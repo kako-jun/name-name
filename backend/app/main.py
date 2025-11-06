@@ -125,12 +125,14 @@ async def clone_project(body: dict):
         raise HTTPException(status_code=400, detail=f"Project '{project_name}' already exists")
 
     try:
-        # 設定を保存（クローン前に保存して、get_git_serviceで読み込めるようにする）
-        project_path.mkdir(parents=True, exist_ok=True)
-        save_project_config(project_name, {"branch": branch})
-
-        git_service = get_git_service(project_name)
+        # まずGitリポジトリをクローン
+        # GitServiceを作成（ブランチ指定）
+        git_services[project_name] = GitService(str(project_path), branch=branch)
+        git_service = git_services[project_name]
         git_service.init_or_clone(repo_url)
+
+        # クローン成功後に設定を保存
+        save_project_config(project_name, {"branch": branch})
 
         return {
             "success": True,
