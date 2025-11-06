@@ -66,13 +66,13 @@ uv venv
 uv sync
 
 # サーバー起動
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 7373
 ```
 
 **ポイント**:
 - `uv`を使用（高速で最新の方式）
 - `pyproject.toml`で依存関係管理（requirements.txtは廃止）
-- ポートは8001を使用（8000が使われていることがあるため）
+- ポートは7373を使用
 
 ### フロントエンド (React + Vite)
 
@@ -102,7 +102,7 @@ docker compose up
 
 ```bash
 # APIで初期化
-curl -X POST http://localhost:8001/api/projects/init \
+curl -X POST http://localhost:7373/api/projects/init \
   -H "Content-Type: application/json" \
   -d '{"name": "my-game", "branch": "develop"}'
 ```
@@ -119,7 +119,7 @@ curl -X POST http://localhost:8001/api/projects/init \
 
 ```bash
 # APIでクローン
-curl -X POST http://localhost:8001/api/projects/clone \
+curl -X POST http://localhost:7373/api/projects/clone \
   -H "Content-Type: application/json" \
   -d '{
     "name": "ogurasia",
@@ -188,16 +188,16 @@ my-game/
 cd backend
 
 # サーバー起動
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 7373
 
 # プロジェクト一覧
-LD_PRELOAD= curl http://localhost:8001/api/projects
+LD_PRELOAD= curl http://localhost:7373/api/projects
 
 # 章データ取得
-LD_PRELOAD= curl http://localhost:8001/api/projects/ogurasia/chapters
+LD_PRELOAD= curl http://localhost:7373/api/projects/ogurasia/chapters
 
 # アセット一覧
-LD_PRELOAD= curl http://localhost:8001/api/projects/ogurasia/assets/images
+LD_PRELOAD= curl http://localhost:7373/api/projects/ogurasia/assets/images
 ```
 
 **注意**: `LD_PRELOAD=`はproxyを回避するために必要な場合があります。
@@ -257,13 +257,13 @@ LD_PRELOAD= git push origin main
 
 ## トラブルシューティング
 
-### ポート8001が使用中
+### ポート7373が使用中
 ```bash
 # プロセスを確認
-lsof -i :8001
+lsof -i :7373
 
 # または別のポートを使用
-uv run uvicorn app.main:app --reload --port 8002
+uv run uvicorn app.main:app --reload --port 7374
 ```
 
 ### プロジェクトのクローンに失敗

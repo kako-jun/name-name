@@ -4,13 +4,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "7373:7373"
     volumes:
       - ./backend/app:/app/app
       - ./backend/projects:/app/projects
     environment:
       - PYTHONUNBUFFERED=1
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 7373 --reload
     networks:
       - name-name-network
 
@@ -26,7 +26,7 @@ services:
       - ./frontend/index.html:/app/index.html
       - ./frontend/vite.config.ts:/app/vite.config.ts
     environment:
-      - VITE_API_URL=http://localhost:8000
+      - VITE_API_URL=http://localhost:7373
     command: npm run dev -- --host 0.0.0.0
     networks:
       - name-name-network
