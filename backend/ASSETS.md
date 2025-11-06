@@ -15,11 +15,13 @@ projects/{project_name}/
     ├── images/             # 画像ファイル
     │   ├── character_a.png
     │   └── background_1.jpg
-    ├── audio/              # 音声ファイル
+    ├── sounds/             # 音声ファイル
     │   ├── bgm_001.mp3
     │   └── se_click.wav
-    └── videos/             # 動画ファイル
-        └── opening.mp4
+    ├── movies/             # 動画ファイル
+    │   └── opening.mp4
+    └── ideas/              # アイデアファイル
+        └── character_concept.md
 ```
 
 ## API エンドポイント
@@ -28,7 +30,7 @@ projects/{project_name}/
 ```
 GET /api/projects/{project_name}/assets/{asset_type}
 ```
-- `asset_type`: `images`, `audio`, `videos`
+- `asset_type`: `images`, `sounds`, `movies`, `ideas`
 - レスポンス: アセットの名前、サイズ、URLのリスト
 
 ### アセットアップロード
@@ -85,13 +87,13 @@ class GameScene extends Phaser.Scene {
     // 音声をロード
     this.load.audio(
       'bgm_001',
-      `${baseUrl}/${projectName}/assets/audio/bgm_001.mp3`
+      `${baseUrl}/${projectName}/assets/sounds/bgm_001.mp3`
     );
 
     // 動画をロード
     this.load.video(
       'opening',
-      `${baseUrl}/${projectName}/assets/videos/opening.mp4`
+      `${baseUrl}/${projectName}/assets/movies/opening.mp4`
     );
   }
 
