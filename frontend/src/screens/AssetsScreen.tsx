@@ -138,7 +138,7 @@ function AssetsScreen({
               </svg>
             </button>
             <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-              アセット管理 <span className={isDark ? 'text-gray-400' : 'text-gray-500'}>- {projectName}</span>
+              Name × Name <span className={isDark ? 'text-gray-400' : 'text-gray-500'}>- {projectName} - アセット管理</span>
             </h1>
           </div>
           <div className="flex items-center gap-2">
