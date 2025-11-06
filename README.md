@@ -18,14 +18,17 @@
 - マルチデバイス対応
 
 ### 🔄 自動バージョン管理
-- 原稿の変更履歴を自動保存（Git）
+- 原稿の変更を自動保存（ワーキングディレクトリ）
+- セーブボタンでGitコミット・プッシュ
 - PC・スマホから同じ原稿を編集
 - ブランチで開発版と本番版を分離
 
 ### 🎨 アセット管理
-- 画像・音声・動画をまとめて管理
-- アップロードで自動Git管理
-- Phaserから直接ロード可能
+- 画像・音声・動画・アイデアをまとめて管理
+- サムネイル表示と検索機能
+- プレビュー機能（画像・音声・動画）
+- ドラッグ&ドロップでアップロード
+- セーブボタンでGitコミット
 
 ## インストール
 
@@ -102,26 +105,43 @@ curl -X POST http://localhost:8000/api/projects/clone \
 
 ### 4. アセットの追加
 
+フロントエンドのアセット管理画面から：
+1. プロジェクトを開く
+2. 右上の「アセット」ボタンをクリック
+3. タブ（画像・音声・動画・アイデア）を選択
+4. 検索で既存アセットを絞り込み
+5. 画面下部のアップロード領域にドラッグ&ドロップ
+6. セーブボタンでコミット・プッシュ
+
+**API経由でアップロード:**
 ```bash
 # 画像をアップロード
 curl -X POST http://localhost:8000/api/projects/my-game/assets/images \
   -F "file=@character.png"
 
 # 音声をアップロード
-curl -X POST http://localhost:8000/api/projects/my-game/assets/audio \
+curl -X POST http://localhost:8000/api/projects/my-game/assets/sounds \
   -F "file=@bgm.mp3"
+
+# 動画をアップロード
+curl -X POST http://localhost:8000/api/projects/my-game/assets/movies \
+  -F "file=@intro.mp4"
 ```
 
 ## プロジェクト構造
 
 ```
 my-game/                # ゲームプロジェクト（別リポジトリ）
+├── .git/
+├── .gitignore
+├── .name-name.json    # ローカル設定（gitignore対象）
 ├── chapters/
 │   └── all.md         # 原稿（Markdown形式）
 └── assets/
     ├── images/        # 画像ファイル
-    ├── audio/         # 音声ファイル
-    └── videos/        # 動画ファイル
+    ├── sounds/        # 音声ファイル
+    ├── movies/        # 動画ファイル
+    └── ideas/         # アイデアファイル（テキスト等）
 ```
 
 ### Markdown形式の原稿

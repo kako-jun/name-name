@@ -24,14 +24,29 @@ class GitService:
         elif remote_url:
             logger.info(f"リポジトリをクローン: {remote_url}")
             self.repo = Repo.clone_from(remote_url, self.repo_path)
+            self._set_anonymous_user()
             self._checkout_branch()
         else:
             logger.info(f"新規リポジトリを初期化: {self.repo_path}")
             self.repo_path.mkdir(parents=True, exist_ok=True)
             self.repo = Repo.init(self.repo_path)
+            self._set_anonymous_user()
             # 初期コミットを作成してからブランチを作成
             self._create_initial_commit()
             self._checkout_branch()
+
+    def _set_anonymous_user(self):
+        """匿名のユーザー名とメールアドレスを設定（プライバシー保護）"""
+        if not self.repo:
+            return
+
+        try:
+            with self.repo.config_writer() as config:
+                config.set_value("user", "name", "anonymous")
+                config.set_value("user", "email", "anonymous@localhost")
+            logger.info("匿名のGitユーザー情報を設定")
+        except Exception as e:
+            logger.error(f"Gitユーザー情報の設定に失敗: {e}")
 
     def _create_initial_commit(self):
         """初期コミットを作成（空のリポジトリ用）"""
@@ -117,3 +132,25 @@ class GitService:
         if not self.repo:
             return False
         return self.repo.is_dirty() or len(self.repo.untracked_files) > 0
+
+    def discard_changes(self) -> bool:
+        """未コミットの変更を破棄（git checkout . + 未追跡ファイル削除）"""
+        try:
+            if not self.repo:
+                return False
+
+            # 変更されたファイルを元に戻す
+            self.repo.git.checkout('.')
+
+            # 未追跡ファイルを削除
+            for file in self.repo.untracked_files:
+                file_path = self.repo_path / file
+                if file_path.exists():
+                    file_path.unlink()
+                    logger.info(f"Deleted untracked file: {file}")
+
+            logger.info("All changes discarded")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to discard changes: {e}")
+            return False

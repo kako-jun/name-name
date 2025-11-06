@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import SaveDiscardButtons from '../components/SaveDiscardButtons'
 
 type AssetType = 'images' | 'sounds' | 'movies' | 'ideas'
 
@@ -31,6 +32,75 @@ function AssetsScreen({
   const [uploading, setUploading] = useState(false)
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
   const [deletingAsset, setDeletingAsset] = useState<Asset | null>(null)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
+
+  // 初回ロード時と5秒ごとにgit statusをチェック
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
+        if (response.ok) {
+          const data = await response.json()
+          setHasUnsavedChanges(data.has_uncommitted_changes)
+        }
+      } catch (error) {
+        console.error('Failed to check status:', error)
+      }
+    }
+
+    checkStatus()
+    const interval = setInterval(checkStatus, 5000)
+    return () => clearInterval(interval)
+  }, [apiBaseUrl, projectName])
+
+  // セーブボタン: Gitコミット・プッシュ
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: 'アセット更新',
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to commit: ${response.status}`)
+      }
+      setHasUnsavedChanges(false)
+    } catch (error) {
+      console.error('Failed to save:', error)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  // 変更を破棄
+  const handleDiscard = async () => {
+    setShowDiscardConfirm(false)
+    setIsSaving(true)
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/discard`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to discard: ${response.status}`)
+      }
+      // アセット一覧を再読み込み
+      const assetsResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}`)
+      if (assetsResponse.ok) {
+        const data = await assetsResponse.json()
+        setAssets(data.assets)
+      }
+      setHasUnsavedChanges(false)
+    } catch (error) {
+      console.error('Failed to discard changes:', error)
+    } finally {
+      setIsSaving(false)
+    }
+  }
 
   // タブ切り替え時に選択をクリア
   useEffect(() => {
@@ -510,6 +580,53 @@ function AssetsScreen({
           </div>
         </div>
       )}
+
+      {/* 変更を破棄の確認ダイアログ */}
+      {showDiscardConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
+          <div
+            className={`p-6 rounded-lg shadow-xl max-w-md w-full ${
+              isDark ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+            }`}
+          >
+            <h2 className="text-xl font-bold mb-4">変更を破棄しますか？</h2>
+            <p className={`mb-6 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+              未コミットの変更がすべて失われます。この操作は取り消せません。
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowDiscardConfirm(false)}
+                className={`px-4 py-2 rounded font-medium transition-colors ${
+                  isDark
+                    ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                    : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                }`}
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleDiscard}
+                className={`px-4 py-2 rounded font-medium transition-colors ${
+                  isDark
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : 'bg-red-500 hover:bg-red-600 text-white'
+                }`}
+              >
+                破棄
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* セーブ/アンドゥボタン */}
+      <SaveDiscardButtons
+        hasUnsavedChanges={hasUnsavedChanges}
+        isSaving={isSaving}
+        isDark={isDark}
+        onSave={handleSave}
+        onDiscard={() => setShowDiscardConfirm(true)}
+      />
     </div>
   )
 }
