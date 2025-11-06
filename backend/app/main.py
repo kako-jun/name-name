@@ -173,7 +173,7 @@ async def init_project(body: dict):
         chapters_dir.mkdir(parents=True, exist_ok=True)
 
         # アセットディレクトリを作成
-        for asset_type in ["images", "audio", "videos"]:
+        for asset_type in ["images", "sounds", "movies", "ideas"]:
             asset_dir = project_path / "assets" / asset_type
             asset_dir.mkdir(parents=True, exist_ok=True)
             # .gitkeepを作成して空ディレクトリをGit管理
@@ -323,10 +323,10 @@ async def switch_branch(project_name: str, body: dict):
 async def list_assets(project_name: str, asset_type: str):
     """指定タイプのアセット一覧を取得
 
-    asset_type: images, audio, videos
+    asset_type: images, sounds, movies, ideas
     """
-    if asset_type not in ["images", "audio", "videos"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, audio, or videos")
+    if asset_type not in ["images", "sounds", "movies", "ideas"]:
+        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
 
     project_path = get_project_path(project_name)
     if not project_path.exists():
@@ -358,10 +358,10 @@ async def upload_asset(
 ):
     """アセットをアップロード
 
-    asset_type: images, audio, videos
+    asset_type: images, sounds, movies, ideas
     """
-    if asset_type not in ["images", "audio", "videos"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, audio, or videos")
+    if asset_type not in ["images", "sounds", "movies", "ideas"]:
+        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
 
     project_path = get_project_path(project_name)
     if not project_path.exists():
@@ -398,10 +398,10 @@ async def upload_asset(
 async def get_asset(project_name: str, asset_type: str, filename: str):
     """アセットファイルを取得（配信）
 
-    asset_type: images, audio, videos
+    asset_type: images, sounds, movies, ideas
     """
-    if asset_type not in ["images", "audio", "videos"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, audio, or videos")
+    if asset_type not in ["images", "sounds", "movies", "ideas"]:
+        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
 
     assets_dir = get_assets_dir(project_name, asset_type)
     file_path = assets_dir / filename
@@ -421,10 +421,10 @@ async def delete_asset(
 ):
     """アセットを削除
 
-    asset_type: images, audio, videos
+    asset_type: images, sounds, movies, ideas
     """
-    if asset_type not in ["images", "audio", "videos"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, audio, or videos")
+    if asset_type not in ["images", "sounds", "movies", "ideas"]:
+        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
 
     project_path = get_project_path(project_name)
     if not project_path.exists():
