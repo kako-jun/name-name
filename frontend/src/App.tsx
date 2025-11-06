@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom'
 import ProjectListScreen from './screens/ProjectListScreen'
 import EditorScreen from './screens/EditorScreen'
+import AssetsScreen from './screens/AssetsScreen'
 
 function App() {
   const [isDark, setIsDark] = useState(() => {
@@ -40,6 +41,17 @@ function App() {
           path="/:projectName"
           element={
             <EditorScreenWrapper
+              apiBaseUrl={apiBaseUrl}
+              isDark={isDark}
+              onToggleDark={() => setIsDark(!isDark)}
+              onOpenSettings={() => setShowSettings(true)}
+            />
+          }
+        />
+        <Route
+          path="/:projectName/assets"
+          element={
+            <AssetsScreenWrapper
               apiBaseUrl={apiBaseUrl}
               isDark={isDark}
               onToggleDark={() => setIsDark(!isDark)}
@@ -148,8 +160,52 @@ function EditorScreenWrapper({
     navigate('/')
   }
 
+  const handleNavigateToAssets = () => {
+    navigate(`/${projectName}/assets`)
+  }
+
   return (
     <EditorScreen
+      projectName={projectName}
+      apiBaseUrl={apiBaseUrl}
+      isDark={isDark}
+      onBack={handleBack}
+      onToggleDark={onToggleDark}
+      onOpenSettings={onOpenSettings}
+      onNavigateToAssets={handleNavigateToAssets}
+    />
+  )
+}
+
+function AssetsScreenWrapper({
+  apiBaseUrl,
+  isDark,
+  onToggleDark,
+  onOpenSettings,
+}: {
+  apiBaseUrl: string
+  isDark: boolean
+  onToggleDark: () => void
+  onOpenSettings: () => void
+}) {
+  const { projectName } = useParams<{ projectName: string }>()
+  const navigate = useNavigate()
+
+  if (!projectName) {
+    navigate('/')
+    return null
+  }
+
+  useEffect(() => {
+    document.title = `アセット管理 - ${projectName} - Name × Name`
+  }, [projectName])
+
+  const handleBack = () => {
+    navigate(`/${projectName}`)
+  }
+
+  return (
+    <AssetsScreen
       projectName={projectName}
       apiBaseUrl={apiBaseUrl}
       isDark={isDark}
