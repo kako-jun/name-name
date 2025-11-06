@@ -237,24 +237,14 @@ function AssetsScreen({
 
       <main className="flex-1 overflow-hidden flex">
         {/* アセット一覧 */}
-        <div className={`w-96 border-r ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'} overflow-y-auto`}>
-          <div className="p-4">
-            <label
-              className={`block w-full px-4 py-8 text-center rounded-lg border-2 border-dashed cursor-pointer transition-colors ${
-                isDark
-                  ? 'border-gray-600 hover:border-gray-500 bg-gray-700 hover:bg-gray-600'
-                  : 'border-gray-300 hover:border-gray-400 bg-white hover:bg-gray-50'
-              }`}
-            >
-              <input
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(e) => handleFileUpload(e.target.files)}
-                disabled={uploading}
-              />
+        <div className={`w-96 border-r ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'} flex flex-col`}>
+          {/* 検索・フィルター領域 */}
+          <div className={`p-4 border-b ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
+            <div className="relative">
               <svg
-                className={`w-8 h-8 mx-auto mb-2 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}
+                className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 ${
+                  isDark ? 'text-gray-400' : 'text-gray-500'
+                }`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -263,20 +253,29 @@ function AssetsScreen({
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeWidth={2}
-                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
                 />
               </svg>
-              <span className={`text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
-                {uploading ? 'アップロード中...' : 'ファイルを選択またはドロップ'}
-              </span>
-            </label>
+              <input
+                type="text"
+                placeholder="検索..."
+                className={`w-full pl-10 pr-3 py-2 rounded border ${
+                  isDark
+                    ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'
+                    : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                }`}
+              />
+            </div>
+          </div>
 
+          {/* アセット一覧（スクロール可能） */}
+          <div className="flex-1 overflow-y-auto p-4">
             {loading ? (
               <div className="text-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
               </div>
             ) : (
-              <div className="mt-4 space-y-2">
+              <div className="space-y-2">
                 {assets.map((asset) => (
                   <div
                     key={asset.name}
@@ -291,7 +290,16 @@ function AssetsScreen({
                           : 'bg-white hover:bg-gray-100 border border-gray-200'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {/* サムネイル（画像のみ） */}
+                      {selectedType === 'images' && (
+                        <img
+                          src={`${apiBaseUrl}${asset.url}`}
+                          alt={asset.name}
+                          className="w-12 h-12 object-cover rounded flex-shrink-0"
+                        />
+                      )}
+
                       <div className="flex-1 min-w-0">
                         <div className={`text-sm font-medium truncate ${isDark ? 'text-gray-200' : 'text-gray-900'}`}>
                           {asset.name}
@@ -300,12 +308,13 @@ function AssetsScreen({
                           {formatFileSize(asset.size)}
                         </div>
                       </div>
+
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
                           handleDeleteClick(asset)
                         }}
-                        className={`ml-2 p-1 rounded transition-colors ${
+                        className={`p-1 rounded transition-colors flex-shrink-0 ${
                           isDark
                             ? 'text-gray-400 hover:text-red-400 hover:bg-red-900/20'
                             : 'text-gray-500 hover:text-red-600 hover:bg-red-50'
@@ -326,6 +335,41 @@ function AssetsScreen({
                 ))}
               </div>
             )}
+          </div>
+
+          {/* アップロード領域（一番下） */}
+          <div className={`p-4 border-t ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
+            <label
+              className={`block w-full px-4 py-6 text-center rounded-lg border-2 border-dashed cursor-pointer transition-colors ${
+                isDark
+                  ? 'border-gray-600 hover:border-gray-500 bg-gray-700 hover:bg-gray-600'
+                  : 'border-gray-300 hover:border-gray-400 bg-white hover:bg-gray-50'
+              }`}
+            >
+              <input
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => handleFileUpload(e.target.files)}
+                disabled={uploading}
+              />
+              <svg
+                className={`w-6 h-6 mx-auto mb-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                />
+              </svg>
+              <span className={`text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                {uploading ? 'アップロード中...' : 'ファイルを追加'}
+              </span>
+            </label>
           </div>
         </div>
 
