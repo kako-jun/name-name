@@ -13,23 +13,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Backend (Python)
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-backend/.venv/
-backend/venv/
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-
-# Backend projects (each is a separate git repo)
-backend/projects/
+# Backend has its own .gitignore
 
 # Docker
 *.env.local
