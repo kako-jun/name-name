@@ -35,6 +35,7 @@ function EditorScreen({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
+  const initialChaptersRef = useRef<string>('')
 
   // 初回ロード: APIから章データを取得
   useEffect(() => {
@@ -45,24 +46,18 @@ function EditorScreen({
       }
       const data = await response.json()
       setChapters(data.chapters)
+      // 初期状態を保存
+      initialChaptersRef.current = JSON.stringify(data.chapters)
     }
     loadChapters()
   }, [apiBaseUrl, projectName])
 
-  // 未コミットの変更があるかチェック
+  // 章データの変更を検出
   useEffect(() => {
-    const checkStatus = async () => {
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
-      if (!response.ok) {
-        throw new Error(`Failed to check status: ${response.status}`)
-      }
-      const data = await response.json()
-      setHasUnsavedChanges(data.has_uncommitted_changes)
-    }
-    checkStatus()
-    const interval = setInterval(checkStatus, 5000)
-    return () => clearInterval(interval)
-  }, [apiBaseUrl, projectName])
+    if (initialChaptersRef.current === '') return
+    const currentChapters = JSON.stringify(chapters)
+    setHasUnsavedChanges(currentChapters !== initialChaptersRef.current)
+  }, [chapters])
 
   // 章データが変更されたら自動的にワーキングディレクトリに保存
   useEffect(() => {
@@ -82,7 +77,6 @@ function EditorScreen({
       if (!response.ok) {
         throw new Error(`Failed to auto-save: ${response.status}`)
       }
-      setHasUnsavedChanges(true)
     }, 1000)
 
     return () => {
@@ -106,6 +100,8 @@ function EditorScreen({
       setIsSaving(false)
       throw new Error(`Failed to commit: ${response.status}`)
     }
+    // 保存成功後、初期状態を更新
+    initialChaptersRef.current = JSON.stringify(chapters)
     setHasUnsavedChanges(false)
     setIsSaving(false)
   }
