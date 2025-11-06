@@ -372,22 +372,16 @@ async def upload_asset(
         assets_dir = get_assets_dir(project_name, asset_type)
         assets_dir.mkdir(parents=True, exist_ok=True)
 
-        # ファイルを保存
+        # ファイルを保存（コミットはしない）
         file_path = assets_dir / file.filename
         with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-
-        # Git commit & push
-        git_service = get_git_service(project_name)
-        relative_path = file_path.relative_to(project_path)
-        message = commit_message or f"アセット追加: {asset_type}/{file.filename}"
-        commit_hash = git_service.commit_and_push(str(relative_path), message)
 
         return {
             "success": True,
             "filename": file.filename,
             "url": f"/api/projects/{project_name}/assets/{asset_type}/{file.filename}",
-            "commit_hash": commit_hash,
+            "message": "ワーキングディレクトリに保存しました（未コミット）",
         }
     except Exception as e:
         logger.error(f"Upload asset failed: {e}")
@@ -437,19 +431,13 @@ async def delete_asset(
         raise HTTPException(status_code=404, detail="Asset not found")
 
     try:
-        # ファイルを削除
+        # ファイルを削除（コミットはしない）
         file_path.unlink()
-
-        # Git commit & push
-        git_service = get_git_service(project_name)
-        relative_path = file_path.relative_to(project_path)
-        message = commit_message or f"アセット削除: {asset_type}/{filename}"
-        commit_hash = git_service.commit_and_push(str(relative_path), message)
 
         return {
             "success": True,
             "filename": filename,
-            "commit_hash": commit_hash,
+            "message": "ワーキングディレクトリから削除しました（未コミット）",
         }
     except Exception as e:
         logger.error(f"Delete asset failed: {e}")
