@@ -1,0 +1,1109 @@
+import React, { useState, useRef, useEffect } from 'react'
+import { Chapter, Viewport, Cut } from '../types'
+import ChapterCard from './ChapterCard'
+
+interface CanvasEditorProps {
+  chapters: Chapter[]
+  setChapters: (chapters: Chapter[]) => void
+  isDark: boolean
+}
+
+function CanvasEditor({ chapters, setChapters, isDark }: CanvasEditorProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const editingRef = useRef<HTMLDivElement>(null)
+  const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 })
+  const [isPanning, setIsPanning] = useState(false)
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+  const [editingCutId, setEditingCutId] = useState<number | null>(null)
+  const [editingSceneId, setEditingSceneId] = useState<number | null>(null)
+  const [editingChapterId, setEditingChapterId] = useState<number | null>(null)
+  const [newlyAddedCutId, setNewlyAddedCutId] = useState<number | null>(null)
+  const [newlyAddedSceneId, setNewlyAddedSceneId] = useState<number | null>(null)
+  const [newlyAddedChapterId, setNewlyAddedChapterId] = useState<number | null>(null)
+  const [draggedCut, setDraggedCut] = useState<{
+    chapterId: number
+    sceneId: number
+    cutId: number
+  } | null>(null)
+  const [draggedScene, setDraggedScene] = useState<{
+    chapterId: number
+    sceneId: number
+  } | null>(null)
+  const [draggedChapter, setDraggedChapter] = useState<number | null>(null)
+  const [dropTarget, setDropTarget] = useState<{
+    chapterId: number
+    sceneId: number
+    position: number
+  } | null>(null)
+  const [sceneDropTarget, setSceneDropTarget] = useState<{
+    chapterId: number
+    position: number
+  } | null>(null)
+  const [chapterDropTarget, setChapterDropTarget] = useState<number | null>(null)
+
+  // 編集モード終了の検知
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (editingRef.current && !editingRef.current.contains(e.target as Node)) {
+        handleEditingEnd()
+      }
+    }
+
+    const handleEscKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleEditingEnd()
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEscKey)
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEscKey)
+    }
+  }, [editingCutId, editingSceneId, editingChapterId, newlyAddedCutId, newlyAddedSceneId, newlyAddedChapterId, chapters])
+
+  // 編集モード終了時の処理
+  const handleEditingEnd = () => {
+    // 新規追加されたカットがデフォルト値のままなら削除
+    if (newlyAddedCutId !== null) {
+      const cut = chapters
+        .flatMap((ch) => ch.scenes)
+        .flatMap((sc) => sc.cuts)
+        .find((c) => c.id === newlyAddedCutId)
+
+      if (cut && cut.character === '' && cut.text === '' && cut.expression === '') {
+        // デフォルト値のままなので削除
+        const newChapters = chapters.map((chapter) => ({
+          ...chapter,
+          scenes: chapter.scenes.map((scene) => ({
+            ...scene,
+            cuts: scene.cuts.filter((c) => c.id !== newlyAddedCutId),
+          })),
+        }))
+        setChapters(newChapters)
+      }
+      setNewlyAddedCutId(null)
+    }
+
+    // 新規追加されたシーンがデフォルト値のままなら削除
+    if (newlyAddedSceneId !== null) {
+      const scene = chapters
+        .flatMap((ch) => ch.scenes)
+        .find((sc) => sc.id === newlyAddedSceneId)
+
+      if (scene && scene.title === '新しいシーン' && scene.cuts.length === 0) {
+        // デフォルト値のままなので削除
+        const newChapters = chapters.map((chapter) => ({
+          ...chapter,
+          scenes: chapter.scenes.filter((sc) => sc.id !== newlyAddedSceneId),
+        }))
+        setChapters(newChapters)
+      }
+      setNewlyAddedSceneId(null)
+    }
+
+    // 新規追加された章がデフォルト値のままなら削除
+    if (newlyAddedChapterId !== null) {
+      const chapter = chapters.find((ch) => ch.id === newlyAddedChapterId)
+
+      if (chapter && chapter.title === '新しい章' && chapter.scenes.length === 0) {
+        // デフォルト値のままなので削除
+        const newChapters = chapters.filter((ch) => ch.id !== newlyAddedChapterId)
+        setChapters(newChapters)
+      }
+      setNewlyAddedChapterId(null)
+    }
+
+    setEditingCutId(null)
+    setEditingSceneId(null)
+    setEditingChapterId(null)
+  }
+
+  // カットの編集
+  const handleCutChange = (
+    chapterId: number,
+    sceneId: number,
+    cutId: number,
+    field: 'character' | 'text' | 'expression',
+    value: string
+  ) => {
+    const newChapters = chapters.map((chapter) => {
+      if (chapter.id === chapterId) {
+        return {
+          ...chapter,
+          scenes: chapter.scenes.map((scene) => {
+            if (scene.id === sceneId) {
+              return {
+                ...scene,
+                cuts: scene.cuts.map((cut) => {
+                  if (cut.id === cutId) {
+                    return { ...cut, [field]: value }
+                  }
+                  return cut
+                }),
+              }
+            }
+            return scene
+          }),
+        }
+      }
+      return chapter
+    })
+    setChapters(newChapters)
+  }
+
+  // ドラッグ開始
+  const handleDragStart = (chapterId: number, sceneId: number, cutId: number) => {
+    setDraggedCut({ chapterId, sceneId, cutId })
+  }
+
+  // ドラッグオーバー
+  const handleDragOver = (e: React.DragEvent, chapterId: number, sceneId: number, position: number) => {
+    e.preventDefault()
+    setDropTarget({ chapterId, sceneId, position })
+  }
+
+  // ドロップ
+  const handleDrop = () => {
+    if (!draggedCut || !dropTarget) return
+
+    // ドラッグ元のカットを取得
+    let draggedCutData: any = null
+    const newChapters = chapters.map((chapter) => {
+      if (chapter.id === draggedCut.chapterId) {
+        return {
+          ...chapter,
+          scenes: chapter.scenes.map((scene) => {
+            if (scene.id === draggedCut.sceneId) {
+              const cutIndex = scene.cuts.findIndex((c) => c.id === draggedCut.cutId)
+              if (cutIndex !== -1) {
+                draggedCutData = scene.cuts[cutIndex]
+                return {
+                  ...scene,
+                  cuts: scene.cuts.filter((c) => c.id !== draggedCut.cutId),
+                }
+              }
+            }
+            return scene
+          }),
+        }
+      }
+      return chapter
+    })
+
+    // ドロップ先にカットを挿入
+    const finalChapters = newChapters.map((chapter) => {
+      if (chapter.id === dropTarget.chapterId) {
+        return {
+          ...chapter,
+          scenes: chapter.scenes.map((scene) => {
+            if (scene.id === dropTarget.sceneId) {
+              const newCuts = [...scene.cuts]
+              newCuts.splice(dropTarget.position, 0, draggedCutData)
+              return {
+                ...scene,
+                cuts: newCuts,
+              }
+            }
+            return scene
+          }),
+        }
+      }
+      return chapter
+    })
+
+    setChapters(finalChapters)
+    setDraggedCut(null)
+    setDropTarget(null)
+  }
+
+  // ドラッグ終了
+  const handleDragEnd = () => {
+    setDraggedCut(null)
+    setDropTarget(null)
+  }
+
+  // シーンのドラッグ開始
+  const handleSceneDragStart = (chapterId: number, sceneId: number) => {
+    setDraggedScene({ chapterId, sceneId })
+  }
+
+  // シーンのドラッグオーバー
+  const handleSceneDragOver = (e: React.DragEvent, chapterId: number, position: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setSceneDropTarget({ chapterId, position })
+  }
+
+  // シーンのドロップ
+  const handleSceneDrop = (e: React.DragEvent) => {
+    e.stopPropagation()
+    if (!draggedScene || !sceneDropTarget) return
+
+    // ドラッグ元のシーンを取得
+    const draggedSceneData = chapters
+      .find((ch) => ch.id === draggedScene.chapterId)
+      ?.scenes.find((sc) => sc.id === draggedScene.sceneId)
+
+    if (!draggedSceneData) return
+
+    // ドラッグ元からシーンを削除
+    let newChapters = chapters.map((chapter) => {
+      if (chapter.id === draggedScene.chapterId) {
+        return {
+          ...chapter,
+          scenes: chapter.scenes.filter((sc) => sc.id !== draggedScene.sceneId),
+        }
+      }
+      return chapter
+    })
+
+    // ドロップ先にシーンを挿入
+    newChapters = newChapters.map((chapter) => {
+      if (chapter.id === sceneDropTarget.chapterId) {
+        const newScenes = [...chapter.scenes]
+        newScenes.splice(sceneDropTarget.position, 0, draggedSceneData)
+        return { ...chapter, scenes: newScenes }
+      }
+      return chapter
+    })
+
+    setChapters(newChapters)
+    setDraggedScene(null)
+    setSceneDropTarget(null)
+  }
+
+  // シーンのドラッグ終了
+  const handleSceneDragEnd = () => {
+    setDraggedScene(null)
+    setSceneDropTarget(null)
+  }
+
+  // 章のドラッグ開始
+  const handleChapterDragStart = (chapterId: number) => {
+    setDraggedChapter(chapterId)
+  }
+
+  // 章のドラッグオーバー
+  const handleChapterDragOver = (e: React.DragEvent, position: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setChapterDropTarget(position)
+  }
+
+  // 章のドロップ
+  const handleChapterDrop = (e: React.DragEvent) => {
+    e.stopPropagation()
+    if (draggedChapter === null || chapterDropTarget === null) return
+
+    const draggedChapterData = chapters.find((ch) => ch.id === draggedChapter)
+    if (!draggedChapterData) return
+
+    // ドラッグ元から章を削除
+    let newChapters = chapters.filter((ch) => ch.id !== draggedChapter)
+
+    // ドロップ先に章を挿入
+    newChapters.splice(chapterDropTarget, 0, draggedChapterData)
+
+    setChapters(newChapters)
+    setDraggedChapter(null)
+    setChapterDropTarget(null)
+  }
+
+  // 章のドラッグ終了
+  const handleChapterDragEnd = () => {
+    setDraggedChapter(null)
+    setChapterDropTarget(null)
+  }
+
+  // カットを追加
+  const handleAddCut = (chapterId: number, sceneId: number, position: number) => {
+    const maxCutId = Math.max(...chapters.flatMap((ch) => ch.scenes.flatMap((sc) => sc.cuts.map((c) => c.id))), 0)
+    const newCut = {
+      id: maxCutId + 1,
+      character: '',
+      text: '',
+      expression: '',
+    }
+
+    const newChapters = chapters.map((chapter) => {
+      if (chapter.id === chapterId) {
+        return {
+          ...chapter,
+          scenes: chapter.scenes.map((scene) => {
+            if (scene.id === sceneId) {
+              const newCuts = [...scene.cuts]
+              newCuts.splice(position, 0, newCut)
+              return {
+                ...scene,
+                cuts: newCuts,
+              }
+            }
+            return scene
+          }),
+        }
+      }
+      return chapter
+    })
+
+    setChapters(newChapters)
+    // 追加したカットを編集モードに
+    setEditingCutId(newCut.id)
+    setNewlyAddedCutId(newCut.id)
+  }
+
+  // カットを削除
+  const handleDeleteCut = (chapterId: number, sceneId: number, cutId: number) => {
+    const newChapters = chapters.map((chapter) => {
+      if (chapter.id === chapterId) {
+        return {
+          ...chapter,
+          scenes: chapter.scenes.map((scene) => {
+            if (scene.id === sceneId) {
+              return {
+                ...scene,
+                cuts: scene.cuts.filter((c) => c.id !== cutId),
+              }
+            }
+            return scene
+          }),
+        }
+      }
+      return chapter
+    })
+    setChapters(newChapters)
+    setEditingCutId(null)
+  }
+
+  // シーンを追加
+  const handleAddScene = (chapterId: number, position: number) => {
+    const maxSceneId = Math.max(...chapters.flatMap((ch) => ch.scenes.map((sc) => sc.id)), 0)
+    const newScene = { id: maxSceneId + 1, title: '新しいシーン', cuts: [] }
+    const newChapters = chapters.map((chapter) => {
+      if (chapter.id === chapterId) {
+        const newScenes = [...chapter.scenes]
+        newScenes.splice(position, 0, newScene)
+        return { ...chapter, scenes: newScenes }
+      }
+      return chapter
+    })
+    setChapters(newChapters)
+    setEditingSceneId(newScene.id)
+    setNewlyAddedSceneId(newScene.id)
+  }
+
+  // シーンを削除
+  const handleDeleteScene = (chapterId: number, sceneId: number) => {
+    const newChapters = chapters.map((chapter) => {
+      if (chapter.id === chapterId) {
+        return {
+          ...chapter,
+          scenes: chapter.scenes.filter((s) => s.id !== sceneId),
+        }
+      }
+      return chapter
+    })
+    setChapters(newChapters)
+    setEditingSceneId(null)
+  }
+
+  // シーンのタイトルを変更
+  const handleSceneTitleChange = (chapterId: number, sceneId: number, newTitle: string) => {
+    const newChapters = chapters.map((chapter) => {
+      if (chapter.id === chapterId) {
+        return {
+          ...chapter,
+          scenes: chapter.scenes.map((scene) => {
+            if (scene.id === sceneId) {
+              return { ...scene, title: newTitle }
+            }
+            return scene
+          }),
+        }
+      }
+      return chapter
+    })
+    setChapters(newChapters)
+  }
+
+  // 章を追加
+  const handleAddChapter = (position: number) => {
+    const maxChapterId = Math.max(...chapters.map((ch) => ch.id), 0)
+    const newChapter = { id: maxChapterId + 1, title: '新しい章', scenes: [] }
+    const newChapters = [...chapters]
+    newChapters.splice(position, 0, newChapter)
+    setChapters(newChapters)
+    setEditingChapterId(newChapter.id)
+    setNewlyAddedChapterId(newChapter.id)
+  }
+
+  // 章を削除
+  const handleDeleteChapter = (chapterId: number) => {
+    const newChapters = chapters.filter((ch) => ch.id !== chapterId)
+    setChapters(newChapters)
+    setEditingChapterId(null)
+  }
+
+  // 章のタイトルを変更
+  const handleChapterTitleChange = (chapterId: number, newTitle: string) => {
+    const newChapters = chapters.map((chapter) => {
+      if (chapter.id === chapterId) {
+        return { ...chapter, title: newTitle }
+      }
+      return chapter
+    })
+    setChapters(newChapters)
+  }
+
+  // ホイールでズーム
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault()
+
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 0.9 : 1.1
+      const newZoom = Math.min(Math.max(viewport.zoom * zoomFactor, 0.1), 5)
+
+      // マウス位置を中心にズーム
+      const rect = container.getBoundingClientRect()
+      const mouseX = e.clientX - rect.left
+      const mouseY = e.clientY - rect.top
+
+      const worldX = (mouseX - viewport.x) / viewport.zoom
+      const worldY = (mouseY - viewport.y) / viewport.zoom
+
+      const newX = mouseX - worldX * newZoom
+      const newY = mouseY - worldY * newZoom
+
+      setViewport({ x: newX, y: newY, zoom: newZoom })
+    }
+
+    container.addEventListener('wheel', handleWheel, { passive: false })
+    return () => container.removeEventListener('wheel', handleWheel)
+  }, [viewport])
+
+  // パン操作
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 0) {
+      setIsPanning(true)
+      setPanStart({ x: e.clientX - viewport.x, y: e.clientY - viewport.y })
+      e.preventDefault()
+    }
+  }
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isPanning) {
+      const newX = e.clientX - panStart.x
+      const newY = e.clientY - panStart.y
+      setViewport({ ...viewport, x: newX, y: newY })
+    }
+  }
+
+  const handleMouseUp = () => {
+    setIsPanning(false)
+  }
+
+  // カーソルの変更
+  const cursor = isPanning ? 'grabbing' : 'grab'
+
+  return (
+    <div
+      ref={containerRef}
+      className={`relative w-full h-full overflow-hidden ${isDark ? 'bg-gray-900' : 'bg-gray-100'}`}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      style={{ cursor }}
+    >
+      {/* ズーム・パンが適用されるコンテンツ領域 */}
+      <div
+        style={{
+          transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
+          transformOrigin: '0 0',
+          transition: isPanning ? 'none' : 'transform 0.1s ease-out',
+        }}
+      >
+        {/* 章ごとに横並びで表示 */}
+        <div className="flex gap-8 p-8">
+          {chapters.map((chapter, chapterIndex) => (
+            <React.Fragment key={chapter.id}>
+              {/* 章の追加ボタン */}
+              <div
+                draggable={false}
+                className={`group w-12 flex-shrink-0 flex items-start justify-center pt-8 transition-all rounded cursor-pointer ${
+                  chapterDropTarget === chapterIndex
+                    ? isDark
+                      ? 'bg-indigo-900/40 border-2 border-indigo-400'
+                      : 'bg-indigo-100 border-2 border-indigo-600'
+                    : draggedChapter !== null
+                      ? isDark
+                        ? 'bg-gray-700/20 hover:bg-gray-700/40'
+                        : 'bg-gray-200/50 hover:bg-gray-200'
+                      : isDark
+                        ? 'hover:bg-gray-700/30'
+                        : 'hover:bg-gray-100'
+                }`}
+                onClick={() => handleAddChapter(chapterIndex)}
+                onDragOver={(e) => handleChapterDragOver(e, chapterIndex)}
+                onDrop={handleChapterDrop}
+                title="章を追加"
+              >
+                <div
+                  className={`opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center gap-1 text-xs ${
+                    isDark ? 'text-gray-400' : 'text-gray-500'
+                  }`}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                </div>
+              </div>
+
+              <motion.div
+                layout
+                layoutId={`chapter-${chapter.id}`}
+                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                className={`flex-shrink-0 w-96 p-6 rounded-lg shadow-lg ${
+                  isDark ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-300'
+                } ${draggedChapter === chapter.id ? 'opacity-50' : ''}`}
+              >
+                {/* 章のヘッダー */}
+                <div className="relative mb-4">
+                  {/* ドラッグハンドル */}
+                  {editingChapterId !== chapter.id && (
+                    <div
+                      draggable
+                      onDragStart={(e) => {
+                        e.stopPropagation()
+                        handleChapterDragStart(chapter.id)
+                      }}
+                      onDragEnd={handleChapterDragEnd}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      className={`absolute -top-2 -right-2 p-2 rounded cursor-grab active:cursor-grabbing opacity-30 hover:opacity-100 transition-opacity ${
+                        isDark ? 'text-gray-400' : 'text-gray-500'
+                      }`}
+                      title="ドラッグして移動"
+                    >
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M9 3h2v2H9V3zm0 4h2v2H9V7zm0 4h2v2H9v-2zm0 4h2v2H9v-2zm0 4h2v2H9v-2zm4-16h2v2h-2V3zm0 4h2v2h-2V7zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2z" />
+                      </svg>
+                    </div>
+                  )}
+
+                  {editingChapterId === chapter.id ? (
+                    <div
+                      ref={editingRef}
+                      className="space-y-2"
+                      onClick={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="text"
+                        value={chapter.title}
+                        onChange={(e) => handleChapterTitleChange(chapter.id, e.target.value)}
+                        autoFocus
+                        placeholder="章のタイトル"
+                        className={`w-full px-3 py-2 text-xl font-bold rounded border ${
+                          isDark
+                            ? 'bg-gray-700 text-white border-gray-600 focus:border-indigo-500'
+                            : 'bg-white text-gray-900 border-gray-300 focus:border-indigo-500'
+                        } focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                      />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (confirm('この章を削除しますか？')) {
+                            handleDeleteChapter(chapter.id)
+                          }
+                        }}
+                        className={`w-full px-3 py-2 text-sm font-medium rounded flex items-center justify-center gap-2 transition-colors ${
+                          isDark
+                            ? 'bg-red-900/50 text-red-300 hover:bg-red-900/70 border border-red-800'
+                            : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                        }`}
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                          />
+                        </svg>
+                        章を削除
+                      </button>
+                    </div>
+                  ) : (
+                    <h2
+                      className={`text-xl font-bold ${isDark ? 'text-white' : 'text-gray-900'} cursor-pointer hover:opacity-70`}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation()
+                        setEditingChapterId(chapter.id)
+                      }}
+                    >
+                      第{chapterIndex + 1}章: {chapter.title}
+                    </h2>
+                  )}
+                </div>
+
+              {chapter.scenes.map((scene, sceneIndex) => (
+                <React.Fragment key={scene.id}>
+                  {/* シーンの追加ボタン */}
+                  <div
+                    draggable={false}
+                    className={`group h-6 flex items-center justify-center transition-all rounded cursor-pointer mb-2 ${
+                      sceneDropTarget?.chapterId === chapter.id && sceneDropTarget?.position === sceneIndex
+                        ? isDark
+                          ? 'bg-indigo-900/40 border border-indigo-400'
+                          : 'bg-indigo-100 border border-indigo-600'
+                        : draggedScene !== null
+                          ? isDark
+                            ? 'bg-gray-700/20 hover:bg-gray-700/40'
+                            : 'bg-gray-200/50 hover:bg-gray-200'
+                          : isDark
+                            ? 'hover:bg-gray-700/30'
+                            : 'hover:bg-gray-100'
+                    }`}
+                    onClick={() => handleAddScene(chapter.id, sceneIndex)}
+                    onDragOver={(e) => handleSceneDragOver(e, chapter.id, sceneIndex)}
+                    onDrop={handleSceneDrop}
+                    title="シーンを追加"
+                  >
+                    <div
+                      className={`opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs ${
+                        isDark ? 'text-gray-400' : 'text-gray-500'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                      <span>シーンを追加</span>
+                    </div>
+                  </div>
+
+                  <motion.div
+                    layout
+                    layoutId={`scene-${scene.id}`}
+                    transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                    className={`mb-4 p-4 rounded-lg border ${
+                      isDark ? 'bg-gray-700/50 border-gray-600' : 'bg-gray-50 border-gray-300'
+                    } ${draggedScene?.sceneId === scene.id ? 'opacity-50' : ''}`}
+                  >
+                    {/* シーンのヘッダー */}
+                    <div className="relative mb-2">
+                      {/* ドラッグハンドル */}
+                      {editingSceneId !== scene.id && (
+                        <div
+                          draggable
+                          onDragStart={(e) => {
+                            e.stopPropagation()
+                            handleSceneDragStart(chapter.id, scene.id)
+                          }}
+                          onDragEnd={handleSceneDragEnd}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          className={`absolute -top-2 -right-2 p-1.5 rounded cursor-grab active:cursor-grabbing opacity-30 hover:opacity-100 transition-opacity ${
+                            isDark ? 'text-gray-400' : 'text-gray-500'
+                          }`}
+                          title="ドラッグして移動"
+                        >
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M9 3h2v2H9V3zm0 4h2v2H9V7zm0 4h2v2H9v-2zm0 4h2v2H9v-2zm0 4h2v2H9v-2zm4-16h2v2h-2V3zm0 4h2v2h-2V7zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2z" />
+                          </svg>
+                        </div>
+                      )}
+
+                      {editingSceneId === scene.id ? (
+                        <div
+                          ref={editingRef}
+                          className="space-y-2"
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="text"
+                            value={scene.title}
+                            onChange={(e) => handleSceneTitleChange(chapter.id, scene.id, e.target.value)}
+                            autoFocus
+                            placeholder="シーンのタイトル"
+                            className={`w-full px-2 py-1 text-lg font-semibold rounded border ${
+                              isDark
+                                ? 'bg-gray-700 text-gray-300 border-gray-600 focus:border-indigo-500'
+                                : 'bg-white text-gray-700 border-gray-300 focus:border-indigo-500'
+                            } focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                          />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (confirm('このシーンを削除しますか？')) {
+                                handleDeleteScene(chapter.id, scene.id)
+                              }
+                            }}
+                            className={`w-full px-3 py-2 text-sm font-medium rounded flex items-center justify-center gap-2 transition-colors ${
+                              isDark
+                                ? 'bg-red-900/50 text-red-300 hover:bg-red-900/70 border border-red-800'
+                                : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                            }`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                              />
+                            </svg>
+                            シーンを削除
+                          </button>
+                        </div>
+                      ) : (
+                        <h3
+                          className={`text-lg font-semibold ${isDark ? 'text-gray-300' : 'text-gray-700'} cursor-pointer hover:opacity-70`}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation()
+                            setEditingSceneId(scene.id)
+                          }}
+                        >
+                          場面{sceneIndex + 1}: {scene.title}
+                        </h3>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                    {/* シーン先頭の追加ボタン */}
+                    <div
+                      draggable={false}
+                      className={`group h-6 flex items-center justify-center transition-all rounded cursor-pointer ${
+                        dropTarget?.chapterId === chapter.id &&
+                        dropTarget?.sceneId === scene.id &&
+                        dropTarget?.position === 0
+                          ? isDark
+                            ? 'bg-indigo-900/40 border border-indigo-400'
+                            : 'bg-indigo-100 border border-indigo-600'
+                          : draggedCut !== null
+                            ? isDark
+                              ? 'bg-gray-700/20 hover:bg-gray-700/40'
+                              : 'bg-gray-200/50 hover:bg-gray-200'
+                            : isDark
+                              ? 'hover:bg-gray-700/30'
+                              : 'hover:bg-gray-100'
+                      }`}
+                      onClick={() => handleAddCut(chapter.id, scene.id, 0)}
+                      onDragOver={(e) => handleDragOver(e, chapter.id, scene.id, 0)}
+                      onDrop={handleDrop}
+                      title="カットを追加"
+                    >
+                      <div
+                        className={`opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs ${
+                          isDark ? 'text-gray-400' : 'text-gray-500'
+                        }`}
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        </svg>
+                        <span>カットを追加</span>
+                      </div>
+                    </div>
+
+                    {scene.cuts.map((cut, cutIndex) => (
+                      <React.Fragment key={cut.id}>
+                        <motion.div
+                          layout
+                          layoutId={`cut-${cut.id}`}
+                          transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation()
+                            setEditingCutId(cut.id)
+                          }}
+                          onDragOver={(e) => handleDragOver(e, chapter.id, scene.id, cutIndex)}
+                          onDrop={handleDrop}
+                          className={`relative p-3 rounded border ${
+                            isDark
+                              ? 'bg-gray-700 border-gray-600 hover:bg-gray-600'
+                              : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                          } transition-colors ${
+                            draggedCut?.cutId === cut.id ? 'opacity-50' : ''
+                          } ${
+                            dropTarget?.chapterId === chapter.id &&
+                            dropTarget?.sceneId === scene.id &&
+                            dropTarget?.position === cutIndex
+                              ? isDark
+                                ? 'border-t-4 border-t-indigo-400'
+                                : 'border-t-4 border-t-indigo-600'
+                              : ''
+                          }`}
+                        >
+                          {/* ドラッグハンドル（編集中は非表示） */}
+                          {editingCutId !== cut.id && (
+                            <div
+                              draggable
+                              onDragStart={(e) => {
+                                e.stopPropagation()
+                                handleDragStart(chapter.id, scene.id, cut.id)
+                              }}
+                              onDragEnd={handleDragEnd}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              className={`absolute top-2 right-2 p-1 rounded cursor-grab active:cursor-grabbing ${
+                                isDark
+                                  ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-600'
+                                  : 'text-gray-400 hover:text-gray-600 hover:bg-gray-200'
+                              }`}
+                              title="ドラッグして移動"
+                            >
+                              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M9 3h2v2H9V3zm0 4h2v2H9V7zm0 4h2v2H9v-2zm0 4h2v2H9v-2zm0 4h2v2H9v-2zm4-16h2v2h-2V3zm0 4h2v2h-2V7zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2z" />
+                              </svg>
+                            </div>
+                          )}
+
+                          <div className={`text-xs mb-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                            カット{cutIndex + 1}
+                          </div>
+                          {editingCutId === cut.id ? (
+                            <div
+                              ref={editingRef}
+                              className="space-y-2"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="text"
+                                value={cut.character}
+                                onChange={(e) =>
+                                  handleCutChange(chapter.id, scene.id, cut.id, 'character', e.target.value)
+                                }
+                                autoFocus
+                                placeholder="キャラクター名"
+                                className={`w-full px-2 py-1 text-sm font-medium rounded border ${
+                                  isDark
+                                    ? 'bg-gray-800 text-gray-200 border-gray-600 focus:border-indigo-500'
+                                    : 'bg-white text-gray-800 border-gray-300 focus:border-indigo-500'
+                                } focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                              />
+                              <textarea
+                                value={cut.text}
+                                onChange={(e) =>
+                                  handleCutChange(chapter.id, scene.id, cut.id, 'text', e.target.value)
+                                }
+                                placeholder="テキスト"
+                                rows={3}
+                                className={`w-full px-2 py-1 text-sm rounded border ${
+                                  isDark
+                                    ? 'bg-gray-800 text-gray-300 border-gray-600 focus:border-indigo-500'
+                                    : 'bg-white text-gray-600 border-gray-300 focus:border-indigo-500'
+                                } focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none`}
+                              />
+                              <input
+                                type="text"
+                                value={cut.expression}
+                                onChange={(e) =>
+                                  handleCutChange(chapter.id, scene.id, cut.id, 'expression', e.target.value)
+                                }
+                                placeholder="ポーズ"
+                                className={`w-full px-2 py-1 text-sm rounded border ${
+                                  isDark
+                                    ? 'bg-gray-800 text-gray-300 border-gray-600 focus:border-indigo-500'
+                                    : 'bg-white text-gray-600 border-gray-300 focus:border-indigo-500'
+                                } focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                              />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (confirm('このカットを削除しますか？')) {
+                                    handleDeleteCut(chapter.id, scene.id, cut.id)
+                                  }
+                                }}
+                                className={`w-full px-3 py-2 text-sm font-medium rounded flex items-center justify-center gap-2 transition-colors ${
+                                  isDark
+                                    ? 'bg-red-900/50 text-red-300 hover:bg-red-900/70 border border-red-800'
+                                    : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                                }`}
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                  />
+                                </svg>
+                                カットを削除
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <div className={`text-sm font-medium ${isDark ? 'text-gray-200' : 'text-gray-800'}`}>
+                                {cut.character}
+                              </div>
+                              <div className={`text-sm mt-1 line-clamp-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                                {cut.text}
+                              </div>
+                            </>
+                          )}
+                        </motion.div>
+
+                        {/* カット間の追加ボタン（最後のカットの後ろはドロップゾーンとしても機能） */}
+                        <div
+                          draggable={false}
+                          className={`group h-6 flex items-center justify-center transition-all rounded cursor-pointer ${
+                            dropTarget?.chapterId === chapter.id &&
+                            dropTarget?.sceneId === scene.id &&
+                            dropTarget?.position === cutIndex + 1
+                              ? isDark
+                                ? 'bg-indigo-900/40 border border-indigo-400'
+                                : 'bg-indigo-100 border border-indigo-600'
+                              : draggedCut !== null
+                                ? isDark
+                                  ? 'bg-gray-700/20 hover:bg-gray-700/40'
+                                  : 'bg-gray-200/50 hover:bg-gray-200'
+                                : isDark
+                                  ? 'hover:bg-gray-700/30'
+                                  : 'hover:bg-gray-100'
+                          }`}
+                          onClick={() => handleAddCut(chapter.id, scene.id, cutIndex + 1)}
+                          onDragOver={(e) => handleDragOver(e, chapter.id, scene.id, cutIndex + 1)}
+                          onDrop={handleDrop}
+                          title="カットを追加"
+                        >
+                          <div
+                            className={`opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs ${
+                              isDark ? 'text-gray-400' : 'text-gray-500'
+                            }`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                            <span>カットを追加</span>
+                          </div>
+                        </div>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </motion.div>
+              </React.Fragment>
+            ))}
+
+            {/* 最後のシーンの追加ボタン */}
+            <div
+              draggable={false}
+              className={`group h-6 flex items-center justify-center transition-all rounded cursor-pointer mb-2 ${
+                sceneDropTarget?.chapterId === chapter.id && sceneDropTarget?.position === chapter.scenes.length
+                  ? isDark
+                    ? 'bg-indigo-900/40 border border-indigo-400'
+                    : 'bg-indigo-100 border border-indigo-600'
+                  : draggedScene !== null
+                    ? isDark
+                      ? 'bg-gray-700/20 hover:bg-gray-700/40'
+                      : 'bg-gray-200/50 hover:bg-gray-200'
+                    : isDark
+                      ? 'hover:bg-gray-700/30'
+                      : 'hover:bg-gray-100'
+              }`}
+              onClick={() => handleAddScene(chapter.id, chapter.scenes.length)}
+              onDragOver={(e) => handleSceneDragOver(e, chapter.id, chapter.scenes.length)}
+              onDrop={handleSceneDrop}
+              title="シーンを追加"
+            >
+              <div
+                className={`opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs ${
+                  isDark ? 'text-gray-400' : 'text-gray-500'
+                }`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                <span>シーンを追加</span>
+              </div>
+            </div>
+            </motion.div>
+            </React.Fragment>
+          ))}
+          {/* 最後の章の追加ボタン */}
+          <div
+            draggable={false}
+            className={`group w-12 flex-shrink-0 flex items-start justify-center pt-8 transition-all rounded cursor-pointer ${
+              chapterDropTarget === chapters.length
+                ? isDark
+                  ? 'bg-indigo-900/40 border-2 border-indigo-400'
+                  : 'bg-indigo-100 border-2 border-indigo-600'
+                : draggedChapter !== null
+                  ? isDark
+                    ? 'bg-gray-700/20 hover:bg-gray-700/40'
+                    : 'bg-gray-200/50 hover:bg-gray-200'
+                  : isDark
+                    ? 'hover:bg-gray-700/30'
+                    : 'hover:bg-gray-100'
+            }`}
+            onClick={() => handleAddChapter(chapters.length)}
+            onDragOver={(e) => handleChapterDragOver(e, chapters.length)}
+            onDrop={handleChapterDrop}
+            title="章を追加"
+          >
+            <div
+              className={`opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center gap-1 text-xs ${
+                isDark ? 'text-gray-400' : 'text-gray-500'
+              }`}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* オーバーレイUI: ズームコントロール */}
+      <div className="absolute top-4 left-4 flex flex-col gap-2">
+        <button
+          onClick={() => setViewport({ ...viewport, zoom: Math.min(viewport.zoom * 1.2, 5) })}
+          className={`w-10 h-10 flex items-center justify-center rounded-lg shadow-lg ${
+            isDark ? 'bg-gray-800 text-white hover:bg-gray-700' : 'bg-white text-gray-900 hover:bg-gray-100'
+          } border ${isDark ? 'border-gray-700' : 'border-gray-300'}`}
+          title="ズームイン (ホイール上)"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
+        <button
+          onClick={() => setViewport({ ...viewport, zoom: Math.max(viewport.zoom * 0.8, 0.1) })}
+          className={`w-10 h-10 flex items-center justify-center rounded-lg shadow-lg ${
+            isDark ? 'bg-gray-800 text-white hover:bg-gray-700' : 'bg-white text-gray-900 hover:bg-gray-100'
+          } border ${isDark ? 'border-gray-700' : 'border-gray-300'}`}
+          title="ズームアウト (ホイール下)"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+          </svg>
+        </button>
+        <button
+          onClick={() => setViewport({ x: 0, y: 0, zoom: 1 })}
+          className={`w-10 h-10 flex items-center justify-center rounded-lg shadow-lg ${
+            isDark ? 'bg-gray-800 text-white hover:bg-gray-700' : 'bg-white text-gray-900 hover:bg-gray-100'
+          } border ${isDark ? 'border-gray-700' : 'border-gray-300'}`}
+          title="リセット"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+          </svg>
+        </button>
+      </div>
+
+      {/* ヘルプテキスト */}
+      <div className={`absolute bottom-4 left-4 px-4 py-2 rounded-lg text-xs ${
+        isDark ? 'bg-gray-800/90 text-gray-300' : 'bg-white/90 text-gray-600'
+      } border ${isDark ? 'border-gray-700' : 'border-gray-300'}`}>
+        <div>ドラッグ: パン（移動）</div>
+        <div>ホイール: ズーム</div>
+        <div>ズーム: {Math.round(viewport.zoom * 100)}%</div>
+      </div>
+    </div>
+  )
+}
+
+export default CanvasEditor

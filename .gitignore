@@ -1,3 +1,9 @@
+# Frontend (Node.js)
+node_modules
+dist
+dist-ssr
+*.local
+
 # Logs
 logs
 *.log
@@ -7,10 +13,26 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Backend (Python)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+backend/.venv/
+backend/venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Backend projects (each is a separate git repo)
+backend/projects/
+
+# Docker
+*.env.local
 
 # Editor directories and files
 .vscode/*
