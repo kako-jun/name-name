@@ -1,19 +1,147 @@
 import { useState, useEffect } from 'react'
-import ScriptEditor from './components/ScriptEditor'
+import CanvasEditor from './components/CanvasEditor'
 import NovelPlayer from './components/NovelPlayer'
-import { ScriptRow, Mode } from './types'
+import { Chapter, Mode } from './types'
 
-// サンプルデータ
-const initialScriptData: ScriptRow[] = [
-  { id: 1, character: 'ナレーター', text: '物語が始まる...', expression: '' },
-  { id: 2, character: '主人公', text: 'こんにちは、世界！', expression: '笑顔' },
-  { id: 3, character: 'ヒロイン', text: 'よろしくね！', expression: '照れ' },
+// サンプルデータ（Canvas風エディタ用）
+const initialChapters: Chapter[] = [
+  {
+    id: 1,
+    title: '出会い',
+    scenes: [
+      {
+        id: 1,
+        title: 'プロローグ',
+        cuts: [
+          { id: 1, character: 'ナレーター', text: '物語が始まる...', expression: '' },
+          { id: 2, character: '主人公', text: 'こんにちは、世界！', expression: '笑顔' },
+        ],
+      },
+      {
+        id: 2,
+        title: '初対面',
+        cuts: [
+          { id: 3, character: 'ヒロイン', text: 'よろしくね！', expression: '照れ' },
+          { id: 4, character: '主人公', text: 'こちらこそ！', expression: '笑顔' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 2,
+    title: '事件発生',
+    scenes: [
+      {
+        id: 3,
+        title: '不穏な空気',
+        cuts: [
+          { id: 5, character: 'ナレーター', text: 'その日の夜、事件が起きた。', expression: '' },
+          { id: 6, character: '主人公', text: 'これは...！', expression: '驚き' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 3,
+    title: '調査開始',
+    scenes: [
+      {
+        id: 4,
+        title: '手がかり',
+        cuts: [
+          { id: 7, character: '主人公', text: 'この手がかりは...', expression: '真剣' },
+          { id: 8, character: 'ヒロイン', text: '何か見つけた？', expression: '心配' },
+        ],
+      },
+      {
+        id: 5,
+        title: '証拠の分析',
+        cuts: [
+          { id: 9, character: '主人公', text: 'これは重要な証拠だ', expression: '真剣' },
+          { id: 10, character: 'ナレーター', text: '事件の真相が見えてきた', expression: '' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 4,
+    title: '真実への接近',
+    scenes: [
+      {
+        id: 6,
+        title: '容疑者との対峙',
+        cuts: [
+          { id: 11, character: '主人公', text: 'あなたが犯人なのか？', expression: '疑い' },
+          { id: 12, character: '容疑者', text: '私は何も知らない...', expression: '動揺' },
+        ],
+      },
+      {
+        id: 7,
+        title: '新たな謎',
+        cuts: [
+          { id: 13, character: 'ヒロイン', text: 'この状況、おかしくない？', expression: '疑問' },
+          {
+            id: 14,
+            character: '主人公',
+            text: '確かに...何かが引っかかる',
+            expression: '考え込む',
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: 5,
+    title: '真犯人',
+    scenes: [
+      {
+        id: 8,
+        title: '真相の解明',
+        cuts: [
+          { id: 15, character: '主人公', text: 'すべての謎が解けた！', expression: '確信' },
+          { id: 16, character: 'ナレーター', text: '驚愕の真実が明かされる', expression: '' },
+        ],
+      },
+      {
+        id: 9,
+        title: '対決',
+        cuts: [
+          { id: 17, character: '真犯人', text: 'よくぞここまで...', expression: '冷笑' },
+          { id: 18, character: '主人公', text: '観念しろ！', expression: '怒り' },
+          { id: 19, character: 'ヒロイン', text: 'そんな...まさか！', expression: '驚愕' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 6,
+    title: 'エピローグ',
+    scenes: [
+      {
+        id: 10,
+        title: '事件の終結',
+        cuts: [
+          { id: 20, character: 'ナレーター', text: '長い事件がついに終わった', expression: '' },
+          { id: 21, character: '主人公', text: 'やっと終わった...', expression: '安堵' },
+        ],
+      },
+      {
+        id: 11,
+        title: '新たな日常',
+        cuts: [
+          { id: 22, character: 'ヒロイン', text: 'これからどうする？', expression: '笑顔' },
+          { id: 23, character: '主人公', text: 'また新しい物語が始まる', expression: '希望' },
+          { id: 24, character: 'ナレーター', text: '二人の冒険は続く...', expression: '' },
+        ],
+      },
+    ],
+  },
 ]
 
 function App() {
   const [mode, setMode] = useState<Mode>('edit')
-  const [scriptData, setScriptData] = useState<ScriptRow[]>(initialScriptData)
-  const [selectedIndex, setSelectedIndex] = useState<number>(0)
+  const [chapters, setChapters] = useState<Chapter[]>(initialChapters)
+  const [selectedCutId, setSelectedCutId] = useState<number | null>(null)
   const [isDark, setIsDark] = useState(() => {
     const saved = localStorage.getItem('darkMode')
     return saved ? JSON.parse(saved) : false
@@ -22,6 +150,29 @@ function App() {
   useEffect(() => {
     localStorage.setItem('darkMode', JSON.stringify(isDark))
   }, [isDark])
+
+  // chapters から scriptData を生成
+  const generateScriptFromChapters = (): ScriptRow[] => {
+    return chapters.flatMap((chapter) =>
+      chapter.scenes.flatMap((scene) =>
+        scene.cuts.map((cut) => ({
+          id: cut.id,
+          character: cut.character,
+          text: cut.text,
+          expression: cut.expression,
+        }))
+      )
+    )
+  }
+
+  // selectedCutId から startIndex を計算
+  const getStartIndexFromSelectedCut = (): number => {
+    if (selectedCutId === null) return 0
+
+    const script = generateScriptFromChapters()
+    const index = script.findIndex((row) => row.id === selectedCutId)
+    return index !== -1 ? index : 0
+  }
 
   return (
     <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
@@ -108,15 +259,18 @@ function App() {
 
       <main className="flex-1 overflow-hidden">
         {mode === 'edit' ? (
-          <ScriptEditor
-            scriptData={scriptData}
-            setScriptData={setScriptData}
-            selectedIndex={selectedIndex}
-            setSelectedIndex={setSelectedIndex}
+          <CanvasEditor
+            chapters={chapters}
+            setChapters={setChapters}
             isDark={isDark}
+            selectedCutId={selectedCutId}
+            setSelectedCutId={setSelectedCutId}
           />
         ) : (
-          <NovelPlayer scriptData={scriptData} startIndex={selectedIndex} />
+          <NovelPlayer
+            scriptData={generateScriptFromChapters()}
+            startIndex={getStartIndexFromSelectedCut()}
+          />
         )}
       </main>
     </div>
