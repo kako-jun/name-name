@@ -1,155 +1,115 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import CanvasEditor from './components/CanvasEditor'
 import NovelPlayer from './components/NovelPlayer'
 import { Chapter, Mode } from './types'
 
-// サンプルデータ（Canvas風エディタ用）
-const initialChapters: Chapter[] = [
-  {
-    id: 1,
-    title: '出会い',
-    scenes: [
-      {
-        id: 1,
-        title: 'プロローグ',
-        cuts: [
-          { id: 1, character: 'ナレーター', text: '物語が始まる...', expression: '' },
-          { id: 2, character: '主人公', text: 'こんにちは、世界！', expression: '笑顔' },
-        ],
-      },
-      {
-        id: 2,
-        title: '初対面',
-        cuts: [
-          { id: 3, character: 'ヒロイン', text: 'よろしくね！', expression: '照れ' },
-          { id: 4, character: '主人公', text: 'こちらこそ！', expression: '笑顔' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 2,
-    title: '事件発生',
-    scenes: [
-      {
-        id: 3,
-        title: '不穏な空気',
-        cuts: [
-          { id: 5, character: 'ナレーター', text: 'その日の夜、事件が起きた。', expression: '' },
-          { id: 6, character: '主人公', text: 'これは...！', expression: '驚き' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 3,
-    title: '調査開始',
-    scenes: [
-      {
-        id: 4,
-        title: '手がかり',
-        cuts: [
-          { id: 7, character: '主人公', text: 'この手がかりは...', expression: '真剣' },
-          { id: 8, character: 'ヒロイン', text: '何か見つけた？', expression: '心配' },
-        ],
-      },
-      {
-        id: 5,
-        title: '証拠の分析',
-        cuts: [
-          { id: 9, character: '主人公', text: 'これは重要な証拠だ', expression: '真剣' },
-          { id: 10, character: 'ナレーター', text: '事件の真相が見えてきた', expression: '' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 4,
-    title: '真実への接近',
-    scenes: [
-      {
-        id: 6,
-        title: '容疑者との対峙',
-        cuts: [
-          { id: 11, character: '主人公', text: 'あなたが犯人なのか？', expression: '疑い' },
-          { id: 12, character: '容疑者', text: '私は何も知らない...', expression: '動揺' },
-        ],
-      },
-      {
-        id: 7,
-        title: '新たな謎',
-        cuts: [
-          { id: 13, character: 'ヒロイン', text: 'この状況、おかしくない？', expression: '疑問' },
-          {
-            id: 14,
-            character: '主人公',
-            text: '確かに...何かが引っかかる',
-            expression: '考え込む',
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: 5,
-    title: '真犯人',
-    scenes: [
-      {
-        id: 8,
-        title: '真相の解明',
-        cuts: [
-          { id: 15, character: '主人公', text: 'すべての謎が解けた！', expression: '確信' },
-          { id: 16, character: 'ナレーター', text: '驚愕の真実が明かされる', expression: '' },
-        ],
-      },
-      {
-        id: 9,
-        title: '対決',
-        cuts: [
-          { id: 17, character: '真犯人', text: 'よくぞここまで...', expression: '冷笑' },
-          { id: 18, character: '主人公', text: '観念しろ！', expression: '怒り' },
-          { id: 19, character: 'ヒロイン', text: 'そんな...まさか！', expression: '驚愕' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 6,
-    title: 'エピローグ',
-    scenes: [
-      {
-        id: 10,
-        title: '事件の終結',
-        cuts: [
-          { id: 20, character: 'ナレーター', text: '長い事件がついに終わった', expression: '' },
-          { id: 21, character: '主人公', text: 'やっと終わった...', expression: '安堵' },
-        ],
-      },
-      {
-        id: 11,
-        title: '新たな日常',
-        cuts: [
-          { id: 22, character: 'ヒロイン', text: 'これからどうする？', expression: '笑顔' },
-          { id: 23, character: '主人公', text: 'また新しい物語が始まる', expression: '希望' },
-          { id: 24, character: 'ナレーター', text: '二人の冒険は続く...', expression: '' },
-        ],
-      },
-    ],
-  },
-]
-
 function App() {
   const [mode, setMode] = useState<Mode>('edit')
-  const [chapters, setChapters] = useState<Chapter[]>(initialChapters)
+  const [chapters, setChapters] = useState<Chapter[]>([])
   const [selectedCutId, setSelectedCutId] = useState<number | null>(null)
   const [isDark, setIsDark] = useState(() => {
     const saved = localStorage.getItem('darkMode')
     return saved ? JSON.parse(saved) : false
   })
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const saveTimeoutRef = useRef<number | null>(null)
+
+  // 設定（LocalStorageに保存）
+  const [showSettings, setShowSettings] = useState(false)
+  const [apiBaseUrl, setApiBaseUrl] = useState(() => {
+    return localStorage.getItem('apiBaseUrl') || 'http://localhost:7373'
+  })
+  const [projectName, setProjectName] = useState(() => {
+    return localStorage.getItem('projectName') || 'ogurasia'
+  })
 
   useEffect(() => {
     localStorage.setItem('darkMode', JSON.stringify(isDark))
   }, [isDark])
+
+  useEffect(() => {
+    localStorage.setItem('apiBaseUrl', apiBaseUrl)
+  }, [apiBaseUrl])
+
+  useEffect(() => {
+    localStorage.setItem('projectName', projectName)
+    document.title = `${projectName} - Name × Name`
+  }, [projectName])
+
+  // 初回ロード: APIから章データを取得
+  useEffect(() => {
+    const loadChapters = async () => {
+      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
+      if (!response.ok) {
+        throw new Error(`Failed to load chapters: ${response.status}`)
+      }
+      const data = await response.json()
+      setChapters(data.chapters)
+    }
+    loadChapters()
+  }, [apiBaseUrl, projectName])
+
+  // 未コミットの変更があるかチェック
+  useEffect(() => {
+    const checkStatus = async () => {
+      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
+      if (!response.ok) {
+        throw new Error(`Failed to check status: ${response.status}`)
+      }
+      const data = await response.json()
+      setHasUnsavedChanges(data.has_uncommitted_changes)
+    }
+    checkStatus()
+    const interval = setInterval(checkStatus, 5000) // 5秒ごとにチェック
+    return () => clearInterval(interval)
+  }, [apiBaseUrl, projectName])
+
+  // 章データが変更されたら自動的にワーキングディレクトリに保存（デバウンス付き）
+  useEffect(() => {
+    if (saveTimeoutRef.current !== null) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+
+    saveTimeoutRef.current = window.setTimeout(async () => {
+      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chapters: chapters,
+          message: '自動保存',
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to auto-save: ${response.status}`)
+      }
+      setHasUnsavedChanges(true) // ワーキングディレクトリに保存されたので未コミット状態
+    }, 1000) // 1秒のデバウンス
+
+    return () => {
+      if (saveTimeoutRef.current !== null) {
+        clearTimeout(saveTimeoutRef.current)
+      }
+    }
+  }, [chapters])
+
+  // 保存ボタン: Gitコミット・プッシュ
+  const handleSave = async () => {
+    setIsSaving(true)
+    const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/commit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: '原稿保存',
+      }),
+    })
+    if (!response.ok) {
+      setIsSaving(false)
+      throw new Error(`Failed to commit: ${response.status}`)
+    }
+    setHasUnsavedChanges(false)
+    setIsSaving(false)
+  }
 
   // chapters から scriptData を生成
   const generateScriptFromChapters = (): ScriptRow[] => {
@@ -181,16 +141,17 @@ function App() {
       >
         <div className="px-6 py-2 flex items-center justify-between">
           <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-            Name × Name
+            Name × Name <span className={isDark ? 'text-gray-400' : 'text-gray-500'}>- {projectName}</span>
           </h1>
-          {/* テーマ切り替えスイッチ */}
-          <button
-            onClick={() => setIsDark(!isDark)}
-            className={`w-10 h-10 flex items-center justify-center rounded transition-colors ${
-              isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
-            }`}
-            title={isDark ? 'Light Mode' : 'Dark Mode'}
-          >
+          <div className="flex items-center gap-2">
+            {/* テーマ切り替えスイッチ */}
+            <button
+              onClick={() => setIsDark(!isDark)}
+              className={`w-10 h-10 flex items-center justify-center rounded transition-colors ${
+                isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+              title={isDark ? 'Light Mode' : 'Dark Mode'}
+            >
             {isDark ? (
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -211,49 +172,167 @@ function App() {
               </svg>
             )}
           </button>
+            {/* 設定ボタン */}
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className={`w-10 h-10 flex items-center justify-center rounded transition-colors ${
+                isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+              title="Settings"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* モード切替ボタン（画面右下隅に縦並び固定） */}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+      {/* 設定モーダル */}
+      {showSettings && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]"
+        >
+          <div
+            className={`p-6 rounded-lg shadow-xl max-w-md w-full ${
+              isDark ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+            }`}
+          >
+            <h2 className="text-xl font-bold mb-4">設定</h2>
+            <div className="space-y-4">
+              <div>
+                <label className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                  API URL
+                </label>
+                <input
+                  type="text"
+                  value={apiBaseUrl}
+                  onChange={(e) => setApiBaseUrl(e.target.value)}
+                  className={`w-full px-3 py-2 border rounded ${
+                    isDark
+                      ? 'bg-gray-700 border-gray-600 text-white'
+                      : 'bg-white border-gray-300 text-gray-900'
+                  }`}
+                  placeholder="http://localhost:7373"
+                />
+              </div>
+              <div>
+                <label className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                  プロジェクト名
+                </label>
+                <input
+                  type="text"
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                  className={`w-full px-3 py-2 border rounded ${
+                    isDark
+                      ? 'bg-gray-700 border-gray-600 text-white'
+                      : 'bg-white border-gray-300 text-gray-900'
+                  }`}
+                  placeholder="ogurasia"
+                />
+              </div>
+              <button
+                onClick={() => setShowSettings(false)}
+                className={`w-full py-2 px-4 rounded font-medium ${
+                  isDark
+                    ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                    : 'bg-blue-500 hover:bg-blue-600 text-white'
+                }`}
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* モード切替と保存ボタン（画面右下隅に固定） */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end">
+        {/* モード切替ボタン（左右並び） */}
+        <div className="flex gap-2">
+          <button
+            className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
+              mode === 'edit'
+                ? isDark
+                  ? 'bg-gray-700 text-white border-gray-600'
+                  : 'bg-gray-900 text-white border-gray-800'
+                : isDark
+                  ? 'bg-gray-800 text-gray-400 hover:bg-gray-700 border-gray-700'
+                  : 'bg-white text-gray-600 hover:bg-gray-100 border-gray-300'
+            }`}
+            onClick={() => setMode('edit')}
+            title="Edit Mode"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+              />
+            </svg>
+          </button>
+          <button
+            className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
+              mode === 'play'
+                ? isDark
+                  ? 'bg-gray-700 text-white border-gray-600'
+                  : 'bg-gray-900 text-white border-gray-800'
+                : isDark
+                  ? 'bg-gray-800 text-gray-400 hover:bg-gray-700 border-gray-700'
+                  : 'bg-white text-gray-600 hover:bg-gray-100 border-gray-300'
+            }`}
+            onClick={() => setMode('play')}
+            title="Play Mode"
+          >
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          </button>
+        </div>
+
+        {/* 保存ボタン（右下詰め） */}
         <button
           className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
-            mode === 'edit'
+            hasUnsavedChanges && !isSaving
               ? isDark
-                ? 'bg-gray-700 text-white border-gray-600'
-                : 'bg-gray-900 text-white border-gray-800'
+                ? 'bg-blue-600 text-white border-blue-500 hover:bg-blue-700'
+                : 'bg-blue-500 text-white border-blue-400 hover:bg-blue-600'
               : isDark
-                ? 'bg-gray-800 text-gray-400 hover:bg-gray-700 border-gray-700'
-                : 'bg-white text-gray-600 hover:bg-gray-100 border-gray-300'
+                ? 'bg-gray-800 text-gray-500 border-gray-700 cursor-not-allowed'
+                : 'bg-gray-200 text-gray-400 border-gray-300 cursor-not-allowed'
           }`}
-          onClick={() => setMode('edit')}
-          title="Edit Mode"
+          onClick={handleSave}
+          disabled={!hasUnsavedChanges || isSaving}
+          title={hasUnsavedChanges ? 'Gitにコミット・プッシュ' : '保存済み'}
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-            />
-          </svg>
-        </button>
-        <button
-          className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
-            mode === 'play'
-              ? isDark
-                ? 'bg-gray-700 text-white border-gray-600'
-                : 'bg-gray-900 text-white border-gray-800'
-              : isDark
-                ? 'bg-gray-800 text-gray-400 hover:bg-gray-700 border-gray-700'
-                : 'bg-white text-gray-600 hover:bg-gray-100 border-gray-300'
-          }`}
-          onClick={() => setMode('play')}
-          title="Play Mode"
-        >
-          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M8 5v14l11-7z" />
-          </svg>
+          {isSaving ? (
+            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+          ) : (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"
+              />
+            </svg>
+          )}
         </button>
       </div>
 

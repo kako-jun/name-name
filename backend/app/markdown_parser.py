@@ -41,8 +41,14 @@ def markdown_to_chapters(markdown: str) -> List[Chapter]:
         # 章のパース (# 第1章: タイトル)
         chapter_match = re.match(r'^# 第(\d+)章:\s*(.+)$', line)
         if chapter_match:
+            # 新しい章に移る前に、現在のカット・シーンを確定
+            if current_cut and current_scene:
+                current_scene.cuts.append(current_cut)
+            if current_scene and current_chapter:
+                current_chapter.scenes.append(current_scene)
             if current_chapter:
                 chapters.append(current_chapter)
+
             chapter_id = int(chapter_match.group(1))
             chapter_title = chapter_match.group(2)
             current_chapter = Chapter(id=chapter_id, title=chapter_title, scenes=[])
@@ -53,8 +59,12 @@ def markdown_to_chapters(markdown: str) -> List[Chapter]:
         # シーンのパース (## シーン1: タイトル)
         scene_match = re.match(r'^## シーン(\d+):\s*(.+)$', line)
         if scene_match and current_chapter:
+            # 新しいシーンに移る前に、現在のカットを確定
+            if current_cut and current_scene:
+                current_scene.cuts.append(current_cut)
             if current_scene:
                 current_chapter.scenes.append(current_scene)
+
             scene_id = int(scene_match.group(1))
             scene_title = scene_match.group(2)
             current_scene = Scene(id=scene_id, title=scene_title, cuts=[])

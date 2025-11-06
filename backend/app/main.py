@@ -29,8 +29,8 @@ app = FastAPI(
 # CORS設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],  # Vite開発サーバー
-    allow_credentials=True,
+    allow_origins=["*"],  # 開発中はすべて許可
+    allow_credentials=False,  # *を使う場合はFalseにする必要がある
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -199,52 +199,62 @@ async def init_project(body: dict):
 
 @app.get("/api/projects/{project_name}/chapters", response_model=ChaptersResponse)
 async def get_chapters(project_name: str):
-    """指定プロジェクトの章データを取得"""
-    git_service = get_git_service(project_name)
+    """指定プロジェクトの章データを取得（ワーキングディレクトリから、未コミットの変更含む）"""
     file_path = get_chapters_file_path(project_name)
 
     if not file_path.exists():
-        # ファイルが存在しない場合は空配列を返す
-        return ChaptersResponse(chapters=[])
+        raise HTTPException(status_code=404, detail=f"Chapters file not found: {file_path}")
 
-    try:
-        # Git pullして最新を取得
-        git_service.pull()
+    # ワーキングディレクトリから直接読み込み（pullしない）
+    markdown_content = file_path.read_text(encoding="utf-8")
+    chapters = markdown_to_chapters(markdown_content)
 
-        # Markdownファイルを読み込み
-        markdown_content = file_path.read_text(encoding="utf-8")
-        chapters = markdown_to_chapters(markdown_content)
-
-        return ChaptersResponse(chapters=chapters)
-    except Exception as e:
-        logger.error(f"Get chapters failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return ChaptersResponse(chapters=chapters)
 
 
-@app.put("/api/projects/{project_name}/chapters", response_model=SaveResponse)
-async def save_chapters(project_name: str, body: ChaptersRequest):
-    """指定プロジェクトの章データを保存"""
-    git_service = get_git_service(project_name)
+@app.put("/api/projects/{project_name}/chapters")
+async def update_chapters(project_name: str, body: ChaptersRequest):
+    """指定プロジェクトの章データをワーキングディレクトリに書き込む（コミットはしない）"""
     file_path = get_chapters_file_path(project_name)
 
     # 親ディレクトリを作成
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        # ChaptersをMarkdownに変換
-        markdown_content = chapters_to_markdown(body.chapters)
+    # ChaptersをMarkdownに変換
+    markdown_content = chapters_to_markdown(body.chapters)
 
-        # ファイルに書き込み
-        file_path.write_text(markdown_content, encoding="utf-8")
+    # ファイルに書き込み（コミットはしない）
+    file_path.write_text(markdown_content, encoding="utf-8")
 
-        # Git commit & push
-        relative_path = file_path.relative_to(PROJECTS_DIR / project_name)
-        commit_hash = git_service.commit_and_push(str(relative_path), body.message)
+    return {
+        "success": True,
+        "message": "ワーキングディレクトリに保存しました（未コミット）"
+    }
 
-        return SaveResponse(success=True, commit_hash=commit_hash)
-    except Exception as e:
-        logger.error(f"Save chapters failed: {e}")
-        return SaveResponse(success=False, error=str(e))
+
+@app.post("/api/projects/{project_name}/commit", response_model=SaveResponse)
+async def commit_changes(project_name: str, body: dict):
+    """ワーキングディレクトリの変更をコミット・プッシュ"""
+    git_service = get_git_service(project_name)
+    message = body.get("message", "原稿更新")
+
+    # すべての変更をコミット
+    commit_hash = git_service.commit_and_push(".", message)
+
+    return SaveResponse(success=True, commit_hash=commit_hash)
+
+
+@app.get("/api/projects/{project_name}/status")
+async def get_project_status(project_name: str):
+    """プロジェクトの状態を取得（未コミットの変更があるか）"""
+    git_service = get_git_service(project_name)
+
+    has_changes = git_service.has_changes()
+
+    return {
+        "has_uncommitted_changes": has_changes,
+        "message": "未コミットの変更があります" if has_changes else "すべてコミット済み"
+    }
 
 
 @app.post("/api/projects/{project_name}/sync")
