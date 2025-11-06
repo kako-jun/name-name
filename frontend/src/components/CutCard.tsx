@@ -163,7 +163,7 @@ function CutCard({
               onChange={(e) => onCutChange(chapterId, sceneId, cut.id, 'text', e.target.value)}
               placeholder="テキスト"
               rows={3}
-              className={`w-full px-2 py-1 text-sm rounded border resize-none ${
+              className={`w-full px-2 py-1 text-sm rounded border resize-none font-mono ${
                 isDark
                   ? 'bg-gray-700 text-gray-300 border-gray-600 focus:border-indigo-500'
                   : 'bg-white text-gray-700 border-gray-300 focus:border-indigo-500'
@@ -203,7 +203,7 @@ function CutCard({
             >
               {cut.character || '（キャラクター名）'}
             </div>
-            <div className={`text-xs ml-2 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+            <div className={`text-sm ml-2 font-mono whitespace-pre-wrap ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
               {cut.text || '（テキスト）'}
             </div>
             {cut.expression && (
