@@ -257,6 +257,25 @@ async def get_project_status(project_name: str):
     }
 
 
+@app.post("/api/projects/{project_name}/discard")
+async def discard_changes(project_name: str):
+    """未コミットの変更を破棄（git checkout . + 未追跡ファイル削除）"""
+    git_service = get_git_service(project_name)
+
+    try:
+        success = git_service.discard_changes()
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to discard changes")
+
+        return {
+            "success": True,
+            "message": "すべての変更を破棄しました"
+        }
+    except Exception as e:
+        logger.error(f"Discard failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/projects/{project_name}/sync")
 async def sync_project(project_name: str):
     """プロジェクトを同期（git pull）"""

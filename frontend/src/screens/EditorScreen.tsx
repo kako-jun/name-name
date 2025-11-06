@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import CanvasEditor from '../components/CanvasEditor'
 import NovelPlayer from '../components/NovelPlayer'
+import SaveDiscardButtons from '../components/SaveDiscardButtons'
 import { Chapter, Mode } from '../types'
 
 interface ScriptRow {
@@ -34,6 +35,7 @@ function EditorScreen({
   const [selectedCutId, setSelectedCutId] = useState<number | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
   const initialChaptersRef = useRef<string>('')
 
@@ -48,15 +50,51 @@ function EditorScreen({
       setChapters(data.chapters)
       // 初期状態を保存
       initialChaptersRef.current = JSON.stringify(data.chapters)
+
+      // git statusをチェックして、未コミットの変更があればボタンを青くする
+      const statusResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
+      if (statusResponse.ok) {
+        const statusData = await statusResponse.json()
+        setHasUnsavedChanges(statusData.has_uncommitted_changes)
+      }
     }
     loadChapters()
   }, [apiBaseUrl, projectName])
 
-  // 章データの変更を検出
+  // 5秒ごとにgit statusをチェック（ただしフロント側の変更を優先）
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
+        if (response.ok) {
+          const data = await response.json()
+          // フロント側で変更がない場合のみ、サーバー側の状態を反映
+          const currentChapters = JSON.stringify(chapters)
+          const hasLocalChanges = initialChaptersRef.current !== '' && currentChapters !== initialChaptersRef.current
+          if (!hasLocalChanges) {
+            setHasUnsavedChanges(data.has_uncommitted_changes)
+          } else {
+            // フロント側で変更がある場合は常にtrue
+            setHasUnsavedChanges(true)
+          }
+        }
+      } catch (error) {
+        console.error('Failed to check status:', error)
+      }
+    }
+
+    const interval = setInterval(checkStatus, 5000)
+    return () => clearInterval(interval)
+  }, [apiBaseUrl, projectName, chapters])
+
+  // 章データの変更を検出（即座に反映）
   useEffect(() => {
     if (initialChaptersRef.current === '') return
     const currentChapters = JSON.stringify(chapters)
-    setHasUnsavedChanges(currentChapters !== initialChaptersRef.current)
+    const hasChanges = currentChapters !== initialChaptersRef.current
+    if (hasChanges) {
+      setHasUnsavedChanges(true)
+    }
   }, [chapters])
 
   // 章データが変更されたら自動的にワーキングディレクトリに保存
@@ -104,6 +142,32 @@ function EditorScreen({
     initialChaptersRef.current = JSON.stringify(chapters)
     setHasUnsavedChanges(false)
     setIsSaving(false)
+  }
+
+  // 破棄ボタン: 未コミットの変更を破棄
+  const handleDiscard = async () => {
+    setShowDiscardConfirm(false)
+    setIsSaving(true)
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/discard`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to discard: ${response.status}`)
+      }
+      // データを再読み込み
+      const chaptersResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
+      if (chaptersResponse.ok) {
+        const data = await chaptersResponse.json()
+        setChapters(data.chapters)
+        initialChaptersRef.current = JSON.stringify(data.chapters)
+      }
+      setHasUnsavedChanges(false)
+    } catch (error) {
+      console.error('Failed to discard changes:', error)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const generateScriptFromChapters = (): ScriptRow[] => {
@@ -207,81 +271,6 @@ function EditorScreen({
         </div>
       </header>
 
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end">
-        <div className="flex gap-2">
-          <button
-            className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
-              mode === 'edit'
-                ? isDark
-                  ? 'bg-gray-700 text-white border-gray-600'
-                  : 'bg-gray-900 text-white border-gray-800'
-                : isDark
-                  ? 'bg-gray-800 text-gray-400 hover:bg-gray-700 border-gray-700'
-                  : 'bg-white text-gray-600 hover:bg-gray-100 border-gray-300'
-            }`}
-            onClick={() => setMode('edit')}
-            title="Edit Mode"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-              />
-            </svg>
-          </button>
-          <button
-            className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
-              mode === 'play'
-                ? isDark
-                  ? 'bg-gray-700 text-white border-gray-600'
-                  : 'bg-gray-900 text-white border-gray-800'
-                : isDark
-                  ? 'bg-gray-800 text-gray-400 hover:bg-gray-700 border-gray-700'
-                  : 'bg-white text-gray-600 hover:bg-gray-100 border-gray-300'
-            }`}
-            onClick={() => setMode('play')}
-            title="Play Mode"
-          >
-            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          </button>
-        </div>
-
-        <button
-          className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
-            hasUnsavedChanges && !isSaving
-              ? isDark
-                ? 'bg-blue-600 text-white border-blue-500 hover:bg-blue-700'
-                : 'bg-blue-500 text-white border-blue-400 hover:bg-blue-600'
-              : isDark
-                ? 'bg-gray-800 text-gray-500 border-gray-700 cursor-not-allowed'
-                : 'bg-gray-200 text-gray-400 border-gray-300 cursor-not-allowed'
-          }`}
-          onClick={handleSave}
-          disabled={!hasUnsavedChanges || isSaving}
-          title={hasUnsavedChanges ? 'Gitにコミット・プッシュ' : '保存済み'}
-        >
-          {isSaving ? (
-            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-          ) : (
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"
-              />
-            </svg>
-          )}
-        </button>
-      </div>
-
       <main className="flex-1 overflow-hidden">
         {mode === 'edit' ? (
           <CanvasEditor
@@ -299,6 +288,55 @@ function EditorScreen({
           />
         )}
       </main>
+
+      {/* 破棄確認ダイアログ */}
+      {showDiscardConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
+          <div
+            className={`p-6 rounded-lg shadow-xl max-w-md w-full ${
+              isDark ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+            }`}
+          >
+            <h2 className="text-xl font-bold mb-4">変更を破棄しますか？</h2>
+            <p className={`mb-6 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+              未コミットの変更がすべて失われます。この操作は取り消せません。
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowDiscardConfirm(false)}
+                className={`px-4 py-2 rounded font-medium transition-colors ${
+                  isDark
+                    ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                    : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                }`}
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleDiscard}
+                className={`px-4 py-2 rounded font-medium transition-colors ${
+                  isDark
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : 'bg-red-500 hover:bg-red-600 text-white'
+                }`}
+              >
+                破棄
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* プレイモード切替 & セーブ/アンドゥボタン */}
+      <SaveDiscardButtons
+        hasUnsavedChanges={hasUnsavedChanges}
+        isSaving={isSaving}
+        isDark={isDark}
+        onSave={handleSave}
+        onDiscard={() => setShowDiscardConfirm(true)}
+        mode={mode}
+        onModeChange={setMode}
+      />
     </div>
   )
 }

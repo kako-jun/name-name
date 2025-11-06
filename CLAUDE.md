@@ -111,8 +111,9 @@ curl -X POST http://localhost:8001/api/projects/init \
 - Git リポジトリ
 - chapters/all.md
 - assets/images/
-- assets/audio/
-- assets/videos/
+- assets/sounds/
+- assets/movies/
+- assets/ideas/
 
 ### 既存ゲームのクローン
 
@@ -160,9 +161,10 @@ my-game/
 ├── chapters/
 │   └── all.md          # 章データ（Markdown形式）
 └── assets/
-    ├── images/
-    ├── audio/
-    └── videos/
+    ├── images/         # 画像ファイル
+    ├── sounds/         # 音声ファイル
+    ├── movies/         # 動画ファイル
+    └── ideas/          # アイデアファイル
 ```
 
 ### Markdownフォーマット
@@ -244,10 +246,14 @@ LD_PRELOAD= git push origin main
 - `PUT /api/projects/{name}/chapters` - 保存
 
 ### アセット管理
-- `GET /api/projects/{name}/assets/{type}` - 一覧（type: images/audio/videos）
+- `GET /api/projects/{name}/assets/{type}` - 一覧（type: images/sounds/movies/ideas）
 - `POST /api/projects/{name}/assets/{type}` - アップロード
 - `GET /api/projects/{name}/assets/{type}/{filename}` - ダウンロード
 - `DELETE /api/projects/{name}/assets/{type}/{filename}` - 削除
+
+### コミット・同期
+- `GET /api/projects/{name}/status` - 未コミットの変更確認
+- `POST /api/projects/{name}/commit` - コミット・プッシュ
 
 ## トラブルシューティング
 
@@ -280,6 +286,18 @@ uv venv
 uv sync
 ```
 
+## 保存の仕組み
+
+### 自動保存（ワーキングディレクトリ）
+- 章データやアセットの変更は1秒後に自動保存
+- ワーキングディレクトリに書き込まれるのみ（コミットはしない）
+- セーブボタンが青く表示される（未コミットの変更あり）
+
+### 手動コミット（セーブボタン）
+- セーブボタンを押すとGitコミット・プッシュ
+- コミット成功後、セーブボタンの青色が消える
+- ローカル状態で未保存変更を追跡（APIポーリングなし）
+
 ## 開発時の注意点
 
 1. **シンボリックリンクは使わない** - Windows互換性のため
@@ -289,18 +307,32 @@ uv sync
 5. **LD_PRELOAD=を使う** - proxy環境でのcurl/git操作時
 6. **uvを使う** - Python依存関係管理
 
-## 次のステップ
+## 実装状況
 
-現在の状態：
+### 完了
 - ✅ バックエンドAPI実装完了
 - ✅ プロジェクト管理機能完成
-- ✅ アセット管理機能完成
+- ✅ アセット管理機能完成（images/sounds/movies/ideas）
 - ✅ ブランチ戦略実装完了
-- ⬜ フロントエンドとバックエンドの統合
-- ⬜ エディタUIでプロジェクト選択機能
-- ⬜ エディタからバックエンドAPIを呼び出し
-- ⬜ アセットアップロードUI
+- ✅ フロントエンドとバックエンドの統合
+- ✅ エディタUIでプロジェクト選択機能
+- ✅ キャンバスエディタ（ドラッグ&ドロップ）
+- ✅ アセット管理画面
+  - タブ切り替え（4種類のアセット）
+  - 検索機能（UI実装済み）
+  - サムネイル表示（画像）
+  - プレビュー機能（画像・音声・動画）
+  - ドラッグ&ドロップアップロード
+  - パンくずリストナビゲーション
+- ✅ 自動保存機能（ワーキングディレクトリ）
+- ✅ セーブボタン（Gitコミット・プッシュ）
+- ✅ ダークモード対応
+
+### 未実装
+- ⬜ アセット検索機能（バックエンド連携）
+- ⬜ タグ機能（アセット分類）
 - ⬜ Phaserとの統合テスト
+- ⬜ ゲーム実行環境の構築
 
 ## 参考ドキュメント
 
