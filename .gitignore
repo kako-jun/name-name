@@ -30,3 +30,4 @@ lerna-debug.log*
 *.sw?
 .claude/settings.local.json
 .serena/
+.mcp.json
