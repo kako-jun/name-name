@@ -1,0 +1,10 @@
+
+[iscript]
+sf.my.flags.clear_{{{scene_underbar}}} = true;
+sf.my.flags.show_{{{next_scene_underbar}}} = true;
+
+{{{noises}}}
+[endscript]
+
+[intermission series="{{{series}}}" num_of_noise="{{{num_of_noise}}}"]
+[s]

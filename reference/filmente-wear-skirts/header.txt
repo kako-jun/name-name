@@ -1,0 +1,65 @@
+[_tb_system_call storage=system/_{{{scene}}}.ks]
+
+*0
+[jump target="*preload"]
+
+*1
+[iscript]
+tf.time = 1;
+[endscript]
+
+[jump target="*preload"]
+
+*2
+[iscript]
+tf.time = 2;
+[endscript]
+
+[jump target="*preload"]
+
+*3
+[iscript]
+tf.time = 3;
+[endscript]
+
+[jump target="*preload"]
+
+*4
+[iscript]
+tf.time = 4;
+[endscript]
+
+*preload
+
+[iscript]
+f.preload_images = [
+  "data/fgimage/chara/1/black.png",
+  "data/fgimage/chara/1/white.png",
+  "data/fgimage/chara/1/BG_1_4.png",
+  "data/fgimage/chara/1/BG_2_4.png",
+  "data/fgimage/chara/1/BG_3_4.png",
+  "data/fgimage/chara/1/BG_4_4.png",
+  "data/fgimage/chara/1/BG_5_4.png",
+  "data/fgimage/chara/2/kako_angry.png",
+  "data/fgimage/chara/2/kako_happy.png",
+  "data/fgimage/chara/2/tomo_tohoho.png",
+];
+[endscript]
+
+[preload storage="&f.preload_images" wait="true"]
+
+[if exp="tf.time === 1"]
+  [jump target="*1_00"]
+[endif]
+
+[if exp="tf.time === 2"]
+  [jump target="*2_00"]
+[endif]
+
+[if exp="tf.time === 3"]
+  [jump target="*3_00"]
+[endif]
+
+[if exp="tf.time === 4"]
+  [jump target="*4_00"]
+[endif]

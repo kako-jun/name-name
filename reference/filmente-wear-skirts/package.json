@@ -1,0 +1,109 @@
+{
+  "name": "filmente",
+  "version": "1.0.0",
+  "private": true,
+  "author": "kako-jun",
+  "scripts": {
+    "serve": "vue-cli-service serve",
+    "build": "vue-cli-service build",
+    "lint": "vue-cli-service lint",
+    "e": "node src/background/app_cli.js exiftence",
+    "electron:build": "vue-cli-service electron:build",
+    "electron:serve": "vue-cli-service electron:serve",
+    "h": "node src/background/app_cli.js handred",
+    "postinstall": "electron-builder install-app-deps",
+    "postuninstall": "electron-builder install-app-deps",
+    "test:unit": "vue-cli-service test:unit",
+    "w": "node src/background/app_cli.js wear-skirts",
+    "y": "node src/background/app_cli.js ymd-md-d"
+  },
+  "dependencies": {
+    "exif": "^0.6.0",
+    "image-size": "^0.8.3",
+    "lodash": "^4.17.19",
+    "make-dir": "^3.1.0",
+    "moment": "^2.27.0",
+    "postcss-import": "^12.0.1",
+    "vue": "^2.6.11",
+    "vue-i18n": "^8.18.2",
+    "vue-router": "^3.3.4",
+    "vue2-perfect-scrollbar": "^1.5.0",
+    "vuetify": "^2.3.4",
+    "vuex": "^3.5.1"
+  },
+  "devDependencies": {
+    "@vue/cli-plugin-babel": "^4.4.6",
+    "@vue/cli-plugin-eslint": "^4.4.6",
+    "@vue/cli-plugin-unit-jest": "^4.4.6",
+    "@vue/cli-service": "^4.4.6",
+    "@vue/test-utils": "^1.0.3",
+    "babel-core": "7.0.0-bridge.0",
+    "babel-eslint": "^10.1.0",
+    "babel-jest": "^26.1.0",
+    "electron": "^9.1.0",
+    "eslint": "^7.4.0",
+    "eslint-plugin-vue": "^6.2.2",
+    "node-sass": "^4.14.1",
+    "sass-loader": "^9.0.2",
+    "stylus": "^0.54.7",
+    "stylus-loader": "^3.0.2",
+    "vue-cli-plugin-electron-builder": "^1.4.6",
+    "vue-cli-plugin-i18n": "^1.0.1",
+    "vue-cli-plugin-vuetify": "^2.0.6",
+    "vue-template-compiler": "^2.6.11",
+    "vuetify-loader": "^1.5.0"
+  },
+  "eslintConfig": {
+    "root": true,
+    "env": {
+      "node": true
+    },
+    "extends": [
+      "plugin:vue/essential",
+      "eslint:recommended"
+    ],
+    "rules": {},
+    "parserOptions": {
+      "parser": "babel-eslint"
+    }
+  },
+  "postcss": {
+    "plugins": {
+      "autoprefixer": {}
+    }
+  },
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not ie <= 8"
+  ],
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "jsx",
+      "json",
+      "vue"
+    ],
+    "transform": {
+      "^.+\\.vue$": "vue-jest",
+      ".+\\.(css|styl|less|sass|scss|svg|png|jpg|ttf|woff|woff2)$": "jest-transform-stub",
+      "^.+\\.jsx?$": "babel-jest"
+    },
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/src/$1"
+    },
+    "snapshotSerializers": [
+      "jest-serializer-vue"
+    ],
+    "testMatch": [
+      "**/tests/unit/**/*.spec.(js|jsx|ts|tsx)|**/__tests__/*.(js|jsx|ts|tsx)"
+    ],
+    "testURL": "http://localhost/"
+  },
+  "license": "MIT",
+  "main": "background.js",
+  "repository": {
+    "type": "git",
+    "url": "git@ssh.dev.azure.com:v3/kako-jun/filmente/filmente"
+  }
+}
