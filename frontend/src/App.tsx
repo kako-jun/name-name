@@ -3,24 +3,24 @@ import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-rout
 import ProjectListScreen from './screens/ProjectListScreen'
 import EditorScreen from './screens/EditorScreen'
 import AssetsScreen from './screens/AssetsScreen'
+import { get, set } from './utils/storage'
 
 function App() {
   const [isDark, setIsDark] = useState(() => {
-    const saved = localStorage.getItem('darkMode')
-    return saved ? JSON.parse(saved) : false
+    return get('darkMode') ?? false
   })
 
   const [showSettings, setShowSettings] = useState(false)
   const [apiBaseUrl, setApiBaseUrl] = useState(() => {
-    return localStorage.getItem('apiBaseUrl') || 'http://localhost:7373'
+    return get('apiBaseUrl') ?? 'http://localhost:7373'
   })
 
   useEffect(() => {
-    localStorage.setItem('darkMode', JSON.stringify(isDark))
+    set('darkMode', isDark)
   }, [isDark])
 
   useEffect(() => {
-    localStorage.setItem('apiBaseUrl', apiBaseUrl)
+    set('apiBaseUrl', apiBaseUrl)
   }, [apiBaseUrl])
 
   return (
