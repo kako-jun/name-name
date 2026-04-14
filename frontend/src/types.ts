@@ -33,4 +33,6 @@ export interface Viewport {
   zoom: number // ズームレベル (0.1 ~ 5.0)
 }
 
+export type EditableCutField = 'character' | 'text' | 'expression'
+
 export type Mode = 'edit' | 'play'
