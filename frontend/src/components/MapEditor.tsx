@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MapData, TileType } from '../types/rpg'
+import { MapData, TileType, TILE_COLORS } from '../types/rpg'
 
 interface MapEditorProps {
   mapData: MapData
@@ -12,13 +12,6 @@ const TILE_NAMES = {
   [TileType.ROAD]: '道',
   [TileType.TREE]: '木',
   [TileType.WATER]: '水',
-}
-
-const TILE_COLORS = {
-  [TileType.GRASS]: '#2d5016',
-  [TileType.ROAD]: '#8b7355',
-  [TileType.TREE]: '#1a3a1a',
-  [TileType.WATER]: '#4169e1',
 }
 
 function MapEditor({ mapData, onChange, isDark }: MapEditorProps) {

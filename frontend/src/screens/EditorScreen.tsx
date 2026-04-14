@@ -45,21 +45,25 @@ function EditorScreen({
   const initialChaptersRef = useRef<string>('')
 
   // RPGエディタ用の状態
-  const [rpgProject, setRpgProject] = useState<RPGProject>({
-    name: projectName,
-    version: '1.0.0',
-    map: {
-      width: 25,
-      height: 19,
-      tileSize: 32,
-      tiles: Array.from({ length: 19 }, (_, y) =>
-        Array.from({ length: 25 }, (_, x) =>
-          x === 0 || x === 24 || y === 0 || y === 18 ? 2 : 0
-        )
-      ),
-    },
-    player: { x: 5, y: 5, direction: 'down' },
-    npcs: [],
+  const [rpgProject, setRpgProject] = useState<RPGProject>(() => {
+    const mapWidth = 25
+    const mapHeight = 19
+    return {
+      name: projectName,
+      version: '1.0.0',
+      map: {
+        width: mapWidth,
+        height: mapHeight,
+        tileSize: 32,
+        tiles: Array.from({ length: mapHeight }, (_, y) =>
+          Array.from({ length: mapWidth }, (_, x) =>
+            x === 0 || x === mapWidth - 1 || y === 0 || y === mapHeight - 1 ? 2 : 0
+          )
+        ),
+      },
+      player: { x: 5, y: 5, direction: 'down' },
+      npcs: [],
+    }
   })
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
 

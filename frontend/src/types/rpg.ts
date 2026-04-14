@@ -75,6 +75,26 @@ export interface RPGProject {
 }
 
 /**
+ * タイルの CSS 色定数（MapEditor・NPCEditor・RPGScene で共有）
+ */
+export const TILE_COLORS = {
+  [TileType.GRASS]: '#2d5016',
+  [TileType.ROAD]: '#8b7355',
+  [TileType.TREE]: '#1a3a1a',
+  [TileType.WATER]: '#4169e1',
+} as const
+
+/**
+ * タイルの Phaser 用数値色定数
+ */
+export const TILE_COLORS_HEX = {
+  [TileType.GRASS]: 0x2d5016,
+  [TileType.ROAD]: 0x8b7355,
+  [TileType.TREE]: 0x1a3a1a,
+  [TileType.WATER]: 0x4169e1,
+} as const
+
+/**
  * 選択中のタイル
  */
 export interface SelectedTile {

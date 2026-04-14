@@ -1,5 +1,5 @@
 import Phaser from 'phaser'
-import { RPGProject, NPCData } from '../types/rpg'
+import { RPGProject, NPCData, TILE_COLORS_HEX, TileType } from '../types/rpg'
 
 interface NPC {
   sprite: Phaser.GameObjects.Rectangle
@@ -106,24 +106,17 @@ export class RPGScene extends Phaser.Scene {
     this.input.on('pointerdown', this.handlePointerDown, this)
 
     // カメラ設定
-    const mapWidth = this.mapData[0].length * this.tileSize
+    const mapWidth = (this.mapData[0]?.length ?? 0) * this.tileSize
     const mapHeight = this.mapData.length * this.tileSize
     this.cameras.main.setBounds(0, 0, mapWidth, mapHeight)
     this.cameras.main.startFollow(this.player!, true, 0.1, 0.1)
   }
 
   private drawMap() {
-    const colors = {
-      0: 0x2d5016, // 草地（濃い緑）
-      1: 0x8b7355, // 道（茶色）
-      2: 0x1a3a1a, // 木（暗い緑）
-      3: 0x4169e1, // 水（青）
-    }
-
     for (let y = 0; y < this.mapData.length; y++) {
       for (let x = 0; x < this.mapData[y].length; x++) {
         const tileType = this.mapData[y][x]
-        const color = colors[tileType as keyof typeof colors]
+        const color = TILE_COLORS_HEX[tileType as TileType] ?? TILE_COLORS_HEX[TileType.GRASS]
 
         this.add
           .rectangle(
@@ -178,7 +171,8 @@ export class RPGScene extends Phaser.Scene {
 
   private createTextWindow() {
     const windowHeight = 120
-    const windowY = 600 - windowHeight - 10
+    const windowY = this.scale.height - windowHeight - 10
+    const windowWidth = this.scale.width - 20
 
     this.textWindow = this.add.container(10, windowY)
     this.textWindow.setScrollFactor(0)
@@ -186,7 +180,7 @@ export class RPGScene extends Phaser.Scene {
     this.textWindow.setVisible(false)
 
     // ウインドウ背景
-    const bg = this.add.rectangle(0, 0, 780, windowHeight, 0x000080)
+    const bg = this.add.rectangle(0, 0, windowWidth, windowHeight, 0x000080)
     bg.setOrigin(0, 0)
     bg.setStrokeStyle(4, 0xffffff)
 
@@ -194,7 +188,7 @@ export class RPGScene extends Phaser.Scene {
     this.textContent = this.add.text(20, 20, '', {
       fontSize: '20px',
       color: '#ffffff',
-      wordWrap: { width: 740 },
+      wordWrap: { width: windowWidth - 40 },
       lineSpacing: 8,
     })
 
@@ -466,7 +460,7 @@ export class RPGScene extends Phaser.Scene {
       }
 
       // 経路が長すぎる場合は中断（パフォーマンス対策）
-      if (visited.size > 200) {
+      if (visited.size > 500) {
         return null
       }
     }

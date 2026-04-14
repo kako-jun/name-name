@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import Phaser from 'phaser'
-import { rpgGameConfig } from '../game/rpgConfig'
+import { RPGScene } from '../game/RPGScene'
+import { RPG_PARENT_ID, rpgGameConfig } from '../game/rpgConfig'
 import { RPGProject } from '../types/rpg'
 
 interface RPGPlayerProps {
@@ -11,17 +12,24 @@ function RPGPlayer({ gameData }: RPGPlayerProps) {
   const gameRef = useRef<Phaser.Game | null>(null)
 
   useEffect(() => {
-    if (!gameRef.current && gameData) {
-      gameRef.current = new Phaser.Game(rpgGameConfig)
+    if (!gameData) return
 
-      // ゲーム起動後にシーンを開始（データを渡す）
-      gameRef.current.events.once('ready', () => {
-        const rpgScene = gameRef.current?.scene.getScene('RPGScene')
-        if (rpgScene) {
-          rpgScene.scene.restart({ gameData })
-        }
-      })
+    // gameData を scene に直接渡して起動する（ready後のrestartは不要）
+    const config = {
+      ...rpgGameConfig,
+      scene: [
+        {
+          scene: RPGScene,
+          key: 'RPGScene',
+        },
+      ],
     }
+
+    gameRef.current = new Phaser.Game(config)
+
+    gameRef.current.events.once('ready', () => {
+      gameRef.current?.scene.start('RPGScene', { gameData })
+    })
 
     return () => {
       if (gameRef.current) {
@@ -41,7 +49,7 @@ function RPGPlayer({ gameData }: RPGPlayerProps) {
 
   return (
     <div className="w-full h-full flex items-center justify-center">
-      <div id="rpg-game" />
+      <div id={RPG_PARENT_ID} />
     </div>
   )
 }

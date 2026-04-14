@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { NPCData, MapData } from '../types/rpg'
+import { NPCData, MapData, TILE_COLORS, TileType } from '../types/rpg'
 
 interface NPCEditorProps {
   npcs: NPCData[]
@@ -9,7 +9,7 @@ interface NPCEditorProps {
 }
 
 function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
-  const [selectedNPC, setSelectedNPC] = useState<NPCData | null>(null)
+  const [selectedNPCId, setSelectedNPCId] = useState<string | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [newNPC, setNewNPC] = useState<Partial<NPCData>>({
     name: '',
@@ -18,6 +18,9 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
     message: '',
     color: 0xff6b6b,
   })
+
+  // IDから現在のNPCデータを引く（selectedNPCIdが古いデータを持ち続けるバグを防ぐ）
+  const selectedNPC = selectedNPCId ? (npcs.find(n => n.id === selectedNPCId) ?? null) : null
 
   const handleAddNPC = () => {
     if (!newNPC.name || !newNPC.message) {
@@ -28,10 +31,10 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
     const npc: NPCData = {
       id: `npc${Date.now()}`,
       name: newNPC.name!,
-      x: newNPC.x || 5,
-      y: newNPC.y || 5,
+      x: newNPC.x ?? 5,
+      y: newNPC.y ?? 5,
       message: newNPC.message!,
-      color: newNPC.color || 0xff6b6b,
+      color: newNPC.color ?? 0xff6b6b,
     }
 
     onChange([...npcs, npc])
@@ -42,22 +45,19 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
   const handleDeleteNPC = (id: string) => {
     if (confirm('このNPCを削除しますか？')) {
       onChange(npcs.filter(n => n.id !== id))
-      if (selectedNPC?.id === id) {
-        setSelectedNPC(null)
+      if (selectedNPCId === id) {
+        setSelectedNPCId(null)
       }
     }
   }
 
   const handleUpdateNPC = (id: string, updates: Partial<NPCData>) => {
     onChange(npcs.map(n => (n.id === id ? { ...n, ...updates } : n)))
-    if (selectedNPC?.id === id) {
-      setSelectedNPC({ ...selectedNPC, ...updates })
-    }
   }
 
   const handleMapClick = (x: number, y: number) => {
-    if (selectedNPC) {
-      handleUpdateNPC(selectedNPC.id, { x, y })
+    if (selectedNPCId) {
+      handleUpdateNPC(selectedNPCId, { x, y })
     }
   }
 
@@ -67,7 +67,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
       <div
         className={`w-80 border-r overflow-auto ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-white'}`}
       >
-        <div className="p-4 border-b ${isDark ? 'border-gray-700' : 'border-gray-200'}">
+        <div className={`p-4 border-b ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
           <h3 className={`font-semibold mb-3 ${isDark ? 'text-white' : 'text-gray-900'}`}>NPCリスト</h3>
           <button
             onClick={() => setShowAddForm(true)}
@@ -90,9 +90,9 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
             npcs.map(npc => (
               <div
                 key={npc.id}
-                onClick={() => setSelectedNPC(npc)}
+                onClick={() => setSelectedNPCId(npc.id)}
                 className={`p-3 mb-2 rounded cursor-pointer transition-colors ${
-                  selectedNPC?.id === npc.id
+                  selectedNPCId === npc.id
                     ? isDark
                       ? 'bg-blue-900 border-blue-700'
                       : 'bg-blue-100 border-blue-300'
@@ -167,20 +167,14 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                     style={{
                       backgroundColor: npcHere
                         ? `#${npcHere.color.toString(16).padStart(6, '0')}`
-                        : tile === 0
-                          ? '#2d5016'
-                          : tile === 1
-                            ? '#8b7355'
-                            : tile === 2
-                              ? '#1a3a1a'
-                              : '#4169e1',
+                        : TILE_COLORS[tile as TileType] ?? TILE_COLORS[TileType.GRASS],
                     }}
                     onClick={() => handleMapClick(x, y)}
                     title={npcHere ? `${npcHere.name} (${x}, ${y})` : `(${x}, ${y})`}
                   >
                     {npcHere && (
                       <div className="flex items-center justify-center h-full text-white text-xs font-bold">
-                        {npcHere.name[0]}
+                        {npcHere.name[0] ?? '?'}
                       </div>
                     )}
                   </div>
