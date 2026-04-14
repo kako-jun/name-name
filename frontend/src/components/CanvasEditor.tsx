@@ -131,7 +131,7 @@ function CanvasEditor({
   }, [handleEditingEnd])
 
   // カットの編集
-  const handleCutChange = (
+  const handleCutChange = useCallback((
     chapterId: number,
     sceneId: number,
     cutId: number,
@@ -161,15 +161,15 @@ function CanvasEditor({
       return chapter
     })
     setChapters(newChapters)
-  }
+  }, [chapters, setChapters])
 
   // カットのドラッグ開始
-  const handleDragStart = (chapterId: number, sceneId: number, cutId: number) => {
+  const handleDragStart = useCallback((chapterId: number, sceneId: number, cutId: number) => {
     setDraggedCut({ chapterId, sceneId, cutId })
-  }
+  }, [])
 
   // カットのドラッグオーバー
-  const handleDragOver = (
+  const handleDragOver = useCallback((
     e: React.DragEvent,
     chapterId: number,
     sceneId: number,
@@ -177,10 +177,10 @@ function CanvasEditor({
   ) => {
     e.preventDefault()
     setDropTarget({ chapterId, sceneId, position })
-  }
+  }, [])
 
   // カットのドロップ
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = useCallback((e: React.DragEvent) => {
     e.stopPropagation()
     if (!draggedCut || !dropTarget) return
 
@@ -235,28 +235,28 @@ function CanvasEditor({
     setChapters(finalChapters)
     setDraggedCut(null)
     setDropTarget(null)
-  }
+  }, [draggedCut, dropTarget, chapters, setChapters])
 
   // カットのドラッグ終了
-  const handleDragEnd = () => {
+  const handleDragEnd = useCallback(() => {
     setDraggedCut(null)
     setDropTarget(null)
-  }
+  }, [])
 
   // シーンのドラッグ開始
-  const handleSceneDragStart = (chapterId: number, sceneId: number) => {
+  const handleSceneDragStart = useCallback((chapterId: number, sceneId: number) => {
     setDraggedScene({ chapterId, sceneId })
-  }
+  }, [])
 
   // シーンのドラッグオーバー
-  const handleSceneDragOver = (e: React.DragEvent, chapterId: number, position: number) => {
+  const handleSceneDragOver = useCallback((e: React.DragEvent, chapterId: number, position: number) => {
     e.preventDefault()
     e.stopPropagation()
     setSceneDropTarget({ chapterId, position })
-  }
+  }, [])
 
   // シーンのドロップ
-  const handleSceneDrop = (e: React.DragEvent) => {
+  const handleSceneDrop = useCallback((e: React.DragEvent) => {
     e.stopPropagation()
     if (!draggedScene || !sceneDropTarget) return
 
@@ -291,28 +291,28 @@ function CanvasEditor({
     setChapters(newChapters)
     setDraggedScene(null)
     setSceneDropTarget(null)
-  }
+  }, [draggedScene, sceneDropTarget, chapters, setChapters])
 
   // シーンのドラッグ終了
-  const handleSceneDragEnd = () => {
+  const handleSceneDragEnd = useCallback(() => {
     setDraggedScene(null)
     setSceneDropTarget(null)
-  }
+  }, [])
 
   // 章のドラッグ開始
-  const handleChapterDragStart = (chapterId: number) => {
+  const handleChapterDragStart = useCallback((chapterId: number) => {
     setDraggedChapter(chapterId)
-  }
+  }, [])
 
   // 章のドラッグオーバー
-  const handleChapterDragOver = (e: React.DragEvent, position: number) => {
+  const handleChapterDragOver = useCallback((e: React.DragEvent, position: number) => {
     e.preventDefault()
     e.stopPropagation()
     setChapterDropTarget(position)
-  }
+  }, [])
 
   // 章のドロップ
-  const handleChapterDrop = (e: React.DragEvent) => {
+  const handleChapterDrop = useCallback((e: React.DragEvent) => {
     e.stopPropagation()
     if (draggedChapter === null || chapterDropTarget === null) return
 
@@ -328,16 +328,16 @@ function CanvasEditor({
     setChapters(newChapters)
     setDraggedChapter(null)
     setChapterDropTarget(null)
-  }
+  }, [draggedChapter, chapterDropTarget, chapters, setChapters])
 
   // 章のドラッグ終了
-  const handleChapterDragEnd = () => {
+  const handleChapterDragEnd = useCallback(() => {
     setDraggedChapter(null)
     setChapterDropTarget(null)
-  }
+  }, [])
 
   // カットを追加
-  const handleAddCut = (chapterId: number, sceneId: number, position: number) => {
+  const handleAddCut = useCallback((chapterId: number, sceneId: number, position: number) => {
     const maxCutId = Math.max(
       ...chapters.flatMap((ch) => ch.scenes.flatMap((sc) => sc.cuts.map((c) => c.id))),
       0
@@ -372,10 +372,10 @@ function CanvasEditor({
     setChapters(newChapters)
     setEditingCutId(newCut.id)
     setNewlyAddedCutId(newCut.id)
-  }
+  }, [chapters, setChapters])
 
   // カットを削除
-  const handleDeleteCut = (chapterId: number, sceneId: number, cutId: number) => {
+  const handleDeleteCut = useCallback((chapterId: number, sceneId: number, cutId: number) => {
     const newChapters = chapters.map((chapter) => {
       if (chapter.id === chapterId) {
         return {
@@ -395,10 +395,10 @@ function CanvasEditor({
     })
     setChapters(newChapters)
     setEditingCutId(null)
-  }
+  }, [chapters, setChapters])
 
   // シーンを追加
-  const handleAddScene = (chapterId: number, position: number) => {
+  const handleAddScene = useCallback((chapterId: number, position: number) => {
     const maxSceneId = Math.max(...chapters.flatMap((ch) => ch.scenes.map((sc) => sc.id)), 0)
     const newScene = { id: maxSceneId + 1, title: '新しいシーン', cuts: [] }
     const newChapters = chapters.map((chapter) => {
@@ -412,10 +412,10 @@ function CanvasEditor({
     setChapters(newChapters)
     setEditingSceneId(newScene.id)
     setNewlyAddedSceneId(newScene.id)
-  }
+  }, [chapters, setChapters])
 
   // シーンを削除
-  const handleDeleteScene = (chapterId: number, sceneId: number) => {
+  const handleDeleteScene = useCallback((chapterId: number, sceneId: number) => {
     const newChapters = chapters.map((chapter) => {
       if (chapter.id === chapterId) {
         return {
@@ -427,10 +427,10 @@ function CanvasEditor({
     })
     setChapters(newChapters)
     setEditingSceneId(null)
-  }
+  }, [chapters, setChapters])
 
   // シーンのタイトルを変更
-  const handleSceneTitleChange = (chapterId: number, sceneId: number, newTitle: string) => {
+  const handleSceneTitleChange = useCallback((chapterId: number, sceneId: number, newTitle: string) => {
     const newChapters = chapters.map((chapter) => {
       if (chapter.id === chapterId) {
         return {
@@ -446,10 +446,10 @@ function CanvasEditor({
       return chapter
     })
     setChapters(newChapters)
-  }
+  }, [chapters, setChapters])
 
   // 章を追加
-  const handleAddChapter = (position: number) => {
+  const handleAddChapter = useCallback((position: number) => {
     const maxChapterId = Math.max(...chapters.map((ch) => ch.id), 0)
     const newChapter = { id: maxChapterId + 1, title: '新しい章', scenes: [] }
     const newChapters = [...chapters]
@@ -457,17 +457,17 @@ function CanvasEditor({
     setChapters(newChapters)
     setEditingChapterId(newChapter.id)
     setNewlyAddedChapterId(newChapter.id)
-  }
+  }, [chapters, setChapters])
 
   // 章を削除
-  const handleDeleteChapter = (chapterId: number) => {
+  const handleDeleteChapter = useCallback((chapterId: number) => {
     const newChapters = chapters.filter((ch) => ch.id !== chapterId)
     setChapters(newChapters)
     setEditingChapterId(null)
-  }
+  }, [chapters, setChapters])
 
   // 章のタイトルを変更
-  const handleChapterTitleChange = (chapterId: number, newTitle: string) => {
+  const handleChapterTitleChange = useCallback((chapterId: number, newTitle: string) => {
     const newChapters = chapters.map((chapter) => {
       if (chapter.id === chapterId) {
         return { ...chapter, title: newTitle }
@@ -475,36 +475,36 @@ function CanvasEditor({
       return chapter
     })
     setChapters(newChapters)
-  }
+  }, [chapters, setChapters])
 
   // 章の編集を開始（他の編集モードを終了）
-  const handleStartEditingChapter = (chapterId: number) => {
+  const handleStartEditingChapter = useCallback((chapterId: number) => {
     setEditingCutId(null)
     setEditingSceneId(null)
     setEditingChapterId(chapterId)
-  }
+  }, [])
 
   // シーンの編集を開始（他の編集モードを終了）
-  const handleStartEditingScene = (sceneId: number) => {
+  const handleStartEditingScene = useCallback((sceneId: number) => {
     setEditingCutId(null)
     setEditingChapterId(null)
     setEditingSceneId(sceneId)
-  }
+  }, [])
 
   // カットの編集を開始（他の編集モードを終了）
-  const handleStartEditingCut = (cutId: number) => {
+  const handleStartEditingCut = useCallback((cutId: number) => {
     setEditingChapterId(null)
     setEditingSceneId(null)
     setEditingCutId(cutId)
-  }
+  }, [])
 
   // カットの選択（編集モードを終了）
-  const handleSelectCut = (cutId: number) => {
+  const handleSelectCut = useCallback((cutId: number) => {
     setEditingChapterId(null)
     setEditingSceneId(null)
     setEditingCutId(null)
     setSelectedCutId(cutId)
-  }
+  }, [setSelectedCutId])
 
   // ホイールでズーム
   useEffect(() => {
