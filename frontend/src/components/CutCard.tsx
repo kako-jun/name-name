@@ -8,7 +8,6 @@ interface CutCardProps {
   cutIndex: number
   isDark: boolean
   editingCutId: number | null
-  newlyAddedCutId: number | null
   selectedCutId: number | null
   editingRef: React.RefObject<HTMLDivElement>
   draggedCut: { chapterId: number; sceneId: number; cutId: number } | null
@@ -36,7 +35,6 @@ function CutCard({
   cutIndex,
   isDark,
   editingCutId,
-  newlyAddedCutId: _newlyAddedCutId,
   selectedCutId,
   editingRef,
   draggedCut,

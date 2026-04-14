@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { Chapter, Viewport, Cut, EditableCutField } from '../types'
 import ChapterCard from './ChapterCard'
 
@@ -73,18 +73,10 @@ function CanvasEditor({
       document.removeEventListener('mousedown', handleClickOutside)
       document.removeEventListener('keydown', handleEscKey)
     }
-  }, [
-    editingCutId,
-    editingSceneId,
-    editingChapterId,
-    newlyAddedCutId,
-    newlyAddedSceneId,
-    newlyAddedChapterId,
-    chapters,
-  ])
+  }, [handleEditingEnd])
 
   // 編集モード終了時の処理
-  const handleEditingEnd = () => {
+  const handleEditingEnd = useCallback(() => {
     // 新規追加されたカットがデフォルト値のままなら削除
     if (newlyAddedCutId !== null) {
       const cut = chapters
@@ -136,7 +128,7 @@ function CanvasEditor({
     setEditingCutId(null)
     setEditingSceneId(null)
     setEditingChapterId(null)
-  }
+  }, [newlyAddedCutId, newlyAddedSceneId, newlyAddedChapterId, chapters, setChapters])
 
   // カットの編集
   const handleCutChange = (
@@ -599,7 +591,6 @@ function CanvasEditor({
               editingChapterId={editingChapterId}
               editingSceneId={editingSceneId}
               editingCutId={editingCutId}
-              newlyAddedCutId={newlyAddedCutId}
               selectedCutId={selectedCutId}
               editingRef={editingRef}
               draggedChapter={draggedChapter}
