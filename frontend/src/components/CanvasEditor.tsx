@@ -52,29 +52,6 @@ function CanvasEditor({
   } | null>(null)
   const [chapterDropTarget, setChapterDropTarget] = useState<number | null>(null)
 
-  // 編集モード終了の検知
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (editingRef.current && !editingRef.current.contains(e.target as Node)) {
-        handleEditingEnd()
-      }
-    }
-
-    const handleEscKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        handleEditingEnd()
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('keydown', handleEscKey)
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('keydown', handleEscKey)
-    }
-  }, [handleEditingEnd])
-
   // 編集モード終了時の処理
   const handleEditingEnd = useCallback(() => {
     // 新規追加されたカットがデフォルト値のままなら削除
@@ -129,6 +106,29 @@ function CanvasEditor({
     setEditingSceneId(null)
     setEditingChapterId(null)
   }, [newlyAddedCutId, newlyAddedSceneId, newlyAddedChapterId, chapters, setChapters])
+
+  // 編集モード終了の検知
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (editingRef.current && !editingRef.current.contains(e.target as Node)) {
+        handleEditingEnd()
+      }
+    }
+
+    const handleEscKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleEditingEnd()
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEscKey)
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEscKey)
+    }
+  }, [handleEditingEnd])
 
   // カットの編集
   const handleCutChange = (
@@ -209,6 +209,7 @@ function CanvasEditor({
     })
 
     if (!draggedCutData) return
+    const cutToInsert: Cut = draggedCutData
 
     // ドロップ先にカットを挿入
     const finalChapters = newChapters.map((chapter) => {
@@ -218,7 +219,7 @@ function CanvasEditor({
           scenes: chapter.scenes.map((scene) => {
             if (scene.id === dropTarget.sceneId) {
               const newCuts = [...scene.cuts]
-              newCuts.splice(dropTarget.position, 0, draggedCutData)
+              newCuts.splice(dropTarget.position, 0, cutToInsert)
               return {
                 ...scene,
                 cuts: newCuts,
