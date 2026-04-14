@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
 import Phaser from 'phaser'
-import { RPGScene } from '../game/RPGScene'
 import { RPG_PARENT_ID, rpgGameConfig } from '../game/rpgConfig'
 import { RPGProject } from '../types/rpg'
 
@@ -14,18 +13,8 @@ function RPGPlayer({ gameData }: RPGPlayerProps) {
   useEffect(() => {
     if (!gameData) return
 
-    // gameData を scene に直接渡して起動する（ready後のrestartは不要）
-    const config = {
-      ...rpgGameConfig,
-      scene: [
-        {
-          scene: RPGScene,
-          key: 'RPGScene',
-        },
-      ],
-    }
-
-    gameRef.current = new Phaser.Game(config)
+    // rpgGameConfig には scene: [RPGScene] が設定済みなのでそのまま使う
+    gameRef.current = new Phaser.Game(rpgGameConfig)
 
     gameRef.current.events.once('ready', () => {
       gameRef.current?.scene.start('RPGScene', { gameData })

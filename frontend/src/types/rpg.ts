@@ -93,12 +93,3 @@ export const TILE_COLORS_HEX = {
   [TileType.TREE]: 0x1a3a1a,
   [TileType.WATER]: 0x4169e1,
 } as const
-
-/**
- * 選択中のタイル
- */
-export interface SelectedTile {
-  type: TileType
-  color: number
-  name: string
-}

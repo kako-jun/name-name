@@ -272,14 +272,14 @@ export class RPGScene extends Phaser.Scene {
       gridY < 0 ||
       gridY >= this.mapData.length ||
       gridX < 0 ||
-      gridX >= this.mapData[0].length
+      gridX >= (this.mapData[0]?.length ?? 0)
     ) {
       return false
     }
 
     // 通行不可タイル（木と水）
     const tile = this.mapData[gridY][gridX]
-    if (tile === 2 || tile === 3) {
+    if (tile === TileType.TREE || tile === TileType.WATER) {
       return false
     }
 

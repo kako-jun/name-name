@@ -217,7 +217,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                   <input
                     type="number"
                     value={newNPC.x}
-                    onChange={e => setNewNPC({ ...newNPC, x: parseInt(e.target.value) || 0 })}
+                    onChange={e => setNewNPC({ ...newNPC, x: parseInt(e.target.value) ?? 0 })}
                     className={`w-full px-3 py-2 border rounded ${
                       isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'
                     }`}
@@ -230,7 +230,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                   <input
                     type="number"
                     value={newNPC.y}
-                    onChange={e => setNewNPC({ ...newNPC, y: parseInt(e.target.value) || 0 })}
+                    onChange={e => setNewNPC({ ...newNPC, y: parseInt(e.target.value) ?? 0 })}
                     className={`w-full px-3 py-2 border rounded ${
                       isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'
                     }`}
