@@ -40,6 +40,7 @@ function EditorScreen({
   const [selectedCutId, setSelectedCutId] = useState<number | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
   const initialChaptersRef = useRef<string>('')
@@ -70,20 +71,25 @@ function EditorScreen({
   // 初回ロード: APIから章データを取得
   useEffect(() => {
     const loadChapters = async () => {
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
-      if (!response.ok) {
-        throw new Error(`Failed to load chapters: ${response.status}`)
-      }
-      const data = await response.json()
-      setChapters(data.chapters)
-      // 初期状態を保存
-      initialChaptersRef.current = JSON.stringify(data.chapters)
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
+        if (!response.ok) {
+          console.error(`Failed to load chapters: ${response.status}`)
+          return
+        }
+        const data = await response.json()
+        setChapters(data.chapters)
+        // 初期状態を保存
+        initialChaptersRef.current = JSON.stringify(data.chapters)
 
-      // git statusをチェックして、未コミットの変更があればボタンを青くする
-      const statusResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
-      if (statusResponse.ok) {
-        const statusData = await statusResponse.json()
-        setHasUnsavedChanges(statusData.has_uncommitted_changes)
+        // git statusをチェックして、未コミットの変更があればボタンを青くする
+        const statusResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
+        if (statusResponse.ok) {
+          const statusData = await statusResponse.json()
+          setHasUnsavedChanges(statusData.has_uncommitted_changes)
+        }
+      } catch (error) {
+        console.error('Failed to load chapters:', error)
       }
     }
     loadChapters()
@@ -132,16 +138,20 @@ function EditorScreen({
     }
 
     saveTimeoutRef.current = window.setTimeout(async () => {
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chapters: chapters,
-          message: '自動保存',
-        }),
-      })
-      if (!response.ok) {
-        throw new Error(`Failed to auto-save: ${response.status}`)
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chapters: chapters,
+            message: '自動保存',
+          }),
+        })
+        if (!response.ok) {
+          console.error(`Failed to auto-save: ${response.status}`)
+        }
+      } catch (error) {
+        console.error('Failed to auto-save:', error)
       }
     }, 1000)
 
@@ -155,33 +165,44 @@ function EditorScreen({
   // 保存ボタン: Gitコミット・プッシュ
   const handleSave = async () => {
     setIsSaving(true)
-    const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/commit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: '原稿保存',
-      }),
-    })
-    if (!response.ok) {
+    setSaveError(null)
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: '原稿保存',
+        }),
+      })
+      if (!response.ok) {
+        console.error(`Failed to commit: ${response.status}`)
+        setSaveError('保存に失敗しました')
+        return
+      }
+      // 保存成功後、初期状態を更新
+      initialChaptersRef.current = JSON.stringify(chapters)
+      setHasUnsavedChanges(false)
+    } catch (error) {
+      console.error('Failed to commit:', error)
+      setSaveError('保存に失敗しました')
+    } finally {
       setIsSaving(false)
-      throw new Error(`Failed to commit: ${response.status}`)
     }
-    // 保存成功後、初期状態を更新
-    initialChaptersRef.current = JSON.stringify(chapters)
-    setHasUnsavedChanges(false)
-    setIsSaving(false)
   }
 
   // 破棄ボタン: 未コミットの変更を破棄
   const handleDiscard = async () => {
     setShowDiscardConfirm(false)
     setIsSaving(true)
+    setSaveError(null)
     try {
       const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/discard`, {
         method: 'POST',
       })
       if (!response.ok) {
-        throw new Error(`Failed to discard: ${response.status}`)
+        console.error(`Failed to discard: ${response.status}`)
+        setSaveError('変更の破棄に失敗しました')
+        return
       }
       // データを再読み込み
       const chaptersResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
@@ -193,6 +214,7 @@ function EditorScreen({
       setHasUnsavedChanges(false)
     } catch (error) {
       console.error('Failed to discard changes:', error)
+      setSaveError('変更の破棄に失敗しました')
     } finally {
       setIsSaving(false)
     }
@@ -421,6 +443,25 @@ function EditorScreen({
                 破棄
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* エラーメッセージ */}
+      {saveError && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100]">
+          <div
+            className={`px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 ${
+              isDark ? 'bg-red-900 text-red-200' : 'bg-red-100 text-red-800'
+            }`}
+          >
+            <span className="text-sm">{saveError}</span>
+            <button
+              onClick={() => setSaveError(null)}
+              className="ml-2 text-xs opacity-70 hover:opacity-100"
+            >
+              ✕
+            </button>
           </div>
         </div>
       )}

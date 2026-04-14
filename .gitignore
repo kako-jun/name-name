@@ -28,6 +28,7 @@ lerna-debug.log*
 *.njsproj
 *.sln
 *.sw?
+*.backup
 .claude/settings.local.json
 .serena/
 .mcp.json

@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Cut } from '../types'
+import { Cut, EditableCutField } from '../types'
 
 interface CutCardProps {
   cut: Cut
@@ -8,7 +8,6 @@ interface CutCardProps {
   cutIndex: number
   isDark: boolean
   editingCutId: number | null
-  newlyAddedCutId: number | null
   selectedCutId: number | null
   editingRef: React.RefObject<HTMLDivElement>
   draggedCut: { chapterId: number; sceneId: number; cutId: number } | null
@@ -17,7 +16,7 @@ interface CutCardProps {
     chapterId: number,
     sceneId: number,
     cutId: number,
-    field: keyof Cut,
+    field: EditableCutField,
     value: string
   ) => void
   onDeleteCut: (chapterId: number, sceneId: number, cutId: number) => void
@@ -36,7 +35,6 @@ function CutCard({
   cutIndex,
   isDark,
   editingCutId,
-  newlyAddedCutId: _newlyAddedCutId,
   selectedCutId,
   editingRef,
   draggedCut,
