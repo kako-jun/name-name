@@ -9,7 +9,6 @@ interface ChapterCardProps {
   editingChapterId: number | null
   editingSceneId: number | null
   editingCutId: number | null
-  newlyAddedCutId: number | null
   selectedCutId: number | null
   editingRef: React.RefObject<HTMLDivElement>
   draggedChapter: number | null
@@ -58,7 +57,6 @@ function ChapterCard({
   editingChapterId,
   editingSceneId,
   editingCutId,
-  newlyAddedCutId,
   selectedCutId,
   editingRef,
   draggedChapter,
@@ -230,7 +228,6 @@ function ChapterCard({
               isDark={isDark}
               editingSceneId={editingSceneId}
               editingCutId={editingCutId}
-              newlyAddedCutId={newlyAddedCutId}
               selectedCutId={selectedCutId}
               editingRef={editingRef}
               draggedScene={draggedScene}

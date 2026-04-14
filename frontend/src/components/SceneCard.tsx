@@ -9,7 +9,6 @@ interface SceneCardProps {
   isDark: boolean
   editingSceneId: number | null
   editingCutId: number | null
-  newlyAddedCutId: number | null
   selectedCutId: number | null
   editingRef: React.RefObject<HTMLDivElement>
   draggedScene: { chapterId: number; sceneId: number } | null
@@ -47,7 +46,6 @@ function SceneCard({
   isDark,
   editingSceneId,
   editingCutId,
-  newlyAddedCutId,
   selectedCutId,
   editingRef,
   draggedScene,
@@ -201,7 +199,6 @@ function SceneCard({
               cutIndex={cutIndex}
               isDark={isDark}
               editingCutId={editingCutId}
-              newlyAddedCutId={newlyAddedCutId}
               selectedCutId={selectedCutId}
               editingRef={editingRef}
               draggedCut={draggedCut}
