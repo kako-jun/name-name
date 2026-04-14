@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Scene, Cut } from '../types'
+import { Scene, EditableCutField } from '../types'
 import CutCard from './CutCard'
 
 interface SceneCardProps {
@@ -28,7 +28,7 @@ interface SceneCardProps {
     chapterId: number,
     sceneId: number,
     cutId: number,
-    field: keyof Cut,
+    field: EditableCutField,
     value: string
   ) => void
   onDeleteCut: (chapterId: number, sceneId: number, cutId: number) => void

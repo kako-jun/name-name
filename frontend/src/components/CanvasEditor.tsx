@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { Chapter, Viewport, Cut } from '../types'
+import { Chapter, Viewport, Cut, EditableCutField } from '../types'
 import ChapterCard from './ChapterCard'
 
 interface CanvasEditorProps {
@@ -143,7 +143,7 @@ function CanvasEditor({
     chapterId: number,
     sceneId: number,
     cutId: number,
-    field: 'character' | 'text' | 'expression',
+    field: EditableCutField,
     value: string
   ) => {
     const newChapters = chapters.map((chapter) => {
@@ -215,6 +215,8 @@ function CanvasEditor({
       }
       return chapter
     })
+
+    if (!draggedCutData) return
 
     // ドロップ先にカットを挿入
     const finalChapters = newChapters.map((chapter) => {
