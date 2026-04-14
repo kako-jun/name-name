@@ -1,8 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
 import CanvasEditor from '../components/CanvasEditor'
 import NovelPlayer from '../components/NovelPlayer'
+import MapEditor from '../components/MapEditor'
+import NPCEditor from '../components/NPCEditor'
+import RPGPlayer from '../components/RPGPlayer'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
 import { Chapter, Mode } from '../types'
+import { RPGProject, MapData, NPCData } from '../types/rpg'
 
 interface ScriptRow {
   id: number
@@ -31,6 +35,7 @@ function EditorScreen({
   onNavigateToAssets,
 }: EditorScreenProps) {
   const [mode, setMode] = useState<Mode>('edit')
+  const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [selectedCutId, setSelectedCutId] = useState<number | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
@@ -38,6 +43,25 @@ function EditorScreen({
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
   const initialChaptersRef = useRef<string>('')
+
+  // RPGエディタ用の状態
+  const [rpgProject, setRpgProject] = useState<RPGProject>({
+    name: projectName,
+    version: '1.0.0',
+    map: {
+      width: 25,
+      height: 19,
+      tileSize: 32,
+      tiles: Array.from({ length: 19 }, (_, y) =>
+        Array.from({ length: 25 }, (_, x) =>
+          x === 0 || x === 24 || y === 0 || y === 18 ? 2 : 0
+        )
+      ),
+    },
+    player: { x: 5, y: 5, direction: 'down' },
+    npcs: [],
+  })
+  const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
 
   // 初回ロード: APIから章データを取得
   useEffect(() => {
@@ -269,23 +293,93 @@ function EditorScreen({
             </button>
           </div>
         </div>
+
+        {/* エディタタブ（ノベル / RPG） */}
+        <div className={`px-6 flex gap-1 border-t ${isDark ? 'border-gray-700' : 'border-blue-100'}`}>
+          {(['novel', 'rpg'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setEditorTab(tab)}
+              className={`px-4 py-1.5 text-sm font-medium rounded-t transition-colors ${
+                editorTab === tab
+                  ? isDark
+                    ? 'bg-gray-700 text-white'
+                    : 'bg-white text-gray-900 border border-b-white border-blue-200'
+                  : isDark
+                    ? 'text-gray-400 hover:text-gray-200'
+                    : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {tab === 'novel' ? 'ノベル' : 'RPG'}
+            </button>
+          ))}
+        </div>
       </header>
 
       <main className="flex-1 overflow-hidden">
-        {mode === 'edit' ? (
-          <CanvasEditor
-            chapters={chapters}
-            setChapters={setChapters}
-            isDark={isDark}
-            selectedCutId={selectedCutId}
-            setSelectedCutId={setSelectedCutId}
-            onNavigateToAssets={onNavigateToAssets}
-          />
+        {editorTab === 'novel' ? (
+          // ノベルエディタ
+          mode === 'edit' ? (
+            <CanvasEditor
+              chapters={chapters}
+              setChapters={setChapters}
+              isDark={isDark}
+              selectedCutId={selectedCutId}
+              setSelectedCutId={setSelectedCutId}
+              onNavigateToAssets={onNavigateToAssets}
+            />
+          ) : (
+            <NovelPlayer
+              scriptData={generateScriptFromChapters()}
+              startIndex={getStartIndexFromSelectedCut()}
+            />
+          )
         ) : (
-          <NovelPlayer
-            scriptData={generateScriptFromChapters()}
-            startIndex={getStartIndexFromSelectedCut()}
-          />
+          // RPGエディタ
+          <div className="h-full flex flex-col">
+            {/* RPGサブタブ */}
+            <div className={`flex gap-1 px-4 py-2 border-b ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
+              {(['map', 'npc', 'play'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setRpgSubTab(tab)}
+                  className={`px-3 py-1.5 text-sm font-medium rounded transition-colors ${
+                    rpgSubTab === tab
+                      ? isDark
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-blue-500 text-white'
+                      : isDark
+                        ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+                  }`}
+                >
+                  {tab === 'map' ? 'マップ' : tab === 'npc' ? 'NPC' : 'プレイ'}
+                </button>
+              ))}
+            </div>
+
+            {/* RPGサブタブコンテンツ */}
+            <div className="flex-1 overflow-hidden">
+              {rpgSubTab === 'map' && (
+                <MapEditor
+                  mapData={rpgProject.map}
+                  onChange={(mapData: MapData) => setRpgProject({ ...rpgProject, map: mapData })}
+                  isDark={isDark}
+                />
+              )}
+              {rpgSubTab === 'npc' && (
+                <NPCEditor
+                  npcs={rpgProject.npcs}
+                  mapData={rpgProject.map}
+                  onChange={(npcs: NPCData[]) => setRpgProject({ ...rpgProject, npcs })}
+                  isDark={isDark}
+                />
+              )}
+              {rpgSubTab === 'play' && (
+                <RPGPlayer gameData={rpgProject} />
+              )}
+            </div>
+          </div>
         )}
       </main>
 
@@ -334,8 +428,8 @@ function EditorScreen({
         isDark={isDark}
         onSave={handleSave}
         onDiscard={() => setShowDiscardConfirm(true)}
-        mode={mode}
-        onModeChange={setMode}
+        mode={editorTab === 'novel' ? mode : undefined}
+        onModeChange={editorTab === 'novel' ? setMode : undefined}
       />
     </div>
   )
