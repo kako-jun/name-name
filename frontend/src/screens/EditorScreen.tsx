@@ -65,6 +65,33 @@ function EditorScreen({
   })
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
 
+  // WASMパース結果からフラットなEvent[]を組み立てる
+  const flattenDocumentEvents = (doc: import('../types').EventDocument): Event[] => {
+    const events: Event[] = []
+    for (const chapter of doc.chapters) {
+      for (let si = 0; si < chapter.scenes.length; si++) {
+        if (events.length > 0) {
+          events.push('SceneTransition')
+        }
+        events.push(...chapter.scenes[si].events)
+      }
+    }
+    return events
+  }
+
+  // MarkdownをWASMでパースしてeventsを更新
+  const parseAndSetEvents = async (markdown: string) => {
+    if (!markdown.trim()) return
+    try {
+      const doc = await parseMarkdown(markdown)
+      setWasmEvents(flattenDocumentEvents(doc))
+      setWasmReady(true)
+    } catch (parseError) {
+      console.error('WASM parse failed:', parseError)
+      setSaveError('Markdownのパースに失敗しました')
+    }
+  }
+
   // 初回ロード: APIからMarkdownを取得しWASMでパース
   useEffect(() => {
     const loadChapters = async () => {
@@ -80,24 +107,7 @@ function EditorScreen({
         initialChaptersRef.current = markdown
 
         // WASMパースでEventsを生成
-        if (markdown.trim()) {
-          try {
-            const doc = await parseMarkdown(markdown)
-            const events: Event[] = []
-            for (const chapter of doc.chapters) {
-              for (let si = 0; si < chapter.scenes.length; si++) {
-                if (events.length > 0) {
-                  events.push('SceneTransition')
-                }
-                events.push(...chapter.scenes[si].events)
-              }
-            }
-            setWasmEvents(events)
-            setWasmReady(true)
-          } catch (parseError) {
-            console.error('WASM parse failed:', parseError)
-          }
-        }
+        await parseAndSetEvents(markdown)
 
         // 旧モデルへの変換（キャンバスエディタ用、後方互換）
         if (data.chapters) {
@@ -234,23 +244,7 @@ function EditorScreen({
           setChapters(data.chapters)
         }
         // WASMパースを再実行
-        if (markdown.trim()) {
-          try {
-            const doc = await parseMarkdown(markdown)
-            const events: Event[] = []
-            for (const chapter of doc.chapters) {
-              for (let si = 0; si < chapter.scenes.length; si++) {
-                if (events.length > 0) {
-                  events.push('SceneTransition')
-                }
-                events.push(...chapter.scenes[si].events)
-              }
-            }
-            setWasmEvents(events)
-          } catch (parseError) {
-            console.error('WASM parse failed:', parseError)
-          }
-        }
+        await parseAndSetEvents(markdown)
       }
       setHasUnsavedChanges(false)
     } catch (error) {
