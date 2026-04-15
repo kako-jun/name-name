@@ -17,6 +17,12 @@ export interface SaveSlotData {
   textIndex: number
   flags: Record<string, FlagValue>
   backgroundPath: string | null
+  /** 暗転状態 */
+  isBlackout: boolean
+  /** 表示中のキャラクター情報 */
+  characters: Array<{ name: string; expression: string; position: string }>
+  /** 再生中の BGM パス */
+  currentBgmPath: string | null
   savedAt: string // ISO 8601
   sceneName: string | null
 }
@@ -89,7 +95,9 @@ export class SaveManager {
           typeof slot.eventIndex === 'number' &&
           typeof slot.textIndex === 'number' &&
           typeof slot.savedAt === 'string' &&
-          typeof slot.flags === 'object'
+          typeof slot.flags === 'object' &&
+          typeof slot.isBlackout === 'boolean' &&
+          Array.isArray(slot.characters)
         ) {
           this.save(i, slot as SaveSlotData)
         } else {
