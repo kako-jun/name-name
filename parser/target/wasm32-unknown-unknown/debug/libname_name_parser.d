@@ -1,1 +1,0 @@
-/Users/kako-jun/repos/2025/name-name/parser/target/wasm32-unknown-unknown/debug/libname_name_parser.rlib: /Users/kako-jun/repos/2025/name-name/parser/src/emitter.rs /Users/kako-jun/repos/2025/name-name/parser/src/lib.rs /Users/kako-jun/repos/2025/name-name/parser/src/models.rs /Users/kako-jun/repos/2025/name-name/parser/src/parser.rs

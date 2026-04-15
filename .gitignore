@@ -13,6 +13,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Rust
+target/
+
 # Backend has its own .gitignore
 
 # Docker
