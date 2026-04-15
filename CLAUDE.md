@@ -375,7 +375,7 @@ uv sync
 - ⬜ RPGプレイヤーのPixiJS移行（現在はPhaser）
 - ⬜ 立ち絵表示・退場（未Issue化）
 - ✅ 選択肢・分岐 + フラグ・条件分岐（#10）— GameState / ChoiceOverlay / シーンジャンプ
-- ⬜ セーブ/ロード + バックログ（#11）
+- ✅ セーブ/ロード + バックログ（#11）— SaveManager / SaveLoadOverlay / BacklogOverlay / localStorage 3スロット / JSON エクスポート・インポート
 
 ## 参考ドキュメント
 

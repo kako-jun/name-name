@@ -16,6 +16,9 @@ import { DialogBox } from './DialogBox'
 import { AudioManager } from './AudioManager'
 import { GameState } from './GameState'
 import { ChoiceOverlay } from './ChoiceOverlay'
+import { SaveManager, SaveSlotData } from './SaveManager'
+import { SaveLoadOverlay } from './SaveLoadOverlay'
+import { BacklogOverlay } from './BacklogOverlay'
 import { Event, EventScene } from '../types'
 
 const GAME_WIDTH = 800
@@ -73,6 +76,21 @@ export class NovelRenderer {
   /** 展開済み Condition イベントのインデックス（重複展開防止） */
   private expandedConditions: Set<number> = new Set()
 
+  /** セーブマネージャー */
+  private saveManager: SaveManager = new SaveManager()
+
+  /** セーブ/ロードオーバーレイ */
+  private saveLoadOverlay!: SaveLoadOverlay
+
+  /** バックログオーバーレイ */
+  private backlogOverlay!: BacklogOverlay
+
+  /** 現在のシーンID */
+  private currentSceneId: string | null = null
+
+  /** 現在の背景パス */
+  private currentBackgroundPath: string | null = null
+
   constructor() {
     this.app = new Application()
     this.bgGraphics = new Graphics()
@@ -84,6 +102,8 @@ export class NovelRenderer {
     })
     this.audioManager = new AudioManager()
     this.choiceOverlay = new ChoiceOverlay(GAME_WIDTH, GAME_HEIGHT)
+    this.saveLoadOverlay = new SaveLoadOverlay(GAME_WIDTH, GAME_HEIGHT, this.saveManager)
+    this.backlogOverlay = new BacklogOverlay(GAME_WIDTH, GAME_HEIGHT)
   }
 
   /**
@@ -133,11 +153,20 @@ export class NovelRenderer {
     this.choiceOverlay.visible = false
     this.app.stage.addChild(this.choiceOverlay)
 
+    // セーブ/ロードオーバーレイ
+    this.app.stage.addChild(this.saveLoadOverlay)
+
+    // バックログオーバーレイ
+    this.app.stage.addChild(this.backlogOverlay)
+
     // クリック/タップで進行
     this.app.canvas.addEventListener('pointerdown', this.handleAdvance)
 
     // キーボードで進行
     window.addEventListener('keydown', this.handleKeyDown)
+
+    // バックログスクロール
+    this.app.canvas.addEventListener('wheel', this.handleWheel, { passive: false })
 
     this.initialized = true
   }
@@ -157,6 +186,7 @@ export class NovelRenderer {
     this.allScenes = scenes
     this.gameState.clear()
     if (scenes.length > 0) {
+      this.currentSceneId = scenes[0].id
       this.setEvents(scenes[0].events)
     }
   }
@@ -170,6 +200,7 @@ export class NovelRenderer {
       console.warn(`[name-name] シーンが見つからない: ${sceneId}`)
       return
     }
+    this.currentSceneId = sceneId
     this.resetAndStartEvents([...scene.events])
   }
 
@@ -210,9 +241,12 @@ export class NovelRenderer {
    */
   destroy(): void {
     this.app.canvas.removeEventListener('pointerdown', this.handleAdvance)
+    this.app.canvas.removeEventListener('wheel', this.handleWheel)
     window.removeEventListener('keydown', this.handleKeyDown)
     this.audioManager.destroy()
     this.choiceOverlay.hide()
+    this.saveLoadOverlay.hide()
+    this.backlogOverlay.hide()
     this.dialogBox.dispose()
     this.app.destroy(true, { children: true })
     this.initialized = false
@@ -222,11 +256,60 @@ export class NovelRenderer {
 
   private handleAdvance = (): void => {
     this.audioManager.ensureContext()
+    if (this.backlogOverlay.visible) {
+      this.backlogOverlay.hide()
+      return
+    }
+    if (this.saveLoadOverlay.visible) return
     this.advance()
+  }
+
+  private handleWheel = (e: WheelEvent): void => {
+    if (this.backlogOverlay.visible) {
+      e.preventDefault()
+      this.backlogOverlay.handleWheel(e.deltaY)
+    }
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     this.audioManager.ensureContext()
+
+    // Escape: 開いているオーバーレイを閉じる
+    if (e.key === 'Escape') {
+      if (this.backlogOverlay.visible) {
+        this.backlogOverlay.hide()
+        return
+      }
+      if (this.saveLoadOverlay.visible) {
+        this.saveLoadOverlay.hide()
+        return
+      }
+      return
+    }
+
+    // バックログ表示中のキー操作
+    if (this.backlogOverlay.visible) {
+      switch (e.key) {
+        case 'b':
+        case 'B':
+          this.backlogOverlay.hide()
+          break
+        case 'ArrowUp':
+          e.preventDefault()
+          this.backlogOverlay.handleKeyScroll('up')
+          break
+        case 'ArrowDown':
+          e.preventDefault()
+          this.backlogOverlay.handleKeyScroll('down')
+          break
+      }
+      return
+    }
+
+    // セーブ/ロードオーバーレイ表示中は入力を無視
+    if (this.saveLoadOverlay.visible) return
+
+    // オーバーレイが開いていない場合のキー操作
     switch (e.key) {
       case ' ':
       case 'Enter':
@@ -238,6 +321,24 @@ export class NovelRenderer {
         break
       case 'ArrowLeft':
         this.goBack()
+        break
+      case 's':
+      case 'S':
+        if (!this.waitingForChoice) {
+          this.openSaveMenu()
+        }
+        break
+      case 'l':
+      case 'L':
+        if (!this.waitingForChoice) {
+          this.openLoadMenu()
+        }
+        break
+      case 'b':
+      case 'B':
+        if (!this.waitingForChoice) {
+          this.backlogOverlay.toggle()
+        }
         break
     }
   }
@@ -253,6 +354,11 @@ export class NovelRenderer {
     const textEvt = getTextEvent(current)
 
     if (textEvt) {
+      // 現在表示中のテキストをバックログに記録
+      const currentLine = textEvt.text[this.textIndex] ?? ''
+      const character = textEvt.type === 'dialog' ? textEvt.character : null
+      this.backlogOverlay.addEntry(character, currentLine)
+
       this.textIndex++
       if (this.textIndex < textEvt.text.length) {
         // まだテキスト行が残っている
@@ -404,6 +510,7 @@ export class NovelRenderer {
    * 背景画像を設定する（アスペクト比維持でカバー）
    */
   private setBackground(path: string): void {
+    this.currentBackgroundPath = path
     this.bgContainer.removeChildren()
 
     if (!this.assetBaseUrl) return
@@ -447,6 +554,7 @@ export class NovelRenderer {
    * 背景画像をクリアする
    */
   private clearBackground(): void {
+    this.currentBackgroundPath = null
     this.bgContainer.removeChildren()
   }
 
@@ -477,6 +585,95 @@ export class NovelRenderer {
     if (lastBgmEvent) {
       this.processDirective(lastBgmEvent)
     }
+  }
+
+  /**
+   * セーブメニューを表示する
+   */
+  private openSaveMenu(): void {
+    this.saveLoadOverlay.showSave((slot: number) => {
+      const sceneName = this.currentSceneId
+        ? this.allScenes.find((s) => s.id === this.currentSceneId)?.title ?? null
+        : null
+
+      const data: SaveSlotData = {
+        slot,
+        sceneId: this.currentSceneId,
+        eventIndex: this.eventIndex,
+        textIndex: this.textIndex,
+        flags: this.gameState.toJSON(),
+        backgroundPath: this.currentBackgroundPath,
+        savedAt: new Date().toISOString(),
+        sceneName,
+      }
+      this.saveManager.save(slot, data)
+    })
+  }
+
+  /**
+   * ロードメニューを表示する
+   */
+  private openLoadMenu(): void {
+    this.saveLoadOverlay.showLoad((data: SaveSlotData) => {
+      this.loadFromSaveData(data)
+    })
+  }
+
+  /**
+   * セーブデータからゲーム状態を復元する
+   */
+  private loadFromSaveData(data: SaveSlotData): void {
+    // フラグを復元
+    this.gameState.fromJSON(data.flags)
+
+    if (!data.sceneId) return
+
+    // シーンを探す
+    const scene = this.allScenes.find((s) => s.id === data.sceneId)
+    if (!scene) {
+      console.warn(`[name-name] セーブデータのシーンが見つからない: ${data.sceneId}`)
+      return
+    }
+
+    this.currentSceneId = data.sceneId
+
+    // 選択肢状態をリセット
+    this.waitingForChoice = false
+    this.choiceOverlay.hide()
+    this.audioManager.stopBgm(0)
+    this.clearBackground()
+    this.blackoutOverlay.visible = false
+    this.events = [...scene.events]
+    this.expandedConditions.clear()
+    this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
+
+    // eventIndex まで演出イベントを再実行して状態を再構築
+    // Flag/Condition/Choice はスキップし、演出（Background/Blackout/BGM等）のみ再構築
+    // Condition の展開は通常の進行に任せる
+    let lastBgmEvent: Event | null = null
+    for (let i = 0; i < data.eventIndex && i < this.events.length; i++) {
+      const ev = this.events[i]
+      if (!getTextEvent(ev)) {
+        if (typeof ev === 'object' && ev !== null) {
+          if ('Bgm' in ev) {
+            lastBgmEvent = ev
+          } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev) {
+            // スキップ（フラグは fromJSON で復元済み、Condition/Choice は副作用防止）
+          } else {
+            this.processDirective(ev)
+          }
+        } else if (typeof ev === 'string') {
+          this.processDirective(ev)
+        }
+      }
+    }
+    if (lastBgmEvent) {
+      this.processDirective(lastBgmEvent)
+    }
+
+    this.eventIndex = data.eventIndex
+    this.textIndex = data.textIndex
+    this.render()
   }
 
   /**
