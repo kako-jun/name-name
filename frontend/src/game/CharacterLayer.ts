@@ -85,6 +85,17 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 現在表示中のキャラクター情報を返す（スナップショット用）
+   */
+  getCharacterStates(): Array<{ name: string; expression: string; position: string }> {
+    const result: Array<{ name: string; expression: string; position: string }> = []
+    for (const [name, state] of this.characters) {
+      result.push({ name, expression: state.expression, position: state.position })
+    }
+    return result
+  }
+
+  /**
    * 全キャラクターを削除する
    */
   clear(): void {
