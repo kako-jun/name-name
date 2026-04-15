@@ -51,6 +51,7 @@ export class NovelRenderer {
   private initialized = false
   private onEndCallback: (() => void) | null = null
   private assetBaseUrl: string = ''
+  private textureCache: Map<string, Sprite> = new Map()
 
   constructor() {
     this.app = new Application()
@@ -123,6 +124,7 @@ export class NovelRenderer {
     this.eventIndex = 0
     this.textIndex = 0
     this.displayEventCount = events.filter((e) => getTextEvent(e) !== null).length
+    this.textureCache.clear()
     this.clearBackground()
     this.blackoutOverlay.visible = false
     this.processUntilNextTextEvent()
@@ -300,20 +302,40 @@ export class NovelRenderer {
 
     if (!this.assetBaseUrl) return
 
-    const url = `${this.assetBaseUrl}/${path}`
+    const cleanPath = path.replace(/^\//, '')
+    const url = `${this.assetBaseUrl}/${cleanPath}`
+
+    // キャッシュ済みの Sprite があればクローンして再利用（戻る操作時のフリッカー防止）
+    const cached = this.textureCache.get(url)
+    if (cached && cached.texture.valid) {
+      const sprite = new Sprite(cached.texture)
+      this.applyCoverFit(sprite)
+      this.bgContainer.addChild(sprite)
+      return
+    }
+
     const sprite = Sprite.from(url)
 
     sprite.texture.source.on('loaded', () => {
-      const scaleX = GAME_WIDTH / sprite.texture.width
-      const scaleY = GAME_HEIGHT / sprite.texture.height
-      const scale = Math.max(scaleX, scaleY)
-      sprite.width = sprite.texture.width * scale
-      sprite.height = sprite.texture.height * scale
-      sprite.x = (GAME_WIDTH - sprite.width) / 2
-      sprite.y = (GAME_HEIGHT - sprite.height) / 2
+      this.textureCache.set(url, sprite)
+      this.applyCoverFit(sprite)
+    })
+
+    sprite.texture.source.on('error', () => {
+      console.warn(`[name-name] 背景画像の読み込みに失敗: ${url}`)
     })
 
     this.bgContainer.addChild(sprite)
+  }
+
+  private applyCoverFit(sprite: Sprite): void {
+    const scaleX = GAME_WIDTH / sprite.texture.width
+    const scaleY = GAME_HEIGHT / sprite.texture.height
+    const scale = Math.max(scaleX, scaleY)
+    sprite.width = sprite.texture.width * scale
+    sprite.height = sprite.texture.height * scale
+    sprite.x = (GAME_WIDTH - sprite.width) / 2
+    sprite.y = (GAME_HEIGHT - sprite.height) / 2
   }
 
   /**
