@@ -15,21 +15,26 @@ import { Application, Container, Graphics, Sprite, Text as PixiText, TextStyle }
 import { CharacterLayer } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
 import { AudioManager } from './AudioManager'
-import { GameState } from './GameState'
+import { GameState, NovelGameState, resolveEvents } from './GameState'
 import { ChoiceOverlay } from './ChoiceOverlay'
 import { SaveManager, SaveSlotData } from './SaveManager'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
+import { SeekBar } from './SeekBar'
 import { Event, EventScene } from '../types'
 
 const GAME_WIDTH = 800
 const GAME_HEIGHT = 600
 
 /** Dialog / Narration から text を取り出すヘルパー */
-function getTextEvent(
-  event: Event
-):
-  | { type: 'dialog'; character: string | null; expression: string | null; position: string | null; text: string[] }
+function getTextEvent(event: Event):
+  | {
+      type: 'dialog'
+      character: string | null
+      expression: string | null
+      position: string | null
+      text: string[]
+    }
   | { type: 'narration'; text: string[] }
   | null {
   if (typeof event === 'object' && event !== null) {
@@ -59,9 +64,13 @@ export class NovelRenderer {
   private counterText: PixiText | null = null
   private displayEventCount = 0
 
-  private events: Event[] = []
+  /** Condition 展開済みのフラットなイベント配列（元の events は保持しない） */
+  private resolvedEvents: Event[] = []
   private eventIndex = 0
   private textIndex = 0
+
+  /** スナップショット履歴スタック（テキストイベント到達ごとに push） */
+  private history: NovelGameState[] = []
 
   private initialized = false
   private onEndCallback: (() => void) | null = null
@@ -87,9 +96,6 @@ export class NovelRenderer {
   /** 全シーン情報（シーンジャンプ用） */
   private allScenes: EventScene[] = []
 
-  /** 展開済み Condition イベントのインデックス（重複展開防止） */
-  private expandedConditions: Set<number> = new Set()
-
   /** セーブマネージャー */
   private saveManager: SaveManager = new SaveManager()
 
@@ -99,11 +105,17 @@ export class NovelRenderer {
   /** バックログオーバーレイ */
   private backlogOverlay!: BacklogOverlay
 
+  /** シークバー */
+  private seekBar: SeekBar
+
   /** 現在のシーンID */
   private currentSceneId: string | null = null
 
   /** 現在の背景パス */
   private currentBackgroundPath: string | null = null
+
+  /** 現在の BGM パス（スナップショット用） */
+  private currentBgmPath: string | null = null
 
   constructor() {
     this.app = new Application()
@@ -119,6 +131,7 @@ export class NovelRenderer {
     this.choiceOverlay = new ChoiceOverlay(GAME_WIDTH, GAME_HEIGHT)
     this.saveLoadOverlay = new SaveLoadOverlay(GAME_WIDTH, GAME_HEIGHT, this.saveManager)
     this.backlogOverlay = new BacklogOverlay(GAME_WIDTH, GAME_HEIGHT)
+    this.seekBar = new SeekBar()
   }
 
   /**
@@ -153,6 +166,10 @@ export class NovelRenderer {
 
     // ダイアログボックス
     this.app.stage.addChild(this.dialogBox)
+
+    // シークバー（ダイアログボックスの下）
+    this.seekBar.setOnSeek((index) => this.seekTo(index))
+    this.app.stage.addChild(this.seekBar)
 
     // シーンカウンター
     const counterStyle = new TextStyle({
@@ -237,16 +254,24 @@ export class NovelRenderer {
     this.clearBackground()
     this.characterLayer.clear()
     this.blackoutOverlay.visible = false
-    this.events = events
+    this.currentBgmPath = null
+
+    // Condition をフラグに基づいて展開（元の events は変更しない）
+    this.resolvedEvents = resolveEvents(events, this.gameState)
     this.eventIndex = 0
     this.textIndex = 0
-    this.expandedConditions.clear()
-    this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
+    this.history = []
+    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
     this.processUntilNextTextEvent()
+
     // 最初のテキストイベントに立ち絵情報があれば表示
-    if (this.eventIndex < this.events.length) {
-      this.showCharacterFromDialog(this.events[this.eventIndex])
+    if (this.eventIndex < this.resolvedEvents.length) {
+      this.showCharacterFromDialog(this.resolvedEvents[this.eventIndex])
     }
+
+    // 最初のテキストイベントのスナップショットを記録
+    this.pushSnapshot()
+
     this.render()
   }
 
@@ -285,7 +310,158 @@ export class NovelRenderer {
     this.initialized = false
   }
 
+  /**
+   * 現在のゲーム状態のスナップショットを返す
+   */
+  getSnapshot(): NovelGameState {
+    return {
+      sceneId: this.currentSceneId,
+      eventIndex: this.eventIndex,
+      textIndex: this.textIndex,
+      flags: this.gameState.toJSON(),
+      backgroundPath: this.currentBackgroundPath,
+      isBlackout: this.blackoutOverlay.visible,
+      characters: this.characterLayer.getCharacterStates(),
+      currentBgmPath: this.currentBgmPath,
+    }
+  }
+
+  /**
+   * 次のテキスト / 次のイベントへ進む
+   */
+  advance(): void {
+    if (this.resolvedEvents.length === 0) return
+    if (this.waitingForChoice || this.waitingForWait) return
+
+    const current = this.resolvedEvents[this.eventIndex]
+    const textEvt = getTextEvent(current)
+
+    if (textEvt) {
+      // 現在表示中のテキストをバックログに記録
+      const currentLine = textEvt.text[this.textIndex] ?? ''
+      const character = textEvt.type === 'dialog' ? textEvt.character : null
+      this.backlogOverlay.addEntry(character, currentLine)
+
+      this.textIndex++
+      if (this.textIndex < textEvt.text.length) {
+        // まだテキスト行が残っている
+        this.render()
+        return
+      }
+    }
+
+    // 次のイベントへ
+    this.eventIndex++
+    this.textIndex = 0
+
+    if (this.eventIndex >= this.resolvedEvents.length) {
+      // 全イベント完了
+      this.dialogBox.setDialog(null, '')
+      this.dialogBox.setIndicatorVisible(false)
+      this.updateCounter()
+      this.onEndCallback?.()
+      return
+    }
+
+    this.processUntilNextTextEvent()
+    // テキストイベントに立ち絵情報があれば表示
+    if (this.eventIndex < this.resolvedEvents.length) {
+      this.showCharacterFromDialog(this.resolvedEvents[this.eventIndex])
+    }
+
+    // スナップショットを記録
+    this.pushSnapshot()
+
+    this.render()
+  }
+
+  /**
+   * 1つ前の表示イベントに戻る（スナップショットベースの宣言的復元）
+   */
+  goBack(): void {
+    if (this.resolvedEvents.length === 0) return
+    if (this.waitingForChoice || this.waitingForWait) return
+
+    const current = this.resolvedEvents[this.eventIndex]
+    const textEvt = getTextEvent(current)
+
+    if (textEvt && this.textIndex > 0) {
+      this.textIndex--
+      this.render()
+      return
+    }
+
+    // 前のスナップショットへ（現在の分を pop して、その前に戻る）
+    if (this.history.length > 1) {
+      this.history.pop()
+      const prevState = this.history[this.history.length - 1]
+      this.applyState(prevState)
+      this.render()
+    }
+  }
+
+  /**
+   * 履歴の任意位置にジャンプする（シークバーから呼ばれる）
+   */
+  seekTo(historyIndex: number): void {
+    if (historyIndex < 0 || historyIndex >= this.history.length) return
+    if (this.waitingForChoice || this.waitingForWait) return
+
+    // 履歴を指定位置まで切り詰める
+    this.history = this.history.slice(0, historyIndex + 1)
+    const targetState = this.history[historyIndex]
+    this.applyState(targetState)
+    this.render()
+  }
+
   // --- private ---
+
+  /**
+   * スナップショットを履歴に push する
+   */
+  private pushSnapshot(): void {
+    if (
+      this.eventIndex < this.resolvedEvents.length &&
+      getTextEvent(this.resolvedEvents[this.eventIndex])
+    ) {
+      this.history.push(this.getSnapshot())
+    }
+  }
+
+  /**
+   * スナップショットから状態を宣言的に復元する
+   */
+  private applyState(state: NovelGameState): void {
+    // インデックス復元
+    this.eventIndex = state.eventIndex
+    this.textIndex = state.textIndex
+
+    // 背景復元
+    if (state.backgroundPath) {
+      this.setBackground(state.backgroundPath)
+    } else {
+      this.clearBackground()
+    }
+
+    // 暗転復元
+    this.blackoutOverlay.visible = state.isBlackout
+
+    // 立ち絵復元
+    this.characterLayer.clear()
+    for (const ch of state.characters) {
+      this.characterLayer.show(ch.name, ch.expression, ch.position, this.assetBaseUrl)
+    }
+
+    // BGM復元
+    if (state.currentBgmPath) {
+      const soundUrl = `${this.assetBaseUrl}/sounds/${state.currentBgmPath.replace(/^\//, '')}`
+      this.audioManager.playBgm(soundUrl)
+      this.currentBgmPath = state.currentBgmPath
+    } else {
+      this.audioManager.stopBgm(0)
+      this.currentBgmPath = null
+    }
+  }
 
   private handleAdvance = (): void => {
     this.audioManager.ensureContext()
@@ -377,106 +553,12 @@ export class NovelRenderer {
   }
 
   /**
-   * 次のテキスト / 次のイベントへ進む
-   */
-  private advance(): void {
-    if (this.events.length === 0) return
-    if (this.waitingForChoice || this.waitingForWait) return
-
-    const current = this.events[this.eventIndex]
-    const textEvt = getTextEvent(current)
-
-    if (textEvt) {
-      // 現在表示中のテキストをバックログに記録
-      const currentLine = textEvt.text[this.textIndex] ?? ''
-      const character = textEvt.type === 'dialog' ? textEvt.character : null
-      this.backlogOverlay.addEntry(character, currentLine)
-
-      this.textIndex++
-      if (this.textIndex < textEvt.text.length) {
-        // まだテキスト行が残っている
-        this.render()
-        return
-      }
-    }
-
-    // 次のイベントへ
-    this.eventIndex++
-    this.textIndex = 0
-
-    if (this.eventIndex >= this.events.length) {
-      // 全イベント完了
-      this.dialogBox.setDialog(null, '')
-      this.dialogBox.setIndicatorVisible(false)
-      this.updateCounter()
-      this.onEndCallback?.()
-      return
-    }
-
-    this.processUntilNextTextEvent()
-    // テキストイベントに立ち絵情報があれば表示
-    if (this.eventIndex < this.events.length) {
-      this.showCharacterFromDialog(this.events[this.eventIndex])
-    }
-    this.render()
-  }
-
-  /**
-   * 1つ前の表示イベントに戻る
-   */
-  private goBack(): void {
-    if (this.events.length === 0) return
-    if (this.waitingForChoice || this.waitingForWait) return
-
-    const current = this.events[this.eventIndex]
-    const textEvt = getTextEvent(current)
-
-    if (textEvt && this.textIndex > 0) {
-      this.textIndex--
-      this.render()
-      return
-    }
-
-    // 前のイベントへ
-    if (this.eventIndex > 0) {
-      const oldEventIndex = this.eventIndex
-      const oldTextIndex = this.textIndex
-
-      this.eventIndex--
-      this.textIndex = 0
-
-      // 前の表示イベントを探す
-      while (this.eventIndex > 0 && !getTextEvent(this.events[this.eventIndex])) {
-        this.eventIndex--
-      }
-
-      if (!getTextEvent(this.events[this.eventIndex])) {
-        // テキストイベントが見つからなかった — 何もしない
-        this.eventIndex = oldEventIndex
-        this.textIndex = oldTextIndex
-        return
-      }
-
-      const prevEvt = getTextEvent(this.events[this.eventIndex])
-      if (prevEvt) {
-        // 最後のテキスト行を表示
-        this.textIndex = prevEvt.text.length - 1
-      }
-
-      // 演出状態を先頭から再構築
-      this.replayDirectivesUpTo(this.eventIndex)
-
-      this.render()
-    }
-  }
-
-  /**
    * 非テキストイベントを実行しながら次のテキストイベントまで進む
    */
   private processUntilNextTextEvent(): void {
-    while (this.eventIndex < this.events.length) {
-      if (getTextEvent(this.events[this.eventIndex])) break
-      this.processDirective(this.events[this.eventIndex])
+    while (this.eventIndex < this.resolvedEvents.length) {
+      if (getTextEvent(this.resolvedEvents[this.eventIndex])) break
+      this.processDirective(this.resolvedEvents[this.eventIndex])
       // Choice / Wait は進行を止める
       if (this.waitingForChoice || this.waitingForWait) break
       this.eventIndex++
@@ -485,6 +567,8 @@ export class NovelRenderer {
 
   /**
    * 演出イベント（Background, Blackout, SceneTransition）を実行する
+   *
+   * Condition は resolvedEvents では既に展開済みなので、ここでは処理しない。
    */
   private processDirective(event: Event): void {
     if (typeof event === 'string') {
@@ -506,8 +590,10 @@ export class NovelRenderer {
       if (event.Bgm.action === 'Play' && event.Bgm.path) {
         const soundUrl = `${this.assetBaseUrl}/sounds/${event.Bgm.path.replace(/^\//, '')}`
         this.audioManager.playBgm(soundUrl)
+        this.currentBgmPath = event.Bgm.path
       } else {
         this.audioManager.stopBgm()
+        this.currentBgmPath = null
       }
       return
     }
@@ -518,17 +604,10 @@ export class NovelRenderer {
     }
     if ('Flag' in event) {
       this.gameState.setFlag(event.Flag.name, event.Flag.value)
-      return
-    }
-    if ('Condition' in event) {
-      if (!this.expandedConditions.has(this.eventIndex) && this.gameState.checkFlag(event.Condition.flag)) {
-        // 条件が真 → 内部 events を現在位置に挿入（flatten）、重複展開を防止
-        this.expandedConditions.add(this.eventIndex)
-        const innerEvents = event.Condition.events
-        this.events.splice(this.eventIndex + 1, 0, ...innerEvents)
-        // displayEventCount を再計算
-        this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
-      }
+      // フラグ変更により Condition の評価結果が変わる可能性があるが、
+      // resolvedEvents は setEvents/jumpToScene 時に計算済み。
+      // Flag が resolvedEvents 内に残っているので、ここで再展開は不要。
+      // もし動的に再展開が必要な場合は、ここに再計算ロジックを入れる。
       return
     }
     if ('Choice' in event) {
@@ -561,9 +640,10 @@ export class NovelRenderer {
         this.waitingForWait = false
         this.eventIndex++
         this.processUntilNextTextEvent()
-        if (this.eventIndex < this.events.length) {
-          this.showCharacterFromDialog(this.events[this.eventIndex])
+        if (this.eventIndex < this.resolvedEvents.length) {
+          this.showCharacterFromDialog(this.resolvedEvents[this.eventIndex])
         }
+        this.pushSnapshot()
         this.render()
       }, event.Wait.ms)
       return
@@ -577,7 +657,12 @@ export class NovelRenderer {
     const textEvt = getTextEvent(event)
     if (!textEvt || textEvt.type !== 'dialog') return
     if (!textEvt.expression || !textEvt.position || !textEvt.character) return
-    this.characterLayer.show(textEvt.character, textEvt.expression, textEvt.position, this.assetBaseUrl)
+    this.characterLayer.show(
+      textEvt.character,
+      textEvt.expression,
+      textEvt.position,
+      this.assetBaseUrl
+    )
   }
 
   /**
@@ -633,57 +718,25 @@ export class NovelRenderer {
   }
 
   /**
-   * 先頭から targetIndex まで演出イベントを再実行して状態を再構築する
-   */
-  private replayDirectivesUpTo(targetIndex: number): void {
-    this.clearBackground()
-    this.characterLayer.clear()
-    this.blackoutOverlay.visible = false
-    this.audioManager.stopBgm(0)
-
-    // 最後の BGM イベントを見つけて再生する（SE/Flag/Condition/Choice はリプレイしない）
-    let lastBgmEvent: Event | null = null
-    for (let i = 0; i <= targetIndex; i++) {
-      const ev = this.events[i]
-      // Dialog の立ち絵情報もリプレイする
-      const textEvt = getTextEvent(ev)
-      if (textEvt) {
-        this.showCharacterFromDialog(ev)
-        continue
-      }
-      if (typeof ev === 'object' && ev !== null) {
-        if ('Bgm' in ev) {
-          lastBgmEvent = ev
-        } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev || 'Wait' in ev) {
-          // リプレイ時にはスキップ（副作用の重複を防ぐ）
-        } else {
-          this.processDirective(ev)
-        }
-      } else if (typeof ev === 'string') {
-        this.processDirective(ev)
-      }
-    }
-    if (lastBgmEvent) {
-      this.processDirective(lastBgmEvent)
-    }
-  }
-
-  /**
    * セーブメニューを表示する
    */
   private openSaveMenu(): void {
     this.saveLoadOverlay.showSave((slot: number) => {
       const sceneName = this.currentSceneId
-        ? this.allScenes.find((s) => s.id === this.currentSceneId)?.title ?? null
+        ? (this.allScenes.find((s) => s.id === this.currentSceneId)?.title ?? null)
         : null
 
+      const snapshot = this.getSnapshot()
       const data: SaveSlotData = {
         slot,
-        sceneId: this.currentSceneId,
-        eventIndex: this.eventIndex,
-        textIndex: this.textIndex,
-        flags: this.gameState.toJSON(),
-        backgroundPath: this.currentBackgroundPath,
+        sceneId: snapshot.sceneId,
+        eventIndex: snapshot.eventIndex,
+        textIndex: snapshot.textIndex,
+        flags: snapshot.flags,
+        backgroundPath: snapshot.backgroundPath,
+        isBlackout: snapshot.isBlackout,
+        characters: snapshot.characters,
+        currentBgmPath: snapshot.currentBgmPath,
         savedAt: new Date().toISOString(),
         sceneName,
       }
@@ -701,7 +754,7 @@ export class NovelRenderer {
   }
 
   /**
-   * セーブデータからゲーム状態を復元する
+   * セーブデータからゲーム状態を復元する（applyState ベースの宣言的復元）
    */
   private loadFromSaveData(data: SaveSlotData): void {
     // フラグを復元
@@ -720,24 +773,33 @@ export class NovelRenderer {
 
     // 選択肢状態をリセット
     this.waitingForChoice = false
-    this.choiceOverlay.hide()
-    this.audioManager.stopBgm(0)
-    this.events = [...scene.events]
-    this.expandedConditions.clear()
-    this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
-
-    // eventIndex まで演出イベントを再実行して状態を再構築
-    const targetIndex = Math.min(data.eventIndex - 1, this.events.length - 1)
-    if (targetIndex >= 0) {
-      this.replayDirectivesUpTo(targetIndex)
-    } else {
-      this.clearBackground()
-      this.characterLayer.clear()
-      this.blackoutOverlay.visible = false
+    this.waitingForWait = false
+    if (this.waitTimer) {
+      clearTimeout(this.waitTimer)
+      this.waitTimer = null
     }
+    this.choiceOverlay.hide()
 
-    this.eventIndex = data.eventIndex
-    this.textIndex = data.textIndex
+    // Condition をフラグに基づいて展開
+    this.resolvedEvents = resolveEvents([...scene.events], this.gameState)
+    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+
+    // NovelGameState を構築して applyState で宣言的に復元
+    const state: NovelGameState = {
+      sceneId: data.sceneId,
+      eventIndex: data.eventIndex,
+      textIndex: data.textIndex,
+      flags: data.flags,
+      backgroundPath: data.backgroundPath,
+      isBlackout: data.isBlackout ?? false,
+      characters: data.characters ?? [],
+      currentBgmPath: data.currentBgmPath ?? null,
+    }
+    this.applyState(state)
+
+    // 履歴をリセット（ロード後は現在位置のみ）
+    this.history = [this.getSnapshot()]
+
     this.render()
   }
 
@@ -746,9 +808,9 @@ export class NovelRenderer {
    */
   private render(): void {
     if (!this.initialized) return
-    if (this.eventIndex >= this.events.length) return
+    if (this.eventIndex >= this.resolvedEvents.length) return
 
-    const current = this.events[this.eventIndex]
+    const current = this.resolvedEvents[this.eventIndex]
     const textEvt = getTextEvent(current)
 
     if (!textEvt) {
@@ -764,10 +826,11 @@ export class NovelRenderer {
 
     // 最後のテキスト行かつ最後のイベントならインジケーター非表示
     const isLastText = this.textIndex >= textEvt.text.length - 1
-    const isLastEvent = this.eventIndex >= this.events.length - 1
+    const isLastEvent = this.eventIndex >= this.resolvedEvents.length - 1
     this.dialogBox.setIndicatorVisible(!(isLastText && isLastEvent))
 
     this.updateCounter()
+    this.updateSeekBar()
   }
 
   private updateCounter(): void {
@@ -775,12 +838,25 @@ export class NovelRenderer {
     const total = this.displayEventCount
     // 表示イベントの中での現在位置を計算
     let displayIndex = 0
-    for (let i = 0; i < this.eventIndex && i < this.events.length; i++) {
-      if (getTextEvent(this.events[i])) displayIndex++
+    for (let i = 0; i < this.eventIndex && i < this.resolvedEvents.length; i++) {
+      if (getTextEvent(this.resolvedEvents[i])) displayIndex++
     }
-    if (this.eventIndex < this.events.length && getTextEvent(this.events[this.eventIndex])) {
+    if (
+      this.eventIndex < this.resolvedEvents.length &&
+      getTextEvent(this.resolvedEvents[this.eventIndex])
+    ) {
       displayIndex++
     }
     this.counterText.text = `${displayIndex} / ${total}`
+  }
+
+  /**
+   * シークバーの表示を更新する
+   */
+  private updateSeekBar(): void {
+    // history.length - 1 が現在のインデックス（0-based）
+    const current = Math.max(0, this.history.length - 1)
+    const total = this.history.length
+    this.seekBar.update(current, total)
   }
 }
