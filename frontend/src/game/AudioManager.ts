@@ -13,6 +13,8 @@ export class AudioManager {
   private bgmGain: GainNode | null = null
   private currentBgmUrl: string | null = null
   private audioCache: Map<string, AudioBuffer> = new Map()
+  private bgmRequestId = 0
+  private fadingNodes: { source: AudioBufferSourceNode; gain: GainNode; timer: ReturnType<typeof setTimeout> }[] = []
 
   /**
    * AudioContext を生成/再開する。
@@ -38,11 +40,9 @@ export class AudioManager {
     // 現在の BGM を即停止（フェードなし）
     this.stopBgmImmediate()
 
+    const requestId = ++this.bgmRequestId
     const buffer = await this.loadAudio(url)
-    if (!buffer) return
-
-    // 停止〜ロード間に別の playBgm が呼ばれた場合のガード
-    if (this.currentBgmUrl !== null) return
+    if (!buffer || requestId !== this.bgmRequestId) return
 
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
@@ -77,8 +77,8 @@ export class AudioManager {
     gain.gain.setValueAtTime(gain.gain.value, now)
     gain.gain.linearRampToValueAtTime(0, now + fadeMs / 1000)
 
-    // フェード完了後にノードを停止
-    setTimeout(() => {
+    // フェード完了後にノードを停止（参照を保持して新規再生時にキャンセル可能に）
+    const timer = setTimeout(() => {
       try {
         source.stop()
       } catch {
@@ -86,7 +86,10 @@ export class AudioManager {
       }
       source.disconnect()
       gain.disconnect()
+      this.fadingNodes = this.fadingNodes.filter((n) => n.source !== source)
     }, fadeMs + 50)
+
+    this.fadingNodes.push({ source, gain, timer })
 
     this.bgmSource = null
     this.bgmGain = null
@@ -105,8 +108,8 @@ export class AudioManager {
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
     source.connect(this.ctx.destination)
+    source.onended = () => source.disconnect()
     source.start(0)
-    // fire-and-forget: 再生完了後に自動解放される
   }
 
   /**
@@ -127,6 +130,19 @@ export class AudioManager {
    * BGM を即座に停止する（フェードなし）
    */
   private stopBgmImmediate(): void {
+    // フェード中のノードも即停止
+    for (const node of this.fadingNodes) {
+      clearTimeout(node.timer)
+      try {
+        node.source.stop()
+      } catch {
+        // already stopped
+      }
+      node.source.disconnect()
+      node.gain.disconnect()
+    }
+    this.fadingNodes = []
+
     if (this.bgmSource) {
       try {
         this.bgmSource.stop()

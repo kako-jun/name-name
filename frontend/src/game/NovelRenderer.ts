@@ -170,6 +170,7 @@ export class NovelRenderer {
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
+    this.audioManager.ensureContext()
     switch (e.key) {
       case ' ':
       case 'Enter':
