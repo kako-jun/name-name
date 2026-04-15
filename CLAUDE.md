@@ -165,7 +165,8 @@ curl -X POST http://localhost:8001/api/projects/{name}/switch-branch \
 my-game/
 ├── .git/
 ├── .gitignore          # .name-name.jsonを除外
-├── .name-name.json     # ローカル設定（ブランチ情報）
+├── .name-name.json     # ローカル設定（ブランチ情報、gitignore対象）
+├── .name-name-tags.json # アセットタグ情報（Git管理対象）
 ├── chapters/
 │   └── all.md          # 章データ（Markdown形式）
 └── assets/
@@ -266,10 +267,15 @@ LD_PRELOAD= git push origin main
 - `PUT /api/projects/{name}/chapters` - 保存
 
 ### アセット管理
-- `GET /api/projects/{name}/assets/{type}` - 一覧（type: images/sounds/movies/ideas）
+- `GET /api/projects/{name}/assets/{type}` - 一覧（type: images/sounds/movies/ideas）。`?q=`で名前検索、`?tag=`でタグフィルタ
 - `POST /api/projects/{name}/assets/{type}` - アップロード
 - `GET /api/projects/{name}/assets/{type}/{filename}` - ダウンロード
 - `DELETE /api/projects/{name}/assets/{type}/{filename}` - 削除
+- `PUT /api/projects/{name}/assets/{type}/{filename}/tags` - タグ設定
+- `DELETE /api/projects/{name}/assets/{type}/{filename}/tags/{tag}` - タグ削除
+
+### タグ管理
+- `GET /api/projects/{name}/tags` - プロジェクト内の全ユニークタグ一覧
 
 ### コミット・同期
 - `GET /api/projects/{name}/status` - 未コミットの変更確認
@@ -339,7 +345,8 @@ uv sync
 - ✅ キャンバスエディタ（ドラッグ&ドロップ）
 - ✅ アセット管理画面
   - タブ切り替え（4種類のアセット）
-  - 検索機能（UI実装済み）
+  - 検索機能（バックエンド連携済み、名前部分一致）
+  - タグ機能（付与・削除・フィルタリング、`.name-name-tags.json` に保存）
   - サムネイル表示（画像）
   - プレビュー機能（画像・音声・動画）
   - ドラッグ&ドロップアップロード
@@ -373,8 +380,6 @@ uv sync
 - ✅ AudioBuffer キャッシュ・ユーザーインタラクション制約対応
 
 ### 未実装
-- ⬜ アセット検索機能（バックエンド連携）
-- ⬜ タグ機能（アセット分類）
 - ⬜ フロントエンドでのWASMパーサー統合
 - ⬜ RPGプレイヤーのPixiJS移行（現在はPhaser）
 - ✅ 立ち絵表示 + 表情変更 + 退場（#18）— CharacterLayer / 左右中央配置 / ExpressionChange / Exit

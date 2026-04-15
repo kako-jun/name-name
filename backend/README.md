@@ -105,13 +105,23 @@ POST   /api/projects/{name}/commit           # コミット・プッシュ
 ### アセット管理
 
 ```
-GET    /api/projects/{name}/assets/{type}           # アセット一覧
-POST   /api/projects/{name}/assets/{type}           # アセットアップロード
-GET    /api/projects/{name}/assets/{type}/{file}    # アセット取得
-DELETE /api/projects/{name}/assets/{type}/{file}    # アセット削除
+GET    /api/projects/{name}/assets/{type}               # アセット一覧（?q= 名前検索, ?tag= タグフィルタ）
+POST   /api/projects/{name}/assets/{type}               # アセットアップロード
+GET    /api/projects/{name}/assets/{type}/{file}        # アセット取得
+DELETE /api/projects/{name}/assets/{type}/{file}        # アセット削除
+PUT    /api/projects/{name}/assets/{type}/{file}/tags   # タグ設定
+DELETE /api/projects/{name}/assets/{type}/{file}/tags/{tag}  # タグ削除
+```
+
+### タグ管理
+
+```
+GET    /api/projects/{name}/tags                        # 全ユニークタグ一覧
 ```
 
 `{type}`: `images`, `sounds`, `movies`, `ideas`
+
+タグ情報はプロジェクト内の `.name-name-tags.json` に保存されます（Git管理対象）。
 
 ## CORS設定
 
