@@ -95,7 +95,9 @@ export class SaveManager {
           typeof slot.eventIndex === 'number' &&
           typeof slot.textIndex === 'number' &&
           typeof slot.savedAt === 'string' &&
-          typeof slot.flags === 'object'
+          typeof slot.flags === 'object' &&
+          typeof slot.isBlackout === 'boolean' &&
+          Array.isArray(slot.characters)
         ) {
           this.save(i, slot as SaveSlotData)
         } else {

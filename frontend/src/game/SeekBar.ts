@@ -6,10 +6,8 @@
  * 動画プレイヤー的な見た目のスクラブバー。
  */
 
-import { Container, Graphics } from 'pixi.js'
-
-const GAME_WIDTH = 800
-const GAME_HEIGHT = 600
+import { Container, FederatedPointerEvent, Graphics } from 'pixi.js'
+import { GAME_WIDTH, GAME_HEIGHT } from './constants'
 
 /** バー全体の高さ（px） */
 const BAR_HEIGHT = 6
@@ -31,7 +29,7 @@ export class SeekBar extends Container {
   private barBg: Graphics
   private barFill: Graphics
   private thumb: Graphics
-  private hitArea_: Graphics
+  private clickRegion: Graphics
 
   private barWidth: number
   private barX: number
@@ -49,13 +47,13 @@ export class SeekBar extends Container {
     this.barWidth = GAME_WIDTH - BAR_MARGIN_X * 2
 
     // 透明ヒットエリア（クリック検出を広めに取る）
-    this.hitArea_ = new Graphics()
-    this.hitArea_.rect(this.barX, BAR_Y - 8, this.barWidth, BAR_HEIGHT + 16)
-    this.hitArea_.fill({ color: 0x000000, alpha: 0 })
-    this.hitArea_.eventMode = 'static'
-    this.hitArea_.cursor = 'pointer'
-    this.hitArea_.on('pointerdown', this.handleClick)
-    this.addChild(this.hitArea_)
+    this.clickRegion = new Graphics()
+    this.clickRegion.rect(this.barX, BAR_Y - 8, this.barWidth, BAR_HEIGHT + 16)
+    this.clickRegion.fill({ color: 0x000000, alpha: 0 })
+    this.clickRegion.eventMode = 'static'
+    this.clickRegion.cursor = 'pointer'
+    this.clickRegion.on('pointerdown', this.handleClick)
+    this.addChild(this.clickRegion)
 
     // 背景バー
     this.barBg = new Graphics()
@@ -99,7 +97,8 @@ export class SeekBar extends Container {
   }
 
   private updateVisual(): void {
-    const ratio = this._total > 0 ? Math.max(0, Math.min(1, this._current / this._total)) : 0
+    const maxIndex = this._total - 1
+    const ratio = maxIndex > 0 ? Math.max(0, Math.min(1, this._current / maxIndex)) : 0
     const fillWidth = Math.max(BAR_RADIUS * 2, this.barWidth * ratio)
 
     this.barFill.clear()
@@ -111,10 +110,10 @@ export class SeekBar extends Container {
     this.thumb.visible = this._total > 0
   }
 
-  private handleClick = (e: { globalX?: number; global?: { x: number } }): void => {
+  private handleClick = (e: FederatedPointerEvent): void => {
     if (this._total <= 0) return
 
-    const globalX = e.globalX ?? e.global?.x ?? 0
+    const globalX = e.globalX
     const localX = globalX - this.barX
     const ratio = Math.max(0, Math.min(1, localX / this.barWidth))
     const index = Math.round(ratio * (this._total - 1))
