@@ -4,9 +4,10 @@ import { NovelRenderer } from '../game/NovelRenderer'
 
 interface NovelPlayerProps {
   events: Event[]
+  assetBaseUrl?: string
 }
 
-function NovelPlayer({ events }: NovelPlayerProps) {
+function NovelPlayer({ events, assetBaseUrl }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
 
@@ -23,6 +24,9 @@ function NovelPlayer({ events }: NovelPlayerProps) {
       if (destroyed) {
         renderer.destroy()
         return
+      }
+      if (assetBaseUrl) {
+        renderer.setAssetBaseUrl(assetBaseUrl)
       }
       renderer.setEvents(events)
     })

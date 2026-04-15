@@ -4,10 +4,13 @@
  * Event[] を受け取り、クリック/タップ/キーボードで進行する。
  * - Dialog/Narration: text[] の各要素を1つずつ表示（カノソ方式 = 一瞬表示）
  * - 改行 = テキスト送り、空行 = 改ページ（ボックス内テキストクリア）
- * - Background, BGM, SE 等の非表示イベントはスキップ
+ * - Background: 背景画像表示（アスペクト比維持カバー）
+ * - Blackout: 暗転/暗転解除
+ * - SceneTransition: 背景クリア + 暗転解除
+ * - BGM, SE 等の未実装イベントはスキップ
  */
 
-import { Application, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
+import { Application, Container, Graphics, Sprite, Text as PixiText, TextStyle } from 'pixi.js'
 import { DialogBox } from './DialogBox'
 import { Event } from '../types'
 
@@ -36,6 +39,8 @@ export class NovelRenderer {
   private app: Application
   private dialogBox: DialogBox
   private bgGraphics: Graphics
+  private bgContainer: Container
+  private blackoutOverlay: Graphics
   private counterText: PixiText | null = null
   private displayEventCount = 0
 
@@ -45,10 +50,13 @@ export class NovelRenderer {
 
   private initialized = false
   private onEndCallback: (() => void) | null = null
+  private assetBaseUrl: string = ''
 
   constructor() {
     this.app = new Application()
     this.bgGraphics = new Graphics()
+    this.bgContainer = new Container()
+    this.blackoutOverlay = new Graphics()
     this.dialogBox = new DialogBox({
       screenWidth: GAME_WIDTH,
       screenHeight: GAME_HEIGHT,
@@ -72,6 +80,15 @@ export class NovelRenderer {
     this.bgGraphics.rect(0, 0, GAME_WIDTH, GAME_HEIGHT)
     this.bgGraphics.fill(0x000000)
     this.app.stage.addChild(this.bgGraphics)
+
+    // 背景画像コンテナ
+    this.app.stage.addChild(this.bgContainer)
+
+    // 暗転レイヤー
+    this.blackoutOverlay.rect(0, 0, GAME_WIDTH, GAME_HEIGHT)
+    this.blackoutOverlay.fill(0x000000)
+    this.blackoutOverlay.visible = false
+    this.app.stage.addChild(this.blackoutOverlay)
 
     // ダイアログボックス
     this.app.stage.addChild(this.dialogBox)
@@ -106,8 +123,17 @@ export class NovelRenderer {
     this.eventIndex = 0
     this.textIndex = 0
     this.displayEventCount = events.filter((e) => getTextEvent(e) !== null).length
-    this.skipToNextDisplayEvent()
+    this.clearBackground()
+    this.blackoutOverlay.visible = false
+    this.processUntilNextTextEvent()
     this.render()
+  }
+
+  /**
+   * 背景画像のベースURLを設定する
+   */
+  setAssetBaseUrl(url: string): void {
+    this.assetBaseUrl = url
   }
 
   /**
@@ -181,7 +207,7 @@ export class NovelRenderer {
       return
     }
 
-    this.skipToNextDisplayEvent()
+    this.processUntilNextTextEvent()
     this.render()
   }
 
@@ -226,17 +252,88 @@ export class NovelRenderer {
         this.textIndex = prevEvt.text.length - 1
       }
 
+      // 演出状態を先頭から再構築
+      this.replayDirectivesUpTo(this.eventIndex)
+
       this.render()
     }
   }
 
   /**
-   * 非表示イベント（Background, BGM 等）をスキップして次の表示イベントへ
+   * 非テキストイベントを実行しながら次のテキストイベントまで進む
    */
-  private skipToNextDisplayEvent(): void {
+  private processUntilNextTextEvent(): void {
     while (this.eventIndex < this.events.length) {
       if (getTextEvent(this.events[this.eventIndex])) break
+      this.processDirective(this.events[this.eventIndex])
       this.eventIndex++
+    }
+  }
+
+  /**
+   * 演出イベント（Background, Blackout, SceneTransition）を実行する
+   */
+  private processDirective(event: Event): void {
+    if (typeof event === 'string') {
+      if (event === 'SceneTransition') {
+        this.clearBackground()
+        this.blackoutOverlay.visible = false
+      }
+      return
+    }
+    if ('Background' in event) {
+      this.setBackground(event.Background.path)
+      return
+    }
+    if ('Blackout' in event) {
+      this.blackoutOverlay.visible = event.Blackout.action === 'On'
+      return
+    }
+    // BGM, SE, Exit, Wait, Flag, Condition 等は別Issue — スキップ
+  }
+
+  /**
+   * 背景画像を設定する（アスペクト比維持でカバー）
+   */
+  private setBackground(path: string): void {
+    this.bgContainer.removeChildren()
+
+    if (!this.assetBaseUrl) return
+
+    const url = `${this.assetBaseUrl}/${path}`
+    const sprite = Sprite.from(url)
+
+    sprite.texture.source.on('loaded', () => {
+      const scaleX = GAME_WIDTH / sprite.texture.width
+      const scaleY = GAME_HEIGHT / sprite.texture.height
+      const scale = Math.max(scaleX, scaleY)
+      sprite.width = sprite.texture.width * scale
+      sprite.height = sprite.texture.height * scale
+      sprite.x = (GAME_WIDTH - sprite.width) / 2
+      sprite.y = (GAME_HEIGHT - sprite.height) / 2
+    })
+
+    this.bgContainer.addChild(sprite)
+  }
+
+  /**
+   * 背景画像をクリアする
+   */
+  private clearBackground(): void {
+    this.bgContainer.removeChildren()
+  }
+
+  /**
+   * 先頭から targetIndex まで演出イベントを再実行して状態を再構築する
+   */
+  private replayDirectivesUpTo(targetIndex: number): void {
+    this.clearBackground()
+    this.blackoutOverlay.visible = false
+    for (let i = 0; i <= targetIndex; i++) {
+      const ev = this.events[i]
+      if (!getTextEvent(ev)) {
+        this.processDirective(ev)
+      }
     }
   }
 
