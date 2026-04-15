@@ -7,6 +7,7 @@ import RPGPlayer from '../components/RPGPlayer'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
 import { Chapter, Mode, Event } from '../types'
 import { RPGProject, MapData, NPCData } from '../types/rpg'
+import { parseMarkdown } from '../wasm/parser'
 
 interface EditorScreenProps {
   projectName: string
@@ -37,6 +38,9 @@ function EditorScreen({
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
   const initialChaptersRef = useRef<string>('')
+  const [rawMarkdown, setRawMarkdown] = useState<string>('')
+  const [wasmEvents, setWasmEvents] = useState<Event[]>([])
+  const [wasmReady, setWasmReady] = useState(false)
 
   // RPGエディタ用の状態
   const [rpgProject, setRpgProject] = useState<RPGProject>(() => {
@@ -61,7 +65,7 @@ function EditorScreen({
   })
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
 
-  // 初回ロード: APIから章データを取得
+  // 初回ロード: APIからMarkdownを取得しWASMでパース
   useEffect(() => {
     const loadChapters = async () => {
       try {
@@ -71,11 +75,36 @@ function EditorScreen({
           return
         }
         const data = await response.json()
-        setChapters(data.chapters)
-        // 初期状態を保存
-        initialChaptersRef.current = JSON.stringify(data.chapters)
+        const markdown = data.content || ''
+        setRawMarkdown(markdown)
+        initialChaptersRef.current = markdown
 
-        // git statusをチェックして、未コミットの変更があればボタンを青くする
+        // WASMパースでEventsを生成
+        if (markdown.trim()) {
+          try {
+            const doc = await parseMarkdown(markdown)
+            const events: Event[] = []
+            for (const chapter of doc.chapters) {
+              for (let si = 0; si < chapter.scenes.length; si++) {
+                if (events.length > 0) {
+                  events.push('SceneTransition')
+                }
+                events.push(...chapter.scenes[si].events)
+              }
+            }
+            setWasmEvents(events)
+            setWasmReady(true)
+          } catch (parseError) {
+            console.error('WASM parse failed:', parseError)
+          }
+        }
+
+        // 旧モデルへの変換（キャンバスエディタ用、後方互換）
+        if (data.chapters) {
+          setChapters(data.chapters)
+        }
+
+        // git statusをチェック
         const statusResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
         if (statusResponse.ok) {
           const statusData = await statusResponse.json()
@@ -96,9 +125,8 @@ function EditorScreen({
         if (response.ok) {
           const data = await response.json()
           // フロント側で変更がない場合のみ、サーバー側の状態を反映
-          const currentChapters = JSON.stringify(chapters)
           const hasLocalChanges =
-            initialChaptersRef.current !== '' && currentChapters !== initialChaptersRef.current
+            initialChaptersRef.current !== '' && rawMarkdown !== initialChaptersRef.current
           if (!hasLocalChanges) {
             setHasUnsavedChanges(data.has_uncommitted_changes)
           } else {
@@ -113,20 +141,20 @@ function EditorScreen({
 
     const interval = setInterval(checkStatus, 5000)
     return () => clearInterval(interval)
-  }, [apiBaseUrl, projectName, chapters])
+  }, [apiBaseUrl, projectName, rawMarkdown])
 
-  // 章データの変更を検出（即座に反映）
+  // Markdownの変更を検出（即座に反映）
   useEffect(() => {
     if (initialChaptersRef.current === '') return
-    const currentChapters = JSON.stringify(chapters)
-    const hasChanges = currentChapters !== initialChaptersRef.current
-    if (hasChanges) {
+    if (rawMarkdown !== initialChaptersRef.current) {
       setHasUnsavedChanges(true)
     }
-  }, [chapters])
+  }, [rawMarkdown])
 
-  // 章データが変更されたら自動的にワーキングディレクトリに保存
+  // rawMarkdownが変更されたら自動的にワーキングディレクトリに保存
   useEffect(() => {
+    if (!rawMarkdown || rawMarkdown === initialChaptersRef.current) return
+
     if (saveTimeoutRef.current !== null) {
       clearTimeout(saveTimeoutRef.current)
     }
@@ -136,10 +164,7 @@ function EditorScreen({
         const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chapters: chapters,
-            message: '自動保存',
-          }),
+          body: JSON.stringify({ content: rawMarkdown }),
         })
         if (!response.ok) {
           console.error(`Failed to auto-save: ${response.status}`)
@@ -154,7 +179,7 @@ function EditorScreen({
         clearTimeout(saveTimeoutRef.current)
       }
     }
-  }, [chapters, apiBaseUrl, projectName])
+  }, [rawMarkdown, apiBaseUrl, projectName])
 
   // 保存ボタン: Gitコミット・プッシュ
   const handleSave = async () => {
@@ -174,7 +199,7 @@ function EditorScreen({
         return
       }
       // 保存成功後、初期状態を更新
-      initialChaptersRef.current = JSON.stringify(chapters)
+      initialChaptersRef.current = rawMarkdown
       setHasUnsavedChanges(false)
     } catch (error) {
       console.error('Failed to commit:', error)
@@ -202,8 +227,30 @@ function EditorScreen({
       const chaptersResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
       if (chaptersResponse.ok) {
         const data = await chaptersResponse.json()
-        setChapters(data.chapters)
-        initialChaptersRef.current = JSON.stringify(data.chapters)
+        const markdown = data.content || ''
+        setRawMarkdown(markdown)
+        initialChaptersRef.current = markdown
+        if (data.chapters) {
+          setChapters(data.chapters)
+        }
+        // WASMパースを再実行
+        if (markdown.trim()) {
+          try {
+            const doc = await parseMarkdown(markdown)
+            const events: Event[] = []
+            for (const chapter of doc.chapters) {
+              for (let si = 0; si < chapter.scenes.length; si++) {
+                if (events.length > 0) {
+                  events.push('SceneTransition')
+                }
+                events.push(...chapter.scenes[si].events)
+              }
+            }
+            setWasmEvents(events)
+          } catch (parseError) {
+            console.error('WASM parse failed:', parseError)
+          }
+        }
       }
       setHasUnsavedChanges(false)
     } catch (error) {
@@ -245,7 +292,11 @@ function EditorScreen({
     return events
   }
 
-  const novelEvents = useMemo(() => generateEventsFromChapters(), [chapters])
+  // WASMパース結果を優先、フォールバックとして旧モデルからの変換
+  const novelEvents = useMemo(
+    () => (wasmReady && wasmEvents.length > 0 ? wasmEvents : generateEventsFromChapters()),
+    [wasmReady, wasmEvents, chapters]
+  )
 
   return (
     <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
