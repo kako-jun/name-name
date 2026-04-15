@@ -692,39 +692,18 @@ export class NovelRenderer {
     this.waitingForChoice = false
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
-    this.clearBackground()
-    this.characterLayer.clear()
-    this.blackoutOverlay.visible = false
     this.events = [...scene.events]
     this.expandedConditions.clear()
     this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
 
     // eventIndex まで演出イベントを再実行して状態を再構築
-    // Flag/Condition/Choice はスキップし、演出（Background/Blackout/BGM/立ち絵等）のみ再構築
-    // Condition の展開は通常の進行に任せる
-    let lastBgmEvent: Event | null = null
-    for (let i = 0; i < data.eventIndex && i < this.events.length; i++) {
-      const ev = this.events[i]
-      const textEvt = getTextEvent(ev)
-      if (textEvt) {
-        // Dialog の立ち絵情報をリプレイする
-        this.showCharacterFromDialog(ev)
-        continue
-      }
-      if (typeof ev === 'object' && ev !== null) {
-        if ('Bgm' in ev) {
-          lastBgmEvent = ev
-        } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev) {
-          // スキップ（フラグは fromJSON で復元済み、Condition/Choice は副作用防止）
-        } else {
-          this.processDirective(ev)
-        }
-      } else if (typeof ev === 'string') {
-        this.processDirective(ev)
-      }
-    }
-    if (lastBgmEvent) {
-      this.processDirective(lastBgmEvent)
+    const targetIndex = Math.min(data.eventIndex - 1, this.events.length - 1)
+    if (targetIndex >= 0) {
+      this.replayDirectivesUpTo(targetIndex)
+    } else {
+      this.clearBackground()
+      this.characterLayer.clear()
+      this.blackoutOverlay.visible = false
     }
 
     this.eventIndex = data.eventIndex

@@ -4,10 +4,7 @@
  * PixiJS Container 上でキャラクター立ち絵の表示・表情変更・退場を管理する。
  */
 
-import { Container, Sprite } from 'pixi.js'
-
-const GAME_WIDTH = 800
-const GAME_HEIGHT = 600
+import { Container, Sprite, Texture } from 'pixi.js'
 
 /** キャラクターの画面上の配置位置 */
 const POSITION_X: Record<string, number> = {
@@ -107,11 +104,11 @@ export class CharacterLayer extends Container {
     const cleanExpression = expression.replace(/^\//, '')
     const url = `${assetBaseUrl}/images/${cleanExpression}.png`
 
-    const newSprite = Sprite.from(url)
-    newSprite.texture.source.on('loaded', () => {
-      sprite.texture = newSprite.texture
+    const texture = Texture.from(url)
+    texture.source.on('loaded', () => {
+      sprite.texture = texture
     })
-    newSprite.texture.source.on('error', () => {
+    texture.source.on('error', () => {
       console.warn(`[name-name] 立ち絵の読み込みに失敗: ${url}`)
     })
   }
