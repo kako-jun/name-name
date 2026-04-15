@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
 
 type AssetType = 'images' | 'sounds' | 'movies' | 'ideas'
@@ -36,10 +36,19 @@ function AssetsScreen({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [allTags, setAllTags] = useState<string[]>([])
   const [newTagInput, setNewTagInput] = useState('')
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 検索入力のデバウンス (300ms)
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => setDebouncedQuery(value), 300)
+  }, [])
 
   // 初回ロード時と5秒ごとにgit statusをチェック
   useEffect(() => {
@@ -93,12 +102,8 @@ function AssetsScreen({
       if (!response.ok) {
         throw new Error(`Failed to discard: ${response.status}`)
       }
-      // アセット一覧を再読み込み
-      const assetsResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}`)
-      if (assetsResponse.ok) {
-        const data = await assetsResponse.json()
-        setAssets(data.assets)
-      }
+      // アセット一覧を再読み込み（フィルタ維持）
+      await fetchAssets()
       setHasUnsavedChanges(false)
     } catch (error) {
       console.error('Failed to discard changes:', error)
@@ -110,28 +115,19 @@ function AssetsScreen({
   // タブ切り替え時に選択とフィルターをクリア
   useEffect(() => {
     setSelectedAsset(null)
-    setSearchQuery('')
+    setSearchInput('')
+    setDebouncedQuery('')
     setSelectedTag(null)
+    setNewTagInput('')
   }, [selectedType])
 
-  // 全タグ一覧を取得
+  // アセット選択変更時にタグ入力をクリア
   useEffect(() => {
-    const loadTags = async () => {
-      try {
-        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/tags`)
-        if (response.ok) {
-          const data = await response.json()
-          setAllTags(data.tags)
-        }
-      } catch (error) {
-        console.error('Failed to load tags:', error)
-      }
-    }
-    loadTags()
-  }, [apiBaseUrl, projectName])
+    setNewTagInput('')
+  }, [selectedAsset?.name])
 
-  // タグ一覧を再取得するヘルパー
-  const refreshTags = async () => {
+  // タグ一覧を取得・再取得
+  const fetchTags = useCallback(async () => {
     try {
       const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/tags`)
       if (response.ok) {
@@ -139,34 +135,43 @@ function AssetsScreen({
         setAllTags(data.tags)
       }
     } catch (error) {
-      console.error('Failed to refresh tags:', error)
+      console.error('Failed to load tags:', error)
     }
-  }
+  }, [apiBaseUrl, projectName])
+
+  useEffect(() => {
+    fetchTags()
+  }, [fetchTags])
+
+  // アセット一覧URLを構築するヘルパー
+  const buildAssetsUrl = useCallback(() => {
+    const params = new URLSearchParams()
+    if (debouncedQuery) params.set('q', debouncedQuery)
+    if (selectedTag) params.set('tag', selectedTag)
+    const queryString = params.toString()
+    return `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}${queryString ? '?' + queryString : ''}`
+  }, [apiBaseUrl, projectName, selectedType, debouncedQuery, selectedTag])
 
   // アセット一覧を取得
-  useEffect(() => {
-    const loadAssets = async () => {
-      setLoading(true)
-      try {
-        const params = new URLSearchParams()
-        if (searchQuery) params.set('q', searchQuery)
-        if (selectedTag) params.set('tag', selectedTag)
-        const queryString = params.toString()
-        const url = `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}${queryString ? '?' + queryString : ''}`
-        const response = await fetch(url)
-        if (!response.ok) {
-          throw new Error(`Failed to load assets: ${response.status}`)
-        }
-        const data = await response.json()
-        setAssets(data.assets)
-      } catch (error) {
-        console.error('Failed to load assets:', error)
-      } finally {
-        setLoading(false)
+  const fetchAssets = useCallback(async () => {
+    setLoading(true)
+    try {
+      const response = await fetch(buildAssetsUrl())
+      if (!response.ok) {
+        throw new Error(`Failed to load assets: ${response.status}`)
       }
+      const data = await response.json()
+      setAssets(data.assets)
+    } catch (error) {
+      console.error('Failed to load assets:', error)
+    } finally {
+      setLoading(false)
     }
-    loadAssets()
-  }, [apiBaseUrl, projectName, selectedType, searchQuery, selectedTag])
+  }, [buildAssetsUrl])
+
+  useEffect(() => {
+    fetchAssets()
+  }, [fetchAssets])
 
   // ファイルアップロード
   const handleFileUpload = async (files: FileList | null) => {
@@ -188,10 +193,8 @@ function AssetsScreen({
         }
       }
 
-      // アップロード成功後、一覧を再取得
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}`)
-      const data = await response.json()
-      setAssets(data.assets)
+      // アップロード成功後、一覧を再取得（フィルタ維持）
+      await fetchAssets()
     } catch (error) {
       console.error('Failed to upload files:', error)
     } finally {
@@ -250,7 +253,7 @@ function AssetsScreen({
           setSelectedAsset({ ...asset, tags: newTags })
         }
         setNewTagInput('')
-        refreshTags()
+        fetchTags()
       }
     } catch (error) {
       console.error('Failed to add tag:', error)
@@ -270,7 +273,7 @@ function AssetsScreen({
         if (selectedAsset?.name === asset.name) {
           setSelectedAsset({ ...asset, tags: newTags })
         }
-        refreshTags()
+        fetchTags()
       }
     } catch (error) {
       console.error('Failed to remove tag:', error)
@@ -418,8 +421,8 @@ function AssetsScreen({
               <input
                 type="text"
                 placeholder="検索..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={searchInput}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className={`w-full pl-10 pr-3 py-2 rounded border ${
                   isDark
                     ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'
