@@ -78,6 +78,12 @@ export class NovelRenderer {
   /** 選択肢表示中フラグ */
   private waitingForChoice = false
 
+  /** Wait イベント実行中フラグ */
+  private waitingForWait = false
+
+  /** Wait タイマー（destroy 時キャンセル用） */
+  private waitTimer: ReturnType<typeof setTimeout> | null = null
+
   /** 全シーン情報（シーンジャンプ用） */
   private allScenes: EventScene[] = []
 
@@ -221,6 +227,11 @@ export class NovelRenderer {
    */
   private resetAndStartEvents(events: Event[]): void {
     this.waitingForChoice = false
+    this.waitingForWait = false
+    if (this.waitTimer) {
+      clearTimeout(this.waitTimer)
+      this.waitTimer = null
+    }
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
     this.clearBackground()
@@ -260,6 +271,10 @@ export class NovelRenderer {
     this.app.canvas.removeEventListener('pointerdown', this.handleAdvance)
     this.app.canvas.removeEventListener('wheel', this.handleWheel)
     window.removeEventListener('keydown', this.handleKeyDown)
+    if (this.waitTimer) {
+      clearTimeout(this.waitTimer)
+      this.waitTimer = null
+    }
     this.audioManager.destroy()
     this.characterLayer.clear()
     this.choiceOverlay.hide()
@@ -366,7 +381,7 @@ export class NovelRenderer {
    */
   private advance(): void {
     if (this.events.length === 0) return
-    if (this.waitingForChoice) return
+    if (this.waitingForChoice || this.waitingForWait) return
 
     const current = this.events[this.eventIndex]
     const textEvt = getTextEvent(current)
@@ -411,7 +426,7 @@ export class NovelRenderer {
    */
   private goBack(): void {
     if (this.events.length === 0) return
-    if (this.waitingForChoice) return
+    if (this.waitingForChoice || this.waitingForWait) return
 
     const current = this.events[this.eventIndex]
     const textEvt = getTextEvent(current)
@@ -462,8 +477,8 @@ export class NovelRenderer {
     while (this.eventIndex < this.events.length) {
       if (getTextEvent(this.events[this.eventIndex])) break
       this.processDirective(this.events[this.eventIndex])
-      // Choice は進行を止める（選択待ち）
-      if (this.waitingForChoice) break
+      // Choice / Wait は進行を止める
+      if (this.waitingForChoice || this.waitingForWait) break
       this.eventIndex++
     }
   }
@@ -537,7 +552,22 @@ export class NovelRenderer {
       this.characterLayer.remove(event.Exit.character)
       return
     }
-    // Wait 等は別Issue — スキップ
+    if ('Wait' in event) {
+      // 進行を停止し、指定ミリ秒後に再開（eventIndex のインクリメントはコールバック内で行う）
+      this.waitingForWait = true
+      this.waitTimer = setTimeout(() => {
+        this.waitTimer = null
+        if (!this.initialized) return
+        this.waitingForWait = false
+        this.eventIndex++
+        this.processUntilNextTextEvent()
+        if (this.eventIndex < this.events.length) {
+          this.showCharacterFromDialog(this.events[this.eventIndex])
+        }
+        this.render()
+      }, event.Wait.ms)
+      return
+    }
   }
 
   /**
@@ -624,7 +654,7 @@ export class NovelRenderer {
       if (typeof ev === 'object' && ev !== null) {
         if ('Bgm' in ev) {
           lastBgmEvent = ev
-        } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev) {
+        } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev || 'Wait' in ev) {
           // リプレイ時にはスキップ（副作用の重複を防ぐ）
         } else {
           this.processDirective(ev)
