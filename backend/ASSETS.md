@@ -28,10 +28,12 @@ projects/{project_name}/
 
 ### アセット一覧取得
 ```
-GET /api/projects/{project_name}/assets/{asset_type}
+GET /api/projects/{project_name}/assets/{asset_type}?q={query}&tag={tag}
 ```
 - `asset_type`: `images`, `sounds`, `movies`, `ideas`
-- レスポンス: アセットの名前、サイズ、URLのリスト
+- `q`（オプション）: ファイル名の部分一致検索（大文字小文字無視）
+- `tag`（オプション）: 指定タグを持つアセットのみ返す
+- レスポンス: アセットの名前、サイズ、URL、タグのリスト
 
 ### アセットアップロード
 ```
@@ -56,6 +58,42 @@ GET /api/projects/{project_name}/assets/{asset_type}/{filename}
 DELETE /api/projects/{project_name}/assets/{asset_type}/{filename}
 ```
 - ファイルを削除し、自動的にGitコミット・プッシュ
+- 紐づくタグ情報も自動削除
+
+### タグ設定
+```
+PUT /api/projects/{project_name}/assets/{asset_type}/{filename}/tags
+Content-Type: application/json
+
+{"tags": ["キャラ", "主人公"]}
+```
+- アセットのタグを上書き設定
+- 空配列を渡すとタグをクリア
+
+### タグ個別削除
+```
+DELETE /api/projects/{project_name}/assets/{asset_type}/{filename}/tags/{tag}
+```
+- アセットから指定タグのみ削除
+
+### タグ一覧取得
+```
+GET /api/projects/{project_name}/tags
+```
+- プロジェクト内の全ユニークタグ名を返す
+
+## タグの保存先
+
+タグ情報はプロジェクトルートの `.name-name-tags.json` に保存されます。
+
+```json
+{
+  "images/hero.png": ["キャラ", "主人公"],
+  "sounds/bgm01.ogg": ["BGM", "戦闘"]
+}
+```
+
+キーは `{asset_type}/{filename}` 形式。このファイルはGit管理対象（コミットボタンで他の変更と一緒にコミットされます）。
 
 ## PixiJSとの統合
 
