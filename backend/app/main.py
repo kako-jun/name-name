@@ -90,11 +90,18 @@ def get_tags_file_path(project_name: str) -> Path:
     return PROJECTS_DIR / project_name / ".name-name-tags.json"
 
 
+MAX_TAG_LENGTH = 50
+
+
 def load_tags(project_name: str) -> dict:
     """タグ情報を読み込み"""
     path = get_tags_file_path(project_name)
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.warning(f"Invalid JSON in tags file: {path}")
+            return {}
     return {}
 
 
@@ -102,6 +109,28 @@ def save_tags(project_name: str, tags: dict):
     """タグ情報を保存"""
     path = get_tags_file_path(project_name)
     path.write_text(json.dumps(tags, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def validate_tags(tags: list) -> list[str]:
+    """タグリストのバリデーション。不正な値があれば例外を投げる"""
+    if not isinstance(tags, list):
+        raise HTTPException(status_code=400, detail="tags must be an array")
+    validated = []
+    for tag in tags:
+        if not isinstance(tag, str):
+            raise HTTPException(status_code=400, detail="each tag must be a string")
+        tag = tag.strip()
+        if not tag:
+            continue
+        if len(tag) > MAX_TAG_LENGTH:
+            raise HTTPException(status_code=400, detail=f"tag must be {MAX_TAG_LENGTH} characters or less")
+        validated.append(tag)
+    return validated
+
+
+def validate_asset_type(asset_type: str):
+    """アセットタイプのバリデーション"""
+    validate_asset_type(asset_type)
 
 
 @app.get("/")
@@ -364,8 +393,7 @@ async def list_assets(
     q: ファイル名の部分一致検索（大文字小文字無視）
     tag: 指定タグを持つアセットのみ返す
     """
-    if asset_type not in ["images", "sounds", "movies", "ideas"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
+    validate_asset_type(asset_type)
 
     project_path = get_project_path(project_name)
     if not project_path.exists():
@@ -415,8 +443,7 @@ async def upload_asset(
 
     asset_type: images, sounds, movies, ideas
     """
-    if asset_type not in ["images", "sounds", "movies", "ideas"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
+    validate_asset_type(asset_type)
 
     project_path = get_project_path(project_name)
     if not project_path.exists():
@@ -449,8 +476,7 @@ async def get_asset(project_name: str, asset_type: str, filename: str):
 
     asset_type: images, sounds, movies, ideas
     """
-    if asset_type not in ["images", "sounds", "movies", "ideas"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
+    validate_asset_type(asset_type)
 
     assets_dir = get_assets_dir(project_name, asset_type)
     file_path = assets_dir / filename
@@ -472,8 +498,7 @@ async def delete_asset(
 
     asset_type: images, sounds, movies, ideas
     """
-    if asset_type not in ["images", "sounds", "movies", "ideas"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
+    validate_asset_type(asset_type)
 
     project_path = get_project_path(project_name)
     if not project_path.exists():
@@ -525,8 +550,7 @@ async def list_tags(project_name: str):
 @app.put("/api/projects/{project_name}/assets/{asset_type}/{filename}/tags")
 async def set_asset_tags(project_name: str, asset_type: str, filename: str, body: dict):
     """アセットのタグを設定（上書き）"""
-    if asset_type not in ["images", "sounds", "movies", "ideas"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
+    validate_asset_type(asset_type)
 
     # アセットの存在確認
     assets_dir = get_assets_dir(project_name, asset_type)
@@ -534,7 +558,7 @@ async def set_asset_tags(project_name: str, asset_type: str, filename: str, body
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    tags = body.get("tags", [])
+    tags = validate_tags(body.get("tags", []))
 
     all_tags = load_tags(project_name)
     tag_key = f"{asset_type}/{filename}"
@@ -552,8 +576,16 @@ async def set_asset_tags(project_name: str, asset_type: str, filename: str, body
 @app.delete("/api/projects/{project_name}/assets/{asset_type}/{filename}/tags/{tag}")
 async def delete_asset_tag(project_name: str, asset_type: str, filename: str, tag: str):
     """アセットから個別タグを削除"""
-    if asset_type not in ["images", "sounds", "movies", "ideas"]:
-        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
+    validate_asset_type(asset_type)
+
+    project_path = get_project_path(project_name)
+    if not project_path.exists():
+        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found")
+
+    assets_dir = get_assets_dir(project_name, asset_type)
+    file_path = assets_dir / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Asset not found")
 
     all_tags = load_tags(project_name)
     tag_key = f"{asset_type}/{filename}"
