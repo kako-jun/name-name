@@ -38,6 +38,13 @@ function NovelPlayer({ events, assetBaseUrl }: NovelPlayerProps) {
     }
   }, [])
 
+  // assetBaseUrl が変わったらレンダラーに反映
+  useEffect(() => {
+    if (rendererRef.current && assetBaseUrl) {
+      rendererRef.current.setAssetBaseUrl(assetBaseUrl)
+    }
+  }, [assetBaseUrl])
+
   // events が変わったらレンダラーに反映
   useEffect(() => {
     if (rendererRef.current) {
