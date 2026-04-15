@@ -59,7 +59,7 @@ export class NovelRenderer {
   private audioManager: AudioManager
 
   /** ゲーム状態（フラグストア）— 章またぎで保持 */
-  readonly gameState: GameState = new GameState()
+  private gameState: GameState = new GameState()
 
   /** 選択肢オーバーレイ */
   private choiceOverlay: ChoiceOverlay
@@ -69,6 +69,9 @@ export class NovelRenderer {
 
   /** 全シーン情報（シーンジャンプ用） */
   private allScenes: EventScene[] = []
+
+  /** 展開済み Condition イベントのインデックス（重複展開防止） */
+  private expandedConditions: Set<number> = new Set()
 
   constructor() {
     this.app = new Application()
@@ -143,9 +146,10 @@ export class NovelRenderer {
    * イベントキューを設定して最初の表示イベントを表示
    */
   setEvents(events: Event[]): void {
-    this.events = events
+    this.events = [...events]
     this.eventIndex = 0
     this.textIndex = 0
+    this.expandedConditions.clear()
     this.displayEventCount = events.filter((e) => getTextEvent(e) !== null).length
     this.textureCache.clear()
     this.audioManager.stopBgm(0)
@@ -160,6 +164,7 @@ export class NovelRenderer {
    */
   setScenes(scenes: EventScene[]): void {
     this.allScenes = scenes
+    this.gameState.clear()
     if (scenes.length > 0) {
       this.setEvents(scenes[0].events)
     }
@@ -174,12 +179,16 @@ export class NovelRenderer {
       console.warn(`[name-name] シーンが見つからない: ${sceneId}`)
       return
     }
+    this.waitingForChoice = false
+    this.choiceOverlay.hide()
+    this.audioManager.stopBgm(0)
+    this.clearBackground()
+    this.blackoutOverlay.visible = false
     this.events = [...scene.events]
     this.eventIndex = 0
     this.textIndex = 0
+    this.expandedConditions.clear()
     this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
-    this.waitingForChoice = false
-    this.choiceOverlay.hide()
     this.processUntilNextTextEvent()
     this.render()
   }
@@ -327,6 +336,8 @@ export class NovelRenderer {
     while (this.eventIndex < this.events.length) {
       if (getTextEvent(this.events[this.eventIndex])) break
       this.processDirective(this.events[this.eventIndex])
+      // Choice は進行を止める（選択待ち）
+      if (this.waitingForChoice) break
       this.eventIndex++
     }
   }
@@ -369,8 +380,9 @@ export class NovelRenderer {
       return
     }
     if ('Condition' in event) {
-      if (this.gameState.checkFlag(event.Condition.flag)) {
-        // 条件が真 → 内部 events を現在位置に挿入（flatten）
+      if (!this.expandedConditions.has(this.eventIndex) && this.gameState.checkFlag(event.Condition.flag)) {
+        // 条件が真 → 内部 events を現在位置に挿入（flatten）、重複展開を防止
+        this.expandedConditions.add(this.eventIndex)
         const innerEvents = event.Condition.events
         this.events.splice(this.eventIndex + 1, 0, ...innerEvents)
         // displayEventCount を再計算
@@ -448,16 +460,20 @@ export class NovelRenderer {
     this.blackoutOverlay.visible = false
     this.audioManager.stopBgm(0)
 
-    // 最後の BGM イベントを見つけて再生する（SE はリプレイしない）
+    // 最後の BGM イベントを見つけて再生する（SE/Flag/Condition/Choice はリプレイしない）
     let lastBgmEvent: Event | null = null
     for (let i = 0; i <= targetIndex; i++) {
       const ev = this.events[i]
-      if (!getTextEvent(ev)) {
-        if (typeof ev === 'object' && ev !== null && 'Bgm' in ev) {
+      if (!getTextEvent(ev) && typeof ev === 'object' && ev !== null) {
+        if ('Bgm' in ev) {
           lastBgmEvent = ev
+        } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev) {
+          // リプレイ時にはスキップ（副作用の重複を防ぐ）
         } else {
           this.processDirective(ev)
         }
+      } else if (typeof ev === 'string') {
+        this.processDirective(ev)
       }
     }
     if (lastBgmEvent) {
