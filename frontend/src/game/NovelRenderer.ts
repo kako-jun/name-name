@@ -7,11 +7,13 @@
  * - Background: 背景画像表示（アスペクト比維持カバー）
  * - Blackout: 暗転/暗転解除
  * - SceneTransition: 背景クリア + 暗転解除
- * - BGM, SE 等の未実装イベントはスキップ
+ * - BGM: ループ再生、切り替え、フェードアウト停止
+ * - SE: 単発再生（複数同時可）
  */
 
 import { Application, Container, Graphics, Sprite, Text as PixiText, TextStyle } from 'pixi.js'
 import { DialogBox } from './DialogBox'
+import { AudioManager } from './AudioManager'
 import { Event } from '../types'
 
 const GAME_WIDTH = 800
@@ -52,6 +54,7 @@ export class NovelRenderer {
   private onEndCallback: (() => void) | null = null
   private assetBaseUrl: string = ''
   private textureCache: Map<string, Sprite> = new Map()
+  private audioManager: AudioManager
 
   constructor() {
     this.app = new Application()
@@ -62,6 +65,7 @@ export class NovelRenderer {
       screenWidth: GAME_WIDTH,
       screenHeight: GAME_HEIGHT,
     })
+    this.audioManager = new AudioManager()
   }
 
   /**
@@ -125,6 +129,7 @@ export class NovelRenderer {
     this.textIndex = 0
     this.displayEventCount = events.filter((e) => getTextEvent(e) !== null).length
     this.textureCache.clear()
+    this.audioManager.stopBgm(0)
     this.clearBackground()
     this.blackoutOverlay.visible = false
     this.processUntilNextTextEvent()
@@ -151,6 +156,7 @@ export class NovelRenderer {
   destroy(): void {
     this.app.canvas.removeEventListener('pointerdown', this.handleAdvance)
     window.removeEventListener('keydown', this.handleKeyDown)
+    this.audioManager.destroy()
     this.dialogBox.dispose()
     this.app.destroy(true, { children: true })
     this.initialized = false
@@ -159,10 +165,12 @@ export class NovelRenderer {
   // --- private ---
 
   private handleAdvance = (): void => {
+    this.audioManager.ensureContext()
     this.advance()
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
+    this.audioManager.ensureContext()
     switch (e.key) {
       case ' ':
       case 'Enter':
@@ -291,7 +299,21 @@ export class NovelRenderer {
       this.blackoutOverlay.visible = event.Blackout.action === 'On'
       return
     }
-    // BGM, SE, Exit, Wait, Flag, Condition 等は別Issue — スキップ
+    if ('Bgm' in event) {
+      if (event.Bgm.action === 'Play' && event.Bgm.path) {
+        const soundUrl = `${this.assetBaseUrl}/sounds/${event.Bgm.path.replace(/^\//, '')}`
+        this.audioManager.playBgm(soundUrl)
+      } else {
+        this.audioManager.stopBgm()
+      }
+      return
+    }
+    if ('Se' in event) {
+      const soundUrl = `${this.assetBaseUrl}/sounds/${event.Se.path.replace(/^\//, '')}`
+      this.audioManager.playSe(soundUrl)
+      return
+    }
+    // Exit, Wait, Flag, Condition 等は別Issue — スキップ
   }
 
   /**
@@ -303,7 +325,7 @@ export class NovelRenderer {
     if (!this.assetBaseUrl) return
 
     const cleanPath = path.replace(/^\//, '')
-    const url = `${this.assetBaseUrl}/${cleanPath}`
+    const url = `${this.assetBaseUrl}/images/${cleanPath}`
 
     // キャッシュ済みの Sprite があればクローンして再利用（戻る操作時のフリッカー防止）
     const cached = this.textureCache.get(url)
@@ -350,11 +372,22 @@ export class NovelRenderer {
   private replayDirectivesUpTo(targetIndex: number): void {
     this.clearBackground()
     this.blackoutOverlay.visible = false
+    this.audioManager.stopBgm(0)
+
+    // 最後の BGM イベントを見つけて再生する（SE はリプレイしない）
+    let lastBgmEvent: Event | null = null
     for (let i = 0; i <= targetIndex; i++) {
       const ev = this.events[i]
       if (!getTextEvent(ev)) {
-        this.processDirective(ev)
+        if (typeof ev === 'object' && ev !== null && 'Bgm' in ev) {
+          lastBgmEvent = ev
+        } else {
+          this.processDirective(ev)
+        }
       }
+    }
+    if (lastBgmEvent) {
+      this.processDirective(lastBgmEvent)
     }
   }
 
