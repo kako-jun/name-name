@@ -7,7 +7,7 @@
  * - Background, BGM, SE 等の非表示イベントはスキップ
  */
 
-import { Application, Graphics } from 'pixi.js'
+import { Application, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
 import { DialogBox } from './DialogBox'
 import { Event } from '../types'
 
@@ -36,7 +36,8 @@ export class NovelRenderer {
   private app: Application
   private dialogBox: DialogBox
   private bgGraphics: Graphics
-  private counterText: import('pixi.js').Text | null = null
+  private counterText: PixiText | null = null
+  private displayEventCount = 0
 
   private events: Event[] = []
   private eventIndex = 0
@@ -76,7 +77,6 @@ export class NovelRenderer {
     this.app.stage.addChild(this.dialogBox)
 
     // シーンカウンター
-    const { Text: PixiText, TextStyle } = await import('pixi.js')
     const counterStyle = new TextStyle({
       fontFamily: "'Noto Sans JP', sans-serif",
       fontSize: 16,
@@ -105,6 +105,7 @@ export class NovelRenderer {
     this.events = events
     this.eventIndex = 0
     this.textIndex = 0
+    this.displayEventCount = events.filter((e) => getTextEvent(e) !== null).length
     this.skipToNextDisplayEvent()
     this.render()
   }
@@ -201,12 +202,22 @@ export class NovelRenderer {
 
     // 前のイベントへ
     if (this.eventIndex > 0) {
+      const oldEventIndex = this.eventIndex
+      const oldTextIndex = this.textIndex
+
       this.eventIndex--
       this.textIndex = 0
 
       // 前の表示イベントを探す
       while (this.eventIndex > 0 && !getTextEvent(this.events[this.eventIndex])) {
         this.eventIndex--
+      }
+
+      if (!getTextEvent(this.events[this.eventIndex])) {
+        // テキストイベントが見つからなかった — 何もしない
+        this.eventIndex = oldEventIndex
+        this.textIndex = oldTextIndex
+        return
       }
 
       const prevEvt = getTextEvent(this.events[this.eventIndex])
@@ -260,7 +271,7 @@ export class NovelRenderer {
 
   private updateCounter(): void {
     if (!this.counterText) return
-    const total = this.events.filter((e) => getTextEvent(e) !== null).length
+    const total = this.displayEventCount
     // 表示イベントの中での現在位置を計算
     let displayIndex = 0
     for (let i = 0; i < this.eventIndex && i < this.events.length; i++) {
