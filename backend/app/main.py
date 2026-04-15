@@ -8,13 +8,11 @@ import json
 from typing import List, Optional
 
 from .models import (
-    Chapter,
-    ChaptersRequest,
-    ChaptersResponse,
+    MarkdownContentRequest,
+    MarkdownContentResponse,
     SaveResponse,
 )
 from .git_service import GitService
-from .markdown_parser import chapters_to_markdown, markdown_to_chapters
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
@@ -197,34 +195,30 @@ async def init_project(body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/projects/{project_name}/chapters", response_model=ChaptersResponse)
+@app.get("/api/projects/{project_name}/chapters", response_model=MarkdownContentResponse)
 async def get_chapters(project_name: str):
-    """指定プロジェクトの章データを取得（ワーキングディレクトリから、未コミットの変更含む）"""
+    """指定プロジェクトの章データをMarkdown生テキストで取得"""
     file_path = get_chapters_file_path(project_name)
 
     if not file_path.exists():
         raise HTTPException(status_code=404, detail=f"Chapters file not found: {file_path}")
 
-    # ワーキングディレクトリから直接読み込み（pullしない）
+    # ワーキングディレクトリから直接読み込み（パースしない）
     markdown_content = file_path.read_text(encoding="utf-8")
-    chapters = markdown_to_chapters(markdown_content)
 
-    return ChaptersResponse(chapters=chapters)
+    return MarkdownContentResponse(content=markdown_content)
 
 
 @app.put("/api/projects/{project_name}/chapters")
-async def update_chapters(project_name: str, body: ChaptersRequest):
-    """指定プロジェクトの章データをワーキングディレクトリに書き込む（コミットはしない）"""
+async def update_chapters(project_name: str, body: MarkdownContentRequest):
+    """受け取ったMarkdown生テキストをそのままファイルに書き込む（コミットはしない）"""
     file_path = get_chapters_file_path(project_name)
 
     # 親ディレクトリを作成
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ChaptersをMarkdownに変換
-    markdown_content = chapters_to_markdown(body.chapters)
-
-    # ファイルに書き込み（コミットはしない）
-    file_path.write_text(markdown_content, encoding="utf-8")
+    # 生テキストをそのまま書き込み
+    file_path.write_text(body.content, encoding="utf-8")
 
     return {
         "success": True,
