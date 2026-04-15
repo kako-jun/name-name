@@ -17,6 +17,12 @@ export interface SaveSlotData {
   textIndex: number
   flags: Record<string, FlagValue>
   backgroundPath: string | null
+  /** 暗転状態 */
+  isBlackout: boolean
+  /** 表示中のキャラクター情報 */
+  characters: Array<{ name: string; expression: string; position: string }>
+  /** 再生中の BGM パス */
+  currentBgmPath: string | null
   savedAt: string // ISO 8601
   sceneName: string | null
 }
