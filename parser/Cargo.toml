@@ -1,0 +1,18 @@
+[package]
+name = "name-name-parser"
+version = "0.1.0"
+edition = "2021"
+description = "Markdown parser for name-name visual novel engine"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+tsify-next = { version = "0.5", features = ["js"] }
+cfg-if = "1"
+
+[dev-dependencies]
