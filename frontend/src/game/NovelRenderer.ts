@@ -146,17 +146,8 @@ export class NovelRenderer {
    * イベントキューを設定して最初の表示イベントを表示
    */
   setEvents(events: Event[]): void {
-    this.events = [...events]
-    this.eventIndex = 0
-    this.textIndex = 0
-    this.expandedConditions.clear()
-    this.displayEventCount = events.filter((e) => getTextEvent(e) !== null).length
     this.textureCache.clear()
-    this.audioManager.stopBgm(0)
-    this.clearBackground()
-    this.blackoutOverlay.visible = false
-    this.processUntilNextTextEvent()
-    this.render()
+    this.resetAndStartEvents([...events])
   }
 
   /**
@@ -179,12 +170,19 @@ export class NovelRenderer {
       console.warn(`[name-name] シーンが見つからない: ${sceneId}`)
       return
     }
+    this.resetAndStartEvents([...scene.events])
+  }
+
+  /**
+   * イベント配列をリセットし、最初のテキストイベントまで進めて描画する
+   */
+  private resetAndStartEvents(events: Event[]): void {
     this.waitingForChoice = false
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
     this.clearBackground()
     this.blackoutOverlay.visible = false
-    this.events = [...scene.events]
+    this.events = events
     this.eventIndex = 0
     this.textIndex = 0
     this.expandedConditions.clear()
