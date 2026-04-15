@@ -21,6 +21,17 @@ function isLineEndProhibited(ch: string): boolean {
   return LINE_END_PROHIBITED.includes(ch)
 }
 
+/** Canvas / context のモジュールレベルキャッシュ（毎回生成を避ける） */
+let cachedCanvas: HTMLCanvasElement | null = null
+let cachedCtx: CanvasRenderingContext2D | null = null
+function getContext(): CanvasRenderingContext2D | null {
+  if (!cachedCtx) {
+    cachedCanvas = document.createElement('canvas')
+    cachedCtx = cachedCanvas.getContext('2d')
+  }
+  return cachedCtx
+}
+
 /**
  * テキストを指定幅で折り返す
  * @param text 折り返し対象テキスト（改行なしの1段落）
@@ -32,8 +43,7 @@ export function wordwrap(text: string, maxWidth: number, font: string): string[]
   if (text.length === 0) return ['']
   if (maxWidth <= 0) return [text]
 
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')
+  const ctx = getContext()
   if (!ctx) return [text]
 
   ctx.font = font

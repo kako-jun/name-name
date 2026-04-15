@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import CanvasEditor from '../components/CanvasEditor'
 import NovelPlayer from '../components/NovelPlayer'
 import MapEditor from '../components/MapEditor'
@@ -245,6 +245,8 @@ function EditorScreen({
     return events
   }
 
+  const novelEvents = useMemo(() => generateEventsFromChapters(), [chapters])
+
   return (
     <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
       <header
@@ -363,7 +365,7 @@ function EditorScreen({
               onNavigateToAssets={onNavigateToAssets}
             />
           ) : (
-            <NovelPlayer events={generateEventsFromChapters()} />
+            <NovelPlayer events={novelEvents} />
           )
         ) : (
           // RPGエディタ

@@ -10,6 +10,7 @@ function NovelPlayer({ events }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
 
+  // ライフサイクル管理: init + destroy
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -30,6 +31,13 @@ function NovelPlayer({ events }: NovelPlayerProps) {
       destroyed = true
       renderer.destroy()
       rendererRef.current = null
+    }
+  }, [])
+
+  // events が変わったらレンダラーに反映
+  useEffect(() => {
+    if (rendererRef.current) {
+      rendererRef.current.setEvents(events)
     }
   }, [events])
 

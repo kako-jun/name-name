@@ -119,7 +119,7 @@ export class DialogBox extends Container {
     // --- バウンスアニメーション ---
     this.ticker = new Ticker()
     this.ticker.add(() => {
-      this.indicatorTime += this.ticker.deltaMS / 1000
+      this.indicatorTime = (this.indicatorTime + this.ticker.deltaMS / 1000) % ((2 * Math.PI) / 3)
       this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
     })
     this.ticker.start()
