@@ -365,7 +365,10 @@ function EditorScreen({
               onNavigateToAssets={onNavigateToAssets}
             />
           ) : (
-            <NovelPlayer events={novelEvents} />
+            <NovelPlayer
+              events={novelEvents}
+              assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/images`}
+            />
           )
         ) : (
           // RPGエディタ
