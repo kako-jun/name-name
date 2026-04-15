@@ -373,7 +373,7 @@ uv sync
 - ⬜ タグ機能（アセット分類）
 - ⬜ フロントエンドでのWASMパーサー統合
 - ⬜ RPGプレイヤーのPixiJS移行（現在はPhaser）
-- ⬜ 立ち絵表示・退場（未Issue化）
+- ✅ 立ち絵表示 + 表情変更 + 退場（#18）— CharacterLayer / 左右中央配置 / ExpressionChange / Exit
 - ✅ 選択肢・分岐 + フラグ・条件分岐（#10）— GameState / ChoiceOverlay / シーンジャンプ
 - ✅ セーブ/ロード + バックログ（#11）— SaveManager / SaveLoadOverlay / BacklogOverlay / localStorage 3スロット / JSON エクスポート・インポート
 
