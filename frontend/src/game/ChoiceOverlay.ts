@@ -33,6 +33,7 @@ export class ChoiceOverlay extends Container {
    * 選択肢を表示する
    */
   show(options: ChoiceOption[], onSelect: (jump: string) => void): void {
+    if (options.length === 0) return
     this.onSelect = onSelect
     this.removeChildren()
 
