@@ -319,13 +319,12 @@ export class NovelRenderer {
     sprite.texture.source.on('loaded', () => {
       this.textureCache.set(url, sprite)
       this.applyCoverFit(sprite)
+      this.bgContainer.addChild(sprite)
     })
 
     sprite.texture.source.on('error', () => {
       console.warn(`[name-name] 背景画像の読み込みに失敗: ${url}`)
     })
-
-    this.bgContainer.addChild(sprite)
   }
 
   private applyCoverFit(sprite: Sprite): void {
