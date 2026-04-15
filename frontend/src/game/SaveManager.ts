@@ -77,13 +77,23 @@ export class SaveManager {
    */
   importJSON(json: string): boolean {
     try {
-      const data = JSON.parse(json) as (SaveSlotData | null)[]
+      const data = JSON.parse(json)
       if (!Array.isArray(data)) return false
+      // 各スロットの基本的な形状を検証
       for (let i = 0; i < SLOT_COUNT; i++) {
-        if (i < data.length && data[i] !== null && data[i] !== undefined) {
-          this.save(i, data[i]!)
-        } else {
+        const slot = i < data.length ? data[i] : null
+        if (slot === null || slot === undefined) {
           this.deleteSlot(i)
+        } else if (
+          typeof slot === 'object' &&
+          typeof slot.eventIndex === 'number' &&
+          typeof slot.textIndex === 'number' &&
+          typeof slot.savedAt === 'string' &&
+          typeof slot.flags === 'object'
+        ) {
+          this.save(i, slot as SaveSlotData)
+        } else {
+          return false
         }
       }
       return true

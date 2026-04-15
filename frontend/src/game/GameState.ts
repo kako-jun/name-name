@@ -72,10 +72,4 @@ export class GameState {
     }
   }
 
-  /**
-   * 全フラグを取得する（外部参照用）
-   */
-  getFlags(): Map<string, FlagValue> {
-    return new Map(this.flags)
-  }
 }
