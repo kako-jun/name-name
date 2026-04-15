@@ -367,7 +367,7 @@ function EditorScreen({
           ) : (
             <NovelPlayer
               events={novelEvents}
-              assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/images`}
+              assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets`}
             />
           )
         ) : (
