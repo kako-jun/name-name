@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
 
 type AssetType = 'images' | 'sounds' | 'movies' | 'ideas'
@@ -7,6 +7,7 @@ interface Asset {
   name: string
   size: number
   url: string
+  tags: string[]
 }
 
 interface AssetsScreenProps {
@@ -35,6 +36,26 @@ function AssetsScreen({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [selectedTag, setSelectedTag] = useState<string | null>(null)
+  const [allTags, setAllTags] = useState<string[]>([])
+  const [newTagInput, setNewTagInput] = useState('')
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 検索入力のデバウンス (300ms)
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => setDebouncedQuery(value), 300)
+  }, [])
+
+  // アンマウント時にデバウンスタイマーをクリア
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [])
 
   // 初回ロード時と5秒ごとにgit statusをチェック
   useEffect(() => {
@@ -88,12 +109,8 @@ function AssetsScreen({
       if (!response.ok) {
         throw new Error(`Failed to discard: ${response.status}`)
       }
-      // アセット一覧を再読み込み
-      const assetsResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}`)
-      if (assetsResponse.ok) {
-        const data = await assetsResponse.json()
-        setAssets(data.assets)
-      }
+      // アセット一覧を再読み込み（フィルタ維持）
+      await fetchAssets()
       setHasUnsavedChanges(false)
     } catch (error) {
       console.error('Failed to discard changes:', error)
@@ -102,30 +119,66 @@ function AssetsScreen({
     }
   }
 
-  // タブ切り替え時に選択をクリア
+  // タブ切り替え時に選択とフィルターをクリア
   useEffect(() => {
     setSelectedAsset(null)
+    setSearchInput('')
+    setDebouncedQuery('')
+    setSelectedTag(null)
+    setNewTagInput('')
   }, [selectedType])
 
-  // アセット一覧を取得
+  // アセット選択変更時にタグ入力をクリア
   useEffect(() => {
-    const loadAssets = async () => {
-      setLoading(true)
-      try {
-        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}`)
-        if (!response.ok) {
-          throw new Error(`Failed to load assets: ${response.status}`)
-        }
+    setNewTagInput('')
+  }, [selectedAsset?.name])
+
+  // タグ一覧を取得・再取得
+  const fetchTags = useCallback(async () => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/tags`)
+      if (response.ok) {
         const data = await response.json()
-        setAssets(data.assets)
-      } catch (error) {
-        console.error('Failed to load assets:', error)
-      } finally {
-        setLoading(false)
+        setAllTags(data.tags)
       }
+    } catch (error) {
+      console.error('Failed to load tags:', error)
     }
-    loadAssets()
-  }, [apiBaseUrl, projectName, selectedType])
+  }, [apiBaseUrl, projectName])
+
+  useEffect(() => {
+    fetchTags()
+  }, [fetchTags])
+
+  // アセット一覧URLを構築するヘルパー
+  const buildAssetsUrl = useCallback(() => {
+    const params = new URLSearchParams()
+    if (debouncedQuery) params.set('q', debouncedQuery)
+    if (selectedTag) params.set('tag', selectedTag)
+    const queryString = params.toString()
+    return `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}${queryString ? '?' + queryString : ''}`
+  }, [apiBaseUrl, projectName, selectedType, debouncedQuery, selectedTag])
+
+  // アセット一覧を取得
+  const fetchAssets = useCallback(async () => {
+    setLoading(true)
+    try {
+      const response = await fetch(buildAssetsUrl())
+      if (!response.ok) {
+        throw new Error(`Failed to load assets: ${response.status}`)
+      }
+      const data = await response.json()
+      setAssets(data.assets)
+    } catch (error) {
+      console.error('Failed to load assets:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [buildAssetsUrl])
+
+  useEffect(() => {
+    fetchAssets()
+  }, [fetchAssets])
 
   // ファイルアップロード
   const handleFileUpload = async (files: FileList | null) => {
@@ -147,10 +200,8 @@ function AssetsScreen({
         }
       }
 
-      // アップロード成功後、一覧を再取得
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}`)
-      const data = await response.json()
-      setAssets(data.assets)
+      // アップロード成功後、一覧を再取得（フィルタ維持）
+      await fetchAssets()
     } catch (error) {
       console.error('Failed to upload files:', error)
     } finally {
@@ -176,15 +227,64 @@ function AssetsScreen({
         throw new Error(`Failed to delete ${deletingAsset.name}: ${response.status}`)
       }
 
-      // 削除成功後、一覧を再取得
+      // 削除成功後、一覧とタグを再取得
       setAssets(assets.filter((a) => a.name !== deletingAsset.name))
       if (selectedAsset?.name === deletingAsset.name) {
         setSelectedAsset(null)
       }
       setDeletingAsset(null)
+      fetchTags()
     } catch (error) {
       console.error('Failed to delete file:', error)
       setDeletingAsset(null)
+    }
+  }
+
+  // タグを追加
+  const handleAddTag = async (asset: Asset, tagName: string) => {
+    const trimmed = tagName.trim()
+    if (!trimmed || asset.tags.includes(trimmed)) return
+
+    const newTags = [...asset.tags, trimmed]
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}/${asset.name}/tags`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tags: newTags }),
+        }
+      )
+      if (response.ok) {
+        setAssets(assets.map((a) => (a.name === asset.name ? { ...a, tags: newTags } : a)))
+        if (selectedAsset?.name === asset.name) {
+          setSelectedAsset({ ...asset, tags: newTags })
+        }
+        setNewTagInput('')
+        fetchTags()
+      }
+    } catch (error) {
+      console.error('Failed to add tag:', error)
+    }
+  }
+
+  // タグを削除
+  const handleRemoveTag = async (asset: Asset, tagName: string) => {
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}/${asset.name}/tags/${encodeURIComponent(tagName)}`,
+        { method: 'DELETE' }
+      )
+      if (response.ok) {
+        const newTags = asset.tags.filter((t) => t !== tagName)
+        setAssets(assets.map((a) => (a.name === asset.name ? { ...a, tags: newTags } : a)))
+        if (selectedAsset?.name === asset.name) {
+          setSelectedAsset({ ...asset, tags: newTags })
+        }
+        fetchTags()
+      }
+    } catch (error) {
+      console.error('Failed to remove tag:', error)
     }
   }
 
@@ -329,6 +429,8 @@ function AssetsScreen({
               <input
                 type="text"
                 placeholder="検索..."
+                value={searchInput}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className={`w-full pl-10 pr-3 py-2 rounded border ${
                   isDark
                     ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'
@@ -336,6 +438,26 @@ function AssetsScreen({
                 }`}
               />
             </div>
+            {/* タグフィルター */}
+            {allTags.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {allTags.map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                    className={`px-2 py-0.5 text-xs rounded-full transition-colors ${
+                      selectedTag === tag
+                        ? 'bg-blue-500 text-white'
+                        : isDark
+                          ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* アセット一覧（スクロール可能） */}
@@ -377,6 +499,20 @@ function AssetsScreen({
                         <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
                           {formatFileSize(asset.size)}
                         </div>
+                        {asset.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {asset.tags.map((tag) => (
+                              <span
+                                key={tag}
+                                className={`px-1.5 py-0 text-[10px] rounded-full ${
+                                  isDark ? 'bg-gray-600 text-gray-300' : 'bg-gray-200 text-gray-600'
+                                }`}
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
 
                       <button
@@ -492,6 +628,59 @@ function AssetsScreen({
                   />
                 </div>
               )}
+
+              {/* タグ管理 */}
+              <div className={`mt-6 p-4 rounded-lg ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                <h3 className={`text-sm font-medium mb-2 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>タグ</h3>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {selectedAsset.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full ${
+                        isDark ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      {tag}
+                      <button
+                        onClick={() => handleRemoveTag(selectedAsset, tag)}
+                        className={`hover:text-red-400 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="タグを追加..."
+                    value={newTagInput}
+                    onChange={(e) => setNewTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newTagInput.trim()) {
+                        handleAddTag(selectedAsset, newTagInput)
+                      }
+                    }}
+                    className={`flex-1 px-3 py-1.5 text-sm rounded border ${
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'
+                        : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                    }`}
+                  />
+                  <button
+                    onClick={() => {
+                      if (newTagInput.trim()) handleAddTag(selectedAsset, newTagInput)
+                    }}
+                    className={`px-3 py-1.5 text-sm rounded transition-colors ${
+                      isDark
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                        : 'bg-blue-500 hover:bg-blue-600 text-white'
+                    }`}
+                  >
+                    追加
+                  </button>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="flex items-center justify-center h-full">
