@@ -295,3 +295,80 @@ title: "テスト"
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
 }
+
+#[test]
+fn test_empty_scene() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 空のシーン
+
+## 1-2: 次のシーン
+
+**カコ** (suppin_1, 左):
+こんにちは。
+"#;
+    let doc = parser::parse(input);
+    let scenes = &doc.chapters[0].scenes;
+    assert_eq!(scenes.len(), 2);
+    assert_eq!(scenes[0].id, "1-1");
+    assert_eq!(scenes[0].events.len(), 0);
+    assert_eq!(scenes[1].id, "1-2");
+    assert_eq!(scenes[1].events.len(), 1);
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
+fn test_expression_change_without_text() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 表情変更テスト
+
+**トモ** (laugh_1, 右):
+最初の台詞。
+
+**トモ** → angry_1:
+
+[暗転]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3);
+    match &events[0] {
+        Event::Dialog { character, text, .. } => {
+            assert_eq!(character, &Some("トモ".to_string()));
+            assert_eq!(text, &vec!["最初の台詞。".to_string()]);
+        }
+        other => panic!("Expected Dialog, got {:?}", other),
+    }
+    assert_eq!(events[1], Event::ExpressionChange {
+        character: "トモ".to_string(),
+        expression: "angry_1".to_string(),
+    });
+    assert_eq!(events[2], Event::Blackout { action: BlackoutAction::On });
+}
+
+#[test]
+fn test_no_front_matter() {
+    let input = r#"## 1-1: テスト
+
+**カコ** (suppin_1, 左):
+こんにちは。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.engine, "name-name");
+    assert_eq!(doc.chapters[0].number, 1);
+    assert_eq!(doc.chapters[0].title, "");
+    assert_eq!(doc.chapters[0].scenes.len(), 1);
+    assert_eq!(doc.chapters[0].scenes[0].events.len(), 1);
+}
