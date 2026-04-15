@@ -78,6 +78,9 @@ export class NovelRenderer {
   /** 選択肢表示中フラグ */
   private waitingForChoice = false
 
+  /** Wait イベント実行中フラグ */
+  private waitingForWait = false
+
   /** 全シーン情報（シーンジャンプ用） */
   private allScenes: EventScene[] = []
 
@@ -221,6 +224,7 @@ export class NovelRenderer {
    */
   private resetAndStartEvents(events: Event[]): void {
     this.waitingForChoice = false
+    this.waitingForWait = false
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
     this.clearBackground()
@@ -366,7 +370,7 @@ export class NovelRenderer {
    */
   private advance(): void {
     if (this.events.length === 0) return
-    if (this.waitingForChoice) return
+    if (this.waitingForChoice || this.waitingForWait) return
 
     const current = this.events[this.eventIndex]
     const textEvt = getTextEvent(current)
@@ -411,7 +415,7 @@ export class NovelRenderer {
    */
   private goBack(): void {
     if (this.events.length === 0) return
-    if (this.waitingForChoice) return
+    if (this.waitingForChoice || this.waitingForWait) return
 
     const current = this.events[this.eventIndex]
     const textEvt = getTextEvent(current)
@@ -462,8 +466,8 @@ export class NovelRenderer {
     while (this.eventIndex < this.events.length) {
       if (getTextEvent(this.events[this.eventIndex])) break
       this.processDirective(this.events[this.eventIndex])
-      // Choice は進行を止める（選択待ち）
-      if (this.waitingForChoice) break
+      // Choice / Wait は進行を止める
+      if (this.waitingForChoice || this.waitingForWait) break
       this.eventIndex++
     }
   }
@@ -537,7 +541,19 @@ export class NovelRenderer {
       this.characterLayer.remove(event.Exit.character)
       return
     }
-    // Wait 等は別Issue — スキップ
+    if ('Wait' in event) {
+      this.waitingForWait = true
+      setTimeout(() => {
+        this.waitingForWait = false
+        this.eventIndex++
+        this.processUntilNextTextEvent()
+        if (this.eventIndex < this.events.length) {
+          this.showCharacterFromDialog(this.events[this.eventIndex])
+        }
+        this.render()
+      }, event.Wait.ms)
+      return
+    }
   }
 
   /**
@@ -624,7 +640,7 @@ export class NovelRenderer {
       if (typeof ev === 'object' && ev !== null) {
         if ('Bgm' in ev) {
           lastBgmEvent = ev
-        } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev) {
+        } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev || 'Wait' in ev) {
           // リプレイ時にはスキップ（副作用の重複を防ぐ）
         } else {
           this.processDirective(ev)
