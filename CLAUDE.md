@@ -17,18 +17,25 @@
 
 ```
 name-name/
+├── parser/             # Rust crate（Markdownパーサー本体）
+│   ├── Cargo.toml
+│   ├── src/
+│   │   ├── lib.rs            # WASMエクスポート
+│   │   ├── models.rs         # Eventデータモデル（型の正本）
+│   │   ├── parser.rs         # Markdown → Events
+│   │   └── emitter.rs        # Events → Markdown
+│   └── tests/
 ├── frontend/           # React + Vite + TypeScript
 │   ├── src/
 │   │   ├── components/ # UIコンポーネント
 │   │   └── game/       # Phaserゲーム
 │   ├── package.json
 │   └── vite.config.ts
-├── backend/            # FastAPI + Python
+├── backend/            # FastAPI + Python（プロジェクト管理のみ、パースしない）
 │   ├── app/
 │   │   ├── main.py           # APIエンドポイント
 │   │   ├── models.py         # Pydanticモデル
-│   │   ├── git_service.py    # Git操作
-│   │   └── markdown_parser.py # Markdown変換
+│   │   └── git_service.py    # Git操作
 │   ├── projects/             # ゲームプロジェクト（gitignore対象）
 │   │   └── {game-name}/      # 各ゲームのリポジトリ
 │   ├── pyproject.toml        # uv用依存関係
@@ -168,18 +175,30 @@ my-game/
     └── ideas/          # アイデアファイル
 ```
 
-### Markdownフォーマット
+### Markdownフォーマット（v0.1仕様）
 
 ```markdown
-# 第1章: タイトル
+---
+engine: name-name
+chapter: 1
+title: "出会い"
+default_bgm: amehure.ogg
+---
 
-## シーン1: シーンタイトル
+## 1-1: 教室の朝
 
-### カット1
-- **キャラクター**: 主人公
-- **テキスト**: セリフ内容
-- **表情**: normal
+[背景: radius/BG_COMMON_GRAD_3.png]
+[BGM: amehure.ogg]
+[暗転解除]
+
+**主人公** (suppin_1, 左):
+今日も平和な一日が始まる。
+
+**ヒロイン** (smile_1, 右):
+おはよう！
 ```
+
+パーサーは `parser/`（Rust）で実装。WASM経由でフロントエンドから使用する。
 
 ## よく使うコマンド
 
@@ -329,11 +348,18 @@ uv sync
 - ✅ セーブボタン（Gitコミット・プッシュ）
 - ✅ ダークモード対応
 
+### 完了（パーサー）
+- ✅ Rustパーサー（Markdown v0.1仕様の全構文対応）
+- ✅ WASMコンパイル対応（wasm-bindgen + tsify-next）
+- ✅ 双方向変換（parse + emit）とラウンドトリップテスト
+- ✅ バックエンドからパーサー除去（生テキスト中継に変更）
+- ✅ フロントエンドにEvent型定義追加
+
 ### 未実装
 - ⬜ アセット検索機能（バックエンド連携）
 - ⬜ タグ機能（アセット分類）
-- ⬜ Phaserとの統合テスト
-- ⬜ ゲーム実行環境の構築
+- ⬜ フロントエンドでのWASMパーサー統合
+- ⬜ ノベルプレイヤー（PixiJS移行含む）
 
 ## 参考ドキュメント
 
