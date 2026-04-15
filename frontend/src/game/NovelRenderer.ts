@@ -81,6 +81,9 @@ export class NovelRenderer {
   /** Wait イベント実行中フラグ */
   private waitingForWait = false
 
+  /** Wait タイマー（destroy 時キャンセル用） */
+  private waitTimer: ReturnType<typeof setTimeout> | null = null
+
   /** 全シーン情報（シーンジャンプ用） */
   private allScenes: EventScene[] = []
 
@@ -225,6 +228,10 @@ export class NovelRenderer {
   private resetAndStartEvents(events: Event[]): void {
     this.waitingForChoice = false
     this.waitingForWait = false
+    if (this.waitTimer) {
+      clearTimeout(this.waitTimer)
+      this.waitTimer = null
+    }
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
     this.clearBackground()
@@ -264,6 +271,10 @@ export class NovelRenderer {
     this.app.canvas.removeEventListener('pointerdown', this.handleAdvance)
     this.app.canvas.removeEventListener('wheel', this.handleWheel)
     window.removeEventListener('keydown', this.handleKeyDown)
+    if (this.waitTimer) {
+      clearTimeout(this.waitTimer)
+      this.waitTimer = null
+    }
     this.audioManager.destroy()
     this.characterLayer.clear()
     this.choiceOverlay.hide()
@@ -542,8 +553,11 @@ export class NovelRenderer {
       return
     }
     if ('Wait' in event) {
+      // 進行を停止し、指定ミリ秒後に再開（eventIndex のインクリメントはコールバック内で行う）
       this.waitingForWait = true
-      setTimeout(() => {
+      this.waitTimer = setTimeout(() => {
+        this.waitTimer = null
+        if (!this.initialized) return
         this.waitingForWait = false
         this.eventIndex++
         this.processUntilNextTextEvent()
