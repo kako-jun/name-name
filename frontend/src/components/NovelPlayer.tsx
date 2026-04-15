@@ -1,13 +1,14 @@
 import { useEffect, useRef } from 'react'
-import { Event } from '../types'
+import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 
 interface NovelPlayerProps {
   events: Event[]
+  scenes?: EventScene[]
   assetBaseUrl?: string
 }
 
-function NovelPlayer({ events, assetBaseUrl }: NovelPlayerProps) {
+function NovelPlayer({ events, scenes, assetBaseUrl }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
 
@@ -28,7 +29,11 @@ function NovelPlayer({ events, assetBaseUrl }: NovelPlayerProps) {
       if (assetBaseUrl) {
         renderer.setAssetBaseUrl(assetBaseUrl)
       }
-      renderer.setEvents(events)
+      if (scenes && scenes.length > 0) {
+        renderer.setScenes(scenes)
+      } else {
+        renderer.setEvents(events)
+      }
     })
 
     return () => {
@@ -45,12 +50,15 @@ function NovelPlayer({ events, assetBaseUrl }: NovelPlayerProps) {
     }
   }, [assetBaseUrl])
 
-  // events が変わったらレンダラーに反映
+  // events / scenes が変わったらレンダラーに反映
   useEffect(() => {
-    if (rendererRef.current) {
+    if (!rendererRef.current) return
+    if (scenes && scenes.length > 0) {
+      rendererRef.current.setScenes(scenes)
+    } else {
       rendererRef.current.setEvents(events)
     }
-  }, [events])
+  }, [events, scenes])
 
   return (
     <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">

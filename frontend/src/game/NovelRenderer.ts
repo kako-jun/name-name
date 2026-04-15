@@ -14,7 +14,9 @@
 import { Application, Container, Graphics, Sprite, Text as PixiText, TextStyle } from 'pixi.js'
 import { DialogBox } from './DialogBox'
 import { AudioManager } from './AudioManager'
-import { Event } from '../types'
+import { GameState } from './GameState'
+import { ChoiceOverlay } from './ChoiceOverlay'
+import { Event, EventScene } from '../types'
 
 const GAME_WIDTH = 800
 const GAME_HEIGHT = 600
@@ -56,6 +58,21 @@ export class NovelRenderer {
   private textureCache: Map<string, Sprite> = new Map()
   private audioManager: AudioManager
 
+  /** ゲーム状態（フラグストア）— 章またぎで保持 */
+  private gameState: GameState = new GameState()
+
+  /** 選択肢オーバーレイ */
+  private choiceOverlay: ChoiceOverlay
+
+  /** 選択肢表示中フラグ */
+  private waitingForChoice = false
+
+  /** 全シーン情報（シーンジャンプ用） */
+  private allScenes: EventScene[] = []
+
+  /** 展開済み Condition イベントのインデックス（重複展開防止） */
+  private expandedConditions: Set<number> = new Set()
+
   constructor() {
     this.app = new Application()
     this.bgGraphics = new Graphics()
@@ -66,6 +83,7 @@ export class NovelRenderer {
       screenHeight: GAME_HEIGHT,
     })
     this.audioManager = new AudioManager()
+    this.choiceOverlay = new ChoiceOverlay(GAME_WIDTH, GAME_HEIGHT)
   }
 
   /**
@@ -111,6 +129,10 @@ export class NovelRenderer {
     this.counterText.anchor.set(1, 0)
     this.app.stage.addChild(this.counterText)
 
+    // 選択肢オーバーレイ（カウンターより上に配置）
+    this.choiceOverlay.visible = false
+    this.app.stage.addChild(this.choiceOverlay)
+
     // クリック/タップで進行
     this.app.canvas.addEventListener('pointerdown', this.handleAdvance)
 
@@ -124,14 +146,49 @@ export class NovelRenderer {
    * イベントキューを設定して最初の表示イベントを表示
    */
   setEvents(events: Event[]): void {
-    this.events = events
+    this.events = [...events]
     this.eventIndex = 0
     this.textIndex = 0
+    this.expandedConditions.clear()
     this.displayEventCount = events.filter((e) => getTextEvent(e) !== null).length
     this.textureCache.clear()
     this.audioManager.stopBgm(0)
     this.clearBackground()
     this.blackoutOverlay.visible = false
+    this.processUntilNextTextEvent()
+    this.render()
+  }
+
+  /**
+   * 全シーンを設定して最初のシーンから開始する
+   */
+  setScenes(scenes: EventScene[]): void {
+    this.allScenes = scenes
+    this.gameState.clear()
+    if (scenes.length > 0) {
+      this.setEvents(scenes[0].events)
+    }
+  }
+
+  /**
+   * 指定シーンにジャンプする
+   */
+  jumpToScene(sceneId: string): void {
+    const scene = this.allScenes.find((s) => s.id === sceneId)
+    if (!scene) {
+      console.warn(`[name-name] シーンが見つからない: ${sceneId}`)
+      return
+    }
+    this.waitingForChoice = false
+    this.choiceOverlay.hide()
+    this.audioManager.stopBgm(0)
+    this.clearBackground()
+    this.blackoutOverlay.visible = false
+    this.events = [...scene.events]
+    this.eventIndex = 0
+    this.textIndex = 0
+    this.expandedConditions.clear()
+    this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
     this.processUntilNextTextEvent()
     this.render()
   }
@@ -157,6 +214,7 @@ export class NovelRenderer {
     this.app.canvas.removeEventListener('pointerdown', this.handleAdvance)
     window.removeEventListener('keydown', this.handleKeyDown)
     this.audioManager.destroy()
+    this.choiceOverlay.hide()
     this.dialogBox.dispose()
     this.app.destroy(true, { children: true })
     this.initialized = false
@@ -191,6 +249,7 @@ export class NovelRenderer {
    */
   private advance(): void {
     if (this.events.length === 0) return
+    if (this.waitingForChoice) return
 
     const current = this.events[this.eventIndex]
     const textEvt = getTextEvent(current)
@@ -226,6 +285,7 @@ export class NovelRenderer {
    */
   private goBack(): void {
     if (this.events.length === 0) return
+    if (this.waitingForChoice) return
 
     const current = this.events[this.eventIndex]
     const textEvt = getTextEvent(current)
@@ -276,6 +336,8 @@ export class NovelRenderer {
     while (this.eventIndex < this.events.length) {
       if (getTextEvent(this.events[this.eventIndex])) break
       this.processDirective(this.events[this.eventIndex])
+      // Choice は進行を止める（選択待ち）
+      if (this.waitingForChoice) break
       this.eventIndex++
     }
   }
@@ -313,7 +375,31 @@ export class NovelRenderer {
       this.audioManager.playSe(soundUrl)
       return
     }
-    // Exit, Wait, Flag, Condition 等は別Issue — スキップ
+    if ('Flag' in event) {
+      this.gameState.setFlag(event.Flag.name, event.Flag.value)
+      return
+    }
+    if ('Condition' in event) {
+      if (!this.expandedConditions.has(this.eventIndex) && this.gameState.checkFlag(event.Condition.flag)) {
+        // 条件が真 → 内部 events を現在位置に挿入（flatten）、重複展開を防止
+        this.expandedConditions.add(this.eventIndex)
+        const innerEvents = event.Condition.events
+        this.events.splice(this.eventIndex + 1, 0, ...innerEvents)
+        // displayEventCount を再計算
+        this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
+      }
+      return
+    }
+    if ('Choice' in event) {
+      this.waitingForChoice = true
+      this.choiceOverlay.show(event.Choice.options, (jump: string) => {
+        this.waitingForChoice = false
+        this.choiceOverlay.hide()
+        this.jumpToScene(jump)
+      })
+      return
+    }
+    // Exit, Wait, ExpressionChange 等は別Issue — スキップ
   }
 
   /**
@@ -374,16 +460,20 @@ export class NovelRenderer {
     this.blackoutOverlay.visible = false
     this.audioManager.stopBgm(0)
 
-    // 最後の BGM イベントを見つけて再生する（SE はリプレイしない）
+    // 最後の BGM イベントを見つけて再生する（SE/Flag/Condition/Choice はリプレイしない）
     let lastBgmEvent: Event | null = null
     for (let i = 0; i <= targetIndex; i++) {
       const ev = this.events[i]
-      if (!getTextEvent(ev)) {
-        if (typeof ev === 'object' && ev !== null && 'Bgm' in ev) {
+      if (!getTextEvent(ev) && typeof ev === 'object' && ev !== null) {
+        if ('Bgm' in ev) {
           lastBgmEvent = ev
+        } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev) {
+          // リプレイ時にはスキップ（副作用の重複を防ぐ）
         } else {
           this.processDirective(ev)
         }
+      } else if (typeof ev === 'string') {
+        this.processDirective(ev)
       }
     }
     if (lastBgmEvent) {
