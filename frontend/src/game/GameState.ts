@@ -50,4 +50,32 @@ export class GameState {
   clear(): void {
     this.flags.clear()
   }
+
+  /**
+   * フラグを Record として返す（シリアライズ用）
+   */
+  toJSON(): Record<string, FlagValue> {
+    const obj: Record<string, FlagValue> = {}
+    this.flags.forEach((value, key) => {
+      obj[key] = value
+    })
+    return obj
+  }
+
+  /**
+   * Record からフラグを復元する（デシリアライズ用）
+   */
+  fromJSON(data: Record<string, FlagValue>): void {
+    this.flags.clear()
+    for (const [key, value] of Object.entries(data)) {
+      this.flags.set(key, value)
+    }
+  }
+
+  /**
+   * 全フラグを取得する（外部参照用）
+   */
+  getFlags(): Map<string, FlagValue> {
+    return new Map(this.flags)
+  }
 }
