@@ -472,7 +472,6 @@ export class NovelRenderer {
    * Flag イベント処理後に呼ばれ、後続の Condition が新しいフラグ値で評価される。
    */
   private reResolveEvents(): void {
-    const oldResolved = this.resolvedEvents
     const oldIndex = this.eventIndex
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
