@@ -12,6 +12,7 @@
  */
 
 import { Application, Container, Graphics, Sprite, Text as PixiText, TextStyle } from 'pixi.js'
+import { CharacterLayer } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
 import { AudioManager } from './AudioManager'
 import { GameState } from './GameState'
@@ -28,12 +29,18 @@ const GAME_HEIGHT = 600
 function getTextEvent(
   event: Event
 ):
-  | { type: 'dialog'; character: string | null; text: string[] }
+  | { type: 'dialog'; character: string | null; expression: string | null; position: string | null; text: string[] }
   | { type: 'narration'; text: string[] }
   | null {
   if (typeof event === 'object' && event !== null) {
     if ('Dialog' in event) {
-      return { type: 'dialog', character: event.Dialog.character, text: event.Dialog.text }
+      return {
+        type: 'dialog',
+        character: event.Dialog.character,
+        expression: event.Dialog.expression,
+        position: event.Dialog.position,
+        text: event.Dialog.text,
+      }
     }
     if ('Narration' in event) {
       return { type: 'narration', text: event.Narration.text }
@@ -47,6 +54,7 @@ export class NovelRenderer {
   private dialogBox: DialogBox
   private bgGraphics: Graphics
   private bgContainer: Container
+  private characterLayer: CharacterLayer
   private blackoutOverlay: Graphics
   private counterText: PixiText | null = null
   private displayEventCount = 0
@@ -95,6 +103,7 @@ export class NovelRenderer {
     this.app = new Application()
     this.bgGraphics = new Graphics()
     this.bgContainer = new Container()
+    this.characterLayer = new CharacterLayer()
     this.blackoutOverlay = new Graphics()
     this.dialogBox = new DialogBox({
       screenWidth: GAME_WIDTH,
@@ -126,6 +135,9 @@ export class NovelRenderer {
 
     // 背景画像コンテナ
     this.app.stage.addChild(this.bgContainer)
+
+    // 立ち絵レイヤー
+    this.app.stage.addChild(this.characterLayer)
 
     // 暗転レイヤー
     this.blackoutOverlay.rect(0, 0, GAME_WIDTH, GAME_HEIGHT)
@@ -212,6 +224,7 @@ export class NovelRenderer {
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
     this.clearBackground()
+    this.characterLayer.clear()
     this.blackoutOverlay.visible = false
     this.events = events
     this.eventIndex = 0
@@ -219,6 +232,10 @@ export class NovelRenderer {
     this.expandedConditions.clear()
     this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
     this.processUntilNextTextEvent()
+    // 最初のテキストイベントに立ち絵情報があれば表示
+    if (this.eventIndex < this.events.length) {
+      this.showCharacterFromDialog(this.events[this.eventIndex])
+    }
     this.render()
   }
 
@@ -244,6 +261,7 @@ export class NovelRenderer {
     this.app.canvas.removeEventListener('wheel', this.handleWheel)
     window.removeEventListener('keydown', this.handleKeyDown)
     this.audioManager.destroy()
+    this.characterLayer.clear()
     this.choiceOverlay.hide()
     this.saveLoadOverlay.hide()
     this.backlogOverlay.hide()
@@ -381,6 +399,10 @@ export class NovelRenderer {
     }
 
     this.processUntilNextTextEvent()
+    // テキストイベントに立ち絵情報があれば表示
+    if (this.eventIndex < this.events.length) {
+      this.showCharacterFromDialog(this.events[this.eventIndex])
+    }
     this.render()
   }
 
@@ -503,7 +525,29 @@ export class NovelRenderer {
       })
       return
     }
-    // Exit, Wait, ExpressionChange 等は別Issue — スキップ
+    if ('ExpressionChange' in event) {
+      this.characterLayer.changeExpression(
+        event.ExpressionChange.character,
+        event.ExpressionChange.expression,
+        this.assetBaseUrl
+      )
+      return
+    }
+    if ('Exit' in event) {
+      this.characterLayer.remove(event.Exit.character)
+      return
+    }
+    // Wait 等は別Issue — スキップ
+  }
+
+  /**
+   * Dialog イベントに立ち絵情報（expression + position）があれば表示する
+   */
+  private showCharacterFromDialog(event: Event): void {
+    const textEvt = getTextEvent(event)
+    if (!textEvt || textEvt.type !== 'dialog') return
+    if (!textEvt.expression || !textEvt.position || !textEvt.character) return
+    this.characterLayer.show(textEvt.character, textEvt.expression, textEvt.position, this.assetBaseUrl)
   }
 
   /**
@@ -563,6 +607,7 @@ export class NovelRenderer {
    */
   private replayDirectivesUpTo(targetIndex: number): void {
     this.clearBackground()
+    this.characterLayer.clear()
     this.blackoutOverlay.visible = false
     this.audioManager.stopBgm(0)
 
@@ -570,7 +615,13 @@ export class NovelRenderer {
     let lastBgmEvent: Event | null = null
     for (let i = 0; i <= targetIndex; i++) {
       const ev = this.events[i]
-      if (!getTextEvent(ev) && typeof ev === 'object' && ev !== null) {
+      // Dialog の立ち絵情報もリプレイする
+      const textEvt = getTextEvent(ev)
+      if (textEvt) {
+        this.showCharacterFromDialog(ev)
+        continue
+      }
+      if (typeof ev === 'object' && ev !== null) {
         if ('Bgm' in ev) {
           lastBgmEvent = ev
         } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev) {
@@ -641,34 +692,18 @@ export class NovelRenderer {
     this.waitingForChoice = false
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
-    this.clearBackground()
-    this.blackoutOverlay.visible = false
     this.events = [...scene.events]
     this.expandedConditions.clear()
     this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
 
     // eventIndex まで演出イベントを再実行して状態を再構築
-    // Flag/Condition/Choice はスキップし、演出（Background/Blackout/BGM等）のみ再構築
-    // Condition の展開は通常の進行に任せる
-    let lastBgmEvent: Event | null = null
-    for (let i = 0; i < data.eventIndex && i < this.events.length; i++) {
-      const ev = this.events[i]
-      if (!getTextEvent(ev)) {
-        if (typeof ev === 'object' && ev !== null) {
-          if ('Bgm' in ev) {
-            lastBgmEvent = ev
-          } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev) {
-            // スキップ（フラグは fromJSON で復元済み、Condition/Choice は副作用防止）
-          } else {
-            this.processDirective(ev)
-          }
-        } else if (typeof ev === 'string') {
-          this.processDirective(ev)
-        }
-      }
-    }
-    if (lastBgmEvent) {
-      this.processDirective(lastBgmEvent)
+    const targetIndex = Math.min(data.eventIndex - 1, this.events.length - 1)
+    if (targetIndex >= 0) {
+      this.replayDirectivesUpTo(targetIndex)
+    } else {
+      this.clearBackground()
+      this.characterLayer.clear()
+      this.blackoutOverlay.visible = false
     }
 
     this.eventIndex = data.eventIndex
