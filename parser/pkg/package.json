@@ -1,0 +1,16 @@
+{
+  "name": "name-name-parser",
+  "type": "module",
+  "description": "Markdown parser for name-name visual novel engine",
+  "version": "0.1.0",
+  "files": [
+    "name_name_parser_bg.wasm",
+    "name_name_parser.js",
+    "name_name_parser.d.ts"
+  ],
+  "main": "name_name_parser.js",
+  "types": "name_name_parser.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
