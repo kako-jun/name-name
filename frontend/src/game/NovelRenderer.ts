@@ -166,7 +166,7 @@ export class NovelRenderer {
     window.addEventListener('keydown', this.handleKeyDown)
 
     // バックログスクロール
-    this.app.canvas.addEventListener('wheel', this.handleWheel)
+    this.app.canvas.addEventListener('wheel', this.handleWheel, { passive: false })
 
     this.initialized = true
   }
@@ -648,16 +648,27 @@ export class NovelRenderer {
     this.displayEventCount = this.events.filter((e) => getTextEvent(e) !== null).length
 
     // eventIndex まで演出イベントを再実行して状態を再構築
+    // Flag/Condition/Choice はスキップし、演出（Background/Blackout/BGM等）のみ再構築
+    // Condition の展開は通常の進行に任せる
+    let lastBgmEvent: Event | null = null
     for (let i = 0; i < data.eventIndex && i < this.events.length; i++) {
       const ev = this.events[i]
       if (!getTextEvent(ev)) {
-        this.processDirective(ev)
-        if (this.waitingForChoice) {
-          // Choice に遭遇した場合は、セーブ時点ではすでに選択済みのはず
-          this.waitingForChoice = false
-          this.choiceOverlay.hide()
+        if (typeof ev === 'object' && ev !== null) {
+          if ('Bgm' in ev) {
+            lastBgmEvent = ev
+          } else if ('Flag' in ev || 'Condition' in ev || 'Choice' in ev) {
+            // スキップ（フラグは fromJSON で復元済み、Condition/Choice は副作用防止）
+          } else {
+            this.processDirective(ev)
+          }
+        } else if (typeof ev === 'string') {
+          this.processDirective(ev)
         }
       }
+    }
+    if (lastBgmEvent) {
+      this.processDirective(lastBgmEvent)
     }
 
     this.eventIndex = data.eventIndex
