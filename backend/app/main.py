@@ -130,7 +130,8 @@ def validate_tags(tags: list) -> list[str]:
 
 def validate_asset_type(asset_type: str):
     """アセットタイプのバリデーション"""
-    validate_asset_type(asset_type)
+    if asset_type not in ["images", "sounds", "movies", "ideas"]:
+        raise HTTPException(status_code=400, detail="asset_type must be images, sounds, movies, or ideas")
 
 
 @app.get("/")

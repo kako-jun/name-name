@@ -50,6 +50,13 @@ function AssetsScreen({
     debounceRef.current = setTimeout(() => setDebouncedQuery(value), 300)
   }, [])
 
+  // アンマウント時にデバウンスタイマーをクリア
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [])
+
   // 初回ロード時と5秒ごとにgit statusをチェック
   useEffect(() => {
     const checkStatus = async () => {
@@ -220,12 +227,13 @@ function AssetsScreen({
         throw new Error(`Failed to delete ${deletingAsset.name}: ${response.status}`)
       }
 
-      // 削除成功後、一覧を再取得
+      // 削除成功後、一覧とタグを再取得
       setAssets(assets.filter((a) => a.name !== deletingAsset.name))
       if (selectedAsset?.name === deletingAsset.name) {
         setSelectedAsset(null)
       }
       setDeletingAsset(null)
+      fetchTags()
     } catch (error) {
       console.error('Failed to delete file:', error)
       setDeletingAsset(null)
