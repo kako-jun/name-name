@@ -72,8 +72,6 @@ pub fn parse(input: &str) -> Document {
             if let Some(colon_pos) = rest.find(':') {
                 let id = rest[..colon_pos].trim().to_string();
                 let title = rest[colon_pos + 1..].trim().to_string();
-                // Handle fullwidth colon
-                let title = title.strip_prefix('\u{FF1A}').map(|s| s.trim().to_string()).unwrap_or(title);
                 current_scene = Some(Scene {
                     id,
                     title,
@@ -162,20 +160,6 @@ pub fn parse(input: &str) -> Document {
                 });
                 continue;
             }
-        }
-
-        // Flag: [フラグ: name = value]
-        if let Some(rest) = trimmed.strip_prefix("[フラグ:") {
-            if let Some(content) = rest.strip_suffix(']') {
-                if let Some(eq_pos) = content.find('=') {
-                    let name = content[..eq_pos].trim().to_string();
-                    let val_str = content[eq_pos + 1..].trim();
-                    let value = parse_flag_value(val_str);
-                    current_events.push(Event::Flag { name, value });
-                }
-            }
-            pos += 1;
-            continue;
         }
 
         // Expression change: **トモ** → angry_1:
@@ -381,9 +365,7 @@ fn is_speaker_line(line: &str) -> bool {
         return false;
     }
     // Must have ** ... ** and end with :
-    if let Some(end) = line.find("**:") {
-        // Simple form: **Name**:
-        let _ = end;
+    if line.contains("**:") {
         return true;
     }
     if line.ends_with(':') || line.ends_with('：') {

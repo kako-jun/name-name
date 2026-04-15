@@ -1,24 +1,9 @@
 from pydantic import BaseModel
-from typing import List
-
-
-class Scene(BaseModel):
-    """シーン"""
-    id: int
-    title: str
-
-
-class Chapter(BaseModel):
-    """章"""
-    id: int
-    title: str
-    scenes: List[Scene]
 
 
 class MarkdownContentRequest(BaseModel):
     """Markdown生テキスト更新リクエスト"""
     content: str
-    message: str = "原稿更新"
 
 
 class MarkdownContentResponse(BaseModel):

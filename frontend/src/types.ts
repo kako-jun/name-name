@@ -1,3 +1,4 @@
+/** @deprecated 旧データモデル。EventDocument に移行予定 */
 export interface ScriptRow {
   id: number
   character: string
@@ -5,6 +6,7 @@ export interface ScriptRow {
   expression: string
 }
 
+/** @deprecated 旧データモデル。Event に移行予定 */
 export interface Cut {
   id: number
   character: string
@@ -15,12 +17,14 @@ export interface Cut {
   links?: number[] // 関連するカットのID
 }
 
+/** @deprecated 旧データモデル。EventScene に移行予定 */
 export interface Scene {
   id: number
   title: string
   cuts: Cut[]
 }
 
+/** @deprecated 旧データモデル。EventChapter に移行予定 */
 export interface Chapter {
   id: number
   title: string
