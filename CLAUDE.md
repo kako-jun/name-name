@@ -363,7 +363,11 @@ uv sync
 - ✅ Event型モデルでの描画（旧ScriptRowから移行完了）
 - ✅ 背景画像表示（アスペクト比維持カバー）+ 暗転/暗転解除 + 場面転換
 - ✅ 演出イベントの即時実行（Background/Blackout/SceneTransition）
-- ✅ 戻る操作時の演出状態リプレイ
+- ✅ スナップショット方式の状態管理（NovelGameState + 履歴スタック）
+- ✅ 宣言的復元（applyState）— 巻き戻し・シーク・ロードで先頭リプレイ不要
+- ✅ Condition 不変展開（resolveEvents — events 配列の splice 廃止）
+- ✅ シークバーUI（プログレスバー + クリックジャンプ）
+- ✅ advance/goBack/getSnapshot/seekTo の public API
 - ✅ BGM ループ再生・フェードアウト停止・切り替え（Web Audio API）
 - ✅ SE ワンショット再生・複数同時再生（Web Audio API）
 - ✅ AudioBuffer キャッシュ・ユーザーインタラクション制約対応
@@ -376,6 +380,7 @@ uv sync
 - ✅ 立ち絵表示 + 表情変更 + 退場（#18）— CharacterLayer / 左右中央配置 / ExpressionChange / Exit
 - ✅ 選択肢・分岐 + フラグ・条件分岐（#10）— GameState / ChoiceOverlay / シーンジャンプ
 - ✅ セーブ/ロード + バックログ（#11）— SaveManager / SaveLoadOverlay / BacklogOverlay / localStorage 3スロット / JSON エクスポート・インポート
+- ✅ スナップショット方式リファクタリング（#26）— NovelGameState / resolveEvents / SeekBar / applyState 宣言的復元 / SaveSlotData 拡張
 
 ## 参考ドキュメント
 
