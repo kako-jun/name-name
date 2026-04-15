@@ -1,43 +1,37 @@
 import { useEffect, useRef } from 'react'
-import Phaser from 'phaser'
-import { ScriptRow } from '../types'
-import { NovelGameScene } from '../game/NovelGameScene'
+import { Event } from '../types'
+import { NovelRenderer } from '../game/NovelRenderer'
 
 interface NovelPlayerProps {
-  scriptData: ScriptRow[]
-  startIndex?: number
+  events: Event[]
 }
 
-function NovelPlayer({ scriptData, startIndex = 0 }: NovelPlayerProps) {
-  const gameRef = useRef<Phaser.Game | null>(null)
+function NovelPlayer({ events }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const rendererRef = useRef<NovelRenderer | null>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
 
-    const config: Phaser.Types.Core.GameConfig = {
-      type: Phaser.AUTO,
-      parent: containerRef.current,
-      width: 800,
-      height: 600,
-      backgroundColor: '#667eea',
-      scene: NovelGameScene,
-      scale: {
-        mode: Phaser.Scale.FIT,
-        autoCenter: Phaser.Scale.CENTER_BOTH,
-      },
-    }
+    const renderer = new NovelRenderer()
+    rendererRef.current = renderer
 
-    gameRef.current = new Phaser.Game(config)
+    let destroyed = false
 
-    // シーンにデータを渡す
-    gameRef.current.scene.start('NovelGameScene', { scriptData, startIndex })
+    renderer.init(containerRef.current).then(() => {
+      if (destroyed) {
+        renderer.destroy()
+        return
+      }
+      renderer.setEvents(events)
+    })
 
     return () => {
-      gameRef.current?.destroy(true)
-      gameRef.current = null
+      destroyed = true
+      renderer.destroy()
+      rendererRef.current = null
     }
-  }, [scriptData, startIndex])
+  }, [events])
 
   return (
     <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
