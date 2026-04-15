@@ -5,15 +5,8 @@ import MapEditor from '../components/MapEditor'
 import NPCEditor from '../components/NPCEditor'
 import RPGPlayer from '../components/RPGPlayer'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
-import { Chapter, Mode } from '../types'
+import { Chapter, Mode, Event } from '../types'
 import { RPGProject, MapData, NPCData } from '../types/rpg'
-
-interface ScriptRow {
-  id: number
-  character: string
-  text: string
-  expression: string
-}
 
 interface EditorScreenProps {
   projectName: string
@@ -104,7 +97,8 @@ function EditorScreen({
           const data = await response.json()
           // フロント側で変更がない場合のみ、サーバー側の状態を反映
           const currentChapters = JSON.stringify(chapters)
-          const hasLocalChanges = initialChaptersRef.current !== '' && currentChapters !== initialChaptersRef.current
+          const hasLocalChanges =
+            initialChaptersRef.current !== '' && currentChapters !== initialChaptersRef.current
           if (!hasLocalChanges) {
             setHasUnsavedChanges(data.has_uncommitted_changes)
           } else {
@@ -220,24 +214,35 @@ function EditorScreen({
     }
   }
 
-  const generateScriptFromChapters = (): ScriptRow[] => {
-    return chapters.flatMap((chapter) =>
-      chapter.scenes.flatMap((scene) =>
-        scene.cuts.map((cut) => ({
-          id: cut.id,
-          character: cut.character,
-          text: cut.text,
-          expression: cut.expression,
-        }))
-      )
-    )
-  }
-
-  const getStartIndexFromSelectedCut = (): number => {
-    if (selectedCutId === null) return 0
-    const script = generateScriptFromChapters()
-    const index = script.findIndex((row) => row.id === selectedCutId)
-    return index !== -1 ? index : 0
+  const generateEventsFromChapters = (): Event[] => {
+    const events: Event[] = []
+    chapters.forEach((chapter, ci) => {
+      chapter.scenes.forEach((scene, si) => {
+        // シーン境界で SceneTransition を挿入（最初のシーン以外）
+        if (ci > 0 || si > 0) {
+          events.push('SceneTransition')
+        }
+        scene.cuts.forEach((cut) => {
+          if (cut.character) {
+            events.push({
+              Dialog: {
+                character: cut.character || null,
+                expression: cut.expression || null,
+                position: null,
+                text: cut.text ? cut.text.split('\n') : [''],
+              },
+            })
+          } else {
+            events.push({
+              Narration: {
+                text: cut.text ? cut.text.split('\n') : [''],
+              },
+            })
+          }
+        })
+      })
+    })
+    return events
   }
 
   return (
@@ -264,7 +269,8 @@ function EditorScreen({
               </svg>
             </button>
             <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-              Name × Name <span className={isDark ? 'text-gray-400' : 'text-gray-500'}>- {projectName}</span>
+              Name × Name{' '}
+              <span className={isDark ? 'text-gray-400' : 'text-gray-500'}>- {projectName}</span>
             </h1>
           </div>
           <div className="flex items-center gap-2">
@@ -321,7 +327,9 @@ function EditorScreen({
         </div>
 
         {/* エディタタブ（ノベル / RPG） */}
-        <div className={`px-6 flex gap-1 border-t ${isDark ? 'border-gray-700' : 'border-blue-100'}`}>
+        <div
+          className={`px-6 flex gap-1 border-t ${isDark ? 'border-gray-700' : 'border-blue-100'}`}
+        >
           {(['novel', 'rpg'] as const).map((tab) => (
             <button
               key={tab}
@@ -355,16 +363,15 @@ function EditorScreen({
               onNavigateToAssets={onNavigateToAssets}
             />
           ) : (
-            <NovelPlayer
-              scriptData={generateScriptFromChapters()}
-              startIndex={getStartIndexFromSelectedCut()}
-            />
+            <NovelPlayer events={generateEventsFromChapters()} />
           )
         ) : (
           // RPGエディタ
           <div className="h-full flex flex-col">
             {/* RPGサブタブ */}
-            <div className={`flex gap-1 px-4 py-2 border-b ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
+            <div
+              className={`flex gap-1 px-4 py-2 border-b ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}
+            >
               {(['map', 'npc', 'play'] as const).map((tab) => (
                 <button
                   key={tab}
@@ -401,9 +408,7 @@ function EditorScreen({
                   isDark={isDark}
                 />
               )}
-              {rpgSubTab === 'play' && (
-                <RPGPlayer gameData={rpgProject} />
-              )}
+              {rpgSubTab === 'play' && <RPGPlayer gameData={rpgProject} />}
             </div>
           </div>
         )}
