@@ -22,9 +22,7 @@ import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
 import { SeekBar } from './SeekBar'
 import { Event, EventScene } from '../types'
-
-const GAME_WIDTH = 800
-const GAME_HEIGHT = 600
+import { GAME_WIDTH, GAME_HEIGHT } from './constants'
 
 /** Dialog / Narration から text を取り出すヘルパー */
 function getTextEvent(event: Event):
@@ -64,7 +62,9 @@ export class NovelRenderer {
   private counterText: PixiText | null = null
   private displayEventCount = 0
 
-  /** Condition 展開済みのフラットなイベント配列（元の events は保持しない） */
+  /** Condition 展開前の元イベント配列（Flag 変更時の再展開に使用） */
+  private rawEvents: Event[] = []
+  /** Condition 展開済みのフラットなイベント配列 */
   private resolvedEvents: Event[] = []
   private eventIndex = 0
   private textIndex = 0
@@ -256,7 +256,8 @@ export class NovelRenderer {
     this.blackoutOverlay.visible = false
     this.currentBgmPath = null
 
-    // Condition をフラグに基づいて展開（元の events は変更しない）
+    // 元イベントを保持し、Condition をフラグに基づいて展開
+    this.rawEvents = events
     this.resolvedEvents = resolveEvents(events, this.gameState)
     this.eventIndex = 0
     this.textIndex = 0
@@ -407,7 +408,7 @@ export class NovelRenderer {
     if (historyIndex < 0 || historyIndex >= this.history.length) return
     if (this.waitingForChoice || this.waitingForWait) return
 
-    // 履歴を指定位置まで切り詰める
+    // 履歴を指定位置まで切り詰める（アンドゥスタック方式: 戻った地点から再進行すると新しい履歴が積まれる）
     this.history = this.history.slice(0, historyIndex + 1)
     const targetState = this.history[historyIndex]
     this.applyState(targetState)
@@ -432,6 +433,9 @@ export class NovelRenderer {
    * スナップショットから状態を宣言的に復元する
    */
   private applyState(state: NovelGameState): void {
+    // フラグ復元
+    this.gameState.fromJSON(state.flags)
+
     // インデックス復元
     this.eventIndex = state.eventIndex
     this.textIndex = state.textIndex
@@ -461,6 +465,24 @@ export class NovelRenderer {
       this.audioManager.stopBgm(0)
       this.currentBgmPath = null
     }
+  }
+
+  /**
+   * rawEvents を現在のフラグ状態で再展開し、eventIndex を維持する。
+   * Flag イベント処理後に呼ばれ、後続の Condition が新しいフラグ値で評価される。
+   */
+  private reResolveEvents(): void {
+    const oldResolved = this.resolvedEvents
+    const oldIndex = this.eventIndex
+    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
+    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+
+    // 再展開で配列長が変わった場合、eventIndex を安全な範囲に収める
+    if (oldIndex >= this.resolvedEvents.length) {
+      this.eventIndex = Math.max(0, this.resolvedEvents.length - 1)
+    }
+    // 再展開前と同じイベントを指しているか確認（Flag イベント自体は展開で位置が変わらない）
+    // Flag は Condition の外にあるため、Flag の位置は再展開で変動しない
   }
 
   private handleAdvance = (): void => {
@@ -604,10 +626,9 @@ export class NovelRenderer {
     }
     if ('Flag' in event) {
       this.gameState.setFlag(event.Flag.name, event.Flag.value)
-      // フラグ変更により Condition の評価結果が変わる可能性があるが、
-      // resolvedEvents は setEvents/jumpToScene 時に計算済み。
-      // Flag が resolvedEvents 内に残っているので、ここで再展開は不要。
-      // もし動的に再展開が必要な場合は、ここに再計算ロジックを入れる。
+      // フラグ変更により後続の Condition の評価結果が変わる可能性がある。
+      // 現在のシーンの元イベントを再取得して resolvedEvents を再計算する。
+      this.reResolveEvents()
       return
     }
     if ('Choice' in event) {
@@ -780,8 +801,9 @@ export class NovelRenderer {
     }
     this.choiceOverlay.hide()
 
-    // Condition をフラグに基づいて展開
-    this.resolvedEvents = resolveEvents([...scene.events], this.gameState)
+    // 元イベントを保持し、Condition をフラグに基づいて展開
+    this.rawEvents = [...scene.events]
+    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
 
     // NovelGameState を構築して applyState で宣言的に復元
