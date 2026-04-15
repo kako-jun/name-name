@@ -36,10 +36,10 @@ name-name/
 | モジュール | 責務 | パースする？ |
 |---|---|---|
 | `parser/` | Markdown ↔ Event[] の双方向変換 | Yes（正本） |
-| `frontend/` | エディタUI + ノベルプレイヤー + RPGプレイヤー | No（WASMで parser を呼ぶ） |
+| `frontend/` | エディタUI + ノベルプレイヤー + RPGプレイヤー | Yes（WASMで parser を呼ぶ。`src/wasm/parser.ts` 経由） |
 | `backend/` | プロジェクト管理、Git操作、アセット配信 | No（生テキスト中継） |
 
-バックエンドはパースしない。Markdown テキストをそのままフロントエンドに渡し、フロントエンドが WASM パーサーで Event[] に変換する。
+バックエンドはパースしない。Markdown テキストをそのままフロントエンドに渡し、フロントエンドが WASM パーサー（`frontend/src/wasm/parser.ts`）で Event[] に変換する。WASM の初期化は遅延実行（初回呼び出し時に `init()` を実行）。
 
 ## データフロー
 

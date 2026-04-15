@@ -24,11 +24,13 @@ name-name/
 │   │   ├── models.rs         # Eventデータモデル（型の正本）
 │   │   ├── parser.rs         # Markdown → Events
 │   │   └── emitter.rs        # Events → Markdown
+│   ├── pkg/                  # wasm-pack ビルド成果物（WASM + JS + .d.ts）
 │   └── tests/
 ├── frontend/           # React + Vite + TypeScript
 │   ├── src/
 │   │   ├── components/ # UIコンポーネント
-│   │   └── game/       # ゲームレンダラー（ノベル: PixiJS / RPG: Phaser）
+│   │   ├── game/       # ゲームレンダラー（ノベル: PixiJS / RPG: Phaser）
+│   │   └── wasm/       # WASMパーサーラッパー（parser/pkg/ を参照）
 │   ├── package.json
 │   └── vite.config.ts
 ├── backend/            # FastAPI + Python（プロジェクト管理のみ、パースしない）
@@ -379,8 +381,14 @@ uv sync
 - ✅ SE ワンショット再生・複数同時再生（Web Audio API）
 - ✅ AudioBuffer キャッシュ・ユーザーインタラクション制約対応
 
+### 完了（WASMパーサー統合）
+- ✅ wasm-pack ビルド（`parser/pkg/` に成果物生成）
+- ✅ Vite WASMプラグイン設定（vite-plugin-wasm + vite-plugin-top-level-await）
+- ✅ フロントエンドWASMラッパー（`frontend/src/wasm/parser.ts`）
+- ✅ EditorScreenでWASMパース結果をノベルプレイヤーに供給
+- ✅ 旧モデル（Chapter/Scene/Cut）からの自動フォールバック
+
 ### 未実装
-- ⬜ フロントエンドでのWASMパーサー統合
 - ⬜ RPGプレイヤーのPixiJS移行（現在はPhaser）
 - ✅ 立ち絵表示 + 表情変更 + 退場（#18）— CharacterLayer / 左右中央配置 / ExpressionChange / Exit
 - ✅ 選択肢・分岐 + フラグ・条件分岐（#10）— GameState / ChoiceOverlay / シーンジャンプ
