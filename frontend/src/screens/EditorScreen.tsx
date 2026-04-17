@@ -5,9 +5,9 @@ import MapEditor from '../components/MapEditor'
 import NPCEditor from '../components/NPCEditor'
 import RPGPlayer from '../components/RPGPlayer'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
-import { Chapter, Mode, Event } from '../types'
+import type { Mode, Event, EventDocument, EventRef } from '../types'
 import { RPGProject, MapData, NPCData } from '../types/rpg'
-import { parseMarkdown } from '../wasm/parser'
+import { parseMarkdown, emitMarkdown } from '../wasm/parser'
 
 interface EditorScreenProps {
   projectName: string
@@ -17,6 +17,25 @@ interface EditorScreenProps {
   onToggleDark: () => void
   onOpenSettings: () => void
   onNavigateToAssets: () => void
+}
+
+/**
+ * EventDocument を「最初のシーン以外の前に SceneTransition を挟んだ」フラット Event[] に変換する。
+ * NovelPlayer に食わせるための整形。
+ */
+function flattenDocumentEvents(doc: EventDocument): Event[] {
+  const events: Event[] = []
+  let first = true
+  for (const chapter of doc.chapters) {
+    for (const scene of chapter.scenes) {
+      if (!first) {
+        events.push('SceneTransition')
+      }
+      first = false
+      events.push(...scene.events)
+    }
+  }
+  return events
 }
 
 function EditorScreen({
@@ -30,17 +49,15 @@ function EditorScreen({
 }: EditorScreenProps) {
   const [mode, setMode] = useState<Mode>('edit')
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
-  const [chapters, setChapters] = useState<Chapter[]>([])
-  const [selectedCutId, setSelectedCutId] = useState<number | null>(null)
+  const [doc, setDoc] = useState<EventDocument | null>(null)
+  const [selectedEvent, setSelectedEvent] = useState<EventRef | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
-  const initialChaptersRef = useRef<string>('')
+  const initialMarkdownRef = useRef<string>('')
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
-  const [wasmEvents, setWasmEvents] = useState<Event[]>([])
-  const [wasmReady, setWasmReady] = useState(false)
 
   // RPGエディタ用の状態
   const [rpgProject, setRpgProject] = useState<RPGProject>(() => {
@@ -65,30 +82,29 @@ function EditorScreen({
   })
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
 
-  // WASMパース結果からフラットなEvent[]を組み立てる
-  const flattenDocumentEvents = (doc: import('../types').EventDocument): Event[] => {
-    const events: Event[] = []
-    for (const chapter of doc.chapters) {
-      for (let si = 0; si < chapter.scenes.length; si++) {
-        if (events.length > 0) {
-          events.push('SceneTransition')
-        }
-        events.push(...chapter.scenes[si].events)
-      }
+  // ユーザー操作で doc が変わったら emit し、rawMarkdown を更新する。
+  // rawMarkdown の更新は autosave useEffect 経由で backend に PUT される。
+  const handleDocChange = async (newDoc: EventDocument) => {
+    setDoc(newDoc)
+    try {
+      const md = await emitMarkdown(newDoc)
+      setRawMarkdown(md)
+    } catch (err) {
+      console.error('emitMarkdown failed:', err)
+      setSaveError('Markdown生成に失敗しました')
     }
-    return events
   }
 
-  // MarkdownをWASMでパースしてeventsを更新
-  const parseAndSetEvents = async (markdown: string) => {
-    if (!markdown.trim()) return
+  // Markdown を WASM でパースして doc を更新
+  const parseAndSetDoc = async (markdown: string) => {
     try {
-      const doc = await parseMarkdown(markdown)
-      setWasmEvents(flattenDocumentEvents(doc))
-      setWasmReady(true)
+      const parsed = await parseMarkdown(markdown)
+      setDoc(parsed)
     } catch (parseError) {
       console.error('WASM parse failed:', parseError)
       setSaveError('Markdownのパースに失敗しました')
+      // 空のドキュメントでフォールバック
+      setDoc({ engine: 'name-name', chapters: [] })
     }
   }
 
@@ -104,15 +120,9 @@ function EditorScreen({
         const data = await response.json()
         const markdown = data.content || ''
         setRawMarkdown(markdown)
-        initialChaptersRef.current = markdown
+        initialMarkdownRef.current = markdown
 
-        // WASMパースでEventsを生成
-        await parseAndSetEvents(markdown)
-
-        // 旧モデルへの変換（キャンバスエディタ用、後方互換）
-        if (data.chapters) {
-          setChapters(data.chapters)
-        }
+        await parseAndSetDoc(markdown)
 
         // git statusをチェック
         const statusResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
@@ -127,20 +137,18 @@ function EditorScreen({
     loadChapters()
   }, [apiBaseUrl, projectName])
 
-  // 5秒ごとにgit statusをチェック（ただしフロント側の変更を優先）
+  // 5秒ごとにgit statusをチェック（フロント側の変更を優先）
   useEffect(() => {
     const checkStatus = async () => {
       try {
         const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
         if (response.ok) {
           const data = await response.json()
-          // フロント側で変更がない場合のみ、サーバー側の状態を反映
           const hasLocalChanges =
-            initialChaptersRef.current !== '' && rawMarkdown !== initialChaptersRef.current
+            initialMarkdownRef.current !== '' && rawMarkdown !== initialMarkdownRef.current
           if (!hasLocalChanges) {
             setHasUnsavedChanges(data.has_uncommitted_changes)
           } else {
-            // フロント側で変更がある場合は常にtrue
             setHasUnsavedChanges(true)
           }
         }
@@ -153,17 +161,17 @@ function EditorScreen({
     return () => clearInterval(interval)
   }, [apiBaseUrl, projectName, rawMarkdown])
 
-  // Markdownの変更を検出（即座に反映）
+  // Markdownの変更を検出
   useEffect(() => {
-    if (initialChaptersRef.current === '') return
-    if (rawMarkdown !== initialChaptersRef.current) {
+    if (initialMarkdownRef.current === '') return
+    if (rawMarkdown !== initialMarkdownRef.current) {
       setHasUnsavedChanges(true)
     }
   }, [rawMarkdown])
 
   // rawMarkdownが変更されたら自動的にワーキングディレクトリに保存
   useEffect(() => {
-    if (!rawMarkdown || rawMarkdown === initialChaptersRef.current) return
+    if (!rawMarkdown || rawMarkdown === initialMarkdownRef.current) return
 
     if (saveTimeoutRef.current !== null) {
       clearTimeout(saveTimeoutRef.current)
@@ -208,8 +216,7 @@ function EditorScreen({
         setSaveError('保存に失敗しました')
         return
       }
-      // 保存成功後、初期状態を更新
-      initialChaptersRef.current = rawMarkdown
+      initialMarkdownRef.current = rawMarkdown
       setHasUnsavedChanges(false)
     } catch (error) {
       console.error('Failed to commit:', error)
@@ -233,18 +240,13 @@ function EditorScreen({
         setSaveError('変更の破棄に失敗しました')
         return
       }
-      // データを再読み込み
       const chaptersResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
       if (chaptersResponse.ok) {
         const data = await chaptersResponse.json()
         const markdown = data.content || ''
         setRawMarkdown(markdown)
-        initialChaptersRef.current = markdown
-        if (data.chapters) {
-          setChapters(data.chapters)
-        }
-        // WASMパースを再実行
-        await parseAndSetEvents(markdown)
+        initialMarkdownRef.current = markdown
+        await parseAndSetDoc(markdown)
       }
       setHasUnsavedChanges(false)
     } catch (error) {
@@ -255,41 +257,10 @@ function EditorScreen({
     }
   }
 
-  const generateEventsFromChapters = (): Event[] => {
-    const events: Event[] = []
-    chapters.forEach((chapter, ci) => {
-      chapter.scenes.forEach((scene, si) => {
-        // シーン境界で SceneTransition を挿入（最初のシーン以外）
-        if (ci > 0 || si > 0) {
-          events.push('SceneTransition')
-        }
-        scene.cuts.forEach((cut) => {
-          if (cut.character) {
-            events.push({
-              Dialog: {
-                character: cut.character || null,
-                expression: cut.expression || null,
-                position: null,
-                text: cut.text ? cut.text.split('\n') : [''],
-              },
-            })
-          } else {
-            events.push({
-              Narration: {
-                text: cut.text ? cut.text.split('\n') : [''],
-              },
-            })
-          }
-        })
-      })
-    })
-    return events
-  }
-
-  // WASMパース結果を優先、フォールバックとして旧モデルからの変換
+  // プレイモード用のフラット Event[]
   const novelEvents = useMemo(
-    () => (wasmReady && wasmEvents.length > 0 ? wasmEvents : generateEventsFromChapters()),
-    [wasmReady, wasmEvents, chapters]
+    () => (doc ? flattenDocumentEvents(doc) : []),
+    [doc]
   )
 
   return (
@@ -399,16 +370,23 @@ function EditorScreen({
 
       <main className="flex-1 overflow-hidden">
         {editorTab === 'novel' ? (
-          // ノベルエディタ
           mode === 'edit' ? (
-            <CanvasEditor
-              chapters={chapters}
-              setChapters={setChapters}
-              isDark={isDark}
-              selectedCutId={selectedCutId}
-              setSelectedCutId={setSelectedCutId}
-              onNavigateToAssets={onNavigateToAssets}
-            />
+            doc !== null ? (
+              <CanvasEditor
+                doc={doc}
+                onDocChange={handleDocChange}
+                isDark={isDark}
+                selectedEvent={selectedEvent}
+                setSelectedEvent={setSelectedEvent}
+                onNavigateToAssets={onNavigateToAssets}
+              />
+            ) : (
+              <div
+                className={`flex items-center justify-center h-full ${isDark ? 'text-gray-400' : 'text-gray-600'}`}
+              >
+                読み込み中...
+              </div>
+            )
           ) : (
             <NovelPlayer
               events={novelEvents}
@@ -418,7 +396,6 @@ function EditorScreen({
         ) : (
           // RPGエディタ
           <div className="h-full flex flex-col">
-            {/* RPGサブタブ */}
             <div
               className={`flex gap-1 px-4 py-2 border-b ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}
             >
@@ -441,7 +418,6 @@ function EditorScreen({
               ))}
             </div>
 
-            {/* RPGサブタブコンテンツ */}
             <div className="flex-1 overflow-hidden">
               {rpgSubTab === 'map' && (
                 <MapEditor
