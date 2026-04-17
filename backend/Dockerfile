@@ -1,22 +1,33 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install git for GitPython
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# uv をインストール（公式バイナリ）
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-# Copy requirements and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# GitPython が使う git 本体
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy application code
-COPY . .
+# 依存定義だけ先にコピーして依存レイヤをキャッシュ
+COPY pyproject.toml uv.lock ./
 
-# Create projects directory
+# 仮想環境は /app/.venv（uv 既定）。本体コード同梱前に依存だけ同期
+RUN uv sync --frozen --no-dev --no-install-project
+
+# アプリコード
+COPY app ./app
+
+# プロジェクト自体もインストール
+RUN uv sync --frozen --no-dev
+
+# プロジェクトデータ格納先
 RUN mkdir -p projects
 
-# Expose port
-EXPOSE 8000
+# compose.yaml と統一
+EXPOSE 7373
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# uv 管理の venv 経由で uvicorn を起動
+CMD ["uv", "run", "--no-dev", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7373"]
