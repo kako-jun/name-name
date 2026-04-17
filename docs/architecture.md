@@ -36,7 +36,7 @@ name-name/
 | モジュール | 責務 | パースする？ |
 |---|---|---|
 | `parser/` | Markdown ↔ Event[] の双方向変換 | Yes（正本） |
-| `frontend/` | エディタUI + ノベルプレイヤー + RPGプレイヤー | Yes（WASMで parser を呼ぶ。`src/wasm/parser.ts` 経由） |
+| `frontend/` | エディタUI + ノベルプレイヤー（PixiJS） + RPGプレイヤー（PixiJS） | Yes（WASMで parser を呼ぶ。`src/wasm/parser.ts` 経由） |
 | `backend/` | プロジェクト管理、Git操作、アセット配信 | No（生テキスト中継） |
 
 バックエンドはパースしない。Markdown テキストをそのままフロントエンドに渡し、フロントエンドが WASM パーサー（`frontend/src/wasm/parser.ts`）で Event[] に変換する。WASM の初期化は遅延実行（初回呼び出し時に `init()` を実行）。
@@ -200,6 +200,49 @@ Web Audio API を使用。
 ### AudioBuffer キャッシュ
 - 一度デコードした AudioBuffer をキャッシュ
 - ユーザーインタラクション制約（autoplay policy）に対応
+
+## RPG サブシステム
+
+RPG プレイモードもノベルと同じく PixiJS で実装する（Phaser から移行済み）。
+レンダラーは `frontend/src/game/RPGRenderer.ts`。
+
+### RPGProject データモデル
+
+`frontend/src/types/rpg.ts` に定義：
+
+- `MapData` — `width` / `height` / `tileSize` + 2次元配列の `tiles`（`TileType` = GRASS / ROAD / TREE / WATER）
+- `PlayerData` — 初期グリッド座標と向き（`up` / `down` / `left` / `right`）
+- `NPCData` — グリッド座標・名前・会話メッセージ・表示色
+- `RPGProject` — 上記の集合（+ 将来の `EventData`）
+
+`TILE_COLORS_HEX` がタイルの描画色（PixiJS `Graphics` で矩形塗りつぶしに使用）。
+
+### RPGRenderer の責務
+
+| API | 説明 |
+|---|---|
+| `init(container)` | PixiJS `Application` を生成し `<canvas>` を親要素に追加 |
+| `load(gameData)` | マップ・プレイヤー・NPC を描画して入力受付開始 |
+| `destroy()` | ticker・イベントリスナー解除、PIXI `Application` 破棄 |
+
+内部はレイヤ分割：`mapLayer` / `npcLayer` / `playerLayer` を `world` コンテナに束ね、プレイヤー位置に追従するカメラ（`world.x/y` のオフセット更新）を適用する。マップが画面より大きい場合のみクランプ、小さい場合は中央寄せ。
+
+### プレイヤー移動
+
+- 矢印キー / WASD でグリッド単位に移動（1タイル単位）
+- 通行不可タイル（TREE / WATER）と NPC のいるタイルには入れない
+- 移動中は `performance.now()` ベースで 150ms かけて線形補間し、完了まで次入力を受け付けない
+- 進行方向に小さな三角マーカーを表示（向きの視覚化）
+
+### 会話ダイアログ
+
+- プレイヤーの前方 1 タイルに NPC がいる状態で Enter / Space
+- 画面下部のウィンドウに NPC 名と `message` を即時表示（タイプライター演出なし）
+- 再度 Enter / Space で閉じる。ダイアログ表示中は移動入力を無視
+
+### サンプルデータ
+
+`frontend/src/game/sampleRpgData.ts` に 16×12 のサンプルマップと NPC 2 人を用意。`RPGPlayer` コンポーネントは `gameData` prop が未指定ならこれを使用し、データ永続化（#34）より前でも RPG がそのまま動作する。
 
 ## ツールとゲームデータの分離
 
