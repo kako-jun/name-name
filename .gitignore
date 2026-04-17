@@ -35,3 +35,4 @@ target/
 .claude/settings.local.json
 .serena/
 .mcp.json
+*.tsbuildinfo
