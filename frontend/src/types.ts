@@ -1,11 +1,3 @@
-/** @deprecated 旧データモデル。EventDocument に移行予定 */
-export interface ScriptRow {
-  id: number
-  character: string
-  text: string
-  expression: string
-}
-
 /** @deprecated 旧データモデル。Event に移行予定 */
 export interface Cut {
   id: number
