@@ -32,6 +32,8 @@ export class RPGRenderer {
   private dialogBg: Graphics | null = null
   private dialogName: PixiText | null = null
   private dialogText: PixiText | null = null
+  private currentDialogName = ''
+  private currentDialogMessage = ''
 
   private npcs: NPC[] = []
   private mapTiles: number[][] = []
@@ -88,6 +90,7 @@ export class RPGRenderer {
     this.app.stage.addChild(this.dialogLayer)
 
     window.addEventListener('keydown', this.handleKeyDown)
+    window.addEventListener('resize', this.handleResize)
     this.app.ticker.add(this.onTick)
 
     this.initialized = true
@@ -95,10 +98,40 @@ export class RPGRenderer {
 
   /** ゲームデータを読み込んで描画を開始する */
   load(gameData: RPGProject): void {
+    // 状態リセット
+    this.isShowingDialog = false
+    this.isMoving = false
+    this.moveStart = 0
+    this.currentDialogName = ''
+    this.currentDialogMessage = ''
+
+    // 既存のダイアログ関連リソースを破棄
+    this.dialogLayer.removeChildren()
+    if (this.dialogBg) {
+      this.dialogBg.destroy()
+      this.dialogBg = null
+    }
+    if (this.dialogName) {
+      this.dialogName.destroy()
+      this.dialogName = null
+    }
+    if (this.dialogText) {
+      this.dialogText.destroy()
+      this.dialogText = null
+    }
+
     this.mapTiles = gameData.map.tiles
     this.tileSize = gameData.map.tileSize
     this.mapHeight = gameData.map.height
     this.mapWidth = gameData.map.width
+
+    // マップ整合性チェック（警告のみ）
+    if (
+      this.mapTiles.length !== this.mapHeight ||
+      this.mapTiles.some((r) => r.length !== this.mapWidth)
+    ) {
+      console.warn('[RPGRenderer] map tiles dimensions mismatch')
+    }
 
     this.playerGridX = gameData.player.x
     this.playerGridY = gameData.player.y
@@ -115,6 +148,7 @@ export class RPGRenderer {
   /** リソース解放 */
   destroy(): void {
     window.removeEventListener('keydown', this.handleKeyDown)
+    window.removeEventListener('resize', this.handleResize)
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
       this.app.destroy(true, { children: true })
@@ -126,18 +160,39 @@ export class RPGRenderer {
 
   private drawMap(): void {
     this.mapLayer.removeChildren()
+    // 色ごとに単一 Graphics にまとめて描画（タイル数分の Graphics 生成を避ける）
+    const byColor = new Map<number, Array<[number, number]>>()
     for (let y = 0; y < this.mapTiles.length; y++) {
       const row = this.mapTiles[y]
       for (let x = 0; x < row.length; x++) {
         const tileType = row[x] as TileType
         const color = TILE_COLORS_HEX[tileType] ?? TILE_COLORS_HEX[TileType.GRASS]
-        const tile = new Graphics()
-        tile.rect(x * this.tileSize, y * this.tileSize, this.tileSize, this.tileSize)
-        tile.fill(color)
-        tile.stroke({ width: 1, color: 0x000000, alpha: 0.2 })
-        this.mapLayer.addChild(tile)
+        const list = byColor.get(color) ?? []
+        list.push([x, y])
+        byColor.set(color, list)
       }
     }
+    const fillG = new Graphics()
+    const strokeG = new Graphics()
+    // 色ごとに rect を積んで fill（同色まとめバッチ）
+    for (const [color, cells] of byColor) {
+      for (const [x, y] of cells) {
+        fillG.rect(x * this.tileSize, y * this.tileSize, this.tileSize, this.tileSize)
+      }
+      fillG.fill(color)
+    }
+    // 注: pixi v8 の Graphics は fill ごとにパスをリセットするため、上の各 fill で
+    //     直前の rect 群だけが塗られる
+    // grid stroke はマップ全体を一筆で
+    for (let y = 0; y < this.mapTiles.length; y++) {
+      const row = this.mapTiles[y]
+      for (let x = 0; x < row.length; x++) {
+        strokeG.rect(x * this.tileSize, y * this.tileSize, this.tileSize, this.tileSize)
+      }
+    }
+    strokeG.stroke({ width: 1, color: 0x000000, alpha: 0.2 })
+    this.mapLayer.addChild(fillG)
+    this.mapLayer.addChild(strokeG)
   }
 
   private drawNPCs(npcData: NPCData[]): void {
@@ -183,7 +238,7 @@ export class RPGRenderer {
     g.clear()
     const reach = this.tileSize / 2 - 2
     const half = 4
-    let p: [number, number, number, number, number, number]
+    let p: number[]
     switch (this.playerDirection) {
       case 'up':
         p = [0, -reach, -half, -reach + half + 2, half, -reach + half + 2]
@@ -204,14 +259,16 @@ export class RPGRenderer {
 
   private drawDialog(): void {
     this.dialogLayer.removeChildren()
-    const bg = new Graphics()
-    this.dialogBg = bg
     const height = 120
     const width = this.screenWidth - 40
-    bg.roundRect(20, this.screenHeight - height - 20, width, height, 8)
+    const boxTop = this.screenHeight - 140
+
+    const bg = new Graphics()
+    this.dialogBg = bg
+    bg.roundRect(20, boxTop, width, height, 8)
     bg.fill({ color: 0x000033, alpha: 0.92 })
     bg.stroke({ width: 3, color: 0xffffff })
-    bg.visible = false
+    bg.visible = this.isShowingDialog
     this.dialogLayer.addChild(bg)
 
     const nameStyle = new TextStyle({
@@ -220,10 +277,10 @@ export class RPGRenderer {
       fill: 0xffe066,
       fontWeight: 'bold',
     })
-    const name = new PixiText({ text: '', style: nameStyle })
+    const name = new PixiText({ text: this.currentDialogName, style: nameStyle })
     name.x = 40
-    name.y = this.screenHeight - height - 4
-    name.visible = false
+    name.y = boxTop + 10
+    name.visible = this.isShowingDialog
     this.dialogName = name
     this.dialogLayer.addChild(name)
 
@@ -233,20 +290,60 @@ export class RPGRenderer {
       fill: 0xffffff,
       wordWrap: true,
       wordWrapWidth: width - 40,
+      breakWords: true,
       lineHeight: 26,
     })
-    const text = new PixiText({ text: '', style: textStyle })
+    const text = new PixiText({ text: this.currentDialogMessage, style: textStyle })
     text.x = 40
-    text.y = this.screenHeight - height - 20 + 24
-    text.visible = false
+    text.y = boxTop + 40
+    text.visible = this.isShowingDialog
     this.dialogText = text
     this.dialogLayer.addChild(text)
+
+    // 長文対応: ダイアログ箱の内側でクリップ
+    const mask = new Graphics()
+    mask.rect(20, boxTop, width, height)
+    mask.fill(0xffffff)
+    this.dialogLayer.addChild(mask)
+    text.mask = mask
+  }
+
+  /** ダイアログを現在の screenWidth/screenHeight と currentDialog* で再構築する */
+  private redrawDialog(): void {
+    // 既存を破棄してから再構築（show/hide 状態は isShowingDialog から復元される）
+    if (this.dialogBg) {
+      this.dialogBg.destroy()
+      this.dialogBg = null
+    }
+    if (this.dialogName) {
+      this.dialogName.destroy()
+      this.dialogName = null
+    }
+    if (this.dialogText) {
+      this.dialogText.destroy()
+      this.dialogText = null
+    }
+    this.drawDialog()
   }
 
   // --- 入力 ---
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (!this.initialized) return
+
+    // キーリピートはすべて無視（ダイアログちらつき・移動過剰対策）
+    if (e.repeat) return
+
+    // input/textarea/contentEditable にフォーカスがあるときはキー奪取しない
+    const active = document.activeElement
+    if (
+      active &&
+      (active.tagName === 'INPUT' ||
+        active.tagName === 'TEXTAREA' ||
+        (active as HTMLElement).isContentEditable)
+    ) {
+      return
+    }
 
     if (this.isShowingDialog) {
       if (e.key === ' ' || e.key === 'Enter') {
@@ -357,6 +454,8 @@ export class RPGRenderer {
 
   private showDialog(name: string, message: string): void {
     this.isShowingDialog = true
+    this.currentDialogName = name
+    this.currentDialogMessage = message
     if (this.dialogBg) this.dialogBg.visible = true
     if (this.dialogName) {
       this.dialogName.text = name
@@ -373,6 +472,20 @@ export class RPGRenderer {
     if (this.dialogBg) this.dialogBg.visible = false
     if (this.dialogName) this.dialogName.visible = false
     if (this.dialogText) this.dialogText.visible = false
+  }
+
+  // --- リサイズ ---
+
+  private handleResize = (): void => {
+    if (!this.initialized) return
+    const parent = (this.app.canvas as HTMLCanvasElement).parentElement
+    if (!parent) return
+    const rect = parent.getBoundingClientRect()
+    this.screenWidth = Math.max(320, Math.floor(rect.width || 800))
+    this.screenHeight = Math.max(240, Math.floor(rect.height || 600))
+    this.app.renderer.resize(this.screenWidth, this.screenHeight)
+    this.redrawDialog()
+    this.centerCamera()
   }
 
   // --- ティック ---
