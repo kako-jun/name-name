@@ -58,7 +58,7 @@ pub fn parse(input: &str) -> Document {
         let trimmed = line.trim();
 
         // Scene heading: ## 1-1: 教室の朝
-        if trimmed.starts_with("## ") {
+        if let Some(rest) = trimmed.strip_prefix("## ") {
             // Save previous scene
             if let Some(mut scene) = current_scene.take() {
                 scene.events = std::mem::take(&mut current_events);
@@ -67,8 +67,6 @@ pub fn parse(input: &str) -> Document {
             last_character = None;
             last_expression = None;
             last_position = None;
-
-            let rest = &trimmed[3..];
             if let Some(colon_pos) = rest.find(':') {
                 let id = rest[..colon_pos].trim().to_string();
                 let title = rest[colon_pos + 1..].trim().to_string();
@@ -97,7 +95,12 @@ pub fn parse(input: &str) -> Document {
         }
 
         // Directive: [...]
-        if trimmed.starts_with('[') && !trimmed.starts_with("[選択]") && !trimmed.starts_with("[/選択]") && !trimmed.starts_with("[条件:") && !trimmed.starts_with("[/条件]") {
+        if trimmed.starts_with('[')
+            && !trimmed.starts_with("[選択]")
+            && !trimmed.starts_with("[/選択]")
+            && !trimmed.starts_with("[条件:")
+            && !trimmed.starts_with("[/条件]")
+        {
             if let Some(event) = parse_directive(trimmed) {
                 current_events.push(event);
             }
@@ -165,13 +168,14 @@ pub fn parse(input: &str) -> Document {
         // Expression change: **トモ** → angry_1:
         if trimmed.starts_with("**") && trimmed.contains('→') {
             if let Some(event) = parse_expression_change(trimmed) {
-                match &event {
-                    Event::ExpressionChange { character, expression } => {
-                        last_character = Some(character.clone());
-                        last_expression = Some(expression.clone());
-                        // position stays the same
-                    }
-                    _ => {}
+                if let Event::ExpressionChange {
+                    character,
+                    expression,
+                } = &event
+                {
+                    last_character = Some(character.clone());
+                    last_expression = Some(expression.clone());
+                    // position stays the same
                 }
                 current_events.push(event);
             }
@@ -195,7 +199,11 @@ pub fn parse(input: &str) -> Document {
                 if next_trimmed.is_empty() {
                     break;
                 }
-                if next_trimmed.starts_with('[') || next_trimmed.starts_with("## ") || next_trimmed.starts_with("**") || next_trimmed.starts_with("> ") {
+                if next_trimmed.starts_with('[')
+                    || next_trimmed.starts_with("## ")
+                    || next_trimmed.starts_with("**")
+                    || next_trimmed.starts_with("> ")
+                {
                     break;
                 }
                 text_lines.push(next_trimmed.to_string());
@@ -216,7 +224,11 @@ pub fn parse(input: &str) -> Document {
         if trimmed.starts_with("> ") {
             let mut narration_lines: Vec<String> = Vec::new();
             while pos < len && lines[pos].trim().starts_with("> ") {
-                let text = lines[pos].trim().strip_prefix("> ").unwrap_or("").to_string();
+                let text = lines[pos]
+                    .trim()
+                    .strip_prefix("> ")
+                    .unwrap_or("")
+                    .to_string();
                 narration_lines.push(text);
                 pos += 1;
             }
@@ -235,7 +247,11 @@ pub fn parse(input: &str) -> Document {
                 if next_trimmed.is_empty() {
                     break;
                 }
-                if next_trimmed.starts_with('[') || next_trimmed.starts_with("## ") || next_trimmed.starts_with("**") || next_trimmed.starts_with("> ") {
+                if next_trimmed.starts_with('[')
+                    || next_trimmed.starts_with("## ")
+                    || next_trimmed.starts_with("**")
+                    || next_trimmed.starts_with("> ")
+                {
                     break;
                 }
                 text_lines.push(next_trimmed.to_string());
@@ -276,7 +292,10 @@ pub fn parse(input: &str) -> Document {
 /// Parse just the events from a string (used for nested condition blocks)
 fn parse_events_only(input: &str) -> Vec<Event> {
     // Wrap in a fake document so we can reuse parsing logic
-    let fake = format!("---\nengine: name-name\nchapter: 1\ntitle: \"tmp\"\n---\n\n## tmp-1: tmp\n\n{}", input);
+    let fake = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"tmp\"\n---\n\n## tmp-1: tmp\n\n{}",
+        input
+    );
     let doc = parse(&fake);
     if let Some(chapter) = doc.chapters.first() {
         if let Some(scene) = chapter.scenes.first() {
@@ -446,7 +465,12 @@ title: "テスト"
         assert_eq!(doc.chapters[0].scenes.len(), 1);
         assert_eq!(doc.chapters[0].scenes[0].events.len(), 1);
         match &doc.chapters[0].scenes[0].events[0] {
-            Event::Dialog { character, expression, position, text } => {
+            Event::Dialog {
+                character,
+                expression,
+                position,
+                text,
+            } => {
                 assert_eq!(character, &Some("カコ".to_string()));
                 assert_eq!(expression, &Some("suppin_1".to_string()));
                 assert_eq!(position, &Some("左".to_string()));
@@ -479,15 +503,52 @@ title: "テスト"
         let doc = parse(input);
         let events = &doc.chapters[0].scenes[0].events;
         assert_eq!(events.len(), 9);
-        assert_eq!(events[0], Event::Background { path: "radius/BG_COMMON_GRAD_3.png".to_string() });
-        assert_eq!(events[1], Event::Bgm { path: Some("amehure.ogg".to_string()), action: BgmAction::Play });
-        assert_eq!(events[2], Event::Blackout { action: BlackoutAction::Off });
-        assert_eq!(events[3], Event::Se { path: "se_test.ogg".to_string() });
-        assert_eq!(events[4], Event::Blackout { action: BlackoutAction::On });
+        assert_eq!(
+            events[0],
+            Event::Background {
+                path: "radius/BG_COMMON_GRAD_3.png".to_string()
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::Bgm {
+                path: Some("amehure.ogg".to_string()),
+                action: BgmAction::Play
+            }
+        );
+        assert_eq!(
+            events[2],
+            Event::Blackout {
+                action: BlackoutAction::Off
+            }
+        );
+        assert_eq!(
+            events[3],
+            Event::Se {
+                path: "se_test.ogg".to_string()
+            }
+        );
+        assert_eq!(
+            events[4],
+            Event::Blackout {
+                action: BlackoutAction::On
+            }
+        );
         assert_eq!(events[5], Event::SceneTransition);
-        assert_eq!(events[6], Event::Exit { character: "トモ".to_string() });
+        assert_eq!(
+            events[6],
+            Event::Exit {
+                character: "トモ".to_string()
+            }
+        );
         assert_eq!(events[7], Event::Wait { ms: 1000 });
-        assert_eq!(events[8], Event::Bgm { path: None, action: BgmAction::Stop });
+        assert_eq!(
+            events[8],
+            Event::Bgm {
+                path: None,
+                action: BgmAction::Stop
+            }
+        );
     }
 
     #[test]
