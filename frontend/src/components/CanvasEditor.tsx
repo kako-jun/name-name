@@ -608,7 +608,7 @@ function CanvasEditor({
 
   const cursor = isPanning ? 'grabbing' : 'grab'
 
-  // searchQuery は現時点では UI 表示のみ（既存挙動と同じ。将来のフィルタ用）
+  // 検索バーは表示のみ。フィルタ機能は別 Issue で実装予定
   void searchQuery
 
   return (
