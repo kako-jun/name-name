@@ -57,6 +57,8 @@ export class RPGRenderer {
   private screenWidth = 0
   private screenHeight = 0
 
+  private resizeRaf: number | null = null
+
   private initialized = false
 
   constructor() {
@@ -149,6 +151,10 @@ export class RPGRenderer {
   destroy(): void {
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('resize', this.handleResize)
+    if (this.resizeRaf !== null) {
+      cancelAnimationFrame(this.resizeRaf)
+      this.resizeRaf = null
+    }
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
       this.app.destroy(true, { children: true })
@@ -156,10 +162,17 @@ export class RPGRenderer {
     }
   }
 
+  /** layer の既存子要素を destroy してから remove する（GPU リソースリーク防止） */
+  private clearLayer(layer: Container): void {
+    for (const child of layer.removeChildren()) {
+      child.destroy()
+    }
+  }
+
   // --- 描画 ---
 
   private drawMap(): void {
-    this.mapLayer.removeChildren()
+    this.clearLayer(this.mapLayer)
     // 色ごとに単一 Graphics にまとめて描画（タイル数分の Graphics 生成を避ける）
     const byColor = new Map<number, Array<[number, number]>>()
     for (let y = 0; y < this.mapTiles.length; y++) {
@@ -196,7 +209,7 @@ export class RPGRenderer {
   }
 
   private drawNPCs(npcData: NPCData[]): void {
-    this.npcLayer.removeChildren()
+    this.clearLayer(this.npcLayer)
     this.npcs = []
     for (const data of npcData) {
       const container = new Container()
@@ -214,7 +227,7 @@ export class RPGRenderer {
   }
 
   private drawPlayer(): void {
-    this.playerLayer.removeChildren()
+    this.clearLayer(this.playerLayer)
     const container = new Container()
     const body = new Graphics()
     const size = this.tileSize - 4
@@ -478,14 +491,20 @@ export class RPGRenderer {
 
   private handleResize = (): void => {
     if (!this.initialized) return
-    const parent = (this.app.canvas as HTMLCanvasElement).parentElement
-    if (!parent) return
-    const rect = parent.getBoundingClientRect()
-    this.screenWidth = Math.max(320, Math.floor(rect.width || 800))
-    this.screenHeight = Math.max(240, Math.floor(rect.height || 600))
-    this.app.renderer.resize(this.screenWidth, this.screenHeight)
-    this.redrawDialog()
-    this.centerCamera()
+    // ドラッグリサイズ中の連続発火を requestAnimationFrame で間引く
+    if (this.resizeRaf !== null) return
+    this.resizeRaf = requestAnimationFrame(() => {
+      this.resizeRaf = null
+      if (!this.initialized) return
+      const parent = (this.app.canvas as HTMLCanvasElement).parentElement
+      if (!parent) return
+      const rect = parent.getBoundingClientRect()
+      this.screenWidth = Math.max(320, Math.floor(rect.width || 800))
+      this.screenHeight = Math.max(240, Math.floor(rect.height || 600))
+      this.app.renderer.resize(this.screenWidth, this.screenHeight)
+      this.redrawDialog()
+      this.centerCamera()
+    })
   }
 
   // --- ティック ---
