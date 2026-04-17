@@ -2,6 +2,13 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import type { EventDocument, EventChapter, EventScene, Event, EventRef, Viewport } from '../types'
 import ChapterCard from './ChapterCard'
 
+/** イベントのドロップ先位置。挿入位置を 0..scene.events.length の整数で表す。 */
+interface EventDropTarget {
+  chapterIdx: number
+  sceneIdx: number
+  position: number
+}
+
 interface CanvasEditorProps {
   doc: EventDocument
   onDocChange: (doc: EventDocument) => void
@@ -40,25 +47,28 @@ function CanvasEditor({
   const [panStart, setPanStart] = useState({ x: 0, y: 0 })
   const [searchQuery, setSearchQuery] = useState('')
   const [editingEvent, setEditingEvent] = useState<EventRef | null>(null)
-  const [editingSceneRef, setEditingSceneRef] = useState<{ chapterIdx: number; sceneIdx: number } | null>(null)
+  const [editingSceneRef, setEditingSceneRef] = useState<{
+    chapterIdx: number
+    sceneIdx: number
+  } | null>(null)
   const [editingChapterIdx, setEditingChapterIdx] = useState<number | null>(null)
   const [newlyAddedEvent, setNewlyAddedEvent] = useState<EventRef | null>(null)
-  const [newlyAddedScene, setNewlyAddedScene] = useState<{ chapterIdx: number; sceneIdx: number } | null>(null)
+  const [newlyAddedScene, setNewlyAddedScene] = useState<{
+    chapterIdx: number
+    sceneIdx: number
+  } | null>(null)
   const [newlyAddedChapter, setNewlyAddedChapter] = useState<number | null>(null)
   const [draggedEvent, setDraggedEvent] = useState<EventRef | null>(null)
-  const [draggedScene, setDraggedScene] = useState<{ chapterIdx: number; sceneIdx: number } | null>(null)
-  const [draggedChapter, setDraggedChapter] = useState<number | null>(null)
-  const [eventDropTarget, setEventDropTarget] = useState<(EventRef & { position: number }) | null>(null)
-  const [sceneDropTarget, setSceneDropTarget] = useState<{ chapterIdx: number; position: number } | null>(null)
-  const [chapterDropTarget, setChapterDropTarget] = useState<number | null>(null)
-
-  // ドキュメントを更新する共通ヘルパー
-  const updateDoc = useCallback(
-    (updater: (d: EventDocument) => EventDocument) => {
-      onDocChange(updater(doc))
-    },
-    [doc, onDocChange]
+  const [draggedScene, setDraggedScene] = useState<{ chapterIdx: number; sceneIdx: number } | null>(
+    null
   )
+  const [draggedChapter, setDraggedChapter] = useState<number | null>(null)
+  const [eventDropTarget, setEventDropTarget] = useState<EventDropTarget | null>(null)
+  const [sceneDropTarget, setSceneDropTarget] = useState<{
+    chapterIdx: number
+    position: number
+  } | null>(null)
+  const [chapterDropTarget, setChapterDropTarget] = useState<number | null>(null)
 
   // 編集モード終了時の処理（新規追加されたものがデフォルト値のままなら削除）
   const handleEditingEnd = useCallback(() => {
@@ -111,9 +121,7 @@ function CanvasEditor({
         newDoc = {
           ...newDoc,
           chapters: newDoc.chapters.map((ch, ci) =>
-            ci === chapterIdx
-              ? { ...ch, scenes: ch.scenes.filter((_, si) => si !== sceneIdx) }
-              : ch
+            ci === chapterIdx ? { ...ch, scenes: ch.scenes.filter((_, si) => si !== sceneIdx) } : ch
           ),
         }
       }
@@ -166,26 +174,24 @@ function CanvasEditor({
   // イベントの内容を変更
   const handleEventChange = useCallback(
     (chapterIdx: number, sceneIdx: number, eventIdx: number, newEvent: Event) => {
-      updateDoc((d) => ({
-        ...d,
-        chapters: d.chapters.map((ch, ci) =>
-          ci === chapterIdx
-            ? {
-                ...ch,
-                scenes: ch.scenes.map((sc, si) =>
-                  si === sceneIdx
-                    ? {
-                        ...sc,
-                        events: sc.events.map((ev, ei) => (ei === eventIdx ? newEvent : ev)),
-                      }
-                    : sc
-                ),
-              }
-            : ch
-        ),
-      }))
+      const newChapters = doc.chapters.map((ch, ci) =>
+        ci === chapterIdx
+          ? {
+              ...ch,
+              scenes: ch.scenes.map((sc, si) =>
+                si === sceneIdx
+                  ? {
+                      ...sc,
+                      events: sc.events.map((ev, ei) => (ei === eventIdx ? newEvent : ev)),
+                    }
+                  : sc
+              ),
+            }
+          : ch
+      )
+      onDocChange({ ...doc, chapters: newChapters })
     },
-    [updateDoc]
+    [doc, onDocChange]
   )
 
   // イベントのドラッグ開始
@@ -196,7 +202,7 @@ function CanvasEditor({
   const handleEventDragOver = useCallback(
     (e: React.DragEvent, chapterIdx: number, sceneIdx: number, position: number) => {
       e.preventDefault()
-      setEventDropTarget({ chapterIdx, sceneIdx, eventIdx: position, position })
+      setEventDropTarget({ chapterIdx, sceneIdx, position })
     },
     []
   )
@@ -449,9 +455,7 @@ function CanvasEditor({
   const handleDeleteScene = useCallback(
     (chapterIdx: number, sceneIdx: number) => {
       const newChapters = doc.chapters.map((ch, ci) =>
-        ci === chapterIdx
-          ? { ...ch, scenes: ch.scenes.filter((_, si) => si !== sceneIdx) }
-          : ch
+        ci === chapterIdx ? { ...ch, scenes: ch.scenes.filter((_, si) => si !== sceneIdx) } : ch
       )
       onDocChange({ ...doc, chapters: newChapters })
       setEditingSceneRef(null)
@@ -627,7 +631,7 @@ function CanvasEditor({
         <div className="flex gap-8 p-8">
           {doc.chapters.map((chapter, chapterIdx) => (
             <ChapterCard
-              key={`chapter-${chapterIdx}-${chapter.number}`}
+              key={chapter.number}
               chapter={chapter}
               chapterIdx={chapterIdx}
               isDark={isDark}

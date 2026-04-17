@@ -12,14 +12,19 @@ interface EventCardProps {
   editingRef: React.RefObject<HTMLDivElement>
   isDragging: boolean
   draggedEvent: EventRef | null
-  dropTarget: (EventRef & { position: number }) | null
+  dropTarget: { chapterIdx: number; sceneIdx: number; position: number } | null
   onEventChange: (chapterIdx: number, sceneIdx: number, eventIdx: number, newEvent: Event) => void
   onDeleteEvent: (chapterIdx: number, sceneIdx: number, eventIdx: number) => void
   onStartEditing: (ref: EventRef) => void
   onSelectEvent: (ref: EventRef) => void
   onEventDragStart: (ref: EventRef) => void
   onEventDragEnd: () => void
-  onEventDragOver: (e: React.DragEvent, chapterIdx: number, sceneIdx: number, position: number) => void
+  onEventDragOver: (
+    e: React.DragEvent,
+    chapterIdx: number,
+    sceneIdx: number,
+    position: number
+  ) => void
   onEventDrop: (e: React.DragEvent) => void
 }
 
@@ -287,9 +292,7 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     const d = event.Dialog
     return (
       <div className="space-y-1">
-        <div
-          className={`text-sm font-semibold ml-2 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
-        >
+        <div className={`text-sm font-semibold ml-2 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
           {d.character || '（キャラクター名）'}
         </div>
         <div
