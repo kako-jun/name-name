@@ -121,6 +121,9 @@ function EditorScreen({
         const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
         if (!response.ok) {
           console.error(`Failed to load chapters: ${response.status}`)
+          // ロード失敗時もエディタで操作を開始できるよう、空 doc にフォールバックする
+          setDoc({ engine: 'name-name', chapters: [] })
+          setSaveError('プロジェクトの読み込みに失敗しました')
           return
         }
         const data = await response.json()
@@ -138,6 +141,8 @@ function EditorScreen({
         }
       } catch (error) {
         console.error('Failed to load chapters:', error)
+        setDoc({ engine: 'name-name', chapters: [] })
+        setSaveError('プロジェクトの読み込みに失敗しました')
       }
     }
     loadChapters()
@@ -267,10 +272,7 @@ function EditorScreen({
   }
 
   // プレイモード用のフラット Event[]
-  const novelEvents = useMemo(
-    () => (doc ? flattenDocumentEvents(doc) : []),
-    [doc]
-  )
+  const novelEvents = useMemo(() => (doc ? flattenDocumentEvents(doc) : []), [doc])
 
   return (
     <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
