@@ -14,7 +14,7 @@ interface SceneCardProps {
   draggedScene: { chapterIdx: number; sceneIdx: number } | null
   sceneDropTarget: { chapterIdx: number; position: number } | null
   draggedEvent: EventRef | null
-  eventDropTarget: (EventRef & { position: number }) | null
+  eventDropTarget: { chapterIdx: number; sceneIdx: number; position: number } | null
   onSceneTitleChange: (chapterIdx: number, sceneIdx: number, title: string) => void
   onDeleteScene: (chapterIdx: number, sceneIdx: number) => void
   onStartEditingScene: (chapterIdx: number, sceneIdx: number) => void
@@ -22,14 +22,24 @@ interface SceneCardProps {
   onSceneDragEnd: () => void
   onSceneDragOver: (e: React.DragEvent, chapterIdx: number, position: number) => void
   onSceneDrop: (e: React.DragEvent) => void
-  onAddEvent: (chapterIdx: number, sceneIdx: number, position: number, variant: 'Dialog' | 'Narration') => void
+  onAddEvent: (
+    chapterIdx: number,
+    sceneIdx: number,
+    position: number,
+    variant: 'Dialog' | 'Narration'
+  ) => void
   onEventChange: (chapterIdx: number, sceneIdx: number, eventIdx: number, newEvent: Event) => void
   onDeleteEvent: (chapterIdx: number, sceneIdx: number, eventIdx: number) => void
   onStartEditingEvent: (ref: EventRef) => void
   onSelectEvent: (ref: EventRef) => void
   onEventDragStart: (ref: EventRef) => void
   onEventDragEnd: () => void
-  onEventDragOver: (e: React.DragEvent, chapterIdx: number, sceneIdx: number, position: number) => void
+  onEventDragOver: (
+    e: React.DragEvent,
+    chapterIdx: number,
+    sceneIdx: number,
+    position: number
+  ) => void
   onEventDrop: (e: React.DragEvent) => void
 }
 
