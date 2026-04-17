@@ -12,11 +12,17 @@ interface CanvasEditorProps {
 }
 
 /**
- * ユニークなシーンIDを生成する。emitterが新たなIDを割り振るため
- * 一時的なものでよいが、Reactキーの衝突は避ける。
+ * 指定の章に対して、章番号ベースの連番シーンIDを採番する（例: 章 number=1 の新規シーンは "1-1", "1-2", ...）。
+ * このIDは Markdown に書き込まれて永続化されるため、タイムスタンプや乱数ではなく人間可読で安定したものにする。
+ * 既存IDとの衝突を避けるため 1 から順に走査し、1000 連続で衝突した場合のみ tie-breaker として timestamp にフォールバックする。
  */
-function makeSceneId(): string {
-  return `scene-${Date.now()}-${Math.floor(Math.random() * 10000)}`
+function nextSceneId(chapter: EventChapter, chapterNumber: number): string {
+  const existing = new Set(chapter.scenes.map((s) => s.id))
+  for (let i = 1; i < 1000; i++) {
+    const id = `${chapterNumber}-${i}`
+    if (!existing.has(id)) return id
+  }
+  return `${chapterNumber}-${Date.now()}`
 }
 
 function CanvasEditor({
@@ -419,7 +425,13 @@ function CanvasEditor({
   // シーンを追加
   const handleAddScene = useCallback(
     (chapterIdx: number, position: number) => {
-      const newScene: EventScene = { id: makeSceneId(), title: '新しいシーン', events: [] }
+      const chapter = doc.chapters[chapterIdx]
+      if (!chapter) return
+      const newScene: EventScene = {
+        id: nextSceneId(chapter, chapter.number),
+        title: '新しいシーン',
+        events: [],
+      }
       const newChapters = doc.chapters.map((ch, ci) => {
         if (ci !== chapterIdx) return ch
         const newScenes = [...ch.scenes]
