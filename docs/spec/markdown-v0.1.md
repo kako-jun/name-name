@@ -26,7 +26,7 @@ default_bgm: amehure.ogg
 | `hidden` | boolean | No | `true` の場合エディタで非表示（デフォルト: `false`） |
 | `default_bgm` | string | No | 章全体のデフォルトBGMファイルパス |
 
-フロントマターは Event ではなく、Chapter 構造体のフィールドとしてパースされる。
+フロントマターは Event ではなく、parser の Chapter 構造体（Rust 側）のフィールドとしてパースされる。フロントエンド側の EventChapter 型とは別物なので注意する。
 
 ## シーン
 
