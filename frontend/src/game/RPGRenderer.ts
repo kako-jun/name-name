@@ -56,7 +56,6 @@ export class RPGRenderer {
   private screenHeight = 0
 
   private initialized = false
-  private container: HTMLElement | null = null
 
   constructor() {
     this.app = new Application()
@@ -69,7 +68,6 @@ export class RPGRenderer {
 
   /** PixiJS Application を初期化し、親要素に Canvas を挿入する */
   async init(container: HTMLElement): Promise<void> {
-    this.container = container
     const rect = container.getBoundingClientRect()
     this.screenWidth = Math.max(320, Math.floor(rect.width || 800))
     this.screenHeight = Math.max(240, Math.floor(rect.height || 600))
@@ -122,7 +120,6 @@ export class RPGRenderer {
       this.app.destroy(true, { children: true })
       this.initialized = false
     }
-    this.container = null
   }
 
   // --- 描画 ---
