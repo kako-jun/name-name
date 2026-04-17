@@ -50,6 +50,9 @@ function EditorScreen({
   const [mode, setMode] = useState<Mode>('edit')
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [doc, setDoc] = useState<EventDocument | null>(null)
+  // CanvasEditor を再マウントしてエディタ内部 state を完全リセットするためのバージョン。
+  // discard 成功時などにインクリメントする。
+  const [docVersion, setDocVersion] = useState(0)
   const [selectedEvent, setSelectedEvent] = useState<EventRef | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -84,14 +87,17 @@ function EditorScreen({
 
   // ユーザー操作で doc が変わったら emit し、rawMarkdown を更新する。
   // rawMarkdown の更新は autosave useEffect 経由で backend に PUT される。
+  // emit が失敗した場合は rawMarkdown と doc の desync を避けるため、doc を元に戻す。
   const handleDocChange = async (newDoc: EventDocument) => {
+    const prev = doc
     setDoc(newDoc)
     try {
       const md = await emitMarkdown(newDoc)
       setRawMarkdown(md)
     } catch (err) {
       console.error('emitMarkdown failed:', err)
-      setSaveError('Markdown生成に失敗しました')
+      setDoc(prev)
+      setSaveError('Markdown生成に失敗したため変更を破棄しました')
     }
   }
 
@@ -248,6 +254,9 @@ function EditorScreen({
         initialMarkdownRef.current = markdown
         await parseAndSetDoc(markdown)
       }
+      // discard で doc が差し替わるため、選択状態・CanvasEditor 内部 state を完全リセット
+      setSelectedEvent(null)
+      setDocVersion((v) => v + 1)
       setHasUnsavedChanges(false)
     } catch (error) {
       console.error('Failed to discard changes:', error)
@@ -373,6 +382,7 @@ function EditorScreen({
           mode === 'edit' ? (
             doc !== null ? (
               <CanvasEditor
+                key={docVersion}
                 doc={doc}
                 onDocChange={handleDocChange}
                 isDark={isDark}
