@@ -1,8 +1,10 @@
-import { useState } from 'react'
-import { MapData, TileType, TILE_COLORS } from '../types/rpg'
+import { useEffect, useState } from 'react'
+import { MapData, RPGProject, TileType, TILE_COLORS } from '../types/rpg'
+import RPGPlayer from './RPGPlayer'
 
 interface MapEditorProps {
   mapData: MapData
+  rpgProject: RPGProject
   onChange: (mapData: MapData) => void
   isDark: boolean
 }
@@ -14,9 +16,23 @@ const TILE_NAMES = {
   [TileType.WATER]: '水',
 }
 
-function MapEditor({ mapData, onChange, isDark }: MapEditorProps) {
+function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
   const [selectedTile, setSelectedTile] = useState<TileType>(TileType.GRASS)
   const [isPainting, setIsPainting] = useState(false)
+  const [previewView, setPreviewView] = useState<'topdown' | 'raycast' | null>(null)
+
+  useEffect(() => {
+    if (previewView === null) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setPreviewView(null)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [previewView])
 
   const handleTileClick = (x: number, y: number) => {
     const newTiles = mapData.tiles.map((row, rowIndex) =>
@@ -50,7 +66,7 @@ function MapEditor({ mapData, onChange, isDark }: MapEditorProps) {
       <div
         className={`p-4 border-b ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-white'}`}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className={`text-sm font-medium ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
             タイル選択:
           </span>
@@ -79,6 +95,28 @@ function MapEditor({ mapData, onChange, isDark }: MapEditorProps) {
                 </button>
               )
             })}
+          </div>
+          <div className="flex gap-2 ml-auto">
+            <button
+              onClick={() => setPreviewView('raycast')}
+              className={`px-3 py-2 rounded text-sm transition-colors ${
+                isDark
+                  ? 'bg-purple-700 text-white hover:bg-purple-600'
+                  : 'bg-purple-500 text-white hover:bg-purple-600'
+              }`}
+            >
+              Raycastでプレビュー
+            </button>
+            <button
+              onClick={() => setPreviewView('topdown')}
+              className={`px-3 py-2 rounded text-sm transition-colors ${
+                isDark
+                  ? 'bg-emerald-700 text-white hover:bg-emerald-600'
+                  : 'bg-emerald-500 text-white hover:bg-emerald-600'
+              }`}
+            >
+              見下ろしでプレビュー
+            </button>
           </div>
         </div>
       </div>
@@ -116,6 +154,34 @@ function MapEditor({ mapData, onChange, isDark }: MapEditorProps) {
           </div>
         </div>
       </div>
+
+      {/* プレビューモーダル */}
+      {previewView && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200]"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPreviewView(null)
+          }}
+        >
+          <div
+            className={`relative w-[90vw] h-[90vh] rounded-lg overflow-hidden ${isDark ? 'bg-gray-900' : 'bg-white'}`}
+          >
+            <button
+              onClick={() => setPreviewView(null)}
+              className="absolute top-2 right-2 z-10 px-3 py-1 rounded bg-gray-700 text-white hover:bg-gray-600"
+              aria-label="プレビューを閉じる"
+            >
+              閉じる (Esc)
+            </button>
+            <div
+              className={`absolute top-2 left-2 z-10 px-3 py-1 rounded text-sm ${isDark ? 'bg-gray-800 text-gray-200' : 'bg-gray-200 text-gray-800'}`}
+            >
+              {previewView === 'raycast' ? 'Raycast プレビュー' : '見下ろし プレビュー'}
+            </div>
+            <RPGPlayer gameData={rpgProject} view={previewView} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
