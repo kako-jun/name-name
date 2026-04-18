@@ -16,26 +16,79 @@ use name_name_parser::parser;
 const FRIDAY1930_SAMPLE: &str = include_str!("fixtures/friday1930-sample.md");
 
 #[test]
-fn friday1930_sample_parses_two_scenes() {
+fn friday1930_sample_parses_three_scenes() {
     let doc = parser::parse(FRIDAY1930_SAMPLE);
     assert_eq!(doc.engine, "name-name");
     assert_eq!(doc.chapters.len(), 1);
     let chapter = &doc.chapters[0];
     assert_eq!(chapter.number, 1);
-    assert_eq!(chapter.scenes.len(), 2);
+    assert_eq!(chapter.scenes.len(), 3);
+    assert_eq!(chapter.scenes[0].id, "prologue-morning");
+    assert_eq!(chapter.scenes[1].id, "abel-village");
+    assert_eq!(chapter.scenes[2].id, "dungeon-north");
 }
 
 #[test]
-fn friday1930_both_scenes_are_raycast() {
+fn friday1930_view_is_mixed() {
+    // プロローグはノベル（view 指定なし → TopDown デフォルト）、
+    // RPG 2シーンは Raycast。
     let doc = parser::parse(FRIDAY1930_SAMPLE);
-    for scene in &doc.chapters[0].scenes {
-        assert_eq!(
-            scene.view,
-            SceneView::Raycast,
-            "scene {:?} should be raycast",
-            scene.id
-        );
-    }
+    assert_eq!(doc.chapters[0].scenes[0].view, SceneView::TopDown);
+    assert_eq!(doc.chapters[0].scenes[1].view, SceneView::Raycast);
+    assert_eq!(doc.chapters[0].scenes[2].view, SceneView::Raycast);
+}
+
+#[test]
+fn friday1930_prologue_has_novel_elements() {
+    // ノベル要素（ダイアログ・ナレーション・背景・BGM・暗転解除・SE・退場・場面転換）
+    // が parser を通って Event として抽出されることを担保する。
+    let doc = parser::parse(FRIDAY1930_SAMPLE);
+    let prologue = &doc.chapters[0].scenes[0];
+
+    let has_background = prologue
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::Background { .. }));
+    assert!(has_background, "prologue should contain Background event");
+
+    let has_bgm = prologue
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::Bgm { .. }));
+    assert!(has_bgm, "prologue should contain Bgm event");
+
+    let has_narration = prologue
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::Narration { .. }));
+    assert!(has_narration, "prologue should contain Narration event");
+
+    // プロローグにはデイジー×3 + アベル×2 のダイアログがある想定。
+    // 最小3件（話者が2人以上いて掛け合いが成立する）をスモークの契約とする。
+    let dialog_count = prologue
+        .events
+        .iter()
+        .filter(|e| matches!(e, Event::Dialog { .. }))
+        .count();
+    assert!(dialog_count >= 3, "prologue should have multiple Dialog events");
+
+    let has_se = prologue.events.iter().any(|e| matches!(e, Event::Se { .. }));
+    assert!(has_se, "prologue should contain Se event");
+
+    let has_exit = prologue
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::Exit { .. }));
+    assert!(has_exit, "prologue should contain Exit event");
+
+    let has_scene_transition = prologue
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::SceneTransition));
+    assert!(
+        has_scene_transition,
+        "prologue should end with SceneTransition"
+    );
 }
 
 #[test]

@@ -299,9 +299,9 @@ MapEditor/NPCEditor の変更
 
 name-name の parser / emitter を壊すと下流ゲームが一斉に動かなくなるため、代表プロジェクトの最小 Markdown を `parser/tests/fixtures/` に fixture として取り込み、構造を検証するスモークテストを置く。
 
-| fixture | テスト | 対象下流 |
-|---|---|---|
-| `fixtures/friday1930-sample.md` | `friday1930_smoke_test.rs` | [friday-1930](https://github.com/kako-jun/friday-1930)（raycast プロトタイプ） |
+| fixture | テスト | 対象下流 | カバー |
+|---|---|---|---|
+| `fixtures/friday1930-sample.md` | `friday1930_smoke_test.rs` | [friday-1930](https://github.com/kako-jun/friday-1930) | ノベル（ダイアログ/ナレーション/背景/BGM/暗転/SE/退場/場面転換）+ RPG（RpgMap/PlayerStart/Npc/view=raycast）の混在 |
 
 **運用ルール:**
 - 下流の `chapters/all.md` を更新したら、対応する fixture も手動で同期する（ファイルコピー）
