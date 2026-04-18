@@ -26,6 +26,39 @@ pub enum FlagValue {
     Number(f64),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RpgMapData {
+    pub width: u32,
+    pub height: u32,
+    pub tile_size: u32,
+    pub tiles: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NpcData {
+    pub id: String,
+    pub name: String,
+    pub x: u32,
+    pub y: u32,
+    pub color: u32,
+    pub message: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerStartData {
+    pub x: u32,
+    pub y: u32,
+    pub direction: Direction,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub enum Event {
@@ -73,6 +106,9 @@ pub enum Event {
         character: String,
         expression: String,
     },
+    RpgMap(RpgMapData),
+    PlayerStart(PlayerStartData),
+    Npc(NpcData),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

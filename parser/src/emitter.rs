@@ -189,7 +189,79 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("**{}** → {}:\n", character, expression));
                 prev_was_dialog_or_text = false;
             }
+            Event::RpgMap(map) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "[マップ {}x{} タイル={}]\n",
+                    map.width, map.height, map.tile_size
+                ));
+                for row in &map.tiles {
+                    let mut line = String::with_capacity(map.width as usize);
+                    for (i, t) in row.iter().enumerate() {
+                        if i >= map.width as usize {
+                            break;
+                        }
+                        line.push(tile_char(*t));
+                    }
+                    // pad if short
+                    while line.chars().count() < map.width as usize {
+                        line.push('G');
+                    }
+                    out.push_str(&line);
+                    out.push('\n');
+                }
+                out.push_str("[/マップ]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::PlayerStart(p) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "[プレイヤー @{},{} 向き={}]\n",
+                    p.x,
+                    p.y,
+                    direction_ja(p.direction)
+                ));
+                prev_was_dialog_or_text = false;
+            }
+            Event::Npc(npc) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "[NPC {} @{},{} 色=#{:06x}]\n",
+                    npc.name, npc.x, npc.y, npc.color
+                ));
+                for line in &npc.message {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                out.push_str("[/NPC]\n");
+                prev_was_dialog_or_text = false;
+            }
         }
+    }
+}
+
+fn tile_char(t: u8) -> char {
+    match t {
+        0 => 'G',
+        1 => 'R',
+        2 => 'T',
+        3 => 'W',
+        _ => 'G',
+    }
+}
+
+fn direction_ja(d: Direction) -> &'static str {
+    match d {
+        Direction::Up => "上",
+        Direction::Down => "下",
+        Direction::Left => "左",
+        Direction::Right => "右",
     }
 }
 
