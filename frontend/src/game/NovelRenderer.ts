@@ -11,7 +11,16 @@
  * - SE: 単発再生（複数同時可）
  */
 
-import { Application, Container, Graphics, Sprite, Text as PixiText, TextStyle } from 'pixi.js'
+import {
+  Application,
+  Assets,
+  Container,
+  Graphics,
+  Sprite,
+  Text as PixiText,
+  Texture,
+  TextStyle,
+} from 'pixi.js'
 import { CharacterLayer } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
 import { AudioManager } from './AudioManager'
@@ -75,7 +84,7 @@ export class NovelRenderer {
   private initialized = false
   private onEndCallback: (() => void) | null = null
   private assetBaseUrl: string = ''
-  private textureCache: Map<string, Sprite> = new Map()
+  private textureCache: Map<string, Texture> = new Map()
   private audioManager: AudioManager
 
   /** ゲーム状態（フラグストア）— 章またぎで保持 */
@@ -697,26 +706,25 @@ export class NovelRenderer {
     const cleanPath = path.replace(/^\//, '')
     const url = `${this.assetBaseUrl}/images/${cleanPath}`
 
-    // キャッシュ済みの Sprite があればクローンして再利用（戻る操作時のフリッカー防止）
+    // キャッシュ済みの Texture があれば再利用（戻る操作時のフリッカー防止）
     const cached = this.textureCache.get(url)
-    if (cached && cached.texture.valid) {
-      const sprite = new Sprite(cached.texture)
+    if (cached) {
+      const sprite = new Sprite(cached)
       this.applyCoverFit(sprite)
       this.bgContainer.addChild(sprite)
       return
     }
 
-    const sprite = Sprite.from(url)
-
-    sprite.texture.source.on('loaded', () => {
-      this.textureCache.set(url, sprite)
-      this.applyCoverFit(sprite)
-      this.bgContainer.addChild(sprite)
-    })
-
-    sprite.texture.source.on('error', () => {
-      console.warn(`[name-name] 背景画像の読み込みに失敗: ${url}`)
-    })
+    Assets.load(url)
+      .then((texture: Texture) => {
+        this.textureCache.set(url, texture)
+        const sprite = new Sprite(texture)
+        this.applyCoverFit(sprite)
+        this.bgContainer.addChild(sprite)
+      })
+      .catch(() => {
+        console.warn(`[name-name] 背景画像の読み込みに失敗: ${url}`)
+      })
   }
 
   private applyCoverFit(sprite: Sprite): void {
