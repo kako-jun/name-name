@@ -6,17 +6,34 @@
  * 会話ダイアログを表示する。RPG プレイモードのデフォルトビュー。
  */
 
-import { Application, Container, Graphics } from 'pixi.js'
+import { Application, Container, Graphics, Sprite } from 'pixi.js'
 import { NPCData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { RpgDialogBox } from './RpgDialogBox'
+import {
+  clampFrames,
+  clearDemoSheetCache,
+  directionToRow,
+  loadNpcSpriteSheet,
+  type NpcSpriteSheet,
+} from './npcSpriteSheet'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
+
+/** NPC 歩行アニメのフレーム切替周期（ms）。frame 0 ↔ 1 を 500ms ごとに入れ替え */
+const NPC_ANIM_PERIOD_MS = 500
 
 interface NPC {
   data: NPCData
   container: Container
   x: number
   y: number
+  /** スプライト（未ロード or 未指定 or ロード失敗なら null → color 四角描画） */
+  sprite: Sprite | null
+  sheet: NpcSpriteSheet | null
+  /** アニメ位相オフセット（ms）。NPC ごとにずらして画一感を防ぐ */
+  phaseOffset: number
+  /** 現在の向き（data.direction または 'down'） */
+  direction: Direction
 }
 
 export class TopDownRenderer {
@@ -137,6 +154,7 @@ export class TopDownRenderer {
     }
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
+      clearDemoSheetCache(this.app.renderer)
       this.app.destroy(true, { children: true })
       this.dialogBox = null
       this.initialized = false
@@ -192,19 +210,61 @@ export class TopDownRenderer {
   private drawNPCs(npcData: NPCData[]): void {
     this.clearLayer(this.npcLayer)
     this.npcs = []
-    for (const data of npcData) {
+    for (let i = 0; i < npcData.length; i++) {
+      const data = npcData[i]
       const container = new Container()
+      container.x = this.gridToPixelX(data.x)
+      container.y = this.gridToPixelY(data.y)
+      this.npcLayer.addChild(container)
+
+      // color 四角は常に置いておく（スプライトがロードされるまでの placeholder を兼ねる）
       const rect = new Graphics()
       const size = this.tileSize - 4
       rect.rect(-size / 2, -size / 2, size, size)
       rect.fill(data.color)
       rect.stroke({ width: 2, color: 0x8b0000 })
       container.addChild(rect)
-      container.x = this.gridToPixelX(data.x)
-      container.y = this.gridToPixelY(data.y)
-      this.npcLayer.addChild(container)
-      this.npcs.push({ data, container, x: data.x, y: data.y })
+
+      // phaseOffset: アニメ周期内を NPC 数で等分した位相差を与え、全員が同時に足踏みして画一的に見えるのを防ぐ
+      const stride = NPC_ANIM_PERIOD_MS / Math.max(1, npcData.length)
+      const npc: NPC = {
+        data,
+        container,
+        x: data.x,
+        y: data.y,
+        sprite: null,
+        sheet: null,
+        phaseOffset: i * stride,
+        direction: data.direction ?? 'down',
+      }
+      this.npcs.push(npc)
+
+      // sprite が指定されていれば非同期ロード → 完了したら rect を隠して Sprite を差し込む
+      if (data.sprite) {
+        this.loadNpcSprite(npc, rect)
+      }
     }
+  }
+
+  private async loadNpcSprite(npc: NPC, placeholder: Graphics): Promise<void> {
+    const sheet = await loadNpcSpriteSheet(
+      npc.data.sprite!,
+      clampFrames(npc.data.frames),
+      this.tileSize,
+      npc.data.color,
+      this.app.renderer
+    )
+    // load 完了時点で NPC が破棄されていたら何もしない
+    if (!this.initialized || npc.container.destroyed) return
+    if (!sheet) return // 失敗時は color 四角のまま
+
+    npc.sheet = sheet
+    const sprite = new Sprite(sheet.textures[directionToRow(npc.direction)][0])
+    sprite.anchor.set(0.5)
+    npc.container.addChild(sprite)
+    npc.sprite = sprite
+    // placeholder を隠す
+    placeholder.visible = false
   }
 
   private drawPlayer(): void {
@@ -400,8 +460,9 @@ export class TopDownRenderer {
   // --- ティック ---
 
   private onTick = (): void => {
-    if (!this.isMoving) return
     const now = performance.now()
+    this.updateNpcAnimations(now)
+    if (!this.isMoving) return
     const t = Math.min(1, (now - this.moveStart) / this.moveDuration)
     const x = this.moveFromX + (this.moveToX - this.moveFromX) * t
     const y = this.moveFromY + (this.moveToY - this.moveFromY) * t
@@ -409,6 +470,18 @@ export class TopDownRenderer {
     this.centerCamera()
     if (t >= 1) {
       this.isMoving = false
+    }
+  }
+
+  /** NPC アニメ: アイドル足踏みだけ。位相オフセットで画一感を防ぐ */
+  private updateNpcAnimations(nowMs: number): void {
+    for (const npc of this.npcs) {
+      if (!npc.sprite || !npc.sheet) continue
+      const frames = npc.sheet.frames
+      if (frames < 2) continue
+      const frame = Math.floor((nowMs + npc.phaseOffset) / NPC_ANIM_PERIOD_MS) % frames
+      const row = directionToRow(npc.direction)
+      npc.sprite.texture = npc.sheet.textures[row][frame]
     }
   }
 

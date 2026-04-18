@@ -32,6 +32,7 @@ export interface NPCData {
   color: number // スプライトの色（16進数）
   sprite?: string // スプライトシートへの相対パス。未指定なら color の四角で描画
   frames?: number // 歩行アニメのフレーム数（方向あたり）。未指定なら 2
+  direction?: 'up' | 'down' | 'left' | 'right' // アイドル時の向き。未指定なら down
 }
 
 /**
