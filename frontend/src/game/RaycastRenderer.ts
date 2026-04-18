@@ -17,6 +17,7 @@ import {
   loadNpcSpriteSheet,
   type NpcSpriteSheet,
 } from './npcSpriteSheet'
+import { projectNpcToScreen } from './raycastProjection'
 
 interface NPCRuntime {
   data: NPCData
@@ -512,43 +513,32 @@ export class RaycastRenderer {
     }
 
     // NPC billboard: Sprite + mask で描画。距離は zIndex でソート
-    // 逆行列: [planeX dirX; planeY dirY]^-1
-    const invDet = 1.0 / (planeX * dirY - dirX * planeY)
-    const playerTileX = Math.floor(this.playerX)
-    const playerTileY = Math.floor(this.playerY)
     for (const n of this.npcs) {
-      // プレイヤーと同タイルに立っている NPC は描画不要（衝突判定で発生しないが保険）
-      const npcTileX = Math.floor(n.x)
-      const npcTileY = Math.floor(n.y)
-      if (npcTileX === playerTileX && npcTileY === playerTileY) {
-        n.container.visible = false
-        continue
-      }
-      const rx = n.x - this.playerX
-      const ry = n.y - this.playerY
-      const transformX = invDet * (dirY * rx - dirX * ry)
-      const transformY = invDet * (-planeY * rx + planeX * ry) // これが depth
-
-      if (transformY <= 0.01) {
+      const proj = projectNpcToScreen(
+        { x: n.x, y: n.y },
+        { x: this.playerX, y: this.playerY },
+        { x: dirX, y: dirY },
+        { x: planeX, y: planeY },
+        { width: w, height: h },
+        this.npcSpriteMinDepth
+      )
+      if (!proj) {
         n.container.visible = false
         continue
       }
 
-      const spriteScreenX = Math.floor((w / 2) * (1 + transformX / transformY))
-      // 位置と遮蔽判定には元の transformY、サイズのみ下限クランプ
-      const clampedDepth = Math.max(transformY, this.npcSpriteMinDepth)
-      const spriteHeight = Math.abs(Math.floor(h / clampedDepth))
-      const spriteWidthPx = spriteHeight
-      let drawStartY = Math.floor(-spriteHeight / 2 + h / 2)
-      if (drawStartY < 0) drawStartY = 0
-      let drawEndY = Math.floor(spriteHeight / 2 + h / 2)
-      if (drawEndY > h) drawEndY = h
-      let drawStartX = Math.floor(-spriteWidthPx / 2 + spriteScreenX)
-      let drawEndX = Math.floor(spriteWidthPx / 2 + spriteScreenX)
-      if (drawStartX < 0) drawStartX = 0
-      if (drawEndX > w) drawEndX = w
+      const {
+        screenX: spriteScreenX,
+        spriteHeight,
+        spriteWidthPx,
+        depth,
+        drawStartX,
+        drawEndX,
+        drawStartY,
+        drawEndY,
+      } = proj
 
-      const fog = Math.max(0, Math.min(1, 1 - transformY / this.fogMaxDist))
+      const fog = Math.max(0, Math.min(1, 1 - depth / this.fogMaxDist))
       // フォグ:
       //  - スプライトロード済みの NPC は白 × fog（画像を暗くする）
       //  - 未ロード NPC は data.color × fog（単色 billboard のフォグ）
@@ -565,7 +555,7 @@ export class RaycastRenderer {
       n.sprite.height = spriteHeight
       n.container.visible = true
       // 距離ソート: 遠い NPC ほど先に描く → zIndex を小さく
-      n.container.zIndex = -transformY
+      n.container.zIndex = -depth
 
       // mask 更新: zBuffer で遮蔽されていない列だけを可視にする。
       // mask は npcLayer → container（ともに位置 0, 0）直下なので、rect 座標はキャンバス絶対座標と一致する
@@ -574,7 +564,7 @@ export class RaycastRenderer {
       for (let sx = drawStartX; sx < drawEndX; sx += this.stripeWidth) {
         const stripeIdx = Math.floor(sx / this.stripeWidth)
         if (stripeIdx < 0 || stripeIdx >= numStripes) continue
-        if (transformY >= zBuffer[stripeIdx]) continue
+        if (depth >= zBuffer[stripeIdx]) continue
         n.mask.rect(sx, drawStartY, this.stripeWidth, drawEndY - drawStartY)
         hasVisible = true
       }
