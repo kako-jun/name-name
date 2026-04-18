@@ -541,9 +541,10 @@ describe('applyRpgProjectToDoc', () => {
     expect(updated.chapters[0].scenes[0].view).toBe('Raycast')
     const villageEvents = updated.chapters[0].scenes[0].events
     expect(villageEvents[0]).toHaveProperty('RpgMap')
-    if ('RpgMap' in villageEvents[0]) {
-      expect(villageEvents[0].RpgMap.width).toBe(4)
-      expect(villageEvents[0].RpgMap.tiles[0]).toEqual([1, 1, 1, 1])
+    const villageFirst = villageEvents[0]
+    if (typeof villageFirst !== 'string' && 'RpgMap' in villageFirst) {
+      expect(villageFirst.RpgMap.width).toBe(4)
+      expect(villageFirst.RpgMap.tiles[0]).toEqual([1, 1, 1, 1])
     }
     // Ch1 村の NPC が差し替わっている
     const villageNpc = villageEvents.find(
@@ -560,10 +561,11 @@ describe('applyRpgProjectToDoc', () => {
     expect(dungeonScene.view).toBe('Raycast')
     const dungeonEvents = dungeonScene.events
     expect(dungeonEvents[0]).toHaveProperty('RpgMap')
-    if ('RpgMap' in dungeonEvents[0]) {
-      expect(dungeonEvents[0].RpgMap.width).toBe(3)
-      expect(dungeonEvents[0].RpgMap.height).toBe(3)
-      expect(dungeonEvents[0].RpgMap.tiles).toEqual([
+    const dungeonFirst = dungeonEvents[0]
+    if (typeof dungeonFirst !== 'string' && 'RpgMap' in dungeonFirst) {
+      expect(dungeonFirst.RpgMap.width).toBe(3)
+      expect(dungeonFirst.RpgMap.height).toBe(3)
+      expect(dungeonFirst.RpgMap.tiles).toEqual([
         [2, 2, 2],
         [2, 0, 2],
         [2, 2, 2],
