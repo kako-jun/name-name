@@ -43,6 +43,7 @@ export interface RpgMapData {
 export interface Scene {
     id: string;
     title: string;
+    view?: SceneView;
     events: Event[];
 }
 
@@ -55,6 +56,8 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[] } } | { Narration: { text: string[] } } | { Background: { path: string } } | { Bgm: { path: string | undefined; action: BgmAction } } | { Se: { path: string } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData };
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
+
+export type SceneView = "TopDown" | "Raycast";
 
 
 export function emit_markdown(input: any): string;

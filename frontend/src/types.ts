@@ -16,10 +16,7 @@ export interface ChoiceOption {
   jump: string
 }
 
-export type FlagValue =
-  | { Bool: boolean }
-  | { String: string }
-  | { Number: number }
+export type FlagValue = { Bool: boolean } | { String: string } | { Number: number }
 
 export type Direction = 'Up' | 'Down' | 'Left' | 'Right'
 
@@ -46,7 +43,14 @@ export interface PlayerStartData {
 }
 
 export type Event =
-  | { Dialog: { character: string | null; expression: string | null; position: string | null; text: string[] } }
+  | {
+      Dialog: {
+        character: string | null
+        expression: string | null
+        position: string | null
+        text: string[]
+      }
+    }
   | { Narration: { text: string[] } }
   | { Background: { path: string } }
   | { Bgm: { path: string | null; action: BgmAction } }
@@ -63,9 +67,12 @@ export type Event =
   | { PlayerStart: PlayerStartData }
   | { Npc: NpcData }
 
+export type SceneView = 'TopDown' | 'Raycast'
+
 export interface EventScene {
   id: string
   title: string
+  view: SceneView
   events: Event[]
 }
 

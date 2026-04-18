@@ -72,6 +72,9 @@ export interface RPGProject {
   player: PlayerData // プレイヤー初期データ
   npcs: NPCData[] // NPCリスト
   events?: EventData[] // イベントリスト（オプション）
+  // プレイ時の表示モード。必須化済み。デフォルトは 'topdown' 相当。
+  // （Doc の scene.view=Raycast から派生したときは 'raycast'）
+  view: 'topdown' | 'raycast'
 }
 
 /**
@@ -85,7 +88,7 @@ export const TILE_COLORS = {
 } as const
 
 /**
- * タイルの PixiJS 用数値色定数（RPGRenderer で使用）
+ * タイルの PixiJS 用数値色定数（TopDownRenderer で使用）
  */
 export const TILE_COLORS_HEX = {
   [TileType.GRASS]: 0x2d5016,

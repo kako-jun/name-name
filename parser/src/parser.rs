@@ -69,18 +69,22 @@ pub fn parse(input: &str) -> Document {
             last_position = None;
             if let Some(colon_pos) = rest.find(':') {
                 let id = rest[..colon_pos].trim().to_string();
-                let title = rest[colon_pos + 1..].trim().to_string();
+                let title_raw = rest[colon_pos + 1..].trim().to_string();
+                let (title, view) = parse_scene_title_and_view(&title_raw);
                 current_scene = Some(Scene {
                     id,
                     title,
+                    view,
                     events: Vec::new(),
                 });
             } else if let Some(colon_pos) = rest.find('：') {
                 let id = rest[..colon_pos].trim().to_string();
-                let title = rest[colon_pos + '：'.len_utf8()..].trim().to_string();
+                let title_raw = rest[colon_pos + '：'.len_utf8()..].trim().to_string();
+                let (title, view) = parse_scene_title_and_view(&title_raw);
                 current_scene = Some(Scene {
                     id,
                     title,
+                    view,
                     events: Vec::new(),
                 });
             }
@@ -686,6 +690,49 @@ fn resolve_npc_id_conflict(base: &str, existing: &[Event]) -> String {
         n += 1;
     }
     candidate
+}
+
+/// Parse the title portion of a scene header and extract an optional
+/// `[view=xxx]` trailing directive. Returns the cleaned title and the
+/// resolved SceneView. Unknown view values fall back to `TopDown` with
+/// a warning.
+fn parse_scene_title_and_view(title_raw: &str) -> (String, SceneView) {
+    let s = title_raw.trim();
+    // Look for a trailing [view=...] marker.
+    if s.ends_with(']') {
+        if let Some(open) = s.rfind('[') {
+            let inside = &s[open + 1..s.len() - 1];
+            if let Some(val) = inside.strip_prefix("view=") {
+                let val = val.trim();
+                let cleaned = s[..open].trim_end().to_string();
+                let view = match val {
+                    "topdown" | "TopDown" => SceneView::TopDown,
+                    "raycast" | "Raycast" => SceneView::Raycast,
+                    other => {
+                        emit_unknown_view_warning(other);
+                        SceneView::TopDown
+                    }
+                };
+                return (cleaned, view);
+            }
+        }
+    }
+    (s.to_string(), SceneView::TopDown)
+}
+
+fn emit_unknown_view_warning(value: &str) {
+    let msg = format!(
+        "[name-name-parser] warning: unknown scene view '{}', falling back to topdown",
+        value
+    );
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::warn_1(&msg.into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        eprintln!("{}", msg);
+    }
 }
 
 /// Emit a warning about map dimension mismatch. On native targets this goes

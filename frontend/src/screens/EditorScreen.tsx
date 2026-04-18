@@ -144,6 +144,7 @@ function EditorScreen({
       },
       player: { x: 5, y: 5, direction: 'down' },
       npcs: [],
+      view: 'topdown',
     }
     const newSceneId = 'rpg-map'
     const newDoc = applyRpgProjectToDoc(doc, emptyProject, newSceneId)
@@ -509,7 +510,9 @@ function EditorScreen({
                       isDark={isDark}
                     />
                   )}
-                  {rpgSubTab === 'play' && <RPGPlayer gameData={rpgProject ?? undefined} />}
+                  {rpgSubTab === 'play' && (
+                    <RPGPlayer gameData={rpgProject ?? undefined} view={rpgProject?.view} />
+                  )}
                 </>
               )}
             </div>
