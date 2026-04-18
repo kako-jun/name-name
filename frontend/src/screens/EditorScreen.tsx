@@ -8,6 +8,11 @@ import SaveDiscardButtons from '../components/SaveDiscardButtons'
 import type { Mode, Event, EventDocument, EventRef } from '../types'
 import { RPGProject, MapData, NPCData } from '../types/rpg'
 import { parseMarkdown, emitMarkdown } from '../wasm/parser'
+import {
+  rpgProjectFromDoc,
+  applyRpgProjectToDoc,
+  findRpgSceneIndex,
+} from '../game/rpgProjectFromDoc'
 
 interface EditorScreenProps {
   projectName: string
@@ -61,29 +66,24 @@ function EditorScreen({
   const saveTimeoutRef = useRef<number | null>(null)
   const initialMarkdownRef = useRef<string>('')
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
-
-  // RPGエディタ用の状態
-  const [rpgProject, setRpgProject] = useState<RPGProject>(() => {
-    const mapWidth = 25
-    const mapHeight = 19
-    return {
-      name: projectName,
-      version: '1.0.0',
-      map: {
-        width: mapWidth,
-        height: mapHeight,
-        tileSize: 32,
-        tiles: Array.from({ length: mapHeight }, (_, y) =>
-          Array.from({ length: mapWidth }, (_, x) =>
-            x === 0 || x === mapWidth - 1 || y === 0 || y === mapHeight - 1 ? 2 : 0
-          )
-        ),
-      },
-      player: { x: 5, y: 5, direction: 'down' },
-      npcs: [],
-    }
-  })
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
+  // 現在 RPG タブが編集対象としているシーン ID（doc 内の最初の RPG シーン）
+  const [rpgSceneId, setRpgSceneId] = useState<string | null>(null)
+
+  // doc から RPGProject を導出（メモ化）。見つかったシーン ID も rpgSceneId に同期。
+  const rpgProject: RPGProject | null = useMemo(() => {
+    if (!doc) return null
+    const found = findRpgSceneIndex(doc)
+    if (!found) return null
+    const sceneIdForThisDoc =
+      doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
+    // シーン ID が変わったら state を同期（描画中は setState を直接呼ばず副作用で）
+    if (sceneIdForThisDoc !== rpgSceneId) {
+      // 次 tick で同期（render 中に setState すると警告が出るため）
+      queueMicrotask(() => setRpgSceneId(sceneIdForThisDoc))
+    }
+    return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName)
+  }, [doc, projectName, rpgSceneId])
 
   // ユーザー操作で doc が変わったら emit し、rawMarkdown を更新する。
   // rawMarkdown の更新は autosave useEffect 経由で backend に PUT される。
@@ -112,6 +112,43 @@ function EditorScreen({
       // 空のドキュメントでフォールバック
       setDoc({ engine: 'name-name', chapters: [] })
     }
+  }
+
+  // RPGProject の変更を doc に書き戻し、Markdown に反映する
+  const persistRpgProject = async (updated: RPGProject) => {
+    if (!doc) return
+    // 既に doc 内で特定済みの RPG シーン ID を対象にする（未設定なら
+    // applyRpgProjectToDoc 内のフォールバックで最初の RPG シーンに書き戻される）
+    const targetSceneId = rpgSceneId ?? 'rpg-map'
+    const newDoc = applyRpgProjectToDoc(doc, updated, targetSceneId)
+    await handleDocChange(newDoc)
+  }
+
+  // 空の RPG シーンを追加する。doc がロード済みでない間は呼ばない（ボタン側で disabled）
+  const addEmptyRpgScene = async () => {
+    if (!doc) return
+    const mapWidth = 20
+    const mapHeight = 15
+    const emptyProject: RPGProject = {
+      name: projectName,
+      version: '1.0.0',
+      map: {
+        width: mapWidth,
+        height: mapHeight,
+        tileSize: 32,
+        tiles: Array.from({ length: mapHeight }, (_, y) =>
+          Array.from({ length: mapWidth }, (_, x) =>
+            x === 0 || x === mapWidth - 1 || y === 0 || y === mapHeight - 1 ? 2 : 0
+          )
+        ),
+      },
+      player: { x: 5, y: 5, direction: 'down' },
+      npcs: [],
+    }
+    const newSceneId = 'rpg-map'
+    const newDoc = applyRpgProjectToDoc(doc, emptyProject, newSceneId)
+    setRpgSceneId(newSceneId)
+    await handleDocChange(newDoc)
   }
 
   // 初回ロード: APIからMarkdownを取得しWASMでパース
@@ -261,6 +298,7 @@ function EditorScreen({
       }
       // discard で doc が差し替わるため、選択状態・CanvasEditor 内部 state を完全リセット
       setSelectedEvent(null)
+      setRpgSceneId(null)
       setDocVersion((v) => v + 1)
       setHasUnsavedChanges(false)
     } catch (error) {
@@ -431,22 +469,49 @@ function EditorScreen({
             </div>
 
             <div className="flex-1 overflow-hidden">
-              {rpgSubTab === 'map' && (
-                <MapEditor
-                  mapData={rpgProject.map}
-                  onChange={(mapData: MapData) => setRpgProject({ ...rpgProject, map: mapData })}
-                  isDark={isDark}
-                />
+              {rpgProject === null ? (
+                <div className={`h-full flex flex-col items-center justify-center gap-4 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <p className="text-sm">このプロジェクトにはまだRPGシーンがありません。</p>
+                  <button
+                    onClick={addEmptyRpgScene}
+                    disabled={!doc}
+                    className={`px-4 py-2 rounded font-medium transition-colors ${
+                      !doc
+                        ? isDark
+                          ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                          : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        : isDark
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                          : 'bg-blue-500 hover:bg-blue-600 text-white'
+                    }`}
+                  >
+                    + RPGシーンを追加
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {rpgSubTab === 'map' && (
+                    <MapEditor
+                      mapData={rpgProject.map}
+                      onChange={(mapData: MapData) => {
+                        void persistRpgProject({ ...rpgProject, map: mapData })
+                      }}
+                      isDark={isDark}
+                    />
+                  )}
+                  {rpgSubTab === 'npc' && (
+                    <NPCEditor
+                      npcs={rpgProject.npcs}
+                      mapData={rpgProject.map}
+                      onChange={(npcs: NPCData[]) => {
+                        void persistRpgProject({ ...rpgProject, npcs })
+                      }}
+                      isDark={isDark}
+                    />
+                  )}
+                  {rpgSubTab === 'play' && <RPGPlayer gameData={rpgProject ?? undefined} />}
+                </>
               )}
-              {rpgSubTab === 'npc' && (
-                <NPCEditor
-                  npcs={rpgProject.npcs}
-                  mapData={rpgProject.map}
-                  onChange={(npcs: NPCData[]) => setRpgProject({ ...rpgProject, npcs })}
-                  isDark={isDark}
-                />
-              )}
-              {rpgSubTab === 'play' && <RPGPlayer gameData={rpgProject} />}
             </div>
           </div>
         )}

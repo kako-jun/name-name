@@ -1,11 +1,60 @@
 /* tslint:disable */
 /* eslint-disable */
+export interface Chapter {
+    number: number;
+    title: string;
+    hidden: boolean;
+    default_bgm: string | undefined;
+    scenes: Scene[];
+}
+
+export interface ChoiceOption {
+    text: string;
+    jump: string;
+}
+
 export interface Document {
     engine: string;
     chapters: Chapter[];
 }
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[] } } | { Narration: { text: string[] } } | { Background: { path: string } } | { Bgm: { path: string | undefined; action: BgmAction } } | { Se: { path: string } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } };
+export interface NpcData {
+    id: string;
+    name: string;
+    x: number;
+    y: number;
+    color: number;
+    message: string[];
+}
+
+export interface PlayerStartData {
+    x: number;
+    y: number;
+    direction: Direction;
+}
+
+export interface RpgMapData {
+    width: number;
+    height: number;
+    tile_size: number;
+    tiles: number[][];
+}
+
+export interface Scene {
+    id: string;
+    title: string;
+    events: Event[];
+}
+
+export type BgmAction = "Play" | "Stop";
+
+export type BlackoutAction = "On" | "Off";
+
+export type Direction = "Up" | "Down" | "Left" | "Right";
+
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[] } } | { Narration: { text: string[] } } | { Background: { path: string } } | { Bgm: { path: string | undefined; action: BgmAction } } | { Se: { path: string } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData };
+
+export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 
 
 export function emit_markdown(input: any): string;
