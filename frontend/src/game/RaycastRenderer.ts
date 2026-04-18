@@ -6,14 +6,32 @@
  * 操作は WASD/矢印キー + Q/E（左右ストレイフ）、Enter/Space で正面 NPC と会話。
  */
 
-import { Application, Container, Graphics } from 'pixi.js'
+import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js'
 import { NPCData, RPGProject, TileType } from '../types/rpg'
 import { RpgDialogBox } from './RpgDialogBox'
+import {
+  NPC_ANIM_PERIOD_MS,
+  clampFrames,
+  clearDemoSheetCache,
+  directionToRow,
+  loadNpcSpriteSheet,
+  type NpcSpriteSheet,
+} from './npcSpriteSheet'
 
 interface NPCRuntime {
   data: NPCData
   x: number // tile-grid center (x + 0.5)
   y: number
+  container: Container
+  /** billboard sprite。初期状態は `Texture.WHITE` を `data.color` で tint した単色矩形。
+   *  スプライトがロードされたら texture を差し替え、tint はフォグ用途に再利用する */
+  sprite: Sprite
+  /** 前方 z-buffer 遮蔽用の列単位マスク */
+  mask: Graphics
+  /** ロード済みのスプライトシート。null の場合は単色 billboard のまま */
+  sheet: NpcSpriteSheet | null
+  /** アニメ位相オフセット（ms） */
+  phaseOffset: number
 }
 
 type DirectionLabel = 'up' | 'down' | 'left' | 'right'
@@ -21,6 +39,7 @@ type DirectionLabel = 'up' | 'down' | 'left' | 'right'
 export class RaycastRenderer {
   private app: Application
   private worldLayer: Container
+  private npcLayer: Container
   private dialogBox: RpgDialogBox | null = null
 
   private worldGraphics: Graphics | null = null
@@ -28,6 +47,8 @@ export class RaycastRenderer {
   private mapTiles: number[][] = []
   private mapWidth = 0
   private mapHeight = 0
+  /** スプライトシートセルサイズ（マップの tileSize と揃える）。NPC テクスチャ切り出しで使用 */
+  private tileSize = 32
 
   private npcs: NPCRuntime[] = []
 
@@ -65,6 +86,9 @@ export class RaycastRenderer {
   constructor() {
     this.app = new Application()
     this.worldLayer = new Container()
+    this.npcLayer = new Container()
+    // zIndex で距離ソート（奥→手前）
+    this.npcLayer.sortableChildren = true
   }
 
   async init(container: HTMLElement): Promise<void> {
@@ -84,6 +108,7 @@ export class RaycastRenderer {
     this.worldGraphics = new Graphics()
     this.worldLayer.addChild(this.worldGraphics)
     this.app.stage.addChild(this.worldLayer)
+    this.app.stage.addChild(this.npcLayer)
 
     this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
     this.app.stage.addChild(this.dialogBox)
@@ -102,6 +127,7 @@ export class RaycastRenderer {
     this.mapTiles = gameData.map.tiles
     this.mapWidth = gameData.map.width
     this.mapHeight = gameData.map.height
+    this.tileSize = gameData.map.tileSize
 
     if (
       this.mapTiles.length !== this.mapHeight ||
@@ -110,11 +136,7 @@ export class RaycastRenderer {
       console.warn('[RaycastRenderer] map tiles dimensions mismatch')
     }
 
-    this.npcs = gameData.npcs.map((n) => ({
-      data: n,
-      x: n.x + 0.5,
-      y: n.y + 0.5,
-    }))
+    this.rebuildNpcObjects(gameData.npcs)
 
     // Player: tile center
     this.playerX = gameData.player.x + 0.5
@@ -123,6 +145,67 @@ export class RaycastRenderer {
 
     this.lastTickMs = performance.now()
     this.keys.clear()
+  }
+
+  /**
+   * NPC オブジェクト（Container + Sprite + mask）をレイヤに作成する。
+   * スプライト未指定 NPC は `Texture.WHITE` を `data.color` で tint した単色矩形のまま維持。
+   * `sprite=...` 指定があれば非同期ロードし、完了後に texture を差し替える。
+   */
+  private rebuildNpcObjects(npcData: NPCData[]): void {
+    // 既存を destroy
+    for (const child of this.npcLayer.removeChildren()) {
+      child.destroy({ children: true })
+    }
+    this.npcs = []
+
+    const stride = NPC_ANIM_PERIOD_MS / Math.max(1, npcData.length)
+    for (let i = 0; i < npcData.length; i++) {
+      const data = npcData[i]
+      const container = new Container()
+      this.npcLayer.addChild(container)
+
+      const sprite = new Sprite(Texture.WHITE)
+      sprite.anchor.set(0.5)
+      sprite.tint = data.color
+      container.addChild(sprite)
+
+      const mask = new Graphics()
+      container.addChild(mask)
+      sprite.mask = mask
+
+      const npc: NPCRuntime = {
+        data,
+        x: data.x + 0.5,
+        y: data.y + 0.5,
+        container,
+        sprite,
+        mask,
+        sheet: null,
+        phaseOffset: i * stride,
+      }
+      this.npcs.push(npc)
+
+      if (data.sprite) {
+        this.loadNpcSprite(npc)
+      }
+    }
+  }
+
+  private async loadNpcSprite(npc: NPCRuntime): Promise<void> {
+    const sheet = await loadNpcSpriteSheet(
+      npc.data.sprite!,
+      clampFrames(npc.data.frames),
+      this.tileSize,
+      npc.data.color,
+      this.app.renderer
+    )
+    if (!this.initialized || npc.container.destroyed) return
+    if (!sheet) return
+    npc.sheet = sheet
+    // 単色から実スプライトに差し替え。tint はフォグ適用用に再利用する（白で初期化）
+    npc.sprite.texture = sheet.textures[directionToRow(npc.data.direction)][0]
+    npc.sprite.tint = 0xffffff
   }
 
   destroy(): void {
@@ -135,7 +218,11 @@ export class RaycastRenderer {
     }
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
+      // app.destroy → clearDemoSheetCache の順。逆順だと cache の RenderTexture source を先に
+      // 破棄してしまい、app.destroy で連鎖的に Sprite が破棄済み source を参照する可能性がある
+      const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
+      clearDemoSheetCache(renderer)
       this.dialogBox = null
       this.initialized = false
     }
@@ -228,6 +315,7 @@ export class RaycastRenderer {
     if (!this.dialogBox?.isShowing) {
       this.updateMovement(dt)
     }
+    this.updateNpcAnimations(now)
     this.renderFrame()
   }
 
@@ -423,37 +511,31 @@ export class RaycastRenderer {
       }
     }
 
-    // NPC billboard: 距離ソートで遠→近に描画
-    const npcSprites: Array<{ dist: number; npc: NPCRuntime }> = []
-    for (const n of this.npcs) {
-      const rx = n.x - this.playerX
-      const ry = n.y - this.playerY
-      npcSprites.push({ dist: rx * rx + ry * ry, npc: n })
-    }
-    npcSprites.sort((a, b) => b.dist - a.dist)
-
+    // NPC billboard: Sprite + mask で描画。距離は zIndex でソート
     // 逆行列: [planeX dirX; planeY dirY]^-1
     const invDet = 1.0 / (planeX * dirY - dirX * planeY)
     const playerTileX = Math.floor(this.playerX)
     const playerTileY = Math.floor(this.playerY)
-    for (const entry of npcSprites) {
-      const n = entry.npc
-      // プレイヤーと同タイルに立っている NPC は描画不要（衝突判定で発生しないが保険）。
-      // 壁めり込み等の異常状態でここに達した場合、後段の z-buffer 比較でも
-      // 近距離 NPC が誤って奥判定される可能性があるため、先頭で弾く。
+    for (const n of this.npcs) {
+      // プレイヤーと同タイルに立っている NPC は描画不要（衝突判定で発生しないが保険）
       const npcTileX = Math.floor(n.x)
       const npcTileY = Math.floor(n.y)
-      if (npcTileX === playerTileX && npcTileY === playerTileY) continue
+      if (npcTileX === playerTileX && npcTileY === playerTileY) {
+        n.container.visible = false
+        continue
+      }
       const rx = n.x - this.playerX
       const ry = n.y - this.playerY
       const transformX = invDet * (dirY * rx - dirX * ry)
       const transformY = invDet * (-planeY * rx + planeX * ry) // これが depth
 
-      if (transformY <= 0.01) continue // 背面カリング兼ゼロ除算ガード
+      if (transformY <= 0.01) {
+        n.container.visible = false
+        continue
+      }
 
       const spriteScreenX = Math.floor((w / 2) * (1 + transformX / transformY))
-      // 幾何的な位置（spriteScreenX）と遮蔽判定（後段の zBuffer 比較）には元の transformY を使い、
-      // サイズ算出のみ下限でクランプする（位置まで固定するとカメラ前に貼り付く）。
+      // 位置と遮蔽判定には元の transformY、サイズのみ下限クランプ
       const clampedDepth = Math.max(transformY, this.npcSpriteMinDepth)
       const spriteHeight = Math.abs(Math.floor(h / clampedDepth))
       const spriteWidthPx = spriteHeight
@@ -467,16 +549,52 @@ export class RaycastRenderer {
       if (drawEndX > w) drawEndX = w
 
       const fog = Math.max(0, Math.min(1, 1 - transformY / this.fogMaxDist))
-      const color = applyFog(n.data.color, fog)
+      // フォグ:
+      //  - スプライトロード済みの NPC は白 × fog（画像を暗くする）
+      //  - 未ロード NPC は data.color × fog（単色 billboard のフォグ）
+      if (n.sheet) {
+        n.sprite.tint = applyFog(0xffffff, fog)
+      } else {
+        n.sprite.tint = applyFog(n.data.color, fog)
+      }
 
-      // 遮蔽: ストライプ単位で zBuffer を比較して描画
+      // Sprite 配置とサイズ
+      n.sprite.x = spriteScreenX
+      n.sprite.y = h / 2
+      n.sprite.width = spriteWidthPx
+      n.sprite.height = spriteHeight
+      n.container.visible = true
+      // 距離ソート: 遠い NPC ほど先に描く → zIndex を小さく
+      n.container.zIndex = -transformY
+
+      // mask 更新: zBuffer で遮蔽されていない列だけを可視にする。
+      // mask は npcLayer → container（ともに位置 0, 0）直下なので、rect 座標はキャンバス絶対座標と一致する
+      n.mask.clear()
+      let hasVisible = false
       for (let sx = drawStartX; sx < drawEndX; sx += this.stripeWidth) {
         const stripeIdx = Math.floor(sx / this.stripeWidth)
         if (stripeIdx < 0 || stripeIdx >= numStripes) continue
         if (transformY >= zBuffer[stripeIdx]) continue
-        g.rect(sx, drawStartY, this.stripeWidth, drawEndY - drawStartY)
-        g.fill(color)
+        n.mask.rect(sx, drawStartY, this.stripeWidth, drawEndY - drawStartY)
+        hasVisible = true
       }
+      if (hasVisible) {
+        n.mask.fill(0xffffff)
+      } else {
+        n.container.visible = false
+      }
+    }
+  }
+
+  /** NPC アイドル歩行アニメ（スプライトロード済み NPC のみ）。TopDown と同じ周期 / 位相方式 */
+  private updateNpcAnimations(nowMs: number): void {
+    for (const npc of this.npcs) {
+      const sheet = npc.sheet
+      if (!sheet) continue
+      if (sheet.frames < 2) continue
+      const frame = Math.floor((nowMs + npc.phaseOffset) / NPC_ANIM_PERIOD_MS) % sheet.frames
+      const row = directionToRow(npc.data.direction)
+      npc.sprite.texture = sheet.textures[row][frame]
     }
   }
 }
