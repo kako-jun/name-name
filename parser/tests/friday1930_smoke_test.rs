@@ -6,6 +6,9 @@
 //!
 //! fixture を更新したいときは: friday-1930 で chapters/all.md を更新したあと、
 //! 同じ内容をここに同期する（ファイルコピー）。
+//!
+//! スコープ: **ハッピーパスの構造検証のみ**。parser の異常系（空ファイル、
+//! 不正な view 値、マップ寸法ミスマッチ等）は `integration_test.rs` 側で扱う。
 
 use name_name_parser::models::{Event, SceneView};
 use name_name_parser::parser;
@@ -59,6 +62,8 @@ fn friday1930_village_has_four_npcs_and_map() {
         .count();
     assert_eq!(player_count, 1);
 
+    // NPC は Markdown 出現順で events に push される仕様（parser.rs）。
+    // 順序が変わった場合は parser の変更意図とテスト期待を両方見直す。
     let npc_names: Vec<String> = village
         .events
         .iter()
@@ -97,6 +102,6 @@ fn friday1930_dungeon_has_jikido() {
         })
         .expect("ジキド NPC exists in dungeon-north");
 
-    assert_eq!(jikido.color, 0xcc3333);
+    assert_eq!(jikido.color, 0xcc3333); // fixture 側の `色=#cc3333` と対応
     assert!(!jikido.message.is_empty());
 }
