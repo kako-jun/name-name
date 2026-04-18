@@ -249,9 +249,17 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     Some(slug) if slug == npc.id => String::new(),
                     _ => format!(" id={}", npc.id),
                 };
+                let sprite_suffix = match &npc.sprite {
+                    Some(path) if !path.is_empty() => format!(" sprite={}", path),
+                    _ => String::new(),
+                };
+                let frames_suffix = match npc.frames {
+                    Some(n) => format!(" frames={}", n),
+                    None => String::new(),
+                };
                 out.push_str(&format!(
-                    "[NPC {} @{},{} 色=#{:06x}{}]\n",
-                    npc.name, npc.x, npc.y, npc.color, id_suffix
+                    "[NPC {} @{},{} 色=#{:06x}{}{}{}]\n",
+                    npc.name, npc.x, npc.y, npc.color, id_suffix, sprite_suffix, frames_suffix
                 ));
                 for line in &npc.message {
                     out.push_str(line);

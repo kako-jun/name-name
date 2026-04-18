@@ -778,6 +778,104 @@ two
 }
 
 #[test]
+fn test_rpg_npc_sprite_and_frames() {
+    // `sprite=` と `frames=` の双方向変換。未指定の既存 NPC は None のまま維持される。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[NPC elder @5,3 色=#ff0000 sprite=elder.png frames=2]
+hi
+[/NPC]
+
+[NPC kid @2,2 色=#00aaff sprite=kid.png]
+hey
+[/NPC]
+
+[NPC plain @0,0 色=#888888]
+default square
+[/NPC]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3);
+    if let Event::Npc(n) = &events[0] {
+        assert_eq!(n.sprite.as_deref(), Some("elder.png"));
+        assert_eq!(n.frames, Some(2));
+    } else {
+        panic!("Expected Npc");
+    }
+    if let Event::Npc(n) = &events[1] {
+        assert_eq!(n.sprite.as_deref(), Some("kid.png"));
+        assert_eq!(n.frames, None, "frames absent when not specified");
+    } else {
+        panic!("Expected Npc");
+    }
+    if let Event::Npc(n) = &events[2] {
+        assert_eq!(n.sprite, None);
+        assert_eq!(n.frames, None);
+    } else {
+        panic!("Expected Npc");
+    }
+
+    // Round-trip
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("sprite=elder.png"));
+    assert!(emitted.contains("frames=2"));
+    // plain NPC should NOT gain sprite/frames after round-trip
+    let plain_line = emitted
+        .lines()
+        .find(|l| l.contains("[NPC plain "))
+        .expect("plain NPC header should exist");
+    assert!(
+        !plain_line.contains("sprite="),
+        "plain NPC should not emit sprite=: {}",
+        plain_line
+    );
+    assert!(
+        !plain_line.contains("frames="),
+        "plain NPC should not emit frames=: {}",
+        plain_line
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
+fn test_rpg_npc_invalid_frames_is_ignored() {
+    // `frames=0` や非数値は無効扱い（None のまま）。NPC 自体はパースされる。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[NPC a @0,0 色=#ff0000 frames=0]
+hi
+[/NPC]
+
+[NPC b @1,1 色=#ff0000 frames=abc]
+hi
+[/NPC]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2);
+    if let Event::Npc(n) = &events[0] {
+        assert_eq!(n.frames, None, "frames=0 is invalid");
+    }
+    if let Event::Npc(n) = &events[1] {
+        assert_eq!(n.frames, None, "non-numeric frames is invalid");
+    }
+}
+
+#[test]
 fn test_rpg_map_dimension_mismatch_row_count_short() {
     // Declared 5x4, actual 2 rows: parser tolerantly pads to 4 with zero rows,
     // and a warning is emitted to stderr. The panic-free behavior is what we
