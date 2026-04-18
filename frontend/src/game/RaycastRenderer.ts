@@ -543,15 +543,23 @@ export class RaycastRenderer {
     const invDet = 1.0 / (planeX * dirY - dirX * planeY)
     for (const entry of npcSprites) {
       const n = entry.npc
+      // プレイヤーと同タイルに立っている NPC は描画不要（衝突判定で発生しないが保険）
+      const nTileX = Math.floor(n.x)
+      const nTileY = Math.floor(n.y)
+      const pTileX = Math.floor(this.playerX)
+      const pTileY = Math.floor(this.playerY)
+      if (nTileX === pTileX && nTileY === pTileY) continue
       const rx = n.x - this.playerX
       const ry = n.y - this.playerY
       const transformX = invDet * (dirY * rx - dirX * ry)
       const transformY = invDet * (-planeY * rx + planeX * ry) // これが depth
 
-      if (transformY <= 0.05) continue // 後ろ or 至近
+      if (transformY <= 0.01) continue // 後ろ or ゼロ除算ガードのみ
 
       const spriteScreenX = Math.floor((w / 2) * (1 + transformX / transformY))
-      const spriteHeight = Math.abs(Math.floor(h / transformY))
+      // 極小 transformY でスプライトが青天井に肥大化するのを防ぐ。分母に下限を設ける
+      const clampedDepth = Math.max(transformY, 0.1)
+      const spriteHeight = Math.abs(Math.floor(h / clampedDepth))
       const spriteWidthPx = spriteHeight
       let drawStartY = Math.floor(-spriteHeight / 2 + h / 2)
       if (drawStartY < 0) drawStartY = 0
