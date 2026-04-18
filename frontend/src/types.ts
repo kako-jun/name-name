@@ -21,6 +21,30 @@ export type FlagValue =
   | { String: string }
   | { Number: number }
 
+export type Direction = 'Up' | 'Down' | 'Left' | 'Right'
+
+export interface RpgMapData {
+  width: number
+  height: number
+  tile_size: number
+  tiles: number[][]
+}
+
+export interface NpcData {
+  id: string
+  name: string
+  x: number
+  y: number
+  color: number
+  message: string[]
+}
+
+export interface PlayerStartData {
+  x: number
+  y: number
+  direction: Direction
+}
+
 export type Event =
   | { Dialog: { character: string | null; expression: string | null; position: string | null; text: string[] } }
   | { Narration: { text: string[] } }
@@ -35,6 +59,9 @@ export type Event =
   | { Flag: { name: string; value: FlagValue } }
   | { Condition: { flag: string; events: Event[] } }
   | { ExpressionChange: { character: string; expression: string } }
+  | { RpgMap: RpgMapData }
+  | { PlayerStart: PlayerStartData }
+  | { Npc: NpcData }
 
 export interface EventScene {
   id: string
