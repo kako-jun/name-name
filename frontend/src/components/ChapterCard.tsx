@@ -1,70 +1,74 @@
 import { motion } from 'framer-motion'
-import { Chapter, EditableCutField } from '../types'
+import type { EventChapter, EventRef, Event } from '../types'
 import SceneCard from './SceneCard'
 
 interface ChapterCardProps {
-  chapter: Chapter
-  chapterIndex: number
+  chapter: EventChapter
+  chapterIdx: number
   isDark: boolean
-  editingChapterId: number | null
-  editingSceneId: number | null
-  editingCutId: number | null
-  selectedCutId: number | null
+  editingChapterIdx: number | null
+  editingSceneRef: { chapterIdx: number; sceneIdx: number } | null
+  editingEvent: EventRef | null
+  selectedEvent: EventRef | null
   editingRef: React.RefObject<HTMLDivElement>
   draggedChapter: number | null
   chapterDropTarget: number | null
-  draggedScene: { chapterId: number; sceneId: number } | null
-  sceneDropTarget: { chapterId: number; position: number } | null
-  draggedCut: { chapterId: number; sceneId: number; cutId: number } | null
-  dropTarget: { chapterId: number; sceneId: number; position: number } | null
-  onChapterTitleChange: (chapterId: number, title: string) => void
-  onDeleteChapter: (chapterId: number) => void
-  onStartEditingChapter: (chapterId: number) => void
-  onChapterDragStart: (chapterId: number) => void
+  draggedScene: { chapterIdx: number; sceneIdx: number } | null
+  sceneDropTarget: { chapterIdx: number; position: number } | null
+  draggedEvent: EventRef | null
+  eventDropTarget: { chapterIdx: number; sceneIdx: number; position: number } | null
+  onChapterTitleChange: (chapterIdx: number, title: string) => void
+  onDeleteChapter: (chapterIdx: number) => void
+  onStartEditingChapter: (chapterIdx: number) => void
+  onChapterDragStart: (chapterIdx: number) => void
   onChapterDragEnd: () => void
   onChapterDragOver: (e: React.DragEvent, position: number) => void
   onChapterDrop: (e: React.DragEvent) => void
   onAddChapter: (position: number) => void
-  onAddScene: (chapterId: number, position: number) => void
-  onSceneTitleChange: (chapterId: number, sceneId: number, title: string) => void
-  onDeleteScene: (chapterId: number, sceneId: number) => void
-  onStartEditingScene: (sceneId: number) => void
-  onSceneDragStart: (chapterId: number, sceneId: number) => void
+  onAddScene: (chapterIdx: number, position: number) => void
+  onSceneTitleChange: (chapterIdx: number, sceneIdx: number, title: string) => void
+  onDeleteScene: (chapterIdx: number, sceneIdx: number) => void
+  onStartEditingScene: (chapterIdx: number, sceneIdx: number) => void
+  onSceneDragStart: (chapterIdx: number, sceneIdx: number) => void
   onSceneDragEnd: () => void
-  onSceneDragOver: (e: React.DragEvent, chapterId: number, position: number) => void
+  onSceneDragOver: (e: React.DragEvent, chapterIdx: number, position: number) => void
   onSceneDrop: (e: React.DragEvent) => void
-  onAddCut: (chapterId: number, sceneId: number, position: number) => void
-  onCutChange: (
-    chapterId: number,
-    sceneId: number,
-    cutId: number,
-    field: EditableCutField,
-    value: string
+  onAddEvent: (
+    chapterIdx: number,
+    sceneIdx: number,
+    position: number,
+    variant: 'Dialog' | 'Narration'
   ) => void
-  onDeleteCut: (chapterId: number, sceneId: number, cutId: number) => void
-  onStartEditingCut: (cutId: number) => void
-  onSelectCut: (cutId: number) => void
-  onCutDragStart: (chapterId: number, sceneId: number, cutId: number) => void
-  onCutDragEnd: () => void
-  onCutDragOver: (e: React.DragEvent, chapterId: number, sceneId: number, position: number) => void
-  onCutDrop: (e: React.DragEvent) => void
+  onEventChange: (chapterIdx: number, sceneIdx: number, eventIdx: number, newEvent: Event) => void
+  onDeleteEvent: (chapterIdx: number, sceneIdx: number, eventIdx: number) => void
+  onStartEditingEvent: (ref: EventRef) => void
+  onSelectEvent: (ref: EventRef) => void
+  onEventDragStart: (ref: EventRef) => void
+  onEventDragEnd: () => void
+  onEventDragOver: (
+    e: React.DragEvent,
+    chapterIdx: number,
+    sceneIdx: number,
+    position: number
+  ) => void
+  onEventDrop: (e: React.DragEvent) => void
 }
 
 function ChapterCard({
   chapter,
-  chapterIndex,
+  chapterIdx,
   isDark,
-  editingChapterId,
-  editingSceneId,
-  editingCutId,
-  selectedCutId,
+  editingChapterIdx,
+  editingSceneRef,
+  editingEvent,
+  selectedEvent,
   editingRef,
   draggedChapter,
   chapterDropTarget,
   draggedScene,
   sceneDropTarget,
-  draggedCut,
-  dropTarget,
+  draggedEvent,
+  eventDropTarget,
   onChapterTitleChange,
   onDeleteChapter,
   onStartEditingChapter,
@@ -81,16 +85,23 @@ function ChapterCard({
   onSceneDragEnd,
   onSceneDragOver,
   onSceneDrop,
-  onAddCut,
-  onCutChange,
-  onDeleteCut,
-  onStartEditingCut,
-  onSelectCut,
-  onCutDragStart,
-  onCutDragEnd,
-  onCutDragOver,
-  onCutDrop,
+  onAddEvent,
+  onEventChange,
+  onDeleteEvent,
+  onStartEditingEvent,
+  onSelectEvent,
+  onEventDragStart,
+  onEventDragEnd,
+  onEventDragOver,
+  onEventDrop,
 }: ChapterCardProps) {
+  const isEditingChapter = editingChapterIdx === chapterIdx
+  const isBeingDragged = draggedChapter === chapterIdx
+  const editingSceneIdxInThis =
+    editingSceneRef !== null && editingSceneRef.chapterIdx === chapterIdx
+      ? editingSceneRef.sceneIdx
+      : null
+
   return (
     <>
       {/* 章の追加ボタン（章がドラッグされている時だけ表示） */}
@@ -98,7 +109,7 @@ function ChapterCard({
         <div
           draggable={false}
           className={`group w-12 flex-shrink-0 flex items-start justify-center pt-8 transition-all rounded cursor-pointer ${
-            chapterDropTarget === chapterIndex
+            chapterDropTarget === chapterIdx
               ? isDark
                 ? 'bg-indigo-900/40 border-2 border-indigo-400'
                 : 'bg-indigo-100 border-2 border-indigo-600'
@@ -106,8 +117,8 @@ function ChapterCard({
                 ? 'bg-gray-700/20 hover:bg-gray-700/40'
                 : 'bg-gray-200/50 hover:bg-gray-200'
           }`}
-          onClick={() => onAddChapter(chapterIndex)}
-          onDragOver={(e) => onChapterDragOver(e, chapterIndex)}
+          onClick={() => onAddChapter(chapterIdx)}
+          onDragOver={(e) => onChapterDragOver(e, chapterIdx)}
           onDrop={onChapterDrop}
           title="章を追加"
         >
@@ -130,21 +141,20 @@ function ChapterCard({
 
       <motion.div
         layout
-        layoutId={`chapter-${chapter.id}`}
         transition={{ type: 'spring', stiffness: 300, damping: 30 }}
         className={`flex-shrink-0 w-96 p-6 rounded-lg shadow-lg ${
           isDark ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-300'
-        } ${draggedChapter === chapter.id ? 'opacity-50' : ''}`}
+        } ${isBeingDragged ? 'opacity-50' : ''}`}
       >
         {/* 章のヘッダー */}
         <div className="relative mb-4">
           {/* ドラッグハンドル */}
-          {editingChapterId !== chapter.id && (
+          {!isEditingChapter && (
             <div
               draggable
               onDragStart={(e) => {
                 e.stopPropagation()
-                onChapterDragStart(chapter.id)
+                onChapterDragStart(chapterIdx)
               }}
               onDragEnd={onChapterDragEnd}
               onMouseDown={(e) => e.stopPropagation()}
@@ -159,7 +169,7 @@ function ChapterCard({
             </div>
           )}
 
-          {editingChapterId === chapter.id ? (
+          {isEditingChapter ? (
             <div
               ref={editingRef}
               className="space-y-2"
@@ -169,7 +179,7 @@ function ChapterCard({
               <input
                 type="text"
                 value={chapter.title}
-                onChange={(e) => onChapterTitleChange(chapter.id, e.target.value)}
+                onChange={(e) => onChapterTitleChange(chapterIdx, e.target.value)}
                 autoFocus
                 placeholder="章のタイトル"
                 className={`w-full px-3 py-2 text-xl font-bold rounded border ${
@@ -181,7 +191,7 @@ function ChapterCard({
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onDeleteChapter(chapter.id)
+                  onDeleteChapter(chapterIdx)
                 }}
                 className={`w-full px-3 py-2 text-sm rounded transition-colors ${
                   isDark
@@ -196,7 +206,7 @@ function ChapterCard({
             <div
               onClick={(e) => {
                 e.stopPropagation()
-                onStartEditingChapter(chapter.id)
+                onStartEditingChapter(chapterIdx)
               }}
               onMouseDown={(e) => e.stopPropagation()}
               className="cursor-pointer mb-4"
@@ -207,7 +217,7 @@ function ChapterCard({
                     isDark ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
                   }`}
                 >
-                  第{chapterIndex + 1}章
+                  第{chapter.number}章
                 </span>
               </div>
               <div className={`font-bold text-xl ml-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>
@@ -219,21 +229,21 @@ function ChapterCard({
 
         {/* シーン一覧 */}
         <div className="space-y-2">
-          {chapter.scenes.map((scene, sceneIndex) => (
+          {chapter.scenes.map((scene, sceneIdx) => (
             <SceneCard
               key={scene.id}
               scene={scene}
-              chapterId={chapter.id}
-              sceneIndex={sceneIndex}
+              chapterIdx={chapterIdx}
+              sceneIdx={sceneIdx}
               isDark={isDark}
-              editingSceneId={editingSceneId}
-              editingCutId={editingCutId}
-              selectedCutId={selectedCutId}
+              editingSceneIdx={editingSceneIdxInThis}
+              editingEvent={editingEvent}
+              selectedEvent={selectedEvent}
               editingRef={editingRef}
               draggedScene={draggedScene}
               sceneDropTarget={sceneDropTarget}
-              draggedCut={draggedCut}
-              dropTarget={dropTarget}
+              draggedEvent={draggedEvent}
+              eventDropTarget={eventDropTarget}
               onSceneTitleChange={onSceneTitleChange}
               onDeleteScene={onDeleteScene}
               onStartEditingScene={onStartEditingScene}
@@ -241,24 +251,40 @@ function ChapterCard({
               onSceneDragEnd={onSceneDragEnd}
               onSceneDragOver={onSceneDragOver}
               onSceneDrop={onSceneDrop}
-              onAddCut={onAddCut}
-              onCutChange={onCutChange}
-              onDeleteCut={onDeleteCut}
-              onStartEditingCut={onStartEditingCut}
-              onSelectCut={onSelectCut}
-              onCutDragStart={onCutDragStart}
-              onCutDragEnd={onCutDragEnd}
-              onCutDragOver={onCutDragOver}
-              onCutDrop={onCutDrop}
+              onAddEvent={onAddEvent}
+              onEventChange={onEventChange}
+              onDeleteEvent={onDeleteEvent}
+              onStartEditingEvent={onStartEditingEvent}
+              onSelectEvent={onSelectEvent}
+              onEventDragStart={onEventDragStart}
+              onEventDragEnd={onEventDragEnd}
+              onEventDragOver={onEventDragOver}
+              onEventDrop={onEventDrop}
             />
           ))}
 
-          {/* 最後のシーン追加ボタン（場面がドラッグされている時だけ表示） */}
+          {/* シーン追加ボタン（常に表示） */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onAddScene(chapterIdx, chapter.scenes.length)
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className={`w-full px-2 py-1 text-xs rounded transition-colors ${
+              isDark
+                ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+            }`}
+          >
+            + シーンを追加
+          </button>
+
+          {/* 最後のシーン追加ドロップ領域（場面がドラッグされている時だけ表示） */}
           {draggedScene !== null && (
             <div
               draggable={false}
               className={`group h-6 flex items-center justify-center transition-all rounded cursor-pointer ${
-                sceneDropTarget?.chapterId === chapter.id &&
+                sceneDropTarget?.chapterIdx === chapterIdx &&
                 sceneDropTarget?.position === chapter.scenes.length
                   ? isDark
                     ? 'bg-indigo-900/40 border border-indigo-400'
@@ -267,8 +293,7 @@ function ChapterCard({
                     ? 'bg-gray-700/20 hover:bg-gray-700/40'
                     : 'bg-gray-200/50 hover:bg-gray-200'
               }`}
-              onClick={() => onAddScene(chapter.id, chapter.scenes.length)}
-              onDragOver={(e) => onSceneDragOver(e, chapter.id, chapter.scenes.length)}
+              onDragOver={(e) => onSceneDragOver(e, chapterIdx, chapter.scenes.length)}
               onDrop={onSceneDrop}
             >
               <div

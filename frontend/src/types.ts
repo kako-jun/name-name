@@ -1,35 +1,8 @@
-/** @deprecated 旧データモデル。Event に移行予定 */
-export interface Cut {
-  id: number
-  character: string
-  text: string
-  expression: string
-  // 将来的な拡張用
-  notes?: string
-  links?: number[] // 関連するカットのID
-}
-
-/** @deprecated 旧データモデル。EventScene に移行予定 */
-export interface Scene {
-  id: number
-  title: string
-  cuts: Cut[]
-}
-
-/** @deprecated 旧データモデル。EventChapter に移行予定 */
-export interface Chapter {
-  id: number
-  title: string
-  scenes: Scene[]
-}
-
 export interface Viewport {
   x: number // パン位置 X
   y: number // パン位置 Y
   zoom: number // ズームレベル (0.1 ~ 5.0)
 }
-
-export type EditableCutField = 'character' | 'text' | 'expression'
 
 export type Mode = 'edit' | 'play'
 
@@ -81,3 +54,13 @@ export interface EventDocument {
   engine: string
   chapters: EventChapter[]
 }
+
+/** エディタでの編集位置を示す参照（章インデックス、シーンインデックス、イベントインデックス） */
+export interface EventRef {
+  chapterIdx: number
+  sceneIdx: number
+  eventIdx: number
+}
+
+export type EditableDialogField = 'character' | 'expression' | 'text'
+export type EditableNarrationField = 'text'

@@ -1,57 +1,61 @@
 import { motion } from 'framer-motion'
-import { Scene, EditableCutField } from '../types'
-import CutCard from './CutCard'
+import type { EventScene, EventRef, Event } from '../types'
+import EventCard from './EventCard'
 
 interface SceneCardProps {
-  scene: Scene
-  chapterId: number
-  sceneIndex: number
+  scene: EventScene
+  chapterIdx: number
+  sceneIdx: number
   isDark: boolean
-  editingSceneId: number | null
-  editingCutId: number | null
-  selectedCutId: number | null
+  editingSceneIdx: number | null
+  editingEvent: EventRef | null
+  selectedEvent: EventRef | null
   editingRef: React.RefObject<HTMLDivElement>
-  draggedScene: { chapterId: number; sceneId: number } | null
-  sceneDropTarget: { chapterId: number; position: number } | null
-  draggedCut: { chapterId: number; sceneId: number; cutId: number } | null
-  dropTarget: { chapterId: number; sceneId: number; position: number } | null
-  onSceneTitleChange: (chapterId: number, sceneId: number, title: string) => void
-  onDeleteScene: (chapterId: number, sceneId: number) => void
-  onStartEditingScene: (sceneId: number) => void
-  onSceneDragStart: (chapterId: number, sceneId: number) => void
+  draggedScene: { chapterIdx: number; sceneIdx: number } | null
+  sceneDropTarget: { chapterIdx: number; position: number } | null
+  draggedEvent: EventRef | null
+  eventDropTarget: { chapterIdx: number; sceneIdx: number; position: number } | null
+  onSceneTitleChange: (chapterIdx: number, sceneIdx: number, title: string) => void
+  onDeleteScene: (chapterIdx: number, sceneIdx: number) => void
+  onStartEditingScene: (chapterIdx: number, sceneIdx: number) => void
+  onSceneDragStart: (chapterIdx: number, sceneIdx: number) => void
   onSceneDragEnd: () => void
-  onSceneDragOver: (e: React.DragEvent, chapterId: number, position: number) => void
+  onSceneDragOver: (e: React.DragEvent, chapterIdx: number, position: number) => void
   onSceneDrop: (e: React.DragEvent) => void
-  onAddCut: (chapterId: number, sceneId: number, position: number) => void
-  onCutChange: (
-    chapterId: number,
-    sceneId: number,
-    cutId: number,
-    field: EditableCutField,
-    value: string
+  onAddEvent: (
+    chapterIdx: number,
+    sceneIdx: number,
+    position: number,
+    variant: 'Dialog' | 'Narration'
   ) => void
-  onDeleteCut: (chapterId: number, sceneId: number, cutId: number) => void
-  onStartEditingCut: (cutId: number) => void
-  onSelectCut: (cutId: number) => void
-  onCutDragStart: (chapterId: number, sceneId: number, cutId: number) => void
-  onCutDragEnd: () => void
-  onCutDragOver: (e: React.DragEvent, chapterId: number, sceneId: number, position: number) => void
-  onCutDrop: (e: React.DragEvent) => void
+  onEventChange: (chapterIdx: number, sceneIdx: number, eventIdx: number, newEvent: Event) => void
+  onDeleteEvent: (chapterIdx: number, sceneIdx: number, eventIdx: number) => void
+  onStartEditingEvent: (ref: EventRef) => void
+  onSelectEvent: (ref: EventRef) => void
+  onEventDragStart: (ref: EventRef) => void
+  onEventDragEnd: () => void
+  onEventDragOver: (
+    e: React.DragEvent,
+    chapterIdx: number,
+    sceneIdx: number,
+    position: number
+  ) => void
+  onEventDrop: (e: React.DragEvent) => void
 }
 
 function SceneCard({
   scene,
-  chapterId,
-  sceneIndex,
+  chapterIdx,
+  sceneIdx,
   isDark,
-  editingSceneId,
-  editingCutId,
-  selectedCutId,
+  editingSceneIdx,
+  editingEvent,
+  selectedEvent,
   editingRef,
   draggedScene,
   sceneDropTarget,
-  draggedCut,
-  dropTarget,
+  draggedEvent,
+  eventDropTarget,
   onSceneTitleChange,
   onDeleteScene,
   onStartEditingScene,
@@ -59,23 +63,29 @@ function SceneCard({
   onSceneDragEnd,
   onSceneDragOver,
   onSceneDrop,
-  onAddCut,
-  onCutChange,
-  onDeleteCut,
-  onStartEditingCut,
-  onSelectCut,
-  onCutDragStart,
-  onCutDragEnd,
-  onCutDragOver,
-  onCutDrop,
+  onAddEvent,
+  onEventChange,
+  onDeleteEvent,
+  onStartEditingEvent,
+  onSelectEvent,
+  onEventDragStart,
+  onEventDragEnd,
+  onEventDragOver,
+  onEventDrop,
 }: SceneCardProps) {
+  const isEditingScene = editingSceneIdx === sceneIdx
+  const isBeingDragged =
+    draggedScene !== null &&
+    draggedScene.chapterIdx === chapterIdx &&
+    draggedScene.sceneIdx === sceneIdx
+
   return (
     <>
       {/* シーンのドロップ領域（場面がドラッグされている時だけ表示） */}
       {draggedScene !== null && (
         <div
           className={`group h-6 flex items-center justify-center transition-all rounded cursor-pointer ${
-            sceneDropTarget?.chapterId === chapterId && sceneDropTarget?.position === sceneIndex
+            sceneDropTarget?.chapterIdx === chapterIdx && sceneDropTarget?.position === sceneIdx
               ? isDark
                 ? 'bg-indigo-900/40 border border-indigo-400'
                 : 'bg-indigo-100 border border-indigo-600'
@@ -83,7 +93,7 @@ function SceneCard({
                 ? 'bg-gray-700/20 hover:bg-gray-700/40'
                 : 'bg-gray-200/50 hover:bg-gray-200'
           }`}
-          onDragOver={(e) => onSceneDragOver(e, chapterId, sceneIndex)}
+          onDragOver={(e) => onSceneDragOver(e, chapterIdx, sceneIdx)}
           onDrop={onSceneDrop}
         >
           <div
@@ -103,17 +113,17 @@ function SceneCard({
         transition={{ type: 'spring', stiffness: 300, damping: 30 }}
         className={`mb-4 p-4 rounded-lg border ${
           isDark ? 'bg-gray-700/50 border-gray-600' : 'bg-gray-50 border-gray-300'
-        } ${draggedScene?.sceneId === scene.id ? 'opacity-50' : ''}`}
+        } ${isBeingDragged ? 'opacity-50' : ''}`}
       >
         {/* シーンのヘッダー */}
         <div className="relative mb-2">
           {/* ドラッグハンドル */}
-          {editingSceneId !== scene.id && (
+          {!isEditingScene && (
             <div
               draggable
               onDragStart={(e) => {
                 e.stopPropagation()
-                onSceneDragStart(chapterId, scene.id)
+                onSceneDragStart(chapterIdx, sceneIdx)
               }}
               onDragEnd={onSceneDragEnd}
               onMouseDown={(e) => e.stopPropagation()}
@@ -128,7 +138,7 @@ function SceneCard({
             </div>
           )}
 
-          {editingSceneId === scene.id ? (
+          {isEditingScene ? (
             <div
               ref={editingRef}
               className="space-y-2"
@@ -138,7 +148,7 @@ function SceneCard({
               <input
                 type="text"
                 value={scene.title}
-                onChange={(e) => onSceneTitleChange(chapterId, scene.id, e.target.value)}
+                onChange={(e) => onSceneTitleChange(chapterIdx, sceneIdx, e.target.value)}
                 autoFocus
                 placeholder="シーンのタイトル"
                 className={`w-full px-2 py-1 text-lg font-semibold rounded border ${
@@ -150,7 +160,7 @@ function SceneCard({
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onDeleteScene(chapterId, scene.id)
+                  onDeleteScene(chapterIdx, sceneIdx)
                 }}
                 className={`w-full px-2 py-1 text-xs rounded transition-colors ${
                   isDark
@@ -165,7 +175,7 @@ function SceneCard({
             <div
               onClick={(e) => {
                 e.stopPropagation()
-                onStartEditingScene(scene.id)
+                onStartEditingScene(chapterIdx, sceneIdx)
               }}
               onMouseDown={(e) => e.stopPropagation()}
               className="cursor-pointer"
@@ -176,7 +186,7 @@ function SceneCard({
                     isDark ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
                   }`}
                 >
-                  シーン{sceneIndex + 1}
+                  シーン{sceneIdx + 1}
                 </span>
               </div>
               <div
@@ -188,40 +198,90 @@ function SceneCard({
           )}
         </div>
 
-        {/* カット一覧 */}
+        {/* イベント一覧 */}
         <div className="space-y-2">
-          {scene.cuts.map((cut, cutIndex) => (
-            <CutCard
-              key={cut.id}
-              cut={cut}
-              chapterId={chapterId}
-              sceneId={scene.id}
-              cutIndex={cutIndex}
-              isDark={isDark}
-              editingCutId={editingCutId}
-              selectedCutId={selectedCutId}
-              editingRef={editingRef}
-              draggedCut={draggedCut}
-              dropTarget={dropTarget}
-              onCutChange={onCutChange}
-              onDeleteCut={onDeleteCut}
-              onStartEditing={onStartEditingCut}
-              onSelectCut={onSelectCut}
-              onCutDragStart={onCutDragStart}
-              onCutDragEnd={onCutDragEnd}
-              onCutDragOver={onCutDragOver}
-              onCutDrop={onCutDrop}
-            />
-          ))}
+          {scene.events.map((event, eventIdx) => {
+            const isEditingThis =
+              editingEvent !== null &&
+              editingEvent.chapterIdx === chapterIdx &&
+              editingEvent.sceneIdx === sceneIdx &&
+              editingEvent.eventIdx === eventIdx
+            const isSelectedThis =
+              selectedEvent !== null &&
+              selectedEvent.chapterIdx === chapterIdx &&
+              selectedEvent.sceneIdx === sceneIdx &&
+              selectedEvent.eventIdx === eventIdx
+            const isDraggedThis =
+              draggedEvent !== null &&
+              draggedEvent.chapterIdx === chapterIdx &&
+              draggedEvent.sceneIdx === sceneIdx &&
+              draggedEvent.eventIdx === eventIdx
+            return (
+              <EventCard
+                key={`${chapterIdx}-${sceneIdx}-${eventIdx}`}
+                event={event}
+                chapterIdx={chapterIdx}
+                sceneIdx={sceneIdx}
+                eventIdx={eventIdx}
+                isDark={isDark}
+                isEditing={isEditingThis}
+                isSelected={isSelectedThis}
+                editingRef={editingRef}
+                isDragging={isDraggedThis}
+                draggedEvent={draggedEvent}
+                dropTarget={eventDropTarget}
+                onEventChange={onEventChange}
+                onDeleteEvent={onDeleteEvent}
+                onStartEditing={onStartEditingEvent}
+                onSelectEvent={onSelectEvent}
+                onEventDragStart={onEventDragStart}
+                onEventDragEnd={onEventDragEnd}
+                onEventDragOver={onEventDragOver}
+                onEventDrop={onEventDrop}
+              />
+            )
+          })}
 
-          {/* 最後のカット追加ボタン（カットがドラッグされている時だけ表示） */}
-          {draggedCut !== null && (
+          {/* イベント追加ボタン（ダイアログ/ナレーション） */}
+          <div className="flex gap-2 mt-2">
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onAddEvent(chapterIdx, sceneIdx, scene.events.length, 'Dialog')
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                isDark
+                  ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                  : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+              }`}
+            >
+              + ダイアログ
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onAddEvent(chapterIdx, sceneIdx, scene.events.length, 'Narration')
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                isDark
+                  ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                  : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+              }`}
+            >
+              + ナレーション
+            </button>
+          </div>
+
+          {/* 最後のイベント追加ドロップ領域（イベントがドラッグされている時だけ表示） */}
+          {draggedEvent !== null && (
             <div
               draggable={false}
               className={`group h-6 flex items-center justify-center transition-all rounded cursor-pointer ${
-                dropTarget?.chapterId === chapterId &&
-                dropTarget?.sceneId === scene.id &&
-                dropTarget?.position === scene.cuts.length
+                eventDropTarget?.chapterIdx === chapterIdx &&
+                eventDropTarget?.sceneIdx === sceneIdx &&
+                eventDropTarget?.position === scene.events.length
                   ? isDark
                     ? 'bg-indigo-900/40 border border-indigo-400'
                     : 'bg-indigo-100 border border-indigo-600'
@@ -229,9 +289,8 @@ function SceneCard({
                     ? 'bg-gray-700/20 hover:bg-gray-700/40'
                     : 'bg-gray-200/50 hover:bg-gray-200'
               }`}
-              onClick={() => onAddCut(chapterId, scene.id, scene.cuts.length)}
-              onDragOver={(e) => onCutDragOver(e, chapterId, scene.id, scene.cuts.length)}
-              onDrop={onCutDrop}
+              onDragOver={(e) => onEventDragOver(e, chapterIdx, sceneIdx, scene.events.length)}
+              onDrop={onEventDrop}
             >
               <div
                 className={`opacity-0 group-hover:opacity-100 transition-opacity text-xs ${
