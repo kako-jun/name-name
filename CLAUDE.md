@@ -407,6 +407,7 @@ uv sync
 - `docs/spec/markdown-v0.1.md` - Markdown v0.1 構文仕様（パーサー対応全構文）
 - `docs/architecture.md` - アーキテクチャ設計書（モノレポ構造、状態管理、レンダリング）
 - `docs/guide/controls.md` - 操作ガイド（キー操作、セーブ/ロード、バックログ、シークバー）
+- `docs/guide/editor.md` - エディタガイド（ノベル/RPG タブ、シーン選択、視点切替）
 - `backend/README.md` - バックエンドAPI詳細
 - `backend/ASSETS.md` - アセット管理とPixiJS統合
 - `backend/BRANCHES.md` - ブランチ戦略詳細
