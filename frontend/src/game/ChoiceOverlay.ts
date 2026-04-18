@@ -23,7 +23,7 @@ export class ChoiceOverlay extends Container {
 
   constructor(
     private screenWidth: number,
-    private screenHeight: number,
+    private screenHeight: number
   ) {
     super()
     this.eventMode = 'static'

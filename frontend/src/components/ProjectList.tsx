@@ -36,7 +36,9 @@ function ProjectList({ apiBaseUrl, isDark, onSelectProject }: ProjectListProps) 
 
   if (loading) {
     return (
-      <div className={`flex items-center justify-center h-full ${isDark ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}>
+      <div
+        className={`flex items-center justify-center h-full ${isDark ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}
+      >
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
           <p>読み込み中...</p>
@@ -46,8 +48,12 @@ function ProjectList({ apiBaseUrl, isDark, onSelectProject }: ProjectListProps) 
   }
 
   return (
-    <div className={`flex flex-col items-center justify-center h-full p-8 ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
-      <div className={`w-full max-w-2xl ${isDark ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-xl p-8`}>
+    <div
+      className={`flex flex-col items-center justify-center h-full p-8 ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}
+    >
+      <div
+        className={`w-full max-w-2xl ${isDark ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-xl p-8`}
+      >
         <h2 className={`text-2xl font-bold mb-6 ${isDark ? 'text-white' : 'text-gray-900'}`}>
           プロジェクトを選択
         </h2>

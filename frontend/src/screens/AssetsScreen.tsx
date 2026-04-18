@@ -190,10 +190,13 @@ function AssetsScreen({
         const formData = new FormData()
         formData.append('file', file)
 
-        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}`, {
-          method: 'POST',
-          body: formData,
-        })
+        const response = await fetch(
+          `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}`,
+          {
+            method: 'POST',
+            body: formData,
+          }
+        )
 
         if (!response.ok) {
           throw new Error(`Failed to upload ${file.name}: ${response.status}`)
@@ -219,9 +222,12 @@ function AssetsScreen({
     if (!deletingAsset) return
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}/${deletingAsset.name}`, {
-        method: 'DELETE',
-      })
+      const response = await fetch(
+        `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}/${deletingAsset.name}`,
+        {
+          method: 'DELETE',
+        }
+      )
 
       if (!response.ok) {
         throw new Error(`Failed to delete ${deletingAsset.name}: ${response.status}`)
@@ -306,10 +312,14 @@ function AssetsScreen({
 
   return (
     <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
-      <header className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}>
+      <header
+        className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
+      >
         <div className="px-6 py-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className={`text-lg font-semibold flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+            <h1
+              className={`text-lg font-semibold flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-900'}`}
+            >
               <span>Name × Name</span>
               <span className={isDark ? 'text-gray-500' : 'text-gray-400'}>-</span>
               <button
@@ -364,14 +374,21 @@ function AssetsScreen({
                   strokeWidth={2}
                   d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
                 />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                />
               </svg>
             </button>
           </div>
         </div>
 
         {/* タブ */}
-        <div className={`flex items-center border-t ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
+        <div
+          className={`flex items-center border-t ${isDark ? 'border-gray-700' : 'border-gray-200'}`}
+        >
           <div className="flex flex-1">
             {(['images', 'sounds', 'movies', 'ideas'] as AssetType[]).map((type) => (
               <button
@@ -399,7 +416,12 @@ function AssetsScreen({
             title="閉じる"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -407,7 +429,9 @@ function AssetsScreen({
 
       <main className="flex-1 overflow-hidden flex">
         {/* アセット一覧 */}
-        <div className={`w-96 border-r ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'} flex flex-col`}>
+        <div
+          className={`w-96 border-r ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'} flex flex-col`}
+        >
           {/* 検索・フィルター領域 */}
           <div className={`p-4 border-b ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
             <div className="relative">
@@ -493,7 +517,9 @@ function AssetsScreen({
                       )}
 
                       <div className="flex-1 min-w-0">
-                        <div className={`text-sm font-medium truncate ${isDark ? 'text-gray-200' : 'text-gray-900'}`}>
+                        <div
+                          className={`text-sm font-medium truncate ${isDark ? 'text-gray-200' : 'text-gray-900'}`}
+                        >
                           {asset.name}
                         </div>
                         <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
@@ -527,7 +553,12 @@ function AssetsScreen({
                         }`}
                         title="削除"
                       >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
                           <path
                             strokeLinecap="round"
                             strokeLinejoin="round"
@@ -583,7 +614,9 @@ function AssetsScreen({
         <div className="flex-1 overflow-y-auto">
           {selectedAsset ? (
             <div className="p-8">
-              <h2 className={`text-xl font-semibold mb-4 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+              <h2
+                className={`text-xl font-semibold mb-4 ${isDark ? 'text-white' : 'text-gray-900'}`}
+              >
                 {selectedAsset.name}
               </h2>
 
@@ -631,7 +664,11 @@ function AssetsScreen({
 
               {/* タグ管理 */}
               <div className={`mt-6 p-4 rounded-lg ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                <h3 className={`text-sm font-medium mb-2 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>タグ</h3>
+                <h3
+                  className={`text-sm font-medium mb-2 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                >
+                  タグ
+                </h3>
                 <div className="flex flex-wrap gap-1 mb-2">
                   {selectedAsset.tags.map((tag) => (
                     <span
@@ -686,7 +723,12 @@ function AssetsScreen({
             <div className="flex items-center justify-center h-full">
               <div className={`text-center ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
                 {selectedType === 'images' && (
-                  <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg
+                    className="w-16 h-16 mx-auto mb-4 opacity-50"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -696,7 +738,12 @@ function AssetsScreen({
                   </svg>
                 )}
                 {selectedType === 'sounds' && (
-                  <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg
+                    className="w-16 h-16 mx-auto mb-4 opacity-50"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -706,7 +753,12 @@ function AssetsScreen({
                   </svg>
                 )}
                 {selectedType === 'movies' && (
-                  <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg
+                    className="w-16 h-16 mx-auto mb-4 opacity-50"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -716,7 +768,12 @@ function AssetsScreen({
                   </svg>
                 )}
                 {selectedType === 'ideas' && (
-                  <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg
+                    className="w-16 h-16 mx-auto mb-4 opacity-50"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"

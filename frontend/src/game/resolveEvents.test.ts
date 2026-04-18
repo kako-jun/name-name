@@ -21,10 +21,7 @@ describe('resolveEvents', () => {
       { Narration: { text: ['後'] } },
     ]
     const result = resolveEvents(events, gs)
-    expect(result).toEqual([
-      { Narration: { text: ['前'] } },
-      { Narration: { text: ['後'] } },
-    ])
+    expect(result).toEqual([{ Narration: { text: ['前'] } }, { Narration: { text: ['後'] } }])
   })
 
   it('Condition が真なら内部 events を展開する', () => {
@@ -59,10 +56,7 @@ describe('resolveEvents', () => {
       },
     ]
     const result = resolveEvents(events, gs)
-    expect(result).toEqual([
-      { Narration: { text: ['外側'] } },
-      { Narration: { text: ['内側'] } },
-    ])
+    expect(result).toEqual([{ Narration: { text: ['外側'] } }, { Narration: { text: ['内側'] } }])
   })
 
   it('ネストした Condition の内側が偽なら内側だけスキップする', () => {
@@ -104,9 +98,7 @@ describe('resolveEvents', () => {
     const gs = new GameState()
     gs.setFlag('a', { Bool: true })
     const inner: Event[] = [{ Narration: { text: ['展開'] } }]
-    const events: Event[] = [
-      { Condition: { flag: 'a', events: inner } },
-    ]
+    const events: Event[] = [{ Condition: { flag: 'a', events: inner } }]
     const eventsCopy = JSON.parse(JSON.stringify(events))
     resolveEvents(events, gs)
     expect(events).toEqual(eventsCopy)
