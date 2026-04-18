@@ -408,6 +408,7 @@ uv sync
 - ✅ 選択肢・分岐 + フラグ・条件分岐（#10）— GameState / ChoiceOverlay / シーンジャンプ
 - ✅ セーブ/ロード + バックログ（#11）— SaveManager / SaveLoadOverlay / BacklogOverlay / localStorage 3スロット / JSON エクスポート・インポート
 - ✅ スナップショット方式リファクタリング（#26）— NovelGameState / resolveEvents / SeekBar / applyState 宣言的復元 / SaveSlotData 拡張
+- ✅ 壁テクスチャマッピング（#48）— ストライプ Sprite プール、デモ木目/水面、フォグ適用
 
 ## 参考ドキュメント
 
