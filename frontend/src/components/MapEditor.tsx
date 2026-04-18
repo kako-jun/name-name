@@ -16,15 +16,37 @@ const TILE_NAMES = {
   [TileType.WATER]: '水',
 }
 
+const PREVIEW_BUTTONS: ReadonlyArray<{
+  view: 'raycast' | 'topdown'
+  label: string
+  darkClass: string
+  lightClass: string
+}> = [
+  {
+    view: 'raycast',
+    label: 'Raycastでプレビュー',
+    darkClass: 'bg-purple-700 text-white hover:bg-purple-600',
+    lightClass: 'bg-purple-500 text-white hover:bg-purple-600',
+  },
+  {
+    view: 'topdown',
+    label: '見下ろしでプレビュー',
+    darkClass: 'bg-emerald-700 text-white hover:bg-emerald-600',
+    lightClass: 'bg-emerald-500 text-white hover:bg-emerald-600',
+  },
+]
+
 function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
   const [selectedTile, setSelectedTile] = useState<TileType>(TileType.GRASS)
   const [isPainting, setIsPainting] = useState(false)
   const [previewView, setPreviewView] = useState<'topdown' | 'raycast' | null>(null)
+  const isPreviewOpen = previewView !== null
 
   useEffect(() => {
-    if (previewView === null) return
+    if (!isPreviewOpen) return
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      // IME 変換確定用の Esc でモーダルが閉じないようガード
+      if (e.key === 'Escape' && !e.isComposing) {
         setPreviewView(null)
       }
     }
@@ -32,7 +54,7 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [previewView])
+  }, [isPreviewOpen])
 
   const handleTileClick = (x: number, y: number) => {
     const newTiles = mapData.tiles.map((row, rowIndex) =>
@@ -76,6 +98,7 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
               return (
                 <button
                   key={type}
+                  type="button"
                   onClick={() => setSelectedTile(tileType)}
                   className={`px-3 py-2 rounded flex items-center gap-2 transition-colors ${
                     selectedTile === tileType
@@ -97,26 +120,18 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
             })}
           </div>
           <div className="flex gap-2 ml-auto">
-            <button
-              onClick={() => setPreviewView('raycast')}
-              className={`px-3 py-2 rounded text-sm transition-colors ${
-                isDark
-                  ? 'bg-purple-700 text-white hover:bg-purple-600'
-                  : 'bg-purple-500 text-white hover:bg-purple-600'
-              }`}
-            >
-              Raycastでプレビュー
-            </button>
-            <button
-              onClick={() => setPreviewView('topdown')}
-              className={`px-3 py-2 rounded text-sm transition-colors ${
-                isDark
-                  ? 'bg-emerald-700 text-white hover:bg-emerald-600'
-                  : 'bg-emerald-500 text-white hover:bg-emerald-600'
-              }`}
-            >
-              見下ろしでプレビュー
-            </button>
+            {PREVIEW_BUTTONS.map((btn) => (
+              <button
+                key={btn.view}
+                type="button"
+                onClick={() => setPreviewView(btn.view)}
+                className={`px-3 py-2 rounded text-sm transition-colors ${
+                  isDark ? btn.darkClass : btn.lightClass
+                }`}
+              >
+                {btn.label}
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -158,7 +173,10 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
       {/* プレビューモーダル */}
       {previewView && (
         <div
-          className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200]"
+          role="dialog"
+          aria-modal="true"
+          aria-label={previewView === 'raycast' ? 'Raycast プレビュー' : '見下ろし プレビュー'}
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100]"
           onClick={(e) => {
             if (e.target === e.currentTarget) setPreviewView(null)
           }}
@@ -167,6 +185,7 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
             className={`relative w-[90vw] h-[90vh] rounded-lg overflow-hidden ${isDark ? 'bg-gray-900' : 'bg-white'}`}
           >
             <button
+              type="button"
               onClick={() => setPreviewView(null)}
               className="absolute top-2 right-2 z-10 px-3 py-1 rounded bg-gray-700 text-white hover:bg-gray-600"
               aria-label="プレビューを閉じる"
