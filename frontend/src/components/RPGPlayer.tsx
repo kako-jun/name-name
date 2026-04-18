@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { RPGRenderer } from '../game/RPGRenderer'
+import { TopDownRenderer } from '../game/TopDownRenderer'
 import { sampleRpgData } from '../game/sampleRpgData'
 import { RPGProject } from '../types/rpg'
 
@@ -14,7 +14,7 @@ function RPGPlayer({ gameData }: RPGPlayerProps) {
     const container = containerRef.current
     if (!container) return
 
-    const renderer = new RPGRenderer()
+    const renderer = new TopDownRenderer()
     let cancelled = false
 
     renderer
@@ -27,7 +27,7 @@ function RPGPlayer({ gameData }: RPGPlayerProps) {
         renderer.load(gameData ?? sampleRpgData)
       })
       .catch((err) => {
-        console.error('[name-name] RPGRenderer の初期化に失敗:', err)
+        console.error('[name-name] TopDownRenderer の初期化に失敗:', err)
       })
 
     return () => {
