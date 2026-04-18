@@ -11,6 +11,7 @@ import { NPCData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { RpgDialogBox } from './RpgDialogBox'
 import {
   clampFrames,
+  clearDemoSheetCache,
   directionToRow,
   loadNpcSpriteSheet,
   type NpcSpriteSheet,
@@ -153,6 +154,7 @@ export class TopDownRenderer {
     }
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
+      clearDemoSheetCache(this.app.renderer)
       this.app.destroy(true, { children: true })
       this.dialogBox = null
       this.initialized = false
@@ -223,6 +225,8 @@ export class TopDownRenderer {
       rect.stroke({ width: 2, color: 0x8b0000 })
       container.addChild(rect)
 
+      // phaseOffset: アニメ周期内を NPC 数で等分した位相差を与え、全員が同時に足踏みして画一的に見えるのを防ぐ
+      const stride = NPC_ANIM_PERIOD_MS / Math.max(1, npcData.length)
       const npc: NPC = {
         data,
         container,
@@ -230,7 +234,7 @@ export class TopDownRenderer {
         y: data.y,
         sprite: null,
         sheet: null,
-        phaseOffset: (i * NPC_ANIM_PERIOD_MS) / Math.max(1, npcData.length),
+        phaseOffset: i * stride,
         direction: data.direction ?? 'down',
       }
       this.npcs.push(npc)

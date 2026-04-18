@@ -102,17 +102,19 @@ export function buildDemoSheet(
 function drawDemoCell(dir: Direction, frame: number, color: number, size: number): Graphics {
   const g = new Graphics()
   const cx = size / 2
-  // 胴体（中央やや下）
+  // 胴体（中央やや下）— fill → stroke は同じパスに連続適用できる
   const bodyW = Math.max(10, Math.floor(size * 0.45))
   const bodyH = Math.max(8, Math.floor(size * 0.3))
   const bodyTop = Math.floor(size * 0.45)
-  g.rect(cx - bodyW / 2, bodyTop, bodyW, bodyH).fill(color)
-  g.rect(cx - bodyW / 2, bodyTop, bodyW, bodyH).stroke({ width: 1, color: 0x222222 })
+  g.rect(cx - bodyW / 2, bodyTop, bodyW, bodyH)
+    .fill(color)
+    .stroke({ width: 1, color: 0x222222 })
 
   // 頭（胴体の上、肌色）
   const headR = Math.max(4, Math.floor(size * 0.2))
-  g.circle(cx, bodyTop - headR + 2, headR).fill(0xfcd9b0)
-  g.circle(cx, bodyTop - headR + 2, headR).stroke({ width: 1, color: 0x222222 })
+  g.circle(cx, bodyTop - headR + 2, headR)
+    .fill(0xfcd9b0)
+    .stroke({ width: 1, color: 0x222222 })
 
   // 目（向きを示す）
   const eyeR = 1
@@ -144,7 +146,49 @@ function drawDemoCell(dir: Direction, frame: number, color: number, size: number
 }
 
 /**
- * NPC スプライトシートを得る。`spritePath` が `__demo` なら手続き生成、
+ * `__demo` スプライトの RenderTexture をレンダラーごと＋（色, frames, tileSize）組でキャッシュ。
+ * 同じ条件の NPC が複数いても GPU テクスチャを 1 つで共有する。
+ * `clearDemoSheetCache(renderer)` で全キャッシュを destroy（レンダラー破棄時に呼ぶこと）。
+ */
+const demoSheetCache = new WeakMap<Renderer, Map<string, Texture>>()
+
+function demoCacheKey(color: number, frames: number, tileSize: number): string {
+  return `${color}|${frames}|${tileSize}`
+}
+
+function getOrBuildDemoBase(
+  renderer: Renderer,
+  color: number,
+  frames: number,
+  tileSize: number
+): Texture {
+  let byRenderer = demoSheetCache.get(renderer)
+  if (!byRenderer) {
+    byRenderer = new Map()
+    demoSheetCache.set(renderer, byRenderer)
+  }
+  const key = demoCacheKey(color, frames, tileSize)
+  const existing = byRenderer.get(key)
+  if (existing) return existing
+  const built = buildDemoSheet(renderer, color, frames, tileSize)
+  byRenderer.set(key, built)
+  return built
+}
+
+/**
+ * レンダラー破棄時に、そのレンダラー向けに生成した __demo テクスチャを一括 destroy する。
+ */
+export function clearDemoSheetCache(renderer: Renderer): void {
+  const byRenderer = demoSheetCache.get(renderer)
+  if (!byRenderer) return
+  for (const tex of byRenderer.values()) {
+    tex.destroy(true)
+  }
+  demoSheetCache.delete(renderer)
+}
+
+/**
+ * NPC スプライトシートを得る。`spritePath` が `__demo` なら手続き生成（色・frames・tileSize でキャッシュ共有）、
  * それ以外は PIXI Assets.load で外部画像をロードする。失敗時は null（呼び出し側で色四角フォールバック）。
  */
 export async function loadNpcSpriteSheet(
@@ -157,7 +201,7 @@ export async function loadNpcSpriteSheet(
   const f = clampFrames(frames)
 
   if (spritePath === '__demo') {
-    const base = buildDemoSheet(renderer, color, f, tileSize)
+    const base = getOrBuildDemoBase(renderer, color, f, tileSize)
     return { textures: sliceSheet(base, f, tileSize), frames: f }
   }
 
