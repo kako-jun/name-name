@@ -85,7 +85,7 @@ export const TILE_COLORS = {
 } as const
 
 /**
- * タイルの Phaser 用数値色定数
+ * タイルの PixiJS 用数値色定数（RPGRenderer で使用）
  */
 export const TILE_COLORS_HEX = {
   [TileType.GRASS]: 0x2d5016,
