@@ -294,3 +294,16 @@ MapEditor/NPCEditor の変更
 - **ゲームプロジェクト**: 別リポジトリ（例: ogurasia）
 - 各ゲームは `backend/projects/` にクローンされる（gitignore 対象）
 - API 経由でクローン・管理（手動 git clone 禁止、Windows 互換性のため）
+
+## 下流プロジェクトのスモークテスト
+
+name-name の parser / emitter を壊すと下流ゲームが一斉に動かなくなるため、代表プロジェクトの最小 Markdown を `parser/tests/fixtures/` に fixture として取り込み、構造を検証するスモークテストを置く。
+
+| fixture | テスト | 対象下流 |
+|---|---|---|
+| `fixtures/friday1930-sample.md` | `friday1930_smoke_test.rs` | [friday-1930](https://github.com/kako-jun/friday-1930)（raycast プロトタイプ） |
+
+**運用ルール:**
+- 下流の `chapters/all.md` を更新したら、対応する fixture も手動で同期する（ファイルコピー）
+- fixture はあくまで「代表的な構造例」。バイト一致を要求する必要はなく、view / RpgMap / NPC の抽出が期待通りかを assert する
+- 下流ごとに fixture とテストを1対追加していく
