@@ -14,6 +14,7 @@ export class RpgDialogBox extends Container {
   private bg: Graphics | null = null
   private nameText: PixiText | null = null
   private messageText: PixiText | null = null
+  private maskGraphics: Graphics | null = null
   private currentName = ''
   private currentMessage = ''
   private screenWidth: number
@@ -61,7 +62,11 @@ export class RpgDialogBox extends Container {
   }
 
   override destroy(): void {
-    this.disposeChildren()
+    // super.destroy({ children: true }) が自身と全子要素を破棄する
+    this.bg = null
+    this.nameText = null
+    this.messageText = null
+    this.maskGraphics = null
     super.destroy({ children: true })
   }
 
@@ -78,6 +83,10 @@ export class RpgDialogBox extends Container {
     if (this.messageText) {
       this.messageText.destroy()
       this.messageText = null
+    }
+    if (this.maskGraphics) {
+      this.maskGraphics.destroy()
+      this.maskGraphics = null
     }
   }
 
@@ -126,6 +135,7 @@ export class RpgDialogBox extends Container {
     const mask = new Graphics()
     mask.rect(20, boxTop, width, height)
     mask.fill(0xffffff)
+    this.maskGraphics = mask
     this.addChild(mask)
     message.mask = mask
   }
