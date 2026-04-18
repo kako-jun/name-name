@@ -1,0 +1,229 @@
+import type { EventDocument, Event } from '../types'
+import type { RPGProject, MapData, NPCData, PlayerData } from '../types/rpg'
+
+/**
+ * Document から RPGProject を導出する。
+ *
+ * - 最初に RpgMap を含むシーンを探す（sceneId 指定があればそれを優先）
+ * - そのシーンから RpgMap / PlayerStart / Npc を抽出して RPGProject を組み立てる
+ * - マップが無ければ null を返す
+ */
+export function rpgProjectFromDoc(
+  doc: EventDocument,
+  sceneId?: string,
+  projectName = 'rpg-project'
+): RPGProject | null {
+  const targetScene = findRpgScene(doc, sceneId)
+  if (!targetScene) return null
+
+  let map: MapData | null = null
+  let player: PlayerData | null = null
+  const npcs: NPCData[] = []
+
+  for (const ev of targetScene.events) {
+    if (typeof ev === 'string') continue
+    if ('RpgMap' in ev) {
+      map = {
+        width: ev.RpgMap.width,
+        height: ev.RpgMap.height,
+        tileSize: ev.RpgMap.tile_size,
+        tiles: ev.RpgMap.tiles.map((row) => [...row]),
+      }
+    } else if ('PlayerStart' in ev) {
+      player = {
+        x: ev.PlayerStart.x,
+        y: ev.PlayerStart.y,
+        direction: directionToLower(ev.PlayerStart.direction),
+      }
+    } else if ('Npc' in ev) {
+      npcs.push({
+        id: ev.Npc.id,
+        name: ev.Npc.name,
+        x: ev.Npc.x,
+        y: ev.Npc.y,
+        color: ev.Npc.color,
+        message: ev.Npc.message.join('\n'),
+      })
+    }
+  }
+
+  if (!map) return null
+
+  return {
+    name: projectName,
+    version: '1.0.0',
+    map,
+    player: player ?? { x: 0, y: 0, direction: 'down' },
+    npcs,
+  }
+}
+
+/**
+ * シーン識別情報（chapterIndex, sceneIndex）で RpgMap イベントを含むシーンを探す。
+ * sceneId 指定があれば優先、無ければ先頭から最初にマップを持つシーンを返す。
+ */
+function findRpgScene(
+  doc: EventDocument,
+  sceneId?: string
+): { chapterIndex: number; sceneIndex: number; events: Event[] } | null {
+  for (let ci = 0; ci < doc.chapters.length; ci++) {
+    const chapter = doc.chapters[ci]
+    for (let si = 0; si < chapter.scenes.length; si++) {
+      const scene = chapter.scenes[si]
+      if (sceneId !== undefined) {
+        if (scene.id !== sceneId) continue
+      }
+      const hasMap = scene.events.some((e) => typeof e !== 'string' && 'RpgMap' in e)
+      if (hasMap) {
+        return { chapterIndex: ci, sceneIndex: si, events: scene.events }
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Document 内で最初にマップを含むシーンのインデックスを返す。
+ * 書き戻し用。無ければ null。
+ */
+export function findRpgSceneIndex(
+  doc: EventDocument,
+  sceneId?: string
+): { chapterIndex: number; sceneIndex: number } | null {
+  const found = findRpgScene(doc, sceneId)
+  if (!found) return null
+  return { chapterIndex: found.chapterIndex, sceneIndex: found.sceneIndex }
+}
+
+function directionToLower(d: 'Up' | 'Down' | 'Left' | 'Right'): 'up' | 'down' | 'left' | 'right' {
+  switch (d) {
+    case 'Up':
+      return 'up'
+    case 'Down':
+      return 'down'
+    case 'Left':
+      return 'left'
+    case 'Right':
+      return 'right'
+  }
+}
+
+function directionToUpper(d: 'up' | 'down' | 'left' | 'right'): 'Up' | 'Down' | 'Left' | 'Right' {
+  switch (d) {
+    case 'up':
+      return 'Up'
+    case 'down':
+      return 'Down'
+    case 'left':
+      return 'Left'
+    case 'right':
+      return 'Right'
+  }
+}
+
+/**
+ * RPGProject の変更を Document に書き戻す。
+ * 指定シーンの events[] から既存の RpgMap / PlayerStart / Npc をすべて除去し、
+ * 現在の rpgProject の内容で置き換える。ノベル要素（Dialog など）はそのまま保持。
+ * 対象シーンが存在しない場合、先頭章に新しいシーンを追加する。
+ */
+export function applyRpgProjectToDoc(
+  doc: EventDocument,
+  project: RPGProject,
+  sceneId: string = 'rpg-map'
+): EventDocument {
+  const existing = findRpgSceneIndex(doc, sceneId) ?? findRpgSceneIndex(doc)
+
+  const rpgEvents: Event[] = [
+    {
+      RpgMap: {
+        width: project.map.width,
+        height: project.map.height,
+        tile_size: project.map.tileSize,
+        tiles: project.map.tiles.map((row) => [...row]),
+      },
+    },
+    {
+      PlayerStart: {
+        x: project.player.x,
+        y: project.player.y,
+        direction: directionToUpper(project.player.direction),
+      },
+    },
+    ...project.npcs.map(
+      (npc): Event => ({
+        Npc: {
+          id: npc.id,
+          name: npc.name,
+          x: npc.x,
+          y: npc.y,
+          color: npc.color,
+          message: npc.message.split('\n'),
+        },
+      })
+    ),
+  ]
+
+  const newChapters = doc.chapters.map((chapter, ci) => ({
+    ...chapter,
+    scenes: chapter.scenes.map((scene, si) => {
+      if (existing && ci === existing.chapterIndex && si === existing.sceneIndex) {
+        // RpgMap / PlayerStart / Npc 以外のイベントはそのまま保持
+        const preserved = scene.events.filter(
+          (e) =>
+            typeof e === 'string' ||
+            (!('RpgMap' in e) && !('PlayerStart' in e) && !('Npc' in e))
+        )
+        return {
+          ...scene,
+          events: [...rpgEvents, ...preserved],
+        }
+      }
+      return scene
+    }),
+  }))
+
+  // 対象シーンが存在しない場合、先頭章に新しいシーンを追加
+  if (!existing) {
+    if (newChapters.length === 0) {
+      return {
+        ...doc,
+        chapters: [
+          {
+            number: 1,
+            title: '',
+            hidden: false,
+            default_bgm: null,
+            scenes: [
+              {
+                id: sceneId,
+                title: 'RPG マップ',
+                events: rpgEvents,
+              },
+            ],
+          },
+        ],
+      }
+    }
+    const first = newChapters[0]
+    return {
+      ...doc,
+      chapters: [
+        {
+          ...first,
+          scenes: [
+            ...first.scenes,
+            {
+              id: sceneId,
+              title: 'RPG マップ',
+              events: rpgEvents,
+            },
+          ],
+        },
+        ...newChapters.slice(1),
+      ],
+    }
+  }
+
+  return { ...doc, chapters: newChapters }
+}
