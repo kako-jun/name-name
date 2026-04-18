@@ -37,6 +37,17 @@ export interface NpcProjection {
  * - `depth` は生の transformY（z-buffer 比較で遮蔽整合性を保つ）
  * - `spriteHeight/Width` は `Math.max(transformY, minDepth)` でクランプされた深度から算出
  *   （極小 transformY でサイズが青天井に肥大化するのを防ぐ）
+ *
+ * 呼び出し側注意: `det`（= plane × dir）はフレーム内で dir/plane が不変なら定数になる。
+ * 本関数は NPC ごとに毎回再計算するが、通常の NPC 数（数体〜数十）では実害なし。
+ * 数百体規模で毎フレーム呼ぶ用途が出てきたら precompute 版 API を別途検討する。
+ *
+ * @param npc NPC の world 座標（タイル中心を `x + 0.5` 等で表現）
+ * @param player プレイヤーの world 座標
+ * @param dir カメラ向き単位ベクトル
+ * @param plane カメラ平面ベクトル（長さ = tan(fov/2)）
+ * @param screen 描画キャンバスサイズ
+ * @param minDepth スプライトサイズ計算時の深度下限。z-buffer 比較や `depth` フィールドには影響しない。
  */
 export function projectNpcToScreen(
   npc: Vec2,
@@ -51,6 +62,8 @@ export function projectNpcToScreen(
     return null
   }
 
+  // 正規直交カメラでは |det| ≈ tan(fov/2) ≈ 0.577 なので、1e-9 は通常プレイでは発動しない純防御。
+  // 入力が完全退化（dir ∥ plane）したときのゼロ除算を避けるのが目的。
   const det = plane.x * dir.y - dir.x * plane.y
   if (Math.abs(det) < 1e-9) return null
   const invDet = 1.0 / det

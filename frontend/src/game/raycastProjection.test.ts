@@ -21,6 +21,34 @@ describe('projectNpcToScreen', () => {
     expect(result).toBeNull()
   })
 
+  it('境界: transformY = 0.001 は背面カリングで null', () => {
+    // rx = 0.001 ≤ 0.01 → 背面カリング対象。
+    // 同一タイル判定を回避するため npc.y を別タイルに置く（floor(6.5)=6 ≠ floor(5.5)=5）
+    const npc = { x: 5.501, y: 6.5 }
+    const result = projectNpcToScreen(npc, player, dir, plane, screen, minDepth)
+    expect(result).toBeNull()
+  })
+
+  it('境界: transformY = 0.02 は minDepth=0.1 でクランプ発動（spriteHeight = 6000）', () => {
+    // rx = 0.02 > 0.01 → 背面カリングされない。
+    // clampedDepth = max(0.02, 0.1) = 0.1 → spriteHeight = floor(600 / 0.1) = 6000
+    const npc = { x: 5.52, y: 6.5 }
+    const result = projectNpcToScreen(npc, player, dir, plane, screen, minDepth)
+    expect(result).not.toBeNull()
+    expect(result!.depth).toBeCloseTo(0.02, 5)
+    expect(result!.spriteHeight).toBe(6000)
+  })
+
+  it('境界: transformY = 0.1 は minDepth=0.1 のちょうど境界（クランプ発動しても同じ値）', () => {
+    // rx = 0.1、minDepth = 0.1 → clampedDepth = max(0.1, 0.1) = 0.1
+    // spriteHeight = floor(600 / 0.1) = 6000（境界なのでクランプ有無に関わらず同値）
+    const npc = { x: 5.6, y: 6.5 }
+    const result = projectNpcToScreen(npc, player, dir, plane, screen, minDepth)
+    expect(result).not.toBeNull()
+    expect(result!.depth).toBeCloseTo(0.1, 5)
+    expect(result!.spriteHeight).toBe(6000)
+  })
+
   it('minDepth クランプが発動: 深度は生 transformY、サイズはクランプ深度で計算', () => {
     // npc = (6.1, 7.5) → rx = 0.6, ry = 2.0
     //   transformY = 0.6（生の深度、depth に格納される）
@@ -70,10 +98,10 @@ describe('projectNpcToScreen', () => {
   })
 
   it('退化カメラ（det ≈ 0）: null を返す', () => {
-    const degenerateDir = { x: 1, y: 0 }
-    const degeneratePlane = { x: 1, y: 0 } // dir と平行 → det = 0
+    // plane が dir と平行 → det = plane.x * dir.y - dir.x * plane.y = 0
+    const degeneratePlane = { x: 1, y: 0 }
     const npc = { x: 6.5, y: 5.5 }
-    const result = projectNpcToScreen(npc, player, degenerateDir, degeneratePlane, screen, minDepth)
+    const result = projectNpcToScreen(npc, player, dir, degeneratePlane, screen, minDepth)
     expect(result).toBeNull()
   })
 })
