@@ -22,7 +22,14 @@ pub fn emit(doc: &Document) -> String {
 
         for scene in &chapter.scenes {
             out.push('\n');
-            out.push_str(&format!("## {}: {}\n", scene.id, scene.title));
+            let view_suffix = match scene.view {
+                SceneView::Raycast => " [view=raycast]",
+                SceneView::TopDown => "",
+            };
+            out.push_str(&format!(
+                "## {}: {}{}\n",
+                scene.id, scene.title, view_suffix
+            ));
             out.push('\n');
 
             emit_events(&mut out, &scene.events);
@@ -339,6 +346,7 @@ mod tests {
                 scenes: vec![Scene {
                     id: "1-1".to_string(),
                     title: "テスト".to_string(),
+                    view: SceneView::TopDown,
                     events: vec![Event::Dialog {
                         character: Some("カコ".to_string()),
                         expression: Some("suppin_1".to_string()),

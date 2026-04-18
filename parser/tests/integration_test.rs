@@ -921,6 +921,94 @@ hidden: true
 }
 
 #[test]
+fn test_scene_view_raycast_round_trip() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map-village: 村の広場 [view=raycast]
+
+[マップ 3x2 タイル=32]
+TTT
+T.T
+[/マップ]
+"#;
+    let doc = parser::parse(input);
+    let scene = &doc.chapters[0].scenes[0];
+    assert_eq!(scene.id, "map-village");
+    assert_eq!(scene.title, "村の広場");
+    assert_eq!(scene.view, SceneView::Raycast);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("## map-village: 村の広場 [view=raycast]"),
+        "emit must write [view=raycast] directive: {}",
+        emitted
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
+fn test_scene_view_default_topdown_is_omitted_on_emit() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map-village: 村の広場
+
+[マップ 3x2 タイル=32]
+TTT
+T.T
+[/マップ]
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.chapters[0].scenes[0].view, SceneView::TopDown);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("[view="),
+        "TopDown is default and must not be emitted: {}",
+        emitted
+    );
+}
+
+#[test]
+fn test_scene_view_topdown_explicit_is_normalized() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map-village: 村 [view=topdown]
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.chapters[0].scenes[0].title, "村");
+    assert_eq!(doc.chapters[0].scenes[0].view, SceneView::TopDown);
+    // emit drops the explicit topdown
+    let emitted = emitter::emit(&doc);
+    assert!(!emitted.contains("[view="), "got: {}", emitted);
+}
+
+#[test]
+fn test_scene_view_unknown_falls_back_to_topdown() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map-village: 村 [view=bogus]
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.chapters[0].scenes[0].view, SceneView::TopDown);
+}
+
+#[test]
 fn test_no_front_matter() {
     let input = r#"## 1-1: テスト
 
