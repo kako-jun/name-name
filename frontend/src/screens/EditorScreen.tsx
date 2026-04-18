@@ -587,6 +587,7 @@ function EditorScreen({
                   {rpgSubTab === 'map' && (
                     <MapEditor
                       mapData={rpgProject.map}
+                      rpgProject={rpgProject}
                       onChange={(mapData: MapData) => {
                         void persistRpgProject({ ...rpgProject, map: mapData })
                       }}
