@@ -174,12 +174,16 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                   <input
                     type="text"
                     value={selectedNPC.sprite ?? ''}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      // 属性は空白区切りで parse されるためパスに空白を含められない
+                      // （docs/spec/markdown-v0.1.md の NPC ブロック節を参照）。
+                      // 前後空白は trim、途中に空白が残る値はそのまま保存するが validation は今後の課題
+                      const v = e.target.value.trim()
                       handleUpdateNPC(selectedNPC.id, {
-                        sprite: e.target.value.trim() ? e.target.value : undefined,
+                        sprite: v.length > 0 ? v : undefined,
                       })
-                    }
-                    placeholder="__demo または character.png（空で色四角）"
+                    }}
+                    placeholder="__demo または character.png（空で色四角、空白不可）"
                     className={`w-full px-2 py-1 text-sm border rounded ${
                       isDark
                         ? 'bg-gray-700 border-gray-600 text-white'
@@ -415,7 +419,8 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                   placeholder="__demo または character.png"
                 />
                 <p className={`text-xs mt-1 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
-                  空のままなら色付き四角で描画。`__demo` で内蔵デモスプライト
+                  空のままなら色付き四角で描画。`__demo`
+                  で内蔵デモスプライト（パスに空白は使えません）
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-4">
