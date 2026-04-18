@@ -75,8 +75,7 @@ function EditorScreen({
     if (!doc) return null
     const found = findRpgSceneIndex(doc)
     if (!found) return null
-    const sceneIdForThisDoc =
-      doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
+    const sceneIdForThisDoc = doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
     // シーン ID が変わったら state を同期（描画中は setState を直接呼ばず副作用で）
     if (sceneIdForThisDoc !== rpgSceneId) {
       // 次 tick で同期（render 中に setState すると警告が出るため）
@@ -470,7 +469,9 @@ function EditorScreen({
 
             <div className="flex-1 overflow-hidden">
               {rpgProject === null ? (
-                <div className={`h-full flex flex-col items-center justify-center gap-4 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                <div
+                  className={`h-full flex flex-col items-center justify-center gap-4 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                >
                   <p className="text-sm">このプロジェクトにはまだRPGシーンがありません。</p>
                   <button
                     onClick={addEmptyRpgScene}
@@ -509,7 +510,9 @@ function EditorScreen({
                       isDark={isDark}
                     />
                   )}
-                  {rpgSubTab === 'play' && <RPGPlayer gameData={rpgProject ?? undefined} />}
+                  {rpgSubTab === 'play' && (
+                    <RPGPlayer gameData={rpgProject ?? undefined} view={rpgProject?.view} />
+                  )}
                 </>
               )}
             </div>

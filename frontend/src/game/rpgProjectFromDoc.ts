@@ -1,4 +1,4 @@
-import type { EventDocument, Event } from '../types'
+import type { EventDocument, Event, SceneView } from '../types'
 import type { RPGProject, MapData, NPCData, PlayerData } from '../types/rpg'
 
 /**
@@ -19,6 +19,7 @@ export function rpgProjectFromDoc(
   let map: MapData | null = null
   let player: PlayerData | null = null
   const npcs: NPCData[] = []
+  const view: 'topdown' | 'raycast' = targetScene.view === 'Raycast' ? 'raycast' : 'topdown'
 
   for (const ev of targetScene.events) {
     if (typeof ev === 'string') continue
@@ -55,6 +56,7 @@ export function rpgProjectFromDoc(
     map,
     player: player ?? { x: 0, y: 0, direction: 'down' },
     npcs,
+    view,
   }
 }
 
@@ -65,7 +67,12 @@ export function rpgProjectFromDoc(
 function findRpgScene(
   doc: EventDocument,
   sceneId?: string
-): { chapterIndex: number; sceneIndex: number; events: Event[] } | null {
+): {
+  chapterIndex: number
+  sceneIndex: number
+  events: Event[]
+  view: SceneView
+} | null {
   for (let ci = 0; ci < doc.chapters.length; ci++) {
     const chapter = doc.chapters[ci]
     for (let si = 0; si < chapter.scenes.length; si++) {
@@ -75,7 +82,12 @@ function findRpgScene(
       }
       const hasMap = scene.events.some((e) => typeof e !== 'string' && 'RpgMap' in e)
       if (hasMap) {
-        return { chapterIndex: ci, sceneIndex: si, events: scene.events }
+        return {
+          chapterIndex: ci,
+          sceneIndex: si,
+          events: scene.events,
+          view: scene.view ?? 'TopDown',
+        }
       }
     }
   }
@@ -164,6 +176,8 @@ export function applyRpgProjectToDoc(
     ),
   ]
 
+  const projectView: SceneView = project.view === 'raycast' ? 'Raycast' : 'TopDown'
+
   const newChapters = doc.chapters.map((chapter, ci) => ({
     ...chapter,
     scenes: chapter.scenes.map((scene, si) => {
@@ -171,11 +185,11 @@ export function applyRpgProjectToDoc(
         // RpgMap / PlayerStart / Npc 以外のイベントはそのまま保持
         const preserved = scene.events.filter(
           (e) =>
-            typeof e === 'string' ||
-            (!('RpgMap' in e) && !('PlayerStart' in e) && !('Npc' in e))
+            typeof e === 'string' || (!('RpgMap' in e) && !('PlayerStart' in e) && !('Npc' in e))
         )
         return {
           ...scene,
+          view: projectView,
           events: [...rpgEvents, ...preserved],
         }
       }
@@ -198,6 +212,7 @@ export function applyRpgProjectToDoc(
               {
                 id: sceneId,
                 title: 'RPG マップ',
+                view: projectView,
                 events: rpgEvents,
               },
             ],
@@ -216,6 +231,7 @@ export function applyRpgProjectToDoc(
             {
               id: sceneId,
               title: 'RPG マップ',
+              view: projectView,
               events: rpgEvents,
             },
           ],

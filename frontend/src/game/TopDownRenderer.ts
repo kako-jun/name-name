@@ -143,7 +143,10 @@ export class TopDownRenderer {
     this.drawNPCs(gameData.npcs)
     this.drawPlayer()
     this.drawDialog()
-    this.updatePlayerPosition(this.gridToPixelX(this.playerGridX), this.gridToPixelY(this.playerGridY))
+    this.updatePlayerPosition(
+      this.gridToPixelX(this.playerGridX),
+      this.gridToPixelY(this.playerGridY)
+    )
     this.centerCamera()
   }
 

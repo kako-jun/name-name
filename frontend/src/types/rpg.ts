@@ -72,6 +72,7 @@ export interface RPGProject {
   player: PlayerData // プレイヤー初期データ
   npcs: NPCData[] // NPCリスト
   events?: EventData[] // イベントリスト（オプション）
+  view?: 'topdown' | 'raycast' // プレイ時の表示モード（省略時 topdown）
 }
 
 /**

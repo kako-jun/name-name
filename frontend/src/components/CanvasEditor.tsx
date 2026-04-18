@@ -436,6 +436,7 @@ function CanvasEditor({
       const newScene: EventScene = {
         id: nextSceneId(chapter, chapter.number),
         title: '新しいシーン',
+        view: 'TopDown',
         events: [],
       }
       const newChapters = doc.chapters.map((ch, ci) => {
