@@ -74,25 +74,45 @@ function EditorScreen({
   // doc 内の全 RPG シーン（シーン選択ドロップダウン用）
   const rpgScenes = useMemo(() => (doc ? findAllRpgScenes(doc) : []), [doc])
 
-  // doc から RPGProject を導出（メモ化）。見つかったシーン ID も rpgSceneId に同期。
-  // rpgSceneId が既に設定されていればそのシーンを優先、
+  // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
+  // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
   // 未設定または doc に存在しない場合は最初の RPG シーンにフォールバックする。
   const rpgProject: RPGProject | null = useMemo(() => {
     if (!doc) return null
-    // rpgSceneId が doc 内の RPG シーンと一致するかチェック
     const explicitFound =
       rpgSceneId !== null ? findRpgSceneIndex(doc, rpgSceneId) : null
     const found = explicitFound ?? findRpgSceneIndex(doc)
     if (!found) return null
     const sceneIdForThisDoc =
       doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
-    // シーン ID が変わったら state を同期（描画中は setState を直接呼ばず副作用で）
-    if (sceneIdForThisDoc !== rpgSceneId) {
-      // 次 tick で同期（render 中に setState すると警告が出るため）
-      queueMicrotask(() => setRpgSceneId(sceneIdForThisDoc))
-    }
     return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName)
   }, [doc, projectName, rpgSceneId])
+
+  // 現在の rpgSceneId が doc 内に存在しない場合、先頭の RPG シーンに切り替える。
+  // useMemo 内で setState しないよう副作用を分離。
+  useEffect(() => {
+    if (!doc) return
+    // rpgSceneId が既に doc 内に存在するシーンを指していれば何もしない
+    if (rpgSceneId !== null && findRpgSceneIndex(doc, rpgSceneId) !== null) {
+      return
+    }
+    // doc の先頭 RPG シーンにフォールバック
+    const fallback = findRpgSceneIndex(doc)
+    const nextSceneId =
+      fallback !== null
+        ? (doc.chapters[fallback.chapterIndex]?.scenes[fallback.sceneIndex]?.id ?? null)
+        : null
+    // 無限ループ防止: 同じ値なら setState しない
+    if (nextSceneId !== rpgSceneId) {
+      setRpgSceneId(nextSceneId)
+    }
+  }, [doc, rpgSceneId])
+
+  // プロジェクト名が変わったら rpgSceneId をリセット（将来の再マウント無し
+  // プロジェクト切替への備え。現状は App 側で key を変えて再マウントされる）
+  useEffect(() => {
+    setRpgSceneId(null)
+  }, [projectName])
 
   // ユーザー操作で doc が変わったら emit し、rawMarkdown を更新する。
   // rawMarkdown の更新は autosave useEffect 経由で backend に PUT される。
