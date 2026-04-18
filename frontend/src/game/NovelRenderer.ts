@@ -11,7 +11,16 @@
  * - SE: 単発再生（複数同時可）
  */
 
-import { Application, Container, Graphics, Sprite, Text as PixiText, TextStyle } from 'pixi.js'
+import {
+  Application,
+  Assets,
+  Container,
+  Graphics,
+  Sprite,
+  Text as PixiText,
+  Texture,
+  TextStyle,
+} from 'pixi.js'
 import { CharacterLayer } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
 import { AudioManager } from './AudioManager'
@@ -75,7 +84,9 @@ export class NovelRenderer {
   private initialized = false
   private onEndCallback: (() => void) | null = null
   private assetBaseUrl: string = ''
-  private textureCache: Map<string, Sprite> = new Map()
+  private textureCache: Map<string, Texture> = new Map()
+  /** setBackground の非同期ロード用トークン。destroy / 再入 の race 回避に使う */
+  private bgLoadToken = 0
   private audioManager: AudioManager
 
   /** ゲーム状態（フラグストア）— 章またぎで保持 */
@@ -210,6 +221,12 @@ export class NovelRenderer {
    * イベントキューを設定して最初の表示イベントを表示
    */
   setEvents(events: Event[]): void {
+    // PixiJS v8 の Assets.load で取得した Texture は Assets の内部キャッシュに残り続けるため、
+    // キャッシュ済みURLを Assets.unload で解放してから textureCache をクリアする
+    const urls = Array.from(this.textureCache.keys())
+    Promise.all(urls.map((u) => Assets.unload(u))).catch((err) => {
+      console.warn('[name-name] テクスチャの解放に失敗', err)
+    })
     this.textureCache.clear()
     this.resetAndStartEvents([...events])
   }
@@ -307,6 +324,12 @@ export class NovelRenderer {
     this.saveLoadOverlay.hide()
     this.backlogOverlay.hide()
     this.dialogBox.dispose()
+    // GPU テクスチャのリーク防止: Assets.unload で内部キャッシュから解放
+    const urls = Array.from(this.textureCache.keys())
+    Promise.all(urls.map((u) => Assets.unload(u))).catch((err) => {
+      console.warn('[name-name] テクスチャの解放に失敗', err)
+    })
+    this.textureCache.clear()
     this.app.destroy(true, { children: true })
     this.initialized = false
   }
@@ -697,26 +720,29 @@ export class NovelRenderer {
     const cleanPath = path.replace(/^\//, '')
     const url = `${this.assetBaseUrl}/images/${cleanPath}`
 
-    // キャッシュ済みの Sprite があればクローンして再利用（戻る操作時のフリッカー防止）
+    // キャッシュ済みの Texture があれば再利用（戻る操作時のフリッカー防止）
     const cached = this.textureCache.get(url)
-    if (cached && cached.texture.valid) {
-      const sprite = new Sprite(cached.texture)
+    if (cached) {
+      const sprite = new Sprite(cached)
       this.applyCoverFit(sprite)
       this.bgContainer.addChild(sprite)
       return
     }
 
-    const sprite = Sprite.from(url)
-
-    sprite.texture.source.on('loaded', () => {
-      this.textureCache.set(url, sprite)
-      this.applyCoverFit(sprite)
-      this.bgContainer.addChild(sprite)
-    })
-
-    sprite.texture.source.on('error', () => {
-      console.warn(`[name-name] 背景画像の読み込みに失敗: ${url}`)
-    })
+    // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ
+    const token = ++this.bgLoadToken
+    Assets.load(url)
+      .then((texture) => {
+        if (token !== this.bgLoadToken) return
+        if (!this.initialized) return
+        this.textureCache.set(url, texture)
+        const sprite = new Sprite(texture)
+        this.applyCoverFit(sprite)
+        this.bgContainer.addChild(sprite)
+      })
+      .catch((err) => {
+        console.warn('[name-name] 背景画像の読み込みに失敗: ' + url, err)
+      })
   }
 
   private applyCoverFit(sprite: Sprite): void {

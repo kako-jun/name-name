@@ -14,7 +14,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
-    "type-check": "tsc --noEmit",
+    "type-check": "tsc -b --noEmit",
     "prepare": "husky"
   },
   "dependencies": {

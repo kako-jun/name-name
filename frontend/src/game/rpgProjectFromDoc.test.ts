@@ -340,9 +340,10 @@ describe('applyRpgProjectToDoc', () => {
     const lastEvent = events[events.length - 1]
     expect(lastEvent).toHaveProperty('Narration')
     // マップサイズ確認
-    if ('RpgMap' in events[0]) {
-      expect(events[0].RpgMap.width).toBe(3)
-      expect(events[0].RpgMap.tiles[0]).toEqual([1, 1, 1])
+    const first = events[0]
+    if (typeof first === 'object' && 'RpgMap' in first) {
+      expect(first.RpgMap.width).toBe(3)
+      expect(first.RpgMap.tiles[0]).toEqual([1, 1, 1])
     }
   })
 
