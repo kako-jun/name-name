@@ -85,6 +85,8 @@ export class NovelRenderer {
   private onEndCallback: (() => void) | null = null
   private assetBaseUrl: string = ''
   private textureCache: Map<string, Texture> = new Map()
+  /** setBackground の非同期ロード用トークン。destroy / 再入 の race 回避に使う */
+  private bgLoadToken = 0
   private audioManager: AudioManager
 
   /** ゲーム状態（フラグストア）— 章またぎで保持 */
@@ -219,6 +221,10 @@ export class NovelRenderer {
    * イベントキューを設定して最初の表示イベントを表示
    */
   setEvents(events: Event[]): void {
+    // PixiJS v8 の Assets.load で取得した Texture は Assets の内部キャッシュに残り続けるため、
+    // キャッシュ済みURLを Assets.unload で解放してから textureCache をクリアする
+    const urls = Array.from(this.textureCache.keys())
+    Promise.all(urls.map((u) => Assets.unload(u))).catch(() => {})
     this.textureCache.clear()
     this.resetAndStartEvents([...events])
   }
@@ -316,6 +322,10 @@ export class NovelRenderer {
     this.saveLoadOverlay.hide()
     this.backlogOverlay.hide()
     this.dialogBox.dispose()
+    // GPU テクスチャのリーク防止: Assets.unload で内部キャッシュから解放
+    const urls = Array.from(this.textureCache.keys())
+    Promise.all(urls.map((u) => Assets.unload(u))).catch(() => {})
+    this.textureCache.clear()
     this.app.destroy(true, { children: true })
     this.initialized = false
   }
@@ -715,15 +725,19 @@ export class NovelRenderer {
       return
     }
 
+    // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ
+    const token = ++this.bgLoadToken
     Assets.load(url)
-      .then((texture: Texture) => {
+      .then((texture) => {
+        if (token !== this.bgLoadToken) return
+        if (!this.initialized) return
         this.textureCache.set(url, texture)
         const sprite = new Sprite(texture)
         this.applyCoverFit(sprite)
         this.bgContainer.addChild(sprite)
       })
-      .catch(() => {
-        console.warn(`[name-name] 背景画像の読み込みに失敗: ${url}`)
+      .catch((err) => {
+        console.warn('[name-name] 背景画像の読み込みに失敗: ' + url, err)
       })
   }
 

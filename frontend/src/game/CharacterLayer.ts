@@ -117,10 +117,12 @@ export class CharacterLayer extends Container {
 
     Assets.load(url)
       .then((texture) => {
+        // destroy 後に解決した場合は反映しない（UAF 防止）
+        if (sprite.destroyed) return
         sprite.texture = texture
       })
-      .catch(() => {
-        console.warn(`[name-name] 立ち絵の読み込みに失敗: ${url}`)
+      .catch((err) => {
+        console.warn('[name-name] 立ち絵の読み込みに失敗: ' + url, err)
       })
   }
 }
