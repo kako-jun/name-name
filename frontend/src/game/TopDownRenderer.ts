@@ -6,8 +6,9 @@
  * 会話ダイアログを表示する。RPG プレイモードのデフォルトビュー。
  */
 
-import { Application, Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
+import { Application, Container, Graphics } from 'pixi.js'
 import { NPCData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
+import { RpgDialogBox } from './RpgDialogBox'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -24,16 +25,10 @@ export class TopDownRenderer {
   private npcLayer: Container
   private playerLayer: Container
   private world: Container
-  private dialogLayer: Container
+  private dialogBox: RpgDialogBox | null = null
 
   private playerContainer: Container | null = null
   private playerDirectionIndicator: Graphics | null = null
-
-  private dialogBg: Graphics | null = null
-  private dialogName: PixiText | null = null
-  private dialogText: PixiText | null = null
-  private currentDialogName = ''
-  private currentDialogMessage = ''
 
   private npcs: NPC[] = []
   private mapTiles: number[][] = []
@@ -46,7 +41,6 @@ export class TopDownRenderer {
   private playerDirection: Direction = 'down'
 
   private isMoving = false
-  private isShowingDialog = false
   private moveStart = 0
   private moveFromX = 0
   private moveFromY = 0
@@ -67,7 +61,6 @@ export class TopDownRenderer {
     this.mapLayer = new Container()
     this.npcLayer = new Container()
     this.playerLayer = new Container()
-    this.dialogLayer = new Container()
   }
 
   /** PixiJS Application を初期化し、親要素に Canvas を挿入する */
@@ -89,7 +82,9 @@ export class TopDownRenderer {
     this.world.addChild(this.npcLayer)
     this.world.addChild(this.playerLayer)
     this.app.stage.addChild(this.world)
-    this.app.stage.addChild(this.dialogLayer)
+
+    this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
+    this.app.stage.addChild(this.dialogBox)
 
     window.addEventListener('keydown', this.handleKeyDown)
     window.addEventListener('resize', this.handleResize)
@@ -101,26 +96,9 @@ export class TopDownRenderer {
   /** ゲームデータを読み込んで描画を開始する */
   load(gameData: RPGProject): void {
     // 状態リセット
-    this.isShowingDialog = false
     this.isMoving = false
     this.moveStart = 0
-    this.currentDialogName = ''
-    this.currentDialogMessage = ''
-
-    // 既存のダイアログ関連リソースを破棄
-    this.dialogLayer.removeChildren()
-    if (this.dialogBg) {
-      this.dialogBg.destroy()
-      this.dialogBg = null
-    }
-    if (this.dialogName) {
-      this.dialogName.destroy()
-      this.dialogName = null
-    }
-    if (this.dialogText) {
-      this.dialogText.destroy()
-      this.dialogText = null
-    }
+    this.dialogBox?.hide()
 
     this.mapTiles = gameData.map.tiles
     this.tileSize = gameData.map.tileSize
@@ -142,7 +120,6 @@ export class TopDownRenderer {
     this.drawMap()
     this.drawNPCs(gameData.npcs)
     this.drawPlayer()
-    this.drawDialog()
     this.updatePlayerPosition(
       this.gridToPixelX(this.playerGridX),
       this.gridToPixelY(this.playerGridY)
@@ -161,6 +138,7 @@ export class TopDownRenderer {
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
       this.app.destroy(true, { children: true })
+      this.dialogBox = null
       this.initialized = false
     }
   }
@@ -273,75 +251,6 @@ export class TopDownRenderer {
     g.fill(0xffffff)
   }
 
-  private drawDialog(): void {
-    this.dialogLayer.removeChildren()
-    const height = 120
-    const width = this.screenWidth - 40
-    const boxTop = this.screenHeight - 140
-
-    const bg = new Graphics()
-    this.dialogBg = bg
-    bg.roundRect(20, boxTop, width, height, 8)
-    bg.fill({ color: 0x000033, alpha: 0.92 })
-    bg.stroke({ width: 3, color: 0xffffff })
-    bg.visible = this.isShowingDialog
-    this.dialogLayer.addChild(bg)
-
-    const nameStyle = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
-      fontSize: 18,
-      fill: 0xffe066,
-      fontWeight: 'bold',
-    })
-    const name = new PixiText({ text: this.currentDialogName, style: nameStyle })
-    name.x = 40
-    name.y = boxTop + 10
-    name.visible = this.isShowingDialog
-    this.dialogName = name
-    this.dialogLayer.addChild(name)
-
-    const textStyle = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
-      fontSize: 18,
-      fill: 0xffffff,
-      wordWrap: true,
-      wordWrapWidth: width - 40,
-      breakWords: true,
-      lineHeight: 26,
-    })
-    const text = new PixiText({ text: this.currentDialogMessage, style: textStyle })
-    text.x = 40
-    text.y = boxTop + 40
-    text.visible = this.isShowingDialog
-    this.dialogText = text
-    this.dialogLayer.addChild(text)
-
-    // 長文対応: ダイアログ箱の内側でクリップ
-    const mask = new Graphics()
-    mask.rect(20, boxTop, width, height)
-    mask.fill(0xffffff)
-    this.dialogLayer.addChild(mask)
-    text.mask = mask
-  }
-
-  /** ダイアログを現在の screenWidth/screenHeight と currentDialog* で再構築する */
-  private redrawDialog(): void {
-    // 既存を破棄してから再構築（show/hide 状態は isShowingDialog から復元される）
-    if (this.dialogBg) {
-      this.dialogBg.destroy()
-      this.dialogBg = null
-    }
-    if (this.dialogName) {
-      this.dialogName.destroy()
-      this.dialogName = null
-    }
-    if (this.dialogText) {
-      this.dialogText.destroy()
-      this.dialogText = null
-    }
-    this.drawDialog()
-  }
-
   // --- 入力 ---
 
   private handleKeyDown = (e: KeyboardEvent): void => {
@@ -361,10 +270,10 @@ export class TopDownRenderer {
       return
     }
 
-    if (this.isShowingDialog) {
+    if (this.dialogBox?.isShowing) {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
-        this.hideDialog()
+        this.dialogBox.hide()
       }
       return
     }
@@ -465,29 +374,7 @@ export class TopDownRenderer {
         break
     }
     const npc = this.npcs.find((n) => n.x === tx && n.y === ty)
-    if (npc) this.showDialog(npc.data.name, npc.data.message)
-  }
-
-  private showDialog(name: string, message: string): void {
-    this.isShowingDialog = true
-    this.currentDialogName = name
-    this.currentDialogMessage = message
-    if (this.dialogBg) this.dialogBg.visible = true
-    if (this.dialogName) {
-      this.dialogName.text = name
-      this.dialogName.visible = true
-    }
-    if (this.dialogText) {
-      this.dialogText.text = message
-      this.dialogText.visible = true
-    }
-  }
-
-  private hideDialog(): void {
-    this.isShowingDialog = false
-    if (this.dialogBg) this.dialogBg.visible = false
-    if (this.dialogName) this.dialogName.visible = false
-    if (this.dialogText) this.dialogText.visible = false
+    if (npc) this.dialogBox?.show(npc.data.name, npc.data.message)
   }
 
   // --- リサイズ ---
@@ -505,7 +392,7 @@ export class TopDownRenderer {
       this.screenWidth = Math.max(320, Math.floor(rect.width || 800))
       this.screenHeight = Math.max(240, Math.floor(rect.height || 600))
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
-      this.redrawDialog()
+      this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
       this.centerCamera()
     })
   }

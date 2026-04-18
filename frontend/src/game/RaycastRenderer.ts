@@ -6,8 +6,9 @@
  * 操作は WASD/矢印キー + Q/E（左右ストレイフ）、Enter/Space で正面 NPC と会話。
  */
 
-import { Application, Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
+import { Application, Container, Graphics } from 'pixi.js'
 import { NPCData, RPGProject, TileType } from '../types/rpg'
+import { RpgDialogBox } from './RpgDialogBox'
 
 interface NPCRuntime {
   data: NPCData
@@ -20,16 +21,9 @@ type DirectionLabel = 'up' | 'down' | 'left' | 'right'
 export class RaycastRenderer {
   private app: Application
   private worldLayer: Container
-  private dialogLayer: Container
+  private dialogBox: RpgDialogBox | null = null
 
   private worldGraphics: Graphics | null = null
-
-  private dialogBg: Graphics | null = null
-  private dialogName: PixiText | null = null
-  private dialogText: PixiText | null = null
-  private currentDialogName = ''
-  private currentDialogMessage = ''
-  private isShowingDialog = false
 
   private mapTiles: number[][] = []
   private mapWidth = 0
@@ -71,7 +65,6 @@ export class RaycastRenderer {
   constructor() {
     this.app = new Application()
     this.worldLayer = new Container()
-    this.dialogLayer = new Container()
   }
 
   async init(container: HTMLElement): Promise<void> {
@@ -91,7 +84,9 @@ export class RaycastRenderer {
     this.worldGraphics = new Graphics()
     this.worldLayer.addChild(this.worldGraphics)
     this.app.stage.addChild(this.worldLayer)
-    this.app.stage.addChild(this.dialogLayer)
+
+    this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
+    this.app.stage.addChild(this.dialogBox)
 
     window.addEventListener('keydown', this.handleKeyDown)
     window.addEventListener('keyup', this.handleKeyUp)
@@ -102,23 +97,7 @@ export class RaycastRenderer {
   }
 
   load(gameData: RPGProject): void {
-    this.isShowingDialog = false
-    this.currentDialogName = ''
-    this.currentDialogMessage = ''
-
-    this.dialogLayer.removeChildren()
-    if (this.dialogBg) {
-      this.dialogBg.destroy()
-      this.dialogBg = null
-    }
-    if (this.dialogName) {
-      this.dialogName.destroy()
-      this.dialogName = null
-    }
-    if (this.dialogText) {
-      this.dialogText.destroy()
-      this.dialogText = null
-    }
+    this.dialogBox?.hide()
 
     this.mapTiles = gameData.map.tiles
     this.mapWidth = gameData.map.width
@@ -143,7 +122,6 @@ export class RaycastRenderer {
     this.playerAngle = directionToAngle(gameData.player.direction)
 
     this.lastTickMs = performance.now()
-    this.drawDialog()
     this.keys.clear()
   }
 
@@ -158,98 +136,9 @@ export class RaycastRenderer {
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
       this.app.destroy(true, { children: true })
+      this.dialogBox = null
       this.initialized = false
     }
-  }
-
-  // --- ダイアログ（TopDownRenderer と同じ見た目） ---
-
-  private drawDialog(): void {
-    this.dialogLayer.removeChildren()
-    const height = 120
-    const width = this.screenWidth - 40
-    const boxTop = this.screenHeight - 140
-
-    const bg = new Graphics()
-    this.dialogBg = bg
-    bg.roundRect(20, boxTop, width, height, 8)
-    bg.fill({ color: 0x000033, alpha: 0.92 })
-    bg.stroke({ width: 3, color: 0xffffff })
-    bg.visible = this.isShowingDialog
-    this.dialogLayer.addChild(bg)
-
-    const nameStyle = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
-      fontSize: 18,
-      fill: 0xffe066,
-      fontWeight: 'bold',
-    })
-    const name = new PixiText({ text: this.currentDialogName, style: nameStyle })
-    name.x = 40
-    name.y = boxTop + 10
-    name.visible = this.isShowingDialog
-    this.dialogName = name
-    this.dialogLayer.addChild(name)
-
-    const textStyle = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
-      fontSize: 18,
-      fill: 0xffffff,
-      wordWrap: true,
-      wordWrapWidth: width - 40,
-      breakWords: true,
-      lineHeight: 26,
-    })
-    const text = new PixiText({ text: this.currentDialogMessage, style: textStyle })
-    text.x = 40
-    text.y = boxTop + 40
-    text.visible = this.isShowingDialog
-    this.dialogText = text
-    this.dialogLayer.addChild(text)
-
-    const mask = new Graphics()
-    mask.rect(20, boxTop, width, height)
-    mask.fill(0xffffff)
-    this.dialogLayer.addChild(mask)
-    text.mask = mask
-  }
-
-  private redrawDialog(): void {
-    if (this.dialogBg) {
-      this.dialogBg.destroy()
-      this.dialogBg = null
-    }
-    if (this.dialogName) {
-      this.dialogName.destroy()
-      this.dialogName = null
-    }
-    if (this.dialogText) {
-      this.dialogText.destroy()
-      this.dialogText = null
-    }
-    this.drawDialog()
-  }
-
-  private showDialog(name: string, message: string): void {
-    this.isShowingDialog = true
-    this.currentDialogName = name
-    this.currentDialogMessage = message
-    if (this.dialogBg) this.dialogBg.visible = true
-    if (this.dialogName) {
-      this.dialogName.text = name
-      this.dialogName.visible = true
-    }
-    if (this.dialogText) {
-      this.dialogText.text = message
-      this.dialogText.visible = true
-    }
-  }
-
-  private hideDialog(): void {
-    this.isShowingDialog = false
-    if (this.dialogBg) this.dialogBg.visible = false
-    if (this.dialogName) this.dialogName.visible = false
-    if (this.dialogText) this.dialogText.visible = false
   }
 
   // --- 入力 ---
@@ -268,10 +157,10 @@ export class RaycastRenderer {
     if (!this.initialized) return
     if (this.isEditableFocused()) return
 
-    if (this.isShowingDialog) {
+    if (this.dialogBox?.isShowing) {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
-        this.hideDialog()
+        this.dialogBox.hide()
       }
       return
     }
@@ -307,7 +196,7 @@ export class RaycastRenderer {
     const ty = Math.floor(this.playerY + dy)
     const npc = this.npcs.find((n) => Math.floor(n.x) === tx && Math.floor(n.y) === ty)
     if (npc) {
-      this.showDialog(npc.data.name, npc.data.message)
+      this.dialogBox?.show(npc.data.name, npc.data.message)
     }
   }
 
@@ -325,7 +214,7 @@ export class RaycastRenderer {
       this.screenWidth = Math.max(320, Math.floor(rect.width || 800))
       this.screenHeight = Math.max(240, Math.floor(rect.height || 600))
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
-      this.redrawDialog()
+      this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
     })
   }
 
@@ -336,7 +225,7 @@ export class RaycastRenderer {
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
 
-    if (!this.isShowingDialog) {
+    if (!this.dialogBox?.isShowing) {
       this.updateMovement(dt)
     }
     this.renderFrame()
