@@ -389,6 +389,12 @@ uv sync
 - ✅ EditorScreenでWASMパース結果をノベルプレイヤーに供給
 - ✅ エディタも EventDocument を直接操作する形に完全移行（#36）— 旧型との並存・フォールバックは廃止
 
+### 完了（RPG データ永続化 #34）
+- ✅ Parser に RpgMap / PlayerStart / Npc Event を追加（マップブロック・プレイヤー行・NPCブロック）
+- ✅ `rpgProjectFromDoc` / `applyRpgProjectToDoc` ヘルパーで doc ⇔ RPGProject を相互変換
+- ✅ EditorScreen の RPG タブが doc 経由で動作（編集 → applyRpgProjectToDoc → emitMarkdown → 自動保存）
+- ✅ RPG シーンが無ければ「+ RPGシーンを追加」ボタンで初期化
+
 ### 未実装
 - ✅ RPGプレイヤーのPixiJS移行（#35）— RPGRenderer / サンプルデータでの即起動 / 矢印・WASD 移動 + Enter/Space 会話
 - ✅ 立ち絵表示 + 表情変更 + 退場（#18）— CharacterLayer / 左右中央配置 / ExpressionChange / Exit
