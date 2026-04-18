@@ -503,20 +503,21 @@ function EditorScreen({
               <div
                 className={`flex items-center gap-4 px-4 py-2 border-b text-sm ${
                   isDark
-                    ? 'border-gray-700 bg-gray-800 text-gray-200'
-                    : 'border-gray-200 bg-gray-50 text-gray-700'
+                    ? 'border-gray-600 bg-gray-900 text-gray-200'
+                    : 'border-gray-300 bg-white text-gray-700'
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  <label
-                    htmlFor="rpg-scene-select"
-                    className={isDark ? 'text-gray-300' : 'text-gray-600'}
-                  >
-                    シーン:
-                  </label>
-                  {rpgScenes.length >= 2 ? (
+                {rpgScenes.length >= 2 && (
+                  <div className="flex items-center gap-2">
+                    <label
+                      htmlFor="rpg-scene-select"
+                      className={isDark ? 'text-gray-300' : 'text-gray-600'}
+                    >
+                      シーン:
+                    </label>
                     <select
                       id="rpg-scene-select"
+                      aria-label="RPGシーン選択"
                       value={rpgSceneId ?? ''}
                       onChange={(e) => setRpgSceneId(e.target.value)}
                       className={`px-2 py-1 rounded border text-sm ${
@@ -527,20 +528,12 @@ function EditorScreen({
                     >
                       {rpgScenes.map((s) => (
                         <option key={s.id} value={s.id}>
-                          {s.id} - {s.title}
+                          {s.title || s.id}
                         </option>
                       ))}
                     </select>
-                  ) : (
-                    <span
-                      className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}
-                    >
-                      {rpgScenes[0]
-                        ? `${rpgScenes[0].id} - ${rpgScenes[0].title}`
-                        : ''}
-                    </span>
-                  )}
-                </div>
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <label
                     htmlFor="rpg-view-select"
@@ -550,6 +543,7 @@ function EditorScreen({
                   </label>
                   <select
                     id="rpg-view-select"
+                    aria-label="RPG視点切替"
                     value={rpgProject.view}
                     onChange={(e) => {
                       const nextView = e.target.value as 'topdown' | 'raycast'
