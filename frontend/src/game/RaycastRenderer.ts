@@ -286,7 +286,10 @@ export class RaycastRenderer {
   }
 
   private tryTalk(): void {
-    // 正面タイル = player + 向きベクトル
+    // プレイヤーの向きベクトル (dx, dy) から直近1マスのタイルを確定し、
+    // そのタイルに NPC がいれば会話を開始する。
+    // 見下ろし版（TopDownRenderer）と同じく、斜め向きでも「直近タイル（= 単位ベクトル1歩先）」
+    // のみを対象にするため、視線上の複数マス先の NPC には届かない。
     const dx = Math.cos(this.playerAngle)
     const dy = Math.sin(this.playerAngle)
     const tx = Math.floor(this.playerX + dx)
