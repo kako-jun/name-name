@@ -463,6 +463,205 @@ title: "テスト"
 }
 
 #[test]
+fn test_rpg_map_only() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map-village: 村
+
+[マップ 5x3 タイル=32]
+GGGGG
+GRRRG
+GGGGG
+[/マップ]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::RpgMap(map) => {
+            assert_eq!(map.width, 5);
+            assert_eq!(map.height, 3);
+            assert_eq!(map.tile_size, 32);
+            assert_eq!(map.tiles.len(), 3);
+            assert_eq!(map.tiles[0], vec![0, 0, 0, 0, 0]);
+            assert_eq!(map.tiles[1], vec![0, 1, 1, 1, 0]);
+            assert_eq!(map.tiles[2], vec![0, 0, 0, 0, 0]);
+        }
+        other => panic!("Expected RpgMap, got {:?}", other),
+    }
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
+fn test_rpg_npc_block() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map-village: 村
+
+[NPC 長老 @5,3 色=#ff0000]
+こんにちは、旅人さん。
+村へようこそ。
+[/NPC]
+
+[NPC 子ども @7,5 色=#00aaff]
+ねえねえ遊ぼうよ！
+[/NPC]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2);
+    match &events[0] {
+        Event::Npc(npc) => {
+            assert_eq!(npc.name, "長老");
+            assert_eq!(npc.x, 5);
+            assert_eq!(npc.y, 3);
+            assert_eq!(npc.color, 0xff0000);
+            assert_eq!(
+                npc.message,
+                vec![
+                    "こんにちは、旅人さん。".to_string(),
+                    "村へようこそ。".to_string(),
+                ]
+            );
+        }
+        other => panic!("Expected Npc, got {:?}", other),
+    }
+    match &events[1] {
+        Event::Npc(npc) => {
+            assert_eq!(npc.name, "子ども");
+            assert_eq!(npc.color, 0x00aaff);
+        }
+        other => panic!("Expected Npc, got {:?}", other),
+    }
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
+fn test_rpg_player_start() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map-village: 村
+
+[プレイヤー @10,7 向き=下]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::PlayerStart(p) => {
+            assert_eq!(p.x, 10);
+            assert_eq!(p.y, 7);
+            assert_eq!(p.direction, Direction::Down);
+        }
+        other => panic!("Expected PlayerStart, got {:?}", other),
+    }
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
+fn test_rpg_full_scene_with_novel_mixed() {
+    // RPG elements and novel Dialog in the same scene
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map-village: 村の広場
+
+[マップ 4x3 タイル=32]
+TTTT
+T..T
+TTTT
+[/マップ]
+
+[プレイヤー @1,1 向き=下]
+
+[NPC 長老 @2,1 色=#ff0000]
+こんにちは。
+[/NPC]
+
+**カコ** (suppin_1, 左):
+この村に着いたみたいね。
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    // RpgMap, PlayerStart, Npc, Dialog
+    assert_eq!(events.len(), 4);
+    assert!(matches!(events[0], Event::RpgMap(_)));
+    assert!(matches!(events[1], Event::PlayerStart(_)));
+    assert!(matches!(events[2], Event::Npc(_)));
+    assert!(matches!(events[3], Event::Dialog { .. }));
+
+    // Map should have grass (from .) in middle
+    if let Event::RpgMap(map) = &events[0] {
+        assert_eq!(map.tiles[0], vec![2, 2, 2, 2]);
+        assert_eq!(map.tiles[1], vec![2, 0, 0, 2]);
+    }
+
+    // NPC id should be generated from name (non-ASCII → npc1)
+    if let Event::Npc(npc) = &events[2] {
+        assert_eq!(npc.name, "長老");
+        assert!(!npc.id.is_empty());
+    }
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
+fn test_rpg_direction_variants() {
+    let cases = vec![
+        ("上", Direction::Up),
+        ("下", Direction::Down),
+        ("左", Direction::Left),
+        ("右", Direction::Right),
+    ];
+    for (ja, expected) in cases {
+        let input = format!(
+            r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## m: map
+
+[プレイヤー @0,0 向き={}]
+"#,
+            ja
+        );
+        let doc = parser::parse(&input);
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::PlayerStart(p) => assert_eq!(p.direction, expected),
+            other => panic!("Expected PlayerStart, got {:?}", other),
+        }
+    }
+}
+
+#[test]
 fn test_no_front_matter() {
     let input = r#"## 1-1: テスト
 

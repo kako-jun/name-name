@@ -94,6 +94,87 @@ pub fn parse(input: &str) -> Document {
             continue;
         }
 
+        // RPG Map block: [マップ WxH タイル=N] ... [/マップ]
+        if let Some(header) = trimmed.strip_prefix("[マップ") {
+            if header.ends_with(']') {
+                let header_inner = header.trim_end_matches(']').trim();
+                if let Some(map_data) = parse_map_header(header_inner) {
+                    let (width, height, tile_size) = map_data;
+                    pos += 1;
+                    let mut tiles: Vec<Vec<u8>> = Vec::with_capacity(height as usize);
+                    while pos < len && lines[pos].trim() != "[/マップ]" {
+                        let row_line = lines[pos];
+                        let row = parse_tile_row(row_line, width as usize);
+                        tiles.push(row);
+                        pos += 1;
+                    }
+                    if pos < len {
+                        pos += 1; // skip [/マップ]
+                    }
+                    // Pad if short rows (should already be handled, but ensure count)
+                    while tiles.len() < height as usize {
+                        tiles.push(vec![0u8; width as usize]);
+                    }
+                    tiles.truncate(height as usize);
+                    current_events.push(Event::RpgMap(RpgMapData {
+                        width,
+                        height,
+                        tile_size,
+                        tiles,
+                    }));
+                    continue;
+                }
+            }
+        }
+
+        // NPC block: [NPC name @x,y 色=#rrggbb] ... [/NPC]
+        if let Some(header) = trimmed.strip_prefix("[NPC") {
+            if header.ends_with(']') {
+                let header_inner = header.trim_end_matches(']').trim();
+                if let Some((name, x, y, color)) = parse_npc_header(header_inner) {
+                    pos += 1;
+                    let mut message: Vec<String> = Vec::new();
+                    while pos < len && lines[pos].trim() != "[/NPC]" {
+                        message.push(lines[pos].trim().to_string());
+                        pos += 1;
+                    }
+                    // Trim trailing empty lines in message
+                    while let Some(last) = message.last() {
+                        if last.is_empty() {
+                            message.pop();
+                        } else {
+                            break;
+                        }
+                    }
+                    if pos < len {
+                        pos += 1; // skip [/NPC]
+                    }
+                    let id = slugify_npc_id(&name, &current_events);
+                    current_events.push(Event::Npc(NpcData {
+                        id,
+                        name,
+                        x,
+                        y,
+                        color,
+                        message,
+                    }));
+                    continue;
+                }
+            }
+        }
+
+        // Player start (single line): [プレイヤー @x,y 向き=...]
+        if let Some(rest) = trimmed.strip_prefix("[プレイヤー") {
+            if rest.ends_with(']') {
+                let inner = rest.trim_end_matches(']').trim();
+                if let Some(player) = parse_player_line(inner) {
+                    current_events.push(Event::PlayerStart(player));
+                    pos += 1;
+                    continue;
+                }
+            }
+        }
+
         // Directive: [...]
         if trimmed.starts_with('[')
             && !trimmed.starts_with("[選択]")
@@ -432,6 +513,143 @@ fn parse_expression_change(line: &str) -> Option<Event> {
         character,
         expression,
     })
+}
+
+/// Parse "20x15 タイル=32" → Some((20, 15, 32))
+fn parse_map_header(s: &str) -> Option<(u32, u32, u32)> {
+    // Split on whitespace
+    let mut parts = s.split_whitespace();
+    let size = parts.next()?;
+    let (w_str, h_str) = size.split_once('x').or_else(|| size.split_once('X'))?;
+    let width: u32 = w_str.trim().parse().ok()?;
+    let height: u32 = h_str.trim().parse().ok()?;
+    // tile_size: default 32 if omitted
+    let mut tile_size: u32 = 32;
+    for rest in parts {
+        if let Some(val) = rest.strip_prefix("タイル=") {
+            if let Ok(n) = val.trim().parse() {
+                tile_size = n;
+            }
+        }
+    }
+    Some((width, height, tile_size))
+}
+
+/// Parse a single row of tile characters. G/.=0, R=1, T=2, W=3. Unknown → 0.
+fn parse_tile_row(line: &str, width: usize) -> Vec<u8> {
+    let mut row: Vec<u8> = line
+        .chars()
+        .take(width)
+        .map(|c| match c {
+            'G' | '.' => 0u8,
+            'R' => 1u8,
+            'T' => 2u8,
+            'W' => 3u8,
+            _ => 0u8,
+        })
+        .collect();
+    while row.len() < width {
+        row.push(0);
+    }
+    row
+}
+
+/// Parse NPC header: "name @x,y 色=#rrggbb" → Some((name, x, y, color))
+fn parse_npc_header(s: &str) -> Option<(String, u32, u32, u32)> {
+    // Extract name (before @), then @x,y, then 色=...
+    let at_pos = s.find('@')?;
+    let name = s[..at_pos].trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let after_at = &s[at_pos + 1..];
+    // split by whitespace to separate x,y from 色=
+    let mut parts = after_at.split_whitespace();
+    let coord = parts.next()?;
+    let (x_str, y_str) = coord.split_once(',')?;
+    let x: u32 = x_str.trim().parse().ok()?;
+    let y: u32 = y_str.trim().parse().ok()?;
+    // color: default 0xff6b6b
+    let mut color: u32 = 0xff6b6b;
+    for p in parts {
+        if let Some(val) = p.strip_prefix("色=") {
+            let hex = val.trim().trim_start_matches('#');
+            if let Ok(n) = u32::from_str_radix(hex, 16) {
+                color = n;
+            }
+        }
+    }
+    Some((name, x, y, color))
+}
+
+/// Parse player start line: "@x,y 向き=..." → Some(PlayerStartData)
+fn parse_player_line(s: &str) -> Option<PlayerStartData> {
+    let at_pos = s.find('@')?;
+    let after_at = &s[at_pos + 1..];
+    let mut parts = after_at.split_whitespace();
+    let coord = parts.next()?;
+    let (x_str, y_str) = coord.split_once(',')?;
+    let x: u32 = x_str.trim().parse().ok()?;
+    let y: u32 = y_str.trim().parse().ok()?;
+    let mut direction = Direction::Down;
+    for p in parts {
+        if let Some(val) = p.strip_prefix("向き=") {
+            direction = parse_direction(val.trim());
+        }
+    }
+    Some(PlayerStartData { x, y, direction })
+}
+
+fn parse_direction(s: &str) -> Direction {
+    match s {
+        "up" | "Up" | "上" => Direction::Up,
+        "down" | "Down" | "下" => Direction::Down,
+        "left" | "Left" | "左" => Direction::Left,
+        "right" | "Right" | "右" => Direction::Right,
+        _ => Direction::Down,
+    }
+}
+
+/// Generate a unique id for an NPC from its name. If name is non-ASCII,
+/// fall back to "npc{index}". If an NPC with the same id already exists
+/// in the current events, append -2, -3, etc.
+fn slugify_npc_id(name: &str, existing: &[Event]) -> String {
+    let base: String = name
+        .chars()
+        .filter_map(|c| {
+            if c.is_ascii_alphanumeric() {
+                Some(c.to_ascii_lowercase())
+            } else if c == ' ' || c == '-' || c == '_' {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect();
+    let base = if base.is_empty() {
+        let count = existing
+            .iter()
+            .filter(|e| matches!(e, Event::Npc(_)))
+            .count();
+        format!("npc{}", count + 1)
+    } else {
+        base
+    };
+
+    // Check for collisions
+    let mut candidate = base.clone();
+    let mut n = 2;
+    while existing.iter().any(|e| {
+        if let Event::Npc(npc) = e {
+            npc.id == candidate
+        } else {
+            false
+        }
+    }) {
+        candidate = format!("{}-{}", base, n);
+        n += 1;
+    }
+    candidate
 }
 
 fn unquote(s: &str) -> String {
