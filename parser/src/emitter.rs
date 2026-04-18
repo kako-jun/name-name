@@ -257,9 +257,20 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     Some(n) => format!(" frames={}", n),
                     None => String::new(),
                 };
+                let direction_suffix = match npc.direction {
+                    Some(d) => format!(" 向き={}", direction_ja(d)),
+                    None => String::new(),
+                };
                 out.push_str(&format!(
-                    "[NPC {} @{},{} 色=#{:06x}{}{}{}]\n",
-                    npc.name, npc.x, npc.y, npc.color, id_suffix, sprite_suffix, frames_suffix
+                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}]\n",
+                    npc.name,
+                    npc.x,
+                    npc.y,
+                    npc.color,
+                    id_suffix,
+                    sprite_suffix,
+                    frames_suffix,
+                    direction_suffix
                 ));
                 for line in &npc.message {
                     out.push_str(line);
