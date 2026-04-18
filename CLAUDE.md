@@ -97,6 +97,13 @@ npm run dev
 # → http://localhost:5173
 ```
 
+**pre-commit フック**:
+
+- `npm install` で husky が自動インストールされる（`.husky/pre-commit` が有効化）
+- `git commit` 時に staged な `frontend/src/**/*.{ts,tsx,css,json,md}` が自動で ESLint + Prettier で整形される
+- 整形結果は自動再ステージされる（lint-staged が処理）
+- バイパスしたい場合は `git commit --no-verify`（ただし CI の `npm run lint` で落ちる）
+
 ### Docker Compose（推奨）
 
 ```bash

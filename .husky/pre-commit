@@ -1,1 +1,2 @@
+# staged ファイルは frontend/ 配下のみ対象。backend(.py) やリポルート直下(.md) は対象外。
 cd frontend && npx lint-staged
