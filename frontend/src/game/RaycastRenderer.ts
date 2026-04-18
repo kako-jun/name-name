@@ -18,6 +18,13 @@ import {
   type NpcSpriteSheet,
 } from './npcSpriteSheet'
 import { projectNpcToScreen } from './raycastProjection'
+import {
+  clearDemoWallCache,
+  computeWallU,
+  loadWallTexture,
+  uToColumn,
+  type WallTextureSheet,
+} from './wallTextureSheet'
 
 interface NPCRuntime {
   data: NPCData
@@ -40,10 +47,18 @@ type DirectionLabel = 'up' | 'down' | 'left' | 'right'
 export class RaycastRenderer {
   private app: Application
   private worldLayer: Container
+  private wallSpritesContainer: Container
   private npcLayer: Container
   private dialogBox: RpgDialogBox | null = null
 
   private worldGraphics: Graphics | null = null
+
+  /** 壁用ストライプ Sprite プール。index = stripe index。texture/tint/visible を毎フレーム更新する */
+  private stripeSprites: Sprite[] = []
+
+  /** 壁テクスチャ（TREE / WATER）。ロード完了後に使用、未ロード中は色ベタ fallback */
+  private treeTexture: WallTextureSheet | null = null
+  private waterTexture: WallTextureSheet | null = null
 
   private mapTiles: number[][] = []
   private mapWidth = 0
@@ -87,6 +102,7 @@ export class RaycastRenderer {
   constructor() {
     this.app = new Application()
     this.worldLayer = new Container()
+    this.wallSpritesContainer = new Container()
     this.npcLayer = new Container()
     // zIndex で距離ソート（奥→手前）
     this.npcLayer.sortableChildren = true
@@ -107,7 +123,10 @@ export class RaycastRenderer {
     container.appendChild(this.app.canvas as HTMLCanvasElement)
 
     this.worldGraphics = new Graphics()
+    // 空・床は worldGraphics（奥）、壁ストライプ Sprite は wallSpritesContainer（手前）。
+    // NPC は npcLayer（さらに手前）で stage 直下。worldLayer との分離は従来通り
     this.worldLayer.addChild(this.worldGraphics)
+    this.worldLayer.addChild(this.wallSpritesContainer)
     this.app.stage.addChild(this.worldLayer)
     this.app.stage.addChild(this.npcLayer)
 
@@ -146,6 +165,22 @@ export class RaycastRenderer {
 
     this.lastTickMs = performance.now()
     this.keys.clear()
+
+    // 壁テクスチャを非同期ロード（完了まではベタ塗り fallback）。
+    // 同じ RaycastRenderer で load() が複数回呼ばれても、wallTextureSheet 側の
+    // WeakMap キャッシュにより RenderTexture は使い回される
+    this.ensureWallTextures()
+  }
+
+  private async ensureWallTextures(): Promise<void> {
+    const renderer = this.app.renderer
+    const [tree, water] = await Promise.all([
+      loadWallTexture('tree', renderer),
+      loadWallTexture('water', renderer),
+    ])
+    if (!this.initialized) return
+    this.treeTexture = tree
+    this.waterTexture = water
   }
 
   /**
@@ -219,11 +254,16 @@ export class RaycastRenderer {
     }
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
-      // app.destroy → clearDemoSheetCache の順。逆順だと cache の RenderTexture source を先に
-      // 破棄してしまい、app.destroy で連鎖的に Sprite が破棄済み source を参照する可能性がある
+      // app.destroy → clearDemoWallCache → clearDemoSheetCache の順。逆順だと cache の
+      // RenderTexture source を先に破棄してしまい、app.destroy で連鎖的に Sprite が破棄済み
+      // source を参照する可能性がある
       const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
+      clearDemoWallCache(renderer)
       clearDemoSheetCache(renderer)
+      this.stripeSprites = []
+      this.treeTexture = null
+      this.waterTexture = null
       this.dialogBox = null
       this.initialized = false
     }
@@ -303,7 +343,30 @@ export class RaycastRenderer {
       this.screenHeight = Math.max(240, Math.floor(rect.height || 600))
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
       this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
+      // 画面幅が変わると numStripes も変わるので、余剰分を destroy して寸法を合わせる
+      this.ensureStripePool(Math.ceil(this.screenWidth / this.stripeWidth))
     })
+  }
+
+  /**
+   * 壁ストライプ Sprite プールを必要数まで増減する。
+   * 足りない分は新規生成して wallSpritesContainer に addChild、
+   * 余剰分は destroy して配列から削除する。
+   */
+  private ensureStripePool(target: number): void {
+    while (this.stripeSprites.length < target) {
+      const s = new Sprite(Texture.WHITE)
+      s.anchor.set(0, 0.5)
+      s.visible = false
+      this.wallSpritesContainer.addChild(s)
+      this.stripeSprites.push(s)
+    }
+    while (this.stripeSprites.length > target) {
+      const s = this.stripeSprites.pop()
+      if (s) {
+        s.destroy()
+      }
+    }
   }
 
   // --- ティック ---
@@ -429,6 +492,11 @@ export class RaycastRenderer {
     const numStripes = Math.ceil(w / this.stripeWidth)
     const zBuffer = new Float32Array(numStripes)
 
+    // 壁 Sprite プールを必要数まで確保（lazy 成長）
+    this.ensureStripePool(numStripes)
+    // テクスチャロード済みかどうか。未ロード中は worldGraphics に色ベタで描く fallback を使う
+    const texturesReady = this.treeTexture !== null && this.waterTexture !== null
+
     for (let i = 0; i < numStripes; i++) {
       const screenX = i * this.stripeWidth
       // cameraX: -1 (left) .. +1 (right)
@@ -497,18 +565,46 @@ export class RaycastRenderer {
 
       zBuffer[i] = perpDist
 
+      const stripeSprite = this.stripeSprites[i]
       if (hit && perpDist <= this.fogMaxDist + 0.5) {
         const lineHeight = Math.floor(h / perpDist)
-        let drawStart = Math.floor(-lineHeight / 2 + h / 2)
-        let drawEnd = Math.floor(lineHeight / 2 + h / 2)
-        if (drawStart < 0) drawStart = 0
-        if (drawEnd > h) drawEnd = h
-
-        const baseColor = wallColor(hitTile, side)
         const fog = Math.max(0, Math.min(1, 1 - perpDist / this.fogMaxDist))
-        const color = applyFog(baseColor, fog)
-        g.rect(screenX, drawStart, this.stripeWidth, drawEnd - drawStart)
-        g.fill(color)
+
+        if (texturesReady) {
+          // テクスチャストライプ方式: Sprite プールの texture/位置/tint を更新
+          const sheet = hitTile === TileType.WATER ? this.waterTexture! : this.treeTexture!
+          const u = computeWallU(
+            side as 0 | 1,
+            perpDist,
+            this.playerX,
+            this.playerY,
+            rayDirX,
+            rayDirY
+          )
+          const col = uToColumn(u, sheet.width)
+          // y-side は従来同様に 0.7 倍で暗めにしてから fog 適用（立体感の維持）
+          const shadedBase = side === 1 ? darken(0xffffff, 0.7) : 0xffffff
+          stripeSprite.texture = sheet.columns[col]
+          stripeSprite.x = screenX
+          stripeSprite.y = h / 2
+          stripeSprite.width = this.stripeWidth
+          stripeSprite.height = lineHeight
+          stripeSprite.tint = applyFog(shadedBase, fog)
+          stripeSprite.visible = true
+        } else {
+          // ロード前 fallback: 従来のベタ塗り（worldGraphics）
+          stripeSprite.visible = false
+          let drawStart = Math.floor(-lineHeight / 2 + h / 2)
+          let drawEnd = Math.floor(lineHeight / 2 + h / 2)
+          if (drawStart < 0) drawStart = 0
+          if (drawEnd > h) drawEnd = h
+          const baseColor = wallColor(hitTile, side)
+          const color = applyFog(baseColor, fog)
+          g.rect(screenX, drawStart, this.stripeWidth, drawEnd - drawStart)
+          g.fill(color)
+        }
+      } else {
+        stripeSprite.visible = false
       }
     }
 
