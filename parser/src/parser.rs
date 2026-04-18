@@ -94,6 +94,105 @@ pub fn parse(input: &str) -> Document {
             continue;
         }
 
+        // RPG Map block: [マップ WxH タイル=N] ... [/マップ]
+        if let Some(header) = trimmed.strip_prefix("[マップ") {
+            if header.ends_with(']') {
+                let header_inner = header.trim_end_matches(']').trim();
+                if let Some(map_data) = parse_map_header(header_inner) {
+                    let (width, height, tile_size) = map_data;
+                    pos += 1;
+                    let mut raw_rows: Vec<&str> = Vec::with_capacity(height as usize);
+                    while pos < len && lines[pos].trim() != "[/マップ]" {
+                        raw_rows.push(lines[pos]);
+                        pos += 1;
+                    }
+                    if pos < len {
+                        pos += 1; // skip [/マップ]
+                    }
+
+                    // Warn if declared dimensions don't match actual data.
+                    // Behavior: keep tolerant (pad missing rows with zeros,
+                    // truncate extras; short rows are already zero-padded by
+                    // parse_tile_row, long rows are truncated). Do not panic.
+                    let actual_rows = raw_rows.len() as u32;
+                    let any_row_width_mismatch =
+                        raw_rows.iter().any(|r| r.chars().count() as u32 != width);
+                    if actual_rows != height || any_row_width_mismatch {
+                        emit_map_dimension_warning(width, height, &raw_rows);
+                    }
+
+                    let mut tiles: Vec<Vec<u8>> = raw_rows
+                        .iter()
+                        .map(|row_line| parse_tile_row(row_line, width as usize))
+                        .collect();
+                    // Pad if short rows (should already be handled, but ensure count)
+                    while tiles.len() < height as usize {
+                        tiles.push(vec![0u8; width as usize]);
+                    }
+                    tiles.truncate(height as usize);
+                    current_events.push(Event::RpgMap(RpgMapData {
+                        width,
+                        height,
+                        tile_size,
+                        tiles,
+                    }));
+                    continue;
+                }
+            }
+        }
+
+        // NPC block: [NPC name @x,y 色=#rrggbb (id=xxx)?] ... [/NPC]
+        if let Some(header) = trimmed.strip_prefix("[NPC") {
+            if header.ends_with(']') {
+                let header_inner = header.trim_end_matches(']').trim();
+                if let Some((name, x, y, color, explicit_id)) = parse_npc_header(header_inner) {
+                    pos += 1;
+                    let mut message: Vec<String> = Vec::new();
+                    while pos < len && lines[pos].trim() != "[/NPC]" {
+                        // Preserve leading indentation; only strip trailing whitespace
+                        message.push(lines[pos].trim_end().to_string());
+                        pos += 1;
+                    }
+                    // Trim trailing empty lines in message
+                    while let Some(last) = message.last() {
+                        if last.is_empty() {
+                            message.pop();
+                        } else {
+                            break;
+                        }
+                    }
+                    if pos < len {
+                        pos += 1; // skip [/NPC]
+                    }
+                    let id = match explicit_id {
+                        Some(eid) => resolve_npc_id_conflict(&eid, &current_events),
+                        None => slugify_npc_id(&name, &current_events),
+                    };
+                    current_events.push(Event::Npc(NpcData {
+                        id,
+                        name,
+                        x,
+                        y,
+                        color,
+                        message,
+                    }));
+                    continue;
+                }
+            }
+        }
+
+        // Player start (single line): [プレイヤー @x,y 向き=...]
+        if let Some(rest) = trimmed.strip_prefix("[プレイヤー") {
+            if rest.ends_with(']') {
+                let inner = rest.trim_end_matches(']').trim();
+                if let Some(player) = parse_player_line(inner) {
+                    current_events.push(Event::PlayerStart(player));
+                    pos += 1;
+                    continue;
+                }
+            }
+        }
+
         // Directive: [...]
         if trimmed.starts_with('[')
             && !trimmed.starts_with("[選択]")
@@ -434,6 +533,180 @@ fn parse_expression_change(line: &str) -> Option<Event> {
     })
 }
 
+/// Parse "20x15 タイル=32" → Some((20, 15, 32))
+fn parse_map_header(s: &str) -> Option<(u32, u32, u32)> {
+    // Split on whitespace
+    let mut parts = s.split_whitespace();
+    let size = parts.next()?;
+    let (w_str, h_str) = size.split_once('x').or_else(|| size.split_once('X'))?;
+    let width: u32 = w_str.trim().parse().ok()?;
+    let height: u32 = h_str.trim().parse().ok()?;
+    // tile_size: default 32 if omitted
+    let mut tile_size: u32 = 32;
+    for rest in parts {
+        if let Some(val) = rest.strip_prefix("タイル=") {
+            if let Ok(n) = val.trim().parse() {
+                tile_size = n;
+            }
+        }
+    }
+    Some((width, height, tile_size))
+}
+
+/// Parse a single row of tile characters. G/.=0, R=1, T=2, W=3. Unknown → 0.
+fn parse_tile_row(line: &str, width: usize) -> Vec<u8> {
+    let mut row: Vec<u8> = line
+        .chars()
+        .take(width)
+        .map(|c| match c {
+            'G' | '.' => 0u8,
+            'R' => 1u8,
+            'T' => 2u8,
+            'W' => 3u8,
+            _ => 0u8,
+        })
+        .collect();
+    while row.len() < width {
+        row.push(0);
+    }
+    row
+}
+
+/// Parse NPC header: "name @x,y 色=#rrggbb (id=xxx)?" → Some((name, x, y, color, explicit_id))
+fn parse_npc_header(s: &str) -> Option<(String, u32, u32, u32, Option<String>)> {
+    // Extract name (before @), then @x,y, then 色=... / id=...
+    let at_pos = s.find('@')?;
+    let name = s[..at_pos].trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let after_at = &s[at_pos + 1..];
+    // split by whitespace to separate x,y from 色= / id=
+    let mut parts = after_at.split_whitespace();
+    let coord = parts.next()?;
+    let (x_str, y_str) = coord.split_once(',')?;
+    let x: u32 = x_str.trim().parse().ok()?;
+    let y: u32 = y_str.trim().parse().ok()?;
+    // color: default 0xff6b6b
+    let mut color: u32 = 0xff6b6b;
+    let mut explicit_id: Option<String> = None;
+    for p in parts {
+        if let Some(val) = p.strip_prefix("色=") {
+            let hex = val.trim().trim_start_matches('#');
+            if let Ok(n) = u32::from_str_radix(hex, 16) {
+                color = n;
+            }
+        } else if let Some(val) = p.strip_prefix("id=") {
+            let v = val.trim().to_string();
+            if !v.is_empty() {
+                explicit_id = Some(v);
+            }
+        }
+    }
+    Some((name, x, y, color, explicit_id))
+}
+
+/// Parse player start line: "@x,y 向き=..." → Some(PlayerStartData)
+fn parse_player_line(s: &str) -> Option<PlayerStartData> {
+    let at_pos = s.find('@')?;
+    let after_at = &s[at_pos + 1..];
+    let mut parts = after_at.split_whitespace();
+    let coord = parts.next()?;
+    let (x_str, y_str) = coord.split_once(',')?;
+    let x: u32 = x_str.trim().parse().ok()?;
+    let y: u32 = y_str.trim().parse().ok()?;
+    let mut direction = Direction::Down;
+    for p in parts {
+        if let Some(val) = p.strip_prefix("向き=") {
+            direction = parse_direction(val.trim());
+        }
+    }
+    Some(PlayerStartData { x, y, direction })
+}
+
+fn parse_direction(s: &str) -> Direction {
+    match s {
+        "up" | "Up" | "上" => Direction::Up,
+        "down" | "Down" | "下" => Direction::Down,
+        "left" | "Left" | "左" => Direction::Left,
+        "right" | "Right" | "右" => Direction::Right,
+        _ => Direction::Down,
+    }
+}
+
+/// Compute the base slug for an NPC name. Returns `None` if the name has no
+/// slug-able characters (caller falls back to `npc{index}`).
+pub(crate) fn npc_base_slug(name: &str) -> Option<String> {
+    let slug: String = name
+        .chars()
+        .filter_map(|c| {
+            if c.is_ascii_alphanumeric() {
+                Some(c.to_ascii_lowercase())
+            } else if c == ' ' || c == '-' || c == '_' {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect();
+    if slug.is_empty() {
+        None
+    } else {
+        Some(slug)
+    }
+}
+
+/// Generate a unique id for an NPC from its name. If name is non-ASCII,
+/// fall back to "npc{index}". If an NPC with the same id already exists
+/// in the current events, append -2, -3, etc.
+fn slugify_npc_id(name: &str, existing: &[Event]) -> String {
+    let base = npc_base_slug(name).unwrap_or_else(|| {
+        let count = existing
+            .iter()
+            .filter(|e| matches!(e, Event::Npc(_)))
+            .count();
+        format!("npc{}", count + 1)
+    });
+    resolve_npc_id_conflict(&base, existing)
+}
+
+/// Given a desired NPC id (explicit or slugged), append -2, -3, ... if it
+/// collides with an NPC already present in `existing`.
+fn resolve_npc_id_conflict(base: &str, existing: &[Event]) -> String {
+    let mut candidate = base.to_string();
+    let mut n = 2;
+    while existing.iter().any(|e| {
+        if let Event::Npc(npc) = e {
+            npc.id == candidate
+        } else {
+            false
+        }
+    }) {
+        candidate = format!("{}-{}", base, n);
+        n += 1;
+    }
+    candidate
+}
+
+/// Emit a warning about map dimension mismatch. On native targets this goes
+/// to stderr via `eprintln!`; on `wasm32` it goes through `console.warn`.
+fn emit_map_dimension_warning(width: u32, height: u32, raw_rows: &[&str]) {
+    let actual_rows = raw_rows.len();
+    let row_widths: Vec<usize> = raw_rows.iter().map(|r| r.chars().count()).collect();
+    let msg = format!(
+        "[name-name-parser] warning: map dimensions mismatch — declared {}x{}, got {} rows with widths {:?}",
+        width, height, actual_rows, row_widths
+    );
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::warn_1(&msg.into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        eprintln!("{}", msg);
+    }
+}
+
 fn unquote(s: &str) -> String {
     let s = s.trim();
     if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
@@ -567,7 +840,7 @@ default_bgm: test.ogg
         assert_eq!(doc.engine, "name-name");
         assert_eq!(doc.chapters[0].number, 2);
         assert_eq!(doc.chapters[0].title, "第二章");
-        assert_eq!(doc.chapters[0].hidden, true);
+        assert!(doc.chapters[0].hidden);
         assert_eq!(doc.chapters[0].default_bgm, Some("test.ogg".to_string()));
     }
 }

@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::parser::npc_base_slug;
 
 /// Emit a Document back to Markdown format.
 pub fn emit(doc: &Document) -> String {
@@ -10,7 +11,10 @@ pub fn emit(doc: &Document) -> String {
         out.push_str(&format!("engine: {}\n", doc.engine));
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
-        out.push_str(&format!("hidden: {}\n", chapter.hidden));
+        // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
+        if chapter.hidden {
+            out.push_str("hidden: true\n");
+        }
         if let Some(ref bgm) = chapter.default_bgm {
             out.push_str(&format!("default_bgm: {}\n", bgm));
         }
@@ -189,7 +193,86 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("**{}** → {}:\n", character, expression));
                 prev_was_dialog_or_text = false;
             }
+            Event::RpgMap(map) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "[マップ {}x{} タイル={}]\n",
+                    map.width, map.height, map.tile_size
+                ));
+                for row in &map.tiles {
+                    let mut line = String::with_capacity(map.width as usize);
+                    for (i, t) in row.iter().enumerate() {
+                        if i >= map.width as usize {
+                            break;
+                        }
+                        line.push(tile_char(*t));
+                    }
+                    // pad if short
+                    while line.chars().count() < map.width as usize {
+                        line.push('G');
+                    }
+                    out.push_str(&line);
+                    out.push('\n');
+                }
+                out.push_str("[/マップ]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::PlayerStart(p) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "[プレイヤー @{},{} 向き={}]\n",
+                    p.x,
+                    p.y,
+                    direction_ja(p.direction)
+                ));
+                prev_was_dialog_or_text = false;
+            }
+            Event::Npc(npc) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // Emit `id=...` only when the stored id differs from what the
+                // slugger would produce from the name (so names that slugify
+                // cleanly keep the markup visually short).
+                let id_suffix = match npc_base_slug(&npc.name) {
+                    Some(slug) if slug == npc.id => String::new(),
+                    _ => format!(" id={}", npc.id),
+                };
+                out.push_str(&format!(
+                    "[NPC {} @{},{} 色=#{:06x}{}]\n",
+                    npc.name, npc.x, npc.y, npc.color, id_suffix
+                ));
+                for line in &npc.message {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                out.push_str("[/NPC]\n");
+                prev_was_dialog_or_text = false;
+            }
         }
+    }
+}
+
+fn tile_char(t: u8) -> char {
+    match t {
+        0 => 'G',
+        1 => 'R',
+        2 => 'T',
+        3 => 'W',
+        _ => 'G',
+    }
+}
+
+fn direction_ja(d: Direction) -> &'static str {
+    match d {
+        Direction::Up => "上",
+        Direction::Down => "下",
+        Direction::Left => "左",
+        Direction::Right => "右",
     }
 }
 
