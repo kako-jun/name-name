@@ -69,6 +69,11 @@ pub struct NpcData {
     /// 実用上の妥当範囲 1〜4 はレンダラー側で clamp する想定。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frames: Option<u32>,
+    /// NPC が向いている方向。`向き=下` のように指定する。
+    /// 未指定の場合はレンダラーのデフォルト（= `Down`）で描画される。
+    /// 自律移動は未対応のためアイドル中はこの向きのまま。将来の「話しかけ時にプレイヤーを向く」拡張はレンダラー側で上書きする想定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Direction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]

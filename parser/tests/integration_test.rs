@@ -846,6 +846,67 @@ default square
 }
 
 #[test]
+fn test_rpg_npc_direction_round_trip() {
+    // `向き=` 属性の双方向変換。未指定の NPC は direction None のまま維持される。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[NPC a @0,0 色=#ff0000 向き=左]
+hi
+[/NPC]
+
+[NPC b @1,1 色=#00ff00 向き=右]
+hey
+[/NPC]
+
+[NPC c @2,2 色=#0000ff 向き=上]
+ho
+[/NPC]
+
+[NPC d @3,3 色=#ffff00]
+default
+[/NPC]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 4);
+    if let Event::Npc(n) = &events[0] {
+        assert_eq!(n.direction, Some(Direction::Left));
+    }
+    if let Event::Npc(n) = &events[1] {
+        assert_eq!(n.direction, Some(Direction::Right));
+    }
+    if let Event::Npc(n) = &events[2] {
+        assert_eq!(n.direction, Some(Direction::Up));
+    }
+    if let Event::Npc(n) = &events[3] {
+        assert_eq!(n.direction, None);
+    }
+
+    // Round-trip: emit must include 向き= for specified NPCs, omit for default
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("向き=左"));
+    assert!(emitted.contains("向き=右"));
+    assert!(emitted.contains("向き=上"));
+    let default_line = emitted
+        .lines()
+        .find(|l| l.contains("[NPC d "))
+        .expect("default NPC header");
+    assert!(
+        !default_line.contains("向き="),
+        "default NPC must not emit 向き=: {}",
+        default_line
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
 fn test_rpg_npc_invalid_frames_is_ignored() {
     // `frames=0` や非数値は無効扱い（None のまま）。NPC 自体はパースされる。
     let input = r#"---

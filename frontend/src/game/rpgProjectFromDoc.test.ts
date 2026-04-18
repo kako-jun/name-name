@@ -683,8 +683,10 @@ describe('applyRpgProjectToDoc', () => {
     expect(project).not.toBeNull()
     expect(project!.npcs[0].sprite).toBe('elder.png')
     expect(project!.npcs[0].frames).toBe(2)
+    expect(project!.npcs[0].direction).toBeUndefined()
     expect(project!.npcs[1].sprite).toBeUndefined()
     expect(project!.npcs[1].frames).toBeUndefined()
+    expect(project!.npcs[1].direction).toBeUndefined()
 
     const updated = applyRpgProjectToDoc(doc, project!, 'village')
     const events = updated.chapters[0].scenes[0].events
@@ -698,5 +700,71 @@ describe('applyRpgProjectToDoc', () => {
     const plain = npcs.find((n) => n.id === 'plain')!
     expect(plain.sprite).toBeUndefined()
     expect(plain.frames).toBeUndefined()
+  })
+
+  it('NPC の direction を doc ⇔ project 間で往復できる（大文字⇔小文字変換）', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 's',
+              title: '',
+              view: 'TopDown',
+              events: [
+                {
+                  RpgMap: {
+                    width: 2,
+                    height: 2,
+                    tile_size: 32,
+                    tiles: [
+                      [0, 0],
+                      [0, 0],
+                    ],
+                  },
+                },
+                {
+                  Npc: {
+                    id: 'a',
+                    name: 'A',
+                    x: 0,
+                    y: 0,
+                    color: 0xff0000,
+                    message: ['hi'],
+                    direction: 'Left',
+                  },
+                },
+                {
+                  Npc: {
+                    id: 'b',
+                    name: 'B',
+                    x: 1,
+                    y: 1,
+                    color: 0x00ff00,
+                    message: ['hi'],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    const project = rpgProjectFromDoc(doc)!
+    expect(project.npcs[0].direction).toBe('left')
+    expect(project.npcs[1].direction).toBeUndefined()
+
+    const updated = applyRpgProjectToDoc(doc, project, 's')
+    const npcs: NpcData[] = updated.chapters[0].scenes[0].events.flatMap((e) =>
+      typeof e !== 'string' && 'Npc' in e ? [e.Npc] : []
+    )
+    expect(npcs.find((n) => n.id === 'a')?.direction).toBe('Left')
+    expect(npcs.find((n) => n.id === 'b')?.direction).toBeUndefined()
   })
 })

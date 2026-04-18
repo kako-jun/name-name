@@ -46,6 +46,7 @@ export function rpgProjectFromDoc(
         message: ev.Npc.message.join('\n'),
         sprite: ev.Npc.sprite,
         frames: ev.Npc.frames,
+        direction: ev.Npc.direction ? directionToLower(ev.Npc.direction) : undefined,
       })
     }
   }
@@ -213,6 +214,7 @@ export function applyRpgProjectToDoc(
           message: npc.message.split('\n'),
           sprite: npc.sprite,
           frames: npc.frames,
+          direction: npc.direction ? directionToUpper(npc.direction) : undefined,
         },
       })
     ),

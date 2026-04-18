@@ -38,6 +38,8 @@ export interface NpcData {
   sprite?: string
   /** 歩行アニメのフレーム数（方向あたり）。未指定ならレンダラーのデフォルト（2） */
   frames?: number
+  /** NPC が向いている方向。未指定ならレンダラーのデフォルト（Down） */
+  direction?: Direction
 }
 
 export interface PlayerStartData {
