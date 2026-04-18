@@ -17,6 +17,9 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
     y: 5,
     message: '',
     color: 0xff6b6b,
+    sprite: undefined,
+    frames: undefined,
+    direction: undefined,
   })
 
   // IDから現在のNPCデータを引く（selectedNPCIdが古いデータを持ち続けるバグを防ぐ）
@@ -35,10 +38,22 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
       y: newNPC.y ?? 5,
       message: newNPC.message!,
       color: newNPC.color ?? 0xff6b6b,
+      sprite: newNPC.sprite?.trim() ? newNPC.sprite.trim() : undefined,
+      frames: newNPC.frames && newNPC.frames >= 1 ? newNPC.frames : undefined,
+      direction: newNPC.direction,
     }
 
     onChange([...npcs, npc])
-    setNewNPC({ name: '', x: 5, y: 5, message: '', color: 0xff6b6b })
+    setNewNPC({
+      name: '',
+      x: 5,
+      y: 5,
+      message: '',
+      color: 0xff6b6b,
+      sprite: undefined,
+      frames: undefined,
+      direction: undefined,
+    })
     setShowAddForm(false)
   }
 
@@ -137,11 +152,100 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
       {/* マップビュー */}
       <div className={`flex-1 overflow-auto p-4 ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
         {selectedNPC ? (
-          <div className="mb-4">
-            <div
-              className={`text-sm font-medium mb-2 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
-            >
+          <div className="mb-4 space-y-3">
+            <div className={`text-sm font-medium ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
               「{selectedNPC.name}」の配置: マップをクリックして位置を変更
+            </div>
+            <div
+              className={`p-3 rounded border ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-white'}`}
+            >
+              <div
+                className={`text-sm font-semibold mb-2 ${isDark ? 'text-gray-200' : 'text-gray-800'}`}
+              >
+                見た目の設定
+              </div>
+              <div className="grid grid-cols-[1fr_auto_auto] gap-3 items-end">
+                <div>
+                  <label
+                    className={`block text-xs font-medium mb-1 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}
+                  >
+                    スプライト
+                  </label>
+                  <input
+                    type="text"
+                    value={selectedNPC.sprite ?? ''}
+                    onChange={(e) => {
+                      // 属性は空白区切りで parse されるためパスに空白を含められない
+                      // （docs/spec/markdown-v0.1.md の NPC ブロック節を参照）。
+                      // 前後空白は trim、途中に空白が残る値はそのまま保存するが validation は今後の課題
+                      const v = e.target.value.trim()
+                      handleUpdateNPC(selectedNPC.id, {
+                        sprite: v.length > 0 ? v : undefined,
+                      })
+                    }}
+                    placeholder="__demo または character.png（空で色四角、空白不可）"
+                    className={`w-full px-2 py-1 text-sm border rounded ${
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label
+                    className={`block text-xs font-medium mb-1 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}
+                  >
+                    フレーム
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={4}
+                    value={selectedNPC.frames ?? ''}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10)
+                      handleUpdateNPC(selectedNPC.id, {
+                        frames: isNaN(n) ? undefined : Math.max(1, Math.min(4, n)),
+                      })
+                    }}
+                    placeholder="2"
+                    className={`w-20 px-2 py-1 text-sm border rounded ${
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label
+                    className={`block text-xs font-medium mb-1 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}
+                  >
+                    向き
+                  </label>
+                  <select
+                    value={selectedNPC.direction ?? ''}
+                    onChange={(e) =>
+                      handleUpdateNPC(selectedNPC.id, {
+                        direction:
+                          e.target.value === ''
+                            ? undefined
+                            : (e.target.value as NPCData['direction']),
+                      })
+                    }
+                    className={`px-2 py-1 text-sm border rounded ${
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
+                    }`}
+                  >
+                    <option value="">下（既定）</option>
+                    <option value="down">下</option>
+                    <option value="left">左</option>
+                    <option value="right">右</option>
+                    <option value="up">上</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
         ) : (
@@ -296,6 +400,86 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                   }`}
                   placeholder="#ff6b6b"
                 />
+              </div>
+              <div>
+                <label
+                  className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                >
+                  スプライト（任意）
+                </label>
+                <input
+                  type="text"
+                  value={newNPC.sprite ?? ''}
+                  onChange={(e) => setNewNPC({ ...newNPC, sprite: e.target.value })}
+                  className={`w-full px-3 py-2 border rounded ${
+                    isDark
+                      ? 'bg-gray-700 border-gray-600 text-white'
+                      : 'bg-white border-gray-300 text-gray-900'
+                  }`}
+                  placeholder="__demo または character.png"
+                />
+                <p className={`text-xs mt-1 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+                  空のままなら色付き四角で描画。`__demo`
+                  で内蔵デモスプライト（パスに空白は使えません）
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                  >
+                    フレーム数（1〜4）
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={4}
+                    value={newNPC.frames ?? ''}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10)
+                      setNewNPC({
+                        ...newNPC,
+                        frames: isNaN(n) ? undefined : Math.max(1, Math.min(4, n)),
+                      })
+                    }}
+                    className={`w-full px-3 py-2 border rounded ${
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
+                    }`}
+                    placeholder="2"
+                  />
+                </div>
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                  >
+                    向き
+                  </label>
+                  <select
+                    value={newNPC.direction ?? ''}
+                    onChange={(e) =>
+                      setNewNPC({
+                        ...newNPC,
+                        direction:
+                          e.target.value === ''
+                            ? undefined
+                            : (e.target.value as NPCData['direction']),
+                      })
+                    }
+                    className={`w-full px-3 py-2 border rounded ${
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
+                    }`}
+                  >
+                    <option value="">（未指定: 下）</option>
+                    <option value="down">下</option>
+                    <option value="left">左</option>
+                    <option value="right">右</option>
+                    <option value="up">上</option>
+                  </select>
+                </div>
               </div>
             </div>
             <div className="flex gap-3 justify-end mt-6">
