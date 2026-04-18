@@ -63,6 +63,8 @@ fn friday1930_prologue_has_novel_elements() {
         .any(|e| matches!(e, Event::Narration { .. }));
     assert!(has_narration, "prologue should contain Narration event");
 
+    // プロローグにはデイジー×3 + アベル×2 のダイアログがある想定。
+    // 最小3件（話者が2人以上いて掛け合いが成立する）をスモークの契約とする。
     let dialog_count = prologue
         .events
         .iter()
