@@ -12,6 +12,7 @@ import {
   rpgProjectFromDoc,
   applyRpgProjectToDoc,
   findRpgSceneIndex,
+  findAllRpgScenes,
 } from '../game/rpgProjectFromDoc'
 
 interface EditorScreenProps {
@@ -70,10 +71,18 @@ function EditorScreen({
   // 現在 RPG タブが編集対象としているシーン ID（doc 内の最初の RPG シーン）
   const [rpgSceneId, setRpgSceneId] = useState<string | null>(null)
 
+  // doc 内の全 RPG シーン（シーン選択ドロップダウン用）
+  const rpgScenes = useMemo(() => (doc ? findAllRpgScenes(doc) : []), [doc])
+
   // doc から RPGProject を導出（メモ化）。見つかったシーン ID も rpgSceneId に同期。
+  // rpgSceneId が既に設定されていればそのシーンを優先、
+  // 未設定または doc に存在しない場合は最初の RPG シーンにフォールバックする。
   const rpgProject: RPGProject | null = useMemo(() => {
     if (!doc) return null
-    const found = findRpgSceneIndex(doc)
+    // rpgSceneId が doc 内の RPG シーンと一致するかチェック
+    const explicitFound =
+      rpgSceneId !== null ? findRpgSceneIndex(doc, rpgSceneId) : null
+    const found = explicitFound ?? findRpgSceneIndex(doc)
     if (!found) return null
     const sceneIdForThisDoc =
       doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
@@ -468,6 +477,76 @@ function EditorScreen({
                 </button>
               ))}
             </div>
+
+            {/* シーン選択 + view 切替ツールバー（RPG シーンが存在するときのみ） */}
+            {rpgProject !== null && (
+              <div
+                className={`flex items-center gap-4 px-4 py-2 border-b text-sm ${
+                  isDark
+                    ? 'border-gray-700 bg-gray-800 text-gray-200'
+                    : 'border-gray-200 bg-gray-50 text-gray-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="rpg-scene-select"
+                    className={isDark ? 'text-gray-300' : 'text-gray-600'}
+                  >
+                    シーン:
+                  </label>
+                  {rpgScenes.length >= 2 ? (
+                    <select
+                      id="rpg-scene-select"
+                      value={rpgSceneId ?? ''}
+                      onChange={(e) => setRpgSceneId(e.target.value)}
+                      className={`px-2 py-1 rounded border text-sm ${
+                        isDark
+                          ? 'bg-gray-700 border-gray-600 text-gray-100'
+                          : 'bg-white border-gray-300 text-gray-900'
+                      }`}
+                    >
+                      {rpgScenes.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.id} - {s.title}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span
+                      className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}
+                    >
+                      {rpgScenes[0]
+                        ? `${rpgScenes[0].id} - ${rpgScenes[0].title}`
+                        : ''}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="rpg-view-select"
+                    className={isDark ? 'text-gray-300' : 'text-gray-600'}
+                  >
+                    視点:
+                  </label>
+                  <select
+                    id="rpg-view-select"
+                    value={rpgProject.view}
+                    onChange={(e) => {
+                      const nextView = e.target.value as 'topdown' | 'raycast'
+                      void persistRpgProject({ ...rpgProject, view: nextView })
+                    }}
+                    className={`px-2 py-1 rounded border text-sm ${
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-gray-100'
+                        : 'bg-white border-gray-300 text-gray-900'
+                    }`}
+                  >
+                    <option value="topdown">見下ろし</option>
+                    <option value="raycast">レイキャスト</option>
+                  </select>
+                </div>
+              </div>
+            )}
 
             <div className="flex-1 overflow-hidden">
               {rpgProject === null ? (
