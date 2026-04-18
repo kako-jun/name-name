@@ -673,7 +673,27 @@ fn parse_direction(s: &str) -> Direction {
         "down" | "Down" | "下" => Direction::Down,
         "left" | "Left" | "左" => Direction::Left,
         "right" | "Right" | "右" => Direction::Right,
-        _ => Direction::Down,
+        _ => {
+            emit_unknown_direction_warning(s);
+            Direction::Down
+        }
+    }
+}
+
+/// Emit a warning about an unknown direction value. The parser still falls back to
+/// `Down` for compatibility, but the user sees a warning about the typo.
+fn emit_unknown_direction_warning(value: &str) {
+    let msg = format!(
+        "[name-name-parser] warning: unknown direction '{}', falling back to down. Expected one of: up/down/left/right or 上/下/左/右",
+        value
+    );
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::warn_1(&msg.into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        eprintln!("{}", msg);
     }
 }
 

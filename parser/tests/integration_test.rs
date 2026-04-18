@@ -662,6 +662,36 @@ title: "RPG"
 }
 
 #[test]
+fn test_rpg_direction_unknown_falls_back_to_down_with_warning() {
+    // 未知の向き値は `Down` にフォールバック（既存挙動を維持）し、stderr に warning を出す。
+    // ここでは挙動（=Down）のみを assert。warning 出力は副作用で、手動で stderr を読んで確認する。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## m: map
+
+[プレイヤー @0,0 向き=大きい]
+
+[NPC a @1,1 色=#ff0000 向き=さいきょう]
+hi
+[/NPC]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    match &events[0] {
+        Event::PlayerStart(p) => assert_eq!(p.direction, Direction::Down),
+        other => panic!("Expected PlayerStart, got {:?}", other),
+    }
+    match &events[1] {
+        Event::Npc(npc) => assert_eq!(npc.direction, Some(Direction::Down)),
+        other => panic!("Expected Npc, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_rpg_npc_message_preserves_leading_indent() {
     // Leading whitespace in NPC message must be preserved (e.g. for code snippets,
     // ASCII art, or poem-style indentation). Only trailing whitespace is trimmed.
