@@ -18,9 +18,6 @@ ENV/
 .coverage
 htmlcov/
 
-# uv
-uv.lock
-
 # Projects (each is a separate git repo)
 projects/
 

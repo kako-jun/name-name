@@ -35,7 +35,12 @@ fn emit_events(out: &mut String, events: &[Event]) {
 
     for (i, event) in events.iter().enumerate() {
         match event {
-            Event::Dialog { character, expression, position, text } => {
+            Event::Dialog {
+                character,
+                expression,
+                position,
+                text,
+            } => {
                 // Add blank line before dialog if previous was also dialog (new speech block)
                 if prev_was_dialog_or_text && i > 0 {
                     out.push('\n');
@@ -162,7 +167,10 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[フラグ: {} = {}]\n", name, val_str));
                 prev_was_dialog_or_text = false;
             }
-            Event::Condition { flag, events: inner } => {
+            Event::Condition {
+                flag,
+                events: inner,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
@@ -171,7 +179,10 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str("[/条件]\n");
                 prev_was_dialog_or_text = false;
             }
-            Event::ExpressionChange { character, expression } => {
+            Event::ExpressionChange {
+                character,
+                expression,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
@@ -197,16 +208,23 @@ fn needs_speaker_line(events: &[Event], idx: usize) -> bool {
 
     match (prev, curr) {
         (
-            Event::Dialog { character: prev_ch, expression: prev_ex, position: prev_pos, .. },
-            Event::Dialog { character: curr_ch, expression: curr_ex, position: curr_pos, .. },
+            Event::Dialog {
+                character: prev_ch,
+                expression: prev_ex,
+                position: prev_pos,
+                ..
+            },
+            Event::Dialog {
+                character: curr_ch,
+                expression: curr_ex,
+                position: curr_pos,
+                ..
+            },
         ) => {
             // Same speaker continuation: no speaker line needed
             !(prev_ch == curr_ch && prev_ex == curr_ex && prev_pos == curr_pos)
         }
-        (
-            Event::ExpressionChange { .. },
-            Event::Dialog { .. },
-        ) => {
+        (Event::ExpressionChange { .. }, Event::Dialog { .. }) => {
             // After expression change, no speaker line (expression change already shows who)
             false
         }
