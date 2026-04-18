@@ -42,7 +42,9 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
   }, [selectedNPCId, selectedNPC?.sprite])
   const panelSpriteHasError = spriteHasInnerWhitespace(spriteDraft)
 
-  // 追加フォームの sprite は既存の newNPC.sprite をそのまま利用。途中空白を検出
+  // 追加フォームの sprite は既存の newNPC.sprite をそのまま利用（panel のような draft state は不要）。
+  // 理由: handleAddNPC まで親スコープに値が流出しないため、無効値が Markdown 往復に混入しない。
+  // 無効時は追加ボタンを disabled + 二重防衛の alert で弾く。
   const addFormSpriteHasError = spriteHasInnerWhitespace(newNPC.sprite ?? '')
 
   const handleAddNPC = () => {
