@@ -70,9 +70,15 @@ fn friday1930_prologue_has_novel_elements() {
         .iter()
         .filter(|e| matches!(e, Event::Dialog { .. }))
         .count();
-    assert!(dialog_count >= 3, "prologue should have multiple Dialog events");
+    assert!(
+        dialog_count >= 3,
+        "prologue should have multiple Dialog events"
+    );
 
-    let has_se = prologue.events.iter().any(|e| matches!(e, Event::Se { .. }));
+    let has_se = prologue
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::Se { .. }));
     assert!(has_se, "prologue should contain Se event");
 
     let has_exit = prologue
@@ -94,8 +100,7 @@ fn friday1930_prologue_has_novel_elements() {
 #[test]
 fn friday1930_village_has_four_npcs_and_map() {
     let doc = parser::parse(FRIDAY1930_SAMPLE);
-    let village = doc
-        .chapters[0]
+    let village = doc.chapters[0]
         .scenes
         .iter()
         .find(|s| s.id == "abel-village")
@@ -139,8 +144,7 @@ fn friday1930_village_has_four_npcs_and_map() {
 #[test]
 fn friday1930_dungeon_has_jikido() {
     let doc = parser::parse(FRIDAY1930_SAMPLE);
-    let dungeon = doc
-        .chapters[0]
+    let dungeon = doc.chapters[0]
         .scenes
         .iter()
         .find(|s| s.id == "dungeon-north")

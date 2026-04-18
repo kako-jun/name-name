@@ -136,17 +136,12 @@ pub enum Event {
     Npc(NpcData),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub enum SceneView {
+    #[default]
     TopDown,
     Raycast,
-}
-
-impl Default for SceneView {
-    fn default() -> Self {
-        SceneView::TopDown
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
