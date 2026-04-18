@@ -119,11 +119,26 @@ pub enum Event {
     Npc(NpcData),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum SceneView {
+    TopDown,
+    Raycast,
+}
+
+impl Default for SceneView {
+    fn default() -> Self {
+        SceneView::TopDown
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct Scene {
     pub id: String,
     pub title: String,
+    #[serde(default)]
+    pub view: SceneView,
     pub events: Vec<Event>,
 }
 

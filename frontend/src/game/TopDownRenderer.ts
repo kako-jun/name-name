@@ -1,9 +1,9 @@
 /**
- * PixiJS ベースの RPG レンダラー
+ * PixiJS ベースの見下ろし型 RPG レンダラー。
  *
- * タイルマップ・プレイヤー・NPC を描画し、キーボード入力でプレイヤーを
- * グリッド単位で動かす。隣接 NPC に Enter/Space で話しかけると会話
- * ダイアログを表示する。
+ * タイルマップ・プレイヤー・NPC を真上から描画し、キーボード入力で
+ * プレイヤーをグリッド単位で動かす。隣接 NPC に Enter/Space で話しかけると
+ * 会話ダイアログを表示する。RPG プレイモードのデフォルトビュー。
  */
 
 import { Application, Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
@@ -18,7 +18,7 @@ interface NPC {
   y: number
 }
 
-export class RPGRenderer {
+export class TopDownRenderer {
   private app: Application
   private mapLayer: Container
   private npcLayer: Container
@@ -132,7 +132,7 @@ export class RPGRenderer {
       this.mapTiles.length !== this.mapHeight ||
       this.mapTiles.some((r) => r.length !== this.mapWidth)
     ) {
-      console.warn('[RPGRenderer] map tiles dimensions mismatch')
+      console.warn('[TopDownRenderer] map tiles dimensions mismatch')
     }
 
     this.playerGridX = gameData.player.x
@@ -143,7 +143,10 @@ export class RPGRenderer {
     this.drawNPCs(gameData.npcs)
     this.drawPlayer()
     this.drawDialog()
-    this.updatePlayerPosition(this.gridToPixelX(this.playerGridX), this.gridToPixelY(this.playerGridY))
+    this.updatePlayerPosition(
+      this.gridToPixelX(this.playerGridX),
+      this.gridToPixelY(this.playerGridY)
+    )
     this.centerCamera()
   }
 

@@ -40,6 +40,28 @@ default_bgm: amehure.ogg
 - `title`: シーンの表示名
 - コロンは半角 `:` でも全角 `：` でも認識される
 
+### シーンの表示モード（`[view=...]`）
+
+RPG プレイモードでどのレンダラーを使うかをシーン単位で指定できる。タイトルの末尾に `[view=xxx]` を付ける:
+
+```markdown
+## map-village: 村の広場 [view=raycast]
+```
+
+| 値 | レンダラー | 備考 |
+|---|---|---|
+| `topdown` | 見下ろし型（TopDownRenderer） | デフォルト。省略時はこれ |
+| `raycast` | 一人称レイキャスト（RaycastRenderer） | 壁 = TREE / WATER、DDA 方式 |
+
+仕様:
+- 未指定は `topdown`（emit 時も省略される）
+- `topdown` を明示しても emit 時は省略される（正規化）
+- 未知の値（例: `[view=bogus]`）は warning を出して `topdown` にフォールバック
+- RPG シーン（マップブロックを含むシーン）でのみ意味を持つ。ノベル専用シーンに付けても無害だが無視される
+- MapEditor は編集優先のため常に見下ろし型で描画する（view 指定に関係なし）
+- パース時は `[view=TopDown]` / `[view=topdown]` のように大文字小文字どちらも受理する。emit 時は小文字（`topdown` / `raycast`）に正規化されて書き出される
+- 現時点で view はエディタ UI からは切り替えられず、Markdown を直接編集して指定する
+
 ## ダイアログ
 
 太字の名前、括弧内に表情と位置、改行後にテキスト。
