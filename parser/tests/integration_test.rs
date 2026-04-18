@@ -1008,6 +1008,46 @@ title: "RPG"
     assert_eq!(doc.chapters[0].scenes[0].view, SceneView::TopDown);
 }
 
+/// タイトル自体が `]` で終わるケース（例: `## 1-1: テスト [重要]`）では
+/// `[重要]` は `view=` プレフィックスを持たないため、タイトルの一部として
+/// そのまま保持され、unknown view の warning も出ない。
+#[test]
+fn test_scene_title_ending_with_bracket_is_not_view() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "t"
+---
+
+## 1-1: テスト [重要]
+
+**カコ** (suppin_1, 左):
+hi
+"#;
+    let doc = parser::parse(input);
+    let scene = &doc.chapters[0].scenes[0];
+    // タイトルは `[重要]` を含めてそのまま保持される
+    assert_eq!(scene.title, "テスト [重要]");
+    // view は未指定なのでデフォルトの TopDown
+    assert_eq!(scene.view, SceneView::TopDown);
+
+    // round-trip: emit してもタイトルが壊れない
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("## 1-1: テスト [重要]"),
+        "title with trailing [重要] must be preserved: {}",
+        emitted
+    );
+    // view=... 指定がないので [view=...] も emit されない
+    assert!(
+        !emitted.contains("[view="),
+        "no view directive should be emitted: {}",
+        emitted
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
 #[test]
 fn test_no_front_matter() {
     let input = r#"## 1-1: テスト

@@ -179,6 +179,7 @@ describe('applyRpgProjectToDoc', () => {
       },
       player: { x: 0, y: 0, direction: 'up' as const },
       npcs: [{ id: 'a', name: 'A', x: 1, y: 1, color: 0xff00ff, message: 'hi' }],
+      view: 'topdown' as const,
     }
 
     const updated = applyRpgProjectToDoc(doc, project, 'map-village')
@@ -221,12 +222,73 @@ describe('applyRpgProjectToDoc', () => {
       },
       player: { x: 0, y: 0, direction: 'down' as const },
       npcs: [],
+      view: 'topdown' as const,
     }
     const updated = applyRpgProjectToDoc(doc, project, 'new-rpg-scene')
     expect(updated.chapters[0].scenes).toHaveLength(2)
     const newScene = updated.chapters[0].scenes[1]
     expect(newScene.id).toBe('new-rpg-scene')
     expect(newScene.events[0]).toHaveProperty('RpgMap')
+  })
+
+  it('同一章の非RPGシーンの view は書き換えられない', () => {
+    // チャプター1内に「ノベルのみシーン (view=TopDown)」と「RPGシーン (view=Raycast)」が混在
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'novel-only',
+              title: 'ノベルのみ',
+              view: 'TopDown',
+              events: [{ Narration: { text: ['ノベルです'] } }],
+            },
+            {
+              id: 'rpg-scene',
+              title: 'RPG',
+              view: 'Raycast',
+              events: [
+                {
+                  RpgMap: {
+                    width: 2,
+                    height: 1,
+                    tile_size: 32,
+                    tiles: [[0, 0]],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    // RPGProject 側で view=topdown に変更
+    const project: RPGProject = {
+      name: 'test',
+      version: '1.0.0',
+      map: {
+        width: 2,
+        height: 1,
+        tileSize: 32,
+        tiles: [[0, 0]],
+      },
+      player: { x: 0, y: 0, direction: 'down' },
+      npcs: [],
+      view: 'topdown',
+    }
+    const updated = applyRpgProjectToDoc(doc, project, 'rpg-scene')
+    // RPGシーン側は view が TopDown に書き換わる
+    expect(updated.chapters[0].scenes[1].view).toBe('TopDown')
+    // ノベル側シーンの view は TopDown のまま保持される（= 書き換えられない）
+    expect(updated.chapters[0].scenes[0].view).toBe('TopDown')
+    // ノベル側のイベントも保持される
+    expect(updated.chapters[0].scenes[0].events).toHaveLength(1)
+    expect(updated.chapters[0].scenes[0].events[0]).toHaveProperty('Narration')
   })
 
   it('RPGProject.view=raycast を Doc の scene.view=Raycast に書き戻せる', () => {
