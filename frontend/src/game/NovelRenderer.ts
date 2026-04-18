@@ -224,7 +224,9 @@ export class NovelRenderer {
     // PixiJS v8 の Assets.load で取得した Texture は Assets の内部キャッシュに残り続けるため、
     // キャッシュ済みURLを Assets.unload で解放してから textureCache をクリアする
     const urls = Array.from(this.textureCache.keys())
-    Promise.all(urls.map((u) => Assets.unload(u))).catch(() => {})
+    Promise.all(urls.map((u) => Assets.unload(u))).catch((err) => {
+      console.warn('[name-name] テクスチャの解放に失敗', err)
+    })
     this.textureCache.clear()
     this.resetAndStartEvents([...events])
   }
@@ -324,7 +326,9 @@ export class NovelRenderer {
     this.dialogBox.dispose()
     // GPU テクスチャのリーク防止: Assets.unload で内部キャッシュから解放
     const urls = Array.from(this.textureCache.keys())
-    Promise.all(urls.map((u) => Assets.unload(u))).catch(() => {})
+    Promise.all(urls.map((u) => Assets.unload(u))).catch((err) => {
+      console.warn('[name-name] テクスチャの解放に失敗', err)
+    })
     this.textureCache.clear()
     this.app.destroy(true, { children: true })
     this.initialized = false
