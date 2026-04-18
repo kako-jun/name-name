@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::parser::npc_base_slug;
 
 /// Emit a Document back to Markdown format.
 pub fn emit(doc: &Document) -> String {
@@ -10,7 +11,10 @@ pub fn emit(doc: &Document) -> String {
         out.push_str(&format!("engine: {}\n", doc.engine));
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
-        out.push_str(&format!("hidden: {}\n", chapter.hidden));
+        // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
+        if chapter.hidden {
+            out.push_str("hidden: true\n");
+        }
         if let Some(ref bgm) = chapter.default_bgm {
             out.push_str(&format!("default_bgm: {}\n", bgm));
         }
@@ -231,9 +235,16 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
+                // Emit `id=...` only when the stored id differs from what the
+                // slugger would produce from the name (so names that slugify
+                // cleanly keep the markup visually short).
+                let id_suffix = match npc_base_slug(&npc.name) {
+                    Some(slug) if slug == npc.id => String::new(),
+                    _ => format!(" id={}", npc.id),
+                };
                 out.push_str(&format!(
-                    "[NPC {} @{},{} 色=#{:06x}]\n",
-                    npc.name, npc.x, npc.y, npc.color
+                    "[NPC {} @{},{} 色=#{:06x}{}]\n",
+                    npc.name, npc.x, npc.y, npc.color, id_suffix
                 ));
                 for line in &npc.message {
                     out.push_str(line);

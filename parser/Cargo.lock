@@ -59,6 +59,7 @@ dependencies = [
  "serde_json",
  "tsify-next",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
