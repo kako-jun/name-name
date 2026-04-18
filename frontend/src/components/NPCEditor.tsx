@@ -20,7 +20,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
   })
 
   // IDから現在のNPCデータを引く（selectedNPCIdが古いデータを持ち続けるバグを防ぐ）
-  const selectedNPC = selectedNPCId ? (npcs.find(n => n.id === selectedNPCId) ?? null) : null
+  const selectedNPC = selectedNPCId ? (npcs.find((n) => n.id === selectedNPCId) ?? null) : null
 
   const handleAddNPC = () => {
     if (!newNPC.name || !newNPC.message) {
@@ -44,7 +44,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
 
   const handleDeleteNPC = (id: string) => {
     if (confirm('このNPCを削除しますか？')) {
-      onChange(npcs.filter(n => n.id !== id))
+      onChange(npcs.filter((n) => n.id !== id))
       if (selectedNPCId === id) {
         setSelectedNPCId(null)
       }
@@ -52,7 +52,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
   }
 
   const handleUpdateNPC = (id: string, updates: Partial<NPCData>) => {
-    onChange(npcs.map(n => (n.id === id ? { ...n, ...updates } : n)))
+    onChange(npcs.map((n) => (n.id === id ? { ...n, ...updates } : n)))
   }
 
   const handleMapClick = (x: number, y: number) => {
@@ -68,7 +68,9 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
         className={`w-80 border-r overflow-auto ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-white'}`}
       >
         <div className={`p-4 border-b ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
-          <h3 className={`font-semibold mb-3 ${isDark ? 'text-white' : 'text-gray-900'}`}>NPCリスト</h3>
+          <h3 className={`font-semibold mb-3 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+            NPCリスト
+          </h3>
           <button
             onClick={() => setShowAddForm(true)}
             className={`w-full py-2 px-4 rounded font-medium transition-colors ${
@@ -87,7 +89,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
               NPCがまだありません
             </p>
           ) : (
-            npcs.map(npc => (
+            npcs.map((npc) => (
               <div
                 key={npc.id}
                 onClick={() => setSelectedNPCId(npc.id)}
@@ -102,9 +104,11 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                 } border`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className={`font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>{npc.name}</span>
+                  <span className={`font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                    {npc.name}
+                  </span>
                   <button
-                    onClick={e => {
+                    onClick={(e) => {
                       e.stopPropagation()
                       handleDeleteNPC(npc.id)
                     }}
@@ -134,7 +138,9 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
       <div className={`flex-1 overflow-auto p-4 ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
         {selectedNPC ? (
           <div className="mb-4">
-            <div className={`text-sm font-medium mb-2 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+            <div
+              className={`text-sm font-medium mb-2 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+            >
               「{selectedNPC.name}」の配置: マップをクリックして位置を変更
             </div>
           </div>
@@ -155,7 +161,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
           >
             {mapData.tiles.map((row, y) =>
               row.map((tile, x) => {
-                const npcHere = npcs.find(n => n.x === x && n.y === y)
+                const npcHere = npcs.find((n) => n.x === x && n.y === y)
                 const isSelected = selectedNPC && selectedNPC.x === x && selectedNPC.y === y
 
                 return (
@@ -167,7 +173,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                     style={{
                       backgroundColor: npcHere
                         ? `#${npcHere.color.toString(16).padStart(6, '0')}`
-                        : TILE_COLORS[tile as TileType] ?? TILE_COLORS[TileType.GRASS],
+                        : (TILE_COLORS[tile as TileType] ?? TILE_COLORS[TileType.GRASS]),
                     }}
                     onClick={() => handleMapClick(x, y)}
                     title={npcHere ? `${npcHere.name} (${x}, ${y})` : `(${x}, ${y})`}
@@ -196,69 +202,87 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
             <h2 className="text-xl font-bold mb-4">NPC追加</h2>
             <div className="space-y-4">
               <div>
-                <label className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                <label
+                  className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                >
                   名前
                 </label>
                 <input
                   type="text"
                   value={newNPC.name}
-                  onChange={e => setNewNPC({ ...newNPC, name: e.target.value })}
+                  onChange={(e) => setNewNPC({ ...newNPC, name: e.target.value })}
                   className={`w-full px-3 py-2 border rounded ${
-                    isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'
+                    isDark
+                      ? 'bg-gray-700 border-gray-600 text-white'
+                      : 'bg-white border-gray-300 text-gray-900'
                   }`}
                   placeholder="村人"
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label
+                    className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                  >
                     X座標
                   </label>
                   <input
                     type="number"
                     value={newNPC.x}
-                    onChange={e => setNewNPC({ ...newNPC, x: parseInt(e.target.value) ?? 0 })}
+                    onChange={(e) => setNewNPC({ ...newNPC, x: parseInt(e.target.value) ?? 0 })}
                     className={`w-full px-3 py-2 border rounded ${
-                      isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
                     }`}
                   />
                 </div>
                 <div>
-                  <label className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label
+                    className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                  >
                     Y座標
                   </label>
                   <input
                     type="number"
                     value={newNPC.y}
-                    onChange={e => setNewNPC({ ...newNPC, y: parseInt(e.target.value) ?? 0 })}
+                    onChange={(e) => setNewNPC({ ...newNPC, y: parseInt(e.target.value) ?? 0 })}
                     className={`w-full px-3 py-2 border rounded ${
-                      isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
                     }`}
                   />
                 </div>
               </div>
               <div>
-                <label className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                <label
+                  className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                >
                   メッセージ
                 </label>
                 <textarea
                   value={newNPC.message}
-                  onChange={e => setNewNPC({ ...newNPC, message: e.target.value })}
+                  onChange={(e) => setNewNPC({ ...newNPC, message: e.target.value })}
                   className={`w-full px-3 py-2 border rounded ${
-                    isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'
+                    isDark
+                      ? 'bg-gray-700 border-gray-600 text-white'
+                      : 'bg-white border-gray-300 text-gray-900'
                   }`}
                   rows={3}
                   placeholder="こんにちは！"
                 />
               </div>
               <div>
-                <label className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                <label
+                  className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                >
                   色 (16進数)
                 </label>
                 <input
                   type="text"
                   value={`#${newNPC.color?.toString(16).padStart(6, '0')}`}
-                  onChange={e => {
+                  onChange={(e) => {
                     const hex = e.target.value.replace('#', '')
                     const num = parseInt(hex, 16)
                     if (!isNaN(num)) {
@@ -266,7 +290,9 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                     }
                   }}
                   className={`w-full px-3 py-2 border rounded ${
-                    isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'
+                    isDark
+                      ? 'bg-gray-700 border-gray-600 text-white'
+                      : 'bg-white border-gray-300 text-gray-900'
                   }`}
                   placeholder="#ff6b6b"
                 />
@@ -286,7 +312,9 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
               <button
                 onClick={handleAddNPC}
                 className={`px-4 py-2 rounded font-medium transition-colors ${
-                  isDark ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-blue-500 hover:bg-blue-600 text-white'
+                  isDark
+                    ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                    : 'bg-blue-500 hover:bg-blue-600 text-white'
                 }`}
               >
                 追加

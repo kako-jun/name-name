@@ -245,11 +245,7 @@ export class SaveLoadOverlay extends Container {
     this.addChild(closeBtn)
   }
 
-  private createButton(
-    label: string,
-    textStyle: TextStyle,
-    onClick: () => void,
-  ): Container {
+  private createButton(label: string, textStyle: TextStyle, onClick: () => void): Container {
     const container = new Container()
     container.eventMode = 'static'
     container.cursor = 'pointer'

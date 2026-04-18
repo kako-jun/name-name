@@ -79,11 +79,7 @@ function ProjectListScreen({
       </header>
 
       <main className="flex-1 overflow-hidden">
-        <ProjectList
-          apiBaseUrl={apiBaseUrl}
-          isDark={isDark}
-          onSelectProject={onSelectProject}
-        />
+        <ProjectList apiBaseUrl={apiBaseUrl} isDark={isDark} onSelectProject={onSelectProject} />
       </main>
     </div>
   )

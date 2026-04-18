@@ -53,6 +53,8 @@ jobs:
 
       - run: npm ci
 
+      - run: npm run lint
+
       - run: npm run type-check
 
       - run: npm test -- --run

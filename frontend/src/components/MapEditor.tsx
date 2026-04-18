@@ -47,7 +47,9 @@ function MapEditor({ mapData, onChange, isDark }: MapEditorProps) {
   return (
     <div className="h-full flex flex-col">
       {/* タイルパレット */}
-      <div className={`p-4 border-b ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-white'}`}>
+      <div
+        className={`p-4 border-b ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-white'}`}
+      >
         <div className="flex items-center gap-2">
           <span className={`text-sm font-medium ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
             タイル選択:

@@ -72,7 +72,9 @@ function App() {
             <h2 className="text-xl font-bold mb-4">設定</h2>
             <div className="space-y-4">
               <div>
-                <label className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                <label
+                  className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                >
                   API URL
                 </label>
                 <input
