@@ -10,6 +10,7 @@ import { Application, Container, Graphics, Sprite } from 'pixi.js'
 import { NPCData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { RpgDialogBox } from './RpgDialogBox'
 import {
+  NPC_ANIM_PERIOD_MS,
   clampFrames,
   clearDemoSheetCache,
   directionToRow,
@@ -18,9 +19,6 @@ import {
 } from './npcSpriteSheet'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
-
-/** NPC 歩行アニメのフレーム切替周期（ms）。frame 0 ↔ 1 を 500ms ごとに入れ替え */
-const NPC_ANIM_PERIOD_MS = 500
 
 interface NPC {
   data: NPCData
@@ -154,8 +152,12 @@ export class TopDownRenderer {
     }
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
-      clearDemoSheetCache(this.app.renderer)
+      // renderer 参照を先に保持してから app.destroy（children 連鎖で Sprite / 内部 Texture が破棄される）。
+      // その後に cache 側の RenderTexture（source 共有元）を破棄 — 順序を逆にすると source を先に
+      // destroy してしまい、子 Sprite が既に破棄済み source を再参照して壊れる可能性がある
+      const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
+      clearDemoSheetCache(renderer)
       this.dialogBox = null
       this.initialized = false
     }

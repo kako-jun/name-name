@@ -14,6 +14,9 @@ import { Assets, Container, Graphics, Rectangle, RenderTexture, Renderer, Textur
 
 export type Direction = 'down' | 'left' | 'right' | 'up'
 
+/** NPC アイドル歩行アニメのフレーム切替周期（ms）。TopDown / Raycast で共有 */
+export const NPC_ANIM_PERIOD_MS = 500
+
 const DIRECTION_ROW: Record<Direction, number> = {
   down: 0,
   left: 1,

@@ -10,15 +10,13 @@ import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js'
 import { NPCData, RPGProject, TileType } from '../types/rpg'
 import { RpgDialogBox } from './RpgDialogBox'
 import {
+  NPC_ANIM_PERIOD_MS,
   clampFrames,
   clearDemoSheetCache,
   directionToRow,
   loadNpcSpriteSheet,
   type NpcSpriteSheet,
 } from './npcSpriteSheet'
-
-/** NPC 歩行アニメのフレーム切替周期（ms）。TopDown と同じ値にして見た目を揃える */
-const NPC_ANIM_PERIOD_MS = 500
 
 interface NPCRuntime {
   data: NPCData
@@ -220,8 +218,11 @@ export class RaycastRenderer {
     }
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
-      clearDemoSheetCache(this.app.renderer)
+      // app.destroy → clearDemoSheetCache の順。逆順だと cache の RenderTexture source を先に
+      // 破棄してしまい、app.destroy で連鎖的に Sprite が破棄済み source を参照する可能性がある
+      const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
+      clearDemoSheetCache(renderer)
       this.dialogBox = null
       this.initialized = false
     }
@@ -566,7 +567,8 @@ export class RaycastRenderer {
       // 距離ソート: 遠い NPC ほど先に描く → zIndex を小さく
       n.container.zIndex = -transformY
 
-      // mask 更新: zBuffer で遮蔽されていない列だけを可視にする
+      // mask 更新: zBuffer で遮蔽されていない列だけを可視にする。
+      // mask は npcLayer → container（ともに位置 0, 0）直下なので、rect 座標はキャンバス絶対座標と一致する
       n.mask.clear()
       let hasVisible = false
       for (let sx = drawStartX; sx < drawEndX; sx += this.stripeWidth) {
