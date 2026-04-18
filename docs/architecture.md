@@ -46,8 +46,12 @@ name-name/
 ### 編集時
 
 ```
-ユーザー操作 → React UI → Event[] → parser(emit) → Markdown → API → Git保存
+ユーザー操作 → React UI (EventDocument 直接操作) → parser(emit) → Markdown → API → Git保存
 ```
+
+エディタは `EventDocument`（`chapters[].scenes[].events[]` のツリー）を真実の情報源として
+保持する。UI の編集操作は `EventDocument` を直接更新し、`emitMarkdown` で Markdown 文字列に
+変換してから autosave 経由で backend に保存する。旧 `Chapter` / `Scene` / `Cut` 型は削除済み。
 
 ### 再生時
 

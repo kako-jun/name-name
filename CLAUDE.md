@@ -370,6 +370,7 @@ uv sync
 - ✅ 日本語ワードラップ（禁則処理付き）
 - ✅ カノソ方式テキスト表示（一瞬表示 + クリック送り）
 - ✅ Event型モデルでの描画（旧ScriptRowから移行完了）
+- ✅ エディタも EventDocument ベースに完全移行（#36）— 旧 Chapter / Scene / Cut 型削除、emit経由でMarkdown保存、プレイモードもWASMパース結果のみで動作（フォールバックなし）
 - ✅ 背景画像表示（アスペクト比維持カバー）+ 暗転/暗転解除 + 場面転換
 - ✅ 演出イベントの即時実行（Background/Blackout/SceneTransition）
 - ✅ スナップショット方式の状態管理（NovelGameState + 履歴スタック）
@@ -386,7 +387,7 @@ uv sync
 - ✅ Vite WASMプラグイン設定（vite-plugin-wasm + vite-plugin-top-level-await）
 - ✅ フロントエンドWASMラッパー（`frontend/src/wasm/parser.ts`）
 - ✅ EditorScreenでWASMパース結果をノベルプレイヤーに供給
-- ✅ 旧モデル（Chapter/Scene/Cut）からの自動フォールバック
+- ✅ エディタも EventDocument を直接操作する形に完全移行（#36）— 旧型との並存・フォールバックは廃止
 
 ### 未実装
 - ✅ RPGプレイヤーのPixiJS移行（#35）— RPGRenderer / サンプルデータでの即起動 / 矢印・WASD 移動 + Enter/Space 会話
