@@ -107,6 +107,44 @@ export function findRpgSceneIndex(
   return { chapterIndex: found.chapterIndex, sceneIndex: found.sceneIndex }
 }
 
+/**
+ * Document 内のすべての RPG シーン（RpgMap を含むシーン）を列挙する。
+ * エディタのシーン選択ドロップダウン等に使う。
+ */
+export function findAllRpgScenes(
+  doc: EventDocument
+): Array<{
+  chapterIndex: number
+  sceneIndex: number
+  id: string
+  title: string
+  view: 'topdown' | 'raycast'
+}> {
+  const result: Array<{
+    chapterIndex: number
+    sceneIndex: number
+    id: string
+    title: string
+    view: 'topdown' | 'raycast'
+  }> = []
+  for (let ci = 0; ci < doc.chapters.length; ci++) {
+    const chapter = doc.chapters[ci]
+    for (let si = 0; si < chapter.scenes.length; si++) {
+      const scene = chapter.scenes[si]
+      const hasMap = scene.events.some((e) => typeof e !== 'string' && 'RpgMap' in e)
+      if (!hasMap) continue
+      result.push({
+        chapterIndex: ci,
+        sceneIndex: si,
+        id: scene.id,
+        title: scene.title,
+        view: scene.view === 'Raycast' ? 'raycast' : 'topdown',
+      })
+    }
+  }
+  return result
+}
+
 function directionToLower(d: 'Up' | 'Down' | 'Left' | 'Right'): 'up' | 'down' | 'left' | 'right' {
   switch (d) {
     case 'Up':

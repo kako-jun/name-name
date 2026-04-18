@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rpgProjectFromDoc, applyRpgProjectToDoc } from './rpgProjectFromDoc'
+import { rpgProjectFromDoc, applyRpgProjectToDoc, findAllRpgScenes } from './rpgProjectFromDoc'
 import type { EventDocument } from '../types'
 import type { RPGProject } from '../types/rpg'
 
@@ -125,6 +125,154 @@ describe('rpgProjectFromDoc', () => {
       ],
     }
     expect(rpgProjectFromDoc(doc)).toBeNull()
+  })
+})
+
+describe('findAllRpgScenes', () => {
+  it('単一 RPG シーンを列挙できる', () => {
+    const list = findAllRpgScenes(makeDoc())
+    expect(list).toHaveLength(1)
+    expect(list[0].id).toBe('map-village')
+    expect(list[0].title).toBe('村')
+    expect(list[0].view).toBe('topdown')
+    expect(list[0].chapterIndex).toBe(0)
+    expect(list[0].sceneIndex).toBe(0)
+  })
+
+  it('複数章にまたがる RPG シーンを列挙できる', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'Ch1',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'village',
+              title: '村',
+              view: 'TopDown',
+              events: [
+                {
+                  RpgMap: {
+                    width: 2,
+                    height: 1,
+                    tile_size: 32,
+                    tiles: [[0, 0]],
+                  },
+                },
+              ],
+            },
+            {
+              id: 'intro',
+              title: 'イントロ',
+              view: 'TopDown',
+              events: [{ Narration: { text: ['ノベル'] } }],
+            },
+          ],
+        },
+        {
+          number: 2,
+          title: 'Ch2',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'dungeon',
+              title: 'ダンジョン',
+              view: 'Raycast',
+              events: [
+                {
+                  RpgMap: {
+                    width: 2,
+                    height: 2,
+                    tile_size: 32,
+                    tiles: [
+                      [2, 2],
+                      [2, 0],
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const list = findAllRpgScenes(doc)
+    expect(list).toHaveLength(2)
+    expect(list[0].id).toBe('village')
+    expect(list[0].view).toBe('topdown')
+    expect(list[0].chapterIndex).toBe(0)
+    expect(list[0].sceneIndex).toBe(0)
+    expect(list[1].id).toBe('dungeon')
+    expect(list[1].view).toBe('raycast')
+    expect(list[1].chapterIndex).toBe(1)
+    expect(list[1].sceneIndex).toBe(0)
+  })
+
+  it('RPG シーンが無ければ空配列', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 's1',
+              title: '',
+              view: 'TopDown',
+              events: [{ Narration: { text: ['novel only'] } }],
+            },
+          ],
+        },
+      ],
+    }
+    expect(findAllRpgScenes(doc)).toEqual([])
+  })
+
+  it('RpgMap を含まないシーン（view だけ指定されたノベルシーン等）は列挙されない', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'novel-raycast',
+              title: 'ノベルでも view=Raycast',
+              view: 'Raycast',
+              events: [{ Narration: { text: ['マップは無い'] } }],
+            },
+            {
+              id: 'rpg',
+              title: 'RPG',
+              view: 'TopDown',
+              events: [
+                {
+                  RpgMap: {
+                    width: 1,
+                    height: 1,
+                    tile_size: 32,
+                    tiles: [[0]],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const list = findAllRpgScenes(doc)
+    expect(list).toHaveLength(1)
+    expect(list[0].id).toBe('rpg')
   })
 })
 
