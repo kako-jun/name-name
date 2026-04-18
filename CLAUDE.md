@@ -9,7 +9,7 @@
 - ノベルゲームもRPGも同じ .md ファイルで記述（Markdownスーパーセット）
 - エディタモード: キャンバス上でドラッグ&ドロップで編集（ノベル/RPG共通）
 - ノベルプレイモード: PixiJSでゲーム実行（Phaserから移行済み）
-- RPGプレイモード: Phaserでゲーム実行（mocotchより統合。→PixiJS移行予定）
+- RPGプレイモード: PixiJSでゲーム実行（Phaserから移行済み）
 - Git管理: 原稿とアセットをGitで自動バージョン管理
 - ブランチ戦略: develop（開発用）/ main（本番用）
 
@@ -29,7 +29,7 @@ name-name/
 ├── frontend/           # React + Vite + TypeScript
 │   ├── src/
 │   │   ├── components/ # UIコンポーネント
-│   │   ├── game/       # ゲームレンダラー（ノベル: PixiJS / RPG: Phaser）
+│   │   ├── game/       # ゲームレンダラー（ノベル・RPG ともに PixiJS）
 │   │   └── wasm/       # WASMパーサーラッパー（parser/pkg/ を参照）
 │   ├── package.json
 │   └── vite.config.ts
@@ -389,7 +389,7 @@ uv sync
 - ✅ 旧モデル（Chapter/Scene/Cut）からの自動フォールバック
 
 ### 未実装
-- ⬜ RPGプレイヤーのPixiJS移行（現在はPhaser）
+- ✅ RPGプレイヤーのPixiJS移行（#35）— RPGRenderer / サンプルデータでの即起動 / 矢印・WASD 移動 + Enter/Space 会話
 - ✅ 立ち絵表示 + 表情変更 + 退場（#18）— CharacterLayer / 左右中央配置 / ExpressionChange / Exit
 - ✅ 選択肢・分岐 + フラグ・条件分岐（#10）— GameState / ChoiceOverlay / シーンジャンプ
 - ✅ セーブ/ロード + バックログ（#11）— SaveManager / SaveLoadOverlay / BacklogOverlay / localStorage 3スロット / JSON エクスポート・インポート
