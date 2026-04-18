@@ -34,6 +34,10 @@ export interface NpcData {
   y: number
   color: number
   message: string[]
+  /** スプライトシートへの相対パス。未指定なら色付き四角で描画される */
+  sprite?: string
+  /** 歩行アニメのフレーム数（方向あたり）。未指定ならレンダラーのデフォルト（2） */
+  frames?: number
 }
 
 export interface PlayerStartData {

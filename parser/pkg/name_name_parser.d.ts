@@ -25,6 +25,17 @@ export interface NpcData {
     y: number;
     color: number;
     message: string[];
+    /**
+     * スプライトシートへの相対パス（例: `character.png`）。
+     * 未指定の場合は従来どおり色付き四角で描画される。
+     */
+    sprite?: string;
+    /**
+     * 歩行アニメーションのフレーム数（方向あたり）。
+     * ドラクエ式の 2 フレーム（足踏み）が標準。特殊キャラ向けに 1〜4 を許容。
+     * 未指定の場合はレンダラー側のデフォルト（= 2）を使う。
+     */
+    frames?: number;
 }
 
 export interface PlayerStartData {

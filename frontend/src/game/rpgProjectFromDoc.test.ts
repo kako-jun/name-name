@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { rpgProjectFromDoc, applyRpgProjectToDoc, findAllRpgScenes } from './rpgProjectFromDoc'
-import type { EventDocument } from '../types'
+import type { EventDocument, NpcData } from '../types'
 import type { RPGProject } from '../types/rpg'
 
 function makeDoc(): EventDocument {
@@ -622,5 +622,81 @@ describe('applyRpgProjectToDoc', () => {
     }
     const updated = applyRpgProjectToDoc(doc, project, 'rc')
     expect(updated.chapters[0].scenes[0].view).toBe('Raycast')
+  })
+
+  it('NPC の sprite / frames を doc ⇔ project 間で往復できる', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'village',
+              title: '村',
+              view: 'TopDown',
+              events: [
+                {
+                  RpgMap: {
+                    width: 2,
+                    height: 2,
+                    tile_size: 32,
+                    tiles: [
+                      [0, 0],
+                      [0, 0],
+                    ],
+                  },
+                },
+                {
+                  Npc: {
+                    id: 'elder',
+                    name: '長老',
+                    x: 1,
+                    y: 1,
+                    color: 0xff0000,
+                    message: ['hi'],
+                    sprite: 'elder.png',
+                    frames: 2,
+                  },
+                },
+                {
+                  Npc: {
+                    id: 'plain',
+                    name: '村人',
+                    x: 0,
+                    y: 1,
+                    color: 0x888888,
+                    message: ['hello'],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    const project = rpgProjectFromDoc(doc)
+    expect(project).not.toBeNull()
+    expect(project!.npcs[0].sprite).toBe('elder.png')
+    expect(project!.npcs[0].frames).toBe(2)
+    expect(project!.npcs[1].sprite).toBeUndefined()
+    expect(project!.npcs[1].frames).toBeUndefined()
+
+    const updated = applyRpgProjectToDoc(doc, project!, 'village')
+    const events = updated.chapters[0].scenes[0].events
+    const npcs: NpcData[] = events.flatMap((e) =>
+      typeof e !== 'string' && 'Npc' in e ? [e.Npc] : []
+    )
+    expect(npcs).toHaveLength(2)
+    const elder = npcs.find((n) => n.id === 'elder')!
+    expect(elder.sprite).toBe('elder.png')
+    expect(elder.frames).toBe(2)
+    const plain = npcs.find((n) => n.id === 'plain')!
+    expect(plain.sprite).toBeUndefined()
+    expect(plain.frames).toBeUndefined()
   })
 })

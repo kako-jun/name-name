@@ -30,6 +30,8 @@ export interface NPCData {
   y: number // Y座標（グリッド）
   message: string // 会話内容
   color: number // スプライトの色（16進数）
+  sprite?: string // スプライトシートへの相対パス。未指定なら color の四角で描画
+  frames?: number // 歩行アニメのフレーム数（方向あたり）。未指定なら 2
 }
 
 /**
