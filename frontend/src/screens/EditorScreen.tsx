@@ -12,6 +12,7 @@ import {
   rpgProjectFromDoc,
   applyRpgProjectToDoc,
   findRpgSceneIndex,
+  findAllRpgScenes,
 } from '../game/rpgProjectFromDoc'
 
 interface EditorScreenProps {
@@ -70,20 +71,48 @@ function EditorScreen({
   // 現在 RPG タブが編集対象としているシーン ID（doc 内の最初の RPG シーン）
   const [rpgSceneId, setRpgSceneId] = useState<string | null>(null)
 
-  // doc から RPGProject を導出（メモ化）。見つかったシーン ID も rpgSceneId に同期。
+  // doc 内の全 RPG シーン（シーン選択ドロップダウン用）
+  const rpgScenes = useMemo(() => (doc ? findAllRpgScenes(doc) : []), [doc])
+
+  // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
+  // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
+  // 未設定または doc に存在しない場合は最初の RPG シーンにフォールバックする。
   const rpgProject: RPGProject | null = useMemo(() => {
     if (!doc) return null
-    const found = findRpgSceneIndex(doc)
+    const explicitFound =
+      rpgSceneId !== null ? findRpgSceneIndex(doc, rpgSceneId) : null
+    const found = explicitFound ?? findRpgSceneIndex(doc)
     if (!found) return null
     const sceneIdForThisDoc =
       doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
-    // シーン ID が変わったら state を同期（描画中は setState を直接呼ばず副作用で）
-    if (sceneIdForThisDoc !== rpgSceneId) {
-      // 次 tick で同期（render 中に setState すると警告が出るため）
-      queueMicrotask(() => setRpgSceneId(sceneIdForThisDoc))
-    }
     return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName)
   }, [doc, projectName, rpgSceneId])
+
+  // 現在の rpgSceneId が doc 内に存在しない場合、先頭の RPG シーンに切り替える。
+  // useMemo 内で setState しないよう副作用を分離。
+  useEffect(() => {
+    if (!doc) return
+    // rpgSceneId が既に doc 内に存在するシーンを指していれば何もしない
+    if (rpgSceneId !== null && findRpgSceneIndex(doc, rpgSceneId) !== null) {
+      return
+    }
+    // doc の先頭 RPG シーンにフォールバック
+    const fallback = findRpgSceneIndex(doc)
+    const nextSceneId =
+      fallback !== null
+        ? (doc.chapters[fallback.chapterIndex]?.scenes[fallback.sceneIndex]?.id ?? null)
+        : null
+    // 無限ループ防止: 同じ値なら setState しない
+    if (nextSceneId !== rpgSceneId) {
+      setRpgSceneId(nextSceneId)
+    }
+  }, [doc, rpgSceneId])
+
+  // プロジェクト名が変わったら rpgSceneId をリセット（将来の再マウント無し
+  // プロジェクト切替への備え。現状は App 側で key を変えて再マウントされる）
+  useEffect(() => {
+    setRpgSceneId(null)
+  }, [projectName])
 
   // ユーザー操作で doc が変わったら emit し、rawMarkdown を更新する。
   // rawMarkdown の更新は autosave useEffect 経由で backend に PUT される。
@@ -468,6 +497,70 @@ function EditorScreen({
                 </button>
               ))}
             </div>
+
+            {/* シーン選択 + view 切替ツールバー（RPG シーンが存在するときのみ） */}
+            {rpgProject !== null && (
+              <div
+                className={`flex items-center gap-4 px-4 py-2 border-b text-sm ${
+                  isDark
+                    ? 'border-gray-600 bg-gray-900 text-gray-200'
+                    : 'border-gray-300 bg-white text-gray-700'
+                }`}
+              >
+                {rpgScenes.length >= 2 && (
+                  <div className="flex items-center gap-2">
+                    <label
+                      htmlFor="rpg-scene-select"
+                      className={isDark ? 'text-gray-300' : 'text-gray-600'}
+                    >
+                      シーン:
+                    </label>
+                    <select
+                      id="rpg-scene-select"
+                      aria-label="RPGシーン選択"
+                      value={rpgSceneId ?? ''}
+                      onChange={(e) => setRpgSceneId(e.target.value)}
+                      className={`px-2 py-1 rounded border text-sm ${
+                        isDark
+                          ? 'bg-gray-700 border-gray-600 text-gray-100'
+                          : 'bg-white border-gray-300 text-gray-900'
+                      }`}
+                    >
+                      {rpgScenes.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.title || s.id}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="rpg-view-select"
+                    className={isDark ? 'text-gray-300' : 'text-gray-600'}
+                  >
+                    視点:
+                  </label>
+                  <select
+                    id="rpg-view-select"
+                    aria-label="RPG視点切替"
+                    value={rpgProject.view}
+                    onChange={(e) => {
+                      const nextView = e.target.value as 'topdown' | 'raycast'
+                      void persistRpgProject({ ...rpgProject, view: nextView })
+                    }}
+                    className={`px-2 py-1 rounded border text-sm ${
+                      isDark
+                        ? 'bg-gray-700 border-gray-600 text-gray-100'
+                        : 'bg-white border-gray-300 text-gray-900'
+                    }`}
+                  >
+                    <option value="topdown">見下ろし</option>
+                    <option value="raycast">レイキャスト</option>
+                  </select>
+                </div>
+              </div>
+            )}
 
             <div className="flex-1 overflow-hidden">
               {rpgProject === null ? (

@@ -61,8 +61,11 @@ export function rpgProjectFromDoc(
 }
 
 /**
- * シーン識別情報（chapterIndex, sceneIndex）で RpgMap イベントを含むシーンを探す。
- * sceneId 指定があれば優先、無ければ先頭から最初にマップを持つシーンを返す。
+ * RpgMap イベントを含むシーンを探す。
+ *
+ * - sceneId 指定がある場合: その id を持つシーンのみを探す。
+ *   該当シーンが RpgMap を持たなければ null を返す（= 先頭フォールバックは行わない）。
+ * - sceneId 未指定の場合: 先頭から走査して最初にマップを持つシーンを返す。
  */
 function findRpgScene(
   doc: EventDocument,
@@ -105,6 +108,41 @@ export function findRpgSceneIndex(
   const found = findRpgScene(doc, sceneId)
   if (!found) return null
   return { chapterIndex: found.chapterIndex, sceneIndex: found.sceneIndex }
+}
+
+/**
+ * エディタのシーン選択ドロップダウン等で使う RPG シーン要約。
+ */
+export type RpgSceneSummary = {
+  chapterIndex: number
+  sceneIndex: number
+  id: string
+  title: string
+  view: 'topdown' | 'raycast'
+}
+
+/**
+ * Document 内のすべての RPG シーン（RpgMap を含むシーン）を列挙する。
+ * エディタのシーン選択ドロップダウン等に使う。
+ */
+export function findAllRpgScenes(doc: EventDocument): RpgSceneSummary[] {
+  const result: RpgSceneSummary[] = []
+  for (let ci = 0; ci < doc.chapters.length; ci++) {
+    const chapter = doc.chapters[ci]
+    for (let si = 0; si < chapter.scenes.length; si++) {
+      const scene = chapter.scenes[si]
+      const hasMap = scene.events.some((e) => typeof e !== 'string' && 'RpgMap' in e)
+      if (!hasMap) continue
+      result.push({
+        chapterIndex: ci,
+        sceneIndex: si,
+        id: scene.id,
+        title: scene.title,
+        view: scene.view === 'Raycast' ? 'raycast' : 'topdown',
+      })
+    }
+  }
+  return result
 }
 
 function directionToLower(d: 'Up' | 'Down' | 'Left' | 'Right'): 'up' | 'down' | 'left' | 'right' {

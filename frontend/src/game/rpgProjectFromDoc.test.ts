@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rpgProjectFromDoc, applyRpgProjectToDoc } from './rpgProjectFromDoc'
+import { rpgProjectFromDoc, applyRpgProjectToDoc, findAllRpgScenes } from './rpgProjectFromDoc'
 import type { EventDocument } from '../types'
 import type { RPGProject } from '../types/rpg'
 
@@ -125,6 +125,154 @@ describe('rpgProjectFromDoc', () => {
       ],
     }
     expect(rpgProjectFromDoc(doc)).toBeNull()
+  })
+})
+
+describe('findAllRpgScenes', () => {
+  it('単一 RPG シーンを列挙できる', () => {
+    const list = findAllRpgScenes(makeDoc())
+    expect(list).toHaveLength(1)
+    expect(list[0].id).toBe('map-village')
+    expect(list[0].title).toBe('村')
+    expect(list[0].view).toBe('topdown')
+    expect(list[0].chapterIndex).toBe(0)
+    expect(list[0].sceneIndex).toBe(0)
+  })
+
+  it('複数章にまたがる RPG シーンを列挙できる', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'Ch1',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'village',
+              title: '村',
+              view: 'TopDown',
+              events: [
+                {
+                  RpgMap: {
+                    width: 2,
+                    height: 1,
+                    tile_size: 32,
+                    tiles: [[0, 0]],
+                  },
+                },
+              ],
+            },
+            {
+              id: 'intro',
+              title: 'イントロ',
+              view: 'TopDown',
+              events: [{ Narration: { text: ['ノベル'] } }],
+            },
+          ],
+        },
+        {
+          number: 2,
+          title: 'Ch2',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'dungeon',
+              title: 'ダンジョン',
+              view: 'Raycast',
+              events: [
+                {
+                  RpgMap: {
+                    width: 2,
+                    height: 2,
+                    tile_size: 32,
+                    tiles: [
+                      [2, 2],
+                      [2, 0],
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const list = findAllRpgScenes(doc)
+    expect(list).toHaveLength(2)
+    expect(list[0].id).toBe('village')
+    expect(list[0].view).toBe('topdown')
+    expect(list[0].chapterIndex).toBe(0)
+    expect(list[0].sceneIndex).toBe(0)
+    expect(list[1].id).toBe('dungeon')
+    expect(list[1].view).toBe('raycast')
+    expect(list[1].chapterIndex).toBe(1)
+    expect(list[1].sceneIndex).toBe(0)
+  })
+
+  it('RPG シーンが無ければ空配列', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 's1',
+              title: '',
+              view: 'TopDown',
+              events: [{ Narration: { text: ['novel only'] } }],
+            },
+          ],
+        },
+      ],
+    }
+    expect(findAllRpgScenes(doc)).toEqual([])
+  })
+
+  it('RpgMap を含まないシーン（view だけ指定されたノベルシーン等）は列挙されない', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'novel-raycast',
+              title: 'ノベルでも view=Raycast',
+              view: 'Raycast',
+              events: [{ Narration: { text: ['マップは無い'] } }],
+            },
+            {
+              id: 'rpg',
+              title: 'RPG',
+              view: 'TopDown',
+              events: [
+                {
+                  RpgMap: {
+                    width: 1,
+                    height: 1,
+                    tile_size: 32,
+                    tiles: [[0]],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const list = findAllRpgScenes(doc)
+    expect(list).toHaveLength(1)
+    expect(list[0].id).toBe('rpg')
   })
 })
 
@@ -289,6 +437,148 @@ describe('applyRpgProjectToDoc', () => {
     // ノベル側のイベントも保持される
     expect(updated.chapters[0].scenes[0].events).toHaveLength(1)
     expect(updated.chapters[0].scenes[0].events[0]).toHaveProperty('Narration')
+  })
+
+  it('章をまたぐ複数 RPG シーンで、対象シーン以外（マップ・view・NPC）を書き換えない', () => {
+    // Ch1 に村シーン、Ch2 にダンジョンシーン（どちらも RpgMap を持つ）
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'Ch1',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'map-village',
+              title: '村',
+              view: 'TopDown',
+              events: [
+                {
+                  RpgMap: {
+                    width: 2,
+                    height: 1,
+                    tile_size: 32,
+                    tiles: [[0, 0]],
+                  },
+                },
+                { PlayerStart: { x: 0, y: 0, direction: 'Down' } },
+                {
+                  Npc: {
+                    id: 'elder',
+                    name: '長老',
+                    x: 1,
+                    y: 0,
+                    color: 0xff0000,
+                    message: ['村のNPC'],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        {
+          number: 2,
+          title: 'Ch2',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'map-dungeon',
+              title: 'ダンジョン',
+              view: 'Raycast',
+              events: [
+                {
+                  RpgMap: {
+                    width: 3,
+                    height: 3,
+                    tile_size: 32,
+                    tiles: [
+                      [2, 2, 2],
+                      [2, 0, 2],
+                      [2, 2, 2],
+                    ],
+                  },
+                },
+                { PlayerStart: { x: 1, y: 1, direction: 'Up' } },
+                {
+                  Npc: {
+                    id: 'boss',
+                    name: 'ボス',
+                    x: 1,
+                    y: 1,
+                    color: 0x000000,
+                    message: ['ダンジョンのNPC'],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    // Ch1 村の rpgProject を書き戻す（view を raycast に変更、NPC 差し替え）
+    const project: RPGProject = {
+      name: 'test',
+      version: '1.0.0',
+      map: {
+        width: 4,
+        height: 1,
+        tileSize: 32,
+        tiles: [[1, 1, 1, 1]],
+      },
+      player: { x: 2, y: 0, direction: 'left' },
+      npcs: [
+        { id: 'new-villager', name: '新村人', x: 3, y: 0, color: 0x00ff00, message: 'updated' },
+      ],
+      view: 'raycast',
+    }
+    const updated = applyRpgProjectToDoc(doc, project, 'map-village')
+
+    // Ch1 村の view が書き戻した値になっている
+    expect(updated.chapters[0].scenes[0].view).toBe('Raycast')
+    const villageEvents = updated.chapters[0].scenes[0].events
+    expect(villageEvents[0]).toHaveProperty('RpgMap')
+    const villageFirst = villageEvents[0]
+    if (typeof villageFirst !== 'string' && 'RpgMap' in villageFirst) {
+      expect(villageFirst.RpgMap.width).toBe(4)
+      expect(villageFirst.RpgMap.tiles[0]).toEqual([1, 1, 1, 1])
+    }
+    // Ch1 村の NPC が差し替わっている
+    const villageNpc = villageEvents.find(
+      (e) => typeof e !== 'string' && 'Npc' in e
+    )
+    expect(villageNpc).toBeDefined()
+    if (villageNpc && typeof villageNpc !== 'string' && 'Npc' in villageNpc) {
+      expect(villageNpc.Npc.id).toBe('new-villager')
+    }
+
+    // Ch2 ダンジョンのマップ・view・NPC は無変更
+    const dungeonScene = updated.chapters[1].scenes[0]
+    expect(dungeonScene.id).toBe('map-dungeon')
+    expect(dungeonScene.view).toBe('Raycast')
+    const dungeonEvents = dungeonScene.events
+    expect(dungeonEvents[0]).toHaveProperty('RpgMap')
+    const dungeonFirst = dungeonEvents[0]
+    if (typeof dungeonFirst !== 'string' && 'RpgMap' in dungeonFirst) {
+      expect(dungeonFirst.RpgMap.width).toBe(3)
+      expect(dungeonFirst.RpgMap.height).toBe(3)
+      expect(dungeonFirst.RpgMap.tiles).toEqual([
+        [2, 2, 2],
+        [2, 0, 2],
+        [2, 2, 2],
+      ])
+    }
+    const dungeonNpc = dungeonEvents.find(
+      (e) => typeof e !== 'string' && 'Npc' in e
+    )
+    expect(dungeonNpc).toBeDefined()
+    if (dungeonNpc && typeof dungeonNpc !== 'string' && 'Npc' in dungeonNpc) {
+      expect(dungeonNpc.Npc.id).toBe('boss')
+      expect(dungeonNpc.Npc.name).toBe('ボス')
+    }
   })
 
   it('RPGProject.view=raycast を Doc の scene.view=Raycast に書き戻せる', () => {
