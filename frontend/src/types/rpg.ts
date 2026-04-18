@@ -72,7 +72,9 @@ export interface RPGProject {
   player: PlayerData // プレイヤー初期データ
   npcs: NPCData[] // NPCリスト
   events?: EventData[] // イベントリスト（オプション）
-  view?: 'topdown' | 'raycast' // プレイ時の表示モード（省略時 topdown）
+  // プレイ時の表示モード。必須化済み。デフォルトは 'topdown' 相当。
+  // （Doc の scene.view=Raycast から派生したときは 'raycast'）
+  view: 'topdown' | 'raycast'
 }
 
 /**

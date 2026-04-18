@@ -57,4 +57,5 @@ export const sampleRpgData: RPGProject = {
       color: 0xff66cc,
     },
   ],
+  view: 'topdown',
 }
