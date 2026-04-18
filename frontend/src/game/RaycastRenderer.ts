@@ -57,6 +57,10 @@ export class RaycastRenderer {
   // フォグ上限 12 タイル: マップサイズ（通常 16x12 前後）に対して「遠くの壁は薄く霞む」ことを狙った値。
   // 大きくすると遠景まで鮮明に見えて没入感が減り、小さくすると視界が狭く感じる。
   private readonly fogMaxDist = 12
+  // NPC スプライトサイズ算出時の深度下限。極小 transformY でスプライト高が青天井に肥大化するのを防ぐ。
+  // 0.1 = 画面高の10倍まで許容 → drawStart/End の既存クランプで画面内に収まるサイズ。
+  // 幾何的な位置（spriteScreenX）や z-buffer 比較には適用しない（遮蔽整合性のため）。
+  private readonly npcSpriteMinDepth = 0.1
 
   private keys = new Set<string>()
   private lastTickMs = 0
@@ -541,24 +545,27 @@ export class RaycastRenderer {
 
     // 逆行列: [planeX dirX; planeY dirY]^-1
     const invDet = 1.0 / (planeX * dirY - dirX * planeY)
+    const playerTileX = Math.floor(this.playerX)
+    const playerTileY = Math.floor(this.playerY)
     for (const entry of npcSprites) {
       const n = entry.npc
-      // プレイヤーと同タイルに立っている NPC は描画不要（衝突判定で発生しないが保険）
-      const nTileX = Math.floor(n.x)
-      const nTileY = Math.floor(n.y)
-      const pTileX = Math.floor(this.playerX)
-      const pTileY = Math.floor(this.playerY)
-      if (nTileX === pTileX && nTileY === pTileY) continue
+      // プレイヤーと同タイルに立っている NPC は描画不要（衝突判定で発生しないが保険）。
+      // 壁めり込み等の異常状態でここに達した場合、後段の z-buffer 比較でも
+      // 近距離 NPC が誤って奥判定される可能性があるため、先頭で弾く。
+      const npcTileX = Math.floor(n.x)
+      const npcTileY = Math.floor(n.y)
+      if (npcTileX === playerTileX && npcTileY === playerTileY) continue
       const rx = n.x - this.playerX
       const ry = n.y - this.playerY
       const transformX = invDet * (dirY * rx - dirX * ry)
       const transformY = invDet * (-planeY * rx + planeX * ry) // これが depth
 
-      if (transformY <= 0.01) continue // 後ろ or ゼロ除算ガードのみ
+      if (transformY <= 0.01) continue // 背面カリング兼ゼロ除算ガード
 
       const spriteScreenX = Math.floor((w / 2) * (1 + transformX / transformY))
-      // 極小 transformY でスプライトが青天井に肥大化するのを防ぐ。分母に下限を設ける
-      const clampedDepth = Math.max(transformY, 0.1)
+      // 幾何的な位置（spriteScreenX）と遮蔽判定（後段の zBuffer 比較）には元の transformY を使い、
+      // サイズ算出のみ下限でクランプする（位置まで固定するとカメラ前に貼り付く）。
+      const clampedDepth = Math.max(transformY, this.npcSpriteMinDepth)
       const spriteHeight = Math.abs(Math.floor(h / clampedDepth))
       const spriteWidthPx = spriteHeight
       let drawStartY = Math.floor(-spriteHeight / 2 + h / 2)
