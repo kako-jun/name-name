@@ -131,7 +131,12 @@ export class BacklogOverlay extends Container {
 
     // マスク（タイトル下からスクリーン下端まで）
     this.maskGraphics = new Graphics()
-    this.maskGraphics.rect(0, TEXT_PADDING_TOP, this.screenWidth, this.screenHeight - TEXT_PADDING_TOP - TEXT_PADDING_BOTTOM)
+    this.maskGraphics.rect(
+      0,
+      TEXT_PADDING_TOP,
+      this.screenWidth,
+      this.screenHeight - TEXT_PADDING_TOP - TEXT_PADDING_BOTTOM
+    )
     this.maskGraphics.fill(0xffffff)
     this.addChild(this.maskGraphics)
 

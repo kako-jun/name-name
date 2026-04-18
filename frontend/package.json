@@ -15,7 +15,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "type-check": "tsc -b --noEmit",
-    "prepare": "husky"
+    "prepare": "cd .. && node frontend/node_modules/husky/bin.js || true"
   },
   "dependencies": {
     "framer-motion": "^12.23.24",

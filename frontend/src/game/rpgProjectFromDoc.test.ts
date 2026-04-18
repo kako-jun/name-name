@@ -548,9 +548,7 @@ describe('applyRpgProjectToDoc', () => {
       expect(villageFirst.RpgMap.tiles[0]).toEqual([1, 1, 1, 1])
     }
     // Ch1 村の NPC が差し替わっている
-    const villageNpc = villageEvents.find(
-      (e) => typeof e !== 'string' && 'Npc' in e
-    )
+    const villageNpc = villageEvents.find((e) => typeof e !== 'string' && 'Npc' in e)
     expect(villageNpc).toBeDefined()
     if (villageNpc && typeof villageNpc !== 'string' && 'Npc' in villageNpc) {
       expect(villageNpc.Npc.id).toBe('new-villager')
@@ -572,9 +570,7 @@ describe('applyRpgProjectToDoc', () => {
         [2, 2, 2],
       ])
     }
-    const dungeonNpc = dungeonEvents.find(
-      (e) => typeof e !== 'string' && 'Npc' in e
-    )
+    const dungeonNpc = dungeonEvents.find((e) => typeof e !== 'string' && 'Npc' in e)
     expect(dungeonNpc).toBeDefined()
     if (dungeonNpc && typeof dungeonNpc !== 'string' && 'Npc' in dungeonNpc) {
       expect(dungeonNpc.Npc.id).toBe('boss')

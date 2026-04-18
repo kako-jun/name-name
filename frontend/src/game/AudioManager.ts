@@ -14,7 +14,11 @@ export class AudioManager {
   private currentBgmUrl: string | null = null
   private audioCache: Map<string, AudioBuffer> = new Map()
   private bgmRequestId = 0
-  private fadingNodes: { source: AudioBufferSourceNode; gain: GainNode; timer: ReturnType<typeof setTimeout> }[] = []
+  private fadingNodes: {
+    source: AudioBufferSourceNode
+    gain: GainNode
+    timer: ReturnType<typeof setTimeout>
+  }[] = []
 
   /**
    * AudioContext を生成/再開する。
