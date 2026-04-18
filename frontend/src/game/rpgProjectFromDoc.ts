@@ -44,6 +44,8 @@ export function rpgProjectFromDoc(
         y: ev.Npc.y,
         color: ev.Npc.color,
         message: ev.Npc.message.join('\n'),
+        sprite: ev.Npc.sprite,
+        frames: ev.Npc.frames,
       })
     }
   }
@@ -209,6 +211,8 @@ export function applyRpgProjectToDoc(
           y: npc.y,
           color: npc.color,
           message: npc.message.split('\n'),
+          sprite: npc.sprite,
+          frames: npc.frames,
         },
       })
     ),

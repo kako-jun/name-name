@@ -145,11 +145,11 @@ pub fn parse(input: &str) -> Document {
             }
         }
 
-        // NPC block: [NPC name @x,y 色=#rrggbb (id=xxx)?] ... [/NPC]
+        // NPC block: [NPC name @x,y 色=#rrggbb (id=xxx)? (sprite=path)? (frames=N)?] ... [/NPC]
         if let Some(header) = trimmed.strip_prefix("[NPC") {
             if header.ends_with(']') {
                 let header_inner = header.trim_end_matches(']').trim();
-                if let Some((name, x, y, color, explicit_id)) = parse_npc_header(header_inner) {
+                if let Some(parsed) = parse_npc_header(header_inner) {
                     pos += 1;
                     let mut message: Vec<String> = Vec::new();
                     while pos < len && lines[pos].trim() != "[/NPC]" {
@@ -168,17 +168,19 @@ pub fn parse(input: &str) -> Document {
                     if pos < len {
                         pos += 1; // skip [/NPC]
                     }
-                    let id = match explicit_id {
+                    let id = match parsed.explicit_id {
                         Some(eid) => resolve_npc_id_conflict(&eid, &current_events),
-                        None => slugify_npc_id(&name, &current_events),
+                        None => slugify_npc_id(&parsed.name, &current_events),
                     };
                     current_events.push(Event::Npc(NpcData {
                         id,
-                        name,
-                        x,
-                        y,
-                        color,
+                        name: parsed.name,
+                        x: parsed.x,
+                        y: parsed.y,
+                        color: parsed.color,
                         message,
+                        sprite: parsed.sprite,
+                        frames: parsed.frames,
                     }));
                     continue;
                 }
@@ -577,15 +579,25 @@ fn parse_tile_row(line: &str, width: usize) -> Vec<u8> {
 }
 
 /// Parse NPC header: "name @x,y 色=#rrggbb (id=xxx)?" → Some((name, x, y, color, explicit_id))
-fn parse_npc_header(s: &str) -> Option<(String, u32, u32, u32, Option<String>)> {
-    // Extract name (before @), then @x,y, then 色=... / id=...
+pub(crate) struct ParsedNpcHeader {
+    pub name: String,
+    pub x: u32,
+    pub y: u32,
+    pub color: u32,
+    pub explicit_id: Option<String>,
+    pub sprite: Option<String>,
+    pub frames: Option<u32>,
+}
+
+fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
+    // Extract name (before @), then @x,y, then 色=... / id=... / sprite=... / frames=...
     let at_pos = s.find('@')?;
     let name = s[..at_pos].trim().to_string();
     if name.is_empty() {
         return None;
     }
     let after_at = &s[at_pos + 1..];
-    // split by whitespace to separate x,y from 色= / id=
+    // split by whitespace to separate x,y from attribute tokens
     let mut parts = after_at.split_whitespace();
     let coord = parts.next()?;
     let (x_str, y_str) = coord.split_once(',')?;
@@ -594,6 +606,8 @@ fn parse_npc_header(s: &str) -> Option<(String, u32, u32, u32, Option<String>)> 
     // color: default 0xff6b6b
     let mut color: u32 = 0xff6b6b;
     let mut explicit_id: Option<String> = None;
+    let mut sprite: Option<String> = None;
+    let mut frames: Option<u32> = None;
     for p in parts {
         if let Some(val) = p.strip_prefix("色=") {
             let hex = val.trim().trim_start_matches('#');
@@ -605,9 +619,28 @@ fn parse_npc_header(s: &str) -> Option<(String, u32, u32, u32, Option<String>)> 
             if !v.is_empty() {
                 explicit_id = Some(v);
             }
+        } else if let Some(val) = p.strip_prefix("sprite=") {
+            let v = val.trim().to_string();
+            if !v.is_empty() {
+                sprite = Some(v);
+            }
+        } else if let Some(val) = p.strip_prefix("frames=") {
+            if let Ok(n) = val.trim().parse::<u32>() {
+                if n >= 1 {
+                    frames = Some(n);
+                }
+            }
         }
     }
-    Some((name, x, y, color, explicit_id))
+    Some(ParsedNpcHeader {
+        name,
+        x,
+        y,
+        color,
+        explicit_id,
+        sprite,
+        frames,
+    })
 }
 
 /// Parse player start line: "@x,y 向き=..." → Some(PlayerStartData)

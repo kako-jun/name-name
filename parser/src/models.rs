@@ -57,6 +57,18 @@ pub struct NpcData {
     pub y: u32,
     pub color: u32,
     pub message: Vec<String>,
+    /// スプライトシートへの相対パス（例: `character.png`）。
+    /// 未指定の場合は従来どおり色付き四角で描画される。
+    /// parser は値を生文字列として透過する（パス存在や形式の検証はレンダラー側の責務）。
+    /// Markdown 属性は空白区切りのためパスに空白を含められない（引用記法は未対応）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprite: Option<String>,
+    /// 歩行アニメーションのフレーム数（方向あたり）。
+    /// ドラクエ式の 2 フレーム（足踏み）が標準。未指定の場合はレンダラー側のデフォルト（= 2）を使う。
+    /// parser は `>= 1` の整数を受理するだけ（上限チェックなし）。
+    /// 実用上の妥当範囲 1〜4 はレンダラー側で clamp する想定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frames: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
