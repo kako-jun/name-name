@@ -1,5 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NPCData, MapData, TILE_COLORS, TileType } from '../types/rpg'
+
+/**
+ * NPC 属性は `[NPC ... sprite=path]` のように空白区切りで parse されるため、
+ * sprite 値に空白（スペース・タブ・全角空白）を含めるとラウンドトリップで壊れる。
+ * trim 済みの値に `\s` が残るかどうかを判定する。
+ */
+function spriteHasInnerWhitespace(value: string): boolean {
+  return /\s/u.test(value.trim())
+}
 
 interface NPCEditorProps {
   npcs: NPCData[]
@@ -25,9 +34,26 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
   // IDから現在のNPCデータを引く（selectedNPCIdが古いデータを持ち続けるバグを防ぐ）
   const selectedNPC = selectedNPCId ? (npcs.find((n) => n.id === selectedNPCId) ?? null) : null
 
+  // 見た目の設定パネルの sprite 入力ドラフト。
+  // 途中空白を含む無効な入力でもユーザーのタイピングをそのまま表示し、無効な値が親 state に流れないよう隔離する。
+  const [spriteDraft, setSpriteDraft] = useState<string>('')
+  useEffect(() => {
+    setSpriteDraft(selectedNPC?.sprite ?? '')
+  }, [selectedNPCId, selectedNPC?.sprite])
+  const panelSpriteHasError = spriteHasInnerWhitespace(spriteDraft)
+
+  // 追加フォームの sprite は既存の newNPC.sprite をそのまま利用（panel のような draft state は不要）。
+  // 理由: handleAddNPC まで親スコープに値が流出しないため、無効値が Markdown 往復に混入しない。
+  // 無効時は追加ボタンを disabled + 二重防衛の alert で弾く。
+  const addFormSpriteHasError = spriteHasInnerWhitespace(newNPC.sprite ?? '')
+
   const handleAddNPC = () => {
     if (!newNPC.name || !newNPC.message) {
       alert('名前とメッセージを入力してください')
+      return
+    }
+    if (addFormSpriteHasError) {
+      alert('スプライトのパスに空白は含められません')
       return
     }
 
@@ -173,23 +199,36 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                   </label>
                   <input
                     type="text"
-                    value={selectedNPC.sprite ?? ''}
+                    value={spriteDraft}
                     onChange={(e) => {
-                      // 属性は空白区切りで parse されるためパスに空白を含められない
-                      // （docs/spec/markdown-v0.1.md の NPC ブロック節を参照）。
-                      // 前後空白は trim、途中に空白が残る値はそのまま保存するが validation は今後の課題
-                      const v = e.target.value.trim()
-                      handleUpdateNPC(selectedNPC.id, {
-                        sprite: v.length > 0 ? v : undefined,
-                      })
+                      const v = e.target.value
+                      setSpriteDraft(v)
+                      // 途中空白を含む値は無効扱い: 親の NPCData には反映しない（= Markdown 出力にも流れない）
+                      // 前後空白のみの trim は許容して保存
+                      if (!spriteHasInnerWhitespace(v)) {
+                        const t = v.trim()
+                        handleUpdateNPC(selectedNPC.id, {
+                          sprite: t.length > 0 ? t : undefined,
+                        })
+                      }
                     }}
                     placeholder="__demo または character.png（空で色四角、空白不可）"
                     className={`w-full px-2 py-1 text-sm border rounded ${
-                      isDark
-                        ? 'bg-gray-700 border-gray-600 text-white'
-                        : 'bg-white border-gray-300 text-gray-900'
+                      panelSpriteHasError
+                        ? isDark
+                          ? 'bg-gray-700 border-red-500 text-white'
+                          : 'bg-white border-red-500 text-gray-900'
+                        : isDark
+                          ? 'bg-gray-700 border-gray-600 text-white'
+                          : 'bg-white border-gray-300 text-gray-900'
                     }`}
+                    aria-invalid={panelSpriteHasError}
                   />
+                  {panelSpriteHasError && (
+                    <p className="text-xs mt-1 text-red-500">
+                      スプライトのパスに空白は含められません
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label
@@ -412,16 +451,27 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                   value={newNPC.sprite ?? ''}
                   onChange={(e) => setNewNPC({ ...newNPC, sprite: e.target.value })}
                   className={`w-full px-3 py-2 border rounded ${
-                    isDark
-                      ? 'bg-gray-700 border-gray-600 text-white'
-                      : 'bg-white border-gray-300 text-gray-900'
+                    addFormSpriteHasError
+                      ? isDark
+                        ? 'bg-gray-700 border-red-500 text-white'
+                        : 'bg-white border-red-500 text-gray-900'
+                      : isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
                   }`}
                   placeholder="__demo または character.png"
+                  aria-invalid={addFormSpriteHasError}
                 />
-                <p className={`text-xs mt-1 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
-                  空のままなら色付き四角で描画。`__demo`
-                  で内蔵デモスプライト（パスに空白は使えません）
-                </p>
+                {addFormSpriteHasError ? (
+                  <p className="text-xs mt-1 text-red-500">
+                    スプライトのパスに空白は含められません
+                  </p>
+                ) : (
+                  <p className={`text-xs mt-1 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+                    空のままなら色付き四角で描画。`__demo`
+                    で内蔵デモスプライト（パスに空白は使えません）
+                  </p>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -495,10 +545,13 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
               </button>
               <button
                 onClick={handleAddNPC}
+                disabled={addFormSpriteHasError}
                 className={`px-4 py-2 rounded font-medium transition-colors ${
-                  isDark
-                    ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                    : 'bg-blue-500 hover:bg-blue-600 text-white'
+                  addFormSpriteHasError
+                    ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                    : isDark
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                      : 'bg-blue-500 hover:bg-blue-600 text-white'
                 }`}
               >
                 追加
