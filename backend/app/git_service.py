@@ -134,20 +134,21 @@ class GitService:
         return self.repo.is_dirty() or len(self.repo.untracked_files) > 0
 
     def discard_changes(self) -> bool:
-        """未コミットの変更を破棄（git checkout . + 未追跡ファイル削除）"""
+        """未コミットの変更を破棄（git reset --hard HEAD + git clean -fd）
+
+        `.name-name-tags.json` のようなコミット済みトラッキング対象ファイルも
+        HEAD 時点の内容に確実に戻すため、`git checkout .` ではなく
+        `git reset --hard HEAD` を使う（インデックスと作業ツリーの両方をリセット）。
+        """
         try:
             if not self.repo:
                 return False
 
-            # 変更されたファイルを元に戻す
-            self.repo.git.checkout('.')
+            # トラッキング対象ファイルを HEAD にリセット（インデックス + 作業ツリー）
+            self.repo.git.reset('--hard', 'HEAD')
 
-            # 未追跡ファイルを削除
-            for file in self.repo.untracked_files:
-                file_path = self.repo_path / file
-                if file_path.exists():
-                    file_path.unlink()
-                    logger.info(f"Deleted untracked file: {file}")
+            # 未追跡ファイル・ディレクトリを削除（.gitignore 対象は残す）
+            self.repo.git.clean('-fd')
 
             logger.info("All changes discarded")
             return True

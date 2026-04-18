@@ -95,6 +95,10 @@ GET /api/projects/{project_name}/tags
 
 キーは `{asset_type}/{filename}` 形式。このファイルはGit管理対象（コミットボタンで他の変更と一緒にコミットされます）。
 
+### 破棄操作との関係
+
+`POST /api/projects/{name}/discard` は `git reset --hard HEAD` + `git clean -fd` を実行するため、`.name-name-tags.json` の未コミット変更も HEAD 時点の内容に戻ります（コミット前のタグ追加・削除・編集はすべて取り消されます）。
+
 ## PixiJSとの統合
 
 ### エディタモード
