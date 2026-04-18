@@ -45,10 +45,17 @@ export class RaycastRenderer {
   private screenWidth = 0
   private screenHeight = 0
 
-  private readonly fov = (Math.PI / 180) * 60 // 60 deg
+  // FOV 60°: 標準 FPS 相当（Doom/Wolf3D の 60° と同じ）。
+  // 実装上はカメラ平面ベクトルの長さが tan(fov/2) で決まり、広すぎると魚眼歪みが強く、狭すぎると閉塞感が出る。
+  private readonly fov = (Math.PI / 180) * 60
+  // 1 列あたり 2px 幅で描画。1px だと本数が増えて CPU コストが重く、4px 以上だと縦縞が目立つため 2 を採用。
   private readonly stripeWidth = 2
-  private readonly moveSpeed = 3 // tiles per second
-  private readonly rotSpeed = 3 // radians per second
+  // 移動速度 3 tiles/s: 見下ろし版（TopDownRenderer）と同等の歩行感。速すぎると壁接触の判定違和感が出やすい。
+  private readonly moveSpeed = 3
+  // 旋回速度 3 rad/s: 1 回転に約 2.1 秒。FPS の標準より遅めだが、ADV で酔いにくいことを優先。
+  private readonly rotSpeed = 3
+  // フォグ上限 12 タイル: マップサイズ（通常 16x12 前後）に対して「遠くの壁は薄く霞む」ことを狙った値。
+  // 大きくすると遠景まで鮮明に見えて没入感が減り、小さくすると視界が狭く感じる。
   private readonly fogMaxDist = 12
 
   private keys = new Set<string>()
