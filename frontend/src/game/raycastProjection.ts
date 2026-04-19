@@ -208,3 +208,22 @@ export function resolveFloorHeight(grid: number[][] | undefined, tx: number, ty:
   if (typeof v !== 'number' || !Number.isFinite(v)) return 0
   return v
 }
+
+/**
+ * 天井高さグリッド（[y][x]）から指定タイルの天井高さを返す純粋関数（Issue #87）。
+ *
+ * - `grid` が `undefined`、該当行が未定義、セルが未定義、値が有限数でない場合は `1` を返す（標準天井）
+ * - `0` 以下の値も `1` にフォールバックする（天井が床より下の退化ケースで頭ぶつけ判定が破綻するのを防ぐ）
+ *
+ * `resolveFloorHeight`（fallback=0、負値許容）と対照的に、fallback=1、0 以下非許容。
+ * プレイヤーのジャンプ時の頭ぶつけ判定に使う。
+ */
+export function resolveCeilingHeight(grid: number[][] | undefined, tx: number, ty: number): number {
+  if (!grid) return 1
+  const row = grid[ty]
+  if (!row) return 1
+  const v = row[tx]
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 1
+  if (v <= 0) return 1
+  return v
+}

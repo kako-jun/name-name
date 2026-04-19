@@ -34,6 +34,14 @@ export interface MapData {
    * Issue #84 で追加。
    */
   floorHeights?: number[][]
+  /**
+   * タイル座標 [y][x] ごとの天井高さ（1.0 = 標準、0.5 = 低天井トンネル、等）。
+   * 未指定または該当セル未定義時は 1.0 扱い（従来挙動）。
+   * ジャンプ時の頭ぶつけ判定に使う（視覚的なレンダリングは別 Issue）。
+   *
+   * Issue #87 で追加。
+   */
+  ceilingHeights?: number[][]
 }
 
 /**

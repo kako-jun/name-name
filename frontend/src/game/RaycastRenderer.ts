@@ -21,6 +21,7 @@ import {
   computeEffectiveFogMaxDist,
   computeWallYRange,
   projectNpcToScreen,
+  resolveCeilingHeight,
   resolveFloorHeight,
 } from './raycastProjection'
 import {
@@ -89,6 +90,9 @@ export class RaycastRenderer {
   private wallHeights?: number[][]
   /** タイルごとの床高さ（[y][x]、0.0 = 地面標準）。undefined 時は全タイル 0.0 扱い（Issue #84） */
   private floorHeights?: number[][]
+  /** タイルごとの天井高さ（[y][x]、1.0 = 標準）。undefined 時は全タイル 1.0 扱い（Issue #87）。
+   *  ジャンプ時の頭ぶつけ判定に使う。視覚的な天井レンダリングは別 Issue */
+  private ceilingHeights?: number[][]
   private mapWidth = 0
   private mapHeight = 0
   /** スプライトシートセルサイズ（マップの tileSize と揃える）。NPC テクスチャ切り出しで使用 */
@@ -197,6 +201,7 @@ export class RaycastRenderer {
     this.mapTiles = gameData.map.tiles
     this.wallHeights = gameData.map.wallHeights
     this.floorHeights = gameData.map.floorHeights
+    this.ceilingHeights = gameData.map.ceilingHeights
     this.mapWidth = gameData.map.width
     this.mapHeight = gameData.map.height
     this.tileSize = gameData.map.tileSize
@@ -221,6 +226,15 @@ export class RaycastRenderer {
     ) {
       console.warn(
         '[RaycastRenderer] floorHeights dimensions mismatch (falls back to 0.0 per cell)'
+      )
+    }
+    if (
+      this.ceilingHeights &&
+      (this.ceilingHeights.length !== this.mapHeight ||
+        this.ceilingHeights.some((r) => r.length !== this.mapWidth))
+    ) {
+      console.warn(
+        '[RaycastRenderer] ceilingHeights dimensions mismatch (falls back to 1.0 per cell)'
       )
     }
 
@@ -603,6 +617,19 @@ export class RaycastRenderer {
     if (this.playerJumpZ > 0 || this.playerVZ !== 0) {
       this.playerVZ -= this.gravity * dt
       this.playerJumpZ += this.playerVZ * dt
+      // 頭ぶつけ（Issue #87）: 現在タイルの天井高さ（タイル単位）から足元の床高さ（playerGroundZ）を引いた値が
+      // playerJumpZ の上限。超えたらその位置で止め、VZ を 0 にして即落下開始（跳ね返り無し、MVP）。
+      // 天井が床より低い退化ケースは resolveCeilingHeight が 1 にフォールバックするので maxJumpZ > 0 が保証される
+      // わけではない（playerGroundZ > 1 の床段差上では maxJumpZ が負になりうる）。その場合は頭ぶつけ判定が
+      // 即発動してジャンプ自体が成立しないことになるが、MVP スコープでは許容する
+      const tx = Math.floor(this.playerX)
+      const ty = Math.floor(this.playerY)
+      const ceiling = resolveCeilingHeight(this.ceilingHeights, tx, ty)
+      const maxJumpZ = ceiling - this.playerGroundZ
+      if (this.playerJumpZ >= maxJumpZ) {
+        this.playerJumpZ = maxJumpZ
+        if (this.playerVZ > 0) this.playerVZ = 0
+      }
       if (this.playerJumpZ <= 0) {
         this.playerJumpZ = 0
         this.playerVZ = 0
