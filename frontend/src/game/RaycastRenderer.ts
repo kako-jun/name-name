@@ -359,8 +359,12 @@ export class RaycastRenderer {
       this.waterTexture = null
       const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
-      // Issue #93: stacked RenderTexture を先に破棄してから demoWallCache の base を壊す
-      // （stacked は base の render 時にコピーされるので順序依存は実質ないが、明示する）
+      // Issue #93: 順序は実質意味を持つ。
+      // clearStackedWallCache は sheet.destroy() 経由で stacked RenderTexture（ownedBase）を
+      // destroy(true) で解放する。この stacked RT の columns は base source を参照しており、
+      // さらに base 本体は demoWallCache が所有する。先に demoWallCache を壊してから
+      // stacked を壊そうとすると、columns が参照する base source が既に死んでいる状態になる。
+      // そのため stacked → demo の順で呼ぶ。
       clearStackedWallCache(renderer)
       clearDemoWallCache(renderer)
       clearDemoSheetCache(renderer)

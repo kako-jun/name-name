@@ -82,7 +82,11 @@ export function computeWallU(
 }
 
 export interface WallTextureCrop {
-  /** 切り出し開始 Y（texture 座標、`textureHeight * (1 - wallHeight)` 相当） */
+  /**
+   * 切り出し開始 Y（texture 座標）。
+   * `stackHeight - round(wh * textureHeight)`（stackHeight = tileCount * textureHeight）。
+   * tileCount=1 のときは `textureHeight - round(wh * textureHeight)`（従来の `(1-wh)*H` 相当）。
+   */
   frameY: number
   /** 切り出し高さ（texture 座標） */
   frameHeight: number
@@ -356,7 +360,11 @@ const stackedWallCache = new WeakMap<Renderer, Map<string, WallTextureSheet>>()
  * ベーステクスチャを縦方向に `tileCount` 回スタックした RenderTexture を作る。
  * Sprite を tileCount 個配置して renderer.render で 1 枚の RenderTexture に焼く。
  */
-function buildStackedWallTexture(renderer: Renderer, base: Texture, tileCount: number): Texture {
+function buildStackedWallTexture(
+  renderer: Pick<Renderer, 'render'>,
+  base: Texture,
+  tileCount: number
+): RenderTexture {
   const container = new Container()
   for (let i = 0; i < tileCount; i++) {
     const sprite = new Sprite(base)
@@ -409,7 +417,13 @@ export function getStackedWallSheet(
 
   const base = getOrBuildDemoBase(renderer, kind)
   const stackedHeight = TEXTURE_HEIGHT * clamped
-  const stackedBase = clamped === 1 ? base : buildStackedWallTexture(renderer, base, clamped)
+  // clamped === 1 のときは demoWallCache 所有の base をそのまま使い回すので、本 sheet は base の
+  // 所有権を持たない（ownedBase=null）。destroy で誤って demoWallCache の base を壊さないため。
+  // clamped >= 2 のときだけ新しい RenderTexture を本 sheet が所有し、clearStackedWallCache 経由で
+  // sheet.destroy() → ownedBase.destroy(true) で解放する。
+  const ownedBase: RenderTexture | null =
+    clamped === 1 ? null : buildStackedWallTexture(renderer, base, clamped)
+  const stackedBase: Texture = ownedBase ?? base
   const columns = sliceColumns(stackedBase, TEXTURE_WIDTH, stackedHeight)
 
   const sheet: WallTextureSheet = {
@@ -421,8 +435,9 @@ export function getStackedWallSheet(
         tex.destroy(false)
       }
       columns.length = 0
-      // stackedBase (tileCount>=2 の場合は本関数の所有) の destroy は `clearStackedWallCache` に委譲。
-      // 個別 destroy はキャッシュ側の整合を崩す恐れがあるため呼ばない。
+      // ownedBase !== null の場合のみ、本 sheet が所有する stacked RenderTexture を解放する。
+      // ownedBase === null（tileCount=1）は demoWallCache の base を共有しているため触らない。
+      ownedBase?.destroy(true)
     },
   }
   byRenderer.set(key, sheet)

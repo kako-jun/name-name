@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest'
-import { computeWallTextureCrop, computeWallU, TEXTURE_WIDTH, uToColumn } from './wallTextureSheet'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { Renderer } from 'pixi.js'
+import {
+  __resetWallHeightClampWarning,
+  computeWallTextureCrop,
+  computeWallU,
+  getStackedWallSheet,
+  TEXTURE_WIDTH,
+  uToColumn,
+} from './wallTextureSheet'
 
 describe('uToColumn', () => {
   it('u=0 は列 0', () => {
@@ -148,7 +156,7 @@ describe('computeWallTextureCrop (Issue #86 Phase 2-5)', () => {
   })
 
   it('textureHeight=65（奇数）, wallHeight=0.5 → Math.round の丸め（65*0.5=32.5 → 33）', () => {
-    // Math.round(32.5) は銀行丸めの可能性があるが JS の Math.round は 0.5 を切り上げ（偶数丸めではない）
+    // `Math.round(0.5) === 1` を前提に（JS の Math.round は 0.5 を常に切り上げ、銀行丸めではない）
     const crop = computeWallTextureCrop(65, 0.5)
     expect(crop.frameHeight).toBe(33)
     expect(crop.frameY).toBe(32)
@@ -239,5 +247,76 @@ describe('computeWallTextureCrop 垂直タイリング (Issue #93)', () => {
       const stackHeight = 64 * crop.tileCount
       expect(crop.frameY + crop.frameHeight).toBe(stackHeight)
     }
+  })
+
+  it('frameY は全 wh ∈ (0, 3] で 0 以上（round 誤差の invariant）', () => {
+    // 境界ちょうど / ちょい手前 / ちょい後 / 中央を含む
+    const whs = [0.001, 0.5, 1.0, 1.0001, 1.5, 1.9999, 2.0, 2.0001, 2.999, 3.0]
+    for (const wh of whs) {
+      const crop = computeWallTextureCrop(64, wh)
+      expect(crop.frameY).toBeGreaterThanOrEqual(0)
+      expect(crop.frameY + crop.frameHeight).toBeLessThanOrEqual(crop.tileCount * 64)
+    }
+  })
+})
+
+describe('getStackedWallSheet キャッシュ (Issue #93)', () => {
+  /**
+   * renderer モック。`render` だけ spy で、PIXI の RenderTexture.create は WebGL 不要なので
+   * jsdom で動く（実 GPU 割り当ては renderer.render 呼び出し時まで遅延される）。
+   * getStackedWallSheet から渡される renderer は Pick<Renderer, 'render'> 相当で使えれば十分。
+   */
+  function makeRendererMock(): Renderer {
+    return { render: vi.fn() } as unknown as Renderer
+  }
+
+  it('同じ renderer / kind / tileCount で 2 回呼ぶと同じ sheet インスタンスを返す', () => {
+    const r = makeRendererMock()
+    const s1 = getStackedWallSheet(r, 'tree', 2)
+    const s2 = getStackedWallSheet(r, 'tree', 2)
+    expect(s1).toBe(s2)
+  })
+
+  it('異なる renderer で呼ぶと別インスタンスを返す（WeakMap 分離）', () => {
+    const r1 = makeRendererMock()
+    const r2 = makeRendererMock()
+    const s1 = getStackedWallSheet(r1, 'tree', 2)
+    const s2 = getStackedWallSheet(r2, 'tree', 2)
+    expect(s1).not.toBe(s2)
+  })
+
+  it('同じ renderer で異なる (kind, tileCount) は別インスタンスを返す（Map 分離）', () => {
+    const r = makeRendererMock()
+    const treeT2 = getStackedWallSheet(r, 'tree', 2)
+    const treeT3 = getStackedWallSheet(r, 'tree', 3)
+    const waterT2 = getStackedWallSheet(r, 'water', 2)
+    expect(treeT2).not.toBe(treeT3)
+    expect(treeT2).not.toBe(waterT2)
+    expect(treeT3).not.toBe(waterT2)
+  })
+
+  it('キャッシュヒット時は renderer.render が追加で呼ばれない（2 回目以降の build 抑止）', () => {
+    const r = makeRendererMock()
+    const renderSpy = r.render as ReturnType<typeof vi.fn>
+    getStackedWallSheet(r, 'tree', 2)
+    const countAfterFirst = renderSpy.mock.calls.length
+    getStackedWallSheet(r, 'tree', 2)
+    expect(renderSpy.mock.calls.length).toBe(countAfterFirst)
+  })
+})
+
+describe('wh>3 クランプ警告 (Issue #93)', () => {
+  beforeEach(() => {
+    __resetWallHeightClampWarning()
+  })
+
+  it('テスト環境では警告は出ない（MODE=test で抑制）が、フラグは立つので 2 回目以降も沈黙', () => {
+    // 実際に console.warn が呼ばれないことを spy で担保する。
+    // import.meta.env.MODE === 'test' のため、warnWallHeightClampedOnce は warn を呼ばずに return する。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    computeWallTextureCrop(64, 5)
+    computeWallTextureCrop(64, 10)
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
   })
 })
