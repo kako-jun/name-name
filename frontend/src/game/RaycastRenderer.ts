@@ -19,10 +19,13 @@ import {
 } from './npcSpriteSheet'
 import {
   computeEffectiveFogMaxDist,
+  computeFloorStepWallYRange,
   computeWallYRange,
+  detectFloorStep,
   projectNpcToScreen,
   resolveCeilingHeight,
   resolveFloorHeight,
+  type StepRecord,
 } from './raycastProjection'
 import {
   clearDemoWallCache,
@@ -63,10 +66,24 @@ type DirectionLabel = 'up' | 'down' | 'left' | 'right'
  */
 const SIDE_SHADE_BASE = darken(0xffffff, 0.7)
 
+/**
+ * perpDist / 段差 depth の極小値クランプ閾値。
+ *
+ * 0 除算に近い極小距離で `h / perpDist` が青天井に発散するのを防ぐための下限。
+ * 壁（perpDist）と段差（crossDepth）の両方で同じ値を共有して、挙動の整合性を保つ。
+ * モジュール定数化（N5）。
+ */
+const MIN_DEPTH = 0.0001
+
 export class RaycastRenderer {
   private app: Application
   private worldLayer: Container
   private wallSpritesContainer: Container
+  /** 段差壁面用 Sprite プールの Container（Issue #88 Phase 2-7a）。
+   *  メインの壁（`wallSpritesContainer`）の後（= 手前）に addChild して、段差壁は壁よりも
+   *  重ね合わせ順で上に描画される。段差は最終壁の「手前」に位置するため、視覚的に手前に描くのが正しい。
+   *  zIndex による厳密な距離ソートは行わない（段差は常に手前、壁は常に奥の MVP 方針）。 */
+  private stepWallSpritesContainer: Container
   private npcLayer: Container
   private dialogBox: RpgDialogBox | null = null
 
@@ -75,6 +92,13 @@ export class RaycastRenderer {
   /** 壁用ストライプ Sprite プール。index = stripe index。texture/tint/visible を毎フレーム更新する。
    *  不変条件: `wallSpritesContainer.children[i] === this.stripeSprites[i]`（ensureStripePool が維持） */
   private stripeSprites: Sprite[] = []
+
+  /** 段差壁面用 Sprite プール（Issue #88 Phase 2-7a）。
+   *  1 列につき最大 `MAX_STEPS_PER_COLUMN` 個まで段差を重ね描きできる。フラットな配列で
+   *  管理し、index = `stripeIdx * MAX_STEPS_PER_COLUMN + slot`。毎フレーム visible=false で
+   *  初期化し、描画した slot だけ true にする。
+   *  不変条件: `stepWallSpritesContainer.children[i] === this.stepWallSprites[i]`。 */
+  private stepWallSprites: Sprite[] = []
 
   /** 壁ストライプの perpDist を格納する z-buffer。NPC billboard の遮蔽判定で参照。
    *  stripe プールと一緒にサイズ同期して再利用（毎フレーム new を避ける） */
@@ -152,6 +176,16 @@ export class RaycastRenderer {
   // 幾何的な位置（spriteScreenX）や z-buffer 比較には適用しない（遮蔽整合性のため）。
   private readonly npcSpriteMinDepth = 0.1
 
+  // 1 列あたり記録・描画する段差壁の最大数（Issue #88 Phase 2-7a）。
+  // DDA ループ中、プレイヤーから壁タイルまでの間に通過するタイル境界のうち、手前から数個だけ描く。
+  // 通常のマップで視界内にある段差は 1-2 個程度のため 3 で十分。奥にある段差は手前の段差/壁に
+  // 遮蔽される可能性が高く、見えなくても実害は小さい。
+  //
+  // Q2: 値 3 は現状「推測値」。実測データに基づくチューニングは未実施。典型的な 16x12 マップでの
+  // 段差分布（中央階段 2 段 + 崖 1 段）を想定しているが、広大で段差密度の高いマップを導入する
+  // ときは fps / 可視段差欠落率 を計測して再調整する。
+  private readonly maxStepsPerColumn = 3
+
   private keys = new Set<string>()
   private lastTickMs = 0
 
@@ -162,6 +196,7 @@ export class RaycastRenderer {
     this.app = new Application()
     this.worldLayer = new Container()
     this.wallSpritesContainer = new Container()
+    this.stepWallSpritesContainer = new Container()
     this.npcLayer = new Container()
     // zIndex で距離ソート（奥→手前）
     this.npcLayer.sortableChildren = true
@@ -182,10 +217,12 @@ export class RaycastRenderer {
     container.appendChild(this.app.canvas as HTMLCanvasElement)
 
     this.worldGraphics = new Graphics()
-    // 空・床は worldGraphics（奥）、壁ストライプ Sprite は wallSpritesContainer（手前）。
+    // 空・床は worldGraphics（奥）、壁ストライプ Sprite は wallSpritesContainer（手前）、
+    // 段差壁面 Sprite は stepWallSpritesContainer（さらに手前：メイン壁より手前に位置するため）。
     // NPC は npcLayer（さらに手前）で stage 直下。worldLayer との分離は従来通り
     this.worldLayer.addChild(this.worldGraphics)
     this.worldLayer.addChild(this.wallSpritesContainer)
+    this.worldLayer.addChild(this.stepWallSpritesContainer)
     this.app.stage.addChild(this.worldLayer)
     this.app.stage.addChild(this.npcLayer)
 
@@ -369,6 +406,7 @@ export class RaycastRenderer {
       clearDemoWallCache(renderer)
       clearDemoSheetCache(renderer)
       this.stripeSprites = []
+      this.stepWallSprites = []
       this.zBuffer = new Float32Array(0)
       this.wallTopYBuffer = new Float32Array(0)
       this.dialogBox = null
@@ -518,6 +556,24 @@ export class RaycastRenderer {
     }
     if (target > 0 && this.wallTopYBuffer.length !== target) {
       this.wallTopYBuffer = new Float32Array(target)
+    }
+    // 段差壁面用 Sprite プールも同じ幅で同期する（Issue #88 Phase 2-7a）。
+    // サイズ = stripeCount * maxStepsPerColumn。列ごとに maxStepsPerColumn 個の slot を確保。
+    const stepTarget = target * this.maxStepsPerColumn
+    while (this.stepWallSprites.length < stepTarget) {
+      const s = new Sprite(Texture.WHITE)
+      s.anchor.set(0, 0)
+      s.visible = false
+      // ストライプ幅は不変なので生成時に一度だけ設定（width setter は scale 計算を伴うため毎フレーム回避）
+      s.width = this.stripeWidth
+      this.stepWallSpritesContainer.addChild(s)
+      this.stepWallSprites.push(s)
+    }
+    while (this.stepWallSprites.length > stepTarget) {
+      const s = this.stepWallSprites.pop()
+      if (s) {
+        s.destroy()
+      }
     }
   }
 
@@ -769,25 +825,60 @@ export class RaycastRenderer {
         sideDistY = (mapY + 1.0 - this.playerY) * deltaDistY
       }
 
-      let side = 0 // 0 = x-side, 1 = y-side
+      let side: 0 | 1 = 0 // 0 = x-side, 1 = y-side
       let hit = false
       let hitTile = TileType.TREE
+      // Issue #88 Phase 2-7a: DDA 中に通過するタイル境界で床高さ差を検出し、段差壁面を記録する。
+      // 「壁ヒットで止まる前」の境界だけが対象。手前から最大 maxStepsPerColumn 個まで。
+      // stepInfos は prev→next の順（= 手前→奥の順）で push される。描画は奥→手前だが
+      // zBuffer 書き込みは「最も手前の段差の depth」を使うため手前→奥の順で見て最小 depth を採る。
+      //
+      // S4 手前優先の根拠: DDA は手前→奥の順にタイル境界を跨ぐため、stepInfos は自然に手前→奥の
+      // 順で並ぶ。`stepInfos.length < this.maxStepsPerColumn` で push を止めれば、残った奥側の段差は
+      // 無視される ＝ 自動的に「手前の段差を maxStepsPerColumn 個だけ残す」優先順位になる。
+      // N1: StepRecord 型はモジュールトップ（raycastProjection.ts）に昇格
+      const stepInfos: StepRecord[] = []
+      // S2 早期 bailout: floorHeights 自体が undefined なマップでは resolveFloorHeight が常に 0 を
+      // 返すため、detectFloorStep(0, 0) は必ず null で段差は 1 つも生まれない。この場合 maxSteps の
+      // DDA ループ内で毎イテレーション 2 回の undefined チェック + detectFloorStep 呼び出しを
+      // スキップできる（typical 1フレーム = stripeCount × maxSteps = 400 × 24 ≈ 9600 回）。
+      const hasFloorHeights = this.floorHeights !== undefined
       // 最大距離ガード（想定: map の最大対角）
       const maxSteps = this.mapWidth + this.mapHeight + 4
       for (let s = 0; s < maxSteps; s++) {
+        const prevMapX = mapX
+        const prevMapY = mapY
+        let crossDepth: number
+        // N3: crossedSide は side と常に同値なので、side のみで統一する
         if (sideDistX < sideDistY) {
+          crossDepth = sideDistX
           sideDistX += deltaDistX
           mapX += stepX
           side = 0
         } else {
+          crossDepth = sideDistY
           sideDistY += deltaDistY
           mapY += stepY
           side = 1
         }
+        // 壁ヒット時は境界 = 壁面そのものなので段差は記録しない（壁の向こう側の床を参照しても描かない）
         if (this.isWallTile(mapX, mapY)) {
           hit = true
           hitTile = this.getTile(mapX, mapY)
           break
+        }
+        // 両タイルとも非壁 → 床段差を検出。prev / next の床高さを比較する。
+        // N2: 「片方が壁ならスキップ」の文言は削除（両方非壁ブランチなので無条件比較でよい）。
+        if (hasFloorHeights && stepInfos.length < this.maxStepsPerColumn) {
+          const prevFloorZ = resolveFloorHeight(this.floorHeights, prevMapX, prevMapY)
+          const nextFloorZ = resolveFloorHeight(this.floorHeights, mapX, mapY)
+          const step = detectFloorStep(prevFloorZ, nextFloorZ)
+          if (step) {
+            // 極近距離クランプ（perpDist と同じ扱い、N5: MIN_DEPTH で共有）
+            const depthClamped = crossDepth < MIN_DEPTH ? MIN_DEPTH : crossDepth
+            // side は `let side: 0 | 1` で narrow されているのでキャスト不要
+            stepInfos.push({ info: step, depth: depthClamped, side })
+          }
         }
       }
 
@@ -799,7 +890,7 @@ export class RaycastRenderer {
       } else {
         perpDist = sideDistY - deltaDistY
       }
-      if (perpDist < 0.0001) perpDist = 0.0001
+      if (perpDist < MIN_DEPTH) perpDist = MIN_DEPTH
 
       zBuffer[i] = perpDist
 
@@ -842,14 +933,7 @@ export class RaycastRenderer {
           hitTile === TileType.WATER ? this.waterTexture : this.treeTexture
         if (sheet) {
           // テクスチャストライプ方式: Sprite プールの texture/位置/tint を更新
-          const u = computeWallU(
-            side as 0 | 1,
-            perpDist,
-            this.playerX,
-            this.playerY,
-            rayDirX,
-            rayDirY
-          )
+          const u = computeWallU(side, perpDist, this.playerX, this.playerY, rayDirX, rayDirY)
           const col = uToColumn(u, sheet.width)
           // y-side は従来同様に 0.7 倍で暗めにしてから fog 適用（立体感の維持）。
           // 値はモジュール定数（SIDE_SHADE_BASE）で 1 度だけ計算してある。
@@ -900,6 +984,135 @@ export class RaycastRenderer {
         }
       } else {
         stripeSprite.visible = false
+      }
+
+      // --- 段差壁面の描画（Issue #88 Phase 2-7a） ---
+      // 列ごとに maxStepsPerColumn 個の slot を持つ。描画する slot だけ visible=true、
+      // 余りは毎列 visible=false に戻す（前フレームの残像を消す）。
+      // 描画順: stepInfos は手前→奥の順で push されているので、奥→手前の順で描くには
+      // 逆順に反復する。PixiJS の Container は children の配列順で描画するが、今回は
+      // slot の「描画タイミング」ではなく「重ね順」は Container の子配列順で決まるため、
+      // 遠い段差を先の slot に置く（小さい slot index ほど奥）。
+      //
+      // zBuffer / wallTopYBuffer 書き込み: stepInfos のうち最も手前（最小 depth）のものの
+      // depth と drawStartY で書き換える（M1/M2）。これにより段差の手前にいる NPC は段差で
+      // 遮蔽され、段差より上にはみ出た部分は正しく可視化される。段差は壁より手前（DDA は
+      // 壁ヒットで止まる前の境界）にあるため、depth < perpDist が常に成立し、wallTopYBuffer
+      // も段差の drawStartY（= 壁より小さい値）で min 更新する。
+      // N3: `POSITIVE_INFINITY` は「距離比較の sentinel」。実在する段差の depth は有限なので
+      // 初回の `depth < frontStepDepth` で必ず更新される。距離ユニット（fogMaxDist + 1 等）
+      // でも意味は同じだが、「未設定」を明示する意図で無限大を採用
+      let frontStepDepth = Number.POSITIVE_INFINITY
+      let frontStepDrawStartY = h // 段差がない or 描画スキップ時は h（遮蔽なし相当）
+      const drawSlots = stepInfos.length
+      for (let slot = 0; slot < drawSlots; slot++) {
+        const stepSprite = this.stepWallSprites[i * this.maxStepsPerColumn + slot]
+        // Q1 invariant: ensureStripePool は stepWallSprites.length === numStripes * maxStepsPerColumn
+        // を保証するため、`i * maxStepsPerColumn + slot`（slot < drawSlots <= maxStepsPerColumn、
+        // i < numStripes）は常に有効な index。理論上 `!stepSprite` は起き得ないが、
+        // pool 再確保の途中状態（例: 初期化順の変更で未同期になる）に備えて安全側で skip する
+        if (!stepSprite) continue
+        // stepInfos[奥→手前] = stepInfos の逆順を slot 0→N に割り当て、
+        // slot 0（最も奥）は Container 子の中で先に描画される。
+        const sourceIdx = drawSlots - 1 - slot
+        const rec = stepInfos[sourceIdx]
+        const depth = rec.depth
+        // 遠方カリング: 段差は通常壁と同じ fogMaxDist で消える（wallHeight による延長は適用しない）
+        if (depth > this.fogMaxDist + 0.5) {
+          stepSprite.visible = false
+          continue
+        }
+        const stepLineHeight = Math.floor(h / depth)
+        const { drawStartY: sStart, drawEndY: sEnd } = computeFloorStepWallYRange(
+          stepLineHeight,
+          rec.info.lowerZ,
+          rec.info.upperZ,
+          h,
+          totalYOffsetPx
+        )
+        const stepDrawHeight = sEnd - sStart
+        if (stepDrawHeight <= 0) {
+          stepSprite.visible = false
+          continue
+        }
+        // 手前段差記録（M1/M2 用。フェアな最前面 = 最小 depth を保持する）
+        // Q2: 厳密不等のため、同距離（depth が完全一致）の段差が複数あると
+        // 最初に記録された方が最前面扱いになる。DDA は奥→手前の順に cross を検出し
+        // 本ループは `sourceIdx = drawSlots - 1 - slot` で奥から反復するため、
+        // 「後のほう（手前側の cross）がより手前」という想定と厳密には噛み合わないが、
+        // 通常プレイでは同一 depth は実質発生せず、仮に発生しても frontStepDrawStartY の差は
+        // 視覚的に無視できる範囲（同距離なら drawStartY もほぼ同じ）。厳密な最前面更新に
+        // したい場合は `<=` に変更すればよい
+        if (depth < frontStepDepth) {
+          frontStepDepth = depth
+          frontStepDrawStartY = sStart
+        }
+        // テクスチャ: 段差の「高い側のタイル」の wallType を取りたいが、両隣は非壁タイル
+        // （草・道）なので、MVP では TREE 壁のテクスチャを流用する。木のテクスチャは
+        // レンガ調で段差の側面として十分違和感がない。wallTextureSheet がロード前の間は
+        // ベタ塗りフォールバックを worldGraphics に描く。
+        const sheet = this.treeTexture
+        const stepFog = Math.max(0, Math.min(1, 1 - depth / this.fogMaxDist))
+        // y-side（y 軸跨ぎ）は通常壁と同様に暗めに（立体感維持）
+        const stepShadedBase = rec.side === 1 ? SIDE_SHADE_BASE : 0xffffff
+        if (sheet) {
+          // u 座標: 通常壁と同じ `computeWallU` を流用。段差でも横方向の位相は同じ規則で決まる
+          const u = computeWallU(rec.side, depth, this.playerX, this.playerY, rayDirX, rayDirY)
+          const col = uToColumn(u, sheet.width)
+          // S1: テクスチャ縦圧縮の解消 —— 段差壁の pixel scale を通常壁と一致させるため
+          // `computeWallTextureCrop(WALL_TEXTURE_HEIGHT, heightDiff)` でベーステクスチャの下部
+          // `heightDiff * H` 分のみ切り出す（crop モード）。
+          //   - heightDiff=0.25 → frameY=48, frameHeight=16, tileCount=1（下 1/4 のみ）
+          //   - heightDiff=1.0  → frameY=0,  frameHeight=64, tileCount=1（全体）
+          //   - heightDiff>1    → tileCount>1 で stacked sheet が必要になるが、床段差の
+          //     heightDiff は基本的に 1 以下（1 タイル分の段差でも 1.0）なので MVP では
+          //     tileCount>1 ケースは考慮外。tileCount>1 になった場合もフォールバック的に
+          //     ベーステクスチャの一部として描く（視覚的には縦に詰まるが描画は破綻しない）。
+          // pixel scale = stepDrawHeight / frameHeight = (heightDiff * lineHeight) / (heightDiff * H)
+          //             = lineHeight / H ← 通常壁と同じ
+          const stepCrop = computeWallTextureCrop(WALL_TEXTURE_HEIGHT, rec.info.heightDiff)
+          const frameY = stepCrop.frameHeight > 0 && stepCrop.tileCount === 1 ? stepCrop.frameY : 0
+          const frameHeight =
+            stepCrop.frameHeight > 0 && stepCrop.tileCount === 1
+              ? stepCrop.frameHeight
+              : WALL_TEXTURE_HEIGHT
+          const src = sheet.columns[col].source
+          stepSprite.texture = new Texture({
+            source: src,
+            frame: new Rectangle(col, frameY, 1, frameHeight),
+          })
+          stepSprite.x = screenX
+          stepSprite.y = sStart
+          stepSprite.height = stepDrawHeight
+          stepSprite.tint = applyFog(stepShadedBase, stepFog)
+          stepSprite.visible = true
+        } else {
+          stepSprite.visible = false
+          // ロード前フォールバック: worldGraphics にベタ塗り。色は壁（TREE）と同じロジックで
+          // side に応じて暗くする
+          const baseColor = wallColor(TileType.TREE, rec.side)
+          const color = applyFog(baseColor, stepFog)
+          g.rect(screenX, sStart, this.stripeWidth, stepDrawHeight)
+          g.fill(color)
+        }
+      }
+      // S3 残 slot 一括 visible=false: 段差のないセルでは drawSlots=0 なので、ここだけで
+      // maxStepsPerColumn 個すべてを畳む（前フレームの残像を消す）。
+      for (let slot = drawSlots; slot < this.maxStepsPerColumn; slot++) {
+        const stepSprite = this.stepWallSprites[i * this.maxStepsPerColumn + slot]
+        if (stepSprite) stepSprite.visible = false
+      }
+
+      // M1/M2: 最前面段差の depth / drawStartY で zBuffer / wallTopYBuffer を上書き。
+      // 段差は壁より手前なので、frontStepDepth < perpDist が常に成立する前提だが、
+      // 念のため条件付き更新にして「より手前（＝より厳しい遮蔽）」のときだけ書き換える。
+      // wallTopYBuffer は「画面上で上にある方」＝ Y の小さい方を採用（壁 hit=false で h のまま
+      // のケースも含め、段差の drawStartY の方が小さければ上書きする）。
+      if (frontStepDepth < zBuffer[i]) {
+        zBuffer[i] = frontStepDepth
+      }
+      if (frontStepDrawStartY < wallTopYBuffer[i]) {
+        wallTopYBuffer[i] = frontStepDrawStartY
       }
     }
 

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   computeEffectiveFogMaxDist,
+  computeFloorStepWallYRange,
   computeWallYRange,
+  detectFloorStep,
   projectNpcToScreen,
   resolveCeilingHeight,
   resolveFloorHeight,
@@ -582,5 +584,172 @@ describe('resolveCeilingHeight', () => {
     const grid = [[0.5]]
     expect(resolveCeilingHeight(grid, -1, 0)).toBe(1)
     expect(resolveCeilingHeight(grid, 0, -1)).toBe(1)
+  })
+})
+
+describe('detectFloorStep', () => {
+  // Issue #88 Phase 2-7a: 隣接タイルの床高さから段差壁面情報を返す
+
+  it('同じ高さなら null', () => {
+    expect(detectFloorStep(0, 0)).toBeNull()
+    expect(detectFloorStep(0.5, 0.5)).toBeNull()
+  })
+
+  it('ごく微小な差（1e-7）は null（浮動小数雑音吸収）', () => {
+    expect(detectFloorStep(0.5, 0.5 + 1e-7)).toBeNull()
+  })
+
+  it('prev が高い場合、upperSide=prev', () => {
+    const step = detectFloorStep(0.5, 0)
+    expect(step).not.toBeNull()
+    expect(step!.lowerZ).toBe(0)
+    expect(step!.upperZ).toBe(0.5)
+    expect(step!.heightDiff).toBeCloseTo(0.5, 6)
+    expect(step!.upperSide).toBe('prev')
+  })
+
+  it('next が高い場合、upperSide=next', () => {
+    const step = detectFloorStep(0, 0.5)
+    expect(step).not.toBeNull()
+    expect(step!.lowerZ).toBe(0)
+    expect(step!.upperZ).toBe(0.5)
+    expect(step!.heightDiff).toBeCloseTo(0.5, 6)
+    expect(step!.upperSide).toBe('next')
+  })
+
+  it('負の床（沈み込み）と地面の段差も正しく認識', () => {
+    const step = detectFloorStep(-0.3, 0)
+    expect(step).not.toBeNull()
+    expect(step!.lowerZ).toBe(-0.3)
+    expect(step!.upperZ).toBe(0)
+    expect(step!.heightDiff).toBeCloseTo(0.3, 6)
+    expect(step!.upperSide).toBe('next')
+  })
+
+  it('NaN 入力は null（防御）', () => {
+    expect(detectFloorStep(Number.NaN, 0)).toBeNull()
+    expect(detectFloorStep(0, Number.NaN)).toBeNull()
+  })
+
+  it('Infinity 入力は null（防御）', () => {
+    expect(detectFloorStep(Number.POSITIVE_INFINITY, 0)).toBeNull()
+    expect(detectFloorStep(0, Number.NEGATIVE_INFINITY)).toBeNull()
+  })
+
+  // S5 境界値追加テスト
+  it('大差（+5 / -5）も正しく認識', () => {
+    const step = detectFloorStep(5, -5)
+    expect(step).not.toBeNull()
+    expect(step!.lowerZ).toBe(-5)
+    expect(step!.upperZ).toBe(5)
+    expect(step!.heightDiff).toBeCloseTo(10, 6)
+    expect(step!.upperSide).toBe('prev')
+  })
+
+  it('0 と -0 は同値なので null（符号差のみの浮動小数ノイズ吸収）', () => {
+    // Math.abs(0 - (-0)) === 0 < 1e-6
+    expect(detectFloorStep(0, -0)).toBeNull()
+  })
+
+  it('差が閾値 1e-6 ちょうどなら段差として認識される（閾値は < 1e-6 で null なので 1e-6 自体は非 null）', () => {
+    // 実装は `if (diff < 1e-6) return null` なので 1e-6 ちょうどは段差扱い（非 null）。
+    // 境界仕様を固定するための回帰テスト
+    const step = detectFloorStep(0, 1e-6)
+    expect(step).not.toBeNull()
+    expect(step!.heightDiff).toBeCloseTo(1e-6, 12)
+  })
+
+  it('差が 1e-6 より小さい（1e-7）なら null', () => {
+    expect(detectFloorStep(0.1, 0.1 + 1e-7)).toBeNull()
+  })
+})
+
+describe('computeFloorStepWallYRange', () => {
+  // Issue #88 Phase 2-7a: 段差壁面の Y 範囲を返す
+  // 基準: h=480, lineHeight=200, pitch=0
+  //   通常の壁（lowerZ=0, upperZ=1）の基準地面位置は floor(100 + 240) = 340
+
+  it('lowerZ=0, upperZ=1 は computeWallYRange(lineHeight, 1, h) と同じ', () => {
+    // 段差の下端=地面(340)、上端=140
+    const step = computeFloorStepWallYRange(200, 0, 1, 480)
+    const wall = computeWallYRange(200, 1, 480)
+    expect(step.drawStartY).toBe(wall.drawStartY)
+    expect(step.drawEndY).toBe(wall.drawEndY)
+  })
+
+  it('lowerZ=0, upperZ=0.5 は半段の段差壁', () => {
+    // drawEndRaw = floor(100 + 240 - 0) = 340
+    // drawStartRaw = floor(100 + 240 - 200*0.5) = 240
+    const range = computeFloorStepWallYRange(200, 0, 0.5, 480)
+    expect(range.drawEndY).toBe(340)
+    expect(range.drawStartY).toBe(240)
+  })
+
+  it('lowerZ=0.25, upperZ=0.75 は中間にある半段段差', () => {
+    // drawEndRaw = floor(340 - 200*0.25) = 290
+    // drawStartRaw = floor(340 - 200*0.75) = 190
+    const range = computeFloorStepWallYRange(200, 0.25, 0.75, 480)
+    expect(range.drawEndY).toBe(290)
+    expect(range.drawStartY).toBe(190)
+  })
+
+  it('upperZ <= lowerZ は drawStart === drawEnd（描画なし）', () => {
+    const range = computeFloorStepWallYRange(200, 0.5, 0.5, 480)
+    expect(range.drawStartY).toBe(range.drawEndY)
+    const range2 = computeFloorStepWallYRange(200, 0.7, 0.5, 480)
+    expect(range2.drawStartY).toBe(range2.drawEndY)
+  })
+
+  it('lineHeight=0 は drawStart === drawEnd（h/2 位置）', () => {
+    const range = computeFloorStepWallYRange(0, 0, 1, 480)
+    expect(range.drawStartY).toBe(240)
+    expect(range.drawEndY).toBe(240)
+  })
+
+  it('pitchOffsetPx > 0 で全体が下にシフト', () => {
+    // baseY = 240+50=290 → drawEndRaw=floor(100+290)=390, drawStartRaw=floor(390-100)=290
+    const range = computeFloorStepWallYRange(200, 0, 0.5, 480, 50)
+    expect(range.drawEndY).toBe(390)
+    expect(range.drawStartY).toBe(290)
+  })
+
+  it('pitchOffsetPx < 0 で全体が上にシフト', () => {
+    // baseY=190 → drawEndRaw=floor(100+190)=290, drawStartRaw=floor(290-100)=190
+    const range = computeFloorStepWallYRange(200, 0, 0.5, 480, -50)
+    expect(range.drawEndY).toBe(290)
+    expect(range.drawStartY).toBe(190)
+  })
+
+  it('画面外は [0, h] にクランプ', () => {
+    // 極端な pitch で下端が h を超える
+    const range = computeFloorStepWallYRange(200, 0, 0.5, 480, 1000)
+    expect(range.drawStartY).toBe(480)
+    expect(range.drawEndY).toBe(480)
+    const range2 = computeFloorStepWallYRange(200, 0, 0.5, 480, -1000)
+    expect(range2.drawStartY).toBe(0)
+    expect(range2.drawEndY).toBe(0)
+  })
+
+  it('NaN / Infinity 入力は 0 扱い（防御）', () => {
+    // lineHeight NaN → safeLineHeight=0 → 両端 h/2
+    const a = computeFloorStepWallYRange(Number.NaN, 0, 0.5, 480)
+    expect(a.drawStartY).toBe(240)
+    expect(a.drawEndY).toBe(240)
+    // lowerZ/upperZ NaN → それぞれ 0 扱い
+    const b = computeFloorStepWallYRange(200, Number.NaN, Number.NaN, 480)
+    expect(b.drawStartY).toBe(b.drawEndY)
+    // pitch NaN → 0 扱いで基準通り
+    const c = computeFloorStepWallYRange(200, 0, 0.5, 480, Number.NaN)
+    expect(c.drawEndY).toBe(340)
+    expect(c.drawStartY).toBe(240)
+  })
+
+  it('負の lowerZ（沈み込みから地面への段差）も正しく描画', () => {
+    // lowerZ=-0.25, upperZ=0 → 下端は地面より下
+    // drawEndRaw = floor(340 - 200*(-0.25)) = floor(390) = 390
+    // drawStartRaw = floor(340 - 0) = 340
+    const range = computeFloorStepWallYRange(200, -0.25, 0, 480)
+    expect(range.drawEndY).toBe(390)
+    expect(range.drawStartY).toBe(340)
   })
 })

@@ -210,6 +210,104 @@ export function resolveFloorHeight(grid: number[][] | undefined, tx: number, ty:
 }
 
 /**
+ * 段差壁面（floor step wall）情報。Issue #88 Phase 2-7a。
+ *
+ * 隣接タイル間で `floorHeights` に差があるとき、境界に生じる垂直な段差面を表現する。
+ * - `lowerZ` < `upperZ`。`heightDiff = upperZ - lowerZ > 0`
+ * - この面は「lowerZ から upperZ まで」の垂直壁として描画される
+ * - `upperSide` は「高い方の床がどちら側にあるか」（将来 u 座標計算やテクスチャ選択で使う可能性があるため保持）
+ */
+export interface FloorStepInfo {
+  lowerZ: number
+  upperZ: number
+  heightDiff: number
+  upperSide: 'prev' | 'next'
+}
+
+/**
+ * 段差壁の記録（DDA ループ内で手前→奥順に蓄積する）。
+ *
+ * - `info`: 検出した段差情報（lowerZ/upperZ/heightDiff/upperSide）
+ * - `depth`: ray が境界を跨いだときの crossDepth（`MIN_DEPTH` 以上にクランプ済み）
+ * - `side`: 境界を跨いだ side（0=x-side, 1=y-side）。NPC と同じ y-side シェード判定に使う
+ *
+ * モジュールトップに昇格（元は DDA ループ内 inline 型）。
+ */
+export interface StepRecord {
+  info: FloorStepInfo
+  depth: number
+  side: 0 | 1
+}
+
+/**
+ * 隣接タイルの床高さから段差壁面情報を返す純粋関数（Issue #88 Phase 2-7a）。
+ *
+ * - `prevFloorZ === nextFloorZ` または差が 1e-6 未満 → `null`（段差なし）
+ * - 高い方を `upperZ`、低い方を `lowerZ` として返す
+ *
+ * Q3 defense-in-depth: 非有限値の検査は通常 `resolveFloorHeight` 側で `0` に正規化されているため
+ * ここには来ないが、純粋関数単位の契約として独立に検証する（`resolveFloorHeight` を経由しない
+ * 直接呼び出しや、将来 `resolveFloorHeight` の正規化ルールが変わったときにここで吸収するため）。
+ * `NaN` / `Infinity` は `null`。
+ */
+export function detectFloorStep(prevFloorZ: number, nextFloorZ: number): FloorStepInfo | null {
+  if (!Number.isFinite(prevFloorZ) || !Number.isFinite(nextFloorZ)) return null
+  const diff = Math.abs(prevFloorZ - nextFloorZ)
+  if (diff < 1e-6) return null
+  if (prevFloorZ > nextFloorZ) {
+    return { lowerZ: nextFloorZ, upperZ: prevFloorZ, heightDiff: diff, upperSide: 'prev' }
+  }
+  return { lowerZ: prevFloorZ, upperZ: nextFloorZ, heightDiff: diff, upperSide: 'next' }
+}
+
+/**
+ * 段差壁面の Y 範囲（画面座標）を返す純粋関数（Issue #88 Phase 2-7a）。
+ *
+ * 段差の垂直面は、通常の壁の地面位置から `lowerZ * lineHeight` だけ上にシフトした位置が下端、
+ * そこから `heightDiff * lineHeight` 分だけ上に伸ばした位置が上端になる。
+ *
+ * 地面の基準位置（`baseGroundY`）: `computeWallYRange` と同じく
+ *   `baseGroundY = floor(lineHeight/2 + h/2 + pitchOffsetPx)`
+ * を前提にする。ただし段差の下端・上端は同じ floor 操作を最後に 1 回だけかけて、
+ * 二重 floor による 1px バイアスを避ける（`computeWallYRange` の方針と同じ）。
+ *
+ * 入力契約:
+ *  - `lineHeight` の `NaN/Infinity/負値` は 0 扱い
+ *  - `lowerZ / upperZ` の `NaN/Infinity` は 0 扱い
+ *  - `upperZ <= lowerZ` のときは上端=下端（描画なし相当）
+ *  - `pitchOffsetPx` の `NaN/Infinity` は 0 扱い
+ *  - 画面外クランプは [0, screenHeight] で行う
+ *
+ * 呼び出し側は `drawEndY - drawStartY <= 0` で描画スキップの責務を持つ。
+ */
+export function computeFloorStepWallYRange(
+  lineHeight: number,
+  lowerZ: number,
+  upperZ: number,
+  screenHeight: number,
+  pitchOffsetPx: number = 0
+): WallYRange {
+  const h = screenHeight
+  const safeLineHeight = !Number.isFinite(lineHeight) || lineHeight <= 0 ? 0 : lineHeight
+  const safeLower = Number.isFinite(lowerZ) ? lowerZ : 0
+  const safeUpper = Number.isFinite(upperZ) ? upperZ : 0
+  const safePitchOffset = Number.isFinite(pitchOffsetPx) ? pitchOffsetPx : 0
+  // 段差の高さ（負以下は描画なし）
+  const effectiveDiff = safeUpper - safeLower <= 0 ? 0 : safeUpper - safeLower
+  // 地面基準位置に対して「lowerZ 分上」に段差の下端が来る。通常の `computeWallYRange` は
+  // `lowerZ=0` を仮定していたのと対照。上端は下端からさらに effectiveDiff 分上。
+  const drawEndRaw = Math.floor(
+    safeLineHeight / 2 + h / 2 + safePitchOffset - safeLineHeight * safeLower
+  )
+  const drawStartRaw = Math.floor(
+    safeLineHeight / 2 + h / 2 + safePitchOffset - safeLineHeight * (safeLower + effectiveDiff)
+  )
+  const drawStartY = drawStartRaw < 0 ? 0 : drawStartRaw > h ? h : drawStartRaw
+  const drawEndY = drawEndRaw < 0 ? 0 : drawEndRaw > h ? h : drawEndRaw
+  return { drawStartY, drawEndY }
+}
+
+/**
  * 天井高さグリッド（[y][x]）から指定タイルの天井高さを返す純粋関数（Issue #87）。
  *
  * - `grid` が `undefined`、該当行が未定義、セルが未定義、値が有限数でない場合は `1` を返す（標準天井）
