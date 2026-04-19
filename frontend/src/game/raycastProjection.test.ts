@@ -320,3 +320,98 @@ describe('projectNpcToScreen (with pitch)', () => {
     expect(negBig!.drawEndY).toBe(0)
   })
 })
+
+describe('computeWallYRange (with combined offset for jump)', () => {
+  // Issue #80 Phase 2-2: pitchOffsetPx 引数は「pitch 由来 + cameraZ（ジャンプ）由来」の合算値を受け取る。
+  // 関数自体は合算後の単一スカラとしか扱わないが、呼び出し側で
+  //   pitchOffsetPx + cameraZOffsetPx = 合算 Y オフセット
+  // という運用になることを契約として明示するための境界値テスト。
+  // 基準: h=480, lineHeight=200, wallHeight=1
+  //   合算 0 → drawEndY=340, drawStartY=140
+
+  it('合算オフセット（pitch+30, cameraZ+30 → total 60）が単独値と同じ結果になる', () => {
+    // 合算 60 → baseY=300 → drawEndY=floor(100+300)=400, drawStartY=floor(400-200)=200
+    const combined = computeWallYRange(200, 1, 480, 60)
+    expect(combined.drawEndY).toBe(400)
+    expect(combined.drawStartY).toBe(200)
+    // 関数は合算スカラだけ見るので、pitch=60 単独でも同値
+    const single = computeWallYRange(200, 1, 480, 60)
+    expect(combined.drawEndY).toBe(single.drawEndY)
+    expect(combined.drawStartY).toBe(single.drawStartY)
+  })
+
+  it('大きな合算（pitch=50 + cameraZ=100 → total 150）でも [0, h] にクランプ', () => {
+    // baseY=240+150=390 → drawEndRaw=floor(100+390)=490 → 480, drawStartRaw=floor(490-200)=290
+    const range = computeWallYRange(200, 1, 480, 150)
+    expect(range.drawEndY).toBe(480)
+    expect(range.drawStartY).toBe(290)
+  })
+
+  it('負の合算（pitch=-30 + cameraZ=0 → total -30）も従来通り上シフト', () => {
+    // baseY=210 → drawEndY=floor(100+210)=310, drawStartY=floor(310-200)=110
+    const range = computeWallYRange(200, 1, 480, -30)
+    expect(range.drawEndY).toBe(310)
+    expect(range.drawStartY).toBe(110)
+  })
+
+  it('呼び出し側合算が NaN になっても関数自体は 0 扱いで防御', () => {
+    // ジャンプ計算で playerZ が NaN になり cameraZOffsetPx=NaN、合算 pitch+NaN=NaN を渡されるケース
+    const range = computeWallYRange(200, 1, 480, Number.NaN)
+    expect(range.drawEndY).toBe(340)
+    expect(range.drawStartY).toBe(140)
+  })
+
+  it('合算とジャンプ最大値（playerZ=0.375 → cameraZOffsetPx=90, h=480）でも安全', () => {
+    // jumpInitialV=3, gravity=12 → 最高到達 = 9/24 = 0.375 タイル → cameraZOffsetPx = 0.375 * 240 = 90
+    // pitch=0 でも合算=90 → baseY=330 → drawEndY=floor(100+330)=430, drawStartY=floor(430-200)=230
+    const range = computeWallYRange(200, 1, 480, 90)
+    expect(range.drawEndY).toBe(430)
+    expect(range.drawStartY).toBe(230)
+  })
+})
+
+describe('projectNpcToScreen (with combined offset for jump)', () => {
+  // Issue #80 Phase 2-2: 合算オフセット（pitch + cameraZ）を NPC 射影でも検証
+  const player = { x: 5.5, y: 5.5 }
+  const dir = { x: 1, y: 0 }
+  const planeLen = Math.tan(Math.PI / 6)
+  const plane = { x: 0, y: planeLen }
+  const screen = { width: 800, height: 600 }
+  const minDepth = 0.1
+
+  it('合算オフセット（pitch+30, cameraZ+30 → total 60）でも単独値と同じ Y シフト', () => {
+    // 通常: drawStartY=0, drawEndY=600（spriteHeight=600, baseY=300）
+    // 合算 60 → baseY=360 → drawStart=floor(-300+360)=60, drawEnd=floor(300+360)=660 → 600 クランプ
+    const npc = { x: 6.5, y: 5.5 }
+    const result = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, 60)
+    expect(result).not.toBeNull()
+    expect(result!.drawStartY).toBe(60)
+    expect(result!.drawEndY).toBe(600)
+  })
+
+  it('大きな合算（pitch=50 + cameraZ=100 → total 150）でも [0, h] にクランプ', () => {
+    const npc = { x: 6.5, y: 5.5 }
+    const result = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, 150)
+    expect(result).not.toBeNull()
+    expect(result!.drawStartY).toBe(150)
+    expect(result!.drawEndY).toBe(600)
+  })
+
+  it('呼び出し側合算が NaN になっても 0 扱いで防御', () => {
+    const npc = { x: 6.5, y: 5.5 }
+    const a = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, 0)
+    const b = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, Number.NaN)
+    expect(b!.drawStartY).toBe(a!.drawStartY)
+    expect(b!.drawEndY).toBe(a!.drawEndY)
+  })
+
+  it('ジャンプ最大相当（cameraZOffsetPx=90, h=600 ベース）でも整合', () => {
+    // h=600 環境では cameraZOffsetPx = 0.375 * 300 = 112.5 → round=113
+    // baseY=300+113=413 → drawStart=floor(-300+413)=113, drawEnd=floor(300+413)=713 → 600 クランプ
+    const npc = { x: 6.5, y: 5.5 }
+    const result = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, 113)
+    expect(result).not.toBeNull()
+    expect(result!.drawStartY).toBe(113)
+    expect(result!.drawEndY).toBe(600)
+  })
+})
