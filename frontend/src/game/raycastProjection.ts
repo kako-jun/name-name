@@ -48,6 +48,8 @@ export interface NpcProjection {
  * @param plane カメラ平面ベクトル（長さ = tan(fov/2)）
  * @param screen 描画キャンバスサイズ
  * @param minDepth スプライトサイズ計算時の深度下限。z-buffer 比較や `depth` フィールドには影響しない。
+ * @param pitchOffsetPx 上下視線（pitch）による Y シフト px（Issue #80 Phase 2）。正で画面中央が下にシフト＝視線が上向き。
+ *                       `NaN/Infinity` は `0` 扱い。デフォルト `0`（pitch 未対応の従来呼び出しは挙動不変）。
  */
 export function projectNpcToScreen(
   npc: Vec2,
@@ -55,7 +57,8 @@ export function projectNpcToScreen(
   dir: Vec2,
   plane: Vec2,
   screen: { width: number; height: number },
-  minDepth: number
+  minDepth: number,
+  pitchOffsetPx: number = 0
 ): NpcProjection | null {
   // 同一タイル判定
   if (Math.floor(npc.x) === Math.floor(player.x) && Math.floor(npc.y) === Math.floor(player.y)) {
@@ -82,10 +85,15 @@ export function projectNpcToScreen(
   const spriteHeight = Math.abs(Math.floor(h / clampedDepth))
   const spriteWidthPx = spriteHeight
 
-  let drawStartY = Math.floor(-spriteHeight / 2 + h / 2)
+  // pitch オフセット: NaN/Infinity は 0 扱い。baseY = h/2 + offset を中央基準にする
+  const safePitchOffset = Number.isFinite(pitchOffsetPx) ? pitchOffsetPx : 0
+  const baseY = h / 2 + safePitchOffset
+  let drawStartY = Math.floor(-spriteHeight / 2 + baseY)
   if (drawStartY < 0) drawStartY = 0
-  let drawEndY = Math.floor(spriteHeight / 2 + h / 2)
+  if (drawStartY > h) drawStartY = h
+  let drawEndY = Math.floor(spriteHeight / 2 + baseY)
   if (drawEndY > h) drawEndY = h
+  if (drawEndY < 0) drawEndY = 0
   let drawStartX = Math.floor(-spriteWidthPx / 2 + screenX)
   let drawEndX = Math.floor(spriteWidthPx / 2 + screenX)
   if (drawStartX < 0) drawStartX = 0
@@ -131,19 +139,26 @@ export interface WallYRange {
  * @param lineHeight 高さ 1.0 の壁が占める縦px（Lodev 方式の h/perpDist）
  * @param wallHeight 壁の高さ倍率（0 以下・非有限は 0 扱い、上限なし）
  * @param screenHeight 画面高 px
+ * @param pitchOffsetPx 上下視線（pitch）による Y シフト px（Issue #80 Phase 2）。正で画面中央が下にシフト＝視線が上向き。
+ *                       `NaN/Infinity` は `0` 扱い。デフォルト `0`（pitch 未対応の従来呼び出しは挙動不変）。
  */
 export function computeWallYRange(
   lineHeight: number,
   wallHeight: number,
-  screenHeight: number
+  screenHeight: number,
+  pitchOffsetPx: number = 0
 ): WallYRange {
   const h = screenHeight
   const effectiveHeight = !Number.isFinite(wallHeight) || wallHeight <= 0 ? 0 : wallHeight
   const safeLineHeight = !Number.isFinite(lineHeight) || lineHeight <= 0 ? 0 : lineHeight
+  const safePitchOffset = Number.isFinite(pitchOffsetPx) ? pitchOffsetPx : 0
   // drawEnd は常に floor 済みの整数として確定させ、上端は drawEnd 基準で 1 回だけ floor する
   // （drawEnd を二度参照するため別変数。drawEndRaw の floor 漏れによる 1px ズレを避ける狙い）
-  const drawEndRaw = Math.floor(safeLineHeight / 2 + h / 2)
-  const drawStartRaw = Math.floor(safeLineHeight / 2 + h / 2 - safeLineHeight * effectiveHeight)
+  // pitchOffsetPx は地平線（baseY = h/2 + offset）を上下にずらす効果を持ち、上端・下端の両方に同じ量だけ加わる
+  const drawEndRaw = Math.floor(safeLineHeight / 2 + h / 2 + safePitchOffset)
+  const drawStartRaw = Math.floor(
+    safeLineHeight / 2 + h / 2 + safePitchOffset - safeLineHeight * effectiveHeight
+  )
   const drawStartY = drawStartRaw < 0 ? 0 : drawStartRaw > h ? h : drawStartRaw
   const drawEndY = drawEndRaw < 0 ? 0 : drawEndRaw > h ? h : drawEndRaw
   return { drawStartY, drawEndY }

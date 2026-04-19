@@ -410,6 +410,7 @@ uv sync
 - ✅ スナップショット方式リファクタリング（#26）— NovelGameState / resolveEvents / SeekBar / applyState 宣言的復元 / SaveSlotData 拡張
 - ✅ 壁テクスチャマッピング（#48）— ストライプ Sprite プール、デモ木目/水面、フォグ適用
 - ✅ 壁高さ（段差）対応（#49 Phase 1）— wallHeights[y][x]、computeWallYRange、サンプルマップに段差追加
+- ✅ pitch（上下視線、#80 Phase 2-1）— PageUp/PageDown、±0.4 rad、純粋関数引数拡張
 
 ## 参考ドキュメント
 
