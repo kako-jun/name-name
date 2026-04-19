@@ -190,3 +190,21 @@ export function computeEffectiveFogMaxDist(baseFogMaxDist: number, wallHeight: n
   }
   return baseFogMaxDist * wallHeight
 }
+
+/**
+ * 床高さグリッド（[y][x]）から指定タイルの床高さを返す純粋関数（Issue #84）。
+ *
+ * - `grid` が `undefined`、該当行が未定義、セルが未定義、値が有限数でない場合は `0` を返す（地面扱い）
+ * - 負値はそのまま返す（地面より沈み込む表現を許容する）
+ *
+ * `getWallHeight` の fallback=1 に対し、床高さは fallback=0（地面）。
+ * プレイヤーがそのタイルに踏み込んだときのカメラ高さオフセットとして使う。
+ */
+export function resolveFloorHeight(grid: number[][] | undefined, tx: number, ty: number): number {
+  if (!grid) return 0
+  const row = grid[ty]
+  if (!row) return 0
+  const v = row[tx]
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 0
+  return v
+}

@@ -3,6 +3,7 @@ import {
   computeEffectiveFogMaxDist,
   computeWallYRange,
   projectNpcToScreen,
+  resolveFloorHeight,
 } from './raycastProjection'
 
 describe('projectNpcToScreen', () => {
@@ -459,5 +460,62 @@ describe('computeEffectiveFogMaxDist', () => {
 
   it('wallHeight=-Infinity も base 扱い（防御、wallHeight<=1 ルートに乗る）', () => {
     expect(computeEffectiveFogMaxDist(base, Number.NEGATIVE_INFINITY)).toBe(base)
+  })
+})
+
+describe('resolveFloorHeight', () => {
+  // Issue #84: 床高さグリッドから指定タイルの床高さを返す純粋関数。
+  // `getWallHeight` と異なり fallback は 0（地面）。負値はそのまま返す（沈み込みを許容）。
+
+  it('grid=undefined は 0 を返す', () => {
+    expect(resolveFloorHeight(undefined, 0, 0)).toBe(0)
+  })
+
+  it('通常の正値はそのまま返す', () => {
+    const grid = [[0.5]]
+    expect(resolveFloorHeight(grid, 0, 0)).toBe(0.5)
+  })
+
+  it('範囲外インデックス（x >= width）は 0 を返す', () => {
+    const grid = [
+      [0.5, 1.0],
+      [0.25, 0.75],
+    ]
+    expect(resolveFloorHeight(grid, 5, 0)).toBe(0)
+  })
+
+  it('範囲外インデックス（y >= height）は 0 を返す', () => {
+    const grid = [[0.5, 1.0]]
+    expect(resolveFloorHeight(grid, 0, 5)).toBe(0)
+  })
+
+  it('行が未定義（sparse）なら 0 を返す', () => {
+    const grid: number[][] = []
+    grid[2] = [0.5]
+    // 行 0 は未定義
+    expect(resolveFloorHeight(grid, 0, 0)).toBe(0)
+    // 行 2 の 0 列目は 0.5
+    expect(resolveFloorHeight(grid, 0, 2)).toBe(0.5)
+  })
+
+  it('セルが NaN なら 0 を返す', () => {
+    const grid = [[Number.NaN]]
+    expect(resolveFloorHeight(grid, 0, 0)).toBe(0)
+  })
+
+  it('セルが Infinity なら 0 を返す', () => {
+    const grid = [[Number.POSITIVE_INFINITY]]
+    expect(resolveFloorHeight(grid, 0, 0)).toBe(0)
+  })
+
+  it('負値はそのまま返す（沈み込み表現を許容）', () => {
+    const grid = [[-0.5]]
+    expect(resolveFloorHeight(grid, 0, 0)).toBe(-0.5)
+  })
+
+  it('負のインデックスは 0 を返す', () => {
+    const grid = [[0.5]]
+    expect(resolveFloorHeight(grid, -1, 0)).toBe(0)
+    expect(resolveFloorHeight(grid, 0, -1)).toBe(0)
   })
 })

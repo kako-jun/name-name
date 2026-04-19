@@ -21,6 +21,7 @@ import {
   computeEffectiveFogMaxDist,
   computeWallYRange,
   projectNpcToScreen,
+  resolveFloorHeight,
 } from './raycastProjection'
 import {
   clearDemoWallCache,
@@ -85,6 +86,8 @@ export class RaycastRenderer {
   private mapTiles: number[][] = []
   /** タイルごとの壁高さ（[y][x]、1.0 = 従来挙動）。undefined 時は全タイル 1.0 扱い（Issue #49 Phase 1） */
   private wallHeights?: number[][]
+  /** タイルごとの床高さ（[y][x]、0.0 = 地面標準）。undefined 時は全タイル 0.0 扱い（Issue #84） */
+  private floorHeights?: number[][]
   private mapWidth = 0
   private mapHeight = 0
   /** スプライトシートセルサイズ（マップの tileSize と揃える）。NPC テクスチャ切り出しで使用 */
@@ -98,10 +101,15 @@ export class RaycastRenderer {
   private playerAngle = 0 // radians; 0 = +x (right)
   /** プレイヤーの上下視線（rad）。正で上向き（画面中央が下にシフト）。Issue #80 Phase 2 */
   private playerPitch = 0
-  /** プレイヤーのカメラ高さ（タイル単位）。0 = 地面（標準視点）、正でジャンプ中。Issue #80 Phase 2-2 */
-  private playerZ = 0
+  /** ジャンプ由来のカメラ高さオフセット（タイル単位、足元の床面からの相対高）。
+   *  0 = 床面、正でジャンプ中。Issue #80 Phase 2-2（旧 playerZ）。Issue #84 でリネーム。 */
+  private playerJumpZ = 0
   /** プレイヤーの鉛直方向速度（タイル/秒）。正で上昇中、負で落下中。Issue #80 Phase 2-2 */
   private playerVZ = 0
+  /** 現在踏んでいるタイルの床高さ（タイル単位、0 = 地面標準）。Issue #84。
+   *  移動で踏みしめた瞬間に `resolveFloorHeight` で更新（補間なし）。
+   *  カメラ総オフセット = playerGroundZ + playerJumpZ。 */
+  private playerGroundZ = 0
 
   private screenWidth = 0
   private screenHeight = 0
@@ -187,6 +195,7 @@ export class RaycastRenderer {
 
     this.mapTiles = gameData.map.tiles
     this.wallHeights = gameData.map.wallHeights
+    this.floorHeights = gameData.map.floorHeights
     this.mapWidth = gameData.map.width
     this.mapHeight = gameData.map.height
     this.tileSize = gameData.map.tileSize
@@ -204,6 +213,15 @@ export class RaycastRenderer {
     ) {
       console.warn('[RaycastRenderer] wallHeights dimensions mismatch (falls back to 1.0 per cell)')
     }
+    if (
+      this.floorHeights &&
+      (this.floorHeights.length !== this.mapHeight ||
+        this.floorHeights.some((r) => r.length !== this.mapWidth))
+    ) {
+      console.warn(
+        '[RaycastRenderer] floorHeights dimensions mismatch (falls back to 0.0 per cell)'
+      )
+    }
 
     this.rebuildNpcObjects(gameData.npcs)
 
@@ -214,8 +232,14 @@ export class RaycastRenderer {
     // pitch は load() ごとに 0（水平）にリセット。データモデル化は将来 Issue
     this.playerPitch = 0
     // ジャンプ状態も load() ごとに地面・静止にリセット（Issue #80 Phase 2-2）
-    this.playerZ = 0
+    this.playerJumpZ = 0
     this.playerVZ = 0
+    // 初期タイルの床高さに合わせる（Issue #84）
+    this.playerGroundZ = resolveFloorHeight(
+      this.floorHeights,
+      Math.floor(this.playerX),
+      Math.floor(this.playerY)
+    )
 
     this.lastTickMs = performance.now()
     this.keys.clear()
@@ -390,12 +414,12 @@ export class RaycastRenderer {
   }
 
   /**
-   * ジャンプ入力（Z キー押下時）。着地中（playerZ === 0 かつ playerVZ === 0）にのみ
+   * ジャンプ入力（Z キー押下時）。着地中（playerJumpZ === 0 かつ playerVZ === 0）にのみ
    * `jumpInitialV` を鉛直速度に与える。空中では無視されるため、ジャンプ中の二段ジャンプは不可。
-   * Issue #80 Phase 2-2。
+   * Issue #80 Phase 2-2。床段差の上（playerGroundZ > 0）でもジャンプ可能（Issue #84）。
    */
   private tryJump(): void {
-    if (this.playerZ === 0 && this.playerVZ === 0) {
+    if (this.playerJumpZ === 0 && this.playerVZ === 0) {
       this.playerVZ = this.jumpInitialV
     }
   }
@@ -563,14 +587,23 @@ export class RaycastRenderer {
       }
     }
 
+    // 床段差（Issue #84）: 移動処理後、現在踏んでいるタイルの床高さに合わせる（瞬時切替・補間なし）。
+    // 移動していない場合でも毎フレーム更新するが、同値代入になるだけで副作用はない。
+    this.playerGroundZ = resolveFloorHeight(
+      this.floorHeights,
+      Math.floor(this.playerX),
+      Math.floor(this.playerY)
+    )
+
     // ジャンプ・重力（Issue #80 Phase 2-2）。
-    // 着地中（playerZ===0 かつ playerVZ===0）はスキップして無駄計算を避ける。
-    // ジャンプ中は壁衝突判定（isPassable）を変えない方針なので、空中でも壁の上には乗れない。
-    if (this.playerZ > 0 || this.playerVZ !== 0) {
+    // 着地中（playerJumpZ===0 かつ playerVZ===0）はスキップして無駄計算を避ける。
+    // ジャンプは足元の床（playerGroundZ）からの相対高 playerJumpZ で管理するため、床段差の上でもジャンプ可能。
+    // 壁衝突判定（isPassable）は変えない方針なので、空中でも壁の上には乗れない。
+    if (this.playerJumpZ > 0 || this.playerVZ !== 0) {
       this.playerVZ -= this.gravity * dt
-      this.playerZ += this.playerVZ * dt
-      if (this.playerZ <= 0) {
-        this.playerZ = 0
+      this.playerJumpZ += this.playerVZ * dt
+      if (this.playerJumpZ <= 0) {
+        this.playerJumpZ = 0
         this.playerVZ = 0
       }
     }
@@ -638,10 +671,12 @@ export class RaycastRenderer {
     const rawPitchOffset = Math.round(Math.tan(this.playerPitch) * (h / 2))
     // 念のため [-h, h] にクランプ（pitch クランプ済みなので通常は ±0.4 rad ≈ ±42% h で収まる）
     const pitchOffsetPx = rawPitchOffset > h ? h : rawPitchOffset < -h ? -h : rawPitchOffset
-    // ジャンプ（Issue #80 Phase 2-2）→ カメラ高さ playerZ（タイル単位）を Y px に換算。
-    // playerZ 正でカメラが上 → 視点が高い → baseY が下シフト＝壁・NPC が下方向に見え、プレイヤーが上から見下ろす感
-    // 符号規約は pitchOffsetPx と同じ（正で baseY が下シフト）なので、そのまま加算してよい。
-    const rawCameraZOffset = Math.round(this.playerZ * (h / 2))
+    // ジャンプ（Issue #80 Phase 2-2）+ 床段差（Issue #84）→ カメラ高さ合算を Y px に換算。
+    // totalCameraZ = playerGroundZ（足元の床高さ）+ playerJumpZ（ジャンプ相対高）
+    // totalCameraZ が正でカメラが上 → 視点が高い → baseY が下シフト＝壁・NPC が下方向に見え、
+    // プレイヤーが上から見下ろす感。符号規約は pitchOffsetPx と同じ（正で baseY が下シフト）。
+    const totalCameraZ = this.playerGroundZ + this.playerJumpZ
+    const rawCameraZOffset = Math.round(totalCameraZ * (h / 2))
     // pitch と同じく [-h, h] にクランプ（pitch との対称性、合算後の極端値を防ぐ）
     const cameraZOffsetPx = rawCameraZOffset > h ? h : rawCameraZOffset < -h ? -h : rawCameraZOffset
     // 描画関数に渡す合算オフセット。computeWallYRange / projectNpcToScreen の pitchOffsetPx 引数は
