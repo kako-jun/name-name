@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { projectNpcToScreen } from './raycastProjection'
+import { computeWallYRange, projectNpcToScreen } from './raycastProjection'
 
 describe('projectNpcToScreen', () => {
   // 共通のカメラ設定: player (5.5, 5.5)、dir = +x、FOV 60° 相当
@@ -103,5 +103,98 @@ describe('projectNpcToScreen', () => {
     const npc = { x: 6.5, y: 5.5 }
     const result = projectNpcToScreen(npc, player, dir, degeneratePlane, screen, minDepth)
     expect(result).toBeNull()
+  })
+})
+
+describe('computeWallYRange', () => {
+  // 基準設定: h=480, lineHeight=200, wallHeight=1 のとき
+  //   drawEndRaw   = floor(100 + 240) = 340
+  //   drawStartRaw = floor(340 - 200) = 140
+  // 地面位置（drawEnd）は wallHeight に依らず 340 で不変。
+  // 注意: 本関数は Y 範囲を返すだけで、`drawEndY - drawStartY <= 0` のときの描画スキップは
+  // 呼び出し側責務（RaycastRenderer.renderFrame の drawHeight 判定）。
+
+  it('wallHeight=1 は従来挙動（中央±lineHeight/2）', () => {
+    const range = computeWallYRange(200, 1, 480)
+    expect(range.drawStartY).toBe(140)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('wallHeight=0.5 は上端が下がる（地面位置は不変）', () => {
+    // drawStartRaw = floor(340 - 200*0.5) = 240
+    const range = computeWallYRange(200, 0.5, 480)
+    expect(range.drawStartY).toBe(240)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('wallHeight=1.5 は上端が上に伸びる', () => {
+    // drawStartRaw = floor(340 - 200*1.5) = 40
+    const range = computeWallYRange(200, 1.5, 480)
+    expect(range.drawStartY).toBe(40)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('wallHeight=2 は上端が画面外クランプ', () => {
+    // drawStartRaw = floor(340 - 200*2) = -60 → 0 にクランプ
+    const range = computeWallYRange(200, 2, 480)
+    expect(range.drawStartY).toBe(0)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('wallHeight=0 は drawStart === drawEnd（描画なし）', () => {
+    // drawStartRaw = floor(340 - 0) = 340
+    const range = computeWallYRange(200, 0, 480)
+    expect(range.drawStartY).toBe(340)
+    expect(range.drawEndY).toBe(340)
+    expect(range.drawEndY - range.drawStartY).toBe(0)
+  })
+
+  it('wallHeight<0 は 0 扱い（drawStart===drawEnd）', () => {
+    const range = computeWallYRange(200, -1, 480)
+    expect(range.drawStartY).toBe(340)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('lineHeight が小さい（遠い壁）ケース: 中央付近に薄く収まる', () => {
+    // h=480, lineHeight=20, wallHeight=1
+    //   drawEndRaw   = floor(10 + 240) = 250
+    //   drawStartRaw = floor(250 - 20) = 230
+    const range = computeWallYRange(20, 1, 480)
+    expect(range.drawStartY).toBe(230)
+    expect(range.drawEndY).toBe(250)
+  })
+
+  it('lineHeight > h（近すぎる壁）で drawStart=0, drawEnd=h にクランプ', () => {
+    // h=480, lineHeight=800, wallHeight=1
+    //   drawEndRaw   = floor(400 + 240) = 640 → 480 にクランプ
+    //   drawStartRaw = floor(640 - 800) = -160 → 0 にクランプ
+    const range = computeWallYRange(800, 1, 480)
+    expect(range.drawStartY).toBe(0)
+    expect(range.drawEndY).toBe(480)
+  })
+
+  it('wallHeight=NaN は 0 扱い（drawStart===drawEnd）', () => {
+    const range = computeWallYRange(200, Number.NaN, 480)
+    expect(range.drawStartY).toBe(340)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('wallHeight=Infinity は 0 扱い', () => {
+    const range = computeWallYRange(200, Number.POSITIVE_INFINITY, 480)
+    expect(range.drawStartY).toBe(340)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('lineHeight=NaN は 0 扱い（drawStart===drawEnd=h/2）', () => {
+    const range = computeWallYRange(Number.NaN, 1, 480)
+    // safeLineHeight=0 → drawEndRaw=floor(0+240)=240, drawStartRaw=floor(240-0)=240
+    expect(range.drawStartY).toBe(240)
+    expect(range.drawEndY).toBe(240)
+  })
+
+  it('lineHeight<0 は 0 扱い', () => {
+    const range = computeWallYRange(-100, 1, 480)
+    expect(range.drawStartY).toBe(240)
+    expect(range.drawEndY).toBe(240)
   })
 })
