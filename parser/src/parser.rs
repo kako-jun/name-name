@@ -106,11 +106,24 @@ pub fn parse(input: &str) -> Document {
                     let (width, height, tile_size) = map_data;
                     pos += 1;
                     let mut raw_rows: Vec<&str> = Vec::with_capacity(height as usize);
-                    while pos < len && lines[pos].trim() != "[/マップ]" {
+                    let mut close_found = false;
+                    while pos < len {
+                        let l = lines[pos].trim();
+                        if l == "[/マップ]" {
+                            close_found = true;
+                            break;
+                        }
+                        // `[/マップ]` 欠落ガード: 行頭が `[` で始まり、[/マップ] でもない行が来たら
+                        // 別ブロックが突入したと判断してループ中断。`pos` はそのまま次のブロック
+                        // 処理に回す（break しなければ別ブロックがマップ行として消費されてしまう）。
+                        if l.starts_with('[') {
+                            emit_map_close_missing_warning(width, height, raw_rows.len());
+                            break;
+                        }
                         raw_rows.push(lines[pos]);
                         pos += 1;
                     }
-                    if pos < len {
+                    if close_found && pos < len {
                         pos += 1; // skip [/マップ]
                     }
 
@@ -155,14 +168,34 @@ pub fn parse(input: &str) -> Document {
             pos += 1;
             let end_tag = format!("[/{}]", kind.tag());
             let mut rows: Vec<Vec<f64>> = Vec::new();
+            let mut line_no: usize = 0;
             while pos < len && lines[pos].trim() != end_tag {
                 let raw = lines[pos].trim();
+                line_no += 1;
                 if !raw.is_empty() {
-                    let parsed_row: Vec<f64> = raw
+                    // 1 行に 1 トークンでも parse 失敗があれば、その行を丸ごと破棄して警告を出す。
+                    // collect::<Option<Vec<_>>>() は FromIterator の仕様で、any None で全体 None になる。
+                    let parsed_row: Option<Vec<f64>> = raw
                         .split_whitespace()
-                        .filter_map(|s| s.parse::<f64>().ok())
-                        .collect();
-                    rows.push(parsed_row);
+                        .map(|s| s.parse::<f64>().ok().map(|v| (s, v)))
+                        .collect::<Option<Vec<_>>>()
+                        .map(|pairs| pairs.into_iter().map(|(_, v)| v).collect());
+                    match parsed_row {
+                        Some(row) => rows.push(row),
+                        None => {
+                            // どのトークンが壊れているかを拾う
+                            let bad = raw
+                                .split_whitespace()
+                                .find(|s| s.parse::<f64>().is_err())
+                                .unwrap_or("?");
+                            emit_height_block_warning(&format!(
+                                "[{}] 行 {}: 数値でないトークン \"{}\" を検出、行を破棄しました",
+                                kind.tag(),
+                                line_no,
+                                bad
+                            ));
+                        }
+                    }
                 }
                 pos += 1;
             }
@@ -837,15 +870,22 @@ fn emit_map_dimension_warning(width: u32, height: u32, raw_rows: &[&str]) {
     {
         web_sys::console::warn_1(&msg.into());
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
     {
         eprintln!("{}", msg);
+    }
+    #[cfg(all(not(target_arch = "wasm32"), test))]
+    {
+        let _ = msg;
     }
 }
 
 /// 高さブロックの種別。tag() で `[...]` 内部の日本語ラベルを返す。
+///
+// TODO: warnings を Document の warnings フィールドに集約し、frontend で
+//       エディタ UI が視覚的に表示できる仕組みを検討（現状は eprintln のみ）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HeightKind {
+enum HeightKind {
     Wall,
     Floor,
     Ceiling,
@@ -862,8 +902,10 @@ impl HeightKind {
 }
 
 /// 行が高さブロックの開始タグ（`[壁高さ]` / `[床高さ]` / `[天井高さ]`）かを判定する。
+/// `trim()` は呼び出し側で既に済んでいる前提だが、末尾スペース等に耐えるため
+/// 念のため再度 `trim()` する。`[マップ ...]` 系のような属性は現状なし。
 fn detect_height_block(line: &str) -> Option<HeightKind> {
-    match line {
+    match line.trim() {
         "[壁高さ]" => Some(HeightKind::Wall),
         "[床高さ]" => Some(HeightKind::Floor),
         "[天井高さ]" => Some(HeightKind::Ceiling),
@@ -871,32 +913,51 @@ fn detect_height_block(line: &str) -> Option<HeightKind> {
     }
 }
 
-/// 高さブロックの行データを、直前の `Event::RpgMap` に注入する。
-/// 直前に RpgMap が無い / 既に該当フィールドが埋まっている場合は警告して破棄する。
+/// 高さブロックの行データを、**直前の** `Event::RpgMap` にのみ注入する。
+/// spec（「直前の `[マップ]` ブロックに紐付けられる」）と一致させるため、
+/// `events.last_mut()` を見る。直前の Event が RpgMap でなければ破棄。
+/// 既に該当フィールドが埋まっていれば「後勝ち」で上書きし警告を出す。
+/// 空ブロック（`rows.is_empty()`）は inject せず警告を出す。
+/// 行の列数がジャグっていたら警告だけ出し、値は保持する（validateMapHeights に委ねる）。
 fn inject_heights_into_last_map(events: &mut [Event], kind: HeightKind, rows: Vec<Vec<f64>>) {
-    // 末尾から直近の RpgMap を探す
-    for ev in events.iter_mut().rev() {
-        if let Event::RpgMap(map) = ev {
+    // 空ブロックは注入しない（Some(vec![]) が frontend に漏れると
+    // validateMapHeights が row-count-mismatch を誤検出する）。
+    if rows.is_empty() {
+        emit_height_block_warning(&format!("[{}] ブロックが空です。無視します", kind.tag()));
+        return;
+    }
+
+    // ジャグ配列チェック（警告だけ、破棄はしない）。
+    if let Some(first_len) = rows.first().map(|r| r.len()) {
+        if rows.iter().any(|r| r.len() != first_len) {
+            emit_height_block_warning(&format!("[{}] 各行の列数が不揃いです", kind.tag()));
+        }
+    }
+
+    // 末尾が RpgMap でなければ破棄。
+    match events.last_mut() {
+        Some(Event::RpgMap(map)) => {
             let slot: &mut Option<Vec<Vec<f64>>> = match kind {
                 HeightKind::Wall => &mut map.wall_heights,
                 HeightKind::Floor => &mut map.floor_heights,
                 HeightKind::Ceiling => &mut map.ceiling_heights,
             };
             if slot.is_some() {
+                // 「最後勝ち」に変更。エディタで上書きしたとき後から書いた方が勝つほうが直感的。
                 emit_height_block_warning(&format!(
-                    "duplicate [{}] block; keeping the first and ignoring this one",
+                    "[{}] ブロックが重複しています。後の定義で上書きしました",
                     kind.tag()
                 ));
-                return;
             }
             *slot = Some(rows);
-            return;
+        }
+        _ => {
+            emit_height_block_warning(&format!(
+                "[{}] ブロックの直前が [マップ] ではありません。破棄しました",
+                kind.tag()
+            ));
         }
     }
-    emit_height_block_warning(&format!(
-        "[{}] block appeared before any [マップ] block; ignoring",
-        kind.tag()
-    ));
 }
 
 fn emit_height_block_warning(detail: &str) {
@@ -905,9 +966,35 @@ fn emit_height_block_warning(detail: &str) {
     {
         web_sys::console::warn_1(&msg.into());
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    // テスト中は stderr を汚さない（question #15 の判断）。
+    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
     {
         eprintln!("{}", msg);
+    }
+    #[cfg(all(not(target_arch = "wasm32"), test))]
+    {
+        let _ = msg; // suppress unused in tests
+    }
+}
+
+/// `[/マップ]` 欠落時の警告。行頭 `[` で始まる別ブロックが突入した時点で
+/// マップブロックを打ち切るため、既に収集した行数を報告する。
+fn emit_map_close_missing_warning(width: u32, height: u32, collected_rows: usize) {
+    let msg = format!(
+        "[name-name-parser] warning: [/マップ] が見つからないうちに別ブロックが開始されました — 宣言 {}x{}, 収集済み {} 行",
+        width, height, collected_rows
+    );
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::warn_1(&msg.into());
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
+    {
+        eprintln!("{}", msg);
+    }
+    #[cfg(all(not(target_arch = "wasm32"), test))]
+    {
+        let _ = msg;
     }
 }
 

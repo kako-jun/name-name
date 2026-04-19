@@ -1,5 +1,6 @@
 use crate::models::*;
 use crate::parser::npc_base_slug;
+use std::fmt::Write as _;
 
 /// Emit a Document back to Markdown format.
 pub fn emit(doc: &Document) -> String {
@@ -354,6 +355,9 @@ fn needs_speaker_line(events: &[Event], idx: usize) -> bool {
     }
 }
 
+// 注: f64 演算結果（例: 0.1 + 0.2 = 0.30000000000000004）をそのまま書き戻すと
+// 冗長桁が出る。現状は parser 入力由来の値しか通らないので問題ないが、エディタ側で
+// 演算結果を書き戻す場合は整数または 0.25 刻みを推奨。必要なら ryu 等で丸める。
 fn format_number(n: f64) -> String {
     if n == n.floor() && n.is_finite() {
         format!("{}", n as i64)
@@ -366,7 +370,7 @@ fn format_number(n: f64) -> String {
 /// 行頭で空行を一つ挟み、ブロック終端の後は改行のみ残す（他ブロックのスタイルに合わせる）。
 fn emit_height_block(out: &mut String, tag: &str, rows: &[Vec<f64>]) {
     out.push('\n');
-    out.push_str(&format!("[{}]\n", tag));
+    writeln!(out, "[{}]", tag).unwrap();
     for row in rows {
         let mut first = true;
         for v in row {
@@ -378,7 +382,7 @@ fn emit_height_block(out: &mut String, tag: &str, rows: &[Vec<f64>]) {
         }
         out.push('\n');
     }
-    out.push_str(&format!("[/{}]\n", tag));
+    writeln!(out, "[/{}]", tag).unwrap();
 }
 
 #[cfg(test)]
