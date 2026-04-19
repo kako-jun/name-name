@@ -44,6 +44,13 @@ interface NPCRuntime {
 
 type DirectionLabel = 'up' | 'down' | 'left' | 'right'
 
+/**
+ * y-side（side=1）壁の基底シェード色。
+ * 立体感維持のため 0.7 倍で暗めにした白を `applyFog` のベースにする。
+ * 毎フレーム `darken(0xffffff, 0.7)` を呼ぶのは無駄なのでモジュール定数に昇格。
+ */
+const SIDE_SHADE_BASE = darken(0xffffff, 0.7)
+
 export class RaycastRenderer {
   private app: Application
   private worldLayer: Container
@@ -53,8 +60,13 @@ export class RaycastRenderer {
 
   private worldGraphics: Graphics | null = null
 
-  /** 壁用ストライプ Sprite プール。index = stripe index。texture/tint/visible を毎フレーム更新する */
+  /** 壁用ストライプ Sprite プール。index = stripe index。texture/tint/visible を毎フレーム更新する。
+   *  不変条件: `wallSpritesContainer.children[i] === this.stripeSprites[i]`（ensureStripePool が維持） */
   private stripeSprites: Sprite[] = []
+
+  /** 壁ストライプの perpDist を格納する z-buffer。NPC billboard の遮蔽判定で参照。
+   *  stripe プールと一緒にサイズ同期して再利用（毎フレーム new を避ける） */
+  private zBuffer: Float32Array = new Float32Array(0)
 
   /** 壁テクスチャ（TREE / WATER）。ロード完了後に使用、未ロード中は色ベタ fallback */
   private treeTexture: WallTextureSheet | null = null
@@ -169,7 +181,9 @@ export class RaycastRenderer {
     // 壁テクスチャを非同期ロード（完了まではベタ塗り fallback）。
     // 同じ RaycastRenderer で load() が複数回呼ばれても、wallTextureSheet 側の
     // WeakMap キャッシュにより RenderTexture は使い回される
-    this.ensureWallTextures()
+    this.ensureWallTextures().catch((e) => {
+      console.warn('[RaycastRenderer] wall textures load failed:', e)
+    })
   }
 
   private async ensureWallTextures(): Promise<void> {
@@ -178,7 +192,16 @@ export class RaycastRenderer {
       loadWallTexture('tree', renderer),
       loadWallTexture('water', renderer),
     ])
-    if (!this.initialized) return
+    // destroy とのレース: await 中に destroy が走った場合、今ロードしたシートは
+    // 代入せず即座に破棄する（そうしないと columns がリークする）
+    if (!this.initialized) {
+      tree?.destroy()
+      water?.destroy()
+      return
+    }
+    // 既存シートを先に destroy してから差し替える（load() 再呼び出し時のリーク対策）
+    this.treeTexture?.destroy()
+    this.waterTexture?.destroy()
     this.treeTexture = tree
     this.waterTexture = water
   }
@@ -254,18 +277,25 @@ export class RaycastRenderer {
     }
     if (this.initialized) {
       this.app.ticker.remove(this.onTick)
-      // app.destroy → clearDemoWallCache → clearDemoSheetCache の順。逆順だと cache の
-      // RenderTexture source を先に破棄してしまい、app.destroy で連鎖的に Sprite が破棄済み
-      // source を参照する可能性がある
+      // 順序:
+      //   1. initialized=false → 進行中の async ロードが完了したとき「代入せず破棄」ルートに流す
+      //   2. 派生 columns Texture を destroy（base source は共有なので壊さない）
+      //   3. app.destroy で Sprite / Container / Renderer を破棄
+      //   4. clearDemoWallCache / clearDemoSheetCache で base RenderTexture を destroy(true)
+      //      これを app.destroy より後ろに置くのは、逆順だと cache の RenderTexture source を
+      //      先に破棄してしまい、app.destroy で連鎖的に破棄済み source を参照する可能性があるため
+      this.initialized = false
+      this.treeTexture?.destroy()
+      this.waterTexture?.destroy()
+      this.treeTexture = null
+      this.waterTexture = null
       const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
       clearDemoWallCache(renderer)
       clearDemoSheetCache(renderer)
       this.stripeSprites = []
-      this.treeTexture = null
-      this.waterTexture = null
+      this.zBuffer = new Float32Array(0)
       this.dialogBox = null
-      this.initialized = false
     }
   }
 
@@ -352,12 +382,24 @@ export class RaycastRenderer {
    * 壁ストライプ Sprite プールを必要数まで増減する。
    * 足りない分は新規生成して wallSpritesContainer に addChild、
    * 余剰分は destroy して配列から削除する。
+   *
+   * 不変条件: `wallSpritesContainer.children[i] === this.stripeSprites[i]`（index 対応）。
+   * ここでは末尾追加・末尾削除のみ行うためこの対応が維持される。
+   * 他所で wallSpritesContainer.addChild/removeChild を直接触る場合はこの対応が壊れるので注意。
+   *
+   * Sprite の `width` setter は scale 計算を伴うため、毎フレーム呼ぶとコスト大。
+   * ストライプ幅は不変（stripeWidth）なので生成時に一度だけセットし、毎フレームは
+   * `height` のみ更新する。
+   *
+   * zBuffer サイズも同時に同期する（毎フレーム new を避ける）。
    */
   private ensureStripePool(target: number): void {
     while (this.stripeSprites.length < target) {
       const s = new Sprite(Texture.WHITE)
       s.anchor.set(0, 0.5)
       s.visible = false
+      // texture は 1px 幅 → `scale.x = stripeWidth` が実質セットされる（width setter 経由）
+      s.width = this.stripeWidth
       this.wallSpritesContainer.addChild(s)
       this.stripeSprites.push(s)
     }
@@ -366,6 +408,9 @@ export class RaycastRenderer {
       if (s) {
         s.destroy()
       }
+    }
+    if (this.zBuffer.length !== target) {
+      this.zBuffer = new Float32Array(target)
     }
   }
 
@@ -490,12 +535,10 @@ export class RaycastRenderer {
     const planeY = dirX * planeLen
 
     const numStripes = Math.ceil(w / this.stripeWidth)
-    const zBuffer = new Float32Array(numStripes)
 
-    // 壁 Sprite プールを必要数まで確保（lazy 成長）
+    // 壁 Sprite プールと zBuffer を必要数まで確保（lazy 成長、毎フレーム new を避ける）
     this.ensureStripePool(numStripes)
-    // テクスチャロード済みかどうか。未ロード中は worldGraphics に色ベタで描く fallback を使う
-    const texturesReady = this.treeTexture !== null && this.waterTexture !== null
+    const zBuffer = this.zBuffer
 
     for (let i = 0; i < numStripes; i++) {
       const screenX = i * this.stripeWidth
@@ -570,9 +613,13 @@ export class RaycastRenderer {
         const lineHeight = Math.floor(h / perpDist)
         const fog = Math.max(0, Math.min(1, 1 - perpDist / this.fogMaxDist))
 
-        if (texturesReady) {
+        // 個別判定: 該当 kind のシートだけが揃っていれば Sprite を使う。
+        // 「両方揃ってから切替」のフラグ方式だと、片方だけロード成功したケースで
+        // 不必要に fallback を続けてしまうため、stripe ごとに判断する。
+        const sheet: WallTextureSheet | null =
+          hitTile === TileType.WATER ? this.waterTexture : this.treeTexture
+        if (sheet) {
           // テクスチャストライプ方式: Sprite プールの texture/位置/tint を更新
-          const sheet = hitTile === TileType.WATER ? this.waterTexture! : this.treeTexture!
           const u = computeWallU(
             side as 0 | 1,
             perpDist,
@@ -582,12 +629,13 @@ export class RaycastRenderer {
             rayDirY
           )
           const col = uToColumn(u, sheet.width)
-          // y-side は従来同様に 0.7 倍で暗めにしてから fog 適用（立体感の維持）
-          const shadedBase = side === 1 ? darken(0xffffff, 0.7) : 0xffffff
+          // y-side は従来同様に 0.7 倍で暗めにしてから fog 適用（立体感の維持）。
+          // 値はモジュール定数（SIDE_SHADE_BASE）で 1 度だけ計算してある。
+          const shadedBase = side === 1 ? SIDE_SHADE_BASE : 0xffffff
           stripeSprite.texture = sheet.columns[col]
           stripeSprite.x = screenX
           stripeSprite.y = h / 2
-          stripeSprite.width = this.stripeWidth
+          // width は ensureStripePool で 1 度だけ設定済み（毎フレーム scale 計算を避ける）
           stripeSprite.height = lineHeight
           stripeSprite.tint = applyFog(shadedBase, fog)
           stripeSprite.visible = true

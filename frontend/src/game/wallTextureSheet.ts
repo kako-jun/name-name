@@ -10,7 +10,7 @@
  * から `computeWallU` → `uToColumn` で列 index を決め、ストライプ Sprite の texture に割り当てる。
  */
 
-import { Assets, Container, Graphics, Rectangle, RenderTexture, Renderer, Texture } from 'pixi.js'
+import { Container, Graphics, Rectangle, RenderTexture, Renderer, Texture } from 'pixi.js'
 
 export type WallTextureKind = 'tree' | 'water'
 
@@ -24,6 +24,11 @@ export interface WallTextureSheet {
   columns: Texture[]
   width: number
   height: number
+  /**
+   * 派生 columns Texture を解放する。base source は共有（`demoWallCache` or Assets 側）なので
+   * touch しない。base 本体の解放は `clearDemoWallCache(renderer)` 側が担当する。
+   */
+  destroy(): void
 }
 
 /**
@@ -40,13 +45,15 @@ export function uToColumn(u: number, width: number): number {
 }
 
 /**
- * 壁ヒット位置から u 座標（[0, 1]）を算出する純粋関数。
+ * 壁ヒット位置から u 座標（[0, 1)）を算出する純粋関数。
  *
  * Lodev 方式:
  *  - side=0（x-side に当たった）→ wallY = playerY + perpDist * rayDirY の小数部
  *  - side=1（y-side に当たった）→ wallX = playerX + perpDist * rayDirX の小数部
  *  - u 反転: side=0 && rayDirX > 0 のときと、side=1 && rayDirY < 0 のとき u = 1 - u
  *    （テクスチャの「左右」がレイの来る向きに対して常に同じ向きに見えるようにする）
+ *
+ * @see https://lodev.org/cgtutor/raycasting.html
  */
 export function computeWallU(
   hitSide: 0 | 1,
@@ -67,11 +74,18 @@ export function computeWallU(
   if (hitSide === 1 && rayDirY < 0) u = 1 - u
   // 浮動小数の境界で負の微小値になる可能性をクランプ
   if (u < 0) u = 0
+  // u >= 1 を 1 - 1e-6 に丸める: `uToColumn` 側でも width-1 へのクランプで救われるが、
+  // 呼び出し側で `u === 1` を直接等号比較するケースや、[0, 1) の半開区間契約に依存する
+  // 呼び出し側の歴史的境界回避のため、ここで閉じておく
   if (u >= 1) u = 1 - 1e-6
   return u
 }
 
-/** ベーステクスチャから縦ストライプ配列を切り出す */
+/**
+ * ベーステクスチャから縦ストライプ配列を切り出す。
+ * base source を共有するため、個別 Texture を destroy するときは
+ * `tex.destroy(false)` で呼び、base source を壊さないこと。
+ */
 function sliceColumns(base: Texture, width: number, height: number): Texture[] {
   const cols: Texture[] = []
   for (let x = 0; x < width; x++) {
@@ -94,7 +108,8 @@ function drawDemoTree(size: number): Graphics {
   // ベース
   g.rect(0, 0, size, size).fill(0x1a3a1a)
 
-  // 木目の縦ライン（濃いめ）。幅・位置はジグザグにして単調さを避ける
+  // 木目の縦ライン（濃いめ）。幅・位置はジグザグにして単調さを避ける。
+  // 値は TEXTURE_WIDTH=64 前提で手動調整済み（可変幅対応は将来 Issue）
   const grainCols = [8, 18, 27, 39, 48, 57]
   for (const col of grainCols) {
     for (let y = 0; y < size; y++) {
@@ -103,7 +118,7 @@ function drawDemoTree(size: number): Graphics {
     }
   }
 
-  // 明るめの縦ハイライト（木の反射）
+  // 明るめの縦ハイライト（木の反射）。TEXTURE_WIDTH=64 前提
   const highlightCols = [14, 33, 52]
   for (const col of highlightCols) {
     for (let y = 0; y < size; y++) {
@@ -206,32 +221,29 @@ export function clearDemoWallCache(renderer: Renderer): void {
 
 /**
  * 壁テクスチャシートを得る。`kind` に応じて `__demo_tree` / `__demo_water` を手続き生成する。
- * 将来的に外部画像パスを渡せるよう、第 3 引数に `externalPath` を許容する（省略時はデモ生成）。
+ *
+ * Phase 1 では外部画像パス引数を受け付けない（未使用 + センチネル値の混乱回避）。
+ * Phase 2（プロジェクトごとの `assets/textures/{name}.png` 読み込み）は別 Issue で戻す。
+ *
  * ロード失敗時は null（呼び出し側で色ベタ fallback）。
  */
 export async function loadWallTexture(
   kind: WallTextureKind,
-  renderer: Renderer,
-  externalPath?: string
+  renderer: Renderer
 ): Promise<WallTextureSheet | null> {
-  if (externalPath && externalPath !== '__demo_tree' && externalPath !== '__demo_water') {
-    try {
-      const base = (await Assets.load(externalPath)) as Texture
-      return {
-        columns: sliceColumns(base, TEXTURE_WIDTH, TEXTURE_HEIGHT),
-        width: TEXTURE_WIDTH,
-        height: TEXTURE_HEIGHT,
-      }
-    } catch (e) {
-      console.warn(`[WallTextureSheet] failed to load wall texture "${externalPath}":`, e)
-      return null
-    }
-  }
-
   const base = getOrBuildDemoBase(renderer, kind)
+  const columns = sliceColumns(base, TEXTURE_WIDTH, TEXTURE_HEIGHT)
   return {
-    columns: sliceColumns(base, TEXTURE_WIDTH, TEXTURE_HEIGHT),
+    columns,
     width: TEXTURE_WIDTH,
     height: TEXTURE_HEIGHT,
+    destroy() {
+      // base source は demoWallCache（または Assets）側が共有・管理するので触らない。
+      // 派生 frame Texture のみ個別に destroy する（false: base を壊さない）
+      for (const tex of columns) {
+        tex.destroy(false)
+      }
+      columns.length = 0
+    },
   }
 }
