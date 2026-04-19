@@ -275,8 +275,12 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     Some(d) => format!(" 向き={}", direction_ja(d)),
                     None => String::new(),
                 };
+                let portrait_suffix = match &npc.portrait {
+                    Some(path) if !path.is_empty() => format!(" portrait={}", path),
+                    _ => String::new(),
+                };
                 out.push_str(&format!(
-                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}]\n",
+                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}{}]\n",
                     npc.name,
                     npc.x,
                     npc.y,
@@ -284,7 +288,8 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     id_suffix,
                     sprite_suffix,
                     frames_suffix,
-                    direction_suffix
+                    direction_suffix,
+                    portrait_suffix
                 ));
                 for line in &npc.message {
                     out.push_str(line);

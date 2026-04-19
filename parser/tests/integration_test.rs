@@ -967,6 +967,68 @@ hi
 }
 
 #[test]
+fn test_rpg_npc_portrait_round_trip() {
+    // Issue #73 Phase 1: `portrait=` 属性の双方向変換。
+    // 未指定の NPC は portrait = None のまま維持される。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[NPC elder @5,3 色=#ff0000 portrait=elder_portrait.png]
+hi
+[/NPC]
+
+[NPC kid @2,2 色=#00aaff sprite=kid.png portrait=kid_portrait.png]
+hey
+[/NPC]
+
+[NPC plain @0,0 色=#888888]
+no portrait
+[/NPC]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3);
+    if let Event::Npc(n) = &events[0] {
+        assert_eq!(n.portrait.as_deref(), Some("elder_portrait.png"));
+    } else {
+        panic!("Expected Npc");
+    }
+    if let Event::Npc(n) = &events[1] {
+        assert_eq!(n.portrait.as_deref(), Some("kid_portrait.png"));
+        assert_eq!(n.sprite.as_deref(), Some("kid.png"));
+    } else {
+        panic!("Expected Npc");
+    }
+    if let Event::Npc(n) = &events[2] {
+        assert_eq!(n.portrait, None, "portrait absent when not specified");
+    } else {
+        panic!("Expected Npc");
+    }
+
+    // Round-trip
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("portrait=elder_portrait.png"));
+    assert!(emitted.contains("portrait=kid_portrait.png"));
+    // plain NPC should NOT gain portrait after round-trip
+    let plain_line = emitted
+        .lines()
+        .find(|l| l.contains("[NPC plain "))
+        .expect("plain NPC header should exist");
+    assert!(
+        !plain_line.contains("portrait="),
+        "plain NPC should not emit portrait=: {}",
+        plain_line
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
 fn test_rpg_map_dimension_mismatch_row_count_short() {
     // Declared 5x4, actual 2 rows: parser tolerantly pads to 4 with zero rows,
     // and a warning is emitted to stderr. The panic-free behavior is what we

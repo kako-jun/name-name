@@ -89,6 +89,13 @@ pub struct NpcData {
     /// 自律移動は未対応のためアイドル中はこの向きのまま。将来の「話しかけ時にプレイヤーを向く」拡張はレンダラー側で上書きする想定。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<Direction>,
+    /// 会話ダイアログに表示する顔画像（portrait）への相対パス（例: `elder_portrait.png`）。
+    /// 未指定の場合は RpgDialogBox に顔枠が表示されず従来どおり名前＋本文のみの表示になる。
+    /// Issue #73 Phase 1 で追加。VN 風の固定顔枠のみで、動的表情切替（Phase 2 / #101）は含まない。
+    /// parser は値を生文字列として透過する（パス存在や形式の検証はレンダラー側の責務）。
+    /// Markdown 属性は空白区切りのためパスに空白を含められない（引用記法は未対応）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portrait: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
