@@ -25,6 +25,12 @@ export interface RpgMapData {
   height: number
   tile_size: number
   tiles: number[][]
+  /** タイル座標 [y][x] ごとの壁高さ。未指定なら null（Issue #90） */
+  wall_heights?: number[][] | null
+  /** タイル座標 [y][x] ごとの床高さ。未指定なら null（Issue #90） */
+  floor_heights?: number[][] | null
+  /** タイル座標 [y][x] ごとの天井高さ。未指定なら null（Issue #90） */
+  ceiling_heights?: number[][] | null
 }
 
 export interface NpcData {
