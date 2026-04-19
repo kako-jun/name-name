@@ -88,6 +88,10 @@ export class RaycastRenderer {
   private playerAngle = 0 // radians; 0 = +x (right)
   /** プレイヤーの上下視線（rad）。正で上向き（画面中央が下にシフト）。Issue #80 Phase 2 */
   private playerPitch = 0
+  /** プレイヤーのカメラ高さ（タイル単位）。0 = 地面（標準視点）、正でジャンプ中。Issue #80 Phase 2-2 */
+  private playerZ = 0
+  /** プレイヤーの鉛直方向速度（タイル/秒）。正で上昇中、負で落下中。Issue #80 Phase 2-2 */
+  private playerVZ = 0
 
   private screenWidth = 0
   private screenHeight = 0
@@ -107,6 +111,11 @@ export class RaycastRenderer {
   // pitch クランプ ±0.4 rad（≒ ±23°）。Lodev 方式の `Math.tan(pitch) * h/2` でも 0.4 rad で
   // h/2 の約 42% シフトに収まり、画面外破綻を起こさない目安。広げすぎると床/天井が破綻して見える。
   private readonly pitchMaxAbs = 0.4
+  // ジャンプ初速 3.0 タイル/秒、重力 12.0 タイル/秒^2（Issue #80 Phase 2-2）。
+  // 最高到達高 = v^2 / (2g) = 9 / 24 = 0.375 タイル分、滞空時間 = 2v/g = 0.5 秒。
+  // 控えめだが視点が変わる感覚は十分得られる程度の設定。連続ジャンプ防止のため着地中のみ受け付ける。
+  private readonly jumpInitialV = 3.0
+  private readonly gravity = 12.0
   // フォグ上限 12 タイル: マップサイズ（通常 16x12 前後）に対して「遠くの壁は薄く霞む」ことを狙った値。
   // 大きくすると遠景まで鮮明に見えて没入感が減り、小さくすると視界が狭く感じる。
   private readonly fogMaxDist = 12
@@ -194,6 +203,9 @@ export class RaycastRenderer {
     this.playerAngle = directionToAngle(gameData.player.direction)
     // pitch は load() ごとに 0（水平）にリセット。データモデル化は将来 Issue
     this.playerPitch = 0
+    // ジャンプ状態も load() ごとに地面・静止にリセット（Issue #80 Phase 2-2）
+    this.playerZ = 0
+    this.playerVZ = 0
 
     this.lastTickMs = performance.now()
     this.keys.clear()
@@ -351,9 +363,29 @@ export class RaycastRenderer {
     }
 
     const k = normalizeKey(e.key)
+    // ジャンプは「押下時に1回だけ反応」する性質なので、keys set には載せず
+    // handleKeyDown で直接処理する（連続キー入力で多重ジャンプしないよう e.repeat を弾く）
+    if (k === 'jump') {
+      e.preventDefault()
+      if (!e.repeat) {
+        this.tryJump()
+      }
+      return
+    }
     if (isMovementKey(k)) {
       e.preventDefault()
       this.keys.add(k)
+    }
+  }
+
+  /**
+   * ジャンプ入力（Z キー押下時）。着地中（playerZ === 0 かつ playerVZ === 0）にのみ
+   * `jumpInitialV` を鉛直速度に与える。空中では無視されるため、ジャンプ中の二段ジャンプは不可。
+   * Issue #80 Phase 2-2。
+   */
+  private tryJump(): void {
+    if (this.playerZ === 0 && this.playerVZ === 0) {
+      this.playerVZ = this.jumpInitialV
     }
   }
 
@@ -376,7 +408,8 @@ export class RaycastRenderer {
     if (npc) {
       this.dialogBox?.show(npc.data.name, npc.data.message)
       // ダイアログ表示中は updateMovement がスキップされるため、押されたままのキー
-      // （移動・回転・pitch）が残留する。閉じた瞬間にジャンプしないよう一括クリア。
+      // （移動・回転・pitch）が残留する。閉じた瞬間に意図しない挙動にならないよう一括クリア。
+      // ジャンプは keys set ではなく handleKeyDown 直接処理 + dialog ガードで防がれているので対象外。
       this.keys.clear()
     }
   }
@@ -515,6 +548,18 @@ export class RaycastRenderer {
         this.playerY = nextY
       }
     }
+
+    // ジャンプ・重力（Issue #80 Phase 2-2）。
+    // 着地中（playerZ===0 かつ playerVZ===0）はスキップして無駄計算を避ける。
+    // ジャンプ中は壁衝突判定（isPassable）を変えない方針なので、空中でも壁の上には乗れない。
+    if (this.playerZ > 0 || this.playerVZ !== 0) {
+      this.playerVZ -= this.gravity * dt
+      this.playerZ += this.playerVZ * dt
+      if (this.playerZ <= 0) {
+        this.playerZ = 0
+        this.playerVZ = 0
+      }
+    }
   }
 
   private isPassable(x: number, y: number): boolean {
@@ -576,12 +621,20 @@ export class RaycastRenderer {
 
     // pitch（上下視線、Issue #80 Phase 2）→ 画面中央 Y のシフト px。
     // Lodev 方式の `Math.tan(pitch) * h/2`。pitch 正で baseY が下にシフト → 空が広く見える＝視線が上向き。
-    // 空・床の分割位置 / 壁 Y 範囲 / NPC Y 範囲のすべてに同じオフセットを適用する。
     const rawPitchOffset = Math.round(Math.tan(this.playerPitch) * (h / 2))
     // 念のため [-h, h] にクランプ（pitch クランプ済みなので通常は ±0.4 rad ≈ ±42% h で収まる）
     const pitchOffsetPx = rawPitchOffset > h ? h : rawPitchOffset < -h ? -h : rawPitchOffset
-    // 空・床ベタ塗りの境界 Y。[0, h] にクランプして負/超過の高さを避ける。
-    const horizonY = h / 2 + pitchOffsetPx
+    // ジャンプ（Issue #80 Phase 2-2）→ カメラ高さ playerZ（タイル単位）を Y px に換算。
+    // playerZ 正でカメラが上 → 視点が高い → baseY が下シフト＝壁・NPC が下方向に見え、プレイヤーが上から見下ろす感
+    // 符号規約は pitchOffsetPx と同じ（正で baseY が下シフト）なので、そのまま加算してよい。
+    const rawCameraZOffset = Math.round(this.playerZ * (h / 2))
+    // pitch と同じく [-h, h] にクランプ（pitch との対称性、合算後の極端値を防ぐ）
+    const cameraZOffsetPx = rawCameraZOffset > h ? h : rawCameraZOffset < -h ? -h : rawCameraZOffset
+    // 描画関数に渡す合算オフセット。computeWallYRange / projectNpcToScreen の pitchOffsetPx 引数は
+    // 「pitch 由来 + cameraZ 由来」の合算 Y シフトを受け取る契約に汎化済み（純粋関数側 JSDoc 参照）。
+    const totalYOffsetPx = pitchOffsetPx + cameraZOffsetPx
+    // 空・床ベタ塗りの境界 Y。Math.floor で整数化（h が奇数のときのサブピクセル値を避ける）+ [0, h] クランプ。
+    const horizonY = Math.floor(h / 2 + totalYOffsetPx)
     const horizonClamped = horizonY < 0 ? 0 : horizonY > h ? h : horizonY
 
     // 空・床のベタ塗り（pitch に応じて分割位置を上下に動かす）
@@ -684,7 +737,12 @@ export class RaycastRenderer {
         // wallHeight=1.0 なら従来挙動、0.5 なら腰高の柵、1.5 なら塔。
         // 地面位置（drawEndY）は wallHeight に依らず不変で、上端（drawStartY）が伸縮する。
         const wallHeight = this.getWallHeight(mapX, mapY)
-        const { drawStartY, drawEndY } = computeWallYRange(lineHeight, wallHeight, h, pitchOffsetPx)
+        const { drawStartY, drawEndY } = computeWallYRange(
+          lineHeight,
+          wallHeight,
+          h,
+          totalYOffsetPx
+        )
         const drawHeight = drawEndY - drawStartY
 
         // wallHeight<=0 で高さゼロ → 描画なし
@@ -747,7 +805,7 @@ export class RaycastRenderer {
         { x: planeX, y: planeY },
         { width: w, height: h },
         this.npcSpriteMinDepth,
-        pitchOffsetPx
+        totalYOffsetPx
       )
       if (!proj) {
         n.container.visible = false
@@ -775,10 +833,11 @@ export class RaycastRenderer {
         n.sprite.tint = applyFog(n.data.color, fog)
       }
 
-      // Sprite 配置とサイズ。anchor=(0.5,0.5) なので Y は baseY = h/2 + pitchOffsetPx に置く
-      // （projectNpcToScreen の drawStartY/EndY と同じ baseY を共有させる）
+      // Sprite 配置とサイズ。anchor=(0.5,0.5) なので Y は baseY = h/2 + totalYOffsetPx に置く
+      // （projectNpcToScreen の drawStartY/EndY と同じ baseY を共有させる。
+      //  totalYOffsetPx = pitchOffsetPx + cameraZOffsetPx で pitch とジャンプを合算）
       n.sprite.x = spriteScreenX
-      n.sprite.y = h / 2 + pitchOffsetPx
+      n.sprite.y = h / 2 + totalYOffsetPx
       n.sprite.width = spriteWidthPx
       n.sprite.height = spriteHeight
       n.container.visible = true
@@ -858,6 +917,9 @@ function normalizeKey(key: string): string {
       return 'pitch_up'
     case 'PageDown':
       return 'pitch_down'
+    case 'z':
+    case 'Z':
+      return 'jump'
     default:
       return ''
   }
@@ -872,7 +934,8 @@ function isMovementKey(k: string): boolean {
     k === 'strafe_left' ||
     k === 'strafe_right' ||
     k === 'pitch_up' ||
-    k === 'pitch_down'
+    k === 'pitch_down' ||
+    k === 'jump'
   )
 }
 

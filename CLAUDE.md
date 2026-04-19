@@ -411,6 +411,7 @@ uv sync
 - ✅ 壁テクスチャマッピング（#48）— ストライプ Sprite プール、デモ木目/水面、フォグ適用
 - ✅ 壁高さ（段差）対応（#49 Phase 1）— wallHeights[y][x]、computeWallYRange、サンプルマップに段差追加
 - ✅ pitch（上下視線、#80 Phase 2-1）— PageUp/PageDown、±0.4 rad、純粋関数引数拡張
+- ✅ ジャンプ（#80 Phase 2-2）— Z キー、playerZ/playerVZ + 重力（jumpInitialV=3.0、gravity=12.0、最高 0.375 タイル）、cameraZOffsetPx を pitchOffsetPx と合算して描画基準にシフト
 
 ## 参考ドキュメント
 
