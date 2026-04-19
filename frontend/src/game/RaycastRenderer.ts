@@ -32,6 +32,7 @@ import {
   uToColumn,
   type WallTextureSheet,
 } from './wallTextureSheet'
+import { formatHeightError, validateMapHeights } from './mapValidation'
 
 interface NPCRuntime {
   data: NPCData
@@ -212,30 +213,11 @@ export class RaycastRenderer {
     ) {
       console.warn('[RaycastRenderer] map tiles dimensions mismatch')
     }
-    if (
-      this.wallHeights &&
-      (this.wallHeights.length !== this.mapHeight ||
-        this.wallHeights.some((r) => r.length !== this.mapWidth))
-    ) {
-      console.warn('[RaycastRenderer] wallHeights dimensions mismatch (falls back to 1.0 per cell)')
-    }
-    if (
-      this.floorHeights &&
-      (this.floorHeights.length !== this.mapHeight ||
-        this.floorHeights.some((r) => r.length !== this.mapWidth))
-    ) {
-      console.warn(
-        '[RaycastRenderer] floorHeights dimensions mismatch (falls back to 0.0 per cell)'
-      )
-    }
-    if (
-      this.ceilingHeights &&
-      (this.ceilingHeights.length !== this.mapHeight ||
-        this.ceilingHeights.some((r) => r.length !== this.mapWidth))
-    ) {
-      console.warn(
-        '[RaycastRenderer] ceilingHeights dimensions mismatch (falls back to 1.0 per cell)'
-      )
+    const heightValidation = validateMapHeights(gameData.map)
+    if (!heightValidation.ok) {
+      for (const err of heightValidation.errors) {
+        console.warn(`[RaycastRenderer] ${formatHeightError(err)} — falls back per cell`)
+      }
     }
 
     this.rebuildNpcObjects(gameData.npcs)
