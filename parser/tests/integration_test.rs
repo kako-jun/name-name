@@ -1440,6 +1440,215 @@ T.T
     assert_eq!(doc, doc2);
 }
 
+/// Issue #90 レビュー指摘 #6-a: 空の高さブロック `[壁高さ]\n[/壁高さ]` は
+/// `Some(vec![])` として保持せず、None のまま残す（空ブロックは警告を出して無視）。
+#[test]
+fn test_rpg_map_height_empty_block() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 3x2 タイル=32]
+TTT
+T.T
+[/マップ]
+
+[壁高さ]
+[/壁高さ]
+"#;
+    let doc = parser::parse(input);
+    if let Event::RpgMap(map) = &doc.chapters[0].scenes[0].events[0] {
+        assert_eq!(map.wall_heights, None);
+    } else {
+        panic!("Expected RpgMap");
+    }
+}
+
+/// Issue #90 レビュー指摘 #6-b: `[マップ]` より前に高さブロックが現れた場合、
+/// 直前に RpgMap がないので破棄される。後続の `[マップ]` には注入されない。
+#[test]
+fn test_rpg_map_height_before_map() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[壁高さ]
+1 1 1
+1 1 1
+[/壁高さ]
+
+[マップ 3x2 タイル=32]
+TTT
+T.T
+[/マップ]
+"#;
+    let doc = parser::parse(input);
+    if let Event::RpgMap(map) = &doc.chapters[0].scenes[0].events[0] {
+        assert_eq!(map.wall_heights, None);
+    } else {
+        panic!("Expected RpgMap");
+    }
+}
+
+/// Issue #90 レビュー指摘 #6-c + #11: 同じ種別の高さブロックが重複した場合、
+/// 「最後勝ち」で上書きする（エディタで書き換えたとき後者が勝つ方が直感的）。
+#[test]
+fn test_rpg_map_height_duplicate_block() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 2x2 タイル=32]
+TT
+TT
+[/マップ]
+
+[壁高さ]
+1 1
+1 1
+[/壁高さ]
+
+[壁高さ]
+2 2
+2 2
+[/壁高さ]
+"#;
+    let doc = parser::parse(input);
+    if let Event::RpgMap(map) = &doc.chapters[0].scenes[0].events[0] {
+        assert_eq!(
+            map.wall_heights.as_ref().unwrap(),
+            &vec![vec![2.0, 2.0], vec![2.0, 2.0]]
+        );
+    } else {
+        panic!("Expected RpgMap");
+    }
+}
+
+/// Issue #90 レビュー指摘 #6-d + #2: 数値でないトークンが 1 つでもあれば
+/// その行を丸ごと破棄して警告を出す（silent drop 禁止）。他の行は採用される。
+#[test]
+fn test_rpg_map_height_non_numeric_token() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 4x2 タイル=32]
+TTTT
+TTTT
+[/マップ]
+
+[壁高さ]
+1 2 abc 4
+1 1 1 1
+[/壁高さ]
+"#;
+    let doc = parser::parse(input);
+    if let Event::RpgMap(map) = &doc.chapters[0].scenes[0].events[0] {
+        // 1 行目 ("1 2 abc 4") は破棄され、2 行目 ("1 1 1 1") のみ採用される。
+        assert_eq!(
+            map.wall_heights.as_ref().unwrap(),
+            &vec![vec![1.0, 1.0, 1.0, 1.0]]
+        );
+    } else {
+        panic!("Expected RpgMap");
+    }
+}
+
+/// Issue #90 レビュー指摘 #6-e + #4: 高さブロックは **直前の** RpgMap にしか
+/// 紐付けない（`last_mut()` 方針）。`[マップ]→[プレイヤー]→[壁高さ]` では高さは破棄される。
+#[test]
+fn test_rpg_map_height_block_not_immediately_after_map() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 3x2 タイル=32]
+TTT
+T.T
+[/マップ]
+
+[プレイヤー @0,0 向き=下]
+
+[壁高さ]
+1 1 1
+1 1 1
+[/壁高さ]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::RpgMap(map) = &events[0] {
+        assert_eq!(
+            map.wall_heights, None,
+            "直前が PlayerStart なので壁高さは破棄される"
+        );
+    } else {
+        panic!("Expected RpgMap at [0]");
+    }
+    // PlayerStart は保持されている
+    assert!(
+        matches!(&events[1], Event::PlayerStart(_)),
+        "PlayerStart should be preserved"
+    );
+}
+
+/// Issue #90 レビュー指摘 #6-f + #1: `[/マップ]` 欠落時、次のブロック（`[壁高さ]`）
+/// が突入したらマップ収集を break + 警告。その `[壁高さ]` は独立ブロックとして解釈され、
+/// ただし直前が RpgMap であれば注入される（このケースは RpgMap が last なので注入される）。
+#[test]
+fn test_rpg_map_close_missing() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 3x2 タイル=32]
+TTT
+TGT
+[壁高さ]
+1 1 1
+1 1 1
+[/壁高さ]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    // [/マップ] が無いまま [壁高さ] が来たため、マップは 2 行分収集されて RpgMap になる。
+    // 続く [壁高さ] は独立ブロックとして解釈され、直前の RpgMap に注入される。
+    assert_eq!(events.len(), 1, "RpgMap 一つだけ（高さは inject される）");
+    if let Event::RpgMap(map) = &events[0] {
+        assert_eq!(map.width, 3);
+        assert_eq!(map.height, 2);
+        assert_eq!(
+            map.wall_heights.as_ref().unwrap(),
+            &vec![vec![1.0, 1.0, 1.0], vec![1.0, 1.0, 1.0]]
+        );
+    } else {
+        panic!("Expected RpgMap");
+    }
+}
+
 #[test]
 fn test_no_front_matter() {
     let input = r#"## 1-1: テスト
