@@ -48,8 +48,11 @@ export interface NpcProjection {
  * @param plane カメラ平面ベクトル（長さ = tan(fov/2)）
  * @param screen 描画キャンバスサイズ
  * @param minDepth スプライトサイズ計算時の深度下限。z-buffer 比較や `depth` フィールドには影響しない。
- * @param pitchOffsetPx 上下視線（pitch）による Y シフト px（Issue #80 Phase 2）。正で画面中央が下にシフト＝視線が上向き。
- *                       `NaN/Infinity` は `0` 扱い。デフォルト `0`（pitch 未対応の従来呼び出しは挙動不変）。
+ * @param pitchOffsetPx 画面中央 Y のシフト量（px）。Issue #80 Phase 2 で導入。
+ *                       pitch 由来の `Math.tan(pitch) * h/2` だけでなく、ジャンプ等のカメラ高さオフセット
+ *                       `playerZ * h/2`（Phase 2-2）を合算した値を渡せる。正で画面中央が下にシフト＝視線が上向き
+ *                       またはカメラ位置が上（プレイヤーがジャンプ中）。`NaN/Infinity` は `0` 扱い。
+ *                       デフォルト `0`（pitch/ジャンプ未対応の従来呼び出しは挙動不変）。
  */
 export function projectNpcToScreen(
   npc: Vec2,
@@ -139,8 +142,11 @@ export interface WallYRange {
  * @param lineHeight 高さ 1.0 の壁が占める縦px（Lodev 方式の h/perpDist）
  * @param wallHeight 壁の高さ倍率（0 以下・非有限は 0 扱い、上限なし）
  * @param screenHeight 画面高 px
- * @param pitchOffsetPx 上下視線（pitch）による Y シフト px（Issue #80 Phase 2）。正で画面中央が下にシフト＝視線が上向き。
- *                       `NaN/Infinity` は `0` 扱い。デフォルト `0`（pitch 未対応の従来呼び出しは挙動不変）。
+ * @param pitchOffsetPx 画面中央 Y のシフト量（px）。Issue #80 Phase 2 で導入。
+ *                       pitch 由来の `Math.tan(pitch) * h/2` だけでなく、ジャンプ等のカメラ高さオフセット
+ *                       `playerZ * h/2`（Phase 2-2）を合算した値を渡せる。正で画面中央が下にシフト＝視線が上向き
+ *                       またはカメラ位置が上（プレイヤーがジャンプ中）。`NaN/Infinity` は `0` 扱い。
+ *                       デフォルト `0`（pitch/ジャンプ未対応の従来呼び出しは挙動不変）。
  */
 export function computeWallYRange(
   lineHeight: number,
