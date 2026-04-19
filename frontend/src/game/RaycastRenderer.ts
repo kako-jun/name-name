@@ -6,7 +6,7 @@
  * 操作は WASD/矢印キー + Q/E（左右ストレイフ）、Enter/Space で正面 NPC と会話。
  */
 
-import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js'
+import { Application, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js'
 import { NPCData, RPGProject, TileType } from '../types/rpg'
 import { RpgDialogBox } from './RpgDialogBox'
 import {
@@ -25,6 +25,7 @@ import {
 } from './raycastProjection'
 import {
   clearDemoWallCache,
+  computeWallTextureCrop,
   computeWallU,
   loadWallTexture,
   uToColumn,
@@ -832,11 +833,26 @@ export class RaycastRenderer {
           // y-side は従来同様に 0.7 倍で暗めにしてから fog 適用（立体感の維持）。
           // 値はモジュール定数（SIDE_SHADE_BASE）で 1 度だけ計算してある。
           const shadedBase = side === 1 ? SIDE_SHADE_BASE : 0xffffff
-          stripeSprite.texture = sheet.columns[col]
+          // Issue #86 Phase 2-5: wallHeight<1 のとき texture 上端をクロップし、下部 wallHeight 分のみ
+          // 1:1 スケールで表示する。pixel scale が wallHeight に依らず一定になり、レンガ模様が
+          // 縦潰れしない。wallHeight>=1 は texture 全体（従来 stretch 挙動を維持）。
+          const crop = computeWallTextureCrop(sheet.height, wallHeight)
+          if (crop.frameHeight <= 0) {
+            stripeSprite.visible = false
+            continue
+          }
+          // sheet.columns[col] は base source を共有する派生 Texture なので、source 経由で
+          // 新しい frame を持つ Texture を都度 new する。前フレームの Texture は GC に任せる
+          // （明示 destroy すると base source を壊すリスクがあるため呼ばない）。
+          const src = sheet.columns[col].source
+          stripeSprite.texture = new Texture({
+            source: src,
+            frame: new Rectangle(col, crop.frameY, 1, crop.frameHeight),
+          })
           stripeSprite.x = screenX
           // anchor.y=0 なので Sprite の上端を drawStartY に配置し、height で下端を決める。
-          // wallHeight に応じて Sprite.scale.y が縮尺されるため、テクスチャは縦に圧縮/伸張される。
-          // Phase 1 の要件は「段差が見える」ことなので、上端クロップではなく全体スケール方式を採用。
+          // wallHeight<1 のときは crop で texture 下部のみを取っているため、Sprite を drawHeight に
+          // スケールしても pixel scale は通常時と同じ（lineHeight/textureHeight）。
           stripeSprite.y = drawStartY
           // width は ensureStripePool で 1 度だけ設定済み（毎フレーム scale 計算を避ける）
           stripeSprite.height = drawHeight
