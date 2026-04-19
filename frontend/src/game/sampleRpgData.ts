@@ -76,6 +76,26 @@ const floorHeights: number[][] = tiles.map((row, y) =>
   })
 )
 
+/**
+ * Issue #87: タイルごとの天井高さ。
+ *
+ * 低天井タイル（0.5）でジャンプすると頭をぶつけて跳ね返される体感を作る（MVP: 頭ぶつけ判定のみ、
+ * 視覚的な天井レンダリングは別 Issue）。
+ *
+ * - 縦道の一部（ROAD, row 3, col 11）を低天井（0.5）にして「トンネル」のような挙動を作る
+ * - それ以外のタイルは 1.0（標準天井、従来挙動）
+ *
+ * 控えめな配置に留めているのは MVP スコープのため。
+ */
+const ceilingHeights: number[][] = tiles.map((row, y) =>
+  row.map((t, x) => {
+    // 縦道（col 11）の一部に低天井を置く。ジャンプで頭をぶつけて即落下する体感
+    if (t === TileType.ROAD && y === 3 && x === 11) return 0.5
+    // その他は標準天井
+    return 1
+  })
+)
+
 export const sampleRpgData: RPGProject = {
   name: 'サンプル村',
   version: '1.0.0',
@@ -86,6 +106,7 @@ export const sampleRpgData: RPGProject = {
     tiles,
     wallHeights,
     floorHeights,
+    ceilingHeights,
   },
   player: {
     x: 5,

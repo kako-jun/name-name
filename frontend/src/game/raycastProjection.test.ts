@@ -3,6 +3,7 @@ import {
   computeEffectiveFogMaxDist,
   computeWallYRange,
   projectNpcToScreen,
+  resolveCeilingHeight,
   resolveFloorHeight,
 } from './raycastProjection'
 
@@ -517,5 +518,69 @@ describe('resolveFloorHeight', () => {
     const grid = [[0.5]]
     expect(resolveFloorHeight(grid, -1, 0)).toBe(0)
     expect(resolveFloorHeight(grid, 0, -1)).toBe(0)
+  })
+})
+
+describe('resolveCeilingHeight', () => {
+  // Issue #87: 天井高さグリッドから指定タイルの天井高さを返す純粋関数。
+  // `getWallHeight` と同じ設計（fallback=1）。`resolveFloorHeight`（fallback=0、負値許容）と対照。
+  // 0 以下も 1 フォールバック（天井が床より下の退化ケースで頭ぶつけ判定が破綻するのを防ぐ）。
+
+  it('grid=undefined は 1 を返す（標準天井）', () => {
+    expect(resolveCeilingHeight(undefined, 0, 0)).toBe(1)
+  })
+
+  it('通常の正値（低天井 0.5）はそのまま返す', () => {
+    const grid = [[0.5]]
+    expect(resolveCeilingHeight(grid, 0, 0)).toBe(0.5)
+  })
+
+  it('1 より大きい値もそのまま返す（高天井）', () => {
+    const grid = [[2.5]]
+    expect(resolveCeilingHeight(grid, 0, 0)).toBe(2.5)
+  })
+
+  it('範囲外インデックス（x >= width）は 1 を返す', () => {
+    const grid = [
+      [0.5, 0.5],
+      [0.5, 0.5],
+    ]
+    expect(resolveCeilingHeight(grid, 5, 0)).toBe(1)
+  })
+
+  it('範囲外インデックス（y >= height）は 1 を返す', () => {
+    const grid = [[0.5, 0.5]]
+    expect(resolveCeilingHeight(grid, 0, 5)).toBe(1)
+  })
+
+  it('行が未定義（sparse）なら 1 を返す', () => {
+    const grid: number[][] = []
+    grid[2] = [0.5]
+    // 行 0 は未定義 → 1
+    expect(resolveCeilingHeight(grid, 0, 0)).toBe(1)
+    // 行 2 の 0 列目は 0.5
+    expect(resolveCeilingHeight(grid, 0, 2)).toBe(0.5)
+  })
+
+  it('セルが NaN なら 1 を返す', () => {
+    const grid = [[Number.NaN]]
+    expect(resolveCeilingHeight(grid, 0, 0)).toBe(1)
+  })
+
+  it('セルが Infinity なら 1 を返す', () => {
+    const grid = [[Number.POSITIVE_INFINITY]]
+    expect(resolveCeilingHeight(grid, 0, 0)).toBe(1)
+  })
+
+  it('0 以下の値は 1 にフォールバック（退化ケース防御）', () => {
+    expect(resolveCeilingHeight([[0]], 0, 0)).toBe(1)
+    expect(resolveCeilingHeight([[-0.5]], 0, 0)).toBe(1)
+    expect(resolveCeilingHeight([[Number.NEGATIVE_INFINITY]], 0, 0)).toBe(1)
+  })
+
+  it('負のインデックスは 1 を返す', () => {
+    const grid = [[0.5]]
+    expect(resolveCeilingHeight(grid, -1, 0)).toBe(1)
+    expect(resolveCeilingHeight(grid, 0, -1)).toBe(1)
   })
 })
