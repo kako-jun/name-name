@@ -215,7 +215,7 @@ export function resolveFloorHeight(grid: number[][] | undefined, tx: number, ty:
  * - `grid` が `undefined`、該当行が未定義、セルが未定義、値が有限数でない場合は `1` を返す（標準天井）
  * - `0` 以下の値も `1` にフォールバックする（天井が床より下の退化ケースで頭ぶつけ判定が破綻するのを防ぐ）
  *
- * `getWallHeight` と同じ設計（fallback=1）。`resolveFloorHeight`（fallback=0、負値許容）と対照。
+ * `resolveFloorHeight`（fallback=0、負値許容）と対照的に、fallback=1、0 以下非許容。
  * プレイヤーのジャンプ時の頭ぶつけ判定に使う。
  */
 export function resolveCeilingHeight(grid: number[][] | undefined, tx: number, ty: number): number {
