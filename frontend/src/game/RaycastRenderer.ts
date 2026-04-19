@@ -620,12 +620,18 @@ export class RaycastRenderer {
 
     // pitch（上下視線、Issue #80 Phase 2）→ 画面中央 Y のシフト px。
     // Lodev 方式の `Math.tan(pitch) * h/2`。pitch 正で baseY が下にシフト → 空が広く見える＝視線が上向き。
-    // 空・床の分割位置 / 壁 Y 範囲 / NPC Y 範囲のすべてに同じオフセットを適用する。
     const rawPitchOffset = Math.round(Math.tan(this.playerPitch) * (h / 2))
     // 念のため [-h, h] にクランプ（pitch クランプ済みなので通常は ±0.4 rad ≈ ±42% h で収まる）
     const pitchOffsetPx = rawPitchOffset > h ? h : rawPitchOffset < -h ? -h : rawPitchOffset
+    // ジャンプ（Issue #80 Phase 2-2）→ カメラ高さ playerZ（タイル単位）を Y px に換算。
+    // playerZ 正でカメラが上 → 視点が高い → baseY が下シフト＝壁・NPC が下方向に見え、プレイヤーが上から見下ろす感
+    // 符号規約は pitchOffsetPx と同じ（正で baseY が下シフト）なので、そのまま加算してよい。
+    const cameraZOffsetPx = Math.round(this.playerZ * (h / 2))
+    // 描画関数に渡す合算オフセット。computeWallYRange / projectNpcToScreen の pitchOffsetPx 引数は
+    // 「pitch 由来 + cameraZ 由来」の合算 Y シフトを受け取る契約に汎化済み（純粋関数側 JSDoc 参照）。
+    const totalYOffsetPx = pitchOffsetPx + cameraZOffsetPx
     // 空・床ベタ塗りの境界 Y。[0, h] にクランプして負/超過の高さを避ける。
-    const horizonY = h / 2 + pitchOffsetPx
+    const horizonY = h / 2 + totalYOffsetPx
     const horizonClamped = horizonY < 0 ? 0 : horizonY > h ? h : horizonY
 
     // 空・床のベタ塗り（pitch に応じて分割位置を上下に動かす）
@@ -728,7 +734,12 @@ export class RaycastRenderer {
         // wallHeight=1.0 なら従来挙動、0.5 なら腰高の柵、1.5 なら塔。
         // 地面位置（drawEndY）は wallHeight に依らず不変で、上端（drawStartY）が伸縮する。
         const wallHeight = this.getWallHeight(mapX, mapY)
-        const { drawStartY, drawEndY } = computeWallYRange(lineHeight, wallHeight, h, pitchOffsetPx)
+        const { drawStartY, drawEndY } = computeWallYRange(
+          lineHeight,
+          wallHeight,
+          h,
+          totalYOffsetPx
+        )
         const drawHeight = drawEndY - drawStartY
 
         // wallHeight<=0 で高さゼロ → 描画なし
@@ -791,7 +802,7 @@ export class RaycastRenderer {
         { x: planeX, y: planeY },
         { width: w, height: h },
         this.npcSpriteMinDepth,
-        pitchOffsetPx
+        totalYOffsetPx
       )
       if (!proj) {
         n.container.visible = false
@@ -819,10 +830,11 @@ export class RaycastRenderer {
         n.sprite.tint = applyFog(n.data.color, fog)
       }
 
-      // Sprite 配置とサイズ。anchor=(0.5,0.5) なので Y は baseY = h/2 + pitchOffsetPx に置く
-      // （projectNpcToScreen の drawStartY/EndY と同じ baseY を共有させる）
+      // Sprite 配置とサイズ。anchor=(0.5,0.5) なので Y は baseY = h/2 + totalYOffsetPx に置く
+      // （projectNpcToScreen の drawStartY/EndY と同じ baseY を共有させる。
+      //  totalYOffsetPx = pitchOffsetPx + cameraZOffsetPx で pitch とジャンプを合算）
       n.sprite.x = spriteScreenX
-      n.sprite.y = h / 2 + pitchOffsetPx
+      n.sprite.y = h / 2 + totalYOffsetPx
       n.sprite.width = spriteWidthPx
       n.sprite.height = spriteHeight
       n.container.visible = true
