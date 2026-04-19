@@ -86,37 +86,96 @@ export interface WallTextureCrop {
   frameY: number
   /** 切り出し高さ（texture 座標） */
   frameHeight: number
+  /**
+   * 使うスタックテクスチャのタイル数（1, 2, 3）。
+   * 1 のときは基底テクスチャ 1 枚、2 のときはベース 2 枚縦スタック、3 のときは 3 枚スタック。
+   * wallHeight > 3 は 3 にクランプ（その部分だけ従来 stretch 退化、警告を 1 度出す）。
+   */
+  tileCount: number
+}
+
+/** wallHeight > 3 の警告を各セッションで 1 度だけ出すためのフラグ（module-scope） */
+let _loggedClampWarning = false
+
+/**
+ * wh > 3 のクランプ警告。テスト実行時は抑制する。
+ * 関数として分離して unit test から reset 可能に（テスト内では `MODE === 'test'` で実質 no-op）。
+ */
+function warnWallHeightClampedOnce(wh: number): void {
+  if (_loggedClampWarning) return
+  // vitest などのテスト環境では抑制（import.meta.env.MODE が 'test'）
+  try {
+    if (
+      typeof import.meta !== 'undefined' &&
+      (import.meta as { env?: { MODE?: string } }).env?.MODE === 'test'
+    ) {
+      _loggedClampWarning = true
+      return
+    }
+  } catch {
+    // 一部のランタイム（ビルド時評価）で import.meta.env が読めない場合はフォールスルー
+  }
+  _loggedClampWarning = true
+  console.warn(
+    `[wallTextureSheet] wallHeight=${wh} exceeds supported max 3; clamping to 3-tile rendering.`
+  )
 }
 
 /**
- * 壁高さに応じたテクスチャ切り出し範囲を返す純粋関数（Issue #86 Phase 2-5）。
+ * 壁高さに応じたテクスチャ切り出し範囲を返す純粋関数。
  *
- * - 0 < wallHeight < 1: 上端を削って下部 wallHeight 分を残す（frameY > 0、frameHeight < textureHeight）
- * - wallHeight >= 1: texture 全体（frameY=0、frameHeight=textureHeight）。従来 stretch 挙動と等価
- * - wallHeight <= 0 / NaN / Infinity: frameY=0、frameHeight=0（防御、呼び出し側は drawHeight=0 でスキップ）
+ * Issue #86 Phase 2-5: 0 < wallHeight < 1 の crop モード（上端を削って下部のみ残す）。
+ * Issue #93: wallHeight > 1 の垂直タイリングモード（tileCount 2/3 のスタックテクスチャを指す）。
  *
- * `frameHeight` は 1px 未満にならないよう `Math.max(1, ...)` で保護（wallHeight が極小値でも
- * PIXI.Texture.frame に渡せる値にする）。Math.round で整数化。
+ * - 0 < wh < 1: tileCount=1、frameY=(1-wh)*H、frameHeight=wh*H（上端を削って下部のみ）
+ * - wh == 1: tileCount=1、frameY=0、frameHeight=H（texture 全体）
+ * - 1 < wh <= 2: tileCount=2、frameY=(2-wh)*H、frameHeight=wh*H（2 タイル合成の下部 wh 分）
+ * - 2 < wh <= 3: tileCount=3、frameY=(3-wh)*H、frameHeight=wh*H（3 タイル合成の下部 wh 分）
+ * - wh > 3: tileCount=3、frameY=0、frameHeight=3*H にクランプ（console.warn 1 回）
+ * - wh <= 0 / NaN / Infinity: tileCount=1、frameY=0、frameHeight=0（描画スキップ）
  *
- * 数学的根拠:
- *   - 通常（wallHeight=1）: pixel scale = lineHeight/textureHeight
- *   - 短い壁 crop 後（wallHeight=0.5）: pixel scale = (lineHeight*0.5) / (textureHeight*0.5)
- *     = lineHeight/textureHeight ← 通常と同じ → レンガ模様が縦潰れしない
+ * `frameHeight` は 1px 未満にならないよう `Math.max(1, ...)` で保護、Math.round で整数化。
+ *
+ * 数学的根拠（pixel scale 不変性）:
+ *   - wh=1: pixel scale = lineHeight / H
+ *   - wh=0.5 crop: pixel scale = (lineHeight*0.5) / (H*0.5) = lineHeight / H ← 同じ
+ *   - wh=2 tile: pixel scale = (lineHeight*2) / (H*2) = lineHeight / H ← 同じ
+ *
+ * @param textureHeight 基底テクスチャの高さ（通常 TEXTURE_HEIGHT=64）。スタック後の高さではない
+ * @param wallHeight 壁高さ（1.0 が標準）
  */
 export function computeWallTextureCrop(textureHeight: number, wallHeight: number): WallTextureCrop {
   // 防御: 非有限値・非正値は空の切り出し
   if (!Number.isFinite(wallHeight) || wallHeight <= 0) {
-    return { frameY: 0, frameHeight: 0 }
+    return { frameY: 0, frameHeight: 0, tileCount: 1 }
   }
-  // wallHeight >= 1 は texture 全体（従来 stretch 挙動、tiling は別 Issue）
-  if (wallHeight >= 1) {
-    return { frameY: 0, frameHeight: textureHeight }
+
+  // wh > 3 はクランプ（3 タイル分に圧縮、stretch 退化）
+  if (wallHeight > 3) {
+    warnWallHeightClampedOnce(wallHeight)
+    return { frameY: 0, frameHeight: textureHeight * 3, tileCount: 3 }
   }
-  // 0 < wallHeight < 1: 下部のみ残す
+
+  // バケット: ceil(wh) で 1/2/3 を決める（wh=1.0 は 1、wh=2.0 は 2、wh=2.0001 は 3）
+  // wh <= 0 は上で弾いているので、ceil(wh) は 1/2/3 のいずれか
+  const tileCount = Math.ceil(wallHeight) as 1 | 2 | 3
+  const stackHeight = textureHeight * tileCount
+
+  // frameHeight = wh * H（整数化 + 1px 保護）
   const rawHeight = Math.round(textureHeight * wallHeight)
   const frameHeight = Math.max(1, rawHeight)
-  const frameY = textureHeight - frameHeight
-  return { frameY, frameHeight }
+  // frameY は「スタック高さの下端に揃える」= stackHeight - frameHeight
+  const frameY = stackHeight - frameHeight
+  return { frameY, frameHeight, tileCount }
+}
+
+/**
+ * テスト専用: wh > 3 警告フラグをリセット。
+ * 本番コードから呼ばれることを想定しない。
+ * @internal
+ */
+export function __resetWallHeightClampWarning(): void {
+  _loggedClampWarning = false
 }
 
 /**
