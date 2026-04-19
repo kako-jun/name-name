@@ -26,10 +26,14 @@ import {
 } from './raycastProjection'
 import {
   clearDemoWallCache,
+  clearStackedWallCache,
   computeWallTextureCrop,
   computeWallU,
+  getStackedWallSheet,
   loadWallTexture,
+  TEXTURE_HEIGHT as WALL_TEXTURE_HEIGHT,
   uToColumn,
+  type WallTextureKind,
   type WallTextureSheet,
 } from './wallTextureSheet'
 import { formatHeightError, validateMapHeights } from './mapValidation'
@@ -344,9 +348,10 @@ export class RaycastRenderer {
       //   1. initialized=false → 進行中の async ロードが完了したとき「代入せず破棄」ルートに流す
       //   2. 派生 columns Texture を destroy（base source は共有なので壊さない）
       //   3. app.destroy で Sprite / Container / Renderer を破棄
-      //   4. clearDemoWallCache / clearDemoSheetCache で base RenderTexture を destroy(true)
-      //      これを app.destroy より後ろに置くのは、逆順だと cache の RenderTexture source を
-      //      先に破棄してしまい、app.destroy で連鎖的に破棄済み source を参照する可能性があるため
+      //   4. clearStackedWallCache（Issue #93）→ clearDemoWallCache / clearDemoSheetCache の順で
+      //      base RenderTexture を destroy(true)。これを app.destroy より後ろに置くのは、逆順だと
+      //      cache の RenderTexture source を先に破棄してしまい、app.destroy で連鎖的に破棄済み
+      //      source を参照する可能性があるため
       this.initialized = false
       this.treeTexture?.destroy()
       this.waterTexture?.destroy()
@@ -354,6 +359,13 @@ export class RaycastRenderer {
       this.waterTexture = null
       const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
+      // Issue #93: stacked → demo の順で呼ぶ。
+      // clearStackedWallCache は sheet.destroy() 経由で stacked RenderTexture（ownedBase）を
+      // destroy(true) で解放する。stacked RT の columns 自身は stacked RT の source を参照する
+      // ので、既に作成済み sheet が壊れるわけではない。ただし将来 stacked を rebuild する経路
+      // （再入や遅延 destroy）では buildStackedWallTexture が base source を読む必要があり、
+      // demo が先に壊れていると参照不能になる。安全側として stacked を先、demo を後にする。
+      clearStackedWallCache(renderer)
       clearDemoWallCache(renderer)
       clearDemoSheetCache(renderer)
       this.stripeSprites = []
@@ -844,16 +856,27 @@ export class RaycastRenderer {
           const shadedBase = side === 1 ? SIDE_SHADE_BASE : 0xffffff
           // Issue #86 Phase 2-5: wallHeight<1 のとき texture 上端をクロップし、下部 wallHeight 分のみ
           // 1:1 スケールで表示する。pixel scale が wallHeight に依らず一定になり、レンガ模様が
-          // 縦潰れしない。wallHeight>=1 は texture 全体（従来 stretch 挙動を維持）。
-          const crop = computeWallTextureCrop(sheet.height, wallHeight)
+          // 縦潰れしない。
+          // Issue #93: wallHeight>1 のときは crop.tileCount に応じたスタックテクスチャ
+          // （ベース 2 枚 or 3 枚を縦に並べた RenderTexture）から切り出して、タイリング描画する。
+          // 引数は基底テクスチャ高さ（64）を渡す — frameY/frameHeight は tileCount*64 の座標系で
+          // 返るので、スタックシートの列 source にそのまま frame として渡せる。
+          const crop = computeWallTextureCrop(WALL_TEXTURE_HEIGHT, wallHeight)
           if (crop.frameHeight <= 0) {
             stripeSprite.visible = false
             continue
           }
-          // sheet.columns[col] は base source を共有する派生 Texture なので、source 経由で
-          // 新しい frame を持つ Texture を都度 new する。前フレームの Texture は GC に任せる
-          // （明示 destroy すると base source を壊すリスクがあるため呼ばない）。
-          const src = sheet.columns[col].source
+          // tileCount=1 なら既存 sheet（ベース 1 枚）をそのまま使い、>=2 なら stacked sheet を取得。
+          // stacked sheet は renderer ごと＋kind×tileCount ごとに WeakMap キャッシュされる。
+          const wallKind: WallTextureKind = hitTile === TileType.WATER ? 'water' : 'tree'
+          const effectiveSheet =
+            crop.tileCount === 1
+              ? sheet
+              : getStackedWallSheet(this.app.renderer, wallKind, crop.tileCount)
+          // effectiveSheet.columns[col] は base/stacked source を共有する派生 Texture なので、
+          // source 経由で新しい frame を持つ Texture を都度 new する。前フレームの Texture は
+          // GC に任せる（明示 destroy すると shared source を壊すリスクがあるため呼ばない）。
+          const src = effectiveSheet.columns[col].source
           stripeSprite.texture = new Texture({
             source: src,
             frame: new Rectangle(col, crop.frameY, 1, crop.frameHeight),
