@@ -86,6 +86,8 @@ export class RaycastRenderer {
   private playerX = 0
   private playerY = 0
   private playerAngle = 0 // radians; 0 = +x (right)
+  /** プレイヤーの上下視線（rad）。正で上向き（画面中央が下にシフト）。Issue #80 Phase 2 */
+  private playerPitch = 0
 
   private screenWidth = 0
   private screenHeight = 0
@@ -99,6 +101,12 @@ export class RaycastRenderer {
   private readonly moveSpeed = 3
   // 旋回速度 3 rad/s: 1 回転に約 2.1 秒。FPS の標準より遅めだが、ADV で酔いにくいことを優先。
   private readonly rotSpeed = 3
+  // pitch 速度 1.5 rad/s: 旋回より遅め。最大 ±0.4 rad なので押しっぱなしで約 0.27 秒で端に到達する程度。
+  // Issue #80 Phase 2: PageUp/PageDown キーで連続変化させる。
+  private readonly pitchSpeed = 1.5
+  // pitch クランプ ±0.4 rad（≒ ±23°）。Lodev 方式の `Math.tan(pitch) * h/2` でも 0.4 rad で
+  // h/2 の約 42% シフトに収まり、画面外破綻を起こさない目安。広げすぎると床/天井が破綻して見える。
+  private readonly pitchMaxAbs = 0.4
   // フォグ上限 12 タイル: マップサイズ（通常 16x12 前後）に対して「遠くの壁は薄く霞む」ことを狙った値。
   // 大きくすると遠景まで鮮明に見えて没入感が減り、小さくすると視界が狭く感じる。
   private readonly fogMaxDist = 12
@@ -184,6 +192,8 @@ export class RaycastRenderer {
     this.playerX = gameData.player.x + 0.5
     this.playerY = gameData.player.y + 0.5
     this.playerAngle = directionToAngle(gameData.player.direction)
+    // pitch は load() ごとに 0（水平）にリセット。データモデル化は将来 Issue
+    this.playerPitch = 0
 
     this.lastTickMs = performance.now()
     this.keys.clear()
@@ -450,6 +460,18 @@ export class RaycastRenderer {
     if (this.keys.has('rot_right')) {
       this.playerAngle += this.rotSpeed * dt
     }
+
+    // pitch（上下視線、Issue #80 Phase 2）
+    // PageUp = 上を見る = playerPitch を増加（baseY が下にシフト → 空が広く見える）
+    if (this.keys.has('pitch_up')) {
+      this.playerPitch += this.pitchSpeed * dt
+    }
+    if (this.keys.has('pitch_down')) {
+      this.playerPitch -= this.pitchSpeed * dt
+    }
+    // ±pitchMaxAbs にクランプ
+    if (this.playerPitch > this.pitchMaxAbs) this.playerPitch = this.pitchMaxAbs
+    else if (this.playerPitch < -this.pitchMaxAbs) this.playerPitch = -this.pitchMaxAbs
 
     const dx = Math.cos(this.playerAngle)
     const dy = Math.sin(this.playerAngle)
@@ -813,6 +835,10 @@ function normalizeKey(key: string): string {
     case 'e':
     case 'E':
       return 'strafe_right'
+    case 'PageUp':
+      return 'pitch_up'
+    case 'PageDown':
+      return 'pitch_down'
     default:
       return ''
   }
@@ -825,7 +851,9 @@ function isMovementKey(k: string): boolean {
     k === 'rot_left' ||
     k === 'rot_right' ||
     k === 'strafe_left' ||
-    k === 'strafe_right'
+    k === 'strafe_right' ||
+    k === 'pitch_up' ||
+    k === 'pitch_down'
   )
 }
 
