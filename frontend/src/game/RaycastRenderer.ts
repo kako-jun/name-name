@@ -409,7 +409,7 @@ export class RaycastRenderer {
         s.destroy()
       }
     }
-    if (this.zBuffer.length !== target) {
+    if (target > 0 && this.zBuffer.length !== target) {
       this.zBuffer = new Float32Array(target)
     }
   }
@@ -616,6 +616,9 @@ export class RaycastRenderer {
         // 個別判定: 該当 kind のシートだけが揃っていれば Sprite を使う。
         // 「両方揃ってから切替」のフラグ方式だと、片方だけロード成功したケースで
         // 不必要に fallback を続けてしまうため、stripe ごとに判断する。
+        // 注意: 将来 TREE/WATER 以外の壁タイル種別を追加する場合は、ここの
+        // 分岐と ensureWallTextures のロード対象も忘れずに増やすこと。
+        // 現状は WATER 以外を tree シート扱いにフォールバックしている。
         const sheet: WallTextureSheet | null =
           hitTile === TileType.WATER ? this.waterTexture : this.treeTexture
         if (sheet) {
