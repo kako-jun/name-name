@@ -18,6 +18,14 @@ export interface MapData {
   height: number // マップの高さ（グリッド数）
   tileSize: number // 1タイルのピクセルサイズ
   tiles: number[][] // タイルデータ（2次元配列）
+  /**
+   * タイル座標 [y][x] ごとの壁高さ（1.0 = 標準、0.5 = 腰ほどの柵、2.0 = 二階建て等）。
+   * 未指定（undefined）または該当セル未定義時は 1.0 扱い。
+   * 壁でないタイル（GRASS/ROAD）の値は無視される。
+   *
+   * Issue #49 Phase 1 で追加。Phase 2 で Markdown 構文から読み込む予定。
+   */
+  wallHeights?: number[][]
 }
 
 /**
