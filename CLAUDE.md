@@ -409,6 +409,7 @@ uv sync
 - ✅ セーブ/ロード + バックログ（#11）— SaveManager / SaveLoadOverlay / BacklogOverlay / localStorage 3スロット / JSON エクスポート・インポート
 - ✅ スナップショット方式リファクタリング（#26）— NovelGameState / resolveEvents / SeekBar / applyState 宣言的復元 / SaveSlotData 拡張
 - ✅ 壁テクスチャマッピング（#48）— ストライプ Sprite プール、デモ木目/水面、フォグ適用
+- ✅ 壁高さ（段差）対応（#49 Phase 1）— wallHeights[y][x]、computeWallYRange、サンプルマップに段差追加
 
 ## 参考ドキュメント
 
