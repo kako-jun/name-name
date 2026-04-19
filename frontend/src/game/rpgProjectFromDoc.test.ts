@@ -771,6 +771,77 @@ describe('applyRpgProjectToDoc', () => {
     expect(plain.frames).toBeUndefined()
   })
 
+  it('NPC の portrait を doc ⇔ project 間で往復できる（Issue #73 Phase 1）', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'village',
+              title: '村',
+              view: 'TopDown',
+              events: [
+                {
+                  RpgMap: {
+                    width: 2,
+                    height: 2,
+                    tile_size: 32,
+                    tiles: [
+                      [0, 0],
+                      [0, 0],
+                    ],
+                  },
+                },
+                {
+                  Npc: {
+                    id: 'elder',
+                    name: '長老',
+                    x: 1,
+                    y: 1,
+                    color: 0xff0000,
+                    message: ['hi'],
+                    portrait: 'elder_portrait.png',
+                  },
+                },
+                {
+                  Npc: {
+                    id: 'plain',
+                    name: '村人',
+                    x: 0,
+                    y: 1,
+                    color: 0x888888,
+                    message: ['hello'],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    const project = rpgProjectFromDoc(doc)
+    expect(project).not.toBeNull()
+    expect(project!.npcs[0].portrait).toBe('elder_portrait.png')
+    expect(project!.npcs[1].portrait).toBeUndefined()
+
+    const updated = applyRpgProjectToDoc(doc, project!, 'village')
+    const events = updated.chapters[0].scenes[0].events
+    const npcs: NpcData[] = events.flatMap((e) =>
+      typeof e !== 'string' && 'Npc' in e ? [e.Npc] : []
+    )
+    expect(npcs).toHaveLength(2)
+    const elder = npcs.find((n) => n.id === 'elder')!
+    expect(elder.portrait).toBe('elder_portrait.png')
+    const plain = npcs.find((n) => n.id === 'plain')!
+    expect(plain.portrait).toBeUndefined()
+  })
+
   it('NPC の direction を doc ⇔ project 間で往復できる（大文字⇔小文字変換）', () => {
     const doc: EventDocument = {
       engine: 'name-name',

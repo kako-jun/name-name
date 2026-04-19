@@ -46,6 +46,12 @@ export interface NpcData {
   frames?: number
   /** NPC が向いている方向。未指定ならレンダラーのデフォルト（Down） */
   direction?: Direction
+  /**
+   * 会話ダイアログに表示する顔画像（portrait）への相対パス。
+   * Issue #73 Phase 1 で追加。未指定なら RpgDialogBox に顔枠は出ず従来どおりの表示。
+   * 動的表情切替は Phase 2 (#101) で別途対応。
+   */
+  portrait?: string
 }
 
 export interface PlayerStartData {
