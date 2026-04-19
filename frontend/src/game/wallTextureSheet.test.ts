@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeWallU, TEXTURE_WIDTH, uToColumn } from './wallTextureSheet'
+import { computeWallTextureCrop, computeWallU, TEXTURE_WIDTH, uToColumn } from './wallTextureSheet'
 
 describe('uToColumn', () => {
   it('u=0 は列 0', () => {
@@ -87,5 +87,90 @@ describe('computeWallU', () => {
     const col = uToColumn(u, TEXTURE_WIDTH)
     expect(col).toBeGreaterThanOrEqual(0)
     expect(col).toBeLessThan(TEXTURE_WIDTH)
+  })
+})
+
+describe('computeWallTextureCrop (Issue #86 Phase 2-5)', () => {
+  it('wallHeight=1 は texture 全体（frameY=0, frameHeight=textureHeight）', () => {
+    const crop = computeWallTextureCrop(64, 1)
+    expect(crop.frameY).toBe(0)
+    expect(crop.frameHeight).toBe(64)
+  })
+
+  it('wallHeight=0.5, textureHeight=64 → 下半分（frameY=32, frameHeight=32）', () => {
+    const crop = computeWallTextureCrop(64, 0.5)
+    expect(crop.frameY).toBe(32)
+    expect(crop.frameHeight).toBe(32)
+  })
+
+  it('wallHeight=0.25, textureHeight=64 → 下 1/4（frameY=48, frameHeight=16）', () => {
+    const crop = computeWallTextureCrop(64, 0.25)
+    expect(crop.frameY).toBe(48)
+    expect(crop.frameHeight).toBe(16)
+  })
+
+  it('wallHeight=1.5 は texture 全体のまま（stretch 維持、tiling は別 Issue）', () => {
+    const crop = computeWallTextureCrop(64, 1.5)
+    expect(crop.frameY).toBe(0)
+    expect(crop.frameHeight).toBe(64)
+  })
+
+  it('wallHeight=2 も texture 全体（stretch 維持）', () => {
+    const crop = computeWallTextureCrop(64, 2)
+    expect(crop.frameY).toBe(0)
+    expect(crop.frameHeight).toBe(64)
+  })
+
+  it('wallHeight=0 → frameHeight=0（描画スキップ）', () => {
+    const crop = computeWallTextureCrop(64, 0)
+    expect(crop.frameY).toBe(0)
+    expect(crop.frameHeight).toBe(0)
+  })
+
+  it('wallHeight 負値 → frameHeight=0（描画スキップ）', () => {
+    const crop = computeWallTextureCrop(64, -0.5)
+    expect(crop.frameY).toBe(0)
+    expect(crop.frameHeight).toBe(0)
+  })
+
+  it('wallHeight=NaN → frameHeight=0（防御）', () => {
+    const crop = computeWallTextureCrop(64, Number.NaN)
+    expect(crop.frameY).toBe(0)
+    expect(crop.frameHeight).toBe(0)
+  })
+
+  it('wallHeight=Infinity → frameHeight=0（防御、>=1 パスに入らない）', () => {
+    const crop = computeWallTextureCrop(64, Number.POSITIVE_INFINITY)
+    expect(crop.frameY).toBe(0)
+    expect(crop.frameHeight).toBe(0)
+  })
+
+  it('textureHeight=128, wallHeight=0.5 → frameY=64, frameHeight=64', () => {
+    const crop = computeWallTextureCrop(128, 0.5)
+    expect(crop.frameY).toBe(64)
+    expect(crop.frameHeight).toBe(64)
+  })
+
+  it('textureHeight=65（奇数）, wallHeight=0.5 → Math.round の丸め（65*0.5=32.5 → 33）', () => {
+    // Math.round(32.5) は銀行丸めの可能性があるが JS の Math.round は 0.5 を切り上げ（偶数丸めではない）
+    const crop = computeWallTextureCrop(65, 0.5)
+    expect(crop.frameHeight).toBe(33)
+    expect(crop.frameY).toBe(32)
+    // 合計が textureHeight と一致
+    expect(crop.frameY + crop.frameHeight).toBe(65)
+  })
+
+  it('wallHeight が極小値で Math.round の結果が 0 になるケースは 1px 保護', () => {
+    // textureHeight=64, wallHeight=0.001 → round(0.064) = 0 → 1px に保護
+    const crop = computeWallTextureCrop(64, 0.001)
+    expect(crop.frameHeight).toBe(1)
+    expect(crop.frameY).toBe(63)
+  })
+
+  it('frameY + frameHeight は textureHeight と一致（下端が揃う）', () => {
+    for (const wh of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+      const crop = computeWallTextureCrop(64, wh)
+      expect(crop.frameY + crop.frameHeight).toBe(64)
+    }
   })
 })
