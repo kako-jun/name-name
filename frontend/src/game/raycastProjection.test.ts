@@ -651,9 +651,9 @@ describe('detectFloorStep', () => {
     expect(detectFloorStep(0, -0)).toBeNull()
   })
 
-  it('差がちょうど閾値 1e-6 なら null（< 1e-6 なので 1e-6 自体は境界で null にならず段差扱い）', () => {
-    // 実装は `if (diff < 1e-6) return null` なので 1e-6 ちょうどは「null ではなく段差あり」
-    // 境界を明示するための回帰テスト
+  it('差が閾値 1e-6 ちょうどなら段差として認識される（閾値は < 1e-6 で null なので 1e-6 自体は非 null）', () => {
+    // 実装は `if (diff < 1e-6) return null` なので 1e-6 ちょうどは段差扱い（非 null）。
+    // 境界仕様を固定するための回帰テスト
     const step = detectFloorStep(0, 1e-6)
     expect(step).not.toBeNull()
     expect(step!.heightDiff).toBeCloseTo(1e-6, 12)

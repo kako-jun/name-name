@@ -825,7 +825,7 @@ export class RaycastRenderer {
         sideDistY = (mapY + 1.0 - this.playerY) * deltaDistY
       }
 
-      let side = 0 // 0 = x-side, 1 = y-side
+      let side: 0 | 1 = 0 // 0 = x-side, 1 = y-side
       let hit = false
       let hitTile = TileType.TREE
       // Issue #88 Phase 2-7a: DDA 中に通過するタイル境界で床高さ差を検出し、段差壁面を記録する。
@@ -876,9 +876,8 @@ export class RaycastRenderer {
           if (step) {
             // 極近距離クランプ（perpDist と同じ扱い、N5: MIN_DEPTH で共有）
             const depthClamped = crossDepth < MIN_DEPTH ? MIN_DEPTH : crossDepth
-            // side は直前の DDA 分岐で 0 か 1 に代入されているが、TS は `let side = 0` で
-            // number にワイドニングしているため `as 0 | 1` で narrowing を明示する
-            stepInfos.push({ info: step, depth: depthClamped, side: side as 0 | 1 })
+            // side は `let side: 0 | 1` で narrow されているのでキャスト不要
+            stepInfos.push({ info: step, depth: depthClamped, side })
           }
         }
       }
@@ -1007,11 +1006,18 @@ export class RaycastRenderer {
       // 遮蔽され、段差より上にはみ出た部分は正しく可視化される。段差は壁より手前（DDA は
       // 壁ヒットで止まる前の境界）にあるため、depth < perpDist が常に成立し、wallTopYBuffer
       // も段差の drawStartY（= 壁より小さい値）で min 更新する。
+      // N3: `POSITIVE_INFINITY` は「距離比較の sentinel」。実在する段差の depth は有限なので
+      // 初回の `depth < frontStepDepth` で必ず更新される。距離ユニット（fogMaxDist + 1 等）
+      // でも意味は同じだが、「未設定」を明示する意図で無限大を採用
       let frontStepDepth = Number.POSITIVE_INFINITY
       let frontStepDrawStartY = h // 段差がない or 描画スキップ時は h（遮蔽なし相当）
       const drawSlots = stepInfos.length
       for (let slot = 0; slot < drawSlots; slot++) {
         const stepSprite = this.stepWallSprites[i * this.maxStepsPerColumn + slot]
+        // Q1 invariant: ensureStripePool は stepWallSprites.length === numStripes * maxStepsPerColumn
+        // を保証するため、`i * maxStepsPerColumn + slot`（slot < drawSlots <= maxStepsPerColumn、
+        // i < numStripes）は常に有効な index。理論上 `!stepSprite` は起き得ないが、
+        // pool 再確保の途中状態（例: 初期化順の変更で未同期になる）に備えて安全側で skip する
         if (!stepSprite) continue
         // stepInfos[奥→手前] = stepInfos の逆順を slot 0→N に割り当て、
         // slot 0（最も奥）は Container 子の中で先に描画される。
@@ -1037,6 +1043,13 @@ export class RaycastRenderer {
           continue
         }
         // 手前段差記録（M1/M2 用。フェアな最前面 = 最小 depth を保持する）
+        // Q2: 厳密不等のため、同距離（depth が完全一致）の段差が複数あると
+        // 最初に記録された方が最前面扱いになる。DDA は奥→手前の順に cross を検出し
+        // 本ループは `sourceIdx = drawSlots - 1 - slot` で奥から反復するため、
+        // 「後のほう（手前側の cross）がより手前」という想定と厳密には噛み合わないが、
+        // 通常プレイでは同一 depth は実質発生せず、仮に発生しても frontStepDrawStartY の差は
+        // 視覚的に無視できる範囲（同距離なら drawStartY もほぼ同じ）。厳密な最前面更新に
+        // したい場合は `<=` に変更すればよい
         if (depth < frontStepDepth) {
           frontStepDepth = depth
           frontStepDrawStartY = sStart
