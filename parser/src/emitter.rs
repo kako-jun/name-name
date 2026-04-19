@@ -1,5 +1,6 @@
 use crate::models::*;
 use crate::parser::npc_base_slug;
+use std::fmt::Write as _;
 
 /// Emit a Document back to Markdown format.
 pub fn emit(doc: &Document) -> String {
@@ -224,6 +225,19 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push('\n');
                 }
                 out.push_str("[/マップ]\n");
+
+                // Height blocks (Issue #90): emit after the map in order wall/floor/ceiling.
+                // Each block uses the 日本語 tag and space-separated f64 rows.
+                if let Some(heights) = &map.wall_heights {
+                    emit_height_block(out, "壁高さ", heights);
+                }
+                if let Some(heights) = &map.floor_heights {
+                    emit_height_block(out, "床高さ", heights);
+                }
+                if let Some(heights) = &map.ceiling_heights {
+                    emit_height_block(out, "天井高さ", heights);
+                }
+
                 prev_was_dialog_or_text = false;
             }
             Event::PlayerStart(p) => {
@@ -341,12 +355,34 @@ fn needs_speaker_line(events: &[Event], idx: usize) -> bool {
     }
 }
 
+// 注: f64 演算結果（例: 0.1 + 0.2 = 0.30000000000000004）をそのまま書き戻すと
+// 冗長桁が出る。現状は parser 入力由来の値しか通らないので問題ないが、エディタ側で
+// 演算結果を書き戻す場合は整数または 0.25 刻みを推奨。必要なら ryu 等で丸める。
 fn format_number(n: f64) -> String {
     if n == n.floor() && n.is_finite() {
         format!("{}", n as i64)
     } else {
         format!("{}", n)
     }
+}
+
+/// 高さブロックを emit する。各値は `1.0 → "1"`, `0.25 → "0.25"` で書く。
+/// 行頭で空行を一つ挟み、ブロック終端の後は改行のみ残す（他ブロックのスタイルに合わせる）。
+fn emit_height_block(out: &mut String, tag: &str, rows: &[Vec<f64>]) {
+    out.push('\n');
+    writeln!(out, "[{}]", tag).unwrap();
+    for row in rows {
+        let mut first = true;
+        for v in row {
+            if !first {
+                out.push(' ');
+            }
+            out.push_str(&format_number(*v));
+            first = false;
+        }
+        out.push('\n');
+    }
+    writeln!(out, "[/{}]", tag).unwrap();
 }
 
 #[cfg(test)]
