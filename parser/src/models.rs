@@ -46,6 +46,21 @@ pub struct RpgMapData {
     pub height: u32,
     pub tile_size: u32,
     pub tiles: Vec<Vec<u8>>,
+    /// タイル座標 [y][x] ごとの壁高さ（1.0 = 標準、0.5 = 半壁、2.0 = 二階建て等）。
+    /// 未指定時は None。ランタイム fallback は 1.0。
+    /// Issue #90 で Markdown `[壁高さ]` ブロックから読み込み可能にした。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_heights: Option<Vec<Vec<f64>>>,
+    /// タイル座標 [y][x] ごとの床高さ（0.0 = 地面標準、0.5 = 半段、1.0 = 1タイル分上）。
+    /// 未指定時は None。ランタイム fallback は 0.0。
+    /// Issue #90 で Markdown `[床高さ]` ブロックから読み込み可能にした。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor_heights: Option<Vec<Vec<f64>>>,
+    /// タイル座標 [y][x] ごとの天井高さ（1.0 = 標準、0.5 = 低天井トンネル等）。
+    /// 未指定時は None。ランタイム fallback は 1.0。
+    /// Issue #90 で Markdown `[天井高さ]` ブロックから読み込み可能にした。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_heights: Option<Vec<Vec<f64>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]

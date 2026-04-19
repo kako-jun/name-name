@@ -24,11 +24,23 @@ export function rpgProjectFromDoc(
   for (const ev of targetScene.events) {
     if (typeof ev === 'string') continue
     if ('RpgMap' in ev) {
+      // Issue #90: Markdown の `[壁高さ]` / `[床高さ]` / `[天井高さ]` ブロックを
+      // MapData の wallHeights / floorHeights / ceilingHeights に詰め替える。
+      // parser.ts 側で null 正規化済みなので、null→undefined に落とす。
       map = {
         width: ev.RpgMap.width,
         height: ev.RpgMap.height,
         tileSize: ev.RpgMap.tile_size,
         tiles: ev.RpgMap.tiles.map((row) => [...row]),
+        wallHeights: ev.RpgMap.wall_heights
+          ? ev.RpgMap.wall_heights.map((row) => [...row])
+          : undefined,
+        floorHeights: ev.RpgMap.floor_heights
+          ? ev.RpgMap.floor_heights.map((row) => [...row])
+          : undefined,
+        ceilingHeights: ev.RpgMap.ceiling_heights
+          ? ev.RpgMap.ceiling_heights.map((row) => [...row])
+          : undefined,
       }
     } else if ('PlayerStart' in ev) {
       player = {
@@ -194,6 +206,16 @@ export function applyRpgProjectToDoc(
         height: project.map.height,
         tile_size: project.map.tileSize,
         tiles: project.map.tiles.map((row) => [...row]),
+        // Issue #90: MapData の高さ配列を Markdown 側に書き戻せるよう Event にも含める。
+        wall_heights: project.map.wallHeights
+          ? project.map.wallHeights.map((row) => [...row])
+          : null,
+        floor_heights: project.map.floorHeights
+          ? project.map.floorHeights.map((row) => [...row])
+          : null,
+        ceiling_heights: project.map.ceilingHeights
+          ? project.map.ceilingHeights.map((row) => [...row])
+          : null,
       },
     },
     {

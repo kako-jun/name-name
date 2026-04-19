@@ -58,6 +58,24 @@ export interface RpgMapData {
     height: number;
     tile_size: number;
     tiles: number[][];
+    /**
+     * タイル座標 [y][x] ごとの壁高さ（1.0 = 標準、0.5 = 半壁、2.0 = 二階建て等）。
+     * 未指定時は None。ランタイム fallback は 1.0。
+     * Issue #90 で Markdown `[壁高さ]` ブロックから読み込み可能にした。
+     */
+    wall_heights?: number[][];
+    /**
+     * タイル座標 [y][x] ごとの床高さ（0.0 = 地面標準、0.5 = 半段、1.0 = 1タイル分上）。
+     * 未指定時は None。ランタイム fallback は 0.0。
+     * Issue #90 で Markdown `[床高さ]` ブロックから読み込み可能にした。
+     */
+    floor_heights?: number[][];
+    /**
+     * タイル座標 [y][x] ごとの天井高さ（1.0 = 標準、0.5 = 低天井トンネル等）。
+     * 未指定時は None。ランタイム fallback は 1.0。
+     * Issue #90 で Markdown `[天井高さ]` ブロックから読み込み可能にした。
+     */
+    ceiling_heights?: number[][];
 }
 
 export interface Scene {
