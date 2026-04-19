@@ -17,7 +17,7 @@ import {
   loadNpcSpriteSheet,
   type NpcSpriteSheet,
 } from './npcSpriteSheet'
-import { projectNpcToScreen } from './raycastProjection'
+import { computeWallYRange, projectNpcToScreen } from './raycastProjection'
 import {
   clearDemoWallCache,
   computeWallU,
@@ -73,6 +73,8 @@ export class RaycastRenderer {
   private waterTexture: WallTextureSheet | null = null
 
   private mapTiles: number[][] = []
+  /** タイルごとの壁高さ（[y][x]、1.0 = 従来挙動）。undefined 時は全タイル 1.0 扱い（Issue #49 Phase 1） */
+  private wallHeights: number[][] | undefined = undefined
   private mapWidth = 0
   private mapHeight = 0
   /** スプライトシートセルサイズ（マップの tileSize と揃える）。NPC テクスチャ切り出しで使用 */
@@ -157,6 +159,7 @@ export class RaycastRenderer {
     this.dialogBox?.hide()
 
     this.mapTiles = gameData.map.tiles
+    this.wallHeights = gameData.map.wallHeights
     this.mapWidth = gameData.map.width
     this.mapHeight = gameData.map.height
     this.tileSize = gameData.map.tileSize
@@ -396,7 +399,9 @@ export class RaycastRenderer {
   private ensureStripePool(target: number): void {
     while (this.stripeSprites.length < target) {
       const s = new Sprite(Texture.WHITE)
-      s.anchor.set(0, 0.5)
+      // anchor.y=0: Sprite の上端を drawStartY に合わせる（Issue #49 Phase 1 で wallHeight 対応のため
+      // 「中央寄せで高さ固定」から「上端 drawStartY、height = drawEndY - drawStartY」方式に移行）
+      s.anchor.set(0, 0)
       s.visible = false
       // texture は 1px 幅 → `scale.x = stripeWidth` が実質セットされる（width setter 経由）
       s.width = this.stripeWidth
@@ -511,6 +516,20 @@ export class RaycastRenderer {
     return row[tx]
   }
 
+  /**
+   * タイル座標 (tx, ty) の壁高さを取得する（Issue #49 Phase 1）。
+   * wallHeights が未指定、該当行/セルが未定義、有限数でない場合は 1.0（従来挙動）を返す。
+   */
+  private getWallHeight(tx: number, ty: number): number {
+    const grid = this.wallHeights
+    if (!grid) return 1
+    const row = grid[ty]
+    if (!row) return 1
+    const v = row[tx]
+    if (typeof v !== 'number' || !Number.isFinite(v)) return 1
+    return v
+  }
+
   // --- 描画（DDA レイキャスティング + billboard NPC） ---
 
   private renderFrame(): void {
@@ -613,6 +632,19 @@ export class RaycastRenderer {
         const lineHeight = Math.floor(h / perpDist)
         const fog = Math.max(0, Math.min(1, 1 - perpDist / this.fogMaxDist))
 
+        // Issue #49 Phase 1: タイルごとの壁高さを適用。
+        // wallHeight=1.0 なら従来挙動、0.5 なら腰高の柵、1.5 なら塔。
+        // 地面位置（drawEndY）は wallHeight に依らず不変で、上端（drawStartY）が伸縮する。
+        const wallHeight = this.getWallHeight(mapX, mapY)
+        const { drawStartY, drawEndY } = computeWallYRange(lineHeight, wallHeight, h)
+        const drawHeight = drawEndY - drawStartY
+
+        // wallHeight<=0 で高さゼロ → 描画なし
+        if (drawHeight <= 0) {
+          stripeSprite.visible = false
+          continue
+        }
+
         // 個別判定: 該当 kind のシートだけが揃っていれば Sprite を使う。
         // 「両方揃ってから切替」のフラグ方式だと、片方だけロード成功したケースで
         // 不必要に fallback を続けてしまうため、stripe ごとに判断する。
@@ -637,21 +669,20 @@ export class RaycastRenderer {
           const shadedBase = side === 1 ? SIDE_SHADE_BASE : 0xffffff
           stripeSprite.texture = sheet.columns[col]
           stripeSprite.x = screenX
-          stripeSprite.y = h / 2
+          // anchor.y=0 なので Sprite の上端を drawStartY に配置し、height で下端を決める。
+          // wallHeight に応じて Sprite.scale.y が縮尺されるため、テクスチャは縦に圧縮/伸張される。
+          // Phase 1 の要件は「段差が見える」ことなので、上端クロップではなく全体スケール方式を採用。
+          stripeSprite.y = drawStartY
           // width は ensureStripePool で 1 度だけ設定済み（毎フレーム scale 計算を避ける）
-          stripeSprite.height = lineHeight
+          stripeSprite.height = drawHeight
           stripeSprite.tint = applyFog(shadedBase, fog)
           stripeSprite.visible = true
         } else {
           // ロード前 fallback: 従来のベタ塗り（worldGraphics）
           stripeSprite.visible = false
-          let drawStart = Math.floor(-lineHeight / 2 + h / 2)
-          let drawEnd = Math.floor(lineHeight / 2 + h / 2)
-          if (drawStart < 0) drawStart = 0
-          if (drawEnd > h) drawEnd = h
           const baseColor = wallColor(hitTile, side)
           const color = applyFog(baseColor, fog)
-          g.rect(screenX, drawStart, this.stripeWidth, drawEnd - drawStart)
+          g.rect(screenX, drawStartY, this.stripeWidth, drawHeight)
           g.fill(color)
         }
       } else {
