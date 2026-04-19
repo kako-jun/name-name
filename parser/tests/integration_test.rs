@@ -1237,6 +1237,209 @@ hi
     assert_eq!(doc, doc2);
 }
 
+/// Issue #90: [マップ] の後ろに [壁高さ] ブロックを置くと、直前の RpgMap
+/// に wall_heights として注入される。往復で値が保持される。
+#[test]
+fn test_rpg_map_with_wall_heights() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 3x2 タイル=32]
+TTT
+T.T
+[/マップ]
+
+[壁高さ]
+1 2 1
+1 1 1
+[/壁高さ]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::RpgMap(map) => {
+            assert_eq!(
+                map.wall_heights.as_ref().expect("wall_heights present"),
+                &vec![vec![1.0, 2.0, 1.0], vec![1.0, 1.0, 1.0]]
+            );
+            assert_eq!(map.floor_heights, None);
+            assert_eq!(map.ceiling_heights, None);
+        }
+        other => panic!("Expected RpgMap, got {:?}", other),
+    }
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("[壁高さ]"),
+        "emit must write [壁高さ]: {}",
+        emitted
+    );
+    assert!(
+        !emitted.contains("[床高さ]"),
+        "missing floor block should not be emitted: {}",
+        emitted
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+/// [マップ] + [壁高さ] + [床高さ] + [天井高さ] の 4 ブロックが揃った場合の往復。
+#[test]
+fn test_rpg_map_with_all_heights() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 3x2 タイル=32]
+TTT
+T.T
+[/マップ]
+
+[壁高さ]
+1 2 1
+1 1 1
+[/壁高さ]
+
+[床高さ]
+0 0 0
+0 0.5 0
+[/床高さ]
+
+[天井高さ]
+1 1 1
+1 2 1
+[/天井高さ]
+"#;
+    let doc = parser::parse(input);
+    if let Event::RpgMap(map) = &doc.chapters[0].scenes[0].events[0] {
+        assert_eq!(
+            map.wall_heights.as_ref().unwrap(),
+            &vec![vec![1.0, 2.0, 1.0], vec![1.0, 1.0, 1.0]]
+        );
+        assert_eq!(
+            map.floor_heights.as_ref().unwrap(),
+            &vec![vec![0.0, 0.0, 0.0], vec![0.0, 0.5, 0.0]]
+        );
+        assert_eq!(
+            map.ceiling_heights.as_ref().unwrap(),
+            &vec![vec![1.0, 1.0, 1.0], vec![1.0, 2.0, 1.0]]
+        );
+    } else {
+        panic!("Expected RpgMap");
+    }
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+/// 小数値（0.25, 1.5 など）も正確に往復する。
+#[test]
+fn test_rpg_map_heights_roundtrip_decimals() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 3x2 タイル=32]
+TTT
+T.T
+[/マップ]
+
+[床高さ]
+0 0.25 0
+1.5 0 0
+[/床高さ]
+"#;
+    let doc = parser::parse(input);
+    if let Event::RpgMap(map) = &doc.chapters[0].scenes[0].events[0] {
+        let floor = map.floor_heights.as_ref().unwrap();
+        assert_eq!(floor[0], vec![0.0, 0.25, 0.0]);
+        assert_eq!(floor[1], vec![1.5, 0.0, 0.0]);
+    } else {
+        panic!("Expected RpgMap");
+    }
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("0.25"),
+        "decimal 0.25 must survive emit: {}",
+        emitted
+    );
+    assert!(
+        emitted.contains("1.5"),
+        "decimal 1.5 must survive emit: {}",
+        emitted
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+/// 高さブロックの記述順は [壁高さ]→[床高さ]→[天井高さ] を推奨するが、
+/// parser は順不同で受理する（ここでは [天井高さ]→[床高さ]→[壁高さ] の順で書く）。
+#[test]
+fn test_rpg_map_heights_order_independent() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 3x2 タイル=32]
+TTT
+T.T
+[/マップ]
+
+[天井高さ]
+1 1 1
+1 2 1
+[/天井高さ]
+
+[床高さ]
+0 0 0
+0 0.5 0
+[/床高さ]
+
+[壁高さ]
+1 2 1
+1 1 1
+[/壁高さ]
+"#;
+    let doc = parser::parse(input);
+    if let Event::RpgMap(map) = &doc.chapters[0].scenes[0].events[0] {
+        assert_eq!(
+            map.wall_heights.as_ref().unwrap(),
+            &vec![vec![1.0, 2.0, 1.0], vec![1.0, 1.0, 1.0]]
+        );
+        assert_eq!(
+            map.floor_heights.as_ref().unwrap(),
+            &vec![vec![0.0, 0.0, 0.0], vec![0.0, 0.5, 0.0]]
+        );
+        assert_eq!(
+            map.ceiling_heights.as_ref().unwrap(),
+            &vec![vec![1.0, 1.0, 1.0], vec![1.0, 2.0, 1.0]]
+        );
+    } else {
+        panic!("Expected RpgMap");
+    }
+    // 往復しても内容は同じ（emit は推奨順で出し直す）
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
 #[test]
 fn test_no_front_matter() {
     let input = r#"## 1-1: テスト

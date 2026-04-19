@@ -139,10 +139,40 @@ pub fn parse(input: &str) -> Document {
                         height,
                         tile_size,
                         tiles,
+                        wall_heights: None,
+                        floor_heights: None,
+                        ceiling_heights: None,
                     }));
                     continue;
                 }
             }
+        }
+
+        // Height blocks: [壁高さ] / [床高さ] / [天井高さ]
+        // 空白区切りの f64 を行ごとにパースし、直前の RpgMap Event に注入する。
+        // [マップ] と独立して受理し、寸法チェックは後段 (frontend validateMapHeights) に委ねる。
+        if let Some(kind) = detect_height_block(trimmed) {
+            pos += 1;
+            let end_tag = format!("[/{}]", kind.tag());
+            let mut rows: Vec<Vec<f64>> = Vec::new();
+            while pos < len && lines[pos].trim() != end_tag {
+                let raw = lines[pos].trim();
+                if !raw.is_empty() {
+                    let parsed_row: Vec<f64> = raw
+                        .split_whitespace()
+                        .filter_map(|s| s.parse::<f64>().ok())
+                        .collect();
+                    rows.push(parsed_row);
+                }
+                pos += 1;
+            }
+            if pos < len {
+                pos += 1; // skip end tag
+            }
+            // 直前の RpgMap Event に注入する。見つからなければ warning を出して破棄する
+            // （寸法チェックは後段任せだが、[マップ] が一度も来ていなければ紐付け先がない）。
+            inject_heights_into_last_map(&mut current_events, kind, rows);
+            continue;
         }
 
         // NPC block: [NPC name @x,y 色=#rrggbb (id=xxx)? (sprite=path)? (frames=N)?] ... [/NPC]
@@ -803,6 +833,74 @@ fn emit_map_dimension_warning(width: u32, height: u32, raw_rows: &[&str]) {
         "[name-name-parser] warning: map dimensions mismatch — declared {}x{}, got {} rows with widths {:?}",
         width, height, actual_rows, row_widths
     );
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::warn_1(&msg.into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        eprintln!("{}", msg);
+    }
+}
+
+/// 高さブロックの種別。tag() で `[...]` 内部の日本語ラベルを返す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeightKind {
+    Wall,
+    Floor,
+    Ceiling,
+}
+
+impl HeightKind {
+    fn tag(self) -> &'static str {
+        match self {
+            HeightKind::Wall => "壁高さ",
+            HeightKind::Floor => "床高さ",
+            HeightKind::Ceiling => "天井高さ",
+        }
+    }
+}
+
+/// 行が高さブロックの開始タグ（`[壁高さ]` / `[床高さ]` / `[天井高さ]`）かを判定する。
+fn detect_height_block(line: &str) -> Option<HeightKind> {
+    match line {
+        "[壁高さ]" => Some(HeightKind::Wall),
+        "[床高さ]" => Some(HeightKind::Floor),
+        "[天井高さ]" => Some(HeightKind::Ceiling),
+        _ => None,
+    }
+}
+
+/// 高さブロックの行データを、直前の `Event::RpgMap` に注入する。
+/// 直前に RpgMap が無い / 既に該当フィールドが埋まっている場合は警告して破棄する。
+fn inject_heights_into_last_map(events: &mut [Event], kind: HeightKind, rows: Vec<Vec<f64>>) {
+    // 末尾から直近の RpgMap を探す
+    for ev in events.iter_mut().rev() {
+        if let Event::RpgMap(map) = ev {
+            let slot: &mut Option<Vec<Vec<f64>>> = match kind {
+                HeightKind::Wall => &mut map.wall_heights,
+                HeightKind::Floor => &mut map.floor_heights,
+                HeightKind::Ceiling => &mut map.ceiling_heights,
+            };
+            if slot.is_some() {
+                emit_height_block_warning(&format!(
+                    "duplicate [{}] block; keeping the first and ignoring this one",
+                    kind.tag()
+                ));
+                return;
+            }
+            *slot = Some(rows);
+            return;
+        }
+    }
+    emit_height_block_warning(&format!(
+        "[{}] block appeared before any [マップ] block; ignoring",
+        kind.tag()
+    ));
+}
+
+fn emit_height_block_warning(detail: &str) {
+    let msg = format!("[name-name-parser] warning: {}", detail);
     #[cfg(target_arch = "wasm32")]
     {
         web_sys::console::warn_1(&msg.into());
