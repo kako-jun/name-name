@@ -3,9 +3,10 @@ import { MapData, RPGProject, TileType, TILE_COLORS } from '../types/rpg'
 import HeightGrid from './MapEditor/HeightGrid'
 import HeightPalette from './MapEditor/HeightPalette'
 import {
-  ensureHeightGrid,
   HeightField,
   HEIGHT_FALLBACKS,
+  HEIGHT_FIELD_LABELS,
+  HEIGHT_FIELDS,
   paintHeightCell,
   resizeHeightGrid,
 } from './MapEditor/heightUtils'
@@ -34,13 +35,10 @@ const TAB_LABELS: Record<EditorTab, string> = {
   ceilingHeights: '天井高さ',
 }
 
-const TAB_ORDER: readonly EditorTab[] = ['tiles', 'wallHeights', 'floorHeights', 'ceilingHeights']
+const TAB_ORDER: readonly EditorTab[] = ['tiles', ...HEIGHT_FIELDS]
 
-const LAYER_LABELS: Record<HeightField, string> = {
-  wallHeights: '壁',
-  floorHeights: '床',
-  ceilingHeights: '天井',
-}
+// heightUtils.HEIGHT_FIELD_LABELS を直接使う（重複定義廃止）
+const LAYER_LABELS: Record<HeightField, string> = HEIGHT_FIELD_LABELS
 
 const PREVIEW_BUTTONS: ReadonlyArray<{
   view: 'raycast' | 'topdown'
@@ -98,29 +96,49 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
     }
   }, [isPreviewOpen])
 
-  // 高さタブを開いたら、該当フィールドが undefined なら fallback で初期化
+  // マップサイズ変更（width / height 更新）時に、既存の height grid が
+  // 新サイズと不整合なら resize して onChange。
+  // ポイント:
+  // - タブ切替時の初期化副作用は廃止（undefined はユーザーが最初に塗った瞬間に
+  //   paintHeightCell 内で初期化される）
+  // - undefined の field には一切触らない（ペイントされるまで Markdown に出さない）
+  // - 既存の grid のみ、全行の列数一致までチェック（defensive）
   useEffect(() => {
-    if (currentTab === 'tiles') return
-    const field = currentTab
-    const current = mapData[field]
-    if (current === undefined) {
-      onChange({
-        ...mapData,
-        [field]: ensureHeightGrid(field, mapData.width, mapData.height),
-      })
-      return
-    }
-    // サイズ不一致（map リサイズ後）なら resize して揃える
-    if (
-      current.length !== mapData.height ||
-      (current[0] !== undefined && current[0].length !== mapData.width)
-    ) {
-      onChange({
-        ...mapData,
+    let updatedMap = mapData
+    let changed = false
+    for (const field of HEIGHT_FIELDS) {
+      const current = mapData[field]
+      if (current === undefined) continue // 未定義は触らない
+      const needsResize =
+        current.length !== mapData.height || !current.every((row) => row.length === mapData.width)
+      if (!needsResize) continue
+      updatedMap = {
+        ...updatedMap,
         [field]: resizeHeightGrid(field, current, mapData.width, mapData.height),
-      })
+      }
+      changed = true
     }
-  }, [currentTab, mapData, onChange])
+    if (changed) onChange(updatedMap)
+    // M1/M2: 依存は「寸法 + 各高さ配列の参照」に絞る。mapData 全体を依存にすると
+    // tiles 変更のたびにこの effect が走ってしまう。mapData は closure から取る。
+  }, [
+    mapData.width,
+    mapData.height,
+    mapData.wallHeights,
+    mapData.floorHeights,
+    mapData.ceilingHeights,
+    onChange,
+  ])
+
+  // S1: マウスボタンを離したときの isPainting 終了を window スコープで確実に拾う。
+  // （セル外 / ウィンドウ外で mouseup されてもドラッグ状態が残らないように）
+  useEffect(() => {
+    const handleUp = () => setIsPainting(false)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [])
 
   const handleTileClick = (x: number, y: number) => {
     const newTiles = mapData.tiles.map((row, rowIndex) =>
@@ -149,22 +167,24 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
   }
 
   const handleHeightPaintCell = (x: number, y: number) => {
+    // 防御: HeightGrid は tiles タブではマウントされないが念のため
     if (currentTab === 'tiles') return
     const field = currentTab
     const value = selectedHeightValues[field]
-    const nextGrid = paintHeightCell(
-      field,
-      mapData[field],
-      mapData.width,
-      mapData.height,
-      x,
-      y,
-      value
-    )
+    const currentGrid = mapData[field]
+    const nextGrid = paintHeightCell(field, currentGrid, mapData.width, mapData.height, x, y, value)
+    // S5: 参照が変わっていなければ no-op（範囲外 + grid が定義済のケース）
+    if (nextGrid === currentGrid) return
     onChange({
       ...mapData,
       [field]: nextGrid,
     })
+  }
+
+  // M3: カスタム値を state に書き込む前に [0, 10] に clamp、NaN は 0 フォールバック
+  const setCustomHeightValueClamped = (field: HeightField, raw: number) => {
+    const clamped = Number.isNaN(raw) ? 0 : Math.max(0, Math.min(10, raw))
+    setCustomHeightValues((prev) => ({ ...prev, [field]: clamped }))
   }
 
   return (
@@ -243,9 +263,7 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
                 onSelectValue={(v) =>
                   setSelectedHeightValues((prev) => ({ ...prev, [currentTab]: v }))
                 }
-                onCustomValueChange={(v) =>
-                  setCustomHeightValues((prev) => ({ ...prev, [currentTab]: v }))
-                }
+                onCustomValueChange={(v) => setCustomHeightValueClamped(currentTab, v)}
                 isDark={isDark}
               />
               {/* レイヤ on/off */}
@@ -311,7 +329,7 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
               {mapData.tiles.map((row, y) =>
                 row.map((tile, x) => (
                   <div
-                    key={`${x}-${y}`}
+                    key={y * mapData.width + x}
                     className="border border-gray-600 cursor-pointer hover:opacity-80 transition-opacity"
                     style={{
                       backgroundColor: TILE_COLORS[tile as TileType],

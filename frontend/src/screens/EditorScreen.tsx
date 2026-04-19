@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import CanvasEditor from '../components/CanvasEditor'
 import NovelPlayer from '../components/NovelPlayer'
 import MapEditor from '../components/MapEditor'
@@ -150,6 +150,19 @@ function EditorScreen({
     const newDoc = applyRpgProjectToDoc(doc, updated, targetSceneId)
     await handleDocChange(newDoc)
   }
+
+  // MapEditor に渡す onChange を memoize する（M1: MapEditor 側 useEffect の依存
+  // 安定化のため）。rpgProject が差し替わったときのみ新しい関数参照になる。
+  // persistRpgProject は毎回新規生成だが、実質依存は rpgProject と doc。
+  // rpgProject が変わる = doc が変わる、なので rpgProject 参照で十分（react-hooks
+  // プラグインは未導入のため明示的な lint エラーは出ないが、意図を明記する）。
+  const handleMapChange = useCallback(
+    (mapData: MapData) => {
+      if (!rpgProject) return
+      void persistRpgProject({ ...rpgProject, map: mapData })
+    },
+    [rpgProject]
+  )
 
   // 空の RPG シーンを追加する。doc がロード済みでない間は呼ばない（ボタン側で disabled）
   const addEmptyRpgScene = async () => {
@@ -588,9 +601,7 @@ function EditorScreen({
                     <MapEditor
                       mapData={rpgProject.map}
                       rpgProject={rpgProject}
-                      onChange={(mapData: MapData) => {
-                        void persistRpgProject({ ...rpgProject, map: mapData })
-                      }}
+                      onChange={handleMapChange}
                       isDark={isDark}
                     />
                   )}

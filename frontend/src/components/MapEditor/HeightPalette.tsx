@@ -3,6 +3,7 @@
 import {
   formatHeightLabel,
   HeightField,
+  HEIGHT_EPSILON,
   HEIGHT_PRESETS,
   heightToBackgroundColor,
 } from './heightUtils'
@@ -33,7 +34,7 @@ function HeightPalette({
       </span>
       <div className="flex gap-2">
         {presets.map((value) => {
-          const isSelected = Math.abs(value - selectedValue) < 1e-9
+          const isSelected = Math.abs(value - selectedValue) < HEIGHT_EPSILON
           return (
             <button
               key={value}
@@ -74,6 +75,7 @@ function HeightPalette({
           type="number"
           step="0.25"
           min="0"
+          max="10"
           value={customValue}
           onChange={(e) => {
             const parsed = parseFloat(e.target.value)
