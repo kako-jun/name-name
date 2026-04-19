@@ -169,3 +169,24 @@ export function computeWallYRange(
   const drawEndY = drawEndRaw < 0 ? 0 : drawEndRaw > h ? h : drawEndRaw
   return { drawStartY, drawEndY }
 }
+
+/**
+ * 壁高さに応じたフォグ上限距離を返す（Issue #80 Phase 2）。
+ *
+ * 通常の壁（wallHeight=1）は `baseFogMaxDist` で消えるが、高い塔（wallHeight=1.5, 2 等）は
+ * ランドマークとして遠距離から視認できてほしい。そこで wallHeight > 1 の塔に限り、
+ * 上限距離を `baseFogMaxDist * wallHeight` まで伸長する。
+ *
+ * 契約:
+ *  - `wallHeight <= 1` → `baseFogMaxDist`（低い壁は通常の壁と同じ距離で消える。遠方視認を広げない）
+ *  - `wallHeight > 1`  → `baseFogMaxDist * wallHeight`（高いほど遠くまで見える）
+ *  - `NaN / Infinity / 負値`（および `0`）は `baseFogMaxDist`（防御。`Math.max(1, ...)` 相当）
+ *
+ * `baseFogMaxDist` 自体の非有限／非正値はそのまま返す（呼び出し側の責務）。
+ */
+export function computeEffectiveFogMaxDist(baseFogMaxDist: number, wallHeight: number): number {
+  if (!Number.isFinite(wallHeight) || wallHeight <= 1) {
+    return baseFogMaxDist
+  }
+  return baseFogMaxDist * wallHeight
+}
