@@ -62,12 +62,17 @@ function loadPortraitTexture(path: string): Promise<Texture> {
     }
     return tex
   })
-  // 失敗したらキャッシュから除去（以降の show で再試行可能にする）
+  // 先にキャッシュ登録してから failure handler を繋ぐ（set → catch の順で意図を明確化）。
+  // 同じ path が呼び出された場合は cached を返し、ここでの set は実行されない。
+  // なお Assets.load は常に非同期なので順序差が現実のレースになることはないが、意図として自然な並びにしておく。
+  portraitCache.set(path, promise)
+  // 失敗したらキャッシュから除去（以降の show で再試行可能にする）。
+  // 呼び出し側（beginPortraitLoad）は .then の 2 引数形 or .catch で reject も扱うので、
+  // ここで握り潰しても Unhandled Rejection にはならない（同じ promise を cached として返す経路でも同様）。
   promise.catch((err: unknown) => {
     console.warn(`[RpgDialogBox] failed to load portrait "${path}":`, err)
     portraitCache.delete(path)
   })
-  portraitCache.set(path, promise)
   return promise
 }
 
