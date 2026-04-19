@@ -635,6 +635,33 @@ describe('detectFloorStep', () => {
     expect(detectFloorStep(Number.POSITIVE_INFINITY, 0)).toBeNull()
     expect(detectFloorStep(0, Number.NEGATIVE_INFINITY)).toBeNull()
   })
+
+  // S5 境界値追加テスト
+  it('大差（+5 / -5）も正しく認識', () => {
+    const step = detectFloorStep(5, -5)
+    expect(step).not.toBeNull()
+    expect(step!.lowerZ).toBe(-5)
+    expect(step!.upperZ).toBe(5)
+    expect(step!.heightDiff).toBeCloseTo(10, 6)
+    expect(step!.upperSide).toBe('prev')
+  })
+
+  it('0 と -0 は同値なので null（符号差のみの浮動小数ノイズ吸収）', () => {
+    // Math.abs(0 - (-0)) === 0 < 1e-6
+    expect(detectFloorStep(0, -0)).toBeNull()
+  })
+
+  it('差がちょうど閾値 1e-6 なら null（< 1e-6 なので 1e-6 自体は境界で null にならず段差扱い）', () => {
+    // 実装は `if (diff < 1e-6) return null` なので 1e-6 ちょうどは「null ではなく段差あり」
+    // 境界を明示するための回帰テスト
+    const step = detectFloorStep(0, 1e-6)
+    expect(step).not.toBeNull()
+    expect(step!.heightDiff).toBeCloseTo(1e-6, 12)
+  })
+
+  it('差が 1e-6 より小さい（1e-7）なら null', () => {
+    expect(detectFloorStep(0.1, 0.1 + 1e-7)).toBeNull()
+  })
 })
 
 describe('computeFloorStepWallYRange', () => {

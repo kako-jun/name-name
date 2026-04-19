@@ -225,11 +225,30 @@ export interface FloorStepInfo {
 }
 
 /**
+ * 段差壁の記録（DDA ループ内で手前→奥順に蓄積する）。
+ *
+ * - `info`: 検出した段差情報（lowerZ/upperZ/heightDiff/upperSide）
+ * - `depth`: ray が境界を跨いだときの crossDepth（`MIN_DEPTH` 以上にクランプ済み）
+ * - `side`: 境界を跨いだ side（0=x-side, 1=y-side）。NPC と同じ y-side シェード判定に使う
+ *
+ * モジュールトップに昇格（元は DDA ループ内 inline 型）。
+ */
+export interface StepRecord {
+  info: FloorStepInfo
+  depth: number
+  side: 0 | 1
+}
+
+/**
  * 隣接タイルの床高さから段差壁面情報を返す純粋関数（Issue #88 Phase 2-7a）。
  *
  * - `prevFloorZ === nextFloorZ` または差が 1e-6 未満 → `null`（段差なし）
  * - 高い方を `upperZ`、低い方を `lowerZ` として返す
- * - 非有限値は `resolveFloorHeight` 経由で呼ぶ前提なので、ここでは来ないが防御として `NaN` / `Infinity` は `null`
+ *
+ * Q3 defense-in-depth: 非有限値の検査は通常 `resolveFloorHeight` 側で `0` に正規化されているため
+ * ここには来ないが、純粋関数単位の契約として独立に検証する（`resolveFloorHeight` を経由しない
+ * 直接呼び出しや、将来 `resolveFloorHeight` の正規化ルールが変わったときにここで吸収するため）。
+ * `NaN` / `Infinity` は `null`。
  */
 export function detectFloorStep(prevFloorZ: number, nextFloorZ: number): FloorStepInfo | null {
   if (!Number.isFinite(prevFloorZ) || !Number.isFinite(nextFloorZ)) return null
