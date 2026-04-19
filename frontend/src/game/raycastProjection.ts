@@ -102,3 +102,49 @@ export function projectNpcToScreen(
     drawEndY,
   }
 }
+
+export interface WallYRange {
+  /** 壁の上端 Y（画面座標、小さい方が上）。0 未満は 0 にクランプ済み */
+  drawStartY: number
+  /** 壁の下端 Y（画面座標、地面相当で `Math.floor(h/2 + lineHeight/2)`）。h 超過は h にクランプ済み */
+  drawEndY: number
+}
+
+/**
+ * 壁の高さ（wallHeight, 1.0 = 従来の画面中央 ±lineHeight/2）を考慮した Y 範囲を返す。
+ *
+ * 地面の位置は wallHeight に依らず常に `h/2 + lineHeight/2`（プレイヤー視線が地面から 0.5 タイル上と仮定）。
+ * 上端は「地面から wallHeight 分上」= drawEnd - lineHeight * wallHeight。
+ *
+ * 浮動小数の floor を `lineHeight / 2 + h / 2` の段階で 1 回だけ取らず、
+ * `drawEnd - lineHeight * effectiveHeight` 全体を 1 回 floor することで、
+ * 二重 floor による最大 1px の上方バイアスを回避する。
+ *
+ * 入力契約:
+ *  - `wallHeight` の `NaN/Infinity/負値` は 0 扱い（描画なし相当）
+ *  - `lineHeight` の `NaN/Infinity/負値` は 0 扱い
+ *  - `screenHeight` は非負を前提（負値はクランプで吸収するが想定外）
+ * 呼び出し側で `drawEndY - drawStartY <= 0` を見て描画スキップする責務がある。
+ *
+ * 画面外クランプは [0, screenHeight] で行う。
+ *
+ * @param lineHeight 高さ 1.0 の壁が占める縦px（Lodev 方式の h/perpDist）
+ * @param wallHeight 壁の高さ倍率（0 以下・非有限は 0 扱い、上限なし）
+ * @param screenHeight 画面高 px
+ */
+export function computeWallYRange(
+  lineHeight: number,
+  wallHeight: number,
+  screenHeight: number
+): WallYRange {
+  const h = screenHeight
+  const effectiveHeight = !Number.isFinite(wallHeight) || wallHeight <= 0 ? 0 : wallHeight
+  const safeLineHeight = !Number.isFinite(lineHeight) || lineHeight <= 0 ? 0 : lineHeight
+  // drawEnd は常に floor 済みの整数として確定させ、上端は drawEnd 基準で 1 回だけ floor する
+  // （drawEnd を二度参照するため別変数。drawEndRaw の floor 漏れによる 1px ズレを避ける狙い）
+  const drawEndRaw = Math.floor(safeLineHeight / 2 + h / 2)
+  const drawStartRaw = Math.floor(safeLineHeight / 2 + h / 2 - safeLineHeight * effectiveHeight)
+  const drawStartY = drawStartRaw < 0 ? 0 : drawStartRaw > h ? h : drawStartRaw
+  const drawEndY = drawEndRaw < 0 ? 0 : drawEndRaw > h ? h : drawEndRaw
+  return { drawStartY, drawEndY }
+}
