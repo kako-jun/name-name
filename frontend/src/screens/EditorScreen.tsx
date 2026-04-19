@@ -156,6 +156,8 @@ function EditorScreen({
   // persistRpgProject は毎回新規生成だが、実質依存は rpgProject と doc。
   // rpgProject が変わる = doc が変わる、なので rpgProject 参照で十分（react-hooks
   // プラグインは未導入のため明示的な lint エラーは出ないが、意図を明記する）。
+  // TODO: eslint-plugin-react-hooks 導入時に exhaustive-deps の警告が出るので、
+  //   意図的 suppression (eslint-disable-next-line) を付けるか依存を追加するか再判断する。
   const handleMapChange = useCallback(
     (mapData: MapData) => {
       if (!rpgProject) return

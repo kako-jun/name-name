@@ -194,6 +194,9 @@ function HeightGrid({
     paintAt(coords.x, coords.y)
   }
 
+  // onMouseEnter はバブリングしないため、親デリゲーションでは onMouseOver を使う。
+  // オーバーレイ要素には pointer-events:none を指定しているので e.target はセル div
+  // に解決され、closest で data-cell-* 属性を拾える。
   const handleMouseOver = (e: React.MouseEvent) => {
     if (!isPainting) return
     const coords = extractCoords(e.target)

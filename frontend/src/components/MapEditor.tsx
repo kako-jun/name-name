@@ -37,9 +37,6 @@ const TAB_LABELS: Record<EditorTab, string> = {
 
 const TAB_ORDER: readonly EditorTab[] = ['tiles', ...HEIGHT_FIELDS]
 
-// heightUtils.HEIGHT_FIELD_LABELS を直接使う（重複定義廃止）
-const LAYER_LABELS: Record<HeightField, string> = HEIGHT_FIELD_LABELS
-
 const PREVIEW_BUTTONS: ReadonlyArray<{
   view: 'raycast' | 'topdown'
   label: string
@@ -62,7 +59,8 @@ const PREVIEW_BUTTONS: ReadonlyArray<{
 
 function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
   const [selectedTile, setSelectedTile] = useState<TileType>(TileType.GRASS)
-  const [isPainting, setIsPainting] = useState(false)
+  // tiles タブ専用のペイント状態。高さタブ側は HeightGrid 内部の isPainting を使う
+  const [isTilePainting, setIsTilePainting] = useState(false)
   const [previewView, setPreviewView] = useState<'topdown' | 'raycast' | null>(null)
   const [currentTab, setCurrentTab] = useState<EditorTab>('tiles')
   const [layerVisibility, setLayerVisibility] = useState<Record<HeightField, boolean>>({
@@ -133,7 +131,7 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
   // S1: マウスボタンを離したときの isPainting 終了を window スコープで確実に拾う。
   // （セル外 / ウィンドウ外で mouseup されてもドラッグ状態が残らないように）
   useEffect(() => {
-    const handleUp = () => setIsPainting(false)
+    const handleUp = () => setIsTilePainting(false)
     window.addEventListener('mouseup', handleUp)
     return () => {
       window.removeEventListener('mouseup', handleUp)
@@ -152,18 +150,18 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
   }
 
   const handleTileMouseDown = (x: number, y: number) => {
-    setIsPainting(true)
+    setIsTilePainting(true)
     handleTileClick(x, y)
   }
 
   const handleTileMouseEnter = (x: number, y: number) => {
-    if (isPainting) {
+    if (isTilePainting) {
       handleTileClick(x, y)
     }
   }
 
   const handleMouseUp = () => {
-    setIsPainting(false)
+    setIsTilePainting(false)
   }
 
   const handleHeightPaintCell = (x: number, y: number) => {
@@ -275,7 +273,7 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
                 <span className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
                   表示:
                 </span>
-                {(Object.keys(LAYER_LABELS) as HeightField[]).map((f) => (
+                {(Object.keys(HEIGHT_FIELD_LABELS) as HeightField[]).map((f) => (
                   <label
                     key={f}
                     className={`flex items-center gap-1 text-xs cursor-pointer ${
@@ -289,7 +287,7 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
                         setLayerVisibility((prev) => ({ ...prev, [f]: e.target.checked }))
                       }
                     />
-                    {LAYER_LABELS[f]}
+                    {HEIGHT_FIELD_LABELS[f]}
                   </label>
                 ))}
               </div>
