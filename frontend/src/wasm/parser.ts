@@ -45,6 +45,21 @@ function normalizeEvents(events: Event[]): Event[] {
         },
       }
     }
+    if ('RpgMap' in event) {
+      // Issue #90: Rust 側の Option<Vec<Vec<f64>>> は WASM 経由で undefined になるため、
+      // frontend の規約（types.ts）に合わせて null に正規化する。
+      return {
+        RpgMap: {
+          width: event.RpgMap.width,
+          height: event.RpgMap.height,
+          tile_size: event.RpgMap.tile_size,
+          tiles: event.RpgMap.tiles,
+          wall_heights: event.RpgMap.wall_heights ?? null,
+          floor_heights: event.RpgMap.floor_heights ?? null,
+          ceiling_heights: event.RpgMap.ceiling_heights ?? null,
+        },
+      }
+    }
     return event
   })
 }
