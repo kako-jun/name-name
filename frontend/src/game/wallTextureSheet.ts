@@ -10,7 +10,7 @@
  * から `computeWallU` → `uToColumn` で列 index を決め、ストライプ Sprite の texture に割り当てる。
  */
 
-import { Container, Graphics, Rectangle, RenderTexture, Renderer, Texture } from 'pixi.js'
+import { Container, Graphics, Rectangle, RenderTexture, Renderer, Sprite, Texture } from 'pixi.js'
 
 export type WallTextureKind = 'tree' | 'water'
 
@@ -343,4 +343,102 @@ export async function loadWallTexture(
       columns.length = 0
     },
   }
+}
+
+/**
+ * スタック済み壁テクスチャシートのキャッシュ（Issue #93）。
+ * key は `"${kind}:${tileCount}"`。renderer が GC されれば一緒に消える（WeakMap）。
+ * RaycastRenderer からは tileCount>=2 のときだけ呼ぶ想定。
+ */
+const stackedWallCache = new WeakMap<Renderer, Map<string, WallTextureSheet>>()
+
+/**
+ * ベーステクスチャを縦方向に `tileCount` 回スタックした RenderTexture を作る。
+ * Sprite を tileCount 個配置して renderer.render で 1 枚の RenderTexture に焼く。
+ */
+function buildStackedWallTexture(renderer: Renderer, base: Texture, tileCount: number): Texture {
+  const container = new Container()
+  for (let i = 0; i < tileCount; i++) {
+    const sprite = new Sprite(base)
+    sprite.x = 0
+    sprite.y = i * TEXTURE_HEIGHT
+    container.addChild(sprite)
+  }
+  const rt = RenderTexture.create({
+    width: TEXTURE_WIDTH,
+    height: TEXTURE_HEIGHT * tileCount,
+    resolution: 1,
+  })
+  renderer.render({ container, target: rt })
+  // sprite は base texture を参照しているだけ。base source は demoWallCache の所有なので、
+  // children: true でも base 本体は destroy されない（Sprite 側の所有権は無い）。
+  container.destroy({ children: true })
+  return rt
+}
+
+/**
+ * スタック済み壁テクスチャシートを取得する（Issue #93、垂直タイリング用）。
+ *
+ * - tileCount=1 のときは基底テクスチャからそのまま columns を切り出して返す
+ *   （`loadWallTexture` と同じ結果の新しいシート。呼び出し側は独立した destroy 管理が可能）。
+ * - tileCount>=2 のときは、基底テクスチャを縦に `tileCount` 回スタックした RenderTexture を
+ *   作り、そこから `sliceColumns` で列を切り出す。計算された stacked RenderTexture は
+ *   `stackedWallCache` に保持され、renderer が GC されるまで再利用される。
+ *
+ * `sheet.height` は `TEXTURE_HEIGHT * tileCount`。`computeWallTextureCrop` の frameY/frameHeight は
+ * このスタック高さと整合する。呼び出し側は `computeWallTextureCrop(TEXTURE_HEIGHT, wh)` と
+ * 基底高さを渡し、帰ってきた `frameY` を `Rectangle(col, frameY, 1, frameHeight)` として
+ * 本関数が返した `sheet.columns[col].source` に当てる。
+ */
+export function getStackedWallSheet(
+  renderer: Renderer,
+  kind: WallTextureKind,
+  tileCount: number
+): WallTextureSheet {
+  // 入力防御: 1-3 にクランプ。tileCount が外から 0 や 4+ で来ても安全に動く
+  const clamped = Math.max(1, Math.min(3, Math.floor(tileCount))) as 1 | 2 | 3
+  const key = `${kind}:${clamped}`
+
+  let byRenderer = stackedWallCache.get(renderer)
+  if (!byRenderer) {
+    byRenderer = new Map()
+    stackedWallCache.set(renderer, byRenderer)
+  }
+  const cached = byRenderer.get(key)
+  if (cached) return cached
+
+  const base = getOrBuildDemoBase(renderer, kind)
+  const stackedHeight = TEXTURE_HEIGHT * clamped
+  const stackedBase = clamped === 1 ? base : buildStackedWallTexture(renderer, base, clamped)
+  const columns = sliceColumns(stackedBase, TEXTURE_WIDTH, stackedHeight)
+
+  const sheet: WallTextureSheet = {
+    columns,
+    width: TEXTURE_WIDTH,
+    height: stackedHeight,
+    destroy() {
+      for (const tex of columns) {
+        tex.destroy(false)
+      }
+      columns.length = 0
+      // stackedBase (tileCount>=2 の場合は本関数の所有) の destroy は `clearStackedWallCache` に委譲。
+      // 個別 destroy はキャッシュ側の整合を崩す恐れがあるため呼ばない。
+    },
+  }
+  byRenderer.set(key, sheet)
+  return sheet
+}
+
+/**
+ * レンダラー破棄時に、スタック済み RenderTexture とシートを一括 destroy する。
+ * demoWallCache の base を壊す前に呼ぶのが安全（stacked RenderTexture は既に独立 source を持つが、
+ * columns は base source を参照するため、順序を気にする場合は stacked → demo の順で呼ぶ）。
+ */
+export function clearStackedWallCache(renderer: Renderer): void {
+  const byRenderer = stackedWallCache.get(renderer)
+  if (!byRenderer) return
+  for (const sheet of byRenderer.values()) {
+    sheet.destroy()
+  }
+  stackedWallCache.delete(renderer)
 }
