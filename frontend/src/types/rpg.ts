@@ -26,6 +26,14 @@ export interface MapData {
    * Issue #49 Phase 1 で追加。Phase 2 で Markdown 構文から読み込む予定。
    */
   wallHeights?: number[][]
+  /**
+   * タイル座標 [y][x] ごとの床高さ（0.0 = 地面標準、0.5 = 半段、1.0 = 1タイル分上、等）。
+   * 未指定または該当セル未定義時は 0.0 扱い（従来挙動）。
+   * プレイヤーがそのタイルに踏み込むとカメラ高さが自動で上昇する。
+   *
+   * Issue #84 で追加。
+   */
+  floorHeights?: number[][]
 }
 
 /**

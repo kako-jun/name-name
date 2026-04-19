@@ -56,6 +56,26 @@ const wallHeights: number[][] = tiles.map((row, y) =>
   })
 )
 
+/**
+ * Issue #84: タイルごとの床高さ。
+ *
+ * プレイヤーが踏み込むとカメラ高さが自動で上昇する（MVP: 視点が上がるだけ、
+ * 視覚的な段差壁面レンダリングは別 Issue）。
+ *
+ * - 上側の横道（ROAD, row 2, col 6-7）に 0.25 の微妙な段差を置き、歩いていると視点がふわっと上がる体感を作る
+ * - それ以外のタイルは 0（地面標準）
+ *
+ * 控えめな配置に留めているのは MVP スコープのため。極端な起伏は別途マップごとに設計する。
+ */
+const floorHeights: number[][] = tiles.map((row, y) =>
+  row.map((t, x) => {
+    // 上側の横道の中ほど（row 2, col 6-7）を一段上げる。歩いているとふわっと視点が上がる演出
+    if (t === TileType.ROAD && y === 2 && (x === 6 || x === 7)) return 0.25
+    // その他は地面標準
+    return 0
+  })
+)
+
 export const sampleRpgData: RPGProject = {
   name: 'サンプル村',
   version: '1.0.0',
@@ -65,6 +85,7 @@ export const sampleRpgData: RPGProject = {
     tileSize: 32,
     tiles,
     wallHeights,
+    floorHeights,
   },
   player: {
     x: 5,
