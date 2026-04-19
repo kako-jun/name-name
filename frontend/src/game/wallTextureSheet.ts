@@ -81,6 +81,44 @@ export function computeWallU(
   return u
 }
 
+export interface WallTextureCrop {
+  /** 切り出し開始 Y（texture 座標、`textureHeight * (1 - wallHeight)` 相当） */
+  frameY: number
+  /** 切り出し高さ（texture 座標） */
+  frameHeight: number
+}
+
+/**
+ * 壁高さに応じたテクスチャ切り出し範囲を返す純粋関数（Issue #86 Phase 2-5）。
+ *
+ * - 0 < wallHeight < 1: 上端を削って下部 wallHeight 分を残す（frameY > 0、frameHeight < textureHeight）
+ * - wallHeight >= 1: texture 全体（frameY=0、frameHeight=textureHeight）。従来 stretch 挙動と等価
+ * - wallHeight <= 0 / NaN / Infinity: frameY=0、frameHeight=0（防御、呼び出し側は drawHeight=0 でスキップ）
+ *
+ * `frameHeight` は 1px 未満にならないよう `Math.max(1, ...)` で保護（wallHeight が極小値でも
+ * PIXI.Texture.frame に渡せる値にする）。Math.round で整数化。
+ *
+ * 数学的根拠:
+ *   - 通常（wallHeight=1）: pixel scale = lineHeight/textureHeight
+ *   - 短い壁 crop 後（wallHeight=0.5）: pixel scale = (lineHeight*0.5) / (textureHeight*0.5)
+ *     = lineHeight/textureHeight ← 通常と同じ → レンガ模様が縦潰れしない
+ */
+export function computeWallTextureCrop(textureHeight: number, wallHeight: number): WallTextureCrop {
+  // 防御: 非有限値・非正値は空の切り出し
+  if (!Number.isFinite(wallHeight) || wallHeight <= 0) {
+    return { frameY: 0, frameHeight: 0 }
+  }
+  // wallHeight >= 1 は texture 全体（従来 stretch 挙動、tiling は別 Issue）
+  if (wallHeight >= 1) {
+    return { frameY: 0, frameHeight: textureHeight }
+  }
+  // 0 < wallHeight < 1: 下部のみ残す
+  const rawHeight = Math.round(textureHeight * wallHeight)
+  const frameHeight = Math.max(1, rawHeight)
+  const frameY = textureHeight - frameHeight
+  return { frameY, frameHeight }
+}
+
 /**
  * ベーステクスチャから縦ストライプ配列を切り出す。
  * base source を共有するため、個別 Texture を destroy するときは
