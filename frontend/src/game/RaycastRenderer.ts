@@ -17,7 +17,11 @@ import {
   loadNpcSpriteSheet,
   type NpcSpriteSheet,
 } from './npcSpriteSheet'
-import { computeWallYRange, projectNpcToScreen } from './raycastProjection'
+import {
+  computeEffectiveFogMaxDist,
+  computeWallYRange,
+  projectNpcToScreen,
+} from './raycastProjection'
 import {
   clearDemoWallCache,
   computeWallU,
@@ -67,6 +71,12 @@ export class RaycastRenderer {
   /** 壁ストライプの perpDist を格納する z-buffer。NPC billboard の遮蔽判定で参照。
    *  stripe プールと一緒にサイズ同期して再利用（毎フレーム new を避ける） */
   private zBuffer: Float32Array = new Float32Array(0)
+
+  /** 壁ストライプの上端画面 Y を格納するバッファ（Issue #80 Phase 2）。
+   *  NPC mask の壁高さ連動遮蔽で参照する。壁が描画されなかった列は `screenHeight`
+   *  （= 遮蔽なし相当、min(segEndY, wallTopY) で制約がかからない値）で埋める。
+   *  zBuffer と同じ index 対応で、ensureStripePool でサイズ同期される。 */
+  private wallTopYBuffer: Float32Array = new Float32Array(0)
 
   /** 壁テクスチャ（TREE / WATER）。ロード完了後に使用、未ロード中は色ベタ fallback */
   private treeTexture: WallTextureSheet | null = null
@@ -327,6 +337,7 @@ export class RaycastRenderer {
       clearDemoSheetCache(renderer)
       this.stripeSprites = []
       this.zBuffer = new Float32Array(0)
+      this.wallTopYBuffer = new Float32Array(0)
       this.dialogBox = null
     }
   }
@@ -471,6 +482,9 @@ export class RaycastRenderer {
     }
     if (target > 0 && this.zBuffer.length !== target) {
       this.zBuffer = new Float32Array(target)
+    }
+    if (target > 0 && this.wallTopYBuffer.length !== target) {
+      this.wallTopYBuffer = new Float32Array(target)
     }
   }
 
@@ -659,6 +673,10 @@ export class RaycastRenderer {
     // 壁 Sprite プールと zBuffer を必要数まで確保（lazy 成長、毎フレーム new を避ける）
     this.ensureStripePool(numStripes)
     const zBuffer = this.zBuffer
+    const wallTopYBuffer = this.wallTopYBuffer
+    // 壁を描画しなかった列は「遮蔽なし」扱いにするため screenHeight で埋める
+    // （NPC mask 側で min(segEndY, wallTopY) と使うので、wallTopY=h なら制約がかからない）
+    wallTopYBuffer.fill(h)
 
     for (let i = 0; i < numStripes; i++) {
       const screenX = i * this.stripeWidth
@@ -729,14 +747,16 @@ export class RaycastRenderer {
       zBuffer[i] = perpDist
 
       const stripeSprite = this.stripeSprites[i]
-      if (hit && perpDist <= this.fogMaxDist + 0.5) {
+      // Issue #49 Phase 1 / #80 Phase 2: タイルごとの壁高さを適用。
+      // wallHeight=1.0 なら従来挙動、0.5 なら腰高の柵、1.5 なら塔。
+      // 地面位置（drawEndY）は wallHeight に依らず不変で、上端（drawStartY）が伸縮する。
+      // Phase 2: 遠方カリングとフォグも壁高さに応じて伸長（高い塔はランドマークとして遠くまで見える）
+      const wallHeight = hit ? this.getWallHeight(mapX, mapY) : 1
+      const effectiveFogMax = computeEffectiveFogMaxDist(this.fogMaxDist, wallHeight)
+      if (hit && perpDist <= effectiveFogMax + 0.5) {
         const lineHeight = Math.floor(h / perpDist)
-        const fog = Math.max(0, Math.min(1, 1 - perpDist / this.fogMaxDist))
+        const fog = Math.max(0, Math.min(1, 1 - perpDist / effectiveFogMax))
 
-        // Issue #49 Phase 1: タイルごとの壁高さを適用。
-        // wallHeight=1.0 なら従来挙動、0.5 なら腰高の柵、1.5 なら塔。
-        // 地面位置（drawEndY）は wallHeight に依らず不変で、上端（drawStartY）が伸縮する。
-        const wallHeight = this.getWallHeight(mapX, mapY)
         const { drawStartY, drawEndY } = computeWallYRange(
           lineHeight,
           wallHeight,
@@ -750,6 +770,10 @@ export class RaycastRenderer {
           stripeSprite.visible = false
           continue
         }
+
+        // NPC mask の壁高さ連動遮蔽用に、実際に描画した壁の上端 Y を記録する（Issue #80 Phase 2）。
+        // スプライト描画・ベタ塗り fallback の両経路で同じ drawStartY を書くので、この時点で一度だけ記録する
+        wallTopYBuffer[i] = drawStartY
 
         // 個別判定: 該当 kind のシートだけが揃っていれば Sprite を使う。
         // 「両方揃ってから切替」のフラグ方式だと、片方だけロード成功したケースで
@@ -845,14 +869,22 @@ export class RaycastRenderer {
       n.container.zIndex = -depth
 
       // mask 更新: zBuffer で遮蔽されていない列だけを可視にする。
+      // Issue #80 Phase 2: 壁が前にあっても、壁の上端（wallTopYBuffer）より上にはみ出す部分は可視化する。
+      //   低い壁（wallHeight=0.5）の奥にいる NPC の頭が壁の上から出る演出。
       // mask は npcLayer → container（ともに位置 0, 0）直下なので、rect 座標はキャンバス絶対座標と一致する
       n.mask.clear()
       let hasVisible = false
       for (let sx = drawStartX; sx < drawEndX; sx += this.stripeWidth) {
         const stripeIdx = Math.floor(sx / this.stripeWidth)
         if (stripeIdx < 0 || stripeIdx >= numStripes) continue
-        if (depth >= zBuffer[stripeIdx]) continue
-        n.mask.rect(sx, drawStartY, this.stripeWidth, drawEndY - drawStartY)
+        let segEndY = drawEndY
+        if (depth >= zBuffer[stripeIdx]) {
+          // 壁が前にある列: 壁の上端（wallTopY）より上の部分のみ可視化
+          const wallTopY = wallTopYBuffer[stripeIdx]
+          if (wallTopY < segEndY) segEndY = wallTopY
+          if (segEndY <= drawStartY) continue
+        }
+        n.mask.rect(sx, drawStartY, this.stripeWidth, segEndY - drawStartY)
         hasVisible = true
       }
       if (hasVisible) {

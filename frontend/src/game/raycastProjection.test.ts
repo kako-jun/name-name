@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { computeWallYRange, projectNpcToScreen } from './raycastProjection'
+import {
+  computeEffectiveFogMaxDist,
+  computeWallYRange,
+  projectNpcToScreen,
+} from './raycastProjection'
 
 describe('projectNpcToScreen', () => {
   // 共通のカメラ設定: player (5.5, 5.5)、dir = +x、FOV 60° 相当
@@ -413,5 +417,47 @@ describe('projectNpcToScreen (with combined offset for jump)', () => {
     expect(result).not.toBeNull()
     expect(result!.drawStartY).toBe(113)
     expect(result!.drawEndY).toBe(600)
+  })
+})
+
+describe('computeEffectiveFogMaxDist', () => {
+  // 基準: baseFogMaxDist = 12（RaycastRenderer の実値）
+  const base = 12
+
+  it('wallHeight=1 は base と等しい（通常の壁は従来挙動）', () => {
+    expect(computeEffectiveFogMaxDist(base, 1)).toBe(base)
+  })
+
+  it('wallHeight=0.5（低い壁）も base と等しい（Math.max(1, 0.5)=1 相当）', () => {
+    // 低い壁は遠方視認距離を広げない。通常の壁と同じ距離で消える
+    expect(computeEffectiveFogMaxDist(base, 0.5)).toBe(base)
+  })
+
+  it('wallHeight=1.5 は base * 1.5（塔がランドマークとして遠くまで見える）', () => {
+    expect(computeEffectiveFogMaxDist(base, 1.5)).toBe(base * 1.5)
+  })
+
+  it('wallHeight=2 は base * 2', () => {
+    expect(computeEffectiveFogMaxDist(base, 2)).toBe(base * 2)
+  })
+
+  it('wallHeight=0 は base 扱い（防御）', () => {
+    expect(computeEffectiveFogMaxDist(base, 0)).toBe(base)
+  })
+
+  it('wallHeight=負値 は base 扱い（防御）', () => {
+    expect(computeEffectiveFogMaxDist(base, -1)).toBe(base)
+  })
+
+  it('wallHeight=NaN は base 扱い（防御）', () => {
+    expect(computeEffectiveFogMaxDist(base, Number.NaN)).toBe(base)
+  })
+
+  it('wallHeight=Infinity は base 扱い（防御）', () => {
+    expect(computeEffectiveFogMaxDist(base, Number.POSITIVE_INFINITY)).toBe(base)
+  })
+
+  it('wallHeight=-Infinity も base 扱い（防御、wallHeight<=1 ルートに乗る）', () => {
+    expect(computeEffectiveFogMaxDist(base, Number.NEGATIVE_INFINITY)).toBe(base)
   })
 })
