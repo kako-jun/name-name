@@ -166,10 +166,25 @@ describe('paintHeightCell', () => {
 })
 
 describe('heightToBackgroundColor', () => {
-  it('value = 0 は薄グレー（field 共通）', () => {
+  it('value === 0 は strict equality で薄グレー（field 共通）', () => {
     expect(heightToBackgroundColor('wallHeights', 0)).toBe('#e5e7eb')
     expect(heightToBackgroundColor('floorHeights', 0)).toBe('#e5e7eb')
     expect(heightToBackgroundColor('ceilingHeights', 0)).toBe('#e5e7eb')
+  })
+
+  it('value = 1e-10（浮動小数微小値）は 0 扱いにしない（薄グレーではない）', () => {
+    const c = heightToBackgroundColor('wallHeights', 1e-10)
+    expect(c).not.toBe('#e5e7eb')
+    expect(c.startsWith('hsl(')).toBe(true)
+  })
+
+  it('value = -1（clamp 漏れ）は L=90 で上側クランプ、#e5e7eb にはしない', () => {
+    const c = heightToBackgroundColor('wallHeights', -1)
+    // -1 は 0 ではないので「薄グレー」分岐に入らず、HSL が返る
+    expect(c.startsWith('hsl(')).toBe(true)
+    // L は 90 に上側クランプ（90 - (-1)*30 = 120 を 90 に clamp）
+    const l = parseInt(c.match(/(\d+)%\)$/)![1], 10)
+    expect(l).toBe(90)
   })
 
   it('壁: 値が大きいほど L が小さい（=暗い）', () => {

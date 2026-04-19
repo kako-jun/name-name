@@ -7,6 +7,32 @@
 export type HeightField = 'wallHeights' | 'floorHeights' | 'ceilingHeights'
 
 /**
+ * すべての HeightField を並び順つきで列挙する定数。
+ * MapEditor / HeightGrid で loop するときに共有する。
+ */
+export const HEIGHT_FIELDS: readonly HeightField[] = [
+  'wallHeights',
+  'floorHeights',
+  'ceilingHeights',
+] as const
+
+/**
+ * HeightField ごとの日本語ラベル（UI 表示・レイヤ on/off のテキスト）。
+ */
+export const HEIGHT_FIELD_LABELS: Record<HeightField, string> = {
+  wallHeights: '壁',
+  floorHeights: '床',
+  ceilingHeights: '天井',
+}
+
+/**
+ * 浮動小数比較の許容誤差（1e-9）。
+ * プリセット値の一致判定（HeightPalette）や「ほぼ 0」検出で使う。
+ * formatHeightLabel は別途 toFixed(4) で丸めるため、許容誤差は 1e-4 相当で表示される。
+ */
+export const HEIGHT_EPSILON = 1e-9
+
+/**
  * 各 HeightField の fallback（未指定時の既定値）。
  * RaycastRenderer 側の解釈（resolveWall/Floor/CeilingHeight）と一致させること。
  */
@@ -45,7 +71,7 @@ export function ensureHeightGrid(field: HeightField, width: number, height: numb
 
 /**
  * 既存 grid を width x height にリサイズする。
- * 拡大した部分は fallback、縮小した部分は切り落とす。
+ * 拡大した部分は fallback、縮小時は超過部分を捨てる。
  * 既存の値はできるだけ保持する。
  */
 export function resizeHeightGrid(
@@ -110,9 +136,24 @@ export function heightToBackgroundColor(field: HeightField, value: number): stri
   const hue =
     field === 'wallHeights' ? 200 : field === 'floorHeights' ? 30 : /* ceilingHeights */ 280
   const saturation = field === 'wallHeights' ? 60 : field === 'floorHeights' ? 50 : 40
-  const lightness = Math.max(20, 90 - value * 30)
+  // 負数（clamp 漏れ）で L が 90 を超えないよう両側で clamp する
+  const lightness = Math.max(20, Math.min(90, 90 - value * 30))
 
   return `hsl(${hue}, ${saturation}%, ${lightness}%)`
+}
+
+/**
+ * 数値ラベルの文字色を決める。
+ * 薄グレー背景（value === 0）のときは濃グレー、それ以外は白。
+ * text-shadow と組み合わせて視認性を確保する。
+ */
+export function heightToLabelColor(field: HeightField, value: number): string {
+  // field は将来の拡張余地として受け取るが、現状は value === 0 のみで分岐する
+  void field
+  if (value === 0) {
+    return '#374151'
+  }
+  return '#ffffff'
 }
 
 /**
