@@ -10,7 +10,7 @@
  * から `computeWallU` → `uToColumn` で列 index を決め、ストライプ Sprite の texture に割り当てる。
  */
 
-import { Container, Graphics, Rectangle, RenderTexture, Renderer, Texture } from 'pixi.js'
+import { Container, Graphics, Rectangle, RenderTexture, Renderer, Sprite, Texture } from 'pixi.js'
 
 export type WallTextureKind = 'tree' | 'water'
 
@@ -82,41 +82,104 @@ export function computeWallU(
 }
 
 export interface WallTextureCrop {
-  /** 切り出し開始 Y（texture 座標、`textureHeight * (1 - wallHeight)` 相当） */
+  /**
+   * 切り出し開始 Y（texture 座標）。
+   * `stackHeight - round(wh * textureHeight)`（stackHeight = tileCount * textureHeight）。
+   * tileCount=1 のときは `textureHeight - round(wh * textureHeight)`（従来の `(1-wh)*H` 相当）。
+   */
   frameY: number
   /** 切り出し高さ（texture 座標） */
   frameHeight: number
+  /**
+   * 使うスタックテクスチャのタイル数（1, 2, 3）。
+   * 1 のときは基底テクスチャ 1 枚、2 のときはベース 2 枚縦スタック、3 のときは 3 枚スタック。
+   * wallHeight > 3 は 3 にクランプ（その部分だけ従来 stretch 退化、警告を 1 度出す）。
+   */
+  tileCount: number
+}
+
+/** wallHeight > 3 の警告を各セッションで 1 度だけ出すためのフラグ（module-scope） */
+let _loggedClampWarning = false
+
+/**
+ * wh > 3 のクランプ警告。テスト実行時は抑制する。
+ * 関数として分離して unit test から reset 可能に（テスト内では `MODE === 'test'` で実質 no-op）。
+ */
+function warnWallHeightClampedOnce(wh: number): void {
+  if (_loggedClampWarning) return
+  // vitest などのテスト環境では抑制（import.meta.env.MODE が 'test'）
+  try {
+    if (
+      typeof import.meta !== 'undefined' &&
+      (import.meta as { env?: { MODE?: string } }).env?.MODE === 'test'
+    ) {
+      _loggedClampWarning = true
+      return
+    }
+  } catch {
+    // 一部のランタイム（ビルド時評価）で import.meta.env が読めない場合はフォールスルー
+  }
+  _loggedClampWarning = true
+  console.warn(
+    `[wallTextureSheet] wallHeight=${wh} exceeds supported max 3; clamping to 3-tile rendering.`
+  )
 }
 
 /**
- * 壁高さに応じたテクスチャ切り出し範囲を返す純粋関数（Issue #86 Phase 2-5）。
+ * 壁高さに応じたテクスチャ切り出し範囲を返す純粋関数。
  *
- * - 0 < wallHeight < 1: 上端を削って下部 wallHeight 分を残す（frameY > 0、frameHeight < textureHeight）
- * - wallHeight >= 1: texture 全体（frameY=0、frameHeight=textureHeight）。従来 stretch 挙動と等価
- * - wallHeight <= 0 / NaN / Infinity: frameY=0、frameHeight=0（防御、呼び出し側は drawHeight=0 でスキップ）
+ * Issue #86 Phase 2-5: 0 < wallHeight < 1 の crop モード（上端を削って下部のみ残す）。
+ * Issue #93: wallHeight > 1 の垂直タイリングモード（tileCount 2/3 のスタックテクスチャを指す）。
  *
- * `frameHeight` は 1px 未満にならないよう `Math.max(1, ...)` で保護（wallHeight が極小値でも
- * PIXI.Texture.frame に渡せる値にする）。Math.round で整数化。
+ * - 0 < wh < 1: tileCount=1、frameY=(1-wh)*H、frameHeight=wh*H（上端を削って下部のみ）
+ * - wh == 1: tileCount=1、frameY=0、frameHeight=H（texture 全体）
+ * - 1 < wh <= 2: tileCount=2、frameY=(2-wh)*H、frameHeight=wh*H（2 タイル合成の下部 wh 分）
+ * - 2 < wh <= 3: tileCount=3、frameY=(3-wh)*H、frameHeight=wh*H（3 タイル合成の下部 wh 分）
+ * - wh > 3: tileCount=3、frameY=0、frameHeight=3*H にクランプ（console.warn 1 回）
+ * - wh <= 0 / NaN / Infinity: tileCount=1、frameY=0、frameHeight=0（描画スキップ）
  *
- * 数学的根拠:
- *   - 通常（wallHeight=1）: pixel scale = lineHeight/textureHeight
- *   - 短い壁 crop 後（wallHeight=0.5）: pixel scale = (lineHeight*0.5) / (textureHeight*0.5)
- *     = lineHeight/textureHeight ← 通常と同じ → レンガ模様が縦潰れしない
+ * `frameHeight` は 1px 未満にならないよう `Math.max(1, ...)` で保護、Math.round で整数化。
+ *
+ * 数学的根拠（pixel scale 不変性）:
+ *   - wh=1: pixel scale = lineHeight / H
+ *   - wh=0.5 crop: pixel scale = (lineHeight*0.5) / (H*0.5) = lineHeight / H ← 同じ
+ *   - wh=2 tile: pixel scale = (lineHeight*2) / (H*2) = lineHeight / H ← 同じ
+ *
+ * @param textureHeight 基底テクスチャの高さ（通常 TEXTURE_HEIGHT=64）。スタック後の高さではない
+ * @param wallHeight 壁高さ（1.0 が標準）
  */
 export function computeWallTextureCrop(textureHeight: number, wallHeight: number): WallTextureCrop {
   // 防御: 非有限値・非正値は空の切り出し
   if (!Number.isFinite(wallHeight) || wallHeight <= 0) {
-    return { frameY: 0, frameHeight: 0 }
+    return { frameY: 0, frameHeight: 0, tileCount: 1 }
   }
-  // wallHeight >= 1 は texture 全体（従来 stretch 挙動、tiling は別 Issue）
-  if (wallHeight >= 1) {
-    return { frameY: 0, frameHeight: textureHeight }
+
+  // wh > 3 はクランプ（3 タイル分に圧縮、stretch 退化）
+  if (wallHeight > 3) {
+    warnWallHeightClampedOnce(wallHeight)
+    return { frameY: 0, frameHeight: textureHeight * 3, tileCount: 3 }
   }
-  // 0 < wallHeight < 1: 下部のみ残す
+
+  // バケット: ceil(wh) で 1/2/3 を決める（wh=1.0 は 1、wh=2.0 は 2、wh=2.0001 は 3）
+  // wh <= 0 は上で弾いているので、ceil(wh) は 1/2/3 のいずれか
+  const tileCount = Math.ceil(wallHeight) as 1 | 2 | 3
+  const stackHeight = textureHeight * tileCount
+
+  // frameHeight = wh * H（整数化 + 1px 保護）
   const rawHeight = Math.round(textureHeight * wallHeight)
   const frameHeight = Math.max(1, rawHeight)
-  const frameY = textureHeight - frameHeight
-  return { frameY, frameHeight }
+  // frameY は「スタック高さの下端に揃える」= stackHeight - frameHeight
+  const frameY = stackHeight - frameHeight
+  return { frameY, frameHeight, tileCount }
+}
+
+/**
+ * テスト専用: wh > 3 警告フラグをリセット。
+ * 本番コードから呼ばれることを想定しない。
+ * @internal
+ */
+export function __resetWallHeightClampWarning(): void {
+  _loggedClampWarning = false
 }
 
 /**
@@ -284,4 +347,113 @@ export async function loadWallTexture(
       columns.length = 0
     },
   }
+}
+
+/**
+ * スタック済み壁テクスチャシートのキャッシュ（Issue #93）。
+ * key は `"${kind}:${tileCount}"`。renderer が GC されれば一緒に消える（WeakMap）。
+ * RaycastRenderer からは tileCount>=2 のときだけ呼ぶ想定。
+ */
+const stackedWallCache = new WeakMap<Renderer, Map<string, WallTextureSheet>>()
+
+/**
+ * ベーステクスチャを縦方向に `tileCount` 回スタックした RenderTexture を作る。
+ * Sprite を tileCount 個配置して renderer.render で 1 枚の RenderTexture に焼く。
+ */
+function buildStackedWallTexture(
+  renderer: Pick<Renderer, 'render'>,
+  base: Texture,
+  tileCount: number
+): RenderTexture {
+  const container = new Container()
+  for (let i = 0; i < tileCount; i++) {
+    const sprite = new Sprite(base)
+    sprite.x = 0
+    sprite.y = i * TEXTURE_HEIGHT
+    container.addChild(sprite)
+  }
+  const rt = RenderTexture.create({
+    width: TEXTURE_WIDTH,
+    height: TEXTURE_HEIGHT * tileCount,
+    resolution: 1,
+  })
+  renderer.render({ container, target: rt })
+  // sprite は base texture を参照しているだけ。base source は demoWallCache の所有なので、
+  // children: true でも base 本体は destroy されない（Sprite 側の所有権は無い）。
+  container.destroy({ children: true })
+  return rt
+}
+
+/**
+ * スタック済み壁テクスチャシートを取得する（Issue #93、垂直タイリング用）。
+ *
+ * - tileCount=1 のときは基底テクスチャからそのまま columns を切り出して返す
+ *   （`loadWallTexture` と同じ結果の新しいシート。呼び出し側は独立した destroy 管理が可能）。
+ * - tileCount>=2 のときは、基底テクスチャを縦に `tileCount` 回スタックした RenderTexture を
+ *   作り、そこから `sliceColumns` で列を切り出す。計算された stacked RenderTexture は
+ *   `stackedWallCache` に保持され、renderer が GC されるまで再利用される。
+ *
+ * `sheet.height` は `TEXTURE_HEIGHT * tileCount`。`computeWallTextureCrop` の frameY/frameHeight は
+ * このスタック高さと整合する。呼び出し側は `computeWallTextureCrop(TEXTURE_HEIGHT, wh)` と
+ * 基底高さを渡し、帰ってきた `frameY` を `Rectangle(col, frameY, 1, frameHeight)` として
+ * 本関数が返した `sheet.columns[col].source` に当てる。
+ */
+export function getStackedWallSheet(
+  renderer: Renderer,
+  kind: WallTextureKind,
+  tileCount: number
+): WallTextureSheet {
+  // 入力防御: 1-3 にクランプ。tileCount が外から 0 や 4+ で来ても安全に動く
+  const clamped = Math.max(1, Math.min(3, Math.floor(tileCount))) as 1 | 2 | 3
+  const key = `${kind}:${clamped}`
+
+  let byRenderer = stackedWallCache.get(renderer)
+  if (!byRenderer) {
+    byRenderer = new Map()
+    stackedWallCache.set(renderer, byRenderer)
+  }
+  const cached = byRenderer.get(key)
+  if (cached) return cached
+
+  const base = getOrBuildDemoBase(renderer, kind)
+  const stackedHeight = TEXTURE_HEIGHT * clamped
+  // clamped === 1 のときは demoWallCache 所有の base をそのまま使い回すので、本 sheet は base の
+  // 所有権を持たない（ownedBase=null）。destroy で誤って demoWallCache の base を壊さないため。
+  // clamped >= 2 のときだけ新しい RenderTexture を本 sheet が所有し、clearStackedWallCache 経由で
+  // sheet.destroy() → ownedBase.destroy(true) で解放する。
+  const ownedBase: RenderTexture | null =
+    clamped === 1 ? null : buildStackedWallTexture(renderer, base, clamped)
+  const stackedBase: Texture = ownedBase ?? base
+  const columns = sliceColumns(stackedBase, TEXTURE_WIDTH, stackedHeight)
+
+  const sheet: WallTextureSheet = {
+    columns,
+    width: TEXTURE_WIDTH,
+    height: stackedHeight,
+    destroy() {
+      for (const tex of columns) {
+        tex.destroy(false)
+      }
+      columns.length = 0
+      // ownedBase !== null の場合のみ、本 sheet が所有する stacked RenderTexture を解放する。
+      // ownedBase === null（tileCount=1）は demoWallCache の base を共有しているため触らない。
+      ownedBase?.destroy(true)
+    },
+  }
+  byRenderer.set(key, sheet)
+  return sheet
+}
+
+/**
+ * レンダラー破棄時に、スタック済み RenderTexture とシートを一括 destroy する。
+ * demoWallCache の base を壊す前に呼ぶのが安全（stacked RenderTexture は既に独立 source を持つが、
+ * columns は base source を参照するため、順序を気にする場合は stacked → demo の順で呼ぶ）。
+ */
+export function clearStackedWallCache(renderer: Renderer): void {
+  const byRenderer = stackedWallCache.get(renderer)
+  if (!byRenderer) return
+  for (const sheet of byRenderer.values()) {
+    sheet.destroy()
+  }
+  stackedWallCache.delete(renderer)
 }
