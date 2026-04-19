@@ -102,3 +102,36 @@ export function projectNpcToScreen(
     drawEndY,
   }
 }
+
+export interface WallYRange {
+  /** 壁の上端 Y（画面座標、小さい方が上）。0 未満はクランプ */
+  drawStartY: number
+  /** 壁の下端 Y（画面座標、地面相当で常に `h/2 + lineHeight/2` 近辺）。h 超過はクランプ */
+  drawEndY: number
+}
+
+/**
+ * 壁の高さ（wallHeight, 1.0 = 従来の画面中央 ±lineHeight/2）を考慮した Y 範囲を返す。
+ *
+ * 地面の位置は wallHeight に依らず常に `h/2 + lineHeight/2`（プレイヤー視線が地面から 0.5 タイル上と仮定）。
+ * 上端は「地面から wallHeight 分上」= drawEnd - lineHeight * wallHeight。
+ *
+ * 画面外クランプは呼び出し側が行うが、本関数でもクランプ済みの値を返す。
+ *
+ * @param lineHeight 高さ 1.0 の壁が占める縦px（Lodev 方式の h/perpDist）
+ * @param wallHeight 壁の高さ倍率（0 以下は 0 扱い、特に上限なし）
+ * @param screenHeight 画面高 px
+ */
+export function computeWallYRange(
+  lineHeight: number,
+  wallHeight: number,
+  screenHeight: number
+): WallYRange {
+  const h = screenHeight
+  const effectiveHeight = wallHeight <= 0 ? 0 : wallHeight
+  const drawEndRaw = Math.floor(lineHeight / 2 + h / 2)
+  const drawStartRaw = Math.floor(drawEndRaw - lineHeight * effectiveHeight)
+  const drawStartY = drawStartRaw < 0 ? 0 : drawStartRaw > h ? h : drawStartRaw
+  const drawEndY = drawEndRaw < 0 ? 0 : drawEndRaw > h ? h : drawEndRaw
+  return { drawStartY, drawEndY }
+}
