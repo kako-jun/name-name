@@ -198,3 +198,125 @@ describe('computeWallYRange', () => {
     expect(range.drawEndY).toBe(240)
   })
 })
+
+describe('computeWallYRange (with pitch)', () => {
+  // 基準: h=480, lineHeight=200, wallHeight=1
+  //   pitch=0 → drawEndY=340, drawStartY=140
+  //   pitchOffsetPx は baseY = h/2 + offset を動かし、上端・下端の両方に同じ量加わる
+
+  it('pitchOffsetPx 未指定は従来挙動と同じ', () => {
+    const a = computeWallYRange(200, 1, 480)
+    const b = computeWallYRange(200, 1, 480, 0)
+    expect(a.drawStartY).toBe(b.drawStartY)
+    expect(a.drawEndY).toBe(b.drawEndY)
+    expect(b.drawStartY).toBe(140)
+    expect(b.drawEndY).toBe(340)
+  })
+
+  it('pitchOffsetPx > 0 で全体が下にシフト（視線が上向き）', () => {
+    // baseY = 240 + 50 = 290 → drawEndY=floor(100+290)=390, drawStartY=floor(390-200)=190
+    const range = computeWallYRange(200, 1, 480, 50)
+    expect(range.drawEndY).toBe(390)
+    expect(range.drawStartY).toBe(190)
+  })
+
+  it('pitchOffsetPx < 0 で全体が上にシフト（視線が下向き）', () => {
+    // baseY = 240 - 50 = 190 → drawEndY=floor(100+190)=290, drawStartY=floor(290-200)=90
+    const range = computeWallYRange(200, 1, 480, -50)
+    expect(range.drawEndY).toBe(290)
+    expect(range.drawStartY).toBe(90)
+  })
+
+  it('pitch で画面外に出ても [0, h] にクランプされ安全', () => {
+    // h=480, pitch=+1000 → drawEndRaw=1340, drawStartRaw=1140 → 両方 480 にクランプ
+    const range = computeWallYRange(200, 1, 480, 1000)
+    expect(range.drawStartY).toBe(480)
+    expect(range.drawEndY).toBe(480)
+    // 反対方向（pitch=-1000）→ 両方 0 にクランプ
+    const range2 = computeWallYRange(200, 1, 480, -1000)
+    expect(range2.drawStartY).toBe(0)
+    expect(range2.drawEndY).toBe(0)
+  })
+
+  it('pitchOffsetPx=NaN は 0 扱い', () => {
+    // 0 扱いなので pitch 未指定と同値
+    const range = computeWallYRange(200, 1, 480, Number.NaN)
+    expect(range.drawStartY).toBe(140)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('pitchOffsetPx=Infinity は 0 扱い', () => {
+    const range = computeWallYRange(200, 1, 480, Number.POSITIVE_INFINITY)
+    expect(range.drawStartY).toBe(140)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('pitch と wallHeight の合成: pitchOffsetPx > 0 + wallHeight=1.5', () => {
+    // baseY=290 → drawEndY=floor(100+290)=390, drawStartY=floor(390-200*1.5)=90
+    const range = computeWallYRange(200, 1.5, 480, 50)
+    expect(range.drawEndY).toBe(390)
+    expect(range.drawStartY).toBe(90)
+  })
+})
+
+describe('projectNpcToScreen (with pitch)', () => {
+  const player = { x: 5.5, y: 5.5 }
+  const dir = { x: 1, y: 0 }
+  const planeLen = Math.tan(Math.PI / 6)
+  const plane = { x: 0, y: planeLen }
+  const screen = { width: 800, height: 600 }
+  const minDepth = 0.1
+
+  it('pitchOffsetPx 未指定は従来挙動と同じ（透過互換）', () => {
+    const npc = { x: 6.5, y: 5.5 }
+    const a = projectNpcToScreen(npc, player, dir, plane, screen, minDepth)
+    const b = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, 0)
+    expect(a).not.toBeNull()
+    expect(b).not.toBeNull()
+    expect(b!.drawStartY).toBe(a!.drawStartY)
+    expect(b!.drawEndY).toBe(a!.drawEndY)
+    expect(b!.screenX).toBe(a!.screenX)
+  })
+
+  it('pitchOffsetPx > 0 で Y 範囲が下にシフト', () => {
+    // 通常: drawStartY=0, drawEndY=600（spriteHeight=600, h=600, baseY=300）
+    // pitch=+50 → baseY=350 → drawStart=floor(-300+350)=50, drawEnd=floor(300+350)=650 → 600 クランプ
+    const npc = { x: 6.5, y: 5.5 }
+    const result = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, 50)
+    expect(result).not.toBeNull()
+    expect(result!.drawStartY).toBe(50)
+    expect(result!.drawEndY).toBe(600)
+    // X 系は pitch に影響されない
+    expect(result!.screenX).toBe(400)
+    expect(result!.drawStartX).toBe(100)
+    expect(result!.drawEndX).toBe(700)
+  })
+
+  it('pitchOffsetPx < 0 で Y 範囲が上にシフト', () => {
+    // pitch=-50 → baseY=250 → drawStart=floor(-300+250)=-50→0, drawEnd=floor(300+250)=550
+    const npc = { x: 6.5, y: 5.5 }
+    const result = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, -50)
+    expect(result).not.toBeNull()
+    expect(result!.drawStartY).toBe(0)
+    expect(result!.drawEndY).toBe(550)
+  })
+
+  it('pitchOffsetPx=NaN は 0 扱い', () => {
+    const npc = { x: 6.5, y: 5.5 }
+    const a = projectNpcToScreen(npc, player, dir, plane, screen, minDepth)
+    const b = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, Number.NaN)
+    expect(b!.drawStartY).toBe(a!.drawStartY)
+    expect(b!.drawEndY).toBe(a!.drawEndY)
+  })
+
+  it('pitch で画面外に出ても [0, h] にクランプ', () => {
+    // 巨大 pitch でも drawStart/End が [0, h] に収まる
+    const npc = { x: 6.5, y: 5.5 }
+    const big = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, 10000)
+    expect(big!.drawStartY).toBe(600)
+    expect(big!.drawEndY).toBe(600)
+    const negBig = projectNpcToScreen(npc, player, dir, plane, screen, minDepth, -10000)
+    expect(negBig!.drawStartY).toBe(0)
+    expect(negBig!.drawEndY).toBe(0)
+  })
+})
