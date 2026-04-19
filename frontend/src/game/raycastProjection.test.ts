@@ -111,6 +111,8 @@ describe('computeWallYRange', () => {
   //   drawEndRaw   = floor(100 + 240) = 340
   //   drawStartRaw = floor(340 - 200) = 140
   // 地面位置（drawEnd）は wallHeight に依らず 340 で不変。
+  // 注意: 本関数は Y 範囲を返すだけで、`drawEndY - drawStartY <= 0` のときの描画スキップは
+  // 呼び出し側責務（RaycastRenderer.renderFrame の drawHeight 判定）。
 
   it('wallHeight=1 は従来挙動（中央±lineHeight/2）', () => {
     const range = computeWallYRange(200, 1, 480)
@@ -169,5 +171,30 @@ describe('computeWallYRange', () => {
     const range = computeWallYRange(800, 1, 480)
     expect(range.drawStartY).toBe(0)
     expect(range.drawEndY).toBe(480)
+  })
+
+  it('wallHeight=NaN は 0 扱い（drawStart===drawEnd）', () => {
+    const range = computeWallYRange(200, Number.NaN, 480)
+    expect(range.drawStartY).toBe(340)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('wallHeight=Infinity は 0 扱い', () => {
+    const range = computeWallYRange(200, Number.POSITIVE_INFINITY, 480)
+    expect(range.drawStartY).toBe(340)
+    expect(range.drawEndY).toBe(340)
+  })
+
+  it('lineHeight=NaN は 0 扱い（drawStart===drawEnd=h/2）', () => {
+    const range = computeWallYRange(Number.NaN, 1, 480)
+    // safeLineHeight=0 → drawEndRaw=floor(0+240)=240, drawStartRaw=floor(240-0)=240
+    expect(range.drawStartY).toBe(240)
+    expect(range.drawEndY).toBe(240)
+  })
+
+  it('lineHeight<0 は 0 扱い', () => {
+    const range = computeWallYRange(-100, 1, 480)
+    expect(range.drawStartY).toBe(240)
+    expect(range.drawEndY).toBe(240)
   })
 })

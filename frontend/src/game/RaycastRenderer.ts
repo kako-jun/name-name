@@ -74,7 +74,7 @@ export class RaycastRenderer {
 
   private mapTiles: number[][] = []
   /** タイルごとの壁高さ（[y][x]、1.0 = 従来挙動）。undefined 時は全タイル 1.0 扱い（Issue #49 Phase 1） */
-  private wallHeights: number[][] | undefined = undefined
+  private wallHeights?: number[][]
   private mapWidth = 0
   private mapHeight = 0
   /** スプライトシートセルサイズ（マップの tileSize と揃える）。NPC テクスチャ切り出しで使用 */
@@ -169,6 +169,13 @@ export class RaycastRenderer {
       this.mapTiles.some((r) => r.length !== this.mapWidth)
     ) {
       console.warn('[RaycastRenderer] map tiles dimensions mismatch')
+    }
+    if (
+      this.wallHeights &&
+      (this.wallHeights.length !== this.mapHeight ||
+        this.wallHeights.some((r) => r.length !== this.mapWidth))
+    ) {
+      console.warn('[RaycastRenderer] wallHeights dimensions mismatch (falls back to 1.0 per cell)')
     }
 
     this.rebuildNpcObjects(gameData.npcs)
@@ -400,7 +407,9 @@ export class RaycastRenderer {
     while (this.stripeSprites.length < target) {
       const s = new Sprite(Texture.WHITE)
       // anchor.y=0: Sprite の上端を drawStartY に合わせる（Issue #49 Phase 1 で wallHeight 対応のため
-      // 「中央寄せで高さ固定」から「上端 drawStartY、height = drawEndY - drawStartY」方式に移行）
+      // 「中央寄せで高さ固定」から「上端 drawStartY、height = drawEndY - drawStartY」方式に移行）。
+      // 中央寄せ方式だと wallHeight ≠ 1 のとき中心が壁中央からズレるため、上端基準にすれば
+      // 純粋関数 `computeWallYRange` 側で Y 範囲を完結させられる。
       s.anchor.set(0, 0)
       s.visible = false
       // texture は 1px 幅 → `scale.x = stripeWidth` が実質セットされる（width setter 経由）

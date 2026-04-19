@@ -38,6 +38,8 @@ const tiles: number[][] = [
 const wallHeights: number[][] = tiles.map((row, y) =>
   row.map((t, x) => {
     if (t === TileType.WATER) return 0.5
+    // GRASS/ROAD は壁判定されない（isWallTile=false）ので wallHeights 値は実際には参照されないが、
+    // 保険として 0 を入れておく（万が一参照されても drawHeight=0 で描画スキップ）
     if (t !== TileType.TREE) return 0
     // 外周の四隅を塔
     const isCorner =
