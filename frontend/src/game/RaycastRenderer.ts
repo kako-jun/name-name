@@ -86,6 +86,8 @@ export class RaycastRenderer {
   private playerX = 0
   private playerY = 0
   private playerAngle = 0 // radians; 0 = +x (right)
+  /** プレイヤーの上下視線（rad）。正で上向き（画面中央が下にシフト）。Issue #80 Phase 2 */
+  private playerPitch = 0
 
   private screenWidth = 0
   private screenHeight = 0
@@ -99,6 +101,12 @@ export class RaycastRenderer {
   private readonly moveSpeed = 3
   // 旋回速度 3 rad/s: 1 回転に約 2.1 秒。FPS の標準より遅めだが、ADV で酔いにくいことを優先。
   private readonly rotSpeed = 3
+  // pitch 速度 1.5 rad/s: 旋回より遅め。最大 ±0.4 rad なので押しっぱなしで約 0.27 秒で端に到達する程度。
+  // Issue #80 Phase 2: PageUp/PageDown キーで連続変化させる。
+  private readonly pitchSpeed = 1.5
+  // pitch クランプ ±0.4 rad（≒ ±23°）。Lodev 方式の `Math.tan(pitch) * h/2` でも 0.4 rad で
+  // h/2 の約 42% シフトに収まり、画面外破綻を起こさない目安。広げすぎると床/天井が破綻して見える。
+  private readonly pitchMaxAbs = 0.4
   // フォグ上限 12 タイル: マップサイズ（通常 16x12 前後）に対して「遠くの壁は薄く霞む」ことを狙った値。
   // 大きくすると遠景まで鮮明に見えて没入感が減り、小さくすると視界が狭く感じる。
   private readonly fogMaxDist = 12
@@ -184,6 +192,8 @@ export class RaycastRenderer {
     this.playerX = gameData.player.x + 0.5
     this.playerY = gameData.player.y + 0.5
     this.playerAngle = directionToAngle(gameData.player.direction)
+    // pitch は load() ごとに 0（水平）にリセット。データモデル化は将来 Issue
+    this.playerPitch = 0
 
     this.lastTickMs = performance.now()
     this.keys.clear()
@@ -365,6 +375,9 @@ export class RaycastRenderer {
     const npc = this.npcs.find((n) => Math.floor(n.x) === tx && Math.floor(n.y) === ty)
     if (npc) {
       this.dialogBox?.show(npc.data.name, npc.data.message)
+      // ダイアログ表示中は updateMovement がスキップされるため、押されたままのキー
+      // （移動・回転・pitch）が残留する。閉じた瞬間にジャンプしないよう一括クリア。
+      this.keys.clear()
     }
   }
 
@@ -450,6 +463,18 @@ export class RaycastRenderer {
     if (this.keys.has('rot_right')) {
       this.playerAngle += this.rotSpeed * dt
     }
+
+    // pitch（上下視線、Issue #80 Phase 2）
+    // PageUp = 上を見る = playerPitch を増加（baseY が下にシフト → 空が広く見える）
+    if (this.keys.has('pitch_up')) {
+      this.playerPitch += this.pitchSpeed * dt
+    }
+    if (this.keys.has('pitch_down')) {
+      this.playerPitch -= this.pitchSpeed * dt
+    }
+    // ±pitchMaxAbs にクランプ
+    if (this.playerPitch > this.pitchMaxAbs) this.playerPitch = this.pitchMaxAbs
+    else if (this.playerPitch < -this.pitchMaxAbs) this.playerPitch = -this.pitchMaxAbs
 
     const dx = Math.cos(this.playerAngle)
     const dy = Math.sin(this.playerAngle)
@@ -549,11 +574,25 @@ export class RaycastRenderer {
     const w = this.screenWidth
     const h = this.screenHeight
 
-    // 空・床のベタ塗り
-    g.rect(0, 0, w, h / 2)
-    g.fill(0x4477cc)
-    g.rect(0, h / 2, w, h / 2)
-    g.fill(0x555555)
+    // pitch（上下視線、Issue #80 Phase 2）→ 画面中央 Y のシフト px。
+    // Lodev 方式の `Math.tan(pitch) * h/2`。pitch 正で baseY が下にシフト → 空が広く見える＝視線が上向き。
+    // 空・床の分割位置 / 壁 Y 範囲 / NPC Y 範囲のすべてに同じオフセットを適用する。
+    const rawPitchOffset = Math.round(Math.tan(this.playerPitch) * (h / 2))
+    // 念のため [-h, h] にクランプ（pitch クランプ済みなので通常は ±0.4 rad ≈ ±42% h で収まる）
+    const pitchOffsetPx = rawPitchOffset > h ? h : rawPitchOffset < -h ? -h : rawPitchOffset
+    // 空・床ベタ塗りの境界 Y。[0, h] にクランプして負/超過の高さを避ける。
+    const horizonY = h / 2 + pitchOffsetPx
+    const horizonClamped = horizonY < 0 ? 0 : horizonY > h ? h : horizonY
+
+    // 空・床のベタ塗り（pitch に応じて分割位置を上下に動かす）
+    if (horizonClamped > 0) {
+      g.rect(0, 0, w, horizonClamped)
+      g.fill(0x4477cc)
+    }
+    if (horizonClamped < h) {
+      g.rect(0, horizonClamped, w, h - horizonClamped)
+      g.fill(0x555555)
+    }
 
     // カメラ設定: dir = 単位向き, plane = dir に垂直、長さは tan(fov/2)
     const dirX = Math.cos(this.playerAngle)
@@ -645,7 +684,7 @@ export class RaycastRenderer {
         // wallHeight=1.0 なら従来挙動、0.5 なら腰高の柵、1.5 なら塔。
         // 地面位置（drawEndY）は wallHeight に依らず不変で、上端（drawStartY）が伸縮する。
         const wallHeight = this.getWallHeight(mapX, mapY)
-        const { drawStartY, drawEndY } = computeWallYRange(lineHeight, wallHeight, h)
+        const { drawStartY, drawEndY } = computeWallYRange(lineHeight, wallHeight, h, pitchOffsetPx)
         const drawHeight = drawEndY - drawStartY
 
         // wallHeight<=0 で高さゼロ → 描画なし
@@ -707,7 +746,8 @@ export class RaycastRenderer {
         { x: dirX, y: dirY },
         { x: planeX, y: planeY },
         { width: w, height: h },
-        this.npcSpriteMinDepth
+        this.npcSpriteMinDepth,
+        pitchOffsetPx
       )
       if (!proj) {
         n.container.visible = false
@@ -735,9 +775,10 @@ export class RaycastRenderer {
         n.sprite.tint = applyFog(n.data.color, fog)
       }
 
-      // Sprite 配置とサイズ
+      // Sprite 配置とサイズ。anchor=(0.5,0.5) なので Y は baseY = h/2 + pitchOffsetPx に置く
+      // （projectNpcToScreen の drawStartY/EndY と同じ baseY を共有させる）
       n.sprite.x = spriteScreenX
-      n.sprite.y = h / 2
+      n.sprite.y = h / 2 + pitchOffsetPx
       n.sprite.width = spriteWidthPx
       n.sprite.height = spriteHeight
       n.container.visible = true
@@ -813,6 +854,10 @@ function normalizeKey(key: string): string {
     case 'e':
     case 'E':
       return 'strafe_right'
+    case 'PageUp':
+      return 'pitch_up'
+    case 'PageDown':
+      return 'pitch_down'
     default:
       return ''
   }
@@ -825,7 +870,9 @@ function isMovementKey(k: string): boolean {
     k === 'rot_left' ||
     k === 'rot_right' ||
     k === 'strafe_left' ||
-    k === 'strafe_right'
+    k === 'strafe_right' ||
+    k === 'pitch_up' ||
+    k === 'pitch_down'
   )
 }
 
