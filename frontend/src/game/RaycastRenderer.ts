@@ -488,7 +488,7 @@ export class RaycastRenderer {
     const ty = Math.floor(this.playerY + dy)
     const npc = this.npcs.find((n) => Math.floor(n.x) === tx && Math.floor(n.y) === ty)
     if (npc) {
-      this.dialogBox?.show(npc.data.name, npc.data.message)
+      this.dialogBox?.show(npc.data.name, npc.data.message, npc.data.portrait)
       // ダイアログ表示中は updateMovement がスキップされるため、押されたままのキー
       // （移動・回転・pitch）が残留する。閉じた瞬間に意図しない挙動にならないよう一括クリア。
       // ジャンプは keys set ではなく handleKeyDown 直接処理 + dialog ガードで防がれているので対象外。
