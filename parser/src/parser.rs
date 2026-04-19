@@ -862,28 +862,18 @@ fn emit_unknown_view_warning(value: &str) {
 fn emit_map_dimension_warning(width: u32, height: u32, raw_rows: &[&str]) {
     let actual_rows = raw_rows.len();
     let row_widths: Vec<usize> = raw_rows.iter().map(|r| r.chars().count()).collect();
-    let msg = format!(
+    emit_warning(&format!(
         "[name-name-parser] warning: map dimensions mismatch — declared {}x{}, got {} rows with widths {:?}",
         width, height, actual_rows, row_widths
-    );
-    #[cfg(target_arch = "wasm32")]
-    {
-        web_sys::console::warn_1(&msg.into());
-    }
-    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-    {
-        eprintln!("{}", msg);
-    }
-    #[cfg(all(not(target_arch = "wasm32"), test))]
-    {
-        let _ = msg;
-    }
+    ));
 }
 
 /// 高さブロックの種別。tag() で `[...]` 内部の日本語ラベルを返す。
 ///
 // TODO: warnings を Document の warnings フィールドに集約し、frontend で
 //       エディタ UI が視覚的に表示できる仕組みを検討（現状は eprintln のみ）。
+//       将来 warnings を `Document` フィールドに集約する際は、`#[cfg(test)]` での
+//       出力抑制をやめ、`Vec<String>` に貯めてテストから検証可能にする設計に変える。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeightKind {
     Wall,
@@ -902,10 +892,10 @@ impl HeightKind {
 }
 
 /// 行が高さブロックの開始タグ（`[壁高さ]` / `[床高さ]` / `[天井高さ]`）かを判定する。
-/// `trim()` は呼び出し側で既に済んでいる前提だが、末尾スペース等に耐えるため
-/// 念のため再度 `trim()` する。`[マップ ...]` 系のような属性は現状なし。
+/// 呼び出し側で trim 済み前提（parser ループ 167 行目で `trimmed` を渡す）。
+/// `[マップ ...]` 系のような属性は現状なし。
 fn detect_height_block(line: &str) -> Option<HeightKind> {
-    match line.trim() {
+    match line {
         "[壁高さ]" => Some(HeightKind::Wall),
         "[床高さ]" => Some(HeightKind::Floor),
         "[天井高さ]" => Some(HeightKind::Ceiling),
@@ -961,41 +951,35 @@ fn inject_heights_into_last_map(events: &mut [Event], kind: HeightKind, rows: Ve
 }
 
 fn emit_height_block_warning(detail: &str) {
-    let msg = format!("[name-name-parser] warning: {}", detail);
-    #[cfg(target_arch = "wasm32")]
-    {
-        web_sys::console::warn_1(&msg.into());
-    }
-    // テスト中は stderr を汚さない（question #15 の判断）。
-    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-    {
-        eprintln!("{}", msg);
-    }
-    #[cfg(all(not(target_arch = "wasm32"), test))]
-    {
-        let _ = msg; // suppress unused in tests
-    }
+    emit_warning(&format!("[name-name-parser] warning: {}", detail));
 }
 
 /// `[/マップ]` 欠落時の警告。行頭 `[` で始まる別ブロックが突入した時点で
 /// マップブロックを打ち切るため、既に収集した行数を報告する。
 fn emit_map_close_missing_warning(width: u32, height: u32, collected_rows: usize) {
-    let msg = format!(
+    emit_warning(&format!(
         "[name-name-parser] warning: [/マップ] が見つからないうちに別ブロックが開始されました — 宣言 {}x{}, 収集済み {} 行",
         width, height, collected_rows
-    );
-    #[cfg(target_arch = "wasm32")]
-    {
-        web_sys::console::warn_1(&msg.into());
-    }
-    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-    {
-        eprintln!("{}", msg);
-    }
-    #[cfg(all(not(target_arch = "wasm32"), test))]
-    {
-        let _ = msg;
-    }
+    ));
+}
+
+/// 共通の warning 出力ヘルパー。
+/// - native (`cfg(test)` なし): stderr に出力する
+/// - native + test: 何もしない（テスト中の stderr 汚染防止）
+/// - wasm32: `console.warn` へ流す
+#[cfg(all(not(target_arch = "wasm32"), not(test)))]
+fn emit_warning(msg: &str) {
+    eprintln!("{}", msg);
+}
+
+#[cfg(all(not(target_arch = "wasm32"), test))]
+fn emit_warning(_msg: &str) {
+    // suppress during tests
+}
+
+#[cfg(target_arch = "wasm32")]
+fn emit_warning(msg: &str) {
+    web_sys::console::warn_1(&msg.into());
 }
 
 fn unquote(s: &str) -> String {

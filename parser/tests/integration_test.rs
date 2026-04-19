@@ -1288,6 +1288,46 @@ T.T
     assert_eq!(doc, doc2);
 }
 
+/// 列数不揃いな高さブロックでも parser は受理して保持する。
+/// 寸法整合は `validateMapHeights` 側で検証する責務であり、
+/// parser は警告だけ出して値はそのまま `Vec<Vec<f64>>` に載せる。
+#[test]
+fn test_rpg_map_height_jagged_rows() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "RPG"
+---
+
+## map: m
+
+[マップ 3x2 タイル=32]
+TTT
+TGT
+[/マップ]
+
+[壁高さ]
+1 2 3
+4 5
+[/壁高さ]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::RpgMap(map) => {
+            // ジャグ配列でも Vec<Vec<f64>> としてそのまま保持される（破棄しない）。
+            assert_eq!(
+                map.wall_heights.as_ref().expect("wall_heights present"),
+                &vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0]]
+            );
+            assert_eq!(map.floor_heights, None);
+            assert_eq!(map.ceiling_heights, None);
+        }
+        other => panic!("Expected RpgMap, got {:?}", other),
+    }
+}
+
 /// [マップ] + [壁高さ] + [床高さ] + [天井高さ] の 4 ブロックが揃った場合の往復。
 #[test]
 fn test_rpg_map_with_all_heights() {

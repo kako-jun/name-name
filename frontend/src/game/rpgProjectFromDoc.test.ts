@@ -836,4 +836,86 @@ describe('applyRpgProjectToDoc', () => {
     expect(npcs.find((n) => n.id === 'a')?.direction).toBe('Left')
     expect(npcs.find((n) => n.id === 'b')?.direction).toBeUndefined()
   })
+
+  // Issue #90: doc → project → doc の往復で wall/floor/ceiling heights が保持される。
+  // NPC sprite/frames の往復テスト（696-772 行）と同形式。
+  it('RpgMap の wallHeights / floorHeights / ceilingHeights を doc ⇔ project 間で往復できる', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'heights',
+              title: '高さ往復',
+              view: 'TopDown',
+              events: [
+                {
+                  RpgMap: {
+                    width: 3,
+                    height: 2,
+                    tile_size: 32,
+                    tiles: [
+                      [2, 2, 2],
+                      [2, 0, 2],
+                    ],
+                    wall_heights: [
+                      [1, 2, 1],
+                      [1, 1, 1],
+                    ],
+                    floor_heights: [
+                      [0, 0, 0],
+                      [0, 0.25, 0],
+                    ],
+                    ceiling_heights: [
+                      [1, 1, 1],
+                      [1, 2, 1],
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    const project = rpgProjectFromDoc(doc)
+    expect(project).not.toBeNull()
+    expect(project!.map.wallHeights).toEqual([
+      [1, 2, 1],
+      [1, 1, 1],
+    ])
+    expect(project!.map.floorHeights).toEqual([
+      [0, 0, 0],
+      [0, 0.25, 0],
+    ])
+    expect(project!.map.ceilingHeights).toEqual([
+      [1, 1, 1],
+      [1, 2, 1],
+    ])
+
+    const updated = applyRpgProjectToDoc(doc, project!, 'heights')
+    const rpgMaps = updated.chapters[0].scenes[0].events.flatMap((e) =>
+      typeof e !== 'string' && 'RpgMap' in e ? [e.RpgMap] : []
+    )
+    expect(rpgMaps).toHaveLength(1)
+    const map = rpgMaps[0]
+    expect(map.wall_heights).toEqual([
+      [1, 2, 1],
+      [1, 1, 1],
+    ])
+    expect(map.floor_heights).toEqual([
+      [0, 0, 0],
+      [0, 0.25, 0],
+    ])
+    expect(map.ceiling_heights).toEqual([
+      [1, 1, 1],
+      [1, 2, 1],
+    ])
+  })
 })
