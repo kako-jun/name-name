@@ -933,14 +933,7 @@ export class RaycastRenderer {
           hitTile === TileType.WATER ? this.waterTexture : this.treeTexture
         if (sheet) {
           // テクスチャストライプ方式: Sprite プールの texture/位置/tint を更新
-          const u = computeWallU(
-            side as 0 | 1,
-            perpDist,
-            this.playerX,
-            this.playerY,
-            rayDirX,
-            rayDirY
-          )
+          const u = computeWallU(side, perpDist, this.playerX, this.playerY, rayDirX, rayDirY)
           const col = uToColumn(u, sheet.width)
           // y-side は従来同様に 0.7 倍で暗めにしてから fog 適用（立体感の維持）。
           // 値はモジュール定数（SIDE_SHADE_BASE）で 1 度だけ計算してある。
