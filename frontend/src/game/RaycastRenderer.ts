@@ -375,6 +375,9 @@ export class RaycastRenderer {
     const npc = this.npcs.find((n) => Math.floor(n.x) === tx && Math.floor(n.y) === ty)
     if (npc) {
       this.dialogBox?.show(npc.data.name, npc.data.message)
+      // ダイアログ表示中は updateMovement がスキップされるため、押されたままのキー
+      // （移動・回転・pitch）が残留する。閉じた瞬間にジャンプしないよう一括クリア。
+      this.keys.clear()
     }
   }
 
