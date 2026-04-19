@@ -245,6 +245,7 @@ pub fn parse(input: &str) -> Document {
                         sprite: parsed.sprite,
                         frames: parsed.frames,
                         direction: parsed.direction,
+                        portrait: parsed.portrait,
                     }));
                     continue;
                 }
@@ -652,6 +653,7 @@ pub(crate) struct ParsedNpcHeader {
     pub sprite: Option<String>,
     pub frames: Option<u32>,
     pub direction: Option<Direction>,
+    pub portrait: Option<String>,
 }
 
 fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
@@ -674,6 +676,7 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
     let mut sprite: Option<String> = None;
     let mut frames: Option<u32> = None;
     let mut direction: Option<Direction> = None;
+    let mut portrait: Option<String> = None;
     for p in parts {
         if let Some(val) = p.strip_prefix("色=") {
             let hex = val.trim().trim_start_matches('#');
@@ -698,6 +701,11 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
             }
         } else if let Some(val) = p.strip_prefix("向き=") {
             direction = Some(parse_direction(val.trim()));
+        } else if let Some(val) = p.strip_prefix("portrait=") {
+            let v = val.trim().to_string();
+            if !v.is_empty() {
+                portrait = Some(v);
+            }
         }
     }
     Some(ParsedNpcHeader {
@@ -709,6 +717,7 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
         sprite,
         frames,
         direction,
+        portrait,
     })
 }
 

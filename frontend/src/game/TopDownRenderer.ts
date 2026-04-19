@@ -436,7 +436,7 @@ export class TopDownRenderer {
         break
     }
     const npc = this.npcs.find((n) => n.x === tx && n.y === ty)
-    if (npc) this.dialogBox?.show(npc.data.name, npc.data.message)
+    if (npc) this.dialogBox?.show(npc.data.name, npc.data.message, npc.data.portrait)
   }
 
   // --- リサイズ ---

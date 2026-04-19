@@ -59,6 +59,7 @@ export function rpgProjectFromDoc(
         sprite: ev.Npc.sprite,
         frames: ev.Npc.frames,
         direction: ev.Npc.direction ? directionToLower(ev.Npc.direction) : undefined,
+        portrait: ev.Npc.portrait,
       })
     }
   }
@@ -237,6 +238,7 @@ export function applyRpgProjectToDoc(
           sprite: npc.sprite,
           frames: npc.frames,
           direction: npc.direction ? directionToUpper(npc.direction) : undefined,
+          portrait: npc.portrait,
         },
       })
     ),

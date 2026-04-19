@@ -131,6 +131,10 @@ export const sampleRpgData: RPGProject = {
       sprite: '__demo',
       frames: 2,
       direction: 'left',
+      // Issue #73 Phase 1: portrait 指定で RpgDialogBox に顔枠を出す動作確認用。
+      // 実ファイルは未配置のため Assets.load は失敗し、枠（黒背景 + 白枠）プレースホルダのみが表示される。
+      // Phase 2 (#101) で動的表情切替を入れる際に、実アセット配置も合わせて行う予定。
+      portrait: 'elder_portrait.png',
     },
     {
       id: 'npc-child',
@@ -142,6 +146,7 @@ export const sampleRpgData: RPGProject = {
       sprite: '__demo',
       frames: 2,
       direction: 'up',
+      // portrait 未指定 = 従来どおり顔枠なし（後方互換の視覚確認用）。Phase 1 では意図的に片方のみ設定。
     },
   ],
   view: 'topdown',
