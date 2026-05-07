@@ -190,7 +190,7 @@ describe("PUT /api/projects/:name/contents/*", () => {
     expect(res.status).toBe(409);
   });
 
-  it("succeeds with valid sha and editor token", async () => {
+  it("succeeds with valid sha and editor token (update)", async () => {
     globalThis.fetch = vi.fn(async () =>
       jsonResponse(
         {
@@ -220,5 +220,143 @@ describe("PUT /api/projects/:name/contents/*", () => {
     expect(res.headers.get("x-cache")).toBe("PURGED");
     const body = (await res.json()) as { sha: string };
     expect(body.sha).toBe("newsha");
+  });
+
+  // --- #115: 新規ファイル作成（sha なし PUT） ---
+
+  it("creates a new file when sha is omitted and forwards no sha to GitHub (#115)", async () => {
+    const seenBodies: unknown[] = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.body && typeof init.body === "string") {
+        seenBodies.push(JSON.parse(init.body));
+      }
+      return jsonResponse(
+        {
+          content: { sha: "createdsha", path: "chapters/new.md" },
+          commit: { sha: "create-commit-sha" },
+        },
+        200,
+      );
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/new.md",
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer dev-token",
+        },
+        body: JSON.stringify({
+          // sha を渡さない → create 経路
+          content: "# 新規シーン\n",
+          message: "create chapters/new",
+        }),
+      },
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-cache")).toBe("PURGED");
+    const body = (await res.json()) as { sha: string; commit_sha: string; path: string };
+    expect(body.sha).toBe("createdsha");
+    expect(body.commit_sha).toBe("create-commit-sha");
+    expect(body.path).toBe("chapters/new.md");
+
+    // GitHub に送ったペイロードに sha が含まれていないことを確認
+    expect(seenBodies.length).toBe(1);
+    const sent = seenBodies[0] as Record<string, unknown>;
+    expect(sent.sha).toBeUndefined();
+    expect(typeof sent.content).toBe("string");
+  });
+
+  it("normalizes GitHub 422 to 409 when creating but file already exists (#115)", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse(
+        {
+          message: "Invalid request.\n\n\"sha\" wasn't supplied.",
+        },
+        422,
+      ),
+    ) as typeof fetch;
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer dev-token",
+        },
+        body: JSON.stringify({
+          // sha 省略の create だが、サーバ側に既存ファイルがある
+          content: "# 上書きしたい",
+          message: "create",
+        }),
+      },
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; status?: number };
+    expect(body.error.toLowerCase()).toContain("already exists");
+    expect(body.error).toContain("sha");
+  });
+
+  it("creates with default commit message when message is omitted (#115)", async () => {
+    const seenBodies: unknown[] = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.body && typeof init.body === "string") {
+        seenBodies.push(JSON.parse(init.body));
+      }
+      return jsonResponse(
+        {
+          content: { sha: "createdsha", path: "chapters/new.md" },
+          commit: { sha: "create-commit-sha" },
+        },
+        200,
+      );
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/new.md",
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer dev-token",
+        },
+        // sha も message も省略
+        body: JSON.stringify({ content: "x" }),
+      },
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(200);
+    const sent = seenBodies[0] as Record<string, unknown>;
+    expect(typeof sent.message).toBe("string");
+    expect((sent.message as string).length).toBeGreaterThan(0);
+  });
+
+  it("preserves 409 sha-mismatch behavior on update path (regression for #115)", async () => {
+    // sha あり PUT で GitHub が 409 を返したら、Worker は 409 のまま返す
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse({ message: "sha does not match" }, 409),
+    ) as typeof fetch;
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer dev-token",
+        },
+        body: JSON.stringify({
+          content: "new",
+          sha: "stale",
+          message: "edit",
+        }),
+      },
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(409);
   });
 });
