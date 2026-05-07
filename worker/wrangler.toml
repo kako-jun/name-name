@@ -1,0 +1,12 @@
+name = "name-name-api"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ALLOWED_ORIGIN = "https://name-name.llll-ll.com"
+DEFAULT_OWNER = "kako-jun"
+
+# Secrets (set via `wrangler secret put`):
+# - GITHUB_TOKEN  : GitHub PAT (fine-grained, contents:write on game repos)
+# - DEV_AUTH_TOKEN: ローカル開発用の bearer token (本番は CF Access / GitHub OAuth, #110)
