@@ -153,6 +153,9 @@ function JumpTopScreen({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
+  // TODO(#110): isEditor() を localStorage から読む現状の実装はマウント時 1 回しか評価されない。
+  //   #110 で CF Access JWT or GitHub OAuth に置き換える際、`useSyncExternalStore` で
+  //   セッション中の認証状態変化を購読する形に切り替える。
   const editor = useMemo(() => isEditor(), [isEditor])
   const tileRefs = useRef<Array<HTMLDivElement | null>>([])
   const sound = useMemo(() => createSoundController(), [])
@@ -210,13 +213,18 @@ function JumpTopScreen({
       setActiveIndex((prev) => {
         const next = (prev + delta + projects.length) % projects.length
         sound.playSelect()
-        // 次フレームで focus（state 更新後の DOM を待つ）
-        setTimeout(() => focusTile(next), 0)
         return next
       })
     },
-    [projects.length, sound, focusTile]
+    [projects.length, sound]
   )
+
+  // activeIndex 変更後に DOM 反映を待ってから focus を移す。
+  // setTimeout だと React 18 concurrent rendering で順序が脆いため useEffect で保証する。
+  useEffect(() => {
+    if (projects.length === 0) return
+    focusTile(activeIndex)
+  }, [activeIndex, projects.length, focusTile])
 
   // 矢印キー / Enter のグローバルハンドラ。タイル個別の onKeyDown でも拾うが、
   // フォーカスがロゴ等にあるときも動かしたいので window で拾う。
@@ -357,14 +365,15 @@ function JumpTopScreen({
           </div>
         ) : (
           <div
-            role="listbox"
+            role="grid"
             aria-label="ゲーム一覧"
-            aria-activedescendant={`tile-${projects[activeIndex]?.name ?? ''}`}
             className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 max-w-7xl mx-auto"
           >
             {projects.map((project, index) => {
               const isActive = index === activeIndex
-              const tileId = `tile-${project.name}`
+              // project.name は listProjects 側で英数字+ハイフン前提（kako-jun のリポ命名規則）。
+              // 万一 DOM id として不正な文字が入った場合に備え、id は安全な接頭辞のみで生成する。
+              const tileId = `tile-${index}`
               return (
                 <div
                   key={project.name}
@@ -372,15 +381,15 @@ function JumpTopScreen({
                   ref={(el) => {
                     tileRefs.current[index] = el
                   }}
-                  role="option"
-                  aria-selected={isActive}
+                  role="button"
+                  aria-label={`${project.title || project.name} をプレイ`}
+                  aria-pressed={isActive}
                   tabIndex={0}
                   onClick={() => {
                     sound.resumeOnUserGesture()
                     setActiveIndex(index)
                     handleSelect(index)
                   }}
-                  onMouseEnter={() => setActiveIndex(index)}
                   onFocus={() => setActiveIndex(index)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {

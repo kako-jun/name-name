@@ -144,15 +144,15 @@ describe('JumpTopScreen', () => {
       expect(screen.getAllByTestId('game-tile')).toHaveLength(3)
     })
 
-    // 初期 activeIndex=0 のタイル A が aria-selected="true"
+    // 初期 activeIndex=0 のタイル A が aria-pressed="true"
     const tiles = screen.getAllByTestId('game-tile')
-    expect(tiles[0].getAttribute('aria-selected')).toBe('true')
+    expect(tiles[0].getAttribute('aria-pressed')).toBe('true')
 
     // → を 2 回押すと C にフォーカスが移る
     fireEvent.keyDown(window, { key: 'ArrowRight' })
     fireEvent.keyDown(window, { key: 'ArrowRight' })
     await waitFor(() => {
-      expect(screen.getAllByTestId('game-tile')[2].getAttribute('aria-selected')).toBe('true')
+      expect(screen.getAllByTestId('game-tile')[2].getAttribute('aria-pressed')).toBe('true')
     })
 
     // Enter で onPlayProject('c')
