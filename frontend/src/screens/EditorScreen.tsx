@@ -84,6 +84,11 @@ function EditorScreen({
   const shaRef = useRef<string | null>(null)
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
+  // PR #120 review S4: 初期ロードに失敗したら autosave / 保存ボタンを止める。
+  //   失敗時に空 doc で上書きすると localStorage の draft も '' で潰れて
+  //   ユーザーの未保存原稿が消えるので、loadFailed のうちはサーバ書き戻し系を
+  //   全部停止し、再読み込みを促すエラーメッセージを出す。
+  const [loadFailed, setLoadFailed] = useState(false)
   // PR #120 review S2: NovelPlayer に渡す assets のベース URL。kako-jun ハードコードを
   //   やめ、Worker (listProjects) から取得した repo (`owner/name`) を使う。
   //   ロード前は null。
@@ -250,6 +255,7 @@ function EditorScreen({
         const data = await api.getContents(projectName, CHAPTERS_PATH, DEFAULT_BRANCH)
         const markdown = data.content || ''
         shaRef.current = data.sha
+        setLoadFailed(false)
         initialMarkdownRef.current = markdown
 
         // localStorage に draft があれば復元、無ければサーバ値をそのまま使う。
@@ -266,9 +272,14 @@ function EditorScreen({
         setHasUnsavedChanges(localDraft !== null && localDraft !== markdown)
       } catch (error) {
         console.error('Failed to load chapters:', error)
-        // ロード失敗時もエディタで操作を開始できるよう、空 doc にフォールバックする
+        // PR #120 review S4: 失敗時に setRawMarkdown('') すると autosave 経由で
+        //   localStorage の draft が空文字で潰れる。loadFailed フラグを立てて
+        //   autosave と保存ボタンを止めることで、ユーザーが既に書いた原稿の
+        //   draft を保護する。doc は空フォールバックで操作可能にだけしておく。
+        shaRef.current = null
+        setLoadFailed(true)
         setDoc({ engine: 'name-name', chapters: [] })
-        setSaveError('プロジェクトの読み込みに失敗しました')
+        setSaveError('プロジェクトの読み込みに失敗しました。再読み込みしてください。')
       }
     }
     loadChapters()
@@ -285,7 +296,10 @@ function EditorScreen({
 
   // rawMarkdown が変更されたら localStorage に下書き退避（debounce 1s）。
   // サーバへの保存は handleSave で明示的に行う。
+  // PR #120 review S4: 初期ロード失敗時 (loadFailed) は draft を一切触らない。
+  //   失敗状態で空 doc を設定しているので、autosave すると既存 draft を上書きする。
   useEffect(() => {
+    if (loadFailed) return
     if (!rawMarkdown && initialMarkdownRef.current === '') return
 
     if (draftSaveTimeoutRef.current !== null) {
@@ -310,7 +324,7 @@ function EditorScreen({
         clearTimeout(draftSaveTimeoutRef.current)
       }
     }
-  }, [rawMarkdown, projectName])
+  }, [rawMarkdown, projectName, loadFailed])
 
   // 保存ボタン: Worker の PUT contents を直接叩く（保存 = 即 commit）。
   // Worker モデルでは独立した「commit」概念が無いので、PUT が成功した時点で
@@ -351,19 +365,28 @@ function EditorScreen({
   // 破棄ボタン: localStorage の draft を消し、サーバから最新を再取得して上書き。
   // Worker モデルでは「未コミット変更を捨てて HEAD に戻す」ではなく、
   // 「ローカルで持っている下書きを捨てて GitHub の最新を引き直す」になる。
+  // PR #120 review S3: 先に localStorage を消すと、その直後に getContents が
+  //   失敗したとき draft が消えた上にエディタも空のままになり、ユーザーの
+  //   作業が完全に失われる。サーバから取り直しが成功した「後」で draft を消す
+  //   順序にする。
   const handleDiscard = async () => {
     setShowDiscardConfirm(false)
     setIsSaving(true)
     setSaveError(null)
     try {
+      // 1. 先にサーバから最新を取り直す
+      const data = await api.getContents(projectName, CHAPTERS_PATH, DEFAULT_BRANCH)
+      const markdown = data.content || ''
+
+      // 2. 取得成功したら draft を消す（失敗時は draft を保持して再試行可能に）
       try {
         localStorage.removeItem(localStorageKey(projectName))
       } catch {
         // ignore
       }
-      const data = await api.getContents(projectName, CHAPTERS_PATH, DEFAULT_BRANCH)
-      const markdown = data.content || ''
+
       shaRef.current = data.sha
+      setLoadFailed(false)
       initialMarkdownRef.current = markdown
       setRawMarkdown(markdown)
       await parseAndSetDoc(markdown)
