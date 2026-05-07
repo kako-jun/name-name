@@ -204,11 +204,12 @@ my-game/                # ゲームプロジェクト（別リポジトリ）
 
 - [docs/adr/0001-hosting-architecture.md](./docs/adr/0001-hosting-architecture.md) - **ホスティングアーキテクチャ ADR（2026-05-08 確定）**
 - [docs/spec/markdown-v0.1.md](./docs/spec/markdown-v0.1.md) - Markdown v0.1 構文仕様
-- [docs/architecture.md](./docs/architecture.md) - アーキテクチャ設計書
+- [docs/architecture.md](./docs/architecture.md) - アーキテクチャ設計書（旧 FastAPI 前提、`worker/` 移行完了後に書き直し予定）
 - [docs/guide/controls.md](./docs/guide/controls.md) - 操作ガイド
 - [CLAUDE.md](./CLAUDE.md) - 開発ガイド（Claude Code用）
-- [backend/README.md](./backend/README.md) - バックエンドAPI仕様（旧 FastAPI、移行期間中の暫定）
-- [backend/ASSETS.md](./backend/ASSETS.md) - アセット管理詳細
+- [worker/README.md](./worker/README.md) - **CF Worker バックエンド（新方針、#106）**
+- [backend/README.md](./backend/README.md) - 旧 FastAPI バックエンド仕様（移行期間中の暫定、#112 で削除予定）
+- [backend/ASSETS.md](./backend/ASSETS.md) - アセット管理詳細（旧）
 - [backend/BRANCHES.md](./backend/BRANCHES.md) - ブランチ戦略（2026-05-08 改訂）
 
 ## ライセンス
