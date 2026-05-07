@@ -82,6 +82,12 @@ const AUTH_TOKEN_STORAGE_KEY = 'dev_auth_token'
  * localStorage に保存された開発用トークンを Bearer で送る。
  * #110 (本番認証) で OAuth フローに置き換わるが、それまでは手動投入。
  * exported しているのはテストとデバッグから値を覗くため。
+ *
+ * PR #120 review Q2: 本ヘッダは「Worker のみが受信する」想定で全リクエストに乗せている。
+ *   Worker 以外のドメイン (raw.githubusercontent.com 等) には fetch しない設計
+ *   （アセットの実バイトは <img>/<audio> の src に download_url を直接渡すだけで
+ *   ここの fetch は通らない）。Worker URL を baseUrl に固定することでトークン
+ *   漏洩の経路を物理的に塞いでいる。
  */
 export function authHeaders(): HeadersInit {
   // SSR / vitest jsdom 以外で localStorage が無いケースに備えて try-catch
@@ -115,6 +121,16 @@ class ApiError extends Error {
 
 export { ApiError }
 
+/**
+ * レスポンスを JSON として解釈する。
+ *
+ * PR #120 review N1: 空ボディも考慮する。res.text() が '' のときは body=undefined のまま、
+ *   非 JSON のときは body=text(string) になる。!res.ok のときは Worker から返る
+ *   `{ error: '...' }` を優先してメッセージ化し、body=undefined または error フィールドが
+ *   無い場合は `${label} failed: ${status}` のフォールバックを返す。
+ *   こうしておくと「Worker が落ちて空 body の 502」みたいなケースでも
+ *   ApiError が投げられて呼び出し側で拾える。
+ */
 async function parseJsonOrThrow<T>(res: Response, label: string): Promise<T> {
   const text = await res.text()
   let body: unknown = undefined
