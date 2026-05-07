@@ -199,47 +199,38 @@ function AssetsScreen({
     }
   }
 
-  // ファイル削除の確認ダイアログを表示
+  // PR #120 review S1: 削除・タグ管理は Worker 側に DELETE / tag エンドポイントが
+  //   無いので、ボタンを disabled にして「ローカルだけ消えてサーバには残る」詐欺 UI を
+  //   防ぐ。実装は #108 以降。確認ダイアログ・追加ハンドラは disabled なので
+  //   実行経路に到達しないが、防御として早期 return も残す。
+  const DISABLED_DELETE_HINT = '削除は #108 以降で実装予定です'
+  const DISABLED_TAG_HINT = 'タグ管理は #108 以降で実装予定です'
+
+  // ファイル削除の確認ダイアログを表示（現状 disabled なので呼ばれない想定）
   const handleDeleteClick = (asset: Asset) => {
     setDeletingAsset(asset)
   }
 
-  // kako-jun/name-name#107: Worker 側に DELETE / tag エンドポイントは未実装。
-  //   削除・タグ管理は #108 (Editor/Player 統合) で再設計するため、当面は
-  //   ローカル UI 上だけ反映する no-op ハンドラに退避する。サーバ状態は変わらない。
-  //   削除確認ダイアログは UX を残すために維持する。
+  // 削除実行（disabled で UI 上到達しないが、保険として no-op）
   const handleDeleteConfirm = async () => {
     if (!deletingAsset) return
-    console.warn(
-      '[AssetsScreen] delete is not yet implemented in Worker; UI-only removal',
-      deletingAsset.name
-    )
-    setAssets(assets.filter((a) => a.name !== deletingAsset.name))
-    if (selectedAsset?.name === deletingAsset.name) {
-      setSelectedAsset(null)
-    }
+    // disabled UI なので通常はここに来ない。万一来てもサーバを触らないだけにする。
+    console.warn('[AssetsScreen] delete is disabled until #108; ignoring', deletingAsset.name)
     setDeletingAsset(null)
   }
 
-  // タグ追加（ローカルのみ）
-  const handleAddTag = async (asset: Asset, tagName: string) => {
-    const trimmed = tagName.trim()
-    if (!trimmed || asset.tags.includes(trimmed)) return
-    const newTags = [...asset.tags, trimmed]
-    setAssets(assets.map((a) => (a.name === asset.name ? { ...a, tags: newTags } : a)))
-    if (selectedAsset?.name === asset.name) {
-      setSelectedAsset({ ...asset, tags: newTags })
-    }
-    setNewTagInput('')
+  // タグ追加（disabled で UI 上到達しない）
+  const handleAddTag = async (_asset: Asset, _tagName: string) => {
+    void _asset
+    void _tagName
+    console.warn('[AssetsScreen] tag add is disabled until #108')
   }
 
-  // タグ削除（ローカルのみ）
-  const handleRemoveTag = async (asset: Asset, tagName: string) => {
-    const newTags = asset.tags.filter((t) => t !== tagName)
-    setAssets(assets.map((a) => (a.name === asset.name ? { ...a, tags: newTags } : a)))
-    if (selectedAsset?.name === asset.name) {
-      setSelectedAsset({ ...asset, tags: newTags })
-    }
+  // タグ削除（disabled で UI 上到達しない）
+  const handleRemoveTag = async (_asset: Asset, _tagName: string) => {
+    void _asset
+    void _tagName
+    console.warn('[AssetsScreen] tag remove is disabled until #108')
   }
 
   const formatFileSize = (bytes: number): string => {
@@ -494,12 +485,12 @@ function AssetsScreen({
                           e.stopPropagation()
                           handleDeleteClick(asset)
                         }}
-                        className={`p-1 rounded transition-colors flex-shrink-0 ${
-                          isDark
-                            ? 'text-gray-400 hover:text-red-400 hover:bg-red-900/20'
-                            : 'text-gray-500 hover:text-red-600 hover:bg-red-50'
+                        disabled
+                        aria-label={DISABLED_DELETE_HINT}
+                        className={`p-1 rounded transition-colors flex-shrink-0 cursor-not-allowed opacity-40 ${
+                          isDark ? 'text-gray-400' : 'text-gray-500'
                         }`}
-                        title="削除"
+                        title={DISABLED_DELETE_HINT}
                       >
                         <svg
                           className="w-4 h-4"
@@ -628,7 +619,10 @@ function AssetsScreen({
                       {tag}
                       <button
                         onClick={() => handleRemoveTag(selectedAsset, tag)}
-                        className={`hover:text-red-400 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}
+                        disabled
+                        aria-label={DISABLED_TAG_HINT}
+                        title={DISABLED_TAG_HINT}
+                        className={`cursor-not-allowed opacity-40 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}
                       >
                         ×
                       </button>
@@ -638,15 +632,13 @@ function AssetsScreen({
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    placeholder="タグを追加..."
+                    placeholder={DISABLED_TAG_HINT}
                     value={newTagInput}
                     onChange={(e) => setNewTagInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && newTagInput.trim()) {
-                        handleAddTag(selectedAsset, newTagInput)
-                      }
-                    }}
-                    className={`flex-1 px-3 py-1.5 text-sm rounded border ${
+                    disabled
+                    aria-label={DISABLED_TAG_HINT}
+                    title={DISABLED_TAG_HINT}
+                    className={`flex-1 px-3 py-1.5 text-sm rounded border cursor-not-allowed opacity-50 ${
                       isDark
                         ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'
                         : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
@@ -656,10 +648,11 @@ function AssetsScreen({
                     onClick={() => {
                       if (newTagInput.trim()) handleAddTag(selectedAsset, newTagInput)
                     }}
-                    className={`px-3 py-1.5 text-sm rounded transition-colors ${
-                      isDark
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                        : 'bg-blue-500 hover:bg-blue-600 text-white'
+                    disabled
+                    aria-label={DISABLED_TAG_HINT}
+                    title={DISABLED_TAG_HINT}
+                    className={`px-3 py-1.5 text-sm rounded transition-colors cursor-not-allowed opacity-50 ${
+                      isDark ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white'
                     }`}
                   >
                     追加
