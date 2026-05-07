@@ -1,6 +1,8 @@
 // GET /api/projects ハンドラ
 //
-// 当面はハードコードのリスト。将来的に KV/D1 への移行を別 Issue で検討する。
+// 当面はハードコードのリスト。
+// TODO(#117): PROJECTS リストの KV / D1 化。その時に Map<name, Project> に切り替えて
+//   findProject を O(1) にする。現状は 4 件なので線形探索で十分。
 
 import type { Env, Project } from "./types";
 
@@ -12,11 +14,15 @@ export const PROJECTS: ReadonlyArray<Project> = [
 ];
 
 export function findProject(name: string): Project | undefined {
+  // TODO(#117): KV/D1 化の際は Map ベースに置き換える
   return PROJECTS.find((p) => p.name === name);
 }
 
 export function splitRepo(project: Project): { owner: string; repo: string } {
   const [owner, repo] = project.repo.split("/", 2);
+  if (!owner || !repo) {
+    throw new Error(`invalid project.repo: ${project.repo}`);
+  }
   return { owner, repo };
 }
 
