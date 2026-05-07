@@ -1,13 +1,30 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
+import { createApiClient, type AssetEntry } from '../api/client'
 
 type AssetType = 'images' | 'sounds' | 'movies' | 'ideas'
 
+// kako-jun/name-name#107: 旧 FastAPI は assets を { name, size, url, tags } で返し、
+// `${apiBaseUrl}${url}` で raw bytes を直接返していた。Worker は AssetEntry
+// (`{ name, path, sha, size, type, download_url }`) を返し、bytes は
+// download_url (raw.githubusercontent.com) から直接取る。
+// ローカル UI 用に旧 Asset 型と互換のあるラッパを作る。tags は #108 で再設計予定。
 interface Asset {
   name: string
   size: number
-  url: string
-  tags: string[]
+  url: string // 表示・再生用 URL（download_url ?? '' のフォールバック）
+  tags: string[] // 暫定で常に []
+}
+
+const DEFAULT_BRANCH = 'develop'
+
+function entryToAsset(entry: AssetEntry): Asset {
+  return {
+    name: entry.name,
+    size: entry.size,
+    url: entry.download_url ?? '',
+    tags: [],
+  }
 }
 
 interface AssetsScreenProps {
@@ -43,6 +60,9 @@ function AssetsScreen({
   const [newTagInput, setNewTagInput] = useState('')
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // apiBaseUrl が変わるたびにクライアントを作り直す
+  const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
+
   // 検索入力のデバウンス (300ms)
   const handleSearchChange = useCallback((value: string) => {
     setSearchInput(value)
@@ -57,63 +77,34 @@ function AssetsScreen({
     }
   }, [])
 
-  // 初回ロード時と5秒ごとにgit statusをチェック
+  // kako-jun/name-name#107: Worker モデルでは「未コミット変更」概念無し。
+  //   旧 5 秒間隔の git status ポーリングは廃止。hasUnsavedChanges は常に false 維持。
+  //   保存/破棄ボタンは UI として残すが、押しても no-op + 一覧再取得のみ
+  //   （UI 統合は #108 で行う）。
   useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
-        if (response.ok) {
-          const data = await response.json()
-          setHasUnsavedChanges(data.has_uncommitted_changes)
-        }
-      } catch (error) {
-        console.error('Failed to check status:', error)
-      }
-    }
+    setHasUnsavedChanges(false)
+  }, [projectName])
 
-    checkStatus()
-    const interval = setInterval(checkStatus, 5000)
-    return () => clearInterval(interval)
-  }, [apiBaseUrl, projectName])
-
-  // セーブボタン: Gitコミット・プッシュ
+  // セーブボタン: Worker モデルではアップロード時点で commit 済み。no-op + フラグクリア
   const handleSave = async () => {
     setIsSaving(true)
     try {
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/commit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: 'アセット更新',
-        }),
-      })
-      if (!response.ok) {
-        throw new Error(`Failed to commit: ${response.status}`)
-      }
+      // PUT contents が即 commit する設計のため、ここで個別に何かをする必要はない。
       setHasUnsavedChanges(false)
-    } catch (error) {
-      console.error('Failed to save:', error)
     } finally {
       setIsSaving(false)
     }
   }
 
-  // 変更を破棄
+  // 変更を破棄: Worker では「未コミット差分」が無いので一覧再取得だけ
   const handleDiscard = async () => {
     setShowDiscardConfirm(false)
     setIsSaving(true)
     try {
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/discard`, {
-        method: 'POST',
-      })
-      if (!response.ok) {
-        throw new Error(`Failed to discard: ${response.status}`)
-      }
-      // アセット一覧を再読み込み（フィルタ維持）
       await fetchAssets()
       setHasUnsavedChanges(false)
     } catch (error) {
-      console.error('Failed to discard changes:', error)
+      console.error('Failed to refresh assets:', error)
     } finally {
       setIsSaving(false)
     }
@@ -133,77 +124,73 @@ function AssetsScreen({
     setNewTagInput('')
   }, [selectedAsset?.name])
 
-  // タグ一覧を取得・再取得
+  // kako-jun/name-name#107: タグは Worker 側未実装。暫定で空配列。
+  //   別 Issue (assets メタ再設計) で本実装する予定。
   const fetchTags = useCallback(async () => {
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/tags`)
-      if (response.ok) {
-        const data = await response.json()
-        setAllTags(data.tags)
-      }
-    } catch (error) {
-      console.error('Failed to load tags:', error)
-    }
-  }, [apiBaseUrl, projectName])
+    setAllTags([])
+  }, [])
 
   useEffect(() => {
     fetchTags()
   }, [fetchTags])
 
-  // アセット一覧URLを構築するヘルパー
-  const buildAssetsUrl = useCallback(() => {
-    const params = new URLSearchParams()
-    if (debouncedQuery) params.set('q', debouncedQuery)
-    if (selectedTag) params.set('tag', selectedTag)
-    const queryString = params.toString()
-    return `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}${queryString ? '?' + queryString : ''}`
-  }, [apiBaseUrl, projectName, selectedType, debouncedQuery, selectedTag])
-
-  // アセット一覧を取得
+  // アセット一覧を取得。
+  // 旧 FastAPI は q / tag をサーバ側で絞り込んでいたが、Worker は単純な
+  // ディレクトリリストしか返さないため、検索とタグ絞り込みは クライアント側で行う。
+  // tags は #108 で再導入予定なので現状は空。
   const fetchAssets = useCallback(async () => {
     setLoading(true)
     try {
-      const response = await fetch(buildAssetsUrl())
-      if (!response.ok) {
-        throw new Error(`Failed to load assets: ${response.status}`)
-      }
-      const data = await response.json()
-      setAssets(data.assets)
+      const entries = await api.listAssets(projectName, selectedType, { ref: DEFAULT_BRANCH })
+      const all = entries.filter((e) => e.type === 'file').map(entryToAsset)
+      const filtered = debouncedQuery
+        ? all.filter((a) => a.name.toLowerCase().includes(debouncedQuery.toLowerCase()))
+        : all
+      // tag フィルタは現状空なので素通し（selectedTag が null のまま）
+      setAssets(filtered)
     } catch (error) {
       console.error('Failed to load assets:', error)
+      setAssets([])
     } finally {
       setLoading(false)
     }
-  }, [buildAssetsUrl])
+  }, [api, projectName, selectedType, debouncedQuery])
 
   useEffect(() => {
     fetchAssets()
   }, [fetchAssets])
 
-  // ファイルアップロード
+  // File を base64 に変換（FileReader.readAsDataURL の prefix を剥がす）
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = reader.result
+        if (typeof result !== 'string') {
+          reject(new Error('FileReader returned non-string result'))
+          return
+        }
+        const idx = result.indexOf(',')
+        resolve(idx >= 0 ? result.slice(idx + 1) : result)
+      }
+      reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  // ファイルアップロード（Worker は JSON + base64 を受け取る）
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return
 
     setUploading(true)
     try {
       for (const file of Array.from(files)) {
-        const formData = new FormData()
-        formData.append('file', file)
-
-        const response = await fetch(
-          `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}`,
-          {
-            method: 'POST',
-            body: formData,
-          }
-        )
-
-        if (!response.ok) {
-          throw new Error(`Failed to upload ${file.name}: ${response.status}`)
-        }
+        const base64 = await fileToBase64(file)
+        await api.uploadAsset(projectName, selectedType, file.name, base64, DEFAULT_BRANCH, {
+          message: `upload ${file.name}`,
+        })
       }
-
-      // アップロード成功後、一覧を再取得（フィルタ維持）
+      // アップロード成功後、一覧を再取得
       await fetchAssets()
     } catch (error) {
       console.error('Failed to upload files:', error)
@@ -217,80 +204,41 @@ function AssetsScreen({
     setDeletingAsset(asset)
   }
 
-  // ファイル削除を実行
+  // kako-jun/name-name#107: Worker 側に DELETE / tag エンドポイントは未実装。
+  //   削除・タグ管理は #108 (Editor/Player 統合) で再設計するため、当面は
+  //   ローカル UI 上だけ反映する no-op ハンドラに退避する。サーバ状態は変わらない。
+  //   削除確認ダイアログは UX を残すために維持する。
   const handleDeleteConfirm = async () => {
     if (!deletingAsset) return
-
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}/${deletingAsset.name}`,
-        {
-          method: 'DELETE',
-        }
-      )
-
-      if (!response.ok) {
-        throw new Error(`Failed to delete ${deletingAsset.name}: ${response.status}`)
-      }
-
-      // 削除成功後、一覧とタグを再取得
-      setAssets(assets.filter((a) => a.name !== deletingAsset.name))
-      if (selectedAsset?.name === deletingAsset.name) {
-        setSelectedAsset(null)
-      }
-      setDeletingAsset(null)
-      fetchTags()
-    } catch (error) {
-      console.error('Failed to delete file:', error)
-      setDeletingAsset(null)
+    console.warn(
+      '[AssetsScreen] delete is not yet implemented in Worker; UI-only removal',
+      deletingAsset.name
+    )
+    setAssets(assets.filter((a) => a.name !== deletingAsset.name))
+    if (selectedAsset?.name === deletingAsset.name) {
+      setSelectedAsset(null)
     }
+    setDeletingAsset(null)
   }
 
-  // タグを追加
+  // タグ追加（ローカルのみ）
   const handleAddTag = async (asset: Asset, tagName: string) => {
     const trimmed = tagName.trim()
     if (!trimmed || asset.tags.includes(trimmed)) return
-
     const newTags = [...asset.tags, trimmed]
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}/${asset.name}/tags`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tags: newTags }),
-        }
-      )
-      if (response.ok) {
-        setAssets(assets.map((a) => (a.name === asset.name ? { ...a, tags: newTags } : a)))
-        if (selectedAsset?.name === asset.name) {
-          setSelectedAsset({ ...asset, tags: newTags })
-        }
-        setNewTagInput('')
-        fetchTags()
-      }
-    } catch (error) {
-      console.error('Failed to add tag:', error)
+    setAssets(assets.map((a) => (a.name === asset.name ? { ...a, tags: newTags } : a)))
+    if (selectedAsset?.name === asset.name) {
+      setSelectedAsset({ ...asset, tags: newTags })
     }
+    setNewTagInput('')
   }
 
-  // タグを削除
+  // タグ削除（ローカルのみ）
   const handleRemoveTag = async (asset: Asset, tagName: string) => {
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/projects/${projectName}/assets/${selectedType}/${asset.name}/tags/${encodeURIComponent(tagName)}`,
-        { method: 'DELETE' }
-      )
-      if (response.ok) {
-        const newTags = asset.tags.filter((t) => t !== tagName)
-        setAssets(assets.map((a) => (a.name === asset.name ? { ...a, tags: newTags } : a)))
-        if (selectedAsset?.name === asset.name) {
-          setSelectedAsset({ ...asset, tags: newTags })
-        }
-        fetchTags()
-      }
-    } catch (error) {
-      console.error('Failed to remove tag:', error)
+    const newTags = asset.tags.filter((t) => t !== tagName)
+    setAssets(assets.map((a) => (a.name === asset.name ? { ...a, tags: newTags } : a)))
+    if (selectedAsset?.name === asset.name) {
+      setSelectedAsset({ ...asset, tags: newTags })
     }
   }
 
@@ -510,7 +458,7 @@ function AssetsScreen({
                       {/* サムネイル（画像のみ） */}
                       {selectedType === 'images' && (
                         <img
-                          src={`${apiBaseUrl}${asset.url}`}
+                          src={asset.url}
                           alt={asset.name}
                           className="w-12 h-12 object-cover rounded flex-shrink-0"
                         />
@@ -623,7 +571,7 @@ function AssetsScreen({
               {selectedType === 'images' && (
                 <div className="flex justify-center">
                   <img
-                    src={`${apiBaseUrl}${selectedAsset.url}`}
+                    src={selectedAsset.url}
                     alt={selectedAsset.name}
                     className="max-w-full max-h-[600px] rounded-lg shadow-lg"
                   />
@@ -633,7 +581,7 @@ function AssetsScreen({
               {selectedType === 'sounds' && (
                 <div className="flex justify-center">
                   <audio controls className="w-full max-w-md">
-                    <source src={`${apiBaseUrl}${selectedAsset.url}`} />
+                    <source src={selectedAsset.url} />
                     お使いのブラウザは音声の再生に対応していません。
                   </audio>
                 </div>
@@ -642,7 +590,7 @@ function AssetsScreen({
               {selectedType === 'movies' && (
                 <div className="flex justify-center">
                   <video controls className="max-w-full max-h-[600px] rounded-lg shadow-lg">
-                    <source src={`${apiBaseUrl}${selectedAsset.url}`} />
+                    <source src={selectedAsset.url} />
                     お使いのブラウザは動画の再生に対応していません。
                   </video>
                 </div>
@@ -655,7 +603,7 @@ function AssetsScreen({
                   }`}
                 >
                   <iframe
-                    src={`${apiBaseUrl}${selectedAsset.url}`}
+                    src={selectedAsset.url}
                     className="w-full min-h-[600px] border-none"
                     title={selectedAsset.name}
                   />
