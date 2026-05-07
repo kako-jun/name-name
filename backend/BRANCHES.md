@@ -1,194 +1,83 @@
 # ブランチ戦略
 
-Name×Nameは、Gitブランチを使って開発環境と本番環境を分離します。
+> **⚠️ 2026-05-08 改訂**
+> 旧版は「ローカル Docker 開発 + GCP 本番」前提でしたが、**ホスティング戦略は CF Pages + CF Worker + GitHub API（Agasteer 方式）に転換**しました。本ファイルもそれに合わせて書き直しています。
+> 正本（永続的な意思決定記録）: `repos/private/notes/.agasteer/notes/dev/name-name.md` の「ホスティング戦略（2026-05-08 確定）」セクション。
+> 旧版で説明されていた「FastAPI に POST してブランチ切替」「`backend/projects/` に clone」「GCP 本番環境」はすべて廃止予定です。
 
 ## ブランチの役割
 
-### `develop` ブランチ（デフォルト）
-- **用途**: 原稿の編集・テスト
-- **環境**: ローカル開発環境（localhost）
+各ゲームリポ（`kako-jun/ogurasia`, `kako-jun/skirts-colour`, `kako-jun/friday-1930` 等）は2本のブランチを持ちます。
+
+### `develop` ブランチ（編集用）
+
+- **誰が触るか**: kako-jun のみ（`name-name.llll-ll.com/edit/<game>` 経由）
+- **どこから触るか**: ブラウザのエディタ → CF Worker → GitHub Contents API → `develop` への commit
 - **特徴**:
   - 自由に編集・保存できる
-  - 本番環境には影響しない
-  - 新しい章やシーンを試作できる
+  - 一般ユーザーから見えない（`/play/*` は main しか参照しない）
+  - 未完成原稿・試作中シーンを置く場所
 
-### `main` ブランチ
-- **用途**: 本番公開用の確定した原稿
-- **環境**: GCP本番環境
+### `main` ブランチ（公開用）
+
+- **誰が見るか**: 一般ユーザー（`name-name.llll-ll.com/play/<game>`）
+- **どう反映するか**: kako-jun が GitHub UI で `develop` → `main` の PR をマージ
 - **特徴**:
-  - ユーザーに見せる完成版
-  - `develop`から十分テストした内容をマージ
-  - 慎重に管理
+  - 確定した原稿のみがマージされる
+  - マージ＝即公開（Worker のキャッシュをパージしてから次のリクエストで反映）
 
 ## ワークフロー
 
-### 1. 通常の開発作業
+### 1. 通常の編集作業
 
 ```
-開発者 → localhost (develop) → GitHub (develop)
+kako-jun (ブラウザ)
+    ↓ /edit/<game> でログイン
+name-name.llll-ll.com (CF Pages, 静的フロント)
+    ↓ fetch
+name-name-api.workers.dev (CF Worker)
+    ↓ GitHub REST API (octokit)
+github.com/kako-jun/<game>  (develop ブランチに commit)
 ```
 
-1. ローカルで`develop`ブランチを使用（デフォルト）
-2. 原稿を編集・保存
-3. 自動的に`develop`ブランチにcommit & push
+1. `/edit/<game>` を開く（CF Access or GitHub OAuth で kako-jun を認証）
+2. Worker が `GET /repos/kako-jun/<game>/contents/...?ref=develop` で内容取得
+3. ブラウザ上で編集
+4. 保存ボタン → Worker が `PUT /repos/.../contents/...` で SHA 付きコミット（`develop` に対して）
 
-### 2. 本番環境への反映
+### 2. 本番反映
 
 ```
-GitHub (develop) → Pull Request → GitHub (main) → GCP (main)
+develop → Pull Request → main → 一般ユーザーから見える
 ```
 
-1. GitHubで`develop`→`main`のPull Requestを作成
-2. 内容を確認してマージ
-3. 本番環境（GCP）が`main`ブランチから自動デプロイ
+1. GitHub 上で `develop` → `main` の PR を作成
+2. kako-jun が確認してマージ
+3. Worker のキャッシュをパージ（保存時 or マージ時に webhook で）
+4. 次の `/play/<game>` リクエストから新しい main が見える
 
-### 3. 本番内容の確認（オプション）
+### 3. 別デバイスでの楽観ロック
 
-開発環境で本番ブランチを確認したい場合：
+Contents API は `sha` 必須。別デバイスで先に編集された場合は 409 が返るので、エディタ側に「最新を取り直す」ボタンを実装して事故を防ぐ。
 
-```bash
-POST /api/projects/{project_name}/switch-branch
-{
-  "branch": "main"
-}
-```
+## 認証
 
-確認後、開発ブランチに戻す：
+- **編集 (`/edit/*`)**: CF Access or GitHub OAuth で kako-jun のみ通過
+- **再生 (`/play/*`)**: ログイン不要
+- **GitHub PAT**: Worker の Secret（`wrangler secret put GITHUB_TOKEN`）に格納。**ブラウザに一切渡さない**
 
-```bash
-POST /api/projects/{project_name}/switch-branch
-{
-  "branch": "develop"
-}
-```
+## 廃止された旧計画（参考）
 
-## API エンドポイント
+以下は旧版の記述で、**現在は使われていません**。順次削除されます。
 
-### プロジェクト作成時にブランチ指定
-
-```bash
-# 新規プロジェクト
-POST /api/projects/init
-{
-  "name": "my-game",
-  "branch": "develop"  # 省略可（デフォルトはdevelop）
-}
-
-# 既存リポジトリをクローン
-POST /api/projects/clone
-{
-  "name": "my-game",
-  "repo_url": "https://github.com/user/my-game.git",
-  "branch": "develop"  # 省略可（デフォルトはdevelop）
-}
-```
-
-### ブランチ切り替え
-
-```bash
-POST /api/projects/{project_name}/switch-branch
-{
-  "branch": "main"
-}
-```
-
-### プロジェクト一覧（ブランチ情報含む）
-
-```bash
-GET /api/projects
-
-# レスポンス
-{
-  "projects": [
-    {
-      "name": "my-game",
-      "path": "/path/to/projects/my-game",
-      "branch": "develop"
-    }
-  ]
-}
-```
-
-## 設定ファイル
-
-各プロジェクトのルートに`.name-name.json`が作成されます：
-
-```json
-{
-  "branch": "develop"
-}
-```
-
-このファイルは**ローカル設定**なので、Gitで管理されません。
-各環境（開発・本番）で異なるブランチを使用できます。
-
-## 環境別の設定例
-
-### ローカル開発環境
-```json
-{
-  "branch": "develop"
-}
-```
-- 編集中の原稿で作業
-- 本番に影響なし
-
-### GCP本番環境
-```json
-{
-  "branch": "main"
-}
-```
-- 確定した原稿をユーザーに配信
-- `main`ブランチのみを参照
-
-## ベストプラクティス
-
-1. **日常的な編集は`develop`で**
-   - 新しい章やシーンは必ず`develop`で作成
-   - 誤字修正も`develop`で行う
-
-2. **こまめにコミット**
-   - 保存のたびに自動コミット
-   - 変更履歴が残るので安心
-
-3. **本番反映は慎重に**
-   - `develop`で十分テストしてから`main`にマージ
-   - Pull Requestでレビューを行う
-
-4. **緊急修正の場合**
-   - 本番で誤字を発見 → `main`ブランチで直接修正も可能
-   - 修正後、`main`→`develop`にもマージして同期
-
-## トラブルシューティング
-
-### 間違えて本番ブランチで編集してしまった
-
-```bash
-# 1. developに切り替え
-POST /api/projects/{project_name}/switch-branch
-{"branch": "develop"}
-
-# 2. mainブランチの変更をdevelopにマージ（GitHubで）
-# または、変更を取り消す
-```
-
-### ブランチの状態がおかしい
-
-```bash
-# プロジェクトを同期
-POST /api/projects/{project_name}/sync
-```
-
-### 設定ファイルを手動で確認
-
-```bash
-cat projects/my-game/.name-name.json
-```
+- `POST /api/projects/{name}/switch-branch` (FastAPI バックエンド) → 廃止
+- `backend/projects/{name}/.git/` にローカルクローン → 廃止（GitHub をそのまま使う）
+- `.name-name.json` の `branch` フィールド → 廃止（ブランチはURL/UIで指定）
+- GCP 本番環境が main を自動デプロイ → 廃止（CF Pages + Worker に置換）
 
 ## まとめ
 
-- **`develop`**: 編集用（デフォルト）
-- **`main`**: 本番公開用
-- 開発環境と本番環境は完全に分離
-- ブランチ切り替えで柔軟に対応可能
+- **`develop`**: 編集用（kako-jun が `/edit/<game>` から触る）
+- **`main`**: 公開用（一般ユーザーが `/play/<game>` で見る）
+- 編集 = Worker → GitHub Contents API で `develop` に commit
+- 公開 = GitHub UI で develop→main マージ → Worker キャッシュパージ
