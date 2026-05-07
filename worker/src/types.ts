@@ -45,6 +45,8 @@ export interface AssetUploadBody {
   contentBase64: string;
   message: string;
   branch?: string;
+  // 既存ファイルを上書きする場合の sha。新規作成時は省略する。
+  sha?: string;
 }
 
 // アセットの種類（assets/ 配下のサブディレクトリ名に対応）
