@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, useNavigate, useParams, Navigate } from 'react-router-dom'
 import ProjectListScreen from './screens/ProjectListScreen'
 import EditorScreen from './screens/EditorScreen'
 import AssetsScreen from './screens/AssetsScreen'
+import PlayerScreen from './screens/PlayerScreen'
 import { get, set } from './utils/storage'
 import { defaultApiBaseUrl } from './api/client'
 
@@ -42,7 +43,11 @@ function App() {
           }
         />
         <Route
-          path="/:projectName"
+          path="/play/:projectName"
+          element={<PlayerScreenWrapper apiBaseUrl={apiBaseUrl} isDark={isDark} />}
+        />
+        <Route
+          path="/edit/:projectName"
           element={
             <EditorScreenWrapper
               apiBaseUrl={apiBaseUrl}
@@ -53,7 +58,7 @@ function App() {
           }
         />
         <Route
-          path="/:projectName/assets"
+          path="/edit/:projectName/assets"
           element={
             <AssetsScreenWrapper
               apiBaseUrl={apiBaseUrl}
@@ -63,6 +68,7 @@ function App() {
             />
           }
         />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 
       {/* 設定モーダル */}
@@ -125,7 +131,13 @@ function ProjectListScreenWrapper({
   const navigate = useNavigate()
 
   const handleSelectProject = (projectName: string) => {
-    navigate(`/${projectName}`)
+    // 既定の選択操作は編集モードに遷移する。プレイ専用は ProjectList の
+    // 「プレイ」ボタンから /play/:projectName に直接飛ばす（#108 step 3）。
+    navigate(`/edit/${projectName}`)
+  }
+
+  const handlePlayProject = (projectName: string) => {
+    navigate(`/play/${projectName}`)
   }
 
   return (
@@ -133,6 +145,7 @@ function ProjectListScreenWrapper({
       apiBaseUrl={apiBaseUrl}
       isDark={isDark}
       onSelectProject={handleSelectProject}
+      onPlayProject={handlePlayProject}
       onToggleDark={onToggleDark}
       onOpenSettings={onOpenSettings}
     />
@@ -167,7 +180,7 @@ function EditorScreenWrapper({
   }
 
   const handleNavigateToAssets = () => {
-    navigate(`/${projectName}/assets`)
+    navigate(`/edit/${projectName}/assets`)
   }
 
   return (
@@ -207,7 +220,7 @@ function AssetsScreenWrapper({
   }, [projectName])
 
   const handleBack = () => {
-    navigate(`/${projectName}`)
+    navigate(`/edit/${projectName}`)
   }
 
   return (
@@ -218,6 +231,35 @@ function AssetsScreenWrapper({
       onBack={handleBack}
       onToggleDark={onToggleDark}
       onOpenSettings={onOpenSettings}
+    />
+  )
+}
+
+function PlayerScreenWrapper({ apiBaseUrl, isDark }: { apiBaseUrl: string; isDark: boolean }) {
+  const { projectName } = useParams<{ projectName: string }>()
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (projectName) {
+      document.title = `${projectName} - Name × Name`
+    }
+  }, [projectName])
+
+  if (!projectName) {
+    navigate('/')
+    return null
+  }
+
+  const handleBack = () => {
+    navigate('/')
+  }
+
+  return (
+    <PlayerScreen
+      projectName={projectName}
+      apiBaseUrl={apiBaseUrl}
+      isDark={isDark}
+      onBack={handleBack}
     />
   )
 }
