@@ -33,10 +33,23 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
   });
 }
 
-beforeEach(() => {
-  // Cache API のキャッシュをテスト間で持ち越さないため、毎回モックを差し替え。
-  // miniflare の caches.default はテストごとにクリアされない場合があるので、
-  // URL に test-id を含めて衝突を回避する手も取れるが、ここでは fetch モックで対処。
+beforeEach(async () => {
+  // Cache API のキャッシュをテスト間で持ち越さないよう、毎回 caches.default を
+  // 走査・パージする。miniflare 環境では caches.default が利用可能。
+  const cache = (caches as unknown as { default?: Cache }).default;
+  if (cache) {
+    // 本テストで使うキー（ogurasia の chapters / missing 等）を網羅的に削除する。
+    // contentsCacheKey の組み立て規則に合わせる: contents:{owner}/{repo}:{ref}:{path}
+    const keysToPurge = [
+      "contents:kako-jun/ogurasia:default:chapters/all.md",
+      "contents:kako-jun/ogurasia:default:missing.md",
+    ];
+    for (const k of keysToPurge) {
+      await cache.delete(
+        new Request(`https://name-name-cache.local/${encodeURIComponent(k)}`),
+      );
+    }
+  }
 });
 
 afterEach(() => {
@@ -92,6 +105,32 @@ describe("GET /api/projects/:name/contents/*", () => {
     const res = await worker.fetch(req, ENV, ctx);
     expect(res.status).toBe(404);
   });
+
+  it("rejects path containing '..' with 400", async () => {
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/foo/..%2Fetc/passwd",
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 502 when GitHub returns invalid base64", async () => {
+    // atob が InvalidCharacterError を投げる文字列を仕込む
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse({
+        type: "file",
+        path: "chapters/all.md",
+        sha: "deadbeef",
+        encoding: "base64",
+        content: "@@@not-base64@@@",
+      }),
+    ) as typeof fetch;
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(502);
+  });
 });
 
 describe("PUT /api/projects/:name/contents/*", () => {
@@ -112,7 +151,7 @@ describe("PUT /api/projects/:name/contents/*", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns 400 if sha is missing", async () => {
+  it("returns 400 if sha is missing and references #115 in error", async () => {
     const req = new Request(
       "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
       {
@@ -128,6 +167,23 @@ describe("PUT /api/projects/:name/contents/*", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("sha");
+    expect(body.error).toContain("#115");
+  });
+
+  it("rejects PUT path containing '..' with 400 before auth", async () => {
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/foo/..%2Fetc/passwd",
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer dev-token",
+        },
+        body: JSON.stringify({ content: "x", sha: "abc", message: "test" }),
+      },
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(400);
   });
 
   it("returns 409 when GitHub responds with sha mismatch", async () => {
@@ -180,6 +236,7 @@ describe("PUT /api/projects/:name/contents/*", () => {
     );
     const res = await worker.fetch(req, ENV, ctx);
     expect(res.status).toBe(200);
+    expect(res.headers.get("x-cache")).toBe("PURGED");
     const body = (await res.json()) as { sha: string };
     expect(body.sha).toBe("newsha");
   });
