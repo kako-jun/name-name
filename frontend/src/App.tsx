@@ -4,6 +4,7 @@ import ProjectListScreen from './screens/ProjectListScreen'
 import EditorScreen from './screens/EditorScreen'
 import AssetsScreen from './screens/AssetsScreen'
 import { get, set } from './utils/storage'
+import { defaultApiBaseUrl } from './api/client'
 
 function App() {
   const [isDark, setIsDark] = useState(() => {
@@ -11,8 +12,11 @@ function App() {
   })
 
   const [showSettings, setShowSettings] = useState(false)
+  // kako-jun/name-name#107: 既定値を Worker (localhost:8787) に変更。
+  //   localStorage に旧値 (localhost:7373) が残っているケースは
+  //   設定モーダルで上書きできる。VITE_API_URL があればそれが既定値。
   const [apiBaseUrl, setApiBaseUrl] = useState(() => {
-    return get('apiBaseUrl') ?? 'http://localhost:7373'
+    return get('apiBaseUrl') ?? defaultApiBaseUrl()
   })
 
   useEffect(() => {
@@ -86,7 +90,7 @@ function App() {
                       ? 'bg-gray-700 border-gray-600 text-white'
                       : 'bg-white border-gray-300 text-gray-900'
                   }`}
-                  placeholder="http://localhost:7373"
+                  placeholder="http://localhost:8787"
                 />
               </div>
               <button

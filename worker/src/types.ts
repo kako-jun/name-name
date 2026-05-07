@@ -52,9 +52,20 @@ export interface AssetUploadBody {
 }
 
 // アセットの種類（assets/ 配下のサブディレクトリ名に対応）
-// 必要に応じて拡張する
+//
+// kako-jun/name-name#107 (PR #120 review M1): 実態のゲームリポ
+// (friday-1930, ogurasia 等) は assets/{images, sounds, movies, ideas}/ の
+// 4 種類で運用している。Worker 側のホワイトリストを 4 種に絞ると将来拡張で
+// 毎回 Worker をデプロイし直すことになるため、実態 4 種 + 将来拡張 6 種を
+// 両方許容する。フロントは現状 images/sounds/movies/ideas のみ送るが、
+// 拡張時に Worker 側のコードを触らずに済む。
 export type AssetType =
+  // 実態（ゲームリポで実際に使われているサブディレクトリ）
   | "images"
+  | "sounds"
+  | "movies"
+  | "ideas"
+  // 将来拡張用（細分化したいときの予約）
   | "audio"
   | "bgm"
   | "se"
@@ -64,6 +75,9 @@ export type AssetType =
 
 export const ASSET_TYPES: ReadonlyArray<AssetType> = [
   "images",
+  "sounds",
+  "movies",
+  "ideas",
   "audio",
   "bgm",
   "se",
