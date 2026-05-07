@@ -203,6 +203,7 @@ my-game/                # ゲームプロジェクト（別リポジトリ）
 ## ドキュメント
 
 - [docs/adr/0001-hosting-architecture.md](./docs/adr/0001-hosting-architecture.md) - **ホスティングアーキテクチャ ADR（2026-05-08 確定）**
+- [docs/deployment.md](./docs/deployment.md) - **CF Pages + CF Worker デプロイ手順**
 - [docs/spec/markdown-v0.1.md](./docs/spec/markdown-v0.1.md) - Markdown v0.1 構文仕様
 - [docs/architecture.md](./docs/architecture.md) - アーキテクチャ設計書（旧 FastAPI 前提、`worker/` 移行完了後に書き直し予定）
 - [docs/guide/controls.md](./docs/guide/controls.md) - 操作ガイド
