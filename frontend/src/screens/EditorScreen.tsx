@@ -84,6 +84,10 @@ function EditorScreen({
   const shaRef = useRef<string | null>(null)
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
+  // PR #120 review Q1: shaRef.current を state にも反映して、保存ボタンの
+  //   disabled 制御に使う。ref 単体だと React が再レンダリングしないため
+  //   ボタンの enabled/disabled が更新されない。
+  const [hasSha, setHasSha] = useState(false)
   // PR #120 review S4: 初期ロードに失敗したら autosave / 保存ボタンを止める。
   //   失敗時に空 doc で上書きすると localStorage の draft も '' で潰れて
   //   ユーザーの未保存原稿が消えるので、loadFailed のうちはサーバ書き戻し系を
@@ -255,6 +259,7 @@ function EditorScreen({
         const data = await api.getContents(projectName, CHAPTERS_PATH, DEFAULT_BRANCH)
         const markdown = data.content || ''
         shaRef.current = data.sha
+        setHasSha(Boolean(data.sha))
         setLoadFailed(false)
         initialMarkdownRef.current = markdown
 
@@ -277,6 +282,7 @@ function EditorScreen({
         //   autosave と保存ボタンを止めることで、ユーザーが既に書いた原稿の
         //   draft を保護する。doc は空フォールバックで操作可能にだけしておく。
         shaRef.current = null
+        setHasSha(false)
         setLoadFailed(true)
         setDoc({ engine: 'name-name', chapters: [] })
         setSaveError('プロジェクトの読み込みに失敗しました。再読み込みしてください。')
@@ -329,24 +335,28 @@ function EditorScreen({
   // 保存ボタン: Worker の PUT contents を直接叩く（保存 = 即 commit）。
   // Worker モデルでは独立した「commit」概念が無いので、PUT が成功した時点で
   // GitHub にコミットされている。
+  // PR #120 review Q1: shaRef が null（初期ロード失敗 / 未取得）のときは保存を
+  //   実行しない。ボタン側でも disabled にしているので通常はここに来ないが、
+  //   保険として早期 return する。
   const handleSave = async () => {
+    if (loadFailed || shaRef.current === null) {
+      setSaveError('再読み込みしてから保存してください')
+      return
+    }
     setIsSaving(true)
     setSaveError(null)
     try {
       const sha = shaRef.current
-      if (!sha) {
-        // 初回ロードに失敗していて sha が無い場合は作成扱いで PUT する
-        // （Worker は sha 無しを新規作成として扱う。chapters/all.md が
-        //  既存なら 409 が返るのでエラー表示する）。
-        console.warn('No sha available; attempting create-style PUT')
-      }
       const result = await api.putContents(projectName, CHAPTERS_PATH, {
         content: rawMarkdown,
         sha: sha ?? undefined,
         branch: DEFAULT_BRANCH,
         message: '原稿保存',
       })
-      if (result.sha) shaRef.current = result.sha
+      if (result.sha) {
+        shaRef.current = result.sha
+        setHasSha(true)
+      }
       initialMarkdownRef.current = rawMarkdown
       setHasUnsavedChanges(false)
       try {
@@ -386,6 +396,7 @@ function EditorScreen({
       }
 
       shaRef.current = data.sha
+      setHasSha(Boolean(data.sha))
       setLoadFailed(false)
       initialMarkdownRef.current = markdown
       setRawMarkdown(markdown)
@@ -754,6 +765,11 @@ function EditorScreen({
         onDiscard={() => setShowDiscardConfirm(true)}
         mode={editorTab === 'novel' ? mode : undefined}
         onModeChange={editorTab === 'novel' ? setMode : undefined}
+        // PR #120 review Q1: shaRef 未取得（loadFailed / 未ロード）時は保存不可。
+        saveDisabled={loadFailed || !hasSha}
+        saveDisabledTitle={
+          loadFailed ? '再読み込みしてから保存してください' : !hasSha ? '読み込み中…' : undefined
+        }
       />
     </div>
   )
