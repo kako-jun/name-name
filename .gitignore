@@ -21,6 +21,12 @@ target/
 # Docker
 *.env.local
 
+# kako-jun/name-name#107: Vite env (frontend/.env, frontend/.env.local 等)
+# .env.example はコミットする（明示的にネガティブパターン）
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
