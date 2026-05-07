@@ -2,16 +2,18 @@
 
 このファイルは、Claude Codeがこのプロジェクトを理解し、効率的に開発を進めるための情報をまとめたものです。
 
+> **⚠️ ホスティング戦略は 2026-05-08 に転換しました。** 旧計画（FastAPI バックエンド + Docker + GCP デプロイ）は破棄。新方針は「**CF Pages（静的フロント）+ CF Worker（octokit）+ GitHub API（Agasteer 方式）**」です。**正本**: `repos/private/notes/.agasteer/notes/dev/name-name.md` の「ホスティング戦略（2026-05-08 確定）」セクション。`backend/` (FastAPI/GitPython/compose.yaml) は移行完了次第削除されます。本ファイル下記のローカル Docker 手順は**移行期間中の暫定**です。
+
 ## プロジェクト概要
 
 **Name×Name**: ゲームスクリプト言語 + GUIエディタ + ランタイム
 
 - ノベルゲームもRPGも同じ .md ファイルで記述（Markdownスーパーセット）
-- エディタモード: キャンバス上でドラッグ&ドロップで編集（ノベル/RPG共通）
-- ノベルプレイモード: PixiJSでゲーム実行（Phaserから移行済み）
-- RPGプレイモード: PixiJSでゲーム実行（Phaserから移行済み）
-- Git管理: 原稿とアセットをGitで自動バージョン管理
-- ブランチ戦略: develop（開発用）/ main（本番用）
+- **ハード = name-name**、**ソフト = 各ゲームリポ（ogurasia, skirts-colour, friday-1930 等）**
+- エディタとプレイヤーは**同じ React アプリ**で、認証で機能分岐（未ログイン=プレイヤーのみ／kako-jun ログイン=編集UI＋デバッグ追加）
+- ノベル / RPG どちらも PixiJS でゲーム実行（Phaserから移行済み）
+- 永続化: GitHub の各ゲームリポをそのままソース・オブ・トゥルースとし、Worker から GitHub REST API で読み書き
+- ブランチ戦略: develop（編集用）/ main（公開用、`/play/*` から見える）
 
 ## プロジェクト構造（モノレポ）
 
@@ -59,10 +61,10 @@ name-name/
 - パスはOS依存しない形で扱う
 
 ### 3. ブランチ戦略
-- **develop**: 開発・編集用（デフォルト）
-- **main**: 本番公開用
-- ローカル環境はdevelopブランチ
-- 本番環境（GCP）はmainブランチを参照
+- **develop**: 編集用（kako-jun が `/edit/<game>` から触るブランチ）
+- **main**: 公開用（一般ユーザーが `/play/<game>` で見るブランチ）
+- 一般ユーザーには未完成原稿が見えないよう、`/play/*` は `main` を参照する
+- 旧計画（GCP 本番環境が main を参照）は破棄済み
 
 ## 開発環境のセットアップ
 
