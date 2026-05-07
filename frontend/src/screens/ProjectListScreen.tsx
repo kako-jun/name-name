@@ -4,6 +4,11 @@ interface ProjectListScreenProps {
   apiBaseUrl: string
   isDark: boolean
   onSelectProject: (projectName: string) => void
+  /**
+   * 「プレイ」ボタン押下時の遷移先。kako-jun/name-name#108 で追加。
+   * 省略時は onSelectProject にフォールバック（編集モードに飛ぶ）。
+   */
+  onPlayProject?: (projectName: string) => void
   onToggleDark: () => void
   onOpenSettings: () => void
 }
@@ -12,6 +17,7 @@ function ProjectListScreen({
   apiBaseUrl,
   isDark,
   onSelectProject,
+  onPlayProject,
   onToggleDark,
   onOpenSettings,
 }: ProjectListScreenProps) {
@@ -79,7 +85,12 @@ function ProjectListScreen({
       </header>
 
       <main className="flex-1 overflow-hidden">
-        <ProjectList apiBaseUrl={apiBaseUrl} isDark={isDark} onSelectProject={onSelectProject} />
+        <ProjectList
+          apiBaseUrl={apiBaseUrl}
+          isDark={isDark}
+          onSelectProject={onSelectProject}
+          onPlayProject={onPlayProject}
+        />
       </main>
     </div>
   )

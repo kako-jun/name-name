@@ -5,9 +5,14 @@ interface ProjectListProps {
   apiBaseUrl: string
   isDark: boolean
   onSelectProject: (projectName: string) => void
+  /**
+   * 「プレイ」ボタン押下時のハンドラ。kako-jun/name-name#108 で追加。
+   * 省略時は表示せず、行クリックで onSelectProject (編集モード) のみ動く。
+   */
+  onPlayProject?: (projectName: string) => void
 }
 
-function ProjectList({ apiBaseUrl, isDark, onSelectProject }: ProjectListProps) {
+function ProjectList({ apiBaseUrl, isDark, onSelectProject, onPlayProject }: ProjectListProps) {
   const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [loading, setLoading] = useState(true)
   // apiBaseUrl が変わるたびにクライアントを作り直す。createApiClient は薄い
@@ -61,37 +66,51 @@ function ProjectList({ apiBaseUrl, isDark, onSelectProject }: ProjectListProps) 
         ) : (
           <div className="space-y-3">
             {projects.map((project) => (
-              <button
+              <div
                 key={project.name}
-                onClick={() => onSelectProject(project.name)}
-                className={`w-full text-left p-4 rounded-lg border transition-colors ${
+                className={`p-4 rounded-lg border ${
                   isDark
-                    ? 'border-gray-700 bg-gray-700 hover:bg-gray-600 text-white'
-                    : 'border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-900'
+                    ? 'border-gray-700 bg-gray-700 text-white'
+                    : 'border-gray-200 bg-gray-50 text-gray-900'
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-semibold text-lg">{project.title || project.name}</h3>
-                    <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <h3 className="font-semibold text-lg truncate">
+                      {project.title || project.name}
+                    </h3>
+                    <p className={`text-sm truncate ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
                       {project.repo}
                     </p>
                   </div>
-                  <svg
-                    className={`w-6 h-6 ${isDark ? 'text-gray-400' : 'text-gray-400'}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 5l7 7-7 7"
-                    />
-                  </svg>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {onPlayProject && (
+                      <button
+                        onClick={() => onPlayProject(project.name)}
+                        aria-label={`${project.title || project.name} をプレイ`}
+                        className={`px-3 py-1.5 rounded font-medium text-sm transition-colors ${
+                          isDark
+                            ? 'bg-green-600 hover:bg-green-700 text-white'
+                            : 'bg-green-500 hover:bg-green-600 text-white'
+                        }`}
+                      >
+                        プレイ
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onSelectProject(project.name)}
+                      aria-label={`${project.title || project.name} を編集`}
+                      className={`px-3 py-1.5 rounded font-medium text-sm transition-colors ${
+                        isDark
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                          : 'bg-blue-500 hover:bg-blue-600 text-white'
+                      }`}
+                    >
+                      編集
+                    </button>
+                  </div>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}
