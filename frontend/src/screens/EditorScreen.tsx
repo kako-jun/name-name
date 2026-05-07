@@ -14,6 +14,19 @@ import {
   findRpgSceneIndex,
   findAllRpgScenes,
 } from '../game/rpgProjectFromDoc'
+import { createApiClient } from '../api/client'
+
+// kako-jun/name-name#107: 旧 FastAPI モデルでは autosave 1s debounce で
+// ワーキングディレクトリに PUT し、commit ボタンで Git push していた。
+// Worker モデルでは「保存ボタン押下 = PUT contents = 即 commit」になるため、
+// 編集中の値は localStorage に退避し、サーバ保存は明示「保存」のみとする。
+// UI の本格的な改修（保存ボタン名変更・autosave 表示など）は #108 で行う。
+const CHAPTERS_PATH = 'chapters/all.md'
+const DEFAULT_BRANCH = 'develop'
+
+function localStorageKey(projectName: string): string {
+  return `name-name:editor-draft:${projectName}`
+}
 
 interface EditorScreenProps {
   projectName: string
@@ -64,10 +77,16 @@ function EditorScreen({
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
-  const saveTimeoutRef = useRef<number | null>(null)
+  const draftSaveTimeoutRef = useRef<number | null>(null)
   const initialMarkdownRef = useRef<string>('')
+  // GitHub Contents API の sha。PUT 時の楽観ロックに必須。
+  // ロード時に getContents() のレスポンスから設定し、PUT 成功時に新しい sha で更新する。
+  const shaRef = useRef<string | null>(null)
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
+
+  // apiBaseUrl が変わるたびにクライアントを作り直す。
+  const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
   // 現在 RPG タブが編集対象としているシーン ID（doc 内の最初の RPG シーン）
   const [rpgSceneId, setRpgSceneId] = useState<string | null>(null)
 
@@ -194,151 +213,134 @@ function EditorScreen({
     await handleDocChange(newDoc)
   }
 
-  // 初回ロード: APIからMarkdownを取得しWASMでパース
+  // 初回ロード: Worker (Contents API) から chapters/all.md を取得しWASMでパース。
+  // 取得時の sha を shaRef に保持し、後続の PUT 時に楽観ロック用に渡す。
+  // ロード前に localStorage の draft を見て、復元できる場合は draft を表示する
+  // （draft があるが ref と sha の世代が古い場合は #108 でマージ UI を入れる予定。
+  //  暫定では「ロード後に draft で上書き」する素直な復元のみ）。
   useEffect(() => {
     const loadChapters = async () => {
       try {
-        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
-        if (!response.ok) {
-          console.error(`Failed to load chapters: ${response.status}`)
-          // ロード失敗時もエディタで操作を開始できるよう、空 doc にフォールバックする
-          setDoc({ engine: 'name-name', chapters: [] })
-          setSaveError('プロジェクトの読み込みに失敗しました')
-          return
-        }
-        const data = await response.json()
+        const data = await api.getContents(projectName, CHAPTERS_PATH, DEFAULT_BRANCH)
         const markdown = data.content || ''
-        setRawMarkdown(markdown)
+        shaRef.current = data.sha
         initialMarkdownRef.current = markdown
 
-        await parseAndSetDoc(markdown)
-
-        // git statusをチェック
-        const statusResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
-        if (statusResponse.ok) {
-          const statusData = await statusResponse.json()
-          setHasUnsavedChanges(statusData.has_uncommitted_changes)
+        // localStorage に draft があれば復元、無ければサーバ値をそのまま使う。
+        // 現状は単純復元。サーバ側が更新されている可能性は #108 で対処。
+        let localDraft: string | null = null
+        try {
+          localDraft = localStorage.getItem(localStorageKey(projectName))
+        } catch {
+          localDraft = null
         }
+        const startMarkdown = localDraft !== null && localDraft !== '' ? localDraft : markdown
+        setRawMarkdown(startMarkdown)
+        await parseAndSetDoc(startMarkdown)
+        setHasUnsavedChanges(localDraft !== null && localDraft !== markdown)
       } catch (error) {
         console.error('Failed to load chapters:', error)
+        // ロード失敗時もエディタで操作を開始できるよう、空 doc にフォールバックする
         setDoc({ engine: 'name-name', chapters: [] })
         setSaveError('プロジェクトの読み込みに失敗しました')
       }
     }
     loadChapters()
-  }, [apiBaseUrl, projectName])
+    // api は apiBaseUrl から派生する useMemo の値、projectName が変わったらもう一度ロード
+  }, [api, projectName])
 
-  // 5秒ごとにgit statusをチェック（フロント側の変更を優先）
+  // Markdown の変更を検出して未保存フラグを立てる。
+  // Worker モデルでは status ポーリングは行わない（保存=即commit のためサーバに
+  // 「未コミット差分」が存在しない）。
   useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/status`)
-        if (response.ok) {
-          const data = await response.json()
-          const hasLocalChanges =
-            initialMarkdownRef.current !== '' && rawMarkdown !== initialMarkdownRef.current
-          if (!hasLocalChanges) {
-            setHasUnsavedChanges(data.has_uncommitted_changes)
-          } else {
-            setHasUnsavedChanges(true)
-          }
-        }
-      } catch (error) {
-        console.error('Failed to check status:', error)
-      }
-    }
-
-    const interval = setInterval(checkStatus, 5000)
-    return () => clearInterval(interval)
-  }, [apiBaseUrl, projectName, rawMarkdown])
-
-  // Markdownの変更を検出
-  useEffect(() => {
-    if (initialMarkdownRef.current === '') return
-    if (rawMarkdown !== initialMarkdownRef.current) {
-      setHasUnsavedChanges(true)
-    }
+    if (initialMarkdownRef.current === '' && rawMarkdown === '') return
+    setHasUnsavedChanges(rawMarkdown !== initialMarkdownRef.current)
   }, [rawMarkdown])
 
-  // rawMarkdownが変更されたら自動的にワーキングディレクトリに保存
+  // rawMarkdown が変更されたら localStorage に下書き退避（debounce 1s）。
+  // サーバへの保存は handleSave で明示的に行う。
   useEffect(() => {
-    if (!rawMarkdown || rawMarkdown === initialMarkdownRef.current) return
+    if (!rawMarkdown && initialMarkdownRef.current === '') return
 
-    if (saveTimeoutRef.current !== null) {
-      clearTimeout(saveTimeoutRef.current)
+    if (draftSaveTimeoutRef.current !== null) {
+      clearTimeout(draftSaveTimeoutRef.current)
     }
 
-    saveTimeoutRef.current = window.setTimeout(async () => {
+    draftSaveTimeoutRef.current = window.setTimeout(() => {
       try {
-        const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: rawMarkdown }),
-        })
-        if (!response.ok) {
-          console.error(`Failed to auto-save: ${response.status}`)
+        if (rawMarkdown === initialMarkdownRef.current) {
+          // 変更が無ければ draft を消しておく
+          localStorage.removeItem(localStorageKey(projectName))
+        } else {
+          localStorage.setItem(localStorageKey(projectName), rawMarkdown)
         }
       } catch (error) {
-        console.error('Failed to auto-save:', error)
+        console.error('Failed to persist draft to localStorage:', error)
       }
     }, 1000)
 
     return () => {
-      if (saveTimeoutRef.current !== null) {
-        clearTimeout(saveTimeoutRef.current)
+      if (draftSaveTimeoutRef.current !== null) {
+        clearTimeout(draftSaveTimeoutRef.current)
       }
     }
-  }, [rawMarkdown, apiBaseUrl, projectName])
+  }, [rawMarkdown, projectName])
 
-  // 保存ボタン: Gitコミット・プッシュ
+  // 保存ボタン: Worker の PUT contents を直接叩く（保存 = 即 commit）。
+  // Worker モデルでは独立した「commit」概念が無いので、PUT が成功した時点で
+  // GitHub にコミットされている。
   const handleSave = async () => {
     setIsSaving(true)
     setSaveError(null)
     try {
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/commit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: '原稿保存',
-        }),
-      })
-      if (!response.ok) {
-        console.error(`Failed to commit: ${response.status}`)
-        setSaveError('保存に失敗しました')
-        return
+      const sha = shaRef.current
+      if (!sha) {
+        // 初回ロードに失敗していて sha が無い場合は作成扱いで PUT する
+        // （Worker は sha 無しを新規作成として扱う。chapters/all.md が
+        //  既存なら 409 が返るのでエラー表示する）。
+        console.warn('No sha available; attempting create-style PUT')
       }
+      const result = await api.putContents(projectName, CHAPTERS_PATH, {
+        content: rawMarkdown,
+        sha: sha ?? undefined,
+        branch: DEFAULT_BRANCH,
+        message: '原稿保存',
+      })
+      if (result.sha) shaRef.current = result.sha
       initialMarkdownRef.current = rawMarkdown
       setHasUnsavedChanges(false)
+      try {
+        localStorage.removeItem(localStorageKey(projectName))
+      } catch {
+        // ignore
+      }
     } catch (error) {
-      console.error('Failed to commit:', error)
+      console.error('Failed to save:', error)
       setSaveError('保存に失敗しました')
     } finally {
       setIsSaving(false)
     }
   }
 
-  // 破棄ボタン: 未コミットの変更を破棄
+  // 破棄ボタン: localStorage の draft を消し、サーバから最新を再取得して上書き。
+  // Worker モデルでは「未コミット変更を捨てて HEAD に戻す」ではなく、
+  // 「ローカルで持っている下書きを捨てて GitHub の最新を引き直す」になる。
   const handleDiscard = async () => {
     setShowDiscardConfirm(false)
     setIsSaving(true)
     setSaveError(null)
     try {
-      const response = await fetch(`${apiBaseUrl}/api/projects/${projectName}/discard`, {
-        method: 'POST',
-      })
-      if (!response.ok) {
-        console.error(`Failed to discard: ${response.status}`)
-        setSaveError('変更の破棄に失敗しました')
-        return
+      try {
+        localStorage.removeItem(localStorageKey(projectName))
+      } catch {
+        // ignore
       }
-      const chaptersResponse = await fetch(`${apiBaseUrl}/api/projects/${projectName}/chapters`)
-      if (chaptersResponse.ok) {
-        const data = await chaptersResponse.json()
-        const markdown = data.content || ''
-        setRawMarkdown(markdown)
-        initialMarkdownRef.current = markdown
-        await parseAndSetDoc(markdown)
-      }
+      const data = await api.getContents(projectName, CHAPTERS_PATH, DEFAULT_BRANCH)
+      const markdown = data.content || ''
+      shaRef.current = data.sha
+      initialMarkdownRef.current = markdown
+      setRawMarkdown(markdown)
+      await parseAndSetDoc(markdown)
       // discard で doc が差し替わるため、選択状態・CanvasEditor 内部 state を完全リセット
       setSelectedEvent(null)
       setRpgSceneId(null)
@@ -483,7 +485,14 @@ function EditorScreen({
           ) : (
             <NovelPlayer
               events={novelEvents}
-              assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets`}
+              // kako-jun/name-name#107: 旧 FastAPI は静的ファイルを直接返していたが、
+              //   Worker は /assets/:type の一覧 API しか提供しない（個別ファイルは
+              //   GitHub の download_url 経由になる）。
+              //   暫定で raw.githubusercontent.com を直接指す。プロジェクト一覧に
+              //   含まれる repo は現状 "kako-jun/<projectName>" 固定なので
+              //   このフォールバックで動く。Editor/Player 統合 (#108) で
+              //   download_url ベースに置き換える。
+              assetBaseUrl={`https://raw.githubusercontent.com/kako-jun/${projectName}/${DEFAULT_BRANCH}/assets`}
             />
           )
         ) : (
