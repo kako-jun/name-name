@@ -15,11 +15,32 @@ export interface AuthContext {
   user: string | null;
 }
 
+/**
+ * 文字列の constant-time 比較。
+ * Workers ランタイムには `crypto.subtle.timingSafeEqual` 相当が無いので自前実装する。
+ * 長さが異なる場合は早期 false を返すが、その時点では中身の差分情報はリークしない。
+ *
+ * TODO(#110): 本認証 (CF Access JWT / GitHub OAuth) に置き換える際も、
+ *   ユーザ秘匿値（HMAC タグ等）を比較する箇所では必ず constant-time を維持すること。
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 export async function authenticate(request: Request, env: Env): Promise<AuthContext> {
-  // TODO(#110): CF Access JWT or GitHub OAuth で検証する
+  // TODO(#110): CF Access JWT or GitHub OAuth で検証する。
+  //   その際もトークン比較は必ず constant-time を維持する（constantTimeEqual を使う）。
   const authHeader = request.headers.get("authorization");
-  if (env.DEV_AUTH_TOKEN && authHeader === `Bearer ${env.DEV_AUTH_TOKEN}`) {
-    return { isEditor: true, user: "kako-jun" };
+  if (env.DEV_AUTH_TOKEN && authHeader !== null) {
+    const expected = `Bearer ${env.DEV_AUTH_TOKEN}`;
+    if (constantTimeEqual(authHeader, expected)) {
+      return { isEditor: true, user: "kako-jun" };
+    }
   }
   return { isEditor: false, user: null };
 }
