@@ -8,11 +8,18 @@ import type { Env } from "./types";
 
 export type GitHubClient = Octokit;
 
+// GITHUB_TOKEN 未設定の警告は同一プロセス内で 1 回だけ出す。
+// （Worker が isolate 内で再利用される場合、毎リクエスト出力すると邪魔なため）
+let warnedMissingToken = false;
+
 export function createGitHub(env: Env): GitHubClient {
   if (!env.GITHUB_TOKEN) {
     // dev / test では未設定のことがある。実 API 呼び出し時に octokit が落ちるので、
     // ここではログだけ。未設定でも fetch をモックすれば走る。
-    console.warn("[github] GITHUB_TOKEN is not set");
+    if (!warnedMissingToken) {
+      console.warn("[github] GITHUB_TOKEN is not set");
+      warnedMissingToken = true;
+    }
   }
   return new Octokit({
     auth: env.GITHUB_TOKEN,

@@ -16,27 +16,42 @@ import { handleGetContents, handlePutContents } from "./contents";
 import { handleListProjects } from "./projects";
 import type { Env } from "./types";
 
-const CORS_HEADERS_BASE: Record<string, string> = {
+// preflight (OPTIONS) と通常レスポンスで返す CORS ヘッダを分けて管理する。
+// preflight 専用ヘッダ（allow-methods / allow-headers / max-age）は通常レスポンスには不要。
+const CORS_PREFLIGHT_ONLY: Record<string, string> = {
   "access-control-allow-methods": "GET, PUT, POST, OPTIONS",
   "access-control-allow-headers": "authorization, content-type",
   "access-control-max-age": "86400",
 };
 
-function corsHeaders(env: Env, origin: string | null): Record<string, string> {
-  const allowed = env.ALLOWED_ORIGIN;
+/** Origin 完全一致の判定。将来的にホワイトリスト化する余地を残すため Set で保持する */
+function resolveAllowedOrigin(env: Env, origin: string | null): string {
+  const allowedSet = new Set([env.ALLOWED_ORIGIN]);
   // 完全一致のみ許可。ローカル開発で `wrangler dev` から叩く場合は wrangler.toml の
   // ALLOWED_ORIGIN を `http://localhost:5173` などに上書きすること。
-  const allowOrigin = origin && origin === allowed ? origin : allowed;
+  return origin && allowedSet.has(origin) ? origin : env.ALLOWED_ORIGIN;
+}
+
+/** OPTIONS preflight 用の CORS ヘッダ */
+function corsHeadersForPreflight(env: Env, origin: string | null): Record<string, string> {
   return {
-    ...CORS_HEADERS_BASE,
-    "access-control-allow-origin": allowOrigin,
+    ...CORS_PREFLIGHT_ONLY,
+    "access-control-allow-origin": resolveAllowedOrigin(env, origin),
+    vary: "origin",
+  };
+}
+
+/** 通常レスポンスに付与する CORS ヘッダ（allow-origin と vary のみ） */
+function corsHeadersForResponse(env: Env, origin: string | null): Record<string, string> {
+  return {
+    "access-control-allow-origin": resolveAllowedOrigin(env, origin),
     vary: "origin",
   };
 }
 
 function withCors(response: Response, env: Env, origin: string | null): Response {
   const headers = new Headers(response.headers);
-  for (const [k, v] of Object.entries(corsHeaders(env, origin))) {
+  for (const [k, v] of Object.entries(corsHeadersForResponse(env, origin))) {
     headers.set(k, v);
   }
   return new Response(response.body, { status: response.status, headers });
@@ -125,7 +140,7 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: corsHeaders(env, origin),
+        headers: corsHeadersForPreflight(env, origin),
       });
     }
 
