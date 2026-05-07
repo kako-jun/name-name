@@ -4,6 +4,7 @@ import ProjectListScreen from './screens/ProjectListScreen'
 import EditorScreen from './screens/EditorScreen'
 import AssetsScreen from './screens/AssetsScreen'
 import PlayerScreen from './screens/PlayerScreen'
+import JumpTopScreen from './screens/JumpTopScreen'
 import { get, set } from './utils/storage'
 import { defaultApiBaseUrl } from './api/client'
 
@@ -31,8 +32,21 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* kako-jun/name-name#109: / は JumpTopScreen（ジャンプ風メニュー）。
+            旧 ProjectListScreen は /admin に退避。 */}
         <Route
           path="/"
+          element={
+            <JumpTopScreenWrapper
+              apiBaseUrl={apiBaseUrl}
+              isDark={isDark}
+              onToggleDark={() => setIsDark(!isDark)}
+              onOpenSettings={() => setShowSettings(true)}
+            />
+          }
+        />
+        <Route
+          path="/admin"
           element={
             <ProjectListScreenWrapper
               apiBaseUrl={apiBaseUrl}
@@ -114,6 +128,36 @@ function App() {
         </div>
       )}
     </BrowserRouter>
+  )
+}
+
+function JumpTopScreenWrapper({
+  apiBaseUrl,
+  isDark,
+  onToggleDark,
+  onOpenSettings,
+}: {
+  apiBaseUrl: string
+  isDark: boolean
+  onToggleDark: () => void
+  onOpenSettings: () => void
+}) {
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    document.title = 'Name × Name'
+  }, [])
+
+  return (
+    <JumpTopScreen
+      apiBaseUrl={apiBaseUrl}
+      isDark={isDark}
+      onToggleDark={onToggleDark}
+      onOpenSettings={onOpenSettings}
+      onPlayProject={(projectName) => navigate(`/play/${projectName}`)}
+      onEditProject={(projectName) => navigate(`/edit/${projectName}`)}
+      onOpenAdmin={() => navigate('/admin')}
+    />
   )
 }
 

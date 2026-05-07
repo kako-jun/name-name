@@ -29,6 +29,13 @@ function ProjectListScreen({
         <div className="px-6 py-2 flex items-center justify-between">
           <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
             Name × Name
+            {/* kako-jun/name-name#109: 旧 ProjectListScreen は /admin に退避。
+                ヘッダで「管理画面」だと明示する。 */}
+            <span
+              className={`ml-2 text-xs font-normal ${isDark ? 'text-gray-400' : 'text-gray-500'}`}
+            >
+              管理画面
+            </span>
           </h1>
           <div className="flex items-center gap-2">
             <button
