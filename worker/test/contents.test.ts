@@ -151,25 +151,6 @@ describe("PUT /api/projects/:name/contents/*", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns 400 if sha is missing and references #115 in error", async () => {
-    const req = new Request(
-      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
-      {
-        method: "PUT",
-        headers: {
-          "content-type": "application/json",
-          authorization: "Bearer dev-token",
-        },
-        body: JSON.stringify({ content: "x", message: "test" }),
-      },
-    );
-    const res = await worker.fetch(req, ENV, ctx);
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("sha");
-    expect(body.error).toContain("#115");
-  });
-
   it("rejects PUT path containing '..' with 400 before auth", async () => {
     const req = new Request(
       "https://name-name-api.workers.dev/api/projects/ogurasia/contents/foo/..%2Fetc/passwd",

@@ -1,9 +1,10 @@
 // /api/projects/:name/contents/* ハンドラ
 //
 // - GET : Contents API を叩いて base64 を utf-8 にデコード、{ path, sha, content } を返す
-// - PUT : { content, sha, message, branch? } を受け取り、base64 化して PUT する
-//         sha mismatch (409) はそのまま 409 でクライアントへ返す
-//         新規ファイル作成 (sha なし) は #115 で実装予定。現状は 400 で reject する。
+// - PUT : { content, sha?, message?, branch? } を受け取り、base64 化して PUT する
+//         sha あり → 既存ファイル更新（GitHub は sha 不一致で 409 を返す。そのまま伝搬）
+//         sha なし → 新規ファイル作成（#115）。GitHub は同名ファイル既存で 422 を返すので
+//                    `409 Conflict` に正規化してクライアントへ返す。
 
 import type { Endpoints } from "@octokit/types";
 import { authenticate, requireEditor } from "./auth";
@@ -151,14 +152,19 @@ export async function handlePutContents(
     return badRequest("invalid JSON body");
   }
   if (typeof body.content !== "string") return badRequest("content is required");
-  if (typeof body.sha !== "string" || body.sha.length === 0) {
-    // TODO(#115): 新規ファイル作成 (sha なし PUT) のサポート。
-    //   現状は仕様乖離より UX 優先で 400 を返す。
-    return badRequest("sha is required for update; create is not implemented yet (see #115)");
-  }
-  if (typeof body.message !== "string" || body.message.length === 0) {
-    return badRequest("message is required");
-  }
+
+  // sha は任意。あれば update、なければ create として扱う（#115）。
+  const sha: string | undefined =
+    typeof body.sha === "string" && body.sha.length > 0 ? body.sha : undefined;
+  const isCreate = sha === undefined;
+
+  // message はデフォルトを用意（明示指定があればそちらを優先）。
+  const message =
+    typeof body.message === "string" && body.message.length > 0
+      ? body.message
+      : isCreate
+        ? `create ${path}`
+        : `update ${path}`;
 
   const { owner, repo } = splitRepo(project);
   const branch = body.branch;
@@ -168,14 +174,16 @@ export async function handlePutContents(
       owner,
       repo,
       path,
-      message: body.message,
+      message,
       content: utf8ToBase64(body.content),
-      sha: body.sha,
+      // sha が undefined のままだと octokit がペイロードに含めないため、新規作成扱いになる。
+      sha,
       branch,
     });
     logRateLimit("contents.put", res.headers as Record<string, string | number | undefined>);
 
     // 該当パスの read キャッシュをパージ（branch 指定の有無を両方）。
+    // create 成功時も同じパスに対する古い 404 キャッシュを掃除しておく。
     // NOTE(#118): 現状はこの Worker が触る branch / default 二系統だけパージしている。
     //   ブランチ横断でのパージは GitHub webhook 経由で #118 にて本実装する予定。
     await cacheDelete(contentsCacheKey(owner, repo, path, branch ?? null));
@@ -194,6 +202,18 @@ export async function handlePutContents(
   } catch (err) {
     const ne = normalizeError(err);
     logRateLimit("contents.put.err", ne.responseHeaders);
+    // create 経路で同名ファイルが既にある場合、GitHub は 422 を返す。
+    // クライアント視点では「衝突」なので 409 Conflict に正規化する。
+    if (isCreate && ne.status === 422) {
+      return jsonResponse(
+        {
+          error:
+            "file already exists at this path; pass `sha` to update the existing file",
+          status: 409,
+        },
+        409,
+      );
+    }
     // 409 (sha mismatch) は楽観ロック失敗としてそのまま伝える
     return jsonResponse({ error: ne.message, status: ne.status }, ne.status);
   }
