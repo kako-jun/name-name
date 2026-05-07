@@ -1,10 +1,5 @@
-import { useEffect, useState } from 'react'
-
-interface Project {
-  name: string
-  path: string
-  branch: string
-}
+import { useEffect, useMemo, useState } from 'react'
+import { createApiClient, type ProjectInfo } from '../api/client'
 
 interface ProjectListProps {
   apiBaseUrl: string
@@ -13,18 +8,18 @@ interface ProjectListProps {
 }
 
 function ProjectList({ apiBaseUrl, isDark, onSelectProject }: ProjectListProps) {
-  const [projects, setProjects] = useState<Project[]>([])
+  const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [loading, setLoading] = useState(true)
+  // apiBaseUrl が変わるたびにクライアントを作り直す。createApiClient は薄い
+  // ファクトリなので毎回でも実コストは無いが、useMemo にしておけば
+  // 依存配列のキー値として安定する。
+  const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
 
   useEffect(() => {
     const loadProjects = async () => {
       try {
-        const response = await fetch(`${apiBaseUrl}/api/projects`)
-        if (!response.ok) {
-          throw new Error(`Failed to load projects: ${response.status}`)
-        }
-        const data = await response.json()
-        setProjects(data.projects)
+        const list = await api.listProjects()
+        setProjects(list)
       } catch (error) {
         console.error('Failed to load projects:', error)
       } finally {
@@ -32,7 +27,7 @@ function ProjectList({ apiBaseUrl, isDark, onSelectProject }: ProjectListProps) 
       }
     }
     loadProjects()
-  }, [apiBaseUrl])
+  }, [api])
 
   if (loading) {
     return (
@@ -77,9 +72,9 @@ function ProjectList({ apiBaseUrl, isDark, onSelectProject }: ProjectListProps) 
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <h3 className="font-semibold text-lg">{project.name}</h3>
+                    <h3 className="font-semibold text-lg">{project.title || project.name}</h3>
                     <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-                      ブランチ: {project.branch}
+                      {project.repo}
                     </p>
                   </div>
                   <svg

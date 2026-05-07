@@ -98,6 +98,23 @@ describe("GET /api/projects/:name/assets/:type", () => {
     const res = await worker.fetch(req, ENV, ctx);
     expect(res.status).toBe(400);
   });
+
+  // PR #120 review M1: 実ゲームリポ (friday-1930 / ogurasia 等) の
+  //   assets/{sounds, movies, ideas}/ をホワイトリストに含めて 200 を返す。
+  it.each(["sounds", "movies", "ideas"] as const)(
+    "accepts real-world asset type %s with 200",
+    async (type) => {
+      globalThis.fetch = vi.fn(async () => jsonResponse([])) as typeof fetch;
+      const req = new Request(
+        `https://name-name-api.workers.dev/api/projects/ogurasia/assets/${type}`,
+      );
+      const res = await worker.fetch(req, ENV, ctx);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { type: string; entries: unknown[] };
+      expect(body.type).toBe(type);
+      expect(Array.isArray(body.entries)).toBe(true);
+    },
+  );
 });
 
 describe("POST /api/projects/:name/assets/:type", () => {
