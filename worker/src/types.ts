@@ -25,8 +25,10 @@ export interface ContentsGetResponse {
 
 export interface ContentsPutBody {
   content: string;
-  sha: string;
-  message: string;
+  // sha があれば既存ファイル更新（楽観ロック）、なければ新規作成。
+  // GitHub の Contents API は sha 不一致 → 409、同名ファイル既存で sha なし → 422 を返す。
+  sha?: string;
+  message?: string;
   branch?: string;
 }
 
