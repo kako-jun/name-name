@@ -20,7 +20,7 @@ Issue: kako-jun/name-name#106
 |---|---|---|
 | GET | `/api/projects` | 公開ゲーム一覧（ハードコード）|
 | GET | `/api/projects/:name/contents/*path` | Contents API ラッパー (base64 → utf-8) |
-| PUT | `/api/projects/:name/contents/*path` | Contents API で commit。sha 必須（楽観ロック）|
+| PUT | `/api/projects/:name/contents/*path` | Contents API で commit。**新規作成 + 更新どちらも対応**（#115 で実装済）|
 | GET | `/api/projects/:name/assets/:type` | `assets/{type}/` のディレクトリ一覧 |
 | POST | `/api/projects/:name/assets/:type` | base64 アップロード（**5 MiB 未満**）|
 
@@ -72,11 +72,26 @@ npm run dev
 curl http://localhost:8787/api/projects
 curl http://localhost:8787/api/projects/ogurasia/contents/chapters/all.md
 
+# 既存ファイルの更新（sha 必須・楽観ロック）
 curl -X PUT http://localhost:8787/api/projects/ogurasia/contents/chapters/all.md \
   -H "authorization: Bearer ${DEV_AUTH_TOKEN}" \
   -H "content-type: application/json" \
   -d '{"content":"# 新本文","sha":"<前回の sha>","message":"edit chapters/all"}'
+
+# 新規ファイルの作成（sha 省略 / message も省略可：デフォルト `create <path>`）
+curl -X PUT http://localhost:8787/api/projects/ogurasia/contents/chapters/new.md \
+  -H "authorization: Bearer ${DEV_AUTH_TOKEN}" \
+  -H "content-type: application/json" \
+  -d '{"content":"# 新シーン"}'
 ```
+
+`PUT` のセマンティクス（#115）:
+
+- `sha` あり → 既存ファイル更新。GitHub が sha 不一致を検知すると `409 Conflict`。
+- `sha` なし → 新規ファイル作成。同名ファイルが既にある場合、GitHub が返す `422` を
+  Worker 側で `409 Conflict` に正規化して返す（更新するなら `sha` を渡してくださいの旨）。
+- `message` 任意（省略時は `create <path>` / `update <path>` のデフォルト）。
+- 成功時はどちらも `200 OK` で `{ path, sha, commit_sha }` を返し、`x-cache: PURGED`。
 
 ## デプロイ
 
@@ -91,10 +106,13 @@ wrangler deploy
 - **#110** authenticate() 本実装（CF Access / GitHub OAuth）
 - **#111** 初回 wrangler deploy（kako-jun が手動）
 - **#112** 旧 `backend/` (FastAPI) と `compose.yaml` の削除
-- **#115** 新規ファイル作成エンドポイント（sha なし PUT）
 - **#116** `>= 5 MiB` のアセットを Git Data API (blob/tree/commit) で扱う
 - **#117** PROJECTS リストの KV / D1 化
 - **#118** ブランチ横断のキャッシュパージ（GitHub webhook 経由）
+
+実装済:
+
+- **#115** 新規ファイル作成エンドポイント（sha なし PUT）— 422 → 409 正規化、`PUT` で create + update 両対応
 
 ## ファイル構成
 
