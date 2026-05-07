@@ -14,7 +14,7 @@ import {
   findRpgSceneIndex,
   findAllRpgScenes,
 } from '../game/rpgProjectFromDoc'
-import { createApiClient } from '../api/client'
+import { createApiClient, type ProjectInfo } from '../api/client'
 
 // kako-jun/name-name#107: 旧 FastAPI モデルでは autosave 1s debounce で
 // ワーキングディレクトリに PUT し、commit ボタンで Git push していた。
@@ -84,6 +84,10 @@ function EditorScreen({
   const shaRef = useRef<string | null>(null)
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
+  // PR #120 review S2: NovelPlayer に渡す assets のベース URL。kako-jun ハードコードを
+  //   やめ、Worker (listProjects) から取得した repo (`owner/name`) を使う。
+  //   ロード前は null。
+  const [projectRepo, setProjectRepo] = useState<string | null>(null)
 
   // apiBaseUrl が変わるたびにクライアントを作り直す。
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
@@ -212,6 +216,28 @@ function EditorScreen({
     setRpgSceneId(newSceneId)
     await handleDocChange(newDoc)
   }
+
+  // PR #120 review S2: projectName から repo (`owner/name`) を解決する。
+  //   listProjects の結果は Worker の projects.ts に固定で入っており短いため、
+  //   毎回呼んでも問題ない。失敗時は projectRepo=null のまま → assetBaseUrl は
+  //   フォールバック（kako-jun/<name>）で動かす。
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const list = await api.listProjects()
+        if (cancelled) return
+        const found = list.find((p: ProjectInfo) => p.name === projectName)
+        setProjectRepo(found?.repo ?? null)
+      } catch (error) {
+        console.error('Failed to resolve project repo:', error)
+        if (!cancelled) setProjectRepo(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [api, projectName])
 
   // 初回ロード: Worker (Contents API) から chapters/all.md を取得しWASMでパース。
   // 取得時の sha を shaRef に保持し、後続の PUT 時に楽観ロック用に渡す。
@@ -485,14 +511,17 @@ function EditorScreen({
           ) : (
             <NovelPlayer
               events={novelEvents}
-              // kako-jun/name-name#107: 旧 FastAPI は静的ファイルを直接返していたが、
+              // PR #120 review S2: 旧 FastAPI は静的ファイルを直接返していたが、
               //   Worker は /assets/:type の一覧 API しか提供しない（個別ファイルは
               //   GitHub の download_url 経由になる）。
-              //   暫定で raw.githubusercontent.com を直接指す。プロジェクト一覧に
-              //   含まれる repo は現状 "kako-jun/<projectName>" 固定なので
-              //   このフォールバックで動く。Editor/Player 統合 (#108) で
-              //   download_url ベースに置き換える。
-              assetBaseUrl={`https://raw.githubusercontent.com/kako-jun/${projectName}/${DEFAULT_BRANCH}/assets`}
+              //   暫定で raw.githubusercontent.com を直接指す。
+              //   プロジェクトリポジトリ owner/name は listProjects() の結果
+              //   (ProjectInfo.repo) から取得する。未取得時は kako-jun/<name> に
+              //   フォールバックして動作互換を保つ（Editor/Player 統合 #108 で
+              //   download_url ベースに置き換える）。
+              assetBaseUrl={`https://raw.githubusercontent.com/${
+                projectRepo ?? `kako-jun/${projectName}`
+              }/${DEFAULT_BRANCH}/assets`}
             />
           )
         ) : (
