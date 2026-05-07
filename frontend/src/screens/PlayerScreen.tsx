@@ -51,10 +51,6 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    document.title = `${projectName} - Name × Name`
-  }, [projectName])
-
-  useEffect(() => {
     let cancelled = false
     const load = async () => {
       setLoading(true)

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, useNavigate, useParams, Navigate } from 'react-router-dom'
 import ProjectListScreen from './screens/ProjectListScreen'
 import EditorScreen from './screens/EditorScreen'
 import AssetsScreen from './screens/AssetsScreen'
@@ -68,6 +68,7 @@ function App() {
             />
           }
         />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 
       {/* 設定モーダル */}
@@ -237,6 +238,12 @@ function AssetsScreenWrapper({
 function PlayerScreenWrapper({ apiBaseUrl, isDark }: { apiBaseUrl: string; isDark: boolean }) {
   const { projectName } = useParams<{ projectName: string }>()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    if (projectName) {
+      document.title = `${projectName} - Name × Name`
+    }
+  }, [projectName])
 
   if (!projectName) {
     navigate('/')
