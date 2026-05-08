@@ -74,11 +74,31 @@ describe('typewriter pure helpers', () => {
       expect(s1).toBe(s0) // 同一参照（早期 return）
     })
 
-    it('deltaMS が負でも壊れない', () => {
-      const s0 = startTypewriter('ABCDE')
+    it('deltaMS が負でも壊れない (acc を維持)', () => {
+      const s0 = { fullText: 'ABCDE', displayedCharCount: 1, acc: 12 }
       const s1 = tickTypewriter(s0, -100, 30)
+      expect(s1.displayedCharCount).toBe(1)
+      expect(s1.acc).toBe(12) // 元の acc を捨てない
+    })
+
+    it('deltaMS が NaN でも壊れない', () => {
+      const s0 = startTypewriter('ABC')
+      const s1 = tickTypewriter(s0, NaN, 30)
       expect(s1.displayedCharCount).toBe(0)
       expect(s1.acc).toBe(0)
+    })
+
+    it('msPerChar が NaN なら即時完了 (>0 でない値は完了扱い)', () => {
+      const s0 = startTypewriter('ABCDE')
+      const s1 = tickTypewriter(s0, 1, NaN)
+      expect(s1.displayedCharCount).toBe(5)
+    })
+
+    it('msPerChar 超大値 + 通常 deltaMS なら 1 文字も進まない', () => {
+      const s0 = startTypewriter('ABC')
+      const s1 = tickTypewriter(s0, 16, 1_000_000)
+      expect(s1.displayedCharCount).toBe(0)
+      expect(s1.acc).toBe(16)
     })
   })
 
@@ -90,10 +110,19 @@ describe('typewriter pure helpers', () => {
       expect(isTypingActive(s1)).toBe(false)
     })
 
-    it('完了済みなら何もしない', () => {
+    it('完了済みなら何もしない (同一参照)', () => {
       const s0 = { fullText: 'ABC', displayedCharCount: 3, acc: 0 }
       const s1 = skipTypewriter(s0)
       expect(s1).toBe(s0)
+    })
+
+    it('skip 連打しても state は安定 (2 回目以降は同一参照)', () => {
+      const s0 = startTypewriter('ABCDE')
+      const s1 = skipTypewriter(s0)
+      const s2 = skipTypewriter(s1)
+      const s3 = skipTypewriter(s2)
+      expect(s2).toBe(s1)
+      expect(s3).toBe(s1)
     })
 
     it('空文字でも壊れない', () => {

@@ -27,7 +27,10 @@ export function startTypewriter(fullText: string): TypewriterState {
 }
 
 /**
- * 1 フレーム分進める。msPerChar=0 のときは即座に最後まで進む。
+ * 1 フレーム分進める。msPerChar<=0 (0 / 負 / NaN扱い) のときは即座に最後まで進む。
+ *
+ * - 既完了 state は同一参照で早期 return
+ * - 負の deltaMS は 0 にクランプ (時刻巻き戻り耐性)
  *
  * @returns 新しい state（immutable）
  */
@@ -37,14 +40,17 @@ export function tickTypewriter(
   msPerChar: number
 ): TypewriterState {
   if (state.displayedCharCount >= state.fullText.length) return state
-  if (msPerChar <= 0) {
+  if (!(msPerChar > 0)) {
+    // 0 / 負 / NaN は即時完了
     return {
       fullText: state.fullText,
       displayedCharCount: state.fullText.length,
       acc: 0,
     }
   }
-  const acc = state.acc + Math.max(0, deltaMS)
+  // 負の deltaMS / NaN はフレーム進行 0 とみなす (acc は元の値を維持)
+  const safeDelta = deltaMS > 0 ? deltaMS : 0
+  const acc = state.acc + safeDelta
   if (acc < msPerChar) {
     return { fullText: state.fullText, displayedCharCount: state.displayedCharCount, acc }
   }
