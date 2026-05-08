@@ -182,7 +182,7 @@ export class NovelRenderer {
     this.app.stage.addChild(this.dialogBox)
 
     // シークバー（ダイアログボックスの下）
-    this.seekBar.setOnSeek((index) => this.seekTo(index))
+    this.seekBar.setOnSeek((displayIndex) => this.seekToTextEventDisplayIndex(displayIndex))
     this.app.stage.addChild(this.seekBar)
 
     // シーンカウンター
@@ -888,10 +888,11 @@ export class NovelRenderer {
     this.updateSeekBar()
   }
 
-  private updateCounter(): void {
-    if (!this.counterText) return
-    const total = this.displayEventCount
-    // 表示イベントの中での現在位置を計算
+  /**
+   * 表示用テキストイベントの現在 index（1-based、Counter / SeekBar 共通）。
+   * 例: 13 個のテキストイベント中 3 個目を表示中なら 3 を返す。
+   */
+  private getDisplayIndex(): number {
     let displayIndex = 0
     for (let i = 0; i < this.eventIndex && i < this.resolvedEvents.length; i++) {
       if (getTextEvent(this.resolvedEvents[i])) displayIndex++
@@ -902,16 +903,56 @@ export class NovelRenderer {
     ) {
       displayIndex++
     }
-    this.counterText.text = `${displayIndex} / ${total}`
+    return displayIndex
+  }
+
+  private updateCounter(): void {
+    if (!this.counterText) return
+    this.counterText.text = `${this.getDisplayIndex()} / ${this.displayEventCount}`
   }
 
   /**
-   * シークバーの表示を更新する
+   * シークバーの表示を更新する。Counter と同じ「テキストイベント表示位置」で動く。
+   * (旧実装は history.length - 1 / history.length で常に ratio≈1 になりバーが
+   *  満タンに張り付いていた #125)
    */
   private updateSeekBar(): void {
-    // history.length - 1 が現在のインデックス（0-based）
-    const current = Math.max(0, this.history.length - 1)
-    const total = this.history.length
+    const displayIndex = this.getDisplayIndex()
+    // 0-based に変換し SeekBar に渡す。SeekBar は ratio = current/(total-1) を計算する。
+    const current = Math.max(0, displayIndex - 1)
+    const total = this.displayEventCount
     this.seekBar.update(current, total)
+  }
+
+  /**
+   * SeekBar からのクリック (テキストイベント表示 index 0-based) を
+   * 適切な history index にマップして seekTo する。
+   *
+   * - 訪問済み (history に対応エントリあり) → そこへ巻き戻し
+   * - 未訪問 (前方ジャンプ) → forward-play は未対応なので no-op
+   */
+  private seekToTextEventDisplayIndex(displayIndex: number): void {
+    if (displayIndex < 0) return
+
+    // displayIndex 番目のテキストイベントが resolvedEvents の何番にあるかを引く
+    let textCount = 0
+    let targetEventIndex = -1
+    for (let i = 0; i < this.resolvedEvents.length; i++) {
+      if (getTextEvent(this.resolvedEvents[i])) {
+        if (textCount === displayIndex) {
+          targetEventIndex = i
+          break
+        }
+        textCount++
+      }
+    }
+    if (targetEventIndex < 0) return
+
+    const historyIdx = this.history.findIndex((s) => s.eventIndex === targetEventIndex)
+    if (historyIdx < 0) {
+      // 未訪問への前方ジャンプは未対応 (forward-play が未実装のため)
+      return
+    }
+    this.seekTo(historyIdx)
   }
 }
