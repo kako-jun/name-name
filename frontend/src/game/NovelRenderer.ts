@@ -139,6 +139,15 @@ export class NovelRenderer {
   /** 論理画面高さ（aspectRatio から決定） */
   private screenHeight: number
 
+  /** オートモード ON/OFF (#139) */
+  private autoMode: boolean = false
+  /** オートモード待機タイマー（destroy 時・手動操作時にキャンセル） */
+  private autoTimer: ReturnType<typeof setTimeout> | null = null
+  /** オートモード待機時間 ms（settings.autoWaitMs から更新） */
+  private autoWaitMs: number = 2500
+  /** autoMode 変更時の React 側同期コールバック */
+  private onAutoModeChange: ((on: boolean) => void) | null = null
+
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
     this.bgGraphics = new Graphics()
@@ -287,6 +296,10 @@ export class NovelRenderer {
       clearTimeout(this.waitTimer)
       this.waitTimer = null
     }
+    if (this.autoTimer) {
+      clearTimeout(this.autoTimer)
+      this.autoTimer = null
+    }
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
     this.clearBackground()
@@ -332,12 +345,47 @@ export class NovelRenderer {
 
   /**
    * 設定（テキスト速度・音量）をリアルタイムに反映する。
-   * Issue #138。autoWaitMs / voiceVolume はここでは使わない（将来用）。
+   * voiceVolume は #144 voice 実装後に対応予定。
    */
-  applySettings(settings: { msPerChar: number; bgmVolume: number; seVolume: number }): void {
+  applySettings(settings: {
+    msPerChar: number
+    bgmVolume: number
+    seVolume: number
+    autoWaitMs?: number
+  }): void {
     this.dialogBox.setMsPerChar(settings.msPerChar)
     this.audioManager.setBgmVolume(settings.bgmVolume)
     this.audioManager.setSeVolume(settings.seVolume)
+    if (settings.autoWaitMs !== undefined) {
+      this.autoWaitMs = settings.autoWaitMs
+    }
+  }
+
+  /**
+   * オートモードの ON/OFF を切り替える (#139)。
+   * OFF にした場合は待機中のオートタイマーをキャンセルする。
+   * React 側から呼ぶ場合は setAutoMode、renderer 内部から呼ぶ場合も同じメソッドを使う。
+   */
+  setAutoMode(on: boolean): void {
+    if (this.autoMode === on) return
+    this.autoMode = on
+    if (!on && this.autoTimer) {
+      clearTimeout(this.autoTimer)
+      this.autoTimer = null
+    }
+    // React state との同期。コールバック内で setAutoMode が再度呼ばれても
+    // 同値 no-op（上の早期 return）で無限ループを防いでいる。
+    this.onAutoModeChange?.(on)
+  }
+
+  /** オートモード変更コールバックを登録する（NovelPlayer が setAutoMode(false) を検知するため） */
+  setOnAutoModeChange(cb: (on: boolean) => void): void {
+    this.onAutoModeChange = cb
+  }
+
+  /** オートモードの現在状態を取得する */
+  isAutoMode(): boolean {
+    return this.autoMode
   }
 
   /**
@@ -355,6 +403,10 @@ export class NovelRenderer {
     if (this.waitTimer) {
       clearTimeout(this.waitTimer)
       this.waitTimer = null
+    }
+    if (this.autoTimer) {
+      clearTimeout(this.autoTimer)
+      this.autoTimer = null
     }
     this.audioManager.destroy()
     this.characterLayer.clear()
@@ -548,6 +600,10 @@ export class NovelRenderer {
   /**
    * typewriter 表示中なら全文表示にスキップ、完了済みなら次イベントへ進む (#137)。
    * advance() / クリック / Enter / Space / ArrowRight 共通の入力ハンドラから呼ぶ。
+   *
+   * 呼び出し元は必ず先に setAutoMode(false) してから本メソッドを呼ぶこと。
+   * skipTypewriter() 内は onTypingDone を破棄するが、この時点では autoMode がすでに
+   * false になっているため、次の render() でコールバックがセットされず自動進行しない。
    */
   private advanceOrSkipTypewriter(): void {
     if (this.dialogBox.isTyping()) {
@@ -564,6 +620,8 @@ export class NovelRenderer {
       return
     }
     if (this.saveLoadOverlay.visible) return
+    // 手動クリック/タップでオートモードをキャンセル (#139)
+    this.setAutoMode(false)
     this.advanceOrSkipTypewriter()
   }
 
@@ -617,12 +675,16 @@ export class NovelRenderer {
       case ' ':
       case 'Enter':
         e.preventDefault()
+        // 手動キー操作でオートモードをキャンセル (#139)
+        this.setAutoMode(false)
         this.advanceOrSkipTypewriter()
         break
       case 'ArrowRight':
+        this.setAutoMode(false)
         this.advanceOrSkipTypewriter()
         break
       case 'ArrowLeft':
+        this.setAutoMode(false)
         this.goBack()
         break
       case 's':
@@ -936,7 +998,9 @@ export class NovelRenderer {
 
     // 空行 = 改ページ（テキストクリア後に次行へ自動進行はしない。空表示する）
     const name = textEvt.type === 'dialog' ? textEvt.character : null
-    this.dialogBox.setDialog(name, line)
+    // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)
+    const onTypingDone = this.autoMode ? () => this.scheduleAutoAdvance() : null
+    this.dialogBox.setDialog(name, line, onTypingDone)
 
     // 最後のテキスト行かつ最後のイベントならインジケーター非表示
     const isLastText = this.textIndex >= textEvt.text.length - 1
@@ -945,6 +1009,24 @@ export class NovelRenderer {
 
     this.updateCounter()
     this.updateSeekBar()
+  }
+
+  /**
+   * オートモード: autoWaitMs 後に advance() を呼ぶタイマーをセット (#139)。
+   * 選択肢待ち・Wait 待ち中は発動しない。
+   */
+  private scheduleAutoAdvance(): void {
+    if (!this.autoMode) return
+    if (this.waitingForChoice || this.waitingForWait) return
+    if (this.autoTimer) {
+      clearTimeout(this.autoTimer)
+    }
+    this.autoTimer = setTimeout(() => {
+      this.autoTimer = null
+      if (this.autoMode && !this.waitingForChoice && !this.waitingForWait) {
+        this.advance()
+      }
+    }, this.autoWaitMs)
   }
 
   private updateCounter(): void {
