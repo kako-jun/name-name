@@ -30,11 +30,12 @@ import { SaveManager, SaveSlotData } from './SaveManager'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
 import { SeekBar } from './SeekBar'
+import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { Event, EventScene } from '../types'
 import { GAME_WIDTH, GAME_HEIGHT } from './constants'
 
 /** Dialog / Narration から text を取り出すヘルパー */
-function getTextEvent(event: Event):
+export function getTextEvent(event: Event):
   | {
       type: 'dialog'
       character: string | null
@@ -888,27 +889,10 @@ export class NovelRenderer {
     this.updateSeekBar()
   }
 
-  /**
-   * 表示用テキストイベントの現在 index（1-based、Counter / SeekBar 共通）。
-   * 例: 13 個のテキストイベント中 3 個目を表示中なら 3 を返す。
-   */
-  private getDisplayIndex(): number {
-    let displayIndex = 0
-    for (let i = 0; i < this.eventIndex && i < this.resolvedEvents.length; i++) {
-      if (getTextEvent(this.resolvedEvents[i])) displayIndex++
-    }
-    if (
-      this.eventIndex < this.resolvedEvents.length &&
-      getTextEvent(this.resolvedEvents[this.eventIndex])
-    ) {
-      displayIndex++
-    }
-    return displayIndex
-  }
-
   private updateCounter(): void {
     if (!this.counterText) return
-    this.counterText.text = `${this.getDisplayIndex()} / ${this.displayEventCount}`
+    const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
+    this.counterText.text = `${displayIndex} / ${this.displayEventCount}`
   }
 
   /**
@@ -917,7 +901,7 @@ export class NovelRenderer {
    *  満タンに張り付いていた #125)
    */
   private updateSeekBar(): void {
-    const displayIndex = this.getDisplayIndex()
+    const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
     // 0-based に変換し SeekBar に渡す。SeekBar は ratio = current/(total-1) を計算する。
     const current = Math.max(0, displayIndex - 1)
     const total = this.displayEventCount
@@ -929,30 +913,17 @@ export class NovelRenderer {
    * 適切な history index にマップして seekTo する。
    *
    * - 訪問済み (history に対応エントリあり) → そこへ巻き戻し
-   * - 未訪問 (前方ジャンプ) → forward-play は未対応なので no-op
+   * - 未訪問 (前方ジャンプ) → forward-play は未実装なので no-op。
+   *   TODO: 将来 visual hint (DialogBox 上の小フラッシュ等) を出して
+   *   「無効操作」とユーザーに伝えるか検討する
    */
   private seekToTextEventDisplayIndex(displayIndex: number): void {
-    if (displayIndex < 0) return
-
-    // displayIndex 番目のテキストイベントが resolvedEvents の何番にあるかを引く
-    let textCount = 0
-    let targetEventIndex = -1
-    for (let i = 0; i < this.resolvedEvents.length; i++) {
-      if (getTextEvent(this.resolvedEvents[i])) {
-        if (textCount === displayIndex) {
-          targetEventIndex = i
-          break
-        }
-        textCount++
-      }
-    }
-    if (targetEventIndex < 0) return
-
-    const historyIdx = this.history.findIndex((s) => s.eventIndex === targetEventIndex)
-    if (historyIdx < 0) {
-      // 未訪問への前方ジャンプは未対応 (forward-play が未実装のため)
-      return
-    }
+    const historyIdx = findHistoryIndexForDisplayIndex(
+      displayIndex,
+      this.resolvedEvents,
+      this.history
+    )
+    if (historyIdx < 0) return
     this.seekTo(historyIdx)
   }
 }
