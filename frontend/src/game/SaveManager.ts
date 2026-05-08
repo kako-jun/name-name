@@ -76,7 +76,7 @@ export class SaveManager {
   /**
    * 全スロットを JSON 文字列でエクスポートする。
    * クイックセーブは一時的な作業メモとして扱うため、エクスポート対象に含めない。
-   * ブラウザ間の持ち運しが目的のため、意図的に除外している。
+   * ブラウザ間の持ち運びが目的のため、意図的に除外している。
    */
   exportJSON(): string {
     const data: (SaveSlotData | null)[] = this.listSlots()
