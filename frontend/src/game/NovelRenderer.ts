@@ -30,11 +30,12 @@ import { SaveManager, SaveSlotData } from './SaveManager'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
 import { SeekBar } from './SeekBar'
+import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { Event, EventScene } from '../types'
 import { GAME_WIDTH, GAME_HEIGHT } from './constants'
 
 /** Dialog / Narration から text を取り出すヘルパー */
-function getTextEvent(event: Event):
+export function getTextEvent(event: Event):
   | {
       type: 'dialog'
       character: string | null
@@ -182,7 +183,7 @@ export class NovelRenderer {
     this.app.stage.addChild(this.dialogBox)
 
     // シークバー（ダイアログボックスの下）
-    this.seekBar.setOnSeek((index) => this.seekTo(index))
+    this.seekBar.setOnSeek((displayIndex) => this.seekToTextEventDisplayIndex(displayIndex))
     this.app.stage.addChild(this.seekBar)
 
     // シーンカウンター
@@ -890,28 +891,39 @@ export class NovelRenderer {
 
   private updateCounter(): void {
     if (!this.counterText) return
-    const total = this.displayEventCount
-    // 表示イベントの中での現在位置を計算
-    let displayIndex = 0
-    for (let i = 0; i < this.eventIndex && i < this.resolvedEvents.length; i++) {
-      if (getTextEvent(this.resolvedEvents[i])) displayIndex++
-    }
-    if (
-      this.eventIndex < this.resolvedEvents.length &&
-      getTextEvent(this.resolvedEvents[this.eventIndex])
-    ) {
-      displayIndex++
-    }
-    this.counterText.text = `${displayIndex} / ${total}`
+    const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
+    this.counterText.text = `${displayIndex} / ${this.displayEventCount}`
   }
 
   /**
-   * シークバーの表示を更新する
+   * シークバーの表示を更新する。Counter と同じ「テキストイベント表示位置」で動く。
+   * (旧実装は history.length - 1 / history.length で常に ratio≈1 になりバーが
+   *  満タンに張り付いていた #125)
    */
   private updateSeekBar(): void {
-    // history.length - 1 が現在のインデックス（0-based）
-    const current = Math.max(0, this.history.length - 1)
-    const total = this.history.length
+    const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
+    // 0-based に変換し SeekBar に渡す。SeekBar は ratio = current/(total-1) を計算する。
+    const current = Math.max(0, displayIndex - 1)
+    const total = this.displayEventCount
     this.seekBar.update(current, total)
+  }
+
+  /**
+   * SeekBar からのクリック (テキストイベント表示 index 0-based) を
+   * 適切な history index にマップして seekTo する。
+   *
+   * - 訪問済み (history に対応エントリあり) → そこへ巻き戻し
+   * - 未訪問 (前方ジャンプ) → forward-play は未実装なので no-op。
+   *   TODO: 将来 visual hint (DialogBox 上の小フラッシュ等) を出して
+   *   「無効操作」とユーザーに伝えるか検討する
+   */
+  private seekToTextEventDisplayIndex(displayIndex: number): void {
+    const historyIdx = findHistoryIndexForDisplayIndex(
+      displayIndex,
+      this.resolvedEvents,
+      this.history
+    )
+    if (historyIdx < 0) return
+    this.seekTo(historyIdx)
   }
 }
