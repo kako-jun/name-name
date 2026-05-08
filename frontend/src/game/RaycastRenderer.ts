@@ -41,7 +41,7 @@ import {
 } from './wallTextureSheet'
 import { formatHeightError, validateMapHeights } from './mapValidation'
 import { attachTouchInput, type SwipeDirection } from './touchInput'
-import { TouchMenuOverlay, DQ4_COMMANDS } from './TouchMenuOverlay'
+import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
 
 interface NPCRuntime {
   data: UiNpcData
@@ -627,10 +627,11 @@ export class RaycastRenderer {
 
   /**
    * DQ4 8 コマンド + サブメニューの選択結果を受ける (#171)。
-   * 未実装コマンドは console.info で識別ログのみ、振る舞いは no-op。
+   * 未実装コマンドは console.info で識別ログのみ。
    */
-  private handleMenuSelect = (id: string): void => {
+  private handleMenuSelect = (rawId: string): void => {
     this.menuOverlay?.hideMenu()
+    const id = rawId as Dq4CommandId
     switch (id) {
       case 'talk':
         this.tryTalk()
@@ -641,10 +642,26 @@ export class RaycastRenderer {
       case 'door':
         console.info('[RaycastRenderer] とびら: 未実装')
         return
-      case 'close':
+      case 'item':
+      case 'status':
+      case 'tactics':
+      case 'spell':
+      case 'equip':
         return
-      default:
-        console.info(`[RaycastRenderer] menu select '${id}' は未実装`)
+      case 'item:none':
+      case 'spell:none':
+      case 'status:hero':
+      case 'equip:hero':
+      case 'tactics:bravely':
+      case 'tactics:safely':
+      case 'tactics:no-spell':
+        console.info(`[RaycastRenderer] sub menu '${id}' は未実装`)
+        return
+      default: {
+        const _exhaustive: never = id
+        void _exhaustive
+        console.info(`[RaycastRenderer] menu select '${rawId}' は未実装`)
+      }
     }
   }
 

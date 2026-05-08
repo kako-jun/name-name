@@ -36,8 +36,11 @@ export const DEFAULT_MENU_ITEMS: ReadonlyArray<MenuItem> = [
 /**
  * #171 DQ4 ファミコン版相当の 8 コマンド。
  * 順序・サブメニュー内容はプレースホルダ。実装が進む（#172/#174/#175）と中身が埋まる。
+ *
+ * `as const` で id を literal union として抽出できるよう書く。consumer 側
+ * （TopDownRenderer / RaycastRenderer の handleMenuSelect の switch）で網羅検査ができる。
  */
-export const DQ4_COMMANDS: ReadonlyArray<MenuItem> = [
+export const DQ4_COMMANDS = [
   { id: 'talk', label: 'はなす' },
   {
     id: 'item',
@@ -70,7 +73,19 @@ export const DQ4_COMMANDS: ReadonlyArray<MenuItem> = [
     submenu: [{ id: 'equip:hero', label: 'ゆうしゃ' }],
   },
   { id: 'door', label: 'とびら' },
-]
+] as const satisfies ReadonlyArray<MenuItem>
+
+/** DQ4_COMMANDS のメイン項目 id の literal union（consumer の switch で網羅検査するため） */
+export type Dq4MainCommandId = (typeof DQ4_COMMANDS)[number]['id']
+
+/** submenu を持つ要素だけ抜き出して、その submenu の leaf id を union 化する */
+type Dq4WithSubmenu = Extract<(typeof DQ4_COMMANDS)[number], { submenu: ReadonlyArray<unknown> }>
+
+/** DQ4_COMMANDS のサブメニュー leaf id の literal union（'tactics:bravely' 等） */
+export type Dq4SubCommandId = Dq4WithSubmenu['submenu'][number]['id']
+
+/** メイン + サブ全ての DQ4 コマンド id */
+export type Dq4CommandId = Dq4MainCommandId | Dq4SubCommandId
 
 const PADDING_X = 16
 const PADDING_Y = 12
@@ -97,6 +112,49 @@ export interface TouchMenuOptions {
   items?: ReadonlyArray<MenuItem>
   position?: MenuPosition
   layout?: MenuLayout
+}
+
+/**
+ * メインパネルの矩形を純関数で計算する。テスト容易性のため export する。
+ *
+ * 列数: layout='grid-4x2' で 4、それ以外で 1。行数は項目数 ÷ 列数の切り上げ。
+ * 配置: top-left は (SCREEN_MARGIN, SCREEN_MARGIN) 起点、bottom-right は画面右下から逆算。
+ */
+export function computeMainPanelLayout(input: {
+  screenWidth: number
+  screenHeight: number
+  itemCount: number
+  /** items 中で最も幅広いテキストの実測 px。0 なら panel が縮退して PADDING_X*2 のみ */
+  maxTextWidth: number
+  position: MenuPosition
+  layout: MenuLayout
+}): {
+  panelX: number
+  panelY: number
+  panelWidth: number
+  panelHeight: number
+  cellWidth: number
+  cellHeight: number
+  columns: number
+} {
+  const columns = input.layout === 'grid-4x2' ? 4 : 1
+  const rows = Math.max(1, Math.ceil(input.itemCount / columns))
+  const cellWidth = input.maxTextWidth + PADDING_X
+  const cellHeight = ITEM_HEIGHT
+  const panelWidth = columns * cellWidth + PADDING_X
+  const panelHeight = rows * cellHeight + PADDING_Y * 2
+
+  let panelX: number
+  let panelY: number
+  if (input.position === 'top-left') {
+    panelX = SCREEN_MARGIN
+    panelY = SCREEN_MARGIN
+  } else {
+    panelX = input.screenWidth - panelWidth - SCREEN_MARGIN
+    panelY = input.screenHeight - panelHeight - SCREEN_MARGIN
+  }
+
+  return { panelX, panelY, panelWidth, panelHeight, cellWidth, cellHeight, columns }
 }
 
 export class TouchMenuOverlay extends Container {
@@ -237,12 +295,9 @@ export class TouchMenuOverlay extends Container {
   }
 
   private handleSubItemTap(sub: MenuItem): void {
-    // サブの先にさらに submenu があれば開く（多段は将来）。今は 1 段で打ち止め。
-    if (sub.submenu && sub.submenu.length > 0) {
-      // 仮: 多段サブメニューは未対応。タップで上書きせずに親 submenu を差し替える
-      this.openSubmenu(sub)
-      return
-    }
+    // 多段サブメニューは現状未対応。サブ leaf 扱いで onSelect を一括発火する。
+    // sub.submenu があっても無視する（呼び出し側が leaf id だけ気にすれば良い設計に倒す）。
+    // 多段化が必要になったら #173/#174 戦闘メニュー実装時にネスト管理を追加する。
     this.onSelect(sub.id)
     this.hideMenu()
   }
@@ -255,8 +310,16 @@ export class TouchMenuOverlay extends Container {
       return
     }
 
+    const maxTextWidth = Math.max(...this.items.map((n) => n.text.width))
     const { panelX, panelY, panelWidth, panelHeight, cellWidth, cellHeight, columns } =
-      this.computeMainPanel()
+      computeMainPanelLayout({
+        screenWidth: this.screenWidth,
+        screenHeight: this.screenHeight,
+        itemCount: this.items.length,
+        maxTextWidth,
+        position: this.menuPosition,
+        layout: this.layoutKind,
+      })
 
     this.bgPanel.clear()
     this.bgPanel.roundRect(panelX, panelY, panelWidth, panelHeight, 6)
@@ -277,38 +340,17 @@ export class TouchMenuOverlay extends Container {
     if (this.activeSubItem) this.layoutSubmenu()
   }
 
-  private computeMainPanel(): {
-    panelX: number
-    panelY: number
-    panelWidth: number
-    panelHeight: number
-    cellWidth: number
-    cellHeight: number
-    columns: number
-  } {
-    let maxTextWidth = 0
-    for (const node of this.items) {
-      maxTextWidth = Math.max(maxTextWidth, node.text.width)
-    }
-
-    const columns = this.layoutKind === 'grid-4x2' ? 4 : 1
-    const rows = Math.ceil(this.items.length / columns)
-    const cellWidth = maxTextWidth + PADDING_X
-    const cellHeight = ITEM_HEIGHT
-    const panelWidth = columns * cellWidth + PADDING_X
-    const panelHeight = rows * cellHeight + PADDING_Y * 2
-
-    let panelX: number
-    let panelY: number
-    if (this.menuPosition === 'top-left') {
-      panelX = SCREEN_MARGIN
-      panelY = SCREEN_MARGIN
-    } else {
-      panelX = this.screenWidth - panelWidth - SCREEN_MARGIN
-      panelY = this.screenHeight - panelHeight - SCREEN_MARGIN
-    }
-
-    return { panelX, panelY, panelWidth, panelHeight, cellWidth, cellHeight, columns }
+  /** layout / layoutSubmenu の両方で再利用するための薄いラッパー */
+  private computeMainPanel() {
+    const maxTextWidth = Math.max(0, ...this.items.map((n) => n.text.width))
+    return computeMainPanelLayout({
+      screenWidth: this.screenWidth,
+      screenHeight: this.screenHeight,
+      itemCount: this.items.length,
+      maxTextWidth,
+      position: this.menuPosition,
+      layout: this.layoutKind,
+    })
   }
 
   /**
@@ -346,10 +388,16 @@ export class TouchMenuOverlay extends Container {
         subX = main.panelX + main.panelWidth + SUBMENU_GAP
       }
     }
+    // Y はメインの上端に揃え、下端はみ出しは上方向にスライドして吸収する。
+    // それでも収まらない極小縦画面では SCREEN_MARGIN を侵食してでも上端に貼り付ける
+    // （subY が負になることはない、最終的に max(SCREEN_MARGIN, ...) でクランプ）。
+    const screenAvailable = this.screenHeight - SCREEN_MARGIN
     let subY = main.panelY
-    // 下にはみ出す場合は上方向にスライド
-    if (subY + subPanelHeight > this.screenHeight - SCREEN_MARGIN) {
-      subY = Math.max(SCREEN_MARGIN, this.screenHeight - SCREEN_MARGIN - subPanelHeight)
+    if (subY + subPanelHeight > screenAvailable) {
+      subY = screenAvailable - subPanelHeight
+    }
+    if (subY < SCREEN_MARGIN) {
+      subY = SCREEN_MARGIN
     }
 
     this.subBgPanel.clear()
