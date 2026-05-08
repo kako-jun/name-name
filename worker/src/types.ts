@@ -8,6 +8,13 @@ export interface Env {
   // wrangler secret put で設定
   GITHUB_TOKEN?: string;
   DEV_AUTH_TOKEN?: string;
+
+  // ローカル開発で workerd から corp proxy 越しに api.github.com を叩けないとき、
+  // host 側で立てた中継サーバを向き先にするための base URL（例: `http://127.0.0.1:9091`）。
+  // 未設定なら api.github.com を直接叩く（本番 CF Worker の経路）。
+  // proxy 値そのものはコードや wrangler.toml には書かず、shell env 経由で
+  // dev ラッパー (scripts/dev.mjs) が自動付与する。
+  GITHUB_API_BASE?: string;
 }
 
 export interface Project {
