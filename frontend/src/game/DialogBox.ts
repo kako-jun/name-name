@@ -225,7 +225,7 @@ export class DialogBox extends Container {
       fontFamily: this.fontFamily,
       fontSize: this.fontSize,
       fill: 0xffffff,
-      lineHeight: this.fontSize * 1.6,
+      lineHeight: this.lineHeight(),
       dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
     })
   }
@@ -318,9 +318,8 @@ export class DialogBox extends Container {
     const measure = (s: string): number =>
       ctx ? ctx.measureText(s).width : s.length * this.fontSize
 
-    const lineHeight = this.fontSize * 1.6
-    // ルビフォントサイズ: base の半分（読みやすさのため最低 12px）
-    const rubyFontSize = Math.max(12, Math.round(this.fontSize * 0.5))
+    const lineHeight = this.lineHeight()
+    const rubyFontSize = this.rubyFontSize()
     const rubyStyle = new TextStyle({
       fontFamily: this.fontFamily,
       fontSize: rubyFontSize,
@@ -446,7 +445,7 @@ export class DialogBox extends Container {
     // drop-shadow は TextStyle を再生成して反映
     this.dialogText.style = this.makeDialogTextStyle()
     // ルビ Text も同じ DropShadow ポリシーで揃える (#148)
-    const rubyFontSize = Math.max(12, Math.round(this.fontSize * 0.5))
+    const rubyFontSize = this.rubyFontSize()
     for (const e of this.rubyEntries) {
       e.text.style = new TextStyle({
         fontFamily: this.fontFamily,
@@ -537,9 +536,27 @@ export class DialogBox extends Container {
   }
 
   /**
-   * リソース解放
+   * 行高さ。dialogText style と ruby placement の両方で使うため private メソッドに集約 (#148 R1 S4)。
+   */
+  private lineHeight(): number {
+    return this.fontSize * 1.6
+  }
+
+  /**
+   * ルビフォントサイズ: base の半分、ただし可読性のため最低 12px (#148 R1 S4)。
+   */
+  private rubyFontSize(): number {
+    return Math.max(12, Math.round(this.fontSize * 0.5))
+  }
+
+  /**
+   * リソース解放。
+   * ルビ overlay の Text 群も明示 destroy する (#148 R1 S3)。
+   * 通常は NovelRenderer.destroy 経由で stage 全体が破棄されるが、DialogBox 単体を
+   * 入れ替える将来パスでもリソースが孤立しないようにしておく。
    */
   dispose(): void {
+    this.clearRubyEntries()
     this.ticker.stop()
     this.ticker.destroy()
   }

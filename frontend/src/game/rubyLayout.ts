@@ -42,7 +42,9 @@ export interface RubyPlacement {
 export function computeRubyPlacements(runs: RubyRun[], lines: string[]): RubyPlacement[] {
   const placements: RubyPlacement[] = []
 
-  // 各行の plain text 上の開始オフセット（end は次行の start - 0、最終行は plain.length）
+  // 各行の plain text 上の開始オフセット（end は次行の start、最終行は plain.length）。
+  // typewriter の displayedCharCount は `lines.join('\n').length` 単位（plain 文字数 + 改行数）で
+  // 進むため、revealAt も同じ単位で計算する (#148 R1 N9/N10)。
   const lineStarts: number[] = []
   let acc = 0
   for (const ln of lines) {

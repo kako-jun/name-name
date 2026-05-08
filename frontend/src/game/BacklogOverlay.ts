@@ -6,6 +6,7 @@
  */
 
 import { Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
+import { stripRubyMarkup } from './ruby'
 
 const OVERLAY_ALPHA = 0.85
 const TEXT_PADDING_X = 40
@@ -54,12 +55,14 @@ export class BacklogOverlay extends Container {
   }
 
   /**
-   * バックログにエントリを追加する
+   * バックログにエントリを追加する。
+   * ルビ markup (`漢字《かんじ》` / `｜` 記号) は plain text に剥いでから保存する (#148 R1 S1)。
+   * バックログではルビ自体は再現せず、本文だけを綺麗に表示する方針。
    */
   addEntry(character: string | null, text: string): void {
     // 空行（改ページ）は記録しない
     if (text === '') return
-    this.entries.push({ character, text })
+    this.entries.push({ character, text: stripRubyMarkup(text) })
   }
 
   /**

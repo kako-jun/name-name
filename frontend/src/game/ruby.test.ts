@@ -115,3 +115,25 @@ describe('stripRubyMarkup', () => {
     expect(stripRubyMarkup('漢字《かんじ')).toBe('漢字《かんじ')
   })
 })
+
+describe('parseRubyText 追加カバレッジ (#148 R1 N8)', () => {
+  it('連続するルビ (間に plain がない) も正しく分解される', () => {
+    const runs = parseRubyText('漢字《かんじ》漢字《かんじ》')
+    expect(runs).toEqual([
+      { base: '漢字', ruby: 'かんじ' },
+      { base: '漢字', ruby: 'かんじ' },
+    ])
+  })
+
+  it('《》 直前がひらがな単独だと base 候補にならず plain 透過する', () => {
+    // U+3042 'あ' は漢字レンジ外のため自動連結しない。`｜` が無いので base 不在で plain 化
+    const runs = parseRubyText('あ《ア》')
+    expect(runs.map((r) => r.base).join('')).toBe('あ《ア》')
+    expect(runs.every((r) => r.ruby === null)).toBe(true)
+  })
+
+  it('｜ で明示すればひらがなも base にできる', () => {
+    const runs = parseRubyText('｜あいうえお《アイウエオ》')
+    expect(runs).toEqual([{ base: 'あいうえお', ruby: 'アイウエオ' }])
+  })
+})

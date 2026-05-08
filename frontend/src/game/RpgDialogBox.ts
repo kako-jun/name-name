@@ -29,6 +29,7 @@ import {
   tickTypewriter,
   visibleText,
 } from './typewriter'
+import { stripRubyMarkup } from './ruby'
 
 /** typewriter のデフォルト速度（ms/char）。設定画面 #138 で上書き可能になる前提 */
 const DEFAULT_RPG_MS_PER_CHAR = 30
@@ -155,10 +156,15 @@ export class RpgDialogBox extends Container {
    * @param portrait NPC の portrait 相対パス。未指定または空文字なら顔枠を表示しない
    */
   show(name: string, message: string, portrait?: string): void {
+    // RpgDialogBox は現状ルビ非対応。Dialog/Narration と異なり NPC.message には
+    // ルビ overlay を実装していないため、`漢字《かんじ》` 記法が含まれた場合は
+    // ルビ markup を取り除いて plain として表示する (#148 R1 S2)。
+    // 将来 RpgDialogBox にルビ対応を入れるならここで parseRubyText を呼ぶ。
+    const cleanMessage = stripRubyMarkup(message)
     const previousPortrait = this.currentPortrait
     this.showing = true
     this.currentName = name
-    this.currentMessage = message
+    this.currentMessage = cleanMessage
     this.currentPortrait = portrait && portrait.length > 0 ? portrait : undefined
 
     if (this.bg) this.bg.visible = true
@@ -168,7 +174,7 @@ export class RpgDialogBox extends Container {
     }
     if (this.messageText) {
       // typewriter: 全文を保持し、displayedCharCount を 0 から進めていく
-      this.typewriter = startTypewriter(message)
+      this.typewriter = startTypewriter(cleanMessage)
       this.messageText.text = ''
       this.messageText.visible = true
     }
