@@ -106,9 +106,11 @@ wrangler deploy
 ## 今後の Issue
 
 - **#110** authenticate() 本実装（CF Access / GitHub OAuth）
-- **#118** ブランチ横断のキャッシュパージ（GitHub webhook 経由）
 
 実装済:
+
+- **#118** ブランチ横断のキャッシュパージ — TTL を 60→10 秒に短縮することで実用妥協。GitHub UI で develop→main マージしても 10 秒以内に main 配信が新しくなる。kako-jun 1 人運用前提、レート枠 5000 req/h に余裕。generation-based / webhook 方式は将来必要になったら再検討
+
 
 - **#111** 初回 wrangler deploy（session377 で手動完了）
 - **#112** 旧 `backend/` (FastAPI) と `compose.yaml` の削除（session377 完了）
@@ -129,7 +131,7 @@ worker/
 │   ├── index.ts          # エントリ + ルーティング + CORS
 │   ├── github.ts         # @octokit/core ラッパー + rate-limit ログ
 │   ├── auth.ts           # 認証ミドルウェア（#110 で本実装、現状スタブ）
-│   ├── cache.ts          # Cache API ヘルパー (60 秒)
+│   ├── cache.ts          # Cache API ヘルパー (10 秒、#118 でブランチ横断パージ妥協のため短縮)
 │   ├── projects.ts       # GET /api/projects（ハードコード）
 │   ├── contents.ts       # GET/PUT /api/projects/:name/contents/*
 │   ├── assets.ts         # GET/POST /api/projects/:name/assets/:type
