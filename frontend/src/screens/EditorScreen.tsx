@@ -547,6 +547,7 @@ function EditorScreen({
               events={novelEvents}
               aspectRatio={doc?.aspect_ratio}
               choiceStyle={doc?.choice_style ?? null}
+              fontFamily={doc?.font_family ?? null}
               // PR #120 review S2: 旧 FastAPI は静的ファイルを直接返していたが、
               //   Worker は /assets/:type の一覧 API しか提供しない（個別ファイルは
               //   GitHub の download_url 経由になる）。

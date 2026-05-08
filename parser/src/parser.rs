@@ -14,6 +14,7 @@ pub fn parse(input: &str) -> Document {
     let mut default_bgm: Option<String> = None;
     let mut aspect_ratio = String::from("16:9");
     let mut choice_style: Option<String> = None;
+    let mut font_family: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -42,6 +43,13 @@ pub fn parse(input: &str) -> Document {
                 if !v.is_empty() {
                     choice_style = Some(v);
                 }
+            } else if let Some(val) = line.strip_prefix("font_family:") {
+                // per-game デフォルトフォント (#147)。
+                // 値は CSS の font-family を生で透過させる。空なら None のままにする。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    font_family = Some(v);
+                }
             }
             pos += 1;
         }
@@ -66,6 +74,9 @@ pub fn parse(input: &str) -> Document {
     let mut last_position: Option<String> = None;
     // per-line voice (#144): [ボイス: path] で次の Dialog/Narration に注入する
     let mut pending_voice_path: Option<String> = None;
+    // per-line font (#147): [フォント: family] で次の Dialog/Narration に注入する。
+    // [フォント解除] で None にクリアされる（base に戻る）。
+    let mut pending_font_family: Option<String> = None;
 
     while pos < len {
         let line = lines[pos];
@@ -295,10 +306,32 @@ pub fn parse(input: &str) -> Document {
                 pos += 1;
                 continue;
             }
+            // [フォント: family] は次の Dialog/Narration に注入する (#147)。
+            // 値は CSS の font-family 文字列（カンマや空白を含んでよい）を生で保持する。
+            // `[フォント: ]` のように空白のみの場合は pending に空文字を残さない (#147 R1 M2)。
+            if let Some(content) = trimmed
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .and_then(|s| s.strip_prefix("フォント:"))
+            {
+                let trimmed_content = content.trim();
+                if !trimmed_content.is_empty() {
+                    pending_font_family = Some(trimmed_content.to_string());
+                }
+                pos += 1;
+                continue;
+            }
+            // [フォント解除] で pending をクリアし、次の行から base (Document.font_family) に戻す (#147)。
+            if trimmed == "[フォント解除]" {
+                pending_font_family = None;
+                pos += 1;
+                continue;
+            }
             if let Some(event) = parse_directive(trimmed) {
-                // [ボイス: path] の後に非テキストディレクティブが挟まった場合は
-                // pending_voice_path を破棄する（誤ったイベントへの注入を防ぐ #144）
+                // [ボイス:] / [フォント:] の後に非テキストディレクティブが挟まった場合は
+                // pending を破棄する（誤ったイベントへの注入を防ぐ #144 / #147）
                 pending_voice_path = None;
+                pending_font_family = None;
                 current_events.push(event);
             }
             pos += 1;
@@ -413,6 +446,7 @@ pub fn parse(input: &str) -> Document {
                     position,
                     text: text_lines,
                     voice_path: pending_voice_path.take(),
+                    font_family: pending_font_family.take(),
                 });
             }
             continue;
@@ -433,6 +467,7 @@ pub fn parse(input: &str) -> Document {
             current_events.push(Event::Narration {
                 text: narration_lines,
                 voice_path: pending_voice_path.take(),
+                font_family: pending_font_family.take(),
             });
             continue;
         }
@@ -463,6 +498,7 @@ pub fn parse(input: &str) -> Document {
                     position: last_position.clone(),
                     text: text_lines,
                     voice_path: pending_voice_path.take(),
+                    font_family: pending_font_family.take(),
                 });
             }
             continue;
@@ -481,6 +517,7 @@ pub fn parse(input: &str) -> Document {
         engine,
         aspect_ratio,
         choice_style,
+        font_family,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

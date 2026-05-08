@@ -22,6 +22,9 @@ export interface BacklogEntry {
   text: string
 }
 
+/** 既定フォント。Document.font_family が未指定のときに使う (#147 R1 S1)。 */
+const DEFAULT_FONT_FAMILY = "'Noto Sans JP', sans-serif"
+
 export class BacklogOverlay extends Container {
   private screenWidth: number
   private screenHeight: number
@@ -30,6 +33,9 @@ export class BacklogOverlay extends Container {
   private contentContainer: Container
   private maskGraphics: Graphics
   private totalContentHeight = 0
+  /** per-game フォント。NovelRenderer.setFontFamily から伝播してくる (#147 R1 S1)。
+   *  per-line フォントはバックログ上では再現しない（仕様）。 */
+  private fontFamily: string = DEFAULT_FONT_FAMILY
 
   constructor(screenWidth: number, screenHeight: number) {
     super()
@@ -40,6 +46,11 @@ export class BacklogOverlay extends Container {
 
     this.contentContainer = new Container()
     this.maskGraphics = new Graphics()
+  }
+
+  /** per-game フォントをセットする (#147 R1 S1)。次回 show() で反映される。 */
+  setFontFamily(family: string | null): void {
+    this.fontFamily = family ?? DEFAULT_FONT_FAMILY
   }
 
   /**
@@ -118,7 +129,7 @@ export class BacklogOverlay extends Container {
 
     // タイトル
     const titleStyle = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
+      fontFamily: this.fontFamily,
       fontSize: 22,
       fill: TITLE_COLOR,
       fontWeight: 'bold',
@@ -146,20 +157,20 @@ export class BacklogOverlay extends Container {
     this.addChild(this.contentContainer)
 
     const nameStyle = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
+      fontFamily: this.fontFamily,
       fontSize: 16,
       fill: NAME_COLOR,
       fontWeight: 'bold',
     })
     const textStyle = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
+      fontFamily: this.fontFamily,
       fontSize: 16,
       fill: TEXT_COLOR,
       wordWrap: true,
       wordWrapWidth: this.screenWidth - TEXT_PADDING_X * 2,
     })
     const narrationStyle = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
+      fontFamily: this.fontFamily,
       fontSize: 16,
       fill: NARRATION_COLOR,
       fontStyle: 'italic',
@@ -199,7 +210,7 @@ export class BacklogOverlay extends Container {
 
     // 「閉じる」ヒント
     const hintStyle = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
+      fontFamily: this.fontFamily,
       fontSize: 14,
       fill: 0x888888,
     })
