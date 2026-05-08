@@ -65,7 +65,24 @@ interface CharacterState {
   expression: string
   /** 進行中アニメーション。null なら静的 */
   animation: ActiveAnimation | null
+  /** フェードイン/アウトアニメーション。退場時は完了後に sprite を destroy する */
+  fadeAnimation: FadeAnimation | null
 }
+
+interface FadeAnimation {
+  startMs: number
+  durationMs: number
+  fromAlpha: number
+  toAlpha: number
+  /** true なら 0 に到達した時点で sprite を破棄して characters Map から消す */
+  destroyOnComplete: boolean
+}
+
+/**
+ * 立ち絵のフェードイン/アウトのデフォルト時間 (ms)。
+ * 仕様書 docs/spec/markdown-v0.1.md と数値を揃えて変更する。
+ */
+const DEFAULT_FADE_MS = 300
 
 export interface AnimateParams {
   /** "+500" / "-200" / "400" / undefined */
@@ -104,13 +121,45 @@ export class CharacterLayer extends Container {
 
   /**
    * キャラクター立ち絵を表示する。既に表示中なら position / expression を更新する。
+   *
+   * 新規表示時は alpha 0 から DEFAULT_FADE_MS かけてフェードインする（#177）。
+   * セーブからの復元やスキップモードなど瞬時表示が望ましい場合は `options.instant: true` を渡す。
+   * 退場アニメ中の同名キャラを再 show すると、フェードアウトを取り消してフェードインに切り替える。
+   *
+   * フェードイン進行中（destroyOnComplete=false）の同名キャラへの再 show は、position / expression
+   * が同じなら no-op、異なれば即時切替（フェード進行はそのまま継続）。フェード自体を再起動する
+   * ユースケースは現状想定していないため、明示的な「フェードリスタート」API は持たない。
    */
-  show(character: string, expression: string, position: string, assetBaseUrl: string): void {
+  show(
+    character: string,
+    expression: string,
+    position: string,
+    assetBaseUrl: string,
+    options?: { instant?: boolean }
+  ): void {
     const normalizedPosition = normalizePosition(position)
+    const instant = options?.instant === true
     const existing = this.characters.get(character)
 
     if (existing) {
-      // 表情が同じで位置も同じなら何もしない
+      // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す
+      if (existing.fadeAnimation?.destroyOnComplete) {
+        if (instant) {
+          existing.sprite.alpha = 1
+          existing.fadeAnimation = null
+        } else {
+          existing.fadeAnimation = {
+            startMs: this.elapsedMs,
+            durationMs: DEFAULT_FADE_MS,
+            fromAlpha: existing.sprite.alpha,
+            toAlpha: 1,
+            destroyOnComplete: false,
+          }
+          this.ensureTicker()
+        }
+      }
+
+      // 表情が同じで位置も同じなら何もしない（フェード状態は上で解消済み）
       if (existing.expression === expression && existing.position === normalizedPosition) return
 
       // 位置変更
@@ -134,14 +183,26 @@ export class CharacterLayer extends Container {
     sprite.anchor.set(0.5, 1)
     sprite.x = x
     sprite.y = CHARACTER_Y
+    sprite.alpha = instant ? 1 : 0
     this.addChild(sprite)
 
-    this.characters.set(character, {
+    const state: CharacterState = {
       sprite,
       position: normalizedPosition,
       expression,
       animation: null,
-    })
+      fadeAnimation: instant
+        ? null
+        : {
+            startMs: this.elapsedMs,
+            durationMs: DEFAULT_FADE_MS,
+            fromAlpha: 0,
+            toAlpha: 1,
+            destroyOnComplete: false,
+          },
+    }
+    this.characters.set(character, state)
+    if (state.fadeAnimation) this.ensureTicker()
     this.loadTexture(sprite, expression, assetBaseUrl)
   }
 
@@ -212,10 +273,10 @@ export class CharacterLayer extends Container {
     this.ensureTicker()
   }
 
-  /** 進行中アニメーションを 1 つでも持つキャラがいるか */
+  /** 進行中アニメーション（transform / fade いずれか）を 1 つでも持つキャラがいるか */
   hasActiveAnimation(): boolean {
     for (const s of this.characters.values()) {
-      if (s.animation) return true
+      if (s.animation || s.fadeAnimation) return true
     }
     return false
   }
@@ -226,26 +287,46 @@ export class CharacterLayer extends Container {
     ticker.add(() => {
       this.elapsedMs += ticker.deltaMS
       let anyActive = false
-      for (const state of this.characters.values()) {
+      // 退場フェード完了で characters Map から削除する可能性があるため、entries を先にコピーする。
+      // （Map 自体の iteration は delete に対して安全だが、コピー方が読みやすいので採用）
+      const entries = Array.from(this.characters.entries())
+      for (const [name, state] of entries) {
         const a = state.animation
-        if (!a) continue
-        const t = (this.elapsedMs - a.startMs) / a.durationMs
-        if (t >= 1) {
-          // 完了
-          state.sprite.x = a.toX
-          state.sprite.y = a.toY
-          state.sprite.rotation = a.toRotation
-          state.sprite.scale.set(a.toScale, a.toScale)
-          state.animation = null
-          continue
+        if (a) {
+          const t = (this.elapsedMs - a.startMs) / a.durationMs
+          if (t >= 1) {
+            state.sprite.x = a.toX
+            state.sprite.y = a.toY
+            state.sprite.rotation = a.toRotation
+            state.sprite.scale.set(a.toScale, a.toScale)
+            state.animation = null
+          } else {
+            anyActive = true
+            const eased = applyEasing(a.easing, t)
+            state.sprite.x = a.fromX + (a.toX - a.fromX) * eased
+            state.sprite.y = a.fromY + (a.toY - a.fromY) * eased
+            state.sprite.rotation = a.fromRotation + (a.toRotation - a.fromRotation) * eased
+            const sc = a.fromScale + (a.toScale - a.fromScale) * eased
+            state.sprite.scale.set(sc, sc)
+          }
         }
-        anyActive = true
-        const eased = applyEasing(a.easing, t)
-        state.sprite.x = a.fromX + (a.toX - a.fromX) * eased
-        state.sprite.y = a.fromY + (a.toY - a.fromY) * eased
-        state.sprite.rotation = a.fromRotation + (a.toRotation - a.fromRotation) * eased
-        const sc = a.fromScale + (a.toScale - a.fromScale) * eased
-        state.sprite.scale.set(sc, sc)
+
+        const f = state.fadeAnimation
+        if (f) {
+          const tf = (this.elapsedMs - f.startMs) / f.durationMs
+          if (tf >= 1) {
+            state.sprite.alpha = f.toAlpha
+            state.fadeAnimation = null
+            if (f.destroyOnComplete) {
+              this.removeChild(state.sprite)
+              state.sprite.destroy()
+              this.characters.delete(name)
+            }
+          } else {
+            anyActive = true
+            state.sprite.alpha = f.fromAlpha + (f.toAlpha - f.fromAlpha) * tf
+          }
+        }
       }
       if (!anyActive) {
         this.maybeStopTicker()
@@ -264,15 +345,30 @@ export class CharacterLayer extends Container {
   }
 
   /**
-   * キャラクターを退場させる
+   * キャラクターを退場させる。
+   *
+   * デフォルトでは alpha 1 → 0 のフェードアウト後に sprite を破棄する（#177）。
+   * 即時退場が必要な場合は `options.instant: true`（旧挙動と等価）。
    */
-  remove(character: string): void {
+  remove(character: string, options?: { instant?: boolean }): void {
     const state = this.characters.get(character)
     if (!state) return
-    this.removeChild(state.sprite)
-    state.sprite.destroy()
-    this.characters.delete(character)
-    this.maybeStopTicker()
+    const instant = options?.instant === true
+    if (instant) {
+      this.removeChild(state.sprite)
+      state.sprite.destroy()
+      this.characters.delete(character)
+      this.maybeStopTicker()
+      return
+    }
+    state.fadeAnimation = {
+      startMs: this.elapsedMs,
+      durationMs: DEFAULT_FADE_MS,
+      fromAlpha: state.sprite.alpha,
+      toAlpha: 0,
+      destroyOnComplete: true,
+    }
+    this.ensureTicker()
   }
 
   /**
