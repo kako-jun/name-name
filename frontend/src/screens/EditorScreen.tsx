@@ -21,7 +21,7 @@ import { createApiClient, type ProjectInfo } from '../api/client'
 // Worker モデルでは「保存ボタン押下 = PUT contents = 即 commit」になるため、
 // 編集中の値は localStorage に退避し、サーバ保存は明示「保存」のみとする。
 // UI の本格的な改修（保存ボタン名変更・autosave 表示など）は #108 で行う。
-const CHAPTERS_PATH = 'chapters/all.md'
+const SCRIPT_PATH = 'script.md'
 const DEFAULT_BRANCH = 'develop'
 
 function localStorageKey(projectName: string): string {
@@ -248,7 +248,7 @@ function EditorScreen({
     }
   }, [api, projectName])
 
-  // 初回ロード: Worker (Contents API) から chapters/all.md を取得しWASMでパース。
+  // 初回ロード: Worker (Contents API) から script.md を取得しWASMでパース。
   // 取得時の sha を shaRef に保持し、後続の PUT 時に楽観ロック用に渡す。
   // ロード前に localStorage の draft を見て、復元できる場合は draft を表示する
   // （draft があるが ref と sha の世代が古い場合は #108 でマージ UI を入れる予定。
@@ -256,7 +256,7 @@ function EditorScreen({
   useEffect(() => {
     const loadChapters = async () => {
       try {
-        const data = await api.getContents(projectName, CHAPTERS_PATH, DEFAULT_BRANCH)
+        const data = await api.getContents(projectName, SCRIPT_PATH, DEFAULT_BRANCH)
         const markdown = data.content || ''
         shaRef.current = data.sha
         setHasSha(Boolean(data.sha))
@@ -347,7 +347,7 @@ function EditorScreen({
     setSaveError(null)
     try {
       const sha = shaRef.current
-      const result = await api.putContents(projectName, CHAPTERS_PATH, {
+      const result = await api.putContents(projectName, SCRIPT_PATH, {
         content: rawMarkdown,
         sha: sha ?? undefined,
         branch: DEFAULT_BRANCH,
@@ -385,7 +385,7 @@ function EditorScreen({
     setSaveError(null)
     try {
       // 1. 先にサーバから最新を取り直す
-      const data = await api.getContents(projectName, CHAPTERS_PATH, DEFAULT_BRANCH)
+      const data = await api.getContents(projectName, SCRIPT_PATH, DEFAULT_BRANCH)
       const markdown = data.content || ''
 
       // 2. 取得成功したら draft を消す（失敗時は draft を保持して再試行可能に）

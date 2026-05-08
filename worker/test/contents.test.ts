@@ -41,7 +41,7 @@ beforeEach(async () => {
     // 本テストで使うキー（ogurasia の chapters / missing 等）を網羅的に削除する。
     // contentsCacheKey の組み立て規則に合わせる: contents:{owner}/{repo}:{ref}:{path}
     const keysToPurge = [
-      "contents:kako-jun/ogurasia:default:chapters/all.md",
+      "contents:kako-jun/ogurasia:default:script.md",
       "contents:kako-jun/ogurasia:default:missing.md",
     ];
     for (const k of keysToPurge) {
@@ -66,7 +66,7 @@ describe("GET /api/projects/:name/contents/*", () => {
       seenUrls.push(url);
       return jsonResponse({
         type: "file",
-        path: "chapters/all.md",
+        path: "script.md",
         sha: "deadbeef",
         encoding: "base64",
         content: utf8Base64(text),
@@ -75,12 +75,12 @@ describe("GET /api/projects/:name/contents/*", () => {
     globalThis.fetch = fetchMock as typeof fetch;
 
     const req = new Request(
-      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/script.md",
     );
     const res = await worker.fetch(req, ENV, ctx);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { path: string; sha: string; content: string };
-    expect(body.path).toBe("chapters/all.md");
+    expect(body.path).toBe("script.md");
     expect(body.sha).toBe("deadbeef");
     expect(body.content).toBe(text);
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -119,14 +119,14 @@ describe("GET /api/projects/:name/contents/*", () => {
     globalThis.fetch = vi.fn(async () =>
       jsonResponse({
         type: "file",
-        path: "chapters/all.md",
+        path: "script.md",
         sha: "deadbeef",
         encoding: "base64",
         content: "@@@not-base64@@@",
       }),
     ) as typeof fetch;
     const req = new Request(
-      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/script.md",
     );
     const res = await worker.fetch(req, ENV, ctx);
     expect(res.status).toBe(502);
@@ -136,7 +136,7 @@ describe("GET /api/projects/:name/contents/*", () => {
 describe("PUT /api/projects/:name/contents/*", () => {
   it("requires editor auth", async () => {
     const req = new Request(
-      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/script.md",
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -172,7 +172,7 @@ describe("PUT /api/projects/:name/contents/*", () => {
       jsonResponse({ message: "sha does not match" }, 409),
     ) as typeof fetch;
     const req = new Request(
-      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/script.md",
       {
         method: "PUT",
         headers: {
@@ -194,14 +194,14 @@ describe("PUT /api/projects/:name/contents/*", () => {
     globalThis.fetch = vi.fn(async () =>
       jsonResponse(
         {
-          content: { sha: "newsha", path: "chapters/all.md" },
+          content: { sha: "newsha", path: "script.md" },
           commit: { sha: "commit-sha" },
         },
         200,
       ),
     ) as typeof fetch;
     const req = new Request(
-      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/script.md",
       {
         method: "PUT",
         headers: {
@@ -280,7 +280,7 @@ describe("PUT /api/projects/:name/contents/*", () => {
       ),
     ) as typeof fetch;
     const req = new Request(
-      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/script.md",
       {
         method: "PUT",
         headers: {
@@ -342,7 +342,7 @@ describe("PUT /api/projects/:name/contents/*", () => {
       jsonResponse({ message: "sha does not match" }, 409),
     ) as typeof fetch;
     const req = new Request(
-      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/chapters/all.md",
+      "https://name-name-api.workers.dev/api/projects/ogurasia/contents/script.md",
       {
         method: "PUT",
         headers: {
