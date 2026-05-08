@@ -108,7 +108,39 @@ ALLOWED_ORIGIN = "https://name-name.llll-ll.com"
 DEFAULT_OWNER = "kako-jun"
 ```
 
-dev 環境は `http://localhost:7374` を許可するため、ローカル開発時は別 wrangler.toml or `--var` でオーバーライド。
+dev 環境では `npm run dev` （`worker/scripts/dev.mjs` 経由）が起動時に `GITHUB_API_BASE` を立てるため、Worker は `localhost` / `127.x` / `10.x` / `172.16-31.x` / `192.168.x` の dev origin を自動で CORS 許可する。production の `ALLOWED_ORIGIN` 値はそのままで良く、CF Worker 本番では `GITHUB_API_BASE` 未設定なので dev origin は通らない。
+
+## 4. ローカル開発（dev）
+
+```bash
+cd worker && npm install && npm run dev -- --ip 0.0.0.0   # → http://localhost:8787
+cd frontend && VITE_API_URL=http://<host>:8787 npm run dev -- --host  # → http://localhost:7374
+```
+
+`worker/scripts/dev.mjs` が wrangler を spawn する際の振る舞い:
+
+- ルーティングは Hono (`hono` + `hono/cors`) で構成
+- shell に `HTTPS_PROXY` / `HTTP_PROXY` が入っていれば、host 側 Node の `scripts/github-proxy.mjs` を `127.0.0.1:9091` に立て、Worker には `--var GITHUB_API_BASE=http://127.0.0.1:9091` を渡す。Worker は plain fetch でこの中継を叩くため、workerd 内に proxy/undici を埋め込む必要がない
+- wrangler CLI 自身の env からは proxy を消す。`HTTPS_PROXY` が見えていると wrangler は内部の loopback 接続まで proxy しようとして全リクエストが 500 "Connection error" になる
+- proxy 値そのものはコード・wrangler.toml にも書かない
+- SIGINT / SIGTERM で子プロセス群 (github-proxy / local-fs-proxy / wrangler / workerd) をプロセスグループごとまとめて落とす
+
+### ローカル fs モード（push 前のシナリオ確認用）
+
+シナリオを毎回 push してから `/play/<game>` で確認するのは効率が悪いので、Worker が GitHub の代わりに **ローカル作業ツリー** を読み書きするモードを用意した。
+
+```bash
+# 例: ogurasia / friday-1930 / skirts-colour / gymnasia をローカルクローンから読む
+LOCAL_REPOS_BASE=/home/d131/repos/2025:/home/d131/repos/private \
+  npm run dev -- --local --ip 0.0.0.0
+```
+
+- `--local` (or `NAME_NAME_LOCAL=1`) で local-fs-proxy.mjs (`127.0.0.1:9092`) が立つ
+- Worker は `GITHUB_API_BASE` 経由でこの中継を叩くため Worker 側コードは変更不要
+- `/edit/<game>` で保存 → ローカル作業ツリーに即書き込み（git commit/push は kako-jun が手動）
+- `/play/<game>` も同じローカルツリーから読む
+- 動作 OK なら `git push` で本番反映、production CF Worker は GitHub から読む（経路は変わらない）
+- proxy モードと local-fs モードは排他、`--local` が優先
 
 ## 4. トラブルシューティング
 

@@ -13,19 +13,24 @@ import { render, screen, waitFor } from '@testing-library/react'
 // API クライアントをモック化
 const listProjectsMock = vi.fn()
 const getContentsMock = vi.fn()
-vi.mock('../api/client', () => ({
-  createApiClient: () => ({
-    listProjects: listProjectsMock,
-    getContents: getContentsMock,
-    putContents: vi.fn(),
-    listAssets: vi.fn(),
-    uploadAsset: vi.fn(),
-    getStatus: vi.fn(),
-    commit: vi.fn(),
-    discard: vi.fn(),
-    getTags: vi.fn(),
-  }),
-}))
+vi.mock('../api/client', async (importOriginal) => {
+  // ApiError 等の本物のクラスは使い回したいので importOriginal で取り出す。
+  const orig = await importOriginal<typeof import('../api/client')>()
+  return {
+    ...orig,
+    createApiClient: () => ({
+      listProjects: listProjectsMock,
+      getContents: getContentsMock,
+      putContents: vi.fn(),
+      listAssets: vi.fn(),
+      uploadAsset: vi.fn(),
+      getStatus: vi.fn(),
+      commit: vi.fn(),
+      discard: vi.fn(),
+      getTags: vi.fn(),
+    }),
+  }
+})
 
 // WASM パーサをモック化（jsdom で WASM 初期化はしたくない）
 const parseMarkdownMock = vi.fn()
@@ -201,11 +206,12 @@ describe('PlayerScreen', () => {
     expect(screen.queryByTestId('novel-player')).toBeNull()
   })
 
-  it('データ取得に失敗した場合はエラーメッセージを表示する', async () => {
+  it('chapters/all.md がリポにまだ無い (404) 場合は「準備中」案内を表示する', async () => {
+    const { ApiError } = await import('../api/client')
     listProjectsMock.mockResolvedValue([
-      { name: 'missing', title: 'missing', repo: 'kako-jun/missing' },
+      { name: 'missing', title: 'まだ無いゲーム', repo: 'kako-jun/missing' },
     ])
-    getContentsMock.mockRejectedValue(new Error('not found'))
+    getContentsMock.mockRejectedValue(new ApiError(404, { error: 'not found' }, 'Not Found'))
 
     render(
       <PlayerScreen
@@ -216,11 +222,32 @@ describe('PlayerScreen', () => {
       />
     )
 
+    expect(await screen.findByText('まだ無いゲーム はまだ準備中です')).toBeInTheDocument()
+    // エラー扱いではないので alert role は出ない
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByTestId('novel-player')).toBeNull()
+    expect(screen.queryByTestId('rpg-player')).toBeNull()
+  })
+
+  it('404 以外のデータ取得失敗はエラーメッセージを表示する', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'broken', title: 'broken', repo: 'kako-jun/broken' },
+    ])
+    getContentsMock.mockRejectedValue(new Error('network down'))
+
+    render(
+      <PlayerScreen
+        projectName="broken"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('ゲームデータが見つかりません')
+      expect(screen.getByRole('alert')).toHaveTextContent('ゲームデータの読み込みに失敗しました')
     })
 
-    // プレイヤーは描画されない
     expect(screen.queryByTestId('novel-player')).toBeNull()
     expect(screen.queryByTestId('rpg-player')).toBeNull()
   })

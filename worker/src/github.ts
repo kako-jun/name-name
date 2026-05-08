@@ -2,6 +2,7 @@
 //
 // - GitHub PAT は env.GITHUB_TOKEN から読む（ブラウザに渡らない）
 // - レスポンスヘッダの x-ratelimit-remaining を console.log に出す
+// - dev で corp proxy 越しに繋ぐときは env.GITHUB_API_BASE を host 側中継に向ける
 
 import { Octokit } from "@octokit/core";
 import type { Env } from "./types";
@@ -9,21 +10,24 @@ import type { Env } from "./types";
 export type GitHubClient = Octokit;
 
 // GITHUB_TOKEN 未設定の警告は同一プロセス内で 1 回だけ出す。
-// （Worker が isolate 内で再利用される場合、毎リクエスト出力すると邪魔なため）
 let warnedMissingToken = false;
+let warnedApiBase = false;
 
 export function createGitHub(env: Env): GitHubClient {
   if (!env.GITHUB_TOKEN) {
-    // dev / test では未設定のことがある。実 API 呼び出し時に octokit が落ちるので、
-    // ここではログだけ。未設定でも fetch をモックすれば走る。
     if (!warnedMissingToken) {
       console.warn("[github] GITHUB_TOKEN is not set");
       warnedMissingToken = true;
     }
   }
+  if (env.GITHUB_API_BASE && !warnedApiBase) {
+    console.log(`[github] using GITHUB_API_BASE=${env.GITHUB_API_BASE}`);
+    warnedApiBase = true;
+  }
   return new Octokit({
     auth: env.GITHUB_TOKEN,
     userAgent: "name-name-api/0.1.0",
+    baseUrl: env.GITHUB_API_BASE ?? "https://api.github.com",
   });
 }
 

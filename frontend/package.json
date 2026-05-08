@@ -5,7 +5,9 @@
   "type": "module",
   "author": "kako-jun",
   "scripts": {
+    "predev": "node scripts/sync-wasm.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/sync-wasm.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest",

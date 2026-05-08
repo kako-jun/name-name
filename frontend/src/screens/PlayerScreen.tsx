@@ -5,7 +5,7 @@ import type { Event, EventDocument } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { parseMarkdown } from '../wasm/parser'
 import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
-import { createApiClient, type ProjectInfo } from '../api/client'
+import { ApiError, createApiClient, type ProjectInfo } from '../api/client'
 
 // kako-jun/name-name#108: 一般ユーザー向けの再生専用画面。
 //   - 編集 UI / 保存 / アセット管理 / デバッグは一切表示しない
@@ -49,12 +49,15 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // chapters/all.md がまだリポに無い「未投入」状態。エラーではなく案内として扱う。
+  const [unpopulated, setUnpopulated] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     const load = async () => {
       setLoading(true)
       setError(null)
+      setUnpopulated(false)
       try {
         // 1. プロジェクト情報を取得（タイトル表示・assets ベース URL 解決用）
         const projects = await api.listProjects()
@@ -62,8 +65,21 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         if (cancelled) return
         setProjectInfo(found)
 
-        // 2. main ブランチから章データを取得
-        const data = await api.getContents(projectName, CHAPTERS_PATH, PUBLIC_BRANCH)
+        // 2. main ブランチから章データを取得。404 はリポにまだ chapters/all.md
+        //    が無い「未投入」状態として扱い、エラーではなく案内表示にする。
+        let data
+        try {
+          data = await api.getContents(projectName, CHAPTERS_PATH, PUBLIC_BRANCH)
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 404) {
+            if (!cancelled) {
+              setUnpopulated(true)
+              setDoc(null)
+            }
+            return
+          }
+          throw e
+        }
         if (cancelled) return
         const markdown = data.content || ''
 
@@ -74,7 +90,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       } catch (e) {
         console.error('PlayerScreen: failed to load project:', e)
         if (!cancelled) {
-          setError('ゲームデータが見つかりません')
+          setError('ゲームデータの読み込みに失敗しました')
           setDoc(null)
         }
       } finally {
@@ -147,6 +163,17 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
             className={`flex items-center justify-center h-full ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
           >
             <p role="alert">{error}</p>
+          </div>
+        ) : unpopulated ? (
+          <div
+            className={`flex flex-col items-center justify-center h-full gap-2 px-6 text-center ${
+              isDark ? 'text-gray-300' : 'text-gray-700'
+            }`}
+          >
+            <p className="text-lg font-semibold">{title} はまだ準備中です</p>
+            <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+              シナリオ（chapters/all.md）が公開されると、ここで再生できるようになります。
+            </p>
           </div>
         ) : rpgProject !== null ? (
           // RPG シーンを含むプロジェクトは RPGPlayer を優先する。

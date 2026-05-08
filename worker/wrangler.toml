@@ -10,3 +10,9 @@ DEFAULT_OWNER = "kako-jun"
 # Secrets (set via `wrangler secret put`):
 # - GITHUB_TOKEN  : GitHub PAT (fine-grained, contents:write on game repos)
 # - DEV_AUTH_TOKEN: ローカル開発用の bearer token (本番は CF Access / GitHub OAuth, #110)
+#
+# ローカル dev 専用 env (本番では設定不要):
+# - HTTPS_PROXY / HTTP_PROXY : shell に export しておけば、`npm run dev` の
+#   ラッパー (worker/scripts/dev.mjs) が host 側中継 proxy を立ち上げ、
+#   workerd には `--var GITHUB_API_BASE:http://127.0.0.1:9091` を渡す。
+#   proxy 値そのものはコード/wrangler.toml/.dev.vars いずれにも書かない。
