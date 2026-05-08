@@ -13,6 +13,47 @@ const POSITION_X: Record<string, number> = {
   right: 650,
 }
 
+/**
+ * 日本語表記の position を英語 key に正規化する。
+ * パーサーは "中央" 等の日本語表記をそのまま position 文字列に流すため、
+ * CharacterLayer 側で受ける必要がある (#133)。
+ *
+ * サポートする表記:
+ *   - 英語: left / center / right
+ *   - 英語ゆれ (case / 綴り): Left / Center / Centre / Right
+ *   - 日本語 (左): 左 / 左寄り / 左端
+ *   - 日本語 (中央): 中央 / 真ん中 / まんなか / 真中 / 中
+ *   - 日本語 (右): 右 / 右寄り / 右端
+ *
+ * 未知の値が来たら CharacterLayer 側で center にフォールバックする。
+ */
+const POSITION_ALIASES_JA: Record<string, string> = {
+  左: 'left',
+  左寄り: 'left',
+  左端: 'left',
+  中央: 'center',
+  真ん中: 'center',
+  まんなか: 'center',
+  真中: 'center',
+  中: 'center',
+  右: 'right',
+  右寄り: 'right',
+  右端: 'right',
+}
+
+const POSITION_ALIASES_EN: Record<string, string> = {
+  Left: 'left',
+  Center: 'center',
+  Centre: 'center',
+  Right: 'right',
+}
+
+export function normalizePosition(position: string): string {
+  // 空文字 / null 相当は早期に center に倒す (review #152 nit)
+  if (!position) return 'center'
+  return POSITION_ALIASES_JA[position] ?? POSITION_ALIASES_EN[position] ?? position
+}
+
 /** 足元 Y 座標（ダイアログボックス上端あたり） */
 const CHARACTER_Y = 380
 
@@ -29,17 +70,18 @@ export class CharacterLayer extends Container {
    * キャラクター立ち絵を表示する。既に表示中なら position / expression を更新する。
    */
   show(character: string, expression: string, position: string, assetBaseUrl: string): void {
+    const normalizedPosition = normalizePosition(position)
     const existing = this.characters.get(character)
 
     if (existing) {
       // 表情が同じで位置も同じなら何もしない
-      if (existing.expression === expression && existing.position === position) return
+      if (existing.expression === expression && existing.position === normalizedPosition) return
 
       // 位置変更
-      if (existing.position !== position) {
-        const x = POSITION_X[position] ?? POSITION_X['center']
+      if (existing.position !== normalizedPosition) {
+        const x = POSITION_X[normalizedPosition] ?? POSITION_X['center']
         existing.sprite.x = x
-        existing.position = position
+        existing.position = normalizedPosition
       }
 
       // 表情変更
@@ -51,14 +93,14 @@ export class CharacterLayer extends Container {
     }
 
     // 新規表示
-    const x = POSITION_X[position] ?? POSITION_X['center']
+    const x = POSITION_X[normalizedPosition] ?? POSITION_X['center']
     const sprite = new Sprite()
     sprite.anchor.set(0.5, 1)
     sprite.x = x
     sprite.y = CHARACTER_Y
     this.addChild(sprite)
 
-    this.characters.set(character, { sprite, position, expression })
+    this.characters.set(character, { sprite, position: normalizedPosition, expression })
     this.loadTexture(sprite, expression, assetBaseUrl)
   }
 
