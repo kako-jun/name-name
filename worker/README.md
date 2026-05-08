@@ -22,7 +22,7 @@ Issue: kako-jun/name-name#106
 | GET | `/api/projects/:name/contents/*path` | Contents API ラッパー (base64 → utf-8) |
 | PUT | `/api/projects/:name/contents/*path` | Contents API で commit。**新規作成 + 更新どちらも対応**（#115 で実装済）|
 | GET | `/api/projects/:name/assets/:type` | `assets/{type}/` のディレクトリ一覧 |
-| POST | `/api/projects/:name/assets/:type` | base64 アップロード（**5 MiB 未満**）|
+| POST | `/api/projects/:name/assets/:type` | base64 アップロード。サイズで経路自動分岐: `<5 MiB`=Contents API、`>=5 MiB && <=100 MiB`=Git Data API (#116)、`>100 MiB`=413 (LFS は別 Issue) |
 
 `PUT` / `POST` は editor 認証が必要。**現状は dev only** で `Authorization: Bearer ${DEV_AUTH_TOKEN}` 一致のみ通す。
 本実装（CF Access JWT or GitHub OAuth）は **kako-jun/name-name#110**。
@@ -104,15 +104,15 @@ wrangler deploy
 ## 今後の Issue
 
 - **#110** authenticate() 本実装（CF Access / GitHub OAuth）
-- **#111** 初回 wrangler deploy（kako-jun が手動）
-- **#112** 旧 `backend/` (FastAPI) と `compose.yaml` の削除
-- **#116** `>= 5 MiB` のアセットを Git Data API (blob/tree/commit) で扱う
-- **#117** PROJECTS リストの KV / D1 化
 - **#118** ブランチ横断のキャッシュパージ（GitHub webhook 経由）
 
 実装済:
 
+- **#111** 初回 wrangler deploy（session377 で手動完了）
+- **#112** 旧 `backend/` (FastAPI) と `compose.yaml` の削除（session377 完了）
 - **#115** 新規ファイル作成エンドポイント（sha なし PUT）— 422 → 409 正規化、`PUT` で create + update 両対応
+- **#116** `>= 5 MiB` のアセットを Git Data API (blob/tree/commit/ref) で扱う（`<= 100 MiB`、それ以上は LFS = 別 Issue）
+- **#117** PROJECTS リストの KV / D1 化（won't do、ハードコードのまま）
 
 ## ファイル構成
 

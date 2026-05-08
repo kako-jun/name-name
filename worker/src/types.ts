@@ -93,4 +93,11 @@ export const ASSET_TYPES: ReadonlyArray<AssetType> = [
   "fonts",
 ];
 
+// Contents API 経由でアップロードできる上限。GitHub Contents API のレスポンス側に
+// 1 MiB 制限があるため安全側で 5 MiB に絞る。これを超えるアセットは Git Data API
+// (blob/tree/commit) 経路で扱う (#116)。
 export const MAX_ASSET_BYTES = 5 * 1024 * 1024; // 5 MiB
+
+// Git Data API の blob 上限。GitHub の blob サイズ上限は 100 MiB で、これを超えるものは
+// Git LFS が必要 (別 Issue 案件)。100 MiB を超える本体は 413 で reject する。
+export const MAX_GIT_DATA_BYTES = 100 * 1024 * 1024; // 100 MiB
