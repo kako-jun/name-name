@@ -67,11 +67,7 @@ export function clearReadProgress(docKey: string): void {
   }
 }
 
-/** テスト用: localStorage をリセットする */
+/** テスト用: localStorage をリセットする（clearReadProgress の薄いラッパー） */
 export function __resetReadProgressForTest(docKey: string): void {
-  try {
-    localStorage.removeItem(STORAGE_PREFIX + docKey)
-  } catch {
-    // ignore
-  }
+  clearReadProgress(docKey)
 }

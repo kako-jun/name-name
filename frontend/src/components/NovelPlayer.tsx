@@ -138,7 +138,8 @@ function NovelPlayer({
   }, [events, scenes])
 
   // 「つづきから」: 初回イベントセット後に一度だけスキップモードを ON にする (#141)
-  // useRef で発動済みフラグを管理し、events 更新のたびに再発動しないよう制御する
+  // initialSkipMode が false の間は早期 return するため ref はセットされない。
+  // initialSkipMode が true になった初回のみ ref をセットして発動し、以降の events 更新では再発動しない。
   const initialSkipAppliedRef = useRef(false)
   useEffect(() => {
     if (!initialSkipMode || !docKey) return
