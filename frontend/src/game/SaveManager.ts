@@ -74,7 +74,9 @@ export class SaveManager {
   }
 
   /**
-   * 全スロットを JSON 文字列でエクスポートする
+   * 全スロットを JSON 文字列でエクスポートする。
+   * クイックセーブは一時的な作業メモとして扱うため、エクスポート対象に含めない。
+   * ブラウザ間の持ち運しが目的のため、意図的に除外している。
    */
   exportJSON(): string {
     const data: (SaveSlotData | null)[] = this.listSlots()
@@ -149,6 +151,17 @@ export class SaveManager {
       return localStorage.getItem(QUICK_SAVE_KEY) !== null
     } catch {
       return false
+    }
+  }
+
+  /**
+   * クイックセーブデータを消去する。
+   */
+  deleteQuickSave(): void {
+    try {
+      localStorage.removeItem(QUICK_SAVE_KEY)
+    } catch {
+      // ignore
     }
   }
 }

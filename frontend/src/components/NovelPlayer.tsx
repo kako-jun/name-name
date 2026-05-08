@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
@@ -124,14 +124,14 @@ function NovelPlayer({
   }, [])
 
   // クイックセーブ/ロード 通知 toast を表示するヘルパー (#142)
-  function showToast(message: string) {
+  const showToast = useCallback((message: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
     setToast(message)
     toastTimerRef.current = setTimeout(() => {
       setToast(null)
       toastTimerRef.current = null
     }, 2000)
-  }
+  }, [])
 
   // F5: クイックセーブ / F8: クイックロード (#142)
   useEffect(() => {
@@ -148,7 +148,7 @@ function NovelPlayer({
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [])
+  }, [showToast])
 
   // unmount 時に toast タイマーをクリア
   useEffect(() => {

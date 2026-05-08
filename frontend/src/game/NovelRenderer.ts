@@ -994,9 +994,11 @@ export class NovelRenderer {
 
   /**
    * クイックセーブスロットからゲーム状態を復元する。
+   * 選択肢・Wait 待機中はロードしない（不整合状態を避けるため）。
    * データがない・復元できない場合は false を返す。
    */
   quickLoad(): boolean {
+    if (this.waitingForChoice || this.waitingForWait) return false
     const data = this.saveManager.quickLoad()
     if (!data) return false
     this.loadFromSaveData(data)

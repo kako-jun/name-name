@@ -25,8 +25,7 @@ describe('SaveManager - クイックセーブ', () => {
 
   beforeEach(() => {
     manager = new SaveManager()
-    // テスト前にクイックセーブを消す
-    localStorage.removeItem('name-name-save-quick')
+    manager.deleteQuickSave()
   })
 
   it('hasQuickSave: データなしで false を返す', () => {
