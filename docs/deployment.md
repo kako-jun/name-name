@@ -165,11 +165,7 @@ LOCAL_REPOS_BASE=/home/d131/repos/2025:/home/d131/repos/private \
 - Worker `ALLOWED_ORIGIN` と CF Pages のドメインが一致しているか
 - preview デプロイ（PR ごとの一時 URL）は別 origin になるので CORS から漏れる。preview を使うなら `ALLOWED_ORIGINS` 配列化が要る（フォローアップ Issue 候補）
 
-## 5. 旧 backend の停止
-
-`backend/` (FastAPI / GitPython / compose.yaml) は #112 で削除予定。CF Pages + Worker が稼働している間は触らないでよい。
-
-## 6. ロールバック
+## 5. ロールバック
 
 - CF Pages: ダッシュボードの `Deployments` から過去ビルドを `Rollback`
 - CF Worker: `wrangler rollback` で直前バージョンに戻す
@@ -183,6 +179,6 @@ LOCAL_REPOS_BASE=/home/d131/repos/2025:/home/d131/repos/private \
 - #107 frontend API 切替（マージ済）
 - #108 ルーティング (`/play` `/edit`)（マージ済）
 - #109 ジャンプ風トップ（マージ済）
-- #110 CF Access or GitHub OAuth 認証（未着手、kako-jun 判断待ち）
-- #111 CF Pages デプロイ（本ドキュメント、kako-jun 手作業）
-- #112 旧 backend 削除（Worker 動作確認後）
+- #110 CF Access or GitHub OAuth 認証（暫定 read-only 運用で保留）
+- #111 CF Pages デプロイ（完了、`https://name-name.llll-ll.com`）
+- #112 旧 backend 削除（本 PR で完了）

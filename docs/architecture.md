@@ -25,15 +25,21 @@ name-name/
 │   │       └── RpgDialogBox.ts      # RPG 共通ダイアログ（TopDown / Raycast で共用）
 │   ├── package.json
 │   └── vite.config.ts
-├── backend/            # FastAPI + Python（プロジェクト管理のみ）
-│   ├── app/
-│   │   ├── main.py           # APIエンドポイント
-│   │   ├── models.py         # Pydanticモデル
-│   │   └── git_service.py    # Git操作
-│   ├── projects/             # ゲームプロジェクト（gitignore対象）
-│   └── pyproject.toml
-├── docs/               # ドキュメント
-└── compose.yaml        # Docker Compose設定
+├── worker/             # Cloudflare Worker（GitHub REST API プロキシ）
+│   ├── src/
+│   │   ├── index.ts          # Hono ルーティング + CORS
+│   │   ├── projects.ts       # GET /api/projects
+│   │   ├── contents.ts       # GET/PUT /api/projects/:name/contents/*
+│   │   ├── assets.ts         # GET/POST /api/projects/:name/assets/:type
+│   │   ├── github.ts         # octokit ラッパー（baseUrl 切替で dev 用中継対応）
+│   │   ├── auth.ts           # 認証ミドルウェア（CF Access 想定、#110）
+│   │   └── cache.ts          # CF Cache API ヘルパー
+│   ├── scripts/
+│   │   ├── dev.mjs           # `npm run dev` ラッパー（直結 / proxy / local-fs の 3 モード）
+│   │   ├── github-proxy.mjs  # corp proxy 中継（host 側）
+│   │   └── local-fs-proxy.mjs# ローカル作業ツリー emulator（host 側）
+│   └── wrangler.toml
+└── docs/               # ドキュメント
 ```
 
 ### 各モジュールの責務
@@ -42,26 +48,26 @@ name-name/
 |---|---|---|
 | `parser/` | Markdown ↔ Event[] の双方向変換 | Yes（正本） |
 | `frontend/` | エディタUI + ノベルプレイヤー（PixiJS） + RPGプレイヤー（PixiJS） | Yes（WASMで parser を呼ぶ。`src/wasm/parser.ts` 経由） |
-| `backend/` | プロジェクト管理、Git操作、アセット配信 | No（生テキスト中継） |
+| `worker/` | GitHub REST API プロキシ、CORS、認証ゲート、Cache API | No（生テキスト中継） |
 
-バックエンドはパースしない。Markdown テキストをそのままフロントエンドに渡し、フロントエンドが WASM パーサー（`frontend/src/wasm/parser.ts`）で Event[] に変換する。WASM の初期化は遅延実行（初回呼び出し時に `init()` を実行）。
+Worker はパースしない。GitHub から Markdown を取得してそのままフロントエンドに渡し、フロントエンドが WASM パーサー（`frontend/src/wasm/parser.ts`）で Event[] に変換する。WASM の初期化は遅延実行（初回呼び出し時に `init()` を実行）。
 
 ## データフロー
 
 ### 編集時
 
 ```
-ユーザー操作 → React UI (EventDocument 直接操作) → parser(emit) → Markdown → API → Git保存
+ユーザー操作 → React UI (EventDocument 直接操作) → parser(emit) → Markdown → Worker(/api/.../contents PUT) → GitHub
 ```
 
 エディタは `EventDocument`（`chapters[].scenes[].events[]` のツリー）を真実の情報源として
 保持する。UI の編集操作は `EventDocument` を直接更新し、`emitMarkdown` で Markdown 文字列に
-変換してから autosave 経由で backend に保存する。旧 `Chapter` / `Scene` / `Cut` 型は削除済み。
+変換してから autosave 経由で Worker に PUT する。旧 `Chapter` / `Scene` / `Cut` 型は削除済み。
 
 ### 再生時
 
 ```
-API → Markdown → parser(parse) → Event[] → resolveEvents → NovelRenderer(PixiJS)
+Worker(/api/.../contents GET) → Markdown → parser(parse) → Event[] → resolveEvents → NovelRenderer(PixiJS)
 ```
 
 ## パーサー
@@ -428,9 +434,10 @@ MapEditor/NPCEditor の変更
 ## ツールとゲームデータの分離
 
 - **Name×Name ツール**: このリポジトリ（name-name）
-- **ゲームプロジェクト**: 別リポジトリ（例: ogurasia）
-- 各ゲームは `backend/projects/` にクローンされる（gitignore 対象）
-- API 経由でクローン・管理（手動 git clone 禁止、Windows 互換性のため）
+- **ゲームプロジェクト**: 別リポジトリ（例: ogurasia, friday-1930, skirts-colour, gymnasia）
+- 永続化は GitHub の各ゲームリポをそのまま使う（D1/R2 を介さない、ADR `0001-hosting-architecture.md` 参照）
+- 本番: Worker が GitHub Contents API 経由で読み書き
+- dev: `npm run dev -- --local` でローカル作業ツリーを直読みできる（`worker/scripts/local-fs-proxy.mjs`）
 
 ## 下流プロジェクトのスモークテスト
 
