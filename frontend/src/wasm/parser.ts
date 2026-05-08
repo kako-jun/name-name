@@ -60,6 +60,14 @@ function normalizeEvents(events: Event[]): Event[] {
         },
       }
     }
+    if ('Se' in event) {
+      return {
+        Se: {
+          path: event.Se.path,
+          fade_ms: event.Se.fade_ms ?? null,
+        },
+      }
+    }
     if ('Condition' in event) {
       return {
         Condition: {
