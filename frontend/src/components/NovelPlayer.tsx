@@ -135,12 +135,18 @@ function NovelPlayer({
     } else {
       rendererRef.current.setEvents(events)
     }
-    // 「つづきから」: イベント設定後にスキップモードを ON にして未読位置まで高速進行 (#141)
-    if (initialSkipMode && docKey) {
-      rendererRef.current.setSkipMode(true)
-      setSkipMode(true)
-    }
   }, [events, scenes])
+
+  // 「つづきから」: 初回イベントセット後に一度だけスキップモードを ON にする (#141)
+  // useRef で発動済みフラグを管理し、events 更新のたびに再発動しないよう制御する
+  const initialSkipAppliedRef = useRef(false)
+  useEffect(() => {
+    if (!initialSkipMode || !docKey) return
+    if (initialSkipAppliedRef.current) return
+    initialSkipAppliedRef.current = true
+    rendererRef.current?.setSkipMode(true)
+    setSkipMode(true)
+  }, [events, scenes, initialSkipMode, docKey])
 
   // オートモード変更を renderer に反映 (#139)
   useEffect(() => {

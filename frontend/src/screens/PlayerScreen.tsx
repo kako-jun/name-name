@@ -7,10 +7,7 @@ import type { RPGProject } from '../types/rpg'
 import { parseMarkdown } from '../wasm/parser'
 import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
 import { ApiError, createApiClient, type ProjectInfo } from '../api/client'
-import {
-  loadReadProgress,
-  __resetReadProgressForTest as resetReadProgress,
-} from '../game/readProgress'
+import { loadReadProgress, clearReadProgress } from '../game/readProgress'
 
 // kako-jun/name-name#108: 一般ユーザー向けの再生専用画面。
 //   - 編集 UI / 保存 / アセット管理 / デバッグは一切表示しない
@@ -133,7 +130,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const title = projectInfo?.title || projectName
 
   // 「つづきから」ボタンの有効判定: 既読データが存在するか (#141)
-  const hasSaveData = loadReadProgress(projectName).size > 0
+  const [hasSaveData, setHasSaveData] = useState(() => loadReadProgress(projectName).size > 0)
 
   return (
     <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
@@ -210,7 +207,8 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
                 isDark={isDark}
                 onNewGame={() => {
                   // 新規開始: 既読データをクリアして最初から
-                  resetReadProgress(projectName)
+                  clearReadProgress(projectName)
+                  setHasSaveData(false)
                   setStartWithSkip(false)
                   setTitleDismissed(true)
                 }}
@@ -220,9 +218,9 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
                   setTitleDismissed(true)
                 }}
                 onOpenSettings={() => {
-                  // NovelPlayer 内の設定パネルを開く手段がないため、
-                  // 将来的には設定パネルを外部から制御できる ref を追加する。
-                  // 現時点ではタイトルを閉じて設定ボタンから開くよう案内。
+                  // TODO (#141): NovelPlayer の設定パネルを外部から開く ref を追加して
+                  // タイトル画面の「設定」ボタンからダイレクトに設定を開けるようにする。
+                  // 現時点ではタイトルを閉じてゲーム内の設定ボタン（⚙）から開く。
                   setTitleDismissed(true)
                 }}
                 onBack={onBack}
