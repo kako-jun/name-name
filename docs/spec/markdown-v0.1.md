@@ -15,6 +15,7 @@ chapter: 1
 title: "出会い"
 hidden: false
 default_bgm: amehure.ogg
+aspect_ratio: "16:9"
 ---
 ```
 
@@ -25,6 +26,7 @@ default_bgm: amehure.ogg
 | `title` | string | Yes | 章タイトル |
 | `hidden` | boolean | No | `true` の場合エディタで非表示（デフォルト: `false`） |
 | `default_bgm` | string | No | 章全体のデフォルトBGMファイルパス |
+| `aspect_ratio` | string | No | 画面比率。`"16:9"` / `"4:3"` / `"9:16"` から選択（デフォルト: `"16:9"`）。論理解像度は 16:9=800×450、4:3=800×600、9:16=450×800 |
 
 フロントマターは Event ではなく、parser の Chapter 構造体（Rust 側）のフィールドとしてパースされる。フロントエンド側の EventChapter 型とは別物なので注意する。
 

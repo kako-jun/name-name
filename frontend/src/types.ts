@@ -117,6 +117,8 @@ export interface EventChapter {
 
 export interface EventDocument {
   engine: string
+  /** 画面比率。省略時は "16:9" がデフォルト (Issue #136) */
+  aspect_ratio?: string
   chapters: EventChapter[]
 }
 

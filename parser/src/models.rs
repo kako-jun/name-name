@@ -236,5 +236,12 @@ pub struct Chapter {
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct Document {
     pub engine: String,
+    /// 画面比率。"16:9" / "4:3" / "9:16"。未指定時は "16:9"。
+    #[serde(default = "default_aspect_ratio")]
+    pub aspect_ratio: String,
     pub chapters: Vec<Chapter>,
+}
+
+fn default_aspect_ratio() -> String {
+    "16:9".to_string()
 }
