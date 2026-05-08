@@ -12,7 +12,7 @@
  * TopDownRenderer / RaycastRenderer の dialogBox の上に乗せる前提（addChild の順序で zIndex を制御）。
  */
 
-import { Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
+import { Container, Graphics, Rectangle, Text as PixiText, TextStyle } from 'pixi.js'
 
 export type MenuItemId = 'talk' | 'close'
 
@@ -35,9 +35,21 @@ const BOTTOM_MARGIN = 24
 
 interface ItemNode {
   item: MenuItem
-  bg: Graphics
+  /** タップ判定領域。透明 Container に hitArea を持たせる（描画コストなし） */
+  hit: Container
   text: PixiText
 }
+
+/**
+ * 全項目で共有するテキストスタイル。setItems 毎に new TextStyle するのは無駄なので
+ * モジュール定数として 1 個だけ持つ（Pixi 内部で文字メトリクス計算が走る単位）。
+ */
+const ITEM_TEXT_STYLE = new TextStyle({
+  fontFamily: "'Noto Sans JP', sans-serif",
+  fontSize: ITEM_FONT_SIZE,
+  fill: 0xffffff,
+  fontWeight: 'bold',
+})
 
 export class TouchMenuOverlay extends Container {
   private bgPanel: Graphics
@@ -65,32 +77,25 @@ export class TouchMenuOverlay extends Container {
   setItems(items: ReadonlyArray<MenuItem>): void {
     // 既存ノードを破棄
     for (const node of this.items) {
-      this.removeChild(node.bg)
+      this.removeChild(node.hit)
       this.removeChild(node.text)
-      node.bg.destroy()
+      node.hit.destroy()
       node.text.destroy()
     }
     this.items = []
 
-    const style = new TextStyle({
-      fontFamily: "'Noto Sans JP', sans-serif",
-      fontSize: ITEM_FONT_SIZE,
-      fill: 0xffffff,
-      fontWeight: 'bold',
-    })
-
     for (const item of items) {
-      const text = new PixiText({ text: item.label, style })
-      const bg = new Graphics()
-      // 文字をタップ範囲全体で受けられるよう、bg を eventMode='static' にする
-      bg.eventMode = 'static'
-      bg.cursor = 'pointer'
-      bg.on('pointertap', () => {
+      const text = new PixiText({ text: item.label, style: ITEM_TEXT_STYLE })
+      // hitArea を持つ透明 Container でタップを受ける（描画なし、Graphics の塗り不要）
+      const hit = new Container()
+      hit.eventMode = 'static'
+      hit.cursor = 'pointer'
+      hit.on('pointertap', () => {
         this.onSelect(item.id)
       })
-      this.addChild(bg)
+      this.addChild(hit)
       this.addChild(text)
-      this.items.push({ item, bg, text })
+      this.items.push({ item, hit, text })
     }
     this.layout()
   }
@@ -138,14 +143,11 @@ export class TouchMenuOverlay extends Container {
     this.bgPanel.fill({ color: 0x000000, alpha: 0.78 })
     this.bgPanel.stroke({ color: 0xffffff, width: 2 })
 
-    // 各項目: タップ判定矩形（透明）+ テキスト
+    // 各項目: hit area 矩形（描画なし）+ テキスト配置
     for (let i = 0; i < this.items.length; i++) {
       const node = this.items[i]
       const itemY = panelY + PADDING_Y + i * ITEM_HEIGHT
-      node.bg.clear()
-      // 透明矩形（hit area 用）。alpha 0 でもヒットテストは有効
-      node.bg.rect(panelX, itemY, panelWidth, ITEM_HEIGHT)
-      node.bg.fill({ color: 0xffffff, alpha: 0.001 })
+      node.hit.hitArea = new Rectangle(panelX, itemY, panelWidth, ITEM_HEIGHT)
       node.text.x = panelX + PADDING_X
       node.text.y = itemY + (ITEM_HEIGHT - node.text.height) / 2
     }

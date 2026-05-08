@@ -45,6 +45,8 @@ export class TopDownRenderer {
   private dialogBox: RpgDialogBox | null = null
   private menuOverlay: TouchMenuOverlay | null = null
   private detachTouchInput: (() => void) | null = null
+  /** isMoving 中に来たスワイプを 1 件だけキューする。連続スワイプの取りこぼし防止 (#178) */
+  private pendingSwipe: Direction | null = null
 
   private playerContainer: Container | null = null
   private playerDirectionIndicator: Graphics | null = null
@@ -497,7 +499,12 @@ export class TopDownRenderer {
       this.menuOverlay.hideMenu()
       return
     }
-    if (this.isMoving) return
+    if (this.isMoving) {
+      // 連続スワイプを取りこぼさないよう、最後の入力 1 件だけキューする。
+      // 最後勝ちにすることで「速くスワイプし続けると古い方向に進む」違和感を避ける。
+      this.pendingSwipe = direction
+      return
+    }
     this.tryMove(direction)
   }
 
@@ -567,6 +574,14 @@ export class TopDownRenderer {
     this.centerCamera()
     if (t >= 1) {
       this.isMoving = false
+      // キューされたスワイプがあれば次の移動を即座に発火（連続スワイプの滑らかさ）#178
+      if (this.pendingSwipe && !this.dialogBox?.isShowing && !this.menuOverlay?.isShowing()) {
+        const next = this.pendingSwipe
+        this.pendingSwipe = null
+        this.tryMove(next)
+      } else {
+        this.pendingSwipe = null
+      }
     }
   }
 

@@ -561,9 +561,11 @@ export class RaycastRenderer {
         break
       case 'left':
         this.playerAngle -= Math.PI / 2
+        this.normalizePlayerAngle()
         break
       case 'right':
         this.playerAngle += Math.PI / 2
+        this.normalizePlayerAngle()
         break
     }
   }
@@ -571,12 +573,16 @@ export class RaycastRenderer {
   /**
    * 正面ベクトル方向に 1 タイル分だけプレイヤー位置をスナップする。
    * 移動先タイルが通行不可（壁 / NPC）なら何もしない（ステップだけ消費する）。
+   *
+   * `Math.cos/sin(playerAngle)` は π/2 付近で微小な符号誤差を持ち、キーボード操作で
+   * playerAngle が連続値になっている状態で「正面のはずなのに動かない」を起こす可能性がある。
+   * 正面 1 タイルは整数増分（-1/0/+1）であるべきなので Math.round で正規化してから加算する。
    */
   private snapStep(forward: number): void {
-    const dx = Math.cos(this.playerAngle) * forward
-    const dy = Math.sin(this.playerAngle) * forward
-    const targetTileX = Math.floor(this.playerX + dx)
-    const targetTileY = Math.floor(this.playerY + dy)
+    const dx = Math.round(Math.cos(this.playerAngle)) * forward
+    const dy = Math.round(Math.sin(this.playerAngle)) * forward
+    const targetTileX = Math.floor(this.playerX) + dx
+    const targetTileY = Math.floor(this.playerY) + dy
     if (!this.isPassable(targetTileX + 0.5, targetTileY + 0.5)) return
     // タイル中央にスナップ（playerX/Y はタイル中央 + 0.5 基準）
     this.playerX = targetTileX + 0.5
@@ -587,6 +593,18 @@ export class RaycastRenderer {
       Math.floor(this.playerX),
       Math.floor(this.playerY)
     )
+  }
+
+  /**
+   * playerAngle を [-π, π] 区間に畳み込む。スワイプ回転を長時間続けると累積発散する float
+   * を抑える（描画自体は cos/sin 経由で問題ないが、長期セッションでの精度劣化を予防）。
+   */
+  private normalizePlayerAngle(): void {
+    const TAU = Math.PI * 2
+    let a = this.playerAngle % TAU
+    if (a > Math.PI) a -= TAU
+    else if (a < -Math.PI) a += TAU
+    this.playerAngle = a
   }
 
   private handleTap = (): void => {

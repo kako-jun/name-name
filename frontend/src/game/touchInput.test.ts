@@ -16,10 +16,11 @@ describe('classifySwipe', () => {
     expect(classifySwipe(-10, -50)).toBe('up')
   })
 
-  it('絶対値が同じときは水平を優先する', () => {
+  it('絶対値が同じときは水平を優先する（4 象限すべて確認）', () => {
     expect(classifySwipe(40, 40)).toBe('right')
     expect(classifySwipe(40, -40)).toBe('right')
     expect(classifySwipe(-40, 40)).toBe('left')
+    expect(classifySwipe(-40, -40)).toBe('left')
   })
 
   it('スクリーン座標の Y 軸（下向き正）に従い up/down を分ける', () => {

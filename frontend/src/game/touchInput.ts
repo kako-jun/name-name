@@ -60,8 +60,9 @@ export function attachTouchInput(element: HTMLElement, options: TouchInputOption
       startY: e.clientY,
       startTime: performance.now(),
     }
-    // 画面スクロール抑止（タッチデバイスでスワイプが scroll に化けるのを防ぐ）
-    if (e.pointerType === 'touch') e.preventDefault()
+    // 画面スクロール抑止は下記 touch-action: none 側で完結させる。
+    // pointerdown は passive listener で登録される処理系があり preventDefault が
+    // 警告を出すケースがあるため、ここでは preventDefault を呼ばない。
   }
 
   const onUp = (e: PointerEvent): void => {
@@ -92,7 +93,14 @@ export function attachTouchInput(element: HTMLElement, options: TouchInputOption
 
   // touch-action: none を element に強制し、ブラウザのデフォルトジェスチャを抑制する。
   // 親側の CSS と二重指定になっても害はない。
-  const previousTouchAction = element.style.touchAction
+  //
+  // React StrictMode では init/destroy が二重発火するため、素直に previousTouchAction を
+  // 保存すると 1 回目の attach で 'none' を保存して 2 回目の detach で 'none' に戻してしまう。
+  // dataset に「自分が書き換える前の値」を一度だけ記録し、最後に detach されたとき復元する。
+  const TOUCH_ACTION_KEY = 'nameNamePrevTouchAction'
+  if (!(TOUCH_ACTION_KEY in element.dataset)) {
+    element.dataset[TOUCH_ACTION_KEY] = element.style.touchAction
+  }
   element.style.touchAction = 'none'
 
   element.addEventListener('pointerdown', onDown)
@@ -105,7 +113,11 @@ export function attachTouchInput(element: HTMLElement, options: TouchInputOption
     element.removeEventListener('pointerup', onUp)
     element.removeEventListener('pointercancel', onCancel)
     element.removeEventListener('pointerleave', onCancel)
-    element.style.touchAction = previousTouchAction
+    const prev = element.dataset[TOUCH_ACTION_KEY]
+    if (prev !== undefined) {
+      element.style.touchAction = prev
+      delete element.dataset[TOUCH_ACTION_KEY]
+    }
   }
 }
 
