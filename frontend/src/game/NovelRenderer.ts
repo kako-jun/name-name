@@ -574,6 +574,9 @@ export class NovelRenderer {
     if (historyIndex < 0 || historyIndex >= this.history.length) return
     if (this.waitingForChoice || this.waitingForWait) return
 
+    // シーク操作時はスキップモードを解除する (#140): ユーザーが特定箇所を見たくてシークしているため
+    this.setSkipMode(false)
+
     // 履歴を指定位置まで切り詰める（アンドゥスタック方式: 戻った地点から再進行すると新しい履歴が積まれる）
     this.history = this.history.slice(0, historyIndex + 1)
     const targetState = this.history[historyIndex]

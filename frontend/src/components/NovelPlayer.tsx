@@ -94,6 +94,13 @@ function NovelPlayer({
     }
   }, [debouncedSave])
 
+  // docKey が変化したときに renderer に反映 (#140): 同じコンポーネントが再利用される場合の考慮
+  useEffect(() => {
+    if (docKey) {
+      rendererRef.current?.setDocKey(docKey)
+    }
+  }, [docKey])
+
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
