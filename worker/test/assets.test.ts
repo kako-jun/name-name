@@ -135,8 +135,8 @@ describe("POST /api/projects/:name/assets/:type", () => {
     expect(res.status).toBe(401);
   });
 
-  it("rejects asset > 100 MiB with 413 (LFS required)", async () => {
-    // base64 length to exceed MAX_GIT_DATA_BYTES の 100 MiB
+  it("rejects asset > MAX_GIT_DATA_BYTES with 413 (Worker memory limit)", async () => {
+    // MAX_GIT_DATA_BYTES (25 MiB) を超える本体は Worker メモリ制約で reject する
     const targetBytes = MAX_GIT_DATA_BYTES + 1024;
     const b64Length = Math.ceil(targetBytes / 3) * 4;
     const big = "A".repeat(b64Length);
@@ -291,13 +291,24 @@ describe("POST /api/projects/:name/assets/:type", () => {
    */
   function makeGitDataMock(opts: {
     defaultBranch?: string;
-    contentsSha?: string | null; // null = 404, undefined = not called
+    /**
+     * 楽観ロック用 listing 応答の sha。
+     *  - undefined: contents lookup は来ない想定 (テスト失敗時は呼ばれてしまう)
+     *  - null: 親ディレクトリは存在するが当該ファイル無し (新規扱い)
+     *  - string: 当該 file の sha として返す
+     *  - "404": 親ディレクトリごと 404
+     */
+    contentsSha?: string | null | "404";
+    /** 楽観ロック用 listing で返すファイル名 (default: "big.png") */
+    contentsFilename?: string;
     refSha?: string;
     parentTreeSha?: string;
     newBlobSha?: string;
     newTreeSha?: string;
     newCommitSha?: string;
-    finalRefSha?: string;
+    /** PATCH ref のレスポンス status を強制したいとき (default: 200) */
+    refPatchStatus?: number;
+    refPatchBody?: unknown;
   }): { fetch: typeof fetch; calls: Record<string, number> } {
     const calls: Record<string, number> = {
       repo: 0,
@@ -317,18 +328,27 @@ describe("POST /api/projects/:name/assets/:type", () => {
         calls.repo++;
         return jsonResponse({ default_branch: opts.defaultBranch ?? "main" });
       }
-      // GET /repos/.../contents/...
+      // GET /repos/.../contents/... (親ディレクトリ listing 経由で sha を引く)
       if (method === "GET" && url.includes("/contents/")) {
         calls.contents++;
-        if (opts.contentsSha === null) {
+        if (opts.contentsSha === "404") {
           return jsonResponse({ message: "Not Found" }, 404);
         }
-        return jsonResponse({
-          path: "assets/images/big.png",
-          sha: opts.contentsSha,
-          size: 999,
-          type: "file",
-        });
+        const fname = opts.contentsFilename ?? "big.png";
+        if (opts.contentsSha === null || opts.contentsSha === undefined) {
+          // 親ディレクトリは存在するが当該ファイルなし
+          return jsonResponse([]);
+        }
+        return jsonResponse([
+          {
+            name: fname,
+            path: `assets/images/${fname}`,
+            sha: opts.contentsSha,
+            size: 999,
+            type: "file",
+            download_url: null,
+          },
+        ]);
       }
       // GET /git/ref/heads/{branch} (octokit url-encodes the slash → heads%2F)
       if (method === "GET" && /\/git\/ref\/heads(%2F|\/)/.test(url)) {
@@ -356,9 +376,12 @@ describe("POST /api/projects/:name/assets/:type", () => {
         return jsonResponse({ sha: opts.newCommitSha ?? "new-commit" }, 201);
       }
       // PATCH /git/refs/heads/{branch} (octokit url-encodes the slash → heads%2F)
+      // NOTE: method が PATCH のため POST /git/commits とは衝突しない。
       if (method === "PATCH" && /\/git\/refs\/heads(%2F|\/)/.test(url)) {
         calls.refPatch++;
-        return jsonResponse({ object: { sha: opts.finalRefSha ?? opts.newCommitSha ?? "new-commit" } });
+        const status = opts.refPatchStatus ?? 200;
+        const body = opts.refPatchBody ?? { object: { sha: opts.newCommitSha ?? "new-commit" } };
+        return jsonResponse(body, status);
       }
       throw new Error(`unexpected fetch: ${method} ${url}`);
     }) as typeof fetch;
@@ -505,6 +528,105 @@ describe("POST /api/projects/:name/assets/:type", () => {
     // sha 不一致で短絡したので blob 作成等は呼ばれない
     expect(calls.blob).toBe(0);
     expect(calls.refPatch).toBe(0);
+  });
+
+  it("returns 409 when ref PATCH responds 422 non-fast-forward (concurrent push)", async () => {
+    // review M-1: PATCH /git/refs が 422 を返したら GitDataConflictError → 409 に正規化
+    const { fetch: mockFetch, calls } = makeGitDataMock({
+      newCommitSha: "would-be-commit",
+      refPatchStatus: 422,
+      refPatchBody: { message: "Update is not a fast forward" },
+    });
+    globalThis.fetch = mockFetch;
+
+    const big = makeBase64OfBytes(MAX_ASSET_BYTES + 100);
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/assets/images",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer dev-token",
+        },
+        body: JSON.stringify({
+          filename: "race.png",
+          contentBase64: big,
+          message: "race",
+          branch: "main",
+        }),
+      },
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(409);
+    expect(calls.refPatch).toBe(1);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("concurrent");
+  });
+
+  it("resolves default_branch AND performs optimistic locking when both are required", async () => {
+    // review S-4: branch 省略 + sha 指定の合わせ技
+    const { fetch: mockFetch, calls } = makeGitDataMock({
+      defaultBranch: "main",
+      contentsSha: "match-sha",
+      newBlobSha: "blob-merged",
+    });
+    globalThis.fetch = mockFetch;
+
+    const big = makeBase64OfBytes(MAX_ASSET_BYTES + 100);
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/assets/images",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer dev-token",
+        },
+        body: JSON.stringify({
+          filename: "big.png",
+          contentBase64: big,
+          message: "update",
+          sha: "match-sha",
+        }),
+      },
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(201);
+    expect(calls.repo).toBe(1); // default_branch 解決
+    expect(calls.contents).toBe(1); // 楽観ロック
+    expect(calls.refPatch).toBe(1);
+  });
+
+  it("strips whitespace from base64 in Git Data API path", async () => {
+    // review S-4: 既存の Contents API path にはあったが Git Data path にも必要
+    const { fetch: mockFetch, calls } = makeGitDataMock({
+      newBlobSha: "blob-clean",
+    });
+    globalThis.fetch = mockFetch;
+
+    // 5 MiB 強の base64 に改行を混ぜる (typical PEM-like wrapping を想定)
+    const cleanLength = Math.ceil((MAX_ASSET_BYTES + 100) / 3) * 4;
+    const cleanBig = "A".repeat(cleanLength);
+    const wrappedBig = cleanBig.match(/.{1,76}/g)!.join("\n");
+
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/assets/images",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer dev-token",
+        },
+        body: JSON.stringify({
+          filename: "wrapped.png",
+          contentBase64: wrappedBig,
+          message: "wrapped",
+          branch: "main",
+        }),
+      },
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(201);
+    expect(calls.blob).toBe(1);
   });
 
   it("propagates 422 when GitHub returns 422 (e.g. existing file without sha)", async () => {

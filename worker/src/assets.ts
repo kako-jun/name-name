@@ -240,7 +240,12 @@ export async function handleUploadAsset(
       expectedSha: body.sha,
     });
 
-    await cacheDelete(assetsCacheKey(owner, repo, type, branch ?? null));
+    // branch 省略時は default_branch が解決されている。両方 (resolved + null) を
+    // パージしてキャッシュ整合を取る (review N-1)。
+    await cacheDelete(assetsCacheKey(owner, repo, type, result.branch));
+    if (branch && branch !== result.branch) {
+      await cacheDelete(assetsCacheKey(owner, repo, type, branch));
+    }
     await cacheDelete(assetsCacheKey(owner, repo, type, null));
 
     return jsonResponse(

@@ -22,7 +22,9 @@ Issue: kako-jun/name-name#106
 | GET | `/api/projects/:name/contents/*path` | Contents API ラッパー (base64 → utf-8) |
 | PUT | `/api/projects/:name/contents/*path` | Contents API で commit。**新規作成 + 更新どちらも対応**（#115 で実装済）|
 | GET | `/api/projects/:name/assets/:type` | `assets/{type}/` のディレクトリ一覧 |
-| POST | `/api/projects/:name/assets/:type` | base64 アップロード。サイズで経路自動分岐: `<5 MiB`=Contents API、`>=5 MiB && <=100 MiB`=Git Data API (#116)、`>100 MiB`=413 (LFS は別 Issue) |
+| POST | `/api/projects/:name/assets/:type` | base64 アップロード。サイズで経路自動分岐: `<5 MiB`=Contents API、`>=5 MiB && <=25 MiB`=Git Data API (#116)、`>25 MiB`=413 |
+
+> **大容量アセットの上限**: GitHub の blob 上限は 100 MiB だが、Cloudflare Workers の per-request メモリ上限が 128 MiB なので 100 MiB 級の base64 (≈133 MiB の文字列) は OOM する。本 Worker は安全圏として **25 MiB** で頭打ちにしている。それ以上は Git LFS or streaming アップロード経路 (将来 Issue) で扱う。
 
 `PUT` / `POST` は editor 認証が必要。**現状は dev only** で `Authorization: Bearer ${DEV_AUTH_TOKEN}` 一致のみ通す。
 本実装（CF Access JWT or GitHub OAuth）は **kako-jun/name-name#110**。

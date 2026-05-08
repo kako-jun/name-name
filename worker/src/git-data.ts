@@ -57,8 +57,6 @@ type TreeCreateResponse =
   Endpoints["POST /repos/{owner}/{repo}/git/trees"]["response"]["data"];
 type CommitCreateResponse =
   Endpoints["POST /repos/{owner}/{repo}/git/commits"]["response"]["data"];
-type RefPatchResponse =
-  Endpoints["PATCH /repos/{owner}/{repo}/git/refs/{ref}"]["response"]["data"];
 type ContentsGetResponse =
   Endpoints["GET /repos/{owner}/{repo}/contents/{path}"]["response"]["data"];
 
@@ -75,8 +73,15 @@ async function resolveDefaultBranch(
 
 /**
  * 楽観ロック用に現在の path 上の blob sha を取得する。
+ *
+ * Contents API を **ファイル直接** で叩くと >1 MiB のレスポンスが
+ * truncate されるなど挙動差があるため、親ディレクトリの listing から
+ * 該当 basename を引く方式にする (review M-2)。listing 各 entry の sha
+ * はディレクトリ全体が大きくても安定して返ってくる。
+ *
  * - 存在すれば sha を返す
- * - 404 なら null を返す（新規作成扱い）
+ * - 親ディレクトリ自体が無い / 当該ファイルが listing に無い → null (新規作成扱い)
+ * - 想定外の形 (path が file ではなく dir 等) は warn ログを出して null
  */
 async function getCurrentBlobSha(
   octokit: GitHubClient,
@@ -85,19 +90,25 @@ async function getCurrentBlobSha(
   path: string,
   branch: string,
 ): Promise<string | null> {
+  const lastSlash = path.lastIndexOf("/");
+  if (lastSlash < 0) return null;
+  const dirPath = path.slice(0, lastSlash);
+  const baseName = path.slice(lastSlash + 1);
   try {
     const res = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
       owner,
       repo,
-      path,
+      path: dirPath,
       ref: branch,
     });
     const data = res.data as ContentsGetResponse;
-    if (Array.isArray(data)) {
-      // ディレクトリなら sha 比較は無意味。null として扱い、後段で衝突判定に任せる
+    if (!Array.isArray(data)) {
+      // ディレクトリのつもりが file が返ってきた異常系。比較不能なので null に倒す。
+      console.warn(`[git-data] expected directory listing at ${dirPath} but got non-array`);
       return null;
     }
-    return data.sha ?? null;
+    const entry = data.find((e) => e.name === baseName && e.type === "file");
+    return entry?.sha ?? null;
   } catch (err) {
     const ne = normalizeError(err);
     if (ne.status === 404) return null;
@@ -174,19 +185,31 @@ export async function uploadAssetViaGitData(
   logRateLimit("git-data.commit-create", newCommitRes.headers as Record<string, string | number | undefined>);
   const newCommitSha = (newCommitRes.data as CommitCreateResponse).sha;
 
-  const refPatchRes = await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
-    owner,
-    repo,
-    ref: `heads/${branch}`,
-    sha: newCommitSha,
-  });
-  logRateLimit("git-data.ref-patch", refPatchRes.headers as Record<string, string | number | undefined>);
-  const finalCommitSha = (refPatchRes.data as RefPatchResponse).object.sha;
-
-  return {
-    path,
-    sha: newBlobSha,
-    commit_sha: finalCommitSha,
-    branch,
-  };
+  // ref patch が 422 を返したら他デバイス/CI の concurrent push と判定し
+  // GitDataConflictError に詰め替える (review M-1)。force は使わない方針。
+  try {
+    const refPatchRes = await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+      owner,
+      repo,
+      ref: `heads/${branch}`,
+      sha: newCommitSha,
+    });
+    logRateLimit("git-data.ref-patch", refPatchRes.headers as Record<string, string | number | undefined>);
+    // refPatchRes.data.object.sha は newCommitSha と一致するため改めて読まずに返す。
+    // (ref patch の echo 確認は logRateLimit の HTTP 200 で十分)
+    return {
+      path,
+      sha: newBlobSha,
+      commit_sha: newCommitSha,
+      branch,
+    };
+  } catch (err) {
+    const ne = normalizeError(err);
+    if (ne.status === 422) {
+      throw new GitDataConflictError(
+        `ref advanced concurrently on heads/${branch} (non-fast-forward); retry the upload`,
+      );
+    }
+    throw err;
+  }
 }
