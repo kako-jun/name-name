@@ -10,7 +10,28 @@
  * ノベル用 DialogBox（話者名別枠 + ▼インジケーター + 禁則ワードラップ）とは見た目が別系統のため独立クラスとして分離している。
  */
 
-import { Assets, Container, Graphics, Sprite, Text as PixiText, TextStyle, Texture } from 'pixi.js'
+import {
+  Assets,
+  Container,
+  Graphics,
+  Sprite,
+  Text as PixiText,
+  TextStyle,
+  Texture,
+  Ticker,
+} from 'pixi.js'
+import {
+  type TypewriterState,
+  isTypingActive,
+  makeInitialTypewriterState,
+  skipTypewriter as typewriterSkip,
+  startTypewriter,
+  tickTypewriter,
+  visibleText,
+} from './typewriter'
+
+/** typewriter のデフォルト速度（ms/char）。設定画面 #138 で上書き可能になる前提 */
+const DEFAULT_RPG_MS_PER_CHAR = 30
 
 /**
  * レイアウト定数（モジュール export）。
@@ -97,11 +118,30 @@ export class RpgDialogBox extends Container {
   private screenHeight: number
   private showing = false
 
+  /** typewriter 状態 (#150 / #137 と共通 helper) */
+  private typewriter: TypewriterState = makeInitialTypewriterState()
+  /** typewriter: 1 文字あたり ms */
+  private msPerChar: number = DEFAULT_RPG_MS_PER_CHAR
+  /** typewriter 進行 + show 中のみ動かす ticker */
+  private ticker: Ticker
+
   constructor(screenWidth: number, screenHeight: number) {
     super()
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
     this.build()
+
+    // typewriter ticker: show 中のみ tick を消費する。constructor では走らせず、
+    // show() で start、hide() / destroy() で stop する。
+    this.ticker = new Ticker()
+    this.ticker.add(() => {
+      if (!isTypingActive(this.typewriter)) return
+      const next = tickTypewriter(this.typewriter, this.ticker.deltaMS, this.msPerChar)
+      if (next.displayedCharCount !== this.typewriter.displayedCharCount && this.messageText) {
+        this.messageText.text = visibleText(next)
+      }
+      this.typewriter = next
+    })
   }
 
   get isShowing(): boolean {
@@ -127,9 +167,12 @@ export class RpgDialogBox extends Container {
       this.nameText.visible = true
     }
     if (this.messageText) {
-      this.messageText.text = message
+      // typewriter: 全文を保持し、displayedCharCount を 0 から進めていく
+      this.typewriter = startTypewriter(message)
+      this.messageText.text = ''
       this.messageText.visible = true
     }
+    if (!this.ticker.started) this.ticker.start()
 
     this.applyPortraitLayout()
     if (this.currentPortrait) {
@@ -148,6 +191,37 @@ export class RpgDialogBox extends Container {
     if (this.nameText) this.nameText.visible = false
     if (this.messageText) this.messageText.visible = false
     this.hidePortrait()
+    // typewriter 状態クリア + ticker 停止 (CPU 節約)
+    this.typewriter = makeInitialTypewriterState()
+    if (this.ticker.started) this.ticker.stop()
+  }
+
+  /**
+   * typewriter 表示中なら全文を即時表示し完了させる (#150)。
+   * 表示完了済み or hide 中なら何もしない。
+   */
+  skipTypewriter(): void {
+    if (!isTypingActive(this.typewriter)) return
+    this.typewriter = typewriterSkip(this.typewriter)
+    if (this.messageText) this.messageText.text = visibleText(this.typewriter)
+  }
+
+  /**
+   * typewriter が進行中（まだ全文表示されていない）か。
+   */
+  isTyping(): boolean {
+    return isTypingActive(this.typewriter)
+  }
+
+  /**
+   * typewriter 速度を設定する (#138 設定画面から呼ぶ前提)。
+   * @param msPerChar 1 文字あたり ms。0 以下は瞬間表示扱い。
+   */
+  setMsPerChar(msPerChar: number): void {
+    this.msPerChar = Math.max(0, msPerChar)
+    if (this.msPerChar === 0) {
+      this.skipTypewriter()
+    }
   }
 
   redraw(screenWidth: number, screenHeight: number): void {
@@ -163,7 +237,8 @@ export class RpgDialogBox extends Container {
         this.nameText.visible = true
       }
       if (this.messageText) {
-        this.messageText.text = this.currentMessage
+        // redraw 時は typewriter の現在状態を保ったまま再描画する
+        this.messageText.text = visibleText(this.typewriter)
         this.messageText.visible = true
       }
       this.applyPortraitLayout()
@@ -176,6 +251,9 @@ export class RpgDialogBox extends Container {
   }
 
   override destroy(): void {
+    // typewriter ticker を完全に停止・破棄してリーク防止
+    if (this.ticker.started) this.ticker.stop()
+    this.ticker.destroy()
     // super.destroy({ children: true }) が自身と全子要素を破棄する
     this.bg = null
     this.nameText = null

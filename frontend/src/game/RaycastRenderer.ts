@@ -432,7 +432,12 @@ export class RaycastRenderer {
     if (this.dialogBox?.isShowing) {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
-        this.dialogBox.hide()
+        // typewriter 表示中なら全文表示にスキップ、完了済みなら閉じる (#150)
+        if (this.dialogBox.isTyping()) {
+          this.dialogBox.skipTypewriter()
+        } else {
+          this.dialogBox.hide()
+        }
       }
       return
     }
