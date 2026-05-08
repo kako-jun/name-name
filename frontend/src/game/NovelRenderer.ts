@@ -717,6 +717,11 @@ export class NovelRenderer {
       })
       return
     }
+    if ('DialogBorderless' in event) {
+      // 文字ウィンドウ枠の ON/OFF (#135)
+      this.dialogBox.setBorderless(event.DialogBorderless.borderless)
+      return
+    }
     if ('Wait' in event) {
       // 進行を停止し、指定ミリ秒後に再開（eventIndex のインクリメントはコールバック内で行う）
       this.waitingForWait = true
