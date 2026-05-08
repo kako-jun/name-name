@@ -823,6 +823,8 @@ export class NovelRenderer {
       return
     }
     if ('Choice' in event) {
+      // 選択肢に到達したらスキップモードを解除（手動選択が必要） (#140)
+      this.setSkipMode(false)
       this.waitingForChoice = true
       this.choiceOverlay.show(event.Choice.options, (jump: string) => {
         this.waitingForChoice = false
@@ -862,6 +864,8 @@ export class NovelRenderer {
     }
     if ('Wait' in event) {
       // 進行を停止し、指定ミリ秒後に再開（eventIndex のインクリメントはコールバック内で行う）
+      // Wait 中もスキップを停止する（Wait を無視するのは仕様違反） (#140)
+      this.setSkipMode(false)
       this.waitingForWait = true
       this.waitTimer = setTimeout(() => {
         this.waitTimer = null
@@ -1088,6 +1092,10 @@ export class NovelRenderer {
   /**
    * スキップモード: 既読行を高速スキップする (#140)。
    * タイプライターをスキップしてから advance() を setTimeout(0) で呼ぶ。
+   * Choice / Wait 到達時は processDirective() 内で setSkipMode(false) が呼ばれるため、
+   * タイマー発火時に skipMode が false になっており advance() は通常呼び出しになる。
+   * 同一イベントの複数 text 行は同じ displayIndex を持つため、
+   * 2 行目以降も「既読」として扱い全行をスキップする（意図的な設計）。
    */
   private scheduleSkipStep(): void {
     if (!this.skipMode) return
@@ -1097,7 +1105,8 @@ export class NovelRenderer {
     this.skipTimer = setTimeout(() => {
       this.skipTimer = null
       if (!this.skipMode) return
-      // タイプライター中なら全文スキップ（onTypingDone は null なので自動進行しない）
+      // タイプライター中なら全文スキップ（skipTypewriter は onTypingDone を破棄するため
+      // オートモードとの二重 advance は起きない）
       if (this.dialogBox.isTyping()) {
         this.dialogBox.skipTypewriter()
       }
