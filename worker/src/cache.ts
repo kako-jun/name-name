@@ -1,10 +1,15 @@
 // Cache API ヘルパー
 //
-// - GET の結果を 60 秒キャッシュする
-// - PUT/POST が成功したら該当キーをパージする
+// - GET の結果を 10 秒キャッシュする
+// - PUT/POST が成功したら該当キーをパージする (write-through)
 // - テスト環境では caches.default が無いので、ヘルパーは undefined を許容する
+//
+// TTL を短く (10s) しているのは #118 への対応。develop→main マージは GitHub UI 経由で
+// 走るため Worker がそのタイミングを検知できず、main のキャッシュが古いまま残る問題が
+// あった。kako-jun 1 人運用 + 5000 req/h レート枠に余裕があるため、TTL 短縮で
+// 実用十分と判断。generation-based / webhook 方式は将来必要になったら再検討する。
 
-const DEFAULT_TTL_SECONDS = 60;
+const DEFAULT_TTL_SECONDS = 10;
 
 function getCache(): Cache | null {
   // @cloudflare/workers-types の caches.default
