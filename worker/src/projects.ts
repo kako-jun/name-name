@@ -1,8 +1,8 @@
 // GET /api/projects ハンドラ
 //
-// 当面はハードコードのリスト。
-// TODO(#117): PROJECTS リストの KV / D1 化。その時に Map<name, Project> に切り替えて
-//   findProject を O(1) にする。現状は 4 件なので線形探索で十分。
+// プロジェクトリストはハードコード。新ゲーム追加 = 本ファイル 1 行追加 + `wrangler deploy`。
+// (KV/D1 化を一度検討したが、dev 環境 (miniflare) で KV を毎回 seed する手間に対し
+//  実利が薄かったので #117 close。プロジェクト数 10+ や動的追加 UI が要る段階で再考)
 
 import type { Env, Project } from "./types";
 
@@ -14,7 +14,6 @@ export const PROJECTS: ReadonlyArray<Project> = [
 ];
 
 export function findProject(name: string): Project | undefined {
-  // TODO(#117): KV/D1 化の際は Map ベースに置き換える
   return PROJECTS.find((p) => p.name === name);
 }
 
