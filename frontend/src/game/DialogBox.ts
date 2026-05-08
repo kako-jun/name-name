@@ -5,6 +5,7 @@
  * - 話者名ボックス（名前がある場合のみ表示）
  * - 日本語ワードラップ（禁則処理付き）
  * - 続きインジケーター（▼ バウンスアニメーション）
+ * - 枠なしナレ風モード (#135): 背景・枠を非表示にし DropShadow で可読性を確保
  */
 
 import { Container, Graphics, Text, TextStyle, Ticker } from 'pixi.js'
@@ -38,10 +39,20 @@ export interface DialogBoxConfig {
   fontFamily?: string
   /** typewriter 表示の 1 文字あたり ms（デフォルト: 30ms/char） */
   msPerChar?: number
+  /**
+   * 枠なしナレ風モード（デフォルト: false）。
+   * true のとき半透明黒背景・白枠・話者名ボックスを非表示にし、
+   * テキストに drop-shadow を付けて可読性を確保する。
+   * per-game デフォルトとして指定し、[枠なし]/[枠あり] で per-scene 上書き可能。
+   */
+  borderless?: boolean
 }
 
 /** typewriter のデフォルト速度（ms/char）。設定画面 #138 で上書き可能になる前提 */
 const DEFAULT_MS_PER_CHAR = 30
+
+/** 枠なしモードの DropShadow 設定 */
+const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 4, distance: 2, alpha: 0.9 } as const
 
 export class DialogBox extends Container {
   private bg: Graphics
@@ -59,6 +70,8 @@ export class DialogBox extends Container {
   private padding: number
   private fontSize: number
   private fontFamily: string
+  /** 枠なしモード (#135) */
+  private borderless: boolean
 
   /** typewriter 状態 (#137) */
   private typewriter: TypewriterState = makeInitialTypewriterState()
@@ -82,23 +95,27 @@ export class DialogBox extends Container {
       fontSize = 22,
       fontFamily = "'Noto Sans JP', sans-serif",
       msPerChar = DEFAULT_MS_PER_CHAR,
+      borderless = false,
     } = config
 
     this.padding = padding
     this.fontSize = fontSize
     this.fontFamily = fontFamily
     this.msPerChar = msPerChar
+    this.borderless = borderless
     this.boxW = screenWidth - marginX * 2
     this.boxH = boxHeight
     this.boxX = marginX
     this.boxY = screenHeight - boxHeight - marginBottom
 
-    // --- 半透明黒背景 + 白枠 ---
+    // --- 半透明黒背景 + 白枠（枠なしモードでは非表示） ---
     this.bg = new Graphics()
-    this.drawBackground()
+    if (!this.borderless) {
+      this.drawBackground()
+    }
     this.addChild(this.bg)
 
-    // --- 話者名ボックス ---
+    // --- 話者名ボックス（枠なしモードでは常に非表示） ---
     this.nameBox = new Graphics()
     this.addChild(this.nameBox)
 
@@ -116,13 +133,8 @@ export class DialogBox extends Container {
     this.nameText.visible = false
 
     // --- ダイアログテキスト ---
-    const textStyle = new TextStyle({
-      fontFamily,
-      fontSize,
-      fill: 0xffffff,
-      lineHeight: fontSize * 1.6,
-    })
-    this.dialogText = new Text({ text: '', style: textStyle })
+    // 枠なしモードでは drop-shadow で可読性を確保
+    this.dialogText = new Text({ text: '', style: this.makeDialogTextStyle() })
     this.dialogText.x = this.boxX + padding
     this.dialogText.y = this.boxY + padding
     this.addChild(this.dialogText)
@@ -161,6 +173,17 @@ export class DialogBox extends Container {
     this.ticker.start()
   }
 
+  /** ダイアログテキスト用 TextStyle を生成（borderless 状態に応じて drop-shadow を制御） */
+  private makeDialogTextStyle(): TextStyle {
+    return new TextStyle({
+      fontFamily: this.fontFamily,
+      fontSize: this.fontSize,
+      fill: 0xffffff,
+      lineHeight: this.fontSize * 1.6,
+      dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
+    })
+  }
+
   private drawBackground(): void {
     this.bg.clear()
     // 半透明黒背景
@@ -189,10 +212,13 @@ export class DialogBox extends Container {
 
   /**
    * ダイアログを表示（話者名 + テキスト）
+   *
+   * 枠なしモード（borderless=true）では name を無視して nameBox を非表示にする。
+   * setBorderless(false) で枠ありに戻したあとも、nameBox の復元はこのメソッドの呼び出し時に行う。
    */
   setDialog(name: string | null, text: string): void {
-    // 話者名
-    if (name) {
+    // 話者名（枠なしモードでは常に非表示）
+    if (name && !this.borderless) {
       this.nameText.text = name
       // テキスト幅を測定して名前ボックスを描画
       const measured = this.nameText.width
@@ -245,6 +271,32 @@ export class DialogBox extends Container {
     this.msPerChar = Math.max(0, msPerChar)
     if (this.msPerChar === 0) {
       this.skipTypewriter()
+    }
+  }
+
+  /**
+   * 枠なしナレ風モードを動的に切替える。
+   *
+   * - true: 半透明背景・白枠・話者名ボックスを非表示 + DropShadow を付与
+   * - false: 通常モードに戻す。話者名の再表示は次の setDialog() 呼び出し時に行われる
+   *
+   * per-scene の [枠なし]/[枠あり] ディレクティブ、またはシーンリセット時に呼ぶ。
+   */
+  setBorderless(borderless: boolean): void {
+    if (this.borderless === borderless) return
+    this.borderless = borderless
+    // 背景・枠の再描画
+    this.bg.clear()
+    if (!this.borderless) {
+      this.drawBackground()
+    }
+    // drop-shadow は TextStyle を再生成して反映
+    this.dialogText.style = this.makeDialogTextStyle()
+    // 話者名ボックスは枠なしモードでは常に非表示。
+    // 枠ありに戻したときの nameBox/nameText の表示復元は次の setDialog() に委ねる。
+    if (this.borderless) {
+      this.nameBox.visible = false
+      this.nameText.visible = false
     }
   }
 

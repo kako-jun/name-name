@@ -183,6 +183,15 @@ pub enum Event {
         #[serde(default)]
         easing: Easing,
     },
+    /// 文字ウィンドウ枠の ON/OFF を切り替える (#135)。
+    ///
+    /// `[枠なし]` で枠なしナレ風モードを ON、`[枠あり]` で元に戻す。
+    /// per-game デフォルトは NovelRenderer 側の config で設定し、
+    /// このイベントで per-scene 上書きできる。
+    DialogBorderless {
+        /// true = 枠なし、false = 枠あり
+        borderless: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Tsify)]
