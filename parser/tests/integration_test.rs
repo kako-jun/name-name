@@ -1765,3 +1765,219 @@ fn test_no_front_matter() {
     assert_eq!(doc.chapters[0].scenes.len(), 1);
     assert_eq!(doc.chapters[0].scenes[0].events.len(), 1);
 }
+
+// ---- #143 画面効果: shake / flash / fade ----
+
+#[test]
+fn test_shake_default_params() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: シェイク
+
+[シェイク:]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Shake { intensity_px, duration_ms } = &events[0] {
+        assert_eq!(*intensity_px, 10);
+        assert_eq!(*duration_ms, 500);
+    } else {
+        panic!("Expected Shake, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_shake_custom_params() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: シェイク
+
+[シェイク: intensity=20, duration=1000]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::Shake { intensity_px, duration_ms } = &events[0] {
+        assert_eq!(*intensity_px, 20);
+        assert_eq!(*duration_ms, 1000);
+    } else {
+        panic!("Expected Shake, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_shake_ja_params() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: シェイク
+
+[シェイク: 強度=15, 時間=800]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::Shake { intensity_px, duration_ms } = &events[0] {
+        assert_eq!(*intensity_px, 15);
+        assert_eq!(*duration_ms, 800);
+    } else {
+        panic!("Expected Shake, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_flash_default_params() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: フラッシュ
+
+[フラッシュ:]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::Flash { color, alpha, duration_ms } = &events[0] {
+        assert_eq!(color, "#ffffff");
+        assert!((alpha - 0.8).abs() < 1e-5);
+        assert_eq!(*duration_ms, 300);
+    } else {
+        panic!("Expected Flash, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_flash_custom_params() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: フラッシュ
+
+[フラッシュ: color=#ff0000, alpha=1.0, duration=200]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::Flash { color, alpha, duration_ms } = &events[0] {
+        assert_eq!(color, "#ff0000");
+        assert!((alpha - 1.0).abs() < 1e-5);
+        assert_eq!(*duration_ms, 200);
+    } else {
+        panic!("Expected Flash, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_fade_default_params() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: フェード
+
+[フェード:]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::Fade { target, color, from_alpha, to_alpha, duration_ms } = &events[0] {
+        assert_eq!(target, "all");
+        assert_eq!(color, "#000000");
+        assert!((from_alpha - 0.0).abs() < 1e-5);
+        assert!((to_alpha - 1.0).abs() < 1e-5);
+        assert_eq!(*duration_ms, 500);
+    } else {
+        panic!("Expected Fade, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_fade_custom_params() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: フェード
+
+[フェード: target=bg, color=#000000, from=1.0, to=0.0, duration=1500]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::Fade { target, color, from_alpha, to_alpha, duration_ms } = &events[0] {
+        assert_eq!(target, "bg");
+        assert_eq!(color, "#000000");
+        assert!((from_alpha - 1.0).abs() < 1e-5);
+        assert!((to_alpha - 0.0).abs() < 1e-5);
+        assert_eq!(*duration_ms, 1500);
+    } else {
+        panic!("Expected Fade, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_fade_ja_params() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: フェード
+
+[フェード: 対象=all, 色=#000000, 開始=0, 終了=1, 時間=600]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::Fade { target, color, from_alpha, to_alpha, duration_ms } = &events[0] {
+        assert_eq!(target, "all");
+        assert_eq!(color, "#000000");
+        assert!((from_alpha - 0.0).abs() < 1e-5);
+        assert!((to_alpha - 1.0).abs() < 1e-5);
+        assert_eq!(*duration_ms, 600);
+    } else {
+        panic!("Expected Fade, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_shake_flash_fade_roundtrip() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: 全効果
+
+[シェイク: intensity=20, duration=1000]
+[フラッシュ: color=#ffffff, alpha=1.0, duration=200]
+[フェード: target=all, color=#000000, from=0, to=1, duration=500]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3);
+    // emitter でシリアライズして再パースしても同じになること
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.chapters[0].scenes[0].events.len(), 3);
+    assert_eq!(events[0], doc2.chapters[0].scenes[0].events[0]);
+    assert_eq!(events[1], doc2.chapters[0].scenes[0].events[1]);
+    assert_eq!(events[2], doc2.chapters[0].scenes[0].events[2]);
+}

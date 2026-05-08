@@ -347,6 +347,49 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(if *borderless { "[枠なし]\n" } else { "[枠あり]\n" });
                 prev_was_dialog_or_text = false;
             }
+            Event::Shake {
+                intensity_px,
+                duration_ms,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "[シェイク: intensity={}, duration={}]\n",
+                    intensity_px, duration_ms
+                ));
+                prev_was_dialog_or_text = false;
+            }
+            Event::Flash {
+                color,
+                alpha,
+                duration_ms,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "[フラッシュ: color={}, alpha={}, duration={}]\n",
+                    color, alpha, duration_ms
+                ));
+                prev_was_dialog_or_text = false;
+            }
+            Event::Fade {
+                target,
+                color,
+                from_alpha,
+                to_alpha,
+                duration_ms,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "[フェード: target={}, color={}, from={}, to={}, duration={}]\n",
+                    target, color, from_alpha, to_alpha, duration_ms
+                ));
+                prev_was_dialog_or_text = false;
+            }
         }
     }
 }

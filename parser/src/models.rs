@@ -192,6 +192,56 @@ pub enum Event {
         /// true = 枠なし、false = 枠あり
         borderless: bool,
     },
+    /// 画面シェイク演出 (#143)。
+    ///
+    /// `[シェイク: intensity=10, duration=500]`
+    /// intensity: 揺れ幅 px（デフォルト 10）、duration: 継続時間 ms（デフォルト 500）。
+    /// 決定論的再現のため sin 波ベースで進捗率から位置を計算する。
+    Shake {
+        /// 揺れ幅 px
+        #[serde(default = "default_shake_intensity")]
+        intensity_px: u32,
+        /// 継続時間 ms
+        #[serde(default = "default_effect_duration")]
+        duration_ms: u32,
+    },
+    /// フラッシュ演出 (#143)。
+    ///
+    /// `[フラッシュ: color=#ffffff, alpha=0.8, duration=300]`
+    /// 指定色のオーバーレイを瞬時に表示し、duration かけてアルファ 0 へ fade out する。
+    Flash {
+        /// 色コード（例: "#ffffff"）
+        #[serde(default = "default_flash_color")]
+        color: String,
+        /// ピーク時の不透明度 0.0〜1.0
+        #[serde(default = "default_flash_alpha")]
+        alpha: f32,
+        /// フェードアウト時間 ms
+        #[serde(default = "default_effect_duration")]
+        duration_ms: u32,
+    },
+    /// フェード演出 (#143)。
+    ///
+    /// `[フェード: target=all, color=#000000, from=0, to=1, duration=500]`
+    /// target: "bg"（背景のみ）または "all"（全画面）。
+    /// from/to: アルファ値 0.0〜1.0。指定色のオーバーレイを from→to に補間する。
+    Fade {
+        /// "bg" or "all"
+        #[serde(default = "default_fade_target")]
+        target: String,
+        /// 色コード（例: "#000000"）
+        #[serde(default = "default_fade_color")]
+        color: String,
+        /// 開始アルファ 0.0〜1.0
+        #[serde(default)]
+        from_alpha: f32,
+        /// 終了アルファ 0.0〜1.0
+        #[serde(default = "default_fade_to_alpha")]
+        to_alpha: f32,
+        /// 継続時間 ms
+        #[serde(default = "default_effect_duration")]
+        duration_ms: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Tsify)]
@@ -244,4 +294,32 @@ pub struct Document {
 
 fn default_aspect_ratio() -> String {
     "16:9".to_string()
+}
+
+fn default_shake_intensity() -> u32 {
+    10
+}
+
+fn default_effect_duration() -> u32 {
+    500
+}
+
+fn default_flash_color() -> String {
+    "#ffffff".to_string()
+}
+
+fn default_flash_alpha() -> f32 {
+    0.8
+}
+
+fn default_fade_target() -> String {
+    "all".to_string()
+}
+
+fn default_fade_color() -> String {
+    "#000000".to_string()
+}
+
+fn default_fade_to_alpha() -> f32 {
+    1.0
 }
