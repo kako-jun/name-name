@@ -90,6 +90,9 @@ async function getCurrentBlobSha(
   path: string,
   branch: string,
 ): Promise<string | null> {
+  // 前提: path は `assets/<type>/<file>` 形式 (handleUploadAsset で構築)。
+  // トップレベル (スラッシュ無し) の path は呼び出し側で発生しない想定だが、
+  // 将来そうなった場合に listing 親を引けないので null に倒して新規扱いにする。
   const lastSlash = path.lastIndexOf("/");
   if (lastSlash < 0) return null;
   const dirPath = path.slice(0, lastSlash);
