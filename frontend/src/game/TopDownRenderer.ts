@@ -18,7 +18,7 @@ import {
   type NpcSpriteSheet,
 } from './npcSpriteSheet'
 import { attachTouchInput, type SwipeDirection } from './touchInput'
-import { TouchMenuOverlay, type MenuItemId } from './TouchMenuOverlay'
+import { TouchMenuOverlay, DQ4_COMMANDS } from './TouchMenuOverlay'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -107,11 +107,12 @@ export class TopDownRenderer {
     this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
     this.app.stage.addChild(this.dialogBox)
 
-    // タッチメニュー（仮想パッドではなく文字直タップ式）#178
+    // タッチメニュー: DQ4 ファミコン版相当の左上 8 コマンドウィンドウ (#178 → #171)
     this.menuOverlay = new TouchMenuOverlay(
       this.screenWidth,
       this.screenHeight,
-      this.handleMenuSelect
+      this.handleMenuSelect,
+      { items: DQ4_COMMANDS, position: 'top-left', layout: 'grid-4x2' }
     )
     this.app.stage.addChild(this.menuOverlay)
 
@@ -532,12 +533,33 @@ export class TopDownRenderer {
     this.menuOverlay?.showMenu()
   }
 
-  private handleMenuSelect = (id: MenuItemId): void => {
+  /**
+   * DQ4 8 コマンド + サブメニューの選択結果を受ける (#171)。
+   * 未実装コマンド（どうぐ・じゅもん・つよさ・そうび・さくせん）はサブメニューが
+   * placeholder のまま発火する → console.warn で識別、振る舞いは no-op。
+   * 実機能は #172/#173/#174/#175 が揃ってから埋める。
+   */
+  private handleMenuSelect = (id: string): void => {
     this.menuOverlay?.hideMenu()
-    if (id === 'talk') {
-      this.tryTalk()
+    switch (id) {
+      case 'talk':
+        this.tryTalk()
+        return
+      case 'examine':
+        // TODO #171/#173: 足元タイルを調べる（隠しアイテム / 看板読み）
+        console.info('[TopDownRenderer] しらべる: 未実装')
+        return
+      case 'door':
+        // TODO #171: 正面の鍵付きドアを開く（鍵アイテム参照）
+        console.info('[TopDownRenderer] とびら: 未実装')
+        return
+      case 'close':
+        return
+      default:
+        // サブメニュー leaf（item:* / spell:* / equip:* / status:* / tactics:*）は
+        // 各機能 Issue で実装する。今は識別ログのみ。
+        console.info(`[TopDownRenderer] menu select '${id}' は未実装`)
     }
-    // 'close' は hideMenu のみで完結
   }
 
   // --- リサイズ ---

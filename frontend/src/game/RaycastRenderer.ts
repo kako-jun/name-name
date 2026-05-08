@@ -41,7 +41,7 @@ import {
 } from './wallTextureSheet'
 import { formatHeightError, validateMapHeights } from './mapValidation'
 import { attachTouchInput, type SwipeDirection } from './touchInput'
-import { TouchMenuOverlay, type MenuItemId } from './TouchMenuOverlay'
+import { TouchMenuOverlay, DQ4_COMMANDS } from './TouchMenuOverlay'
 
 interface NPCRuntime {
   data: UiNpcData
@@ -233,11 +233,12 @@ export class RaycastRenderer {
     this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
     this.app.stage.addChild(this.dialogBox)
 
-    // タッチメニュー（仮想パッドではなく文字直タップ式）#178
+    // タッチメニュー: DQ4 ファミコン版相当の左上 8 コマンドウィンドウ (#178 → #171)
     this.menuOverlay = new TouchMenuOverlay(
       this.screenWidth,
       this.screenHeight,
-      this.handleMenuSelect
+      this.handleMenuSelect,
+      { items: DQ4_COMMANDS, position: 'top-left', layout: 'grid-4x2' }
     )
     this.app.stage.addChild(this.menuOverlay)
 
@@ -624,10 +625,26 @@ export class RaycastRenderer {
     this.menuOverlay?.showMenu()
   }
 
-  private handleMenuSelect = (id: MenuItemId): void => {
+  /**
+   * DQ4 8 コマンド + サブメニューの選択結果を受ける (#171)。
+   * 未実装コマンドは console.info で識別ログのみ、振る舞いは no-op。
+   */
+  private handleMenuSelect = (id: string): void => {
     this.menuOverlay?.hideMenu()
-    if (id === 'talk') {
-      this.tryTalk()
+    switch (id) {
+      case 'talk':
+        this.tryTalk()
+        return
+      case 'examine':
+        console.info('[RaycastRenderer] しらべる: 未実装')
+        return
+      case 'door':
+        console.info('[RaycastRenderer] とびら: 未実装')
+        return
+      case 'close':
+        return
+      default:
+        console.info(`[RaycastRenderer] menu select '${id}' は未実装`)
     }
   }
 
