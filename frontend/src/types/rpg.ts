@@ -45,9 +45,16 @@ export interface MapData {
 }
 
 /**
- * NPCデータ
+ * NPC データ（UI / runtime 側）。
+ *
+ * `frontend/src/types.ts` の `NpcData`（parser / WASM 経由のスキーマ）と対応するが、
+ * UI 側はエディタが 1 文字列として扱うため `message: string`（parser 側は `message: string[]`）。
+ * 名前を分けてあるのは、フィールドを追加するときに parser 側 (NpcData) と UI 側 (UiNpcData)
+ * の両方を更新する責務を grep / 補完上で見分けやすくするため (#103)。
+ *
+ * 変換は `frontend/src/game/rpgProjectFromDoc.ts` および `applyRpgProjectToDoc.ts` が担う。
  */
-export interface NPCData {
+export interface UiNpcData {
   id: string // ユニークID
   name: string // NPC名
   x: number // X座標（グリッド）
@@ -101,7 +108,7 @@ export interface RPGProject {
   version: string // データバージョン
   map: MapData // マップデータ
   player: PlayerData // プレイヤー初期データ
-  npcs: NPCData[] // NPCリスト
+  npcs: UiNpcData[] // NPCリスト
   events?: EventData[] // イベントリスト（オプション）
   // プレイ時の表示モード。必須化済み。デフォルトは 'topdown' 相当。
   // （Doc の scene.view=Raycast から派生したときは 'raycast'）
