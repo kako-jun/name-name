@@ -93,4 +93,16 @@ export const ASSET_TYPES: ReadonlyArray<AssetType> = [
   "fonts",
 ];
 
+// Contents API 経由でアップロードできる上限。GitHub Contents API のレスポンス側に
+// 1 MiB 制限があるため安全側で 5 MiB に絞る。これを超えるアセットは Git Data API
+// (blob/tree/commit) 経路で扱う (#116)。
 export const MAX_ASSET_BYTES = 5 * 1024 * 1024; // 5 MiB
+
+// Git Data API 経由でアップロードできる実用上限。
+//
+// GitHub の blob サイズ上限自体は 100 MiB だが、Cloudflare Workers の per-request
+// メモリ上限が 128 MiB なので 100 MiB の base64 (≈133 MiB の文字列、UTF-16 内部表現で
+// 倍プラス octokit の JSON.stringify コピーが乗ると 256 MiB 超) は確実に OOM する。
+// 安全圏は 20-25 MiB 程度。25 MiB を超える本体は 413 で reject し、それ以上は
+// Git LFS or streaming 経路 (将来 Issue) で扱う。
+export const MAX_GIT_DATA_BYTES = 25 * 1024 * 1024; // 25 MiB (Worker memory practical limit)
