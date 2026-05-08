@@ -8,6 +8,24 @@ import JumpTopScreen from './screens/JumpTopScreen'
 import { get, set } from './utils/storage'
 import { defaultApiBaseUrl } from './api/client'
 
+/**
+ * 各ゲーム専用サブドメインからの直接アクセスを許可するための判定。
+ * `<game>.llll-ll.com` を CF Pages の追加カスタムドメインに紐付けると、
+ * その配下では問答無用で `/play/<game>` を表示する (URL バーは
+ * サブドメインのまま、ブランディング用)。
+ *
+ * `name-name.llll-ll.com` と `localhost` / 開発用 IP は通常ルーティング。
+ */
+const RESERVED_HOSTS = new Set(['name-name', 'www', 'admin'])
+function detectGameSubdomain(): string | null {
+  if (typeof window === 'undefined') return null
+  const m = window.location.hostname.match(/^([a-z0-9-]+)\.llll-ll\.com$/i)
+  if (!m) return null
+  const sub = m[1].toLowerCase()
+  if (RESERVED_HOSTS.has(sub)) return null
+  return sub
+}
+
 function App() {
   const [isDark, setIsDark] = useState(() => {
     return get('darkMode') ?? false
@@ -28,6 +46,24 @@ function App() {
   useEffect(() => {
     set('apiBaseUrl', apiBaseUrl)
   }, [apiBaseUrl])
+
+  // <game>.llll-ll.com サブドメインからのアクセス時は問答無用で PlayerScreen
+  // を表示する。BrowserRouter はマウントしない (URL バーをサブドメインのまま
+  // 保つ + 全パスがプレイ画面に集約)。
+  const gameSubdomain = detectGameSubdomain()
+  if (gameSubdomain) {
+    return (
+      <PlayerScreen
+        projectName={gameSubdomain}
+        apiBaseUrl={apiBaseUrl}
+        isDark={isDark}
+        onBack={() => {
+          // サブドメイン経由では戻る先が無いので name-name 本体トップに飛ばす
+          window.location.href = 'https://name-name.llll-ll.com/'
+        }}
+      />
+    )
+  }
 
   return (
     <BrowserRouter>
