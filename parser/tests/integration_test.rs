@@ -2464,6 +2464,65 @@ choice_style: soft
 }
 
 #[test]
+fn test_document_choice_style_edge_cases() {
+    // 空文字 → None (#146 R1 N3)
+    let input_empty = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+choice_style:
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input_empty);
+    assert_eq!(
+        doc.choice_style, None,
+        "choice_style が空なら None として parse される"
+    );
+
+    // 未知値 → Some("foo") で透過（runtime 側でフォールバック判定する設計）
+    let input_unknown = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+choice_style: foo
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input_unknown);
+    assert_eq!(
+        doc.choice_style.as_deref(),
+        Some("foo"),
+        "未知値も生文字列で透過する（runtime 側で default フォールバック）"
+    );
+
+    // クォート付き + 前後空白
+    let input_quoted = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+choice_style:   "monochrome"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input_quoted);
+    assert_eq!(
+        doc.choice_style.as_deref(),
+        Some("monochrome"),
+        "前後空白とクォートを剥がして parse される"
+    );
+}
+
+#[test]
 fn test_voice_overwritten_by_later_directive() {
     // [ボイス:] が連続した場合、後者で前者を上書きし最後のものが注入されること (#144)
     let input =

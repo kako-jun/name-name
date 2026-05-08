@@ -281,7 +281,8 @@ export class AudioManager {
   }
 
   /**
-   * 選択肢ホバー時の控えめな確認音 (#146)。playSelectTone より低音量・低音程。
+   * 選択肢ホバー時の控えめな確認音 (#146)。
+   * 確定音 (880Hz) との聴覚差を確保するため周波数を 600Hz に下げる (R1 N4)。
    */
   playHoverTone(): void {
     if (!this.ctx) return
@@ -289,7 +290,7 @@ export class AudioManager {
     const osc = this.ctx.createOscillator()
     const gain = this.ctx.createGain()
     osc.type = 'sine'
-    osc.frequency.value = 800
+    osc.frequency.value = 600
     const now = this.ctx.currentTime
     gain.gain.setValueAtTime(0.05, now)
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06)

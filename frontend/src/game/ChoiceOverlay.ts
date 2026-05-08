@@ -86,16 +86,35 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
   },
 }
 
-function resolveStyle(name?: string | null): ChoiceTheme {
-  if (name && name in STYLE_THEMES) {
+/**
+ * style 名からテーマを解決する (#146)。
+ * 未指定 / 空文字 / 未知値はすべて `default` フォールバック。
+ * 未知値のときのみ console.warn を出して typo に気付けるようにする
+ * （null / undefined / "" / "default" は警告なし）。
+ *
+ * 単独 export しているのはユニットテスト用途。
+ */
+export function resolveStyle(name?: string | null): ChoiceTheme {
+  if (!name || name === 'default') {
+    return STYLE_THEMES.default
+  }
+  if (name in STYLE_THEMES) {
     return STYLE_THEMES[name as ChoiceStyleName]
   }
+  console.warn(
+    `[name-name] choice_style "${name}" は未知のテーマです。default にフォールバックします。利用可能: ${Object.keys(
+      STYLE_THEMES
+    ).join(' / ')}`
+  )
   return STYLE_THEMES.default
 }
 
 export class ChoiceOverlay extends Container {
   private onSelect: ((jump: string) => void) | null = null
   private audioManager: AudioManager | null = null
+  // 直前にホバー音を鳴らしたボタン index。マウスがボタン境界をジリジリ動いて
+  // pointerover が連続発火しても、別ボタンへ移動した時だけ再生するための記録 (#146 R1 S1)
+  private lastHoverIdx: number | null = null
 
   constructor(
     private screenWidth: number,
@@ -123,7 +142,15 @@ export class ChoiceOverlay extends Container {
   show(options: ChoiceOption[], onSelect: (jump: string) => void, style?: string | null): void {
     if (options.length === 0) return
     this.onSelect = onSelect
-    this.removeChildren()
+    // 連続呼び出しで子オブジェクトが滞留しないよう明示 destroy する (#146 R1 S3)
+    for (const child of this.removeChildren()) {
+      child.destroy({ children: true })
+    }
+    this.lastHoverIdx = null
+    // セーブデータからのロード直後など、最初のユーザー入力が選択肢クリックになる
+    // ケースで AudioContext が未初期化のまま playSelectTone が無音になるのを防ぐ。
+    // pointerdown 時点でも resume できるが、show 時にも保険で叩いておく (#146 R1 S2)
+    this.audioManager?.ensureContext()
 
     const theme = resolveStyle(style)
 
@@ -169,17 +196,25 @@ export class ChoiceOverlay extends Container {
         bg.clear()
         this.drawButton(bg, theme, theme.fillHover, theme.borderHover)
         buttonContainer.scale.set(HOVER_SCALE)
-        this.audioManager?.playHoverTone()
+        // 同一ボタンで pointerover が連発しても再生しない (#146 R1 S1)
+        if (this.lastHoverIdx !== i) {
+          this.audioManager?.playHoverTone()
+          this.lastHoverIdx = i
+        }
       })
 
       buttonContainer.on('pointerout', () => {
         bg.clear()
         this.drawButton(bg, theme, theme.fillNormal, theme.borderNormal)
         buttonContainer.scale.set(1)
+        if (this.lastHoverIdx === i) {
+          this.lastHoverIdx = null
+        }
       })
 
       buttonContainer.on('pointerdown', (e) => {
         e.stopPropagation()
+        this.audioManager?.ensureContext()
         this.audioManager?.playSelectTone()
         this.onSelect?.(option.jump)
       })
@@ -191,12 +226,17 @@ export class ChoiceOverlay extends Container {
   }
 
   /**
-   * 選択肢を非表示にする
+   * 選択肢を非表示にする。
+   * 子の Container / Graphics / Text は明示的に destroy してリスナーと
+   * GPU リソースを解放する (#146 R1 S3)。
    */
   hide(): void {
     this.visible = false
-    this.removeChildren()
+    for (const child of this.removeChildren()) {
+      child.destroy({ children: true })
+    }
     this.onSelect = null
+    this.lastHoverIdx = null
   }
 
   private drawButton(
