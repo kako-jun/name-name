@@ -49,10 +49,39 @@ function isDevOrigin(origin: string): boolean {
   return isLoopbackOrPrivateHostname(u.hostname);
 }
 
+/**
+ * `<game>.llll-ll.com` でゲーム専用サブドメインからのアクセスも本番扱いで通す。
+ * (ALLOWED_ORIGIN は `https://name-name.llll-ll.com` 単体しか持てないため、
+ *  origin 関数で「ALLOWED_ORIGIN と同じドメインの subdomain」を許可する)。
+ *
+ * 判定基準: ALLOWED_ORIGIN が `https://<host>.llll-ll.com` 形式のとき、
+ *   `https://<sub>.<同じ親ドメイン>` も許可する。
+ */
+function isProductionSiblingOrigin(origin: string, allowed: string): boolean {
+  let o: URL;
+  let a: URL;
+  try {
+    o = new URL(origin);
+    a = new URL(allowed);
+  } catch {
+    return false;
+  }
+  if (o.protocol !== a.protocol) return false;
+  if (o.protocol !== "https:") return false;
+  // 親ドメインを比較する。`name-name.llll-ll.com` の親は `llll-ll.com`。
+  const allowedParent = a.hostname.split(".").slice(-2).join(".");
+  if (allowedParent.split(".").length < 2) return false;
+  if (!o.hostname.endsWith(`.${allowedParent}`)) return false;
+  // `llll-ll.com` 自体は通さない (apex は別運用想定)
+  if (o.hostname === allowedParent) return false;
+  return true;
+}
+
 app.use("*", (c, next) =>
   cors({
     origin: (origin) => {
       if (origin === c.env.ALLOWED_ORIGIN) return origin;
+      if (origin && isProductionSiblingOrigin(origin, c.env.ALLOWED_ORIGIN)) return origin;
       if (c.env.GITHUB_API_BASE && origin && isDevOrigin(origin)) return origin;
       return c.env.ALLOWED_ORIGIN;
     },
