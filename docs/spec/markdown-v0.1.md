@@ -29,6 +29,7 @@ choice_style: "default"
 | `default_bgm` | string | No | 章全体のデフォルトBGMファイルパス |
 | `aspect_ratio` | string | No | 画面比率。`"16:9"` / `"4:3"` / `"9:16"` から選択（デフォルト: `"16:9"`）。論理解像度は 16:9=800×450、4:3=800×600、9:16=450×800 |
 | `choice_style` | string | No | 選択肢ボタンのスタイル名。`"default"` / `"soft"` / `"monochrome"`（省略時は `"default"`、不明値も `"default"` にフォールバック）。詳細は [選択肢のスタイル](#選択肢のスタイル) を参照 (#146) |
+| `font_family` | string | No | per-game デフォルトのテキストフォント（CSS の `font-family` 文字列）。例: `"Klee One, cursive"`。省略時は runtime 既定 `'Noto Sans JP', sans-serif`。詳細は [フォント切替](#フォント切替) を参照 (#147) |
 
 フロントマターは Event ではなく、parser の Chapter 構造体（Rust 側）のフィールドとしてパースされる。フロントエンド側の EventChapter 型とは別物なので注意する。
 
@@ -260,6 +261,55 @@ frontmatter の `choice_style` で per-game に切替可能 (#146)。runtime（C
 - `[枠あり]`: 通常モード（枠あり）に戻す
 
 シネマティック演出や子供向け動画（字幕スタイル）に向いている。per-game のデフォルト設定は `NovelRenderer` の `config.dialogBorderless` で指定できる。
+
+## フォント切替
+
+ゲームのトーンに合わせて Dialog / Narration のテキストフォントを切替えられる (#147)。
+
+### per-game デフォルト
+
+frontmatter の `font_family` で章全体の既定フォントを設定する。値は CSS の `font-family` 文字列をそのまま透過する（カンマ区切りの fallback も書ける）。
+
+```yaml
+---
+engine: name-name
+chapter: 1
+title: "やさしいおはなし"
+font_family: "Klee One, cursive"
+---
+```
+
+省略時は runtime 既定 `'Noto Sans JP', sans-serif` が使われる。
+
+### per-line 上書き
+
+`[フォント: family]` ディレクティブで直後の Dialog / Narration を 1 件だけ上書きする。`[ボイス:]` と同じく pending 機構で次のテキストに注入される。
+
+```markdown
+[フォント: Hina Mincho, serif]
+**主人公**:
+（厳かな心の声……）
+
+[フォント: Yusei Magic, sans-serif]
+> 教科書のような朝。
+```
+
+- 続けて指定すると後者が優先される
+- 非テキストディレクティブ（`[背景:]` 等）が間に挟まると pending は破棄される（誤注入防止）
+- `[フォント解除]` で pending をクリアし、次の行から base（`font_family` または runtime 既定）に戻る
+
+### 主要フォント（Google Fonts から動的ロード）
+
+runtime はクライアント側で `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=...">` を `<head>` に注入してロードする。任意の Google Fonts ファミリー名を指定可能だが、推奨は以下の 4 種:
+
+| フェイス | 想定用途 |
+|---|---|
+| `Noto Sans JP` | 標準（runtime 既定） |
+| `Klee One` | 手書き風 / 子供向け |
+| `Hina Mincho` | 明朝（シリアス・歴史もの） |
+| `Yusei Magic` | 柔らかい教科書体 |
+
+`font_family` の値は CSS のままなので、最後に必ず汎用 family（`sans-serif` / `serif` / `cursive`）を入れておくと未ロード時のフォールバックが滑らかになる。
 
 ## 画面効果（シェイク / フラッシュ / フェード）
 
