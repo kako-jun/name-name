@@ -20,6 +20,13 @@ export class AudioManager {
     timer: ReturnType<typeof setTimeout>
   }[] = []
 
+  // マスター音量（Issue #138）。BGM / SE をそれぞれの master gain に集約し、
+  // setBgmVolume / setSeVolume で動的に変更できるようにする。
+  private bgmMasterGain: GainNode | null = null
+  private seMasterGain: GainNode | null = null
+  private bgmVolume = 1.0
+  private seVolume = 1.0
+
   /**
    * AudioContext を生成/再開する。
    * ユーザーインタラクション（クリック等）のタイミングで呼ぶこと。
@@ -30,6 +37,40 @@ export class AudioManager {
     }
     if (this.ctx.state === 'suspended') {
       this.ctx.resume()
+    }
+    this.ensureMasterGains()
+  }
+
+  /** master gain が未生成なら作って destination に繋ぐ */
+  private ensureMasterGains(): void {
+    if (!this.ctx) return
+    if (!this.bgmMasterGain) {
+      this.bgmMasterGain = this.ctx.createGain()
+      this.bgmMasterGain.gain.value = this.bgmVolume
+      this.bgmMasterGain.connect(this.ctx.destination)
+    }
+    if (!this.seMasterGain) {
+      this.seMasterGain = this.ctx.createGain()
+      this.seMasterGain.gain.value = this.seVolume
+      this.seMasterGain.connect(this.ctx.destination)
+    }
+  }
+
+  /** BGM マスター音量を設定する（0..1） */
+  setBgmVolume(volume: number): void {
+    const v = Math.max(0, Math.min(1, volume))
+    this.bgmVolume = v
+    if (this.bgmMasterGain && this.ctx) {
+      this.bgmMasterGain.gain.setValueAtTime(v, this.ctx.currentTime)
+    }
+  }
+
+  /** SE マスター音量を設定する（0..1） */
+  setSeVolume(volume: number): void {
+    const v = Math.max(0, Math.min(1, volume))
+    this.seVolume = v
+    if (this.seMasterGain && this.ctx) {
+      this.seMasterGain.gain.setValueAtTime(v, this.ctx.currentTime)
     }
   }
 
@@ -55,7 +96,12 @@ export class AudioManager {
     const gain = this.ctx.createGain()
     gain.gain.value = 1.0
     source.connect(gain)
-    gain.connect(this.ctx.destination)
+    this.ensureMasterGains()
+    if (this.bgmMasterGain) {
+      gain.connect(this.bgmMasterGain)
+    } else {
+      gain.connect(this.ctx.destination)
+    }
 
     source.start(0)
 
@@ -111,7 +157,12 @@ export class AudioManager {
 
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
-    source.connect(this.ctx.destination)
+    this.ensureMasterGains()
+    if (this.seMasterGain) {
+      source.connect(this.seMasterGain)
+    } else {
+      source.connect(this.ctx.destination)
+    }
     source.onended = () => source.disconnect()
     source.start(0)
   }
@@ -122,6 +173,14 @@ export class AudioManager {
   destroy(): void {
     this.stopBgmImmediate()
     this.audioCache.clear()
+    if (this.bgmMasterGain) {
+      this.bgmMasterGain.disconnect()
+      this.bgmMasterGain = null
+    }
+    if (this.seMasterGain) {
+      this.seMasterGain.disconnect()
+      this.seMasterGain = null
+    }
     if (this.ctx) {
       this.ctx.close()
       this.ctx = null
