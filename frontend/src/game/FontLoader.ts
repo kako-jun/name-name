@@ -7,7 +7,9 @@
  * 設計メモ:
  * - 当初は CSP に強い `<link>` 注入を採用（@import は CSP `style-src` の inline を要求するため避ける）
  * - 同じ family が連続して呼ばれた場合に Promise を共有（race / 多重 fetch 防止）
- * - 失敗時はキャッシュから除去して次回再試行できるようにする（一時的な 404 で永続的に詰まないため）
+ * - 失敗時は拒否済み Promise をキャッシュに残し、次回以降は再 fetch せず即座に同じ rejection を返す。
+ *   毎 Dialog で console.warn が連発する事故を防ぐ意図 (#147 R1 N4)。
+ *   手動再試行は resetFontLoaderCache() で。
  * - document.fonts.ready の完了を待ち、PixiJS 側で TextStyle に反映した瞬間に正しいグリフが使われるようにする
  *
  * 想定の主要フォント（Issue #147 の範囲内）:
@@ -59,7 +61,7 @@ export function resetFontLoaderCache(): void {
  *
  * - 同じ family を 2 回以上呼んでも `<link>` は 1 個しか作られない
  * - SSR / 非ブラウザ環境（document が無い場合）は no-op で resolve する
- * - 失敗したらキャッシュから除去して次回再試行可能にする（一過性 404 で永続詰まりを防ぐ）
+ * - 失敗したら拒否済み Promise をキャッシュに残し、再 fetch しない（ログ連発防止）
  * - document.fonts API があれば `document.fonts.ready` も待つ。
  *   無い場合（古い test 環境）は link.onload のみで完了とみなす
  */
@@ -104,8 +106,10 @@ export function ensureFontLoaded(family: string): Promise<void> {
       }
     }
     link.onerror = (err) => {
-      // 失敗したら次回再試行できるよう cache から除去
-      loadCache.delete(primary)
+      // 失敗時はキャッシュに「拒否済み Promise」をそのまま残す (#147 R1 N4)。
+      // 次回以降の ensureFontLoaded は同じ Promise を返すため、毎 Dialog で
+      // 再 fetch + console.warn が連発する事故を防ぐ。手動再試行は
+      // resetFontLoaderCache() で実現できる（テスト用途のみの想定）。
       reject(err instanceof Error ? err : new Error(`font load failed: ${primary}`))
     }
 

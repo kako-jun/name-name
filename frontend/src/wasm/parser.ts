@@ -38,6 +38,12 @@ async function ensureInit(): Promise<void> {
  * Rust の Option<T> は WASM 経由で undefined になるが、
  * frontend の types.ts では null を使っているため変換が必要。
  */
+/** 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。 */
+function nullIfEmpty(s: string | null | undefined): string | null {
+  if (s == null) return null
+  return s.length === 0 ? null : s
+}
+
 function normalizeEvents(events: Event[]): Event[] {
   return events.map((event) => {
     if (typeof event === 'string') return event
@@ -49,9 +55,10 @@ function normalizeEvents(events: Event[]): Event[] {
           position: event.Dialog.position ?? null,
           text: event.Dialog.text,
           // voice_path / font_family は WASM 経由で undefined になるが、
-          // frontend の規約に合わせ null に正規化する (#144 / #147)
-          voice_path: event.Dialog.voice_path ?? null,
-          font_family: event.Dialog.font_family ?? null,
+          // frontend の規約に合わせ null に正規化する (#144 / #147)。
+          // 空文字も null に倒す (#147 R1 N5)。
+          voice_path: nullIfEmpty(event.Dialog.voice_path),
+          font_family: nullIfEmpty(event.Dialog.font_family),
         },
       }
     }
@@ -59,8 +66,8 @@ function normalizeEvents(events: Event[]): Event[] {
       return {
         Narration: {
           text: event.Narration.text,
-          voice_path: event.Narration.voice_path ?? null,
-          font_family: event.Narration.font_family ?? null,
+          voice_path: nullIfEmpty(event.Narration.voice_path),
+          font_family: nullIfEmpty(event.Narration.font_family),
         },
       }
     }
@@ -112,8 +119,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
   return {
     engine: doc.engine,
     aspect_ratio: doc.aspect_ratio,
-    choice_style: doc.choice_style ?? null,
-    font_family: doc.font_family ?? null,
+    choice_style: nullIfEmpty(doc.choice_style),
+    font_family: nullIfEmpty(doc.font_family),
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

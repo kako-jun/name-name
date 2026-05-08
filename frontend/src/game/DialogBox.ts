@@ -70,6 +70,9 @@ export class DialogBox extends Container {
   private padding: number
   private fontSize: number
   private fontFamily: string
+  /** setDialog で受け取った最新のテキストを保持しておき、setFontFamily で
+   *  wordwrap を再計算するために使う (#147 R1 S2)。 */
+  private currentText: string = ''
   /** 枠なしモード (#135) */
   private borderless: boolean
 
@@ -231,6 +234,7 @@ export class DialogBox extends Container {
    * @param onTypingDone タイピング完了時に1度だけ呼ばれるコールバック（オートモード用）
    */
   setDialog(name: string | null, text: string, onTypingDone?: (() => void) | null): void {
+    this.currentText = text
     // 話者名（枠なしモードでは常に非表示）
     if (name && !this.borderless) {
       this.nameText.text = name
@@ -349,6 +353,21 @@ export class DialogBox extends Container {
       fontSize: 20,
       fill: 0xa8dadc,
     })
+    // フォントが変わると 1 文字あたりの幅が変わるため wordwrap を再計算する (#147 R1 S2)。
+    // 表示中のテキストがあれば再 wordwrap して typewriter を新規開始する。
+    // typewriter 進行中だった場合は新フォントでの再生成になるが、フォント切替自体が
+    // 稀な操作なので「タイプ位置リセット」は許容する（ユーザーは普通切替後に文字を読み直す）。
+    if (this.currentText) {
+      const font = `${this.fontSize}px ${this.fontFamily}`
+      const maxTextWidth = this.boxW - this.padding * 2
+      const lines = wordwrap(this.currentText, maxTextWidth, font)
+      const fullText = lines.join('\n')
+      this.typewriter = startTypewriter(fullText)
+      // 既に最後まで表示し終わっていた場合は即時完了させて表示崩れを防ぐ
+      if (!isTypingActive(this.typewriter)) {
+        this.dialogText.text = fullText
+      }
+    }
   }
 
   /**

@@ -126,4 +126,54 @@ describe('ensureFontLoaded', () => {
 
     expect(links.length).toBe(0)
   })
+
+  it('同じ先頭フェイスでも fallback 列が違う family は <link> を共有する (#147 R1 S4)', async () => {
+    const { doc, links } = createMockDocument()
+    __setDocumentForTest(doc)
+    await ensureFontLoaded('Klee One, cursive')
+    await ensureFontLoaded('Klee One, sans-serif')
+    expect(links.length).toBe(1)
+  })
+
+  it('ロード失敗は拒否済み Promise としてキャッシュされ、再 fetch しない (#147 R1 N4)', async () => {
+    // onerror を発火するモックを作る（appendChild 直後に onerror）
+    const links: Array<{
+      href: string
+      rel: string
+      onload: (() => void) | null
+      onerror: ((err: unknown) => void) | null
+      attributes: Record<string, string>
+    }> = []
+    const head = {
+      appendChild(el: { onload?: (() => void) | null; onerror?: ((err: unknown) => void) | null }) {
+        queueMicrotask(() => {
+          if (el.onerror) el.onerror(new Error('mock 404'))
+        })
+        return el
+      },
+    }
+    const doc = {
+      createElement(_tag: string) {
+        const link = {
+          rel: '',
+          href: '',
+          onload: null as (() => void) | null,
+          onerror: null as ((err: unknown) => void) | null,
+          attributes: {} as Record<string, string>,
+          setAttribute(name: string, value: string) {
+            this.attributes[name] = value
+          },
+        }
+        links.push(link)
+        return link
+      },
+      head,
+    } as unknown as Document
+    __setDocumentForTest(doc)
+
+    await expect(ensureFontLoaded('Bogus Family')).rejects.toBeInstanceOf(Error)
+    // 2 回目は新規 <link> を作らず同じ rejection を返す
+    await expect(ensureFontLoaded('Bogus Family')).rejects.toBeInstanceOf(Error)
+    expect(links.length).toBe(1)
+  })
 })

@@ -308,12 +308,16 @@ pub fn parse(input: &str) -> Document {
             }
             // [フォント: family] は次の Dialog/Narration に注入する (#147)。
             // 値は CSS の font-family 文字列（カンマや空白を含んでよい）を生で保持する。
+            // `[フォント: ]` のように空白のみの場合は pending に空文字を残さない (#147 R1 M2)。
             if let Some(content) = trimmed
                 .strip_prefix('[')
                 .and_then(|s| s.strip_suffix(']'))
                 .and_then(|s| s.strip_prefix("フォント:"))
             {
-                pending_font_family = Some(content.trim().to_string());
+                let trimmed_content = content.trim();
+                if !trimmed_content.is_empty() {
+                    pending_font_family = Some(trimmed_content.to_string());
+                }
                 pos += 1;
                 continue;
             }

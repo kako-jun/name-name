@@ -111,6 +111,11 @@ export class NovelRenderer {
   /** runtime 既定フォント。Document.font_family / per-line 共に未指定のときの最終フォールバック (#147) */
   private static readonly RUNTIME_DEFAULT_FONT_FAMILY = "'Noto Sans JP', sans-serif"
 
+  /** 直近で render した Dialog/Narration に紐付く resolved font family (#147 R1 M1)。
+   *  ensureFontLoaded の Promise 解決時に「いま表示中の Dialog のフォントか」を判定する race guard 用。
+   *  別の Dialog に進んだ後に古い family が `setFontFamily` で上書きされる事故を防ぐ。 */
+  private currentResolvedFontFamily: string | null = null
+
   /** 選択肢表示中フラグ */
   private waitingForChoice = false
 
@@ -419,6 +424,8 @@ export class NovelRenderer {
     // per-game default は描画時に適用するため、ここでは即時に DialogBox を切り替えない。
     // 早期に切り替えると未ロードのフォントで bake されるため、render() 側で
     // ensureFontLoaded → setFontFamily の順を担保する。
+    // バックログは per-line を再現せず per-game フォントだけを反映する (#147 R1 S1)。
+    this.backlogOverlay.setFontFamily(family ?? null)
   }
 
   /**
@@ -1426,14 +1433,17 @@ export class NovelRenderer {
     // フォント解決 (#147): per-line override → per-game default → runtime default の優先順
     const resolvedFontFamily =
       perLineFontFamily ?? this.gameDefaultFontFamily ?? NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+    this.currentResolvedFontFamily = resolvedFontFamily
     // フォント未ロードのままで TextStyle に当てると fallback で bake されるため、
     // 非同期ロードしてから DialogBox に反映する。先に既存フォントで描画しておくと
     // 完了後に自然にグリフが置き換わる（pixi v8 は style 差し替えで再 bake する）。
     void ensureFontLoaded(resolvedFontFamily)
       .then(() => {
-        // 非同期完了の race ガード: 別 Dialog に進んだ後に古いフォントを当てない。
-        // resolvedFontFamily は本イベントのスナップショットなので、現在も同じ値かを再検証する。
-        // 実装上は最後に解決した family が直近の resolved と一致していれば適用してよい。
+        // 非同期完了の race ガード (#147 R1 M1): 解決時点の resolvedFontFamily と
+        // 「いま表示中の」currentResolvedFontFamily が一致するときだけ適用する。
+        // ユーザーが連続 advance してフォント A → B と進んだ場合、A のロード完了で
+        // B の表示中に A を上書きしてしまう事故を防ぐ。
+        if (this.currentResolvedFontFamily !== resolvedFontFamily) return
         this.dialogBox.setFontFamily(resolvedFontFamily)
       })
       .catch((err) => {

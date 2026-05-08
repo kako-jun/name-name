@@ -20,8 +20,11 @@ pub fn emit(doc: &Document) -> String {
         }
         // Emit font_family only when present (#147)。
         // CSS の font-family 文字列はカンマや空白を含み得るので必ず double-quote で包む。
+        // family 名に `"` が含まれる場合は emit 時に取り除く（unquote が escape を解釈しないため
+        // round-trip で壊れるのを防ぐ）。実用上 `"` を含む family 名は無いので影響なし (#147 R1 N2)。
         if let Some(ref family) = doc.font_family {
-            out.push_str(&format!("font_family: \"{}\"\n", family));
+            let sanitized = family.replace('"', "");
+            out.push_str(&format!("font_family: \"{}\"\n", sanitized));
         }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));

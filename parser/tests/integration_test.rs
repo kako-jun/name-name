@@ -2751,3 +2751,65 @@ fn test_font_release_clears_pending() {
         panic!("Expected Dialog, got {:?}", events[0]);
     }
 }
+
+#[test]
+fn test_font_directive_empty_value_is_ignored() {
+    // [フォント:   ] のように空白のみの値は pending に空文字を残さない (#147 R1 M2)。
+    // 直後の Dialog は font_family: None のままで base に戻る。
+    let input = "## s: テスト\n\n[フォント:   ]\n**カコ**:\nこんにちは。\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Dialog { font_family, .. } = &events[0] {
+        assert!(
+            font_family.is_none(),
+            "空 [フォント:] は pending に空文字を残さず、Dialog の font_family は None"
+        );
+    } else {
+        panic!("Expected Dialog, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
+    // family 名に `"` が含まれた場合、emit 時に取り除いて round-trip で壊れないようにする (#147 R1 N2)。
+    // 実用上は `"` を含む font-family 名は存在しないため影響なし。
+    let mut doc = Document {
+        engine: "name-name".to_string(),
+        aspect_ratio: "16:9".to_string(),
+        choice_style: None,
+        font_family: Some(r#"My "Quoted" Font, sans-serif"#.to_string()),
+        chapters: vec![Chapter {
+            number: 1,
+            title: "tmp".to_string(),
+            hidden: false,
+            default_bgm: None,
+            scenes: vec![Scene {
+                id: "s".to_string(),
+                title: "テスト".to_string(),
+                view: SceneView::default(),
+                events: vec![],
+            }],
+        }],
+    };
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("\\\""),
+        "emit には backslash escape を出さない: {}",
+        emitted
+    );
+    let doc2 = parser::parse(&emitted);
+    // sanitized 後の family と一致
+    assert_eq!(
+        doc2.font_family.as_deref(),
+        Some("My Quoted Font, sans-serif")
+    );
+
+    // 反対側もチェック: None なら emit に含まれないこと
+    doc.font_family = None;
+    let emitted_none = emitter::emit(&doc);
+    assert!(
+        !emitted_none.contains("font_family:"),
+        "font_family が None なら emit に出ない"
+    );
+}
