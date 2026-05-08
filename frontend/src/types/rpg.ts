@@ -52,7 +52,12 @@ export interface MapData {
  * 名前を分けてあるのは、フィールドを追加するときに parser 側 (NpcData) と UI 側 (UiNpcData)
  * の両方を更新する責務を grep / 補完上で見分けやすくするため (#103)。
  *
- * 変換は `frontend/src/game/rpgProjectFromDoc.ts` および `applyRpgProjectToDoc.ts` が担う。
+ * 命名は parser 側を WASM 経由スキーマの `NpcData` 据え置き、UI 側に `Ui` プレフィックスを
+ * 付ける方針を採用。候補には `ParsedNpcData` / `NpcEdit` 等もあったが、parser 側は Rust の
+ * `models::Npc` に対応する WASM 型でリネーム範囲が広くなるため、UI 側を派生扱いにした。
+ *
+ * 変換は `frontend/src/game/rpgProjectFromDoc.ts` の `rpgProjectFromDoc` /
+ * `applyRpgProjectToDoc` が担う。
  */
 export interface UiNpcData {
   id: string // ユニークID
