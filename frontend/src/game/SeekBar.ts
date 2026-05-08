@@ -7,14 +7,11 @@
  */
 
 import { Container, FederatedPointerEvent, Graphics } from 'pixi.js'
-import { GAME_WIDTH, GAME_HEIGHT } from './constants'
 
 /** バー全体の高さ（px） */
 const BAR_HEIGHT = 6
 /** バー左右マージン */
 const BAR_MARGIN_X = 20
-/** バーの Y 位置（画面最下端からのオフセット） */
-const BAR_Y = GAME_HEIGHT - 12
 
 /** バー背景色（暗いグレー） */
 const BAR_BG_COLOR = 0x333333
@@ -33,6 +30,7 @@ export class SeekBar extends Container {
 
   private barWidth: number
   private barX: number
+  private barY: number
 
   private _total = 0
   private _current = 0
@@ -40,15 +38,16 @@ export class SeekBar extends Container {
   /** クリックで呼ばれるコールバック (historyIndex: number) => void */
   private onSeek: ((historyIndex: number) => void) | null = null
 
-  constructor() {
+  constructor(screenWidth: number, screenHeight: number) {
     super()
 
     this.barX = BAR_MARGIN_X
-    this.barWidth = GAME_WIDTH - BAR_MARGIN_X * 2
+    this.barWidth = screenWidth - BAR_MARGIN_X * 2
+    this.barY = screenHeight - 12
 
     // 透明ヒットエリア（クリック検出を広めに取る）
     this.clickRegion = new Graphics()
-    this.clickRegion.rect(this.barX, BAR_Y - 8, this.barWidth, BAR_HEIGHT + 16)
+    this.clickRegion.rect(this.barX, this.barY - 8, this.barWidth, BAR_HEIGHT + 16)
     this.clickRegion.fill({ color: 0x000000, alpha: 0 })
     this.clickRegion.eventMode = 'static'
     this.clickRegion.cursor = 'pointer'
@@ -68,7 +67,7 @@ export class SeekBar extends Container {
     this.thumb = new Graphics()
     this.thumb.circle(0, 0, THUMB_RADIUS)
     this.thumb.fill({ color: BAR_FILL_COLOR, alpha: 0.9 })
-    this.thumb.y = BAR_Y + BAR_HEIGHT / 2
+    this.thumb.y = this.barY + BAR_HEIGHT / 2
     this.addChild(this.thumb)
 
     this.updateVisual()
@@ -92,7 +91,7 @@ export class SeekBar extends Container {
 
   private drawBar(g: Graphics, color: number, width: number, alpha: number): void {
     g.clear()
-    g.roundRect(this.barX, BAR_Y, width, BAR_HEIGHT, BAR_RADIUS)
+    g.roundRect(this.barX, this.barY, width, BAR_HEIGHT, BAR_RADIUS)
     g.fill({ color, alpha })
   }
 
@@ -102,7 +101,7 @@ export class SeekBar extends Container {
     const fillWidth = Math.max(BAR_RADIUS * 2, this.barWidth * ratio)
 
     this.barFill.clear()
-    this.barFill.roundRect(this.barX, BAR_Y, fillWidth, BAR_HEIGHT, BAR_RADIUS)
+    this.barFill.roundRect(this.barX, this.barY, fillWidth, BAR_HEIGHT, BAR_RADIUS)
     this.barFill.fill({ color: BAR_FILL_COLOR, alpha: 0.8 })
 
     // つまみ位置
