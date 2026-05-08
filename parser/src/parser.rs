@@ -532,7 +532,66 @@ fn parse_directive(line: &str) -> Option<Event> {
         }
     }
 
+    // [アニメ: target=ナレーター, x=+500, rotation=360, duration=3000, easing=ease-out]
+    // 必須: target, duration / 任意: x, y, rotation, scale, easing
+    if let Some(rest) = content.strip_prefix("アニメ:") {
+        return parse_animate_directive(rest);
+    }
+
     None
+}
+
+fn parse_animate_directive(content: &str) -> Option<Event> {
+    use crate::models::Easing;
+
+    let mut target: Option<String> = None;
+    let mut dx: Option<String> = None;
+    let mut dy: Option<String> = None;
+    let mut rotation: Option<String> = None;
+    let mut scale: Option<f32> = None;
+    let mut duration_ms: Option<u32> = None;
+    let mut easing = Easing::Linear;
+
+    for raw_pair in content.split(',') {
+        let pair = raw_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = match pair.split_once('=') {
+            Some((k, v)) => (k.trim(), v.trim()),
+            None => return None, // 不正な構文
+        };
+        match key {
+            "target" | "対象" => target = Some(value.to_string()),
+            "x" => dx = Some(value.to_string()),
+            "y" => dy = Some(value.to_string()),
+            "rotation" | "回転" => rotation = Some(value.to_string()),
+            "scale" | "拡縮" => scale = value.parse().ok(),
+            "duration" | "時間" => duration_ms = value.parse().ok(),
+            "easing" => {
+                easing = match value.to_ascii_lowercase().as_str() {
+                    "linear" => Easing::Linear,
+                    "ease-in" | "easein" => Easing::EaseIn,
+                    "ease-out" | "easeout" => Easing::EaseOut,
+                    "ease-in-out" | "easeinout" => Easing::EaseInOut,
+                    _ => Easing::Linear,
+                }
+            }
+            _ => {} // 未知キーは silent skip
+        }
+    }
+
+    let target = target?;
+    let duration_ms = duration_ms?;
+    Some(Event::Animate {
+        target,
+        dx,
+        dy,
+        rotation,
+        scale,
+        duration_ms,
+        easing,
+    })
 }
 
 fn parse_flag_value(s: &str) -> FlagValue {
@@ -1106,6 +1165,123 @@ title: "テスト"
                 action: BgmAction::Stop
             }
         );
+    }
+
+    #[test]
+    fn test_parse_animate_directive() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "アニメテスト"
+---
+
+## anim: アニメ
+
+[アニメ: target=ナレーター, x=+500, rotation=360, duration=3000, easing=ease-out]
+[アニメ: target=車, scale=1.5, duration=1500]
+[アニメ: target=寿司, y=-200, duration=800, easing=ease-in]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3);
+        if let Event::Animate {
+            target,
+            dx,
+            rotation,
+            duration_ms,
+            easing,
+            ..
+        } = &events[0]
+        {
+            assert_eq!(target, "ナレーター");
+            assert_eq!(dx.as_deref(), Some("+500"));
+            assert_eq!(rotation.as_deref(), Some("360"));
+            assert_eq!(*duration_ms, 3000);
+            assert_eq!(*easing, crate::models::Easing::EaseOut);
+        } else {
+            panic!("expected Animate, got {:?}", events[0]);
+        }
+        if let Event::Animate {
+            target,
+            scale,
+            duration_ms,
+            easing,
+            ..
+        } = &events[1]
+        {
+            assert_eq!(target, "車");
+            assert_eq!(*scale, Some(1.5));
+            assert_eq!(*duration_ms, 1500);
+            assert_eq!(*easing, crate::models::Easing::Linear);
+        } else {
+            panic!("expected Animate, got {:?}", events[1]);
+        }
+        if let Event::Animate {
+            target,
+            dy,
+            easing,
+            ..
+        } = &events[2]
+        {
+            assert_eq!(target, "寿司");
+            assert_eq!(dy.as_deref(), Some("-200"));
+            assert_eq!(*easing, crate::models::Easing::EaseIn);
+        } else {
+            panic!("expected Animate, got {:?}", events[2]);
+        }
+    }
+
+    #[test]
+    fn test_animate_directive_japanese_keys() {
+        // 日本語キーの別名 (target=対象, rotation=回転, scale=拡縮, duration=時間) も受理する
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "JP"
+---
+
+## s: テスト
+
+[アニメ: 対象=車, 回転=180, 拡縮=2, 時間=2000]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        if let Event::Animate {
+            target,
+            rotation,
+            scale,
+            duration_ms,
+            ..
+        } = &events[0]
+        {
+            assert_eq!(target, "車");
+            assert_eq!(rotation.as_deref(), Some("180"));
+            assert_eq!(*scale, Some(2.0));
+            assert_eq!(*duration_ms, 2000);
+        } else {
+            panic!("expected Animate");
+        }
+    }
+
+    #[test]
+    fn test_animate_directive_missing_required() {
+        // target / duration が欠けると Animate は生成されず directive は捨てられる
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "miss"
+---
+
+## s: テスト
+
+[アニメ: x=+100, duration=1000]
+[アニメ: target=車]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        // どちらも捨てられる
+        assert_eq!(events.len(), 0);
     }
 
     #[test]

@@ -4,7 +4,9 @@
  * PixiJS Container 上でキャラクター立ち絵の表示・表情変更・退場を管理する。
  */
 
-import { Assets, Container, Sprite } from 'pixi.js'
+import { Assets, Container, Sprite, Ticker } from 'pixi.js'
+import type { Easing } from '../types'
+import { applyEasing, resolveDelta } from './easing'
 
 /** キャラクターの画面上の配置位置 */
 const POSITION_X: Record<string, number> = {
@@ -61,10 +63,44 @@ interface CharacterState {
   sprite: Sprite
   position: string
   expression: string
+  /** 進行中アニメーション。null なら静的 */
+  animation: ActiveAnimation | null
+}
+
+export interface AnimateParams {
+  /** "+500" / "-200" / "400" / undefined */
+  dx?: string
+  dy?: string
+  /** 度数 (degree)。"+360" / "180" / undefined */
+  rotation?: string
+  /** 1.0 = 等倍。undefined で変更なし */
+  scale?: number
+  duration_ms: number
+  easing?: Easing
+}
+
+interface ActiveAnimation {
+  startMs: number
+  durationMs: number
+  easing: Easing
+  // 開始時点のスナップショット
+  fromX: number
+  fromY: number
+  fromRotation: number
+  fromScale: number
+  // 終端値 (resolveDelta 適用後)
+  toX: number
+  toY: number
+  toRotation: number
+  toScale: number
 }
 
 export class CharacterLayer extends Container {
   private characters: Map<string, CharacterState> = new Map()
+  /** アニメーション駆動用 ticker。動いているキャラがいないときは停止しておく */
+  private animTicker: Ticker | null = null
+  /** ticker.deltaMS の累計を保持してアニメ進行に使う */
+  private elapsedMs: number = 0
 
   /**
    * キャラクター立ち絵を表示する。既に表示中なら position / expression を更新する。
@@ -100,7 +136,12 @@ export class CharacterLayer extends Container {
     sprite.y = CHARACTER_Y
     this.addChild(sprite)
 
-    this.characters.set(character, { sprite, position: normalizedPosition, expression })
+    this.characters.set(character, {
+      sprite,
+      position: normalizedPosition,
+      expression,
+      animation: null,
+    })
     this.loadTexture(sprite, expression, assetBaseUrl)
   }
 
@@ -116,6 +157,113 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * キャラクター（または立ち絵スロット内のオブジェクト）にアニメーションを適用する (#134)。
+   *
+   * fire-and-forget: 呼び出し側はアニメ完了を待たずに次のイベントへ進める。
+   * 子供向け動画用途で「車が回転しながら横移動」「寿司が降ってくる」等を実現。
+   *
+   * 既存アニメーションがあれば現在位置を起点に上書きする。
+   *
+   * @param character ターゲット名 (show で使った character 名と一致)
+   * @param params アニメパラメータ
+   */
+  animate(character: string, params: AnimateParams): void {
+    const state = this.characters.get(character)
+    if (!state) return
+    const sprite = state.sprite
+    const fromX = sprite.x
+    const fromY = sprite.y
+    const fromRotation = sprite.rotation
+    const fromScale = sprite.scale.x // x/y 等しい想定 (uniform scale)
+
+    // resolveDelta は数値文字列を相対/絶対解釈して target を返す
+    const toX = resolveDelta(params.dx, fromX)
+    const toY = resolveDelta(params.dy, fromY)
+    // rotation はパーサー側で度数。PixiJS は radian なので変換
+    const targetDegrees = resolveDelta(params.rotation, (fromRotation * 180) / Math.PI)
+    const toRotation = (targetDegrees * Math.PI) / 180
+    const toScale = params.scale !== undefined ? params.scale : fromScale
+
+    const durationMs = Math.max(0, params.duration_ms | 0)
+    if (durationMs === 0) {
+      // 即時適用
+      sprite.x = toX
+      sprite.y = toY
+      sprite.rotation = toRotation
+      sprite.scale.set(toScale, toScale)
+      state.animation = null
+      this.maybeStopTicker()
+      return
+    }
+
+    state.animation = {
+      startMs: this.elapsedMs,
+      durationMs,
+      easing: params.easing ?? 'Linear',
+      fromX,
+      fromY,
+      fromRotation,
+      fromScale,
+      toX,
+      toY,
+      toRotation,
+      toScale,
+    }
+    this.ensureTicker()
+  }
+
+  /** 進行中アニメーションを 1 つでも持つキャラがいるか */
+  hasActiveAnimation(): boolean {
+    for (const s of this.characters.values()) {
+      if (s.animation) return true
+    }
+    return false
+  }
+
+  private ensureTicker(): void {
+    if (this.animTicker) return
+    const ticker = new Ticker()
+    ticker.add(() => {
+      this.elapsedMs += ticker.deltaMS
+      let anyActive = false
+      for (const state of this.characters.values()) {
+        const a = state.animation
+        if (!a) continue
+        const t = (this.elapsedMs - a.startMs) / a.durationMs
+        if (t >= 1) {
+          // 完了
+          state.sprite.x = a.toX
+          state.sprite.y = a.toY
+          state.sprite.rotation = a.toRotation
+          state.sprite.scale.set(a.toScale, a.toScale)
+          state.animation = null
+          continue
+        }
+        anyActive = true
+        const eased = applyEasing(a.easing, t)
+        state.sprite.x = a.fromX + (a.toX - a.fromX) * eased
+        state.sprite.y = a.fromY + (a.toY - a.fromY) * eased
+        state.sprite.rotation = a.fromRotation + (a.toRotation - a.fromRotation) * eased
+        const sc = a.fromScale + (a.toScale - a.fromScale) * eased
+        state.sprite.scale.set(sc, sc)
+      }
+      if (!anyActive) {
+        this.maybeStopTicker()
+      }
+    })
+    ticker.start()
+    this.animTicker = ticker
+  }
+
+  private maybeStopTicker(): void {
+    if (!this.animTicker) return
+    if (this.hasActiveAnimation()) return
+    this.animTicker.stop()
+    this.animTicker.destroy()
+    this.animTicker = null
+  }
+
+  /**
    * キャラクターを退場させる
    */
   remove(character: string): void {
@@ -124,6 +272,7 @@ export class CharacterLayer extends Container {
     this.removeChild(state.sprite)
     state.sprite.destroy()
     this.characters.delete(character)
+    this.maybeStopTicker()
   }
 
   /**
@@ -146,6 +295,7 @@ export class CharacterLayer extends Container {
       state.sprite.destroy()
     }
     this.characters.clear()
+    this.maybeStopTicker()
   }
 
   /**
