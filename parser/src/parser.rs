@@ -12,6 +12,7 @@ pub fn parse(input: &str) -> Document {
     let mut chapter_title = String::new();
     let mut hidden = false;
     let mut default_bgm: Option<String> = None;
+    let mut aspect_ratio = String::from("16:9");
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -29,6 +30,11 @@ pub fn parse(input: &str) -> Document {
                 let v = val.trim().to_string();
                 if !v.is_empty() {
                     default_bgm = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("aspect_ratio:") {
+                let v = unquote(val.trim());
+                if v == "16:9" || v == "4:3" || v == "9:16" {
+                    aspect_ratio = v;
                 }
             }
             pos += 1;
@@ -449,6 +455,7 @@ pub fn parse(input: &str) -> Document {
 
     Document {
         engine,
+        aspect_ratio,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

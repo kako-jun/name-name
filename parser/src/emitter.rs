@@ -10,6 +10,10 @@ pub fn emit(doc: &Document) -> String {
         // YAML front matter
         out.push_str("---\n");
         out.push_str(&format!("engine: {}\n", doc.engine));
+        // Emit aspect_ratio only when non-default
+        if doc.aspect_ratio != "16:9" {
+            out.push_str(&format!("aspect_ratio: {}\n", doc.aspect_ratio));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -443,6 +447,7 @@ mod tests {
     fn test_emit_simple() {
         let doc = Document {
             engine: "name-name".to_string(),
+            aspect_ratio: "16:9".to_string(),
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
