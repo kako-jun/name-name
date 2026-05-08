@@ -11,6 +11,8 @@ interface NovelPlayerProps {
   assetBaseUrl?: string
   /** 画面比率。"16:9" / "4:3" / "9:16"。デフォルト "16:9" (#136) */
   aspectRatio?: AspectRatio | string
+  /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
+  docKey?: string
 }
 
 function NovelPlayer({
@@ -18,6 +20,7 @@ function NovelPlayer({
   scenes,
   assetBaseUrl,
   aspectRatio: aspectRatioProp,
+  docKey,
 }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
@@ -28,6 +31,8 @@ function NovelPlayer({
   const [settingsOpen, setSettingsOpen] = useState(false)
   // オートモード ON/OFF (#139)
   const [autoMode, setAutoMode] = useState(false)
+  // スキップモード ON/OFF (#140)
+  const [skipMode, setSkipMode] = useState(false)
   const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
 
   // 有効な AspectRatio に正規化
@@ -55,6 +60,11 @@ function NovelPlayer({
       }
       // renderer が手動操作で autoMode を OFF にしたとき React state を同期 (#139)
       renderer.setOnAutoModeChange((on) => setAutoMode(on))
+      // renderer が未読到達で skipMode を OFF にしたとき React state を同期 (#140)
+      renderer.setOnSkipModeChange((on) => setSkipMode(on))
+      if (docKey) {
+        renderer.setDocKey(docKey)
+      }
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
       if (scenes && scenes.length > 0) {
@@ -118,8 +128,17 @@ function NovelPlayer({
     rendererRef.current?.setAutoMode(autoMode)
   }, [autoMode])
 
+  // スキップモード変更を renderer に反映 (#140)
+  useEffect(() => {
+    rendererRef.current?.setSkipMode(skipMode)
+  }, [skipMode])
+
   const handleAutoToggle = () => {
     setAutoMode((v) => !v)
+  }
+
+  const handleSkipToggle = () => {
+    setSkipMode((v) => !v)
   }
 
   return (
@@ -134,6 +153,21 @@ function NovelPlayer({
           maxHeight: '100%',
         }}
       />
+      {/* スキップボタン (#140): docKey がある場合のみ有効 */}
+      <button
+        type="button"
+        onClick={handleSkipToggle}
+        disabled={!docKey}
+        aria-label={skipMode ? 'スキップモードをオフにする' : 'スキップモードをオンにする'}
+        title="スキップ（既読のみ）"
+        className={`absolute top-3 right-[6.25rem] w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+          skipMode
+            ? 'bg-green-500/80 hover:bg-green-500 text-white'
+            : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
+        }`}
+      >
+        S
+      </button>
       {/* オートモードボタン (#139) */}
       <button
         type="button"
