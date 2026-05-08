@@ -63,6 +63,8 @@ function getTextEvent(event: Event):
 
 export class NovelRenderer {
   private app: Application
+  /** init() 完了済みかのフラグ。React StrictMode 等で init 中に destroy が呼ばれたときの no-op 判定に使う */
+  private appInitialized = false
   private dialogBox: DialogBox
   private bgGraphics: Graphics
   private bgContainer: Container
@@ -155,6 +157,7 @@ export class NovelRenderer {
       background: 0x000000,
       antialias: true,
     })
+    this.appInitialized = true
 
     container.appendChild(this.app.canvas as HTMLCanvasElement)
 
@@ -311,6 +314,11 @@ export class NovelRenderer {
    * リソース解放
    */
   destroy(): void {
+    if (!this.appInitialized) {
+      // React StrictMode では init() が走り切る前に unmount が来る場合がある。
+      // その時 this.app.canvas は undefined のため触ると落ちる。何もせず終了。
+      return
+    }
     this.app.canvas.removeEventListener('pointerdown', this.handleAdvance)
     this.app.canvas.removeEventListener('wheel', this.handleWheel)
     window.removeEventListener('keydown', this.handleKeyDown)

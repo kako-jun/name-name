@@ -1,4 +1,4 @@
-// Worker エントリ + ルーティング
+// Worker エントリ + ルーティング (Hono)
 //
 // ルート:
 //   GET    /api/projects
@@ -7,156 +7,92 @@
 //   GET    /api/projects/:name/assets/:type
 //   POST   /api/projects/:name/assets/:type
 //
-// CORS:
-//   - env.ALLOWED_ORIGIN からのみ通す
-//   - OPTIONS preflight に対応
+// CORS: env.ALLOWED_ORIGIN からのみ通す。preflight は hono/cors に任せる。
 
+import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { handleListAssets, handleUploadAsset } from "./assets";
 import { handleGetContents, handlePutContents } from "./contents";
 import { handleListProjects } from "./projects";
 import type { Env } from "./types";
 
-// preflight (OPTIONS) と通常レスポンスで返す CORS ヘッダを分けて管理する。
-// preflight 専用ヘッダ（allow-methods / allow-headers / max-age）は通常レスポンスには不要。
-const CORS_PREFLIGHT_ONLY: Record<string, string> = {
-  "access-control-allow-methods": "GET, PUT, POST, OPTIONS",
-  "access-control-allow-headers": "authorization, content-type",
-  "access-control-max-age": "86400",
-};
+const app = new Hono<{ Bindings: Env }>();
 
-/** Origin 完全一致の判定。将来的にホワイトリスト化する余地を残すため Set で保持する */
-function resolveAllowedOrigin(env: Env, origin: string | null): string {
-  const allowedSet = new Set([env.ALLOWED_ORIGIN]);
-  // 完全一致のみ許可。ローカル開発で `wrangler dev` から叩く場合は wrangler.toml の
-  // ALLOWED_ORIGIN を `http://localhost:5173` などに上書きすること。
-  return origin && allowedSet.has(origin) ? origin : env.ALLOWED_ORIGIN;
+// dev mode の判定: GITHUB_API_BASE が立っているとき = scripts/dev.mjs 経由起動。
+// その時のみ localhost / プライベート IP の dev origin を CORS で許可する。
+// 本番 (CF Worker) では GITHUB_API_BASE は未設定なので production origin だけ通る。
+function isValidIPv4Octet(s: string): boolean {
+  if (!/^\d{1,3}$/.test(s)) return false;
+  const n = Number(s);
+  return n >= 0 && n <= 255;
 }
-
-/** OPTIONS preflight 用の CORS ヘッダ */
-function corsHeadersForPreflight(env: Env, origin: string | null): Record<string, string> {
-  return {
-    ...CORS_PREFLIGHT_ONLY,
-    "access-control-allow-origin": resolveAllowedOrigin(env, origin),
-    vary: "origin",
-  };
+function isLoopbackOrPrivateHostname(hostname: string): boolean {
+  if (hostname === "localhost") return true;
+  const parts = hostname.split(".");
+  if (parts.length !== 4) return false;
+  if (!parts.every(isValidIPv4Octet)) return false;
+  const [a, b] = parts.map(Number);
+  if (a === 127) return true;
+  if (a === 10) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  return false;
 }
-
-/** 通常レスポンスに付与する CORS ヘッダ（allow-origin と vary のみ） */
-function corsHeadersForResponse(env: Env, origin: string | null): Record<string, string> {
-  return {
-    "access-control-allow-origin": resolveAllowedOrigin(env, origin),
-    vary: "origin",
-  };
-}
-
-function withCors(response: Response, env: Env, origin: string | null): Response {
-  const headers = new Headers(response.headers);
-  for (const [k, v] of Object.entries(corsHeadersForResponse(env, origin))) {
-    headers.set(k, v);
+function isDevOrigin(origin: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(origin);
+  } catch {
+    return false;
   }
-  return new Response(response.body, { status: response.status, headers });
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  return isLoopbackOrPrivateHostname(u.hostname);
 }
 
-function notFound(): Response {
-  return new Response(JSON.stringify({ error: "not found" }), {
-    status: 404,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-}
+app.use("*", (c, next) =>
+  cors({
+    origin: (origin) => {
+      if (origin === c.env.ALLOWED_ORIGIN) return origin;
+      if (c.env.GITHUB_API_BASE && origin && isDevOrigin(origin)) return origin;
+      return c.env.ALLOWED_ORIGIN;
+    },
+    allowMethods: ["GET", "PUT", "POST", "OPTIONS"],
+    allowHeaders: ["authorization", "content-type"],
+    maxAge: 86400,
+  })(c, next),
+);
 
-function methodNotAllowed(): Response {
-  return new Response(JSON.stringify({ error: "method not allowed" }), {
-    status: 405,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-}
+// 各エンドポイントは「許可メソッドの登録 → app.all で 405 catch-all」の順で書く。
+// この順序により、未許可メソッドが onNotFound で 404 にされるのを防ぎ 405 で返せる。
+const methodNotAllowed = (c: { json: (body: unknown, status?: number) => Response }) =>
+  c.json({ error: "method not allowed" }, 405);
 
-interface RouteMatch {
-  // /api/projects
-  kind: "list-projects";
-}
-interface ContentsRoute {
-  kind: "contents";
-  project: string;
-  path: string;
-}
-interface AssetsRoute {
-  kind: "assets";
-  project: string;
-  type: string;
-}
-type Route = RouteMatch | ContentsRoute | AssetsRoute | null;
+app.get("/api/projects", (c) => handleListProjects(c.req.raw, c.env));
+app.all("/api/projects", methodNotAllowed);
 
-function matchRoute(pathname: string): Route {
-  // /api/projects
-  if (pathname === "/api/projects" || pathname === "/api/projects/") {
-    return { kind: "list-projects" };
-  }
-  // /api/projects/:name/contents/*
-  const contentsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/contents\/(.+)$/);
-  if (contentsMatch) {
-    return { kind: "contents", project: contentsMatch[1], path: contentsMatch[2] };
-  }
-  // /api/projects/:name/assets/:type
-  const assetsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/assets\/([^/]+)\/?$/);
-  if (assetsMatch) {
-    return { kind: "assets", project: assetsMatch[1], type: assetsMatch[2] };
-  }
-  return null;
-}
+app.get("/api/projects/:name/contents/:path{.+}", (c) =>
+  handleGetContents(c.req.raw, c.env, c.req.param("name"), c.req.param("path")),
+);
+app.put("/api/projects/:name/contents/:path{.+}", (c) =>
+  handlePutContents(c.req.raw, c.env, c.req.param("name"), c.req.param("path")),
+);
+app.all("/api/projects/:name/contents/:path{.+}", methodNotAllowed);
 
-async function dispatch(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const route = matchRoute(url.pathname);
-  if (!route) return notFound();
+app.get("/api/projects/:name/assets/:type", (c) =>
+  handleListAssets(c.req.raw, c.env, c.req.param("name"), c.req.param("type")),
+);
+app.post("/api/projects/:name/assets/:type", (c) =>
+  handleUploadAsset(c.req.raw, c.env, c.req.param("name"), c.req.param("type")),
+);
+app.all("/api/projects/:name/assets/:type", methodNotAllowed);
 
-  switch (route.kind) {
-    case "list-projects":
-      if (request.method === "GET") return handleListProjects(request, env);
-      return methodNotAllowed();
-    case "contents":
-      if (request.method === "GET") {
-        return handleGetContents(request, env, route.project, route.path);
-      }
-      if (request.method === "PUT") {
-        return handlePutContents(request, env, route.project, route.path);
-      }
-      return methodNotAllowed();
-    case "assets":
-      if (request.method === "GET") {
-        return handleListAssets(request, env, route.project, route.type);
-      }
-      if (request.method === "POST") {
-        return handleUploadAsset(request, env, route.project, route.type);
-      }
-      return methodNotAllowed();
-  }
-}
+app.notFound((c) =>
+  c.json({ error: "not found" }, 404),
+);
 
-export default {
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
-    const origin = request.headers.get("origin");
+app.onError((err, c) => {
+  console.error("[fetch] unhandled", err);
+  return c.json({ error: "internal server error" }, 500);
+});
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: corsHeadersForPreflight(env, origin),
-      });
-    }
-
-    try {
-      const res = await dispatch(request, env);
-      return withCors(res, env, origin);
-    } catch (err) {
-      console.error("[fetch] unhandled", err);
-      const res = new Response(
-        JSON.stringify({ error: "internal server error" }),
-        {
-          status: 500,
-          headers: { "content-type": "application/json; charset=utf-8" },
-        },
-      );
-      return withCors(res, env, origin);
-    }
-  },
-};
+export default app;

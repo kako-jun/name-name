@@ -1,12 +1,34 @@
 import init, { parse_markdown, emit_markdown } from '../../../parser/pkg/name_name_parser.js'
 import type { EventDocument, Event } from '../types'
 
+// WASM 本体を JS バンドルに base64 で埋め込んで fetch なしで読み込む。
+// 経緯: corp proxy 配下では `/parser-pkg/*.bin` を直接 URL アクセスすると binary が
+// 取れるのに、JS の fetch() 経由だとブロックページ HTML が返る事象があった
+// (Accept / Sec-Fetch-Dest ヘッダで proxy が分岐していると思われる)。
+// 環境差を吸収するため、開発・本番ともに ArrayBuffer をバンドルに同梱する方針に切替。
+// サイズコスト: 189 KiB → base64 で約 +50%。一度きりの読み込みなので runtime 影響は無視可能。
+//
+// `wasm-bytes.generated.ts` は frontend/scripts/sync-wasm.mjs (predev/prebuild) が
+// parser/pkg/name_name_parser_bg.wasm から自動生成する。
+import { WASM_BASE64 } from './wasm-bytes.generated'
+
+function base64ToUint8Array(b64: string): Uint8Array {
+  const bin = atob(b64)
+  const len = bin.length
+  const bytes = new Uint8Array(len)
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i)
+  return bytes
+}
+
 // WASM init() の重複実行を防止
 let initPromise: Promise<void> | null = null
 
 async function ensureInit(): Promise<void> {
   if (!initPromise) {
-    initPromise = init().then(() => {})
+    initPromise = (async () => {
+      const bytes = base64ToUint8Array(WASM_BASE64)
+      await init({ module_or_path: bytes.buffer as ArrayBuffer })
+    })()
   }
   await initPromise
 }
