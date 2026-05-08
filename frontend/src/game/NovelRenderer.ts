@@ -131,15 +131,20 @@ export class NovelRenderer {
   /** 現在の BGM パス（スナップショット用） */
   private currentBgmPath: string | null = null
 
-  constructor() {
+  /** 枠なしモードのデフォルト値（per-game 設定）。per-scene の DialogBorderless で上書きされる */
+  private defaultDialogBorderless: boolean = false
+
+  constructor(config?: { dialogBorderless?: boolean }) {
     this.app = new Application()
     this.bgGraphics = new Graphics()
     this.bgContainer = new Container()
     this.characterLayer = new CharacterLayer()
     this.blackoutOverlay = new Graphics()
+    this.defaultDialogBorderless = config?.dialogBorderless ?? false
     this.dialogBox = new DialogBox({
       screenWidth: GAME_WIDTH,
       screenHeight: GAME_HEIGHT,
+      borderless: this.defaultDialogBorderless,
     })
     this.audioManager = new AudioManager()
     this.choiceOverlay = new ChoiceOverlay(GAME_WIDTH, GAME_HEIGHT)
@@ -276,6 +281,8 @@ export class NovelRenderer {
     this.characterLayer.clear()
     this.blackoutOverlay.visible = false
     this.currentBgmPath = null
+    // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
+    this.dialogBox.setBorderless(this.defaultDialogBorderless)
 
     // 元イベントを保持し、Condition をフラグに基づいて展開
     this.rawEvents = events
@@ -715,6 +722,11 @@ export class NovelRenderer {
         duration_ms: event.Animate.duration_ms,
         easing: event.Animate.easing,
       })
+      return
+    }
+    if ('DialogBorderless' in event) {
+      // 文字ウィンドウ枠の ON/OFF (#135)
+      this.dialogBox.setBorderless(event.DialogBorderless.borderless)
       return
     }
     if ('Wait' in event) {

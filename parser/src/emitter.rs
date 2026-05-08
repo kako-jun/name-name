@@ -336,6 +336,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[アニメ: {}]\n", parts.join(", ")));
                 prev_was_dialog_or_text = false;
             }
+            Event::DialogBorderless { borderless } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(if *borderless { "[枠なし]\n" } else { "[枠あり]\n" });
+                prev_was_dialog_or_text = false;
+            }
         }
     }
 }

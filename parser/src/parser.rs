@@ -538,6 +538,14 @@ fn parse_directive(line: &str) -> Option<Event> {
         return parse_animate_directive(rest);
     }
 
+    // [枠なし] / [枠あり] (#135)
+    if content == "枠なし" {
+        return Some(Event::DialogBorderless { borderless: true });
+    }
+    if content == "枠あり" {
+        return Some(Event::DialogBorderless { borderless: false });
+    }
+
     None
 }
 
@@ -1302,5 +1310,28 @@ default_bgm: test.ogg
         assert_eq!(doc.chapters[0].title, "第二章");
         assert!(doc.chapters[0].hidden);
         assert_eq!(doc.chapters[0].default_bgm, Some("test.ogg".to_string()));
+    }
+
+    #[test]
+    fn test_dialog_borderless() {
+        let input = "## 1-1: テスト\n[枠なし]\n> こんにちは\n[枠あり]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3);
+        assert!(
+            matches!(&events[0], Event::DialogBorderless { borderless: true }),
+            "expected DialogBorderless(true), got {:?}",
+            events[0]
+        );
+        assert!(
+            matches!(&events[1], Event::Narration { .. }),
+            "expected Narration, got {:?}",
+            events[1]
+        );
+        assert!(
+            matches!(&events[2], Event::DialogBorderless { borderless: false }),
+            "expected DialogBorderless(false), got {:?}",
+            events[2]
+        );
     }
 }
