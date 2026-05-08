@@ -184,6 +184,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
             events={novelEvents}
             assetBaseUrl={assetBaseUrl}
             aspectRatio={doc?.aspect_ratio}
+            docKey={projectName}
           />
         )}
       </main>
