@@ -78,7 +78,7 @@ curl http://localhost:8787/api/projects/ogurasia/contents/script.md
 curl -X PUT http://localhost:8787/api/projects/ogurasia/contents/script.md \
   -H "authorization: Bearer ${DEV_AUTH_TOKEN}" \
   -H "content-type: application/json" \
-  -d '{"content":"# 新本文","sha":"<前回の sha>","message":"edit chapters/all"}'
+  -d '{"content":"# 新本文","sha":"<前回の sha>","message":"edit script"}'
 
 # 新規ファイルの作成（sha 省略 / message も省略可：デフォルト `create <path>`）
 curl -X PUT http://localhost:8787/api/projects/ogurasia/contents/chapters/new.md \
