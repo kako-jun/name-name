@@ -40,6 +40,8 @@ import {
   type WallTextureSheet,
 } from './wallTextureSheet'
 import { formatHeightError, validateMapHeights } from './mapValidation'
+import { attachTouchInput, type SwipeDirection } from './touchInput'
+import { TouchMenuOverlay, type MenuItemId } from './TouchMenuOverlay'
 
 interface NPCRuntime {
   data: NPCData
@@ -86,6 +88,8 @@ export class RaycastRenderer {
   private stepWallSpritesContainer: Container
   private npcLayer: Container
   private dialogBox: RpgDialogBox | null = null
+  private menuOverlay: TouchMenuOverlay | null = null
+  private detachTouchInput: (() => void) | null = null
 
   private worldGraphics: Graphics | null = null
 
@@ -229,10 +233,24 @@ export class RaycastRenderer {
     this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
     this.app.stage.addChild(this.dialogBox)
 
+    // タッチメニュー（仮想パッドではなく文字直タップ式）#178
+    this.menuOverlay = new TouchMenuOverlay(
+      this.screenWidth,
+      this.screenHeight,
+      this.handleMenuSelect
+    )
+    this.app.stage.addChild(this.menuOverlay)
+
     window.addEventListener('keydown', this.handleKeyDown)
     window.addEventListener('keyup', this.handleKeyUp)
     window.addEventListener('resize', this.handleResize)
     this.app.ticker.add(this.onTick)
+
+    // スワイプ移動 + シングルタップでメニュー開閉 (#178)
+    this.detachTouchInput = attachTouchInput(this.app.canvas as HTMLCanvasElement, {
+      onSwipe: this.handleSwipe,
+      onTap: this.handleTap,
+    })
 
     this.initialized = true
   }
@@ -385,6 +403,10 @@ export class RaycastRenderer {
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
     window.removeEventListener('resize', this.handleResize)
+    if (this.detachTouchInput) {
+      this.detachTouchInput()
+      this.detachTouchInput = null
+    }
     if (this.resizeRaf !== null) {
       cancelAnimationFrame(this.resizeRaf)
       this.resizeRaf = null
@@ -420,6 +442,7 @@ export class RaycastRenderer {
       this.zBuffer = new Float32Array(0)
       this.wallTopYBuffer = new Float32Array(0)
       this.dialogBox = null
+      this.menuOverlay = null
     }
   }
 
@@ -511,6 +534,85 @@ export class RaycastRenderer {
     }
   }
 
+  // --- タッチ入力 (#178) ---
+
+  /**
+   * スワイプはタイル単位のスナップ移動 / 90° 回転に倒す（DQ 風）。
+   * - up: 正面に 1 タイル進む（壁・NPC で阻まれたら停止）
+   * - down: 背面に 1 タイル下がる
+   * - left/right: その場で 90° 回転（playerAngle ±π/2）
+   *
+   * Raycast は通常 keydown/up で連続移動するが、タッチ UI ではキー継続入力が無いので
+   * tap-to-step に倒した方が UX が安定する。
+   */
+  private handleSwipe = (direction: SwipeDirection): void => {
+    if (!this.initialized) return
+    if (this.dialogBox?.isShowing) return
+    if (this.menuOverlay?.isShowing()) {
+      this.menuOverlay.hideMenu()
+      return
+    }
+    switch (direction) {
+      case 'up':
+        this.snapStep(1)
+        break
+      case 'down':
+        this.snapStep(-1)
+        break
+      case 'left':
+        this.playerAngle -= Math.PI / 2
+        break
+      case 'right':
+        this.playerAngle += Math.PI / 2
+        break
+    }
+  }
+
+  /**
+   * 正面ベクトル方向に 1 タイル分だけプレイヤー位置をスナップする。
+   * 移動先タイルが通行不可（壁 / NPC）なら何もしない（ステップだけ消費する）。
+   */
+  private snapStep(forward: number): void {
+    const dx = Math.cos(this.playerAngle) * forward
+    const dy = Math.sin(this.playerAngle) * forward
+    const targetTileX = Math.floor(this.playerX + dx)
+    const targetTileY = Math.floor(this.playerY + dy)
+    if (!this.isPassable(targetTileX + 0.5, targetTileY + 0.5)) return
+    // タイル中央にスナップ（playerX/Y はタイル中央 + 0.5 基準）
+    this.playerX = targetTileX + 0.5
+    this.playerY = targetTileY + 0.5
+    // 段差床高さの再評価
+    this.playerGroundZ = resolveFloorHeight(
+      this.floorHeights,
+      Math.floor(this.playerX),
+      Math.floor(this.playerY)
+    )
+  }
+
+  private handleTap = (): void => {
+    if (!this.initialized) return
+    if (this.dialogBox?.isShowing) {
+      if (this.dialogBox.isTyping()) {
+        this.dialogBox.skipTypewriter()
+      } else {
+        this.dialogBox.hide()
+      }
+      return
+    }
+    if (this.menuOverlay?.isShowing()) {
+      this.menuOverlay.hideMenu()
+      return
+    }
+    this.menuOverlay?.showMenu()
+  }
+
+  private handleMenuSelect = (id: MenuItemId): void => {
+    this.menuOverlay?.hideMenu()
+    if (id === 'talk') {
+      this.tryTalk()
+    }
+  }
+
   // --- リサイズ ---
 
   private handleResize = (): void => {
@@ -526,6 +628,7 @@ export class RaycastRenderer {
       this.screenHeight = Math.max(240, Math.floor(rect.height || 600))
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
       this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
+      this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
       // 画面幅が変わると numStripes も変わるので、余剰分を destroy して寸法を合わせる
       this.ensureStripePool(Math.ceil(this.screenWidth / this.stripeWidth))
     })

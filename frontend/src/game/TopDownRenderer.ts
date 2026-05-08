@@ -17,6 +17,8 @@ import {
   loadNpcSpriteSheet,
   type NpcSpriteSheet,
 } from './npcSpriteSheet'
+import { attachTouchInput, type SwipeDirection } from './touchInput'
+import { TouchMenuOverlay, type MenuItemId } from './TouchMenuOverlay'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -41,6 +43,8 @@ export class TopDownRenderer {
   private playerLayer: Container
   private world: Container
   private dialogBox: RpgDialogBox | null = null
+  private menuOverlay: TouchMenuOverlay | null = null
+  private detachTouchInput: (() => void) | null = null
 
   private playerContainer: Container | null = null
   private playerDirectionIndicator: Graphics | null = null
@@ -101,9 +105,23 @@ export class TopDownRenderer {
     this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
     this.app.stage.addChild(this.dialogBox)
 
+    // タッチメニュー（仮想パッドではなく文字直タップ式）#178
+    this.menuOverlay = new TouchMenuOverlay(
+      this.screenWidth,
+      this.screenHeight,
+      this.handleMenuSelect
+    )
+    this.app.stage.addChild(this.menuOverlay)
+
     window.addEventListener('keydown', this.handleKeyDown)
     window.addEventListener('resize', this.handleResize)
     this.app.ticker.add(this.onTick)
+
+    // スワイプ移動 + シングルタップでメニュー開閉 (#178)
+    this.detachTouchInput = attachTouchInput(this.app.canvas as HTMLCanvasElement, {
+      onSwipe: this.handleSwipe,
+      onTap: this.handleTap,
+    })
 
     this.initialized = true
   }
@@ -158,6 +176,10 @@ export class TopDownRenderer {
   destroy(): void {
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('resize', this.handleResize)
+    if (this.detachTouchInput) {
+      this.detachTouchInput()
+      this.detachTouchInput = null
+    }
     if (this.resizeRaf !== null) {
       cancelAnimationFrame(this.resizeRaf)
       this.resizeRaf = null
@@ -171,6 +193,7 @@ export class TopDownRenderer {
       this.app.destroy(true, { children: true })
       clearDemoSheetCache(renderer)
       this.dialogBox = null
+      this.menuOverlay = null
       this.initialized = false
     }
   }
@@ -456,6 +479,60 @@ export class TopDownRenderer {
     if (npc) this.dialogBox?.show(npc.data.name, npc.data.message, npc.data.portrait)
   }
 
+  // --- タッチ入力 (#178) ---
+
+  /**
+   * スワイプ方向に応じて「向き変更 + 1 マス移動の試行」を行う。
+   * tryMove 内部で playerDirection は先に更新されるため、移動できない場合（壁・NPC）でも
+   * その方向に向きが変わる（DQ 同様）。ダイアログ表示中は移動を抑止する（向き変更も行わない）。
+   */
+  private handleSwipe = (direction: SwipeDirection): void => {
+    if (!this.initialized) return
+    if (this.dialogBox?.isShowing) {
+      // ダイアログ中のスワイプはダイアログ操作と分離。誤爆防止のため何もしない。
+      return
+    }
+    if (this.menuOverlay?.isShowing()) {
+      // メニュー表示中のスワイプはメニューを閉じる（誤って外側をなぞった場合の救済）
+      this.menuOverlay.hideMenu()
+      return
+    }
+    if (this.isMoving) return
+    this.tryMove(direction)
+  }
+
+  /**
+   * タップは状態によって振る舞いが変わる:
+   *   - ダイアログ表示中: typewriter 進行中なら全文表示にスキップ、完了済みなら閉じる
+   *   - メニュー項目自身のタップ: メニュー側でハンドルされる（ここには来ない）
+   *   - メニュー外のタップ: メニュー表示中なら閉じる
+   *   - 通常時: メニューを開く
+   */
+  private handleTap = (): void => {
+    if (!this.initialized) return
+    if (this.dialogBox?.isShowing) {
+      if (this.dialogBox.isTyping()) {
+        this.dialogBox.skipTypewriter()
+      } else {
+        this.dialogBox.hide()
+      }
+      return
+    }
+    if (this.menuOverlay?.isShowing()) {
+      this.menuOverlay.hideMenu()
+      return
+    }
+    this.menuOverlay?.showMenu()
+  }
+
+  private handleMenuSelect = (id: MenuItemId): void => {
+    this.menuOverlay?.hideMenu()
+    if (id === 'talk') {
+      this.tryTalk()
+    }
+    // 'close' は hideMenu のみで完結
+  }
+
   // --- リサイズ ---
 
   private handleResize = (): void => {
@@ -472,6 +549,7 @@ export class TopDownRenderer {
       this.screenHeight = Math.max(240, Math.floor(rect.height || 600))
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
       this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
+      this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
       this.centerCamera()
     })
   }
