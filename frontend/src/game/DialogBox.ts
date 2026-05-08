@@ -79,6 +79,11 @@ export class DialogBox extends Container {
   private msPerChar: number
   /** 続きインジケーターを「表示したい」かどうか。実表示は typewriter 完了後に解禁 */
   private indicatorWanted: boolean = false
+  /**
+   * typewriter 表示完了時に1度だけ呼ばれるコールバック。
+   * setDialog() ごとに上書きされる。オートモード (#139) で使用。
+   */
+  private onTypingDone: (() => void) | null = null
 
   private ticker: Ticker
 
@@ -164,7 +169,14 @@ export class DialogBox extends Container {
         if (next.displayedCharCount !== this.typewriter.displayedCharCount) {
           this.dialogText.text = visibleText(next)
         }
+        const justFinished = isTypingActive(this.typewriter) && !isTypingActive(next)
         this.typewriter = next
+        // タイピング完了した瞬間にコールバックを1度だけ呼ぶ
+        if (justFinished && this.onTypingDone) {
+          const cb = this.onTypingDone
+          this.onTypingDone = null
+          cb()
+        }
       }
 
       // インジケーターは「表示したい」かつ「typewriter 完了」のときのみ可視
@@ -215,8 +227,10 @@ export class DialogBox extends Container {
    *
    * 枠なしモード（borderless=true）では name を無視して nameBox を非表示にする。
    * setBorderless(false) で枠ありに戻したあとも、nameBox の復元はこのメソッドの呼び出し時に行う。
+   *
+   * @param onTypingDone タイピング完了時に1度だけ呼ばれるコールバック（オートモード用）
    */
-  setDialog(name: string | null, text: string): void {
+  setDialog(name: string | null, text: string, onTypingDone?: (() => void) | null): void {
     // 話者名（枠なしモードでは常に非表示）
     if (name && !this.borderless) {
       this.nameText.text = name
@@ -236,6 +250,13 @@ export class DialogBox extends Container {
     const lines = wordwrap(text, maxTextWidth, font)
     this.typewriter = startTypewriter(lines.join('\n'))
     this.dialogText.text = ''
+    // タイピング完了コールバックをセット（空テキストはタイプライターが動かないので即呼び出し）
+    this.onTypingDone = onTypingDone ?? null
+    if (!isTypingActive(this.typewriter) && this.onTypingDone) {
+      const cb = this.onTypingDone
+      this.onTypingDone = null
+      cb()
+    }
   }
 
   /**
@@ -254,6 +275,8 @@ export class DialogBox extends Container {
     if (!isTypingActive(this.typewriter)) return
     this.typewriter = typewriterSkip(this.typewriter)
     this.dialogText.text = visibleText(this.typewriter)
+    // スキップ時はオートモードコールバックを破棄（手動操作なので自動進行しない）
+    this.onTypingDone = null
   }
 
   /**
