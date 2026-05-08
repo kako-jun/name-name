@@ -53,6 +53,8 @@ function NovelPlayer({
       if (assetBaseUrl) {
         renderer.setAssetBaseUrl(assetBaseUrl)
       }
+      // renderer が手動操作で autoMode を OFF にしたとき React state を同期 (#139)
+      renderer.setOnAutoModeChange((on) => setAutoMode(on))
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
       if (scenes && scenes.length > 0) {

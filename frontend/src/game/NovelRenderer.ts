@@ -144,7 +144,9 @@ export class NovelRenderer {
   /** オートモード待機タイマー（destroy 時・手動操作時にキャンセル） */
   private autoTimer: ReturnType<typeof setTimeout> | null = null
   /** オートモード待機時間 ms（settings.autoWaitMs から更新） */
-  private autoWaitMs: number = 2000
+  private autoWaitMs: number = 2500
+  /** autoMode 変更時の React 側同期コールバック */
+  private onAutoModeChange: ((on: boolean) => void) | null = null
 
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
@@ -294,6 +296,10 @@ export class NovelRenderer {
       clearTimeout(this.waitTimer)
       this.waitTimer = null
     }
+    if (this.autoTimer) {
+      clearTimeout(this.autoTimer)
+      this.autoTimer = null
+    }
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
     this.clearBackground()
@@ -357,13 +363,22 @@ export class NovelRenderer {
   /**
    * オートモードの ON/OFF を切り替える (#139)。
    * OFF にした場合は待機中のオートタイマーをキャンセルする。
+   * React 側から呼ぶ場合は setAutoMode、renderer 内部から呼ぶ場合も同じメソッドを使う。
    */
   setAutoMode(on: boolean): void {
+    if (this.autoMode === on) return
     this.autoMode = on
     if (!on && this.autoTimer) {
       clearTimeout(this.autoTimer)
       this.autoTimer = null
     }
+    // React state との同期
+    this.onAutoModeChange?.(on)
+  }
+
+  /** オートモード変更コールバックを登録する（NovelPlayer が setAutoMode(false) を検知するため） */
+  setOnAutoModeChange(cb: (on: boolean) => void): void {
+    this.onAutoModeChange = cb
   }
 
   /** オートモードの現在状態を取得する */
@@ -663,6 +678,7 @@ export class NovelRenderer {
         this.advanceOrSkipTypewriter()
         break
       case 'ArrowLeft':
+        this.setAutoMode(false)
         this.goBack()
         break
       case 's':
