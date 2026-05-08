@@ -99,6 +99,7 @@ function normalizeDocument(doc: EventDocument): EventDocument {
   return {
     engine: doc.engine,
     aspect_ratio: doc.aspect_ratio,
+    choice_style: doc.choice_style ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

@@ -99,6 +99,9 @@ export class NovelRenderer {
   /** 選択肢オーバーレイ */
   private choiceOverlay: ChoiceOverlay
 
+  /** 選択肢スタイル名 (#146)。frontmatter `choice_style:` の値。null なら default 扱い */
+  private choiceStyle: string | null = null
+
   /** 選択肢表示中フラグ */
   private waitingForChoice = false
 
@@ -187,6 +190,8 @@ export class NovelRenderer {
     })
     this.audioManager = new AudioManager()
     this.choiceOverlay = new ChoiceOverlay(this.screenWidth, this.screenHeight)
+    // 選択肢の確定音／ホバー音を AudioManager で鳴らせるように注入 (#146)
+    this.choiceOverlay.setAudioManager(this.audioManager)
     this.saveLoadOverlay = new SaveLoadOverlay(
       this.screenWidth,
       this.screenHeight,
@@ -381,6 +386,15 @@ export class NovelRenderer {
    */
   setAssetBaseUrl(url: string): void {
     this.assetBaseUrl = url
+  }
+
+  /**
+   * 選択肢スタイルを設定する (#146)。
+   * frontmatter `choice_style:` の値（`default` / `soft` / `monochrome` 等）を渡す。
+   * null/undefined のときは default 扱い。
+   */
+  setChoiceStyle(style: string | null | undefined): void {
+    this.choiceStyle = style ?? null
   }
 
   /**
@@ -1031,11 +1045,15 @@ export class NovelRenderer {
       // 選択肢に到達したらスキップモードを解除（手動選択が必要） (#140)
       this.setSkipMode(false)
       this.waitingForChoice = true
-      this.choiceOverlay.show(event.Choice.options, (jump: string) => {
-        this.waitingForChoice = false
-        this.choiceOverlay.hide()
-        this.jumpToScene(jump)
-      })
+      this.choiceOverlay.show(
+        event.Choice.options,
+        (jump: string) => {
+          this.waitingForChoice = false
+          this.choiceOverlay.hide()
+          this.jumpToScene(jump)
+        },
+        this.choiceStyle
+      )
       return
     }
     if ('ExpressionChange' in event) {

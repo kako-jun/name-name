@@ -19,6 +19,12 @@ export interface Document {
      * 画面比率。\"16:9\" / \"4:3\" / \"9:16\"。未指定時は \"16:9\"。
      */
     aspect_ratio?: string;
+    /**
+     * 選択肢スタイル名 (#146)。`default` / `soft` / `monochrome` を想定。
+     * 未指定時は `None`（runtime で `default` 扱い）。
+     * frontmatter `choice_style: soft` で per-game 切替可能。
+     */
+    choice_style?: string;
     chapters: Chapter[];
 }
 
