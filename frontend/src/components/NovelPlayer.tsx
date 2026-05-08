@@ -11,6 +11,9 @@ interface NovelPlayerProps {
   assetBaseUrl?: string
   /** 画面比率。"16:9" / "4:3" / "9:16"。デフォルト "16:9" (#136) */
   aspectRatio?: AspectRatio | string
+  /** 選択肢スタイル名 `default` / `soft` / `monochrome` (#146)。
+   *  frontmatter `choice_style:` から流す。null/undefined で default 扱い */
+  choiceStyle?: string | null
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
   docKey?: string
   /**
@@ -26,6 +29,7 @@ function NovelPlayer({
   scenes,
   assetBaseUrl,
   aspectRatio: aspectRatioProp,
+  choiceStyle,
   docKey,
   initialSkipMode = false,
 }: NovelPlayerProps) {
@@ -75,6 +79,8 @@ function NovelPlayer({
       if (docKey) {
         renderer.setDocKey(docKey)
       }
+      // 選択肢スタイル (#146)
+      renderer.setChoiceStyle(choiceStyle ?? null)
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
       if (scenes && scenes.length > 0) {
@@ -110,6 +116,11 @@ function NovelPlayer({
       rendererRef.current?.setDocKey(docKey)
     }
   }, [docKey])
+
+  // choiceStyle が変化したときに renderer に反映 (#146)
+  useEffect(() => {
+    rendererRef.current?.setChoiceStyle(choiceStyle ?? null)
+  }, [choiceStyle])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {
