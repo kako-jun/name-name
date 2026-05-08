@@ -5,6 +5,7 @@ import {
   __resetMemoryStoreForTest,
   clampSettings,
   loadSettings,
+  makeDebouncedSaveSettings,
   saveSettings,
 } from './settings'
 
@@ -136,5 +137,56 @@ describe('settings', () => {
     expect(setSpy).toHaveBeenCalled()
     expect(loadSettings()).toEqual(s)
     expect(getSpy).toHaveBeenCalled()
+  })
+})
+
+describe('makeDebouncedSaveSettings (review #155 should-2)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('連続呼び出しは debounce され、最後の値だけ保存される', () => {
+    const { save } = makeDebouncedSaveSettings(100)
+    const s1: Settings = { ...DEFAULT_SETTINGS, msPerChar: 10 }
+    const s2: Settings = { ...DEFAULT_SETTINGS, msPerChar: 50 }
+    const s3: Settings = { ...DEFAULT_SETTINGS, msPerChar: 99 }
+
+    save(s1)
+    save(s2)
+    save(s3)
+    // wait 経過前は保存されていない
+    expect(loadSettings().msPerChar).toBe(DEFAULT_SETTINGS.msPerChar)
+
+    vi.advanceTimersByTime(100)
+    expect(loadSettings().msPerChar).toBe(99)
+  })
+
+  it('flush で即時保存できる', () => {
+    const { save, flush } = makeDebouncedSaveSettings(500)
+    save({ ...DEFAULT_SETTINGS, bgmVolume: 0.42 })
+    expect(loadSettings().bgmVolume).toBe(DEFAULT_SETTINGS.bgmVolume)
+    flush()
+    expect(loadSettings().bgmVolume).toBe(0.42)
+  })
+
+  it('cancel で pending 保存を破棄できる', () => {
+    const { save, cancel } = makeDebouncedSaveSettings(100)
+    save({ ...DEFAULT_SETTINGS, seVolume: 0.11 })
+    cancel()
+    vi.advanceTimersByTime(500)
+    expect(loadSettings().seVolume).toBe(DEFAULT_SETTINGS.seVolume)
+  })
+
+  it('独立した debouncer は state を共有しない', () => {
+    const a = makeDebouncedSaveSettings(100)
+    const b = makeDebouncedSaveSettings(100)
+    a.save({ ...DEFAULT_SETTINGS, msPerChar: 10 })
+    b.save({ ...DEFAULT_SETTINGS, msPerChar: 20 })
+    vi.advanceTimersByTime(100)
+    // 後勝ち (どちらも localStorage に書くので、最後の write が残る)
+    expect(loadSettings().msPerChar).toBe(20)
   })
 })
