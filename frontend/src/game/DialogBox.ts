@@ -264,11 +264,16 @@ export class DialogBox extends Container {
   }
 
   /**
-   * テキストのみクリアする
+   * テキストのみクリアする。
+   * 後続の setFontFamily で消したテキストが復活しないよう currentText もリセットする (#147 R2 M-R2-1)。
+   * onTypingDone も解除して、新フォントで再生成された typewriter が完了した際に
+   * 古いコールバックが auto-advance を発火しないようにする。
    */
   clearText(): void {
     this.typewriter = makeInitialTypewriterState()
     this.dialogText.text = ''
+    this.currentText = ''
+    this.onTypingDone = null
   }
 
   /**
@@ -356,16 +361,23 @@ export class DialogBox extends Container {
     // フォントが変わると 1 文字あたりの幅が変わるため wordwrap を再計算する (#147 R1 S2)。
     // 表示中のテキストがあれば再 wordwrap して typewriter を新規開始する。
     // typewriter 進行中だった場合は新フォントでの再生成になるが、フォント切替自体が
-    // 稀な操作なので「タイプ位置リセット」は許容する（ユーザーは普通切替後に文字を読み直す）。
+    // 稀な操作なので「タイプ位置リセット」は許容する。
+    // onTypingDone は新 typewriter で完了通知が二重に飛ぶのを防ぐため null に倒す
+    // （auto-advance の意図しない二重発火対策, #147 R2 S-R2-1）。
     if (this.currentText) {
       const font = `${this.fontSize}px ${this.fontFamily}`
       const maxTextWidth = this.boxW - this.padding * 2
       const lines = wordwrap(this.currentText, maxTextWidth, font)
       const fullText = lines.join('\n')
       this.typewriter = startTypewriter(fullText)
-      // 既に最後まで表示し終わっていた場合は即時完了させて表示崩れを防ぐ
+      this.onTypingDone = null
       if (!isTypingActive(this.typewriter)) {
+        // 既に最後まで表示し終わっていた場合は即時完了させて表示崩れを防ぐ
         this.dialogText.text = fullText
+      } else {
+        // 進行中で再開する場合は旧フォントの bake 済みグリフを一旦消して
+        // 新フォントの先頭から typewriter が始まるように見せる (#147 R2 S-R2-2)
+        this.dialogText.text = ''
       }
     }
   }

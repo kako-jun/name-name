@@ -38,7 +38,13 @@ async function ensureInit(): Promise<void> {
  * Rust の Option<T> は WASM 経由で undefined になるが、
  * frontend の types.ts では null を使っているため変換が必要。
  */
-/** 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。 */
+/**
+ * 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。
+ *
+ * 適用範囲: ランタイム側で「指定なし」と「明示的に空文字を指定」を区別する必要がない
+ * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`)。
+ * 必須テキスト系（`character`, `text`, `path`）には適用しない — それらは空文字も意味のある値。
+ */
 function nullIfEmpty(s: string | null | undefined): string | null {
   if (s == null) return null
   return s.length === 0 ? null : s

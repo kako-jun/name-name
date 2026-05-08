@@ -1443,6 +1443,7 @@ export class NovelRenderer {
         // 「いま表示中の」currentResolvedFontFamily が一致するときだけ適用する。
         // ユーザーが連続 advance してフォント A → B と進んだ場合、A のロード完了で
         // B の表示中に A を上書きしてしまう事故を防ぐ。
+        // 文字列比較なので A → A → A の連続は弾かれない（同 family 適用は no-op で害なし）。
         if (this.currentResolvedFontFamily !== resolvedFontFamily) return
         this.dialogBox.setFontFamily(resolvedFontFamily)
       })
