@@ -228,9 +228,10 @@ export class NovelRenderer {
     this.app.stage.addChild(this.blackoutOverlay)
 
     // 画面効果オーバーレイ（#143: flash/fade — blackout より上、dialog より下）
+    // fill 色は startFlash/startFade で毎回 clear() → fill(color) し直すため初期値は任意
     this.effectOverlay = new Graphics()
     this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.effectOverlay.fill(0xffffff)
+    this.effectOverlay.fill(0x000000)
     this.effectOverlay.alpha = 0
     this.effectOverlay.visible = false
     this.app.stage.addChild(this.effectOverlay)
@@ -775,6 +776,21 @@ export class NovelRenderer {
    * スナップショットから状態を宣言的に復元する
    */
   private applyState(state: NovelGameState): void {
+    // 画面効果をリセット（シーク・バック時に演出が残留しないよう）
+    if (this.shakeTimer) {
+      clearTimeout(this.shakeTimer)
+      this.shakeTimer = null
+    }
+    this.app.stage.position.set(0, 0)
+    if (this.effectTimer) {
+      clearInterval(this.effectTimer)
+      this.effectTimer = null
+    }
+    if (this.effectOverlay) {
+      this.effectOverlay.alpha = 0
+      this.effectOverlay.visible = false
+    }
+
     // フラグ復元
     this.gameState.fromJSON(state.flags)
 
