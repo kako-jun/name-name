@@ -6,7 +6,7 @@ import NPCEditor from '../components/NPCEditor'
 import RPGPlayer from '../components/RPGPlayer'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
 import type { Mode, Event, EventDocument, EventRef } from '../types'
-import { RPGProject, MapData, NPCData } from '../types/rpg'
+import { RPGProject, MapData, UiNpcData } from '../types/rpg'
 import { parseMarkdown, emitMarkdown } from '../wasm/parser'
 import {
   rpgProjectFromDoc,
@@ -686,7 +686,7 @@ function EditorScreen({
                     <NPCEditor
                       npcs={rpgProject.npcs}
                       mapData={rpgProject.map}
-                      onChange={(npcs: NPCData[]) => {
+                      onChange={(npcs: UiNpcData[]) => {
                         void persistRpgProject({ ...rpgProject, npcs })
                       }}
                       isDark={isDark}

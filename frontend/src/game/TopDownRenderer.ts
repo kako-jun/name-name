@@ -7,7 +7,7 @@
  */
 
 import { Application, Container, Graphics, Sprite } from 'pixi.js'
-import { NPCData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
+import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { RpgDialogBox } from './RpgDialogBox'
 import {
   NPC_ANIM_PERIOD_MS,
@@ -23,7 +23,7 @@ import { TouchMenuOverlay, type MenuItemId } from './TouchMenuOverlay'
 type Direction = 'up' | 'down' | 'left' | 'right'
 
 interface NPC {
-  data: NPCData
+  data: UiNpcData
   container: Container
   x: number
   y: number
@@ -246,7 +246,7 @@ export class TopDownRenderer {
     this.mapLayer.addChild(strokeG)
   }
 
-  private drawNPCs(npcData: NPCData[]): void {
+  private drawNPCs(npcData: UiNpcData[]): void {
     this.clearLayer(this.npcLayer)
     this.npcs = []
     for (let i = 0; i < npcData.length; i++) {

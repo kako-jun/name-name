@@ -1,5 +1,5 @@
 import type { EventDocument, Event, SceneView } from '../types'
-import type { RPGProject, MapData, NPCData, PlayerData } from '../types/rpg'
+import type { RPGProject, MapData, UiNpcData, PlayerData } from '../types/rpg'
 
 /**
  * Document から RPGProject を導出する。
@@ -18,7 +18,7 @@ export function rpgProjectFromDoc(
 
   let map: MapData | null = null
   let player: PlayerData | null = null
-  const npcs: NPCData[] = []
+  const npcs: UiNpcData[] = []
   const view: 'topdown' | 'raycast' = targetScene.view === 'Raycast' ? 'raycast' : 'topdown'
 
   for (const ev of targetScene.events) {
