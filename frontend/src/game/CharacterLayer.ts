@@ -15,17 +15,33 @@ const POSITION_X: Record<string, number> = {
 
 /**
  * 日本語表記の position を英語 key に正規化する。
- * パーサーは "中央" 等の日本語表記をそのまま expression/position 文字列に
- * 流すため、CharacterLayer 側で受ける必要がある (#133)。
+ * パーサーは "中央" 等の日本語表記をそのまま position 文字列に流すため、
+ * CharacterLayer 側で受ける必要がある (#133)。
+ *
+ * サポートする表記:
+ *   - 英語: left / center / right
+ *   - 英語ゆれ (case / 綴り): Left / Center / Centre / Right
+ *   - 日本語 (左): 左 / 左寄り / 左端
+ *   - 日本語 (中央): 中央 / 真ん中 / まんなか / 真中 / 中
+ *   - 日本語 (右): 右 / 右寄り / 右端
+ *
+ * 未知の値が来たら CharacterLayer 側で center にフォールバックする。
  */
-const POSITION_ALIASES: Record<string, string> = {
-  // 日本語
+const POSITION_ALIASES_JA: Record<string, string> = {
   左: 'left',
+  左寄り: 'left',
+  左端: 'left',
   中央: 'center',
   真ん中: 'center',
+  まんなか: 'center',
+  真中: 'center',
   中: 'center',
   右: 'right',
-  // よくある英語ゆれ
+  右寄り: 'right',
+  右端: 'right',
+}
+
+const POSITION_ALIASES_EN: Record<string, string> = {
   Left: 'left',
   Center: 'center',
   Centre: 'center',
@@ -33,7 +49,9 @@ const POSITION_ALIASES: Record<string, string> = {
 }
 
 export function normalizePosition(position: string): string {
-  return POSITION_ALIASES[position] ?? position
+  // 空文字 / null 相当は早期に center に倒す (review #152 nit)
+  if (!position) return 'center'
+  return POSITION_ALIASES_JA[position] ?? POSITION_ALIASES_EN[position] ?? position
 }
 
 /** 足元 Y 座標（ダイアログボックス上端あたり） */

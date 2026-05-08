@@ -28,6 +28,18 @@ describe('normalizePosition', () => {
 
   it('未知の値はそのまま返す (CharacterLayer 側で center にフォールバック)', () => {
     expect(normalizePosition('foo')).toBe('foo')
-    expect(normalizePosition('')).toBe('')
+  })
+
+  it('空文字は center に倒す', () => {
+    expect(normalizePosition('')).toBe('center')
+  })
+
+  it('日本語の揺れ (左寄り / 左端 / 真中 / まんなか / 右寄り / 右端) を吸収する', () => {
+    expect(normalizePosition('左寄り')).toBe('left')
+    expect(normalizePosition('左端')).toBe('left')
+    expect(normalizePosition('真中')).toBe('center')
+    expect(normalizePosition('まんなか')).toBe('center')
+    expect(normalizePosition('右寄り')).toBe('right')
+    expect(normalizePosition('右端')).toBe('right')
   })
 })
