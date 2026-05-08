@@ -3,12 +3,15 @@
  *
  * localStorage を使い、複数スロット（3つ）のセーブデータを管理する。
  * JSON エクスポート/インポートによるブラウザ間の持ち運びにも対応。
+ * クイックセーブ（#142）は専用キーで通常スロットとは独立して保存する。
  */
 
 import { FlagValue } from '../types'
 
 const SLOT_COUNT = 3
 const STORAGE_PREFIX = 'name-name-save-'
+/** クイックセーブ専用ストレージキー (#142) */
+const QUICK_SAVE_KEY = 'name-name-save-quick'
 
 export interface SaveSlotData {
   slot: number
@@ -71,7 +74,9 @@ export class SaveManager {
   }
 
   /**
-   * 全スロットを JSON 文字列でエクスポートする
+   * 全スロットを JSON 文字列でエクスポートする。
+   * クイックセーブは一時的な作業メモとして扱うため、エクスポート対象に含めない。
+   * ブラウザ間の持ち運びが目的のため、意図的に除外している。
    */
   exportJSON(): string {
     const data: (SaveSlotData | null)[] = this.listSlots()
@@ -107,6 +112,56 @@ export class SaveManager {
       return true
     } catch {
       return false
+    }
+  }
+
+  // --- クイックセーブ (#142) ---
+
+  /**
+   * クイックセーブスロットに保存する。
+   * 通常スロット（0〜2）とは独立したキーで保存するため、既存セーブと干渉しない。
+   */
+  quickSave(data: SaveSlotData): void {
+    try {
+      localStorage.setItem(QUICK_SAVE_KEY, JSON.stringify(data))
+    } catch {
+      // quota exceeded 等は無視
+    }
+  }
+
+  /**
+   * クイックセーブスロットからデータを読み込む。
+   * データがない場合は null を返す。
+   */
+  quickLoad(): SaveSlotData | null {
+    try {
+      const json = localStorage.getItem(QUICK_SAVE_KEY)
+      if (!json) return null
+      return JSON.parse(json) as SaveSlotData
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * クイックセーブデータが存在するか返す。
+   */
+  hasQuickSave(): boolean {
+    try {
+      return localStorage.getItem(QUICK_SAVE_KEY) !== null
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * クイックセーブデータを消去する。
+   */
+  deleteQuickSave(): void {
+    try {
+      localStorage.removeItem(QUICK_SAVE_KEY)
+    } catch {
+      // ignore
     }
   }
 }

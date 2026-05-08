@@ -960,6 +960,58 @@ export class NovelRenderer {
     this.bgContainer.removeChildren()
   }
 
+  // --- クイックセーブ / クイックロード (#142) ---
+
+  /**
+   * 現在のゲーム状態をクイックセーブスロットに保存する。
+   * 選択肢・Wait 待機中は保存しない（不整合状態を避けるため）。
+   * 成功したら true、保存できない状態なら false を返す。
+   */
+  quickSave(): boolean {
+    if (this.waitingForChoice || this.waitingForWait) return false
+
+    const sceneName = this.currentSceneId
+      ? (this.allScenes.find((s) => s.id === this.currentSceneId)?.title ?? null)
+      : null
+
+    const snapshot = this.getSnapshot()
+    const data: SaveSlotData = {
+      slot: -1, // クイックセーブはスロット番号不使用
+      sceneId: snapshot.sceneId,
+      eventIndex: snapshot.eventIndex,
+      textIndex: snapshot.textIndex,
+      flags: snapshot.flags,
+      backgroundPath: snapshot.backgroundPath,
+      isBlackout: snapshot.isBlackout,
+      characters: snapshot.characters,
+      currentBgmPath: snapshot.currentBgmPath,
+      savedAt: new Date().toISOString(),
+      sceneName,
+    }
+    this.saveManager.quickSave(data)
+    return true
+  }
+
+  /**
+   * クイックセーブスロットからゲーム状態を復元する。
+   * 選択肢・Wait 待機中はロードしない（不整合状態を避けるため）。
+   * データがない・復元できない場合は false を返す。
+   */
+  quickLoad(): boolean {
+    if (this.waitingForChoice || this.waitingForWait) return false
+    const data = this.saveManager.quickLoad()
+    if (!data) return false
+    this.loadFromSaveData(data)
+    return true
+  }
+
+  /**
+   * クイックセーブデータが存在するか返す。
+   */
+  hasQuickSave(): boolean {
+    return this.saveManager.hasQuickSave()
+  }
+
   /**
    * セーブメニューを表示する
    */
