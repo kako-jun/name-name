@@ -162,7 +162,7 @@ export class NovelRenderer {
       this.saveManager
     )
     this.backlogOverlay = new BacklogOverlay(this.screenWidth, this.screenHeight)
-    this.seekBar = new SeekBar()
+    this.seekBar = new SeekBar(this.screenWidth, this.screenHeight)
   }
 
   /**

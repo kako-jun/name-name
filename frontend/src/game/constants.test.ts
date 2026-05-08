@@ -35,6 +35,14 @@ describe('GAME_WIDTH / GAME_HEIGHT (後方互換エイリアス)', () => {
   it('GAME_HEIGHT はデフォルト比率の height と一致する', () => {
     expect(GAME_HEIGHT).toBe(ASPECT_RATIOS[DEFAULT_ASPECT_RATIO].height)
   })
+
+  it('GAME_WIDTH の具体的な値は 800', () => {
+    expect(GAME_WIDTH).toBe(800)
+  })
+
+  it('GAME_HEIGHT の具体的な値は 450 (16:9 デフォルト)', () => {
+    expect(GAME_HEIGHT).toBe(450)
+  })
 })
 
 describe('parseAspectRatio', () => {

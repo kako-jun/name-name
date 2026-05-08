@@ -11,7 +11,7 @@
 /** サポートする画面比率の識別子 */
 export type AspectRatio = '16:9' | '4:3' | '9:16'
 
-/** 各比率の論理解像度（px）。幅基準は 800px で統一 */
+/** 各比率の論理解像度（px）。16:9 / 4:3 は幅 800px 基準、9:16 は高さ 800px 基準 */
 export const ASPECT_RATIOS: Record<AspectRatio, { width: number; height: number }> = {
   '16:9': { width: 800, height: 450 },
   '4:3': { width: 800, height: 600 },

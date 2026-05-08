@@ -89,6 +89,7 @@ function normalizeEvents(events: Event[]): Event[] {
 function normalizeDocument(doc: EventDocument): EventDocument {
   return {
     engine: doc.engine,
+    aspect_ratio: doc.aspect_ratio,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

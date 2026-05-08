@@ -12,7 +12,7 @@ pub fn emit(doc: &Document) -> String {
         out.push_str(&format!("engine: {}\n", doc.engine));
         // Emit aspect_ratio only when non-default
         if doc.aspect_ratio != "16:9" {
-            out.push_str(&format!("aspect_ratio: {}\n", doc.aspect_ratio));
+            out.push_str(&format!("aspect_ratio: \"{}\"\n", doc.aspect_ratio));
         }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));

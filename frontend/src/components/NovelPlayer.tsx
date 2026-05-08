@@ -28,11 +28,13 @@ function NovelPlayer({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
 
-  // 有効な AspectRatio に正規化 (#136)
+  // 有効な AspectRatio に正規化
   const aspectRatio = parseAspectRatio(aspectRatioProp)
   const { width: gameWidth, height: gameHeight } = ASPECT_RATIOS[aspectRatio]
 
   // ライフサイクル管理: init + destroy
+  // aspectRatio が変わる場合はコンポーネントを再マウントすること
+  // （依存配列は空：レンダラーはマウント時に1度だけ生成する設計）
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -113,7 +115,7 @@ function NovelPlayer({
         ref={containerRef}
         className="rounded-xl shadow-2xl overflow-hidden"
         style={{
-          // canvas が aspect-ratio に合わせて正しいサイズで表示されるよう制約 (#136)
+          // canvas が aspect-ratio に合わせて正しいサイズで表示されるよう制約
           aspectRatio: `${gameWidth} / ${gameHeight}`,
           maxWidth: '100%',
           maxHeight: '100%',
