@@ -371,6 +371,16 @@ export class RaycastRenderer {
     npc.sprite.tint = 0xffffff
   }
 
+  /**
+   * 設定（テキスト速度・音量）を反映。Issue #138。
+   * RaycastRenderer も現状 BGM/SE を持たない（将来統合用）。
+   */
+  applySettings(settings: { msPerChar: number; bgmVolume: number; seVolume: number }): void {
+    this.dialogBox?.setMsPerChar(settings.msPerChar)
+    void settings.bgmVolume
+    void settings.seVolume
+  }
+
   destroy(): void {
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)

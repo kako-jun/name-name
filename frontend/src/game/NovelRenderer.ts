@@ -312,6 +312,16 @@ export class NovelRenderer {
   }
 
   /**
+   * 設定（テキスト速度・音量）をリアルタイムに反映する。
+   * Issue #138。autoWaitMs / voiceVolume はここでは使わない（将来用）。
+   */
+  applySettings(settings: { msPerChar: number; bgmVolume: number; seVolume: number }): void {
+    this.dialogBox.setMsPerChar(settings.msPerChar)
+    this.audioManager.setBgmVolume(settings.bgmVolume)
+    this.audioManager.setSeVolume(settings.seVolume)
+  }
+
+  /**
    * リソース解放
    */
   destroy(): void {

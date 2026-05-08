@@ -1,13 +1,16 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { TopDownRenderer } from '../game/TopDownRenderer'
 import { RaycastRenderer } from '../game/RaycastRenderer'
 import { sampleRpgData } from '../game/sampleRpgData'
 import { RPGProject } from '../types/rpg'
+import { type Settings, loadSettings, saveSettings } from '../game/settings'
+import SettingsOverlay from './SettingsOverlay'
 
 type RendererLike = {
   init(container: HTMLElement): Promise<void>
   load(gameData: RPGProject): void
   destroy(): void
+  applySettings?(settings: { msPerChar: number; bgmVolume: number; seVolume: number }): void
 }
 
 interface RPGPlayerProps {
@@ -17,6 +20,11 @@ interface RPGPlayerProps {
 
 function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const rendererRef = useRef<RendererLike | null>(null)
+
+  // 設定 (Issue #138)
+  const [settings, setSettings] = useState<Settings>(() => loadSettings())
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     const container = containerRef.current
@@ -24,6 +32,7 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
 
     const renderer: RendererLike =
       view === 'raycast' ? new RaycastRenderer() : new TopDownRenderer()
+    rendererRef.current = renderer
     let cancelled = false
 
     renderer
@@ -33,6 +42,7 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
           renderer.destroy()
           return
         }
+        renderer.applySettings?.(settings)
         renderer.load(gameData ?? sampleRpgData)
       })
       .catch((err) => {
@@ -44,13 +54,47 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
 
     return () => {
       cancelled = true
+      rendererRef.current = null
       renderer.destroy()
     }
   }, [gameData, view])
 
+  // 設定変更を renderer に反映 + 永続化 (#138)
+  useEffect(() => {
+    rendererRef.current?.applySettings?.(settings)
+    saveSettings(settings)
+  }, [settings])
+
+  // Ctrl/Cmd + , で設定パネル開閉 (#138)
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault()
+        setSettingsOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [])
+
   return (
-    <div className="w-full h-full flex items-center justify-center">
+    <div className="relative w-full h-full flex items-center justify-center">
       <div ref={containerRef} className="w-full h-full" />
+      <button
+        type="button"
+        onClick={() => setSettingsOpen(true)}
+        aria-label="設定を開く"
+        title="設定 (Ctrl/Cmd + ,)"
+        className="absolute top-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white text-lg z-10"
+      >
+        ⚙
+      </button>
+      <SettingsOverlay
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        onChange={setSettings}
+      />
     </div>
   )
 }
