@@ -859,10 +859,12 @@ export class NovelRenderer {
     // 暗転復元
     this.blackoutOverlay.visible = state.isBlackout
 
-    // 立ち絵復元
+    // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）
     this.characterLayer.clear()
     for (const ch of state.characters) {
-      this.characterLayer.show(ch.name, ch.expression, ch.position, this.assetBaseUrl)
+      this.characterLayer.show(ch.name, ch.expression, ch.position, this.assetBaseUrl, {
+        instant: true,
+      })
     }
 
     // BGM復元
@@ -1096,7 +1098,8 @@ export class NovelRenderer {
       return
     }
     if ('Exit' in event) {
-      this.characterLayer.remove(event.Exit.character)
+      // スキップモード中はフェードを抑制して即時退場（既読を素早く流す UX に揃える）#177
+      this.characterLayer.remove(event.Exit.character, { instant: this.skipMode })
       return
     }
     if ('Animate' in event) {
@@ -1169,7 +1172,9 @@ export class NovelRenderer {
       textEvt.character,
       textEvt.expression,
       textEvt.position,
-      this.assetBaseUrl
+      this.assetBaseUrl,
+      // スキップモード中はフェードを抑制（既読シーンの高速進行で違和感を出さない）#177
+      { instant: this.skipMode }
     )
   }
 
