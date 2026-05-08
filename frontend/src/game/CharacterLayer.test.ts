@@ -1,5 +1,77 @@
 import { describe, it, expect } from 'vitest'
-import { normalizePosition } from './CharacterLayer'
+import { CharacterLayer, normalizePosition } from './CharacterLayer'
+
+interface FadeAnimationLike {
+  fromAlpha: number
+  toAlpha: number
+  destroyOnComplete: boolean
+}
+
+interface CharacterStateLike {
+  sprite: { alpha: number }
+  fadeAnimation: FadeAnimationLike | null
+}
+
+interface CharacterLayerInternals {
+  characters: Map<string, CharacterStateLike>
+}
+
+function asInternals(layer: CharacterLayer): CharacterLayerInternals {
+  return layer as unknown as CharacterLayerInternals
+}
+
+describe('CharacterLayer fade (Issue #177)', () => {
+  it('show() の新規表示は alpha 0 から fade-in を開始する', () => {
+    const layer = new CharacterLayer()
+    layer.show('hero', 'normal', '中央', '/assets')
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.sprite.alpha).toBe(0)
+    expect(state!.fadeAnimation).not.toBeNull()
+    expect(state!.fadeAnimation!.fromAlpha).toBe(0)
+    expect(state!.fadeAnimation!.toAlpha).toBe(1)
+    expect(state!.fadeAnimation!.destroyOnComplete).toBe(false)
+  })
+
+  it('show() に instant: true を渡すと alpha 1 で即時表示し fadeAnimation は無し', () => {
+    const layer = new CharacterLayer()
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.sprite.alpha).toBe(1)
+    expect(state!.fadeAnimation).toBeNull()
+  })
+
+  it('remove() のデフォルトは fade-out（destroyOnComplete=true）に切り替えるだけ', () => {
+    const layer = new CharacterLayer()
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.remove('hero')
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.fadeAnimation).not.toBeNull()
+    expect(state!.fadeAnimation!.toAlpha).toBe(0)
+    expect(state!.fadeAnimation!.destroyOnComplete).toBe(true)
+  })
+
+  it('remove() に instant: true を渡すと characters から即座に消える', () => {
+    const layer = new CharacterLayer()
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.remove('hero', { instant: true })
+    expect(asInternals(layer).characters.has('hero')).toBe(false)
+  })
+
+  it('退場フェード中の同名キャラ再 show は fade-in に切り替える', () => {
+    const layer = new CharacterLayer()
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.remove('hero')
+    // 退場フェード中
+    layer.show('hero', 'normal', '中央', '/assets')
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.fadeAnimation).not.toBeNull()
+    expect(state!.fadeAnimation!.toAlpha).toBe(1)
+    expect(state!.fadeAnimation!.destroyOnComplete).toBe(false)
+  })
+})
 
 describe('normalizePosition', () => {
   it('日本語の position を英語 key に正規化する', () => {

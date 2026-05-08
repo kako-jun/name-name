@@ -78,8 +78,11 @@ interface FadeAnimation {
   destroyOnComplete: boolean
 }
 
-/** 立ち絵のフェードイン/アウトのデフォルト時間 (ms) */
-export const DEFAULT_FADE_MS = 300
+/**
+ * 立ち絵のフェードイン/アウトのデフォルト時間 (ms)。
+ * 仕様書 docs/spec/markdown-v0.1.md と数値を揃えて変更する。
+ */
+const DEFAULT_FADE_MS = 300
 
 export interface AnimateParams {
   /** "+500" / "-200" / "400" / undefined */
@@ -120,8 +123,12 @@ export class CharacterLayer extends Container {
    * キャラクター立ち絵を表示する。既に表示中なら position / expression を更新する。
    *
    * 新規表示時は alpha 0 から DEFAULT_FADE_MS かけてフェードインする（#177）。
-   * セーブからの復元など瞬時表示が望ましい場合は `options.instant: true` を渡す。
+   * セーブからの復元やスキップモードなど瞬時表示が望ましい場合は `options.instant: true` を渡す。
    * 退場アニメ中の同名キャラを再 show すると、フェードアウトを取り消してフェードインに切り替える。
+   *
+   * フェードイン進行中（destroyOnComplete=false）の同名キャラへの再 show は、position / expression
+   * が同じなら no-op、異なれば即時切替（フェード進行はそのまま継続）。フェード自体を再起動する
+   * ユースケースは現状想定していないため、明示的な「フェードリスタート」API は持たない。
    */
   show(
     character: string,
@@ -280,7 +287,8 @@ export class CharacterLayer extends Container {
     ticker.add(() => {
       this.elapsedMs += ticker.deltaMS
       let anyActive = false
-      // ticker 中に Map から消す可能性があるので key を先にコピー
+      // 退場フェード完了で characters Map から削除する可能性があるため、entries を先にコピーする。
+      // （Map 自体の iteration は delete に対して安全だが、コピー方が読みやすいので採用）
       const entries = Array.from(this.characters.entries())
       for (const [name, state] of entries) {
         const a = state.animation

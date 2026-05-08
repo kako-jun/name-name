@@ -238,6 +238,10 @@ function NovelPlayer({
           // 親 (bg-black, container-type: size) を基準に letterbox/pillarbox する。
           // ゲーム比率を維持したまま親に内接するサイズを container query 単位で計算する。
           // 縦長スマホでは上下に黒帯、横長デスクトップでは左右に黒帯が出る。
+          //
+          // width / height の min/calc だけで内接矩形は決まる（aspect-ratio は冗長）が、
+          // cq 単位が解釈されない極端なフォールバック環境（古いブラウザ、CSS 計算前の
+          // 一瞬等）でも比率を保てるようセーフティネットとして aspect-ratio を併記。
           aspectRatio: `${gameWidth} / ${gameHeight}`,
           width: `min(100cqw, calc(100cqh * ${gameWidth} / ${gameHeight}))`,
           height: `min(100cqh, calc(100cqw * ${gameHeight} / ${gameWidth}))`,
