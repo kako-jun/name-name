@@ -345,6 +345,7 @@ export class NovelRenderer {
 
   /**
    * 設定（テキスト速度・音量）をリアルタイムに反映する。
+   * voiceVolume は #144 voice 実装後に対応予定。
    */
   applySettings(settings: {
     msPerChar: number
@@ -372,7 +373,8 @@ export class NovelRenderer {
       clearTimeout(this.autoTimer)
       this.autoTimer = null
     }
-    // React state との同期
+    // React state との同期。コールバック内で setAutoMode が再度呼ばれても
+    // 同値 no-op（上の早期 return）で無限ループを防いでいる。
     this.onAutoModeChange?.(on)
   }
 
@@ -598,6 +600,10 @@ export class NovelRenderer {
   /**
    * typewriter 表示中なら全文表示にスキップ、完了済みなら次イベントへ進む (#137)。
    * advance() / クリック / Enter / Space / ArrowRight 共通の入力ハンドラから呼ぶ。
+   *
+   * 呼び出し元は必ず先に setAutoMode(false) してから本メソッドを呼ぶこと。
+   * skipTypewriter() 内は onTypingDone を破棄するが、この時点では autoMode がすでに
+   * false になっているため、次の render() でコールバックがセットされず自動進行しない。
    */
   private advanceOrSkipTypewriter(): void {
     if (this.dialogBox.isTyping()) {
