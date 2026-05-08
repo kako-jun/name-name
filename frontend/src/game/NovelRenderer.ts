@@ -420,6 +420,10 @@ export class NovelRenderer {
   setSkipMode(on: boolean): void {
     if (this.skipMode === on) return
     this.skipMode = on
+    if (on) {
+      // スキップモードとオートモードは排他: スキップ ON 時にオートを解除 (#140)
+      this.setAutoMode(false)
+    }
     if (!on && this.skipTimer) {
       clearTimeout(this.skipTimer)
       this.skipTimer = null
