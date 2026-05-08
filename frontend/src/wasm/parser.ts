@@ -48,6 +48,19 @@ function normalizeEvents(events: Event[]): Event[] {
           expression: event.Dialog.expression ?? null,
           position: event.Dialog.position ?? null,
           text: event.Dialog.text,
+          // voice_path / font_family は WASM 経由で undefined になるが、
+          // frontend の規約に合わせ null に正規化する (#144 / #147)
+          voice_path: event.Dialog.voice_path ?? null,
+          font_family: event.Dialog.font_family ?? null,
+        },
+      }
+    }
+    if ('Narration' in event) {
+      return {
+        Narration: {
+          text: event.Narration.text,
+          voice_path: event.Narration.voice_path ?? null,
+          font_family: event.Narration.font_family ?? null,
         },
       }
     }
@@ -100,6 +113,7 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     engine: doc.engine,
     aspect_ratio: doc.aspect_ratio,
     choice_style: doc.choice_style ?? null,
+    font_family: doc.font_family ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,
