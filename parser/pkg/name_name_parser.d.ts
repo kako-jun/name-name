@@ -15,6 +15,10 @@ export interface ChoiceOption {
 
 export interface Document {
     engine: string;
+    /**
+     * 画面比率。\"16:9\" / \"4:3\" / \"9:16\"。未指定時は \"16:9\"。
+     */
+    aspect_ratio?: string;
     chapters: Chapter[];
 }
 
@@ -101,7 +105,7 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 
 export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[] } } | { Narration: { text: string[] } } | { Background: { path: string } } | { Bgm: { path: string | undefined; action: BgmAction } } | { Se: { path: string } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } };
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[] } } | { Narration: { text: string[] } } | { Background: { path: string } } | { Bgm: { path: string | undefined; action: BgmAction } } | { Se: { path: string } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } };
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 

@@ -160,6 +160,16 @@ export class NovelRenderer {
   /** skipMode 変更時の React 側同期コールバック */
   private onSkipModeChange: ((on: boolean) => void) | null = null
 
+  // ---- 画面効果 (#143) ----
+  /** flash/fade 用全画面オーバーレイ Graphics */
+  private effectOverlay: Graphics | null = null
+  /** shake アニメーション用タイマー */
+  private shakeTimer: ReturnType<typeof setTimeout> | null = null
+  /** shake 開始時刻（ms） */
+  private shakeStartMs: number = 0
+  /** flash/fade アニメーション用タイマー */
+  private effectTimer: ReturnType<typeof setInterval> | null = null
+
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
     this.bgGraphics = new Graphics()
@@ -216,6 +226,14 @@ export class NovelRenderer {
     this.blackoutOverlay.fill(0x000000)
     this.blackoutOverlay.visible = false
     this.app.stage.addChild(this.blackoutOverlay)
+
+    // 画面効果オーバーレイ（#143: flash/fade — blackout より上、dialog より下）
+    this.effectOverlay = new Graphics()
+    this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.effectOverlay.fill(0xffffff)
+    this.effectOverlay.alpha = 0
+    this.effectOverlay.visible = false
+    this.app.stage.addChild(this.effectOverlay)
 
     // ダイアログボックス
     this.app.stage.addChild(this.dialogBox)
@@ -315,6 +333,18 @@ export class NovelRenderer {
     if (this.skipTimer) {
       clearTimeout(this.skipTimer)
       this.skipTimer = null
+    }
+    if (this.shakeTimer) {
+      clearTimeout(this.shakeTimer)
+      this.shakeTimer = null
+    }
+    if (this.effectTimer) {
+      clearInterval(this.effectTimer)
+      this.effectTimer = null
+    }
+    if (this.effectOverlay) {
+      this.effectOverlay.alpha = 0
+      this.effectOverlay.visible = false
     }
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
@@ -465,6 +495,14 @@ export class NovelRenderer {
       clearTimeout(this.skipTimer)
       this.skipTimer = null
     }
+    if (this.shakeTimer) {
+      clearTimeout(this.shakeTimer)
+      this.shakeTimer = null
+    }
+    if (this.effectTimer) {
+      clearInterval(this.effectTimer)
+      this.effectTimer = null
+    }
     this.audioManager.destroy()
     this.characterLayer.clear()
     this.choiceOverlay.hide()
@@ -479,6 +517,137 @@ export class NovelRenderer {
     this.textureCache.clear()
     this.app.destroy(true, { children: true })
     this.initialized = false
+  }
+
+  // ---- 画面効果メソッド (#143) ----
+
+  /**
+   * 16進カラーコード（"#rrggbb"）を PixiJS の 0xRRGGBB 数値に変換する。
+   * パース失敗時は 0xffffff を返す。
+   */
+  private parseHexColor(hex: string): number {
+    const clean = hex.replace('#', '')
+    const n = parseInt(clean, 16)
+    return isNaN(n) ? 0xffffff : n
+  }
+
+  /**
+   * 画面シェイク演出 (#143)。
+   * sin 波ベースの決定論的な揺れ。stage の position を直接動かして実現する。
+   */
+  private startShake(intensityPx: number, durationMs: number): void {
+    if (this.shakeTimer) {
+      clearTimeout(this.shakeTimer)
+      this.shakeTimer = null
+    }
+    this.shakeStartMs = performance.now()
+
+    const FPS = 60
+    const intervalMs = 1000 / FPS
+
+    const tick = (): void => {
+      const elapsed = performance.now() - this.shakeStartMs
+      const progress = Math.min(elapsed / durationMs, 1)
+      // 減衰 sin 波: 残り時間に比例して振幅を絞る
+      const decay = 1 - progress
+      const offsetX = Math.sin(elapsed * 0.05) * intensityPx * decay
+      const offsetY = Math.cos(elapsed * 0.037) * intensityPx * decay * 0.6
+      this.app.stage.position.set(offsetX, offsetY)
+
+      if (progress < 1) {
+        this.shakeTimer = setTimeout(tick, intervalMs)
+      } else {
+        this.app.stage.position.set(0, 0)
+        this.shakeTimer = null
+      }
+    }
+    tick()
+  }
+
+  /**
+   * フラッシュ演出 (#143)。
+   * effectOverlay を指定色で alpha ピーク → 0 にフェードアウトする。
+   */
+  private startFlash(colorHex: string, peakAlpha: number, durationMs: number): void {
+    if (!this.effectOverlay) return
+    if (this.effectTimer) {
+      clearInterval(this.effectTimer)
+      this.effectTimer = null
+    }
+
+    const color = this.parseHexColor(colorHex)
+    this.effectOverlay.clear()
+    this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.effectOverlay.fill(color)
+    this.effectOverlay.alpha = peakAlpha
+    this.effectOverlay.visible = true
+
+    const startMs = performance.now()
+    const FPS = 60
+    const intervalMs = 1000 / FPS
+
+    this.effectTimer = setInterval(() => {
+      const elapsed = performance.now() - startMs
+      const progress = Math.min(elapsed / durationMs, 1)
+      if (!this.effectOverlay) return
+      this.effectOverlay.alpha = peakAlpha * (1 - progress)
+      if (progress >= 1) {
+        this.effectOverlay.visible = false
+        this.effectOverlay.alpha = 0
+        if (this.effectTimer) {
+          clearInterval(this.effectTimer)
+          this.effectTimer = null
+        }
+      }
+    }, intervalMs)
+  }
+
+  /**
+   * フェード演出 (#143)。
+   * effectOverlay を指定色・指定アルファ範囲で補間する。
+   * target: "bg"（背景のみ）は将来拡張。現状は "all" と同じ全画面オーバーレイ。
+   */
+  private startFade(
+    _target: string,
+    colorHex: string,
+    fromAlpha: number,
+    toAlpha: number,
+    durationMs: number
+  ): void {
+    if (!this.effectOverlay) return
+    if (this.effectTimer) {
+      clearInterval(this.effectTimer)
+      this.effectTimer = null
+    }
+
+    const color = this.parseHexColor(colorHex)
+    this.effectOverlay.clear()
+    this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.effectOverlay.fill(color)
+    this.effectOverlay.alpha = fromAlpha
+    this.effectOverlay.visible = true
+
+    const startMs = performance.now()
+    const FPS = 60
+    const intervalMs = 1000 / FPS
+
+    this.effectTimer = setInterval(() => {
+      const elapsed = performance.now() - startMs
+      const progress = Math.min(elapsed / durationMs, 1)
+      if (!this.effectOverlay) return
+      this.effectOverlay.alpha = fromAlpha + (toAlpha - fromAlpha) * progress
+      if (progress >= 1) {
+        this.effectOverlay.alpha = toAlpha
+        // toAlpha が 0 なら不可視に戻す
+        if (toAlpha <= 0) {
+          this.effectOverlay.visible = false
+        }
+        if (this.effectTimer) {
+          clearInterval(this.effectTimer)
+          this.effectTimer = null
+        }
+      }
+    }, intervalMs)
   }
 
   /**
@@ -867,6 +1036,27 @@ export class NovelRenderer {
     if ('DialogBorderless' in event) {
       // 文字ウィンドウ枠の ON/OFF (#135)
       this.dialogBox.setBorderless(event.DialogBorderless.borderless)
+      return
+    }
+    if ('Shake' in event) {
+      // 画面シェイク (#143) — fire-and-forget
+      this.startShake(event.Shake.intensity_px, event.Shake.duration_ms)
+      return
+    }
+    if ('Flash' in event) {
+      // フラッシュ (#143) — fire-and-forget
+      this.startFlash(event.Flash.color, event.Flash.alpha, event.Flash.duration_ms)
+      return
+    }
+    if ('Fade' in event) {
+      // フェード (#143) — fire-and-forget
+      this.startFade(
+        event.Fade.target,
+        event.Fade.color,
+        event.Fade.from_alpha,
+        event.Fade.to_alpha,
+        event.Fade.duration_ms
+      )
       return
     }
     if ('Wait' in event) {

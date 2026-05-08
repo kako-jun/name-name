@@ -95,6 +95,18 @@ export type Event =
         easing?: Easing
       }
     }
+  | { DialogBorderless: { borderless: boolean } }
+  | { Shake: { intensity_px: number; duration_ms: number } }
+  | { Flash: { color: string; alpha: number; duration_ms: number } }
+  | {
+      Fade: {
+        target: string
+        color: string
+        from_alpha: number
+        to_alpha: number
+        duration_ms: number
+      }
+    }
 
 export type Easing = 'Linear' | 'EaseIn' | 'EaseOut' | 'EaseInOut'
 

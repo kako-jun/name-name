@@ -10,7 +10,7 @@ function makeSaveData(): SaveSlotData {
     sceneId: 'scene-1',
     eventIndex: 3,
     textIndex: 1,
-    flags: { visited: true },
+    flags: { visited: { Bool: true } },
     backgroundPath: '/bg/room.png',
     isBlackout: false,
     characters: [{ name: 'Alice', expression: 'happy', position: 'center' }],
@@ -45,7 +45,7 @@ describe('SaveManager - クイックセーブ', () => {
     expect(loaded?.sceneId).toBe('scene-1')
     expect(loaded?.eventIndex).toBe(3)
     expect(loaded?.textIndex).toBe(1)
-    expect(loaded?.flags).toEqual({ visited: true })
+    expect(loaded?.flags).toEqual({ visited: { Bool: true } })
   })
 
   it('quickLoad: データなしで null を返す', () => {
