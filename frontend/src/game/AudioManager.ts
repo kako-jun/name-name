@@ -27,6 +27,9 @@ export class AudioManager {
   private bgmVolume = 1.0
   private seVolume = 1.0
 
+  // per-line voice (#144)
+  private voiceSource: AudioBufferSourceNode | null = null
+
   /**
    * AudioContext を生成/再開する。
    * ユーザーインタラクション（クリック等）のタイミングで呼ぶこと。
@@ -168,10 +171,64 @@ export class AudioManager {
   }
 
   /**
+   * ボイス（per-line voice）をワンショット再生する (#144)。
+   * 再生終了時に onEnded を呼ぶ。オートモードの voice 終了待ちに使用。
+   * 複数呼び出し時は前のボイスを停止して新しいものを再生する。
+   */
+  async playVoice(url: string, onEnded?: () => void): Promise<void> {
+    // 前のボイスを停止
+    this.stopVoice()
+
+    if (!this.ctx) return
+    const buffer = await this.loadAudio(url)
+    if (!buffer || !this.ctx) return
+
+    const source = this.ctx.createBufferSource()
+    source.buffer = buffer
+    this.ensureMasterGains()
+    // TODO (#144 follow-up): voice 専用 masterGain を追加して SE と独立して音量制御できるようにする。
+    // 現状は seMasterGain に繋いでいるため、SE 音量を下げるとボイスも小さくなる。
+    if (this.seMasterGain) {
+      source.connect(this.seMasterGain)
+    } else {
+      source.connect(this.ctx.destination)
+    }
+    source.onended = () => {
+      source.disconnect()
+      if (this.voiceSource === source) {
+        this.voiceSource = null
+      }
+      onEnded?.()
+    }
+    this.voiceSource = source
+    source.start(0)
+  }
+
+  /**
+   * 再生中のボイスを停止する。onEnded は呼ばれない。
+   */
+  stopVoice(): void {
+    if (this.voiceSource) {
+      const s = this.voiceSource
+      // 先に null にして onended ハンドラ内のガードを有効化し、
+      // さらに onended を解除して stop() 後の非同期発火を完全に防ぐ
+      this.voiceSource = null
+      s.onended = null
+      try {
+        s.stop()
+      } catch {
+        // already stopped
+      }
+      s.disconnect()
+    }
+  }
+
+  /**
    * 全停止・リソース解放
    */
   destroy(): void {
     this.stopBgmImmediate()
+    this.stopVoice()
     this.audioCache.clear()
     if (this.bgmMasterGain) {
       this.bgmMasterGain.disconnect()
