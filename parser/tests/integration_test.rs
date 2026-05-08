@@ -79,7 +79,8 @@ fn test_parse_sample() {
         events[1],
         Event::Bgm {
             path: Some("amehure.ogg".to_string()),
-            action: BgmAction::Play
+            action: BgmAction::Play,
+            fade_ms: None,
         }
     );
     // [暗転解除]
@@ -114,7 +115,8 @@ fn test_parse_sample() {
     assert_eq!(
         events[4],
         Event::Se {
-            path: "se_maoudamashii_onepoint26.ogg".to_string()
+            path: "se_maoudamashii_onepoint26.ogg".to_string(),
+            fade_ms: None,
         }
     );
 
@@ -236,7 +238,8 @@ fn test_parse_sample() {
         events[15],
         Event::Bgm {
             path: Some("snowsnow.ogg".to_string()),
-            action: BgmAction::Play
+            action: BgmAction::Play,
+            fade_ms: None,
         }
     );
     // [暗転]
@@ -2159,6 +2162,150 @@ fn test_voice_dropped_when_non_text_directive_intervenes() {
     } else {
         panic!("Expected Dialog, got {:?}", events[1]);
     }
+}
+
+#[test]
+fn test_bgm_play_with_fade_in() {
+    // [BGM: path, フェード=500] で fade-in 時間が parse される (#145)
+    let input = "## s: テスト\n\n[BGM: bgm/main.ogg, フェード=500]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0],
+        Event::Bgm {
+            path: Some("bgm/main.ogg".to_string()),
+            action: BgmAction::Play,
+            fade_ms: Some(500),
+        }
+    );
+}
+
+#[test]
+fn test_bgm_play_with_fade_alias_ascii() {
+    // 英語 alias `fade=N` も受理する (#145)
+    let input = "## s: テスト\n\n[BGM: bgm/main.ogg, fade=750]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Bgm {
+            path: Some("bgm/main.ogg".to_string()),
+            action: BgmAction::Play,
+            fade_ms: Some(750),
+        }
+    );
+}
+
+#[test]
+fn test_bgm_stop_bare_number() {
+    // [BGM停止: 2000] — bare 数字を fade-out ms とみなす (#145)
+    let input = "## s: テスト\n\n[BGM停止: 2000]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0],
+        Event::Bgm {
+            path: None,
+            action: BgmAction::Stop,
+            fade_ms: Some(2000),
+        }
+    );
+}
+
+#[test]
+fn test_bgm_stop_with_fade_kv() {
+    // [BGM停止: フェード=2000] — 明示 kv (#145)
+    let input = "## s: テスト\n\n[BGM停止: フェード=2000]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Bgm {
+            path: None,
+            action: BgmAction::Stop,
+            fade_ms: Some(2000),
+        }
+    );
+}
+
+#[test]
+fn test_bgm_stop_no_args_keeps_default() {
+    // [BGM停止] (引数なし) は fade_ms = None で後方互換 (#145)
+    let input = "## s: テスト\n\n[BGM停止]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Bgm {
+            path: None,
+            action: BgmAction::Stop,
+            fade_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_with_fade_in() {
+    // [SE: path, フェード=200] で fade-in 時間が parse される (#145)
+    let input = "## s: テスト\n\n[SE: se/door.ogg, フェード=200]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0],
+        Event::Se {
+            path: "se/door.ogg".to_string(),
+            fade_ms: Some(200),
+        }
+    );
+}
+
+#[test]
+fn test_audio_fade_round_trip() {
+    // emit → parse で fade_ms が保持される (#145)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "fade"
+---
+
+## s: テスト
+
+[BGM: bgm/main.ogg, フェード=500]
+[SE: se/door.ogg, フェード=200]
+[BGM停止: フェード=2000]
+"#;
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3);
+    assert!(matches!(
+        &events[0],
+        Event::Bgm {
+            fade_ms: Some(500),
+            action: BgmAction::Play,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &events[1],
+        Event::Se {
+            fade_ms: Some(200),
+            ..
+        }
+    ));
+    assert!(matches!(
+        &events[2],
+        Event::Bgm {
+            fade_ms: Some(2000),
+            action: BgmAction::Stop,
+            path: None,
+        }
+    ));
 }
 
 #[test]

@@ -131,9 +131,20 @@ pub enum Event {
     Bgm {
         path: Option<String>,
         action: BgmAction,
+        /// BGM フェード時間 ms (#145)。
+        /// `Play` のときは fade-in、`Stop` のときは fade-out 時間。
+        /// `None` の場合: Play は fade-in なし（即時フル音量）、Stop は AudioManager 既定の 1000ms。
+        /// Markdown 構文: `[BGM: path, フェード=500]` / `[BGM停止: 2000]` / `[BGM停止: フェード=2000]`
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_ms: Option<u32>,
     },
     Se {
         path: String,
+        /// SE fade-in 時間 ms (#145)。
+        /// `None` なら fade-in なし（従来通り即時再生）。
+        /// Markdown 構文: `[SE: path, フェード=200]`
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_ms: Option<u32>,
     },
     Blackout {
         action: BlackoutAction,
