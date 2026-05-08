@@ -9,6 +9,15 @@
 
 import { Container, Graphics, Text, TextStyle, Ticker } from 'pixi.js'
 import { wordwrap } from './wordwrap'
+import {
+  type TypewriterState,
+  isTypingActive,
+  makeInitialTypewriterState,
+  skipTypewriter as typewriterSkip,
+  startTypewriter,
+  tickTypewriter,
+  visibleText,
+} from './typewriter'
 
 export interface DialogBoxConfig {
   /** ゲーム画面幅 */
@@ -27,7 +36,12 @@ export interface DialogBoxConfig {
   fontSize?: number
   /** フォントファミリー（デフォルト: Noto Sans JP, sans-serif） */
   fontFamily?: string
+  /** typewriter 表示の 1 文字あたり ms（デフォルト: 30ms/char） */
+  msPerChar?: number
 }
+
+/** typewriter のデフォルト速度（ms/char）。設定画面 #138 で上書き可能になる前提 */
+const DEFAULT_MS_PER_CHAR = 30
 
 export class DialogBox extends Container {
   private bg: Graphics
@@ -46,6 +60,13 @@ export class DialogBox extends Container {
   private fontSize: number
   private fontFamily: string
 
+  /** typewriter 状態 (#137) */
+  private typewriter: TypewriterState = makeInitialTypewriterState()
+  /** typewriter: 1 文字あたり ms */
+  private msPerChar: number
+  /** 続きインジケーターを「表示したい」かどうか。実表示は typewriter 完了後に解禁 */
+  private indicatorWanted: boolean = false
+
   private ticker: Ticker
 
   constructor(config: DialogBoxConfig) {
@@ -60,11 +81,13 @@ export class DialogBox extends Container {
       padding = 20,
       fontSize = 22,
       fontFamily = "'Noto Sans JP', sans-serif",
+      msPerChar = DEFAULT_MS_PER_CHAR,
     } = config
 
     this.padding = padding
     this.fontSize = fontSize
     this.fontFamily = fontFamily
+    this.msPerChar = msPerChar
     this.boxW = screenWidth - marginX * 2
     this.boxH = boxHeight
     this.boxX = marginX
@@ -116,11 +139,24 @@ export class DialogBox extends Container {
     this.indicator.y = this.indicatorBaseY
     this.addChild(this.indicator)
 
-    // --- バウンスアニメーション ---
+    // --- ticker: バウンスアニメーション + typewriter 進行 ---
     this.ticker = new Ticker()
     this.ticker.add(() => {
+      // インジケーターのバウンス（typewriter 中は表示されないが計算は無害なので継続）
       this.indicatorTime = (this.indicatorTime + this.ticker.deltaMS / 1000) % ((2 * Math.PI) / 3)
       this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
+
+      // typewriter: 文字を 1 文字ずつ進める
+      if (isTypingActive(this.typewriter)) {
+        const next = tickTypewriter(this.typewriter, this.ticker.deltaMS, this.msPerChar)
+        if (next.displayedCharCount !== this.typewriter.displayedCharCount) {
+          this.dialogText.text = visibleText(next)
+        }
+        this.typewriter = next
+      }
+
+      // インジケーターは「表示したい」かつ「typewriter 完了」のときのみ可視
+      this.indicator.visible = this.indicatorWanted && !isTypingActive(this.typewriter)
     })
     this.ticker.start()
   }
@@ -168,25 +204,58 @@ export class DialogBox extends Container {
       this.nameText.visible = false
     }
 
-    // テキスト（ワードラップ適用）
+    // テキスト（ワードラップ適用）+ typewriter 開始
     const font = `${this.fontSize}px ${this.fontFamily}`
     const maxTextWidth = this.boxW - this.padding * 2
     const lines = wordwrap(text, maxTextWidth, font)
-    this.dialogText.text = lines.join('\n')
+    this.typewriter = startTypewriter(lines.join('\n'))
+    this.dialogText.text = ''
   }
 
   /**
    * テキストのみクリアする
    */
   clearText(): void {
+    this.typewriter = makeInitialTypewriterState()
     this.dialogText.text = ''
   }
 
   /**
-   * 続きインジケーターの表示/非表示
+   * typewriter 表示中なら全文を即時表示し完了させる。
+   * 表示完了済みなら何もしない。
+   */
+  skipTypewriter(): void {
+    if (!isTypingActive(this.typewriter)) return
+    this.typewriter = typewriterSkip(this.typewriter)
+    this.dialogText.text = visibleText(this.typewriter)
+  }
+
+  /**
+   * typewriter が進行中（まだ全文表示されていない）か。
+   */
+  isTyping(): boolean {
+    return isTypingActive(this.typewriter)
+  }
+
+  /**
+   * typewriter 速度を設定する (#138 設定画面から呼ぶ前提)。
+   * @param msPerChar 1 文字あたり ms。0 以下は瞬間表示扱い。
+   */
+  setMsPerChar(msPerChar: number): void {
+    this.msPerChar = Math.max(0, msPerChar)
+    if (this.msPerChar === 0) {
+      this.skipTypewriter()
+    }
+  }
+
+  /**
+   * 続きインジケーターの表示要望を保存する。
+   * 実際の表示は typewriter 完了後に ticker 内で反映される。
    */
   setIndicatorVisible(visible: boolean): void {
-    this.indicator.visible = visible
+    this.indicatorWanted = visible
+    // typewriter 中なら抑止、完了済みなら即時反映
+    this.indicator.visible = visible && !isTypingActive(this.typewriter)
   }
 
   /**

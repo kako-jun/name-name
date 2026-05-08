@@ -523,6 +523,11 @@ export class NovelRenderer {
       return
     }
     if (this.saveLoadOverlay.visible) return
+    // typewriter 表示中なら全文表示にスキップ。完了済みなら次へ進む (#137)。
+    if (this.dialogBox.isTyping()) {
+      this.dialogBox.skipTypewriter()
+      return
+    }
     this.advance()
   }
 
@@ -576,10 +581,19 @@ export class NovelRenderer {
       case ' ':
       case 'Enter':
         e.preventDefault()
-        this.advance()
+        // typewriter 中なら全文表示にスキップ、完了済みなら進行 (#137)
+        if (this.dialogBox.isTyping()) {
+          this.dialogBox.skipTypewriter()
+        } else {
+          this.advance()
+        }
         break
       case 'ArrowRight':
-        this.advance()
+        if (this.dialogBox.isTyping()) {
+          this.dialogBox.skipTypewriter()
+        } else {
+          this.advance()
+        }
         break
       case 'ArrowLeft':
         this.goBack()
