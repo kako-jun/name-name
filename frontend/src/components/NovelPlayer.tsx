@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
@@ -40,6 +40,9 @@ function NovelPlayer({
   const [autoMode, setAutoMode] = useState(false)
   // スキップモード ON/OFF (#140)
   const [skipMode, setSkipMode] = useState(false)
+  // クイックセーブ/ロード完了通知 toast (#142)
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
 
   // 有効な AspectRatio に正規化
@@ -118,6 +121,40 @@ function NovelPlayer({
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
+  }, [])
+
+  // クイックセーブ/ロード 通知 toast を表示するヘルパー (#142)
+  const showToast = useCallback((message: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setToast(message)
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null)
+      toastTimerRef.current = null
+    }, 2000)
+  }, [])
+
+  // F5: クイックセーブ / F8: クイックロード (#142)
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'F5') {
+        e.preventDefault()
+        const ok = rendererRef.current?.quickSave() ?? false
+        showToast(ok ? 'クイックセーブしました' : 'この場面ではセーブできません')
+      } else if (e.key === 'F8') {
+        e.preventDefault()
+        const ok = rendererRef.current?.quickLoad() ?? false
+        showToast(ok ? 'クイックロードしました' : 'クイックセーブデータがありません')
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [showToast])
+
+  // unmount 時に toast タイマーをクリア
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    }
   }, [])
 
   // assetBaseUrl が変わったらレンダラーに反映
@@ -223,6 +260,16 @@ function NovelPlayer({
         settings={settings}
         onChange={setSettings}
       />
+      {/* クイックセーブ/ロード通知 toast (#142) */}
+      {toast !== null && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="absolute bottom-10 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-black/70 text-white text-sm font-medium pointer-events-none select-none"
+        >
+          {toast}
+        </div>
+      )}
     </div>
   )
 }
