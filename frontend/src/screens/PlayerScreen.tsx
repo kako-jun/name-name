@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import NovelPlayer from '../components/NovelPlayer'
 import RPGPlayer from '../components/RPGPlayer'
+import TitleOverlay from '../components/TitleOverlay'
 import type { Event, EventDocument } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { parseMarkdown } from '../wasm/parser'
 import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
 import { ApiError, createApiClient, type ProjectInfo } from '../api/client'
+import {
+  loadReadProgress,
+  __resetReadProgressForTest as resetReadProgress,
+} from '../game/readProgress'
 
 // kako-jun/name-name#108: 一般ユーザー向けの再生専用画面。
 //   - 編集 UI / 保存 / アセット管理 / デバッグは一切表示しない
@@ -51,6 +56,11 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const [error, setError] = useState<string | null>(null)
   // chapters/all.md がまだリポに無い「未投入」状態。エラーではなく案内として扱う。
   const [unpopulated, setUnpopulated] = useState(false)
+
+  // タイトル画面の表示状態 (#141)
+  const [titleDismissed, setTitleDismissed] = useState(false)
+  // 「つづきから」で開始した場合 true: ゲーム開始直後にスキップモードで未読位置まで進める
+  const [startWithSkip, setStartWithSkip] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -122,6 +132,9 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
 
   const title = projectInfo?.title || projectName
 
+  // 「つづきから」ボタンの有効判定: 既読データが存在するか (#141)
+  const hasSaveData = loadReadProgress(projectName).size > 0
+
   return (
     <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
       <header
@@ -151,7 +164,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-hidden relative">
         {loading ? (
           <div
             className={`flex items-center justify-center h-full ${isDark ? 'text-gray-400' : 'text-gray-600'}`}
@@ -180,12 +193,42 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           // ノベル+RPG の遷移制御は #108 本統合で扱う。
           <RPGPlayer gameData={rpgProject} view={rpgProject.view} />
         ) : (
-          <NovelPlayer
-            events={novelEvents}
-            assetBaseUrl={assetBaseUrl}
-            aspectRatio={doc?.aspect_ratio}
-            docKey={projectName}
-          />
+          <>
+            <NovelPlayer
+              events={novelEvents}
+              assetBaseUrl={assetBaseUrl}
+              aspectRatio={doc?.aspect_ratio}
+              docKey={projectName}
+              initialSkipMode={startWithSkip}
+            />
+            {/* タイトル画面オーバーレイ (#141): ゲーム開始前に表示 */}
+            {!titleDismissed && (
+              <TitleOverlay
+                title={title}
+                titleImageUrl={`${assetBaseUrl}/title.png`}
+                hasSaveData={hasSaveData}
+                isDark={isDark}
+                onNewGame={() => {
+                  // 新規開始: 既読データをクリアして最初から
+                  resetReadProgress(projectName)
+                  setStartWithSkip(false)
+                  setTitleDismissed(true)
+                }}
+                onContinue={() => {
+                  // つづきから: スキップモードで未読位置まで高速進行
+                  setStartWithSkip(true)
+                  setTitleDismissed(true)
+                }}
+                onOpenSettings={() => {
+                  // NovelPlayer 内の設定パネルを開く手段がないため、
+                  // 将来的には設定パネルを外部から制御できる ref を追加する。
+                  // 現時点ではタイトルを閉じて設定ボタンから開くよう案内。
+                  setTitleDismissed(true)
+                }}
+                onBack={onBack}
+              />
+            )}
+          </>
         )}
       </main>
     </div>
