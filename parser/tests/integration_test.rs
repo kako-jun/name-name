@@ -97,6 +97,7 @@ fn test_parse_sample() {
             expression,
             position,
             text,
+            ..
         } => {
             assert_eq!(character, &Some("カコ".to_string()));
             assert_eq!(expression, &Some("suppin_1".to_string()));
@@ -124,6 +125,7 @@ fn test_parse_sample() {
             expression,
             position,
             text,
+            ..
         } => {
             assert_eq!(character, &Some("カコ".to_string()));
             assert_eq!(expression, &Some("suppin_1".to_string()));
@@ -140,6 +142,7 @@ fn test_parse_sample() {
             expression,
             position,
             text,
+            ..
         } => {
             assert_eq!(character, &Some("トモ".to_string()));
             assert_eq!(expression, &Some("laugh_1".to_string()));
@@ -172,6 +175,7 @@ fn test_parse_sample() {
             expression,
             position: _,
             text,
+            ..
         } => {
             assert_eq!(character, &Some("トモ".to_string()));
             assert_eq!(expression, &Some("angry_1".to_string()));
@@ -373,7 +377,7 @@ title: "テスト"
     let events = &doc.chapters[0].scenes[0].events;
     assert_eq!(events.len(), 1);
     match &events[0] {
-        Event::Narration { text } => {
+        Event::Narration { text, .. } => {
             assert_eq!(
                 text,
                 &vec![
@@ -1783,7 +1787,11 @@ title: "効果テスト"
     let doc = parser::parse(input);
     let events = &doc.chapters[0].scenes[0].events;
     assert_eq!(events.len(), 1);
-    if let Event::Shake { intensity_px, duration_ms } = &events[0] {
+    if let Event::Shake {
+        intensity_px,
+        duration_ms,
+    } = &events[0]
+    {
         assert_eq!(*intensity_px, 10);
         assert_eq!(*duration_ms, 500);
     } else {
@@ -1805,7 +1813,11 @@ title: "効果テスト"
 "#;
     let doc = parser::parse(input);
     let events = &doc.chapters[0].scenes[0].events;
-    if let Event::Shake { intensity_px, duration_ms } = &events[0] {
+    if let Event::Shake {
+        intensity_px,
+        duration_ms,
+    } = &events[0]
+    {
         assert_eq!(*intensity_px, 20);
         assert_eq!(*duration_ms, 1000);
     } else {
@@ -1827,7 +1839,11 @@ title: "効果テスト"
 "#;
     let doc = parser::parse(input);
     let events = &doc.chapters[0].scenes[0].events;
-    if let Event::Shake { intensity_px, duration_ms } = &events[0] {
+    if let Event::Shake {
+        intensity_px,
+        duration_ms,
+    } = &events[0]
+    {
         assert_eq!(*intensity_px, 15);
         assert_eq!(*duration_ms, 800);
     } else {
@@ -1849,7 +1865,12 @@ title: "効果テスト"
 "#;
     let doc = parser::parse(input);
     let events = &doc.chapters[0].scenes[0].events;
-    if let Event::Flash { color, alpha, duration_ms } = &events[0] {
+    if let Event::Flash {
+        color,
+        alpha,
+        duration_ms,
+    } = &events[0]
+    {
         assert_eq!(color, "#ffffff");
         assert!((alpha - 0.8).abs() < 1e-5);
         assert_eq!(*duration_ms, 300);
@@ -1872,7 +1893,12 @@ title: "効果テスト"
 "#;
     let doc = parser::parse(input);
     let events = &doc.chapters[0].scenes[0].events;
-    if let Event::Flash { color, alpha, duration_ms } = &events[0] {
+    if let Event::Flash {
+        color,
+        alpha,
+        duration_ms,
+    } = &events[0]
+    {
         assert_eq!(color, "#ff0000");
         assert!((alpha - 1.0).abs() < 1e-5);
         assert_eq!(*duration_ms, 200);
@@ -1895,7 +1921,14 @@ title: "効果テスト"
 "#;
     let doc = parser::parse(input);
     let events = &doc.chapters[0].scenes[0].events;
-    if let Event::Fade { target, color, from_alpha, to_alpha, duration_ms } = &events[0] {
+    if let Event::Fade {
+        target,
+        color,
+        from_alpha,
+        to_alpha,
+        duration_ms,
+    } = &events[0]
+    {
         assert_eq!(target, "all");
         assert_eq!(color, "#000000");
         assert!((from_alpha - 0.0).abs() < 1e-5);
@@ -1920,7 +1953,14 @@ title: "効果テスト"
 "#;
     let doc = parser::parse(input);
     let events = &doc.chapters[0].scenes[0].events;
-    if let Event::Fade { target, color, from_alpha, to_alpha, duration_ms } = &events[0] {
+    if let Event::Fade {
+        target,
+        color,
+        from_alpha,
+        to_alpha,
+        duration_ms,
+    } = &events[0]
+    {
         assert_eq!(target, "bg");
         assert_eq!(color, "#000000");
         assert!((from_alpha - 1.0).abs() < 1e-5);
@@ -1945,7 +1985,14 @@ title: "効果テスト"
 "#;
     let doc = parser::parse(input);
     let events = &doc.chapters[0].scenes[0].events;
-    if let Event::Fade { target, color, from_alpha, to_alpha, duration_ms } = &events[0] {
+    if let Event::Fade {
+        target,
+        color,
+        from_alpha,
+        to_alpha,
+        duration_ms,
+    } = &events[0]
+    {
         assert_eq!(target, "all");
         assert_eq!(color, "#000000");
         assert!((from_alpha - 0.0).abs() < 1e-5);
@@ -1980,4 +2027,155 @@ title: "効果テスト"
     assert_eq!(events[0], doc2.chapters[0].scenes[0].events[0]);
     assert_eq!(events[1], doc2.chapters[0].scenes[0].events[1]);
     assert_eq!(events[2], doc2.chapters[0].scenes[0].events[2]);
+}
+
+// ---- #144 per-line voice ----
+
+#[test]
+fn test_voice_injected_into_dialog() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "ボイステスト"
+---
+
+## s1: ボイス
+
+[ボイス: voice/line01.mp3]
+**カコ** (suppin_1, 左):
+こんにちは。
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Dialog {
+        voice_path, text, ..
+    } = &events[0]
+    {
+        assert_eq!(voice_path.as_deref(), Some("voice/line01.mp3"));
+        assert_eq!(text, &vec!["こんにちは。".to_string()]);
+    } else {
+        panic!("Expected Dialog, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_voice_injected_into_narration() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "ボイステスト"
+---
+
+## s1: ボイス
+
+[ボイス: voice/narr01.mp3]
+> 静かな朝だった。
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Narration {
+        voice_path, text, ..
+    } = &events[0]
+    {
+        assert_eq!(voice_path.as_deref(), Some("voice/narr01.mp3"));
+        assert_eq!(text, &vec!["静かな朝だった。".to_string()]);
+    } else {
+        panic!("Expected Narration, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_voice_not_set_without_directive() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "ボイステスト"
+---
+
+## s1: ボイスなし
+
+**カコ**:
+おはよう。
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::Dialog { voice_path, .. } = &events[0] {
+        assert!(voice_path.is_none());
+    } else {
+        panic!("Expected Dialog");
+    }
+}
+
+#[test]
+fn test_voice_roundtrip() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "ボイステスト"
+---
+
+## s1: ボイス
+
+[ボイス: voice/line01.mp3]
+**カコ**:
+こんにちは。
+
+[ボイス: voice/narr01.mp3]
+> 静かな朝だった。
+"#;
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    let events1 = &doc.chapters[0].scenes[0].events;
+    let events2 = &doc2.chapters[0].scenes[0].events;
+    assert_eq!(events1.len(), events2.len());
+    // voice_path が roundtrip で保持されること
+    if let Event::Dialog { voice_path, .. } = &events1[0] {
+        assert_eq!(voice_path.as_deref(), Some("voice/line01.mp3"));
+    }
+    if let Event::Narration { voice_path, .. } = &events1[1] {
+        assert_eq!(voice_path.as_deref(), Some("voice/narr01.mp3"));
+    }
+    assert_eq!(events1[0], events2[0]);
+    assert_eq!(events1[1], events2[1]);
+}
+
+#[test]
+fn test_voice_dropped_when_non_text_directive_intervenes() {
+    // [ボイス:] の後に非テキストディレクティブが挟まると pending_voice_path はクリアされ、
+    // その後の Dialog/Narration には voice が注入されないこと (#144)
+    let input = "## s: テスト\n\n[ボイス: wrong.mp3]\n[背景: bg01.png]\n**カコ**:\nこんにちは。\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    // Background + Dialog の 2 イベント
+    assert_eq!(events.len(), 2);
+    if let Event::Dialog { voice_path, .. } = &events[1] {
+        assert_eq!(
+            *voice_path, None,
+            "非テキストを越えて voice が注入されてはいけない"
+        );
+    } else {
+        panic!("Expected Dialog, got {:?}", events[1]);
+    }
+}
+
+#[test]
+fn test_voice_overwritten_by_later_directive() {
+    // [ボイス:] が連続した場合、後者で前者を上書きし最後のものが注入されること (#144)
+    let input =
+        "## s: テスト\n\n[ボイス: first.mp3]\n[ボイス: second.mp3]\n**カコ**:\nこんにちは。\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Dialog { voice_path, .. } = &events[0] {
+        assert_eq!(
+            voice_path.as_deref(),
+            Some("second.mp3"),
+            "後から指定した voice が優先されること"
+        );
+    } else {
+        panic!("Expected Dialog, got {:?}", events[0]);
+    }
 }

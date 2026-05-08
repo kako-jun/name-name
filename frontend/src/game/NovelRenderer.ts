@@ -392,7 +392,7 @@ export class NovelRenderer {
 
   /**
    * 設定（テキスト速度・音量）をリアルタイムに反映する。
-   * voiceVolume は #144 voice 実装後に対応予定。
+   * voiceVolume は voice 専用 masterGain 実装後に対応予定 (#144 follow-up)。
    */
   applySettings(settings: {
     msPerChar: number
@@ -416,9 +416,13 @@ export class NovelRenderer {
   setAutoMode(on: boolean): void {
     if (this.autoMode === on) return
     this.autoMode = on
-    if (!on && this.autoTimer) {
-      clearTimeout(this.autoTimer)
-      this.autoTimer = null
+    if (!on) {
+      if (this.autoTimer) {
+        clearTimeout(this.autoTimer)
+        this.autoTimer = null
+      }
+      // オートモード OFF 時はボイスを停止する（onEnded が誤発火しないよう）
+      this.audioManager.stopVoice()
     }
     // React state との同期。コールバック内で setAutoMode が再度呼ばれても
     // 同値 no-op（上の早期 return）で無限ループを防いでいる。
@@ -750,6 +754,8 @@ export class NovelRenderer {
 
     // シーク操作時はスキップモードを解除する (#140): ユーザーが特定箇所を見たくてシークしているため
     this.setSkipMode(false)
+    // シーク操作時はボイスを停止する（再生中のボイスが残留しないよう）
+    this.audioManager.stopVoice()
 
     // 履歴を指定位置まで切り詰める（アンドゥスタック方式: 戻った地点から再進行すると新しい履歴が積まれる）
     this.history = this.history.slice(0, historyIndex + 1)
@@ -1341,8 +1347,31 @@ export class NovelRenderer {
 
     // 空行 = 改ページ（テキストクリア後に次行へ自動進行はしない。空表示する）
     const name = textEvt.type === 'dialog' ? textEvt.character : null
+
+    // per-line voice 再生 (#144): 最初のテキスト行でのみ再生
+    let voicePath: string | null = null
+    if (this.textIndex === 0) {
+      if (typeof current === 'object' && current !== null) {
+        if ('Dialog' in current) {
+          voicePath = current.Dialog.voice_path ?? null
+        } else if ('Narration' in current) {
+          voicePath = current.Narration.voice_path ?? null
+        }
+      }
+    }
+
+    if (voicePath) {
+      const voiceUrl = `${this.assetBaseUrl}/sounds/${voicePath.replace(/^\//, '')}`
+      // autoMode 時は voice 終了後に自動進行（typewriter 完了とどちらが先かは voice 次第）
+      this.audioManager.playVoice(
+        voiceUrl,
+        this.autoMode ? () => this.scheduleAutoAdvance() : undefined
+      )
+    }
+
     // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)
-    const onTypingDone = this.autoMode ? () => this.scheduleAutoAdvance() : null
+    // voice がある場合は voice 終了が主トリガーになるため typewriter onDone では発火しない
+    const onTypingDone = this.autoMode && !voicePath ? () => this.scheduleAutoAdvance() : null
     this.dialogBox.setDialog(name, line, onTypingDone)
 
     // 最後のテキスト行かつ最後のイベントならインジケーター非表示

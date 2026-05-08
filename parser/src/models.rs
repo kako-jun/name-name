@@ -114,9 +114,16 @@ pub enum Event {
         expression: Option<String>,
         position: Option<String>,
         text: Vec<String>,
+        /// per-line voice ファイルへの相対パス (#144)。
+        /// `[ボイス: voice/line01.mp3]` ディレクティブで直後の Dialog/Narration に注入される。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        voice_path: Option<String>,
     },
     Narration {
         text: Vec<String>,
+        /// per-line voice ファイルへの相対パス (#144)。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        voice_path: Option<String>,
     },
     Background {
         path: String,
