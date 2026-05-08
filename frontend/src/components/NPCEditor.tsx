@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NPCData, MapData, TILE_COLORS, TileType } from '../types/rpg'
+import { UiNpcData, MapData, TILE_COLORS, TileType } from '../types/rpg'
 
 /**
  * NPC 属性は `[NPC ... sprite=path]` のように空白区切りで parse されるため、
@@ -11,16 +11,16 @@ function spriteHasInnerWhitespace(value: string): boolean {
 }
 
 interface NPCEditorProps {
-  npcs: NPCData[]
+  npcs: UiNpcData[]
   mapData: MapData
-  onChange: (npcs: NPCData[]) => void
+  onChange: (npcs: UiNpcData[]) => void
   isDark: boolean
 }
 
 function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
   const [selectedNPCId, setSelectedNPCId] = useState<string | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
-  const [newNPC, setNewNPC] = useState<Partial<NPCData>>({
+  const [newNPC, setNewNPC] = useState<Partial<UiNpcData>>({
     name: '',
     x: 5,
     y: 5,
@@ -57,7 +57,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
       return
     }
 
-    const npc: NPCData = {
+    const npc: UiNpcData = {
       id: `npc${Date.now()}`,
       name: newNPC.name!,
       x: newNPC.x ?? 5,
@@ -92,7 +92,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
     }
   }
 
-  const handleUpdateNPC = (id: string, updates: Partial<NPCData>) => {
+  const handleUpdateNPC = (id: string, updates: Partial<UiNpcData>) => {
     onChange(npcs.map((n) => (n.id === id ? { ...n, ...updates } : n)))
   }
 
@@ -203,7 +203,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                     onChange={(e) => {
                       const v = e.target.value
                       setSpriteDraft(v)
-                      // 途中空白を含む値は無効扱い: 親の NPCData には反映しない（= Markdown 出力にも流れない）
+                      // 途中空白を含む値は無効扱い: 親の UiNpcData には反映しない（= Markdown 出力にも流れない）
                       // 前後空白のみの trim は許容して保存
                       if (!spriteHasInnerWhitespace(v)) {
                         const t = v.trim()
@@ -268,7 +268,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                         direction:
                           e.target.value === ''
                             ? undefined
-                            : (e.target.value as NPCData['direction']),
+                            : (e.target.value as UiNpcData['direction']),
                       })
                     }
                     className={`px-2 py-1 text-sm border rounded ${
@@ -514,7 +514,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                         direction:
                           e.target.value === ''
                             ? undefined
-                            : (e.target.value as NPCData['direction']),
+                            : (e.target.value as UiNpcData['direction']),
                       })
                     }
                     className={`w-full px-3 py-2 border rounded ${

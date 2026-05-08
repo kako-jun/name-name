@@ -7,7 +7,7 @@
  */
 
 import { Application, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js'
-import { NPCData, RPGProject, TileType } from '../types/rpg'
+import { UiNpcData, RPGProject, TileType } from '../types/rpg'
 import { RpgDialogBox } from './RpgDialogBox'
 import {
   NPC_ANIM_PERIOD_MS,
@@ -44,7 +44,7 @@ import { attachTouchInput, type SwipeDirection } from './touchInput'
 import { TouchMenuOverlay, type MenuItemId } from './TouchMenuOverlay'
 
 interface NPCRuntime {
-  data: NPCData
+  data: UiNpcData
   x: number // tile-grid center (x + 0.5)
   y: number
   container: Container
@@ -333,7 +333,7 @@ export class RaycastRenderer {
    * スプライト未指定 NPC は `Texture.WHITE` を `data.color` で tint した単色矩形のまま維持。
    * `sprite=...` 指定があれば非同期ロードし、完了後に texture を差し替える。
    */
-  private rebuildNpcObjects(npcData: NPCData[]): void {
+  private rebuildNpcObjects(npcData: UiNpcData[]): void {
     // 既存を destroy
     for (const child of this.npcLayer.removeChildren()) {
       child.destroy({ children: true })

@@ -33,6 +33,14 @@ export interface RpgMapData {
   ceiling_heights?: number[][] | null
 }
 
+/**
+ * NPC データ（parser / WASM 経由のスキーマ）。
+ *
+ * UI / runtime 側は `frontend/src/types/rpg.ts` の `UiNpcData` に変換される。
+ * 主な差分は `message` の表現（parser は行配列、UI は 1 文字列）と portrait など。
+ * フィールドを追加するときは parser 側 (`NpcData`) と UI 側 (`UiNpcData`) と
+ * 変換層 (`rpgProjectFromDoc` / `applyRpgProjectToDoc`) の 3 箇所を必ず揃える (#103)。
+ */
 export interface NpcData {
   id: string
   name: string
