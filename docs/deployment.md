@@ -162,7 +162,7 @@ LOCAL_REPOS_BASE=~/repos/2025:~/repos/private \
 
 - Worker の `GITHUB_TOKEN` が設定されているか
 - `wrangler tail` でリクエストログを観察
-- 対象ゲームリポの `main` ブランチに `chapters/all.md` が存在するか
+- 対象ゲームリポの `main` ブランチに `script.md` が存在するか
 
 ### `/edit/<game>` で 401 / 403
 

@@ -325,7 +325,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
 /**
  * パスの "/" は残し、各セグメントだけ encodeURIComponent する。
- * `chapters/all.md` → `chapters/all.md`、`日本語/ファイル.md` → percent-encoded
+ * `assets/images/title.png` → `assets/images/title.png`、`日本語/ファイル.md` → percent-encoded
  */
 function encodePathPreserveSlashes(path: string): string {
   return path

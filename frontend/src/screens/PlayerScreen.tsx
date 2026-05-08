@@ -11,11 +11,11 @@ import { loadReadProgress, clearReadProgress } from '../game/readProgress'
 
 // kako-jun/name-name#108: 一般ユーザー向けの再生専用画面。
 //   - 編集 UI / 保存 / アセット管理 / デバッグは一切表示しない
-//   - chapters/all.md は **main ブランチ**を参照する
+//   - script.md は **main ブランチ**を参照する
 //     （ADR #105: 一般ユーザーは未完成原稿（develop）を見ない）
 //   - 戻るボタンとタイトル表示のみのシンプルなヘッダー
 //   - データ取得失敗時は「ゲームデータが見つかりません」を表示
-const CHAPTERS_PATH = 'chapters/all.md'
+const SCRIPT_PATH = 'script.md'
 const PUBLIC_BRANCH = 'main'
 
 interface PlayerScreenProps {
@@ -51,7 +51,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // chapters/all.md がまだリポに無い「未投入」状態。エラーではなく案内として扱う。
+  // script.md がまだリポに無い「未投入」状態。エラーではなく案内として扱う。
   const [unpopulated, setUnpopulated] = useState(false)
 
   // タイトル画面の表示状態 (#141)
@@ -72,11 +72,11 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         if (cancelled) return
         setProjectInfo(found)
 
-        // 2. main ブランチから章データを取得。404 はリポにまだ chapters/all.md
+        // 2. main ブランチからシナリオを取得。404 はリポにまだ script.md
         //    が無い「未投入」状態として扱い、エラーではなく案内表示にする。
         let data
         try {
-          data = await api.getContents(projectName, CHAPTERS_PATH, PUBLIC_BRANCH)
+          data = await api.getContents(projectName, SCRIPT_PATH, PUBLIC_BRANCH)
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
             if (!cancelled) {
@@ -182,7 +182,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           >
             <p className="text-lg font-semibold">{title} はまだ準備中です</p>
             <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-              シナリオ（chapters/all.md）が公開されると、ここで再生できるようになります。
+              シナリオ（script.md）が公開されると、ここで再生できるようになります。
             </p>
           </div>
         ) : rpgProject !== null ? (

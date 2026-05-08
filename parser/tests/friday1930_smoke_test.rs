@@ -1,10 +1,10 @@
 //! friday-1930 プロトタイプ最小マップのスモークテスト。
 //!
-//! `fixtures/friday1930-sample.md` は friday-1930 リポの `chapters/all.md` と
+//! `fixtures/friday1930-sample.md` は friday-1930 リポの `script.md` と
 //! 同じ形式のサンプル（raycast + NPC 構成を検証するための代表例）。
 //! name-name parser 側の破壊的変更で friday-1930 が壊れないかをここで検出する。
 //!
-//! fixture を更新したいときは: friday-1930 で chapters/all.md を更新したあと、
+//! fixture を更新したいときは: friday-1930 で script.md を更新したあと、
 //! 同じ内容をここに同期する（ファイルコピー）。
 //!
 //! スコープ: **ハッピーパスの構造検証のみ**。parser の異常系（空ファイル、

@@ -128,7 +128,7 @@ curl -X POST http://localhost:7373/api/projects/init \
 
 これで以下が自動生成されます：
 - Git リポジトリ
-- chapters/all.md
+- script.md
 - assets/images/
 - assets/sounds/
 - assets/movies/
