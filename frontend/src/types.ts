@@ -84,6 +84,19 @@ export type Event =
   | { RpgMap: RpgMapData }
   | { PlayerStart: PlayerStartData }
   | { Npc: NpcData }
+  | {
+      Animate: {
+        target: string
+        dx?: string
+        dy?: string
+        rotation?: string
+        scale?: number
+        duration_ms: number
+        easing?: Easing
+      }
+    }
+
+export type Easing = 'Linear' | 'EaseIn' | 'EaseOut' | 'EaseInOut'
 
 export type SceneView = 'TopDown' | 'Raycast'
 

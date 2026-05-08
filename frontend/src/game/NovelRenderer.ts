@@ -705,6 +705,18 @@ export class NovelRenderer {
       this.characterLayer.remove(event.Exit.character)
       return
     }
+    if ('Animate' in event) {
+      // 立ち絵アニメ (#134) — fire-and-forget。完了を待たず次へ進む。
+      this.characterLayer.animate(event.Animate.target, {
+        dx: event.Animate.dx,
+        dy: event.Animate.dy,
+        rotation: event.Animate.rotation,
+        scale: event.Animate.scale,
+        duration_ms: event.Animate.duration_ms,
+        easing: event.Animate.easing,
+      })
+      return
+    }
     if ('Wait' in event) {
       // 進行を停止し、指定ミリ秒後に再開（eventIndex のインクリメントはコールバック内で行う）
       this.waitingForWait = true
