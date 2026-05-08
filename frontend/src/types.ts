@@ -73,8 +73,15 @@ export type Event =
     }
   | { Narration: { text: string[]; voice_path?: string | null } }
   | { Background: { path: string } }
-  | { Bgm: { path: string | null; action: BgmAction } }
-  | { Se: { path: string } }
+  | {
+      Bgm: {
+        path: string | null
+        action: BgmAction
+        /** BGM フェード時間 ms (#145)。Play なら fade-in、Stop なら fade-out */
+        fade_ms?: number | null
+      }
+    }
+  | { Se: { path: string; /** SE fade-in 時間 ms (#145) */ fade_ms?: number | null } }
   | { Blackout: { action: BlackoutAction } }
   | 'SceneTransition'
   | { Exit: { character: string } }

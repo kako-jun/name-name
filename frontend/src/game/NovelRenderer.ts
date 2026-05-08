@@ -1000,17 +1000,24 @@ export class NovelRenderer {
     if ('Bgm' in event) {
       if (event.Bgm.action === 'Play' && event.Bgm.path) {
         const soundUrl = `${this.assetBaseUrl}/sounds/${event.Bgm.path.replace(/^\//, '')}`
-        this.audioManager.playBgm(soundUrl)
+        // fade_ms (#145): 指定があれば fade-in、未指定なら即時再生
+        this.audioManager.playBgm(soundUrl, event.Bgm.fade_ms ?? undefined)
         this.currentBgmPath = event.Bgm.path
       } else {
-        this.audioManager.stopBgm()
+        // fade_ms (#145): 指定があればその ms で fade-out、未指定は AudioManager 既定 (1000ms)
+        if (event.Bgm.fade_ms != null) {
+          this.audioManager.stopBgm(event.Bgm.fade_ms)
+        } else {
+          this.audioManager.stopBgm()
+        }
         this.currentBgmPath = null
       }
       return
     }
     if ('Se' in event) {
       const soundUrl = `${this.assetBaseUrl}/sounds/${event.Se.path.replace(/^\//, '')}`
-      this.audioManager.playSe(soundUrl)
+      // fade_ms (#145): 指定があれば fade-in、未指定なら即時再生
+      this.audioManager.playSe(soundUrl, event.Se.fade_ms ?? undefined)
       return
     }
     if ('Flag' in event) {
