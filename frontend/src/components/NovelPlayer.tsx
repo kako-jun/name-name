@@ -227,15 +227,20 @@ function NovelPlayer({
   }
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
+    <div
+      className="relative w-full h-full flex items-center justify-center bg-black"
+      style={{ containerType: 'size' }}
+    >
       <div
         ref={containerRef}
-        className="rounded-xl shadow-2xl overflow-hidden"
+        className="overflow-hidden [&>canvas]:block [&>canvas]:w-full [&>canvas]:h-full"
         style={{
-          // canvas が aspect-ratio に合わせて正しいサイズで表示されるよう制約
+          // 親 (bg-black, container-type: size) を基準に letterbox/pillarbox する。
+          // ゲーム比率を維持したまま親に内接するサイズを container query 単位で計算する。
+          // 縦長スマホでは上下に黒帯、横長デスクトップでは左右に黒帯が出る。
           aspectRatio: `${gameWidth} / ${gameHeight}`,
-          maxWidth: '100%',
-          maxHeight: '100%',
+          width: `min(100cqw, calc(100cqh * ${gameWidth} / ${gameHeight}))`,
+          height: `min(100cqh, calc(100cqw * ${gameHeight} / ${gameWidth}))`,
         }}
       />
       {/* スキップボタン (#140): docKey がある場合のみ有効 */}

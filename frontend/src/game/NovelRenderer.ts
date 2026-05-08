@@ -859,10 +859,12 @@ export class NovelRenderer {
     // 暗転復元
     this.blackoutOverlay.visible = state.isBlackout
 
-    // 立ち絵復元
+    // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）
     this.characterLayer.clear()
     for (const ch of state.characters) {
-      this.characterLayer.show(ch.name, ch.expression, ch.position, this.assetBaseUrl)
+      this.characterLayer.show(ch.name, ch.expression, ch.position, this.assetBaseUrl, {
+        instant: true,
+      })
     }
 
     // BGM復元
