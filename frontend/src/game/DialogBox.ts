@@ -212,6 +212,9 @@ export class DialogBox extends Container {
 
   /**
    * ダイアログを表示（話者名 + テキスト）
+   *
+   * 枠なしモード（borderless=true）では name を無視して nameBox を非表示にする。
+   * setBorderless(false) で枠ありに戻したあとも、nameBox の復元はこのメソッドの呼び出し時に行う。
    */
   setDialog(name: string | null, text: string): void {
     // 話者名（枠なしモードでは常に非表示）
