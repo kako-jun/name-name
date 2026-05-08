@@ -553,7 +553,134 @@ fn parse_directive(line: &str) -> Option<Event> {
         return Some(Event::DialogBorderless { borderless: false });
     }
 
+    // [シェイク: intensity=10, duration=500] (#143)
+    if let Some(rest) = content.strip_prefix("シェイク:") {
+        return parse_shake_directive(rest);
+    }
+
+    // [フラッシュ: color=#ffffff, alpha=0.8, duration=300] (#143)
+    if let Some(rest) = content.strip_prefix("フラッシュ:") {
+        return parse_flash_directive(rest);
+    }
+
+    // [フェード: target=all, color=#000000, from=0, to=1, duration=500] (#143)
+    if let Some(rest) = content.strip_prefix("フェード:") {
+        return parse_fade_directive(rest);
+    }
+
     None
+}
+
+fn parse_shake_directive(content: &str) -> Option<Event> {
+    let mut intensity_px: u32 = 10;
+    let mut duration_ms: u32 = 500;
+
+    for raw_pair in content.split(',') {
+        let pair = raw_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = pair.split_once('=') {
+            match k.trim() {
+                "intensity" | "強度" => {
+                    if let Ok(v) = v.trim().parse() {
+                        intensity_px = v;
+                    }
+                }
+                "duration" | "時間" => {
+                    if let Ok(v) = v.trim().parse() {
+                        duration_ms = v;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Some(Event::Shake {
+        intensity_px,
+        duration_ms,
+    })
+}
+
+fn parse_flash_directive(content: &str) -> Option<Event> {
+    let mut color = "#ffffff".to_string();
+    let mut alpha: f32 = 0.8;
+    let mut duration_ms: u32 = 300;
+
+    for raw_pair in content.split(',') {
+        let pair = raw_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = pair.split_once('=') {
+            match k.trim() {
+                "color" | "色" => color = v.trim().to_string(),
+                "alpha" | "不透明度" => {
+                    if let Ok(v) = v.trim().parse() {
+                        alpha = v;
+                    }
+                }
+                "duration" | "時間" => {
+                    if let Ok(v) = v.trim().parse() {
+                        duration_ms = v;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Some(Event::Flash {
+        color,
+        alpha,
+        duration_ms,
+    })
+}
+
+fn parse_fade_directive(content: &str) -> Option<Event> {
+    let mut target = "all".to_string();
+    let mut color = "#000000".to_string();
+    let mut from_alpha: f32 = 0.0;
+    let mut to_alpha: f32 = 1.0;
+    let mut duration_ms: u32 = 500;
+
+    for raw_pair in content.split(',') {
+        let pair = raw_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = pair.split_once('=') {
+            match k.trim() {
+                "target" | "対象" => target = v.trim().to_string(),
+                "color" | "色" => color = v.trim().to_string(),
+                "from" | "開始" => {
+                    if let Ok(v) = v.trim().parse() {
+                        from_alpha = v;
+                    }
+                }
+                "to" | "終了" => {
+                    if let Ok(v) = v.trim().parse() {
+                        to_alpha = v;
+                    }
+                }
+                "duration" | "時間" => {
+                    if let Ok(v) = v.trim().parse() {
+                        duration_ms = v;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Some(Event::Fade {
+        target,
+        color,
+        from_alpha,
+        to_alpha,
+        duration_ms,
+    })
 }
 
 fn parse_animate_directive(content: &str) -> Option<Event> {
