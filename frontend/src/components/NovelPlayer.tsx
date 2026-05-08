@@ -26,6 +26,8 @@ function NovelPlayer({
   // debounce で吸収する (review #155 should-2)
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // オートモード ON/OFF (#139)
+  const [autoMode, setAutoMode] = useState(false)
   const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
 
   // 有効な AspectRatio に正規化
@@ -109,6 +111,15 @@ function NovelPlayer({
     }
   }, [events, scenes])
 
+  // オートモード変更を renderer に反映 (#139)
+  useEffect(() => {
+    rendererRef.current?.setAutoMode(autoMode)
+  }, [autoMode])
+
+  const handleAutoToggle = () => {
+    setAutoMode((v) => !v)
+  }
+
   return (
     <div className="relative w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
       <div
@@ -121,6 +132,20 @@ function NovelPlayer({
           maxHeight: '100%',
         }}
       />
+      {/* オートモードボタン (#139) */}
+      <button
+        type="button"
+        onClick={handleAutoToggle}
+        aria-label={autoMode ? 'オートモードをオフにする' : 'オートモードをオンにする'}
+        title="オートモード (A)"
+        className={`absolute top-3 right-14 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
+          autoMode
+            ? 'bg-blue-500/80 hover:bg-blue-500 text-white'
+            : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
+        }`}
+      >
+        A
+      </button>
       <button
         type="button"
         onClick={() => setSettingsOpen(true)}
