@@ -82,9 +82,9 @@ name-name-api.workers.dev/api/...      ← Worker
 
 ### 廃止される旧計画
 
-- `backend/` (FastAPI + GitPython + projects/) → 移行完了次第削除
-- `compose.yaml` → 削除
-- `backend/BRANCHES.md` の「GCP 本番環境が main を自動デプロイ」記述 → 既に新方針へ書き換え済（旧計画は墓標として「廃止された旧計画」セクションに保存）
+- `backend/` (FastAPI + GitPython + projects/) → **#112 で削除完了**
+- `compose.yaml` → **#112 で削除完了**
+- `backend/BRANCHES.md` の「GCP 本番環境が main を自動デプロイ」記述 → 廃止（backend ごと削除）
 - `POST /api/projects/{name}/switch-branch` 等の FastAPI エンドポイント → 廃止
 
 ### トレードオフ
