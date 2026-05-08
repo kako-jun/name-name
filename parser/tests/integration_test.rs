@@ -2377,6 +2377,93 @@ fn test_bgm_play_bare_number_is_not_fade() {
 }
 
 #[test]
+fn test_document_choice_style_parses_from_frontmatter() {
+    // frontmatter `choice_style: soft` が Some("soft") で parse されること (#146)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+choice_style: soft
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.choice_style.as_deref(),
+        Some("soft"),
+        "frontmatter の choice_style が parse されること"
+    );
+
+    // 引用符付きでも同じく読めること
+    let input_quoted = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+choice_style: "monochrome"
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc_quoted = parser::parse(input_quoted);
+    assert_eq!(doc_quoted.choice_style.as_deref(), Some("monochrome"));
+
+    // 未指定なら None
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert_eq!(doc_none.choice_style, None);
+}
+
+#[test]
+fn test_document_choice_style_round_trip() {
+    // parse → emit → parse で choice_style が保持されること (#146)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+choice_style: soft
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc1 = parser::parse(input);
+    let emitted = emitter::emit(&doc1);
+    assert!(
+        emitted.contains("choice_style:"),
+        "emit 出力に choice_style が含まれること: {}",
+        emitted
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc1.choice_style, doc2.choice_style);
+    assert_eq!(doc2.choice_style.as_deref(), Some("soft"));
+
+    // None の場合は emit に出ないこと
+    let mut doc_none = doc1.clone();
+    doc_none.choice_style = None;
+    let emitted_none = emitter::emit(&doc_none);
+    assert!(
+        !emitted_none.contains("choice_style:"),
+        "choice_style が None なら emit に含まれないこと: {}",
+        emitted_none
+    );
+}
+
+#[test]
 fn test_voice_overwritten_by_later_directive() {
     // [ボイス:] が連続した場合、後者で前者を上書きし最後のものが注入されること (#144)
     let input =
