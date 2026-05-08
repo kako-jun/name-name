@@ -362,15 +362,20 @@ export class DialogBox extends Container {
     // 表示中のテキストがあれば再 wordwrap して typewriter を新規開始する。
     // typewriter 進行中だった場合は新フォントでの再生成になるが、フォント切替自体が
     // 稀な操作なので「タイプ位置リセット」は許容する。
-    // onTypingDone は新 typewriter で完了通知が二重に飛ぶのを防ぐため null に倒す
-    // （auto-advance の意図しない二重発火対策, #147 R2 S-R2-1）。
+    // 注: `onTypingDone` には触らない (#147 R3 M-R3-1)。`render()` の呼び出し順は
+    //   1) ensureFontLoaded(...).then(setFontFamily) を登録（必ず microtask で実行）
+    //   2) setDialog(name, text, onTypingDone) で auto-advance コールバックを登録
+    //   3) microtask 起動 → ここに来る
+    // この時点で `onTypingDone` は「今表示中の Dialog の auto-advance」なので
+    // null に倒すと autoMode + per-line フォント切替時に自動進行が止まる。
+    // 古い typewriter は this.typewriter の差し替えで破棄され、ticker は新 typewriter
+    // のみを観測するため二重発火は元から起きない。
     if (this.currentText) {
       const font = `${this.fontSize}px ${this.fontFamily}`
       const maxTextWidth = this.boxW - this.padding * 2
       const lines = wordwrap(this.currentText, maxTextWidth, font)
       const fullText = lines.join('\n')
       this.typewriter = startTypewriter(fullText)
-      this.onTypingDone = null
       if (!isTypingActive(this.typewriter)) {
         // 既に最後まで表示し終わっていた場合は即時完了させて表示崩れを防ぐ
         this.dialogText.text = fullText
