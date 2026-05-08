@@ -10,6 +10,8 @@
 
 import { Container, Graphics, Text, TextStyle, Ticker } from 'pixi.js'
 import { wordwrap } from './wordwrap'
+import { parseRubyText, stripRubyMarkup } from './ruby'
+import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
 import {
   type TypewriterState,
   isTypingActive,
@@ -54,11 +56,31 @@ const DEFAULT_MS_PER_CHAR = 30
 /** 枠なしモードの DropShadow 設定 */
 const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 4, distance: 2, alpha: 0.9 } as const
 
+/**
+ * ルビの x 位置計算用の Canvas measure コンテキスト (#148)。
+ * wordwrap.ts と独立にキャッシュを持つ（フォントが異なる用途で衝突しないように）。
+ */
+let cachedRubyCanvas: HTMLCanvasElement | null = null
+let cachedRubyCtx: CanvasRenderingContext2D | null = null
+function getMeasureContext(): CanvasRenderingContext2D | null {
+  if (!cachedRubyCtx) {
+    cachedRubyCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null
+    cachedRubyCtx = cachedRubyCanvas?.getContext('2d') ?? null
+  }
+  return cachedRubyCtx
+}
+
 export class DialogBox extends Container {
   private bg: Graphics
   private nameBox: Graphics
   private nameText: Text
   private dialogText: Text
+  /** ルビ描画用の Container。dialogText の上に重ねる (#148)。 */
+  private rubyContainer: Container
+  /** 各 placement に対応する Text と reveal 状態 */
+  private rubyEntries: Array<{ placement: RubyPlacement; text: Text }> = []
+  /** 直近 setDialog で算出した ruby placements（typewriter 進行と突き合わせる） */
+  private rubyPlacements: RubyPlacement[] = []
   private indicator: Text
   private indicatorBaseY: number
   private indicatorTime = 0
@@ -147,6 +169,13 @@ export class DialogBox extends Container {
     this.dialogText.y = this.boxY + padding
     this.addChild(this.dialogText)
 
+    // --- ルビ用 Container (#148) ---
+    // dialogText と同じ原点に重ねる。Text は表示タイミングに応じて add/remove する。
+    this.rubyContainer = new Container()
+    this.rubyContainer.x = this.dialogText.x
+    this.rubyContainer.y = this.dialogText.y
+    this.addChild(this.rubyContainer)
+
     // --- 続きインジケーター（▼） ---
     const indicatorStyle = new TextStyle({
       fontFamily,
@@ -171,6 +200,8 @@ export class DialogBox extends Container {
         const next = tickTypewriter(this.typewriter, this.ticker.deltaMS, this.msPerChar)
         if (next.displayedCharCount !== this.typewriter.displayedCharCount) {
           this.dialogText.text = visibleText(next)
+          // base が typewriter で表示完了したルビを reveal する (#148)
+          this.updateRubyVisibility(next.displayedCharCount)
         }
         const justFinished = isTypingActive(this.typewriter) && !isTypingActive(next)
         this.typewriter = next
@@ -248,12 +279,17 @@ export class DialogBox extends Container {
       this.nameText.visible = false
     }
 
-    // テキスト（ワードラップ適用）+ typewriter 開始
+    // テキスト（ルビ記号を除いた plain にワードラップ適用）+ typewriter 開始 (#148)
     const font = `${this.fontSize}px ${this.fontFamily}`
     const maxTextWidth = this.boxW - this.padding * 2
-    const lines = wordwrap(text, maxTextWidth, font)
+    const runs = parseRubyText(text)
+    const plainText = stripRubyMarkup(text)
+    const lines = wordwrap(plainText, maxTextWidth, font)
     this.typewriter = startTypewriter(lines.join('\n'))
     this.dialogText.text = ''
+    // ルビ配置を再構築（typewriter と同期して順次表示する）
+    this.rubyPlacements = computeRubyPlacements(runs, lines)
+    this.rebuildRubyEntries(lines, font)
     // タイピング完了コールバックをセット（空テキストはタイプライターが動かないので即呼び出し）
     this.onTypingDone = onTypingDone ?? null
     if (!isTypingActive(this.typewriter) && this.onTypingDone) {
@@ -261,6 +297,88 @@ export class DialogBox extends Container {
       this.onTypingDone = null
       cb()
     }
+  }
+
+  /**
+   * ルビ用 Text 群を捨てて placements から再構築する (#148)。
+   * 表示は最初すべて invisible。typewriter 進行に応じて updateRubyVisibility で順次出す。
+   */
+  private rebuildRubyEntries(lines: string[], font: string): void {
+    // 既存 Text を破棄
+    for (const e of this.rubyEntries) {
+      this.rubyContainer.removeChild(e.text)
+      e.text.destroy()
+    }
+    this.rubyEntries = []
+
+    if (this.rubyPlacements.length === 0) return
+
+    const ctx = getMeasureContext()
+    if (ctx) ctx.font = font
+    const measure = (s: string): number =>
+      ctx ? ctx.measureText(s).width : s.length * this.fontSize
+
+    const lineHeight = this.fontSize * 1.6
+    // ルビフォントサイズ: base の半分（読みやすさのため最低 12px）
+    const rubyFontSize = Math.max(12, Math.round(this.fontSize * 0.5))
+    const rubyStyle = new TextStyle({
+      fontFamily: this.fontFamily,
+      fontSize: rubyFontSize,
+      fill: 0xffffff,
+      // borderless と同じ DropShadow を付ければ読みやすいが、最小実装では fill のみ
+      dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
+    })
+
+    for (const p of this.rubyPlacements) {
+      const line = lines[p.lineIndex] ?? ''
+      const before = line.substring(0, p.charStartInLine)
+      const baseStr = line.substring(p.charStartInLine, p.charEndInLine)
+      const xStart = measure(before)
+      const baseWidth = measure(baseStr)
+
+      // ルビが base より広い場合は base 中心に配置（はみ出しは許容）
+      const rubyWidth = measure(p.ruby)
+      const xRubyCenter = xStart + baseWidth / 2
+      const xRuby = xRubyCenter - rubyWidth / 2
+
+      // y: 行の上端より少し上にルビを置く（ベースライン上にかぶせる）
+      const yLineTop = p.lineIndex * lineHeight
+      const yRuby = yLineTop - rubyFontSize + 2 // 少し下げて base に近づける
+
+      const t = new Text({ text: p.ruby, style: rubyStyle })
+      t.x = xRuby
+      t.y = yRuby
+      t.visible = false
+      this.rubyContainer.addChild(t)
+      this.rubyEntries.push({ placement: p, text: t })
+    }
+  }
+
+  /**
+   * typewriter の displayedCharCount に応じてルビの可視性を更新する (#148)。
+   * base 末尾が表示済みなら ruby を visible にする。
+   */
+  private updateRubyVisibility(displayedCharCount: number): void {
+    for (const e of this.rubyEntries) {
+      e.text.visible = displayedCharCount >= e.placement.revealAt
+    }
+  }
+
+  /** すべてのルビを表示状態にする（skip 用）。 */
+  private revealAllRuby(): void {
+    for (const e of this.rubyEntries) {
+      e.text.visible = true
+    }
+  }
+
+  /** ルビ Text をすべて破棄する（clearText 用）。 */
+  private clearRubyEntries(): void {
+    for (const e of this.rubyEntries) {
+      this.rubyContainer.removeChild(e.text)
+      e.text.destroy()
+    }
+    this.rubyEntries = []
+    this.rubyPlacements = []
   }
 
   /**
@@ -274,6 +392,7 @@ export class DialogBox extends Container {
     this.dialogText.text = ''
     this.currentText = ''
     this.onTypingDone = null
+    this.clearRubyEntries()
   }
 
   /**
@@ -284,6 +403,8 @@ export class DialogBox extends Container {
     if (!isTypingActive(this.typewriter)) return
     this.typewriter = typewriterSkip(this.typewriter)
     this.dialogText.text = visibleText(this.typewriter)
+    // スキップ時もルビは全表示にする (#148)
+    this.revealAllRuby()
     // スキップ時はオートモードコールバックを破棄（手動操作なので自動進行しない）
     this.onTypingDone = null
   }
@@ -324,6 +445,16 @@ export class DialogBox extends Container {
     }
     // drop-shadow は TextStyle を再生成して反映
     this.dialogText.style = this.makeDialogTextStyle()
+    // ルビ Text も同じ DropShadow ポリシーで揃える (#148)
+    const rubyFontSize = Math.max(12, Math.round(this.fontSize * 0.5))
+    for (const e of this.rubyEntries) {
+      e.text.style = new TextStyle({
+        fontFamily: this.fontFamily,
+        fontSize: rubyFontSize,
+        fill: 0xffffff,
+        dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
+      })
+    }
     // 話者名ボックスは枠なしモードでは常に非表示。
     // 枠ありに戻したときの nameBox/nameText の表示復元は次の setDialog() に委ねる。
     if (this.borderless) {
@@ -373,16 +504,24 @@ export class DialogBox extends Container {
     if (this.currentText) {
       const font = `${this.fontSize}px ${this.fontFamily}`
       const maxTextWidth = this.boxW - this.padding * 2
-      const lines = wordwrap(this.currentText, maxTextWidth, font)
+      const runs = parseRubyText(this.currentText)
+      const plainText = stripRubyMarkup(this.currentText)
+      const lines = wordwrap(plainText, maxTextWidth, font)
       const fullText = lines.join('\n')
       this.typewriter = startTypewriter(fullText)
+      // ルビ配置も新フォントで再構築 (#148)
+      this.rubyPlacements = computeRubyPlacements(runs, lines)
+      this.rebuildRubyEntries(lines, font)
       if (!isTypingActive(this.typewriter)) {
         // 既に最後まで表示し終わっていた場合は即時完了させて表示崩れを防ぐ
         this.dialogText.text = fullText
+        this.revealAllRuby()
       } else {
         // 進行中で再開する場合は旧フォントの bake 済みグリフを一旦消して
         // 新フォントの先頭から typewriter が始まるように見せる (#147 R2 S-R2-2)
         this.dialogText.text = ''
+        // ルビは進行 0 状態にリセット
+        this.updateRubyVisibility(0)
       }
     }
   }

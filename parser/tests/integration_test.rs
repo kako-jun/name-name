@@ -2813,3 +2813,57 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         "font_family が None なら emit に出ない"
     );
 }
+
+#[test]
+fn test_ruby_markup_passthrough_in_dialog_text() {
+    // ルビ記法 (#148) は parser/Rust 側ではスキーマを拡張せず、
+    // Dialog/Narration の text フィールドに生 markdown のまま透過する設計。
+    // frontend が描画直前に parseRubyText でランに分解する。
+    // ここでは「《》/｜ を含む text 行が壊れずに parse される」ことを確認する。
+    let markdown = r#"---
+engine: name-name
+chapter: 1
+title: "ルビテスト"
+hidden: false
+---
+
+## 1-1: ルビ確認
+
+**子供** (suppin_1, 左):
+これは漢字《かんじ》です。
+｜美少女《びしょうじょ》戦士。
+
+> ナレーター《narrator》は語る。
+"#;
+
+    let doc = parser::parse(markdown);
+    let events = &doc.chapters[0].scenes[0].events;
+
+    // Dialog: 2 行のテキストにそれぞれ《》/｜ がそのまま残る
+    let dialog_text = match &events[0] {
+        Event::Dialog { text, .. } => text.clone(),
+        other => panic!("Dialog を期待したが {:?}", other),
+    };
+    assert_eq!(dialog_text.len(), 2);
+    assert_eq!(dialog_text[0], "これは漢字《かんじ》です。");
+    assert_eq!(dialog_text[1], "｜美少女《びしょうじょ》戦士。");
+
+    // Narration も同様に透過される
+    let narration_text = match &events[1] {
+        Event::Narration { text, .. } => text.clone(),
+        other => panic!("Narration を期待したが {:?}", other),
+    };
+    assert_eq!(
+        narration_text,
+        vec!["ナレーター《narrator》は語る。".to_string()]
+    );
+
+    // round-trip: emit してパースし直しても保持されること
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    let dialog_text2 = match &doc2.chapters[0].scenes[0].events[0] {
+        Event::Dialog { text, .. } => text.clone(),
+        _ => panic!("Dialog を期待"),
+    };
+    assert_eq!(dialog_text2, dialog_text);
+}
