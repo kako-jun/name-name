@@ -33,6 +33,7 @@ import { SeekBar } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { Event, EventScene } from '../types'
 import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
+import { isRead, loadReadProgress, markRead } from './readProgress'
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -147,6 +148,17 @@ export class NovelRenderer {
   private autoWaitMs: number = 2500
   /** autoMode 変更時の React 側同期コールバック */
   private onAutoModeChange: ((on: boolean) => void) | null = null
+
+  /** スキップモード ON/OFF (#140) */
+  private skipMode: boolean = false
+  /** スキップ連続進行タイマー */
+  private skipTimer: ReturnType<typeof setTimeout> | null = null
+  /** 既読進捗（display index の Set）。docKey が設定されている場合に使用 */
+  private readProgress: Set<number> = new Set()
+  /** 既読永続化のキー（undefined の場合はスキップ機能無効） */
+  private docKey: string | undefined = undefined
+  /** skipMode 変更時の React 側同期コールバック */
+  private onSkipModeChange: ((on: boolean) => void) | null = null
 
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
@@ -300,6 +312,10 @@ export class NovelRenderer {
       clearTimeout(this.autoTimer)
       this.autoTimer = null
     }
+    if (this.skipTimer) {
+      clearTimeout(this.skipTimer)
+      this.skipTimer = null
+    }
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
     this.clearBackground()
@@ -389,6 +405,43 @@ export class NovelRenderer {
   }
 
   /**
+   * 既読永続化キーを設定する (#140)。
+   * 設定するとスキップモードが有効になり、既読進捗を localStorage から読み込む。
+   */
+  setDocKey(docKey: string): void {
+    this.docKey = docKey
+    this.readProgress = loadReadProgress(docKey)
+  }
+
+  /**
+   * スキップモードの ON/OFF を切り替える (#140)。
+   * OFF にした場合はスキップタイマーをキャンセルする。
+   */
+  setSkipMode(on: boolean): void {
+    if (this.skipMode === on) return
+    this.skipMode = on
+    if (on) {
+      // スキップモードとオートモードは排他: スキップ ON 時にオートを解除 (#140)
+      this.setAutoMode(false)
+    }
+    if (!on && this.skipTimer) {
+      clearTimeout(this.skipTimer)
+      this.skipTimer = null
+    }
+    this.onSkipModeChange?.(on)
+  }
+
+  /** スキップモード変更コールバックを登録する */
+  setOnSkipModeChange(cb: (on: boolean) => void): void {
+    this.onSkipModeChange = cb
+  }
+
+  /** スキップモードの現在状態を取得する */
+  isSkipMode(): boolean {
+    return this.skipMode
+  }
+
+  /**
    * リソース解放
    */
   destroy(): void {
@@ -407,6 +460,10 @@ export class NovelRenderer {
     if (this.autoTimer) {
       clearTimeout(this.autoTimer)
       this.autoTimer = null
+    }
+    if (this.skipTimer) {
+      clearTimeout(this.skipTimer)
+      this.skipTimer = null
     }
     this.audioManager.destroy()
     this.characterLayer.clear()
@@ -521,6 +578,9 @@ export class NovelRenderer {
     if (historyIndex < 0 || historyIndex >= this.history.length) return
     if (this.waitingForChoice || this.waitingForWait) return
 
+    // シーク操作時はスキップモードを解除する (#140): ユーザーが特定箇所を見たくてシークしているため
+    this.setSkipMode(false)
+
     // 履歴を指定位置まで切り詰める（アンドゥスタック方式: 戻った地点から再進行すると新しい履歴が積まれる）
     this.history = this.history.slice(0, historyIndex + 1)
     const targetState = this.history[historyIndex]
@@ -620,8 +680,9 @@ export class NovelRenderer {
       return
     }
     if (this.saveLoadOverlay.visible) return
-    // 手動クリック/タップでオートモードをキャンセル (#139)
+    // 手動クリック/タップでオートモード・スキップモードをキャンセル (#139 #140)
     this.setAutoMode(false)
+    this.setSkipMode(false)
     this.advanceOrSkipTypewriter()
   }
 
@@ -675,16 +736,19 @@ export class NovelRenderer {
       case ' ':
       case 'Enter':
         e.preventDefault()
-        // 手動キー操作でオートモードをキャンセル (#139)
+        // 手動キー操作でオートモード・スキップモードをキャンセル (#139 #140)
         this.setAutoMode(false)
+        this.setSkipMode(false)
         this.advanceOrSkipTypewriter()
         break
       case 'ArrowRight':
         this.setAutoMode(false)
+        this.setSkipMode(false)
         this.advanceOrSkipTypewriter()
         break
       case 'ArrowLeft':
         this.setAutoMode(false)
+        this.setSkipMode(false)
         this.goBack()
         break
       case 's':
@@ -766,6 +830,8 @@ export class NovelRenderer {
       return
     }
     if ('Choice' in event) {
+      // 選択肢に到達したらスキップモードを解除（手動選択が必要） (#140)
+      this.setSkipMode(false)
       this.waitingForChoice = true
       this.choiceOverlay.show(event.Choice.options, (jump: string) => {
         this.waitingForChoice = false
@@ -805,6 +871,8 @@ export class NovelRenderer {
     }
     if ('Wait' in event) {
       // 進行を停止し、指定ミリ秒後に再開（eventIndex のインクリメントはコールバック内で行う）
+      // Wait 中もスキップを停止する（Wait を無視するのは仕様違反） (#140)
+      this.setSkipMode(false)
       this.waitingForWait = true
       this.waitTimer = setTimeout(() => {
         this.waitTimer = null
@@ -995,6 +1063,23 @@ export class NovelRenderer {
     }
 
     const line = textEvt.text[this.textIndex] ?? ''
+    const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
+
+    // スキップモード処理 (#140): 既読チェックはマーク前に行う
+    if (this.skipMode && this.docKey) {
+      if (!isRead(this.readProgress, displayIndex)) {
+        // 未読到達 → スキップ終了（現在の行は表示して待機）
+        this.setSkipMode(false)
+      } else {
+        // 既読 → 即 advance をスケジュール
+        this.scheduleSkipStep()
+      }
+    }
+
+    // 既読マーク (#140): チェック後にマーク（次回以降は既読として扱う）
+    if (this.docKey) {
+      markRead(this.docKey, this.readProgress, displayIndex)
+    }
 
     // 空行 = 改ページ（テキストクリア後に次行へ自動進行はしない。空表示する）
     const name = textEvt.type === 'dialog' ? textEvt.character : null
@@ -1009,6 +1094,31 @@ export class NovelRenderer {
 
     this.updateCounter()
     this.updateSeekBar()
+  }
+
+  /**
+   * スキップモード: 既読行を高速スキップする (#140)。
+   * タイプライターをスキップしてから advance() を setTimeout(0) で呼ぶ。
+   * Choice / Wait 到達時は processDirective() 内で setSkipMode(false) が呼ばれるため、
+   * タイマー発火時に skipMode が false になっており advance() は通常呼び出しになる。
+   * 同一イベントの複数 text 行は同じ displayIndex を持つため、
+   * 2 行目以降も「既読」として扱い全行をスキップする（意図的な設計）。
+   */
+  private scheduleSkipStep(): void {
+    if (!this.skipMode) return
+    if (this.skipTimer) {
+      clearTimeout(this.skipTimer)
+    }
+    this.skipTimer = setTimeout(() => {
+      this.skipTimer = null
+      if (!this.skipMode) return
+      // タイプライター中なら全文スキップ（skipTypewriter は onTypingDone を破棄するため
+      // オートモードとの二重 advance は起きない）
+      if (this.dialogBox.isTyping()) {
+        this.dialogBox.skipTypewriter()
+      }
+      this.advance()
+    }, 0)
   }
 
   /**
