@@ -18,6 +18,7 @@ import {
   TEXT_X_NO_PORTRAIT,
   TEXT_INNER_PADDING,
   SIDE_MARGIN,
+  computePortraitContainFit,
 } from './RpgDialogBox'
 
 // private フィールドにアクセスするための型
@@ -195,5 +196,47 @@ describe('RpgDialogBox typewriter (Issue #150)', () => {
     expect(i.messageText!.text).toBe('') // 新規 typewriter 開始時点なので空
     expect(box.isTyping()).toBe(true)
     box.destroy()
+  })
+})
+
+describe('computePortraitContainFit (Issue #104)', () => {
+  // 計算は枠サイズ 80、frameX=40, frameY=100 で固定
+  const FRAME_SIZE = 80
+  const FX = 40
+  const FY = 100
+
+  it('正方形の source は枠ぴったりに表示する', () => {
+    const fit = computePortraitContainFit(160, 160, FX, FY, FRAME_SIZE)
+    expect(fit.x).toBe(40)
+    expect(fit.y).toBe(100)
+    expect(fit.width).toBe(80)
+    expect(fit.height).toBe(80)
+  })
+
+  it('縦長の source は中央寄せで横余白を残す', () => {
+    // 100×200 → scale = min(80/100, 80/200) = 0.4 → 40×80
+    const fit = computePortraitContainFit(100, 200, FX, FY, FRAME_SIZE)
+    expect(fit.width).toBe(40)
+    expect(fit.height).toBe(80)
+    expect(fit.x).toBe(40 + (80 - 40) / 2) // 60
+    expect(fit.y).toBe(100)
+  })
+
+  it('横長の source は中央寄せで縦余白を残す', () => {
+    // 200×100 → scale = min(80/200, 80/100) = 0.4 → 80×40
+    const fit = computePortraitContainFit(200, 100, FX, FY, FRAME_SIZE)
+    expect(fit.width).toBe(80)
+    expect(fit.height).toBe(40)
+    expect(fit.x).toBe(40)
+    expect(fit.y).toBe(100 + (80 - 40) / 2) // 120
+  })
+
+  it('source が 0 や非数なら枠と同じサイズへフォールバック', () => {
+    const a = computePortraitContainFit(0, 100, FX, FY, FRAME_SIZE)
+    expect(a).toEqual({ x: 40, y: 100, width: 80, height: 80 })
+    const b = computePortraitContainFit(NaN, 100, FX, FY, FRAME_SIZE)
+    expect(b).toEqual({ x: 40, y: 100, width: 80, height: 80 })
+    const c = computePortraitContainFit(100, -1, FX, FY, FRAME_SIZE)
+    expect(c).toEqual({ x: 40, y: 100, width: 80, height: 80 })
   })
 })

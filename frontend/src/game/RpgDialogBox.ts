@@ -50,6 +50,37 @@ const DEFAULT_RPG_MS_PER_CHAR = 30
  * テストもこの export を使って計算式で assert しているので、数値を変えたら両方追従する。
  */
 export const PORTRAIT_SIZE = 80
+
+/**
+ * portrait 画像を `PORTRAIT_SIZE` 正方形枠に「contain」（アスペクト比維持で内接）するときの
+ * 表示矩形を計算する純関数 (#104)。余白は portraitFrame の半透明黒で埋まる前提。
+ *
+ * 縮退ケース:
+ * - texture が未ロードで `srcW`/`srcH` が 0 の場合: 枠と同じサイズを返してフォールバック描画にする
+ * - 比率が枠と同じ場合: 余白なし（枠ぴったり）
+ *
+ * (frameX, frameY) は portrait 枠の左上座標。返り値の x/y はその枠内で中央揃えする位置。
+ */
+export function computePortraitContainFit(
+  srcW: number,
+  srcH: number,
+  frameX: number,
+  frameY: number,
+  frameSize: number
+): { x: number; y: number; width: number; height: number } {
+  if (!Number.isFinite(srcW) || !Number.isFinite(srcH) || srcW <= 0 || srcH <= 0) {
+    return { x: frameX, y: frameY, width: frameSize, height: frameSize }
+  }
+  const scale = Math.min(frameSize / srcW, frameSize / srcH)
+  const w = srcW * scale
+  const h = srcH * scale
+  return {
+    x: frameX + (frameSize - w) / 2,
+    y: frameY + (frameSize - h) / 2,
+    width: w,
+    height: h,
+  }
+}
 export const PORTRAIT_MARGIN = 20
 export const PORTRAIT_X = 40
 export const DIALOG_HEIGHT = 120
@@ -440,21 +471,31 @@ export class RpgDialogBox extends Container {
         const boxTop = this.getBoxTop()
         const portraitY = boxTop + PORTRAIT_Y_OFFSET
 
+        // 縦長立ち絵対応 (#104): contain モードでアスペクト比を保ったまま PORTRAIT_SIZE 枠に内接させる。
+        // 余白は portraitFrame の半透明黒で埋まる。
+        const fit = computePortraitContainFit(
+          texture.width,
+          texture.height,
+          PORTRAIT_X,
+          portraitY,
+          PORTRAIT_SIZE
+        )
+
         if (!this.portraitSprite) {
           const sprite = new Sprite(texture)
-          sprite.x = PORTRAIT_X
-          sprite.y = portraitY
-          sprite.width = PORTRAIT_SIZE
-          sprite.height = PORTRAIT_SIZE
+          sprite.x = fit.x
+          sprite.y = fit.y
+          sprite.width = fit.width
+          sprite.height = fit.height
           this.portraitSprite = sprite
           // portraitFrame の上に乗せる（addChild で最後が最前面）
           this.addChild(sprite)
         } else {
           this.portraitSprite.texture = texture
-          this.portraitSprite.x = PORTRAIT_X
-          this.portraitSprite.y = portraitY
-          this.portraitSprite.width = PORTRAIT_SIZE
-          this.portraitSprite.height = PORTRAIT_SIZE
+          this.portraitSprite.x = fit.x
+          this.portraitSprite.y = fit.y
+          this.portraitSprite.width = fit.width
+          this.portraitSprite.height = fit.height
         }
         // 成功時は visible=true を維持（keepSpriteVisible の有無に関わらず、差し替え成功 = 表示）
         this.portraitSprite.visible = this.showing && !!this.currentPortrait
