@@ -516,6 +516,18 @@ export class NovelRenderer {
     // Flag は Condition の外にあるため、Flag の位置は再展開で変動しない
   }
 
+  /**
+   * typewriter 表示中なら全文表示にスキップ、完了済みなら次イベントへ進む (#137)。
+   * advance() / クリック / Enter / Space / ArrowRight 共通の入力ハンドラから呼ぶ。
+   */
+  private advanceOrSkipTypewriter(): void {
+    if (this.dialogBox.isTyping()) {
+      this.dialogBox.skipTypewriter()
+      return
+    }
+    this.advance()
+  }
+
   private handleAdvance = (): void => {
     this.audioManager.ensureContext()
     if (this.backlogOverlay.visible) {
@@ -523,7 +535,7 @@ export class NovelRenderer {
       return
     }
     if (this.saveLoadOverlay.visible) return
-    this.advance()
+    this.advanceOrSkipTypewriter()
   }
 
   private handleWheel = (e: WheelEvent): void => {
@@ -576,10 +588,10 @@ export class NovelRenderer {
       case ' ':
       case 'Enter':
         e.preventDefault()
-        this.advance()
+        this.advanceOrSkipTypewriter()
         break
       case 'ArrowRight':
-        this.advance()
+        this.advanceOrSkipTypewriter()
         break
       case 'ArrowLeft':
         this.goBack()
