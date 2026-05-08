@@ -59,22 +59,23 @@ jobs:
 
       - run: npm test -- --run
 
-  backend:
-    name: Backend (Python)
+  worker:
+    name: Worker (Cloudflare)
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: backend
+        working-directory: worker
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-node@v4
         with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
 
-      - run: uv sync --frozen
+      - run: npm ci
 
-      - name: Import smoke test
-        run: uv run python -c "from app.main import app; print('FastAPI app import OK')"
+      - run: npm run build
+
+      - run: npm test

@@ -145,7 +145,7 @@ function EditorScreen({
   }, [projectName])
 
   // ユーザー操作で doc が変わったら emit し、rawMarkdown を更新する。
-  // rawMarkdown の更新は autosave useEffect 経由で backend に PUT される。
+  // rawMarkdown の更新は autosave useEffect 経由で Worker に PUT される。
   // emit が失敗した場合は rawMarkdown と doc の desync を避けるため、doc を元に戻す。
   const handleDocChange = async (newDoc: EventDocument) => {
     const prev = doc
