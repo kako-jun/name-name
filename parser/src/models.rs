@@ -118,12 +118,20 @@ pub enum Event {
         /// `[ボイス: voice/line01.mp3]` ディレクティブで直後の Dialog/Narration に注入される。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         voice_path: Option<String>,
+        /// per-line フォント上書き (#147)。CSS の font-family 文字列。
+        /// `[フォント: Klee One, cursive]` ディレクティブで直後の Dialog/Narration に注入される。
+        /// 未指定の場合は Document.font_family（per-game 既定）→ runtime 既定の順でフォールバック。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_family: Option<String>,
     },
     Narration {
         text: Vec<String>,
         /// per-line voice ファイルへの相対パス (#144)。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         voice_path: Option<String>,
+        /// per-line フォント上書き (#147)。詳細は Dialog::font_family を参照。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_family: Option<String>,
     },
     Background {
         path: String,
@@ -314,6 +322,12 @@ pub struct Document {
     /// frontmatter `choice_style: soft` で per-game 切替可能。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choice_style: Option<String>,
+    /// per-game デフォルトフォント (#147)。CSS の font-family 文字列を生で受け取る。
+    /// 例: "Klee One, cursive" / "Hina Mincho, serif"。
+    /// 未指定時は runtime 既定 (`'Noto Sans JP', sans-serif`)。
+    /// 個別行で上書きしたい場合は [フォント: ...] ディレクティブで Dialog/Narration 直前に指定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

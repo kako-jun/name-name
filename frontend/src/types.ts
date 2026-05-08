@@ -69,9 +69,18 @@ export type Event =
         text: string[]
         /** per-line voice ファイルパス (#144) */
         voice_path?: string | null
+        /** per-line フォント上書き (#147)。CSS の font-family 文字列 */
+        font_family?: string | null
       }
     }
-  | { Narration: { text: string[]; voice_path?: string | null } }
+  | {
+      Narration: {
+        text: string[]
+        voice_path?: string | null
+        /** per-line フォント上書き (#147) */
+        font_family?: string | null
+      }
+    }
   | { Background: { path: string } }
   | {
       Bgm: {
@@ -143,6 +152,9 @@ export interface EventDocument {
   /** 選択肢スタイル名。`default` / `soft` / `monochrome` (#146)。
    *  null/undefined のときは runtime で `default` 扱い。 */
   choice_style?: string | null
+  /** per-game デフォルトフォント (#147)。CSS の font-family 文字列。
+   *  null/undefined のときは runtime 既定 (`'Noto Sans JP', sans-serif`) を使う。 */
+  font_family?: string | null
   chapters: EventChapter[]
 }
 
