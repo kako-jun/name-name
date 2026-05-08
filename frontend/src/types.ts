@@ -67,9 +67,11 @@ export type Event =
         expression: string | null
         position: string | null
         text: string[]
+        /** per-line voice ファイルパス (#144) */
+        voice_path?: string | null
       }
     }
-  | { Narration: { text: string[] } }
+  | { Narration: { text: string[]; voice_path?: string | null } }
   | { Background: { path: string } }
   | { Bgm: { path: string | null; action: BgmAction } }
   | { Se: { path: string } }

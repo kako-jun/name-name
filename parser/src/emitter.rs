@@ -56,10 +56,16 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 expression,
                 position,
                 text,
+                voice_path,
             } => {
                 // Add blank line before dialog if previous was also dialog (new speech block)
                 if prev_was_dialog_or_text && i > 0 {
                     out.push('\n');
+                }
+
+                // Emit [ボイス: path] before the dialog block
+                if let Some(ref vp) = voice_path {
+                    out.push_str(&format!("[ボイス: {}]\n", vp));
                 }
 
                 // Check if we need to emit a speaker line
@@ -90,9 +96,12 @@ fn emit_events(out: &mut String, events: &[Event]) {
 
                 prev_was_dialog_or_text = true;
             }
-            Event::Narration { text } => {
+            Event::Narration { text, voice_path } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
+                }
+                if let Some(ref vp) = voice_path {
+                    out.push_str(&format!("[ボイス: {}]\n", vp));
                 }
                 for line in text {
                     out.push_str(&format!("> {}\n", line));
@@ -505,6 +514,7 @@ mod tests {
                         expression: Some("suppin_1".to_string()),
                         position: Some("左".to_string()),
                         text: vec!["こんにちは。".to_string()],
+                        voice_path: None,
                     }],
                 }],
             }],

@@ -58,6 +58,8 @@ pub fn parse(input: &str) -> Document {
     let mut last_character: Option<String> = None;
     let mut last_expression: Option<String> = None;
     let mut last_position: Option<String> = None;
+    // per-line voice (#144): [ボイス: path] で次の Dialog/Narration に注入する
+    let mut pending_voice_path: Option<String> = None;
 
     while pos < len {
         let line = lines[pos];
@@ -277,7 +279,20 @@ pub fn parse(input: &str) -> Document {
             && !trimmed.starts_with("[条件:")
             && !trimmed.starts_with("[/条件]")
         {
+            // [ボイス: path] は次の Dialog/Narration に注入する (#144)
+            if let Some(content) = trimmed
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .and_then(|s| s.strip_prefix("ボイス:"))
+            {
+                pending_voice_path = Some(content.trim().to_string());
+                pos += 1;
+                continue;
+            }
             if let Some(event) = parse_directive(trimmed) {
+                // [ボイス: path] の後に非テキストディレクティブが挟まった場合は
+                // pending_voice_path を破棄する（誤ったイベントへの注入を防ぐ #144）
+                pending_voice_path = None;
                 current_events.push(event);
             }
             pos += 1;
@@ -391,6 +406,7 @@ pub fn parse(input: &str) -> Document {
                     expression,
                     position,
                     text: text_lines,
+                    voice_path: pending_voice_path.take(),
                 });
             }
             continue;
@@ -410,6 +426,7 @@ pub fn parse(input: &str) -> Document {
             }
             current_events.push(Event::Narration {
                 text: narration_lines,
+                voice_path: pending_voice_path.take(),
             });
             continue;
         }
@@ -439,6 +456,7 @@ pub fn parse(input: &str) -> Document {
                     expression: last_expression.clone(),
                     position: last_position.clone(),
                     text: text_lines,
+                    voice_path: pending_voice_path.take(),
                 });
             }
             continue;
@@ -1228,6 +1246,7 @@ title: "テスト"
                 expression,
                 position,
                 text,
+                ..
             } => {
                 assert_eq!(character, &Some("カコ".to_string()));
                 assert_eq!(expression, &Some("suppin_1".to_string()));
