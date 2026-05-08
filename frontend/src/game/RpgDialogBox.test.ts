@@ -24,7 +24,12 @@ import {
 interface RpgDialogBoxInternals {
   portraitFrame: { visible: boolean } | null
   nameText: { x: number } | null
-  messageText: { x: number; style: { wordWrapWidth: number } } | null
+  messageText: {
+    x: number
+    text: string
+    visible: boolean
+    style: { wordWrapWidth: number }
+  } | null
   portraitSprite: { visible: boolean; texture: unknown } | null
   currentPortraitToken: number
 }
@@ -124,6 +129,71 @@ describe('RpgDialogBox portrait (Issue #73 Phase 1)', () => {
     box.show('村人', 'yo', 'villager.png')
     expect(i.currentPortraitToken).toBeGreaterThan(tokenAfterRedraw)
 
+    box.destroy()
+  })
+})
+
+describe('RpgDialogBox typewriter (Issue #150)', () => {
+  it('show 直後は messageText.text が空 (typewriter 開始時点)', () => {
+    const box = new RpgDialogBox(SCREEN_WIDTH, SCREEN_HEIGHT)
+    box.show('長老', 'こんにちは')
+    const i = asInternals(box)
+    expect(i.messageText!.text).toBe('')
+    expect(i.messageText!.visible).toBe(true)
+    expect(box.isTyping()).toBe(true)
+    box.destroy()
+  })
+
+  it('skipTypewriter で全文が即座に表示される', () => {
+    const box = new RpgDialogBox(SCREEN_WIDTH, SCREEN_HEIGHT)
+    box.show('長老', 'こんにちは、若者よ。')
+    box.skipTypewriter()
+    const i = asInternals(box)
+    expect(i.messageText!.text).toBe('こんにちは、若者よ。')
+    expect(box.isTyping()).toBe(false)
+    box.destroy()
+  })
+
+  it('hide で typewriter 状態がリセットされる', () => {
+    const box = new RpgDialogBox(SCREEN_WIDTH, SCREEN_HEIGHT)
+    box.show('長老', 'long message')
+    expect(box.isTyping()).toBe(true)
+    box.hide()
+    expect(box.isTyping()).toBe(false)
+    box.destroy()
+  })
+
+  it('setMsPerChar(0) で表示中なら即座に skip される', () => {
+    const box = new RpgDialogBox(SCREEN_WIDTH, SCREEN_HEIGHT)
+    box.show('長老', 'message')
+    expect(box.isTyping()).toBe(true)
+    box.setMsPerChar(0)
+    const i = asInternals(box)
+    expect(i.messageText!.text).toBe('message')
+    expect(box.isTyping()).toBe(false)
+    box.destroy()
+  })
+
+  it('skip 連打しても安定 (二回目は no-op)', () => {
+    const box = new RpgDialogBox(SCREEN_WIDTH, SCREEN_HEIGHT)
+    box.show('長老', 'msg')
+    box.skipTypewriter()
+    box.skipTypewriter()
+    box.skipTypewriter()
+    const i = asInternals(box)
+    expect(i.messageText!.text).toBe('msg')
+    expect(box.isTyping()).toBe(false)
+    box.destroy()
+  })
+
+  it('別 NPC を再度 show すると typewriter が新規開始する', () => {
+    const box = new RpgDialogBox(SCREEN_WIDTH, SCREEN_HEIGHT)
+    box.show('長老', 'first')
+    box.skipTypewriter()
+    box.show('村人', 'second')
+    const i = asInternals(box)
+    expect(i.messageText!.text).toBe('') // 新規 typewriter 開始時点なので空
+    expect(box.isTyping()).toBe(true)
     box.destroy()
   })
 })
