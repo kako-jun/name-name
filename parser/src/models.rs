@@ -156,6 +156,43 @@ pub enum Event {
     RpgMap(RpgMapData),
     PlayerStart(PlayerStartData),
     Npc(NpcData),
+    /// 立ち絵 / オブジェクトのアニメーション (#134)。
+    ///
+    /// 子供向け動画用途で「車が回転しながら横移動」「寿司が空から降ってくる」等の
+    /// 表現を可能にする。target は表示中のキャラ名 (CharacterLayer 上の identifier)。
+    /// fire-and-forget 方式: animation 開始と同時に次イベントへ進める。
+    /// 動画 export 時の決定論的な再生は別 Issue で対応。
+    Animate {
+        /// アニメさせる対象。立ち絵の character 名 (例: "ナレーター", "車")
+        target: String,
+        /// X 軸の移動量 (px)。先頭 + / - で相対、なし or 数値のみで絶対座標。None で変更なし。
+        /// 文字列で持つのは "+500" / "-200" / "400" のように相対/絶対を区別するため。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dx: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dy: Option<String>,
+        /// 回転量 (degrees)。+ で相対加算、なしで絶対 (現在 = 0 起点)。None で変更なし。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rotation: Option<String>,
+        /// スケール (1.0 = 等倍)。None で変更なし。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f32>,
+        /// アニメ全体の所要時間 (ms)。
+        duration_ms: u32,
+        /// イージング関数。未指定は Linear。
+        #[serde(default)]
+        easing: Easing,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum Easing {
+    #[default]
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Tsify)]

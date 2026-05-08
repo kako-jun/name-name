@@ -298,6 +298,44 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str("[/NPC]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::Animate {
+                target,
+                dx,
+                dy,
+                rotation,
+                scale,
+                duration_ms,
+                easing,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut parts: Vec<String> = vec![format!("target={}", target)];
+                if let Some(v) = dx {
+                    parts.push(format!("x={}", v));
+                }
+                if let Some(v) = dy {
+                    parts.push(format!("y={}", v));
+                }
+                if let Some(v) = rotation {
+                    parts.push(format!("rotation={}", v));
+                }
+                if let Some(v) = scale {
+                    parts.push(format!("scale={}", v));
+                }
+                parts.push(format!("duration={}", duration_ms));
+                let easing_str = match easing {
+                    crate::models::Easing::Linear => "linear",
+                    crate::models::Easing::EaseIn => "ease-in",
+                    crate::models::Easing::EaseOut => "ease-out",
+                    crate::models::Easing::EaseInOut => "ease-in-out",
+                };
+                if *easing != crate::models::Easing::Linear {
+                    parts.push(format!("easing={}", easing_str));
+                }
+                out.push_str(&format!("[アニメ: {}]\n", parts.join(", ")));
+                prev_was_dialog_or_text = false;
+            }
         }
     }
 }
