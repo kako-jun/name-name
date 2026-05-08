@@ -256,6 +256,55 @@ export class AudioManager {
   }
 
   /**
+   * 選択肢クリック時の確定音 (#146)。
+   * Web Audio の OscillatorNode を直接合成するためファイル不要。
+   * SE 系統 (seMasterGain) に乗せるため、SE 音量設定と同期する。
+   */
+  playSelectTone(): void {
+    if (!this.ctx) return
+    this.ensureMasterGains()
+    const osc = this.ctx.createOscillator()
+    const gain = this.ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = 880
+    const now = this.ctx.currentTime
+    gain.gain.setValueAtTime(0.15, now)
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12)
+    osc.connect(gain)
+    if (this.seMasterGain) {
+      gain.connect(this.seMasterGain)
+    } else {
+      gain.connect(this.ctx.destination)
+    }
+    osc.start()
+    osc.stop(now + 0.15)
+  }
+
+  /**
+   * 選択肢ホバー時の控えめな確認音 (#146)。
+   * 確定音 (880Hz) との聴覚差を確保するため周波数を 600Hz に下げる (R1 N4)。
+   */
+  playHoverTone(): void {
+    if (!this.ctx) return
+    this.ensureMasterGains()
+    const osc = this.ctx.createOscillator()
+    const gain = this.ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = 600
+    const now = this.ctx.currentTime
+    gain.gain.setValueAtTime(0.05, now)
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06)
+    osc.connect(gain)
+    if (this.seMasterGain) {
+      gain.connect(this.seMasterGain)
+    } else {
+      gain.connect(this.ctx.destination)
+    }
+    osc.start()
+    osc.stop(now + 0.08)
+  }
+
+  /**
    * 全停止・リソース解放
    */
   destroy(): void {

@@ -14,6 +14,10 @@ pub fn emit(doc: &Document) -> String {
         if doc.aspect_ratio != "16:9" {
             out.push_str(&format!("aspect_ratio: \"{}\"\n", doc.aspect_ratio));
         }
+        // Emit choice_style only when present (#146)
+        if let Some(ref style) = doc.choice_style {
+            out.push_str(&format!("choice_style: \"{}\"\n", style));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -517,6 +521,7 @@ mod tests {
         let doc = Document {
             engine: "name-name".to_string(),
             aspect_ratio: "16:9".to_string(),
+            choice_style: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),

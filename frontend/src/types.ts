@@ -140,6 +140,9 @@ export interface EventDocument {
   engine: string
   /** 画面比率。省略時は "16:9" がデフォルト (Issue #136) */
   aspect_ratio?: string
+  /** 選択肢スタイル名。`default` / `soft` / `monochrome` (#146)。
+   *  null/undefined のときは runtime で `default` 扱い。 */
+  choice_style?: string | null
   chapters: EventChapter[]
 }
 

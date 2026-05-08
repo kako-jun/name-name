@@ -309,6 +309,11 @@ pub struct Document {
     /// 画面比率。"16:9" / "4:3" / "9:16"。未指定時は "16:9"。
     #[serde(default = "default_aspect_ratio")]
     pub aspect_ratio: String,
+    /// 選択肢スタイル名 (#146)。`default` / `soft` / `monochrome` を想定。
+    /// 未指定時は `None`（runtime で `default` 扱い）。
+    /// frontmatter `choice_style: soft` で per-game 切替可能。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice_style: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

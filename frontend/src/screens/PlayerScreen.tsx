@@ -195,6 +195,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               events={novelEvents}
               assetBaseUrl={assetBaseUrl}
               aspectRatio={doc?.aspect_ratio}
+              choiceStyle={doc?.choice_style ?? null}
               docKey={projectName}
               initialSkipMode={startWithSkip}
             />
