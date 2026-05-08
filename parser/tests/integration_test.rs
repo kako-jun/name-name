@@ -2540,3 +2540,214 @@ fn test_voice_overwritten_by_later_directive() {
         panic!("Expected Dialog, got {:?}", events[0]);
     }
 }
+
+// --- #147: フォント切替 (per-game / per-line) ---
+
+#[test]
+fn test_document_font_family_parses_from_frontmatter() {
+    // frontmatter `font_family:` が Some(...) で parse されること (#147)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_family: "Klee One, cursive"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.font_family.as_deref(),
+        Some("Klee One, cursive"),
+        "frontmatter の font_family が parse されること"
+    );
+
+    // 引用符なしでも読めること（カンマ・空白を含む値もそのまま透過）
+    let input_unquoted = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_family: Hina Mincho, serif
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_unquoted = parser::parse(input_unquoted);
+    assert_eq!(
+        doc_unquoted.font_family.as_deref(),
+        Some("Hina Mincho, serif")
+    );
+
+    // 未指定なら None
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert_eq!(doc_none.font_family, None);
+
+    // 空文字なら None（choice_style と同じ規約）
+    let input_empty = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_family:
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_empty = parser::parse(input_empty);
+    assert_eq!(doc_empty.font_family, None);
+}
+
+#[test]
+fn test_dialog_font_directive_inject_pending() {
+    // [フォント: family] が次の Dialog/Narration の font_family に注入されること (#147)
+    let dialog_input = "## s: テスト\n\n[フォント: Klee One, cursive]\n**カコ**:\nこんにちは。\n";
+    let doc = parser::parse(dialog_input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Dialog {
+        font_family, text, ..
+    } = &events[0]
+    {
+        assert_eq!(font_family.as_deref(), Some("Klee One, cursive"));
+        assert_eq!(text, &vec!["こんにちは。".to_string()]);
+    } else {
+        panic!("Expected Dialog, got {:?}", events[0]);
+    }
+
+    // Narration にも注入されること
+    let narration_input = "## s: テスト\n\n[フォント: Hina Mincho, serif]\n> 静かな朝。\n";
+    let doc = parser::parse(narration_input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Narration { font_family, .. } = &events[0] {
+        assert_eq!(font_family.as_deref(), Some("Hina Mincho, serif"));
+    } else {
+        panic!("Expected Narration, got {:?}", events[0]);
+    }
+
+    // [フォント:] なしの場合は None
+    let bare_input = "## s: テスト\n\n**カコ**:\nふつう。\n";
+    let doc = parser::parse(bare_input);
+    let events = &doc.chapters[0].scenes[0].events;
+    if let Event::Dialog { font_family, .. } = &events[0] {
+        assert!(font_family.is_none(), "directive なしなら None");
+    } else {
+        panic!("Expected Dialog");
+    }
+}
+
+#[test]
+fn test_dialog_font_round_trip() {
+    // parse → emit → parse で font_family（per-game / per-line）が両方保持されること (#147)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_family: "Klee One, cursive"
+---
+
+## 1-1: シーン
+
+[フォント: Hina Mincho, serif]
+**カコ**:
+こんにちは。
+
+[フォント: Yusei Magic, sans-serif]
+> 静かな朝だった。
+"#;
+    let doc1 = parser::parse(input);
+    let emitted = emitter::emit(&doc1);
+    assert!(
+        emitted.contains("font_family:"),
+        "emit 出力に font_family が含まれること: {}",
+        emitted
+    );
+    assert!(
+        emitted.contains("[フォント: Hina Mincho, serif]"),
+        "per-line [フォント:] が emit されること: {}",
+        emitted
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc1, doc2, "round-trip で完全一致すること");
+    assert_eq!(doc2.font_family.as_deref(), Some("Klee One, cursive"));
+
+    // None の場合は emit に出ないこと
+    let mut doc_none = doc1.clone();
+    doc_none.font_family = None;
+    let emitted_none = emitter::emit(&doc_none);
+    assert!(
+        !emitted_none.contains("font_family:"),
+        "font_family が None なら emit に含まれないこと: {}",
+        emitted_none
+    );
+}
+
+#[test]
+fn test_font_directive_is_overwritten_by_later() {
+    // [フォント:] が連続した場合、後者で前者を上書きし最後のものが注入されること (#147)
+    let input =
+        "## s: テスト\n\n[フォント: First, sans-serif]\n[フォント: Second, serif]\n**カコ**:\nこんにちは。\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Dialog { font_family, .. } = &events[0] {
+        assert_eq!(
+            font_family.as_deref(),
+            Some("Second, serif"),
+            "後から指定した font が優先されること"
+        );
+    } else {
+        panic!("Expected Dialog, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_font_dropped_when_non_text_directive_intervenes() {
+    // [フォント:] の後に非テキストディレクティブが挟まると pending_font_family はクリアされ、
+    // その後の Dialog/Narration には font が注入されないこと (#147 voice と同じ動作)
+    let input = "## s: テスト\n\n[フォント: wrong, sans-serif]\n[背景: bg01.png]\n**カコ**:\nこんにちは。\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2); // Background + Dialog
+    if let Event::Dialog { font_family, .. } = &events[1] {
+        assert!(
+            font_family.is_none(),
+            "非テキストを越えて font が注入されてはいけない"
+        );
+    } else {
+        panic!("Expected Dialog, got {:?}", events[1]);
+    }
+}
+
+#[test]
+fn test_font_release_clears_pending() {
+    // [フォント解除] で pending がクリアされ、次の Dialog は base に戻ること (#147)
+    let input =
+        "## s: テスト\n\n[フォント: Klee One, cursive]\n[フォント解除]\n**カコ**:\nこんにちは。\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Dialog { font_family, .. } = &events[0] {
+        assert!(
+            font_family.is_none(),
+            "[フォント解除] の後の Dialog には font が注入されないこと"
+        );
+    } else {
+        panic!("Expected Dialog, got {:?}", events[0]);
+    }
+}

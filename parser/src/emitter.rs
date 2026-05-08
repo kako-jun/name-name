@@ -18,6 +18,11 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ref style) = doc.choice_style {
             out.push_str(&format!("choice_style: \"{}\"\n", style));
         }
+        // Emit font_family only when present (#147)。
+        // CSS の font-family 文字列はカンマや空白を含み得るので必ず double-quote で包む。
+        if let Some(ref family) = doc.font_family {
+            out.push_str(&format!("font_family: \"{}\"\n", family));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -61,12 +66,18 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 position,
                 text,
                 voice_path,
+                font_family,
             } => {
                 // Add blank line before dialog if previous was also dialog (new speech block)
                 if prev_was_dialog_or_text && i > 0 {
                     out.push('\n');
                 }
 
+                // Emit [フォント: family] before the dialog block (#147)。
+                // 連続する Dialog/Narration で同値が続く場合もスキップしない（明示記述を保つ）。
+                if let Some(ref ff) = font_family {
+                    out.push_str(&format!("[フォント: {}]\n", ff));
+                }
                 // Emit [ボイス: path] before the dialog block
                 if let Some(ref vp) = voice_path {
                     out.push_str(&format!("[ボイス: {}]\n", vp));
@@ -100,9 +111,16 @@ fn emit_events(out: &mut String, events: &[Event]) {
 
                 prev_was_dialog_or_text = true;
             }
-            Event::Narration { text, voice_path } => {
+            Event::Narration {
+                text,
+                voice_path,
+                font_family,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
+                }
+                if let Some(ref ff) = font_family {
+                    out.push_str(&format!("[フォント: {}]\n", ff));
                 }
                 if let Some(ref vp) = voice_path {
                     out.push_str(&format!("[ボイス: {}]\n", vp));
@@ -522,6 +540,7 @@ mod tests {
             engine: "name-name".to_string(),
             aspect_ratio: "16:9".to_string(),
             choice_style: None,
+            font_family: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -537,6 +556,7 @@ mod tests {
                         position: Some("左".to_string()),
                         text: vec!["こんにちは。".to_string()],
                         voice_path: None,
+                        font_family: None,
                     }],
                 }],
             }],
