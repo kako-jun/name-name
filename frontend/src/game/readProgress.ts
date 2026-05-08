@@ -55,11 +55,19 @@ export function isRead(progress: Set<number>, displayIndex: number): boolean {
   return progress.has(displayIndex)
 }
 
-/** テスト用: localStorage をリセットする */
-export function __resetReadProgressForTest(docKey: string): void {
+/**
+ * 指定 docKey の既読データを全消去する。
+ * タイトル画面の「新規開始」など、進捗リセット時に呼ぶ (#141)。
+ */
+export function clearReadProgress(docKey: string): void {
   try {
     localStorage.removeItem(STORAGE_PREFIX + docKey)
   } catch {
     // ignore
   }
+}
+
+/** テスト用: localStorage をリセットする（clearReadProgress の薄いラッパー） */
+export function __resetReadProgressForTest(docKey: string): void {
+  clearReadProgress(docKey)
 }

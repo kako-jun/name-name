@@ -13,6 +13,12 @@ interface NovelPlayerProps {
   aspectRatio?: AspectRatio | string
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
   docKey?: string
+  /**
+   * true にするとゲーム開始直後にスキップモードを ON にする (#141)。
+   * 「つづきから」で未読位置まで高速スキップするために使用する。
+   * docKey が未設定の場合は無視される。
+   */
+  initialSkipMode?: boolean
 }
 
 function NovelPlayer({
@@ -21,6 +27,7 @@ function NovelPlayer({
   assetBaseUrl,
   aspectRatio: aspectRatioProp,
   docKey,
+  initialSkipMode = false,
 }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
@@ -129,6 +136,18 @@ function NovelPlayer({
       rendererRef.current.setEvents(events)
     }
   }, [events, scenes])
+
+  // 「つづきから」: 初回イベントセット後に一度だけスキップモードを ON にする (#141)
+  // initialSkipMode が false の間は早期 return するため ref はセットされない。
+  // initialSkipMode が true になった初回のみ ref をセットして発動し、以降の events 更新では再発動しない。
+  const initialSkipAppliedRef = useRef(false)
+  useEffect(() => {
+    if (!initialSkipMode || !docKey) return
+    if (initialSkipAppliedRef.current) return
+    initialSkipAppliedRef.current = true
+    rendererRef.current?.setSkipMode(true)
+    setSkipMode(true)
+  }, [events, scenes, initialSkipMode, docKey])
 
   // オートモード変更を renderer に反映 (#139)
   useEffect(() => {

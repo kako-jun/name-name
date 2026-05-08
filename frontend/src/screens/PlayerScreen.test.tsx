@@ -138,8 +138,9 @@ describe('PlayerScreen', () => {
       'https://raw.githubusercontent.com/kako-jun/friday-1930/main/assets'
     )
 
-    // タイトル表示
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('友達 1930')
+    // タイトル表示（ヘッダーの h1 とタイトルオーバーレイの h1 の両方に表示される）
+    const headings = screen.getAllByRole('heading', { level: 1 })
+    expect(headings.some((h) => h.textContent === '友達 1930')).toBe(true)
 
     // 編集 UI が描画されていないこと（編集モード固有の文字列が無い）
     expect(screen.queryByText('保存')).toBeNull()
