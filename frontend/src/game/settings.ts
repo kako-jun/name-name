@@ -114,3 +114,51 @@ export function saveSettings(s: Settings): void {
 export function __resetMemoryStoreForTest(): void {
   memoryStore = null
 }
+
+/**
+ * saveSettings の debounced 版を作る (review #155 should-2)。
+ * スライダーを drag するたび localStorage 書き込みが発生するのを抑える。
+ *
+ * @param waitMs 連続呼び出しが止まってから何 ms 後に保存するか (デフォルト 300ms)
+ */
+export function makeDebouncedSaveSettings(waitMs: number = 300): {
+  save: (s: Settings) => void
+  flush: () => void
+  cancel: () => void
+} {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let pending: Settings | null = null
+
+  const flush = () => {
+    if (timer !== null) {
+      clearTimeout(timer)
+      timer = null
+    }
+    if (pending !== null) {
+      saveSettings(pending)
+      pending = null
+    }
+  }
+
+  const cancel = () => {
+    if (timer !== null) {
+      clearTimeout(timer)
+      timer = null
+    }
+    pending = null
+  }
+
+  const save = (s: Settings) => {
+    pending = s
+    if (timer !== null) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      if (pending !== null) {
+        saveSettings(pending)
+        pending = null
+      }
+    }, waitMs)
+  }
+
+  return { save, flush, cancel }
+}

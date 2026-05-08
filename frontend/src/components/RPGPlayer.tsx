@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { TopDownRenderer } from '../game/TopDownRenderer'
 import { RaycastRenderer } from '../game/RaycastRenderer'
 import { sampleRpgData } from '../game/sampleRpgData'
 import { RPGProject } from '../types/rpg'
-import { type Settings, loadSettings, saveSettings } from '../game/settings'
+import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import SettingsOverlay from './SettingsOverlay'
 
 type RendererLike = {
@@ -22,9 +22,10 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const rendererRef = useRef<RendererLike | null>(null)
 
-  // 設定 (Issue #138)
+  // 設定 (Issue #138) — slider drag による書き込み連打は debounce で吸収 (review #155 should-2)
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
 
   useEffect(() => {
     const container = containerRef.current
@@ -59,11 +60,18 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
     }
   }, [gameData, view])
 
-  // 設定変更を renderer に反映 + 永続化 (#138)
+  // 設定変更を renderer に反映 + 永続化 (#138) — debounced
   useEffect(() => {
     rendererRef.current?.applySettings?.(settings)
-    saveSettings(settings)
-  }, [settings])
+    debouncedSave.save(settings)
+  }, [settings, debouncedSave])
+
+  // unmount 時に debounce 中の保存を flush
+  useEffect(() => {
+    return () => {
+      debouncedSave.flush()
+    }
+  }, [debouncedSave])
 
   // Ctrl/Cmd + , で設定パネル開閉 (#138)
   useEffect(() => {

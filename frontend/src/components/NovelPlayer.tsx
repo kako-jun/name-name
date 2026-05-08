@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
-import { type Settings, loadSettings, saveSettings } from '../game/settings'
+import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import SettingsOverlay from './SettingsOverlay'
 
 interface NovelPlayerProps {
@@ -14,9 +14,11 @@ function NovelPlayer({ events, scenes, assetBaseUrl }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
 
-  // 設定 (Issue #138): localStorage と同期
+  // 設定 (Issue #138): localStorage と同期。スライダー drag による書き込み連打は
+  // debounce で吸収する (review #155 should-2)
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
 
   // ライフサイクル管理: init + destroy
   useEffect(() => {
@@ -54,8 +56,15 @@ function NovelPlayer({ events, scenes, assetBaseUrl }: NovelPlayerProps) {
   // 設定変更を renderer に反映 + localStorage に保存 (#138)
   useEffect(() => {
     rendererRef.current?.applySettings(settings)
-    saveSettings(settings)
-  }, [settings])
+    debouncedSave.save(settings)
+  }, [settings, debouncedSave])
+
+  // unmount 時に debounce 中の保存を flush する（取りこぼし防止）
+  useEffect(() => {
+    return () => {
+      debouncedSave.flush()
+    }
+  }, [debouncedSave])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {
