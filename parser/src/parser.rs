@@ -1378,10 +1378,7 @@ title: "アニメテスト"
             panic!("expected Animate, got {:?}", events[1]);
         }
         if let Event::Animate {
-            target,
-            dy,
-            easing,
-            ..
+            target, dy, easing, ..
         } = &events[2]
         {
             assert_eq!(target, "寿司");

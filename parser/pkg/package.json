@@ -6,13 +6,11 @@
   "files": [
     "name_name_parser_bg.wasm",
     "name_name_parser.js",
-    "name_name_parser_bg.js",
     "name_name_parser.d.ts"
   ],
   "main": "name_name_parser.js",
   "types": "name_name_parser.d.ts",
   "sideEffects": [
-    "./name_name_parser.js",
     "./snippets/*"
   ]
 }
