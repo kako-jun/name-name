@@ -2,7 +2,7 @@
 //
 // 検証ポイント:
 //   - listProjects / getContents が main ブランチ指定で呼ばれる
-//   - 取得した chapters/all.md が WASM パーサに渡され、結果が NovelPlayer
+//   - 取得した script.md が WASM パーサに渡され、結果が NovelPlayer
 //     (またはRPGシーン含有時 RPGPlayer) に流し込まれる
 //   - 編集系 UI（保存・破棄・タブなど）が一切描画されない
 //   - データ取得失敗時にエラーメッセージが表示される
@@ -83,7 +83,7 @@ describe('PlayerScreen', () => {
       { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
     ])
     getContentsMock.mockResolvedValue({
-      path: 'chapters/all.md',
+      path: 'script.md',
       sha: 'sha1',
       content: '# chapter\n\n## scene\n\n- dialog: hello',
     })
@@ -128,7 +128,7 @@ describe('PlayerScreen', () => {
     })
 
     // main ブランチ指定で取得していること
-    expect(getContentsMock).toHaveBeenCalledWith('friday-1930', 'chapters/all.md', 'main')
+    expect(getContentsMock).toHaveBeenCalledWith('friday-1930', 'script.md', 'main')
 
     // パース結果が NovelPlayer に流れていること（dialog 1件→1イベント）
     const player = screen.getByTestId('novel-player')
@@ -153,7 +153,7 @@ describe('PlayerScreen', () => {
   it('RPG シーンを含むドキュメントは RPGPlayer に渡す', async () => {
     listProjectsMock.mockResolvedValue([{ name: 'demo', title: 'demo', repo: 'kako-jun/demo' }])
     getContentsMock.mockResolvedValue({
-      path: 'chapters/all.md',
+      path: 'script.md',
       sha: 'sha2',
       content: '# rpg',
     })
@@ -207,7 +207,7 @@ describe('PlayerScreen', () => {
     expect(screen.queryByTestId('novel-player')).toBeNull()
   })
 
-  it('chapters/all.md がリポにまだ無い (404) 場合は「準備中」案内を表示する', async () => {
+  it('script.md がリポにまだ無い (404) 場合は「準備中」案内を表示する', async () => {
     const { ApiError } = await import('../api/client')
     listProjectsMock.mockResolvedValue([
       { name: 'missing', title: 'まだ無いゲーム', repo: 'kako-jun/missing' },
@@ -256,7 +256,7 @@ describe('PlayerScreen', () => {
   it('戻るボタンを押すと onBack が呼ばれる', async () => {
     listProjectsMock.mockResolvedValue([])
     getContentsMock.mockResolvedValue({
-      path: 'chapters/all.md',
+      path: 'script.md',
       sha: 'sha3',
       content: '',
     })

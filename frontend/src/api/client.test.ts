@@ -113,7 +113,7 @@ describe('createApiClient', () => {
     it('ref 指定時は ?ref= クエリを付ける', async () => {
       const { fetchImpl, calls } = makeMockFetch(() =>
         jsonResponse({
-          path: 'chapters/all.md',
+          path: 'script.md',
           sha: 'abc',
           content: '# hello',
           encoding: 'utf-8',
@@ -121,11 +121,9 @@ describe('createApiClient', () => {
       )
       const api = createApiClient({ baseUrl: BASE, fetchImpl })
 
-      const result = await api.getContents('ogurasia', 'chapters/all.md', 'develop')
+      const result = await api.getContents('ogurasia', 'script.md', 'develop')
 
-      expect(calls[0].url).toBe(
-        `${BASE}/api/projects/ogurasia/contents/chapters/all.md?ref=develop`
-      )
+      expect(calls[0].url).toBe(`${BASE}/api/projects/ogurasia/contents/script.md?ref=develop`)
       expect(result.sha).toBe('abc')
       expect(result.content).toBe('# hello')
     })
@@ -163,11 +161,11 @@ describe('createApiClient', () => {
   describe('putContents', () => {
     it('PUT で sha / branch / content を送る', async () => {
       const { fetchImpl, calls } = makeMockFetch(() =>
-        jsonResponse({ path: 'chapters/all.md', sha: 'new-sha', commit_sha: 'commit-sha' })
+        jsonResponse({ path: 'script.md', sha: 'new-sha', commit_sha: 'commit-sha' })
       )
       const api = createApiClient({ baseUrl: BASE, fetchImpl })
 
-      const result = await api.putContents('proj', 'chapters/all.md', {
+      const result = await api.putContents('proj', 'script.md', {
         content: '# new content',
         sha: 'old-sha',
         branch: 'develop',
