@@ -142,6 +142,18 @@ export class TopDownRenderer {
     this.centerCamera()
   }
 
+  /**
+   * 設定（テキスト速度・音量）を反映。Issue #138。
+   * TopDownRenderer は現状 BGM/SE を持たないが、将来 AudioManager を統合した
+   * 際の API 互換のため bgmVolume / seVolume も受け取る。
+   */
+  applySettings(settings: { msPerChar: number; bgmVolume: number; seVolume: number }): void {
+    this.dialogBox?.setMsPerChar(settings.msPerChar)
+    // BGM / SE は未実装。引数は将来用。
+    void settings.bgmVolume
+    void settings.seVolume
+  }
+
   /** リソース解放 */
   destroy(): void {
     window.removeEventListener('keydown', this.handleKeyDown)
