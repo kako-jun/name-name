@@ -2309,6 +2309,74 @@ title: "fade"
 }
 
 #[test]
+fn test_audio_fade_invalid_values_silently_skipped() {
+    // 不正な fade 値は silent skip され fade_ms: None のまま (#145)
+    // - フェード=abc (parse 失敗)
+    // - フェード= (空文字)
+    // - 不明=100 (未知のキー)
+    // - 前後空白の許容
+    let input = r#"## s: テスト
+
+[BGM: bgm/a.ogg, フェード=abc]
+[BGM: bgm/b.ogg, フェード=]
+[BGM: bgm/c.ogg, 不明=100]
+[BGM: bgm/d.ogg,    フェード   =   500   ]
+[BGM停止: -100]
+[BGM停止:]
+[SE: se/x.ogg, フェード=xyz]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 7);
+    // 1. フェード=abc → None
+    assert!(matches!(&events[0], Event::Bgm { fade_ms: None, .. }));
+    // 2. フェード= (空) → None
+    assert!(matches!(&events[1], Event::Bgm { fade_ms: None, .. }));
+    // 3. 未知のキー → None
+    assert!(matches!(&events[2], Event::Bgm { fade_ms: None, .. }));
+    // 4. 前後空白でも parse 成功
+    assert!(matches!(
+        &events[3],
+        Event::Bgm {
+            fade_ms: Some(500),
+            ..
+        }
+    ));
+    // 5. 負数 (u32 で弾かれる) → None で BGM停止 既定挙動
+    assert!(matches!(
+        &events[4],
+        Event::Bgm {
+            action: BgmAction::Stop,
+            fade_ms: None,
+            ..
+        }
+    ));
+    // 6. 引数空 → None
+    assert!(matches!(
+        &events[5],
+        Event::Bgm {
+            action: BgmAction::Stop,
+            fade_ms: None,
+            ..
+        }
+    ));
+    // 7. SE 不正値 → None
+    assert!(matches!(&events[6], Event::Se { fade_ms: None, .. }));
+}
+
+#[test]
+fn test_bgm_play_bare_number_is_not_fade() {
+    // Play 系では path との曖昧さを避けるため bare 数字を fade_ms として受理しない (#145)
+    // `[BGM: x.ogg, 500]` の "500" は kv ではないので silent skip され fade_ms: None
+    let input = "## s: テスト\n\n[BGM: bgm/a.ogg, 500]\n[SE: se/x.ogg, 300]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2);
+    assert!(matches!(&events[0], Event::Bgm { fade_ms: None, .. }));
+    assert!(matches!(&events[1], Event::Se { fade_ms: None, .. }));
+}
+
+#[test]
 fn test_voice_overwritten_by_later_directive() {
     // [ボイス:] が連続した場合、後者で前者を上書きし最後のものが注入されること (#144)
     let input =

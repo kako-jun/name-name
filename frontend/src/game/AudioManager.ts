@@ -103,7 +103,7 @@ export class AudioManager {
 
     const gain = this.ctx.createGain()
     const now = this.ctx.currentTime
-    if (fadeInMs && fadeInMs > 0) {
+    if (typeof fadeInMs === 'number' && Number.isFinite(fadeInMs) && fadeInMs > 0) {
       gain.gain.setValueAtTime(0, now)
       gain.gain.linearRampToValueAtTime(1.0, now + fadeInMs / 1000)
     } else {
@@ -176,7 +176,7 @@ export class AudioManager {
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
     this.ensureMasterGains()
-    if (fadeInMs && fadeInMs > 0) {
+    if (typeof fadeInMs === 'number' && Number.isFinite(fadeInMs) && fadeInMs > 0) {
       const gain = this.ctx.createGain()
       const now = this.ctx.currentTime
       gain.gain.setValueAtTime(0, now)

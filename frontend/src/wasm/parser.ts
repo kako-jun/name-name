@@ -56,6 +56,7 @@ function normalizeEvents(events: Event[]): Event[] {
         Bgm: {
           path: event.Bgm.path ?? null,
           action: event.Bgm.action,
+          fade_ms: event.Bgm.fade_ms ?? null,
         },
       }
     }

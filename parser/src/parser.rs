@@ -602,9 +602,30 @@ fn parse_directive(line: &str) -> Option<Event> {
     None
 }
 
+/// 単一 kv pair（または bare 数字）から fade_ms を取り出す (#145)。
+/// `フェード=N` / `fade=N` を受理。`accept_bare_number=true` のとき `=` 無し純数字も fade_ms とみなす。
+/// 未知のキー・不正な値・空文字は None を返す（呼び出し側で silent skip）。
+fn parse_fade_kv(pair: &str, accept_bare_number: bool) -> Option<u32> {
+    let pair = pair.trim();
+    if pair.is_empty() {
+        return None;
+    }
+    if let Some((k, v)) = pair.split_once('=') {
+        match k.trim() {
+            "フェード" | "fade" => v.trim().parse::<u32>().ok(),
+            _ => None,
+        }
+    } else if accept_bare_number {
+        pair.parse::<u32>().ok()
+    } else {
+        None
+    }
+}
+
 /// `[BGM: path, フェード=500]` / `[SE: path, フェード=200]` の本体を分解する (#145)。
 /// 最初の `,` 区切り要素を path、残りを kv ペアとして解釈する。
-/// kv は `フェード` / `fade` を受理。bare 数字（`=` なし）も fade_ms とみなす。
+/// kv は `フェード` / `fade` のみ受理。Play 系は path との曖昧さを避けるため bare 数字は受理しない
+/// （Stop 系の `[BGM停止: 2000]` のみ bare 数字を許容）。
 /// 未知のキーや不正な値は silent skip する（後方互換重視）。
 fn parse_audio_path_and_fade(content: &str) -> (String, Option<u32>) {
     let mut parts = content.split(',');
@@ -614,21 +635,7 @@ fn parse_audio_path_and_fade(content: &str) -> (String, Option<u32>) {
         .unwrap_or_default();
     let mut fade_ms: Option<u32> = None;
     for raw in parts {
-        let pair = raw.trim();
-        if pair.is_empty() {
-            continue;
-        }
-        if let Some((k, v)) = pair.split_once('=') {
-            match k.trim() {
-                "フェード" | "fade" => {
-                    if let Ok(n) = v.trim().parse::<u32>() {
-                        fade_ms = Some(n);
-                    }
-                }
-                _ => {}
-            }
-        } else if let Ok(n) = pair.parse::<u32>() {
-            // bare 数字も fade_ms として受理（[SE: path, 500] 等）
+        if let Some(n) = parse_fade_kv(raw, false) {
             fade_ms = Some(n);
         }
     }
@@ -636,24 +643,11 @@ fn parse_audio_path_and_fade(content: &str) -> (String, Option<u32>) {
 }
 
 /// `[BGM停止: 2000]` / `[BGM停止: フェード=2000]` の引数部分を fade_ms として解釈する (#145)。
-/// bare 数字 / `フェード=` / `fade=` を受理。複数指定時は最後の値が勝つ。
+/// bare 数字 / `フェード=` / `fade=` を受理。複数指定時は最後の有効値が勝つ。
 fn parse_audio_fade_args(content: &str) -> Option<u32> {
     let mut fade_ms: Option<u32> = None;
     for raw in content.split(',') {
-        let pair = raw.trim();
-        if pair.is_empty() {
-            continue;
-        }
-        if let Some((k, v)) = pair.split_once('=') {
-            match k.trim() {
-                "フェード" | "fade" => {
-                    if let Ok(n) = v.trim().parse::<u32>() {
-                        fade_ms = Some(n);
-                    }
-                }
-                _ => {}
-            }
-        } else if let Ok(n) = pair.parse::<u32>() {
+        if let Some(n) = parse_fade_kv(raw, true) {
             fade_ms = Some(n);
         }
     }
