@@ -80,8 +80,12 @@ export class AudioManager {
   /**
    * BGM をループ再生する。同じ URL なら何もしない。
    * 別の BGM が再生中なら即座に停止して切り替える。
+   *
+   * @param url 再生する BGM の URL
+   * @param fadeInMs fade-in 時間 ms (#145)。未指定なら即時フル音量。
+   *   gain を 0 から 1 まで線形に上げる。
    */
-  async playBgm(url: string): Promise<void> {
+  async playBgm(url: string, fadeInMs?: number): Promise<void> {
     if (!this.ctx) return
     if (this.currentBgmUrl === url) return
 
@@ -91,13 +95,20 @@ export class AudioManager {
     const requestId = ++this.bgmRequestId
     const buffer = await this.loadAudio(url)
     if (!buffer || requestId !== this.bgmRequestId) return
+    if (!this.ctx) return
 
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
     source.loop = true
 
     const gain = this.ctx.createGain()
-    gain.gain.value = 1.0
+    const now = this.ctx.currentTime
+    if (typeof fadeInMs === 'number' && Number.isFinite(fadeInMs) && fadeInMs > 0) {
+      gain.gain.setValueAtTime(0, now)
+      gain.gain.linearRampToValueAtTime(1.0, now + fadeInMs / 1000)
+    } else {
+      gain.gain.value = 1.0
+    }
     source.connect(gain)
     this.ensureMasterGains()
     if (this.bgmMasterGain) {
@@ -151,8 +162,12 @@ export class AudioManager {
 
   /**
    * SE をワンショット再生する。複数同時再生可能。
+   *
+   * @param url 再生する SE の URL
+   * @param fadeInMs fade-in 時間 ms (#145)。未指定なら即時フル音量で再生。
+   *   指定時は GainNode を挟んで 0 → 1 に線形補間する。
    */
-  async playSe(url: string): Promise<void> {
+  async playSe(url: string, fadeInMs?: number): Promise<void> {
     if (!this.ctx) return
 
     const buffer = await this.loadAudio(url)
@@ -161,12 +176,29 @@ export class AudioManager {
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
     this.ensureMasterGains()
-    if (this.seMasterGain) {
-      source.connect(this.seMasterGain)
+    if (typeof fadeInMs === 'number' && Number.isFinite(fadeInMs) && fadeInMs > 0) {
+      const gain = this.ctx.createGain()
+      const now = this.ctx.currentTime
+      gain.gain.setValueAtTime(0, now)
+      gain.gain.linearRampToValueAtTime(1.0, now + fadeInMs / 1000)
+      source.connect(gain)
+      if (this.seMasterGain) {
+        gain.connect(this.seMasterGain)
+      } else {
+        gain.connect(this.ctx.destination)
+      }
+      source.onended = () => {
+        source.disconnect()
+        gain.disconnect()
+      }
     } else {
-      source.connect(this.ctx.destination)
+      if (this.seMasterGain) {
+        source.connect(this.seMasterGain)
+      } else {
+        source.connect(this.ctx.destination)
+      }
+      source.onended = () => source.disconnect()
     }
-    source.onended = () => source.disconnect()
     source.start(0)
   }
 

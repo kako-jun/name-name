@@ -115,27 +115,40 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[背景: {}]\n", path));
                 prev_was_dialog_or_text = false;
             }
-            Event::Bgm { path, action } => {
+            Event::Bgm {
+                path,
+                action,
+                fade_ms,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
                 match action {
                     BgmAction::Play => {
                         if let Some(ref p) = path {
-                            out.push_str(&format!("[BGM: {}]\n", p));
+                            match fade_ms {
+                                Some(ms) => {
+                                    out.push_str(&format!("[BGM: {}, フェード={}]\n", p, ms))
+                                }
+                                None => out.push_str(&format!("[BGM: {}]\n", p)),
+                            }
                         }
                     }
-                    BgmAction::Stop => {
-                        out.push_str("[BGM停止]\n");
-                    }
+                    BgmAction::Stop => match fade_ms {
+                        Some(ms) => out.push_str(&format!("[BGM停止: フェード={}]\n", ms)),
+                        None => out.push_str("[BGM停止]\n"),
+                    },
                 }
                 prev_was_dialog_or_text = false;
             }
-            Event::Se { path } => {
+            Event::Se { path, fade_ms } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!("[SE: {}]\n", path));
+                match fade_ms {
+                    Some(ms) => out.push_str(&format!("[SE: {}, フェード={}]\n", path, ms)),
+                    None => out.push_str(&format!("[SE: {}]\n", path)),
+                }
                 prev_was_dialog_or_text = false;
             }
             Event::Blackout { action } => {

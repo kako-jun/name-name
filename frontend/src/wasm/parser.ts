@@ -56,6 +56,15 @@ function normalizeEvents(events: Event[]): Event[] {
         Bgm: {
           path: event.Bgm.path ?? null,
           action: event.Bgm.action,
+          fade_ms: event.Bgm.fade_ms ?? null,
+        },
+      }
+    }
+    if ('Se' in event) {
+      return {
+        Se: {
+          path: event.Se.path,
+          fade_ms: event.Se.fade_ms ?? null,
         },
       }
     }

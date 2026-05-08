@@ -508,22 +508,35 @@ fn parse_directive(line: &str) -> Option<Event> {
             path: path.trim().to_string(),
         });
     }
+    // [BGM停止] / [BGM停止: 2000] / [BGM停止: フェード=2000] (#145)
     if content == "BGM停止" {
         return Some(Event::Bgm {
             path: None,
             action: BgmAction::Stop,
+            fade_ms: None,
         });
     }
-    if let Some(path) = content.strip_prefix("BGM:") {
+    if let Some(rest) = content.strip_prefix("BGM停止:") {
+        let fade_ms = parse_audio_fade_args(rest);
         return Some(Event::Bgm {
-            path: Some(path.trim().to_string()),
-            action: BgmAction::Play,
+            path: None,
+            action: BgmAction::Stop,
+            fade_ms,
         });
     }
-    if let Some(path) = content.strip_prefix("SE:") {
-        return Some(Event::Se {
-            path: path.trim().to_string(),
+    // [BGM: path] / [BGM: path, フェード=500] (#145)
+    if let Some(rest) = content.strip_prefix("BGM:") {
+        let (path, fade_ms) = parse_audio_path_and_fade(rest);
+        return Some(Event::Bgm {
+            path: Some(path),
+            action: BgmAction::Play,
+            fade_ms,
         });
+    }
+    // [SE: path] / [SE: path, フェード=200] (#145)
+    if let Some(rest) = content.strip_prefix("SE:") {
+        let (path, fade_ms) = parse_audio_path_and_fade(rest);
+        return Some(Event::Se { path, fade_ms });
     }
     if content == "暗転" {
         return Some(Event::Blackout {
@@ -587,6 +600,58 @@ fn parse_directive(line: &str) -> Option<Event> {
     }
 
     None
+}
+
+/// 単一 kv pair（または bare 数字）から fade_ms を取り出す (#145)。
+/// `フェード=N` / `fade=N` を受理。`accept_bare_number=true` のとき `=` 無し純数字も fade_ms とみなす。
+/// 未知のキー・不正な値・空文字は None を返す（呼び出し側で silent skip）。
+fn parse_fade_kv(pair: &str, accept_bare_number: bool) -> Option<u32> {
+    let pair = pair.trim();
+    if pair.is_empty() {
+        return None;
+    }
+    if let Some((k, v)) = pair.split_once('=') {
+        match k.trim() {
+            "フェード" | "fade" => v.trim().parse::<u32>().ok(),
+            _ => None,
+        }
+    } else if accept_bare_number {
+        pair.parse::<u32>().ok()
+    } else {
+        None
+    }
+}
+
+/// `[BGM: path, フェード=500]` / `[SE: path, フェード=200]` の本体を分解する (#145)。
+/// 最初の `,` 区切り要素を path、残りを kv ペアとして解釈する。
+/// kv は `フェード` / `fade` のみ受理。Play 系は path との曖昧さを避けるため bare 数字は受理しない
+/// （Stop 系の `[BGM停止: 2000]` のみ bare 数字を許容）。
+/// 未知のキーや不正な値は silent skip する（後方互換重視）。
+fn parse_audio_path_and_fade(content: &str) -> (String, Option<u32>) {
+    let mut parts = content.split(',');
+    let path = parts
+        .next()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let mut fade_ms: Option<u32> = None;
+    for raw in parts {
+        if let Some(n) = parse_fade_kv(raw, false) {
+            fade_ms = Some(n);
+        }
+    }
+    (path, fade_ms)
+}
+
+/// `[BGM停止: 2000]` / `[BGM停止: フェード=2000]` の引数部分を fade_ms として解釈する (#145)。
+/// bare 数字 / `フェード=` / `fade=` を受理。複数指定時は最後の有効値が勝つ。
+fn parse_audio_fade_args(content: &str) -> Option<u32> {
+    let mut fade_ms: Option<u32> = None;
+    for raw in content.split(',') {
+        if let Some(n) = parse_fade_kv(raw, true) {
+            fade_ms = Some(n);
+        }
+    }
+    fade_ms
 }
 
 fn parse_shake_directive(content: &str) -> Option<Event> {
@@ -1290,7 +1355,8 @@ title: "テスト"
             events[1],
             Event::Bgm {
                 path: Some("amehure.ogg".to_string()),
-                action: BgmAction::Play
+                action: BgmAction::Play,
+                fade_ms: None,
             }
         );
         assert_eq!(
@@ -1302,7 +1368,8 @@ title: "テスト"
         assert_eq!(
             events[3],
             Event::Se {
-                path: "se_test.ogg".to_string()
+                path: "se_test.ogg".to_string(),
+                fade_ms: None,
             }
         );
         assert_eq!(
@@ -1323,7 +1390,8 @@ title: "テスト"
             events[8],
             Event::Bgm {
                 path: None,
-                action: BgmAction::Stop
+                action: BgmAction::Stop,
+                fade_ms: None,
             }
         );
     }

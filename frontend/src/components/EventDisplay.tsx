@@ -59,17 +59,21 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
   }
 
   if ('Bgm' in event) {
+    const fade = event.Bgm.fade_ms != null ? ` (フェード ${event.Bgm.fade_ms}ms)` : ''
     return (
       <div className={`text-xs italic ml-2 ${isDark ? 'text-gray-500' : 'text-gray-500'}`}>
         BGM {event.Bgm.action === 'Play' ? '再生' : '停止'}: {event.Bgm.path ?? '(なし)'}
+        {fade}
       </div>
     )
   }
 
   if ('Se' in event) {
+    const fade = event.Se.fade_ms != null ? ` (フェード ${event.Se.fade_ms}ms)` : ''
     return (
       <div className={`text-xs italic ml-2 ${isDark ? 'text-gray-500' : 'text-gray-500'}`}>
         SE: {event.Se.path}
+        {fade}
       </div>
     )
   }
