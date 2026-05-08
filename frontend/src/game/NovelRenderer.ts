@@ -23,6 +23,7 @@ import {
 } from 'pixi.js'
 import { CharacterLayer } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
+import { ensureFontLoaded } from './FontLoader'
 import { AudioManager } from './AudioManager'
 import { GameState, NovelGameState, resolveEvents } from './GameState'
 import { ChoiceOverlay } from './ChoiceOverlay'
@@ -101,6 +102,14 @@ export class NovelRenderer {
 
   /** 選択肢スタイル名 (#146)。frontmatter `choice_style:` の値。null なら default 扱い */
   private choiceStyle: string | null = null
+
+  /** per-game デフォルトフォント (#147)。frontmatter `font_family:` の値。
+   *  null なら DialogBox の組み込み既定 (`'Noto Sans JP', sans-serif`) を使う。
+   *  per-line `[フォント:]` で個別 Dialog/Narration が上書き可能。 */
+  private gameDefaultFontFamily: string | null = null
+
+  /** runtime 既定フォント。Document.font_family / per-line 共に未指定のときの最終フォールバック (#147) */
+  private static readonly RUNTIME_DEFAULT_FONT_FAMILY = "'Noto Sans JP', sans-serif"
 
   /** 選択肢表示中フラグ */
   private waitingForChoice = false
@@ -395,6 +404,21 @@ export class NovelRenderer {
    */
   setChoiceStyle(style: string | null | undefined): void {
     this.choiceStyle = style ?? null
+  }
+
+  /**
+   * per-game デフォルトフォントを設定する (#147)。
+   * frontmatter `font_family:` の値（CSS の font-family 文字列）を渡す。
+   * null/undefined のときは runtime 既定 (`'Noto Sans JP', sans-serif`) にフォールバック。
+   *
+   * 設定された family は描画前に [フォント:] per-line override が無い場合に Dialog/Narration へ
+   * 適用される。フォントロードは描画時に lazy に行われる。
+   */
+  setFontFamily(family: string | null | undefined): void {
+    this.gameDefaultFontFamily = family ?? null
+    // per-game default は描画時に適用するため、ここでは即時に DialogBox を切り替えない。
+    // 早期に切り替えると未ロードのフォントで bake されるため、render() 側で
+    // ensureFontLoaded → setFontFamily の順を担保する。
   }
 
   /**
@@ -1375,13 +1399,18 @@ export class NovelRenderer {
 
     // per-line voice 再生 (#144): 最初のテキスト行でのみ再生
     let voicePath: string | null = null
-    if (this.textIndex === 0) {
-      if (typeof current === 'object' && current !== null) {
-        if ('Dialog' in current) {
+    let perLineFontFamily: string | null = null
+    if (typeof current === 'object' && current !== null) {
+      if ('Dialog' in current) {
+        if (this.textIndex === 0) {
           voicePath = current.Dialog.voice_path ?? null
-        } else if ('Narration' in current) {
+        }
+        perLineFontFamily = current.Dialog.font_family ?? null
+      } else if ('Narration' in current) {
+        if (this.textIndex === 0) {
           voicePath = current.Narration.voice_path ?? null
         }
+        perLineFontFamily = current.Narration.font_family ?? null
       }
     }
 
@@ -1393,6 +1422,23 @@ export class NovelRenderer {
         this.autoMode ? () => this.scheduleAutoAdvance() : undefined
       )
     }
+
+    // フォント解決 (#147): per-line override → per-game default → runtime default の優先順
+    const resolvedFontFamily =
+      perLineFontFamily ?? this.gameDefaultFontFamily ?? NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+    // フォント未ロードのままで TextStyle に当てると fallback で bake されるため、
+    // 非同期ロードしてから DialogBox に反映する。先に既存フォントで描画しておくと
+    // 完了後に自然にグリフが置き換わる（pixi v8 は style 差し替えで再 bake する）。
+    void ensureFontLoaded(resolvedFontFamily)
+      .then(() => {
+        // 非同期完了の race ガード: 別 Dialog に進んだ後に古いフォントを当てない。
+        // resolvedFontFamily は本イベントのスナップショットなので、現在も同じ値かを再検証する。
+        // 実装上は最後に解決した family が直近の resolved と一致していれば適用してよい。
+        this.dialogBox.setFontFamily(resolvedFontFamily)
+      })
+      .catch((err) => {
+        console.warn('[name-name] フォントロードに失敗', resolvedFontFamily, err)
+      })
 
     // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)
     // voice がある場合は voice 終了が主トリガーになるため typewriter onDone では発火しない

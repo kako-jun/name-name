@@ -14,6 +14,9 @@ interface NovelPlayerProps {
   /** 選択肢スタイル名 `default` / `soft` / `monochrome` (#146)。
    *  frontmatter `choice_style:` から流す。null/undefined で default 扱い */
   choiceStyle?: string | null
+  /** per-game デフォルトフォント (#147)。CSS の font-family 文字列。
+   *  frontmatter `font_family:` から流す。null/undefined で runtime 既定 (Noto Sans JP) */
+  fontFamily?: string | null
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
   docKey?: string
   /**
@@ -30,6 +33,7 @@ function NovelPlayer({
   assetBaseUrl,
   aspectRatio: aspectRatioProp,
   choiceStyle,
+  fontFamily,
   docKey,
   initialSkipMode = false,
 }: NovelPlayerProps) {
@@ -81,6 +85,8 @@ function NovelPlayer({
       }
       // 選択肢スタイル (#146)
       renderer.setChoiceStyle(choiceStyle ?? null)
+      // per-game フォント (#147)
+      renderer.setFontFamily(fontFamily ?? null)
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
       if (scenes && scenes.length > 0) {
@@ -121,6 +127,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setChoiceStyle(choiceStyle ?? null)
   }, [choiceStyle])
+
+  // fontFamily が変化したときに renderer に反映 (#147)
+  useEffect(() => {
+    rendererRef.current?.setFontFamily(fontFamily ?? null)
+  }, [fontFamily])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {

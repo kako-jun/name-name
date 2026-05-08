@@ -324,6 +324,34 @@ export class DialogBox extends Container {
   }
 
   /**
+   * フォントファミリーを動的に切り替える (#147)。
+   *
+   * - dialogText / nameText / indicator の TextStyle を再生成して反映する
+   * - 同じ family のときは何もしない（不要な再描画を避ける）
+   * - 呼び出し側で `ensureFontLoaded(family)` を await したあとに呼ぶ前提
+   *   （未ロードのまま呼んでも fallback フォントで表示されるだけで壊れはしない）
+   */
+  setFontFamily(family: string): void {
+    if (this.fontFamily === family) return
+    this.fontFamily = family
+    // dialogText: borderless 状態を維持しつつ family を更新
+    this.dialogText.style = this.makeDialogTextStyle()
+    // nameText: 既存の style を新規生成し直す（font-weight bold を維持）
+    this.nameText.style = new TextStyle({
+      fontFamily: family,
+      fontSize: this.fontSize - 2,
+      fill: 0xffffff,
+      fontWeight: 'bold',
+    })
+    // indicator (▼): default size 20, fill 0xa8dadc を維持
+    this.indicator.style = new TextStyle({
+      fontFamily: family,
+      fontSize: 20,
+      fill: 0xa8dadc,
+    })
+  }
+
+  /**
    * 続きインジケーターの表示要望を保存する。
    * 実際の表示は typewriter 完了後に ticker 内で反映される。
    */
