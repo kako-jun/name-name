@@ -2,15 +2,23 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
+import { type AspectRatio, ASPECT_RATIOS, parseAspectRatio } from '../game/constants'
 import SettingsOverlay from './SettingsOverlay'
 
 interface NovelPlayerProps {
   events: Event[]
   scenes?: EventScene[]
   assetBaseUrl?: string
+  /** 画面比率。"16:9" / "4:3" / "9:16"。デフォルト "16:9" (#136) */
+  aspectRatio?: AspectRatio | string
 }
 
-function NovelPlayer({ events, scenes, assetBaseUrl }: NovelPlayerProps) {
+function NovelPlayer({
+  events,
+  scenes,
+  assetBaseUrl,
+  aspectRatio: aspectRatioProp,
+}: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
 
@@ -20,11 +28,15 @@ function NovelPlayer({ events, scenes, assetBaseUrl }: NovelPlayerProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
 
+  // 有効な AspectRatio に正規化 (#136)
+  const aspectRatio = parseAspectRatio(aspectRatioProp)
+  const { width: gameWidth, height: gameHeight } = ASPECT_RATIOS[aspectRatio]
+
   // ライフサイクル管理: init + destroy
   useEffect(() => {
     if (!containerRef.current) return
 
-    const renderer = new NovelRenderer()
+    const renderer = new NovelRenderer({ aspectRatio })
     rendererRef.current = renderer
 
     let destroyed = false
@@ -100,7 +112,12 @@ function NovelPlayer({ events, scenes, assetBaseUrl }: NovelPlayerProps) {
       <div
         ref={containerRef}
         className="rounded-xl shadow-2xl overflow-hidden"
-        style={{ maxWidth: '100%', maxHeight: '100%' }}
+        style={{
+          // canvas が aspect-ratio に合わせて正しいサイズで表示されるよう制約 (#136)
+          aspectRatio: `${gameWidth} / ${gameHeight}`,
+          maxWidth: '100%',
+          maxHeight: '100%',
+        }}
       />
       <button
         type="button"

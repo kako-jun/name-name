@@ -32,7 +32,7 @@ import { BacklogOverlay } from './BacklogOverlay'
 import { SeekBar } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { Event, EventScene } from '../types'
-import { GAME_WIDTH, GAME_HEIGHT } from './constants'
+import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -134,22 +134,34 @@ export class NovelRenderer {
   /** 枠なしモードのデフォルト値（per-game 設定）。per-scene の DialogBorderless で上書きされる */
   private defaultDialogBorderless: boolean = false
 
-  constructor(config?: { dialogBorderless?: boolean }) {
+  /** 論理画面幅（aspectRatio から決定） */
+  private screenWidth: number
+  /** 論理画面高さ（aspectRatio から決定） */
+  private screenHeight: number
+
+  constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
     this.bgGraphics = new Graphics()
     this.bgContainer = new Container()
     this.characterLayer = new CharacterLayer()
     this.blackoutOverlay = new Graphics()
     this.defaultDialogBorderless = config?.dialogBorderless ?? false
+    const ratio = parseAspectRatio(config?.aspectRatio)
+    this.screenWidth = ASPECT_RATIOS[ratio].width
+    this.screenHeight = ASPECT_RATIOS[ratio].height
     this.dialogBox = new DialogBox({
-      screenWidth: GAME_WIDTH,
-      screenHeight: GAME_HEIGHT,
+      screenWidth: this.screenWidth,
+      screenHeight: this.screenHeight,
       borderless: this.defaultDialogBorderless,
     })
     this.audioManager = new AudioManager()
-    this.choiceOverlay = new ChoiceOverlay(GAME_WIDTH, GAME_HEIGHT)
-    this.saveLoadOverlay = new SaveLoadOverlay(GAME_WIDTH, GAME_HEIGHT, this.saveManager)
-    this.backlogOverlay = new BacklogOverlay(GAME_WIDTH, GAME_HEIGHT)
+    this.choiceOverlay = new ChoiceOverlay(this.screenWidth, this.screenHeight)
+    this.saveLoadOverlay = new SaveLoadOverlay(
+      this.screenWidth,
+      this.screenHeight,
+      this.saveManager
+    )
+    this.backlogOverlay = new BacklogOverlay(this.screenWidth, this.screenHeight)
     this.seekBar = new SeekBar()
   }
 
@@ -158,8 +170,8 @@ export class NovelRenderer {
    */
   async init(container: HTMLElement): Promise<void> {
     await this.app.init({
-      width: GAME_WIDTH,
-      height: GAME_HEIGHT,
+      width: this.screenWidth,
+      height: this.screenHeight,
       background: 0x000000,
       antialias: true,
     })
@@ -168,7 +180,7 @@ export class NovelRenderer {
     container.appendChild(this.app.canvas as HTMLCanvasElement)
 
     // 黒背景
-    this.bgGraphics.rect(0, 0, GAME_WIDTH, GAME_HEIGHT)
+    this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
     this.bgGraphics.fill(0x000000)
     this.app.stage.addChild(this.bgGraphics)
 
@@ -179,7 +191,7 @@ export class NovelRenderer {
     this.app.stage.addChild(this.characterLayer)
 
     // 暗転レイヤー
-    this.blackoutOverlay.rect(0, 0, GAME_WIDTH, GAME_HEIGHT)
+    this.blackoutOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
     this.blackoutOverlay.fill(0x000000)
     this.blackoutOverlay.visible = false
     this.app.stage.addChild(this.blackoutOverlay)
@@ -199,7 +211,7 @@ export class NovelRenderer {
       fontWeight: 'bold',
     })
     this.counterText = new PixiText({ text: '', style: counterStyle })
-    this.counterText.x = GAME_WIDTH - 20
+    this.counterText.x = this.screenWidth - 20
     this.counterText.y = 16
     this.counterText.anchor.set(1, 0)
     this.app.stage.addChild(this.counterText)
@@ -801,13 +813,13 @@ export class NovelRenderer {
   }
 
   private applyCoverFit(sprite: Sprite): void {
-    const scaleX = GAME_WIDTH / sprite.texture.width
-    const scaleY = GAME_HEIGHT / sprite.texture.height
+    const scaleX = this.screenWidth / sprite.texture.width
+    const scaleY = this.screenHeight / sprite.texture.height
     const scale = Math.max(scaleX, scaleY)
     sprite.width = sprite.texture.width * scale
     sprite.height = sprite.texture.height * scale
-    sprite.x = (GAME_WIDTH - sprite.width) / 2
-    sprite.y = (GAME_HEIGHT - sprite.height) / 2
+    sprite.x = (this.screenWidth - sprite.width) / 2
+    sprite.y = (this.screenHeight - sprite.height) / 2
   }
 
   /**

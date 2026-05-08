@@ -180,7 +180,11 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           // ノベル+RPG の遷移制御は #108 本統合で扱う。
           <RPGPlayer gameData={rpgProject} view={rpgProject.view} />
         ) : (
-          <NovelPlayer events={novelEvents} assetBaseUrl={assetBaseUrl} />
+          <NovelPlayer
+            events={novelEvents}
+            assetBaseUrl={assetBaseUrl}
+            aspectRatio={doc?.aspect_ratio}
+          />
         )}
       </main>
     </div>
