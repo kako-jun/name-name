@@ -139,6 +139,13 @@ export class NovelRenderer {
   /** 論理画面高さ（aspectRatio から決定） */
   private screenHeight: number
 
+  /** オートモード ON/OFF (#139) */
+  private autoMode: boolean = false
+  /** オートモード待機タイマー（destroy 時・手動操作時にキャンセル） */
+  private autoTimer: ReturnType<typeof setTimeout> | null = null
+  /** オートモード待機時間 ms（settings.autoWaitMs から更新） */
+  private autoWaitMs: number = 2000
+
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
     this.bgGraphics = new Graphics()
@@ -332,12 +339,36 @@ export class NovelRenderer {
 
   /**
    * 設定（テキスト速度・音量）をリアルタイムに反映する。
-   * Issue #138。autoWaitMs / voiceVolume はここでは使わない（将来用）。
    */
-  applySettings(settings: { msPerChar: number; bgmVolume: number; seVolume: number }): void {
+  applySettings(settings: {
+    msPerChar: number
+    bgmVolume: number
+    seVolume: number
+    autoWaitMs?: number
+  }): void {
     this.dialogBox.setMsPerChar(settings.msPerChar)
     this.audioManager.setBgmVolume(settings.bgmVolume)
     this.audioManager.setSeVolume(settings.seVolume)
+    if (settings.autoWaitMs !== undefined) {
+      this.autoWaitMs = settings.autoWaitMs
+    }
+  }
+
+  /**
+   * オートモードの ON/OFF を切り替える (#139)。
+   * OFF にした場合は待機中のオートタイマーをキャンセルする。
+   */
+  setAutoMode(on: boolean): void {
+    this.autoMode = on
+    if (!on && this.autoTimer) {
+      clearTimeout(this.autoTimer)
+      this.autoTimer = null
+    }
+  }
+
+  /** オートモードの現在状態を取得する */
+  isAutoMode(): boolean {
+    return this.autoMode
   }
 
   /**
@@ -355,6 +386,10 @@ export class NovelRenderer {
     if (this.waitTimer) {
       clearTimeout(this.waitTimer)
       this.waitTimer = null
+    }
+    if (this.autoTimer) {
+      clearTimeout(this.autoTimer)
+      this.autoTimer = null
     }
     this.audioManager.destroy()
     this.characterLayer.clear()
@@ -564,6 +599,8 @@ export class NovelRenderer {
       return
     }
     if (this.saveLoadOverlay.visible) return
+    // 手動クリック/タップでオートモードをキャンセル (#139)
+    this.setAutoMode(false)
     this.advanceOrSkipTypewriter()
   }
 
@@ -617,9 +654,12 @@ export class NovelRenderer {
       case ' ':
       case 'Enter':
         e.preventDefault()
+        // 手動キー操作でオートモードをキャンセル (#139)
+        this.setAutoMode(false)
         this.advanceOrSkipTypewriter()
         break
       case 'ArrowRight':
+        this.setAutoMode(false)
         this.advanceOrSkipTypewriter()
         break
       case 'ArrowLeft':
@@ -936,7 +976,9 @@ export class NovelRenderer {
 
     // 空行 = 改ページ（テキストクリア後に次行へ自動進行はしない。空表示する）
     const name = textEvt.type === 'dialog' ? textEvt.character : null
-    this.dialogBox.setDialog(name, line)
+    // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)
+    const onTypingDone = this.autoMode ? () => this.scheduleAutoAdvance() : null
+    this.dialogBox.setDialog(name, line, onTypingDone)
 
     // 最後のテキスト行かつ最後のイベントならインジケーター非表示
     const isLastText = this.textIndex >= textEvt.text.length - 1
@@ -945,6 +987,24 @@ export class NovelRenderer {
 
     this.updateCounter()
     this.updateSeekBar()
+  }
+
+  /**
+   * オートモード: autoWaitMs 後に advance() を呼ぶタイマーをセット (#139)。
+   * 選択肢待ち・Wait 待ち中は発動しない。
+   */
+  private scheduleAutoAdvance(): void {
+    if (!this.autoMode) return
+    if (this.waitingForChoice || this.waitingForWait) return
+    if (this.autoTimer) {
+      clearTimeout(this.autoTimer)
+    }
+    this.autoTimer = setTimeout(() => {
+      this.autoTimer = null
+      if (this.autoMode && !this.waitingForChoice && !this.waitingForWait) {
+        this.advance()
+      }
+    }, this.autoWaitMs)
   }
 
   private updateCounter(): void {
