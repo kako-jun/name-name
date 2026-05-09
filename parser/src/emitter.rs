@@ -349,6 +349,69 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str("[/NPC]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::Monster(m) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[モンスター {}]\n", m.id));
+                out.push_str(&format!("名前: {}\n", m.name));
+                out.push_str(&format!("HP: {}\n", m.hp));
+                if m.mp > 0 {
+                    out.push_str(&format!("MP: {}\n", m.mp));
+                }
+                out.push_str(&format!("ATK: {}\n", m.atk));
+                out.push_str(&format!("DEF: {}\n", m.def_value));
+                out.push_str(&format!("AGI: {}\n", m.agi));
+                out.push_str(&format!("EXP: {}\n", m.exp));
+                out.push_str(&format!("GOLD: {}\n", m.gold));
+                if let Some(s) = &m.sprite {
+                    out.push_str(&format!("スプライト: {}\n", s));
+                }
+                if let Some(b) = &m.builtin {
+                    out.push_str(&format!("builtin: {}\n", b));
+                }
+                out.push_str("[/モンスター]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::Item(it) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[アイテム {}]\n", it.id));
+                out.push_str(&format!("名前: {}\n", it.name));
+                out.push_str(&format!("種別: {}\n", it.kind));
+                if let Some(p) = it.price {
+                    out.push_str(&format!("価格: {}\n", p));
+                }
+                if let Some(e) = &it.effect {
+                    out.push_str(&format!("効果: {}\n", e));
+                }
+                if let Some(b) = &it.builtin {
+                    out.push_str(&format!("builtin: {}\n", b));
+                }
+                out.push_str("[/アイテム]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::Spell(sp) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[呪文 {}]\n", sp.id));
+                out.push_str(&format!("名前: {}\n", sp.name));
+                out.push_str(&format!("MP: {}\n", sp.mp));
+                out.push_str(&format!("対象: {}\n", sp.target));
+                if let Some(s) = &sp.school {
+                    out.push_str(&format!("系統: {}\n", s));
+                }
+                if let Some(e) = &sp.effect {
+                    out.push_str(&format!("効果: {}\n", e));
+                }
+                if let Some(b) = &sp.builtin {
+                    out.push_str(&format!("builtin: {}\n", b));
+                }
+                out.push_str("[/呪文]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::Animate {
                 target,
                 dx,
@@ -568,5 +631,103 @@ mod tests {
         let output = emit(&doc);
         assert!(output.contains("**カコ** (suppin_1, 左):"));
         assert!(output.contains("こんにちは。"));
+    }
+
+    // ===== Master data blocks (#174) =====
+
+    #[test]
+    fn emits_monster_block() {
+        let doc = make_doc_with_event(Event::Monster(MonsterDef {
+            id: "slime".to_string(),
+            name: "スライム".to_string(),
+            hp: 10,
+            mp: 0,
+            atk: 3,
+            def_value: 1,
+            agi: 2,
+            exp: 2,
+            gold: 1,
+            sprite: Some("monsters/slime.png".to_string()),
+            builtin: None,
+        }));
+        let out = emit(&doc);
+        assert!(out.contains("[モンスター slime]"));
+        assert!(out.contains("名前: スライム"));
+        assert!(out.contains("HP: 10"));
+        assert!(out.contains("ATK: 3"));
+        assert!(out.contains("DEF: 1"));
+        assert!(out.contains("スプライト: monsters/slime.png"));
+        assert!(out.contains("[/モンスター]"));
+        // MP は 0 のとき省略
+        assert!(!out.contains("MP: 0"));
+    }
+
+    #[test]
+    fn emits_item_block_with_effect() {
+        let doc = make_doc_with_event(Event::Item(ItemDef {
+            id: "やくそう".to_string(),
+            name: "やくそう".to_string(),
+            kind: "回復".to_string(),
+            price: Some(8),
+            effect: Some("heal 30".to_string()),
+            builtin: None,
+        }));
+        let out = emit(&doc);
+        assert!(out.contains("[アイテム やくそう]"));
+        assert!(out.contains("名前: やくそう"));
+        assert!(out.contains("種別: 回復"));
+        assert!(out.contains("価格: 8"));
+        assert!(out.contains("効果: heal 30"));
+        assert!(out.contains("[/アイテム]"));
+    }
+
+    #[test]
+    fn emits_spell_block_with_builtin() {
+        let doc = make_doc_with_event(Event::Spell(SpellDef {
+            id: "ザラキ".to_string(),
+            name: "ザラキ".to_string(),
+            mp: 8,
+            target: "敵全体".to_string(),
+            effect: None,
+            builtin: Some("zaraki".to_string()),
+            school: None,
+        }));
+        let out = emit(&doc);
+        assert!(out.contains("[呪文 ザラキ]"));
+        assert!(out.contains("MP: 8"));
+        assert!(out.contains("対象: 敵全体"));
+        assert!(out.contains("builtin: zaraki"));
+        assert!(out.contains("[/呪文]"));
+    }
+
+    #[test]
+    fn round_trip_master_blocks() {
+        // parse → emit → parse がフィールド一致で安定することを確認
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[モンスター slime]\n名前: スライム\nHP: 10\nATK: 3\nDEF: 1\nAGI: 2\nEXP: 2\nGOLD: 1\n[/モンスター]\n\n[呪文 ホイミ]\n名前: ホイミ\nMP: 4\n対象: 味方単体\n効果: heal 15..25\n[/呪文]\n\n[アイテム やくそう]\n名前: やくそう\n種別: 回復\n価格: 8\n効果: heal 30\n[/アイテム]\n";
+        let doc1 = crate::parser::parse(input);
+        let emitted = emit(&doc1);
+        let doc2 = crate::parser::parse(&emitted);
+        assert_eq!(doc1, doc2, "master data round-trip should be stable");
+    }
+
+    fn make_doc_with_event(event: Event) -> Document {
+        Document {
+            engine: "name-name".to_string(),
+            aspect_ratio: "16:9".to_string(),
+            choice_style: None,
+            font_family: None,
+            chapters: vec![Chapter {
+                number: 1,
+                title: "test".to_string(),
+                hidden: false,
+                default_bgm: None,
+                scenes: vec![Scene {
+                    id: "data".to_string(),
+                    title: "マスター".to_string(),
+                    view: SceneView::TopDown,
+                    events: vec![event],
+                }],
+            }],
+        }
     }
 }
