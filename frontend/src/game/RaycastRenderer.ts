@@ -568,6 +568,10 @@ export class RaycastRenderer {
     // 連続値（例 0.0001 や π/2 + ε）になっていても「最も近い基本方位」のタイルを
     // 対象にする。snapStep と同じ方針 (#178)、これがないと「目の前の NPC が認識
     // されない」事故が起きる (#172 / #178 R2 で報告)。
+    //
+    // 副作用: playerAngle = π/4 のような対角方向のとき dx=dy=1 となり、対角タイル
+    // の NPC も talk 対象になる。DQ 慣習として「斜め前の NPC にも話しかけられる」
+    // のは自然なので意図通り。直線のみに絞りたい場合は |dx|>|dy| で 1 軸選択する。
     const dx = Math.round(Math.cos(this.playerAngle))
     const dy = Math.round(Math.sin(this.playerAngle))
     const tx = Math.floor(this.playerX) + dx
@@ -649,50 +653,23 @@ export class RaycastRenderer {
   /**
    * 1 歩ごとの DQ4 式エンカウント抽選 (#172)。
    *
-   * - encounterRate=0 のマップ（街・室内）はスキップ
-   * - 戦闘直後の連続エンカウントを避けるため encounterCooldown 残歩数の間はスキップ
-   * - encounterGroups から重み均等で 1 つ選択し、`+` で連結された複合グループは
-   *   各 ID をマスターから引いて BattleEntity に変換する
-   * - 1 体も解決できなかったらエンカウント不発（warning ログ）
+   * - 戦闘直後の連続エンカウントを避けるため encounterCooldown 残歩数の間は抽選自体を
+   *   スキップ（rng を消費しないため乱数列に偏りが出ない）
+   * - 抽選・敵解決は純関数 `rollEncounter` に分離してテスト可能にしてある
    */
   private maybeRollEncounter(): void {
     if (this.battleScreen) return // 戦闘中
-    if (this.encounterRate === 0) return
-    if (this.encounterGroups.length === 0) return
     if (this.encounterCooldown > 0) {
       this.encounterCooldown -= 1
       return
     }
-    if (Math.random() >= 1 / this.encounterRate) return
-
-    const groupSpec = this.encounterGroups[Math.floor(Math.random() * this.encounterGroups.length)]
-    const monsterIds = groupSpec
-      .split('+')
-      .map((s) => s.trim())
-      .filter(Boolean)
-    const enemies: BattleEntity[] = []
-    for (const id of monsterIds) {
-      const def = this.masterMonsters[id]
-      if (!def) {
-        console.warn(`[RaycastRenderer] encounter group references unknown monster '${id}'`)
-        continue
-      }
-      enemies.push({
-        id: def.id,
-        name: def.name,
-        hp: def.hp,
-        maxHp: def.hp,
-        mp: def.mp ?? 0,
-        maxMp: def.mp ?? 0,
-        atk: def.atk,
-        def: def.def,
-        agi: def.agi,
-        exp: def.exp,
-        gold: def.gold,
-      })
-    }
-    if (enemies.length === 0) return
-    this.startBattle(enemies)
+    const enemies = rollEncounter({
+      rate: this.encounterRate,
+      groups: this.encounterGroups,
+      masters: this.masterMonsters,
+      rng: Math.random,
+    })
+    if (enemies) this.startBattle(enemies)
   }
 
   /**
@@ -1135,6 +1112,9 @@ export class RaycastRenderer {
     // 完全な floor casting ではなく、視線中央の depth サンプリング 1 箇所だけ → 横方向の
     // 色変化は出ないが、GRASS と ROAD を踏み込んだときに即座に床色が切り替わる視覚効果になる。
     // 連続同色のスキャンラインはまとめて 1 矩形で fill する（呼び出し回数を抑制）。
+    //
+    // ピッチ時の depth 計算は Lodev 標準近似（rowDist = cameraZ / ((y - horizon)/halfH)）。
+    // 大きなピッチでは床テクスチャの歪みが目立つはずだが、本実装は単色塗り分けなので許容範囲。
     if (horizonClamped < h) {
       const cameraZ = 0.5 // プレイヤー視点高さ（0.5 タイル）。computeWallYRange と同じ規約
       const halfH = h / 2
@@ -1597,6 +1577,56 @@ export class RaycastRenderer {
       npc.sprite.texture = sheet.textures[row][frame]
     }
   }
+}
+
+/**
+ * DQ4 式エンカウント抽選の純関数実装 (#172)。
+ *
+ * - rate=0 / groups 空 / masters が解決不能で全滅 → null（不発）
+ * - rate=1 で毎歩確実エンカウント（debug knob）
+ * - rate=N で `rng() < 1/N` 抽選、当選したら groups から重み均等で 1 つ選び、
+ *   `+` 連結を分解してマスターから BattleEntity を組み立てる
+ *
+ * RaycastRenderer.maybeRollEncounter から呼ばれる。テストでは `rng` に
+ * 固定値関数を渡して挙動を assert する。
+ */
+export function rollEncounter(input: {
+  rate: number
+  groups: ReadonlyArray<string>
+  masters: Record<string, import('../types').MonsterDef>
+  rng: () => number
+}): BattleEntity[] | null {
+  if (input.rate === 0) return null
+  if (input.groups.length === 0) return null
+  if (input.rng() >= 1 / input.rate) return null
+
+  const groupSpec = input.groups[Math.floor(input.rng() * input.groups.length)]
+  const monsterIds = groupSpec
+    .split('+')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const enemies: BattleEntity[] = []
+  for (const id of monsterIds) {
+    const def = input.masters[id]
+    if (!def) {
+      console.warn(`[name-name] encounter group references unknown monster '${id}'`)
+      continue
+    }
+    enemies.push({
+      id: def.id,
+      name: def.name,
+      hp: def.hp,
+      maxHp: def.hp,
+      mp: def.mp ?? 0,
+      maxMp: def.mp ?? 0,
+      atk: def.atk,
+      def: def.def,
+      agi: def.agi,
+      exp: def.exp,
+      gold: def.gold,
+    })
+  }
+  return enemies.length > 0 ? enemies : null
 }
 
 function directionToAngle(d: DirectionLabel): number {

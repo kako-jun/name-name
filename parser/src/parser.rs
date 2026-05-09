@@ -1365,12 +1365,21 @@ fn emit_warning(msg: &str) {
 /// 受理形式:
 ///   "16"   → 16
 ///   "1/16" → 16  (分母を抽出)
-///   "0"    → 0   (安全マップ)
+///   "0"    → 0   (安全マップ、絶対にエンカウントしない)
+///   "1"    → 1   (デバッグ用、毎歩エンカウント発火)
 ///
-/// 0 は明示的に「絶対にエンカウントしない」を意味する（街・室内）。
+/// 不正値は None で破棄:
+///   "1/0"  → None (分母 0 は無意味、安全マップ意図なら "0" を直接書く)
 fn parse_encounter_rate(s: &str) -> Option<u32> {
     if let Some(denom) = s.strip_prefix("1/") {
-        return denom.trim().parse::<u32>().ok();
+        let n = denom.trim().parse::<u32>().ok()?;
+        if n == 0 {
+            emit_encounter_warning(
+                "[エンカウント率: 1/0] は無意味（分母 0）。安全マップなら [エンカウント率: 0] を使ってください",
+            );
+            return None;
+        }
+        return Some(n);
     }
     s.parse::<u32>().ok()
 }

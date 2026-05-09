@@ -3,7 +3,11 @@ import type { RPGProject, MapData, UiNpcData, PlayerData } from '../types/rpg'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[モンスター] [アイテム] [呪文]` の
- * マスター定義を ID 引きの Record に集約する (#174 / #172)。重複 ID は後勝ち。
+ * マスター定義を ID 引きの Record に集約する (#174 / #172)。
+ *
+ * 重複 ID は **後勝ち**（同じ id を 2 度書いた場合、ドキュメント上で後に出てきた
+ * 定義が採用される）。意図的な上書きは想定していないが、誤って重複させたときの
+ * 挙動を仕様化しておく（warning は出さない、parser 段階で id 重複は検出しない）。
  */
 export function collectMasterData(doc: EventDocument): {
   monsters: Record<string, MonsterDef>
