@@ -776,8 +776,16 @@ export class RaycastRenderer {
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
 
-    // ミニマップのプレイヤー位置を毎フレ更新 (#149)
-    this.minimap?.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
+    // ミニマップ (#149): イベント中（ダイアログ表示）/ メニュー表示中は邪魔なので隠す。
+    // 通常探索中だけ表示し、自機位置 + 向きを毎フレ更新する。
+    if (this.minimap) {
+      const dialogVisible = this.dialogBox?.isShowing ?? false
+      const menuVisible = this.menuOverlay?.isShowing() ?? false
+      this.minimap.visible = !dialogVisible && !menuVisible
+      if (this.minimap.visible) {
+        this.minimap.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
+      }
+    }
 
     if (!this.dialogBox?.isShowing) {
       this.updateMovement(dt)
