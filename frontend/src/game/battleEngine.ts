@@ -214,10 +214,13 @@ export class BattleEngine {
 
   private resolveSpellTargets(spell: SpellExecution, targetId?: string): BattleEntity[] {
     switch (spell.target) {
-      case '味方単体':
-        return targetId
-          ? this.state.party.filter((p) => p.id === targetId)
-          : [this.state.party[0]].filter(Boolean)
+      case '味方単体': {
+        if (targetId) {
+          return this.state.party.filter((p) => p.id === targetId)
+        }
+        const alive = this.firstAlive(this.state.party)
+        return alive ? [alive] : []
+      }
       case '味方全体':
         return this.state.party.filter((p) => p.hp > 0)
       case '敵全体':

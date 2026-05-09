@@ -217,6 +217,9 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
   switch (effect.kind) {
     case 'heal':
     case 'heal_full': {
+      // heal_full は Math.min(maxHp, hp + Infinity) で完全回復になる前提。
+      // entity.maxHp は有限値である必要があり（Infinity 渡すと NaN ログになる）、
+      // BattleEntity 生成時にこれを保証する責務は呼び出し側にある。
       const amount =
         effect.kind === 'heal_full'
           ? Infinity
@@ -287,5 +290,7 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
 function rollRange(min: number, max: number, rng: () => number): number {
   if (min === max) return min
   const r = rng()
-  return Math.floor(min + r * (max - min + 1))
+  // Math.random() は [0, 1) なので通常 max+1 にはならないが、
+  // テストや差し替え rng で 1.0 を渡された場合に備えて Math.min(max, ...) で堅牢化。
+  return Math.min(max, Math.floor(min + r * (max - min + 1)))
 }

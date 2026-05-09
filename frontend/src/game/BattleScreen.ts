@@ -31,12 +31,14 @@ const PANEL_BG_ALPHA = 0.85
 const PANEL_STROKE = 0xffffff
 const TEXT_COLOR = 0xffffff
 const HP_COLOR = 0x88ee88
-const MP_COLOR = 0x88aaff
+// MP_COLOR は HP/MP バー UI 実装時（戦闘 Phase 2、#175 と同時想定）に追加する
 
 const STAGE_PADDING = 16
-const COMMAND_HEIGHT = 60
-const LOG_HEIGHT = 100
+const STATS_HEIGHT = 32
+const COMMAND_HEIGHT = 56
+const LOG_HEIGHT = 96
 const LOG_VISIBLE_LINES = 4
+const PANEL_GAP = 6
 
 const NAME_FONT_SIZE = 18
 const COMMAND_FONT_SIZE = 18
@@ -89,6 +91,7 @@ export class BattleScreen extends Container {
   private enemyNameText: PixiText
   private enemyHpText: PixiText
   private heroStatsText: PixiText
+  private statsPanel: Graphics
   private commandPanel: Graphics
   private logPanel: Graphics
   private logLines: PixiText[] = []
@@ -107,6 +110,7 @@ export class BattleScreen extends Container {
     this.opts = opts
 
     this.dim = new Graphics()
+    this.statsPanel = new Graphics()
     this.commandPanel = new Graphics()
     this.logPanel = new Graphics()
     this.enemyNameText = new PixiText({ text: '', style: TEXT_STYLE_NAME })
@@ -116,8 +120,9 @@ export class BattleScreen extends Container {
     this.addChild(this.dim)
     this.addChild(this.enemyNameText)
     this.addChild(this.enemyHpText)
-    this.addChild(this.commandPanel)
+    this.addChild(this.statsPanel)
     this.addChild(this.heroStatsText)
+    this.addChild(this.commandPanel)
     this.addChild(this.logPanel)
     this.buildCommandButtons()
     this.buildLogLines()
@@ -187,6 +192,7 @@ export class BattleScreen extends Container {
   private layout(): void {
     const W = this.screenWidth
     const H = this.screenHeight
+    const panelW = W - STAGE_PADDING * 2
 
     // フィールド全体を暗くする半透明黒
     this.dim.clear().rect(0, 0, W, H).fill({ color: 0x000000, alpha: BG_DIM_ALPHA })
@@ -199,26 +205,32 @@ export class BattleScreen extends Container {
     this.enemyHpText.x = W / 2
     this.enemyHpText.y = H * 0.15 + NAME_FONT_SIZE + 8
 
-    // コマンドパネル（画面下部）
-    const commandY = H - LOG_HEIGHT - COMMAND_HEIGHT - STAGE_PADDING
-    const commandW = W - STAGE_PADDING * 2
-    this.commandPanel
+    // 縦積み構成: 下から ログ → コマンド → HP/MP の 3 段。
+    // 9:16 縦長スマホ (W=360 程度) でもコマンドが画面幅をはみ出さない構造。
+    const logY = H - LOG_HEIGHT - STAGE_PADDING
+    const commandY = logY - PANEL_GAP - COMMAND_HEIGHT
+    const statsY = commandY - PANEL_GAP - STATS_HEIGHT
+
+    // HP/MP パネル
+    this.statsPanel
       .clear()
-      .roundRect(STAGE_PADDING, commandY, commandW, COMMAND_HEIGHT, 6)
+      .roundRect(STAGE_PADDING, statsY, panelW, STATS_HEIGHT, 6)
       .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
       .stroke({ color: PANEL_STROKE, width: 2 })
-
-    // HP/MP（コマンドパネル内左端）
     this.heroStatsText.x = STAGE_PADDING + 12
-    this.heroStatsText.y = commandY + (COMMAND_HEIGHT - HP_FONT_SIZE) / 2
+    this.heroStatsText.y = statsY + (STATS_HEIGHT - HP_FONT_SIZE) / 2
 
-    // 4 コマンドを HP/MP の右側に均等割
-    const cmdAreaX = STAGE_PADDING + 180
-    const cmdAreaW = W - cmdAreaX - STAGE_PADDING
-    const cmdW = cmdAreaW / this.commands.length
+    // コマンドパネル（4 コマンドを画面幅で均等割）
+    this.commandPanel
+      .clear()
+      .roundRect(STAGE_PADDING, commandY, panelW, COMMAND_HEIGHT, 6)
+      .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+      .stroke({ color: PANEL_STROKE, width: 2 })
+    // commands.length は固定 4。万一 0 になっても div by zero しないよう max(1) でガード
+    const cmdW = panelW / Math.max(1, this.commands.length)
     for (let i = 0; i < this.commands.length; i++) {
       const node = this.commands[i]
-      const cellX = cmdAreaX + i * cmdW
+      const cellX = STAGE_PADDING + i * cmdW
       node.hit.hitArea = new Rectangle(cellX, commandY, cmdW, COMMAND_HEIGHT)
       node.text.anchor.set(0.5, 0.5)
       node.text.x = cellX + cmdW / 2
@@ -226,10 +238,9 @@ export class BattleScreen extends Container {
     }
 
     // ログパネル（画面最下部）
-    const logY = H - LOG_HEIGHT - STAGE_PADDING
     this.logPanel
       .clear()
-      .roundRect(STAGE_PADDING, logY, commandW, LOG_HEIGHT, 6)
+      .roundRect(STAGE_PADDING, logY, panelW, LOG_HEIGHT, 6)
       .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
       .stroke({ color: PANEL_STROKE, width: 2 })
     for (let i = 0; i < this.logLines.length; i++) {
@@ -250,7 +261,7 @@ export class BattleScreen extends Container {
     }
     const hero: BattleEntity | undefined = s.party[0]
     if (hero) {
-      this.heroStatsText.text = `${hero.name}\nHP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
+      this.heroStatsText.text = `${hero.name}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
       this.heroStatsText.style.fill = hero.hp > 0 ? TEXT_COLOR : 0x888888
     }
     // ログ末尾 LOG_VISIBLE_LINES 件
@@ -265,6 +276,5 @@ export class BattleScreen extends Container {
       cmd.text.alpha = inputEnabled ? 1 : 0.4
       cmd.hit.eventMode = inputEnabled ? 'static' : 'none'
     }
-    void MP_COLOR // MP バー実装は将来。現状 unused 警告抑制（将来の HP/MP バー UI で使用）
   }
 }
