@@ -42,6 +42,7 @@ import {
 import { formatHeightError, validateMapHeights } from './mapValidation'
 import { attachTouchInput, type SwipeDirection } from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
+import { MinimapOverlay } from './MinimapOverlay'
 
 interface NPCRuntime {
   data: UiNpcData
@@ -89,7 +90,10 @@ export class RaycastRenderer {
   private npcLayer: Container
   private dialogBox: RpgDialogBox | null = null
   private menuOverlay: TouchMenuOverlay | null = null
+  private minimap: MinimapOverlay | null = null
   private detachTouchInput: (() => void) | null = null
+  /** load 時に持っていた NPC リスト（resize 時のミニマップ再描画に使う） */
+  private cachedNpcDataForMinimap: ReadonlyArray<import('../types/rpg').UiNpcData> = []
 
   private worldGraphics: Graphics | null = null
 
@@ -233,6 +237,10 @@ export class RaycastRenderer {
     this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
     this.app.stage.addChild(this.dialogBox)
 
+    // 2D ミニマップ (#149)。マップ寸法は load() で setMap、毎フレ setPlayerAngle で更新。
+    this.minimap = new MinimapOverlay(this.screenWidth, this.screenHeight, { corner: 'top-right' })
+    this.app.stage.addChild(this.minimap)
+
     // タッチメニュー: DQ4 ファミコン版相当の左上 8 コマンドウィンドウ (#178 → #171)
     this.menuOverlay = new TouchMenuOverlay(
       this.screenWidth,
@@ -281,6 +289,7 @@ export class RaycastRenderer {
     }
 
     this.rebuildNpcObjects(gameData.npcs)
+    this.cachedNpcDataForMinimap = gameData.npcs
 
     // Player: tile center
     this.playerX = gameData.player.x + 0.5
@@ -300,6 +309,11 @@ export class RaycastRenderer {
 
     this.lastTickMs = performance.now()
     this.keys.clear()
+
+    // ミニマップ (#149): マップ寸法 + タイル + NPC ドットをセット。プレイヤー位置は onTick 毎に更新
+    this.minimap?.setMap(this.mapWidth, this.mapHeight, this.mapTiles)
+    this.minimap?.setNpcs(this.cachedNpcDataForMinimap)
+    this.minimap?.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
 
     // 壁テクスチャを非同期ロード（完了まではベタ塗り fallback）。
     // 同じ RaycastRenderer で load() が複数回呼ばれても、wallTextureSheet 側の
@@ -444,6 +458,7 @@ export class RaycastRenderer {
       this.wallTopYBuffer = new Float32Array(0)
       this.dialogBox = null
       this.menuOverlay = null
+      this.minimap = null
     }
   }
 
@@ -681,6 +696,13 @@ export class RaycastRenderer {
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
       this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
       this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
+      // ミニマップ位置を画面サイズに追従させる (#149)
+      if (this.minimap) {
+        this.minimap.resize(this.screenWidth, this.screenHeight)
+        this.minimap.setMap(this.mapWidth, this.mapHeight, this.mapTiles)
+        this.minimap.setNpcs(this.cachedNpcDataForMinimap)
+        this.minimap.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
+      }
       // 画面幅が変わると numStripes も変わるので、余剰分を destroy して寸法を合わせる
       this.ensureStripePool(Math.ceil(this.screenWidth / this.stripeWidth))
     })
@@ -753,6 +775,9 @@ export class RaycastRenderer {
     const now = performance.now()
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
+
+    // ミニマップのプレイヤー位置を毎フレ更新 (#149)
+    this.minimap?.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
 
     if (!this.dialogBox?.isShowing) {
       this.updateMovement(dt)
