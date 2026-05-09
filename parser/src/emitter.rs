@@ -406,6 +406,33 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str("[/アイテム]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::PartyMember(p) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[パーティ {}]\n", p.id));
+                out.push_str(&format!("名前: {}\n", p.name));
+                if let Some(s) = &p.sprite {
+                    out.push_str(&format!("スプライト: {}\n", s));
+                }
+                if p.level > 1 {
+                    out.push_str(&format!("レベル: {}\n", p.level));
+                }
+                out.push_str(&format!("HP: {}\n", p.hp));
+                if p.mp > 0 {
+                    out.push_str(&format!("MP: {}\n", p.mp));
+                }
+                out.push_str(&format!("ATK: {}\n", p.atk));
+                out.push_str(&format!("DEF: {}\n", p.def_value));
+                out.push_str(&format!("AGI: {}\n", p.agi));
+                if let Some(learns) = &p.learns {
+                    for l in learns {
+                        out.push_str(&format!("習得: Lv{} {}\n", l.level, l.spell));
+                    }
+                }
+                out.push_str("[/パーティ]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::Spell(sp) => {
                 if prev_was_dialog_or_text {
                     out.push('\n');

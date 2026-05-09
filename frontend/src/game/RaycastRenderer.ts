@@ -100,6 +100,8 @@ export class RaycastRenderer {
   private encounterRate: number = 0
   private encounterGroups: string[] = []
   private masterMonsters: Record<string, import('../types').MonsterDef> = {}
+  /** パーティマスター (#175)。`hero` 既定 ID を最優先で使う */
+  private masterParty: Record<string, import('../types').PartyMemberDef> = {}
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -312,6 +314,7 @@ export class RaycastRenderer {
     this.encounterRate = gameData.map.encounterRate ?? 0
     this.encounterGroups = gameData.map.encounterGroups ?? []
     this.masterMonsters = gameData.monsters ?? {}
+    this.masterParty = gameData.party ?? {}
     this.stepCounter = 0
     this.encounterCooldown = 0
 
@@ -673,9 +676,10 @@ export class RaycastRenderer {
   }
 
   /**
-   * 戦闘画面を起動する (#173 + #172)。
+   * 戦闘画面を起動する (#173 + #172 + #175)。
    *
-   * パーティは固定の「ゆうしゃ」1 体（パーティデータは #175 で master 化予定）。
+   * パーティは masterParty['hero']（#175 で master 化済み）から組み立てる。
+   * 未定義の場合はハードコード「ゆうしゃ」にフォールバック。
    * 敵は呼び出し側が解決済の BattleEntity[] を渡す（エンカウント抽選または
    * 「しらべる」テスト経路から）。戦闘終了で自動的に画面を畳み、エンカウント
    * クールダウン（連続エンカウント抑止）を 3 歩セットする。
@@ -683,17 +687,7 @@ export class RaycastRenderer {
   private startBattle(enemies: BattleEntity[]): void {
     if (this.battleScreen) return // 多重起動防止
     if (enemies.length === 0) return
-    const hero: BattleEntity = {
-      id: 'hero',
-      name: 'ゆうしゃ',
-      hp: 20,
-      maxHp: 20,
-      mp: 4,
-      maxMp: 4,
-      atk: 5,
-      def: 3,
-      agi: 4,
-    }
+    const hero = this.buildHeroBattleEntity()
     const engine = new BattleEngine([hero], enemies)
     this.battleScreen = new BattleScreen(engine, this.screenWidth, this.screenHeight, {
       onClose: () => {
@@ -707,6 +701,38 @@ export class RaycastRenderer {
       },
     })
     this.app.stage.addChild(this.battleScreen)
+  }
+
+  /**
+   * masterParty['hero'] から BattleEntity を組み立てる。未定義ならハードコード値 (#175)。
+   * 将来的にはセーブデータの現在値（HP/MP 残量、レベル）を反映する。
+   */
+  private buildHeroBattleEntity(): BattleEntity {
+    const def = this.masterParty['hero']
+    if (def) {
+      return {
+        id: def.id,
+        name: def.name,
+        hp: def.hp,
+        maxHp: def.hp,
+        mp: def.mp ?? 0,
+        maxMp: def.mp ?? 0,
+        atk: def.atk,
+        def: def.def,
+        agi: def.agi,
+      }
+    }
+    return {
+      id: 'hero',
+      name: 'ゆうしゃ',
+      hp: 20,
+      maxHp: 20,
+      mp: 4,
+      maxMp: 4,
+      atk: 5,
+      def: 3,
+      agi: 4,
+    }
   }
 
   /**

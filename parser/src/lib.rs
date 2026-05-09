@@ -1,4 +1,5 @@
 pub mod emitter;
+pub(crate) mod master;
 pub mod models;
 pub mod parser;
 

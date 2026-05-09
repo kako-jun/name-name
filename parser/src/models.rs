@@ -166,6 +166,47 @@ pub struct ItemDef {
     pub builtin: Option<String>,
 }
 
+/// パーティメンバー定義 (#175)。
+///
+/// `[パーティ <id>]` ブロックで定義。プレイヤー側の戦闘エンティティ初期値を持つ。
+/// レベルアップ後の状態はセーブデータ側で管理する想定で、ここは「Lv1 開始時」の値。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct PartyMemberDef {
+    pub id: String,
+    pub name: String,
+    /// 立ち絵 / 戦闘スプライト相対パス
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprite: Option<String>,
+    /// 初期レベル（既定 1）
+    #[serde(default = "default_level")]
+    pub level: u32,
+    pub hp: u32,
+    #[serde(default)]
+    pub mp: u32,
+    pub atk: u32,
+    /// `def` は Rust 予約語のため Rust 側は `def_value`、JSON / TS 側は `def` で透過する。
+    #[serde(rename = "def")]
+    pub def_value: u32,
+    pub agi: u32,
+    /// レベルアップで習得する呪文（順不同）。`{ level: 4, spell: "ホイミ" }` 形式。
+    /// Phase 1 ではデータとして保持するだけ、ランタイム評価は #175 follow-up。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learns: Option<Vec<PartyLearns>>,
+}
+
+/// パーティメンバーの呪文習得スロット (#175)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct PartyLearns {
+    pub level: u32,
+    pub spell: String,
+}
+
+fn default_level() -> u32 {
+    1
+}
+
 /// 呪文定義 (#174)。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
@@ -271,6 +312,8 @@ pub enum Event {
     Item(ItemDef),
     /// 呪文定義 (#174)。`[呪文 <id>] ... [/呪文]` ブロックで書く。
     Spell(SpellDef),
+    /// パーティメンバー定義 (#175)。`[パーティ <id>] ... [/パーティ]` ブロックで書く。
+    PartyMember(PartyMemberDef),
     /// 立ち絵 / オブジェクトのアニメーション (#134)。
     ///
     /// 子供向け動画用途で「車が回転しながら横移動」「寿司が空から降ってくる」等の

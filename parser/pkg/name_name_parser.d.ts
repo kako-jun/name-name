@@ -23,6 +23,46 @@ export interface ItemDef {
 }
 
 /**
+ * パーティメンバーの呪文習得スロット (#175)
+ */
+export interface PartyLearns {
+    level: number;
+    spell: string;
+}
+
+/**
+ * パーティメンバー定義 (#175)。
+ *
+ * `[パーティ <id>]` ブロックで定義。プレイヤー側の戦闘エンティティ初期値を持つ。
+ * レベルアップ後の状態はセーブデータ側で管理する想定で、ここは「Lv1 開始時」の値。
+ */
+export interface PartyMemberDef {
+    id: string;
+    name: string;
+    /**
+     * 立ち絵 / 戦闘スプライト相対パス
+     */
+    sprite?: string;
+    /**
+     * 初期レベル（既定 1）
+     */
+    level?: number;
+    hp: number;
+    mp?: number;
+    atk: number;
+    /**
+     * `def` は Rust 予約語のため Rust 側は `def_value`、JSON / TS 側は `def` で透過する。
+     */
+    def: number;
+    agi: number;
+    /**
+     * レベルアップで習得する呪文（順不同）。`{ level: 4, spell: \"ホイミ\" }` 形式。
+     * Phase 1 ではデータとして保持するだけ、ランタイム評価は #175 follow-up。
+     */
+    learns?: PartyLearns[];
+}
+
+/**
  * モンスター定義 (#174)。
  *
  * 各章の `## data: マスター` シーン内に `[モンスター <id>] ... [/モンスター]` で書く。
@@ -210,7 +250,7 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 
 export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string } } | { Narration: { text: string[]; voice_path?: string; font_family?: string } } | { Background: { path: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { path: string; fade_ms?: number } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } };
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string } } | { Narration: { text: string[]; voice_path?: string; font_family?: string } } | { Background: { path: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { path: string; fade_ms?: number } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { PartyMember: PartyMemberDef } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } };
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 

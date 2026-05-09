@@ -138,6 +138,8 @@ export interface RPGProject {
   items?: Record<string, import('../types').ItemDef>
   /** 同上、呪文 */
   spells?: Record<string, import('../types').SpellDef>
+  /** 同上、パーティメンバー (#175) */
+  party?: Record<string, import('../types').PartyMemberDef>
 }
 
 /**

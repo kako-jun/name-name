@@ -1,3 +1,4 @@
+use crate::master::try_parse_master_data_block;
 use crate::models::*;
 
 /// Parse a name-name Markdown document into a Document struct.
@@ -1427,163 +1428,9 @@ fn unquote(s: &str) -> String {
     }
 }
 
-// ===== Master data blocks (#174) =====
 
-struct ParsedMasterBlock {
-    event: Event,
-    next_pos: usize,
-}
-
-/// `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` のいずれかを検出して
-/// ボディの key: value ペアからオブジェクトを組み立てる。検出に失敗（ヘッダ形式不一致 /
-/// 必須項目欠落）した場合は `None` を返し、呼び出し側は次の解釈ルートへ進む。
-fn try_parse_master_data_block(
-    lines: &[&str],
-    pos: usize,
-    len: usize,
-) -> Option<ParsedMasterBlock> {
-    let header = lines[pos].trim();
-    let (kind, id, close_tag) = parse_master_block_header(header)?;
-    let body = collect_master_body(lines, pos + 1, len, close_tag);
-    let next_pos = body.next_pos;
-
-    let event = match kind {
-        MasterKind::Monster => Event::Monster(build_monster_def(id, &body.entries)?),
-        MasterKind::Item => Event::Item(build_item_def(id, &body.entries)),
-        MasterKind::Spell => Event::Spell(build_spell_def(id, &body.entries)?),
-    };
-
-    Some(ParsedMasterBlock { event, next_pos })
-}
-
-#[derive(Clone, Copy)]
-enum MasterKind {
-    Monster,
-    Item,
-    Spell,
-}
-
-fn parse_master_block_header(header: &str) -> Option<(MasterKind, String, &'static str)> {
-    if let Some(rest) = header.strip_prefix("[モンスター ") {
-        let id = rest.strip_suffix(']')?.trim().to_string();
-        if id.is_empty() {
-            return None;
-        }
-        return Some((MasterKind::Monster, id, "[/モンスター]"));
-    }
-    if let Some(rest) = header.strip_prefix("[アイテム ") {
-        let id = rest.strip_suffix(']')?.trim().to_string();
-        if id.is_empty() {
-            return None;
-        }
-        return Some((MasterKind::Item, id, "[/アイテム]"));
-    }
-    if let Some(rest) = header.strip_prefix("[呪文 ") {
-        let id = rest.strip_suffix(']')?.trim().to_string();
-        if id.is_empty() {
-            return None;
-        }
-        return Some((MasterKind::Spell, id, "[/呪文]"));
-    }
-    None
-}
-
-struct MasterBody {
-    entries: Vec<(String, String)>,
-    next_pos: usize,
-}
-
-fn collect_master_body(lines: &[&str], start: usize, len: usize, close_tag: &str) -> MasterBody {
-    let mut entries: Vec<(String, String)> = Vec::new();
-    let mut p = start;
-    while p < len && lines[p].trim() != close_tag {
-        let line = lines[p].trim();
-        if !line.is_empty() {
-            if let Some((k, v)) = line.split_once(':') {
-                entries.push((k.trim().to_string(), v.trim().to_string()));
-            }
-        }
-        p += 1;
-    }
-    if p < len {
-        p += 1; // skip close tag
-    }
-    MasterBody {
-        entries,
-        next_pos: p,
-    }
-}
-
-fn lookup_master_value<'a>(entries: &'a [(String, String)], keys: &[&str]) -> Option<&'a str> {
-    for (k, v) in entries {
-        if keys.iter().any(|key| k == key) {
-            return Some(v.as_str());
-        }
-    }
-    None
-}
-
-fn lookup_master_u32(entries: &[(String, String)], keys: &[&str], default: u32) -> u32 {
-    lookup_master_value(entries, keys)
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-
-fn lookup_master_string(entries: &[(String, String)], keys: &[&str]) -> Option<String> {
-    lookup_master_value(entries, keys).map(|s| s.to_string())
-}
-
-fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<MonsterDef> {
-    let name = lookup_master_string(entries, &["名前", "name"])?;
-    if name.is_empty() {
-        return None;
-    }
-    Some(MonsterDef {
-        id,
-        name,
-        hp: lookup_master_u32(entries, &["HP", "hp"], 1),
-        mp: lookup_master_u32(entries, &["MP", "mp"], 0),
-        atk: lookup_master_u32(entries, &["ATK", "atk", "攻撃"], 0),
-        def_value: lookup_master_u32(entries, &["DEF", "def", "守備"], 0),
-        agi: lookup_master_u32(entries, &["AGI", "agi", "素早さ"], 0),
-        exp: lookup_master_u32(entries, &["EXP", "exp", "経験値"], 0),
-        gold: lookup_master_u32(entries, &["GOLD", "gold", "G", "ゴールド"], 0),
-        sprite: lookup_master_string(entries, &["スプライト", "sprite"]),
-        builtin: lookup_master_string(entries, &["builtin"]),
-    })
-}
-
-fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
-    let name = lookup_master_string(entries, &["名前", "name"]).unwrap_or_default();
-    let kind = lookup_master_string(entries, &["種別", "kind"])
-        .unwrap_or_else(|| "その他".to_string());
-    ItemDef {
-        id,
-        name,
-        kind,
-        price: lookup_master_value(entries, &["価格", "price"]).and_then(|v| v.parse().ok()),
-        effect: lookup_master_string(entries, &["効果", "effect"]),
-        builtin: lookup_master_string(entries, &["builtin"]),
-    }
-}
-
-fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef> {
-    let name = lookup_master_string(entries, &["名前", "name"])?;
-    if name.is_empty() {
-        return None;
-    }
-    let target = lookup_master_string(entries, &["対象", "target"])
-        .unwrap_or_else(|| "敵単体".to_string());
-    Some(SpellDef {
-        id,
-        name,
-        mp: lookup_master_u32(entries, &["MP", "mp"], 0),
-        target,
-        effect: lookup_master_string(entries, &["効果", "effect"]),
-        builtin: lookup_master_string(entries, &["builtin"]),
-        school: lookup_master_string(entries, &["系統", "school"]),
-    })
-}
+// マスターデータブロック (#174 / #175) のパース実装は master.rs に分離。
+// `use crate::master::try_parse_master_data_block;` は parser.rs 冒頭に集約。
 
 #[cfg(test)]
 mod tests {
@@ -2144,6 +1991,137 @@ GGG
             Event::RpgMap(m) => assert_eq!(m.encounter_rate, Some(0)),
             other => panic!("expected RpgMap, got {:?}", other),
         }
+    }
+
+    // ===== Party member block (#175) =====
+
+    #[test]
+    fn parses_party_member_block_with_all_fields() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[パーティ hero]
+名前: ゆうしゃ
+スプライト: characters/hero.png
+レベル: 1
+HP: 20
+MP: 0
+ATK: 5
+DEF: 3
+AGI: 4
+習得: Lv4 ホイミ
+習得: Lv7 ギラ
+[/パーティ]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::PartyMember(p) => {
+                assert_eq!(p.id, "hero");
+                assert_eq!(p.name, "ゆうしゃ");
+                assert_eq!(p.sprite.as_deref(), Some("characters/hero.png"));
+                assert_eq!(p.level, 1);
+                assert_eq!(p.hp, 20);
+                assert_eq!(p.atk, 5);
+                assert_eq!(p.def_value, 3);
+                assert_eq!(p.agi, 4);
+                let learns = p.learns.as_ref().expect("learns 必須");
+                assert_eq!(learns.len(), 2);
+                assert_eq!(learns[0].level, 4);
+                assert_eq!(learns[0].spell, "ホイミ");
+                assert_eq!(learns[1].level, 7);
+                assert_eq!(learns[1].spell, "ギラ");
+            }
+            other => panic!("expected PartyMember, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn party_learns_accepts_kv_form() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[パーティ hero]
+名前: ゆうしゃ
+HP: 20
+ATK: 5
+DEF: 3
+AGI: 4
+習得: level=4 spell=ホイミ
+[/パーティ]
+"#;
+        let doc = parse(input);
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::PartyMember(p) => {
+                let learns = p.learns.as_ref().expect("learns 必須");
+                assert_eq!(learns[0].level, 4);
+                assert_eq!(learns[0].spell, "ホイミ");
+            }
+            other => panic!("expected PartyMember, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn party_learns_preserves_order_and_skips_invalid_rows() {
+        // 不正な習得行が混じっても、後続の正常行は取り込まれて順序が保たれる
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[パーティ hero]
+名前: ゆうしゃ
+HP: 20
+ATK: 5
+DEF: 3
+AGI: 4
+習得: Lv4 ホイミ
+習得: invalid_no_level_number
+習得: level=7 spell=
+習得: Lv10 ベホマ
+[/パーティ]
+"#;
+        let doc = parse(input);
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::PartyMember(p) => {
+                let learns = p.learns.as_ref().expect("learns 必須");
+                // 不正行 2 つはスキップされ、正常行 2 つが順序を保ったまま残る
+                assert_eq!(learns.len(), 2);
+                assert_eq!(learns[0].level, 4);
+                assert_eq!(learns[0].spell, "ホイミ");
+                assert_eq!(learns[1].level, 10);
+                assert_eq!(learns[1].spell, "ベホマ");
+            }
+            other => panic!("expected PartyMember, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn party_member_without_name_is_dropped() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[パーティ nameless]
+HP: 20
+[/パーティ]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 0);
     }
 
     #[test]
