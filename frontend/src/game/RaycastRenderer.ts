@@ -92,7 +92,14 @@ export class RaycastRenderer {
   private menuOverlay: TouchMenuOverlay | null = null
   private minimap: MinimapOverlay | null = null
   private detachTouchInput: (() => void) | null = null
-  /** load 時に持っていた NPC リスト（resize 時のミニマップ再描画に使う） */
+  /**
+   * resize 時のミニマップ再描画に使う NPC リスト（#149）。
+   *
+   * 責務: rebuildNpcObjects を呼ぶすべての経路でこの cache も同期更新する。
+   * 現状は load() 時のみ rebuildNpcObjects が呼ばれるが、将来イベントで NPC を
+   * 動的に出現・消滅させる場合（例: 戦闘前後・スクリプト発火）も rebuildNpcObjects
+   * 経由で更新する設計に倒すこと。
+   */
   private cachedNpcDataForMinimap: ReadonlyArray<import('../types/rpg').UiNpcData> = []
 
   private worldGraphics: Graphics | null = null
@@ -289,7 +296,6 @@ export class RaycastRenderer {
     }
 
     this.rebuildNpcObjects(gameData.npcs)
-    this.cachedNpcDataForMinimap = gameData.npcs
 
     // Player: tile center
     this.playerX = gameData.player.x + 0.5
@@ -310,9 +316,9 @@ export class RaycastRenderer {
     this.lastTickMs = performance.now()
     this.keys.clear()
 
-    // ミニマップ (#149): マップ寸法 + タイル + NPC ドットをセット。プレイヤー位置は onTick 毎に更新
+    // ミニマップ (#149): マップ寸法をセット。NPC は rebuildNpcObjects 経由で同期済。
+    // プレイヤー位置は onTick 毎に更新する。
     this.minimap?.setMap(this.mapWidth, this.mapHeight, this.mapTiles)
-    this.minimap?.setNpcs(this.cachedNpcDataForMinimap)
     this.minimap?.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
 
     // 壁テクスチャを非同期ロード（完了まではベタ塗り fallback）。
@@ -349,6 +355,10 @@ export class RaycastRenderer {
    * `sprite=...` 指定があれば非同期ロードし、完了後に texture を差し替える。
    */
   private rebuildNpcObjects(npcData: UiNpcData[]): void {
+    // ミニマップ用 cache をここで同期する。rebuildNpcObjects を呼ぶすべての経路で
+    // ミニマップが古いリストを描かないようにするためのワンソース更新点 (#149)。
+    this.cachedNpcDataForMinimap = npcData
+    this.minimap?.setNpcs(npcData)
     // 既存を destroy
     for (const child of this.npcLayer.removeChildren()) {
       child.destroy({ children: true })

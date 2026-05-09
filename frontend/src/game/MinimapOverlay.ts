@@ -32,6 +32,14 @@ const DEFAULT_MARGIN = 12
 
 /** プレイヤー / NPC マーカーの半径（タイル px の倍率）。1 タイル一杯に近い大きさ */
 const MARKER_RADIUS_RATIO = 0.45
+/** プレイヤー三角形の前頂点までの距離（マーカー半径の倍率）。前向きを示す矢印感 */
+const PLAYER_TIP_REACH = 1.6
+/**
+ * プレイヤー三角形の左右底点角度（前向きから 0.75π = 135° の後方斜め）。
+ * 0.5π（真横）だと矢じりが鋭すぎ、π（真後ろ）だと針状で底辺が無くなるため
+ * 0.75π を採用してそれっぽい矢印形状にする。
+ */
+const PLAYER_BACK_ANGLE = Math.PI * 0.75
 
 export class MinimapOverlay extends Container {
   private bg: Graphics
@@ -73,8 +81,12 @@ export class MinimapOverlay extends Container {
 
   /**
    * 画面サイズ変更時に呼ぶ。マップ寸法は変わらない前提なら、タイル/NPC 再描画はコール側で。
+   *
+   * 高負荷経路で呼ばれるため、origin / tilePx に変化が無いときは内部再計算もスキップする
+   * （タイル数 100×100 のマップでは setMap を毎回呼ぶと無視できないコストになる）。
    */
   resize(screenWidth: number, screenHeight: number): void {
+    if (screenWidth === this.screenWidth && screenHeight === this.screenHeight) return
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
     this.recomputeOrigin()
@@ -137,11 +149,11 @@ export class MinimapOverlay extends Container {
   private drawPlayerAt(cx: number, cy: number, angleRad: number): void {
     this.playerLayer.clear()
     const r = Math.max(1.5, this.tilePx * MARKER_RADIUS_RATIO)
-    // 三角形（向き矢印兼）
-    const tipX = cx + Math.cos(angleRad) * r * 1.6
-    const tipY = cy + Math.sin(angleRad) * r * 1.6
-    const leftAngle = angleRad + Math.PI * 0.75
-    const rightAngle = angleRad - Math.PI * 0.75
+    // 三角形（向き矢印兼）。前頂点 + 左右底点で正三角形に近い矢じり形
+    const tipX = cx + Math.cos(angleRad) * r * PLAYER_TIP_REACH
+    const tipY = cy + Math.sin(angleRad) * r * PLAYER_TIP_REACH
+    const leftAngle = angleRad + PLAYER_BACK_ANGLE
+    const rightAngle = angleRad - PLAYER_BACK_ANGLE
     const lx = cx + Math.cos(leftAngle) * r
     const ly = cy + Math.sin(leftAngle) * r
     const rx = cx + Math.cos(rightAngle) * r
@@ -192,8 +204,9 @@ export class MinimapOverlay extends Container {
   private drawTiles(tiles: ReadonlyArray<ReadonlyArray<number>>): void {
     this.tiles.clear()
     if (this.tilePx <= 0) return
-    // タイル毎に色を決めて 1 つの Graphics に積み上げる（type 別に fill すると数 K 回描画）
-    // 同色をまとめて fill する単純な最適化
+    // 同色のタイルをまとめて 1 回 fill する単純な最適化。TileType は現状 4 種
+    // （GRASS / ROAD / TREE / WATER）なので fill 呼び出しは最大 4 回に収まる。
+    // タイル毎に fill すると O(W*H) 回の fill 呼び出しになるためそれを回避。
     const byColor = new Map<number, Array<[number, number]>>()
     for (let y = 0; y < this.mapH; y++) {
       const row = tiles[y]
