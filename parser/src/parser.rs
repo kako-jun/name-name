@@ -277,6 +277,15 @@ pub fn parse(input: &str) -> Document {
             }
         }
 
+        // Master data blocks (#174): [モンスター <id>] / [アイテム <id>] / [呪文 <id>]
+        // 共通のキー値ボディを持つ宣言型ブロック。汎用関数（key=value）で書ききれない場合は
+        // body 中で `builtin: <slug>` を指定してランタイムの専用関数に委譲する。
+        if let Some(parsed) = try_parse_master_data_block(&lines, pos, len) {
+            current_events.push(parsed.event);
+            pos = parsed.next_pos;
+            continue;
+        }
+
         // Player start (single line): [プレイヤー @x,y 向き=...]
         if let Some(rest) = trimmed.strip_prefix("[プレイヤー") {
             if rest.ends_with(']') {
@@ -1328,6 +1337,164 @@ fn unquote(s: &str) -> String {
     }
 }
 
+// ===== Master data blocks (#174) =====
+
+struct ParsedMasterBlock {
+    event: Event,
+    next_pos: usize,
+}
+
+/// `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` のいずれかを検出して
+/// ボディの key: value ペアからオブジェクトを組み立てる。検出に失敗（ヘッダ形式不一致 /
+/// 必須項目欠落）した場合は `None` を返し、呼び出し側は次の解釈ルートへ進む。
+fn try_parse_master_data_block(
+    lines: &[&str],
+    pos: usize,
+    len: usize,
+) -> Option<ParsedMasterBlock> {
+    let header = lines[pos].trim();
+    let (kind, id, close_tag) = parse_master_block_header(header)?;
+    let body = collect_master_body(lines, pos + 1, len, close_tag);
+    let next_pos = body.next_pos;
+
+    let event = match kind {
+        MasterKind::Monster => Event::Monster(build_monster_def(id, &body.entries)?),
+        MasterKind::Item => Event::Item(build_item_def(id, &body.entries)),
+        MasterKind::Spell => Event::Spell(build_spell_def(id, &body.entries)?),
+    };
+
+    Some(ParsedMasterBlock { event, next_pos })
+}
+
+#[derive(Clone, Copy)]
+enum MasterKind {
+    Monster,
+    Item,
+    Spell,
+}
+
+fn parse_master_block_header(header: &str) -> Option<(MasterKind, String, &'static str)> {
+    if let Some(rest) = header.strip_prefix("[モンスター ") {
+        let id = rest.strip_suffix(']')?.trim().to_string();
+        if id.is_empty() {
+            return None;
+        }
+        return Some((MasterKind::Monster, id, "[/モンスター]"));
+    }
+    if let Some(rest) = header.strip_prefix("[アイテム ") {
+        let id = rest.strip_suffix(']')?.trim().to_string();
+        if id.is_empty() {
+            return None;
+        }
+        return Some((MasterKind::Item, id, "[/アイテム]"));
+    }
+    if let Some(rest) = header.strip_prefix("[呪文 ") {
+        let id = rest.strip_suffix(']')?.trim().to_string();
+        if id.is_empty() {
+            return None;
+        }
+        return Some((MasterKind::Spell, id, "[/呪文]"));
+    }
+    None
+}
+
+struct MasterBody {
+    entries: Vec<(String, String)>,
+    next_pos: usize,
+}
+
+fn collect_master_body(lines: &[&str], start: usize, len: usize, close_tag: &str) -> MasterBody {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut p = start;
+    while p < len && lines[p].trim() != close_tag {
+        let line = lines[p].trim();
+        if !line.is_empty() {
+            if let Some((k, v)) = line.split_once(':') {
+                entries.push((k.trim().to_string(), v.trim().to_string()));
+            }
+        }
+        p += 1;
+    }
+    if p < len {
+        p += 1; // skip close tag
+    }
+    MasterBody {
+        entries,
+        next_pos: p,
+    }
+}
+
+fn lookup_master_value<'a>(entries: &'a [(String, String)], keys: &[&str]) -> Option<&'a str> {
+    for (k, v) in entries {
+        if keys.iter().any(|key| k == key) {
+            return Some(v.as_str());
+        }
+    }
+    None
+}
+
+fn lookup_master_u32(entries: &[(String, String)], keys: &[&str], default: u32) -> u32 {
+    lookup_master_value(entries, keys)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn lookup_master_string(entries: &[(String, String)], keys: &[&str]) -> Option<String> {
+    lookup_master_value(entries, keys).map(|s| s.to_string())
+}
+
+fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<MonsterDef> {
+    let name = lookup_master_string(entries, &["名前", "name"])?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(MonsterDef {
+        id,
+        name,
+        hp: lookup_master_u32(entries, &["HP", "hp"], 1),
+        mp: lookup_master_u32(entries, &["MP", "mp"], 0),
+        atk: lookup_master_u32(entries, &["ATK", "atk", "攻撃"], 0),
+        def_value: lookup_master_u32(entries, &["DEF", "def", "守備"], 0),
+        agi: lookup_master_u32(entries, &["AGI", "agi", "素早さ"], 0),
+        exp: lookup_master_u32(entries, &["EXP", "exp", "経験値"], 0),
+        gold: lookup_master_u32(entries, &["GOLD", "gold", "G", "ゴールド"], 0),
+        sprite: lookup_master_string(entries, &["スプライト", "sprite"]),
+        builtin: lookup_master_string(entries, &["builtin"]),
+    })
+}
+
+fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
+    let name = lookup_master_string(entries, &["名前", "name"]).unwrap_or_default();
+    let kind = lookup_master_string(entries, &["種別", "kind"])
+        .unwrap_or_else(|| "その他".to_string());
+    ItemDef {
+        id,
+        name,
+        kind,
+        price: lookup_master_value(entries, &["価格", "price"]).and_then(|v| v.parse().ok()),
+        effect: lookup_master_string(entries, &["効果", "effect"]),
+        builtin: lookup_master_string(entries, &["builtin"]),
+    }
+}
+
+fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef> {
+    let name = lookup_master_string(entries, &["名前", "name"])?;
+    if name.is_empty() {
+        return None;
+    }
+    let target = lookup_master_string(entries, &["対象", "target"])
+        .unwrap_or_else(|| "敵単体".to_string());
+    Some(SpellDef {
+        id,
+        name,
+        mp: lookup_master_u32(entries, &["MP", "mp"], 0),
+        target,
+        effect: lookup_master_string(entries, &["効果", "effect"]),
+        builtin: lookup_master_string(entries, &["builtin"]),
+        school: lookup_master_string(entries, &["系統", "school"]),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1595,5 +1762,213 @@ default_bgm: test.ogg
             "expected DialogBorderless(false), got {:?}",
             events[2]
         );
+    }
+
+    // ===== Master data blocks (#174) =====
+
+    #[test]
+    fn parses_monster_block_with_all_fields() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[モンスター slime]
+名前: スライム
+HP: 10
+MP: 0
+ATK: 3
+DEF: 1
+AGI: 2
+EXP: 2
+GOLD: 1
+スプライト: monsters/slime.png
+[/モンスター]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::Monster(m) => {
+                assert_eq!(m.id, "slime");
+                assert_eq!(m.name, "スライム");
+                assert_eq!(m.hp, 10);
+                assert_eq!(m.mp, 0);
+                assert_eq!(m.atk, 3);
+                assert_eq!(m.def_value, 1);
+                assert_eq!(m.agi, 2);
+                assert_eq!(m.exp, 2);
+                assert_eq!(m.gold, 1);
+                assert_eq!(m.sprite.as_deref(), Some("monsters/slime.png"));
+                assert_eq!(m.builtin, None);
+            }
+            other => panic!("expected Monster, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn monster_block_without_name_is_dropped() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[モンスター nameless]
+HP: 5
+[/モンスター]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 0, "block without 名前 should be dropped");
+    }
+
+    #[test]
+    fn parses_item_block_with_effect() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[アイテム やくそう]
+名前: やくそう
+種別: 回復
+価格: 8
+効果: heal 30
+[/アイテム]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::Item(it) => {
+                assert_eq!(it.id, "やくそう");
+                assert_eq!(it.name, "やくそう");
+                assert_eq!(it.kind, "回復");
+                assert_eq!(it.price, Some(8));
+                assert_eq!(it.effect.as_deref(), Some("heal 30"));
+                assert_eq!(it.builtin, None);
+            }
+            other => panic!("expected Item, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_spell_block_with_builtin() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[呪文 ザラキ]
+名前: ザラキ
+MP: 8
+対象: 敵全体
+builtin: zaraki
+[/呪文]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::Spell(sp) => {
+                assert_eq!(sp.id, "ザラキ");
+                assert_eq!(sp.name, "ザラキ");
+                assert_eq!(sp.mp, 8);
+                assert_eq!(sp.target, "敵全体");
+                assert_eq!(sp.builtin.as_deref(), Some("zaraki"));
+                assert_eq!(sp.effect, None);
+                assert_eq!(sp.school, None);
+            }
+            other => panic!("expected Spell, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_spell_block_with_declarative_effect_and_school() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[呪文 メラ]
+名前: メラ
+MP: 2
+対象: 敵単体
+系統: fire
+効果: damage 8..14 type=fire
+[/呪文]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::Spell(sp) => {
+                assert_eq!(sp.school.as_deref(), Some("fire"));
+                assert_eq!(sp.effect.as_deref(), Some("damage 8..14 type=fire"));
+            }
+            other => panic!("expected Spell, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn english_keys_are_accepted() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[モンスター ghost]
+name: ゴースト
+hp: 14
+atk: 5
+def: 2
+agi: 6
+exp: 4
+gold: 3
+[/モンスター]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::Monster(m) => {
+                assert_eq!(m.name, "ゴースト");
+                assert_eq!(m.hp, 14);
+                assert_eq!(m.def_value, 2);
+            }
+            other => panic!("expected Monster, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn item_kind_defaults_to_その他() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[アイテム mystery]
+名前: なぞの石
+[/アイテム]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::Item(it) => {
+                assert_eq!(it.kind, "その他");
+                assert_eq!(it.price, None);
+            }
+            other => panic!("expected Item, got {:?}", other),
+        }
     }
 }

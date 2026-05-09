@@ -106,6 +106,73 @@ pub struct PlayerStartData {
     pub direction: Direction,
 }
 
+/// モンスター定義 (#174)。
+///
+/// 各章の `## data: マスター` シーン内に `[モンスター <id>] ... [/モンスター]` で書く。
+/// 効果（特殊行動）が単純な式で書ききれない場合は `builtin: <slug>` でランタイム実装に委譲する。
+/// 詳細は kako-jun と合意した「汎用関数 + 専用 builtin」二層設計を参照（#176）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct MonsterDef {
+    pub id: String,
+    pub name: String,
+    pub hp: u32,
+    #[serde(default)]
+    pub mp: u32,
+    pub atk: u32,
+    /// `def` は Rust 予約語のため Rust 側は `def_value`、JSON / TS 側は `def` で透過する。
+    #[serde(rename = "def")]
+    pub def_value: u32,
+    pub agi: u32,
+    pub exp: u32,
+    pub gold: u32,
+    /// スプライトシートへの相対パス（`monsters/slime.png` 等）。未指定なら色塗り四角。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprite: Option<String>,
+    /// 専用関数 ID（"darkness_breath" 等）。指定時は通常攻撃以外の挙動が当該関数で完結する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
+}
+
+/// アイテム定義 (#174)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ItemDef {
+    pub id: String,
+    pub name: String,
+    /// 種別（"回復" / "攻撃" / "武器" / "盾" / "鎧" / "兜" / "鍵" / "その他" 等）。
+    /// runtime が文字列を解釈する。parser は値を透過するだけ。
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price: Option<u32>,
+    /// 宣言的効果 DSL（"heal 30" / "damage 8..14 type=fire" 等）。`builtin` と排他。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    /// 専用関数 ID（"world_tree_drop" / "wing_of_chimera" 等）。`effect` と排他。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
+}
+
+/// 呪文定義 (#174)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct SpellDef {
+    pub id: String,
+    pub name: String,
+    pub mp: u32,
+    /// 対象（"味方単体" / "敵単体" / "味方全体" / "敵全体" / "自分" / "マップ" 等）。
+    pub target: String,
+    /// 宣言的効果 DSL（"heal 15..25" / "damage 30..50 type=ice" 等）。`builtin` と排他。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    /// 専用関数 ID（"zaraki" / "ruula" / "rariho" 等）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
+    /// 系統（"fire" / "ice" / "holy" / "breath" 等、耐性計算用）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub school: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub enum Event {
@@ -184,6 +251,13 @@ pub enum Event {
     RpgMap(RpgMapData),
     PlayerStart(PlayerStartData),
     Npc(NpcData),
+    /// モンスター定義 (#174)。`[モンスター <id>] ... [/モンスター]` ブロックで書く。
+    /// シナリオシーンからは ID 参照（`[エンカウント群: slime, ghost]` 等）で利用する。
+    Monster(MonsterDef),
+    /// アイテム定義 (#174)。`[アイテム <id>] ... [/アイテム]` ブロックで書く。
+    Item(ItemDef),
+    /// 呪文定義 (#174)。`[呪文 <id>] ... [/呪文]` ブロックで書く。
+    Spell(SpellDef),
     /// 立ち絵 / オブジェクトのアニメーション (#134)。
     ///
     /// 子供向け動画用途で「車が回転しながら横移動」「寿司が空から降ってくる」等の

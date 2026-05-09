@@ -1,5 +1,82 @@
 /* tslint:disable */
 /* eslint-disable */
+/**
+ * アイテム定義 (#174)。
+ */
+export interface ItemDef {
+    id: string;
+    name: string;
+    /**
+     * 種別（\"回復\" / \"攻撃\" / \"武器\" / \"盾\" / \"鎧\" / \"兜\" / \"鍵\" / \"その他\" 等）。
+     * runtime が文字列を解釈する。parser は値を透過するだけ。
+     */
+    kind: string;
+    price?: number;
+    /**
+     * 宣言的効果 DSL（\"heal 30\" / \"damage 8..14 type=fire\" 等）。`builtin` と排他。
+     */
+    effect?: string;
+    /**
+     * 専用関数 ID（\"world_tree_drop\" / \"wing_of_chimera\" 等）。`effect` と排他。
+     */
+    builtin?: string;
+}
+
+/**
+ * モンスター定義 (#174)。
+ *
+ * 各章の `## data: マスター` シーン内に `[モンスター <id>] ... [/モンスター]` で書く。
+ * 効果（特殊行動）が単純な式で書ききれない場合は `builtin: <slug>` でランタイム実装に委譲する。
+ * 詳細は kako-jun と合意した「汎用関数 + 専用 builtin」二層設計を参照（#176）。
+ */
+export interface MonsterDef {
+    id: string;
+    name: string;
+    hp: number;
+    mp?: number;
+    atk: number;
+    /**
+     * `def` は Rust 予約語のため Rust 側は `def_value`、JSON / TS 側は `def` で透過する。
+     */
+    def: number;
+    agi: number;
+    exp: number;
+    gold: number;
+    /**
+     * スプライトシートへの相対パス（`monsters/slime.png` 等）。未指定なら色塗り四角。
+     */
+    sprite?: string;
+    /**
+     * 専用関数 ID（\"darkness_breath\" 等）。指定時は通常攻撃以外の挙動が当該関数で完結する。
+     */
+    builtin?: string;
+}
+
+/**
+ * 呪文定義 (#174)。
+ */
+export interface SpellDef {
+    id: string;
+    name: string;
+    mp: number;
+    /**
+     * 対象（\"味方単体\" / \"敵単体\" / \"味方全体\" / \"敵全体\" / \"自分\" / \"マップ\" 等）。
+     */
+    target: string;
+    /**
+     * 宣言的効果 DSL（\"heal 15..25\" / \"damage 30..50 type=ice\" 等）。`builtin` と排他。
+     */
+    effect?: string;
+    /**
+     * 専用関数 ID（\"zaraki\" / \"ruula\" / \"rariho\" 等）。
+     */
+    builtin?: string;
+    /**
+     * 系統（\"fire\" / \"ice\" / \"holy\" / \"breath\" 等、耐性計算用）。
+     */
+    school?: string;
+}
+
 export interface Chapter {
     number: number;
     title: string;
@@ -118,7 +195,7 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 
 export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string } } | { Narration: { text: string[]; voice_path?: string; font_family?: string } } | { Background: { path: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { path: string; fade_ms?: number } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } };
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string } } | { Narration: { text: string[]; voice_path?: string; font_family?: string } } | { Background: { path: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { path: string; fade_ms?: number } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } };
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 
