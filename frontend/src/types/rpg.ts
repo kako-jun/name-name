@@ -42,6 +42,16 @@ export interface MapData {
    * Issue #87 で追加。
    */
   ceilingHeights?: number[][]
+  /**
+   * 確率エンカウントの分母 (#172)。`Math.random() < 1/N` で抽選。
+   * 未指定 = エンカウントなし、`0` = 街・室内（明示的に発生しない）、`16` = 1/16 確率。
+   */
+  encounterRate?: number
+  /**
+   * エンカウント時の敵グループ候補。各要素は単体モンスター ID または `+` 連結
+   * （`slime+ghost` で「スライム＋ゴースト同時」）。重み均等で抽選。
+   */
+  encounterGroups?: string[]
 }
 
 /**
@@ -118,6 +128,16 @@ export interface RPGProject {
   // プレイ時の表示モード。必須化済み。デフォルトは 'topdown' 相当。
   // （Doc の scene.view=Raycast から派生したときは 'raycast'）
   view: 'topdown' | 'raycast'
+  /**
+   * Document 全体から集めたマスターデータ (#174 / #172 / #173)。
+   * モンスター ID をキーに引いて戦闘で使う。Document の任意のシーンに置かれた
+   * `[モンスター ...]` ブロックがすべて集約される。
+   */
+  monsters?: Record<string, import('../types').MonsterDef>
+  /** 同上、アイテム */
+  items?: Record<string, import('../types').ItemDef>
+  /** 同上、呪文 */
+  spells?: Record<string, import('../types').SpellDef>
 }
 
 /**

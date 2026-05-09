@@ -1,5 +1,30 @@
-import type { EventDocument, Event, SceneView } from '../types'
+import type { EventDocument, Event, SceneView, MonsterDef, ItemDef, SpellDef } from '../types'
 import type { RPGProject, MapData, UiNpcData, PlayerData } from '../types/rpg'
+
+/**
+ * Document 全体（全章 / 全シーン）を走査して `[モンスター] [アイテム] [呪文]` の
+ * マスター定義を ID 引きの Record に集約する (#174 / #172)。重複 ID は後勝ち。
+ */
+export function collectMasterData(doc: EventDocument): {
+  monsters: Record<string, MonsterDef>
+  items: Record<string, ItemDef>
+  spells: Record<string, SpellDef>
+} {
+  const monsters: Record<string, MonsterDef> = {}
+  const items: Record<string, ItemDef> = {}
+  const spells: Record<string, SpellDef> = {}
+  for (const chapter of doc.chapters) {
+    for (const scene of chapter.scenes) {
+      for (const ev of scene.events) {
+        if (typeof ev === 'string') continue
+        if ('Monster' in ev) monsters[ev.Monster.id] = ev.Monster
+        else if ('Item' in ev) items[ev.Item.id] = ev.Item
+        else if ('Spell' in ev) spells[ev.Spell.id] = ev.Spell
+      }
+    }
+  }
+  return { monsters, items, spells }
+}
 
 /**
  * Document から RPGProject を導出する。
@@ -41,6 +66,8 @@ export function rpgProjectFromDoc(
         ceilingHeights: ev.RpgMap.ceiling_heights
           ? ev.RpgMap.ceiling_heights.map((row) => [...row])
           : undefined,
+        encounterRate: ev.RpgMap.encounter_rate ?? undefined,
+        encounterGroups: ev.RpgMap.encounter_groups ? [...ev.RpgMap.encounter_groups] : undefined,
       }
     } else if ('PlayerStart' in ev) {
       player = {
@@ -66,6 +93,9 @@ export function rpgProjectFromDoc(
 
   if (!map) return null
 
+  // Document 全体からマスターデータを収集して RPGProject に同梱する (#174 / #172)
+  const master = collectMasterData(doc)
+
   return {
     name: projectName,
     version: '1.0.0',
@@ -73,6 +103,9 @@ export function rpgProjectFromDoc(
     player: player ?? { x: 0, y: 0, direction: 'down' },
     npcs,
     view,
+    monsters: master.monsters,
+    items: master.items,
+    spells: master.spells,
   }
 }
 
@@ -217,6 +250,8 @@ export function applyRpgProjectToDoc(
         ceiling_heights: project.map.ceilingHeights
           ? project.map.ceilingHeights.map((row) => [...row])
           : null,
+        encounter_rate: project.map.encounterRate ?? null,
+        encounter_groups: project.map.encounterGroups ? [...project.map.encounterGroups] : null,
       },
     },
     {

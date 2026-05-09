@@ -180,10 +180,43 @@ pub fn parse(input: &str) -> Document {
                         wall_heights: None,
                         floor_heights: None,
                         ceiling_heights: None,
+                        encounter_rate: None,
+                        encounter_groups: None,
                     }));
                     continue;
                 }
             }
+        }
+
+        // エンカウント率 (#172): 直前の RpgMap に注入する単行ディレクティブ
+        // [エンカウント率: 16] / [エンカウント率: 1/16]（後者は分母 16 を抽出）/
+        // [エンカウント率: 0]（安全マップ：街・室内）
+        if let Some(content) = trimmed
+            .strip_prefix("[エンカウント率:")
+            .and_then(|s| s.strip_suffix(']'))
+        {
+            if let Some(rate) = parse_encounter_rate(content.trim()) {
+                inject_encounter_rate_into_last_map(&mut current_events, rate);
+            }
+            pos += 1;
+            continue;
+        }
+        // エンカウント群 (#172): 直前の RpgMap に注入。
+        // [エンカウント群: slime, ghost, slime+skeleton]
+        if let Some(content) = trimmed
+            .strip_prefix("[エンカウント群:")
+            .and_then(|s| s.strip_suffix(']'))
+        {
+            let groups: Vec<String> = content
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !groups.is_empty() {
+                inject_encounter_groups_into_last_map(&mut current_events, groups);
+            }
+            pos += 1;
+            continue;
         }
 
         // Height blocks: [壁高さ] / [床高さ] / [天井高さ]
@@ -1328,6 +1361,54 @@ fn emit_warning(msg: &str) {
     web_sys::console::warn_1(&msg.into());
 }
 
+/// `[エンカウント率: ...]` のボディを u32 にパースする。
+/// 受理形式:
+///   "16"   → 16
+///   "1/16" → 16  (分母を抽出)
+///   "0"    → 0   (安全マップ)
+///
+/// 0 は明示的に「絶対にエンカウントしない」を意味する（街・室内）。
+fn parse_encounter_rate(s: &str) -> Option<u32> {
+    if let Some(denom) = s.strip_prefix("1/") {
+        return denom.trim().parse::<u32>().ok();
+    }
+    s.parse::<u32>().ok()
+}
+
+fn inject_encounter_rate_into_last_map(events: &mut [Event], rate: u32) {
+    match events.last_mut() {
+        Some(Event::RpgMap(map)) => {
+            map.encounter_rate = Some(rate);
+        }
+        _ => {
+            emit_encounter_warning("[エンカウント率] の直前が [マップ] ではありません。破棄しました");
+        }
+    }
+}
+
+fn inject_encounter_groups_into_last_map(events: &mut [Event], groups: Vec<String>) {
+    match events.last_mut() {
+        Some(Event::RpgMap(map)) => {
+            map.encounter_groups = Some(groups);
+        }
+        _ => {
+            emit_encounter_warning("[エンカウント群] の直前が [マップ] ではありません。破棄しました");
+        }
+    }
+}
+
+fn emit_encounter_warning(msg: &str) {
+    let full = format!("[name-name-parser] warning: {}", msg);
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::warn_1(&full.into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        eprintln!("{}", full);
+    }
+}
+
 fn unquote(s: &str) -> String {
     let s = s.trim();
     if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
@@ -1970,5 +2051,109 @@ title: "test"
             }
             other => panic!("expected Item, got {:?}", other),
         }
+    }
+
+    // ===== Encounter directives (#172) =====
+
+    #[test]
+    fn parses_encounter_rate_and_groups_attached_to_map() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## map: m
+
+[マップ 5x5 タイル=32]
+GGGGG
+GGGGG
+GGGGG
+GGGGG
+GGGGG
+[/マップ]
+
+[エンカウント率: 1/16]
+[エンカウント群: slime, ghost, slime+ghost]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::RpgMap(m) => {
+                assert_eq!(m.encounter_rate, Some(16));
+                assert_eq!(
+                    m.encounter_groups,
+                    Some(vec!["slime".into(), "ghost".into(), "slime+ghost".into()])
+                );
+            }
+            other => panic!("expected RpgMap, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encounter_rate_accepts_bare_number() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## map: m
+
+[マップ 3x3 タイル=32]
+GGG
+GGG
+GGG
+[/マップ]
+
+[エンカウント率: 32]
+"#;
+        let doc = parse(input);
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::RpgMap(m) => assert_eq!(m.encounter_rate, Some(32)),
+            other => panic!("expected RpgMap, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encounter_rate_zero_is_safe_map() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## map: m
+
+[マップ 3x3 タイル=32]
+GGG
+GGG
+GGG
+[/マップ]
+
+[エンカウント率: 0]
+"#;
+        let doc = parse(input);
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::RpgMap(m) => assert_eq!(m.encounter_rate, Some(0)),
+            other => panic!("expected RpgMap, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encounter_directives_without_preceding_map_are_dropped() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## scene: s
+
+[エンカウント率: 1/16]
+[エンカウント群: slime]
+
+> なれーしょん
+"#;
+        let doc = parse(input);
+        // Narration only — encounter は破棄される
+        let events = &doc.chapters[0].scenes[0].events;
+        assert!(events.iter().all(|e| !matches!(e, Event::RpgMap(_))));
     }
 }
