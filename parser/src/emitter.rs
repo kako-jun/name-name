@@ -289,6 +289,20 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     emit_height_block(out, "天井高さ", heights);
                 }
 
+                // エンカウント設定 (#172)
+                if let Some(rate) = map.encounter_rate {
+                    if rate == 0 {
+                        out.push_str("[エンカウント率: 0]\n");
+                    } else {
+                        out.push_str(&format!("[エンカウント率: 1/{}]\n", rate));
+                    }
+                }
+                if let Some(groups) = &map.encounter_groups {
+                    if !groups.is_empty() {
+                        out.push_str(&format!("[エンカウント群: {}]\n", groups.join(", ")));
+                    }
+                }
+
                 prev_was_dialog_or_text = false;
             }
             Event::PlayerStart(p) => {
@@ -729,5 +743,54 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    // ===== Encounter (#172) =====
+
+    #[test]
+    fn emits_encounter_rate_and_groups_after_map() {
+        let map = RpgMapData {
+            width: 3,
+            height: 3,
+            tile_size: 32,
+            tiles: vec![vec![0; 3]; 3],
+            wall_heights: None,
+            floor_heights: None,
+            ceiling_heights: None,
+            encounter_rate: Some(16),
+            encounter_groups: Some(vec!["slime".into(), "slime+ghost".into()]),
+        };
+        let doc = make_doc_with_event(Event::RpgMap(map));
+        let out = emit(&doc);
+        assert!(out.contains("[エンカウント率: 1/16]"));
+        assert!(out.contains("[エンカウント群: slime, slime+ghost]"));
+    }
+
+    #[test]
+    fn encounter_rate_zero_emits_zero_form() {
+        let map = RpgMapData {
+            width: 3,
+            height: 3,
+            tile_size: 32,
+            tiles: vec![vec![0; 3]; 3],
+            wall_heights: None,
+            floor_heights: None,
+            ceiling_heights: None,
+            encounter_rate: Some(0),
+            encounter_groups: None,
+        };
+        let doc = make_doc_with_event(Event::RpgMap(map));
+        let out = emit(&doc);
+        assert!(out.contains("[エンカウント率: 0]"));
+        assert!(!out.contains("1/0"));
+    }
+
+    #[test]
+    fn round_trip_encounter() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## m: m\n\n[マップ 3x3 タイル=32]\nGGG\nGGG\nGGG\n[/マップ]\n[エンカウント率: 1/16]\n[エンカウント群: slime, ghost]\n";
+        let doc1 = crate::parser::parse(input);
+        let emitted = emit(&doc1);
+        let doc2 = crate::parser::parse(&emitted);
+        assert_eq!(doc1, doc2, "encounter round-trip should be stable");
     }
 }

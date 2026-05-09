@@ -31,6 +31,10 @@ export interface RpgMapData {
   floor_heights?: number[][] | null
   /** タイル座標 [y][x] ごとの天井高さ。未指定なら null（Issue #90） */
   ceiling_heights?: number[][] | null
+  /** 確率エンカウントの分母（DQ4 式、`Math.random() < 1/N`）。0 = 街・室内 (#172) */
+  encounter_rate?: number | null
+  /** エンカウント抽選の敵グループ候補。各要素は monster_id か `+` 連結 (#172) */
+  encounter_groups?: string[] | null
 }
 
 /**

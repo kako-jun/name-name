@@ -178,6 +178,21 @@ export interface RpgMapData {
      * Issue #90 で Markdown `[天井高さ]` ブロックから読み込み可能にした。
      */
     ceiling_heights?: number[][];
+    /**
+     * 確率エンカウントの分母（DQ4 式、`Math.random() < 1/N`）。
+     * `[エンカウント率: 1/16]` または `[エンカウント率: 16]` で指定。
+     * `0` は「絶対にエンカウントしない安全マップ」（街・室内向け）。未指定 = エンカウントなし。
+     * Issue #172 で追加。
+     */
+    encounter_rate?: number;
+    /**
+     * エンカウント時に抽選される敵グループ名のリスト（重み均等）。
+     * `[エンカウント群: slime, ghost, slime+skeleton]` で指定。
+     * 各要素は単体モンスター ID または `+` 連結の複合（同時出現）。
+     * 未指定の場合 encounter_rate が設定されていてもエンカウントしない。
+     * Issue #172 で追加。
+     */
+    encounter_groups?: string[];
 }
 
 export interface Scene {
