@@ -19,7 +19,6 @@ import {
 } from './npcSpriteSheet'
 import { attachTouchInput, type SwipeDirection } from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
-import { MinimapOverlay } from './MinimapOverlay'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -45,7 +44,6 @@ export class TopDownRenderer {
   private world: Container
   private dialogBox: RpgDialogBox | null = null
   private menuOverlay: TouchMenuOverlay | null = null
-  private minimap: MinimapOverlay | null = null
   private detachTouchInput: (() => void) | null = null
   /** isMoving 中に来たスワイプを 1 件だけキューする。連続スワイプの取りこぼし防止 (#178) */
   private pendingSwipe: Direction | null = null
@@ -109,9 +107,7 @@ export class TopDownRenderer {
     this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
     this.app.stage.addChild(this.dialogBox)
 
-    // 2D ミニマップ (#149)。マップは load() で setMap、毎フレ setPlayerGrid。
-    this.minimap = new MinimapOverlay(this.screenWidth, this.screenHeight, { corner: 'top-right' })
-    this.app.stage.addChild(this.minimap)
+    // ミニマップは raycast 専用 (#149)。topdown は元々全体俯瞰で見えているので不要。
 
     // タッチメニュー: DQ4 ファミコン版相当の左上 8 コマンドウィンドウ (#178 → #171)
     this.menuOverlay = new TouchMenuOverlay(
@@ -167,11 +163,6 @@ export class TopDownRenderer {
       this.gridToPixelY(this.playerGridY)
     )
     this.centerCamera()
-
-    // ミニマップ (#149): マップ寸法 + タイル + NPC ドットをセット。プレイヤー位置は onTick 毎に更新
-    this.minimap?.setMap(this.mapWidth, this.mapHeight, this.mapTiles)
-    this.minimap?.setNpcs(gameData.npcs)
-    this.minimap?.setPlayerGrid(this.playerGridX, this.playerGridY, this.playerDirection)
   }
 
   /**
@@ -208,7 +199,6 @@ export class TopDownRenderer {
       clearDemoSheetCache(renderer)
       this.dialogBox = null
       this.menuOverlay = null
-      this.minimap = null
       this.initialized = false
     }
   }
@@ -608,13 +598,6 @@ export class TopDownRenderer {
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
       this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
       this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
-      // ミニマップ位置を画面サイズに追従させる (#149)
-      if (this.minimap) {
-        this.minimap.resize(this.screenWidth, this.screenHeight)
-        this.minimap.setMap(this.mapWidth, this.mapHeight, this.mapTiles)
-        this.minimap.setNpcs(this.npcs.map((n) => n.data))
-        this.minimap.setPlayerGrid(this.playerGridX, this.playerGridY, this.playerDirection)
-      }
       this.centerCamera()
     })
   }
@@ -624,8 +607,6 @@ export class TopDownRenderer {
   private onTick = (): void => {
     const now = performance.now()
     this.updateNpcAnimations(now)
-    // ミニマップのプレイヤー位置を毎フレ更新 (#149)。移動中は補間位置で滑らかに
-    this.minimap?.setPlayerGrid(this.playerGridX, this.playerGridY, this.playerDirection)
     if (!this.isMoving) return
     const t = Math.min(1, (now - this.moveStart) / this.moveDuration)
     const x = this.moveFromX + (this.moveToX - this.moveFromX) * t
