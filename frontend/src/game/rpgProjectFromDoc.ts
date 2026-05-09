@@ -1,4 +1,12 @@
-import type { EventDocument, Event, SceneView, MonsterDef, ItemDef, SpellDef } from '../types'
+import type {
+  EventDocument,
+  Event,
+  SceneView,
+  MonsterDef,
+  ItemDef,
+  SpellDef,
+  PartyMemberDef,
+} from '../types'
 import type { RPGProject, MapData, UiNpcData, PlayerData } from '../types/rpg'
 
 /**
@@ -13,10 +21,12 @@ export function collectMasterData(doc: EventDocument): {
   monsters: Record<string, MonsterDef>
   items: Record<string, ItemDef>
   spells: Record<string, SpellDef>
+  party: Record<string, PartyMemberDef>
 } {
   const monsters: Record<string, MonsterDef> = {}
   const items: Record<string, ItemDef> = {}
   const spells: Record<string, SpellDef> = {}
+  const party: Record<string, PartyMemberDef> = {}
   for (const chapter of doc.chapters) {
     for (const scene of chapter.scenes) {
       for (const ev of scene.events) {
@@ -24,10 +34,11 @@ export function collectMasterData(doc: EventDocument): {
         if ('Monster' in ev) monsters[ev.Monster.id] = ev.Monster
         else if ('Item' in ev) items[ev.Item.id] = ev.Item
         else if ('Spell' in ev) spells[ev.Spell.id] = ev.Spell
+        else if ('PartyMember' in ev) party[ev.PartyMember.id] = ev.PartyMember
       }
     }
   }
-  return { monsters, items, spells }
+  return { monsters, items, spells, party }
 }
 
 /**
@@ -110,6 +121,7 @@ export function rpgProjectFromDoc(
     monsters: master.monsters,
     items: master.items,
     spells: master.spells,
+    party: master.party,
   }
 }
 

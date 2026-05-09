@@ -96,6 +96,29 @@ export interface ItemDef {
   builtin?: string
 }
 
+/** パーティメンバー定義 (#175) */
+export interface PartyMemberDef {
+  id: string
+  name: string
+  sprite?: string
+  /** 初期レベル（既定 1） */
+  level?: number
+  hp: number
+  /** マナ。`#[serde(default)]` 由来で optional（未指定 = 0 扱い） */
+  mp?: number
+  atk: number
+  def: number
+  agi: number
+  /** レベルアップで習得する呪文。Phase 1 ではデータとして保持するだけ */
+  learns?: PartyLearns[]
+}
+
+/** パーティメンバーの呪文習得スロット (#175) */
+export interface PartyLearns {
+  level: number
+  spell: string
+}
+
 /** 呪文定義 (#174) */
 export interface SpellDef {
   id: string
@@ -160,6 +183,7 @@ export type Event =
   | { Monster: MonsterDef }
   | { Item: ItemDef }
   | { Spell: SpellDef }
+  | { PartyMember: PartyMemberDef }
   | {
       Animate: {
         target: string
