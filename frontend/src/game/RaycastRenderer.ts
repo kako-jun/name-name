@@ -96,6 +96,13 @@ export class RaycastRenderer {
   private minimap: MinimapOverlay | null = null
   private battleScreen: BattleScreen | null = null
   private detachTouchInput: (() => void) | null = null
+  /** 確率エンカウント (#172) */
+  private encounterRate: number = 0
+  private encounterGroups: string[] = []
+  private masterMonsters: Record<string, import('../types').MonsterDef> = {}
+  private stepCounter: number = 0
+  /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
+  private encounterCooldown: number = 0
   /**
    * resize 時のミニマップ再描画に使う NPC リスト（#149）。
    *
@@ -300,6 +307,13 @@ export class RaycastRenderer {
     }
 
     this.rebuildNpcObjects(gameData.npcs)
+
+    // エンカウント設定 (#172)
+    this.encounterRate = gameData.map.encounterRate ?? 0
+    this.encounterGroups = gameData.map.encounterGroups ?? []
+    this.masterMonsters = gameData.monsters ?? {}
+    this.stepCounter = 0
+    this.encounterCooldown = 0
 
     // Player: tile center
     this.playerX = gameData.player.x + 0.5
@@ -549,12 +563,19 @@ export class RaycastRenderer {
   private tryTalk(): void {
     // プレイヤーの向きベクトル (dx, dy) から直近1マスのタイルを確定し、
     // そのタイルに NPC がいれば会話を開始する。
-    // 見下ろし版（TopDownRenderer）と同じく、斜め向きでも「直近タイル（= 単位ベクトル1歩先）」
-    // のみを対象にするため、視線上の複数マス先の NPC には届かない。
-    const dx = Math.cos(this.playerAngle)
-    const dy = Math.sin(this.playerAngle)
-    const tx = Math.floor(this.playerX + dx)
-    const ty = Math.floor(this.playerY + dy)
+    //
+    // cos/sin を Math.round で正規化することで、キーボード操作で playerAngle が
+    // 連続値（例 0.0001 や π/2 + ε）になっていても「最も近い基本方位」のタイルを
+    // 対象にする。snapStep と同じ方針 (#178)、これがないと「目の前の NPC が認識
+    // されない」事故が起きる (#172 / #178 R2 で報告)。
+    //
+    // 副作用: playerAngle = π/4 のような対角方向のとき dx=dy=1 となり、対角タイル
+    // の NPC も talk 対象になる。DQ 慣習として「斜め前の NPC にも話しかけられる」
+    // のは自然なので意図通り。直線のみに絞りたい場合は |dx|>|dy| で 1 軸選択する。
+    const dx = Math.round(Math.cos(this.playerAngle))
+    const dy = Math.round(Math.sin(this.playerAngle))
+    const tx = Math.floor(this.playerX) + dx
+    const ty = Math.floor(this.playerY) + dy
     const npc = this.npcs.find((n) => Math.floor(n.x) === tx && Math.floor(n.y) === ty)
     if (npc) {
       this.dialogBox?.show(npc.data.name, npc.data.message, npc.data.portrait)
@@ -624,17 +645,44 @@ export class RaycastRenderer {
       Math.floor(this.playerX),
       Math.floor(this.playerY)
     )
+    // 1 歩進んだので確率エンカウント抽選 (#172)
+    this.stepCounter += 1
+    this.maybeRollEncounter()
   }
 
   /**
-   * Phase 1 テスト用の戦闘プロト起動 (#173)。
+   * 1 歩ごとの DQ4 式エンカウント抽選 (#172)。
    *
-   * しらべるコマンドから呼び出される暫定経路。本来は #172 のエンカウント
-   * 抽選で発火する。固定パーティ（ゆうしゃ）とスライム 1 体で試せる。
-   * 戦闘終了で自動的に画面を畳む。
+   * - 戦闘直後の連続エンカウントを避けるため encounterCooldown 残歩数の間は抽選自体を
+   *   スキップ（rng を消費しないため乱数列に偏りが出ない）
+   * - 抽選・敵解決は純関数 `rollEncounter` に分離してテスト可能にしてある
    */
-  private startTestBattle(): void {
+  private maybeRollEncounter(): void {
+    if (this.battleScreen) return // 戦闘中
+    if (this.encounterCooldown > 0) {
+      this.encounterCooldown -= 1
+      return
+    }
+    const enemies = rollEncounter({
+      rate: this.encounterRate,
+      groups: this.encounterGroups,
+      masters: this.masterMonsters,
+      rng: Math.random,
+    })
+    if (enemies) this.startBattle(enemies)
+  }
+
+  /**
+   * 戦闘画面を起動する (#173 + #172)。
+   *
+   * パーティは固定の「ゆうしゃ」1 体（パーティデータは #175 で master 化予定）。
+   * 敵は呼び出し側が解決済の BattleEntity[] を渡す（エンカウント抽選または
+   * 「しらべる」テスト経路から）。戦闘終了で自動的に画面を畳み、エンカウント
+   * クールダウン（連続エンカウント抑止）を 3 歩セットする。
+   */
+  private startBattle(enemies: BattleEntity[]): void {
     if (this.battleScreen) return // 多重起動防止
+    if (enemies.length === 0) return
     const hero: BattleEntity = {
       id: 'hero',
       name: 'ゆうしゃ',
@@ -646,20 +694,7 @@ export class RaycastRenderer {
       def: 3,
       agi: 4,
     }
-    const slime: BattleEntity = {
-      id: 'slime',
-      name: 'スライム',
-      hp: 10,
-      maxHp: 10,
-      mp: 0,
-      maxMp: 0,
-      atk: 3,
-      def: 1,
-      agi: 2,
-      exp: 2,
-      gold: 1,
-    }
-    const engine = new BattleEngine([hero], [slime])
+    const engine = new BattleEngine([hero], enemies)
     this.battleScreen = new BattleScreen(engine, this.screenWidth, this.screenHeight, {
       onClose: () => {
         if (this.battleScreen) {
@@ -667,9 +702,47 @@ export class RaycastRenderer {
           this.battleScreen.destroy({ children: true })
           this.battleScreen = null
         }
+        // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）#172
+        this.encounterCooldown = 3
       },
     })
     this.app.stage.addChild(this.battleScreen)
+  }
+
+  /**
+   * 「しらべる」コマンドの暫定テスト用戦闘起動。マスターデータに `slime`
+   * があればそれを使い、無ければハードコード値で 1 体起動する。
+   */
+  private startTestBattle(): void {
+    const def = this.masterMonsters['slime']
+    const slime: BattleEntity = def
+      ? {
+          id: def.id,
+          name: def.name,
+          hp: def.hp,
+          maxHp: def.hp,
+          mp: def.mp ?? 0,
+          maxMp: def.mp ?? 0,
+          atk: def.atk,
+          def: def.def,
+          agi: def.agi,
+          exp: def.exp,
+          gold: def.gold,
+        }
+      : {
+          id: 'slime',
+          name: 'スライム',
+          hp: 10,
+          maxHp: 10,
+          mp: 0,
+          maxMp: 0,
+          atk: 3,
+          def: 1,
+          agi: 2,
+          exp: 2,
+          gold: 1,
+        }
+    this.startBattle([slime])
   }
 
   /**
@@ -1030,14 +1103,50 @@ export class RaycastRenderer {
     const horizonY = Math.floor(h / 2 + totalYOffsetPx)
     const horizonClamped = horizonY < 0 ? 0 : horizonY > h ? h : horizonY
 
-    // 空・床のベタ塗り（pitch に応じて分割位置を上下に動かす）
+    // 空のベタ塗り（pitch に応じて分割位置を上下に動かす）
     if (horizonClamped > 0) {
       g.rect(0, 0, w, horizonClamped)
       g.fill(0x4477cc)
     }
+    // 床: スキャンラインごとに「視線方向の対応タイル」を引いて色を変える (#172 ROAD 対応)。
+    // 完全な floor casting ではなく、視線中央の depth サンプリング 1 箇所だけ → 横方向の
+    // 色変化は出ないが、GRASS と ROAD を踏み込んだときに即座に床色が切り替わる視覚効果になる。
+    // 連続同色のスキャンラインはまとめて 1 矩形で fill する（呼び出し回数を抑制）。
+    //
+    // ピッチ時の depth 計算は Lodev 標準近似（rowDist = cameraZ / ((y - horizon)/halfH)）。
+    // 大きなピッチでは床テクスチャの歪みが目立つはずだが、本実装は単色塗り分けなので許容範囲。
     if (horizonClamped < h) {
-      g.rect(0, horizonClamped, w, h - horizonClamped)
-      g.fill(0x555555)
+      const cameraZ = 0.5 // プレイヤー視点高さ（0.5 タイル）。computeWallYRange と同じ規約
+      const halfH = h / 2
+      // 視線正面方向ベクトル（本体は dirX/dirY だが、cos/sin は後段で再計算するためここだけローカル取得）
+      const fx = Math.cos(this.playerAngle)
+      const fy = Math.sin(this.playerAngle)
+      let bandStart = horizonClamped
+      let bandColor = -1
+      const flushBand = (yEnd: number, color: number) => {
+        if (color < 0 || yEnd <= bandStart) return
+        g.rect(0, bandStart, w, yEnd - bandStart).fill(color)
+      }
+      for (let y = horizonClamped + 1; y < h; y++) {
+        const denom = (y - horizonClamped) / halfH
+        // 視線正面 depth で 1 サンプルする（横方向は無視）
+        const rowDist = denom > 0 ? cameraZ / denom : 0
+        const sampleX = Math.floor(this.playerX + fx * rowDist)
+        const sampleY = Math.floor(this.playerY + fy * rowDist)
+        let color = 0x555555
+        if (sampleY >= 0 && sampleY < this.mapHeight && sampleX >= 0 && sampleX < this.mapWidth) {
+          const tile = this.mapTiles[sampleY]?.[sampleX]
+          if (tile === TileType.ROAD) color = 0x8b7355
+          else if (tile === TileType.GRASS) color = 0x2d5016
+          else color = 0x444444 // TREE/WATER タイル下に立つことは無いがフォールバック
+        }
+        if (color !== bandColor) {
+          flushBand(y, bandColor)
+          bandStart = y
+          bandColor = color
+        }
+      }
+      flushBand(h, bandColor)
     }
 
     // カメラ設定: dir = 単位向き, plane = dir に垂直、長さは tan(fov/2)
@@ -1468,6 +1577,56 @@ export class RaycastRenderer {
       npc.sprite.texture = sheet.textures[row][frame]
     }
   }
+}
+
+/**
+ * DQ4 式エンカウント抽選の純関数実装 (#172)。
+ *
+ * - rate=0 / groups 空 / masters が解決不能で全滅 → null（不発）
+ * - rate=1 で毎歩確実エンカウント（debug knob）
+ * - rate=N で `rng() < 1/N` 抽選、当選したら groups から重み均等で 1 つ選び、
+ *   `+` 連結を分解してマスターから BattleEntity を組み立てる
+ *
+ * RaycastRenderer.maybeRollEncounter から呼ばれる。テストでは `rng` に
+ * 固定値関数を渡して挙動を assert する。
+ */
+export function rollEncounter(input: {
+  rate: number
+  groups: ReadonlyArray<string>
+  masters: Record<string, import('../types').MonsterDef>
+  rng: () => number
+}): BattleEntity[] | null {
+  if (input.rate === 0) return null
+  if (input.groups.length === 0) return null
+  if (input.rng() >= 1 / input.rate) return null
+
+  const groupSpec = input.groups[Math.floor(input.rng() * input.groups.length)]
+  const monsterIds = groupSpec
+    .split('+')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const enemies: BattleEntity[] = []
+  for (const id of monsterIds) {
+    const def = input.masters[id]
+    if (!def) {
+      console.warn(`[name-name] encounter group references unknown monster '${id}'`)
+      continue
+    }
+    enemies.push({
+      id: def.id,
+      name: def.name,
+      hp: def.hp,
+      maxHp: def.hp,
+      mp: def.mp ?? 0,
+      maxMp: def.mp ?? 0,
+      atk: def.atk,
+      def: def.def,
+      agi: def.agi,
+      exp: def.exp,
+      gold: def.gold,
+    })
+  }
+  return enemies.length > 0 ? enemies : null
 }
 
 function directionToAngle(d: DirectionLabel): number {
