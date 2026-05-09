@@ -43,6 +43,9 @@ import { formatHeightError, validateMapHeights } from './mapValidation'
 import { attachTouchInput, type SwipeDirection } from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
 import { MinimapOverlay } from './MinimapOverlay'
+import { BattleScreen } from './BattleScreen'
+import { BattleEngine } from './battleEngine'
+import type { BattleEntity } from './spellDsl'
 
 interface NPCRuntime {
   data: UiNpcData
@@ -91,6 +94,7 @@ export class RaycastRenderer {
   private dialogBox: RpgDialogBox | null = null
   private menuOverlay: TouchMenuOverlay | null = null
   private minimap: MinimapOverlay | null = null
+  private battleScreen: BattleScreen | null = null
   private detachTouchInput: (() => void) | null = null
   /**
    * resize 時のミニマップ再描画に使う NPC リスト（#149）。
@@ -469,6 +473,7 @@ export class RaycastRenderer {
       this.dialogBox = null
       this.menuOverlay = null
       this.minimap = null
+      this.battleScreen = null
     }
   }
 
@@ -622,6 +627,52 @@ export class RaycastRenderer {
   }
 
   /**
+   * Phase 1 テスト用の戦闘プロト起動 (#173)。
+   *
+   * しらべるコマンドから呼び出される暫定経路。本来は #172 のエンカウント
+   * 抽選で発火する。固定パーティ（ゆうしゃ）とスライム 1 体で試せる。
+   * 戦闘終了で自動的に画面を畳む。
+   */
+  private startTestBattle(): void {
+    if (this.battleScreen) return // 多重起動防止
+    const hero: BattleEntity = {
+      id: 'hero',
+      name: 'ゆうしゃ',
+      hp: 20,
+      maxHp: 20,
+      mp: 4,
+      maxMp: 4,
+      atk: 5,
+      def: 3,
+      agi: 4,
+    }
+    const slime: BattleEntity = {
+      id: 'slime',
+      name: 'スライム',
+      hp: 10,
+      maxHp: 10,
+      mp: 0,
+      maxMp: 0,
+      atk: 3,
+      def: 1,
+      agi: 2,
+      exp: 2,
+      gold: 1,
+    }
+    const engine = new BattleEngine([hero], [slime])
+    this.battleScreen = new BattleScreen(engine, this.screenWidth, this.screenHeight, {
+      onClose: () => {
+        if (this.battleScreen) {
+          this.app.stage.removeChild(this.battleScreen)
+          this.battleScreen.destroy({ children: true })
+          this.battleScreen = null
+        }
+      },
+    })
+    this.app.stage.addChild(this.battleScreen)
+  }
+
+  /**
    * playerAngle を [-π, π] 区間に畳み込む。スワイプ回転を長時間続けると累積発散する float
    * を抑える（描画自体は cos/sin 経由で問題ないが、長期セッションでの精度劣化を予防）。
    */
@@ -662,7 +713,9 @@ export class RaycastRenderer {
         this.tryTalk()
         return
       case 'examine':
-        console.info('[RaycastRenderer] しらべる: 未実装')
+        // Phase 1 テスト用: しらべる で戦闘プロトを発火 (#173)。
+        // 本来は #172 のエンカウント抽選から発火する。後でこの分岐は外す。
+        this.startTestBattle()
         return
       case 'door':
         console.info('[RaycastRenderer] とびら: 未実装')
