@@ -66,8 +66,10 @@ export interface NpcData {
 export interface MonsterDef {
   id: string
   name: string
+  /** 体力。未指定時のデフォルトは 1（即死扱いを避けるための最低値、#174 設計判断） */
   hp: number
-  mp: number
+  /** マナ。`#[serde(default)]` 由来で optional（未指定 = 0 扱い、parser/pkg の d.ts と整合） */
+  mp?: number
   atk: number
   def: number
   agi: number
