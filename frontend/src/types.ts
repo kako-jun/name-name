@@ -62,6 +62,49 @@ export interface NpcData {
   portrait?: string
 }
 
+/** モンスター定義 (#174)。`[モンスター <id>] ... [/モンスター]` ブロックでパースされる */
+export interface MonsterDef {
+  id: string
+  name: string
+  /** 体力。未指定時のデフォルトは 1（即死扱いを避けるための最低値、#174 設計判断） */
+  hp: number
+  /** マナ。`#[serde(default)]` 由来で optional（未指定 = 0 扱い、parser/pkg の d.ts と整合） */
+  mp?: number
+  atk: number
+  def: number
+  agi: number
+  exp: number
+  gold: number
+  sprite?: string
+  /** 専用関数 ID。指定時はランタイム実装に委譲（汎用 + 専用 builtin の二層設計、#176） */
+  builtin?: string
+}
+
+/** アイテム定義 (#174) */
+export interface ItemDef {
+  id: string
+  name: string
+  /** 種別（"回復" / "攻撃" / "武器" / "盾" / "鎧" / "兜" / "鍵" / "その他" 等） */
+  kind: string
+  price?: number
+  /** 宣言的効果 DSL（"heal 30" 等）。`builtin` と排他 */
+  effect?: string
+  builtin?: string
+}
+
+/** 呪文定義 (#174) */
+export interface SpellDef {
+  id: string
+  name: string
+  mp: number
+  /** 対象（"味方単体" / "敵単体" / "味方全体" / "敵全体" / "自分" / "マップ" 等） */
+  target: string
+  effect?: string
+  builtin?: string
+  /** 系統（"fire" / "ice" / "holy" / "breath" 等、耐性計算用） */
+  school?: string
+}
+
 export interface PlayerStartData {
   x: number
   y: number
@@ -110,6 +153,9 @@ export type Event =
   | { RpgMap: RpgMapData }
   | { PlayerStart: PlayerStartData }
   | { Npc: NpcData }
+  | { Monster: MonsterDef }
+  | { Item: ItemDef }
+  | { Spell: SpellDef }
   | {
       Animate: {
         target: string
