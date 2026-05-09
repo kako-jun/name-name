@@ -42,6 +42,7 @@ import {
 import { formatHeightError, validateMapHeights } from './mapValidation'
 import { attachTouchInput, type SwipeDirection } from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
+import { MinimapOverlay } from './MinimapOverlay'
 
 interface NPCRuntime {
   data: UiNpcData
@@ -89,7 +90,17 @@ export class RaycastRenderer {
   private npcLayer: Container
   private dialogBox: RpgDialogBox | null = null
   private menuOverlay: TouchMenuOverlay | null = null
+  private minimap: MinimapOverlay | null = null
   private detachTouchInput: (() => void) | null = null
+  /**
+   * resize 時のミニマップ再描画に使う NPC リスト（#149）。
+   *
+   * 責務: rebuildNpcObjects を呼ぶすべての経路でこの cache も同期更新する。
+   * 現状は load() 時のみ rebuildNpcObjects が呼ばれるが、将来イベントで NPC を
+   * 動的に出現・消滅させる場合（例: 戦闘前後・スクリプト発火）も rebuildNpcObjects
+   * 経由で更新する設計に倒すこと。
+   */
+  private cachedNpcDataForMinimap: ReadonlyArray<import('../types/rpg').UiNpcData> = []
 
   private worldGraphics: Graphics | null = null
 
@@ -233,6 +244,10 @@ export class RaycastRenderer {
     this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
     this.app.stage.addChild(this.dialogBox)
 
+    // 2D ミニマップ (#149)。マップ寸法は load() で setMap、毎フレ setPlayerAngle で更新。
+    this.minimap = new MinimapOverlay(this.screenWidth, this.screenHeight, { corner: 'top-right' })
+    this.app.stage.addChild(this.minimap)
+
     // タッチメニュー: DQ4 ファミコン版相当の左上 8 コマンドウィンドウ (#178 → #171)
     this.menuOverlay = new TouchMenuOverlay(
       this.screenWidth,
@@ -301,6 +316,11 @@ export class RaycastRenderer {
     this.lastTickMs = performance.now()
     this.keys.clear()
 
+    // ミニマップ (#149): マップ寸法をセット。NPC は rebuildNpcObjects 経由で同期済。
+    // プレイヤー位置は onTick 毎に更新する。
+    this.minimap?.setMap(this.mapWidth, this.mapHeight, this.mapTiles)
+    this.minimap?.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
+
     // 壁テクスチャを非同期ロード（完了まではベタ塗り fallback）。
     // 同じ RaycastRenderer で load() が複数回呼ばれても、wallTextureSheet 側の
     // WeakMap キャッシュにより RenderTexture は使い回される
@@ -335,6 +355,10 @@ export class RaycastRenderer {
    * `sprite=...` 指定があれば非同期ロードし、完了後に texture を差し替える。
    */
   private rebuildNpcObjects(npcData: UiNpcData[]): void {
+    // ミニマップ用 cache をここで同期する。rebuildNpcObjects を呼ぶすべての経路で
+    // ミニマップが古いリストを描かないようにするためのワンソース更新点 (#149)。
+    this.cachedNpcDataForMinimap = npcData
+    this.minimap?.setNpcs(npcData)
     // 既存を destroy
     for (const child of this.npcLayer.removeChildren()) {
       child.destroy({ children: true })
@@ -444,6 +468,7 @@ export class RaycastRenderer {
       this.wallTopYBuffer = new Float32Array(0)
       this.dialogBox = null
       this.menuOverlay = null
+      this.minimap = null
     }
   }
 
@@ -681,6 +706,13 @@ export class RaycastRenderer {
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
       this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
       this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
+      // ミニマップ位置を画面サイズに追従させる (#149)
+      if (this.minimap) {
+        this.minimap.resize(this.screenWidth, this.screenHeight)
+        this.minimap.setMap(this.mapWidth, this.mapHeight, this.mapTiles)
+        this.minimap.setNpcs(this.cachedNpcDataForMinimap)
+        this.minimap.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
+      }
       // 画面幅が変わると numStripes も変わるので、余剰分を destroy して寸法を合わせる
       this.ensureStripePool(Math.ceil(this.screenWidth / this.stripeWidth))
     })
@@ -753,6 +785,17 @@ export class RaycastRenderer {
     const now = performance.now()
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
+
+    // ミニマップ (#149): イベント中（ダイアログ表示）/ メニュー表示中は邪魔なので隠す。
+    // 通常探索中だけ表示し、自機位置 + 向きを毎フレ更新する。
+    if (this.minimap) {
+      const dialogVisible = this.dialogBox?.isShowing ?? false
+      const menuVisible = this.menuOverlay?.isShowing() ?? false
+      this.minimap.visible = !dialogVisible && !menuVisible
+      if (this.minimap.visible) {
+        this.minimap.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
+      }
+    }
 
     if (!this.dialogBox?.isShowing) {
       this.updateMovement(dt)

@@ -107,6 +107,8 @@ export class TopDownRenderer {
     this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
     this.app.stage.addChild(this.dialogBox)
 
+    // ミニマップは raycast 専用 (#149)。topdown は元々全体俯瞰で見えているので不要。
+
     // タッチメニュー: DQ4 ファミコン版相当の左上 8 コマンドウィンドウ (#178 → #171)
     this.menuOverlay = new TouchMenuOverlay(
       this.screenWidth,
