@@ -1,3 +1,4 @@
+use crate::master::try_parse_master_data_block;
 use crate::models::*;
 
 /// Parse a name-name Markdown document into a Document struct.
@@ -1429,8 +1430,7 @@ fn unquote(s: &str) -> String {
 
 
 // マスターデータブロック (#174 / #175) のパース実装は master.rs に分離。
-// ここでは crate 内 use で取り込んで本体ループから呼び出すだけ。
-use crate::master::try_parse_master_data_block;
+// `use crate::master::try_parse_master_data_block;` は parser.rs 冒頭に集約。
 
 #[cfg(test)]
 mod tests {
@@ -2064,6 +2064,43 @@ AGI: 4
                 let learns = p.learns.as_ref().expect("learns 必須");
                 assert_eq!(learns[0].level, 4);
                 assert_eq!(learns[0].spell, "ホイミ");
+            }
+            other => panic!("expected PartyMember, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn party_learns_preserves_order_and_skips_invalid_rows() {
+        // 不正な習得行が混じっても、後続の正常行は取り込まれて順序が保たれる
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[パーティ hero]
+名前: ゆうしゃ
+HP: 20
+ATK: 5
+DEF: 3
+AGI: 4
+習得: Lv4 ホイミ
+習得: invalid_no_level_number
+習得: level=7 spell=
+習得: Lv10 ベホマ
+[/パーティ]
+"#;
+        let doc = parse(input);
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::PartyMember(p) => {
+                let learns = p.learns.as_ref().expect("learns 必須");
+                // 不正行 2 つはスキップされ、正常行 2 つが順序を保ったまま残る
+                assert_eq!(learns.len(), 2);
+                assert_eq!(learns[0].level, 4);
+                assert_eq!(learns[0].spell, "ホイミ");
+                assert_eq!(learns[1].level, 10);
+                assert_eq!(learns[1].spell, "ベホマ");
             }
             other => panic!("expected PartyMember, got {:?}", other),
         }

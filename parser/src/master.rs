@@ -201,18 +201,30 @@ fn collect_party_learns(entries: &[(String, String)]) -> Option<Vec<PartyLearns>
                 }
             }
             if let (Some(lv), Some(sp)) = (level, spell) {
-                out.push(PartyLearns {
-                    level: lv,
-                    spell: sp,
-                });
+                if !sp.is_empty() {
+                    out.push(PartyLearns {
+                        level: lv,
+                        spell: sp,
+                    });
+                }
+                // sp が空（"spell=" だけ書いて値なし）はパターン 1 では破棄。
+                // パターン 2 の解釈にもフォールバックさせない（kv 形式で書いた意図を尊重）。
                 continue;
             }
         }
         // パターン 2: "Lv4 ホイミ" / "4 ホイミ"
+        // 不正行（lv トークン無し / 数値でない / spell 空）は当該行のみスキップ。
+        // 関数全体を `?` で早期 return すると、後続の正常な習得行まで巻き込んで捨ててしまう。
         let mut tokens = trimmed.split_whitespace();
-        let lv_token = tokens.next()?;
+        let lv_token = match tokens.next() {
+            Some(t) => t,
+            None => continue,
+        };
         let lv_str = lv_token.strip_prefix("Lv").unwrap_or(lv_token);
-        let lv = lv_str.parse::<u32>().ok()?;
+        let lv = match lv_str.parse::<u32>() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
         let spell: String = tokens.collect::<Vec<_>>().join(" ");
         if spell.is_empty() {
             continue;
