@@ -66,7 +66,9 @@ export class EventRunner {
     }
 
     if (cmd.type === 'Wait') {
-      setTimeout(() => this.step(), cmd.ms)
+      setTimeout(() => {
+        if (this.running) this.step()
+      }, cmd.ms)
       return
     }
 
