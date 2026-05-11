@@ -359,8 +359,12 @@ fn emit_events(out: &mut String, events: &[Event]) {
                             .join(",")
                     )
                 };
+                let scene_suffix = match &npc.scene {
+                    Some(s) if !s.is_empty() => format!(" scene={}", s),
+                    _ => String::new(),
+                };
                 out.push_str(&format!(
-                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}{}{}]\n",
+                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}{}{}{}]\n",
                     npc.name,
                     npc.x,
                     npc.y,
@@ -370,7 +374,8 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     frames_suffix,
                     direction_suffix,
                     portrait_suffix,
-                    expressions_suffix
+                    expressions_suffix,
+                    scene_suffix
                 ));
                 for line in &npc.message {
                     out.push_str(line);
@@ -467,6 +472,63 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push_str(&format!("builtin: {}\n", b));
                 }
                 out.push_str("[/呪文]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::RpgEvent { name, commands } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[イベント {}]\n", name));
+                for cmd in commands {
+                    match cmd {
+                        EventCommand::NpcMove { npc, x, y, speed, direction } => {
+                            let dir_part = match direction {
+                                Some(d) => format!(" 向き={}", direction_ja(*d)),
+                                None => String::new(),
+                            };
+                            out.push_str(&format!(
+                                "[NPC移動: {} → @{},{} 速度={}{}]\n",
+                                npc, x, y, speed, dir_part
+                            ));
+                        }
+                        EventCommand::Wait { ms } => {
+                            out.push_str(&format!("[待機: {}]\n", ms));
+                        }
+                        EventCommand::Dialog { character, text } => {
+                            if let Some(ch) = character {
+                                out.push_str(&format!("**{}**:\n", ch));
+                            }
+                            for line in text {
+                                out.push_str(line);
+                                out.push('\n');
+                            }
+                        }
+                        EventCommand::Narration { text } => {
+                            for line in text {
+                                out.push_str(&format!("> {}\n", line));
+                            }
+                        }
+                    }
+                }
+                out.push_str("[/イベント]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::RpgTrigger { x, y, auto, scene, once } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let pos_part = if *auto {
+                    "auto".to_string()
+                } else if let (Some(tx), Some(ty)) = (x, y) {
+                    format!("@{},{}", tx, ty)
+                } else {
+                    "auto".to_string()
+                };
+                let once_part = if *once { " once=true" } else { "" };
+                out.push_str(&format!(
+                    "[トリガー {} scene={}{}]\n",
+                    pos_part, scene, once_part
+                ));
                 prev_was_dialog_or_text = false;
             }
             Event::Animate {
