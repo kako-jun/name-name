@@ -7,6 +7,7 @@
 import { Assets, Container, Sprite, Ticker } from 'pixi.js'
 import type { Easing } from '../types'
 import { applyEasing, resolveDelta } from './easing'
+import { ASPECT_RATIOS } from './constants'
 
 /** キャラクターの画面上の配置位置 */
 const POSITION_X: Record<string, number> = {
@@ -57,7 +58,7 @@ export function normalizePosition(position: string): string {
 }
 
 /** 足元 Y 座標の比率（横長 450px 基準: 380/450 ≒ 0.844） */
-const CHARACTER_Y_RATIO = 380 / 450
+const CHARACTER_Y_RATIO = 380 / ASPECT_RATIOS['16:9'].height
 
 interface CharacterState {
   sprite: Sprite
@@ -121,6 +122,9 @@ export class CharacterLayer extends Container {
   /** 足元 Y 座標（screenHeight * CHARACTER_Y_RATIO） */
   private readonly characterY: number
 
+  /**
+   * @param screenHeight 論理画面高さ（ASPECT_RATIOS から取得した値を渡す）
+   */
   constructor(screenHeight: number) {
     super()
     this.characterY = screenHeight * CHARACTER_Y_RATIO

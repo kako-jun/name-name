@@ -8,7 +8,7 @@ interface FadeAnimationLike {
 }
 
 interface CharacterStateLike {
-  sprite: { alpha: number }
+  sprite: { alpha: number; y: number }
   fadeAnimation: FadeAnimationLike | null
 }
 
@@ -113,5 +113,15 @@ describe('normalizePosition', () => {
     expect(normalizePosition('まんなか')).toBe('center')
     expect(normalizePosition('右寄り')).toBe('right')
     expect(normalizePosition('右端')).toBe('right')
+  })
+})
+
+describe('CharacterLayer portrait mode (Issue #209)', () => {
+  it('screenHeight=800（9:16）で sprite.y が 800 * (380 / 450) ≒ 676 になる', () => {
+    const layer = new CharacterLayer(800)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.sprite.y).toBeCloseTo(800 * (380 / 450), 5)
   })
 })
