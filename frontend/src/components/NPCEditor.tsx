@@ -3,12 +3,14 @@ import { UiNpcData, MapData, TILE_COLORS, TileType } from '../types/rpg'
 
 /**
  * NPC 属性は `[NPC ... sprite=path]` のように空白区切りで parse されるため、
- * sprite 値に空白（スペース・タブ・全角空白）を含めるとラウンドトリップで壊れる。
+ * sprite / portrait 値に空白（スペース・タブ・全角空白）を含めるとラウンドトリップで壊れる。
  * trim 済みの値に `\s` が残るかどうかを判定する。
  */
 function spriteHasInnerWhitespace(value: string): boolean {
   return /\s/u.test(value.trim())
 }
+/** portrait パスも同じルール */
+const portraitHasInnerWhitespace = spriteHasInnerWhitespace
 
 interface NPCEditorProps {
   npcs: UiNpcData[]
@@ -37,15 +39,19 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
   // 見た目の設定パネルの sprite 入力ドラフト。
   // 途中空白を含む無効な入力でもユーザーのタイピングをそのまま表示し、無効な値が親 state に流れないよう隔離する。
   const [spriteDraft, setSpriteDraft] = useState<string>('')
+  const [portraitDraft, setPortraitDraft] = useState<string>('')
   useEffect(() => {
     setSpriteDraft(selectedNPC?.sprite ?? '')
-  }, [selectedNPCId, selectedNPC?.sprite])
+    setPortraitDraft(selectedNPC?.portrait ?? '')
+  }, [selectedNPCId, selectedNPC?.sprite, selectedNPC?.portrait])
   const panelSpriteHasError = spriteHasInnerWhitespace(spriteDraft)
+  const panelPortraitHasError = portraitHasInnerWhitespace(portraitDraft)
 
   // 追加フォームの sprite は既存の newNPC.sprite をそのまま利用（panel のような draft state は不要）。
   // 理由: handleAddNPC まで親スコープに値が流出しないため、無効値が Markdown 往復に混入しない。
   // 無効時は追加ボタンを disabled + 二重防衛の alert で弾く。
   const addFormSpriteHasError = spriteHasInnerWhitespace(newNPC.sprite ?? '')
+  const addFormPortraitHasError = portraitHasInnerWhitespace(newNPC.portrait ?? '')
 
   const handleAddNPC = () => {
     if (!newNPC.name || !newNPC.message) {
@@ -67,6 +73,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
       sprite: newNPC.sprite?.trim() ? newNPC.sprite.trim() : undefined,
       frames: newNPC.frames && newNPC.frames >= 1 ? newNPC.frames : undefined,
       direction: newNPC.direction,
+      portrait: newNPC.portrait?.trim() ? newNPC.portrait.trim() : undefined,
     }
 
     onChange([...npcs, npc])
@@ -79,6 +86,7 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
       sprite: undefined,
       frames: undefined,
       direction: undefined,
+      portrait: undefined,
     })
     setShowAddForm(false)
   }
@@ -284,6 +292,42 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                     <option value="up">上</option>
                   </select>
                 </div>
+              </div>
+              {/* portrait: 話しかけ時に顔枠に表示する画像パス (#101) */}
+              <div className="mt-3">
+                <label
+                  className={`block text-xs font-medium mb-1 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}
+                >
+                  顔画像（portrait）
+                </label>
+                <input
+                  type="text"
+                  value={portraitDraft}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setPortraitDraft(v)
+                    if (!portraitHasInnerWhitespace(v)) {
+                      const t = v.trim()
+                      handleUpdateNPC(selectedNPC.id, {
+                        portrait: t.length > 0 ? t : undefined,
+                      })
+                    }
+                  }}
+                  placeholder="elder.png（空白不可）"
+                  className={`w-full px-2 py-1 text-sm border rounded ${
+                    panelPortraitHasError
+                      ? isDark
+                        ? 'bg-gray-700 border-red-500 text-white'
+                        : 'bg-white border-red-500 text-gray-900'
+                      : isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
+                  }`}
+                  aria-invalid={panelPortraitHasError}
+                />
+                {panelPortraitHasError && (
+                  <p className="text-xs mt-1 text-red-500">顔画像のパスに空白は含められません</p>
+                )}
               </div>
             </div>
           </div>
@@ -531,6 +575,33 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
                   </select>
                 </div>
               </div>
+              {/* portrait */}
+              <div className="mt-3">
+                <label
+                  className={`block text-sm font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+                >
+                  顔画像（portrait）
+                </label>
+                <input
+                  type="text"
+                  value={newNPC.portrait ?? ''}
+                  onChange={(e) => setNewNPC({ ...newNPC, portrait: e.target.value })}
+                  placeholder="elder.png（空白不可、省略可）"
+                  className={`w-full px-3 py-2 border rounded ${
+                    addFormPortraitHasError
+                      ? isDark
+                        ? 'bg-gray-700 border-red-500 text-white'
+                        : 'bg-white border-red-500 text-gray-900'
+                      : isDark
+                        ? 'bg-gray-700 border-gray-600 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
+                  }`}
+                  aria-invalid={addFormPortraitHasError}
+                />
+                {addFormPortraitHasError && (
+                  <p className="text-xs mt-1 text-red-500">顔画像のパスに空白は含められません</p>
+                )}
+              </div>
             </div>
             <div className="flex gap-3 justify-end mt-6">
               <button
@@ -545,9 +616,9 @@ function NPCEditor({ npcs, mapData, onChange, isDark }: NPCEditorProps) {
               </button>
               <button
                 onClick={handleAddNPC}
-                disabled={addFormSpriteHasError}
+                disabled={addFormSpriteHasError || addFormPortraitHasError}
                 className={`px-4 py-2 rounded font-medium transition-colors ${
-                  addFormSpriteHasError
+                  addFormSpriteHasError || addFormPortraitHasError
                     ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
                     : isDark
                       ? 'bg-blue-600 hover:bg-blue-700 text-white'

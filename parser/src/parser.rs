@@ -305,6 +305,7 @@ pub fn parse(input: &str) -> Document {
                         frames: parsed.frames,
                         direction: parsed.direction,
                         portrait: parsed.portrait,
+                        expressions: parsed.expressions,
                     }));
                     continue;
                 }
@@ -1025,6 +1026,7 @@ pub(crate) struct ParsedNpcHeader {
     pub frames: Option<u32>,
     pub direction: Option<Direction>,
     pub portrait: Option<String>,
+    pub expressions: std::collections::HashMap<String, String>,
 }
 
 fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
@@ -1048,6 +1050,7 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
     let mut frames: Option<u32> = None;
     let mut direction: Option<Direction> = None;
     let mut portrait: Option<String> = None;
+    let mut expressions: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for p in parts {
         if let Some(val) = p.strip_prefix("色=") {
             let hex = val.trim().trim_start_matches('#');
@@ -1077,6 +1080,17 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
             if !v.is_empty() {
                 portrait = Some(v);
             }
+        } else if let Some(val) = p.strip_prefix("expressions=") {
+            // "normal:normal.png,sad:sad.png" → HashMap
+            for pair in val.trim().split(',') {
+                if let Some((key, path)) = pair.split_once(':') {
+                    let k = key.trim().to_string();
+                    let v = path.trim().to_string();
+                    if !k.is_empty() && !v.is_empty() {
+                        expressions.insert(k, v);
+                    }
+                }
+            }
         }
     }
     Some(ParsedNpcHeader {
@@ -1089,6 +1103,7 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
         frames,
         direction,
         portrait,
+        expressions,
     })
 }
 
