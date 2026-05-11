@@ -355,6 +355,10 @@ describe('DialogBox フォントロード非同期化 (Issue #214)', () => {
 
     const entriesAfterSecond = i.rubyEntries.length
     expect(entriesAfterSecond).toBeGreaterThan(0)
+    // 追加: 2回目のルビ文字列が含まれるか確認
+    expect(i.rubyEntries.some((e) => (e.placement as { ruby: string }).ruby === 'にかいめ')).toBe(
+      true
+    )
 
     // 1回目を後から resolve しても rubyEntries は変わらない（stale token で弾かれる）
     first.resolve()

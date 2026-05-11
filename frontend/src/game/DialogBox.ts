@@ -569,7 +569,11 @@ export class DialogBox extends Container {
         .then(() => {
           if (rubyToken !== this.rubyBuildToken) return
           this.rebuildRubyEntries(lines, font)
-          if (!isTypingActive(this.typewriter)) {
+          if (this.msPerChar === 0) {
+            this.skipTypewriter()
+            this.dialogText.text = fullText
+            this.revealAllRuby()
+          } else if (!isTypingActive(this.typewriter)) {
             this.dialogText.text = fullText
             this.revealAllRuby()
           } else {
