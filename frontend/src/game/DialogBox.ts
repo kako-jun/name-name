@@ -471,10 +471,14 @@ export class DialogBox extends Container {
     this.rubyPlacements = computeRubyPlacements(runs, lines)
     this.rubyBuildToken += 1
     const rubyToken = this.rubyBuildToken
-    ensureFontLoaded(this.fontFamily).then(() => {
-      if (rubyToken !== this.rubyBuildToken) return
-      this.rebuildRubyEntries(lines, font)
-    })
+    ensureFontLoaded(this.fontFamily)
+      .then(() => {
+        if (rubyToken !== this.rubyBuildToken) return
+        this.rebuildRubyEntries(lines, font)
+      })
+      .catch(() => {
+        // フォントロード失敗時はルビなしで継続（クラッシュ防止）
+      })
     this.onTypingDone = onTypingDone ?? null
     if (!isTypingActive(this.typewriter) && this.onTypingDone) {
       const cb = this.onTypingDone
@@ -561,17 +565,21 @@ export class DialogBox extends Container {
       this.rubyPlacements = computeRubyPlacements(runs, lines)
       this.rubyBuildToken += 1
       const rubyToken = this.rubyBuildToken
-      ensureFontLoaded(this.fontFamily).then(() => {
-        if (rubyToken !== this.rubyBuildToken) return
-        this.rebuildRubyEntries(lines, font)
-        if (!isTypingActive(this.typewriter)) {
-          this.dialogText.text = fullText
-          this.revealAllRuby()
-        } else {
-          this.dialogText.text = ''
-          this.updateRubyVisibility(0)
-        }
-      })
+      ensureFontLoaded(this.fontFamily)
+        .then(() => {
+          if (rubyToken !== this.rubyBuildToken) return
+          this.rebuildRubyEntries(lines, font)
+          if (!isTypingActive(this.typewriter)) {
+            this.dialogText.text = fullText
+            this.revealAllRuby()
+          } else {
+            this.dialogText.text = ''
+            this.updateRubyVisibility(0)
+          }
+        })
+        .catch(() => {
+          // フォントロード失敗時はルビなしで継続（クラッシュ防止）
+        })
     }
   }
 
