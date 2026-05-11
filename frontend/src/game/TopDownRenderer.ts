@@ -7,7 +7,7 @@
  */
 
 import { Application, Container, Graphics, Sprite } from 'pixi.js'
-import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
+import { UiNpcData, UiRpgTrigger, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import type { MonsterDef } from '../types'
 import { DialogBox } from './DialogBox'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
@@ -199,6 +199,9 @@ export class TopDownRenderer {
       this.gridToPixelY(this.playerGridY)
     )
     this.centerCamera()
+
+    // マップ進入時 auto トリガー発火 (#198)
+    this.fireAutoTriggers()
   }
 
   /**
@@ -500,6 +503,52 @@ export class TopDownRenderer {
 
     // 1 歩進んだので確率エンカウント抽選 (#191)
     this.maybeRollEncounter()
+
+    // タイル踏み込みトリガー検出 (#198)
+    this.checkStepTriggers(nx, ny)
+  }
+
+  /**
+   * タイル踏み込み時にstepトリガーを照合し、マッチしたイベントを発火する (#198)
+   */
+  private checkStepTriggers(x: number, y: number): void {
+    const triggers = this.gameData?.triggers
+    if (!triggers || !this.eventRunner) return
+    for (const trigger of triggers) {
+      if (trigger.auto) continue
+      if (trigger.x !== x || trigger.y !== y) continue
+      this.fireTrigger(trigger)
+    }
+  }
+
+  /**
+   * マップ進入時にautoトリガーを全て発火する (#198)
+   */
+  private fireAutoTriggers(): void {
+    const triggers = this.gameData?.triggers
+    if (!triggers || !this.eventRunner) return
+    for (const trigger of triggers) {
+      if (!trigger.auto) continue
+      this.fireTrigger(trigger)
+    }
+  }
+
+  /**
+   * トリガーのイベントを実行する。once=trueの場合は発火済みならスキップ (#198)
+   */
+  private fireTrigger(trigger: UiRpgTrigger): void {
+    if (!this.eventRunner || !this.gameData) return
+    const event = this.gameData.rpgEvents?.find((e) => e.name === trigger.scene)
+    if (!event) return
+    if (trigger.once) {
+      const key = `name-name-trigger-done-${trigger.scene}`
+      if (localStorage.getItem(key)) return
+      localStorage.setItem(key, '1')
+    }
+    this.inputLocked = true
+    this.eventRunner.run(event.commands, () => {
+      this.inputLocked = false
+    })
   }
 
   private maybeRollEncounter(): void {
