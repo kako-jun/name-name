@@ -481,7 +481,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[イベント {}]\n", name));
                 for cmd in commands {
                     match cmd {
-                        EventCommand::NpcMove { npc, x, y, speed, direction } => {
+                        EventCommand::NpcMove {
+                            npc,
+                            x,
+                            y,
+                            speed,
+                            direction,
+                        } => {
                             let dir_part = match direction {
                                 Some(d) => format!(" 向き={}", direction_ja(*d)),
                                 None => String::new(),
@@ -513,7 +519,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str("[/イベント]\n");
                 prev_was_dialog_or_text = false;
             }
-            Event::RpgTrigger { x, y, auto, scene, once } => {
+            Event::RpgTrigger {
+                x,
+                y,
+                auto,
+                scene,
+                once,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
@@ -522,6 +534,9 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 } else if let (Some(tx), Some(ty)) = (x, y) {
                     format!("@{},{}", tx, ty)
                 } else {
+                    eprintln!(
+                        "[name-name] 警告: RpgTrigger に auto=false かつ x/y=None の不正データ"
+                    );
                     "auto".to_string()
                 };
                 let once_part = if *once { " once=true" } else { "" };

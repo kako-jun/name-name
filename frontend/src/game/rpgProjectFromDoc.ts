@@ -106,6 +106,7 @@ export function rpgProjectFromDoc(
           ev.Npc.expressions && ev.Npc.expressions.size > 0
             ? Object.fromEntries(ev.Npc.expressions)
             : undefined,
+        scene: ev.Npc.scene,
       })
     }
   }
@@ -298,6 +299,7 @@ export function applyRpgProjectToDoc(
             npc.expressions && Object.keys(npc.expressions).length > 0
               ? new Map(Object.entries(npc.expressions))
               : undefined,
+          scene: npc.scene,
         },
       })
     ),

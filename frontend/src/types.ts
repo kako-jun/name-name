@@ -70,6 +70,8 @@ export interface NpcData {
    * WASM 側は `Map<string, string>` だが JSON ラウンドトリップで `Record` として扱う。
    */
   expressions?: Record<string, string>
+  /** 「はなす」時に再生するイベント名 (#187)。指定時は message の代わりにこのイベントを再生する。 */
+  scene?: string
 }
 
 /** モンスター定義 (#174)。`[モンスター <id>] ... [/モンスター]` ブロックでパースされる */
