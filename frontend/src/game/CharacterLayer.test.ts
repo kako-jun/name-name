@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { CharacterLayer, normalizePosition } from './CharacterLayer'
+import { ASPECT_RATIOS } from './constants'
 
 interface FadeAnimationLike {
   fromAlpha: number
@@ -122,6 +123,6 @@ describe('CharacterLayer portrait mode (Issue #209)', () => {
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     const state = asInternals(layer).characters.get('hero')
     expect(state).toBeDefined()
-    expect(state!.sprite.y).toBeCloseTo(800 * (380 / 450), 5)
+    expect(state!.sprite.y).toBeCloseTo(800 * (380 / ASPECT_RATIOS['16:9'].height), 5)
   })
 })
