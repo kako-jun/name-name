@@ -8,7 +8,8 @@
 
 import { Application, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js'
 import { UiNpcData, RPGProject, TileType } from '../types/rpg'
-import { RpgDialogBox } from './RpgDialogBox'
+import { DialogBox } from './DialogBox'
+import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import {
   NPC_ANIM_PERIOD_MS,
   clampFrames,
@@ -93,7 +94,7 @@ export class RaycastRenderer {
    *  zIndex による厳密な距離ソートは行わない（段差は常に手前、壁は常に奥の MVP 方針）。 */
   private stepWallSpritesContainer: Container
   private npcLayer: Container
-  private dialogBox: RpgDialogBox | null = null
+  private dialogBox: DialogBox | null = null
   private menuOverlay: TouchMenuOverlay | null = null
   private minimap: MinimapOverlay | null = null
   private battleScreen: BattleScreen | null = null
@@ -264,7 +265,15 @@ export class RaycastRenderer {
     this.app.stage.addChild(this.worldLayer)
     this.app.stage.addChild(this.npcLayer)
 
-    this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
+    this.dialogBox = new DialogBox({
+      screenWidth: this.screenWidth,
+      screenHeight: this.screenHeight,
+      boxHeight: 120,
+      fontSize: 18,
+      bgColor: 0x000033,
+      nameColor: 0xffe066,
+      nameSeparateBox: false,
+    })
     this.app.stage.addChild(this.dialogBox)
 
     // 2D ミニマップ (#149)。マップ寸法は load() で setMap、毎フレ setPlayerAngle で更新。
@@ -594,7 +603,11 @@ export class RaycastRenderer {
     const ty = Math.floor(this.playerY) + dy
     const npc = this.npcs.find((n) => Math.floor(n.x) === tx && Math.floor(n.y) === ty)
     if (npc) {
-      this.dialogBox?.show(npc.data.name, npc.data.message, npc.data.portrait)
+      this.dialogBox?.show(
+        npc.data.name,
+        stripExpressionDirectives(npc.data.message),
+        resolveNpcPortrait(npc.data)
+      )
       // ダイアログ表示中は updateMovement がスキップされるため、押されたままのキー
       // （移動・回転・pitch）が残留する。閉じた瞬間に意図しない挙動にならないよう一括クリア。
       // ジャンプは keys set ではなく handleKeyDown 直接処理 + dialog ガードで防がれているので対象外。

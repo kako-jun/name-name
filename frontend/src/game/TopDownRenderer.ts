@@ -9,7 +9,8 @@
 import { Application, Container, Graphics, Sprite } from 'pixi.js'
 import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import type { MonsterDef } from '../types'
-import { RpgDialogBox } from './RpgDialogBox'
+import { DialogBox } from './DialogBox'
+import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import {
   NPC_ANIM_PERIOD_MS,
   clampFrames,
@@ -44,7 +45,7 @@ export class TopDownRenderer {
   private npcLayer: Container
   private playerLayer: Container
   private world: Container
-  private dialogBox: RpgDialogBox | null = null
+  private dialogBox: DialogBox | null = null
   private menuOverlay: TouchMenuOverlay | null = null
   private detachTouchInput: (() => void) | null = null
   /** isMoving 中に来たスワイプを 1 件だけキューする。連続スワイプの取りこぼし防止 (#178) */
@@ -113,7 +114,15 @@ export class TopDownRenderer {
     this.world.addChild(this.playerLayer)
     this.app.stage.addChild(this.world)
 
-    this.dialogBox = new RpgDialogBox(this.screenWidth, this.screenHeight)
+    this.dialogBox = new DialogBox({
+      screenWidth: this.screenWidth,
+      screenHeight: this.screenHeight,
+      boxHeight: 120,
+      fontSize: 18,
+      bgColor: 0x000033,
+      nameColor: 0xffe066,
+      nameSeparateBox: false,
+    })
     this.app.stage.addChild(this.dialogBox)
 
     // ミニマップは raycast 専用 (#149)。topdown は元々全体俯瞰で見えているので不要。
@@ -523,7 +532,13 @@ export class TopDownRenderer {
         break
     }
     const npc = this.npcs.find((n) => n.x === tx && n.y === ty)
-    if (npc) this.dialogBox?.show(npc.data.name, npc.data.message, npc.data.portrait)
+    if (npc) {
+      this.dialogBox?.show(
+        npc.data.name,
+        stripExpressionDirectives(npc.data.message),
+        resolveNpcPortrait(npc.data)
+      )
+    }
   }
 
   // --- タッチ入力 (#178) ---
