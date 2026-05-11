@@ -40,6 +40,11 @@ interface NPC {
   direction: Direction
 }
 
+/** once=true トリガーの発火済みフラグを localStorage に保存するキーを生成する (#198) */
+export function triggerDoneKey(sceneName: string): string {
+  return `name-name-trigger-done-${sceneName}`
+}
+
 export class TopDownRenderer {
   private app: Application
   private mapLayer: Container
@@ -541,7 +546,7 @@ export class TopDownRenderer {
     const event = this.gameData.rpgEvents?.find((e) => e.name === trigger.scene)
     if (!event) return
     if (trigger.once) {
-      const key = `name-name-trigger-done-${trigger.scene}`
+      const key = triggerDoneKey(trigger.scene)
       if (localStorage.getItem(key)) return
       localStorage.setItem(key, '1')
     }
