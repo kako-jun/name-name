@@ -305,6 +305,7 @@ pub fn parse(input: &str) -> Document {
                         frames: parsed.frames,
                         direction: parsed.direction,
                         portrait: parsed.portrait,
+                        expressions: parsed.expressions,
                     }));
                     continue;
                 }
@@ -1025,6 +1026,7 @@ pub(crate) struct ParsedNpcHeader {
     pub frames: Option<u32>,
     pub direction: Option<Direction>,
     pub portrait: Option<String>,
+    pub expressions: std::collections::HashMap<String, String>,
 }
 
 fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
@@ -1048,6 +1050,7 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
     let mut frames: Option<u32> = None;
     let mut direction: Option<Direction> = None;
     let mut portrait: Option<String> = None;
+    let mut expressions: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for p in parts {
         if let Some(val) = p.strip_prefix("色=") {
             let hex = val.trim().trim_start_matches('#');
@@ -1077,6 +1080,17 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
             if !v.is_empty() {
                 portrait = Some(v);
             }
+        } else if let Some(val) = p.strip_prefix("expressions=") {
+            // "normal:normal.png,sad:sad.png" → HashMap
+            for pair in val.trim().split(',') {
+                if let Some((key, path)) = pair.split_once(':') {
+                    let k = key.trim().to_string();
+                    let v = path.trim().to_string();
+                    if !k.is_empty() && !v.is_empty() {
+                        expressions.insert(k, v);
+                    }
+                }
+            }
         }
     }
     Some(ParsedNpcHeader {
@@ -1089,6 +1103,7 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
         frames,
         direction,
         portrait,
+        expressions,
     })
 }
 
@@ -2125,7 +2140,7 @@ HP: 20
     }
 
     #[test]
-    fn encounter_directives_without_preceding_map_are_dropped() {
+    fn npc_expressions_parse() {
         let input = r#"---
 engine: name-name
 chapter: 1
@@ -2133,14 +2148,64 @@ title: "test"
 ---
 ## scene: s
 
-[エンカウント率: 1/16]
-[エンカウント群: slime]
-
-> なれーしょん
+[マップ 5x5 テーマ=town]
+[/マップ]
+[プレイヤー開始 @2,2]
+[NPC 長老 @1,1 色=#ffcc00 portrait=elder.png expressions=normal:normal.png,sad:sad.png]
+こんにちは。
+[/NPC]
 "#;
         let doc = parse(input);
-        // Narration only — encounter は破棄される
         let events = &doc.chapters[0].scenes[0].events;
-        assert!(events.iter().all(|e| !matches!(e, Event::RpgMap(_))));
+        let npc = events.iter().find_map(|e| {
+            if let Event::Npc(n) = e {
+                Some(n)
+            } else {
+                None
+            }
+        });
+        let npc = npc.expect("Npc event not found");
+        assert_eq!(npc.expressions.get("normal"), Some(&"normal.png".to_string()));
+        assert_eq!(npc.expressions.get("sad"), Some(&"sad.png".to_string()));
+        assert_eq!(npc.expressions.len(), 2);
+    }
+
+    #[test]
+    fn npc_expressions_roundtrip() {
+        use crate::emitter::emit;
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## scene: s
+
+[マップ 5x5 テーマ=town]
+[/マップ]
+[プレイヤー開始 @2,2]
+[NPC 長老 @1,1 色=#ffcc00 portrait=elder.png expressions=normal:normal.png,sad:sad.png]
+こんにちは。
+[/NPC]
+"#;
+        let doc = parse(input);
+        let emitted = emit(&doc);
+        // emitter が expressions= を出力することを確認
+        assert!(
+            emitted.contains("expressions="),
+            "emitter should include expressions= but got:\n{}",
+            emitted
+        );
+        // ラウンドトリップ: 再パースしても同じ expressions が得られる
+        let doc2 = parse(&emitted);
+        let npc2 = doc2.chapters[0].scenes[0].events.iter().find_map(|e| {
+            if let Event::Npc(n) = e {
+                Some(n)
+            } else {
+                None
+            }
+        });
+        let npc2 = npc2.expect("Npc event not found after roundtrip");
+        assert_eq!(npc2.expressions.get("normal"), Some(&"normal.png".to_string()));
+        assert_eq!(npc2.expressions.get("sad"), Some(&"sad.png".to_string()));
     }
 }

@@ -60,10 +60,16 @@ export interface NpcData {
   direction?: Direction
   /**
    * 会話ダイアログに表示する顔画像（portrait）への相対パス。
-   * Issue #73 Phase 1 で追加。未指定なら RpgDialogBox に顔枠は出ず従来どおりの表示。
+   * Issue #73 Phase 1 で追加。未指定なら DialogBox に顔枠は出ず従来どおりの表示。
    * 動的表情切替は Phase 2 (#101) で別途対応。
    */
   portrait?: string
+  /**
+   * 表情差分マップ（#101 Phase 2）。
+   * キーは表情名、値は portrait 画像パス。
+   * WASM 側は `Map<string, string>` だが JSON ラウンドトリップで `Record` として扱う。
+   */
+  expressions?: Record<string, string>
 }
 
 /** モンスター定義 (#174)。`[モンスター <id>] ... [/モンスター]` ブロックでパースされる */

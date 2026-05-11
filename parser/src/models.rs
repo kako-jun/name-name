@@ -103,12 +103,18 @@ pub struct NpcData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<Direction>,
     /// 会話ダイアログに表示する顔画像（portrait）への相対パス（例: `elder_portrait.png`）。
-    /// 未指定の場合は RpgDialogBox に顔枠が表示されず従来どおり名前＋本文のみの表示になる。
-    /// Issue #73 Phase 1 で追加。VN 風の固定顔枠のみで、動的表情切替（Phase 2 / #101）は含まない。
+    /// 未指定の場合は DialogBox に顔枠が表示されず従来どおり名前＋本文のみの表示になる。
+    /// Issue #73 Phase 1 で追加。VN 風の固定顔枠のみで、動的表情切替（Phase 2 / #101）は別フィールド。
     /// parser は値を生文字列として透過する（パス存在や形式の検証はレンダラー側の責務）。
     /// Markdown 属性は空白区切りのためパスに空白を含められない（引用記法は未対応）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub portrait: Option<String>,
+    /// 表情差分マップ（#101 Phase 2）。
+    /// キーは表情名（例: "normal" / "sad" / "angry"）、値は portrait 画像への相対パス。
+    /// Markdown 属性は `expressions=normal:normal.png,sad:sad.png` の形式で指定する。
+    /// NPC の message 内の `[expression=sad]` で実行時に portrait が切り替わる。
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub expressions: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]

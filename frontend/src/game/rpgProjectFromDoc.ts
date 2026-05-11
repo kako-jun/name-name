@@ -102,6 +102,10 @@ export function rpgProjectFromDoc(
         frames: ev.Npc.frames,
         direction: ev.Npc.direction ? directionToLower(ev.Npc.direction) : undefined,
         portrait: ev.Npc.portrait,
+        expressions:
+          ev.Npc.expressions && ev.Npc.expressions.size > 0
+            ? Object.fromEntries(ev.Npc.expressions)
+            : undefined,
       })
     }
   }
@@ -290,6 +294,10 @@ export function applyRpgProjectToDoc(
           frames: npc.frames,
           direction: npc.direction ? directionToUpper(npc.direction) : undefined,
           portrait: npc.portrait,
+          expressions:
+            npc.expressions && Object.keys(npc.expressions).length > 0
+              ? new Map(Object.entries(npc.expressions))
+              : undefined,
         },
       })
     ),

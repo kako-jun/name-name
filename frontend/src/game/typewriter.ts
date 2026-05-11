@@ -1,7 +1,7 @@
 /**
  * 1 文字ずつ表示する typewriter の pure 計算ヘルパー (#137)
  *
- * DialogBox / RpgDialogBox で同じロジックを使えるよう、PixiJS 依存無しで切り出す。
+ * ノベルエンジン / RPG DialogBox で同じロジックを使えるよう、PixiJS 依存無しで切り出す。
  * 単体テストもこの helper に集約する。
  */
 
