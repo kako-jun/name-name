@@ -233,6 +233,7 @@ export class TopDownRenderer {
       const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
       clearDemoSheetCache(renderer)
+      this.inputLocked = false
       this.eventRunner?.destroy()
       this.eventRunner = null
       this.dialogBox = null
@@ -536,6 +537,7 @@ export class TopDownRenderer {
   }
 
   private tryTalk(): void {
+    if (this.inputLocked) return
     let tx = this.playerGridX
     let ty = this.playerGridY
     switch (this.playerDirection) {
@@ -557,6 +559,12 @@ export class TopDownRenderer {
       if (npc.data.scene) {
         const event = this.gameData?.rpgEvents?.find((e) => e.name === npc.data.scene)
         if (event) {
+          // once=true のトリガーは発火済みなら skip
+          if (event.once) {
+            const key = `name-name-event-done_npc_${npc.data.name}`
+            if (localStorage.getItem(key)) return
+            localStorage.setItem(key, '1')
+          }
           this.inputLocked = true
           this.eventRunner?.run(event.commands, () => {
             this.inputLocked = false
@@ -802,7 +810,7 @@ export class TopDownRenderer {
         const start = performance.now()
 
         const tick = (): void => {
-          if (!this.initialized) {
+          if (!this.initialized || npc.container.destroyed) {
             resolve()
             return
           }

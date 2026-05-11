@@ -23,6 +23,7 @@ export function collectRpgEvents(doc: EventDocument): UiRpgEvent[] {
         if ('RpgEvent' in ev) {
           result.push({
             name: ev.RpgEvent.name,
+            once: (ev.RpgEvent as { once?: boolean }).once ?? false,
             commands: ev.RpgEvent.commands as EventCommand[],
           })
         }
