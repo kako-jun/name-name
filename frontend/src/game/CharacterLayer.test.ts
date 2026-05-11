@@ -126,3 +126,21 @@ describe('CharacterLayer portrait mode (Issue #209)', () => {
     expect(state!.sprite.y).toBeCloseTo(800 * (380 / ASPECT_RATIOS['16:9'].height), 5)
   })
 })
+
+describe('CharacterLayer X position ratio (Issue #216)', () => {
+  it('9:16（screenWidth=450）で center の sprite.x が 450 * 0.5 = 225 になる', () => {
+    const layer = new CharacterLayer(450, 800)
+    layer.show('hero', 'normal', 'center', '/assets', { instant: true })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.sprite.x).toBeCloseTo(225, 0)
+  })
+
+  it('16:9（screenWidth=800）で center の sprite.x が 800 * 0.5 = 400 になる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', 'center', '/assets', { instant: true })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.sprite.x).toBeCloseTo(400, 0)
+  })
+})
