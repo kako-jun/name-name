@@ -23,7 +23,7 @@ function asInternals(layer: CharacterLayer): CharacterLayerInternals {
 
 describe('CharacterLayer fade (Issue #177)', () => {
   it('show() の新規表示は alpha 0 から fade-in を開始する', () => {
-    const layer = new CharacterLayer(450)
+    const layer = new CharacterLayer(800, 450)
     layer.show('hero', 'normal', '中央', '/assets')
     const state = asInternals(layer).characters.get('hero')
     expect(state).toBeDefined()
@@ -35,7 +35,7 @@ describe('CharacterLayer fade (Issue #177)', () => {
   })
 
   it('show() に instant: true を渡すと alpha 1 で即時表示し fadeAnimation は無し', () => {
-    const layer = new CharacterLayer(450)
+    const layer = new CharacterLayer(800, 450)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     const state = asInternals(layer).characters.get('hero')
     expect(state!.sprite.alpha).toBe(1)
@@ -43,7 +43,7 @@ describe('CharacterLayer fade (Issue #177)', () => {
   })
 
   it('remove() のデフォルトは fade-out（destroyOnComplete=true）に切り替えるだけ', () => {
-    const layer = new CharacterLayer(450)
+    const layer = new CharacterLayer(800, 450)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     layer.remove('hero')
     const state = asInternals(layer).characters.get('hero')
@@ -54,14 +54,14 @@ describe('CharacterLayer fade (Issue #177)', () => {
   })
 
   it('remove() に instant: true を渡すと characters から即座に消える', () => {
-    const layer = new CharacterLayer(450)
+    const layer = new CharacterLayer(800, 450)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     layer.remove('hero', { instant: true })
     expect(asInternals(layer).characters.has('hero')).toBe(false)
   })
 
   it('退場フェード中の同名キャラ再 show は fade-in に切り替える', () => {
-    const layer = new CharacterLayer(450)
+    const layer = new CharacterLayer(800, 450)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     layer.remove('hero')
     // 退場フェード中
@@ -119,7 +119,7 @@ describe('normalizePosition', () => {
 
 describe('CharacterLayer portrait mode (Issue #209)', () => {
   it('screenHeight=800（9:16）で sprite.y が 800 * (380 / 450) ≒ 676 になる', () => {
-    const layer = new CharacterLayer(800)
+    const layer = new CharacterLayer(450, 800)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     const state = asInternals(layer).characters.get('hero')
     expect(state).toBeDefined()
