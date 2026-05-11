@@ -111,7 +111,12 @@ export interface UiRpgEvent {
   commands: import('../types').EventCommand[]
 }
 
-/** RPG タイル踏み込み / auto トリガー定義 (#187) */
+/** RPG タイル踏み込み / auto トリガー定義 (#187)
+ *
+ * `scene` は RPGProject 内でユニークな名前を使うこと。
+ * once=true のフラグは `trigger_{scene}` キーで localStorage に保存されるため、
+ * 異なるトリガーに同じ scene 名を使うと once フラグが共有される。
+ */
 export interface UiRpgTrigger {
   /** 踏み込みトリガーの X 座標。auto トリガーの場合は undefined */
   x?: number

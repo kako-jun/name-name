@@ -475,6 +475,9 @@ export class TopDownRenderer {
   }
 
   private tryMove(direction: Direction): void {
+    // inputLocked 中は移動を受け付けない。handleKeyDown / handleSwipe 側でもガードしているが、
+    // 将来の呼び出し元追加時の安全網として tryMove 自体でも確認する (#198)
+    if (this.inputLocked) return
     this.playerDirection = direction
     this.updateDirectionIndicator()
 
@@ -528,6 +531,10 @@ export class TopDownRenderer {
 
   /**
    * マップ進入時にautoトリガーを全て発火する (#198)
+   *
+   * `load()` から呼ばれるため、マップを再訪（load 再呼び出し）するたびに実行される。
+   * once=false の auto トリガーはマップ再訪のたびに発火する（意図的な仕様）。
+   * once=true の auto トリガーは初回進入時のみ発火し、以後はフラグでスキップされる。
    */
   private fireAutoTriggers(): void {
     const triggers = this.gameData?.triggers
@@ -544,10 +551,17 @@ export class TopDownRenderer {
   private fireTrigger(trigger: UiRpgTrigger): void {
     if (!this.eventRunner || !this.gameData) return
     const event = this.gameData.rpgEvents?.find((e) => e.name === trigger.scene)
-    if (!event) return
+    if (!event) {
+      console.warn(`[TopDownRenderer] trigger scene not found: "${trigger.scene}"`)
+      return
+    }
     if (trigger.once) {
       const key = triggerDoneKey(trigger.scene)
       if (localStorage.getItem(key)) return
+      // EventRunner.run() は同期的にキューを設定して step() を呼ぶだけであり、
+      // 例外を throw しない設計（eventRunner.ts: run() 参照）。
+      // この前提のもと「run() の直前に書き込む」ことで
+      // 「run が呼ばれたが onComplete が未発火」状態でもフラグが重複発火を防ぐ。
       localStorage.setItem(key, '1')
     }
     this.inputLocked = true
@@ -619,7 +633,8 @@ export class TopDownRenderer {
         if (isOnce) {
           const key = triggerDoneKey(npc.data.scene)
           if (localStorage.getItem(key)) return
-          // run が確実に呼ばれる直前に書き込む
+          // EventRunner.run() は例外を throw しない設計のため、
+          // run() の直前に書き込むことで重複発火を安全に防ぐ（fireTrigger と同方針）。
           localStorage.setItem(key, '1')
         }
         this.inputLocked = true
