@@ -617,7 +617,7 @@ export class TopDownRenderer {
         const trigger = this.gameData?.triggers?.find((t) => t.scene === npc.data.scene)
         const isOnce = trigger?.once ?? false
         if (isOnce) {
-          const key = `name-name-event-done-npc-${npc.data.name}`
+          const key = triggerDoneKey(npc.data.scene)
           if (localStorage.getItem(key)) return
           // run が確実に呼ばれる直前に書き込む
           localStorage.setItem(key, '1')
@@ -771,7 +771,12 @@ export class TopDownRenderer {
     if (t >= 1) {
       this.isMoving = false
       // キューされたスワイプがあれば次の移動を即座に発火（連続スワイプの滑らかさ）#178
-      if (this.pendingSwipe && !this.dialogBox?.isShowing && !this.menuOverlay?.isShowing()) {
+      if (
+        this.pendingSwipe &&
+        !this.inputLocked &&
+        !this.dialogBox?.isShowing &&
+        !this.menuOverlay?.isShowing()
+      ) {
         const next = this.pendingSwipe
         this.pendingSwipe = null
         this.tryMove(next)
