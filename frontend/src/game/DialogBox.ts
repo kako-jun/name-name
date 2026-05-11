@@ -20,6 +20,7 @@ import { Assets, Container, Graphics, Sprite, Text, TextStyle, Texture, Ticker }
 import { wordwrap } from './wordwrap'
 import { parseRubyText, stripRubyMarkup } from './ruby'
 import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
+import { ensureFontLoaded } from './FontLoader'
 import {
   type TypewriterState,
   isTypingActive,
@@ -178,6 +179,7 @@ export class DialogBox extends Container {
   private portraitSprite: Sprite | null = null
   private currentPortrait: string | undefined = undefined
   private currentPortraitToken = 0
+  private rubyBuildToken = 0
 
   // --- レイアウト ---
   private boxX: number
@@ -467,7 +469,18 @@ export class DialogBox extends Container {
     this.typewriter = startTypewriter(lines.join('\n'))
     this.dialogText.text = ''
     this.rubyPlacements = computeRubyPlacements(runs, lines)
-    this.rebuildRubyEntries(lines, font)
+    this.rubyBuildToken += 1
+    const rubyToken = this.rubyBuildToken
+    ensureFontLoaded(this.fontFamily)
+      .then(() => {
+        if (rubyToken !== this.rubyBuildToken) return
+        this.rebuildRubyEntries(lines, font)
+        // msPerChar=0 の場合も update() が skipTypewriter() を呼ぶため、ここでの特別処理は不要。
+        // setFontFamily 側は typewriter をリセットするため .then 内での即時スキップが必要（設計上の非対称点）。
+      })
+      .catch(() => {
+        // フォントロード失敗時はルビなしで継続（クラッシュ防止）
+      })
     this.onTypingDone = onTypingDone ?? null
     if (!isTypingActive(this.typewriter) && this.onTypingDone) {
       const cb = this.onTypingDone
@@ -477,6 +490,7 @@ export class DialogBox extends Container {
   }
 
   clearText(): void {
+    this.rubyBuildToken += 1
     this.typewriter = makeInitialTypewriterState()
     this.dialogText.text = ''
     this.currentText = ''
@@ -551,14 +565,27 @@ export class DialogBox extends Container {
       const fullText = lines.join('\n')
       this.typewriter = startTypewriter(fullText)
       this.rubyPlacements = computeRubyPlacements(runs, lines)
-      this.rebuildRubyEntries(lines, font)
-      if (!isTypingActive(this.typewriter)) {
-        this.dialogText.text = fullText
-        this.revealAllRuby()
-      } else {
-        this.dialogText.text = ''
-        this.updateRubyVisibility(0)
-      }
+      this.rubyBuildToken += 1
+      const rubyToken = this.rubyBuildToken
+      ensureFontLoaded(this.fontFamily)
+        .then(() => {
+          if (rubyToken !== this.rubyBuildToken) return
+          this.rebuildRubyEntries(lines, font)
+          if (this.msPerChar === 0) {
+            this.skipTypewriter()
+            this.dialogText.text = fullText
+            this.revealAllRuby()
+          } else if (!isTypingActive(this.typewriter)) {
+            this.dialogText.text = fullText
+            this.revealAllRuby()
+          } else {
+            this.dialogText.text = ''
+            this.updateRubyVisibility(0)
+          }
+        })
+        .catch(() => {
+          // フォントロード失敗時はルビなしで継続（クラッシュ防止）
+        })
     }
   }
 
