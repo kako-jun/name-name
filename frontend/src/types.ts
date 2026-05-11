@@ -257,3 +257,12 @@ export interface EventRef {
 
 export type EditableDialogField = 'character' | 'expression' | 'text'
 export type EditableNarrationField = 'text'
+
+/**
+ * RPG イベントコマンド (#197)。parser の EventCommand と同期する。
+ */
+export type EventCommand =
+  | { type: 'NpcMove'; npc: string; x: number; y: number; speed?: number; direction?: Direction }
+  | { type: 'Wait'; ms: number }
+  | { type: 'Dialog'; character?: string; text: string[] }
+  | { type: 'Narration'; text: string[] }

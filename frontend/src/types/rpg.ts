@@ -103,6 +103,29 @@ export interface PlayerData {
 }
 
 /**
+ * RPG イベント（コマンドキュー）の UI 側型 (#197)。
+ * parser の RpgEvent / EventCommand と同期する。
+ */
+export interface UiRpgEvent {
+  name: string
+  commands: import('../types').EventCommand[]
+}
+
+/** RPG タイル踏み込み / auto トリガー定義 (#187) */
+export interface UiRpgTrigger {
+  /** 踏み込みトリガーの X 座標。auto トリガーの場合は undefined */
+  x?: number
+  /** 踏み込みトリガーの Y 座標。auto トリガーの場合は undefined */
+  y?: number
+  /** true のときマップ進入時に自動発火 */
+  auto: boolean
+  /** 実行するイベント名 */
+  scene: string
+  /** true のとき初回のみ発火 */
+  once: boolean
+}
+
+/**
  * イベントデータ（将来的な拡張用）
  */
 export interface EventData {
@@ -133,6 +156,13 @@ export interface RPGProject {
   player: PlayerData // プレイヤー初期データ
   npcs: UiNpcData[] // NPCリスト
   events?: EventData[] // イベントリスト（オプション）
+  /**
+   * RPG イベント（コマンドキュー）リスト (#197)。
+   * NPC の scene フィールドから参照される。
+   */
+  rpgEvents?: UiRpgEvent[]
+  /** RPG タイル踏み込み / auto トリガーリスト (#187) */
+  triggers?: UiRpgTrigger[]
   // プレイ時の表示モード。必須化済み。デフォルトは 'topdown' 相当。
   // （Doc の scene.view=Raycast から派生したときは 'raycast'）
   view: 'topdown' | 'raycast'
