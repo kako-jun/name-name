@@ -179,6 +179,7 @@ export class DialogBox extends Container {
   private portraitSprite: Sprite | null = null
   private currentPortrait: string | undefined = undefined
   private currentPortraitToken = 0
+  private rubyBuildToken = 0
 
   // --- レイアウト ---
   private boxX: number
@@ -468,7 +469,10 @@ export class DialogBox extends Container {
     this.typewriter = startTypewriter(lines.join('\n'))
     this.dialogText.text = ''
     this.rubyPlacements = computeRubyPlacements(runs, lines)
+    this.rubyBuildToken += 1
+    const rubyToken = this.rubyBuildToken
     ensureFontLoaded(this.fontFamily).then(() => {
+      if (rubyToken !== this.rubyBuildToken) return
       this.rebuildRubyEntries(lines, font)
     })
     this.onTypingDone = onTypingDone ?? null
@@ -480,6 +484,7 @@ export class DialogBox extends Container {
   }
 
   clearText(): void {
+    this.rubyBuildToken += 1
     this.typewriter = makeInitialTypewriterState()
     this.dialogText.text = ''
     this.currentText = ''
@@ -554,7 +559,10 @@ export class DialogBox extends Container {
       const fullText = lines.join('\n')
       this.typewriter = startTypewriter(fullText)
       this.rubyPlacements = computeRubyPlacements(runs, lines)
+      this.rubyBuildToken += 1
+      const rubyToken = this.rubyBuildToken
       ensureFontLoaded(this.fontFamily).then(() => {
+        if (rubyToken !== this.rubyBuildToken) return
         this.rebuildRubyEntries(lines, font)
         if (!isTypingActive(this.typewriter)) {
           this.dialogText.text = fullText
