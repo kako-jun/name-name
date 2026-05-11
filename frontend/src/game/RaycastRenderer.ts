@@ -46,6 +46,8 @@ import { MinimapOverlay } from './MinimapOverlay'
 import { BattleScreen } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
+import { rollEncounter } from './encounter'
+export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
   data: UiNpcData
@@ -108,10 +110,11 @@ export class RaycastRenderer {
   /**
    * updateMovement でのタイルまたぎ検出用。
    * 前フレームのタイル座標を保持し、整数グリッドが変化したときにエンカウント抽選を呼ぶ。
-   * -1 は未初期化（最初の load() 後の最初フレームで確定する）。
+   * false は未初期化（最初の load() 後の最初フレームで初期化する）。
    */
-  private prevTileX: number = -1
-  private prevTileY: number = -1
+  private prevTileInitialized: boolean = false
+  private prevTileX: number = 0
+  private prevTileY: number = 0
   /**
    * resize 時のミニマップ再描画に使う NPC リスト（#149）。
    *
@@ -324,8 +327,9 @@ export class RaycastRenderer {
     this.masterParty = gameData.party ?? {}
     this.stepCounter = 0
     this.encounterCooldown = 0
-    this.prevTileX = -1
-    this.prevTileY = -1
+    this.prevTileInitialized = false
+    this.prevTileX = 0
+    this.prevTileY = 0
 
     // Player: tile center
     this.playerX = gameData.player.x + 0.5
@@ -659,6 +663,11 @@ export class RaycastRenderer {
     )
     // 1 歩進んだので確率エンカウント抽選 (#172)
     this.stepCounter += 1
+    // prevTileX/Y を更新して、同フレームの updateMovement タイルまたぎ検出と
+    // 二重エンカウントしないようにする (#191)
+    this.prevTileInitialized = true
+    this.prevTileX = Math.floor(this.playerX)
+    this.prevTileY = Math.floor(this.playerY)
     this.maybeRollEncounter()
   }
 
@@ -1065,8 +1074,9 @@ export class RaycastRenderer {
     // 毎フレーム呼ぶと極端に高頻度になるため、整数グリッド座標の変化で 1 回だけ発火させる。
     const curTileX = Math.floor(this.playerX)
     const curTileY = Math.floor(this.playerY)
-    if (this.prevTileX === -1) {
+    if (!this.prevTileInitialized) {
       // 初期化: 最初のフレームではエンカウントを発生させない
+      this.prevTileInitialized = true
       this.prevTileX = curTileX
       this.prevTileY = curTileY
     } else if (curTileX !== this.prevTileX || curTileY !== this.prevTileY) {
@@ -1628,56 +1638,6 @@ export class RaycastRenderer {
       npc.sprite.texture = sheet.textures[row][frame]
     }
   }
-}
-
-/**
- * DQ4 式エンカウント抽選の純関数実装 (#172)。
- *
- * - rate=0 / groups 空 / masters が解決不能で全滅 → null（不発）
- * - rate=1 で毎歩確実エンカウント（debug knob）
- * - rate=N で `rng() < 1/N` 抽選、当選したら groups から重み均等で 1 つ選び、
- *   `+` 連結を分解してマスターから BattleEntity を組み立てる
- *
- * RaycastRenderer.maybeRollEncounter から呼ばれる。テストでは `rng` に
- * 固定値関数を渡して挙動を assert する。
- */
-export function rollEncounter(input: {
-  rate: number
-  groups: ReadonlyArray<string>
-  masters: Record<string, import('../types').MonsterDef>
-  rng: () => number
-}): BattleEntity[] | null {
-  if (input.rate === 0) return null
-  if (input.groups.length === 0) return null
-  if (input.rng() >= 1 / input.rate) return null
-
-  const groupSpec = input.groups[Math.floor(input.rng() * input.groups.length)]
-  const monsterIds = groupSpec
-    .split('+')
-    .map((s) => s.trim())
-    .filter(Boolean)
-  const enemies: BattleEntity[] = []
-  for (const id of monsterIds) {
-    const def = input.masters[id]
-    if (!def) {
-      console.warn(`[name-name] encounter group references unknown monster '${id}'`)
-      continue
-    }
-    enemies.push({
-      id: def.id,
-      name: def.name,
-      hp: def.hp,
-      maxHp: def.hp,
-      mp: def.mp ?? 0,
-      maxMp: def.mp ?? 0,
-      atk: def.atk,
-      def: def.def,
-      agi: def.agi,
-      exp: def.exp,
-      gold: def.gold,
-    })
-  }
-  return enemies.length > 0 ? enemies : null
 }
 
 function directionToAngle(d: DirectionLabel): number {

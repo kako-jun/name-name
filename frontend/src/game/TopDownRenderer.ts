@@ -20,7 +20,7 @@ import {
 } from './npcSpriteSheet'
 import { attachTouchInput, type SwipeDirection } from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
-import { rollEncounter } from './RaycastRenderer'
+import { rollEncounter } from './encounter'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -484,7 +484,9 @@ export class TopDownRenderer {
     })
     if (enemies && enemies.length > 0) {
       // TopDown では戦闘画面を RaycastRenderer のように持っていないため、
-      // 現時点では console.info で記録するにとどめ、将来 BattleScreen 統合時に実装する
+      // 現時点では console.info で記録するにとどめ、将来 BattleScreen 統合時に実装する。
+      // TODO: BattleScreen 統合時は「エンカウント検出時」ではなく「戦闘終了（onClose）時」に
+      //       encounterCooldown = 3 をセットするよう変更すること（RaycastRenderer と同方式にする）
       console.info(
         '[TopDownRenderer] encounter!',
         enemies.map((e) => e.name)
