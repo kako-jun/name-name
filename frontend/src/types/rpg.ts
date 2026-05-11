@@ -80,9 +80,15 @@ export interface UiNpcData {
   frames?: number // 歩行アニメのフレーム数（方向あたり）。未指定なら 2
   direction?: 'up' | 'down' | 'left' | 'right' // アイドル時の向き。未指定なら down
   // 会話ダイアログに表示する顔画像（portrait）への相対パス。Issue #73 Phase 1 で追加。
-  // 未指定なら RpgDialogBox に顔枠が表示されず従来どおり名前＋本文のみ。
-  // 動的表情切替は Phase 2 (#101) で対応予定 — 本フィールドは固定 1 枚のみ。
+  // 未指定なら DialogBox に顔枠が表示されず従来どおり名前＋本文のみ。
   portrait?: string
+  /**
+   * 表情差分マップ（#101 Phase 2）。
+   * キーは表情名（例: "normal" / "sad" / "angry"）、値は portrait 画像への相対パス。
+   * NPC の message 内に `[expression=sad]` と書くと DialogBox の portrait がこの値に切り替わる。
+   * 未指定なら表情切替構文は動作せず `portrait` 固定 1 枚のまま。
+   */
+  expressions?: Record<string, string>
 }
 
 /**
