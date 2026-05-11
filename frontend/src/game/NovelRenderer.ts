@@ -374,6 +374,8 @@ export class NovelRenderer {
     this.characterLayer.clear()
     this.blackoutOverlay.visible = false
     this.currentBgmPath = null
+    // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
+    this.dialogBox.clearText()
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
     this.dialogBox.setBorderless(this.defaultDialogBorderless)
 

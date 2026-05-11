@@ -9,7 +9,7 @@ interface FadeAnimationLike {
 }
 
 interface CharacterStateLike {
-  sprite: { alpha: number; y: number }
+  sprite: { alpha: number; x: number; y: number }
   fadeAnimation: FadeAnimationLike | null
 }
 
