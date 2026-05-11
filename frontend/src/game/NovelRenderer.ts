@@ -196,7 +196,7 @@ export class NovelRenderer {
     const ratio = parseAspectRatio(config?.aspectRatio)
     this.screenWidth = ASPECT_RATIOS[ratio].width
     this.screenHeight = ASPECT_RATIOS[ratio].height
-    this.characterLayer = new CharacterLayer(this.screenHeight)
+    this.characterLayer = new CharacterLayer(this.screenWidth, this.screenHeight)
     this.blackoutOverlay = new Graphics()
     this.defaultDialogBorderless = config?.dialogBorderless ?? false
     this.dialogBox = new DialogBox({
