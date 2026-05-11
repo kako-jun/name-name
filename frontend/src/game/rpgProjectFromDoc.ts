@@ -6,8 +6,31 @@ import type {
   ItemDef,
   SpellDef,
   PartyMemberDef,
+  EventCommand,
 } from '../types'
-import type { RPGProject, MapData, UiNpcData, PlayerData } from '../types/rpg'
+import type { RPGProject, MapData, UiNpcData, PlayerData, UiRpgEvent } from '../types/rpg'
+
+/**
+ * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
+ * parser の RpgEvent を UiRpgEvent に変換して返す。
+ */
+export function collectRpgEvents(doc: EventDocument): UiRpgEvent[] {
+  const result: UiRpgEvent[] = []
+  for (const chapter of doc.chapters) {
+    for (const scene of chapter.scenes) {
+      for (const ev of scene.events) {
+        if (typeof ev === 'string') continue
+        if ('RpgEvent' in ev) {
+          result.push({
+            name: ev.RpgEvent.name,
+            commands: ev.RpgEvent.commands as EventCommand[],
+          })
+        }
+      }
+    }
+  }
+  return result
+}
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[モンスター] [アイテム] [呪文]` の
@@ -115,6 +138,8 @@ export function rpgProjectFromDoc(
 
   // Document 全体からマスターデータを収集して RPGProject に同梱する (#174 / #172)
   const master = collectMasterData(doc)
+  // Document 全体から RPG イベントを収集する (#197)
+  const rpgEvents = collectRpgEvents(doc)
 
   return {
     name: projectName,
@@ -127,6 +152,7 @@ export function rpgProjectFromDoc(
     items: master.items,
     spells: master.spells,
     party: master.party,
+    rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
   }
 }
 
