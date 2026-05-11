@@ -7,6 +7,7 @@
 import { Assets, Container, Sprite, Ticker } from 'pixi.js'
 import type { Easing } from '../types'
 import { applyEasing, resolveDelta } from './easing'
+import { ASPECT_RATIOS } from './constants'
 
 /** キャラクターの画面上の配置位置 */
 const POSITION_X: Record<string, number> = {
@@ -56,8 +57,8 @@ export function normalizePosition(position: string): string {
   return POSITION_ALIASES_JA[position] ?? POSITION_ALIASES_EN[position] ?? position
 }
 
-/** 足元 Y 座標（ダイアログボックス上端あたり） */
-const CHARACTER_Y = 380
+/** 足元 Y 座標の比率（横長 450px 基準: 380/450 ≒ 0.844） */
+const CHARACTER_Y_RATIO = 380 / ASPECT_RATIOS['16:9'].height
 
 interface CharacterState {
   sprite: Sprite
@@ -118,6 +119,16 @@ export class CharacterLayer extends Container {
   private animTicker: Ticker | null = null
   /** ticker.deltaMS の累計を保持してアニメ進行に使う */
   private elapsedMs: number = 0
+  /** 足元 Y 座標（screenHeight * CHARACTER_Y_RATIO） */
+  private readonly characterY: number
+
+  /**
+   * @param screenHeight 論理画面高さ（ASPECT_RATIOS から取得した値を渡す）
+   */
+  constructor(screenHeight: number) {
+    super()
+    this.characterY = screenHeight * CHARACTER_Y_RATIO
+  }
 
   /**
    * キャラクター立ち絵を表示する。既に表示中なら position / expression を更新する。
@@ -182,7 +193,7 @@ export class CharacterLayer extends Container {
     const sprite = new Sprite()
     sprite.anchor.set(0.5, 1)
     sprite.x = x
-    sprite.y = CHARACTER_Y
+    sprite.y = this.characterY
     sprite.alpha = instant ? 1 : 0
     this.addChild(sprite)
 
