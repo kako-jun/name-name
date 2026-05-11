@@ -118,6 +118,8 @@ export class NovelRenderer {
 
   /** 選択肢表示中フラグ */
   private waitingForChoice = false
+  /** 選択肢クリック直後の同フレーム advance を抑制するフラグ (#211) */
+  private justSelectedChoice = false
 
   /** Wait イベント実行中フラグ */
   private waitingForWait = false
@@ -912,6 +914,10 @@ export class NovelRenderer {
   }
 
   private handleAdvance = (): void => {
+    if (this.justSelectedChoice) {
+      this.justSelectedChoice = false
+      return
+    }
     this.audioManager.ensureContext()
     if (this.backlogOverlay.visible) {
       this.backlogOverlay.hide()
@@ -932,6 +938,10 @@ export class NovelRenderer {
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
+    if (this.justSelectedChoice) {
+      this.justSelectedChoice = false
+      return
+    }
     this.audioManager.ensureContext()
 
     // Escape: 開いているオーバーレイを閉じる
@@ -1081,6 +1091,12 @@ export class NovelRenderer {
       this.choiceOverlay.show(
         event.Choice.options,
         (jump: string) => {
+          // 同フレームの advance を抑制。jumpToScene が例外を投げても次の
+          // イベントループで確実にリセットされるよう setTimeout(0) を使う (#211)
+          this.justSelectedChoice = true
+          setTimeout(() => {
+            this.justSelectedChoice = false
+          }, 0)
           this.waitingForChoice = false
           this.choiceOverlay.hide()
           this.jumpToScene(jump)
