@@ -306,14 +306,192 @@ pub fn parse(input: &str) -> Document {
                         direction: parsed.direction,
                         portrait: parsed.portrait,
                         expressions: parsed.expressions,
+                        scene: parsed.scene,
                     }));
                     continue;
                 }
             }
         }
 
-        // Master data blocks (#174): [モンスター <id>] / [アイテム <id>] / [呪文 <id>]
-        // 共通のキー値ボディを持つ宣言型ブロック。汎用関数（key=value）で書ききれない場合は
+        // RpgEvent block: [イベント <name>] ... [/イベント]
+        if let Some(header) = trimmed.strip_prefix("[イベント ") {
+            if header.ends_with(']') {
+                let name = header.trim_end_matches(']').trim().to_string();
+                if !name.is_empty() {
+                    pos += 1;
+                    let mut commands: Vec<EventCommand> = Vec::new();
+                    let mut pending_dialog_char: Option<String> = None;
+                    let mut pending_dialog_lines: Vec<String> = Vec::new();
+                    while pos < len && lines[pos].trim() != "[/イベント]" {
+                        let cmd_line = lines[pos].trim();
+                        // [NPC移動: <npc> → @x,y 速度=N 向き=<dir>]
+                        if let Some(rest) = cmd_line.strip_prefix("[NPC移動:") {
+                            if rest.ends_with(']') {
+                                // flush pending dialog
+                                if let Some(char) = pending_dialog_char.take() {
+                                    if !pending_dialog_lines.is_empty() {
+                                        commands.push(EventCommand::Dialog {
+                                            character: Some(char),
+                                            text: std::mem::take(&mut pending_dialog_lines),
+                                        });
+                                    }
+                                    // text が空の場合は話者行だけで終わったとみなし、skip
+                                } else if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: None,
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                                let inner = rest.trim_end_matches(']').trim();
+                                if let Some(cmd) = parse_npc_move_command(inner) {
+                                    commands.push(cmd);
+                                }
+                                pos += 1;
+                                continue;
+                            }
+                        }
+                        // [待機: N]
+                        if let Some(rest) = cmd_line.strip_prefix("[待機:") {
+                            if rest.ends_with(']') {
+                                if let Some(char) = pending_dialog_char.take() {
+                                    if !pending_dialog_lines.is_empty() {
+                                        commands.push(EventCommand::Dialog {
+                                            character: Some(char),
+                                            text: std::mem::take(&mut pending_dialog_lines),
+                                        });
+                                    }
+                                } else if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: None,
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                                let ms_str = rest.trim_end_matches(']').trim();
+                                if let Ok(ms) = ms_str.parse::<u32>() {
+                                    commands.push(EventCommand::Wait { ms });
+                                }
+                                pos += 1;
+                                continue;
+                            }
+                        }
+                        // > テキスト → Narration
+                        if cmd_line.starts_with("> ") {
+                            if let Some(char) = pending_dialog_char.take() {
+                                if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: Some(char),
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                            } else if !pending_dialog_lines.is_empty() {
+                                commands.push(EventCommand::Dialog {
+                                    character: None,
+                                    text: std::mem::take(&mut pending_dialog_lines),
+                                });
+                            }
+                            let mut narr_lines: Vec<String> = Vec::new();
+                            while pos < len {
+                                let l = lines[pos].trim();
+                                if l.starts_with("> ") {
+                                    narr_lines.push(l.strip_prefix("> ").unwrap_or("").to_string());
+                                    pos += 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                            commands.push(EventCommand::Narration { text: narr_lines });
+                            continue;
+                        }
+                        // **キャラ**: → Dialog speaker
+                        if cmd_line.starts_with("**") && is_speaker_line(cmd_line) {
+                            if let Some(char) = pending_dialog_char.take() {
+                                if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: Some(char),
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                                // text が空の場合は話者行だけで終わったとみなし、skip
+                            } else if !pending_dialog_lines.is_empty() {
+                                commands.push(EventCommand::Dialog {
+                                    character: None,
+                                    text: std::mem::take(&mut pending_dialog_lines),
+                                });
+                            }
+                            let after_stars = &cmd_line[2..];
+                            let name_end = after_stars.find("**").unwrap_or(after_stars.len());
+                            pending_dialog_char = Some(after_stars[..name_end].to_string());
+                            pos += 1;
+                            continue;
+                        }
+                        // empty line flushes dialog
+                        if cmd_line.is_empty() {
+                            if let Some(char) = pending_dialog_char.take() {
+                                if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: Some(char),
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                            } else if !pending_dialog_lines.is_empty() {
+                                commands.push(EventCommand::Dialog {
+                                    character: None,
+                                    text: std::mem::take(&mut pending_dialog_lines),
+                                });
+                            }
+                            pos += 1;
+                            continue;
+                        }
+                        // plain text → dialog lines
+                        if !cmd_line.starts_with('[') {
+                            pending_dialog_lines.push(cmd_line.to_string());
+                            pos += 1;
+                            continue;
+                        }
+                        pos += 1;
+                    }
+                    // flush pending dialog at end
+                    if let Some(char) = pending_dialog_char.take() {
+                        if !pending_dialog_lines.is_empty() {
+                            commands.push(EventCommand::Dialog {
+                                character: Some(char),
+                                text: pending_dialog_lines,
+                            });
+                        }
+                        // text が空の場合は話者行だけで終わったとみなし、skip
+                    } else if !pending_dialog_lines.is_empty() {
+                        commands.push(EventCommand::Dialog {
+                            character: None,
+                            text: pending_dialog_lines,
+                        });
+                    }
+                    if pos < len {
+                        pos += 1; // skip [/イベント]
+                    } else {
+                        eprintln!(
+                            "[name-name] 警告: [イベント {}] に対応する [/イベント] がありません",
+                            name
+                        );
+                    }
+                    current_events.push(Event::RpgEvent { name, commands });
+                    continue;
+                }
+            }
+        }
+
+        // RpgTrigger: [トリガー @x,y scene=xxx once=true] or [トリガー auto scene=xxx]
+        if let Some(rest) = trimmed.strip_prefix("[トリガー ") {
+            if rest.ends_with(']') {
+                let inner = rest.trim_end_matches(']').trim();
+                if let Some(trigger) = parse_trigger_line(inner) {
+                    current_events.push(trigger);
+                    pos += 1;
+                    continue;
+                }
+            }
+        }
+
+        // Master data blocks (#174): [モンスター <id>] / [アイテム <id>] / [呪文 <id>]        // 共通のキー値ボディを持つ宣言型ブロック。汎用関数（key=value）で書ききれない場合は
         // body 中で `builtin: <slug>` を指定してランタイムの専用関数に委譲する。
         if let Some(parsed) = try_parse_master_data_block(&lines, pos, len) {
             current_events.push(parsed.event);
@@ -1027,6 +1205,7 @@ pub(crate) struct ParsedNpcHeader {
     pub direction: Option<Direction>,
     pub portrait: Option<String>,
     pub expressions: std::collections::HashMap<String, String>,
+    pub scene: Option<String>,
 }
 
 fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
@@ -1050,7 +1229,9 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
     let mut frames: Option<u32> = None;
     let mut direction: Option<Direction> = None;
     let mut portrait: Option<String> = None;
-    let mut expressions: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut expressions: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut scene: Option<String> = None;
     for p in parts {
         if let Some(val) = p.strip_prefix("色=") {
             let hex = val.trim().trim_start_matches('#');
@@ -1091,6 +1272,11 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
                     }
                 }
             }
+        } else if let Some(val) = p.strip_prefix("scene=") {
+            let v = val.trim().to_string();
+            if !v.is_empty() {
+                scene = Some(v);
+            }
         }
     }
     Some(ParsedNpcHeader {
@@ -1104,6 +1290,7 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
         direction,
         portrait,
         expressions,
+        scene,
     })
 }
 
@@ -1406,7 +1593,9 @@ fn inject_encounter_rate_into_last_map(events: &mut [Event], rate: u32) {
             map.encounter_rate = Some(rate);
         }
         _ => {
-            emit_encounter_warning("[エンカウント率] の直前が [マップ] ではありません。破棄しました");
+            emit_encounter_warning(
+                "[エンカウント率] の直前が [マップ] ではありません。破棄しました",
+            );
         }
     }
 }
@@ -1417,7 +1606,9 @@ fn inject_encounter_groups_into_last_map(events: &mut [Event], groups: Vec<Strin
             map.encounter_groups = Some(groups);
         }
         _ => {
-            emit_encounter_warning("[エンカウント群] の直前が [マップ] ではありません。破棄しました");
+            emit_encounter_warning(
+                "[エンカウント群] の直前が [マップ] ではありません。破棄しました",
+            );
         }
     }
 }
@@ -1434,6 +1625,87 @@ fn emit_encounter_warning(msg: &str) {
     }
 }
 
+/// `[NPC移動: <npc> → @x,y 速度=N 向き=<dir>]` の内部をパースする。
+/// 形式: `<npc名> → @x,y [速度=N] [向き=<dir>]`
+fn parse_npc_move_command(s: &str) -> Option<EventCommand> {
+    // Split on → (arrow)
+    let arrow_pos = s.find('→')?;
+    let npc = s[..arrow_pos].trim().to_string();
+    if npc.is_empty() {
+        return None;
+    }
+    let rest = s[arrow_pos + '→'.len_utf8()..].trim();
+    let at_pos = rest.find('@')?;
+    let after_at = &rest[at_pos + 1..];
+    let mut parts = after_at.split_whitespace();
+    let coord = parts.next()?;
+    let (x_str, y_str) = coord.split_once(',')?;
+    let x: u32 = x_str.trim().parse().ok()?;
+    let y: u32 = y_str.trim().parse().ok()?;
+    let mut speed: u32 = 3;
+    let mut direction: Option<Direction> = None;
+    for p in parts {
+        if let Some(val) = p.strip_prefix("速度=") {
+            if let Ok(n) = val.trim().parse::<u32>() {
+                speed = n;
+            }
+        } else if let Some(val) = p.strip_prefix("向き=") {
+            direction = Some(parse_direction(val.trim()));
+        }
+    }
+    Some(EventCommand::NpcMove {
+        npc,
+        x,
+        y,
+        speed,
+        direction,
+    })
+}
+
+/// `[トリガー ...]` の内部をパースする。
+/// 座標トリガー: `@x,y scene=xxx [once=true]`
+/// 自動トリガー: `auto scene=xxx [once=true]`
+fn parse_trigger_line(s: &str) -> Option<Event> {
+    let mut x: Option<u32> = None;
+    let mut y: Option<u32> = None;
+    let mut auto = false;
+    let mut scene: Option<String> = None;
+    let mut once = false;
+
+    let mut parts = s.split_whitespace();
+    let first = parts.next()?;
+    if first == "auto" {
+        auto = true;
+    } else if first.starts_with('@') {
+        let coord = &first[1..];
+        let (x_str, y_str) = coord.split_once(',')?;
+        x = Some(x_str.trim().parse().ok()?);
+        y = Some(y_str.trim().parse().ok()?);
+    } else {
+        return None;
+    }
+
+    for p in parts {
+        if let Some(val) = p.strip_prefix("scene=") {
+            let v = val.trim().to_string();
+            if !v.is_empty() {
+                scene = Some(v);
+            }
+        } else if p == "once=true" {
+            once = true;
+        }
+    }
+
+    let scene = scene?;
+    Some(Event::RpgTrigger {
+        x,
+        y,
+        auto,
+        scene,
+        once,
+    })
+}
+
 fn unquote(s: &str) -> String {
     let s = s.trim();
     if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
@@ -1442,7 +1714,6 @@ fn unquote(s: &str) -> String {
         s.to_string()
     }
 }
-
 
 // マスターデータブロック (#174 / #175) のパース実装は master.rs に分離。
 // `use crate::master::try_parse_master_data_block;` は parser.rs 冒頭に集約。
@@ -2157,15 +2428,14 @@ title: "test"
 "#;
         let doc = parse(input);
         let events = &doc.chapters[0].scenes[0].events;
-        let npc = events.iter().find_map(|e| {
-            if let Event::Npc(n) = e {
-                Some(n)
-            } else {
-                None
-            }
-        });
+        let npc = events
+            .iter()
+            .find_map(|e| if let Event::Npc(n) = e { Some(n) } else { None });
         let npc = npc.expect("Npc event not found");
-        assert_eq!(npc.expressions.get("normal"), Some(&"normal.png".to_string()));
+        assert_eq!(
+            npc.expressions.get("normal"),
+            Some(&"normal.png".to_string())
+        );
         assert_eq!(npc.expressions.get("sad"), Some(&"sad.png".to_string()));
         assert_eq!(npc.expressions.len(), 2);
     }
@@ -2205,7 +2475,158 @@ title: "test"
             }
         });
         let npc2 = npc2.expect("Npc event not found after roundtrip");
-        assert_eq!(npc2.expressions.get("normal"), Some(&"normal.png".to_string()));
+        assert_eq!(
+            npc2.expressions.get("normal"),
+            Some(&"normal.png".to_string())
+        );
         assert_eq!(npc2.expressions.get("sad"), Some(&"sad.png".to_string()));
+    }
+
+    // ===== RpgEvent / RpgTrigger / NpcData.scene (#196) =====
+
+    #[test]
+    fn npc_scene_parse() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## map: m
+
+[NPC 衛兵 @3,3 色=#ff0000 scene=guard_talk]
+警戒中だ。
+[/NPC]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        let npc = events
+            .iter()
+            .find_map(|e| if let Event::Npc(n) = e { Some(n) } else { None })
+            .expect("Npc not found");
+        assert_eq!(npc.scene.as_deref(), Some("guard_talk"));
+    }
+
+    #[test]
+    fn rpg_event_parse() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## map: m
+
+[イベント guard_talk]
+[NPC移動: 衛兵 → @5,3 速度=1]
+[待機: 500]
+**衛兵**:
+通れ。
+[/イベント]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::RpgEvent { name, commands } => {
+                assert_eq!(name, "guard_talk");
+                assert_eq!(commands.len(), 3);
+                match &commands[0] {
+                    EventCommand::NpcMove {
+                        npc, x, y, speed, ..
+                    } => {
+                        assert_eq!(npc, "衛兵");
+                        assert_eq!(*x, 5);
+                        assert_eq!(*y, 3);
+                        assert_eq!(*speed, 1);
+                    }
+                    other => panic!("expected NpcMove, got {:?}", other),
+                }
+                match &commands[1] {
+                    EventCommand::Wait { ms } => assert_eq!(*ms, 500),
+                    other => panic!("expected Wait, got {:?}", other),
+                }
+                match &commands[2] {
+                    EventCommand::Dialog { character, text } => {
+                        assert_eq!(character.as_deref(), Some("衛兵"));
+                        assert_eq!(text, &vec!["通れ。".to_string()]);
+                    }
+                    other => panic!("expected Dialog, got {:?}", other),
+                }
+            }
+            other => panic!("expected RpgEvent, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rpg_trigger_step_parse() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## map: m
+
+[トリガー @5,5 scene=foo once=true]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::RpgTrigger {
+                x,
+                y,
+                auto,
+                scene,
+                once,
+            } => {
+                assert_eq!(*x, Some(5));
+                assert_eq!(*y, Some(5));
+                assert!(!auto);
+                assert_eq!(scene, "foo");
+                assert!(*once);
+            }
+            other => panic!("expected RpgTrigger, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rpg_trigger_auto_parse() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## map: m
+
+[トリガー auto scene=intro]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::RpgTrigger {
+                x,
+                y,
+                auto,
+                scene,
+                once,
+            } => {
+                assert_eq!(*x, None);
+                assert_eq!(*y, None);
+                assert!(*auto);
+                assert_eq!(scene, "intro");
+                assert!(!once);
+            }
+            other => panic!("expected RpgTrigger, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rpg_event_roundtrip() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## map: m\n\n[イベント guard_talk]\n[NPC移動: 衛兵 → @5,3 速度=2]\n[待機: 300]\n**衛兵**:\n通れ。\n[/イベント]\n[トリガー @5,5 scene=guard_talk once=true]\n[トリガー auto scene=guard_talk]\n";
+        let doc1 = parse(input);
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "rpg event/trigger round-trip should be stable");
     }
 }

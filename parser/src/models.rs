@@ -1,6 +1,40 @@
 use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
+/// RPG イベントのコマンド単体 (#187 / #196)。
+/// RpgEvent の commands に列挙され、EventRunner が順に実行する。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(tag = "type")]
+pub enum EventCommand {
+    /// NPC をタイル単位でアニメ移動させる。
+    /// `[NPC移動: 長老 → @5,3 速度=1]`
+    NpcMove {
+        npc: String,
+        x: u32,
+        y: u32,
+        /// タイル/秒。既定 3。
+        #[serde(default = "default_npc_move_speed")]
+        speed: u32,
+        /// 移動後の向き。未指定なら移動方向に自動設定。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<Direction>,
+    },
+    /// 指定 ms 待機する。`[待機: 500]`
+    Wait { ms: u32 },
+    /// 台詞を表示する。既存 Dialog イベントに対応。
+    Dialog {
+        character: Option<String>,
+        text: Vec<String>,
+    },
+    /// ナレーションを表示する。
+    Narration { text: Vec<String> },
+}
+
+fn default_npc_move_speed() -> u32 {
+    3
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub enum BgmAction {
@@ -115,6 +149,11 @@ pub struct NpcData {
     /// NPC の message 内の `[expression=sad]` で実行時に portrait が切り替わる。
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub expressions: std::collections::HashMap<String, String>,
+    /// 「はなす」時に再生するイベント名（#187）。
+    /// 指定時は `message` の代わりにこのイベントを EventRunner で再生する。
+    /// 未指定の場合は従来通り `message` を DialogBox に表示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -320,6 +359,31 @@ pub enum Event {
     Spell(SpellDef),
     /// パーティメンバー定義 (#175)。`[パーティ <id>] ... [/パーティ]` ブロックで書く。
     PartyMember(PartyMemberDef),
+    /// RPG イベント定義 (#187)。
+    /// `[イベント <name>] ... [/イベント]` ブロックで書く。
+    /// トリガーから scene 名で参照される。
+    RpgEvent {
+        name: String,
+        commands: Vec<EventCommand>,
+    },
+    /// RPG トリガー定義 (#187)。
+    /// タイル踏み込み: `[トリガー @x,y scene=xxx once=true]`
+    /// マップ進入時: `[トリガー auto scene=xxx]`
+    RpgTrigger {
+        /// 踏み込みトリガーの座標。auto トリガーの場合は None。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<u32>,
+        /// true のときマップ進入時に自動発火。x/y と排他。
+        #[serde(default)]
+        auto: bool,
+        /// 実行するイベント名。
+        scene: String,
+        /// true のとき初回のみ発火（SaveManager でフラグ管理）。
+        #[serde(default)]
+        once: bool,
+    },
     /// 立ち絵 / オブジェクトのアニメーション (#134)。
     ///
     /// 子供向け動画用途で「車が回転しながら横移動」「寿司が空から降ってくる」等の
