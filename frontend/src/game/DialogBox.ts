@@ -475,6 +475,8 @@ export class DialogBox extends Container {
       .then(() => {
         if (rubyToken !== this.rubyBuildToken) return
         this.rebuildRubyEntries(lines, font)
+        // msPerChar=0 の場合も update() が skipTypewriter() を呼ぶため、ここでの特別処理は不要。
+        // setFontFamily 側は typewriter をリセットするため .then 内での即時スキップが必要（設計上の非対称点）。
       })
       .catch(() => {
         // フォントロード失敗時はルビなしで継続（クラッシュ防止）
