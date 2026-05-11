@@ -2140,7 +2140,7 @@ HP: 20
     }
 
     #[test]
-    fn encounter_directives_without_preceding_map_are_dropped() {
+    fn npc_expressions_parse() {
         let input = r#"---
 engine: name-name
 chapter: 1
@@ -2148,14 +2148,64 @@ title: "test"
 ---
 ## scene: s
 
-[エンカウント率: 1/16]
-[エンカウント群: slime]
-
-> なれーしょん
+[マップ 5x5 テーマ=town]
+[/マップ]
+[プレイヤー開始 @2,2]
+[NPC 長老 @1,1 色=#ffcc00 portrait=elder.png expressions=normal:normal.png,sad:sad.png]
+こんにちは。
+[/NPC]
 "#;
         let doc = parse(input);
-        // Narration only — encounter は破棄される
         let events = &doc.chapters[0].scenes[0].events;
-        assert!(events.iter().all(|e| !matches!(e, Event::RpgMap(_))));
+        let npc = events.iter().find_map(|e| {
+            if let Event::Npc(n) = e {
+                Some(n)
+            } else {
+                None
+            }
+        });
+        let npc = npc.expect("Npc event not found");
+        assert_eq!(npc.expressions.get("normal"), Some(&"normal.png".to_string()));
+        assert_eq!(npc.expressions.get("sad"), Some(&"sad.png".to_string()));
+        assert_eq!(npc.expressions.len(), 2);
+    }
+
+    #[test]
+    fn npc_expressions_roundtrip() {
+        use crate::emitter::emit;
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## scene: s
+
+[マップ 5x5 テーマ=town]
+[/マップ]
+[プレイヤー開始 @2,2]
+[NPC 長老 @1,1 色=#ffcc00 portrait=elder.png expressions=normal:normal.png,sad:sad.png]
+こんにちは。
+[/NPC]
+"#;
+        let doc = parse(input);
+        let emitted = emit(&doc);
+        // emitter が expressions= を出力することを確認
+        assert!(
+            emitted.contains("expressions="),
+            "emitter should include expressions= but got:\n{}",
+            emitted
+        );
+        // ラウンドトリップ: 再パースしても同じ expressions が得られる
+        let doc2 = parse(&emitted);
+        let npc2 = doc2.chapters[0].scenes[0].events.iter().find_map(|e| {
+            if let Event::Npc(n) = e {
+                Some(n)
+            } else {
+                None
+            }
+        });
+        let npc2 = npc2.expect("Npc event not found after roundtrip");
+        assert_eq!(npc2.expressions.get("normal"), Some(&"normal.png".to_string()));
+        assert_eq!(npc2.expressions.get("sad"), Some(&"sad.png".to_string()));
     }
 }

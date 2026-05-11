@@ -191,7 +191,7 @@ export interface NpcData {
      * 表情差分マップ（#101 Phase 2）。
      * キーは表情名（例: \"normal\" / \"sad\" / \"angry\"）、値は portrait 画像への相対パス。
      * Markdown 属性は `expressions=normal:normal.png,sad:sad.png` の形式で指定する。
-     * message 内の `[expression=sad]` で実行時に portrait が切り替わる。
+     * NPC の message 内の `[expression=sad]` で実行時に portrait が切り替わる。
      */
     expressions?: Map<string, string>;
 }

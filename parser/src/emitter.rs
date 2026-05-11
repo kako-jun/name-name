@@ -344,8 +344,23 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     Some(path) if !path.is_empty() => format!(" portrait={}", path),
                     _ => String::new(),
                 };
+                let expressions_suffix = if npc.expressions.is_empty() {
+                    String::new()
+                } else {
+                    // BTreeMap でソートして順序を安定化（保存のたびに diff が出るのを防ぐ）
+                    let mut pairs: Vec<_> = npc.expressions.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    format!(
+                        " expressions={}",
+                        pairs
+                            .iter()
+                            .map(|(k, v)| format!("{}:{}", k, v))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                };
                 out.push_str(&format!(
-                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}{}]\n",
+                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}{}{}]\n",
                     npc.name,
                     npc.x,
                     npc.y,
@@ -354,7 +369,8 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     sprite_suffix,
                     frames_suffix,
                     direction_suffix,
-                    portrait_suffix
+                    portrait_suffix,
+                    expressions_suffix
                 ));
                 for line in &npc.message {
                     out.push_str(line);

@@ -294,7 +294,10 @@ export function applyRpgProjectToDoc(
           frames: npc.frames,
           direction: npc.direction ? directionToUpper(npc.direction) : undefined,
           portrait: npc.portrait,
-          expressions: npc.expressions,
+          expressions:
+            npc.expressions && Object.keys(npc.expressions).length > 0
+              ? new Map(Object.entries(npc.expressions))
+              : undefined,
         },
       })
     ),
