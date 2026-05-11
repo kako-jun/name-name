@@ -192,6 +192,16 @@ export type Event =
   | { Item: ItemDef }
   | { Spell: SpellDef }
   | { PartyMember: PartyMemberDef }
+  | { RpgEvent: { name: string; commands: EventCommand[] } }
+  | {
+      RpgTrigger: {
+        x?: number
+        y?: number
+        auto?: boolean
+        scene: string
+        once?: boolean
+      }
+    }
   | {
       Animate: {
         target: string
