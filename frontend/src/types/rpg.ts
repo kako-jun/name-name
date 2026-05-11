@@ -89,6 +89,8 @@ export interface UiNpcData {
    * 未指定なら表情切替構文は動作せず `portrait` 固定 1 枚のまま。
    */
   expressions?: Record<string, string>
+  /** 「はなす」時に再生するイベント名 (#187)。指定時は message の代わりにこのイベントを再生する。 */
+  scene?: string
 }
 
 /**
