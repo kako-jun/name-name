@@ -106,6 +106,13 @@ export class RaycastRenderer {
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
   /**
+   * updateMovement でのタイルまたぎ検出用。
+   * 前フレームのタイル座標を保持し、整数グリッドが変化したときにエンカウント抽選を呼ぶ。
+   * -1 は未初期化（最初の load() 後の最初フレームで確定する）。
+   */
+  private prevTileX: number = -1
+  private prevTileY: number = -1
+  /**
    * resize 時のミニマップ再描画に使う NPC リスト（#149）。
    *
    * 責務: rebuildNpcObjects を呼ぶすべての経路でこの cache も同期更新する。
@@ -317,6 +324,8 @@ export class RaycastRenderer {
     this.masterParty = gameData.party ?? {}
     this.stepCounter = 0
     this.encounterCooldown = 0
+    this.prevTileX = -1
+    this.prevTileY = -1
 
     // Player: tile center
     this.playerX = gameData.player.x + 0.5
@@ -1050,6 +1059,22 @@ export class RaycastRenderer {
         this.playerVZ = 0
       }
     }
+
+    // タイルまたぎ検出 → エンカウント抽選 (#191)。
+    // snapStep（タッチ 1 歩）と同様に、タイルグリッドが変化した瞬間だけ抽選する。
+    // 毎フレーム呼ぶと極端に高頻度になるため、整数グリッド座標の変化で 1 回だけ発火させる。
+    const curTileX = Math.floor(this.playerX)
+    const curTileY = Math.floor(this.playerY)
+    if (this.prevTileX === -1) {
+      // 初期化: 最初のフレームではエンカウントを発生させない
+      this.prevTileX = curTileX
+      this.prevTileY = curTileY
+    } else if (curTileX !== this.prevTileX || curTileY !== this.prevTileY) {
+      this.prevTileX = curTileX
+      this.prevTileY = curTileY
+      this.stepCounter += 1
+      this.maybeRollEncounter()
+    }
   }
 
   private isPassable(x: number, y: number): boolean {
@@ -1159,12 +1184,12 @@ export class RaycastRenderer {
         const rowDist = denom > 0 ? cameraZ / denom : 0
         const sampleX = Math.floor(this.playerX + fx * rowDist)
         const sampleY = Math.floor(this.playerY + fy * rowDist)
-        let color = 0x555555
+        let color = 0x1a3a1a // マップ範囲外: TREE と同色でフォールバック
         if (sampleY >= 0 && sampleY < this.mapHeight && sampleX >= 0 && sampleX < this.mapWidth) {
           const tile = this.mapTiles[sampleY]?.[sampleX]
           if (tile === TileType.ROAD) color = 0x8b7355
           else if (tile === TileType.GRASS) color = 0x2d5016
-          else color = 0x444444 // TREE/WATER タイル下に立つことは無いがフォールバック
+          else color = 0x1a3a1a // TREE/WATER: TopDown の TILE_COLORS_HEX[TileType.TREE] と統一
         }
         if (color !== bandColor) {
           flushBand(y, bandColor)

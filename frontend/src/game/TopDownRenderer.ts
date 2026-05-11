@@ -8,6 +8,7 @@
 
 import { Application, Container, Graphics, Sprite } from 'pixi.js'
 import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
+import type { MonsterDef } from '../types'
 import { RpgDialogBox } from './RpgDialogBox'
 import {
   NPC_ANIM_PERIOD_MS,
@@ -19,6 +20,7 @@ import {
 } from './npcSpriteSheet'
 import { attachTouchInput, type SwipeDirection } from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
+import { rollEncounter } from './RaycastRenderer'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -73,6 +75,13 @@ export class TopDownRenderer {
   private screenHeight = 0
 
   private resizeRaf: number | null = null
+
+  /** 確率エンカウント (#191) */
+  private encounterRate: number = 0
+  private encounterGroups: string[] = []
+  private masterMonsters: Record<string, MonsterDef> = {}
+  /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする */
+  private encounterCooldown: number = 0
 
   private initialized = false
 
@@ -154,6 +163,12 @@ export class TopDownRenderer {
     this.playerGridX = gameData.player.x
     this.playerGridY = gameData.player.y
     this.playerDirection = gameData.player.direction
+
+    // エンカウント設定 (#191)
+    this.encounterRate = gameData.map.encounterRate ?? 0
+    this.encounterGroups = gameData.map.encounterGroups ?? []
+    this.masterMonsters = gameData.monsters ?? {}
+    this.encounterCooldown = 0
 
     this.drawMap()
     this.drawNPCs(gameData.npcs)
@@ -451,6 +466,31 @@ export class TopDownRenderer {
     this.playerGridX = nx
     this.playerGridY = ny
     this.isMoving = true
+
+    // 1 歩進んだので確率エンカウント抽選 (#191)
+    this.maybeRollEncounter()
+  }
+
+  private maybeRollEncounter(): void {
+    if (this.encounterCooldown > 0) {
+      this.encounterCooldown -= 1
+      return
+    }
+    const enemies = rollEncounter({
+      rate: this.encounterRate,
+      groups: this.encounterGroups,
+      masters: this.masterMonsters,
+      rng: Math.random,
+    })
+    if (enemies && enemies.length > 0) {
+      // TopDown では戦闘画面を RaycastRenderer のように持っていないため、
+      // 現時点では console.info で記録するにとどめ、将来 BattleScreen 統合時に実装する
+      console.info(
+        '[TopDownRenderer] encounter!',
+        enemies.map((e) => e.name)
+      )
+      this.encounterCooldown = 3
+    }
   }
 
   private canMoveTo(x: number, y: number): boolean {
