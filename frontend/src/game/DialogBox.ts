@@ -198,7 +198,6 @@ export class DialogBox extends Container {
 
   // --- 状態 ---
   private currentText: string = ''
-  private currentName: string = ''
   private showing = false
 
   // --- typewriter ---
@@ -358,7 +357,6 @@ export class DialogBox extends Container {
     const cleanMessage = stripRubyMarkup(message)
     const previousPortrait = this.currentPortrait
     this.showing = true
-    this.currentName = name
     this.currentPortrait = portrait && portrait.length > 0 ? portrait : undefined
 
     // setDialog が bg.visible / showing を管理するため、ここでは bg.visible を触らない。

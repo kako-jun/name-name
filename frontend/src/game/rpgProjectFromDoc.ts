@@ -54,9 +54,9 @@ function collectRpgTriggers(doc: EventDocument): UiRpgTrigger[] {
           triggers.push({
             x: t.x,
             y: t.y,
-            auto: t.auto,
+            auto: t.auto ?? false,
             scene: t.scene,
-            once: t.once,
+            once: t.once ?? false,
           })
         }
       }
@@ -157,10 +157,10 @@ export function rpgProjectFromDoc(
         frames: ev.Npc.frames,
         direction: ev.Npc.direction ? directionToLower(ev.Npc.direction) : undefined,
         portrait: ev.Npc.portrait,
-        expressions:
-          ev.Npc.expressions && ev.Npc.expressions.size > 0
-            ? Object.fromEntries(ev.Npc.expressions)
-            : undefined,
+        expressions: (() => {
+          const m = ev.Npc.expressions as Map<string, string> | undefined
+          return m && m.size > 0 ? Object.fromEntries(m) : undefined
+        })(),
         scene: ev.Npc.scene,
       })
     }
@@ -358,7 +358,7 @@ export function applyRpgProjectToDoc(
           portrait: npc.portrait,
           expressions:
             npc.expressions && Object.keys(npc.expressions).length > 0
-              ? new Map(Object.entries(npc.expressions))
+              ? { ...npc.expressions }
               : undefined,
           scene: npc.scene,
         },
