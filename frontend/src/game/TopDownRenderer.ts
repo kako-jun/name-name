@@ -557,19 +557,19 @@ export class TopDownRenderer {
     const npc = this.npcs.find((n) => n.x === tx && n.y === ty)
     if (npc) {
       if (npc.data.scene) {
+        if (!this.eventRunner) return
         const event = this.gameData?.rpgEvents?.find((e) => e.name === npc.data.scene)
-        if (event) {
-          // once=true のトリガーは発火済みなら skip
-          if (event.once) {
-            const key = `name-name-event-done_npc_${npc.data.name}`
-            if (localStorage.getItem(key)) return
-            localStorage.setItem(key, '1')
-          }
-          this.inputLocked = true
-          this.eventRunner?.run(event.commands, () => {
-            this.inputLocked = false
-          })
+        if (!event) return
+        if (event.once) {
+          const key = `name-name-event-done-npc-${npc.data.name}`
+          if (localStorage.getItem(key)) return
+          // run が確実に呼ばれる直前に書き込む
+          localStorage.setItem(key, '1')
         }
+        this.inputLocked = true
+        this.eventRunner.run(event.commands, () => {
+          this.inputLocked = false
+        })
         return
       }
       this.dialogBox?.show(
@@ -589,6 +589,7 @@ export class TopDownRenderer {
    */
   private handleSwipe = (direction: SwipeDirection): void => {
     if (!this.initialized) return
+    if (this.inputLocked && this.eventRunner?.isRunning) return
     if (this.dialogBox?.isShowing) {
       // ダイアログ中のスワイプはダイアログ操作と分離。誤爆防止のため何もしない。
       return
