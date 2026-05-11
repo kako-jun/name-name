@@ -3,8 +3,22 @@
  *
  * #194: RpgDialogBox を DialogBox に統合した後の動作確認。
  * 旧 RpgDialogBox.test.ts を DialogBox API に合わせて移行。
+ *
+ * #214: フォントロード非同期化（ensureFontLoaded + rubyBuildToken）のテスト。
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// ensureFontLoaded をモック — 手動 resolve できる Promise を返す
+vi.mock('./FontLoader', () => ({
+  ensureFontLoaded: vi.fn(),
+  extractPrimaryFamily: (f: string) =>
+    f
+      .split(',')[0]
+      ?.trim()
+      .replace(/^['"]+|['"]+$/g, '') ?? f,
+  resetFontLoaderCache: vi.fn(),
+  __setDocumentForTest: vi.fn(),
+}))
 import {
   DialogBox,
   PORTRAIT_SIZE,
@@ -12,6 +26,11 @@ import {
   PORTRAIT_X,
   computePortraitContainFit,
 } from './DialogBox'
+import { ensureFontLoaded } from './FontLoader'
+
+// デフォルトは即 resolve — 既存テストが影響を受けないようにする
+const mockEnsureFontLoaded = vi.mocked(ensureFontLoaded)
+mockEnsureFontLoaded.mockResolvedValue(undefined)
 
 // RPG スタイル設定（TopDownRenderer / RaycastRenderer と同じ値）
 const SCREEN_WIDTH = 800
@@ -45,6 +64,8 @@ interface DialogBoxInternals {
   dialogText: { x: number; text: string; visible: boolean }
   portraitSprite: { visible: boolean; texture: unknown } | null
   currentPortraitToken: number
+  rubyEntries: Array<{ placement: unknown; text: unknown }>
+  rubyBuildToken: number
 }
 
 function asInternals(box: DialogBox): DialogBoxInternals {
@@ -224,5 +245,159 @@ describe('computePortraitContainFit (Issue #104 / #194)', () => {
     expect(b).toEqual({ x: 40, y: 100, width: 80, height: 80 })
     const c = computePortraitContainFit(100, -1, FX, FY, FRAME_SIZE)
     expect(c).toEqual({ x: 40, y: 100, width: 80, height: 80 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #214: フォントロード非同期化 (ensureFontLoaded + rubyBuildToken) テスト
+// ---------------------------------------------------------------------------
+
+/** テスト用手動 resolve Promise を生成する */
+function makeManualPromise(): {
+  promise: Promise<void>
+  resolve: () => void
+  reject: (e: unknown) => void
+} {
+  let resolve!: () => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+describe('DialogBox フォントロード非同期化 (Issue #214)', () => {
+  let box: DialogBox
+
+  beforeEach(() => {
+    box = new DialogBox({
+      screenWidth: 800,
+      screenHeight: 600,
+      boxHeight: 120,
+      marginX: 20,
+      padding: 20,
+      fontSize: 18,
+    })
+  })
+
+  afterEach(() => {
+    box.dispose()
+    vi.clearAllMocks()
+  })
+
+  // TC-01: フォントロード成功後に rubyEntries が構築される
+  it('TC-01: フォントロード成功後に rubyEntries が構築され x 座標が設定されている', async () => {
+    const { promise, resolve } = makeManualPromise()
+    mockEnsureFontLoaded.mockReturnValue(promise)
+
+    box.setDialog(null, '漢字《かんじ》のルビ')
+    const i = asInternals(box)
+
+    // .then 未解決の間は rubyEntries は空
+    expect(i.rubyEntries.length).toBe(0)
+
+    resolve()
+    await promise
+
+    // マイクロタスクキューを flush
+    await Promise.resolve()
+
+    expect(i.rubyEntries.length).toBeGreaterThan(0)
+    // 各エントリの x は数値として設定されている
+    for (const e of i.rubyEntries) {
+      expect(typeof (e.text as { x: number }).x).toBe('number')
+    }
+  })
+
+  // TC-02: setDialog 直後（.then 前）は rubyEntries が空
+  it('TC-02: setDialog 呼び出し直後（フォントロード前）は rubyEntries が空', () => {
+    const { promise } = makeManualPromise()
+    mockEnsureFontLoaded.mockReturnValue(promise)
+
+    box.setDialog(null, '漢字《かんじ》テスト')
+    const i = asInternals(box)
+
+    expect(i.rubyEntries.length).toBe(0)
+  })
+
+  // TC-06: ensureFontLoaded が reject した場合、rubyEntries は空のままでクラッシュしない
+  it('TC-06: ensureFontLoaded が reject した場合 rebuildRubyEntries は呼ばれず rubyEntries は空のまま', async () => {
+    mockEnsureFontLoaded.mockRejectedValueOnce(new Error('font load failed'))
+
+    box.setDialog(null, '漢字《かんじ》テスト')
+    const i = asInternals(box)
+
+    // マイクロタスクキューを flush
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(i.rubyEntries.length).toBe(0)
+  })
+
+  // TC-08: setDialog を連続2回呼んだとき、1回目の stale .then は無視される
+  it('TC-08: setDialog 連続2回呼び出し時、stale な 1回目の .then は無視され rubyEntries は2回目の内容', async () => {
+    const first = makeManualPromise()
+    const second = makeManualPromise()
+
+    // 1回目と2回目で別の Promise を返す
+    mockEnsureFontLoaded.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+
+    box.setDialog(null, '一回目《いっかいめ》')
+    box.setDialog(null, '二回目《にかいめ》のテキスト')
+
+    const i = asInternals(box)
+
+    // 2回目の resolve を先に行う
+    second.resolve()
+    await second.promise
+    await Promise.resolve()
+
+    const entriesAfterSecond = i.rubyEntries.length
+    expect(entriesAfterSecond).toBeGreaterThan(0)
+    // 追加: 2回目のルビ文字列が含まれるか確認
+    expect(i.rubyEntries.some((e) => (e.placement as { ruby: string }).ruby === 'にかいめ')).toBe(
+      true
+    )
+
+    // 1回目を後から resolve しても rubyEntries は変わらない（stale token で弾かれる）
+    first.resolve()
+    await first.promise
+    await Promise.resolve()
+
+    expect(i.rubyEntries.length).toBe(entriesAfterSecond)
+  })
+
+  // TC-12: setDialog → clearText → .then 解決の順で stale callback は無視される
+  it('TC-12: setDialog → clearText → フォントロード解決の順で stale callback は無視される', async () => {
+    const { promise, resolve } = makeManualPromise()
+    mockEnsureFontLoaded.mockReturnValue(promise)
+
+    box.setDialog(null, '漢字《かんじ》')
+    box.clearText()
+
+    const i = asInternals(box)
+
+    resolve()
+    await promise
+    await Promise.resolve()
+
+    // clearText が rubyBuildToken を進めているため stale .then は無視される
+    expect(i.rubyEntries.length).toBe(0)
+  })
+
+  // TC-15: ルビ記法なしのテキストで .then 解決後も rubyEntries が空のまま
+  it('TC-15: ルビ記法を含まないテキストは .then 解決後も rubyEntries が空のまま', async () => {
+    const { promise, resolve } = makeManualPromise()
+    mockEnsureFontLoaded.mockReturnValue(promise)
+
+    box.setDialog(null, 'ルビなしのシンプルなテキスト')
+    const i = asInternals(box)
+
+    resolve()
+    await promise
+    await Promise.resolve()
+
+    expect(i.rubyEntries.length).toBe(0)
   })
 })
