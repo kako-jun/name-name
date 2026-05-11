@@ -59,7 +59,9 @@ export class EventRunner {
     }
 
     if (cmd.type === 'NpcMove') {
-      this.npcMover.moveNpcTo(cmd.npc, cmd.x, cmd.y, cmd.speed ?? 3).then(() => this.step())
+      this.npcMover.moveNpcTo(cmd.npc, cmd.x, cmd.y, cmd.speed ?? 3).then(() => {
+        if (this.running) this.step()
+      })
       return
     }
 

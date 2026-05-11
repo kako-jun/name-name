@@ -108,6 +108,7 @@ export interface PlayerData {
  */
 export interface UiRpgEvent {
   name: string
+  once: boolean
   commands: import('../types').EventCommand[]
 }
 
