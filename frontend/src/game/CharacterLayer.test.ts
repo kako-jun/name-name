@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { CharacterLayer, normalizePosition } from './CharacterLayer'
+import { ASPECT_RATIOS } from './constants'
 
 interface FadeAnimationLike {
   fromAlpha: number
@@ -8,7 +9,7 @@ interface FadeAnimationLike {
 }
 
 interface CharacterStateLike {
-  sprite: { alpha: number }
+  sprite: { alpha: number; y: number }
   fadeAnimation: FadeAnimationLike | null
 }
 
@@ -22,7 +23,7 @@ function asInternals(layer: CharacterLayer): CharacterLayerInternals {
 
 describe('CharacterLayer fade (Issue #177)', () => {
   it('show() の新規表示は alpha 0 から fade-in を開始する', () => {
-    const layer = new CharacterLayer()
+    const layer = new CharacterLayer(450)
     layer.show('hero', 'normal', '中央', '/assets')
     const state = asInternals(layer).characters.get('hero')
     expect(state).toBeDefined()
@@ -34,7 +35,7 @@ describe('CharacterLayer fade (Issue #177)', () => {
   })
 
   it('show() に instant: true を渡すと alpha 1 で即時表示し fadeAnimation は無し', () => {
-    const layer = new CharacterLayer()
+    const layer = new CharacterLayer(450)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     const state = asInternals(layer).characters.get('hero')
     expect(state!.sprite.alpha).toBe(1)
@@ -42,7 +43,7 @@ describe('CharacterLayer fade (Issue #177)', () => {
   })
 
   it('remove() のデフォルトは fade-out（destroyOnComplete=true）に切り替えるだけ', () => {
-    const layer = new CharacterLayer()
+    const layer = new CharacterLayer(450)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     layer.remove('hero')
     const state = asInternals(layer).characters.get('hero')
@@ -53,14 +54,14 @@ describe('CharacterLayer fade (Issue #177)', () => {
   })
 
   it('remove() に instant: true を渡すと characters から即座に消える', () => {
-    const layer = new CharacterLayer()
+    const layer = new CharacterLayer(450)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     layer.remove('hero', { instant: true })
     expect(asInternals(layer).characters.has('hero')).toBe(false)
   })
 
   it('退場フェード中の同名キャラ再 show は fade-in に切り替える', () => {
-    const layer = new CharacterLayer()
+    const layer = new CharacterLayer(450)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     layer.remove('hero')
     // 退場フェード中
@@ -113,5 +114,15 @@ describe('normalizePosition', () => {
     expect(normalizePosition('まんなか')).toBe('center')
     expect(normalizePosition('右寄り')).toBe('right')
     expect(normalizePosition('右端')).toBe('right')
+  })
+})
+
+describe('CharacterLayer portrait mode (Issue #209)', () => {
+  it('screenHeight=800（9:16）で sprite.y が 800 * (380 / 450) ≒ 676 になる', () => {
+    const layer = new CharacterLayer(800)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.sprite.y).toBeCloseTo(800 * (380 / ASPECT_RATIOS['16:9'].height), 5)
   })
 })
