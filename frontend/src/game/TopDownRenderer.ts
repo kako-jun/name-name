@@ -22,6 +22,7 @@ import {
 import { attachTouchInput, type SwipeDirection } from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
 import { rollEncounter } from './encounter'
+import { EventRunner, type NpcMover } from './eventRunner'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -47,6 +48,8 @@ export class TopDownRenderer {
   private world: Container
   private dialogBox: DialogBox | null = null
   private menuOverlay: TouchMenuOverlay | null = null
+  private eventRunner: EventRunner | null = null
+  private inputLocked = false
   private detachTouchInput: (() => void) | null = null
   /** isMoving 中に来たスワイプを 1 件だけキューする。連続スワイプの取りこぼし防止 (#178) */
   private pendingSwipe: Direction | null = null
@@ -85,6 +88,7 @@ export class TopDownRenderer {
   private encounterCooldown: number = 0
 
   private initialized = false
+  private gameData: RPGProject | null = null
 
   constructor() {
     this.app = new Application()
@@ -125,6 +129,12 @@ export class TopDownRenderer {
     })
     this.app.stage.addChild(this.dialogBox)
 
+    // EventRunner: NPC イベントのコマンドキューを順に実行する (#197)
+    const npcMover: NpcMover = {
+      moveNpcTo: (name, x, y, speed) => this.moveNpcTo(name, x, y, speed),
+    }
+    this.eventRunner = new EventRunner(this.dialogBox, npcMover)
+
     // ミニマップは raycast 専用 (#149)。topdown は元々全体俯瞰で見えているので不要。
 
     // タッチメニュー: DQ4 ファミコン版相当の左上 8 コマンドウィンドウ (#178 → #171)
@@ -155,6 +165,8 @@ export class TopDownRenderer {
     this.isMoving = false
     this.moveStart = 0
     this.dialogBox?.hide()
+    this.inputLocked = false
+    this.gameData = gameData
 
     this.mapTiles = gameData.map.tiles
     this.tileSize = gameData.map.tileSize
@@ -221,6 +233,8 @@ export class TopDownRenderer {
       const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
       clearDemoSheetCache(renderer)
+      this.eventRunner?.destroy()
+      this.eventRunner = null
       this.dialogBox = null
       this.menuOverlay = null
       this.initialized = false
@@ -399,13 +413,20 @@ export class TopDownRenderer {
     if (this.dialogBox?.isShowing) {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
-        // typewriter 表示中なら全文表示にスキップ、完了済みなら閉じる (#150)
-        if (this.dialogBox.isTyping()) {
+        if (this.inputLocked && this.eventRunner?.isRunning) {
+          this.eventRunner.advance()
+        } else if (this.dialogBox.isTyping()) {
+          // typewriter 表示中なら全文表示にスキップ、完了済みなら閉じる (#150)
           this.dialogBox.skipTypewriter()
         } else {
           this.dialogBox.hide()
         }
       }
+      return
+    }
+
+    // イベントランナー実行中は移動・メニューをブロック (#197)
+    if (this.inputLocked && this.eventRunner?.isRunning) {
       return
     }
 
@@ -533,6 +554,16 @@ export class TopDownRenderer {
     }
     const npc = this.npcs.find((n) => n.x === tx && n.y === ty)
     if (npc) {
+      if (npc.data.scene) {
+        const event = this.gameData?.rpgEvents?.find((e) => e.name === npc.data.scene)
+        if (event) {
+          this.inputLocked = true
+          this.eventRunner?.run(event.commands, () => {
+            this.inputLocked = false
+          })
+        }
+        return
+      }
       this.dialogBox?.show(
         npc.data.name,
         stripExpressionDirectives(npc.data.message),
@@ -578,7 +609,9 @@ export class TopDownRenderer {
   private handleTap = (): void => {
     if (!this.initialized) return
     if (this.dialogBox?.isShowing) {
-      if (this.dialogBox.isTyping()) {
+      if (this.inputLocked && this.eventRunner?.isRunning) {
+        this.eventRunner.advance()
+      } else if (this.dialogBox.isTyping()) {
         this.dialogBox.skipTypewriter()
       } else {
         this.dialogBox.hide()
@@ -731,5 +764,63 @@ export class TopDownRenderer {
 
   private gridToPixelY(gy: number): number {
     return gy * this.tileSize + this.tileSize / 2
+  }
+
+  /** NPC をグリッド単位でアニメ移動させる。完了したら resolve する Promise を返す (#197) */
+  private moveNpcTo(name: string, tx: number, ty: number, speed: number): Promise<void> {
+    return new Promise((resolve) => {
+      const npc = this.npcs.find((n) => n.data.name === name)
+      if (!npc) {
+        resolve()
+        return
+      }
+      const TILE = this.tileSize
+      const pxPerMs = (TILE * speed) / 1000
+
+      const moveNextTile = (): void => {
+        if (npc.x === tx && npc.y === ty) {
+          resolve()
+          return
+        }
+        const dx = Math.sign(tx - npc.x)
+        const dy = Math.sign(ty - npc.y)
+        const fromX = npc.container.x
+        const fromY = npc.container.y
+        npc.x += dx
+        npc.y += dy
+        const toX = this.gridToPixelX(npc.x)
+        const toY = this.gridToPixelY(npc.y)
+
+        // 向き更新
+        if (dx === 1) npc.direction = 'right'
+        else if (dx === -1) npc.direction = 'left'
+        else if (dy === 1) npc.direction = 'down'
+        else if (dy === -1) npc.direction = 'up'
+
+        const dist = TILE
+        const duration = dist / pxPerMs
+        const start = performance.now()
+
+        const tick = (): void => {
+          if (!this.initialized) {
+            resolve()
+            return
+          }
+          const elapsed = performance.now() - start
+          const t = Math.min(elapsed / duration, 1)
+          npc.container.x = fromX + (toX - fromX) * t
+          npc.container.y = fromY + (toY - fromY) * t
+          if (t < 1) {
+            requestAnimationFrame(tick)
+          } else {
+            npc.container.x = toX
+            npc.container.y = toY
+            moveNextTile()
+          }
+        }
+        requestAnimationFrame(tick)
+      }
+      moveNextTile()
+    })
   }
 }

@@ -103,6 +103,15 @@ export interface PlayerData {
 }
 
 /**
+ * RPG イベント（コマンドキュー）の UI 側型 (#197)。
+ * parser の RpgEvent / EventCommand と同期する。
+ */
+export interface UiRpgEvent {
+  name: string
+  commands: import('../types').EventCommand[]
+}
+
+/**
  * イベントデータ（将来的な拡張用）
  */
 export interface EventData {
@@ -133,6 +142,11 @@ export interface RPGProject {
   player: PlayerData // プレイヤー初期データ
   npcs: UiNpcData[] // NPCリスト
   events?: EventData[] // イベントリスト（オプション）
+  /**
+   * RPG イベント（コマンドキュー）リスト (#197)。
+   * NPC の scene フィールドから参照される。
+   */
+  rpgEvents?: UiRpgEvent[]
   // プレイ時の表示モード。必須化済み。デフォルトは 'topdown' 相当。
   // （Doc の scene.view=Raycast から派生したときは 'raycast'）
   view: 'topdown' | 'raycast'
