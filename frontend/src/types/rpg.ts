@@ -108,8 +108,21 @@ export interface PlayerData {
  */
 export interface UiRpgEvent {
   name: string
-  once: boolean
   commands: import('../types').EventCommand[]
+}
+
+/** RPG タイル踏み込み / auto トリガー定義 (#187) */
+export interface UiRpgTrigger {
+  /** 踏み込みトリガーの X 座標。auto トリガーの場合は undefined */
+  x?: number
+  /** 踏み込みトリガーの Y 座標。auto トリガーの場合は undefined */
+  y?: number
+  /** true のときマップ進入時に自動発火 */
+  auto: boolean
+  /** 実行するイベント名 */
+  scene: string
+  /** true のとき初回のみ発火 */
+  once: boolean
 }
 
 /**
@@ -148,6 +161,8 @@ export interface RPGProject {
    * NPC の scene フィールドから参照される。
    */
   rpgEvents?: UiRpgEvent[]
+  /** RPG タイル踏み込み / auto トリガーリスト (#187) */
+  triggers?: UiRpgTrigger[]
   // プレイ時の表示モード。必須化済み。デフォルトは 'topdown' 相当。
   // （Doc の scene.view=Raycast から派生したときは 'raycast'）
   view: 'topdown' | 'raycast'

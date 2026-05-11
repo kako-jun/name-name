@@ -8,7 +8,14 @@ import type {
   PartyMemberDef,
   EventCommand,
 } from '../types'
-import type { RPGProject, MapData, UiNpcData, PlayerData, UiRpgEvent } from '../types/rpg'
+import type {
+  RPGProject,
+  MapData,
+  UiNpcData,
+  PlayerData,
+  UiRpgEvent,
+  UiRpgTrigger,
+} from '../types/rpg'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -23,7 +30,6 @@ export function collectRpgEvents(doc: EventDocument): UiRpgEvent[] {
         if ('RpgEvent' in ev) {
           result.push({
             name: ev.RpgEvent.name,
-            once: (ev.RpgEvent as { once?: boolean }).once ?? false,
             commands: ev.RpgEvent.commands as EventCommand[],
           })
         }
@@ -34,7 +40,32 @@ export function collectRpgEvents(doc: EventDocument): UiRpgEvent[] {
 }
 
 /**
- * Document 全体（全章 / 全シーン）を走査して `[モンスター] [アイテム] [呪文]` の
+ * Document 全体（全章 / 全シーン）を走査して `[トリガー]` ブロックを収集する (#187)。
+ * parser の RpgTrigger を UiRpgTrigger に変換して返す。
+ */
+function collectRpgTriggers(doc: EventDocument): UiRpgTrigger[] {
+  const triggers: UiRpgTrigger[] = []
+  for (const chapter of doc.chapters) {
+    for (const scene of chapter.scenes) {
+      for (const ev of scene.events) {
+        if (typeof ev === 'string') continue
+        if ('RpgTrigger' in ev) {
+          const t = ev.RpgTrigger
+          triggers.push({
+            x: t.x,
+            y: t.y,
+            auto: t.auto,
+            scene: t.scene,
+            once: t.once,
+          })
+        }
+      }
+    }
+  }
+  return triggers
+}
+
+/**
  * マスター定義を ID 引きの Record に集約する (#174 / #172)。
  *
  * 重複 ID は **後勝ち**（同じ id を 2 度書いた場合、ドキュメント上で後に出てきた
@@ -141,6 +172,8 @@ export function rpgProjectFromDoc(
   const master = collectMasterData(doc)
   // Document 全体から RPG イベントを収集する (#197)
   const rpgEvents = collectRpgEvents(doc)
+  // Document 全体から RPG トリガーを収集する (#187)
+  const triggers = collectRpgTriggers(doc)
 
   return {
     name: projectName,
@@ -154,6 +187,7 @@ export function rpgProjectFromDoc(
     spells: master.spells,
     party: master.party,
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
+    triggers: triggers.length > 0 ? triggers : undefined,
   }
 }
 

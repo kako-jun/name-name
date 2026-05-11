@@ -560,7 +560,9 @@ export class TopDownRenderer {
         if (!this.eventRunner) return
         const event = this.gameData?.rpgEvents?.find((e) => e.name === npc.data.scene)
         if (!event) return
-        if (event.once) {
+        const trigger = this.gameData?.triggers?.find((t) => t.scene === npc.data.scene)
+        const isOnce = trigger?.once ?? false
+        if (isOnce) {
           const key = `name-name-event-done-npc-${npc.data.name}`
           if (localStorage.getItem(key)) return
           // run が確実に呼ばれる直前に書き込む
