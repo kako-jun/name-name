@@ -9,11 +9,11 @@ import type { Easing } from '../types'
 import { applyEasing, resolveDelta } from './easing'
 import { ASPECT_RATIOS } from './constants'
 
-/** キャラクターの画面上の配置位置 */
-const POSITION_X: Record<string, number> = {
-  left: 150,
-  center: 400,
-  right: 650,
+/** キャラクターの画面上の配置位置（screenWidth に対する比率） */
+const CHARACTER_X_RATIO: Record<string, number> = {
+  left: 150 / 800, // 0.1875
+  center: 400 / 800, // 0.5
+  right: 650 / 800, // 0.8125
 }
 
 /**
@@ -121,13 +121,21 @@ export class CharacterLayer extends Container {
   private elapsedMs: number = 0
   /** 足元 Y 座標（screenHeight * CHARACTER_Y_RATIO） */
   private readonly characterY: number
+  /** X 座標テーブル（screenWidth * CHARACTER_X_RATIO[pos]） */
+  private readonly positionX: Record<string, number>
 
   /**
+   * @param screenWidth 論理画面幅（ASPECT_RATIOS から取得した値を渡す）
    * @param screenHeight 論理画面高さ（ASPECT_RATIOS から取得した値を渡す）
    */
-  constructor(screenHeight: number) {
+  constructor(screenWidth: number, screenHeight: number) {
     super()
     this.characterY = screenHeight * CHARACTER_Y_RATIO
+    this.positionX = {
+      left: screenWidth * CHARACTER_X_RATIO.left,
+      center: screenWidth * CHARACTER_X_RATIO.center,
+      right: screenWidth * CHARACTER_X_RATIO.right,
+    }
   }
 
   /**
@@ -175,7 +183,7 @@ export class CharacterLayer extends Container {
 
       // 位置変更
       if (existing.position !== normalizedPosition) {
-        const x = POSITION_X[normalizedPosition] ?? POSITION_X['center']
+        const x = this.positionX[normalizedPosition] ?? this.positionX['center']
         existing.sprite.x = x
         existing.position = normalizedPosition
       }
@@ -189,7 +197,7 @@ export class CharacterLayer extends Container {
     }
 
     // 新規表示
-    const x = POSITION_X[normalizedPosition] ?? POSITION_X['center']
+    const x = this.positionX[normalizedPosition] ?? this.positionX['center']
     const sprite = new Sprite()
     sprite.anchor.set(0.5, 1)
     sprite.x = x
