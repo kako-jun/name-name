@@ -20,6 +20,7 @@ import { Assets, Container, Graphics, Sprite, Text, TextStyle, Texture, Ticker }
 import { wordwrap } from './wordwrap'
 import { parseRubyText, stripRubyMarkup } from './ruby'
 import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
+import { ensureFontLoaded } from './FontLoader'
 import {
   type TypewriterState,
   isTypingActive,
@@ -467,7 +468,9 @@ export class DialogBox extends Container {
     this.typewriter = startTypewriter(lines.join('\n'))
     this.dialogText.text = ''
     this.rubyPlacements = computeRubyPlacements(runs, lines)
-    this.rebuildRubyEntries(lines, font)
+    ensureFontLoaded(this.fontFamily).then(() => {
+      this.rebuildRubyEntries(lines, font)
+    })
     this.onTypingDone = onTypingDone ?? null
     if (!isTypingActive(this.typewriter) && this.onTypingDone) {
       const cb = this.onTypingDone
@@ -551,14 +554,16 @@ export class DialogBox extends Container {
       const fullText = lines.join('\n')
       this.typewriter = startTypewriter(fullText)
       this.rubyPlacements = computeRubyPlacements(runs, lines)
-      this.rebuildRubyEntries(lines, font)
-      if (!isTypingActive(this.typewriter)) {
-        this.dialogText.text = fullText
-        this.revealAllRuby()
-      } else {
-        this.dialogText.text = ''
-        this.updateRubyVisibility(0)
-      }
+      ensureFontLoaded(this.fontFamily).then(() => {
+        this.rebuildRubyEntries(lines, font)
+        if (!isTypingActive(this.typewriter)) {
+          this.dialogText.text = fullText
+          this.revealAllRuby()
+        } else {
+          this.dialogText.text = ''
+          this.updateRubyVisibility(0)
+        }
+      })
     }
   }
 
