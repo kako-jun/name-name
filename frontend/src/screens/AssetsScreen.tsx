@@ -9,6 +9,11 @@ type AssetType = 'images' | 'sounds' | 'movies' | 'ideas'
 // (`{ name, path, sha, size, type, download_url }`) を返し、bytes は
 // download_url (raw.githubusercontent.com) から直接取る。
 // ローカル UI 用に旧 Asset 型と互換のあるラッパを作る。tags は #108 で再設計予定。
+//
+// NOTE: private repo では download_url (raw.githubusercontent.com) が 404 になるため
+// AssetsScreen のサムネイル・プレビューが壊れる既知の問題がある。
+// PlayerScreen / EditorScreen は Worker proxy (/assets/raw/*) 経由に移行済みだが、
+// AssetsScreen は未対応（TODO: entryToAsset で proxy URL に置き換える）。
 interface Asset {
   name: string
   size: number

@@ -14,7 +14,7 @@ import {
   findRpgSceneIndex,
   findAllRpgScenes,
 } from '../game/rpgProjectFromDoc'
-import { createApiClient, type ProjectInfo } from '../api/client'
+import { createApiClient } from '../api/client'
 
 // kako-jun/name-name#107: 旧 FastAPI モデルでは autosave 1s debounce で
 // ワーキングディレクトリに PUT し、commit ボタンで Git push していた。
@@ -96,7 +96,7 @@ function EditorScreen({
   // PR #120 review S2: NovelPlayer に渡す assets のベース URL。kako-jun ハードコードを
   //   やめ、Worker (listProjects) から取得した repo (`owner/name`) を使う。
   //   ロード前は null。
-  const [projectRepo, setProjectRepo] = useState<string | null>(null)
+  // projectRepo は Worker proxy 移行により不要になった（raw.githubusercontent.com 廃止）
 
   // apiBaseUrl が変わるたびにクライアントを作り直す。
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
@@ -226,27 +226,7 @@ function EditorScreen({
     await handleDocChange(newDoc)
   }
 
-  // PR #120 review S2: projectName から repo (`owner/name`) を解決する。
-  //   listProjects の結果は Worker の projects.ts に固定で入っており短いため、
-  //   毎回呼んでも問題ない。失敗時は projectRepo=null のまま → assetBaseUrl は
-  //   フォールバック（kako-jun/<name>）で動かす。
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const list = await api.listProjects()
-        if (cancelled) return
-        const found = list.find((p: ProjectInfo) => p.name === projectName)
-        setProjectRepo(found?.repo ?? null)
-      } catch (error) {
-        console.error('Failed to resolve project repo:', error)
-        if (!cancelled) setProjectRepo(null)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [api, projectName])
+  // PR #120 review S2: projectRepo（repo 名解決）は Worker proxy 移行で不要になった。
 
   // 初回ロード: Worker (Contents API) から script.md を取得しWASMでパース。
   // 取得時の sha を shaRef に保持し、後続の PUT 時に楽観ロック用に渡す。
@@ -548,17 +528,12 @@ function EditorScreen({
               aspectRatio={doc?.aspect_ratio}
               choiceStyle={doc?.choice_style ?? null}
               fontFamily={doc?.font_family ?? null}
-              // PR #120 review S2: 旧 FastAPI は静的ファイルを直接返していたが、
-              //   Worker は /assets/:type の一覧 API しか提供しない（個別ファイルは
-              //   GitHub の download_url 経由になる）。
-              //   暫定で raw.githubusercontent.com を直接指す。
-              //   プロジェクトリポジトリ owner/name は listProjects() の結果
-              //   (ProjectInfo.repo) から取得する。未取得時は kako-jun/<name> に
-              //   フォールバックして動作互換を保つ（Editor/Player 統合 #108 で
-              //   download_url ベースに置き換える）。
-              assetBaseUrl={`https://raw.githubusercontent.com/${
-                projectRepo ?? `kako-jun/${projectName}`
-              }/${DEFAULT_BRANCH}/assets`}
+              // Worker proxy 経由で assets を取得（private repo でも動作する）。
+              // NOTE: EditorScreen は develop ブランチでスクリプトを編集するが、
+              // assetBaseUrl はクエリパラメータを持てない設計のため ref=main 固定になる。
+              // develop にしか存在しない素材は EditorScreen のプレビューに表示されない既知の制限。
+              // 解決するには NovelRenderer に ref を個別パラメータとして渡す設計変更が必要（TODO）。
+              assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
             />
           )
         ) : (

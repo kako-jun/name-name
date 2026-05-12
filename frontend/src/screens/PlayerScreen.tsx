@@ -122,10 +122,9 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
     return rpgProjectFromDoc(doc, sceneId, projectName)
   }, [doc, projectName])
 
-  // assets のベース URL は main ブランチを参照（#108 で download_url ベースに統一予定）
-  const assetBaseUrl = projectInfo
-    ? `https://raw.githubusercontent.com/${projectInfo.repo}/${PUBLIC_BRANCH}/assets`
-    : `https://raw.githubusercontent.com/kako-jun/${projectName}/${PUBLIC_BRANCH}/assets`
+  // assets のベース URL は Worker proxy 経由（private repo でも動作する）
+  // /api/projects/:name/assets/raw/:path で GitHub Contents API を経由して取得する
+  const assetBaseUrl = `${apiBaseUrl}/api/projects/${projectName}/assets/raw`
 
   const title = projectInfo?.title || projectName
 
@@ -204,7 +203,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
             {!titleDismissed && (
               <TitleOverlay
                 title={title}
-                titleImageUrl={`${assetBaseUrl}/title.png`}
+                titleImageUrl={`${assetBaseUrl}/images/title.png`}
                 hasSaveData={hasSaveData}
                 isDark={isDark}
                 onNewGame={() => {

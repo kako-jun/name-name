@@ -11,7 +11,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { handleListAssets, handleUploadAsset } from "./assets";
+import { handleListAssets, handleRawAsset, handleUploadAsset } from "./assets";
 import { handleGetContents, handlePutContents } from "./contents";
 import { handleListProjects } from "./projects";
 import type { Env } from "./types";
@@ -106,6 +106,11 @@ app.put("/api/projects/:name/contents/:path{.+}", (c) =>
   handlePutContents(c.req.raw, c.env, c.req.param("name"), c.req.param("path")),
 );
 app.all("/api/projects/:name/contents/:path{.+}", methodNotAllowed);
+
+app.get("/api/projects/:name/assets/raw/:path{.+}", (c) =>
+  handleRawAsset(c.req.raw, c.env, c.req.param("name"), c.req.param("path")),
+);
+app.all("/api/projects/:name/assets/raw/:path{.+}", methodNotAllowed);
 
 app.get("/api/projects/:name/assets/:type", (c) =>
   handleListAssets(c.req.raw, c.env, c.req.param("name"), c.req.param("type")),
