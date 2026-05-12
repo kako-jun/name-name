@@ -140,7 +140,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           <button
             onClick={onBack}
             aria-label="プロジェクト一覧に戻る"
-            className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
+            className={`w-8 h-8 flex items-center justify-center rounded transition-colors cursor-pointer ${
               isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
             }`}
             title="プロジェクト一覧に戻る"
