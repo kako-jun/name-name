@@ -4,6 +4,7 @@ import { NovelRenderer } from '../game/NovelRenderer'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import { type AspectRatio, ASPECT_RATIOS, parseAspectRatio } from '../game/constants'
 import SettingsOverlay from './SettingsOverlay'
+import { DebugOverlay } from './DebugOverlay'
 
 interface NovelPlayerProps {
   events: Event[]
@@ -45,7 +46,9 @@ function NovelPlayer({
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
   const [settingsOpen, setSettingsOpen] = useState(false)
   // オートモード ON/OFF (#139)
-  const [autoMode, setAutoMode] = useState(false)
+  // llll-ll-media 等の動画用途では起動時 ON が正解。ノベルゲーで止まりたい場合は
+  // UI のオートトグルで切る運用（後で frontmatter `auto_play: false` を追加する）
+  const [autoMode, setAutoMode] = useState(true)
   // スキップモード ON/OFF (#140)
   const [skipMode, setSkipMode] = useState(false)
   // クイックセーブ/ロード完了通知 toast (#142)
@@ -65,6 +68,8 @@ function NovelPlayer({
 
     const renderer = new NovelRenderer({ aspectRatio })
     rendererRef.current = renderer
+    // デバッグ用に window へ露出 (production でも軽量なので残す)
+    ;(window as unknown as { __renderer?: NovelRenderer }).__renderer = renderer
 
     let destroyed = false
 
@@ -231,6 +236,7 @@ function NovelPlayer({
       className="relative w-full h-full flex items-center justify-center bg-black"
       style={{ containerType: 'size' }}
     >
+      <DebugOverlay rendererRef={rendererRef} />
       <div
         ref={containerRef}
         className="overflow-hidden [&>canvas]:block [&>canvas]:w-full [&>canvas]:h-full"

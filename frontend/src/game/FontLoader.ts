@@ -84,6 +84,30 @@ export function ensureFontLoaded(family: string): Promise<void> {
       resolve()
       return
     }
+    // 自己ホスト font (public/fonts/ に置いた woff2/ttf) を優先
+    // 命名規約: family 名が `bellpoke_font` のような snake_case で、
+    // `public/fonts/<family>.woff2` が存在するなら @font-face を inject する
+    if (/^[a-z0-9_]+$/.test(primary)) {
+      const localUrl = `/fonts/${primary}.woff2`
+      const style = documentRef.createElement('style')
+      style.setAttribute('data-name-name-font-local', primary)
+      style.textContent = `@font-face { font-family: '${primary}'; src: url('${localUrl}') format('woff2'); font-display: swap; }`
+      documentRef.head.appendChild(style)
+      const docAny = documentRef as Document & {
+        fonts?: { load?: (s: string) => Promise<unknown>; ready?: Promise<unknown> }
+      }
+      if (docAny.fonts?.load) {
+        docAny.fonts
+          .load(`16px ${primary}`)
+          .then(() => resolve())
+          .catch(() => resolve())
+      } else if (docAny.fonts?.ready) {
+        docAny.fonts.ready.then(() => resolve()).catch(() => resolve())
+      } else {
+        resolve()
+      }
+      return
+    }
     // Google Fonts API (CSS2) のクエリを組み立てる。空白は `+` に変換するのが慣例。
     const familyParam = primary.replace(/\s+/g, '+')
     const href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(familyParam).replace(/%2B/g, '+')}&display=swap`
