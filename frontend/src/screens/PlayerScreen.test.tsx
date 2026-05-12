@@ -133,9 +133,9 @@ describe('PlayerScreen', () => {
     // パース結果が NovelPlayer に流れていること（dialog 1件→1イベント）
     const player = screen.getByTestId('novel-player')
     expect(player.getAttribute('data-event-count')).toBe('1')
-    // assets ベース URL は repo + main を参照
+    // assets ベース URL は Worker proxy 経由
     expect(player.getAttribute('data-asset-base-url')).toBe(
-      'https://raw.githubusercontent.com/kako-jun/friday-1930/main/assets'
+      'http://api.test/api/projects/friday-1930/assets/raw'
     )
 
     // タイトル表示（ヘッダーの h1 とタイトルオーバーレイの h1 の両方に表示される）
