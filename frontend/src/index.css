@@ -1,5 +1,10 @@
 @import 'tailwindcss';
 
+/* ボタンのデフォルトカーソルを pointer に統一 */
+button {
+  cursor: pointer;
+}
+
 /* スクロールバーのスタイル */
 * {
   scrollbar-width: thin;
