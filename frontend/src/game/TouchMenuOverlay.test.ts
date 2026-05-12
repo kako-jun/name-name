@@ -2,6 +2,22 @@ import { describe, it, expect } from 'vitest'
 import { computeMainPanelLayout } from './TouchMenuOverlay'
 
 describe('computeMainPanelLayout (Issue #171)', () => {
+  it('grid-2x4 で 8 項目を 2 列 4 行に並べる', () => {
+    const r = computeMainPanelLayout({
+      screenWidth: 800,
+      screenHeight: 450,
+      itemCount: 8,
+      maxTextWidth: 80,
+      position: 'top-left',
+      layout: 'grid-2x4',
+    })
+    expect(r.columns).toBe(2)
+    expect(r.panelWidth).toBe(2 * (80 + 16) + 16)
+    expect(r.panelHeight).toBe(4 * 36 + 12 * 2)
+    expect(r.panelX).toBe(24)
+    expect(r.panelY).toBe(24)
+  })
+
   it('grid-4x2 で 8 項目を 4 列 2 行に並べる', () => {
     const r = computeMainPanelLayout({
       screenWidth: 800,
@@ -74,7 +90,7 @@ describe('computeMainPanelLayout (Issue #171)', () => {
       itemCount: 8,
       maxTextWidth: 80,
       position: 'top-left',
-      layout: 'grid-4x2',
+      layout: 'grid-2x4',
     })
     const b = computeMainPanelLayout({
       screenWidth: 1920,
@@ -82,7 +98,7 @@ describe('computeMainPanelLayout (Issue #171)', () => {
       itemCount: 8,
       maxTextWidth: 80,
       position: 'top-left',
-      layout: 'grid-4x2',
+      layout: 'grid-2x4',
     })
     expect(a.panelX).toBe(b.panelX)
     expect(a.panelY).toBe(b.panelY)

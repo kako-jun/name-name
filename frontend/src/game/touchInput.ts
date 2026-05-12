@@ -32,11 +32,24 @@ export interface TouchInputOptions extends TouchInputHandlers {
 const DEFAULT_SWIPE_MIN = 30
 const DEFAULT_TAP_MAX_DIST = 12
 const DEFAULT_TAP_MAX_DUR = 350
+/**
+ * Pixi オーバーレイ（メニュー項目など）を押した直後の pointerup は、canvas 全体向けの
+ * 汎用 tap 判定から除外したい。さもないと「メニュー項目を押したつもり」が同時に
+ * 「画面タップ」としても扱われ、show/hide や dialog close が二重発火する。
+ *
+ * 期限つきの単純な suppression に倒し、同一ジェスチャ中の pointerup だけ弾く。
+ */
+let suppressTapUntilMs = 0
 
 interface ActivePointer {
   startX: number
   startY: number
   startTime: number
+}
+
+/** 次回の tap 判定を短時間だけ抑止する。Pixi の UI 項目 pointerdown から呼ぶ。 */
+export function suppressNextTouchTap(durationMs = 250): void {
+  suppressTapUntilMs = Math.max(suppressTapUntilMs, performance.now() + durationMs)
 }
 
 /**
@@ -69,6 +82,10 @@ export function attachTouchInput(element: HTMLElement, options: TouchInputOption
     if (!active) return
     const start = active
     active = null
+
+    if (performance.now() <= suppressTapUntilMs) {
+      return
+    }
 
     const dx = e.clientX - start.startX
     const dy = e.clientY - start.startY
