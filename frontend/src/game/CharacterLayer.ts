@@ -319,6 +319,54 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 動画タイトルを画面中央に表示する。
+   * 既に Title があれば text を差し替える。空文字なら即時退場。
+   * `[アニメ target=Title]` で普通の立ち絵と同じ規則で動かせる。
+   */
+  showTitle(text: string, fontFamily: string, position?: string): void {
+    const NAME = 'Title'
+    const existing = this.characters.get(NAME)
+    if (text.length === 0) {
+      if (existing) this.remove(NAME, { instant: true })
+      return
+    }
+    if (existing) {
+      if (existing.label && !existing.label.destroyed) {
+        existing.label.text = text
+        existing.label.style = new TextStyle({ fontFamily, fontSize: 64, fill: 0xffffff })
+      }
+      return
+    }
+    // sprite は不可視 (no texture) のアンカー。CharacterState を保つために置く。
+    const normalizedPosition = position ? normalizePosition(position) : 'center'
+    const initialX = this.positionX[normalizedPosition] ?? this.screenWidth * 0.5
+    const sprite = new Sprite()
+    sprite.x = initialX
+    sprite.y = this.screenHeight * 0.5
+    sprite.alpha = 1
+    this.addChild(sprite)
+
+    const label = new Text({
+      text,
+      style: new TextStyle({ fontFamily, fontSize: 64, fill: 0xffffff }),
+    })
+    label.anchor.set(0.5, 0.5)
+    label.x = sprite.x
+    label.y = sprite.y
+    this.addChild(label)
+
+    this.characters.set(NAME, {
+      sprite,
+      label,
+      position: normalizedPosition,
+      expression: '',
+      assetBaseUrl: '',
+      animation: null,
+      fadeAnimation: null,
+    })
+  }
+
+  /**
    * 表情のみを差し替える（位置はそのまま）
    */
   changeExpression(character: string, expression: string, assetBaseUrl: string): void {

@@ -584,6 +584,27 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[アニメ: {}]\n", parts.join(", ")));
                 prev_was_dialog_or_text = false;
             }
+            Event::TitleShow {
+                text,
+                font_family,
+                position,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[タイトル: ");
+                out.push_str(text);
+                if let Some(f) = font_family {
+                    out.push_str(", font=");
+                    out.push_str(f);
+                }
+                if let Some(p) = position {
+                    out.push_str(", 位置=");
+                    out.push_str(p);
+                }
+                out.push_str("]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::DialogBorderless { borderless } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');

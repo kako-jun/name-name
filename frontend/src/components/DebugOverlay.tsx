@@ -54,7 +54,7 @@ export function DebugOverlay({
         right: 8,
         bottom: 8,
         zIndex: 9999,
-        maxWidth: 460,
+        width: 460,
         maxHeight: '60vh',
         overflow: 'auto',
         padding: '8px 10px',
