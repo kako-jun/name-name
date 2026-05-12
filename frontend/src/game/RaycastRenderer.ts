@@ -280,12 +280,12 @@ export class RaycastRenderer {
     this.minimap = new MinimapOverlay(this.screenWidth, this.screenHeight, { corner: 'top-right' })
     this.app.stage.addChild(this.minimap)
 
-    // タッチメニュー: DQ4 ファミコン版相当の左上 8 コマンドウィンドウ (#178 → #171)
+    // タッチメニュー: DQ4 ファミコン版相当の左上 2 列 x 4 行コマンドウィンドウ (#178 → #171)
     this.menuOverlay = new TouchMenuOverlay(
       this.screenWidth,
       this.screenHeight,
       this.handleMenuSelect,
-      { items: DQ4_COMMANDS, position: 'top-left', layout: 'grid-4x2' }
+      { items: DQ4_COMMANDS, position: 'top-left', layout: 'grid-2x4' }
     )
     this.app.stage.addChild(this.menuOverlay)
 

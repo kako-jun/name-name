@@ -3,22 +3,24 @@
  *
  * 用途:
  * - #178 のシンプル版: 「はなす / とじる」を右下にポップアップさせる軽量メニュー
- * - #171 の DQ4 コマンドウィンドウ: 左上に 4×2 グリッドで 8 コマンドを並べ、選択した
+ * - #171 の DQ4 コマンドウィンドウ: 左上に 2×4 グリッドで 8 コマンドを並べ、選択した
  *   コマンドの右隣にサブメニューを開く（重ね方は後で実機調整、まずは動く形）
  *
  * 共通点: 「普段は隠れていてタップで出る、文字を直接タップして即決定（カーソル不要）」。
  * これは TouchMenuOverlay の根幹仕様。
  *
- * 違い: position（top-left / bottom-right）と layout（list / grid-4x2）と submenu の有無。
+ * 違い: position（top-left / bottom-right）と layout（list / grid-2x4 / grid-4x2）と
+ * submenu の有無。
  *
  * 仮想パッドは出さない方針 (#178)。サブメニューは 1 段のみ対応（多段化は将来 #173 や #174
  * の戦闘メニューを実装するときに拡張）。
  */
 
 import { Container, Graphics, Rectangle, Text as PixiText, TextStyle } from 'pixi.js'
+import { suppressNextTouchTap } from './touchInput'
 
 export type MenuPosition = 'top-left' | 'bottom-right'
-export type MenuLayout = 'list' | 'grid-4x2'
+export type MenuLayout = 'list' | 'grid-4x2' | 'grid-2x4'
 
 /** メニュー項目。submenu 指定で 1 段だけサブメニューが出せる */
 export interface MenuItem {
@@ -35,7 +37,12 @@ export const DEFAULT_MENU_ITEMS: ReadonlyArray<MenuItem> = [
 
 /**
  * #171 DQ4 ファミコン版相当の 8 コマンド。
- * 順序・サブメニュー内容はプレースホルダ。実装が進む（#172/#174/#175）と中身が埋まる。
+ * 順序は FC 版 DQ4 の実機どおり 2 列 x 4 行:
+ *
+ *   はなす / じゅもん
+ *   つよさ / どうぐ
+ *   そうび / さくせん
+ *   とびら / しらべる
  *
  * `as const` で id を literal union として抽出できるよう書く。consumer 側
  * （TopDownRenderer / RaycastRenderer の handleMenuSelect の switch）で網羅検査ができる。
@@ -43,15 +50,24 @@ export const DEFAULT_MENU_ITEMS: ReadonlyArray<MenuItem> = [
 export const DQ4_COMMANDS = [
   { id: 'talk', label: 'はなす' },
   {
-    id: 'item',
-    label: 'どうぐ',
-    submenu: [{ id: 'item:none', label: '（なし）' }],
+    id: 'spell',
+    label: 'じゅもん',
+    submenu: [{ id: 'spell:none', label: '（なし）' }],
   },
-  { id: 'examine', label: 'しらべる' },
   {
     id: 'status',
     label: 'つよさ',
     submenu: [{ id: 'status:hero', label: 'ゆうしゃ' }],
+  },
+  {
+    id: 'item',
+    label: 'どうぐ',
+    submenu: [{ id: 'item:none', label: '（なし）' }],
+  },
+  {
+    id: 'equip',
+    label: 'そうび',
+    submenu: [{ id: 'equip:hero', label: 'ゆうしゃ' }],
   },
   {
     id: 'tactics',
@@ -62,17 +78,8 @@ export const DQ4_COMMANDS = [
       { id: 'tactics:no-spell', label: 'じゅもんつかうな' },
     ],
   },
-  {
-    id: 'spell',
-    label: 'じゅもん',
-    submenu: [{ id: 'spell:none', label: '（なし）' }],
-  },
-  {
-    id: 'equip',
-    label: 'そうび',
-    submenu: [{ id: 'equip:hero', label: 'ゆうしゃ' }],
-  },
   { id: 'door', label: 'とびら' },
+  { id: 'examine', label: 'しらべる' },
 ] as const satisfies ReadonlyArray<MenuItem>
 
 /** DQ4_COMMANDS のメイン項目 id の literal union（consumer の switch で網羅検査するため） */
@@ -117,7 +124,8 @@ export interface TouchMenuOptions {
 /**
  * メインパネルの矩形を純関数で計算する。テスト容易性のため export する。
  *
- * 列数: layout='grid-4x2' で 4、それ以外で 1。行数は項目数 ÷ 列数の切り上げ。
+ * 列数: layout='grid-4x2' で 4、'grid-2x4' で 2、それ以外で 1。
+ * 行数は項目数 ÷ 列数の切り上げ。
  * 配置: top-left は (SCREEN_MARGIN, SCREEN_MARGIN) 起点、bottom-right は画面右下から逆算。
  */
 export function computeMainPanelLayout(input: {
@@ -137,7 +145,7 @@ export function computeMainPanelLayout(input: {
   cellHeight: number
   columns: number
 } {
-  const columns = input.layout === 'grid-4x2' ? 4 : 1
+  const columns = input.layout === 'grid-4x2' ? 4 : input.layout === 'grid-2x4' ? 2 : 1
   const rows = Math.max(1, Math.ceil(input.itemCount / columns))
   const cellWidth = input.maxTextWidth + PADDING_X
   const cellHeight = ITEM_HEIGHT
@@ -215,6 +223,7 @@ export class TouchMenuOverlay extends Container {
       const hit = new Container()
       hit.eventMode = 'static'
       hit.cursor = 'pointer'
+      hit.on('pointerdown', () => suppressNextTouchTap())
       hit.on('pointertap', () => this.handleItemTap(item))
       this.addChild(hit)
       this.addChild(text)
@@ -272,6 +281,7 @@ export class TouchMenuOverlay extends Container {
       const hit = new Container()
       hit.eventMode = 'static'
       hit.cursor = 'pointer'
+      hit.on('pointerdown', () => suppressNextTouchTap())
       hit.on('pointertap', () => this.handleSubItemTap(sub))
       this.subContainer.addChild(hit)
       this.subContainer.addChild(text)
