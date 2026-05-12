@@ -59,6 +59,118 @@ function base64DecodedLength(b64: string): number {
   return Math.floor((cleaned.length * 3) / 4) - pad;
 }
 
+/**
+ * GET /api/projects/:name/assets/raw/*assetPath
+ *
+ * GitHub Contents API でファイルを取得し、base64 デコードしてバイナリとして返す。
+ * private repo でも GITHUB_TOKEN があれば取得できる。
+ *
+ * assetPath は "images/placeholder-kako/smile.png" のような
+ * assets/ 以下の相対パスを想定している（assets/ プレフィックスなし）。
+ * Worker 内では `assets/${assetPath}` に展開して GitHub API に渡す。
+ *
+ * 【認証設計】
+ * このエンドポイントは認証なし（requireEditor 不要）。
+ * 理由: PlayerScreen（一般ユーザー向け再生）が認証なしでアセットを取得する必要があるため。
+ * 脅威モデル: assets/ 配下には公開予定の素材のみ置く運用とする。
+ * 機密性の高いファイルは assets/ に置かないこと。
+ *
+ * 【GitHub Contents API の制限】
+ * 1 ファイル最大 1 MiB まで content（base64）を返す。
+ * それを超えるファイルは content が空文字列になるため、413 を返す。
+ * name-name の画像・音声アセットは通常この範囲内に収まる想定。
+ */
+export async function handleRawAsset(
+  request: Request,
+  env: Env,
+  projectName: string,
+  assetPath: string,
+): Promise<Response> {
+  const project = findProject(projectName);
+  if (!project) {
+    return new Response("project not found", { status: 404 });
+  }
+
+  // path traversal 防御: ".." を含むパスは拒否する。
+  // GitHub Contents API 自体も "../" パスを拒否するが、早期リターンで明示する。
+  if (assetPath.includes("..")) {
+    return new Response("invalid path", { status: 400 });
+  }
+
+  const url = new URL(request.url);
+  const ref = url.searchParams.get("ref") ?? "main";
+  const { owner, repo } = splitRepo(project);
+  const path = `assets/${assetPath}`;
+
+  const octokit = createGitHub(env);
+  try {
+    const res = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+      owner,
+      repo,
+      path,
+      ref,
+    });
+    logRateLimit("assets.raw", res.headers as Record<string, string | number | undefined>);
+
+    const data = res.data as { type: string; content?: string; encoding?: string; size?: number };
+    if (data.type !== "file") {
+      return new Response("not a file", { status: 404 });
+    }
+
+    // GitHub Contents API は 1 MiB 超のファイルで content を空文字列にして返す。
+    // その場合は Git Data API (blob) 経由が必要だが、現状は 413 で通知する。
+    if (typeof data.content !== "string" || data.content === "") {
+      return new Response(
+        `asset too large for Contents API (size=${data.size ?? "unknown"} bytes, max ~1 MiB). Use Git LFS or reduce file size.`,
+        { status: 413 },
+      );
+    }
+
+    // base64 → バイナリ（Workers の atob + charCodeAt が最も確実）
+    const cleanedB64 = data.content.replace(/\s+/g, "");
+    const binaryString = atob(cleanedB64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    // Content-Type を拡張子から推定
+    const ext = assetPath.split(".").pop()?.toLowerCase() ?? "";
+    const mimeMap: Record<string, string> = {
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      gif: "image/gif",
+      webp: "image/webp",
+      svg: "image/svg+xml",
+      mp3: "audio/mpeg",
+      ogg: "audio/ogg",
+      wav: "audio/wav",
+      mp4: "video/mp4",
+      webm: "video/webm",
+    };
+    const contentType = mimeMap[ext] ?? "application/octet-stream";
+
+    // CORS: 画像・音声はブラウザの <img>/<audio> から直接参照されるため * を許可する。
+    // Worker 全体の CORS（ALLOWED_ORIGIN 検証）と別に設定しているが、
+    // assets/raw は「ゲームプレイヤーが認証なしで取得する公開素材」の想定のため意図的。
+    // cache-control: 5分（300秒）は開発中の素材更新と帯域コストのバランス。
+    // ?ref=develop でのプレビュー時はブラウザキャッシュに注意。
+    return new Response(bytes, {
+      status: 200,
+      headers: {
+        "content-type": contentType,
+        "cache-control": "public, max-age=300",
+        "access-control-allow-origin": "*",
+      },
+    });
+  } catch (err) {
+    const ne = normalizeError(err);
+    logRateLimit("assets.raw.err", ne.responseHeaders);
+    return new Response(ne.message, { status: ne.status });
+  }
+}
+
 export async function handleListAssets(
   request: Request,
   env: Env,
