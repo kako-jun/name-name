@@ -1224,6 +1224,15 @@ export class NovelRenderer {
       this.dialogBox.setBorderless(event.DialogBorderless.borderless)
       return
     }
+    if ('TitleShow' in event) {
+      // 動画タイトル中央表示 (llll-ll-media 用)
+      const ts = (event as { TitleShow: { text: string; font_family?: string; position?: string } })
+        .TitleShow
+      const font =
+        ts.font_family ?? this.gameDefaultFontFamily ?? NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+      this.characterLayer.showTitle(ts.text, font, ts.position)
+      return
+    }
     if ('Shake' in event) {
       // 画面シェイク (#143) — fire-and-forget
       this.startShake(event.Shake.intensity_px, event.Shake.duration_ms)

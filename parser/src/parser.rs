@@ -842,6 +842,46 @@ fn parse_directive(line: &str) -> Option<Event> {
         return parse_animate_directive(rest);
     }
 
+    // [タイトル: TEXT] / [タイトル: TEXT, font=bellpoke_font] / [タイトル: TEXT, 位置=右外]
+    // 動画用センターオーバーレイ。空テキストなら退場扱い。
+    // 位置を指定すると初期位置を変えられる (右外 = 画面外右から登場用)。
+    if let Some(rest) = content.strip_prefix("タイトル:") {
+        let mut text = String::new();
+        let mut font_family: Option<String> = None;
+        let mut position: Option<String> = None;
+        let mut first = true;
+        for raw in rest.split(',') {
+            let part = raw.trim();
+            if first {
+                first = false;
+                text = part.to_string();
+                continue;
+            }
+            if let Some((k, v)) = part.split_once('=') {
+                match k.trim() {
+                    "font" | "font_family" | "フォント" => {
+                        let v = v.trim();
+                        if !v.is_empty() {
+                            font_family = Some(v.to_string());
+                        }
+                    }
+                    "position" | "位置" => {
+                        let v = v.trim();
+                        if !v.is_empty() {
+                            position = Some(v.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        return Some(Event::TitleShow {
+            text,
+            font_family,
+            position,
+        });
+    }
+
     // [枠なし] / [枠あり] (#135)
     if content == "枠なし" {
         return Some(Event::DialogBorderless { borderless: true });

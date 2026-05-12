@@ -411,6 +411,20 @@ pub enum Event {
         #[serde(default)]
         easing: Easing,
     },
+    /// 動画タイトル表示 (llll-ll-media 用、#TBD)。
+    /// `[タイトル: TEXT]` で画面中央に Text オーバーレイを出す。
+    /// `target=Title` で [アニメ] のターゲットになれるよう、CharacterLayer に
+    /// 名前 "Title" の text-only キャラとして登録される。
+    /// 既に Title が表示されているときは text を差し替える。空文字なら退場。
+    TitleShow {
+        text: String,
+        /// font 指定。未指定なら chapter の font_family を使う。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_family: Option<String>,
+        /// 初期位置 (右外 / 中央 / 左外 等)。未指定なら center。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        position: Option<String>,
+    },
     /// 文字ウィンドウ枠の ON/OFF を切り替える (#135)。
     ///
     /// `[枠なし]` で枠なしナレ風モードを ON、`[枠あり]` で元に戻す。
