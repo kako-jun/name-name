@@ -263,6 +263,19 @@ export class NovelRenderer {
     // シークバー（ダイアログボックスの下）
     this.seekBar.setOnSeek((displayIndex) => this.seekToTextEventDisplayIndex(displayIndex))
     this.app.stage.addChild(this.seekBar)
+    // デフォルトで非表示。マウスがキャンバス下端付近に来たら表示する (簡易ホバー)
+    this.seekBar.visible = false
+    if (this.app.canvas) {
+      const canvas = this.app.canvas as HTMLCanvasElement
+      canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect()
+        const yRatio = (e.clientY - rect.top) / rect.height
+        this.seekBar.visible = yRatio > 0.78
+      })
+      canvas.addEventListener('mouseleave', () => {
+        this.seekBar.visible = false
+      })
+    }
 
     // シーンカウンター
     const counterStyle = new TextStyle({
@@ -275,6 +288,8 @@ export class NovelRenderer {
     this.counterText.x = this.screenWidth - 20
     this.counterText.y = 16
     this.counterText.anchor.set(1, 0)
+    // カウンターはデバッグ HUD 側で出すので Pixi 側では非表示にしておく
+    this.counterText.visible = false
     this.app.stage.addChild(this.counterText)
 
     // 選択肢オーバーレイ（カウンターより上に配置）
@@ -302,6 +317,78 @@ export class NovelRenderer {
   /**
    * イベントキューを設定して最初の表示イベントを表示
    */
+  /**
+   * デバッグ用: 現在の実行状態を返す。開発時の HUD 表示に使う。
+   */
+  getDebugState(): {
+    eventIndex: number
+    eventCount: number
+    eventKind: string
+    eventText?: string
+    autoMode: boolean
+    waitingForChoice: boolean
+    waitingForWait: boolean
+    currentResolvedFontFamily: string | null
+    sceneId: string | null
+    characters: Array<{
+      name: string
+      expression: string
+      position: string
+      x: number
+      y: number
+      scale: number
+    }>
+  } {
+    const current = this.resolvedEvents[this.eventIndex]
+    let kind = '(none)'
+    let text: string | undefined
+    if (current && typeof current === 'object') {
+      kind = Object.keys(current)[0] ?? '(unknown)'
+      // 本文を見えるところまで取り出す
+      const v = (current as Record<string, unknown>)[kind]
+      if (v && typeof v === 'object') {
+        const maybeText = (
+          v as { text?: unknown; line?: unknown; path?: unknown; target?: unknown }
+        ).text
+        if (Array.isArray(maybeText) && maybeText.length > 0)
+          text = JSON.stringify(maybeText[0]).slice(0, 120)
+        else if (typeof (v as { line?: unknown }).line === 'string')
+          text = (v as { line: string }).line
+        else if (typeof (v as { path?: unknown }).path === 'string')
+          text = (v as { path: string }).path
+        else if (typeof (v as { target?: unknown }).target === 'string')
+          text = (v as { target: string }).target
+      }
+    }
+    const chars = this.characterLayer.getCharacterStates().map((s) => {
+      // 私的フィールドへの最小アクセス: x/y/scale をスナップショット
+      const inner = this.characterLayer as unknown as {
+        characters: Map<string, { sprite: { x: number; y: number; scale: { x: number } } }>
+      }
+      const st = inner.characters.get(s.name)
+      return {
+        name: s.name,
+        expression: s.expression,
+        position: s.position,
+        x: st?.sprite.x ?? -1,
+        y: st?.sprite.y ?? -1,
+        scale: st?.sprite.scale.x ?? -1,
+      }
+    })
+    return {
+      eventIndex: this.eventIndex,
+      eventCount: this.resolvedEvents.length,
+      eventKind: kind,
+      eventText: text,
+      autoMode: this.autoMode,
+      waitingForChoice: this.waitingForChoice,
+      waitingForWait: this.waitingForWait,
+      currentResolvedFontFamily: this.currentResolvedFontFamily,
+      sceneId: this.currentSceneId ?? null,
+      characters: chars,
+    }
+  }
+
   setEvents(events: Event[]): void {
     // PixiJS v8 の Assets.load で取得した Texture は Assets の内部キャッシュに残り続けるため、
     // キャッシュ済みURLを Assets.unload で解放してから textureCache をクリアする

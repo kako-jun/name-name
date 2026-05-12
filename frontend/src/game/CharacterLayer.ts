@@ -4,16 +4,19 @@
  * PixiJS Container 上でキャラクター立ち絵の表示・表情変更・退場を管理する。
  */
 
-import { Assets, Container, Sprite, Ticker } from 'pixi.js'
+import { Assets, Container, Sprite, Text, TextStyle, Ticker } from 'pixi.js'
 import type { Easing } from '../types'
 import { applyEasing, resolveDelta } from './easing'
-import { ASPECT_RATIOS } from './constants'
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
 const CHARACTER_X_RATIO: Record<string, number> = {
   left: 150 / 800, // 0.1875
   center: 400 / 800, // 0.5
   right: 650 / 800, // 0.8125
+  // オフスクリーン位置（スクロールイン/アウトの初期/終了位置として使う）
+  // スプライト中心の x。画像の半幅 (~400 logical) を考えると 1.5 にしないと右端が見える
+  off_left: -400 / 800, // -0.5, 画像中心が画面左 0.5 分外
+  off_right: 1200 / 800, // 1.5, 画像中心が画面右 0.5 分外
 }
 
 /**
@@ -42,6 +45,13 @@ const POSITION_ALIASES_JA: Record<string, string> = {
   右: 'right',
   右寄り: 'right',
   右端: 'right',
+  // オフスクリーン（スクロールイン/アウトの起点・終点）
+  右外: 'off_right',
+  画面外右: 'off_right',
+  オフ右: 'off_right',
+  左外: 'off_left',
+  画面外左: 'off_left',
+  オフ左: 'off_left',
 }
 
 const POSITION_ALIASES_EN: Record<string, string> = {
@@ -57,17 +67,29 @@ export function normalizePosition(position: string): string {
   return POSITION_ALIASES_JA[position] ?? POSITION_ALIASES_EN[position] ?? position
 }
 
-/** 足元 Y 座標の比率（横長 450px 基準: 380/450 ≒ 0.844） */
-const CHARACTER_Y_RATIO = 380 / ASPECT_RATIOS['16:9'].height
+/** 足元 Y 座標の比率。
+ *  以前は 380/450 ≒ 0.844 (DialogBox の上端あたり) だったが、
+ *  枠なし・教育動画モードでは立ち絵の下端を画面下端まで下げたほうが座りが良い。
+ *  影響範囲: 全 game の立ち絵が画面下端まで下がる。既存 game が枠ありで足元位置を
+ *  そのままにしたい場合は別途オプション化が要る。 */
+const CHARACTER_Y_RATIO = 1.0
 
 interface CharacterState {
   sprite: Sprite
+  /** 立ち絵の上に表示する名前ラベル（off_right/off_left で登場したとき自動付与）。
+   *  sprite と同じ x で追従する。退場時に一緒に destroy する。 */
+  label?: Text
   position: string
   expression: string
   /** 進行中アニメーション。null なら静的 */
   animation: ActiveAnimation | null
   /** フェードイン/アウトアニメーション。退場時は完了後に sprite を destroy する */
   fadeAnimation: FadeAnimation | null
+  /** 2コマ自動切替 (expression が `*-a` なら `*-b` と 1 秒ごとに交互)。
+   *  remove() / clear() で interval を必ずクリアする */
+  idleIntervalId?: ReturnType<typeof setInterval>
+  /** show() 時の assetBaseUrl。アニメ開始時に idle cycle を仕掛けるとき再利用する */
+  assetBaseUrl: string
 }
 
 interface FadeAnimation {
@@ -121,6 +143,9 @@ export class CharacterLayer extends Container {
   private elapsedMs: number = 0
   /** 足元 Y 座標（screenHeight * CHARACTER_Y_RATIO） */
   private readonly characterY: number
+  /** auto-scale 計算のために screenWidth / screenHeight を保持 */
+  private readonly screenWidth: number
+  private readonly screenHeight: number
   /** X 座標テーブル（screenWidth * CHARACTER_X_RATIO[pos]） */
   private readonly positionX: Record<string, number>
 
@@ -130,11 +155,15 @@ export class CharacterLayer extends Container {
    */
   constructor(screenWidth: number, screenHeight: number) {
     super()
+    this.screenWidth = screenWidth
+    this.screenHeight = screenHeight
     this.characterY = screenHeight * CHARACTER_Y_RATIO
     this.positionX = {
       left: screenWidth * CHARACTER_X_RATIO.left,
       center: screenWidth * CHARACTER_X_RATIO.center,
       right: screenWidth * CHARACTER_X_RATIO.right,
+      off_left: screenWidth * CHARACTER_X_RATIO.off_left,
+      off_right: screenWidth * CHARACTER_X_RATIO.off_right,
     }
   }
 
@@ -205,10 +234,32 @@ export class CharacterLayer extends Container {
     sprite.alpha = instant ? 1 : 0
     this.addChild(sprite)
 
+    // off_right/off_left で登場した立ち絵には名前ラベルを上に自動付与する。
+    // llll-ll-media の「車の画像と同じ幅で上に名前」を実現するため。
+    // sprite と同じ x を毎フレーム追従させるので、アニメ時も自然に一緒に動く。
+    let label: Text | undefined
+    if (normalizedPosition === 'off_right' || normalizedPosition === 'off_left') {
+      label = new Text({
+        text: character,
+        style: new TextStyle({
+          fontFamily: 'bellpoke_font, sans-serif',
+          fontSize: 48,
+          fill: 0xffffff,
+        }),
+      })
+      label.anchor.set(0.5, 1)
+      label.x = sprite.x
+      label.y = this.screenHeight * 0.18 // 画面上から 18% の位置 (label の下端)
+      label.alpha = instant ? 1 : 0
+      this.addChild(label)
+    }
+
     const state: CharacterState = {
       sprite,
+      label,
       position: normalizedPosition,
       expression,
+      assetBaseUrl,
       animation: null,
       fadeAnimation: instant
         ? null
@@ -222,7 +273,49 @@ export class CharacterLayer extends Container {
     }
     this.characters.set(character, state)
     if (state.fadeAnimation) this.ensureTicker()
-    this.loadTexture(sprite, expression, assetBaseUrl)
+    this.loadTexture(sprite, expression, assetBaseUrl, label)
+  }
+
+  /**
+   * 進行中の transform アニメーション (animate()) が走っている間だけ
+   * `-a` / `-b` を 1 秒ごとに交互させる。停止状態では `-a` 固定。
+   * 呼び出し側は animate() の開始/終了タイミングで呼ぶ。
+   */
+  private startIdleCycle(character: string, assetBaseUrl: string): void {
+    const state = this.characters.get(character)
+    if (!state || state.idleIntervalId) return
+    const match = state.expression.match(/^(.+)-a$/)
+    if (!match) return
+    const basename = match[1]
+    let frame: 'a' | 'b' = 'a'
+    const intervalId = setInterval(() => {
+      const cur = this.characters.get(character)
+      if (!cur || cur.sprite.destroyed) {
+        clearInterval(intervalId)
+        return
+      }
+      frame = frame === 'a' ? 'b' : 'a'
+      const nextExpression = `${basename}-${frame}`
+      cur.expression = nextExpression
+      this.loadTexture(cur.sprite, nextExpression, assetBaseUrl, cur.label)
+    }, 1000)
+    state.idleIntervalId = intervalId
+  }
+
+  private stopIdleCycle(character: string, assetBaseUrl: string): void {
+    const state = this.characters.get(character)
+    if (!state || !state.idleIntervalId) return
+    clearInterval(state.idleIntervalId)
+    state.idleIntervalId = undefined
+    // 停止後は必ず -a に戻す
+    const match = state.expression.match(/^(.+)-[ab]$/)
+    if (match) {
+      const aExpression = `${match[1]}-a`
+      if (state.expression !== aExpression) {
+        state.expression = aExpression
+        this.loadTexture(state.sprite, aExpression, assetBaseUrl, state.label)
+      }
+    }
   }
 
   /**
@@ -289,6 +382,8 @@ export class CharacterLayer extends Container {
       toRotation,
       toScale,
     }
+    // アニメ開始時に 2 コマ idle を回す（停止時は -a 固定なので、ここで切替を始める）
+    this.startIdleCycle(character, state.assetBaseUrl)
     this.ensureTicker()
   }
 
@@ -319,6 +414,8 @@ export class CharacterLayer extends Container {
             state.sprite.rotation = a.toRotation
             state.sprite.scale.set(a.toScale, a.toScale)
             state.animation = null
+            // アニメ終了 → 2 コマ切替を止めて -a に戻す
+            this.stopIdleCycle(name, state.assetBaseUrl)
           } else {
             anyActive = true
             const eased = applyEasing(a.easing, t)
@@ -337,14 +434,26 @@ export class CharacterLayer extends Container {
             state.sprite.alpha = f.toAlpha
             state.fadeAnimation = null
             if (f.destroyOnComplete) {
+              if (state.idleIntervalId) clearInterval(state.idleIntervalId)
               this.removeChild(state.sprite)
               state.sprite.destroy()
+              if (state.label) {
+                this.removeChild(state.label)
+                state.label.destroy()
+                state.label = undefined
+              }
               this.characters.delete(name)
             }
           } else {
             anyActive = true
             state.sprite.alpha = f.fromAlpha + (f.toAlpha - f.fromAlpha) * tf
+            if (state.label) state.label.alpha = state.sprite.alpha
           }
+        }
+
+        // 名前ラベルを sprite に追従させる（x のみ。y は loadTexture で画像高さに合わせて固定済み）
+        if (state.label) {
+          state.label.x = state.sprite.x
         }
       }
       if (!anyActive) {
@@ -373,9 +482,18 @@ export class CharacterLayer extends Container {
     const state = this.characters.get(character)
     if (!state) return
     const instant = options?.instant === true
+    if (state.idleIntervalId) {
+      clearInterval(state.idleIntervalId)
+      state.idleIntervalId = undefined
+    }
     if (instant) {
       this.removeChild(state.sprite)
       state.sprite.destroy()
+      if (state.label) {
+        this.removeChild(state.label)
+        state.label.destroy()
+        state.label = undefined
+      }
       this.characters.delete(character)
       this.maybeStopTicker()
       return
@@ -406,8 +524,13 @@ export class CharacterLayer extends Container {
    */
   clear(): void {
     for (const [, state] of this.characters) {
+      if (state.idleIntervalId) clearInterval(state.idleIntervalId)
       this.removeChild(state.sprite)
       state.sprite.destroy()
+      if (state.label) {
+        this.removeChild(state.label)
+        state.label.destroy()
+      }
     }
     this.characters.clear()
     this.maybeStopTicker()
@@ -416,7 +539,12 @@ export class CharacterLayer extends Container {
   /**
    * テクスチャをロードして Sprite に適用する
    */
-  private loadTexture(sprite: Sprite, expression: string, assetBaseUrl: string): void {
+  private loadTexture(
+    sprite: Sprite,
+    expression: string,
+    assetBaseUrl: string,
+    label?: Text
+  ): void {
     if (!assetBaseUrl) return
 
     const cleanExpression = expression.replace(/^\//, '')
@@ -426,6 +554,28 @@ export class CharacterLayer extends Container {
       .then((texture) => {
         // destroy 後に解決した場合は反映しない（UAF 防止）
         if (sprite.destroyed) return
+        // テクスチャが論理画面より大きければ、画面内に収まるよう自動スケール
+        // (llll-ll-media の車のように 1600x900 級の素材を 800x450 論理画面に乗せるため)
+        const sw = this.screenWidth
+        const sh = this.screenHeight
+        if (texture.width > sw || texture.height > sh) {
+          const scale = Math.min(sw / texture.width, sh / texture.height)
+          sprite.scale.set(scale)
+        } else {
+          sprite.scale.set(1)
+        }
+        // ラベルを車の幅に収める。
+        // - natural width が車幅を超えたら縮小、収まっていれば等倍のまま (大きくしない)
+        // - label.anchor=(0.5, 1) なので label.x = sprite.x で水平方向は中央揃え
+        if (label && !label.destroyed) {
+          const spriteW = sprite.width
+          label.scale.set(1, 1)
+          const naturalW = label.width
+          if (naturalW > spriteW && naturalW > 0) {
+            const s = spriteW / naturalW
+            label.scale.set(s, s)
+          }
+        }
         sprite.texture = texture
       })
       .catch((err) => {

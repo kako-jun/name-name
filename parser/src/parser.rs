@@ -661,16 +661,16 @@ pub fn parse(input: &str) -> Document {
                 text_lines.push(next_trimmed.to_string());
                 pos += 1;
             }
-            if !text_lines.is_empty() {
-                current_events.push(Event::Dialog {
-                    character: Some(character),
-                    expression,
-                    position,
-                    text: text_lines,
-                    voice_path: pending_voice_path.take(),
-                    font_family: pending_font_family.take(),
-                });
-            }
+            // body が空でも Dialog を発行する (立ち絵だけ登場させて台詞は無し、
+            // のような動画用途で必要)。renderer 側で空テキストはタイプライタ抑制する。
+            current_events.push(Event::Dialog {
+                character: Some(character),
+                expression,
+                position,
+                text: if text_lines.is_empty() { vec![String::new()] } else { text_lines },
+                voice_path: pending_voice_path.take(),
+                font_family: pending_font_family.take(),
+            });
             continue;
         }
 

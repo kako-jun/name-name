@@ -220,7 +220,7 @@ export class DialogBox extends Container {
       marginX = 20,
       marginBottom = 20,
       padding = 20,
-      fontSize = 22,
+      fontSize = 40,
       fontFamily = "'Noto Sans JP', sans-serif",
       msPerChar = DEFAULT_MS_PER_CHAR,
       borderless = false,
@@ -452,6 +452,17 @@ export class DialogBox extends Container {
    * @param onTypingDone タイピング完了時コールバック（オートモード用）
    */
   setDialog(name: string | null, text: string, onTypingDone?: (() => void) | null): void {
+    // テキストが空 (空文字 / 空白だけ / 全角空白だけ) なら DialogBox は隠す。
+    // 立ち絵を登場させるためだけの空ダイアログで ▼ インジケーターや透明枠が残るのを避ける。
+    const trimmedText = text.replace(/\s/g, '').replace(/\u3000/g, '')
+    if (trimmedText === '') {
+      this.hide()
+      this.onTypingDone = null
+      // 呼び出し側 (NovelRenderer) は onTypingDone でオートモードを進めるので、
+      // 即時 done を通知する
+      if (onTypingDone) onTypingDone()
+      return
+    }
     this.currentText = text
     this.showing = true
     this.bg.visible = !this.borderless
