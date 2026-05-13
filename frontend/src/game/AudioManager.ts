@@ -30,6 +30,10 @@ export class AudioManager {
   // per-line voice (#144)
   private voiceSource: AudioBufferSourceNode | null = null
 
+  // 動画エクスポート用キャプチャ先 (#228)。enableCapture で生成し、bgm/seMasterGain
+  // をここにも繋いで MediaRecorder に流す。
+  private captureDest: MediaStreamAudioDestinationNode | null = null
+
   // 最後に発生した警告 (DebugOverlay 表示用)。
   // ensureContext 未呼び出し等、進行は止めないが原因可視化したい状況で記録する。
   private lastWarning: string | null = null
@@ -59,12 +63,50 @@ export class AudioManager {
       this.bgmMasterGain = this.ctx.createGain()
       this.bgmMasterGain.gain.value = this.bgmVolume
       this.bgmMasterGain.connect(this.ctx.destination)
+      if (this.captureDest) this.bgmMasterGain.connect(this.captureDest)
     }
     if (!this.seMasterGain) {
       this.seMasterGain = this.ctx.createGain()
       this.seMasterGain.gain.value = this.seVolume
       this.seMasterGain.connect(this.ctx.destination)
+      if (this.captureDest) this.seMasterGain.connect(this.captureDest)
     }
+  }
+
+  /**
+   * 動画エクスポート用に MediaStream を取得する (#228)。
+   * 既存の bgm/seMasterGain を `MediaStreamAudioDestinationNode` にも分岐して、
+   * `MediaRecorder` に渡せる音声ストリームを返す。`destination` への通常配線は維持するため、
+   * モニタリングはスピーカーから引き続き聴こえる。
+   *
+   * 録画終了後は `disableCapture()` でノードを解放する。
+   */
+  enableCapture(): MediaStream | null {
+    this.ensureContext()
+    if (!this.ctx) return null
+    if (!this.captureDest) {
+      this.captureDest = this.ctx.createMediaStreamDestination()
+      // 既に作成済みの master gain にも接続
+      if (this.bgmMasterGain) this.bgmMasterGain.connect(this.captureDest)
+      if (this.seMasterGain) this.seMasterGain.connect(this.captureDest)
+    }
+    return this.captureDest.stream
+  }
+
+  /** enableCapture で繋いだ録音 destination を切断する (#228) */
+  disableCapture(): void {
+    if (!this.captureDest) return
+    try {
+      this.bgmMasterGain?.disconnect(this.captureDest)
+    } catch {
+      // already disconnected
+    }
+    try {
+      this.seMasterGain?.disconnect(this.captureDest)
+    } catch {
+      // already disconnected
+    }
+    this.captureDest = null
   }
 
   /** BGM マスター音量を設定する（0..1） */

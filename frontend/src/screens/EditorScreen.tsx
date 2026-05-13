@@ -15,6 +15,13 @@ import {
   findAllRpgScenes,
 } from '../game/rpgProjectFromDoc'
 import { createApiClient } from '../api/client'
+import type { NovelRenderer } from '../game/NovelRenderer'
+import {
+  exportVideo,
+  downloadBlob,
+  pickSupportedMimeType,
+  type VideoExportOptions,
+} from '../game/VideoExporter'
 
 // kako-jun/name-name#107: 旧 FastAPI モデルでは autosave 1s debounce で
 // ワーキングディレクトリに PUT し、commit ボタンで Git push していた。
@@ -67,6 +74,13 @@ function EditorScreen({
   onNavigateToAssets,
 }: EditorScreenProps) {
   const [mode, setMode] = useState<Mode>('edit')
+  // 動画エクスポート (#228)。プレビュー中の renderer 参照と、ダイアログ/進捗状態。
+  const novelRendererRef = useRef<NovelRenderer | null>(null)
+  const [videoExportOpen, setVideoExportOpen] = useState(false)
+  const [videoExportStatus, setVideoExportStatus] = useState<string | null>(null)
+  const [videoExportStartScene, setVideoExportStartScene] = useState('')
+  const [videoExportEndScene, setVideoExportEndScene] = useState('')
+  const [videoExportFps, setVideoExportFps] = useState(30)
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [doc, setDoc] = useState<EventDocument | null>(null)
   // CanvasEditor を再マウントしてエディタ内部 state を完全リセットするためのバージョン。
@@ -105,6 +119,64 @@ function EditorScreen({
 
   // doc 内の全 RPG シーン（シーン選択ドロップダウン用）
   const rpgScenes = useMemo(() => (doc ? findAllRpgScenes(doc) : []), [doc])
+
+  // 動画エクスポート用シーンID一覧（順序保持）(#228)
+  const allSceneIds = useMemo<string[]>(() => {
+    if (!doc) return []
+    const ids: string[] = []
+    for (const ch of doc.chapters) {
+      for (const sc of ch.scenes) ids.push(sc.id)
+    }
+    return ids
+  }, [doc])
+
+  // doc が更新されたら start/end が無効になっていないか同期する
+  useEffect(() => {
+    if (allSceneIds.length === 0) return
+    if (!allSceneIds.includes(videoExportStartScene)) {
+      setVideoExportStartScene(allSceneIds[0])
+    }
+    if (!allSceneIds.includes(videoExportEndScene)) {
+      setVideoExportEndScene(allSceneIds[allSceneIds.length - 1])
+    }
+  }, [allSceneIds, videoExportStartScene, videoExportEndScene])
+
+  const handleStartVideoExport = useCallback(async () => {
+    const renderer = novelRendererRef.current
+    if (!renderer) {
+      setVideoExportStatus('プレビューを開いてから実行してください')
+      return
+    }
+    if (!videoExportStartScene || !videoExportEndScene) {
+      setVideoExportStatus('開始シーンと終了シーンを選択してください')
+      return
+    }
+    const mime = pickSupportedMimeType()
+    if (!mime) {
+      setVideoExportStatus('このブラウザは video/webm の MediaRecorder をサポートしていません')
+      return
+    }
+    setVideoExportStatus('準備中...')
+    const opts: VideoExportOptions = {
+      startSceneId: videoExportStartScene,
+      endSceneId: videoExportEndScene,
+      fps: videoExportFps,
+      mimeType: mime,
+      onProgress: (s) => setVideoExportStatus(s),
+    }
+    try {
+      const result = await exportVideo(renderer, opts)
+      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+      const filename = `${projectName}_${videoExportStartScene}_${videoExportEndScene}_${stamp}.webm`
+      downloadBlob(result.blob, filename)
+      const durSec = (result.durationMs / 1000).toFixed(1)
+      const sizeMb = (result.blob.size / (1024 * 1024)).toFixed(2)
+      setVideoExportStatus(`完了: ${filename} (${durSec}s, ${sizeMb} MB)`)
+    } catch (e) {
+      console.error('[VideoExport] failed', e)
+      setVideoExportStatus(`失敗: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }, [projectName, videoExportStartScene, videoExportEndScene, videoExportFps])
 
   // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
   // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
@@ -523,18 +595,110 @@ function EditorScreen({
               </div>
             )
           ) : (
-            <NovelPlayer
-              events={novelEvents}
-              aspectRatio={doc?.aspect_ratio}
-              choiceStyle={doc?.choice_style ?? null}
-              fontFamily={doc?.font_family ?? null}
-              // Worker proxy 経由で assets を取得（private repo でも動作する）。
-              // NOTE: EditorScreen は develop ブランチでスクリプトを編集するが、
-              // assetBaseUrl はクエリパラメータを持てない設計のため ref=main 固定になる。
-              // develop にしか存在しない素材は EditorScreen のプレビューに表示されない既知の制限。
-              // 解決するには NovelRenderer に ref を個別パラメータとして渡す設計変更が必要（TODO）。
-              assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
-            />
+            <div className="relative w-full h-full">
+              <NovelPlayer
+                events={novelEvents}
+                aspectRatio={doc?.aspect_ratio}
+                choiceStyle={doc?.choice_style ?? null}
+                fontFamily={doc?.font_family ?? null}
+                // Worker proxy 経由で assets を取得（private repo でも動作する）。
+                // NOTE: EditorScreen は develop ブランチでスクリプトを編集するが、
+                // assetBaseUrl はクエリパラメータを持てない設計のため ref=main 固定になる。
+                // develop にしか存在しない素材は EditorScreen のプレビューに表示されない既知の制限。
+                // 解決するには NovelRenderer に ref を個別パラメータとして渡す設計変更が必要（TODO）。
+                assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
+                onRendererReady={(r) => {
+                  novelRendererRef.current = r
+                }}
+              />
+              {/* 動画エクスポート (#228) */}
+              <button
+                type="button"
+                onClick={() => setVideoExportOpen(true)}
+                aria-label="動画エクスポート"
+                title="動画エクスポート"
+                className="absolute top-3 left-3 px-3 h-9 flex items-center gap-1 rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white text-sm font-medium"
+              >
+                <span aria-hidden="true">●</span>
+                <span>録画</span>
+              </button>
+              {videoExportOpen && (
+                <div
+                  className="absolute inset-0 z-50 flex items-center justify-center bg-black/70"
+                  onClick={() => setVideoExportOpen(false)}
+                >
+                  <div
+                    className={`max-w-md w-[90%] p-5 rounded-lg shadow-xl ${isDark ? 'bg-gray-800 text-gray-100' : 'bg-white text-gray-900'}`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <h2 className="text-lg font-bold mb-3">動画エクスポート (WebM)</h2>
+                    <p className="text-xs mb-3 opacity-70">
+                      シナリオ範囲を MediaRecorder
+                      でリアルタイム録画します。実時間がかかり、録画中はタブをアクティブにしておいてください。
+                    </p>
+                    <label className="block text-sm mb-2">
+                      開始シーン
+                      <select
+                        value={videoExportStartScene}
+                        onChange={(e) => setVideoExportStartScene(e.target.value)}
+                        className={`mt-1 w-full px-2 py-1 rounded border ${isDark ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'}`}
+                      >
+                        {allSceneIds.map((id) => (
+                          <option key={id} value={id}>
+                            {id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block text-sm mb-2">
+                      終了シーン
+                      <select
+                        value={videoExportEndScene}
+                        onChange={(e) => setVideoExportEndScene(e.target.value)}
+                        className={`mt-1 w-full px-2 py-1 rounded border ${isDark ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'}`}
+                      >
+                        {allSceneIds.map((id) => (
+                          <option key={id} value={id}>
+                            {id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block text-sm mb-3">
+                      フレームレート
+                      <select
+                        value={videoExportFps}
+                        onChange={(e) => setVideoExportFps(Number(e.target.value))}
+                        className={`mt-1 w-full px-2 py-1 rounded border ${isDark ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'}`}
+                      >
+                        <option value={24}>24 fps</option>
+                        <option value={30}>30 fps</option>
+                        <option value={60}>60 fps</option>
+                      </select>
+                    </label>
+                    {videoExportStatus && (
+                      <div className="text-xs mb-3 opacity-80 break-all">{videoExportStatus}</div>
+                    )}
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setVideoExportOpen(false)}
+                        className={`px-3 py-1 rounded text-sm ${isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-200 hover:bg-gray-300'}`}
+                      >
+                        閉じる
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleStartVideoExport}
+                        className="px-3 py-1 rounded text-sm bg-red-600 hover:bg-red-500 text-white"
+                      >
+                        録画開始
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           )
         ) : (
           // RPGエディタ

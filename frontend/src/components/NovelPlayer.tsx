@@ -26,6 +26,9 @@ interface NovelPlayerProps {
    * docKey が未設定の場合は無視される。
    */
   initialSkipMode?: boolean
+  /** renderer 準備完了時に呼ばれるコールバック (#228 動画エクスポート用)。
+   *  destroy 直前に null で呼ばれる。 */
+  onRendererReady?: (renderer: NovelRenderer | null) => void
 }
 
 function NovelPlayer({
@@ -37,6 +40,7 @@ function NovelPlayer({
   fontFamily,
   docKey,
   initialSkipMode = false,
+  onRendererReady,
 }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
@@ -99,10 +103,12 @@ function NovelPlayer({
       } else {
         renderer.setEvents(events)
       }
+      onRendererReady?.(renderer)
     })
 
     return () => {
       destroyed = true
+      onRendererReady?.(null)
       renderer.destroy()
       rendererRef.current = null
     }
