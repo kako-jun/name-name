@@ -11,6 +11,7 @@ interface DebugState {
   waitingForWait: boolean
   currentResolvedFontFamily: string | null
   sceneId: string | null
+  audioWarning: string | null
   characters: Array<{
     name: string
     expression: string
@@ -81,6 +82,9 @@ export function DebugOverlay({
         {state.waitingForChoice ? 'YES' : '-'}
       </div>
       <div>font: {state.currentResolvedFontFamily ?? '(default)'}</div>
+      {state.audioWarning && (
+        <div style={{ color: '#fb7185', marginTop: 4 }}>⚠ {state.audioWarning}</div>
+      )}
       <div style={{ color: '#fde68a', marginTop: 4 }}>characters ({state.characters.length}):</div>
       {state.characters.map((c) => (
         <div key={c.name}>

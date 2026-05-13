@@ -341,6 +341,7 @@ export class NovelRenderer {
     waitingForWait: boolean
     currentResolvedFontFamily: string | null
     sceneId: string | null
+    audioWarning: string | null
     characters: Array<{
       name: string
       expression: string
@@ -396,6 +397,7 @@ export class NovelRenderer {
       waitingForWait: this.waitingForWait,
       currentResolvedFontFamily: this.currentResolvedFontFamily,
       sceneId: this.currentSceneId ?? null,
+      audioWarning: this.audioManager.getLastWarning(),
       characters: chars,
     }
   }
