@@ -48,6 +48,32 @@ export function DebugOverlay({
 
   if (!state) return null
 
+  const buildText = (): string => {
+    const lines = [
+      'debug',
+      `scene: ${state.sceneId ?? '(none)'}`,
+      `event: ${state.eventIndex + 1} / ${state.eventCount} [${state.eventKind}]`,
+      ...(state.eventText ? [`↳ ${state.eventText}`] : []),
+      `auto: ${state.autoMode ? 'ON' : 'off'} / wait: ${state.waitingForWait ? 'YES' : '-'} / choice: ${state.waitingForChoice ? 'YES' : '-'}`,
+      `font: ${state.currentResolvedFontFamily ?? '(default)'}`,
+      ...(state.audioWarning ? [`⚠ ${state.audioWarning}`] : []),
+      `characters (${state.characters.length}):`,
+      ...state.characters.map(
+        (c) =>
+          `・${c.name} [${c.position}] expr=${c.expression.split('/').pop()} x=${c.x.toFixed(0)} y=${c.y.toFixed(0)} s=${c.scale.toFixed(2)}`
+      ),
+    ]
+    return lines.join('\n')
+  }
+
+  const handleCopy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(buildText())
+    } catch (err) {
+      console.warn('[DebugOverlay] copy failed', err)
+    }
+  }
+
   return (
     <div
       style={{
@@ -66,12 +92,31 @@ export function DebugOverlay({
         lineHeight: 1.35,
         border: '1px solid #2a3140',
         borderRadius: 4,
-        pointerEvents: 'none',
+        // pointerEvents: 'auto' でクリック/選択を許可 (テキストコピー用 #issue-pending)
+        pointerEvents: 'auto',
+        userSelect: 'text',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-all',
       }}
     >
-      <div style={{ color: '#67e8f9', fontWeight: 700 }}>debug</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ color: '#67e8f9', fontWeight: 700, flex: 1 }}>debug</div>
+        <button
+          type="button"
+          onClick={handleCopy}
+          style={{
+            background: 'rgba(103, 232, 249, 0.15)',
+            color: '#67e8f9',
+            border: '1px solid #2a3140',
+            borderRadius: 3,
+            cursor: 'pointer',
+            fontSize: 10,
+            padding: '2px 6px',
+          }}
+        >
+          copy
+        </button>
+      </div>
       <div>scene: {state.sceneId ?? '(none)'}</div>
       <div>
         event: {state.eventIndex + 1} / {state.eventCount} [{state.eventKind}]

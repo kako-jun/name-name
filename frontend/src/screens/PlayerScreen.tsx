@@ -212,11 +212,22 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
                   setHasSaveData(false)
                   setStartWithSkip(false)
                   setTitleDismissed(true)
+                  // user gesture を使って AudioContext を起動する (#issue-pending)。
+                  // autoMode で進行する動画モードでは handleAdvance / handleKeyDown が呼ばれず
+                  // AudioContext が永久 null になるため、ここで明示的に起動する
+                  const renderer = (
+                    window as { __renderer?: { audioManager?: { ensureContext?: () => void } } }
+                  ).__renderer
+                  renderer?.audioManager?.ensureContext?.()
                 }}
                 onContinue={() => {
                   // つづきから: スキップモードで未読位置まで高速進行
                   setStartWithSkip(true)
                   setTitleDismissed(true)
+                  const renderer = (
+                    window as { __renderer?: { audioManager?: { ensureContext?: () => void } } }
+                  ).__renderer
+                  renderer?.audioManager?.ensureContext?.()
                 }}
                 onOpenSettings={() => {
                   // TODO (#141): NovelPlayer の設定パネルを外部から開く ref を追加して
