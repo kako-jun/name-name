@@ -30,6 +30,14 @@ export class AudioManager {
   // per-line voice (#144)
   private voiceSource: AudioBufferSourceNode | null = null
 
+  // 最後に発生した警告 (DebugOverlay 表示用)。
+  // ensureContext 未呼び出し等、進行は止めないが原因可視化したい状況で記録する。
+  private lastWarning: string | null = null
+
+  getLastWarning(): string | null {
+    return this.lastWarning
+  }
+
   /**
    * AudioContext を生成/再開する。
    * ユーザーインタラクション（クリック等）のタイミングで呼ぶこと。
@@ -211,9 +219,23 @@ export class AudioManager {
     // 前のボイスを停止
     this.stopVoice()
 
-    if (!this.ctx) return
+    if (!this.ctx) {
+      // autoMode で「画面に触れず」進行している動画モード等、ensureContext が一度も呼ばれない
+      // ケースで voice 付き Dialog に到達すると、ここで return すると onEnded が呼ばれず
+      // scheduleAutoAdvance がブロックされて永遠 wait になる (#issue-pending)。
+      // 音は出せないが、進行は止めない。原因は lastWarning として DebugOverlay に出す。
+      this.lastWarning =
+        'audio: AudioContext 未初期化 (画面を 1 回タップ or キー入力で起動)。voice/SE/BGM は鳴らないが進行は継続'
+      console.warn('[name-name] playVoice: AudioContext not ready, advancing without playback', url)
+      onEnded?.()
+      return
+    }
+    this.lastWarning = null
     const buffer = await this.loadAudio(url)
-    if (!buffer || !this.ctx) return
+    if (!buffer || !this.ctx) {
+      onEnded?.()
+      return
+    }
 
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
