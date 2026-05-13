@@ -414,6 +414,18 @@ export class NovelRenderer {
   }
 
   /**
+   * 同じ scenario を最初から再開する (texture cache は維持)。
+   * 動画モードの「新規開始」直後に AudioContext を起動してから冒頭の voice 付き event を
+   * 再走させる用途。setEvents() は texture を Assets.unload するため、render と並行すると
+   * Pixi が `Cannot read properties of null (reading 'alphaMode')` で落ちる。restart() は
+   * texture を維持するため安全。
+   */
+  restart(): void {
+    if (this.rawEvents.length === 0) return
+    this.resetAndStartEvents([...this.rawEvents])
+  }
+
+  /**
    * 全シーンを設定して最初のシーンから開始する
    */
   setScenes(scenes: EventScene[]): void {
