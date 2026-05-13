@@ -89,6 +89,8 @@ export class NovelRenderer {
 
   private initialized = false
   private onEndCallback: (() => void) | null = null
+  /** 動画エクスポート用 (#228)。`jumpToScene` / `setScenes` でシーンが切り替わったときに呼ぶ */
+  private onSceneChangeCallback: ((sceneId: string) => void) | null = null
   private assetBaseUrl: string = ''
   private textureCache: Map<string, Texture> = new Map()
   /** setBackground の非同期ロード用トークン。destroy / 再入 の race 回避に使う */
@@ -434,6 +436,7 @@ export class NovelRenderer {
     if (scenes.length > 0) {
       this.currentSceneId = scenes[0].id
       this.setEvents(scenes[0].events)
+      this.onSceneChangeCallback?.(scenes[0].id)
     }
   }
 
@@ -448,6 +451,32 @@ export class NovelRenderer {
     }
     this.currentSceneId = sceneId
     this.resetAndStartEvents([...scene.events])
+    this.onSceneChangeCallback?.(sceneId)
+  }
+
+  /** 現在表示中のシーンID (#228 動画エクスポート用) */
+  getCurrentSceneId(): string | null {
+    return this.currentSceneId
+  }
+
+  /** 登録済みシーンIDの一覧（順序保持）(#228 動画エクスポート UI 用) */
+  getAllSceneIds(): string[] {
+    return this.allScenes.map((s) => s.id)
+  }
+
+  /** 描画 canvas を取得する (#228 `captureStream` 用) */
+  getCanvas(): HTMLCanvasElement | null {
+    return (this.app?.canvas as HTMLCanvasElement | undefined) ?? null
+  }
+
+  /** AudioManager にアクセスする (#228 動画エクスポートの音声配線用) */
+  getAudioManager(): AudioManager {
+    return this.audioManager
+  }
+
+  /** シーン切り替えコールバックを登録する (#228) */
+  setOnSceneChange(cb: ((sceneId: string) => void) | null): void {
+    this.onSceneChangeCallback = cb
   }
 
   /**
