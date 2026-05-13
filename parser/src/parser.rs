@@ -675,16 +675,22 @@ pub fn parse(input: &str) -> Document {
         }
 
         // Narration: > テキスト
-        if trimmed.starts_with("> ") {
+        // `>` 単独 (空 Narration) もサポートする。voice 注入用途で「テキストを画面に出さず voice
+        // だけ Dialog/Narration に紐付けたい」ケース (例: [タイトル:] の voice 紐付け) で使う。
+        // trim() で全角空白も削除されるため `> 　` のような書き方は空 `>` として処理される。
+        if trimmed == ">" || trimmed.starts_with("> ") {
             let mut narration_lines: Vec<String> = Vec::new();
-            while pos < len && lines[pos].trim().starts_with("> ") {
-                let text = lines[pos]
-                    .trim()
-                    .strip_prefix("> ")
-                    .unwrap_or("")
-                    .to_string();
-                narration_lines.push(text);
-                pos += 1;
+            while pos < len {
+                let t = lines[pos].trim();
+                if t == ">" {
+                    narration_lines.push(String::new());
+                    pos += 1;
+                } else if let Some(rest) = t.strip_prefix("> ") {
+                    narration_lines.push(rest.to_string());
+                    pos += 1;
+                } else {
+                    break;
+                }
             }
             current_events.push(Event::Narration {
                 text: narration_lines,
