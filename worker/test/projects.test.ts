@@ -18,13 +18,14 @@ describe("GET /api/projects", () => {
     const res = await worker.fetch(req, ENV, ctx);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { projects: Array<{ name: string }> };
-    expect(body.projects.length).toBe(5);
+    expect(body.projects.length).toBe(6);
     expect(body.projects.map((p) => p.name)).toEqual([
       "ogurasia",
       "skirts-colour",
       "friday-1930",
       "gymnasia",
       "llll-ll-media",
+      "amanuma",
     ]);
   });
 
