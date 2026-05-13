@@ -7,6 +7,8 @@
 import { Assets, Container, Sprite, Text, TextStyle, Ticker } from 'pixi.js'
 import type { Easing } from '../types'
 import { applyEasing, resolveDelta } from './easing'
+import { ensureFontLoaded } from './FontLoader'
+import { TimeController, defaultTimeController } from './TimeController'
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
 const CHARACTER_X_RATIO: Record<string, number> = {
@@ -86,8 +88,8 @@ interface CharacterState {
   /** フェードイン/アウトアニメーション。退場時は完了後に sprite を destroy する */
   fadeAnimation: FadeAnimation | null
   /** 2コマ自動切替 (expression が `*-a` なら `*-b` と 1 秒ごとに交互)。
-   *  remove() / clear() で interval を必ずクリアする */
-  idleIntervalId?: ReturnType<typeof setInterval>
+   *  remove() / clear() で interval を必ずクリアする。TimeController 経由なので number。 */
+  idleIntervalId?: number
   /** show() 時の assetBaseUrl。アニメ開始時に idle cycle を仕掛けるとき再利用する */
   assetBaseUrl: string
 }
@@ -148,15 +150,22 @@ export class CharacterLayer extends Container {
   private readonly screenHeight: number
   /** X 座標テーブル（screenWidth * CHARACTER_X_RATIO[pos]） */
   private readonly positionX: Record<string, number>
+  /** タイマーの抽象化 (動画エクスポート用 virtual モード対応) */
+  private readonly time: TimeController
 
   /**
    * @param screenWidth 論理画面幅（ASPECT_RATIOS から取得した値を渡す）
    * @param screenHeight 論理画面高さ（ASPECT_RATIOS から取得した値を渡す）
    */
-  constructor(screenWidth: number, screenHeight: number) {
+  constructor(
+    screenWidth: number,
+    screenHeight: number,
+    time: TimeController = defaultTimeController
+  ) {
     super()
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
+    this.time = time
     this.characterY = screenHeight * CHARACTER_Y_RATIO
     this.positionX = {
       left: screenWidth * CHARACTER_X_RATIO.left,
@@ -239,19 +248,23 @@ export class CharacterLayer extends Container {
     // sprite と同じ x を毎フレーム追従させるので、アニメ時も自然に一緒に動く。
     let label: Text | undefined
     if (normalizedPosition === 'off_right' || normalizedPosition === 'off_left') {
+      const labelFont = 'bellpoke_font, sans-serif'
       label = new Text({
         text: character,
-        style: new TextStyle({
-          fontFamily: 'bellpoke_font, sans-serif',
-          fontSize: 48,
-          fill: 0xffffff,
-        }),
+        style: new TextStyle({ fontFamily: labelFont, fontSize: 48, fill: 0xffffff }),
       })
       label.anchor.set(0.5, 1)
       label.x = sprite.x
       label.y = this.screenHeight * 0.18 // 画面上から 18% の位置 (label の下端)
       label.alpha = instant ? 1 : 0
       this.addChild(label)
+      const labelRef = label
+      void ensureFontLoaded(labelFont)
+        .then(() => {
+          if (labelRef.destroyed) return
+          labelRef.style = new TextStyle({ fontFamily: labelFont, fontSize: 48, fill: 0xffffff })
+        })
+        .catch(() => {})
     }
 
     const state: CharacterState = {
@@ -288,10 +301,10 @@ export class CharacterLayer extends Container {
     if (!match) return
     const basename = match[1]
     let frame: 'a' | 'b' = 'a'
-    const intervalId = setInterval(() => {
+    const intervalId = this.time.setInterval(() => {
       const cur = this.characters.get(character)
       if (!cur || cur.sprite.destroyed) {
-        clearInterval(intervalId)
+        this.time.clearInterval(intervalId)
         return
       }
       frame = frame === 'a' ? 'b' : 'a'
@@ -305,7 +318,7 @@ export class CharacterLayer extends Container {
   private stopIdleCycle(character: string, assetBaseUrl: string): void {
     const state = this.characters.get(character)
     if (!state || !state.idleIntervalId) return
-    clearInterval(state.idleIntervalId)
+    this.time.clearInterval(state.idleIntervalId)
     state.idleIntervalId = undefined
     // 停止後は必ず -a に戻す
     const match = state.expression.match(/^(.+)-[ab]$/)
@@ -335,6 +348,18 @@ export class CharacterLayer extends Container {
         existing.label.text = text
         existing.label.style = new TextStyle({ fontFamily, fontSize: 64, fill: 0xffffff })
       }
+      // position が指定されていれば再配置する (再度別 position から登場させる用途)
+      if (position) {
+        const normalized = normalizePosition(position)
+        const newX = this.positionX[normalized] ?? this.screenWidth * 0.5
+        existing.sprite.x = newX
+        if (existing.label && !existing.label.destroyed) {
+          existing.label.x = newX
+        }
+        existing.position = normalized
+        // 進行中の transform アニメがあれば破棄 (位置が壊れるので)
+        existing.animation = null
+      }
       return
     }
     // sprite は不可視 (no texture) のアンカー。CharacterState を保つために置く。
@@ -354,6 +379,14 @@ export class CharacterLayer extends Container {
     label.x = sprite.x
     label.y = sprite.y
     this.addChild(label)
+    // フォントが Google Fonts / @font-face で非同期ロードの場合、初回は fallback で
+    // ベイクされるため、ロード完了後に style を再適用してグリフを差し替える
+    void ensureFontLoaded(fontFamily)
+      .then(() => {
+        if (label.destroyed) return
+        label.style = new TextStyle({ fontFamily, fontSize: 64, fill: 0xffffff })
+      })
+      .catch(() => {})
 
     this.characters.set(NAME, {
       sprite,
@@ -482,7 +515,7 @@ export class CharacterLayer extends Container {
             state.sprite.alpha = f.toAlpha
             state.fadeAnimation = null
             if (f.destroyOnComplete) {
-              if (state.idleIntervalId) clearInterval(state.idleIntervalId)
+              if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
               this.removeChild(state.sprite)
               state.sprite.destroy()
               if (state.label) {
@@ -531,7 +564,7 @@ export class CharacterLayer extends Container {
     if (!state) return
     const instant = options?.instant === true
     if (state.idleIntervalId) {
-      clearInterval(state.idleIntervalId)
+      this.time.clearInterval(state.idleIntervalId)
       state.idleIntervalId = undefined
     }
     if (instant) {
@@ -572,7 +605,7 @@ export class CharacterLayer extends Container {
    */
   clear(): void {
     for (const [, state] of this.characters) {
-      if (state.idleIntervalId) clearInterval(state.idleIntervalId)
+      if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
       this.removeChild(state.sprite)
       state.sprite.destroy()
       if (state.label) {
