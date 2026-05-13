@@ -215,19 +215,45 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
                   // user gesture を使って AudioContext を起動する (#issue-pending)。
                   // autoMode で進行する動画モードでは handleAdvance / handleKeyDown が呼ばれず
                   // AudioContext が永久 null になるため、ここで明示的に起動する
+                  // さらに scenario は TitleOverlay 表示中に既に最初の text event まで進行している
+                  // ため、AudioContext 起動後に setEvents で再リセットして最初から走らせる
+                  // (これをしないと冒頭の voice 付き Narration/Dialog が AudioContext null のまま
+                  // 発火済みで再生されない)。
                   const renderer = (
-                    window as { __renderer?: { audioManager?: { ensureContext?: () => void } } }
+                    window as {
+                      __renderer?: {
+                        audioManager?: { ensureContext?: () => void }
+                        rawEvents?: unknown[]
+                        setEvents?: (events: unknown[]) => void
+                      }
+                    }
                   ).__renderer
                   renderer?.audioManager?.ensureContext?.()
+                  if (renderer?.rawEvents && renderer.setEvents) {
+                    renderer.setEvents([...renderer.rawEvents])
+                  }
                 }}
                 onContinue={() => {
                   // つづきから: スキップモードで未読位置まで高速進行
                   setStartWithSkip(true)
                   setTitleDismissed(true)
+                  // さらに scenario は TitleOverlay 表示中に既に最初の text event まで進行している
+                  // ため、AudioContext 起動後に setEvents で再リセットして最初から走らせる
+                  // (これをしないと冒頭の voice 付き Narration/Dialog が AudioContext null のまま
+                  // 発火済みで再生されない)。
                   const renderer = (
-                    window as { __renderer?: { audioManager?: { ensureContext?: () => void } } }
+                    window as {
+                      __renderer?: {
+                        audioManager?: { ensureContext?: () => void }
+                        rawEvents?: unknown[]
+                        setEvents?: (events: unknown[]) => void
+                      }
+                    }
                   ).__renderer
                   renderer?.audioManager?.ensureContext?.()
+                  if (renderer?.rawEvents && renderer.setEvents) {
+                    renderer.setEvents([...renderer.rawEvents])
+                  }
                 }}
                 onOpenSettings={() => {
                   // TODO (#141): NovelPlayer の設定パネルを外部から開く ref を追加して
