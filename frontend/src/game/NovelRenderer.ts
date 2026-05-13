@@ -35,6 +35,7 @@ import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapp
 import { Event, EventScene } from '../types'
 import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
 import { isRead, loadReadProgress, markRead } from './readProgress'
+import { TimeController, defaultTimeController } from './TimeController'
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -124,8 +125,10 @@ export class NovelRenderer {
   /** Wait イベント実行中フラグ */
   private waitingForWait = false
 
-  /** Wait タイマー（destroy 時キャンセル用） */
-  private waitTimer: ReturnType<typeof setTimeout> | null = null
+  /** Wait タイマー（destroy 時キャンセル用）。TimeController 経由なので number */
+  private waitTimer: number | null = null
+  /** タイマー抽象化レイヤー (#228 動画エクスポート対応の土台) */
+  private time: TimeController = defaultTimeController
 
   /** 全シーン情報（シーンジャンプ用） */
   private allScenes: EventScene[] = []
@@ -162,7 +165,7 @@ export class NovelRenderer {
   /** オートモード ON/OFF (#139) */
   private autoMode: boolean = false
   /** オートモード待機タイマー（destroy 時・手動操作時にキャンセル） */
-  private autoTimer: ReturnType<typeof setTimeout> | null = null
+  private autoTimer: number | null = null
   /** オートモード待機時間 ms（settings.autoWaitMs から更新） */
   private autoWaitMs: number = 2500
   /** autoMode 変更時の React 側同期コールバック */
@@ -171,7 +174,7 @@ export class NovelRenderer {
   /** スキップモード ON/OFF (#140) */
   private skipMode: boolean = false
   /** スキップ連続進行タイマー */
-  private skipTimer: ReturnType<typeof setTimeout> | null = null
+  private skipTimer: number | null = null
   /** 既読進捗（display index の Set）。docKey が設定されている場合に使用 */
   private readProgress: Set<number> = new Set()
   /** 既読永続化のキー（undefined の場合はスキップ機能無効） */
@@ -183,11 +186,11 @@ export class NovelRenderer {
   /** flash/fade 用全画面オーバーレイ Graphics */
   private effectOverlay: Graphics | null = null
   /** shake アニメーション用タイマー */
-  private shakeTimer: ReturnType<typeof setTimeout> | null = null
+  private shakeTimer: number | null = null
   /** shake 開始時刻（ms） */
   private shakeStartMs: number = 0
   /** flash/fade アニメーション用タイマー */
-  private effectTimer: ReturnType<typeof setInterval> | null = null
+  private effectTimer: number | null = null
 
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
@@ -196,7 +199,7 @@ export class NovelRenderer {
     const ratio = parseAspectRatio(config?.aspectRatio)
     this.screenWidth = ASPECT_RATIOS[ratio].width
     this.screenHeight = ASPECT_RATIOS[ratio].height
-    this.characterLayer = new CharacterLayer(this.screenWidth, this.screenHeight)
+    this.characterLayer = new CharacterLayer(this.screenWidth, this.screenHeight, this.time)
     this.blackoutOverlay = new Graphics()
     this.defaultDialogBorderless = config?.dialogBorderless ?? false
     this.dialogBox = new DialogBox({
@@ -318,6 +321,14 @@ export class NovelRenderer {
    * イベントキューを設定して最初の表示イベントを表示
    */
   /**
+   * 動画エクスポート (#228) 等で時刻を仮想モードに切り替えるためのアクセサ。
+   * 通常 (live) では何もしなくて良い。
+   */
+  getTimeController(): TimeController {
+    return this.time
+  }
+
+  /**
    * デバッグ用: 現在の実行状態を返す。開発時の HUD 表示に使う。
    */
   getDebugState(): {
@@ -432,23 +443,23 @@ export class NovelRenderer {
     this.waitingForChoice = false
     this.waitingForWait = false
     if (this.waitTimer) {
-      clearTimeout(this.waitTimer)
+      this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
     }
     if (this.autoTimer) {
-      clearTimeout(this.autoTimer)
+      this.time.clearTimeout(this.autoTimer)
       this.autoTimer = null
     }
     if (this.skipTimer) {
-      clearTimeout(this.skipTimer)
+      this.time.clearTimeout(this.skipTimer)
       this.skipTimer = null
     }
     if (this.shakeTimer) {
-      clearTimeout(this.shakeTimer)
+      this.time.clearTimeout(this.shakeTimer)
       this.shakeTimer = null
     }
     if (this.effectTimer) {
-      clearInterval(this.effectTimer)
+      this.time.clearInterval(this.effectTimer)
       this.effectTimer = null
     }
     if (this.effectOverlay) {
@@ -554,7 +565,7 @@ export class NovelRenderer {
     this.autoMode = on
     if (!on) {
       if (this.autoTimer) {
-        clearTimeout(this.autoTimer)
+        this.time.clearTimeout(this.autoTimer)
         this.autoTimer = null
       }
       // オートモード OFF 時はボイスを停止する（onEnded が誤発火しないよう）
@@ -596,7 +607,7 @@ export class NovelRenderer {
       this.setAutoMode(false)
     }
     if (!on && this.skipTimer) {
-      clearTimeout(this.skipTimer)
+      this.time.clearTimeout(this.skipTimer)
       this.skipTimer = null
     }
     this.onSkipModeChange?.(on)
@@ -625,23 +636,23 @@ export class NovelRenderer {
     this.app.canvas.removeEventListener('wheel', this.handleWheel)
     window.removeEventListener('keydown', this.handleKeyDown)
     if (this.waitTimer) {
-      clearTimeout(this.waitTimer)
+      this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
     }
     if (this.autoTimer) {
-      clearTimeout(this.autoTimer)
+      this.time.clearTimeout(this.autoTimer)
       this.autoTimer = null
     }
     if (this.skipTimer) {
-      clearTimeout(this.skipTimer)
+      this.time.clearTimeout(this.skipTimer)
       this.skipTimer = null
     }
     if (this.shakeTimer) {
-      clearTimeout(this.shakeTimer)
+      this.time.clearTimeout(this.shakeTimer)
       this.shakeTimer = null
     }
     if (this.effectTimer) {
-      clearInterval(this.effectTimer)
+      this.time.clearInterval(this.effectTimer)
       this.effectTimer = null
     }
     this.audioManager.destroy()
@@ -678,7 +689,7 @@ export class NovelRenderer {
    */
   private startShake(intensityPx: number, durationMs: number): void {
     if (this.shakeTimer) {
-      clearTimeout(this.shakeTimer)
+      this.time.clearTimeout(this.shakeTimer)
       this.shakeTimer = null
     }
     this.shakeStartMs = performance.now()
@@ -696,7 +707,7 @@ export class NovelRenderer {
       this.app.stage.position.set(offsetX, offsetY)
 
       if (progress < 1) {
-        this.shakeTimer = setTimeout(tick, intervalMs)
+        this.shakeTimer = this.time.setTimeout(tick, intervalMs)
       } else {
         this.app.stage.position.set(0, 0)
         this.shakeTimer = null
@@ -712,7 +723,7 @@ export class NovelRenderer {
   private startFlash(colorHex: string, peakAlpha: number, durationMs: number): void {
     if (!this.effectOverlay) return
     if (this.effectTimer) {
-      clearInterval(this.effectTimer)
+      this.time.clearInterval(this.effectTimer)
       this.effectTimer = null
     }
 
@@ -727,7 +738,7 @@ export class NovelRenderer {
     const FPS = 60
     const intervalMs = 1000 / FPS
 
-    this.effectTimer = setInterval(() => {
+    this.effectTimer = this.time.setInterval(() => {
       const elapsed = performance.now() - startMs
       const progress = Math.min(elapsed / durationMs, 1)
       if (!this.effectOverlay) return
@@ -736,7 +747,7 @@ export class NovelRenderer {
         this.effectOverlay.visible = false
         this.effectOverlay.alpha = 0
         if (this.effectTimer) {
-          clearInterval(this.effectTimer)
+          this.time.clearInterval(this.effectTimer)
           this.effectTimer = null
         }
       }
@@ -757,7 +768,7 @@ export class NovelRenderer {
   ): void {
     if (!this.effectOverlay) return
     if (this.effectTimer) {
-      clearInterval(this.effectTimer)
+      this.time.clearInterval(this.effectTimer)
       this.effectTimer = null
     }
 
@@ -772,7 +783,7 @@ export class NovelRenderer {
     const FPS = 60
     const intervalMs = 1000 / FPS
 
-    this.effectTimer = setInterval(() => {
+    this.effectTimer = this.time.setInterval(() => {
       const elapsed = performance.now() - startMs
       const progress = Math.min(elapsed / durationMs, 1)
       if (!this.effectOverlay) return
@@ -784,7 +795,7 @@ export class NovelRenderer {
           this.effectOverlay.visible = false
         }
         if (this.effectTimer) {
-          clearInterval(this.effectTimer)
+          this.time.clearInterval(this.effectTimer)
           this.effectTimer = null
         }
       }
@@ -920,12 +931,12 @@ export class NovelRenderer {
   private applyState(state: NovelGameState): void {
     // 画面効果をリセット（シーク・バック時に演出が残留しないよう）
     if (this.shakeTimer) {
-      clearTimeout(this.shakeTimer)
+      this.time.clearTimeout(this.shakeTimer)
       this.shakeTimer = null
     }
     this.app.stage.position.set(0, 0)
     if (this.effectTimer) {
-      clearInterval(this.effectTimer)
+      this.time.clearInterval(this.effectTimer)
       this.effectTimer = null
     }
     if (this.effectOverlay) {
@@ -1183,7 +1194,7 @@ export class NovelRenderer {
           // 同フレームの advance を抑制。jumpToScene が例外を投げても次の
           // イベントループで確実にリセットされるよう setTimeout(0) を使う (#211)
           this.justSelectedChoice = true
-          setTimeout(() => {
+          this.time.setTimeout(() => {
             this.justSelectedChoice = false
           }, 0)
           this.waitingForChoice = false
@@ -1259,7 +1270,7 @@ export class NovelRenderer {
       // Wait 中もスキップを停止する（Wait を無視するのは仕様違反） (#140)
       this.setSkipMode(false)
       this.waitingForWait = true
-      this.waitTimer = setTimeout(() => {
+      this.waitTimer = this.time.setTimeout(() => {
         this.waitTimer = null
         if (!this.initialized) return
         this.waitingForWait = false
@@ -1457,7 +1468,7 @@ export class NovelRenderer {
     this.waitingForChoice = false
     this.waitingForWait = false
     if (this.waitTimer) {
-      clearTimeout(this.waitTimer)
+      this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
     }
     this.choiceOverlay.hide()
@@ -1595,9 +1606,9 @@ export class NovelRenderer {
   private scheduleSkipStep(): void {
     if (!this.skipMode) return
     if (this.skipTimer) {
-      clearTimeout(this.skipTimer)
+      this.time.clearTimeout(this.skipTimer)
     }
-    this.skipTimer = setTimeout(() => {
+    this.skipTimer = this.time.setTimeout(() => {
       this.skipTimer = null
       if (!this.skipMode) return
       // タイプライター中なら全文スキップ（skipTypewriter は onTypingDone を破棄するため
@@ -1617,9 +1628,9 @@ export class NovelRenderer {
     if (!this.autoMode) return
     if (this.waitingForChoice || this.waitingForWait) return
     if (this.autoTimer) {
-      clearTimeout(this.autoTimer)
+      this.time.clearTimeout(this.autoTimer)
     }
-    this.autoTimer = setTimeout(() => {
+    this.autoTimer = this.time.setTimeout(() => {
       this.autoTimer = null
       if (this.autoMode && !this.waitingForChoice && !this.waitingForWait) {
         this.advance()
