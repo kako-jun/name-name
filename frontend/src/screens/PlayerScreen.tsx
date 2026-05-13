@@ -223,15 +223,12 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
                     window as {
                       __renderer?: {
                         audioManager?: { ensureContext?: () => void }
-                        rawEvents?: unknown[]
-                        setEvents?: (events: unknown[]) => void
+                        restart?: () => void
                       }
                     }
                   ).__renderer
                   renderer?.audioManager?.ensureContext?.()
-                  if (renderer?.rawEvents && renderer.setEvents) {
-                    renderer.setEvents([...renderer.rawEvents])
-                  }
+                  renderer?.restart?.()
                 }}
                 onContinue={() => {
                   // つづきから: スキップモードで未読位置まで高速進行
@@ -245,15 +242,12 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
                     window as {
                       __renderer?: {
                         audioManager?: { ensureContext?: () => void }
-                        rawEvents?: unknown[]
-                        setEvents?: (events: unknown[]) => void
+                        restart?: () => void
                       }
                     }
                   ).__renderer
                   renderer?.audioManager?.ensureContext?.()
-                  if (renderer?.rawEvents && renderer.setEvents) {
-                    renderer.setEvents([...renderer.rawEvents])
-                  }
+                  renderer?.restart?.()
                 }}
                 onOpenSettings={() => {
                   // TODO (#141): NovelPlayer の設定パネルを外部から開く ref を追加して
