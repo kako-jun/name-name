@@ -12,6 +12,7 @@ export const PROJECTS: ReadonlyArray<Project> = [
   { name: "friday-1930", title: "Friday 1930", repo: "kako-jun/friday-1930" },
   { name: "gymnasia", title: "Gymnasia", repo: "kako-jun/gymnasia" },
   { name: "llll-ll-media", title: "llll-ll-media", repo: "kako-jun/llll-ll-media" },
+  { name: "amanuma", title: "amanuma", repo: "kako-jun/amanuma" },
 ];
 
 export function findProject(name: string): Project | undefined {
