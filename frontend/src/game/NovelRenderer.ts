@@ -1555,11 +1555,11 @@ export class NovelRenderer {
 
     if (voicePath) {
       const voiceUrl = `${this.assetBaseUrl}/sounds/${voicePath.replace(/^\//, '')}`
-      // autoMode 時は voice 終了後に自動進行（typewriter 完了とどちらが先かは voice 次第）
-      this.audioManager.playVoice(
-        voiceUrl,
-        this.autoMode ? () => this.scheduleAutoAdvance() : undefined
-      )
+      // voice は fire-and-forget で再生する。autoAdvance は typing onDone / [待機] が決定する。
+      // 以前は voice 終了で scheduleAutoAdvance を呼んでいたが、これだと voice の長さで
+      // 中央ホールド時間が伸びてしまい「決まった時間で次へ進む」設計と合わなかった。
+      // voice が長くて次イベントが先に来ると stopVoice で切られるが、短句ナレ用途ではOK。
+      this.audioManager.playVoice(voiceUrl)
     }
 
     // フォント解決 (#147): per-line override → per-game default → runtime default の優先順
@@ -1583,9 +1583,9 @@ export class NovelRenderer {
         console.warn('[name-name] フォントロードに失敗', resolvedFontFamily, err)
       })
 
-    // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)
-    // voice がある場合は voice 終了が主トリガーになるため typewriter onDone では発火しない
-    const onTypingDone = this.autoMode && !voicePath ? () => this.scheduleAutoAdvance() : null
+    // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)。
+    // voice 有無に関わらず typing onDone で進める (voice は fire-and-forget)。
+    const onTypingDone = this.autoMode ? () => this.scheduleAutoAdvance() : null
     this.dialogBox.setDialog(name, line, onTypingDone)
 
     // 最後のテキスト行かつ最後のイベントならインジケーター非表示
