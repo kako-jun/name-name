@@ -237,6 +237,59 @@ Web Audio API を使用。
 - 一度デコードした AudioBuffer をキャッシュ
 - ユーザーインタラクション制約（autoplay policy）に対応
 
+### 動画エクスポート用キャプチャ (#228)
+- `AudioManager.enableCapture()` で `MediaStreamAudioDestinationNode` を生成し、`bgmMasterGain` / `seMasterGain` を分岐配線する
+- 通常の `ctx.destination` への配線は維持されるため、録画中もスピーカーで音をモニタできる
+- 別アプリの音声・他ブラウザタブ・システム音は混入しない（Web Audio グラフ内の音のみキャプチャ）
+- `disableCapture()` で MediaStream destination を切断する
+
+## 動画エクスポート (#228)
+
+llll-ll-media など、シナリオを動画ファイルとして書き出す用途のための Phase 1 実装。
+
+### 方式: MediaRecorder リアルタイム録画
+
+```
+canvas.captureStream(fps) ─┐
+                            ├─ MediaStream ─ MediaRecorder ─ Blob (video/webm)
+AudioManager.enableCapture ─┘
+```
+
+- 映像: `<canvas>` 要素の描画フレームのみキャプチャ
+- 音声: AudioManager の master gain 経由音のみキャプチャ
+- 出力: WebM（VP9/opus 優先、VP8 フォールバック）
+
+### モジュール構成
+
+| ファイル | 役割 |
+|---|---|
+| `frontend/src/game/VideoExporter.ts` | `exportVideo()` / `pickSupportedMimeType()` / `downloadBlob()` |
+| `frontend/src/game/AudioManager.ts` | `enableCapture()` / `disableCapture()` |
+| `frontend/src/game/NovelRenderer.ts` | `getCanvas()` / `getAudioManager()` / `getCurrentSceneId()` / `getAllSceneIds()` / `setOnSceneChange()` |
+| `frontend/src/components/NovelPlayer.tsx` | `onRendererReady` prop |
+| `frontend/src/screens/EditorScreen.tsx` | 録画ボタン + モーダル UI |
+
+### 終了検出
+
+`exportVideo` 開始時に `setOnSceneChange` を上書きし、以下のいずれかで `MediaRecorder.stop()` する:
+
+1. シーンが一度 `endSceneId` になり、その後別シーンへ遷移した
+2. `renderer.onEnd` が発火（全イベント完走、`endSceneId` が最終シーンだったケース）
+
+stop 後に `postRollMs` (デフォルト 300ms) の余韻録音を経て Blob を確定する。
+録画開始前は `preRollMs` (デフォルト 100ms) の遅延を挟んで先頭の音切れを軽減する。
+
+### Phase 1 の制約
+
+- **実時間がかかる**: シナリオ 3 分なら録画も 3 分。virtual time 化していないため
+- **WebM のみ**: mp4 変換は Phase 2 で ffmpeg.wasm を追加する
+- **タブ非アクティブで品質劣化**: ブラウザが rAF を間引くと描画フレームが薄まる
+- **コールバックの占有**: `setOnSceneChange` / `onEnd` を録画中に上書きするため、録画中の手動操作と競合する想定はしていない
+
+### Phase 2 構想
+
+決定論的 virtual time 経路（`TimeController` 既設）+ `OffscreenCanvas` 毎フレーム render + ffmpeg.wasm 連結。Phase 1 のモジュール境界 (`VideoExporter`) を保ったまま実装本体を差し替える想定。
+
 ## RPG サブシステム
 
 RPG プレイモードもノベルと同じく PixiJS で実装する（Phaser から移行済み）。
