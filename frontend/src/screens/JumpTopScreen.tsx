@@ -1,49 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createApiClient, type ProjectInfo } from '../api/client'
 
-// kako-jun/name-name#109: トップページ（ジャンプ風メニュー）。
-//
-// 位置づけ:
-//   - name-name は「ハード」、各ゲームリポは「ソフト（カートリッジ）」。
-//     このトップ画面は「ハードを起動したときのゲーム選択画面」に相当する。
-//   - タイル状にゲームを並べ、選択 → /play/:projectName。
-//   - ログイン中（dev_auth_token あり）なら各タイルに「編集」ボタンを出して
-//     /edit/:projectName へも飛ばせる。
-//
-// 設計メモ:
-//   - キーボード操作（矢印キー / Enter）に対応。アクセシビリティのため各タイルは
-//     `role="button"` + tabIndex で focus 可能にしてある。
-//   - サウンドは Web Audio API ベースの薄いラッパで「ファイルが無くても動く」を
-//     最優先にしている。BGM / SE のファイルパスは props や props 由来ではなく、
-//     後で /assets/ 配下に置けば自然に鳴る形（暫定）。
-//   - 過度なアニメーションは避け、Tailwind トークン + transition だけで済ませる。
-//   - 「キャッチコピー」と「サムネ」は別 Issue (#110+) でリポ毎に用意する想定。
-//     今は repo 名・gradation 枠で代替。
-
 interface JumpTopScreenProps {
   apiBaseUrl: string
   isDark: boolean
   onToggleDark: () => void
   onOpenSettings: () => void
-  /** ゲーム選択時の遷移ハンドラ（/play/:projectName） */
   onPlayProject: (projectName: string) => void
-  /** 編集モード遷移ハンドラ（/edit/:projectName）。ログイン時のみ呼ばれる */
   onEditProject: (projectName: string) => void
-  /** 管理画面（/admin = 旧 ProjectListScreen）への遷移 */
   onOpenAdmin: () => void
-  /**
-   * テスト・SSR から差し替え可能なログイン判定。本番では既定の
-   * `defaultIsEditor` （localStorage の dev_auth_token を見る）を使う。
-   * #110 で本実装の認証フローに置き換える前提。
-   */
   isEditor?: () => boolean
 }
 
-/**
- * 既定のログイン判定。`dev_auth_token` が localStorage にあれば編集者扱い。
- * `apiClient.authHeaders()` と一致する判定にしている（同じキーを参照）。
- * #110 で本番認証に置き換える際はこの関数だけ差し替える。
- */
 function defaultIsEditor(): boolean {
   try {
     return typeof localStorage !== 'undefined' && !!localStorage.getItem('dev_auth_token')
@@ -52,29 +20,38 @@ function defaultIsEditor(): boolean {
   }
 }
 
-/**
- * ハードロゴの色を repo 名から決める雑なハッシュ。サムネ画像が無い間の
- * 視覚的な区別用なので、可逆性も衝突回避も求めない。
- */
 function gradientFor(name: string): string {
   let h = 0
   for (let i = 0; i < name.length; i += 1) {
     h = (h * 31 + name.charCodeAt(i)) >>> 0
   }
   const hue1 = h % 360
-  const hue2 = (hue1 + 60) % 360
-  return `linear-gradient(135deg, hsl(${hue1}, 70%, 55%), hsl(${hue2}, 70%, 45%))`
+  const hue2 = (hue1 + 42) % 360
+  const hue3 = (hue1 + 320) % 360
+  return `linear-gradient(135deg, hsl(${hue1}, 92%, 58%), hsl(${hue2}, 88%, 52%) 52%, hsl(${hue3}, 84%, 44%))`
 }
 
-/**
- * 選択 SE。Web Audio で短いサイン波を鳴らすだけ。サウンドファイルが
- * 無くても動かしたいので、外部 mp3/ogg は読み込まない。AudioContext が
- * 使えない（SSR / 古い jsdom）環境では何もしない。
- *
- * BGM は仕様上「常駐」だが、無音 BGM はユーザーストレスになりやすいので
- * 自動再生はせず、ユーザーが最初の操作（キー / クリック）をしたときに
- * 一度だけ薄い和音を鳴らす形にしてある。本格 BGM は別 Issue で差し替え。
- */
+function formatFakeCount(base: number): string {
+  return new Intl.NumberFormat('en-US').format(base)
+}
+
+function buildFakeStats(index: number): { views: string; comments: string } {
+  const viewBase = Math.max(1, 752_773 - index * 92_441)
+  const commentBase = Math.max(1, 1_672 - index * 184)
+  return {
+    views: formatFakeCount(viewBase),
+    comments: formatFakeCount(commentBase),
+  }
+}
+
+function shouldIgnoreGlobalKeydown(target: EventTarget | null): boolean {
+  const el = target instanceof HTMLElement ? target : null
+  if (!el) return false
+  if (el.isContentEditable) return true
+  if (el.closest('[data-testid="game-tile"]')) return false
+  return !!el.closest('button, a, input, textarea, select, summary, [contenteditable="true"]')
+}
+
 function createSoundController(): {
   playSelect: () => void
   playConfirm: () => void
@@ -95,7 +72,6 @@ function createSoundController(): {
       ctx = new Ctor()
       return ctx
     } catch (e) {
-      // AudioContext が使えない環境（SSR / 古い jsdom）。サイレントに諦める。
       console.warn('[JumpTopScreen] AudioContext unavailable; sound disabled', e)
       return null
     }
@@ -108,7 +84,7 @@ function createSoundController(): {
       const osc = c.createOscillator()
       const gain = c.createGain()
       osc.frequency.value = freq
-      osc.type = 'sine'
+      osc.type = 'square'
       gain.gain.setValueAtTime(volume, c.currentTime)
       gain.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + durationMs / 1000)
       osc.connect(gain).connect(c.destination)
@@ -120,8 +96,8 @@ function createSoundController(): {
   }
 
   return {
-    playSelect: () => tone(660, 60),
-    playConfirm: () => tone(880, 120, 0.07),
+    playSelect: () => tone(660, 55, 0.045),
+    playConfirm: () => tone(880, 110, 0.06),
     resumeOnUserGesture: () => {
       const c = ensureCtx()
       if (!c) return
@@ -129,13 +105,123 @@ function createSoundController(): {
         c.resume().catch(() => {})
       }
       if (!bgmStarted) {
-        // ごく薄い「起動音」。常駐 BGM のスタブ。
         bgmStarted = true
-        tone(523.25, 200, 0.04)
-        setTimeout(() => tone(659.25, 200, 0.04), 80)
+        tone(523.25, 170, 0.035)
+        setTimeout(() => tone(659.25, 170, 0.035), 90)
       }
     },
   }
+}
+
+function EyeIcon() {
+  return (
+    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M2.4 12C4.6 7.8 8 5.7 12 5.7s7.4 2.1 9.6 6.3C19.4 16.2 16 18.3 12 18.3S4.6 16.2 2.4 12Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="2.9" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  )
+}
+
+function CommentIcon() {
+  return (
+    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M5 6.5h14v9H9l-4 3v-12Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function FooterIcon({ type }: { type: 'home' | 'ticket' | 'search' | 'hat' | 'user' }) {
+  if (type === 'home') {
+    return (
+      <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <path
+          d="M4 11.5 12 5l8 6.5"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M6.5 10.5V19h11v-8.5"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    )
+  }
+  if (type === 'ticket') {
+    return (
+      <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <path
+          d="M5 8.5h14v7H5v-7Z"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path d="M9 8.5v7" stroke="currentColor" strokeWidth="2" strokeDasharray="1.8 1.8" />
+        <path d="M12 12h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  if (type === 'search') {
+    return (
+      <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <circle cx="10.5" cy="10.5" r="5.5" stroke="currentColor" strokeWidth="2" />
+        <path d="m15 15 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  if (type === 'hat') {
+    return (
+      <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <path
+          d="M4 12c2.5-1.7 5.2-2.6 8-2.6s5.5.9 8 2.6"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <path
+          d="M7 13.8c1 2 2.8 3.2 5 3.2s4-.9 5-3.2"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <path
+          d="M9.2 8.7 12 6l2.8 2.7"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    )
+  }
+  return (
+    <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="8" r="3.6" stroke="currentColor" strokeWidth="2" />
+      <path
+        d="M5.5 19c1.7-2.8 4-4.2 6.5-4.2s4.8 1.4 6.5 4.2"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
 }
 
 function JumpTopScreen({
@@ -153,11 +239,8 @@ function JumpTopScreen({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
-  // TODO(#110): isEditor() を localStorage から読む現状の実装はマウント時 1 回しか評価されない。
-  //   #110 で CF Access JWT or GitHub OAuth に置き換える際、`useSyncExternalStore` で
-  //   セッション中の認証状態変化を購読する形に切り替える。
   const editor = useMemo(() => isEditor(), [isEditor])
-  const tileRefs = useRef<Array<HTMLDivElement | null>>([])
+  const tileRefs = useRef<Array<HTMLElement | null>>([])
   const sound = useMemo(() => createSoundController(), [])
 
   useEffect(() => {
@@ -219,21 +302,15 @@ function JumpTopScreen({
     [projects.length, sound]
   )
 
-  // activeIndex 変更後に DOM 反映を待ってから focus を移す。
-  // setTimeout だと React 18 concurrent rendering で順序が脆いため useEffect で保証する。
   useEffect(() => {
     if (projects.length === 0) return
     focusTile(activeIndex)
   }, [activeIndex, projects.length, focusTile])
 
-  // 矢印キー / Enter のグローバルハンドラ。タイル個別の onKeyDown でも拾うが、
-  // フォーカスがロゴ等にあるときも動かしたいので window で拾う。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (projects.length === 0) return
-      // フォーム要素の中ではキー操作を奪わない
-      const target = e.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (shouldIgnoreGlobalKeydown(e.target)) return
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault()
         moveBy(1)
@@ -252,224 +329,341 @@ function JumpTopScreen({
     return () => window.removeEventListener('keydown', onKey)
   }, [projects.length, moveBy, handleSelect, activeIndex, sound])
 
-  return (
-    <div
-      className={`flex flex-col min-h-screen ${
-        isDark
-          ? 'dark bg-gradient-to-br from-gray-900 via-gray-950 to-black text-white'
-          : 'bg-gradient-to-br from-blue-50 via-white to-purple-50 text-gray-900'
-      }`}
-      onMouseDown={() => sound.resumeOnUserGesture()}
-    >
-      <header
-        className={`border-b ${
-          isDark ? 'border-gray-800 bg-black/40' : 'border-blue-200 bg-white/60'
-        } backdrop-blur`}
-      >
-        <div className="px-6 py-3 flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-extrabold tracking-tight truncate">Name × Name</h1>
-            <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-600'} truncate`}>
-              kako-jun のゲームを選んで遊ぼう
-            </p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={onOpenAdmin}
-              className={`px-3 h-10 rounded transition-colors text-sm ${
-                isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'
-              }`}
-              title="管理画面"
-            >
-              管理
-            </button>
-            <button
-              type="button"
-              onClick={onToggleDark}
-              className={`w-10 h-10 flex items-center justify-center rounded transition-colors ${
-                isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
-              }`}
-              title={isDark ? 'Light Mode' : 'Dark Mode'}
-              aria-label={isDark ? 'Light Mode' : 'Dark Mode'}
-            >
-              {isDark ? (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
-                  />
-                </svg>
-              ) : (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
-                  />
-                </svg>
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className={`w-10 h-10 flex items-center justify-center rounded transition-colors ${
-                isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
-              }`}
-              title="Settings"
-              aria-label="Settings"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </header>
+  const rankingProjects = projects.map((project, index) => ({
+    project,
+    index,
+    stats: buildFakeStats(index),
+  }))
 
-      <main className="flex-1 px-6 py-8" role="main" aria-label="ゲーム選択">
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4" />
-              <p>読み込み中...</p>
+  const featured = rankingProjects[0] ?? null
+  const rest = rankingProjects.slice(1)
+  const pageBgClass = isDark ? 'bg-[#242424] text-white' : 'bg-[#f6f1e8] text-[#161616]'
+  const panelBgClass = isDark ? 'bg-[#242424]' : 'bg-[#f9f4ec]'
+  const sectionBgClass = isDark ? 'border-white/10 bg-[#1f1f1f]' : 'border-black/10 bg-[#2b2725]'
+  const subTextClass = 'text-white/55'
+  const emptyTextClass = isDark ? 'text-white/65' : 'text-[#161616]/72'
+  const metaTextClass = isDark ? 'text-white/52' : 'text-[#161616]/62'
+  const footerBgClass = isDark ? 'bg-white text-[#666]' : 'bg-[#161616] text-white/70'
+  const footerInactiveTextClass = isDark ? 'text-[#666]' : 'text-white/70'
+
+  return (
+    <div className={`min-h-screen ${pageBgClass}`} onMouseDown={() => sound.resumeOnUserGesture()}>
+      <div
+        className={`mx-auto min-h-screen w-full max-w-[820px] ${panelBgClass} shadow-[0_0_0_1px_rgba(255,255,255,0.04)]`}
+      >
+        <header className="sticky top-0 z-30">
+          <div className="bg-[#fb322f] px-4 py-4 text-white">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="leading-none">
+                  <div className="text-[1.9rem] font-black tracking-[-0.08em]">ネーム＋</div>
+                  <div className="text-[0.76rem] font-bold tracking-[0.18em]">連載ゲーム！</div>
+                </div>
+                <div className="hidden text-[2rem] font-black tracking-[-0.05em] text-[#ffe54d] sm:block">
+                  初回全部遊べる
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenAdmin}
+                  className="rounded-full border border-white/30 bg-black/20 px-3 py-1.5 text-xs font-bold"
+                  title="管理"
+                >
+                  管理
+                </button>
+                <button
+                  type="button"
+                  onClick={onToggleDark}
+                  className="rounded-full border border-white/30 bg-black/20 px-3 py-1.5 text-xs font-bold"
+                  title={isDark ? 'Light Mode' : 'Dark Mode'}
+                  aria-label={isDark ? 'Light Mode' : 'Dark Mode'}
+                >
+                  {isDark ? 'LIGHT' : 'DARK'}
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="rounded-full border border-white/30 bg-black/20 px-3 py-1.5 text-xs font-bold"
+                  title="Settings"
+                  aria-label="Settings"
+                >
+                  設定
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 text-sm font-bold text-[#ffe54d] sm:hidden">初回全部遊べる</div>
+          </div>
+
+          <div className={`border-b px-4 py-4 ${sectionBgClass}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-[2rem] font-black text-[#fb322f] shadow-[0_0_0_4px_rgba(255,255,255,0.05)]">
+                  名
+                </div>
+                <div>
+                  <div className="text-[2rem] font-black tracking-[-0.06em] leading-none text-white">
+                    ネームのランキング
+                  </div>
+                  <div
+                    className={`mt-1 text-xs font-semibold uppercase tracking-[0.18em] ${subTextClass}`}
+                  >
+                    Fixed Order Now / Most Played Later
+                  </div>
+                </div>
+              </div>
+              <div className={`text-5xl font-thin ${subTextClass}`}>›</div>
             </div>
           </div>
-        ) : error ? (
-          <div role="alert" className="max-w-xl mx-auto text-center py-12">
-            <p className={`text-lg font-semibold ${isDark ? 'text-red-300' : 'text-red-600'}`}>
-              {error}
-            </p>
-            <p className={`text-sm mt-2 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-              API URL を確認してください（設定 → API URL）
-            </p>
-          </div>
-        ) : projects.length === 0 ? (
-          <div className={`text-center py-12 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-            <p>ゲームがまだありません</p>
-            <p className="text-sm mt-2">「管理」からプロジェクトを追加してください</p>
-          </div>
-        ) : (
-          <div
-            role="grid"
-            aria-label="ゲーム一覧"
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 max-w-7xl mx-auto"
-          >
-            {projects.map((project, index) => {
-              const isActive = index === activeIndex
-              // project.name は listProjects 側で英数字+ハイフン前提（kako-jun のリポ命名規則）。
-              // 万一 DOM id として不正な文字が入った場合に備え、id は安全な接頭辞のみで生成する。
-              const tileId = `tile-${index}`
-              return (
-                <div
-                  key={project.name}
-                  id={tileId}
+        </header>
+
+        <main className="px-4 pb-36 pt-4" role="main" aria-label="ゲーム選択">
+          {loading ? (
+            <div className="flex min-h-[40vh] items-center justify-center">
+              <div className="text-center">
+                <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-white/20 border-t-[#fb322f]" />
+                <p className="text-sm font-semibold text-white/70">読み込み中...</p>
+              </div>
+            </div>
+          ) : error ? (
+            <div role="alert" className="py-16 text-center">
+              <p className="text-lg font-black text-[#ff807d]">{error}</p>
+              <p className="mt-2 text-sm text-white/55">設定から API URL を確認してください</p>
+            </div>
+          ) : projects.length === 0 ? (
+            <div className={`py-16 text-center ${emptyTextClass}`}>
+              <p className="text-lg font-black">ゲームがまだありません</p>
+              <p className="mt-2 text-sm">「管理」からプロジェクトを追加してください</p>
+            </div>
+          ) : (
+            <div role="grid" aria-label="ゲーム一覧" className="space-y-8">
+              {featured && (
+                <article
+                  key={featured.project.name}
+                  id="tile-0"
                   ref={(el) => {
-                    tileRefs.current[index] = el
+                    tileRefs.current[0] = el
                   }}
                   role="button"
-                  aria-label={`${project.title || project.name} をプレイ`}
-                  aria-pressed={isActive}
+                  aria-label={`${featured.project.title || featured.project.name} をプレイ`}
+                  aria-pressed={activeIndex === 0}
                   tabIndex={0}
                   onClick={() => {
                     sound.resumeOnUserGesture()
-                    setActiveIndex(index)
-                    handleSelect(index)
+                    setActiveIndex(0)
+                    handleSelect(0)
                   }}
-                  onFocus={() => setActiveIndex(index)}
+                  onFocus={() => setActiveIndex(0)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
                       sound.resumeOnUserGesture()
-                      handleSelect(index)
+                      handleSelect(0)
                     }
                   }}
-                  className={`group relative rounded-xl overflow-hidden cursor-pointer transition-all duration-150 outline-none ${
-                    isActive
-                      ? 'ring-2 ring-offset-2 ring-blue-500 scale-[1.02] shadow-2xl'
-                      : 'shadow-md hover:shadow-xl'
-                  } ${isDark ? 'bg-gray-800 ring-offset-gray-900' : 'bg-white ring-offset-white'}`}
+                  className={`group block cursor-pointer outline-none ${
+                    activeIndex === 0 ? 'scale-[1.01]' : ''
+                  }`}
                   data-testid="game-tile"
-                  data-project={project.name}
+                  data-project={featured.project.name}
                 >
-                  {/* サムネ枠（暫定: gradation のみ）。#110+ で cover 画像に差し替え */}
-                  <div
-                    className="aspect-[16/9] w-full"
-                    style={{ background: gradientFor(project.name) }}
-                    aria-hidden
-                  >
-                    <div className="w-full h-full flex items-center justify-center">
-                      <span
-                        className="text-white text-4xl font-black drop-shadow-lg select-none"
-                        style={{ letterSpacing: '0.05em' }}
-                      >
-                        {(project.title || project.name).slice(0, 1).toUpperCase()}
-                      </span>
+                  <div className="relative overflow-hidden bg-black">
+                    <div className="absolute left-0 top-0 z-10 bg-[#fb322f] px-4 py-2 text-4xl font-black leading-none">
+                      1
+                    </div>
+                    <div
+                      className={`relative aspect-[16/8.2] w-full overflow-hidden border border-white/6 transition-transform duration-150 ${
+                        activeIndex === 0 ? 'scale-[1.01]' : 'group-hover:scale-[1.01]'
+                      }`}
+                      style={{ background: gradientFor(featured.project.name) }}
+                      aria-hidden
+                    >
+                      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_24%,rgba(255,255,255,0.24),transparent_22%),radial-gradient(circle_at_82%_18%,rgba(255,255,255,0.26),transparent_20%),linear-gradient(0deg,rgba(0,0,0,0.04),rgba(0,0,0,0.04))]" />
+                      <div className="absolute inset-y-0 right-0 w-[32%] bg-[linear-gradient(180deg,rgba(255,255,255,0.24),rgba(0,0,0,0.12))]" />
+                      <div className="absolute left-4 top-4 rounded-full bg-black px-4 py-3 text-sm font-black leading-tight tracking-[-0.04em] text-white shadow-lg">
+                        人気沸騰
+                        <br />
+                        kako-jun の
+                        <br />
+                        ゲーム置き場
+                      </div>
+                      <div className="absolute bottom-0 left-0 right-0 bg-[linear-gradient(180deg,transparent,rgba(0,0,0,0.82))] p-4 pt-12">
+                        <div className="inline-flex bg-[#fb322f] px-3 py-1 text-xl font-black text-white">
+                          全話￥0
+                        </div>
+                        <div className="mt-3 text-[clamp(2.5rem,6vw,5.2rem)] font-black tracking-[-0.08em] text-white drop-shadow-[0_3px_0_rgba(0,0,0,0.35)]">
+                          {(featured.project.title || featured.project.name).toUpperCase()}
+                        </div>
+                        <div className="mt-1 text-sm font-semibold uppercase tracking-[0.22em] text-white/78">
+                          {featured.project.repo}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="p-4">
-                    <h2
-                      className={`text-lg font-bold truncate ${
-                        isDark ? 'text-white' : 'text-gray-900'
-                      }`}
-                    >
-                      {project.title || project.name}
+                  <div className="space-y-2 py-3">
+                    <h2 className="text-[2.2rem] font-black tracking-[-0.06em] leading-none">
+                      {featured.project.title || featured.project.name}
                     </h2>
-                    {/* キャッチコピー（暫定: repo 名）。#110+ で短いキャッチに差し替え */}
-                    <p
-                      className={`text-xs truncate mt-1 ${
-                        isDark ? 'text-gray-400' : 'text-gray-500'
-                      }`}
-                    >
-                      {project.repo}
-                    </p>
-
+                    <div className="flex items-center gap-8 text-[1.1rem] font-semibold">
+                      <div className="flex items-center gap-2">
+                        <EyeIcon />
+                        <span>{featured.stats.views}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <CommentIcon />
+                        <span>{featured.stats.comments}</span>
+                      </div>
+                    </div>
                     {editor && (
-                      <div className="mt-3 flex justify-end">
+                      <div className="pt-1">
                         <button
                           type="button"
-                          onClick={(e) => handleEdit(e, project.name)}
-                          className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
-                            isDark
-                              ? 'bg-purple-600 hover:bg-purple-700 text-white'
-                              : 'bg-purple-500 hover:bg-purple-600 text-white'
-                          }`}
-                          aria-label={`${project.title || project.name} を編集`}
+                          onClick={(e) => handleEdit(e, featured.project.name)}
+                          className="rounded-full bg-white px-4 py-2 text-sm font-black text-black"
+                          aria-label={`${featured.project.title || featured.project.name} を編集`}
                         >
                           編集
                         </button>
                       </div>
                     )}
                   </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </main>
+                </article>
+              )}
 
-      <footer
-        className={`px-6 py-3 text-center text-xs border-t ${
-          isDark ? 'border-gray-800 text-gray-500' : 'border-gray-200 text-gray-500'
-        }`}
-      >
-        ↑↓←→ で選択 / Enter で決定
-      </footer>
+              <div className="grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-2">
+                {rest.map(({ project, index, stats }) => {
+                  // rankingProjects 側で保持した元の project index。slice(1) 後の連番ではない。
+                  const rank = index + 1
+                  const isActive = activeIndex === index
+                  return (
+                    <article
+                      key={project.name}
+                      id={`tile-${index}`}
+                      ref={(el) => {
+                        tileRefs.current[index] = el
+                      }}
+                      role="button"
+                      aria-label={`${project.title || project.name} をプレイ`}
+                      aria-pressed={isActive}
+                      tabIndex={0}
+                      onClick={() => {
+                        sound.resumeOnUserGesture()
+                        setActiveIndex(index)
+                        handleSelect(index)
+                      }}
+                      onFocus={() => setActiveIndex(index)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          sound.resumeOnUserGesture()
+                          handleSelect(index)
+                        }
+                      }}
+                      className={`group cursor-pointer outline-none transition-transform duration-150 ${
+                        isActive ? 'scale-[1.01]' : ''
+                      }`}
+                      data-testid="game-tile"
+                      data-project={project.name}
+                    >
+                      <div
+                        className={`relative aspect-[1/1.02] overflow-hidden border border-white/6 transition-transform duration-150 ${
+                          isActive ? 'scale-[1.01]' : 'group-hover:scale-[1.01]'
+                        }`}
+                        style={{ background: gradientFor(project.name) }}
+                        aria-hidden
+                      >
+                        <div className="absolute left-0 top-0 z-10 bg-[#fb322f] px-4 py-2 text-4xl font-black leading-none text-white">
+                          {rank}
+                        </div>
+                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_18%,rgba(255,255,255,0.23),transparent_18%),linear-gradient(180deg,transparent_34%,rgba(0,0,0,0.28)_78%,rgba(0,0,0,0.58))]" />
+                        <div className="absolute bottom-0 left-0 right-0 p-4">
+                          <div className="inline-flex bg-[#fb322f] px-3 py-1 text-base font-black text-white">
+                            全話￥0
+                          </div>
+                          <div className="mt-3 break-words text-[clamp(2rem,5vw,3.5rem)] font-black tracking-[-0.08em] leading-none text-white drop-shadow-[0_3px_0_rgba(0,0,0,0.35)]">
+                            {(project.title || project.name).toUpperCase()}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1 py-3">
+                        <h2 className="text-[1.1rem] font-black tracking-[-0.04em]">
+                          {project.title || project.name}
+                        </h2>
+                        <div
+                          className={`text-xs font-semibold uppercase tracking-[0.15em] ${metaTextClass}`}
+                        >
+                          {project.repo}
+                        </div>
+                        <div className="flex items-center gap-6 pt-1 text-base font-semibold">
+                          <div className="flex items-center gap-2">
+                            <EyeIcon />
+                            <span>{stats.views}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <CommentIcon />
+                            <span>{stats.comments}</span>
+                          </div>
+                        </div>
+                        {editor && (
+                          <div className="pt-1">
+                            <button
+                              type="button"
+                              onClick={(e) => handleEdit(e, project.name)}
+                              className="rounded-full border border-white/18 px-3 py-1.5 text-xs font-black text-white"
+                              aria-label={`${project.title || project.name} を編集`}
+                            >
+                              編集
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </main>
+
+        <footer
+          className={`fixed bottom-0 left-0 right-0 z-40 border-t border-black/10 ${footerBgClass}`}
+        >
+          <div className="mx-auto flex max-w-[820px] items-stretch justify-between px-2 pt-2">
+            {[
+              { label: 'ホーム', icon: 'home', active: true },
+              { label: '無料作品', icon: 'ticket', active: false },
+              { label: 'さがす', icon: 'search', active: false },
+              { label: '少年ネーム', icon: 'hat', active: false },
+              { label: 'マイページ', icon: 'user', active: false },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className="flex min-w-0 flex-1 flex-col items-center gap-1 px-1 pb-3 pt-1 text-center"
+                aria-hidden="true"
+              >
+                <div
+                  className={`flex h-16 w-16 items-center justify-center rounded-full ${
+                    item.active ? 'bg-[#fb322f] text-white' : footerInactiveTextClass
+                  }`}
+                >
+                  <FooterIcon type={item.icon as 'home' | 'ticket' | 'search' | 'hat' | 'user'} />
+                </div>
+                <span
+                  className={`text-[0.95rem] font-black tracking-[-0.03em] ${
+                    item.active ? 'text-[#fb322f]' : footerInactiveTextClass
+                  }`}
+                >
+                  {item.label}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="mx-auto h-1.5 w-36 rounded-full bg-black/40" />
+          <div className="h-2" />
+        </footer>
+      </div>
     </div>
   )
 }
