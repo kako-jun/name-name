@@ -86,7 +86,13 @@ function ProjectList({ apiBaseUrl, isDark, onSelectProject, onPlayProject }: Pro
                   <div className="flex items-center gap-2 shrink-0">
                     {onPlayProject && (
                       <button
-                        onClick={() => onPlayProject(project.name)}
+                        onClick={() => {
+                          if (project.external_url) {
+                            window.location.href = project.external_url
+                          } else {
+                            onPlayProject(project.name)
+                          }
+                        }}
                         aria-label={`${project.title || project.name} をプレイ`}
                         className={`px-3 py-1.5 rounded font-medium text-sm transition-colors ${
                           isDark
