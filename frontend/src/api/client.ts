@@ -37,6 +37,7 @@ export interface ProjectInfo {
   name: string
   title: string
   repo: string
+  external_url?: string
 }
 
 export interface ContentsResponse {
