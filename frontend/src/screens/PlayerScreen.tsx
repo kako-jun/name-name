@@ -72,6 +72,13 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         if (cancelled) return
         setProjectInfo(found)
 
+        // external_url が設定されているプロジェクトはゲームサイトに直接リダイレクト
+        // （PlayerScreen はノベル/RPG 専用。外部ゲームはここを経由しない）
+        if (found?.external_url) {
+          window.location.replace(found.external_url)
+          return
+        }
+
         // 2. main ブランチからシナリオを取得。404 はリポにまだ script.md
         //    が無い「未投入」状態として扱い、エラーではなく案内表示にする。
         let data
