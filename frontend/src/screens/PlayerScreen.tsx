@@ -72,14 +72,6 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         if (cancelled) return
         setProjectInfo(found)
 
-        // external_url が設定されているプロジェクトは直接リダイレクト
-        // replace() で履歴を置き換えることで、ゲーム側でブラウザの戻るボタンを
-        // 押すと name-name 一覧に戻れる（リダイレクト中画面は履歴に残らない）
-        if (found?.external_url) {
-          window.location.replace(found.external_url)
-          return
-        }
-
         // 2. main ブランチからシナリオを取得。404 はリポにまだ script.md
         //    が無い「未投入」状態として扱い、エラーではなく案内表示にする。
         let data

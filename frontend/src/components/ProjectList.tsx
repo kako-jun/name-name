@@ -84,25 +84,32 @@ function ProjectList({ apiBaseUrl, isDark, onSelectProject, onPlayProject }: Pro
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {onPlayProject && (
-                      <button
-                        onClick={() => {
-                          if (project.external_url) {
-                            window.location.href = project.external_url
-                          } else {
-                            onPlayProject(project.name)
-                          }
-                        }}
-                        aria-label={`${project.title || project.name} をプレイ`}
-                        className={`px-3 py-1.5 rounded font-medium text-sm transition-colors ${
-                          isDark
-                            ? 'bg-green-600 hover:bg-green-700 text-white'
-                            : 'bg-green-500 hover:bg-green-600 text-white'
-                        }`}
-                      >
-                        プレイ
-                      </button>
-                    )}
+                    {onPlayProject &&
+                      (project.external_url ? (
+                        <a
+                          href={project.external_url}
+                          aria-label={`${project.title || project.name} をプレイ`}
+                          className={`px-3 py-1.5 rounded font-medium text-sm transition-colors ${
+                            isDark
+                              ? 'bg-green-600 hover:bg-green-700 text-white'
+                              : 'bg-green-500 hover:bg-green-600 text-white'
+                          }`}
+                        >
+                          プレイ
+                        </a>
+                      ) : (
+                        <button
+                          onClick={() => onPlayProject(project.name)}
+                          aria-label={`${project.title || project.name} をプレイ`}
+                          className={`px-3 py-1.5 rounded font-medium text-sm transition-colors ${
+                            isDark
+                              ? 'bg-green-600 hover:bg-green-700 text-white'
+                              : 'bg-green-500 hover:bg-green-600 text-white'
+                          }`}
+                        >
+                          プレイ
+                        </button>
+                      ))}
                     <button
                       onClick={() => onSelectProject(project.name)}
                       aria-label={`${project.title || project.name} を編集`}
