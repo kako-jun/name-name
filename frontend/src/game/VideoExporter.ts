@@ -20,9 +20,17 @@ export interface VideoExportOptions {
   mimeType?: string
   /** 進捗ログ。状態文字列を都度通知（UI 表示用） */
   onProgress?: (status: string) => void
-  /** 録画開始までの待機時間 ms。BGM 先頭が削れる軽減策。デフォルト 100ms */
+  /**
+   * jumpToScene 後、録画開始までの待機時間 ms。
+   * 経験則: PixiJS の Ticker 1〜2 周期 (~33ms) + 立ち絵 fade-in 余裕。100ms あれば
+   * 「前回プレビューの最終フレーム」を確実にクリアして新シーン先頭が描画された状態で録画開始できる。
+   */
   preRollMs?: number
-  /** 録画停止後の追加録音時間 ms。終端の SE/BGM 余韻取り。デフォルト 300ms */
+  /**
+   * 終了検知後、録画停止までの追加録音時間 ms。
+   * 経験則: 終端の SE / BGM の自然なフェードアウトと、停止フラグから MediaRecorder.stop()
+   * までのフレーム遅延を吸収する。300ms 程度で余韻が切れない。
+   */
   postRollMs?: number
 }
 
@@ -48,6 +56,11 @@ export function pickSupportedMimeType(): string | null {
     if (MediaRecorder.isTypeSupported(m)) return m
   }
   return null
+}
+
+/** ファイル名に使えない文字を `_` に置換する */
+export function sanitizeFilename(s: string): string {
+  return s.replace(/[^a-zA-Z0-9_.-]/g, '_')
 }
 
 /**
@@ -104,49 +117,11 @@ export async function exportVideo(
     if (e.data && e.data.size > 0) chunks.push(e.data)
   }
 
-  // 既存のコールバックを退避（録画後に復元）
-  // 注: setOnSceneChange は #228 で新設、onEnd は別経路で使われている可能性があるため
-  // 上書きで横取りし、stop 時に null に戻す。完全な復元は呼び出し側責務。
-  const startedAt = performance.now()
+  // 録画中は setOnSceneChange / onEnd を VideoExporter が占有する。
+  // 既存リスナがあれば退避し、cleanup 時に確実に復元する (review S1)。
+  const prevOnEnd = renderer.takeOnEnd()
+  const prevOnSceneChange = renderer.takeOnSceneChange()
 
-  let stopped = false
-  let visitedEndScene = false
-
-  const finalize = (status: string): Promise<VideoExportResult> => {
-    if (stopped) {
-      // 二重 stop ガード。既に Promise が解決済みでも待つ Promise を返してしまうと
-      // 永遠 pending になるので、最終的に同じ blob を返すよう外側で resolve しておく。
-      return resultPromise
-    }
-    stopped = true
-    onProgress?.(status)
-    return new Promise<VideoExportResult>((resolve, reject) => {
-      const finish = () => {
-        try {
-          renderer.setOnSceneChange(null)
-          renderer.onEnd(() => {})
-          audio.disableCapture()
-        } catch (e) {
-          console.warn('[VideoExporter] cleanup failed', e)
-        }
-        const blob = new Blob(chunks, { type: mimeType })
-        resolve({ blob, mimeType, durationMs: performance.now() - startedAt })
-      }
-      recorder.onstop = finish
-      recorder.onerror = (e) => reject(e)
-      // postRollMs の余韻録音
-      setTimeout(() => {
-        try {
-          if (recorder.state !== 'inactive') recorder.stop()
-          else finish()
-        } catch (e) {
-          reject(e)
-        }
-      }, postRollMs)
-    })
-  }
-
-  // resultPromise を先に作って finalize の二重呼び出しに備える
   let resolveResult!: (r: VideoExportResult) => void
   let rejectResult!: (e: unknown) => void
   const resultPromise = new Promise<VideoExportResult>((resolve, reject) => {
@@ -154,36 +129,82 @@ export async function exportVideo(
     rejectResult = reject
   })
 
+  let stopped = false
+  let visitedEndScene = false
+  let startedAt = 0
+
+  const cleanup = () => {
+    try {
+      renderer.setOnSceneChange(prevOnSceneChange)
+      renderer.onEnd(prevOnEnd ?? (() => {}))
+      audio.disableCapture()
+    } catch (e) {
+      console.warn('[VideoExporter] cleanup failed', e)
+    }
+  }
+
+  const finalize = (status: string) => {
+    if (stopped) return
+    stopped = true
+    onProgress?.(status)
+
+    // postRoll の余韻録音 → recorder.stop() → onstop で chunks 確定。
+    // recorder.onstop は stop() 呼び出し後に発火するので、stop 前に仕掛けて OK。
+    recorder.onstop = () => {
+      cleanup()
+      const blob = new Blob(chunks, { type: mimeType })
+      resolveResult({ blob, mimeType, durationMs: performance.now() - startedAt })
+    }
+    setTimeout(() => {
+      try {
+        if (recorder.state !== 'inactive') {
+          recorder.stop()
+        } else {
+          // すでに stop 済（recorder.onerror 経由等）。onstop は呼ばれないので手動で確定
+          cleanup()
+          const blob = new Blob(chunks, { type: mimeType })
+          resolveResult({ blob, mimeType, durationMs: performance.now() - startedAt })
+        }
+      } catch (e) {
+        cleanup()
+        rejectResult(e instanceof Error ? e : new Error(String(e)))
+      }
+    }, postRollMs)
+  }
+
+  recorder.onerror = () => {
+    cleanup()
+    rejectResult(new Error('MediaRecorder error'))
+  }
+
   renderer.setOnSceneChange((sceneId) => {
     if (stopped) return
+    onProgress?.(`録画中: ${sceneId}`)
     if (sceneId === endSceneId) {
       visitedEndScene = true
-      onProgress?.(`録画中: ${sceneId}`)
       return
     }
-    onProgress?.(`録画中: ${sceneId}`)
     if (visitedEndScene) {
-      // endSceneId を抜けた瞬間に stop
-      finalize(`終端到達: ${sceneId}`).then(resolveResult).catch(rejectResult)
+      finalize(`終端到達: ${sceneId}`)
     }
   })
 
   renderer.onEnd(() => {
     if (stopped) return
-    // 全イベント完走（endSceneId が最終シーンだった場合のフォールバック）
-    finalize('全イベント完走').then(resolveResult).catch(rejectResult)
+    finalize('全イベント完走')
   })
 
-  // 録画開始
-  recorder.start(1000) // 1 秒ごとに dataavailable
-  onProgress?.('録画開始')
-
-  // preRoll 経過後にジャンプ（先頭の音切れを軽減）
-  await new Promise((r) => setTimeout(r, preRollMs))
-
-  // オートモード ON で自走させる（llll-ll-media は元々起動時 ON だが念のため）
+  // 先に jumpToScene でシーン先頭まで進めてから録画開始することで、
+  // 「前回プレビューの最終フレーム」が録画先頭に混入するのを防ぐ (review M2)。
   renderer.setAutoMode(true)
   renderer.jumpToScene(startSceneId)
+  onProgress?.('録画準備中')
+
+  await new Promise((r) => setTimeout(r, preRollMs))
+
+  startedAt = performance.now()
+  recorder.start(1000) // 1 秒ごとに dataavailable
+  onProgress?.('録画開始')
 
   return resultPromise
 }
@@ -197,6 +218,7 @@ export function downloadBlob(blob: Blob, filename: string): void {
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
-  // revokeObjectURL は次フレームで（ダウンロードダイアログが開く前に剥がさない）
+  // Safari は <a download> のクリック直後に Blob URL を revoke するとダウンロード失敗するため
+  // 1 秒の猶予を持たせる（Chrome/Firefox は 0ms でも動く）。
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }

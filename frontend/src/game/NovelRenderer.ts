@@ -480,6 +480,25 @@ export class NovelRenderer {
   }
 
   /**
+   * 現在登録されている onEnd を取り出して null クリアする (#228 動画エクスポート用)。
+   * VideoExporter が録画中に onEnd を占有する間、既存のリスナを退避するために使う。
+   */
+  takeOnEnd(): (() => void) | null {
+    const prev = this.onEndCallback
+    this.onEndCallback = null
+    return prev
+  }
+
+  /**
+   * 現在登録されている onSceneChange を取り出して null クリアする (#228 動画エクスポート用)。
+   */
+  takeOnSceneChange(): ((sceneId: string) => void) | null {
+    const prev = this.onSceneChangeCallback
+    this.onSceneChangeCallback = null
+    return prev
+  }
+
+  /**
    * イベント配列をリセットし、最初のテキストイベントまで進めて描画する
    */
   private resetAndStartEvents(events: Event[]): void {
