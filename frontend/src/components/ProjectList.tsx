@@ -10,9 +10,16 @@ interface ProjectListProps {
    * 省略時は表示せず、行クリックで onSelectProject (編集モード) のみ動く。
    */
   onPlayProject?: (projectName: string) => void
+  embedded?: boolean
 }
 
-function ProjectList({ apiBaseUrl, isDark, onSelectProject, onPlayProject }: ProjectListProps) {
+function ProjectList({
+  apiBaseUrl,
+  isDark,
+  onSelectProject,
+  onPlayProject,
+  embedded = false,
+}: ProjectListProps) {
   const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [loading, setLoading] = useState(true)
   // apiBaseUrl が変わるたびにクライアントを作り直す。createApiClient は薄い
@@ -49,10 +56,18 @@ function ProjectList({ apiBaseUrl, isDark, onSelectProject, onPlayProject }: Pro
 
   return (
     <div
-      className={`flex flex-col items-center justify-center h-full p-8 ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}
+      className={`flex h-full min-h-0 flex-col overflow-y-auto p-8 ${
+        embedded
+          ? isDark
+            ? 'bg-gray-900'
+            : 'bg-gray-50'
+          : isDark
+            ? 'items-center justify-center bg-gray-900'
+            : 'items-center justify-center bg-gray-50'
+      }`}
     >
       <div
-        className={`w-full max-w-2xl ${isDark ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-xl p-8`}
+        className={`w-full max-w-2xl shrink-0 ${isDark ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-xl p-8`}
       >
         <h2 className={`text-2xl font-bold mb-6 ${isDark ? 'text-white' : 'text-gray-900'}`}>
           プロジェクトを選択

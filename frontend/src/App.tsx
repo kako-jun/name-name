@@ -32,6 +32,7 @@ function App() {
   })
 
   const [showSettings, setShowSettings] = useState(false)
+  const [showAdmin, setShowAdmin] = useState(false)
   // kako-jun/name-name#107: 既定値を Worker (localhost:8787) に変更。
   //   localStorage に旧値 (localhost:7373) が残っているケースは
   //   設定モーダルで上書きできる。VITE_API_URL があればそれが既定値。
@@ -78,17 +79,7 @@ function App() {
               isDark={isDark}
               onToggleDark={() => setIsDark(!isDark)}
               onOpenSettings={() => setShowSettings(true)}
-            />
-          }
-        />
-        <Route
-          path="/admin"
-          element={
-            <ProjectListScreenWrapper
-              apiBaseUrl={apiBaseUrl}
-              isDark={isDark}
-              onToggleDark={() => setIsDark(!isDark)}
-              onOpenSettings={() => setShowSettings(true)}
+              onOpenAdmin={() => setShowAdmin(true)}
             />
           }
         />
@@ -123,11 +114,15 @@ function App() {
 
       {/* 設定モーダル */}
       {showSettings && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowSettings(false)}
+        >
           <div
-            className={`p-6 rounded-lg shadow-xl max-w-md w-full ${
+            className={`max-h-[min(40rem,calc(100vh-2rem))] w-full max-w-md overflow-y-auto rounded-lg p-6 shadow-xl ${
               isDark ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
             }`}
+            onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-xl font-bold mb-4">設定</h2>
             <div className="space-y-4">
@@ -163,6 +158,29 @@ function App() {
           </div>
         </div>
       )}
+
+      {showAdmin && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowAdmin(false)}
+        >
+          <div
+            className={`h-[min(52rem,calc(100vh-2rem))] w-full max-w-5xl overflow-hidden rounded-2xl shadow-2xl ${
+              isDark ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ProjectListScreenWrapper
+              apiBaseUrl={apiBaseUrl}
+              isDark={isDark}
+              onToggleDark={() => setIsDark(!isDark)}
+              onOpenSettings={() => setShowSettings(true)}
+              onClose={() => setShowAdmin(false)}
+              embedded={true}
+            />
+          </div>
+        </div>
+      )}
     </BrowserRouter>
   )
 }
@@ -172,11 +190,13 @@ function JumpTopScreenWrapper({
   isDark,
   onToggleDark,
   onOpenSettings,
+  onOpenAdmin,
 }: {
   apiBaseUrl: string
   isDark: boolean
   onToggleDark: () => void
   onOpenSettings: () => void
+  onOpenAdmin: () => void
 }) {
   const navigate = useNavigate()
 
@@ -192,7 +212,7 @@ function JumpTopScreenWrapper({
       onOpenSettings={onOpenSettings}
       onPlayProject={(projectName) => navigate(`/play/${projectName}`)}
       onEditProject={(projectName) => navigate(`/edit/${projectName}`)}
-      onOpenAdmin={() => navigate('/admin')}
+      onOpenAdmin={onOpenAdmin}
     />
   )
 }
@@ -202,11 +222,15 @@ function ProjectListScreenWrapper({
   isDark,
   onToggleDark,
   onOpenSettings,
+  onClose,
+  embedded = false,
 }: {
   apiBaseUrl: string
   isDark: boolean
   onToggleDark: () => void
   onOpenSettings: () => void
+  onClose?: () => void
+  embedded?: boolean
 }) {
   const navigate = useNavigate()
 
@@ -228,6 +252,8 @@ function ProjectListScreenWrapper({
       onPlayProject={handlePlayProject}
       onToggleDark={onToggleDark}
       onOpenSettings={onOpenSettings}
+      onClose={onClose}
+      embedded={embedded}
     />
   )
 }

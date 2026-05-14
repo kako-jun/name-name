@@ -11,6 +11,8 @@ interface ProjectListScreenProps {
   onPlayProject?: (projectName: string) => void
   onToggleDark: () => void
   onOpenSettings: () => void
+  onClose?: () => void
+  embedded?: boolean
 }
 
 function ProjectListScreen({
@@ -20,23 +22,29 @@ function ProjectListScreen({
   onPlayProject,
   onToggleDark,
   onOpenSettings,
+  onClose,
+  embedded = false,
 }: ProjectListScreenProps) {
   return (
-    <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
+    <div
+      className={`flex flex-col ${embedded ? 'h-full min-h-0' : 'h-screen'} ${
+        isDark ? 'dark bg-gray-900' : 'bg-white'
+      }`}
+    >
       <header
         className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
       >
         <div className="px-6 py-2 flex items-center justify-between">
-          <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-            Name × Name
-            {/* kako-jun/name-name#109: 旧 ProjectListScreen は /admin に退避。
-                ヘッダで「管理画面」だと明示する。 */}
-            <span
-              className={`ml-2 text-xs font-normal ${isDark ? 'text-gray-400' : 'text-gray-500'}`}
-            >
-              管理画面
-            </span>
-          </h1>
+          <div className="min-w-0">
+            <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+              Name × Name
+              <span
+                className={`ml-2 text-xs font-normal ${isDark ? 'text-gray-400' : 'text-gray-500'}`}
+              >
+                管理画面
+              </span>
+            </h1>
+          </div>
           <div className="flex items-center gap-2">
             <button
               onClick={onToggleDark}
@@ -71,6 +79,7 @@ function ProjectListScreen({
                 isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
               }`}
               title="Settings"
+              aria-label="Settings"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -87,16 +96,36 @@ function ProjectListScreen({
                 />
               </svg>
             </button>
+            {onClose && (
+              <button
+                onClick={onClose}
+                className={`w-10 h-10 flex items-center justify-center rounded transition-colors ${
+                  isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+                title="閉じる"
+                aria-label="閉じる"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 6l12 12M18 6l-12 12"
+                  />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 min-h-0 overflow-hidden">
         <ProjectList
           apiBaseUrl={apiBaseUrl}
           isDark={isDark}
           onSelectProject={onSelectProject}
           onPlayProject={onPlayProject}
+          embedded={embedded}
         />
       </main>
     </div>
