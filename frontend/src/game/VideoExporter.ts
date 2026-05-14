@@ -23,10 +23,11 @@ export interface VideoExportOptions {
   /**
    * jumpToScene 後、録画開始までの待機時間 ms。
    * jumpToScene が canvas に新フレームを描画 + GPU 合成が flush されるまでの猶予。
-   * jumpToScene 同期描画 → 1 frame (16ms @60Hz) 待機 → recorder.start の順で、
+   * jumpToScene 同期描画 → preRoll 待機 → recorder.start の順で、
    * 「前回プレビューの最終フレーム」が録画先頭に乗るリスクと、
    * 「BGM 開始イベントが録画前に発火して頭が欠ける」リスクの両方を最小化する。
-   * 16ms は人間の聴覚閾値（音の attack 50ms 以下）以下なので BGM headcut は知覚されない。
+   * 50ms はパイント flush (~16ms) + AudioContext のバッファ遅延 (20-50ms) を吸収する目安。
+   * これより短くすると BGM 頭が欠けるリスクがある。
    */
   preRollMs?: number
   /**
@@ -66,13 +67,12 @@ export function sanitizeFilename(s: string): string {
   return s.replace(/[^a-zA-Z0-9_.-]+/g, '_')
 }
 
-/** 多重 exportVideo 並行起動を防ぐモジュールスコープのフラグ (review round-2 S3) */
+/**
+ * 多重 exportVideo 並行起動を防ぐモジュールスコープのフラグ (review round-2 S3)。
+ * UI 側 (EditorScreen) は別途 React state で「録画中」を表現するので、ここは
+ * VideoExporter 内部の防衛線専用（UI から状態を読む必要は無い）。
+ */
 let isExporting = false
-
-/** 現在 exportVideo が走行中かを返す（UI でボタン disable 制御に使う）*/
-export function isVideoExporting(): boolean {
-  return isExporting
-}
 
 /**
  * シナリオ範囲を録画して `Blob` を返す。失敗時は throw する。
@@ -90,7 +90,7 @@ export async function exportVideo(
     fps,
     mimeType: mimeTypeOpt,
     onProgress,
-    preRollMs = 16,
+    preRollMs = 50,
     postRollMs = 1200,
   } = opts
 
@@ -233,7 +233,7 @@ export async function exportVideo(
     }
   })
 
-  renderer.onEnd(() => {
+  renderer.setOnEnd(() => {
     if (stopped) return
     finalize('全イベント完走')
   })

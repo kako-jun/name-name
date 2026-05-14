@@ -1,9 +1,9 @@
+import { useEffect } from 'react'
+
 /**
  * 動画エクスポートモーダル (#228)。
  * EditorScreen のプレビュー画面に重ねて表示する。
  */
-import { useEffect } from 'react'
-
 interface VideoExportModalProps {
   isDark: boolean
   allSceneIds: string[]
@@ -34,19 +34,24 @@ function VideoExportModal({
   onStart,
   onClose,
 }: VideoExportModalProps) {
-  // Esc キーで閉じる
+  // Esc キーで閉じる（録画中は閉じれないようにする = 進捗の見失い防止）
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape' && !isRunning) {
+        e.stopPropagation()
+        onClose()
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
+  }, [onClose, isRunning])
 
   return (
     <div
       className="absolute inset-0 z-50 flex items-center justify-center bg-black/70"
-      onClick={onClose}
+      onClick={() => {
+        if (!isRunning) onClose()
+      }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="video-export-modal-title"
@@ -107,7 +112,8 @@ function VideoExportModal({
           <button
             type="button"
             onClick={onClose}
-            className={`px-3 py-1 rounded text-sm ${isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-200 hover:bg-gray-300'}`}
+            disabled={isRunning}
+            className={`px-3 py-1 rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed ${isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-200 hover:bg-gray-300'}`}
           >
             閉じる
           </button>
