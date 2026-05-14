@@ -63,6 +63,9 @@ export class AudioManager {
       this.bgmMasterGain = this.ctx.createGain()
       this.bgmMasterGain.gain.value = this.bgmVolume
       this.bgmMasterGain.connect(this.ctx.destination)
+      // 動画録画中で captureDest 先取りの場合は同時に分岐する (#228)。
+      // 通常経路では enableCapture → ensureContext → ensureMasterGains の順で
+      // bgmMasterGain は既に存在するため、このブランチは「再 init 後の最初の再生時」用の保険。
       if (this.captureDest) this.bgmMasterGain.connect(this.captureDest)
     }
     if (!this.seMasterGain) {
