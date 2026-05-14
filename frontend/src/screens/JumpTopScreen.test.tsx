@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 // API クライアントをモック化
 const listProjectsMock = vi.fn()
@@ -48,7 +49,7 @@ const baseProps = {
 describe('JumpTopScreen', () => {
   it('listProjects 成功時にタイル一覧を表示する', async () => {
     listProjectsMock.mockResolvedValue([
-      { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
+      { name: 'friday-1930', title: 'Friday 19:30', repo: 'kako-jun/friday-1930' },
       { name: 'demo', title: 'demo', repo: 'kako-jun/demo' },
     ])
     render(
@@ -63,13 +64,13 @@ describe('JumpTopScreen', () => {
     await waitFor(() => {
       expect(screen.getAllByTestId('game-tile')).toHaveLength(2)
     })
-    expect(screen.getByText('友達 1930')).toBeInTheDocument()
-    expect(screen.getByText('demo')).toBeInTheDocument()
+    expect(screen.getAllByText('Friday 19:30').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('demo').length).toBeGreaterThan(0)
   })
 
   it('タイルクリックで onPlayProject が呼ばれる', async () => {
     listProjectsMock.mockResolvedValue([
-      { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
+      { name: 'friday-1930', title: 'Friday 19:30', repo: 'kako-jun/friday-1930' },
     ])
     const onPlay = vi.fn()
     render(
@@ -86,9 +87,29 @@ describe('JumpTopScreen', () => {
     expect(onPlay).toHaveBeenCalledWith('friday-1930')
   })
 
+  it('2位以下のタイルクリックでも対応する projectName が呼ばれる', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'friday-1930', title: 'Friday 19:30', repo: 'kako-jun/friday-1930' },
+      { name: 'demo', title: 'Demo', repo: 'kako-jun/demo' },
+    ])
+    const onPlay = vi.fn()
+    render(
+      <JumpTopScreen
+        {...baseProps}
+        onPlayProject={onPlay}
+        onEditProject={vi.fn()}
+        isEditor={() => false}
+      />
+    )
+
+    const tiles = await screen.findAllByTestId('game-tile')
+    fireEvent.click(tiles[1])
+    expect(onPlay).toHaveBeenCalledWith('demo')
+  })
+
   it('非ログイン時は編集ボタンを表示しない', async () => {
     listProjectsMock.mockResolvedValue([
-      { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
+      { name: 'friday-1930', title: 'Friday 19:30', repo: 'kako-jun/friday-1930' },
     ])
     render(
       <JumpTopScreen
@@ -104,7 +125,7 @@ describe('JumpTopScreen', () => {
 
   it('ログイン時は編集ボタンが表示され、押下で onEditProject が呼ばれる', async () => {
     listProjectsMock.mockResolvedValue([
-      { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
+      { name: 'friday-1930', title: 'Friday 19:30', repo: 'kako-jun/friday-1930' },
     ])
     const onPlay = vi.fn()
     const onEdit = vi.fn()
@@ -117,7 +138,7 @@ describe('JumpTopScreen', () => {
       />
     )
 
-    const editBtn = await screen.findByRole('button', { name: /友達 1930 を編集/ })
+    const editBtn = await screen.findByRole('button', { name: /Friday 19:30 を編集/ })
     fireEvent.click(editBtn)
     expect(onEdit).toHaveBeenCalledWith('friday-1930')
     // 編集ボタンクリックは play に伝播しない（stopPropagation）
@@ -158,6 +179,36 @@ describe('JumpTopScreen', () => {
     // Enter で onPlayProject('c')
     fireEvent.keyDown(window, { key: 'Enter' })
     expect(onPlay).toHaveBeenCalledWith('c')
+  })
+
+  it('設定ボタンにフォーカス中の Enter はゲーム起動に誤爆しない', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'a', title: 'A', repo: 'kako-jun/a' },
+      { name: 'b', title: 'B', repo: 'kako-jun/b' },
+    ])
+    const user = userEvent.setup()
+    const onPlay = vi.fn()
+    const onOpenSettings = vi.fn()
+    render(
+      <JumpTopScreen
+        {...baseProps}
+        onOpenSettings={onOpenSettings}
+        onPlayProject={onPlay}
+        onEditProject={vi.fn()}
+        isEditor={() => false}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('game-tile')).toHaveLength(2)
+    })
+
+    const settingsButton = screen.getByRole('button', { name: 'Settings' })
+    settingsButton.focus()
+    await user.keyboard('{Enter}')
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    expect(onPlay).not.toHaveBeenCalled()
   })
 
   it('listProjects 失敗時にエラーメッセージを表示する', async () => {
