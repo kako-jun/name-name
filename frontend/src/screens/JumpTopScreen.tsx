@@ -142,6 +142,69 @@ function CommentIcon() {
   )
 }
 
+function MoonIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function SunIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function GearIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function GridIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm10 0h6v6h-6v-6Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 function FooterIcon({ type }: { type: 'home' | 'ticket' | 'search' | 'hat' | 'user' }) {
   if (type === 'home') {
     return (
@@ -352,72 +415,68 @@ function JumpTopScreen({
         className={`mx-auto min-h-screen w-full max-w-[820px] ${panelBgClass} shadow-[0_0_0_1px_rgba(255,255,255,0.04)]`}
       >
         <header className="sticky top-0 z-30">
-          <div className="bg-[#fb322f] px-4 py-4 text-white">
+          <div className="bg-[#fb322f] px-4 py-2.5 text-white">
             <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="leading-none">
-                  <div className="text-[1.9rem] font-black tracking-[-0.08em]">ネーム＋</div>
-                  <div className="text-[0.76rem] font-bold tracking-[0.18em]">連載ゲーム！</div>
-                </div>
-                <div className="hidden text-[2rem] font-black tracking-[-0.05em] text-[#ffe54d] sm:block">
-                  初回全部遊べる
+              <div className="min-w-0">
+                <div className="text-[1.45rem] font-black tracking-[-0.08em] leading-none">
+                  Name x Name
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={onOpenAdmin}
-                  className="rounded-full border border-white/30 bg-black/20 px-3 py-1.5 text-xs font-bold"
-                  title="管理"
-                >
-                  管理
-                </button>
-                <button
-                  type="button"
                   onClick={onToggleDark}
-                  className="rounded-full border border-white/30 bg-black/20 px-3 py-1.5 text-xs font-bold"
+                  className="flex h-8.5 w-8.5 items-center justify-center rounded-full border border-white/30 bg-black/20"
                   title={isDark ? 'Light Mode' : 'Dark Mode'}
                   aria-label={isDark ? 'Light Mode' : 'Dark Mode'}
                 >
-                  {isDark ? 'LIGHT' : 'DARK'}
+                  {isDark ? <SunIcon /> : <MoonIcon />}
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenAdmin}
+                  className="flex h-8.5 w-8.5 items-center justify-center rounded-full border border-white/30 bg-black/20"
+                  title="管理"
+                  aria-label="管理"
+                >
+                  <GridIcon />
                 </button>
                 <button
                   type="button"
                   onClick={onOpenSettings}
-                  className="rounded-full border border-white/30 bg-black/20 px-3 py-1.5 text-xs font-bold"
+                  className="flex h-8.5 w-8.5 items-center justify-center rounded-full border border-white/30 bg-black/20"
                   title="Settings"
                   aria-label="Settings"
                 >
-                  設定
+                  <GearIcon />
                 </button>
               </div>
             </div>
-            <div className="mt-2 text-sm font-bold text-[#ffe54d] sm:hidden">初回全部遊べる</div>
           </div>
 
-          <div className={`border-b px-4 py-4 ${sectionBgClass}`}>
+          <div className={`border-b px-4 py-3 ${sectionBgClass}`}>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-[2rem] font-black text-[#fb322f] shadow-[0_0_0_4px_rgba(255,255,255,0.05)]">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[1.55rem] font-black text-[#fb322f] shadow-[0_0_0_4px_rgba(255,255,255,0.05)]">
                   名
                 </div>
                 <div>
-                  <div className="text-[2rem] font-black tracking-[-0.06em] leading-none text-white">
+                  <div className="text-[1.65rem] font-black tracking-[-0.06em] leading-none text-white">
                     ネームのランキング
                   </div>
                   <div
-                    className={`mt-1 text-xs font-semibold uppercase tracking-[0.18em] ${subTextClass}`}
+                    className={`mt-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] ${subTextClass}`}
                   >
                     Fixed Order Now / Most Played Later
                   </div>
                 </div>
               </div>
-              <div className={`text-5xl font-thin ${subTextClass}`}>›</div>
+              <div className={`text-4xl font-thin ${subTextClass}`}>›</div>
             </div>
           </div>
         </header>
 
-        <main className="px-4 pb-36 pt-4" role="main" aria-label="ゲーム選択">
+        <main className="px-4 pb-36 pt-3" role="main" aria-label="ゲーム選択">
           {loading ? (
             <div className="flex min-h-[40vh] items-center justify-center">
               <div className="text-center">
@@ -436,7 +495,7 @@ function JumpTopScreen({
               <p className="mt-2 text-sm">「管理」からプロジェクトを追加してください</p>
             </div>
           ) : (
-            <div role="grid" aria-label="ゲーム一覧" className="space-y-8">
+            <div role="grid" aria-label="ゲーム一覧" className="space-y-6">
               {featured && (
                 <article
                   key={featured.project.name}
@@ -480,32 +539,32 @@ function JumpTopScreen({
                     >
                       <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_24%,rgba(255,255,255,0.24),transparent_22%),radial-gradient(circle_at_82%_18%,rgba(255,255,255,0.26),transparent_20%),linear-gradient(0deg,rgba(0,0,0,0.04),rgba(0,0,0,0.04))]" />
                       <div className="absolute inset-y-0 right-0 w-[32%] bg-[linear-gradient(180deg,rgba(255,255,255,0.24),rgba(0,0,0,0.12))]" />
-                      <div className="absolute left-4 top-4 rounded-full bg-black px-4 py-3 text-sm font-black leading-tight tracking-[-0.04em] text-white shadow-lg">
+                      <div className="absolute left-3 top-3 rounded-full bg-black px-3 py-2 text-[0.68rem] font-black leading-tight tracking-[-0.04em] text-white shadow-lg">
                         人気沸騰
                         <br />
                         kako-jun の
                         <br />
                         ゲーム置き場
                       </div>
-                      <div className="absolute bottom-0 left-0 right-0 bg-[linear-gradient(180deg,transparent,rgba(0,0,0,0.82))] p-4 pt-12">
-                        <div className="inline-flex bg-[#fb322f] px-3 py-1 text-xl font-black text-white">
+                      <div className="absolute bottom-0 left-0 right-0 bg-[linear-gradient(180deg,transparent,rgba(0,0,0,0.82))] p-3 pt-10">
+                        <div className="inline-flex bg-[#fb322f] px-2.5 py-1 text-sm font-black text-white">
                           全話￥0
                         </div>
-                        <div className="mt-3 text-[clamp(2.5rem,6vw,5.2rem)] font-black tracking-[-0.08em] text-white drop-shadow-[0_3px_0_rgba(0,0,0,0.35)]">
+                        <div className="mt-2 text-[clamp(2rem,5vw,4rem)] font-black tracking-[-0.08em] text-white drop-shadow-[0_3px_0_rgba(0,0,0,0.35)]">
                           {(featured.project.title || featured.project.name).toUpperCase()}
                         </div>
-                        <div className="mt-1 text-sm font-semibold uppercase tracking-[0.22em] text-white/78">
+                        <div className="mt-0.5 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-white/78">
                           {featured.project.repo}
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="space-y-2 py-3">
-                    <h2 className="text-[2.2rem] font-black tracking-[-0.06em] leading-none">
+                  <div className="space-y-1.5 py-2.5">
+                    <h2 className="text-[1.8rem] font-black tracking-[-0.06em] leading-none">
                       {featured.project.title || featured.project.name}
                     </h2>
-                    <div className="flex items-center gap-8 text-[1.1rem] font-semibold">
+                    <div className="flex items-center gap-6 text-[0.95rem] font-semibold">
                       <div className="flex items-center gap-2">
                         <EyeIcon />
                         <span>{featured.stats.views}</span>
@@ -520,7 +579,7 @@ function JumpTopScreen({
                         <button
                           type="button"
                           onClick={(e) => handleEdit(e, featured.project.name)}
-                          className="rounded-full bg-white px-4 py-2 text-sm font-black text-black"
+                          className="rounded-full bg-white px-3 py-1.5 text-xs font-black text-black"
                           aria-label={`${featured.project.title || featured.project.name} を編集`}
                         >
                           編集
@@ -531,7 +590,7 @@ function JumpTopScreen({
                 </article>
               )}
 
-              <div className="grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2">
                 {rest.map(({ project, index, stats }) => {
                   // rankingProjects 側で保持した元の project index。slice(1) 後の連番ではない。
                   const rank = index + 1
@@ -578,25 +637,25 @@ function JumpTopScreen({
                         </div>
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_18%,rgba(255,255,255,0.23),transparent_18%),linear-gradient(180deg,transparent_34%,rgba(0,0,0,0.28)_78%,rgba(0,0,0,0.58))]" />
                         <div className="absolute bottom-0 left-0 right-0 p-4">
-                          <div className="inline-flex bg-[#fb322f] px-3 py-1 text-base font-black text-white">
+                          <div className="inline-flex bg-[#fb322f] px-2.5 py-1 text-sm font-black text-white">
                             全話￥0
                           </div>
-                          <div className="mt-3 break-words text-[clamp(2rem,5vw,3.5rem)] font-black tracking-[-0.08em] leading-none text-white drop-shadow-[0_3px_0_rgba(0,0,0,0.35)]">
+                          <div className="mt-2 break-words text-[clamp(1.55rem,4vw,2.7rem)] font-black tracking-[-0.08em] leading-none text-white drop-shadow-[0_3px_0_rgba(0,0,0,0.35)]">
                             {(project.title || project.name).toUpperCase()}
                           </div>
                         </div>
                       </div>
 
-                      <div className="space-y-1 py-3">
-                        <h2 className="text-[1.1rem] font-black tracking-[-0.04em]">
+                      <div className="space-y-1 py-2.5">
+                        <h2 className="text-[0.98rem] font-black tracking-[-0.04em]">
                           {project.title || project.name}
                         </h2>
                         <div
-                          className={`text-xs font-semibold uppercase tracking-[0.15em] ${metaTextClass}`}
+                          className={`text-[0.64rem] font-semibold uppercase tracking-[0.13em] ${metaTextClass}`}
                         >
                           {project.repo}
                         </div>
-                        <div className="flex items-center gap-6 pt-1 text-base font-semibold">
+                        <div className="flex items-center gap-5 pt-0.5 text-[0.92rem] font-semibold">
                           <div className="flex items-center gap-2">
                             <EyeIcon />
                             <span>{stats.views}</span>
@@ -611,7 +670,7 @@ function JumpTopScreen({
                             <button
                               type="button"
                               onClick={(e) => handleEdit(e, project.name)}
-                              className="rounded-full border border-white/18 px-3 py-1.5 text-xs font-black text-white"
+                              className="rounded-full border border-white/18 px-3 py-1 text-[0.68rem] font-black text-white"
                               aria-label={`${project.title || project.name} を編集`}
                             >
                               編集
@@ -630,7 +689,7 @@ function JumpTopScreen({
         <footer
           className={`fixed bottom-0 left-0 right-0 z-40 border-t border-black/10 ${footerBgClass}`}
         >
-          <div className="mx-auto flex max-w-[820px] items-stretch justify-between px-2 pt-2">
+          <div className="mx-auto flex max-w-[820px] items-stretch justify-between px-2 pt-1.5">
             {[
               { label: 'ホーム', icon: 'home', active: true },
               { label: '無料作品', icon: 'ticket', active: false },
@@ -640,18 +699,18 @@ function JumpTopScreen({
             ].map((item) => (
               <div
                 key={item.label}
-                className="flex min-w-0 flex-1 flex-col items-center gap-1 px-1 pb-3 pt-1 text-center"
+                className="flex min-w-0 flex-1 flex-col items-center gap-0.5 px-1 pb-2.5 pt-0.5 text-center"
                 aria-hidden="true"
               >
                 <div
-                  className={`flex h-16 w-16 items-center justify-center rounded-full ${
+                  className={`flex h-13 w-13 items-center justify-center rounded-full ${
                     item.active ? 'bg-[#fb322f] text-white' : footerInactiveTextClass
                   }`}
                 >
                   <FooterIcon type={item.icon as 'home' | 'ticket' | 'search' | 'hat' | 'user'} />
                 </div>
                 <span
-                  className={`text-[0.95rem] font-black tracking-[-0.03em] ${
+                  className={`text-[0.78rem] font-black tracking-[-0.03em] ${
                     item.active ? 'text-[#fb322f]' : footerInactiveTextClass
                   }`}
                 >
@@ -660,8 +719,6 @@ function JumpTopScreen({
               </div>
             ))}
           </div>
-          <div className="mx-auto h-1.5 w-36 rounded-full bg-black/40" />
-          <div className="h-2" />
         </footer>
       </div>
     </div>
