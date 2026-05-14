@@ -599,6 +599,11 @@ export class NovelRenderer {
     this.onEndCallback = callback
   }
 
+  /** 終了コールバックを設定する（null で解除可能）(#228 動画エクスポート復元用) */
+  setOnEnd(callback: (() => void) | null): void {
+    this.onEndCallback = callback
+  }
+
   /**
    * 設定（テキスト速度・音量）をリアルタイムに反映する。
    * voiceVolume は voice 専用 masterGain 実装後に対応予定 (#144 follow-up)。

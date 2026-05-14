@@ -22,14 +22,17 @@ export interface VideoExportOptions {
   onProgress?: (status: string) => void
   /**
    * jumpToScene 後、録画開始までの待機時間 ms。
-   * 経験則: PixiJS の Ticker 1〜2 周期 (~33ms) + 立ち絵 fade-in 余裕。100ms あれば
-   * 「前回プレビューの最終フレーム」を確実にクリアして新シーン先頭が描画された状態で録画開始できる。
+   * jumpToScene が canvas に新フレームを描画 + GPU 合成が flush されるまでの猶予。
+   * jumpToScene 同期描画 → 1 frame (16ms @60Hz) 待機 → recorder.start の順で、
+   * 「前回プレビューの最終フレーム」が録画先頭に乗るリスクと、
+   * 「BGM 開始イベントが録画前に発火して頭が欠ける」リスクの両方を最小化する。
+   * 16ms は人間の聴覚閾値（音の attack 50ms 以下）以下なので BGM headcut は知覚されない。
    */
   preRollMs?: number
   /**
    * 終了検知後、録画停止までの追加録音時間 ms。
-   * 経験則: 終端の SE / BGM の自然なフェードアウトと、停止フラグから MediaRecorder.stop()
-   * までのフレーム遅延を吸収する。300ms 程度で余韻が切れない。
+   * AudioManager の BGM 既定フェード 1000ms をすべて録音するため、デフォルト 1200ms。
+   * 短くすると終端で BGM がプチっと切れる事故になるため、変更時は要注意。
    */
   postRollMs?: number
 }
@@ -58,9 +61,17 @@ export function pickSupportedMimeType(): string | null {
   return null
 }
 
-/** ファイル名に使えない文字を `_` に置換する */
+/** ファイル名に使えない文字を `_` に置換する。連続する不正文字は 1 つに圧縮する */
 export function sanitizeFilename(s: string): string {
-  return s.replace(/[^a-zA-Z0-9_.-]/g, '_')
+  return s.replace(/[^a-zA-Z0-9_.-]+/g, '_')
+}
+
+/** 多重 exportVideo 並行起動を防ぐモジュールスコープのフラグ (review round-2 S3) */
+let isExporting = false
+
+/** 現在 exportVideo が走行中かを返す（UI でボタン disable 制御に使う）*/
+export function isVideoExporting(): boolean {
+  return isExporting
 }
 
 /**
@@ -79,8 +90,8 @@ export async function exportVideo(
     fps,
     mimeType: mimeTypeOpt,
     onProgress,
-    preRollMs = 100,
-    postRollMs = 300,
+    preRollMs = 16,
+    postRollMs = 1200,
   } = opts
 
   if (typeof MediaRecorder === 'undefined') {
@@ -111,6 +122,14 @@ export async function exportVideo(
     ...audioStream.getAudioTracks(),
   ])
 
+  // 多重録画ガード (review S3)。同 NovelRenderer に対する並行 exportVideo は
+  // takeOnEnd/takeOnSceneChange の前提（破壊的）を壊すため許可しない。
+  if (isExporting) {
+    audio.disableCapture()
+    throw new Error('VideoExporter is already running. Wait for the current export to finish.')
+  }
+  isExporting = true
+
   const chunks: Blob[] = []
   const recorder = new MediaRecorder(combined, { mimeType })
   recorder.ondataavailable = (e) => {
@@ -130,17 +149,32 @@ export async function exportVideo(
   })
 
   let stopped = false
+  let settled = false
   let visitedEndScene = false
   let startedAt = 0
 
   const cleanup = () => {
     try {
+      // 元値が null だったら null に戻す（advance の onEndCallback?.() 挙動を完全復元）(round-2 S4)
       renderer.setOnSceneChange(prevOnSceneChange)
-      renderer.onEnd(prevOnEnd ?? (() => {}))
+      renderer.setOnEnd(prevOnEnd)
       audio.disableCapture()
     } catch (e) {
       console.warn('[VideoExporter] cleanup failed', e)
     }
+    isExporting = false
+  }
+
+  const settleResolve = (durationMs: number) => {
+    if (settled) return
+    settled = true
+    const blob = new Blob(chunks, { type: mimeType })
+    resolveResult({ blob, mimeType, durationMs })
+  }
+  const settleReject = (err: Error) => {
+    if (settled) return
+    settled = true
+    rejectResult(err)
   }
 
   const finalize = (status: string) => {
@@ -152,31 +186,41 @@ export async function exportVideo(
     // recorder.onstop は stop() 呼び出し後に発火するので、stop 前に仕掛けて OK。
     recorder.onstop = () => {
       cleanup()
-      const blob = new Blob(chunks, { type: mimeType })
-      resolveResult({ blob, mimeType, durationMs: performance.now() - startedAt })
+      settleResolve(performance.now() - startedAt)
     }
     setTimeout(() => {
       try {
         if (recorder.state !== 'inactive') {
           recorder.stop()
         } else {
-          // すでに stop 済（recorder.onerror 経由等）。onstop は呼ばれないので手動で確定
+          // すでに stop 済（recorder.onerror 経由等）。onstop は来ないので手動で確定。
+          // settled フラグがあるので onstop と二重発火しても安全 (round-2 M2)。
+          recorder.onstop = null
           cleanup()
-          const blob = new Blob(chunks, { type: mimeType })
-          resolveResult({ blob, mimeType, durationMs: performance.now() - startedAt })
+          settleResolve(performance.now() - startedAt)
         }
       } catch (e) {
         cleanup()
-        rejectResult(e instanceof Error ? e : new Error(String(e)))
+        settleReject(e instanceof Error ? e : new Error(String(e)))
       }
     }, postRollMs)
   }
 
-  recorder.onerror = () => {
+  recorder.onerror = (e: Event) => {
+    // MediaRecorder の onerror は MediaRecorderErrorEvent を渡す。
+    // e.error に DOMException が入っているので拾って原因究明に役立てる (round-2 S2)。
+    const detail = (e as { error?: { name?: string; message?: string } }).error
     cleanup()
-    rejectResult(new Error('MediaRecorder error'))
+    settleReject(
+      new Error(
+        `MediaRecorder error: ${detail?.name ?? 'unknown'}${detail?.message ? ' ' + detail.message : ''}`
+      )
+    )
   }
 
+  // startSceneId === endSceneId の単一シーン録画では、jumpToScene 直後の
+  // setOnSceneChange 発火で visitedEndScene = true まで進むが、まだ
+  // 「別シーンへの遷移」は起きていないので finalize は呼ばれない。OK。
   renderer.setOnSceneChange((sceneId) => {
     if (stopped) return
     onProgress?.(`録画中: ${sceneId}`)
@@ -194,8 +238,10 @@ export async function exportVideo(
     finalize('全イベント完走')
   })
 
-  // 先に jumpToScene でシーン先頭まで進めてから録画開始することで、
-  // 「前回プレビューの最終フレーム」が録画先頭に混入するのを防ぐ (review M2)。
+  // 順序 (M1 修正): jumpToScene で synchronously 新フレーム描画 + BGM 開始 →
+  // 1 frame (16ms @60Hz) 待って GPU 合成 flush → recorder.start。
+  // この順序で「前回プレビューの最終フレーム混入」と「BGM 頭欠け」の両方を最小化する。
+  // jumpToScene 後すぐに recorder を立ち上げないと BGM の起点を取り逃す。
   renderer.setAutoMode(true)
   renderer.jumpToScene(startSceneId)
   onProgress?.('録画準備中')
@@ -203,7 +249,7 @@ export async function exportVideo(
   await new Promise((r) => setTimeout(r, preRollMs))
 
   startedAt = performance.now()
-  recorder.start(1000) // 1 秒ごとに dataavailable
+  recorder.start(1000) // 1 秒ごとに dataavailable。途中 error 時の partial 保存にも有効
   onProgress?.('録画開始')
 
   return resultPromise

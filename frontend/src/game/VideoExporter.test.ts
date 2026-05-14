@@ -6,12 +6,12 @@ describe('sanitizeFilename', () => {
     expect(sanitizeFilename('a-b_c.1')).toBe('a-b_c.1')
   })
 
-  it('replaces slashes and other unsafe characters with underscore', () => {
-    expect(sanitizeFilename('foo/bar baz:qux*?')).toBe('foo_bar_baz_qux__')
+  it('replaces slashes and other unsafe characters with underscore, collapsing runs', () => {
+    expect(sanitizeFilename('foo/bar baz:qux*?')).toBe('foo_bar_baz_qux_')
   })
 
-  it('keeps Latin letters but replaces non-ASCII (so JIS path on Windows is safe)', () => {
-    expect(sanitizeFilename('日本語file')).toBe('___file')
+  it('collapses non-ASCII runs to a single underscore (so JIS path on Windows is safe)', () => {
+    expect(sanitizeFilename('日本語file')).toBe('_file')
   })
 })
 

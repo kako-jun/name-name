@@ -2,6 +2,8 @@
  * 動画エクスポートモーダル (#228)。
  * EditorScreen のプレビュー画面に重ねて表示する。
  */
+import { useEffect } from 'react'
+
 interface VideoExportModalProps {
   isDark: boolean
   allSceneIds: string[]
@@ -9,6 +11,8 @@ interface VideoExportModalProps {
   endSceneId: string
   fps: number
   status: string | null
+  /** 録画進行中なら true。録画開始ボタンを disable する */
+  isRunning: boolean
   onChangeStart: (id: string) => void
   onChangeEnd: (id: string) => void
   onChangeFps: (fps: number) => void
@@ -23,22 +27,37 @@ function VideoExportModal({
   endSceneId,
   fps,
   status,
+  isRunning,
   onChangeStart,
   onChangeEnd,
   onChangeFps,
   onStart,
   onClose,
 }: VideoExportModalProps) {
+  // Esc キーで閉じる
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
   return (
     <div
       className="absolute inset-0 z-50 flex items-center justify-center bg-black/70"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="video-export-modal-title"
     >
       <div
         className={`max-w-md w-[90%] p-5 rounded-lg shadow-xl ${isDark ? 'bg-gray-800 text-gray-100' : 'bg-white text-gray-900'}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-lg font-bold mb-3">動画エクスポート (WebM)</h2>
+        <h2 id="video-export-modal-title" className="text-lg font-bold mb-3">
+          動画エクスポート (WebM)
+        </h2>
         <p className="text-xs mb-3 opacity-70">
           シナリオ範囲を MediaRecorder
           でリアルタイム録画します。実時間がかかり、録画中はタブをアクティブにしておいてください。
@@ -95,9 +114,10 @@ function VideoExportModal({
           <button
             type="button"
             onClick={onStart}
-            className="px-3 py-1 rounded text-sm bg-red-600 hover:bg-red-500 text-white"
+            disabled={isRunning}
+            className="px-3 py-1 rounded text-sm bg-red-600 hover:bg-red-500 text-white disabled:bg-gray-500 disabled:cursor-not-allowed"
           >
-            録画開始
+            {isRunning ? '録画中…' : '録画開始'}
           </button>
         </div>
       </div>
