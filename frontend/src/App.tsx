@@ -165,11 +165,12 @@ function App() {
           onClick={() => setShowAdmin(false)}
         >
           <div
-            className={`h-[min(52rem,calc(100vh-2rem))] w-full max-w-5xl overflow-hidden rounded-2xl shadow-2xl ${
-              isDark ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'
+            className={`max-h-[min(52rem,calc(100vh-2rem))] w-full max-w-5xl overflow-y-auto rounded-lg p-6 shadow-xl ${
+              isDark ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
             }`}
             onClick={(e) => e.stopPropagation()}
           >
+            <h2 className="mb-4 text-xl font-bold">管理</h2>
             <ProjectListScreenWrapper
               apiBaseUrl={apiBaseUrl}
               isDark={isDark}

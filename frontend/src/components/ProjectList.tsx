@@ -58,18 +58,24 @@ function ProjectList({
     <div
       className={`flex h-full min-h-0 flex-col overflow-y-auto p-8 ${
         embedded
-          ? isDark
-            ? 'bg-gray-900'
-            : 'bg-gray-50'
+          ? 'bg-transparent p-0'
           : isDark
             ? 'items-center justify-center bg-gray-900'
             : 'items-center justify-center bg-gray-50'
       }`}
     >
       <div
-        className={`w-full max-w-2xl shrink-0 ${isDark ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-xl p-8`}
+        className={`w-full shrink-0 ${
+          embedded
+            ? 'max-w-none rounded-none bg-transparent p-0 shadow-none'
+            : `${isDark ? 'bg-gray-800' : 'bg-white'} max-w-2xl rounded-lg p-8 shadow-xl`
+        }`}
       >
-        <h2 className={`text-2xl font-bold mb-6 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+        <h2
+          className={`mb-6 ${embedded ? 'text-xl' : 'text-2xl'} font-bold ${
+            isDark ? 'text-white' : 'text-gray-900'
+          }`}
+        >
           プロジェクトを選択
         </h2>
 
