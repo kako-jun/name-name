@@ -7,9 +7,10 @@
 import type { Env, Project } from "./types";
 
 export const PROJECTS: ReadonlyArray<Project> = [
-  { name: "ogurasia", title: "オグラシア", repo: "kako-jun/ogurasia" },
-  { name: "skirts-colour", title: "宇宙色", repo: "kako-jun/skirts-colour" },
-  { name: "friday-1930", title: "Friday 1930", repo: "kako-jun/friday-1930" },
+  { name: "ogurasia", title: "おぐらじあ", repo: "kako-jun/ogurasia" },
+  { name: "attama", title: "あったま空っぽのほうが", repo: "kako-jun/attama" },
+  { name: "skirts-colour", title: "宇宙の果てわ、なに色か？", repo: "kako-jun/skirts-colour" },
+  { name: "friday-1930", title: "Friday 19:30", repo: "kako-jun/friday-1930" },
   { name: "gymnasia", title: "Gymnasia", repo: "kako-jun/gymnasia" },
   { name: "llll-ll-media", title: "llll-ll-media", repo: "kako-jun/llll-ll-media" },
   { name: "amanuma", title: "amanuma", repo: "kako-jun/amanuma", external_url: "https://amanuma.llll-ll.com" },
