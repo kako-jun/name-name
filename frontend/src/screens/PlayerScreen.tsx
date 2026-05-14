@@ -73,8 +73,10 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         setProjectInfo(found)
 
         // external_url が設定されているプロジェクトは直接リダイレクト
+        // replace() で履歴を置き換えることで、ゲーム側でブラウザの戻るボタンを
+        // 押すと name-name 一覧に戻れる（リダイレクト中画面は履歴に残らない）
         if (found?.external_url) {
-          window.location.href = found.external_url
+          window.location.replace(found.external_url)
           return
         }
 
