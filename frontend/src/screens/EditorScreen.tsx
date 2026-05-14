@@ -83,6 +83,7 @@ function EditorScreen({
   const [exportStartSceneId, setExportStartSceneId] = useState('')
   const [exportEndSceneId, setExportEndSceneId] = useState('')
   const [exportFps, setExportFps] = useState(30)
+  const [exportRunning, setExportRunning] = useState(false)
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [doc, setDoc] = useState<EventDocument | null>(null)
   // CanvasEditor を再マウントしてエディタ内部 state を完全リセットするためのバージョン。
@@ -159,6 +160,11 @@ function EditorScreen({
       setExportStatus('このブラウザは video/webm の MediaRecorder をサポートしていません')
       return
     }
+    if (exportRunning) {
+      setExportStatus('既に録画中です')
+      return
+    }
+    setExportRunning(true)
     setExportStatus('準備中...')
     const opts: VideoExportOptions = {
       startSceneId: exportStartSceneId,
@@ -180,8 +186,10 @@ function EditorScreen({
     } catch (e) {
       console.error('[VideoExport] failed', e)
       setExportStatus(`失敗: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setExportRunning(false)
     }
-  }, [projectName, exportStartSceneId, exportEndSceneId, exportFps])
+  }, [projectName, exportStartSceneId, exportEndSceneId, exportFps, exportRunning])
 
   // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
   // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
@@ -635,6 +643,7 @@ function EditorScreen({
                   endSceneId={exportEndSceneId}
                   fps={exportFps}
                   status={exportStatus}
+                  isRunning={exportRunning}
                   onChangeStart={setExportStartSceneId}
                   onChangeEnd={setExportEndSceneId}
                   onChangeFps={setExportFps}

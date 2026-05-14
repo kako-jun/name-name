@@ -378,6 +378,7 @@ export class AudioManager {
     this.stopBgmImmediate()
     this.stopVoice()
     this.audioCache.clear()
+    this.disableCapture()
     if (this.bgmMasterGain) {
       this.bgmMasterGain.disconnect()
       this.bgmMasterGain = null

@@ -279,6 +279,20 @@ AudioManager.enableCapture ─┘
 stop 後に `postRollMs` (デフォルト 300ms) の余韻録音を経て Blob を確定する。
 録画開始前は `preRollMs` (デフォルト 100ms) の遅延を挟んで先頭の音切れを軽減する。
 
+### VideoExporter が依存する公開 API
+
+| メソッド | 役割 |
+|---|---|
+| `NovelRenderer.getCanvas()` | `canvas.captureStream(fps)` の対象を取得 |
+| `NovelRenderer.getAudioManager()` | AudioManager 経由で音声 MediaStream を分岐 |
+| `NovelRenderer.getCurrentSceneId()` / `getAllSceneIds()` | UI のシーン選択 |
+| `NovelRenderer.setOnSceneChange()` / `takeOnSceneChange()` | 終端検出用のリスナ占有と退避復元 |
+| `NovelRenderer.onEnd()` / `takeOnEnd()` / `setOnEnd()` | 全イベント完走の検出用、退避復元 |
+| `AudioManager.enableCapture()` / `disableCapture()` | 音声 MediaStreamAudioDestinationNode の分岐管理 |
+| `VideoExporter.exportVideo()` / `pickSupportedMimeType()` / `sanitizeFilename()` / `downloadBlob()` / `isVideoExporting()` | エクスポートの本体と補助関数 |
+
+`take*` 系は破壊的 getter（取り出し後 null クリア）。VideoExporter 内部で同 renderer に対する並行起動を防ぐため、モジュールスコープで `isExporting` フラグも持つ。
+
 ### Phase 1 の制約
 
 - **実時間がかかる**: シナリオ 3 分なら録画も 3 分。virtual time 化していないため
