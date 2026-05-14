@@ -21,6 +21,7 @@ export interface Project {
   name: string;
   title: string;
   repo: string; // "owner/name"
+  external_url?: string; // 設定時は name-name を経由せず直接このURLに飛ぶ
 }
 
 export interface ContentsGetResponse {
