@@ -13,6 +13,22 @@ describe('sanitizeFilename', () => {
   it('collapses non-ASCII runs to a single underscore (so JIS path on Windows is safe)', () => {
     expect(sanitizeFilename('日本語file')).toBe('_file')
   })
+
+  it('collapses a trailing run of unsafe characters into a single underscore', () => {
+    expect(sanitizeFilename('foo?')).toBe('foo_')
+  })
+
+  it('collapses a leading run of unsafe characters into a single underscore', () => {
+    expect(sanitizeFilename('?foo')).toBe('_foo')
+  })
+
+  it('reduces all-unsafe input to a single underscore', () => {
+    expect(sanitizeFilename('??##')).toBe('_')
+  })
+
+  it('returns empty string for empty input', () => {
+    expect(sanitizeFilename('')).toBe('')
+  })
 })
 
 describe('pickSupportedMimeType', () => {
