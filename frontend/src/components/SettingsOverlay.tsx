@@ -77,17 +77,7 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
         className="w-full max-w-md mx-4 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-5 flex flex-col gap-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex justify-between items-center">
-          <h2 className="text-lg font-semibold text-white">設定</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="閉じる"
-            className="w-8 h-8 flex items-center justify-center rounded text-gray-400 hover:bg-gray-800 hover:text-white"
-          >
-            ✕
-          </button>
-        </div>
+        <h2 className="text-lg font-semibold text-white">設定</h2>
 
         <div className="flex flex-col gap-4">
           <SliderRow
@@ -157,16 +147,9 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
           >
             デフォルトに戻す
           </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded"
-          >
-            閉じる
-          </button>
         </div>
 
-        <p className="text-xs text-gray-500 text-center">ESC でも閉じられます</p>
+        <p className="text-xs text-gray-500 text-center">外側クリックか ESC で閉じられます</p>
       </div>
     </div>
   )
