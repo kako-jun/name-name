@@ -415,7 +415,7 @@ function JumpTopScreen({
         className={`mx-auto min-h-screen w-full max-w-[820px] ${panelBgClass} shadow-[0_0_0_1px_rgba(255,255,255,0.04)]`}
       >
         <header className="sticky top-0 z-30">
-          <div className="bg-[#fb322f] px-4 py-2.5 text-white">
+          <div className="bg-[#1677ff] px-4 py-2.5 text-white">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[1.45rem] font-black tracking-[-0.08em] leading-none">
@@ -457,7 +457,7 @@ function JumpTopScreen({
           <div className={`border-b px-4 py-3 ${sectionBgClass}`}>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[1.55rem] font-black text-[#fb322f] shadow-[0_0_0_4px_rgba(255,255,255,0.05)]">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[1.55rem] font-black text-[#1677ff] shadow-[0_0_0_4px_rgba(255,255,255,0.05)]">
                   名
                 </div>
                 <div>
@@ -480,7 +480,7 @@ function JumpTopScreen({
           {loading ? (
             <div className="flex min-h-[40vh] items-center justify-center">
               <div className="text-center">
-                <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-white/20 border-t-[#fb322f]" />
+                <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-white/20 border-t-[#1677ff]" />
                 <p className="text-sm font-semibold text-white/70">読み込み中...</p>
               </div>
             </div>
@@ -527,7 +527,7 @@ function JumpTopScreen({
                   data-project={featured.project.name}
                 >
                   <div className="relative overflow-hidden bg-black">
-                    <div className="absolute left-0 top-0 z-10 bg-[#fb322f] px-4 py-2 text-4xl font-black leading-none">
+                    <div className="absolute left-0 top-0 z-10 bg-[#1677ff] px-4 py-2 text-4xl font-black leading-none">
                       1
                     </div>
                     <div
@@ -547,7 +547,7 @@ function JumpTopScreen({
                         ゲーム置き場
                       </div>
                       <div className="absolute bottom-0 left-0 right-0 bg-[linear-gradient(180deg,transparent,rgba(0,0,0,0.82))] p-3 pt-10">
-                        <div className="inline-flex bg-[#fb322f] px-2.5 py-1 text-sm font-black text-white">
+                        <div className="inline-flex bg-[#1677ff] px-2.5 py-1 text-sm font-black text-white">
                           全話￥0
                         </div>
                         <div className="mt-2 text-[clamp(2rem,5vw,4rem)] font-black tracking-[-0.08em] text-white drop-shadow-[0_3px_0_rgba(0,0,0,0.35)]">
@@ -632,12 +632,12 @@ function JumpTopScreen({
                         style={{ background: gradientFor(project.name) }}
                         aria-hidden
                       >
-                        <div className="absolute left-0 top-0 z-10 bg-[#fb322f] px-4 py-2 text-4xl font-black leading-none text-white">
+                        <div className="absolute left-0 top-0 z-10 bg-[#1677ff] px-4 py-2 text-4xl font-black leading-none text-white">
                           {rank}
                         </div>
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_18%,rgba(255,255,255,0.23),transparent_18%),linear-gradient(180deg,transparent_34%,rgba(0,0,0,0.28)_78%,rgba(0,0,0,0.58))]" />
                         <div className="absolute bottom-0 left-0 right-0 p-4">
-                          <div className="inline-flex bg-[#fb322f] px-2.5 py-1 text-sm font-black text-white">
+                          <div className="inline-flex bg-[#1677ff] px-2.5 py-1 text-sm font-black text-white">
                             全話￥0
                           </div>
                           <div className="mt-2 break-words text-[clamp(1.55rem,4vw,2.7rem)] font-black tracking-[-0.08em] leading-none text-white drop-shadow-[0_3px_0_rgba(0,0,0,0.35)]">
@@ -704,14 +704,14 @@ function JumpTopScreen({
               >
                 <div
                   className={`flex h-13 w-13 items-center justify-center rounded-full ${
-                    item.active ? 'bg-[#fb322f] text-white' : footerInactiveTextClass
+                    item.active ? 'bg-[#1677ff] text-white' : footerInactiveTextClass
                   }`}
                 >
                   <FooterIcon type={item.icon as 'home' | 'ticket' | 'search' | 'hat' | 'user'} />
                 </div>
                 <span
                   className={`text-[0.78rem] font-black tracking-[-0.03em] ${
-                    item.active ? 'text-[#fb322f]' : footerInactiveTextClass
+                    item.active ? 'text-[#1677ff]' : footerInactiveTextClass
                   }`}
                 >
                   {item.label}
