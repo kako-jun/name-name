@@ -16,6 +16,7 @@ export const PROJECTS: ReadonlyArray<Project> = [
   { name: "amanuma", title: "amanuma", repo: "kako-jun/amanuma", external_url: "https://amanuma.llll-ll.com" },
   { name: "cee-lo-rings", title: "cee-lo-rings", repo: "kako-jun/cee-lo-rings", external_url: "https://cee-lo-rings.llll-ll.com" },
   { name: "anomaly2-corona-road", title: "anomaly2-corona-road", repo: "kako-jun/anomaly2-corona-road", external_url: "https://anomaly2-corona-road.llll-ll.com" },
+  { name: "tacojiman", title: "tacojiman", repo: "kako-jun/tacojiman", external_url: "https://kako-jun.github.io/tacojiman" },
 ];
 
 export function findProject(name: string): Project | undefined {
