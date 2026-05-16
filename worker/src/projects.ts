@@ -18,6 +18,7 @@ export const PROJECTS: ReadonlyArray<Project> = [
   { name: "anomaly2-corona-road", title: "anomaly2-corona-road", repo: "kako-jun/anomaly2-corona-road", external_url: "https://anomaly2-corona-road.llll-ll.com" },
   { name: "tacojiman", title: "tacojiman", repo: "kako-jun/tacojiman", external_url: "https://tacojiman.llll-ll.com" },
   { name: "endroll-jumpers", title: "endroll-jumpers", repo: "kako-jun/endroll-jumpers", external_url: "https://endroll-jumpers.llll-ll.com" },
+  { name: "yatagarrage", title: "Yatagarrage: Hanabi Sparkout", repo: "kako-jun/yatagarrage", external_url: "https://yatagarrage.llll-ll.com" },
 ];
 
 export function findProject(name: string): Project | undefined {
