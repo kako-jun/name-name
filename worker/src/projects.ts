@@ -17,6 +17,7 @@ export const PROJECTS: ReadonlyArray<Project> = [
   { name: "cee-lo-rings", title: "cee-lo-rings", repo: "kako-jun/cee-lo-rings", external_url: "https://cee-lo-rings.llll-ll.com" },
   { name: "anomaly2-corona-road", title: "anomaly2-corona-road", repo: "kako-jun/anomaly2-corona-road", external_url: "https://anomaly2-corona-road.llll-ll.com" },
   { name: "tacojiman", title: "tacojiman", repo: "kako-jun/tacojiman", external_url: "https://tacojiman.llll-ll.com" },
+  { name: "endroll-jumpers", title: "endroll-jumpers", repo: "kako-jun/endroll-jumpers", external_url: "https://endroll-jumpers.llll-ll.com" },
 ];
 
 export function findProject(name: string): Project | undefined {
