@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   computeEffectiveFogMaxDist,
+  computeFloorRowDist,
   computeFloorStepWallYRange,
   computeWallYRange,
+  consumeTurnAnim,
   detectFloorStep,
   projectNpcToScreen,
   resolveCeilingHeight,
   resolveFloorHeight,
+  sampleFloorTileColor,
 } from './raycastProjection'
 
 describe('projectNpcToScreen', () => {
@@ -751,5 +754,174 @@ describe('computeFloorStepWallYRange', () => {
     const range = computeFloorStepWallYRange(200, -0.25, 0, 480)
     expect(range.drawEndY).toBe(390)
     expect(range.drawStartY).toBe(340)
+  })
+})
+
+describe('computeFloorRowDist', () => {
+  // 標準ケース: cameraZ=0.5, screenHeight=600, horizonY=300
+  // halfH=300。y=horizonY+1 のとき denom=1/300、rowDist=0.5*300=150 タイル先
+  // y=horizonY+300 (=h-0) のとき denom=1、rowDist=0.5 タイル先（足元）
+  const cameraZ = 0.5
+  const h = 600
+  const horizonY = 300
+
+  it('y=horizonY+1 で遠距離（halfH 倍の cameraZ）', () => {
+    expect(computeFloorRowDist(horizonY + 1, horizonY, h, cameraZ)).toBeCloseTo(150)
+  })
+
+  it('y=horizonY+300（画面下端）で cameraZ と同値', () => {
+    expect(computeFloorRowDist(horizonY + 300, horizonY, h, cameraZ)).toBeCloseTo(0.5)
+  })
+
+  it('y == horizonY は denom=0 で 0', () => {
+    expect(computeFloorRowDist(horizonY, horizonY, h, cameraZ)).toBe(0)
+  })
+
+  it('y < horizonY（地平線より上）は denom<=0 で 0', () => {
+    expect(computeFloorRowDist(horizonY - 1, horizonY, h, cameraZ)).toBe(0)
+  })
+
+  it('screenHeight=0 / 負値で 0', () => {
+    expect(computeFloorRowDist(400, 300, 0, cameraZ)).toBe(0)
+    expect(computeFloorRowDist(400, 300, -100, cameraZ)).toBe(0)
+  })
+
+  it('cameraZ=0 で 0、cameraZ=NaN は 0 扱い（rowDist=0）', () => {
+    expect(computeFloorRowDist(400, 300, h, 0)).toBe(0)
+    expect(computeFloorRowDist(400, 300, h, NaN)).toBe(0)
+    expect(computeFloorRowDist(400, 300, h, Infinity)).toBe(0)
+  })
+
+  it('y / horizonY が NaN/Infinity でも 0 を返す', () => {
+    expect(computeFloorRowDist(NaN, 300, h, cameraZ)).toBe(0)
+    expect(computeFloorRowDist(400, NaN, h, cameraZ)).toBe(0)
+    expect(computeFloorRowDist(Infinity, 300, h, cameraZ)).toBe(0)
+  })
+})
+
+describe('sampleFloorTileColor', () => {
+  // 3x3 マップ。中央 (1,1) だけ ROAD(=1)、それ以外 GRASS(=0)
+  const map = [
+    [0, 0, 0],
+    [0, 1, 0],
+    [0, 0, 0],
+  ]
+  const palette = { 0: 0x2d5016, 1: 0x8b7355, 2: 0x1a3a1a } as const
+  const fallback = 0xff00ff
+
+  it('中央タイルの ROAD 色を返す', () => {
+    expect(sampleFloorTileColor(map, 3, 3, 1.5, 1.5, palette, fallback)).toBe(0x8b7355)
+  })
+
+  it('GRASS 色を返す', () => {
+    expect(sampleFloorTileColor(map, 3, 3, 0.5, 0.5, palette, fallback)).toBe(0x2d5016)
+  })
+
+  it('マップ範囲外（負）は fallback', () => {
+    expect(sampleFloorTileColor(map, 3, 3, -0.5, 1.5, palette, fallback)).toBe(fallback)
+    expect(sampleFloorTileColor(map, 3, 3, 1.5, -0.5, palette, fallback)).toBe(fallback)
+  })
+
+  it('マップ範囲外（上限）は fallback', () => {
+    expect(sampleFloorTileColor(map, 3, 3, 3.0, 1.5, palette, fallback)).toBe(fallback)
+    expect(sampleFloorTileColor(map, 3, 3, 1.5, 3.0, palette, fallback)).toBe(fallback)
+  })
+
+  it('境界値: ちょうど右下端 (2.999..., 2.999...) は (2,2) タイル', () => {
+    expect(sampleFloorTileColor(map, 3, 3, 2.999, 2.999, palette, fallback)).toBe(0x2d5016)
+  })
+
+  it('row が undefined（穴あき）でも fallback', () => {
+    const sparse: number[][] = []
+    sparse[2] = [0, 0, 0]
+    // row 0,1 が undefined
+    expect(sampleFloorTileColor(sparse, 3, 3, 1.5, 0.5, palette, fallback)).toBe(fallback)
+  })
+
+  it('palette に無いタイル種別は fallback', () => {
+    // tile=9 は palette に無い
+    const m9 = [[9]]
+    expect(sampleFloorTileColor(m9, 1, 1, 0.5, 0.5, palette, fallback)).toBe(fallback)
+  })
+
+  it('worldX/Y の NaN/Infinity は fallback', () => {
+    expect(sampleFloorTileColor(map, 3, 3, NaN, 1.5, palette, fallback)).toBe(fallback)
+    expect(sampleFloorTileColor(map, 3, 3, 1.5, Infinity, palette, fallback)).toBe(fallback)
+  })
+})
+
+describe('consumeTurnAnim', () => {
+  // 標準設定: dt=1/60s, animSpeed=10rad/s → maxStep ≈ 0.1667
+  const dt = 1 / 60
+  const speed = 10
+
+  it('残量 0 で delta=0、残量=0', () => {
+    expect(consumeTurnAnim(0, dt, speed)).toEqual({ delta: 0, newRemaining: 0 })
+  })
+
+  it('残量 < maxStep でぴったり消化', () => {
+    // remaining=0.1, maxStep=0.1667 → ぴったり消費
+    const r = consumeTurnAnim(0.1, dt, speed)
+    expect(r.delta).toBe(0.1)
+    expect(r.newRemaining).toBe(0)
+  })
+
+  it('残量 == maxStep でぴったり消化', () => {
+    const maxStep = speed * dt
+    const r = consumeTurnAnim(maxStep, dt, speed)
+    expect(r.delta).toBe(maxStep)
+    expect(r.newRemaining).toBe(0)
+  })
+
+  it('残量 > maxStep は符号付きで maxStep 分だけ消費', () => {
+    // remaining=π/2 ≈ 1.5708, maxStep≈0.1667 → delta=+0.1667, newRemaining≈1.404
+    const r = consumeTurnAnim(Math.PI / 2, dt, speed)
+    expect(r.delta).toBeCloseTo(speed * dt)
+    expect(r.newRemaining).toBeCloseTo(Math.PI / 2 - speed * dt)
+  })
+
+  it('負の残量も対称に消化（左旋回）', () => {
+    const r = consumeTurnAnim(-Math.PI / 2, dt, speed)
+    expect(r.delta).toBeCloseTo(-speed * dt)
+    expect(r.newRemaining).toBeCloseTo(-Math.PI / 2 + speed * dt)
+  })
+
+  it('dt=0 / 負値 で delta=0、残量はそのまま', () => {
+    expect(consumeTurnAnim(0.5, 0, speed)).toEqual({ delta: 0, newRemaining: 0.5 })
+    expect(consumeTurnAnim(0.5, -0.1, speed)).toEqual({ delta: 0, newRemaining: 0.5 })
+  })
+
+  it('animSpeed=0 / 負値 で delta=0、残量はそのまま', () => {
+    expect(consumeTurnAnim(0.5, dt, 0)).toEqual({ delta: 0, newRemaining: 0.5 })
+    expect(consumeTurnAnim(0.5, dt, -1)).toEqual({ delta: 0, newRemaining: 0.5 })
+  })
+
+  it('remaining NaN/Infinity は破損として 0 にリセット', () => {
+    expect(consumeTurnAnim(NaN, dt, speed)).toEqual({ delta: 0, newRemaining: 0 })
+    expect(consumeTurnAnim(Infinity, dt, speed)).toEqual({ delta: 0, newRemaining: 0 })
+  })
+
+  it('dt/speed NaN/Infinity は maxStep=0 扱い、残量保持', () => {
+    expect(consumeTurnAnim(0.5, NaN, speed)).toEqual({ delta: 0, newRemaining: 0.5 })
+    expect(consumeTurnAnim(0.5, dt, NaN)).toEqual({ delta: 0, newRemaining: 0.5 })
+    expect(consumeTurnAnim(0.5, Infinity, speed)).toEqual({ delta: 0, newRemaining: 0.5 })
+  })
+
+  it('複数フレームで π/2 を 0.16s で消化できる', () => {
+    // animSpeed=10rad/s なら π/2 ≈ 1.5708rad は 1.5708/10 ≈ 0.157s で消化
+    let remaining = Math.PI / 2
+    let totalDelta = 0
+    let frames = 0
+    while (remaining !== 0 && frames < 100) {
+      const r = consumeTurnAnim(remaining, dt, speed)
+      totalDelta += r.delta
+      remaining = r.newRemaining
+      frames++
+    }
+    expect(remaining).toBe(0)
+    expect(totalDelta).toBeCloseTo(Math.PI / 2)
+    // dt=1/60, animSpeed=10 → maxStep=10/60≈0.1667。π/2≈1.5708 を 9 ステップ分（=1.5）消化した
+    // 残量 0.0708 を 10 フレ目で全部消化 → ちょうど 10 フレで完了する
+    expect(frames).toBe(10)
   })
 })

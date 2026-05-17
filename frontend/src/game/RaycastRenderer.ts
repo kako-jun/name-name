@@ -7,7 +7,7 @@
  */
 
 import { Application, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js'
-import { UiNpcData, RPGProject, TileType } from '../types/rpg'
+import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { DialogBox } from './DialogBox'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import {
@@ -20,12 +20,15 @@ import {
 } from './npcSpriteSheet'
 import {
   computeEffectiveFogMaxDist,
+  computeFloorRowDist,
   computeFloorStepWallYRange,
   computeWallYRange,
+  consumeTurnAnim,
   detectFloorStep,
   projectNpcToScreen,
   resolveCeilingHeight,
   resolveFloorHeight,
+  sampleFloorTileColor,
   type StepRecord,
 } from './raycastProjection'
 import {
@@ -83,6 +86,16 @@ const SIDE_SHADE_BASE = darken(0xffffff, 0.7)
  * モジュール定数化（N5）。
  */
 const MIN_DEPTH = 0.0001
+
+/**
+ * 床 floor casting で使うプレイヤー視点高さ（タイル単位）。
+ * `computeWallYRange` の暗黙仮定（lineHeight / 2 が地面位置）と同じ規約。
+ * 0.5 = プレイヤーが床から半タイル分の高さに目を持つ＝壁の真ん中が地平線に並ぶ。
+ */
+const FLOOR_CAMERA_Z = 0.5
+
+/** 2π。`normalizePlayerAngle` と `turnAnimMaxAbs` で共有。 */
+const TAU = Math.PI * 2
 
 export class RaycastRenderer {
   private app: Application
@@ -196,6 +209,14 @@ export class RaycastRenderer {
   private readonly moveSpeed = 3
   // 旋回速度 3 rad/s: 1 回転に約 2.1 秒。FPS の標準より遅めだが、ADV で酔いにくいことを優先。
   private readonly rotSpeed = 3
+  // スワイプ 90° ターンのアニメーション角速度（rad/s）。π/2 ≈ 1.57 rad を約 0.16s で回す。
+  // 瞬間スナップだと方向感覚を失うため補間する。残角度（rad、符号付き）を保持し、毎フレ消費。
+  private readonly turnAnimSpeed = 10
+  // 連打時の残量上限（±rad）。±2π = フル 1 回転分まで許容（4 連打で同じ向きに戻る挙動を
+  // 維持しつつ、100 連打で 16 秒回り続ける事故は防ぐ）。turnAnimSpeed=10rad/s なら最悪 0.63s
+  // で消化完了するため、連打中に方向感覚を失うリスクは限定的。
+  private readonly turnAnimMaxAbs = TAU
+  private turnAnimRemaining = 0
   // pitch 速度 1.5 rad/s: 旋回より遅め。最大 ±0.4 rad なので押しっぱなしで約 0.27 秒で端に到達する程度。
   // Issue #80 Phase 2: PageUp/PageDown キーで連続変化させる。
   private readonly pitchSpeed = 1.5
@@ -641,14 +662,42 @@ export class RaycastRenderer {
         this.snapStep(-1)
         break
       case 'left':
-        this.playerAngle -= Math.PI / 2
-        this.normalizePlayerAngle()
+        this.queueTurn(-Math.PI / 2)
         break
       case 'right':
-        this.playerAngle += Math.PI / 2
-        this.normalizePlayerAngle()
+        this.queueTurn(Math.PI / 2)
         break
     }
+  }
+
+  /**
+   * スワイプ左右で 90° 旋回するときの予約。瞬時に playerAngle を書き換えず、
+   * turnAnimRemaining に「あと回す角度（符号付き）」を積む。連打した場合は加算され、
+   * advanceTurnAnim のフレームで turnAnimSpeed * dt ずつ消費される。
+   *
+   * 残量は ±turnAnimMaxAbs（= ±2π）にクランプする。100 連打で 16 秒回り続けるような
+   * UX 事故を防ぐ（4 連打で同向きに戻る挙動は維持される）。
+   */
+  private queueTurn(delta: number): void {
+    this.turnAnimRemaining += delta
+    if (this.turnAnimRemaining > this.turnAnimMaxAbs) {
+      this.turnAnimRemaining = this.turnAnimMaxAbs
+    } else if (this.turnAnimRemaining < -this.turnAnimMaxAbs) {
+      this.turnAnimRemaining = -this.turnAnimMaxAbs
+    }
+  }
+
+  /**
+   * ターン補間の残量を即時消費して playerAngle を予約された最終角度まで進める。
+   * `snapStep` の先頭で呼ばれる。
+   * 旋回アニメ中にタイル単位の移動・タイル方向計算（`Math.round(cos/sin)`）が走ると、
+   * 中間角度を拾って想定外のタイルへ進む事故が起きるため、移動前に必ず flush する。
+   */
+  private flushTurnAnim(): void {
+    if (this.turnAnimRemaining === 0) return
+    this.playerAngle += this.turnAnimRemaining
+    this.turnAnimRemaining = 0
+    this.normalizePlayerAngle()
   }
 
   /**
@@ -660,6 +709,8 @@ export class RaycastRenderer {
    * 正面 1 タイルは整数増分（-1/0/+1）であるべきなので Math.round で正規化してから加算する。
    */
   private snapStep(forward: number): void {
+    // 旋回アニメ中なら残角度を全部消費してから方向を決める
+    this.flushTurnAnim()
     const dx = Math.round(Math.cos(this.playerAngle)) * forward
     const dy = Math.round(Math.sin(this.playerAngle)) * forward
     const targetTileX = Math.floor(this.playerX) + dx
@@ -807,7 +858,6 @@ export class RaycastRenderer {
    * を抑える（描画自体は cos/sin 経由で問題ないが、長期セッションでの精度劣化を予防）。
    */
   private normalizePlayerAngle(): void {
-    const TAU = Math.PI * 2
     let a = this.playerAngle % TAU
     if (a > Math.PI) a -= TAU
     else if (a < -Math.PI) a += TAU
@@ -971,20 +1021,43 @@ export class RaycastRenderer {
 
     // ミニマップ (#149): イベント中（ダイアログ表示）/ メニュー表示中は邪魔なので隠す。
     // 通常探索中だけ表示し、自機位置 + 向きを毎フレ更新する。
+    // 非表示中もバッファだけは更新しておく：ダイアログ中も advanceTurnAnim で playerAngle が
+    // 変わるため、再表示時に矢印がカクッと飛ばないよう追従させる。
     if (this.minimap) {
       const dialogVisible = this.dialogBox?.isShowing ?? false
       const menuVisible = this.menuOverlay?.isShowing() ?? false
       this.minimap.visible = !dialogVisible && !menuVisible
-      if (this.minimap.visible) {
-        this.minimap.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
-      }
+      this.minimap.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
     }
+
+    // スワイプ 90° ターン補間は dialog/menu の開閉と独立に進める：旋回中にダイアログが開くと、
+    // updateMovement のスキップで turnAnimRemaining が消費されないまま凍結する事故を防ぐ。
+    // プレイヤー位置の更新だけが dialog 中スキップ対象。
+    this.advanceTurnAnim(dt)
 
     if (!this.dialogBox?.isShowing) {
       this.updateMovement(dt)
     }
     this.updateNpcAnimations(now)
     this.renderFrame()
+  }
+
+  /**
+   * スワイプ 90° ターン補間の残量を 1 フレ分消費する。
+   * 純粋関数 `consumeTurnAnim` に切り出し済みで、ここは playerAngle への適用だけを担う。
+   *
+   * `consumeTurnAnim` は破損残量（NaN/Infinity）を `{ delta: 0, newRemaining: 0 }` にリセット
+   * して伝播させない契約なので、delta が 0 でも `newRemaining` は必ず書き戻す（リセット効果を
+   * 取り逃がさないため）。
+   */
+  private advanceTurnAnim(dt: number): void {
+    if (this.turnAnimRemaining === 0) return
+    const { delta, newRemaining } = consumeTurnAnim(this.turnAnimRemaining, dt, this.turnAnimSpeed)
+    this.turnAnimRemaining = newRemaining
+    if (delta !== 0) {
+      this.playerAngle += delta
+      this.normalizePlayerAngle()
+    }
   }
 
   private updateMovement(dt: number): void {
@@ -1177,58 +1250,81 @@ export class RaycastRenderer {
     const horizonY = Math.floor(h / 2 + totalYOffsetPx)
     const horizonClamped = horizonY < 0 ? 0 : horizonY > h ? h : horizonY
 
-    // 空のベタ塗り（pitch に応じて分割位置を上下に動かす）
-    if (horizonClamped > 0) {
-      g.rect(0, 0, w, horizonClamped)
-      g.fill(0x4477cc)
-    }
-    // 床: スキャンラインごとに「視線方向の対応タイル」を引いて色を変える (#172 ROAD 対応)。
-    // 完全な floor casting ではなく、視線中央の depth サンプリング 1 箇所だけ → 横方向の
-    // 色変化は出ないが、GRASS と ROAD を踏み込んだときに即座に床色が切り替わる視覚効果になる。
-    // 連続同色のスキャンラインはまとめて 1 矩形で fill する（呼び出し回数を抑制）。
-    //
-    // ピッチ時の depth 計算は Lodev 標準近似（rowDist = cameraZ / ((y - horizon)/halfH)）。
-    // 大きなピッチでは床テクスチャの歪みが目立つはずだが、本実装は単色塗り分けなので許容範囲。
-    if (horizonClamped < h) {
-      const cameraZ = 0.5 // プレイヤー視点高さ（0.5 タイル）。computeWallYRange と同じ規約
-      const halfH = h / 2
-      // 視線正面方向ベクトル（本体は dirX/dirY だが、cos/sin は後段で再計算するためここだけローカル取得）
-      const fx = Math.cos(this.playerAngle)
-      const fy = Math.sin(this.playerAngle)
-      let bandStart = horizonClamped
-      let bandColor = -1
-      const flushBand = (yEnd: number, color: number) => {
-        if (color < 0 || yEnd <= bandStart) return
-        g.rect(0, bandStart, w, yEnd - bandStart).fill(color)
-      }
-      for (let y = horizonClamped + 1; y < h; y++) {
-        const denom = (y - horizonClamped) / halfH
-        // 視線正面 depth で 1 サンプルする（横方向は無視）
-        const rowDist = denom > 0 ? cameraZ / denom : 0
-        const sampleX = Math.floor(this.playerX + fx * rowDist)
-        const sampleY = Math.floor(this.playerY + fy * rowDist)
-        let color = 0x1a3a1a // マップ範囲外: TREE と同色でフォールバック
-        if (sampleY >= 0 && sampleY < this.mapHeight && sampleX >= 0 && sampleX < this.mapWidth) {
-          const tile = this.mapTiles[sampleY]?.[sampleX]
-          if (tile === TileType.ROAD) color = 0x8b7355
-          else if (tile === TileType.GRASS) color = 0x2d5016
-          else color = 0x1a3a1a // TREE/WATER: TopDown の TILE_COLORS_HEX[TileType.TREE] と統一
-        }
-        if (color !== bandColor) {
-          flushBand(y, bandColor)
-          bandStart = y
-          bandColor = color
-        }
-      }
-      flushBand(h, bandColor)
-    }
-
-    // カメラ設定: dir = 単位向き, plane = dir に垂直、長さは tan(fov/2)
+    // カメラ設定: dir = 単位向き, plane = dir に垂直、長さは tan(fov/2)。
+    // 床 floor casting と壁 DDA で同じベクトルを参照するため、renderFrame 冒頭で 1 回だけ計算する。
+    // この後 playerAngle を変更しないため、両者は必ず同一フレームの値を共有する。
     const dirX = Math.cos(this.playerAngle)
     const dirY = Math.sin(this.playerAngle)
     const planeLen = Math.tan(this.fov / 2)
     const planeX = -dirY * planeLen
     const planeY = dirX * planeLen
+
+    // 空のベタ塗り（pitch に応じて分割位置を上下に動かす）
+    if (horizonClamped > 0) {
+      g.rect(0, 0, w, horizonClamped)
+      g.fill(0x4477cc)
+    }
+    // 床: 2D マップの GRASS/ROAD/TREE 矩形をそのまま透視投影で並べたように見せる。
+    // スキャンラインごとに左端→右端の世界座標を補間して、ピクセル単位でタイル種別を判定し、
+    // 連続同色のランを 1 矩形にまとめて fill する。
+    //
+    // 1 サンプル/スキャンライン方式（#172）と違って、横方向の色変化（=タイル境界）が
+    // ちゃんと現れる。壁が四角の集まりに見えるのと同じ理屈で、床も四角の集まりに見える。
+    //
+    // 計算量は w × (h - horizon) の Math.floor 2 回 + ランチェックで、800×300 ≈ 240k ops/frame。
+    // 連続同色なら fill 呼び出しは 1 行あたり通常数個に収まる。
+    if (horizonClamped < h) {
+      // 画面左端 (cameraX=-1) と右端 (cameraX=+1) を貫くレイの方向
+      const leftRayX = dirX - planeX
+      const leftRayY = dirY - planeY
+      const rightRayX = dirX + planeX
+      const rightRayY = dirY + planeY
+      // 床色のフォールバック: マップ範囲外、`mapTiles[ty]` 行が undefined、palette に無い
+      // 未知タイル種別はこの色に倒す。WATER / TREE は palette に登録があるので青 / 暗緑が
+      // そのまま出る（TopDown マップ表示と対応するように 2D の見た目を踏襲する）
+      const FALLBACK_COLOR = TILE_COLORS_HEX[TileType.TREE]
+
+      for (let y = horizonClamped + 1; y < h; y++) {
+        // y は horizonClamped + 1 以上なので computeFloorRowDist 内の denom > 0 は厳密に成立する
+        const rowDist = computeFloorRowDist(y, horizonClamped, h, FLOOR_CAMERA_Z)
+        if (rowDist <= 0) continue
+        const leftWorldX = this.playerX + rowDist * leftRayX
+        const leftWorldY = this.playerY + rowDist * leftRayY
+        const rightWorldX = this.playerX + rowDist * rightRayX
+        const rightWorldY = this.playerY + rowDist * rightRayY
+        const stepWorldX = (rightWorldX - leftWorldX) / w
+        const stepWorldY = (rightWorldY - leftWorldY) / w
+
+        let wx = leftWorldX
+        let wy = leftWorldY
+        let runStart = 0
+        // null = まだランが始まっていない sentinel。number で 0 も有効色（黒）になり得るので null を使う
+        let runColor: number | null = null
+        for (let x = 0; x < w; x++) {
+          const color = sampleFloorTileColor(
+            this.mapTiles,
+            this.mapWidth,
+            this.mapHeight,
+            wx,
+            wy,
+            TILE_COLORS_HEX,
+            FALLBACK_COLOR
+          )
+          if (color !== runColor) {
+            if (runColor !== null && x > runStart) {
+              g.rect(runStart, y, x - runStart, 1).fill(runColor)
+            }
+            runStart = x
+            runColor = color
+          }
+          wx += stepWorldX
+          wy += stepWorldY
+        }
+        if (runColor !== null && w > runStart) {
+          g.rect(runStart, y, w - runStart, 1).fill(runColor)
+        }
+      }
+    }
 
     const numStripes = Math.ceil(w / this.stripeWidth)
 

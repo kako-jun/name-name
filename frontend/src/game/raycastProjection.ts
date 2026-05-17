@@ -139,6 +139,10 @@ export interface WallYRange {
  *
  * 画面外クランプは [0, screenHeight] で行う。
  *
+ * NOTE: 床 floor casting は「視点が床から 0.5 タイル上にある（= lineHeight/2 が地面位置）」前提を
+ * 共有する（`RaycastRenderer.ts` の `FLOOR_CAMERA_Z = 0.5` 定数）。この関数の地面位置規約を
+ * 変更する場合は床側の `FLOOR_CAMERA_Z` も同時に見直すこと。
+ *
  * @param lineHeight 高さ 1.0 の壁が占める縦px（Lodev 方式の h/perpDist）
  * @param wallHeight 壁の高さ倍率（0 以下・非有限は 0 扱い、上限なし）
  * @param screenHeight 画面高 px
@@ -324,4 +328,106 @@ export function resolveCeilingHeight(grid: number[][] | undefined, tx: number, t
   if (typeof v !== 'number' || !Number.isFinite(v)) return 1
   if (v <= 0) return 1
   return v
+}
+
+// =============================================================================
+// 床 floor casting 用の純粋関数群（Raycast 床描画）
+// =============================================================================
+
+/**
+ * スキャンライン y における地表までの距離（タイル単位）を返す。
+ *
+ * Lodev 方式 floor casting の標準式: `rowDist = cameraZ / ((y - horizon) / (h/2))`。
+ *
+ * 入力契約:
+ *  - `y > horizonY` でないと denom が 0 以下になる。呼び出し側は y > horizonY を保証する。
+ *  - 上記が満たされない場合・非有限値・`screenHeight<=0` の場合は `0` を返す（描画スキップ目印）。
+ *  - `cameraZ` の `NaN/Infinity` は `0` 扱い。
+ */
+export function computeFloorRowDist(
+  y: number,
+  horizonY: number,
+  screenHeight: number,
+  cameraZ: number
+): number {
+  if (!Number.isFinite(y) || !Number.isFinite(horizonY)) return 0
+  if (!Number.isFinite(screenHeight) || screenHeight <= 0) return 0
+  const safeCameraZ = Number.isFinite(cameraZ) ? cameraZ : 0
+  const halfH = screenHeight / 2
+  const denom = (y - horizonY) / halfH
+  if (denom <= 0) return 0
+  return safeCameraZ / denom
+}
+
+/**
+ * 床タイル色サンプリング純粋関数。
+ *
+ * 与えられた世界座標 `(worldX, worldY)` のタイルを `Math.floor` で引き、
+ * `palette[tile]` から色を返す。`palette` に無いタイル種別・マップ範囲外・非有限値は
+ * `fallbackColor` にフォールバックする。
+ *
+ * 入力契約:
+ *  - `mapTiles[ty]` が undefined のとき（行が穴あき）は `fallbackColor`
+ *  - `palette[tile]` が `number` でないとき（未登録タイル種別）は `fallbackColor`
+ *  - `worldX/Y` の `NaN/Infinity` は `fallbackColor`
+ */
+export function sampleFloorTileColor(
+  mapTiles: number[][],
+  mapWidth: number,
+  mapHeight: number,
+  worldX: number,
+  worldY: number,
+  palette: Readonly<Record<number, number>>,
+  fallbackColor: number
+): number {
+  if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return fallbackColor
+  const tx = Math.floor(worldX)
+  const ty = Math.floor(worldY)
+  if (tx < 0 || tx >= mapWidth || ty < 0 || ty >= mapHeight) return fallbackColor
+  const row = mapTiles[ty]
+  if (!row) return fallbackColor
+  const tile = row[tx]
+  if (typeof tile !== 'number') return fallbackColor
+  // 型上 `palette[tile]` は `number` だが、TS の `noUncheckedIndexedAccess` が無効でも実体が
+  // 欠けた palette を渡される可能性があるため、ランタイム防御として `typeof` チェックを残す。
+  const color = palette[tile]
+  return typeof color === 'number' ? color : fallbackColor
+}
+
+// =============================================================================
+// スワイプ 90° ターン補間用の純粋関数（Raycast 旋回アニメ）
+// =============================================================================
+
+/**
+ * ターン補間 1 ステップ分の角度消費結果。
+ */
+export interface TurnAnimStep {
+  /** プレイヤー角度に加算する rad（符号付き）。残量ゼロ・dt=0・speed=0 のときは 0 */
+  delta: number
+  /** 消費後の残量 rad（符号付き）。`Math.abs(remaining) <= maxStep` なら 0 にクリア */
+  newRemaining: number
+}
+
+/**
+ * 残量 `remaining` (rad、符号付き) から 1 フレ分 `dt * animSpeed` を消費する。
+ *
+ * - 残量が `maxStep` 以内なら全部消費して `newRemaining = 0`（float 誤差で 0 を跨ぐ事故を防ぐ）
+ * - それ以外は `Math.sign(remaining) * maxStep` を消費して残量を減らす
+ *
+ * 入力契約:
+ *  - `remaining` の `NaN/Infinity` は `{ delta: 0, newRemaining: 0 }`（破損状態を伝播させない）
+ *  - `dt` / `animSpeed` の非正値・`NaN/Infinity` は `maxStep=0` 扱いで `delta=0`、残量はそのまま
+ */
+export function consumeTurnAnim(remaining: number, dt: number, animSpeed: number): TurnAnimStep {
+  if (!Number.isFinite(remaining)) return { delta: 0, newRemaining: 0 }
+  if (remaining === 0) return { delta: 0, newRemaining: 0 }
+  const safeDt = Number.isFinite(dt) && dt > 0 ? dt : 0
+  const safeSpeed = Number.isFinite(animSpeed) && animSpeed > 0 ? animSpeed : 0
+  const maxStep = safeSpeed * safeDt
+  if (maxStep <= 0) return { delta: 0, newRemaining: remaining }
+  if (Math.abs(remaining) <= maxStep) {
+    return { delta: remaining, newRemaining: 0 }
+  }
+  const step = (remaining > 0 ? 1 : -1) * maxStep
+  return { delta: step, newRemaining: remaining - step }
 }
