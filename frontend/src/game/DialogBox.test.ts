@@ -401,3 +401,42 @@ describe('DialogBox フォントロード非同期化 (Issue #214)', () => {
     expect(i.rubyEntries.length).toBe(0)
   })
 })
+
+describe('isJustShown ガード (メニュー → tryTalk → dialog.show 直後の二重 tap 防御)', () => {
+  let box: DialogBox
+
+  beforeEach(() => {
+    box = makeRpgBox()
+  })
+
+  afterEach(() => {
+    box.destroy()
+  })
+
+  it('show 直後は guardMs 内で true', () => {
+    box.show('NPC', 'やあ', undefined)
+    expect(box.isJustShown(300)).toBe(true)
+  })
+
+  it('show 前は false（showing が false なのでガード非対象）', () => {
+    expect(box.isJustShown(300)).toBe(false)
+  })
+
+  it('guardMs を 0 にすると常に false（差分 < 0 にならないため）', () => {
+    box.show('NPC', 'やあ', undefined)
+    expect(box.isJustShown(0)).toBe(false)
+  })
+
+  it('hide 後は showing=false なので false（時刻記録はリセットしないが showing で弾く）', () => {
+    box.show('NPC', 'やあ', undefined)
+    box.hide()
+    expect(box.isJustShown(99999)).toBe(false)
+  })
+
+  it('再度 show すると時刻が更新されてガード復活', () => {
+    box.show('A', '1', undefined)
+    box.hide()
+    box.show('B', '2', undefined)
+    expect(box.isJustShown(300)).toBe(true)
+  })
+})

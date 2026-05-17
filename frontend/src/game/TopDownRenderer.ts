@@ -19,7 +19,12 @@ import {
   loadNpcSpriteSheet,
   type NpcSpriteSheet,
 } from './npcSpriteSheet'
-import { attachTouchInput, type SwipeDirection } from './touchInput'
+import {
+  attachTouchInput,
+  DIALOG_JUST_SHOWN_GUARD_MS,
+  suppressNextTouchTap,
+  type SwipeDirection,
+} from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
 import { rollEncounter } from './encounter'
 import { EventRunner, type NpcMover } from './eventRunner'
@@ -689,6 +694,12 @@ export class TopDownRenderer {
   private handleTap = (): void => {
     if (!this.initialized) return
     if (this.dialogBox?.isShowing) {
+      // ダイアログを開いた直後 (< DIALOG_JUST_SHOWN_GUARD_MS) は advance / skip / hide すべて
+      // 無視する。メニュー → tryTalk → dialog.show 直後、または EventRunner の Dialog/Narration
+      // コマンドで dialog.show された直後に到達した tap で dialog がすぐ進む/閉じる事故を防ぐ。
+      if (this.dialogBox.isJustShown(DIALOG_JUST_SHOWN_GUARD_MS)) {
+        return
+      }
       if (this.inputLocked && this.eventRunner?.isRunning) {
         this.eventRunner.advance()
       } else if (this.dialogBox.isTyping()) {
@@ -712,6 +723,9 @@ export class TopDownRenderer {
    */
   private handleMenuSelect = (rawId: string): void => {
     this.menuOverlay?.hideMenu()
+    // 同一ジェスチャ内の漏れ tap で直後の handleTap が走らないよう、suppression を再延長する。
+    // DialogBox.isJustShown は時刻ベースの保険、こちらは「同じ tap シーケンスは確実に弾く」一次防衛。
+    suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
     const id = rawId as Dq4CommandId
     switch (id) {
       case 'talk':

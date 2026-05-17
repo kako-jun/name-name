@@ -44,7 +44,12 @@ import {
   type WallTextureSheet,
 } from './wallTextureSheet'
 import { formatHeightError, validateMapHeights } from './mapValidation'
-import { attachTouchInput, type SwipeDirection } from './touchInput'
+import {
+  attachTouchInput,
+  DIALOG_JUST_SHOWN_GUARD_MS,
+  suppressNextTouchTap,
+  type SwipeDirection,
+} from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
 import { MinimapOverlay } from './MinimapOverlay'
 import { BattleScreen } from './BattleScreen'
@@ -867,6 +872,12 @@ export class RaycastRenderer {
   private handleTap = (): void => {
     if (!this.initialized) return
     if (this.dialogBox?.isShowing) {
+      // ダイアログを開いた直後 (< DIALOG_JUST_SHOWN_GUARD_MS) は close 系操作を無視する。
+      // PixiJS pointertap → tryTalk → dialog.show の連鎖直後に到達した canvas tap で
+      // 即座にダイアログが閉じる事故を防ぐ。suppressNextTouchTap が漏れたケースへの保険。
+      if (this.dialogBox.isJustShown(DIALOG_JUST_SHOWN_GUARD_MS)) {
+        return
+      }
       if (this.dialogBox.isTyping()) {
         this.dialogBox.skipTypewriter()
       } else {
@@ -887,6 +898,9 @@ export class RaycastRenderer {
    */
   private handleMenuSelect = (rawId: string): void => {
     this.menuOverlay?.hideMenu()
+    // S3 防御層: 同一ジェスチャ内の漏れ tap で直後の handleTap が走らないよう、suppression を再延長する。
+    // DialogBox.isJustShown は時刻ベースの保険、こちらは「同じ tap シーケンスは確実に弾く」ための一次防衛。
+    suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
     const id = rawId as Dq4CommandId
     switch (id) {
       case 'talk':

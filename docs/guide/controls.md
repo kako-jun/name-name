@@ -127,6 +127,13 @@ PixiJS ベースのタイルマップ RPG モード。`gameData` を渡さない
 
 プレイヤーの向いている先のタイルに NPC がいるとき、Enter / Space で会話が開始し、画面下部にウィンドウが表示される（NPC 名と本文）。再度 Enter / Space で閉じる。会話ウィンドウ表示中は移動入力を受け付けない。両モードで同じダイアログ UI を使う。
 
+メニューの「はなす」から会話を開始した場合、選択した tap が直後の canvas tap として canvas に届いてダイアログが即時に閉じる/進む事故を防ぐため、二段構えの防御を入れている:
+
+1. `handleMenuSelect` の入口で `suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)` を再延長する（同一 PointerEvent シーケンス内の漏れ tap を確実に弾く一次防御）
+2. `handleTap` 側で `dialogBox.isJustShown(DIALOG_JUST_SHOWN_GUARD_MS)` が真のときは close / advance / typewriter skip を全て無視する（時刻ベースの保険、suppressNextTouchTap が漏れたケース）
+
+ガード幅は `DIALOG_JUST_SHOWN_GUARD_MS = 400 ms`（`tapMaxDuration = 350 ms` と `suppressNextTouchTap` のデフォルト 250 ms を覆える値）。EventRunner の Dialog / Narration コマンドで `dialog.show` された直後も同じガードが効く（DialogBox 側で時刻を持っているため）。
+
 ### スマホ・タッチ操作（両モード共通）(#178)
 
 オンスクリーンの仮想パッドは出さず、ジェスチャだけで操作する:
