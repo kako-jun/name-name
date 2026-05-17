@@ -8,7 +8,8 @@
 
 import { Application, Container, Graphics, Sprite } from 'pixi.js'
 import { UiNpcData, UiRpgTrigger, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
-import type { MonsterDef } from '../types'
+import type { ItemDef, MonsterDef, PartyMemberDef } from '../types'
+import { initialEquipmentFromMember, type MemberEquipment } from './equipmentState'
 import { DialogBox } from './DialogBox'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import {
@@ -94,6 +95,15 @@ export class TopDownRenderer {
   private encounterRate: number = 0
   private encounterGroups: string[] = []
   private masterMonsters: Record<string, MonsterDef> = {}
+  private masterParty: Record<string, PartyMemberDef> = {}
+  /** アイテムマスター (#207)。装備選択画面の候補列挙と装備ボーナス参照に使う */
+  private masterItems: Record<string, ItemDef> = {}
+  /**
+   * パーティメンバーごとの装備状態 (#207)。
+   * TopDown では現状戦闘画面に未統合だが、装備画面と整合させるため保持する。
+   * BattleScreen 統合時は RaycastRenderer 同様 buildHero で bonus を atk/def に焼き込む。
+   */
+  private partyEquipment: Map<string, MemberEquipment> = new Map()
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする */
   private encounterCooldown: number = 0
 
@@ -199,6 +209,13 @@ export class TopDownRenderer {
     this.encounterRate = gameData.map.encounterRate ?? 0
     this.encounterGroups = gameData.map.encounterGroups ?? []
     this.masterMonsters = gameData.monsters ?? {}
+    this.masterParty = gameData.party ?? {}
+    this.masterItems = gameData.items ?? {}
+    // 装備状態を初期化 (#207)。各メンバーの equip フィールドから組み立てる
+    this.partyEquipment = new Map()
+    for (const member of Object.values(this.masterParty)) {
+      this.partyEquipment.set(member.id, initialEquipmentFromMember(member))
+    }
     this.encounterCooldown = 0
 
     this.drawMap()

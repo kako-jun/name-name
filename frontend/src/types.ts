@@ -92,7 +92,10 @@ export interface MonsterDef {
   builtin?: string
 }
 
-/** アイテム定義 (#174) */
+/**
+ * アイテム定義 (#174 / #207)。
+ * parser/src/models.rs の ItemDef と必ず一致させること。
+ */
 export interface ItemDef {
   id: string
   name: string
@@ -102,9 +105,23 @@ export interface ItemDef {
   /** 宣言的効果 DSL（"heal 30" 等）。`builtin` と排他 */
   effect?: string
   builtin?: string
+  /** 装備スロット (#207)。"weapon" / "armor" / "shield" / "helmet"。未指定なら装備不可 */
+  equip_slot?: string
+  /** 装備中の ATK ボーナス (#207) */
+  atk_bonus?: number
+  /** 装備中の DEF ボーナス (#207) */
+  def_bonus?: number
+  /**
+   * 装備可能なメンバー ID のリスト (#207)。
+   * 未指定または空のときは「誰でも装備可」扱い。
+   */
+  equippable_by?: string[]
 }
 
-/** パーティメンバー定義 (#175) */
+/**
+ * パーティメンバー定義 (#175 / #207)。
+ * parser/src/models.rs の PartyMemberDef と必ず一致させること。
+ */
 export interface PartyMemberDef {
   id: string
   name: string
@@ -119,6 +136,11 @@ export interface PartyMemberDef {
   agi: number
   /** レベルアップで習得する呪文。Phase 1 ではデータとして保持するだけ */
   learns?: PartyLearns[]
+  /**
+   * 初期装備 (#207)。スロット名 → アイテム ID。
+   * runtime はこれを partyEquipment の初期状態に反映する。
+   */
+  equip?: Record<string, string>
 }
 
 /** パーティメンバーの呪文習得スロット (#175) */

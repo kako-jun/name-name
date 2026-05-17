@@ -57,6 +57,11 @@ import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { rollEncounter } from './encounter'
 export { rollEncounter } from './encounter'
+import {
+  getEquipmentBonus,
+  initialEquipmentFromMember,
+  type MemberEquipment,
+} from './equipmentState'
 
 interface NPCRuntime {
   data: UiNpcData
@@ -123,6 +128,13 @@ export class RaycastRenderer {
   private masterMonsters: Record<string, import('../types').MonsterDef> = {}
   /** パーティマスター (#175)。`hero` 既定 ID を最優先で使う */
   private masterParty: Record<string, import('../types').PartyMemberDef> = {}
+  /** アイテムマスター (#207)。装備のボーナス参照と装備選択画面の候補列挙に使う */
+  private masterItems: Record<string, import('../types').ItemDef> = {}
+  /**
+   * パーティメンバーごとの装備状態 (#207)。
+   * セーブデータ統合は将来 Issue。今は load() ごとに初期装備から再構築する。
+   */
+  private partyEquipment: Map<string, MemberEquipment> = new Map()
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -360,6 +372,12 @@ export class RaycastRenderer {
     this.encounterGroups = gameData.map.encounterGroups ?? []
     this.masterMonsters = gameData.monsters ?? {}
     this.masterParty = gameData.party ?? {}
+    this.masterItems = gameData.items ?? {}
+    // 装備状態を初期化 (#207)。各メンバーの equip フィールドから組み立てる
+    this.partyEquipment = new Map()
+    for (const member of Object.values(this.masterParty)) {
+      this.partyEquipment.set(member.id, initialEquipmentFromMember(member))
+    }
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -797,6 +815,10 @@ export class RaycastRenderer {
   private buildHeroBattleEntity(): BattleEntity {
     const def = this.masterParty['hero']
     if (def) {
+      // 装備ボーナスを焼き込む (#207)。BattleEntity 自体は equipment を持たず、
+      // 効果値だけが atk/def に上乗せされる方式。
+      const equipment = this.partyEquipment.get(def.id) ?? {}
+      const bonus = getEquipmentBonus(equipment, this.masterItems)
       return {
         id: def.id,
         name: def.name,
@@ -804,8 +826,8 @@ export class RaycastRenderer {
         maxHp: def.hp,
         mp: def.mp ?? 0,
         maxMp: def.mp ?? 0,
-        atk: def.atk,
-        def: def.def,
+        atk: def.atk + bonus.atk,
+        def: def.def + bonus.def,
         agi: def.agi,
       }
     }
