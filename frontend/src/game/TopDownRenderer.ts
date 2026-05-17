@@ -10,6 +10,7 @@ import { Application, Container, Graphics, Sprite } from 'pixi.js'
 import { UiNpcData, UiRpgTrigger, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import type { ItemDef, MonsterDef, PartyMemberDef } from '../types'
 import { initialEquipmentFromMember, type MemberEquipment } from './equipmentState'
+import { EquipmentScreen } from './EquipmentScreen'
 import { DialogBox } from './DialogBox'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import {
@@ -104,6 +105,8 @@ export class TopDownRenderer {
    * BattleScreen 統合時は RaycastRenderer 同様 buildHero で bonus を atk/def に焼き込む。
    */
   private partyEquipment: Map<string, MemberEquipment> = new Map()
+  /** 装備変更画面 (#207)。タップで開く。表示中は入力スキップ */
+  private equipmentScreen: EquipmentScreen | null = null
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする */
   private encounterCooldown: number = 0
 
@@ -268,6 +271,7 @@ export class TopDownRenderer {
       this.eventRunner = null
       this.dialogBox = null
       this.menuOverlay = null
+      this.equipmentScreen = null
       this.initialized = false
     }
   }
@@ -441,6 +445,9 @@ export class TopDownRenderer {
       return
     }
 
+    // 装備画面表示中はフィールド入力を全て無視 (#207)
+    if (this.equipmentScreen?.visible) return
+
     if (this.dialogBox?.isShowing) {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
@@ -592,6 +599,32 @@ export class TopDownRenderer {
     })
   }
 
+  /**
+   * 装備変更画面を起動する (#207)。
+   * RaycastRenderer と同じ実装パターン。EquipmentScreen を遅延生成し、
+   * partyEquipment Map を参照渡しで共有する。
+   */
+  private openEquipmentScreen(memberId: string): void {
+    if (!this.equipmentScreen) {
+      this.equipmentScreen = new EquipmentScreen(
+        this.screenWidth,
+        this.screenHeight,
+        this.masterItems,
+        this.masterParty,
+        this.partyEquipment,
+        {
+          onEquipChanged: (mid, eq) => {
+            this.partyEquipment.set(mid, eq)
+          },
+        }
+      )
+      this.app.stage.addChild(this.equipmentScreen)
+    } else {
+      this.equipmentScreen.redraw(this.screenWidth, this.screenHeight)
+    }
+    this.equipmentScreen.show(memberId)
+  }
+
   private maybeRollEncounter(): void {
     if (this.encounterCooldown > 0) {
       this.encounterCooldown -= 1
@@ -683,6 +716,8 @@ export class TopDownRenderer {
   private handleSwipe = (direction: SwipeDirection): void => {
     if (!this.initialized) return
     if (this.inputLocked && this.eventRunner?.isRunning) return
+    // 装備画面表示中はスワイプも無視 (#207)
+    if (this.equipmentScreen?.visible) return
     if (this.dialogBox?.isShowing) {
       // ダイアログ中のスワイプはダイアログ操作と分離。誤爆防止のため何もしない。
       return
@@ -710,6 +745,8 @@ export class TopDownRenderer {
    */
   private handleTap = (): void => {
     if (!this.initialized) return
+    // 装備画面表示中: 画面のタップは EquipmentScreen 内部のハンドラに任せる (#207)
+    if (this.equipmentScreen?.visible) return
     if (this.dialogBox?.isShowing) {
       // ダイアログを開いた直後 (< DIALOG_JUST_SHOWN_GUARD_MS) は advance / skip / hide すべて
       // 無視する。メニュー → tryTalk → dialog.show 直後、または EventRunner の Dialog/Narration
@@ -763,10 +800,12 @@ export class TopDownRenderer {
       case 'equip':
         // 親をそのまま選んだ場合（submenu が空のときに来うる）。今は no-op
         return
+      case 'equip:hero':
+        this.openEquipmentScreen('hero')
+        return
       case 'item:none':
       case 'spell:none':
       case 'status:hero':
-      case 'equip:hero':
       case 'tactics:bravely':
       case 'tactics:safely':
       case 'tactics:no-spell':
@@ -799,6 +838,7 @@ export class TopDownRenderer {
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
       this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
       this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
+      this.equipmentScreen?.redraw(this.screenWidth, this.screenHeight)
       this.centerCamera()
     })
   }

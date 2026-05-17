@@ -62,6 +62,7 @@ import {
   initialEquipmentFromMember,
   type MemberEquipment,
 } from './equipmentState'
+import { EquipmentScreen } from './EquipmentScreen'
 
 interface NPCRuntime {
   data: UiNpcData
@@ -135,6 +136,8 @@ export class RaycastRenderer {
    * セーブデータ統合は将来 Issue。今は load() ごとに初期装備から再構築する。
    */
   private partyEquipment: Map<string, MemberEquipment> = new Map()
+  /** 装備変更画面 (#207)。タップで開く。フィールド入力は表示中スキップ */
+  private equipmentScreen: EquipmentScreen | null = null
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -557,6 +560,7 @@ export class RaycastRenderer {
       this.menuOverlay = null
       this.minimap = null
       this.battleScreen = null
+      this.equipmentScreen = null
     }
   }
 
@@ -575,6 +579,9 @@ export class RaycastRenderer {
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (!this.initialized) return
     if (this.isEditableFocused()) return
+
+    // 装備画面表示中はフィールド入力を全て無視 (#207)
+    if (this.equipmentScreen?.visible) return
 
     if (this.dialogBox?.isShowing) {
       if (e.key === ' ' || e.key === 'Enter') {
@@ -673,6 +680,8 @@ export class RaycastRenderer {
   private handleSwipe = (direction: SwipeDirection): void => {
     if (!this.initialized) return
     if (this.dialogBox?.isShowing) return
+    // 装備画面表示中はスワイプも無効 (#207)
+    if (this.equipmentScreen?.visible) return
     if (this.menuOverlay?.isShowing()) {
       this.menuOverlay.hideMenu()
       return
@@ -812,6 +821,39 @@ export class RaycastRenderer {
    * masterParty['hero'] から BattleEntity を組み立てる。未定義ならハードコード値 (#175)。
    * 将来的にはセーブデータの現在値（HP/MP 残量、レベル）を反映する。
    */
+  /**
+   * 装備変更画面を起動する (#207)。
+   * EquipmentScreen を遅延生成し、partyEquipment を参照渡しで共有する。
+   * 装備が変わると onEquipChanged で同 Map がそのまま更新されるため、
+   * 次の startBattle で getEquipmentBonus が新しい状態を読む。
+   */
+  private openEquipmentScreen(memberId: string): void {
+    if (this.battleScreen) return // 戦闘中は不可
+    if (!this.equipmentScreen) {
+      this.equipmentScreen = new EquipmentScreen(
+        this.screenWidth,
+        this.screenHeight,
+        this.masterItems,
+        this.masterParty,
+        this.partyEquipment,
+        {
+          onEquipChanged: (mid, eq) => {
+            // partyEquipment Map は参照共有なので EquipmentScreen 側で set 済み。
+            // ここでは念のため再 set して、将来 onEquipChanged 経路が増えても一貫性を保つ。
+            this.partyEquipment.set(mid, eq)
+          },
+          onClose: () => {
+            // hide は EquipmentScreen 内で済んでいる
+          },
+        }
+      )
+      this.app.stage.addChild(this.equipmentScreen)
+    } else {
+      this.equipmentScreen.redraw(this.screenWidth, this.screenHeight)
+    }
+    this.equipmentScreen.show(memberId)
+  }
+
   private buildHeroBattleEntity(): BattleEntity {
     const def = this.masterParty['hero']
     if (def) {
@@ -942,10 +984,12 @@ export class RaycastRenderer {
       case 'spell':
       case 'equip':
         return
+      case 'equip:hero':
+        this.openEquipmentScreen('hero')
+        return
       case 'item:none':
       case 'spell:none':
       case 'status:hero':
-      case 'equip:hero':
       case 'tactics:bravely':
       case 'tactics:safely':
       case 'tactics:no-spell':
@@ -975,6 +1019,7 @@ export class RaycastRenderer {
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
       this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
       this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
+      this.equipmentScreen?.redraw(this.screenWidth, this.screenHeight)
       // ミニマップ位置を画面サイズに追従させる (#149)
       if (this.minimap) {
         this.minimap.resize(this.screenWidth, this.screenHeight)
@@ -1062,7 +1107,8 @@ export class RaycastRenderer {
     if (this.minimap) {
       const dialogVisible = this.dialogBox?.isShowing ?? false
       const menuVisible = this.menuOverlay?.isShowing() ?? false
-      this.minimap.visible = !dialogVisible && !menuVisible
+      const equipVisible = this.equipmentScreen?.visible ?? false
+      this.minimap.visible = !dialogVisible && !menuVisible && !equipVisible
       this.minimap.setPlayerAngle(this.playerX, this.playerY, this.playerAngle)
     }
 
@@ -1071,7 +1117,8 @@ export class RaycastRenderer {
     // プレイヤー位置の更新だけが dialog 中スキップ対象。
     this.advanceTurnAnim(dt)
 
-    if (!this.dialogBox?.isShowing) {
+    // 装備画面 (#207) もダイアログと同じ扱いで updateMovement をスキップ
+    if (!this.dialogBox?.isShowing && !this.equipmentScreen?.visible) {
       this.updateMovement(dt)
     }
     this.updateNpcAnimations(now)
