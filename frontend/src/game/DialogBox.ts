@@ -201,6 +201,14 @@ export class DialogBox extends Container {
   // --- 状態 ---
   private currentText: string = ''
   private showing = false
+  /**
+   * `show()` を最後に呼んだ時刻 (performance.now())。0 = 一度も show されていない（差分が
+   * 常に巨大になるためガード判定は偽になる）。
+   * `isJustShown(guardMs)` 経由で「メニュー → tryTalk → dialog.show 直後に到達した tap で
+   * dialog がすぐ閉じる事故」のガード判定に使う。`hide()` でリセットしない（次の `show()`
+   * で上書きされるため）。
+   */
+  private lastShownAtMs = 0
 
   // --- typewriter ---
   private typewriter: TypewriterState = makeInitialTypewriterState()
@@ -359,6 +367,7 @@ export class DialogBox extends Container {
     const cleanMessage = stripRubyMarkup(message)
     const previousPortrait = this.currentPortrait
     this.showing = true
+    this.lastShownAtMs = performance.now()
     this.currentPortrait = portrait && portrait.length > 0 ? portrait : undefined
 
     // setDialog が bg.visible / showing を管理するため、ここでは bg.visible を触らない。
@@ -390,6 +399,15 @@ export class DialogBox extends Container {
 
   get isShowing(): boolean {
     return this.showing
+  }
+
+  /**
+   * 直前の `show()` から `guardMs` ミリ秒以内なら true を返す。
+   * 「タップによってダイアログを開いた瞬間の同一ジェスチャに含まれる二重発火 tap で
+   * dialog がすぐ閉じる事故」を防ぐためのガード判定。
+   */
+  isJustShown(guardMs: number): boolean {
+    return this.showing && performance.now() - this.lastShownAtMs < guardMs
   }
 
   /**

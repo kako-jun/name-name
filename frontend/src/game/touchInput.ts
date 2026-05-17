@@ -53,6 +53,16 @@ export function suppressNextTouchTap(durationMs = 250): void {
 }
 
 /**
+ * ダイアログを開いた直後の handleTap close 系操作を弾くガード幅 (ms)。
+ * - `DialogBox.isJustShown(guardMs)` 経由で時刻ベースの二次保険として使う
+ * - `handleMenuSelect` 入口で `suppressNextTouchTap(guardMs)` の duration としても使う（一次防御）
+ *
+ * `suppressNextTouchTap` のデフォルト 250ms と `attachTouchInput` の `tapMaxDuration`
+ * 350ms を覆えるように 400ms 取る。手動で suppressNextTouchTap が漏れても余裕を持って弾く。
+ */
+export const DIALOG_JUST_SHOWN_GUARD_MS = 400
+
+/**
  * 指定 element に pointer 系のリスナーを取り付け、tap / swipe を検出する。
  *
  * @returns 取り外し用関数。
