@@ -192,7 +192,7 @@ pub struct MonsterDef {
     pub builtin: Option<String>,
 }
 
-/// アイテム定義 (#174)。
+/// アイテム定義 (#174 / #207)。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ItemDef {
@@ -209,6 +209,23 @@ pub struct ItemDef {
     /// 専用関数 ID（"world_tree_drop" / "wing_of_chimera" 等）。`effect` と排他。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builtin: Option<String>,
+    /// 装備スロット (#207)。"weapon" / "armor" / "shield" / "helmet"。
+    /// 指定があるアイテムだけ装備可能。
+    /// runtime は文字列を引いて分岐するだけで、parser は値を透過する。
+    /// Markdown 側は「武器/防具/盾/兜」「武器/armor/shield/helmet」を許容（master.rs で正規化）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equip_slot: Option<String>,
+    /// 装備中の ATK ボーナス (#207)。武器スロット向け。負値も可。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atk_bonus: Option<i32>,
+    /// 装備中の DEF ボーナス (#207)。防具/盾/兜スロット向け。負値も可。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub def_bonus: Option<i32>,
+    /// 装備可能なパーティメンバー ID のリスト (#207)。
+    /// `None` または空リストは「誰でも装備可」扱い（runtime での解釈）。
+    /// Markdown は「装備可能: hero, prince」のカンマ区切りで指定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equippable_by: Option<Vec<String>>,
 }
 
 /// パーティメンバー定義 (#175)。
@@ -238,6 +255,11 @@ pub struct PartyMemberDef {
     /// Phase 1 ではデータとして保持するだけ、ランタイム評価は #175 follow-up。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub learns: Option<Vec<PartyLearns>>,
+    /// 初期装備 (#207)。スロット名（weapon/armor/shield/helmet）→ アイテム ID。
+    /// runtime はこれを `partyEquipment` の初期状態に反映する。
+    /// Markdown は「装備: weapon=copper_sword」を複数行書ける。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equip: Option<std::collections::HashMap<String, String>>,
 }
 
 /// パーティメンバーの呪文習得スロット (#175)

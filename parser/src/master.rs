@@ -154,6 +154,45 @@ fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
         price: lookup_master_value(entries, &["価格", "price"]).and_then(|v| v.parse().ok()),
         effect: lookup_master_string(entries, &["効果", "effect"]),
         builtin: lookup_master_string(entries, &["builtin"]),
+        equip_slot: lookup_equip_slot(entries),
+        atk_bonus: lookup_master_value(entries, &["攻撃ボーナス", "atk_bonus", "atkBonus"])
+            .and_then(|v| v.parse().ok()),
+        def_bonus: lookup_master_value(entries, &["守備ボーナス", "def_bonus", "defBonus"])
+            .and_then(|v| v.parse().ok()),
+        equippable_by: lookup_equippable_by(entries),
+    }
+}
+
+/// `スロット` / `slot` を引いて、英語スロット名（weapon/armor/shield/helmet）に正規化する。
+/// 日本語「武器/防具/盾/兜」も受理。それ以外は値をそのまま透過（runtime が判定）。
+fn lookup_equip_slot(entries: &[(String, String)]) -> Option<String> {
+    let raw = lookup_master_string(entries, &["スロット", "slot", "equip_slot", "equipSlot"])?;
+    let normalized = match raw.as_str() {
+        "武器" | "weapon" => "weapon",
+        "防具" | "鎧" | "armor" => "armor",
+        "盾" | "shield" => "shield",
+        "兜" | "helmet" => "helmet",
+        other => return Some(other.to_string()),
+    };
+    Some(normalized.to_string())
+}
+
+/// `装備可能` / `equippable_by` のカンマ区切りリストをパースする。
+/// 空白要素はスキップ。すべて空なら None を返す。
+fn lookup_equippable_by(entries: &[(String, String)]) -> Option<Vec<String>> {
+    let raw = lookup_master_string(
+        entries,
+        &["装備可能", "equippable_by", "equippableBy"],
+    )?;
+    let items: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if items.is_empty() {
+        None
+    } else {
+        Some(items)
     }
 }
 
@@ -174,7 +213,58 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
         agi: lookup_master_u32(entries, &["AGI", "agi", "素早さ"], 0),
         // 「習得」キーは複数行 OK で `Lv4 ホイミ` / `4 ホイミ` のような形式を受理する
         learns: collect_party_learns(entries),
+        // 「装備」キーも複数行 OK で `weapon=copper_sword` 形式を集める (#207)
+        equip: collect_party_equip(entries),
     })
+}
+
+/// `装備` / `equip` のキー値ペアを複数集めて HashMap<slot, item_id> にする (#207)。
+/// 形式: 1 行 1 スロット、`slot=item_id` または `slot:item_id`、複数 K=V スペース区切り（`weapon=sword armor=cloth`）も受理。
+/// 同一スロットの重複指定は後勝ち。
+fn collect_party_equip(
+    entries: &[(String, String)],
+) -> Option<std::collections::HashMap<String, String>> {
+    let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (k, v) in entries {
+        if k != "装備" && k != "equip" {
+            continue;
+        }
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        for token in trimmed.split_whitespace() {
+            let (slot_raw, item_id) = match token.split_once('=') {
+                Some(pair) => pair,
+                None => match token.split_once(':') {
+                    Some(pair) => pair,
+                    None => continue,
+                },
+            };
+            let slot = normalize_slot_name(slot_raw.trim());
+            let id = item_id.trim().to_string();
+            if slot.is_empty() || id.is_empty() {
+                continue;
+            }
+            out.insert(slot, id);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// スロット名を英語表記に正規化する（lookup_equip_slot と同じ表）。
+fn normalize_slot_name(raw: &str) -> String {
+    match raw {
+        "武器" | "weapon" => "weapon".to_string(),
+        "防具" | "鎧" | "armor" => "armor".to_string(),
+        "盾" | "shield" => "shield".to_string(),
+        "兜" | "helmet" => "helmet".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// `習得` / `learns` のキー値ペアを複数集めて Vec<PartyLearns> にする。

@@ -424,6 +424,23 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if let Some(b) = &it.builtin {
                     out.push_str(&format!("builtin: {}\n", b));
                 }
+                // #207 装備系フィールド。emit は受理した英語スロット名でそのまま書き戻す
+                // （日本語入力 → 英語正規化 → 英語 emit の片方向）。round-trip 比較は
+                // parser 出力同士で行うため正規化後の値で安定する。
+                if let Some(s) = &it.equip_slot {
+                    out.push_str(&format!("スロット: {}\n", s));
+                }
+                if let Some(b) = it.atk_bonus {
+                    out.push_str(&format!("攻撃ボーナス: {}\n", b));
+                }
+                if let Some(b) = it.def_bonus {
+                    out.push_str(&format!("守備ボーナス: {}\n", b));
+                }
+                if let Some(list) = &it.equippable_by {
+                    if !list.is_empty() {
+                        out.push_str(&format!("装備可能: {}\n", list.join(", ")));
+                    }
+                }
                 out.push_str("[/アイテム]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -449,6 +466,16 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if let Some(learns) = &p.learns {
                     for l in learns {
                         out.push_str(&format!("習得: Lv{} {}\n", l.level, l.spell));
+                    }
+                }
+                // #207 初期装備。HashMap の決定論的順序のためにキーを sort してから書く
+                if let Some(equip) = &p.equip {
+                    let mut slots: Vec<&String> = equip.keys().collect();
+                    slots.sort();
+                    for slot in slots {
+                        if let Some(item_id) = equip.get(slot) {
+                            out.push_str(&format!("装備: {}={}\n", slot, item_id));
+                        }
                     }
                 }
                 out.push_str("[/パーティ]\n");
@@ -826,6 +853,10 @@ mod tests {
             price: Some(8),
             effect: Some("heal 30".to_string()),
             builtin: None,
+            equip_slot: None,
+            atk_bonus: None,
+            def_bonus: None,
+            equippable_by: None,
         }));
         let out = emit(&doc);
         assert!(out.contains("[アイテム やくそう]"));
@@ -863,6 +894,110 @@ mod tests {
         let emitted = emit(&doc1);
         let doc2 = crate::parser::parse(&emitted);
         assert_eq!(doc1, doc2, "master data round-trip should be stable");
+    }
+
+    // ===== 装備システム (#207) =====
+
+    #[test]
+    fn emits_item_with_equip_fields() {
+        let doc = make_doc_with_event(Event::Item(ItemDef {
+            id: "copper_sword".to_string(),
+            name: "どうのつるぎ".to_string(),
+            kind: "武器".to_string(),
+            price: Some(100),
+            effect: None,
+            builtin: None,
+            equip_slot: Some("weapon".to_string()),
+            atk_bonus: Some(8),
+            def_bonus: None,
+            equippable_by: Some(vec!["hero".to_string(), "prince".to_string()]),
+        }));
+        let out = emit(&doc);
+        assert!(out.contains("[アイテム copper_sword]"));
+        assert!(out.contains("スロット: weapon"));
+        assert!(out.contains("攻撃ボーナス: 8"));
+        assert!(out.contains("装備可能: hero, prince"));
+        assert!(!out.contains("守備ボーナス"));
+    }
+
+    #[test]
+    fn parses_item_with_japanese_slot_keywords() {
+        // 「スロット: 武器」「装備可能: hero」等の日本語表記を受理して英語に正規化する
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[アイテム leather_armor]\n名前: かわのよろい\n種別: 防具\n価格: 70\nスロット: 防具\n守備ボーナス: 4\n装備可能: hero\n[/アイテム]\n";
+        let doc = crate::parser::parse(input);
+        let event = &doc.chapters[0].scenes[0].events[0];
+        match event {
+            Event::Item(it) => {
+                assert_eq!(it.equip_slot.as_deref(), Some("armor"));
+                assert_eq!(it.def_bonus, Some(4));
+                assert_eq!(it.atk_bonus, None);
+                assert_eq!(
+                    it.equippable_by.as_deref(),
+                    Some(["hero".to_string()].as_slice())
+                );
+            }
+            _ => panic!("expected Item event"),
+        }
+    }
+
+    #[test]
+    fn round_trip_item_with_equip_fields() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[アイテム copper_sword]\n名前: どうのつるぎ\n種別: 武器\n価格: 100\nスロット: weapon\n攻撃ボーナス: 8\n装備可能: hero, prince\n[/アイテム]\n";
+        let doc1 = crate::parser::parse(input);
+        let emitted = emit(&doc1);
+        let doc2 = crate::parser::parse(&emitted);
+        assert_eq!(doc1, doc2, "item equip round-trip should be stable");
+    }
+
+    #[test]
+    fn emits_party_with_initial_equip() {
+        let mut equip = std::collections::HashMap::new();
+        equip.insert("weapon".to_string(), "copper_sword".to_string());
+        equip.insert("armor".to_string(), "cloth_armor".to_string());
+        let doc = make_doc_with_event(Event::PartyMember(PartyMemberDef {
+            id: "hero".to_string(),
+            name: "ゆうしゃ".to_string(),
+            sprite: None,
+            level: 1,
+            hp: 20,
+            mp: 4,
+            atk: 5,
+            def_value: 3,
+            agi: 4,
+            learns: None,
+            equip: Some(equip),
+        }));
+        let out = emit(&doc);
+        assert!(out.contains("[パーティ hero]"));
+        assert!(out.contains("装備: armor=cloth_armor"));
+        assert!(out.contains("装備: weapon=copper_sword"));
+    }
+
+    #[test]
+    fn round_trip_party_with_initial_equip() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[パーティ hero]\n名前: ゆうしゃ\nHP: 20\nMP: 4\nATK: 5\nDEF: 3\nAGI: 4\n装備: weapon=copper_sword\n装備: armor=cloth_armor\n[/パーティ]\n";
+        let doc1 = crate::parser::parse(input);
+        let emitted = emit(&doc1);
+        let doc2 = crate::parser::parse(&emitted);
+        assert_eq!(doc1, doc2, "party equip round-trip should be stable");
+    }
+
+    #[test]
+    fn backward_compat_item_without_equip_fields() {
+        // 既存形式（equip 系フィールド無し）が従来通りパースされる
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[アイテム やくそう]\n名前: やくそう\n種別: 回復\n価格: 8\n効果: heal 30\n[/アイテム]\n";
+        let doc = crate::parser::parse(input);
+        let event = &doc.chapters[0].scenes[0].events[0];
+        match event {
+            Event::Item(it) => {
+                assert_eq!(it.equip_slot, None);
+                assert_eq!(it.atk_bonus, None);
+                assert_eq!(it.def_bonus, None);
+                assert_eq!(it.equippable_by, None);
+                assert_eq!(it.effect.as_deref(), Some("heal 30"));
+            }
+            _ => panic!("expected Item event"),
+        }
     }
 
     fn make_doc_with_event(event: Event) -> Document {
