@@ -227,10 +227,11 @@ export class EquipmentScreen extends Container {
   private rebuild(): void {
     // 既存子要素（dim / panel 以外）をクリア。
     // removeChildren で全 detach → 個別 destroy の順にして PixiJS の内部 children 配列を 1 回だけ書き換える (review N4)。
-    const survivors = new Set<Container | Graphics>([this.dim, this.panel])
+    // Graphics extends Container なので Set<Container> で両方を保持できる
+    const survivors = new Set<Container>([this.dim, this.panel])
     const toDestroy: Container[] = []
     for (const child of this.children.slice()) {
-      if (!survivors.has(child as Container | Graphics)) {
+      if (!survivors.has(child)) {
         toDestroy.push(child)
       }
     }
