@@ -34,6 +34,8 @@ export interface EquipmentBonus {
   def: number
 }
 
+// `string` で受けて narrowing するため Set の要素型は `string` で宣言する (review N7)。
+// `isEquipmentSlot(slot: string)` の引数を型エラーなしで通すための意図的な型注釈。
 const SLOT_SET: ReadonlySet<string> = new Set<EquipmentSlot>(ALL_EQUIPMENT_SLOTS)
 
 function isEquipmentSlot(slot: string): slot is EquipmentSlot {
@@ -77,10 +79,10 @@ export function equipItem(
 
 /**
  * 指定スロットの装備を外した新しい equipment を返す。
- * 元々空でも空のまま新インスタンスで返す（call site の参照等価チェック簡略化）。
+ * 既に空のスロットは元参照をそのまま返す（参照等価で「変更無し」を判定可能） (review N1)。
  */
 export function unequipItem(equipment: MemberEquipment, slot: EquipmentSlot): MemberEquipment {
-  if (equipment[slot] === undefined) return { ...equipment }
+  if (equipment[slot] === undefined) return equipment
   const next: MemberEquipment = { ...equipment }
   delete next[slot]
   return next

@@ -263,6 +263,9 @@ export class TopDownRenderer {
       // renderer 参照を先に保持してから app.destroy（children 連鎖で Sprite / 内部 Texture が破棄される）。
       // その後に cache 側の RenderTexture（source 共有元）を破棄 — 順序を逆にすると source を先に
       // destroy してしまい、子 Sprite が既に破棄済み source を再参照して壊れる可能性がある
+      // EquipmentScreen は app.stage の子で children:true の連鎖で破棄されるが、
+      // 順序事故防止と明示性のため app.destroy より先に明示 destroy する (review Q2)。
+      this.equipmentScreen?.destroy({ children: true })
       const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
       clearDemoSheetCache(renderer)
@@ -613,6 +616,8 @@ export class TopDownRenderer {
         this.masterParty,
         this.partyEquipment,
         {
+          // 装備変更の正本反映はここ一箇所に集約 (review N10)。
+          // EquipmentScreen 側は immutable な next を渡すだけ、Map への set は Renderer 側で行う。
           onEquipChanged: (mid, eq) => {
             this.partyEquipment.set(mid, eq)
           },
@@ -798,7 +803,9 @@ export class TopDownRenderer {
       case 'tactics':
       case 'spell':
       case 'equip':
-        // 親をそのまま選んだ場合（submenu が空のときに来うる）。今は no-op
+        // 親 id が来た場合（submenu が空、あるいは将来 submenu が空配列になったとき）。
+        // 現状 'equip' は DQ4_COMMANDS で submenu: [{ id: 'equip:hero' }] を持つので
+        // TouchMenuOverlay が submenu を開き、ここには来ない想定。誤呼出時の no-op として残す。
         return
       case 'equip:hero':
         this.openEquipmentScreen('hero')

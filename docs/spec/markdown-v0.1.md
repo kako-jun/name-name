@@ -735,7 +735,9 @@ GOLD: 1
 | `守備ボーナス` | `def_bonus` / `defBonus` | No | 装備中の DEF 加算 (#207) |
 | `装備可能` | `equippable_by` / `equippableBy` | No | 装備可能なメンバー ID のカンマ区切りリスト (#207)。未指定または空なら誰でも装備可 |
 
-スロット名は英語に正規化されて runtime に渡る（`武器`→`weapon`）。日本語・英語のどちらで書いてもよい。
+スロット名は英語に正規化されて runtime に渡る（`武器`→`weapon`）。日本語・英語のどちらで書いてもよく、英語表記は大小無視（`Weapon` / `WEAPON` も `weapon` に正規化される）。未知のスロット名は小文字化して透過し、runtime（`isEquipmentSlot`）が弾く。
+
+> **Phase 2 メモ**: `パーティ` ブロックの `装備: weapon=やくそう` のように、参照先 `アイテム` が `equip_slot` を持たない（= 装備不可）ケースを parser 単体で拒否する仕組みは未実装。`アイテム` 定義は別ブロックなので `_compile_validate` 等の cross-block 検証が必要。現状は parser が値をそのまま透過し、runtime 側で「現在のスロット定義に存在するなら表示、無ければ無視」して救済する。検証強化は別 Issue で対応する。
 
 ### パーティメンバー (#175)
 
@@ -781,7 +783,9 @@ AGI: 4
 
 `BattleEntity` 自体は装備を持たず、構築時に値が焼き込まれる方式（既存の `computeAttackDamage` 等を変更しないため）。装備が変わるたびに戦闘エンティティを作り直す前提。
 
-装備の付け外しはフィールドメニュー「そうび → ゆうしゃ」から `EquipmentScreen` オーバーレイで行う。同スロットの上書き・「外す」をサポート。装備候補は `equip_slot` が一致し、`equippable_by` が未指定 / 空 / 当該メンバー ID を含むものに限定される。
+装備の付け外しはフィールドメニュー「そうび → ゆうしゃ」から `EquipmentScreen` オーバーレイで行う。同スロットの上書き・「外す」をサポート。装備候補は `equip_slot` が一致し、`equippable_by` が未指定 / 空 / 当該メンバー ID を含むものに限定される。現装備のアイテムが `equippable_by` から後から外れた場合でも、ポップアップ先頭に「現装備（再装備）」項目として注入し、必ず戻せるようにする。
+
+**現状の反映範囲（Phase 1）**: 装備ボーナスは **Raycast 経由で起動された戦闘** にのみ反映される。TopDown 経由の戦闘 (`TopDownRenderer.startBattle`) ではまだ装備ボーナスを焼き込んでおらず、BattleScreen 統合と同時に有効化する（別 Issue で対応）。装備データ自体（`partyEquipment` Map）は両 Renderer で共有・編集される。
 
 ### 呪文
 

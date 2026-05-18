@@ -153,11 +153,11 @@ describe('unequipItem', () => {
     expect(next).toEqual({ armor: 'cloth_armor' })
   })
 
-  it('空スロットを外しても新インスタンスを返す', () => {
+  it('空スロットを外したら参照そのまま返す（変更無し）', () => {
+    // review N1: 早期 return で参照等価を保つことで「変更無し」を呼び出し側が判定可能。
     const prev = { armor: 'cloth_armor' }
     const next = unequipItem(prev, 'weapon')
-    expect(next).toEqual({ armor: 'cloth_armor' })
-    expect(next).not.toBe(prev)
+    expect(next).toBe(prev)
   })
 })
 

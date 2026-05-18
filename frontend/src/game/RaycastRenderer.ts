@@ -57,11 +57,8 @@ import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { rollEncounter } from './encounter'
 export { rollEncounter } from './encounter'
-import {
-  getEquipmentBonus,
-  initialEquipmentFromMember,
-  type MemberEquipment,
-} from './equipmentState'
+import { initialEquipmentFromMember, type MemberEquipment } from './equipmentState'
+import { buildHeroBattleEntity } from './buildBattleEntity'
 import { EquipmentScreen } from './EquipmentScreen'
 
 interface NPCRuntime {
@@ -541,6 +538,9 @@ export class RaycastRenderer {
       this.waterTexture?.destroy()
       this.treeTexture = null
       this.waterTexture = null
+      // EquipmentScreen は app.stage の子で children:true の連鎖で破棄されるが、
+      // 順序事故防止と明示性のため app.destroy より先に明示 destroy する (review Q2)。
+      this.equipmentScreen?.destroy({ children: true })
       const renderer = this.app.renderer
       this.app.destroy(true, { children: true })
       // Issue #93: stacked → demo の順で呼ぶ。
@@ -801,7 +801,7 @@ export class RaycastRenderer {
   private startBattle(enemies: BattleEntity[]): void {
     if (this.battleScreen) return // 多重起動防止
     if (enemies.length === 0) return
-    const hero = this.buildHeroBattleEntity()
+    const hero = this.makeHeroBattleEntity()
     const engine = new BattleEngine([hero], enemies)
     this.battleScreen = new BattleScreen(engine, this.screenWidth, this.screenHeight, {
       onClose: () => {
@@ -837,9 +837,10 @@ export class RaycastRenderer {
         this.masterParty,
         this.partyEquipment,
         {
+          // 装備変更の正本反映はここ一箇所に集約 (review N10)。
+          // EquipmentScreen 側は immutable な next を計算してコールバックで返すだけにし、
+          // partyEquipment Map への set は Renderer 側で行う。
           onEquipChanged: (mid, eq) => {
-            // partyEquipment Map は参照共有なので EquipmentScreen 側で set 済み。
-            // ここでは念のため再 set して、将来 onEquipChanged 経路が増えても一貫性を保つ。
             this.partyEquipment.set(mid, eq)
           },
           onClose: () => {
@@ -854,24 +855,16 @@ export class RaycastRenderer {
     this.equipmentScreen.show(memberId)
   }
 
-  private buildHeroBattleEntity(): BattleEntity {
+  /**
+   * 戦闘起動時の味方エンティティを組み立てる。装備ボーナスは
+   * `buildHeroBattleEntity` で焼き込む (#207)。
+   * masterParty['hero'] が未定義ならハードコード値 (#175)。
+   */
+  private makeHeroBattleEntity(): BattleEntity {
     const def = this.masterParty['hero']
     if (def) {
-      // 装備ボーナスを焼き込む (#207)。BattleEntity 自体は equipment を持たず、
-      // 効果値だけが atk/def に上乗せされる方式。
       const equipment = this.partyEquipment.get(def.id) ?? {}
-      const bonus = getEquipmentBonus(equipment, this.masterItems)
-      return {
-        id: def.id,
-        name: def.name,
-        hp: def.hp,
-        maxHp: def.hp,
-        mp: def.mp ?? 0,
-        maxMp: def.mp ?? 0,
-        atk: def.atk + bonus.atk,
-        def: def.def + bonus.def,
-        agi: def.agi,
-      }
+      return buildHeroBattleEntity(def, equipment, this.masterItems)
     }
     return {
       id: 'hero',
@@ -983,6 +976,9 @@ export class RaycastRenderer {
       case 'tactics':
       case 'spell':
       case 'equip':
+        // 親 id が来た場合（submenu が空、あるいは将来 submenu が空配列になったとき）。
+        // 現状 'equip' は DQ4_COMMANDS で submenu: [{ id: 'equip:hero' }] を持つので
+        // TouchMenuOverlay が submenu を開き、ここには来ない想定。誤呼出時の no-op として残す。
         return
       case 'equip:hero':
         this.openEquipmentScreen('hero')

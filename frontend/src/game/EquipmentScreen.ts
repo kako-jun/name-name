@@ -19,6 +19,10 @@
  * 「変更」タップで該当スロットの装備可能アイテム一覧をポップアップ。
  * 「外す」も選択肢に含む。アイテム選択で equip + ポップアップ閉じる。
  * スワイプ・キーボード対応は省略（最小 UX、タップ専用）。
+ *
+ * 注: モジュール定数 `TEXT_STYLE_*` は副作用なしの共有 TextStyle。
+ *     EquipmentScreen 自体は単一ウィンドウしか出さない前提で、複製不要。
+ *     もし将来複数 instance を同時表示するなら都度 new TextStyle に切り替えること (review S3)。
  */
 
 import { Container, Graphics, Rectangle, Text as PixiText, TextStyle } from 'pixi.js'
@@ -77,7 +81,8 @@ export interface EquipmentLayout {
   rows: Array<{ y: number; labelX: number; valueX: number; buttonX: number }>
   rowHeight: number
   closeButton: { x: number; y: number; width: number; height: number }
-  popup: { x: number; y: number; width: number; height: number; itemHeight: number }
+  /** ポップアップの初期見積もり位置・幅。height は openPopup で実コンテンツ件数から再計算する。 */
+  popup: { x: number; y: number; width: number; itemHeight: number }
 }
 
 const PANEL_MARGIN = 32
@@ -86,19 +91,25 @@ const TITLE_HEIGHT = 56
 const FOOTER_HEIGHT = 56
 const POPUP_ITEM_HEIGHT = 36
 const POPUP_MAX_VISIBLE = 8
+/** ポップアップの最大行数の上限（DQ4 風: 装備可能 5 件 + 外す = 6 行を想定した初期見積もり） */
+const MAX_POPUP_INITIAL_ROWS = 6
+/** アイテム名の表示最大文字数。これを超えたら末尾を「…」に置換する (review N8) */
+const ITEM_NAME_MAX_CHARS = 10
 
 /**
  * 画面サイズから EquipmentScreen のレイアウトを計算する。
  *
  * パネルは画面中央に固定幅 480px（または画面幅 - 64px の小さい方）。
  * 4 行 + タイトル + フッター。ポップアップはパネル内に被せて中央配置。
+ *
+ * screenWidth / screenHeight が 0 以下の異常値でも panel.x/y が負にならないよう Math.max でガード (review S2)。
  */
 export function computeEquipmentLayout(screenWidth: number, screenHeight: number): EquipmentLayout {
   const panelWidth = Math.min(480, Math.max(280, screenWidth - PANEL_MARGIN * 2))
   const rowsTotal = ROW_HEIGHT * ALL_EQUIPMENT_SLOTS.length
   const panelHeight = TITLE_HEIGHT + rowsTotal + FOOTER_HEIGHT
-  const panelX = Math.floor((screenWidth - panelWidth) / 2)
-  const panelY = Math.floor((screenHeight - panelHeight) / 2)
+  const panelX = Math.max(0, Math.floor((screenWidth - panelWidth) / 2))
+  const panelY = Math.max(0, Math.floor((screenHeight - panelHeight) / 2))
 
   const rows = ALL_EQUIPMENT_SLOTS.map((_slot, i) => {
     const y = panelY + TITLE_HEIGHT + i * ROW_HEIGHT
@@ -125,7 +136,6 @@ export function computeEquipmentLayout(screenWidth: number, screenHeight: number
       x: panelX + 24,
       y: panelY + TITLE_HEIGHT,
       width: panelWidth - 48,
-      height: Math.min(POPUP_MAX_VISIBLE, 6) * POPUP_ITEM_HEIGHT + 16,
       itemHeight: POPUP_ITEM_HEIGHT,
     },
   }
@@ -153,6 +163,12 @@ export class EquipmentScreen extends Container {
   private dim: Graphics
   private panel: Graphics
   private popup: Container | null = null
+  /**
+   * ポップアップ表示中に panel/buttons の hit をブロックする全画面シールド。
+   * popup の真下、panel/buttons の真上に挿入する (review M2)。
+   * 透明だが eventMode='static' で全画面 hitArea を持ち、枠外タップで closePopup を呼ぶ。
+   */
+  private popupShield: Graphics | null = null
   private currentMemberId: string | null = null
 
   constructor(
@@ -209,15 +225,21 @@ export class EquipmentScreen extends Container {
   }
 
   private rebuild(): void {
-    // 既存子要素（dim / panel 以外）をクリア
-    for (let i = this.children.length - 1; i >= 0; i--) {
-      const child = this.children[i]
-      if (child !== this.dim && child !== this.panel) {
-        this.removeChild(child)
-        child.destroy({ children: true })
+    // 既存子要素（dim / panel 以外）をクリア。
+    // removeChildren で全 detach → 個別 destroy の順にして PixiJS の内部 children 配列を 1 回だけ書き換える (review N4)。
+    const survivors = new Set<Container | Graphics>([this.dim, this.panel])
+    const toDestroy: Container[] = []
+    for (const child of this.children.slice()) {
+      if (!survivors.has(child as Container | Graphics)) {
+        toDestroy.push(child)
       }
     }
+    for (const child of toDestroy) {
+      this.removeChild(child)
+      child.destroy({ children: true })
+    }
     this.popup = null
+    this.popupShield = null
 
     const memberId = this.currentMemberId
     if (!memberId) return
@@ -291,18 +313,44 @@ export class EquipmentScreen extends Container {
     if (!memberId) return
 
     const layout = computeEquipmentLayout(this.screenWidth, this.screenHeight)
-    const items = getEquippableItems(memberId, slot, this.masterItems)
+    const equippable = getEquippableItems(memberId, slot, this.masterItems)
+    const equipment = this.partyEquipment.get(memberId) ?? {}
+    const currentItem = getEquippedItem(equipment, slot, this.masterItems)
+
+    // 現装備が equippable に含まれていなければ先頭に注入する (review M3)。
+    // master の equippable_by から外された装備でも再装備（戻す）操作を可能にするため。
+    let items: ItemDef[] = equippable
+    if (currentItem && !equippable.some((it) => it.id === currentItem.id)) {
+      items = [currentItem, ...equippable]
+    }
+
     const itemHeight = layout.popup.itemHeight
-    // 「外す」を 1 件挿入するので +1
+    // 「外す」を 1 件挿入するので +1。
+    // 上限は POPUP_MAX_VISIBLE (8) を絶対上限、MAX_POPUP_INITIAL_ROWS (6) を典型ケース上限とし、
+    // 行数の少ない方を選んで高さを確定する。スクロール対応は将来 Issue (review N2)。
     const rowCount = items.length + 1
-    const popupHeight = Math.min(POPUP_MAX_VISIBLE, rowCount) * itemHeight + 16
+    const cappedRows = Math.min(rowCount, POPUP_MAX_VISIBLE, MAX_POPUP_INITIAL_ROWS)
+    const popupHeight = cappedRows * itemHeight + 16
     const popupWidth = layout.popup.width
+
+    // ポップアップ表示中は panel/buttons の hit を全画面シールドでブロックし、
+    // 枠外タップで closePopup する (review M2)。dim は描画専用で hit に使わない。
+    // shield → popup の順で addChild するので popup が最前面、shield はその直下、
+    // panel/buttons の上に乗って hit を吸収する。
+    const shield = new Graphics()
+    shield.rect(0, 0, this.screenWidth, this.screenHeight).fill({ color: 0x000000, alpha: 0 })
+    shield.eventMode = 'static'
+    shield.hitArea = new Rectangle(0, 0, this.screenWidth, this.screenHeight)
+    shield.on('pointertap', () => this.closePopup())
+    this.addChild(shield)
+    this.popupShield = shield
 
     const popup = new Container()
     const bg = new Graphics()
     bg.rect(layout.popup.x, layout.popup.y, popupWidth, popupHeight)
       .fill({ color: 0x111122, alpha: 0.98 })
       .stroke({ width: 2, color: PANEL_STROKE })
+    // 背景タップはポップアップを閉じない（行 hit が拾わなかった余白タップを無視）
     bg.eventMode = 'static'
     bg.hitArea = new Rectangle(layout.popup.x, layout.popup.y, popupWidth, popupHeight)
     popup.addChild(bg)
@@ -352,6 +400,11 @@ export class EquipmentScreen extends Container {
   }
 
   private closePopup(): void {
+    if (this.popupShield) {
+      this.removeChild(this.popupShield)
+      this.popupShield.destroy()
+      this.popupShield = null
+    }
     if (this.popup) {
       this.removeChild(this.popup)
       this.popup.destroy({ children: true })
@@ -361,27 +414,35 @@ export class EquipmentScreen extends Container {
 
   /**
    * 装備変更を不変更新で反映し、コールバックを発火する。
-   * 装備行の再描画も rebuild() で行う。
+   * partyEquipment Map への書き戻しは Renderer 側 (onEquipChanged) の責務 (review N10)。
+   * 本クラスは next を計算して渡すだけ。
    */
   private applyChange(mutator: (eq: MemberEquipment) => MemberEquipment): void {
     const memberId = this.currentMemberId
     if (!memberId) return
     const prev = this.partyEquipment.get(memberId) ?? {}
     const next = mutator(prev)
-    this.partyEquipment.set(memberId, next)
     this.opts.onEquipChanged?.(memberId, next)
     this.closePopup()
     this.rebuild()
   }
 
-  /** アイテムの表示ラベル（名前 + bonus 表示） */
+  /**
+   * アイテムの表示ラベル（名前 + bonus 表示）。
+   * - atk_bonus / def_bonus が 0 または undefined のときは表示しない (review N6)
+   * - 長すぎる name は `ITEM_NAME_MAX_CHARS - 1` 文字 + 「…」で切り詰める (review N8)
+   */
   private formatItemLabel(item: ItemDef): string {
-    const parts: string[] = [item.name]
-    if (typeof item.atk_bonus === 'number') {
-      parts.push(item.atk_bonus >= 0 ? `+${item.atk_bonus}攻` : `${item.atk_bonus}攻`)
+    const name =
+      item.name.length > ITEM_NAME_MAX_CHARS
+        ? `${item.name.slice(0, ITEM_NAME_MAX_CHARS - 1)}…`
+        : item.name
+    const parts: string[] = [name]
+    if (typeof item.atk_bonus === 'number' && item.atk_bonus !== 0) {
+      parts.push(item.atk_bonus > 0 ? `+${item.atk_bonus}攻` : `${item.atk_bonus}攻`)
     }
-    if (typeof item.def_bonus === 'number') {
-      parts.push(item.def_bonus >= 0 ? `+${item.def_bonus}守` : `${item.def_bonus}守`)
+    if (typeof item.def_bonus === 'number' && item.def_bonus !== 0) {
+      parts.push(item.def_bonus > 0 ? `+${item.def_bonus}守` : `${item.def_bonus}守`)
     }
     return parts.join(' ')
   }
@@ -401,6 +462,8 @@ export class EquipmentScreen extends Container {
     c.cursor = 'pointer'
     c.hitArea = new Rectangle(0, 0, 80, 36)
     c.on('pointertap', onTap)
+    // dim の pointertap が popup-close を呼ばないように、ボタン自身が tap を「消費」する。
+    // PixiJS は子→親バブル方向のイベントを持つので、ボタン上のタップは dim には伝播しない。
     return c
   }
 }
