@@ -104,6 +104,9 @@ fn collect_master_body(lines: &[&str], start: usize, len: usize, close_tag: &str
     }
 }
 
+/// 与えられたキー候補のいずれかに一致する最初の値を `&str` で返す。
+/// 借用で済むケース（後続で `.parse::<u32>()` する数値、または素通り判定だけしたいケース）はこちら。
+/// `String` の所有権が必要なケース（戻り値で `Option<String>` を持ち回すなど）は `lookup_master_string` を使う。
 fn lookup_master_value<'a>(entries: &'a [(String, String)], keys: &[&str]) -> Option<&'a str> {
     for (k, v) in entries {
         if keys.iter().any(|key| k == key) {
@@ -164,17 +167,11 @@ fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
 }
 
 /// `スロット` / `slot` を引いて、英語スロット名（weapon/armor/shield/helmet）に正規化する。
-/// 日本語「武器/防具/盾/兜」も受理。それ以外は値をそのまま透過（runtime が判定）。
+/// 日本語「武器/防具/盾/兜」も受理。英語表記は大小無視（"WEAPON" / "Weapon" も OK）。
+/// それ以外は値をそのまま透過（runtime が判定）。
 fn lookup_equip_slot(entries: &[(String, String)]) -> Option<String> {
     let raw = lookup_master_string(entries, &["スロット", "slot", "equip_slot", "equipSlot"])?;
-    let normalized = match raw.as_str() {
-        "武器" | "weapon" => "weapon",
-        "防具" | "鎧" | "armor" => "armor",
-        "盾" | "shield" => "shield",
-        "兜" | "helmet" => "helmet",
-        other => return Some(other.to_string()),
-    };
-    Some(normalized.to_string())
+    Some(normalize_slot_name(raw.trim()))
 }
 
 /// `装備可能` / `equippable_by` のカンマ区切りリストをパースする。
@@ -257,13 +254,23 @@ fn collect_party_equip(
 }
 
 /// スロット名を英語表記に正規化する（lookup_equip_slot と同じ表）。
+/// 日本語キーはそのまま、英語キーは大小無視（"WEAPON" / "Weapon" / "weapon" → "weapon"）。
+/// 未知の値は小文字化して透過し、後段（runtime）が isEquipmentSlot で弾く。
 fn normalize_slot_name(raw: &str) -> String {
     match raw {
-        "武器" | "weapon" => "weapon".to_string(),
-        "防具" | "鎧" | "armor" => "armor".to_string(),
-        "盾" | "shield" => "shield".to_string(),
-        "兜" | "helmet" => "helmet".to_string(),
-        other => other.to_string(),
+        "武器" => return "weapon".to_string(),
+        "防具" | "鎧" => return "armor".to_string(),
+        "盾" => return "shield".to_string(),
+        "兜" => return "helmet".to_string(),
+        _ => {}
+    }
+    let lower = raw.to_lowercase();
+    match lower.as_str() {
+        "weapon" => "weapon".to_string(),
+        "armor" => "armor".to_string(),
+        "shield" => "shield".to_string(),
+        "helmet" => "helmet".to_string(),
+        _ => lower,
     }
 }
 

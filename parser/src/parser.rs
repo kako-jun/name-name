@@ -2439,6 +2439,71 @@ AGI: 4
     }
 
     #[test]
+    fn party_equip_normalizes_uppercase_slot_names() {
+        // 「装備: WEAPON=copper_sword」等の大文字スロット名が weapon に正規化されること (#207 review)
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[パーティ hero]
+名前: ゆうしゃ
+HP: 20
+ATK: 5
+DEF: 3
+AGI: 4
+装備: WEAPON=copper_sword Armor=cloth_armor SHIELD=wooden_shield helmet=leather_cap
+[/パーティ]
+"#;
+        let doc = parse(input);
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::PartyMember(p) => {
+                let equip = p.equip.as_ref().expect("equip 必須");
+                assert_eq!(equip.get("weapon").map(|s| s.as_str()), Some("copper_sword"));
+                assert_eq!(equip.get("armor").map(|s| s.as_str()), Some("cloth_armor"));
+                assert_eq!(
+                    equip.get("shield").map(|s| s.as_str()),
+                    Some("wooden_shield")
+                );
+                assert_eq!(equip.get("helmet").map(|s| s.as_str()), Some("leather_cap"));
+                // 元の大文字キーが残っていないことも保証
+                assert!(equip.get("WEAPON").is_none());
+                assert!(equip.get("Armor").is_none());
+                assert!(equip.get("SHIELD").is_none());
+            }
+            other => panic!("expected PartyMember, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn item_equip_slot_normalizes_uppercase() {
+        // [アイテム ...] の `スロット: Weapon` も "weapon" に正規化されること (#207 review)
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[アイテム copper_sword]
+名前: どうのつるぎ
+種別: 武器
+スロット: Weapon
+攻撃ボーナス: 8
+[/アイテム]
+"#;
+        let doc = parse(input);
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Item(item) => {
+                assert_eq!(item.equip_slot.as_deref(), Some("weapon"));
+            }
+            other => panic!("expected Item, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn party_member_without_name_is_dropped() {
         let input = r#"---
 engine: name-name
