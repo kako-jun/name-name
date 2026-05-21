@@ -97,16 +97,50 @@ export function collectMasterData(doc: EventDocument): {
 }
 
 /**
+ * 複数 Document からマスターデータを束ねる (#238 / 親 #234)。
+ *
+ * ogurasia は `data.md` (hidden: true) にマスター定義を分離している運用がある。
+ * RPG タブが script.md の doc しか見ないと、マスターが空になり戦闘・装備等が
+ * 動かない。エディタ側で他 .md の Document も解析済みのものを渡して、ここで束ねる。
+ *
+ * 重複 ID は **後勝ち**（同 id を複数 .md で書いた場合、配列順で後ろに来る doc が優先）。
+ * 慣例として「active doc を末尾に置く」ことで active 側の上書きを優先できる。
+ */
+export function mergeMasterDataFromDocs(docs: EventDocument[]): {
+  monsters: Record<string, MonsterDef>
+  items: Record<string, ItemDef>
+  spells: Record<string, SpellDef>
+  party: Record<string, PartyMemberDef>
+} {
+  const merged = {
+    monsters: {} as Record<string, MonsterDef>,
+    items: {} as Record<string, ItemDef>,
+    spells: {} as Record<string, SpellDef>,
+    party: {} as Record<string, PartyMemberDef>,
+  }
+  for (const doc of docs) {
+    const m = collectMasterData(doc)
+    Object.assign(merged.monsters, m.monsters)
+    Object.assign(merged.items, m.items)
+    Object.assign(merged.spells, m.spells)
+    Object.assign(merged.party, m.party)
+  }
+  return merged
+}
+
+/**
  * Document から RPGProject を導出する。
  *
  * - 最初に RpgMap を含むシーンを探す（sceneId 指定があればそれを優先）
  * - そのシーンから RpgMap / PlayerStart / Npc を抽出して RPGProject を組み立てる
  * - マップが無ければ null を返す
+ * - #238: `extraDocs` を渡すと他 .md (例: data.md) のマスター定義を統合する
  */
 export function rpgProjectFromDoc(
   doc: EventDocument,
   sceneId?: string,
-  projectName = 'rpg-project'
+  projectName = 'rpg-project',
+  extraDocs: EventDocument[] = []
 ): RPGProject | null {
   const targetScene = findRpgScene(doc, sceneId)
   if (!targetScene) return null
@@ -168,8 +202,10 @@ export function rpgProjectFromDoc(
 
   if (!map) return null
 
-  // Document 全体からマスターデータを収集して RPGProject に同梱する (#174 / #172)
-  const master = collectMasterData(doc)
+  // Document 全体からマスターデータを収集して RPGProject に同梱する (#174 / #172)。
+  // #238: extraDocs (例: data.md) が渡されていれば統合する。重複 ID は active doc 優先のため
+  //   active doc を配列末尾に置く（後勝ちルール）。
+  const master = mergeMasterDataFromDocs([...extraDocs, doc])
   // Document 全体から RPG イベントを収集する (#197)
   const rpgEvents = collectRpgEvents(doc)
   // Document 全体から RPG トリガーを収集する (#187)

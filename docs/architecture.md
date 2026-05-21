@@ -77,6 +77,14 @@ EditorScreen は listing をタブ UI で表示し、タブ切替で `currentScr
 localStorage の draft キーは `name-name:editor-draft:${projectName}:${path}` で
 ファイル単位に分離されている。タブ切替時に未保存変更があれば確認ダイアログを出す。
 
+#### RPG タブのマスター統合 (#238 / 親 #234)
+
+`mergeMasterDataFromDocs(docs[])` で複数 .md のマスター (`Monster` / `Item` / `Spell` /
+`PartyMember`) を束ねる。重複 ID は **後勝ち**。`rpgProjectFromDoc(doc, sceneId, name, extraDocs)`
+の `extraDocs` に他 .md (例: `data.md`) の `EventDocument` を渡すと、active doc が末尾に
+ある状態でマージされ、active 側の上書きが効く。EditorScreen は availableScripts から
+currentScriptPath 以外を全部 parallel fetch + parse して `otherDocs` state に詰める。
+
 ### 再生時
 
 ```

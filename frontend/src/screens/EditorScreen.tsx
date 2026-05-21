@@ -112,6 +112,11 @@ function EditorScreen({
   // #237: 編集中ファイルパス + 利用可能なファイル一覧。
   const [currentScriptPath, setCurrentScriptPath] = useState<string>(DEFAULT_SCRIPT_PATH)
   const [availableScripts, setAvailableScripts] = useState<ScriptInfo[]>([])
+  // #238: 編集中以外の .md (data.md 等) を解析した EventDocument。
+  // RPG タブが master データ (モンスター / アイテム / 呪文 / パーティ) を data.md から
+  // 参照できるよう、active doc とは別に並行ロードして保持する。
+  // active doc 編集中も updated されない（保存時に再フェッチで十分）。
+  const [otherDocs, setOtherDocs] = useState<EventDocument[]>([])
   // PR #120 review Q1: shaRef.current を state にも反映して、保存ボタンの
   //   disabled 制御に使う。ref 単体だと React が再レンダリングしないため
   //   ボタンの enabled/disabled が更新されない。
@@ -211,8 +216,9 @@ function EditorScreen({
     const found = explicitFound ?? findRpgSceneIndex(doc)
     if (!found) return null
     const sceneIdForThisDoc = doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
-    return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName)
-  }, [doc, projectName, rpgSceneId])
+    // #238: data.md 等の他 .md からマスターデータを取り込む
+    return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName, otherDocs)
+  }, [doc, projectName, rpgSceneId, otherDocs])
 
   // 現在の rpgSceneId が doc 内に存在しない場合、先頭の RPG シーンに切り替える。
   // useMemo 内で setState しないよう副作用を分離。
@@ -397,11 +403,41 @@ function EditorScreen({
     }
     loadList()
     // #237 review S1: listing 自体は repo 単位の情報なので projectName が変わったときだけ再取得する。
+    // (listing 取得後の otherDocs ロードは別の useEffect が availableScripts を監視して行う)
     // currentScriptPath を依存に入れるとタブ切替の度に listing API が再叩きされて無駄。
     // 「現在 path が listing に無いなら先頭に切り替える」のは setCurrentScriptPath で
     //   currentScriptPath が変わる → このフックは再実行されない（次回 projectName 変更時のみ）が、
     //   listing は既に最新 (1 回前のフックで取得済み) なので問題なし。
   }, [api, projectName])
+
+  // #238: availableScripts から currentScriptPath 以外の .md を fetch + parse して
+  //   otherDocs に詰める。RPG タブが data.md 等のマスター定義を参照できるようにする。
+  // 失敗した個別ファイルはスキップ（致命的でない）。
+  useEffect(() => {
+    let cancelled = false
+    const loadOthers = async () => {
+      const others = availableScripts.filter((s) => s.path !== currentScriptPath)
+      if (others.length === 0) {
+        setOtherDocs([])
+        return
+      }
+      const docs: EventDocument[] = []
+      for (const s of others) {
+        try {
+          const data = await api.getContents(projectName, s.path, DEFAULT_BRANCH)
+          const parsed = await parseMarkdown(data.content || '')
+          docs.push(parsed)
+        } catch (err) {
+          console.warn(`[EditorScreen] failed to load other doc ${s.path}`, err)
+        }
+      }
+      if (!cancelled) setOtherDocs(docs)
+    }
+    loadOthers()
+    return () => {
+      cancelled = true
+    }
+  }, [api, projectName, availableScripts, currentScriptPath])
 
   // Markdown の変更を検出して未保存フラグを立てる。
   // Worker モデルでは status ポーリングは行わない（保存=即commit のためサーバに

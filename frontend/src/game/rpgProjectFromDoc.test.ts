@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { rpgProjectFromDoc, applyRpgProjectToDoc, findAllRpgScenes } from './rpgProjectFromDoc'
+import {
+  rpgProjectFromDoc,
+  applyRpgProjectToDoc,
+  findAllRpgScenes,
+  mergeMasterDataFromDocs,
+} from './rpgProjectFromDoc'
 import type { EventDocument, NpcData } from '../types'
 import type { RPGProject } from '../types/rpg'
 
@@ -988,5 +993,142 @@ describe('applyRpgProjectToDoc', () => {
       [1, 1, 1],
       [1, 2, 1],
     ])
+  })
+})
+
+// #238: data.md 等の他 .md からマスター定義を取り込めることを担保する。
+describe('mergeMasterDataFromDocs (#238)', () => {
+  function masterDoc(): EventDocument {
+    return {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'data',
+          hidden: true,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'data-master',
+              title: 'マスター',
+              view: 'TopDown',
+              events: [
+                {
+                  Monster: {
+                    id: 'slime',
+                    name: 'スライム',
+                    hp: 10,
+                    mp: 0,
+                    atk: 3,
+                    def: 1,
+                    agi: 2,
+                    exp: 2,
+                    gold: 1,
+                  },
+                },
+                {
+                  Item: {
+                    id: 'やくそう',
+                    name: 'やくそう',
+                    kind: '回復',
+                    price: 8,
+                    effect: 'heal 30',
+                  },
+                },
+                {
+                  Spell: {
+                    id: 'ホイミ',
+                    name: 'ホイミ',
+                    mp: 4,
+                    target: '味方単体',
+                    effect: 'heal 15..25',
+                  },
+                },
+                {
+                  PartyMember: {
+                    id: 'hero',
+                    name: 'ゆうしゃ',
+                    level: 1,
+                    hp: 20,
+                    mp: 4,
+                    atk: 5,
+                    def: 3,
+                    agi: 4,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+  }
+
+  it('単一 doc のマスター定義を全種類拾う', () => {
+    const m = mergeMasterDataFromDocs([masterDoc()])
+    expect(m.monsters.slime?.name).toBe('スライム')
+    expect(m.items['やくそう']?.kind).toBe('回復')
+    expect(m.spells['ホイミ']?.target).toBe('味方単体')
+    expect(m.party.hero?.atk).toBe(5)
+  })
+
+  it('複数 doc を渡すと後勝ちで ID 上書きされる (active doc を末尾に置く運用)', () => {
+    const base = masterDoc() // slime hp=10
+    const override: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'override',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 's',
+              title: 's',
+              view: 'TopDown',
+              events: [
+                {
+                  Monster: {
+                    id: 'slime',
+                    name: 'スライム (強)',
+                    hp: 99,
+                    mp: 0,
+                    atk: 9,
+                    def: 9,
+                    agi: 9,
+                    exp: 9,
+                    gold: 9,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const m = mergeMasterDataFromDocs([base, override])
+    expect(m.monsters.slime?.hp).toBe(99)
+    expect(m.monsters.slime?.name).toBe('スライム (強)')
+    // 上書きされない側のマスターは残る
+    expect(m.items['やくそう']?.name).toBe('やくそう')
+  })
+
+  it('空配列を渡すと空オブジェクトを返す', () => {
+    const m = mergeMasterDataFromDocs([])
+    expect(m.monsters).toEqual({})
+    expect(m.items).toEqual({})
+    expect(m.spells).toEqual({})
+    expect(m.party).toEqual({})
+  })
+
+  it('rpgProjectFromDoc に extraDocs を渡すと RPGProject.monsters に統合される', () => {
+    const active = makeDoc() // RpgMap + NPC のみ、マスター無し
+    const data = masterDoc() // マスター定義のみ
+    const project = rpgProjectFromDoc(active, undefined, 'test', [data])
+    expect(project).not.toBeNull()
+    expect(project!.monsters.slime?.name).toBe('スライム')
+    expect(project!.items['やくそう']?.name).toBe('やくそう')
+    expect(project!.party.hero?.name).toBe('ゆうしゃ')
   })
 })
