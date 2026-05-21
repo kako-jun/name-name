@@ -39,6 +39,31 @@ function variantLabel(event: Event): string {
   return k
 }
 
+/**
+ * #239 (manga-desk theme): variant ごとに「机の上の物」の見た目を割り当てる。
+ * - Dialog / Narration → 原稿用紙 (desk-genko)
+ * - Choice / Flag / Condition → 青ペンの分岐メモ (desk-fusen-b)
+ * - Monster / Item / Spell / PartyMember → 資料の付箋 (desk-fusen-g)
+ * - Npc / RpgMap / PlayerStart / RpgEvent / RpgTrigger → RPG メモ (desk-fusen-p)
+ * - その他演出系 (Background, Bgm, Se, Wait, Animate, Shake, Flash, Fade, ...) → 黄付箋
+ */
+function variantToDeskClass(event: Event): string {
+  if (typeof event === 'string') return 'desk-fusen' // SceneTransition
+  if ('Dialog' in event || 'Narration' in event) return 'desk-genko desk-body'
+  if ('Choice' in event || 'Flag' in event || 'Condition' in event) return 'desk-fusen desk-fusen-b'
+  if ('Monster' in event || 'Item' in event || 'Spell' in event || 'PartyMember' in event)
+    return 'desk-fusen desk-fusen-g'
+  if (
+    'Npc' in event ||
+    'RpgMap' in event ||
+    'PlayerStart' in event ||
+    'RpgEvent' in event ||
+    'RpgTrigger' in event
+  )
+    return 'desk-fusen desk-fusen-p'
+  return 'desk-fusen' // 演出系 (Bgm / Se / Background / Wait / Animate / Shake / Flash / Fade / ...)
+}
+
 function EventCard({
   event,
   chapterIdx,
@@ -112,15 +137,20 @@ function EventCard({
             onSelectEvent(ref)
           }
         }}
-        className={`relative p-3 rounded border cursor-pointer ${
-          isSelected
-            ? isDark
-              ? 'bg-indigo-900/50 border-indigo-500 ring-2 ring-indigo-500'
-              : 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-500'
-            : isDark
-              ? 'bg-gray-800/50 border-gray-600 hover:border-gray-500'
-              : 'bg-white border-gray-300 hover:border-gray-400'
-        } ${isDragging ? 'opacity-50' : ''}`}
+        // #239: variant 別の付箋色 / 原稿用紙風。Dialog / Narration はインクで書き込む
+        //   原稿用紙、それ以外は変種別の付箋色（演出=黄、分岐=青、RPG=桃、マスター=緑）。
+        className={`relative p-3 rounded border cursor-pointer transition-shadow ${
+          isSelected ? 'ring-2 ring-offset-1' : ''
+        } ${isDragging ? 'opacity-50' : ''} ${variantToDeskClass(event)}`}
+        // #239 review N1: as never キャストは型エラー回避目的だが意図が読みづらいので
+        //   React.CSSProperties に明示キャストし直す。CSS カスタムプロパティは
+        //   React の型定義に無いがランタイム上は通る。
+        style={
+          {
+            borderColor: isSelected ? 'var(--desk-akapen)' : 'var(--desk-rule)',
+            '--tw-ring-color': 'var(--desk-akapen)',
+          } as React.CSSProperties
+        }
       >
         {/* ドラッグハンドル */}
         {!isEditing && (

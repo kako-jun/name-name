@@ -565,9 +565,12 @@ function EditorScreen({
   const novelEvents = useMemo(() => (doc ? flattenDocumentEvents(doc) : []), [doc])
 
   return (
-    <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
+    // #239: 漫画家の机テーマ。エディタ全体に desk-paper 紙テクスチャを敷く。
+    // ダーク時は .dark クラスで CSS 変数が深夜作業灯モードに切り替わる。
+    <div className={`theme-desk desk-paper flex flex-col h-screen ${isDark ? 'dark' : ''}`}>
       <header
-        className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
+        className={`border-b ${isDark ? 'border-gray-700' : ''}`}
+        style={{ borderColor: 'var(--desk-rule)' }}
       >
         <div className="px-6 py-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -587,9 +590,8 @@ function EditorScreen({
                 />
               </svg>
             </button>
-            <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-              Name × Name{' '}
-              <span className={isDark ? 'text-gray-400' : 'text-gray-500'}>- {projectName}</span>
+            <h1 className="text-lg desk-heading">
+              Name × Name <span style={{ color: 'var(--desk-ink-soft)' }}>- {projectName}</span>
             </h1>
           </div>
           <div className="flex items-center gap-2">
@@ -676,20 +678,12 @@ function EditorScreen({
                     setCurrentScriptPath(s.path)
                     // 切替後の load は currentScriptPath を依存に入れた useEffect が処理する
                   }}
-                  className={`px-3 py-1 rounded-t transition-colors ${
-                    isActive
-                      ? isDark
-                        ? 'bg-gray-700 text-white'
-                        : 'bg-white text-gray-900 border border-b-white border-blue-200'
-                      : isDark
-                        ? 'text-gray-400 hover:text-gray-200'
-                        : 'text-gray-500 hover:text-gray-700'
-                  }`}
+                  className="desk-tab"
                   title={s.title ?? s.path}
                 >
                   {s.path}
                   {s.hidden && (
-                    <span className={`ml-1 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                    <span className="ml-1" style={{ color: 'var(--desk-ink-soft)' }}>
                       (hidden)
                     </span>
                   )}
@@ -699,23 +693,20 @@ function EditorScreen({
           </div>
         )}
 
-        {/* エディタタブ（ノベル / RPG） */}
+        {/* エディタタブ（ノベル / RPG）。
+            #239 review S3: role=tab / role=tablist をファイルタブと一貫させる。 */}
         <div
           className={`px-6 flex gap-1 border-t ${isDark ? 'border-gray-700' : 'border-blue-100'}`}
+          role="tablist"
+          aria-label="エディタモード"
         >
           {(['novel', 'rpg'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setEditorTab(tab)}
-              className={`px-4 py-1.5 text-sm font-medium rounded-t transition-colors ${
-                editorTab === tab
-                  ? isDark
-                    ? 'bg-gray-700 text-white'
-                    : 'bg-white text-gray-900 border border-b-white border-blue-200'
-                  : isDark
-                    ? 'text-gray-400 hover:text-gray-200'
-                    : 'text-gray-500 hover:text-gray-700'
-              }`}
+              role="tab"
+              aria-selected={editorTab === tab}
+              className="desk-tab"
             >
               {tab === 'novel' ? 'ノベル' : 'RPG'}
             </button>
