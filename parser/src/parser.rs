@@ -469,8 +469,7 @@ pub fn parse(input: &str) -> Document {
                         pos += 1; // skip [/イベント]
                     } else {
                         eprintln!(
-                            "[name-name] 警告: [イベント {}] に対応する [/イベント] がありません",
-                            name
+                            "[name-name] 警告: [イベント {name}] に対応する [/イベント] がありません"
                         );
                     }
                     current_events.push(Event::RpgEvent { name, commands });
@@ -667,7 +666,11 @@ pub fn parse(input: &str) -> Document {
                 character: Some(character),
                 expression,
                 position,
-                text: if text_lines.is_empty() { vec![String::new()] } else { text_lines },
+                text: if text_lines.is_empty() {
+                    vec![String::new()]
+                } else {
+                    text_lines
+                },
                 voice_path: pending_voice_path.take(),
                 font_family: pending_font_family.take(),
             });
@@ -760,8 +763,7 @@ pub fn parse(input: &str) -> Document {
 fn parse_events_only(input: &str) -> Vec<Event> {
     // Wrap in a fake document so we can reuse parsing logic
     let fake = format!(
-        "---\nengine: name-name\nchapter: 1\ntitle: \"tmp\"\n---\n\n## tmp-1: tmp\n\n{}",
-        input
+        "---\nengine: name-name\nchapter: 1\ntitle: \"tmp\"\n---\n\n## tmp-1: tmp\n\n{input}"
     );
     let doc = parse(&fake);
     if let Some(chapter) = doc.chapters.first() {
@@ -1375,8 +1377,7 @@ fn parse_direction(s: &str) -> Direction {
 /// `Down` for compatibility, but the user sees a warning about the typo.
 fn emit_unknown_direction_warning(value: &str) {
     let msg = format!(
-        "[name-name-parser] warning: unknown direction '{}', falling back to down. Expected one of: up/down/left/right or 上/下/左/右",
-        value
+        "[name-name-parser] warning: unknown direction '{value}', falling back to down. Expected one of: up/down/left/right or 上/下/左/右"
     );
     #[cfg(target_arch = "wasm32")]
     {
@@ -1384,7 +1385,7 @@ fn emit_unknown_direction_warning(value: &str) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        eprintln!("{}", msg);
+        eprintln!("{msg}");
     }
 }
 
@@ -1436,7 +1437,7 @@ fn resolve_npc_id_conflict(base: &str, existing: &[Event]) -> String {
             false
         }
     }) {
-        candidate = format!("{}-{}", base, n);
+        candidate = format!("{base}-{n}");
         n += 1;
     }
     candidate
@@ -1472,8 +1473,7 @@ fn parse_scene_title_and_view(title_raw: &str) -> (String, SceneView) {
 
 fn emit_unknown_view_warning(value: &str) {
     let msg = format!(
-        "[name-name-parser] warning: unknown scene view '{}', falling back to topdown",
-        value
+        "[name-name-parser] warning: unknown scene view '{value}', falling back to topdown"
     );
     #[cfg(target_arch = "wasm32")]
     {
@@ -1481,7 +1481,7 @@ fn emit_unknown_view_warning(value: &str) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        eprintln!("{}", msg);
+        eprintln!("{msg}");
     }
 }
 
@@ -1491,8 +1491,7 @@ fn emit_map_dimension_warning(width: u32, height: u32, raw_rows: &[&str]) {
     let actual_rows = raw_rows.len();
     let row_widths: Vec<usize> = raw_rows.iter().map(|r| r.chars().count()).collect();
     emit_warning(&format!(
-        "[name-name-parser] warning: map dimensions mismatch — declared {}x{}, got {} rows with widths {:?}",
-        width, height, actual_rows, row_widths
+        "[name-name-parser] warning: map dimensions mismatch — declared {width}x{height}, got {actual_rows} rows with widths {row_widths:?}"
     ));
 }
 
@@ -1579,15 +1578,14 @@ fn inject_heights_into_last_map(events: &mut [Event], kind: HeightKind, rows: Ve
 }
 
 fn emit_height_block_warning(detail: &str) {
-    emit_warning(&format!("[name-name-parser] warning: {}", detail));
+    emit_warning(&format!("[name-name-parser] warning: {detail}"));
 }
 
 /// `[/マップ]` 欠落時の警告。行頭 `[` で始まる別ブロックが突入した時点で
 /// マップブロックを打ち切るため、既に収集した行数を報告する。
 fn emit_map_close_missing_warning(width: u32, height: u32, collected_rows: usize) {
     emit_warning(&format!(
-        "[name-name-parser] warning: [/マップ] が見つからないうちに別ブロックが開始されました — 宣言 {}x{}, 収集済み {} 行",
-        width, height, collected_rows
+        "[name-name-parser] warning: [/マップ] が見つからないうちに別ブロックが開始されました — 宣言 {width}x{height}, 収集済み {collected_rows} 行"
     ));
 }
 
@@ -1597,7 +1595,7 @@ fn emit_map_close_missing_warning(width: u32, height: u32, collected_rows: usize
 /// - wasm32: `console.warn` へ流す
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
 fn emit_warning(msg: &str) {
-    eprintln!("{}", msg);
+    eprintln!("{msg}");
 }
 
 #[cfg(all(not(target_arch = "wasm32"), test))]
@@ -1660,14 +1658,14 @@ fn inject_encounter_groups_into_last_map(events: &mut [Event], groups: Vec<Strin
 }
 
 fn emit_encounter_warning(msg: &str) {
-    let full = format!("[name-name-parser] warning: {}", msg);
+    let full = format!("[name-name-parser] warning: {msg}");
     #[cfg(target_arch = "wasm32")]
     {
         web_sys::console::warn_1(&full.into());
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        eprintln!("{}", full);
+        eprintln!("{full}");
     }
 }
 
@@ -1722,8 +1720,7 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
     let first = parts.next()?;
     if first == "auto" {
         auto = true;
-    } else if first.starts_with('@') {
-        let coord = &first[1..];
+    } else if let Some(coord) = first.strip_prefix('@') {
         let (x_str, y_str) = coord.split_once(',')?;
         x = Some(x_str.trim().parse().ok()?);
         y = Some(y_str.trim().parse().ok()?);
@@ -2073,7 +2070,7 @@ GOLD: 1
                 assert_eq!(m.sprite.as_deref(), Some("monsters/slime.png"));
                 assert_eq!(m.builtin, None);
             }
-            other => panic!("expected Monster, got {:?}", other),
+            other => panic!("expected Monster, got {other:?}"),
         }
     }
 
@@ -2122,7 +2119,7 @@ title: "test"
                 assert_eq!(it.effect.as_deref(), Some("heal 30"));
                 assert_eq!(it.builtin, None);
             }
-            other => panic!("expected Item, got {:?}", other),
+            other => panic!("expected Item, got {other:?}"),
         }
     }
 
@@ -2154,7 +2151,7 @@ builtin: zaraki
                 assert_eq!(sp.effect, None);
                 assert_eq!(sp.school, None);
             }
-            other => panic!("expected Spell, got {:?}", other),
+            other => panic!("expected Spell, got {other:?}"),
         }
     }
 
@@ -2182,7 +2179,7 @@ MP: 2
                 assert_eq!(sp.school.as_deref(), Some("fire"));
                 assert_eq!(sp.effect.as_deref(), Some("damage 8..14 type=fire"));
             }
-            other => panic!("expected Spell, got {:?}", other),
+            other => panic!("expected Spell, got {other:?}"),
         }
     }
 
@@ -2213,7 +2210,7 @@ gold: 3
                 assert_eq!(m.hp, 14);
                 assert_eq!(m.def_value, 2);
             }
-            other => panic!("expected Monster, got {:?}", other),
+            other => panic!("expected Monster, got {other:?}"),
         }
     }
 
@@ -2237,7 +2234,7 @@ title: "test"
                 assert_eq!(it.kind, "その他");
                 assert_eq!(it.price, None);
             }
-            other => panic!("expected Item, got {:?}", other),
+            other => panic!("expected Item, got {other:?}"),
         }
     }
 
@@ -2273,7 +2270,7 @@ GGGGG
                     Some(vec!["slime".into(), "ghost".into(), "slime+ghost".into()])
                 );
             }
-            other => panic!("expected RpgMap, got {:?}", other),
+            other => panic!("expected RpgMap, got {other:?}"),
         }
     }
 
@@ -2297,7 +2294,7 @@ GGG
         let doc = parse(input);
         match &doc.chapters[0].scenes[0].events[0] {
             Event::RpgMap(m) => assert_eq!(m.encounter_rate, Some(32)),
-            other => panic!("expected RpgMap, got {:?}", other),
+            other => panic!("expected RpgMap, got {other:?}"),
         }
     }
 
@@ -2321,7 +2318,7 @@ GGG
         let doc = parse(input);
         match &doc.chapters[0].scenes[0].events[0] {
             Event::RpgMap(m) => assert_eq!(m.encounter_rate, Some(0)),
-            other => panic!("expected RpgMap, got {:?}", other),
+            other => panic!("expected RpgMap, got {other:?}"),
         }
     }
 
@@ -2368,7 +2365,7 @@ AGI: 4
                 assert_eq!(learns[1].level, 7);
                 assert_eq!(learns[1].spell, "ギラ");
             }
-            other => panic!("expected PartyMember, got {:?}", other),
+            other => panic!("expected PartyMember, got {other:?}"),
         }
     }
 
@@ -2397,7 +2394,7 @@ AGI: 4
                 assert_eq!(learns[0].level, 4);
                 assert_eq!(learns[0].spell, "ホイミ");
             }
-            other => panic!("expected PartyMember, got {:?}", other),
+            other => panic!("expected PartyMember, got {other:?}"),
         }
     }
 
@@ -2434,7 +2431,7 @@ AGI: 4
                 assert_eq!(learns[1].level, 10);
                 assert_eq!(learns[1].spell, "ベホマ");
             }
-            other => panic!("expected PartyMember, got {:?}", other),
+            other => panic!("expected PartyMember, got {other:?}"),
         }
     }
 
@@ -2508,8 +2505,7 @@ title: "test"
         // emitter が expressions= を出力することを確認
         assert!(
             emitted.contains("expressions="),
-            "emitter should include expressions= but got:\n{}",
-            emitted
+            "emitter should include expressions= but got:\n{emitted}"
         );
         // ラウンドトリップ: 再パースしても同じ expressions が得られる
         let doc2 = parse(&emitted);
@@ -2584,21 +2580,21 @@ title: "test"
                         assert_eq!(*y, 3);
                         assert_eq!(*speed, 1);
                     }
-                    other => panic!("expected NpcMove, got {:?}", other),
+                    other => panic!("expected NpcMove, got {other:?}"),
                 }
                 match &commands[1] {
                     EventCommand::Wait { ms } => assert_eq!(*ms, 500),
-                    other => panic!("expected Wait, got {:?}", other),
+                    other => panic!("expected Wait, got {other:?}"),
                 }
                 match &commands[2] {
                     EventCommand::Dialog { character, text } => {
                         assert_eq!(character.as_deref(), Some("衛兵"));
                         assert_eq!(text, &vec!["通れ。".to_string()]);
                     }
-                    other => panic!("expected Dialog, got {:?}", other),
+                    other => panic!("expected Dialog, got {other:?}"),
                 }
             }
-            other => panic!("expected RpgEvent, got {:?}", other),
+            other => panic!("expected RpgEvent, got {other:?}"),
         }
     }
 
@@ -2630,7 +2626,7 @@ title: "test"
                 assert_eq!(scene, "foo");
                 assert!(*once);
             }
-            other => panic!("expected RpgTrigger, got {:?}", other),
+            other => panic!("expected RpgTrigger, got {other:?}"),
         }
     }
 
@@ -2662,7 +2658,7 @@ title: "test"
                 assert_eq!(scene, "intro");
                 assert!(!once);
             }
-            other => panic!("expected RpgTrigger, got {:?}", other),
+            other => panic!("expected RpgTrigger, got {other:?}"),
         }
     }
 

@@ -108,7 +108,7 @@ fn test_parse_sample() {
                 &vec!["ちくしょう……。".to_string(), "なんで！".to_string()]
             );
         }
-        other => panic!("Expected Dialog, got {:?}", other),
+        other => panic!("Expected Dialog, got {other:?}"),
     }
 
     // [SE: ...]
@@ -134,7 +134,7 @@ fn test_parse_sample() {
             assert_eq!(position, &Some("左".to_string()));
             assert_eq!(text, &vec!["こうなるんだよぅ……ッ！".to_string()]);
         }
-        other => panic!("Expected Dialog continuation, got {:?}", other),
+        other => panic!("Expected Dialog continuation, got {other:?}"),
     }
 
     // **トモ** (laugh_1, 右): ...
@@ -158,7 +158,7 @@ fn test_parse_sample() {
                 ]
             );
         }
-        other => panic!("Expected Dialog, got {:?}", other),
+        other => panic!("Expected Dialog, got {other:?}"),
     }
 
     // **トモ** → angry_1:
@@ -183,7 +183,7 @@ fn test_parse_sample() {
             assert_eq!(expression, &Some("angry_1".to_string()));
             assert_eq!(text, &vec!["くけけけけけけけけけ。".to_string()]);
         }
-        other => panic!("Expected Dialog after expression change, got {:?}", other),
+        other => panic!("Expected Dialog after expression change, got {other:?}"),
     }
 
     // [背景: radius/BG_KAKO_1_2.png]
@@ -202,7 +202,7 @@ fn test_parse_sample() {
             assert_eq!(character, &Some("トモ".to_string()));
             assert_eq!(text, &vec!["それでよい。".to_string()]);
         }
-        other => panic!("Expected Dialog continuation, got {:?}", other),
+        other => panic!("Expected Dialog continuation, got {other:?}"),
     }
 
     // [退場: トモ]
@@ -230,7 +230,7 @@ fn test_parse_sample() {
             assert_eq!(character, &Some("カコ".to_string()));
             assert_eq!(text, &vec!["私は……".to_string()]);
         }
-        other => panic!("Expected Dialog, got {:?}", other),
+        other => panic!("Expected Dialog, got {other:?}"),
     }
 
     // [BGM: snowsnow.ogg]
@@ -287,7 +287,7 @@ title: "テスト"
             assert_eq!(options[1].text, "信じない");
             assert_eq!(options[1].jump, "1-4");
         }
-        other => panic!("Expected Choice, got {:?}", other),
+        other => panic!("Expected Choice, got {other:?}"),
     }
 
     // Roundtrip
@@ -356,10 +356,10 @@ title: "テスト"
                     assert_eq!(character, &Some("カコ".to_string()));
                     assert_eq!(text, &vec!["ありがとう。".to_string()]);
                 }
-                other => panic!("Expected Dialog inside condition, got {:?}", other),
+                other => panic!("Expected Dialog inside condition, got {other:?}"),
             }
         }
-        other => panic!("Expected Condition, got {:?}", other),
+        other => panic!("Expected Condition, got {other:?}"),
     }
 }
 
@@ -389,7 +389,7 @@ title: "テスト"
                 ]
             );
         }
-        other => panic!("Expected Narration, got {:?}", other),
+        other => panic!("Expected Narration, got {other:?}"),
     }
 
     let emitted = emitter::emit(&doc);
@@ -452,7 +452,7 @@ title: "テスト"
             assert_eq!(character, &Some("トモ".to_string()));
             assert_eq!(text, &vec!["最初の台詞。".to_string()]);
         }
-        other => panic!("Expected Dialog, got {:?}", other),
+        other => panic!("Expected Dialog, got {other:?}"),
     }
     assert_eq!(
         events[1],
@@ -498,7 +498,7 @@ GGGGG
             assert_eq!(map.tiles[1], vec![0, 1, 1, 1, 0]);
             assert_eq!(map.tiles[2], vec![0, 0, 0, 0, 0]);
         }
-        other => panic!("Expected RpgMap, got {:?}", other),
+        other => panic!("Expected RpgMap, got {other:?}"),
     }
 
     let emitted = emitter::emit(&doc);
@@ -542,14 +542,14 @@ title: "RPG"
                 ]
             );
         }
-        other => panic!("Expected Npc, got {:?}", other),
+        other => panic!("Expected Npc, got {other:?}"),
     }
     match &events[1] {
         Event::Npc(npc) => {
             assert_eq!(npc.name, "子ども");
             assert_eq!(npc.color, 0x00aaff);
         }
-        other => panic!("Expected Npc, got {:?}", other),
+        other => panic!("Expected Npc, got {other:?}"),
     }
 
     let emitted = emitter::emit(&doc);
@@ -578,7 +578,7 @@ title: "RPG"
             assert_eq!(p.y, 7);
             assert_eq!(p.direction, Direction::Down);
         }
-        other => panic!("Expected PlayerStart, got {:?}", other),
+        other => panic!("Expected PlayerStart, got {other:?}"),
     }
 
     let emitted = emitter::emit(&doc);
@@ -656,14 +656,13 @@ title: "RPG"
 
 ## m: map
 
-[プレイヤー @0,0 向き={}]
-"#,
-            ja
+[プレイヤー @0,0 向き={ja}]
+"#
         );
         let doc = parser::parse(&input);
         match &doc.chapters[0].scenes[0].events[0] {
             Event::PlayerStart(p) => assert_eq!(p.direction, expected),
-            other => panic!("Expected PlayerStart, got {:?}", other),
+            other => panic!("Expected PlayerStart, got {other:?}"),
         }
     }
 }
@@ -690,11 +689,11 @@ hi
     let events = &doc.chapters[0].scenes[0].events;
     match &events[0] {
         Event::PlayerStart(p) => assert_eq!(p.direction, Direction::Down),
-        other => panic!("Expected PlayerStart, got {:?}", other),
+        other => panic!("Expected PlayerStart, got {other:?}"),
     }
     match &events[1] {
         Event::Npc(npc) => assert_eq!(npc.direction, Some(Direction::Down)),
-        other => panic!("Expected Npc, got {:?}", other),
+        other => panic!("Expected Npc, got {other:?}"),
     }
 }
 
@@ -711,7 +710,7 @@ fn test_rpg_npc_message_preserves_leading_indent() {
             assert_eq!(npc.message[1], "通常の台詞");
             assert_eq!(npc.message[2], "\t空白タブ");
         }
-        other => panic!("Expected Npc, got {:?}", other),
+        other => panic!("Expected Npc, got {other:?}"),
     }
 
     // Round-trip must also preserve indentation.
@@ -749,8 +748,7 @@ title: "RPG"
     let emitted = emitter::emit(&doc);
     assert!(
         emitted.contains("id=village-elder"),
-        "emit must write explicit id that differs from auto-slug: {}",
-        emitted
+        "emit must write explicit id that differs from auto-slug: {emitted}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
@@ -776,8 +774,7 @@ hi
     let emitted = emitter::emit(&doc);
     assert!(
         !emitted.contains("id="),
-        "emit should omit id= when it matches the slug: {}",
-        emitted
+        "emit should omit id= when it matches the slug: {emitted}"
     );
     // But round-trip must still yield the same id.
     let doc2 = parser::parse(&emitted);
@@ -870,13 +867,11 @@ default square
         .expect("plain NPC header should exist");
     assert!(
         !plain_line.contains("sprite="),
-        "plain NPC should not emit sprite=: {}",
-        plain_line
+        "plain NPC should not emit sprite=: {plain_line}"
     );
     assert!(
         !plain_line.contains("frames="),
-        "plain NPC should not emit frames=: {}",
-        plain_line
+        "plain NPC should not emit frames=: {plain_line}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
@@ -936,8 +931,7 @@ default
         .expect("default NPC header");
     assert!(
         !default_line.contains("向き="),
-        "default NPC must not emit 向き=: {}",
-        default_line
+        "default NPC must not emit 向き=: {default_line}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
@@ -1028,8 +1022,7 @@ no portrait
         .expect("plain NPC header should exist");
     assert!(
         !plain_line.contains("portrait="),
-        "plain NPC should not emit portrait=: {}",
-        plain_line
+        "plain NPC should not emit portrait=: {plain_line}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
@@ -1150,8 +1143,7 @@ fn test_emit_omits_hidden_false() {
     let emitted = emitter::emit(&doc);
     assert!(
         !emitted.contains("hidden:"),
-        "hidden: false should be omitted: {}",
-        emitted
+        "hidden: false should be omitted: {emitted}"
     );
     // Round-trip equivalence.
     let doc2 = parser::parse(&emitted);
@@ -1173,8 +1165,7 @@ hidden: true
     let emitted = emitter::emit(&doc);
     assert!(
         emitted.contains("hidden: true"),
-        "hidden: true must round-trip: {}",
-        emitted
+        "hidden: true must round-trip: {emitted}"
     );
 }
 
@@ -1202,8 +1193,7 @@ T.T
     let emitted = emitter::emit(&doc);
     assert!(
         emitted.contains("## map-village: 村の広場 [view=raycast]"),
-        "emit must write [view=raycast] directive: {}",
-        emitted
+        "emit must write [view=raycast] directive: {emitted}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
@@ -1229,8 +1219,7 @@ T.T
     let emitted = emitter::emit(&doc);
     assert!(
         !emitted.contains("[view="),
-        "TopDown is default and must not be emitted: {}",
-        emitted
+        "TopDown is default and must not be emitted: {emitted}"
     );
 }
 
@@ -1249,7 +1238,7 @@ title: "RPG"
     assert_eq!(doc.chapters[0].scenes[0].view, SceneView::TopDown);
     // emit drops the explicit topdown
     let emitted = emitter::emit(&doc);
-    assert!(!emitted.contains("[view="), "got: {}", emitted);
+    assert!(!emitted.contains("[view="), "got: {emitted}");
 }
 
 #[test]
@@ -1293,14 +1282,12 @@ hi
     let emitted = emitter::emit(&doc);
     assert!(
         emitted.contains("## 1-1: テスト [重要]"),
-        "title with trailing [重要] must be preserved: {}",
-        emitted
+        "title with trailing [重要] must be preserved: {emitted}"
     );
     // view=... 指定がないので [view=...] も emit されない
     assert!(
         !emitted.contains("[view="),
-        "no view directive should be emitted: {}",
-        emitted
+        "no view directive should be emitted: {emitted}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
@@ -1340,18 +1327,16 @@ T.T
             assert_eq!(map.floor_heights, None);
             assert_eq!(map.ceiling_heights, None);
         }
-        other => panic!("Expected RpgMap, got {:?}", other),
+        other => panic!("Expected RpgMap, got {other:?}"),
     }
     let emitted = emitter::emit(&doc);
     assert!(
         emitted.contains("[壁高さ]"),
-        "emit must write [壁高さ]: {}",
-        emitted
+        "emit must write [壁高さ]: {emitted}"
     );
     assert!(
         !emitted.contains("[床高さ]"),
-        "missing floor block should not be emitted: {}",
-        emitted
+        "missing floor block should not be emitted: {emitted}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
@@ -1393,7 +1378,7 @@ TGT
             assert_eq!(map.floor_heights, None);
             assert_eq!(map.ceiling_heights, None);
         }
-        other => panic!("Expected RpgMap, got {:?}", other),
+        other => panic!("Expected RpgMap, got {other:?}"),
     }
 }
 
@@ -1482,13 +1467,11 @@ T.T
     let emitted = emitter::emit(&doc);
     assert!(
         emitted.contains("0.25"),
-        "decimal 0.25 must survive emit: {}",
-        emitted
+        "decimal 0.25 must survive emit: {emitted}"
     );
     assert!(
         emitted.contains("1.5"),
-        "decimal 1.5 must survive emit: {}",
-        emitted
+        "decimal 1.5 must survive emit: {emitted}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
@@ -2445,8 +2428,7 @@ choice_style: soft
     let emitted = emitter::emit(&doc1);
     assert!(
         emitted.contains("choice_style:"),
-        "emit 出力に choice_style が含まれること: {}",
-        emitted
+        "emit 出力に choice_style が含まれること: {emitted}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc1.choice_style, doc2.choice_style);
@@ -2458,8 +2440,7 @@ choice_style: soft
     let emitted_none = emitter::emit(&doc_none);
     assert!(
         !emitted_none.contains("choice_style:"),
-        "choice_style が None なら emit に含まれないこと: {}",
-        emitted_none
+        "choice_style が None なら emit に含まれないこと: {emitted_none}"
     );
 }
 
@@ -2674,13 +2655,11 @@ font_family: "Klee One, cursive"
     let emitted = emitter::emit(&doc1);
     assert!(
         emitted.contains("font_family:"),
-        "emit 出力に font_family が含まれること: {}",
-        emitted
+        "emit 出力に font_family が含まれること: {emitted}"
     );
     assert!(
         emitted.contains("[フォント: Hina Mincho, serif]"),
-        "per-line [フォント:] が emit されること: {}",
-        emitted
+        "per-line [フォント:] が emit されること: {emitted}"
     );
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc1, doc2, "round-trip で完全一致すること");
@@ -2692,8 +2671,7 @@ font_family: "Klee One, cursive"
     let emitted_none = emitter::emit(&doc_none);
     assert!(
         !emitted_none.contains("font_family:"),
-        "font_family が None なら emit に含まれないこと: {}",
-        emitted_none
+        "font_family が None なら emit に含まれないこと: {emitted_none}"
     );
 }
 
@@ -2795,8 +2773,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
     let emitted = emitter::emit(&doc);
     assert!(
         !emitted.contains("\\\""),
-        "emit には backslash escape を出さない: {}",
-        emitted
+        "emit には backslash escape を出さない: {emitted}"
     );
     let doc2 = parser::parse(&emitted);
     // sanitized 後の family と一致
@@ -2842,7 +2819,7 @@ hidden: false
     // Dialog: 2 行のテキストにそれぞれ《》/｜ がそのまま残る
     let dialog_text = match &events[0] {
         Event::Dialog { text, .. } => text.clone(),
-        other => panic!("Dialog を期待したが {:?}", other),
+        other => panic!("Dialog を期待したが {other:?}"),
     };
     assert_eq!(dialog_text.len(), 2);
     assert_eq!(dialog_text[0], "これは漢字《かんじ》です。");
@@ -2851,7 +2828,7 @@ hidden: false
     // Narration も同様に透過される
     let narration_text = match &events[1] {
         Event::Narration { text, .. } => text.clone(),
-        other => panic!("Narration を期待したが {:?}", other),
+        other => panic!("Narration を期待したが {other:?}"),
     };
     assert_eq!(
         narration_text,

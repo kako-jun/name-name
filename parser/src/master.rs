@@ -243,8 +243,8 @@ fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef>
     if name.is_empty() {
         return None;
     }
-    let target = lookup_master_string(entries, &["対象", "target"])
-        .unwrap_or_else(|| "敵単体".to_string());
+    let target =
+        lookup_master_string(entries, &["対象", "target"]).unwrap_or_else(|| "敵単体".to_string());
     Some(SpellDef {
         id,
         name,

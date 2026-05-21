@@ -16,7 +16,7 @@ pub fn emit(doc: &Document) -> String {
         }
         // Emit choice_style only when present (#146)
         if let Some(ref style) = doc.choice_style {
-            out.push_str(&format!("choice_style: \"{}\"\n", style));
+            out.push_str(&format!("choice_style: \"{style}\"\n"));
         }
         // Emit font_family only when present (#147)。
         // CSS の font-family 文字列はカンマや空白を含み得るので必ず double-quote で包む。
@@ -24,7 +24,7 @@ pub fn emit(doc: &Document) -> String {
         // round-trip で壊れるのを防ぐ）。実用上 `"` を含む family 名は無いので影響なし (#147 R1 N2)。
         if let Some(ref family) = doc.font_family {
             let sanitized = family.replace('"', "");
-            out.push_str(&format!("font_family: \"{}\"\n", sanitized));
+            out.push_str(&format!("font_family: \"{sanitized}\"\n"));
         }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
@@ -33,7 +33,7 @@ pub fn emit(doc: &Document) -> String {
             out.push_str("hidden: true\n");
         }
         if let Some(ref bgm) = chapter.default_bgm {
-            out.push_str(&format!("default_bgm: {}\n", bgm));
+            out.push_str(&format!("default_bgm: {bgm}\n"));
         }
         out.push_str("---\n");
 
@@ -79,25 +79,25 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 // Emit [フォント: family] before the dialog block (#147)。
                 // 連続する Dialog/Narration で同値が続く場合もスキップしない（明示記述を保つ）。
                 if let Some(ref ff) = font_family {
-                    out.push_str(&format!("[フォント: {}]\n", ff));
+                    out.push_str(&format!("[フォント: {ff}]\n"));
                 }
                 // Emit [ボイス: path] before the dialog block
                 if let Some(ref vp) = voice_path {
-                    out.push_str(&format!("[ボイス: {}]\n", vp));
+                    out.push_str(&format!("[ボイス: {vp}]\n"));
                 }
 
                 // Check if we need to emit a speaker line
                 let need_speaker = needs_speaker_line(events, i);
                 if need_speaker {
                     if let Some(ref ch) = character {
-                        out.push_str(&format!("**{}**", ch));
+                        out.push_str(&format!("**{ch}**"));
                         if expression.is_some() || position.is_some() {
                             let expr = expression.as_deref().unwrap_or("");
                             let pos = position.as_deref().unwrap_or("");
                             if !pos.is_empty() {
-                                out.push_str(&format!(" ({}, {}):\n", expr, pos));
+                                out.push_str(&format!(" ({expr}, {pos}):\n"));
                             } else if !expr.is_empty() {
-                                out.push_str(&format!(" ({}):\n", expr));
+                                out.push_str(&format!(" ({expr}):\n"));
                             } else {
                                 out.push_str(":\n");
                             }
@@ -123,13 +123,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push('\n');
                 }
                 if let Some(ref ff) = font_family {
-                    out.push_str(&format!("[フォント: {}]\n", ff));
+                    out.push_str(&format!("[フォント: {ff}]\n"));
                 }
                 if let Some(ref vp) = voice_path {
-                    out.push_str(&format!("[ボイス: {}]\n", vp));
+                    out.push_str(&format!("[ボイス: {vp}]\n"));
                 }
                 for line in text {
-                    out.push_str(&format!("> {}\n", line));
+                    out.push_str(&format!("> {line}\n"));
                 }
                 prev_was_dialog_or_text = true;
             }
@@ -137,7 +137,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!("[背景: {}]\n", path));
+                out.push_str(&format!("[背景: {path}]\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::Bgm {
@@ -152,15 +152,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     BgmAction::Play => {
                         if let Some(ref p) = path {
                             match fade_ms {
-                                Some(ms) => {
-                                    out.push_str(&format!("[BGM: {}, フェード={}]\n", p, ms))
-                                }
-                                None => out.push_str(&format!("[BGM: {}]\n", p)),
+                                Some(ms) => out.push_str(&format!("[BGM: {p}, フェード={ms}]\n")),
+                                None => out.push_str(&format!("[BGM: {p}]\n")),
                             }
                         }
                     }
                     BgmAction::Stop => match fade_ms {
-                        Some(ms) => out.push_str(&format!("[BGM停止: フェード={}]\n", ms)),
+                        Some(ms) => out.push_str(&format!("[BGM停止: フェード={ms}]\n")),
                         None => out.push_str("[BGM停止]\n"),
                     },
                 }
@@ -171,8 +169,8 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push('\n');
                 }
                 match fade_ms {
-                    Some(ms) => out.push_str(&format!("[SE: {}, フェード={}]\n", path, ms)),
-                    None => out.push_str(&format!("[SE: {}]\n", path)),
+                    Some(ms) => out.push_str(&format!("[SE: {path}, フェード={ms}]\n")),
+                    None => out.push_str(&format!("[SE: {path}]\n")),
                 }
                 prev_was_dialog_or_text = false;
             }
@@ -197,14 +195,14 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!("[退場: {}]\n", character));
+                out.push_str(&format!("[退場: {character}]\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::Wait { ms } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!("[待機: {}]\n", ms));
+                out.push_str(&format!("[待機: {ms}]\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::Choice { options } => {
@@ -224,10 +222,10 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 }
                 let val_str = match value {
                     FlagValue::Bool(b) => b.to_string(),
-                    FlagValue::String(s) => format!("\"{}\"", s),
+                    FlagValue::String(s) => format!("\"{s}\""),
                     FlagValue::Number(n) => format_number(*n),
                 };
-                out.push_str(&format!("[フラグ: {} = {}]\n", name, val_str));
+                out.push_str(&format!("[フラグ: {name} = {val_str}]\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::Condition {
@@ -237,7 +235,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!("[条件: {}]\n", flag));
+                out.push_str(&format!("[条件: {flag}]\n"));
                 emit_events(out, inner);
                 out.push_str("[/条件]\n");
                 prev_was_dialog_or_text = false;
@@ -249,7 +247,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!("**{}** → {}:\n", character, expression));
+                out.push_str(&format!("**{character}** → {expression}:\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::RpgMap(map) => {
@@ -294,7 +292,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     if rate == 0 {
                         out.push_str("[エンカウント率: 0]\n");
                     } else {
-                        out.push_str(&format!("[エンカウント率: 1/{}]\n", rate));
+                        out.push_str(&format!("[エンカウント率: 1/{rate}]\n"));
                     }
                 }
                 if let Some(groups) = &map.encounter_groups {
@@ -329,11 +327,11 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     _ => format!(" id={}", npc.id),
                 };
                 let sprite_suffix = match &npc.sprite {
-                    Some(path) if !path.is_empty() => format!(" sprite={}", path),
+                    Some(path) if !path.is_empty() => format!(" sprite={path}"),
                     _ => String::new(),
                 };
                 let frames_suffix = match npc.frames {
-                    Some(n) => format!(" frames={}", n),
+                    Some(n) => format!(" frames={n}"),
                     None => String::new(),
                 };
                 let direction_suffix = match npc.direction {
@@ -341,7 +339,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     None => String::new(),
                 };
                 let portrait_suffix = match &npc.portrait {
-                    Some(path) if !path.is_empty() => format!(" portrait={}", path),
+                    Some(path) if !path.is_empty() => format!(" portrait={path}"),
                     _ => String::new(),
                 };
                 let expressions_suffix = if npc.expressions.is_empty() {
@@ -354,13 +352,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                         " expressions={}",
                         pairs
                             .iter()
-                            .map(|(k, v)| format!("{}:{}", k, v))
+                            .map(|(k, v)| format!("{k}:{v}"))
                             .collect::<Vec<_>>()
                             .join(",")
                     )
                 };
                 let scene_suffix = match &npc.scene {
-                    Some(s) if !s.is_empty() => format!(" scene={}", s),
+                    Some(s) if !s.is_empty() => format!(" scene={s}"),
                     _ => String::new(),
                 };
                 out.push_str(&format!(
@@ -400,10 +398,10 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("EXP: {}\n", m.exp));
                 out.push_str(&format!("GOLD: {}\n", m.gold));
                 if let Some(s) = &m.sprite {
-                    out.push_str(&format!("スプライト: {}\n", s));
+                    out.push_str(&format!("スプライト: {s}\n"));
                 }
                 if let Some(b) = &m.builtin {
-                    out.push_str(&format!("builtin: {}\n", b));
+                    out.push_str(&format!("builtin: {b}\n"));
                 }
                 out.push_str("[/モンスター]\n");
                 prev_was_dialog_or_text = false;
@@ -416,13 +414,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("名前: {}\n", it.name));
                 out.push_str(&format!("種別: {}\n", it.kind));
                 if let Some(p) = it.price {
-                    out.push_str(&format!("価格: {}\n", p));
+                    out.push_str(&format!("価格: {p}\n"));
                 }
                 if let Some(e) = &it.effect {
-                    out.push_str(&format!("効果: {}\n", e));
+                    out.push_str(&format!("効果: {e}\n"));
                 }
                 if let Some(b) = &it.builtin {
-                    out.push_str(&format!("builtin: {}\n", b));
+                    out.push_str(&format!("builtin: {b}\n"));
                 }
                 out.push_str("[/アイテム]\n");
                 prev_was_dialog_or_text = false;
@@ -434,7 +432,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[パーティ {}]\n", p.id));
                 out.push_str(&format!("名前: {}\n", p.name));
                 if let Some(s) = &p.sprite {
-                    out.push_str(&format!("スプライト: {}\n", s));
+                    out.push_str(&format!("スプライト: {s}\n"));
                 }
                 if p.level > 1 {
                     out.push_str(&format!("レベル: {}\n", p.level));
@@ -463,13 +461,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("MP: {}\n", sp.mp));
                 out.push_str(&format!("対象: {}\n", sp.target));
                 if let Some(s) = &sp.school {
-                    out.push_str(&format!("系統: {}\n", s));
+                    out.push_str(&format!("系統: {s}\n"));
                 }
                 if let Some(e) = &sp.effect {
-                    out.push_str(&format!("効果: {}\n", e));
+                    out.push_str(&format!("効果: {e}\n"));
                 }
                 if let Some(b) = &sp.builtin {
-                    out.push_str(&format!("builtin: {}\n", b));
+                    out.push_str(&format!("builtin: {b}\n"));
                 }
                 out.push_str("[/呪文]\n");
                 prev_was_dialog_or_text = false;
@@ -478,7 +476,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!("[イベント {}]\n", name));
+                out.push_str(&format!("[イベント {name}]\n"));
                 for cmd in commands {
                     match cmd {
                         EventCommand::NpcMove {
@@ -493,16 +491,15 @@ fn emit_events(out: &mut String, events: &[Event]) {
                                 None => String::new(),
                             };
                             out.push_str(&format!(
-                                "[NPC移動: {} → @{},{} 速度={}{}]\n",
-                                npc, x, y, speed, dir_part
+                                "[NPC移動: {npc} → @{x},{y} 速度={speed}{dir_part}]\n"
                             ));
                         }
                         EventCommand::Wait { ms } => {
-                            out.push_str(&format!("[待機: {}]\n", ms));
+                            out.push_str(&format!("[待機: {ms}]\n"));
                         }
                         EventCommand::Dialog { character, text } => {
                             if let Some(ch) = character {
-                                out.push_str(&format!("**{}**:\n", ch));
+                                out.push_str(&format!("**{ch}**:\n"));
                             }
                             for line in text {
                                 out.push_str(line);
@@ -511,7 +508,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                         }
                         EventCommand::Narration { text } => {
                             for line in text {
-                                out.push_str(&format!("> {}\n", line));
+                                out.push_str(&format!("> {line}\n"));
                             }
                         }
                     }
@@ -532,7 +529,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 let pos_part = if *auto {
                     "auto".to_string()
                 } else if let (Some(tx), Some(ty)) = (x, y) {
-                    format!("@{},{}", tx, ty)
+                    format!("@{tx},{ty}")
                 } else {
                     eprintln!(
                         "[name-name] 警告: RpgTrigger に auto=false かつ x/y=None の不正データ"
@@ -540,10 +537,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     "auto".to_string()
                 };
                 let once_part = if *once { " once=true" } else { "" };
-                out.push_str(&format!(
-                    "[トリガー {} scene={}{}]\n",
-                    pos_part, scene, once_part
-                ));
+                out.push_str(&format!("[トリガー {pos_part} scene={scene}{once_part}]\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::Animate {
@@ -560,18 +554,18 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 }
                 let mut parts: Vec<String> = vec![format!("target={}", target)];
                 if let Some(v) = dx {
-                    parts.push(format!("x={}", v));
+                    parts.push(format!("x={v}"));
                 }
                 if let Some(v) = dy {
-                    parts.push(format!("y={}", v));
+                    parts.push(format!("y={v}"));
                 }
                 if let Some(v) = rotation {
-                    parts.push(format!("rotation={}", v));
+                    parts.push(format!("rotation={v}"));
                 }
                 if let Some(v) = scale {
-                    parts.push(format!("scale={}", v));
+                    parts.push(format!("scale={v}"));
                 }
-                parts.push(format!("duration={}", duration_ms));
+                parts.push(format!("duration={duration_ms}"));
                 let easing_str = match easing {
                     crate::models::Easing::Linear => "linear",
                     crate::models::Easing::EaseIn => "ease-in",
@@ -579,7 +573,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     crate::models::Easing::EaseInOut => "ease-in-out",
                 };
                 if *easing != crate::models::Easing::Linear {
-                    parts.push(format!("easing={}", easing_str));
+                    parts.push(format!("easing={easing_str}"));
                 }
                 out.push_str(&format!("[アニメ: {}]\n", parts.join(", ")));
                 prev_was_dialog_or_text = false;
@@ -624,8 +618,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push('\n');
                 }
                 out.push_str(&format!(
-                    "[シェイク: intensity={}, duration={}]\n",
-                    intensity_px, duration_ms
+                    "[シェイク: intensity={intensity_px}, duration={duration_ms}]\n"
                 ));
                 prev_was_dialog_or_text = false;
             }
@@ -638,8 +631,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push('\n');
                 }
                 out.push_str(&format!(
-                    "[フラッシュ: color={}, alpha={}, duration={}]\n",
-                    color, alpha, duration_ms
+                    "[フラッシュ: color={color}, alpha={alpha}, duration={duration_ms}]\n"
                 ));
                 prev_was_dialog_or_text = false;
             }
@@ -654,8 +646,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push('\n');
                 }
                 out.push_str(&format!(
-                    "[フェード: target={}, color={}, from={}, to={}, duration={}]\n",
-                    target, color, from_alpha, to_alpha, duration_ms
+                    "[フェード: target={target}, color={color}, from={from_alpha}, to={to_alpha}, duration={duration_ms}]\n"
                 ));
                 prev_was_dialog_or_text = false;
             }
@@ -728,7 +719,7 @@ fn format_number(n: f64) -> String {
     if n == n.floor() && n.is_finite() {
         format!("{}", n as i64)
     } else {
-        format!("{}", n)
+        format!("{n}")
     }
 }
 
@@ -736,7 +727,7 @@ fn format_number(n: f64) -> String {
 /// 行頭で空行を一つ挟み、ブロック終端の後は改行のみ残す（他ブロックのスタイルに合わせる）。
 fn emit_height_block(out: &mut String, tag: &str, rows: &[Vec<f64>]) {
     out.push('\n');
-    writeln!(out, "[{}]", tag).unwrap();
+    writeln!(out, "[{tag}]").unwrap();
     for row in rows {
         let mut first = true;
         for v in row {
@@ -748,7 +739,7 @@ fn emit_height_block(out: &mut String, tag: &str, rows: &[Vec<f64>]) {
         }
         out.push('\n');
     }
-    writeln!(out, "[/{}]", tag).unwrap();
+    writeln!(out, "[/{tag}]").unwrap();
 }
 
 #[cfg(test)]

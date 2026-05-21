@@ -1127,8 +1127,9 @@ describe('mergeMasterDataFromDocs (#238)', () => {
     const data = masterDoc() // マスター定義のみ
     const project = rpgProjectFromDoc(active, undefined, 'test', [data])
     expect(project).not.toBeNull()
-    expect(project!.monsters.slime?.name).toBe('スライム')
-    expect(project!.items['やくそう']?.name).toBe('やくそう')
-    expect(project!.party.hero?.name).toBe('ゆうしゃ')
+    if (!project) throw new Error('project is null')
+    expect(project.monsters?.slime?.name).toBe('スライム')
+    expect(project.items?.['やくそう']?.name).toBe('やくそう')
+    expect(project.party?.hero?.name).toBe('ゆうしゃ')
   })
 })
