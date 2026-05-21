@@ -14,6 +14,7 @@ import { cors } from "hono/cors";
 import { handleListAssets, handleRawAsset, handleUploadAsset } from "./assets";
 import { handleGetContents, handlePutContents } from "./contents";
 import { handleListProjects } from "./projects";
+import { handleListScripts } from "./scripts";
 import type { Env } from "./types";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -98,6 +99,11 @@ const methodNotAllowed = (c: { json: (body: unknown, status?: number) => Respons
 
 app.get("/api/projects", (c) => handleListProjects(c.req.raw, c.env));
 app.all("/api/projects", methodNotAllowed);
+
+app.get("/api/projects/:name/scripts", (c) =>
+  handleListScripts(c.req.raw, c.env, c.req.param("name")),
+);
+app.all("/api/projects/:name/scripts", methodNotAllowed);
 
 app.get("/api/projects/:name/contents/:path{.+}", (c) =>
   handleGetContents(c.req.raw, c.env, c.req.param("name"), c.req.param("path")),

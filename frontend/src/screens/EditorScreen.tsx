@@ -14,7 +14,7 @@ import {
   findRpgSceneIndex,
   findAllRpgScenes,
 } from '../game/rpgProjectFromDoc'
-import { createApiClient } from '../api/client'
+import { createApiClient, type ScriptInfo } from '../api/client'
 import type { NovelRenderer } from '../game/NovelRenderer'
 import {
   exportVideo,
@@ -30,11 +30,19 @@ import VideoExportModal from '../components/VideoExportModal'
 // Worker モデルでは「保存ボタン押下 = PUT contents = 即 commit」になるため、
 // 編集中の値は localStorage に退避し、サーバ保存は明示「保存」のみとする。
 // UI の本格的な改修（保存ボタン名変更・autosave 表示など）は #108 で行う。
-const SCRIPT_PATH = 'script.md'
+// #237: 既定で開くファイル。プロジェクト直下に script.md がある前提（旧挙動踏襲）。
+// listScripts 経由で取れる .md があれば、UI のタブ操作で切り替えられる。
+const DEFAULT_SCRIPT_PATH = 'script.md'
 const DEFAULT_BRANCH = 'develop'
 
-function localStorageKey(projectName: string): string {
-  return `name-name:editor-draft:${projectName}`
+/**
+ * draft の localStorage キー。#237 でファイル単位に分離（path を含む）。
+ * 旧キー `name-name:editor-draft:${projectName}` は無視され、新キーで管理される。
+ * 旧キーを明示的に migrate せず放置するのは、サーバ側に最新がある以上ローカル draft が
+ * 1 セッション失われても致命的ではないため（破壊的でない単方向移行）。
+ */
+function localStorageKey(projectName: string, path: string): string {
+  return `name-name:editor-draft:${projectName}:${path}`
 }
 
 interface EditorScreenProps {
@@ -101,6 +109,14 @@ function EditorScreen({
   const shaRef = useRef<string | null>(null)
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
+  // #237: 編集中ファイルパス + 利用可能なファイル一覧。
+  const [currentScriptPath, setCurrentScriptPath] = useState<string>(DEFAULT_SCRIPT_PATH)
+  const [availableScripts, setAvailableScripts] = useState<ScriptInfo[]>([])
+  // #238: 編集中以外の .md (data.md 等) を解析した EventDocument。
+  // RPG タブが master データ (モンスター / アイテム / 呪文 / パーティ) を data.md から
+  // 参照できるよう、active doc とは別に並行ロードして保持する。
+  // active doc 編集中も updated されない（保存時に再フェッチで十分）。
+  const [otherDocs, setOtherDocs] = useState<EventDocument[]>([])
   // PR #120 review Q1: shaRef.current を state にも反映して、保存ボタンの
   //   disabled 制御に使う。ref 単体だと React が再レンダリングしないため
   //   ボタンの enabled/disabled が更新されない。
@@ -200,8 +216,9 @@ function EditorScreen({
     const found = explicitFound ?? findRpgSceneIndex(doc)
     if (!found) return null
     const sceneIdForThisDoc = doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
-    return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName)
-  }, [doc, projectName, rpgSceneId])
+    // #238: data.md 等の他 .md からマスターデータを取り込む
+    return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName, otherDocs)
+  }, [doc, projectName, rpgSceneId, otherDocs])
 
   // 現在の rpgSceneId が doc 内に存在しない場合、先頭の RPG シーンに切り替える。
   // useMemo 内で setState しないよう副作用を分離。
@@ -319,9 +336,18 @@ function EditorScreen({
   // （draft があるが ref と sha の世代が古い場合は #108 でマージ UI を入れる予定。
   //  暫定では「ロード後に draft で上書き」する素直な復元のみ）。
   useEffect(() => {
+    // #237 review M1: タブ切替で currentScriptPath が変わったとき、
+    // 先に sha / 初期値を即座にリセットする。
+    // 理由: 前ファイルの sha が shaRef に残ったまま loadChapters が catch に飛ぶと
+    //   ユーザーが新パス向けに編集→保存 → 前ファイルの sha で別パス PUT → 409 か
+    //   最悪のケースで意図しないファイルを上書きしうる。fetch 前に確実にクリアする。
+    shaRef.current = null
+    setHasSha(false)
+    initialMarkdownRef.current = ''
+
     const loadChapters = async () => {
       try {
-        const data = await api.getContents(projectName, SCRIPT_PATH, DEFAULT_BRANCH)
+        const data = await api.getContents(projectName, currentScriptPath, DEFAULT_BRANCH)
         const markdown = data.content || ''
         shaRef.current = data.sha
         setHasSha(Boolean(data.sha))
@@ -332,7 +358,7 @@ function EditorScreen({
         // 現状は単純復元。サーバ側が更新されている可能性は #108 で対処。
         let localDraft: string | null = null
         try {
-          localDraft = localStorage.getItem(localStorageKey(projectName))
+          localDraft = localStorage.getItem(localStorageKey(projectName, currentScriptPath))
         } catch {
           localDraft = null
         }
@@ -354,8 +380,64 @@ function EditorScreen({
       }
     }
     loadChapters()
-    // api は apiBaseUrl から派生する useMemo の値、projectName が変わったらもう一度ロード
+    // api は apiBaseUrl から派生する useMemo の値、projectName / currentScriptPath が
+    // 変わったらもう一度ロード（#237: ファイルタブ切替で再ロード）。
+  }, [api, projectName, currentScriptPath])
+
+  // #237: プロジェクト直下の .md 一覧（engine: name-name のみ）を取得してタブを構築。
+  // 失敗しても致命的でない（script.md 単体運用に degrade する）ためエラーはコンソールのみ。
+  useEffect(() => {
+    const loadList = async () => {
+      try {
+        const scripts = await api.listScripts(projectName, DEFAULT_BRANCH)
+        setAvailableScripts(scripts)
+        // 現在開いているファイルが listing に存在しない場合（新規 repo 等）は、
+        // listing の先頭ファイルに切り替える。リストが空なら DEFAULT_SCRIPT_PATH のまま。
+        if (scripts.length > 0 && !scripts.some((s) => s.path === currentScriptPath)) {
+          setCurrentScriptPath(scripts[0].path)
+        }
+      } catch (err) {
+        console.warn('[EditorScreen] listScripts failed; falling back to single script.md', err)
+        setAvailableScripts([])
+      }
+    }
+    loadList()
+    // #237 review S1: listing 自体は repo 単位の情報なので projectName が変わったときだけ再取得する。
+    // (listing 取得後の otherDocs ロードは別の useEffect が availableScripts を監視して行う)
+    // currentScriptPath を依存に入れるとタブ切替の度に listing API が再叩きされて無駄。
+    // 「現在 path が listing に無いなら先頭に切り替える」のは setCurrentScriptPath で
+    //   currentScriptPath が変わる → このフックは再実行されない（次回 projectName 変更時のみ）が、
+    //   listing は既に最新 (1 回前のフックで取得済み) なので問題なし。
   }, [api, projectName])
+
+  // #238: availableScripts から currentScriptPath 以外の .md を fetch + parse して
+  //   otherDocs に詰める。RPG タブが data.md 等のマスター定義を参照できるようにする。
+  // 失敗した個別ファイルはスキップ（致命的でない）。
+  useEffect(() => {
+    let cancelled = false
+    const loadOthers = async () => {
+      const others = availableScripts.filter((s) => s.path !== currentScriptPath)
+      if (others.length === 0) {
+        setOtherDocs([])
+        return
+      }
+      const docs: EventDocument[] = []
+      for (const s of others) {
+        try {
+          const data = await api.getContents(projectName, s.path, DEFAULT_BRANCH)
+          const parsed = await parseMarkdown(data.content || '')
+          docs.push(parsed)
+        } catch (err) {
+          console.warn(`[EditorScreen] failed to load other doc ${s.path}`, err)
+        }
+      }
+      if (!cancelled) setOtherDocs(docs)
+    }
+    loadOthers()
+    return () => {
+      cancelled = true
+    }
+  }, [api, projectName, availableScripts, currentScriptPath])
 
   // Markdown の変更を検出して未保存フラグを立てる。
   // Worker モデルでは status ポーリングは行わない（保存=即commit のためサーバに
@@ -381,9 +463,9 @@ function EditorScreen({
       try {
         if (rawMarkdown === initialMarkdownRef.current) {
           // 変更が無ければ draft を消しておく
-          localStorage.removeItem(localStorageKey(projectName))
+          localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
         } else {
-          localStorage.setItem(localStorageKey(projectName), rawMarkdown)
+          localStorage.setItem(localStorageKey(projectName, currentScriptPath), rawMarkdown)
         }
       } catch (error) {
         console.error('Failed to persist draft to localStorage:', error)
@@ -412,7 +494,7 @@ function EditorScreen({
     setSaveError(null)
     try {
       const sha = shaRef.current
-      const result = await api.putContents(projectName, SCRIPT_PATH, {
+      const result = await api.putContents(projectName, currentScriptPath, {
         content: rawMarkdown,
         sha: sha ?? undefined,
         branch: DEFAULT_BRANCH,
@@ -425,7 +507,7 @@ function EditorScreen({
       initialMarkdownRef.current = rawMarkdown
       setHasUnsavedChanges(false)
       try {
-        localStorage.removeItem(localStorageKey(projectName))
+        localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
       } catch {
         // ignore
       }
@@ -450,12 +532,12 @@ function EditorScreen({
     setSaveError(null)
     try {
       // 1. 先にサーバから最新を取り直す
-      const data = await api.getContents(projectName, SCRIPT_PATH, DEFAULT_BRANCH)
+      const data = await api.getContents(projectName, currentScriptPath, DEFAULT_BRANCH)
       const markdown = data.content || ''
 
       // 2. 取得成功したら draft を消す（失敗時は draft を保持して再試行可能に）
       try {
-        localStorage.removeItem(localStorageKey(projectName))
+        localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
       } catch {
         // ignore
       }
@@ -562,6 +644,60 @@ function EditorScreen({
             </button>
           </div>
         </div>
+
+        {/* #237: ファイルタブ（script.md / data.md / ...）。
+            availableScripts が 2 件以上のときだけ表示する。1 件以下のときは UI を出さず、
+            旧 script.md 単体運用の見た目を保つ。 */}
+        {availableScripts.length > 1 && (
+          <div
+            className={`px-6 flex gap-1 border-t text-xs ${
+              isDark ? 'border-gray-700' : 'border-blue-100'
+            }`}
+            role="tablist"
+            aria-label="シナリオファイル"
+          >
+            {availableScripts.map((s) => {
+              const isActive = s.path === currentScriptPath
+              return (
+                <button
+                  key={s.path}
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => {
+                    if (s.path === currentScriptPath) return
+                    if (
+                      hasUnsavedChanges &&
+                      !window.confirm(
+                        '未保存の変更があります。破棄して別のファイルに切り替えますか？'
+                      )
+                    ) {
+                      return
+                    }
+                    setCurrentScriptPath(s.path)
+                    // 切替後の load は currentScriptPath を依存に入れた useEffect が処理する
+                  }}
+                  className={`px-3 py-1 rounded-t transition-colors ${
+                    isActive
+                      ? isDark
+                        ? 'bg-gray-700 text-white'
+                        : 'bg-white text-gray-900 border border-b-white border-blue-200'
+                      : isDark
+                        ? 'text-gray-400 hover:text-gray-200'
+                        : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                  title={s.title ?? s.path}
+                >
+                  {s.path}
+                  {s.hidden && (
+                    <span className={`ml-1 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                      (hidden)
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         {/* エディタタブ（ノベル / RPG） */}
         <div
