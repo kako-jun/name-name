@@ -32,7 +32,7 @@ import VideoExportModal from '../components/VideoExportModal'
 // UI の本格的な改修（保存ボタン名変更・autosave 表示など）は #108 で行う。
 // #237: 既定で開くファイル。プロジェクト直下に script.md がある前提（旧挙動踏襲）。
 // listScripts 経由で取れる .md があれば、UI のタブ操作で切り替えられる。
-const DEFAULT_currentScriptPath = 'script.md'
+const DEFAULT_SCRIPT_PATH = 'script.md'
 const DEFAULT_BRANCH = 'develop'
 
 /**
@@ -110,7 +110,7 @@ function EditorScreen({
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
   // #237: 編集中ファイルパス + 利用可能なファイル一覧。
-  const [currentScriptPath, setCurrentScriptPath] = useState<string>(DEFAULT_currentScriptPath)
+  const [currentScriptPath, setCurrentScriptPath] = useState<string>(DEFAULT_SCRIPT_PATH)
   const [availableScripts, setAvailableScripts] = useState<ScriptInfo[]>([])
   // PR #120 review Q1: shaRef.current を state にも反映して、保存ボタンの
   //   disabled 制御に使う。ref 単体だと React が再レンダリングしないため
