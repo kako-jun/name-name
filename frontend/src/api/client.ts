@@ -47,6 +47,15 @@ export interface ContentsResponse {
   encoding?: 'utf-8'
 }
 
+/** scripts listing 1 件（#237） */
+export interface ScriptInfo {
+  path: string
+  sha: string
+  size: number
+  title: string | null
+  hidden: boolean
+}
+
 export interface ContentsPutResponse {
   path: string
   sha: string | null
@@ -158,6 +167,12 @@ export interface ApiClient {
   /** プロジェクト一覧 */
   listProjects(): Promise<ProjectInfo[]>
 
+  /** プロジェクト直下の name-name シナリオ .md 一覧（#237）。
+   *  frontmatter に `engine: name-name` を含む .md だけが返る。
+   *  ファイルタブ UI のソースとして使う。
+   */
+  listScripts(projectName: string, ref?: string): Promise<ScriptInfo[]>
+
   /** Markdown / 設定ファイル 1 本を取得。`ref` はブランチ名（既定 develop） */
   getContents(projectName: string, path: string, ref?: string): Promise<ContentsResponse>
 
@@ -218,6 +233,16 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       })
       const data = await parseJsonOrThrow<{ projects: ProjectInfo[] }>(res, 'listProjects')
       return data.projects
+    },
+
+    async listScripts(projectName: string, ref?: string): Promise<ScriptInfo[]> {
+      const qs = ref ? `?ref=${encodeURIComponent(ref)}` : ''
+      const res = await fetchImpl(
+        url(`/api/projects/${encodeURIComponent(projectName)}/scripts${qs}`),
+        { headers: { ...authHeaders() } }
+      )
+      const data = await parseJsonOrThrow<{ scripts: ScriptInfo[] }>(res, 'listScripts')
+      return data.scripts
     },
 
     async getContents(projectName: string, path: string, ref?: string): Promise<ContentsResponse> {
