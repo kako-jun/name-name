@@ -209,6 +209,119 @@ describe("GET /api/projects/:name/scripts", () => {
     expect(fileFetches.some((u) => u.includes("huge.md"))).toBe(false);
   });
 
+  it("treats hidden: true # comment as boolean true (review S4: strip trailing comment)", async () => {
+    const dataWithComment = `---
+engine: name-name
+title: "with comment"
+hidden: true # 一時退避中
+---
+
+## scene
+> ok
+`;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.match(/\/contents\/?$/) || url.match(/\/contents\/?\?/)) {
+        return jsonResponse(
+          mockRoot([
+            { name: "x.md", path: "x.md", sha: "sha-x", size: 100 },
+          ]),
+        );
+      }
+      return jsonResponse(mockFileContents("x.md", dataWithComment, "sha-x"));
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/scripts",
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    const body = (await res.json()) as { scripts: Array<{ hidden: boolean }> };
+    expect(body.scripts[0].hidden).toBe(true);
+  });
+
+  it("accepts files at the 64KB size boundary (review S3)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.match(/\/contents\/?$/) || url.match(/\/contents\/?\?/)) {
+        return jsonResponse(
+          mockRoot([
+            // size = 64*1024 ぴったり (含まれる: <=)
+            { name: "ok.md", path: "ok.md", sha: "sha-ok", size: 64 * 1024 },
+            // size = 64*1024 + 1 (除外: > 64KB)
+            { name: "ng.md", path: "ng.md", sha: "sha-ng", size: 64 * 1024 + 1 },
+          ]),
+        );
+      }
+      if (url.includes("/contents/ok.md")) {
+        return jsonResponse(mockFileContents("ok.md", SCRIPT_MD, "sha-ok"));
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/scripts",
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    const body = (await res.json()) as { scripts: Array<{ path: string }> };
+    expect(body.scripts.map((s) => s.path)).toEqual(["ok.md"]);
+  });
+
+  it("invalidates scripts listing cache when PUT contents touches a .md (review M2)", async () => {
+    // 1) 初回 GET /scripts でキャッシュ MISS、レスポンスが Cache API に書かれる
+    // 2) PUT /contents/foo.md → scripts キャッシュも cacheDelete される
+    // 3) 再び GET /scripts するとキャッシュ MISS（パージ済みなので fetch しに行く）
+    let listingCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? "GET";
+      if (method === "PUT" && url.includes("/contents/foo.md")) {
+        return jsonResponse({
+          content: { path: "foo.md", sha: "new-sha" },
+          commit: { sha: "commit-sha" },
+        });
+      }
+      if (method === "GET" && (url.match(/\/contents\/?$/) || url.match(/\/contents\/?\?/))) {
+        listingCalls++;
+        return jsonResponse(mockRoot([{ name: "script.md", path: "script.md", sha: "s", size: 50 }]));
+      }
+      if (method === "GET" && url.includes("/contents/script.md")) {
+        return jsonResponse(mockFileContents("script.md", SCRIPT_MD, "s"));
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    // 1) 初回 listing
+    const r1 = await worker.fetch(
+      new Request("https://name-name-api.workers.dev/api/projects/ogurasia/scripts"),
+      ENV,
+      ctx,
+    );
+    expect(r1.status).toBe(200);
+    const cacheCallsAfterFirst = listingCalls;
+    expect(cacheCallsAfterFirst).toBeGreaterThanOrEqual(1);
+
+    // 2) PUT contents/foo.md (.md なので scripts cache をパージするはず)
+    const r2 = await worker.fetch(
+      new Request("https://name-name-api.workers.dev/api/projects/ogurasia/contents/foo.md", {
+        method: "PUT",
+        headers: { authorization: "Bearer dev-token", "content-type": "application/json" },
+        body: JSON.stringify({ content: "---\nengine: name-name\n---\n", branch: "develop" }),
+      }),
+      ENV,
+      ctx,
+    );
+    expect(r2.status).toBe(200);
+
+    // 3) 再 listing: キャッシュがパージされていれば再 fetch されるので listingCalls が増える
+    await worker.fetch(
+      new Request("https://name-name-api.workers.dev/api/projects/ogurasia/scripts"),
+      ENV,
+      ctx,
+    );
+    expect(listingCalls).toBeGreaterThan(cacheCallsAfterFirst);
+  });
+
   it("propagates GitHub error status on root listing failure", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ message: "not found" }, 404));
     globalThis.fetch = fetchMock as typeof fetch;

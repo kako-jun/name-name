@@ -330,6 +330,15 @@ function EditorScreen({
   // （draft があるが ref と sha の世代が古い場合は #108 でマージ UI を入れる予定。
   //  暫定では「ロード後に draft で上書き」する素直な復元のみ）。
   useEffect(() => {
+    // #237 review M1: タブ切替で currentScriptPath が変わったとき、
+    // 先に sha / 初期値を即座にリセットする。
+    // 理由: 前ファイルの sha が shaRef に残ったまま loadChapters が catch に飛ぶと
+    //   ユーザーが新パス向けに編集→保存 → 前ファイルの sha で別パス PUT → 409 か
+    //   最悪のケースで意図しないファイルを上書きしうる。fetch 前に確実にクリアする。
+    shaRef.current = null
+    setHasSha(false)
+    initialMarkdownRef.current = ''
+
     const loadChapters = async () => {
       try {
         const data = await api.getContents(projectName, currentScriptPath, DEFAULT_BRANCH)
@@ -387,9 +396,12 @@ function EditorScreen({
       }
     }
     loadList()
-    // currentScriptPath を依存に入れないのは、自分自身を再評価して無限ループするのを避けるため。
-    // ファイルが変わったときの listing 再取得は不要（保存時にキャッシュ TTL で更新される）。
-  }, [api, projectName, currentScriptPath])
+    // #237 review S1: listing 自体は repo 単位の情報なので projectName が変わったときだけ再取得する。
+    // currentScriptPath を依存に入れるとタブ切替の度に listing API が再叩きされて無駄。
+    // 「現在 path が listing に無いなら先頭に切り替える」のは setCurrentScriptPath で
+    //   currentScriptPath が変わる → このフックは再実行されない（次回 projectName 変更時のみ）が、
+    //   listing は既に最新 (1 回前のフックで取得済み) なので問題なし。
+  }, [api, projectName])
 
   // Markdown の変更を検出して未保存フラグを立てる。
   // Worker モデルでは status ポーリングは行わない（保存=即commit のためサーバに

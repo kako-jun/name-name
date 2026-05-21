@@ -50,8 +50,10 @@ function jsonResponse(body: unknown, status = 200, extraHeaders: Record<string, 
   });
 }
 
-/** scripts listing 用の Cache API キー（contents/assets と衝突しない prefix） */
-function scriptsCacheKey(owner: string, repo: string, ref: string | null): string {
+/** scripts listing 用の Cache API キー（contents/assets と衝突しない prefix）。
+ *  PUT contents で `.md` を書いた直後に scripts listing が古いまま残らないよう、
+ *  contents.ts から `cacheDelete(scriptsCacheKey(...))` で呼ばれる（#237 review M2）。 */
+export function scriptsCacheKey(owner: string, repo: string, ref: string | null): string {
   return `scripts:${owner}/${repo}:${ref ?? "default"}`;
 }
 
@@ -78,11 +80,17 @@ function parseFrontmatter(text: string): Record<string, string> {
     const kv = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*$/);
     if (!kv) continue;
     let value = kv[2];
-    // `"...".` `'...'` を剥がす
-    if (
+    // quoted string でなければ末尾 `#` 以降をコメントとして剥がす (#237 review S4)。
+    // quoted 内の `#` は値の一部なので保護する。
+    const quoted =
       (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
+      (value.startsWith("'") && value.endsWith("'"));
+    if (!quoted) {
+      const hashIdx = value.indexOf("#");
+      if (hashIdx >= 0) {
+        value = value.slice(0, hashIdx).trimEnd();
+      }
+    } else {
       value = value.slice(1, -1);
     }
     result[kv[1]] = value;

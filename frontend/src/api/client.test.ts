@@ -131,6 +131,12 @@ describe('createApiClient', () => {
       await api.listScripts('ogurasia')
       expect(calls[0].url).toBe(`${BASE}/api/projects/ogurasia/scripts`)
     })
+
+    it('エラー時は ApiError を投げる (review S5)', async () => {
+      const { fetchImpl } = makeMockFetch(() => jsonResponse({ error: 'rate limited' }, 429))
+      const api = createApiClient({ baseUrl: BASE, fetchImpl })
+      await expect(api.listScripts('ogurasia')).rejects.toBeInstanceOf(ApiError)
+    })
   })
 
   describe('getContents', () => {

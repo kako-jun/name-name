@@ -11,6 +11,7 @@ import { authenticate, requireEditor } from "./auth";
 import { cacheDelete, cacheGet, cachePut, contentsCacheKey } from "./cache";
 import { createGitHub, logRateLimit, normalizeError } from "./github";
 import { findProject, splitRepo } from "./projects";
+import { scriptsCacheKey } from "./scripts";
 import type { ContentsGetResponse, ContentsPutBody, Env } from "./types";
 
 type ContentsGetResponseData =
@@ -188,6 +189,16 @@ export async function handlePutContents(
     //   ブランチ横断でのパージは GitHub webhook 経由で #118 にて本実装する予定。
     await cacheDelete(contentsCacheKey(owner, repo, path, branch ?? null));
     await cacheDelete(contentsCacheKey(owner, repo, path, null));
+
+    // #237 review M2: ルート直下の `.md` が新規作成された場合、scripts listing
+    // (/api/projects/:name/scripts) のキャッシュが古いままだと新ファイルがタブ UI に
+    // 出るまで最大 10s 遅延する。`.md` を触ったときは listing キャッシュもパージする。
+    // ディレクトリ内 .md は今のところ scripts listing 対象外だが、将来 recursive 化
+    // しても安全側に倒すため拡張子だけで判定する。
+    if (path.toLowerCase().endsWith(".md")) {
+      await cacheDelete(scriptsCacheKey(owner, repo, branch ?? null));
+      await cacheDelete(scriptsCacheKey(owner, repo, null));
+    }
 
     const data = res.data as ContentsPutResponseData;
     return jsonResponse(
