@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Name x Name</title>
+    <!-- #239 (manga-desk theme): エディタ UI 用の和文フォント。プレイヤー側は per-game で
+         動的 link を inject するので、ここでは「漫画家の机」テーマ用に preload する。
+         Klee One: 見出し・タブ等の手書き寄り丸ゴシック。
+         Hina Mincho: 原稿用紙風の本文に使う明朝。 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Hina+Mincho&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>
