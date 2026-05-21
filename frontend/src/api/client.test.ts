@@ -109,6 +109,30 @@ describe('createApiClient', () => {
     })
   })
 
+  describe('listScripts (#237)', () => {
+    it('GET /api/projects/:name/scripts を叩いて scripts 配列を返す', async () => {
+      const scripts = [
+        { path: 'script.md', sha: 'a', size: 100, title: 'メイン', hidden: false },
+        { path: 'data.md', sha: 'b', size: 50, title: 'マスター', hidden: true },
+      ]
+      const { fetchImpl, calls } = makeMockFetch(() => jsonResponse({ scripts }))
+      const api = createApiClient({ baseUrl: BASE, fetchImpl })
+
+      const result = await api.listScripts('ogurasia', 'develop')
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0].url).toBe(`${BASE}/api/projects/ogurasia/scripts?ref=develop`)
+      expect(result).toEqual(scripts)
+    })
+
+    it('ref 未指定なら ?ref= は付かない', async () => {
+      const { fetchImpl, calls } = makeMockFetch(() => jsonResponse({ scripts: [] }))
+      const api = createApiClient({ baseUrl: BASE, fetchImpl })
+      await api.listScripts('ogurasia')
+      expect(calls[0].url).toBe(`${BASE}/api/projects/ogurasia/scripts`)
+    })
+  })
+
   describe('getContents', () => {
     it('ref 指定時は ?ref= クエリを付ける', async () => {
       const { fetchImpl, calls } = makeMockFetch(() =>
