@@ -142,10 +142,15 @@ function EventCard({
         className={`relative p-3 rounded border cursor-pointer transition-shadow ${
           isSelected ? 'ring-2 ring-offset-1' : ''
         } ${isDragging ? 'opacity-50' : ''} ${variantToDeskClass(event)}`}
-        style={{
-          borderColor: isSelected ? 'var(--desk-akapen)' : 'var(--desk-rule)',
-          ['--tw-ring-color' as never]: 'var(--desk-akapen)',
-        }}
+        // #239 review N1: as never キャストは型エラー回避目的だが意図が読みづらいので
+        //   React.CSSProperties に明示キャストし直す。CSS カスタムプロパティは
+        //   React の型定義に無いがランタイム上は通る。
+        style={
+          {
+            borderColor: isSelected ? 'var(--desk-akapen)' : 'var(--desk-rule)',
+            '--tw-ring-color': 'var(--desk-akapen)',
+          } as React.CSSProperties
+        }
       >
         {/* ドラッグハンドル */}
         {!isEditing && (

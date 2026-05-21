@@ -693,14 +693,18 @@ function EditorScreen({
           </div>
         )}
 
-        {/* エディタタブ（ノベル / RPG） */}
+        {/* エディタタブ（ノベル / RPG）。
+            #239 review S3: role=tab / role=tablist をファイルタブと一貫させる。 */}
         <div
           className={`px-6 flex gap-1 border-t ${isDark ? 'border-gray-700' : 'border-blue-100'}`}
+          role="tablist"
+          aria-label="エディタモード"
         >
           {(['novel', 'rpg'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setEditorTab(tab)}
+              role="tab"
               aria-selected={editorTab === tab}
               className="desk-tab"
             >
