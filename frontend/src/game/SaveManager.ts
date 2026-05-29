@@ -7,6 +7,7 @@
  */
 
 import { FlagValue } from '../types'
+import { BackgroundFade } from './GameState'
 
 const SLOT_COUNT = 3
 const STORAGE_PREFIX = 'name-name-save-'
@@ -20,6 +21,11 @@ export interface SaveSlotData {
   textIndex: number
   flags: Record<string, FlagValue>
   backgroundPath: string | null
+  /**
+   * 背景の端フェードマスク (#250)。
+   * 後方互換: 古いセーブデータには無い → undefined/null はフェードなし扱い。
+   */
+  backgroundFade?: BackgroundFade | null
   /** 暗転状態 */
   isBlackout: boolean
   /** 表示中のキャラクター情報 */

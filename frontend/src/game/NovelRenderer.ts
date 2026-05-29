@@ -25,7 +25,7 @@ import { CharacterLayer } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 import { AudioManager } from './AudioManager'
-import { GameState, NovelGameState, resolveEvents } from './GameState'
+import { BackgroundFade, GameState, NovelGameState, resolveEvents } from './GameState'
 import { ChoiceOverlay } from './ChoiceOverlay'
 import { SaveManager, SaveSlotData } from './SaveManager'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
@@ -63,6 +63,38 @@ export function getTextEvent(event: Event):
     }
   }
   return null
+}
+
+/**
+ * 各端の生 fade 値（parser / セーブデータ由来）を正規化して BackgroundFade | null を返す (#250)。
+ *
+ * - 非数値・負・0・NaN は「指定なし」として落とす
+ * - 全端が指定なしなら null（マスク不要）
+ */
+export function normalizeBackgroundFade(
+  raw:
+    | { top?: number | null; bottom?: number | null; left?: number | null; right?: number | null }
+    | null
+    | undefined
+): BackgroundFade | null {
+  if (!raw) return null
+  const norm = (v: number | null | undefined): number | undefined => {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return undefined
+    return Math.round(v)
+  }
+  const top = norm(raw.top)
+  const bottom = norm(raw.bottom)
+  const left = norm(raw.left)
+  const right = norm(raw.right)
+  if (top === undefined && bottom === undefined && left === undefined && right === undefined) {
+    return null
+  }
+  const result: BackgroundFade = {}
+  if (top !== undefined) result.top = top
+  if (bottom !== undefined) result.bottom = bottom
+  if (left !== undefined) result.left = left
+  if (right !== undefined) result.right = right
+  return result
 }
 
 export class NovelRenderer {
@@ -152,6 +184,12 @@ export class NovelRenderer {
 
   /** 現在の背景パス */
   private currentBackgroundPath: string | null = null
+
+  /** 現在の背景端フェードマスク (#250)。なしなら null */
+  private currentBackgroundFade: BackgroundFade | null = null
+
+  /** 現在の背景に適用中のマスク Sprite (#250)。解放時に破棄する */
+  private bgMaskSprite: Sprite | null = null
 
   /** 現在の BGM パス（スナップショット用） */
   private currentBgmPath: string | null = null
@@ -734,6 +772,8 @@ export class NovelRenderer {
       console.warn('[name-name] テクスチャの解放に失敗', err)
     })
     this.textureCache.clear()
+    // canvas 由来マスクテクスチャの GPU リソースを解放する (#250)
+    this.disposeBgMask()
     this.app.destroy(true, { children: true })
     this.initialized = false
   }
@@ -879,6 +919,7 @@ export class NovelRenderer {
       textIndex: this.textIndex,
       flags: this.gameState.toJSON(),
       backgroundPath: this.currentBackgroundPath,
+      backgroundFade: this.currentBackgroundFade,
       isBlackout: this.blackoutOverlay.visible,
       characters: this.characterLayer.getCharacterStates(),
       currentBgmPath: this.currentBgmPath,
@@ -1020,7 +1061,7 @@ export class NovelRenderer {
 
     // 背景復元
     if (state.backgroundPath) {
-      this.setBackground(state.backgroundPath)
+      this.setBackground(state.backgroundPath, state.backgroundFade)
     } else {
       this.clearBackground()
     }
@@ -1214,7 +1255,16 @@ export class NovelRenderer {
       return
     }
     if ('Background' in event) {
-      this.setBackground(event.Background.path)
+      const bg = event.Background
+      this.setBackground(
+        bg.path,
+        normalizeBackgroundFade({
+          top: bg.fade_top,
+          bottom: bg.fade_bottom,
+          left: bg.fade_left,
+          right: bg.fade_right,
+        })
+      )
       return
     }
     if ('Blackout' in event) {
@@ -1371,10 +1421,13 @@ export class NovelRenderer {
   }
 
   /**
-   * 背景画像を設定する（アスペクト比維持でカバー）
+   * 背景画像を設定する（アスペクト比維持でカバー）。
+   * fade を渡すと端フェードマスク (#250) を適用する。
    */
-  private setBackground(path: string): void {
+  private setBackground(path: string, fade?: BackgroundFade | null): void {
     this.currentBackgroundPath = path
+    this.currentBackgroundFade = normalizeBackgroundFade(fade)
+    this.disposeBgMask()
     this.bgContainer.removeChildren()
 
     if (!this.assetBaseUrl) return
@@ -1382,17 +1435,22 @@ export class NovelRenderer {
     const cleanPath = path.replace(/^\//, '')
     const url = `${this.assetBaseUrl}/images/${cleanPath}`
 
+    // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ。
+    // キャッシュヒットで同期描画する場合も必ず進めること。さもないと直前に
+    // 走っていた別背景の Assets.load().then が後から解決し、即描画した背景の上に
+    // 古い sprite+fade を addChild してしまう。
+    const token = ++this.bgLoadToken
+
     // キャッシュ済みの Texture があれば再利用（戻る操作時のフリッカー防止）
     const cached = this.textureCache.get(url)
     if (cached) {
       const sprite = new Sprite(cached)
       this.applyCoverFit(sprite)
       this.bgContainer.addChild(sprite)
+      this.applyEdgeFadeMask(sprite)
       return
     }
 
-    // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ
-    const token = ++this.bgLoadToken
     Assets.load(url)
       .then((texture) => {
         if (token !== this.bgLoadToken) return
@@ -1401,6 +1459,7 @@ export class NovelRenderer {
         const sprite = new Sprite(texture)
         this.applyCoverFit(sprite)
         this.bgContainer.addChild(sprite)
+        this.applyEdgeFadeMask(sprite)
       })
       .catch((err) => {
         console.warn('[name-name] 背景画像の読み込みに失敗: ' + url, err)
@@ -1418,10 +1477,115 @@ export class NovelRenderer {
   }
 
   /**
+   * 現在の currentBackgroundFade に基づいて端フェードマスク (#250) を sprite に適用する。
+   * フェード指定がなければ何もしない（従来動作）。
+   */
+  private applyEdgeFadeMask(sprite: Sprite): void {
+    const maskSprite = this.buildEdgeFadeMask(this.currentBackgroundFade)
+    if (!maskSprite) return
+    this.bgMaskSprite = maskSprite
+    this.bgContainer.addChild(maskSprite)
+    sprite.mask = maskSprite
+  }
+
+  /**
+   * 端フェードマスク Sprite を生成する (#250)。
+   *
+   * screenWidth × screenHeight の Canvas を白(不透明)で塗り、各指定端について
+   * 端→内側に向かう線形グラデーション(alpha 0→1)を destination-in 合成で重ねる。
+   * これにより複数端が重なる角は乗算的により透明になる（4辺すべてが寄与した角も正しく透明）。
+   * 決定論的（時間・乱数を使わない）。将来動画入力レイヤが来ても流用できる純粋な生成ロジック。
+   *
+   * 全端が 0/None なら null を返す（マスク不要）。
+   */
+  private buildEdgeFadeMask(fade: BackgroundFade | null): Sprite | null {
+    if (!fade) return null
+    const top = fade.top ?? 0
+    const bottom = fade.bottom ?? 0
+    const left = fade.left ?? 0
+    const right = fade.right ?? 0
+    if (top <= 0 && bottom <= 0 && left <= 0 && right <= 0) return null
+
+    const w = Math.round(this.screenWidth)
+    const h = Math.round(this.screenHeight)
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+
+    // ベースは完全不透明な白で塗る
+    ctx.fillStyle = 'rgba(255,255,255,1)'
+    ctx.fillRect(0, 0, w, h)
+
+    // 各端のフェードを destination-in で乗算的に重ねる。
+    // destination-in は「既存ピクセル alpha × 新ソース alpha」になるため、角が正しく重なる。
+    // 各端ごとに画面全体を
+    // 「帯部分は 0→1 勾配、帯より内側は alpha1(勾配の clamp で自動的に 1)」で塗る。
+    // CanvasGradient は描画範囲外を端の stop 色で clamp するため、全画面 fillRect すれば
+    // 帯の内側は alpha1 のまま残り、帯部分だけ 0→1 になる。
+    // これを destination-in で重ねると、帯どうしが重なる角は ×(0..1) を複数回受けて
+    // 乗算的により透明になる（4辺すべてが寄与した角も正しく透明）。
+    ctx.globalCompositeOperation = 'destination-in'
+
+    // 上端: y=0(端) で alpha0、y=top(内側境界) で alpha1。
+    if (top > 0) {
+      const grad = ctx.createLinearGradient(0, 0, 0, top)
+      grad.addColorStop(0, 'rgba(255,255,255,0)')
+      grad.addColorStop(1, 'rgba(255,255,255,1)')
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, w, h)
+    }
+    if (bottom > 0) {
+      const grad = ctx.createLinearGradient(0, h, 0, h - bottom)
+      grad.addColorStop(0, 'rgba(255,255,255,0)')
+      grad.addColorStop(1, 'rgba(255,255,255,1)')
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, w, h)
+    }
+    if (left > 0) {
+      const grad = ctx.createLinearGradient(0, 0, left, 0)
+      grad.addColorStop(0, 'rgba(255,255,255,0)')
+      grad.addColorStop(1, 'rgba(255,255,255,1)')
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, w, h)
+    }
+    if (right > 0) {
+      const grad = ctx.createLinearGradient(w, 0, w - right, 0)
+      grad.addColorStop(0, 'rgba(255,255,255,0)')
+      grad.addColorStop(1, 'rgba(255,255,255,1)')
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, w, h)
+    }
+
+    ctx.globalCompositeOperation = 'source-over'
+
+    const texture = Texture.from(canvas)
+    const maskSprite = new Sprite(texture)
+    maskSprite.x = 0
+    maskSprite.y = 0
+    maskSprite.width = this.screenWidth
+    maskSprite.height = this.screenHeight
+    return maskSprite
+  }
+
+  /** 背景マスク Sprite と そのテクスチャを破棄する (#250)。メモリリーク防止 */
+  private disposeBgMask(): void {
+    if (this.bgMaskSprite) {
+      this.bgMaskSprite.removeFromParent()
+      // canvas 由来のテクスチャは textureCache に乗らないので確実に破棄する
+      this.bgMaskSprite.destroy({ texture: true, textureSource: true })
+      this.bgMaskSprite = null
+    }
+  }
+
+  /**
    * 背景画像をクリアする
    */
   private clearBackground(): void {
     this.currentBackgroundPath = null
+    this.currentBackgroundFade = null
+    this.disposeBgMask()
     this.bgContainer.removeChildren()
   }
 
@@ -1447,6 +1611,7 @@ export class NovelRenderer {
       textIndex: snapshot.textIndex,
       flags: snapshot.flags,
       backgroundPath: snapshot.backgroundPath,
+      backgroundFade: snapshot.backgroundFade,
       isBlackout: snapshot.isBlackout,
       characters: snapshot.characters,
       currentBgmPath: snapshot.currentBgmPath,
@@ -1494,6 +1659,7 @@ export class NovelRenderer {
         textIndex: snapshot.textIndex,
         flags: snapshot.flags,
         backgroundPath: snapshot.backgroundPath,
+        backgroundFade: snapshot.backgroundFade,
         isBlackout: snapshot.isBlackout,
         characters: snapshot.characters,
         currentBgmPath: snapshot.currentBgmPath,
@@ -1552,6 +1718,7 @@ export class NovelRenderer {
       textIndex: data.textIndex,
       flags: data.flags,
       backgroundPath: data.backgroundPath,
+      backgroundFade: normalizeBackgroundFade(data.backgroundFade),
       isBlackout: data.isBlackout ?? false,
       characters: data.characters ?? [],
       currentBgmPath: data.currentBgmPath ?? null,

@@ -301,6 +301,19 @@ pub enum Event {
     },
     Background {
         path: String,
+        /// #250 端フェードマスク（px）— 各端から内側へのフェード帯の幅をスクリーン座標系の px で指定。
+        /// 帯の最外端（画面端）で alpha=0（完全透明）、内側境界で alpha=1（不透明）。線形。
+        /// `None` または 0 はフェードなし。端末キャプチャの余白隠し / 手紙風オーバーレイ用。
+        /// Markdown 構文: `[背景: path, フェード上=40, フェード下=60, フェード左=0, フェード右=0]`
+        /// 英語 alias: `fade_top` / `fade_bottom` / `fade_left` / `fade_right`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_top: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_bottom: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_left: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_right: Option<u32>,
     },
     Bgm {
         path: Option<String>,
