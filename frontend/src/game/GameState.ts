@@ -8,6 +8,20 @@
 import { Event, FlagValue } from '../types'
 
 /**
+ * 背景画像の端フェードマスク設定 (#250)。
+ *
+ * 各端から内側へのフェード帯の幅をスクリーン座標系の px で指定する。
+ * 帯の最外端（画面端）で透明、内側境界で不透明（線形）。
+ * 0 / undefined はその端のフェードなし。
+ */
+export interface BackgroundFade {
+  top?: number
+  bottom?: number
+  left?: number
+  right?: number
+}
+
+/**
  * ノベルゲームの全状態を表すスナップショット
  *
  * advance/goBack/seekTo/save/load の際にこのインターフェースで状態を取り回す。
@@ -18,6 +32,8 @@ export interface NovelGameState {
   textIndex: number
   flags: Record<string, FlagValue>
   backgroundPath: string | null
+  /** 背景の端フェードマスク (#250)。なしなら null */
+  backgroundFade: BackgroundFade | null
   isBlackout: boolean
   characters: Array<{ name: string; expression: string; position: string }>
   currentBgmPath: string | null

@@ -167,7 +167,16 @@ export type Event =
         font_family?: string | null
       }
     }
-  | { Background: { path: string } }
+  | {
+      Background: {
+        path: string
+        /** #250 端フェードマスク（px）。各端から内側へのフェード帯幅。0/未指定はフェードなし */
+        fade_top?: number | null
+        fade_bottom?: number | null
+        fade_left?: number | null
+        fade_right?: number | null
+      }
+    }
   | {
       Bgm: {
         path: string | null

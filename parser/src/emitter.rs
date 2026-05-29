@@ -133,11 +133,31 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 }
                 prev_was_dialog_or_text = true;
             }
-            Event::Background { path } => {
+            Event::Background {
+                path,
+                fade_top,
+                fade_bottom,
+                fade_left,
+                fade_right,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!("[背景: {path}]\n"));
+                // #250 端フェード kv を 上→下→左→右 の順、日本語キーで正規化出力する。
+                let mut kv = String::new();
+                if let Some(n) = fade_top {
+                    kv.push_str(&format!(", フェード上={n}"));
+                }
+                if let Some(n) = fade_bottom {
+                    kv.push_str(&format!(", フェード下={n}"));
+                }
+                if let Some(n) = fade_left {
+                    kv.push_str(&format!(", フェード左={n}"));
+                }
+                if let Some(n) = fade_right {
+                    kv.push_str(&format!(", フェード右={n}"));
+                }
+                out.push_str(&format!("[背景: {path}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::Bgm {

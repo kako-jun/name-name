@@ -71,7 +71,11 @@ fn test_parse_sample() {
     assert_eq!(
         events[0],
         Event::Background {
-            path: "radius/BG_COMMON_GRAD_3.png".to_string()
+            path: "radius/BG_COMMON_GRAD_3.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
         }
     );
     // [BGM: amehure.ogg]
@@ -190,7 +194,11 @@ fn test_parse_sample() {
     assert_eq!(
         events[9],
         Event::Background {
-            path: "radius/BG_KAKO_1_2.png".to_string()
+            path: "radius/BG_KAKO_1_2.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
         }
     );
 
@@ -218,7 +226,11 @@ fn test_parse_sample() {
     assert_eq!(
         events[13],
         Event::Background {
-            path: "radius/BG_COMMON_GRAD_3.png".to_string()
+            path: "radius/BG_COMMON_GRAD_3.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
         }
     );
 
@@ -2843,4 +2855,315 @@ hidden: false
         _ => panic!("Dialog を期待"),
     };
     assert_eq!(dialog_text2, dialog_text);
+}
+
+// ============================================================================
+// #250 背景の端フェードマスク (フェード上/下/左/右) のパーサー / エミッターテスト
+// ============================================================================
+
+/// `[背景: ...]` 1 行だけを含む最小ドキュメントをパースし、最初の Event を取り出すヘルパ。
+fn parse_single_background(directive_line: &str) -> Event {
+    let input = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n{directive_line}\n"
+    );
+    let doc = parser::parse(&input);
+    doc.chapters[0].scenes[0].events[0].clone()
+}
+
+#[test]
+fn test_bgfade_all_four_edges_specified() {
+    // 観点1: 4 端すべて指定 → 全 Some 正値
+    let event = parse_single_background(
+        "[背景: bg.png, フェード上=40, フェード下=60, フェード左=10, フェード右=10]",
+    );
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: Some(40),
+            fade_bottom: Some(60),
+            fade_left: Some(10),
+            fade_right: Some(10),
+        }
+    );
+}
+
+#[test]
+fn test_bgfade_only_one_edge_others_none() {
+    // 観点2: 片端のみ → top=Some、他は None
+    let event = parse_single_background("[背景: bg.png, フェード上=40]");
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: Some(40),
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_bgfade_zero_is_treated_as_none() {
+    // 観点3: 値=0 は無効 → None（フェードなし）
+    let event = parse_single_background("[背景: bg.png, フェード上=0, フェード下=0]");
+    match event {
+        Event::Background {
+            fade_top,
+            fade_bottom,
+            ..
+        } => {
+            assert_eq!(fade_top, None);
+            assert_eq!(fade_bottom, None);
+        }
+        other => panic!("Background を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_bgfade_non_integer_values_are_none() {
+    // 観点4: 負 / 小数 / 非数文字列はパース不能 → None
+    let event =
+        parse_single_background("[背景: bg.png, フェード上=-5, フェード下=3.5, フェード左=abc]");
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_bgfade_no_kv_is_backward_compatible() {
+    // 観点5: kv 無し → 全 None（後方互換）
+    let event = parse_single_background("[背景: bg.png]");
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_bgfade_u32_max_accepted_overflow_rejected() {
+    // 観点6: u32 max は Some、max 超は parse 不能 → None
+    let event =
+        parse_single_background("[背景: bg.png, フェード上=4294967295, フェード下=4294967296]");
+    match event {
+        Event::Background {
+            fade_top,
+            fade_bottom,
+            ..
+        } => {
+            assert_eq!(fade_top, Some(4294967295));
+            assert_eq!(fade_bottom, None);
+        }
+        other => panic!("Background を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_bgfade_english_alias_equals_japanese() {
+    // 観点7: 英語 alias は日本語指定と同一 Event
+    let en = parse_single_background(
+        "[背景: bg.png, fade_top=40, fade_bottom=60, fade_left=10, fade_right=20]",
+    );
+    let ja = parse_single_background(
+        "[背景: bg.png, フェード上=40, フェード下=60, フェード左=10, フェード右=20]",
+    );
+    assert_eq!(en, ja);
+}
+
+#[test]
+fn test_bgfade_mixed_japanese_and_english_keys() {
+    // 観点8: 日英混在 → 両方反映される
+    let event = parse_single_background("[背景: bg.png, フェード上=40, fade_bottom=60]");
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: Some(40),
+            fade_bottom: Some(60),
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_bgfade_unknown_key_silently_skipped() {
+    // 観点9: 未知キーは silent skip、path 正常・全 None
+    let event = parse_single_background("[背景: bg.png, フェード斜め=40]");
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_bgfade_empty_kv_elements_skipped() {
+    // 観点10: 連続カンマ / 末尾カンマの空要素は skip し、有効分だけ反映
+    let event = parse_single_background("[背景: bg.png, , フェード上=40, , フェード下=60,]");
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: Some(40),
+            fade_bottom: Some(60),
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_bgfade_kv_without_equals_skipped() {
+    // 観点11: `=` を含まない kv 片は skip される
+    let event = parse_single_background("[背景: bg.png, フェード上, フェード下=60]");
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: None,
+            fade_bottom: Some(60),
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_bgfade_path_is_trimmed() {
+    // 観点12: path 前後のスペースは trim される
+    let event = parse_single_background("[背景:   bg.png  , フェード上=40]");
+    match event {
+        Event::Background { path, .. } => assert_eq!(path, "bg.png"),
+        other => panic!("Background を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_bgfade_duplicate_key_last_wins() {
+    // 観点13: 同一キー重複は「後勝ち」（実装は split(',') を順に代入するため）
+    let event = parse_single_background("[背景: bg.png, フェード上=40, フェード上=99]");
+    match event {
+        Event::Background { fade_top, .. } => assert_eq!(fade_top, Some(99)),
+        other => panic!("Background を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_bgfade_emit_outputs_in_top_bottom_left_right_order() {
+    // 観点14: emit は入力の kv 順に関わらず 上→下→左→右 の順で出力する
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png, フェード右=20, フェード左=10, フェード下=60, フェード上=40]\n",
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted
+        .contains("[背景: bg.png, フェード上=40, フェード下=60, フェード左=10, フェード右=20]"));
+}
+
+#[test]
+fn test_bgfade_emit_normalizes_english_alias_to_japanese() {
+    // 観点15: 英語 alias 入力でも emit は日本語キーに正規化する
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png, fade_top=40, fade_left=10]\n",
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("フェード上=40"));
+    assert!(emitted.contains("フェード左=10"));
+    assert!(!emitted.contains("fade_top"));
+    assert!(!emitted.contains("fade_left"));
+}
+
+#[test]
+fn test_bgfade_emit_omits_none_edges() {
+    // 観点16: None の端は emit 出力に現れない
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png, フェード上=40]\n",
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[背景: bg.png, フェード上=40]"));
+    assert!(!emitted.contains("フェード下"));
+    assert!(!emitted.contains("フェード左"));
+    assert!(!emitted.contains("フェード右"));
+}
+
+#[test]
+fn test_bgfade_emit_all_none_has_no_kv() {
+    // 観点17: 全 None → emit は kv 無しの `[背景: path]`
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png]\n",
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[背景: bg.png]"));
+    assert!(!emitted.contains("フェード"));
+}
+
+#[test]
+fn test_bgfade_roundtrip_all_edges() {
+    // 観点18: 4 端指定 → emit → parse で一致する
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png, フェード上=40, フェード下=60, フェード左=10, フェード右=20]\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+#[test]
+fn test_bgfade_roundtrip_english_alias_preserves_values() {
+    // 観点19: 英語 alias → emit(日本語化) → parse で値が一致する
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png, fade_top=40, fade_bottom=60, fade_left=10, fade_right=20]\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.chapters[0].scenes[0].events[0],
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: Some(40),
+            fade_bottom: Some(60),
+            fade_left: Some(10),
+            fade_right: Some(20),
+        }
+    );
+}
+
+#[test]
+fn test_bgfade_roundtrip_none_no_regression() {
+    // 観点20: fade が全 None の背景でも round-trip が回帰しない
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png]\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+    assert_eq!(
+        doc2.chapters[0].scenes[0].events[0],
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
 }
