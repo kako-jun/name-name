@@ -71,7 +71,11 @@ fn test_parse_sample() {
     assert_eq!(
         events[0],
         Event::Background {
-            path: "radius/BG_COMMON_GRAD_3.png".to_string()
+            path: "radius/BG_COMMON_GRAD_3.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
         }
     );
     // [BGM: amehure.ogg]
@@ -190,7 +194,11 @@ fn test_parse_sample() {
     assert_eq!(
         events[9],
         Event::Background {
-            path: "radius/BG_KAKO_1_2.png".to_string()
+            path: "radius/BG_KAKO_1_2.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
         }
     );
 
@@ -218,7 +226,11 @@ fn test_parse_sample() {
     assert_eq!(
         events[13],
         Event::Background {
-            path: "radius/BG_COMMON_GRAD_3.png".to_string()
+            path: "radius/BG_COMMON_GRAD_3.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
         }
     );
 
