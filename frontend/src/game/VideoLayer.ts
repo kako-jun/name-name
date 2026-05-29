@@ -23,9 +23,15 @@ const VIDEO_X_RATIO: Record<string, number> = {
   right: 0.75,
 }
 
-/** 日本語/英語ゆれを left/center/right に正規化する。未知/空は center。 */
+/**
+ * 日本語/英語ゆれを left/center/right に正規化する。
+ * 既知の別名（大小・前後空白を許容）にマッチすれば対応する正規値を、
+ * 未知値・空・null・undefined はすべて 'center' を返す（name-name の enum 慣例: 未知→既定）。
+ */
 export function normalizeVideoPosition(position?: string | null): string {
   if (!position) return 'center'
+  const key = position.trim().toLowerCase()
+  if (!key) return 'center'
   const map: Record<string, string> = {
     左: 'left',
     左寄り: 'left',
@@ -37,12 +43,12 @@ export function normalizeVideoPosition(position?: string | null): string {
     右: 'right',
     右寄り: 'right',
     右端: 'right',
-    Left: 'left',
-    Center: 'center',
-    Centre: 'center',
-    Right: 'right',
+    left: 'left',
+    center: 'center',
+    centre: 'center',
+    right: 'right',
   }
-  return map[position] ?? position.toLowerCase()
+  return map[key] ?? 'center'
 }
 
 export interface VideoShowOptions {
@@ -59,6 +65,8 @@ export class VideoLayer extends Container {
   private readonly screenWidth: number
   private readonly screenHeight: number
   private audioManager: AudioManager | null = null
+  /** 動画 URL のベース。背景（NovelRenderer.assetBaseUrl）と同じ値を持たせ、相対パスから URL を再構築する */
+  private assetBaseUrl: string = ''
 
   /** 現在表示中の動画要素。なければ null */
   private videoEl: HTMLVideoElement | null = null
@@ -87,15 +95,31 @@ export class VideoLayer extends Container {
   }
 
   /**
+   * 動画 URL のベースを設定する（背景の setAssetBaseUrl と対）。
+   * show() に渡す相対パスは `assetBaseUrl + '/videos/' + path` で URL 化される。
+   */
+  setAssetBaseUrl(url: string): void {
+    this.assetBaseUrl = url
+  }
+
+  /** 相対パスから完全な動画 URL を構築する（背景の images 構築と同じ規則）。 */
+  private buildVideoUrl(path: string): string {
+    const cleanPath = path.replace(/^\//, '')
+    return `${this.assetBaseUrl}/videos/${cleanPath}`
+  }
+
+  /**
    * 動画を表示・再生する。既に動画があれば置換する（背景と同じ単一スロット意味論）。
    *
-   * @param url 完全な動画 URL（呼び出し側で assetBaseUrl + '/videos/' + path を構築する）
+   * @param path 動画ファイルの相対パス。VideoLayer 内部で assetBaseUrl + '/videos/' + path を構築する
+   *             （背景が相対パスを保持して URL 化するのと同じ責務分担）
    * @param opts 位置 / スケール / ループ / ミュート / フェード / 復元用 playhead
    */
-  show(url: string, opts: VideoShowOptions = {}): void {
+  show(path: string, opts: VideoShowOptions = {}): void {
     // 既存動画があれば先に解放（単一スロット）
     this.remove()
 
+    const url = this.buildVideoUrl(path)
     const position = normalizeVideoPosition(opts.position)
     const loop = opts.loop === true
     const mute = opts.mute === true
@@ -128,7 +152,9 @@ export class VideoLayer extends Container {
     this.sprite = sprite
     this.addChild(sprite)
 
-    this.current = { path: url, position, scale, loop, mute, fade }
+    // path は相対パスを保持する（背景の currentBackgroundPath と同じく portable）。
+    // セーブ/スナップショットにフル URL が混入しないようにし、ドメイン変更後のロードでも壊れない。
+    this.current = { path, position, scale, loop, mute, fade }
 
     // 再生位置の復元（ベストエフォート）
     const seekTo = typeof opts.playhead === 'number' && opts.playhead > 0 ? opts.playhead : 0
@@ -305,7 +331,7 @@ export class VideoLayer extends Container {
 
   /**
    * 状態から復元する（巻き戻し・ロード）。playhead はベストエフォートで seek する。
-   * path は完全 URL を保持しているのでそのまま show() に渡す。
+   * state.path は相対パスなので show() がその時点の assetBaseUrl で URL を再構築する。
    */
   restore(state: VideoState | null): void {
     if (!state) {

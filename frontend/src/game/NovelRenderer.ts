@@ -597,6 +597,8 @@ export class NovelRenderer {
    */
   setAssetBaseUrl(url: string): void {
     this.assetBaseUrl = url
+    // 動画レイヤも同じベース URL で相対パスを URL 化するため伝播する (#252)
+    this.videoLayer.setAssetBaseUrl(url)
   }
 
   /**
@@ -1277,12 +1279,12 @@ export class NovelRenderer {
       return
     }
     if ('Video' in event) {
-      // 動画入力レイヤ (#252)。assetBaseUrl + '/videos/' + path で URL を構築する。
+      // 動画入力レイヤ (#252)。URL 構築は VideoLayer 側（assetBaseUrl + '/videos/' + path）に委譲し、
+      // ここでは相対パスをそのまま渡す。背景の setBackground と同じ責務分担で、
+      // セーブ/スナップショットには相対パスが保持される（ドメイン変更後のロードでも壊れない）。
       const v = event.Video
       if (this.assetBaseUrl) {
-        const cleanPath = v.path.replace(/^\//, '')
-        const url = `${this.assetBaseUrl}/videos/${cleanPath}`
-        this.videoLayer.show(url, {
+        this.videoLayer.show(v.path, {
           position: v.position,
           scale: v.scale,
           loop: v.loop,
