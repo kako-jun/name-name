@@ -315,6 +315,39 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fade_right: Option<u32>,
     },
+    /// 動画入力レイヤ (#252)。立ち絵/背景と同じ枠組みで動画ファイルをレイヤとして配置・再生する。
+    /// 背景と同じく単一スロット意味論: 新しい `[動画:]` は前の動画を置換する。
+    /// 音声トラックがある動画は既定でミックス再生する（`mute=true` で無音化）。
+    /// Markdown 構文:
+    /// `[動画: capture.webm, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, フェード下=60]`
+    /// 英語 alias: `position` / `scale` / `loop` / `mute` / `fade_top` 等。
+    /// アセットパスは `assetBaseUrl + '/videos/' + path`。
+    Video {
+        path: String,
+        /// 配置位置（`左` / `中央` / `右`、英語 alias `left` / `center` / `right`）。`None` は中央扱い。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        position: Option<String>,
+        /// 拡大率（f32）。`None` は cover-fit 相当（画面いっぱいに敷く）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f32>,
+        /// ループ再生するか。`None`/`false` は 1 回再生。serde は予約語回避のため `loop` 名で出力。
+        #[serde(rename = "loop", default, skip_serializing_if = "Option::is_none")]
+        loop_: Option<bool>,
+        /// 音声をミュートするか。`None`/`false` はミックス再生（音声トラックがあれば鳴る）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mute: Option<bool>,
+        /// 端フェードマスク（px）— #250 の背景フェードと同義。`None`/0 はフェードなし。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_top: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_bottom: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_left: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_right: Option<u32>,
+    },
+    /// 動画レイヤをクリアする (#252)。Markdown 構文: `[動画退場]`。
+    VideoExit,
     Bgm {
         path: Option<String>,
         action: BgmAction,

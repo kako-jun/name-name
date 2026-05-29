@@ -248,6 +248,11 @@ export async function exportVideo(
 
   await new Promise((r) => setTimeout(r, preRollMs))
 
+  // 動画入力レイヤ (#252): 録画開始前に表示中の動画を頭出し（currentTime=0）して
+  // ready を待つ。これで録画の先頭から動画が正しく映る/鳴る。動画が無ければ即解決。
+  onProgress?.('動画頭出し中')
+  await renderer.prepareVideosForExport()
+
   startedAt = performance.now()
   recorder.start(1000) // 1 秒ごとに dataavailable。途中 error 時の partial 保存にも有効
   onProgress?.('録画開始')
