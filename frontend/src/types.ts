@@ -178,6 +178,25 @@ export type Event =
       }
     }
   | {
+      Video: {
+        path: string
+        /** #252 配置位置（左/中央/右、英語 alias left/center/right）。未指定は中央 */
+        position?: string | null
+        /** #252 拡大率。未指定は cover-fit 相当（画面いっぱい） */
+        scale?: number | null
+        /** #252 ループ再生するか。未指定/false は 1 回再生 */
+        loop?: boolean | null
+        /** #252 音声をミュートするか。未指定/false はミックス再生 */
+        mute?: boolean | null
+        /** #252 端フェードマスク（px）。#250 背景フェードと同義。0/未指定はフェードなし */
+        fade_top?: number | null
+        fade_bottom?: number | null
+        fade_left?: number | null
+        fade_right?: number | null
+      }
+    }
+  | 'VideoExit'
+  | {
       Bgm: {
         path: string | null
         action: BgmAction

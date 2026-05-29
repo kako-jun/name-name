@@ -22,6 +22,28 @@ export interface BackgroundFade {
 }
 
 /**
+ * 動画入力レイヤの表示状態 (#252)。
+ *
+ * 背景と同じ単一スロット意味論（同時に 1 枚）。スナップショット / セーブ復元で取り回す。
+ * playhead は復元時の seek 目標（秒）。ベストエフォート（録画/シーク精度はブラウザ依存）。
+ */
+export interface VideoState {
+  path: string
+  /** 配置位置（left/center/right に正規化済み）。未指定は center */
+  position?: string
+  /** 拡大率。未指定は cover-fit 相当 */
+  scale?: number
+  /** ループ再生するか */
+  loop?: boolean
+  /** 音声ミュートするか（false/未指定はミックス再生） */
+  mute?: boolean
+  /** 端フェードマスク (#250 と同義) */
+  fade?: BackgroundFade | null
+  /** 復元用の再生位置（秒）。ベストエフォートで seek する */
+  playhead?: number
+}
+
+/**
  * ノベルゲームの全状態を表すスナップショット
  *
  * advance/goBack/seekTo/save/load の際にこのインターフェースで状態を取り回す。
@@ -34,6 +56,8 @@ export interface NovelGameState {
   backgroundPath: string | null
   /** 背景の端フェードマスク (#250)。なしなら null */
   backgroundFade: BackgroundFade | null
+  /** 動画入力レイヤ (#252)。なしなら null */
+  video: VideoState | null
   isBlackout: boolean
   characters: Array<{ name: string; expression: string; position: string }>
   currentBgmPath: string | null
