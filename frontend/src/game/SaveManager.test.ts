@@ -116,3 +116,72 @@ describe('SaveManager - 背景端フェード (#250)', () => {
     expect(loaded?.backgroundFade).toBeNull()
   })
 })
+
+describe('SaveManager - 動画入力レイヤ (#252)', () => {
+  let manager: SaveManager
+
+  beforeEach(() => {
+    manager = new SaveManager()
+    localStorage.clear()
+  })
+
+  it('video 付きで save → load して全フィールドが保持される', () => {
+    const data: SaveSlotData = {
+      ...makeSaveData(),
+      slot: 0,
+      video: {
+        path: '/videos/capture.webm',
+        position: 'center',
+        scale: 1.5,
+        loop: true,
+        mute: false,
+        fade: { top: 40, bottom: 60 },
+        playhead: 12.5,
+      },
+    }
+    manager.save(0, data)
+    const loaded = manager.load(0)
+    expect(loaded?.video).toEqual({
+      path: '/videos/capture.webm',
+      position: 'center',
+      scale: 1.5,
+      loop: true,
+      mute: false,
+      fade: { top: 40, bottom: 60 },
+      playhead: 12.5,
+    })
+  })
+
+  it('後方互換: video 欠如の旧セーブ JSON を読んでもクラッシュしない', () => {
+    // 旧フォーマットを直接 localStorage に書く（video キー無し）
+    const legacy = {
+      slot: 0,
+      sceneId: 'scene-1',
+      eventIndex: 3,
+      textIndex: 1,
+      flags: { visited: { Bool: true } },
+      backgroundPath: '/bg/room.png',
+      isBlackout: false,
+      characters: [{ name: 'Alice', expression: 'happy', position: 'center' }],
+      currentBgmPath: '/bgm/main.mp3',
+      savedAt: new Date().toISOString(),
+      sceneName: 'シーン1',
+    }
+    localStorage.setItem('name-name-save-0', JSON.stringify(legacy))
+    const loaded = manager.load(0)
+    expect(loaded).not.toBeNull()
+    expect(loaded?.sceneId).toBe('scene-1')
+    expect(loaded?.video).toBeUndefined()
+  })
+
+  it('video=null で save → load で null が保持される（動画なし状態）', () => {
+    const data: SaveSlotData = {
+      ...makeSaveData(),
+      slot: 0,
+      video: null,
+    }
+    manager.save(0, data)
+    const loaded = manager.load(0)
+    expect(loaded?.video).toBeNull()
+  })
+})

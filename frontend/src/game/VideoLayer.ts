@@ -24,7 +24,7 @@ const VIDEO_X_RATIO: Record<string, number> = {
 }
 
 /** 日本語/英語ゆれを left/center/right に正規化する。未知/空は center。 */
-function normalizeVideoPosition(position?: string | null): string {
+export function normalizeVideoPosition(position?: string | null): string {
   if (!position) return 'center'
   const map: Record<string, string> = {
     左: 'left',
