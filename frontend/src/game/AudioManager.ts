@@ -30,6 +30,15 @@ export class AudioManager {
   // per-line voice (#144)
   private voiceSource: AudioBufferSourceNode | null = null
 
+  // 動画入力レイヤの音声ミックス (#252)。動画レイヤの HTMLVideoElement を
+  // createMediaElementSource で WebAudio グラフに取り込み、videoMasterGain 経由で
+  // destination + captureDest に流す。これにより export 録画にも自動的に音が乗る。
+  private videoMasterGain: GainNode | null = null
+  private videoVolume = 1.0
+  // createMediaElementSource は 1 要素 1 回のみの WebAudio 制約があるため、
+  // element → source の対応を保持して二重 attach をガードする。
+  private videoSources: Map<HTMLMediaElement, MediaElementAudioSourceNode> = new Map()
+
   // 動画エクスポート用キャプチャ先 (#228)。enableCapture で生成し、bgm/seMasterGain
   // をここにも繋いで MediaRecorder に流す。
   private captureDest: MediaStreamAudioDestinationNode | null = null
@@ -74,6 +83,13 @@ export class AudioManager {
       this.seMasterGain.connect(this.ctx.destination)
       if (this.captureDest) this.seMasterGain.connect(this.captureDest)
     }
+    if (!this.videoMasterGain) {
+      // 動画入力レイヤ音声用 master (#252)。BGM/SE と同じく destination + captureDest に分岐。
+      this.videoMasterGain = this.ctx.createGain()
+      this.videoMasterGain.gain.value = this.videoVolume
+      this.videoMasterGain.connect(this.ctx.destination)
+      if (this.captureDest) this.videoMasterGain.connect(this.captureDest)
+    }
   }
 
   /**
@@ -92,6 +108,8 @@ export class AudioManager {
       // 既に作成済みの master gain にも接続
       if (this.bgmMasterGain) this.bgmMasterGain.connect(this.captureDest)
       if (this.seMasterGain) this.seMasterGain.connect(this.captureDest)
+      // 動画入力レイヤ音声も録画に乗せる (#252)
+      if (this.videoMasterGain) this.videoMasterGain.connect(this.captureDest)
     }
     return this.captureDest.stream
   }
@@ -109,7 +127,68 @@ export class AudioManager {
     } catch {
       // already disconnected
     }
+    try {
+      this.videoMasterGain?.disconnect(this.captureDest)
+    } catch {
+      // already disconnected
+    }
     this.captureDest = null
+  }
+
+  /**
+   * 動画入力レイヤの HTMLVideoElement を WebAudio グラフに取り込む (#252)。
+   * createMediaElementSource → videoMasterGain（→ destination + captureDest）に接続する。
+   * 同一 element の二重 attach はガードする（createMediaElementSource は 1 要素 1 回のみ）。
+   * ミュート再生（mute=true）の動画には呼ばない想定（呼び出し側で判定）。
+   */
+  attachVideoElement(videoEl: HTMLMediaElement): void {
+    this.ensureContext()
+    if (!this.ctx) return
+    // 既に attach 済みなら何もしない（WebAudio 制約）
+    if (this.videoSources.has(videoEl)) return
+    this.ensureMasterGains()
+    let source: MediaElementAudioSourceNode
+    try {
+      source = this.ctx.createMediaElementSource(videoEl)
+    } catch (err) {
+      // 別 AudioContext で既に source 化された等の制約違反。音は出ないが進行は止めない。
+      this.lastWarning =
+        'audio: 動画音声の WebAudio 取り込みに失敗（要素が既に別経路で使用済みの可能性）'
+      console.warn('[name-name] attachVideoElement failed', err)
+      return
+    }
+    if (this.videoMasterGain) {
+      source.connect(this.videoMasterGain)
+    } else {
+      source.connect(this.ctx.destination)
+    }
+    this.videoSources.set(videoEl, source)
+  }
+
+  /**
+   * 動画入力レイヤの HTMLVideoElement を WebAudio グラフから切り離す (#252)。
+   * MediaElementAudioSourceNode を disconnect する。
+   * 注意: createMediaElementSource は 1 要素 1 回のみのため、同じ element を再び
+   * attach することはできない。動画レイヤは remove() で element ごと破棄する運用。
+   */
+  detachVideoElement(videoEl: HTMLMediaElement): void {
+    const source = this.videoSources.get(videoEl)
+    if (!source) return
+    try {
+      source.disconnect()
+    } catch {
+      // already disconnected
+    }
+    this.videoSources.delete(videoEl)
+  }
+
+  /** 動画音声マスター音量を設定する（0..1） (#252) */
+  setVideoVolume(volume: number): void {
+    const v = Math.max(0, Math.min(1, volume))
+    this.videoVolume = v
+    if (this.videoMasterGain && this.ctx) {
+      this.videoMasterGain.gain.setValueAtTime(v, this.ctx.currentTime)
+    }
   }
 
   /** BGM マスター音量を設定する（0..1） */
@@ -379,6 +458,19 @@ export class AudioManager {
     this.stopVoice()
     this.audioCache.clear()
     this.disableCapture()
+    // 動画音声 source を全切断 (#252)
+    for (const source of this.videoSources.values()) {
+      try {
+        source.disconnect()
+      } catch {
+        // already disconnected
+      }
+    }
+    this.videoSources.clear()
+    if (this.videoMasterGain) {
+      this.videoMasterGain.disconnect()
+      this.videoMasterGain = null
+    }
     if (this.bgmMasterGain) {
       this.bgmMasterGain.disconnect()
       this.bgmMasterGain = null
