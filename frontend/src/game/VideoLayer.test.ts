@@ -43,10 +43,13 @@ describe('normalizeVideoPosition', () => {
     expect(normalizeVideoPosition('Centre')).toBe('center')
   })
 
-  it('未知の値はマップ外として小文字化したものをそのまま返す', () => {
-    // 実装は未知値を center に丸めず、lowercase したものを通す。
-    // 既定(center)になるのは null/undefined/空文字のみ。
-    expect(normalizeVideoPosition('TOP')).toBe('top')
+  it('未知の値（既知 alias にないもの）は既定 center に丸める', () => {
+    // name-name の enum 慣例（未知→既定）に合わせ、未知値はすべて center に落とす。
+    expect(normalizeVideoPosition('TOP')).toBe('center')
+  })
+
+  it('前後空白を含む既知 alias も正規化する', () => {
+    expect(normalizeVideoPosition('  left  ')).toBe('left')
   })
 
   it('null は既定 center になる', () => {
