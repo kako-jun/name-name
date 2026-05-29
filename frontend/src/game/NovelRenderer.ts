@@ -772,6 +772,8 @@ export class NovelRenderer {
       console.warn('[name-name] テクスチャの解放に失敗', err)
     })
     this.textureCache.clear()
+    // canvas 由来マスクテクスチャの GPU リソースを解放する (#250)
+    this.disposeBgMask()
     this.app.destroy(true, { children: true })
     this.initialized = false
   }
@@ -1433,6 +1435,12 @@ export class NovelRenderer {
     const cleanPath = path.replace(/^\//, '')
     const url = `${this.assetBaseUrl}/images/${cleanPath}`
 
+    // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ。
+    // キャッシュヒットで同期描画する場合も必ず進めること。さもないと直前に
+    // 走っていた別背景の Assets.load().then が後から解決し、即描画した背景の上に
+    // 古い sprite+fade を addChild してしまう。
+    const token = ++this.bgLoadToken
+
     // キャッシュ済みの Texture があれば再利用（戻る操作時のフリッカー防止）
     const cached = this.textureCache.get(url)
     if (cached) {
@@ -1443,8 +1451,6 @@ export class NovelRenderer {
       return
     }
 
-    // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ
-    const token = ++this.bgLoadToken
     Assets.load(url)
       .then((texture) => {
         if (token !== this.bgLoadToken) return
@@ -1514,7 +1520,7 @@ export class NovelRenderer {
 
     // 各端のフェードを destination-in で乗算的に重ねる。
     // destination-in は「既存ピクセル alpha × 新ソース alpha」になるため、角が正しく重なる。
-    // destination-in は「既存 alpha × 新ソース alpha」。各端ごとに画面全体を
+    // 各端ごとに画面全体を
     // 「帯部分は 0→1 勾配、帯より内側は alpha1(勾配の clamp で自動的に 1)」で塗る。
     // CanvasGradient は描画範囲外を端の stop 色で clamp するため、全画面 fillRect すれば
     // 帯の内側は alpha1 のまま残り、帯部分だけ 0→1 になる。
