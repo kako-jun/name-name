@@ -3309,3 +3309,150 @@ fn test_video_exit_roundtrip() {
     let reparsed = parser::parse(&md);
     assert_eq!(reparsed.chapters[0].scenes[0].events[0], Event::VideoExit);
 }
+
+// --- #252 既存7件の不足を埋める追加ケース ---------------------------------
+
+#[test]
+fn test_video_path_is_trimmed() {
+    // 観点8: path 前後の空白は trim される
+    let event = parse_single_video("[動画:   capture.webm   ]");
+    match event {
+        Event::Video { path, .. } => assert_eq!(path, "capture.webm"),
+        other => panic!("Video を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_video_unknown_key_and_malformed_kv_are_skipped() {
+    // 観点9: 未知キー・空 kv 要素・`=` なし要素は silent skip され、既知キーだけ反映される
+    let event = parse_single_video("[動画: c.webm, なぞ=99, , 位置のみ, スケール=1.0, =値だけ]");
+    assert_eq!(
+        event,
+        Event::Video {
+            path: "c.webm".to_string(),
+            position: None,
+            scale: Some(1.0),
+            loop_: None,
+            mute: None,
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_video_bool_false_is_retained_not_dropped() {
+    // 観点10: ループ=false / ミュート=false は None ではなく Some(false) として保持される
+    let event = parse_single_video("[動画: c.webm, ループ=false, ミュート=false]");
+    assert_eq!(
+        event,
+        Event::Video {
+            path: "c.webm".to_string(),
+            position: None,
+            scale: None,
+            loop_: Some(false),
+            mute: Some(false),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_video_bool_english_false_and_case_insensitive() {
+    // 観点11: 英語 alias loop=False（大文字混在）も bool として解釈される
+    let event = parse_single_video("[動画: c.webm, loop=False, mute=TRUE]");
+    assert_eq!(
+        event,
+        Event::Video {
+            path: "c.webm".to_string(),
+            position: None,
+            scale: None,
+            loop_: Some(false),
+            mute: Some(true),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_video_scale_rejects_non_finite_and_keeps_fraction() {
+    // 観点12: scale は有限の小数を採用、Infinity/NaN は None
+    let frac = parse_single_video("[動画: c.webm, スケール=1.5]");
+    match frac {
+        Event::Video { scale, .. } => assert_eq!(scale, Some(1.5)),
+        other => panic!("Video を期待したが {other:?}"),
+    }
+    let inf = parse_single_video("[動画: c.webm, スケール=inf]");
+    match inf {
+        Event::Video { scale, .. } => assert_eq!(scale, None),
+        other => panic!("Video を期待したが {other:?}"),
+    }
+    let nan = parse_single_video("[動画: c.webm, スケール=NaN]");
+    match nan {
+        Event::Video { scale, .. } => assert_eq!(scale, None),
+        other => panic!("Video を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_video_fade_non_numeric_is_none() {
+    // 観点13: フェードに非数値（abc）を渡すと None（#250 と同じ規則。既存は =0 のみ検証）
+    let event = parse_single_video("[動画: c.webm, フェード上=abc, フェード下=-5]");
+    assert_eq!(
+        event,
+        Event::Video {
+            path: "c.webm".to_string(),
+            position: None,
+            scale: None,
+            loop_: None,
+            mute: None,
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_video_all_none_emits_path_only() {
+    // 観点14: 全フィールド None の Video は kv なしの `[動画: path]` に emit される
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 動画テスト\n\n[動画: capture.webm]\n",
+    );
+    let md = emitter::emit(&doc);
+    assert!(
+        md.contains("[動画: capture.webm]\n"),
+        "kv なしで emit されるべき:\n{md}"
+    );
+    assert!(
+        !md.contains("[動画: capture.webm,"),
+        "kv が付いてはいけない:\n{md}"
+    );
+}
+
+#[test]
+fn test_video_only_partial_fade_roundtrip() {
+    // 観点15: 一部のフェードのみ指定 → 指定したものだけ emit され、round-trip で安定する
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 動画テスト\n\n[動画: c.webm, フェード下=60]\n",
+    );
+    let md = emitter::emit(&doc);
+    assert!(
+        md.contains("[動画: c.webm, フェード下=60]\n"),
+        "フェード下だけが emit されるべき:\n{md}"
+    );
+    let reparsed = parser::parse(&md);
+    assert_eq!(
+        reparsed.chapters[0].scenes[0].events[0],
+        doc.chapters[0].scenes[0].events[0]
+    );
+}
