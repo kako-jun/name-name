@@ -160,6 +160,57 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[背景: {path}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
+            Event::Video {
+                path,
+                position,
+                scale,
+                loop_,
+                mute,
+                fade_top,
+                fade_bottom,
+                fade_left,
+                fade_right,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // #252 kv を 位置→スケール→ループ→ミュート→フェード上/下/左/右 の順、
+                // 日本語キーで正規化出力する（Some のものだけ。round-trip 安定）。
+                let mut kv = String::new();
+                if let Some(p) = position {
+                    kv.push_str(&format!(", 位置={p}"));
+                }
+                if let Some(s) = scale {
+                    kv.push_str(&format!(", スケール={s}"));
+                }
+                if let Some(l) = loop_ {
+                    kv.push_str(&format!(", ループ={l}"));
+                }
+                if let Some(m) = mute {
+                    kv.push_str(&format!(", ミュート={m}"));
+                }
+                if let Some(n) = fade_top {
+                    kv.push_str(&format!(", フェード上={n}"));
+                }
+                if let Some(n) = fade_bottom {
+                    kv.push_str(&format!(", フェード下={n}"));
+                }
+                if let Some(n) = fade_left {
+                    kv.push_str(&format!(", フェード左={n}"));
+                }
+                if let Some(n) = fade_right {
+                    kv.push_str(&format!(", フェード右={n}"));
+                }
+                out.push_str(&format!("[動画: {path}{kv}]\n"));
+                prev_was_dialog_or_text = false;
+            }
+            Event::VideoExit => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[動画退場]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::Bgm {
                 path,
                 action,

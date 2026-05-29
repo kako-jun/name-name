@@ -3167,3 +3167,145 @@ fn test_bgfade_roundtrip_none_no_regression() {
         }
     );
 }
+
+// ============================================================================
+// #252 動画入力レイヤ ([動画: ...] / [動画退場]) のパーサー / エミッターテスト
+// ============================================================================
+
+/// `[動画: ...]` 1 行だけを含む最小ドキュメントをパースし、最初の Event を取り出すヘルパ。
+fn parse_single_video(directive_line: &str) -> Event {
+    let input = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 動画テスト\n\n{directive_line}\n"
+    );
+    let doc = parser::parse(&input);
+    doc.chapters[0].scenes[0].events[0].clone()
+}
+
+#[test]
+fn test_video_full_kv() {
+    // 観点1: 全 kv 指定 → 全フィールドが反映される
+    let event = parse_single_video(
+        "[動画: capture.webm, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, フェード下=60, フェード左=10, フェード右=10]",
+    );
+    assert_eq!(
+        event,
+        Event::Video {
+            path: "capture.webm".to_string(),
+            position: Some("中央".to_string()),
+            scale: Some(1.0),
+            loop_: Some(true),
+            mute: Some(false),
+            fade_top: Some(40),
+            fade_bottom: Some(60),
+            fade_left: Some(10),
+            fade_right: Some(10),
+        }
+    );
+}
+
+#[test]
+fn test_video_path_only_is_all_none() {
+    // 観点2: path のみ → 他は全 None（既定: 中央 / cover-fit / 非ループ / ミックス）
+    let event = parse_single_video("[動画: capture.webm]");
+    assert_eq!(
+        event,
+        Event::Video {
+            path: "capture.webm".to_string(),
+            position: None,
+            scale: None,
+            loop_: None,
+            mute: None,
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_video_english_alias_equals_japanese() {
+    // 観点3: 英語 alias は日本語指定と同一 Event
+    let en = parse_single_video(
+        "[動画: c.webm, position=右, scale=2.0, loop=true, mute=true, fade_top=5, fade_bottom=6, fade_left=7, fade_right=8]",
+    );
+    let ja = parse_single_video(
+        "[動画: c.webm, 位置=右, スケール=2.0, ループ=true, ミュート=true, フェード上=5, フェード下=6, フェード左=7, フェード右=8]",
+    );
+    assert_eq!(en, ja);
+}
+
+#[test]
+fn test_video_invalid_values_are_none() {
+    // 観点4: 不正値の扱い — フェード 0/非数値は None、bool 非 true/false は None、scale 非数値は None
+    let event =
+        parse_single_video("[動画: c.webm, スケール=abc, ループ=yes, ミュート=1, フェード上=0]");
+    assert_eq!(
+        event,
+        Event::Video {
+            path: "c.webm".to_string(),
+            position: None,
+            scale: None,
+            loop_: None,
+            mute: None,
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+        }
+    );
+}
+
+#[test]
+fn test_video_exit_parsed() {
+    // 観点5: [動画退場] → VideoExit
+    let event = parse_single_video("[動画退場]");
+    assert_eq!(event, Event::VideoExit);
+}
+
+#[test]
+fn test_video_roundtrip_normalized_order() {
+    // 観点6: emit は 位置→スケール→ループ→ミュート→フェード上/下/左/右 の順、日本語キーに正規化。
+    // 英語 alias + 順序バラバラで与え、parse → emit が正規化形になることを確認する（round-trip 安定）。
+    let input = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 動画テスト\n\n{}\n",
+        "[動画: capture.webm, fade_right=10, loop=true, position=中央, fade_top=40, mute=false, scale=1.5]"
+    );
+    let doc = parser::parse(&input);
+    let md = emitter::emit(&doc);
+    assert!(
+        md.contains("[動画: capture.webm, 位置=中央, スケール=1.5, ループ=true, ミュート=false, フェード上=40, フェード右=10]"),
+        "emit 結果:\n{md}"
+    );
+    // re-parse して同一 Event に戻ることを確認
+    let reparsed = parser::parse(&md);
+    assert_eq!(
+        reparsed.chapters[0].scenes[0].events[0],
+        doc.chapters[0].scenes[0].events[0]
+    );
+    assert_eq!(
+        doc.chapters[0].scenes[0].events[0],
+        Event::Video {
+            path: "capture.webm".to_string(),
+            position: Some("中央".to_string()),
+            scale: Some(1.5),
+            loop_: Some(true),
+            mute: Some(false),
+            fade_top: Some(40),
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: Some(10),
+        }
+    );
+}
+
+#[test]
+fn test_video_exit_roundtrip() {
+    // 観点7: [動画退場] の emit / re-parse round-trip
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 動画テスト\n\n[動画退場]\n";
+    let doc = parser::parse(input);
+    let md = emitter::emit(&doc);
+    assert!(md.contains("[動画退場]"), "emit 結果:\n{md}");
+    let reparsed = parser::parse(&md);
+    assert_eq!(reparsed.chapters[0].scenes[0].events[0], Event::VideoExit);
+}

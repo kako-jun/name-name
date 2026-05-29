@@ -780,6 +780,13 @@ fn parse_directive(line: &str) -> Option<Event> {
     if let Some(rest) = content.strip_prefix("背景:") {
         return Some(parse_background_directive(rest));
     }
+    // [動画退場] — 動画レイヤをクリア (#252)。「動画:」より先に完全一致で判定する。
+    if content == "動画退場" {
+        return Some(Event::VideoExit);
+    }
+    if let Some(rest) = content.strip_prefix("動画:") {
+        return Some(parse_video_directive(rest));
+    }
     // [BGM停止] / [BGM停止: 2000] / [BGM停止: フェード=2000] (#145)
     if content == "BGM停止" {
         return Some(Event::Bgm {
@@ -997,6 +1004,80 @@ fn parse_background_directive(content: &str) -> Event {
         fade_bottom,
         fade_left,
         fade_right,
+    }
+}
+
+/// `[動画: path]` / `[動画: path, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, ...]`
+/// の本体を分解する (#252)。`parse_background_directive` と同じく最初の `,` で path / kv を分離する。
+/// キーは日本語（`位置` / `スケール` / `ループ` / `ミュート` / `フェード上/下/左/右`）と
+/// 英語 alias（`position` / `scale` / `loop` / `mute` / `fade_top/bottom/left/right`）の両対応。
+/// フェードは 0 / 非数値を None 扱い。bool は `true` / `false`、f32 は parse 失敗で None。
+/// 未知のキーは silent skip する（後方互換重視）。
+fn parse_video_directive(content: &str) -> Event {
+    let (path_part, kv_part) = match content.split_once(',') {
+        Some((p, rest)) => (p, Some(rest)),
+        None => (content, None),
+    };
+    let path = path_part.trim().to_string();
+
+    let mut position: Option<String> = None;
+    let mut scale: Option<f32> = None;
+    let mut loop_: Option<bool> = None;
+    let mut mute: Option<bool> = None;
+    let mut fade_top: Option<u32> = None;
+    let mut fade_bottom: Option<u32> = None;
+    let mut fade_left: Option<u32> = None;
+    let mut fade_right: Option<u32> = None;
+
+    if let Some(kv) = kv_part {
+        for raw in kv.split(',') {
+            let pair = raw.trim();
+            if pair.is_empty() {
+                continue;
+            }
+            if let Some((k, v)) = pair.split_once('=') {
+                let key = k.trim();
+                let value = v.trim();
+                // フェードは parse 成功かつ非ゼロのときだけ採用（0/不正は None）。
+                let px = value.parse::<u32>().ok().filter(|&n| n > 0);
+                match key {
+                    "位置" | "position" if !value.is_empty() => {
+                        position = Some(value.to_string());
+                    }
+                    "スケール" | "scale" => {
+                        scale = value.parse::<f32>().ok().filter(|n| n.is_finite());
+                    }
+                    "ループ" | "loop" => loop_ = parse_bool_kv(value),
+                    "ミュート" | "mute" => mute = parse_bool_kv(value),
+                    "フェード上" | "fade_top" => fade_top = px,
+                    "フェード下" | "fade_bottom" => fade_bottom = px,
+                    "フェード左" | "fade_left" => fade_left = px,
+                    "フェード右" | "fade_right" => fade_right = px,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Event::Video {
+        path,
+        position,
+        scale,
+        loop_,
+        mute,
+        fade_top,
+        fade_bottom,
+        fade_left,
+        fade_right,
+    }
+}
+
+/// `true` / `false`（大文字小文字無視）を bool に解釈する (#252)。それ以外は None。
+fn parse_bool_kv(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
     }
 }
 
