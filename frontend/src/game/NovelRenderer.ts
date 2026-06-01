@@ -1789,6 +1789,9 @@ export class NovelRenderer {
     // 選択肢/待機状態をリセット
     this.waitingForChoice = false
     this.waitingForWait = false
+    // 直前の choice 確定による同フレーム advance 抑制フラグも消す
+    // （任意状態への完全リセットなので残留させない）
+    this.justSelectedChoice = false
     if (this.waitTimer) {
       this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
