@@ -10,7 +10,7 @@
 ADR 0002 で設計済みだが public API が未提供。内部 `applyState` は達成済みなので、**設計価値を外に出す**段階。
 
 - [x] **`playScript(steps)` API**（Issue #220 Phase 1）— クリック操作列を配列で受けて決定論的に状態を進める。再入ガード + 再生中 msPerChar=0 / 完了・例外時に復元。vitest 17 ケース。2026-06-01 実装（`NovelRenderer.playScript`、`Step` 型は `GameState.ts`）
-- [ ] **`startFrom(sceneId, flags)` API**（Issue #220 Phase 2）— 任意状態から起動。長いシーンの後半から開発を始められる
+- [x] **`startFrom(sceneId, flags)` API**（Issue #220 Phase 2）— 任意シーン+フラグ状態から起動。history リセット、flags 置換、不正 sceneId は完全 no-op。vitest 25 ケース。2026-06-01 実装（`NovelRenderer.startFrom`、`StartFromOptions` は `GameState.ts`）
 - [ ] **URL クエリでデバッグ起点指定**（Issue #220 Phase 3、`import.meta.env.DEV` 限定）— `?debug_scene=…&debug_flags=…&debug_script=…`
 
 **完了の機械的検証点**: 「コード1行 / URL 1本で特定局面を再現できる」。これが満たされれば規律3（任意局面起動）が public に達成される。
