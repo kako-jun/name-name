@@ -98,10 +98,12 @@ function parseFlags(value: string): Record<string, FlagValue> {
 export function parseDebugQuery(search: string): DebugQueryResult {
   const params = new URLSearchParams(search)
 
-  // debug_script を優先
+  // debug_script を優先。ただし空・全トークン無効で Step が0件なら
+  // debug_scene へフォールスルーする（空 script が有効な scene を握りつぶさないため）
   const scriptParam = params.get('debug_script')
   if (scriptParam !== null) {
-    return { script: parseScript(scriptParam) }
+    const script = parseScript(scriptParam)
+    if (script.length > 0) return { script }
   }
 
   const sceneId = params.get('debug_scene')

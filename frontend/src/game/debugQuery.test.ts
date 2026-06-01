@@ -133,7 +133,7 @@ describe('parseDebugQuery (#220)', () => {
 
   it('17: NaN な index はキーを付けない', () => {
     const r = parseDebugQuery('?debug_scene=1-2&debug_eventIndex=abc&debug_textIndex=xyz')
-    const scene = (r as { scene: Record<string, unknown> }).scene
+    const scene = (r as unknown as { scene: Record<string, unknown> }).scene
     expect(scene).toEqual({ sceneId: '1-2' })
     expect('eventIndex' in scene).toBe(false)
     expect('textIndex' in scene).toBe(false)
@@ -154,5 +154,16 @@ describe('parseDebugQuery (#220)', () => {
     const withQ = parseDebugQuery('?debug_scene=1-2&debug_flags=k:true')
     const withoutQ = parseDebugQuery('debug_scene=1-2&debug_flags=k:true')
     expect(withoutQ).toEqual(withQ)
+  })
+
+  it('21: 空/全無効 debug_script は scene へフォールスルー（空 script が scene を握りつぶさない）', () => {
+    // 空 script のみ → null
+    expect(parseDebugQuery('?debug_script=')).toBeNull()
+    // 空 script + 有効 scene → scene が返る（script が空配列で握りつぶさない）
+    expect(parseDebugQuery('?debug_script=&debug_scene=1-2')).toEqual({ scene: { sceneId: '1-2' } })
+    // 全トークン無効な script + 有効 scene → scene が返る
+    expect(parseDebugQuery('?debug_script=foo,bar&debug_scene=1-2')).toEqual({
+      scene: { sceneId: '1-2' },
+    })
   })
 })
