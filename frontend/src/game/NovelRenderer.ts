@@ -25,7 +25,14 @@ import { CharacterLayer } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 import { AudioManager } from './AudioManager'
-import { BackgroundFade, GameState, NovelGameState, Step, resolveEvents } from './GameState'
+import {
+  BackgroundFade,
+  GameState,
+  NovelGameState,
+  StartFromOptions,
+  Step,
+  resolveEvents,
+} from './GameState'
 import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { VideoLayer } from './VideoLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
@@ -75,8 +82,8 @@ export function getTextEvent(event: Event):
  */
 export const normalizeBackgroundFade = normalizeEdgeFade
 
-// playScript で使う Step 型を NovelRenderer 経由でも import できるよう再エクスポートする (#220)
-export type { Step } from './GameState'
+// playScript / startFrom で使う型を NovelRenderer 経由でも import できるよう再エクスポートする (#220)
+export type { Step, StartFromOptions } from './GameState'
 
 export class NovelRenderer {
   private app: Application
@@ -1746,6 +1753,72 @@ export class NovelRenderer {
     this.applyState(state)
 
     // 履歴をリセット（ロード後は現在位置のみ）
+    this.history = [this.getSnapshot()]
+
+    this.render()
+  }
+
+  /**
+   * sceneId と flags を直接指定して任意の状態からシーンを開始する (#220 Phase 2)。
+   *
+   * デバッグ/テスト用。history をリセットする（呼び出し後は現在位置のみ）。
+   * 指定フラグは置換であり merge ではない（省略時は空でクリア）。
+   * 復元は applyState に委譲し、新規の描画/状態ロジックは持たない。
+   *
+   * - 存在しない sceneId は完全な no-op（flags も含め一切状態を変えない）。
+   * - eventIndex/textIndex は範囲チェックしない（呼び出し側責任。範囲外でもクラッシュ
+   *   はしないが未定義位置になる）。
+   * - playScript 実行中の呼び出しは想定外（デバッグ API 同士の同時使用は非対応）。
+   */
+  startFrom(opts: StartFromOptions): void {
+    const flags = opts.flags ?? {}
+
+    // シーンを探す。無ければ完全な no-op（この時点で flags/index/history を一切触らない）
+    const scene = this.allScenes.find((s) => s.id === opts.sceneId)
+    if (!scene) {
+      console.warn(`[name-name] startFrom: シーンが見つからない: ${opts.sceneId}`)
+      return
+    }
+
+    // フラグを設定（置換セマンティクス。loadFromSaveData と同じ）。
+    // resolveEvents が flags に依存するため、必ず resolveEvents より前に設定する。
+    this.gameState.fromJSON(flags)
+
+    this.currentSceneId = opts.sceneId
+
+    // 選択肢/待機状態をリセット
+    this.waitingForChoice = false
+    this.waitingForWait = false
+    // 直前の choice 確定による同フレーム advance 抑制フラグも消す
+    // （任意状態への完全リセットなので残留させない）
+    this.justSelectedChoice = false
+    if (this.waitTimer) {
+      this.time.clearTimeout(this.waitTimer)
+      this.waitTimer = null
+    }
+    this.choiceOverlay.hide()
+
+    // 元イベントを保持し、Condition をフラグに基づいて展開
+    this.rawEvents = [...scene.events]
+    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
+    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+
+    // 最小 NovelGameState を構築して applyState で宣言的に復元
+    const state: NovelGameState = {
+      sceneId: opts.sceneId,
+      eventIndex: opts.eventIndex ?? 0,
+      textIndex: opts.textIndex ?? 0,
+      flags,
+      backgroundPath: null,
+      backgroundFade: normalizeBackgroundFade(undefined),
+      video: null,
+      isBlackout: false,
+      characters: [],
+      currentBgmPath: null,
+    }
+    this.applyState(state)
+
+    // 履歴をリセット（デバッグ開始後は現在位置のみ）
     this.history = [this.getSnapshot()]
 
     this.render()

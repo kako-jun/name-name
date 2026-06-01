@@ -79,6 +79,24 @@ export type Step =
   | { type: 'wait'; ms: number }
 
 /**
+ * startFrom() の引数 (#220 Phase 2)。
+ *
+ * sceneId と flags を直接指定して任意の状態からシーンを開始する。
+ * デバッグ/テスト用。これは開始指示であってゲーム状態そのものではないため、
+ * NovelGameState とは別に定義する。
+ */
+export interface StartFromOptions {
+  /** 開始するシーン ID */
+  sceneId: string
+  /** 設定するフラグ（置換セマンティクス。省略時は空でクリア） */
+  flags?: Record<string, FlagValue>
+  /** 開始イベントインデックス（省略時 = 0） */
+  eventIndex?: number
+  /** 開始テキストインデックス（省略時 = 0） */
+  textIndex?: number
+}
+
+/**
  * Condition イベントをフラグに基づいて展開し、フラットなイベント配列を返す。
  *
  * - Condition が真 → 内部 events を再帰的に展開して挿入（Condition 自体は除去）

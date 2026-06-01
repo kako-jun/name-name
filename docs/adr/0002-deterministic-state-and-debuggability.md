@@ -88,10 +88,11 @@ await renderer.playScript(steps: Step[]): Promise<void>
 - バグ再現スクリプトをコードで記述・共有する
 - vitest テストで特定シーンの状態を assert する
 
-### 3. `startFrom(state)` API を提供する（#220 Phase 2）
+### 3. `startFrom(state)` API を提供する（#220 Phase 2）✅ 実装済み（2026-06-01）
 
 sceneId と flags を直接指定して任意の状態から開始する API。
 history はリセットされる（デバッグ用）。
+実装: `NovelRenderer.startFrom`、`StartFromOptions` 型は `GameState.ts`。`loadFromSaveData` を手本に `applyState` を再利用。flags は置換セマンティクス、不正 sceneId は完全 no-op（検証を flags 適用より先に行う）、eventIndex/textIndex は範囲チェックなし（呼び出し側責任）。vitest 25 ケース。
 
 ```typescript
 renderer.startFrom({
