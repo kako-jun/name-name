@@ -23,7 +23,7 @@
 ### 3. GameState 完全シリアライズ + 任意局面起動 ⚠️ 内部は達成・public API が未提供
 - `NovelGameState` は JSON 化可能なプレーンオブジェクト。演出の中間状態（フェード途中・タイプライター途中）は持たない（ADR 0002）
 - `applyState(state)` で任意状態に復元できる（現状 private、`NovelRenderer.ts`）
-- **public API 化の進捗**: `playScript(steps)`（#220 Phase 1）+ `startFrom({sceneId, flags?})`（#220 Phase 2）実装済み — 操作列リプレイ / 任意状態起動。残ギャップ: URL クエリ起点指定（Phase 3）。`docs/roadmap/` 参照
+- **public API 化: ✅ #220 全 Phase 完了** — `playScript(steps)`（Phase 1）/ `startFrom({sceneId, flags?})`（Phase 2）/ URL クエリ起点指定 `?debug_scene=…&debug_script=…`（Phase 3、`debugQuery.ts`、DEV 限定）。操作列リプレイ・任意状態起動・URL 共有が揃い、決定論的デバッグが public に到達
 - **新規レンダラ/モードを作るときの完了条件**: 「任意の state から `applyState` 相当で起動できる」ことを満たす。これは設計品質の**機械的な検証点**（状態と描画が分離できている証明）
 
 ### 4. 単一責務／網状依存の禁止 ⚠️ god-object 傾向あり

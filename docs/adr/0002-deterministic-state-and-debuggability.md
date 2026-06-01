@@ -107,7 +107,7 @@ renderer.startFrom({
 - 特定フラグ組み合わせの分岐を直接開く
 - 長いシーンの後半から開発を始める
 
-### 4. URL クエリによるデバッグ起点指定（#220 Phase 3、開発環境限定）
+### 4. URL クエリによるデバッグ起点指定（#220 Phase 3、開発環境限定）✅ 実装済み（2026-06-01）
 
 ```
 ?debug_scene=1-2&debug_flags=saw_characters:true
@@ -115,6 +115,7 @@ renderer.startFrom({
 ```
 
 `import.meta.env.DEV` の場合のみ有効。本番では無視する。
+実装: 純粋パーサ `frontend/src/game/debugQuery.ts` の `parseDebugQuery(search)` が `{script}` / `{scene}` / `null` を返し、`NovelPlayer.tsx` が `setScenes` 後に DEV ガード付きで `playScript`/`startFrom` を呼ぶ。`debug_script` 優先。vitest 20 ケース。**これで #220 の全 Phase（1 playScript / 2 startFrom / 3 URL クエリ）が完了。**
 
 ## Consequences（影響）
 
