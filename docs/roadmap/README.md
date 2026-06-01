@@ -30,7 +30,7 @@ ADR 0002 で設計済みだが public API が未提供。内部 `applyState` は
 name-name は基盤。下流（ogurasia / friday-1930 / skirts-colour / gymnasia 等）が動くことが価値。
 
 - [ ] 下流ごとの parser スモークテスト fixture を追加（friday-1930 は導入済み、`parser/tests/fixtures/`）
-- [ ] 各下流ゲームにも `/game-doctrine <project> init` を適用して docs を整える
+- [ ] 各下流ゲームにも `/dev-doctrine <project> init` を適用して docs を整える
 
 ---
 
