@@ -1764,19 +1764,25 @@ export class NovelRenderer {
    * デバッグ/テスト用。history をリセットする（呼び出し後は現在位置のみ）。
    * 指定フラグは置換であり merge ではない（省略時は空でクリア）。
    * 復元は applyState に委譲し、新規の描画/状態ロジックは持たない。
+   *
+   * - 存在しない sceneId は完全な no-op（flags も含め一切状態を変えない）。
+   * - eventIndex/textIndex は範囲チェックしない（呼び出し側責任。範囲外でもクラッシュ
+   *   はしないが未定義位置になる）。
+   * - playScript 実行中の呼び出しは想定外（デバッグ API 同士の同時使用は非対応）。
    */
   startFrom(opts: StartFromOptions): void {
     const flags = opts.flags ?? {}
 
-    // フラグを設定（置換セマンティクス。loadFromSaveData と同じ）
-    this.gameState.fromJSON(flags)
-
-    // シーンを探す
+    // シーンを探す。無ければ完全な no-op（この時点で flags/index/history を一切触らない）
     const scene = this.allScenes.find((s) => s.id === opts.sceneId)
     if (!scene) {
       console.warn(`[name-name] startFrom: シーンが見つからない: ${opts.sceneId}`)
       return
     }
+
+    // フラグを設定（置換セマンティクス。loadFromSaveData と同じ）。
+    // resolveEvents が flags に依存するため、必ず resolveEvents より前に設定する。
+    this.gameState.fromJSON(flags)
 
     this.currentSceneId = opts.sceneId
 
