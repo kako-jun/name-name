@@ -997,6 +997,8 @@ export class NovelRenderer {
    *
    * choice の jump 先が存在しない場合は jumpToScene の既存挙動に従い console.warn して
    * no-op となる（例外は投げない）。
+   * 既知の制限: 不正な jump を指定した choice ステップでは、表示中の Choice オーバーレイが
+   * 残る場合がある（デバッグ用途のため許容）。
    *
    * 同時実行は非対応。実行中（wait 待機中など）の再呼び出しは throw する。
    */
@@ -1016,11 +1018,13 @@ export class NovelRenderer {
             // justSelectedChoice は同フレーム advance 抑制用だが、playScript は
             // 同期的に進むため即リセットしてよい。
             this.justSelectedChoice = false
+            // jump 成功時は resetAndStartEvents が false にするが、jump 失敗（存在しない
+            // シーン）時は resetAndStartEvents が呼ばれないため、ここで明示的にリセットする。
             this.waitingForChoice = false
             this.jumpToScene(step.jump)
             break
           case 'wait':
-            await new Promise((resolve) => setTimeout(resolve, step.ms))
+            await new Promise<void>((resolve) => this.time.setTimeout(resolve, step.ms))
             break
         }
       }
