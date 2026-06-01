@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
+import { parseDebugQuery } from '../game/debugQuery'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import { type AspectRatio, ASPECT_RATIOS, parseAspectRatio } from '../game/constants'
 import SettingsOverlay from './SettingsOverlay'
@@ -100,6 +101,17 @@ function NovelPlayer({
       renderer.applySettings(settings)
       if (scenes && scenes.length > 0) {
         renderer.setScenes(scenes)
+        // URL クエリによるデバッグ起点指定 (#220 Phase 3)。
+        // DEV ビルドでのみ有効。production ではこのブロックごと tree-shake される。
+        // debug_scene は sceneId 前提のため scenes 経路（setScenes）でのみ配線する。
+        if (import.meta.env.DEV) {
+          const debug = parseDebugQuery(window.location.search)
+          if (debug && 'script' in debug) {
+            void renderer.playScript(debug.script)
+          } else if (debug && 'scene' in debug) {
+            renderer.startFrom(debug.scene)
+          }
+        }
       } else {
         renderer.setEvents(events)
       }
