@@ -546,6 +546,11 @@ export class DialogBox extends Container {
     }
   }
 
+  /** 現在のタイプライター速度（ms/文字）。playScript の保存/復元用 (#220)。 */
+  getMsPerChar(): number {
+    return this.msPerChar
+  }
+
   setBorderless(borderless: boolean): void {
     if (this.borderless === borderless) return
     this.borderless = borderless

@@ -25,7 +25,7 @@ import { CharacterLayer } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 import { AudioManager } from './AudioManager'
-import { BackgroundFade, GameState, NovelGameState, resolveEvents } from './GameState'
+import { BackgroundFade, GameState, NovelGameState, Step, resolveEvents } from './GameState'
 import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { VideoLayer } from './VideoLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
@@ -74,6 +74,9 @@ export function getTextEvent(event: Event):
  * 既存の import 経路（`NovelRenderer` から）と既存テストを壊さないため、ここに再エクスポートを残す。
  */
 export const normalizeBackgroundFade = normalizeEdgeFade
+
+// playScript で使う Step 型を NovelRenderer 経由でも import できるよう再エクスポートする (#220)
+export type { Step } from './GameState'
 
 export class NovelRenderer {
   private app: Application
@@ -138,6 +141,9 @@ export class NovelRenderer {
 
   /** Wait イベント実行中フラグ */
   private waitingForWait = false
+
+  /** playScript 実行中フラグ（再入ガード用 #220） */
+  private isReplaying = false
 
   /** Wait タイマー（destroy 時キャンセル用）。TimeController 経由なので number */
   private waitTimer: number | null = null
@@ -974,6 +980,58 @@ export class NovelRenderer {
     this.pushSnapshot()
 
     this.render()
+  }
+
+  /**
+   * デバッグ用リプレイ API (#220 Phase 1)。
+   *
+   * シーン+操作列（Step[]）を順に適用して任意の状態を再現する。
+   * - `advance`: クリック相当。`this.advance()` を呼ぶ
+   * - `choice`: 選択肢の確定パスと同等にフラグを整合させてから直接 `jumpToScene(jump)` する
+   *   （Choice オーバーレイの表示はスキップする）
+   * - `wait`: ms ミリ秒だけ待つ（将来の非同期イベント用）
+   *
+   * デバッグ/テスト用のリプレイ API。再生中は msPerChar=0（タイプライター即スキップ）とし、
+   * 完了時・例外時とも元の msPerChar に必ず復元する（try/finally）。
+   * 完了は Promise で通知し、その後は通常操作に戻る。
+   *
+   * choice の jump 先が存在しない場合は jumpToScene の既存挙動に従い console.warn して
+   * no-op となる（例外は投げない）。
+   * 既知の制限: 不正な jump を指定した choice ステップでは、表示中の Choice オーバーレイが
+   * 残る場合がある（デバッグ用途のため許容）。
+   *
+   * 同時実行は非対応。実行中（wait 待機中など）の再呼び出しは throw する。
+   */
+  async playScript(steps: Step[]): Promise<void> {
+    if (this.isReplaying) throw new Error('playScript is already running')
+    this.isReplaying = true
+    const savedMsPerChar = this.dialogBox.getMsPerChar()
+    this.dialogBox.setMsPerChar(0)
+    try {
+      for (const step of steps) {
+        switch (step.type) {
+          case 'advance':
+            this.advance()
+            break
+          case 'choice':
+            // 選択肢確定パス（ChoiceOverlay のコールバック）と同じフラグ整合を保つ。
+            // justSelectedChoice は同フレーム advance 抑制用だが、playScript は
+            // 同期的に進むため即リセットしてよい。
+            this.justSelectedChoice = false
+            // jump 成功時は resetAndStartEvents が false にするが、jump 失敗（存在しない
+            // シーン）時は resetAndStartEvents が呼ばれないため、ここで明示的にリセットする。
+            this.waitingForChoice = false
+            this.jumpToScene(step.jump)
+            break
+          case 'wait':
+            await new Promise<void>((resolve) => this.time.setTimeout(resolve, step.ms))
+            break
+        }
+      }
+    } finally {
+      this.dialogBox.setMsPerChar(savedMsPerChar)
+      this.isReplaying = false
+    }
   }
 
   /**
