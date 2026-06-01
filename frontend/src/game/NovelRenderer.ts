@@ -142,6 +142,9 @@ export class NovelRenderer {
   /** Wait イベント実行中フラグ */
   private waitingForWait = false
 
+  /** playScript 実行中フラグ（再入ガード用 #220） */
+  private isReplaying = false
+
   /** Wait タイマー（destroy 時キャンセル用）。TimeController 経由なので number */
   private waitTimer: number | null = null
   /** タイマー抽象化レイヤー (#228 動画エクスポート対応の土台) */
@@ -988,11 +991,18 @@ export class NovelRenderer {
    *   （Choice オーバーレイの表示はスキップする）
    * - `wait`: ms ミリ秒だけ待つ（将来の非同期イベント用）
    *
-   * 再生中はタイプライターを即スキップ（msPerChar=0）し、完了時・例外時とも
-   * 元の msPerChar に必ず復元する（try/finally）。
+   * デバッグ/テスト用のリプレイ API。再生中は msPerChar=0（タイプライター即スキップ）とし、
+   * 完了時・例外時とも元の msPerChar に必ず復元する（try/finally）。
    * 完了は Promise で通知し、その後は通常操作に戻る。
+   *
+   * choice の jump 先が存在しない場合は jumpToScene の既存挙動に従い console.warn して
+   * no-op となる（例外は投げない）。
+   *
+   * 同時実行は非対応。実行中（wait 待機中など）の再呼び出しは throw する。
    */
   async playScript(steps: Step[]): Promise<void> {
+    if (this.isReplaying) throw new Error('playScript is already running')
+    this.isReplaying = true
     const savedMsPerChar = this.dialogBox.getMsPerChar()
     this.dialogBox.setMsPerChar(0)
     try {
@@ -1016,6 +1026,7 @@ export class NovelRenderer {
       }
     } finally {
       this.dialogBox.setMsPerChar(savedMsPerChar)
+      this.isReplaying = false
     }
   }
 
