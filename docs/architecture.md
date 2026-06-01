@@ -178,6 +178,7 @@ interface NovelGameState {
 | `getSnapshot()` | 現在の状態をスナップショットとして取得 |
 | `seekTo(historyIndex)` | 履歴の指定位置にジャンプ |
 | `applyState(state)` | スナップショットから画面を復元 |
+| `playScript(steps)` | 操作列（`advance`/`choice`/`wait`）を決定論的にリプレイ（#220 Phase 1、デバッグ/テスト用。再生中 msPerChar=0、完了・例外時に復元、再入は throw） |
 
 ## レンダリングパイプライン
 
