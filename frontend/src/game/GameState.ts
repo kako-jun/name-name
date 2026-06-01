@@ -64,6 +64,21 @@ export interface NovelGameState {
 }
 
 /**
+ * デバッグ用リプレイの 1 操作 (#220 Phase 1)。
+ *
+ * シーン再生中のユーザー操作を宣言的に表す。NovelRenderer.playScript() に
+ * 配列で渡すと、各 Step を順に適用して任意の状態を再現できる。
+ * これは演出の再生指示であってゲーム状態ではないため、NovelGameState には含めない。
+ */
+export type Step =
+  /** クリック相当。次のテキスト / 次のイベントへ進む */
+  | { type: 'advance' }
+  /** 選択肢を選ぶ。Choice 表示をスキップして直接 jump 先のシーンへ遷移する */
+  | { type: 'choice'; jump: string }
+  /** 非同期イベント待機（将来用）。ms ミリ秒だけ待つ */
+  | { type: 'wait'; ms: number }
+
+/**
  * Condition イベントをフラグに基づいて展開し、フラットなイベント配列を返す。
  *
  * - Condition が真 → 内部 events を再帰的に展開して挿入（Condition 自体は除去）
