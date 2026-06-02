@@ -1705,26 +1705,32 @@ export class NovelRenderer {
   }
 
   /**
-   * セーブデータからゲーム状態を復元する（applyState ベースの宣言的復元）
+   * 指定シーン + 完成済み NovelGameState へ宣言的に復元する共通コア (#256)。
+   *
+   * loadFromSaveData / startFrom の均質な骨格を集約する:
+   * 「フラグ設定 → 選択肢/待機リセット → resolveEvents → applyState → history リセット → render」。
+   *
+   * 呼び出し側の責務:
+   * - シーン探索と「見つからない場合の挙動」（no-op か警告か）は呼び出し側が決める。
+   * - 復元先の状態（背景/動画/立ち絵/BGM 等）を含む完全な NovelGameState を構築して渡す。
+   *   state.flags は this.gameState へ反映され、resolveEvents の判定にも使われる。
+   *
+   * @param scene 復元先シーン（events を rawEvents として保持する）
+   * @param state applyState に渡す完成済みの状態スナップショット
    */
-  private loadFromSaveData(data: SaveSlotData): void {
-    // フラグを復元
-    this.gameState.fromJSON(data.flags)
+  private restoreToScene(scene: EventScene, state: NovelGameState): void {
+    // フラグを設定（置換セマンティクス）。
+    // resolveEvents が flags に依存するため、必ず resolveEvents より前に設定する。
+    this.gameState.fromJSON(state.flags)
 
-    if (!data.sceneId) return
+    this.currentSceneId = state.sceneId
 
-    // シーンを探す
-    const scene = this.allScenes.find((s) => s.id === data.sceneId)
-    if (!scene) {
-      console.warn(`[name-name] セーブデータのシーンが見つからない: ${data.sceneId}`)
-      return
-    }
-
-    this.currentSceneId = data.sceneId
-
-    // 選択肢状態をリセット
+    // 選択肢/待機状態をリセット
     this.waitingForChoice = false
     this.waitingForWait = false
+    // 直前の choice 確定による同フレーム advance 抑制フラグも消す
+    // （完全リセットなので残留させない）
+    this.justSelectedChoice = false
     if (this.waitTimer) {
       this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
@@ -1736,7 +1742,35 @@ export class NovelRenderer {
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
 
-    // NovelGameState を構築して applyState で宣言的に復元
+    // 完成済み NovelGameState を applyState で宣言的に復元
+    this.applyState(state)
+
+    // 履歴をリセット（復元後は現在位置のみ）
+    this.history = [this.getSnapshot()]
+
+    this.render()
+  }
+
+  /**
+   * セーブデータからゲーム状態を復元する（applyState ベースの宣言的復元）
+   */
+  private loadFromSaveData(data: SaveSlotData): void {
+    if (!data.sceneId) {
+      // sceneId が無い空セーブはフラグだけ復元して終了（restoreToScene を通さない）
+      this.gameState.fromJSON(data.flags)
+      return
+    }
+
+    // シーンを探す
+    const scene = this.allScenes.find((s) => s.id === data.sceneId)
+    if (!scene) {
+      // シーンが無い場合はフラグだけ復元（従来挙動を維持）
+      this.gameState.fromJSON(data.flags)
+      console.warn(`[name-name] セーブデータのシーンが見つからない: ${data.sceneId}`)
+      return
+    }
+
+    // SaveSlotData から背景/動画/立ち絵/BGM まで含む完全な状態を構築
     const state: NovelGameState = {
       sceneId: data.sceneId,
       eventIndex: data.eventIndex,
@@ -1750,12 +1784,7 @@ export class NovelRenderer {
       characters: data.characters ?? [],
       currentBgmPath: data.currentBgmPath ?? null,
     }
-    this.applyState(state)
-
-    // 履歴をリセット（ロード後は現在位置のみ）
-    this.history = [this.getSnapshot()]
-
-    this.render()
+    this.restoreToScene(scene, state)
   }
 
   /**
@@ -1773,37 +1802,15 @@ export class NovelRenderer {
   startFrom(opts: StartFromOptions): void {
     const flags = opts.flags ?? {}
 
-    // シーンを探す。無ければ完全な no-op（この時点で flags/index/history を一切触らない）
+    // シーンを探す。無ければ完全な no-op（この時点で flags/index/history を一切触らない）。
+    // loadFromSaveData と違い、見つからない場合はフラグも復元しない（最小状態への厳格な no-op）。
     const scene = this.allScenes.find((s) => s.id === opts.sceneId)
     if (!scene) {
       console.warn(`[name-name] startFrom: シーンが見つからない: ${opts.sceneId}`)
       return
     }
 
-    // フラグを設定（置換セマンティクス。loadFromSaveData と同じ）。
-    // resolveEvents が flags に依存するため、必ず resolveEvents より前に設定する。
-    this.gameState.fromJSON(flags)
-
-    this.currentSceneId = opts.sceneId
-
-    // 選択肢/待機状態をリセット
-    this.waitingForChoice = false
-    this.waitingForWait = false
-    // 直前の choice 確定による同フレーム advance 抑制フラグも消す
-    // （任意状態への完全リセットなので残留させない）
-    this.justSelectedChoice = false
-    if (this.waitTimer) {
-      this.time.clearTimeout(this.waitTimer)
-      this.waitTimer = null
-    }
-    this.choiceOverlay.hide()
-
-    // 元イベントを保持し、Condition をフラグに基づいて展開
-    this.rawEvents = [...scene.events]
-    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
-
-    // 最小 NovelGameState を構築して applyState で宣言的に復元
+    // 最小 NovelGameState を構築して共通コアで復元
     const state: NovelGameState = {
       sceneId: opts.sceneId,
       eventIndex: opts.eventIndex ?? 0,
@@ -1816,12 +1823,7 @@ export class NovelRenderer {
       characters: [],
       currentBgmPath: null,
     }
-    this.applyState(state)
-
-    // 履歴をリセット（デバッグ開始後は現在位置のみ）
-    this.history = [this.getSnapshot()]
-
-    this.render()
+    this.restoreToScene(scene, state)
   }
 
   /**
