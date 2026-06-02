@@ -1118,7 +1118,9 @@ export class NovelRenderer {
       this.effectOverlay.visible = false
     }
 
-    // フラグ復元
+    // フラグ復元。goBack/seekTo は applyState を単独で呼ぶため、ここでの復元は必須。
+    // restoreToScene 経由では resolveEvents 用に先んじて同じ復元が行われるが、
+    // 冪等な fromJSON なので二重適用に副作用はない（詳細は restoreToScene のコメント #256）。
     this.gameState.fromJSON(state.flags)
 
     // インデックス復元
@@ -1721,6 +1723,14 @@ export class NovelRenderer {
   private restoreToScene(scene: EventScene, state: NovelGameState): void {
     // フラグを設定（置換セマンティクス）。
     // resolveEvents が flags に依存するため、必ず resolveEvents より前に設定する。
+    //
+    // 注意 (#256): この fromJSON は後段の applyState 内でも同じ state.flags で
+    // 再度呼ばれる（goBack/seekTo は applyState を単独で叩くため applyState 側の
+    // フラグ復元も必須）。二重適用に見えるが両者は別目的:
+    //   - ここ: resolveEvents（下の展開）より前に flags を確定させるため
+    //   - applyState 内: applyState を直接呼ぶ経路のフラグ復元のため
+    // 同一値の冪等な fromJSON なので副作用はない。どちらか一方を消すと
+    // resolveEvents の展開か直接 applyState 経路のどちらかが壊れるため残す。
     this.gameState.fromJSON(state.flags)
 
     this.currentSceneId = state.sceneId

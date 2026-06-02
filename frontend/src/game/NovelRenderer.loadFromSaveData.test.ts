@@ -52,6 +52,7 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
 /** loadFromSaveData 検証用の内部アクセサ（startFrom.test.ts と同じ） */
 interface RendererInternals {
   history: unknown[]
+  justSelectedChoice: boolean
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -293,6 +294,27 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     r.quickLoad()
     expect(internals(r).history.length).toBe(1)
     expect(internals(r).history[0]).toEqual(r.getSnapshot())
+  })
+
+  // ===== E2. choice 抑制フラグのリセット（startFrom と挙動を揃える #256） =====
+
+  it('28: 正常ロードで justSelectedChoice=false にリセットされる（restoreToScene 共通リセット）', () => {
+    const r = makeRenderer(SCENES)
+    // ロード前に「choice 直後」状態を人為的に立てておく
+    internals(r).justSelectedChoice = true
+    seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1 }))
+    r.quickLoad()
+    // restoreToScene が完全リセットの一環として false に倒す（startFrom と同じ挙動）
+    expect(internals(r).justSelectedChoice).toBe(false)
+  })
+
+  it('29: sceneId="" の空セーブは restoreToScene を通さないため justSelectedChoice を触らない', () => {
+    const r = makeRenderer(SCENES)
+    internals(r).justSelectedChoice = true
+    seedQuickSave(craftSave({ sceneId: '', flags: { f: boolFlag(true) } }))
+    r.quickLoad()
+    // 空セーブは早期 return（restoreToScene 未通過）なので据え置き
+    expect(internals(r).justSelectedChoice).toBe(true)
   })
 
   // ===== F. Condition 展開（flags がロード時点で resolveEvents に効く） =====
