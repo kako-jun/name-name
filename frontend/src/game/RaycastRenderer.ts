@@ -24,12 +24,11 @@ import {
   computeFloorStepWallYRange,
   computeWallYRange,
   consumeTurnAnim,
-  detectFloorStep,
+  marchRay,
   projectNpcToScreen,
   resolveCeilingHeight,
   resolveFloorHeight,
   sampleFloorTileColor,
-  type StepRecord,
 } from './raycastProjection'
 import {
   clearDemoWallCache,
@@ -1350,6 +1349,13 @@ export class RaycastRenderer {
     // （NPC mask 側で min(segEndY, wallTopY) と使うので、wallTopY=h なら制約がかからない）
     wallTopYBuffer.fill(h)
 
+    // DDA の壁判定はタイルマップだけに依存する（`this` 以外を読まない）ので、純粋関数 marchRay へ
+    // クロージャとして渡す。stripe ループの外で 1 度だけ束ねて毎列の closure 生成を避ける。
+    const isWall = (tx: number, ty: number): boolean => this.isWallTile(tx, ty)
+    const getTile = (tx: number, ty: number): number => this.getTile(tx, ty)
+    // 最大距離ガード（想定: map の最大対角）。stripe ごとに不変なのでループ外で算出。
+    const maxSteps = this.mapWidth + this.mapHeight + 4
+
     for (let i = 0; i < numStripes; i++) {
       const screenX = i * this.stripeWidth
       // cameraX: -1 (left) .. +1 (right)
@@ -1357,99 +1363,34 @@ export class RaycastRenderer {
       const rayDirX = dirX + planeX * cameraX
       const rayDirY = dirY + planeY * cameraX
 
-      // DDA
-      let mapX = Math.floor(this.playerX)
-      let mapY = Math.floor(this.playerY)
-
-      const deltaDistX = rayDirX === 0 ? 1e30 : Math.abs(1 / rayDirX)
-      const deltaDistY = rayDirY === 0 ? 1e30 : Math.abs(1 / rayDirY)
-
-      let stepX: number
-      let stepY: number
-      let sideDistX: number
-      let sideDistY: number
-
-      if (rayDirX < 0) {
-        stepX = -1
-        sideDistX = (this.playerX - mapX) * deltaDistX
-      } else {
-        stepX = 1
-        sideDistX = (mapX + 1.0 - this.playerX) * deltaDistX
-      }
-      if (rayDirY < 0) {
-        stepY = -1
-        sideDistY = (this.playerY - mapY) * deltaDistY
-      } else {
-        stepY = 1
-        sideDistY = (mapY + 1.0 - this.playerY) * deltaDistY
-      }
-
-      let side: 0 | 1 = 0 // 0 = x-side, 1 = y-side
-      let hit = false
-      let hitTile = TileType.TREE
-      // Issue #88 Phase 2-7a: DDA 中に通過するタイル境界で床高さ差を検出し、段差壁面を記録する。
-      // 「壁ヒットで止まる前」の境界だけが対象。手前から最大 maxStepsPerColumn 個まで。
-      // stepInfos は prev→next の順（= 手前→奥の順）で push される。描画は奥→手前だが
-      // zBuffer 書き込みは「最も手前の段差の depth」を使うため手前→奥の順で見て最小 depth を採る。
+      // DDA ray march（純粋関数 marchRay に集約。Issue #259）。init + 逐次ステップ + 壁ヒット +
+      // 段差検出 + perpDist を 1 呼び出しに置換。march 過程（壁ヒット・段差・crossDepth・side）は
+      // raycastProjection.test.ts で境界値テスト可能。挙動は元のインラインループと完全に等価。
       //
-      // S4 手前優先の根拠: DDA は手前→奥の順にタイル境界を跨ぐため、stepInfos は自然に手前→奥の
-      // 順で並ぶ。`stepInfos.length < this.maxStepsPerColumn` で push を止めれば、残った奥側の段差は
-      // 無視される ＝ 自動的に「手前の段差を maxStepsPerColumn 個だけ残す」優先順位になる。
-      // N1: StepRecord 型はモジュールトップ（raycastProjection.ts）に昇格
-      const stepInfos: StepRecord[] = []
-      // S2 早期 bailout: floorHeights 自体が undefined なマップでは resolveFloorHeight が常に 0 を
-      // 返すため、detectFloorStep(0, 0) は必ず null で段差は 1 つも生まれない。この場合 maxSteps の
-      // DDA ループ内で毎イテレーション 2 回の undefined チェック + detectFloorStep 呼び出しを
-      // スキップできる（typical 1フレーム = stripeCount × maxSteps = 400 × 24 ≈ 9600 回）。
-      const hasFloorHeights = this.floorHeights !== undefined
-      // 最大距離ガード（想定: map の最大対角）
-      const maxSteps = this.mapWidth + this.mapHeight + 4
-      for (let s = 0; s < maxSteps; s++) {
-        const prevMapX = mapX
-        const prevMapY = mapY
-        let crossDepth: number
-        // N3: crossedSide は side と常に同値なので、side のみで統一する
-        if (sideDistX < sideDistY) {
-          crossDepth = sideDistX
-          sideDistX += deltaDistX
-          mapX += stepX
-          side = 0
-        } else {
-          crossDepth = sideDistY
-          sideDistY += deltaDistY
-          mapY += stepY
-          side = 1
-        }
-        // 壁ヒット時は境界 = 壁面そのものなので段差は記録しない（壁の向こう側の床を参照しても描かない）
-        if (this.isWallTile(mapX, mapY)) {
-          hit = true
-          hitTile = this.getTile(mapX, mapY)
-          break
-        }
-        // 両タイルとも非壁 → 床段差を検出。prev / next の床高さを比較する。
-        // N2: 「片方が壁ならスキップ」の文言は削除（両方非壁ブランチなので無条件比較でよい）。
-        if (hasFloorHeights && stepInfos.length < this.maxStepsPerColumn) {
-          const prevFloorZ = resolveFloorHeight(this.floorHeights, prevMapX, prevMapY)
-          const nextFloorZ = resolveFloorHeight(this.floorHeights, mapX, mapY)
-          const step = detectFloorStep(prevFloorZ, nextFloorZ)
-          if (step) {
-            // 極近距離クランプ（perpDist と同じ扱い、N5: MIN_DEPTH で共有）
-            const depthClamped = crossDepth < MIN_DEPTH ? MIN_DEPTH : crossDepth
-            // side は `let side: 0 | 1` で narrow されているのでキャスト不要
-            stepInfos.push({ info: step, depth: depthClamped, side })
-          }
-        }
-      }
-
-      let perpDist: number
-      if (!hit) {
-        perpDist = this.fogMaxDist + 1
-      } else if (side === 0) {
-        perpDist = sideDistX - deltaDistX
-      } else {
-        perpDist = sideDistY - deltaDistY
-      }
-      if (perpDist < MIN_DEPTH) perpDist = MIN_DEPTH
+      // 段差 stepInfos は手前→奥順で蓄積される（Issue #88 Phase 2-7a）。DDA は手前→奥に境界を跨ぐので
+      // `maxStepStairs`（= maxStepsPerColumn）で打ち切れば自動的に手前優先。描画は奥→手前だが
+      // zBuffer 書き込みは最も手前の段差 depth を使う。floorHeights 未指定なら段差検出は丸ごとスキップ。
+      const march = marchRay({
+        playerX: this.playerX,
+        playerY: this.playerY,
+        rayDirX,
+        rayDirY,
+        maxSteps,
+        maxStepStairs: this.maxStepsPerColumn,
+        minDepth: MIN_DEPTH,
+        defaultTile: TileType.TREE,
+        isWall,
+        getTile,
+        floorHeights: this.floorHeights,
+      })
+      const hit = march.hit
+      const hitTile = march.hitTile
+      const side = march.side
+      const stepInfos = march.stepInfos
+      const mapX = march.mapX
+      const mapY = march.mapY
+      // 未ヒットは fogMaxDist+1 のセンチネル（遠方カリングで弾く）。ヒット時は minDepth クランプ済み。
+      const perpDist = march.perpDist ?? this.fogMaxDist + 1
 
       zBuffer[i] = perpDist
 
