@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import {
+  advanceRayMarch,
   computeEffectiveFogMaxDist,
   computeFloorRowDist,
   computeFloorStepWallYRange,
   computeWallYRange,
   consumeTurnAnim,
   detectFloorStep,
+  initRayMarch,
+  marchRay,
   projectNpcToScreen,
   resolveCeilingHeight,
   resolveFloorHeight,
   sampleFloorTileColor,
+  type RayMarchState,
 } from './raycastProjection'
 
 describe('projectNpcToScreen', () => {
@@ -923,5 +927,357 @@ describe('consumeTurnAnim', () => {
     // dt=1/60, animSpeed=10 → maxStep=10/60≈0.1667。π/2≈1.5708 を 9 ステップ分（=1.5）消化した
     // 残量 0.0708 を 10 フレ目で全部消化 → ちょうど 10 フレで完了する
     expect(frames).toBe(10)
+  })
+})
+
+// =============================================================================
+// DDA ray march（Issue #259）— init / advance / marchRay の march 過程テスト
+// =============================================================================
+
+describe('initRayMarch', () => {
+  it('東向き ray（dir +x）: mapX/Y はプレイヤーのタイル、step=+1、sideDist は次境界まで', () => {
+    // player (5.5, 5.5)、dir (1, 0)。deltaDistX = 1/|1| = 1
+    const s = initRayMarch(5.5, 5.5, 1, 0)
+    expect(s.mapX).toBe(5)
+    expect(s.mapY).toBe(5)
+    expect(s.stepX).toBe(1)
+    expect(s.deltaDistX).toBeCloseTo(1)
+    // sideDistX = (mapX + 1 - px) * deltaDistX = (6 - 5.5) * 1 = 0.5
+    expect(s.sideDistX).toBeCloseTo(0.5)
+    // 軸平行 ray（rayDirY=0）→ deltaDistY = 1e30（無限大ガード）
+    expect(s.deltaDistY).toBe(1e30)
+    // 直近ステップ系の初期値
+    expect(s.side).toBe(0)
+    expect(s.crossDepth).toBe(0)
+    expect(s.prevMapX).toBe(5)
+    expect(s.prevMapY).toBe(5)
+  })
+
+  it('西向き ray（dir -x）: step=-1、sideDist はタイル内の残り左距離', () => {
+    // player (5.25, 5.5)、dir (-1, 0)。sideDistX = (px - mapX) * deltaDistX = (5.25 - 5) * 1 = 0.25
+    const s = initRayMarch(5.25, 5.5, -1, 0)
+    expect(s.stepX).toBe(-1)
+    expect(s.sideDistX).toBeCloseTo(0.25)
+  })
+
+  it('斜め ray（dir +x+y）: deltaDist は両軸とも 1/|component|', () => {
+    const s = initRayMarch(0.5, 0.5, 1, 1)
+    expect(s.deltaDistX).toBeCloseTo(1)
+    expect(s.deltaDistY).toBeCloseTo(1)
+    expect(s.stepX).toBe(1)
+    expect(s.stepY).toBe(1)
+    // どちらも (1 - 0.5) * 1 = 0.5
+    expect(s.sideDistX).toBeCloseTo(0.5)
+    expect(s.sideDistY).toBeCloseTo(0.5)
+  })
+})
+
+describe('advanceRayMarch', () => {
+  it('入力 state を破壊しない（純粋・新オブジェクトを返す）', () => {
+    const s0 = initRayMarch(5.5, 5.5, 1, 0)
+    const snapshot: RayMarchState = { ...s0 }
+    const s1 = advanceRayMarch(s0)
+    expect(s0).toEqual(snapshot) // 入力は不変
+    expect(s1).not.toBe(s0) // 別オブジェクト
+  })
+
+  it('sideDistX < sideDistY のとき x 軸を進める（side=0、crossDepth=旧 sideDistX）', () => {
+    const s0 = initRayMarch(5.5, 5.5, 1, 0) // sideDistX=0.5, sideDistY≈huge
+    const s1 = advanceRayMarch(s0)
+    expect(s1.mapX).toBe(6)
+    expect(s1.mapY).toBe(5)
+    expect(s1.side).toBe(0)
+    expect(s1.crossDepth).toBeCloseTo(0.5) // 跨ぐ前の sideDistX
+    expect(s1.prevMapX).toBe(5) // 跨ぐ前のタイル
+    expect(s1.prevMapY).toBe(5)
+    // sideDistX は deltaDistX 加算後（0.5 + 1 = 1.5）
+    expect(s1.sideDistX).toBeCloseTo(1.5)
+  })
+
+  it('sideDistX === sideDistY（同値）は y 軸を優先する（元コードの < 判定と一致）', () => {
+    // 斜め ray、player タイル中心からの等距離 → sideDistX === sideDistY
+    const s0 = initRayMarch(0.5, 0.5, 1, 1)
+    expect(s0.sideDistX).toBeCloseTo(s0.sideDistY)
+    const s1 = advanceRayMarch(s0)
+    expect(s1.side).toBe(1) // y を選ぶ
+    expect(s1.mapY).toBe(1)
+    expect(s1.mapX).toBe(0)
+  })
+
+  it('複数ステップの合成: 東向きに 3 歩で mapX が 3 増える', () => {
+    let s = initRayMarch(5.5, 5.5, 1, 0)
+    s = advanceRayMarch(s)
+    s = advanceRayMarch(s)
+    s = advanceRayMarch(s)
+    expect(s.mapX).toBe(8)
+    expect(s.crossDepth).toBeCloseTo(2.5) // 5.5 → 8 境界まで
+  })
+})
+
+describe('marchRay', () => {
+  const WALL = 1
+  const FLOOR = 0
+
+  /** number[][] グリッド（[ty][tx]）から isWall/getTile クロージャを作る。範囲外は壁。 */
+  function makeWorld(grid: number[][]) {
+    const h = grid.length
+    const w = grid[0]?.length ?? 0
+    const inBounds = (tx: number, ty: number) => tx >= 0 && ty >= 0 && tx < w && ty < h
+    const isWall = (tx: number, ty: number) => !inBounds(tx, ty) || grid[ty][tx] === WALL
+    const getTile = (tx: number, ty: number) => (inBounds(tx, ty) ? grid[ty][tx] : WALL)
+    return { isWall, getTile, w, h }
+  }
+
+  it('東向きに壁へ直進: hit・hitTile・mapX・side、perpDist は壁までの垂直距離', () => {
+    // 1 行マップ: tile 0,1,2 = floor、tile 3 = wall。player (1.5, 0.5) dir (1,0)
+    const { isWall, getTile } = makeWorld([[FLOOR, FLOOR, FLOOR, WALL]])
+    const r = marchRay({
+      playerX: 1.5,
+      playerY: 0.5,
+      rayDirX: 1,
+      rayDirY: 0,
+      maxSteps: 16,
+      maxStepStairs: 8,
+      minDepth: 0.0001,
+      defaultTile: -1,
+      isWall,
+      getTile,
+      floorHeights: undefined,
+    })
+    expect(r.hit).toBe(true)
+    expect(r.hitTile).toBe(WALL)
+    expect(r.mapX).toBe(3)
+    expect(r.mapY).toBe(0)
+    expect(r.side).toBe(0) // x 境界で当たる
+    // perpDist = 壁境界 x=3 までの距離 = 3 - 1.5 = 1.5（deltaDistX=1）
+    expect(r.perpDist).toBeCloseTo(1.5)
+    expect(r.stepInfos).toEqual([])
+  })
+
+  it('極近距離は minDepth にクランプされる', () => {
+    // player をタイル 3（壁）境界の直前に置く。crossDepth = 3 - 2.999 = 0.001 < minDepth 0.01
+    const { isWall, getTile } = makeWorld([[FLOOR, FLOOR, FLOOR, WALL]])
+    const r = marchRay({
+      playerX: 2.999,
+      playerY: 0.5,
+      rayDirX: 1,
+      rayDirY: 0,
+      maxSteps: 16,
+      maxStepStairs: 8,
+      minDepth: 0.01,
+      defaultTile: -1,
+      isWall,
+      getTile,
+      floorHeights: undefined,
+    })
+    expect(r.hit).toBe(true)
+    expect(r.mapX).toBe(3)
+    expect(r.perpDist).toBeCloseTo(0.01) // クランプ発動
+  })
+
+  it('壁に当たらず maxSteps 到達: hit=false、perpDist=null、hitTile=defaultTile', () => {
+    // isWall を常に false にして、境界の壁でも止まらない開放空間を作る
+    const neverWall = () => false
+    const r = marchRay({
+      playerX: 0.5,
+      playerY: 0.5,
+      rayDirX: 1,
+      rayDirY: 0,
+      maxSteps: 5,
+      maxStepStairs: 8,
+      minDepth: 0.0001,
+      defaultTile: -1,
+      isWall: neverWall,
+      getTile: () => FLOOR,
+      floorHeights: undefined,
+    })
+    expect(r.hit).toBe(false)
+    expect(r.perpDist).toBeNull()
+    expect(r.hitTile).toBe(-1)
+    // 5 ステップ東進 → mapX = 0 + 5 = 5
+    expect(r.mapX).toBe(5)
+  })
+
+  it('floorHeights あり: 床段差を手前→奥順に記録（depth と side つき）', () => {
+    // tile 4 が壁。floorHeights は tile 3 だけ高さ 1（x=2→3 境界で 0→1 の段差）
+    const { isWall, getTile } = makeWorld([[FLOOR, FLOOR, FLOOR, FLOOR, WALL]])
+    const floorHeights = [[0, 0, 0, 1, 0]]
+    const r = marchRay({
+      playerX: 1.5,
+      playerY: 0.5,
+      rayDirX: 1,
+      rayDirY: 0,
+      maxSteps: 16,
+      maxStepStairs: 8,
+      minDepth: 0.0001,
+      defaultTile: -1,
+      isWall,
+      getTile,
+      floorHeights,
+    })
+    expect(r.hit).toBe(true)
+    expect(r.mapX).toBe(4)
+    // x=2→3 の境界で段差検出（0 → 1、高い方は next 側）。x=3→4 は壁ヒットで記録されない
+    expect(r.stepInfos).toHaveLength(1)
+    expect(r.stepInfos[0].info.lowerZ).toBe(0)
+    expect(r.stepInfos[0].info.upperZ).toBe(1)
+    expect(r.stepInfos[0].info.upperSide).toBe('next')
+    expect(r.stepInfos[0].side).toBe(0)
+    expect(r.stepInfos[0].depth).toBeCloseTo(1.5) // x=3 境界まで = 3 - 1.5
+  })
+
+  it('floorHeights=undefined なら段差検出を完全スキップ（早期 bailout）', () => {
+    // 同じ地形でも floorHeights を渡さなければ stepInfos は空
+    const { isWall, getTile } = makeWorld([[FLOOR, FLOOR, FLOOR, FLOOR, WALL]])
+    const r = marchRay({
+      playerX: 1.5,
+      playerY: 0.5,
+      rayDirX: 1,
+      rayDirY: 0,
+      maxSteps: 16,
+      maxStepStairs: 8,
+      minDepth: 0.0001,
+      defaultTile: -1,
+      isWall,
+      getTile,
+      floorHeights: undefined,
+    })
+    expect(r.stepInfos).toEqual([])
+  })
+
+  it('maxStepStairs で段差記録を手前優先で打ち切る', () => {
+    // tile 5 が壁。床高さが 0/1 で交互 → 境界ごとに段差。maxStepStairs=1 で手前 1 件だけ残る
+    const { isWall, getTile } = makeWorld([[FLOOR, FLOOR, FLOOR, FLOOR, FLOOR, WALL]])
+    const floorHeights = [[0, 1, 0, 1, 0, 0]]
+    const r = marchRay({
+      playerX: 0.5,
+      playerY: 0.5,
+      rayDirX: 1,
+      rayDirY: 0,
+      maxSteps: 16,
+      maxStepStairs: 1,
+      minDepth: 0.0001,
+      defaultTile: -1,
+      isWall,
+      getTile,
+      floorHeights,
+    })
+    expect(r.hit).toBe(true)
+    expect(r.stepInfos).toHaveLength(1)
+    // 手前 = x=0→1 の境界（0 → 1）。depth = 1 - 0.5 = 0.5
+    expect(r.stepInfos[0].info.upperZ).toBe(1)
+    expect(r.stepInfos[0].depth).toBeCloseTo(0.5)
+  })
+
+  describe('元インライン DDA との等価性（リファレンスオラクル）', () => {
+    // 元 RaycastRenderer.renderFrame のインライン DDA をそのまま再現したリファレンス実装。
+    // marchRay がこれと完全一致することで「挙動不変」を機械的に保証する。
+    function refMarch(
+      px: number,
+      py: number,
+      rdx: number,
+      rdy: number,
+      isWall: (tx: number, ty: number) => boolean,
+      maxSteps: number,
+      minDepth: number
+    ) {
+      let mapX = Math.floor(px)
+      let mapY = Math.floor(py)
+      const ddx = rdx === 0 ? 1e30 : Math.abs(1 / rdx)
+      const ddy = rdy === 0 ? 1e30 : Math.abs(1 / rdy)
+      let stepX: number
+      let stepY: number
+      let sdx: number
+      let sdy: number
+      if (rdx < 0) {
+        stepX = -1
+        sdx = (px - mapX) * ddx
+      } else {
+        stepX = 1
+        sdx = (mapX + 1 - px) * ddx
+      }
+      if (rdy < 0) {
+        stepY = -1
+        sdy = (py - mapY) * ddy
+      } else {
+        stepY = 1
+        sdy = (mapY + 1 - py) * ddy
+      }
+      let side: 0 | 1 = 0
+      let hit = false
+      for (let s = 0; s < maxSteps; s++) {
+        if (sdx < sdy) {
+          sdx += ddx
+          mapX += stepX
+          side = 0
+        } else {
+          sdy += ddy
+          mapY += stepY
+          side = 1
+        }
+        if (isWall(mapX, mapY)) {
+          hit = true
+          break
+        }
+      }
+      let perp: number | null
+      if (!hit) {
+        perp = null
+      } else if (side === 0) {
+        perp = sdx - ddx
+      } else {
+        perp = sdy - ddy
+      }
+      if (perp !== null && perp < minDepth) perp = minDepth
+      return { hit, side, mapX, mapY, perpDist: perp }
+    }
+
+    it('多様な角度の ray でリファレンスと hit/side/map/perpDist が一致する', () => {
+      // 8x8、外周が壁、内部に散らした壁
+      const grid: number[][] = []
+      for (let y = 0; y < 8; y++) {
+        const row: number[] = []
+        for (let x = 0; x < 8; x++) {
+          row.push(x === 0 || y === 0 || x === 7 || y === 7 ? WALL : FLOOR)
+        }
+        grid.push(row)
+      }
+      grid[3][5] = WALL
+      grid[5][2] = WALL
+      const { isWall, getTile } = makeWorld(grid)
+      const px = 3.5
+      const py = 3.5
+      const minDepth = 0.0001
+      const maxSteps = 8 + 8 + 4
+      // 24 方向に ray を撃つ
+      for (let k = 0; k < 24; k++) {
+        const ang = (k / 24) * Math.PI * 2
+        const rdx = Math.cos(ang)
+        const rdy = Math.sin(ang)
+        const expected = refMarch(px, py, rdx, rdy, isWall, maxSteps, minDepth)
+        const actual = marchRay({
+          playerX: px,
+          playerY: py,
+          rayDirX: rdx,
+          rayDirY: rdy,
+          maxSteps,
+          maxStepStairs: 8,
+          minDepth,
+          defaultTile: -1,
+          isWall,
+          getTile,
+          floorHeights: undefined,
+        })
+        expect(actual.hit, `ray#${k} hit`).toBe(expected.hit)
+        expect(actual.side, `ray#${k} side`).toBe(expected.side)
+        expect(actual.mapX, `ray#${k} mapX`).toBe(expected.mapX)
+        expect(actual.mapY, `ray#${k} mapY`).toBe(expected.mapY)
+        if (expected.perpDist === null) {
+          expect(actual.perpDist, `ray#${k} perpDist`).toBeNull()
+        } else {
+          expect(actual.perpDist, `ray#${k} perpDist`).toBeCloseTo(expected.perpDist)
+        }
+      }
+    })
   })
 })

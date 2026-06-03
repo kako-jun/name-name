@@ -431,3 +431,258 @@ export function consumeTurnAnim(remaining: number, dt: number, animSpeed: number
   const step = (remaining > 0 ? 1 : -1) * maxStep
   return { delta: step, newRemaining: remaining - step }
 }
+
+// =============================================================================
+// DDA ray march（純粋関数化・Issue #259）
+//
+// 一人称レイキャスティングの DDA（Digital Differential Analysis）を、PixiJS 描画から
+// 切り離した純粋関数として表現する。これまで RaycastRenderer.renderFrame の内部ループに
+// 直書きされていて、raycastProjection.test.ts は「終端計算」しかカバーできていなかった
+// （march 途中＝壁ヒット判定・段差検出・crossDepth・side 判定のバグを検出できなかった）。
+// init → advance を state→state の遷移として切り出し、marchRay でオーケストレーションする。
+// 境界値テストを march 過程まで広げるのが狙い（規律4 の構造的検証点を描画側に広げる）。
+// =============================================================================
+
+/**
+ * DDA march の状態。1 本の ray が grid をどこまで進んだかを表す。
+ *
+ * `deltaDist* / step*` は ray 方向から決まる不変量、`mapX/Y` と `sideDist*` が
+ * イテレーションで進む可変量。`side / crossDepth / prevMapX/Y` は「直近のステップ」
+ * の結果（`initRayMarch` の初期状態では便宜上 side=0, crossDepth=0, prev=map と同値）。
+ */
+export interface RayMarchState {
+  /** 現在いる grid セル */
+  mapX: number
+  mapY: number
+  /** 次の x / y 境界までの距離 */
+  sideDistX: number
+  sideDistY: number
+  /** 1 タイル進むのにかかる距離（軸平行 ray は 1e30） */
+  deltaDistX: number
+  deltaDistY: number
+  /** ray の進行方向（±1） */
+  stepX: number
+  stepY: number
+  /** 直近のステップで跨いだ side（0=x境界, 1=y境界）。初期状態は 0 */
+  side: 0 | 1
+  /** 直近のステップで境界を跨いだ深度（クランプ前の生 crossDepth）。初期状態は 0 */
+  crossDepth: number
+  /** 直近のステップで跨ぐ前にいたタイル（段差検出で prev/next を比較するため）。初期状態は map と同値 */
+  prevMapX: number
+  prevMapY: number
+}
+
+/**
+ * プレイヤー位置と ray 方向から DDA の初期状態を作る純粋関数（Issue #259）。
+ *
+ * 元 `RaycastRenderer.renderFrame` の init ブロックと同一の式。
+ * - `mapX/Y` はプレイヤーがいるタイル（`Math.floor`）
+ * - `deltaDist*` は 1 タイル進む距離。`rayDir*===0`（軸平行）は `1e30`（無限大ガード）
+ * - `step*` は ray の進行方向（±1）、`sideDist*` は最初の境界までの距離
+ *
+ * 入力契約: `rayDirX/Y` の非有限はカメラ計算側で排除済みの前提（ここでは防御しない）。
+ */
+export function initRayMarch(
+  playerX: number,
+  playerY: number,
+  rayDirX: number,
+  rayDirY: number
+): RayMarchState {
+  const mapX = Math.floor(playerX)
+  const mapY = Math.floor(playerY)
+  const deltaDistX = rayDirX === 0 ? 1e30 : Math.abs(1 / rayDirX)
+  const deltaDistY = rayDirY === 0 ? 1e30 : Math.abs(1 / rayDirY)
+  let stepX: number
+  let stepY: number
+  let sideDistX: number
+  let sideDistY: number
+  if (rayDirX < 0) {
+    stepX = -1
+    sideDistX = (playerX - mapX) * deltaDistX
+  } else {
+    stepX = 1
+    sideDistX = (mapX + 1.0 - playerX) * deltaDistX
+  }
+  if (rayDirY < 0) {
+    stepY = -1
+    sideDistY = (playerY - mapY) * deltaDistY
+  } else {
+    stepY = 1
+    sideDistY = (mapY + 1.0 - playerY) * deltaDistY
+  }
+  return {
+    mapX,
+    mapY,
+    sideDistX,
+    sideDistY,
+    deltaDistX,
+    deltaDistY,
+    stepX,
+    stepY,
+    side: 0,
+    crossDepth: 0,
+    prevMapX: mapX,
+    prevMapY: mapY,
+  }
+}
+
+/**
+ * DDA を 1 セル分、`state` を破壊的に進める内部ヘルパ（ゼロアロケーション）。
+ *
+ * march の数式の唯一の正本。`marchRay` のホットループ（1 フレームで
+ * stripe数 × ステップ数 ≈ 数千回）はこれを単一の scratch state に対して回し、
+ * per-step のオブジェクト生成を避ける（元のインラインループと同じ in-place 更新）。
+ * 純粋版が欲しい外部利用・単体テストは下の `advanceRayMarch` を使う。
+ *
+ * - `prevMapX/Y` に跨ぐ前のタイルを退避してから `mapX/Y` を進める（段差検出で prev/next を比較）
+ * - `sideDistX < sideDistY` の軸を選ぶ（同値時は y を優先＝元コードの `<` と同じ）
+ * - 跨いだ境界の `crossDepth`（= 選んだ側の旧 sideDist）と `side` を記録
+ */
+function stepRayInPlace(state: RayMarchState): void {
+  state.prevMapX = state.mapX
+  state.prevMapY = state.mapY
+  if (state.sideDistX < state.sideDistY) {
+    state.crossDepth = state.sideDistX
+    state.sideDistX += state.deltaDistX
+    state.mapX += state.stepX
+    state.side = 0
+  } else {
+    state.crossDepth = state.sideDistY
+    state.sideDistY += state.deltaDistY
+    state.mapY += state.stepY
+    state.side = 1
+  }
+}
+
+/**
+ * DDA を 1 セル進めた次状態を返す純粋関数（state→state・Issue #259）。
+ *
+ * 入力 `state` は変更せず（不変）、新しい `RayMarchState` を返す。`marchRay` のホットパスは
+ * 内部で破壊的版（`stepRayInPlace`）を使うので、この純粋版は単体テストや外部利用向け
+ * （数式の正本は `stepRayInPlace` に集約し、ここはその immutable ラッパ）。
+ *
+ * 元ループの「prev 保存 → 軸選択 → sideDist 加算 → map 進行」と完全に等価。
+ */
+export function advanceRayMarch(state: RayMarchState): RayMarchState {
+  const next: RayMarchState = { ...state }
+  stepRayInPlace(next)
+  return next
+}
+
+/**
+ * `marchRay` の結果。壁ヒットの有無と、描画に必要な終端値・段差レコードを返す。
+ */
+export interface RayMarchResult {
+  /** 壁にヒットしたか（false = maxSteps 到達／壁なし） */
+  hit: boolean
+  /** ヒットした壁タイル種別（未ヒット時は `defaultTile`） */
+  hitTile: number
+  /** ヒット境界の side（0=x, 1=y）。未ヒット時は最後のステップの side */
+  side: 0 | 1
+  /** ヒット位置のタイル（`getWallHeight` に渡す用）。未ヒット時は最終到達タイル */
+  mapX: number
+  mapY: number
+  /**
+   * 壁の perpWallDist（`minDepth` クランプ済み）。未ヒット時は `null`。
+   * 呼び出し側は未ヒット時に `fogMaxDist + 1` 等のセンチネルを使う。
+   */
+  perpDist: number | null
+  /** 手前→奥順の段差壁レコード（`floorHeights` 未指定時は空配列） */
+  stepInfos: StepRecord[]
+}
+
+/**
+ * 1 本の ray を DDA で march し、壁ヒットと段差壁を検出する純粋関数（Issue #259）。
+ *
+ * これまで `RaycastRenderer.renderFrame` に直書きされていた DDA ループ本体を関数化したもの。
+ * `initRayMarch` + `advanceRayMarch` を内部で使い、壁判定（`isWall` / `getTile` クロージャ）と
+ * 床高さ（`floorHeights` + 既存の `resolveFloorHeight` / `detectFloorStep`）を組み合わせる。
+ *
+ * 壁ヒット時の perpWallDist は「ヒットしたステップの `crossDepth`」と等価。元コードの
+ * `sideDist - deltaDist` は、ヒット直前に加算済みの sideDist から deltaDist を引いて
+ * 跨いだ瞬間の距離（= crossDepth）に戻す操作なので、ここでは crossDepth をそのまま使う。
+ * `minDepth` 未満は `minDepth` にクランプ（0 除算近傍の発散ガード）。
+ *
+ * 段差は「両タイルとも非壁」のステップでのみ記録し、手前から `maxStepStairs` 個まで蓄積する
+ * （DDA は手前→奥順に境界を跨ぐので、`length < maxStepStairs` で打ち切れば自動的に手前優先）。
+ *
+ * 入力契約:
+ *  - `isWall` は範囲外を `true`（壁）、`getTile` は範囲外を既定タイルで返す責務を呼び出し側が持つ
+ *  - `floorHeights` が `undefined` なら段差検出を丸ごとスキップ（`resolveFloorHeight` が常に 0 を
+ *    返し `detectFloorStep` が必ず `null` になる無駄を、毎ステップの 2 lookup ごと省く早期 bailout）
+ *  - `maxSteps` は最大ステップ数（想定: map の最大対角）。壁に当たらなければここで打ち切る
+ *
+ * @param maxStepStairs 段差レコードの上限（手前優先で打ち切り。元 `maxStepsPerColumn`）
+ * @param minDepth      crossDepth / perpDist の極小クランプ閾値（元 `MIN_DEPTH`）
+ * @param defaultTile   未ヒット時の `hitTile`（元 `TileType.TREE`）
+ */
+export function marchRay(params: {
+  playerX: number
+  playerY: number
+  rayDirX: number
+  rayDirY: number
+  maxSteps: number
+  maxStepStairs: number
+  minDepth: number
+  defaultTile: number
+  isWall: (tx: number, ty: number) => boolean
+  getTile: (tx: number, ty: number) => number
+  floorHeights: number[][] | undefined
+}): RayMarchResult {
+  const {
+    playerX,
+    playerY,
+    rayDirX,
+    rayDirY,
+    maxSteps,
+    maxStepStairs,
+    minDepth,
+    defaultTile,
+    isWall,
+    getTile,
+    floorHeights,
+  } = params
+
+  // 単一の scratch state を in-place で進める（per-step アロケーションを避けるホットパス）。
+  const state = initRayMarch(playerX, playerY, rayDirX, rayDirY)
+  const stepInfos: StepRecord[] = []
+  const hasFloorHeights = floorHeights !== undefined
+
+  for (let s = 0; s < maxSteps; s++) {
+    stepRayInPlace(state)
+    // 壁ヒット時は境界 = 壁面そのものなので段差は記録しない（壁の向こうの床は描かない）。
+    if (isWall(state.mapX, state.mapY)) {
+      const perp = state.crossDepth < minDepth ? minDepth : state.crossDepth
+      return {
+        hit: true,
+        hitTile: getTile(state.mapX, state.mapY),
+        side: state.side,
+        mapX: state.mapX,
+        mapY: state.mapY,
+        perpDist: perp,
+        stepInfos,
+      }
+    }
+    // 両タイルとも非壁 → prev / next の床高さを比較して段差を検出。
+    if (hasFloorHeights && stepInfos.length < maxStepStairs) {
+      const prevFloorZ = resolveFloorHeight(floorHeights, state.prevMapX, state.prevMapY)
+      const nextFloorZ = resolveFloorHeight(floorHeights, state.mapX, state.mapY)
+      const step = detectFloorStep(prevFloorZ, nextFloorZ)
+      if (step) {
+        const depthClamped = state.crossDepth < minDepth ? minDepth : state.crossDepth
+        stepInfos.push({ info: step, depth: depthClamped, side: state.side })
+      }
+    }
+  }
+
+  // maxSteps 到達（壁なし）。side / map は最後のステップの値。
+  return {
+    hit: false,
+    hitTile: defaultTile,
+    side: state.side,
+    mapX: state.mapX,
+    mapY: state.mapY,
+    perpDist: null,
+    stepInfos,
+  }
+}

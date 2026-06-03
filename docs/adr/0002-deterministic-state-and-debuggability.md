@@ -92,7 +92,7 @@ await renderer.playScript(steps: Step[]): Promise<void>
 
 sceneId と flags を直接指定して任意の状態から開始する API。
 history はリセットされる（デバッグ用）。
-実装: `NovelRenderer.startFrom`、`StartFromOptions` 型は `GameState.ts`。`loadFromSaveData` を手本に `applyState` を再利用。flags は置換セマンティクス、不正 sceneId は完全 no-op（検証を flags 適用より先に行う）、eventIndex/textIndex は範囲チェックなし（呼び出し側責任）。vitest 25 ケース。
+実装: `NovelRenderer.startFrom`、`StartFromOptions` 型は `GameState.ts`。状態復元コアは `loadFromSaveData` と共通化済み（#256）— 両者とも private `restoreToScene(scene, state)` を呼ぶ（フラグ設定 → 選択肢/待機リセット → resolveEvents → applyState → history リセット → render）。シーン探索と「見つからない場合の挙動」は呼び出し側の責務で、`startFrom` は不正 sceneId で完全 no-op（フラグも復元しない）、`loadFromSaveData` はシーン欠落時もフラグだけ復元する。flags は置換セマンティクス、検証を flags 適用より先に行う、eventIndex/textIndex は範囲チェックなし（呼び出し側責任）。vitest 25 ケース。
 
 ```typescript
 renderer.startFrom({
@@ -135,6 +135,7 @@ renderer.startFrom({
 ## 関連
 
 - `GameState.ts`: `NovelGameState` 定義
-- `NovelRenderer.ts`: `applyState`、`seekTo`、`advance`、`jumpToScene`
+- `NovelRenderer.ts`: `applyState`、`restoreToScene`（`startFrom`/`loadFromSaveData` 共通コア）、`seekTo`、`advance`、`jumpToScene`
 - `docs/architecture.md`: 「状態管理: NovelGameState」セクション
 - Issue #220: `playScript` / `startFrom` 実装
+- Issue #256: `startFrom` / `loadFromSaveData` の状態復元コア共通化（`restoreToScene`）
