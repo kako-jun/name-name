@@ -69,12 +69,13 @@ export function normalizePosition(position: string): string {
   return POSITION_ALIASES_JA[position] ?? POSITION_ALIASES_EN[position] ?? position
 }
 
-/** 足元 Y 座標の比率。
+/** 足元 Y 座標の比率（`characterY = screenHeight * CHARACTER_Y_RATIO`）。
  *  以前は 380/450 ≒ 0.844 (DialogBox の上端あたり) だったが、
  *  枠なし・教育動画モードでは立ち絵の下端を画面下端まで下げたほうが座りが良い。
  *  影響範囲: 全 game の立ち絵が画面下端まで下がる。既存 game が枠ありで足元位置を
- *  そのままにしたい場合は別途オプション化が要る。 */
-const CHARACTER_Y_RATIO = 1.0
+ *  そのままにしたい場合は別途オプション化が要る。
+ *  テストが期待値を直書きして陳腐化するのを防ぐため export する（#262）。 */
+export const CHARACTER_Y_RATIO = 1.0
 
 interface CharacterState {
   sprite: Sprite
