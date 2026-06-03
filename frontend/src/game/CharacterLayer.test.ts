@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { CharacterLayer, normalizePosition } from './CharacterLayer'
-import { ASPECT_RATIOS } from './constants'
+import { CHARACTER_Y_RATIO, CharacterLayer, normalizePosition } from './CharacterLayer'
 
 interface FadeAnimationLike {
   fromAlpha: number
@@ -118,12 +117,14 @@ describe('normalizePosition', () => {
 })
 
 describe('CharacterLayer portrait mode (Issue #209)', () => {
-  it('screenHeight=800（9:16）で sprite.y が 800 * (380 / 450) ≒ 676 になる', () => {
+  it('足元 Y は screenHeight * CHARACTER_Y_RATIO になる（縦長モードでも比率追従）', () => {
+    // CHARACTER_Y_RATIO は #210 後に 380/450 → 1.0 へ変更（足元を画面下端に下げる意図）。
+    // 期待値は定数を直に参照して陳腐化を防ぐ（旧 `800*(380/450)≒676` 直書きの教訓・#262）。
     const layer = new CharacterLayer(450, 800)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
     const state = asInternals(layer).characters.get('hero')
     expect(state).toBeDefined()
-    expect(state!.sprite.y).toBeCloseTo(800 * (380 / ASPECT_RATIOS['16:9'].height), 5)
+    expect(state!.sprite.y).toBeCloseTo(800 * CHARACTER_Y_RATIO, 5)
   })
 })
 
