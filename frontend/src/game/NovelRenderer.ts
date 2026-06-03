@@ -45,6 +45,7 @@ import { Event, EventScene } from '../types'
 import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
 import { isRead, loadReadProgress, markRead } from './readProgress'
 import { TimeController, defaultTimeController } from './TimeController'
+import { computeShakeOffset, computeFlashAlpha, computeFadeAlpha } from './screenEffects'
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -819,14 +820,11 @@ export class NovelRenderer {
 
     const tick = (): void => {
       const elapsed = performance.now() - this.shakeStartMs
-      const progress = Math.min(elapsed / durationMs, 1)
-      // 減衰 sin 波: 残り時間に比例して振幅を絞る
-      const decay = 1 - progress
-      const offsetX = Math.sin(elapsed * 0.05) * intensityPx * decay
-      const offsetY = Math.cos(elapsed * 0.037) * intensityPx * decay * 0.6
+      // 減衰 sin/cos 揺れの数式は screenEffects.computeShakeOffset に集約 (#260)
+      const { offsetX, offsetY, done } = computeShakeOffset(elapsed, intensityPx, durationMs)
       this.app.stage.position.set(offsetX, offsetY)
 
-      if (progress < 1) {
+      if (!done) {
         this.shakeTimer = this.time.setTimeout(tick, intervalMs)
       } else {
         this.app.stage.position.set(0, 0)
@@ -860,10 +858,11 @@ export class NovelRenderer {
 
     this.effectTimer = this.time.setInterval(() => {
       const elapsed = performance.now() - startMs
-      const progress = Math.min(elapsed / durationMs, 1)
       if (!this.effectOverlay) return
-      this.effectOverlay.alpha = peakAlpha * (1 - progress)
-      if (progress >= 1) {
+      // alpha 補間は screenEffects.computeFlashAlpha に集約 (#260)
+      const { alpha, done } = computeFlashAlpha(elapsed, peakAlpha, durationMs)
+      this.effectOverlay.alpha = alpha
+      if (done) {
         this.effectOverlay.visible = false
         this.effectOverlay.alpha = 0
         if (this.effectTimer) {
@@ -905,11 +904,12 @@ export class NovelRenderer {
 
     this.effectTimer = this.time.setInterval(() => {
       const elapsed = performance.now() - startMs
-      const progress = Math.min(elapsed / durationMs, 1)
       if (!this.effectOverlay) return
-      this.effectOverlay.alpha = fromAlpha + (toAlpha - fromAlpha) * progress
-      if (progress >= 1) {
-        this.effectOverlay.alpha = toAlpha
+      // alpha 補間は screenEffects.computeFadeAlpha に集約 (#260)。
+      // done 時に alpha=toAlpha ちょうどを返すので、従来の「progress>=1 で toAlpha を当て直す」挙動と一致。
+      const { alpha, done } = computeFadeAlpha(elapsed, fromAlpha, toAlpha, durationMs)
+      this.effectOverlay.alpha = alpha
+      if (done) {
         // toAlpha が 0 なら不可視に戻す
         if (toAlpha <= 0) {
           this.effectOverlay.visible = false
