@@ -46,7 +46,16 @@ import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
 import { isRead, loadReadProgress, markRead } from './readProgress'
 import { TimeController, defaultTimeController } from './TimeController'
 import { computeShakeOffset, computeFlashAlpha, computeFadeAlpha } from './screenEffects'
-import { computeCoverFit, parseHexColor, resolveAssetUrl, saveSlotToGameState } from './novelLayout'
+import {
+  computeCoverFit,
+  parseHexColor,
+  resolveAssetUrl,
+  saveSlotToGameState,
+  resolveFontFamily,
+  formatCounterText,
+  computeSeekBarPosition,
+  describeEventForDebug,
+} from './novelLayout'
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -392,26 +401,9 @@ export class NovelRenderer {
     }>
   } {
     const current = this.resolvedEvents[this.eventIndex]
-    let kind = '(none)'
-    let text: string | undefined
-    if (current && typeof current === 'object') {
-      kind = Object.keys(current)[0] ?? '(unknown)'
-      // 本文を見えるところまで取り出す
-      const v = (current as Record<string, unknown>)[kind]
-      if (v && typeof v === 'object') {
-        const maybeText = (
-          v as { text?: unknown; line?: unknown; path?: unknown; target?: unknown }
-        ).text
-        if (Array.isArray(maybeText) && maybeText.length > 0)
-          text = JSON.stringify(maybeText[0]).slice(0, 120)
-        else if (typeof (v as { line?: unknown }).line === 'string')
-          text = (v as { line: string }).line
-        else if (typeof (v as { path?: unknown }).path === 'string')
-          text = (v as { path: string }).path
-        else if (typeof (v as { target?: unknown }).target === 'string')
-          text = (v as { target: string }).target
-      }
-    }
+    // イベントから debug HUD 用の {kind, text} を取り出す純粋計算は
+    // novelLayout.describeEventForDebug に集約 (#260)。
+    const { kind, text } = describeEventForDebug(current)
     const chars = this.characterLayer.getCharacterStates().map((s) => {
       // 私的フィールドへの最小アクセス: x/y/scale をスナップショット
       const inner = this.characterLayer as unknown as {
@@ -1447,8 +1439,12 @@ export class NovelRenderer {
       // 動画タイトル中央表示 (llll-ll-media 用)
       const ts = (event as { TitleShow: { text: string; font_family?: string; position?: string } })
         .TitleShow
-      const font =
-        ts.font_family ?? this.gameDefaultFontFamily ?? NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+      // フォント解決の優先順チェーンは novelLayout.resolveFontFamily に集約 (#260)。
+      const font = resolveFontFamily(
+        ts.font_family,
+        this.gameDefaultFontFamily,
+        NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+      )
       this.characterLayer.showTitle(ts.text, font, ts.position)
       return
     }
@@ -1877,9 +1873,13 @@ export class NovelRenderer {
       this.audioManager.playVoice(voiceUrl)
     }
 
-    // フォント解決 (#147): per-line override → per-game default → runtime default の優先順
-    const resolvedFontFamily =
-      perLineFontFamily ?? this.gameDefaultFontFamily ?? NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+    // フォント解決 (#147): per-line override → per-game default → runtime default の優先順。
+    // 優先順チェーンは TitleShow と共通の novelLayout.resolveFontFamily に集約 (#260)。
+    const resolvedFontFamily = resolveFontFamily(
+      perLineFontFamily,
+      this.gameDefaultFontFamily,
+      NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+    )
     this.currentResolvedFontFamily = resolvedFontFamily
     // フォント未ロードのままで TextStyle に当てると fallback で bake されるため、
     // 非同期ロードしてから DialogBox に反映する。先に既存フォントで描画しておくと
@@ -1958,7 +1958,8 @@ export class NovelRenderer {
   private updateCounter(): void {
     if (!this.counterText) return
     const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
-    this.counterText.text = `${displayIndex} / ${this.displayEventCount}`
+    // 表示文字列の整形は novelLayout.formatCounterText に集約 (#260)。
+    this.counterText.text = formatCounterText(displayIndex, this.displayEventCount)
   }
 
   /**
@@ -1968,9 +1969,9 @@ export class NovelRenderer {
    */
   private updateSeekBar(): void {
     const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
-    // 0-based に変換し SeekBar に渡す。SeekBar は ratio = current/(total-1) を計算する。
-    const current = Math.max(0, displayIndex - 1)
-    const total = this.displayEventCount
+    // 0-based 変換 + クランプは novelLayout.computeSeekBarPosition に集約 (#260)。
+    // SeekBar は ratio = current/(total-1) を計算する。
+    const { current, total } = computeSeekBarPosition(displayIndex, this.displayEventCount)
     this.seekBar.update(current, total)
   }
 

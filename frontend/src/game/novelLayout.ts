@@ -141,3 +141,107 @@ export function saveSlotToGameState(
     currentBgmPath: data.currentBgmPath ?? null,
   }
 }
+
+/**
+ * フォント解決の優先順チェーンを 1 箇所に集約する純粋関数 (#147 / #260)。
+ *
+ * 元 NovelRenderer 内で 2 箇所に直書きされていた同形の式:
+ *   - `render()`:      `perLineFontFamily ?? this.gameDefaultFontFamily ?? RUNTIME_DEFAULT_FONT_FAMILY`
+ *   - `processDirective()` の `TitleShow`:
+ *                      `ts.font_family ?? this.gameDefaultFontFamily ?? RUNTIME_DEFAULT_FONT_FAMILY`
+ * どちらも「per-line override → per-game default → runtime default」の同じ 3 段フォールバック。
+ *
+ * `??`（nullish coalescing）の元挙動を忠実に踏襲する:
+ *  - `perLine` が `null`/`undefined` のときだけ `perGameDefault` に落ちる。
+ *  - `perGameDefault` も `null`/`undefined` のときだけ `runtimeDefault` に落ちる。
+ *  - 空文字 `''` は「指定あり」として扱う（`??` は `''` を素通しする。元実装と同じ）。
+ *
+ * 引数は `string | null | undefined` を受けるが、`runtimeDefault` は必ず非 null の文字列を
+ * 渡す前提（元実装の `RUNTIME_DEFAULT_FONT_FAMILY` 定数）。戻り値は常に非 null の family 文字列。
+ */
+export function resolveFontFamily(
+  perLine: string | null | undefined,
+  perGameDefault: string | null | undefined,
+  runtimeDefault: string
+): string {
+  return perLine ?? perGameDefault ?? runtimeDefault
+}
+
+/**
+ * シーンカウンターの表示文字列を返す純粋関数 (#260)。
+ *
+ * 元 `NovelRenderer.updateCounter` の `this.counterText.text = \`${displayIndex} / ${this.displayEventCount}\``
+ * と同一のテンプレートリテラル。`displayIndex`（1-based 現在位置）と `total`（表示イベント総数）を
+ * `"{displayIndex} / {total}"` に整形するだけ。数値の書式変換（ロケール・桁区切り等）は一切しない。
+ */
+export function formatCounterText(displayIndex: number, total: number): string {
+  return `${displayIndex} / ${total}`
+}
+
+/** SeekBar.update に渡す現在位置と総数。 */
+export interface SeekBarPosition {
+  /** SeekBar.update の第 1 引数 `current`（0-based。ratio = current/(total-1) で塗り幅を出す） */
+  current: number
+  /** SeekBar.update の第 2 引数 `total`（表示イベント総数） */
+  total: number
+}
+
+/**
+ * SeekBar に渡す `{current, total}` を算出する純粋関数 (#125 / #260)。
+ *
+ * 元 `NovelRenderer.updateSeekBar` と同一:
+ *   current = Math.max(0, displayIndex - 1)   // 1-based displayIndex を 0-based に変換
+ *   total   = displayEventCount
+ * SeekBar 側は `ratio = current / (total - 1)` で塗り幅を出すため、`displayIndex` を
+ * 1-based のまま渡すと末尾で ratio が 1 を超える。ここで 1 を引いて 0-based に直し、
+ * 先頭（displayIndex=0、まだテキスト未到達）でも負にならないよう `Math.max(0, …)` でクランプする。
+ */
+export function computeSeekBarPosition(displayIndex: number, total: number): SeekBarPosition {
+  return { current: Math.max(0, displayIndex - 1), total }
+}
+
+/** デバッグ HUD 用に 1 イベントから取り出した種別と本文プレビュー。 */
+export interface DebugEventDescriptor {
+  /** イベント種別。`Dialog` / `Background` 等のキー名。判定不能は `'(none)'` / `'(unknown)'` */
+  kind: string
+  /** 本文プレビュー。取り出せないときは `undefined` */
+  text: string | undefined
+}
+
+/**
+ * 1 つの `Event` からデバッグ HUD 用の `{kind, text}` を取り出す純粋関数 (#260)。
+ *
+ * 元 `NovelRenderer.getDebugState` 内に直書きされていた抽出ロジックと同一:
+ *   - object でなければ `kind='(none)'`, `text=undefined`
+ *   - object なら `kind = Object.keys(event)[0] ?? '(unknown)'`
+ *   - その値 `v = event[kind]` が object のとき、本文を以下の優先順で 1 つ取り出す:
+ *       1. `v.text` が長さ 1 以上の配列 → `JSON.stringify(v.text[0]).slice(0, 120)`
+ *       2. `v.line` が string → そのまま
+ *       3. `v.path` が string → そのまま
+ *       4. `v.target` が string → そのまま
+ *       いずれにも当たらなければ `text=undefined`
+ *
+ * `this` / PixiJS / DOM に触れず、入力イベントだけから決定論的に値を導く。HUD 表示専用で
+ * ゲーム進行には影響しない。`text` は最大 120 文字に切り詰める元挙動（配列ケースのみ）を踏襲。
+ */
+export function describeEventForDebug(event: unknown): DebugEventDescriptor {
+  let kind = '(none)'
+  let text: string | undefined
+  if (event && typeof event === 'object') {
+    kind = Object.keys(event)[0] ?? '(unknown)'
+    const v = (event as Record<string, unknown>)[kind]
+    if (v && typeof v === 'object') {
+      const maybeText = (v as { text?: unknown; line?: unknown; path?: unknown; target?: unknown })
+        .text
+      if (Array.isArray(maybeText) && maybeText.length > 0)
+        text = JSON.stringify(maybeText[0]).slice(0, 120)
+      else if (typeof (v as { line?: unknown }).line === 'string')
+        text = (v as { line: string }).line
+      else if (typeof (v as { path?: unknown }).path === 'string')
+        text = (v as { path: string }).path
+      else if (typeof (v as { target?: unknown }).target === 'string')
+        text = (v as { target: string }).target
+    }
+  }
+  return { kind, text }
+}

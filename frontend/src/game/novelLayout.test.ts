@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { computeCoverFit, parseHexColor, resolveAssetUrl, saveSlotToGameState } from './novelLayout'
+import {
+  computeCoverFit,
+  parseHexColor,
+  resolveAssetUrl,
+  saveSlotToGameState,
+  resolveFontFamily,
+  formatCounterText,
+  computeSeekBarPosition,
+  describeEventForDebug,
+} from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
 
@@ -316,5 +325,197 @@ describe('saveSlotToGameState', () => {
     const data = baseData()
     data.sceneId = 'other-scene'
     expect(saveSlotToGameState(data, null).sceneId).toBe('other-scene')
+  })
+})
+
+describe('resolveFontFamily', () => {
+  // 抽出前 NovelRenderer の 2 箇所に直書きされていた優先順チェーン（リファレンス）。
+  // render() / processDirective(TitleShow) ともこの同形の式だった:
+  //   <perLine> ?? this.gameDefaultFontFamily ?? RUNTIME_DEFAULT_FONT_FAMILY
+  // これは抽出後関数のコピーではなく、元の inline 式そのものを `??` で再現したオラクル。
+  const RUNTIME_DEFAULT = "'Noto Sans JP', sans-serif"
+  function inlineResolve(
+    perLine: string | null | undefined,
+    perGame: string | null | undefined
+  ): string {
+    return perLine ?? perGame ?? RUNTIME_DEFAULT
+  }
+
+  it('リファレンス等価性: 抽出前 inline チェーン（?? ?? ??）と一致', () => {
+    // perLine / perGame の全 (指定 / null / undefined) 組み合わせ + 空文字を網羅。
+    const fontVals: Array<string | null | undefined> = [
+      "'Serif', serif", // 指定あり
+      "''", // 一見空に見えるが非空文字（指定扱い）
+      '', // 空文字（?? は素通し → 指定扱い）
+      null,
+      undefined,
+    ]
+    for (const perLine of fontVals) {
+      for (const perGame of fontVals) {
+        expect(resolveFontFamily(perLine, perGame, RUNTIME_DEFAULT)).toBe(
+          inlineResolve(perLine, perGame)
+        )
+      }
+    }
+  })
+
+  it('per-line 指定があれば最優先', () => {
+    expect(resolveFontFamily("'A', sans-serif", "'B', serif", RUNTIME_DEFAULT)).toBe(
+      "'A', sans-serif"
+    )
+  })
+
+  it('per-line 未指定なら per-game default に落ちる', () => {
+    expect(resolveFontFamily(null, "'B', serif", RUNTIME_DEFAULT)).toBe("'B', serif")
+    expect(resolveFontFamily(undefined, "'B', serif", RUNTIME_DEFAULT)).toBe("'B', serif")
+  })
+
+  it('per-line / per-game とも未指定なら runtime default', () => {
+    expect(resolveFontFamily(null, null, RUNTIME_DEFAULT)).toBe(RUNTIME_DEFAULT)
+    expect(resolveFontFamily(undefined, undefined, RUNTIME_DEFAULT)).toBe(RUNTIME_DEFAULT)
+  })
+
+  it("空文字 '' は「指定あり」として素通しする（?? の元挙動）", () => {
+    // ?? は falsy ('') を素通しするため、空文字 per-line は default に落ちない。
+    expect(resolveFontFamily('', "'B', serif", RUNTIME_DEFAULT)).toBe('')
+    expect(resolveFontFamily(null, '', RUNTIME_DEFAULT)).toBe('')
+  })
+})
+
+describe('formatCounterText', () => {
+  // 抽出前 NovelRenderer.updateCounter の inline 式（リファレンス）:
+  //   this.counterText.text = `${displayIndex} / ${this.displayEventCount}`
+  function inlineCounter(displayIndex: number, total: number): string {
+    return `${displayIndex} / ${total}`
+  }
+
+  it('リファレンス等価性: 抽出前 inline テンプレートと一致', () => {
+    const cases: Array<[number, number]> = [
+      [3, 13], // 通常
+      [0, 0], // 空（先頭未到達 / イベントなし）
+      [1, 1], // 1 件のみ
+      [13, 13], // 末尾
+      [100, 999], // 大きい値
+    ]
+    for (const [di, total] of cases) {
+      expect(formatCounterText(di, total)).toBe(inlineCounter(di, total))
+    }
+  })
+
+  it('"{displayIndex} / {total}" の書式（桁区切り等の整形はしない）', () => {
+    expect(formatCounterText(3, 13)).toBe('3 / 13')
+    expect(formatCounterText(0, 0)).toBe('0 / 0')
+    expect(formatCounterText(1000, 2000)).toBe('1000 / 2000') // 桁区切りなし
+  })
+})
+
+describe('computeSeekBarPosition', () => {
+  // 抽出前 NovelRenderer.updateSeekBar の inline 式（リファレンス）:
+  //   const current = Math.max(0, displayIndex - 1)
+  //   const total = this.displayEventCount
+  function inlineSeek(displayIndex: number, total: number): { current: number; total: number } {
+    const current = Math.max(0, displayIndex - 1)
+    return { current, total }
+  }
+
+  it('リファレンス等価性: 抽出前 inline 式（Math.max(0, displayIndex-1)）と一致', () => {
+    const cases: Array<[number, number]> = [
+      [3, 13], // 通常 → current=2
+      [1, 13], // 先頭テキスト到達 → current=0
+      [0, 13], // 未到達 (displayIndex=0) → max(0,-1)=0
+      [13, 13], // 末尾 → current=12
+      [0, 0], // 空シナリオ
+      [1, 1], // 1 件のみ → current=0
+    ]
+    for (const [di, total] of cases) {
+      expect(computeSeekBarPosition(di, total)).toEqual(inlineSeek(di, total))
+    }
+  })
+
+  it('displayIndex を 0-based にし、先頭で負にならないようクランプ', () => {
+    expect(computeSeekBarPosition(3, 13)).toEqual({ current: 2, total: 13 })
+    expect(computeSeekBarPosition(1, 13)).toEqual({ current: 0, total: 13 }) // 1-1=0
+    expect(computeSeekBarPosition(0, 13)).toEqual({ current: 0, total: 13 }) // max(0,-1)=0
+  })
+
+  it('total は displayEventCount をそのまま素通し', () => {
+    expect(computeSeekBarPosition(5, 42).total).toBe(42)
+    expect(computeSeekBarPosition(5, 0).total).toBe(0)
+  })
+})
+
+describe('describeEventForDebug', () => {
+  // 抽出前 NovelRenderer.getDebugState 内の inline 抽出ロジック（リファレンス）。
+  // 抽出後関数のコピーではなく、元の getDebugState の文（current → kind/text 導出）を
+  // そのまま貼り直したオラクル。
+  function inlineDescribe(current: unknown): { kind: string; text: string | undefined } {
+    let kind = '(none)'
+    let text: string | undefined
+    if (current && typeof current === 'object') {
+      kind = Object.keys(current)[0] ?? '(unknown)'
+      const v = (current as Record<string, unknown>)[kind]
+      if (v && typeof v === 'object') {
+        const maybeText = (
+          v as { text?: unknown; line?: unknown; path?: unknown; target?: unknown }
+        ).text
+        if (Array.isArray(maybeText) && maybeText.length > 0)
+          text = JSON.stringify(maybeText[0]).slice(0, 120)
+        else if (typeof (v as { line?: unknown }).line === 'string')
+          text = (v as { line: string }).line
+        else if (typeof (v as { path?: unknown }).path === 'string')
+          text = (v as { path: string }).path
+        else if (typeof (v as { target?: unknown }).target === 'string')
+          text = (v as { target: string }).target
+      }
+    }
+    return { kind, text }
+  }
+
+  it('リファレンス等価性: 抽出前 getDebugState の inline 抽出と一致', () => {
+    const cases: unknown[] = [
+      { Dialog: { character: 'A', text: ['こんにちは', '2行目'] } }, // text 配列 → 先頭を JSON 化
+      { Narration: { text: ['ナレーション'] } },
+      { Background: { path: 'bg/room.png' } }, // path 経路
+      { Bgm: { path: 'bgm/main.mp3', action: 'Play' } },
+      { Choice: { target: 'scene-2' } }, // target 経路
+      { Wait: { ms: 500 } }, // text/line/path/target いずれも無 → undefined
+      { Dialog: { character: 'A', text: [] } }, // 空配列 → text 経路に乗らず undefined
+      'SceneTransition', // 文字列 → object でない → '(none)'
+      null, // null → '(none)'
+      undefined, // undefined → '(none)'
+      42, // number → '(none)'
+      {}, // 空オブジェクト → keys[0] undefined → '(unknown)'
+      { Dialog: 'not-an-object' }, // v が object でない → text なし
+      { Foo: { line: 'ライン文字列' } }, // line 経路（line/path/target の優先順確認用）
+      { Foo: { line: 'L', path: 'P', target: 'T' } }, // line が最優先
+      { Foo: { path: 'P', target: 'T' } }, // path が target より優先
+    ]
+    for (const c of cases) {
+      expect(describeEventForDebug(c)).toEqual(inlineDescribe(c))
+    }
+  })
+
+  it('text 配列は先頭要素を JSON 化して 120 文字に切り詰める', () => {
+    const long = 'あ'.repeat(300)
+    const r = describeEventForDebug({ Dialog: { text: [long] } })
+    // JSON.stringify でクォートが付くので、先頭は '"あああ...'。120 文字で切る。
+    expect(r.text).toBe(JSON.stringify(long).slice(0, 120))
+    expect(r.text!.length).toBe(120)
+  })
+
+  it('本文取り出し優先順: text 配列 > line > path > target', () => {
+    expect(
+      describeEventForDebug({ E: { text: ['T'], line: 'L', path: 'P', target: 'X' } }).text
+    ).toBe(JSON.stringify('T'))
+    expect(describeEventForDebug({ E: { line: 'L', path: 'P', target: 'X' } }).text).toBe('L')
+    expect(describeEventForDebug({ E: { path: 'P', target: 'X' } }).text).toBe('P')
+    expect(describeEventForDebug({ E: { target: 'X' } }).text).toBe('X')
+  })
+
+  it('object でない / 空オブジェクトの退化系', () => {
+    expect(describeEventForDebug('str')).toEqual({ kind: '(none)', text: undefined })
+    expect(describeEventForDebug(null)).toEqual({ kind: '(none)', text: undefined })
+    expect(describeEventForDebug(undefined)).toEqual({ kind: '(none)', text: undefined })
+    expect(describeEventForDebug({})).toEqual({ kind: '(unknown)', text: undefined })
   })
 })
