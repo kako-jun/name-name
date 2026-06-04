@@ -55,6 +55,8 @@ import {
   formatCounterText,
   computeSeekBarPosition,
   describeEventForDebug,
+  findSceneById,
+  resolveSceneTitle,
 } from './novelLayout'
 
 /** Dialog / Narration から text を取り出すヘルパー */
@@ -474,7 +476,7 @@ export class NovelRenderer {
    * 指定シーンにジャンプする
    */
   jumpToScene(sceneId: string): void {
-    const scene = this.allScenes.find((s) => s.id === sceneId)
+    const scene = findSceneById(this.allScenes, sceneId)
     if (!scene) {
       console.warn(`[name-name] シーンが見つからない: ${sceneId}`)
       return
@@ -1608,9 +1610,9 @@ export class NovelRenderer {
   quickSave(): boolean {
     if (this.waitingForChoice || this.waitingForWait) return false
 
-    const sceneName = this.currentSceneId
-      ? (this.allScenes.find((s) => s.id === this.currentSceneId)?.title ?? null)
-      : null
+    // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
+    // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
+    const sceneName = resolveSceneTitle(this.allScenes, this.currentSceneId)
 
     const snapshot = this.getSnapshot()
     const data: SaveSlotData = {
@@ -1657,9 +1659,8 @@ export class NovelRenderer {
    */
   private openSaveMenu(): void {
     this.saveLoadOverlay.showSave((slot: number) => {
-      const sceneName = this.currentSceneId
-        ? (this.allScenes.find((s) => s.id === this.currentSceneId)?.title ?? null)
-        : null
+      // quickSave と共通のシーンタイトル解決 (#260)。
+      const sceneName = resolveSceneTitle(this.allScenes, this.currentSceneId)
 
       const snapshot = this.getSnapshot()
       const data: SaveSlotData = {
@@ -1756,7 +1757,7 @@ export class NovelRenderer {
     }
 
     // シーンを探す
-    const scene = this.allScenes.find((s) => s.id === data.sceneId)
+    const scene = findSceneById(this.allScenes, data.sceneId)
     if (!scene) {
       // シーンが無い場合はフラグだけ復元（従来挙動を維持）
       this.gameState.fromJSON(data.flags)
@@ -1788,7 +1789,7 @@ export class NovelRenderer {
 
     // シーンを探す。無ければ完全な no-op（この時点で flags/index/history を一切触らない）。
     // loadFromSaveData と違い、見つからない場合はフラグも復元しない（最小状態への厳格な no-op）。
-    const scene = this.allScenes.find((s) => s.id === opts.sceneId)
+    const scene = findSceneById(this.allScenes, opts.sceneId)
     if (!scene) {
       console.warn(`[name-name] startFrom: シーンが見つからない: ${opts.sceneId}`)
       return

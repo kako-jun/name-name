@@ -8,9 +8,12 @@ import {
   formatCounterText,
   computeSeekBarPosition,
   describeEventForDebug,
+  findSceneById,
+  resolveSceneTitle,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
+import type { EventScene } from '../types'
 
 describe('computeCoverFit', () => {
   // 注意: これは「抽出後の computeCoverFit と同一の直接計算式」であって、
@@ -517,5 +520,125 @@ describe('describeEventForDebug', () => {
     expect(describeEventForDebug(null)).toEqual({ kind: '(none)', text: undefined })
     expect(describeEventForDebug(undefined)).toEqual({ kind: '(none)', text: undefined })
     expect(describeEventForDebug({})).toEqual({ kind: '(unknown)', text: undefined })
+  })
+})
+
+// EventScene の最小フィクスチャ（events は本テスト対象の find/title 解決に無関係なので空）。
+function scene(id: string, title: string): EventScene {
+  return { id, title, view: 'TopDown', events: [] }
+}
+
+describe('findSceneById', () => {
+  // 抽出前 NovelRenderer の jumpToScene / loadFromSaveData / startFrom に同形で直書き
+  // されていた式そのもの（抽出後関数のコピーではなく inline 式の貼り直し）:
+  //   this.allScenes.find((s) => s.id === <id>)
+  function inlineFind(scenes: EventScene[], sceneId: string): EventScene | undefined {
+    return scenes.find((s) => s.id === sceneId)
+  }
+
+  const scenes: EventScene[] = [
+    scene('intro', '導入'),
+    scene('room-1', '部屋1'),
+    scene('room-2', '部屋2'),
+  ]
+
+  it('リファレンス等価性: 抽出前 inline find と同一参照を返す', () => {
+    const cases = ['intro', 'room-1', 'room-2', 'missing', '', 'INTRO']
+    for (const id of cases) {
+      // toBe で参照同値（同じ配列要素 or 同じ undefined）を縛る。値コピーではない。
+      expect(findSceneById(scenes, id)).toBe(inlineFind(scenes, id))
+    }
+  })
+
+  it('該当 id のシーン本体（同一参照）を返す', () => {
+    expect(findSceneById(scenes, 'room-1')).toBe(scenes[1])
+    expect(findSceneById(scenes, 'intro')).toBe(scenes[0])
+  })
+
+  it('該当なし → undefined（find の素の挙動）', () => {
+    expect(findSceneById(scenes, 'nope')).toBeUndefined()
+    expect(findSceneById([], 'intro')).toBeUndefined()
+  })
+
+  it('=== による厳密一致（大文字小文字・型を区別）', () => {
+    expect(findSceneById(scenes, 'Intro')).toBeUndefined() // 大文字違いは不一致
+    expect(findSceneById(scenes, '')).toBeUndefined()
+  })
+
+  it('id 重複時は先頭から最初の一致（先勝ち）を返す', () => {
+    const dup: EventScene[] = [scene('dup', '先'), scene('dup', '後'), scene('x', 'X')]
+    expect(findSceneById(dup, 'dup')).toBe(dup[0])
+    expect(findSceneById(dup, 'dup')?.title).toBe('先')
+  })
+})
+
+describe('resolveSceneTitle', () => {
+  // 抽出前 NovelRenderer の quickSave / openSaveMenu に**バイト単位で重複**していた式
+  // そのもの（抽出後関数のコピーではない）:
+  //   this.currentSceneId
+  //     ? (this.allScenes.find((s) => s.id === this.currentSceneId)?.title ?? null)
+  //     : null
+  function inlineResolveTitle(
+    scenes: EventScene[],
+    sceneId: string | null | undefined
+  ): string | null {
+    return sceneId ? (scenes.find((s) => s.id === sceneId)?.title ?? null) : null
+  }
+
+  const scenes: EventScene[] = [scene('intro', '導入'), scene('room-1', '部屋1')]
+
+  it('リファレンス等価性: 抽出前 inline 三項式と一致', () => {
+    const cases: Array<string | null | undefined> = [
+      'intro', // 一致 → title
+      'room-1', // 別の一致 → title
+      'missing', // scene 無し → null（?.title が undefined → ?? null）
+      '', // 空文字 → falsy → 即 null（scene を引かない）
+      null, // null → 即 null
+      undefined, // undefined → 即 null
+    ]
+    for (const id of cases) {
+      expect(resolveSceneTitle(scenes, id)).toBe(inlineResolveTitle(scenes, id))
+    }
+  })
+
+  it('該当シーンの title を返す', () => {
+    expect(resolveSceneTitle(scenes, 'intro')).toBe('導入')
+    expect(resolveSceneTitle(scenes, 'room-1')).toBe('部屋1')
+  })
+
+  it('sceneId が null / undefined / 空文字 → null（scene を引かず即 return）', () => {
+    expect(resolveSceneTitle(scenes, null)).toBeNull()
+    expect(resolveSceneTitle(scenes, undefined)).toBeNull()
+    expect(resolveSceneTitle(scenes, '')).toBeNull()
+  })
+
+  it('該当 scene が無い → null', () => {
+    expect(resolveSceneTitle(scenes, 'no-such-scene')).toBeNull()
+    expect(resolveSceneTitle([], 'intro')).toBeNull()
+  })
+
+  it('title が（型上はあり得ないが）実行時 undefined/null でも ?? null で null に落とす', () => {
+    // 元 inline 式の `?.title ?? null` の防御を保つ。型を欺いて undefined/null title を作る。
+    const undef: EventScene[] = [
+      { id: 'x', title: undefined as unknown as string, view: 'TopDown', events: [] },
+    ]
+    const nul: EventScene[] = [
+      { id: 'y', title: null as unknown as string, view: 'TopDown', events: [] },
+    ]
+    expect(resolveSceneTitle(undef, 'x')).toBeNull()
+    expect(resolveSceneTitle(nul, 'y')).toBeNull()
+  })
+
+  it('空文字 title は素通し（?? null は falsy の "" を落とさない）', () => {
+    // ?? は '' を素通しするので、空タイトルは null ではなく '' を返す（元 inline と同じ）。
+    const empty: EventScene[] = [scene('e', '')]
+    expect(resolveSceneTitle(empty, 'e')).toBe('')
+    expect(resolveSceneTitle(empty, 'e')).toBe(inlineResolveTitle(empty, 'e'))
+  })
+
+  it('複数 scene から正しい 1 件の title を選ぶ', () => {
+    const many: EventScene[] = [scene('a', 'A'), scene('b', 'B'), scene('c', 'C')]
+    expect(resolveSceneTitle(many, 'b')).toBe('B')
+    expect(resolveSceneTitle(many, 'c')).toBe('C')
   })
 })

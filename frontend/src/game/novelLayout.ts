@@ -1,5 +1,5 @@
 /**
- * `NovelRenderer` の純粋計算（幾何・色パース・URL/フォント解決）。
+ * `NovelRenderer` の純粋計算（幾何・色パース・URL/フォント解決・シーンルックアップ）。
  *
  * `NovelRenderer.ts`（god-object）の肥大トレンド監視と漸進分離 (#260) の一環。
  * 入力→出力が決定論的で、`this` / PixiJS / DOM / TimeController に一切依存しない計算だけを
@@ -13,6 +13,7 @@
 
 import type { BackgroundFade, NovelGameState } from './GameState'
 import type { SaveSlotData } from './SaveManager'
+import type { EventScene } from '../types'
 
 /** カバーフィット後の背景スプライト寸法と配置（px）。 */
 export interface CoverFit {
@@ -223,6 +224,10 @@ export interface DebugEventDescriptor {
  *
  * `this` / PixiJS / DOM に触れず、入力イベントだけから決定論的に値を導く。HUD 表示専用で
  * ゲーム進行には影響しない。`text` は最大 120 文字に切り詰める元挙動（配列ケースのみ）を踏襲。
+ *
+ * 引数型を元の `Event` から `unknown` に広げているのは任意入力耐性のため（HUD デバッグ用途で
+ * `resolvedEvents` 由来の想定外・不正形なイベントを渡されても落ちず `'(none)'`/`'(unknown)'`
+ * に落とす）。内部でガードしてから読むため `unknown` でも安全。
  */
 export function describeEventForDebug(event: unknown): DebugEventDescriptor {
   let kind = '(none)'
@@ -244,4 +249,49 @@ export function describeEventForDebug(event: unknown): DebugEventDescriptor {
     }
   }
   return { kind, text }
+}
+
+/**
+ * シーン ID から該当シーンを線形探索する純粋関数 (#260)。
+ *
+ * 元 NovelRenderer 内に同形で複数箇所直書きされていた `this.allScenes.find((s) => s.id === id)`
+ * を 1 つに集約する。具体的には以下の「シーン本体を引く」用途が同一の式だった:
+ *   - `jumpToScene(sceneId)`:        `this.allScenes.find((s) => s.id === sceneId)`
+ *   - `loadFromSaveData(data)`:      `this.allScenes.find((s) => s.id === data.sceneId)`
+ *   - `startFrom(opts)`:             `this.allScenes.find((s) => s.id === opts.sceneId)`
+ *   - `resolveSceneTitle` 内部:       title を引くための同じ scene ルックアップ
+ *
+ * 見つからなければ `Array.prototype.find` の素の挙動どおり `undefined` を返す（元実装と同じ。
+ * 呼び出し側が `if (!scene)` で未発見時の分岐／警告／フォールバックを各自で行う前提）。
+ * `===` による厳密一致で、先頭から最初に一致した 1 件を返す（重複 id は先勝ち）。
+ * `this` / PixiJS / DOM / audio に一切触れない決定論的写像。
+ */
+export function findSceneById(scenes: EventScene[], sceneId: string): EventScene | undefined {
+  return scenes.find((s) => s.id === sceneId)
+}
+
+/**
+ * 現在のシーン ID からセーブ表示用のシーンタイトルを解決する純粋関数 (#260)。
+ *
+ * 元 NovelRenderer 内で `quickSave()` と `openSaveMenu()` の 2 箇所にバイト単位で重複していた式:
+ *   `this.currentSceneId
+ *      ? (this.allScenes.find((s) => s.id === this.currentSceneId)?.title ?? null)
+ *      : null`
+ * を 1 関数に集約する（`resolveAssetUrl` / `resolveFontFamily` と同じ「2 箇所以上の重複を集約」）。
+ *
+ * 段階を元実装どおり忠実に踏襲する:
+ *  - `sceneId` が falsy（`null` / `undefined` / 空文字 `''`）なら、scene を引かずに即 `null`。
+ *    元の `this.currentSceneId ? … : null` の三項を踏襲する（空文字も「シーン未確定」として `null`）。
+ *  - scene が見つからなければ（`find` が `undefined`）`?.title` が `undefined` になり `?? null` で `null`。
+ *  - scene の `title` が（型上はあり得ないが）`undefined`/`null` でも `?? null` で `null` に落とす。
+ *  - それ以外は scene の `title` 文字列を返す。
+ *
+ * scene 本体の線形探索は `findSceneById` に委譲する（探索ロジックの一元化）。
+ */
+export function resolveSceneTitle(
+  scenes: EventScene[],
+  sceneId: string | null | undefined
+): string | null {
+  if (!sceneId) return null
+  return findSceneById(scenes, sceneId)?.title ?? null
 }
