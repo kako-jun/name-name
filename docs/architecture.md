@@ -215,6 +215,13 @@ NovelRenderer (PixiJS)          ← 1イベントずつ描画
 
 `Dialog` と `Narration` のみユーザー操作（クリック/キー）で進行する。
 
+### NovelRenderer の純粋計算モジュール (#260)
+
+`NovelRenderer.ts` は god-object 化しやすいため、入力→出力が決定論的で `this` / PixiJS / DOM / TimeController に一切依存しない計算を専用モジュールへ漸進分離している（#260）。`ruby.ts` / `rubyLayout.ts` / `raycastProjection.ts` と同じ流儀で、NovelRenderer 側は「いつ計算するか」「結果をどの表示オブジェクト・オーディオに当てるか」だけを保持する。各関数は抽出前に NovelRenderer 内へ直書きされていた式・数値・文字列と完全一致し（挙動不変）、リファレンス等価性をユニットテストで機械的に担保する。
+
+- **`frontend/src/game/screenEffects.ts`（時間→値、#143 / #264）**: 画面効果の毎フレーム計算を集約する。`effectProgress(elapsedMs, durationMs)` が `min(elapsed/duration, 1)` の進行率を返し（`durationMs <= 0` / 非有限は即完了 `1`、負 elapsed は `0` にクランプ）、それを使って `computeShakeOffset`（`decay = 1 - progress`・`offsetX = sin(elapsed*0.05)*intensity*decay`・`offsetY = cos(elapsed*0.037)*intensity*decay*0.6` の減衰揺れ）、`computeFlashAlpha`（`peak*(1-progress)` の線形フェードアウト）、`computeFadeAlpha`（`from + (to-from)*progress` の線形補間、`progress>=1` で `to` ちょうど）を算出する。いずれも `done = progress >= 1` を返し、NaN/Infinity の振幅・alpha は `0` 扱い。境界値テストは `screenEffects.test.ts`
+- **`frontend/src/game/novelLayout.ts`（幾何・色パース・URL 解決・state 変換、#265）**: NovelRenderer の純粋計算 4 種を集約する。`computeCoverFit(textureWidth, textureHeight, screenWidth, screenHeight)` は背景画像をアスペクト比維持で画面に「カバー」し中央寄せした `{width, height, x, y}` を返す（`scale = max(screenW/texW, screenH/texH)` で短辺を画面に合わせ長辺を溢れさせ、はみ出し分を中央でトリミング）。`parseHexColor(hex)` は `#RRGGBB` を PixiJS 用数値色に変換（先頭 '#' を 1 つだけ除去 → `parseInt(_, 16)`、NaN は白 `0xffffff` フォールバック）。`resolveAssetUrl(baseUrl, kind, path)` はアセット相対パスを `${baseUrl}/${kind}/${path 先頭 '/' を 1 つ除去}` の配信 URL に解決（`kind` は `'images' | 'sounds'`）。`saveSlotToGameState(data, normalizedFade)` は `SaveSlotData` を復元用 `NovelGameState` に写像する（video/isBlackout/characters/currentBgmPath は古いセーブ向け後方互換フォールバック付き、fade は PixiJS 非依存を保つため正規化済みの値を引数で受け取る）。境界値・リファレンス等価性テストは `novelLayout.test.ts`
+
 ## セーブ/ロード
 
 ### 保存先
