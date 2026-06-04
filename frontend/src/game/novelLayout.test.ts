@@ -4,9 +4,11 @@ import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
 
 describe('computeCoverFit', () => {
-  // 抽出前に NovelRenderer.applyCoverFit 内で直書きされていた式（リファレンス実装）。
-  // sprite.{width,height,x,y} に代入していた値をそのまま再現する。
-  function inlineCoverFit(texW: number, texH: number, screenW: number, screenH: number) {
+  // 注意: これは「抽出後の computeCoverFit と同一の直接計算式」であって、
+  // 抽出前の PIXI set/read-back 経路の再現ではない（両者は同じ式なので一致して当然）。
+  // applyCoverFit が実際に通る set→read-back round-trip の等価性は、後段の
+  // 「round-trip 等価性」テストで pixiReadBack オラクルを使って別途縛る。
+  function directCoverFit(texW: number, texH: number, screenW: number, screenH: number) {
     const scaleX = screenW / texW
     const scaleY = screenH / texH
     const scale = Math.max(scaleX, scaleY)
@@ -20,7 +22,33 @@ describe('computeCoverFit', () => {
     }
   }
 
-  it('リファレンス等価性: 抽出前 inline 式と数値完全一致', () => {
+  // PIXI v8 Sprite の set→read-back 経路を数値で再現するオラクル。
+  // applyCoverFit は computeCoverFit の戻り値を Object.assign(sprite, {...}) で
+  // sprite.{width,height,x,y} に流し込む。width/height は「実 px」ではなく scale を
+  // 介して保持・読み戻されるため、抽出前から実際に画面へ出ていた寸法はこの round-trip 後の値。
+  //
+  //   set width(v):  scale.x = (origW !== 0) ? v/origW * sign : sign   // sign = Math.sign(scale.x) || 1
+  //   get width():   Math.abs(scale.x) * origW
+  //
+  // 生成直後の Sprite は scale.x = scale.y = 1 なので sign = 1。x/y は position の素通し setter
+  // （read-back 変換なし）。よって画面に出る寸法は下記のとおり。
+  // 参照: node_modules/pixi.js/lib/scene/container/container-mixins/measureMixin.mjs (_setWidth/_setHeight)
+  //        node_modules/pixi.js/lib/scene/sprite/Sprite.mjs (get/set width, get/set height)
+  function pixiReadBack(origW: number, origH: number, screenW: number, screenH: number) {
+    const fit = computeCoverFit(origW, origH, screenW, screenH)
+    // width setter → scale.x（sign=1 で初期化された Sprite を前提）
+    const scaleX = origW !== 0 ? fit.width / origW : 1
+    const scaleY = origH !== 0 ? fit.height / origH : 1
+    // getter で読み戻した実表示寸法
+    return {
+      width: Math.abs(scaleX) * origW,
+      height: Math.abs(scaleY) * origH,
+      x: fit.x, // position はそのまま
+      y: fit.y,
+    }
+  }
+
+  it('リファレンス等価性: 抽出後 computeCoverFit と直接計算式が数値完全一致', () => {
     const cases: Array<[number, number, number, number]> = [
       [1920, 1080, 1920, 1080], // 完全一致（scale=1, x=y=0）
       [1000, 1000, 1920, 1080], // 縦長画面 → 幅基準でカバー
@@ -31,7 +59,60 @@ describe('computeCoverFit', () => {
       [333, 777, 1920, 1080], // 半端な比
     ]
     for (const [tw, th, sw, sh] of cases) {
-      expect(computeCoverFit(tw, th, sw, sh)).toEqual(inlineCoverFit(tw, th, sw, sh))
+      expect(computeCoverFit(tw, th, sw, sh)).toEqual(directCoverFit(tw, th, sw, sh))
+    }
+  })
+
+  it('round-trip 等価性: PIXI set→read-back 経路後も寸法が保たれる', () => {
+    // PR #265 が同値性を疑った当の経路（sprite.width=v で scale.x=v/origW を設定し、
+    // get width=abs(scale.x)*origW で読み戻す）を pixiReadBack で再現し、
+    // computeCoverFit が「設定→読み戻し」を生き残ることを複数入力で機械的に確認する。
+    // 小/大/極端アスペクト比 + 実画面解像度数種を網羅。
+    const cases: Array<[number, number, number, number]> = [
+      [1920, 1080, 1920, 1080], // 等倍
+      [1, 1, 1920, 1080], // 極小テクスチャ → 巨大拡大
+      [8000, 6000, 1366, 768], // 巨大テクスチャ → 縮小（ノートPC解像度）
+      [3840, 2160, 2560, 1440], // 4K → WQHD
+      [100, 4000, 1920, 1080], // 極端な縦長アスペクト
+      [4000, 100, 1280, 720], // 極端な横長アスペクト
+      [1242, 2688, 375, 812], // モバイル縦（iPhone 系）
+      [375, 812, 1920, 1080], // モバイル画像を横画面へ
+      [333, 777, 800, 600], // 半端な比 + SVGA
+    ]
+    for (const [tw, th, sw, sh] of cases) {
+      const fit = computeCoverFit(tw, th, sw, sh)
+      const readBack = pixiReadBack(tw, th, sw, sh)
+      // computeCoverFit の生出力と、PIXI 経路を通した後の表示寸法が一致する
+      // （cover-fit の width/height は常に非負なので abs を通しても値は変わらない）。
+      expect(fit.width).toBeCloseTo(readBack.width, 6)
+      expect(fit.height).toBeCloseTo(readBack.height, 6)
+      expect(fit.x).toBeCloseTo(readBack.x, 6)
+      expect(fit.y).toBeCloseTo(readBack.y, 6)
+      // round-trip 後も「画面を必ず覆う」cover 不変条件が崩れない
+      expect(readBack.width).toBeGreaterThanOrEqual(sw - 1e-6)
+      expect(readBack.height).toBeGreaterThanOrEqual(sh - 1e-6)
+    }
+  })
+
+  it('退化入力: 抽出前後で同じ式 → 同じ結果（texW=0 / NaN / 負値）', () => {
+    // 本体ロジックは不変なので「直接計算式と同じ結果を返す」ことだけを縛る。
+    // raycastProjection 系テストが NaN/Infinity を網羅する流儀に揃える。
+    const degenerate: Array<[number, number, number, number]> = [
+      [0, 1080, 1920, 1080], // texW=0 → scaleX=Infinity → scale=Infinity → width=NaN(0*Inf)
+      [1920, 0, 1920, 1080], // texH=0 → scaleY=Infinity
+      [0, 0, 1920, 1080], // 両方 0
+      [1920, 1080, 0, 0], // 画面 0 → scale=0 → width=0
+      [NaN, 1080, 1920, 1080], // texW NaN
+      [1920, NaN, 1920, 1080], // texH NaN
+      [1920, 1080, NaN, 1080], // screenW NaN
+      [-1920, 1080, 1920, 1080], // 負のテクスチャ幅
+      [1920, 1080, -1920, -1080], // 負の画面
+      [Infinity, 1080, 1920, 1080], // texW Infinity → scaleX=0
+      [1920, 1080, Infinity, 1080], // screenW Infinity → scale=Infinity
+    ]
+    for (const [tw, th, sw, sh] of degenerate) {
+      // toEqual は NaN 同士を一致と見なす（Object.is ベース）ので退化系でも縛れる
+      expect(computeCoverFit(tw, th, sw, sh)).toEqual(directCoverFit(tw, th, sw, sh))
     }
   })
 
@@ -107,6 +188,19 @@ describe('parseHexColor', () => {
   it("先頭 '#' は 1 つだけ除去（replace の元挙動）", () => {
     // '##ff' → '#ff' → parseInt('#ff',16)=NaN → 白
     expect(parseHexColor('##ff')).toBe(0xffffff)
+  })
+
+  it("中間の '#' は最初の 1 つだけ除去（replace('#','') のセマンティクス固定）", () => {
+    // replace(文字列, '') は最初の出現だけを置換する。中間 # でもこの挙動を縛る。
+    // '1#2' → 先頭でなく中間の最初の # を 1 つ消して '12' → parseInt('12',16)=0x12=18
+    expect(parseHexColor('1#2')).toBe(0x12)
+    expect(parseHexColor('1#2')).toBe(inlineParseHexColor('1#2'))
+    // '#1#2' → 最初の # だけ消えて '1#2' → parseInt('1#2',16) は '1' まで読んで 0x1
+    expect(parseHexColor('#1#2')).toBe(0x1)
+    expect(parseHexColor('#1#2')).toBe(inlineParseHexColor('#1#2'))
+    // 'a#b#c' → 最初の # だけ消えて 'ab#c' → parseInt('ab#c',16)='ab' まで → 0xab
+    expect(parseHexColor('a#b#c')).toBe(0xab)
+    expect(parseHexColor('a#b#c')).toBe(inlineParseHexColor('a#b#c'))
   })
 })
 
