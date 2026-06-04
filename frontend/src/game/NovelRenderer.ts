@@ -46,6 +46,7 @@ import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
 import { isRead, loadReadProgress, markRead } from './readProgress'
 import { TimeController, defaultTimeController } from './TimeController'
 import { computeShakeOffset, computeFlashAlpha, computeFadeAlpha } from './screenEffects'
+import { computeCoverFit, parseHexColor, resolveAssetUrl, saveSlotToGameState } from './novelLayout'
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -793,16 +794,7 @@ export class NovelRenderer {
   }
 
   // ---- 画面効果メソッド (#143) ----
-
-  /**
-   * 16進カラーコード（"#rrggbb"）を PixiJS の 0xRRGGBB 数値に変換する。
-   * パース失敗時は 0xffffff を返す。
-   */
-  private parseHexColor(hex: string): number {
-    const clean = hex.replace('#', '')
-    const n = parseInt(clean, 16)
-    return isNaN(n) ? 0xffffff : n
-  }
+  // 16進カラーパース parseHexColor は novelLayout に切り出した (#260)
 
   /**
    * 画面シェイク演出 (#143)。
@@ -845,7 +837,7 @@ export class NovelRenderer {
       this.effectTimer = null
     }
 
-    const color = this.parseHexColor(colorHex)
+    const color = parseHexColor(colorHex)
     this.effectOverlay.clear()
     this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
     this.effectOverlay.fill(color)
@@ -891,7 +883,7 @@ export class NovelRenderer {
       this.effectTimer = null
     }
 
-    const color = this.parseHexColor(colorHex)
+    const color = parseHexColor(colorHex)
     this.effectOverlay.clear()
     this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
     this.effectOverlay.fill(color)
@@ -1151,7 +1143,7 @@ export class NovelRenderer {
 
     // BGM復元
     if (state.currentBgmPath) {
-      const soundUrl = `${this.assetBaseUrl}/sounds/${state.currentBgmPath.replace(/^\//, '')}`
+      const soundUrl = resolveAssetUrl(this.assetBaseUrl, 'sounds', state.currentBgmPath)
       this.audioManager.playBgm(soundUrl)
       this.currentBgmPath = state.currentBgmPath
     } else {
@@ -1372,7 +1364,7 @@ export class NovelRenderer {
     }
     if ('Bgm' in event) {
       if (event.Bgm.action === 'Play' && event.Bgm.path) {
-        const soundUrl = `${this.assetBaseUrl}/sounds/${event.Bgm.path.replace(/^\//, '')}`
+        const soundUrl = resolveAssetUrl(this.assetBaseUrl, 'sounds', event.Bgm.path)
         // fade_ms (#145): 指定があれば fade-in、未指定なら即時再生
         this.audioManager.playBgm(soundUrl, event.Bgm.fade_ms ?? undefined)
         this.currentBgmPath = event.Bgm.path
@@ -1388,7 +1380,7 @@ export class NovelRenderer {
       return
     }
     if ('Se' in event) {
-      const soundUrl = `${this.assetBaseUrl}/sounds/${event.Se.path.replace(/^\//, '')}`
+      const soundUrl = resolveAssetUrl(this.assetBaseUrl, 'sounds', event.Se.path)
       // fade_ms (#145): 指定があれば fade-in、未指定なら即時再生
       this.audioManager.playSe(soundUrl, event.Se.fade_ms ?? undefined)
       return
@@ -1531,8 +1523,7 @@ export class NovelRenderer {
 
     if (!this.assetBaseUrl) return
 
-    const cleanPath = path.replace(/^\//, '')
-    const url = `${this.assetBaseUrl}/images/${cleanPath}`
+    const url = resolveAssetUrl(this.assetBaseUrl, 'images', path)
 
     // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ。
     // キャッシュヒットで同期描画する場合も必ず進めること。さもないと直前に
@@ -1566,13 +1557,10 @@ export class NovelRenderer {
   }
 
   private applyCoverFit(sprite: Sprite): void {
-    const scaleX = this.screenWidth / sprite.texture.width
-    const scaleY = this.screenHeight / sprite.texture.height
-    const scale = Math.max(scaleX, scaleY)
-    sprite.width = sprite.texture.width * scale
-    sprite.height = sprite.texture.height * scale
-    sprite.x = (this.screenWidth - sprite.width) / 2
-    sprite.y = (this.screenHeight - sprite.height) / 2
+    // カバーフィット幾何は novelLayout.computeCoverFit に集約 (#260)。
+    // 戻り値の {width,height,x,y} を Object.assign で sprite の各 setter に流し込む。
+    const { width, height } = sprite.texture
+    Object.assign(sprite, computeCoverFit(width, height, this.screenWidth, this.screenHeight))
   }
 
   /**
@@ -1780,20 +1768,10 @@ export class NovelRenderer {
       return
     }
 
-    // SaveSlotData から背景/動画/立ち絵/BGM まで含む完全な状態を構築
-    const state: NovelGameState = {
-      sceneId: data.sceneId,
-      eventIndex: data.eventIndex,
-      textIndex: data.textIndex,
-      flags: data.flags,
-      backgroundPath: data.backgroundPath,
-      backgroundFade: normalizeBackgroundFade(data.backgroundFade),
-      // 動画レイヤ (#252)。後方互換: 古いセーブには無い → null（動画なし）。
-      video: data.video ?? null,
-      isBlackout: data.isBlackout ?? false,
-      characters: data.characters ?? [],
-      currentBgmPath: data.currentBgmPath ?? null,
-    }
+    // SaveSlotData → NovelGameState のフィールド対応・後方互換フォールバックは
+    // novelLayout.saveSlotToGameState に集約 (#260)。fade だけは PixiJS を間接参照する
+    // normalizeBackgroundFade をここで適用し、純粋関数には正規化済みの値を渡す。
+    const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
     this.restoreToScene(scene, state)
   }
 
@@ -1891,7 +1869,7 @@ export class NovelRenderer {
     }
 
     if (voicePath) {
-      const voiceUrl = `${this.assetBaseUrl}/sounds/${voicePath.replace(/^\//, '')}`
+      const voiceUrl = resolveAssetUrl(this.assetBaseUrl, 'sounds', voicePath)
       // voice は fire-and-forget で再生する。autoAdvance は typing onDone / [待機] が決定する。
       // 以前は voice 終了で scheduleAutoAdvance を呼んでいたが、これだと voice の長さで
       // 中央ホールド時間が伸びてしまい「決まった時間で次へ進む」設計と合わなかった。
