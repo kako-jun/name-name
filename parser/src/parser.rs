@@ -856,9 +856,19 @@ fn parse_directive(line: &str) -> Option<Event> {
     }
 
     // [文字演出: Title, 効果=爆発, 間隔=80] — グリフ単位の文字アニメ (#268)
-    // 必須: target / 任意: 効果(爆発|タイプ), 間隔, 速度, dy/dx/rotation/scale/alpha, duration, easing
+    // 必須: target / 任意: 効果(爆発|タイプ), 間隔, 速度, dy/dx/rotation/scale/alpha, duration, easing,
+    //       カーソル/点滅/カーソル色 (効果=タイプ 専用, #271)
     if let Some(rest) = content.strip_prefix("文字演出:") {
         return parse_text_effect_directive(rest);
+    }
+
+    // [下線: Title, 色=#1a4a7a, 太さ=3, 時間=700] — 下線ビーム (#270)
+    // 必須: target（bare 先頭値でも可）/ 任意: 色, 太さ, 時間, 余白, easing
+    if let Some(rest) = content.strip_prefix("下線:") {
+        return parse_underline_directive(rest);
+    }
+    if let Some(rest) = content.strip_prefix("underline:") {
+        return parse_underline_directive(rest);
     }
 
     // [タイトル: TEXT] / [タイトル: TEXT, font=bellpoke_font] / [タイトル: TEXT, 位置=右外]
@@ -1299,6 +1309,10 @@ fn parse_text_effect_directive(content: &str) -> Option<Event> {
     let mut alpha: Option<f32> = None;
     let mut duration_ms: Option<u32> = None;
     let mut easing: Option<crate::models::Easing> = None;
+    // #271: タイプ末尾の点滅カーソル（効果=タイプ 専用）。
+    let mut cursor: Option<bool> = None;
+    let mut blink_ms: Option<u32> = None;
+    let mut cursor_color: Option<String> = None;
 
     let mut first = true;
     for raw_pair in content.split(',') {
@@ -1338,6 +1352,10 @@ fn parse_text_effect_directive(content: &str) -> Option<Event> {
                     "alpha" | "不透明度" => alpha = value.parse().ok(),
                     "duration" | "時間" => duration_ms = value.parse().ok(),
                     "easing" => easing = parse_easing(value),
+                    // #271: カーソル on/off。on / true / 表示 を真、off / false / なし を偽に倒す。
+                    "cursor" | "カーソル" => cursor = parse_on_off(value),
+                    "blink" | "点滅" => blink_ms = value.parse().ok(),
+                    "cursor_color" | "カーソル色" => cursor_color = Some(value.to_string()),
                     _ => {} // 未知キーは silent skip
                 }
             }
@@ -1357,6 +1375,78 @@ fn parse_text_effect_directive(content: &str) -> Option<Event> {
         scale,
         alpha,
         duration_ms,
+        easing,
+        cursor,
+        blink_ms,
+        cursor_color,
+    })
+}
+
+/// on/off 系キーワードを bool に解釈する (#271)。
+/// `on` / `true` / `表示` / `あり` を true、`off` / `false` / `なし` を false に倒す。
+/// 未知の値は None（呼び出し側でフィールド未設定 = 既定挙動）。
+fn parse_on_off(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "on" | "true" | "表示" | "あり" => Some(true),
+        "off" | "false" | "なし" => Some(false),
+        _ => None,
+    }
+}
+
+/// `[下線: target, …]` をパースする (#270)。
+///
+/// orber OP タイトルカードの下線ビーム。`[文字演出]` とは別系統の図形プリミティブ。
+/// 必須は target のみ（bare 先頭値でも可）。プリセット既定値の展開は TS 側で行い、
+/// parser は指定された値を素直に持たせる。日本語キー（対象/色/太さ/時間/余白）＋
+/// 英語エイリアス（target/color/thickness/duration/offset）に両対応。
+/// target 欠落時は directive を捨てる（Animate / TextEffect の作法に揃える）。
+fn parse_underline_directive(content: &str) -> Option<Event> {
+    let mut target: Option<String> = None;
+    let mut color: Option<String> = None;
+    let mut thickness: Option<u32> = None;
+    let mut duration_ms: Option<u32> = None;
+    let mut offset: Option<u32> = None;
+    let mut easing: Option<crate::models::Easing> = None;
+
+    let mut first = true;
+    for raw_pair in content.split(',') {
+        let pair = raw_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        // 先頭要素が `=` を含まない bare 値なら target とみなす
+        //（`[下線: Title, 色=#1a4a7a]` の `Title`）。
+        match pair.split_once('=') {
+            None => {
+                if first {
+                    target = Some(pair.to_string());
+                }
+                // bare 値が 2 つ目以降に来る不正構文は silent skip
+            }
+            Some((k, v)) => {
+                let key = k.trim();
+                let value = v.trim();
+                match key {
+                    "target" | "対象" => target = Some(value.to_string()),
+                    "color" | "色" => color = Some(value.to_string()),
+                    "thickness" | "太さ" => thickness = value.parse().ok(),
+                    "duration" | "時間" => duration_ms = value.parse().ok(),
+                    "offset" | "余白" => offset = value.parse().ok(),
+                    "easing" => easing = parse_easing(value),
+                    _ => {} // 未知キーは silent skip
+                }
+            }
+        }
+        first = false;
+    }
+
+    let target = target?;
+    Some(Event::Underline {
+        target,
+        color,
+        thickness,
+        duration_ms,
+        offset,
         easing,
     })
 }

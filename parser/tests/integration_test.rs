@@ -2350,6 +2350,341 @@ title: "文字演出"
     );
 }
 
+// ---- #271 [文字演出: 効果=タイプ] カーソル ----
+
+#[test]
+fn test_text_effect_cursor_japanese_keys() {
+    // 日本語キー カーソル=on / 点滅 / カーソル色 をパースする。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "カーソル"
+---
+
+## s1: cursor
+
+[文字演出: Title, 効果=タイプ, 速度=70, カーソル=on, 点滅=600, カーソル色=#2b6cb0]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::TextEffect {
+        target,
+        effect,
+        cursor,
+        blink_ms,
+        cursor_color,
+        ..
+    } = &events[0]
+    {
+        assert_eq!(target, "Title");
+        assert_eq!(*effect, Some(TextEffectPreset::Typewriter));
+        assert_eq!(*cursor, Some(true));
+        assert_eq!(*blink_ms, Some(600));
+        assert_eq!(cursor_color.as_deref(), Some("#2b6cb0"));
+    } else {
+        panic!("expected TextEffect, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_text_effect_cursor_english_keys_and_off() {
+    // 英語キー cursor=off / blink / cursor_color を受理する。off は Some(false)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "カーソル"
+---
+
+## s1: cursor_en
+
+[文字演出: target=Title, effect=typewriter, cursor=off, blink=400, cursor_color=#ffffff]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::TextEffect {
+        cursor,
+        blink_ms,
+        cursor_color,
+        ..
+    } = &events[0]
+    {
+        assert_eq!(*cursor, Some(false));
+        assert_eq!(*blink_ms, Some(400));
+        assert_eq!(cursor_color.as_deref(), Some("#ffffff"));
+    } else {
+        panic!("expected TextEffect, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_text_effect_cursor_unset_when_not_specified() {
+    // カーソル系を書かなければ全フィールド None（既存 directive と後方互換）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "カーソル"
+---
+
+## s1: no_cursor
+
+[文字演出: Title, 効果=タイプ, 速度=70]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::TextEffect {
+        cursor,
+        blink_ms,
+        cursor_color,
+        ..
+    } = &events[0]
+    {
+        assert_eq!(*cursor, None);
+        assert_eq!(*blink_ms, None);
+        assert_eq!(*cursor_color, None);
+    } else {
+        panic!("expected TextEffect, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_text_effect_cursor_roundtrip() {
+    // parse → emit → parse でカーソル系が保たれる。emit は英語キー (cursor=on) に正規化。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "カーソル"
+---
+
+## s1: roundtrip
+
+[文字演出: Title, 効果=タイプ, 速度=70, カーソル=on, 点滅=600, カーソル色=#2b6cb0]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("cursor=on"),
+        "emit should normalize カーソル=on to cursor=on, got:\n{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    let events2 = &doc2.chapters[0].scenes[0].events;
+    assert_eq!(events2.len(), 1);
+    assert_eq!(events[0], events2[0]);
+}
+
+// ---- #270 [下線] 下線ビーム ----
+
+#[test]
+fn test_underline_bare_target_only() {
+    // bare 先頭値 (Title) を target にする。色/太さ等は未指定 = None（既定値は TS 側）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "下線"
+---
+
+## s1: underline
+
+[タイトル: orber]
+[下線: Title]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2);
+    if let Event::Underline {
+        target,
+        color,
+        thickness,
+        duration_ms,
+        offset,
+        easing,
+    } = &events[1]
+    {
+        assert_eq!(target, "Title");
+        assert_eq!(*color, None);
+        assert_eq!(*thickness, None);
+        assert_eq!(*duration_ms, None);
+        assert_eq!(*offset, None);
+        assert_eq!(*easing, None);
+    } else {
+        panic!("expected Underline, got {:?}", events[1]);
+    }
+}
+
+#[test]
+fn test_underline_japanese_keys() {
+    // 日本語キー 色/太さ/時間/余白 をパースする。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "下線"
+---
+
+## s1: underline_ja
+
+[下線: Title, 色=#1a4a7a, 太さ=3, 時間=700, 余白=8]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Underline {
+        target,
+        color,
+        thickness,
+        duration_ms,
+        offset,
+        ..
+    } = &events[0]
+    {
+        assert_eq!(target, "Title");
+        assert_eq!(color.as_deref(), Some("#1a4a7a"));
+        assert_eq!(*thickness, Some(3));
+        assert_eq!(*duration_ms, Some(700));
+        assert_eq!(*offset, Some(8));
+    } else {
+        panic!("expected Underline, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_underline_english_alias_directive_and_keys() {
+    // 英語ディレクティブ [underline:] と英語キー color/thickness/duration/offset/easing。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "下線"
+---
+
+## s1: underline_en
+
+[underline: target=Title, color=#222, thickness=5, duration=500, offset=10, easing=ease-out-back]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::Underline {
+        target,
+        color,
+        thickness,
+        duration_ms,
+        offset,
+        easing,
+    } = &events[0]
+    {
+        assert_eq!(target, "Title");
+        assert_eq!(color.as_deref(), Some("#222"));
+        assert_eq!(*thickness, Some(5));
+        assert_eq!(*duration_ms, Some(500));
+        assert_eq!(*offset, Some(10));
+        assert_eq!(*easing, Some(Easing::EaseOutBack));
+    } else {
+        panic!("expected Underline, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_underline_missing_target_dropped() {
+    // target 欠落時は directive を捨てる (Animate / TextEffect の作法に揃える)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "下線"
+---
+
+## s1: drop
+
+[下線: 色=#1a4a7a, 太さ=3]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 0);
+}
+
+#[test]
+fn test_underline_second_bare_value_ignored() {
+    // bare 値は先頭のみ target。2 つ目以降の bare 値は silent skip。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "下線"
+---
+
+## s1: bare
+
+[下線: Title, Foo, 色=#1a4a7a]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::Underline { target, .. } => assert_eq!(target, "Title"),
+        other => panic!("expected Underline, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_underline_unknown_key_silently_skipped() {
+    // 未知キーは無視し、既知キーだけ拾う。directive は壊れず残る。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "下線"
+---
+
+## s1: unknown
+
+[下線: Title, きらめき=999, 太さ=3]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::Underline {
+            target, thickness, ..
+        } => {
+            assert_eq!(target, "Title");
+            assert_eq!(*thickness, Some(3));
+        }
+        other => panic!("expected Underline, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_underline_roundtrip() {
+    // parse → emit → parse で同一になること。emit は英語キーに正規化する。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "下線"
+---
+
+## s1: roundtrip
+
+[下線: Title]
+[下線: target=Title, 色=#1a4a7a, 太さ=3, 時間=700, 余白=8, easing=オーバーシュート]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("[下線: target=Title]"),
+        "bare underline should emit target only, got:\n{emitted}"
+    );
+    assert!(
+        emitted.contains("easing=ease-out-back"),
+        "emit should normalize オーバーシュート to ease-out-back, got:\n{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    let events2 = &doc2.chapters[0].scenes[0].events;
+    assert_eq!(events2.len(), 2);
+    assert_eq!(events[0], events2[0]);
+    assert_eq!(events[1], events2[1]);
+}
+
 // ---- #144 per-line voice ----
 
 #[test]
