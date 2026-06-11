@@ -7,6 +7,16 @@
 export type EventCommand = { type: "NpcMove"; npc: string; x: number; y: number; speed?: number; direction?: Direction } | { type: "Wait"; ms: number } | { type: "Dialog"; character: string | undefined; text: string[] } | { type: "Narration"; text: string[] };
 
 /**
+ * `[文字演出]` の名前付きプリセット (#268)。
+ *
+ * プリセット → プリミティブ（dy/scale/alpha/間隔/duration/easing）の展開は
+ * **TS ランタイム側** (`frontend/src/game/textEffect.ts`) で行い、既定値の正本も
+ * そこに 1 箇所だけ置く。parser はどのプリセットが指定されたかを enum として記録するだけ。
+ * 個別プリミティブ（dy= 等）は TextEffect の各フィールドで上書きできる。
+ */
+export type TextEffectPreset = "Explode" | "Typewriter";
+
+/**
  * アイテム定義 (#174)。
  */
 export interface ItemDef {
@@ -267,9 +277,9 @@ export type BlackoutAction = "On" | "Off";
 
 export type Direction = "Up" | "Down" | "Left" | "Right";
 
-export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut";
+export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut" | "EaseOutBack";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string } } | { Narration: { text: string[]; voice_path?: string; font_family?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { path: string; fade_ms?: number } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } };
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string } } | { Narration: { text: string[]; voice_path?: string; font_family?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { path: string; fade_ms?: number } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | { Exit: { character: string } } | { Wait: { ms: number } } | { Choice: { options: ChoiceOption[] } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } };
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 
@@ -284,8 +294,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly emit_markdown: (a: any) => [number, number, number, number];
     readonly parse_markdown: (a: number, b: number) => [number, number, number];
+    readonly emit_markdown: (a: any) => [number, number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

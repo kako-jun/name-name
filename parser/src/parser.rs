@@ -855,6 +855,12 @@ fn parse_directive(line: &str) -> Option<Event> {
         return parse_animate_directive(rest);
     }
 
+    // [文字演出: Title, 効果=爆発, 間隔=80] — グリフ単位の文字アニメ (#268)
+    // 必須: target / 任意: 効果(爆発|タイプ), 間隔, 速度, dy/dx/rotation/scale/alpha, duration, easing
+    if let Some(rest) = content.strip_prefix("文字演出:") {
+        return parse_text_effect_directive(rest);
+    }
+
     // [タイトル: TEXT] / [タイトル: TEXT, font=bellpoke_font] / [タイトル: TEXT, 位置=右外]
     // 動画用センターオーバーレイ。空テキストなら退場扱い。
     // 位置を指定すると初期位置を変えられる (右外 = 画面外右から登場用)。
@@ -1233,13 +1239,7 @@ fn parse_animate_directive(content: &str) -> Option<Event> {
             "scale" | "拡縮" => scale = value.parse().ok(),
             "duration" | "時間" => duration_ms = value.parse().ok(),
             "easing" => {
-                easing = match value.to_ascii_lowercase().as_str() {
-                    "linear" => Easing::Linear,
-                    "ease-in" | "easein" => Easing::EaseIn,
-                    "ease-out" | "easeout" => Easing::EaseOut,
-                    "ease-in-out" | "easeinout" => Easing::EaseInOut,
-                    _ => Easing::Linear,
-                }
+                easing = parse_easing(value).unwrap_or(Easing::Linear);
             }
             _ => {} // 未知キーは silent skip
         }
@@ -1253,6 +1253,108 @@ fn parse_animate_directive(content: &str) -> Option<Event> {
         dy,
         rotation,
         scale,
+        duration_ms,
+        easing,
+    })
+}
+
+/// easing キーワードを Easing に解釈する (#134 / #268)。
+/// 英語表記（linear / ease-out / easeoutback 等）と日本語表記（オーバーシュート）を受理。
+/// 未知の値は None（呼び出し側で Linear 等にフォールバック）。
+fn parse_easing(value: &str) -> Option<crate::models::Easing> {
+    use crate::models::Easing;
+    // オーバーシュートは日本語表記のため lowercase 化前に判定する。
+    if value == "オーバーシュート" {
+        return Some(Easing::EaseOutBack);
+    }
+    match value.to_ascii_lowercase().as_str() {
+        "linear" => Some(Easing::Linear),
+        "ease-in" | "easein" => Some(Easing::EaseIn),
+        "ease-out" | "easeout" => Some(Easing::EaseOut),
+        "ease-in-out" | "easeinout" => Some(Easing::EaseInOut),
+        "ease-out-back" | "easeoutback" => Some(Easing::EaseOutBack),
+        _ => None,
+    }
+}
+
+/// `[文字演出: target, …]` をパースする (#268)。
+///
+/// `[アニメ]` のグリフ単位版。プリセット（効果=爆発/タイプ）と素のプリミティブ
+/// （dy=/scale= 等 + 間隔/速度/duration/easing）の 2 層。必須は target のみで、
+/// プリセット既定値の展開は TS ランタイム側で行う（parser は値を素直に持たせるだけ）。
+/// 日本語キー（効果/間隔/速度/対象/拡縮/不透明度/回転/時間）＋英語エイリアス
+/// （effect/stagger/speed/target/scale/alpha/rotation/duration）に両対応。
+/// target 欠落時は directive を捨てる（Animate の作法に揃える）。
+fn parse_text_effect_directive(content: &str) -> Option<Event> {
+    use crate::models::TextEffectPreset;
+
+    let mut target: Option<String> = None;
+    let mut effect: Option<TextEffectPreset> = None;
+    let mut stagger_ms: Option<u32> = None;
+    let mut ms_per_char: Option<u32> = None;
+    let mut dx: Option<String> = None;
+    let mut dy: Option<String> = None;
+    let mut rotation: Option<String> = None;
+    let mut scale: Option<f32> = None;
+    let mut alpha: Option<f32> = None;
+    let mut duration_ms: Option<u32> = None;
+    let mut easing: Option<crate::models::Easing> = None;
+
+    let mut first = true;
+    for raw_pair in content.split(',') {
+        let pair = raw_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        // 先頭要素が `=` を含まない bare 値なら target とみなす
+        //（`[文字演出: Title, 効果=爆発]` の `Title`）。
+        match pair.split_once('=') {
+            None => {
+                if first {
+                    target = Some(pair.to_string());
+                }
+                // bare 値が 2 つ目以降に来る不正構文は silent skip
+            }
+            Some((k, v)) => {
+                let key = k.trim();
+                let value = v.trim();
+                match key {
+                    "target" | "対象" => target = Some(value.to_string()),
+                    "effect" | "効果" => {
+                        effect = match value.to_ascii_lowercase().as_str() {
+                            "explode" | "爆発" => Some(TextEffectPreset::Explode),
+                            "typewriter" | "タイプ" => Some(TextEffectPreset::Typewriter),
+                            _ => None, // 未知プリセットは silent skip
+                        };
+                        // 日本語の "爆発" / "タイプ" は lowercase 化で変わらないため上で拾える
+                    }
+                    "stagger" | "間隔" => stagger_ms = value.parse().ok(),
+                    "speed" | "速度" => ms_per_char = value.parse().ok(),
+                    "x" | "dx" => dx = Some(value.to_string()),
+                    "y" | "dy" => dy = Some(value.to_string()),
+                    "rotation" | "回転" => rotation = Some(value.to_string()),
+                    "scale" | "拡縮" => scale = value.parse().ok(),
+                    "alpha" | "不透明度" => alpha = value.parse().ok(),
+                    "duration" | "時間" => duration_ms = value.parse().ok(),
+                    "easing" => easing = parse_easing(value),
+                    _ => {} // 未知キーは silent skip
+                }
+            }
+        }
+        first = false;
+    }
+
+    let target = target?;
+    Some(Event::TextEffect {
+        target,
+        effect,
+        stagger_ms,
+        ms_per_char,
+        dx,
+        dy,
+        rotation,
+        scale,
+        alpha,
         duration_ms,
         easing,
     })

@@ -2027,6 +2027,159 @@ title: "効果テスト"
     assert_eq!(events[2], doc2.chapters[0].scenes[0].events[2]);
 }
 
+// ---- #268 [文字演出] グリフ単位の文字アニメ ----
+
+#[test]
+fn test_text_effect_preset_explode() {
+    // プリセット (効果=爆発) + 間隔上書き。プリミティブ既定値は TS 側で展開するので
+    // parser は effect/stagger を素直に持つだけ。bare 先頭値 (Title) を target にする。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: 爆発
+
+[タイトル: orber]
+[文字演出: Title, 効果=爆発, 間隔=80]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2);
+    if let Event::TextEffect {
+        target,
+        effect,
+        stagger_ms,
+        ms_per_char,
+        dy,
+        ..
+    } = &events[1]
+    {
+        assert_eq!(target, "Title");
+        assert_eq!(*effect, Some(TextEffectPreset::Explode));
+        assert_eq!(*stagger_ms, Some(80));
+        // プリセット既定値 (dy 等) は parser では展開しない
+        assert_eq!(*ms_per_char, None);
+        assert_eq!(*dy, None);
+    } else {
+        panic!("expected TextEffect, got {:?}", events[1]);
+    }
+}
+
+#[test]
+fn test_text_effect_preset_typewriter_english_keys() {
+    // 英語エイリアス (effect=typewriter, speed=) も受理する
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: タイプ
+
+[文字演出: target=Title, effect=typewriter, speed=70]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::TextEffect {
+        target,
+        effect,
+        ms_per_char,
+        ..
+    } = &events[0]
+    {
+        assert_eq!(target, "Title");
+        assert_eq!(*effect, Some(TextEffectPreset::Typewriter));
+        assert_eq!(*ms_per_char, Some(70));
+    } else {
+        panic!("expected TextEffect, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_text_effect_raw_primitives_with_overshoot() {
+    // 上級者は素のプリミティブで書ける。easing=オーバーシュート を EaseOutBack に解釈する。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: 素
+
+[文字演出: Title, dy=+60, scale=0.5, 間隔=50, easing=オーバーシュート]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    if let Event::TextEffect {
+        target,
+        effect,
+        dy,
+        scale,
+        stagger_ms,
+        easing,
+        ..
+    } = &events[0]
+    {
+        assert_eq!(target, "Title");
+        assert_eq!(*effect, None);
+        assert_eq!(dy.as_deref(), Some("+60"));
+        assert_eq!(*scale, Some(0.5));
+        assert_eq!(*stagger_ms, Some(50));
+        assert_eq!(*easing, Some(Easing::EaseOutBack));
+    } else {
+        panic!("expected TextEffect, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_text_effect_missing_target_dropped() {
+    // target 欠落時は directive を捨てる (Animate の作法に揃える)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: 欠落
+
+[文字演出: 効果=爆発, 間隔=80]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 0);
+}
+
+#[test]
+fn test_text_effect_roundtrip() {
+    // parse → emit → parse で同一になること（プリセット + 素プリミティブ + EaseOutBack）
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: roundtrip
+
+[文字演出: Title, 効果=爆発, 間隔=80]
+[文字演出: target=Title, dy=+60, scale=0.5, 間隔=50, easing=オーバーシュート]
+[文字演出: Title, 効果=タイプ, 速度=70]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    let events2 = &doc2.chapters[0].scenes[0].events;
+    assert_eq!(events2.len(), 3);
+    assert_eq!(events[0], events2[0]);
+    assert_eq!(events[1], events2[1]);
+    assert_eq!(events[2], events2[2]);
+}
+
 // ---- #144 per-line voice ----
 
 #[test]
