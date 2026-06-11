@@ -304,6 +304,27 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     )
   }
 
+  if ('TextEffect' in event) {
+    const te = event.TextEffect
+    const parts: string[] = []
+    if (te.effect != null) parts.push(te.effect === 'Explode' ? '爆発' : 'タイプ')
+    if (te.stagger_ms != null) parts.push(`間隔=${te.stagger_ms}`)
+    if (te.ms_per_char != null) parts.push(`速度=${te.ms_per_char}`)
+    if (te.dx != null) parts.push(`dx=${te.dx}`)
+    if (te.dy != null) parts.push(`dy=${te.dy}`)
+    if (te.rotation != null) parts.push(`rot=${te.rotation}`)
+    if (te.scale != null) parts.push(`scale=${te.scale}`)
+    if (te.alpha != null) parts.push(`alpha=${te.alpha}`)
+    if (te.duration_ms != null) parts.push(`${te.duration_ms}ms`)
+    if (te.easing && te.easing !== 'Linear') parts.push(te.easing)
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        文字演出: {te.target}
+        {parts.length > 0 ? ` ${parts.join(' ')}` : ''}
+      </div>
+    )
+  }
+
   if ('DialogBorderless' in event) {
     return (
       <div className={`text-xs italic ml-2 ${meta}`}>
