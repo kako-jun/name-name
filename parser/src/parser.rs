@@ -1321,12 +1321,13 @@ fn parse_text_effect_directive(content: &str) -> Option<Event> {
                 match key {
                     "target" | "対象" => target = Some(value.to_string()),
                     "effect" | "効果" => {
+                        // to_ascii_lowercase は ASCII のみ小文字化し非 ASCII は素通しするため、
+                        // 英語別名は大小無視で、日本語キーワードはそのまま一致する。
                         effect = match value.to_ascii_lowercase().as_str() {
                             "explode" | "爆発" => Some(TextEffectPreset::Explode),
                             "typewriter" | "タイプ" => Some(TextEffectPreset::Typewriter),
                             _ => None, // 未知プリセットは silent skip
                         };
-                        // 日本語の "爆発" / "タイプ" は lowercase 化で変わらないため上で拾える
                     }
                     "stagger" | "間隔" => stagger_ms = value.parse().ok(),
                     "speed" | "速度" => ms_per_char = value.parse().ok(),
