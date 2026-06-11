@@ -241,6 +241,24 @@ export type Event =
         easing?: Easing
       }
     }
+  | {
+      /** グリフ単位の文字アニメ (#268)。`[アニメ]` のグリフ単位版。
+       *  プリセット (effect) → プリミティブ既定値の展開は textEffect.ts で行う。
+       *  ここでは parser が持たせた生の値（未指定は undefined）をそのまま受け取る。 */
+      TextEffect: {
+        target: string
+        effect?: TextEffectPreset
+        stagger_ms?: number
+        ms_per_char?: number
+        dx?: string
+        dy?: string
+        rotation?: string
+        scale?: number
+        alpha?: number
+        duration_ms?: number
+        easing?: Easing
+      }
+    }
   | { DialogBorderless: { borderless: boolean } }
   | { Shake: { intensity_px: number; duration_ms: number } }
   | { Flash: { color: string; alpha: number; duration_ms: number } }
@@ -254,7 +272,10 @@ export type Event =
       }
     }
 
-export type Easing = 'Linear' | 'EaseIn' | 'EaseOut' | 'EaseInOut'
+export type Easing = 'Linear' | 'EaseIn' | 'EaseOut' | 'EaseInOut' | 'EaseOutBack'
+
+/** `[文字演出]` の名前付きプリセット (#268)。parser の TextEffectPreset と同期する。 */
+export type TextEffectPreset = 'Explode' | 'Typewriter'
 
 export type SceneView = 'TopDown' | 'Raycast'
 

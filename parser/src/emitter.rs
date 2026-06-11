@@ -637,16 +637,64 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     parts.push(format!("scale={v}"));
                 }
                 parts.push(format!("duration={duration_ms}"));
-                let easing_str = match easing {
-                    crate::models::Easing::Linear => "linear",
-                    crate::models::Easing::EaseIn => "ease-in",
-                    crate::models::Easing::EaseOut => "ease-out",
-                    crate::models::Easing::EaseInOut => "ease-in-out",
-                };
                 if *easing != crate::models::Easing::Linear {
-                    parts.push(format!("easing={easing_str}"));
+                    parts.push(format!("easing={}", easing_keyword(*easing)));
                 }
                 out.push_str(&format!("[アニメ: {}]\n", parts.join(", ")));
+                prev_was_dialog_or_text = false;
+            }
+            Event::TextEffect {
+                target,
+                effect,
+                stagger_ms,
+                ms_per_char,
+                dx,
+                dy,
+                rotation,
+                scale,
+                alpha,
+                duration_ms,
+                easing,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut parts: Vec<String> = vec![format!("target={}", target)];
+                if let Some(e) = effect {
+                    let effect_str = match e {
+                        crate::models::TextEffectPreset::Explode => "explode",
+                        crate::models::TextEffectPreset::Typewriter => "typewriter",
+                    };
+                    parts.push(format!("effect={effect_str}"));
+                }
+                if let Some(v) = stagger_ms {
+                    parts.push(format!("stagger={v}"));
+                }
+                if let Some(v) = ms_per_char {
+                    parts.push(format!("speed={v}"));
+                }
+                if let Some(v) = dx {
+                    parts.push(format!("x={v}"));
+                }
+                if let Some(v) = dy {
+                    parts.push(format!("y={v}"));
+                }
+                if let Some(v) = rotation {
+                    parts.push(format!("rotation={v}"));
+                }
+                if let Some(v) = scale {
+                    parts.push(format!("scale={v}"));
+                }
+                if let Some(v) = alpha {
+                    parts.push(format!("alpha={v}"));
+                }
+                if let Some(v) = duration_ms {
+                    parts.push(format!("duration={v}"));
+                }
+                if let Some(e) = easing {
+                    parts.push(format!("easing={}", easing_keyword(*e)));
+                }
+                out.push_str(&format!("[文字演出: {}]\n", parts.join(", ")));
                 prev_was_dialog_or_text = false;
             }
             Event::TitleShow {
@@ -722,6 +770,18 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 prev_was_dialog_or_text = false;
             }
         }
+    }
+}
+
+/// Easing を Markdown キーワードに変換する (#134 / #268)。
+/// parse_easing が受理する英語表記に揃える（round-trip 一致）。
+fn easing_keyword(easing: crate::models::Easing) -> &'static str {
+    match easing {
+        crate::models::Easing::Linear => "linear",
+        crate::models::Easing::EaseIn => "ease-in",
+        crate::models::Easing::EaseOut => "ease-out",
+        crate::models::Easing::EaseInOut => "ease-in-out",
+        crate::models::Easing::EaseOutBack => "ease-out-back",
     }
 }
 

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { CHARACTER_Y_RATIO, CharacterLayer, normalizePosition } from './CharacterLayer'
+import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
 
 interface FadeAnimationLike {
   fromAlpha: number
@@ -143,5 +144,146 @@ describe('CharacterLayer X position ratio (Issue #216)', () => {
     const state = asInternals(layer).characters.get('hero')
     expect(state).toBeDefined()
     expect(state!.sprite.x).toBeCloseTo(400, 0)
+  })
+})
+
+interface GlyphEntryLike {
+  glyph: { alpha: number; scale: { x: number }; visible: boolean; destroyed: boolean }
+  restX: number
+  restY: number
+}
+
+interface TextEffectStateLike {
+  textEffect: {
+    glyphs: GlyphEntryLike[]
+    transform: unknown
+    typewriter: unknown
+  } | null
+  label?: { visible: boolean; text: string }
+}
+
+describe('CharacterLayer applyTextEffect (#268)', () => {
+  // applyTextEffect はフォント確定後（ensureFontLoaded）にグリフを構築する (#268 question8)。
+  // document を null にすると ensureFontLoaded は即 resolve するため、await でグリフ構築を待てる。
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  function getTitle(layer: CharacterLayer): TextEffectStateLike {
+    return (layer as unknown as { characters: Map<string, TextEffectStateLike> }).characters.get(
+      'Title'
+    )!
+  }
+
+  it('タイトル文字数ぶんのグリフに分解し、単一 label は隠す', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Explode' })
+    const st = getTitle(layer)
+    expect(st.textEffect).not.toBeNull()
+    expect(st.textEffect!.glyphs.length).toBe(5) // o r b e r
+    expect(st.textEffect!.transform).not.toBeNull()
+    expect(st.label!.visible).toBe(false)
+  })
+
+  it('instant: true は全グリフを整列・不透明・全可視の静止状態にする（ADR 0002 復元）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Explode' }, { instant: true })
+    const st = getTitle(layer)
+    expect(st.textEffect).not.toBeNull()
+    for (const { glyph } of st.textEffect!.glyphs) {
+      expect(glyph.alpha).toBe(1)
+      expect(glyph.scale.x).toBe(1)
+      expect(glyph.visible).toBe(true)
+    }
+  })
+
+  it('タイプ効果は transform を持たず typewriter 状態を持つ', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('$ orber.llll-ll.com', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', ms_per_char: 70 })
+    const st = getTitle(layer)
+    expect(st.textEffect!.transform).toBeNull()
+    expect(st.textEffect!.typewriter).not.toBeNull()
+  })
+
+  it('showTitle でテキストを差し替えると進行中のグリフ演出は破棄され label が再表示される', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Explode' })
+    expect(getTitle(layer).textEffect).not.toBeNull()
+    layer.showTitle('next', 'sans-serif')
+    const st = getTitle(layer)
+    expect(st.textEffect).toBeNull()
+    expect(st.label!.visible).toBe(true)
+    expect(st.label!.text).toBe('next')
+  })
+
+  it('対象が存在しない / label が空なら no-op', async () => {
+    const layer = new CharacterLayer(800, 450)
+    // 対象なし
+    await expect(layer.applyTextEffect('NoSuch', { effect: 'Explode' })).resolves.toBeUndefined()
+    // 空タイトル（showTitle は空文字で退場するので Title 自体が無い）
+    layer.showTitle('', 'sans-serif')
+    await expect(layer.applyTextEffect('Title', { effect: 'Explode' })).resolves.toBeUndefined()
+  })
+
+  it('instant: true のタイプ効果は全グリフを可視にする（reveal の即時完了）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter' }, { instant: true })
+    const st = getTitle(layer)
+    expect(st.textEffect).not.toBeNull()
+    for (const { glyph } of st.textEffect!.glyphs) {
+      expect(glyph.visible).toBe(true)
+    }
+  })
+
+  it('applyTextEffect を再適用すると前のグリフ列を破棄して貼り直す（重複しない）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Explode' })
+    const first = getTitle(layer).textEffect!.glyphs
+    expect(first.length).toBe(5)
+    // 同じ Title へ別効果を再適用しても、グリフ数は文字数ぶんのまま（積み増しされない）。
+    await layer.applyTextEffect('Title', { effect: 'Typewriter' })
+    const st = getTitle(layer)
+    expect(st.textEffect!.glyphs.length).toBe(5)
+    expect(st.textEffect!.transform).toBeNull() // タイプへ切替済み
+    expect(st.textEffect!.typewriter).not.toBeNull()
+  })
+
+  it('remove(instant) はグリフ container を破棄して Title を characters から消す（ADR0002 破棄）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Explode' })
+    const glyphs = getTitle(layer).textEffect!.glyphs
+    layer.remove('Title', { instant: true })
+    // Title 自体が消える
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.has('Title')).toBe(
+      false
+    )
+    // グリフ Text も破棄される（UAF / 幽霊グリフ防止）
+    for (const { glyph } of glyphs) {
+      expect(glyph.destroyed).toBe(true)
+    }
+  })
+
+  it('clear() はグリフ container を破棄して全キャラを消す', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Explode' })
+    const glyphs = getTitle(layer).textEffect!.glyphs
+    layer.clear()
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.size).toBe(0)
+    for (const { glyph } of glyphs) {
+      expect(glyph.destroyed).toBe(true)
+    }
   })
 })

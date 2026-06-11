@@ -1450,6 +1450,30 @@ export class NovelRenderer {
       this.characterLayer.showTitle(ts.text, font, ts.position)
       return
     }
+    if ('TextEffect' in event) {
+      // グリフ単位の文字演出 (#268) — fire-and-forget。完了を待たず次へ進む。
+      // skipMode 中は演出を畳んで即時完了（整列・不透明）にする。ADR 0002 に従い
+      // アニメ進行中の中間状態は持たないため、復元/スキップ時は静止状態でよい。
+      const te = event.TextEffect
+      // フォント確定後にグリフ構築する Promise を返すが、fire-and-forget なので待たない。
+      void this.characterLayer.applyTextEffect(
+        te.target,
+        {
+          effect: te.effect,
+          stagger_ms: te.stagger_ms,
+          ms_per_char: te.ms_per_char,
+          dx: te.dx,
+          dy: te.dy,
+          rotation: te.rotation,
+          scale: te.scale,
+          alpha: te.alpha,
+          duration_ms: te.duration_ms,
+          easing: te.easing,
+        },
+        { instant: this.skipMode }
+      )
+      return
+    }
     if ('Shake' in event) {
       // 画面シェイク (#143) — fire-and-forget
       this.startShake(event.Shake.intensity_px, event.Shake.duration_ms)

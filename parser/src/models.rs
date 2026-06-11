@@ -457,6 +457,52 @@ pub enum Event {
         #[serde(default)]
         easing: Easing,
     },
+    /// グリフ単位の文字アニメ (#268)。`[アニメ]` のグリフ単位版。
+    ///
+    /// 対象テキスト（CharacterLayer 上の identifier。例 "Title"）をグリフに分解し、
+    /// 各グリフが「開始オフセット → 整列位置」へ stagger 付きで入る enter アニメ。
+    /// 合成可能なプリミティブ（dx/dy/scale/rotation/alpha + 間隔/duration/easing）と、
+    /// 名前付きプリセット（爆発/タイプ）の 2 層構成。
+    ///
+    /// プリセット → プリミティブ既定値の展開は **TS ランタイム側** で行う（単一責務）。
+    /// parser は指定された値を素直に持たせるだけで、未指定は serde で skip する。
+    /// fire-and-forget 方式: 開始と同時に次イベントへ進む（Animate と同じ）。
+    /// 全タイミングは TimeController 駆動で決定論的（Math.random 不使用）。
+    TextEffect {
+        /// 効果をかける対象。CharacterLayer 上の identifier（例 "Title"）。
+        target: String,
+        /// 名前付きプリセット。未指定なら素のプリミティブのみ。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effect: Option<TextEffectPreset>,
+        /// グリフ間の開始遅延 (ms)。グリフ i は `i * stagger_ms` 遅れて開始する。
+        /// 日本語キー `間隔` / 英語 `stagger`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stagger_ms: Option<u32>,
+        /// `効果=タイプ` の 1 文字あたり表示時間 (ms)。日本語キー `速度` / 英語 `speed`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ms_per_char: Option<u32>,
+        /// 開始オフセット（最終整列位置を 0 とする相対開始値）。Animate と同じく相対/絶対を
+        /// 区別するため文字列で持つ。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dx: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dy: Option<String>,
+        /// 開始時の回転 (degrees)。最終整列位置を 0 とする相対開始値。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rotation: Option<String>,
+        /// 開始時のスケール（最終は 1.0 = 等倍）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f32>,
+        /// 開始時のアルファ（最終は 1.0 = 不透明）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alpha: Option<f32>,
+        /// 各グリフのアニメ所要時間 (ms)。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u32>,
+        /// イージング関数。未指定なら TS 側でプリセット既定 → Linear に倒す。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        easing: Option<Easing>,
+    },
     /// 動画タイトル表示 (llll-ll-media 用、#TBD)。
     /// `[タイトル: TEXT]` で画面中央に Text オーバーレイを出す。
     /// `target=Title` で [アニメ] のターゲットになれるよう、CharacterLayer に
@@ -540,6 +586,25 @@ pub enum Easing {
     EaseIn,
     EaseOut,
     EaseInOut,
+    /// 一度行き過ぎてから戻る "ポップ" 系イージング (#268)。
+    /// 標準的な easeOutBack（overshoot 係数 s=1.70158）。`[文字演出]` の `効果=爆発` 等で使う。
+    /// Markdown キーワード: `オーバーシュート` / `EaseOutBack`。`[アニメ]` でも使える。
+    EaseOutBack,
+}
+
+/// `[文字演出]` の名前付きプリセット (#268)。
+///
+/// プリセット → プリミティブ（dy/scale/alpha/間隔/duration/easing）の展開は
+/// **TS ランタイム側** (`frontend/src/game/textEffect.ts`) で行い、既定値の正本も
+/// そこに 1 箇所だけ置く。parser はどのプリセットが指定されたかを enum として記録するだけ。
+/// 個別プリミティブ（dy= 等）は TextEffect の各フィールドで上書きできる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum TextEffectPreset {
+    /// `効果=爆発` / `explode`。1 文字ずつ下から飛び出す explodeUp 相当。
+    Explode,
+    /// `効果=タイプ` / `typewriter`。typewriter.ts の reveal を再利用し 1 文字ずつ表示。
+    Typewriter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Tsify)]

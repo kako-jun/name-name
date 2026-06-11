@@ -23,6 +23,19 @@ export function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
 }
 
+/**
+ * easeOutBack (#268)。一度 1.0 を行き過ぎてから戻る "ポップ" 系。
+ * 標準的な式（overshoot 係数 s = 1.70158）。爆発プリセットの着地感に使う。
+ * t=1 でちょうど 1.0 を返す（途中で 1.0 を超える区間がある）。
+ */
+const BACK_OVERSHOOT = 1.70158
+export function easeOutBack(t: number): number {
+  const c1 = BACK_OVERSHOOT
+  const c3 = c1 + 1
+  const u = t - 1
+  return 1 + c3 * u * u * u + c1 * u * u
+}
+
 export function applyEasing(easing: Easing | undefined, t: number): number {
   // t は 0..1 にクランプしてから関数適用
   const clamped = t < 0 ? 0 : t > 1 ? 1 : t
@@ -33,6 +46,8 @@ export function applyEasing(easing: Easing | undefined, t: number): number {
       return easeOut(clamped)
     case 'EaseInOut':
       return easeInOut(clamped)
+    case 'EaseOutBack':
+      return easeOutBack(clamped)
     case 'Linear':
     case undefined:
     default:

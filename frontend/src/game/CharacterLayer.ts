@@ -9,6 +9,17 @@ import type { Easing } from '../types'
 import { applyEasing, resolveDelta } from './easing'
 import { ensureFontLoaded } from './FontLoader'
 import { TimeController, defaultTimeController } from './TimeController'
+import {
+  computeGlyphTransform,
+  isRevealEffect,
+  layoutGlyphCenters,
+  resolveTransformEffect,
+  resolveTypewriterMsPerChar,
+  textEffectTotalDurationMs,
+  type ResolvedTransformEffect,
+  type TextEffectParams,
+} from './textEffect'
+import { startTypewriter, tickTypewriter, type TypewriterState } from './typewriter'
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
 const CHARACTER_X_RATIO: Record<string, number> = {
@@ -88,6 +99,8 @@ interface CharacterState {
   animation: ActiveAnimation | null
   /** フェードイン/アウトアニメーション。退場時は完了後に sprite を destroy する */
   fadeAnimation: FadeAnimation | null
+  /** グリフ単位の文字演出 (#268)。null なら適用なし（タイトルは単一 label 表示）。 */
+  textEffect: TextEffectAnimation | null
   /** 2コマ自動切替 (expression が `*-a` なら `*-b` と 1 秒ごとに交互)。
    *  remove() / clear() で interval を必ずクリアする。TimeController 経由なので number。 */
   idleIntervalId?: number
@@ -136,6 +149,39 @@ interface ActiveAnimation {
   toY: number
   toRotation: number
   toScale: number
+}
+
+/**
+ * グリフ単位の文字演出の進行状態 (#268)。
+ *
+ * タイトル label を 1 文字ずつ Text に分解して container に並べ、ticker で
+ * 各グリフの transform/alpha を毎フレーム純粋計算（textEffect.ts）して適用する。
+ * 効果完了後も container を保持し、後続 `[アニメ target=Title]` が sprite を動かすと
+ * container が追従する（container は sprite の子）。
+ *
+ * 中間状態は持たない（ADR 0002）: 進行は startMs からの経過 ms で都度計算する。
+ * 復元時は applyTextEffectResting で「効果完了済み = 全グリフ整列」状態にする。
+ */
+interface TextEffectAnimation {
+  /** sprite の子として並ぶグリフ Text 群を束ねる container。整列レイアウト済み。 */
+  container: Container
+  /**
+   * 1 文字ごとのグリフと、その整列位置（restX/restY）を明示保持する。
+   * 毎フレームの補間オフセットは restX/restY を基準に足し込む（モンキーパッチ排除 #268）。
+   */
+  glyphs: Array<{ glyph: Text; restX: number; restY: number }>
+  /** transform 系（爆発等）の解決済みパラメータ。reveal 系では null。 */
+  transform: ResolvedTransformEffect | null
+  /** reveal 系（タイプ）の typewriter 状態。transform 系では null。 */
+  typewriter: TypewriterState | null
+  /** reveal の 1 文字あたり ms（typewriter 駆動用）。 */
+  msPerChar: number
+  /** 効果開始時刻（elapsedMs 基準）。transform 進行の起点。 */
+  startMs: number
+  /** 効果全体の所要 ms（最後のグリフが整列し終わるまで）。ticker 停止判定用。 */
+  totalMs: number
+  /** 整列確定（settleTextEffect）済みか。完了後に毎フレーム再 settle しないためのラッチ。 */
+  settled: boolean
 }
 
 export class CharacterLayer extends Container {
@@ -284,6 +330,7 @@ export class CharacterLayer extends Container {
             toAlpha: 1,
             destroyOnComplete: false,
           },
+      textEffect: null,
     }
     this.characters.set(character, state)
     if (state.fadeAnimation) this.ensureTicker()
@@ -345,9 +392,13 @@ export class CharacterLayer extends Container {
       return
     }
     if (existing) {
+      // テキスト差し替え時は進行中のグリフ演出を破棄し、単一 label 表示へ戻す。
+      // （グリフは古いテキストのままなので残すと不整合になる）#268
+      this.clearTextEffect(existing)
       if (existing.label && !existing.label.destroyed) {
         existing.label.text = text
         existing.label.style = new TextStyle({ fontFamily, fontSize: 64, fill: 0xffffff })
+        existing.label.visible = true
       }
       // position が指定されていれば再配置する (再度別 position から登場させる用途)
       if (position) {
@@ -397,6 +448,7 @@ export class CharacterLayer extends Container {
       assetBaseUrl: '',
       animation: null,
       fadeAnimation: null,
+      textEffect: null,
     })
   }
 
@@ -469,11 +521,257 @@ export class CharacterLayer extends Container {
     this.ensureTicker()
   }
 
-  /** 進行中アニメーション（transform / fade いずれか）を 1 つでも持つキャラがいるか */
+  /** タイトル label の現在のフォント・サイズ・色を引き継ぐための定数。 */
+  private static readonly TITLE_FONT_SIZE = 64
+  private static readonly TITLE_FILL = 0xffffff
+
+  /**
+   * グリフ Text の表示幅を測る。PixiJS のテキスト計測に依存する。
+   *
+   * canvas が無い環境（jsdom など計測不能・非有限値・0 幅）では fontSize ベースの
+   * 近似 advance（全角想定で fontSize * 0.6）にフォールバックする。レイアウトが
+   * 0 幅で潰れて全グリフが重なる事故を防ぐ防御。実ブラウザでは正しい幅が返る。
+   */
+  private measureGlyphWidth(t: Text): number {
+    let w = 0
+    try {
+      w = t.width
+    } catch {
+      w = 0
+    }
+    if (!Number.isFinite(w) || w <= 0) {
+      return CharacterLayer.TITLE_FONT_SIZE * 0.6
+    }
+    return w
+  }
+
+  /**
+   * グリフ単位の文字演出を適用する (#268)。
+   *
+   * 対象（CharacterLayer 上の identifier。例 "Title"）の label をグリフ Text 列に
+   * 分解して同位置にレイアウトし、ticker で各グリフを `i*間隔` 遅延の enter アニメ。
+   * reveal 系（タイプ）は typewriter.ts を this.time 駆動で 1 文字ずつ表示。
+   *
+   * fire-and-forget: 呼び出し側は完了を待たず次イベントへ進む。
+   * 効果完了後も container を保持するため、後続 `[アニメ target=Title]` が効く。
+   *
+   * @param instant true なら即時完了状態（全グリフ整列・不透明）にする。
+   *   セーブ復元・スキップ時に演出を飛ばすため（ADR 0002: 中間状態を持たない）。
+   * @returns フォント確定後のグリフ構築まで含めた完了 Promise。fire-and-forget の
+   *   呼び出し側は無視してよい（`void` で破棄）。テストは await して構築完了を待てる。
+   */
+  applyTextEffect(
+    target: string,
+    params: TextEffectParams,
+    options?: { instant?: boolean }
+  ): Promise<void> {
+    const state = this.characters.get(target)
+    if (!state || !state.label || state.label.destroyed) return Promise.resolve()
+
+    const sourceText = state.label.text
+    if (sourceText.length === 0) return Promise.resolve()
+
+    // 既存の演出があれば破棄してから貼り直す（テキスト・パラメータ変更時の再適用）
+    this.clearTextEffect(state)
+
+    const fontFamily =
+      state.label.style instanceof TextStyle
+        ? state.label.style.fontFamily
+        : ('sans-serif' as string | string[])
+
+    // フォントが Web フォント遅延ロードの場合、未ロード状態で measure すると fallback
+    // フォントの字形で幅が測られて字間がずれる（showTitle の label 再適用と同じ問題 #268）。
+    // グリフの分解・幅計測・レイアウト・アニメ開始を ensureFontLoaded 完了後に行い、
+    // 確定したフォントで measure する。既ロード時は microtask で即解決し実質遅延ゼロ。
+    // fire-and-forget の呼び出し側契約は維持（呼び出し側は完了 Promise を無視できる）。
+    const fontName = Array.isArray(fontFamily) ? fontFamily[0] : fontFamily
+    return ensureFontLoaded(fontName)
+      .catch(() => {})
+      .then(() => {
+        // 待っている間に対象が退場・テキスト差し替えされていたら何もしない。
+        const cur = this.characters.get(target)
+        if (cur !== state) return
+        if (!state.label || state.label.destroyed) return
+        if (state.label.text !== sourceText) return
+        this.buildTextEffect(state, sourceText, fontFamily, params, options)
+      })
+  }
+
+  /**
+   * フォント確定後にグリフ列を構築して演出をセットする（applyTextEffect の後半）。
+   * 純粋なレイアウト計算（中心 x）は textEffect.layoutGlyphCenters に委譲する。
+   */
+  private buildTextEffect(
+    state: CharacterState,
+    sourceText: string,
+    fontFamily: string | string[],
+    params: TextEffectParams,
+    options?: { instant?: boolean }
+  ): void {
+    // 競合で既に別の演出が貼られている場合があるため、ここでも一度畳んでから貼り直す。
+    this.clearTextEffect(state)
+
+    // グリフ Text を生成し、行全体を中央寄せでレイアウトする。
+    const container = new Container()
+    // sprite の子にすることで、後続 [アニメ] による sprite の transform が container に波及する。
+    state.sprite.addChild(container)
+
+    const chars = Array.from(sourceText) // サロゲートペア対応で code point 単位に分解
+    const texts: Text[] = []
+    const widths: number[] = []
+    for (const ch of chars) {
+      const t = new Text({
+        text: ch,
+        style: new TextStyle({
+          fontFamily,
+          fontSize: CharacterLayer.TITLE_FONT_SIZE,
+          fill: CharacterLayer.TITLE_FILL,
+        }),
+      })
+      t.anchor.set(0.5, 0.5)
+      container.addChild(t)
+      texts.push(t)
+      widths.push(this.measureGlyphWidth(t))
+    }
+    // 各グリフ中心 x は純関数で算出（行全体を container 原点で中央寄せ）。
+    // 整列位置 (restX/restY) を明示保持して、補間オフセットは毎フレーム足し込む。
+    const centers = layoutGlyphCenters(widths)
+    const glyphs = texts.map((t, i) => {
+      t.x = centers[i]
+      t.y = 0
+      return { glyph: t, restX: centers[i], restY: 0 }
+    })
+
+    // 元の単一 label は隠す（グリフ列が見た目を担う）。
+    if (state.label && !state.label.destroyed) state.label.visible = false
+
+    const reveal = isRevealEffect(params)
+    let effect: TextEffectAnimation
+    if (reveal) {
+      const msPerChar = resolveTypewriterMsPerChar(params)
+      effect = {
+        container,
+        glyphs,
+        transform: null,
+        typewriter: startTypewriter(sourceText),
+        msPerChar,
+        startMs: this.elapsedMs,
+        totalMs: msPerChar * chars.length,
+        settled: false,
+      }
+    } else {
+      const resolved = resolveTransformEffect(params)
+      effect = {
+        container,
+        glyphs,
+        transform: resolved,
+        typewriter: null,
+        msPerChar: 0,
+        startMs: this.elapsedMs,
+        totalMs: textEffectTotalDurationMs(resolved, glyphs.length),
+        settled: false,
+      }
+    }
+    state.textEffect = effect
+
+    if (options?.instant) {
+      // 即時完了: 全グリフを整列・不透明にして演出を畳む（中間状態を持たない）。
+      this.settleTextEffect(state)
+      return
+    }
+
+    // 初期フレームを即時反映してから ticker を回す（最初の 1 フレームのチラつき防止）。
+    this.updateTextEffectFrame(effect, 0)
+    this.ensureTicker()
+  }
+
+  /**
+   * グリフ演出の 1 フレームを純粋計算（textEffect.ts / typewriter.ts）して各グリフへ適用する。
+   * @param deltaMS このフレームの経過時間（typewriter の累積駆動用）。
+   * @returns まだ進行中なら true、完了していれば false。
+   */
+  private updateTextEffectFrame(effect: TextEffectAnimation, deltaMS: number): boolean {
+    if (effect.transform) {
+      const elapsed = this.elapsedMs - effect.startMs
+      for (let i = 0; i < effect.glyphs.length; i++) {
+        const { glyph, restX, restY } = effect.glyphs[i]
+        const gt = computeGlyphTransform(effect.transform, elapsed, i)
+        glyph.x = restX + gt.offsetX
+        glyph.y = restY + gt.offsetY
+        glyph.rotation = gt.rotationRad
+        glyph.scale.set(gt.scale, gt.scale)
+        glyph.alpha = gt.alpha
+      }
+      return elapsed < effect.totalMs
+    }
+    if (effect.typewriter) {
+      // reveal: typewriter を deltaMS で累積駆動し、displayedCharCount まで可視。
+      const next = tickTypewriter(effect.typewriter, deltaMS, effect.msPerChar)
+      effect.typewriter = next
+      for (let i = 0; i < effect.glyphs.length; i++) {
+        effect.glyphs[i].glyph.visible = i < next.displayedCharCount
+      }
+      return next.displayedCharCount < effect.glyphs.length
+    }
+    return false
+  }
+
+  /**
+   * グリフ演出を「効果完了済み（全グリフ整列・不透明・全可視）」の静止状態にする。
+   * container/glyphs は保持したまま、進行アニメだけ畳む。復元・即時完了に使う。
+   */
+  private settleTextEffect(state: CharacterState): void {
+    const effect = state.textEffect
+    if (!effect) return
+    for (const { glyph, restX, restY } of effect.glyphs) {
+      glyph.x = restX
+      glyph.y = restY
+      glyph.rotation = 0
+      glyph.scale.set(1, 1)
+      glyph.alpha = 1
+      glyph.visible = true
+    }
+    if (effect.typewriter) {
+      effect.typewriter = { ...effect.typewriter, displayedCharCount: effect.glyphs.length, acc: 0 }
+    }
+    // 進行を終えたので transform/typewriter の駆動は不要だが、container は保持する。
+    // settled ラッチを立てて、以後 ticker が毎フレーム再 settle しないようにする。
+    effect.settled = true
+  }
+
+  /**
+   * グリフ演出を完全に破棄し、単一 label 表示へ戻す（テキスト差し替え・退場時）。
+   */
+  private clearTextEffect(state: CharacterState): void {
+    const effect = state.textEffect
+    if (!effect) return
+    for (const { glyph } of effect.glyphs) {
+      effect.container.removeChild(glyph)
+      glyph.destroy()
+    }
+    if (!effect.container.destroyed) {
+      state.sprite.removeChild(effect.container)
+      effect.container.destroy()
+    }
+    state.textEffect = null
+    if (state.label && !state.label.destroyed) state.label.visible = true
+  }
+
+  /** 進行中アニメーション（transform / fade / textEffect いずれか）を 1 つでも持つキャラがいるか */
   hasActiveAnimation(): boolean {
     for (const s of this.characters.values()) {
       if (s.animation || s.fadeAnimation) return true
+      if (s.textEffect && this.isTextEffectActive(s.textEffect)) return true
     }
+    return false
+  }
+
+  /** グリフ演出がまだ進行中か（完了済みなら container は保持するが ticker は止めてよい）。 */
+  private isTextEffectActive(effect: TextEffectAnimation): boolean {
+    // 整列確定済みなら、たとえ未完了でも駆動不要（settle 後は静止状態を保つだけ）。
+    if (effect.settled) return false
+    if (effect.transform) return this.elapsedMs - effect.startMs < effect.totalMs
+    if (effect.typewriter) return effect.typewriter.displayedCharCount < effect.glyphs.length
     return false
   }
 
@@ -517,6 +815,7 @@ export class CharacterLayer extends Container {
             state.fadeAnimation = null
             if (f.destroyOnComplete) {
               if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
+              this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
               this.removeChild(state.sprite)
               state.sprite.destroy()
               if (state.label) {
@@ -530,6 +829,20 @@ export class CharacterLayer extends Container {
             anyActive = true
             state.sprite.alpha = f.fromAlpha + (f.toAlpha - f.fromAlpha) * tf
             if (state.label) state.label.alpha = state.sprite.alpha
+          }
+        }
+
+        // グリフ単位の文字演出 (#268) を毎フレーム純粋計算で駆動する。
+        // 整列確定済み（settled）の effect は毎フレーム再 settle せず読み飛ばす（空回り回避 nit）。
+        // settle は「進行 → 完了」へ遷移したフレームの 1 回だけで足りる。
+        const te = state.textEffect
+        if (te && !te.settled) {
+          const stillRunning = this.updateTextEffectFrame(te, ticker.deltaMS)
+          if (stillRunning) {
+            anyActive = true
+          } else {
+            // 完了 → 整列状態に確定（container は保持し後続 [アニメ] が効く）。
+            this.settleTextEffect(state)
           }
         }
 
@@ -569,6 +882,7 @@ export class CharacterLayer extends Container {
       state.idleIntervalId = undefined
     }
     if (instant) {
+      this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
       this.removeChild(state.sprite)
       state.sprite.destroy()
       if (state.label) {
@@ -607,6 +921,7 @@ export class CharacterLayer extends Container {
   clear(): void {
     for (const [, state] of this.characters) {
       if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
+      this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
       this.removeChild(state.sprite)
       state.sprite.destroy()
       if (state.label) {
