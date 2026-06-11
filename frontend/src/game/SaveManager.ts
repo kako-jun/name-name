@@ -22,6 +22,11 @@ export interface SaveSlotData {
   flags: Record<string, FlagValue>
   backgroundPath: string | null
   /**
+   * 単色の地色 (#273)。背景画像と同じ永続状態として保存する。
+   * 後方互換: 古いセーブデータには無い → undefined/null は地色なし（既定の黒）扱い。
+   */
+  backgroundColor?: string | null
+  /**
    * 背景の端フェードマスク (#250)。
    * 後方互換: 古いセーブデータには無い → undefined/null はフェードなし扱い。
    */
