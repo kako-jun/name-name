@@ -216,6 +216,8 @@ interface TextEffectAnimation {
 interface CursorState {
   /** カーソル本体の縦矩形 Graphics（container の子）。 */
   gfx: Graphics
+  /** カーソルに適用した解決済み色 number (#273)。`カーソル色` 指定 > タイトル色 fallback の一次情報。 */
+  colorNum: number
   /** 点滅周期 (ms)。半周期で表示/非表示。 */
   blinkMs: number
   /** 点滅起点（elapsedMs 基準）。startMs と揃え、export 再現のため仮想時間で算出する。 */
@@ -797,6 +799,8 @@ export class CharacterLayer extends Container {
     container.addChild(gfx)
     return {
       gfx,
+      // gfx.fill に渡したのと同じ解決済み色を一次情報として保存する (#273)。
+      colorNum,
       blinkMs: resolved.blinkMs,
       // 点滅起点は効果開始と揃える（仮想時間で算出 → export 再現）。
       blinkStartMs: this.elapsedMs,
