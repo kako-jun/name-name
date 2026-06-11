@@ -397,54 +397,6 @@ interface CursorTitleLike {
   } | null
 }
 
-/**
- * jsdom（canvas 未インストール）では、非 instant の cursor=on reveal を build する際に
- * `positionCursor` が `glyph.width` を素読みし（CharacterLayer.ts L798/803）、Pixi の
- * `Text.width` getter が `CanvasTextMetrics.measureFont` で `_context` null につき
- * `TypeError: Cannot set properties of null (setting 'font')` を投げる。
- *
- * 重要: この throw は **カーソル生成より後**（buildCursor → state.textEffect 代入 → 初期
- * フレーム反映 updateTextEffectFrame(0) → positionCursor の順）に起きる。よって
- * 「カーソルが生成され state に乗る」「blinkMs が既定」「gfx 未破棄」「cursor がある限り
- * hasActiveAnimation()===true（settle モデルの小例外 #271）」という #271 の本丸挙動は、
- * この既知の throw を握り潰したうえで build 後の state を観測すれば実機実装そのままで検証できる。
- * 前任者の「観測限界で検証不能」は誤り（カーソル配線は jsdom でも観測可能）。
- *
- * 握り潰しは「known な jsdom canvas-metrics の throw」に限定して同定する
- * （無関係なエラーは握り潰さず素通しさせ、リグレッションを隠さない）。
- * なお `positionCursor` が `glyph.width` を `measureGlyphWidth` のような try/catch ガード
- * 越しでなく素読みしている点は、本ファイルでは扱わずメインへ報告する実装側の堅牢性ギャップ。
- */
-function isJsdomCanvasMetricsError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  const msg = err.message
-  const stack = err.stack ?? ''
-  return (
-    /Cannot set propert(?:y|ies) of null \(setting 'font'\)/.test(msg) &&
-    /CanvasTextMetrics|positionCursor/.test(stack)
-  )
-}
-
-/**
- * 非 instant の cursor=on reveal を適用し、既知の jsdom canvas-metrics throw だけを
- * 同定して握り潰す（それ以外の throw は再 throw してテストを落とす）。
- * 戻り値で「既知 throw が起きたか」を返し、build 自体が走ったことを確認できるようにする。
- */
-async function applyCursorRevealTolerant(
-  layer: CharacterLayer,
-  params: { effect: 'Typewriter'; cursor: true; ms_per_char?: number }
-): Promise<{ threwKnown: boolean }> {
-  let threwKnown = false
-  await layer.applyTextEffect('Title', params).catch((err: unknown) => {
-    if (isJsdomCanvasMetricsError(err)) {
-      threwKnown = true
-      return
-    }
-    throw err
-  })
-  return { threwKnown }
-}
-
 describe('CharacterLayer cursor (#271)', () => {
   beforeEach(() => {
     __setDocumentForTest(null)
@@ -492,19 +444,13 @@ describe('CharacterLayer cursor (#271)', () => {
   })
 
   // ---- #271 本丸: 非 instant の cursor=on でカーソルが生成され、点滅し続ける ----
-  // build 中の positionCursor が jsdom canvas でこける既知 throw は applyCursorRevealTolerant が
-  // 同定して握り潰す。throw はカーソル生成より後なので、build 後の state を実装そのままで観測できる。
+  // positionCursor は glyph 幅を measureGlyphWidth でガード経由に読むため、jsdom（canvas 未
+  // インストール）でも build が throw せず、素直に await できる（#271 S1）。
 
   it('cursor=on の非 instant タイプはカーソルを生成し、gfx を破棄しない', async () => {
     const layer = new CharacterLayer(800, 450)
     layer.showTitle('orber', 'sans-serif')
-    const { threwKnown } = await applyCursorRevealTolerant(layer, {
-      effect: 'Typewriter',
-      cursor: true,
-      ms_per_char: 70,
-    })
-    // build（buildCursor → updateTextEffectFrame(0)）まで走ったことの裏取り。
-    expect(threwKnown).toBe(true)
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
     const st = getTitleC(layer)
     expect(st.textEffect).not.toBeNull()
     // 1: カーソルが生成され state に乗る。
@@ -516,7 +462,7 @@ describe('CharacterLayer cursor (#271)', () => {
   it('生成されたカーソルの blinkMs は既定（CURSOR_DEFAULTS）になる', async () => {
     const layer = new CharacterLayer(800, 450)
     layer.showTitle('orber', 'sans-serif')
-    await applyCursorRevealTolerant(layer, { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
     const st = getTitleC(layer)
     // 2: blink_ms 未指定なので既定値。直書きせず定数を参照（陳腐化防止）。
     expect(st.textEffect!.cursor!.blinkMs).toBe(CURSOR_DEFAULTS.blinkMs)
@@ -525,13 +471,12 @@ describe('CharacterLayer cursor (#271)', () => {
   it('カーソルがある限り hasActiveAnimation()===true（reveal 完了・settle 後も止まらない＝settle モデルの小例外）', async () => {
     const layer = new CharacterLayer(800, 450)
     layer.showTitle('orber', 'sans-serif')
-    await applyCursorRevealTolerant(layer, { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
     const st = getTitleC(layer)
     const te = st.textEffect!
     // build 直後（reveal 進行中）でも、カーソルがあるので ticker は止められない。
     expect(layer.hasActiveAnimation()).toBe(true)
-    // reveal を「完了 + settle 済み」に進める。ここで positionCursor は呼ばない
-    //（jsdom で glyph.width がこけるため）。isTextEffectActive は effect.cursor を
+    // reveal を「完了 + settle 済み」に進める。isTextEffectActive は effect.cursor を
     // settled より先に見て true を返すので、完了・settle 後もカーソルがある限り active。
     te.typewriter = { ...te.typewriter!, displayedCharCount: te.glyphs.length, acc: 0 }
     te.settled = true
@@ -551,6 +496,41 @@ describe('CharacterLayer cursor (#271)', () => {
     const st = getTitleC(layer)
     expect(st.textEffect!.cursor).toBeNull()
     // カーソルが無い完了済み reveal は ticker を止められる ⇒ 上記の active はカーソル由来だと裏付く。
+    expect(layer.hasActiveAnimation()).toBe(false)
+  })
+
+  // ---- #271 リーク回帰: カーソルで回り続けた ticker が破棄経路で確実に止まる ----
+
+  it('remove(instant) でカーソルが破棄され hasActiveAnimation()===false に戻る（ticker リーク防止）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    // カーソルが点滅で ticker を回し続けている。
+    const cursorGfx = getTitleC(layer).textEffect!.cursor!.gfx
+    expect(layer.hasActiveAnimation()).toBe(true)
+    // remove(instant) → clearTextEffect → destroyCursor を通り、カーソルが破棄される。
+    layer.remove('Title', { instant: true })
+    // Title 自体が消え、カーソルの Graphics も破棄されている（リークしない）。
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.has('Title')).toBe(
+      false
+    )
+    expect(cursorGfx.destroyed).toBe(true)
+    // active 要因が無くなったので ticker は止められる。
+    expect(layer.hasActiveAnimation()).toBe(false)
+  })
+
+  it('showTitle のテキスト差し替えでカーソルが破棄され hasActiveAnimation()===false に戻る（ticker リーク防止）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    const cursorGfx = getTitleC(layer).textEffect!.cursor!.gfx
+    expect(layer.hasActiveAnimation()).toBe(true)
+    // showTitle のテキスト差し替えは clearTextEffect → destroyCursor を通り、グリフ演出ごと破棄する。
+    layer.showTitle('next', 'sans-serif')
+    const st = getTitleC(layer)
+    expect(st.textEffect).toBeNull()
+    expect(cursorGfx.destroyed).toBe(true)
+    // カーソルが消えたので ticker は止められる（点滅で回り続けない）。
     expect(layer.hasActiveAnimation()).toBe(false)
   })
 })

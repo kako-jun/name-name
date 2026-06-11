@@ -225,7 +225,8 @@ interface CursorState {
  * 矩形は左端基準で描画し、pivot/位置で transform-origin 左を実現する。
  *
  * 中間状態は持たない（ADR0002）: 進行は startMs からの経過 ms で都度計算する。
- * 復元・skip 時は scale.x=1（伸び切り）の静止状態にする。
+ * skip 時（skipMode のスキップ前進）は scale.x=1（伸び切り）の静止状態にする。
+ * applyState は [下線] を replay しない（GameState に持たない・ADR0002）ので、復元では走らない。
  */
 interface UnderlineAnimation {
   /** 線本体の Graphics（左端基準で矩形を描画済み。scale.x で伸長する）。 */
@@ -794,13 +795,15 @@ export class CharacterLayer extends Container {
       headY = 0
     } else if (shown <= 0) {
       // まだ 1 文字も出ていない: 先頭グリフの左端。
+      // 幅は measureGlyphWidth でガード経由に読む（jsdom で Text.width getter が throw するのを防ぐ防御）。
       const first = effect.glyphs[0]
-      headX = first.restX - first.glyph.width / 2
+      headX = first.restX - this.measureGlyphWidth(first.glyph) / 2
       headY = first.restY
     } else {
       // 表示済み末尾グリフの右端。
+      // 幅は measureGlyphWidth でガード経由に読む（jsdom で Text.width getter が throw するのを防ぐ防御）。
       const last = effect.glyphs[Math.min(shown, effect.glyphs.length) - 1]
-      headX = last.restX + last.glyph.width / 2
+      headX = last.restX + this.measureGlyphWidth(last.glyph) / 2
       headY = last.restY
     }
     cursor.gfx.x = headX
@@ -846,7 +849,8 @@ export class CharacterLayer extends Container {
    * グリフ演出を「効果完了済み（全グリフ整列・不透明・全可視）」の静止状態にする。
    * container/glyphs は保持したまま、進行アニメだけ畳む。復元・即時完了に使う。
    *
-   * @param instant true（skip/復元）ならカーソルを破棄して「カーソルなしの静止全表示」に畳む
+   * @param instant true（skip 時。skipMode のスキップ前進。applyState は [文字演出] を replay
+   *   しないので復元では走らない）ならカーソルを破棄して「カーソルなしの静止全表示」に畳む
    *   (#271 ADR0002: skip 時はカーソルなし)。false（通常完了）ならカーソルは末尾に固定して
    *   点滅し続ける（closing.html 忠実）— カーソルは settle 後も生かす小例外。
    */
@@ -866,7 +870,7 @@ export class CharacterLayer extends Container {
     }
     if (effect.cursor) {
       if (instant) {
-        // skip/復元: カーソルなしの静止全表示に畳む。
+        // skip 時: カーソルなしの静止全表示に畳む。
         this.destroyCursor(effect)
       } else {
         // 通常完了: カーソルを末尾位置に固定。点滅は settle 後も ticker が継続する。
@@ -919,7 +923,8 @@ export class CharacterLayer extends Container {
    * fire-and-forget: 呼び出し側は完了を待たず次イベントへ進む。
    * 幅 measure は fallback フォントずれを避けるため ensureFontLoaded 後に行う。
    *
-   * @param instant true（skip/復元）なら伸び切り（scale.x=1）の静止線にする（ADR0002）。
+   * @param instant true（skip 時。skipMode のスキップ前進。applyState は [下線] を replay しない
+   *   ので復元では走らない）なら伸び切り（scale.x=1）の静止線にする（ADR0002）。
    * @returns フォント確定後の線構築まで含めた完了 Promise。fire-and-forget は無視してよい。
    */
   applyUnderline(
@@ -962,6 +967,7 @@ export class CharacterLayer extends Container {
     params: UnderlineParams,
     options?: { instant?: boolean }
   ): void {
+    // フォント待ちの競合で既に別の下線が貼られている場合に備え、ここでも一度畳んでから貼り直す。
     this.clearUnderline(state)
     const label = state.label
     if (!label || label.destroyed) return
@@ -990,6 +996,9 @@ export class CharacterLayer extends Container {
     gfx.rect(0, 0, geom.width, geom.thickness).fill(resolved.colorNum)
     gfx.x = geom.x
     gfx.y = geom.y
+    // 下線は sprite 直下に置く（グリフ container の子にはしない）。spec の「後続 [アニメ target=Title]
+    // で sprite ごと動かせる」に沿わせるため。将来 container 単独 transform を入れても下線は sprite
+    // 座標系に留まるので、container と別の子である点に注意（container だけ動かすと下線はずれる）。
     state.sprite.addChild(gfx)
 
     const anim: UnderlineAnimation = {
@@ -1023,7 +1032,7 @@ export class CharacterLayer extends Container {
     return elapsed < anim.durationMs
   }
 
-  /** 下線を伸び切り（scale.x=1）の静止状態にする。復元・即時完了に使う。 */
+  /** 下線を伸び切り（scale.x=1）の静止状態にする。skip 時（skipMode のスキップ前進）・即時完了に使う。 */
   private settleUnderline(state: CharacterState): void {
     const anim = state.underline
     if (!anim) return
