@@ -4,6 +4,7 @@ import {
   TYPEWRITER_PRESET,
   TEXT_EFFECT_DEFAULTS,
   RESTING_GLYPH_TRANSFORM,
+  CURSOR_DEFAULTS,
   resolveTransformEffect,
   glyphLinearProgress,
   computeGlyphTransform,
@@ -11,6 +12,8 @@ import {
   resolveTypewriterMsPerChar,
   isRevealEffect,
   layoutGlyphCenters,
+  resolveCursor,
+  cursorVisible,
 } from './textEffect'
 import { easeOutBack } from './easing'
 
@@ -330,5 +333,86 @@ describe('textEffect: layoutGlyphCenters の境界・不変条件', () => {
     const centers = layoutGlyphCenters(widths)
     expect(centers[0]).toBeCloseTo(-centers[2], 9)
     expect(centers[1]).toBeCloseTo(0, 9) // 中央グリフは原点
+  })
+})
+
+// ===== #271: resolveCursor（点滅カーソルの設定解決。reveal 専用）=====
+// enabled は「reveal 効果 かつ cursor===true」のときだけ true。期待値は CURSOR_DEFAULTS を import。
+describe('textEffect: resolveCursor 値解決（reveal 専用 + デフォルト）', () => {
+  it('効果=タイプ かつ カーソル=on のときだけ enabled=true', () => {
+    expect(resolveCursor({ effect: 'Typewriter', cursor: true }).enabled).toBe(true)
+  })
+
+  it('reveal でも cursor が false / 未指定なら enabled=false', () => {
+    expect(resolveCursor({ effect: 'Typewriter', cursor: false }).enabled).toBe(false)
+    expect(resolveCursor({ effect: 'Typewriter' }).enabled).toBe(false)
+  })
+
+  it('reveal でない効果は cursor=true でも enabled=false（カーソルは reveal 専用）', () => {
+    expect(resolveCursor({ effect: 'Explode', cursor: true }).enabled).toBe(false)
+    expect(resolveCursor({ cursor: true }).enabled).toBe(false)
+  })
+
+  it('blink_ms 未指定は既定 CURSOR_DEFAULTS.blinkMs を使う', () => {
+    expect(resolveCursor({ effect: 'Typewriter', cursor: true }).blinkMs).toBe(
+      CURSOR_DEFAULTS.blinkMs
+    )
+  })
+
+  it('正の blink_ms はそれを優先する', () => {
+    expect(resolveCursor({ effect: 'Typewriter', cursor: true, blink_ms: 400 }).blinkMs).toBe(400)
+  })
+
+  it('0 / 負の blink_ms は既定に倒す（点滅停止＝0 除算回避は cursorVisible 側でも担保）', () => {
+    expect(resolveCursor({ effect: 'Typewriter', cursor: true, blink_ms: 0 }).blinkMs).toBe(
+      CURSOR_DEFAULTS.blinkMs
+    )
+    expect(resolveCursor({ effect: 'Typewriter', cursor: true, blink_ms: -100 }).blinkMs).toBe(
+      CURSOR_DEFAULTS.blinkMs
+    )
+  })
+
+  it('cursor_color はパススルー（未指定なら undefined = 文字色流用）', () => {
+    expect(
+      resolveCursor({ effect: 'Typewriter', cursor: true, cursor_color: '#2b6cb0' }).color
+    ).toBe('#2b6cb0')
+    expect(resolveCursor({ effect: 'Typewriter', cursor: true }).color).toBeUndefined()
+  })
+})
+
+// ===== #271: cursorVisible（点滅 step 関数。floor(t/半周期)%2===0）=====
+describe('textEffect: cursorVisible の点滅境界', () => {
+  it('t=0 は表示（true）', () => {
+    expect(cursorVisible(0, 600)).toBe(true)
+  })
+
+  it('負 elapsed は 0 にクランプして表示（true）', () => {
+    expect(cursorVisible(-100, 600)).toBe(true)
+  })
+
+  it('半周期ごとに表示/非表示が反転する（前半表示・後半非表示）', () => {
+    const blink = 600 // 半周期 300
+    expect(cursorVisible(0, blink)).toBe(true) // [0,300) 表示
+    expect(cursorVisible(150, blink)).toBe(true)
+    expect(cursorVisible(450, blink)).toBe(false) // [300,600) 非表示
+    expect(cursorVisible(750, blink)).toBe(true) // [600,900) 再び表示
+    expect(cursorVisible(1050, blink)).toBe(false) // [900,1200) 非表示
+  })
+
+  it('半周期ちょうどの境界は floor で次区間（非表示）に入る', () => {
+    const blink = 600 // 半周期 300
+    // t = 半周期ちょうど → floor(300/300)=1 → odd → false
+    expect(cursorVisible(300, blink)).toBe(false)
+    // t = 周期ちょうど → floor(600/300)=2 → even → true
+    expect(cursorVisible(600, blink)).toBe(true)
+    // 境界の直前は前区間に残る
+    expect(cursorVisible(299, blink)).toBe(true)
+    expect(cursorVisible(599, blink)).toBe(false)
+  })
+
+  it('blinkMs<=0 は常に表示（0 除算回避・点滅停止の安全側）', () => {
+    expect(cursorVisible(0, 0)).toBe(true)
+    expect(cursorVisible(500, 0)).toBe(true)
+    expect(cursorVisible(500, -100)).toBe(true)
   })
 })

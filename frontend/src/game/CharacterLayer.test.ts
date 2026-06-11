@@ -287,3 +287,162 @@ describe('CharacterLayer applyTextEffect (#268)', () => {
     }
   })
 })
+
+// ===== #270: applyUnderline（下線ビーム）=====
+interface UnderlineStateLike {
+  underline: {
+    gfx: { scale: { x: number }; destroyed: boolean; parent: unknown }
+    resolved: { durationMs: number }
+    settled: boolean
+  } | null
+  label?: { text: string }
+}
+
+describe('CharacterLayer applyUnderline (#270)', () => {
+  // applyUnderline はフォント確定後（ensureFontLoaded）に線を構築する。
+  // document を null にすると ensureFontLoaded は即 resolve するため await で構築を待てる。
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  function getTitleU(layer: CharacterLayer): UnderlineStateLike {
+    return (layer as unknown as { characters: Map<string, UnderlineStateLike> }).characters.get(
+      'Title'
+    )!
+  }
+
+  it('タイトル表示後に下線を適用すると Graphics が生成され進行中は scale.x<1 で始まる', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {})
+    const st = getTitleU(layer)
+    expect(st.underline).not.toBeNull()
+    expect(st.underline!.gfx.destroyed).toBe(false)
+    // 初期フレームを反映してから ticker を回すので、伸長中は scale.x<1（まだ伸び切っていない）。
+    expect(st.underline!.gfx.scale.x).toBeLessThan(1)
+    expect(st.underline!.settled).toBe(false)
+  })
+
+  it('instant: true は伸び切った静止線（scale.x=1, settled）になる（ADR0002 復元）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const st = getTitleU(layer)
+    expect(st.underline).not.toBeNull()
+    expect(st.underline!.gfx.scale.x).toBe(1)
+    expect(st.underline!.settled).toBe(true)
+  })
+
+  it('target 不在 / 空タイトルは no-op（silent skip、下線を作らない）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    // 対象なし
+    await expect(layer.applyUnderline('NoSuch', {})).resolves.toBeUndefined()
+    // 空タイトルは Title 自体が無い
+    layer.showTitle('', 'sans-serif')
+    await expect(layer.applyUnderline('Title', {})).resolves.toBeUndefined()
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.has('Title')).toBe(
+      false
+    )
+  })
+
+  it('showTitle でテキストを差し替えると下線は破棄される（幅が変わるため）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const gfx = getTitleU(layer).underline!.gfx
+    layer.showTitle('next', 'sans-serif')
+    const st = getTitleU(layer)
+    expect(st.underline).toBeNull()
+    expect(gfx.destroyed).toBe(true)
+  })
+
+  it('再適用すると前の線を破棄して貼り直す（重複しない）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const first = getTitleU(layer).underline!.gfx
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const second = getTitleU(layer).underline!.gfx
+    expect(first.destroyed).toBe(true) // 旧線は破棄
+    expect(second.destroyed).toBe(false)
+    expect(second).not.toBe(first)
+  })
+
+  it('remove(instant) は下線 Graphics を破棄して Title を消す', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const gfx = getTitleU(layer).underline!.gfx
+    layer.remove('Title', { instant: true })
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.has('Title')).toBe(
+      false
+    )
+    expect(gfx.destroyed).toBe(true)
+  })
+})
+
+// ===== #271: 点滅カーソル（効果=タイプ 専用）=====
+interface CursorTitleLike {
+  textEffect: {
+    cursor: { gfx: { destroyed: boolean }; blinkMs: number } | null
+  } | null
+}
+
+describe('CharacterLayer cursor (#271)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  function getTitleC(layer: CharacterLayer): CursorTitleLike {
+    return (layer as unknown as { characters: Map<string, CursorTitleLike> }).characters.get(
+      'Title'
+    )!
+  }
+
+  // 注意: カーソル「生成あり」の非 instant 経路（cursor=on で settle せずに保持）は、
+  // buildTextEffect → updateTextEffectFrame(0) → positionCursor が glyph.width を読むため、
+  // canvas 無しの jsdom（CanvasTextMetrics.measureFont）でクラッシュする。これは production
+  // バグではなく純粋にテスト環境（canvas 未インストール）の観測限界。カーソル生成条件・点滅・
+  // 解決値そのものは textEffect.test.ts の resolveCursor / cursorVisible で厚くカバーする。
+  // ここでは glyph.width を読まない instant / cursor=off 経路だけを CharacterLayer 配線として検証する。
+
+  it('cursor=off（既定）のタイプはカーソルを持たず、完了すれば ticker は止められる', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', ms_per_char: 0 })
+    const st = getTitleC(layer)
+    expect(st.textEffect!.cursor).toBeNull()
+    expect(layer.hasActiveAnimation()).toBe(false)
+  })
+
+  it('instant(skip) はカーソル=on でもカーソルなしの静止全表示に畳む（#271 ADR0002）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true }, { instant: true })
+    const st = getTitleC(layer)
+    expect(st.textEffect).not.toBeNull()
+    // skip はカーソルを破棄（cursor=null）し、点滅も走らせないので ticker は止められる。
+    expect(st.textEffect!.cursor).toBeNull()
+    expect(layer.hasActiveAnimation()).toBe(false)
+  })
+
+  it('reveal でない効果（爆発）はカーソル=on を指定してもカーソルを作らない', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    // 爆発は reveal でないので resolveCursor.enabled=false → buildCursor は null。
+    // 爆発経路は positionCursor を呼ばないため glyph.width に触れずクラッシュしない。
+    await layer.applyTextEffect('Title', { effect: 'Explode', cursor: true }, { instant: true })
+    const st = getTitleC(layer)
+    expect(st.textEffect!.cursor).toBeNull()
+  })
+})
