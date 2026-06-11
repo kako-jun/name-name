@@ -10,6 +10,7 @@ import {
   textEffectTotalDurationMs,
   resolveTypewriterMsPerChar,
   isRevealEffect,
+  layoutGlyphCenters,
 } from './textEffect'
 import { easeOutBack } from './easing'
 
@@ -268,5 +269,66 @@ describe('textEffect: computeGlyphTransform の stagger 反映', () => {
     expect(g.offsetY).toBeCloseTo(40, 6)
     expect(g.scale).toBeCloseTo(EXPLODE_PRESET.scale, 6)
     expect(g.alpha).toBeCloseTo(EXPLODE_PRESET.alpha, 6)
+  })
+})
+
+// ===== should2: layoutGlyphCenters（中央寄せレイアウトの純関数化）=====
+// 期待値は定数直書きせず、関数の不変条件（合計幅・中心間隔・対称性）で検証する。
+describe('textEffect: layoutGlyphCenters の境界・不変条件', () => {
+  // 中心配列に対し「各グリフを半幅ぶん広げた区間」の左端・右端を返すユーティリティ。
+  function spanEnds(widths: number[], centers: number[]): { left: number; right: number } {
+    const left = centers[0] - widths[0] / 2
+    const right = centers[centers.length - 1] + widths[widths.length - 1] / 2
+    return { left, right }
+  }
+
+  it('空配列は []（グリフ 0 個）', () => {
+    expect(layoutGlyphCenters([])).toEqual([])
+  })
+
+  it('1 グリフは原点中央（中心 0）。幅に依らず単独なら中央に来る', () => {
+    expect(layoutGlyphCenters([10])).toEqual([0])
+    expect(layoutGlyphCenters([0])).toEqual([0])
+    expect(layoutGlyphCenters([123.4])).toEqual([0])
+  })
+
+  it('複数グリフ: 行全体が原点中央（左端=-totalWidth/2, 右端=+totalWidth/2）', () => {
+    const widths = [10, 20, 30] // totalWidth=60
+    const centers = layoutGlyphCenters(widths)
+    const total = widths.reduce((a, b) => a + b, 0)
+    const { left, right } = spanEnds(widths, centers)
+    expect(left).toBeCloseTo(-total / 2, 9)
+    expect(right).toBeCloseTo(total / 2, 9)
+    // 行全体は原点対称（左端と右端の符号が反転し絶対値が一致）
+    expect(left).toBeCloseTo(-right, 9)
+  })
+
+  it('隣接中心の間隔は両グリフの半幅和に等しい（隙間も重なりもない詰め配置）', () => {
+    const widths = [12, 8, 40, 4]
+    const centers = layoutGlyphCenters(widths)
+    for (let i = 1; i < widths.length; i++) {
+      const gap = centers[i] - centers[i - 1]
+      expect(gap).toBeCloseTo(widths[i - 1] / 2 + widths[i] / 2, 9)
+    }
+    expect(centers.length).toBe(widths.length)
+  })
+
+  it('幅 0 が混在しても破綻しない（0 幅グリフは前後と同一点に潰れるだけ）', () => {
+    const widths = [10, 0, 10] // totalWidth=20
+    const centers = layoutGlyphCenters(widths)
+    const total = widths.reduce((a, b) => a + b, 0)
+    const { left, right } = spanEnds(widths, centers)
+    expect(left).toBeCloseTo(-total / 2, 9)
+    expect(right).toBeCloseTo(total / 2, 9)
+    // 中央の 0 幅グリフは前グリフの右端 = 次グリフの左端に一致（その点に潰れる）
+    expect(centers[1]).toBeCloseTo(centers[0] + widths[0] / 2, 9)
+    expect(centers[1]).toBeCloseTo(centers[2] - widths[2] / 2, 9)
+  })
+
+  it('左右対称な幅列なら中心配列も原点対称になる', () => {
+    const widths = [10, 30, 10]
+    const centers = layoutGlyphCenters(widths)
+    expect(centers[0]).toBeCloseTo(-centers[2], 9)
+    expect(centers[1]).toBeCloseTo(0, 9) // 中央グリフは原点
   })
 })

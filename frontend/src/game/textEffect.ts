@@ -227,3 +227,27 @@ export function resolveTypewriterMsPerChar(params: TextEffectParams): number {
 export function isRevealEffect(params: TextEffectParams): boolean {
   return params.effect === 'Typewriter'
 }
+
+/**
+ * グリフ幅の配列から、行全体を中央寄せした各グリフの中心 x 座標を返す（純粋）。
+ *
+ * 各グリフを左端から幅ぶん詰めて並べ、行全体（合計幅）を原点中央に置く。
+ * すなわち最初のグリフの左端は `-totalWidth/2`、各グリフの中心 x は
+ * 「そのグリフより手前の幅合計 + 自身の半幅 - totalWidth/2」。
+ * 返す配列の長さは `widths.length`。空配列なら `[]`。
+ *
+ * CharacterLayer.applyTextEffect の「totalWidth → cursor=-totalWidth/2 から各グリフ中心」
+ * のレイアウトをここに集約し、PixiJS 非依存で境界値テストできるようにする (#268)。
+ */
+export function layoutGlyphCenters(widths: number[]): number[] {
+  let totalWidth = 0
+  for (const w of widths) totalWidth += w
+  const centers: number[] = new Array(widths.length)
+  let cursor = -totalWidth / 2
+  for (let i = 0; i < widths.length; i++) {
+    const w = widths[i]
+    centers[i] = cursor + w / 2
+    cursor += w
+  }
+  return centers
+}
