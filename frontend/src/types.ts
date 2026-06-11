@@ -257,6 +257,25 @@ export type Event =
         alpha?: number
         duration_ms?: number
         easing?: Easing
+        /** `効果=タイプ` 専用: タイプ末尾の点滅カーソルを出すか (#271)。reveal 以外では無視。 */
+        cursor?: boolean
+        /** カーソル点滅周期 (ms)。半周期で表示/非表示。未指定は既定 600 (#271)。 */
+        blink_ms?: number
+        /** カーソル色 (CSS カラー文字列)。未指定は文字色を流用 (#271)。 */
+        cursor_color?: string
+      }
+    }
+  | {
+      /** 下線ビーム (#270)。`[文字演出]` とは別系統の図形プリミティブ。
+       *  対象テキストの実 measure 幅にフィットする横線を直下に置き scaleX 0→1 で左から伸ばす。
+       *  プリセット既定値の展開は underline.ts / CharacterLayer で行う。 */
+      Underline: {
+        target: string
+        color?: string
+        thickness?: number
+        duration_ms?: number
+        offset?: number
+        easing?: Easing
       }
     }
   | { DialogBorderless: { borderless: boolean } }
