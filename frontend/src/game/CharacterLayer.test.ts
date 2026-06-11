@@ -215,4 +215,57 @@ describe('CharacterLayer applyTextEffect (#268)', () => {
     layer.showTitle('', 'sans-serif')
     expect(() => layer.applyTextEffect('Title', { effect: 'Explode' })).not.toThrow()
   })
+
+  it('instant: true のタイプ効果は全グリフを可視にする（reveal の即時完了）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    layer.applyTextEffect('Title', { effect: 'Typewriter' }, { instant: true })
+    const st = getTitle(layer)
+    expect(st.textEffect).not.toBeNull()
+    for (const g of st.textEffect!.glyphs) {
+      expect(g.visible).toBe(true)
+    }
+  })
+
+  it('applyTextEffect を再適用すると前のグリフ列を破棄して貼り直す（重複しない）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    layer.applyTextEffect('Title', { effect: 'Explode' })
+    const first = getTitle(layer).textEffect!.glyphs
+    expect(first.length).toBe(5)
+    // 同じ Title へ別効果を再適用しても、グリフ数は文字数ぶんのまま（積み増しされない）。
+    layer.applyTextEffect('Title', { effect: 'Typewriter' })
+    const st = getTitle(layer)
+    expect(st.textEffect!.glyphs.length).toBe(5)
+    expect(st.textEffect!.transform).toBeNull() // タイプへ切替済み
+    expect(st.textEffect!.typewriter).not.toBeNull()
+  })
+
+  it('remove(instant) はグリフ container を破棄して Title を characters から消す（ADR0002 破棄）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    layer.applyTextEffect('Title', { effect: 'Explode' })
+    const glyphs = getTitle(layer).textEffect!.glyphs as unknown as Array<{ destroyed: boolean }>
+    layer.remove('Title', { instant: true })
+    // Title 自体が消える
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.has('Title')).toBe(
+      false
+    )
+    // グリフ Text も破棄される（UAF / 幽霊グリフ防止）
+    for (const g of glyphs) {
+      expect(g.destroyed).toBe(true)
+    }
+  })
+
+  it('clear() はグリフ container を破棄して全キャラを消す', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    layer.applyTextEffect('Title', { effect: 'Explode' })
+    const glyphs = getTitle(layer).textEffect!.glyphs as unknown as Array<{ destroyed: boolean }>
+    layer.clear()
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.size).toBe(0)
+    for (const g of glyphs) {
+      expect(g.destroyed).toBe(true)
+    }
+  })
 })

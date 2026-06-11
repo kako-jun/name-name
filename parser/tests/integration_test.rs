@@ -2180,6 +2180,176 @@ title: "文字演出"
     assert_eq!(events[2], events2[2]);
 }
 
+// ---- #268 [文字演出] フェーズ1ギャップ: エイリアス / 異常系 / フィールド網羅 / emit 形 ----
+
+#[test]
+fn test_text_effect_explode_english_and_typewriter_japanese_aliases() {
+    // 既存テストは爆発(日)・typewriter(英) のみ。残る組み合わせ
+    // effect=explode(英) / 効果=タイプ(日) もプリセットに解決することを守る。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: alias
+
+[文字演出: target=Title, effect=explode]
+[文字演出: Title, 効果=タイプ]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2);
+    match &events[0] {
+        Event::TextEffect { effect, .. } => assert_eq!(*effect, Some(TextEffectPreset::Explode)),
+        other => panic!("expected TextEffect, got {other:?}"),
+    }
+    match &events[1] {
+        Event::TextEffect { effect, .. } => assert_eq!(*effect, Some(TextEffectPreset::Typewriter)),
+        other => panic!("expected TextEffect, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_text_effect_unknown_effect_is_silently_dropped_but_directive_kept() {
+    // 未知プリセット名は effect=None に倒すが、target があれば directive 自体は生かす
+    // （素のプリミティブとして解釈される余地を残す）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: unknown_effect
+
+[文字演出: Title, 効果=きらきら]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::TextEffect { target, effect, .. } => {
+            assert_eq!(target, "Title");
+            assert_eq!(*effect, None); // 未知は silent skip
+        }
+        other => panic!("expected TextEffect, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_text_effect_unknown_key_is_silently_skipped() {
+    // 未知キーは無視し、既知キーだけ拾う。directive は壊れず残る。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: unknown_key
+
+[文字演出: Title, 効果=爆発, きらめき=999, 間隔=80]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::TextEffect {
+            target,
+            effect,
+            stagger_ms,
+            ..
+        } => {
+            assert_eq!(target, "Title");
+            assert_eq!(*effect, Some(TextEffectPreset::Explode));
+            assert_eq!(*stagger_ms, Some(80)); // 既知キーは未知キーに邪魔されず拾える
+        }
+        other => panic!("expected TextEffect, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_text_effect_all_primitive_fields_parsed() {
+    // 既存 raw テストは dy/scale/間隔/easing のみ。残る dx/rotation/alpha/duration/速度 を網羅する。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: fields
+
+[文字演出: Title, dx=-30, rotation=180, alpha=0.5, duration=600, speed=40]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::TextEffect {
+            dx,
+            rotation,
+            alpha,
+            duration_ms,
+            ms_per_char,
+            ..
+        } => {
+            assert_eq!(dx.as_deref(), Some("-30"));
+            assert_eq!(rotation.as_deref(), Some("180"));
+            assert_eq!(*alpha, Some(0.5));
+            assert_eq!(*duration_ms, Some(600));
+            assert_eq!(*ms_per_char, Some(40));
+        }
+        other => panic!("expected TextEffect, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_text_effect_second_bare_value_ignored_target_stays_first() {
+    // bare 値は先頭のみ target。2 つ目以降の bare 値は silent skip され、target は先頭のまま。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: bare
+
+[文字演出: Title, Foo, 効果=爆発]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::TextEffect { target, .. } => assert_eq!(target, "Title"),
+        other => panic!("expected TextEffect, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_text_effect_emit_uses_english_keywords() {
+    // emit は effect=explode / easing=ease-out-back の英語キーワード形に正規化する
+    // （round-trip 一致のため parse_easing が受理する綴りに揃える）。文字列形を直接守る。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "文字演出"
+---
+
+## s1: emit
+
+[文字演出: Title, 効果=爆発, easing=オーバーシュート]
+"#;
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("effect=explode"),
+        "emit should normalize 効果=爆発 to effect=explode, got:\n{emitted}"
+    );
+    assert!(
+        emitted.contains("easing=ease-out-back"),
+        "emit should normalize オーバーシュート to easing=ease-out-back, got:\n{emitted}"
+    );
+}
+
 // ---- #144 per-line voice ----
 
 #[test]
