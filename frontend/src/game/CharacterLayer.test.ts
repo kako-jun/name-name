@@ -145,3 +145,74 @@ describe('CharacterLayer X position ratio (Issue #216)', () => {
     expect(state!.sprite.x).toBeCloseTo(400, 0)
   })
 })
+
+interface TextEffectStateLike {
+  textEffect: {
+    glyphs: Array<{ alpha: number; scale: { x: number }; visible: boolean }>
+    transform: unknown
+    typewriter: unknown
+  } | null
+  label?: { visible: boolean; text: string }
+}
+
+describe('CharacterLayer applyTextEffect (#268)', () => {
+  function getTitle(layer: CharacterLayer): TextEffectStateLike {
+    return (layer as unknown as { characters: Map<string, TextEffectStateLike> }).characters.get(
+      'Title'
+    )!
+  }
+
+  it('タイトル文字数ぶんのグリフに分解し、単一 label は隠す', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    layer.applyTextEffect('Title', { effect: 'Explode' })
+    const st = getTitle(layer)
+    expect(st.textEffect).not.toBeNull()
+    expect(st.textEffect!.glyphs.length).toBe(5) // o r b e r
+    expect(st.textEffect!.transform).not.toBeNull()
+    expect(st.label!.visible).toBe(false)
+  })
+
+  it('instant: true は全グリフを整列・不透明・全可視の静止状態にする（ADR 0002 復元）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    layer.applyTextEffect('Title', { effect: 'Explode' }, { instant: true })
+    const st = getTitle(layer)
+    expect(st.textEffect).not.toBeNull()
+    for (const g of st.textEffect!.glyphs) {
+      expect(g.alpha).toBe(1)
+      expect(g.scale.x).toBe(1)
+      expect(g.visible).toBe(true)
+    }
+  })
+
+  it('タイプ効果は transform を持たず typewriter 状態を持つ', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('$ orber.llll-ll.com', 'sans-serif')
+    layer.applyTextEffect('Title', { effect: 'Typewriter', ms_per_char: 70 })
+    const st = getTitle(layer)
+    expect(st.textEffect!.transform).toBeNull()
+    expect(st.textEffect!.typewriter).not.toBeNull()
+  })
+
+  it('showTitle でテキストを差し替えると進行中のグリフ演出は破棄され label が再表示される', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    layer.applyTextEffect('Title', { effect: 'Explode' })
+    expect(getTitle(layer).textEffect).not.toBeNull()
+    layer.showTitle('next', 'sans-serif')
+    const st = getTitle(layer)
+    expect(st.textEffect).toBeNull()
+    expect(st.label!.visible).toBe(true)
+    expect(st.label!.text).toBe('next')
+  })
+
+  it('対象が存在しない / label が空なら no-op', () => {
+    const layer = new CharacterLayer(800, 450)
+    // 対象なし
+    expect(() => layer.applyTextEffect('NoSuch', { effect: 'Explode' })).not.toThrow()
+    // 空タイトル（showTitle は空文字で退場するので Title 自体が無い）
+    layer.showTitle('', 'sans-serif')
+    expect(() => layer.applyTextEffect('Title', { effect: 'Explode' })).not.toThrow()
+  })
+})
