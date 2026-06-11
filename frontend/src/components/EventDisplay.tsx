@@ -317,9 +317,29 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     if (te.alpha != null) parts.push(`alpha=${te.alpha}`)
     if (te.duration_ms != null) parts.push(`${te.duration_ms}ms`)
     if (te.easing && te.easing !== 'Linear') parts.push(te.easing)
+    // #271 点滅カーソル
+    if (te.cursor === true) parts.push('カーソル')
+    if (te.blink_ms != null) parts.push(`点滅=${te.blink_ms}`)
+    if (te.cursor_color != null) parts.push(`カーソル色=${te.cursor_color}`)
     return (
       <div className={`text-xs italic ml-2 ${meta}`}>
         文字演出: {te.target}
+        {parts.length > 0 ? ` ${parts.join(' ')}` : ''}
+      </div>
+    )
+  }
+
+  if ('Underline' in event) {
+    const u = event.Underline
+    const parts: string[] = []
+    if (u.color != null) parts.push(`色=${u.color}`)
+    if (u.thickness != null) parts.push(`太さ=${u.thickness}`)
+    if (u.duration_ms != null) parts.push(`${u.duration_ms}ms`)
+    if (u.offset != null) parts.push(`余白=${u.offset}`)
+    if (u.easing && u.easing !== 'Linear') parts.push(u.easing)
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        下線: {u.target}
         {parts.length > 0 ? ` ${parts.join(' ')}` : ''}
       </div>
     )
