@@ -197,6 +197,13 @@ export type Event =
     }
   | 'VideoExit'
   | {
+      /** 単色の地色 (#273)。`[背景色: #f5f0e8]`。背景画像 (Background) と同じ永続状態として
+       *  NovelGameState に持たせ、snapshot / applyState / セーブ復元で復元する。 */
+      BackgroundColor: {
+        color: string
+      }
+    }
+  | {
       Bgm: {
         path: string | null
         action: BgmAction
@@ -276,6 +283,17 @@ export type Event =
         duration_ms?: number
         offset?: number
         easing?: Easing
+      }
+    }
+  | {
+      /** 動画タイトル中央表示 (llll-ll-media 用)。`[タイトル: TEXT, 色=#1a4a7a]`。
+       *  color (#273) はタイトル文字色。グリフ演出 (爆発)・カーソルにも波及する。
+       *  未指定なら CharacterLayer 側で白 (TITLE_FILL) にフォールバック。 */
+      TitleShow: {
+        text: string
+        font_family?: string
+        position?: string
+        color?: string
       }
     }
   | { DialogBorderless: { borderless: boolean } }

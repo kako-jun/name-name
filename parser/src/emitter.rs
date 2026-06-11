@@ -160,6 +160,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[背景: {path}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
+            Event::BackgroundColor { color } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[背景色: {color}]\n"));
+                prev_was_dialog_or_text = false;
+            }
             Event::Video {
                 path,
                 position,
@@ -745,6 +752,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 text,
                 font_family,
                 position,
+                color,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -758,6 +766,11 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if let Some(p) = position {
                     out.push_str(", 位置=");
                     out.push_str(p);
+                }
+                // タイトル文字色 (#273)。日本語キー `色=` で round-trip 出力する。
+                if let Some(c) = color {
+                    out.push_str(", 色=");
+                    out.push_str(c);
                 }
                 out.push_str("]\n");
                 prev_was_dialog_or_text = false;
