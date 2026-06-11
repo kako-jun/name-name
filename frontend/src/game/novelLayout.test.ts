@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeCoverFit,
   parseHexColor,
+  parseColorToNumber,
   resolveAssetUrl,
   saveSlotToGameState,
   resolveFontFamily,
@@ -330,6 +331,42 @@ describe('saveSlotToGameState', () => {
     const data = baseData()
     data.sceneId = 'other-scene'
     expect(saveSlotToGameState(data, null).sceneId).toBe('other-scene')
+  })
+
+  // BG6: backgroundColor を持たない（旧フォーマット相当）入力 → ?? null で null に倒れる。
+  // 後方互換ガード（`data.backgroundColor ?? null`）を単体で縛る。
+  it('BG6: backgroundColor 無しの入力 → backgroundColor: null（後方互換 ?? null）', () => {
+    const data = baseData()
+    // baseData は backgroundColor を持たないので、欠落＝旧セーブと同じ。
+    expect(saveSlotToGameState(data, null).backgroundColor).toBeNull()
+  })
+
+  // BG7: backgroundColor 指定ありはそのまま透過する（地色文字列を消さない）。
+  it('BG7: backgroundColor 指定あり（#abc）→ そのまま透過する', () => {
+    const data: SaveSlotData = { ...baseData(), backgroundColor: '#abc' }
+    expect(saveSlotToGameState(data, null).backgroundColor).toBe('#abc')
+  })
+})
+
+// ===== #273: parseColorToNumber 移設の非回帰（novelLayout から直 import）=====
+//
+// P2: parseColorToNumber は #273 で underline.ts から novelLayout.ts へ移設された。
+// underline.ts は後方互換のため re-export し、underline.test.ts の全ケースは re-export 経由で
+// 緑のまま（P1。実行で確認済み・新規不要）。ここでは novelLayout から「直 import」した実体が
+// 同じ純関数として機能することを 3 点（正常/不正 hex/undefined）で縛り、移設で挙動が変わって
+// いないことを保証する。
+describe('parseColorToNumber (#273 移設・novelLayout 直 import)', () => {
+  it('P2: 正常 hex は数値化（#1a4a7a → 0x1a4a7a）', () => {
+    expect(parseColorToNumber('#1a4a7a', 0x000000)).toBe(0x1a4a7a)
+  })
+
+  it('P2: 不正 hex は fallback に倒れる（#zzz → fallback）', () => {
+    // #zzz は 3 桁短縮形として展開後 zzzzzz になり純 hex 判定で弾かれ fallback。
+    expect(parseColorToNumber('#zzz', 0x123456)).toBe(0x123456)
+  })
+
+  it('P2: undefined は fallback を返す（「指定なし」のハンドリング）', () => {
+    expect(parseColorToNumber(undefined, 0x123456)).toBe(0x123456)
   })
 })
 
