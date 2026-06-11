@@ -1455,7 +1455,8 @@ export class NovelRenderer {
       // skipMode 中は演出を畳んで即時完了（整列・不透明）にする。ADR 0002 に従い
       // アニメ進行中の中間状態は持たないため、復元/スキップ時は静止状態でよい。
       const te = event.TextEffect
-      this.characterLayer.applyTextEffect(
+      // フォント確定後にグリフ構築する Promise を返すが、fire-and-forget なので待たない。
+      void this.characterLayer.applyTextEffect(
         te.target,
         {
           effect: te.effect,
