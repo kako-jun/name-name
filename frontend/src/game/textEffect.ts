@@ -130,7 +130,8 @@ export const RESTING_GLYPH_TRANSFORM: GlyphTransform = {
 export function resolveTransformEffect(params: TextEffectParams): ResolvedTransformEffect {
   const preset = params.effect === 'Explode' ? EXPLODE_PRESET : null
 
-  const dxExpr = params.dx ?? preset?.dx ?? TEXT_EFFECT_DEFAULTS.dx
+  // explode を含め現行プリセットは水平オフセット(dx)を持たないため、dx は個別指定か既定のみ。
+  const dxExpr = params.dx ?? TEXT_EFFECT_DEFAULTS.dx
   const dyExpr = params.dy ?? preset?.dy ?? TEXT_EFFECT_DEFAULTS.dy
   const rotationExpr = params.rotation ?? TEXT_EFFECT_DEFAULTS.rotation
   const scale = params.scale ?? preset?.scale ?? TEXT_EFFECT_DEFAULTS.scale
