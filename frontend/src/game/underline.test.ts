@@ -60,6 +60,17 @@ describe('underline: parseColorToNumber', () => {
     expect(parseColorToNumber('#zzzzzz', 0x123456)).toBe(0x123456)
     expect(parseColorToNumber('#gggggg', 0x123456)).toBe(0x123456)
   })
+
+  it('符号付き 6 文字 hex は純 hex でないので fallback に倒れる（parseInt の符号解釈を弾く）', () => {
+    // Number.parseInt('+1a4a7', 16) は符号を解釈して 0x1a4a7 を返してしまう。
+    // 純 hex 判定（/^[0-9a-fA-F]+$/）で先に弾くため fallback に倒れる。
+    expect(parseColorToNumber('#+1a4a7', 0x123456)).toBe(0x123456)
+    expect(parseColorToNumber('#-1a4a7', 0x123456)).toBe(0x123456)
+    expect(parseColorToNumber('#+12345', 0x123456)).toBe(0x123456)
+    expect(parseColorToNumber('#-12345', 0x123456)).toBe(0x123456)
+    // '#' を付けない形でも同様（'+' を含めて 6 文字）。
+    expect(parseColorToNumber('+1a4a7', 0x123456)).toBe(0x123456)
+  })
 })
 
 // ===== #270: resolveUnderline（既定値 + 個別指定のデシジョンテーブル）=====

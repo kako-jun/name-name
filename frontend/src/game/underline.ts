@@ -73,6 +73,9 @@ export function parseColorToNumber(color: string | undefined, fallback: number):
       .join('')
   }
   if (s.length !== 6) return fallback
+  // 純粋 hex 16 進数のみ受理する。Number.parseInt は '+1a4a7'/'-1a4a7' のような符号付き
+  // 文字列を解釈してしまい fallback に倒れないため、parseInt 前に純 hex 判定で弾く。
+  if (!/^[0-9a-fA-F]+$/.test(s)) return fallback
   const n = Number.parseInt(s, 16)
   if (!Number.isFinite(n) || Number.isNaN(n)) return fallback
   return n
