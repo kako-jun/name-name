@@ -16,7 +16,8 @@
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
-import type { Event, EventScene, NovelGameState } from '../types'
+import type { Event, EventScene } from '../types'
+import type { NovelGameState } from './GameState'
 import { SaveManager, SaveSlotData } from './SaveManager'
 
 // --- fixture helpers（既存 NovelRenderer 系テストと同じスタイル）---
