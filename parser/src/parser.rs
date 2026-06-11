@@ -3085,4 +3085,92 @@ title: "test"
             panic!("expected TitleShow");
         }
     }
+
+    // R6: 英語キー `color=` で受け、emit は日本語 `色=` に正規化する（入力英語→出力日本語の
+    // 非対称 round-trip）。下線（#270）の color と同じく英語キーも受理する仕様を縛る。
+    #[test]
+    fn title_color_english_key_emits_japanese() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber, color=#1a4a7a]\n";
+        let doc = parse(input);
+        // 英語キーでも color に入る。
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::TitleShow {
+                text: "orber".to_string(),
+                font_family: None,
+                position: None,
+                color: Some("#1a4a7a".to_string()),
+            }
+        );
+        // emit は常に日本語 `色=` で出す（英語キーは出力に残らない）。
+        let emitted = emit(&doc);
+        assert!(
+            emitted.contains("色=#1a4a7a"),
+            "emit should normalize to Japanese key `色=`, got: {emitted}"
+        );
+        assert!(
+            !emitted.contains("color="),
+            "emit should not keep English key `color=`, got: {emitted}"
+        );
+        // 意味的には再 parse で安定（color= → 色= の正規化は値を変えない）。
+        let reparsed = parse(&emitted);
+        assert_eq!(doc, reparsed, "color= input should round-trip via 色= output");
+    }
+
+    // R7: `[背景色: ]`（値が空）の境界。実装は rest.trim() をそのまま保持するため空文字 color に
+    // なる（描画では黒に倒すが文字列は保持＝spec の round-trip 保持）。parse→emit→再 parse が安定。
+    #[test]
+    fn background_color_empty_value_roundtrip() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景色: ]\n";
+        let d1 = parse(input);
+        // 空文字を保持する（None ではなく空文字列）。
+        assert_eq!(
+            d1.chapters[0].scenes[0].events[0],
+            Event::BackgroundColor {
+                color: "".to_string(),
+            }
+        );
+        // emit は `[背景色: ]`（空値）で出し、再 parse しても同じ空文字に戻る。
+        let d2 = parse(&emit(&d1));
+        assert_eq!(d1, d2, "empty background color round-trip should be stable");
+    }
+
+    // R8: `[タイトル: orber, 色=]`（色キーありで値が空）。タイトル色の kv は空値ガード
+    // （`if !v.is_empty()`）を持つため、空値では color=None になる（背景色の空文字保持とは非対称）。
+    #[test]
+    fn title_empty_color_value_is_none() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber, 色=]\n";
+        let doc = parse(input);
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::TitleShow {
+                text: "orber".to_string(),
+                font_family: None,
+                position: None,
+                color: None,
+            }
+        );
+    }
+
+    // R9: font / 位置 / 色 を同時指定した全属性 round-trip。属性が増えても emit→parse が安定する
+    // ことを縛る（emit の属性出力順 font→位置→色 が parse で復元される）。
+    #[test]
+    fn title_all_attributes_roundtrip() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber, font=bellpoke_font, 位置=中央, 色=#1a4a7a]\n";
+        let d1 = parse(input);
+        assert_eq!(
+            d1.chapters[0].scenes[0].events[0],
+            Event::TitleShow {
+                text: "orber".to_string(),
+                font_family: Some("bellpoke_font".to_string()),
+                position: Some("中央".to_string()),
+                color: Some("#1a4a7a".to_string()),
+            }
+        );
+        let d2 = parse(&emit(&d1));
+        assert_eq!(d1, d2, "title with all attributes round-trip should be stable");
+    }
 }
