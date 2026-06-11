@@ -1469,6 +1469,27 @@ export class NovelRenderer {
           alpha: te.alpha,
           duration_ms: te.duration_ms,
           easing: te.easing,
+          // #271 点滅カーソル（効果=タイプ 専用）
+          cursor: te.cursor,
+          blink_ms: te.blink_ms,
+          cursor_color: te.cursor_color,
+        },
+        { instant: this.skipMode }
+      )
+      return
+    }
+    if ('Underline' in event) {
+      // 下線ビーム (#270) — fire-and-forget。完了を待たず次へ進む。
+      // skipMode 中は伸び切った静止線にする（ADR0002: 中間状態を持たない）。
+      const ul = event.Underline
+      void this.characterLayer.applyUnderline(
+        ul.target,
+        {
+          color: ul.color,
+          thickness: ul.thickness,
+          duration_ms: ul.duration_ms,
+          offset: ul.offset,
+          easing: ul.easing,
         },
         { instant: this.skipMode }
       )

@@ -502,6 +502,51 @@ pub enum Event {
         /// イージング関数。未指定なら TS 側でプリセット既定 → Linear に倒す。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         easing: Option<Easing>,
+        /// `効果=タイプ` 専用: タイプ末尾の点滅カーソルを出すか (#271)。
+        /// 日本語キー `カーソル` / 英語 `cursor`（on/off）。`Some(true)` で表示。
+        /// reveal 以外の効果では TS 側で無視される。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<bool>,
+        /// カーソルの点滅周期 (ms)。半周期で表示/非表示が切り替わる (#271)。
+        /// 日本語キー `点滅` / 英語 `blink`。未指定なら TS 側で既定 600ms。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blink_ms: Option<u32>,
+        /// カーソル色 (CSS カラー文字列、例 "#2b6cb0") (#271)。
+        /// 日本語キー `カーソル色` / 英語 `cursor_color`。未指定なら TS 側で文字色を流用。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor_color: Option<String>,
+    },
+    /// 下線ビーム (#270)。
+    ///
+    /// orber 宣伝動画の OP タイトルカード（opening.html の `drawLine` / scaleX 0→1）の
+    /// 忠実再現。対象テキスト（CharacterLayer 上の identifier。例 "Title"）の
+    /// レンダリング済み幅に自動フィットする横線を直下に置き、左から伸ばす。
+    ///
+    /// `[文字演出]` とは別系統の「図形プリミティブ」。グリフ効果ではなく線なので
+    /// 独立ディレクティブとして新設した（kako-jun 承認）。
+    /// プリセット既定値の展開は **TS ランタイム側** で行い、parser は値を素直に持つ。
+    /// fire-and-forget 方式: 開始と同時に次イベントへ進む（Animate と同じ）。
+    /// 全タイミングは TimeController 駆動で決定論的（Math.random 不使用）。
+    /// ADR0002 準拠: 伸び途中の中間状態は持たず、復元/skip は伸び切った静止線に畳む。
+    Underline {
+        /// 下線をかける対象。CharacterLayer 上の identifier（例 "Title"）。
+        target: String,
+        /// 線の色 (CSS カラー文字列)。日本語キー `色` / 英語 `color`。未指定は TS 既定 `#1a4a7a`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+        /// 線の太さ (px)。日本語キー `太さ` / 英語 `thickness`。未指定は TS 既定 3。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thickness: Option<u32>,
+        /// 伸長アニメ所要 (ms)。日本語キー `時間` / 英語 `duration`。未指定は TS 既定 700。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u32>,
+        /// テキスト下端からの距離 (px)。日本語キー `余白` / 英語 `offset`。
+        /// 未指定なら TS 側で測定値から自動算出する。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        offset: Option<u32>,
+        /// イージング関数。未指定なら TS 側で既定 EaseIn に倒す。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        easing: Option<Easing>,
     },
     /// 動画タイトル表示 (llll-ll-media 用、#TBD)。
     /// `[タイトル: TEXT]` で画面中央に Text オーバーレイを出す。

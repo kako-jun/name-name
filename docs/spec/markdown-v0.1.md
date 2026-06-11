@@ -496,6 +496,9 @@ runtime はクライアント側で `<link rel="stylesheet" href="https://fonts.
 | `speed` | `速度` | `タイプ` の 1 文字あたり ms（既定 70）|
 | `duration` | `時間` | 各グリフのアニメ所要時間 ms |
 | `easing` | — | イージング（下記）|
+| `cursor` | `カーソル` | `on` でタイプ末尾に点滅カーソルを表示（`効果=タイプ` 専用、下記）|
+| `blink` | `点滅` | カーソル点滅周期 ms（既定 600、半周期で表示/非表示）|
+| `cursor_color` | `カーソル色` | カーソル色（CSS カラー。既定は文字色を流用）|
 
 - すべて `TimeController` 駆動＝決定論的（`Math.random` 不使用）。動画 export・シーク・セーブ復元と整合
 - fire-and-forget: 効果開始と同時に次イベントへ進む
@@ -506,6 +509,53 @@ runtime はクライアント側で `<link rel="stylesheet" href="https://fonts.
 ### イージング `オーバーシュート`（`EaseOutBack`）
 
 爆発の "ポップ"（一度行き過ぎてから戻る）を出すための easing。`easing=オーバーシュート` または `easing=EaseOutBack` で指定する。`[アニメ]`・`[文字演出]` の両方で使える汎用追加。標準的な easeOutBack（overshoot 係数 s=1.70158）。
+
+### 点滅カーソル（`カーソル` / `cursor`）(#271)
+
+`効果=タイプ` のタイプライタに、ターミナル風の点滅カーソル（キャレット）を付ける。動画の ED タイトルカード（`$ cargo install gitpp` のようなコマンドのタイプ）用途。
+
+```markdown
+[タイトル: $ orber.llll-ll.com]
+[文字演出: Title, 効果=タイプ, 速度=70, カーソル=on]
+```
+
+- **タイプ中**: 表示済みテキストの末尾（reveal head）にキャレットが追従表示される
+- **タイプ完了後**: 末尾位置に固定して**点滅し続ける**。点滅周期は `点滅`（既定 600ms、半周期で表示/非表示が切替）
+- キャレット形状は細い縦矩形。色は文字色（既定）または `カーソル色` / `cursor_color`
+- `cursor`（`カーソル`）は `効果=タイプ` 専用。`on` / `off`（日本語 `表示` / `なし` も可）
+- **決定論**: 点滅位相は `TimeController` 仮想時間から `floor(t / 半周期) % 2`（`cursorVisible` 純関数）で算出。`Math.random` 不使用。export で再現
+- **ADR 0002**: カーソルは「点滅し続ける装飾」として効果 settle 後も生かす小例外。位置はタイプ完了位置に固定。点滅状態は render-only でセーブ対象外。`skipMode`（`instant`）ではカーソルなしの静止全表示に畳む
+
+## 下線（下線ビーム）(#270)
+
+`[文字演出]` のグリフ効果とは別系統の**図形プリミティブ**。対象テキストの幅にフィットする横線を直下に置き、`scaleX 0→1` で**左から伸ばす**（巨神兵ビーム）。動画の OP タイトルカードで、爆発で出したツール名の下に下線を引く用途。
+
+対象は CharacterLayer 上の identifier。`[タイトル: TEXT]` で表示したタイトル（`Title`）に引ける。
+
+```markdown
+[タイトル: orber]
+[文字演出: Title, 効果=爆発, 間隔=80]
+[下線: Title]
+```
+
+英語ディレクティブ `[underline: target, …]` も使える。
+
+| パラメータ | 日本語キー | 既定 | 説明 |
+|---|---|---|---|
+| `target` | `対象` | （必須） | 対象 identifier（先頭の bare 値でも指定可）。欠落時は directive を破棄 |
+| `color` | `色` | `#1a4a7a` | 線の色（CSS カラー）|
+| `thickness` | `太さ` | `3` | 線の太さ（px）|
+| `duration` | `時間` | `700` | 伸長アニメ所要 ms |
+| `offset` | `余白` | （自動） | テキスト下端からの距離（px）。未指定なら測定値から自動算出 |
+| `easing` | — | `EaseIn` | 既定 `EaseIn`（加速ビーム感）。`オーバーシュート` 等も指定可 |
+
+- **対象テキスト幅に自動フィット**: レンダリング済みテキストの実 measure 幅を使う（fallback フォント幅ずれを防ぐ）
+- **左固定で伸長**: 矩形をローカル左端基準で描き `scale.x` 0→1 で右へ伸ばす（transform-origin 左）
+- すべて `TimeController` 駆動＝決定論的（`Math.random` 不使用）
+- fire-and-forget: 効果開始と同時に次イベントへ進む
+- 線は対象 sprite の子として置かれるため、後続の `[アニメ: target=Title, …]` でタイトルごと動かせる
+- emit（再保存）時、日本語キー（色/太さ/時間/余白）は英語キー（color/thickness/duration/offset）に正規化して書き出される（round-trip は壊れない）
+- **ADR 0002**: 伸び途中の中間状態を `NovelGameState` に持たない。セーブ/ロード・シーク・任意局面起動では再 emit されない。`skipMode`（`instant`）では伸び切った静止線に畳む
 
 ## RPG 拡張
 

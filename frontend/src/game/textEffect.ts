@@ -34,6 +34,12 @@ export interface TextEffectParams {
   /** 各グリフのアニメ所要時間 (ms) */
   duration_ms?: number
   easing?: Easing
+  /** `効果=タイプ` 専用: タイプ末尾の点滅カーソルを出すか (#271)。reveal 以外では無視。 */
+  cursor?: boolean
+  /** カーソル点滅周期 (ms)。半周期で表示/非表示が切替。未指定は既定 600 (#271)。 */
+  blink_ms?: number
+  /** カーソル色 (CSS カラー文字列)。未指定は文字色を流用 (#271)。 */
+  cursor_color?: string
 }
 
 /**
@@ -251,4 +257,67 @@ export function layoutGlyphCenters(widths: number[]): number[] {
     cursor += w
   }
   return centers
+}
+
+// ---- #271 点滅カーソル（効果=タイプ 専用） ----
+
+/**
+ * カーソル既定値の正本 (#271)。closing.html の `blink 0.6s step-end infinite` 相当。
+ * - blinkMs: 600（半周期 300ms で表示/非表示が切替）
+ * - color: undefined = 文字色を流用（closing.html は `border-color` がコマンド色 #2b6cb0）
+ *
+ * テストが期待値を直書きして陳腐化するのを防ぐため export する。
+ */
+export const CURSOR_DEFAULTS = {
+  blinkMs: 600,
+} as const
+
+/** カーソル設定の「解決済み」値。reveal 以外では cursor.enabled=false になる。 */
+export interface ResolvedCursor {
+  /** カーソルを表示するか（reveal 効果 かつ cursor=on のときだけ true）。 */
+  enabled: boolean
+  /** 点滅周期 (ms)。半周期で表示/非表示が切替。 */
+  blinkMs: number
+  /** カーソル色（CSS カラー文字列）。undefined なら文字色を流用する。 */
+  color?: string
+}
+
+/**
+ * カーソル関連パラメータを解決する (#271)。
+ *
+ * カーソルは `効果=タイプ`（reveal 系）専用。reveal でない、または cursor!=true のときは
+ * `enabled=false`。点滅周期は個別 blink_ms > 既定 600。負/0 の blink_ms はクランプ
+ * （0 以下は既定に倒す＝点滅停止＝0 除算回避は cursorVisible 側でも担保）。
+ */
+export function resolveCursor(params: TextEffectParams): ResolvedCursor {
+  const enabled = isRevealEffect(params) && params.cursor === true
+  const blink = params.blink_ms
+  const blinkMs = blink !== undefined && blink > 0 ? blink : CURSOR_DEFAULTS.blinkMs
+  return {
+    enabled,
+    blinkMs,
+    color: params.cursor_color,
+  }
+}
+
+/**
+ * 点滅カーソルが「いま表示状態か」を返す（純粋・決定論）。
+ *
+ * 半周期 `blinkMs/2` ごとに表示/非表示が反転する step 関数。`t=0` で表示（true）。
+ * closing.html の `@keyframes blink { 50% { border-color: transparent } }`（前半表示・
+ * 後半非表示）と一致する。
+ *
+ * 境界:
+ * - elapsedMs<=0 → true（開始直後はカーソル表示）
+ * - blinkMs<=0（点滅なし）→ 常に true（0 除算回避・点滅停止の安全側）
+ * - elapsedMs = 半周期 ちょうど → 次の区間（非表示）に入る（floor 境界）
+ *
+ * @param elapsedMs カーソル点滅起点からの経過 ms（TimeController 仮想時間）
+ * @param blinkMs 点滅周期 (ms)。半周期で反転
+ */
+export function cursorVisible(elapsedMs: number, blinkMs: number): boolean {
+  if (!(blinkMs > 0)) return true
+  const safeElapsed = elapsedMs > 0 ? elapsedMs : 0
+  const half = blinkMs / 2
+  return Math.floor(safeElapsed / half) % 2 === 0
 }

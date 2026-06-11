@@ -655,6 +655,9 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 alpha,
                 duration_ms,
                 easing,
+                cursor,
+                blink_ms,
+                cursor_color,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -694,7 +697,48 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if let Some(e) = easing {
                     parts.push(format!("easing={}", easing_keyword(*e)));
                 }
+                // #271: カーソル系。round-trip のため英語キー (cursor=on/off) に正規化する。
+                if let Some(c) = cursor {
+                    parts.push(format!("cursor={}", if *c { "on" } else { "off" }));
+                }
+                if let Some(v) = blink_ms {
+                    parts.push(format!("blink={v}"));
+                }
+                if let Some(v) = cursor_color {
+                    parts.push(format!("cursor_color={v}"));
+                }
                 out.push_str(&format!("[文字演出: {}]\n", parts.join(", ")));
+                prev_was_dialog_or_text = false;
+            }
+            Event::Underline {
+                target,
+                color,
+                thickness,
+                duration_ms,
+                offset,
+                easing,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // round-trip のため英語キーに正規化する（parse_underline_directive が受理する綴り）。
+                let mut parts: Vec<String> = vec![format!("target={}", target)];
+                if let Some(v) = color {
+                    parts.push(format!("color={v}"));
+                }
+                if let Some(v) = thickness {
+                    parts.push(format!("thickness={v}"));
+                }
+                if let Some(v) = duration_ms {
+                    parts.push(format!("duration={v}"));
+                }
+                if let Some(v) = offset {
+                    parts.push(format!("offset={v}"));
+                }
+                if let Some(e) = easing {
+                    parts.push(format!("easing={}", easing_keyword(*e)));
+                }
+                out.push_str(&format!("[下線: {}]\n", parts.join(", ")));
                 prev_was_dialog_or_text = false;
             }
             Event::TitleShow {

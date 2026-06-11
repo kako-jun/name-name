@@ -4,21 +4,32 @@
  * PixiJS Container 上でキャラクター立ち絵の表示・表情変更・退場を管理する。
  */
 
-import { Assets, Container, Sprite, Text, TextStyle, Ticker } from 'pixi.js'
+import { Assets, Container, Graphics, Sprite, Text, TextStyle, Ticker } from 'pixi.js'
 import type { Easing } from '../types'
 import { applyEasing, resolveDelta } from './easing'
 import { ensureFontLoaded } from './FontLoader'
 import { TimeController, defaultTimeController } from './TimeController'
 import {
   computeGlyphTransform,
+  cursorVisible,
   isRevealEffect,
   layoutGlyphCenters,
+  resolveCursor,
   resolveTransformEffect,
   resolveTypewriterMsPerChar,
   textEffectTotalDurationMs,
+  type ResolvedCursor,
   type ResolvedTransformEffect,
   type TextEffectParams,
 } from './textEffect'
+import {
+  layoutUnderline,
+  parseColorToNumber,
+  resolveUnderline,
+  underlineScaleX,
+  type ResolvedUnderline,
+  type UnderlineParams,
+} from './underline'
 import { startTypewriter, tickTypewriter, type TypewriterState } from './typewriter'
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
@@ -101,6 +112,8 @@ interface CharacterState {
   fadeAnimation: FadeAnimation | null
   /** グリフ単位の文字演出 (#268)。null なら適用なし（タイトルは単一 label 表示）。 */
   textEffect: TextEffectAnimation | null
+  /** 下線ビーム (#270)。null なら適用なし。sprite の子として線を持つ。 */
+  underline: UnderlineAnimation | null
   /** 2コマ自動切替 (expression が `*-a` なら `*-b` と 1 秒ごとに交互)。
    *  remove() / clear() で interval を必ずクリアする。TimeController 経由なので number。 */
   idleIntervalId?: number
@@ -181,6 +194,50 @@ interface TextEffectAnimation {
   /** 効果全体の所要 ms（最後のグリフが整列し終わるまで）。ticker 停止判定用。 */
   totalMs: number
   /** 整列確定（settleTextEffect）済みか。完了後に毎フレーム再 settle しないためのラッチ。 */
+  settled: boolean
+  /** 点滅カーソル (#271)。null ならカーソルなし。reveal 系（タイプ）かつ cursor=on のときだけ持つ。
+   *  settle 後もカーソルだけは点滅し続ける（render-only の小例外）。 */
+  cursor: CursorState | null
+}
+
+/**
+ * タイプ末尾の点滅カーソル状態 (#271)。
+ *
+ * reveal head（表示済み末尾グリフの右端）に縦矩形 Graphics を置き、`cursorVisible` の
+ * 純関数で点滅させる。タイプ完了後も末尾位置に固定して点滅し続ける（closing.html 忠実）。
+ * ADR0002: 点滅位相は render-only でセーブ対象外。位置はタイプ完了位置に固定。
+ * skip(instant) 時はカーソルなしの静止全表示に畳む（gfx を非表示にする）。
+ */
+interface CursorState {
+  /** カーソル本体の縦矩形 Graphics（container の子）。 */
+  gfx: Graphics
+  /** 点滅周期 (ms)。半周期で表示/非表示。 */
+  blinkMs: number
+  /** 点滅起点（elapsedMs 基準）。startMs と揃え、export 再現のため仮想時間で算出する。 */
+  blinkStartMs: number
+}
+
+/**
+ * 下線ビーム (#270) の進行状態。
+ *
+ * 対象テキスト幅にフィットする横線（Pixi Graphics の矩形）を sprite の子として置き、
+ * ticker で `underlineScaleX` の純関数値を scale.x に当てて左から伸ばす。
+ * 矩形は左端基準で描画し、pivot/位置で transform-origin 左を実現する。
+ *
+ * 中間状態は持たない（ADR0002）: 進行は startMs からの経過 ms で都度計算する。
+ * skip 時（skipMode のスキップ前進）は scale.x=1（伸び切り）の静止状態にする。
+ * applyState は [下線] を replay しない（GameState に持たない・ADR0002）ので、復元では走らない。
+ */
+interface UnderlineAnimation {
+  /** 線本体の Graphics（左端基準で矩形を描画済み。scale.x で伸長する）。 */
+  gfx: Graphics
+  /** 解決済みパラメータ（色/太さ/duration/easing）。 */
+  resolved: ResolvedUnderline
+  /** 効果開始時刻（elapsedMs 基準）。 */
+  startMs: number
+  /** 伸長アニメ所要 ms（resolved.durationMs）。ticker 停止判定用。 */
+  durationMs: number
+  /** 伸び切り確定済みか。完了後に毎フレーム再 settle しないためのラッチ。 */
   settled: boolean
 }
 
@@ -331,6 +388,7 @@ export class CharacterLayer extends Container {
             destroyOnComplete: false,
           },
       textEffect: null,
+      underline: null,
     }
     this.characters.set(character, state)
     if (state.fadeAnimation) this.ensureTicker()
@@ -395,6 +453,8 @@ export class CharacterLayer extends Container {
       // テキスト差し替え時は進行中のグリフ演出を破棄し、単一 label 表示へ戻す。
       // （グリフは古いテキストのままなので残すと不整合になる）#268
       this.clearTextEffect(existing)
+      // 下線も対象テキスト幅に依存するため破棄する（#270）。
+      this.clearUnderline(existing)
       if (existing.label && !existing.label.destroyed) {
         existing.label.text = text
         existing.label.style = new TextStyle({ fontFamily, fontSize: 64, fill: 0xffffff })
@@ -449,6 +509,7 @@ export class CharacterLayer extends Container {
       animation: null,
       fadeAnimation: null,
       textEffect: null,
+      underline: null,
     })
   }
 
@@ -649,6 +710,8 @@ export class CharacterLayer extends Container {
     let effect: TextEffectAnimation
     if (reveal) {
       const msPerChar = resolveTypewriterMsPerChar(params)
+      // #271: 点滅カーソル。reveal かつ cursor=on のときだけ縦矩形 Graphics を作る。
+      const cursor = this.buildCursor(container, params)
       effect = {
         container,
         glyphs,
@@ -658,6 +721,7 @@ export class CharacterLayer extends Container {
         startMs: this.elapsedMs,
         totalMs: msPerChar * chars.length,
         settled: false,
+        cursor,
       }
     } else {
       const resolved = resolveTransformEffect(params)
@@ -670,19 +734,82 @@ export class CharacterLayer extends Container {
         startMs: this.elapsedMs,
         totalMs: textEffectTotalDurationMs(resolved, glyphs.length),
         settled: false,
+        cursor: null,
       }
     }
     state.textEffect = effect
 
     if (options?.instant) {
       // 即時完了: 全グリフを整列・不透明にして演出を畳む（中間状態を持たない）。
-      this.settleTextEffect(state)
+      // カーソルは破棄する（skip 時はカーソルなしの静止全表示、#271 ADR0002）。
+      this.settleTextEffect(state, true)
       return
     }
 
     // 初期フレームを即時反映してから ticker を回す（最初の 1 フレームのチラつき防止）。
     this.updateTextEffectFrame(effect, 0)
     this.ensureTicker()
+  }
+
+  /**
+   * 点滅カーソル (#271) の縦矩形 Graphics を作る（reveal かつ cursor=on のときのみ）。
+   *
+   * グリフ高さに合わせた細い縦棒。色は `カーソル色` 指定 > 文字色 (#268 と同じ TITLE_FILL)。
+   * container の子にして reveal head（表示済み末尾グリフの右端）に毎フレーム追従させる。
+   * `null` を返したら呼び出し側はカーソルなしの従来挙動になる。
+   */
+  private buildCursor(container: Container, params: TextEffectParams): CursorState | null {
+    const resolved: ResolvedCursor = resolveCursor(params)
+    if (!resolved.enabled) return null
+    const colorNum =
+      resolved.color !== undefined
+        ? parseColorToNumber(resolved.color, CharacterLayer.TITLE_FILL)
+        : CharacterLayer.TITLE_FILL
+    // 縦棒の太さ・高さはグリフサイズに比例。closing.html は border-right 2px 相当。
+    const width = Math.max(2, Math.round(CharacterLayer.TITLE_FONT_SIZE * 0.04))
+    const height = CharacterLayer.TITLE_FONT_SIZE
+    const gfx = new Graphics()
+    // 左端基準・縦中央基準で矩形を描く（rect の中心が原点に来るよう左上を負方向に置く）。
+    gfx.rect(0, -height / 2, width, height).fill(colorNum)
+    container.addChild(gfx)
+    return {
+      gfx,
+      blinkMs: resolved.blinkMs,
+      // 点滅起点は効果開始と揃える（仮想時間で算出 → export 再現）。
+      blinkStartMs: this.elapsedMs,
+    }
+  }
+
+  /**
+   * カーソルを reveal head（表示済み末尾グリフの右端）に置き、点滅状態を反映する (#271)。
+   * 表示文字が 0 のときは先頭グリフ左端へ。`cursorVisible` 純関数で点滅を決める。
+   */
+  private positionCursor(effect: TextEffectAnimation): void {
+    const cursor = effect.cursor
+    if (!cursor || cursor.gfx.destroyed) return
+    const shown = effect.typewriter ? effect.typewriter.displayedCharCount : effect.glyphs.length
+    let headX: number
+    let headY: number
+    if (effect.glyphs.length === 0) {
+      headX = 0
+      headY = 0
+    } else if (shown <= 0) {
+      // まだ 1 文字も出ていない: 先頭グリフの左端。
+      // 幅は measureGlyphWidth でガード経由に読む（jsdom で Text.width getter が throw するのを防ぐ防御）。
+      const first = effect.glyphs[0]
+      headX = first.restX - this.measureGlyphWidth(first.glyph) / 2
+      headY = first.restY
+    } else {
+      // 表示済み末尾グリフの右端。
+      // 幅は measureGlyphWidth でガード経由に読む（jsdom で Text.width getter が throw するのを防ぐ防御）。
+      const last = effect.glyphs[Math.min(shown, effect.glyphs.length) - 1]
+      headX = last.restX + this.measureGlyphWidth(last.glyph) / 2
+      headY = last.restY
+    }
+    cursor.gfx.x = headX
+    cursor.gfx.y = headY
+    const elapsed = this.elapsedMs - cursor.blinkStartMs
+    cursor.gfx.visible = cursorVisible(elapsed, cursor.blinkMs)
   }
 
   /**
@@ -711,6 +838,8 @@ export class CharacterLayer extends Container {
       for (let i = 0; i < effect.glyphs.length; i++) {
         effect.glyphs[i].glyph.visible = i < next.displayedCharCount
       }
+      // カーソルは reveal head に追従して点滅（タイプ中）。
+      this.positionCursor(effect)
       return next.displayedCharCount < effect.glyphs.length
     }
     return false
@@ -719,8 +848,13 @@ export class CharacterLayer extends Container {
   /**
    * グリフ演出を「効果完了済み（全グリフ整列・不透明・全可視）」の静止状態にする。
    * container/glyphs は保持したまま、進行アニメだけ畳む。復元・即時完了に使う。
+   *
+   * @param instant true（skip 時。skipMode のスキップ前進。applyState は [文字演出] を replay
+   *   しないので復元では走らない）ならカーソルを破棄して「カーソルなしの静止全表示」に畳む
+   *   (#271 ADR0002: skip 時はカーソルなし)。false（通常完了）ならカーソルは末尾に固定して
+   *   点滅し続ける（closing.html 忠実）— カーソルは settle 後も生かす小例外。
    */
-  private settleTextEffect(state: CharacterState): void {
+  private settleTextEffect(state: CharacterState, instant = false): void {
     const effect = state.textEffect
     if (!effect) return
     for (const { glyph, restX, restY } of effect.glyphs) {
@@ -734,9 +868,30 @@ export class CharacterLayer extends Container {
     if (effect.typewriter) {
       effect.typewriter = { ...effect.typewriter, displayedCharCount: effect.glyphs.length, acc: 0 }
     }
+    if (effect.cursor) {
+      if (instant) {
+        // skip 時: カーソルなしの静止全表示に畳む。
+        this.destroyCursor(effect)
+      } else {
+        // 通常完了: カーソルを末尾位置に固定。点滅は settle 後も ticker が継続する。
+        this.positionCursor(effect)
+      }
+    }
     // 進行を終えたので transform/typewriter の駆動は不要だが、container は保持する。
     // settled ラッチを立てて、以後 ticker が毎フレーム再 settle しないようにする。
+    // （カーソルがある場合のみ ticker はカーソル点滅のために回り続ける — isTextEffectActive 参照。）
     effect.settled = true
+  }
+
+  /** カーソル Graphics を破棄する (#271)。skip / 演出破棄時に呼ぶ。 */
+  private destroyCursor(effect: TextEffectAnimation): void {
+    const cursor = effect.cursor
+    if (!cursor) return
+    if (!cursor.gfx.destroyed) {
+      effect.container.removeChild(cursor.gfx)
+      cursor.gfx.destroy()
+    }
+    effect.cursor = null
   }
 
   /**
@@ -745,6 +900,7 @@ export class CharacterLayer extends Container {
   private clearTextEffect(state: CharacterState): void {
     const effect = state.textEffect
     if (!effect) return
+    this.destroyCursor(effect)
     for (const { glyph } of effect.glyphs) {
       effect.container.removeChild(glyph)
       glyph.destroy()
@@ -757,22 +913,170 @@ export class CharacterLayer extends Container {
     if (state.label && !state.label.destroyed) state.label.visible = true
   }
 
-  /** 進行中アニメーション（transform / fade / textEffect いずれか）を 1 つでも持つキャラがいるか */
+  /**
+   * 下線ビーム (#270) を対象テキストに適用する。
+   *
+   * 対象（CharacterLayer 上の identifier。例 "Title"）の label の実 measure 幅にフィットする
+   * 横線を直下に置き、scale.x 0→1 で左から伸ばす（opening.html の drawLine 相当）。
+   * 線は sprite の子にするため、後続 `[アニメ target=Title]` が sprite を動かすと追従する。
+   *
+   * fire-and-forget: 呼び出し側は完了を待たず次イベントへ進む。
+   * 幅 measure は fallback フォントずれを避けるため ensureFontLoaded 後に行う。
+   *
+   * @param instant true（skip 時。skipMode のスキップ前進。applyState は [下線] を replay しない
+   *   ので復元では走らない）なら伸び切り（scale.x=1）の静止線にする（ADR0002）。
+   * @returns フォント確定後の線構築まで含めた完了 Promise。fire-and-forget は無視してよい。
+   */
+  applyUnderline(
+    target: string,
+    params: UnderlineParams,
+    options?: { instant?: boolean }
+  ): Promise<void> {
+    const state = this.characters.get(target)
+    if (!state || !state.label || state.label.destroyed) return Promise.resolve()
+    const label = state.label
+    const sourceText = label.text
+    if (sourceText.length === 0) return Promise.resolve()
+
+    // 既存の下線があれば破棄してから貼り直す（テキスト・パラメータ変更時の再適用）。
+    this.clearUnderline(state)
+
+    const fontFamily =
+      label.style instanceof TextStyle
+        ? label.style.fontFamily
+        : ('sans-serif' as string | string[])
+    const fontName = Array.isArray(fontFamily) ? fontFamily[0] : fontFamily
+    return ensureFontLoaded(fontName)
+      .catch(() => {})
+      .then(() => {
+        // 待っている間に対象が退場・テキスト差し替えされていたら何もしない。
+        const cur = this.characters.get(target)
+        if (cur !== state) return
+        if (!state.label || state.label.destroyed) return
+        if (state.label.text !== sourceText) return
+        this.buildUnderline(state, params, options)
+      })
+  }
+
+  /**
+   * フォント確定後に下線 Graphics を構築して適用する（applyUnderline の後半）。
+   * 幾何計算（左端 x・y・幅）は underline.layoutUnderline に委譲する。
+   */
+  private buildUnderline(
+    state: CharacterState,
+    params: UnderlineParams,
+    options?: { instant?: boolean }
+  ): void {
+    // フォント待ちの競合で既に別の下線が貼られている場合に備え、ここでも一度畳んでから貼り直す。
+    this.clearUnderline(state)
+    const label = state.label
+    if (!label || label.destroyed) return
+
+    const resolved = resolveUnderline(params)
+    // 対象テキストの実 measure 幅・高さ。anchor 0.5 のため sprite-local 中心は (0,0)。
+    const textWidth = this.measureGlyphWidth(label)
+    const textHeight = (() => {
+      let h = 0
+      try {
+        h = label.height
+      } catch {
+        h = 0
+      }
+      return Number.isFinite(h) && h > 0 ? h : CharacterLayer.TITLE_FONT_SIZE
+    })()
+    // テキスト下端の sprite-local y（中心 0 から下へ半分）。
+    const textBottomY = textHeight / 2
+    // offset 未指定時の自動余白: フォントサイズの数 %（テキスト下端と線の間の隙間）。
+    const autoOffset = Math.round(CharacterLayer.TITLE_FONT_SIZE * 0.1)
+    const geom = layoutUnderline(textWidth, textBottomY, resolved, autoOffset)
+
+    const gfx = new Graphics()
+    // 矩形をローカル原点 (0,0) を左端として描く。scale.x はローカル原点基準で効くため、
+    // gfx 自体を線の左端位置 (geom.x, geom.y) に置けば scale.x 0→1 が「左固定で右へ伸びる」になる。
+    gfx.rect(0, 0, geom.width, geom.thickness).fill(resolved.colorNum)
+    gfx.x = geom.x
+    gfx.y = geom.y
+    // 下線は sprite 直下に置く（グリフ container の子にはしない）。spec の「後続 [アニメ target=Title]
+    // で sprite ごと動かせる」に沿わせるため。将来 container 単独 transform を入れても下線は sprite
+    // 座標系に留まるので、container と別の子である点に注意（container だけ動かすと下線はずれる）。
+    state.sprite.addChild(gfx)
+
+    const anim: UnderlineAnimation = {
+      gfx,
+      resolved,
+      startMs: this.elapsedMs,
+      durationMs: resolved.durationMs,
+      settled: false,
+    }
+    state.underline = anim
+
+    if (options?.instant) {
+      // 即時完了: 伸び切り（scale.x=1）の静止線にする（中間状態を持たない）。
+      this.settleUnderline(state)
+      return
+    }
+    // 初期フレーム（scale.x=0）を反映してから ticker を回す。
+    this.updateUnderlineFrame(anim)
+    this.ensureTicker()
+  }
+
+  /**
+   * 下線の 1 フレームを純粋計算（underline.underlineScaleX）して scale.x に当てる。
+   * @returns まだ伸長中なら true、伸び切ったら false。
+   */
+  private updateUnderlineFrame(anim: UnderlineAnimation): boolean {
+    if (anim.gfx.destroyed) return false
+    const elapsed = this.elapsedMs - anim.startMs
+    const sx = underlineScaleX(elapsed, anim.resolved)
+    anim.gfx.scale.x = sx
+    return elapsed < anim.durationMs
+  }
+
+  /** 下線を伸び切り（scale.x=1）の静止状態にする。skip 時（skipMode のスキップ前進）・即時完了に使う。 */
+  private settleUnderline(state: CharacterState): void {
+    const anim = state.underline
+    if (!anim) return
+    if (!anim.gfx.destroyed) anim.gfx.scale.x = 1
+    anim.settled = true
+  }
+
+  /** 下線 Graphics を完全に破棄する（テキスト差し替え・退場時）。 */
+  private clearUnderline(state: CharacterState): void {
+    const anim = state.underline
+    if (!anim) return
+    if (!anim.gfx.destroyed) {
+      if (!state.sprite.destroyed) state.sprite.removeChild(anim.gfx)
+      anim.gfx.destroy()
+    }
+    state.underline = null
+  }
+
+  /** 進行中アニメーション（transform / fade / textEffect / underline いずれか）を持つキャラがいるか */
   hasActiveAnimation(): boolean {
     for (const s of this.characters.values()) {
       if (s.animation || s.fadeAnimation) return true
       if (s.textEffect && this.isTextEffectActive(s.textEffect)) return true
+      if (s.underline && this.isUnderlineActive(s.underline)) return true
     }
     return false
   }
 
   /** グリフ演出がまだ進行中か（完了済みなら container は保持するが ticker は止めてよい）。 */
   private isTextEffectActive(effect: TextEffectAnimation): boolean {
+    // 完了後もカーソル（点滅）があれば ticker を回し続ける（#271 小例外）。
+    // settle 後の cursor は render-only で、点滅し続けるため駆動が要る。
+    if (effect.cursor) return true
     // 整列確定済みなら、たとえ未完了でも駆動不要（settle 後は静止状態を保つだけ）。
     if (effect.settled) return false
     if (effect.transform) return this.elapsedMs - effect.startMs < effect.totalMs
     if (effect.typewriter) return effect.typewriter.displayedCharCount < effect.glyphs.length
     return false
+  }
+
+  /** 下線ビームがまだ進行中か（伸び切れば ticker は止めてよい）。 (#270) */
+  private isUnderlineActive(underline: UnderlineAnimation): boolean {
+    if (underline.settled) return false
+    return this.elapsedMs - underline.startMs < underline.durationMs
   }
 
   private ensureTicker(): void {
@@ -816,6 +1120,7 @@ export class CharacterLayer extends Container {
             if (f.destroyOnComplete) {
               if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
               this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
+              this.clearUnderline(state) // 下線 gfx を破棄 (#270)
               this.removeChild(state.sprite)
               state.sprite.destroy()
               if (state.label) {
@@ -842,7 +1147,24 @@ export class CharacterLayer extends Container {
             anyActive = true
           } else {
             // 完了 → 整列状態に確定（container は保持し後続 [アニメ] が効く）。
+            // 通常完了 = instant 引数なし（カーソルは末尾固定で点滅継続）。
             this.settleTextEffect(state)
+          }
+        } else if (te && te.cursor) {
+          // settle 済みでもカーソルがあれば点滅だけ駆動し続ける（#271 render-only の小例外）。
+          this.positionCursor(te)
+          anyActive = true
+        }
+
+        // 下線ビーム (#270) を毎フレーム純粋計算で駆動する。
+        const ul = state.underline
+        if (ul && !ul.settled) {
+          const stillRunning = this.updateUnderlineFrame(ul)
+          if (stillRunning) {
+            anyActive = true
+          } else {
+            // 完了 → 伸び切り（scale.x=1）に確定。
+            this.settleUnderline(state)
           }
         }
 
@@ -883,6 +1205,7 @@ export class CharacterLayer extends Container {
     }
     if (instant) {
       this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
+      this.clearUnderline(state) // 下線 gfx を破棄 (#270)
       this.removeChild(state.sprite)
       state.sprite.destroy()
       if (state.label) {
@@ -922,6 +1245,7 @@ export class CharacterLayer extends Container {
     for (const [, state] of this.characters) {
       if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
       this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
+      this.clearUnderline(state) // 下線 gfx を破棄 (#270)
       this.removeChild(state.sprite)
       state.sprite.destroy()
       if (state.label) {

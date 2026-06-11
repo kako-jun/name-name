@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { CHARACTER_Y_RATIO, CharacterLayer, normalizePosition } from './CharacterLayer'
+import { CURSOR_DEFAULTS } from './textEffect'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
 
 interface FadeAnimationLike {
@@ -285,5 +286,251 @@ describe('CharacterLayer applyTextEffect (#268)', () => {
     for (const { glyph } of glyphs) {
       expect(glyph.destroyed).toBe(true)
     }
+  })
+})
+
+// ===== #270: applyUnderline（下線ビーム）=====
+interface UnderlineStateLike {
+  underline: {
+    gfx: { scale: { x: number }; destroyed: boolean; parent: unknown }
+    resolved: { durationMs: number }
+    settled: boolean
+  } | null
+  label?: { text: string }
+}
+
+describe('CharacterLayer applyUnderline (#270)', () => {
+  // applyUnderline はフォント確定後（ensureFontLoaded）に線を構築する。
+  // document を null にすると ensureFontLoaded は即 resolve するため await で構築を待てる。
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  function getTitleU(layer: CharacterLayer): UnderlineStateLike {
+    return (layer as unknown as { characters: Map<string, UnderlineStateLike> }).characters.get(
+      'Title'
+    )!
+  }
+
+  it('タイトル表示後に下線を適用すると Graphics が生成され進行中は scale.x<1 で始まる', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {})
+    const st = getTitleU(layer)
+    expect(st.underline).not.toBeNull()
+    expect(st.underline!.gfx.destroyed).toBe(false)
+    // 初期フレームを反映してから ticker を回すので、伸長中は scale.x<1（まだ伸び切っていない）。
+    expect(st.underline!.gfx.scale.x).toBeLessThan(1)
+    expect(st.underline!.settled).toBe(false)
+  })
+
+  it('instant: true は伸び切った静止線（scale.x=1, settled）になる（ADR0002 復元）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const st = getTitleU(layer)
+    expect(st.underline).not.toBeNull()
+    expect(st.underline!.gfx.scale.x).toBe(1)
+    expect(st.underline!.settled).toBe(true)
+  })
+
+  it('target 不在 / 空タイトルは no-op（silent skip、下線を作らない）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    // 対象なし
+    await expect(layer.applyUnderline('NoSuch', {})).resolves.toBeUndefined()
+    // 空タイトルは Title 自体が無い
+    layer.showTitle('', 'sans-serif')
+    await expect(layer.applyUnderline('Title', {})).resolves.toBeUndefined()
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.has('Title')).toBe(
+      false
+    )
+  })
+
+  it('showTitle でテキストを差し替えると下線は破棄される（幅が変わるため）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const gfx = getTitleU(layer).underline!.gfx
+    layer.showTitle('next', 'sans-serif')
+    const st = getTitleU(layer)
+    expect(st.underline).toBeNull()
+    expect(gfx.destroyed).toBe(true)
+  })
+
+  it('再適用すると前の線を破棄して貼り直す（重複しない）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const first = getTitleU(layer).underline!.gfx
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const second = getTitleU(layer).underline!.gfx
+    expect(first.destroyed).toBe(true) // 旧線は破棄
+    expect(second.destroyed).toBe(false)
+    expect(second).not.toBe(first)
+  })
+
+  it('remove(instant) は下線 Graphics を破棄して Title を消す', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyUnderline('Title', {}, { instant: true })
+    const gfx = getTitleU(layer).underline!.gfx
+    layer.remove('Title', { instant: true })
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.has('Title')).toBe(
+      false
+    )
+    expect(gfx.destroyed).toBe(true)
+  })
+})
+
+// ===== #271: 点滅カーソル（効果=タイプ 専用）=====
+interface CursorTitleLike {
+  textEffect: {
+    cursor: { gfx: { destroyed: boolean }; blinkMs: number } | null
+    glyphs: Array<{ glyph: { visible: boolean } }>
+    typewriter: { displayedCharCount: number; acc: number } | null
+    settled: boolean
+  } | null
+}
+
+describe('CharacterLayer cursor (#271)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  function getTitleC(layer: CharacterLayer): CursorTitleLike {
+    return (layer as unknown as { characters: Map<string, CursorTitleLike> }).characters.get(
+      'Title'
+    )!
+  }
+
+  it('cursor=off（既定）のタイプはカーソルを持たず、完了すれば ticker は止められる', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', ms_per_char: 0 })
+    const st = getTitleC(layer)
+    expect(st.textEffect!.cursor).toBeNull()
+    expect(layer.hasActiveAnimation()).toBe(false)
+  })
+
+  it('instant(skip) はカーソル=on でもカーソルなしの静止全表示に畳む（#271 ADR0002）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true }, { instant: true })
+    const st = getTitleC(layer)
+    expect(st.textEffect).not.toBeNull()
+    // skip はカーソルを破棄（cursor=null）し、点滅も走らせないので ticker は止められる。
+    expect(st.textEffect!.cursor).toBeNull()
+    expect(layer.hasActiveAnimation()).toBe(false)
+  })
+
+  it('reveal でない効果（爆発）はカーソル=on を指定してもカーソルを作らない', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    // 爆発は reveal でないので resolveCursor.enabled=false → buildCursor は null。
+    // 爆発経路は positionCursor を呼ばないため glyph.width に触れずクラッシュしない。
+    await layer.applyTextEffect('Title', { effect: 'Explode', cursor: true }, { instant: true })
+    const st = getTitleC(layer)
+    expect(st.textEffect!.cursor).toBeNull()
+  })
+
+  // ---- #271 本丸: 非 instant の cursor=on でカーソルが生成され、点滅し続ける ----
+  // positionCursor は glyph 幅を measureGlyphWidth でガード経由に読むため、jsdom（canvas 未
+  // インストール）でも build が throw せず、素直に await できる（#271 S1）。
+
+  it('cursor=on の非 instant タイプはカーソルを生成し、gfx を破棄しない', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    const st = getTitleC(layer)
+    expect(st.textEffect).not.toBeNull()
+    // 1: カーソルが生成され state に乗る。
+    expect(st.textEffect!.cursor).not.toBeNull()
+    // 3: カーソル本体 Graphics は破棄されていない。
+    expect(st.textEffect!.cursor!.gfx.destroyed).toBe(false)
+  })
+
+  it('生成されたカーソルの blinkMs は既定（CURSOR_DEFAULTS）になる', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    const st = getTitleC(layer)
+    // 2: blink_ms 未指定なので既定値。直書きせず定数を参照（陳腐化防止）。
+    expect(st.textEffect!.cursor!.blinkMs).toBe(CURSOR_DEFAULTS.blinkMs)
+  })
+
+  it('カーソルがある限り hasActiveAnimation()===true（reveal 完了・settle 後も止まらない＝settle モデルの小例外）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    const st = getTitleC(layer)
+    const te = st.textEffect!
+    // build 直後（reveal 進行中）でも、カーソルがあるので ticker は止められない。
+    expect(layer.hasActiveAnimation()).toBe(true)
+    // reveal を「完了 + settle 済み」に進める。isTextEffectActive は effect.cursor を
+    // settled より先に見て true を返すので、完了・settle 後もカーソルがある限り active。
+    te.typewriter = { ...te.typewriter!, displayedCharCount: te.glyphs.length, acc: 0 }
+    te.settled = true
+    for (const { glyph } of te.glyphs) glyph.visible = true
+    // 4: reveal 完了 + settle 済みでも、カーソルが点滅し続けるため active のまま。
+    expect(te.typewriter!.displayedCharCount).toBe(te.glyphs.length)
+    expect(te.settled).toBe(true)
+    expect(te.cursor).not.toBeNull()
+    expect(layer.hasActiveAnimation()).toBe(true)
+  })
+
+  it('対比: カーソルなしで reveal 完了・settle すると hasActiveAnimation()===false（カーソルが唯一の active 要因）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    // cursor=off は positionCursor を呼ばないので素直に await できる。ms_per_char=0 で即時完了。
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', ms_per_char: 0 })
+    const st = getTitleC(layer)
+    expect(st.textEffect!.cursor).toBeNull()
+    // カーソルが無い完了済み reveal は ticker を止められる ⇒ 上記の active はカーソル由来だと裏付く。
+    expect(layer.hasActiveAnimation()).toBe(false)
+  })
+
+  // ---- #271 リーク回帰: カーソルで回り続けた ticker が破棄経路で確実に止まる ----
+
+  it('remove(instant) でカーソルが破棄され hasActiveAnimation()===false に戻る（ticker リーク防止）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    // カーソルが点滅で ticker を回し続けている。
+    const cursorGfx = getTitleC(layer).textEffect!.cursor!.gfx
+    expect(layer.hasActiveAnimation()).toBe(true)
+    // remove(instant) → clearTextEffect → destroyCursor を通り、カーソルが破棄される。
+    layer.remove('Title', { instant: true })
+    // Title 自体が消え、カーソルの Graphics も破棄されている（リークしない）。
+    expect((layer as unknown as { characters: Map<string, unknown> }).characters.has('Title')).toBe(
+      false
+    )
+    expect(cursorGfx.destroyed).toBe(true)
+    // active 要因が無くなったので ticker は止められる。
+    expect(layer.hasActiveAnimation()).toBe(false)
+  })
+
+  it('showTitle のテキスト差し替えでカーソルが破棄され hasActiveAnimation()===false に戻る（ticker リーク防止）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    const cursorGfx = getTitleC(layer).textEffect!.cursor!.gfx
+    expect(layer.hasActiveAnimation()).toBe(true)
+    // showTitle のテキスト差し替えは clearTextEffect → destroyCursor を通り、グリフ演出ごと破棄する。
+    layer.showTitle('next', 'sans-serif')
+    const st = getTitleC(layer)
+    expect(st.textEffect).toBeNull()
+    expect(cursorGfx.destroyed).toBe(true)
+    // カーソルが消えたので ticker は止められる（点滅で回り続けない）。
+    expect(layer.hasActiveAnimation()).toBe(false)
   })
 })
