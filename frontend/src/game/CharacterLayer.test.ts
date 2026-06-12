@@ -1,7 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { Assets } from 'pixi.js'
 import { CHARACTER_Y_RATIO, CharacterLayer, normalizePosition } from './CharacterLayer'
 import { CURSOR_DEFAULTS } from './textEffect'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
+import { saveSlotToGameState } from './novelLayout'
+import { SaveManager, type SaveSlotData } from './SaveManager'
 
 interface FadeAnimationLike {
   fromAlpha: number
@@ -696,5 +699,572 @@ describe('CharacterLayer title color (#273)', () => {
     for (const { glyph } of st.textEffect!.glyphs) {
       expect(glyph.style.fill).toBe(NAVY)
     }
+  })
+})
+
+describe('CharacterLayer showLabel / showImage (#274)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  interface CharsInternals {
+    characters: Map<
+      string,
+      {
+        sprite: { x: number; y: number; alpha: number }
+        label?: { text: string; style: { fontSize: number; fill: number } }
+        renderOnly?: boolean
+        fadeAnimation: { fromAlpha: number; toAlpha: number } | null
+      }
+    >
+  }
+  function chars(layer: CharacterLayer): CharsInternals {
+    return layer as unknown as CharsInternals
+  }
+
+  it('showLabel は id で登録し、色・サイズ・2D 位置を反映してフェードインする', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({
+      id: 'division',
+      text: 'Planning Div. 42',
+      color: '#7a9abf',
+      position: '中上',
+      size: 16,
+      fontFamily: 'sans-serif',
+    })
+    const st = chars(layer).characters.get('division')
+    expect(st).toBeDefined()
+    // 位置: 中上 = (x=0.5, y=0.34) を screen に掛ける。
+    expect(st!.sprite.x).toBe(800 * 0.5)
+    expect(st!.sprite.y).toBeCloseTo(450 * 0.34, 5)
+    // 色・サイズが label に反映される。
+    expect(st!.label!.text).toBe('Planning Div. 42')
+    expect(st!.label!.style.fontSize).toBe(16)
+    expect(st!.label!.style.fill).toBe(0x7a9abf)
+    // 登場フェードイン（alpha 0 → 1）。
+    expect(st!.sprite.alpha).toBe(0)
+    expect(st!.fadeAnimation).not.toBeNull()
+    expect(st!.fadeAnimation!.toAlpha).toBe(1)
+  })
+
+  it('showLabel フェードイン完了で label.alpha が toAlpha(=1) に揃う（sprite と同期）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'kako-jun', fontFamily: 'sans-serif' })
+    // 内部 ticker を完了まで決定論的に駆動する（elapsedMs を fade 期間より先へ進めて 1 フレーム更新）。
+    const internal = layer as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+      characters: Map<string, { sprite: { alpha: number }; label?: { alpha: number } }>
+    }
+    internal.elapsedMs += 10000
+    internal.animTicker?.update()
+    const st = internal.characters.get('name')!
+    // 完了フレームで sprite だけでなく label も toAlpha(=1) に揃う。
+    // 進行中フレームのみ同期して完了で揃え忘れると label.alpha が半透明で固定される回帰。
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.label!.alpha).toBe(1)
+  })
+
+  it('複数 id のラベルが共存できる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'division', text: 'div', fontFamily: 'sans-serif' })
+    layer.showLabel({ id: 'name', text: 'kako-jun', fontFamily: 'sans-serif' })
+    expect(chars(layer).characters.has('division')).toBe(true)
+    expect(chars(layer).characters.has('name')).toBe(true)
+  })
+
+  it('showLabel id 未指定は既定キー "Label"、size 未指定は 24', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ text: 'hi', fontFamily: 'sans-serif' })
+    const st = chars(layer).characters.get('Label')
+    expect(st).toBeDefined()
+    expect(st!.label!.style.fontSize).toBe(24)
+  })
+
+  it('showLabel に空文字を渡すと既存ラベルを退場させる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'x', text: 'hi', fontFamily: 'sans-serif', instant: true })
+    expect(chars(layer).characters.has('x')).toBe(true)
+    layer.showLabel({ id: 'x', text: '', fontFamily: 'sans-serif' })
+    expect(chars(layer).characters.has('x')).toBe(false)
+  })
+
+  it('showImage は id で登録し 2D 位置を反映、フェードインする', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'a.png', position: '上', assetBaseUrl: '/assets' })
+    const st = chars(layer).characters.get('avatar')
+    expect(st).toBeDefined()
+    expect(st!.sprite.x).toBe(800 * 0.5)
+    expect(st!.sprite.y).toBeCloseTo(450 * 0.16, 5)
+    expect(st!.sprite.alpha).toBe(0)
+    expect(st!.fadeAnimation!.toAlpha).toBe(1)
+  })
+
+  it('Label / Image は renderOnly で getCharacterStates に漏れない（立ち絵だけ残る）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.showLabel({ id: 'division', text: 'div', fontFamily: 'sans-serif' })
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    layer.showTitle('orber', 'sans-serif')
+    const states = layer.getCharacterStates()
+    // 立ち絵 hero だけが snapshot に乗る。Title / Label / Image は render-only で除外。
+    expect(states.map((s) => s.name)).toEqual(['hero'])
+  })
+
+  it('renderOnly フラグが Title / Label / Image に立つ', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'l', text: 'x', fontFamily: 'sans-serif' })
+    layer.showImage({ id: 'i', path: 'a.png', assetBaseUrl: '/assets' })
+    layer.showTitle('t', 'sans-serif')
+    expect(chars(layer).characters.get('l')!.renderOnly).toBe(true)
+    expect(chars(layer).characters.get('i')!.renderOnly).toBe(true)
+    expect(chars(layer).characters.get('Title')!.renderOnly).toBe(true)
+  })
+})
+
+// =====================================================================================
+// #274 追加: showLabel 差し替え・演出対象・既定値、showImage の async load（Assets モック）、
+//            render-only 復元の往復。観測は既存流儀の characters Map 直読みで取る。
+// =====================================================================================
+
+// flushPromises: showImage の `Assets.load(url).then(...)` を解決させる。
+// setTimeout(0) で macrotask 1 回まわすと、解決済み Promise の .then チェーンも消化される。
+const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+interface LabelStateLike {
+  sprite: { x: number; y: number; alpha: number }
+  label?: {
+    text: string
+    visible: boolean
+    style: { fontSize: number; fill: number }
+    x: number
+    y: number
+  }
+  textEffect: unknown
+  underline: unknown
+  fadeAnimation: { toAlpha: number } | null
+}
+function labelChars(layer: CharacterLayer): { characters: Map<string, LabelStateLike> } {
+  return layer as unknown as { characters: Map<string, LabelStateLike> }
+}
+
+describe('CharacterLayer showLabel 差し替え・演出対象・既定 (#274)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  // 5: 同 id 差し替え（textEffect 進行中）→ clearTextEffect が呼ばれ textEffect=null・text 更新。
+  it('同 id 差し替えは進行中の文字演出を破棄し textEffect=null・label.text を更新する', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'kako-jun', fontFamily: 'sans-serif' })
+    await layer.applyTextEffect('name', { effect: 'Explode' })
+    expect(labelChars(layer).characters.get('name')!.textEffect).not.toBeNull()
+    // 同 id へテキスト差し替え。clearTextEffect を通って演出は畳まれる。
+    layer.showLabel({ id: 'name', text: 'NEXT', fontFamily: 'sans-serif' })
+    const st = labelChars(layer).characters.get('name')!
+    expect(st.textEffect).toBeNull()
+    expect(st.label!.text).toBe('NEXT')
+    expect(st.label!.visible).toBe(true)
+  })
+
+  // 6: 同 id 差し替え → text/位置/色/サイズ新値・sprite.x/y と label.x/y を両方更新。
+  it('同 id 差し替えで text・色・サイズ・2D 位置を新値にし、sprite と label の x/y を両更新する', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({
+      id: 'name',
+      text: 'old',
+      color: '#111111',
+      position: '上',
+      size: 16,
+      fontFamily: 'sans-serif',
+    })
+    layer.showLabel({
+      id: 'name',
+      text: 'new',
+      color: '#abcdef',
+      position: '下',
+      size: 40,
+      fontFamily: 'sans-serif',
+    })
+    const st = labelChars(layer).characters.get('name')!
+    expect(st.label!.text).toBe('new')
+    expect(st.label!.style.fill).toBe(0xabcdef)
+    expect(st.label!.style.fontSize).toBe(40)
+    // 下 = (x=0.5, y=0.84)。sprite と label の両方が新位置に動く。
+    expect(st.sprite.x).toBe(800 * 0.5)
+    expect(st.sprite.y).toBeCloseTo(450 * 0.84, 5)
+    expect(st.label!.x).toBe(800 * 0.5)
+    expect(st.label!.y).toBeCloseTo(450 * 0.84, 5)
+  })
+
+  // 7: 本丸。ラベルが `[文字演出: id]` の対象になれる（applyTextEffect 後 textEffect!==null）。
+  //    showLabel は label Text を作るので、Title と同様グリフ演出を貼れる。
+  it('本丸: ラベルは文字演出の対象になれる（applyTextEffect 後 textEffect が立つ）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'kako-jun', fontFamily: 'sans-serif' })
+    await layer.applyTextEffect('name', { effect: 'Explode' })
+    expect(labelChars(layer).characters.get('name')!.textEffect).not.toBeNull()
+  })
+
+  // 8: ラベルが `[下線: id]` の対象になれる（applyUnderline 後 underline!==null）。
+  it('ラベルは下線の対象になれる（applyUnderline 後 underline が立つ）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'kako-jun', fontFamily: 'sans-serif' })
+    await layer.applyUnderline('name', {})
+    expect(labelChars(layer).characters.get('name')!.underline).not.toBeNull()
+  })
+
+  // 9: color 未指定 → label.style.fill===0xffffff（白フォールバック）。
+  it('color 未指定なら label.style.fill は白（0xffffff）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif' })
+    expect(labelChars(layer).characters.get('name')!.label!.style.fill).toBe(0xffffff)
+  })
+
+  // 10: position 未指定 → 中央 (0.5, 0.5)。
+  it('position 未指定なら中央 (0.5, 0.5) に置く', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif' })
+    const st = labelChars(layer).characters.get('name')!
+    expect(st.sprite.x).toBe(800 * 0.5)
+    expect(st.sprite.y).toBe(450 * 0.5)
+  })
+
+  // 11: instant:true（skipMode 相当）→ alpha=1・fadeAnimation=null。
+  it('instant:true は alpha=1 で即時表示し fadeAnimation を持たない（skip）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif', instant: true })
+    const st = labelChars(layer).characters.get('name')!
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.fadeAnimation).toBeNull()
+  })
+})
+
+interface ImageStateLike {
+  sprite: {
+    x: number
+    y: number
+    alpha: number
+    scale: { x: number; y: number }
+    mask: unknown
+    texture: unknown
+  }
+  maskGraphics?: { destroyed: boolean; scale: { x: number; y: number } }
+  fadeAnimation: unknown
+  position: string
+  label?: unknown
+  textEffect: unknown
+}
+function imageChars(layer: CharacterLayer): { characters: Map<string, ImageStateLike> } {
+  return layer as unknown as { characters: Map<string, ImageStateLike> }
+}
+
+describe('CharacterLayer showImage async load (Assets モック) (#274)', () => {
+  // showImage は `Assets.load(url).then(...)` の非同期部分（texture セット / アスペクトスケール /
+  // 円形マスク / mask 半径 / scale 打ち消し / clearMask）が本丸。Assets.load をモックして
+  // 偽 texture を解決させ、flushPromises で .then を消化してから観測する（doctrine session627）。
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  // 偽 texture（{width,height} だけ持てば showImage のアスペクト計算には十分）。
+  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+
+  // 12: url 解決。Assets.load が resolveAssetUrl(base,'images',path) の実値で呼ばれる。
+  it('Assets.load は resolveAssetUrl(base, "images", path) の実 URL で呼ばれる', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'x', path: 'avatar.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expect(loadSpy).toHaveBeenCalledWith('/assets/images/avatar.png')
+  })
+
+  it('Assets.load の URL 解決は先頭スラッシュを 1 つ落とす（resolveAssetUrl 準拠）', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'x', path: '/avatar.png', assetBaseUrl: 'https://cdn.example.com' })
+    await flushPromises()
+    expect(loadSpy).toHaveBeenCalledWith('https://cdn.example.com/images/avatar.png')
+  })
+
+  // 13: 円形マスク。load 解決後 sprite.mask セット・maskGraphics に入る・半径=表示幅/2。
+  it('円形は load 解決後に sprite.mask をセットし maskGraphics を持つ', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'avatar',
+      path: 'a.png',
+      shape: '円形',
+      size: 160,
+      assetBaseUrl: '/assets',
+    })
+    // load 解決前はまだ mask なし（同期部分では円形マスクを張らない）。
+    expect(imageChars(layer).characters.get('avatar')!.maskGraphics).toBeUndefined()
+    await flushPromises()
+    const st = imageChars(layer).characters.get('avatar')!
+    expect(st.maskGraphics).toBeDefined()
+    expect(st.sprite.mask).toBe(st.maskGraphics)
+    // texture も解決後に張られる。
+    expect(st.sprite.texture).toEqual({ width: 200, height: 100 })
+  })
+
+  it('円形マスクの半径は表示幅/2（size=160 → Graphics.circle 半径 80）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)
+    // Graphics.circle の引数（半径）を捕捉する。jsdom でも circle().fill() は throw しない。
+    const { Graphics } = await import('pixi.js')
+    const circleSpy = vi.spyOn(Graphics.prototype, 'circle')
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'avatar',
+      path: 'a.png',
+      shape: '円形',
+      size: 160,
+      assetBaseUrl: '/assets',
+    })
+    await flushPromises()
+    // 円形マスク生成時に circle(0, 0, radius) が呼ばれる。radius = displayWidth/2 = 160/2 = 80。
+    expect(circleSpy).toHaveBeenCalledWith(0, 0, 80)
+  })
+
+  // 14: size 指定でアスペクト維持スケール（scale.x===scale.y===size/texture.width）＋mask の scale 打ち消し。
+  it('size 指定はアスペクト維持スケール（size/texture.width）で、mask が sprite.scale を打ち消す', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'avatar',
+      path: 'a.png',
+      shape: '円形',
+      size: 160,
+      assetBaseUrl: '/assets',
+    })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('avatar')!
+    // scale = size / texture.width = 160/200 = 0.8（x/y 等しい＝アスペクト維持）。
+    expect(st.sprite.scale.x).toBeCloseTo(0.8, 5)
+    expect(st.sprite.scale.y).toBeCloseTo(0.8, 5)
+    // mask は sprite の子なので sprite.scale が二重に効く。mask.scale で 1/0.8 を当てて打ち消す。
+    expect(st.maskGraphics!.scale.x).toBeCloseTo(1 / 0.8, 5)
+    expect(st.maskGraphics!.scale.y).toBeCloseTo(1 / 0.8, 5)
+  })
+
+  // 15: size 未指定で自然サイズ（scale=1,1）・矩形（mask なし）。
+  it('size 未指定は自然サイズ（scale=1,1）で矩形（mask を張らない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)
+    const layer = new CharacterLayer(800, 450)
+    // shape を渡さない＝矩形。
+    layer.showImage({ id: 'rect', path: 'a.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('rect')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+    // 矩形は mask を張らない（pixi 既定の sprite.mask は undefined）。
+    expect(st.sprite.mask).toBeFalsy()
+    expect(st.maskGraphics).toBeUndefined()
+  })
+
+  // 16: 退場(remove instant)で clearMask → sprite.mask=null・maskGraphics=undefined・mask.destroy 呼ばれる。
+  it('remove(instant) は円形マスクを破棄する（sprite.mask=null・maskGraphics=undefined・destroy 済み）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'avatar',
+      path: 'a.png',
+      shape: '円形',
+      size: 160,
+      assetBaseUrl: '/assets',
+    })
+    await flushPromises()
+    const mask = imageChars(layer).characters.get('avatar')!.maskGraphics!
+    layer.remove('avatar', { instant: true })
+    // Image 自体が消える。
+    expect(imageChars(layer).characters.has('avatar')).toBe(false)
+    // mask Graphics は破棄される（リーク防止）。
+    expect(mask.destroyed).toBe(true)
+  })
+
+  // 17: clearAll / fadeOut 完了経路でも mask 破棄（漏れ3経路）。
+  it('clear() でも円形マスクが破棄される', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'avatar',
+      path: 'a.png',
+      shape: '円形',
+      size: 160,
+      assetBaseUrl: '/assets',
+    })
+    await flushPromises()
+    const mask = imageChars(layer).characters.get('avatar')!.maskGraphics!
+    layer.clear()
+    expect(imageChars(layer).characters.size).toBe(0)
+    expect(mask.destroyed).toBe(true)
+  })
+
+  it('fadeOut 完了（remove デフォルト）経路でも円形マスクが破棄され char が消える', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'avatar',
+      path: 'a.png',
+      shape: '円形',
+      size: 160,
+      assetBaseUrl: '/assets',
+      instant: true,
+    })
+    await flushPromises()
+    const mask = imageChars(layer).characters.get('avatar')!.maskGraphics!
+    // デフォルト remove はフェードアウト（destroyOnComplete=true）。
+    layer.remove('avatar')
+    // 内部 ticker を完了まで駆動する（elapsedMs を fade 期間より先へ進めて 1 フレーム更新）。
+    const internal = layer as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 10000
+    internal.animTicker?.update()
+    // fade 完了の destroyOnComplete 経路で clearMask が呼ばれ、char ごと消える。
+    expect(imageChars(layer).characters.has('avatar')).toBe(false)
+    expect(mask.destroyed).toBe(true)
+  })
+
+  // 18: 同 id 再表示は位置のみ更新（texture 差し替えなし）。
+  it('同 id 再表示は位置のみ更新し、Assets.load を再度呼ばない（texture 差し替えなし）', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'a.png', position: '上', assetBaseUrl: '/assets' })
+    await flushPromises()
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    // 同 id で別位置に再表示。
+    layer.showImage({ id: 'avatar', path: 'b.png', position: '下', assetBaseUrl: '/assets' })
+    const st = imageChars(layer).characters.get('avatar')!
+    // 位置だけ更新される（下 = y 0.84）。
+    expect(st.sprite.x).toBe(800 * 0.5)
+    expect(st.sprite.y).toBeCloseTo(450 * 0.84, 5)
+    expect(st.position).toBe('下')
+    // load は追加で呼ばれない（texture は最初のまま）。
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+  })
+
+  // 19: Assets.load reject → console.warn 1 回・例外を投げない・fade state は残る（例外握り潰し禁止）。
+  it('Assets.load 失敗時は console.warn を 1 回出し、例外を投げず fade state を残す', async () => {
+    vi.spyOn(Assets, 'load').mockRejectedValue(new Error('load failed'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    // 例外を投げない（showImage は同期で返り、reject は .catch で握る）。
+    expect(() => layer.showImage({ id: 'x', path: 'a.png', assetBaseUrl: '/assets' })).not.toThrow()
+    await flushPromises()
+    // warn は 1 回だけ。
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    // fade state（登場フェードイン）は残る（load 失敗で消えない）。
+    const st = imageChars(layer).characters.get('x')!
+    expect(st.fadeAnimation).not.toBeNull()
+  })
+
+  // 20: 本丸。画像は `[文字演出: id]` の対象になれない（label 無し → 早期 return、reject しない）。
+  it('本丸: 画像は文字演出の対象になれない（label 無しで早期 return・textEffect は立たない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    // label を持たないので applyTextEffect は no-op（resolve）し、textEffect は立たない。
+    await expect(layer.applyTextEffect('avatar', { effect: 'Explode' })).resolves.toBeUndefined()
+    const st = imageChars(layer).characters.get('avatar')!
+    expect(st.label).toBeUndefined()
+    expect(st.textEffect).toBeNull()
+  })
+})
+
+describe('CharacterLayer render-only 除外と save→load 往復 (#274)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  // 21: showTitle のみ → getCharacterStates 空（Title 漏れ修正の独立回帰防止）。
+  it('showTitle 単独では getCharacterStates が空（Title は render-only で漏れない）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    expect(layer.getCharacterStates()).toEqual([])
+  })
+
+  // 22: save→load 実往復。Label/Image を出した局面を SaveManager 経由で保存→applyState 相当で
+  //     復元し、立ち絵だけ show され Label/Image が復元されないことを縛る（結合）。
+  //     applyState の立ち絵復元ロジック（clear → state.characters を instant show）を直に再現する。
+  it('save→load 往復: Label/Image を出した局面を保存・復元すると立ち絵だけ残り Label/Image は復元されない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    // ---- セーブ前の局面: 立ち絵 + Label + Image + Title を出す ----
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.showLabel({ id: 'division', text: 'div', fontFamily: 'sans-serif' })
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    layer.showTitle('orber', 'sans-serif')
+    await flushPromises()
+
+    // ---- セーブ: getCharacterStates() は render-only を除外し立ち絵だけ返す ----
+    const snapshotChars = layer.getCharacterStates()
+    expect(snapshotChars.map((s) => s.name)).toEqual(['hero'])
+
+    // SaveManager 経由で実際に localStorage へ書き、読み戻す（保存形式を通す）。
+    const manager = new SaveManager()
+    manager.deleteQuickSave()
+    const saveData: SaveSlotData = {
+      slot: -1,
+      sceneId: 'scene-1',
+      eventIndex: 0,
+      textIndex: 0,
+      flags: {},
+      backgroundPath: null,
+      isBlackout: false,
+      characters: snapshotChars,
+      currentBgmPath: null,
+      savedAt: new Date().toISOString(),
+      sceneName: 's',
+    }
+    manager.quickSave(saveData)
+    const loaded = manager.quickLoad()
+    expect(loaded).not.toBeNull()
+
+    // セーブスロット → GameState（純関数）。characters はここで復元対象になる。
+    const restoredState = saveSlotToGameState(loaded!, null)
+    expect(restoredState.characters.map((c) => c.name)).toEqual(['hero'])
+
+    // ---- ロード: applyState の立ち絵復元（clear → 各 character を instant show）を再現 ----
+    const fresh = new CharacterLayer(800, 450)
+    fresh.clear()
+    for (const ch of restoredState.characters) {
+      fresh.show(ch.name, ch.expression, ch.position, '/assets', { instant: true })
+    }
+
+    // 立ち絵 hero だけが復元され、Label(division)/Image(avatar)/Title は復元されない。
+    const internal = fresh as unknown as { characters: Map<string, unknown> }
+    expect(internal.characters.has('hero')).toBe(true)
+    expect(internal.characters.has('division')).toBe(false)
+    expect(internal.characters.has('avatar')).toBe(false)
+    expect(internal.characters.has('Title')).toBe(false)
+    expect(fresh.getCharacterStates().map((s) => s.name)).toEqual(['hero'])
+
+    manager.deleteQuickSave()
   })
 })

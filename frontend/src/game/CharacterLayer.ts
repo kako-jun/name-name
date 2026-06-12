@@ -29,8 +29,8 @@ import {
   type ResolvedUnderline,
   type UnderlineParams,
 } from './underline'
-// 色パーサは novelLayout.ts（色/幾何の純関数置き場）に集約 (#273)。
-import { parseColorToNumber } from './novelLayout'
+// 色パーサ・2D 位置・URL 解決は novelLayout.ts（色/幾何の純関数置き場）に集約 (#273 / #274)。
+import { parseColorToNumber, resolveLayoutPosition, resolveAssetUrl } from './novelLayout'
 import { startTypewriter, tickTypewriter, type TypewriterState } from './typewriter'
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
@@ -124,6 +124,12 @@ interface CharacterState {
   idleIntervalId?: number
   /** show() 時の assetBaseUrl。アニメ開始時に idle cycle を仕掛けるとき再利用する */
   assetBaseUrl: string
+  /** 演出表示（タイトル / ラベル / 画像）か (#274)。true なら getCharacterStates が除外し、
+   *  `NovelGameState.characters` に漏れない（doctrine 規律3: 立ち絵 show だけが復元対象）。
+   *  Title / Label / Image はセーブ/シーク/任意局面起動で再 emit されない（spec L520, ADR0002）。 */
+  renderOnly?: boolean
+  /** 円形マスク用 Graphics (#274)。`[画像: 円形]` のとき sprite.mask に設定する。退場で破棄する。 */
+  maskGraphics?: Graphics
 }
 
 interface FadeAnimation {
@@ -140,6 +146,13 @@ interface FadeAnimation {
  * 仕様書 docs/spec/markdown-v0.1.md と数値を揃えて変更する。
  */
 const DEFAULT_FADE_MS = 300
+
+/**
+ * タイトルカード補助要素（ラベル / 画像 #274）のフェードイン時間 (ms)。
+ * opening.html の各要素の fadeIn（0.3〜0.8s で順次）相当。立ち絵 (#177) より長めの
+ * ゆったりした登場にして、OP のスタック演出の "間" を出す。
+ */
+const TITLE_CARD_FADE_MS = 700
 
 export interface AnimateParams {
   /** "+500" / "-200" / "400" / undefined */
@@ -524,7 +537,216 @@ export class CharacterLayer extends Container {
       underline: null,
       // 解決済みタイトル色 (#273)。グリフ演出・カーソルへ波及させるため state に保持する。
       titleColor: fill,
+      // 演出表示 (#274)。snapshot に漏らさない（getCharacterStates が除外）。
+      renderOnly: true,
     })
+  }
+
+  /**
+   * 単独の色付きラベルを表示する (#274)。
+   *
+   * orber OP タイトルカードの肩書 / 名前のような、立ち絵に紐付かない単独テキストを 2D 位置に出す。
+   * Title と同様アンカー sprite + Text の構成で `characters` マップに id（既定 "Label"）で登録するため、
+   * 後続の `[文字演出: id]` / `[下線: id]` / `[アニメ: target=id]` の対象になれる。
+   * 既に同 id があれば text / 色 / 位置 / サイズを差し替える。空文字なら即時退場。
+   * 登場時は alpha 0 → 1 のフェードイン（opening.html の fadeIn 相当）。render-only。
+   */
+  showLabel(opts: {
+    id?: string
+    text: string
+    color?: string
+    position?: string
+    size?: number
+    fontFamily: string
+    instant?: boolean
+  }): void {
+    const NAME = opts.id ?? 'Label'
+    const fill = parseColorToNumber(opts.color, 0xffffff)
+    const fontSize = opts.size ?? 24
+    const { xRatio, yRatio } = resolveLayoutPosition(opts.position)
+    const x = this.screenWidth * xRatio
+    const y = this.screenHeight * yRatio
+    const instant = opts.instant === true
+
+    const existing = this.characters.get(NAME)
+    if (opts.text.length === 0) {
+      if (existing) this.remove(NAME, { instant: true })
+      return
+    }
+    if (existing) {
+      // 差し替え時は進行中のグリフ演出・下線を破棄（テキスト/幅が変わるため不整合になる）。
+      this.clearTextEffect(existing)
+      this.clearUnderline(existing)
+      existing.sprite.x = x
+      existing.sprite.y = y
+      if (existing.label && !existing.label.destroyed) {
+        existing.label.text = opts.text
+        existing.label.style = new TextStyle({
+          fontFamily: opts.fontFamily,
+          fontSize,
+          fill,
+        })
+        existing.label.x = x
+        existing.label.y = y
+        existing.label.visible = true
+      }
+      // showImage 再表示パスと対称に position も更新する（render-only で復元非使用だが対称性のため）。
+      existing.position = opts.position ?? ''
+      existing.titleColor = fill
+      return
+    }
+
+    // sprite は不可視 (no texture) のアンカー。Title と同形で CharacterState を保つために置く。
+    const sprite = new Sprite()
+    sprite.x = x
+    sprite.y = y
+    sprite.alpha = instant ? 1 : 0
+    this.addChild(sprite)
+
+    const label = new Text({
+      text: opts.text,
+      style: new TextStyle({ fontFamily: opts.fontFamily, fontSize, fill }),
+    })
+    label.anchor.set(0.5, 0.5)
+    label.x = x
+    label.y = y
+    label.alpha = instant ? 1 : 0
+    this.addChild(label)
+    void ensureFontLoaded(opts.fontFamily)
+      .then(() => {
+        if (label.destroyed) return
+        label.style = new TextStyle({ fontFamily: opts.fontFamily, fontSize, fill })
+      })
+      .catch(() => {})
+
+    const state: CharacterState = {
+      sprite,
+      label,
+      position: opts.position ?? '',
+      expression: '',
+      assetBaseUrl: '',
+      animation: null,
+      fadeAnimation: instant
+        ? null
+        : {
+            startMs: this.elapsedMs,
+            durationMs: TITLE_CARD_FADE_MS,
+            fromAlpha: 0,
+            toAlpha: 1,
+            destroyOnComplete: false,
+          },
+      textEffect: null,
+      underline: null,
+      // 文字色をグリフ演出・カーソルに波及させる（Title と同じ役割）。
+      titleColor: fill,
+      // 演出表示 (#274)。snapshot に漏らさない。
+      renderOnly: true,
+    }
+    this.characters.set(NAME, state)
+    if (state.fadeAnimation) this.ensureTicker()
+  }
+
+  /**
+   * 単独の画像を表示する (#274)。
+   *
+   * orber OP タイトルカードのアバターのような、立ち絵（show）に紐付かない単独画像を 2D 位置に出す。
+   * `characters` マップに id（既定 "Image"）で登録され `[アニメ: target=id]` 等の対象になれる。
+   * テクスチャは背景画像と同じく `resolveAssetUrl(base, 'images', path)` から load する。
+   * `shape==='円形'/'circle'` のとき直径 = 表示サイズの円形マスクを sprite にかける。
+   * 登場時は alpha 0 → 1 のフェードイン（label と同じ）。render-only。
+   */
+  showImage(opts: {
+    id?: string
+    path: string
+    position?: string
+    shape?: string
+    size?: number
+    assetBaseUrl: string
+    instant?: boolean
+  }): void {
+    const NAME = opts.id ?? 'Image'
+    const { xRatio, yRatio } = resolveLayoutPosition(opts.position)
+    const x = this.screenWidth * xRatio
+    const y = this.screenHeight * yRatio
+    const instant = opts.instant === true
+    const circular = opts.shape === '円形' || opts.shape === 'circle'
+
+    const existing = this.characters.get(NAME)
+    if (existing) {
+      // 同 id 再表示は位置のみ更新する（テクスチャ差し替えは想定しないため最小挙動）。
+      existing.sprite.x = x
+      existing.sprite.y = y
+      existing.position = opts.position ?? ''
+      return
+    }
+
+    const sprite = new Sprite()
+    sprite.anchor.set(0.5, 0.5)
+    sprite.x = x
+    sprite.y = y
+    sprite.alpha = instant ? 1 : 0
+    this.addChild(sprite)
+
+    const state: CharacterState = {
+      sprite,
+      label: undefined,
+      position: opts.position ?? '',
+      expression: '',
+      assetBaseUrl: opts.assetBaseUrl,
+      animation: null,
+      fadeAnimation: instant
+        ? null
+        : {
+            startMs: this.elapsedMs,
+            durationMs: TITLE_CARD_FADE_MS,
+            fromAlpha: 0,
+            toAlpha: 1,
+            destroyOnComplete: false,
+          },
+      textEffect: null,
+      underline: null,
+      renderOnly: true,
+    }
+    this.characters.set(NAME, state)
+    if (state.fadeAnimation) this.ensureTicker()
+
+    // 任意ファイル名パスの url 解決は背景画像と同じ resolveAssetUrl 経由（#274）。
+    const url = resolveAssetUrl(opts.assetBaseUrl, 'images', opts.path)
+    Assets.load(url)
+      .then((texture) => {
+        if (sprite.destroyed) return
+        sprite.texture = texture
+        // 表示サイズ: size 指定時はその幅にアスペクト維持でスケール。未指定は自然サイズ。
+        let displayWidth = texture.width
+        if (opts.size !== undefined && texture.width > 0) {
+          const scale = opts.size / texture.width
+          sprite.scale.set(scale, scale)
+          displayWidth = opts.size
+        } else {
+          sprite.scale.set(1, 1)
+        }
+        // 円形マスク: 直径 = 表示サイズ（幅）。anchor 0.5 なので中心は sprite 原点。
+        // mask はローカルではなくステージ座標で評価されるため、sprite と同じ位置・スケールに置く。
+        if (circular) {
+          const radius = displayWidth / 2
+          const mask = new Graphics()
+          mask.circle(0, 0, radius).fill(0xffffff)
+          // mask は scale 後の sprite に対してローカル座標で当てる。sprite.scale が効くよう
+          // mask を sprite の子にし、scale を打ち消す（mask の半径は表示 px で描いているため）。
+          mask.x = 0
+          mask.y = 0
+          if (sprite.scale.x !== 0) {
+            mask.scale.set(1 / sprite.scale.x, 1 / sprite.scale.y)
+          }
+          sprite.addChild(mask)
+          sprite.mask = mask
+          const st = this.characters.get(NAME)
+          if (st) st.maskGraphics = mask
+        }
+      })
+      .catch((err) => {
+        console.warn('[name-name] 画像の読み込みに失敗: ' + url, err)
+      })
   }
 
   /**
@@ -1078,6 +1300,19 @@ export class CharacterLayer extends Container {
     state.underline = null
   }
 
+  /** 円形マスク Graphics (#274) を破棄する。画像の退場・破棄時に呼ぶ。
+   *  sprite.destroy() は default で children を破棄しないため明示的に外して destroy する。 */
+  private clearMask(state: CharacterState): void {
+    const mask = state.maskGraphics
+    if (!mask) return
+    if (!state.sprite.destroyed) state.sprite.mask = null
+    if (!mask.destroyed) {
+      if (!state.sprite.destroyed) state.sprite.removeChild(mask)
+      mask.destroy()
+    }
+    state.maskGraphics = undefined
+  }
+
   /** 進行中アニメーション（transform / fade / textEffect / underline いずれか）を持つキャラがいるか */
   hasActiveAnimation(): boolean {
     for (const s of this.characters.values()) {
@@ -1143,11 +1378,16 @@ export class CharacterLayer extends Container {
           const tf = (this.elapsedMs - f.startMs) / f.durationMs
           if (tf >= 1) {
             state.sprite.alpha = f.toAlpha
+            // 完了フレームでも label を sprite に揃える。進行中フレームだけ同期して
+            // 完了で揃えないと、フェードイン完了後に label.alpha が最終サブ1フレーム値
+            // （0.97〜0.99 等）で固定され、[ラベル] 文字が恒久的に半透明になる。
+            if (state.label) state.label.alpha = f.toAlpha
             state.fadeAnimation = null
             if (f.destroyOnComplete) {
               if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
               this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
               this.clearUnderline(state) // 下線 gfx を破棄 (#270)
+              this.clearMask(state) // 円形マスク gfx を破棄 (#274)
               this.removeChild(state.sprite)
               state.sprite.destroy()
               if (state.label) {
@@ -1233,6 +1473,7 @@ export class CharacterLayer extends Container {
     if (instant) {
       this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
       this.clearUnderline(state) // 下線 gfx を破棄 (#270)
+      this.clearMask(state) // 円形マスク gfx を破棄 (#274)
       this.removeChild(state.sprite)
       state.sprite.destroy()
       if (state.label) {
@@ -1255,11 +1496,18 @@ export class CharacterLayer extends Container {
   }
 
   /**
-   * 現在表示中のキャラクター情報を返す（スナップショット用）
+   * 現在表示中のキャラクター情報を返す（スナップショット用）。
+   *
+   * 演出表示（renderOnly: Title / Label / Image, #274）は除外する。これらは動画を start→end で
+   * 通し再生する前提の演出で、`NovelGameState.characters` に持たせない（doctrine 規律3 / spec L520 /
+   * ADR0002）。立ち絵（show）だけが復元対象として残り、セーブ/シーク/任意局面起動で再現される。
+   * 復元時（applyState）は state.characters を show() で再生するため、ここに renderOnly が漏れると
+   * Title/Label/Image が立ち絵として誤って復元されてしまう。それを防ぐフィルタ。
    */
   getCharacterStates(): Array<{ name: string; expression: string; position: string }> {
     const result: Array<{ name: string; expression: string; position: string }> = []
     for (const [name, state] of this.characters) {
+      if (state.renderOnly) continue
       result.push({ name, expression: state.expression, position: state.position })
     }
     return result
@@ -1273,6 +1521,7 @@ export class CharacterLayer extends Container {
       if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
       this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
       this.clearUnderline(state) // 下線 gfx を破棄 (#270)
+      this.clearMask(state) // 円形マスク gfx を破棄 (#274)
       this.removeChild(state.sprite)
       state.sprite.destroy()
       if (state.label) {

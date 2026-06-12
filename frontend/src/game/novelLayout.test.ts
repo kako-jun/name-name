@@ -11,6 +11,7 @@ import {
   describeEventForDebug,
   findSceneById,
   resolveSceneTitle,
+  resolveLayoutPosition,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -679,5 +680,87 @@ describe('resolveSceneTitle', () => {
     const many: EventScene[] = [scene('a', 'A'), scene('b', 'B'), scene('c', 'C')]
     expect(resolveSceneTitle(many, 'b')).toBe('B')
     expect(resolveSceneTitle(many, 'c')).toBe('C')
+  })
+})
+
+describe('resolveLayoutPosition (#274)', () => {
+  it('縦単独トークンは横を中央に倒す', () => {
+    expect(resolveLayoutPosition('上')).toEqual({ xRatio: 0.5, yRatio: 0.16 })
+    expect(resolveLayoutPosition('中上')).toEqual({ xRatio: 0.5, yRatio: 0.34 })
+    expect(resolveLayoutPosition('中')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    expect(resolveLayoutPosition('中下')).toEqual({ xRatio: 0.5, yRatio: 0.64 })
+    expect(resolveLayoutPosition('下')).toEqual({ xRatio: 0.5, yRatio: 0.84 })
+  })
+
+  it('横単独トークンは縦を中央に倒す（CHARACTER_X_RATIO と同値）', () => {
+    expect(resolveLayoutPosition('左')).toEqual({ xRatio: 0.1875, yRatio: 0.5 })
+    expect(resolveLayoutPosition('中央')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    expect(resolveLayoutPosition('右')).toEqual({ xRatio: 0.8125, yRatio: 0.5 })
+  })
+
+  it('結合トークンは縦・横を独立に解釈する', () => {
+    expect(resolveLayoutPosition('左下')).toEqual({ xRatio: 0.1875, yRatio: 0.84 })
+    expect(resolveLayoutPosition('右上')).toEqual({ xRatio: 0.8125, yRatio: 0.16 })
+    // `中上` は縦トークンの完全一致が優先される（横は中央）。
+    expect(resolveLayoutPosition('中上')).toEqual({ xRatio: 0.5, yRatio: 0.34 })
+    // 横が先・縦が後の並びでも拾える。
+    expect(resolveLayoutPosition('左中下')).toEqual({ xRatio: 0.1875, yRatio: 0.64 })
+  })
+
+  it('英語 alias も最小限受ける', () => {
+    expect(resolveLayoutPosition('top')).toEqual({ xRatio: 0.5, yRatio: 0.16 })
+    expect(resolveLayoutPosition('upper')).toEqual({ xRatio: 0.5, yRatio: 0.34 })
+    expect(resolveLayoutPosition('center')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    expect(resolveLayoutPosition('middle')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    expect(resolveLayoutPosition('lower')).toEqual({ xRatio: 0.5, yRatio: 0.64 })
+    expect(resolveLayoutPosition('bottom')).toEqual({ xRatio: 0.5, yRatio: 0.84 })
+    expect(resolveLayoutPosition('left')).toEqual({ xRatio: 0.1875, yRatio: 0.5 })
+    expect(resolveLayoutPosition('right')).toEqual({ xRatio: 0.8125, yRatio: 0.5 })
+  })
+
+  it('未知・空・undefined は中央にフォールバックする', () => {
+    expect(resolveLayoutPosition(undefined)).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    expect(resolveLayoutPosition('')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    expect(resolveLayoutPosition('   ')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    expect(resolveLayoutPosition('斜め')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+  })
+
+  it('前後の空白を trim してから解釈する', () => {
+    expect(resolveLayoutPosition('  中上  ')).toEqual({ xRatio: 0.5, yRatio: 0.34 })
+  })
+
+  // ---- #274 追加: 縦先/横先の結合・中央 substring 衝突・英語大文字の扱い ----
+
+  // 1: 縦が先・横が後の結合 `中右`。縦 `中`(0.5) + 横 `右`(0.8125)。
+  //    縦ループは部分一致で `中` を拾い（`中右` に `中` が含まれる）、横ループは `右` を拾う。
+  it('縦先結合 `中右` → (0.8125, 0.5)', () => {
+    expect(resolveLayoutPosition('中右')).toEqual({ xRatio: 0.8125, yRatio: 0.5 })
+  })
+
+  // 2: 縦が先・横が後の結合 `下左`。縦 `下`(0.84) + 横 `左`(0.1875)。
+  it('縦先結合 `下左` → (0.1875, 0.84)', () => {
+    expect(resolveLayoutPosition('下左')).toEqual({ xRatio: 0.1875, yRatio: 0.84 })
+  })
+
+  // 3: `中央下` の横解決を確定する（`中央` substring 衝突のバグ調査）。
+  //    実装トレース: 完全一致なし → 縦ループ ['中上','中下','上','下','中'] は `下` を先に拾い
+  //    yRatio=0.84。横ループ ['左','中央','右'] は `中央` を `右` より先に拾い xRatio=0.5。
+  //    横ループに `中` 単独キーは無いため `中央` が割れず正しく中央に解決する（衝突なし）。
+  //    → (0.5, 0.84) が正。壊れていない（実装バグなし）ことを回帰として固定する。
+  it('`中央下` → (0.5, 0.84)（`中央`は割れず正しく中央に解決・substring 衝突なし）', () => {
+    expect(resolveLayoutPosition('中央下')).toEqual({ xRatio: 0.5, yRatio: 0.84 })
+  })
+
+  // 4: 英語大文字 `TOP` / `Left` の扱いを実挙動として固定する。
+  //    spec/コメントは「英語 alias を最小限受ける」と書くが、VERTICAL_RATIO/HORIZONTAL_RATIO の
+  //    キーは小文字のみ（top/left 等）。`in` 判定は大文字小文字を区別するため `TOP`/`Left` は
+  //    どの表にもヒットせず、結合トークンの部分一致（日本語キー）にも当たらない。
+  //    → 未知扱いで中央 (0.5,0.5) にフォールバックする。現挙動 = 小文字のみ受理。
+  it('大文字 `TOP` / `Left` は未知扱いで中央フォールバック（英語 alias は小文字のみ受理）', () => {
+    expect(resolveLayoutPosition('TOP')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    expect(resolveLayoutPosition('Left')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    // 対照: 小文字なら受理される（境界を明示）。
+    expect(resolveLayoutPosition('top')).toEqual({ xRatio: 0.5, yRatio: 0.16 })
+    expect(resolveLayoutPosition('left')).toEqual({ xRatio: 0.1875, yRatio: 0.5 })
   })
 })
