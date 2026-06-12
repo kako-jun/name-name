@@ -3115,7 +3115,10 @@ title: "test"
         );
         // 意味的には再 parse で安定（color= → 色= の正規化は値を変えない）。
         let reparsed = parse(&emitted);
-        assert_eq!(doc, reparsed, "color= input should round-trip via 色= output");
+        assert_eq!(
+            doc, reparsed,
+            "color= input should round-trip via 色= output"
+        );
     }
 
     // R7: `[背景色: ]`（値が空）の境界。実装は rest.trim() をそのまま保持するため空文字 color に
@@ -3123,7 +3126,8 @@ title: "test"
     #[test]
     fn background_color_empty_value_roundtrip() {
         use crate::emitter::emit;
-        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景色: ]\n";
+        let input =
+            "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景色: ]\n";
         let d1 = parse(input);
         // 空文字を保持する（None ではなく空文字列）。
         assert_eq!(
@@ -3171,6 +3175,9 @@ title: "test"
             }
         );
         let d2 = parse(&emit(&d1));
-        assert_eq!(d1, d2, "title with all attributes round-trip should be stable");
+        assert_eq!(
+            d1, d2,
+            "title with all attributes round-trip should be stable"
+        );
     }
 }
