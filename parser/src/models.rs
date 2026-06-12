@@ -348,6 +348,14 @@ pub enum Event {
     },
     /// 動画レイヤをクリアする (#252)。Markdown 構文: `[動画退場]`。
     VideoExit,
+    /// 単色の地色 (#273)。背景画像 (`Background`) と同じ永続状態として扱う。
+    /// `[背景色: #f5f0e8]` で画面全面を 1 色で塗る。NovelGameState に持たせ、
+    /// snapshot / applyState / セーブ復元の全経路で復元可能（doctrine 規律3）。
+    /// 色文字列は trim してそのまま保持する生 CSS hex（`#f5f0e8` 等）。
+    /// ディレクティブ名は日本語 `背景色` のみ（`背景` と同じく EN エイリアスなし）。
+    BackgroundColor {
+        color: String,
+    },
     Bgm {
         path: Option<String>,
         action: BgmAction,
@@ -561,6 +569,12 @@ pub enum Event {
         /// 初期位置 (右外 / 中央 / 左外 等)。未指定なら center。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         position: Option<String>,
+        /// タイトル文字色 (CSS カラー文字列、例 "#1a4a7a") (#273)。
+        /// 未指定なら TS 側で白 (`CharacterLayer.TITLE_FILL`) にフォールバック。
+        /// 色はグリフ演出 (爆発) とカーソルにも波及する（OP の "orber" を紺で爆発させる）。
+        /// 日本語キー `色` / 英語 `color`（`Underline` の color と同形）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
     },
     /// 文字ウィンドウ枠の ON/OFF を切り替える (#135)。
     ///

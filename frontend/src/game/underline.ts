@@ -12,6 +12,10 @@
 
 import type { Easing } from '../types'
 import { applyEasing } from './easing'
+// 色パーサは novelLayout.ts（色/幾何の純関数置き場）に集約した (#273)。重複を避けるため
+// ここでは re-export して既存の import（CharacterLayer / underline.test）の互換を保つ。
+import { parseColorToNumber } from './novelLayout'
+export { parseColorToNumber }
 
 /** `[下線]` イベントの生パラメータ（parser 由来。未指定は undefined）。 */
 export interface UnderlineParams {
@@ -53,32 +57,6 @@ export interface ResolvedUnderline {
   /** テキスト下端からの距離 (px)。undefined なら呼び出し側が autoOffset で補う。 */
   offset?: number
   easing: Easing
-}
-
-/**
- * CSS カラー文字列（"#1a4a7a" / "#222" / "1a4a7a"）を Pixi の数値カラーに変換する（純粋）。
- *
- * 3 桁短縮形（#222 → #222222）も展開する。解釈不能なら fallback（既定色）を返す。
- * Math.random など非決定要素は使わない。
- */
-export function parseColorToNumber(color: string | undefined, fallback: number): number {
-  if (color === undefined) return fallback
-  let s = color.trim()
-  if (s.startsWith('#')) s = s.slice(1)
-  if (s.length === 3) {
-    // #rgb → #rrggbb
-    s = s
-      .split('')
-      .map((c) => c + c)
-      .join('')
-  }
-  if (s.length !== 6) return fallback
-  // 純粋 hex 16 進数のみ受理する。Number.parseInt は '+1a4a7'/'-1a4a7' のような符号付き
-  // 文字列を解釈してしまい fallback に倒れないため、parseInt 前に純 hex 判定で弾く。
-  if (!/^[0-9a-fA-F]+$/.test(s)) return fallback
-  const n = Number.parseInt(s, 16)
-  if (!Number.isFinite(n) || Number.isNaN(n)) return fallback
-  return n
 }
 
 /**

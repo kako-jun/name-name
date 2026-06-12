@@ -24,12 +24,13 @@ import {
 } from './textEffect'
 import {
   layoutUnderline,
-  parseColorToNumber,
   resolveUnderline,
   underlineScaleX,
   type ResolvedUnderline,
   type UnderlineParams,
 } from './underline'
+// 色パーサは novelLayout.ts（色/幾何の純関数置き場）に集約 (#273)。
+import { parseColorToNumber } from './novelLayout'
 import { startTypewriter, tickTypewriter, type TypewriterState } from './typewriter'
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
@@ -114,6 +115,10 @@ interface CharacterState {
   textEffect: TextEffectAnimation | null
   /** 下線ビーム (#270)。null なら適用なし。sprite の子として線を持つ。 */
   underline: UnderlineAnimation | null
+  /** 解決済みのタイトル文字色 (Pixi 数値カラー) (#273)。showTitle が `色=` 指定から解決して保持する。
+   *  グリフ演出 (爆発) のグリフ fill とカーソル fallback がこの色を使う。
+   *  未指定（タイトル以外のキャラ含む）は undefined → 各所で TITLE_FILL（白）にフォールバック。 */
+  titleColor?: number
   /** 2コマ自動切替 (expression が `*-a` なら `*-b` と 1 秒ごとに交互)。
    *  remove() / clear() で interval を必ずクリアする。TimeController 経由なので number。 */
   idleIntervalId?: number
@@ -211,6 +216,8 @@ interface TextEffectAnimation {
 interface CursorState {
   /** カーソル本体の縦矩形 Graphics（container の子）。 */
   gfx: Graphics
+  /** カーソルに適用した解決済み色 number (#273)。`カーソル色` 指定 > タイトル色 fallback の一次情報。 */
+  colorNum: number
   /** 点滅周期 (ms)。半周期で表示/非表示。 */
   blinkMs: number
   /** 点滅起点（elapsedMs 基準）。startMs と揃え、export 再現のため仮想時間で算出する。 */
@@ -442,8 +449,11 @@ export class CharacterLayer extends Container {
    * 既に Title があれば text を差し替える。空文字なら即時退場。
    * `[アニメ target=Title]` で普通の立ち絵と同じ規則で動かせる。
    */
-  showTitle(text: string, fontFamily: string, position?: string): void {
+  showTitle(text: string, fontFamily: string, position?: string, color?: string): void {
     const NAME = 'Title'
+    // タイトル文字色を解決する (#273)。未指定・不正値は白 (TITLE_FILL) にフォールバック。
+    // この色を label・グリフ演出 (爆発)・カーソルの全てで使い、紺タイトルを一貫させる。
+    const fill = parseColorToNumber(color, CharacterLayer.TITLE_FILL)
     const existing = this.characters.get(NAME)
     if (text.length === 0) {
       if (existing) this.remove(NAME, { instant: true })
@@ -455,9 +465,11 @@ export class CharacterLayer extends Container {
       this.clearTextEffect(existing)
       // 下線も対象テキスト幅に依存するため破棄する（#270）。
       this.clearUnderline(existing)
+      // テキスト差し替え時は色も更新する（#273）。後続のグリフ演出・カーソルに波及させる。
+      existing.titleColor = fill
       if (existing.label && !existing.label.destroyed) {
         existing.label.text = text
-        existing.label.style = new TextStyle({ fontFamily, fontSize: 64, fill: 0xffffff })
+        existing.label.style = new TextStyle({ fontFamily, fontSize: 64, fill })
         existing.label.visible = true
       }
       // position が指定されていれば再配置する (再度別 position から登場させる用途)
@@ -485,7 +497,7 @@ export class CharacterLayer extends Container {
 
     const label = new Text({
       text,
-      style: new TextStyle({ fontFamily, fontSize: 64, fill: 0xffffff }),
+      style: new TextStyle({ fontFamily, fontSize: 64, fill }),
     })
     label.anchor.set(0.5, 0.5)
     label.x = sprite.x
@@ -496,7 +508,7 @@ export class CharacterLayer extends Container {
     void ensureFontLoaded(fontFamily)
       .then(() => {
         if (label.destroyed) return
-        label.style = new TextStyle({ fontFamily, fontSize: 64, fill: 0xffffff })
+        label.style = new TextStyle({ fontFamily, fontSize: 64, fill })
       })
       .catch(() => {})
 
@@ -510,6 +522,8 @@ export class CharacterLayer extends Container {
       fadeAnimation: null,
       textEffect: null,
       underline: null,
+      // 解決済みタイトル色 (#273)。グリフ演出・カーソルへ波及させるため state に保持する。
+      titleColor: fill,
     })
   }
 
@@ -677,6 +691,9 @@ export class CharacterLayer extends Container {
     // sprite の子にすることで、後続 [アニメ] による sprite の transform が container に波及する。
     state.sprite.addChild(container)
 
+    // グリフの色は解決済みタイトル色 (#273) を使う。未設定なら白 (TITLE_FILL) にフォールバック。
+    // OP の "orber" は爆発するグリフ自体が紺でなければならないため、ここで波及させる。
+    const glyphFill = state.titleColor ?? CharacterLayer.TITLE_FILL
     const chars = Array.from(sourceText) // サロゲートペア対応で code point 単位に分解
     const texts: Text[] = []
     const widths: number[] = []
@@ -686,7 +703,7 @@ export class CharacterLayer extends Container {
         style: new TextStyle({
           fontFamily,
           fontSize: CharacterLayer.TITLE_FONT_SIZE,
-          fill: CharacterLayer.TITLE_FILL,
+          fill: glyphFill,
         }),
       })
       t.anchor.set(0.5, 0.5)
@@ -711,7 +728,8 @@ export class CharacterLayer extends Container {
     if (reveal) {
       const msPerChar = resolveTypewriterMsPerChar(params)
       // #271: 点滅カーソル。reveal かつ cursor=on のときだけ縦矩形 Graphics を作る。
-      const cursor = this.buildCursor(container, params)
+      // #273: カーソル色未指定時はグリフと同じ解決済みタイトル色にフォールバックする。
+      const cursor = this.buildCursor(container, params, glyphFill)
       effect = {
         container,
         glyphs,
@@ -754,17 +772,24 @@ export class CharacterLayer extends Container {
   /**
    * 点滅カーソル (#271) の縦矩形 Graphics を作る（reveal かつ cursor=on のときのみ）。
    *
-   * グリフ高さに合わせた細い縦棒。色は `カーソル色` 指定 > 文字色 (#268 と同じ TITLE_FILL)。
+   * グリフ高さに合わせた細い縦棒。色は `カーソル色` 指定 > タイトル文字色 (#273) > 白 TITLE_FILL。
    * container の子にして reveal head（表示済み末尾グリフの右端）に毎フレーム追従させる。
    * `null` を返したら呼び出し側はカーソルなしの従来挙動になる。
+   *
+   * @param titleFallback `カーソル色` 未指定時に使う解決済みタイトル色 (#273)。
+   *   タイトルが紺なら紺カーソルになる（OP/ED の一貫性）。
    */
-  private buildCursor(container: Container, params: TextEffectParams): CursorState | null {
+  private buildCursor(
+    container: Container,
+    params: TextEffectParams,
+    titleFallback: number
+  ): CursorState | null {
     const resolved: ResolvedCursor = resolveCursor(params)
     if (!resolved.enabled) return null
     const colorNum =
       resolved.color !== undefined
-        ? parseColorToNumber(resolved.color, CharacterLayer.TITLE_FILL)
-        : CharacterLayer.TITLE_FILL
+        ? parseColorToNumber(resolved.color, titleFallback)
+        : titleFallback
     // 縦棒の太さ・高さはグリフサイズに比例。closing.html は border-right 2px 相当。
     const width = Math.max(2, Math.round(CharacterLayer.TITLE_FONT_SIZE * 0.04))
     const height = CharacterLayer.TITLE_FONT_SIZE
@@ -774,6 +799,8 @@ export class CharacterLayer extends Container {
     container.addChild(gfx)
     return {
       gfx,
+      // gfx.fill に渡したのと同じ解決済み色を一次情報として保存する (#273)。
+      colorNum,
       blinkMs: resolved.blinkMs,
       // 点滅起点は効果開始と揃える（仮想時間で算出 → export 再現）。
       blinkStartMs: this.elapsedMs,

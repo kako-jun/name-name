@@ -534,3 +534,167 @@ describe('CharacterLayer cursor (#271)', () => {
     expect(layer.hasActiveAnimation()).toBe(false)
   })
 })
+
+// ===== #273: タイトル文字色（label / グリフ演出 / カーソルへの波及）=====
+//
+// showTitle(text, font, position?, color?) で解決した色を state.titleColor に保持し、
+// 単一 label・爆発グリフ・タイプカーソルの全てへ波及させる。観測点は CPU 側で読める:
+//   - titleColor:      characters.get('Title').titleColor（解決済み Pixi 数値カラー）
+//   - label fill:      characters.get('Title').label.style.fill（PIXI Text.style、CPU 側）
+//   - glyph fill:      textEffect.glyphs[i].glyph.style.fill
+//   - cursor 色:       textEffect.cursor.colorNum（#273 で追加した一次情報の観測点）
+// いずれも canvas/getContext を要さず jsdom で読める（CLAUDE.md doctrine: env-limit を盾にしない）。
+//
+// TITLE_FILL（白フォールバック）は private static のため、直書きせず 0xffffff を期待値にする。
+// これは #270/#271 既存テストが TITLE_FILL=0xffffff を前提に書いているのと同じ流儀。
+const TITLE_FILL = 0xffffff
+const NAVY = 0x1a4a7a // orber OP/ED の紺タイトル #1a4a7a
+
+interface TitleColorStateLike {
+  titleColor?: number
+  label?: { style: { fill: number }; text: string }
+  textEffect: {
+    glyphs: Array<{ glyph: { style: { fill: number } } }>
+    cursor: { colorNum: number } | null
+  } | null
+}
+
+describe('CharacterLayer title color (#273)', () => {
+  // applyTextEffect / showTitle の async フォントロードを await で待てるよう document を null に。
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  function getTitleTC(layer: CharacterLayer): TitleColorStateLike {
+    return (layer as unknown as { characters: Map<string, TitleColorStateLike> }).characters.get(
+      'Title'
+    )!
+  }
+
+  // ---- T1/T2: showTitle が color を解決して titleColor に保持する ----
+
+  it('T1: color 指定で titleColor が解決済み数値（#1a4a7a → 0x1a4a7a）になる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif', undefined, '#1a4a7a')
+    expect(getTitleTC(layer).titleColor).toBe(NAVY)
+  })
+
+  it('T2: color 未指定なら titleColor は白フォールバック（TITLE_FILL=0xffffff）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    expect(getTitleTC(layer).titleColor).toBe(TITLE_FILL)
+  })
+
+  // ---- T3: 新規 Text 経路の label.fill ----
+
+  it('T3: color 指定で新規生成 label の style.fill が 0x1a4a7a になる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif', undefined, '#1a4a7a')
+    expect(getTitleTC(layer).label!.style.fill).toBe(NAVY)
+  })
+
+  // ---- T4: 既存 Title へのテキスト差し替え（差し替え経路の label/titleColor 更新）----
+
+  it('T4: 既存 Title に color 指定で差し替えると titleColor と label.style.fill が更新される', () => {
+    const layer = new CharacterLayer(800, 450)
+    // まず白で出す
+    layer.showTitle('orber', 'sans-serif')
+    expect(getTitleTC(layer).titleColor).toBe(TITLE_FILL)
+    // 同名 Title へテキスト＋紺色で差し替え（differential 経路）
+    layer.showTitle('ORBER', 'sans-serif', undefined, '#1a4a7a')
+    const st = getTitleTC(layer)
+    expect(st.label!.text).toBe('ORBER')
+    expect(st.titleColor).toBe(NAVY)
+    expect(st.label!.style.fill).toBe(NAVY)
+  })
+
+  // ---- T5: 本丸。color 指定 Title の爆発グリフ全てが紺になる ----
+
+  it('T5: color 指定 Title に Explode → 全グリフの style.fill が 0x1a4a7a（本丸）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif', undefined, '#1a4a7a')
+    await layer.applyTextEffect('Title', { effect: 'Explode' })
+    const st = getTitleTC(layer)
+    expect(st.textEffect).not.toBeNull()
+    expect(st.textEffect!.glyphs.length).toBe(5) // o r b e r
+    for (const { glyph } of st.textEffect!.glyphs) {
+      expect(glyph.style.fill).toBe(NAVY)
+    }
+  })
+
+  // ---- T6: color 未指定 Title の爆発グリフは白のまま（回帰防止）----
+
+  it('T6: color 未指定 Title に Explode → 全グリフが白（TITLE_FILL）のまま', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Explode' })
+    const st = getTitleTC(layer)
+    for (const { glyph } of st.textEffect!.glyphs) {
+      expect(glyph.style.fill).toBe(TITLE_FILL)
+    }
+  })
+
+  // ---- T7: カーソル色未指定なら titleColor へ波及（DT-B2）----
+
+  it('T7: color 指定 Title の Typewriter cursor=on（カーソル色なし）→ cursor.colorNum が titleColor(0x1a4a7a)', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif', undefined, '#1a4a7a')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    const st = getTitleTC(layer)
+    expect(st.textEffect!.cursor).not.toBeNull()
+    // カーソル色未指定なので、グリフと同じ解決済みタイトル色（紺）にフォールバックする。
+    expect(st.textEffect!.cursor!.colorNum).toBe(NAVY)
+  })
+
+  // ---- T8: カーソル色指定があれば titleColor より優先（DT-B3/B4）----
+
+  it('T8: カーソル色指定（cursor_color=#ff0000）は titleColor より優先され colorNum=0xff0000', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif', undefined, '#1a4a7a')
+    await layer.applyTextEffect('Title', {
+      effect: 'Typewriter',
+      cursor: true,
+      cursor_color: '#ff0000',
+      ms_per_char: 70,
+    })
+    const st = getTitleTC(layer)
+    expect(st.textEffect!.cursor).not.toBeNull()
+    // `カーソル色` 指定 > タイトル色 fallback。紺(0x1a4a7a)ではなく赤(0xff0000)が勝つ。
+    expect(st.textEffect!.cursor!.colorNum).toBe(0xff0000)
+  })
+
+  // ---- T9: 紺 Title を color 未指定で差し替えると白へ戻る（前の色が残らない回帰）----
+
+  it('T9: 紺 Title を color 未指定で差し替えると titleColor が白へ戻る（前色の残留なし）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif', undefined, '#1a4a7a')
+    expect(getTitleTC(layer).titleColor).toBe(NAVY)
+    // color を渡さずに差し替え → 解決は TITLE_FILL に倒れ、前の紺が残ってはならない。
+    layer.showTitle('plain', 'sans-serif')
+    const st = getTitleTC(layer)
+    expect(st.titleColor).toBe(TITLE_FILL)
+    expect(st.label!.style.fill).toBe(TITLE_FILL)
+  })
+
+  // ---- S3: 日本語＋サロゲートペア混じりタイトル＋色 → 全グリフへ色適用 ----
+
+  it('S3: サロゲートペア混じりタイトル＋color → Array.from 分解した全グリフに 0x1a4a7a 適用', async () => {
+    const layer = new CharacterLayer(800, 450)
+    // "あ𝕏z" = ひらがな1 + 数学英字（サロゲートペア）1 + ASCII 1 = code point 3 つ。
+    const title = 'あ𝕏z'
+    expect(Array.from(title).length).toBe(3) // UTF-16 長は 4 だが code point は 3
+    layer.showTitle(title, 'sans-serif', undefined, '#1a4a7a')
+    await layer.applyTextEffect('Title', { effect: 'Explode' })
+    const st = getTitleTC(layer)
+    // Array.from 分解なのでサロゲートペアが割れず 3 グリフ。
+    expect(st.textEffect!.glyphs.length).toBe(3)
+    for (const { glyph } of st.textEffect!.glyphs) {
+      expect(glyph.style.fill).toBe(NAVY)
+    }
+  })
+})

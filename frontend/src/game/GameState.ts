@@ -54,6 +54,8 @@ export interface NovelGameState {
   textIndex: number
   flags: Record<string, FlagValue>
   backgroundPath: string | null
+  /** 単色の地色 (#273)。背景画像と同じ永続状態。なしなら null（既定の黒） */
+  backgroundColor: string | null
   /** 背景の端フェードマスク (#250)。なしなら null */
   backgroundFade: BackgroundFade | null
   /** 動画入力レイヤ (#252)。なしなら null */

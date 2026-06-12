@@ -49,6 +49,7 @@ import { computeShakeOffset, computeFlashAlpha, computeFadeAlpha } from './scree
 import {
   computeCoverFit,
   parseHexColor,
+  parseColorToNumber,
   resolveAssetUrl,
   saveSlotToGameState,
   resolveFontFamily,
@@ -190,6 +191,10 @@ export class NovelRenderer {
 
   /** 現在の背景パス */
   private currentBackgroundPath: string | null = null
+
+  /** 現在の単色地色 (#273)。背景パスと同じ永続状態。なしなら null（既定の黒）。
+   *  背景画像とは独立スロット: bgGraphics を塗り直すだけで bgContainer の画像には触れない。 */
+  private currentBackgroundColor: string | null = null
 
   /** 現在の背景端フェードマスク (#250)。なしなら null */
   private currentBackgroundFade: BackgroundFade | null = null
@@ -918,6 +923,7 @@ export class NovelRenderer {
       textIndex: this.textIndex,
       flags: this.gameState.toJSON(),
       backgroundPath: this.currentBackgroundPath,
+      backgroundColor: this.currentBackgroundColor,
       backgroundFade: this.currentBackgroundFade,
       video: this.videoLayer.getState(),
       isBlackout: this.blackoutOverlay.visible,
@@ -1118,6 +1124,14 @@ export class NovelRenderer {
       this.setBackground(state.backgroundPath, state.backgroundFade)
     } else {
       this.clearBackground()
+    }
+
+    // 単色地色の復元 (#273)。背景画像とは独立スロット（bgGraphics）なので別分岐で復元する。
+    // 古いセーブ・スナップショットには backgroundColor が無い → ?? null で「色なし」に倒す。
+    if (state.backgroundColor) {
+      this.setBackgroundColor(state.backgroundColor)
+    } else {
+      this.clearBackgroundColor()
     }
 
     // 動画レイヤ復元 (#252)。clearBackground / setBackground は背景のみを扱い
@@ -1331,6 +1345,11 @@ export class NovelRenderer {
       )
       return
     }
+    if ('BackgroundColor' in event) {
+      // 単色地色 (#273)。背景画像と同じ永続状態（snapshot / applyState / セーブ復元で復元）。
+      this.setBackgroundColor(event.BackgroundColor.color)
+      return
+    }
     if ('Video' in event) {
       // 動画入力レイヤ (#252)。URL 構築は VideoLayer 側（assetBaseUrl + '/videos/' + path）に委譲し、
       // ここでは相対パスをそのまま渡す。背景の setBackground と同じ責務分担で、
@@ -1439,15 +1458,19 @@ export class NovelRenderer {
     }
     if ('TitleShow' in event) {
       // 動画タイトル中央表示 (llll-ll-media 用)
-      const ts = (event as { TitleShow: { text: string; font_family?: string; position?: string } })
-        .TitleShow
+      const ts = (
+        event as {
+          TitleShow: { text: string; font_family?: string; position?: string; color?: string }
+        }
+      ).TitleShow
       // フォント解決の優先順チェーンは novelLayout.resolveFontFamily に集約 (#260)。
       const font = resolveFontFamily(
         ts.font_family,
         this.gameDefaultFontFamily,
         NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
       )
-      this.characterLayer.showTitle(ts.text, font, ts.position)
+      // タイトル文字色 (#273)。color は CharacterLayer 側で解決し、グリフ演出・カーソルにも波及する。
+      this.characterLayer.showTitle(ts.text, font, ts.position, ts.color)
       return
     }
     if ('TextEffect' in event) {
@@ -1645,6 +1668,32 @@ export class NovelRenderer {
     this.videoLayer.remove()
   }
 
+  /**
+   * 単色の地色を設定する (#273)。`bgGraphics`（全面を覆う最背面の塗り）を塗り直す。
+   *
+   * 背景画像とは独立スロット: bgContainer の画像には触れない（画像が上に乗る）。
+   * 色解決は novelLayout.parseColorToNumber に委譲（不正値は黒 0x000000 にフォールバック）。
+   * init 時に一度 rect+fill 済みなので、重ね塗りで透けないよう必ず clear() してから塗り直す。
+   */
+  private setBackgroundColor(color: string): void {
+    this.currentBackgroundColor = color
+    const colorNum = parseColorToNumber(color, 0x000000)
+    this.bgGraphics.clear()
+    this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.bgGraphics.fill(colorNum)
+  }
+
+  /**
+   * 単色の地色をリセットする (#273)。地色を既定の黒 (0x000000) に戻す。
+   * 背景画像の clearBackground と対をなす（背景色スロットだけを初期化する）。
+   */
+  private clearBackgroundColor(): void {
+    this.currentBackgroundColor = null
+    this.bgGraphics.clear()
+    this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.bgGraphics.fill(0x000000)
+  }
+
   // --- クイックセーブ / クイックロード (#142) ---
 
   /**
@@ -1667,6 +1716,7 @@ export class NovelRenderer {
       textIndex: snapshot.textIndex,
       flags: snapshot.flags,
       backgroundPath: snapshot.backgroundPath,
+      backgroundColor: snapshot.backgroundColor,
       backgroundFade: snapshot.backgroundFade,
       video: snapshot.video,
       isBlackout: snapshot.isBlackout,
@@ -1715,6 +1765,7 @@ export class NovelRenderer {
         textIndex: snapshot.textIndex,
         flags: snapshot.flags,
         backgroundPath: snapshot.backgroundPath,
+        backgroundColor: snapshot.backgroundColor,
         backgroundFade: snapshot.backgroundFade,
         video: snapshot.video,
         isBlackout: snapshot.isBlackout,
@@ -1847,6 +1898,7 @@ export class NovelRenderer {
       textIndex: opts.textIndex ?? 0,
       flags,
       backgroundPath: null,
+      backgroundColor: null,
       backgroundFade: normalizeBackgroundFade(undefined),
       video: null,
       isBlackout: false,

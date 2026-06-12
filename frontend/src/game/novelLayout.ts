@@ -82,6 +82,41 @@ export function parseHexColor(hex: string): number {
   return isNaN(n) ? 0xffffff : n
 }
 
+/**
+ * CSS カラー文字列（"#1a4a7a" / "#222" / "1a4a7a"）を Pixi の数値カラーに変換する純粋関数 (#270 / #273)。
+ *
+ * 元は `underline.ts` にあったものを、色解決の純関数置き場であるこのモジュールへ集約した
+ * （`parseHexColor` の隣）。下線ビーム（#270）・タイトル文字色（#273）・背景色（#273）が共有する。
+ * `underline.ts` は後方互換のためここから re-export する。
+ *
+ * `parseHexColor` との違い:
+ *  - 3 桁短縮形（#222 → #222222）を展開する。
+ *  - 純 hex（`[0-9a-fA-F]`）以外（`+1a4a7` 等の符号付き）は fallback に倒す。
+ *  - fallback を任意指定できる（`parseHexColor` は白固定）。
+ *  - `undefined` を受けたら fallback を返す（「指定なし」を呼び出し側でハンドルしやすい）。
+ *
+ * 解釈不能なら `fallback` を返す。Math.random など非決定要素は使わない。
+ */
+export function parseColorToNumber(color: string | undefined, fallback: number): number {
+  if (color === undefined) return fallback
+  let s = color.trim()
+  if (s.startsWith('#')) s = s.slice(1)
+  if (s.length === 3) {
+    // #rgb → #rrggbb
+    s = s
+      .split('')
+      .map((c) => c + c)
+      .join('')
+  }
+  if (s.length !== 6) return fallback
+  // 純粋 hex 16 進数のみ受理する。Number.parseInt は '+1a4a7'/'-1a4a7' のような符号付き
+  // 文字列を解釈してしまい fallback に倒れないため、parseInt 前に純 hex 判定で弾く。
+  if (!/^[0-9a-fA-F]+$/.test(s)) return fallback
+  const n = Number.parseInt(s, 16)
+  if (!Number.isFinite(n) || Number.isNaN(n)) return fallback
+  return n
+}
+
 /** アセット URL の種別。`images/` か `sounds/` のサブディレクトリに対応する。 */
 export type AssetKind = 'images' | 'sounds'
 
@@ -111,6 +146,7 @@ export function resolveAssetUrl(baseUrl: string, kind: AssetKind, path: string):
  *   textIndex      = data.textIndex
  *   flags          = data.flags
  *   backgroundPath = data.backgroundPath
+ *   backgroundColor = data.backgroundColor ?? null  // 古いセーブには無い → 地色なし (#273)
  *   backgroundFade = normalizedFade（呼び出し側で normalizeBackgroundFade 済みを渡す）
  *   video          = data.video ?? null      // 古いセーブには無い → 動画なし
  *   isBlackout     = data.isBlackout ?? false
@@ -135,6 +171,7 @@ export function saveSlotToGameState(
     textIndex: data.textIndex,
     flags: data.flags,
     backgroundPath: data.backgroundPath,
+    backgroundColor: data.backgroundColor ?? null,
     backgroundFade: normalizedFade,
     video: data.video ?? null,
     isBlackout: data.isBlackout ?? false,

@@ -777,6 +777,14 @@ fn parse_events_only(input: &str) -> Vec<Event> {
 fn parse_directive(line: &str) -> Option<Event> {
     let content = line.strip_prefix('[')?.strip_suffix(']')?;
 
+    // [背景色: #f5f0e8] — 単色の地色 (#273)。
+    // strip_prefix("背景:") は "背景色: …" にマッチしない（3 文字目が ':' でなく '色'）ため
+    // 順序非依存だが、意図を明示するため「背景:」より前に置く。
+    if let Some(rest) = content.strip_prefix("背景色:") {
+        return Some(Event::BackgroundColor {
+            color: rest.trim().to_string(),
+        });
+    }
     if let Some(rest) = content.strip_prefix("背景:") {
         return Some(parse_background_directive(rest));
     }
@@ -878,6 +886,7 @@ fn parse_directive(line: &str) -> Option<Event> {
         let mut text = String::new();
         let mut font_family: Option<String> = None;
         let mut position: Option<String> = None;
+        let mut color: Option<String> = None;
         let mut first = true;
         for raw in rest.split(',') {
             let part = raw.trim();
@@ -900,6 +909,13 @@ fn parse_directive(line: &str) -> Option<Event> {
                             position = Some(v.to_string());
                         }
                     }
+                    // タイトル文字色 (#273)。Underline の color と同形（日本語キー `色` / 英語 `color`）。
+                    "color" | "色" => {
+                        let v = v.trim();
+                        if !v.is_empty() {
+                            color = Some(v.to_string());
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -908,6 +924,7 @@ fn parse_directive(line: &str) -> Option<Event> {
             text,
             font_family,
             position,
+            color,
         });
     }
 
@@ -2992,5 +3009,175 @@ title: "test"
         let emitted = emit(&doc1);
         let doc2 = parse(&emitted);
         assert_eq!(doc1, doc2, "rpg event/trigger round-trip should be stable");
+    }
+
+    // ===== 背景色 / タイトル色 (#273) =====
+
+    #[test]
+    fn parses_background_color() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景色: #f5f0e8]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            Event::BackgroundColor {
+                color: "#f5f0e8".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn background_color_does_not_shadow_background() {
+        // `[背景: …]` が `背景色` パスに吸われていないこと（プレフィックス衝突回避）。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景: bg.png]\n[背景色: #f5f0e8]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], Event::Background { .. }));
+        assert!(matches!(events[1], Event::BackgroundColor { .. }));
+    }
+
+    #[test]
+    fn background_color_roundtrip() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景色: #f5f0e8]\n";
+        let doc1 = parse(input);
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "background color round-trip should be stable");
+    }
+
+    #[test]
+    fn parses_title_with_color() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber, 色=#1a4a7a]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            Event::TitleShow {
+                text: "orber".to_string(),
+                font_family: None,
+                position: None,
+                color: Some("#1a4a7a".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn title_color_roundtrip_with_and_without() {
+        use crate::emitter::emit;
+        // 色あり
+        let with = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber, 色=#1a4a7a]\n";
+        let d1 = parse(with);
+        let d2 = parse(&emit(&d1));
+        assert_eq!(d1, d2, "title with color round-trip should be stable");
+        // 色なし（既存挙動を壊さない）
+        let without = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber]\n";
+        let d3 = parse(without);
+        let d4 = parse(&emit(&d3));
+        assert_eq!(d3, d4, "title without color round-trip should be stable");
+        // 色なしのとき color は None
+        if let Event::TitleShow { color, .. } = &d3.chapters[0].scenes[0].events[0] {
+            assert_eq!(*color, None);
+        } else {
+            panic!("expected TitleShow");
+        }
+    }
+
+    // R6: 英語キー `color=` で受け、emit は日本語 `色=` に正規化する（入力英語→出力日本語の
+    // 非対称 round-trip）。下線（#270）の color と同じく英語キーも受理する仕様を縛る。
+    #[test]
+    fn title_color_english_key_emits_japanese() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber, color=#1a4a7a]\n";
+        let doc = parse(input);
+        // 英語キーでも color に入る。
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::TitleShow {
+                text: "orber".to_string(),
+                font_family: None,
+                position: None,
+                color: Some("#1a4a7a".to_string()),
+            }
+        );
+        // emit は常に日本語 `色=` で出す（英語キーは出力に残らない）。
+        let emitted = emit(&doc);
+        assert!(
+            emitted.contains("色=#1a4a7a"),
+            "emit should normalize to Japanese key `色=`, got: {emitted}"
+        );
+        assert!(
+            !emitted.contains("color="),
+            "emit should not keep English key `color=`, got: {emitted}"
+        );
+        // 意味的には再 parse で安定（color= → 色= の正規化は値を変えない）。
+        let reparsed = parse(&emitted);
+        assert_eq!(
+            doc, reparsed,
+            "color= input should round-trip via 色= output"
+        );
+    }
+
+    // R7: `[背景色: ]`（値が空）の境界。実装は rest.trim() をそのまま保持するため空文字 color に
+    // なる（描画では黒に倒すが文字列は保持＝spec の round-trip 保持）。parse→emit→再 parse が安定。
+    #[test]
+    fn background_color_empty_value_roundtrip() {
+        use crate::emitter::emit;
+        let input =
+            "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景色: ]\n";
+        let d1 = parse(input);
+        // 空文字を保持する（None ではなく空文字列）。
+        assert_eq!(
+            d1.chapters[0].scenes[0].events[0],
+            Event::BackgroundColor {
+                color: "".to_string(),
+            }
+        );
+        // emit は `[背景色: ]`（空値）で出し、再 parse しても同じ空文字に戻る。
+        let d2 = parse(&emit(&d1));
+        assert_eq!(d1, d2, "empty background color round-trip should be stable");
+    }
+
+    // R8: `[タイトル: orber, 色=]`（色キーありで値が空）。タイトル色の kv は空値ガード
+    // （`if !v.is_empty()`）を持つため、空値では color=None になる（背景色の空文字保持とは非対称）。
+    #[test]
+    fn title_empty_color_value_is_none() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber, 色=]\n";
+        let doc = parse(input);
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::TitleShow {
+                text: "orber".to_string(),
+                font_family: None,
+                position: None,
+                color: None,
+            }
+        );
+    }
+
+    // R9: font / 位置 / 色 を同時指定した全属性 round-trip。属性が増えても emit→parse が安定する
+    // ことを縛る（emit の属性出力順 font→位置→色 が parse で復元される）。
+    #[test]
+    fn title_all_attributes_roundtrip() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber, font=bellpoke_font, 位置=中央, 色=#1a4a7a]\n";
+        let d1 = parse(input);
+        assert_eq!(
+            d1.chapters[0].scenes[0].events[0],
+            Event::TitleShow {
+                text: "orber".to_string(),
+                font_family: Some("bellpoke_font".to_string()),
+                position: Some("中央".to_string()),
+                color: Some("#1a4a7a".to_string()),
+            }
+        );
+        let d2 = parse(&emit(&d1));
+        assert_eq!(
+            d1, d2,
+            "title with all attributes round-trip should be stable"
+        );
     }
 }
