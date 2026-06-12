@@ -294,6 +294,12 @@ export type Event =
         font_family?: string
         position?: string
         color?: string
+        /** 文字サイズ (px) (#275)。未指定は CharacterLayer 既定 64。グリフ演出のグリフも同 size。 */
+        size?: number
+        /** 横位置の比率 override (0..1) (#275)。指定時は position トークンより優先。範囲外は無視。 */
+        x?: number
+        /** 縦位置の比率 override (0..1) (#275)。 */
+        y?: number
       }
     }
   | {
@@ -308,6 +314,16 @@ export type Event =
         size?: number
         id?: string
         font_family?: string
+        /** テキスト揃え (#275)。`left`/`center`/`right`（正規化済み）。未指定は中央。
+         *  左揃え時はグリフ演出（タイプ等）がラベル左端から右へ並ぶ（ED の install-line）。 */
+        align?: string
+        /** 隣接配置 (#275)。参照ラベル id の右端にこのラベルの左端を接続（同 y）。
+         *  指定時このラベルは自動で左揃え。参照が無ければ通常配置にフォールバック。 */
+        after?: string
+        /** 横位置の比率 override (0..1) (#275)。指定時は position トークンより優先。 */
+        x?: number
+        /** 縦位置の比率 override (0..1) (#275)。 */
+        y?: number
       }
     }
   | {
@@ -320,6 +336,10 @@ export type Event =
         shape?: string
         size?: number
         id?: string
+        /** 横位置の比率 override (0..1) (#275)。指定時は position トークンより優先。 */
+        x?: number
+        /** 縦位置の比率 override (0..1) (#275)。 */
+        y?: number
       }
     }
   | { DialogBorderless: { borderless: boolean } }

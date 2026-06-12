@@ -1458,11 +1458,8 @@ export class NovelRenderer {
     }
     if ('TitleShow' in event) {
       // 動画タイトル中央表示 (llll-ll-media 用)
-      const ts = (
-        event as {
-          TitleShow: { text: string; font_family?: string; position?: string; color?: string }
-        }
-      ).TitleShow
+      // Label / Image と同じく union 絞り込み済みの型付きアクセス（types.ts に size/x/y 済み）。
+      const ts = event.TitleShow
       // フォント解決の優先順チェーンは novelLayout.resolveFontFamily に集約 (#260)。
       const font = resolveFontFamily(
         ts.font_family,
@@ -1470,13 +1467,19 @@ export class NovelRenderer {
         NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
       )
       // タイトル文字色 (#273)。color は CharacterLayer 側で解決し、グリフ演出・カーソルにも波及する。
-      this.characterLayer.showTitle(ts.text, font, ts.position, ts.color)
+      // サイズ・x/y override (#275) は CharacterLayer 側で fontSize / resolvePositionWithOverride に渡す。
+      this.characterLayer.showTitle(ts.text, font, ts.position, ts.color, {
+        size: ts.size,
+        x: ts.x,
+        y: ts.y,
+      })
       return
     }
     if ('Label' in event) {
       // 単独の色付きラベル (#274) — OP タイトルカードの肩書 / 名前。
       // フォント解決は TitleShow と共通の resolveFontFamily（per-line → per-game → runtime）。
-      // 位置・色・サイズは CharacterLayer.showLabel が resolveLayoutPosition / parseColorToNumber で解決する。
+      // 位置・色・サイズは CharacterLayer.showLabel が resolvePositionWithOverride / parseColorToNumber で解決する。
+      // 揃え・隣接・x/y override (#275) もそのまま showLabel に渡す（ED の install-line 用）。
       const lb = event.Label
       const font = resolveFontFamily(
         lb.font_family,
@@ -1491,6 +1494,10 @@ export class NovelRenderer {
         position: lb.position,
         size: lb.size,
         fontFamily: font,
+        align: lb.align,
+        after: lb.after,
+        x: lb.x,
+        y: lb.y,
         instant: this.skipMode,
       })
       return
@@ -1505,6 +1512,9 @@ export class NovelRenderer {
         position: im.position,
         shape: im.shape,
         size: im.size,
+        // 位置 override (#275)。position トークンより優先。
+        x: im.x,
+        y: im.y,
         assetBaseUrl: this.assetBaseUrl,
         instant: this.skipMode,
       })

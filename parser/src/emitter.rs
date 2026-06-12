@@ -753,6 +753,9 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 font_family,
                 position,
                 color,
+                size,
+                x,
+                y,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -772,6 +775,16 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push_str(", 色=");
                     out.push_str(c);
                 }
+                // タイトル文字サイズ・位置 override (#275)。日本語キーに正規化して出力。
+                if let Some(s) = size {
+                    out.push_str(&format!(", サイズ={s}"));
+                }
+                if let Some(xv) = x {
+                    out.push_str(&format!(", x={xv}"));
+                }
+                if let Some(yv) = y {
+                    out.push_str(&format!(", y={yv}"));
+                }
                 out.push_str("]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -782,13 +795,19 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 size,
                 id,
                 font_family,
+                align,
+                after,
+                x,
+                y,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
                 // round-trip のため日本語キーに正規化する（英語キー入力も日本語で出す）。
                 out.push_str("[ラベル: ");
-                out.push_str(text);
+                // 前後スペース等、parser の trim で失われる内容を持つ text は `"..."` で囲って
+                // round-trip を安定させる (#275)。通常 text はクオート無しのまま出す。
+                out.push_str(&quote_label_text_if_needed(text));
                 if let Some(c) = color {
                     out.push_str(", 色=");
                     out.push_str(c);
@@ -808,6 +827,22 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push_str(", font=");
                     out.push_str(f);
                 }
+                // 揃え・隣接・位置 override (#275)。日本語キーに正規化して出力。
+                // align は正規化済み英語値（left/center/right）をそのまま値に書く。
+                if let Some(a) = align {
+                    out.push_str(", 揃え=");
+                    out.push_str(a);
+                }
+                if let Some(af) = after {
+                    out.push_str(", 後ろ=");
+                    out.push_str(af);
+                }
+                if let Some(xv) = x {
+                    out.push_str(&format!(", x={xv}"));
+                }
+                if let Some(yv) = y {
+                    out.push_str(&format!(", y={yv}"));
+                }
                 out.push_str("]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -817,6 +852,8 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 shape,
                 size,
                 id,
+                x,
+                y,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -839,6 +876,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if let Some(i) = id {
                     out.push_str(", id=");
                     out.push_str(i);
+                }
+                // 位置 override (#275)。日本語キーは無く x/y で round-trip。
+                if let Some(xv) = x {
+                    out.push_str(&format!(", x={xv}"));
+                }
+                if let Some(yv) = y {
+                    out.push_str(&format!(", y={yv}"));
                 }
                 out.push_str("]\n");
                 prev_was_dialog_or_text = false;
@@ -895,6 +939,21 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 prev_was_dialog_or_text = false;
             }
         }
+    }
+}
+
+/// ラベル本文を round-trip 安定に emit する (#275)。
+///
+/// parser は bare な text を `trim()` する（`extract_label_text`）。そのため前後スペースを
+/// 持つ text（`"$ "` のプロンプト記号など）はクオート無しで出すと再 parse で消える。
+/// 前後に空白がある場合だけ `"..."` で囲んで前後スペースを保持する。通常 text（前後空白なし）
+/// はクオート無しのまま出す。クオート内カンマは非対応（parser の `split(',')` 制約）。
+fn quote_label_text_if_needed(text: &str) -> String {
+    let needs_quote = text != text.trim();
+    if needs_quote {
+        format!("\"{text}\"")
+    } else {
+        text.to_string()
     }
 }
 

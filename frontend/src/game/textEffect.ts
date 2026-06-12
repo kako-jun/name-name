@@ -259,6 +259,28 @@ export function layoutGlyphCenters(widths: number[]): number[] {
   return centers
 }
 
+/**
+ * ラベルの anchor.x に応じて、`layoutGlyphCenters` の中心群（中央寄せ前提）を
+ * 平行移動する x オフセットを返す純関数 (#275)。
+ *
+ * `layoutGlyphCenters` は行全体を原点中央に置く（最初のグリフ左端 = `-totalWidth/2`、
+ * 行の中心 = 0）。ラベルが左揃え（anchor.x=0）・右揃え（anchor.x=1）のときは、行全体を
+ * ずらしてラベルの基準点（sprite ローカル原点 0）に左端／右端が来るようにする:
+ *  - 左揃え（anchorX=0）: 左端を原点へ → 中心群を `+totalWidth/2` シフト
+ *  - 中央（anchorX=0.5）: そのまま → オフセット 0
+ *  - 右揃え（anchorX=1）: 右端を原点へ → 中心群を `-totalWidth/2` シフト
+ *
+ * 一般化すると `offset = totalWidth * (0.5 - anchorX)`（0/0.5/1 で上記に一致し、
+ * 中間 anchor でも連続。グリフ列が左端から右へ並ぶ left-typewriter を担保する）。
+ * Pixi の `Text.anchor.x` と同じ「0=左 / 0.5=中央 / 1=右」の規約に合わせる。
+ *
+ * doctrine 規律4: この x シフトの数式を CharacterLayer.buildTextEffect に直書きせず、
+ * 純関数に切り出して境界（左/中央/右・幅 0）をテスト可能にする。
+ */
+export function glyphAnchorOffset(totalWidth: number, anchorX: number): number {
+  return totalWidth * (0.5 - anchorX)
+}
+
 // ---- #271 点滅カーソル（効果=タイプ 専用） ----
 
 /**

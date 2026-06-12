@@ -575,6 +575,18 @@ pub enum Event {
         /// 日本語キー `色` / 英語 `color`（`Underline` の color と同形）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         color: Option<String>,
+        /// 文字サイズ (px) (#275)。日本語キー `サイズ` / 英語 `size`。未指定は TS 既定 64
+        /// （closing の tool-name は 56、opening は 64）。グリフ演出のグリフも同 size。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u32>,
+        /// 横位置の比率 override (0..1 の float) (#275)。日本語/英語とも `x`。
+        /// 指定時は `position` トークンより優先して xRatio に使う（テンプレ厳密配置用）。
+        /// 範囲外・非数値は TS 側で無視してトークンにフォールバックする。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        /// 縦位置の比率 override (0..1 の float) (#275)。日本語/英語とも `y`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
     },
     /// 単独の色付きラベル (#274)。orber OP タイトルカードの肩書 / 名前のような、
     /// 立ち絵に紐付かない単独テキストを任意の 2D 位置に出す。
@@ -604,6 +616,23 @@ pub enum Event {
         /// 未指定は per-game 既定 → runtime 既定へフォールバック（TitleShow と同形）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         font_family: Option<String>,
+        /// テキスト揃え (#275)。日本語キー `揃え`（`左`/`中央`/`右`）/ 英語 `align`（`left`/`center`/`right`）。
+        /// 値は `left` / `center` / `right` に正規化して保持する。未指定は中央（現状維持）。
+        /// 左揃え時はグリフ演出（タイプ等）のグリフがラベル左端から右へ並ぶ（ED の install-line 用）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        align: Option<String>,
+        /// 隣接配置 (#275)。日本語キー `後ろ` / 英語 `after`。参照ラベル <id> の右端に
+        /// このラベルの左端を接続する（同 y）。指定時このラベルは自動で左揃えになる。
+        /// 参照が存在しない場合は通常配置にフォールバック（落ちない）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+        /// 横位置の比率 override (0..1 の float) (#275)。日本語/英語とも `x`。
+        /// 指定時は `position` トークンより優先して xRatio に使う。範囲外・非数値は TS 側で無視。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        /// 縦位置の比率 override (0..1 の float) (#275)。日本語/英語とも `y`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
     },
     /// 単独の画像 (#274)。orber OP タイトルカードのアバターのような、立ち絵（show）に
     /// 紐付かない単独画像を任意の 2D 位置に出す。
@@ -628,6 +657,13 @@ pub enum Event {
         /// 演出対象 identifier。日本語/英語とも `id`。未指定は TS 側で既定 "Image"。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        /// 横位置の比率 override (0..1 の float) (#275)。日本語/英語とも `x`。
+        /// 指定時は `position` トークンより優先して xRatio に使う。範囲外・非数値は TS 側で無視。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        /// 縦位置の比率 override (0..1 の float) (#275)。日本語/英語とも `y`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
     },
     /// 文字ウィンドウ枠の ON/OFF を切り替える (#135)。
     ///

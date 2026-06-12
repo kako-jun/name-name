@@ -12,6 +12,7 @@ import {
   findSceneById,
   resolveSceneTitle,
   resolveLayoutPosition,
+  resolvePositionWithOverride,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -762,5 +763,56 @@ describe('resolveLayoutPosition (#274)', () => {
     // 対照: 小文字なら受理される（境界を明示）。
     expect(resolveLayoutPosition('top')).toEqual({ xRatio: 0.5, yRatio: 0.16 })
     expect(resolveLayoutPosition('left')).toEqual({ xRatio: 0.1875, yRatio: 0.5 })
+  })
+})
+
+// ===== #275: resolvePositionWithOverride（位置トークン + 数値 x/y override）=====
+// トークン由来の比率を base にし、有効な x/y（有限・0..1）があれば軸ごとに上書きする。
+// 範囲外・非数値・undefined はトークンにフォールバック。軸は独立判定。
+describe('resolvePositionWithOverride (#275)', () => {
+  it('x/y が undefined ならトークンと完全に一致（override なし = 現状維持）', () => {
+    expect(resolvePositionWithOverride('中下', undefined, undefined)).toEqual({
+      xRatio: 0.5,
+      yRatio: 0.64,
+    })
+    expect(resolvePositionWithOverride(undefined, undefined, undefined)).toEqual({
+      xRatio: 0.5,
+      yRatio: 0.5,
+    })
+  })
+
+  it('有効な x/y はトークンより優先される', () => {
+    // トークンは中下 (0.5, 0.64) だが x=0.36, y=0.62 で上書き。
+    expect(resolvePositionWithOverride('中下', 0.36, 0.62)).toEqual({
+      xRatio: 0.36,
+      yRatio: 0.62,
+    })
+  })
+
+  it('境界 0 / 1 は採用される', () => {
+    expect(resolvePositionWithOverride('中央', 0, 1)).toEqual({ xRatio: 0, yRatio: 1 })
+    expect(resolvePositionWithOverride('中央', 1, 0)).toEqual({ xRatio: 1, yRatio: 0 })
+  })
+
+  it('軸独立: x だけ override・y はトークン', () => {
+    // 中下 → y=0.64。x のみ 0.2 で上書き。
+    expect(resolvePositionWithOverride('中下', 0.2, undefined)).toEqual({
+      xRatio: 0.2,
+      yRatio: 0.64,
+    })
+    // y のみ override・x はトークン（左 → x=0.1875）。
+    expect(resolvePositionWithOverride('左', undefined, 0.9)).toEqual({
+      xRatio: 0.1875,
+      yRatio: 0.9,
+    })
+  })
+
+  it('範囲外・非数値・NaN・Infinity はトークンにフォールバックする', () => {
+    const base = resolvePositionWithOverride('中下', undefined, undefined) // (0.5, 0.64)
+    expect(resolvePositionWithOverride('中下', 1.5, -0.1)).toEqual(base)
+    expect(resolvePositionWithOverride('中下', NaN, NaN)).toEqual(base)
+    expect(resolvePositionWithOverride('中下', Infinity, -Infinity)).toEqual(base)
+    // 片軸だけ無効 → その軸だけフォールバック、もう片方は採用。
+    expect(resolvePositionWithOverride('中下', 2, 0.3)).toEqual({ xRatio: 0.5, yRatio: 0.3 })
   })
 })

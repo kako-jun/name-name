@@ -12,6 +12,7 @@ import {
   resolveTypewriterMsPerChar,
   isRevealEffect,
   layoutGlyphCenters,
+  glyphAnchorOffset,
   resolveCursor,
   cursorVisible,
 } from './textEffect'
@@ -333,6 +334,77 @@ describe('textEffect: layoutGlyphCenters の境界・不変条件', () => {
     const centers = layoutGlyphCenters(widths)
     expect(centers[0]).toBeCloseTo(-centers[2], 9)
     expect(centers[1]).toBeCloseTo(0, 9) // 中央グリフは原点
+  })
+})
+
+// ===== #275: glyphAnchorOffset（揃えに応じたグリフ群の平行移動オフセット）=====
+// layoutGlyphCenters は行全体を原点中央に置くので、anchor.x に応じて行をずらす。
+// offset = totalWidth * (0.5 - anchorX)。左=0/中央=0.5/右=1 の 3 点と境界を検証する。
+describe('textEffect: glyphAnchorOffset の揃え別オフセット (#275)', () => {
+  it('中央 (anchorX=0.5) はオフセット 0（従来挙動 = 現状維持）', () => {
+    expect(glyphAnchorOffset(60, 0.5)).toBe(0)
+    expect(glyphAnchorOffset(0, 0.5)).toBe(0)
+    expect(glyphAnchorOffset(123.4, 0.5)).toBe(0)
+  })
+
+  it('左揃え (anchorX=0) は +totalWidth/2（行の左端を原点へ寄せる）', () => {
+    expect(glyphAnchorOffset(60, 0)).toBeCloseTo(30, 9)
+    expect(glyphAnchorOffset(40, 0)).toBeCloseTo(20, 9)
+  })
+
+  it('右揃え (anchorX=1) は -totalWidth/2（行の右端を原点へ寄せる）', () => {
+    expect(glyphAnchorOffset(60, 1)).toBeCloseTo(-30, 9)
+    expect(glyphAnchorOffset(40, 1)).toBeCloseTo(-20, 9)
+  })
+
+  it('左揃えオフセット後、行の左端 (-totalWidth/2 + offset) がちょうど原点 0 に来る', () => {
+    const total = 60
+    const left = -total / 2 + glyphAnchorOffset(total, 0)
+    expect(left).toBeCloseTo(0, 9)
+  })
+
+  it('右揃えオフセット後、行の右端 (+totalWidth/2 + offset) がちょうど原点 0 に来る', () => {
+    const total = 60
+    const right = total / 2 + glyphAnchorOffset(total, 1)
+    expect(right).toBeCloseTo(0, 9)
+  })
+
+  it('幅 0 はどの揃えでもオフセット 0（空ラベルで破綻しない）', () => {
+    // 0 * (0.5 - anchorX) は -0 を生むことがあるが座標上は 0 と等価。toBeCloseTo で符号差を吸収。
+    expect(glyphAnchorOffset(0, 0)).toBeCloseTo(0, 9)
+    expect(glyphAnchorOffset(0, 1)).toBeCloseTo(0, 9)
+    expect(glyphAnchorOffset(0, 0.5)).toBeCloseTo(0, 9)
+  })
+
+  it('中間 anchor (0.25) は絶対値で 20（0.5-0.25=0.25 → 80*0.25）', () => {
+    // 線形を割り戻すだけの自己整合（中央と左の中間）ではなく、独立計算した絶対値で縛る。
+    const total = 80
+    expect(glyphAnchorOffset(total, 0.25)).toBeCloseTo(20, 9)
+  })
+
+  // 観測点を「左揃え時、グリフ群左端 = container 原点」式に置く（線形の自己整合ではない）。
+  // layoutGlyphCenters の左端 = -totalWidth/2。これに glyphAnchorOffset(_, 0) を足した
+  // container ローカル左端が原点 0 に来ることを、独立に組み立てた幅列で確認する。
+  it('左揃え時、layoutGlyphCenters の左端にオフセットを足すと container 原点 0 に乗る', () => {
+    const widths = [12, 34, 6, 50] // totalWidth=102。任意の非対称幅列。
+    const total = widths.reduce((a, b) => a + b, 0)
+    const centers = layoutGlyphCenters(widths)
+    const leftEdge = centers[0] - widths[0] / 2 // = -total/2
+    // 左揃えオフセットを足すと先頭グリフの左端がちょうど原点へ寄る（左から右へ並ぶ起点）。
+    expect(leftEdge + glyphAnchorOffset(total, 0)).toBeCloseTo(0, 9)
+    // 右端は +total（行全体が原点右側に展開する）。
+    const rightEdge = centers[centers.length - 1] + widths[widths.length - 1] / 2 // = +total/2
+    expect(rightEdge + glyphAnchorOffset(total, 0)).toBeCloseTo(total, 9)
+  })
+
+  it('右揃え時、グリフ群右端が container 原点 0、左端が -total に来る', () => {
+    const widths = [12, 34, 6, 50]
+    const total = widths.reduce((a, b) => a + b, 0)
+    const centers = layoutGlyphCenters(widths)
+    const leftEdge = centers[0] - widths[0] / 2
+    const rightEdge = centers[centers.length - 1] + widths[widths.length - 1] / 2
+    expect(rightEdge + glyphAnchorOffset(total, 1)).toBeCloseTo(0, 9)
+    expect(leftEdge + glyphAnchorOffset(total, 1)).toBeCloseTo(-total, 9)
   })
 })
 
