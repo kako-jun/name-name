@@ -905,6 +905,9 @@ fn parse_directive(line: &str) -> Option<Event> {
         let mut font_family: Option<String> = None;
         let mut position: Option<String> = None;
         let mut color: Option<String> = None;
+        let mut size: Option<u32> = None;
+        let mut x: Option<f64> = None;
+        let mut y: Option<f64> = None;
         let mut first = true;
         for raw in rest.split(',') {
             let part = raw.trim();
@@ -934,6 +937,11 @@ fn parse_directive(line: &str) -> Option<Event> {
                             color = Some(v.to_string());
                         }
                     }
+                    // タイトル文字サイズ (#275)。未指定は TS 既定 64。0 は fontSize 0 で潰れるため None。
+                    "size" | "サイズ" => size = v.trim().parse::<u32>().ok().filter(|&n| n > 0),
+                    // 位置 override (#275)。範囲外・非数値はフォールバック（None のまま）。
+                    "x" => x = parse_ratio(v.trim()),
+                    "y" => y = parse_ratio(v.trim()),
                     _ => {}
                 }
             }
@@ -943,6 +951,9 @@ fn parse_directive(line: &str) -> Option<Event> {
             font_family,
             position,
             color,
+            size,
+            x,
+            y,
         });
     }
 
@@ -1493,6 +1504,45 @@ fn parse_underline_directive(content: &str) -> Option<Event> {
 /// エイリアスに両対応。空値ガード（`if !v.is_empty()`）は TitleShow の属性と同形にして、
 /// `色=` のような空値を None に倒す。text が空文字でも Label として保持する
 /// （描画側で text 空は無視するが round-trip では構文を残す）。
+/// `揃え` / `align` の値を `left` / `center` / `right` に正規化する (#275)。
+/// 日本語 `左`/`中央`/`右` と英語 `left`/`center`/`right`（大文字 ゆれ許容）を受ける。
+/// 未知の値は None（指定なし扱い = 中央）。
+fn normalize_align(value: &str) -> Option<String> {
+    match value.trim() {
+        "左" | "left" | "Left" => Some("left".to_string()),
+        "中央" | "中" | "center" | "Center" | "centre" | "Centre" => Some("center".to_string()),
+        "右" | "right" | "Right" => Some("right".to_string()),
+        _ => None,
+    }
+}
+
+/// 位置 override 用の比率 (0..1) を float としてパースする (#275)。
+/// 有限数 かつ 0..1（両端含む）のみ採用。範囲外・非数値・NaN/Infinity は None。
+fn parse_ratio(value: &str) -> Option<f64> {
+    let n = value.trim().parse::<f64>().ok()?;
+    if n.is_finite() && (0.0..=1.0).contains(&n) {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+/// ラベル / タイトル本文の bare 値を取り出す (#275)。
+///
+/// `"..."` で囲まれていたら外側のダブルクオート 1 対を剥がし、**内側は trim しない**
+/// （前後スペースを保持）。これにより `[ラベル: "$ ", …]` の `"$ "` のように、プロンプト
+/// 記号末尾のスペースを保てる（trim で消えるとグリフ演出のコマンドが `$` に密着する実害）。
+/// クオートで囲まれていなければ従来どおり trim した値を返す。`split(',')` は呼び出し側の
+/// まま（クオート内カンマは非対応 = スコープ外）。
+fn extract_label_text(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        trimmed[1..trimmed.len() - 1].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn parse_label_directive(content: &str) -> Option<Event> {
     let mut text = String::new();
     let mut color: Option<String> = None;
@@ -1500,15 +1550,20 @@ fn parse_label_directive(content: &str) -> Option<Event> {
     let mut size: Option<u32> = None;
     let mut id: Option<String> = None;
     let mut font_family: Option<String> = None;
+    let mut align: Option<String> = None;
+    let mut after: Option<String> = None;
+    let mut x: Option<f64> = None;
+    let mut y: Option<f64> = None;
 
     let mut first = true;
     for raw in content.split(',') {
-        let part = raw.trim();
         if first {
             first = false;
-            text = part.to_string();
+            // クオート対応 (#275): `"..."` 内は trim せず前後スペースを保つ。
+            text = extract_label_text(raw);
             continue;
         }
+        let part = raw.trim();
         if let Some((k, v)) = part.split_once('=') {
             let value = v.trim();
             match k.trim() {
@@ -1518,13 +1573,25 @@ fn parse_label_directive(content: &str) -> Option<Event> {
                 "position" | "位置" if !value.is_empty() => {
                     position = Some(value.to_string());
                 }
-                "size" | "サイズ" => size = value.parse().ok(),
+                // サイズ=0 は fontSize 0 になり描画が潰れるため None に倒す (#275)。
+                "size" | "サイズ" => size = value.parse::<u32>().ok().filter(|&n| n > 0),
                 "id" if !value.is_empty() => {
                     id = Some(value.to_string());
                 }
                 "font" | "font_family" | "フォント" if !value.is_empty() => {
                     font_family = Some(value.to_string());
                 }
+                // テキスト揃え (#275)。正規化して保持。未知値は無視（中央扱い）。
+                "align" | "揃え" if !value.is_empty() => {
+                    align = normalize_align(value);
+                }
+                // 隣接配置 (#275)。参照ラベル id の右端に接続。
+                "after" | "後ろ" if !value.is_empty() => {
+                    after = Some(value.to_string());
+                }
+                // 位置 override (#275)。範囲外・非数値はフォールバック（None のまま）。
+                "x" => x = parse_ratio(value),
+                "y" => y = parse_ratio(value),
                 _ => {} // 未知キーは silent skip
             }
         }
@@ -1537,6 +1604,10 @@ fn parse_label_directive(content: &str) -> Option<Event> {
         size,
         id,
         font_family,
+        align,
+        after,
+        x,
+        y,
     })
 }
 
@@ -1552,6 +1623,8 @@ fn parse_image_directive(content: &str) -> Option<Event> {
     let mut shape: Option<String> = None;
     let mut size: Option<u32> = None;
     let mut id: Option<String> = None;
+    let mut x: Option<f64> = None;
+    let mut y: Option<f64> = None;
 
     let mut first = true;
     for raw in content.split(',') {
@@ -1586,6 +1659,9 @@ fn parse_image_directive(content: &str) -> Option<Event> {
                     "id" if !value.is_empty() => {
                         id = Some(value.to_string());
                     }
+                    // 位置 override (#275)。範囲外・非数値はフォールバック（None のまま）。
+                    "x" => x = parse_ratio(value),
+                    "y" => y = parse_ratio(value),
                     _ => {} // 未知キーは silent skip
                 }
             }
@@ -1601,6 +1677,8 @@ fn parse_image_directive(content: &str) -> Option<Event> {
         shape,
         size,
         id,
+        x,
+        y,
     })
 }
 
@@ -3197,6 +3275,9 @@ title: "test"
                 font_family: None,
                 position: None,
                 color: Some("#1a4a7a".to_string()),
+                size: None,
+                x: None,
+                y: None,
             }
         );
     }
@@ -3237,6 +3318,9 @@ title: "test"
                 font_family: None,
                 position: None,
                 color: Some("#1a4a7a".to_string()),
+                size: None,
+                x: None,
+                y: None,
             }
         );
         // emit は常に日本語 `色=` で出す（英語キーは出力に残らない）。
@@ -3290,6 +3374,9 @@ title: "test"
                 font_family: None,
                 position: None,
                 color: None,
+                size: None,
+                x: None,
+                y: None,
             }
         );
     }
@@ -3308,6 +3395,9 @@ title: "test"
                 font_family: Some("bellpoke_font".to_string()),
                 position: Some("中央".to_string()),
                 color: Some("#1a4a7a".to_string()),
+                size: None,
+                x: None,
+                y: None,
             }
         );
         let d2 = parse(&emit(&d1));
@@ -3332,6 +3422,10 @@ title: "test"
                 size: Some(16),
                 id: Some("division".to_string()),
                 font_family: Some("bellpoke_font".to_string()),
+                align: None,
+                after: None,
+                x: None,
+                y: None,
             }
         );
     }
@@ -3356,6 +3450,10 @@ title: "test"
                 size: None,
                 id: None,
                 font_family: None,
+                align: None,
+                after: None,
+                x: None,
+                y: None,
             }
         );
         let d4 = parse(&emit(&d3));
@@ -3377,6 +3475,10 @@ title: "test"
                 size: Some(16),
                 id: Some("division".to_string()),
                 font_family: None,
+                align: None,
+                after: None,
+                x: None,
+                y: None,
             }
         );
         let emitted = emit(&doc);
@@ -3404,6 +3506,8 @@ title: "test"
                 shape: Some("円形".to_string()),
                 size: Some(160),
                 id: Some("avatar".to_string()),
+                x: None,
+                y: None,
             }
         );
     }
@@ -3432,6 +3536,8 @@ title: "test"
                 shape: Some("円形".to_string()),
                 size: None,
                 id: None,
+                x: None,
+                y: None,
             }
         );
         // circle 英語フラグ。
@@ -3466,6 +3572,8 @@ title: "test"
                 shape: None,
                 size: None,
                 id: None,
+                x: None,
+                y: None,
             }
         );
         let d2 = parse(&emit(&d1));
@@ -3481,20 +3589,37 @@ title: "test"
 
     // 23: サイズの u32 parse 境界。負値 / 小数 / 非数値はいずれも `value.parse::<u32>().ok()`
     //     が None になり silent drop される（size: None）。type-globe の size 直書きが壊れない縛り。
+    //     `サイズ=0` も None に倒す（fontSize 0 で描画が潰れるのを防ぐガード、#275）。
     #[test]
     fn label_size_invalid_values_drop_to_none() {
-        for raw in ["サイズ=-5", "サイズ=3.5", "サイズ=abc"] {
+        for raw in ["サイズ=-5", "サイズ=3.5", "サイズ=abc", "サイズ=0"] {
             let doc = parse(&label_doc(&format!("[ラベル: hi, {raw}]")));
             match &doc.chapters[0].scenes[0].events[0] {
                 Event::Label { text, size, .. } => {
                     assert_eq!(text, "hi", "text should survive ({raw})");
                     assert_eq!(
                         *size, None,
-                        "size should be None for `{raw}` (u32 parse fails)"
+                        "size should be None for `{raw}` (u32 parse / 0 guard)"
                     );
                 }
                 other => panic!("expected Label, got {other:?} for `{raw}`"),
             }
+        }
+    }
+
+    // サイズ=0 ガード (#275): タイトルでも 0 は None に倒す（fontSize 0 で潰れるのを防ぐ）。
+    // 正の値は通る（境界 1 が採用される）ことも併せて縛る。
+    #[test]
+    fn title_size_zero_is_none() {
+        let doc = parse(&label_doc("[タイトル: orber, サイズ=0]"));
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::TitleShow { size, .. } => assert_eq!(*size, None, "size=0 must drop to None"),
+            other => panic!("expected TitleShow, got {other:?}"),
+        }
+        let doc = parse(&label_doc("[タイトル: orber, サイズ=1]"));
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::TitleShow { size, .. } => assert_eq!(*size, Some(1), "positive size is kept"),
+            other => panic!("expected TitleShow, got {other:?}"),
         }
     }
 
@@ -3525,6 +3650,10 @@ title: "test"
                 size: None,
                 id: None,
                 font_family: None,
+                align: None,
+                after: None,
+                x: None,
+                y: None,
             },
             "unknown key 謎= must be skipped, Label still parses"
         );
@@ -3543,6 +3672,8 @@ title: "test"
                 shape: None,
                 size: None,
                 id: None,
+                x: None,
+                y: None,
             },
             "non-circle bare token must be skipped, Image still parses"
         );
@@ -3587,6 +3718,10 @@ title: "test"
                 size: None,
                 id: None,
                 font_family: None,
+                align: None,
+                after: None,
+                x: None,
+                y: None,
             },
             "comma in label text is truncated at first comma; trailing segment without `=` is dropped"
         );
@@ -3605,8 +3740,225 @@ title: "test"
                 shape: None,
                 size: None,
                 id: None,
+                x: None,
+                y: None,
             },
             "comma in image path is truncated at first comma (structural limit of split(','))"
         );
+    }
+
+    // ===== #275: 揃え / 後ろ / x / y / タイトル サイズ =====
+
+    // 揃え=左/中央/右 と英語 align=left/center/right を正規化して保持する。日本語 `中`も中央扱い。
+    #[test]
+    fn label_align_normalizes_ja_and_en() {
+        for (raw, want) in [
+            ("揃え=左", "left"),
+            ("揃え=中央", "center"),
+            ("揃え=中", "center"),
+            ("揃え=右", "right"),
+            ("align=left", "left"),
+            ("align=center", "center"),
+            ("align=right", "right"),
+        ] {
+            let doc = parse(&label_doc(&format!("[ラベル: hi, {raw}]")));
+            match &doc.chapters[0].scenes[0].events[0] {
+                Event::Label { align, .. } => {
+                    assert_eq!(*align, Some(want.to_string()), "for `{raw}`");
+                }
+                other => panic!("expected Label, got {other:?} for `{raw}`"),
+            }
+        }
+    }
+
+    // 未知の揃え値は None（中央扱い）に倒れる。
+    #[test]
+    fn label_align_unknown_value_is_none() {
+        let doc = parse(&label_doc("[ラベル: hi, 揃え=斜め]"));
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Label { align, .. } => assert_eq!(*align, None),
+            other => panic!("expected Label, got {other:?}"),
+        }
+    }
+
+    // 後ろ=id（after）を保持する。英語 after= も等価。
+    #[test]
+    fn label_after_ja_and_en() {
+        for raw in ["後ろ=prompt", "after=prompt"] {
+            let doc = parse(&label_doc(&format!("[ラベル: cmd, {raw}]")));
+            match &doc.chapters[0].scenes[0].events[0] {
+                Event::Label { after, .. } => {
+                    assert_eq!(*after, Some("prompt".to_string()), "for `{raw}`")
+                }
+                other => panic!("expected Label, got {other:?} for `{raw}`"),
+            }
+        }
+    }
+
+    // x= / y= は 0..1 の float を採用し、範囲外・非数値はフォールバック（None）。
+    #[test]
+    fn label_xy_ratio_bounds() {
+        // 採用される値。
+        let doc = parse(&label_doc("[ラベル: hi, x=0.36, y=0.62]"));
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Label { x, y, .. } => {
+                assert_eq!(*x, Some(0.36));
+                assert_eq!(*y, Some(0.62));
+            }
+            other => panic!("expected Label, got {other:?}"),
+        }
+        // 境界 0 / 1 は採用。
+        let doc = parse(&label_doc("[ラベル: hi, x=0, y=1]"));
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Label { x, y, .. } => {
+                assert_eq!(*x, Some(0.0));
+                assert_eq!(*y, Some(1.0));
+            }
+            other => panic!("expected Label, got {other:?}"),
+        }
+        // 範囲外・非数値はフォールバック。
+        for raw in ["x=1.5", "x=-0.1", "x=abc", "y=2", "y=NaN"] {
+            let doc = parse(&label_doc(&format!("[ラベル: hi, {raw}]")));
+            match &doc.chapters[0].scenes[0].events[0] {
+                Event::Label { x, y, .. } => {
+                    assert!(
+                        x.is_none() && y.is_none(),
+                        "out-of-range/non-numeric `{raw}` must fall back to None"
+                    );
+                }
+                other => panic!("expected Label, got {other:?} for `{raw}`"),
+            }
+        }
+    }
+
+    // ラベルの揃え/後ろ/x/y を全部指定した round-trip 安定（emit 順 ... → 揃え → 後ろ → x → y）。
+    #[test]
+    fn label_align_after_xy_roundtrip() {
+        use crate::emitter::emit;
+        let input = label_doc("[ラベル: cargo install orber, 色=#2b6cb0, id=cmd, 揃え=左, 後ろ=prompt, x=0.36, y=0.62]");
+        let d1 = parse(&input);
+        match &d1.chapters[0].scenes[0].events[0] {
+            Event::Label {
+                align, after, x, y, ..
+            } => {
+                assert_eq!(*align, Some("left".to_string()));
+                assert_eq!(*after, Some("prompt".to_string()));
+                assert_eq!(*x, Some(0.36));
+                assert_eq!(*y, Some(0.62));
+            }
+            other => panic!("expected Label, got {other:?}"),
+        }
+        let d2 = parse(&emit(&d1));
+        assert_eq!(d1, d2, "label align/after/x/y round-trip should be stable");
+    }
+
+    // タイトル サイズ= / x= / y= を保持し round-trip 安定。英語 size= も等価。
+    #[test]
+    fn title_size_xy_roundtrip() {
+        use crate::emitter::emit;
+        let input = label_doc("[タイトル: gitpp, 色=#1a4a7a, サイズ=56, x=0.5, y=0.4]");
+        let d1 = parse(&input);
+        match &d1.chapters[0].scenes[0].events[0] {
+            Event::TitleShow { size, x, y, .. } => {
+                assert_eq!(*size, Some(56));
+                assert_eq!(*x, Some(0.5));
+                assert_eq!(*y, Some(0.4));
+            }
+            other => panic!("expected TitleShow, got {other:?}"),
+        }
+        let d2 = parse(&emit(&d1));
+        assert_eq!(d1, d2, "title size/x/y round-trip should be stable");
+    }
+
+    // 画像 x= / y= を保持し round-trip 安定。
+    #[test]
+    fn image_xy_roundtrip() {
+        use crate::emitter::emit;
+        let input = label_doc("[画像: avatar.png, 位置=上, 円形, サイズ=160, x=0.5, y=0.2]");
+        let d1 = parse(&input);
+        match &d1.chapters[0].scenes[0].events[0] {
+            Event::Image { x, y, .. } => {
+                assert_eq!(*x, Some(0.5));
+                assert_eq!(*y, Some(0.2));
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+        let d2 = parse(&emit(&d1));
+        assert_eq!(d1, d2, "image x/y round-trip should be stable");
+    }
+
+    // ED の 2 色インストール行が組める結合: プロンプト（灰・静止・左揃え・厳密配置）＋
+    // コマンド（青・後ろ=prompt で隣接・自動左揃え）＋[文字演出: cmd, 効果=タイプ, カーソル=on]。
+    // プロンプト記号は `"$ "` とクオートで囲み、末尾スペースを保持する (#275)。これが無いと
+    // text が `$` に trim され、後続コマンドが `$` に密着して `$cargo` になる（機能の唯一の目的を損なう）。
+    #[test]
+    fn ed_two_color_install_line_parses() {
+        let body = "[ラベル: \"$ \", id=prompt, 色=#7a9abf, 揃え=左, x=0.36, y=0.62]\n[ラベル: cargo install orber, id=cmd, 色=#2b6cb0, 後ろ=prompt]\n[文字演出: cmd, 効果=タイプ, カーソル=on]";
+        let doc = parse(&label_doc(body));
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3, "prompt + command + text-effect");
+        match &events[0] {
+            Event::Label {
+                text, align, x, y, ..
+            } => {
+                // クオートで囲んだので末尾スペースが残る（trim されない）。
+                assert_eq!(text, "$ ");
+                assert_eq!(*align, Some("left".to_string()));
+                assert_eq!(*x, Some(0.36));
+                assert_eq!(*y, Some(0.62));
+            }
+            other => panic!("expected prompt Label, got {other:?}"),
+        }
+        match &events[1] {
+            Event::Label { text, after, .. } => {
+                assert_eq!(text, "cargo install orber");
+                assert_eq!(*after, Some("prompt".to_string()));
+            }
+            other => panic!("expected command Label, got {other:?}"),
+        }
+        assert!(
+            matches!(&events[2], Event::TextEffect { .. }),
+            "third event should be a TextEffect (タイプ)"
+        );
+    }
+
+    // ラベル text のダブルクオート対応 (#275): `"$ "` の前後スペースを保持し、round-trip でも
+    // 失われない（emit は前後空白のある text を `"..."` で囲み直す）。クオート無し text は trim される。
+    #[test]
+    fn label_quoted_text_preserves_surrounding_spaces() {
+        use crate::emitter::emit;
+        // クオート内は trim しない。末尾スペース保持。
+        let d1 = parse(&label_doc("[ラベル: \"$ \", id=prompt]"));
+        match &d1.chapters[0].scenes[0].events[0] {
+            Event::Label { text, .. } => assert_eq!(text, "$ "),
+            other => panic!("expected Label, got {other:?}"),
+        }
+        // emit → 再 parse で前後スペースが保たれる（round-trip 安定）。
+        let emitted = emit(&d1);
+        assert!(
+            emitted.contains("[ラベル: \"$ \""),
+            "emitted should re-quote space-bearing text, got: {emitted}"
+        );
+        let d2 = parse(&emitted);
+        assert_eq!(d1, d2, "quoted-text label round-trip should be stable");
+
+        // クオート無しの通常 text は従来どおり trim される（前後スペースは保持しない）。
+        let d3 = parse(&label_doc("[ラベル:  hi ]"));
+        match &d3.chapters[0].scenes[0].events[0] {
+            Event::Label { text, .. } => assert_eq!(text, "hi"),
+            other => panic!("expected Label, got {other:?}"),
+        }
+        // 前後空白の無い通常 text はクオート無しで emit され round-trip 安定。
+        let emitted3 = emit(&d3);
+        assert!(
+            emitted3.contains("[ラベル: hi"),
+            "plain text emits without quotes, got: {emitted3}"
+        );
+        assert!(
+            !emitted3.contains("\"hi\""),
+            "plain text must not be quoted, got: {emitted3}"
+        );
+        let d4 = parse(&emitted3);
+        assert_eq!(d3, d4, "plain-text label round-trip should be stable");
     }
 }

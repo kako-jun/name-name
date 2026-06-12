@@ -12,6 +12,7 @@ import { TimeController, defaultTimeController } from './TimeController'
 import {
   computeGlyphTransform,
   cursorVisible,
+  glyphAnchorOffset,
   isRevealEffect,
   layoutGlyphCenters,
   resolveCursor,
@@ -30,7 +31,7 @@ import {
   type UnderlineParams,
 } from './underline'
 // 色パーサ・2D 位置・URL 解決は novelLayout.ts（色/幾何の純関数置き場）に集約 (#273 / #274)。
-import { parseColorToNumber, resolveLayoutPosition, resolveAssetUrl } from './novelLayout'
+import { parseColorToNumber, resolvePositionWithOverride, resolveAssetUrl } from './novelLayout'
 import { startTypewriter, tickTypewriter, type TypewriterState } from './typewriter'
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
@@ -92,6 +93,26 @@ export function normalizePosition(position: string): string {
   return POSITION_ALIASES_JA[position] ?? POSITION_ALIASES_EN[position] ?? position
 }
 
+/**
+ * ラベルの `揃え` / `align`（正規化済み left/center/right）を Pixi の anchor.x に写す (#275)。
+ *
+ * 左=0 / 中央=0.5 / 右=1。parser が日本語/英語を `left`/`center`/`right` に正規化済みなので
+ * ここではその 3 値だけを見る。未指定・未知は中央 (0.5) にフォールバック（既定 = 現状維持）。
+ * テストが期待値を直書きして陳腐化しないよう export する。
+ */
+export function alignToAnchorX(align: string | undefined): number {
+  switch (align) {
+    case 'left':
+      return 0
+    case 'right':
+      return 1
+    case 'center':
+      return 0.5
+    default:
+      return 0.5
+  }
+}
+
 /** 足元 Y 座標の比率（`characterY = screenHeight * CHARACTER_Y_RATIO`）。
  *  以前は 380/450 ≒ 0.844 (DialogBox の上端あたり) だったが、
  *  枠なし・教育動画モードでは立ち絵の下端を画面下端まで下げたほうが座りが良い。
@@ -119,6 +140,10 @@ interface CharacterState {
    *  グリフ演出 (爆発) のグリフ fill とカーソル fallback がこの色を使う。
    *  未指定（タイトル以外のキャラ含む）は undefined → 各所で TITLE_FILL（白）にフォールバック。 */
   titleColor?: number
+  /** 解決済みのタイトル文字サイズ (px) (#275)。showTitle が `サイズ=` 指定から解決して保持する。
+   *  グリフ演出 (爆発) のグリフ fontSize とカーソル高さがこの値を使う。
+   *  未指定（タイトル以外のキャラ含む）は undefined → 各所で TITLE_FONT_SIZE（64）にフォールバック。 */
+  titleFontSize?: number
   /** 2コマ自動切替 (expression が `*-a` なら `*-b` と 1 秒ごとに交互)。
    *  remove() / clear() で interval を必ずクリアする。TimeController 経由なので number。 */
   idleIntervalId?: number
@@ -130,6 +155,10 @@ interface CharacterState {
   renderOnly?: boolean
   /** 円形マスク用 Graphics (#274)。`[画像: 円形]` のとき sprite.mask に設定する。退場で破棄する。 */
   maskGraphics?: Graphics
+  /** ラベルの水平 anchor (#275)。左=0 / 中央=0.5 / 右=1。label.anchor.x と一致させて保持する。
+   *  グリフ演出 (buildTextEffect) のグリフ群オフセット (glyphAnchorOffset) とカーソル位置
+   *  (positionCursor) が anchor を尊重するために参照する。未設定（立ち絵等）は 0.5 扱い。 */
+  anchorX?: number
 }
 
 interface FadeAnimation {
@@ -462,11 +491,22 @@ export class CharacterLayer extends Container {
    * 既に Title があれば text を差し替える。空文字なら即時退場。
    * `[アニメ target=Title]` で普通の立ち絵と同じ規則で動かせる。
    */
-  showTitle(text: string, fontFamily: string, position?: string, color?: string): void {
+  showTitle(
+    text: string,
+    fontFamily: string,
+    position?: string,
+    color?: string,
+    // 文字サイズ・位置 override (#275)。size 未指定は既定 64。x/y は position トークンより優先。
+    opts?: { size?: number; x?: number; y?: number }
+  ): void {
     const NAME = 'Title'
     // タイトル文字色を解決する (#273)。未指定・不正値は白 (TITLE_FILL) にフォールバック。
     // この色を label・グリフ演出 (爆発)・カーソルの全てで使い、紺タイトルを一貫させる。
     const fill = parseColorToNumber(color, CharacterLayer.TITLE_FILL)
+    // 文字サイズ (#275)。未指定は従来どおり既定 64。グリフ演出のグリフも同 size を使う。
+    const fontSize = opts?.size ?? CharacterLayer.TITLE_FONT_SIZE
+    // x/y 数値 override があるか（軸いずれかが有効値なら override 経路で位置決定する）(#275)。
+    const hasPosOverride = opts?.x !== undefined || opts?.y !== undefined
     const existing = this.characters.get(NAME)
     if (text.length === 0) {
       if (existing) this.remove(NAME, { instant: true })
@@ -480,13 +520,28 @@ export class CharacterLayer extends Container {
       this.clearUnderline(existing)
       // テキスト差し替え時は色も更新する（#273）。後続のグリフ演出・カーソルに波及させる。
       existing.titleColor = fill
+      // フォントサイズも反映する (#275)。後続のグリフ演出・カーソル高さに波及する。
+      existing.titleFontSize = fontSize
       if (existing.label && !existing.label.destroyed) {
         existing.label.text = text
-        existing.label.style = new TextStyle({ fontFamily, fontSize: 64, fill })
+        existing.label.style = new TextStyle({ fontFamily, fontSize, fill })
         existing.label.visible = true
       }
-      // position が指定されていれば再配置する (再度別 position から登場させる用途)
-      if (position) {
+      // x/y override 指定時は ratio 解決で再配置する (#275)。トークンのみの再配置は従来 positionX 経路。
+      if (hasPosOverride) {
+        const { xRatio, yRatio } = resolvePositionWithOverride(position, opts?.x, opts?.y)
+        const newX = this.screenWidth * xRatio
+        const newY = this.screenHeight * yRatio
+        existing.sprite.x = newX
+        existing.sprite.y = newY
+        if (existing.label && !existing.label.destroyed) {
+          existing.label.x = newX
+          existing.label.y = newY
+        }
+        existing.position = position ? normalizePosition(position) : existing.position
+        existing.animation = null
+      } else if (position) {
+        // position が指定されていれば再配置する (再度別 position から登場させる用途)
         const normalized = normalizePosition(position)
         const newX = this.positionX[normalized] ?? this.screenWidth * 0.5
         existing.sprite.x = newX
@@ -501,16 +556,22 @@ export class CharacterLayer extends Container {
     }
     // sprite は不可視 (no texture) のアンカー。CharacterState を保つために置く。
     const normalizedPosition = position ? normalizePosition(position) : 'center'
-    const initialX = this.positionX[normalizedPosition] ?? this.screenWidth * 0.5
+    // 位置はトークン（縦＋横の 2D）＋数値 x/y override を一括で解決する (#274/#275)。
+    // ラベル・画像（showLabel/showImage）と同じ resolvePositionWithOverride に揃え、タイトルにも
+    // 縦位置トークン（`位置=中下` 等＝opening.html の縦スタック内のツール名）を効かせる。
+    // 左/中央/右の xRatio は立ち絵 positionX（CHARACTER_X_RATIO 0.1875/0.5/0.8125）と同値なので横位置は無回帰。
+    const { xRatio, yRatio } = resolvePositionWithOverride(position, opts?.x, opts?.y)
+    const initialX = this.screenWidth * xRatio
+    const initialY = this.screenHeight * yRatio
     const sprite = new Sprite()
     sprite.x = initialX
-    sprite.y = this.screenHeight * 0.5
+    sprite.y = initialY
     sprite.alpha = 1
     this.addChild(sprite)
 
     const label = new Text({
       text,
-      style: new TextStyle({ fontFamily, fontSize: 64, fill }),
+      style: new TextStyle({ fontFamily, fontSize, fill }),
     })
     label.anchor.set(0.5, 0.5)
     label.x = sprite.x
@@ -521,7 +582,7 @@ export class CharacterLayer extends Container {
     void ensureFontLoaded(fontFamily)
       .then(() => {
         if (label.destroyed) return
-        label.style = new TextStyle({ fontFamily, fontSize: 64, fill })
+        label.style = new TextStyle({ fontFamily, fontSize, fill })
       })
       .catch(() => {})
 
@@ -537,6 +598,8 @@ export class CharacterLayer extends Container {
       underline: null,
       // 解決済みタイトル色 (#273)。グリフ演出・カーソルへ波及させるため state に保持する。
       titleColor: fill,
+      // 解決済みタイトル文字サイズ (#275)。グリフ演出・カーソル高さへ波及させるため state に保持する。
+      titleFontSize: fontSize,
       // 演出表示 (#274)。snapshot に漏らさない（getCharacterStates が除外）。
       renderOnly: true,
     })
@@ -559,14 +622,36 @@ export class CharacterLayer extends Container {
     size?: number
     fontFamily: string
     instant?: boolean
+    /** テキスト揃え (#275)。`left`/`center`/`right`。未指定は中央。 */
+    align?: string
+    /** 隣接配置 (#275)。参照ラベル id の右端にこの左端を接続。指定時は自動で左揃え。 */
+    after?: string
+    /** 横位置 override (0..1) (#275)。position トークンより優先。 */
+    x?: number
+    /** 縦位置 override (0..1) (#275)。 */
+    y?: number
   }): void {
     const NAME = opts.id ?? 'Label'
     const fill = parseColorToNumber(opts.color, 0xffffff)
     const fontSize = opts.size ?? 24
-    const { xRatio, yRatio } = resolveLayoutPosition(opts.position)
-    const x = this.screenWidth * xRatio
-    const y = this.screenHeight * yRatio
+    // `後ろ=` 指定ラベルは右へ伸びる前提なので自動で左揃え（anchor.x=0）にする (#275)。
+    // それ以外は `揃え=` 由来の anchor を使う（未指定は中央 0.5 = 現状維持）。
+    const anchorX = opts.after !== undefined ? 0 : alignToAnchorX(opts.align)
     const instant = opts.instant === true
+
+    // 位置: x/y 数値 override が position トークンより優先 (#275)。
+    const { xRatio, yRatio } = resolvePositionWithOverride(opts.position, opts.x, opts.y)
+    let x = this.screenWidth * xRatio
+    let y = this.screenHeight * yRatio
+    // 隣接配置 (#275): 参照ラベルがあればその右端をこのラベルの左端に合わせ、y も揃える。
+    // 参照が無い/まだ表示前ならフォールバック（上で算出した通常配置のまま）。
+    if (opts.after !== undefined) {
+      const adj = this.computeAfterAnchor(opts.after)
+      if (adj) {
+        x = adj.x
+        y = adj.y
+      }
+    }
 
     const existing = this.characters.get(NAME)
     if (opts.text.length === 0) {
@@ -579,6 +664,7 @@ export class CharacterLayer extends Container {
       this.clearUnderline(existing)
       existing.sprite.x = x
       existing.sprite.y = y
+      existing.anchorX = anchorX
       if (existing.label && !existing.label.destroyed) {
         existing.label.text = opts.text
         existing.label.style = new TextStyle({
@@ -586,6 +672,7 @@ export class CharacterLayer extends Container {
           fontSize,
           fill,
         })
+        existing.label.anchor.set(anchorX, 0.5)
         existing.label.x = x
         existing.label.y = y
         existing.label.visible = true
@@ -593,6 +680,9 @@ export class CharacterLayer extends Container {
       // showImage 再表示パスと対称に position も更新する（render-only で復元非使用だが対称性のため）。
       existing.position = opts.position ?? ''
       existing.titleColor = fill
+      // ラベルのフォントサイズをグリフ演出・カーソルに波及させる (#275)。
+      // 立ち絵 Title (64) と違いラベルは小さめ（既定 24）なので、演出グリフも同 size に揃える。
+      existing.titleFontSize = fontSize
       return
     }
 
@@ -607,7 +697,8 @@ export class CharacterLayer extends Container {
       text: opts.text,
       style: new TextStyle({ fontFamily: opts.fontFamily, fontSize, fill }),
     })
-    label.anchor.set(0.5, 0.5)
+    // 揃えに応じた anchor.x（左=0/中央=0.5/右=1）。静止ラベルはこれだけで左/右に寄る。
+    label.anchor.set(anchorX, 0.5)
     label.x = x
     label.y = y
     label.alpha = instant ? 1 : 0
@@ -639,8 +730,12 @@ export class CharacterLayer extends Container {
       underline: null,
       // 文字色をグリフ演出・カーソルに波及させる（Title と同じ役割）。
       titleColor: fill,
+      // ラベルのフォントサイズをグリフ演出・カーソルに波及させる (#275)。既定 24。
+      titleFontSize: fontSize,
       // 演出表示 (#274)。snapshot に漏らさない。
       renderOnly: true,
+      // 揃え (#275)。グリフ演出オフセット・カーソル位置が参照する。
+      anchorX,
     }
     this.characters.set(NAME, state)
     if (state.fadeAnimation) this.ensureTicker()
@@ -663,9 +758,14 @@ export class CharacterLayer extends Container {
     size?: number
     assetBaseUrl: string
     instant?: boolean
+    /** 横位置 override (0..1) (#275)。position トークンより優先。 */
+    x?: number
+    /** 縦位置 override (0..1) (#275)。 */
+    y?: number
   }): void {
     const NAME = opts.id ?? 'Image'
-    const { xRatio, yRatio } = resolveLayoutPosition(opts.position)
+    // 位置: x/y 数値 override が position トークンより優先 (#275)。
+    const { xRatio, yRatio } = resolvePositionWithOverride(opts.position, opts.x, opts.y)
     const x = this.screenWidth * xRatio
     const y = this.screenHeight * yRatio
     const instant = opts.instant === true
@@ -843,6 +943,28 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 隣接配置 (#275) の接続点を計算する。`後ろ=<refId>` のラベルが参照ラベルの右端に
+   * 左端を合わせるための (x, y) を返す。参照が存在しない / label が無い場合は null
+   * （呼び出し側は通常配置にフォールバック＝落ちない）。
+   *
+   * 参照ラベルの右端 x = `参照 sprite.x + (1 - refAnchorX) * refWidth`:
+   *  - 参照が左揃え（anchorX=0）なら sprite.x が左端なので 右端 = x + width。
+   *  - 参照が中央（anchorX=0.5）なら 右端 = x + width/2。
+   *  - 参照が右揃え（anchorX=1）なら sprite.x が右端なので 右端 = x。
+   * 幅は参照ラベルの実 measure 幅（グリフ演出中なら見た目はグリフ群だが、幅はソース text の
+   * measure 幅で近似する。measure 不能環境では measureGlyphWidth がフォントサイズ近似に倒す）。
+   * y は同 y にする（Issue: プロンプトとコマンドは同じ行）。
+   */
+  private computeAfterAnchor(refId: string): { x: number; y: number } | null {
+    const ref = this.characters.get(refId)
+    if (!ref || !ref.label || ref.label.destroyed) return null
+    const refWidth = this.measureGlyphWidth(ref.label)
+    const refAnchorX = ref.anchorX ?? 0.5
+    const rightEdge = ref.sprite.x + (1 - refAnchorX) * refWidth
+    return { x: rightEdge, y: ref.sprite.y }
+  }
+
+  /**
    * グリフ単位の文字演出を適用する (#268)。
    *
    * 対象（CharacterLayer 上の identifier。例 "Title"）の label をグリフ Text 列に
@@ -916,6 +1038,9 @@ export class CharacterLayer extends Container {
     // グリフの色は解決済みタイトル色 (#273) を使う。未設定なら白 (TITLE_FILL) にフォールバック。
     // OP の "orber" は爆発するグリフ自体が紺でなければならないため、ここで波及させる。
     const glyphFill = state.titleColor ?? CharacterLayer.TITLE_FILL
+    // グリフのサイズは解決済みタイトル文字サイズ (#275) を使う。未設定なら既定 64。
+    // タイトル `サイズ=` を演出グリフにも波及させ、本体 label とグリフ列の大きさを一致させる。
+    const glyphFontSize = state.titleFontSize ?? CharacterLayer.TITLE_FONT_SIZE
     const chars = Array.from(sourceText) // サロゲートペア対応で code point 単位に分解
     const texts: Text[] = []
     const widths: number[] = []
@@ -924,7 +1049,7 @@ export class CharacterLayer extends Container {
         text: ch,
         style: new TextStyle({
           fontFamily,
-          fontSize: CharacterLayer.TITLE_FONT_SIZE,
+          fontSize: glyphFontSize,
           fill: glyphFill,
         }),
       })
@@ -936,6 +1061,13 @@ export class CharacterLayer extends Container {
     // 各グリフ中心 x は純関数で算出（行全体を container 原点で中央寄せ）。
     // 整列位置 (restX/restY) を明示保持して、補間オフセットは毎フレーム足し込む。
     const centers = layoutGlyphCenters(widths)
+    // 揃え (#275): 中央寄せのグリフ群を anchor.x に応じて平行移動する。左揃え（anchorX=0）なら
+    // 行の左端を sprite 原点へ寄せ、グリフ列が左から右へ並ぶ（ED の install-line のタイプ）。
+    // container.x にオフセットを置くことで、子であるカーソル (positionCursor) も自動で追従する。
+    const anchorX = state.anchorX ?? 0.5
+    let totalWidth = 0
+    for (const w of widths) totalWidth += w
+    container.x = glyphAnchorOffset(totalWidth, anchorX)
     const glyphs = texts.map((t, i) => {
       t.x = centers[i]
       t.y = 0
@@ -951,7 +1083,7 @@ export class CharacterLayer extends Container {
       const msPerChar = resolveTypewriterMsPerChar(params)
       // #271: 点滅カーソル。reveal かつ cursor=on のときだけ縦矩形 Graphics を作る。
       // #273: カーソル色未指定時はグリフと同じ解決済みタイトル色にフォールバックする。
-      const cursor = this.buildCursor(container, params, glyphFill)
+      const cursor = this.buildCursor(container, params, glyphFill, glyphFontSize)
       effect = {
         container,
         glyphs,
@@ -1000,11 +1132,14 @@ export class CharacterLayer extends Container {
    *
    * @param titleFallback `カーソル色` 未指定時に使う解決済みタイトル色 (#273)。
    *   タイトルが紺なら紺カーソルになる（OP/ED の一貫性）。
+   * @param fontSize グリフと同じ解決済み文字サイズ (#275)。カーソルの太さ・高さをこれに比例させ、
+   *   タイトル `サイズ=` 指定時もカーソルがグリフ高さに揃う。未指定は既定 64。
    */
   private buildCursor(
     container: Container,
     params: TextEffectParams,
-    titleFallback: number
+    titleFallback: number,
+    fontSize: number = CharacterLayer.TITLE_FONT_SIZE
   ): CursorState | null {
     const resolved: ResolvedCursor = resolveCursor(params)
     if (!resolved.enabled) return null
@@ -1013,8 +1148,8 @@ export class CharacterLayer extends Container {
         ? parseColorToNumber(resolved.color, titleFallback)
         : titleFallback
     // 縦棒の太さ・高さはグリフサイズに比例。closing.html は border-right 2px 相当。
-    const width = Math.max(2, Math.round(CharacterLayer.TITLE_FONT_SIZE * 0.04))
-    const height = CharacterLayer.TITLE_FONT_SIZE
+    const width = Math.max(2, Math.round(fontSize * 0.04))
+    const height = fontSize
     const gfx = new Graphics()
     // 左端基準・縦中央基準で矩形を描く（rect の中心が原点に来るよう左上を負方向に置く）。
     gfx.rect(0, -height / 2, width, height).fill(colorNum)

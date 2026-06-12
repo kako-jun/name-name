@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Assets } from 'pixi.js'
-import { CHARACTER_Y_RATIO, CharacterLayer, normalizePosition } from './CharacterLayer'
+import {
+  CHARACTER_Y_RATIO,
+  CharacterLayer,
+  normalizePosition,
+  alignToAnchorX,
+} from './CharacterLayer'
 import { CURSOR_DEFAULTS } from './textEffect'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
 import { saveSlotToGameState } from './novelLayout'
@@ -824,6 +829,290 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
     expect(chars(layer).characters.get('l')!.renderOnly).toBe(true)
     expect(chars(layer).characters.get('i')!.renderOnly).toBe(true)
     expect(chars(layer).characters.get('Title')!.renderOnly).toBe(true)
+  })
+})
+
+// =====================================================================================
+// #275: 揃え (align) / 隣接 (後ろ=after) / 位置 override (x/y) / タイトル サイズ。
+//   ED の 2 色インストール行（プロンプト灰 + コマンド青タイプ + カーソル）を組むための配線。
+//   観測は characters Map 直読み（anchorX / titleFontSize / label.anchor / textEffect.container.x）。
+// =====================================================================================
+describe('CharacterLayer alignToAnchorX (#275)', () => {
+  it('left=0 / center=0.5 / right=1。未指定・未知は中央 0.5', () => {
+    expect(alignToAnchorX('left')).toBe(0)
+    expect(alignToAnchorX('center')).toBe(0.5)
+    expect(alignToAnchorX('right')).toBe(1)
+    expect(alignToAnchorX(undefined)).toBe(0.5)
+    expect(alignToAnchorX('斜め')).toBe(0.5)
+  })
+})
+
+describe('CharacterLayer 揃え/隣接/位置 override (#275)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  interface LabelInternals {
+    characters: Map<
+      string,
+      {
+        sprite: { x: number; y: number }
+        label?: { anchor: { x: number; y: number }; text: string; style: { fontSize: number } }
+        anchorX?: number
+        titleFontSize?: number
+        textEffect: {
+          container: { x: number }
+          glyphs: { restX: number }[]
+          cursor: { gfx: { x: number; destroyed: boolean } } | null
+        } | null
+      }
+    >
+  }
+  function chars(layer: CharacterLayer): LabelInternals {
+    return layer as unknown as LabelInternals
+  }
+
+  // measureGlyphWidth は jsdom（canvas 未インストール）で TITLE_FONT_SIZE(64)*0.6 = 38.4 の
+  // 決定論 fallback を返す（#271 と同じ）。fontSize に依らず定数なので厳密値で縛れる。
+  const GLYPH_W = 64 * 0.6 // 38.4
+
+  it('揃え=左 で label.anchor.x=0、state.anchorX=0（静止ラベルが左に寄る）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'l', text: 'hi', fontFamily: 'sans-serif', align: 'left' })
+    const st = chars(layer).characters.get('l')!
+    expect(st.label!.anchor.x).toBe(0)
+    expect(st.anchorX).toBe(0)
+  })
+
+  it('揃え=右 で anchor.x=1、揃え未指定は中央 0.5（現状維持）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'r', text: 'hi', fontFamily: 'sans-serif', align: 'right' })
+    layer.showLabel({ id: 'c', text: 'hi', fontFamily: 'sans-serif' })
+    expect(chars(layer).characters.get('r')!.anchorX).toBe(1)
+    expect(chars(layer).characters.get('c')!.anchorX).toBe(0.5)
+  })
+
+  it('x/y override が position トークンより優先される（厳密配置）', () => {
+    const layer = new CharacterLayer(800, 450)
+    // position 中下 = (0.5, 0.64) だが x=0.36, y=0.62 で上書き。
+    layer.showLabel({
+      id: 'p',
+      text: '$',
+      fontFamily: 'sans-serif',
+      position: '中下',
+      x: 0.36,
+      y: 0.62,
+    })
+    const st = chars(layer).characters.get('p')!
+    expect(st.sprite.x).toBeCloseTo(800 * 0.36, 5)
+    expect(st.sprite.y).toBeCloseTo(450 * 0.62, 5)
+  })
+
+  it('範囲外 x はトークンにフォールバック（落ちない）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'p', text: '$', fontFamily: 'sans-serif', position: '中央', x: 1.5 })
+    const st = chars(layer).characters.get('p')!
+    // x=1.5 は無効 → トークン 中央(0.5)。
+    expect(st.sprite.x).toBeCloseTo(800 * 0.5, 5)
+  })
+
+  it('後ろ=参照 で自動左揃え＋参照ラベルの右端に左端を接続（同 y）', () => {
+    const layer = new CharacterLayer(800, 450)
+    // プロンプト（左揃え・厳密配置）。
+    layer.showLabel({
+      id: 'prompt',
+      text: '$ ',
+      fontFamily: 'sans-serif',
+      align: 'left',
+      x: 0.36,
+      y: 0.62,
+    })
+    const prompt = chars(layer).characters.get('prompt')!
+    // 参照ラベルの measure 幅（jsdom では measureGlyphWidth が fontSize*0.6 にフォールバック）。
+    // anchorX=0（左揃え）なので右端 = sprite.x + width。
+    // コマンド（後ろ=prompt）。
+    layer.showLabel({
+      id: 'cmd',
+      text: 'cargo install orber',
+      fontFamily: 'sans-serif',
+      color: '#2b6cb0',
+      after: 'prompt',
+    })
+    const cmd = chars(layer).characters.get('cmd')!
+    // 自動左揃え。
+    expect(cmd.anchorX).toBe(0)
+    // y は参照と同じ。
+    expect(cmd.sprite.y).toBeCloseTo(prompt.sprite.y, 5)
+    // x は参照の右端（prompt.sprite.x より右）。参照は左揃えなので右端 = x + width > x。
+    expect(cmd.sprite.x).toBeGreaterThan(prompt.sprite.x)
+  })
+
+  it('後ろ=存在しない参照 は通常配置にフォールバックする（落ちない）', () => {
+    const layer = new CharacterLayer(800, 450)
+    expect(() =>
+      layer.showLabel({
+        id: 'cmd',
+        text: 'x',
+        fontFamily: 'sans-serif',
+        after: 'nonexistent',
+      })
+    ).not.toThrow()
+    const st = chars(layer).characters.get('cmd')!
+    // 自動左揃えは after 指定だけで立つ（参照不在でも）。
+    expect(st.anchorX).toBe(0)
+  })
+
+  // #3: computeAfterAnchor の右端式 `x + (1-anchorX)*w` を参照の揃え別に厳密値で縛る。
+  //   measureGlyphWidth は jsdom で GLYPH_W(38.4) の定数 fallback なので右端を直接計算できる。
+  //   左揃え参照だけでなく中央・右揃え参照でも検証し、`(1-anchorX)` を `anchorX` に
+  //   書き間違えたら（左↔右が反転して）落ちる強さにする。
+  it.each([
+    ['left', 0, 1 - 0], // 左揃え参照: 右端 = sprite.x + 1.0*w
+    ['center', 0.5, 1 - 0.5], // 中央揃え参照: 右端 = sprite.x + 0.5*w
+    ['right', 1, 1 - 1], // 右揃え参照: 右端 = sprite.x（sprite.x が右端）
+  ] as const)(
+    '後ろ= の左端は参照(%s)の右端 sprite.x + (1-anchorX)*w に厳密一致する',
+    (align, refAnchorX, factor) => {
+      const layer = new CharacterLayer(800, 450)
+      layer.showLabel({ id: 'ref', text: '$ ', fontFamily: 'sans-serif', align, x: 0.4, y: 0.5 })
+      const ref = chars(layer).characters.get('ref')!
+      expect(ref.anchorX).toBe(refAnchorX)
+      layer.showLabel({ id: 'cmd', text: 'cargo', fontFamily: 'sans-serif', after: 'ref' })
+      const cmd = chars(layer).characters.get('cmd')!
+      // 右端 = ref.sprite.x + (1-anchorX)*GLYPH_W。緩い不等号でなく厳密値で縛る。
+      expect(cmd.sprite.x).toBeCloseTo(ref.sprite.x + factor * GLYPH_W, 5)
+      // y は参照と同じ行。
+      expect(cmd.sprite.y).toBeCloseTo(ref.sprite.y, 5)
+    }
+  )
+
+  it('左揃えラベルにタイプ演出を当てるとグリフ群が左へオフセットする（container.x>0）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'cmd', text: 'abc', fontFamily: 'sans-serif', align: 'left' })
+    await layer.applyTextEffect('cmd', { effect: 'Typewriter' })
+    const st = chars(layer).characters.get('cmd')!
+    expect(st.textEffect).not.toBeNull()
+    // 左揃え（anchorX=0）→ glyphAnchorOffset = +totalWidth/2 > 0。
+    // 'abc' は 3 グリフ・各 GLYPH_W → totalWidth=3*GLYPH_W → container.x=1.5*GLYPH_W。
+    expect(st.textEffect!.container.x).toBeCloseTo(1.5 * GLYPH_W, 5)
+  })
+
+  it('中央揃えラベル（既定）のタイプ演出は container.x=0（従来挙動）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'cmd', text: 'abc', fontFamily: 'sans-serif' })
+    await layer.applyTextEffect('cmd', { effect: 'Typewriter' })
+    const st = chars(layer).characters.get('cmd')!
+    expect(st.textEffect!.container.x).toBe(0)
+  })
+
+  // #2 本丸: 左揃えタイプのカーソル「頭位置」が中央揃えと異なる（左端オフセット後に乗る）。
+  //   cursor.gfx.x（container ローカル）はどちらも先頭グリフ左端で同値だが、container.x の
+  //   左端オフセットが効くため、container 適用後の頭位置（container.x + cursor.gfx.x）が
+  //   左揃えと中央揃えで異なる。#271 に倣い cursor.gfx を観測（jsdom で throw せず gfx に乗る）。
+  it('左揃えタイプのカーソル頭位置（container.x+gfx.x）は中央揃えと異なり、左端基準に乗る', async () => {
+    // 中央揃え（既定）。
+    const center = new CharacterLayer(800, 450)
+    center.showLabel({ id: 'cmd', text: 'abc', fontFamily: 'sans-serif' })
+    await center.applyTextEffect('cmd', { effect: 'Typewriter', cursor: true })
+    const cTe = chars(center).characters.get('cmd')!.textEffect!
+    expect(cTe.cursor).not.toBeNull()
+    // 開始直後（displayed=0）はカーソルが先頭グリフ左端。'abc' は 3 グリフ・各 GLYPH_W:
+    // 先頭中心 restX = -GLYPH_W、その左端 = restX - GLYPH_W/2 = -1.5*GLYPH_W（container ローカル）。
+    const cHead = cTe.container.x + cTe.cursor!.gfx.x
+    // 中央揃えは container.x=0 なので頭位置 = -1.5*GLYPH_W。
+    expect(cHead).toBeCloseTo(-1.5 * GLYPH_W, 5)
+
+    // 左揃え。
+    const left = new CharacterLayer(800, 450)
+    left.showLabel({ id: 'cmd', text: 'abc', fontFamily: 'sans-serif', align: 'left' })
+    await left.applyTextEffect('cmd', { effect: 'Typewriter', cursor: true })
+    const lTe = chars(left).characters.get('cmd')!.textEffect!
+    expect(lTe.cursor).not.toBeNull()
+    const lHead = lTe.container.x + lTe.cursor!.gfx.x
+    // 左揃えは container.x=+1.5*GLYPH_W シフト → 頭位置 = 1.5*GLYPH_W + (-1.5*GLYPH_W) = 0。
+    // ラベル左端（sprite 原点 0）に先頭グリフ左端がちょうど乗る（左から右へタイプする起点）。
+    expect(lHead).toBeCloseTo(0, 5)
+    // 左揃え ≠ 中央揃え（左端オフセットぶんだけ右へ寄る）。緩い不等号でなく差で縛る。
+    expect(lHead - cHead).toBeCloseTo(1.5 * GLYPH_W, 5)
+  })
+
+  it('showImage の x/y override が position トークンより優先される', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'av', path: 'a.png', position: '上', assetBaseUrl: '/a', x: 0.2, y: 0.8 })
+    const st = chars(layer).characters.get('av')!
+    expect(st.sprite.x).toBeCloseTo(800 * 0.2, 5)
+    expect(st.sprite.y).toBeCloseTo(450 * 0.8, 5)
+  })
+
+  it('showTitle サイズ= で label.fontSize と titleFontSize が反映される（既定 64）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('gitpp', 'sans-serif', undefined, '#1a4a7a', { size: 56 })
+    const st = chars(layer).characters.get('Title')!
+    expect(st.label!.style.fontSize).toBe(56)
+    expect(st.titleFontSize).toBe(56)
+    // 別タイトルで size 未指定なら既定 64。
+    const layer2 = new CharacterLayer(800, 450)
+    layer2.showTitle('orber', 'sans-serif')
+    expect(chars(layer2).characters.get('Title')!.titleFontSize).toBe(64)
+  })
+
+  it('showTitle x/y override で sprite/label が ratio 配置される（positionX スロット経路を上書き）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif', undefined, undefined, { x: 0.3, y: 0.4 })
+    const st = chars(layer).characters.get('Title')!
+    expect(st.sprite.x).toBeCloseTo(800 * 0.3, 5)
+    expect(st.sprite.y).toBeCloseTo(450 * 0.4, 5)
+    expect(st.label!.anchor.x).toBe(0.5)
+  })
+
+  // #274: タイトルも縦位置トークンを尊重する（label/image と同系統。opening.html の縦スタック内ツール名）。
+  it('showTitle が縦位置トークンを尊重する（中下=横中央・縦0.64、左下=結合、横のみ・無指定は縦中央で無回帰）', () => {
+    // 縦のみ `中下` → 横は中央(0.5)・縦は 0.64。
+    const lv = new CharacterLayer(800, 450)
+    lv.showTitle('orber', 'sans-serif', '中下')
+    const sv = chars(lv).characters.get('Title')!
+    expect(sv.sprite.x).toBeCloseTo(800 * 0.5, 5)
+    expect(sv.sprite.y).toBeCloseTo(450 * 0.64, 5)
+    // 結合 `左下` → 横 0.1875・縦 0.84。
+    const lc = new CharacterLayer(800, 450)
+    lc.showTitle('orber', 'sans-serif', '左下')
+    const sc = chars(lc).characters.get('Title')!
+    expect(sc.sprite.x).toBeCloseTo(800 * 0.1875, 5)
+    expect(sc.sprite.y).toBeCloseTo(450 * 0.84, 5)
+    // 横のみ `左` → 縦は中央 0.5 のまま（従来挙動・無回帰）。x は positionX スロットと同値。
+    const lh = new CharacterLayer(800, 450)
+    lh.showTitle('orber', 'sans-serif', '左')
+    const sh = chars(lh).characters.get('Title')!
+    expect(sh.sprite.x).toBeCloseTo(800 * 0.1875, 5)
+    expect(sh.sprite.y).toBeCloseTo(450 * 0.5, 5)
+    // 無指定 → 画面中央（0.5, 0.5）で従来どおり。
+    const ld = new CharacterLayer(800, 450)
+    ld.showTitle('orber', 'sans-serif')
+    const sd = chars(ld).characters.get('Title')!
+    expect(sd.sprite.x).toBeCloseTo(800 * 0.5, 5)
+    expect(sd.sprite.y).toBeCloseTo(450 * 0.5, 5)
+  })
+
+  it('タイトル サイズ= がグリフ演出グリフの fontSize に波及する', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('ab', 'sans-serif', undefined, undefined, { size: 32 })
+    await layer.applyTextEffect('Title', { effect: 'Explode' })
+    const internal = layer as unknown as {
+      characters: Map<
+        string,
+        { textEffect: { glyphs: { glyph: { style: { fontSize: number } } }[] } | null }
+      >
+    }
+    const te = internal.characters.get('Title')!.textEffect!
+    expect(te.glyphs.length).toBeGreaterThan(0)
+    for (const g of te.glyphs) {
+      expect(g.glyph.style.fontSize).toBe(32)
+    }
   })
 })
 

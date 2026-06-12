@@ -216,6 +216,36 @@ export function resolveLayoutPosition(position: string | undefined): LayoutPosit
   return { xRatio: xRatio ?? 0.5, yRatio: yRatio ?? 0.5 }
 }
 
+/**
+ * 2D 位置をトークン解釈し、数値 `x`/`y`（0..1 の比率）が指定されていれば**そちらを優先**する純関数 (#275)。
+ *
+ * `resolveLayoutPosition(position)` でトークン由来の比率を出してから、`x`/`y` の数値 override を
+ * 軸ごとに被せる。テンプレ（closing.html）の install-line のように `位置=中下` の刻みでは届かない
+ * 厳密配置（`x=0.36, y=0.62`）を必要とする要素のために用意する。
+ *
+ * override の採用条件（軸ごとに独立判定）:
+ *  - `undefined` → トークン由来の比率を使う（override なし）。
+ *  - 有限数 かつ 0..1（両端含む）→ その値を使う。
+ *  - それ以外（NaN / Infinity / 範囲外）→ 無視してトークン由来の比率に**フォールバック**する。
+ *
+ * 軸独立なので「`x` だけ override・`y` はトークン」も成立する。Math.random など非決定要素は使わない。
+ */
+export function resolvePositionWithOverride(
+  position: string | undefined,
+  x: number | undefined,
+  y: number | undefined
+): LayoutPosition {
+  const base = resolveLayoutPosition(position)
+  const xRatio = isValidRatio(x) ? x : base.xRatio
+  const yRatio = isValidRatio(y) ? y : base.yRatio
+  return { xRatio, yRatio }
+}
+
+/** override 比率が採用条件（有限数・0..1）を満たすかの述語 (#275)。型ガードで number に絞る。 */
+function isValidRatio(v: number | undefined): v is number {
+  return v !== undefined && Number.isFinite(v) && v >= 0 && v <= 1
+}
+
 /** アセット URL の種別。`images/` か `sounds/` のサブディレクトリに対応する。 */
 export type AssetKind = 'images' | 'sounds'
 
