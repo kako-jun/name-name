@@ -117,6 +117,105 @@ export function parseColorToNumber(color: string | undefined, fallback: number):
   return n
 }
 
+/** 2D レイアウト位置の比率（screenWidth/Height に掛ける）。 */
+export interface LayoutPosition {
+  /** 横位置の比率（sprite 中心 x = screenWidth * xRatio）。 */
+  xRatio: number
+  /** 縦位置の比率（sprite 中心 y = screenHeight * yRatio）。 */
+  yRatio: number
+}
+
+/**
+ * 縦トークンの yRatio テーブル (#274)。
+ * `上`=0.16 / `中上`=0.34 / `中`=0.5 / `中下`=0.64 / `下`=0.84。
+ * opening.html の avatar→肩書→名前→タイトルの縦スタックを再現できる刻み。
+ */
+const VERTICAL_RATIO: Record<string, number> = {
+  上: 0.16,
+  中上: 0.34,
+  中: 0.5,
+  中下: 0.64,
+  下: 0.84,
+  // 英語 alias（最小限）。
+  top: 0.16,
+  upper: 0.34,
+  center: 0.5,
+  middle: 0.5,
+  lower: 0.64,
+  bottom: 0.84,
+}
+
+/**
+ * 横トークンの xRatio テーブル (#274)。
+ * `左`=0.1875 / `中央`=0.5 / `右`=0.8125（CHARACTER_X_RATIO と同値で立ち絵と揃える）。
+ */
+const HORIZONTAL_RATIO: Record<string, number> = {
+  左: 0.1875,
+  中央: 0.5,
+  右: 0.8125,
+  left: 0.1875,
+  center: 0.5,
+  right: 0.8125,
+}
+
+/**
+ * `[ラベル]` / `[画像]` / `[タイトル]` 用の 2D 位置を比率で解決する純粋関数 (#274)。
+ *
+ * label/image/title は立ち絵（横位置のみの `normalizePosition`）と違い、opening.html の
+ * 縦スタックを再現するため縦位置を効かせたい。縦トークン（上/中上/中/中下/下）と横トークン
+ * （左/中央/右）を結合して解釈する:
+ *   - `中上` → (x=0.5, y=0.34)
+ *   - `左下` → (x=0.1875, y=0.84)
+ *   - `中`   → (0.5, 0.5)
+ *   - `上`   → (0.5, 0.16)  // 縦のみ指定は横は中央
+ *   - `左`   → (0.1875, 0.5) // 横のみ指定は縦は中央
+ * 結合は「縦トークンが先・横トークンが後」でも「横が先」でも両対応する（部分文字列で判定）。
+ * 英語 alias（top/upper/center/middle/lower/bottom/left/right）も最小限受ける。
+ * 未知/空 → center (0.5, 0.5)。
+ *
+ * 既存の `normalizePosition`（横のみ・立ち絵用）は壊さず、これは別関数として併存する。
+ * Math.random など非決定要素は使わない（決定論的写像）。
+ */
+export function resolveLayoutPosition(position: string | undefined): LayoutPosition {
+  const DEFAULT: LayoutPosition = { xRatio: 0.5, yRatio: 0.5 }
+  if (!position) return DEFAULT
+  const token = position.trim()
+  if (token.length === 0) return DEFAULT
+
+  // 1) 完全一致を先に試す（`中` を「中上」等の部分一致より優先するため）。
+  if (token in VERTICAL_RATIO && token in HORIZONTAL_RATIO) {
+    // 同一トークンが両表に存在することは無い（語彙が排他）。保険として縦優先。
+    return { xRatio: 0.5, yRatio: VERTICAL_RATIO[token] }
+  }
+  if (token in VERTICAL_RATIO) {
+    return { xRatio: 0.5, yRatio: VERTICAL_RATIO[token] }
+  }
+  if (token in HORIZONTAL_RATIO) {
+    return { xRatio: HORIZONTAL_RATIO[token], yRatio: 0.5 }
+  }
+
+  // 2) 結合トークン（`中上` / `左下` / `右中` 等）を部分文字列で分解する。
+  //    縦・横を独立に拾い、片方しか見つからなければ他方は中央にフォールバックする。
+  let yRatio: number | undefined
+  let xRatio: number | undefined
+  // 縦トークン（日本語）を長い順（中上/中下 を 中 より先）に探す。
+  for (const key of ['中上', '中下', '上', '下', '中']) {
+    if (token.includes(key)) {
+      yRatio = VERTICAL_RATIO[key]
+      break
+    }
+  }
+  // 横トークン（日本語）。`中央` を `中` と衝突させないため `中央` を先に探す。
+  for (const key of ['左', '中央', '右']) {
+    if (token.includes(key)) {
+      xRatio = HORIZONTAL_RATIO[key]
+      break
+    }
+  }
+  if (yRatio === undefined && xRatio === undefined) return DEFAULT
+  return { xRatio: xRatio ?? 0.5, yRatio: yRatio ?? 0.5 }
+}
+
 /** アセット URL の種別。`images/` か `sounds/` のサブディレクトリに対応する。 */
 export type AssetKind = 'images' | 'sounds'
 

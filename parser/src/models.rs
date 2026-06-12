@@ -576,6 +576,59 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         color: Option<String>,
     },
+    /// 単独の色付きラベル (#274)。orber OP タイトルカードの肩書 / 名前のような、
+    /// 立ち絵に紐付かない単独テキストを任意の 2D 位置に出す。
+    /// `[ラベル: kako-jun, 色=#2b6cb0, 位置=中, サイズ=22, id=name]`。
+    /// `[タイトル]`（TitleShow）と同様、CharacterLayer に id（既定 "Label"）名で登録される
+    /// ため `[文字演出: id, …]` / `[下線: id, …]` / `[アニメ: target=id, …]` の対象になれる。
+    /// 演出表示（render-only）であり `NovelGameState.characters` には漏らさない（doctrine 規律3）。
+    Label {
+        /// ラベル本文。
+        text: String,
+        /// 文字色 (CSS カラー文字列、例 "#7a9abf")。日本語キー `色` / 英語 `color`。
+        /// 未指定なら TS 側で白にフォールバック。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+        /// 2D 位置トークン（縦+横、例 "中上" / "左下" / "中"）。日本語キー `位置` / 英語 `position`。
+        /// 解釈は TS 側の `resolveLayoutPosition` 純関数。未指定は中央。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        position: Option<String>,
+        /// 文字サイズ (px)。日本語キー `サイズ` / 英語 `size`。未指定は TS 既定 24。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u32>,
+        /// 演出対象 identifier。日本語/英語とも `id`。未指定は TS 側で既定 "Label"。
+        /// 複数ラベル共存のため id 指定を推奨（id ごとに別スロットになる）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// フォント上書き (CSS の font-family)。日本語キー `font` / `フォント` / 英語 `font_family`。
+        /// 未指定は per-game 既定 → runtime 既定へフォールバック（TitleShow と同形）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_family: Option<String>,
+    },
+    /// 単独の画像 (#274)。orber OP タイトルカードのアバターのような、立ち絵（show）に
+    /// 紐付かない単独画像を任意の 2D 位置に出す。
+    /// `[画像: avatar.png, 位置=上, 円形, サイズ=160, id=avatar]`。
+    /// アセットパスは背景画像と同じく `assetBaseUrl + '/images/' + path`。
+    /// `[タイトル]` と同様 CharacterLayer に id（既定 "Image"）名で登録され、`[アニメ]` 等の
+    /// 対象になれる。render-only で `NovelGameState.characters` には漏らさない（doctrine 規律3）。
+    Image {
+        /// 画像の相対パス（`assets/images/` 起点）。
+        path: String,
+        /// 2D 位置トークン（縦+横）。日本語キー `位置` / 英語 `position`。未指定は中央。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        position: Option<String>,
+        /// 形状。`円形` / `circle` を値なしフラグでも `形状=円形` でも指定できる。
+        /// 値は `円形` に正規化して保持する。未指定は矩形（マスクなし）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shape: Option<String>,
+        /// 表示サイズ (px、論理座標)。日本語キー `サイズ` / 英語 `size`。
+        /// 指定時はその幅にアスペクト維持でスケール。未指定はテクスチャ自然サイズ。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u32>,
+        /// 演出対象 identifier。日本語/英語とも `id`。未指定は TS 側で既定 "Image"。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     /// 文字ウィンドウ枠の ON/OFF を切り替える (#135)。
     ///
     /// `[枠なし]` で枠なしナレ風モードを ON、`[枠あり]` で元に戻す。

@@ -879,6 +879,24 @@ fn parse_directive(line: &str) -> Option<Event> {
         return parse_underline_directive(rest);
     }
 
+    // [ラベル: text, 色=#7a9abf, 位置=中上, サイズ=16, id=division] — 単独の色付きラベル (#274)
+    // 必須: text（先頭の bare 値）/ 任意: 色, 位置, サイズ, id, font
+    if let Some(rest) = content.strip_prefix("ラベル:") {
+        return parse_label_directive(rest);
+    }
+    if let Some(rest) = content.strip_prefix("label:") {
+        return parse_label_directive(rest);
+    }
+
+    // [画像: avatar.png, 位置=上, 円形, サイズ=160, id=avatar] — 単独の画像 (#274)
+    // 必須: path（先頭の bare 値）/ 任意: 位置, 円形(フラグ)/形状, サイズ, id
+    if let Some(rest) = content.strip_prefix("画像:") {
+        return parse_image_directive(rest);
+    }
+    if let Some(rest) = content.strip_prefix("image:") {
+        return parse_image_directive(rest);
+    }
+
     // [タイトル: TEXT] / [タイトル: TEXT, font=bellpoke_font] / [タイトル: TEXT, 位置=右外]
     // 動画用センターオーバーレイ。空テキストなら退場扱い。
     // 位置を指定すると初期位置を変えられる (右外 = 画面外右から登場用)。
@@ -1465,6 +1483,124 @@ fn parse_underline_directive(content: &str) -> Option<Event> {
         duration_ms,
         offset,
         easing,
+    })
+}
+
+/// `[ラベル: text, …]` をパースする (#274)。
+///
+/// orber OP タイトルカードの肩書 / 名前のような単独色付きラベル。先頭の bare 値を text と
+/// みなし（kv ではない）、残りを色/位置/サイズ/id/font の kv で受ける。日本語キー＋英語
+/// エイリアスに両対応。空値ガード（`if !v.is_empty()`）は TitleShow の属性と同形にして、
+/// `色=` のような空値を None に倒す。text が空文字でも Label として保持する
+/// （描画側で text 空は無視するが round-trip では構文を残す）。
+fn parse_label_directive(content: &str) -> Option<Event> {
+    let mut text = String::new();
+    let mut color: Option<String> = None;
+    let mut position: Option<String> = None;
+    let mut size: Option<u32> = None;
+    let mut id: Option<String> = None;
+    let mut font_family: Option<String> = None;
+
+    let mut first = true;
+    for raw in content.split(',') {
+        let part = raw.trim();
+        if first {
+            first = false;
+            text = part.to_string();
+            continue;
+        }
+        if let Some((k, v)) = part.split_once('=') {
+            let value = v.trim();
+            match k.trim() {
+                "color" | "色" if !value.is_empty() => {
+                    color = Some(value.to_string());
+                }
+                "position" | "位置" if !value.is_empty() => {
+                    position = Some(value.to_string());
+                }
+                "size" | "サイズ" => size = value.parse().ok(),
+                "id" if !value.is_empty() => {
+                    id = Some(value.to_string());
+                }
+                "font" | "font_family" | "フォント" if !value.is_empty() => {
+                    font_family = Some(value.to_string());
+                }
+                _ => {} // 未知キーは silent skip
+            }
+        }
+    }
+
+    Some(Event::Label {
+        text,
+        color,
+        position,
+        size,
+        id,
+        font_family,
+    })
+}
+
+/// `[画像: path, …]` をパースする (#274)。
+///
+/// orber OP タイトルカードのアバターのような単独画像。先頭の bare 値を path とみなす。
+/// `円形` / `circle` は値なしフラグ（`[画像: a.png, 円形]`）でも `形状=円形` でも書ける。
+/// 値なしの bare トークン `円形` / `circle` を shape="円形" として拾う。path 欠落（空文字）
+/// 時は directive を捨てる（画像は path 必須）。
+fn parse_image_directive(content: &str) -> Option<Event> {
+    let mut path = String::new();
+    let mut position: Option<String> = None;
+    let mut shape: Option<String> = None;
+    let mut size: Option<u32> = None;
+    let mut id: Option<String> = None;
+
+    let mut first = true;
+    for raw in content.split(',') {
+        let part = raw.trim();
+        if first {
+            first = false;
+            path = part.to_string();
+            continue;
+        }
+        if part.is_empty() {
+            continue;
+        }
+        match part.split_once('=') {
+            None => {
+                // 値なし bare トークン: 円形 / circle を形状フラグとして拾う。
+                if part == "円形" || part == "circle" {
+                    shape = Some("円形".to_string());
+                }
+                // それ以外の bare 値は silent skip。
+            }
+            Some((k, v)) => {
+                let value = v.trim();
+                match k.trim() {
+                    "position" | "位置" if !value.is_empty() => {
+                        position = Some(value.to_string());
+                    }
+                    // 形状=円形 / shape=circle も受ける。値は `円形` に正規化する。
+                    "shape" | "形状" if (value == "円形" || value == "circle") => {
+                        shape = Some("円形".to_string());
+                    }
+                    "size" | "サイズ" => size = value.parse().ok(),
+                    "id" if !value.is_empty() => {
+                        id = Some(value.to_string());
+                    }
+                    _ => {} // 未知キーは silent skip
+                }
+            }
+        }
+    }
+
+    if path.is_empty() {
+        return None;
+    }
+    Some(Event::Image {
+        path,
+        position,
+        shape,
+        size,
+        id,
     })
 }
 
@@ -3178,6 +3314,299 @@ title: "test"
         assert_eq!(
             d1, d2,
             "title with all attributes round-trip should be stable"
+        );
+    }
+
+    // ===== ラベル / 画像 (#274) =====
+
+    #[test]
+    fn parses_label_with_all_attributes() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[ラベル: Planning Div. 42, 色=#7a9abf, 位置=中上, サイズ=16, id=division, font=bellpoke_font]\n";
+        let doc = parse(input);
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::Label {
+                text: "Planning Div. 42".to_string(),
+                color: Some("#7a9abf".to_string()),
+                position: Some("中上".to_string()),
+                size: Some(16),
+                id: Some("division".to_string()),
+                font_family: Some("bellpoke_font".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn label_roundtrip_with_and_without() {
+        use crate::emitter::emit;
+        // 全属性
+        let with = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[ラベル: kako-jun, 色=#2b6cb0, 位置=中, サイズ=22, id=name]\n";
+        let d1 = parse(with);
+        let d2 = parse(&emit(&d1));
+        assert_eq!(d1, d2, "label with attributes round-trip should be stable");
+        // 属性なし（text のみ）
+        let bare = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[ラベル: hi]\n";
+        let d3 = parse(bare);
+        assert_eq!(
+            d3.chapters[0].scenes[0].events[0],
+            Event::Label {
+                text: "hi".to_string(),
+                color: None,
+                position: None,
+                size: None,
+                id: None,
+                font_family: None,
+            }
+        );
+        let d4 = parse(&emit(&d3));
+        assert_eq!(d3, d4, "bare label round-trip should be stable");
+    }
+
+    // 英語キー `label:` / `color=` / `position=` / `size=` で受け、emit は日本語キーに正規化する。
+    #[test]
+    fn label_english_keys_emit_japanese() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[label: title, color=#7a9abf, position=upper, size=16, id=division]\n";
+        let doc = parse(input);
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::Label {
+                text: "title".to_string(),
+                color: Some("#7a9abf".to_string()),
+                position: Some("upper".to_string()),
+                size: Some(16),
+                id: Some("division".to_string()),
+                font_family: None,
+            }
+        );
+        let emitted = emit(&doc);
+        assert!(emitted.contains("色=#7a9abf"), "got: {emitted}");
+        assert!(emitted.contains("位置=upper"), "got: {emitted}");
+        assert!(emitted.contains("サイズ=16"), "got: {emitted}");
+        assert!(!emitted.contains("color="), "got: {emitted}");
+        let reparsed = parse(&emitted);
+        assert_eq!(
+            doc, reparsed,
+            "english-key label should round-trip via 日本語 output"
+        );
+    }
+
+    #[test]
+    fn parses_image_with_flag_circle() {
+        // 円形を値なしフラグで指定する。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[画像: avatar.png, 位置=上, 円形, サイズ=160, id=avatar]\n";
+        let doc = parse(input);
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::Image {
+                path: "avatar.png".to_string(),
+                position: Some("上".to_string()),
+                shape: Some("円形".to_string()),
+                size: Some(160),
+                id: Some("avatar".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn image_roundtrip_flag_and_kv_circle() {
+        use crate::emitter::emit;
+        // フラグ形 `円形` → emit は `形状=円形` の kv 形に正規化 → 再 parse で同じ shape に戻る。
+        let flag = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[画像: avatar.png, 位置=上, 円形, サイズ=160, id=avatar]\n";
+        let d1 = parse(flag);
+        let emitted = emit(&d1);
+        assert!(emitted.contains("形状=円形"), "got: {emitted}");
+        let d2 = parse(&emitted);
+        assert_eq!(
+            d1, d2,
+            "image with flag circle should round-trip via 形状=円形"
+        );
+        // kv 形 `形状=円形` でも shape は同じ。
+        let kv = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[画像: avatar.png, 形状=円形]\n";
+        let d3 = parse(kv);
+        assert_eq!(
+            d3.chapters[0].scenes[0].events[0],
+            Event::Image {
+                path: "avatar.png".to_string(),
+                position: None,
+                shape: Some("円形".to_string()),
+                size: None,
+                id: None,
+            }
+        );
+        // circle 英語フラグ。
+        let en = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[image: a.png, circle]\n";
+        let d4 = parse(en);
+        if let Event::Image { shape, .. } = &d4.chapters[0].scenes[0].events[0] {
+            assert_eq!(*shape, Some("円形".to_string()));
+        } else {
+            panic!("expected Image");
+        }
+    }
+
+    #[test]
+    fn image_without_path_is_dropped() {
+        // path が空（先頭 bare 値なし）なら directive を捨てる（イベント 0 件）。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[画像: , 円形]\n";
+        let doc = parse(input);
+        assert_eq!(doc.chapters[0].scenes[0].events.len(), 0);
+    }
+
+    #[test]
+    fn image_natural_size_roundtrip() {
+        use crate::emitter::emit;
+        // サイズ・形状なし（自然サイズ・矩形）でも安定 round-trip。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[画像: pic.png, 位置=中]\n";
+        let d1 = parse(input);
+        assert_eq!(
+            d1.chapters[0].scenes[0].events[0],
+            Event::Image {
+                path: "pic.png".to_string(),
+                position: Some("中".to_string()),
+                shape: None,
+                size: None,
+                id: None,
+            }
+        );
+        let d2 = parse(&emit(&d1));
+        assert_eq!(d1, d2, "image natural-size round-trip should be stable");
+    }
+
+    // ===== #274 追加: u32 parse 境界 / 空値ガード / 未知キー / カンマ構造制約 =====
+
+    // 共通ヘッダ。各テストの本文（## 以降）だけを差し替える。
+    fn label_doc(body: &str) -> String {
+        format!("---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n{body}\n")
+    }
+
+    // 23: サイズの u32 parse 境界。負値 / 小数 / 非数値はいずれも `value.parse::<u32>().ok()`
+    //     が None になり silent drop される（size: None）。type-globe の size 直書きが壊れない縛り。
+    #[test]
+    fn label_size_invalid_values_drop_to_none() {
+        for raw in ["サイズ=-5", "サイズ=3.5", "サイズ=abc"] {
+            let doc = parse(&label_doc(&format!("[ラベル: hi, {raw}]")));
+            match &doc.chapters[0].scenes[0].events[0] {
+                Event::Label { text, size, .. } => {
+                    assert_eq!(text, "hi", "text should survive ({raw})");
+                    assert_eq!(
+                        *size, None,
+                        "size should be None for `{raw}` (u32 parse fails)"
+                    );
+                }
+                other => panic!("expected Label, got {other:?} for `{raw}`"),
+            }
+        }
+    }
+
+    // 24: 空値ガード。`色=`（= の右が空）は `if !value.is_empty()` で None に倒れる。
+    //     位置= / id= / font= も同形だが、ここでは色の代表で空値ガードを縛る。
+    #[test]
+    fn label_empty_color_value_is_none() {
+        let doc = parse(&label_doc("[ラベル: hi, 色=]"));
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Label { text, color, .. } => {
+                assert_eq!(text, "hi");
+                assert_eq!(*color, None, "empty `色=` value must guard to None");
+            }
+            other => panic!("expected Label, got {other:?}"),
+        }
+    }
+
+    // 25: 未知キーは silent skip し、Label 自体は成立する（謎=1 を無視して text を保持）。
+    #[test]
+    fn label_unknown_key_silently_skipped() {
+        let doc = parse(&label_doc("[ラベル: x, 謎=1]"));
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::Label {
+                text: "x".to_string(),
+                color: None,
+                position: None,
+                size: None,
+                id: None,
+                font_family: None,
+            },
+            "unknown key 謎= must be skipped, Label still parses"
+        );
+    }
+
+    // 26: 画像の非円形 bare トークンは silent skip し、Image は path だけで成立する。
+    #[test]
+    fn image_unknown_bare_flag_silently_skipped() {
+        let doc = parse(&label_doc("[画像: a.png, へんなbareフラグ]"));
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::Image {
+                path: "a.png".to_string(),
+                position: None,
+                // `円形`/`circle` 以外の bare トークンは shape にならない。
+                shape: None,
+                size: None,
+                id: None,
+            },
+            "non-circle bare token must be skipped, Image still parses"
+        );
+    }
+
+    // 27: `フォント=`（日本語キー）入力の round-trip 安定。emitter は `font=` で出すが、
+    //     parser は font/font_family/フォント を等価に受けるため再 parse で同じ値に戻る。
+    #[test]
+    fn label_font_japanese_key_roundtrips_via_english_emit() {
+        use crate::emitter::emit;
+        let d1 = parse(&label_doc("[ラベル: hi, フォント=bellpoke_font]"));
+        // 入力時点で font_family が拾えている。
+        match &d1.chapters[0].scenes[0].events[0] {
+            Event::Label { font_family, .. } => {
+                assert_eq!(*font_family, Some("bellpoke_font".to_string()));
+            }
+            other => panic!("expected Label, got {other:?}"),
+        }
+        let emitted = emit(&d1);
+        // emit は font= に正規化する（フォント= では出さない）。
+        assert!(emitted.contains("font=bellpoke_font"), "got: {emitted}");
+        assert!(!emitted.contains("フォント="), "got: {emitted}");
+        // それでも再 parse で d1 と同一に戻る（font/フォント は等価キー）。
+        let d2 = parse(&emitted);
+        assert_eq!(d1, d2, "フォント= input should round-trip via font= emit");
+    }
+
+    // 28: text/path に `,` を含む入力の現挙動を固定する（split(',') の構造的限界の明文化）。
+    //     `[ラベル: a,b, 色=#fff]` は split(',') で ["a", "b", " 色=#fff"] になり、
+    //     先頭 "a" だけが text、"b" は `=` を含まない bare → silent skip で LOST、
+    //     "色=#fff" は color として拾われる。つまり text にカンマは入れられない（仕様制約）。
+    #[test]
+    fn label_comma_in_text_is_truncated_at_first_comma() {
+        let doc = parse(&label_doc("[ラベル: a,b, 色=#fff]"));
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::Label {
+                // text は最初のカンマまで。"b" は構造的に脱落する（split(',') の限界）。
+                text: "a".to_string(),
+                color: Some("#fff".to_string()),
+                position: None,
+                size: None,
+                id: None,
+                font_family: None,
+            },
+            "comma in label text is truncated at first comma; trailing segment without `=` is dropped"
+        );
+    }
+
+    // 28b: 画像 path のカンマも同様に最初のカンマで切れる（path にカンマは入れられない）。
+    #[test]
+    fn image_comma_in_path_is_truncated_at_first_comma() {
+        let doc = parse(&label_doc("[画像: a,b.png, 位置=中]"));
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::Image {
+                // path は "a" まで。",b.png" は bare として skip される。
+                path: "a".to_string(),
+                position: Some("中".to_string()),
+                shape: None,
+                size: None,
+                id: None,
+            },
+            "comma in image path is truncated at first comma (structural limit of split(','))"
         );
     }
 }

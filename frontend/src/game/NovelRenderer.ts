@@ -1473,6 +1473,43 @@ export class NovelRenderer {
       this.characterLayer.showTitle(ts.text, font, ts.position, ts.color)
       return
     }
+    if ('Label' in event) {
+      // 単独の色付きラベル (#274) — OP タイトルカードの肩書 / 名前。
+      // フォント解決は TitleShow と共通の resolveFontFamily（per-line → per-game → runtime）。
+      // 位置・色・サイズは CharacterLayer.showLabel が resolveLayoutPosition / parseColorToNumber で解決する。
+      const lb = event.Label
+      const font = resolveFontFamily(
+        lb.font_family,
+        this.gameDefaultFontFamily,
+        NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+      )
+      // skipMode 中はフェードインを飛ばして即時表示する（立ち絵と揃える）。
+      this.characterLayer.showLabel({
+        id: lb.id,
+        text: lb.text,
+        color: lb.color,
+        position: lb.position,
+        size: lb.size,
+        fontFamily: font,
+        instant: this.skipMode,
+      })
+      return
+    }
+    if ('Image' in event) {
+      // 単独の画像 (#274) — OP タイトルカードのアバター。
+      // url 解決は背景画像と同じ assetBaseUrl + '/images/' + path（CharacterLayer 側で resolveAssetUrl）。
+      const im = event.Image
+      this.characterLayer.showImage({
+        id: im.id,
+        path: im.path,
+        position: im.position,
+        shape: im.shape,
+        size: im.size,
+        assetBaseUrl: this.assetBaseUrl,
+        instant: this.skipMode,
+      })
+      return
+    }
     if ('TextEffect' in event) {
       // グリフ単位の文字演出 (#268) — fire-and-forget。完了を待たず次へ進む。
       // skipMode 中は演出を畳んで即時完了（整列・不透明）にする。ADR 0002 に従い

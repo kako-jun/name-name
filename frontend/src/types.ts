@@ -296,6 +296,32 @@ export type Event =
         color?: string
       }
     }
+  | {
+      /** 単独の色付きラベル (#274)。`[ラベル: text, 色=#7a9abf, 位置=中上, サイズ=16, id=division]`。
+       *  立ち絵に紐付かない単独テキストを 2D 位置に出す。CharacterLayer に id（既定 "Label"）で
+       *  登録され `[文字演出: id]` / `[下線: id]` / `[アニメ: target=id]` の対象になれる。
+       *  render-only（NovelGameState.characters には漏らさない）。 */
+      Label: {
+        text: string
+        color?: string
+        position?: string
+        size?: number
+        id?: string
+        font_family?: string
+      }
+    }
+  | {
+      /** 単独の画像 (#274)。`[画像: avatar.png, 位置=上, 円形, サイズ=160, id=avatar]`。
+       *  立ち絵（show）に紐付かない単独画像を 2D 位置に出す。アセットパスは背景画像と同じく
+       *  `assetBaseUrl + '/images/' + path`。shape="円形" で円形マスク。render-only。 */
+      Image: {
+        path: string
+        position?: string
+        shape?: string
+        size?: number
+        id?: string
+      }
+    }
   | { DialogBorderless: { borderless: boolean } }
   | { Shake: { intensity_px: number; duration_ms: number } }
   | { Flash: { color: string; alpha: number; duration_ms: number } }

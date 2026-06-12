@@ -775,6 +775,74 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str("]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::Label {
+                text,
+                color,
+                position,
+                size,
+                id,
+                font_family,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // round-trip のため日本語キーに正規化する（英語キー入力も日本語で出す）。
+                out.push_str("[ラベル: ");
+                out.push_str(text);
+                if let Some(c) = color {
+                    out.push_str(", 色=");
+                    out.push_str(c);
+                }
+                if let Some(p) = position {
+                    out.push_str(", 位置=");
+                    out.push_str(p);
+                }
+                if let Some(s) = size {
+                    out.push_str(&format!(", サイズ={s}"));
+                }
+                if let Some(i) = id {
+                    out.push_str(", id=");
+                    out.push_str(i);
+                }
+                if let Some(f) = font_family {
+                    out.push_str(", font=");
+                    out.push_str(f);
+                }
+                out.push_str("]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::Image {
+                path,
+                position,
+                shape,
+                size,
+                id,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // round-trip のため日本語キーに正規化する。円形は `形状=円形` の kv 形で出す
+                // （値なしフラグ入力 `円形` も `形状=円形` に正規化）。
+                out.push_str("[画像: ");
+                out.push_str(path);
+                if let Some(p) = position {
+                    out.push_str(", 位置=");
+                    out.push_str(p);
+                }
+                if let Some(s) = shape {
+                    out.push_str(", 形状=");
+                    out.push_str(s);
+                }
+                if let Some(sz) = size {
+                    out.push_str(&format!(", サイズ={sz}"));
+                }
+                if let Some(i) = id {
+                    out.push_str(", id=");
+                    out.push_str(i);
+                }
+                out.push_str("]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::DialogBorderless { borderless } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
