@@ -282,6 +282,13 @@ export class NovelRenderer {
       height: this.screenHeight,
       background: 0x000000,
       antialias: true,
+      // #279: 既定では device DPI でラスタライズして表示を鮮明にする。
+      // resolution 未指定だと PixiJS は 1 固定になり、論理解像度（9:16=450×800 等）の
+      // 裏バッファをそのまま拡大表示するためボケる（DOM は device DPI で自動ラスタライズ）。
+      // autoDensity=true で CSS サイズは論理 px のまま、裏バッファだけ resolution 倍にする。
+      // PixiJS v8 の Text は resolution 未指定ならレンダラ解像度に追従するので全テキストが鮮明になる。
+      resolution: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+      autoDensity: true,
     })
     this.appInitialized = true
 
@@ -509,6 +516,26 @@ export class NovelRenderer {
   /** AudioManager にアクセスする (#228 動画エクスポートの音声配線用) */
   getAudioManager(): AudioManager {
     return this.audioManager
+  }
+
+  /**
+   * 現在のレンダラ解像度を返す (#279 動画書き出しの高解像度化)。
+   * 書き出し前後で bump → restore するために退避用として使う。
+   */
+  getRenderResolution(): number {
+    return this.app?.renderer?.resolution ?? 1
+  }
+
+  /**
+   * レンダラ解像度を変更する (#279)。論理サイズ（screenWidth/Height）は据え置きで
+   * 裏バッファだけ resolution 倍にする。動画書き出し時に一時的に上げ、終了後に元へ戻す。
+   * 次フレームの再描画（VideoExporter は直後に jumpToScene する）で render-only 要素も
+   * 高解像度で再生成される。PixiJS v8 の Text はレンダラ解像度に追従する。
+   */
+  setRenderResolution(resolution: number): void {
+    if (!this.app?.renderer) return
+    if (!(resolution > 0) || !Number.isFinite(resolution)) return
+    this.app.renderer.resize(this.screenWidth, this.screenHeight, resolution)
   }
 
   /**

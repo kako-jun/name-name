@@ -107,3 +107,65 @@ describe('exportVideo state machine (smoke)', () => {
     ).rejects.toThrow(/MediaRecorder is not supported/)
   })
 })
+
+describe('exportVideo resolution bump (#279)', () => {
+  let savedMR: unknown
+  beforeEach(() => {
+    savedMR = (globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder
+    class FakeMediaRecorder {
+      static isTypeSupported() {
+        return true
+      }
+    }
+    ;(globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder
+  })
+  afterEach(() => {
+    ;(globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder = savedMR
+  })
+
+  // enableCapture が null を返す失敗経路で、解像度 bump → restore の順序だけを検証する
+  // （MediaRecorder 本体の完走をモックせずに #279-B の核だけを突く）。
+  function makeRenderer(prev: number, calls: number[]) {
+    return {
+      getCanvas: () => ({ captureStream: () => ({ getVideoTracks: () => [] }) }),
+      getAudioManager: () => ({
+        ensureContext: () => {},
+        enableCapture: () => null, // bump 後に失敗させて restore を観測する
+        disableCapture: () => {},
+      }),
+      getRenderResolution: () => prev,
+      setRenderResolution: (r: number) => {
+        calls.push(r)
+      },
+      setOnSceneChange: () => {},
+      setOnEnd: () => {},
+      takeOnEnd: () => null,
+      takeOnSceneChange: () => null,
+      jumpToScene: () => {},
+      setAutoMode: () => {},
+    } as unknown as Parameters<typeof import('./VideoExporter').exportVideo>[0]
+  }
+
+  it('bumps to max(3, prev) before capture and restores prev on failure', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    const calls: number[] = []
+    await expect(
+      exportVideo(makeRenderer(2, calls), { startSceneId: 'a', endSceneId: 'b', fps: 30 })
+    ).rejects.toThrow(/AudioManager could not provide MediaStream/)
+    expect(calls).toEqual([3, 2])
+  })
+
+  it('honors an explicit exportResolution and still restores prev', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    const calls: number[] = []
+    await expect(
+      exportVideo(makeRenderer(1, calls), {
+        startSceneId: 'a',
+        endSceneId: 'b',
+        fps: 30,
+        exportResolution: 5,
+      })
+    ).rejects.toThrow(/AudioManager could not provide MediaStream/)
+    expect(calls).toEqual([5, 1])
+  })
+})
