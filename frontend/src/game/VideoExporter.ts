@@ -36,6 +36,13 @@ export interface VideoExportOptions {
    * 短くすると終端で BGM がプチっと切れる事故になるため、変更時は要注意。
    */
   postRollMs?: number
+  /**
+   * 録画中だけ適用するレンダラ解像度 (#279)。captureStream は canvas の裏バッファを
+   * そのまま録るため、書き出し解像度 = 論理サイズ × この値になる。未指定なら
+   * `max(3, 現在の解像度)`（9:16=450×800 で 1350×2400、16:9=800×450 で 2400×1350 ＝
+   * いずれも 1080×1920 以上）。録画後は元の解像度（device DPI）へ復元する。
+   */
+  exportResolution?: number
 }
 
 export interface VideoExportResult {
@@ -92,6 +99,7 @@ export async function exportVideo(
     onProgress,
     preRollMs = 50,
     postRollMs = 1200,
+    exportResolution: exportResolutionOpt,
   } = opts
 
   if (typeof MediaRecorder === 'undefined') {
@@ -108,30 +116,53 @@ export async function exportVideo(
     throw new Error('NovelRenderer canvas is not ready')
   }
 
-  const audio = renderer.getAudioManager()
-  audio.ensureContext()
-  const audioStream = audio.enableCapture()
-  if (!audioStream) {
-    audio.disableCapture()
-    throw new Error('AudioManager could not provide MediaStream (AudioContext init failed)')
-  }
-
-  const videoStream = canvas.captureStream(fps)
-  const combined = new MediaStream([
-    ...videoStream.getVideoTracks(),
-    ...audioStream.getAudioTracks(),
-  ])
-
   // 多重録画ガード (review S3)。同 NovelRenderer に対する並行 exportVideo は
   // takeOnEnd/takeOnSceneChange の前提（破壊的）を壊すため許可しない。
+  // #279: 解像度 bump / captureStream など副作用の前に最初に弾く（並行起動が
+  // 先行録画の解像度を巻き戻す事故を防ぐ）。
   if (isExporting) {
-    audio.disableCapture()
     throw new Error('VideoExporter is already running. Wait for the current export to finish.')
   }
   isExporting = true
 
+  // #279: 録画中だけレンダラ解像度を上げて高解像度の WebM を得る。captureStream は
+  // canvas の裏バッファを録るので、captureStream を作る前に resize しておく。
+  // 録画後は cleanup で必ず元解像度へ戻す（通常プレイの表示・挙動を無回帰に保つ）。
+  const prevResolution = renderer.getRenderResolution()
+  const exportResolution = exportResolutionOpt ?? Math.max(3, prevResolution)
+  renderer.setRenderResolution(exportResolution)
+
+  const audio = renderer.getAudioManager()
+  audio.ensureContext()
+  const audioStream = audio.enableCapture()
+  if (!audioStream) {
+    // 解像度・録画フラグを必ず巻き戻してから throw（前段で副作用を起こしているため）。
+    audio.disableCapture()
+    renderer.setRenderResolution(prevResolution)
+    isExporting = false
+    throw new Error('AudioManager could not provide MediaStream (AudioContext init failed)')
+  }
+
+  // #279 (review S1): captureStream / MediaStream / MediaRecorder の同期コンストラクタが
+  // throw すると、bump した解像度と isExporting フラグが戻らず固着する（cleanup は
+  // recorder のコールバック経由でしか呼ばれないため）。ここで try/catch し、!audioStream
+  // 経路と同じく副作用（capture / 解像度 / フラグ）を巻き戻してから rethrow する。
+  let recorder!: MediaRecorder
+  try {
+    const videoStream = canvas.captureStream(fps)
+    const combined = new MediaStream([
+      ...videoStream.getVideoTracks(),
+      ...audioStream.getAudioTracks(),
+    ])
+    recorder = new MediaRecorder(combined, { mimeType })
+  } catch (e) {
+    audio.disableCapture()
+    renderer.setRenderResolution(prevResolution)
+    isExporting = false
+    throw e instanceof Error ? e : new Error(String(e))
+  }
+
   const chunks: Blob[] = []
-  const recorder = new MediaRecorder(combined, { mimeType })
   recorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) chunks.push(e.data)
   }
@@ -159,6 +190,8 @@ export async function exportVideo(
       renderer.setOnSceneChange(prevOnSceneChange)
       renderer.setOnEnd(prevOnEnd)
       audio.disableCapture()
+      // #279: 録画用に上げた解像度を元（device DPI）へ戻す。
+      renderer.setRenderResolution(prevResolution)
     } catch (e) {
       console.warn('[VideoExporter] cleanup failed', e)
     }
