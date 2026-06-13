@@ -143,14 +143,26 @@ export async function exportVideo(
     throw new Error('AudioManager could not provide MediaStream (AudioContext init failed)')
   }
 
-  const videoStream = canvas.captureStream(fps)
-  const combined = new MediaStream([
-    ...videoStream.getVideoTracks(),
-    ...audioStream.getAudioTracks(),
-  ])
+  // #279 (review S1): captureStream / MediaStream / MediaRecorder の同期コンストラクタが
+  // throw すると、bump した解像度と isExporting フラグが戻らず固着する（cleanup は
+  // recorder のコールバック経由でしか呼ばれないため）。ここで try/catch し、!audioStream
+  // 経路と同じく副作用（capture / 解像度 / フラグ）を巻き戻してから rethrow する。
+  let recorder!: MediaRecorder
+  try {
+    const videoStream = canvas.captureStream(fps)
+    const combined = new MediaStream([
+      ...videoStream.getVideoTracks(),
+      ...audioStream.getAudioTracks(),
+    ])
+    recorder = new MediaRecorder(combined, { mimeType })
+  } catch (e) {
+    audio.disableCapture()
+    renderer.setRenderResolution(prevResolution)
+    isExporting = false
+    throw e instanceof Error ? e : new Error(String(e))
+  }
 
   const chunks: Blob[] = []
-  const recorder = new MediaRecorder(combined, { mimeType })
   recorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) chunks.push(e.data)
   }
