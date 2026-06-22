@@ -472,7 +472,13 @@ export class NovelRenderer {
   }
 
   /**
-   * 全シーンを設定して最初のシーンから開始する
+   * 全シーンを設定して最初のシーンから開始する。
+   *
+   * 注意 (#284): これは `allScenes`（ジャンプ解決索引）の設定**と同時に**
+   * 再生ストリームを `scenes[0].events` だけに差し替える。複数シーンを線形に
+   * 連結して自動進行させたい場合は使わないこと（scene1 で停止する）。
+   * 線形再生を維持したままジャンプ索引だけを差し替えたいときは
+   * `setEvents(flattened)` ＋ `setJumpSceneIndex(scenes)` を使う。
    */
   setScenes(scenes: EventScene[]): void {
     this.allScenes = scenes
@@ -482,6 +488,21 @@ export class NovelRenderer {
       this.setEvents(scenes[0].events)
       this.onSceneChangeCallback?.(scenes[0].id)
     }
+  }
+
+  /**
+   * シーンジャンプ解決専用の索引だけを設定する (#284)。
+   *
+   * `setScenes` と違い、再生ストリーム（resolvedEvents / eventIndex / currentSceneId）には
+   * 一切触れない。現在の線形再生（`setEvents(flattenDocumentEvents(...))` で流し込んだ
+   * イベント列）をそのまま走らせたまま、`jumpToScene` / `loadFromSaveData` / `startFrom` /
+   * `resolveSceneTitle` がファイル横断（複数 MD）で sceneId を解決できるようにする。
+   *
+   * 単一 script 作品では「自ファイルのシーンだけ」を渡すことになり、`allScenes` の内容は
+   * 従来の `setScenes` と同じ集合になる（＝挙動も従来どおり）。
+   */
+  setJumpSceneIndex(scenes: EventScene[]): void {
+    this.allScenes = scenes
   }
 
   /**

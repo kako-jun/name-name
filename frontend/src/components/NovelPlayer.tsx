@@ -10,6 +10,17 @@ import { DebugOverlay } from './DebugOverlay'
 interface NovelPlayerProps {
   events: Event[]
   scenes?: EventScene[]
+  /**
+   * シーンジャンプ解決専用の索引 (#284)。再生ストリームは `events` のまま（線形再生を
+   * 維持）で、`→ シーンID` のジャンプ・セーブ復元・debug startFrom が **ファイル横断**
+   * （複数 MD）で解決できるよう、全 MD の全シーンをここに渡す。
+   *
+   * `scenes`（= setScenes）との違い: `scenes` は再生ストリーム自体を `scenes[0]` だけに
+   * 差し替えるため多シーンの線形自動進行が止まる。線形再生を残したいときは `events` に
+   * flatten 済みイベント列を、`jumpSceneIndex` に全シーンを渡す（PlayerScreen の使い方）。
+   * `scenes` が指定されている場合は従来どおり `scenes` 優先（後方互換）。
+   */
+  jumpSceneIndex?: EventScene[]
   assetBaseUrl?: string
   /** 画面比率。"16:9" / "4:3" / "9:16"。デフォルト "16:9" (#136) */
   aspectRatio?: AspectRatio | string
@@ -35,6 +46,7 @@ interface NovelPlayerProps {
 function NovelPlayer({
   events,
   scenes,
+  jumpSceneIndex,
   assetBaseUrl,
   aspectRatio: aspectRatioProp,
   choiceStyle,
@@ -99,21 +111,31 @@ function NovelPlayer({
       renderer.setFontFamily(fontFamily ?? null)
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
+      // 再生ストリームの確定 (#284):
+      //   - scenes 指定（後方互換）: setScenes で scenes[0] から再生 + allScenes 索引化
+      //   - それ以外: events を線形再生（多シーン自動進行を維持）。jumpSceneIndex が
+      //     あればジャンプ解決索引だけを別建てで設定する（再生ストリームは置換しない）。
+      // どちらの経路でも debug_scene/debug_script は allScenes が埋まった後に発火させる。
       if (scenes && scenes.length > 0) {
         renderer.setScenes(scenes)
-        // URL クエリによるデバッグ起点指定 (#220 Phase 3)。
-        // DEV ビルドでのみ有効。production ではこのブロックごと tree-shake される。
-        // debug_scene は sceneId 前提のため scenes 経路（setScenes）でのみ配線する。
-        if (import.meta.env.DEV) {
-          const debug = parseDebugQuery(window.location.search)
-          if (debug && 'script' in debug) {
-            void renderer.playScript(debug.script)
-          } else if (debug && 'scene' in debug) {
-            renderer.startFrom(debug.scene)
-          }
-        }
       } else {
+        // ジャンプ索引を先に設定してから線形再生を流す。
+        // （startFrom/playScript が allScenes を必要とするため events より前に置く）
+        if (jumpSceneIndex && jumpSceneIndex.length > 0) {
+          renderer.setJumpSceneIndex(jumpSceneIndex)
+        }
         renderer.setEvents(events)
+      }
+      // URL クエリによるデバッグ起点指定 (#220 Phase 3)。
+      // DEV ビルドでのみ有効。production ではこのブロックごと tree-shake される。
+      // debug_scene は sceneId 前提。scenes / jumpSceneIndex のどちらの索引でも解決する。
+      if (import.meta.env.DEV) {
+        const debug = parseDebugQuery(window.location.search)
+        if (debug && 'script' in debug) {
+          void renderer.playScript(debug.script)
+        } else if (debug && 'scene' in debug) {
+          renderer.startFrom(debug.scene)
+        }
       }
       onRendererReady?.(renderer)
     })
@@ -209,15 +231,19 @@ function NovelPlayer({
     }
   }, [assetBaseUrl])
 
-  // events / scenes が変わったらレンダラーに反映
+  // events / scenes / jumpSceneIndex が変わったらレンダラーに反映 (#284)
   useEffect(() => {
     if (!rendererRef.current) return
     if (scenes && scenes.length > 0) {
       rendererRef.current.setScenes(scenes)
     } else {
+      // ジャンプ索引を先に更新してから線形再生を流す（init と同順）。
+      if (jumpSceneIndex && jumpSceneIndex.length > 0) {
+        rendererRef.current.setJumpSceneIndex(jumpSceneIndex)
+      }
       rendererRef.current.setEvents(events)
     }
-  }, [events, scenes])
+  }, [events, scenes, jumpSceneIndex])
 
   // 「つづきから」: 初回イベントセット後に一度だけスキップモードを ON にする (#141)
   // initialSkipMode が false の間は早期 return するため ref はセットされない。

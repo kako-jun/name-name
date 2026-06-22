@@ -49,19 +49,28 @@ vi.mock('../wasm/parser', () => ({
 }))
 
 // NovelPlayer / RPGPlayer は PixiJS に依存し、jsdom では init できないため
-// props だけ確認できる軽い擬似コンポーネントに差し替える
+// props だけ確認できる軽い擬似コンポーネントに差し替える。
+//
+// #284: PlayerScreen は通常再生を events=（エントリ doc の線形ストリーム）で、
+//   クロスファイルのジャンプ索引を jumpSceneIndex=（全 MD の全シーン）で渡す。
+//   data-scene-* は jumpSceneIndex から読む（旧 scenes= 経路は使わない）。
 const novelPlayerProps = vi.fn()
 vi.mock('../components/NovelPlayer', () => ({
-  default: (props: { events: unknown; scenes?: unknown; assetBaseUrl?: string }) => {
+  default: (props: {
+    events: unknown
+    scenes?: unknown
+    jumpSceneIndex?: unknown
+    assetBaseUrl?: string
+  }) => {
     novelPlayerProps(props)
     return (
       <div
         data-testid="novel-player"
         data-event-count={Array.isArray(props.events) ? props.events.length : 0}
-        data-scene-count={Array.isArray(props.scenes) ? props.scenes.length : 0}
+        data-scene-count={Array.isArray(props.jumpSceneIndex) ? props.jumpSceneIndex.length : 0}
         data-scene-ids={
-          Array.isArray(props.scenes)
-            ? (props.scenes as Array<{ id: string }>).map((s) => s.id).join(',')
+          Array.isArray(props.jumpSceneIndex)
+            ? (props.jumpSceneIndex as Array<{ id: string }>).map((s) => s.id).join(',')
             : ''
         }
         data-asset-base-url={props.assetBaseUrl ?? ''}
@@ -79,6 +88,17 @@ vi.mock('../components/RPGPlayer', () => ({
 }))
 
 import PlayerScreen from './PlayerScreen'
+
+/**
+ * 最後に NovelPlayer へ渡された jumpSceneIndex（= NovelRenderer.allScenes に乗る索引）を取り出す。
+ * （`Array.prototype.at` はビルドの lib(ES2020) 外なので index アクセスで末尾を取る）
+ */
+function lastJumpSceneIndex(): EventScene[] {
+  const calls = novelPlayerProps.mock.calls
+  const lastCall = calls[calls.length - 1]
+  expect(lastCall).toBeDefined()
+  return (lastCall[0] as { jumpSceneIndex: EventScene[] }).jumpSceneIndex
+}
 
 beforeEach(() => {
   listProjectsMock.mockReset()
@@ -170,7 +190,7 @@ describe('PlayerScreen', () => {
     expect(screen.queryByRole('button', { name: 'RPG' })).toBeNull()
   })
 
-  it('#284: 複数 MD のシーンを連結して scenes= で NovelPlayer に渡す（エントリ先頭）', async () => {
+  it('#284: 複数 MD のシーンを連結して jumpSceneIndex= で NovelPlayer に渡す（エントリ先頭）', async () => {
     listProjectsMock.mockResolvedValue([
       { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
     ])
@@ -286,10 +306,8 @@ describe('PlayerScreen', () => {
       expect(screen.getByTestId('novel-player')).toBeInTheDocument()
     })
 
-    // NovelPlayer に渡された scenes（= NovelRenderer.allScenes に乗るもの）を取り出す。
-    const lastCall = novelPlayerProps.mock.calls.at(-1)
-    expect(lastCall).toBeDefined()
-    const scenes = (lastCall![0] as { scenes: EventScene[] }).scenes
+    // NovelPlayer に渡された jumpSceneIndex（= NovelRenderer.allScenes に乗るもの）を取り出す。
+    const scenes = lastJumpSceneIndex()
 
     // エントリのシーンが先頭（開始シーン）
     expect(scenes[0]?.id).toBe('entry-hub')
@@ -465,8 +483,7 @@ describe('PlayerScreen', () => {
     expect(warned).toBe(true)
 
     // 先勝ち: findSceneById は先頭（エントリ）のシーンを返す
-    const lastCall = novelPlayerProps.mock.calls.at(-1)
-    const scenes = (lastCall![0] as { scenes: EventScene[] }).scenes
+    const scenes = lastJumpSceneIndex()
     expect(findSceneById(scenes, 'dup')?.title).toBe('entry-dup')
   })
 
@@ -527,12 +544,12 @@ describe('PlayerScreen', () => {
     expect(screen.queryByTestId('novel-player')).toBeNull()
   })
 
-  it('script.md がリポにまだ無い (404) 場合は「準備中」案内を表示する', async () => {
-    const { ApiError } = await import('../api/client')
+  it('#284: listScripts が 0 件のときは「準備中」案内を表示する', async () => {
     listProjectsMock.mockResolvedValue([
       { name: 'missing', title: 'まだ無いゲーム', repo: 'kako-jun/missing' },
     ])
-    getContentsMock.mockRejectedValue(new ApiError(404, { error: 'not found' }, 'Not Found'))
+    // listScripts は応答するが再生対象 .md が 1 つも無い（= まだ原稿が投入されていない）。
+    listScriptsMock.mockResolvedValue([])
 
     render(
       <PlayerScreen
@@ -548,6 +565,106 @@ describe('PlayerScreen', () => {
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.queryByTestId('novel-player')).toBeNull()
     expect(screen.queryByTestId('rpg-player')).toBeNull()
+    // 0 件なので個別 .md の取得には進まない
+    expect(getContentsMock).not.toHaveBeenCalled()
+  })
+
+  it('#284: listScripts 不能 + 単一 script.md が 404 のときは「準備中」案内を表示する', async () => {
+    const { ApiError } = await import('../api/client')
+    listProjectsMock.mockResolvedValue([
+      { name: 'missing', title: 'まだ無いゲーム', repo: 'kako-jun/missing' },
+    ])
+    // listScripts 自体が使えない（旧 Worker 等）→ 単一 script.md 直接取得にフォールバック。
+    listScriptsMock.mockRejectedValue(new Error('listScripts unavailable'))
+    // その単一 script.md も 404（リポにまだ原稿が無い）→ 準備中扱い。
+    getContentsMock.mockRejectedValue(new ApiError(404, { error: 'not found' }, 'Not Found'))
+
+    render(
+      <PlayerScreen
+        projectName="missing"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    expect(await screen.findByText('まだ無いゲーム はまだ準備中です')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByTestId('novel-player')).toBeNull()
+    // フォールバックは直下 script.md を取りに行く
+    expect(getContentsMock).toHaveBeenCalledWith('missing', 'script.md', 'main')
+  })
+
+  it('#284: theo-hayami 実構成（直下 script.md 無し・content/scripts/script.md がエントリ）で再生に入る', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    // theo-hayami の実ファイル構成: リポ直下に script.md は無い。
+    //   ハブ = content/scripts/script.md、各話 = content/scripts/free|main/*.md
+    listScriptsMock.mockResolvedValue([
+      { path: 'content/scripts/script.md', sha: 's0', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/free/ep1.md', sha: 's1', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/main/ep2.md', sha: 's2', size: 1, title: null, hidden: false },
+    ])
+    getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+      path,
+      sha: 'x',
+      content: path,
+    }))
+    // エントリ（basename === script.md）は開始シーン entry-hub を持つ。
+    parseMarkdownMock.mockImplementation(async (md: string) => {
+      const isEntry = md === 'content/scripts/script.md'
+      return {
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: isEntry
+              ? [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }]
+              : [{ id: `scene-${md}`, title: md, view: 'TopDown', events: [] }],
+          },
+        ],
+      }
+    })
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    // 「準備中」ではなく再生（NovelPlayer）に入る
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('せおはやみ はまだ準備中です')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    // 直下 script.md は取りに行かない（解決は listScripts の basename ベース）
+    expect(getContentsMock).not.toHaveBeenCalledWith('theo-hayami', 'script.md', 'main')
+    // エントリ（content/scripts/script.md）と各話を main で取得する
+    expect(getContentsMock).toHaveBeenCalledWith('theo-hayami', 'content/scripts/script.md', 'main')
+    expect(getContentsMock).toHaveBeenCalledWith(
+      'theo-hayami',
+      'content/scripts/free/ep1.md',
+      'main'
+    )
+
+    // ジャンプ索引: エントリ（content/scripts/script.md）のシーンが先頭 = 開始シーン
+    const scenes = lastJumpSceneIndex()
+    expect(scenes[0]?.id).toBe('entry-hub')
+    // 各話のシーンもクロスファイル解決の対象に含まれる
+    expect(findSceneById(scenes, 'scene-content/scripts/free/ep1.md')).toBeDefined()
+    expect(findSceneById(scenes, 'scene-content/scripts/main/ep2.md')).toBeDefined()
+    // エントリは flatten された events= でも線形再生される（最低 1 シーン分のストリーム）
+    const player = screen.getByTestId('novel-player')
+    expect(player.getAttribute('data-scene-count')).toBe('3')
   })
 
   it('404 以外のデータ取得失敗はエラーメッセージを表示する', async () => {

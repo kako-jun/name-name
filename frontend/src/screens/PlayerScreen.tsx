@@ -11,12 +11,24 @@ import { loadReadProgress, clearReadProgress } from '../game/readProgress'
 
 // kako-jun/name-name#108: 一般ユーザー向けの再生専用画面。
 //   - 編集 UI / 保存 / アセット管理 / デバッグは一切表示しない
-//   - script.md は **main ブランチ**を参照する
+//   - スクリプトは **main ブランチ**を参照する
 //     （ADR #105: 一般ユーザーは未完成原稿（develop）を見ない）
 //   - 戻るボタンとタイトル表示のみのシンプルなヘッダー
 //   - データ取得失敗時は「ゲームデータが見つかりません」を表示
-const SCRIPT_PATH = 'script.md'
+//
+// #284: エントリ MD の解決規則。
+//   listScripts で全 .md を列挙し、**path の basename が `script.md` のもの**を
+//   エントリ（開始 MD）とする。これでハブが直下 `script.md` でも
+//   `content/scripts/script.md`（theo-hayami の scriptsDir 構成）でも解決できる。
+//   basename 一致が無ければ sort 済み先頭をエントリにする。
+const SCRIPT_BASENAME = 'script.md'
 const PUBLIC_BRANCH = 'main'
+
+/** path（'a/b/c.md'）の basename（'c.md'）を返す。空 path は '' */
+function basename(path: string): string {
+  const i = path.lastIndexOf('/')
+  return i >= 0 ? path.slice(i + 1) : path
+}
 
 interface PlayerScreenProps {
   projectName: string
@@ -30,8 +42,10 @@ interface PlayerScreenProps {
  * EditorScreen の同名関数と同じ整形（最初のシーン以外の前に SceneTransition を挟む）。
  * #108 の本格統合時に共通化予定。
  *
- * #284: scenes 経路（setScenes）に乗せたあとは未使用になるが、scenes が 1 件も
- * 取れない退化ケースのフォールバックとして残す。
+ * #284: これがエントリ MD の **通常再生ストリーム**。全シーンを 1 本に線形連結する
+ * ことで、advance() が scene1 → scene2 → … と自動進行する（多シーン作品の線形再生を
+ * 維持する経路。M2 退行修正の本体）。クロスファイルのシーンジャンプ索引は別建ての
+ * `flattenDocumentScenes`（jumpSceneIndex）で供給する。
  */
 function flattenDocumentEvents(doc: EventDocument): Event[] {
   const events: Event[] = []
@@ -86,12 +100,15 @@ function warnDuplicateSceneIds(scenes: EventScene[]): void {
 
 function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenProps) {
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
-  // doc: エントリ script.md のドキュメント。RPG 判定・aspect_ratio 等の
-  // per-game 設定の供給元として使う（これらは作品単位の設定なのでエントリに従う）。
+  // doc: エントリ MD のドキュメント。通常再生ストリーム（線形 events）の供給元であり、
+  // かつ RPG 判定・aspect_ratio / choice_style / font_family 等の per-game 設定の
+  // 供給元でもある (#284 S1)。これらは作品単位の設定なので **エントリ MD に従う**。
+  // サブ MD 側の RPG シーン・frontmatter 設定は採用しない（未対応）。
   const [doc, setDoc] = useState<EventDocument | null>(null)
   // allScenes: 全 .md（エントリ + 各シナリオ）の全シーンを連結したもの (#284)。
-  // NovelPlayer に scenes= で渡すと NovelRenderer.allScenes が埋まり、
-  // クロスファイルのシーンジャンプ（→ シーンID）が解決する。
+  // NovelPlayer に jumpSceneIndex= で渡すと NovelRenderer.allScenes が埋まり、
+  // 通常再生（events= の線形ストリーム）を変えないまま、クロスファイルのシーンジャンプ
+  // （→ シーンID）・セーブ復元・debug startFrom がファイル横断で解決する。
   const [allScenes, setAllScenes] = useState<EventScene[]>([])
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -124,70 +141,100 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           return
         }
 
-        // 2. main ブランチからシナリオを取得。404 はリポにまだ script.md
-        //    が無い「未投入」状態として扱い、エラーではなく案内表示にする。
-        let data
+        // 2. main ブランチの .md を列挙して **エントリ MD を解決する** (#284 M1)。
+        //    エントリ = path の basename が `script.md` のもの。無ければ sort 済み先頭。
+        //    listScripts が 0 件 or 取得不能のときだけ「準備中(unpopulated)」/単一
+        //    フォールバックに分岐する（直下 script.md 固定だと scriptsDir 構成の
+        //    theo-hayami 等が永久に再生できない退行になるため）。
+        let scripts: Awaited<ReturnType<typeof api.listScripts>> | null = null
         try {
-          data = await api.getContents(projectName, SCRIPT_PATH, PUBLIC_BRANCH)
-        } catch (e) {
-          if (e instanceof ApiError && e.status === 404) {
-            if (!cancelled) {
-              setUnpopulated(true)
-              setDoc(null)
-            }
-            return
-          }
-          throw e
+          scripts = await api.listScripts(projectName, PUBLIC_BRANCH)
+        } catch (err) {
+          // listScripts 自体が使えない/失敗（旧 Worker・テストスタブ等）
+          //   → 従来の単一 `script.md` 直接取得にフォールバックする。
+          console.warn('PlayerScreen: listScripts unavailable, single-script mode:', err)
+          scripts = null
         }
         if (cancelled) return
-        const markdown = data.content || ''
 
-        // 3. WASM で Markdown → EventDocument（エントリ）
-        const entryDoc = await parseMarkdown(markdown)
+        // 再生対象の .md パス一覧（hidden は除外）。
+        const playablePaths = (scripts ?? []).filter((s) => !s.hidden).map((s) => s.path)
+
+        if (scripts === null) {
+          // --- listScripts 不能フォールバック: 単一 script.md だけで再生 ---
+          //     404 はリポにまだ script.md が無い「未投入」状態として扱う。
+          let data
+          try {
+            data = await api.getContents(projectName, SCRIPT_BASENAME, PUBLIC_BRANCH)
+          } catch (e) {
+            if (e instanceof ApiError && e.status === 404) {
+              if (!cancelled) {
+                setUnpopulated(true)
+                setDoc(null)
+                setAllScenes([])
+              }
+              return
+            }
+            throw e
+          }
+          if (cancelled) return
+          const entryDoc = await parseMarkdown(data.content || '')
+          if (cancelled) return
+          setDoc(entryDoc)
+          setAllScenes(flattenDocumentScenes(entryDoc))
+          return
+        }
+
+        if (playablePaths.length === 0) {
+          // listScripts は応答したが再生対象 .md が 0 件 → 未投入案内。
+          if (!cancelled) {
+            setUnpopulated(true)
+            setDoc(null)
+            setAllScenes([])
+          }
+          return
+        }
+
+        // エントリ MD を解決: basename === 'script.md' を優先、無ければ sort 済み先頭。
+        const sortedPaths = [...playablePaths].sort()
+        const entryPath = sortedPaths.find((p) => basename(p) === SCRIPT_BASENAME) ?? sortedPaths[0]
+
+        // 3. 全 .md を並列取得 → parse。エントリ doc を分離して保持する。
+        const docByPath = new Map<string, EventDocument>()
+        await Promise.all(
+          sortedPaths.map(async (path) => {
+            try {
+              const c = await api.getContents(projectName, path, PUBLIC_BRANCH)
+              const parsed = await parseMarkdown(c.content || '')
+              docByPath.set(path, parsed)
+            } catch (err) {
+              // 個別 .md の取得・parse 失敗は全体を落とさずスキップ。
+              console.warn(`PlayerScreen: failed to load script ${path}:`, err)
+            }
+          })
+        )
         if (cancelled) return
+
+        const entryDoc = docByPath.get(entryPath) ?? null
+        if (!entryDoc) {
+          // エントリ MD だけは必須。取得・parse できなければ再生不能。
+          throw new Error(`PlayerScreen: entry script not loadable: ${entryPath}`)
+        }
+
+        // 4. RPG 判定・aspect_ratio / choice_style / font_family・通常再生ストリームの
+        //    供給元はエントリ doc (#284 S1)。
         setDoc(entryDoc)
 
-        // 4. マルチ MD ロード (#284)
-        //    listScripts で全 .md を列挙し、script.md 以外＝各シナリオ MD を
-        //    並列取得 → parse → 全シーンを 1 本に連結する。
-        //    連結順はエントリ script.md のシーンを先頭にする（先頭シーン＝開始シーン）。
-        //
-        //    listScripts が無い / 失敗するケース（単一 script のプロジェクト・
-        //    旧 Worker・テストのスタブ等）では従来どおりエントリ 1 本だけで再生する。
-        let extraDocs: EventDocument[] = []
-        try {
-          const scripts = await api.listScripts(projectName, PUBLIC_BRANCH)
-          if (cancelled) return
-          const extraPaths = scripts
-            // hidden は再生対象外
-            .filter((s) => !s.hidden)
-            // エントリ script.md は別途取得済みなので除外
-            .filter((s) => s.path !== SCRIPT_PATH)
-            .map((s) => s.path)
-
-          const fetched = await Promise.all(
-            extraPaths.map(async (path) => {
-              try {
-                const c = await api.getContents(projectName, path, PUBLIC_BRANCH)
-                return await parseMarkdown(c.content || '')
-              } catch (err) {
-                // 個別 .md の取得・parse 失敗は全体を落とさずスキップ
-                console.warn(`PlayerScreen: failed to load script ${path}:`, err)
-                return null
-              }
-            })
-          )
-          if (cancelled) return
-          extraDocs = fetched.filter((d): d is EventDocument => d !== null)
-        } catch (err) {
-          // listScripts 自体が使えない/失敗 → 単一 script フォールバック
-          console.warn('PlayerScreen: listScripts unavailable, single-script mode:', err)
-        }
-
-        // 全シーンを連結（エントリ先頭 → 各シナリオ）。
+        // ジャンプ解決索引 = 全 .md の全シーン。連結順は **エントリ先頭** →
+        //    残りのサブ MD（sort 済み path 順）。先頭シーン＝開始シーンの整合を取る。
         const scenes: EventScene[] = [
           ...flattenDocumentScenes(entryDoc),
-          ...extraDocs.flatMap((d) => flattenDocumentScenes(d)),
+          ...sortedPaths
+            .filter((p) => p !== entryPath)
+            .flatMap((p) => {
+              const d = docByPath.get(p)
+              return d ? flattenDocumentScenes(d) : []
+            }),
         ]
         warnDuplicateSceneIds(scenes)
         if (cancelled) return
@@ -209,11 +256,13 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
     }
   }, [api, projectName])
 
-  // 再生用のフラット Event[]（#284: scenes= 経路に乗るので通常は未使用。
-  // allScenes が空の退化ケース用のエントリ単体フォールバック）
+  // 通常再生ストリーム = エントリ doc を線形に flatten した Event[] (#284 M2)。
+  // これを NovelPlayer に events= で渡すことで多シーンの線形自動進行が成立する。
+  // クロスファイルのジャンプ索引は別建ての allScenes（jumpSceneIndex=）で供給する。
   const novelEvents = useMemo(() => (doc ? flattenDocumentEvents(doc) : []), [doc])
 
-  // RPG シーン（最初の RPG シーンのみ採用 — 編集と違いプレイヤーは選択 UI を出さない）
+  // RPG シーン（最初の RPG シーンのみ採用 — 編集と違いプレイヤーは選択 UI を出さない）。
+  // #284 S1: RPG 判定は **エントリ doc 限定**。サブ MD に RPG シーンがあっても拾わない（未対応）。
   const rpgProject: RPGProject | null = useMemo(() => {
     if (!doc) return null
     const found = findRpgSceneIndex(doc)
@@ -291,12 +340,14 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         ) : (
           <>
             <NovelPlayer
-              // #284: 全 MD のシーンを scenes= で渡す（setScenes 経路）。
-              // これで NovelRenderer.allScenes が全 MD 横断で埋まり、
-              // クロスファイルのシーンジャンプが解決する。events= は scenes が
-              // 1 件も取れなかった退化ケースのフォールバックとしてのみ効く。
-              scenes={allScenes}
+              // #284: 通常再生は events=（エントリ doc の線形ストリーム）で行い、
+              // 多シーンの自動進行（scene1→scene2→…）を維持する（M2 退行修正）。
+              // jumpSceneIndex= には全 MD の全シーンを渡し、NovelRenderer.allScenes を
+              // 全 MD 横断で埋めることでクロスファイルのシーンジャンプ（→ シーンID）・
+              // セーブ復元・debug startFrom を解決する（再生ストリームは置換しない）。
+              // ※ scenes= は使わない（setScenes は再生を scenes[0] だけに差し替えてしまう）。
               events={novelEvents}
+              jumpSceneIndex={allScenes}
               assetBaseUrl={assetBaseUrl}
               aspectRatio={doc?.aspect_ratio}
               choiceStyle={doc?.choice_style ?? null}
