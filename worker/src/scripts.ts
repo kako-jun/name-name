@@ -147,8 +147,9 @@ async function listDirectory(
   } catch (err) {
     const ne = normalizeError(err);
     logRateLimit(`${logLabel}.err`, ne.responseHeaders);
-    // scriptsDir 配下のサブディレクトリが存在しない等の 404 は致命ではないので
-    // throw せず null を返してスキップする（呼び出し側で root だけは throw する）。
+    // 正規化したエラーを throw する。起点ディレクトリ listing の失敗は致命として
+    // 呼び出し側へ伝播し、scriptsDir 配下のサブディレクトリ listing の失敗は
+    // 呼び出し側が try/catch で握り潰してスキップする。
     throw ne;
   }
 }
