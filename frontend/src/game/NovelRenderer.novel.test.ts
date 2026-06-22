@@ -22,8 +22,19 @@
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
+import { NOVEL_ROLE_X_RATIO } from './CharacterLayer'
+import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO } from './constants'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
+
+/**
+ * 役割配置の期待 x を定数から導出する (#286 follow-up S1)。
+ * ハードコード（800*0.25 等）を避け、CharacterLayer の NOVEL_ROLE_X_RATIO と
+ * 既定アスペクト比（16:9 → width 800）の積で算出する。比率・幅が変わっても追従する。
+ */
+const SCREEN_WIDTH = ASPECT_RATIOS[DEFAULT_ASPECT_RATIO].width
+const QUESTIONER_X = SCREEN_WIDTH * NOVEL_ROLE_X_RATIO.questioner // 主人公=左
+const RESPONDER_X = SCREEN_WIDTH * NOVEL_ROLE_X_RATIO.responder // 住人=右
 
 // --- fixture helpers（既存テストと同形） ---
 
@@ -440,5 +451,106 @@ describe('NovelRenderer novel 話者交代ポーズ変化 (#286)', () => {
     internals(r).advance()
     expect(warn).not.toHaveBeenCalled()
     expect(error).not.toHaveBeenCalled()
+  })
+})
+
+// ===== #286 follow-up: 復元経路（goBack / quickLoad=applyState）の役割 x 再適用と誤 nudge 防止 (S1/S2) =====
+//
+// #286 の本実装は applyState（goBack / seekTo / quickLoad の共通復元）で
+// resolveNovelRoleXRatio を再適用し、復元直後の lastSpeaker を据え置く。この分岐は
+// 既存の #286 テスト（前進パスだけ）では踏まれていなかったため、復元経路を明示的に検証する。
+//
+// 観測点（jsdom は ticker が回らない）:
+//   - getSpritePosition(name).x … 復元後の役割 x（質問役=QUESTIONER_X / 住人=RESPONDER_X）。
+//   - getPoseNudgeState(name)    … 復元自体では nudge しない / 復元直後の同一話者 advance でも nudge しない。
+describe('NovelRenderer novel 復元経路の役割配置と誤 nudge 防止 (#286 follow-up S1)', () => {
+  beforeEach(() => {
+    new SaveManager().deleteQuickSave()
+  })
+  afterEach(() => {
+    new SaveManager().deleteQuickSave()
+    vi.restoreAllMocks()
+  })
+
+  // S1-goBack: goBack（applyState 単独経路）後に、戻り先キャラの x が役割 x（住人=右）へ再適用され、
+  //   かつ復元直後に同一話者で advance しても nudge しない（lastSpeaker 据え置きの確認）。
+  it('S1: goBack で役割 x（住人=右）が再適用され、復元直後の同一話者 advance で誤 nudge しない', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    // event0 せお（質問役=左）/ event1 ひな（住人=右）/ event2 ひな（同一話者）
+    r.setScenes([
+      scene('s', [dialog('せお', 'q。'), dialog('ひな', 'a1。'), dialog('ひな', 'a2。')]),
+    ])
+    const i = internals(r)
+    i.advance() // event1 ひな（せお→ひな の交代 = nudge）
+    i.advance() // event2 ひな（ひな→ひな 同一話者）
+    expect(r.getSnapshot().eventIndex).toBe(2)
+
+    // event1（ひな）へ goBack。applyState が走り、ひなの x が役割 x（住人=右）へ再適用される。
+    r.goBack()
+    expect(r.getSnapshot().eventIndex).toBe(1)
+    expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(RESPONDER_X)
+    // 復元自体では nudge しない（演出は GameState に持たない）。
+    expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
+
+    // 復元直後に同一話者（ひな→ひな）で前進しても誤 nudge しない（lastSpeaker が ひな に据えられている）。
+    i.advance()
+    expect(r.getSnapshot().eventIndex).toBe(2)
+    expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
+    // x は役割 x のまま（右）。
+    expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(RESPONDER_X)
+  })
+
+  // S1-quickLoad: quickLoad（loadFromSaveData → restoreToScene → applyState）で seed したキャラが
+  //   役割 x（主人公=左）へ再適用される。復元自体では nudge しない。
+  it('S1: quickLoad（applyState）で役割 x（主人公=左）が再適用され、復元では nudge しない', () => {
+    // event0 = せお（質問役）。せおを表示中の状態を seed（position は正本トークン「中央」）。
+    new SaveManager().quickSave({
+      slot: -1,
+      sceneId: 's',
+      eventIndex: 0,
+      textIndex: 0,
+      flags: {},
+      backgroundPath: null,
+      isBlackout: false,
+      characters: [{ name: 'せお', expression: 'normal', position: '中央' }],
+      currentBgmPath: null,
+      savedAt: new Date().toISOString(),
+      sceneName: null,
+    })
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setScenes([scene('s', [dialog('せお', 'q。'), dialog('ひな', 'a。')])])
+    expect(r.quickLoad()).toBe(true)
+
+    // 正本トークンは「中央」だが、novel + protagonist 一致なので役割 x（質問役=左）へ再適用される。
+    expect(layerOf(r).getSpritePosition('せお')!.x).toBe(QUESTIONER_X)
+    // 復元自体では nudge しない。
+    expect(layerOf(r).getPoseNudgeState('せお')).toBeNull()
+  })
+})
+
+describe('NovelRenderer novel skipMode の nudge 抑制 (#286 follow-up S2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // S2: skipMode 中は話者交代しても nudge を発火しない（既読高速進行で乱発しない）。
+  //   役割 x の再適用は skip でも効く（x は GameState 由来の表示状態）が、nudge（演出）だけ抑制される。
+  it('S2: skipMode 中は話者交代しても nudgePose しない（役割 x は効く）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setSkipMode(true)
+    r.setScenes([scene('s', [dialog('せお', 'q。'), dialog('ひな', 'a。')])])
+    // せお（質問役=左）が表示され、skip でも役割 x は当たる。
+    expect(layerOf(r).getSpritePosition('せお')!.x).toBe(QUESTIONER_X)
+    internals(r).advance()
+    // せお→ひな の話者交代だが skipMode 中なので nudge は発火しない。
+    expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
+    // 役割 x（住人=右）は skip でも当たる。
+    expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(RESPONDER_X)
   })
 })
