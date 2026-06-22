@@ -559,8 +559,10 @@ export function paginateSentencesByLines(
   }
 
   for (let i = 0; i < sentences.length; i++) {
-    // 行数情報が欠けている場合は 1 行として扱う（防御的）。
-    const lines = Math.max(1, Math.floor(sentenceLineCounts[i] ?? 1))
+    // 行数情報が欠けている／非有限（undefined・NaN・Infinity）な場合は 1 行として扱う（防御的）。
+    // NaN は `?? 1` をすり抜け Math.max/floor でも残り pageLines を汚染するため Number.isFinite で弾く。
+    const rawLineCount = sentenceLineCounts[i]
+    const lines = Number.isFinite(rawLineCount) ? Math.max(1, Math.floor(rawLineCount)) : 1
     if (pageSentences.length > 0 && pageLines + lines > cap) {
       // この文を足すと溢れる → 改頁してから新ページの先頭に置く。
       flush()

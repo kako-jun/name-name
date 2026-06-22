@@ -943,29 +943,25 @@ describe('paginateSentencesByLines 境界値 (#283 設計1〜7)', () => {
     expect(pages.map((p) => p.lineCount)).toEqual([4, 1])
   })
 
-  // 5: lineCount が 0 / 負 / undefined の文は「最低 1 行」として扱う（Math.max(1, floor(… ?? 1))）。
-  //    すべて 1 行扱いなら cap=2 で 2 文ずつ詰まる。
-  //    （NaN は別ケース 5b で扱う: 実装は NaN を 1 に補正しないため挙動が異なる。）
-  it('5: lineCount が 0/負/undefined の文は最低 1 行として扱う', () => {
+  // 5: lineCount が 0 / 負 / NaN / undefined の文は「最低 1 行」として扱う
+  //    （Number.isFinite で非有限を弾き 1 に補正）。すべて 1 行扱いなら cap=2 で 2 文ずつ詰まる。
+  it('5: lineCount が 0/負/NaN/undefined の文は最低 1 行として扱う', () => {
     const sentences = ['z', 'n', 'x', 'u']
-    const lineCounts = [0, -3, undefined as unknown as number, -0.5]
+    const lineCounts = [0, -3, NaN, undefined as unknown as number]
     const pages = paginateSentencesByLines(sentences, lineCounts, 2)
     // 各文 1 行 → cap=2 で [z,n] / [x,u]
     expect(pages.map((p) => p.text)).toEqual(['zn', 'xu'])
     expect(pages.map((p) => p.lineCount)).toEqual([2, 2])
   })
 
-  // 5b: 【既知の限界・現挙動の固定】lineCount が NaN の文は最低 1 行に補正されない。
-  //     実装は `Math.max(1, Math.floor(count ?? 1))` で、NaN は `?? 1` に該当せず
-  //     `Math.floor(NaN)=NaN` → `Math.max(1, NaN)=NaN` のまま pageLines を汚染する。
-  //     その結果 `NaN > cap` が常に false になり改頁判定が効かず、全文が 1 ページに潰れて
-  //     lineCount は NaN になる。設計が期待した「NaN→1 行」とは異なる挙動なので、
-  //     この回帰テストで「NaN は防御されていない」現状を明示的に固定する（修正時に赤くなる番兵）。
-  it('5b: lineCount が NaN の文は防御されず pageLines を汚染し全文が 1 ページに潰れる（既知の限界）', () => {
-    const pages = paginateSentencesByLines(['a', 'b'], [NaN, 1], 2)
-    expect(pages).toHaveLength(1)
-    expect(pages[0].text).toBe('ab')
-    expect(Number.isNaN(pages[0].lineCount)).toBe(true)
+  // 5b: NaN の lineCount は 1 行に補正され、pageLines を NaN 汚染しない（改頁判定が効く）。
+  //     a(NaN→1) は単独で収まり、b(2) を足すと 1+2=3>cap2 で改頁 → [a]/[b]。
+  //     lineCount は NaN にならない（汚染ガードの回帰テスト）。
+  it('5b: NaN の lineCount は 1 行扱いになり pageLines を汚染しない', () => {
+    const pages = paginateSentencesByLines(['a', 'b'], [NaN, 2], 2)
+    expect(pages.map((p) => p.text)).toEqual(['a', 'b'])
+    expect(pages.map((p) => p.lineCount)).toEqual([1, 2])
+    expect(pages.some((p) => Number.isNaN(p.lineCount))).toBe(false)
   })
 
   // 6: cap が小数なら floor して扱う（cap=2.9 → 2）。境界 cap=1.x が 1 に落ちることも縛る。
