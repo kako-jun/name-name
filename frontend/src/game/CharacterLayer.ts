@@ -428,12 +428,18 @@ export class CharacterLayer extends Container {
       )
         return
 
-      // 位置変更（position トークンの変化、または override x の変化）
-      if (existing.position !== normalizedPosition || overrideXChanged) {
+      // 位置変更（position トークンの変化、または override x の変化）。
+      // x（見た目の横座標）と position（正本トークン）は別の関心事なので更新を分ける (N2)。
+      // 旧実装は overrideXChanged だけ（position トークンは同一）のとき `existing.position` への
+      // 再代入が no-op になっていた。position は実際に変化したときだけ更新して意図を明確にする。
+      const positionChanged = existing.position !== normalizedPosition
+      if (positionChanged || overrideXChanged) {
         const x = hasXOverride
           ? (overrideX as number)
           : (this.positionX[normalizedPosition] ?? this.positionX['center'])
         existing.sprite.x = x
+      }
+      if (positionChanged) {
         existing.position = normalizedPosition
       }
 

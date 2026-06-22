@@ -694,6 +694,17 @@ export class DialogBox extends Container {
       fill: this.nameColor,
       fontWeight: 'bold',
     })
+    // インライン名（nameSeparateBox=false）も per-game フォントに追従させる。
+    // setFontSize は inlineNameText を作り直すのに setFontFamily が漏らしていた非対称を是正
+    // （#287 review nit）。インライン名だけ旧フォントで残るのを防ぐ。
+    if (this.inlineNameText) {
+      this.inlineNameText.style = new TextStyle({
+        fontFamily: family,
+        fontSize: this.fontSize - 4,
+        fill: this.nameColor,
+        fontWeight: 'bold',
+      })
+    }
     this.indicator.style = new TextStyle({
       fontFamily: family,
       fontSize: 20,

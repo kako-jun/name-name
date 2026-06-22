@@ -760,3 +760,24 @@ describe('DialogBox setFontSize (#283 補遺 per-game font_size)', () => {
     box.dispose()
   })
 })
+
+describe('DialogBox setFontFamily インライン名追従 (#287 review nit)', () => {
+  // setFontSize は inlineNameText を作り直すのに setFontFamily が漏らしていた非対称の回帰防止。
+  // nameSeparateBox=false（インライン名モード）で per-game フォントを変えると、インライン名も追従する。
+  it('setFontFamily が inlineNameText のフォントも更新する（nameSeparateBox=false）', () => {
+    const box = new DialogBox({
+      screenWidth: 800,
+      screenHeight: 600,
+      nameSeparateBox: false,
+    })
+    const internals = box as unknown as {
+      inlineNameText: { style: { fontFamily: string | string[] } } | null
+    }
+    expect(internals.inlineNameText).not.toBeNull()
+    box.setFontFamily("'Hina Mincho', serif")
+    const fam = internals.inlineNameText!.style.fontFamily
+    const famStr = Array.isArray(fam) ? fam.join(',') : String(fam)
+    expect(famStr).toContain('Hina Mincho')
+    box.dispose()
+  })
+})

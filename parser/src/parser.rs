@@ -2325,7 +2325,12 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
 
 fn unquote(s: &str) -> String {
     let s = s.trim();
-    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+    // len >= 2 ガード（#287 review）。単独の `"` や `'`（len 1）は starts_with と ends_with が
+    // 同じ1文字で両方 true になり、`s[1..s.len()-1]` = `s[1..0]` で範囲アンダーフローして panic する。
+    // 病的入力（`font_family: "` 等）でも全 frontmatter パースが落ちないようにする。
+    if s.len() >= 2
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
+    {
         s[1..s.len() - 1].to_string()
     } else {
         s.to_string()
@@ -2338,6 +2343,25 @@ fn unquote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unquote_lone_quote_does_not_panic() {
+        // 単独の `"` / `'`（len 1）でも panic しない（#287 review・len ガード）。
+        assert_eq!(unquote("\""), "\"");
+        assert_eq!(unquote("'"), "'");
+        // 正常な引用は剥がれる。
+        assert_eq!(unquote("\"\""), "");
+        assert_eq!(unquote("\"x\""), "x");
+        assert_eq!(unquote("'y'"), "y");
+        assert_eq!(unquote("plain"), "plain");
+    }
+
+    #[test]
+    fn test_parse_lone_quote_frontmatter_does_not_panic() {
+        // 病的 frontmatter 値（閉じない引用符）でも parse が落ちないこと。
+        let input = "---\nengine: name-name\nfont_family: \"\n---\n\n## 1-1: t\n\n**A**:\nx\n";
+        let _doc = parse(input); // panic しなければ成功
+    }
 
     #[test]
     fn test_parse_simple_dialog() {
