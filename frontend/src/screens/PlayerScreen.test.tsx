@@ -9,6 +9,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+// #284: NovelRenderer.jumpToScene が使う実シーン解決プリミティブ。
+// PlayerScreen が連結した scenes に対してクロスファイルのジャンプが解決することを、
+// 実装で実際に使われるこの純粋関数で確認する（Pixi/NovelRenderer は jsdom で init 不可）。
+import { findSceneById } from '../game/novelLayout'
+import type { EventScene } from '../types'
 
 // API クライアントをモック化
 const listProjectsMock = vi.fn()
@@ -233,6 +238,236 @@ describe('PlayerScreen', () => {
     )
     // エントリ以外の 2 本は main ブランチで取得される
     expect(getContentsMock).toHaveBeenCalledWith('theo-hayami', 'content/scripts/free/a.md', 'main')
+  })
+
+  it('#284: クロスファイルのジャンプが解決する（別 MD のシーン ID が解決対象に含まれる）', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    // エントリ + 別 MD 1 本
+    listScriptsMock.mockResolvedValue([
+      { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/free/a.md', sha: 's1', size: 1, title: null, hidden: false },
+    ])
+    getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+      path,
+      sha: 'x',
+      content: path,
+    }))
+    // エントリ script.md には開始シーン entry-hub、別 MD には別シーン far-scene を持たせる。
+    parseMarkdownMock.mockImplementation(async (md: string) => {
+      const isEntry = md === 'script.md'
+      return {
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: isEntry
+              ? [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }]
+              : [{ id: 'far-scene', title: 'far', view: 'TopDown', events: [] }],
+          },
+        ],
+      }
+    })
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+
+    // NovelPlayer に渡された scenes（= NovelRenderer.allScenes に乗るもの）を取り出す。
+    const lastCall = novelPlayerProps.mock.calls.at(-1)
+    expect(lastCall).toBeDefined()
+    const scenes = (lastCall![0] as { scenes: EventScene[] }).scenes
+
+    // エントリのシーンが先頭（開始シーン）
+    expect(scenes[0]?.id).toBe('entry-hub')
+
+    // 実際のジャンプ解決プリミティブ findSceneById で、別 MD のシーンが解決できる
+    // = クロスファイル・ジャンプ（→ far-scene）が成立する。
+    const jumped = findSceneById(scenes, 'far-scene')
+    expect(jumped).toBeDefined()
+    expect(jumped?.title).toBe('far')
+    // 逆方向（別 MD → エントリ）も解決できる
+    expect(findSceneById(scenes, 'entry-hub')?.title).toBe('hub')
+  })
+
+  it('#284: listScripts が失敗したら単一 script.md 再生にフォールバックする', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    // listScripts が使えない / 失敗（旧 Worker・テストスタブ等）
+    listScriptsMock.mockRejectedValue(new Error('listScripts unavailable'))
+    // エントリ script.md だけは取得できる
+    getContentsMock.mockResolvedValue({
+      path: 'script.md',
+      sha: 'sha-entry',
+      content: 'script.md',
+    })
+    parseMarkdownMock.mockResolvedValue({
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes: [{ id: 'only-scene', title: 'only', view: 'TopDown', events: [] }],
+        },
+      ],
+    })
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+
+    const player = screen.getByTestId('novel-player')
+    // エントリ 1 本のシーンだけで再生継続（エラーにならない）
+    expect(player.getAttribute('data-scene-count')).toBe('1')
+    expect(player.getAttribute('data-scene-ids')).toBe('only-scene')
+    // エラー表示は出ない
+    expect(screen.queryByRole('alert')).toBeNull()
+    // エントリ script.md は main で取得済み
+    expect(getContentsMock).toHaveBeenCalledWith('theo-hayami', 'script.md', 'main')
+  })
+
+  it('#284: 個別 MD の取得/parse 失敗時は残りの MD で再生継続する', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    // エントリ + 壊れた MD(bad) + 正常な MD(good)
+    listScriptsMock.mockResolvedValue([
+      { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/bad.md', sha: 's1', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/good.md', sha: 's2', size: 1, title: null, hidden: false },
+    ])
+    // bad.md の getContents は失敗、それ以外は成功
+    getContentsMock.mockImplementation(async (_name: string, path: string) => {
+      if (path === 'content/scripts/bad.md') {
+        throw new Error('failed to fetch bad.md')
+      }
+      return { path, sha: 'x', content: path }
+    })
+    parseMarkdownMock.mockImplementation(async (md: string) => ({
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes: [{ id: `scene-${md}`, title: md, view: 'TopDown', events: [] }],
+        },
+      ],
+    }))
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+
+    const player = screen.getByTestId('novel-player')
+    const ids = (player.getAttribute('data-scene-ids') ?? '').split(',')
+    // エントリ + good.md の 2 シーン（bad.md は脱落するが全体は落ちない）
+    expect(ids).toContain('scene-script.md')
+    expect(ids).toContain('scene-content/scripts/good.md')
+    expect(ids).not.toContain('scene-content/scripts/bad.md')
+    expect(player.getAttribute('data-scene-count')).toBe('2')
+    // 全体としてエラー表示にはならない
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('#284: シーン ID 重複時は先勝ち + warning を出す', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    // エントリと別 MD で同じシーン ID 'dup' を持つ
+    listScriptsMock.mockResolvedValue([
+      { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/later.md', sha: 's1', size: 1, title: null, hidden: false },
+    ])
+    getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+      path,
+      sha: 'x',
+      content: path,
+    }))
+    parseMarkdownMock.mockImplementation(async (md: string) => {
+      const isEntry = md === 'script.md'
+      return {
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            // 両方が id 'dup' を持つ。先頭（エントリ）のタイトルが先勝ち。
+            scenes: [
+              {
+                id: 'dup',
+                title: isEntry ? 'entry-dup' : 'later-dup',
+                view: 'TopDown',
+                events: [],
+              },
+            ],
+          },
+        ],
+      }
+    })
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+
+    // 重複 ID を検出して warning を出す
+    expect(warnSpy).toHaveBeenCalled()
+    const warned = warnSpy.mock.calls.some(
+      (call) => typeof call[0] === 'string' && call[0].includes('dup')
+    )
+    expect(warned).toBe(true)
+
+    // 先勝ち: findSceneById は先頭（エントリ）のシーンを返す
+    const lastCall = novelPlayerProps.mock.calls.at(-1)
+    const scenes = (lastCall![0] as { scenes: EventScene[] }).scenes
+    expect(findSceneById(scenes, 'dup')?.title).toBe('entry-dup')
   })
 
   it('RPG シーンを含むドキュメントは RPGPlayer に渡す', async () => {
