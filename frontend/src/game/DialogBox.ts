@@ -145,11 +145,11 @@ const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 4, distance: 2, alpha: 0
  * 全画面ノベル（ToHeart 式）では画面の大半をテキストに使う。本文は左上付近から始め、
  * 左右・上下に小さな余白を残す。テストが参照できるよう export する。
  */
-export const NOVEL_TEXT_MARGIN_X = 60
-/** 本文域の上端 Y（画面高に対する比率）。本文は画面上部（左上付近）から始める。 */
-export const NOVEL_TEXT_TOP_RATIO = 0.08
-/** 本文域の下端マージン（px）。 */
-export const NOVEL_TEXT_MARGIN_BOTTOM = 50
+export const NOVEL_TEXT_MARGIN_X = 16
+/** 本文域の上端 Y（画面高に対する比率）。本文はより左上から始める（端から少しだけ離す）。 */
+export const NOVEL_TEXT_TOP_RATIO = 0.012
+/** 本文域の下端マージン（px）。高さを使い切るため小さめ。 */
+export const NOVEL_TEXT_MARGIN_BOTTOM = 20
 
 /**
  * ルビの x 位置計算用の Canvas measure コンテキスト。
@@ -252,7 +252,7 @@ export class DialogBox extends Container {
       marginX = 20,
       marginBottom = 20,
       padding = 20,
-      fontSize = 40,
+      fontSize = 26,
       fontFamily = "'Noto Sans JP', sans-serif",
       msPerChar = DEFAULT_MS_PER_CHAR,
       borderless = false,
