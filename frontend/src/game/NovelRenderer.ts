@@ -58,7 +58,11 @@ import {
   describeEventForDebug,
   findSceneById,
   resolveSceneTitle,
+  splitIntoSentences,
+  paginateSentencesByLines,
+  type NovelPage,
 } from './novelLayout'
+import { stripRubyMarkup } from './ruby'
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -99,6 +103,19 @@ export const normalizeBackgroundFade = normalizeEdgeFade
 // playScript / startFrom で使う型を NovelRenderer 経由でも import できるよう再エクスポートする (#220)
 export type { Step, StartFromOptions } from './GameState'
 
+/**
+ * novel スタイル (#283) のセリフ表示中スクリム不透明度。
+ * ToHeart 式に背景・立ち絵を半分ほど沈め、白文字 + DropShadow の可読性を上げる。
+ * blink/A-B 実機検証で詰める前提の初期値（テストが参照できるよう export する）。
+ */
+export const NOVEL_SCRIM_ALPHA = 0.5
+
+/** novel スクリムの自動退避フェード時間（ms）。表情変化・場面転換で絵を見せるための退避/復帰 (#283)。 */
+export const NOVEL_SCRIM_RETREAT_MS = 220
+
+/** novel スクリム退避後、絵を見せたまま保持する時間（ms）。退避→ホールド→復帰の中段 (#283)。 */
+export const NOVEL_SCRIM_HOLD_MS = 500
+
 export class NovelRenderer {
   private app: Application
   /** init() 完了済みかのフラグ。React StrictMode 等で init 中に destroy が呼ばれたときの no-op 判定に使う */
@@ -110,6 +127,9 @@ export class NovelRenderer {
   private videoLayer: VideoLayer
   private characterLayer: CharacterLayer
   private blackoutOverlay: Graphics
+  /** novel スタイル (#283) の全画面スクリム。セリフ表示中だけ半透明黒を敷く。
+   *  z 順は characterLayer の上・blackoutOverlay の下。adv では常に visible=false。 */
+  private novelScrim: Graphics | null = null
   private counterText: PixiText | null = null
   private displayEventCount = 0
 
@@ -142,6 +162,11 @@ export class NovelRenderer {
   /** 選択肢スタイル名 (#146)。frontmatter `choice_style:` の値。null なら default 扱い */
   private choiceStyle: string | null = null
 
+  /** 会話の描画スタイル (#283)。frontmatter `dialog_style:` の値（`adv` / `novel`）。
+   *  null/未知値は adv 相当（未指定時フォールバック。「正規デフォルト」ではない）。
+   *  `isNovelStyle()` で判定する。 */
+  private dialogStyle: string | null = null
+
   /** per-game デフォルトフォント (#147)。frontmatter `font_family:` の値。
    *  null なら DialogBox の組み込み既定 (`'Noto Sans JP', sans-serif`) を使う。
    *  per-line `[フォント:]` で個別 Dialog/Narration が上書き可能。 */
@@ -149,6 +174,21 @@ export class NovelRenderer {
 
   /** runtime 既定フォント。Document.font_family / per-line 共に未指定のときの最終フォールバック (#147) */
   private static readonly RUNTIME_DEFAULT_FONT_FAMILY = "'Noto Sans JP', sans-serif"
+
+  /** per-game デフォルト本文フォントサイズ (px) (#283 補遺)。frontmatter `font_size:` の値。
+   *  null なら runtime 既定 40 を使う。 */
+  private gameDefaultFontSize: number | null = null
+
+  /** runtime 既定本文フォントサイズ。Document.font_size 未指定時の最終フォールバック (#283 補遺)。
+   *  DialogBox コンストラクタの既定 (40) と一致させる。 */
+  private static readonly RUNTIME_DEFAULT_FONT_SIZE = 40
+
+  /**
+   * novel 改頁キャッシュ (#283)。現在の text イベントを文境界で改頁した結果。
+   * これは**派生**（純粋関数 paginateSentencesByLines で再計算可能）であり GameState には持たない。
+   * eventIndex が変わったら破棄して再計算する（cacheEventIndex で識別）。
+   */
+  private novelPagesCache: { eventIndex: number; pages: NovelPage[] } | null = null
 
   /** 直近で render した Dialog/Narration に紐付く resolved font family (#147 R1 M1)。
    *  ensureFontLoaded の Promise 解決時に「いま表示中の Dialog のフォントか」を判定する race guard 用。
@@ -243,6 +283,12 @@ export class NovelRenderer {
   /** flash/fade アニメーション用タイマー */
   private effectTimer: number | null = null
 
+  // ---- novel スクリム自動退避 (#283) ----
+  /** スクリム退避フェード中フラグ。true の間は updateNovelScrim が触らない（フェードが制御） */
+  private scrimRetreatActive = false
+  /** スクリム退避フェード用タイマー */
+  private scrimRetreatTimer: number | null = null
+
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
     this.bgGraphics = new Graphics()
@@ -282,13 +328,16 @@ export class NovelRenderer {
       height: this.screenHeight,
       background: 0x000000,
       antialias: true,
-      // #279: 既定では device DPI でラスタライズして表示を鮮明にする。
-      // resolution 未指定だと PixiJS は 1 固定になり、論理解像度（9:16=450×800 等）の
-      // 裏バッファをそのまま拡大表示するためボケる（DOM は device DPI で自動ラスタライズ）。
-      // autoDensity=true で CSS サイズは論理 px のまま、裏バッファだけ resolution 倍にする。
-      // PixiJS v8 の Text は resolution 未指定ならレンダラ解像度に追従するので全テキストが鮮明になる。
+      // #279: device DPI でラスタライズして表示を鮮明にする。resolution 未指定だと PixiJS は 1
+      // 固定になり、論理解像度（9:16=450×800 等）の裏バッファをそのまま拡大表示するためボケる。
+      // resolution=DPR で裏バッファを device DPI 倍に取り、PixiJS v8 の Text もそれに追従して鮮明になる。
       resolution: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
-      autoDensity: true,
+      // autoDensity は false。true だと PixiJS が canvas の CSS サイズを論理 px に固定し、
+      // wrapper（レターボックス内接矩形）に追従せず＝ブラウザを縮めても中身が縮まず左上クロップになる。
+      // false にして CSS（NovelPlayer の [&>canvas]:w-full/h-full）に表示サイズを委ね、固定解像度の
+      // レンダリングを wrapper サイズへスケールさせる（背景・立ち絵・文字ごと縮小拡大）。鮮明さは
+      // 上の resolution=DPR が担保する（裏バッファは論理×DPR のまま）。
+      autoDensity: false,
     })
     this.appInitialized = true
 
@@ -307,6 +356,16 @@ export class NovelRenderer {
 
     // 立ち絵レイヤー
     this.app.stage.addChild(this.characterLayer)
+
+    // novel スタイルの全画面スクリム (#283)。z 順は立ち絵の上・暗転/効果/ダイアログの下。
+    // セリフ表示中だけ半透明黒を敷き、白文字の可読性を上げつつ ToHeart 的な「絵を薄く沈める」
+    // 見え方にする。adv では常に非表示。表情変化/場面転換では NovelRenderer がフェード退避する。
+    this.novelScrim = new Graphics()
+    this.novelScrim.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.novelScrim.fill(0x000000)
+    this.novelScrim.alpha = 0
+    this.novelScrim.visible = false
+    this.app.stage.addChild(this.novelScrim)
 
     // 暗転レイヤー
     this.blackoutOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
@@ -633,6 +692,10 @@ export class NovelRenderer {
     this.dialogBox.clearText()
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
     this.dialogBox.setBorderless(this.defaultDialogBorderless)
+    // novel (#283): setBorderless が borderless を上書きしたので novel 幾何を再適用し、
+    // スクリム退避状態と alpha をリセットする（前シーンの退避途中が残らないようにする）。
+    this.resetNovelScrimState()
+    this.dialogBox.setNovelMode(this.isNovelStyle())
 
     // 元イベントを保持し、Condition をフラグに基づいて展開
     this.rawEvents = events
@@ -640,6 +703,8 @@ export class NovelRenderer {
     this.eventIndex = 0
     this.textIndex = 0
     this.history = []
+    // novel 改頁キャッシュ (#283) はイベント列に紐づくので破棄する。
+    this.novelPagesCache = null
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
     this.processUntilNextTextEvent()
 
@@ -687,6 +752,81 @@ export class NovelRenderer {
     // ensureFontLoaded → setFontFamily の順を担保する。
     // バックログは per-line を再現せず per-game フォントだけを反映する (#147 R1 S1)。
     this.backlogOverlay.setFontFamily(family ?? null)
+  }
+
+  /**
+   * per-game 本文フォントサイズを設定する (#283 補遺)。
+   * frontmatter `font_size:` の値（px）を渡す。null/undefined のときは runtime 既定 40。
+   *
+   * font_family と違いフォント lazy load を伴わないので即座に DialogBox に反映する。
+   * これにより 9:16 ノベル（font_size: 26）と 16:9 ADV（既定 40）を per-game で切り替えられ、
+   * DialogBox の組み込み既定 (40) を全ゲーム共通で縮めずに済む（隠れた退行の回避）。
+   * バックログは本文サイズに連動しない固定レイアウトのため反映しない（font_family と同方針）。
+   */
+  setFontSize(size: number | null | undefined): void {
+    this.gameDefaultFontSize = size ?? null
+    this.dialogBox.setFontSize(size ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE)
+  }
+
+  /**
+   * 会話の描画スタイルを設定する (#283)。
+   * frontmatter `dialog_style:` の値（`adv` / `novel`）を渡す。null/undefined/未知値は adv 相当。
+   *
+   * adv と novel は対等。未指定は壊さないため adv 描画にフォールバックするだけで「正規デフォルト」ではない。
+   * DialogBox の幾何・名札・スクリムを novel 用に切り替える。改頁は render/advance 側で処理する。
+   */
+  setDialogStyle(style: string | null | undefined): void {
+    this.dialogStyle = style ?? null
+    this.applyDialogStyle()
+  }
+
+  /** novel スタイルか (#283)。`dialog_style: novel` のときだけ true。それ以外（adv / 未指定 / 未知値）は false。 */
+  private isNovelStyle(): boolean {
+    return this.dialogStyle === 'novel'
+  }
+
+  /**
+   * 現在の dialogStyle を DialogBox とスクリムに反映する (#283)。
+   * setDialogStyle / setEvents 経路から呼ぶ。adv へ戻すときはスクリムも消す。
+   */
+  private applyDialogStyle(): void {
+    const novel = this.isNovelStyle()
+    this.dialogBox.setNovelMode(novel)
+    // per-game 本文サイズ (#283 補遺) を再アサートする。setNovelMode は geometry/borderless を
+    // 冪等に再適用するため、スタイル切替を跨いでも gameDefaultFontSize が確実に効くようにする。
+    this.dialogBox.setFontSize(this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE)
+    if (!novel && this.novelScrim) {
+      // adv ではスクリムを常に消す。
+      this.novelScrim.visible = false
+      this.novelScrim.alpha = 0
+    }
+    // 改頁は幾何（boxH）依存なので、スタイル切替で派生キャッシュを破棄する (#283)。
+    this.novelPagesCache = null
+    // 既にテキスト表示中なら新スタイルで描き直す（adv↔novel 切替が即反映される）。
+    if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
+      this.render()
+    }
+  }
+
+  /**
+   * novel スクリムの表示状態を「セリフ表示中か」に合わせて更新する (#283)。
+   * adv では no-op。退避フェード中（scrimRetreatActive）は触らない（フェードが制御する）。
+   */
+  private updateNovelScrim(visibleForDialog: boolean): void {
+    if (!this.novelScrim) return
+    if (!this.isNovelStyle()) {
+      this.novelScrim.visible = false
+      this.novelScrim.alpha = 0
+      return
+    }
+    if (this.scrimRetreatActive) return
+    if (visibleForDialog) {
+      this.novelScrim.visible = true
+      this.novelScrim.alpha = NOVEL_SCRIM_ALPHA
+    } else {
+      this.novelScrim.visible = false
+      this.novelScrim.alpha = 0
+    }
   }
 
   /**
@@ -818,6 +958,10 @@ export class NovelRenderer {
     if (this.effectTimer) {
       this.time.clearInterval(this.effectTimer)
       this.effectTimer = null
+    }
+    if (this.scrimRetreatTimer) {
+      this.time.clearInterval(this.scrimRetreatTimer)
+      this.scrimRetreatTimer = null
     }
     // 動画レイヤを破棄（video 要素解放・AudioManager から detach・Sprite/Texture/mask 破棄）(#252)。
     // audioManager.destroy() より前に呼んで detach を確実に通す。
@@ -962,6 +1106,88 @@ export class NovelRenderer {
   }
 
   /**
+   * novel スクリム退避の途中状態をリセットする (#283)。
+   * シーン遷移・状態復元・破棄で退避フェードのタイマーを止め、文字 alpha を元に戻す。
+   * 退避中間状態（フェード途中）は GameState に持たないため、復元では「退避していない」前提に倒す。
+   */
+  private resetNovelScrimState(): void {
+    if (this.scrimRetreatTimer) {
+      this.time.clearInterval(this.scrimRetreatTimer)
+      this.scrimRetreatTimer = null
+    }
+    this.scrimRetreatActive = false
+    this.dialogBox.alpha = 1
+    if (this.novelScrim) {
+      this.novelScrim.alpha = 0
+      this.novelScrim.visible = false
+    }
+  }
+
+  /**
+   * novel スクリム自動退避 (#283)。
+   *
+   * 表情変化 / 場面転換のとき、スクリム（とその上の白文字）を一旦 α→0 へ滑らかに退避して
+   * 絵を見せ、`holdMs` 後に元の不透明度へ戻す。エンジン自動（作者は記述不要）。
+   * adv では no-op。セリフ非表示中（スクリムが既に消えている）も no-op。
+   *
+   * 退避中は `scrimRetreatActive=true` にして updateNovelScrim が触らないようにする。
+   * フェード計算は screenEffects.computeFadeAlpha を流用（演出中間状態は GameState に持たない）。
+   */
+  private retreatNovelScrim(holdMs = NOVEL_SCRIM_HOLD_MS): void {
+    if (!this.isNovelStyle() || !this.novelScrim) return
+    // セリフが表示されておらずスクリムが既に消えているなら退避不要。
+    if (!this.novelScrim.visible || this.novelScrim.alpha <= 0) return
+
+    if (this.scrimRetreatTimer) {
+      this.time.clearInterval(this.scrimRetreatTimer)
+      this.scrimRetreatTimer = null
+    }
+    this.scrimRetreatActive = true
+    const text = this.dialogBox
+    const FPS = 60
+    const intervalMs = 1000 / FPS
+    const durationMs = NOVEL_SCRIM_RETREAT_MS
+
+    // フェーズ: 0 = 退避(α: ALPHA→0)、1 = ホールド、2 = 復帰(α: 0→ALPHA)
+    let phase: 0 | 1 | 2 = 0
+    let phaseStart = performance.now()
+
+    this.scrimRetreatTimer = this.time.setInterval(() => {
+      if (!this.novelScrim) return
+      const elapsed = performance.now() - phaseStart
+      if (phase === 0) {
+        const { alpha, done } = computeFadeAlpha(elapsed, NOVEL_SCRIM_ALPHA, 0, durationMs)
+        this.novelScrim.alpha = alpha
+        text.alpha = 1 - (NOVEL_SCRIM_ALPHA - alpha) / NOVEL_SCRIM_ALPHA // 文字も一緒に退避
+        if (done) {
+          this.novelScrim.alpha = 0
+          text.alpha = 0
+          phase = 1
+          phaseStart = performance.now()
+        }
+      } else if (phase === 1) {
+        if (elapsed >= holdMs) {
+          phase = 2
+          phaseStart = performance.now()
+        }
+      } else {
+        const { alpha, done } = computeFadeAlpha(elapsed, 0, NOVEL_SCRIM_ALPHA, durationMs)
+        this.novelScrim.alpha = alpha
+        text.alpha = alpha / NOVEL_SCRIM_ALPHA
+        if (done) {
+          this.novelScrim.alpha = NOVEL_SCRIM_ALPHA
+          text.alpha = 1
+          if (this.scrimRetreatTimer) {
+            this.time.clearInterval(this.scrimRetreatTimer)
+            this.scrimRetreatTimer = null
+          }
+          this.scrimRetreatActive = false
+        }
+      }
+    }, intervalMs)
+  }
+
+  /**
    * 現在のゲーム状態のスナップショットを返す
    */
   getSnapshot(): NovelGameState {
@@ -991,14 +1217,20 @@ export class NovelRenderer {
     const textEvt = getTextEvent(current)
 
     if (textEvt) {
-      // 現在表示中のテキストをバックログに記録
-      const currentLine = textEvt.text[this.textIndex] ?? ''
+      // 現在表示中のテキストをバックログに記録。
+      // novel は改頁ページのテキスト、adv は text 行をそのまま記録する (#283)。
+      const novel = this.isNovelStyle()
+      const currentLine = novel
+        ? (this.getNovelPages(textEvt)[this.textIndex]?.text ?? '')
+        : (textEvt.text[this.textIndex] ?? '')
       const character = textEvt.type === 'dialog' ? textEvt.character : null
       this.backlogOverlay.addEntry(character, currentLine)
 
       this.textIndex++
-      if (this.textIndex < textEvt.text.length) {
-        // まだテキスト行が残っている
+      // novel は改頁ページ数、adv は text 行数で「まだ残りがあるか」を判定する (#283)。
+      const pageCount = this.currentPageCount(textEvt)
+      if (this.textIndex < pageCount) {
+        // まだページ/行が残っている → クリック = 改頁（次ページをクリア表示）
         this.render()
         return
       }
@@ -1007,6 +1239,8 @@ export class NovelRenderer {
     // 次のイベントへ
     this.eventIndex++
     this.textIndex = 0
+    // novel 改頁キャッシュは eventIndex 単位。次イベントへ進むので破棄する (#283)。
+    this.novelPagesCache = null
 
     if (this.eventIndex >= this.resolvedEvents.length) {
       // 全イベント完了
@@ -1157,6 +1391,9 @@ export class NovelRenderer {
       this.effectOverlay.alpha = 0
       this.effectOverlay.visible = false
     }
+    // novel スクリム退避途中（#283）は演出中間状態なので復元では持たない。リセットして
+    // 「退避していない」前提に倒す。render() が現在ページのスクリム可視性を再設定する。
+    this.resetNovelScrimState()
 
     // フラグ復元。goBack/seekTo は applyState を単独で呼ぶため、ここでの復元は必須。
     // restoreToScene 経由では resolveEvents 用に先んじて同じ復元が行われるが、
@@ -1166,6 +1403,9 @@ export class NovelRenderer {
     // インデックス復元
     this.eventIndex = state.eventIndex
     this.textIndex = state.textIndex
+    // novel 改頁キャッシュは派生。任意局面復元で events / 幾何 / eventIndex が変わり得るので破棄し、
+    // render() 側で現在の eventIndex に対して再計算させる (#283)。
+    this.novelPagesCache = null
 
     // 背景復元
     if (state.backgroundPath) {
@@ -1216,6 +1456,8 @@ export class NovelRenderer {
     const oldIndex = this.eventIndex
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    // novel 改頁キャッシュは展開後のイベント列に紐づくので破棄する (#283)。
+    this.novelPagesCache = null
 
     // 再展開で配列長が変わった場合、eventIndex を安全な範囲に収める
     if (oldIndex >= this.resolvedEvents.length) {
@@ -1373,6 +1615,8 @@ export class NovelRenderer {
         // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
         this.videoLayer.remove()
         this.blackoutOverlay.visible = false
+        // novel: 場面転換でスクリム+文字を退避して新しい絵を見せ、戻す (#283)
+        this.retreatNovelScrim()
       }
       if (event === 'VideoExit') {
         // [動画退場] で動画レイヤをクリア (#252)
@@ -1480,6 +1724,8 @@ export class NovelRenderer {
         event.ExpressionChange.expression,
         this.assetBaseUrl
       )
+      // novel: 表情変化でスクリム+文字を退避して立ち絵の変化を見せ、戻す (#283)
+      this.retreatNovelScrim()
       return
     }
     if ('Exit' in event) {
@@ -2004,6 +2250,48 @@ export class NovelRenderer {
   }
 
   /**
+   * 現在の text イベントを novel スタイルの「文境界改頁ページ」へ分割して返す (#283)。
+   *
+   * - **派生**であり GameState には持たない（純粋関数 paginateSentencesByLines で再計算可能）。
+   * - eventIndex 単位で `novelPagesCache` にキャッシュし、同イベント内の改頁クリックでは再計算しない。
+   *
+   * 手順:
+   *  1. `textEvt.text[]`（複数行）を連結し、ルビ記法を `stripRubyMarkup` で除去した plain text にする。
+   *  2. `splitIntoSentences` で文境界に割る（純粋関数）。
+   *  3. 各文を現フォントで wordwrap した行数（`DialogBox.measureLineCount`）を測る。
+   *  4. `paginateSentencesByLines` で利用可能行数（`DialogBox.novelMaxLinesPerPage`）に貪欲改頁（純粋関数）。
+   *
+   * テキストが空（立ち絵だけの空ダイアログ等）なら 1 ページ（空文字）を返し、従来の空表示を保つ。
+   */
+  private getNovelPages(textEvt: { text: string[] }): NovelPage[] {
+    if (this.novelPagesCache && this.novelPagesCache.eventIndex === this.eventIndex) {
+      return this.novelPagesCache.pages
+    }
+    // 複数 text 行はノベルでは 1 連続本文として扱い、文境界で改めて割る。
+    // 改行は stripRubyMarkup 前に空白へ畳んでおく（splitIntoSentences は改行を文内改行として温存
+    // するが、ノベルでは元の手動改行ではなく wordwrap に委ねるため空白に正規化する）。
+    const joined = textEvt.text.join('\n').replace(/\n+/g, ' ')
+    const plain = stripRubyMarkup(joined)
+    const sentences = splitIntoSentences(plain)
+    let pages: NovelPage[]
+    if (sentences.length === 0) {
+      pages = [{ text: '', lineCount: 0 }]
+    } else {
+      const lineCounts = sentences.map((s) => this.dialogBox.measureLineCount(s))
+      pages = paginateSentencesByLines(sentences, lineCounts, this.dialogBox.novelMaxLinesPerPage())
+      if (pages.length === 0) pages = [{ text: '', lineCount: 0 }]
+    }
+    this.novelPagesCache = { eventIndex: this.eventIndex, pages }
+    return pages
+  }
+
+  /** 現在の text イベントの総ページ数 (#283)。novel は改頁数、adv は text 行数。 */
+  private currentPageCount(textEvt: { text: string[] }): number {
+    if (this.isNovelStyle()) return this.getNovelPages(textEvt).length
+    return textEvt.text.length
+  }
+
+  /**
    * 現在のイベント/テキスト行を画面に反映
    */
   private render(): void {
@@ -2018,7 +2306,12 @@ export class NovelRenderer {
       return
     }
 
-    const line = textEvt.text[this.textIndex] ?? ''
+    // 表示テキスト: adv は text 行をそのまま、novel は文境界改頁ページ (#283)。
+    // novel の textIndex は「ページ index」、adv は「text 行 index」を意味する。
+    const novel = this.isNovelStyle()
+    const line = novel
+      ? (this.getNovelPages(textEvt)[this.textIndex]?.text ?? '')
+      : (textEvt.text[this.textIndex] ?? '')
     const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
 
     // スキップモード処理 (#140): 既読チェックはマーク前に行う
@@ -2096,8 +2389,14 @@ export class NovelRenderer {
     const onTypingDone = this.autoMode ? () => this.scheduleAutoAdvance() : null
     this.dialogBox.setDialog(name, line, onTypingDone)
 
-    // 最後のテキスト行かつ最後のイベントならインジケーター非表示
-    const isLastText = this.textIndex >= textEvt.text.length - 1
+    // novel スクリム (#283): セリフが表示されている間だけ半透明黒を敷く。
+    // 空ページ（立ち絵だけの空ダイアログ）はテキスト非表示なのでスクリムも出さない。
+    const hasVisibleText = line.replace(/[\s\u3000]/g, '') !== ''
+    this.updateNovelScrim(hasVisibleText)
+
+    // 最後のページ（adv は最後の text 行）かつ最後のイベントならインジケーター非表示
+    const pageCount = this.currentPageCount(textEvt)
+    const isLastText = this.textIndex >= pageCount - 1
     const isLastEvent = this.eventIndex >= this.resolvedEvents.length - 1
     this.dialogBox.setIndicatorVisible(!(isLastText && isLastEvent))
 

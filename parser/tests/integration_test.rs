@@ -3173,6 +3173,168 @@ choice_style:   "monochrome"
     );
 }
 
+// --- #283: dialog_style (adv / novel の対等 2 択) ---
+
+#[test]
+fn test_document_dialog_style_parses_from_frontmatter() {
+    // frontmatter `dialog_style: novel` が Some("novel") で parse されること (#283)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style: novel
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.dialog_style.as_deref(),
+        Some("novel"),
+        "frontmatter の dialog_style が parse されること"
+    );
+
+    // 未指定なら None（runtime で adv フォールバック）
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert_eq!(doc_none.dialog_style, None);
+}
+
+#[test]
+fn test_document_dialog_style_round_trip() {
+    // parse → emit → parse で dialog_style が保持されること (#283)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style: novel
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc1 = parser::parse(input);
+    let emitted = emitter::emit(&doc1);
+    assert!(
+        emitted.contains("dialog_style:"),
+        "emit 出力に dialog_style が含まれること: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc1.dialog_style, doc2.dialog_style);
+    assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+
+    // None なら emit に出ないこと（adv / novel に「正規デフォルト」が無いので Some のときだけ出す）
+    let mut doc_none = doc1.clone();
+    doc_none.dialog_style = None;
+    let emitted_none = emitter::emit(&doc_none);
+    assert!(
+        !emitted_none.contains("dialog_style:"),
+        "dialog_style が None なら emit に含まれないこと: {emitted_none}"
+    );
+}
+
+#[test]
+fn test_document_dialog_style_edge_cases() {
+    // 空文字 → None（choice_style と同じ規約）
+    let input_empty = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style:
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input_empty);
+    assert_eq!(
+        doc.dialog_style, None,
+        "dialog_style が空なら None として parse される"
+    );
+
+    // adv も生文字列で透過すること（adv / novel は対等）
+    let input_adv = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style: "adv"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_adv = parser::parse(input_adv);
+    assert_eq!(
+        doc_adv.dialog_style.as_deref(),
+        Some("adv"),
+        "adv も明示指定はクォートを剥がして透過する"
+    );
+}
+
+// #283 設計32: 未知値の透過
+#[test]
+fn test_document_dialog_style_unknown_value_passes_through() {
+    // 未知値（adv / novel 以外）も parser はバリデーションせず生文字列で透過する
+    // （choice_style と同じ流儀。runtime 側で未知値を adv にフォールバックする）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style: toheart
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.dialog_style.as_deref(),
+        Some("toheart"),
+        "parser は未知の dialog_style 値もバリデーションせず Some(生文字列) で透過する"
+    );
+}
+
+// #283 設計33: adv 明示の round-trip で emit に出る
+#[test]
+fn test_document_dialog_style_adv_round_trip_emits_explicitly() {
+    // adv を明示指定 → emit に `dialog_style: "adv"` が出る（None だけが省略され、
+    // 明示 adv は黙殺されない）。round-trip で adv 指定が保持される。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style: "adv"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc1 = parser::parse(input);
+    let emitted = emitter::emit(&doc1);
+    assert!(
+        emitted.contains("dialog_style: \"adv\""),
+        "adv 明示指定は emit に dialog_style: \"adv\" として出ること: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.dialog_style.as_deref(), Some("adv"));
+}
+
 #[test]
 fn test_voice_overwritten_by_later_directive() {
     // [ボイス:] が連続した場合、後者で前者を上書きし最後のものが注入されること (#144)
@@ -3427,6 +3589,8 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         aspect_ratio: "16:9".to_string(),
         choice_style: None,
         font_family: Some(r#"My "Quoted" Font, sans-serif"#.to_string()),
+        font_size: None,
+        dialog_style: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -3458,6 +3622,119 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
     assert!(
         !emitted_none.contains("font_family:"),
         "font_family が None なら emit に出ない"
+    );
+}
+
+#[test]
+fn test_document_font_size_parses_from_frontmatter() {
+    // frontmatter `font_size:` が Some(u32) で parse されること (#283 補遺)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_size: 26
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.font_size,
+        Some(26),
+        "frontmatter の font_size が数値で parse されること"
+    );
+
+    // 未指定なら None（runtime 既定 40 にフォールバック）
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert_eq!(doc_none.font_size, None);
+
+    // 空文字なら None（font_family と同じ規約）
+    let input_empty = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_size:
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_empty = parser::parse(input_empty);
+    assert_eq!(doc_empty.font_size, None);
+
+    // 非数値なら None（parse 失敗を握りつぶす）
+    let input_bad = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_size: large
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_bad = parser::parse(input_bad);
+    assert_eq!(doc_bad.font_size, None);
+}
+
+#[test]
+fn test_font_size_round_trip_with_other_frontmatter() {
+    // parse → emit → parse で font_size が保持され、他フィールドと共存すること (#283 補遺)。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+font_family: "Hina Mincho, serif"
+font_size: 26
+dialog_style: "novel"
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.font_size, Some(26));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("font_size: 26"),
+        "emit 出力に font_size が含まれること（quote なしの数値）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.font_size,
+        Some(26),
+        "round-trip で font_size が保持される"
+    );
+    // 共存フィールドも壊れていないこと
+    assert_eq!(doc2.aspect_ratio, "9:16");
+    assert_eq!(doc2.font_family.as_deref(), Some("Hina Mincho, serif"));
+    assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+
+    // None なら emit に含まれないこと
+    let mut doc_none = doc;
+    doc_none.font_size = None;
+    let emitted_none = emitter::emit(&doc_none);
+    assert!(
+        !emitted_none.contains("font_size:"),
+        "font_size が None なら emit に出ない: {emitted_none}"
     );
 }
 

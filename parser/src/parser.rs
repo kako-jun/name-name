@@ -16,6 +16,8 @@ pub fn parse(input: &str) -> Document {
     let mut aspect_ratio = String::from("16:9");
     let mut choice_style: Option<String> = None;
     let mut font_family: Option<String> = None;
+    let mut font_size: Option<u32> = None;
+    let mut dialog_style: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -50,6 +52,18 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     font_family = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("font_size:") {
+                // per-game 本文フォントサイズ (#283 補遺)。数値のみ受ける。
+                // 空・非数値は None のまま（runtime 既定 40 にフォールバック）。
+                font_size = unquote(val.trim()).parse::<u32>().ok();
+            } else if let Some(val) = line.strip_prefix("dialog_style:") {
+                // 会話の描画スタイル (#283)。`adv` / `novel` の対等 2 択。
+                // 値は parser ではバリデーションせず生文字列で透過する（choice_style と同じ流儀。
+                // runtime 側で未知値は adv にフォールバックする）。空なら None のまま。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    dialog_style = Some(v);
                 }
             }
             pos += 1;
@@ -749,6 +763,8 @@ pub fn parse(input: &str) -> Document {
         aspect_ratio,
         choice_style,
         font_family,
+        font_size,
+        dialog_style,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

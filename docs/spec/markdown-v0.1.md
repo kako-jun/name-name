@@ -30,6 +30,8 @@ choice_style: "default"
 | `aspect_ratio` | string | No | 画面比率。`"16:9"` / `"4:3"` / `"9:16"` から選択（デフォルト: `"16:9"`）。論理解像度は 16:9=800×450、4:3=800×600、9:16=450×800 |
 | `choice_style` | string | No | 選択肢ボタンのスタイル名。`"default"` / `"soft"` / `"monochrome"`（省略時は `"default"`、不明値も `"default"` にフォールバック）。詳細は [選択肢のスタイル](#選択肢のスタイル) を参照 (#146) |
 | `font_family` | string | No | per-game デフォルトのテキストフォント（CSS の `font-family` 文字列）。例: `"Klee One, cursive"`。省略時は runtime 既定 `'Noto Sans JP', sans-serif`。詳細は [フォント切替](#フォント切替) を参照 (#147) |
+| `font_size` | number | No | per-game デフォルトの本文フォントサイズ（px）。例: `26`（9:16 ノベル向け）。省略時は runtime 既定 `40`。引用符なしの数値で書く（`font_size: 26`）。詳細は [フォントサイズ](#フォントサイズ) を参照 (#283) |
+| `dialog_style` | string | No | 会話の描画スタイル。`"adv"`（下部 ADV 箱）/ `"novel"`（全画面ノベル）の対等 2 択。「正規デフォルト」は持たず作品ごとに明示するが、未指定・不明値は `adv` 描画にフォールバックする（壊さないため）。詳細は [会話の描画スタイル](#会話の描画スタイル) を参照 (#283) |
 
 フロントマターは Event ではなく、parser の Chapter 構造体（Rust 側）のフィールドとしてパースされる。フロントエンド側の EventChapter 型とは別物なので注意する。
 
@@ -360,6 +362,30 @@ frontmatter の `choice_style` で per-game に切替可能 (#146)。runtime（C
 
 シネマティック演出や子供向け動画（字幕スタイル）に向いている。per-game のデフォルト設定は `NovelRenderer` の `config.dialogBorderless` で指定できる。
 
+## 会話の描画スタイル
+
+frontmatter の `dialog_style` で会話の描画スタイルを作品単位で選ぶ (#283)。`"adv"` / `"novel"` の **対等 2 択**で、どちらかが正規デフォルトという扱いはしない（作品ごとに明示する）。未指定（None）や不明値は壊さないため runtime が `adv` 描画にフォールバックする。parser は値をバリデーションせず生文字列として透過し、emit は非 None のときだけ出力する（`aspect_ratio` / `choice_style` と同じ流儀）。
+
+| `dialog_style` | 概要 |
+|---|---|
+| `adv` | 従来どおりの下部 ADV 箱。話者名ボックス（名札）あり、タイプライタ表示。未指定・不明値もこれにフォールバック |
+| `novel` | 全画面ノベル（ToHeart 式）。全画面の半透明黒スクリム + 白文字（既存 borderless 描画を流用）、**名札なし**、テキスト領域を画面の大半に拡張（ADV 箱の固定高さを解除） |
+
+`novel` の挙動:
+
+- フォントは `adv` と共通（1 種類のまま。novel 専用フォントは無い）
+- **文境界での改頁** — クリック / タップは文を追記するのではなく、収まる行数で区切った次ページへ送る（ページ切替）
+- 表情変化・場面転換ではスクリムが自動退避し、立ち絵や背景が見える
+
+```yaml
+---
+engine: name-name
+chapter: 1
+title: "出会い"
+dialog_style: "novel"
+---
+```
+
 ## フォント切替
 
 ゲームのトーンに合わせて Dialog / Narration のテキストフォントを切替えられる (#147)。
@@ -417,6 +443,27 @@ runtime はクライアント側で `<link rel="stylesheet" href="https://fonts.
 - **フォント切替直後の最初の Dialog は wordwrap が再計算される**。typewriter は新フォントで先頭から再開されるため、表示中だった文字は一旦リセットされる
 - **オフライン / Google Fonts に到達できない環境では fallback フォントで描画される**（`<link>` 注入は失敗するが UI は止まらない）。同一ファミリーの再試行は session 中は行わず、ログを抑制する
 - **将来 self-hosted フォントへの切替余地** — 任意の URL に差し替えられるよう FontLoader を抽象化することは検討余地あり
+
+## フォントサイズ
+
+frontmatter の `font_size` で本文（Dialog / Narration）の既定フォントサイズ（px）を per-game で設定する (#283)。値は引用符なしの整数で書く。
+
+```yaml
+---
+engine: name-name
+chapter: 1
+title: "全画面ノベル"
+aspect_ratio: "9:16"
+dialog_style: "novel"
+font_size: 26
+---
+```
+
+- **省略時は runtime 既定 `40`**。16:9 の ADV ゲーム（orber 等）はこの 40 をそのまま使う
+- **9:16 ノベルなど画面が縦長で文字数を稼ぎたい作品は小さめ（例 `26`）に下げる**。これにより全ゲーム共通の DialogBox 既定を縮めずに、作品単位でだけサイズを変えられる（`font_family` と同じ per-game の流儀）
+- novel スタイルでは本文サイズが 1 ページの行数（改頁）に直結する。小さくすると 1 ページに収まる行数が増える
+- 名札・インライン名は本文サイズに連動する（`font_size - 2` / `font_size - 4`）。インジケーター（▼）とバックログ・選択肢・各種メニューは本文サイズに連動せず固定（`font_family` と同じスコープ）
+- per-line の `font_size` 上書きディレクティブは無い（サイズは per-game 単位だけ）。`0` 以下は 1px に丸められる
 
 ## 画面効果（シェイク / フラッシュ / フェード）
 

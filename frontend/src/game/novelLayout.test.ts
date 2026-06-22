@@ -13,6 +13,8 @@ import {
   resolveSceneTitle,
   resolveLayoutPosition,
   resolvePositionWithOverride,
+  splitIntoSentences,
+  paginateSentencesByLines,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -814,5 +816,211 @@ describe('resolvePositionWithOverride (#275)', () => {
     expect(resolvePositionWithOverride('中下', Infinity, -Infinity)).toEqual(base)
     // 片軸だけ無効 → その軸だけフォールバック、もう片方は採用。
     expect(resolvePositionWithOverride('中下', 2, 0.3)).toEqual({ xRatio: 0.5, yRatio: 0.3 })
+  })
+})
+
+describe('splitIntoSentences (#283 novel 改頁の文境界分割)', () => {
+  it('空文字・空白だけは空配列', () => {
+    expect(splitIntoSentences('')).toEqual([])
+    expect(splitIntoSentences('   ')).toEqual([])
+    expect(splitIntoSentences('　　')).toEqual([])
+  })
+
+  it('句点で文を割る', () => {
+    expect(splitIntoSentences('これは一文目。これは二文目。')).toEqual([
+      'これは一文目。',
+      'これは二文目。',
+    ])
+  })
+
+  it('感嘆符・疑問符（全角/半角）も文末として割る', () => {
+    expect(splitIntoSentences('本当に？はい！そうですか.')).toEqual([
+      '本当に？',
+      'はい！',
+      'そうですか.',
+    ])
+  })
+
+  it('文末記号の直後の閉じ括弧・閉じ引用符は同じ文に含める', () => {
+    expect(splitIntoSentences('「これですか？」と聞いた。')).toEqual([
+      '「これですか？」',
+      'と聞いた。',
+    ])
+  })
+
+  it('文末記号で終わらない末尾の断片も 1 文として拾う', () => {
+    expect(splitIntoSentences('一文目。記号なし末尾')).toEqual(['一文目。', '記号なし末尾'])
+  })
+
+  it('文の前後の余分な空白はトリムする（文中の空白は保持）', () => {
+    expect(splitIntoSentences('  a b。 c d。')).toEqual(['a b。', 'c d。'])
+  })
+})
+
+describe('paginateSentencesByLines (#283 novel 貪欲改頁)', () => {
+  it('溢れる手前で改頁し、最後の文がきりよく収まる（文途中で切らない）', () => {
+    // 各文 1 行・1 ページ 2 行 → 文 5 つは [2, 2, 1] 行のページに割れる。
+    const sentences = ['s1', 's2', 's3', 's4', 's5']
+    const lineCounts = [1, 1, 1, 1, 1]
+    const pages = paginateSentencesByLines(sentences, lineCounts, 2)
+    expect(pages.map((p) => p.text)).toEqual(['s1s2', 's3s4', 's5'])
+    expect(pages.map((p) => p.lineCount)).toEqual([2, 2, 1])
+  })
+
+  it('ページ長は可変でよい（長短バランス）', () => {
+    // 行数 [2, 1, 1, 3]・cap=3 → [2,1]=3行 / [1]=1行(次の3行が入らない) / [3]
+    const sentences = ['a', 'b', 'c', 'd']
+    const pages = paginateSentencesByLines(sentences, [2, 1, 1, 3], 3)
+    expect(pages.map((p) => p.text)).toEqual(['ab', 'c', 'd'])
+    expect(pages.map((p) => p.lineCount)).toEqual([3, 1, 3])
+  })
+
+  it('1 文だけで cap を超える文は単独ページにする（文途中改頁を避ける）', () => {
+    const sentences = ['short', 'verylong', 'tail']
+    // 'verylong' が 5 行で cap=3 を超える → 単独ページ。
+    const pages = paginateSentencesByLines(sentences, [1, 5, 1], 3)
+    expect(pages.map((p) => p.text)).toEqual(['short', 'verylong', 'tail'])
+  })
+
+  it('cap が 0 / 負でも最低 1 として扱い無限ループしない', () => {
+    const pages = paginateSentencesByLines(['a', 'b'], [1, 1], 0)
+    expect(pages.map((p) => p.text)).toEqual(['a', 'b'])
+  })
+
+  it('空配列は空ページ配列', () => {
+    expect(paginateSentencesByLines([], [], 3)).toEqual([])
+  })
+
+  it('joinSentences で連結方法を差し替えられる', () => {
+    const pages = paginateSentencesByLines(['a', 'b'], [1, 1], 5, (s) => s.join(' / '))
+    expect(pages[0].text).toBe('a / b')
+  })
+
+  it('行数情報が欠けている文は 1 行として防御的に扱う', () => {
+    // lineCounts が sentences より短い → 欠損分は 1 行。cap=2 → [a,b]=2行 / [c]
+    const pages = paginateSentencesByLines(['a', 'b', 'c'], [1], 2)
+    expect(pages.map((p) => p.text)).toEqual(['ab', 'c'])
+  })
+})
+
+// ===== #283 設計「追加すべきテストケース 1〜11」: 改頁境界・分割の回帰固定 =====
+//
+// jsdom では canvas.getContext('2d') が null → wordwrap が常に 1 行を返すため、
+// 「1 文が複数行に折り返されて改頁」は NovelRenderer 経由では再現できない。
+// 複数行改頁は純粋関数 paginateSentencesByLines に lineCounts を注入して縛る（ここ）。
+describe('paginateSentencesByLines 境界値 (#283 設計1〜7)', () => {
+  // 1: pageLines + lines === cap ちょうどでは改頁しない（収まる）。`>` で判定している証拠。
+  //    cap=3。文 [a=2行][b=1行]=3行ぴったり → 同一ページ。続く [c=1行] は溢れるので次ページ。
+  //    `>=` で判定していると b の手前で割れて [a]/[b,c] になり落ちる。
+  it('1: pageLines+lines が cap ちょうどなら改頁しない（> 判定の境界）', () => {
+    const pages = paginateSentencesByLines(['a', 'b', 'c'], [2, 1, 1], 3)
+    expect(pages.map((p) => p.text)).toEqual(['ab', 'c'])
+    expect(pages.map((p) => p.lineCount)).toEqual([3, 1])
+  })
+
+  // 2: pageLines + lines === cap+1（1 行だけ超過）なら改頁する。`>` 判定が cap 超えを拾う証拠。
+  //    cap=3。[a=2行][b=2行]=4行(=cap+1) → b の手前で改頁し [a]/[b]。
+  //    `>=` 取り違え・オフバイワンなら [ab] にまとめてしまい落ちる。
+  it('2: pageLines+lines が cap+1 なら改頁する（1 行超過で割れる）', () => {
+    const pages = paginateSentencesByLines(['a', 'b'], [2, 2], 3)
+    expect(pages.map((p) => p.text)).toEqual(['a', 'b'])
+    expect(pages.map((p) => p.lineCount)).toEqual([2, 2])
+  })
+
+  // 3: 単独文がちょうど cap 行なら、その文だけで単独 1 ページ（後続を載せない）。
+  //    cap=3。[a=3行][b=1行] → a は単独ページ、b は次ページ。
+  it('3: 単独文がちょうど cap 行 → 単独ページ（後続を同居させない）', () => {
+    const pages = paginateSentencesByLines(['a', 'b'], [3, 1], 3)
+    expect(pages.map((p) => p.text)).toEqual(['a', 'b'])
+    expect(pages.map((p) => p.lineCount)).toEqual([3, 1])
+  })
+
+  // 4: 単独文が cap+1 行（cap 超過）でも、それ以上割れないので単独 1 ページに置く（文途中改頁回避）。
+  //    cap=3。[a=4行][b=1行] → a 単独・b 次。
+  it('4: 単独文が cap+1 行（cap 超過）でも単独ページにする（文途中で切らない）', () => {
+    const pages = paginateSentencesByLines(['a', 'b'], [4, 1], 3)
+    expect(pages.map((p) => p.text)).toEqual(['a', 'b'])
+    expect(pages.map((p) => p.lineCount)).toEqual([4, 1])
+  })
+
+  // 5: lineCount が 0 / 負 / NaN / undefined の文は「最低 1 行」として扱う
+  //    （Number.isFinite で非有限を弾き 1 に補正）。すべて 1 行扱いなら cap=2 で 2 文ずつ詰まる。
+  it('5: lineCount が 0/負/NaN/undefined の文は最低 1 行として扱う', () => {
+    const sentences = ['z', 'n', 'x', 'u']
+    const lineCounts = [0, -3, NaN, undefined as unknown as number]
+    const pages = paginateSentencesByLines(sentences, lineCounts, 2)
+    // 各文 1 行 → cap=2 で [z,n] / [x,u]
+    expect(pages.map((p) => p.text)).toEqual(['zn', 'xu'])
+    expect(pages.map((p) => p.lineCount)).toEqual([2, 2])
+  })
+
+  // 5b: NaN の lineCount は 1 行に補正され、pageLines を NaN 汚染しない（改頁判定が効く）。
+  //     a(NaN→1) は単独で収まり、b(2) を足すと 1+2=3>cap2 で改頁 → [a]/[b]。
+  //     lineCount は NaN にならない（汚染ガードの回帰テスト）。
+  it('5b: NaN の lineCount は 1 行扱いになり pageLines を汚染しない', () => {
+    const pages = paginateSentencesByLines(['a', 'b'], [NaN, 2], 2)
+    expect(pages.map((p) => p.text)).toEqual(['a', 'b'])
+    expect(pages.map((p) => p.lineCount)).toEqual([1, 2])
+    expect(pages.some((p) => Number.isNaN(p.lineCount))).toBe(false)
+  })
+
+  // 6: cap が小数なら floor して扱う（cap=2.9 → 2）。境界 cap=1.x が 1 に落ちることも縛る。
+  it('6: cap が小数なら floor する（2.9→2 / 1.9→1）', () => {
+    const p29 = paginateSentencesByLines(['a', 'b', 'c'], [1, 1, 1], 2.9)
+    expect(p29.map((p) => p.text)).toEqual(['ab', 'c']) // floor(2.9)=2
+
+    const p19 = paginateSentencesByLines(['a', 'b'], [1, 1], 1.9)
+    expect(p19.map((p) => p.text)).toEqual(['a', 'b']) // floor(1.9)=1 → 1 行ずつ
+  })
+
+  // 7: 全ページの占有行数合計 = 各文の「最低 1 行」補正後 lineCount の総和（行を落とさない不変条件）。
+  it('7: ページ行数の合計が補正後 lineCount の総和に一致する（行を落とさない）', () => {
+    const sentences = ['a', 'b', 'c', 'd', 'e']
+    const raw = [2, 1, 0, 3, -1] // 0 と -1 は 1 に補正される
+    const expectedTotal = raw.reduce((acc, n) => acc + Math.max(1, Math.floor(n) || 1), 0)
+    const pages = paginateSentencesByLines(sentences, raw, 3)
+    const total = pages.reduce((acc, p) => acc + p.lineCount, 0)
+    expect(total).toBe(expectedTotal)
+    // 文も 1 つも欠落しない（連結すると全文が順序通り含まれる）
+    expect(pages.map((p) => p.text).join('')).toBe(sentences.join(''))
+  })
+})
+
+describe('splitIntoSentences 設計8〜11（分割規則の回帰固定 #283）', () => {
+  // 8: 半角ピリオド `.` は SENTENCE_TERMINATORS に含まれないので文境界にしない。
+  //    `3.14は円周率です。` は `.` で割れず 1 文（QA 設計の「3.14 誤分割」は誤報。逆を固定する）。
+  it('8: 半角 `.` では割らない（`3.14は円周率です。` は 1 文）', () => {
+    expect(splitIntoSentences('3.14は円周率です。')).toEqual(['3.14は円周率です。'])
+    // 数字小数を含んでも `。` の位置だけで割れる
+    expect(splitIntoSentences('円周率は3.14です。次は2.71。')).toEqual([
+      '円周率は3.14です。',
+      '次は2.71。',
+    ])
+  })
+
+  // 9: 文末記号が連続する `本当に？！はい。`。`？` の直後の `！` は trailer ではなく
+  //    それ自体が終端記号なので、`！` は独立した 1 文になる（現挙動を回帰として固定する）。
+  it('9: 文末記号の連続 `本当に？！はい。` → 終端記号ごとに割れる', () => {
+    expect(splitIntoSentences('本当に？！はい。')).toEqual(['本当に？', '！', 'はい。'])
+  })
+
+  // 10: トレーラ（閉じ括弧・読点）は直前の終端記号の文に吸収される。
+  //     `。` の直後の `」` `、` は同じ文に取り込み、次の文と混ぜない。
+  it('10: 終端直後のトレーラ（閉じ括弧・読点）は前の文に吸収する', () => {
+    expect(splitIntoSentences('「終わりだ。」、と彼は言った。')).toEqual([
+      '「終わりだ。」、',
+      'と彼は言った。',
+    ])
+    // 読点単独もトレーラとして前文へ吸収される
+    expect(splitIntoSentences('終わり。、つづく。')).toEqual(['終わり。、', 'つづく。'])
+  })
+
+  // 11: 文中の改行（\n）は文の一部として温存し、文境界にしない。
+  //     文境界（終端記号）をまたぐ改行は trim で落ちる。
+  it('11: 文中の改行は温存し、文境界の改行は trim で落とす', () => {
+    // 終端記号のない改行は同じ文の中に残る
+    expect(splitIntoSentences('1行目\n2行目。3行目')).toEqual(['1行目\n2行目。', '3行目'])
+    // 文と文の境目の改行は前後 trim で消える（行頭/行末の空白扱い）
+    expect(splitIntoSentences('一文目。\n二文目。')).toEqual(['一文目。', '二文目。'])
   })
 })
