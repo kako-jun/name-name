@@ -90,13 +90,16 @@ currentScriptPath 以外を全部 parallel fetch + parse して `otherDocs` stat
 
 #### マルチMD再生（#284）
 
-ノベル本編もシナリオを複数 .md に分割できる。`PlayerScreen` はエントリ `script.md`（リポ直下）
-を読みつつ、`listScripts`（`scriptsDir` 配下）で得た各シナリオ .md も並列取得し、**全 doc の
-全シーンを 1 本の `EventScene[]` に連結**して `NovelPlayer` に `scenes=` で渡す（エントリの
-シーンを先頭＝開始シーン）。これにより `NovelRenderer.allScenes` が全 MD 横断で埋まり、
-選択肢のジャンプ（`→ id`）が**ファイルを越えて**解決する（ハブの script.md から各シナリオ .md の
-シーンへ飛び、戻れる）。`listScripts` 不在・失敗時は単一 `script.md` 再生へフォールバックする。
-シーン ID は全 .md でグローバル一意が前提（`findSceneById` 先勝ち・重複は warn）。
+ノベル本編もシナリオを複数 .md に分割できる。`PlayerScreen` は `listScripts`（`scriptsDir`
+配下＋リポ直下）でプロジェクトの全 .md を取得し、**エントリ＝path の basename が `script.md`**
+のもの（無ければ先頭）を選ぶ。通常再生は従来どおり**エントリ doc を `flattenDocumentEvents`
+で線形化した `events=`**（多シーンの自動進行を維持）。それとは別に、**全 doc の全シーンを
+`NovelPlayer` の `jumpSceneIndex=` → `NovelRenderer.setJumpSceneIndex` でジャンプ解決索引
+（`allScenes`）としてのみ**渡す（再生ストリームは置換しない）。これにより選択肢のジャンプ
+（`→ id`）が**ファイルを越えて**解決する（ハブの script.md から各シナリオ .md のシーンへ飛び、
+戻れる）。`listScripts` 不在・失敗時は単一 `script.md` 再生へフォールバック。シーン ID は全 .md
+でグローバル一意が前提（`findSceneById` 先勝ち・重複は warn）。なおエントリ doc のみが RPG 判定・
+`aspect_ratio`/`choice_style`/`font_family` の供給元（サブ MD の RPG シーンは未対応）。
 
 ### 再生時
 
