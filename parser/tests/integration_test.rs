@@ -3718,7 +3718,11 @@ title: "テスト"
     );
 
     let doc2 = parser::parse(&emitted);
-    assert_eq!(doc2.font_size, Some(26), "round-trip で font_size が保持される");
+    assert_eq!(
+        doc2.font_size,
+        Some(26),
+        "round-trip で font_size が保持される"
+    );
     // 共存フィールドも壊れていないこと
     assert_eq!(doc2.aspect_ratio, "9:16");
     assert_eq!(doc2.font_family.as_deref(), Some("Hina Mincho, serif"));
