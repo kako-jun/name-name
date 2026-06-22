@@ -30,6 +30,7 @@ choice_style: "default"
 | `aspect_ratio` | string | No | 画面比率。`"16:9"` / `"4:3"` / `"9:16"` から選択（デフォルト: `"16:9"`）。論理解像度は 16:9=800×450、4:3=800×600、9:16=450×800 |
 | `choice_style` | string | No | 選択肢ボタンのスタイル名。`"default"` / `"soft"` / `"monochrome"`（省略時は `"default"`、不明値も `"default"` にフォールバック）。詳細は [選択肢のスタイル](#選択肢のスタイル) を参照 (#146) |
 | `font_family` | string | No | per-game デフォルトのテキストフォント（CSS の `font-family` 文字列）。例: `"Klee One, cursive"`。省略時は runtime 既定 `'Noto Sans JP', sans-serif`。詳細は [フォント切替](#フォント切替) を参照 (#147) |
+| `dialog_style` | string | No | 会話の描画スタイル。`"adv"`（下部 ADV 箱）/ `"novel"`（全画面ノベル）の対等 2 択。「正規デフォルト」は持たず作品ごとに明示するが、未指定・不明値は `adv` 描画にフォールバックする（壊さないため）。詳細は [会話の描画スタイル](#会話の描画スタイル) を参照 (#283) |
 
 フロントマターは Event ではなく、parser の Chapter 構造体（Rust 側）のフィールドとしてパースされる。フロントエンド側の EventChapter 型とは別物なので注意する。
 
@@ -359,6 +360,30 @@ frontmatter の `choice_style` で per-game に切替可能 (#146)。runtime（C
 - `[枠あり]`: 通常モード（枠あり）に戻す
 
 シネマティック演出や子供向け動画（字幕スタイル）に向いている。per-game のデフォルト設定は `NovelRenderer` の `config.dialogBorderless` で指定できる。
+
+## 会話の描画スタイル
+
+frontmatter の `dialog_style` で会話の描画スタイルを作品単位で選ぶ (#283)。`"adv"` / `"novel"` の **対等 2 択**で、どちらかが正規デフォルトという扱いはしない（作品ごとに明示する）。未指定（None）や不明値は壊さないため runtime が `adv` 描画にフォールバックする。parser は値をバリデーションせず生文字列として透過し、emit は非 None のときだけ出力する（`aspect_ratio` / `choice_style` と同じ流儀）。
+
+| `dialog_style` | 概要 |
+|---|---|
+| `adv` | 従来どおりの下部 ADV 箱。話者名ボックス（名札）あり、タイプライタ表示。未指定・不明値もこれにフォールバック |
+| `novel` | 全画面ノベル（ToHeart 式）。全画面の半透明黒スクリム + 白文字（既存 borderless 描画を流用）、**名札なし**、テキスト領域を画面の大半に拡張（ADV 箱の固定高さを解除） |
+
+`novel` の挙動:
+
+- フォントは `adv` と共通（1 種類のまま。novel 専用フォントは無い）
+- **文境界での改頁** — クリック / タップは文を追記するのではなく、収まる行数で区切った次ページへ送る（ページ切替）
+- 表情変化・場面転換ではスクリムが自動退避し、立ち絵や背景が見える
+
+```yaml
+---
+engine: name-name
+chapter: 1
+title: "出会い"
+dialog_style: "novel"
+---
+```
 
 ## フォント切替
 
