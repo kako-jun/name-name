@@ -22,6 +22,11 @@ export interface Project {
   title: string;
   repo: string; // "owner/name"
   external_url?: string; // 設定時は name-name を経由せず直接このURLに飛ぶ
+  // シナリオ .md の置き場所（リポ直下からの相対パス。例 "content/scripts"）。
+  // 未指定なら従来どおりリポ直下を列挙する（後方互換）。
+  // 指定時は「その直下 + その直下のサブディレクトリ 1 段」を列挙する
+  // （例 content/scripts/free/ や content/scripts/main/ の .md も拾う）。
+  scriptsDir?: string;
 }
 
 export interface ContentsGetResponse {

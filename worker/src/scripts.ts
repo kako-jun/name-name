@@ -1,10 +1,16 @@
 // /api/projects/:name/scripts ハンドラ (#237 / 親 #234)
 //
-// プロジェクトリポのルート直下にある `.md` のうち frontmatter に
+// プロジェクトリポのシナリオ `.md` のうち frontmatter に
 // `engine: name-name` を含むものを列挙して返す。エディタの「ファイルタブ」UI の元データ。
 //
+// 列挙対象（#284 マルチ MD 再生）:
+//   - `scriptsDir` 未指定のプロジェクト: 従来どおりリポ直下のみ
+//   - `scriptsDir` 指定のプロジェクト（例 theo-hayami の `content/scripts`）:
+//     その直下 + その直下のサブディレクトリ 1 段（例 content/scripts/free/、
+//     content/scripts/main/）まで再帰列挙する。再帰は 1 段で十分。
+//
 // 戦略:
-//   1. Contents API でルート directory listing → `.md` で size <= 64KB を pick
+//   1. Contents API で対象 directory listing → `.md` で size <= 64KB を pick
 //      （ノベルゲーム原稿で 64KB 超は普通無い。assets/ 等は dir として弾かれる）
 //   2. 各 .md について short content fetch → 先頭 1〜2KB を peek
 //      → frontmatter (`--- ... ---`) を抽出 → engine: name-name を含むか判定
@@ -103,6 +109,51 @@ function isNameNameScript(fm: Record<string, string>): boolean {
   return fm.engine === "name-name";
 }
 
+/** ディレクトリ listing 1 件分の最小型（必要フィールドだけ） */
+interface DirEntry {
+  name: string;
+  path: string;
+  sha: string;
+  size: number;
+  type: string;
+}
+
+type Octokit = ReturnType<typeof createGitHub>;
+
+/**
+ * 指定ディレクトリ（リポ相対 path。`""` はリポ直下）を Contents API で listing する。
+ * directory でないファイル単体 path だった場合・listing 失敗時は null を返す
+ * （呼び出し側でスキップ）。
+ */
+async function listDirectory(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string | null,
+  logLabel: string,
+): Promise<DirEntry[] | null> {
+  try {
+    const res = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+      owner,
+      repo,
+      path,
+      ref: ref ?? undefined,
+    });
+    logRateLimit(logLabel, res.headers as Record<string, string | number | undefined>);
+    const data = res.data as ContentsGetResponseData;
+    if (!Array.isArray(data)) return null;
+    return data as unknown as DirEntry[];
+  } catch (err) {
+    const ne = normalizeError(err);
+    logRateLimit(`${logLabel}.err`, ne.responseHeaders);
+    // 正規化したエラーを throw する。起点ディレクトリ listing の失敗は致命として
+    // 呼び出し側へ伝播し、scriptsDir 配下のサブディレクトリ listing の失敗は
+    // 呼び出し側が try/catch で握り潰してスキップする。
+    throw ne;
+  }
+}
+
 export async function handleListScripts(
   request: Request,
   env: Env,
@@ -125,36 +176,63 @@ export async function handleListScripts(
 
   const octokit = createGitHub(env);
 
-  // Step 1: ルートディレクトリ listing
-  let rootListing: ContentsGetResponseData;
+  // Step 1: 列挙対象ディレクトリの directory listing。
+  //   - scriptsDir 未指定: リポ直下（path=""）のみ
+  //   - scriptsDir 指定: その直下 + その直下のサブディレクトリ 1 段
+  // 「列挙の起点ディレクトリ」を 1 つ決め、そこから 1 段だけ下りる。
+  const baseDir = project.scriptsDir
+    ? project.scriptsDir.replace(/^\/+|\/+$/g, "") // 前後の / を剥がす
+    : "";
+
+  // 起点ディレクトリ listing。失敗（404 等）は致命なのでそのまま伝播する。
+  let baseListing: DirEntry[];
   try {
-    const res = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-      owner,
-      repo,
-      path: "",
-      ref: ref ?? undefined,
-    });
-    logRateLimit("scripts.list.root", res.headers as Record<string, string | number | undefined>);
-    rootListing = res.data as ContentsGetResponseData;
+    const listed = await listDirectory(octokit, owner, repo, baseDir, ref, "scripts.list.root");
+    if (listed === null) {
+      // 起点がファイル単体 = 想定外の repo 構成
+      return jsonResponse({ error: "scripts directory is not a directory" }, 502);
+    }
+    baseListing = listed;
   } catch (err) {
     const ne = normalizeError(err);
-    logRateLimit("scripts.list.root.err", ne.responseHeaders);
     return jsonResponse({ error: ne.message }, ne.status);
   }
 
-  if (!Array.isArray(rootListing)) {
-    // ルートがファイル単体 = 想定外の repo 構成
-    return jsonResponse({ error: "repository root is not a directory" }, 502);
+  // .md ファイルを拾うフィルタ（64KB 足切り）。
+  const pickMdFiles = (entries: DirEntry[]): DirEntry[] =>
+    entries.filter(
+      (entry) =>
+        entry.type === "file" &&
+        entry.name.toLowerCase().endsWith(".md") &&
+        // 64KB 上限: ノベルゲーム原稿として現実的な上限。
+        // README 等のメタファイルは frontmatter peek で弾けるが、サイズで足切りすることで N 回 fetch のコストを抑える。
+        entry.size <= 64 * 1024,
+    );
+
+  // 起点直下の .md
+  let candidates: DirEntry[] = pickMdFiles(baseListing);
+
+  // scriptsDir 指定時のみ、起点直下のサブディレクトリ 1 段を下りて .md を足す。
+  // （再帰は 1 段で十分。サブの中のサブは見ない）
+  if (project.scriptsDir) {
+    const subDirs = baseListing
+      .filter((entry) => entry.type === "dir")
+      // サブディレクトリ数上限（暴走防止）
+      .slice(0, 50);
+    for (const dir of subDirs) {
+      let subListing: DirEntry[] | null;
+      try {
+        subListing = await listDirectory(octokit, owner, repo, dir.path, ref, "scripts.list.sub");
+      } catch {
+        // サブディレクトリ listing の失敗は listing 全体を落とさずスキップ
+        continue;
+      }
+      if (subListing) candidates = candidates.concat(pickMdFiles(subListing));
+    }
   }
 
-  // 0 件 .md の repo もありうる（external_url 型）。空配列で返す。
-  const candidates = rootListing
-    .filter((entry) => entry.type === "file" && entry.name.toLowerCase().endsWith(".md"))
-    // 64KB 上限: ノベルゲーム原稿として現実的な上限。
-    // README 等のメタファイルは frontmatter peek で弾けるが、サイズで足切りすることで N 回 fetch のコストを抑える。
-    .filter((entry) => entry.size <= 64 * 1024)
-    // ファイル数上限: ルートに 50 個以上 .md がある repo は対象外（暴走防止）
-    .slice(0, 50);
+  // ファイル数上限: 50 個以上 .md がある repo は対象外（暴走防止）
+  candidates = candidates.slice(0, 50);
 
   // Step 2: 各 .md について content fetch → frontmatter peek
   const scripts: ScriptInfo[] = [];

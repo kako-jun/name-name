@@ -22,6 +22,7 @@ export const PROJECTS: ReadonlyArray<Project> = [
   { name: "legend-of-window-ninja", title: "ウィンドウ忍者伝説", repo: "kako-jun/legend-of-window-ninja", external_url: "https://kako-jun.github.io/legend-of-window-ninja/" },
   { name: "elevator-gurl", title: "ヱレベヰターガール", repo: "kako-jun/elevator-gurl", external_url: "https://elevator-gurl.llll-ll.com" },
   { name: "the-peeple", title: "The Peeple", repo: "kako-jun/the-peeple", external_url: "https://the-peeple.llll-ll.com" },
+  { name: "theo-hayami", title: "せおはやみ", repo: "kako-jun/theo-hayami", scriptsDir: "content/scripts" },
 ];
 
 export function findProject(name: string): Project | undefined {
