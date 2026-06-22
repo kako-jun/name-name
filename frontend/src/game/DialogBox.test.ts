@@ -25,6 +25,9 @@ import {
   PORTRAIT_MARGIN,
   PORTRAIT_X,
   computePortraitContainFit,
+  NOVEL_TEXT_MARGIN_X,
+  NOVEL_TEXT_TOP_RATIO,
+  NOVEL_TEXT_MARGIN_BOTTOM,
 } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 
@@ -438,5 +441,228 @@ describe('isJustShown ガード (メニュー → tryTalk → dialog.show 直後
     box.hide()
     box.show('B', '2', undefined)
     expect(box.isJustShown(300)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #283: novel mode（全画面ノベル描画）
+// ---------------------------------------------------------------------------
+//
+// setNovelMode(true) で borderless 相当（枠・背景・名札なし、白文字 + DropShadow）にし、
+// テキスト域を画面の大半へ拡張する。adv へ戻すと下部 ADV 箱の幾何に復帰する。
+//
+// 期待値は実装と同じく export 定数（NOVEL_TEXT_MARGIN_X / NOVEL_TEXT_TOP_RATIO /
+// NOVEL_TEXT_MARGIN_BOTTOM）から算出する（値は直書きしない。実装が定数を変えても追従する）。
+// スクリム・退避フェード・描画反映は NovelRenderer 側 + 実機検証に委ねる（jsdom 観測不能）。
+describe('DialogBox novel mode (#283)', () => {
+  const W = 800
+  const H = 600
+  const FONT_SIZE = 40
+  const PAD = 20
+
+  // novel 幾何を export 定数から算出する参照オラクル（実装 applyNovelGeometry と同形）。
+  function expectedNovelGeometry(screenWidth: number, screenHeight: number) {
+    const topY = Math.round(screenHeight * NOVEL_TEXT_TOP_RATIO)
+    return {
+      boxX: NOVEL_TEXT_MARGIN_X,
+      boxW: screenWidth - NOVEL_TEXT_MARGIN_X * 2,
+      boxY: topY,
+      boxH: screenHeight - topY - NOVEL_TEXT_MARGIN_BOTTOM,
+    }
+  }
+
+  // novelMaxLinesPerPage の参照オラクル（lineHeight = fontSize * 1.6・実装と同形）。
+  function expectedMaxLines(boxH: number, fontSize: number, padding: number) {
+    const usable = boxH - padding * 2
+    return Math.max(1, Math.floor(usable / (fontSize * 1.6)))
+  }
+
+  interface NovelInternals {
+    bg: { visible: boolean }
+    nameBox: { visible: boolean }
+    nameText: { visible: boolean }
+    boxX: number
+    boxW: number
+    boxY: number
+    boxH: number
+  }
+  function novelInternals(box: DialogBox): NovelInternals {
+    return box as unknown as NovelInternals
+  }
+
+  function makeBox(width = W, height = H): DialogBox {
+    return new DialogBox({
+      screenWidth: width,
+      screenHeight: height,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: PAD,
+      fontSize: FONT_SIZE,
+    })
+  }
+
+  // 12: novel ON でセリフ表示すると背景（枠・地）が非表示になる（borderless 化）。
+  //     bg.visible は setDialog 時に `!borderless` で更新される（novel は borderless 相当）ので、
+  //     setNovelMode 直後でなく setDialog 経由で「枠が出ない」ことを観測する。
+  it('12: novel ON でセリフ表示すると背景（枠・地）が非表示になる（borderless 化）', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    box.setDialog('A', 'セリフ。')
+    expect(box.isNovelMode).toBe(true)
+    expect(novelInternals(box).bg.visible).toBe(false)
+    box.dispose()
+  })
+
+  // 12b: 対照 — adv（novel OFF）でセリフ表示すると背景（枠・地）は表示される。
+  //     名札の measureText は jsdom canvas null で落ちるため、名前なし（null）で背景可視だけを観測する。
+  it('12b: adv でセリフ表示すると背景は表示される（novel との対照で borderless 化を確定）', () => {
+    const box = makeBox()
+    box.setDialog(null, 'セリフ。')
+    expect(box.isNovelMode).toBe(false)
+    expect(novelInternals(box).bg.visible).toBe(true)
+    box.dispose()
+  })
+
+  // 13: novel ON では名札（separate box）を表示しようとしても出ない。
+  it('13: novel ON では名札ボックス・名札テキストが非表示のまま（話者名を出さない）', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    box.setDialog('キャラA', 'セリフ。')
+    const i = novelInternals(box)
+    expect(i.nameBox.visible).toBe(false)
+    expect(i.nameText.visible).toBe(false)
+    box.dispose()
+  })
+
+  // 14: novel 幾何が export 定数の算出値に一致する（直書きしない）。
+  it('14: novel ON のテキスト域 boxX/boxW/boxY/boxH が NOVEL_* 定数の算出値に一致する', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const i = novelInternals(box)
+    const exp = expectedNovelGeometry(W, H)
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxH).toBe(exp.boxH)
+    box.dispose()
+  })
+
+  // 15: adv → novel → adv で boxH が advBoxHeight（=180）へ戻る退行ガード。
+  //     novel が boxH を全画面に広げたまま adv に残ると下部箱が巨大化する事故を撃つ。
+  it('15: adv→novel→adv で boxH が元の ADV 箱高さ（advBoxHeight）に戻る', () => {
+    const box = makeBox()
+    const advBoxH = novelInternals(box).boxH // 初期 adv 箱高さ = 180
+    expect(advBoxH).toBe(180)
+
+    box.setNovelMode(true)
+    expect(novelInternals(box).boxH).toBe(expectedNovelGeometry(W, H).boxH)
+
+    box.setNovelMode(false)
+    // adv へ戻ったら下部 ADV 箱の高さに復帰している
+    expect(box.isNovelMode).toBe(false)
+    expect(novelInternals(box).boxH).toBe(advBoxH)
+    box.dispose()
+  })
+
+  // 16: novel↔adv を反復切替しても幾何が累積ドリフトせず冪等（同じ状態に収束する）。
+  it('16: novel↔adv の反復切替は冪等（boxH が毎回同じ値に収束する）', () => {
+    const box = makeBox()
+    const advBoxH = novelInternals(box).boxH
+    const novelBoxH = expectedNovelGeometry(W, H).boxH
+
+    for (let n = 0; n < 5; n++) {
+      box.setNovelMode(true)
+      expect(novelInternals(box).boxH).toBe(novelBoxH)
+      box.setNovelMode(false)
+      expect(novelInternals(box).boxH).toBe(advBoxH)
+    }
+    box.dispose()
+  })
+
+  // 16b: novel を 2 回連続 ON しても冪等（NovelRenderer が setBorderless 後に再適用する経路を想定）。
+  it('16b: novel ON を連続適用しても幾何が変わらない（冪等再適用）', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const first = { ...novelInternals(box) }
+    box.setNovelMode(true)
+    const i = novelInternals(box)
+    expect(i.boxX).toBe(first.boxX)
+    expect(i.boxW).toBe(first.boxW)
+    expect(i.boxY).toBe(first.boxY)
+    expect(i.boxH).toBe(first.boxH)
+    box.dispose()
+  })
+
+  // 17: novelMaxLinesPerPage が各アスペクト比で定数算出値に一致し、最低 1 を下回らない。
+  it('17: novelMaxLinesPerPage が各アスペクト比で定数算出値・最低 1 になる', () => {
+    const cases: Array<[number, number]> = [
+      [800, 450], // 16:9
+      [800, 600], // 4:3
+      [450, 800], // 9:16（縦長 = 本文域が広い）
+    ]
+    for (const [w, h] of cases) {
+      const box = makeBox(w, h)
+      box.setNovelMode(true)
+      const boxH = expectedNovelGeometry(w, h).boxH
+      const exp = expectedMaxLines(boxH, FONT_SIZE, PAD)
+      expect(box.novelMaxLinesPerPage()).toBe(exp)
+      expect(box.novelMaxLinesPerPage()).toBeGreaterThanOrEqual(1)
+      box.dispose()
+    }
+  })
+
+  // 17b: 本文域が潰れる極小画面でも novelMaxLinesPerPage は最低 1 を返す（0 行ページで無限ループしない）。
+  it('17b: 極端に低い画面でも novelMaxLinesPerPage は 1 以上（Math.max(1, …) 下限）', () => {
+    const box = makeBox(800, 200) // boxH が小さくなり usable/行高 < 1 になり得る
+    box.setNovelMode(true)
+    expect(box.novelMaxLinesPerPage()).toBeGreaterThanOrEqual(1)
+    box.dispose()
+  })
+
+  // 18: measureLineCount は jsdom では canvas null で wordwrap が常に 1 行を返すため、
+  //     具体値に依存せず「呼べて正の整数を返す」ことだけを縛る（実描画は実機委譲）。
+  it('18: measureLineCount は呼べて正の整数を返す（jsdom の 1 行値に依存しない）', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const n = box.measureLineCount('適当なテキスト。')
+    expect(Number.isInteger(n)).toBe(true)
+    expect(n).toBeGreaterThanOrEqual(1)
+    // 空文字でも 0 にはならない（wordwrap は [''] を返す）
+    expect(box.measureLineCount('')).toBeGreaterThanOrEqual(1)
+    box.dispose()
+  })
+
+  // 19: novel ON のまま空テキストを setDialog すると hide される（立ち絵だけの空ダイアログ）。
+  //     ▼ や透明枠が残らない既存挙動を novel でも保つ。
+  it('19: novel ON で空テキストの setDialog は box を隠す（showing=false）', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    box.setDialog(null, '   ')
+    expect(box.isShowing).toBe(false)
+    box.dispose()
+  })
+
+  // 20: novel ON で redraw（リサイズ）しても adv 箱に戻らず novel 幾何を維持する。
+  it('20: novel ON で redraw すると novel 幾何を維持する（adv 箱へ戻らない）', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const nw = 1024
+    const nh = 768
+    box.redraw(nw, nh)
+    const i = novelInternals(box)
+    const exp = expectedNovelGeometry(nw, nh)
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxH).toBe(exp.boxH)
+    box.dispose()
+  })
+
+  // 21: 初期状態（setNovelMode を呼ぶ前）は adv（isNovelMode=false）。デフォルトが novel に倒れない。
+  it('21: 初期状態は adv（novel ではない）', () => {
+    const box = makeBox()
+    expect(box.isNovelMode).toBe(false)
+    box.dispose()
   })
 })

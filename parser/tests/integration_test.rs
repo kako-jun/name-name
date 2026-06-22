@@ -3285,6 +3285,56 @@ dialog_style: "adv"
     );
 }
 
+// #283 設計32: 未知値の透過
+#[test]
+fn test_document_dialog_style_unknown_value_passes_through() {
+    // 未知値（adv / novel 以外）も parser はバリデーションせず生文字列で透過する
+    // （choice_style と同じ流儀。runtime 側で未知値を adv にフォールバックする）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style: toheart
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.dialog_style.as_deref(),
+        Some("toheart"),
+        "parser は未知の dialog_style 値もバリデーションせず Some(生文字列) で透過する"
+    );
+}
+
+// #283 設計33: adv 明示の round-trip で emit に出る
+#[test]
+fn test_document_dialog_style_adv_round_trip_emits_explicitly() {
+    // adv を明示指定 → emit に `dialog_style: "adv"` が出る（None だけが省略され、
+    // 明示 adv は黙殺されない）。round-trip で adv 指定が保持される。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style: "adv"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc1 = parser::parse(input);
+    let emitted = emitter::emit(&doc1);
+    assert!(
+        emitted.contains("dialog_style: \"adv\""),
+        "adv 明示指定は emit に dialog_style: \"adv\" として出ること: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.dialog_style.as_deref(), Some("adv"));
+}
+
 #[test]
 fn test_voice_overwritten_by_later_directive() {
     // [ボイス:] が連続した場合、後者で前者を上書きし最後のものが注入されること (#144)
