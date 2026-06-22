@@ -142,12 +142,12 @@ const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 4, distance: 2, alpha: 0
 
 /**
  * novel スタイル (#283) のテキスト領域マージン（px、論理座標）。
- * 全画面ノベル（ToHeart 式）では画面の大半をテキストに使う。下端・左右に少し余白を残し、
- * 上端は立ち絵の頭が隠れすぎないよう中段から下を本文域にする。テストが参照できるよう export する。
+ * 全画面ノベル（ToHeart 式）では画面の大半をテキストに使う。本文は左上付近から始め、
+ * 左右・上下に小さな余白を残す。テストが参照できるよう export する。
  */
 export const NOVEL_TEXT_MARGIN_X = 60
-/** 本文域の上端 Y（画面高に対する比率）。画面の上 40% は絵を見せ、下 60% を本文域にする。 */
-export const NOVEL_TEXT_TOP_RATIO = 0.4
+/** 本文域の上端 Y（画面高に対する比率）。本文は画面上部（左上付近）から始める。 */
+export const NOVEL_TEXT_TOP_RATIO = 0.08
 /** 本文域の下端マージン（px）。 */
 export const NOVEL_TEXT_MARGIN_BOTTOM = 50
 

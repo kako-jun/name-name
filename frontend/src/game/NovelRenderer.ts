@@ -320,13 +320,16 @@ export class NovelRenderer {
       height: this.screenHeight,
       background: 0x000000,
       antialias: true,
-      // #279: 既定では device DPI でラスタライズして表示を鮮明にする。
-      // resolution 未指定だと PixiJS は 1 固定になり、論理解像度（9:16=450×800 等）の
-      // 裏バッファをそのまま拡大表示するためボケる（DOM は device DPI で自動ラスタライズ）。
-      // autoDensity=true で CSS サイズは論理 px のまま、裏バッファだけ resolution 倍にする。
-      // PixiJS v8 の Text は resolution 未指定ならレンダラ解像度に追従するので全テキストが鮮明になる。
+      // #279: device DPI でラスタライズして表示を鮮明にする。resolution 未指定だと PixiJS は 1
+      // 固定になり、論理解像度（9:16=450×800 等）の裏バッファをそのまま拡大表示するためボケる。
+      // resolution=DPR で裏バッファを device DPI 倍に取り、PixiJS v8 の Text もそれに追従して鮮明になる。
       resolution: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
-      autoDensity: true,
+      // autoDensity は false。true だと PixiJS が canvas の CSS サイズを論理 px に固定し、
+      // wrapper（レターボックス内接矩形）に追従せず＝ブラウザを縮めても中身が縮まず左上クロップになる。
+      // false にして CSS（NovelPlayer の [&>canvas]:w-full/h-full）に表示サイズを委ね、固定解像度の
+      // レンダリングを wrapper サイズへスケールさせる（背景・立ち絵・文字ごと縮小拡大）。鮮明さは
+      // 上の resolution=DPR が担保する（裏バッファは論理×DPR のまま）。
+      autoDensity: false,
     })
     this.appInitialized = true
 
