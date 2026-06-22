@@ -472,8 +472,10 @@ export function resolveSceneTitle(
  * 句点・感嘆符・疑問符（全角/半角）に加え、それらの直後に続く閉じ括弧・閉じ引用符は
  * 同じ文の一部として扱う（`「…ですか？」` を `？` で割らず `」` まで含めて 1 文にする）。
  */
-const SENTENCE_TERMINATORS = '。！？!?' // 。！？!?
-const SENTENCE_TRAILERS = '」』】〕〗〙）］｝〉》”’｠、，' // 」』】〕〗〙）］｝〉》”’｀、，
+// 文末記号: 句点・感嘆符・疑問符（全角＋半角 !?）
+const SENTENCE_TERMINATORS = '。！？!?'
+// 文末記号の直後に同じ文へ取り込む閉じ括弧・閉じ引用符・読点
+const SENTENCE_TRAILERS = '」』】〕〗〙）］｝〉》”’｠、，'
 
 /**
  * 本文を文境界で分割する純粋関数 (#283)。

@@ -113,6 +113,9 @@ export const NOVEL_SCRIM_ALPHA = 0.5
 /** novel スクリムの自動退避フェード時間（ms）。表情変化・場面転換で絵を見せるための退避/復帰 (#283)。 */
 export const NOVEL_SCRIM_RETREAT_MS = 220
 
+/** novel スクリム退避後、絵を見せたまま保持する時間（ms）。退避→ホールド→復帰の中段 (#283)。 */
+export const NOVEL_SCRIM_HOLD_MS = 500
+
 export class NovelRenderer {
   private app: Application
   /** init() 完了済みかのフラグ。React StrictMode 等で init 中に destroy が呼ばれたときの no-op 判定に使う */
@@ -1102,7 +1105,7 @@ export class NovelRenderer {
    * 退避中は `scrimRetreatActive=true` にして updateNovelScrim が触らないようにする。
    * フェード計算は screenEffects.computeFadeAlpha を流用（演出中間状態は GameState に持たない）。
    */
-  private retreatNovelScrim(holdMs = 500): void {
+  private retreatNovelScrim(holdMs = NOVEL_SCRIM_HOLD_MS): void {
     if (!this.isNovelStyle() || !this.novelScrim) return
     // セリフが表示されておらずスクリムが既に消えているなら退避不要。
     if (!this.novelScrim.visible || this.novelScrim.alpha <= 0) return
