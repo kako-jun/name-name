@@ -12,6 +12,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 
 // API クライアントをモック化
 const listProjectsMock = vi.fn()
+const listScriptsMock = vi.fn()
 const getContentsMock = vi.fn()
 vi.mock('../api/client', async (importOriginal) => {
   // ApiError 等の本物のクラスは使い回したいので importOriginal で取り出す。
@@ -20,6 +21,9 @@ vi.mock('../api/client', async (importOriginal) => {
     ...orig,
     createApiClient: () => ({
       listProjects: listProjectsMock,
+      // #284: マルチ MD ロードで PlayerScreen が呼ぶ。既定は空配列
+      //   （エントリ script.md だけの単一 script 相当）。個別テストで上書きする。
+      listScripts: listScriptsMock,
       getContents: getContentsMock,
       putContents: vi.fn(),
       listAssets: vi.fn(),
@@ -43,12 +47,18 @@ vi.mock('../wasm/parser', () => ({
 // props だけ確認できる軽い擬似コンポーネントに差し替える
 const novelPlayerProps = vi.fn()
 vi.mock('../components/NovelPlayer', () => ({
-  default: (props: { events: unknown; assetBaseUrl?: string }) => {
+  default: (props: { events: unknown; scenes?: unknown; assetBaseUrl?: string }) => {
     novelPlayerProps(props)
     return (
       <div
         data-testid="novel-player"
         data-event-count={Array.isArray(props.events) ? props.events.length : 0}
+        data-scene-count={Array.isArray(props.scenes) ? props.scenes.length : 0}
+        data-scene-ids={
+          Array.isArray(props.scenes)
+            ? (props.scenes as Array<{ id: string }>).map((s) => s.id).join(',')
+            : ''
+        }
         data-asset-base-url={props.assetBaseUrl ?? ''}
       />
     )
@@ -67,6 +77,11 @@ import PlayerScreen from './PlayerScreen'
 
 beforeEach(() => {
   listProjectsMock.mockReset()
+  listScriptsMock.mockReset()
+  // 既定: エントリ script.md だけ（= 従来の単一 script 再生と等価）
+  listScriptsMock.mockResolvedValue([
+    { path: 'script.md', sha: 's', size: 1, title: null, hidden: false },
+  ])
   getContentsMock.mockReset()
   parseMarkdownMock.mockReset()
   novelPlayerProps.mockReset()
@@ -148,6 +163,76 @@ describe('PlayerScreen', () => {
     expect(screen.queryByText('アセット管理')).toBeNull()
     expect(screen.queryByRole('button', { name: 'ノベル' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'RPG' })).toBeNull()
+  })
+
+  it('#284: 複数 MD のシーンを連結して scenes= で NovelPlayer に渡す（エントリ先頭）', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    // listScripts: エントリ + サブ MD 2 本（hidden は除外される）
+    listScriptsMock.mockResolvedValue([
+      { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/free/a.md', sha: 's1', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/main/b.md', sha: 's2', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/secret.md', sha: 's3', size: 1, title: null, hidden: true },
+    ])
+
+    // getContents は path ごとに別の内容を返す
+    getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+      path,
+      sha: 'x',
+      content: path,
+    }))
+
+    // parseMarkdown は path 文字列をシーン id にしてドキュメントを返す
+    parseMarkdownMock.mockImplementation(async (md: string) => ({
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            { id: `hub-${md}`, title: 't', view: 'TopDown', events: [] },
+            { id: `scene2-${md}`, title: 't2', view: 'TopDown', events: [] },
+          ],
+        },
+      ],
+    }))
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+
+    const player = screen.getByTestId('novel-player')
+    // エントリ(script.md) 2 シーン + サブ 2 本 × 2 シーン = 6（hidden は除外）
+    expect(player.getAttribute('data-scene-count')).toBe('6')
+
+    // 連結順: エントリ script.md のシーンが先頭
+    const ids = (player.getAttribute('data-scene-ids') ?? '').split(',')
+    expect(ids[0]).toBe('hub-script.md')
+    expect(ids[1]).toBe('scene2-script.md')
+    // サブ MD のシーンも含まれる
+    expect(ids).toContain('hub-content/scripts/free/a.md')
+    expect(ids).toContain('hub-content/scripts/main/b.md')
+    // hidden=true の secret.md は取得・連結されない
+    expect(getContentsMock).not.toHaveBeenCalledWith(
+      'theo-hayami',
+      'content/scripts/secret.md',
+      'main'
+    )
+    // エントリ以外の 2 本は main ブランチで取得される
+    expect(getContentsMock).toHaveBeenCalledWith('theo-hayami', 'content/scripts/free/a.md', 'main')
   })
 
   it('RPG シーンを含むドキュメントは RPGPlayer に渡す', async () => {
