@@ -13,6 +13,8 @@ import {
   resolveSceneTitle,
   resolveLayoutPosition,
   resolvePositionWithOverride,
+  splitIntoSentences,
+  paginateSentencesByLines,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -814,5 +816,89 @@ describe('resolvePositionWithOverride (#275)', () => {
     expect(resolvePositionWithOverride('中下', Infinity, -Infinity)).toEqual(base)
     // 片軸だけ無効 → その軸だけフォールバック、もう片方は採用。
     expect(resolvePositionWithOverride('中下', 2, 0.3)).toEqual({ xRatio: 0.5, yRatio: 0.3 })
+  })
+})
+
+describe('splitIntoSentences (#283 novel 改頁の文境界分割)', () => {
+  it('空文字・空白だけは空配列', () => {
+    expect(splitIntoSentences('')).toEqual([])
+    expect(splitIntoSentences('   ')).toEqual([])
+    expect(splitIntoSentences('　　')).toEqual([])
+  })
+
+  it('句点で文を割る', () => {
+    expect(splitIntoSentences('これは一文目。これは二文目。')).toEqual([
+      'これは一文目。',
+      'これは二文目。',
+    ])
+  })
+
+  it('感嘆符・疑問符（全角/半角）も文末として割る', () => {
+    expect(splitIntoSentences('本当に？はい！そうですか.')).toEqual([
+      '本当に？',
+      'はい！',
+      'そうですか.',
+    ])
+  })
+
+  it('文末記号の直後の閉じ括弧・閉じ引用符は同じ文に含める', () => {
+    expect(splitIntoSentences('「これですか？」と聞いた。')).toEqual([
+      '「これですか？」',
+      'と聞いた。',
+    ])
+  })
+
+  it('文末記号で終わらない末尾の断片も 1 文として拾う', () => {
+    expect(splitIntoSentences('一文目。記号なし末尾')).toEqual(['一文目。', '記号なし末尾'])
+  })
+
+  it('文の前後の余分な空白はトリムする（文中の空白は保持）', () => {
+    expect(splitIntoSentences('  a b。 c d。')).toEqual(['a b。', 'c d。'])
+  })
+})
+
+describe('paginateSentencesByLines (#283 novel 貪欲改頁)', () => {
+  it('溢れる手前で改頁し、最後の文がきりよく収まる（文途中で切らない）', () => {
+    // 各文 1 行・1 ページ 2 行 → 文 5 つは [2, 2, 1] 行のページに割れる。
+    const sentences = ['s1', 's2', 's3', 's4', 's5']
+    const lineCounts = [1, 1, 1, 1, 1]
+    const pages = paginateSentencesByLines(sentences, lineCounts, 2)
+    expect(pages.map((p) => p.text)).toEqual(['s1s2', 's3s4', 's5'])
+    expect(pages.map((p) => p.lineCount)).toEqual([2, 2, 1])
+  })
+
+  it('ページ長は可変でよい（長短バランス）', () => {
+    // 行数 [2, 1, 1, 3]・cap=3 → [2,1]=3行 / [1]=1行(次の3行が入らない) / [3]
+    const sentences = ['a', 'b', 'c', 'd']
+    const pages = paginateSentencesByLines(sentences, [2, 1, 1, 3], 3)
+    expect(pages.map((p) => p.text)).toEqual(['ab', 'c', 'd'])
+    expect(pages.map((p) => p.lineCount)).toEqual([3, 1, 3])
+  })
+
+  it('1 文だけで cap を超える文は単独ページにする（文途中改頁を避ける）', () => {
+    const sentences = ['short', 'verylong', 'tail']
+    // 'verylong' が 5 行で cap=3 を超える → 単独ページ。
+    const pages = paginateSentencesByLines(sentences, [1, 5, 1], 3)
+    expect(pages.map((p) => p.text)).toEqual(['short', 'verylong', 'tail'])
+  })
+
+  it('cap が 0 / 負でも最低 1 として扱い無限ループしない', () => {
+    const pages = paginateSentencesByLines(['a', 'b'], [1, 1], 0)
+    expect(pages.map((p) => p.text)).toEqual(['a', 'b'])
+  })
+
+  it('空配列は空ページ配列', () => {
+    expect(paginateSentencesByLines([], [], 3)).toEqual([])
+  })
+
+  it('joinSentences で連結方法を差し替えられる', () => {
+    const pages = paginateSentencesByLines(['a', 'b'], [1, 1], 5, (s) => s.join(' / '))
+    expect(pages[0].text).toBe('a / b')
+  })
+
+  it('行数情報が欠けている文は 1 行として防御的に扱う', () => {
+    // lineCounts が sentences より短い → 欠損分は 1 行。cap=2 → [a,b]=2行 / [c]
+    const pages = paginateSentencesByLines(['a', 'b', 'c'], [1], 2)
+    expect(pages.map((p) => p.text)).toEqual(['ab', 'c'])
   })
 })

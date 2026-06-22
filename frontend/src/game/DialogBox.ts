@@ -141,6 +141,17 @@ const DEFAULT_MS_PER_CHAR = 30
 const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 4, distance: 2, alpha: 0.9 } as const
 
 /**
+ * novel スタイル (#283) のテキスト領域マージン（px、論理座標）。
+ * 全画面ノベル（ToHeart 式）では画面の大半をテキストに使う。下端・左右に少し余白を残し、
+ * 上端は立ち絵の頭が隠れすぎないよう中段から下を本文域にする。テストが参照できるよう export する。
+ */
+export const NOVEL_TEXT_MARGIN_X = 60
+/** 本文域の上端 Y（画面高に対する比率）。画面の上 40% は絵を見せ、下 60% を本文域にする。 */
+export const NOVEL_TEXT_TOP_RATIO = 0.4
+/** 本文域の下端マージン（px）。 */
+export const NOVEL_TEXT_MARGIN_BOTTOM = 50
+
+/**
  * ルビの x 位置計算用の Canvas measure コンテキスト。
  */
 let cachedRubyCanvas: HTMLCanvasElement | null = null
@@ -198,6 +209,19 @@ export class DialogBox extends Container {
   private nameColor: number
   private nameSeparateBox: boolean
 
+  // --- 画面寸法（novel モードの全画面テキスト領域算出に使う #283） ---
+  private screenWidth: number
+  private screenHeight: number
+  /**
+   * novel スタイル (#283)。true のとき:
+   *  - borderless 相当（枠・背景・名札なし、白文字 + DropShadow）
+   *  - テキスト領域を画面の大半に拡張（boxH=180 固定を解除）
+   * adv スタイルは false（従来の下部 ADV 箱）。NovelRenderer が改頁と組み合わせて使う。
+   */
+  private novelMode = false
+  /** adv モードの ADV 箱高さ（novel → adv 復帰時に boxH を戻すため保持 #283） */
+  private advBoxHeight: number
+
   // --- 状態 ---
   private currentText: string = ''
   private showing = false
@@ -247,8 +271,11 @@ export class DialogBox extends Container {
     this.nameSeparateBox = nameSeparateBox
     this.marginX = marginX
     this.marginBottom = marginBottom
+    this.screenWidth = screenWidth
+    this.screenHeight = screenHeight
     this.boxW = screenWidth - marginX * 2
     this.boxH = boxHeight
+    this.advBoxHeight = boxHeight
     this.boxX = marginX
     this.boxY = screenHeight - boxHeight - marginBottom
 
@@ -411,9 +438,38 @@ export class DialogBox extends Container {
   }
 
   /**
+   * novel スタイル (#283) の全画面テキスト領域へ幾何を再計算する。
+   * 画面の下 60%（`NOVEL_TEXT_TOP_RATIO` 以下）をテキスト域にし、左右・下に小さな余白を残す。
+   * 改頁はこの領域に収まる行数 (`novelMaxLinesPerPage`) で行う。
+   */
+  private applyNovelGeometry(): void {
+    const topY = Math.round(this.screenHeight * NOVEL_TEXT_TOP_RATIO)
+    this.boxX = NOVEL_TEXT_MARGIN_X
+    this.boxW = this.screenWidth - NOVEL_TEXT_MARGIN_X * 2
+    this.boxY = topY
+    this.boxH = this.screenHeight - topY - NOVEL_TEXT_MARGIN_BOTTOM
+
+    // テキスト位置更新（borderless 前提なので背景・名札は描かない）。
+    this.dialogText.x = this.textStartX()
+    this.dialogText.y = this.textStartY()
+    this.rubyContainer.x = this.dialogText.x
+    this.rubyContainer.y = this.dialogText.y
+    this.indicator.x = this.boxX + this.boxW - 40
+    this.indicatorBaseY = this.boxY + this.boxH - 30
+    this.indicator.y = this.indicatorBaseY
+  }
+
+  /**
    * 画面リサイズ時にレイアウトを再計算する。
    */
   redraw(screenWidth: number, screenHeight: number): void {
+    this.screenWidth = screenWidth
+    this.screenHeight = screenHeight
+    if (this.novelMode) {
+      // novel モードは全画面テキスト領域なので redraw でも novel geometry を維持する。
+      this.applyNovelGeometry()
+      return
+    }
     this.boxW = screenWidth - this.marginX * 2
     this.boxX = this.marginX
     this.boxY = screenHeight - this.boxH - this.marginBottom
@@ -573,6 +629,59 @@ export class DialogBox extends Container {
       this.nameText.visible = false
       if (this.inlineNameText) this.inlineNameText.visible = false
     }
+  }
+
+  /**
+   * novel スタイル (#283) の ON/OFF を切り替える。
+   *
+   * ON のとき:
+   *  - borderless 相当（枠・背景・名札なし、白文字 + DropShadow）にする
+   *  - テキスト領域を画面の大半に拡張する（`boxH=180` 固定を解除し全画面ノベル化）
+   * OFF（adv）は従来の下部 ADV 箱に戻す。
+   *
+   * 名札 OFF と DropShadow は `setBorderless(true)` のロジックを流用する（novel は実質 borderless 描画）。
+   * 改頁・スクリムは NovelRenderer 側が制御する。本メソッドは DialogBox の幾何と外観だけを担う。
+   */
+  setNovelMode(novel: boolean): void {
+    // 早期 return しない（冪等に再適用する）。NovelRenderer は setEvents 内で
+    // `setBorderless(defaultDialogBorderless)` を呼んだ直後に setNovelMode を呼び直すため、
+    // 「novelMode は変わっていないが borderless が剥がされた」状態でも novel 描画を復元する必要がある。
+    this.novelMode = novel
+    // novel は枠なし白文字（名札 OFF）。setBorderless の既存ロジックを流用する。
+    // setBorderless は同値ガードで no-op になり得るので、borderless が既に望む値でも
+    // 確実に geometry を再適用するため下の applyNovelGeometry / redraw を必ず通す。
+    this.setBorderless(novel)
+    if (novel) {
+      this.applyNovelGeometry()
+    } else {
+      // adv に戻す: 下部 ADV 箱の幾何へ復帰する。
+      this.boxH = this.advBoxHeight
+      this.redraw(this.screenWidth, this.screenHeight)
+    }
+  }
+
+  /** novel スタイルか (#283)。NovelRenderer が改頁・スクリムの分岐に使う。 */
+  get isNovelMode(): boolean {
+    return this.novelMode
+  }
+
+  /**
+   * 本文を 1 行ずつ wordwrap し、各文の占有行数を測るためのメトリクスを提供する (#283)。
+   * novel 改頁（`paginateSentencesByLines`）の入力に使う。
+   * 純粋関数の wordwrap を現在のフォント設定で呼ぶだけのアダプタ。
+   */
+  measureLineCount(plainText: string): number {
+    const font = `${this.fontSize}px ${this.fontFamily}`
+    return wordwrap(plainText, this.maxTextWidth(), font).length
+  }
+
+  /**
+   * novel モードで 1 ページに収まる最大行数 (#283)。
+   * 利用可能テキスト高さ ÷ 行高（端数切り捨て・最低 1）。
+   */
+  novelMaxLinesPerPage(): number {
+    const usable = this.boxH - this.padding * 2
+    return Math.max(1, Math.floor(usable / this.lineHeight()))
   }
 
   setFontFamily(family: string): void {

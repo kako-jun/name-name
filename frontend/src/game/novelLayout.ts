@@ -461,3 +461,117 @@ export function resolveSceneTitle(
   if (!sceneId) return null
   return findSceneById(scenes, sceneId)?.title ?? null
 }
+
+// ---------------------------------------------------------------------------
+// novel スタイルの改頁ロジック (#283)
+// ---------------------------------------------------------------------------
+
+/**
+ * 日本語の文末記号。文境界での改頁判定に使う (#283)。
+ *
+ * 句点・感嘆符・疑問符（全角/半角）に加え、それらの直後に続く閉じ括弧・閉じ引用符は
+ * 同じ文の一部として扱う（`「…ですか？」` を `？` で割らず `」` まで含めて 1 文にする）。
+ */
+const SENTENCE_TERMINATORS = '。！？!?' // 。！？!?
+const SENTENCE_TRAILERS = '」』】〕〗〙）］｝〉》”’｠、，' // 」』】〕〗〙）］｝〉》”’｀、，
+
+/**
+ * 本文を文境界で分割する純粋関数 (#283)。
+ *
+ * 句点・感嘆符・疑問符を文末とみなし、直後に続く閉じ括弧・閉じ引用符（および句読点）は
+ * その文に含める。文末記号を持たない末尾の断片（記号で終わらない最後の塊）も 1 文として返す。
+ * 改行（`\n`）は文の途中の改行として温存し、文境界とはしない（wordwrap が別途処理する）。
+ *
+ * - 空文字・空白だけの入力は空配列 `[]` を返す。
+ * - 文の前後の余分な空白はトリムするが、文中の空白は保持する。
+ *
+ * @param text 本文（イベントの text 行を連結したもの。ルビ記法は stripRubyMarkup 済みを渡す想定）
+ * @returns 文の配列（空要素は含まない）
+ */
+export function splitIntoSentences(text: string): string[] {
+  const sentences: string[] = []
+  let current = ''
+  const chars = Array.from(text)
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i]
+    current += ch
+    if (SENTENCE_TERMINATORS.includes(ch)) {
+      // 文末記号の直後に続く閉じ括弧・閉じ引用符・句読点を同じ文に取り込む。
+      while (i + 1 < chars.length && SENTENCE_TRAILERS.includes(chars[i + 1])) {
+        i++
+        current += chars[i]
+      }
+      const trimmed = current.trim()
+      if (trimmed !== '') sentences.push(trimmed)
+      current = ''
+    }
+  }
+  // 文末記号で終わらない末尾の断片も 1 文として拾う。
+  const tail = current.trim()
+  if (tail !== '') sentences.push(tail)
+  return sentences
+}
+
+/** 1 ページ分の改頁結果 (#283)。 */
+export interface NovelPage {
+  /** このページに含まれる文を結合した本文（wordwrap 前の plain text） */
+  text: string
+  /** このページが占有する wordwrap 後の行数（高さ算出のデバッグ・検証用） */
+  lineCount: number
+}
+
+/**
+ * 文ごとの wordwrap 行数の配列から、利用可能行数に収まるようページへ貪欲分割する純粋関数 (#283)。
+ *
+ * アルゴリズム（Issue #283 スコープ改訂より）:
+ *  - 文を順に詰めていき、**次の文を入れると `maxLinesPerPage` を超える手前で改頁**する
+ *    （= 改頁前の最後の文は必ずきりよく収まり、文の途中で切らない）。
+ *  - 結果ページの行数は可変でよい（1 文でも複数文でも可）。下端まで機械的に詰めない
+ *    （収まる範囲で文単位に切る）。
+ *  - 1 文だけで `maxLinesPerPage` を超える場合は、その文を単独で 1 ページに置く
+ *    （これ以上分割できないため。文途中改頁を避ける優先度が高い）。
+ *
+ * `joinSentences` で連結した本文を `NovelPage.text` に持たせる（呼び出し側が wordwrap して描画する）。
+ *
+ * @param sentences 文の配列（`splitIntoSentences` の結果）
+ * @param sentenceLineCounts 各文を単独で wordwrap したときの行数（`sentences` と同じ長さ・1 以上）
+ * @param maxLinesPerPage 1 ページに収まる最大行数（1 以上。利用可能高さ ÷ 行高 で算出）
+ * @param joinSentences 同一ページ内の文を連結する関数（既定は素朴な空文字連結）
+ * @returns ページ配列（各ページの text と占有行数）
+ */
+export function paginateSentencesByLines(
+  sentences: string[],
+  sentenceLineCounts: number[],
+  maxLinesPerPage: number,
+  joinSentences: (sentencesOnPage: string[]) => string = (s) => s.join('')
+): NovelPage[] {
+  // maxLinesPerPage は 1 未満を許さない（0 だと 1 文も置けず無限ループになる）。
+  const cap = Math.max(1, Math.floor(maxLinesPerPage))
+  const pages: NovelPage[] = []
+  let pageSentences: string[] = []
+  let pageLines = 0
+
+  const flush = () => {
+    if (pageSentences.length === 0) return
+    pages.push({ text: joinSentences(pageSentences), lineCount: pageLines })
+    pageSentences = []
+    pageLines = 0
+  }
+
+  for (let i = 0; i < sentences.length; i++) {
+    // 行数情報が欠けている場合は 1 行として扱う（防御的）。
+    const lines = Math.max(1, Math.floor(sentenceLineCounts[i] ?? 1))
+    if (pageSentences.length > 0 && pageLines + lines > cap) {
+      // この文を足すと溢れる → 改頁してから新ページの先頭に置く。
+      flush()
+    }
+    pageSentences.push(sentences[i])
+    pageLines += lines
+    // 1 文だけで cap を超えるケースはここで即 flush し、文途中改頁を避けて単独ページにする。
+    if (pageSentences.length === 1 && pageLines >= cap) {
+      flush()
+    }
+  }
+  flush()
+  return pages
+}
