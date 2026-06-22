@@ -30,6 +30,9 @@ interface NovelPlayerProps {
   /** per-game デフォルトフォント (#147)。CSS の font-family 文字列。
    *  frontmatter `font_family:` から流す。null/undefined で runtime 既定 (Noto Sans JP) */
   fontFamily?: string | null
+  /** 会話の描画スタイル (#283)。`adv` / `novel` の対等 2 択。
+   *  frontmatter `dialog_style:` から流す。null/undefined で adv 相当（未指定時フォールバック） */
+  dialogStyle?: string | null
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
   docKey?: string
   /**
@@ -51,6 +54,7 @@ function NovelPlayer({
   aspectRatio: aspectRatioProp,
   choiceStyle,
   fontFamily,
+  dialogStyle,
   docKey,
   initialSkipMode = false,
   onRendererReady,
@@ -109,6 +113,9 @@ function NovelPlayer({
       renderer.setChoiceStyle(choiceStyle ?? null)
       // per-game フォント (#147)
       renderer.setFontFamily(fontFamily ?? null)
+      // 会話の描画スタイル (#283)。setEvents/setScenes より前に設定し、初回描画から
+      // novel スタイル（名札 OFF・スクリム・改頁）を反映させる。
+      renderer.setDialogStyle(dialogStyle ?? null)
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
       // 再生ストリームの確定 (#284):
@@ -177,6 +184,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setFontFamily(fontFamily ?? null)
   }, [fontFamily])
+
+  // dialogStyle が変化したときに renderer に反映 (#283)
+  useEffect(() => {
+    rendererRef.current?.setDialogStyle(dialogStyle ?? null)
+  }, [dialogStyle])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {

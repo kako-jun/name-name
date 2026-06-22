@@ -387,6 +387,11 @@ export interface EventDocument {
   /** per-game デフォルトフォント (#147)。CSS の font-family 文字列。
    *  null/undefined のときは runtime 既定 (`'Noto Sans JP', sans-serif`) を使う。 */
   font_family?: string | null
+  /** 会話の描画スタイル (#283)。`adv` / `novel` の対等 2 択。
+   *  `adv` = 下部 ADV 箱（話者名札あり）、`novel` = 全画面ノベル（名札なし・スクリム・改頁）。
+   *  null/undefined のときは runtime で `adv` 相当にフォールバックする（未指定時の挙動であって
+   *  「正規デフォルト」ではない）。frontmatter `dialog_style:` から流す。 */
+  dialog_style?: string | null
   chapters: EventChapter[]
 }
 

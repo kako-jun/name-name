@@ -741,6 +741,7 @@ function EditorScreen({
                 aspectRatio={doc?.aspect_ratio}
                 choiceStyle={doc?.choice_style ?? null}
                 fontFamily={doc?.font_family ?? null}
+                dialogStyle={doc?.dialog_style ?? null}
                 // Worker proxy 経由で assets を取得（private repo でも動作する）。
                 // NOTE: EditorScreen は develop ブランチでスクリプトを編集するが、
                 // assetBaseUrl はクエリパラメータを持てない設計のため ref=main 固定になる。

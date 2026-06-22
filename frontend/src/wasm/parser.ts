@@ -127,6 +127,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     aspect_ratio: doc.aspect_ratio,
     choice_style: nullIfEmpty(doc.choice_style),
     font_family: nullIfEmpty(doc.font_family),
+    // 会話の描画スタイル (#283)。choice_style と同じく空文字は null に倒す。
+    dialog_style: nullIfEmpty(doc.dialog_style),
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

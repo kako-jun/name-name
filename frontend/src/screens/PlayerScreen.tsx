@@ -352,6 +352,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               aspectRatio={doc?.aspect_ratio}
               choiceStyle={doc?.choice_style ?? null}
               fontFamily={doc?.font_family ?? null}
+              dialogStyle={doc?.dialog_style ?? null}
               docKey={projectName}
               initialSkipMode={startWithSkip}
             />
