@@ -127,6 +127,9 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     aspect_ratio: doc.aspect_ratio,
     choice_style: nullIfEmpty(doc.choice_style),
     font_family: nullIfEmpty(doc.font_family),
+    // per-game 本文フォントサイズ (#283 補遺)。数値なので nullIfEmpty（文字列用）は使わず、
+    // WASM 経由の undefined を null に倒すだけ（未指定は runtime 既定 40 にフォールバック）。
+    font_size: doc.font_size ?? null,
     // 会話の描画スタイル (#283)。choice_style と同じく空文字は null に倒す。
     dialog_style: nullIfEmpty(doc.dialog_style),
     chapters: doc.chapters.map((chapter) => ({

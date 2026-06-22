@@ -166,6 +166,12 @@ export interface Document {
      */
     font_family?: string;
     /**
+     * per-game デフォルトの本文フォントサイズ (px) (#283 補遺)。
+     * 例: 9:16 ノベルでは小さめ (26)、16:9 ADV では大きめ (40)。
+     * 未指定は runtime 既定 40（font_family と同じく per-game 単位の上書き）。
+     */
+    font_size?: number;
+    /**
      * 会話の描画スタイル (#283)。`adv` / `novel` の対等 2 択。
      * `adv` = 下部 ADV 箱（話者名札あり）、`novel` = 全画面ノベル（ToHeart 式・名札なし・スクリム）。
      * frontmatter `dialog_style:` から流す。デフォルト値という概念は持たせず、作品ごとに明示指定する。
@@ -302,8 +308,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly emit_markdown: (a: any) => [number, number, number, number];
+    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

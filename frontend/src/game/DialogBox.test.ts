@@ -666,3 +666,97 @@ describe('DialogBox novel mode (#283)', () => {
     box.dispose()
   })
 })
+
+describe('DialogBox setFontSize (#283 補遺 per-game font_size)', () => {
+  const W = 800
+  const H = 600
+
+  // private fontSize / boxH を観測するための内部アクセサ。
+  interface FontInternals {
+    fontSize: number
+    boxH: number
+  }
+  function fontInternals(box: DialogBox): FontInternals {
+    return box as unknown as FontInternals
+  }
+
+  // novelMaxLinesPerPage の参照オラクル（lineHeight = fontSize * 1.6・実装と同形）。
+  function expectedMaxLines(boxH: number, fontSize: number, padding: number) {
+    const usable = boxH - padding * 2
+    return Math.max(1, Math.floor(usable / (fontSize * 1.6)))
+  }
+
+  // fontSize を省略したデフォルト箱（既定 40 を確認するため明示指定しない）。
+  function makeDefaultBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      padding: 20,
+    })
+  }
+
+  // 22: コンストラクタ既定 fontSize は 40（全ゲーム共通の DialogBox 既定が 40 に戻っていること）。
+  //     #283 で一時 26 に変えた退行を per-game font_size に切り出して 40 へ復元したことの回帰防止。
+  it('22: デフォルト fontSize は 40（per-game font_size 未指定時の runtime 既定）', () => {
+    const box = makeDefaultBox()
+    expect(fontInternals(box).fontSize).toBe(40)
+    box.dispose()
+  })
+
+  // 23: setFontSize で fontSize が変わる。
+  it('23: setFontSize で fontSize が更新される', () => {
+    const box = makeDefaultBox()
+    box.setFontSize(26)
+    expect(fontInternals(box).fontSize).toBe(26)
+    box.dispose()
+  })
+
+  // 24: 同値ガード — 既定 40 のまま 40 を渡しても何も壊れない（fontSize は 40 のまま）。
+  it('24: 同値 setFontSize は no-op（fontSize 不変）', () => {
+    const box = makeDefaultBox()
+    box.setFontSize(40)
+    expect(fontInternals(box).fontSize).toBe(40)
+    box.dispose()
+  })
+
+  // 25: 0 / 負値は Math.max(1, ...) で 1 に丸められる（fontSize 0 で潰れるのを防ぐ防御）。
+  it('25: 0 / 負値の setFontSize は 1 に丸められる', () => {
+    const box = makeDefaultBox()
+    box.setFontSize(0)
+    expect(fontInternals(box).fontSize).toBe(1)
+    box.setFontSize(-10)
+    expect(fontInternals(box).fontSize).toBe(1)
+    box.dispose()
+  })
+
+  // 26: setFontSize は novel 改頁の行高に効く — 小さくすると 1 ページに収まる行数が増える。
+  //     novelMaxLinesPerPage = floor((boxH - pad*2) / (fontSize*1.6)) の単調性を確認。
+  it('26: novel モードで fontSize を小さくすると 1 ページの最大行数が増える', () => {
+    const box = makeDefaultBox()
+    box.setNovelMode(true)
+    box.setFontSize(40)
+    const boxH = fontInternals(box).boxH
+    const linesLarge = box.novelMaxLinesPerPage()
+    expect(linesLarge).toBe(expectedMaxLines(boxH, 40, 20))
+    box.setFontSize(20)
+    const linesSmall = box.novelMaxLinesPerPage()
+    expect(linesSmall).toBe(expectedMaxLines(boxH, 20, 20))
+    expect(linesSmall).toBeGreaterThan(linesLarge)
+    box.dispose()
+  })
+
+  // 27: 表示中テキストがあっても setFontSize でクラッシュしない（再 wordwrap・再レイアウトが走る）。
+  //     msPerChar=0（即時表示）でテキストが残っていることを観測する。
+  it('27: 表示中テキストありで setFontSize しても再レイアウトしてクラッシュしない', () => {
+    const box = new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      padding: 20,
+      msPerChar: 0,
+    })
+    box.setDialog(null, 'これは本文テキストです。')
+    expect(() => box.setFontSize(26)).not.toThrow()
+    expect(fontInternals(box).fontSize).toBe(26)
+    box.dispose()
+  })
+})

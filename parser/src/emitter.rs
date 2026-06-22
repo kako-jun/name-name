@@ -26,6 +26,10 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = family.replace('"', "");
             out.push_str(&format!("font_family: \"{sanitized}\"\n"));
         }
+        // Emit font_size only when present (#283 補遺)。数値なので quote 不要。
+        if let Some(size) = doc.font_size {
+            out.push_str(&format!("font_size: {size}\n"));
+        }
         // Emit dialog_style only when present (#283)。adv / novel の対等 2 択で
         // 「正規デフォルト」を持たないため、aspect_ratio のような「非デフォルト時のみ」では
         // なく choice_style と同じ「Some のときだけ出す」流儀にする（明示指定をそのまま保持）。
@@ -1074,6 +1078,7 @@ mod tests {
             aspect_ratio: "16:9".to_string(),
             choice_style: None,
             font_family: None,
+            font_size: None,
             dialog_style: None,
             chapters: vec![Chapter {
                 number: 1,
@@ -1184,6 +1189,7 @@ mod tests {
             aspect_ratio: "16:9".to_string(),
             choice_style: None,
             font_family: None,
+            font_size: None,
             dialog_style: None,
             chapters: vec![Chapter {
                 number: 1,

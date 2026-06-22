@@ -11,8 +11,9 @@
  * jsdom の前提（テスト設計の実機検証で確定）:
  *   - canvas.getContext('2d') が null → wordwrap が常に 1 行 → 各文 = 1 行。
  *     よって 1 文の複数行折り返し改頁は再現不能（純粋関数 novelLayout.test.ts に委譲済み）。
- *   - 16:9（800x450）の novel 既定で novelMaxLinesPerPage()=2。各文 1 行なので
- *     「N 文 → ceil(N/2) ページ」で改頁を観測できる。
+ *   - 16:9（800x450）の novel 既定で novelMaxLinesPerPage()=cap。各文 1 行なので
+ *     「N 文 → ceil(N/cap) ページ」で改頁を観測できる。cap は本文フォントサイズ既定
+ *     （#283 補遺で 40 に復元）と novel 余白に依存するため measureNovelCap() で実測する。
  *
  * 非適用（実機・描画委譲。CLAUDE.md ルール7）:
  *   - スクリム可視性・退避フェードの描画反映（init 必須・jsdom 観測不能）。
@@ -53,8 +54,32 @@ function internals(r: NovelRenderer): RendererInternals {
   return r as unknown as RendererInternals
 }
 
-/** 5 文（jsdom では各 1 行）の 1 narration を持つ novel シーン。16:9 cap=2 → 3 ページ。 */
-const FIVE_SENTENCES = '一。二。三。四。五。'
+/**
+ * 16:9 novel 既定の 1 ページ最大行数（cap）を実測する (#283 補遺)。
+ * cap は novel 幾何（boxH）と本文フォントサイズ（runtime 既定 40）に依存し、過去の余白調整・
+ * font_size 切り出しで値が動くため、テスト内でハードコードせず実測値から期待値を導出する。
+ * jsdom では canvas 2d が null で wordwrap は各文 1 行になるため「1 文 = 1 行」が成立する。
+ */
+function measureNovelCap(): number {
+  const probe = new NovelRenderer()
+  probe.setDialogStyle('novel')
+  return (
+    probe as unknown as { dialogBox: { novelMaxLinesPerPage(): number } }
+  ).dialogBox.novelMaxLinesPerPage()
+}
+const NOVEL_CAP = measureNovelCap()
+
+/**
+ * ちょうど 3 ページ（textIndex 0,1,2）に改頁される文数の narration テキストを作る。
+ * 各文 = 1 行（jsdom）なので、ceil(N/cap) = 3 になる最小 N = 2*cap + 1 文を並べる。
+ * cap に依存させることで、本文フォントサイズ既定が変わっても「3 ページ」を維持する。
+ */
+function sentencesForThreePages(): string {
+  const n = NOVEL_CAP * 2 + 1
+  return Array.from({ length: n }, (_, k) => `${k + 1}。`).join('')
+}
+/** 3 ページに改頁される 1 narration テキスト（cap 連動）。 */
+const THREE_PAGE_TEXT = sentencesForThreePages()
 
 describe('NovelRenderer dialog_style: novel (#283)', () => {
   afterEach(() => {
@@ -88,13 +113,13 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
   })
 
   // 25: novel 多文の改頁で textIndex（= ページ index）が 1 ずつ前進し、ページを使い切ると次イベントへ。
-  //     5 文・cap=2 → 3 ページ（textIndex 0,1,2）。3 回目の advance で次イベントへ（eventIndex+1）。
+  //     2*cap+1 文 → ちょうど 3 ページ（textIndex 0,1,2）。3 回目の advance で次イベントへ（eventIndex+1）。
   it('25: novel 多文の改頁で textIndex がページ単位で前進し、使い切ると次イベントへ', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    r.setScenes([scene('s', [narration(FIVE_SENTENCES), narration('次。')])])
+    r.setScenes([scene('s', [narration(THREE_PAGE_TEXT), narration('次。')])])
     const i = internals(r)
-    expect(i.dialogBox.novelMaxLinesPerPage()).toBe(2) // 前提を固定
+    expect(i.dialogBox.novelMaxLinesPerPage()).toBe(NOVEL_CAP) // 前提を固定（実測 cap）
 
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0 })
     i.advance()
@@ -106,11 +131,30 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
   })
 
   // 25b: ページ総数が「文数 / cap の切り上げ」になる（純計算経路の確認）。
-  it('25b: novel のページ総数は ceil(文数 / cap) になる（5 文・cap2 → 3 ページ）', () => {
+  it('25b: novel のページ総数は ceil(文数 / cap) になる（2*cap+1 文 → 3 ページ）', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    const textEvt = { text: [FIVE_SENTENCES] }
+    const textEvt = { text: [THREE_PAGE_TEXT] }
     expect(internals(r).currentPageCount(textEvt)).toBe(3)
+  })
+
+  // 25c: setFontSize（per-game font_size #283 補遺）が DialogBox に伝播し、cap（1 ページ行数）が変わる。
+  //      フォントを小さくすると 1 ページに収まる行数が増える（NovelPlayer→NovelRenderer→DialogBox 配線の確認）。
+  it('25c: setFontSize が DialogBox に伝播し novelMaxLinesPerPage（cap）が変わる', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [narration('行1')])])
+    const i = internals(r)
+    const capDefault = i.dialogBox.novelMaxLinesPerPage()
+    expect(capDefault).toBe(NOVEL_CAP) // 既定 40 の cap
+
+    r.setFontSize(20) // 半分にすると行高も半分 → cap は増える
+    const capSmall = i.dialogBox.novelMaxLinesPerPage()
+    expect(capSmall).toBeGreaterThan(capDefault)
+
+    // null（未指定）を渡すと runtime 既定 40 に戻り cap も元に戻る
+    r.setFontSize(null)
+    expect(i.dialogBox.novelMaxLinesPerPage()).toBe(NOVEL_CAP)
   })
 
   // 26: adv の多行はページ化されず、text 行数で前進する（novel の改頁が adv に漏れない退行ガード）。
@@ -145,10 +189,10 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
   it('28: スタイル切替（novel→adv）で改頁キャッシュが破棄される', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    r.setScenes([scene('s', [narration(FIVE_SENTENCES)])])
+    r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
     const i = internals(r)
     // getNovelPages を一度呼んでキャッシュを温める
-    i.getNovelPages({ text: [FIVE_SENTENCES] })
+    i.getNovelPages({ text: [THREE_PAGE_TEXT] })
     expect(i.novelPagesCache).not.toBeNull()
 
     // adv へ切替 → 派生キャッシュ破棄
@@ -160,9 +204,9 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
   it('28b: 同一 eventIndex の getNovelPages は同一参照（キャッシュヒット）', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    r.setScenes([scene('s', [narration(FIVE_SENTENCES)])])
+    r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
     const i = internals(r)
-    const textEvt = { text: [FIVE_SENTENCES] }
+    const textEvt = { text: [THREE_PAGE_TEXT] }
     const first = i.getNovelPages(textEvt)
     const second = i.getNovelPages(textEvt)
     expect(second).toBe(first) // 同一参照 = 再計算していない
@@ -174,7 +218,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    r.setScenes([scene('s', [narration(FIVE_SENTENCES)])])
+    r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
     const i = internals(r)
     i.advance()
     i.advance()
@@ -187,7 +231,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
   it('30: novel→adv→novel 往復切替後も改頁が効く（DialogBox novel モード復元）', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    r.setScenes([scene('s', [narration(FIVE_SENTENCES)])])
+    r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
     const i = internals(r)
 
     r.setDialogStyle('adv')
@@ -195,8 +239,8 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
 
     r.setDialogStyle('novel')
     expect(i.dialogBox.isNovelMode).toBe(true)
-    // novel に戻ったら改頁（cap=2 で 5 文 → 3 ページ）が効く
-    expect(i.currentPageCount({ text: [FIVE_SENTENCES] })).toBe(3)
+    // novel に戻ったら改頁（2*cap+1 文 → 3 ページ）が効く
+    expect(i.currentPageCount({ text: [THREE_PAGE_TEXT] })).toBe(3)
   })
 })
 
@@ -234,7 +278,7 @@ describe('NovelRenderer novel ページ index の永続化跨ぎ保持 (#283)', 
     new SaveManager().quickSave(craftSave({ sceneId: 's', eventIndex: 0, textIndex: 1 }))
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    r.setScenes([scene('s', [narration(FIVE_SENTENCES)])])
+    r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
     expect(r.quickLoad()).toBe(true)
     // ページ index がそのまま復元される
     expect(r.getSnapshot().textIndex).toBe(1)
@@ -244,7 +288,7 @@ describe('NovelRenderer novel ページ index の永続化跨ぎ保持 (#283)', 
   it('31b: novel で goBack するとページ index が 1 つ戻る', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    r.setScenes([scene('s', [narration(FIVE_SENTENCES)])])
+    r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
     const i = internals(r)
     i.advance() // ページ index 1 へ
     expect(r.getSnapshot().textIndex).toBe(1)

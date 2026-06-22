@@ -252,7 +252,7 @@ export class DialogBox extends Container {
       marginX = 20,
       marginBottom = 20,
       padding = 20,
-      fontSize = 26,
+      fontSize = 40,
       fontFamily = "'Noto Sans JP', sans-serif",
       msPerChar = DEFAULT_MS_PER_CHAR,
       borderless = false,
@@ -729,6 +729,76 @@ export class DialogBox extends Container {
         .catch(() => {
           // フォントロード失敗時はルビなしで継続（クラッシュ防止）
         })
+    }
+  }
+
+  /**
+   * 本文フォントサイズ (px) を切り替える (#283 補遺)。
+   * frontmatter `font_size:` の per-game 値（未指定なら runtime 既定 40）を渡す。
+   * setFontFamily と同じく依存する TextStyle を作り直し、表示中テキストがあれば
+   * 同フォントで再 wordwrap・再レイアウトする。novel モード中は改頁が boxH/行高
+   * 依存なので redraw で geometry を再適用する。
+   *
+   * font_family と違いフォント lazy load を伴わないため即時反映してよい（数値変更のみ）。
+   */
+  setFontSize(size: number): void {
+    // 0 / 負値で fontSize が潰れるのを防ぐ防御（極端な大値は許容）。
+    const next = Math.max(1, Math.round(size))
+    if (this.fontSize === next) return
+    this.fontSize = next
+
+    // 本文・名札・インライン名・インジケーターの TextStyle を作り直す。
+    // 名札系は fontSize 相対（-2 / -4）でサイズが決まるので追従させる。
+    // インジケーター（▼）は固定 20px のまま（本文サイズと独立した UI 記号）。
+    this.dialogText.style = this.makeDialogTextStyle()
+    this.nameText.style = new TextStyle({
+      fontFamily: this.fontFamily,
+      fontSize: this.fontSize - 2,
+      fill: this.nameColor,
+      fontWeight: 'bold',
+    })
+    if (this.inlineNameText) {
+      this.inlineNameText.style = new TextStyle({
+        fontFamily: this.fontFamily,
+        fontSize: this.fontSize - 4,
+        fill: this.nameColor,
+        fontWeight: 'bold',
+      })
+    }
+
+    // novel モードは geometry（boxH / 行高 / 改頁）に影響するため再適用する。
+    // adv モードでもテキスト開始 y（インライン名の下）が fontSize 依存なので redraw で
+    // 位置を取り直す。
+    if (this.novelMode) {
+      this.applyNovelGeometry()
+    } else {
+      this.redraw(this.screenWidth, this.screenHeight)
+    }
+
+    // 表示中テキストがあれば新フォントサイズで再 wordwrap・再レイアウトする。
+    // font lazy load は不要なので setFontFamily の .then を待たず同期で再構築する。
+    if (this.currentText) {
+      const font = `${this.fontSize}px ${this.fontFamily}`
+      const maxTextWidth = this.maxTextWidth()
+      const runs = parseRubyText(this.currentText)
+      const plainText = stripRubyMarkup(this.currentText)
+      const lines = wordwrap(plainText, maxTextWidth, font)
+      const fullText = lines.join('\n')
+      this.typewriter = startTypewriter(fullText)
+      this.rubyPlacements = computeRubyPlacements(runs, lines)
+      this.rubyBuildToken += 1
+      this.rebuildRubyEntries(lines, font)
+      if (this.msPerChar === 0) {
+        this.skipTypewriter()
+        this.dialogText.text = fullText
+        this.revealAllRuby()
+      } else if (!isTypingActive(this.typewriter)) {
+        this.dialogText.text = fullText
+        this.revealAllRuby()
+      } else {
+        this.dialogText.text = ''
+        this.updateRubyVisibility(0)
+      }
     }
   }
 

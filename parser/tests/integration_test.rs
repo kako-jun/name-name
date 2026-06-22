@@ -3589,6 +3589,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         aspect_ratio: "16:9".to_string(),
         choice_style: None,
         font_family: Some(r#"My "Quoted" Font, sans-serif"#.to_string()),
+        font_size: None,
         dialog_style: None,
         chapters: vec![Chapter {
             number: 1,
@@ -3621,6 +3622,115 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
     assert!(
         !emitted_none.contains("font_family:"),
         "font_family が None なら emit に出ない"
+    );
+}
+
+#[test]
+fn test_document_font_size_parses_from_frontmatter() {
+    // frontmatter `font_size:` が Some(u32) で parse されること (#283 補遺)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_size: 26
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.font_size,
+        Some(26),
+        "frontmatter の font_size が数値で parse されること"
+    );
+
+    // 未指定なら None（runtime 既定 40 にフォールバック）
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert_eq!(doc_none.font_size, None);
+
+    // 空文字なら None（font_family と同じ規約）
+    let input_empty = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_size:
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_empty = parser::parse(input_empty);
+    assert_eq!(doc_empty.font_size, None);
+
+    // 非数値なら None（parse 失敗を握りつぶす）
+    let input_bad = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_size: large
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_bad = parser::parse(input_bad);
+    assert_eq!(doc_bad.font_size, None);
+}
+
+#[test]
+fn test_font_size_round_trip_with_other_frontmatter() {
+    // parse → emit → parse で font_size が保持され、他フィールドと共存すること (#283 補遺)。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+font_family: "Hina Mincho, serif"
+font_size: 26
+dialog_style: "novel"
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.font_size, Some(26));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("font_size: 26"),
+        "emit 出力に font_size が含まれること（quote なしの数値）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.font_size, Some(26), "round-trip で font_size が保持される");
+    // 共存フィールドも壊れていないこと
+    assert_eq!(doc2.aspect_ratio, "9:16");
+    assert_eq!(doc2.font_family.as_deref(), Some("Hina Mincho, serif"));
+    assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+
+    // None なら emit に含まれないこと
+    let mut doc_none = doc;
+    doc_none.font_size = None;
+    let emitted_none = emitter::emit(&doc_none);
+    assert!(
+        !emitted_none.contains("font_size:"),
+        "font_size が None なら emit に出ない: {emitted_none}"
     );
 }
 

@@ -175,6 +175,14 @@ export class NovelRenderer {
   /** runtime 既定フォント。Document.font_family / per-line 共に未指定のときの最終フォールバック (#147) */
   private static readonly RUNTIME_DEFAULT_FONT_FAMILY = "'Noto Sans JP', sans-serif"
 
+  /** per-game デフォルト本文フォントサイズ (px) (#283 補遺)。frontmatter `font_size:` の値。
+   *  null なら runtime 既定 40 を使う。 */
+  private gameDefaultFontSize: number | null = null
+
+  /** runtime 既定本文フォントサイズ。Document.font_size 未指定時の最終フォールバック (#283 補遺)。
+   *  DialogBox コンストラクタの既定 (40) と一致させる。 */
+  private static readonly RUNTIME_DEFAULT_FONT_SIZE = 40
+
   /**
    * novel 改頁キャッシュ (#283)。現在の text イベントを文境界で改頁した結果。
    * これは**派生**（純粋関数 paginateSentencesByLines で再計算可能）であり GameState には持たない。
@@ -747,6 +755,20 @@ export class NovelRenderer {
   }
 
   /**
+   * per-game 本文フォントサイズを設定する (#283 補遺)。
+   * frontmatter `font_size:` の値（px）を渡す。null/undefined のときは runtime 既定 40。
+   *
+   * font_family と違いフォント lazy load を伴わないので即座に DialogBox に反映する。
+   * これにより 9:16 ノベル（font_size: 26）と 16:9 ADV（既定 40）を per-game で切り替えられ、
+   * DialogBox の組み込み既定 (40) を全ゲーム共通で縮めずに済む（隠れた退行の回避）。
+   * バックログは本文サイズに連動しない固定レイアウトのため反映しない（font_family と同方針）。
+   */
+  setFontSize(size: number | null | undefined): void {
+    this.gameDefaultFontSize = size ?? null
+    this.dialogBox.setFontSize(size ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE)
+  }
+
+  /**
    * 会話の描画スタイルを設定する (#283)。
    * frontmatter `dialog_style:` の値（`adv` / `novel`）を渡す。null/undefined/未知値は adv 相当。
    *
@@ -770,6 +792,9 @@ export class NovelRenderer {
   private applyDialogStyle(): void {
     const novel = this.isNovelStyle()
     this.dialogBox.setNovelMode(novel)
+    // per-game 本文サイズ (#283 補遺) を再アサートする。setNovelMode は geometry/borderless を
+    // 冪等に再適用するため、スタイル切替を跨いでも gameDefaultFontSize が確実に効くようにする。
+    this.dialogBox.setFontSize(this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE)
     if (!novel && this.novelScrim) {
       // adv ではスクリムを常に消す。
       this.novelScrim.visible = false

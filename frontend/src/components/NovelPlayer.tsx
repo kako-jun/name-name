@@ -30,6 +30,9 @@ interface NovelPlayerProps {
   /** per-game デフォルトフォント (#147)。CSS の font-family 文字列。
    *  frontmatter `font_family:` から流す。null/undefined で runtime 既定 (Noto Sans JP) */
   fontFamily?: string | null
+  /** per-game デフォルト本文フォントサイズ (px) (#283 補遺)。
+   *  frontmatter `font_size:` から流す。null/undefined で runtime 既定 40 */
+  fontSize?: number | null
   /** 会話の描画スタイル (#283)。`adv` / `novel` の対等 2 択。
    *  frontmatter `dialog_style:` から流す。null/undefined で adv 相当（未指定時フォールバック） */
   dialogStyle?: string | null
@@ -54,6 +57,7 @@ function NovelPlayer({
   aspectRatio: aspectRatioProp,
   choiceStyle,
   fontFamily,
+  fontSize,
   dialogStyle,
   docKey,
   initialSkipMode = false,
@@ -113,6 +117,9 @@ function NovelPlayer({
       renderer.setChoiceStyle(choiceStyle ?? null)
       // per-game フォント (#147)
       renderer.setFontFamily(fontFamily ?? null)
+      // per-game 本文フォントサイズ (#283 補遺)。setDialogStyle/setEvents より前に設定し、
+      // 初回の novel 改頁が正しい本文サイズ（行高）で計算されるようにする。
+      renderer.setFontSize(fontSize ?? null)
       // 会話の描画スタイル (#283)。setEvents/setScenes より前に設定し、初回描画から
       // novel スタイル（名札 OFF・スクリム・改頁）を反映させる。
       renderer.setDialogStyle(dialogStyle ?? null)
@@ -184,6 +191,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setFontFamily(fontFamily ?? null)
   }, [fontFamily])
+
+  // fontSize が変化したときに renderer に反映 (#283 補遺)
+  useEffect(() => {
+    rendererRef.current?.setFontSize(fontSize ?? null)
+  }, [fontSize])
 
   // dialogStyle が変化したときに renderer に反映 (#283)
   useEffect(() => {
