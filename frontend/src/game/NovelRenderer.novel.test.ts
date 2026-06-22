@@ -31,8 +31,31 @@ function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
 }
 
+/** 立ち絵情報つき Dialog（#286 の役割配置・話者交代テスト用）。 */
+function dialog(character: string, ...lines: string[]): Event {
+  return {
+    Dialog: {
+      character,
+      expression: 'normal',
+      position: '中央',
+      text: lines,
+      voice_path: null,
+      font_family: null,
+    },
+  }
+}
+
 function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
+}
+
+/** CharacterLayer の #286 観測 API（renderer 内部にぶら下がる layer を経由して読む）。 */
+interface CharacterLayerObservable {
+  getSpritePosition(name: string): { x: number; y: number } | null
+  getPoseNudgeState(name: string): { active: boolean; baseY: number } | null
+}
+function layerOf(r: NovelRenderer): CharacterLayerObservable {
+  return (r as unknown as { characterLayer: CharacterLayerObservable }).characterLayer
 }
 
 interface RendererInternals {
@@ -313,5 +336,109 @@ describe('NovelRenderer novel ページ index の永続化跨ぎ保持 (#283)', 
     const back = r.getSnapshot()
     expect(back.eventIndex).toBe(0)
     expect(back.textIndex).toBe(0)
+  })
+})
+
+// ===== #286: novel 役割配置（質問役=左 / 回答役=右）＋話者交代ポーズ変化 =====
+//
+// 16:9（width 800）。質問役 x=800*0.25=200、回答役 x=800*0.75=600。
+// jsdom では ticker が回らないため、nudge は「セットされたか」を観測点にする（描画は実機委譲）。
+describe('NovelRenderer novel 役割配置 (#286)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // protagonist 指定の novel: 主人公（質問役）= 左、住人（回答役）= 右。
+  it('protagonist 指定の novel で主人公=左 (0.25)・住人=右 (0.75) に振る', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
+    // 1 つ目の Dialog（せお = 質問役 = 左）
+    expect(layerOf(r).getSpritePosition('せお')!.x).toBe(800 * 0.25)
+    internals(r).advance()
+    // 2 つ目の Dialog（ひな = 住人 = 回答役 = 右）
+    expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(800 * 0.75)
+  })
+
+  // protagonist 未指定の novel は従来配置（position トークン「中央」= screenWidth*0.5）。後方互換。
+  it('protagonist 未指定の novel は従来配置のまま（中央 = 0.5）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [dialog('せお', 'やあ。')])])
+    expect(layerOf(r).getSpritePosition('せお')!.x).toBe(800 * 0.5)
+  })
+
+  // adv では protagonist を設定しても左右配置は効かない（novel 限定）。adv 非回帰。
+  it('adv では protagonist を設定しても役割配置しない（中央 = 0.5）', () => {
+    const r = new NovelRenderer()
+    // dialog_style 未指定 = adv
+    r.setProtagonist('せお')
+    r.setScenes([scene('s', [dialog('せお', 'やあ。'), dialog('ひな', 'どうも。')])])
+    expect(layerOf(r).getSpritePosition('せお')!.x).toBe(800 * 0.5)
+    internals(r).advance()
+    expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(800 * 0.5)
+  })
+
+  // 司会など3人目（非主人公）は v1 では「非主人公=右」に倒す（TODO 定位置）。
+  it('非主人公（司会など）は v1 では回答役=右 (0.75) に倒す', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setScenes([scene('s', [dialog('ヴィンチア', 'では始めます。')])])
+    expect(layerOf(r).getSpritePosition('ヴィンチア')!.x).toBe(800 * 0.75)
+  })
+})
+
+describe('NovelRenderer novel 話者交代ポーズ変化 (#286)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // 話者が変わったら新話者の立ち絵に nudge がかかる。初回（場面冒頭）は交代でないので nudge しない。
+  it('話者交代で新話者に nudgePose がかかる（初回はかからない）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
+    // 初回（せお登場）は話者交代ではない → nudge なし
+    expect(layerOf(r).getPoseNudgeState('せお')).toBeNull()
+    internals(r).advance()
+    // せお → ひな の交代 → ひな に nudge
+    expect(layerOf(r).getPoseNudgeState('ひな')).not.toBeNull()
+    expect(layerOf(r).getPoseNudgeState('ひな')!.active).toBe(true)
+  })
+
+  // 同じ話者が連続する間は nudge しない（改行で同一話者が続くだけならポーズ変化を乱発しない）。
+  it('同一話者が連続する間は nudgePose しない', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setScenes([scene('s', [dialog('せお', '一文目。'), dialog('せお', '二文目。')])])
+    internals(r).advance() // せお → せお（交代なし）
+    expect(layerOf(r).getPoseNudgeState('せお')).toBeNull()
+  })
+
+  // adv では話者交代があっても nudge しない（演出は novel 限定）。adv 非回帰。
+  it('adv では話者交代があっても nudgePose しない', () => {
+    const r = new NovelRenderer()
+    r.setProtagonist('せお')
+    r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
+    internals(r).advance()
+    expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
+  })
+
+  // 話者交代進行で console を汚さない（防御の確認）。
+  it('話者交代の進行で console.warn / console.error を出さない', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setScenes([scene('s', [dialog('せお', 'a。'), dialog('ひな', 'b。'), dialog('せお', 'c。')])])
+    internals(r).advance()
+    internals(r).advance()
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
   })
 })

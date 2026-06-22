@@ -395,6 +395,10 @@ export interface EventDocument {
    *  null/undefined のときは runtime で `adv` 相当にフォールバックする（未指定時の挙動であって
    *  「正規デフォルト」ではない）。frontmatter `dialog_style:` から流す。 */
   dialog_style?: string | null
+  /** 質問役（主人公）の話者名 (#286)。`dialog_style: novel` の左右配置に使う per-game 設定。
+   *  話者がこの名前と一致したら質問役＝左、それ以外（住人）は回答役＝右に振る。
+   *  null/undefined のときは従来配置（後方互換）。frontmatter `protagonist:` から流す。 */
+  protagonist?: string | null
   chapters: EventChapter[]
 }
 

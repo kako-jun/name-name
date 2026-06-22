@@ -36,6 +36,12 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ref style) = doc.dialog_style {
             out.push_str(&format!("dialog_style: \"{style}\"\n"));
         }
+        // Emit protagonist only when present (#286)。dialog_style と同じく Some のときだけ出す。
+        // 話者名はカンマや空白を含み得るので double-quote で包む（font_family と同方針）。
+        if let Some(ref name) = doc.protagonist {
+            let sanitized = name.replace('"', "");
+            out.push_str(&format!("protagonist: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1080,6 +1086,7 @@ mod tests {
             font_family: None,
             font_size: None,
             dialog_style: None,
+            protagonist: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1191,6 +1198,7 @@ mod tests {
             font_family: None,
             font_size: None,
             dialog_style: None,
+            protagonist: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

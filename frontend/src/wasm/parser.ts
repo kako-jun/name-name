@@ -42,7 +42,7 @@ async function ensureInit(): Promise<void> {
  * 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。
  *
  * 適用範囲: ランタイム側で「指定なし」と「明示的に空文字を指定」を区別する必要がない
- * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`)。
+ * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`)。
  * 必須テキスト系（`character`, `text`, `path`）には適用しない — それらは空文字も意味のある値。
  */
 function nullIfEmpty(s: string | null | undefined): string | null {
@@ -132,6 +132,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     font_size: doc.font_size ?? null,
     // 会話の描画スタイル (#283)。choice_style と同じく空文字は null に倒す。
     dialog_style: nullIfEmpty(doc.dialog_style),
+    // 質問役（主人公）の話者名 (#286)。choice_style と同じく空文字は null に倒す。
+    protagonist: nullIfEmpty(doc.protagonist),
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

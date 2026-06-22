@@ -46,6 +46,21 @@ const CHARACTER_X_RATIO: Record<string, number> = {
 }
 
 /**
+ * novel スタイル (#286) の役割配置 x 比率。質問役（主人公）＝左 / 回答役（住人）＝右。
+ * 名札を出さない novel で「誰が喋っているか」を左右で示すため、中央でなく左右に振る。
+ * 既定の left/center/right（CHARACTER_X_RATIO 0.1875/0.5/0.8125）とは別の、より外側に寄せた
+ * 比率（0.25 / 0.75）を使う。issue #286 の「左 x≈0.25 / 右 x≈0.75」に合わせる。
+ * 縦位置は CHARACTER_Y_RATIO（全員共通ベースライン固定）をそのまま使う。
+ * テストが期待値を直書きして陳腐化しないよう export する。
+ */
+export const NOVEL_ROLE_X_RATIO = {
+  /** 質問役（主人公）。画面左寄り。 */
+  questioner: 0.25,
+  /** 回答役（住人 / 司会など非主人公）。画面右寄り。 */
+  responder: 0.75,
+} as const
+
+/**
  * 日本語表記の position を英語 key に正規化する。
  * パーサーは "中央" 等の日本語表記をそのまま position 文字列に流すため、
  * CharacterLayer 側で受ける必要がある (#133)。
@@ -132,6 +147,8 @@ interface CharacterState {
   animation: ActiveAnimation | null
   /** フェードイン/アウトアニメーション。退場時は完了後に sprite を destroy する */
   fadeAnimation: FadeAnimation | null
+  /** 話者交代のポーズ変化 (#286)。null なら適用なし。novel の話者表示に使う自己復帰の軽い持ち上げ。 */
+  poseNudge: PoseNudge | null
   /** グリフ単位の文字演出 (#268)。null なら適用なし（タイトルは単一 label 表示）。 */
   textEffect: TextEffectAnimation | null
   /** 下線ビーム (#270)。null なら適用なし。sprite の子として線を持つ。 */
@@ -168,6 +185,28 @@ interface FadeAnimation {
   toAlpha: number
   /** true なら 0 に到達した時点で sprite を破棄して characters Map から消す */
   destroyOnComplete: boolean
+}
+
+/**
+ * 話者交代のポーズ変化 (#286)。
+ *
+ * 名札を出さない novel スタイルで「今この人が喋っている」を立ち絵で示すための、軽い自己復帰アニメ。
+ * sprite を baseY から少し持ち上げて（最大 -liftPx）半周期で元へ戻す sin 山形のオフセット。
+ * #283 の ExpressionChange/scrim 自動退避フックに相乗りして呼ばれる（新規の重い演出は作らない）。
+ *
+ * baseY を明示保持し、補間オフセットを毎フレーム baseY に足し込む（中間状態を sprite.y に焼き込まない）。
+ * 1 文ごとの高速入替でも、再 nudge は前回の baseY を引き継いで上書きするだけなので破綻しない。
+ * GameState には持たない（演出・render-only。復元では nudge していない静止状態に倒す）。
+ */
+interface PoseNudge {
+  /** 効果開始時刻（elapsedMs 基準）。 */
+  startMs: number
+  /** 山形オフセットの所要 ms（持ち上げ → 復帰で 1 周）。 */
+  durationMs: number
+  /** 持ち上げ量（px）。sprite は最大 baseY - liftPx まで上がって戻る。 */
+  liftPx: number
+  /** オフセットを足し込む基準 y（nudge 開始時の sprite.y）。完了で必ずここへ戻す。 */
+  baseY: number
 }
 
 /**
@@ -345,10 +384,15 @@ export class CharacterLayer extends Container {
     expression: string,
     position: string,
     assetBaseUrl: string,
-    options?: { instant?: boolean }
+    options?: { instant?: boolean; xRatio?: number }
   ): void {
     const normalizedPosition = normalizePosition(position)
     const instant = options?.instant === true
+    // novel 役割配置 (#286): xRatio override があれば positionX テーブルでなく
+    // screenWidth * xRatio で水平位置を決める。position 文字列（snapshot/復元用の正本トークン）は
+    // 据え置き、見た目の x だけを役割（質問役=左 / 回答役=右）に合わせる。
+    const hasXOverride = options?.xRatio !== undefined && Number.isFinite(options.xRatio)
+    const overrideX = hasXOverride ? this.screenWidth * (options?.xRatio as number) : undefined
     const existing = this.characters.get(character)
 
     if (existing) {
@@ -369,12 +413,26 @@ export class CharacterLayer extends Container {
         }
       }
 
-      // 表情が同じで位置も同じなら何もしない（フェード状態は上で解消済み）
-      if (existing.expression === expression && existing.position === normalizedPosition) return
+      // novel 役割配置 (#286): override x がある再 show は、現在の sprite.x と違えば
+      // 「横位置変更あり」とみなす（position トークンは同じでも質問役↔回答役の入替で x が動く）。
+      // override 無しの従来呼び出しでは、position トークン未変化なら x を触らない（#134 の
+      // [アニメ] で動かした立ち絵を再 show で勝手に戻さない adv 非回帰のため、override 時だけ判定する）。
+      const overrideXChanged =
+        hasXOverride && Math.abs(existing.sprite.x - (overrideX as number)) >= 0.5
 
-      // 位置変更
-      if (existing.position !== normalizedPosition) {
-        const x = this.positionX[normalizedPosition] ?? this.positionX['center']
+      // 表情が同じで位置も同じなら何もしない（フェード状態は上で解消済み）。
+      if (
+        existing.expression === expression &&
+        existing.position === normalizedPosition &&
+        !overrideXChanged
+      )
+        return
+
+      // 位置変更（position トークンの変化、または override x の変化）
+      if (existing.position !== normalizedPosition || overrideXChanged) {
+        const x = hasXOverride
+          ? (overrideX as number)
+          : (this.positionX[normalizedPosition] ?? this.positionX['center'])
         existing.sprite.x = x
         existing.position = normalizedPosition
       }
@@ -387,8 +445,8 @@ export class CharacterLayer extends Container {
       return
     }
 
-    // 新規表示
-    const x = this.positionX[normalizedPosition] ?? this.positionX['center']
+    // 新規表示。novel 役割配置 (#286) の override x があればそれを使う。
+    const x = overrideX ?? this.positionX[normalizedPosition] ?? this.positionX['center']
     const sprite = new Sprite()
     sprite.anchor.set(0.5, 1)
     sprite.x = x
@@ -427,6 +485,7 @@ export class CharacterLayer extends Container {
       expression,
       assetBaseUrl,
       animation: null,
+      poseNudge: null,
       fadeAnimation: instant
         ? null
         : {
@@ -593,6 +652,7 @@ export class CharacterLayer extends Container {
       expression: '',
       assetBaseUrl: '',
       animation: null,
+      poseNudge: null,
       fadeAnimation: null,
       textEffect: null,
       underline: null,
@@ -717,6 +777,7 @@ export class CharacterLayer extends Container {
       expression: '',
       assetBaseUrl: '',
       animation: null,
+      poseNudge: null,
       fadeAnimation: instant
         ? null
         : {
@@ -794,6 +855,7 @@ export class CharacterLayer extends Container {
       expression: '',
       assetBaseUrl: opts.assetBaseUrl,
       animation: null,
+      poseNudge: null,
       fadeAnimation: instant
         ? null
         : {
@@ -875,6 +937,12 @@ export class CharacterLayer extends Container {
     const state = this.characters.get(character)
     if (!state) return
     const sprite = state.sprite
+    // 話者交代 nudge (#286) が進行中なら、その baseY へ戻してから animate を起こす。
+    // mid-lift の y を起点にすると以後の dy 相対計算がずれるため、nudge を畳んで基準を確定する。
+    if (state.poseNudge) {
+      sprite.y = state.poseNudge.baseY
+      state.poseNudge = null
+    }
     const fromX = sprite.x
     const fromY = sprite.y
     const fromRotation = sprite.rotation
@@ -921,6 +989,56 @@ export class CharacterLayer extends Container {
   /** タイトル label の現在のフォント・サイズ・色を引き継ぐための定数。 */
   private static readonly TITLE_FONT_SIZE = 64
   private static readonly TITLE_FILL = 0xffffff
+
+  /** 話者交代ポーズ変化 (#286) の持ち上げ量（px）と所要 ms。控えめな「ぴょこっ」。 */
+  private static readonly POSE_NUDGE_LIFT_PX = 24
+  private static readonly POSE_NUDGE_MS = 280
+
+  /**
+   * 話者交代のポーズ変化 (#286)。
+   *
+   * 名札を出さない novel スタイルで「今この人が喋っている」を立ち絵で示すため、対象立ち絵を
+   * 軽く持ち上げて元に戻す自己復帰アニメをかける。NovelRenderer が話者交代を検出したときに
+   * #283 の scrim 自動退避と一緒に呼ぶ（新規の重い演出は作らない）。
+   *
+   * fire-and-forget。対象が居ない / sprite 破棄済みなら no-op。連続呼び出しは前回の baseY を
+   * 引き継いで上書きする（1 文ごとの高速入替でも例外を吐かず破綻しない）。
+   */
+  nudgePose(character: string): void {
+    const state = this.characters.get(character)
+    if (!state || state.sprite.destroyed) return
+    // 連続 nudge: 既に nudge 中なら、焼き込まれていない元の baseY を引き継ぐ
+    // （sprite.y には現在のオフセット込みの値が入っているため、それを基準にしない）。
+    const baseY = state.poseNudge ? state.poseNudge.baseY : state.sprite.y
+    state.poseNudge = {
+      startMs: this.elapsedMs,
+      durationMs: CharacterLayer.POSE_NUDGE_MS,
+      liftPx: CharacterLayer.POSE_NUDGE_LIFT_PX,
+      baseY,
+    }
+    this.ensureTicker()
+  }
+
+  /**
+   * テスト用 (#286): 指定キャラの pose nudge 状態を観測する。
+   * 進行中なら `{ active: true, baseY }`、無ければ `null`。jsdom では ticker が回らないため
+   * 「nudge がセットされたか」「baseY が正しいか」を観測点として使う（描画ピクセルは不可）。
+   */
+  getPoseNudgeState(character: string): { active: boolean; baseY: number } | null {
+    const state = this.characters.get(character)
+    if (!state || !state.poseNudge) return null
+    return { active: true, baseY: state.poseNudge.baseY }
+  }
+
+  /**
+   * テスト用 (#286): 指定キャラの現在 sprite x / y を観測する。
+   * 役割配置（質問役=左 / 回答役=右）の検証に使う。存在しなければ null。
+   */
+  getSpritePosition(character: string): { x: number; y: number } | null {
+    const state = this.characters.get(character)
+    if (!state) return null
+    return { x: state.sprite.x, y: state.sprite.y }
+  }
 
   /**
    * グリフ Text の表示幅を測る。PixiJS のテキスト計測に依存する。
@@ -1451,7 +1569,7 @@ export class CharacterLayer extends Container {
   /** 進行中アニメーション（transform / fade / textEffect / underline いずれか）を持つキャラがいるか */
   hasActiveAnimation(): boolean {
     for (const s of this.characters.values()) {
-      if (s.animation || s.fadeAnimation) return true
+      if (s.animation || s.fadeAnimation || s.poseNudge) return true
       if (s.textEffect && this.isTextEffectActive(s.textEffect)) return true
       if (s.underline && this.isUnderlineActive(s.underline)) return true
     }
@@ -1536,6 +1654,24 @@ export class CharacterLayer extends Container {
             anyActive = true
             state.sprite.alpha = f.fromAlpha + (f.toAlpha - f.fromAlpha) * tf
             if (state.label) state.label.alpha = state.sprite.alpha
+          }
+        }
+
+        // 話者交代のポーズ変化 (#286) を毎フレーム純粋計算で駆動する。
+        // baseY を基準に sin 山形オフセットを足し込む（中間状態を sprite.y に焼き込まない）。
+        // 進行中の transform animation がある間は y をそちらが支配するため nudge は当てない
+        // （話者交代と [アニメ] が同時に来る脚本は想定外。競合時は animation を優先して破綻を避ける）。
+        const pn = state.poseNudge
+        if (pn && !state.animation) {
+          const tp = (this.elapsedMs - pn.startMs) / pn.durationMs
+          if (tp >= 1) {
+            state.sprite.y = pn.baseY
+            state.poseNudge = null
+          } else {
+            anyActive = true
+            // 0→1 を sin(πt) で 0→1→0 の山にし、上方向（-y）へ持ち上げて戻す。
+            const lift = Math.sin(Math.PI * tp) * pn.liftPx
+            state.sprite.y = pn.baseY - lift
           }
         }
 
