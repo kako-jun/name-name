@@ -165,6 +165,14 @@ export interface Document {
      * 個別行で上書きしたい場合は [フォント: ...] ディレクティブで Dialog/Narration 直前に指定。
      */
     font_family?: string;
+    /**
+     * 会話の描画スタイル (#283)。`adv` / `novel` の対等 2 択。
+     * `adv` = 下部 ADV 箱（話者名札あり）、`novel` = 全画面ノベル（ToHeart 式・名札なし・スクリム）。
+     * frontmatter `dialog_style:` から流す。デフォルト値という概念は持たせず、作品ごとに明示指定する。
+     * 未指定の既存作品は壊さないため runtime 側で `adv` にフォールバックするが、それは
+     * 「正規デフォルト」ではなく未指定時の挙動。空文字は None 扱い（choice_style と同じ規約）。
+     */
+    dialog_style?: string;
     chapters: Chapter[];
 }
 
@@ -294,8 +302,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly emit_markdown: (a: any) => [number, number, number, number];
     readonly parse_markdown: (a: number, b: number) => [number, number, number];
+    readonly emit_markdown: (a: any) => [number, number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
