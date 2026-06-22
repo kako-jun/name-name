@@ -18,6 +18,7 @@ pub fn parse(input: &str) -> Document {
     let mut font_family: Option<String> = None;
     let mut font_size: Option<u32> = None;
     let mut dialog_style: Option<String> = None;
+    let mut protagonist: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -64,6 +65,13 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     dialog_style = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("protagonist:") {
+                // 質問役（主人公）の話者名 (#286)。novel スタイルの左右配置に使う。
+                // 値はバリデーションせず生文字列で透過する（dialog_style と同じ流儀）。空なら None のまま。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    protagonist = Some(v);
                 }
             }
             pos += 1;
@@ -765,6 +773,7 @@ pub fn parse(input: &str) -> Document {
         font_family,
         font_size,
         dialog_style,
+        protagonist,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

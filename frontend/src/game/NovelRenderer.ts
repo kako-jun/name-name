@@ -21,7 +21,7 @@ import {
   Texture,
   TextStyle,
 } from 'pixi.js'
-import { CharacterLayer } from './CharacterLayer'
+import { CharacterLayer, NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 import { AudioManager } from './AudioManager'
@@ -166,6 +166,16 @@ export class NovelRenderer {
    *  null/未知値は adv 相当（未指定時フォールバック。「正規デフォルト」ではない）。
    *  `isNovelStyle()` で判定する。 */
   private dialogStyle: string | null = null
+
+  /** 質問役（主人公）の話者名 (#286)。frontmatter `protagonist:` の値。
+   *  novel スタイルの左右配置で「この名前の話者＝質問役＝左 / それ以外（住人）＝回答役＝右」と決める。
+   *  null（未指定）なら従来配置（position トークンのまま）＝後方互換。adv では一切使わない。 */
+  private protagonist: string | null = null
+
+  /** 直前に喋った話者名 (#286)。話者交代の検出に使う。
+   *  Dialog の character が変わったら novel ではポーズ変化（nudgePose）を起こす。
+   *  resetAndStartEvents / シーン遷移でリセットする（前シーンの話者を引きずらない）。 */
+  private lastSpeaker: string | null = null
 
   /** per-game デフォルトフォント (#147)。frontmatter `font_family:` の値。
    *  null なら DialogBox の組み込み既定 (`'Noto Sans JP', sans-serif`) を使う。
@@ -705,6 +715,10 @@ export class NovelRenderer {
     this.history = []
     // novel 改頁キャッシュ (#283) はイベント列に紐づくので破棄する。
     this.novelPagesCache = null
+    // 話者交代追跡 (#286) をリセット（前シーン末尾の話者を引きずらない）。
+    // resetAndStartEvents 直後の最初の Dialog で初めて話者がセットされ、初回は nudge しない
+    // （何もないところから登場する初回は「交代」ではない）。
+    this.lastSpeaker = null
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
     this.processUntilNextTextEvent()
 
@@ -778,6 +792,36 @@ export class NovelRenderer {
   setDialogStyle(style: string | null | undefined): void {
     this.dialogStyle = style ?? null
     this.applyDialogStyle()
+  }
+
+  /**
+   * 質問役（主人公）の話者名を設定する (#286)。
+   * frontmatter `protagonist:` の値（話者名）を渡す。null/undefined/空文字は未指定扱い。
+   *
+   * novel スタイルでこの名前と一致する話者を質問役＝左、それ以外（住人）を回答役＝右に振る。
+   * 未指定なら立ち絵は従来配置（脚本の position トークンのまま）＝後方互換。
+   * adv では一切使わない（左右配置は novel 限定）。
+   */
+  setProtagonist(name: string | null | undefined): void {
+    this.protagonist = name && name.length > 0 ? name : null
+  }
+
+  /**
+   * novel スタイルの役割配置 x 比率を返す (#286)。
+   * 話者が protagonist と一致 → 質問役＝左、それ以外（住人 / 司会など）→ 回答役＝右。
+   * 役割配置を使わない（adv / protagonist 未指定 / 話者不明）場合は undefined を返し、
+   * 呼び出し側は脚本の position トークンによる従来配置にフォールバックする。
+   *
+   * TODO(#286 v1): 司会ヴィンチアの定位置は未対応。現状は「非主人公＝右」に倒している。
+   * 3 人目以降の同時表示や司会の中央固定が要るときは、ここに役割→配置の対応を足す。
+   */
+  private resolveNovelRoleXRatio(character: string | null): number | undefined {
+    if (!this.isNovelStyle()) return undefined
+    if (this.protagonist === null) return undefined
+    if (!character) return undefined
+    return character === this.protagonist
+      ? NOVEL_ROLE_X_RATIO.questioner
+      : NOVEL_ROLE_X_RATIO.responder
   }
 
   /** novel スタイルか (#283)。`dialog_style: novel` のときだけ true。それ以外（adv / 未指定 / 未知値）は false。 */
@@ -1429,13 +1473,22 @@ export class NovelRenderer {
     // 暗転復元
     this.blackoutOverlay.visible = state.isBlackout
 
-    // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）
+    // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）。
+    // novel 役割配置 (#286): protagonist 指定時は復元でも質問役=左 / 回答役=右の x を当てる
+    // （token のままだと前進時の配置と食い違うため）。ポーズ nudge は演出なので復元では起こさない。
     this.characterLayer.clear()
     for (const ch of state.characters) {
+      const xRatio = this.resolveNovelRoleXRatio(ch.name)
       this.characterLayer.show(ch.name, ch.expression, ch.position, this.assetBaseUrl, {
         instant: true,
+        xRatio,
       })
     }
+    // 話者交代追跡 (#286) を復元位置の話者に合わせる。任意局面復元の直後に同じ話者で
+    // 前進しても誤って nudge しないよう、現在イベントの Dialog 話者を lastSpeaker に据える。
+    // 復元自体ではポーズ変化を起こさない（演出は GameState に持たない）。
+    const restoredEvt = getTextEvent(this.resolvedEvents[this.eventIndex])
+    this.lastSpeaker = restoredEvt?.type === 'dialog' ? restoredEvt.character : null
 
     // BGM復元
     if (state.currentBgmPath) {
@@ -1902,20 +1955,47 @@ export class NovelRenderer {
   }
 
   /**
-   * Dialog イベントに立ち絵情報（expression + position）があれば表示する
+   * Dialog イベントに立ち絵情報（expression + position）があれば表示する。
+   *
+   * novel スタイル (#286): protagonist 指定時は立ち絵を役割で左右に振る（質問役=左 / 回答役=右）。
+   * さらに直前と異なる話者になったら、その立ち絵をポーズ変化（nudgePose）させて「今この人」を示す。
+   * adv / protagonist 未指定では従来配置のまま（後方互換）。
+   *
+   * 話者交代の検出は Dialog の character で行い、立ち絵 show の有無に依らず lastSpeaker を更新する
+   * （立ち絵が無い Dialog でも話者の連続性は追う）。
    */
   private showCharacterFromDialog(event: Event): void {
     const textEvt = getTextEvent(event)
     if (!textEvt || textEvt.type !== 'dialog') return
-    if (!textEvt.expression || !textEvt.position || !textEvt.character) return
+
+    const speaker = textEvt.character
+    // 話者交代の検出（novel のみ意味を持つ）。立ち絵表示の前に判定する。
+    // 初回（lastSpeaker===null＝場面冒頭/復元直後）は「交代」ではないので nudge しない
+    // （何もないところから登場する初出は交代ではない）。
+    const speakerChanged =
+      speaker !== null && this.lastSpeaker !== null && speaker !== this.lastSpeaker
+    if (speaker !== null) this.lastSpeaker = speaker
+
+    if (!textEvt.expression || !textEvt.position || !speaker) return
+
+    // novel 役割配置 (#286): protagonist と一致 → 質問役=左 / それ以外 → 回答役=右。
+    // adv / protagonist 未指定では undefined（脚本 position トークンのまま）。
+    const xRatio = this.resolveNovelRoleXRatio(speaker)
     this.characterLayer.show(
-      textEvt.character,
+      speaker,
       textEvt.expression,
       textEvt.position,
       this.assetBaseUrl,
       // スキップモード中はフェードを抑制（既読シーンの高速進行で違和感を出さない）#177
-      { instant: this.skipMode }
+      { instant: this.skipMode, xRatio }
     )
+
+    // 話者交代でポーズ変化 (#286)。novel のみ・スキップ中は抑制（高速進行で乱発しない）。
+    // #283 の scrim 自動退避に相乗りして「絵を見せる」タイミングと揃える。
+    if (speakerChanged && this.isNovelStyle() && !this.skipMode) {
+      this.characterLayer.nudgePose(speaker)
+      this.retreatNovelScrim()
+    }
   }
 
   /**

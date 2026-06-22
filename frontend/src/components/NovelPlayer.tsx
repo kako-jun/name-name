@@ -36,6 +36,9 @@ interface NovelPlayerProps {
   /** 会話の描画スタイル (#283)。`adv` / `novel` の対等 2 択。
    *  frontmatter `dialog_style:` から流す。null/undefined で adv 相当（未指定時フォールバック） */
   dialogStyle?: string | null
+  /** 質問役（主人公）の話者名 (#286)。`dialog_style: novel` の左右配置に使う。
+   *  frontmatter `protagonist:` から流す。null/undefined で従来配置（後方互換） */
+  protagonist?: string | null
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
   docKey?: string
   /**
@@ -59,6 +62,7 @@ function NovelPlayer({
   fontFamily,
   fontSize,
   dialogStyle,
+  protagonist,
   docKey,
   initialSkipMode = false,
   onRendererReady,
@@ -123,6 +127,9 @@ function NovelPlayer({
       // 会話の描画スタイル (#283)。setEvents/setScenes より前に設定し、初回描画から
       // novel スタイル（名札 OFF・スクリム・改頁）を反映させる。
       renderer.setDialogStyle(dialogStyle ?? null)
+      // 質問役（主人公）の話者名 (#286)。setEvents/setScenes より前に設定し、初回の
+      // novel 立ち絵配置（質問役=左 / 回答役=右）が正しい役割で決まるようにする。
+      renderer.setProtagonist(protagonist ?? null)
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
       // 再生ストリームの確定 (#284):
@@ -201,6 +208,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setDialogStyle(dialogStyle ?? null)
   }, [dialogStyle])
+
+  // protagonist が変化したときに renderer に反映 (#286)
+  useEffect(() => {
+    rendererRef.current?.setProtagonist(protagonist ?? null)
+  }, [protagonist])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {

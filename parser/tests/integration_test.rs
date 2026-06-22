@@ -3335,6 +3335,105 @@ dialog_style: "adv"
     assert_eq!(doc2.dialog_style.as_deref(), Some("adv"));
 }
 
+// --- #286: protagonist (novel スタイルの左右配置に使う質問役の話者名) ---
+
+#[test]
+fn test_document_protagonist_parses_from_frontmatter() {
+    // frontmatter `protagonist: せお` が Some("せお") で parse されること (#286)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style: novel
+protagonist: せお
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.protagonist.as_deref(),
+        Some("せお"),
+        "frontmatter の protagonist が parse されること"
+    );
+    // 他 frontmatter（dialog_style）と共存できること
+    assert_eq!(doc.dialog_style.as_deref(), Some("novel"));
+
+    // 未指定なら None（従来配置 = 後方互換）
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert_eq!(doc_none.protagonist, None);
+}
+
+#[test]
+fn test_document_protagonist_round_trip() {
+    // parse → emit → parse で protagonist が保持されること (#286)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+dialog_style: novel
+protagonist: せお
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc1 = parser::parse(input);
+    let emitted = emitter::emit(&doc1);
+    assert!(
+        emitted.contains("protagonist:"),
+        "emit 出力に protagonist が含まれること: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc1.protagonist, doc2.protagonist);
+    assert_eq!(doc2.protagonist.as_deref(), Some("せお"));
+    // dialog_style と共存して round-trip で両方残ること
+    assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+
+    // None なら emit に出ないこと（dialog_style と同じ Some のときだけ出す流儀）
+    let mut doc_none = doc1.clone();
+    doc_none.protagonist = None;
+    let emitted_none = emitter::emit(&doc_none);
+    assert!(
+        !emitted_none.contains("protagonist:"),
+        "protagonist が None なら emit に含まれないこと: {emitted_none}"
+    );
+}
+
+#[test]
+fn test_document_protagonist_empty_is_none() {
+    // 空文字 → None（choice_style / dialog_style と同じ規約）
+    let input_empty = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+protagonist:
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input_empty);
+    assert_eq!(
+        doc.protagonist, None,
+        "protagonist が空なら None として parse される"
+    );
+}
+
 #[test]
 fn test_voice_overwritten_by_later_directive() {
     // [ボイス:] が連続した場合、後者で前者を上書きし最後のものが注入されること (#144)
@@ -3591,6 +3690,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         font_family: Some(r#"My "Quoted" Font, sans-serif"#.to_string()),
         font_size: None,
         dialog_style: None,
+        protagonist: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),

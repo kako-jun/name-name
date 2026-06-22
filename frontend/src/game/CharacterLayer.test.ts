@@ -1557,3 +1557,73 @@ describe('CharacterLayer render-only 除外と save→load 往復 (#274)', () =>
     manager.deleteQuickSave()
   })
 })
+
+// ===== #286: 話者交代ポーズ変化＋役割で左右配置（novel の話者表示） =====
+describe('CharacterLayer 役割配置の xRatio override (#286)', () => {
+  it('show() に xRatio を渡すと sprite.x が screenWidth * xRatio になる（position トークン非依存）', () => {
+    const layer = new CharacterLayer(800, 450)
+    // 質問役=左 (0.25)。position トークンは「中央」でも override が優先する。
+    layer.show('seo', 'normal', '中央', '/assets', { instant: true, xRatio: 0.25 })
+    expect(layer.getSpritePosition('seo')).toEqual({ x: 800 * 0.25, y: 450 * CHARACTER_Y_RATIO })
+  })
+
+  it('xRatio 未指定なら従来の position トークン配置（中央=screenWidth*0.5）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('seo', 'normal', '中央', '/assets', { instant: true })
+    expect(layer.getSpritePosition('seo')!.x).toBe(800 * 0.5)
+  })
+
+  it('既存キャラの xRatio が変わると（質問役↔回答役の入替）sprite.x が更新される', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hina', 'normal', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    expect(layer.getSpritePosition('hina')!.x).toBe(800 * 0.75)
+    // 同じ position トークン「中央」でも、override x が変われば位置が動く
+    layer.show('hina', 'normal', '中央', '/assets', { instant: true, xRatio: 0.25 })
+    expect(layer.getSpritePosition('hina')!.x).toBe(800 * 0.25)
+  })
+
+  it('縦位置（y）は xRatio に依らず全員共通ベースライン（CHARACTER_Y_RATIO）固定', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('left', 'normal', '中央', '/assets', { instant: true, xRatio: 0.25 })
+    layer.show('right', 'normal', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    const baseY = 450 * CHARACTER_Y_RATIO
+    expect(layer.getSpritePosition('left')!.y).toBe(baseY)
+    expect(layer.getSpritePosition('right')!.y).toBe(baseY)
+  })
+})
+
+describe('CharacterLayer 話者交代ポーズ変化 nudgePose (#286)', () => {
+  it('nudgePose() で pose nudge がセットされ、baseY は nudge 開始時の sprite.y', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('seo', 'normal', '中央', '/assets', { instant: true, xRatio: 0.25 })
+    expect(layer.getPoseNudgeState('seo')).toBeNull() // 初期は無し
+    layer.nudgePose('seo')
+    const pn = layer.getPoseNudgeState('seo')
+    expect(pn).not.toBeNull()
+    expect(pn!.active).toBe(true)
+    expect(pn!.baseY).toBe(450 * CHARACTER_Y_RATIO) // 立ち絵のベースライン
+  })
+
+  it('nudgePose() は hasActiveAnimation を true にする（ticker 駆動対象）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('seo', 'normal', '中央', '/assets', { instant: true })
+    expect(layer.hasActiveAnimation()).toBe(false)
+    layer.nudgePose('seo')
+    expect(layer.hasActiveAnimation()).toBe(true)
+  })
+
+  it('連続 nudgePose は前回の baseY を引き継ぐ（高速入替でも基準がずれない）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('seo', 'normal', '中央', '/assets', { instant: true })
+    const baseY = 450 * CHARACTER_Y_RATIO
+    layer.nudgePose('seo')
+    layer.nudgePose('seo') // 連続呼び出し
+    expect(layer.getPoseNudgeState('seo')!.baseY).toBe(baseY)
+  })
+
+  it('居ないキャラへの nudgePose は no-op（例外を吐かない）', () => {
+    const layer = new CharacterLayer(800, 450)
+    expect(() => layer.nudgePose('absent')).not.toThrow()
+    expect(layer.getPoseNudgeState('absent')).toBeNull()
+  })
+})

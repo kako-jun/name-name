@@ -743,6 +743,7 @@ function EditorScreen({
                 fontFamily={doc?.font_family ?? null}
                 fontSize={doc?.font_size ?? null}
                 dialogStyle={doc?.dialog_style ?? null}
+                protagonist={doc?.protagonist ?? null}
                 // Worker proxy 経由で assets を取得（private repo でも動作する）。
                 // NOTE: EditorScreen は develop ブランチでスクリプトを編集するが、
                 // assetBaseUrl はクエリパラメータを持てない設計のため ref=main 固定になる。

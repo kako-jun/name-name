@@ -179,6 +179,13 @@ export interface Document {
      * 「正規デフォルト」ではなく未指定時の挙動。空文字は None 扱い（choice_style と同じ規約）。
      */
     dialog_style?: string;
+    /**
+     * 質問役（主人公）の話者名 (#286)。`dialog_style: novel` の左右配置に使う per-game 設定。
+     * 名札を出さない novel スタイルで、話者がこの名前と一致したら質問役＝左、それ以外（住人）は
+     * 回答役＝右に振る。未指定なら従来配置（position トークン）のままで後方互換。
+     * frontmatter `protagonist:` から流す。空文字は None 扱い（choice_style と同じ規約）。
+     */
+    protagonist?: string;
     chapters: Chapter[];
 }
 
