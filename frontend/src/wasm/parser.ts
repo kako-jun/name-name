@@ -65,6 +65,9 @@ function normalizeEvents(events: Event[]): Event[] {
           // 空文字も null に倒す (#147 R1 N5)。
           voice_path: nullIfEmpty(event.Dialog.voice_path),
           font_family: nullIfEmpty(event.Dialog.font_family),
+          // 立ち絵の明示フィット (#294)。WASM は false のとき undefined を返すため
+          // 明示 boolean に正規化して normalize で落とさない（新フィールド欠落の罠回避）。
+          fit: event.Dialog.fit === true,
         },
       }
     }

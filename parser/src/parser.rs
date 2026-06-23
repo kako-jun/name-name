@@ -95,6 +95,8 @@ pub fn parse(input: &str) -> Document {
     let mut last_character: Option<String> = None;
     let mut last_expression: Option<String> = None;
     let mut last_position: Option<String> = None;
+    // 立ち絵フィット (#294)。話者行で指定された fit を継続行 Dialog にも引き継ぐ。
+    let mut last_fit: bool = false;
     // per-line voice (#144): [ボイス: path] で次の Dialog/Narration に注入する
     let mut pending_voice_path: Option<String> = None;
     // per-line font (#147): [フォント: family] で次の Dialog/Narration に注入する。
@@ -115,6 +117,7 @@ pub fn parse(input: &str) -> Document {
             last_character = None;
             last_expression = None;
             last_position = None;
+            last_fit = false;
             if let Some(colon_pos) = rest.find(':') {
                 let id = rest[..colon_pos].trim().to_string();
                 let title_raw = rest[colon_pos + 1..].trim().to_string();
@@ -658,10 +661,11 @@ pub fn parse(input: &str) -> Document {
 
         // Speaker line: **カコ** (suppin_1, 左):
         if trimmed.starts_with("**") && is_speaker_line(trimmed) {
-            let (character, expression, position) = parse_speaker_line(trimmed);
+            let (character, expression, position, fit) = parse_speaker_line(trimmed);
             last_character = Some(character.clone());
             last_expression = expression.clone();
             last_position = position.clone();
+            last_fit = fit;
 
             pos += 1;
             // Collect text lines until empty line or next command
@@ -695,6 +699,7 @@ pub fn parse(input: &str) -> Document {
                 },
                 voice_path: pending_voice_path.take(),
                 font_family: pending_font_family.take(),
+                fit,
             });
             continue;
         }
@@ -752,6 +757,7 @@ pub fn parse(input: &str) -> Document {
                     text: text_lines,
                     voice_path: pending_voice_path.take(),
                     font_family: pending_font_family.take(),
+                    fit: last_fit,
                 });
             }
             continue;
@@ -1755,7 +1761,26 @@ fn is_speaker_line(line: &str) -> bool {
     false
 }
 
-fn parse_speaker_line(line: &str) -> (String, Option<String>, Option<String>) {
+/// 話者行のオプション (`フィット` / `fit` / `fit=true`) がフィット指定かどうかを判定する (#294)。
+/// トークン単独（`フィット` / `fit`）か `key=true` の形を真と認める。`fit=false` は偽。
+fn is_fit_token(token: &str) -> bool {
+    let t = token.trim();
+    let (key, val) = match t.split_once('=') {
+        Some((k, v)) => (k.trim(), Some(v.trim())),
+        None => (t, None),
+    };
+    if key != "fit" && key != "フィット" {
+        return false;
+    }
+    match val {
+        // `フィット` / `fit` 単独はトークン存在 = true。
+        None => true,
+        // `fit=true` 系は true、それ以外（`fit=false` など）は false。
+        Some(v) => matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "on" | "yes"),
+    }
+}
+
+fn parse_speaker_line(line: &str) -> (String, Option<String>, Option<String>, bool) {
     // Extract character name between ** **
     let after_stars = &line[2..]; // skip leading **
     let name_end = after_stars.find("**").unwrap_or(after_stars.len());
@@ -1764,18 +1789,31 @@ fn parse_speaker_line(line: &str) -> (String, Option<String>, Option<String>) {
     let rest = &after_stars[name_end + 2..]; // after closing **
     let rest = rest.trim();
 
-    // Check for parenthesized attributes: (expression, position):
+    // Check for parenthesized attributes: (expression, position, フィット):
     if let Some(paren_start) = rest.find('(') {
         if let Some(paren_end) = rest.find(')') {
             let attrs = &rest[paren_start + 1..paren_end];
-            let parts: Vec<&str> = attrs.split(',').collect();
-            let expression = parts.first().map(|s| s.trim().to_string());
-            let position = parts.get(1).map(|s| s.trim().to_string());
-            return (character, expression, position);
+            // フィット (#294) は真偽フラグなので、まず全トークンから抜き出して位置取りから除外する。
+            // 残ったトークンが従来どおり expression=先頭 / position=2 番目 の位置取りを保つ。
+            let mut fit = false;
+            let positional: Vec<&str> = attrs
+                .split(',')
+                .filter(|s| {
+                    if is_fit_token(s) {
+                        fit = true;
+                        false
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+            let expression = positional.first().map(|s| s.trim().to_string());
+            let position = positional.get(1).map(|s| s.trim().to_string());
+            return (character, expression, position, fit);
         }
     }
 
-    (character, None, None)
+    (character, None, None, false)
 }
 
 fn parse_expression_change(line: &str) -> Option<Event> {

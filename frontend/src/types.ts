@@ -157,6 +157,12 @@ export type Event =
         voice_path?: string | null
         /** per-line フォント上書き (#147)。CSS の font-family 文字列 */
         font_family?: string | null
+        /**
+         * 立ち絵の明示フィット指定 (#294)。話者行に `フィット` / `fit` を書くと true。
+         * true のときだけ「論理画面より大きい立ち絵を画面内に収める」旧 fit-down を適用する。
+         * 未指定 / false は原寸（scale=1）で表示する。サイズ・位置では自動分岐しない。
+         */
+        fit?: boolean
       }
     }
   | {

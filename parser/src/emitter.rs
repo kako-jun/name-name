@@ -86,6 +86,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 text,
                 voice_path,
                 font_family,
+                fit,
             } => {
                 // Add blank line before dialog if previous was also dialog (new speech block)
                 if prev_was_dialog_or_text && i > 0 {
@@ -107,18 +108,27 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if need_speaker {
                     if let Some(ref ch) = character {
                         out.push_str(&format!("**{ch}**"));
-                        if expression.is_some() || position.is_some() {
-                            let expr = expression.as_deref().unwrap_or("");
-                            let pos = position.as_deref().unwrap_or("");
-                            if !pos.is_empty() {
-                                out.push_str(&format!(" ({expr}, {pos}):\n"));
-                            } else if !expr.is_empty() {
-                                out.push_str(&format!(" ({expr}):\n"));
-                            } else {
-                                out.push_str(":\n");
-                            }
-                        } else {
+                        // 話者行オプションを位置取りで組み立てる: expression=先頭 / position=2 番目、
+                        // フィット (#294) は真偽フラグなので末尾に `フィット` トークンとして付ける。
+                        // parser 側は `フィット` / `fit` を位置取りから除外してから expr/pos を読むので
+                        // round-trip で安定する。fit=false かつ expr/pos なしのときは従来どおり `:` だけ。
+                        let expr = expression.as_deref().unwrap_or("");
+                        let pos = position.as_deref().unwrap_or("");
+                        let mut attrs: Vec<&str> = Vec::new();
+                        if !pos.is_empty() {
+                            // position があれば expression が空でも位置取りを保つため両方積む。
+                            attrs.push(expr);
+                            attrs.push(pos);
+                        } else if !expr.is_empty() {
+                            attrs.push(expr);
+                        }
+                        if *fit {
+                            attrs.push("フィット");
+                        }
+                        if attrs.is_empty() {
                             out.push_str(":\n");
+                        } else {
+                            out.push_str(&format!(" ({}):\n", attrs.join(", ")));
                         }
                     }
                 }
@@ -1107,6 +1117,7 @@ mod tests {
                         text: vec!["こんにちは。".to_string()],
                         voice_path: None,
                         font_family: None,
+                        fit: false,
                     }],
                 }],
             }],

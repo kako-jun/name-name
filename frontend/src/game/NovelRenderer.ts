@@ -72,6 +72,8 @@ export function getTextEvent(event: Event):
       expression: string | null
       position: string | null
       text: string[]
+      /** 立ち絵の明示フィット指定 (#294)。true のとき loadTexture で旧 fit-down を適用する。 */
+      fit: boolean
     }
   | { type: 'narration'; text: string[] }
   | null {
@@ -83,6 +85,8 @@ export function getTextEvent(event: Event):
         expression: event.Dialog.expression,
         position: event.Dialog.position,
         text: event.Dialog.text,
+        // 未指定 / false は原寸（fit=false）。明示 boolean に倒す。
+        fit: event.Dialog.fit === true,
       }
     }
     if ('Narration' in event) {
@@ -90,6 +94,32 @@ export function getTextEvent(event: Event):
     }
   }
   return null
+}
+
+/**
+ * 復元 (#294) 用: 指定キャラの立ち絵フィット指定を resolvedEvents から解決する純粋関数。
+ *
+ * fit は GameState（スナップショット / セーブ）に持たない脚本由来の表示属性なので、
+ * goBack / seekTo / セーブ復元のときは現在イベント (`eventIndex`) 以前で、その立ち絵を
+ * 最後に出した Dialog（speaker == character）の fit を引き当てる。
+ * 見つからなければ false（原寸）。Condition は resolveEvents で展開済みの前提で、
+ * 平坦な resolvedEvents だけを走査する（NovelRenderer の復元と同じ列）。
+ */
+export function resolveCharacterFit(
+  events: Event[],
+  eventIndex: number,
+  character: string
+): boolean {
+  const upper = Math.min(eventIndex, events.length - 1)
+  for (let i = upper; i >= 0; i--) {
+    const e = events[i]
+    if (typeof e === 'object' && e !== null && 'Dialog' in e) {
+      if (e.Dialog.character === character) {
+        return e.Dialog.fit === true
+      }
+    }
+  }
+  return false
 }
 
 /**
@@ -1518,9 +1548,13 @@ export class NovelRenderer {
     this.characterLayer.clear()
     for (const ch of state.characters) {
       const xRatio = this.resolveNovelRoleXRatio(ch.name)
+      // 明示フィット (#294) は GameState に持たない脚本由来属性なので、復元時は
+      // 現在イベント以前の最新 Dialog から引き当てて再現する（goBack/seekTo/セーブ復元）。
+      const fit = resolveCharacterFit(this.resolvedEvents, this.eventIndex, ch.name)
       this.characterLayer.show(ch.name, ch.expression, ch.position, this.assetBaseUrl, {
         instant: true,
         xRatio,
+        fit,
       })
     }
     // 話者交代追跡 (#286) を復元位置の話者に合わせる。任意局面復元の直後に同じ話者で
@@ -2027,7 +2061,8 @@ export class NovelRenderer {
       textEvt.position,
       this.assetBaseUrl,
       // スキップモード中はフェードを抑制（既読シーンの高速進行で違和感を出さない）#177
-      { instant: this.skipMode, xRatio }
+      // 明示フィット (#294): 脚本の話者行 `フィット` 由来。adv/novel で分岐しない。
+      { instant: this.skipMode, xRatio, fit: textEvt.fit }
     )
 
     // 話者交代でポーズ変化 (#286)。novel のみ・スキップ中は抑制（高速進行で乱発しない）。
