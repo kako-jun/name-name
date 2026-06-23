@@ -39,6 +39,10 @@ interface NovelPlayerProps {
   /** 質問役（主人公）の話者名 (#286)。`dialog_style: novel` の左右配置に使う。
    *  frontmatter `protagonist:` から流す。null/undefined で従来配置（後方互換） */
   protagonist?: string | null
+  /** 主人公セリフの本文色 (#305)。CSS hex（既定 #FFF6E6 の暖アイボリー）。
+   *  protagonist 一致話者の novel 本文をこの色にし、住人は純白。null/undefined で既定 #FFF6E6。
+   *  protagonist 未指定なら色差しない（全員白）。 */
+  protagonistTextColor?: string | null
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
   docKey?: string
   /**
@@ -63,6 +67,7 @@ function NovelPlayer({
   fontSize,
   dialogStyle,
   protagonist,
+  protagonistTextColor,
   docKey,
   initialSkipMode = false,
   onRendererReady,
@@ -130,6 +135,9 @@ function NovelPlayer({
       // 質問役（主人公）の話者名 (#286)。setEvents/setScenes より前に設定し、初回の
       // novel 立ち絵配置（質問役=左 / 回答役=右）が正しい役割で決まるようにする。
       renderer.setProtagonist(protagonist ?? null)
+      // 主人公セリフの本文色 (#305)。未指定なら既定 #FFF6E6。setEvents より前に設定し、
+      // 初回描画から主人公セリフが暖アイボリーになるようにする。
+      renderer.setProtagonistTextColor(protagonistTextColor ?? null)
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
       // 再生ストリームの確定 (#284):
@@ -213,6 +221,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setProtagonist(protagonist ?? null)
   }, [protagonist])
+
+  // protagonistTextColor が変化したときに renderer に反映 (#305)
+  useEffect(() => {
+    rendererRef.current?.setProtagonistTextColor(protagonistTextColor ?? null)
+  }, [protagonistTextColor])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {

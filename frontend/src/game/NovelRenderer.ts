@@ -247,6 +247,21 @@ export class NovelRenderer {
    *  resetAndStartEvents / シーン遷移でリセットする（前シーンの話者を引きずらない）。 */
   private lastSpeaker: string | null = null
 
+  /** 主人公セリフの本文色 (#305)。既定は暖アイボリー #FFF6E6。
+   *  protagonist と一致する話者の novel 本文をこの色にし、住人は純白 (#FFFFFF) のまま。
+   *  per-game の `setProtagonistTextColor` で上書き可能（未指定なら既定 #FFF6E6）。
+   *  protagonist 未指定なら色差は起こさず全員白（後方互換）。 */
+  private protagonistTextColor: number = parseColorToNumber(
+    NovelRenderer.DEFAULT_PROTAGONIST_TEXT_COLOR,
+    0xffffff
+  )
+
+  /** 住人（非主人公）の本文色 (#305)。純白。protagonist 未指定時は全員これになる。 */
+  private static readonly RESIDENT_TEXT_COLOR = 0xffffff
+
+  /** 主人公本文色の既定 (#305)。kako-jun 確定の暖アイボリー #FFF6E6。 */
+  private static readonly DEFAULT_PROTAGONIST_TEXT_COLOR = '#FFF6E6'
+
   /** per-game デフォルトフォント (#147)。frontmatter `font_family:` の値。
    *  null なら DialogBox の組み込み既定 (`'Noto Sans JP', sans-serif`) を使う。
    *  per-line `[フォント:]` で個別 Dialog/Narration が上書き可能。 */
@@ -874,6 +889,36 @@ export class NovelRenderer {
    */
   setProtagonist(name: string | null | undefined): void {
     this.protagonist = name && name.length > 0 ? name : null
+  }
+
+  /**
+   * 主人公セリフの本文色を設定する (#305)。
+   * frontmatter `protagonist_text_color:`（任意）の値（CSS hex）を渡す。null/undefined/空文字・
+   * 不正値のときは既定の暖アイボリー #FFF6E6 に倒す（parseColorToNumber の fallback）。
+   *
+   * protagonist と一致する話者の novel 本文をこの色にし、住人は純白のまま。
+   * protagonist 未指定なら色差は起こさない（全員白＝後方互換）。adv では色差しない（novel 限定）。
+   */
+  setProtagonistTextColor(color: string | null | undefined): void {
+    const fallback = parseColorToNumber(NovelRenderer.DEFAULT_PROTAGONIST_TEXT_COLOR, 0xffffff)
+    this.protagonistTextColor =
+      color && color.length > 0 ? parseColorToNumber(color, fallback) : fallback
+  }
+
+  /**
+   * 現在の話者から本文色を決定論的に導出する (#305)。
+   *  - adv / protagonist 未指定 / 話者不明 → 住人色（純白）。色差しない（後方互換）。
+   *  - novel かつ話者が protagonist と一致 → 主人公本文色（既定 #FFF6E6）。
+   *  - それ以外（novel の住人）→ 住人色（純白）。
+   * 演出中間状態でなく per-line の描画属性なので、render() の都度ここで導出して DialogBox に渡す。
+   */
+  private resolveBodyTextColor(speaker: string | null): number {
+    if (!this.isNovelStyle()) return NovelRenderer.RESIDENT_TEXT_COLOR
+    if (this.protagonist === null) return NovelRenderer.RESIDENT_TEXT_COLOR
+    if (!speaker) return NovelRenderer.RESIDENT_TEXT_COLOR
+    return speaker === this.protagonist
+      ? this.protagonistTextColor
+      : NovelRenderer.RESIDENT_TEXT_COLOR
   }
 
   /**
@@ -2754,6 +2799,10 @@ export class NovelRenderer {
       .catch((err) => {
         console.warn('[name-name] フォントロードに失敗', resolvedFontFamily, err)
       })
+
+    // 本文色 (#305): 話者から決定論的に導出して DialogBox に渡す（主人公=暖アイボリー / 住人=白）。
+    // adv / protagonist 未指定では常に白＝後方互換。setDialog/setNovelDialogProgressive の前に当てる。
+    this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
 
     // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)。
     // voice 有無に関わらず typing onDone で進める (voice は fire-and-forget)。

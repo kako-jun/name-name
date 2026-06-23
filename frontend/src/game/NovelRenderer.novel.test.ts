@@ -82,6 +82,8 @@ interface RendererInternals {
   getNovelPages(textEvt: { text: string[] }): Array<{ text: string; lineCount: number }>
   currentPageCount(textEvt: { text: string[] }): number
   isNovelStyle(): boolean
+  /** 本文色の決定論的導出 (#305)。話者 → 色 number（主人公=暖アイボリー / 住人=白）。 */
+  resolveBodyTextColor(speaker: string | null): number
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -720,5 +722,81 @@ describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
     // ページ最後の文 → 次イベントへ。
     i.advance()
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
+  })
+})
+
+// ===== #305: 主人公の本文色（暖アイボリー #FFF6E6）／住人は純白 =====
+//
+// 本文色は render() 時に話者から決定論的に導出して DialogBox.setBodyTextColor に渡す per-line の
+// 描画属性（GameState には持たない）。ここでは導出の純粋部分（resolveBodyTextColor）を直接検証する。
+// DialogBox への受け渡し（dialogText.style.fill 反映）は DialogBox.test.ts で検証する。
+const FFF6E6 = 0xfff6e6 // 暖アイボリー（kako-jun 確定）
+const WHITE = 0xffffff
+describe('NovelRenderer 主人公本文色 (#305)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('novel + protagonist 一致話者は既定の暖アイボリー #FFF6E6 に解決する', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF6E6)
+  })
+
+  it('novel の住人（非主人公）は純白に解決する', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    expect(internals(r).resolveBodyTextColor('ひな')).toBe(WHITE)
+  })
+
+  it('protagonist 未指定なら novel でも全員白（色差しない・後方互換）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(WHITE)
+    expect(internals(r).resolveBodyTextColor('ひな')).toBe(WHITE)
+  })
+
+  it('adv では protagonist を設定しても色差しない（全員白・adv 非回帰）', () => {
+    const r = new NovelRenderer()
+    // dialog_style 未指定 = adv
+    r.setProtagonist('せお')
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(WHITE)
+    expect(internals(r).resolveBodyTextColor('ひな')).toBe(WHITE)
+  })
+
+  it('話者不明（null = ナレ）は白に解決する', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    expect(internals(r).resolveBodyTextColor(null)).toBe(WHITE)
+  })
+
+  it('setProtagonistTextColor で主人公本文色を per-game 上書きできる', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setProtagonistTextColor('#112233')
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(0x112233)
+    // 住人は上書きの影響を受けず白のまま。
+    expect(internals(r).resolveBodyTextColor('ひな')).toBe(WHITE)
+  })
+
+  it('setProtagonistTextColor(null) は既定 #FFF6E6 に倒す', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setProtagonistTextColor('#112233')
+    r.setProtagonistTextColor(null)
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF6E6)
+  })
+
+  it('不正な色指定は既定 #FFF6E6 にフォールバックする', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setProtagonistTextColor('not-a-color')
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF6E6)
   })
 })

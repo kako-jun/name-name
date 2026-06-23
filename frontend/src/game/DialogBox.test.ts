@@ -64,11 +64,13 @@ const TEXT_X_WITH_PORTRAIT = PORTRAIT_X + PORTRAIT_SIZE + PORTRAIT_MARGIN
 // private フィールドにアクセスするための型
 interface DialogBoxInternals {
   portraitFrame: { visible: boolean } | null
-  dialogText: { x: number; text: string; visible: boolean }
+  dialogText: { x: number; text: string; visible: boolean; style: { fill: unknown } }
   portraitSprite: { visible: boolean; texture: unknown } | null
   currentPortraitToken: number
-  rubyEntries: Array<{ placement: unknown; text: unknown }>
+  rubyEntries: Array<{ placement: unknown; text: { x: number; style: { fill: unknown } } }>
   rubyBuildToken: number
+  /** タイプ完了コールバック slot (#302 / #304 follow-up)。null = 未設定。 */
+  onTypingDone: (() => void) | null
 }
 
 function asInternals(box: DialogBox): DialogBoxInternals {
@@ -778,6 +780,58 @@ describe('DialogBox setFontFamily インライン名追従 (#287 review nit)', (
     const fam = internals.inlineNameText!.style.fontFamily
     const famStr = Array.isArray(fam) ? fam.join(',') : String(fam)
     expect(famStr).toContain('Hina Mincho')
+    box.dispose()
+  })
+})
+
+// ===== #305: 本文テキスト色（setBodyTextColor） =====
+//
+// NovelRenderer が話者から導出した本文色（主人公=暖アイボリー #FFF6E6 / 住人=白）を DialogBox に
+// 渡す受け渡し経路の検証。dialogText.style.fill に反映され、表示中ルビにも当たることを確認する。
+describe('DialogBox setBodyTextColor (#305)', () => {
+  it('既定の本文色は純白 0xffffff', () => {
+    const box = makeRpgBox()
+    expect(box.getBodyTextColor()).toBe(0xffffff)
+    box.dispose()
+  })
+
+  it('setBodyTextColor(#FFF6E6 相当の数値) で dialogText.style.fill が更新される', () => {
+    const box = makeRpgBox()
+    box.setBodyTextColor(0xfff6e6)
+    expect(box.getBodyTextColor()).toBe(0xfff6e6)
+    expect(asInternals(box).dialogText.style.fill).toBe(0xfff6e6)
+    box.dispose()
+  })
+
+  it('住人色（純白）に戻せる', () => {
+    const box = makeRpgBox()
+    box.setBodyTextColor(0xfff6e6)
+    box.setBodyTextColor(0xffffff)
+    expect(box.getBodyTextColor()).toBe(0xffffff)
+    expect(asInternals(box).dialogText.style.fill).toBe(0xffffff)
+    box.dispose()
+  })
+
+  it('同じ色の再設定は no-op（getBodyTextColor は維持）', () => {
+    const box = makeRpgBox()
+    box.setBodyTextColor(0xfff6e6)
+    box.setBodyTextColor(0xfff6e6)
+    expect(box.getBodyTextColor()).toBe(0xfff6e6)
+    box.dispose()
+  })
+
+  it('表示中ルビにも本文色が当たる（本文色変更後の rubyEntries.style.fill）', async () => {
+    const box = makeRpgBox()
+    box.setDialog(null, '漢字《かんじ》のルビ')
+    // ルビは ensureFontLoaded().then() で構築されるため microtask を flush してから色を当てる。
+    await Promise.resolve()
+    await Promise.resolve()
+    box.setBodyTextColor(0xfff6e6)
+    const ruby = asInternals(box).rubyEntries
+    expect(ruby.length).toBeGreaterThan(0)
+    for (const e of ruby) {
+      expect(e.text.style.fill).toBe(0xfff6e6)
+    }
     box.dispose()
   })
 })
