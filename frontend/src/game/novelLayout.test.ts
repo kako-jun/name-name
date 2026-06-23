@@ -1137,11 +1137,12 @@ describe('wrappedPrefixLength (#292 文単位送り)', () => {
   })
 })
 
-// ===== #292: computeNovelIndicatorPlacement（novel 文末クリッカー配置）=====
+// ===== #292 / #300: computeNovelIndicatorPlacement（novel 文末クリッカー配置）=====
 //
 // 止まっている表示テキストの最終 wrap 行の右端にクリッカーを置く座標を算出する。
-// x = textStartX + lastLineWidth（右端 - 記号幅でクランプ）、y = textStartY + (lineCount-1)*lineHeight。
-describe('computeNovelIndicatorPlacement (#292)', () => {
+// x = textStartX + lastLineWidth（右端 - 記号幅でクランプ）。
+// y = textStartY + (lineCount-1)*lineHeight + (lineHeight - indicatorHeight)/2  // 文末行 band の縦中央（#300）
+describe('computeNovelIndicatorPlacement (#292 / #300)', () => {
   const base = {
     textStartX: 16,
     textStartY: 10,
@@ -1149,19 +1150,46 @@ describe('computeNovelIndicatorPlacement (#292)', () => {
     lastLineWidth: 100,
     lineHeight: 64,
     indicatorWidth: 20,
+    indicatorHeight: 20,
     boxRightEdge: 784,
   }
 
-  it('1 行: x=textStartX+lastLineWidth, y=textStartY（最終行の行頭）', () => {
+  // 期待値を入力から導出する縦中央ヘルパー（ハードコード禁止・guidelines 規約4）。
+  const expectedCenteredY = (args: typeof base): number => {
+    const lc = args.lineCount >= 1 ? args.lineCount : 1
+    const offset = Math.max(0, (args.lineHeight - args.indicatorHeight) / 2)
+    return args.textStartY + (lc - 1) * args.lineHeight + offset
+  }
+
+  it('1 行: x=textStartX+lastLineWidth, y は文末行 band の縦中央（#300）', () => {
     const p = computeNovelIndicatorPlacement(base)
-    expect(p.x).toBe(16 + 100) // 文末の右
-    expect(p.y).toBe(10) // (1-1)*lineHeight = 0
+    expect(p.x).toBe(base.textStartX + base.lastLineWidth) // 文末の右
+    // (1-1)*lineHeight + (64-20)/2 = 22 → 旧実装の textStartY(=10) より下（縦中央化）
+    expect(p.y).toBe(expectedCenteredY(base))
+    expect(p.y).toBeGreaterThan(base.textStartY) // 旧「行頭上端」より下に来ている
   })
 
-  it('複数行: y は (lineCount-1)*lineHeight だけ下がる', () => {
-    const p = computeNovelIndicatorPlacement({ ...base, lineCount: 3 })
-    expect(p.x).toBe(16 + 100)
-    expect(p.y).toBe(10 + (3 - 1) * 64) // 2 行分下
+  it('複数行: y は (lineCount-1)*lineHeight + 縦中央オフセット', () => {
+    const args = { ...base, lineCount: 3 }
+    const p = computeNovelIndicatorPlacement(args)
+    expect(p.x).toBe(base.textStartX + base.lastLineWidth)
+    expect(p.y).toBe(expectedCenteredY(args)) // 10 + 2*64 + 22
+  })
+
+  it('indicatorHeight が大きいほど縦中央オフセットが小さくなる（行 band 中央に揃う）', () => {
+    const small = computeNovelIndicatorPlacement({ ...base, indicatorHeight: 10 })
+    const large = computeNovelIndicatorPlacement({ ...base, indicatorHeight: 40 })
+    // 同じ高さ中央に揃える: 小さい記号ほど上端からの余白が大きい（= y が下）
+    expect(small.y).toBeGreaterThan(large.y)
+    expect(small.y).toBe(expectedCenteredY({ ...base, indicatorHeight: 10 }))
+    expect(large.y).toBe(expectedCenteredY({ ...base, indicatorHeight: 40 }))
+  })
+
+  it('indicatorHeight が lineHeight を超えると縦中央オフセットは 0（行頭上端へクランプ）', () => {
+    const args = { ...base, indicatorHeight: 100 } // > lineHeight 64
+    const p = computeNovelIndicatorPlacement(args)
+    expect(p.y).toBe(base.textStartY) // (1-1)*lineHeight + max(0, 負) = 0
+    expect(p.y).toBe(expectedCenteredY(args))
   })
 
   it('rawX が右端を超えるとクランプ（boxRightEdge - indicatorWidth）', () => {
@@ -1181,13 +1209,15 @@ describe('computeNovelIndicatorPlacement (#292)', () => {
     expect(p.x).toBe(base.textStartX) // rawX=16 と maxX=16 のうち小さい方=16
   })
 
-  it('lineCount=0 は 1 として扱う（y は最終行頭 = textStartY）', () => {
-    const p = computeNovelIndicatorPlacement({ ...base, lineCount: 0 })
-    expect(p.y).toBe(base.textStartY) // (1-1)*lineHeight=0
+  it('lineCount=0 は 1 として扱う（y は最終行 band の縦中央）', () => {
+    const args = { ...base, lineCount: 0 }
+    const p = computeNovelIndicatorPlacement(args)
+    expect(p.y).toBe(expectedCenteredY(args)) // (1-1)*lineHeight + 縦中央オフセット
   })
 
   it('lineCount 負値も 1 扱い（>=1 ガード）', () => {
-    const p = computeNovelIndicatorPlacement({ ...base, lineCount: -5 })
-    expect(p.y).toBe(base.textStartY)
+    const args = { ...base, lineCount: -5 }
+    const p = computeNovelIndicatorPlacement(args)
+    expect(p.y).toBe(expectedCenteredY(args))
   })
 })

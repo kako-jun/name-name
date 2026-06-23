@@ -718,6 +718,27 @@ export class DialogBox extends Container {
     return isTypingActive(this.typewriter)
   }
 
+  /**
+   * タイプ完了コールバックを「今から」差し替える (#302)。
+   *
+   * `setDialog` / `setNovelDialogProgressive` は描画時点の onTypingDone を確定するため、
+   * auto OFF で描画された行は callback=null になる。その行のタイプ進行中に auto を ON にした
+   * 場合、この live 張り替えで「現在タイプ中の行が完了したら scheduleAutoAdvance する」よう
+   * 直す。タイプ中でなければ（既に完了済み）即その場で 1 回だけ呼ぶ（既存の即時 done と同型）。
+   *
+   * `cb=null` を渡すと解除（auto OFF 時に呼び、OFF 中に完了して誤進行するのを防ぐ）。
+   * 完了時の発火は ticker の justFinished 分岐が `onTypingDone` を一度 null にしてから呼ぶため
+   * 1 回だけ消費される（二重発火しない）。
+   */
+  setOnTypingDone(cb: (() => void) | null): void {
+    this.onTypingDone = cb
+    if (cb && !isTypingActive(this.typewriter)) {
+      // 既にタイプ完了済み → onTypingDone は今後発火しないので、その場で 1 回だけ消費する。
+      this.onTypingDone = null
+      cb()
+    }
+  }
+
   setMsPerChar(msPerChar: number): void {
     this.msPerChar = Math.max(0, msPerChar)
     if (this.msPerChar === 0) {
@@ -973,6 +994,12 @@ export class DialogBox extends Container {
     const font = `${this.fontSize}px ${this.fontFamily}`
     const lastLineWidth = this.measureTextWidth(lastLine, font)
     const indicatorWidth = this.measureTextWidth(this.indicator.text, font) || 20
+    // インジケータの高さ (#300)。本番（WebGL）では実測 height（fontSize 20 の ▼/❯ は行間込みで
+    // おおむね ~24-27px）を使い、行 band の縦中央へ正確に揃える。jsdom は canvas 2d ctx が null で
+    // Text.height が measureFont で throw するため measureIndicatorHeight() が 0 を返す。その場合だけ
+    // 20（= indicator の fontSize。実 height より小さいが縦中央化の方向は保つ）に倒すフォールバック
+    // 値であって、本番の実 height ではない（measureTextWidth の ctx ガードと同趣旨の退化）。
+    const indicatorHeight = this.measureIndicatorHeight() || 20
     const placement = computeNovelIndicatorPlacement({
       textStartX: this.textStartX(),
       textStartY: this.textStartY(),
@@ -980,6 +1007,7 @@ export class DialogBox extends Container {
       lastLineWidth,
       lineHeight: this.lineHeight(),
       indicatorWidth,
+      indicatorHeight,
       boxRightEdge: this.boxX + this.boxW - this.padding,
     })
     this.indicator.x = placement.x
@@ -992,6 +1020,20 @@ export class DialogBox extends Container {
     if (!ctx) return 0
     ctx.font = font
     return ctx.measureText(s).width
+  }
+
+  /**
+   * インジケータ記号の表示高さ（px）を測る (#300)。Pixi の `Text.height` は bounds 計算で
+   * canvas 2d を使うため、ctx が null の jsdom では `measureFont` が throw する。例外時は 0 を
+   * 返し、呼び出し側で fontSize ベース（20）にフォールバックさせる（measureTextWidth と同趣旨）。
+   */
+  private measureIndicatorHeight(): number {
+    try {
+      const h = this.indicator.height
+      return Number.isFinite(h) && h > 0 ? h : 0
+    } catch {
+      return 0
+    }
   }
 
   dispose(): void {

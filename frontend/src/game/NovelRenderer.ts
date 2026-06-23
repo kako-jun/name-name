@@ -974,9 +974,22 @@ export class NovelRenderer {
   }
 
   /**
-   * オートモードの ON/OFF を切り替える (#139)。
+   * オートモードの ON/OFF を切り替える (#139 / #302)。
    * OFF にした場合は待機中のオートタイマーをキャンセルする。
    * React 側から呼ぶ場合は setAutoMode、renderer 内部から呼ぶ場合も同じメソッドを使う。
+   *
+   * 会話中トグルの即時反映 (#302): `onTypingDone` は render()（setDialog /
+   * setNovelDialogProgressive 呼び出し時）に `this.autoMode ? …scheduleAutoAdvance : null` で
+   * **その時点の autoMode で確定**する。auto OFF で描画された行は callback=null になる。よって
+   * 会話中に auto を ON にしただけでは、現在行が「タイプ中」でも「完了済み」でも自動送りが
+   * 始まらなかった（完了済み行は再発火せず、タイプ中行も onTypingDone が null のまま）。
+   *
+   * 修正: on=true かつ choice/wait 待機でなく スクリプト末尾でないとき、DialogBox の
+   * onTypingDone を **live で張り替える**（`setOnTypingDone`）。これで—
+   *  - 現在行が**タイプ中**なら、その行の完了時に scheduleAutoAdvance が発火する。
+   *  - 現在行が**完了済み**なら、setOnTypingDone がその場で 1 回だけ scheduleAutoAdvance を呼ぶ。
+   * どちらも同一経路で扱え、完了時の onTypingDone は ticker 側で一度 null 化されてから呼ばれる
+   * ため二重発火しない。auto を OFF にしたら onTypingDone も解除し、OFF 中の完了で誤って進めない。
    */
   setAutoMode(on: boolean): void {
     if (this.autoMode === on) return
@@ -986,12 +999,52 @@ export class NovelRenderer {
         this.time.clearTimeout(this.autoTimer)
         this.autoTimer = null
       }
+      // オート OFF: onTypingDone も解除する。OFF 中にタイプが完了して誤って進めないように
+      // （#139 手動 OFF 経路と整合。次行の render() が auto=false で null を張り直すのと同義）。
+      this.dialogBox.setOnTypingDone(null)
       // オートモード OFF 時はボイスを停止する（onEnded が誤発火しないよう）
       this.audioManager.stopVoice()
+    } else if (!this.waitingForChoice && !this.waitingForWait && !this.isAtScriptEnd()) {
+      // 会話中にオート ON にした瞬間の即時反映 (#302)。
+      // setOnTypingDone が「タイプ中なら完了時に発火・完了済みなら即発火」を一手に引き受ける。
+      // choice/wait 待機中・スクリプト末尾は対象外（進める先がない）。
+      this.dialogBox.setOnTypingDone(() => this.scheduleAutoAdvance())
     }
     // React state との同期。コールバック内で setAutoMode が再度呼ばれても
     // 同値 no-op（上の早期 return）で無限ループを防いでいる。
     this.onAutoModeChange?.(on)
+  }
+
+  /**
+   * 現在の表示位置が「これ以上 advance しても進む先がない」スクリプト末尾かを判定する純粋な
+   * 述語 (#302)。setAutoMode の即時 scheduleAutoAdvance を末尾で抑止するために使う
+   * （末尾でタイマーを張ると、advance が onEndCallback だけ叩いて空回りするのを防ぐ）。
+   *
+   * 末尾の定義は render() のインジケータ可視判定と同型にする:
+   *  - 表示イベントが無い／既に範囲外 → 末尾扱い。
+   *  - text を持つイベントでないなら（演出のみ等）→ 末尾扱いしない（advance で次へ進める）。
+   *  - text イベントなら「最後のページ かつ（novel は）ページ最後の文 かつ 最後のイベント」が末尾。
+   */
+  private isAtScriptEnd(): boolean {
+    if (this.resolvedEvents.length === 0) return true
+    if (this.eventIndex >= this.resolvedEvents.length) return true
+    const current = this.resolvedEvents[this.eventIndex]
+    const textEvt = getTextEvent(current)
+    if (!textEvt) return false
+    const isLastEvent = this.eventIndex >= this.resolvedEvents.length - 1
+    if (!isLastEvent) return false
+    const pageCount = this.currentPageCount(textEvt)
+    const isLastPage = this.textIndex >= pageCount - 1
+    if (!isLastPage) return false
+    if (this.isNovelStyle()) {
+      const page = this.getNovelPages(textEvt)[this.textIndex]
+      const sentenceCount = page?.sentences.length ?? 0
+      // render() の novelSentenceIndex のような clamp はせず raw sentenceIndex を使う。
+      // over-range（復元等で範囲外）でも `>=` で "末尾扱い" に倒れ、即時オートを抑止する安全方向。
+      const isLastSentenceOnPage = this.sentenceIndex >= sentenceCount - 1
+      return isLastSentenceOnPage
+    }
+    return true
   }
 
   /** オートモード変更コールバックを登録する（NovelPlayer が setAutoMode(false) を検知するため） */
