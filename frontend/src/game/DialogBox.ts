@@ -771,14 +771,9 @@ export class DialogBox extends Container {
     if (this.bodyTextColor === color) return
     this.bodyTextColor = color
     this.dialogText.style = this.makeDialogTextStyle()
-    const rubyFontSize = this.rubyFontSize()
+    const rubyStyle = this.makeRubyTextStyle()
     for (const e of this.rubyEntries) {
-      e.text.style = new TextStyle({
-        fontFamily: this.fontFamily,
-        fontSize: rubyFontSize,
-        fill: this.bodyTextColor,
-        dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
-      })
+      e.text.style = rubyStyle
     }
   }
 
@@ -795,15 +790,9 @@ export class DialogBox extends Container {
       this.drawBackground()
     }
     this.dialogText.style = this.makeDialogTextStyle()
-    const rubyFontSize = this.rubyFontSize()
+    const rubyStyle = this.makeRubyTextStyle()
     for (const e of this.rubyEntries) {
-      e.text.style = new TextStyle({
-        fontFamily: this.fontFamily,
-        fontSize: rubyFontSize,
-        // ルビも本文色 (#305) に合わせる（主人公=暖アイボリー / 住人=白）。
-        fill: this.bodyTextColor,
-        dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
-      })
+      e.text.style = rubyStyle
     }
     if (this.borderless) {
       this.nameBox.visible = false
@@ -1167,6 +1156,21 @@ export class DialogBox extends Container {
     })
   }
 
+  /**
+   * ルビ用 TextStyle を作る (#307)。本文色 (#305) と borderless DropShadow をルビにも揃える。
+   * 旧来 setBorderless / setBodyTextColor / rebuildRubyEntries の 3 経路に独立生成されていた同一
+   * スタイル式を 1 箇所に集約し、将来のルビ様式変更を 1 箇所修正で済むようにする（挙動不変）。
+   */
+  private makeRubyTextStyle(): TextStyle {
+    return new TextStyle({
+      fontFamily: this.fontFamily,
+      fontSize: this.rubyFontSize(),
+      // ルビも本文色 (#305) に合わせる（主人公=暖アイボリー / 住人=白）。
+      fill: this.bodyTextColor,
+      dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
+    })
+  }
+
   private lineHeight(): number {
     return this.fontSize * 1.6
   }
@@ -1259,13 +1263,7 @@ export class DialogBox extends Container {
 
     const lineHeight = this.lineHeight()
     const rubyFontSize = this.rubyFontSize()
-    const rubyStyle = new TextStyle({
-      fontFamily: this.fontFamily,
-      fontSize: rubyFontSize,
-      // ルビも本文色 (#305) に合わせる（主人公=暖アイボリー / 住人=白）。
-      fill: this.bodyTextColor,
-      dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
-    })
+    const rubyStyle = this.makeRubyTextStyle()
 
     for (const p of this.rubyPlacements) {
       const line = lines[p.lineIndex] ?? ''

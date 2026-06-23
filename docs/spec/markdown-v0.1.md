@@ -33,7 +33,6 @@ choice_style: "default"
 | `font_size` | number | No | per-game デフォルトの本文フォントサイズ（px）。例: `26`（9:16 ノベル向け）。省略時は runtime 既定 `40`。引用符なしの数値で書く（`font_size: 26`）。詳細は [フォントサイズ](#フォントサイズ) を参照 (#283) |
 | `dialog_style` | string | No | 会話の描画スタイル。`"adv"`（下部 ADV 箱）/ `"novel"`（全画面ノベル）の対等 2 択。「正規デフォルト」は持たず作品ごとに明示するが、未指定・不明値は `adv` 描画にフォールバックする（壊さないため）。詳細は [会話の描画スタイル](#会話の描画スタイル) を参照 (#283) |
 | `protagonist` | string | No | 質問役（主人公）の話者名。`dialog_style: "novel"` の立ち絵左右配置に使う per-game 設定。話者がこの名前と一致したら質問役＝左、それ以外（住人）は回答役＝右に振る。省略時は従来配置（脚本の position トークンのまま）＝後方互換。`adv` では使わない。詳細は [立ち絵：配置と話者表示](#立ち絵配置と話者表示) を参照 (#286) |
-| `protagonist_text_color` | string | No | 主人公セリフの本文色（CSS hex）。`dialog_style: "novel"` で `protagonist` 一致話者の本文だけこの色にし、住人は純白。省略時は既定の暖アイボリー `#FFF6E6`。不正値も既定に倒す。`protagonist` 未指定なら色差しない（全員白）。`adv` では使わない。詳細は [主人公の本文色](#主人公の本文色305) を参照 (#305) |
 
 フロントマターは Event ではなく、parser の Chapter 構造体（Rust 側）のフィールドとしてパースされる。フロントエンド側の EventChapter 型とは別物なので注意する。
 
@@ -448,9 +447,9 @@ dialog_style: "novel"
 
 #### 主人公の本文色（#305）
 
-`dialog_style: "novel"` で `protagonist` を指定すると、**主人公のセリフ本文だけ**をわずかな暖アイボリー **`#FFF6E6`** で描き、住人（非主人公）は **純白 `#FFFFFF`** のままにする。名札の無い novel で「今の話し手が主人公か住人か」を本文の色味で薄く示すための、per-line の描画属性（話者から決定論的に導出する。`NovelGameState` には持たないので、セーブ／シーク／任意局面起動の復元でも render 時に再導出される）。
+`dialog_style: "novel"` で `protagonist` を指定すると、**主人公のセリフ本文だけ**をわずかな暖アイボリー **`#FFF6E6`** で描き、住人（非主人公）は **純白 `#FFFFFF`** のままにする。名札の無い novel で「今の話し手が主人公か住人か」を本文の色味で薄く示すための、per-line の描画属性（話者から決定論的に導出する。`NovelGameState` には持たないので、セーブ／シーク／任意局面起動の復元でも render 時に再導出される）。**`dialog_style: "novel"` かつ `protagonist` 指定の作品にだけ適用される**（実質 theo のみ）。
 
-- 既定の主人公本文色は `#FFF6E6`。frontmatter `protagonist_text_color`（任意・CSS hex）で per-game に上書きできる。不正値・空は既定 `#FFF6E6` に倒す。
+- 主人公本文色は**固定で `#FFF6E6`**。frontmatter での色上書きは**未実装**（ユーザー要求は固定色のみ）。runtime は内部に上書きフックを持つが、本番経路は色を渡さないため常に `#FFF6E6`。
 - `protagonist` 未指定なら色差は起こさず**全員が白**（後方互換）。`adv` では `protagonist` を設定しても本文色は変えない（novel 限定）。
 - ルビ文字も本文色に合わせる（主人公=暖アイボリー／住人=白）。
 
@@ -461,7 +460,6 @@ chapter: 1
 title: "出会い"
 dialog_style: "novel"
 protagonist: "せお"
-protagonist_text_color: "#FFF6E6"  # 任意。省略時も既定 #FFF6E6
 ---
 ```
 

@@ -892,12 +892,15 @@ export class NovelRenderer {
   }
 
   /**
-   * 主人公セリフの本文色を設定する (#305)。
-   * frontmatter `protagonist_text_color:`（任意）の値（CSS hex）を渡す。null/undefined/空文字・
-   * 不正値のときは既定の暖アイボリー #FFF6E6 に倒す（parseColorToNumber の fallback）。
+   * 主人公セリフの本文色を設定する (#305)。CSS hex を渡す。null/undefined/空文字・不正値の
+   * ときは既定の暖アイボリー #FFF6E6 に倒す（parseColorToNumber の fallback）。
    *
    * protagonist と一致する話者の novel 本文をこの色にし、住人は純白のまま。
    * protagonist 未指定なら色差は起こさない（全員白＝後方互換）。adv では色差しない（novel 限定）。
+   *
+   * 注意（#305 / #307）: 現状この setter を呼ぶ本番経路は無い（parser は色を解析せず、NovelPlayer も
+   * 渡さない）。本番の主人公本文色は常に renderer 既定 #FFF6E6。この setter はテストと将来の
+   * frontmatter 上書き実装に備えた内部フックとして残してある（呼ばなければ既定が効く）。
    */
   setProtagonistTextColor(color: string | null | undefined): void {
     const fallback = parseColorToNumber(NovelRenderer.DEFAULT_PROTAGONIST_TEXT_COLOR, 0xffffff)

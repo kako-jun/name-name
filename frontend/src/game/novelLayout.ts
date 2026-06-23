@@ -743,6 +743,8 @@ export function computeNovelIndicatorPlacement(args: {
   // 上へは戻さない（満杯ページで記号が箱外・前行より上に飛ぶのを防ぐ）。
   const nextLineY = textStartY + lineCount * lineHeight + verticalCenterOffset
   const clampedY = Math.min(nextLineY, boxBottom - args.indicatorHeight)
+  // 満杯ページで次行が箱外に出る場合、下限 sameLineY（最終行 band 縦中央）へ留める。これは
+  // 「箱内優先で文字との重なりを許容（箱外に出るより良い）」という意図的な妥協（#306 nit）。
   const y = Math.max(sameLineY, clampedY)
   return { x, y }
 }
