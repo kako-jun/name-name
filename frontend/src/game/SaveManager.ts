@@ -32,6 +32,11 @@ export interface SaveSlotData {
    */
   backgroundFade?: BackgroundFade | null
   /**
+   * 背景の明るさ（brightness、0.0〜1.0）。同一画像をシーン毎に減光する持続プロパティ。
+   * 後方互換: 古いセーブデータには無い → undefined/null は原画のまま（tint=白）扱い。
+   */
+  backgroundBrightness?: number | null
+  /**
    * 動画入力レイヤ (#252)。
    * 後方互換: 古いセーブデータには無い → undefined/null は動画なし扱い。
    */

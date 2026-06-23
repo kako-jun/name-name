@@ -76,6 +76,7 @@ fn test_parse_sample() {
             fade_bottom: None,
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
     // [BGM: amehure.ogg]
@@ -199,6 +200,7 @@ fn test_parse_sample() {
             fade_bottom: None,
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
 
@@ -231,6 +233,7 @@ fn test_parse_sample() {
             fade_bottom: None,
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
 
@@ -3946,6 +3949,7 @@ fn test_bgfade_all_four_edges_specified() {
             fade_bottom: Some(60),
             fade_left: Some(10),
             fade_right: Some(10),
+            brightness: None,
         }
     );
 }
@@ -3962,6 +3966,7 @@ fn test_bgfade_only_one_edge_others_none() {
             fade_bottom: None,
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
 }
@@ -3996,6 +4001,7 @@ fn test_bgfade_non_integer_values_are_none() {
             fade_bottom: None,
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
 }
@@ -4012,6 +4018,7 @@ fn test_bgfade_no_kv_is_backward_compatible() {
             fade_bottom: None,
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
 }
@@ -4058,6 +4065,7 @@ fn test_bgfade_mixed_japanese_and_english_keys() {
             fade_bottom: Some(60),
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
 }
@@ -4074,6 +4082,7 @@ fn test_bgfade_unknown_key_silently_skipped() {
             fade_bottom: None,
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
 }
@@ -4090,6 +4099,7 @@ fn test_bgfade_empty_kv_elements_skipped() {
             fade_bottom: Some(60),
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
 }
@@ -4106,6 +4116,7 @@ fn test_bgfade_kv_without_equals_skipped() {
             fade_bottom: Some(60),
             fade_left: None,
             fade_right: None,
+            brightness: None,
         }
     );
 }
@@ -4205,6 +4216,7 @@ fn test_bgfade_roundtrip_english_alias_preserves_values() {
             fade_bottom: Some(60),
             fade_left: Some(10),
             fade_right: Some(20),
+            brightness: None,
         }
     );
 }
@@ -4226,6 +4238,194 @@ fn test_bgfade_roundtrip_none_no_regression() {
             fade_bottom: None,
             fade_left: None,
             fade_right: None,
+            brightness: None,
+        }
+    );
+}
+
+// ============================================================================
+// 背景の明るさ (brightness / 明るさ) のパーサー / エミッターテスト
+// 同一画像をシーン毎に減光する持続プロパティ。レンダラー側で tint 乗算する。
+// ============================================================================
+
+#[test]
+fn test_bgbrightness_specified_is_some() {
+    // 観点1: 明るさ=0.6 → Some(0.6)、fade は全 None
+    let event = parse_single_background("[背景: bg.png, 明るさ=0.6]");
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+            brightness: Some(0.6),
+        }
+    );
+}
+
+#[test]
+fn test_bgbrightness_omitted_is_none() {
+    // 観点2: 明るさ未指定 → None（＝原画のまま＝後方互換）
+    let event = parse_single_background("[背景: bg.png]");
+    match event {
+        Event::Background { brightness, .. } => assert_eq!(brightness, None),
+        other => panic!("Background を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_bgbrightness_one_is_none() {
+    // 観点3: 明るさ=1.0（原画と同義）→ None（tint=白 と区別がないため kv を出さない）
+    let event = parse_single_background("[背景: bg.png, 明るさ=1.0]");
+    match event {
+        Event::Background { brightness, .. } => assert_eq!(brightness, None),
+        other => panic!("Background を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_bgbrightness_zero_is_some_zero() {
+    // 観点4: 明るさ=0.0（真っ黒）は有効値 → Some(0.0)。fade の 0=None とは非対称。
+    let event = parse_single_background("[背景: bg.png, 明るさ=0]");
+    match event {
+        Event::Background { brightness, .. } => assert_eq!(brightness, Some(0.0)),
+        other => panic!("Background を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_bgbrightness_out_of_range_clamped() {
+    // 観点5: 範囲外は 0.0..=1.0 にクランプ。負値は 0.0、1.0 超は 1.0→None（原画）に倒れる。
+    let neg = parse_single_background("[背景: bg.png, 明るさ=-0.5]");
+    match neg {
+        Event::Background { brightness, .. } => assert_eq!(brightness, Some(0.0)),
+        other => panic!("Background を期待したが {other:?}"),
+    }
+    let over = parse_single_background("[背景: bg.png, 明るさ=1.5]");
+    match over {
+        Event::Background { brightness, .. } => assert_eq!(brightness, None),
+        other => panic!("Background を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_bgbrightness_non_numeric_and_empty_are_none() {
+    // 観点6: 非数値 / 空 / 非有限は None（指定なし）
+    for line in [
+        "[背景: bg.png, 明るさ=abc]",
+        "[背景: bg.png, 明るさ=]",
+        "[背景: bg.png, 明るさ=NaN]",
+        "[背景: bg.png, 明るさ=inf]",
+    ] {
+        let event = parse_single_background(line);
+        match event {
+            Event::Background { brightness, .. } => {
+                assert_eq!(brightness, None, "入力 {line} は None になるべき")
+            }
+            other => panic!("Background を期待したが {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_bgbrightness_english_alias_equals_japanese() {
+    // 観点7: 英語 alias `brightness` は日本語 `明るさ` と同一 Event
+    let en = parse_single_background("[背景: bg.png, brightness=0.6]");
+    let ja = parse_single_background("[背景: bg.png, 明るさ=0.6]");
+    assert_eq!(en, ja);
+}
+
+#[test]
+fn test_bgbrightness_coexists_with_fade() {
+    // 観点8: フェード端と明るさは独立に共存する
+    let event = parse_single_background("[背景: bg.png, フェード上=40, 明るさ=0.6]");
+    assert_eq!(
+        event,
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: Some(40),
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+            brightness: Some(0.6),
+        }
+    );
+}
+
+#[test]
+fn test_bgbrightness_emit_after_fades() {
+    // 観点9: emit は フェード上→下→左→右→明るさ の順、日本語キーで出力する
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png, 明るさ=0.6, フェード上=40]\n",
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[背景: bg.png, フェード上=40, 明るさ=0.6]"));
+}
+
+#[test]
+fn test_bgbrightness_emit_normalizes_english_alias_to_japanese() {
+    // 観点10: 英語 alias 入力でも emit は日本語キー `明るさ` に正規化する
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png, brightness=0.6]\n",
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("明るさ=0.6"));
+    assert!(!emitted.contains("brightness"));
+}
+
+#[test]
+fn test_bgbrightness_emit_omits_when_none() {
+    // 観点11: 未指定（None）の背景は emit に明るさ kv が現れない（後方互換）
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png]\n",
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[背景: bg.png]"));
+    assert!(!emitted.contains("明るさ"));
+}
+
+#[test]
+fn test_bgbrightness_roundtrip() {
+    // 観点12: 明るさ指定 → emit → parse で一致する
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png, フェード上=40, 明るさ=0.6]\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+    assert_eq!(
+        doc2.chapters[0].scenes[0].events[0],
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: Some(40),
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+            brightness: Some(0.6),
+        }
+    );
+}
+
+#[test]
+fn test_bgbrightness_roundtrip_zero() {
+    // 観点13: 明るさ=0（真っ黒）も round-trip で保持される
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 背景テスト\n\n[背景: bg.png, 明るさ=0]\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+    assert_eq!(
+        doc2.chapters[0].scenes[0].events[0],
+        Event::Background {
+            path: "bg.png".to_string(),
+            fade_top: None,
+            fade_bottom: None,
+            fade_left: None,
+            fade_right: None,
+            brightness: Some(0.0),
         }
     );
 }

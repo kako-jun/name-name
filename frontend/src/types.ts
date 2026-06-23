@@ -175,6 +175,13 @@ export type Event =
         fade_bottom?: number | null
         fade_left?: number | null
         fade_right?: number | null
+        /**
+         * 背景の明るさ（brightness）。同一画像をシーン毎に減光する持続プロパティ。
+         * 0.0〜1.0（1.0=原画のまま＝既定、0.6=60%の明るさ＝暗め）。
+         * レンダラー側で背景スプライトの tint = rgb(b*255, b*255, b*255) として乗算適用する。
+         * null/未指定は原画のまま（tint=白）＝後方互換。
+         */
+        brightness?: number | null
       }
     }
   | {

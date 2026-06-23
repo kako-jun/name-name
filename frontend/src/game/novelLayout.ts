@@ -277,6 +277,7 @@ export function resolveAssetUrl(baseUrl: string, kind: AssetKind, path: string):
  *   backgroundPath = data.backgroundPath
  *   backgroundColor = data.backgroundColor ?? null  // 古いセーブには無い → 地色なし (#273)
  *   backgroundFade = normalizedFade（呼び出し側で normalizeBackgroundFade 済みを渡す）
+ *   backgroundBrightness = data.backgroundBrightness ?? null  // 古いセーブには無い → 原画のまま
  *   video          = data.video ?? null      // 古いセーブには無い → 動画なし
  *   isBlackout     = data.isBlackout ?? false
  *   characters     = data.characters ?? []
@@ -302,6 +303,8 @@ export function saveSlotToGameState(
     backgroundPath: data.backgroundPath,
     backgroundColor: data.backgroundColor ?? null,
     backgroundFade: normalizedFade,
+    // 背景の明るさ。古いセーブには無い → ?? null で原画のまま（tint=白）に倒す。
+    backgroundBrightness: data.backgroundBrightness ?? null,
     video: data.video ?? null,
     isBlackout: data.isBlackout ?? false,
     characters: data.characters ?? [],

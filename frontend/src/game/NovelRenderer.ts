@@ -100,6 +100,40 @@ export function getTextEvent(event: Event):
  */
 export const normalizeBackgroundFade = normalizeEdgeFade
 
+/**
+ * 背景の明るさ（brightness）の生値（parser / セーブデータ由来）を 0.0〜1.0 に正規化する。
+ *
+ * 同一画像をシーン毎に減光する持続プロパティ（「暗いシーンは背景も暗くする」演出用）。
+ * - 非数値 / null / undefined / 非有限（NaN/Infinity）→ null（＝原画のまま＝tint 無効）
+ * - 1.0 以上（原画と同義）→ null（tint=白 と区別がないため持たない・round-trip 安定）
+ * - それ以外は 0.0〜1.0 にクランプして返す（負値は 0.0）
+ *
+ * parser 側でも同等のクランプ・1.0→None 化を行うが、セーブデータ由来の生値（古い手書き
+ * セーブ等）でも安全になるよう、ランタイム側でも防御的に正規化する。
+ */
+export function normalizeBackgroundBrightness(
+  brightness: number | null | undefined
+): number | null {
+  if (brightness == null || !Number.isFinite(brightness)) return null
+  const clamped = Math.min(1, Math.max(0, brightness))
+  return clamped < 1 ? clamped : null
+}
+
+/**
+ * 背景明るさ（brightness、0.0〜1.0）を PixiJS の tint 値（24bit RGB number）に変換する。
+ *
+ * PixiJS の tint は乗算なので、明るさ b に対し各チャンネルを `round(b*255)` にした
+ * グレー値（`rgb(g, g, g)`）を返すと、スプライト全体が b 倍に減光される（b=0.6 で 60%）。
+ * null/未指定は 0xffffff（白）＝tint 無効＝原画のまま（後方互換）。
+ * 入力は normalizeBackgroundBrightness 済みを想定するが、防御的に再クランプする。
+ */
+export function brightnessToTint(brightness: number | null | undefined): number {
+  if (brightness == null || !Number.isFinite(brightness)) return 0xffffff
+  const clamped = Math.min(1, Math.max(0, brightness))
+  const g = Math.round(clamped * 255)
+  return (g << 16) | (g << 8) | g
+}
+
 // playScript / startFrom で使う型を NovelRenderer 経由でも import できるよう再エクスポートする (#220)
 export type { Step, StartFromOptions } from './GameState'
 
@@ -248,6 +282,10 @@ export class NovelRenderer {
 
   /** 現在の背景端フェードマスク (#250)。なしなら null */
   private currentBackgroundFade: BackgroundFade | null = null
+
+  /** 現在の背景明るさ（brightness、0.0〜1.0）。同一画像をシーン毎に減光する持続プロパティ。
+   *  null/未指定は原画のまま（tint=白）。背景スプライト生成/復元時に tint として乗算適用する。 */
+  private currentBackgroundBrightness: number | null = null
 
   /** 現在の背景に適用中のマスク Sprite (#250)。解放時に破棄する */
   private bgMaskSprite: Sprite | null = null
@@ -1243,6 +1281,7 @@ export class NovelRenderer {
       backgroundPath: this.currentBackgroundPath,
       backgroundColor: this.currentBackgroundColor,
       backgroundFade: this.currentBackgroundFade,
+      backgroundBrightness: this.currentBackgroundBrightness,
       video: this.videoLayer.getState(),
       isBlackout: this.blackoutOverlay.visible,
       characters: this.characterLayer.getCharacterStates(),
@@ -1453,7 +1492,7 @@ export class NovelRenderer {
 
     // 背景復元
     if (state.backgroundPath) {
-      this.setBackground(state.backgroundPath, state.backgroundFade)
+      this.setBackground(state.backgroundPath, state.backgroundFade, state.backgroundBrightness)
     } else {
       this.clearBackground()
     }
@@ -1686,7 +1725,8 @@ export class NovelRenderer {
           bottom: bg.fade_bottom,
           left: bg.fade_left,
           right: bg.fade_right,
-        })
+        }),
+        bg.brightness
       )
       return
     }
@@ -2002,9 +2042,14 @@ export class NovelRenderer {
    * 背景画像を設定する（アスペクト比維持でカバー）。
    * fade を渡すと端フェードマスク (#250) を適用する。
    */
-  private setBackground(path: string, fade?: BackgroundFade | null): void {
+  private setBackground(
+    path: string,
+    fade?: BackgroundFade | null,
+    brightness?: number | null
+  ): void {
     this.currentBackgroundPath = path
     this.currentBackgroundFade = normalizeBackgroundFade(fade)
+    this.currentBackgroundBrightness = normalizeBackgroundBrightness(brightness)
     this.disposeBgMask()
     this.bgContainer.removeChildren()
 
@@ -2023,6 +2068,7 @@ export class NovelRenderer {
     if (cached) {
       const sprite = new Sprite(cached)
       this.applyCoverFit(sprite)
+      this.applyBrightnessTint(sprite)
       this.bgContainer.addChild(sprite)
       this.applyEdgeFadeMask(sprite)
       return
@@ -2035,12 +2081,23 @@ export class NovelRenderer {
         this.textureCache.set(url, texture)
         const sprite = new Sprite(texture)
         this.applyCoverFit(sprite)
+        this.applyBrightnessTint(sprite)
         this.bgContainer.addChild(sprite)
         this.applyEdgeFadeMask(sprite)
       })
       .catch((err) => {
         console.warn('[name-name] 背景画像の読み込みに失敗: ' + url, err)
       })
+  }
+
+  /**
+   * 現在の currentBackgroundBrightness に基づいて背景スプライトの tint（減光）を適用する。
+   * PixiJS の tint は乗算なので、明るさ b（0.0〜1.0）に対し
+   * `tint = rgb(round(b*255), round(b*255), round(b*255))` で全体を b 倍に減光する。
+   * null/未指定（＝原画のまま）は 0xffffff（白＝tint 無効）で従来動作。
+   */
+  private applyBrightnessTint(sprite: Sprite): void {
+    sprite.tint = brightnessToTint(this.currentBackgroundBrightness)
   }
 
   private applyCoverFit(sprite: Sprite): void {
@@ -2083,6 +2140,7 @@ export class NovelRenderer {
   private clearBackground(): void {
     this.currentBackgroundPath = null
     this.currentBackgroundFade = null
+    this.currentBackgroundBrightness = null
     this.disposeBgMask()
     this.bgContainer.removeChildren()
     // 動画レイヤも背景と同じ扱いでクリアする (#252)
@@ -2139,6 +2197,7 @@ export class NovelRenderer {
       backgroundPath: snapshot.backgroundPath,
       backgroundColor: snapshot.backgroundColor,
       backgroundFade: snapshot.backgroundFade,
+      backgroundBrightness: snapshot.backgroundBrightness,
       video: snapshot.video,
       isBlackout: snapshot.isBlackout,
       characters: snapshot.characters,
@@ -2188,6 +2247,7 @@ export class NovelRenderer {
         backgroundPath: snapshot.backgroundPath,
         backgroundColor: snapshot.backgroundColor,
         backgroundFade: snapshot.backgroundFade,
+        backgroundBrightness: snapshot.backgroundBrightness,
         video: snapshot.video,
         isBlackout: snapshot.isBlackout,
         characters: snapshot.characters,
@@ -2321,6 +2381,7 @@ export class NovelRenderer {
       backgroundPath: null,
       backgroundColor: null,
       backgroundFade: normalizeBackgroundFade(undefined),
+      backgroundBrightness: null,
       video: null,
       isBlackout: false,
       characters: [],

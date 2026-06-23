@@ -155,11 +155,12 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 fade_bottom,
                 fade_left,
                 fade_right,
+                brightness,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                // #250 端フェード kv を 上→下→左→右 の順、日本語キーで正規化出力する。
+                // #250 端フェード kv を 上→下→左→右、続けて 明るさ の順、日本語キーで正規化出力する。
                 let mut kv = String::new();
                 if let Some(n) = fade_top {
                     kv.push_str(&format!(", フェード上={n}"));
@@ -172,6 +173,9 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 }
                 if let Some(n) = fade_right {
                     kv.push_str(&format!(", フェード右={n}"));
+                }
+                if let Some(b) = brightness {
+                    kv.push_str(&format!(", 明るさ={b}"));
                 }
                 out.push_str(&format!("[背景: {path}{kv}]\n"));
                 prev_was_dialog_or_text = false;
