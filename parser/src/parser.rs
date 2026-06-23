@@ -1048,10 +1048,11 @@ fn parse_audio_path_and_fade(content: &str) -> (String, Option<u32>) {
     (path, fade_ms)
 }
 
-/// `[背景: path]` / `[背景: path, フェード上=40, フェード下=60, ...]` の本体を分解する (#250)。
-/// 最初の `,` 区切り要素を path、残りを端フェード kv として解釈する。
-/// キーは日本語（`フェード上/下/左/右`）と英語 alias（`fade_top/bottom/left/right`）の両対応。
-/// 値が非負整数 px に parse できないものや 0 は None 扱い（指定なし）。
+/// `[背景: path]` / `[背景: path, フェード上=40, フェード下=60, ..., 明るさ=0.6]` の本体を分解する (#250)。
+/// 最初の `,` 区切り要素を path、残りを端フェード / 明るさ kv として解釈する。
+/// キーは日本語（`フェード上/下/左/右` / `明るさ`）と英語 alias（`fade_top/bottom/left/right` / `brightness`）の両対応。
+/// フェードは非負整数 px に parse できないものや 0 は None 扱い（指定なし）。
+/// 明るさは `0.0..=1.0` にクランプし、`1.0`（原画と同義）・不正値・空は None 扱い。
 /// 未知のキーは silent skip する（後方互換重視）。
 fn parse_background_directive(content: &str) -> Event {
     let (path_part, kv_part) = match content.split_once(',') {
@@ -1064,6 +1065,7 @@ fn parse_background_directive(content: &str) -> Event {
     let mut fade_bottom: Option<u32> = None;
     let mut fade_left: Option<u32> = None;
     let mut fade_right: Option<u32> = None;
+    let mut brightness: Option<f32> = None;
 
     if let Some(kv) = kv_part {
         for raw in kv.split(',') {
@@ -1072,13 +1074,15 @@ fn parse_background_directive(content: &str) -> Event {
                 continue;
             }
             if let Some((k, v)) = pair.split_once('=') {
+                let value = v.trim();
                 // 0 は None 扱いにするため、parse 成功かつ非ゼロのときだけ採用する。
-                let val = v.trim().parse::<u32>().ok().filter(|&n| n > 0);
+                let val = value.parse::<u32>().ok().filter(|&n| n > 0);
                 match k.trim() {
                     "フェード上" | "fade_top" => fade_top = val,
                     "フェード下" | "fade_bottom" => fade_bottom = val,
                     "フェード左" | "fade_left" => fade_left = val,
                     "フェード右" | "fade_right" => fade_right = val,
+                    "明るさ" | "brightness" => brightness = parse_brightness_kv(value),
                     _ => {}
                 }
             }
@@ -1091,6 +1095,21 @@ fn parse_background_directive(content: &str) -> Event {
         fade_bottom,
         fade_left,
         fade_right,
+        brightness,
+    }
+}
+
+/// `[背景: ..., 明るさ=<b>]` の明るさ値をパースする。
+/// `0.0..=1.0` にクランプし、有限かつ `1.0` 未満のときだけ `Some` を返す。
+/// `1.0` ちょうど（原画と同義）・非数値・空・非有限（NaN/inf）は `None`（＝未指定＝原画）に倒す。
+/// `1.0` を None に落とすのは、`tint=白` の原画と区別がないため round-trip でも kv を出さないため。
+fn parse_brightness_kv(value: &str) -> Option<f32> {
+    let b = value.parse::<f32>().ok().filter(|n| n.is_finite())?;
+    let clamped = b.clamp(0.0, 1.0);
+    if clamped < 1.0 {
+        Some(clamped)
+    } else {
+        None
     }
 }
 
@@ -2428,6 +2447,7 @@ title: "テスト"
                 fade_bottom: None,
                 fade_left: None,
                 fade_right: None,
+                brightness: None,
             }
         );
         assert_eq!(

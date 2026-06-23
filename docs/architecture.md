@@ -179,6 +179,7 @@ interface NovelGameState {
   flags: Record<string, FlagValue>;          // フラグ状態
   backgroundPath: string | null;             // 表示中の背景
   backgroundColor: string | null;            // 単色の地色（#273。背景画像の下に敷く。復元対象）
+  backgroundBrightness: number | null;       // 背景の明るさ 0.0〜1.0（同一画像をシーン毎に減光。sprite.tint 乗算。null=原画。復元対象）
   isBlackout: boolean;                       // 暗転中か
   characters: Array<{ name: string; expression: string; position: string }>;  // 立ち絵のみ。タイトル/ラベル/画像は演出表示(renderOnly)で除外(#274)
   currentBgmPath: string | null;             // 再生中のBGM

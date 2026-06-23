@@ -58,6 +58,12 @@ export interface NovelGameState {
   backgroundColor: string | null
   /** 背景の端フェードマスク (#250)。なしなら null */
   backgroundFade: BackgroundFade | null
+  /**
+   * 背景の明るさ（brightness）。同一画像をシーン毎に減光する持続プロパティ。
+   * 0.0〜1.0（1.0=原画のまま、0.6=60%）。null/未指定は原画のまま（tint=白）。
+   * 背景フェードと同じく snapshot / applyState / セーブ復元で復元する。
+   */
+  backgroundBrightness: number | null
   /** 動画入力レイヤ (#252)。なしなら null */
   video: VideoState | null
   isBlackout: boolean

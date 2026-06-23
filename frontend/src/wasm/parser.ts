@@ -77,6 +77,22 @@ function normalizeEvents(events: Event[]): Event[] {
         },
       }
     }
+    if ('Background' in event) {
+      // Rust 側の Option<u32> / Option<f32> は WASM 経由で undefined になるため、
+      // frontend の規約（types.ts）に合わせて null に正規化する。
+      // brightness 未指定（null）は原画のまま（tint=白）＝後方互換。
+      const bg = event.Background
+      return {
+        Background: {
+          path: bg.path,
+          fade_top: bg.fade_top ?? null,
+          fade_bottom: bg.fade_bottom ?? null,
+          fade_left: bg.fade_left ?? null,
+          fade_right: bg.fade_right ?? null,
+          brightness: bg.brightness ?? null,
+        },
+      }
+    }
     if ('Bgm' in event) {
       return {
         Bgm: {

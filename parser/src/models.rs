@@ -314,6 +314,15 @@ pub enum Event {
         fade_left: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fade_right: Option<u32>,
+        /// 背景の明るさ（brightness）。同一画像をシーン毎に減光して「暗いシーンは背景も暗くする」
+        /// 演出に使う。`0.0`〜`1.0`（`1.0` = 原画のまま＝既定、`0.6` = 60% の明るさ＝暗め）。
+        /// レンダラー側で背景スプライトの `tint = rgb(b*255, b*255, b*255)` として乗算適用する。
+        /// `None`（未指定）は `1.0` 扱い＝原画のまま（後方互換: 既存背景は不変）。
+        /// パーサーは `0.0..=1.0` にクランプし、`1.0` ちょうど・不正値・空は `None` に倒す
+        /// （`tint=白` の原画と同義になるため round-trip でも kv を出さない）。
+        /// Markdown 構文: `[背景: path, 明るさ=0.6]`。英語 alias: `brightness`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        brightness: Option<f32>,
     },
     /// 動画入力レイヤ (#252)。立ち絵/背景と同じ枠組みで動画ファイルをレイヤとして配置・再生する。
     /// 背景と同じく単一スロット意味論: 新しい `[動画:]` は前の動画を置換する。
