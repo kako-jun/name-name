@@ -1192,21 +1192,24 @@ describe('computeNovelIndicatorPlacement (#292 / #300)', () => {
     expect(p.y).toBe(expectedCenteredY(args))
   })
 
-  it('rawX が右端を超えるとクランプ（boxRightEdge - indicatorWidth）', () => {
-    // lastLineWidth を大きくして rawX=16+800=816 > maxX。
-    const p = computeNovelIndicatorPlacement({ ...base, lastLineWidth: 800 })
-    const maxX = base.boxRightEdge - base.indicatorWidth // 784-20=764
+  it('rawX が右端を超えると次行送り＋x は右端（#306）', () => {
+    // lastLineWidth を大きくして rawX=16+800=816, rawX+indicatorWidth=836 > boxRightEdge 784 → 溢れる。
+    const args = { ...base, lastLineWidth: 800 }
+    const p = computeNovelIndicatorPlacement(args)
+    const maxX = base.boxRightEdge - base.indicatorWidth // 784-20=764（次行の右端）
     expect(p.x).toBe(maxX)
+    // 次行送り: y は同一行配置時より lineHeight 分だけ下（boxBottom 未指定でクランプなし）。
+    expect(p.y).toBe(expectedCenteredY(args) + base.lineHeight)
   })
 
-  it('クランプ下限は textStartX（負の余白へ行かせない）', () => {
+  it('溢れ時の x 下限は textStartX（負の余白へ行かせない）', () => {
     // boxRightEdge が textStartX より左（退化）でも x は textStartX を下回らない。
     const p = computeNovelIndicatorPlacement({
       ...base,
       lastLineWidth: 0,
-      boxRightEdge: 0, // maxX = max(textStartX, 0-20) = textStartX
+      boxRightEdge: 0, // rawX+indicatorWidth=36 > 0 → 溢れ。x = max(textStartX, 0-20) = textStartX
     })
-    expect(p.x).toBe(base.textStartX) // rawX=16 と maxX=16 のうち小さい方=16
+    expect(p.x).toBe(base.textStartX)
   })
 
   it('lineCount=0 は 1 として扱う（y は最終行 band の縦中央）', () => {
@@ -1219,5 +1222,90 @@ describe('computeNovelIndicatorPlacement (#292 / #300)', () => {
     const args = { ...base, lineCount: -5 }
     const p = computeNovelIndicatorPlacement(args)
     expect(p.y).toBe(expectedCenteredY(args))
+  })
+})
+
+// ===== #306: 文末行が右端まで埋まったらクリッカーを次行へ送る（文字との重なり解消）=====
+//
+// 収まる（rawX + indicatorWidth <= boxRightEdge）→ 従来通り同一行右・縦中央（既存挙動維持）。
+// 溢れる → 次行へ: x=boxRightEdge-indicatorWidth, y=textStartY + lineCount*lineHeight + 縦中央オフセット。
+// 次行 y が箱下端（boxBottom）を超えたら箱内へクランプ（最終行 band 縦中央より上へは戻さない）。
+describe('computeNovelIndicatorPlacement 行折り返し (#306)', () => {
+  const base = {
+    textStartX: 16,
+    textStartY: 10,
+    lineCount: 1,
+    lastLineWidth: 100,
+    lineHeight: 64,
+    indicatorWidth: 20,
+    indicatorHeight: 20,
+    boxRightEdge: 784,
+  }
+  const offset = (args: typeof base): number =>
+    Math.max(0, (args.lineHeight - args.indicatorHeight) / 2)
+  const sameLineY = (args: typeof base): number =>
+    args.textStartY +
+    ((args.lineCount >= 1 ? args.lineCount : 1) - 1) * args.lineHeight +
+    offset(args)
+
+  it('① クリッカーが同一行に収まる → 同一行右・縦中央（折り返さない・既存挙動維持）', () => {
+    // rawX + indicatorWidth = 16+100+20 = 136 <= 784 → 収まる。
+    const p = computeNovelIndicatorPlacement(base)
+    expect(p.x).toBe(base.textStartX + base.lastLineWidth) // 文末の右
+    expect(p.y).toBe(sameLineY(base)) // 最終行 band 縦中央
+  })
+
+  it('① ちょうど境界（rawX+indicatorWidth === boxRightEdge）は収まる扱い（<= 判定）', () => {
+    // lastLineWidth を boxRightEdge - textStartX - indicatorWidth = 784-16-20 = 748 に設定。
+    const args = { ...base, lastLineWidth: 748 }
+    const p = computeNovelIndicatorPlacement(args)
+    expect(p.x).toBe(args.textStartX + args.lastLineWidth) // 同一行右（折り返さない）
+    expect(p.y).toBe(sameLineY(args))
+  })
+
+  it('② ちょうど 1px 溢れる → 次行へ（x=右端, y=1 行下の縦中央）', () => {
+    // lastLineWidth を境界 +1 = 749 に。rawX+indicatorWidth = 16+749+20 = 785 > 784 → 溢れる。
+    const args = { ...base, lastLineWidth: 749 }
+    const p = computeNovelIndicatorPlacement(args)
+    expect(p.x).toBe(base.boxRightEdge - base.indicatorWidth) // 次行の右端
+    expect(p.y).toBe(sameLineY(args) + base.lineHeight) // テキストの 1 行下
+  })
+
+  it('③ 最終行が空（lastLineWidth=0, lineCount=1）→ 収まるので同一行（折り返さない）', () => {
+    const args = { ...base, lastLineWidth: 0 }
+    const p = computeNovelIndicatorPlacement(args)
+    expect(p.x).toBe(args.textStartX + 0)
+    expect(p.y).toBe(sameLineY(args))
+  })
+
+  it('④ 次行 y が箱下端を超える → boxBottom-indicatorHeight にクランプ（箱外へ出ない）', () => {
+    // 満杯ページ相当: lineCount=3 で溢れ。次行 y = 10 + 3*64 + 22 = 224。
+    // boxBottom を小さく（150）して clamp を発火させる。clamped = min(224, 150-20=130)=130。
+    // ただし下限は sameLineY（= 10 + 2*64 + 22 = 160）なので max(160, 130)=160 に戻る。
+    const args = { ...base, lineCount: 3, lastLineWidth: 800, boxBottom: 150 }
+    const p = computeNovelIndicatorPlacement(args)
+    expect(p.x).toBe(base.boxRightEdge - base.indicatorWidth)
+    // 箱下端クランプが最終行 band 縦中央（sameLineY）より上に戻すことはない（前行より上へ飛ばない）。
+    expect(p.y).toBe(sameLineY(args))
+  })
+
+  it('④ boxBottom に余裕があれば次行 y はクランプされない', () => {
+    const args = { ...base, lineCount: 2, lastLineWidth: 800, boxBottom: 1000 }
+    const p = computeNovelIndicatorPlacement(args)
+    // 次行 y = sameLineY(2行) + lineHeight、boxBottom 余裕ありでそのまま。
+    expect(p.y).toBe(sameLineY(args) + base.lineHeight)
+    // 確認: 箱下端 - indicatorHeight を超えていない。
+    expect(p.y).toBeLessThanOrEqual(args.boxBottom - base.indicatorHeight)
+  })
+
+  it('④ 次行 y が boxBottom 内に収まる中間ケース（クランプは下端だけ効く）', () => {
+    // lineCount=1 で溢れ → 次行 y = 10 + 1*64 + 22 = 96。boxBottom=110 → min(96, 110-20=90)=90。
+    // 下限 sameLineY(1行)=32 なので max(32,90)=90。クランプが効いて 96 より上に来る。
+    const args = { ...base, lineCount: 1, lastLineWidth: 800, boxBottom: 110 }
+    const p = computeNovelIndicatorPlacement(args)
+    const nextLineY = sameLineY(args) + base.lineHeight // 96
+    const clamped = Math.min(nextLineY, args.boxBottom - base.indicatorHeight) // 90
+    expect(p.y).toBe(Math.max(sameLineY(args), clamped)) // 90
+    expect(p.y).toBeLessThan(nextLineY) // クランプで上がった
   })
 })

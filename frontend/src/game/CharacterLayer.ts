@@ -440,6 +440,9 @@ export class CharacterLayer extends Container {
     // 据え置き、見た目の x だけを役割（質問役=左 / 回答役=右）に合わせる。
     const hasXOverride = options?.xRatio !== undefined && Number.isFinite(options.xRatio)
     const overrideX = hasXOverride ? this.screenWidth * (options?.xRatio as number) : undefined
+    // この show が立ち絵を置く先の水平座標 (#303)。override x > position トークン > center の順で解決する。
+    // 「1 位置に 1 キャラ」を保証するため、別キャラがこの x を占有していたら退場させる判定に使う。
+    const targetX = overrideX ?? this.positionX[normalizedPosition] ?? this.positionX['center']
     const existing = this.characters.get(character)
 
     if (existing) {
@@ -487,10 +490,10 @@ export class CharacterLayer extends Container {
       // 再代入が no-op になっていた。position は実際に変化したときだけ更新して意図を明確にする。
       const positionChanged = existing.position !== normalizedPosition
       if (positionChanged || overrideXChanged) {
-        const x = hasXOverride
-          ? (overrideX as number)
-          : (this.positionX[normalizedPosition] ?? this.positionX['center'])
-        existing.sprite.x = x
+        // 1 位置 1 キャラ (#303): 移動先 x を別キャラが占有していたら退場させる。
+        // 自分自身（character）と renderOnly（Title/Label/Image）は対象外。
+        this.evictCollidersAt(targetX, character, instant)
+        existing.sprite.x = targetX
       }
       if (positionChanged) {
         existing.position = normalizedPosition
@@ -511,8 +514,13 @@ export class CharacterLayer extends Container {
       return
     }
 
+    // 1 位置 1 キャラ (#303): 新規立ち絵を置く前に、この x を占有している別キャラを退場させる。
+    // ヴィンチア(右) → カンティア(右) のように同じ位置に別キャラが続けて出るとき、前のキャラを
+    // フェードアウトして重なりを解消する。自分自身・renderOnly は evictCollidersAt が除外する。
+    this.evictCollidersAt(targetX, character, instant)
+
     // 新規表示。novel 役割配置 (#286) の override x があればそれを使う。
-    const x = overrideX ?? this.positionX[normalizedPosition] ?? this.positionX['center']
+    const x = targetX
     const sprite = new Sprite()
     sprite.anchor.set(0.5, 1)
     sprite.x = x
@@ -1805,6 +1813,44 @@ export class CharacterLayer extends Container {
     this.animTicker = null
   }
 
+  /** 同一位置判定の x 許容差 (px) (#303)。役割配置の overrideX と positionX は決定論的に
+   *  同じ値になるため厳密一致でよいが、浮動小数の丸めに備えて 0.5px の許容を持たせる。 */
+  private static readonly SAME_POSITION_EPSILON = 0.5
+
+  /**
+   * 指定 x を占有している「別の立ち絵」を退場させる (#303)。
+   *
+   * 「1 位置に 1 キャラ」を保証するための最小退場ロジック。新キャラ X を位置 P（= targetX）に
+   * 出す前に呼び、P に既にいる別キャラ Y をフェードアウト（instant 時は即時）させる。これにより
+   * ヴィンチア(右) → カンティア(右) のように同じ位置へ別キャラが続けて出るときの重なりを防ぐ。
+   *
+   * 除外対象:
+   *  - `keepName`（今まさに置こうとしているキャラ自身）。同一キャラの再表示・位置変更は退場させない。
+   *  - `renderOnly`（Title/Label/Image #274）。これらは立ち絵スロットを占有する標準立ち絵ではなく、
+   *    2D 自由配置の演出要素なので位置衝突の対象にしない。
+   *  - 既に退場フェード中（fadeAnimation.destroyOnComplete）のキャラ。二重退場を避ける。
+   *
+   * 別位置（左のせお等）には x が一致しないため干渉しない。退場は GameState に中間状態を持ち込まず、
+   * characters Map から消える（getCharacterStates は退場後の状態を写す）ので、任意局面起動・goBack/seek
+   * の復元でも重なり・消えすぎは起きない。
+   */
+  private evictCollidersAt(targetX: number, keepName: string, instant: boolean): void {
+    if (!Number.isFinite(targetX)) return
+    // 走査中に remove() が characters を delete するため、対象名を先に集めてから退場させる。
+    const colliders: string[] = []
+    for (const [name, state] of this.characters) {
+      if (name === keepName) continue
+      if (state.renderOnly) continue
+      if (state.fadeAnimation?.destroyOnComplete) continue
+      if (Math.abs(state.sprite.x - targetX) < CharacterLayer.SAME_POSITION_EPSILON) {
+        colliders.push(name)
+      }
+    }
+    for (const name of colliders) {
+      this.remove(name, { instant })
+    }
+  }
+
   /**
    * キャラクターを退場させる。
    *
@@ -1857,6 +1903,10 @@ export class CharacterLayer extends Container {
     const result: Array<{ name: string; expression: string; position: string }> = []
     for (const [name, state] of this.characters) {
       if (state.renderOnly) continue
+      // 退場フェード中（destroyOnComplete）のキャラは概念上もう退場済みなのでスナップショットに
+      // 含めない (#303)。1 位置 1 キャラの衝突退場で fade-out 中の前キャラがまだ Map に残っていても、
+      // セーブ/シーク/任意局面起動の復元で「退場しかけのキャラ」が立ち絵として蘇らないようにする。
+      if (state.fadeAnimation?.destroyOnComplete) continue
       result.push({ name, expression: state.expression, position: state.position })
     }
     return result

@@ -130,6 +130,8 @@ function NovelPlayer({
       // 質問役（主人公）の話者名 (#286)。setEvents/setScenes より前に設定し、初回の
       // novel 立ち絵配置（質問役=左 / 回答役=右）が正しい役割で決まるようにする。
       renderer.setProtagonist(protagonist ?? null)
+      // 主人公セリフの本文色 (#305) は renderer 既定 #FFF6E6 のまま使う。frontmatter での
+      // 色上書きは未実装のため、ここでは設定しない（renderer フィールド初期値が効く）。
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
       // 再生ストリームの確定 (#284):

@@ -679,18 +679,28 @@ export interface IndicatorPlacement {
  *  - `indicatorHeight`: インジケータ記号の表示高さ（px。文末行の縦中央寄せに使う・#300）。
  *  - `boxRightEdge`: テキスト領域の右端 x（px。`boxX + boxW - padding` 等）。
  *
- * 配置:
+ * 配置（同一行に収まる場合・従来挙動）:
  *   x = textStartX + lastLineWidth                                          // 最終行の右端（文末の右）
  *   y = textStartY + (lineCount - 1) * lineHeight + (lineHeight - indicatorHeight) / 2
  *                                                                           // 最終行 band の縦中央（#300）
- * x が箱右端に近く indicator がはみ出す場合は `boxRightEdge - indicatorWidth` でクランプする。
- * （最終行が右端ギリギリのとき記号が枠外へ出るのを防ぐ。クランプ下限は textStartX。）
  *
- * y の縦中央化 (#300): 旧実装は文末行の**上端**（`y = textStartY + (lineCount-1)*lineHeight`）を返して
- * いた。インジケータ高さ（≪ 行高 ~64）なので、記号が行 band の上に寄って見える
- * （kako-jun: 「2つとも上下中心より上寄り」）。`(lineHeight - indicatorHeight) / 2` の余白を足して
- * 行 band の縦中央へ揃える。`indicatorHeight` が **lineHeight を超える**ときは余白が負になるため
- * `Math.max(0, …)` で 0 にクランプし、上端（旧挙動）へ退化させて下振れの破綻を防ぐ。
+ * 行折り返し (#306): 最終行が右端まで埋まっていて、クリッカーが**同一行のテキスト右に収まらない**
+ * （`rawX + indicatorWidth > boxRightEdge`）場合、従来は `boxRightEdge - indicatorWidth` にクランプして
+ * いたため**最終行末尾の文字の上にクリッカーが重なって**見えた（画面外は防げるが文字に被る）。
+ * これを避けるため、収まらないときは**次の行に落とす**:
+ *   x = boxRightEdge - indicatorWidth                                       // 次行の右端（「次行の右下」風）
+ *   y = textStartY + lineCount * lineHeight + (lineHeight - indicatorHeight) / 2
+ *                                                                           // テキストの 1 行下の band 縦中央
+ * 同一行に収まる場合は折り返さず従来通り（既存挙動維持）。
+ *
+ * 箱からのはみ出し防止 (#306): 次行に落とした y が箱下端（`boxBottom`）を超えないよう
+ * `Math.min(y, boxBottom - indicatorHeight)` でクランプし、下限は箱内の最終行 band の縦中央
+ * （= 同一行配置時の y）に留めて、満杯ページでも記号が箱外・最終行より上に飛ばないようにする。
+ * `boxBottom` 未指定（後方互換）は Infinity 扱い＝クランプ無効。
+ *
+ * y の縦中央化 (#300): インジケータ高さ（≪ 行高 ~64）なので `(lineHeight - indicatorHeight) / 2` の
+ * 余白を足して行 band の縦中央へ揃える。`indicatorHeight` が **lineHeight を超える**ときは余白が
+ * 負になるため `Math.max(0, …)` で 0 にクランプし、上端（旧挙動）へ退化させて下振れの破綻を防ぐ。
  *
  * Math.random など非決定要素は使わない。決定論的写像。
  */
@@ -703,16 +713,38 @@ export function computeNovelIndicatorPlacement(args: {
   indicatorWidth: number
   indicatorHeight: number
   boxRightEdge: number
+  /** テキスト領域の下端 y（px。`boxY + boxH - padding` 等）。次行送り時の y クランプに使う (#306)。
+   *  未指定（後方互換）は Infinity 扱い＝クランプしない。 */
+  boxBottom?: number
 }): IndicatorPlacement {
   const { textStartX, textStartY, lastLineWidth, lineHeight, indicatorWidth, boxRightEdge } = args
   const lineCount = args.lineCount >= 1 ? args.lineCount : 1
-  const rawX = textStartX + lastLineWidth
-  // はみ出し防止: 右端 - 記号幅 を上限にクランプ。下限は textStartX（負の余白に行かせない）。
-  const maxX = Math.max(textStartX, boxRightEdge - indicatorWidth)
-  const x = Math.min(rawX, maxX)
-  // 最終行の行頭 y に、行 band 内でインジケータを縦中央へ寄せる余白を足す (#300)。
-  // indicatorHeight が lineHeight を超えると余白は負になるため 0 にクランプ（上端＝旧挙動に退化）。
+  const boxBottom = args.boxBottom ?? Number.POSITIVE_INFINITY
+  // 行 band 内でインジケータを縦中央へ寄せる余白 (#300)。indicatorHeight が lineHeight を
+  // 超えると負になるため 0 にクランプ（上端＝旧挙動に退化）。同一行・次行どちらでも使う。
   const verticalCenterOffset = Math.max(0, (lineHeight - args.indicatorHeight) / 2)
-  const y = textStartY + (lineCount - 1) * lineHeight + verticalCenterOffset
+
+  const rawX = textStartX + lastLineWidth
+  // 同一行のテキスト右にクリッカーが収まるか (#306)。収まる = 右端を超えない。
+  const fitsOnSameLine = rawX + indicatorWidth <= boxRightEdge
+
+  // 同一行配置時の y（最終行 band の縦中央）。次行クランプの下限としても使う。
+  const sameLineY = textStartY + (lineCount - 1) * lineHeight + verticalCenterOffset
+
+  if (fitsOnSameLine) {
+    // 従来挙動: 最終行の右に縦中央配置（#300）。
+    return { x: rawX, y: sameLineY }
+  }
+
+  // 溢れる → 次行に落とす (#306)。x は次行の右端（「次行の右下」風）でテキストに被らない。
+  // 下限 textStartX は念のための負余白ガード（boxRightEdge < indicatorWidth の異常入力対策）。
+  const x = Math.max(textStartX, boxRightEdge - indicatorWidth)
+  // テキストの 1 行下の band 縦中央。箱下端を超えそうなら箱内へクランプし、最終行 band より
+  // 上へは戻さない（満杯ページで記号が箱外・前行より上に飛ぶのを防ぐ）。
+  const nextLineY = textStartY + lineCount * lineHeight + verticalCenterOffset
+  const clampedY = Math.min(nextLineY, boxBottom - args.indicatorHeight)
+  // 満杯ページで次行が箱外に出る場合、下限 sameLineY（最終行 band 縦中央）へ留める。これは
+  // 「箱内優先で文字との重なりを許容（箱外に出るより良い）」という意図的な妥協（#306 nit）。
+  const y = Math.max(sameLineY, clampedY)
   return { x, y }
 }

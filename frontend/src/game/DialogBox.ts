@@ -239,6 +239,12 @@ export class DialogBox extends Container {
   private bgColor: number
   private nameColor: number
   private nameSeparateBox: boolean
+  /**
+   * 本文テキスト色 (#305)。既定は純白 0xffffff。NovelRenderer が話者ごと（主人公=暖アイボリー /
+   * 住人=白）に `setBodyTextColor` で切り替える。本文 (`dialogText`) とルビ (`rubyEntries`) の両方に当てる。
+   * 演出中間状態ではなく per-line の描画属性なので、GameState には持たず render 時に話者から決定論的に導出する。
+   */
+  private bodyTextColor = 0xffffff
 
   // --- 画面寸法（novel モードの全画面テキスト領域算出に使う #283） ---
   private screenWidth: number
@@ -751,6 +757,31 @@ export class DialogBox extends Container {
     return this.msPerChar
   }
 
+  /**
+   * 本文テキスト色を設定する (#305)。
+   *
+   * NovelRenderer が render() 時に話者から決定論的に決めて呼ぶ（主人公=暖アイボリー #FFF6E6 /
+   * 住人=純白 #FFFFFF）。本文 (`dialogText`) と表示中ルビ (`rubyEntries`) の両方に当てる。
+   * 値が同じなら no-op（毎 render 呼び出しでも style を作り直さない）。
+   *
+   * これは per-line の描画属性であり演出中間状態ではないため、GameState には持たない。
+   * 復元時も render() が話者から再導出するので、色だけを別途復元する必要はない。
+   */
+  setBodyTextColor(color: number): void {
+    if (this.bodyTextColor === color) return
+    this.bodyTextColor = color
+    this.dialogText.style = this.makeDialogTextStyle()
+    const rubyStyle = this.makeRubyTextStyle()
+    for (const e of this.rubyEntries) {
+      e.text.style = rubyStyle
+    }
+  }
+
+  /** 現在の本文テキスト色 (#305)。テスト・配線検証用。 */
+  getBodyTextColor(): number {
+    return this.bodyTextColor
+  }
+
   setBorderless(borderless: boolean): void {
     if (this.borderless === borderless) return
     this.borderless = borderless
@@ -759,14 +790,9 @@ export class DialogBox extends Container {
       this.drawBackground()
     }
     this.dialogText.style = this.makeDialogTextStyle()
-    const rubyFontSize = this.rubyFontSize()
+    const rubyStyle = this.makeRubyTextStyle()
     for (const e of this.rubyEntries) {
-      e.text.style = new TextStyle({
-        fontFamily: this.fontFamily,
-        fontSize: rubyFontSize,
-        fill: 0xffffff,
-        dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
-      })
+      e.text.style = rubyStyle
     }
     if (this.borderless) {
       this.nameBox.visible = false
@@ -1009,6 +1035,9 @@ export class DialogBox extends Container {
       indicatorWidth,
       indicatorHeight,
       boxRightEdge: this.boxX + this.boxW - this.padding,
+      // 次行送り (#306) の y クランプ用にテキスト領域の下端を渡す。満杯ページで記号が箱外へ
+      // 飛ばないようにする。
+      boxBottom: this.boxY + this.boxH - this.padding,
     })
     this.indicator.x = placement.x
     this.indicatorBaseY = placement.y
@@ -1120,8 +1149,24 @@ export class DialogBox extends Container {
     return new TextStyle({
       fontFamily: this.fontFamily,
       fontSize: this.fontSize,
-      fill: 0xffffff,
+      // 本文色 (#305): 既定は白。主人公セリフのときだけ NovelRenderer が暖アイボリーに切り替える。
+      fill: this.bodyTextColor,
       lineHeight: this.lineHeight(),
+      dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
+    })
+  }
+
+  /**
+   * ルビ用 TextStyle を作る (#307)。本文色 (#305) と borderless DropShadow をルビにも揃える。
+   * 旧来 setBorderless / setBodyTextColor / rebuildRubyEntries の 3 経路に独立生成されていた同一
+   * スタイル式を 1 箇所に集約し、将来のルビ様式変更を 1 箇所修正で済むようにする（挙動不変）。
+   */
+  private makeRubyTextStyle(): TextStyle {
+    return new TextStyle({
+      fontFamily: this.fontFamily,
+      fontSize: this.rubyFontSize(),
+      // ルビも本文色 (#305) に合わせる（主人公=暖アイボリー / 住人=白）。
+      fill: this.bodyTextColor,
       dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
     })
   }
@@ -1218,12 +1263,7 @@ export class DialogBox extends Container {
 
     const lineHeight = this.lineHeight()
     const rubyFontSize = this.rubyFontSize()
-    const rubyStyle = new TextStyle({
-      fontFamily: this.fontFamily,
-      fontSize: rubyFontSize,
-      fill: 0xffffff,
-      dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
-    })
+    const rubyStyle = this.makeRubyTextStyle()
 
     for (const p of this.rubyPlacements) {
       const line = lines[p.lineIndex] ?? ''
