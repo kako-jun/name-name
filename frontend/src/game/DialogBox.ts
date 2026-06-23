@@ -718,6 +718,27 @@ export class DialogBox extends Container {
     return isTypingActive(this.typewriter)
   }
 
+  /**
+   * タイプ完了コールバックを「今から」差し替える (#302)。
+   *
+   * `setDialog` / `setNovelDialogProgressive` は描画時点の onTypingDone を確定するため、
+   * auto OFF で描画された行は callback=null になる。その行のタイプ進行中に auto を ON にした
+   * 場合、この live 張り替えで「現在タイプ中の行が完了したら scheduleAutoAdvance する」よう
+   * 直す。タイプ中でなければ（既に完了済み）即その場で 1 回だけ呼ぶ（既存の即時 done と同型）。
+   *
+   * `cb=null` を渡すと解除（auto OFF 時に呼び、OFF 中に完了して誤進行するのを防ぐ）。
+   * 完了時の発火は ticker の justFinished 分岐が `onTypingDone` を一度 null にしてから呼ぶため
+   * 1 回だけ消費される（二重発火しない）。
+   */
+  setOnTypingDone(cb: (() => void) | null): void {
+    this.onTypingDone = cb
+    if (cb && !isTypingActive(this.typewriter)) {
+      // 既にタイプ完了済み → onTypingDone は今後発火しないので、その場で 1 回だけ消費する。
+      this.onTypingDone = null
+      cb()
+    }
+  }
+
   setMsPerChar(msPerChar: number): void {
     this.msPerChar = Math.max(0, msPerChar)
     if (this.msPerChar === 0) {

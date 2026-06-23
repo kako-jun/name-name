@@ -978,12 +978,18 @@ export class NovelRenderer {
    * OFF にした場合は待機中のオートタイマーをキャンセルする。
    * React 側から呼ぶ場合は setAutoMode、renderer 内部から呼ぶ場合も同じメソッドを使う。
    *
-   * 会話中トグルの即時反映 (#302): on=true にしたとき、現在行のタイプが既に完了していると
-   * `onTypingDone`→`scheduleAutoAdvance` が再発火しないため、その場ではオートにならず、
-   * 待てずに手動送りすると #139 の「手動操作で auto OFF」で解除されてしまっていた。
-   * タイプ完了済み・choice/wait 待機でない・スクリプト末尾でない、の条件を満たすときは
-   * ここで直接 `scheduleAutoAdvance()` を呼んでその場でオートを開始する。タイプ中に on に
-   * した場合は従来どおり onTypingDone で発火する（dialogBox.isTyping() ガードで二重発火を防ぐ）。
+   * 会話中トグルの即時反映 (#302): `onTypingDone` は render()（setDialog /
+   * setNovelDialogProgressive 呼び出し時）に `this.autoMode ? …scheduleAutoAdvance : null` で
+   * **その時点の autoMode で確定**する。auto OFF で描画された行は callback=null になる。よって
+   * 会話中に auto を ON にしただけでは、現在行が「タイプ中」でも「完了済み」でも自動送りが
+   * 始まらなかった（完了済み行は再発火せず、タイプ中行も onTypingDone が null のまま）。
+   *
+   * 修正: on=true かつ choice/wait 待機でなく スクリプト末尾でないとき、DialogBox の
+   * onTypingDone を **live で張り替える**（`setOnTypingDone`）。これで—
+   *  - 現在行が**タイプ中**なら、その行の完了時に scheduleAutoAdvance が発火する。
+   *  - 現在行が**完了済み**なら、setOnTypingDone がその場で 1 回だけ scheduleAutoAdvance を呼ぶ。
+   * どちらも同一経路で扱え、完了時の onTypingDone は ticker 側で一度 null 化されてから呼ばれる
+   * ため二重発火しない。auto を OFF にしたら onTypingDone も解除し、OFF 中の完了で誤って進めない。
    */
   setAutoMode(on: boolean): void {
     if (this.autoMode === on) return
@@ -993,18 +999,16 @@ export class NovelRenderer {
         this.time.clearTimeout(this.autoTimer)
         this.autoTimer = null
       }
+      // オート OFF: onTypingDone も解除する。OFF 中にタイプが完了して誤って進めないように
+      // （#139 手動 OFF 経路と整合。次行の render() が auto=false で null を張り直すのと同義）。
+      this.dialogBox.setOnTypingDone(null)
       // オートモード OFF 時はボイスを停止する（onEnded が誤発火しないよう）
       this.audioManager.stopVoice()
-    } else if (
+    } else if (!this.waitingForChoice && !this.waitingForWait && !this.isAtScriptEnd()) {
       // 会話中にオート ON にした瞬間の即時反映 (#302)。
-      // タイプ中は onTypingDone が後で scheduleAutoAdvance を呼ぶのでここでは呼ばない
-      // （二重発火防止）。choice/wait 待機中・スクリプト末尾も対象外（進める先がない）。
-      !this.dialogBox.isTyping() &&
-      !this.waitingForChoice &&
-      !this.waitingForWait &&
-      !this.isAtScriptEnd()
-    ) {
-      this.scheduleAutoAdvance()
+      // setOnTypingDone が「タイプ中なら完了時に発火・完了済みなら即発火」を一手に引き受ける。
+      // choice/wait 待機中・スクリプト末尾は対象外（進める先がない）。
+      this.dialogBox.setOnTypingDone(() => this.scheduleAutoAdvance())
     }
     // React state との同期。コールバック内で setAutoMode が再度呼ばれても
     // 同値 no-op（上の早期 return）で無限ループを防いでいる。
@@ -1035,6 +1039,8 @@ export class NovelRenderer {
     if (this.isNovelStyle()) {
       const page = this.getNovelPages(textEvt)[this.textIndex]
       const sentenceCount = page?.sentences.length ?? 0
+      // render() の novelSentenceIndex のような clamp はせず raw sentenceIndex を使う。
+      // over-range（復元等で範囲外）でも `>=` で "末尾扱い" に倒れ、即時オートを抑止する安全方向。
       const isLastSentenceOnPage = this.sentenceIndex >= sentenceCount - 1
       return isLastSentenceOnPage
     }
