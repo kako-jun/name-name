@@ -973,6 +973,10 @@ export class DialogBox extends Container {
     const font = `${this.fontSize}px ${this.fontFamily}`
     const lastLineWidth = this.measureTextWidth(lastLine, font)
     const indicatorWidth = this.measureTextWidth(this.indicator.text, font) || 20
+    // インジケータの高さ (#300)。Pixi が測れる環境では実測 height、測れない（jsdom は
+    // canvas 2d ctx が null で Text.height が measureFont で throw する）なら、インジケータ
+    // 生成時の fontSize 20 をベースにフォールバックする（measureTextWidth の ctx ガードと同趣旨）。
+    const indicatorHeight = this.measureIndicatorHeight() || 20
     const placement = computeNovelIndicatorPlacement({
       textStartX: this.textStartX(),
       textStartY: this.textStartY(),
@@ -980,6 +984,7 @@ export class DialogBox extends Container {
       lastLineWidth,
       lineHeight: this.lineHeight(),
       indicatorWidth,
+      indicatorHeight,
       boxRightEdge: this.boxX + this.boxW - this.padding,
     })
     this.indicator.x = placement.x
@@ -992,6 +997,20 @@ export class DialogBox extends Container {
     if (!ctx) return 0
     ctx.font = font
     return ctx.measureText(s).width
+  }
+
+  /**
+   * インジケータ記号の表示高さ（px）を測る (#300)。Pixi の `Text.height` は bounds 計算で
+   * canvas 2d を使うため、ctx が null の jsdom では `measureFont` が throw する。例外時は 0 を
+   * 返し、呼び出し側で fontSize ベース（20）にフォールバックさせる（measureTextWidth と同趣旨）。
+   */
+  private measureIndicatorHeight(): number {
+    try {
+      const h = this.indicator.height
+      return Number.isFinite(h) && h > 0 ? h : 0
+    } catch {
+      return 0
+    }
   }
 
   dispose(): void {

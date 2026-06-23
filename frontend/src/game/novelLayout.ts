@@ -676,13 +676,21 @@ export interface IndicatorPlacement {
  *  - `lastLineWidth`: 最終行の表示幅（px。同じ font で measureText した値）。
  *  - `lineHeight`: 行高（px）。
  *  - `indicatorWidth`: インジケータ記号の表示幅（px。右端クランプで使う）。
+ *  - `indicatorHeight`: インジケータ記号の表示高さ（px。文末行の縦中央寄せに使う・#300）。
  *  - `boxRightEdge`: テキスト領域の右端 x（px。`boxX + boxW - padding` 等）。
  *
  * 配置:
- *   x = textStartX + lastLineWidth                      // 最終行の右端（文末の右）
- *   y = textStartY + (lineCount - 1) * lineHeight       // 最終行の行頭 y
+ *   x = textStartX + lastLineWidth                                          // 最終行の右端（文末の右）
+ *   y = textStartY + (lineCount - 1) * lineHeight + (lineHeight - indicatorHeight) / 2
+ *                                                                           // 最終行 band の縦中央（#300）
  * x が箱右端に近く indicator がはみ出す場合は `boxRightEdge - indicatorWidth` でクランプする。
  * （最終行が右端ギリギリのとき記号が枠外へ出るのを防ぐ。クランプ下限は textStartX。）
+ *
+ * y の縦中央化 (#300): 旧実装は文末行の**上端**（`y = textStartY + (lineCount-1)*lineHeight`）を返して
+ * いた。インジケータ高さ（fontSize 20 ベース）≪ 行高（~64）なので、記号が行 band の上に寄って見える
+ * （kako-jun: 「2つとも上下中心より上寄り」）。`(lineHeight - indicatorHeight) / 2` の余白を足して
+ * 行 band の縦中央へ揃える。`indicatorHeight <= 0` や行高超過でも `Math.max(0, …)` でクランプし、
+ * 上寄りの旧挙動・下振れの破綻を防ぐ。
  *
  * Math.random など非決定要素は使わない。決定論的写像。
  */
@@ -693,6 +701,7 @@ export function computeNovelIndicatorPlacement(args: {
   lastLineWidth: number
   lineHeight: number
   indicatorWidth: number
+  indicatorHeight: number
   boxRightEdge: number
 }): IndicatorPlacement {
   const { textStartX, textStartY, lastLineWidth, lineHeight, indicatorWidth, boxRightEdge } = args
@@ -701,6 +710,9 @@ export function computeNovelIndicatorPlacement(args: {
   // はみ出し防止: 右端 - 記号幅 を上限にクランプ。下限は textStartX（負の余白に行かせない）。
   const maxX = Math.max(textStartX, boxRightEdge - indicatorWidth)
   const x = Math.min(rawX, maxX)
-  const y = textStartY + (lineCount - 1) * lineHeight
+  // 最終行の行頭 y に、行 band 内でインジケータを縦中央へ寄せる余白を足す (#300)。
+  // indicatorHeight が lineHeight を超える／負値なら余白は 0 にクランプ（上端＝旧挙動に退化）。
+  const verticalCenterOffset = Math.max(0, (lineHeight - args.indicatorHeight) / 2)
+  const y = textStartY + (lineCount - 1) * lineHeight + verticalCenterOffset
   return { x, y }
 }
