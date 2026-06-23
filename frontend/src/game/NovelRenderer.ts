@@ -203,6 +203,12 @@ export class NovelRenderer {
   private resolvedEvents: Event[] = []
   private eventIndex = 0
   private textIndex = 0
+  /**
+   * novel スタイル (#292) の「現ページ内で表示済みの最後の文 index」（0-based・息継ぎ送り）。
+   * adv では未使用（常に 0）。textIndex（ページ index）の下位に位置する進行位置＝ゲーム状態。
+   * snapshot / applyState / restoreToScene / セーブ復元で保存・復元する。
+   */
+  private sentenceIndex = 0
 
   /** スナップショット履歴スタック（テキストイベント到達ごとに push） */
   private history: NovelGameState[] = []
@@ -780,6 +786,7 @@ export class NovelRenderer {
     this.resolvedEvents = resolveEvents(events, this.gameState)
     this.eventIndex = 0
     this.textIndex = 0
+    this.sentenceIndex = 0
     this.history = []
     // novel 改頁キャッシュ (#283) はイベント列に紐づくので破棄する。
     this.novelPagesCache = null
@@ -1307,6 +1314,7 @@ export class NovelRenderer {
       sceneId: this.currentSceneId,
       eventIndex: this.eventIndex,
       textIndex: this.textIndex,
+      sentenceIndex: this.sentenceIndex,
       flags: this.gameState.toJSON(),
       backgroundPath: this.currentBackgroundPath,
       backgroundColor: this.currentBackgroundColor,
@@ -1328,22 +1336,45 @@ export class NovelRenderer {
 
     const current = this.resolvedEvents[this.eventIndex]
     const textEvt = getTextEvent(current)
+    const novel = this.isNovelStyle()
 
-    if (textEvt) {
-      // 現在表示中のテキストをバックログに記録。
-      // novel は改頁ページのテキスト、adv は text 行をそのまま記録する (#283)。
-      const novel = this.isNovelStyle()
-      const currentLine = novel
-        ? (this.getNovelPages(textEvt)[this.textIndex]?.text ?? '')
-        : (textEvt.text[this.textIndex] ?? '')
+    if (textEvt && novel) {
+      // --- novel 文単位送り (#292) ---
+      // backlog は「ページを離れる時」だけ記録する（文ごとに記録して断片化させない）。
+      const pages = this.getNovelPages(textEvt)
+      const page = pages[this.textIndex]
+      const sentences = page?.sentences ?? []
+      const character = textEvt.type === 'dialog' ? textEvt.character : null
+
+      // 1) 同ページにまだ続く文がある → 次の文へ（既出は溜まる）。backlog はまだ記録しない。
+      if (this.sentenceIndex < sentences.length - 1) {
+        this.sentenceIndex++
+        this.render()
+        return
+      }
+
+      // 2) ページ最後の文。ここでページを離れるので、このページ全文を backlog に記録する。
+      this.backlogOverlay.addEntry(character, page?.text ?? '')
+
+      // 2a) 同イベントに次ページがある → 新ページの先頭文へ（クリア表示）。
+      if (this.textIndex < pages.length - 1) {
+        this.textIndex++
+        this.sentenceIndex = 0
+        this.render()
+        return
+      }
+      // 2b) 最後のページ → 下の「次イベントへ」へフォールスルー。
+    } else if (textEvt) {
+      // --- adv（従来どおり・#283） ---
+      // 現在表示中の text 行をそのまま backlog に記録する。
+      const currentLine = textEvt.text[this.textIndex] ?? ''
       const character = textEvt.type === 'dialog' ? textEvt.character : null
       this.backlogOverlay.addEntry(character, currentLine)
 
       this.textIndex++
-      // novel は改頁ページ数、adv は text 行数で「まだ残りがあるか」を判定する (#283)。
       const pageCount = this.currentPageCount(textEvt)
       if (this.textIndex < pageCount) {
-        // まだページ/行が残っている → クリック = 改頁（次ページをクリア表示）
+        // まだ text 行が残っている → クリック = 改頁（次行をクリア表示）
         this.render()
         return
       }
@@ -1352,6 +1383,8 @@ export class NovelRenderer {
     // 次のイベントへ
     this.eventIndex++
     this.textIndex = 0
+    // novel 文 index もイベントを跨ぐのでページ先頭にリセットする (#292)。
+    this.sentenceIndex = 0
     // novel 改頁キャッシュは eventIndex 単位。次イベントへ進むので破棄する (#283)。
     this.novelPagesCache = null
 
@@ -1437,8 +1470,28 @@ export class NovelRenderer {
 
     const current = this.resolvedEvents[this.eventIndex]
     const textEvt = getTextEvent(current)
+    const novel = this.isNovelStyle()
 
-    if (textEvt && this.textIndex > 0) {
+    if (textEvt && novel) {
+      // --- novel 文単位送り (#292) ---
+      // 1) 同ページ内を 1 文戻る。
+      if (this.sentenceIndex > 0) {
+        this.sentenceIndex--
+        this.render()
+        return
+      }
+      // 2) ページ先頭の文で更に戻る → 前ページへ。前ページは全文見えている状態に復元する
+      //    （sentenceIndex = 前ページ最後の文）＝戻った先は溜まりきった状態が自然。
+      if (this.textIndex > 0) {
+        this.textIndex--
+        const prevPage = this.getNovelPages(textEvt)[this.textIndex]
+        this.sentenceIndex = Math.max(0, (prevPage?.sentences.length ?? 1) - 1)
+        this.render()
+        return
+      }
+      // 3) 先頭ページの先頭文 → スナップショット/イベント戻りへフォールスルー。
+    } else if (textEvt && this.textIndex > 0) {
+      // --- adv（従来どおり）: text 行を 1 つ戻る。 ---
       this.textIndex--
       this.render()
       return
@@ -1516,6 +1569,8 @@ export class NovelRenderer {
     // インデックス復元
     this.eventIndex = state.eventIndex
     this.textIndex = state.textIndex
+    // novel 文 index (#292)。古い snapshot/セーブには無い → ?? 0（ページ先頭の文）に倒す。
+    this.sentenceIndex = state.sentenceIndex ?? 0
     // novel 改頁キャッシュは派生。任意局面復元で events / 幾何 / eventIndex が変わり得るので破棄し、
     // render() 側で現在の eventIndex に対して再計算させる (#283)。
     this.novelPagesCache = null
@@ -2228,6 +2283,7 @@ export class NovelRenderer {
       sceneId: snapshot.sceneId,
       eventIndex: snapshot.eventIndex,
       textIndex: snapshot.textIndex,
+      sentenceIndex: snapshot.sentenceIndex,
       flags: snapshot.flags,
       backgroundPath: snapshot.backgroundPath,
       backgroundColor: snapshot.backgroundColor,
@@ -2278,6 +2334,7 @@ export class NovelRenderer {
         sceneId: snapshot.sceneId,
         eventIndex: snapshot.eventIndex,
         textIndex: snapshot.textIndex,
+        sentenceIndex: snapshot.sentenceIndex,
         flags: snapshot.flags,
         backgroundPath: snapshot.backgroundPath,
         backgroundColor: snapshot.backgroundColor,
@@ -2412,6 +2469,7 @@ export class NovelRenderer {
       sceneId: opts.sceneId,
       eventIndex: opts.eventIndex ?? 0,
       textIndex: opts.textIndex ?? 0,
+      sentenceIndex: opts.sentenceIndex ?? 0,
       flags,
       backgroundPath: null,
       backgroundColor: null,
@@ -2451,11 +2509,11 @@ export class NovelRenderer {
     const sentences = splitIntoSentences(plain)
     let pages: NovelPage[]
     if (sentences.length === 0) {
-      pages = [{ text: '', lineCount: 0 }]
+      pages = [{ text: '', sentences: [], lineCount: 0 }]
     } else {
       const lineCounts = sentences.map((s) => this.dialogBox.measureLineCount(s))
       pages = paginateSentencesByLines(sentences, lineCounts, this.dialogBox.novelMaxLinesPerPage())
-      if (pages.length === 0) pages = [{ text: '', lineCount: 0 }]
+      if (pages.length === 0) pages = [{ text: '', sentences: [], lineCount: 0 }]
     }
     this.novelPagesCache = { eventIndex: this.eventIndex, pages }
     return pages
@@ -2482,12 +2540,26 @@ export class NovelRenderer {
       return
     }
 
-    // 表示テキスト: adv は text 行をそのまま、novel は文境界改頁ページ (#283)。
-    // novel の textIndex は「ページ index」、adv は「text 行 index」を意味する。
+    // 表示テキスト: adv は text 行をそのまま、novel は文境界改頁ページ (#283/#292)。
+    // novel の textIndex は「ページ index」、sentenceIndex は「ページ内の表示済み最後の文 index」。
+    // novel は文単位送り (#292): 累積表示テキスト = ページ内 sentences[0..sentenceIndex] の連結。
     const novel = this.isNovelStyle()
-    const line = novel
-      ? (this.getNovelPages(textEvt)[this.textIndex]?.text ?? '')
-      : (textEvt.text[this.textIndex] ?? '')
+    // novel: 現ページの文配列と、現在までの累積テキスト・既出プレフィックス長を算出する。
+    let novelPageSentences: string[] = []
+    let novelSentenceIndex = 0
+    let cumulativeText = ''
+    let shownPlainLength = 0
+    if (novel) {
+      const page = this.getNovelPages(textEvt)[this.textIndex]
+      novelPageSentences = page?.sentences ?? []
+      // 文 index を現ページの範囲にクランプ（復元で範囲外を渡されても落とさない・空ページは 0）。
+      const maxSentence = Math.max(0, novelPageSentences.length - 1)
+      novelSentenceIndex = Math.min(Math.max(0, this.sentenceIndex), maxSentence)
+      cumulativeText = novelPageSentences.slice(0, novelSentenceIndex + 1).join('')
+      shownPlainLength = novelPageSentences.slice(0, novelSentenceIndex).join('').length
+    }
+    // line は scrim 可視判定や（adv の）表示テキストに使う。novel は累積テキスト。
+    const line = novel ? cumulativeText : (textEvt.text[this.textIndex] ?? '')
     const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
 
     // スキップモード処理 (#140): 既読チェックはマーク前に行う
@@ -2509,17 +2581,20 @@ export class NovelRenderer {
     // 空行 = 改ページ（テキストクリア後に次行へ自動進行はしない。空表示する）
     const name = textEvt.type === 'dialog' ? textEvt.character : null
 
-    // per-line voice 再生 (#144): 最初のテキスト行でのみ再生
+    // per-line voice 再生 (#144): イベント先頭でのみ再生。
+    // novel (#292) は文単位送りで render が文ごとに走るため、ページ先頭（textIndex===0）かつ
+    // 文先頭（sentenceIndex===0）に限る。adv は従来どおり textIndex===0（最初の text 行）。
+    const atEventStart = this.textIndex === 0 && (!novel || novelSentenceIndex === 0)
     let voicePath: string | null = null
     let perLineFontFamily: string | null = null
     if (typeof current === 'object' && current !== null) {
       if ('Dialog' in current) {
-        if (this.textIndex === 0) {
+        if (atEventStart) {
           voicePath = current.Dialog.voice_path ?? null
         }
         perLineFontFamily = current.Dialog.font_family ?? null
       } else if ('Narration' in current) {
-        if (this.textIndex === 0) {
+        if (atEventStart) {
           voicePath = current.Narration.voice_path ?? null
         }
         perLineFontFamily = current.Narration.font_family ?? null
@@ -2563,18 +2638,33 @@ export class NovelRenderer {
     // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)。
     // voice 有無に関わらず typing onDone で進める (voice は fire-and-forget)。
     const onTypingDone = this.autoMode ? () => this.scheduleAutoAdvance() : null
-    this.dialogBox.setDialog(name, line, onTypingDone)
+    if (novel) {
+      // novel 文単位送り (#292): 既出の文は即時表示・最後に足した文だけタイプする。
+      this.dialogBox.setNovelDialogProgressive(name, cumulativeText, shownPlainLength, onTypingDone)
+    } else {
+      this.dialogBox.setDialog(name, line, onTypingDone)
+    }
 
     // novel スクリム (#283): セリフが表示されている間だけ半透明黒を敷く。
     // 空ページ（立ち絵だけの空ダイアログ）はテキスト非表示なのでスクリムも出さない。
     const hasVisibleText = line.replace(/[\s\u3000]/g, '') !== ''
     this.updateNovelScrim(hasVisibleText)
 
-    // 最後のページ（adv は最後の text 行）かつ最後のイベントならインジケーター非表示
+    // インジケータ (#292):
+    //  - 種別: novel で「現在がそのページの最後の文」なら pageturn（❯・改頁）、それ以外は next（▼・次の文）。
+    //    adv は setIndicatorKind を呼ばず既定 next（▼・従来の右下固定）のまま＝非回帰。
+    //  - 可視: novel は「最後のページの最後の文」かつ最後のイベントで非表示（それ以上進めない）。
+    //    adv は従来どおり「最後のページ（text 行）かつ最後のイベント」で非表示。
     const pageCount = this.currentPageCount(textEvt)
-    const isLastText = this.textIndex >= pageCount - 1
+    const isLastPage = this.textIndex >= pageCount - 1
     const isLastEvent = this.eventIndex >= this.resolvedEvents.length - 1
-    this.dialogBox.setIndicatorVisible(!(isLastText && isLastEvent))
+    if (novel) {
+      const isLastSentenceOnPage = novelSentenceIndex >= novelPageSentences.length - 1
+      this.dialogBox.setIndicatorKind(isLastSentenceOnPage ? 'pageturn' : 'next')
+      this.dialogBox.setIndicatorVisible(!(isLastPage && isLastSentenceOnPage && isLastEvent))
+    } else {
+      this.dialogBox.setIndicatorVisible(!(isLastPage && isLastEvent))
+    }
 
     this.updateCounter()
     this.updateSeekBar()

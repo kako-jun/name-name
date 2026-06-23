@@ -27,9 +27,11 @@ import {
   makeInitialTypewriterState,
   skipTypewriter as typewriterSkip,
   startTypewriter,
+  startTypewriterFrom,
   tickTypewriter,
   visibleText,
 } from './typewriter'
+import { computeNovelIndicatorPlacement, wrappedPrefixLength } from './novelLayout'
 
 // ---------------------------------------------------------------------------
 // portrait レイアウト定数（テストが参照する）
@@ -141,6 +143,25 @@ const DEFAULT_MS_PER_CHAR = 30
 const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 4, distance: 2, alpha: 0.9 } as const
 
 /**
+ * クリッカー（インジケータ）の種別 (#292)。
+ *  - `next`     : 同ページにまだ続く文がある（次は文の送り）。
+ *  - `pageturn` : そのページの最後の文（クリックでページを離れる＝次ページ or 次イベント）。
+ * 種別で形が即座に違い、次が「文」か「改頁」か目で分かるようにする。
+ */
+export type IndicatorKind = 'next' | 'pageturn'
+
+/**
+ * 種別 → プレースホルダ記号（グリフ）の対応表 (#292)。**ここ 1 箇所に集約**する。
+ * 将来 /image の本番アイコンへ hot-swap するときも、差し替えはこの表だけで済むようにする。
+ *  - next     = 明滅する `▼`（次の文）
+ *  - pageturn = `❯`（ページめくり）
+ */
+const INDICATOR_GLYPH: Record<IndicatorKind, string> = {
+  next: '▼',
+  pageturn: '❯',
+}
+
+/**
  * novel スタイル (#283) のテキスト領域マージン（px、論理座標）。
  * 全画面ノベル（ToHeart 式）では画面の大半をテキストに使う。本文は左上付近から始め、
  * 左右・上下に小さな余白を残す。テストが参照できるよう export する。
@@ -185,6 +206,16 @@ export class DialogBox extends Container {
   private indicator: Text
   private indicatorBaseY: number
   private indicatorTime = 0
+  /**
+   * インジケータ種別 (#292)。`next`=次の文（▼明滅）/ `pageturn`=改頁（❯）。
+   * `setIndicatorKind` で切り替え、グリフは INDICATOR_GLYPH 表から引く。
+   */
+  private indicatorKind: IndicatorKind = 'next'
+  /**
+   * novel モードのインジケータ配置に使う、現在の累積表示テキストの wordwrap 結果 (#292)。
+   * setNovelDialogProgressive で更新する。adv モードでは使わない（右下固定のまま）。
+   */
+  private novelWrappedLines: string[] = []
   // --- portrait ---
   private portraitFrame: Graphics | null = null
   private portraitSprite: Sprite | null = null
@@ -354,7 +385,7 @@ export class DialogBox extends Container {
     // --- ticker ---
     this.ticker = new Ticker()
     this.ticker.add(() => {
-      // ▼バウンス
+      // ▼バウンス（明滅）。base y は novel/adv で算出元が違うが、バウンスは共通。
       this.indicatorTime = (this.indicatorTime + this.ticker.deltaMS / 1000) % ((2 * Math.PI) / 3)
       this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
 
@@ -367,10 +398,14 @@ export class DialogBox extends Container {
         }
         const justFinished = isTypingActive(this.typewriter) && !isTypingActive(next)
         this.typewriter = next
-        if (justFinished && this.onTypingDone) {
-          const cb = this.onTypingDone
-          this.onTypingDone = null
-          cb()
+        if (justFinished) {
+          // タイプ完了 → novel ならインジケータを文末（最終 wrap 行の右）へ配置し直す (#292)。
+          this.positionIndicator()
+          if (this.onTypingDone) {
+            const cb = this.onTypingDone
+            this.onTypingDone = null
+            cb()
+          }
         }
       }
 
@@ -574,12 +609,95 @@ export class DialogBox extends Container {
     }
   }
 
+  /**
+   * novel スタイルの文単位送り (#292) でページをプログレッシブ表示する。
+   *
+   * `cumulativeText` = そのページの「先頭〜現在の文」までを連結した本文。`shownPlainLength` =
+   * そのうち「既に表示済み（前の文まで）」の plain（折返し前）文字数。
+   * cumulativeText を wordwrap → `wrappedPrefixLength` で既出分の wrapped 上のインデックスを
+   * 算出 → `startTypewriterFrom` で「既出分は即時表示・残りだけタイプ」する。
+   * これにより既出の文は消えず同一ページに溜まり、最後に足した文だけがタイプされる。
+   *
+   * - 空テキスト（空文字 / 空白だけ）は既存 setDialog 同様 hide する（空ページの ▼/枠残りを避ける）。
+   * - ルビは累積テキストに対して既存 parseRubyText / computeRubyPlacements 経路で解決し、既出分
+   *   （fromCount 以下に reveal 位置がある）は即 reveal する。novel ページは上流で stripRubyMarkup
+   *   済みのため通常ルビは無いが、経路は setDialog と揃える。
+   * - インジケータ配置は文末（最終 wrap 行の右）。タイプ完了時に ticker が positionIndicator で当てる。
+   *
+   * @param name 話者名（novel は borderless なので名札は出ないが、後方互換で受ける）
+   * @param cumulativeText 先頭〜現在の文の連結本文（既出 + 今回タイプする文）
+   * @param shownPlainLength 既出プレフィックスの plain 文字数（page.sentences.slice(0,k).join('').length）
+   * @param onTypingDone タイピング完了時コールバック（オートモード用）
+   */
+  setNovelDialogProgressive(
+    name: string | null,
+    cumulativeText: string,
+    shownPlainLength: number,
+    onTypingDone?: (() => void) | null
+  ): void {
+    // 空（空文字 / 空白だけ / 全角空白だけ）なら hide。setDialog と同じ規則。
+    const trimmedText = cumulativeText.replace(/[\s\u3000]/g, '')
+    if (trimmedText === '') {
+      this.hide()
+      this.onTypingDone = null
+      if (onTypingDone) onTypingDone()
+      return
+    }
+    this.currentText = cumulativeText
+    this.showing = true
+    this.bg.visible = !this.borderless
+
+    // 話者名（novel = borderless で updateNameDisplay は名札を出さないが、経路は揃える）
+    this.updateNameDisplay(name)
+
+    this.dialogText.visible = true
+    const font = `${this.fontSize}px ${this.fontFamily}`
+    const maxTextWidth = this.maxTextWidth()
+    const runs = parseRubyText(cumulativeText)
+    const plainText = stripRubyMarkup(cumulativeText)
+    const lines = wordwrap(plainText, maxTextWidth, font)
+    const fullText = lines.join('\n')
+    // 既出 plain 文字数を plainText 長にクランプし、wordwrap の \n を跨いだ wrapped 上の
+    // インデックス（fromCount）へ変換する。plain 長さ ≠ wrapped 長さ なので純関数で吸収する。
+    const clampedPlainPrefix = Math.max(0, Math.min(plainText.length, Math.floor(shownPlainLength)))
+    const fromCount = wrappedPrefixLength(fullText, clampedPlainPrefix)
+    this.typewriter = startTypewriterFrom(fullText, fromCount)
+    // 既出分（fromCount 文字）は即時表示する。残りは ticker がタイプする。
+    this.dialogText.text = visibleText(this.typewriter)
+    // novel 配置用に累積テキストの wrap 結果を保持する (#292)。
+    this.novelWrappedLines = lines
+    this.rubyPlacements = computeRubyPlacements(runs, lines)
+    this.rubyBuildToken += 1
+    const rubyToken = this.rubyBuildToken
+    ensureFontLoaded(this.fontFamily)
+      .then(() => {
+        if (rubyToken !== this.rubyBuildToken) return
+        this.rebuildRubyEntries(lines, font)
+        // 既出分のルビは即 reveal、これからタイプする分は displayedCharCount 連動で出す。
+        this.updateRubyVisibility(this.typewriter.displayedCharCount)
+      })
+      .catch(() => {
+        // フォントロード失敗時はルビなしで継続（クラッシュ防止）
+      })
+    this.onTypingDone = onTypingDone ?? null
+    // 既に全文表示済み（今回タイプする文が無い＝fromCount == length）なら即 done + 配置。
+    if (!isTypingActive(this.typewriter)) {
+      this.positionIndicator()
+      if (this.onTypingDone) {
+        const cb = this.onTypingDone
+        this.onTypingDone = null
+        cb()
+      }
+    }
+  }
+
   clearText(): void {
     this.rubyBuildToken += 1
     this.typewriter = makeInitialTypewriterState()
     this.dialogText.text = ''
     this.currentText = ''
     this.onTypingDone = null
+    this.novelWrappedLines = []
     this.clearRubyEntries()
   }
 
@@ -589,6 +707,9 @@ export class DialogBox extends Container {
     this.dialogText.text = visibleText(this.typewriter)
     this.revealAllRuby()
     this.onTypingDone = null
+    // スキップ完了で文末まで一気に出るので、novel ならインジケータを文末へ置き直す (#292)。
+    // ticker の justFinished はスキップ（直接代入）では発火しないため、ここで明示的に当てる。
+    this.positionIndicator()
   }
 
   isTyping(): boolean {
@@ -816,6 +937,59 @@ export class DialogBox extends Container {
   setIndicatorVisible(visible: boolean): void {
     this.indicatorWanted = visible
     this.indicator.visible = visible && !isTypingActive(this.typewriter)
+  }
+
+  /**
+   * インジケータの種別を切り替える (#292)。`next`=次の文（▼）/ `pageturn`=改頁（❯）。
+   * グリフは INDICATOR_GLYPH 表（1 箇所集約）から引く。種別が変わったら配置も取り直す
+   * （記号幅が変わるとはみ出しクランプが変わるため）。
+   */
+  setIndicatorKind(kind: IndicatorKind): void {
+    if (this.indicatorKind === kind && this.indicator.text === INDICATOR_GLYPH[kind]) return
+    this.indicatorKind = kind
+    this.indicator.text = INDICATOR_GLYPH[kind]
+    this.positionIndicator()
+  }
+
+  /**
+   * インジケータの基準位置を現在のモードに合わせて確定する (#292)。
+   *  - novel: 表示テキストの**最後の wrap 行の右端**（文末の右）。右下固定を廃止。
+   *  - adv  : 従来どおり右下固定（`boxX + boxW - 40`, `boxY + boxH - 30`）＝非回帰。
+   * `indicatorBaseY` を設定し、x を確定する。実 y はバウンスのため ticker が base に sin を足す。
+   */
+  private positionIndicator(): void {
+    if (!this.novelMode) {
+      // adv: 従来の右下固定。redraw 等が既に設定している x/baseY を尊重しつつ再アサート。
+      this.indicator.x = this.boxX + this.boxW - 40
+      this.indicatorBaseY = this.boxY + this.boxH - 30
+      return
+    }
+    // novel: 最終 wrap 行の右端へ。lines が空（未設定）なら 1 行 / 幅 0 として扱う。
+    const lines = this.novelWrappedLines
+    const lineCount = lines.length >= 1 ? lines.length : 1
+    const lastLine = lines.length > 0 ? lines[lines.length - 1] : ''
+    const font = `${this.fontSize}px ${this.fontFamily}`
+    const lastLineWidth = this.measureTextWidth(lastLine, font)
+    const indicatorWidth = this.measureTextWidth(this.indicator.text, font) || 20
+    const placement = computeNovelIndicatorPlacement({
+      textStartX: this.textStartX(),
+      textStartY: this.textStartY(),
+      lineCount,
+      lastLineWidth,
+      lineHeight: this.lineHeight(),
+      indicatorWidth,
+      boxRightEdge: this.boxX + this.boxW - this.padding,
+    })
+    this.indicator.x = placement.x
+    this.indicatorBaseY = placement.y
+  }
+
+  /** 指定 font で文字列の表示幅（px）を測る。ctx が無い jsdom では 0 を返す（配置は退化的に左端寄せ）。 */
+  private measureTextWidth(s: string, font: string): number {
+    const ctx = getMeasureContext()
+    if (!ctx) return 0
+    ctx.font = font
+    return ctx.measureText(s).width
   }
 
   dispose(): void {

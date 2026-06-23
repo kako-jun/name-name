@@ -19,6 +19,11 @@ export interface SaveSlotData {
   sceneId: string | null
   eventIndex: number
   textIndex: number
+  /**
+   * novel の現ページ内文インデックス (#292)。
+   * 後方互換: 古いセーブデータには無い → undefined は復元時に ?? 0（ページ先頭の文）扱い。
+   */
+  sentenceIndex?: number
   flags: Record<string, FlagValue>
   backgroundPath: string | null
   /**

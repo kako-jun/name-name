@@ -273,6 +273,7 @@ export function resolveAssetUrl(baseUrl: string, kind: AssetKind, path: string):
  *   sceneId        = data.sceneId（呼び出し側で非 null を保証してから渡す）
  *   eventIndex     = data.eventIndex
  *   textIndex      = data.textIndex
+ *   sentenceIndex  = data.sentenceIndex ?? 0  // 古いセーブには無い → ページ先頭 (#292)
  *   flags          = data.flags
  *   backgroundPath = data.backgroundPath
  *   backgroundColor = data.backgroundColor ?? null  // 古いセーブには無い → 地色なし (#273)
@@ -299,6 +300,8 @@ export function saveSlotToGameState(
     sceneId: data.sceneId,
     eventIndex: data.eventIndex,
     textIndex: data.textIndex,
+    // novel の現ページ内文インデックス (#292)。古いセーブには無い → ?? 0（ページ先頭）に倒す。
+    sentenceIndex: data.sentenceIndex ?? 0,
     flags: data.flags,
     backgroundPath: data.backgroundPath,
     backgroundColor: data.backgroundColor ?? null,
@@ -521,6 +524,13 @@ export function splitIntoSentences(text: string): string[] {
 export interface NovelPage {
   /** このページに含まれる文を結合した本文（wordwrap 前の plain text） */
   text: string
+  /**
+   * このページを構成する文の配列 (#292)。
+   * 文単位送り（息継ぎ単位の novel 表示）で「累積表示テキスト」を組み立てるために使う。
+   * `text` は `joinSentences(sentences)` の連結であり（後方互換）、`sentences.join('')`
+   * を既定の連結関数で組むと `text` と一致する。
+   */
+  sentences: string[]
   /** このページが占有する wordwrap 後の行数（高さ算出のデバッグ・検証用） */
   lineCount: number
 }
@@ -537,6 +547,8 @@ export interface NovelPage {
  *    （これ以上分割できないため。文途中改頁を避ける優先度が高い）。
  *
  * `joinSentences` で連結した本文を `NovelPage.text` に持たせる（呼び出し側が wordwrap して描画する）。
+ * 加えて各ページを構成した文の配列を `NovelPage.sentences` に持たせる (#292)。文単位送りでは
+ * `sentences.slice(0, k+1)` の累積テキストを wordwrap して 1 文ずつ表示する。
  *
  * @param sentences 文の配列（`splitIntoSentences` の結果）
  * @param sentenceLineCounts 各文を単独で wordwrap したときの行数（`sentences` と同じ長さ・1 以上）
@@ -558,7 +570,13 @@ export function paginateSentencesByLines(
 
   const flush = () => {
     if (pageSentences.length === 0) return
-    pages.push({ text: joinSentences(pageSentences), lineCount: pageLines })
+    // sentences はこのページを構成する文の配列 (#292)。文単位送りの累積テキスト組み立てに使う。
+    // text は従来どおり joinSentences(sentences) の連結で後方互換を保つ。
+    pages.push({
+      text: joinSentences(pageSentences),
+      sentences: pageSentences,
+      lineCount: pageLines,
+    })
     pageSentences = []
     pageLines = 0
   }
@@ -581,4 +599,116 @@ export function paginateSentencesByLines(
   }
   flush()
   return pages
+}
+
+/**
+ * wordwrap 済みテキスト中で「plain（折返し前）文字を `plainPrefixLength` 個消費し終えた位置」の
+ * インデックスを返す純粋関数 (#292)。
+ *
+ * 文単位送り（息継ぎ単位の novel 表示）の最重要ヘルパー。DialogBox は表示テキストを wordwrap して
+ * `lines.join('\n')` を typewriter の fullText にする。文単位送りでは:
+ *  - 累積表示テキスト  = `page.sentences.slice(0, sentenceIndex+1).join('')` を wordwrap した fullText
+ *  - 既出プレフィックス = `page.sentences.slice(0, sentenceIndex).join('')`（plain 長さ）
+ * を即時表示扱いにしたい。だが wordwrap は `\n` を挿入するため **plain 長さ ≠ wrapped 長さ**。
+ * 「既出プレフィックスの plain 文字数」を、wrapped 文字列上のインデックス（＝ `startTypewriterFrom`
+ * の `fromCount`）へ変換するのがこの関数の役目。
+ *
+ * アルゴリズム:
+ *  - wrappedText を先頭から 1 文字ずつ走査する。
+ *  - `\n`（wordwrap が挿入した改行）は plain にカウントしない（既出文には含まれない区切り）。
+ *  - `\n` 以外（plain 文字）を 1 つ数えるたびに consumed を増やす。
+ *  - consumed が plainPrefixLength に達した**直後**のインデックス（その plain 文字の次の位置）を返す。
+ *
+ * 境界の扱い:
+ *  - `plainPrefixLength <= 0` → 0（既出なし＝全部これからタイプ）。負値も 0 にクランプ。
+ *  - プレフィックスがちょうど wrap 境界に land した場合: 既出文の末尾 plain 文字を消費した直後で
+ *    返すため、その直後に続く `\n`（次行頭の手前の改行）は **含めない**。`\n` を plain に数えない
+ *    ので自然にそうなる（既出文の末尾＝次行の手前で止まる）。
+ *  - plainPrefixLength が wrapped 中の plain 文字総数以上 → wrappedText.length（全消費）。
+ *  - 空文字 / `\n` 連続も安全（plain を数えないので素通しする）。
+ *
+ * Math.random など非決定要素は使わない。`this` / PixiJS / DOM に触れない決定論的写像。
+ *
+ * @param wrappedText wordwrap 後のテキスト（`lines.join('\n')`）
+ * @param plainPrefixLength 既出プレフィックスの plain（折返し前）文字数
+ * @returns wrappedText 上で、その plain プレフィックスを表示し終えた位置のインデックス
+ */
+export function wrappedPrefixLength(wrappedText: string, plainPrefixLength: number): number {
+  if (plainPrefixLength <= 0) return 0
+  let consumed = 0
+  const chars = Array.from(wrappedText)
+  for (let i = 0; i < chars.length; i++) {
+    if (chars[i] === '\n') continue
+    consumed++
+    if (consumed >= plainPrefixLength) {
+      // この plain 文字を消費し終えた = その次の位置までが既出。直後の \n は含めない
+      // （\n を数えないので、ここで返すインデックスは次の plain 文字 or 改行の手前で止まる）。
+      return joinedIndexFromCharIndex(chars, i + 1)
+    }
+  }
+  // 全 plain 文字を消費しても plainPrefixLength に届かない → 全文が既出（末尾まで）。
+  return wrappedText.length
+}
+
+/** novel モードのインジケータ配置（px・論理座標）。 */
+export interface IndicatorPlacement {
+  /** インジケータ左上 x（px） */
+  x: number
+  /** インジケータ左上 y（px） */
+  y: number
+}
+
+/**
+ * novel モードで、止まっている表示テキストの**最後の wrap 行の右端**にインジケータを置く座標を
+ * 計算する純粋関数 (#292)。novel では右下固定を廃止し、文末の右にクリッカーを出す。
+ *
+ * 入力（すべて DialogBox の font メトリクス／幾何から得る・このモジュールは DOM/PIXI 非依存）:
+ *  - `textStartX` / `textStartY`: dialogText の左上（`textStartX()` / `textStartY()`）。
+ *  - `lineCount`: 表示テキストの wrap 後行数（最低 1。0 が来たら 1 扱い）。
+ *  - `lastLineWidth`: 最終行の表示幅（px。同じ font で measureText した値）。
+ *  - `lineHeight`: 行高（px）。
+ *  - `indicatorWidth`: インジケータ記号の表示幅（px。右端クランプで使う）。
+ *  - `boxRightEdge`: テキスト領域の右端 x（px。`boxX + boxW - padding` 等）。
+ *
+ * 配置:
+ *   x = textStartX + lastLineWidth                      // 最終行の右端（文末の右）
+ *   y = textStartY + (lineCount - 1) * lineHeight       // 最終行の行頭 y
+ * x が箱右端に近く indicator がはみ出す場合は `boxRightEdge - indicatorWidth` でクランプする。
+ * （最終行が右端ギリギリのとき記号が枠外へ出るのを防ぐ。クランプ下限は textStartX。）
+ *
+ * Math.random など非決定要素は使わない。決定論的写像。
+ */
+export function computeNovelIndicatorPlacement(args: {
+  textStartX: number
+  textStartY: number
+  lineCount: number
+  lastLineWidth: number
+  lineHeight: number
+  indicatorWidth: number
+  boxRightEdge: number
+}): IndicatorPlacement {
+  const { textStartX, textStartY, lastLineWidth, lineHeight, indicatorWidth, boxRightEdge } = args
+  const lineCount = args.lineCount >= 1 ? args.lineCount : 1
+  const rawX = textStartX + lastLineWidth
+  // はみ出し防止: 右端 - 記号幅 を上限にクランプ。下限は textStartX（負の余白に行かせない）。
+  const maxX = Math.max(textStartX, boxRightEdge - indicatorWidth)
+  const x = Math.min(rawX, maxX)
+  const y = textStartY + (lineCount - 1) * lineHeight
+  return { x, y }
+}
+
+/**
+ * `Array.from(text)`（コードポイント配列）の要素インデックス `charIndex` を、
+ * 元文字列（`text`）上の `string.length`（UTF-16 コード単位）インデックスへ変換する。
+ *
+ * `startTypewriterFrom(fullText, fromCount)` / `String.prototype.substring` は UTF-16 単位の
+ * インデックスを取るため、サロゲートペア（絵文字等）が混じっても破綻しないよう、コードポイント
+ * 走査の結果を UTF-16 長さに直す。`charIndex` は 0..chars.length。
+ */
+function joinedIndexFromCharIndex(chars: string[], charIndex: number): number {
+  let len = 0
+  for (let i = 0; i < charIndex && i < chars.length; i++) {
+    len += chars[i].length
+  }
+  return len
 }

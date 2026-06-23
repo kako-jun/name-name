@@ -17,6 +17,7 @@ function makeState(eventIndex: number): NovelGameState {
     sceneId: 's1',
     eventIndex,
     textIndex: 0,
+    sentenceIndex: 0,
     flags: {},
     backgroundPath: null,
     backgroundColor: null,

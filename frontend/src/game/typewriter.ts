@@ -27,6 +27,27 @@ export function startTypewriter(fullText: string): TypewriterState {
 }
 
 /**
+ * 既表示プレフィックスを持った状態で typewriter を開始する (#292)。
+ *
+ * 文単位送り（息継ぎ単位の novel 表示）用。先頭 `fromCount` 文字は「既に表示済み」（即時表示）
+ * 扱いにし、そこから先だけをタイプする。`startTypewriter(fullText)` は `fromCount=0` の特殊形。
+ *
+ * - `displayedCharCount` を `fromCount` で開始する（その分は visibleText に即座に含まれる）。
+ * - `fromCount` は `[0, fullText.length]` にクランプする（負値→0、超過→length＝即完了扱い）。
+ *   非有限（NaN/Infinity）も 0..length に丸める（NaN→0）。
+ * - `acc=0`（端数なしで開始）。
+ *
+ * pure（副作用なし・immutable）。`fullText` は呼び出し側が wordwrap 済みを渡す（`\n` 込み）。
+ */
+export function startTypewriterFrom(fullText: string, fromCount: number): TypewriterState {
+  const max = fullText.length
+  // NaN は Math.min/max を素通りするので Number.isFinite で 0 に倒してからクランプする。
+  const safe = Number.isFinite(fromCount) ? fromCount : 0
+  const clamped = Math.max(0, Math.min(max, Math.floor(safe)))
+  return { fullText, displayedCharCount: clamped, acc: 0 }
+}
+
+/**
  * 1 フレーム分進める。msPerChar<=0 (0 / 負 / NaN扱い) のときは即座に最後まで進む。
  *
  * - 既完了 state は同一参照で早期 return
