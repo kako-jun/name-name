@@ -4,6 +4,7 @@ import {
   makeInitialTypewriterState,
   skipTypewriter,
   startTypewriter,
+  startTypewriterFrom,
   tickTypewriter,
   visibleText,
 } from './typewriter'
@@ -23,6 +24,98 @@ describe('typewriter pure helpers', () => {
       expect(s.displayedCharCount).toBe(0)
       expect(s.acc).toBe(0)
       expect(isTypingActive(s)).toBe(true)
+    })
+  })
+
+  // ===== startTypewriterFrom 境界値 (#292 文単位送り・既出プレフィックス即時表示) =====
+  // 先頭 fromCount 文字を「既表示」扱いにし、その分だけ displayedCharCount を進めて開始する。
+  // fromCount は [0, fullText.length] にクランプ（負→0・超過→length＝即完了）し、
+  // 非有限（NaN/Infinity）は NaN→0 に倒す。小数は floor。acc は常に 0。
+  describe('startTypewriterFrom (#292)', () => {
+    const TEXT = 'ABCDE' // length 5
+
+    it('fromCount=0 は startTypewriter と等価（先頭から全部タイプ）', () => {
+      const s = startTypewriterFrom(TEXT, 0)
+      expect(s.displayedCharCount).toBe(0)
+      expect(s.acc).toBe(0)
+      expect(visibleText(s)).toBe('')
+      expect(isTypingActive(s)).toBe(true)
+    })
+
+    it('fromCount が中間: その分は即時表示、残りだけタイプ対象に残る', () => {
+      const s = startTypewriterFrom(TEXT, 2)
+      expect(s.displayedCharCount).toBe(2)
+      expect(s.acc).toBe(0)
+      expect(visibleText(s)).toBe('AB') // 既出分は即時表示
+      expect(isTypingActive(s)).toBe(true) // 残り 'CDE' をタイプ
+    })
+
+    it('fromCount == length: 全文が既出（即完了・タイプするものは無い）', () => {
+      const s = startTypewriterFrom(TEXT, TEXT.length)
+      expect(s.displayedCharCount).toBe(TEXT.length)
+      expect(visibleText(s)).toBe(TEXT)
+      expect(isTypingActive(s)).toBe(false)
+    })
+
+    it('fromCount > length: length にクランプ（即完了）', () => {
+      const s = startTypewriterFrom(TEXT, 999)
+      expect(s.displayedCharCount).toBe(TEXT.length)
+      expect(isTypingActive(s)).toBe(false)
+    })
+
+    it('fromCount 負値: 0 にクランプ（先頭から全部タイプ）', () => {
+      const s = startTypewriterFrom(TEXT, -3)
+      expect(s.displayedCharCount).toBe(0)
+      expect(visibleText(s)).toBe('')
+      expect(isTypingActive(s)).toBe(true)
+    })
+
+    it('fromCount NaN: 0 に倒す（Math.min/max を素通りするので isFinite で防御）', () => {
+      const s = startTypewriterFrom(TEXT, NaN)
+      expect(s.displayedCharCount).toBe(0)
+      expect(s.acc).toBe(0)
+    })
+
+    it('fromCount Infinity: 非有限なので 0 に倒す（length にせず先頭から）', () => {
+      const s = startTypewriterFrom(TEXT, Infinity)
+      expect(s.displayedCharCount).toBe(0)
+    })
+
+    it('fromCount 小数: floor して扱う（2.9 → 2）', () => {
+      const s = startTypewriterFrom(TEXT, 2.9)
+      expect(s.displayedCharCount).toBe(2)
+      expect(visibleText(s)).toBe('AB')
+    })
+
+    it('acc は常に 0 で開始（端数を持ち込まない）', () => {
+      expect(startTypewriterFrom(TEXT, 3).acc).toBe(0)
+      expect(startTypewriterFrom(TEXT, 0).acc).toBe(0)
+      expect(startTypewriterFrom('', 0).acc).toBe(0)
+    })
+
+    it('不変条件: 0 <= displayedCharCount <= fullText.length（多入力で縛る）', () => {
+      const inputs = [-100, -1, 0, 1, 2, 5, 6, 100, 2.5, NaN, Infinity, -Infinity]
+      for (const from of inputs) {
+        const s = startTypewriterFrom(TEXT, from)
+        expect(s.displayedCharCount).toBeGreaterThanOrEqual(0)
+        expect(s.displayedCharCount).toBeLessThanOrEqual(TEXT.length)
+        // visibleText は fullText の真のプレフィックス（クランプ後の長さ）
+        expect(visibleText(s)).toBe(TEXT.substring(0, s.displayedCharCount))
+      }
+    })
+
+    it('空文字 fullText では fromCount に関わらず displayedCharCount=0', () => {
+      expect(startTypewriterFrom('', 5).displayedCharCount).toBe(0)
+      expect(startTypewriterFrom('', 0).displayedCharCount).toBe(0)
+      expect(isTypingActive(startTypewriterFrom('', 3))).toBe(false)
+    })
+
+    it('続きを tick すると既出分を超えてタイプが進む', () => {
+      // 'AB' 既出から開始 → 即時完了する msPerChar=0 で残り 'CDE' まで進む。
+      const s0 = startTypewriterFrom(TEXT, 2)
+      const s1 = tickTypewriter(s0, 1, 0)
+      expect(s1.displayedCharCount).toBe(TEXT.length)
+      expect(visibleText(s1)).toBe(TEXT)
     })
   })
 

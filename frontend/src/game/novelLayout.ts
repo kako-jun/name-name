@@ -603,7 +603,7 @@ export function paginateSentencesByLines(
 
 /**
  * wordwrap 済みテキスト中で「plain（折返し前）文字を `plainPrefixLength` 個消費し終えた位置」の
- * インデックスを返す純粋関数 (#292)。
+ * インデックス（UTF-16 コード単位）を返す純粋関数 (#292)。
  *
  * 文単位送り（息継ぎ単位の novel 表示）の最重要ヘルパー。DialogBox は表示テキストを wordwrap して
  * `lines.join('\n')` を typewriter の fullText にする。文単位送りでは:
@@ -613,40 +613,48 @@ export function paginateSentencesByLines(
  * 「既出プレフィックスの plain 文字数」を、wrapped 文字列上のインデックス（＝ `startTypewriterFrom`
  * の `fromCount`）へ変換するのがこの関数の役目。
  *
+ * 単位の一致（#292 セルフレビュー M1 で是正）:
+ *  - 呼び出し側（DialogBox.setNovelDialogProgressive）は `plainPrefixLength` を **UTF-16 コード単位長**
+ *    （`plainText.length` / `sentences.slice(...).join('').length`）で渡す。
+ *  - 本関数も **UTF-16 コード単位**で走査・計数する（`for (let i=0; i<wrappedText.length; i++)`）。
+ *  - 入力と内部カウンタの単位を一致させることで、サロゲートペア（絵文字等）が既出プレフィックスに
+ *    含まれても停止条件がズレない。`\n` は wordwrap がコードポイント境界にしか挿入せず、プレフィックスは
+ *    常に完全なコードポイント列なので、`substring`（UTF-16 単位）でサロゲートを割らない。
+ *
  * アルゴリズム:
- *  - wrappedText を先頭から 1 文字ずつ走査する。
+ *  - wrappedText を先頭から UTF-16 コード単位で 1 つずつ走査する。
  *  - `\n`（wordwrap が挿入した改行）は plain にカウントしない（既出文には含まれない区切り）。
- *  - `\n` 以外（plain 文字）を 1 つ数えるたびに consumed を増やす。
- *  - consumed が plainPrefixLength に達した**直後**のインデックス（その plain 文字の次の位置）を返す。
+ *  - `\n` 以外（plain 文字のコード単位）を 1 つ数えるたびに consumed を増やす。
+ *  - consumed が plainPrefixLength に達した**直後**のインデックス（次の位置）を返す。
  *
  * 境界の扱い:
- *  - `plainPrefixLength <= 0` → 0（既出なし＝全部これからタイプ）。負値も 0 にクランプ。
+ *  - `plainPrefixLength <= 0`（NaN も `<= 0` を素通りしないため別途 0 扱い）→ 0（既出なし＝全部これからタイプ）。
  *  - プレフィックスがちょうど wrap 境界に land した場合: 既出文の末尾 plain 文字を消費した直後で
  *    返すため、その直後に続く `\n`（次行頭の手前の改行）は **含めない**。`\n` を plain に数えない
  *    ので自然にそうなる（既出文の末尾＝次行の手前で止まる）。
- *  - plainPrefixLength が wrapped 中の plain 文字総数以上 → wrappedText.length（全消費）。
+ *  - plainPrefixLength が wrapped 中の plain コード単位総数以上 → wrappedText.length（全消費）。
  *  - 空文字 / `\n` 連続も安全（plain を数えないので素通しする）。
  *
  * Math.random など非決定要素は使わない。`this` / PixiJS / DOM に触れない決定論的写像。
  *
  * @param wrappedText wordwrap 後のテキスト（`lines.join('\n')`）
- * @param plainPrefixLength 既出プレフィックスの plain（折返し前）文字数
- * @returns wrappedText 上で、その plain プレフィックスを表示し終えた位置のインデックス
+ * @param plainPrefixLength 既出プレフィックスの plain（折返し前）文字数（UTF-16 コード単位）
+ * @returns wrappedText 上で、その plain プレフィックスを表示し終えた位置のインデックス（UTF-16 コード単位）
  */
 export function wrappedPrefixLength(wrappedText: string, plainPrefixLength: number): number {
-  if (plainPrefixLength <= 0) return 0
+  // NaN は `<= 0` も `>= n` も素通りするので、有限数でなければ 0（既出なし）に倒す。
+  if (!(plainPrefixLength > 0)) return 0
   let consumed = 0
-  const chars = Array.from(wrappedText)
-  for (let i = 0; i < chars.length; i++) {
-    if (chars[i] === '\n') continue
+  for (let i = 0; i < wrappedText.length; i++) {
+    if (wrappedText[i] === '\n') continue
     consumed++
     if (consumed >= plainPrefixLength) {
-      // この plain 文字を消費し終えた = その次の位置までが既出。直後の \n は含めない
+      // この plain コード単位を消費し終えた = その次の位置までが既出。直後の \n は含めない
       // （\n を数えないので、ここで返すインデックスは次の plain 文字 or 改行の手前で止まる）。
-      return joinedIndexFromCharIndex(chars, i + 1)
+      return i + 1
     }
   }
-  // 全 plain 文字を消費しても plainPrefixLength に届かない → 全文が既出（末尾まで）。
+  // 全 plain コード単位を消費しても plainPrefixLength に届かない → 全文が既出（末尾まで）。
   return wrappedText.length
 }
 
@@ -695,20 +703,4 @@ export function computeNovelIndicatorPlacement(args: {
   const x = Math.min(rawX, maxX)
   const y = textStartY + (lineCount - 1) * lineHeight
   return { x, y }
-}
-
-/**
- * `Array.from(text)`（コードポイント配列）の要素インデックス `charIndex` を、
- * 元文字列（`text`）上の `string.length`（UTF-16 コード単位）インデックスへ変換する。
- *
- * `startTypewriterFrom(fullText, fromCount)` / `String.prototype.substring` は UTF-16 単位の
- * インデックスを取るため、サロゲートペア（絵文字等）が混じっても破綻しないよう、コードポイント
- * 走査の結果を UTF-16 長さに直す。`charIndex` は 0..chars.length。
- */
-function joinedIndexFromCharIndex(chars: string[], charIndex: number): number {
-  let len = 0
-  for (let i = 0; i < charIndex && i < chars.length; i++) {
-    len += chars[i].length
-  }
-  return len
 }

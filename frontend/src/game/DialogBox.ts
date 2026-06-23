@@ -489,9 +489,11 @@ export class DialogBox extends Container {
     this.dialogText.y = this.textStartY()
     this.rubyContainer.x = this.dialogText.x
     this.rubyContainer.y = this.dialogText.y
-    this.indicator.x = this.boxX + this.boxW - 40
-    this.indicatorBaseY = this.boxY + this.boxH - 30
-    this.indicator.y = this.indicatorBaseY
+    // novel のインジケータは文末（最終 wrap 行の右）に置く (#292)。ここで adv の右下固定
+    // （boxX+boxW-40, boxY+boxH-30）を再設定すると、resize のたびに文末配置を上書きして
+    // 一瞬右下へ戻ってしまう（#292 セルフレビュー N2）。novelWrappedLines は保持済みなので
+    // positionIndicator() で現在の文末へ置き直す。実 y はバウンスで ticker が base に sin を足す。
+    this.positionIndicator()
   }
 
   /**

@@ -2661,7 +2661,12 @@ export class NovelRenderer {
     if (novel) {
       const isLastSentenceOnPage = novelSentenceIndex >= novelPageSentences.length - 1
       this.dialogBox.setIndicatorKind(isLastSentenceOnPage ? 'pageturn' : 'next')
-      this.dialogBox.setIndicatorVisible(!(isLastPage && isLastSentenceOnPage && isLastEvent))
+      // 空ページ（立ち絵だけの空ダイアログ）は setNovelDialogProgressive が hide() する。
+      // 隠れた箱の上にクリッカーが浮くのを防ぐため、可視テキストが無い novel ページでは
+      // インジケータを出さない (#292 セルフレビュー N1)。adv は従来どおりで不変。
+      this.dialogBox.setIndicatorVisible(
+        hasVisibleText && !(isLastPage && isLastSentenceOnPage && isLastEvent)
+      )
     } else {
       this.dialogBox.setIndicatorVisible(!(isLastPage && isLastEvent))
     }

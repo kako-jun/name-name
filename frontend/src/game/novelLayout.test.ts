@@ -15,6 +15,8 @@ import {
   resolvePositionWithOverride,
   splitIntoSentences,
   paginateSentencesByLines,
+  wrappedPrefixLength,
+  computeNovelIndicatorPlacement,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -1026,5 +1028,166 @@ describe('splitIntoSentences 設計8〜11（分割規則の回帰固定 #283）'
     expect(splitIntoSentences('1行目\n2行目。3行目')).toEqual(['1行目\n2行目。', '3行目'])
     // 文と文の境目の改行は前後 trim で消える（行頭/行末の空白扱い）
     expect(splitIntoSentences('一文目。\n二文目。')).toEqual(['一文目。', '二文目。'])
+  })
+})
+
+// ===== #292: wrappedPrefixLength（既出 plain 文字数 → wrapped 上の fromCount）=====
+//
+// 文単位送りの最重要ヘルパー。wordwrap が挿入する `\n` を計数から除外し、plain 文字
+// （UTF-16 コード単位）を plainPrefixLength 個消費し終えた直後の wrapped インデックスを返す。
+// 呼び出し側（DialogBox.setNovelDialogProgressive）は plainPrefixLength を UTF-16 長で渡すので、
+// 本関数も UTF-16 コード単位で走査する（M1 で是正・単位一致）。
+describe('wrappedPrefixLength (#292 文単位送り)', () => {
+  // インデックスは「その位置で substring すると既出プレフィックスになる」ことで検証する。
+  // wordwrap は plain 文字列に \n を挿入するだけなので、返り値で substring → \n を除いた
+  // 文字列が既出 plain 文字列の wrapped 表現になる。
+  function plainOf(wrapped: string): string {
+    return wrapped.replace(/\n/g, '')
+  }
+
+  it('plainPrefixLength<=0 は 0（既出なし＝全部これからタイプ）', () => {
+    expect(wrappedPrefixLength('ABCDE', 0)).toBe(0)
+    expect(wrappedPrefixLength('ABCDE', -1)).toBe(0)
+    expect(wrappedPrefixLength('AB\nCD', 0)).toBe(0)
+  })
+
+  it('NaN は 0 に倒す（<=0 も >=n も素通りするので防御）', () => {
+    expect(wrappedPrefixLength('ABCDE', NaN)).toBe(0)
+  })
+
+  it('改行を含まない wrapped はそのまま位置を返す', () => {
+    // "ABCDE" の先頭 3 文字を既出 → index 3。substring(0,3)="ABC"。
+    expect(wrappedPrefixLength('ABCDE', 3)).toBe(3)
+    expect('ABCDE'.substring(0, wrappedPrefixLength('ABCDE', 3))).toBe('ABC')
+  })
+
+  it('\\n を計数せずスキップする（plain 2 文字は \\n の手前で止まる）', () => {
+    const wrapped = 'AB\nCD'
+    // plain 'AB' を消費 → \n の手前（index 2）で止まる。\n は含めない。
+    const idx = wrappedPrefixLength(wrapped, 2)
+    expect(idx).toBe(2)
+    expect(wrapped.substring(0, idx)).toBe('AB') // \n を含まない
+  })
+
+  it('プレフィックスがちょうど wrap 境界に land しても直後の \\n を含めない', () => {
+    // "ABC\nDEF" で plain 3 文字（=1 行目末尾）を既出にすると index 3（\n の手前）で止まる。
+    const wrapped = 'ABC\nDEF'
+    const idx = wrappedPrefixLength(wrapped, 3)
+    expect(idx).toBe(3)
+    expect(wrapped.substring(0, idx)).toBe('ABC')
+    expect(wrapped[idx]).toBe('\n') // 返り値の位置は \n の手前
+  })
+
+  it('\\n をまたいだ既出プレフィックス（2 行目の途中まで）', () => {
+    const wrapped = 'AB\nCDE'
+    // plain 'ABCD'（4 文字）を既出 → \n を読み飛ばし C,D まで → index 5。
+    const idx = wrappedPrefixLength(wrapped, 4)
+    expect(idx).toBe(5)
+    expect(plainOf(wrapped.substring(0, idx))).toBe('ABCD')
+  })
+
+  it('plainPrefixLength が plain 総数以上なら全消費（wrappedText.length）', () => {
+    expect(wrappedPrefixLength('AB\nCD', 4)).toBe('AB\nCD'.length) // plain 4 文字ちょうど
+    expect(wrappedPrefixLength('AB\nCD', 99)).toBe('AB\nCD'.length) // 超過
+  })
+
+  it('空文字は 0（plainPrefixLength に関わらず）', () => {
+    expect(wrappedPrefixLength('', 0)).toBe(0)
+    expect(wrappedPrefixLength('', 5)).toBe(0)
+  })
+
+  it('\\n 連続も安全（plain を数えないので素通し）', () => {
+    const wrapped = 'A\n\nB'
+    // plain 'A' を消費 → index 1（最初の \n の手前）。
+    expect(wrappedPrefixLength(wrapped, 1)).toBe(1)
+    // plain 'AB'（2 文字）→ 連続 \n を飛ばして B まで → index 4（末尾）。
+    expect(wrappedPrefixLength(wrapped, 2)).toBe(wrapped.length)
+  })
+
+  // ---- M1 回帰（サロゲートペア・絵文字）----
+  // 旧実装は plainPrefixLength を UTF-16 長で受けながら内部を Array.from（コードポイント）で
+  // 数えていたため、astral 文字が既出に含まれると停止条件に届かず続きの文の先頭を 1 つ余分に
+  // 既出へ倒した。修正後は入力と内部カウンタを UTF-16 コード単位で一致させる。
+  it('M1: "😀X" / plainPrefixLength=2 で "😀" だけ既出・"X" はタイプ対象に残る', () => {
+    const wrapped = '😀X' // length 3（😀=2 コード単位 + X=1）
+    expect(wrapped.length).toBe(3)
+    const idx = wrappedPrefixLength(wrapped, 2) // 😀 の UTF-16 長 = 2
+    expect(idx).toBe(2) // 😀 の直後（X の手前）
+    expect(wrapped.substring(0, idx)).toBe('😀') // 既出は 😀 のみ
+    expect(wrapped.substring(idx)).toBe('X') // X はこれからタイプ（余分に既出へ倒さない）
+  })
+
+  it('M1: 絵文字を跨ぐ既出プレフィックスでもサロゲートを割らない', () => {
+    const wrapped = '😀😁Z' // 各絵文字 2 コード単位 + Z=1 → length 5
+    expect(wrapped.length).toBe(5)
+    // 😀😁（UTF-16 長 4）を既出に → index 4（Z の手前・絵文字を割らない）。
+    const idx = wrappedPrefixLength(wrapped, 4)
+    expect(idx).toBe(4)
+    expect(wrapped.substring(0, idx)).toBe('😀😁')
+    expect(wrapped.substring(idx)).toBe('Z')
+  })
+
+  it('M1: 絵文字 + 改行混在でも \\n を飛ばし UTF-16 で正しく止まる', () => {
+    const wrapped = '😀\nX' // 😀(2) + \n(1) + X(1) → length 4
+    // plain '😀'（UTF-16 長 2）を既出 → \n の手前（index 2）。
+    const idx = wrappedPrefixLength(wrapped, 2)
+    expect(idx).toBe(2)
+    expect(wrapped.substring(0, idx)).toBe('😀')
+    expect(wrapped[idx]).toBe('\n')
+  })
+})
+
+// ===== #292: computeNovelIndicatorPlacement（novel 文末クリッカー配置）=====
+//
+// 止まっている表示テキストの最終 wrap 行の右端にクリッカーを置く座標を算出する。
+// x = textStartX + lastLineWidth（右端 - 記号幅でクランプ）、y = textStartY + (lineCount-1)*lineHeight。
+describe('computeNovelIndicatorPlacement (#292)', () => {
+  const base = {
+    textStartX: 16,
+    textStartY: 10,
+    lineCount: 1,
+    lastLineWidth: 100,
+    lineHeight: 64,
+    indicatorWidth: 20,
+    boxRightEdge: 784,
+  }
+
+  it('1 行: x=textStartX+lastLineWidth, y=textStartY（最終行の行頭）', () => {
+    const p = computeNovelIndicatorPlacement(base)
+    expect(p.x).toBe(16 + 100) // 文末の右
+    expect(p.y).toBe(10) // (1-1)*lineHeight = 0
+  })
+
+  it('複数行: y は (lineCount-1)*lineHeight だけ下がる', () => {
+    const p = computeNovelIndicatorPlacement({ ...base, lineCount: 3 })
+    expect(p.x).toBe(16 + 100)
+    expect(p.y).toBe(10 + (3 - 1) * 64) // 2 行分下
+  })
+
+  it('rawX が右端を超えるとクランプ（boxRightEdge - indicatorWidth）', () => {
+    // lastLineWidth を大きくして rawX=16+800=816 > maxX。
+    const p = computeNovelIndicatorPlacement({ ...base, lastLineWidth: 800 })
+    const maxX = base.boxRightEdge - base.indicatorWidth // 784-20=764
+    expect(p.x).toBe(maxX)
+  })
+
+  it('クランプ下限は textStartX（負の余白へ行かせない）', () => {
+    // boxRightEdge が textStartX より左（退化）でも x は textStartX を下回らない。
+    const p = computeNovelIndicatorPlacement({
+      ...base,
+      lastLineWidth: 0,
+      boxRightEdge: 0, // maxX = max(textStartX, 0-20) = textStartX
+    })
+    expect(p.x).toBe(base.textStartX) // rawX=16 と maxX=16 のうち小さい方=16
+  })
+
+  it('lineCount=0 は 1 として扱う（y は最終行頭 = textStartY）', () => {
+    const p = computeNovelIndicatorPlacement({ ...base, lineCount: 0 })
+    expect(p.y).toBe(base.textStartY) // (1-1)*lineHeight=0
+  })
+
+  it('lineCount 負値も 1 扱い（>=1 ガード）', () => {
+    const p = computeNovelIndicatorPlacement({ ...base, lineCount: -5 })
+    expect(p.y).toBe(base.textStartY)
   })
 })
