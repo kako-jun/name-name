@@ -4764,6 +4764,45 @@ fn test_fit_japanese_token() {
 }
 
 #[test]
+fn test_fit_token_position_does_not_shift_expr_pos() {
+    // 契約: `フィット` / `fit` トークンは「オプションの末尾に書く」前提だが、
+    // 実装は positional 解釈の前に fit トークンを全位置から除外する。そのため
+    // 先頭・中間に書いても残る positional トークンの順序は崩れず、expression=先頭 /
+    // position=2 番目 の割り当ては保たれる。emitter は常に fit を末尾へ出すので
+    // round-trip は安全。ここでは「どこに書いても expr/pos がずれない」現挙動を固定する。
+    let cases = [
+        // (脚本のオプション部, 期待 expression, 期待 position)
+        ("フィット, suppin_1, 左", "suppin_1", "左"), // 先頭
+        ("suppin_1, フィット, 左", "suppin_1", "左"), // 中間
+        ("suppin_1, 左, フィット", "suppin_1", "左"), // 末尾（規約どおり）
+    ];
+    for (attrs, want_expr, want_pos) in cases {
+        let input = format!("{FIT_HEADER}**カコ** ({attrs}):\nこんにちは。\n");
+        let doc = parser::parse(&input);
+        assert!(first_dialog_fit(&doc), "`{attrs}` で fit=true");
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Dialog {
+                expression,
+                position,
+                ..
+            } => {
+                assert_eq!(
+                    expression,
+                    &Some(want_expr.to_string()),
+                    "`{attrs}`: expression は fit の位置に依らない"
+                );
+                assert_eq!(
+                    position,
+                    &Some(want_pos.to_string()),
+                    "`{attrs}`: position は fit の位置に依らない"
+                );
+            }
+            other => panic!("Expected Dialog, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn test_fit_english_alias_and_kv() {
     // 英語エイリアス `fit`、および `fit=true` / `fit=false`。
     let on = format!("{FIT_HEADER}**カコ** (suppin_1, fit):\nやあ。\n");

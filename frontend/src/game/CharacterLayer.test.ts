@@ -1568,6 +1568,14 @@ describe('computeFitScale 純粋関数（#294 旧 fit-down ロジック）', () 
     expect(computeFitScale(NaN, 100, SW, SH)).toBe(1)
     expect(computeFitScale(100, 100, 0, SH)).toBe(1)
   })
+
+  it('画面寸法が NaN・非正でも原寸 1 に倒す（screen 側ガード）', () => {
+    // texture は画面超過サイズでも、screen 側が不正なら 1（0 除算・NaN を出さない）。
+    expect(computeFitScale(SW * 2, SH * 2, NaN, SH)).toBe(1)
+    expect(computeFitScale(SW * 2, SH * 2, SW, NaN)).toBe(1)
+    expect(computeFitScale(SW * 2, SH * 2, -SW, SH)).toBe(1)
+    expect(computeFitScale(SW * 2, SH * 2, SW, -SH)).toBe(1)
+  })
 })
 
 describe('CharacterLayer 明示フィット show({ fit }) （#294）', () => {

@@ -651,7 +651,10 @@ pub fn parse(input: &str) -> Document {
                 {
                     last_character = Some(character.clone());
                     last_expression = Some(expression.clone());
-                    // position stays the same
+                    // position stays the same.
+                    // last_position / last_fit は意図的に更新しない。表情チェンジは
+                    // 立ち絵の位置・フィット指定を持たないため、以降の継続 Dialog は
+                    // 直前の話者行で確定した position / fit をそのまま継承する。
                 }
                 current_events.push(event);
             }
