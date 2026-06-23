@@ -3789,6 +3789,33 @@ font_size: large
 "#;
     let doc_bad = parser::parse(input_bad);
     assert_eq!(doc_bad.font_size, None);
+
+    // 空引用（`font_size: ""`）でも None（#286 follow-up nit / PR #289 独立レビュー）。
+    // unquote("\"\"") は空文字を返し、空文字の parse::<u32>() が失敗して None に倒れる。
+    // バレ empty（`font_size:`）とは別経路（quote 剥がし後に空になる）なので明示的に固定する。
+    let input_empty_quote = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+font_size: ""
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_empty_quote = parser::parse(input_empty_quote);
+    assert_eq!(
+        doc_empty_quote.font_size, None,
+        "font_size: \"\" は unquote 後に空文字となり parse 失敗で None になること"
+    );
+
+    // None なら emit に font_size 行が出ないこと（既存規約の再確認 / 空引用入力の往復）。
+    let emitted_empty_quote = emitter::emit(&doc_empty_quote);
+    assert!(
+        !emitted_empty_quote.contains("font_size:"),
+        "font_size が None なら emit に出ない（空引用入力でも）: {emitted_empty_quote}"
+    );
 }
 
 #[test]

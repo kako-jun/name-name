@@ -502,6 +502,55 @@ describe('NovelRenderer novel 復元経路の役割配置と誤 nudge 防止 (#2
     expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(RESPONDER_X)
   })
 
+  // S1-goBack-crossspeaker: goBack の復元先と「異なる話者」へ前進したとき、復元時に lastSpeaker を
+  //   復元先話者へ据え直しているか（applyState の `this.lastSpeaker = restoredEvt.character`）を弁別する。
+  //
+  //   なぜ別ケースが要るか（PR #289 独立レビューの should）:
+  //     上の S1-goBack は「ひな→ひな（同一話者）」で復元・前進するため、復元時に lastSpeaker を
+  //     どう据えても（復元先=ひな／null／戻す前の値=ひな のいずれでも）前進時 speakerChanged=false で
+  //     nudge しない。よって `this.lastSpeaker = restoredEvt.character` を「null 固定」や「代入削除」に
+  //     壊しても緑のまま通り、再シードの回帰を検出できない。
+  //
+  //   本ケースの設計（復元先話者 ≠ 前進先話者 を作る）:
+  //     event0 せお / event1 ひな / event2 せお。event2（せお）まで進めると lastSpeaker=せお。
+  //     event1（ひな）へ goBack で復元 → 正しい再シードなら lastSpeaker=ひな に据え直る。
+  //     復元直後に event2（せお）へ前進すると「ひな→せお」の話者交代 → nudge が発火する（true positive）。
+  //       - 正しい実装: lastSpeaker=ひな → speakerChanged=true → せお に nudge（緑）。
+  //       - 「null 固定」に壊すと: lastSpeaker=null → speakerChanged=false → nudge せず（赤）。
+  //       - 「代入削除」に壊すと: lastSpeaker は復元前の せお のまま → speakerChanged=false → nudge せず（赤）。
+  //     どちらの破壊でも「交代なのに nudge しない」で赤化するため、再シードの回帰を検出できる。
+  it('S1: goBack 復元先と異なる話者へ前進すると交代 nudge が発火する（lastSpeaker 再シードの回帰検出）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    // event0 せお（質問役=左）/ event1 ひな（住人=右）/ event2 せお（質問役=左・話者交代）
+    r.setScenes([
+      scene('s', [dialog('せお', 'q1。'), dialog('ひな', 'a。'), dialog('せお', 'q2。')]),
+    ])
+    const i = internals(r)
+    i.advance() // event1 ひな（せお→ひな の交代）
+    i.advance() // event2 せお（ひな→せお の交代）。この時点で lastSpeaker=せお
+    expect(r.getSnapshot().eventIndex).toBe(2)
+
+    // event1（ひな）へ goBack。applyState が走り、lastSpeaker が復元先話者 ひな に据え直る。
+    r.goBack()
+    expect(r.getSnapshot().eventIndex).toBe(1)
+    // 復元先キャラ ひな の x は役割 x（住人=右）へ再適用される。
+    expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(RESPONDER_X)
+    // 復元自体では nudge しない。
+    expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
+
+    // 復元先（ひな）と異なる話者（せお）へ前進 → 話者交代として nudge が発火する。
+    // この assertion が再シードの本丸を踏む: 復元時に lastSpeaker=ひな へ据え直していないと、
+    // lastSpeaker が null（null 固定）または せお（代入削除）になり speakerChanged=false で nudge せず赤くなる。
+    i.advance()
+    expect(r.getSnapshot().eventIndex).toBe(2)
+    expect(layerOf(r).getPoseNudgeState('せお')).not.toBeNull()
+    expect(layerOf(r).getPoseNudgeState('せお')!.active).toBe(true)
+    // 前進先 せお の x は役割 x（質問役=左）。
+    expect(layerOf(r).getSpritePosition('せお')!.x).toBe(QUESTIONER_X)
+  })
+
   // S1-quickLoad: quickLoad（loadFromSaveData → restoreToScene → applyState）で seed したキャラが
   //   役割 x（主人公=左）へ再適用される。復元自体では nudge しない。
   it('S1: quickLoad（applyState）で役割 x（主人公=左）が再適用され、復元では nudge しない', () => {
