@@ -1046,6 +1046,9 @@ export class DialogBox extends Container {
       indicatorWidth,
       indicatorHeight,
       boxRightEdge: this.boxX + this.boxW - this.padding,
+      // 次行送り (#306) の y クランプ用にテキスト領域の下端を渡す。満杯ページで記号が箱外へ
+      // 飛ばないようにする。
+      boxBottom: this.boxY + this.boxH - this.padding,
     })
     this.indicator.x = placement.x
     this.indicatorBaseY = placement.y
