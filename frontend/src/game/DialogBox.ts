@@ -994,9 +994,11 @@ export class DialogBox extends Container {
     const font = `${this.fontSize}px ${this.fontFamily}`
     const lastLineWidth = this.measureTextWidth(lastLine, font)
     const indicatorWidth = this.measureTextWidth(this.indicator.text, font) || 20
-    // インジケータの高さ (#300)。Pixi が測れる環境では実測 height、測れない（jsdom は
-    // canvas 2d ctx が null で Text.height が measureFont で throw する）なら、インジケータ
-    // 生成時の fontSize 20 をベースにフォールバックする（measureTextWidth の ctx ガードと同趣旨）。
+    // インジケータの高さ (#300)。本番（WebGL）では実測 height（fontSize 20 の ▼/❯ は行間込みで
+    // おおむね ~24-27px）を使い、行 band の縦中央へ正確に揃える。jsdom は canvas 2d ctx が null で
+    // Text.height が measureFont で throw するため measureIndicatorHeight() が 0 を返す。その場合だけ
+    // 20（= indicator の fontSize。実 height より小さいが縦中央化の方向は保つ）に倒すフォールバック
+    // 値であって、本番の実 height ではない（measureTextWidth の ctx ガードと同趣旨の退化）。
     const indicatorHeight = this.measureIndicatorHeight() || 20
     const placement = computeNovelIndicatorPlacement({
       textStartX: this.textStartX(),

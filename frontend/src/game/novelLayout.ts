@@ -687,10 +687,10 @@ export interface IndicatorPlacement {
  * （最終行が右端ギリギリのとき記号が枠外へ出るのを防ぐ。クランプ下限は textStartX。）
  *
  * y の縦中央化 (#300): 旧実装は文末行の**上端**（`y = textStartY + (lineCount-1)*lineHeight`）を返して
- * いた。インジケータ高さ（fontSize 20 ベース）≪ 行高（~64）なので、記号が行 band の上に寄って見える
+ * いた。インジケータ高さ（≪ 行高 ~64）なので、記号が行 band の上に寄って見える
  * （kako-jun: 「2つとも上下中心より上寄り」）。`(lineHeight - indicatorHeight) / 2` の余白を足して
- * 行 band の縦中央へ揃える。`indicatorHeight <= 0` や行高超過でも `Math.max(0, …)` でクランプし、
- * 上寄りの旧挙動・下振れの破綻を防ぐ。
+ * 行 band の縦中央へ揃える。`indicatorHeight` が **lineHeight を超える**ときは余白が負になるため
+ * `Math.max(0, …)` で 0 にクランプし、上端（旧挙動）へ退化させて下振れの破綻を防ぐ。
  *
  * Math.random など非決定要素は使わない。決定論的写像。
  */
@@ -711,7 +711,7 @@ export function computeNovelIndicatorPlacement(args: {
   const maxX = Math.max(textStartX, boxRightEdge - indicatorWidth)
   const x = Math.min(rawX, maxX)
   // 最終行の行頭 y に、行 band 内でインジケータを縦中央へ寄せる余白を足す (#300)。
-  // indicatorHeight が lineHeight を超える／負値なら余白は 0 にクランプ（上端＝旧挙動に退化）。
+  // indicatorHeight が lineHeight を超えると余白は負になるため 0 にクランプ（上端＝旧挙動に退化）。
   const verticalCenterOffset = Math.max(0, (lineHeight - args.indicatorHeight) / 2)
   const y = textStartY + (lineCount - 1) * lineHeight + verticalCenterOffset
   return { x, y }
