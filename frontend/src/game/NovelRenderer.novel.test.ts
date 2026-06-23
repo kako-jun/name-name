@@ -21,7 +21,7 @@
  *     → これらは書かない。
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { NovelRenderer } from './NovelRenderer'
+import { NovelRenderer, getTextEvent } from './NovelRenderer'
 import { NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO } from './constants'
 import { SaveManager, type SaveSlotData } from './SaveManager'
@@ -633,5 +633,92 @@ describe('NovelRenderer novel skipMode の nudge 抑制 (#286 follow-up S2)', ()
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
     // 役割 x（住人=右）は skip でも当たる。
     expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(RESPONDER_X)
+  })
+})
+
+// ===== 手動改頁 `---` = Event::PageBreak (#292 Phase 2) =====
+//
+// 本文中の単独行 `---` は parser が Event::PageBreak（serde では文字列 "PageBreak"）にする。
+// runtime はこれを非テキストイベントとして読み飛ばす（getTextEvent=null・processDirective=no-op）。
+// 各 text イベントは独立にページ分割されるため、`---` で割られたイベントの切れ目がそのまま
+// 強制ページ境界になる（自動改頁 #283/#292 の上に乗る人手の早出し改頁）。
+//
+// 観測点（jsdom・init なし。既存 novel テストと同じ流儀）:
+//   - getTextEvent('PageBreak') が null（非テキスト＝読み飛ばし対象）。
+//   - advance() で PageBreak を跨ぐとき eventIndex がマーカー分も進み、次の Dialog が新ページ
+//     （textIndex=0・sentenceIndex=0）から始まる＝強制ページ境界。
+//   - `---` を含まない（PageBreak なし）脚本は従来の文単位送りと完全に同じ（非回帰）。
+describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // P1: PageBreak は非テキストイベント（getTextEvent=null）。adv/novel いずれでも読み飛ばし対象。
+  it('P1: getTextEvent(PageBreak) は null（非テキスト＝読み飛ばし対象）', () => {
+    expect(getTextEvent('PageBreak')).toBeNull()
+  })
+
+  // P2: novel で `セリフ → PageBreak → 同一話者セリフ` を進めると、PageBreak を跨いで
+  //     次の Dialog が新ページ（textIndex=0・sentenceIndex=0）から始まる＝強制ページ境界。
+  //     1 つ目 Dialog は 1 文（cap 内・1 ページ）。その最後の文の advance で PageBreak を読み飛ばし、
+  //     2 つ目 Dialog（event index 2）へ。
+  it('P2: novel で PageBreak を跨ぐと次の Dialog が新ページ先頭から始まる（強制改頁）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    // parser が `カコ「最初の文。」/ --- / 続きの文。` を割った形を手で組む。
+    r.setScenes([
+      scene('s', [dialog('カコ', '最初の文。'), 'PageBreak', dialog('カコ', '続きの文。')]),
+    ])
+    const i = internals(r)
+    expect(i.isNovelStyle()).toBe(true)
+    // 1 つ目 Dialog は 1 ページ・1 文。
+    expect(i.currentPageCount({ text: ['最初の文。'] })).toBe(1)
+
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
+    // 1 つ目 Dialog の最後（唯一）の文 → advance で PageBreak(event1) を読み飛ばし、
+    // 2 つ目 Dialog(event2) の新ページ先頭へ。
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 2, textIndex: 0, sentenceIndex: 0 })
+  })
+
+  // P3: PageBreak は表示イベント数（カウンタ/シークの母数）に入らない。
+  //     dialog + PageBreak + dialog の表示イベント数は 2（PageBreak は除外）。
+  it('P3: PageBreak は displayEventCount に数えられない（テキストイベントのみ）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [dialog('カコ', 'A。'), 'PageBreak', dialog('カコ', 'B。')])])
+    const count = (r as unknown as { displayEventCount: number }).displayEventCount
+    expect(count).toBe(2)
+  })
+
+  // P4: PageBreak の読み飛ばし進行で console を汚さない（no-op の確認）。
+  it('P4: PageBreak を跨ぐ進行で console.warn / console.error を出さない', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [dialog('カコ', 'A。'), 'PageBreak', dialog('カコ', 'B。')])])
+    internals(r).advance()
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  // P5: 非回帰。PageBreak を含まない（`---` 無し）同等脚本は、従来の文単位送りと完全に同じ。
+  //     1 つの Dialog に 2 文をまとめた場合（cap 内・1 ページ 2 文）は、PageBreak で割った P2 と違い
+  //     同一ページ内を文送り（sentenceIndex 0→1）してから次イベントへ進む。
+  it('P5: PageBreak 無し（同一 Dialog に 2 文）は同一ページ内を文送りする（強制改頁が漏れない）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    // cap 内（NOVEL_CAP>=2 前提）に 2 文 → 1 ページ 2 文。
+    r.setScenes([scene('s', [dialog('カコ', '最初の文。続きの文。'), dialog('トモ', '次。')])])
+    const i = internals(r)
+    expect(i.currentPageCount({ text: ['最初の文。続きの文。'] })).toBe(1) // 1 ページ
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
+    // 同一ページ内を 1 文送る（PageBreak が無いので改頁・次イベントには行かない）。
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 1 })
+    // ページ最後の文 → 次イベントへ。
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
   })
 })

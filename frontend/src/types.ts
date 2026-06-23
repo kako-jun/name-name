@@ -227,6 +227,14 @@ export type Event =
   | { Se: { path: string; /** SE fade-in 時間 ms (#145) */ fade_ms?: number | null } }
   | { Blackout: { action: BlackoutAction } }
   | 'SceneTransition'
+  /**
+   * 手動改頁マーカー (#292 Phase 2)。本文中の単独行 `---` から生成される unit variant
+   *（serde では文字列 `"PageBreak"`）。`dialog_style: novel` の自動改頁（文がページに収まる
+   * 範囲で貪欲に詰める #283/#292）の上に乗る、人間が明示的に入れる強制ページ境界。
+   * runtime は非テキストイベントとして読み飛ばす（getTextEvent は null・processDirective は no-op）。
+   * 各 text イベントは独立にページ分割されるため、`---` で割られたイベントの切れ目が
+   * そのまま強制ページ境界になる。`---` を含まない脚本は従来挙動と完全に同じ（非回帰）。 */
+  | 'PageBreak'
   | { Exit: { character: string } }
   | { Wait: { ms: number } }
   | { Choice: { options: ChoiceOption[] } }
