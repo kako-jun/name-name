@@ -52,6 +52,13 @@ export interface NovelGameState {
   sceneId: string | null
   eventIndex: number
   textIndex: number
+  /**
+   * novel スタイル (#292) で「現ページ内の表示済み最後の文 index」（0-based・息継ぎ送り）。
+   * adv では未使用（常に 0）。これは「どの文まで送ったか」という**進行位置＝ゲーム状態**であり、
+   * タイプ途中という演出中間状態ではない（ADR 0002 / 規律3 に適合）。
+   * textIndex（ページ index）の下位に位置する。古いセーブには無い → 復元時は ?? 0。
+   */
+  sentenceIndex: number
   flags: Record<string, FlagValue>
   backgroundPath: string | null
   /** 単色の地色 (#273)。背景画像と同じ永続状態。なしなら null（既定の黒） */
@@ -102,6 +109,8 @@ export interface StartFromOptions {
   eventIndex?: number
   /** 開始テキストインデックス（省略時 = 0） */
   textIndex?: number
+  /** novel の現ページ内文インデックス（省略時 = 0・#292）。adv では未使用。 */
+  sentenceIndex?: number
 }
 
 /**

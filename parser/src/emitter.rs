@@ -299,6 +299,18 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str("[場面転換]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::PageBreak => {
+                // 手動改頁マーカー (#292 Phase 2)。本文中の単独 `---` 行に戻す。
+                // 直前がセリフ/テキストなら空行を 1 つ挟んでから `---` を出す（front matter の
+                // 区切りと視覚的に揃え、前のセリフ行に貼り付かないようにする）。
+                // prev_was_dialog_or_text は true のまま据え置く: `---` を挟んでも次の同一話者
+                // セリフは継続行（話者名なし）として emit したいので、間に PageBreak があっても
+                // 「直前はセリフ」という連続性を崩さない（needs_speaker_line も PageBreak を透過する）。
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("---\n");
+            }
             Event::Exit { character } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -1027,8 +1039,23 @@ fn needs_speaker_line(events: &[Event], idx: usize) -> bool {
     if idx == 0 {
         return true;
     }
+    // 直前イベントを探すとき、手動改頁マーカー (#292) は透過する。
+    // `---` で割られた同一話者の継続セリフは、`---` を挟んでも話者名を再掲しない
+    // （`セリフ。\n---\nセリフ。` を 1 話者の 2 ページとして round-trip させる）。
+    // PageBreak だけが連続するケース（`---\n---`）も遡って最初の非 PageBreak まで見る。
+    let mut prev_idx = idx;
+    while prev_idx > 0 {
+        prev_idx -= 1;
+        if !matches!(events[prev_idx], Event::PageBreak) {
+            break;
+        }
+    }
+    // 遡った先がまだ PageBreak（＝先頭から PageBreak しかなかった）なら話者行が要る。
+    if matches!(events[prev_idx], Event::PageBreak) {
+        return true;
+    }
     // Look at previous event
-    let prev = &events[idx - 1];
+    let prev = &events[prev_idx];
     let curr = &events[idx];
 
     match (prev, curr) {

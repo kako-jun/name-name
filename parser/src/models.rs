@@ -395,6 +395,22 @@ pub enum Event {
         action: BlackoutAction,
     },
     SceneTransition,
+    /// 手動改頁マーカー (#292 Phase 2)。本文中の単独行 `---` から生成される。
+    ///
+    /// `dialog_style: novel` で「自動改頁（文がページに収まる範囲で貪欲に詰める #283/#292）」の
+    /// 上に乗る**人間が明示的に入れる強制ページ境界**。「もっと早く改頁したい」ときだけ書く。
+    /// frontmatter 区切りの `---`（ファイル先頭ブロックのみ）とは別物で、本文（frontmatter
+    /// 終了後）の単独 `---` 行だけがこれになる。
+    ///
+    /// 型表現の方針: text 配列に魔法の文字列を混ぜるのは脆い（doctrine 規律2「型を先に確定」）。
+    /// 代わりに一級の unit variant にし、parser は本文 `---` でセリフ（Dialog/Narration）の
+    /// text 蓄積を打ち切り、その間に `PageBreak` を挟む（＝Dialog を分割する）。各 text イベントは
+    /// runtime 側で独立にページ分割される（`getNovelPages`）ため、イベントの切れ目がそのまま
+    /// 強制ページ境界になり、`paginateSentencesByLines`（#283/#292）に手を入れず非回帰を保てる。
+    /// emitter は単独 `---` 行に戻すので往復で保たれる。serde の unit variant は文字列
+    /// `"PageBreak"` として表現され、TS 側は非テキストイベントとして単に読み飛ばす。
+    /// adv（`dialog_style` 未指定/adv）では runtime が描画イベントを持たないため実害なく無視される。
+    PageBreak,
     Exit {
         character: String,
     },

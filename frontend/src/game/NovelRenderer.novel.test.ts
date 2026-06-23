@@ -21,7 +21,7 @@
  *     → これらは書かない。
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { NovelRenderer } from './NovelRenderer'
+import { NovelRenderer, getTextEvent } from './NovelRenderer'
 import { NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO } from './constants'
 import { SaveManager, type SaveSlotData } from './SaveManager'
@@ -146,22 +146,33 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     expect(internals(r).dialogBox.isNovelMode).toBe(true)
   })
 
-  // 25: novel 多文の改頁で textIndex（= ページ index）が 1 ずつ前進し、ページを使い切ると次イベントへ。
-  //     2*cap+1 文 → ちょうど 3 ページ（textIndex 0,1,2）。3 回目の advance で次イベントへ（eventIndex+1）。
-  it('25: novel 多文の改頁で textIndex がページ単位で前進し、使い切ると次イベントへ', () => {
+  // 25: novel 文単位送り (#292)。1 ページ内は sentenceIndex が 1 文ずつ前進し、ページ最後の文の
+  //     advance で次ページ（textIndex+1, sentenceIndex=0）へ、最後のページの最後の文で次イベントへ。
+  //     cap=NOVEL_CAP・各文 1 行（jsdom）なので 1 ページに cap 文。ここでは cap+1 文 = 2 ページ
+  //     （[cap, 1]）で「文送り → 改頁 → 次イベント」の 3 種の遷移を 1 本で観測する。
+  it('25: novel は文単位で前進し、ページ最後の文で改頁・最後のページの最後で次イベントへ', () => {
+    const cap = NOVEL_CAP
+    // cap+1 文 → ページ [cap, 1]。各文 = `k。`。
+    const pageOverflow = Array.from({ length: cap + 1 }, (_, k) => `${k + 1}。`).join('')
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    r.setScenes([scene('s', [narration(THREE_PAGE_TEXT), narration('次。')])])
+    r.setScenes([scene('s', [narration(pageOverflow), narration('次。')])])
     const i = internals(r)
-    expect(i.dialogBox.novelMaxLinesPerPage()).toBe(NOVEL_CAP) // 前提を固定（実測 cap）
+    expect(i.dialogBox.novelMaxLinesPerPage()).toBe(cap) // 前提を固定（実測 cap）
+    expect(i.currentPageCount({ text: [pageOverflow] })).toBe(2) // ページ [cap, 1]
 
-    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0 })
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
+    // ページ 0（cap 文）の中を 1 文ずつ送る（cap-1 回で最後の文 index = cap-1 に到達）。
+    for (let s = 1; s <= cap - 1; s++) {
+      i.advance()
+      expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: s })
+    }
+    // ページ 0 最後の文 → advance で次ページ（textIndex 1・sentenceIndex 0）へ。
     i.advance()
-    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 1 }) // 2 ページ目
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 1, sentenceIndex: 0 })
+    // 最後のページ（1 文）の最後の文 → advance で次イベントへ。
     i.advance()
-    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 2 }) // 3 ページ目
-    i.advance()
-    expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0 }) // 次イベントへ
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
   })
 
   // 25b: ページ総数が「文数 / cap の切り上げ」になる（純計算経路の確認）。
@@ -318,35 +329,56 @@ describe('NovelRenderer novel ページ index の永続化跨ぎ保持 (#283)', 
     expect(r.getSnapshot().textIndex).toBe(1)
   })
 
-  // 31b: goBack でページ index が 1 つ戻る（同一イベント内の改頁の巻き戻し）。
-  it('31b: novel で goBack するとページ index が 1 つ戻る', () => {
+  // 31b: goBack で文 index が 1 つ戻る（同一ページ内の文送りの巻き戻し・#292）。
+  //      THREE_PAGE_TEXT のページ 0 は cap 文。1 文進めて 1 文戻すと sentenceIndex 0 に戻る。
+  it('31b: novel で goBack すると文 index が 1 つ戻る（同一ページ内）', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
     const i = internals(r)
-    i.advance() // ページ index 1 へ
-    expect(r.getSnapshot().textIndex).toBe(1)
+    i.advance() // 文 index 1 へ（同一ページ・同一イベント）
+    expect(r.getSnapshot()).toMatchObject({ textIndex: 0, sentenceIndex: 1 })
     r.goBack()
-    expect(r.getSnapshot().textIndex).toBe(0)
+    expect(r.getSnapshot()).toMatchObject({ textIndex: 0, sentenceIndex: 0 })
   })
 
-  // 31c: seekTo で履歴位置（別イベント）へ跳んでもページ index が壊れない。
-  //      多イベントを進めてから先頭履歴へ seekTo し、eventIndex/textIndex が履歴どおりに戻る。
-  it('31c: novel で seekTo すると履歴位置の eventIndex/textIndex が復元される', () => {
+  // 31b2: ページ先頭の文で更に goBack すると前ページへ戻り、前ページは全文（最後の文）表示に復元する。
+  //       cap+1 文 → ページ [cap, 1]。cap 回 advance でページ 1（sentenceIndex 0）へ。
+  //       そこで goBack するとページ 0 へ戻り sentenceIndex = cap-1（全文見えている状態）。
+  it('31b2: novel でページ先頭から goBack すると前ページの最後の文へ復元する', () => {
+    const cap = NOVEL_CAP
+    const pageOverflow = Array.from({ length: cap + 1 }, (_, k) => `${k + 1}。`).join('')
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    // 2 イベント: 1 つ目 2 文（cap2 → 1 ページ）、2 つ目 1 文
+    r.setScenes([scene('s', [narration(pageOverflow)])])
+    const i = internals(r)
+    // ページ 0 の cap 文を送り切ると（cap 回 advance）ページ 1 の先頭文へ。
+    for (let k = 0; k < cap; k++) i.advance()
+    expect(r.getSnapshot()).toMatchObject({ textIndex: 1, sentenceIndex: 0 })
+    // ページ先頭で goBack → 前ページ（ページ 0）の最後の文（index cap-1）へ。
+    r.goBack()
+    expect(r.getSnapshot()).toMatchObject({ textIndex: 0, sentenceIndex: cap - 1 })
+  })
+
+  // 31c: seekTo で履歴位置（別イベント）へ跳んでもページ/文 index が壊れない。
+  //      多イベントを進めてから先頭履歴へ seekTo し、eventIndex/textIndex/sentenceIndex が履歴どおりに戻る。
+  it('31c: novel で seekTo すると履歴位置の eventIndex/textIndex/sentenceIndex が復元される', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    // 2 イベント: 1 つ目 2 文（cap=6 → 1 ページ・2 文）、2 つ目 1 文。
+    // 文単位送り (#292) では 1 つ目イベントを次イベントへ抜けるのに 2 advance（文 0→1→次イベント）必要。
     r.setScenes([scene('s', [narration('甲。乙。'), narration('丙。')])])
     const i = internals(r)
-    // 1 つ目（1 ページ）を送ると 2 つ目イベントへ
-    i.advance()
+    i.advance() // 文 0 → 1（同一イベント・同一ページ）
+    i.advance() // ページ最後の文 → 次イベントへ
     const afterFirst = r.getSnapshot()
     expect(afterFirst.eventIndex).toBe(1)
-    // 履歴の先頭（index 0）へ seek すると 1 つ目イベント・ページ 0 に戻る
+    // 履歴の先頭（index 0）へ seek すると 1 つ目イベント・ページ 0・文 0 に戻る（イベント入口スナップショット）。
     r.seekTo(0)
     const back = r.getSnapshot()
     expect(back.eventIndex).toBe(0)
     expect(back.textIndex).toBe(0)
+    expect(back.sentenceIndex).toBe(0)
   })
 })
 
@@ -601,5 +633,92 @@ describe('NovelRenderer novel skipMode の nudge 抑制 (#286 follow-up S2)', ()
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
     // 役割 x（住人=右）は skip でも当たる。
     expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(RESPONDER_X)
+  })
+})
+
+// ===== 手動改頁 `---` = Event::PageBreak (#292 Phase 2) =====
+//
+// 本文中の単独行 `---` は parser が Event::PageBreak（serde では文字列 "PageBreak"）にする。
+// runtime はこれを非テキストイベントとして読み飛ばす（getTextEvent=null・processDirective=no-op）。
+// 各 text イベントは独立にページ分割されるため、`---` で割られたイベントの切れ目がそのまま
+// 強制ページ境界になる（自動改頁 #283/#292 の上に乗る人手の早出し改頁）。
+//
+// 観測点（jsdom・init なし。既存 novel テストと同じ流儀）:
+//   - getTextEvent('PageBreak') が null（非テキスト＝読み飛ばし対象）。
+//   - advance() で PageBreak を跨ぐとき eventIndex がマーカー分も進み、次の Dialog が新ページ
+//     （textIndex=0・sentenceIndex=0）から始まる＝強制ページ境界。
+//   - `---` を含まない（PageBreak なし）脚本は従来の文単位送りと完全に同じ（非回帰）。
+describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // P1: PageBreak は非テキストイベント（getTextEvent=null）。adv/novel いずれでも読み飛ばし対象。
+  it('P1: getTextEvent(PageBreak) は null（非テキスト＝読み飛ばし対象）', () => {
+    expect(getTextEvent('PageBreak')).toBeNull()
+  })
+
+  // P2: novel で `セリフ → PageBreak → 同一話者セリフ` を進めると、PageBreak を跨いで
+  //     次の Dialog が新ページ（textIndex=0・sentenceIndex=0）から始まる＝強制ページ境界。
+  //     1 つ目 Dialog は 1 文（cap 内・1 ページ）。その最後の文の advance で PageBreak を読み飛ばし、
+  //     2 つ目 Dialog（event index 2）へ。
+  it('P2: novel で PageBreak を跨ぐと次の Dialog が新ページ先頭から始まる（強制改頁）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    // parser が `カコ「最初の文。」/ --- / 続きの文。` を割った形を手で組む。
+    r.setScenes([
+      scene('s', [dialog('カコ', '最初の文。'), 'PageBreak', dialog('カコ', '続きの文。')]),
+    ])
+    const i = internals(r)
+    expect(i.isNovelStyle()).toBe(true)
+    // 1 つ目 Dialog は 1 ページ・1 文。
+    expect(i.currentPageCount({ text: ['最初の文。'] })).toBe(1)
+
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
+    // 1 つ目 Dialog の最後（唯一）の文 → advance で PageBreak(event1) を読み飛ばし、
+    // 2 つ目 Dialog(event2) の新ページ先頭へ。
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 2, textIndex: 0, sentenceIndex: 0 })
+  })
+
+  // P3: PageBreak は表示イベント数（カウンタ/シークの母数）に入らない。
+  //     dialog + PageBreak + dialog の表示イベント数は 2（PageBreak は除外）。
+  it('P3: PageBreak は displayEventCount に数えられない（テキストイベントのみ）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [dialog('カコ', 'A。'), 'PageBreak', dialog('カコ', 'B。')])])
+    const count = (r as unknown as { displayEventCount: number }).displayEventCount
+    expect(count).toBe(2)
+  })
+
+  // P4: PageBreak の読み飛ばし進行で console を汚さない（no-op の確認）。
+  it('P4: PageBreak を跨ぐ進行で console.warn / console.error を出さない', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [dialog('カコ', 'A。'), 'PageBreak', dialog('カコ', 'B。')])])
+    internals(r).advance()
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  // P5: 非回帰。PageBreak を含まない（`---` 無し）同等脚本は、従来の文単位送りと完全に同じ。
+  //     1 つの Dialog に 2 文をまとめた場合（cap 内・1 ページ 2 文）は、PageBreak で割った P2 と違い
+  //     同一ページ内を文送り（sentenceIndex 0→1）してから次イベントへ進む。
+  it('P5: PageBreak 無し（同一 Dialog に 2 文）は同一ページ内を文送りする（強制改頁が漏れない）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    // cap 内（NOVEL_CAP>=2 前提）に 2 文 → 1 ページ 2 文。
+    r.setScenes([scene('s', [dialog('カコ', '最初の文。続きの文。'), dialog('トモ', '次。')])])
+    const i = internals(r)
+    expect(i.currentPageCount({ text: ['最初の文。続きの文。'] })).toBe(1) // 1 ページ
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
+    // 同一ページ内を 1 文送る（PageBreak が無いので改頁・次イベントには行かない）。
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 1 })
+    // ページ最後の文 → 次イベントへ。
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
   })
 })

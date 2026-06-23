@@ -149,6 +149,17 @@ pub fn parse(input: &str) -> Document {
             continue;
         }
 
+        // 本文の単独 `---` 行 = 手動改頁マーカー (#292 Phase 2)。
+        // frontmatter の `---` は先頭ブロックで処理済み（pos がそこを越えてここに来る）なので、
+        // ここに到達する単独 `---` は本文中のものだけ＝改頁センチネルとして扱う。
+        // `last_character` は維持する（`---` を挟んでも同一話者が続けば継続行として扱い、
+        // 話者名は再掲しない＝1 つのセリフを 2 ページに割る意味論）。
+        if trimmed == "---" {
+            current_events.push(Event::PageBreak);
+            pos += 1;
+            continue;
+        }
+
         // RPG Map block: [マップ WxH タイル=N] ... [/マップ]
         if let Some(header) = trimmed.strip_prefix("[マップ") {
             if header.ends_with(']') {
@@ -679,6 +690,11 @@ pub fn parse(input: &str) -> Document {
                 if next_trimmed.is_empty() {
                     break;
                 }
+                // 本文の単独 `---` は手動改頁 (#292)。ここで text 蓄積を打ち切り、`---` 行は
+                // トップレベルの `==="---"` ハンドラに任せる（pos は進めない＝この行を再評価させる）。
+                if next_trimmed == "---" {
+                    break;
+                }
                 if next_trimmed.starts_with('[')
                     || next_trimmed.starts_with("## ")
                     || next_trimmed.starts_with("**")
@@ -740,6 +756,11 @@ pub fn parse(input: &str) -> Document {
                 let next = lines[pos];
                 let next_trimmed = next.trim();
                 if next_trimmed.is_empty() {
+                    break;
+                }
+                // 本文の単独 `---` は手動改頁 (#292)。継続行の蓄積もここで打ち切る
+                // （`---` 行はトップレベルハンドラへ。pos は進めない）。
+                if next_trimmed == "---" {
                     break;
                 }
                 if next_trimmed.starts_with('[')
