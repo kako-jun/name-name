@@ -425,8 +425,12 @@ export class CharacterLayer extends Container {
     expression: string,
     position: string,
     assetBaseUrl: string,
-    options?: { instant?: boolean; xRatio?: number; fit?: boolean }
+    options?: { instant?: boolean; xRatio?: number; fit?: boolean; onReady?: () => void }
   ): void {
+    // onReady (#293): 立ち絵の用意（テクスチャ load 完了／texture 不要な早期 return）が済んだら
+    // 1回だけ呼ぶフック。NovelRenderer が forward novel でテキスト reveal をこの完了に揃え、
+    // 「立ち絵 →（同時/直後に）テキスト」を保証する。texture を再ロードしない経路では同期発火する。
+    const onReady = options?.onReady
     // 明示フィット (#294)。脚本の話者行 `フィット` 由来。既定 false（原寸）。
     const fit = options?.fit === true
     const normalizedPosition = normalizePosition(position)
@@ -471,8 +475,11 @@ export class CharacterLayer extends Container {
         existing.position === normalizedPosition &&
         existing.fit === fit &&
         !overrideXChanged
-      )
+      ) {
+        // no-op（立ち絵は既に表示済み）。texture を待つ必要はないので即 ready (#293)。
+        onReady?.()
         return
+      }
 
       // 位置変更（position トークンの変化、または override x の変化）。
       // x（見た目の横座標）と position（正本トークン）は別の関心事なので更新を分ける (N2)。
@@ -494,8 +501,12 @@ export class CharacterLayer extends Container {
       // （表情据え置きでフィットだけ変わったケースも再ロードで反映する）。
       if (existing.expression !== expression || existing.fit !== fit) {
         existing.fit = fit
-        this.loadTexture(existing.sprite, expression, assetBaseUrl, existing.label, fit)
+        // texture 再ロード経路では onReady を loadTexture に委ねる（load 完了/失敗で発火）(#293)。
+        this.loadTexture(existing.sprite, expression, assetBaseUrl, existing.label, fit, onReady)
         existing.expression = expression
+      } else {
+        // 位置/x だけの変更（texture 据え置き）。待つ必要はないので即 ready (#293)。
+        onReady?.()
       }
       return
     }
@@ -556,7 +567,9 @@ export class CharacterLayer extends Container {
     }
     this.characters.set(character, state)
     if (state.fadeAnimation) this.ensureTicker()
-    this.loadTexture(sprite, expression, assetBaseUrl, label, fit)
+    // 新規立ち絵: texture load 完了/失敗で onReady を発火（#293）。これでテキスト reveal が
+    // 立ち絵の用意完了に揃う。
+    this.loadTexture(sprite, expression, assetBaseUrl, label, fit, onReady)
   }
 
   /**
@@ -1870,23 +1883,34 @@ export class CharacterLayer extends Container {
   }
 
   /**
-   * テクスチャをロードして Sprite に適用する
+   * テクスチャをロードして Sprite に適用する。
+   *
+   * `onReady` (#293): テクスチャの用意が済んだ（または素早く諦めた）タイミングで**必ず1回だけ**
+   * 呼ぶ。NovelRenderer がテキスト reveal をこの完了に揃えて「立ち絵 →（同時/直後に）テキスト」
+   * の順序を保証するためのフック。assetBaseUrl 空（描画できない）・load 成功・load 失敗のいずれでも
+   * 発火させ、テキストが永遠に出ない事故を防ぐ。
    */
   private loadTexture(
     sprite: Sprite,
     expression: string,
     assetBaseUrl: string,
     label?: Text,
-    fit = false
+    fit = false,
+    onReady?: () => void
   ): void {
-    if (!assetBaseUrl) return
+    if (!assetBaseUrl) {
+      // 描画できないので待たせない。テキスト側が詰まらないよう即座に ready 扱いにする (#293)。
+      onReady?.()
+      return
+    }
 
     const cleanExpression = expression.replace(/^\//, '')
     const url = `${assetBaseUrl}/images/${cleanExpression}.png`
 
     Assets.load(url)
       .then((texture) => {
-        // destroy 後に解決した場合は反映しない（UAF 防止）
+        // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
+        // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。
         if (sprite.destroyed) return
         // 立ち絵は既定で原寸（scale=1）。画面全体をブラウザ枠に合わせて縮める系統
         // （PixiJS canvas の wrapper スケール）が唯一の常時縮小であり、立ち絵を個別に
@@ -1917,5 +1941,8 @@ export class CharacterLayer extends Container {
       .catch((err) => {
         console.warn('[name-name] 立ち絵の読み込みに失敗: ' + url, err)
       })
+      // 成功/失敗/破棄いずれでも ready を1回だけ通知する (#293)。これでテキスト reveal が
+      // 立ち絵の用意完了に揃い、ロード失敗でもテキストが詰まらない。
+      .finally(() => onReady?.())
   }
 }

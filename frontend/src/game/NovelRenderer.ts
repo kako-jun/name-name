@@ -797,15 +797,10 @@ export class NovelRenderer {
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
     this.processUntilNextTextEvent()
 
-    // 最初のテキストイベントに立ち絵情報があれば表示
-    if (this.eventIndex < this.resolvedEvents.length) {
-      this.showCharacterFromDialog(this.resolvedEvents[this.eventIndex])
-    }
-
-    // 最初のテキストイベントのスナップショットを記録
-    this.pushSnapshot()
-
-    this.render()
+    // 立ち絵 →（同時/直後に）テキスト の順序保証 (#293)。立ち絵 sprite を同期生成してから
+    // 最初のテキストイベントのスナップショットを記録し（afterShow）、novel は立ち絵テクスチャの
+    // 用意完了まで render を遅延、adv/skip は従来どおり同期描画する。
+    this.showCharacterThenRender(() => this.pushSnapshot())
   }
 
   /**
@@ -1398,15 +1393,10 @@ export class NovelRenderer {
     }
 
     this.processUntilNextTextEvent()
-    // テキストイベントに立ち絵情報があれば表示
-    if (this.eventIndex < this.resolvedEvents.length) {
-      this.showCharacterFromDialog(this.resolvedEvents[this.eventIndex])
-    }
 
-    // スナップショットを記録
-    this.pushSnapshot()
-
-    this.render()
+    // 立ち絵 →（同時/直後に）テキスト の順序保証 (#293)。立ち絵 sprite を同期生成してから
+    // スナップショットを記録（afterShow）し、render を順序保証して呼ぶ。
+    this.showCharacterThenRender(() => this.pushSnapshot())
   }
 
   /**
@@ -2073,11 +2063,9 @@ export class NovelRenderer {
         this.waitingForWait = false
         this.eventIndex++
         this.processUntilNextTextEvent()
-        if (this.eventIndex < this.resolvedEvents.length) {
-          this.showCharacterFromDialog(this.resolvedEvents[this.eventIndex])
-        }
-        this.pushSnapshot()
-        this.render()
+        // [待機] 明け後の表示も「立ち絵 →（同時/直後に）テキスト」の順序保証 (#293)。
+        // 立ち絵 sprite を同期生成してからスナップショットを記録（afterShow）する。
+        this.showCharacterThenRender(() => this.pushSnapshot())
       }, event.Wait.ms)
       return
     }
@@ -2093,9 +2081,20 @@ export class NovelRenderer {
    * 話者交代の検出は Dialog の character で行い、立ち絵 show の有無に依らず lastSpeaker を更新する
    * （立ち絵が無い Dialog でも話者の連続性は追う）。
    */
-  private showCharacterFromDialog(event: Event): void {
+  /**
+   * Dialog の立ち絵を表示する。
+   *
+   * @param onReady (#293) 立ち絵の用意（テクスチャ load 完了／表示すべき立ち絵が無い場合の即時）が
+   *   済んだら呼ばれるフック。呼び出し側（forward novel）はこれを使ってテキスト reveal を
+   *   立ち絵の登場に揃える。立ち絵が無い Dialog（expression/position/character 欠落）でも
+   *   **必ず1回**発火させ、テキストが詰まらないようにする。
+   */
+  private showCharacterFromDialog(event: Event, onReady?: () => void): void {
     const textEvt = getTextEvent(event)
-    if (!textEvt || textEvt.type !== 'dialog') return
+    if (!textEvt || textEvt.type !== 'dialog') {
+      onReady?.()
+      return
+    }
 
     const speaker = textEvt.character
     // 話者交代の検出（novel のみ意味を持つ）。立ち絵表示の前に判定する。
@@ -2105,7 +2104,11 @@ export class NovelRenderer {
       speaker !== null && this.lastSpeaker !== null && speaker !== this.lastSpeaker
     if (speaker !== null) this.lastSpeaker = speaker
 
-    if (!textEvt.expression || !textEvt.position || !speaker) return
+    if (!textEvt.expression || !textEvt.position || !speaker) {
+      // 立ち絵が無い Dialog（ナレ的セリフ等）。待つ対象が無いので即 ready (#293)。
+      onReady?.()
+      return
+    }
 
     // novel 役割配置 (#286): protagonist と一致 → 質問役=左 / それ以外 → 回答役=右。
     // adv / protagonist 未指定では undefined（脚本 position トークンのまま）。
@@ -2117,7 +2120,8 @@ export class NovelRenderer {
       this.assetBaseUrl,
       // スキップモード中はフェードを抑制（既読シーンの高速進行で違和感を出さない）#177
       // 明示フィット (#294): 脚本の話者行 `フィット` 由来。adv/novel で分岐しない。
-      { instant: this.skipMode, xRatio, fit: textEvt.fit }
+      // onReady (#293): 立ち絵テクスチャの用意完了でテキスト reveal を解禁する。
+      { instant: this.skipMode, xRatio, fit: textEvt.fit, onReady }
     )
 
     // 話者交代でポーズ変化 (#286)。novel のみ・スキップ中は抑制（高速進行で乱発しない）。
@@ -2126,6 +2130,69 @@ export class NovelRenderer {
       this.characterLayer.nudgePose(speaker)
       this.retreatNovelScrim()
     }
+  }
+
+  /**
+   * forward（前進）パスで「立ち絵 →（同時/直後に）テキスト」の順序を保証して描画する (#293)。
+   *
+   * 問題: テキスト reveal（typewriter）は render() → DialogBox で**同期開始**するのに対し、
+   * 立ち絵は CharacterLayer が Assets.load で**非同期に**テクスチャ取得する。そのため呼び出し順は
+   * 立ち絵が先でも、見た目は「文字が出てから立ち絵が遅れて出る」順序逆転になっていた。
+   *
+   * 対策: novel スタイルでは showCharacterFromDialog の onReady（テクスチャ用意完了）まで render() を
+   * 遅延し、立ち絵がフレームに乗ってからテキストをタイプし始める。adv / skip 中 / 立ち絵なし Dialog は
+   * 従来どおり同期描画（onReady は即時発火するため実質ノーディレイ＝非回帰）。
+   *
+   * 重要: 立ち絵 sprite の生成と `afterShow`（スナップショット記録）は **同期** で済ませる。
+   * snapshot は CharacterLayer の現在状態を写すため、立ち絵を出した後・テキスト reveal の前に
+   * 撮る必要がある（さもないと goBack/seek の復元で立ち絵が欠ける）。遅延するのは render（テキスト
+   * reveal）だけ。演出中間状態は GameState に持ち込まない（規律3）。順序保証は描画駆動のローカルな
+   * トークン照合で行い、保留中に eventIndex が進んだ場合は stale な onReady では描画しない。
+   *
+   * @param afterShow 立ち絵 show 直後・render 前に同期実行するフック（スナップショット記録に使う）
+   */
+  private showCharacterThenRender(afterShow?: () => void): void {
+    if (this.eventIndex >= this.resolvedEvents.length) {
+      // 立ち絵対象が無い。afterShow（スナップショット）だけ走らせ、render は呼ばない
+      // （render() 自体も範囲外では no-op だが、呼ばないことで意図を明確にする）。
+      afterShow?.()
+      return
+    }
+    const event = this.resolvedEvents[this.eventIndex]
+    // adv / skip は同期描画でよい（skip は instant 表示でラグが無く、adv は #293 の対象外＝非回帰）。
+    if (!this.isNovelStyle() || this.skipMode) {
+      this.showCharacterFromDialog(event)
+      afterShow?.()
+      this.render()
+      return
+    }
+    // novel forward: onReady（テクスチャ用意完了）まで render を遅延し、順序を保証する。
+    // 保留中に advance 等で表示位置が動いたら stale な発火では描画しない。
+    // 設計判断 (Q2): タイムアウトで先に render しない（低速回線で先に出すと #293 で直した
+    // 「文字先行→立ち絵後出し」が再発するため。load 失敗は CharacterLayer の `.finally` → onReady で
+    // render され「永久に出ない」事故は防止済み）。
+    const expectedEventIndex = this.eventIndex
+    let rendered = false
+    const renderOnce = () => {
+      if (rendered) return
+      rendered = true
+      // 保留中に進行した（別イベントへ移った／レンダラ破棄）場合は描画しない。
+      if (!this.initialized) return
+      if (this.eventIndex !== expectedEventIndex) return
+      this.render()
+    }
+    // showCharacterFromDialog は sprite を**同期**生成し（CharacterLayer.show 内）、
+    // onReady（renderOnce）は show 経路で必ず1回呼ばれる契約:
+    //  - 立ち絵なし Dialog / no-op / 位置のみ変更 / assetBaseUrl 空 → 同期発火（この場で即 render）。
+    //  - 新規・表情/フィット変更で texture load → load の settle 後に発火（render を遅延＝順序保証）。
+    // Assets.load は必ず settle（resolve/reject）し finally で onReady を呼ぶため、テキストが
+    // 永久に出ない事態は起きない。
+    // 注意（将来の改変者へ）: 現状この関数の末尾にフォールバックの renderOnce() は無い。将来も
+    // 足してはいけない。非同期 load 中に末尾で先に render すると、立ち絵より文字が先に出る
+    // 順序逆転（#293 で直した不具合）が再発する。onReady（renderOnce）だけが唯一の render 起点。
+    this.showCharacterFromDialog(event, renderOnce)
+    // sprite は上の呼び出しで同期生成済み。スナップショットはここで撮る（テキスト reveal の前）。
+    afterShow?.()
   }
 
   /**
