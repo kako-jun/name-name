@@ -2168,6 +2168,9 @@ export class NovelRenderer {
     }
     // novel forward: onReady（テクスチャ用意完了）まで render を遅延し、順序を保証する。
     // 保留中に advance 等で表示位置が動いたら stale な発火では描画しない。
+    // 設計判断 (Q2): タイムアウトで先に render しない（低速回線で先に出すと #293 で直した
+    // 「文字先行→立ち絵後出し」が再発するため。load 失敗は CharacterLayer の `.finally` → onReady で
+    // render され「永久に出ない」事故は防止済み）。
     const expectedEventIndex = this.eventIndex
     let rendered = false
     const renderOnce = () => {
@@ -2183,8 +2186,10 @@ export class NovelRenderer {
     //  - 立ち絵なし Dialog / no-op / 位置のみ変更 / assetBaseUrl 空 → 同期発火（この場で即 render）。
     //  - 新規・表情/フィット変更で texture load → load の settle 後に発火（render を遅延＝順序保証）。
     // Assets.load は必ず settle（resolve/reject）し finally で onReady を呼ぶため、テキストが
-    // 永久に出ない事態は起きない。末尾フォールバック renderOnce() を**呼んではいけない**
-    // （非同期 load 中に先に render して順序逆転を再発させてしまう）。
+    // 永久に出ない事態は起きない。
+    // 注意（将来の改変者へ）: 現状この関数の末尾にフォールバックの renderOnce() は無い。将来も
+    // 足してはいけない。非同期 load 中に末尾で先に render すると、立ち絵より文字が先に出る
+    // 順序逆転（#293 で直した不具合）が再発する。onReady（renderOnce）だけが唯一の render 起点。
     this.showCharacterFromDialog(event, renderOnce)
     // sprite は上の呼び出しで同期生成済み。スナップショットはここで撮る（テキスト reveal の前）。
     afterShow?.()

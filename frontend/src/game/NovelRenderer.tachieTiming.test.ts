@@ -51,6 +51,20 @@ function dialogNoPortrait(character: string, ...lines: string[]): Event {
   }
 }
 
+/** position だけを差し替えた Dialog（同一 character・同表情で位置のみ変更するケース用）。 */
+function dialogAt(character: string, position: string, ...lines: string[]): Event {
+  return {
+    Dialog: {
+      character,
+      expression: 'normal',
+      position,
+      text: lines,
+      voice_path: null,
+      font_family: null,
+    },
+  }
+}
+
 function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
@@ -255,5 +269,66 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     // .finally(onReady) が走り、ロード失敗でもテキスト reveal は出る。
     expect(renderSpy).toHaveBeenCalledTimes(1)
     expect(warnSpy).toHaveBeenCalled()
+  })
+
+  // 7: novel forward — assetBaseUrl 空（描画不能）では texture を取りに行けないので、
+  //    CharacterLayer の loadTexture が `if (!assetBaseUrl)` で即 onReady → render は同期実行される
+  //    （テクスチャ load を待たない＝テキストが詰まらない）。
+  it('7: assetBaseUrl 空では立ち絵あり Dialog でも render を同期実行する（load を待たない）', () => {
+    // 解決しない load にしても、assetBaseUrl 空なら Assets.load 自体が呼ばれない想定。
+    const loadSpy = vi
+      .spyOn(Assets, 'load')
+      .mockReturnValue(new Promise<unknown>(() => {}) as never)
+    vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
+
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    // assetBaseUrl を明示的に空にする（描画不能状態）。
+    r.setAssetBaseUrl('')
+    const h = hooks(r)
+    const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
+    h.initialized = true
+
+    r.setScenes([scene('s', [dialog('ひな', 'こんにちは。')])])
+
+    // assetBaseUrl 空なので texture load には進まず（Assets.load 未呼出）、onReady が同期発火 → render 同期。
+    expect(loadSpy).not.toHaveBeenCalled()
+    expect(renderSpy).toHaveBeenCalledTimes(1)
+  })
+
+  // 8: novel forward — 表示中の同一立ち絵（同 character・同表情）を別位置で再 show すると、
+  //    texture は据え置き（再ロードなし）で位置だけ更新され、onReady が同期発火 → render も同期実行。
+  it('8: novel で位置のみ変更（texture 据え置き）は render を同期実行する（再ロードなし）', async () => {
+    let resolveLoad: (t: unknown) => void = () => {}
+    const loadPromise = new Promise<unknown>((res) => {
+      resolveLoad = res
+    })
+    const loadSpy = vi.spyOn(Assets, 'load').mockReturnValue(loadPromise as never)
+    vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
+
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setAssetBaseUrl('/assets')
+    const h = hooks(r)
+    const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
+    h.initialized = true
+
+    // event0: 中央 / event1: 右（同 character・同表情 normal、位置だけ違う）。
+    r.setScenes([scene('s', [dialog('ひな', 'a。'), dialogAt('ひな', '右', 'b。')])])
+
+    // event0: 新規立ち絵の load 保留 → render 未発火。
+    expect(renderSpy).not.toHaveBeenCalled()
+    // event0 の texture load を完了させて1回目の reveal を解禁する。
+    resolveLoad(fakeTexture())
+    await flushPromises()
+    expect(renderSpy).toHaveBeenCalledTimes(1)
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+
+    // event1 へ前進。位置のみ変更（texture 据え置き）なので再ロードせず onReady 同期発火 → render 同期。
+    h.advance()
+    // 再ロードは起きない（load 呼び出し回数は 1 のまま）。
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    // render は同期で 2 回目が呼ばれている（await 不要）。
+    expect(renderSpy).toHaveBeenCalledTimes(2)
   })
 })
