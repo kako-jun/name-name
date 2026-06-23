@@ -1771,3 +1771,111 @@ describe('CharacterLayer 話者交代ポーズ変化 nudgePose (#286)', () => {
     expect(layer.getPoseNudgeState('absent')).toBeNull()
   })
 })
+
+// ===== #303: 1 位置 1 キャラ（同位置に別キャラが出るとき前のキャラを退場させる） =====
+//
+// 実機（avatar__kantia）で「ヴィンチア(右)が話し終えても立ち絵が消えず、次に同じ右に出る
+// カンティアと重なる」不具合の最小回帰。show() が targetX を占有する別キャラを退場させる。
+// 役割配置 x（質問役=左 0.25 / 回答役=右 0.75）は xRatio override 経由で来るため、
+// override 経路と position トークン経路の両方で衝突退場を検証する。
+describe('CharacterLayer 1 位置 1 キャラ衝突退場 (#303)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  it('同じ override x に X→Y と続けて出すと、Y 表示前に X が退場フェードに入る', () => {
+    const layer = new CharacterLayer(800, 450)
+    // ヴィンチア(右=0.75) を出す。
+    layer.show('ヴィンチア', 'normal', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    expect(asInternals(layer).characters.has('ヴィンチア')).toBe(true)
+    // カンティア(右=0.75) を同じ位置へ。ヴィンチアは退場フェードへ。
+    layer.show('カンティア', 'normal', '中央', '/assets', { xRatio: 0.75 })
+    const vinchia = asInternals(layer).characters.get('ヴィンチア')
+    expect(vinchia).toBeDefined()
+    expect(vinchia!.fadeAnimation).not.toBeNull()
+    expect(vinchia!.fadeAnimation!.toAlpha).toBe(0)
+    expect(vinchia!.fadeAnimation!.destroyOnComplete).toBe(true)
+    // カンティアは新規表示されている。
+    expect(asInternals(layer).characters.has('カンティア')).toBe(true)
+  })
+
+  it('skip(instant) では衝突した前キャラが即座に Map から消える', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('ヴィンチア', 'normal', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    // instant: true（skipMode 相当）で衝突 → 即時退場。
+    layer.show('カンティア', 'normal', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    expect(asInternals(layer).characters.has('ヴィンチア')).toBe(false)
+    expect(asInternals(layer).characters.has('カンティア')).toBe(true)
+  })
+
+  it('別位置（左のせお）には干渉しない（左は残り、右だけ入れ替わる）', () => {
+    const layer = new CharacterLayer(800, 450)
+    // せお(左=0.25)・ヴィンチア(右=0.75)・カンティア(右=0.75) — avatar__kantia の配置。
+    layer.show('せお', 'normal', '中央', '/assets', { instant: true, xRatio: 0.25 })
+    layer.show('ヴィンチア', 'normal', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    layer.show('カンティア', 'normal', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    // 左のせおは残る。右はヴィンチア退場・カンティアだけ。
+    expect(asInternals(layer).characters.has('せお')).toBe(true)
+    expect(asInternals(layer).characters.has('ヴィンチア')).toBe(false)
+    expect(asInternals(layer).characters.has('カンティア')).toBe(true)
+  })
+
+  it('同一キャラの再表示（表情/位置変更）は自分を退場させない', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('カンティア', 'normal', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    // 同じキャラを同位置で表情だけ変えて再 show → 退場しない。
+    layer.show('カンティア', 'smile', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    const st = asInternals(layer).characters.get('カンティア')
+    expect(st).toBeDefined()
+    // 退場フェード（destroyOnComplete）に入っていないこと。
+    expect(st!.fadeAnimation?.destroyOnComplete ?? false).toBe(false)
+    expect(asInternals(layer).characters.has('カンティア')).toBe(true)
+  })
+
+  it('position トークン経路（左/右）でも同位置の別キャラを退場させる', () => {
+    const layer = new CharacterLayer(800, 450)
+    // override なし・position トークン「右」で 2 人続けて出す（adv 経路相当）。
+    layer.show('A', 'normal', '右', '/assets', { instant: true })
+    layer.show('B', 'normal', '右', '/assets', { instant: true })
+    expect(asInternals(layer).characters.has('A')).toBe(false)
+    expect(asInternals(layer).characters.has('B')).toBe(true)
+  })
+
+  it('別の position トークン（左 vs 右）は衝突せず両方残る', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('A', 'normal', '左', '/assets', { instant: true })
+    layer.show('B', 'normal', '右', '/assets', { instant: true })
+    expect(asInternals(layer).characters.has('A')).toBe(true)
+    expect(asInternals(layer).characters.has('B')).toBe(true)
+  })
+
+  it('renderOnly（Label）は同位置でも退場対象にならない（立ち絵スロットを占有しない）', () => {
+    const layer = new CharacterLayer(800, 450)
+    // 中央(0.5)に Label と立ち絵が重なっても、Label は退場させない。
+    layer.showLabel({
+      id: 'L',
+      text: 'タイトル',
+      fontFamily: 'sans-serif',
+      position: '中央',
+      instant: true,
+    })
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    expect(asInternals(layer).characters.has('L')).toBe(true)
+    expect(asInternals(layer).characters.has('hero')).toBe(true)
+  })
+
+  it('退場フェード中（destroyOnComplete）のキャラは getCharacterStates に漏れない', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('ヴィンチア', 'normal', '中央', '/assets', { instant: true, xRatio: 0.75 })
+    // カンティアを同位置へ（fade で退場）。ヴィンチアはまだ Map に居るがフェードアウト中。
+    layer.show('カンティア', 'normal', '中央', '/assets', { xRatio: 0.75 })
+    const names = layer.getCharacterStates().map((s) => s.name)
+    expect(names).not.toContain('ヴィンチア')
+    expect(names).toContain('カンティア')
+  })
+})
