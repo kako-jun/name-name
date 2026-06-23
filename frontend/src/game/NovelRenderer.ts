@@ -974,9 +974,16 @@ export class NovelRenderer {
   }
 
   /**
-   * オートモードの ON/OFF を切り替える (#139)。
+   * オートモードの ON/OFF を切り替える (#139 / #302)。
    * OFF にした場合は待機中のオートタイマーをキャンセルする。
    * React 側から呼ぶ場合は setAutoMode、renderer 内部から呼ぶ場合も同じメソッドを使う。
+   *
+   * 会話中トグルの即時反映 (#302): on=true にしたとき、現在行のタイプが既に完了していると
+   * `onTypingDone`→`scheduleAutoAdvance` が再発火しないため、その場ではオートにならず、
+   * 待てずに手動送りすると #139 の「手動操作で auto OFF」で解除されてしまっていた。
+   * タイプ完了済み・choice/wait 待機でない・スクリプト末尾でない、の条件を満たすときは
+   * ここで直接 `scheduleAutoAdvance()` を呼んでその場でオートを開始する。タイプ中に on に
+   * した場合は従来どおり onTypingDone で発火する（dialogBox.isTyping() ガードで二重発火を防ぐ）。
    */
   setAutoMode(on: boolean): void {
     if (this.autoMode === on) return
@@ -988,10 +995,50 @@ export class NovelRenderer {
       }
       // オートモード OFF 時はボイスを停止する（onEnded が誤発火しないよう）
       this.audioManager.stopVoice()
+    } else if (
+      // 会話中にオート ON にした瞬間の即時反映 (#302)。
+      // タイプ中は onTypingDone が後で scheduleAutoAdvance を呼ぶのでここでは呼ばない
+      // （二重発火防止）。choice/wait 待機中・スクリプト末尾も対象外（進める先がない）。
+      !this.dialogBox.isTyping() &&
+      !this.waitingForChoice &&
+      !this.waitingForWait &&
+      !this.isAtScriptEnd()
+    ) {
+      this.scheduleAutoAdvance()
     }
     // React state との同期。コールバック内で setAutoMode が再度呼ばれても
     // 同値 no-op（上の早期 return）で無限ループを防いでいる。
     this.onAutoModeChange?.(on)
+  }
+
+  /**
+   * 現在の表示位置が「これ以上 advance しても進む先がない」スクリプト末尾かを判定する純粋な
+   * 述語 (#302)。setAutoMode の即時 scheduleAutoAdvance を末尾で抑止するために使う
+   * （末尾でタイマーを張ると、advance が onEndCallback だけ叩いて空回りするのを防ぐ）。
+   *
+   * 末尾の定義は render() のインジケータ可視判定と同型にする:
+   *  - 表示イベントが無い／既に範囲外 → 末尾扱い。
+   *  - text を持つイベントでないなら（演出のみ等）→ 末尾扱いしない（advance で次へ進める）。
+   *  - text イベントなら「最後のページ かつ（novel は）ページ最後の文 かつ 最後のイベント」が末尾。
+   */
+  private isAtScriptEnd(): boolean {
+    if (this.resolvedEvents.length === 0) return true
+    if (this.eventIndex >= this.resolvedEvents.length) return true
+    const current = this.resolvedEvents[this.eventIndex]
+    const textEvt = getTextEvent(current)
+    if (!textEvt) return false
+    const isLastEvent = this.eventIndex >= this.resolvedEvents.length - 1
+    if (!isLastEvent) return false
+    const pageCount = this.currentPageCount(textEvt)
+    const isLastPage = this.textIndex >= pageCount - 1
+    if (!isLastPage) return false
+    if (this.isNovelStyle()) {
+      const page = this.getNovelPages(textEvt)[this.textIndex]
+      const sentenceCount = page?.sentences.length ?? 0
+      const isLastSentenceOnPage = this.sentenceIndex >= sentenceCount - 1
+      return isLastSentenceOnPage
+    }
+    return true
   }
 
   /** オートモード変更コールバックを登録する（NovelPlayer が setAutoMode(false) を検知するため） */
