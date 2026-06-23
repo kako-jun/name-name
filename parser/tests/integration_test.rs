@@ -4872,3 +4872,174 @@ fn test_fit_roundtrip() {
         "fit を含む round-trip が構造的に等しい\n{emitted}"
     );
 }
+
+// ===== 手動改頁 `---` (#292 Phase 2) =====
+//
+// 本文中の単独行 `---` を改頁センチネル（Event::PageBreak）として扱う。frontmatter 区切りの
+// `---`（先頭ブロックのみ）とは区別する。`---` を挟んだ同一話者のセリフは話者名を再掲しない
+// 継続行として扱い（1 つのセリフを 2 ページに割る意味論）、往復で `---` が保たれる。
+
+/// 本文 `---` から既定 HEADER（FIT_HEADER と同じ構造）を組み立てるための前置き。
+const PB_HEADER: &str =
+    "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: テスト\n\n";
+
+#[test]
+fn pagebreak_body_dash_becomes_marker() {
+    // 話者セリフの途中（空行を挟まず）に置いた単独 `---` は PageBreak になり、
+    // セリフを 2 つの Dialog に割る。継続側は話者名を再掲しないので character/位置を継承する。
+    let input = format!("{PB_HEADER}**カコ** (suppin_1, 左):\n最初の文。\n---\n続きの文。\n");
+    let doc = parser::parse(&input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events.len(),
+        3,
+        "Dialog + PageBreak + Dialog の 3 イベント: {events:?}"
+    );
+    match &events[0] {
+        Event::Dialog {
+            character,
+            position,
+            text,
+            ..
+        } => {
+            assert_eq!(character.as_deref(), Some("カコ"));
+            assert_eq!(position.as_deref(), Some("左"));
+            assert_eq!(text, &vec!["最初の文。".to_string()]);
+        }
+        other => panic!("events[0] は Dialog のはず: {other:?}"),
+    }
+    assert_eq!(events[1], Event::PageBreak, "events[1] は PageBreak");
+    match &events[2] {
+        Event::Dialog {
+            character,
+            position,
+            expression,
+            text,
+            ..
+        } => {
+            assert_eq!(character.as_deref(), Some("カコ"), "継続行は同一話者を継承");
+            assert_eq!(position.as_deref(), Some("左"), "位置も継承");
+            assert_eq!(expression.as_deref(), Some("suppin_1"), "表情も継承");
+            assert_eq!(text, &vec!["続きの文。".to_string()]);
+        }
+        other => panic!("events[2] は Dialog のはず: {other:?}"),
+    }
+}
+
+#[test]
+fn pagebreak_frontmatter_dash_is_not_marker() {
+    // frontmatter 区切りの `---`（先頭ブロックの開始/終了）は従来どおりで PageBreak にならない。
+    let input = format!("{PB_HEADER}**カコ** (左):\n本文だけ。\n");
+    let doc = parser::parse(&input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events.len(),
+        1,
+        "frontmatter の --- は PageBreak を生まない"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e, Event::PageBreak)),
+        "PageBreak は 1 つも無い: {events:?}"
+    );
+    // frontmatter 自体は従来どおりパースされる（エンジン・タイトル等が壊れていない）。
+    assert_eq!(doc.engine, "name-name");
+    assert_eq!(doc.chapters[0].title, "テスト");
+}
+
+#[test]
+fn pagebreak_with_blank_lines_around_dash() {
+    // `---` の前後に空行がある書き方（より一般的）でも PageBreak になり、
+    // 同一話者の継続として 2 Dialog に割れる。
+    let input = format!("{PB_HEADER}**カコ** (左):\n最初の文。\n\n---\n\n続きの文。\n");
+    let doc = parser::parse(&input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3, "Dialog + PageBreak + Dialog: {events:?}");
+    assert_eq!(events[1], Event::PageBreak);
+}
+
+#[test]
+fn pagebreak_between_narration_blocks() {
+    // ナレーション間の `---` も PageBreak になる（次の `>` ブロックが新ページになる）。
+    let input = format!("{PB_HEADER}> 一つ目のナレーション。\n---\n> 二つ目のナレーション。\n");
+    let doc = parser::parse(&input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events.len(),
+        3,
+        "Narration + PageBreak + Narration: {events:?}"
+    );
+    assert!(matches!(events[0], Event::Narration { .. }));
+    assert_eq!(events[1], Event::PageBreak);
+    assert!(matches!(events[2], Event::Narration { .. }));
+}
+
+#[test]
+fn pagebreak_roundtrip_stable() {
+    // parse → emit → parse が構造的に等しい（往復で `---` が保たれる）。
+    let input = format!(
+        "{PB_HEADER}**カコ** (suppin_1, 左):\n最初の文。\n---\n続きの文。\n\n\
+         **トモ** (laugh_1, 右):\n別の話者。\n"
+    );
+    let doc1 = parser::parse(&input);
+    let emitted = emitter::emit(&doc1);
+    assert!(
+        emitted.contains("\n---\n"),
+        "emit に単独 --- 行が出る:\n{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc1, doc2,
+        "PageBreak を含む round-trip が等しい:\n{emitted}"
+    );
+}
+
+#[test]
+fn pagebreak_roundtrip_does_not_duplicate_speaker() {
+    // `---` で割られた同一話者の継続セリフは emit で話者名を再掲しない
+    // （needs_speaker_line が PageBreak を透過する）。話者行 `**カコ**` は 1 度だけ。
+    let input = format!("{PB_HEADER}**カコ** (左):\n最初の文。\n---\n続きの文。\n");
+    let doc = parser::parse(&input);
+    let emitted = emitter::emit(&doc);
+    let speaker_count = emitted.matches("**カコ**").count();
+    assert_eq!(
+        speaker_count, 1,
+        "話者名 **カコ** は 1 度だけ（継続行で再掲しない）:\n{emitted}"
+    );
+}
+
+#[test]
+fn pagebreak_consecutive_dashes() {
+    // 連続する `---`（空ページ相当）も全て PageBreak になり、round-trip で保たれる。
+    let input = format!("{PB_HEADER}**カコ** (左):\nA。\n---\n---\nB。\n");
+    let doc1 = parser::parse(&input);
+    let events = &doc1.chapters[0].scenes[0].events;
+    let pb_count = events
+        .iter()
+        .filter(|e| matches!(e, Event::PageBreak))
+        .count();
+    assert_eq!(pb_count, 2, "PageBreak が 2 つ: {events:?}");
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc1, doc2,
+        "連続 PageBreak の round-trip が等しい:\n{emitted}"
+    );
+}
+
+#[test]
+fn pagebreak_absent_is_unchanged() {
+    // `---` を含まない脚本は PageBreak を一切生まず、従来と完全に同じ（非回帰）。
+    let input = format!(
+        "{PB_HEADER}**カコ** (suppin_1, 左):\n一行目。\n二行目。\n\n\
+         **トモ** (laugh_1, 右):\nやあ。\n"
+    );
+    let doc = parser::parse(&input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert!(
+        !events.iter().any(|e| matches!(e, Event::PageBreak)),
+        "--- が無ければ PageBreak は生まれない: {events:?}"
+    );
+    // 往復も従来どおり安定。
+    let doc2 = parser::parse(&emitter::emit(&doc));
+    assert_eq!(doc, doc2, "--- 無しの round-trip は不変");
+}
