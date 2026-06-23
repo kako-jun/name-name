@@ -247,9 +247,9 @@ export class NovelRenderer {
    *  resetAndStartEvents / シーン遷移でリセットする（前シーンの話者を引きずらない）。 */
   private lastSpeaker: string | null = null
 
-  /** 主人公セリフの本文色 (#305)。既定は暖アイボリー #FFF6E6。
+  /** 主人公セリフの本文色 (#305)。固定で暖アイボリー #FFF6E6。
    *  protagonist と一致する話者の novel 本文をこの色にし、住人は純白 (#FFFFFF) のまま。
-   *  per-game の `setProtagonistTextColor` で上書き可能（未指定なら既定 #FFF6E6）。
+   *  `setProtagonistTextColor` は内部/テスト用フックで本番経路からは呼ばれない（frontmatter 上書きは未実装）。
    *  protagonist 未指定なら色差は起こさず全員白（後方互換）。 */
   private protagonistTextColor: number = parseColorToNumber(
     NovelRenderer.DEFAULT_PROTAGONIST_TEXT_COLOR,
