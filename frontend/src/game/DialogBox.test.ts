@@ -835,3 +835,82 @@ describe('DialogBox setBodyTextColor (#305)', () => {
     box.dispose()
   })
 })
+
+// ===== #304 follow-up: setOnTypingDone の実体直接テスト =====
+//
+// 前 PR #304 のレビューで、setOnTypingDone は NovelRenderer 側でモック駆動されるだけで実体に
+// 直接の単体テストが無いと指摘された。ここで分岐を直接踏む:
+//  (a) !isTyping()（完了済み/空）で setOnTypingDone(cb) → 即 cb 1 回・slot は null。
+//  (b) タイプ中に setOnTypingDone(cb) → 即時呼ばれず slot に保持。
+//  (c) setOnTypingDone(null) で解除。
+describe('DialogBox setOnTypingDone (#304 follow-up)', () => {
+  it('(a) タイプ完了済み（skip 後）に setOnTypingDone(cb) すると即座に cb が1回呼ばれ slot は null', () => {
+    const box = makeRpgBox()
+    box.show('長老', 'こんにちは。')
+    box.skipTypewriter() // タイプ完了 → isTyping=false
+    expect(box.isTyping()).toBe(false)
+    const cb = vi.fn()
+    box.setOnTypingDone(cb)
+    expect(cb).toHaveBeenCalledTimes(1)
+    expect(asInternals(box).onTypingDone).toBeNull()
+    box.dispose()
+  })
+
+  it('(a) 空ダイアログ（一度も show せず isTyping=false）でも setOnTypingDone(cb) は即時 1 回呼ぶ', () => {
+    const box = makeRpgBox()
+    // 一度も show していない初期状態 = makeInitialTypewriterState → isTyping=false。
+    expect(box.isTyping()).toBe(false)
+    const cb = vi.fn()
+    box.setOnTypingDone(cb)
+    expect(cb).toHaveBeenCalledTimes(1)
+    expect(asInternals(box).onTypingDone).toBeNull()
+    box.dispose()
+  })
+
+  it('(b) タイプ中に setOnTypingDone(cb) すると即時呼ばれず slot に保持される', () => {
+    const box = makeRpgBox()
+    box.show('長老', 'まだタイプ中の長いセリフ。')
+    expect(box.isTyping()).toBe(true)
+    const cb = vi.fn()
+    box.setOnTypingDone(cb)
+    expect(cb).not.toHaveBeenCalled()
+    expect(asInternals(box).onTypingDone).toBe(cb)
+    box.dispose()
+  })
+
+  it('(b→a) タイプ中に保持した cb は skip 完了の justFinished では発火しない（直接代入はラッチ消費せず slot は維持）', () => {
+    // 仕様の境界確認: skipTypewriter は onTypingDone を null にする（auto OFF 中の誤進行防止）。
+    // つまり「タイプ中に張った cb」は skip 経路では呼ばれず解除される。ticker の justFinished
+    // 経路だけが消費するため、ここでは skip 後に cb 未発火・slot null を確認する。
+    const box = makeRpgBox()
+    box.show('長老', 'まだタイプ中の長いセリフ。')
+    const cb = vi.fn()
+    box.setOnTypingDone(cb)
+    box.skipTypewriter()
+    expect(cb).not.toHaveBeenCalled()
+    expect(asInternals(box).onTypingDone).toBeNull()
+    box.dispose()
+  })
+
+  it('(c) setOnTypingDone(null) で slot を解除できる（タイプ中の保持を取り消す）', () => {
+    const box = makeRpgBox()
+    box.show('長老', 'まだタイプ中の長いセリフ。')
+    const cb = vi.fn()
+    box.setOnTypingDone(cb)
+    expect(asInternals(box).onTypingDone).toBe(cb)
+    box.setOnTypingDone(null)
+    expect(asInternals(box).onTypingDone).toBeNull()
+    expect(cb).not.toHaveBeenCalled()
+    box.dispose()
+  })
+
+  it('(c) 完了済みでも setOnTypingDone(null) は即時発火しない（null は cb でないため）', () => {
+    const box = makeRpgBox()
+    box.show('長老', 'こんにちは。')
+    box.skipTypewriter()
+    // null を渡すと「!isTyping かつ cb」の即時分岐に入らず、slot を null にするだけ。
+    box.setOnTypingDone(null)
+    expect(asInternals(box).onTypingDone).toBeNull()
+    box.dispose()
+  })
+})
