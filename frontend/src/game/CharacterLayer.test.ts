@@ -7,6 +7,7 @@ import {
   alignToAnchorX,
 } from './CharacterLayer'
 import { CURSOR_DEFAULTS } from './textEffect'
+import { ASPECT_RATIOS } from './constants'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
 import { saveSlotToGameState } from './novelLayout'
 import { SaveManager, type SaveSlotData } from './SaveManager'
@@ -1477,6 +1478,57 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     const st = imageChars(layer).characters.get('avatar')!
     expect(st.label).toBeUndefined()
     expect(st.textEffect).toBeNull()
+  })
+})
+
+// =====================================================================================
+// #294: 立ち絵（show 経路 = loadTexture）は常に原寸（scale=1）。
+//   旧仕様は論理画面より大きいテクスチャを fit-down していたが、画面全体の wrapper スケール
+//   だけが唯一の正しい縮小であり、立ち絵を個別に縮めてはいけない（上端・左右のはみ出しは許容）。
+//   ASPECT_RATIOS から 16:9 = 800x450 を参照して期待値を直書きしない。
+// =====================================================================================
+describe('CharacterLayer 立ち絵は原寸表示（fit-down 廃止 #294）', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const { width: SW, height: SH } = ASPECT_RATIOS['16:9']
+
+  it('論理画面より大きい立ち絵（車のような横長）でも scale=1 のまま（個別縮小しない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW * 2, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('truck', 'wheel_loader-a', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('truck')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+
+  it('画面高さより縦長の立ち絵（人物のような縦長）でも scale=1 のまま（上端はみ出し許容）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW / 2, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('kako', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('kako')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+
+  it('論理画面に収まる小さい立ち絵も従来どおり scale=1', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(100, 100) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('mini', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('mini')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
   })
 })
 

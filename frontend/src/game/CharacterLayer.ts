@@ -1828,16 +1828,12 @@ export class CharacterLayer extends Container {
       .then((texture) => {
         // destroy 後に解決した場合は反映しない（UAF 防止）
         if (sprite.destroyed) return
-        // テクスチャが論理画面より大きければ、画面内に収まるよう自動スケール
-        // (llll-ll-media の車のように 1600x900 級の素材を 800x450 論理画面に乗せるため)
-        const sw = this.screenWidth
-        const sh = this.screenHeight
-        if (texture.width > sw || texture.height > sh) {
-          const scale = Math.min(sw / texture.width, sh / texture.height)
-          sprite.scale.set(scale)
-        } else {
-          sprite.scale.set(1)
-        }
+        // 立ち絵は常に原寸（scale=1）で表示する (#294)。
+        // 画面全体をブラウザ枠に合わせて縮める系統（PixiJS canvas の wrapper スケール）が
+        // 唯一の正しい縮小であり、立ち絵を個別に fit-down してはいけない。
+        // 論理画面の上端・左右をはみ出してもよい（縮小しない）。novel/adv で挙動を分けない。
+        // ※ [アニメ] 等の脚本駆動 scale 演出（animate()）はこれとは別物で、ここでは触らない。
+        sprite.scale.set(1)
         // ラベルを車の幅に収める。
         // - natural width が車幅を超えたら縮小、収まっていれば等倍のまま (大きくしない)
         // - label.anchor=(0.5, 1) なので label.x = sprite.x で水平方向は中央揃え
