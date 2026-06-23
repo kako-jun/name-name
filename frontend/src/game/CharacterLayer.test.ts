@@ -5,8 +5,10 @@ import {
   CharacterLayer,
   normalizePosition,
   alignToAnchorX,
+  computeFitScale,
 } from './CharacterLayer'
 import { CURSOR_DEFAULTS } from './textEffect'
+import { ASPECT_RATIOS } from './constants'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
 import { saveSlotToGameState } from './novelLayout'
 import { SaveManager, type SaveSlotData } from './SaveManager'
@@ -1477,6 +1479,148 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     const st = imageChars(layer).characters.get('avatar')!
     expect(st.label).toBeUndefined()
     expect(st.textEffect).toBeNull()
+  })
+})
+
+// =====================================================================================
+// #294: 立ち絵（show 経路 = loadTexture）は常に原寸（scale=1）。
+//   旧仕様は論理画面より大きいテクスチャを fit-down していたが、画面全体の wrapper スケール
+//   だけが唯一の正しい縮小であり、立ち絵を個別に縮めてはいけない（上端・左右のはみ出しは許容）。
+//   ASPECT_RATIOS から 16:9 = 800x450 を参照して期待値を直書きしない。
+// =====================================================================================
+describe('CharacterLayer 立ち絵は原寸表示（fit-down 廃止 #294）', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const { width: SW, height: SH } = ASPECT_RATIOS['16:9']
+
+  it('論理画面より大きい立ち絵（車のような横長）でも scale=1 のまま（個別縮小しない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW * 2, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('truck', 'wheel_loader-a', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('truck')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+
+  it('画面高さより縦長の立ち絵（人物のような縦長）でも scale=1 のまま（上端はみ出し許容）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW / 2, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('kako', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('kako')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+
+  it('論理画面に収まる小さい立ち絵も従来どおり scale=1', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(100, 100) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('mini', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('mini')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+})
+
+// =====================================================================================
+// #294: 明示フィット（show の fit オプション = 脚本の `フィット`）。
+//   fit=true のときだけ旧 fit-down を適用する（大きい時だけ収める・小さい時は原寸）。
+//   境界値は computeFitScale を参照し、定数の計算結果を直書きしない。
+// =====================================================================================
+describe('computeFitScale 純粋関数（#294 旧 fit-down ロジック）', () => {
+  const { width: SW, height: SH } = ASPECT_RATIOS['16:9']
+
+  it('横長 2x のテクスチャは min(SW/texW, SH/texH) に収める', () => {
+    // 1600x900 → SW=800,SH=450 に対して min(800/1600, 450/900)=0.5。
+    expect(computeFitScale(SW * 2, SH * 2, SW, SH)).toBe(Math.min(SW / (SW * 2), SH / (SH * 2)))
+  })
+
+  it('幅だけ画面超過なら横方向の比率で収める', () => {
+    expect(computeFitScale(SW * 2, SH, SW, SH)).toBe(SW / (SW * 2))
+  })
+
+  it('高さだけ画面超過なら縦方向の比率で収める', () => {
+    expect(computeFitScale(SW, SH * 2, SW, SH)).toBe(SH / (SH * 2))
+  })
+
+  it('画面ちょうど（境界）は原寸 1（> 判定なので等倍は縮めない）', () => {
+    expect(computeFitScale(SW, SH, SW, SH)).toBe(1)
+  })
+
+  it('画面より小さいテクスチャは原寸 1（拡大しない）', () => {
+    expect(computeFitScale(100, 100, SW, SH)).toBe(1)
+  })
+
+  it('不正・非正・非有限の寸法は原寸 1 に倒す', () => {
+    expect(computeFitScale(0, 100, SW, SH)).toBe(1)
+    expect(computeFitScale(100, 0, SW, SH)).toBe(1)
+    expect(computeFitScale(NaN, 100, SW, SH)).toBe(1)
+    expect(computeFitScale(100, 100, 0, SH)).toBe(1)
+  })
+
+  it('画面寸法が NaN・非正でも原寸 1 に倒す（screen 側ガード）', () => {
+    // texture は画面超過サイズでも、screen 側が不正なら 1（0 除算・NaN を出さない）。
+    expect(computeFitScale(SW * 2, SH * 2, NaN, SH)).toBe(1)
+    expect(computeFitScale(SW * 2, SH * 2, SW, NaN)).toBe(1)
+    expect(computeFitScale(SW * 2, SH * 2, -SW, SH)).toBe(1)
+    expect(computeFitScale(SW * 2, SH * 2, SW, -SH)).toBe(1)
+  })
+})
+
+describe('CharacterLayer 明示フィット show({ fit }) （#294）', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const { width: SW, height: SH } = ASPECT_RATIOS['16:9']
+
+  it('fit=true・論理画面より大きい立ち絵は computeFitScale で収める', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW * 2, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('truck', 'wheel_loader-a', '中央', '/assets', { instant: true, fit: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('truck')!
+    const expected = computeFitScale(SW * 2, SH * 2, SW, SH)
+    expect(st.sprite.scale.x).toBe(expected)
+    expect(st.sprite.scale.y).toBe(expected)
+  })
+
+  it('fit=true でも論理画面に収まる小さい立ち絵は原寸 1（拡大しない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(100, 100) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('mini', 'normal', '中央', '/assets', { instant: true, fit: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('mini')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+
+  it('fit 省略（既定）は大きい立ち絵でも原寸 1（ca5308a の既定挙動を壊さない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW * 2, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('truck', 'wheel_loader-a', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('truck')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
   })
 })
 

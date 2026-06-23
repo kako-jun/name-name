@@ -4718,3 +4718,157 @@ fn test_video_only_partial_fade_roundtrip() {
         doc.chapters[0].scenes[0].events[0]
     );
 }
+
+// =====================================================================================
+// #294: 立ち絵の明示フィット指定 `フィット` / `fit`。
+//   話者行オプションに `フィット` を書いたときだけ Dialog.fit=true（既定 false）。
+//   サイズ・位置では自動分岐しない。フロント側はこの fit を見て旧 fit-down を適用する。
+// =====================================================================================
+fn first_dialog_fit(doc: &Document) -> bool {
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Dialog { fit, .. } => *fit,
+        other => panic!("Expected Dialog, got {other:?}"),
+    }
+}
+
+const FIT_HEADER: &str =
+    "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: テスト\n\n";
+
+#[test]
+fn test_fit_default_false() {
+    let input = format!("{FIT_HEADER}**カコ** (suppin_1, 左):\nこんにちは。\n");
+    assert!(
+        !first_dialog_fit(&parser::parse(&input)),
+        "fit 未指定は false"
+    );
+}
+
+#[test]
+fn test_fit_japanese_token() {
+    // 表情・位置に続けて `フィット` を置く。
+    let input = format!("{FIT_HEADER}**カコ** (suppin_1, 左, フィット):\nこんにちは。\n");
+    let doc = parser::parse(&input);
+    assert!(first_dialog_fit(&doc), "フィット トークンで fit=true");
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Dialog {
+            expression,
+            position,
+            ..
+        } => {
+            // フィット を抜いても expression / position の位置取りが保たれる。
+            assert_eq!(expression, &Some("suppin_1".to_string()));
+            assert_eq!(position, &Some("左".to_string()));
+        }
+        other => panic!("Expected Dialog, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_fit_token_position_does_not_shift_expr_pos() {
+    // 契約: `フィット` / `fit` トークンは「オプションの末尾に書く」前提だが、
+    // 実装は positional 解釈の前に fit トークンを全位置から除外する。そのため
+    // 先頭・中間に書いても残る positional トークンの順序は崩れず、expression=先頭 /
+    // position=2 番目 の割り当ては保たれる。emitter は常に fit を末尾へ出すので
+    // round-trip は安全。ここでは「どこに書いても expr/pos がずれない」現挙動を固定する。
+    let cases = [
+        // (脚本のオプション部, 期待 expression, 期待 position)
+        ("フィット, suppin_1, 左", "suppin_1", "左"), // 先頭
+        ("suppin_1, フィット, 左", "suppin_1", "左"), // 中間
+        ("suppin_1, 左, フィット", "suppin_1", "左"), // 末尾（規約どおり）
+    ];
+    for (attrs, want_expr, want_pos) in cases {
+        let input = format!("{FIT_HEADER}**カコ** ({attrs}):\nこんにちは。\n");
+        let doc = parser::parse(&input);
+        assert!(first_dialog_fit(&doc), "`{attrs}` で fit=true");
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Dialog {
+                expression,
+                position,
+                ..
+            } => {
+                assert_eq!(
+                    expression,
+                    &Some(want_expr.to_string()),
+                    "`{attrs}`: expression は fit の位置に依らない"
+                );
+                assert_eq!(
+                    position,
+                    &Some(want_pos.to_string()),
+                    "`{attrs}`: position は fit の位置に依らない"
+                );
+            }
+            other => panic!("Expected Dialog, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_fit_english_alias_and_kv() {
+    // 英語エイリアス `fit`、および `fit=true` / `fit=false`。
+    let on = format!("{FIT_HEADER}**カコ** (suppin_1, fit):\nやあ。\n");
+    assert!(first_dialog_fit(&parser::parse(&on)), "fit 単独で true");
+    let kv_on = format!("{FIT_HEADER}**カコ** (suppin_1, fit=true):\nやあ。\n");
+    assert!(first_dialog_fit(&parser::parse(&kv_on)), "fit=true で true");
+    let kv_off = format!("{FIT_HEADER}**カコ** (suppin_1, fit=false):\nやあ。\n");
+    assert!(
+        !first_dialog_fit(&parser::parse(&kv_off)),
+        "fit=false で false"
+    );
+}
+
+#[test]
+fn test_fit_only_no_expression() {
+    // `フィット` だけ（表情・位置なし）。fit=true、expr/pos は None。
+    let input = format!("{FIT_HEADER}**カコ** (フィット):\nやあ。\n");
+    let doc = parser::parse(&input);
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Dialog {
+            fit,
+            expression,
+            position,
+            ..
+        } => {
+            assert!(*fit);
+            assert_eq!(expression, &None);
+            assert_eq!(position, &None);
+        }
+        other => panic!("Expected Dialog, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_fit_inherited_by_continuation() {
+    // 話者行の fit は、空行を挟まない継続行 Dialog にも引き継がれる。
+    let input = format!("{FIT_HEADER}**カコ** (suppin_1, 左, フィット):\n一行目。\n\n二行目。\n");
+    let doc = parser::parse(&input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2, "話者行 Dialog + 継続行 Dialog");
+    for (i, e) in events.iter().enumerate() {
+        match e {
+            Event::Dialog { fit, .. } => assert!(*fit, "events[{i}] は fit=true を継承する"),
+            other => panic!("Expected Dialog, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_fit_roundtrip() {
+    // フィット あり / なし の両方を含む脚本が round-trip で構造的に等しい。
+    let input = format!(
+        "{FIT_HEADER}**カコ** (suppin_1, 左, フィット):\n大きい立ち絵。\n\n\
+         **トモ** (laugh_1, 右):\n普通の立ち絵。\n\n\
+         **カコ** (フィット):\n表情なしフィット。\n"
+    );
+    let doc = parser::parse(&input);
+    let emitted = emitter::emit(&doc);
+    // emit に フィット トークンが現れる。
+    assert!(
+        emitted.contains("フィット"),
+        "emit に フィット が出る:\n{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc, doc2,
+        "fit を含む round-trip が構造的に等しい\n{emitted}"
+    );
+}

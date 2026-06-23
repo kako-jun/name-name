@@ -109,6 +109,43 @@ export function normalizePosition(position: string): string {
 }
 
 /**
+ * 明示フィット指定 (#294) の立ち絵スケールを計算する純粋関数。
+ *
+ * 脚本の話者行に `フィット` / `fit` を書いた立ち絵だけに適用する旧 fit-down ロジック:
+ * テクスチャが論理画面 (`screenW`×`screenH`) より大きいときだけ、画面内に収まるよう
+ * `min(screenW/texW, screenH/texH)` で縮小する。論理画面に収まる小さい立ち絵は原寸 (1)。
+ *
+ * これは ca5308a で撤去した自動縮小と同一の式で、fit=true のときだけ復活させる。
+ * fit=false（既定）の立ち絵は常に原寸 (1) で表示する（この関数を呼ばない）。
+ *
+ * 不正・非有限・非正のテクスチャ寸法は原寸 (1) に倒す（0 除算・NaN ガード）。
+ */
+export function computeFitScale(
+  texW: number,
+  texH: number,
+  screenW: number,
+  screenH: number
+): number {
+  if (
+    !Number.isFinite(texW) ||
+    !Number.isFinite(texH) ||
+    texW <= 0 ||
+    texH <= 0 ||
+    !Number.isFinite(screenW) ||
+    !Number.isFinite(screenH) ||
+    screenW <= 0 ||
+    screenH <= 0
+  ) {
+    return 1
+  }
+  // 大きい時だけ収める。小さい・等倍は原寸のまま（拡大しない）。
+  if (texW > screenW || texH > screenH) {
+    return Math.min(screenW / texW, screenH / texH)
+  }
+  return 1
+}
+
+/**
  * ラベルの `揃え` / `align`（正規化済み left/center/right）を Pixi の anchor.x に写す (#275)。
  *
  * 左=0 / 中央=0.5 / 右=1。parser が日本語/英語を `left`/`center`/`right` に正規化済みなので
@@ -166,6 +203,10 @@ interface CharacterState {
   idleIntervalId?: number
   /** show() 時の assetBaseUrl。アニメ開始時に idle cycle を仕掛けるとき再利用する */
   assetBaseUrl: string
+  /** 明示フィット指定 (#294)。脚本の話者行に `フィット` を書いた立ち絵だけ true。
+   *  true のとき loadTexture で旧 fit-down（大きい時だけ画面内に収める）を適用する。
+   *  既定 false は原寸 (scale=1)。表情変更・2コマ切替で texture を再ロードしても維持する。 */
+  fit: boolean
   /** 演出表示（タイトル / ラベル / 画像）か (#274)。true なら getCharacterStates が除外し、
    *  `NovelGameState.characters` に漏れない（doctrine 規律3: 立ち絵 show だけが復元対象）。
    *  Title / Label / Image はセーブ/シーク/任意局面起動で再 emit されない（spec L520, ADR0002）。 */
@@ -384,8 +425,10 @@ export class CharacterLayer extends Container {
     expression: string,
     position: string,
     assetBaseUrl: string,
-    options?: { instant?: boolean; xRatio?: number }
+    options?: { instant?: boolean; xRatio?: number; fit?: boolean }
   ): void {
+    // 明示フィット (#294)。脚本の話者行 `フィット` 由来。既定 false（原寸）。
+    const fit = options?.fit === true
     const normalizedPosition = normalizePosition(position)
     const instant = options?.instant === true
     // novel 役割配置 (#286): xRatio override があれば positionX テーブルでなく
@@ -420,10 +463,13 @@ export class CharacterLayer extends Container {
       const overrideXChanged =
         hasXOverride && Math.abs(existing.sprite.x - (overrideX as number)) >= 0.5
 
-      // 表情が同じで位置も同じなら何もしない（フェード状態は上で解消済み）。
+      // 表情が同じで位置も同じ、フィット指定も同じなら何もしない（フェード状態は上で解消済み）。
+      // フィット (#294) が変化したら texture を再ロードして scale を取り直す必要があるので、
+      // 早期 return の条件に fit 一致も含める。
       if (
         existing.expression === expression &&
         existing.position === normalizedPosition &&
+        existing.fit === fit &&
         !overrideXChanged
       )
         return
@@ -443,9 +489,12 @@ export class CharacterLayer extends Container {
         existing.position = normalizedPosition
       }
 
-      // 表情変更
-      if (existing.expression !== expression) {
-        this.loadTexture(existing.sprite, expression, assetBaseUrl)
+      // 表情変更・またはフィット指定変更 (#294) のとき texture を再ロードする。
+      // どちらの場合も loadTexture が最新の fit に基づいて scale を取り直す
+      // （表情据え置きでフィットだけ変わったケースも再ロードで反映する）。
+      if (existing.expression !== expression || existing.fit !== fit) {
+        existing.fit = fit
+        this.loadTexture(existing.sprite, expression, assetBaseUrl, existing.label, fit)
         existing.expression = expression
       }
       return
@@ -490,6 +539,7 @@ export class CharacterLayer extends Container {
       position: normalizedPosition,
       expression,
       assetBaseUrl,
+      fit,
       animation: null,
       poseNudge: null,
       fadeAnimation: instant
@@ -506,7 +556,7 @@ export class CharacterLayer extends Container {
     }
     this.characters.set(character, state)
     if (state.fadeAnimation) this.ensureTicker()
-    this.loadTexture(sprite, expression, assetBaseUrl, label)
+    this.loadTexture(sprite, expression, assetBaseUrl, label, fit)
   }
 
   /**
@@ -530,7 +580,8 @@ export class CharacterLayer extends Container {
       frame = frame === 'a' ? 'b' : 'a'
       const nextExpression = `${basename}-${frame}`
       cur.expression = nextExpression
-      this.loadTexture(cur.sprite, nextExpression, assetBaseUrl, cur.label)
+      // 2コマ自動切替でも fit (#294) を維持する。
+      this.loadTexture(cur.sprite, nextExpression, assetBaseUrl, cur.label, cur.fit)
     }, 1000)
     state.idleIntervalId = intervalId
   }
@@ -546,7 +597,8 @@ export class CharacterLayer extends Container {
       const aExpression = `${match[1]}-a`
       if (state.expression !== aExpression) {
         state.expression = aExpression
-        this.loadTexture(state.sprite, aExpression, assetBaseUrl, state.label)
+        // idle cycle 停止で -a に戻すときも fit (#294) を維持する。
+        this.loadTexture(state.sprite, aExpression, assetBaseUrl, state.label, state.fit)
       }
     }
   }
@@ -657,6 +709,8 @@ export class CharacterLayer extends Container {
       position: normalizedPosition,
       expression: '',
       assetBaseUrl: '',
+      // render-only（タイトル）はフィット対象外。常に原寸 (#294)。
+      fit: false,
       animation: null,
       poseNudge: null,
       fadeAnimation: null,
@@ -782,6 +836,8 @@ export class CharacterLayer extends Container {
       position: opts.position ?? '',
       expression: '',
       assetBaseUrl: '',
+      // render-only（ラベル/タイトル）はフィット対象外。常に原寸 (#294)。
+      fit: false,
       animation: null,
       poseNudge: null,
       fadeAnimation: instant
@@ -860,6 +916,8 @@ export class CharacterLayer extends Container {
       position: opts.position ?? '',
       expression: '',
       assetBaseUrl: opts.assetBaseUrl,
+      // render-only（単独画像 #274）はフィット対象外。表示は showImage 専用の sizing に従う。
+      fit: false,
       animation: null,
       poseNudge: null,
       fadeAnimation: instant
@@ -925,7 +983,8 @@ export class CharacterLayer extends Container {
     if (!state) return
     if (state.expression === expression) return
     state.expression = expression
-    this.loadTexture(state.sprite, expression, assetBaseUrl)
+    // 表情のみ差し替えでも fit (#294) を維持する。
+    this.loadTexture(state.sprite, expression, assetBaseUrl, state.label, state.fit)
   }
 
   /**
@@ -1817,7 +1876,8 @@ export class CharacterLayer extends Container {
     sprite: Sprite,
     expression: string,
     assetBaseUrl: string,
-    label?: Text
+    label?: Text,
+    fit = false
   ): void {
     if (!assetBaseUrl) return
 
@@ -1828,16 +1888,18 @@ export class CharacterLayer extends Container {
       .then((texture) => {
         // destroy 後に解決した場合は反映しない（UAF 防止）
         if (sprite.destroyed) return
-        // テクスチャが論理画面より大きければ、画面内に収まるよう自動スケール
-        // (llll-ll-media の車のように 1600x900 級の素材を 800x450 論理画面に乗せるため)
-        const sw = this.screenWidth
-        const sh = this.screenHeight
-        if (texture.width > sw || texture.height > sh) {
-          const scale = Math.min(sw / texture.width, sh / texture.height)
-          sprite.scale.set(scale)
-        } else {
-          sprite.scale.set(1)
-        }
+        // 立ち絵は既定で原寸（scale=1）。画面全体をブラウザ枠に合わせて縮める系統
+        // （PixiJS canvas の wrapper スケール）が唯一の常時縮小であり、立ち絵を個別に
+        // 自動 fit-down してはいけない。論理画面の上端・左右をはみ出してもよい。
+        // ※ [アニメ] 等の脚本駆動 scale 演出（animate()）はこれとは別物で、ここでは触らない。
+        //
+        // 例外: 脚本の話者行に `フィット` / `fit` を書いた立ち絵だけ (#294)、旧 fit-down を
+        // 明示適用する（論理画面より大きいときだけ画面内に収める・小さい時は原寸）。
+        // サイズや位置では自動分岐しない。novel/adv でも分けない（fit フラグだけが分岐の根拠）。
+        const scale = fit
+          ? computeFitScale(texture.width, texture.height, this.screenWidth, this.screenHeight)
+          : 1
+        sprite.scale.set(scale)
         // ラベルを車の幅に収める。
         // - natural width が車幅を超えたら縮小、収まっていれば等倍のまま (大きくしない)
         // - label.anchor=(0.5, 1) なので label.x = sprite.x で水平方向は中央揃え

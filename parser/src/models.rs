@@ -289,6 +289,12 @@ pub enum Event {
         /// 未指定の場合は Document.font_family（per-game 既定）→ runtime 既定の順でフォールバック。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         font_family: Option<String>,
+        /// 立ち絵の明示フィット指定 (#294)。話者行のオプションに `フィット` / `fit` を書くと true。
+        /// `true` のときだけ「論理画面より大きい立ち絵を画面内に収める」旧 fit-down を適用する
+        /// （大きい時だけ縮小・小さい時は原寸）。既定（`false`）は原寸（scale=1）で表示する。
+        /// サイズや位置で自動分岐はしない（明示指定だけが縮小のトリガ）。novel/adv で分けない。
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        fit: bool,
     },
     Narration {
         text: Vec<String>,
