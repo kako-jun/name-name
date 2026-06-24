@@ -8,6 +8,7 @@ import {
   computeFitScale,
 } from './CharacterLayer'
 import { CURSOR_DEFAULTS } from './textEffect'
+import { NovelRenderer } from './NovelRenderer'
 import { ASPECT_RATIOS } from './constants'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
 import { saveSlotToGameState } from './novelLayout'
@@ -1877,5 +1878,220 @@ describe('CharacterLayer 1 位置 1 キャラ衝突退場 (#303)', () => {
     const names = layer.getCharacterStates().map((s) => s.name)
     expect(names).not.toContain('ヴィンチア')
     expect(names).toContain('カンティア')
+  })
+})
+
+// =====================================================================================
+// #308: 立ち絵の足元 Y 比率 per-game 上書き（setCharacterYRatio）。
+//   既定 1.0（後方互換）。CharacterLayer が null/NaN/±Inf→1.0、範囲外→[0,2] クランプを一元所有する。
+//   観測は characters Map 直読み（sprite.y）/ private characterY / getPoseNudgeState。
+//   期待値は必ず `H * ratio` 式で書く（数値直書き禁止＝#262 の陳腐化前科）。
+//   境界は端点±ε の 3 点を必ず縛る（`>=`/`>` 取り違え狙い）。
+// =====================================================================================
+describe('CharacterLayer character_y_ratio (#308)', () => {
+  // setCharacterYRatio で再ベースされる sprite.y と、再ベース除外条件（animation / poseNudge）を
+  // 観測するため、既存 asInternals より広い形で characters と private characterY を読む。
+  interface YRatioStateLike {
+    sprite: { x: number; y: number }
+    animation: unknown
+    poseNudge: unknown
+  }
+  interface YRatioInternals {
+    characters: Map<string, YRatioStateLike>
+    characterY: number
+  }
+  function yInternals(layer: CharacterLayer): YRatioInternals {
+    return layer as unknown as YRatioInternals
+  }
+
+  // ---- F1: 既定（setter を呼ばない）は後方互換で H * CHARACTER_Y_RATIO ----
+  it('F1: setter を呼ばない既定の show は sprite.y = H * CHARACTER_Y_RATIO（後方互換）', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    const st = yInternals(layer).characters.get('hero')!
+    expect(st.sprite.y).toBeCloseTo(H * CHARACTER_Y_RATIO, 5)
+  })
+
+  // ---- F2-F6: 非有効値（null / undefined / 非有限）は既定 1.0 に倒す ----
+  it('F2: null → 既定 1.0（characterY = H * CHARACTER_Y_RATIO）', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(null)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * CHARACTER_Y_RATIO, 5)
+  })
+
+  it('F3: undefined → 既定 1.0', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(undefined)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * CHARACTER_Y_RATIO, 5)
+  })
+
+  it('F4: NaN → 既定 1.0（非有限を neutralize）', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(Number.NaN)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * CHARACTER_Y_RATIO, 5)
+  })
+
+  it('F5: +Infinity → 既定 1.0（非有限を neutralize）', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(Number.POSITIVE_INFINITY)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * CHARACTER_Y_RATIO, 5)
+  })
+
+  it('F6: −Infinity → 既定 1.0（非有限を neutralize）', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(Number.NEGATIVE_INFINITY)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * CHARACTER_Y_RATIO, 5)
+  })
+
+  // ---- F7: 下端境界 3 点（端点±ε）。クランプ下限 0 の `>=`/`>` 取り違え狙い ----
+  it.each([
+    [-0.0001, 0], // 下限未満 → 0 にクランプ
+    [0, 0], // 下限ちょうど → 透過（0）
+    [0.0001, 0.0001], // 下限直上 → 透過
+  ] as const)('F7: 下端境界 ratio=%f は characterY = H * %f', (input, effective) => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(input)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * effective, 5)
+  })
+
+  // ---- F8: 上端境界 3 点（端点±ε）。クランプ上限 2 の `<=`/`<` 取り違え狙い ----
+  it.each([
+    [1.9999, 1.9999], // 上限直下 → 透過
+    [2, 2], // 上限ちょうど → 透過
+    [2.0001, 2], // 上限超過 → 2 にクランプ
+  ] as const)('F8: 上端境界 ratio=%f は characterY = H * %f', (input, effective) => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(input)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * effective, 5)
+  })
+
+  // ---- F9: 既定値 1.0 は透過（クランプもされない） ----
+  it('F9: ratio=1.0 は透過で characterY = H * 1.0', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(1.0)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * 1.0, 5)
+  })
+
+  // ---- F10: 中間値はそのまま透過 ----
+  it.each([[0.5], [1.05]] as const)(
+    'F10: 中間値 ratio=%f は透過で characterY = H * %f',
+    (ratio) => {
+      const H = 450
+      const layer = new CharacterLayer(800, H)
+      layer.setCharacterYRatio(ratio)
+      expect(yInternals(layer).characterY).toBeCloseTo(H * ratio, 5)
+    }
+  )
+
+  // ---- F11: 暴走値は上限 2 にクランプ（遥か下へ飛ばさない） ----
+  it('F11: 暴走値 ratio=1000 は上限 2 にクランプ（characterY = H * 2）', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(1000)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * 2, 5)
+  })
+
+  // ---- F12: 設定後の新規 show が新しい足元 Y で出る ----
+  it('F12: setCharacterYRatio(0.5) 後の新規 show は sprite.y = H * 0.5', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.setCharacterYRatio(0.5)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    const st = yInternals(layer).characters.get('hero')!
+    expect(st.sprite.y).toBeCloseTo(H * 0.5, 5)
+  })
+
+  // ---- F13: 静的表示中の立ち絵を後から再ベースする ----
+  it('F13: 静的表示中に setCharacterYRatio(0.5) すると既存 sprite.y が H * 0.5 へ再ベースされる', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    // 設定前は既定 H * 1.0。
+    expect(yInternals(layer).characters.get('hero')!.sprite.y).toBeCloseTo(H * CHARACTER_Y_RATIO, 5)
+    layer.setCharacterYRatio(0.5)
+    expect(yInternals(layer).characters.get('hero')!.sprite.y).toBeCloseTo(H * 0.5, 5)
+  })
+
+  // ---- F14: 位置アニメ中の sprite は再ベースしない（中間状態を焼き込まない） ----
+  it('F14: 位置アニメ中（animation 非 null）の sprite は setCharacterYRatio で再ベースされない', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    // 非ゼロ duration の animate で animation を進行中にする（dy で y を動かす）。
+    layer.animate('hero', { dy: '-100', duration_ms: 500 })
+    const st = yInternals(layer).characters.get('hero')!
+    expect(st.animation).not.toBeNull()
+    const yBefore = st.sprite.y
+    layer.setCharacterYRatio(0.5)
+    // アニメ中は再ベース対象外。sprite.y は触られず H * 0.5 にならない。
+    expect(st.sprite.y).toBe(yBefore)
+    expect(st.sprite.y).not.toBeCloseTo(H * 0.5, 5)
+  })
+
+  // ---- F15: nudge 中の sprite は再ベースせず baseY も不変 ----
+  it('F15: pose nudge 中（poseNudge 非 null）は再ベースされず baseY も不変', () => {
+    const H = 450
+    const layer = new CharacterLayer(800, H)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.nudgePose('hero')
+    const nudgeBefore = layer.getPoseNudgeState('hero')
+    expect(nudgeBefore).not.toBeNull()
+    const baseYBefore = nudgeBefore!.baseY
+    const st = yInternals(layer).characters.get('hero')!
+    expect(st.poseNudge).not.toBeNull()
+    const yBefore = st.sprite.y
+    layer.setCharacterYRatio(0.5)
+    // nudge 中は再ベース対象外。sprite.y も baseY も動かない。
+    expect(st.sprite.y).toBe(yBefore)
+    expect(layer.getPoseNudgeState('hero')!.baseY).toBe(baseYBefore)
+  })
+
+  // ---- F16: 縦横で同 ratio でも px が変わる（H に比例） ----
+  it.each([
+    [800, 450], // 16:9
+    [450, 800], // 9:16
+  ] as const)('F16: (W=%i, H=%i) で ratio=1.0 の sprite.y は H に一致する', (W, H) => {
+    const layer = new CharacterLayer(W, H)
+    layer.setCharacterYRatio(1.0)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    const st = yInternals(layer).characters.get('hero')!
+    expect(st.sprite.y).toBeCloseTo(H * 1.0, 5)
+  })
+
+  // ---- F17: NovelRenderer は値を持たず CharacterLayer へ素通しする ----
+  it('F17: NovelRenderer.setCharacterYRatio(0.5) は内部 characterLayer の characterY を H * 0.5 にする', () => {
+    const renderer = new NovelRenderer()
+    const layer = (renderer as unknown as { characterLayer: CharacterLayer }).characterLayer
+    const H = (renderer as unknown as { screenHeight: number }).screenHeight
+    renderer.setCharacterYRatio(0.5)
+    expect(yInternals(layer).characterY).toBeCloseTo(H * 0.5, 5)
+  })
+
+  // ---- F18: dialog_style 非依存（novel と adv で同 ratio・同 position の足元が一致） ----
+  //   dialog_style は NovelRenderer 側の関心事なので、両モードの renderer を立てて内部 layer の
+  //   characterY が同 ratio で一致することを縛る（足元 Y は dialog_style に分岐しない）。
+  it('F18: novel と adv で同 ratio の characterY が一致する（dialog_style 非依存）', () => {
+    const novel = new NovelRenderer()
+    novel.setDialogStyle('novel')
+    novel.setCharacterYRatio(0.5)
+    const adv = new NovelRenderer()
+    adv.setDialogStyle('adv')
+    adv.setCharacterYRatio(0.5)
+    const novelLayer = (novel as unknown as { characterLayer: CharacterLayer }).characterLayer
+    const advLayer = (adv as unknown as { characterLayer: CharacterLayer }).characterLayer
+    const H = (novel as unknown as { screenHeight: number }).screenHeight
+    const yNovel = yInternals(novelLayer).characterY
+    const yAdv = yInternals(advLayer).characterY
+    expect(yNovel).toBeCloseTo(H * 0.5, 5)
+    expect(yNovel).toBe(yAdv)
   })
 })

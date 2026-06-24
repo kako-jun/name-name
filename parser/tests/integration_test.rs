@@ -3870,6 +3870,250 @@ title: "テスト"
 }
 
 #[test]
+fn test_document_character_y_ratio_parses_from_frontmatter() {
+    // frontmatter `character_y_ratio:` が Some(f64) で parse されること (#308)。
+    // 値は parser では生のまま透過し、範囲クランプは runtime（CharacterLayer）で行う。
+
+    // R-1: 正常な数値は Some(1.05)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_y_ratio: 1.05
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.character_y_ratio,
+        Some(1.05),
+        "frontmatter の character_y_ratio が数値で parse されること"
+    );
+
+    // R-2: 未指定なら None（runtime 既定 1.0 にフォールバック）。
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert_eq!(doc_none.character_y_ratio, None);
+
+    // R-3: 空文字（`character_y_ratio:`）なら None（font_size と同じ規約）。
+    let input_empty = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_y_ratio:
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_empty = parser::parse(input_empty);
+    assert_eq!(doc_empty.character_y_ratio, None);
+
+    // R-4: 空引用（`character_y_ratio: ""`）でも None（unquote 後に空で parse 失敗）。
+    let input_empty_quote = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_y_ratio: ""
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_empty_quote = parser::parse(input_empty_quote);
+    assert_eq!(
+        doc_empty_quote.character_y_ratio, None,
+        "character_y_ratio: \"\" は unquote 後に空文字となり parse 失敗で None になること"
+    );
+
+    // R-5: 非数値（`character_y_ratio: tall`）なら None（parse 失敗を握りつぶす）。
+    let input_bad = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_y_ratio: tall
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_bad = parser::parse(input_bad);
+    assert_eq!(doc_bad.character_y_ratio, None);
+}
+
+#[test]
+fn test_character_y_ratio_round_trip_with_other_frontmatter() {
+    // R-6: parse → emit → parse で character_y_ratio が保持され、他フィールドと共存すること (#308)。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+font_family: "Hina Mincho, serif"
+font_size: 26
+dialog_style: "novel"
+character_y_ratio: 1.05
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_y_ratio, Some(1.05));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("character_y_ratio: 1.05"),
+        "emit 出力に character_y_ratio が含まれること（quote なしの数値）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.character_y_ratio,
+        Some(1.05),
+        "round-trip で character_y_ratio が保持される"
+    );
+    // 共存フィールドも壊れていないこと。
+    assert_eq!(doc2.aspect_ratio, "9:16");
+    assert_eq!(doc2.font_family.as_deref(), Some("Hina Mincho, serif"));
+    assert_eq!(doc2.font_size, Some(26));
+    assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+}
+
+#[test]
+fn test_character_y_ratio_integer_round_trips_as_float() {
+    // R-7: 整数値 `1` は Some(1.0) で parse され、emit → 再 parse でも Some(1.0) を保つこと (#308)。
+    //   Rust の f64 Display は 1.0 → "1" なので emit 行は `character_y_ratio: 1` になり、
+    //   再 parse で "1".parse::<f64>() = Some(1.0) に戻る（整数表記でも比率は f64 として一貫する）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_y_ratio: 1
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_y_ratio, Some(1.0));
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.character_y_ratio,
+        Some(1.0),
+        "整数 1 は round-trip で Some(1.0) を保つ"
+    );
+}
+
+#[test]
+fn test_character_y_ratio_none_omits_emit_line() {
+    // R-8: character_y_ratio が None なら emit に `character_y_ratio:` 行が出ないこと (#308)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_y_ratio, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("character_y_ratio:"),
+        "character_y_ratio が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_character_y_ratio_passes_through_special_values_without_clamping() {
+    // R-9: 責務分界 (#308)。parser は範囲クランプ・非有限の neutralize を一切しない。
+    //   `nan` → Some(NaN)（is_nan）/ `inf` → Some(inf)（is_infinite）/ `-0.5` → Some(-0.5)。
+    //   安全側フォールバック（NaN/Inf → 1.0、範囲外 → [0,2] クランプ）は runtime（CharacterLayer）の
+    //   責務。parser がここで丸めると一元所有が崩れるため、生の数値を透過する設計を固定する。
+
+    // nan → Some(NaN)。
+    let input_nan = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_y_ratio: nan
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_nan = parser::parse(input_nan);
+    let v_nan = doc_nan
+        .character_y_ratio
+        .expect("nan は Some(NaN) で parse される（parser はクランプしない）");
+    assert!(v_nan.is_nan(), "character_y_ratio: nan は NaN を透過する");
+
+    // inf → Some(inf)。
+    let input_inf = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_y_ratio: inf
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_inf = parser::parse(input_inf);
+    let v_inf = doc_inf
+        .character_y_ratio
+        .expect("inf は Some(inf) で parse される（parser はクランプしない）");
+    assert!(
+        v_inf.is_infinite(),
+        "character_y_ratio: inf は Infinity を透過する"
+    );
+
+    // -0.5 → Some(-0.5)（範囲外でも parser は透過する）。
+    let input_neg = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_y_ratio: -0.5
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_neg = parser::parse(input_neg);
+    assert_eq!(
+        doc_neg.character_y_ratio,
+        Some(-0.5),
+        "character_y_ratio: -0.5 は範囲外でも parser がクランプせず透過する"
+    );
+}
+
+#[test]
 fn test_ruby_markup_passthrough_in_dialog_text() {
     // ルビ記法 (#148) は parser/Rust 側ではスキーマを拡張せず、
     // Dialog/Narration の text フィールドに生 markdown のまま透過する設計。
