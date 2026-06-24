@@ -153,6 +153,11 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     dialog_style: nullIfEmpty(doc.dialog_style),
     // 質問役（主人公）の話者名 (#286)。choice_style と同じく空文字は null に倒す。
     protagonist: nullIfEmpty(doc.protagonist),
+    // 立ち絵足元 Y 比率 (#308)。数値なので ?? null（未指定は runtime 既定 1.0）。
+    character_y_ratio: doc.character_y_ratio ?? null,
+    // スキップ/デバッグの per-game 出し分け (#310)。boolean なので ?? null（未指定は下流で既定: skip=true / debug=false）。
+    skip_enabled: doc.skip_enabled ?? null,
+    debug_enabled: doc.debug_enabled ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,
