@@ -356,6 +356,8 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               dialogStyle={doc?.dialog_style ?? null}
               protagonist={doc?.protagonist ?? null}
               characterYRatio={doc?.character_y_ratio ?? null}
+              skipEnabled={doc?.skip_enabled ?? null}
+              debugEnabled={doc?.debug_enabled ?? null}
               docKey={projectName}
               initialSkipMode={startWithSkip}
             />
