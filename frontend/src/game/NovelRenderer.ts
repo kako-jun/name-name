@@ -892,6 +892,19 @@ export class NovelRenderer {
   }
 
   /**
+   * 立ち絵の足元 Y 比率を設定する (#308)。
+   * frontmatter `character_y_ratio:` の値を渡す。null/undefined のときは既定 1.0（後方互換）。
+   *
+   * 値の所有権は CharacterLayer 側にあるため renderer はフィールドを持たず素通しする
+   * （font_size と違い renderer 側の再計算に値が要らないため）。不正値クランプは
+   * CharacterLayer.setCharacterYRatio が担う。1.0 = 足が画面下端 / >1.0 で靴が画面外に切れる。
+   * dialog_style: novel/adv 非依存（両モードで同じ足元）。
+   */
+  setCharacterYRatio(ratio: number | null | undefined): void {
+    this.characterLayer.setCharacterYRatio(ratio ?? null)
+  }
+
+  /**
    * 主人公セリフの本文色を設定する (#305)。CSS hex を渡す。null/undefined/空文字・不正値の
    * ときは既定の暖アイボリー #FFF6E6 に倒す（parseColorToNumber の fallback）。
    *

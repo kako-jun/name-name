@@ -39,6 +39,9 @@ interface NovelPlayerProps {
   /** 質問役（主人公）の話者名 (#286)。`dialog_style: novel` の左右配置に使う。
    *  frontmatter `protagonist:` から流す。null/undefined で従来配置（後方互換） */
   protagonist?: string | null
+  /** 立ち絵の足元 Y 比率 (#308)。frontmatter `character_y_ratio:` から流す。
+   *  null/undefined で runtime 既定 1.0（足が画面下端）。>1.0 で靴が画面外に切れる（ToHeart 式） */
+  characterYRatio?: number | null
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
   docKey?: string
   /**
@@ -63,6 +66,7 @@ function NovelPlayer({
   fontSize,
   dialogStyle,
   protagonist,
+  characterYRatio,
   docKey,
   initialSkipMode = false,
   onRendererReady,
@@ -130,6 +134,9 @@ function NovelPlayer({
       // 質問役（主人公）の話者名 (#286)。setEvents/setScenes より前に設定し、初回の
       // novel 立ち絵配置（質問役=左 / 回答役=右）が正しい役割で決まるようにする。
       renderer.setProtagonist(protagonist ?? null)
+      // 立ち絵の足元 Y 比率 (#308)。setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、
+      // 初回描画から per-game の足元位置（全身 / 靴を切る）で立つようにする。
+      renderer.setCharacterYRatio(characterYRatio ?? null)
       // 主人公セリフの本文色 (#305) は renderer 既定 #FFF6E6 のまま使う。frontmatter での
       // 色上書きは未実装のため、ここでは設定しない（renderer フィールド初期値が効く）。
       // init 完了直後に現在の settings を反映 (#138)
@@ -215,6 +222,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setProtagonist(protagonist ?? null)
   }, [protagonist])
+
+  // characterYRatio が変化したときに renderer に反映 (#308)
+  useEffect(() => {
+    rendererRef.current?.setCharacterYRatio(characterYRatio ?? null)
+  }, [characterYRatio])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {
