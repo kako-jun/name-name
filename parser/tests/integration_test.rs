@@ -3694,6 +3694,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         font_size: None,
         dialog_style: None,
         protagonist: None,
+        character_y_ratio: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),

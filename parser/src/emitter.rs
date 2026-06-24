@@ -42,6 +42,10 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = name.replace('"', "");
             out.push_str(&format!("protagonist: \"{sanitized}\"\n"));
         }
+        // Emit character_y_ratio only when present (#308)。数値なので quote 不要（font_size と同じ）。
+        if let Some(ratio) = doc.character_y_ratio {
+            out.push_str(&format!("character_y_ratio: {ratio}\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1128,6 +1132,7 @@ mod tests {
             font_size: None,
             dialog_style: None,
             protagonist: None,
+            character_y_ratio: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1241,6 +1246,7 @@ mod tests {
             font_size: None,
             dialog_style: None,
             protagonist: None,
+            character_y_ratio: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

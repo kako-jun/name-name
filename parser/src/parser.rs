@@ -19,6 +19,7 @@ pub fn parse(input: &str) -> Document {
     let mut font_size: Option<u32> = None;
     let mut dialog_style: Option<String> = None;
     let mut protagonist: Option<String> = None;
+    let mut character_y_ratio: Option<f64> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -73,6 +74,11 @@ pub fn parse(input: &str) -> Document {
                 if !v.is_empty() {
                     protagonist = Some(v);
                 }
+            } else if let Some(val) = line.strip_prefix("character_y_ratio:") {
+                // 立ち絵の足元アンカー Y 比率 (#308)。数値のみ受ける（font_size と同じ流儀だが比率なので f64）。
+                // 空・非数値は None のまま（runtime 既定 1.0 にフォールバック）。
+                // 範囲クランプは runtime 側（CharacterLayer）で行う（parser は生の数値を透過）。
+                character_y_ratio = unquote(val.trim()).parse::<f64>().ok();
             }
             pos += 1;
         }
@@ -804,6 +810,7 @@ pub fn parse(input: &str) -> Document {
         font_size,
         dialog_style,
         protagonist,
+        character_y_ratio,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,
