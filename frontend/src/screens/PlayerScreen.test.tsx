@@ -100,6 +100,16 @@ function lastJumpSceneIndex(): EventScene[] {
   return (lastCall[0] as { jumpSceneIndex: EventScene[] }).jumpSceneIndex
 }
 
+/**
+ * 最後に NovelPlayer へ渡された props 全体を取り出す（#310: skipEnabled / debugEnabled の転送確認用）。
+ */
+function lastNovelPlayerProps(): Record<string, unknown> {
+  const calls = novelPlayerProps.mock.calls
+  const lastCall = calls[calls.length - 1]
+  expect(lastCall).toBeDefined()
+  return lastCall[0] as Record<string, unknown>
+}
+
 beforeEach(() => {
   listProjectsMock.mockReset()
   listScriptsMock.mockReset()
@@ -707,5 +717,64 @@ describe('PlayerScreen', () => {
     const backButton = await screen.findByLabelText('プロジェクト一覧に戻る')
     backButton.click()
     expect(onBack).toHaveBeenCalledTimes(1)
+  })
+
+  // --- #310: skip_enabled / debug_enabled を NovelPlayer に転送する ---
+
+  /** skip_enabled / debug_enabled を持つ最小ドキュメントで NovelPlayer 再生に入らせる共通セットアップ。 */
+  async function renderWithFrontmatter(frontmatter: {
+    skip_enabled?: boolean | null
+    debug_enabled?: boolean | null
+  }) {
+    listProjectsMock.mockResolvedValue([
+      { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
+    ])
+    getContentsMock.mockResolvedValue({
+      path: 'script.md',
+      sha: 'sha1',
+      content: '# chapter',
+    })
+    parseMarkdownMock.mockResolvedValue({
+      engine: 'name-name',
+      // PlayerScreen は entry doc をそのまま doc state に置く（#284）。frontmatter フィールドが
+      // doc に乗り、doc?.skip_enabled / doc?.debug_enabled として NovelPlayer に転送される。
+      ...frontmatter,
+      chapters: [
+        {
+          id: 'c1',
+          title: 'chapter',
+          default_bgm: null,
+          scenes: [{ id: 's1', title: 'scene', events: [] }],
+        },
+      ],
+    })
+
+    render(
+      <PlayerScreen
+        projectName="friday-1930"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+  }
+
+  it('#310: doc.skip_enabled / debug_enabled を NovelPlayer に転送する（true/false）', async () => {
+    await renderWithFrontmatter({ skip_enabled: false, debug_enabled: true })
+    const props = lastNovelPlayerProps()
+    expect(props.skipEnabled).toBe(false)
+    expect(props.debugEnabled).toBe(true)
+  })
+
+  it('#310: doc に skip_enabled / debug_enabled が無ければ null を転送する（?? null）', async () => {
+    // frontmatter にキーが無い = undefined → PlayerScreen は `?? null` で null に正規化する。
+    await renderWithFrontmatter({})
+    const props = lastNovelPlayerProps()
+    expect(props.skipEnabled).toBeNull()
+    expect(props.debugEnabled).toBeNull()
   })
 })

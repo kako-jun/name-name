@@ -4115,6 +4115,288 @@ character_y_ratio: -0.5
     );
 }
 
+// --- #310: skip_enabled / debug_enabled (再生 UI ボタンの per-game 出し分け) ---
+//
+// frontmatter `skip_enabled:` / `debug_enabled:` を Option<bool> で透過する。
+// `parse_bool_kv` 再利用で `true`/`false`（大文字小文字無視）のみ受理し、空・不正値・
+// coerce 系（yes/1/on）は None（runtime 既定: skip=true / debug=false にフォールバック）。
+// parser は private な parse_bool_kv を直接公開しないため、parse() 経由で doc フィールドを縛る。
+
+/// `skip_enabled: <value>` だけを frontmatter に持つ最小ドキュメントを組み立てる。
+fn skip_enabled_doc(value: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nskip_enabled:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n"
+    )
+}
+
+#[test]
+fn test_document_skip_enabled_parses_true_false() {
+    // DT3-1: `true` → Some(true) / `false` → Some(false)（厳格な真偽の素直な往復）。
+    let doc_true = parser::parse(&skip_enabled_doc(" true"));
+    assert_eq!(
+        doc_true.skip_enabled,
+        Some(true),
+        "skip_enabled: true は Some(true)"
+    );
+
+    let doc_false = parser::parse(&skip_enabled_doc(" false"));
+    assert_eq!(
+        doc_false.skip_enabled,
+        Some(false),
+        "skip_enabled: false は Some(false)"
+    );
+}
+
+#[test]
+fn test_document_skip_enabled_is_case_insensitive() {
+    // DT3-2: `TRUE` / `False` → 大文字小文字を無視して Some に倒す（parse_bool_kv の to_ascii_lowercase）。
+    let doc_upper = parser::parse(&skip_enabled_doc(" TRUE"));
+    assert_eq!(
+        doc_upper.skip_enabled,
+        Some(true),
+        "skip_enabled: TRUE は大文字無視で Some(true)"
+    );
+
+    let doc_mixed = parser::parse(&skip_enabled_doc(" False"));
+    assert_eq!(
+        doc_mixed.skip_enabled,
+        Some(false),
+        "skip_enabled: False は大文字小文字無視で Some(false)"
+    );
+}
+
+#[test]
+fn test_document_skip_enabled_unspecified_is_none() {
+    // DT3-3: frontmatter にキーが無ければ None（runtime 既定 true=出すにフォールバック）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.skip_enabled, None,
+        "skip_enabled 未指定は None（既定 true にフォールバック）"
+    );
+}
+
+#[test]
+fn test_document_skip_enabled_empty_is_none() {
+    // DT3-4: 空 `skip_enabled:`（値なし）・空引用 `""` はどちらも None
+    //   （parse_bool_kv が trim 後の空文字を弾く。character_y_ratio の空文字規約と同じ向き）。
+    let doc_empty = parser::parse(&skip_enabled_doc(""));
+    assert_eq!(doc_empty.skip_enabled, None, "空 skip_enabled: は None");
+
+    let doc_empty_quote = parser::parse(&skip_enabled_doc(" \"\""));
+    assert_eq!(
+        doc_empty_quote.skip_enabled, None,
+        "skip_enabled: \"\" は unquote 後に空文字となり None"
+    );
+}
+
+#[test]
+fn test_document_skip_enabled_does_not_coerce_truthy_values() {
+    // DT3-5（重要）: `yes` / `1` / `on` は coerce せず None に倒す（厳格＝true/false 以外は無効）。
+    //   YAML 緩い真偽（yes/on/1）を受けると frontmatter の意味が曖昧になるため、parse_bool_kv は
+    //   `true`/`false` だけを真偽として扱い、それ以外は「未指定」と同じ None にする。
+    for truthy in ["yes", "1", "on"] {
+        let doc = parser::parse(&skip_enabled_doc(&format!(" {truthy}")));
+        assert_eq!(
+            doc.skip_enabled, None,
+            "skip_enabled: {truthy} は coerce されず None（厳格）"
+        );
+    }
+}
+
+#[test]
+fn test_document_skip_enabled_garbage_is_none() {
+    // DT3-6: 完全に無関係なゴミ文字列も None（parse 失敗を握りつぶす）。
+    let doc = parser::parse(&skip_enabled_doc(" maybe-later"));
+    assert_eq!(
+        doc.skip_enabled, None,
+        "skip_enabled: maybe-later（garbage）は None"
+    );
+}
+
+#[test]
+fn test_document_debug_enabled_parses_true_false() {
+    // DT3-debug: debug_enabled も skip_enabled と同型（parse_bool_kv 共有）。最低 1 本で
+    //   `true`→Some(true) / `false`→Some(false) / 未指定→None / 緩い真偽 `1`→None を縛る。
+    let make = |value: &str| {
+        format!(
+            "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\ndebug_enabled:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n"
+        )
+    };
+
+    let doc_true = parser::parse(&make(" true"));
+    assert_eq!(
+        doc_true.debug_enabled,
+        Some(true),
+        "debug_enabled: true は Some(true)"
+    );
+
+    let doc_false = parser::parse(&make(" false"));
+    assert_eq!(
+        doc_false.debug_enabled,
+        Some(false),
+        "debug_enabled: false は Some(false)"
+    );
+
+    // 未指定は None（runtime 既定 false=出さないにフォールバック）。
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    assert_eq!(
+        parser::parse(input_none).debug_enabled,
+        None,
+        "debug_enabled 未指定は None（既定 false にフォールバック）"
+    );
+
+    // `1`（緩い真偽）は coerce されず None。
+    assert_eq!(
+        parser::parse(&make(" 1")).debug_enabled,
+        None,
+        "debug_enabled: 1 は coerce されず None（厳格）"
+    );
+}
+
+#[test]
+fn test_skip_enabled_false_round_trips() {
+    // E1: skip_enabled: false → emit に `skip_enabled: false` を含み、再 parse で Some(false)。
+    //   E5 も兼ねる: falsy（false）でも Some なら emit から消えないこと（skip_serializing は None だけ）。
+    let doc = parser::parse(&skip_enabled_doc(" false"));
+    assert_eq!(doc.skip_enabled, Some(false));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("skip_enabled: false"),
+        "emit に `skip_enabled: false` が含まれること（false を落とさない）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.skip_enabled,
+        Some(false),
+        "round-trip で skip_enabled: false が保持される"
+    );
+}
+
+#[test]
+fn test_debug_enabled_true_round_trips() {
+    // E2: debug_enabled: true → emit に `debug_enabled: true` を含み、再 parse で Some(true)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+debug_enabled: true
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.debug_enabled, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("debug_enabled: true"),
+        "emit に `debug_enabled: true` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.debug_enabled,
+        Some(true),
+        "round-trip で debug_enabled: true が保持される"
+    );
+}
+
+#[test]
+fn test_skip_and_debug_enabled_none_omit_emit_lines() {
+    // E3: 両方 None なら emit にどちらのキーも出ない（skip_serializing_if = Option::is_none）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.skip_enabled, None);
+    assert_eq!(doc.debug_enabled, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("skip_enabled:"),
+        "skip_enabled が None なら emit に出ない: {emitted}"
+    );
+    assert!(
+        !emitted.contains("debug_enabled:"),
+        "debug_enabled が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_skip_debug_enabled_round_trip_with_other_frontmatter() {
+    // E4: skip_enabled / debug_enabled / character_y_ratio / dialog_style / aspect_ratio を
+    //   1 ドキュメントに同居させ、parse → emit → parse で全フィールドが保持されること。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+dialog_style: "novel"
+character_y_ratio: 1.05
+skip_enabled: false
+debug_enabled: true
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.skip_enabled, Some(false));
+    assert_eq!(doc.debug_enabled, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+
+    // 真偽 2 フィールドが保持される。
+    assert_eq!(
+        doc2.skip_enabled,
+        Some(false),
+        "skip_enabled が round-trip で保持される"
+    );
+    assert_eq!(
+        doc2.debug_enabled,
+        Some(true),
+        "debug_enabled が round-trip で保持される"
+    );
+    // 共存フィールドも壊れていないこと。
+    assert_eq!(doc2.aspect_ratio, "9:16");
+    assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+    assert_eq!(doc2.character_y_ratio, Some(1.05));
+    // ドキュメント全体が安定（parse → emit → parse が冪等）。
+    assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
+}
+
 #[test]
 fn test_ruby_markup_passthrough_in_dialog_text() {
     // ルビ記法 (#148) は parser/Rust 側ではスキーマを拡張せず、
