@@ -46,6 +46,14 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ratio) = doc.character_y_ratio {
             out.push_str(&format!("character_y_ratio: {ratio}\n"));
         }
+        // Emit skip_enabled / debug_enabled only when present (#310)。bool なので Some のときだけ
+        // `true` / `false` を素で出す（None は省略＝runtime 既定にフォールバック）。
+        if let Some(enabled) = doc.skip_enabled {
+            out.push_str(&format!("skip_enabled: {enabled}\n"));
+        }
+        if let Some(enabled) = doc.debug_enabled {
+            out.push_str(&format!("debug_enabled: {enabled}\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1133,6 +1141,8 @@ mod tests {
             dialog_style: None,
             protagonist: None,
             character_y_ratio: None,
+            skip_enabled: None,
+            debug_enabled: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1247,6 +1257,8 @@ mod tests {
             dialog_style: None,
             protagonist: None,
             character_y_ratio: None,
+            skip_enabled: None,
+            debug_enabled: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

@@ -20,6 +20,8 @@ pub fn parse(input: &str) -> Document {
     let mut dialog_style: Option<String> = None;
     let mut protagonist: Option<String> = None;
     let mut character_y_ratio: Option<f64> = None;
+    let mut skip_enabled: Option<bool> = None;
+    let mut debug_enabled: Option<bool> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -79,6 +81,14 @@ pub fn parse(input: &str) -> Document {
                 // 空・非数値は None のまま（runtime 既定 1.0 にフォールバック）。
                 // 範囲クランプは runtime 側（CharacterLayer）で行う（parser は生の数値を透過）。
                 character_y_ratio = unquote(val.trim()).parse::<f64>().ok();
+            } else if let Some(val) = line.strip_prefix("skip_enabled:") {
+                // Skip(S) ボタンを再生 UI に出すか (#310)。`true` / `false` のみ受ける（parse_bool_kv）。
+                // 空・不正値は None のまま（runtime 既定 true ＝出す＝後方互換）。
+                skip_enabled = parse_bool_kv(&unquote(val.trim()));
+            } else if let Some(val) = line.strip_prefix("debug_enabled:") {
+                // デバッグ HUD（D ボタン）を /play に出すか (#310)。`true` / `false` のみ受ける（parse_bool_kv）。
+                // 空・不正値は None のまま（runtime 既定 false ＝出さない＝本番非表示）。
+                debug_enabled = parse_bool_kv(&unquote(val.trim()));
             }
             pos += 1;
         }
@@ -811,6 +821,8 @@ pub fn parse(input: &str) -> Document {
         dialog_style,
         protagonist,
         character_y_ratio,
+        skip_enabled,
+        debug_enabled,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

@@ -7,6 +7,28 @@ import { type AspectRatio, ASPECT_RATIOS, parseAspectRatio } from '../game/const
 import SettingsOverlay from './SettingsOverlay'
 import { DebugOverlay } from './DebugOverlay'
 
+// デバッグ HUD の展開状態の永続化キー (#310)。既定は畳んだ状態（open=false）。
+// 旧 DebugOverlay (#301) の collapsed 既定 true（= 展開していない）と同じ意味を引き継ぐ。
+const LS_DEBUG_OPEN = 'nn.debugOverlay.open'
+
+/** localStorage から「デバッグ HUD を開いているか」を安全に読む。例外/未保存は false（畳んだ状態）。 */
+function readDebugOpen(): boolean {
+  try {
+    return localStorage.getItem(LS_DEBUG_OPEN) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** localStorage に展開状態を安全に書く。例外は握り潰す（永続化は best-effort）。 */
+function writeDebugOpen(open: boolean): void {
+  try {
+    localStorage.setItem(LS_DEBUG_OPEN, open ? '1' : '0')
+  } catch {
+    // SSR/未対応/プライベートモード等。永続化できなくても UI 状態は React state で動く。
+  }
+}
+
 interface NovelPlayerProps {
   events: Event[]
   scenes?: EventScene[]
@@ -42,6 +64,14 @@ interface NovelPlayerProps {
   /** 立ち絵の足元 Y 比率 (#308)。frontmatter `character_y_ratio:` から流す。
    *  null/undefined で runtime 既定 1.0（足が画面下端）。>1.0 で靴が画面外に切れる（ToHeart 式） */
   characterYRatio?: number | null
+  /** Skip(S) ボタンを出すか (#310)。frontmatter `skip_enabled:` から流す。
+   *  null/undefined/true で Skip(S) ボタンを描画する（既定・後方互換）。false で描画しない。
+   *  skip-read-only ロジック（未読は解除）自体は不変。ボタンの有無だけを制御する。 */
+  skipEnabled?: boolean | null
+  /** デバッグ HUD（D ボタン）を出すか (#310)。
+   *  /play では frontmatter `debug_enabled:` から流す（null/undefined/false で非表示・本番既定）。
+   *  /edit は frontmatter 非依存で常時 true を渡す（編集者用）。 */
+  debugEnabled?: boolean | null
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
   docKey?: string
   /**
@@ -67,6 +97,8 @@ function NovelPlayer({
   dialogStyle,
   protagonist,
   characterYRatio,
+  skipEnabled,
+  debugEnabled,
   docKey,
   initialSkipMode = false,
   onRendererReady,
@@ -88,6 +120,11 @@ function NovelPlayer({
   const [toast, setToast] = useState<string | null>(null)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
+
+  // デバッグ HUD の展開状態 (#310)。右下ボタン列の「D」ボタンで開閉する。
+  // 既定は畳んだ状態（#301 の collapsed 既定 true を引き継ぐ＝open 既定 false）。
+  // 状態は localStorage（旧 DebugOverlay と同じキー意味）に best-effort で永続化する。
+  const [debugOpen, setDebugOpen] = useState<boolean>(() => readDebugOpen())
 
   // 有効な AspectRatio に正規化
   const aspectRatio = parseAspectRatio(aspectRatioProp)
@@ -325,12 +362,41 @@ function NovelPlayer({
     setSkipMode((v) => !v)
   }
 
+  // デバッグ HUD の D ボタン: 押すと展開・再押しで畳む。状態は localStorage に永続化 (#310)。
+  const handleDebugToggle = () => {
+    setDebugOpen((v) => {
+      const next = !v
+      writeDebugOpen(next)
+      return next
+    })
+  }
+
+  // デバッグ HUD（D ボタン + パネル）を出すか (#310)。
+  // /play は debug_enabled（frontmatter）、/edit は常時 true（EditorScreen が渡す）。
+  const debugAvailable = debugEnabled === true
+  // Skip(S) ボタンを描画するか (#310)。未指定/true で出す（既定・後方互換）、false で出さない。
+  const showSkipButton = skipEnabled !== false
+
+  // 右下ボタン列のレイアウト (#310)。右端から ⚙→A→S→D の順に 44px 間隔で左へ並べる。
+  // 条件付きで消える S / D があっても隙間が空かないよう、実際に出るボタンだけを右から
+  // 詰めてスロット番号を採番し、`right = 12 + slot*44`(px) で位置を導出する（特例分岐を作らない）。
+  const SLOT_GAP_PX = 44 // ボタン幅 36px(w-9) + 余白 8px
+  const SLOT_BASE_PX = 12 // 右端マージン（旧 right-3 = 0.75rem）
+  const slotRight = (slot: number): string => `${SLOT_BASE_PX + slot * SLOT_GAP_PX}px`
+  // 採番順 = 右から（settings が slot 0）。出るボタンだけを push して詰める。
+  const buttonOrder: Array<'settings' | 'auto' | 'skip' | 'debug'> = ['settings', 'auto']
+  if (showSkipButton) buttonOrder.push('skip')
+  if (debugAvailable) buttonOrder.push('debug')
+  const slotOf = (id: 'settings' | 'auto' | 'skip' | 'debug'): number => buttonOrder.indexOf(id)
+
   return (
     <div
       className="relative w-full h-full flex items-center justify-center bg-black"
       style={{ containerType: 'size' }}
     >
-      <DebugOverlay rendererRef={rendererRef} />
+      {/* デバッグ HUD パネル (#310): D ボタンの展開状態に追従。debug_enabled(/play) or
+          editor のときだけ出す。閉じている/無効のときは何も描かない（D ボタンが唯一の入口）。 */}
+      {debugAvailable && <DebugOverlay rendererRef={rendererRef} open={debugOpen} />}
       <div
         ref={containerRef}
         className="overflow-hidden [&>canvas]:block [&>canvas]:w-full [&>canvas]:h-full"
@@ -347,28 +413,34 @@ function NovelPlayer({
           height: `min(100cqh, calc(100cqw * ${gameHeight} / ${gameWidth}))`,
         }}
       />
-      {/* スキップボタン (#140): docKey がある場合のみ有効 */}
-      <button
-        type="button"
-        onClick={handleSkipToggle}
-        disabled={!docKey}
-        aria-label={skipMode ? 'スキップモードをオフにする' : 'スキップモードをオンにする'}
-        title="スキップ（既読のみ）"
-        className={`absolute top-3 right-[6.25rem] w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-          skipMode
-            ? 'bg-green-500/80 hover:bg-green-500 text-white'
-            : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
-        }`}
-      >
-        S
-      </button>
+      {/* 操作ボタン列 (#310): クリッカー/ダイアログ送り/シークバーと干渉しない右下隅に集約。
+          右端から ⚙→A→S→D の順に並べ、消えるボタンがあっても詰めて隙間を作らない。 */}
+      {/* スキップボタン (#140): docKey がある場合のみ有効。skip_enabled=false で非表示 (#310) */}
+      {showSkipButton && (
+        <button
+          type="button"
+          onClick={handleSkipToggle}
+          disabled={!docKey}
+          aria-label={skipMode ? 'スキップモードをオフにする' : 'スキップモードをオンにする'}
+          title="スキップ（既読のみ）"
+          style={{ right: slotRight(slotOf('skip')) }}
+          className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+            skipMode
+              ? 'bg-green-500/80 hover:bg-green-500 text-white'
+              : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
+          }`}
+        >
+          S
+        </button>
+      )}
       {/* オートモードボタン (#139) */}
       <button
         type="button"
         onClick={handleAutoToggle}
         aria-label={autoMode ? 'オートモードをオフにする' : 'オートモードをオンにする'}
         title="オートモード (A)"
-        className={`absolute top-3 right-14 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
+        style={{ right: slotRight(slotOf('auto')) }}
+        className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
           autoMode
             ? 'bg-blue-500/80 hover:bg-blue-500 text-white'
             : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
@@ -381,10 +453,30 @@ function NovelPlayer({
         onClick={() => setSettingsOpen(true)}
         aria-label="設定を開く"
         title="設定 (Ctrl/Cmd + ,)"
-        className="absolute top-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white text-lg"
+        style={{ right: slotRight(slotOf('settings')) }}
+        className="absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white text-lg"
       >
         ⚙
       </button>
+      {/* デバッグ HUD トグル「D」ボタン (#310): debug_enabled(/play) or editor のときだけ出す。
+          押すと DebugOverlay パネルを展開・再押しで畳む（既定は畳んだ状態）。 */}
+      {debugAvailable && (
+        <button
+          type="button"
+          onClick={handleDebugToggle}
+          aria-label={debugOpen ? 'デバッグ情報を閉じる' : 'デバッグ情報を開く'}
+          aria-pressed={debugOpen}
+          title="デバッグ (D)"
+          style={{ right: slotRight(slotOf('debug')) }}
+          className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
+            debugOpen
+              ? 'bg-cyan-500/80 hover:bg-cyan-500 text-white'
+              : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
+          }`}
+        >
+          D
+        </button>
+      )}
       <SettingsOverlay
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

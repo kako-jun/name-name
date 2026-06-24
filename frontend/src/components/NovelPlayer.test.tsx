@@ -1,0 +1,344 @@
+// kako-jun/name-name#310: NovelPlayer の再生 UI ボタン出し分け・配置・デバッグ HUD トグルの単体テスト。
+//
+// 検証ポイント:
+//   - DT1: skipEnabled で Skip(S) ボタンの描画/非描画（未指定/null/true で出す・false で出さない）
+//   - DT2: debugEnabled で Debug(D) ボタンの描画/非描画。D が無いとき DebugOverlay パネルも mount されない
+//   - DT-SLOT: 表示ボタン集合ごとの inline style.right（右下スロット詰め＝隙間を作らない）
+//   - T1-T7: デバッグ HUD の展開状態遷移（localStorage 永続化・厳格 === '1'・例外耐性・パネル開時のみ polling）
+//
+// NovelRenderer は PixiJS を構築し jsdom で init 不可のため vi.mock でスタブ化する
+// （PlayerScreen.test.tsx の mock 流儀に倣う）。ボタンは同期 JSX の Tailwind <button> なので
+// mock 後は canvas 非依存でレンダーされる。
+//
+// 非適用（書かない）: pixel 位置・モバイル見た目（blink で確認）/ i18n / skip-read-only(#140)・
+//   auto(#139) のロジック（不変＝既存 NovelRenderer.*.test.ts の緑維持で担保）。
+// /edit 経路の prop 転送（EditorScreen が debugEnabled={true} 固定）は EditorScreen のテストが
+//   存在しないため対象外。ここでは「debugEnabled=true を渡せば D が出る」ことだけ DT2 で縛る。
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
+
+// NovelRenderer を完全スタブ化（PixiJS 構築・init を無効化）。
+// NovelPlayer は init().then(...) 内で多数の setter を呼ぶので、すべて no-op で受ける。
+// getDebugState は DebugOverlay の polling が呼ぶため最小の DebugState 形を返す。
+//
+// `new NovelRenderer(...)` で構築されるため、mock はコンストラクタ（クラス本体）を返す必要がある。
+// vi.mock の factory は冒頭にホイストされるので、クラス・生成インスタンス記録は vi.hoisted で
+// 一緒にホイストして factory から参照できるようにする（top-level 変数参照の TDZ を回避）。
+const { rendererInstances, MockRenderer } = vi.hoisted(() => {
+  const instances: MockRenderer[] = []
+  class MockRenderer {
+    init = vi.fn().mockResolvedValue(undefined)
+    destroy = vi.fn()
+    setAssetBaseUrl = vi.fn()
+    setOnAutoModeChange = vi.fn()
+    setOnSkipModeChange = vi.fn()
+    setDocKey = vi.fn()
+    setChoiceStyle = vi.fn()
+    setFontFamily = vi.fn()
+    setFontSize = vi.fn()
+    setDialogStyle = vi.fn()
+    setProtagonist = vi.fn()
+    setCharacterYRatio = vi.fn()
+    applySettings = vi.fn()
+    setScenes = vi.fn()
+    setEvents = vi.fn()
+    setJumpSceneIndex = vi.fn()
+    setAutoMode = vi.fn()
+    setSkipMode = vi.fn()
+    startFrom = vi.fn()
+    playScript = vi.fn().mockResolvedValue(undefined)
+    quickSave = vi.fn().mockReturnValue(false)
+    quickLoad = vi.fn().mockReturnValue(false)
+    getDebugState = vi.fn().mockReturnValue({
+      eventIndex: 0,
+      eventCount: 1,
+      eventKind: 'Narration',
+      autoMode: true,
+      waitingForChoice: false,
+      waitingForWait: false,
+      currentResolvedFontFamily: null,
+      sceneId: 's1',
+      audioWarning: null,
+      characters: [],
+    })
+
+    constructor() {
+      instances.push(this)
+    }
+  }
+  return { rendererInstances: instances, MockRenderer }
+})
+type MockRenderer = InstanceType<typeof MockRenderer>
+
+vi.mock('../game/NovelRenderer', () => ({
+  NovelRenderer: MockRenderer,
+}))
+
+// SettingsOverlay も SettingsOverlay 内の依存を避けるため軽量スタブにする
+//（NovelPlayer の操作ボタンの検証に SettingsOverlay の実装は不要）。
+vi.mock('./SettingsOverlay', () => ({
+  default: () => null,
+}))
+
+import NovelPlayer from './NovelPlayer'
+
+const LS_DEBUG_OPEN = 'nn.debugOverlay.open'
+
+/**
+ * init().then(...) は microtask なので、render 直後に flush する。
+ * これでデバッグパネルの polling effect や renderer setter が走った状態に揃う。
+ */
+async function flushAsync() {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+const skipButton = () => screen.queryByRole('button', { name: /スキップモードを/ })
+const debugButton = () => screen.queryByRole('button', { name: /デバッグ情報を/ })
+const debugPanel = () => document.querySelector('[style*="position: fixed"]') // DebugOverlay の本体 div
+
+beforeEach(() => {
+  rendererInstances.length = 0
+  localStorage.clear()
+  vi.clearAllMocks()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('NovelPlayer ボタン出し分け', () => {
+  // --- DT1: Skip(S) ボタン ---
+  it('DT1: skipEnabled 未指定なら Skip(S) ボタンを描画する（既定・後方互換）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(skipButton()).toBeInTheDocument()
+  })
+
+  it('DT1: skipEnabled={null} なら Skip(S) ボタンを描画する', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={null} />)
+    await flushAsync()
+    expect(skipButton()).toBeInTheDocument()
+  })
+
+  it('DT1: skipEnabled={true} なら Skip(S) ボタンを描画する', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={true} />)
+    await flushAsync()
+    expect(skipButton()).toBeInTheDocument()
+  })
+
+  it('DT1: skipEnabled={false} なら Skip(S) ボタンを描画しない', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={false} />)
+    await flushAsync()
+    expect(skipButton()).toBeNull()
+  })
+
+  // --- DT2: Debug(D) ボタン + DebugOverlay の mount ---
+  it('DT2: debugEnabled={true} なら Debug(D) ボタンを描画する', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    expect(debugButton()).toBeInTheDocument()
+  })
+
+  it('DT2: debugEnabled={false} なら Debug(D) ボタンを描画せず、DebugOverlay パネルも mount しない', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={false} />)
+    await flushAsync()
+    expect(debugButton()).toBeNull()
+    // パネル本体（position: fixed の DebugOverlay）が DOM に存在しないこと。
+    expect(debugPanel()).toBeNull()
+    // polling も始まっていないこと（getDebugState が一度も呼ばれない）。
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.getDebugState).not.toHaveBeenCalled()
+  })
+
+  it('DT2: debugEnabled={null} なら Debug(D) ボタンを描画しない（/play 既定＝本番非表示）', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={null} />)
+    await flushAsync()
+    expect(debugButton()).toBeNull()
+    expect(debugPanel()).toBeNull()
+  })
+
+  it('DT2: debugEnabled 未指定なら Debug(D) ボタンを描画しない', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(debugButton()).toBeNull()
+    expect(debugPanel()).toBeNull()
+  })
+})
+
+describe('NovelPlayer 右下スロット詰め（DT-SLOT）', () => {
+  // ボタンの inline style.right を検証する。pixel の見た目は対象外（blink）。
+  // 採番: 右端から settings(slot0=12px) → auto(slot1=56px) → skip → debug の順で 44px 間隔。
+  const settingsBtn = () => screen.getByRole('button', { name: '設定を開く' })
+  const autoBtn = () => screen.getByRole('button', { name: /オートモードを/ })
+
+  it('全4ボタン表示時: ⚙=12 / A=56 / S=100 / D=144 px', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={true} debugEnabled={true} />)
+    await flushAsync()
+    expect(settingsBtn().style.right).toBe('12px')
+    expect(autoBtn().style.right).toBe('56px')
+    expect(skipButton()!.style.right).toBe('100px')
+    expect(debugButton()!.style.right).toBe('144px')
+  })
+
+  it('S 非表示時: ⚙/A は 12/56 のまま（隙間が出ず D が 100 に詰める）', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={false} debugEnabled={true} />)
+    await flushAsync()
+    // ⚙/A の位置は S の有無に依存せず固定。
+    expect(settingsBtn().style.right).toBe('12px')
+    expect(autoBtn().style.right).toBe('56px')
+    expect(skipButton()).toBeNull()
+    // S が抜けた分を D が詰める（144px ではなく 100px に来る＝隙間なし）。
+    expect(debugButton()!.style.right).toBe('100px')
+  })
+
+  it('D 非表示時: S が slot2=100px に来る（D の不在で隙間が出ない）', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={true} debugEnabled={false} />)
+    await flushAsync()
+    expect(settingsBtn().style.right).toBe('12px')
+    expect(autoBtn().style.right).toBe('56px')
+    expect(skipButton()!.style.right).toBe('100px')
+    expect(debugButton()).toBeNull()
+  })
+
+  it('S/D 両方非表示時: ⚙=12 / A=56 のみ', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={false} debugEnabled={false} />)
+    await flushAsync()
+    expect(settingsBtn().style.right).toBe('12px')
+    expect(autoBtn().style.right).toBe('56px')
+    expect(skipButton()).toBeNull()
+    expect(debugButton()).toBeNull()
+  })
+})
+
+describe('NovelPlayer デバッグ HUD トグルと永続化（T1-T7）', () => {
+  it('T1: 空 localStorage では既定で畳んだ状態（aria-pressed=false・パネル本体なし）', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    const btn = debugButton()!
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(debugPanel()).toBeNull()
+  })
+
+  it('T2: D クリックで展開し localStorage に "1" を書く', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    const btn = debugButton()!
+    await act(async () => {
+      btn.click()
+    })
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+    expect(debugPanel()).not.toBeNull()
+    expect(localStorage.getItem(LS_DEBUG_OPEN)).toBe('1')
+  })
+
+  it('T3: 再クリックで畳んで localStorage に "0" を書く', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    const btn = debugButton()!
+    await act(async () => {
+      btn.click() // 開く
+    })
+    await act(async () => {
+      btn.click() // 畳む
+    })
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(debugPanel()).toBeNull()
+    expect(localStorage.getItem(LS_DEBUG_OPEN)).toBe('0')
+  })
+
+  it('T4: 事前に "1" が入っていれば初期状態で開いて mount する', async () => {
+    localStorage.setItem(LS_DEBUG_OPEN, '1')
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    expect(debugButton()!.getAttribute('aria-pressed')).toBe('true')
+    expect(debugPanel()).not.toBeNull()
+  })
+
+  it('T5: 事前 "0" は閉じたまま（=== "1" 厳格）', async () => {
+    localStorage.setItem(LS_DEBUG_OPEN, '0')
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    expect(debugButton()!.getAttribute('aria-pressed')).toBe('false')
+    expect(debugPanel()).toBeNull()
+  })
+
+  it('T5: 事前 "abc"（true でも 1 でもない値）は閉じたまま（=== "1" 厳格）', async () => {
+    localStorage.setItem(LS_DEBUG_OPEN, 'abc')
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    expect(debugButton()!.getAttribute('aria-pressed')).toBe('false')
+    expect(debugPanel()).toBeNull()
+  })
+
+  it('T6: localStorage.setItem が throw しても UI トグルは動き、例外を投げない・console.error も出さない', async () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceeded / private mode')
+    })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    const btn = debugButton()!
+
+    // クリックで例外が伝播しないこと（writeDebugOpen が try/catch で握る）。
+    expect(() => {
+      act(() => {
+        btn.click()
+      })
+    }).not.toThrow()
+
+    // setItem は試みられた（＝書き込みパスを通った）が、UI は state で開いている。
+    expect(setItemSpy).toHaveBeenCalled()
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+    expect(debugPanel()).not.toBeNull()
+    // 永続化失敗を console.error で騒がない（best-effort・静かに握る）。
+    expect(errSpy).not.toHaveBeenCalled()
+  })
+
+  it('T7: パネルを開いたときだけ polling（getDebugState）が始まる（fake timers）', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<NovelPlayer events={[]} debugEnabled={true} />)
+      // init().then(...) は real Promise の microtask。fake timers でも microtask は
+      // real な await で解決するため、Promise を数回 flush して setter 完了状態に揃える。
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      const r = rendererInstances[rendererInstances.length - 1]
+
+      // 閉じている間: 200ms 経過しても polling は走らない。
+      act(() => {
+        vi.advanceTimersByTime(600)
+      })
+      expect(r.getDebugState).not.toHaveBeenCalled()
+
+      // D を押して開く → polling 開始。
+      const btn = debugButton()!
+      act(() => {
+        btn.click()
+      })
+      act(() => {
+        vi.advanceTimersByTime(600) // 200ms 間隔で複数回呼ばれる
+      })
+      const callsWhileOpen = r.getDebugState.mock.calls.length
+      expect(callsWhileOpen).toBeGreaterThan(0)
+
+      // 再度押して畳む → polling 停止（以降は呼び出し回数が増えない）。
+      act(() => {
+        btn.click()
+      })
+      act(() => {
+        vi.advanceTimersByTime(600)
+      })
+      expect(r.getDebugState.mock.calls.length).toBe(callsWhileOpen)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

@@ -859,6 +859,21 @@ pub struct Document {
     /// 比率なので f64。空・非数値は None 扱い（runtime 既定 1.0 にフォールバック）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character_y_ratio: Option<f64>,
+    /// Skip(S) ボタンを再生 UI に出すか (#310)。`true` = 出す（既定・後方互換）。
+    /// `false` で Skip(S) ボタンを描画しない（読み物として既読スキップを使わせたくない作品向け）。
+    /// skip-read-only ロジック（未読は解除）自体は変えない。ボタンの有無だけを制御する。
+    /// frontmatter `skip_enabled:` から流す。未指定なら None（runtime で true 扱い＝後方互換）。
+    /// `"true"` / `"false"` のみ受け、それ以外（空・非真偽値）は None（既定 true）にフォールバック。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_enabled: Option<bool>,
+    /// デバッグ HUD（D ボタン）を `/play`（PlayerScreen）に出すか (#310)。
+    /// `true` = 出す / 未指定・`false` = 出さない（本番非表示が既定）。
+    /// `/edit`（EditorScreen）は frontmatter に関係なく常時出す（編集者用＝別経路）ため、
+    /// この設定は再生専用画面の出し分けにのみ効く。
+    /// frontmatter `debug_enabled:` から流す。未指定なら None（runtime で false 扱い＝本番非表示）。
+    /// `"true"` / `"false"` のみ受け、それ以外は None（既定 false）にフォールバック。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_enabled: Option<bool>,
     pub chapters: Vec<Chapter>,
 }
 

@@ -426,6 +426,15 @@ export interface EventDocument {
    *  null/undefined のときは runtime 既定 1.0（後方互換）。frontmatter `character_y_ratio:` から流す。
    *  dialog_style: novel/adv 非依存（両モードで同じ足元）。 */
   character_y_ratio?: number | null
+  /** Skip(S) ボタンを再生 UI に出すか (#310)。true=出す（既定・後方互換）/ false=描画しない。
+   *  skip-read-only ロジック（未読は解除）自体は不変。ボタンの有無だけを制御する。
+   *  null/undefined のときは runtime 既定 true（出す）。frontmatter `skip_enabled:` から流す。 */
+  skip_enabled?: boolean | null
+  /** デバッグ HUD（D ボタン）を `/play`（PlayerScreen）に出すか (#310)。
+   *  true=出す / null/undefined・false=出さない（本番非表示が既定）。
+   *  `/edit`（EditorScreen）は frontmatter 非依存で常時出す（別経路）。
+   *  frontmatter `debug_enabled:` から流す。 */
+  debug_enabled?: boolean | null
   chapters: EventChapter[]
 }
 

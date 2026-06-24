@@ -186,6 +186,33 @@ export interface Document {
      * frontmatter `protagonist:` から流す。空文字は None 扱い（choice_style と同じ規約）。
      */
     protagonist?: string;
+    /**
+     * 立ち絵の足元アンカー Y 比率 (#308)。`characterY = screenHeight * character_y_ratio`。
+     * 内部定数 `CHARACTER_Y_RATIO`（runtime 既定 1.0）と 1:1 対応する per-game 設定。
+     * 1.0 = 足が画面下端 / >1.0（例 1.05）= 足が下端より下＝靴が画面外に切れる（ToHeart 式）。
+     * 足元位置をどこに置くかはゲームごとに違うため、グローバル定数でなく作品ごとに明示指定する。
+     * 未指定の既存作品は壊さないため runtime 側で 1.0 にフォールバックする（後方互換）。
+     * dialog_style: novel/adv 非依存（両モードで同じ足元）。font_size と同じ per-game 数値設定だが
+     * 比率なので f64。空・非数値は None 扱い（runtime 既定 1.0 にフォールバック）。
+     */
+    character_y_ratio?: number;
+    /**
+     * Skip(S) ボタンを再生 UI に出すか (#310)。`true` = 出す（既定・後方互換）。
+     * `false` で Skip(S) ボタンを描画しない（読み物として既読スキップを使わせたくない作品向け）。
+     * skip-read-only ロジック（未読は解除）自体は変えない。ボタンの有無だけを制御する。
+     * frontmatter `skip_enabled:` から流す。未指定なら None（runtime で true 扱い＝後方互換）。
+     * `\"true\"` / `\"false\"` のみ受け、それ以外（空・非真偽値）は None（既定 true）にフォールバック。
+     */
+    skip_enabled?: boolean;
+    /**
+     * デバッグ HUD（D ボタン）を `/play`（PlayerScreen）に出すか (#310)。
+     * `true` = 出す / 未指定・`false` = 出さない（本番非表示が既定）。
+     * `/edit`（EditorScreen）は frontmatter に関係なく常時出す（編集者用＝別経路）ため、
+     * この設定は再生専用画面の出し分けにのみ効く。
+     * frontmatter `debug_enabled:` から流す。未指定なら None（runtime で false 扱い＝本番非表示）。
+     * `\"true\"` / `\"false\"` のみ受け、それ以外は None（既定 false）にフォールバック。
+     */
+    debug_enabled?: boolean;
     chapters: Chapter[];
 }
 
@@ -315,8 +342,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly emit_markdown: (a: any) => [number, number, number, number];
     readonly parse_markdown: (a: number, b: number) => [number, number, number];
+    readonly emit_markdown: (a: any) => [number, number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
