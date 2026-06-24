@@ -165,13 +165,26 @@ export function alignToAnchorX(align: string | undefined): number {
   }
 }
 
-/** 足元 Y 座標の比率（`characterY = screenHeight * CHARACTER_Y_RATIO`）。
+/** 足元 Y 座標の**既定**比率（`characterY = screenHeight * CHARACTER_Y_RATIO`）。
+ *  立ち絵は anchor(0.5, 1)＝下辺が足。この比率に screenHeight を掛けた値を足元 Y にする。
+ *  - 1.0 = 足が画面下端（全身が見える）。
+ *  - >1.0（例 1.05）= 足が画面下端より下＝靴が画面外に切れる（ToHeart 式）。
  *  以前は 380/450 ≒ 0.844 (DialogBox の上端あたり) だったが、
  *  枠なし・教育動画モードでは立ち絵の下端を画面下端まで下げたほうが座りが良い。
- *  影響範囲: 全 game の立ち絵が画面下端まで下がる。既存 game が枠ありで足元位置を
- *  そのままにしたい場合は別途オプション化が要る。
+ *
+ *  足元をどこに置くか（全身 / 靴を切る）はゲームごとに違うため、この定数は
+ *  グローバルに全ゲームを動かす値ではなく **per-game 未指定時の既定値**。frontmatter
+ *  `character_y_ratio` から流した per-game 値で `setCharacterYRatio` 経由で上書きできる。
+ *  未指定（呼ばない）なら 1.0 が効く＝後方互換。dialog_style: novel/adv 非依存。
  *  テストが期待値を直書きして陳腐化するのを防ぐため export する（#262）。 */
 export const CHARACTER_Y_RATIO = 1.0
+
+/** character_y_ratio の許容下限 (#308)。負・極端値は安全側にクランプする。
+ *  0 = 足が画面上端（立ち絵が上に張り付く）。これより小さい値は意味を成さない。 */
+const CHARACTER_Y_RATIO_MIN = 0
+/** character_y_ratio の許容上限 (#308)。1 画面分下まで（足が下端の 1 画面下＝完全に画面外）。
+ *  靴を切る用途（>1.0）は許すが、暴走値で立ち絵を遥か下に飛ばさないよう上限を設ける。 */
+const CHARACTER_Y_RATIO_MAX = 2
 
 interface CharacterState {
   sprite: Sprite
@@ -376,8 +389,11 @@ export class CharacterLayer extends Container {
   private animTicker: Ticker | null = null
   /** ticker.deltaMS の累計を保持してアニメ進行に使う */
   private elapsedMs: number = 0
-  /** 足元 Y 座標（screenHeight * CHARACTER_Y_RATIO） */
-  private readonly characterY: number
+  /** 足元 Y 座標（screenHeight * characterYRatio）。setCharacterYRatio で再計算される (#308)。 */
+  private characterY: number
+  /** 足元 Y 比率 (#308)。既定は CHARACTER_Y_RATIO（1.0）。frontmatter `character_y_ratio` 由来の
+   *  per-game 値を setCharacterYRatio で受けて上書きする。未指定なら 1.0 で後方互換。 */
+  private characterYRatio: number = CHARACTER_Y_RATIO
   /** auto-scale 計算のために screenWidth / screenHeight を保持 */
   private readonly screenWidth: number
   private readonly screenHeight: number
@@ -399,13 +415,42 @@ export class CharacterLayer extends Container {
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
     this.time = time
-    this.characterY = screenHeight * CHARACTER_Y_RATIO
+    this.characterY = screenHeight * this.characterYRatio
     this.positionX = {
       left: screenWidth * CHARACTER_X_RATIO.left,
       center: screenWidth * CHARACTER_X_RATIO.center,
       right: screenWidth * CHARACTER_X_RATIO.right,
       off_left: screenWidth * CHARACTER_X_RATIO.off_left,
       off_right: screenWidth * CHARACTER_X_RATIO.off_right,
+    }
+  }
+
+  /**
+   * 足元 Y 比率を per-game 値で上書きする (#308)。
+   * frontmatter `character_y_ratio:` の値を渡す。null/undefined のときは既定 CHARACTER_Y_RATIO (1.0)。
+   *
+   * 不正値（非有限＝NaN/Infinity）は既定 1.0 に倒し、範囲外（負・極端値）は
+   * [CHARACTER_Y_RATIO_MIN, CHARACTER_Y_RATIO_MAX] = [0, 2] へクランプする（安全側フォールバック）。
+   * 立ち絵配置は dialog_style: novel/adv 非依存（両モードで同じ足元）。
+   *
+   * NovelPlayer の init では setEvents/setScenes（＝最初の show）より前に呼ばれるため、
+   * 通常は characterY の再計算だけで足りる。既に表示中の立ち絵がある場合に備え、
+   * アニメ・nudge していない静的な sprite は新しい足元 Y に再ベースする（後から比率が変わっても破綻させない）。
+   * 進行中（アニメ／nudge）の sprite は触らず、次の show で新しい足元 Y に揃う（`protagonist` と同じく動的変更は次の show から反映＝中間状態の焼き込みを避ける割り切り）。
+   */
+  setCharacterYRatio(ratio: number | null | undefined): void {
+    const next =
+      ratio == null || !Number.isFinite(ratio)
+        ? CHARACTER_Y_RATIO
+        : Math.min(CHARACTER_Y_RATIO_MAX, Math.max(CHARACTER_Y_RATIO_MIN, ratio))
+    this.characterYRatio = next
+    this.characterY = this.screenHeight * next
+    // 既に表示中で、位置アニメ・ポーズ nudge が走っていない静的な立ち絵だけ新しい足元 Y へ再ベースする。
+    // アニメ中の sprite を触ると中間状態を焼き込んでしまうため除外する（PoseNudge は baseY を持つので尊重）。
+    for (const state of this.characters.values()) {
+      if (state.animation === null && state.poseNudge === null) {
+        state.sprite.y = this.characterY
+      }
     }
   }
 

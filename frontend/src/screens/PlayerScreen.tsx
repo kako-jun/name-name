@@ -355,6 +355,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               fontSize={doc?.font_size ?? null}
               dialogStyle={doc?.dialog_style ?? null}
               protagonist={doc?.protagonist ?? null}
+              characterYRatio={doc?.character_y_ratio ?? null}
               docKey={projectName}
               initialSkipMode={startWithSkip}
             />

@@ -850,6 +850,15 @@ pub struct Document {
     /// frontmatter `protagonist:` から流す。空文字は None 扱い（choice_style と同じ規約）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protagonist: Option<String>,
+    /// 立ち絵の足元アンカー Y 比率 (#308)。`characterY = screenHeight * character_y_ratio`。
+    /// 内部定数 `CHARACTER_Y_RATIO`（runtime 既定 1.0）と 1:1 対応する per-game 設定。
+    /// 1.0 = 足が画面下端 / >1.0（例 1.05）= 足が下端より下＝靴が画面外に切れる（ToHeart 式）。
+    /// 足元位置をどこに置くかはゲームごとに違うため、グローバル定数でなく作品ごとに明示指定する。
+    /// 未指定の既存作品は壊さないため runtime 側で 1.0 にフォールバックする（後方互換）。
+    /// dialog_style: novel/adv 非依存（両モードで同じ足元）。font_size と同じ per-game 数値設定だが
+    /// 比率なので f64。空・非数値は None 扱い（runtime 既定 1.0 にフォールバック）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_y_ratio: Option<f64>,
     pub chapters: Vec<Chapter>,
 }
 

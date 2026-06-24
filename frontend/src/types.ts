@@ -420,6 +420,12 @@ export interface EventDocument {
    *  話者がこの名前と一致したら質問役＝左、それ以外（住人）は回答役＝右に振る。
    *  null/undefined のときは従来配置（後方互換）。frontmatter `protagonist:` から流す。 */
   protagonist?: string | null
+  /** 立ち絵の足元アンカー Y 比率 (#308)。`characterY = screenHeight * character_y_ratio`。
+   *  内部定数 `CHARACTER_Y_RATIO`（runtime 既定 1.0）と 1:1 対応する per-game 設定。
+   *  1.0 = 足が画面下端 / >1.0（例 1.05）= 足が下端より下＝靴が画面外に切れる（ToHeart 式）。
+   *  null/undefined のときは runtime 既定 1.0（後方互換）。frontmatter `character_y_ratio:` から流す。
+   *  dialog_style: novel/adv 非依存（両モードで同じ足元）。 */
+  character_y_ratio?: number | null
   chapters: EventChapter[]
 }
 
