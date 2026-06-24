@@ -436,6 +436,7 @@ export class CharacterLayer extends Container {
    * NovelPlayer の init では setEvents/setScenes（＝最初の show）より前に呼ばれるため、
    * 通常は characterY の再計算だけで足りる。既に表示中の立ち絵がある場合に備え、
    * アニメ・nudge していない静的な sprite は新しい足元 Y に再ベースする（後から比率が変わっても破綻させない）。
+   * 進行中（アニメ／nudge）の sprite は触らず、次の show で新しい足元 Y に揃う（`protagonist` と同じく動的変更は次の show から反映＝中間状態の焼き込みを避ける割り切り）。
    */
   setCharacterYRatio(ratio: number | null | undefined): void {
     const next =
