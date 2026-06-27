@@ -284,6 +284,8 @@ export class NovelRenderer {
    * eventIndex が変わったら破棄して再計算する（cacheEventIndex で識別）。
    */
   private novelPagesCache: { eventIndex: number; pages: NovelPage[] } | null = null
+  /** #293: 立ち絵 ready 後に本文 reveal を遅延する描画トークン。古い rAF/setTimeout を無効化する。 */
+  private deferredTextRenderToken = 0
 
   /** 直近で render した Dialog/Narration に紐付く resolved font family (#147 R1 M1)。
    *  ensureFontLoaded の Promise 解決時に「いま表示中の Dialog のフォントか」を判定する race guard 用。
@@ -2286,14 +2288,30 @@ export class NovelRenderer {
     // 「文字先行→立ち絵後出し」が再発するため。load 失敗は CharacterLayer の `.finally` → onReady で
     // render され「永久に出ない」事故は防止済み）。
     const expectedEventIndex = this.eventIndex
+    const expectedTextIndex = this.textIndex
+    const expectedSentenceIndex = this.sentenceIndex
     let rendered = false
     const renderOnce = () => {
       if (rendered) return
       rendered = true
-      // 保留中に進行した（別イベントへ移った／レンダラ破棄）場合は描画しない。
-      if (!this.initialized) return
-      if (this.eventIndex !== expectedEventIndex) return
-      this.render()
+      const token = ++this.deferredTextRenderToken
+      const run = () => {
+        // 保留中に進行した（別イベント/別ページ/別文へ移った／レンダラ破棄）場合は描画しない。
+        if (token !== this.deferredTextRenderToken) return
+        if (!this.initialized) return
+        if (this.eventIndex !== expectedEventIndex) return
+        if (this.textIndex !== expectedTextIndex) return
+        if (this.sentenceIndex !== expectedSentenceIndex) return
+        this.render()
+      }
+      // texture ready 直後に同じタスクで本文 reveal を始めると、ブラウザの最初の paint 前に
+      // テキストも乗ってしまい「文字が少し出てから立ち絵が変わる」に見える端末がある。
+      // rAF を 2 回待つことで、立ち絵だけの frame を 1 回通してから本文を開始する。
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(run))
+      } else {
+        this.time.setTimeout(run, 0)
+      }
     }
     // showCharacterFromDialog は sprite を**同期**生成し（CharacterLayer.show 内）、
     // onReady（renderOnce）は show 経路で必ず1回呼ばれる契約:

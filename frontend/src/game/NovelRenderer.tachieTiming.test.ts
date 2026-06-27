@@ -23,6 +23,14 @@ import type { Event, EventScene } from '../types'
 
 // 解決済み Promise の .then/.finally チェーンを 1 巡消化する。
 const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+// #293: 立ち絵 ready 後、rAF 2 回で「立ち絵だけの frame」を通してから本文 reveal する。
+const flushDeferredTextRender = async (): Promise<void> => {
+  await flushPromises()
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+  await flushPromises()
+}
 
 function dialog(character: string, ...lines: string[]): Event {
   return {
@@ -125,13 +133,16 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     // テクスチャ load 完了 → onReady（.finally）→ renderOnce が render を呼ぶ。
     resolveLoad(fakeTexture())
     await flushPromises()
+    // load 完了直後にはまだ本文 reveal しない。立ち絵だけの frame を先に通す。
+    expect(renderSpy).not.toHaveBeenCalled()
+    await flushDeferredTextRender()
 
     expect(renderSpy).toHaveBeenCalledTimes(1)
   })
 
-  // 2: 立ち絵なし Dialog（expression/position 欠落）は待つ対象が無いので render を同期実行する
-  //    （テキストが永久に出ない事故を防ぐ）。
-  it('2: 立ち絵なし Dialog は render を同期実行する（テキストが詰まらない）', () => {
+  // 2: 立ち絵なし Dialog（expression/position 欠落）は texture load を待たず、
+  //    立ち絵 ready 後の本文 reveal 遅延だけ通す（テキストが永久に出ない事故を防ぐ）。
+  it('2: 立ち絵なし Dialog は load を待たず render される（テキストが詰まらない）', async () => {
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
     const loadSpy = vi.spyOn(Assets, 'load')
 
@@ -144,8 +155,9 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
 
     r.setScenes([scene('s', [dialogNoPortrait('ナレ', '地の文。')])])
 
-    // 立ち絵が無いので Assets.load は呼ばれず、render は同期で1回呼ばれる。
+    // 立ち絵が無いので Assets.load は呼ばれず、本文 reveal 遅延後に render が1回呼ばれる。
     expect(loadSpy).not.toHaveBeenCalled()
+    await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(1)
   })
 
@@ -169,8 +181,8 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
   })
 
   // 4: novel forward — 立ち絵が出ている状態で次の同一立ち絵（表情・位置同じ＝no-op）へ前進すると、
-  //    texture を再ロードしないので render は同期実行される（待たない）。
-  it('4: novel で同一立ち絵（no-op）への前進は render を同期実行する（再ロードなし）', async () => {
+  //    texture を再ロードせず、本文 reveal 遅延だけ通して render される。
+  it('4: novel で同一立ち絵（no-op）への前進は再ロードしない', async () => {
     let resolveLoad: (t: unknown) => void = () => {}
     const loadPromise = new Promise<unknown>((res) => {
       resolveLoad = res
@@ -192,15 +204,15 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     expect(renderSpy).not.toHaveBeenCalled()
     // event0 のテクスチャ load を完了させて1回目の reveal を解禁する。
     resolveLoad(fakeTexture())
-    await flushPromises()
+    await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(1)
     expect(loadSpy).toHaveBeenCalledTimes(1)
 
-    // event1 へ前進。同一立ち絵なので show は no-op → onReady 同期発火 → render も同期実行。
+    // event1 へ前進。同一立ち絵なので show は no-op → onReady 発火 → 本文 reveal 遅延後に render。
     h.advance()
     // 再ロードは起きない（load 呼び出し回数は 1 のまま）。
     expect(loadSpy).toHaveBeenCalledTimes(1)
-    // render は同期で 2 回目が呼ばれている（await 不要）。
+    await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(2)
   })
 
@@ -233,12 +245,12 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
 
     // event0（古い）の load を今さら完了させても、eventIndex 不一致で render しない。
     resolvers[0]?.(fakeTexture())
-    await flushPromises()
+    await flushDeferredTextRender()
     expect(renderSpy).not.toHaveBeenCalled()
 
     // event1（現在）の load を完了させると render が 1 回だけ呼ばれる。
     resolvers[1]?.(fakeTexture())
-    await flushPromises()
+    await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(1)
   })
 
@@ -264,7 +276,7 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     expect(renderSpy).not.toHaveBeenCalled()
 
     rejectLoad(new Error('not found'))
-    await flushPromises()
+    await flushDeferredTextRender()
 
     // .finally(onReady) が走り、ロード失敗でもテキスト reveal は出る。
     expect(renderSpy).toHaveBeenCalledTimes(1)
@@ -272,9 +284,9 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
   })
 
   // 7: novel forward — assetBaseUrl 空（描画不能）では texture を取りに行けないので、
-  //    CharacterLayer の loadTexture が `if (!assetBaseUrl)` で即 onReady → render は同期実行される
+  //    CharacterLayer の loadTexture が `if (!assetBaseUrl)` で即 onReady → 本文 reveal 遅延だけ通す
   //    （テクスチャ load を待たない＝テキストが詰まらない）。
-  it('7: assetBaseUrl 空では立ち絵あり Dialog でも render を同期実行する（load を待たない）', () => {
+  it('7: assetBaseUrl 空では立ち絵あり Dialog でも load を待たない', async () => {
     // 解決しない load にしても、assetBaseUrl 空なら Assets.load 自体が呼ばれない想定。
     const loadSpy = vi
       .spyOn(Assets, 'load')
@@ -291,14 +303,15 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
 
     r.setScenes([scene('s', [dialog('ひな', 'こんにちは。')])])
 
-    // assetBaseUrl 空なので texture load には進まず（Assets.load 未呼出）、onReady が同期発火 → render 同期。
+    // assetBaseUrl 空なので texture load には進まず（Assets.load 未呼出）、本文 reveal 遅延後に render。
     expect(loadSpy).not.toHaveBeenCalled()
+    await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(1)
   })
 
   // 8: novel forward — 表示中の同一立ち絵（同 character・同表情）を別位置で再 show すると、
-  //    texture は据え置き（再ロードなし）で位置だけ更新され、onReady が同期発火 → render も同期実行。
-  it('8: novel で位置のみ変更（texture 据え置き）は render を同期実行する（再ロードなし）', async () => {
+  //    texture は据え置き（再ロードなし）で位置だけ更新され、本文 reveal 遅延だけ通して render される。
+  it('8: novel で位置のみ変更（texture 据え置き）は再ロードしない', async () => {
     let resolveLoad: (t: unknown) => void = () => {}
     const loadPromise = new Promise<unknown>((res) => {
       resolveLoad = res
@@ -320,15 +333,15 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     expect(renderSpy).not.toHaveBeenCalled()
     // event0 の texture load を完了させて1回目の reveal を解禁する。
     resolveLoad(fakeTexture())
-    await flushPromises()
+    await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(1)
     expect(loadSpy).toHaveBeenCalledTimes(1)
 
-    // event1 へ前進。位置のみ変更（texture 据え置き）なので再ロードせず onReady 同期発火 → render 同期。
+    // event1 へ前進。位置のみ変更（texture 据え置き）なので再ロードせず、本文 reveal 遅延後に render。
     h.advance()
     // 再ロードは起きない（load 呼び出し回数は 1 のまま）。
     expect(loadSpy).toHaveBeenCalledTimes(1)
-    // render は同期で 2 回目が呼ばれている（await 不要）。
+    await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(2)
   })
 })
