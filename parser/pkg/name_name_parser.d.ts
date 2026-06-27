@@ -197,6 +197,12 @@ export interface Document {
      */
     character_y_ratio?: number;
     /**
+     * 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms:` から流す。
+     * 未指定なら runtime 既定 300ms（後方互換）。作品ごとに ToHeart 式のじわっとした登場へ
+     * 調整するための per-game 数値設定。空・非数値は None 扱い。
+     */
+    character_fade_ms?: number;
+    /**
      * Skip(S) ボタンを再生 UI に出すか (#310)。`true` = 出す（既定・後方互換）。
      * `false` で Skip(S) ボタンを描画しない（読み物として既読スキップを使わせたくない作品向け）。
      * skip-read-only ロジック（未読は解除）自体は変えない。ボタンの有無だけを制御する。
@@ -342,8 +348,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly emit_markdown: (a: any) => [number, number, number, number];
+    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

@@ -268,6 +268,8 @@ interface PoseNudge {
  * 仕様書 docs/spec/markdown-v0.1.md と数値を揃えて変更する。
  */
 const DEFAULT_FADE_MS = 300
+const CHARACTER_FADE_MS_MIN = 0
+const CHARACTER_FADE_MS_MAX = 5_000
 
 /**
  * タイトルカード補助要素（ラベル / 画像 #274）のフェードイン時間 (ms)。
@@ -394,6 +396,8 @@ export class CharacterLayer extends Container {
   /** 足元 Y 比率 (#308)。既定は CHARACTER_Y_RATIO（1.0）。frontmatter `character_y_ratio` 由来の
    *  per-game 値を setCharacterYRatio で受けて上書きする。未指定なら 1.0 で後方互換。 */
   private characterYRatio: number = CHARACTER_Y_RATIO
+  /** 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms` 由来。 */
+  private characterFadeMs: number = DEFAULT_FADE_MS
   /** auto-scale 計算のために screenWidth / screenHeight を保持 */
   private readonly screenWidth: number
   private readonly screenHeight: number
@@ -455,6 +459,18 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 立ち絵の新規表示・退場フェード時間を per-game 値で上書きする。
+   * null/undefined/非有限値は既定 300ms、範囲外は [0, 5000] にクランプする。
+   */
+  setCharacterFadeMs(ms: number | null | undefined): void {
+    const next =
+      ms == null || !Number.isFinite(ms)
+        ? DEFAULT_FADE_MS
+        : Math.min(CHARACTER_FADE_MS_MAX, Math.max(CHARACTER_FADE_MS_MIN, Math.floor(ms)))
+    this.characterFadeMs = next
+  }
+
+  /**
    * キャラクター立ち絵を表示する。既に表示中なら position / expression を更新する。
    *
    * 新規表示時は alpha 0 から DEFAULT_FADE_MS かけてフェードインする（#177）。
@@ -499,7 +515,7 @@ export class CharacterLayer extends Container {
         } else {
           existing.fadeAnimation = {
             startMs: this.elapsedMs,
-            durationMs: DEFAULT_FADE_MS,
+            durationMs: this.characterFadeMs,
             fromAlpha: existing.sprite.alpha,
             toAlpha: 1,
             destroyOnComplete: false,
@@ -610,7 +626,7 @@ export class CharacterLayer extends Container {
         ? null
         : {
             startMs: this.elapsedMs,
-            durationMs: DEFAULT_FADE_MS,
+            durationMs: this.characterFadeMs,
             fromAlpha: 0,
             toAlpha: 1,
             destroyOnComplete: false,
@@ -1927,7 +1943,7 @@ export class CharacterLayer extends Container {
     }
     state.fadeAnimation = {
       startMs: this.elapsedMs,
-      durationMs: DEFAULT_FADE_MS,
+      durationMs: this.characterFadeMs,
       fromAlpha: state.sprite.alpha,
       toAlpha: 0,
       destroyOnComplete: true,

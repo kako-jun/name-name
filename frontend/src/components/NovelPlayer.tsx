@@ -64,6 +64,8 @@ interface NovelPlayerProps {
   /** 立ち絵の足元 Y 比率 (#308)。frontmatter `character_y_ratio:` から流す。
    *  null/undefined で runtime 既定 1.0（足が画面下端）。>1.0 で靴が画面外に切れる（ToHeart 式） */
   characterYRatio?: number | null
+  /** 立ち絵の新規表示・退場フェード時間 (ms)。frontmatter `character_fade_ms:` から流す。 */
+  characterFadeMs?: number | null
   /** Skip(S) ボタンを出すか (#310)。frontmatter `skip_enabled:` から流す。
    *  null/undefined/true で Skip(S) ボタンを描画する（既定・後方互換）。false で描画しない。
    *  skip-read-only ロジック（未読は解除）自体は不変。ボタンの有無だけを制御する。 */
@@ -97,6 +99,7 @@ function NovelPlayer({
   dialogStyle,
   protagonist,
   characterYRatio,
+  characterFadeMs,
   skipEnabled,
   debugEnabled,
   docKey,
@@ -174,6 +177,8 @@ function NovelPlayer({
       // 立ち絵の足元 Y 比率 (#308)。setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、
       // 初回描画から per-game の足元位置（全身 / 靴を切る）で立つようにする。
       renderer.setCharacterYRatio(characterYRatio ?? null)
+      // 立ち絵フェード時間。初回 show より前に設定し、ToHeart 式のじわっとした登場を作品単位で調整する。
+      renderer.setCharacterFadeMs(characterFadeMs ?? null)
       // 主人公セリフの本文色 (#305) は renderer 既定 #FFF6E6 のまま使う。frontmatter での
       // 色上書きは未実装のため、ここでは設定しない（renderer フィールド初期値が効く）。
       // init 完了直後に現在の settings を反映 (#138)
@@ -264,6 +269,10 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setCharacterYRatio(characterYRatio ?? null)
   }, [characterYRatio])
+
+  useEffect(() => {
+    rendererRef.current?.setCharacterFadeMs(characterFadeMs ?? null)
+  }, [characterFadeMs])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {

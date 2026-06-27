@@ -745,6 +745,7 @@ function EditorScreen({
                 dialogStyle={doc?.dialog_style ?? null}
                 protagonist={doc?.protagonist ?? null}
                 characterYRatio={doc?.character_y_ratio ?? null}
+                characterFadeMs={doc?.character_fade_ms ?? null}
                 // Skip(S) は doc 由来（#310）。skip_enabled=false の作品は編集プレビューでも S を隠す。
                 skipEnabled={doc?.skip_enabled ?? null}
                 // デバッグ(D) は frontmatter 非依存で常時有効（編集者用 #310）。debug_enabled は /play 専用。

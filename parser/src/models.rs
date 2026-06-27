@@ -859,6 +859,11 @@ pub struct Document {
     /// 比率なので f64。空・非数値は None 扱い（runtime 既定 1.0 にフォールバック）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character_y_ratio: Option<f64>,
+    /// 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms:` から流す。
+    /// 未指定なら runtime 既定 300ms（後方互換）。作品ごとに ToHeart 式のじわっとした登場へ
+    /// 調整するための per-game 数値設定。空・非数値は None 扱い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_fade_ms: Option<u32>,
     /// Skip(S) ボタンを再生 UI に出すか (#310)。`true` = 出す（既定・後方互換）。
     /// `false` で Skip(S) ボタンを描画しない（読み物として既読スキップを使わせたくない作品向け）。
     /// skip-read-only ロジック（未読は解除）自体は変えない。ボタンの有無だけを制御する。

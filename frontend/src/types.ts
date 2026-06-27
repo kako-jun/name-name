@@ -426,6 +426,9 @@ export interface EventDocument {
    *  null/undefined のときは runtime 既定 1.0（後方互換）。frontmatter `character_y_ratio:` から流す。
    *  dialog_style: novel/adv 非依存（両モードで同じ足元）。 */
   character_y_ratio?: number | null
+  /** 立ち絵の新規表示・退場フェード時間 (ms)。
+   *  null/undefined のときは runtime 既定 300ms（後方互換）。frontmatter `character_fade_ms:` から流す。 */
+  character_fade_ms?: number | null
   /** Skip(S) ボタンを再生 UI に出すか (#310)。true=出す（既定・後方互換）/ false=描画しない。
    *  skip-read-only ロジック（未読は解除）自体は不変。ボタンの有無だけを制御する。
    *  null/undefined のときは runtime 既定 true（出す）。frontmatter `skip_enabled:` から流す。 */

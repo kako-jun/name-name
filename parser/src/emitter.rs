@@ -46,6 +46,9 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ratio) = doc.character_y_ratio {
             out.push_str(&format!("character_y_ratio: {ratio}\n"));
         }
+        if let Some(ms) = doc.character_fade_ms {
+            out.push_str(&format!("character_fade_ms: {ms}\n"));
+        }
         // Emit skip_enabled / debug_enabled only when present (#310)。bool なので Some のときだけ
         // `true` / `false` を素で出す（None は省略＝runtime 既定にフォールバック）。
         if let Some(enabled) = doc.skip_enabled {
@@ -1141,6 +1144,7 @@ mod tests {
             dialog_style: None,
             protagonist: None,
             character_y_ratio: None,
+            character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
             chapters: vec![Chapter {
@@ -1257,6 +1261,7 @@ mod tests {
             dialog_style: None,
             protagonist: None,
             character_y_ratio: None,
+            character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
             chapters: vec![Chapter {

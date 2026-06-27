@@ -3695,6 +3695,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         dialog_style: None,
         protagonist: None,
         character_y_ratio: None,
+        character_fade_ms: None,
         skip_enabled: None,
         debug_enabled: None,
         chapters: vec![Chapter {
@@ -4361,6 +4362,7 @@ engine: name-name
 aspect_ratio: "9:16"
 dialog_style: "novel"
 character_y_ratio: 1.05
+character_fade_ms: 700
 skip_enabled: false
 debug_enabled: true
 chapter: 1
@@ -4374,6 +4376,7 @@ title: "テスト"
     let doc = parser::parse(input);
     assert_eq!(doc.skip_enabled, Some(false));
     assert_eq!(doc.debug_enabled, Some(true));
+    assert_eq!(doc.character_fade_ms, Some(700));
 
     let emitted = emitter::emit(&doc);
     let doc2 = parser::parse(&emitted);
@@ -4393,6 +4396,7 @@ title: "テスト"
     assert_eq!(doc2.aspect_ratio, "9:16");
     assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
     assert_eq!(doc2.character_y_ratio, Some(1.05));
+    assert_eq!(doc2.character_fade_ms, Some(700));
     // ドキュメント全体が安定（parse → emit → parse が冪等）。
     assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
 }

@@ -20,6 +20,7 @@ pub fn parse(input: &str) -> Document {
     let mut dialog_style: Option<String> = None;
     let mut protagonist: Option<String> = None;
     let mut character_y_ratio: Option<f64> = None;
+    let mut character_fade_ms: Option<u32> = None;
     let mut skip_enabled: Option<bool> = None;
     let mut debug_enabled: Option<bool> = None;
 
@@ -81,6 +82,10 @@ pub fn parse(input: &str) -> Document {
                 // 空・非数値は None のまま（runtime 既定 1.0 にフォールバック）。
                 // 範囲クランプは runtime 側（CharacterLayer）で行う（parser は生の数値を透過）。
                 character_y_ratio = unquote(val.trim()).parse::<f64>().ok();
+            } else if let Some(val) = line.strip_prefix("character_fade_ms:") {
+                // 立ち絵の新規表示・退場フェード時間（ms）。数値のみ受ける。
+                // 空・非数値は None のまま（runtime 既定 300ms にフォールバック）。
+                character_fade_ms = unquote(val.trim()).parse::<u32>().ok();
             } else if let Some(val) = line.strip_prefix("skip_enabled:") {
                 // Skip(S) ボタンを再生 UI に出すか (#310)。`true` / `false` のみ受ける（parse_bool_kv）。
                 // 空・不正値は None のまま（runtime 既定 true ＝出す＝後方互換）。
@@ -821,6 +826,7 @@ pub fn parse(input: &str) -> Document {
         dialog_style,
         protagonist,
         character_y_ratio,
+        character_fade_ms,
         skip_enabled,
         debug_enabled,
         chapters: vec![Chapter {

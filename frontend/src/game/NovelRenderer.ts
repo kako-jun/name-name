@@ -907,6 +907,14 @@ export class NovelRenderer {
   }
 
   /**
+   * 立ち絵の新規表示・退場フェード時間を設定する。
+   * frontmatter `character_fade_ms:` の値（ms）を渡す。null/undefined のときは既定 300ms。
+   */
+  setCharacterFadeMs(ms: number | null | undefined): void {
+    this.characterLayer.setCharacterFadeMs(ms ?? null)
+  }
+
+  /**
    * 主人公セリフの本文色を設定する (#305)。CSS hex を渡す。null/undefined/空文字・不正値の
    * ときは既定の暖アイボリー #FFF6E6 に倒す（parseColorToNumber の fallback）。
    *
