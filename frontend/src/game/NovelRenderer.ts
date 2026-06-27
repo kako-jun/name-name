@@ -2312,13 +2312,35 @@ export class NovelRenderer {
         if (this.sentenceIndex !== expectedSentenceIndex) return
         this.render()
       }
+      const runAfterPortraitSettles = () => {
+        const startedAt = this.time.now()
+        const poll = () => {
+          if (token !== this.deferredTextRenderToken) return
+          if (!this.initialized) return
+          if (this.eventIndex !== expectedEventIndex) return
+          if (this.textIndex !== expectedTextIndex) return
+          if (this.sentenceIndex !== expectedSentenceIndex) return
+          // 立ち絵の fade / nudge / transform が落ち着くまでは本文 reveal を始めない。
+          // renderOnly のタイトル演出やカーソル点滅は CharacterLayer 側で除外している。
+          if (
+            this.characterLayer.hasActivePortraitTransition() &&
+            this.time.now() - startedAt < 6_000
+          ) {
+            this.time.setTimeout(poll, 16)
+            return
+          }
+          run()
+        }
+        poll()
+      }
       // texture ready 直後に同じタスクで本文 reveal を始めると、ブラウザの最初の paint 前に
       // テキストも乗ってしまい「文字が少し出てから立ち絵が変わる」に見える端末がある。
-      // rAF を 2 回待つことで、立ち絵だけの frame を 1 回通してから本文を開始する。
+      // rAF を 2 回待つことで、立ち絵だけの frame を 1 回通し、その後さらに立ち絵の
+      // fade / nudge / transform が落ち着いてから本文を開始する。
       if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-        window.requestAnimationFrame(() => window.requestAnimationFrame(run))
+        window.requestAnimationFrame(() => window.requestAnimationFrame(runAfterPortraitSettles))
       } else {
-        this.time.setTimeout(run, 0)
+        this.time.setTimeout(runAfterPortraitSettles, 0)
       }
     }
     // showCharacterFromDialog は sprite を**同期**生成し（CharacterLayer.show 内）、

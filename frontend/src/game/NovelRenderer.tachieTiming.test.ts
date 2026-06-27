@@ -23,6 +23,7 @@ import type { Event, EventScene } from '../types'
 
 // 解決済み Promise の .then/.finally チェーンを 1 巡消化する。
 const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 // #293: 立ち絵 ready 後、rAF 2 回で「立ち絵だけの frame」を通してから本文 reveal する。
 const flushDeferredTextRender = async (): Promise<void> => {
   await flushPromises()
@@ -81,7 +82,10 @@ interface RendererTestHooks {
   render(): void
   advance(): void
   initialized: boolean
-  characterLayer: { show: (...args: unknown[]) => void }
+  characterLayer: {
+    show: (...args: unknown[]) => void
+    hasActivePortraitTransition: () => boolean
+  }
   eventIndex: number
   resolvedEvents: Event[]
 }
@@ -92,6 +96,13 @@ function hooks(r: NovelRenderer): RendererTestHooks {
 /** fake texture（loadTexture 内の texture.width/height を読む経路を満たす最小形）。 */
 function fakeTexture(): unknown {
   return { width: 100, height: 200, destroyed: false }
+}
+
+function configureNovelRenderer(r: NovelRenderer, assetBaseUrl = '/assets'): void {
+  r.setDialogStyle('novel')
+  // 既存の順序同期テストは texture ready → reveal の順序だけを見る。フェード待ちは専用テストで見る。
+  r.setCharacterFadeMs(0)
+  r.setAssetBaseUrl(assetBaseUrl)
 }
 
 describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', () => {
@@ -112,8 +123,7 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = new NovelRenderer()
-    r.setDialogStyle('novel')
-    r.setAssetBaseUrl('/assets')
+    configureNovelRenderer(r)
     const h = hooks(r)
     // render の実 body は PixiJS 依存なので差し替え、呼び出しタイミングだけ観測する。
     const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
@@ -147,10 +157,10 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     const loadSpy = vi.spyOn(Assets, 'load')
 
     const r = new NovelRenderer()
-    r.setDialogStyle('novel')
-    r.setAssetBaseUrl('/assets')
+    configureNovelRenderer(r)
     const h = hooks(r)
     const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
+    vi.spyOn(h.characterLayer, 'hasActivePortraitTransition').mockReturnValue(false)
     h.initialized = true
 
     r.setScenes([scene('s', [dialogNoPortrait('ナレ', '地の文。')])])
@@ -191,8 +201,7 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = new NovelRenderer()
-    r.setDialogStyle('novel')
-    r.setAssetBaseUrl('/assets')
+    configureNovelRenderer(r)
     const h = hooks(r)
     const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
     h.initialized = true
@@ -227,10 +236,10 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = new NovelRenderer()
-    r.setDialogStyle('novel')
-    r.setAssetBaseUrl('/assets')
+    configureNovelRenderer(r)
     const h = hooks(r)
     const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
+    vi.spyOn(h.characterLayer, 'hasActivePortraitTransition').mockReturnValue(false)
     h.initialized = true
 
     // event0 ひな / event1 せお（別話者・別立ち絵）。
@@ -266,8 +275,7 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const r = new NovelRenderer()
-    r.setDialogStyle('novel')
-    r.setAssetBaseUrl('/assets')
+    configureNovelRenderer(r)
     const h = hooks(r)
     const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
     h.initialized = true
@@ -294,9 +302,8 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = new NovelRenderer()
-    r.setDialogStyle('novel')
     // assetBaseUrl を明示的に空にする（描画不能状態）。
-    r.setAssetBaseUrl('')
+    configureNovelRenderer(r, '')
     const h = hooks(r)
     const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
     h.initialized = true
@@ -320,8 +327,7 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = new NovelRenderer()
-    r.setDialogStyle('novel')
-    r.setAssetBaseUrl('/assets')
+    configureNovelRenderer(r)
     const h = hooks(r)
     const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
     h.initialized = true
@@ -343,5 +349,30 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     expect(loadSpy).toHaveBeenCalledTimes(1)
     await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(2)
+  })
+
+  // 9: novel forward — texture ready 後も、立ち絵の fade / nudge / transform が残っている間は
+  //    本文 reveal を始めない。ページめくり直後に立ち絵が落ち着く前から次文が出る退行を防ぐ。
+  it('9: novel は立ち絵遷移が落ち着くまで本文 reveal を待つ', async () => {
+    vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
+
+    const r = new NovelRenderer()
+    configureNovelRenderer(r)
+    const h = hooks(r)
+    const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
+    h.initialized = true
+
+    const transitionSpy = vi.spyOn(h.characterLayer, 'hasActivePortraitTransition')
+    transitionSpy.mockReturnValueOnce(true).mockReturnValue(false)
+
+    r.setScenes([scene('s', [dialogNoPortrait('ナレ', '本文。')])])
+
+    // ready + 2 rAF 後でも、最初の poll が「立ち絵遷移中」を返すので本文はまだ出ない。
+    await flushDeferredTextRender()
+    expect(renderSpy).not.toHaveBeenCalled()
+
+    // 次の 16ms poll で遷移完了扱いになり、初めて本文 reveal する。
+    await sleep(25)
+    expect(renderSpy).toHaveBeenCalledTimes(1)
   })
 })

@@ -509,7 +509,7 @@ export class CharacterLayer extends Container {
     if (existing) {
       // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す
       if (existing.fadeAnimation?.destroyOnComplete) {
-        if (instant) {
+        if (instant || this.characterFadeMs <= 0) {
           existing.sprite.alpha = 1
           existing.fadeAnimation = null
         } else {
@@ -586,7 +586,8 @@ export class CharacterLayer extends Container {
     sprite.anchor.set(0.5, 1)
     sprite.x = x
     sprite.y = this.characterY
-    sprite.alpha = instant ? 1 : 0
+    const shouldFade = !instant && this.characterFadeMs > 0
+    sprite.alpha = shouldFade ? 0 : 1
     this.addChild(sprite)
 
     // off_right/off_left で登場した立ち絵には名前ラベルを上に自動付与する。
@@ -602,7 +603,7 @@ export class CharacterLayer extends Container {
       label.anchor.set(0.5, 1)
       label.x = sprite.x
       label.y = this.screenHeight * 0.18 // 画面上から 18% の位置 (label の下端)
-      label.alpha = instant ? 1 : 0
+      label.alpha = shouldFade ? 0 : 1
       this.addChild(label)
       const labelRef = label
       void ensureFontLoaded(labelFont)
@@ -622,15 +623,15 @@ export class CharacterLayer extends Container {
       fit,
       animation: null,
       poseNudge: null,
-      fadeAnimation: instant
-        ? null
-        : {
+      fadeAnimation: shouldFade
+        ? {
             startMs: this.elapsedMs,
             durationMs: this.characterFadeMs,
             fromAlpha: 0,
             toAlpha: 1,
             destroyOnComplete: false,
-          },
+          }
+        : null,
       textEffect: null,
       underline: null,
     }
@@ -1723,6 +1724,21 @@ export class CharacterLayer extends Container {
     return false
   }
 
+  /**
+   * 本物の立ち絵の遷移（transform / fade / pose nudge）が残っているか。
+   *
+   * hasActiveAnimation() はタイトル文字演出やカーソル点滅も含むため、本文 reveal の待機条件には
+   * 強すぎる。forward novel では「立ち絵が落ち着くまで」だけ待てばよいので renderOnly と
+   * textEffect/underline を除外する。
+   */
+  hasActivePortraitTransition(): boolean {
+    for (const s of this.characters.values()) {
+      if (s.renderOnly) continue
+      if (s.animation || s.fadeAnimation || s.poseNudge) return true
+    }
+    return false
+  }
+
   /** グリフ演出がまだ進行中か（完了済みなら container は保持するが ticker は止めてよい）。 */
   private isTextEffectActive(effect: TextEffectAnimation): boolean {
     // 完了後もカーソル（点滅）があれば ticker を回し続ける（#271 小例外）。
@@ -1926,7 +1942,7 @@ export class CharacterLayer extends Container {
       this.time.clearInterval(state.idleIntervalId)
       state.idleIntervalId = undefined
     }
-    if (instant) {
+    if (instant || this.characterFadeMs <= 0) {
       this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
       this.clearUnderline(state) // 下線 gfx を破棄 (#270)
       this.clearMask(state) // 円形マスク gfx を破棄 (#274)
