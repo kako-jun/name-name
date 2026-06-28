@@ -6,8 +6,9 @@ import type { Event, EventDocument, EventScene } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { parseMarkdown } from '../wasm/parser'
 import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
-import { ApiError, createApiClient, type ProjectInfo } from '../api/client'
+import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '../api/client'
 import { loadReadProgress, clearReadProgress } from '../game/readProgress'
+import { getCachedScriptContent, putCachedScriptContent } from '../game/scriptContentCache'
 
 // kako-jun/name-name#108: 一般ユーザー向けの再生専用画面。
 //   - 編集 UI / 保存 / アセット管理 / デバッグは一切表示しない
@@ -146,6 +147,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   // script.md がまだリポに無い「未投入」状態。エラーではなく案内として扱う。
   const [unpopulated, setUnpopulated] = useState(false)
   const sortedPlayablePathsRef = useRef<string[]>([])
+  const scriptInfoByPathRef = useRef<Map<string, ScriptInfo>>(new Map())
   const entryPathRef = useRef<string | null>(null)
   const loadedDocsRef = useRef<Map<string, EventDocument>>(new Map())
   const loadingDocsRef = useRef<Map<string, Promise<EventDocument | null>>>(new Map())
@@ -162,13 +164,65 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       const inFlight = loadingDocsRef.current.get(path)
       if (inFlight) return inFlight
 
-      const promise = api
-        .getContents(projectName, path, PUBLIC_BRANCH)
-        .then(async (c) => {
-          const parsed = await parseMarkdown(c.content || '')
+      const promise = (async () => {
+        const scriptInfo = scriptInfoByPathRef.current.get(path)
+        let markdown: string | null = null
+        let loadedFromPersistentCache = false
+
+        if (scriptInfo?.sha) {
+          markdown = await getCachedScriptContent({
+            projectName,
+            ref: PUBLIC_BRANCH,
+            path,
+            sha: scriptInfo.sha,
+          })
+          loadedFromPersistentCache = markdown !== null
+        }
+
+        if (markdown === null) {
+          const contents = await api.getContents(projectName, path, PUBLIC_BRANCH)
+          markdown = contents.content || ''
+          const sha = scriptInfo?.sha ?? contents.sha
+          if (sha) {
+            void putCachedScriptContent(
+              {
+                projectName,
+                ref: PUBLIC_BRANCH,
+                path,
+                sha,
+              },
+              markdown
+            )
+          }
+        }
+
+        try {
+          const parsed = await parseMarkdown(markdown)
           loadedDocsRef.current.set(path, parsed)
           return parsed
-        })
+        } catch (err) {
+          if (!loadedFromPersistentCache) throw err
+
+          console.warn(`PlayerScreen: cached script ${path} failed to parse; refetching`, err)
+          const contents = await api.getContents(projectName, path, PUBLIC_BRANCH)
+          const freshMarkdown = contents.content || ''
+          const sha = scriptInfo?.sha ?? contents.sha
+          if (sha) {
+            void putCachedScriptContent(
+              {
+                projectName,
+                ref: PUBLIC_BRANCH,
+                path,
+                sha,
+              },
+              freshMarkdown
+            )
+          }
+          const parsed = await parseMarkdown(freshMarkdown)
+          loadedDocsRef.current.set(path, parsed)
+          return parsed
+        }
+      })()
         .catch((err) => {
           console.warn(`PlayerScreen: failed to load script ${path}:`, err)
           return null
@@ -225,6 +279,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       setUnpopulated(false)
       setLoadDebugInfo([])
       sortedPlayablePathsRef.current = []
+      scriptInfoByPathRef.current = new Map()
       entryPathRef.current = null
       loadedDocsRef.current = new Map()
       loadingDocsRef.current = new Map()
@@ -259,7 +314,8 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         if (cancelled) return
 
         // 再生対象の .md パス一覧（hidden は除外）。
-        const playablePaths = (scripts ?? []).filter((s) => !s.hidden).map((s) => s.path)
+        const playableScripts = (scripts ?? []).filter((s) => !s.hidden)
+        const playablePaths = playableScripts.map((s) => s.path)
 
         if (scripts === null) {
           // --- listScripts 不能フォールバック: 単一 script.md だけで再生 ---
@@ -310,6 +366,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         const sortedPaths = [...playablePaths].sort()
         const entryPath = sortedPaths.find((p) => basename(p) === SCRIPT_BASENAME) ?? sortedPaths[0]
         sortedPlayablePathsRef.current = sortedPaths
+        scriptInfoByPathRef.current = new Map(playableScripts.map((s) => [s.path, s]))
         entryPathRef.current = entryPath
 
         // 3. 初期表示は entry MD だけを取得・parse する (#314 Phase 1)。
@@ -337,6 +394,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           `scripts listed: ${scripts.length}`,
           `playable paths: ${playablePaths.length}`,
           `initial loaded docs: ${loadedDocsRef.current.size}`,
+          `persistent cache: enabled`,
           `lazy loading: enabled`,
           `scenes: ${scenes.length}`,
           `events: ${flattenDocumentEvents(entryDoc).length}`,

@@ -48,6 +48,15 @@ vi.mock('../wasm/parser', () => ({
   emitMarkdown: vi.fn(),
 }))
 
+const { getCachedScriptContentMock, putCachedScriptContentMock } = vi.hoisted(() => ({
+  getCachedScriptContentMock: vi.fn(),
+  putCachedScriptContentMock: vi.fn(),
+}))
+vi.mock('../game/scriptContentCache', () => ({
+  getCachedScriptContent: getCachedScriptContentMock,
+  putCachedScriptContent: putCachedScriptContentMock,
+}))
+
 // NovelPlayer / RPGPlayer は PixiJS に依存し、jsdom では init できないため
 // props だけ確認できる軽い擬似コンポーネントに差し替える。
 //
@@ -129,6 +138,10 @@ beforeEach(() => {
     { path: 'script.md', sha: 's', size: 1, title: null, hidden: false },
   ])
   getContentsMock.mockReset()
+  getCachedScriptContentMock.mockReset()
+  getCachedScriptContentMock.mockResolvedValue(null)
+  putCachedScriptContentMock.mockReset()
+  putCachedScriptContentMock.mockResolvedValue(undefined)
   parseMarkdownMock.mockReset()
   novelPlayerProps.mockReset()
   rpgPlayerProps.mockReset()
@@ -281,6 +294,173 @@ describe('PlayerScreen', () => {
       'content/scripts/free/a.md',
       'main'
     )
+  })
+
+  it('#314 Phase 2: entry MD が IndexedDB cache hit なら contents API を呼ばない', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    listScriptsMock.mockResolvedValue([
+      { path: 'content/scripts/script.md', sha: 'entry-sha', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/free/a.md', sha: 'a-sha', size: 1, title: null, hidden: false },
+    ])
+    getCachedScriptContentMock.mockImplementation(async ({ path }: { path: string }) =>
+      path === 'content/scripts/script.md' ? 'cached-entry-markdown' : null
+    )
+    getContentsMock.mockResolvedValue({
+      path: 'content/scripts/script.md',
+      sha: 'entry-sha',
+      content: 'network-entry-markdown',
+    })
+    parseMarkdownMock.mockImplementation(async (md: string) => ({
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes: [{ id: `scene-${md}`, title: md, view: 'TopDown', events: [] }],
+        },
+      ],
+    }))
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+
+    expect(getCachedScriptContentMock).toHaveBeenCalledWith({
+      projectName: 'theo-hayami',
+      ref: 'main',
+      path: 'content/scripts/script.md',
+      sha: 'entry-sha',
+    })
+    expect(getContentsMock).not.toHaveBeenCalled()
+    expect(putCachedScriptContentMock).not.toHaveBeenCalled()
+    expect(parseMarkdownMock).toHaveBeenCalledWith('cached-entry-markdown')
+    expect(screen.getByTestId('novel-player').getAttribute('data-scene-ids')).toBe(
+      'scene-cached-entry-markdown'
+    )
+  })
+
+  it('#314 Phase 2: cache miss なら contents API から取得して sha 付きで保存する', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    listScriptsMock.mockResolvedValue([
+      { path: 'script.md', sha: 'listed-sha', size: 1, title: null, hidden: false },
+    ])
+    getCachedScriptContentMock.mockResolvedValue(null)
+    getContentsMock.mockResolvedValue({
+      path: 'script.md',
+      sha: 'contents-sha',
+      content: 'network-markdown',
+    })
+    parseMarkdownMock.mockResolvedValue({
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes: [{ id: 'scene-network', title: 'network', view: 'TopDown', events: [] }],
+        },
+      ],
+    })
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+
+    expect(getContentsMock).toHaveBeenCalledWith('theo-hayami', 'script.md', 'main')
+    expect(putCachedScriptContentMock).toHaveBeenCalledWith(
+      {
+        projectName: 'theo-hayami',
+        ref: 'main',
+        path: 'script.md',
+        sha: 'listed-sha',
+      },
+      'network-markdown'
+    )
+  })
+
+  it('#314 Phase 2: cache hit した lazy MD も contents API を呼ばずに解決する', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    listScriptsMock.mockResolvedValue([
+      { path: 'script.md', sha: 'entry-sha', size: 1, title: null, hidden: false },
+      { path: 'content/scripts/free/a.md', sha: 'a-sha', size: 1, title: null, hidden: false },
+    ])
+    getCachedScriptContentMock.mockImplementation(async ({ path }: { path: string }) => {
+      if (path === 'script.md') return 'entry'
+      if (path === 'content/scripts/free/a.md') return 'cached-a'
+      return null
+    })
+    getContentsMock.mockResolvedValue({
+      path: 'unused.md',
+      sha: 'unused',
+      content: 'unused',
+    })
+    parseMarkdownMock.mockImplementation(async (md: string) => ({
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes:
+            md === 'entry'
+              ? [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }]
+              : [{ id: 'far-scene', title: 'far', view: 'TopDown', events: [] }],
+        },
+      ],
+    }))
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+    expect(getContentsMock).not.toHaveBeenCalled()
+
+    const loadedScenes = await resolveMissingScene('far-scene')
+
+    expect(loadedScenes?.some((s) => s.id === 'far-scene')).toBe(true)
+    expect(getCachedScriptContentMock).toHaveBeenCalledWith({
+      projectName: 'theo-hayami',
+      ref: 'main',
+      path: 'content/scripts/free/a.md',
+      sha: 'a-sha',
+    })
+    expect(getContentsMock).not.toHaveBeenCalled()
   })
 
   it('#314: 未ロード scene へのジャンプ時に別 MD を追加取得して解決する', async () => {
