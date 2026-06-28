@@ -300,8 +300,25 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       loadedDocsRef.current = new Map()
       loadingDocsRef.current = new Map()
       try {
-        // 1. プロジェクト情報を取得（タイトル表示・assets ベース URL 解決用）
-        const projects = await api.listProjects()
+        // 1. プロジェクト情報と scripts 一覧は独立しているので並列に開始する (#314)。
+        //    hard reload の cold path で、project metadata 待ちが entry MD 取得開始を
+        //    不要に遅らせないようにする。
+        const projectsPromise = api.listProjects()
+        const scriptsPromise = (async (): Promise<Awaited<
+          ReturnType<typeof api.listScripts>
+        > | null> => {
+          try {
+            return await api.listScripts(projectName, PUBLIC_BRANCH)
+          } catch (err) {
+            // listScripts 自体が使えない/失敗（旧 Worker・テストスタブ等）
+            //   → 従来の単一 `script.md` 直接取得にフォールバックする。
+            console.warn('PlayerScreen: listScripts unavailable, single-script mode:', err)
+            return null
+          }
+        })()
+
+        // 2. プロジェクト情報を取得（タイトル表示・assets ベース URL 解決用）。
+        const projects = await projectsPromise
         const found = projects.find((p) => p.name === projectName) ?? null
         if (cancelled) return
         setProjectInfo(found)
@@ -313,20 +330,12 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           return
         }
 
-        // 2. main ブランチの .md を列挙して **エントリ MD を解決する** (#284 M1)。
+        // 3. main ブランチの .md を列挙して **エントリ MD を解決する** (#284 M1)。
         //    エントリ = path の basename が `script.md` のもの。無ければ sort 済み先頭。
         //    listScripts が 0 件 or 取得不能のときだけ「準備中(unpopulated)」/単一
         //    フォールバックに分岐する（直下 script.md 固定だと scriptsDir 構成の
         //    theo-hayami 等が永久に再生できない退行になるため）。
-        let scripts: Awaited<ReturnType<typeof api.listScripts>> | null = null
-        try {
-          scripts = await api.listScripts(projectName, PUBLIC_BRANCH)
-        } catch (err) {
-          // listScripts 自体が使えない/失敗（旧 Worker・テストスタブ等）
-          //   → 従来の単一 `script.md` 直接取得にフォールバックする。
-          console.warn('PlayerScreen: listScripts unavailable, single-script mode:', err)
-          scripts = null
-        }
+        const scripts = await scriptsPromise
         if (cancelled) return
 
         // 再生対象の .md パス一覧（hidden は除外）。
@@ -385,7 +394,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         scriptInfoByPathRef.current = new Map(playableScripts.map((s) => [s.path, s]))
         entryPathRef.current = entryPath
 
-        // 3. 初期表示は entry MD だけを取得・parse する (#314 Phase 1)。
+        // 4. 初期表示は entry MD だけを取得・parse する (#314 Phase 1)。
         //    サブ MD は選択先 sceneId が未ロードだった時点で resolver が差分取得する。
         const entryDoc = await loadScriptDoc(entryPath)
         if (cancelled) return
@@ -395,7 +404,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           throw new Error(`PlayerScreen: entry script not loadable: ${entryPath}`)
         }
 
-        // 4. RPG 判定・aspect_ratio / choice_style / font_family・通常再生ストリームの
+        // 5. RPG 判定・aspect_ratio / choice_style / font_family・通常再生ストリームの
         //    供給元はエントリ doc (#284 S1)。
         setDoc(entryDoc)
 
