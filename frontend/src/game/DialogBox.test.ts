@@ -66,6 +66,7 @@ const TEXT_X_WITH_PORTRAIT = PORTRAIT_X + PORTRAIT_SIZE + PORTRAIT_MARGIN
 interface DialogBoxInternals {
   portraitFrame: { visible: boolean } | null
   dialogText: { x: number; text: string; visible: boolean; style: { fill: unknown } }
+  indicator: { visible: boolean }
   portraitSprite: { visible: boolean; texture: unknown } | null
   currentPortraitToken: number
   rubyEntries: Array<{ placement: unknown; text: { x: number; style: { fill: unknown } } }>
@@ -232,6 +233,37 @@ describe('DialogBox typewriter (Issue #150 / #194)', () => {
     const i = asInternals(box)
     expect(i.dialogText.text).toBe('')
     expect(box.isTyping()).toBe(true)
+    box.dispose()
+  })
+
+  it('新しい setDialog でタイプ開始した瞬間に前のインジケータを隠す', () => {
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setDialog('長老', 'first')
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+    expect(i.indicator.visible).toBe(true)
+
+    box.setDialog('村人', 'second')
+    expect(box.isTyping()).toBe(true)
+    expect(i.indicator.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('novel progressive で文を足した瞬間に前の位置のインジケータを隠す', () => {
+    const box = makeRpgBox()
+    box.setNovelMode(true)
+    const i = asInternals(box)
+
+    box.setNovelDialogProgressive(null, 'first', 0)
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+    expect(i.indicator.visible).toBe(true)
+
+    box.setNovelDialogProgressive(null, 'firstsecond', 'first'.length)
+    expect(box.isTyping()).toBe(true)
+    expect(i.indicator.visible).toBe(false)
     box.dispose()
   })
 })

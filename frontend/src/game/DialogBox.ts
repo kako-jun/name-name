@@ -601,6 +601,7 @@ export class DialogBox extends Container {
     const lines = wordwrap(plainText, maxTextWidth, font)
     this.typewriter = startTypewriter(lines.join('\n'))
     this.dialogText.text = ''
+    this.indicator.visible = false
     this.rubyPlacements = computeRubyPlacements(runs, lines)
     this.rubyBuildToken += 1
     const rubyToken = this.rubyBuildToken
@@ -677,6 +678,7 @@ export class DialogBox extends Container {
     this.typewriter = startTypewriterFrom(fullText, fromCount)
     // 既出分（fromCount 文字）は即時表示する。残りは ticker がタイプする。
     this.dialogText.text = this.visibleDialogText(this.typewriter)
+    this.indicator.visible = false
     // novel 配置用に累積テキストの wrap 結果を保持する (#292)。
     this.novelWrappedLines = lines
     this.rubyPlacements = computeRubyPlacements(runs, lines)
