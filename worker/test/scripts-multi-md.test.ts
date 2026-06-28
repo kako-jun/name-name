@@ -79,6 +79,7 @@ describe("GET /api/projects/:name/scripts (scriptsDir / fast tree listing #314)"
             treeEntry("content/scripts/free/a.md", "sha-a", 100),
             treeEntry("content/scripts/main/b.md", "sha-b", 100),
             treeEntry("content/scripts/free/nested/deep.md", "sha-deep", 100),
+            treeEntry("content/scripts/readme.md", "sha-readme", 100),
             treeEntry("content/scripts/README.txt", "sha-txt", 100),
             treeEntry("docs/outside.md", "sha-outside", 100),
           ],

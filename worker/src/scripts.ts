@@ -217,6 +217,7 @@ async function listScriptsFromTree(
         (relative.includes("/") && relative.split("/").length > 2)
       )
         return false;
+      if (relative.toLowerCase() === "readme.md") return false;
       return (
         entry.path.toLowerCase().endsWith(".md") &&
         (entry.size ?? 0) <= 64 * 1024
