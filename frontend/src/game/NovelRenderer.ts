@@ -217,6 +217,8 @@ export class NovelRenderer {
   private onEndCallback: (() => void) | null = null
   /** 動画エクスポート用 (#228)。`jumpToScene` / `setScenes` でシーンが切り替わったときに呼ぶ */
   private onSceneChangeCallback: ((sceneId: string) => void) | null = null
+  private missingSceneResolver: ((sceneId: string) => Promise<EventScene[] | null>) | null = null
+  private pendingMissingScenes = new Set<string>()
   private assetBaseUrl: string = ''
   private textureCache: Map<string, Texture> = new Map()
   /** setBackground の非同期ロード用トークン。destroy / 再入 の race 回避に使う */
@@ -665,18 +667,52 @@ export class NovelRenderer {
     this.allScenes = scenes
   }
 
+  setMissingSceneResolver(
+    resolver: ((sceneId: string) => Promise<EventScene[] | null>) | null
+  ): void {
+    this.missingSceneResolver = resolver
+  }
+
   /**
    * 指定シーンにジャンプする
    */
   jumpToScene(sceneId: string): void {
     const scene = findSceneById(this.allScenes, sceneId)
     if (!scene) {
-      console.warn(`[name-name] シーンが見つからない: ${sceneId}`)
+      if (this.missingSceneResolver) {
+        void this.resolveMissingSceneAndJump(sceneId)
+      } else {
+        console.warn(`[name-name] シーンが見つからない: ${sceneId}`)
+      }
       return
     }
+    this.startScene(sceneId, scene)
+  }
+
+  private startScene(sceneId: string, scene: EventScene): void {
     this.currentSceneId = sceneId
     this.resetAndStartEvents([...scene.events])
     this.onSceneChangeCallback?.(sceneId)
+  }
+
+  private async resolveMissingSceneAndJump(sceneId: string): Promise<void> {
+    if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) return
+    this.pendingMissingScenes.add(sceneId)
+    try {
+      const scenes = await this.missingSceneResolver(sceneId)
+      if (!scenes) return
+      this.setJumpSceneIndex(scenes)
+      const scene = findSceneById(this.allScenes, sceneId)
+      if (!scene) {
+        console.warn(`[name-name] lazy load 後もシーンが見つかりません: ${sceneId}`)
+        return
+      }
+      this.startScene(sceneId, scene)
+    } catch (err) {
+      console.warn(`[name-name] シーンの追加読み込みに失敗しました: ${sceneId}`, err)
+    } finally {
+      this.pendingMissingScenes.delete(sceneId)
+    }
   }
 
   /** 現在表示中のシーンID (#228 動画エクスポート用) */

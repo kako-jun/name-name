@@ -8,7 +8,7 @@
 //   - データ取得失敗時にエラーメッセージが表示される
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 // #284: NovelRenderer.jumpToScene が使う実シーン解決プリミティブ。
 // PlayerScreen が連結した scenes に対してクロスファイルのジャンプが解決することを、
 // 実装で実際に使われるこの純粋関数で確認する（Pixi/NovelRenderer は jsdom で init 不可）。
@@ -60,6 +60,7 @@ vi.mock('../components/NovelPlayer', () => ({
     events: unknown
     scenes?: unknown
     jumpSceneIndex?: unknown
+    onResolveMissingScene?: (sceneId: string) => Promise<EventScene[] | null>
     assetBaseUrl?: string
   }) => {
     novelPlayerProps(props)
@@ -108,6 +109,16 @@ function lastNovelPlayerProps(): Record<string, unknown> {
   const lastCall = calls[calls.length - 1]
   expect(lastCall).toBeDefined()
   return lastCall[0] as Record<string, unknown>
+}
+
+async function resolveMissingScene(sceneId: string): Promise<EventScene[] | null> {
+  const resolver = lastNovelPlayerProps().onResolveMissingScene
+  expect(typeof resolver).toBe('function')
+  let result: EventScene[] | null = null
+  await act(async () => {
+    result = await (resolver as (id: string) => Promise<EventScene[] | null>)(sceneId)
+  })
+  return result
 }
 
 beforeEach(() => {
@@ -200,7 +211,7 @@ describe('PlayerScreen', () => {
     expect(screen.queryByRole('button', { name: 'RPG' })).toBeNull()
   })
 
-  it('#284: 複数 MD のシーンを連結して jumpSceneIndex= で NovelPlayer に渡す（エントリ先頭）', async () => {
+  it('#314: 初期ロードでは entry MD だけを取得して NovelPlayer に渡す', async () => {
     listProjectsMock.mockResolvedValue([
       { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
     ])
@@ -250,27 +261,29 @@ describe('PlayerScreen', () => {
     })
 
     const player = screen.getByTestId('novel-player')
-    // エントリ(script.md) 2 シーン + サブ 2 本 × 2 シーン = 6（hidden は除外）
-    expect(player.getAttribute('data-scene-count')).toBe('6')
+    // 初期表示では entry(script.md) の 2 シーンだけ。サブ MD は選択後に lazy load する。
+    expect(player.getAttribute('data-scene-count')).toBe('2')
 
     // 連結順: エントリ script.md のシーンが先頭
     const ids = (player.getAttribute('data-scene-ids') ?? '').split(',')
     expect(ids[0]).toBe('hub-script.md')
     expect(ids[1]).toBe('scene2-script.md')
-    // サブ MD のシーンも含まれる
-    expect(ids).toContain('hub-content/scripts/free/a.md')
-    expect(ids).toContain('hub-content/scripts/main/b.md')
-    // hidden=true の secret.md は取得・連結されない
+    expect(ids).not.toContain('hub-content/scripts/free/a.md')
+    expect(ids).not.toContain('hub-content/scripts/main/b.md')
+    // hidden=true の secret.md とサブ MD は初期取得されない
     expect(getContentsMock).not.toHaveBeenCalledWith(
       'theo-hayami',
       'content/scripts/secret.md',
       'main'
     )
-    // エントリ以外の 2 本は main ブランチで取得される
-    expect(getContentsMock).toHaveBeenCalledWith('theo-hayami', 'content/scripts/free/a.md', 'main')
+    expect(getContentsMock).not.toHaveBeenCalledWith(
+      'theo-hayami',
+      'content/scripts/free/a.md',
+      'main'
+    )
   })
 
-  it('#284: クロスファイルのジャンプが解決する（別 MD のシーン ID が解決対象に含まれる）', async () => {
+  it('#314: 未ロード scene へのジャンプ時に別 MD を追加取得して解決する', async () => {
     listProjectsMock.mockResolvedValue([
       { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
     ])
@@ -316,19 +329,25 @@ describe('PlayerScreen', () => {
       expect(screen.getByTestId('novel-player')).toBeInTheDocument()
     })
 
-    // NovelPlayer に渡された jumpSceneIndex（= NovelRenderer.allScenes に乗るもの）を取り出す。
+    // 初期索引は entry のみ。
     const scenes = lastJumpSceneIndex()
-
-    // エントリのシーンが先頭（開始シーン）
     expect(scenes[0]?.id).toBe('entry-hub')
+    expect(findSceneById(scenes, 'far-scene')).toBeUndefined()
 
-    // 実際のジャンプ解決プリミティブ findSceneById で、別 MD のシーンが解決できる
-    // = クロスファイル・ジャンプ（→ far-scene）が成立する。
-    const jumped = findSceneById(scenes, 'far-scene')
+    const loadedScenes = await resolveMissingScene('far-scene')
+    expect(loadedScenes).not.toBeNull()
+    expect(getContentsMock).toHaveBeenCalledWith('theo-hayami', 'content/scripts/free/a.md', 'main')
+
+    const jumped = findSceneById(loadedScenes ?? [], 'far-scene')
     expect(jumped).toBeDefined()
     expect(jumped?.title).toBe('far')
     // 逆方向（別 MD → エントリ）も解決できる
-    expect(findSceneById(scenes, 'entry-hub')?.title).toBe('hub')
+    expect(findSceneById(loadedScenes ?? [], 'entry-hub')?.title).toBe('hub')
+
+    getContentsMock.mockClear()
+    const cachedScenes = await resolveMissingScene('far-scene')
+    expect(cachedScenes).not.toBeNull()
+    expect(getContentsMock).not.toHaveBeenCalled()
   })
 
   it('#284: listScripts が失敗したら単一 script.md 再生にフォールバックする', async () => {
@@ -426,11 +445,16 @@ describe('PlayerScreen', () => {
 
     const player = screen.getByTestId('novel-player')
     const ids = (player.getAttribute('data-scene-ids') ?? '').split(',')
-    // エントリ + good.md の 2 シーン（bad.md は脱落するが全体は落ちない）
-    expect(ids).toContain('scene-script.md')
-    expect(ids).toContain('scene-content/scripts/good.md')
-    expect(ids).not.toContain('scene-content/scripts/bad.md')
-    expect(player.getAttribute('data-scene-count')).toBe('2')
+    // 初期表示では entry のみ。bad/good はまだ取得しない。
+    expect(ids).toEqual(['scene-script.md'])
+    expect(player.getAttribute('data-scene-count')).toBe('1')
+
+    const loadedScenes = await resolveMissingScene('scene-content/scripts/good.md')
+    const loadedIds = (loadedScenes ?? []).map((s) => s.id)
+    // lazy fallback で bad.md の失敗を飛ばし、good.md を読み込む。
+    expect(loadedIds).toContain('scene-script.md')
+    expect(loadedIds).toContain('scene-content/scripts/good.md')
+    expect(loadedIds).not.toContain('scene-content/scripts/bad.md')
     // 全体としてエラー表示にはならない
     expect(screen.queryByRole('alert')).toBeNull()
   })
@@ -460,15 +484,13 @@ describe('PlayerScreen', () => {
             title: 'c',
             hidden: false,
             default_bgm: null,
-            // 両方が id 'dup' を持つ。先頭（エントリ）のタイトルが先勝ち。
-            scenes: [
-              {
-                id: 'dup',
-                title: isEntry ? 'entry-dup' : 'later-dup',
-                view: 'TopDown',
-                events: [],
-              },
-            ],
+            // 両方が id 'dup' を持つ。later は lazy load の target も併せ持つ。
+            scenes: isEntry
+              ? [{ id: 'dup', title: 'entry-dup', view: 'TopDown', events: [] }]
+              : [
+                  { id: 'dup', title: 'later-dup', view: 'TopDown', events: [] },
+                  { id: 'later-only', title: 'later-only', view: 'TopDown', events: [] },
+                ],
           },
         ],
       }
@@ -487,7 +509,12 @@ describe('PlayerScreen', () => {
       expect(screen.getByTestId('novel-player')).toBeInTheDocument()
     })
 
-    // 重複 ID を検出して warning を出す
+    // 初期表示は entry のみなので、まだ重複は検出されない。
+    expect(warnSpy).not.toHaveBeenCalled()
+
+    const loadedScenes = await resolveMissingScene('later-only')
+
+    // lazy load で later.md を足した時点で重複 ID を検出して warning を出す
     expect(warnSpy).toHaveBeenCalled()
     const warned = warnSpy.mock.calls.some(
       (call) => typeof call[0] === 'string' && call[0].includes('dup')
@@ -495,8 +522,7 @@ describe('PlayerScreen', () => {
     expect(warned).toBe(true)
 
     // 先勝ち: findSceneById は先頭（エントリ）のシーンを返す
-    const scenes = lastJumpSceneIndex()
-    expect(findSceneById(scenes, 'dup')?.title).toBe('entry-dup')
+    expect(findSceneById(loadedScenes ?? [], 'dup')?.title).toBe('entry-dup')
   })
 
   it('RPG シーンを含むドキュメントは RPGPlayer に渡す', async () => {
@@ -616,7 +642,13 @@ describe('PlayerScreen', () => {
     //   ハブ = content/scripts/script.md、各話 = content/scripts/free|main/*.md
     listScriptsMock.mockResolvedValue([
       { path: 'content/scripts/script.md', sha: 's0', size: 1, title: null, hidden: false },
-      { path: 'content/scripts/free/ep1.md', sha: 's1', size: 1, title: null, hidden: false },
+      {
+        path: 'content/scripts/free/netami__makiya.md',
+        sha: 's1',
+        size: 1,
+        title: null,
+        hidden: false,
+      },
       { path: 'content/scripts/main/ep2.md', sha: 's2', size: 1, title: null, hidden: false },
     ])
     getContentsMock.mockImplementation(async (_name: string, path: string) => ({
@@ -627,6 +659,7 @@ describe('PlayerScreen', () => {
     // エントリ（basename === script.md）は開始シーン entry-hub を持つ。
     parseMarkdownMock.mockImplementation(async (md: string) => {
       const isEntry = md === 'content/scripts/script.md'
+      const isMakiyaNetami = md === 'content/scripts/free/netami__makiya.md'
       return {
         engine: 'name-name',
         chapters: [
@@ -637,7 +670,14 @@ describe('PlayerScreen', () => {
             default_bgm: null,
             scenes: isEntry
               ? [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }]
-              : [{ id: `scene-${md}`, title: md, view: 'TopDown', events: [] }],
+              : [
+                  {
+                    id: isMakiyaNetami ? 'makiya-netami' : `scene-${md}`,
+                    title: md,
+                    view: 'TopDown',
+                    events: [],
+                  },
+                ],
           },
         ],
       }
@@ -661,23 +701,29 @@ describe('PlayerScreen', () => {
 
     // 直下 script.md は取りに行かない（解決は listScripts の basename ベース）
     expect(getContentsMock).not.toHaveBeenCalledWith('theo-hayami', 'script.md', 'main')
-    // エントリ（content/scripts/script.md）と各話を main で取得する
+    // 初期ロードではエントリ（content/scripts/script.md）だけを main で取得する
     expect(getContentsMock).toHaveBeenCalledWith('theo-hayami', 'content/scripts/script.md', 'main')
-    expect(getContentsMock).toHaveBeenCalledWith(
+    expect(getContentsMock).not.toHaveBeenCalledWith(
       'theo-hayami',
-      'content/scripts/free/ep1.md',
+      'content/scripts/free/netami__makiya.md',
       'main'
     )
 
-    // ジャンプ索引: エントリ（content/scripts/script.md）のシーンが先頭 = 開始シーン
+    // ジャンプ索引: 初期はエントリ（content/scripts/script.md）のシーンだけ
     const scenes = lastJumpSceneIndex()
     expect(scenes[0]?.id).toBe('entry-hub')
-    // 各話のシーンもクロスファイル解決の対象に含まれる
-    expect(findSceneById(scenes, 'scene-content/scripts/free/ep1.md')).toBeDefined()
-    expect(findSceneById(scenes, 'scene-content/scripts/main/ep2.md')).toBeDefined()
+    expect(findSceneById(scenes, 'makiya-netami')).toBeUndefined()
     // エントリは flatten された events= でも線形再生される（最低 1 シーン分のストリーム）
     const player = screen.getByTestId('novel-player')
-    expect(player.getAttribute('data-scene-count')).toBe('3')
+    expect(player.getAttribute('data-scene-count')).toBe('1')
+
+    const loadedScenes = await resolveMissingScene('makiya-netami')
+    expect(getContentsMock).toHaveBeenCalledWith(
+      'theo-hayami',
+      'content/scripts/free/netami__makiya.md',
+      'main'
+    )
+    expect(findSceneById(loadedScenes ?? [], 'makiya-netami')).toBeDefined()
   })
 
   it('404 以外のデータ取得失敗はエラーメッセージを表示する', async () => {

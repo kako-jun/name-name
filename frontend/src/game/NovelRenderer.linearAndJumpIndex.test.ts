@@ -162,6 +162,25 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
     expect(r.getAllSceneIds()).toContain('other')
   })
 
+  it('#314: 未ロード scene は resolver で追加索引を受け取り jumpToScene で到達する', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const farScene = scene('far-scene', [narration('far-line')])
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const resolver = vi.fn(async () => [...entryScenes, farScene])
+    const r = new NovelRenderer()
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+
+    r.jumpToScene('far-scene')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(resolver).toHaveBeenCalledWith('far-scene')
+    expect(r.getAllSceneIds()).toEqual(['entry-hub', 'far-scene'])
+    expect(r.getCurrentSceneId()).toBe('far-scene')
+    expect(r.getDebugState().eventText).toContain('far-line')
+  })
+
   it('単一 script は索引が自ファイルのシーンのみ = jumpToScene の解決対象も自シーンに限る', () => {
     const selfScenes: EventScene[] = [
       scene('a', [narration('a-line')]),
