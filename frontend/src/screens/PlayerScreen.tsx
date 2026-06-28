@@ -8,7 +8,12 @@ import { parseMarkdown } from '../wasm/parser'
 import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
 import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '../api/client'
 import { loadReadProgress, clearReadProgress } from '../game/readProgress'
-import { getCachedScriptContent, putCachedScriptContent } from '../game/scriptContentCache'
+import {
+  getCachedParsedScriptDocument,
+  getCachedScriptContent,
+  putCachedParsedScriptDocument,
+  putCachedScriptContent,
+} from '../game/scriptContentCache'
 
 // kako-jun/name-name#108: 一般ユーザー向けの再生専用画面。
 //   - 編集 UI / 保存 / アセット管理 / デバッグは一切表示しない
@@ -166,23 +171,32 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
 
       const promise = (async () => {
         const scriptInfo = scriptInfoByPathRef.current.get(path)
+        const cacheKey = scriptInfo?.sha
+          ? {
+              projectName,
+              ref: PUBLIC_BRANCH,
+              path,
+              sha: scriptInfo.sha,
+            }
+          : null
         let markdown: string | null = null
         let loadedFromPersistentCache = false
 
-        if (scriptInfo?.sha) {
-          markdown = await getCachedScriptContent({
-            projectName,
-            ref: PUBLIC_BRANCH,
-            path,
-            sha: scriptInfo.sha,
-          })
+        if (cacheKey) {
+          const cachedDoc = await getCachedParsedScriptDocument(cacheKey)
+          if (cachedDoc) {
+            loadedDocsRef.current.set(path, cachedDoc)
+            return cachedDoc
+          }
+
+          markdown = await getCachedScriptContent(cacheKey)
           loadedFromPersistentCache = markdown !== null
         }
 
         if (markdown === null) {
           const contents = await api.getContents(projectName, path, PUBLIC_BRANCH)
           markdown = contents.content || ''
-          const sha = scriptInfo?.sha ?? contents.sha
+          const sha = cacheKey?.sha ?? contents.sha
           if (sha) {
             void putCachedScriptContent(
               {
@@ -199,6 +213,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         try {
           const parsed = await parseMarkdown(markdown)
           loadedDocsRef.current.set(path, parsed)
+          if (cacheKey) void putCachedParsedScriptDocument(cacheKey, parsed)
           return parsed
         } catch (err) {
           if (!loadedFromPersistentCache) throw err
@@ -206,7 +221,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           console.warn(`PlayerScreen: cached script ${path} failed to parse; refetching`, err)
           const contents = await api.getContents(projectName, path, PUBLIC_BRANCH)
           const freshMarkdown = contents.content || ''
-          const sha = scriptInfo?.sha ?? contents.sha
+          const sha = cacheKey?.sha ?? contents.sha
           if (sha) {
             void putCachedScriptContent(
               {
@@ -220,6 +235,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           }
           const parsed = await parseMarkdown(freshMarkdown)
           loadedDocsRef.current.set(path, parsed)
+          if (cacheKey) void putCachedParsedScriptDocument(cacheKey, parsed)
           return parsed
         }
       })()
