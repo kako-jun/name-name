@@ -212,6 +212,7 @@ describe('JumpTopScreen', () => {
   })
 
   it('listProjects 失敗時にエラーメッセージを表示する', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     listProjectsMock.mockRejectedValue(new Error('boom'))
     render(
       <JumpTopScreen

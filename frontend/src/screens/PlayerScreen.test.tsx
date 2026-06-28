@@ -332,6 +332,7 @@ describe('PlayerScreen', () => {
   })
 
   it('#284: listScripts が失敗したら単一 script.md 再生にフォールバックする', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     listProjectsMock.mockResolvedValue([
       { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
     ])
@@ -380,6 +381,7 @@ describe('PlayerScreen', () => {
   })
 
   it('#284: 個別 MD の取得/parse 失敗時は残りの MD で再生継続する', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     listProjectsMock.mockResolvedValue([
       { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
     ])
@@ -580,6 +582,7 @@ describe('PlayerScreen', () => {
   })
 
   it('#284: listScripts 不能 + 単一 script.md が 404 のときは「準備中」案内を表示する', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { ApiError } = await import('../api/client')
     listProjectsMock.mockResolvedValue([
       { name: 'missing', title: 'まだ無いゲーム', repo: 'kako-jun/missing' },
@@ -678,6 +681,8 @@ describe('PlayerScreen', () => {
   })
 
   it('404 以外のデータ取得失敗はエラーメッセージを表示する', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     listProjectsMock.mockResolvedValue([
       { name: 'broken', title: 'broken', repo: 'kako-jun/broken' },
     ])

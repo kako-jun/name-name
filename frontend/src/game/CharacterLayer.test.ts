@@ -193,6 +193,9 @@ describe('CharacterLayer applyTextEffect (#268)', () => {
   }
 
   it('タイトル文字数ぶんのグリフに分解し、単一 label は隠す', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     const layer = new CharacterLayer(800, 450)
     layer.showTitle('orber', 'sans-serif')
     await layer.applyTextEffect('Title', { effect: 'Explode' })
