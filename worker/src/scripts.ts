@@ -10,11 +10,10 @@
 //     content/scripts/main/）まで再帰列挙する。再帰は 1 段で十分。
 //
 // 戦略:
-//   1. Contents API で対象 directory listing → `.md` で size <= 64KB を pick
-//      （ノベルゲーム原稿で 64KB 超は普通無い。assets/ 等は dir として弾かれる）
-//   2. 各 .md について short content fetch → 先頭 1〜2KB を peek
-//      → frontmatter (`--- ... ---`) を抽出 → engine: name-name を含むか判定
-//   3. 含むものだけ `[{ path, title, hidden, sha, size }]` で返す
+//   - `scriptsDir` 指定プロジェクトは Git Trees API の recursive tree で `.md` を一括列挙する。
+//     theo-hayami のような 260 本級で、一覧APIが各MD本文を260回 fetch して1分級になるのを避ける。
+//   - `scriptsDir` 未指定プロジェクトは従来どおり、リポ直下 .md の本文を peek して
+//     frontmatter (`engine: name-name`, `hidden`, `title`) を読む。ルート直下は通常数本なので許容。
 //
 // 設計判断:
 //   - GitHub の Contents API は dir 取得時に各 file の content は返さないので、
@@ -34,6 +33,8 @@ import type { Env } from "./types";
 
 type ContentsGetResponseData =
   Endpoints["GET /repos/{owner}/{repo}/contents/{path}"]["response"]["data"];
+type GitTreeResponseData =
+  Endpoints["GET /repos/{owner}/{repo}/git/trees/{tree_sha}"]["response"]["data"];
 
 export interface ScriptInfo {
   path: string;
@@ -54,17 +55,28 @@ interface ScriptsListResponse {
   scripts: ScriptInfo[];
 }
 
-function jsonResponse(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
+function jsonResponse(
+  body: unknown,
+  status = 200,
+  extraHeaders: Record<string, string> = {},
+): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", ...extraHeaders },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      ...extraHeaders,
+    },
   });
 }
 
 /** scripts listing 用の Cache API キー（contents/assets と衝突しない prefix）。
  *  PUT contents で `.md` を書いた直後に scripts listing が古いまま残らないよう、
  *  contents.ts から `cacheDelete(scriptsCacheKey(...))` で呼ばれる（#237 review M2）。 */
-export function scriptsCacheKey(owner: string, repo: string, ref: string | null): string {
+export function scriptsCacheKey(
+  owner: string,
+  repo: string,
+  ref: string | null,
+): string {
   return `scripts:${owner}/${repo}:${ref ?? "default"}`;
 }
 
@@ -123,6 +135,14 @@ interface DirEntry {
   type: string;
 }
 
+interface TreeEntry {
+  path?: string;
+  mode?: string;
+  type?: string;
+  sha?: string;
+  size?: number;
+}
+
 type Octokit = ReturnType<typeof createGitHub>;
 
 /**
@@ -139,13 +159,19 @@ async function listDirectory(
   logLabel: string,
 ): Promise<DirEntry[] | null> {
   try {
-    const res = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-      owner,
-      repo,
-      path,
-      ref: ref ?? undefined,
-    });
-    logRateLimit(logLabel, res.headers as Record<string, string | number | undefined>);
+    const res = await octokit.request(
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      {
+        owner,
+        repo,
+        path,
+        ref: ref ?? undefined,
+      },
+    );
+    logRateLimit(
+      logLabel,
+      res.headers as Record<string, string | number | undefined>,
+    );
     const data = res.data as ContentsGetResponseData;
     if (!Array.isArray(data)) return null;
     return data as unknown as DirEntry[];
@@ -159,13 +185,70 @@ async function listDirectory(
   }
 }
 
+async function listScriptsFromTree(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  baseDir: string,
+  ref: string | null,
+): Promise<ScriptInfo[]> {
+  const res = await octokit.request(
+    "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
+    {
+      owner,
+      repo,
+      tree_sha: ref ?? "HEAD",
+      recursive: "1",
+    },
+  );
+  logRateLimit(
+    "scripts.tree",
+    res.headers as Record<string, string | number | undefined>,
+  );
+  const data = res.data as GitTreeResponseData;
+  const prefix = baseDir.length > 0 ? `${baseDir}/` : "";
+  const scripts = (data.tree as TreeEntry[])
+    .filter((entry) => {
+      if (entry.type !== "blob") return false;
+      if (!entry.path?.startsWith(prefix)) return false;
+      const relative = entry.path.slice(prefix.length);
+      if (
+        !relative ||
+        (relative.includes("/") && relative.split("/").length > 2)
+      )
+        return false;
+      return (
+        entry.path.toLowerCase().endsWith(".md") &&
+        (entry.size ?? 0) <= 64 * 1024
+      );
+    })
+    .slice(0, MAX_SCRIPT_FILES)
+    .map((entry) => ({
+      path: entry.path as string,
+      sha: entry.sha ?? "",
+      size: entry.size ?? 0,
+      title: null,
+      hidden: false,
+    }));
+
+  scripts.sort(compareScriptInfo);
+  return scripts;
+}
+
+function compareScriptInfo(a: ScriptInfo, b: ScriptInfo): number {
+  if (a.path === "script.md" || a.path.endsWith("/script.md")) return -1;
+  if (b.path === "script.md" || b.path.endsWith("/script.md")) return 1;
+  return a.path.localeCompare(b.path);
+}
+
 export async function handleListScripts(
   request: Request,
   env: Env,
   projectName: string,
 ): Promise<Response> {
   const project = findProject(projectName);
-  if (!project) return jsonResponse({ error: `unknown project: ${projectName}` }, 404);
+  if (!project)
+    return jsonResponse({ error: `unknown project: ${projectName}` }, 404);
 
   const url = new URL(request.url);
   const ref = url.searchParams.get("ref");
@@ -189,13 +272,37 @@ export async function handleListScripts(
     ? project.scriptsDir.replace(/^\/+|\/+$/g, "") // 前後の / を剥がす
     : "";
 
+  if (project.scriptsDir) {
+    try {
+      const body: ScriptsListResponse = {
+        scripts: await listScriptsFromTree(octokit, owner, repo, baseDir, ref),
+      };
+      const response = jsonResponse(body, 200, { "x-cache": "MISS" });
+      await cachePut(cacheKey, response);
+      return response;
+    } catch (err) {
+      const ne = normalizeError(err);
+      return jsonResponse({ error: ne.message }, ne.status);
+    }
+  }
+
   // 起点ディレクトリ listing。失敗（404 等）は致命なのでそのまま伝播する。
   let baseListing: DirEntry[];
   try {
-    const listed = await listDirectory(octokit, owner, repo, baseDir, ref, "scripts.list.root");
+    const listed = await listDirectory(
+      octokit,
+      owner,
+      repo,
+      baseDir,
+      ref,
+      "scripts.list.root",
+    );
     if (listed === null) {
       // 起点がファイル単体 = 想定外の repo 構成
-      return jsonResponse({ error: "scripts directory is not a directory" }, 502);
+      return jsonResponse(
+        { error: "scripts directory is not a directory" },
+        502,
+      );
     }
     baseListing = listed;
   } catch (err) {
@@ -227,7 +334,14 @@ export async function handleListScripts(
     for (const dir of subDirs) {
       let subListing: DirEntry[] | null;
       try {
-        subListing = await listDirectory(octokit, owner, repo, dir.path, ref, "scripts.list.sub");
+        subListing = await listDirectory(
+          octokit,
+          owner,
+          repo,
+          dir.path,
+          ref,
+          "scripts.list.sub",
+        );
       } catch {
         // サブディレクトリ listing の失敗は listing 全体を落とさずスキップ
         continue;
@@ -245,14 +359,21 @@ export async function handleListScripts(
   const scripts: ScriptInfo[] = [];
   for (const entry of candidates) {
     try {
-      const res = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-        owner,
-        repo,
-        path: entry.path,
-        ref: ref ?? undefined,
-      });
+      const res = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        {
+          owner,
+          repo,
+          path: entry.path,
+          ref: ref ?? undefined,
+        },
+      );
       const data = res.data as ContentsGetResponseData;
-      if (Array.isArray(data) || data.type !== "file" || typeof data.content !== "string") {
+      if (
+        Array.isArray(data) ||
+        data.type !== "file" ||
+        typeof data.content !== "string"
+      ) {
         continue;
       }
       const text = base64ToUtf8(data.content);
@@ -273,11 +394,7 @@ export async function handleListScripts(
   }
 
   // script.md を先頭に固定 → 他は path 昇順
-  scripts.sort((a, b) => {
-    if (a.path === "script.md") return -1;
-    if (b.path === "script.md") return 1;
-    return a.path.localeCompare(b.path);
-  });
+  scripts.sort(compareScriptInfo);
 
   const body: ScriptsListResponse = { scripts };
   const response = jsonResponse(body, 200, { "x-cache": "MISS" });
