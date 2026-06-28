@@ -1,6 +1,6 @@
-const DB_NAME = 'name-name-script-content-cache'
 import type { EventDocument } from '../types'
 
+const DB_NAME = 'name-name-script-content-cache'
 const DB_VERSION = 2
 const CONTENT_STORE_NAME = 'scriptContents'
 const DOCUMENT_STORE_NAME = 'scriptDocuments'
