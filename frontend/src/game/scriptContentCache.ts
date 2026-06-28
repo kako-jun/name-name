@@ -1,7 +1,11 @@
 const DB_NAME = 'name-name-script-content-cache'
-const DB_VERSION = 1
-const STORE_NAME = 'scriptContents'
+import type { EventDocument } from '../types'
+
+const DB_VERSION = 2
+const CONTENT_STORE_NAME = 'scriptContents'
+const DOCUMENT_STORE_NAME = 'scriptDocuments'
 const PATH_INDEX = 'byPathKey'
+export const PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION = 1
 
 export interface ScriptContentCacheKey {
   projectName: string
@@ -17,12 +21,24 @@ interface ScriptContentCacheRecord extends ScriptContentCacheKey {
   updatedAt: number
 }
 
+interface ParsedScriptDocumentCacheRecord extends ScriptContentCacheKey {
+  key: string
+  pathKey: string
+  schemaVersion: number
+  document: EventDocument
+  updatedAt: number
+}
+
 function encodeKeyPart(part: string): string {
   return encodeURIComponent(part)
 }
 
 function buildKey({ projectName, ref, path, sha }: ScriptContentCacheKey): string {
   return [projectName, ref, path, sha].map(encodeKeyPart).join('|')
+}
+
+function buildDocumentKey(keyParts: ScriptContentCacheKey, schemaVersion: number): string {
+  return `${buildKey(keyParts)}|schema:${schemaVersion}`
 }
 
 function buildPathKey({ projectName, ref, path }: Omit<ScriptContentCacheKey, 'sha'>): string {
@@ -45,17 +61,27 @@ function openDatabase(): Promise<IDBDatabase | null> {
     const request = dbFactory.open(DB_NAME, DB_VERSION)
     request.onupgradeneeded = () => {
       const db = request.result
-      const store = db.objectStoreNames.contains(STORE_NAME)
-        ? request.transaction?.objectStore(STORE_NAME)
-        : db.createObjectStore(STORE_NAME, { keyPath: 'key' })
-      if (store && !store.indexNames.contains(PATH_INDEX)) {
-        store.createIndex(PATH_INDEX, 'pathKey', { unique: false })
-      }
+      ensureStore(db, request.transaction, CONTENT_STORE_NAME)
+      ensureStore(db, request.transaction, DOCUMENT_STORE_NAME)
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => resolve(null)
     request.onblocked = () => resolve(null)
   })
+}
+
+function ensureStore(
+  db: IDBDatabase,
+  transaction: IDBTransaction | null,
+  storeName: string
+): IDBObjectStore | null {
+  const store = db.objectStoreNames.contains(storeName)
+    ? transaction?.objectStore(storeName)
+    : db.createObjectStore(storeName, { keyPath: 'key' })
+  if (store && !store.indexNames.contains(PATH_INDEX)) {
+    store.createIndex(PATH_INDEX, 'pathKey', { unique: false })
+  }
+  return store ?? null
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T | null> {
@@ -72,8 +98,8 @@ export async function getCachedScriptContent(
   if (!db) return null
 
   try {
-    const tx = db.transaction(STORE_NAME, 'readonly')
-    const store = tx.objectStore(STORE_NAME)
+    const tx = db.transaction(CONTENT_STORE_NAME, 'readonly')
+    const store = tx.objectStore(CONTENT_STORE_NAME)
     const record = await requestResult<ScriptContentCacheRecord | undefined>(
       store.get(buildKey(keyParts))
     )
@@ -102,8 +128,8 @@ export async function putCachedScriptContent(
   }
 
   try {
-    const tx = db.transaction(STORE_NAME, 'readwrite')
-    const store = tx.objectStore(STORE_NAME)
+    const tx = db.transaction(CONTENT_STORE_NAME, 'readwrite')
+    const store = tx.objectStore(CONTENT_STORE_NAME)
     store.put(record)
 
     // 同じ path の古い sha はベストエフォートで掃除する。
@@ -121,7 +147,66 @@ export async function putCachedScriptContent(
   }
 }
 
+export async function getCachedParsedScriptDocument(
+  keyParts: ScriptContentCacheKey,
+  schemaVersion = PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION
+): Promise<EventDocument | null> {
+  const db = await openDatabase()
+  if (!db) return null
+
+  try {
+    const tx = db.transaction(DOCUMENT_STORE_NAME, 'readonly')
+    const store = tx.objectStore(DOCUMENT_STORE_NAME)
+    const record = await requestResult<ParsedScriptDocumentCacheRecord | undefined>(
+      store.get(buildDocumentKey(keyParts, schemaVersion))
+    )
+    return record?.schemaVersion === schemaVersion && record.document ? record.document : null
+  } catch {
+    return null
+  } finally {
+    db.close()
+  }
+}
+
+export async function putCachedParsedScriptDocument(
+  keyParts: ScriptContentCacheKey,
+  document: EventDocument,
+  schemaVersion = PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION
+): Promise<void> {
+  const db = await openDatabase()
+  if (!db) return
+
+  const pathKey = buildPathKey(keyParts)
+  const record: ParsedScriptDocumentCacheRecord = {
+    ...keyParts,
+    key: buildDocumentKey(keyParts, schemaVersion),
+    pathKey,
+    schemaVersion,
+    document,
+    updatedAt: Date.now(),
+  }
+
+  try {
+    const tx = db.transaction(DOCUMENT_STORE_NAME, 'readwrite')
+    const store = tx.objectStore(DOCUMENT_STORE_NAME)
+    store.put(record)
+
+    const index = store.index(PATH_INDEX)
+    const oldRecords = await requestResult<ParsedScriptDocumentCacheRecord[]>(
+      index.getAll(IDBKeyRange.only(pathKey))
+    )
+    for (const oldRecord of oldRecords ?? []) {
+      if (oldRecord.key !== record.key) store.delete(oldRecord.key)
+    }
+  } catch {
+    // キャッシュは最適化なので、保存失敗で再生を止めない。
+  } finally {
+    db.close()
+  }
+}
+
 export const __internal = {
   buildKey,
+  buildDocumentKey,
   buildPathKey,
 }

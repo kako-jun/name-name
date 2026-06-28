@@ -48,12 +48,21 @@ vi.mock('../wasm/parser', () => ({
   emitMarkdown: vi.fn(),
 }))
 
-const { getCachedScriptContentMock, putCachedScriptContentMock } = vi.hoisted(() => ({
+const {
+  getCachedParsedScriptDocumentMock,
+  getCachedScriptContentMock,
+  putCachedParsedScriptDocumentMock,
+  putCachedScriptContentMock,
+} = vi.hoisted(() => ({
+  getCachedParsedScriptDocumentMock: vi.fn(),
   getCachedScriptContentMock: vi.fn(),
+  putCachedParsedScriptDocumentMock: vi.fn(),
   putCachedScriptContentMock: vi.fn(),
 }))
 vi.mock('../game/scriptContentCache', () => ({
+  getCachedParsedScriptDocument: getCachedParsedScriptDocumentMock,
   getCachedScriptContent: getCachedScriptContentMock,
+  putCachedParsedScriptDocument: putCachedParsedScriptDocumentMock,
   putCachedScriptContent: putCachedScriptContentMock,
 }))
 
@@ -138,8 +147,12 @@ beforeEach(() => {
     { path: 'script.md', sha: 's', size: 1, title: null, hidden: false },
   ])
   getContentsMock.mockReset()
+  getCachedParsedScriptDocumentMock.mockReset()
+  getCachedParsedScriptDocumentMock.mockResolvedValue(null)
   getCachedScriptContentMock.mockReset()
   getCachedScriptContentMock.mockResolvedValue(null)
+  putCachedParsedScriptDocumentMock.mockReset()
+  putCachedParsedScriptDocumentMock.mockResolvedValue(undefined)
   putCachedScriptContentMock.mockReset()
   putCachedScriptContentMock.mockResolvedValue(undefined)
   parseMarkdownMock.mockReset()
@@ -352,6 +365,58 @@ describe('PlayerScreen', () => {
     )
   })
 
+  it('#314 Phase 3: parse済み entry MD cache hit なら contents API も parseMarkdown も呼ばない', async () => {
+    listProjectsMock.mockResolvedValue([
+      { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+    ])
+    listScriptsMock.mockResolvedValue([
+      { path: 'content/scripts/script.md', sha: 'entry-sha', size: 1, title: null, hidden: false },
+    ])
+    getCachedParsedScriptDocumentMock.mockResolvedValue({
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes: [{ id: 'scene-parsed-cache', title: 'cached', view: 'TopDown', events: [] }],
+        },
+      ],
+    })
+    getContentsMock.mockResolvedValue({
+      path: 'content/scripts/script.md',
+      sha: 'entry-sha',
+      content: 'network-entry-markdown',
+    })
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
+
+    expect(getCachedParsedScriptDocumentMock).toHaveBeenCalledWith({
+      projectName: 'theo-hayami',
+      ref: 'main',
+      path: 'content/scripts/script.md',
+      sha: 'entry-sha',
+    })
+    expect(getCachedScriptContentMock).not.toHaveBeenCalled()
+    expect(getContentsMock).not.toHaveBeenCalled()
+    expect(parseMarkdownMock).not.toHaveBeenCalled()
+    expect(screen.getByTestId('novel-player').getAttribute('data-scene-ids')).toBe(
+      'scene-parsed-cache'
+    )
+  })
+
   it('#314 Phase 2: cache miss なら contents API から取得して sha 付きで保存する', async () => {
     listProjectsMock.mockResolvedValue([
       { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
@@ -401,6 +466,7 @@ describe('PlayerScreen', () => {
       },
       'network-markdown'
     )
+    expect(putCachedParsedScriptDocumentMock).toHaveBeenCalled()
   })
 
   it('#314 Phase 2: cache hit した lazy MD も contents API を呼ばずに解決する', async () => {
