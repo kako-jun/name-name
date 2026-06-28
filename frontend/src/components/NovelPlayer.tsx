@@ -43,6 +43,8 @@ interface NovelPlayerProps {
    * `scenes` が指定されている場合は従来どおり `scenes` 優先（後方互換）。
    */
   jumpSceneIndex?: EventScene[]
+  /** 未ロード sceneId を必要時に追加解決する hook (#314)。 */
+  onResolveMissingScene?: (sceneId: string) => Promise<EventScene[] | null>
   assetBaseUrl?: string
   /** 画面比率。"16:9" / "4:3" / "9:16"。デフォルト "16:9" (#136) */
   aspectRatio?: AspectRatio | string
@@ -93,6 +95,7 @@ function NovelPlayer({
   events,
   scenes,
   jumpSceneIndex,
+  onResolveMissingScene,
   assetBaseUrl,
   aspectRatio: aspectRatioProp,
   choiceStyle,
@@ -157,6 +160,7 @@ function NovelPlayer({
       if (assetBaseUrl) {
         renderer.setAssetBaseUrl(assetBaseUrl)
       }
+      renderer.setMissingSceneResolver?.(onResolveMissingScene ?? null)
       // renderer が手動操作で autoMode を OFF にしたとき React state を同期 (#139)
       renderer.setOnAutoModeChange((on) => setAutoMode(on))
       // renderer が未読到達で skipMode を OFF にしたとき React state を同期 (#140)
@@ -343,6 +347,10 @@ function NovelPlayer({
       rendererRef.current.setEvents(events)
     }
   }, [events, scenes, jumpSceneIndex])
+
+  useEffect(() => {
+    rendererRef.current?.setMissingSceneResolver?.(onResolveMissingScene ?? null)
+  }, [onResolveMissingScene])
 
   // 「つづきから」: 初回イベントセット後に一度だけスキップモードを ON にする (#141)
   // initialSkipMode が false の間は早期 return するため ref はセットされない。

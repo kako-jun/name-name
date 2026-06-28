@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import NovelPlayer from '../components/NovelPlayer'
 import RPGPlayer from '../components/RPGPlayer'
 import TitleOverlay from '../components/TitleOverlay'
@@ -98,6 +98,35 @@ function warnDuplicateSceneIds(scenes: EventScene[]): void {
   }
 }
 
+function buildSceneIndex(
+  entryPath: string | null,
+  sortedPaths: string[],
+  docs: Map<string, EventDocument>
+) {
+  const scenes: EventScene[] = []
+  if (entryPath) {
+    const entryDoc = docs.get(entryPath)
+    if (entryDoc) scenes.push(...flattenDocumentScenes(entryDoc))
+  }
+  for (const path of sortedPaths) {
+    if (path === entryPath) continue
+    const doc = docs.get(path)
+    if (doc) scenes.push(...flattenDocumentScenes(doc))
+  }
+  return scenes
+}
+
+function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] {
+  const basenames = new Set<string>([`${sceneId}.md`])
+  const parts = sceneId.split('-')
+  if (parts.length >= 2) {
+    const resident = parts[0]
+    const theme = parts.slice(1).join('-')
+    basenames.add(`${theme}__${resident}.md`)
+  }
+  return paths.filter((path) => basenames.has(basename(path)))
+}
+
 function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenProps) {
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
   // doc: エントリ MD のドキュメント。通常再生ストリーム（線形 events）の供給元であり、
@@ -116,11 +145,77 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const [loadDebugInfo, setLoadDebugInfo] = useState<string[]>([])
   // script.md がまだリポに無い「未投入」状態。エラーではなく案内として扱う。
   const [unpopulated, setUnpopulated] = useState(false)
+  const sortedPlayablePathsRef = useRef<string[]>([])
+  const entryPathRef = useRef<string | null>(null)
+  const loadedDocsRef = useRef<Map<string, EventDocument>>(new Map())
+  const loadingDocsRef = useRef<Map<string, Promise<EventDocument | null>>>(new Map())
 
   // タイトル画面の表示状態 (#141)
   const [titleDismissed, setTitleDismissed] = useState(false)
   // 「つづきから」で開始した場合 true: ゲーム開始直後にスキップモードで未読位置まで進める
   const [startWithSkip, setStartWithSkip] = useState(false)
+
+  const loadScriptDoc = useCallback(
+    async (path: string): Promise<EventDocument | null> => {
+      const cached = loadedDocsRef.current.get(path)
+      if (cached) return cached
+      const inFlight = loadingDocsRef.current.get(path)
+      if (inFlight) return inFlight
+
+      const promise = api
+        .getContents(projectName, path, PUBLIC_BRANCH)
+        .then(async (c) => {
+          const parsed = await parseMarkdown(c.content || '')
+          loadedDocsRef.current.set(path, parsed)
+          return parsed
+        })
+        .catch((err) => {
+          console.warn(`PlayerScreen: failed to load script ${path}:`, err)
+          return null
+        })
+        .finally(() => {
+          loadingDocsRef.current.delete(path)
+        })
+      loadingDocsRef.current.set(path, promise)
+      return promise
+    },
+    [api, projectName]
+  )
+
+  const resolveMissingScene = useCallback(
+    async (sceneId: string): Promise<EventScene[] | null> => {
+      const entryPath = entryPathRef.current
+      const sortedPaths = sortedPlayablePathsRef.current
+      const currentScenes = buildSceneIndex(entryPath, sortedPaths, loadedDocsRef.current)
+      if (currentScenes.some((s) => s.id === sceneId)) return currentScenes
+
+      const candidatePaths = inferScriptPathsForSceneId(sceneId, sortedPaths).filter(
+        (path) => !loadedDocsRef.current.has(path)
+      )
+      const fallbackPaths = sortedPaths.filter(
+        (path) => path !== entryPath && !loadedDocsRef.current.has(path)
+      )
+      const pathsToTry = [
+        ...candidatePaths,
+        ...fallbackPaths.filter((p) => !candidatePaths.includes(p)),
+      ]
+
+      for (const path of pathsToTry) {
+        const loaded = await loadScriptDoc(path)
+        if (!loaded) continue
+        const scenes = buildSceneIndex(entryPath, sortedPaths, loadedDocsRef.current)
+        warnDuplicateSceneIds(scenes)
+        const found = scenes.some((s) => s.id === sceneId)
+        setLoadDebugInfo((prev) => [
+          ...prev.filter((line) => !line.startsWith('lazy loaded docs:')),
+          `lazy loaded docs: ${loadedDocsRef.current.size}/${sortedPaths.length}`,
+        ])
+        if (found) return scenes
+      }
+      return null
+    },
+    [loadScriptDoc]
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -129,6 +224,10 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       setError(null)
       setUnpopulated(false)
       setLoadDebugInfo([])
+      sortedPlayablePathsRef.current = []
+      entryPathRef.current = null
+      loadedDocsRef.current = new Map()
+      loadingDocsRef.current = new Map()
       try {
         // 1. プロジェクト情報を取得（タイトル表示・assets ベース URL 解決用）
         const projects = await api.listProjects()
@@ -183,6 +282,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           const entryDoc = await parseMarkdown(data.content || '')
           if (cancelled) return
           const entryScenes = flattenDocumentScenes(entryDoc)
+          loadedDocsRef.current.set(SCRIPT_BASENAME, entryDoc)
           setDoc(entryDoc)
           setAllScenes(entryScenes)
           setLoadDebugInfo([
@@ -209,26 +309,14 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         // エントリ MD を解決: basename === 'script.md' を優先、無ければ sort 済み先頭。
         const sortedPaths = [...playablePaths].sort()
         const entryPath = sortedPaths.find((p) => basename(p) === SCRIPT_BASENAME) ?? sortedPaths[0]
+        sortedPlayablePathsRef.current = sortedPaths
+        entryPathRef.current = entryPath
 
-        // 3. 全 .md を並列取得 → parse。エントリ doc を分離して保持する。
-        const docByPath = new Map<string, EventDocument>()
-        const failedPaths: string[] = []
-        await Promise.all(
-          sortedPaths.map(async (path) => {
-            try {
-              const c = await api.getContents(projectName, path, PUBLIC_BRANCH)
-              const parsed = await parseMarkdown(c.content || '')
-              docByPath.set(path, parsed)
-            } catch (err) {
-              // 個別 .md の取得・parse 失敗は全体を落とさずスキップ。
-              console.warn(`PlayerScreen: failed to load script ${path}:`, err)
-              failedPaths.push(path)
-            }
-          })
-        )
+        // 3. 初期表示は entry MD だけを取得・parse する (#314 Phase 1)。
+        //    サブ MD は選択先 sceneId が未ロードだった時点で resolver が差分取得する。
+        const entryDoc = await loadScriptDoc(entryPath)
         if (cancelled) return
 
-        const entryDoc = docByPath.get(entryPath) ?? null
         if (!entryDoc) {
           // エントリ MD だけは必須。取得・parse できなければ再生不能。
           throw new Error(`PlayerScreen: entry script not loadable: ${entryPath}`)
@@ -238,17 +326,9 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         //    供給元はエントリ doc (#284 S1)。
         setDoc(entryDoc)
 
-        // ジャンプ解決索引 = 全 .md の全シーン。連結順は **エントリ先頭** →
-        //    残りのサブ MD（sort 済み path 順）。先頭シーン＝開始シーンの整合を取る。
-        const scenes: EventScene[] = [
-          ...flattenDocumentScenes(entryDoc),
-          ...sortedPaths
-            .filter((p) => p !== entryPath)
-            .flatMap((p) => {
-              const d = docByPath.get(p)
-              return d ? flattenDocumentScenes(d) : []
-            }),
-        ]
+        // 初期ジャンプ解決索引は entry のシーンだけ。未ロード target は NovelRenderer の
+        // missingSceneResolver が必要時に追加する (#314)。
+        const scenes = buildSceneIndex(entryPath, sortedPaths, loadedDocsRef.current)
         warnDuplicateSceneIds(scenes)
         if (cancelled) return
         setAllScenes(scenes)
@@ -256,9 +336,8 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           `entry: ${entryPath}`,
           `scripts listed: ${scripts.length}`,
           `playable paths: ${playablePaths.length}`,
-          `loaded docs: ${docByPath.size}`,
-          `failed docs: ${failedPaths.length}`,
-          ...(failedPaths.length > 0 ? [`failed: ${failedPaths.slice(0, 5).join(', ')}`] : []),
+          `initial loaded docs: ${loadedDocsRef.current.size}`,
+          `lazy loading: enabled`,
           `scenes: ${scenes.length}`,
           `events: ${flattenDocumentEvents(entryDoc).length}`,
         ])
@@ -278,7 +357,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
     return () => {
       cancelled = true
     }
-  }, [api, projectName])
+  }, [api, loadScriptDoc, projectName])
 
   // 通常再生ストリーム = エントリ doc を線形に flatten した Event[] (#284 M2)。
   // これを NovelPlayer に events= で渡すことで多シーンの線形自動進行が成立する。
@@ -372,6 +451,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               // ※ scenes= は使わない（setScenes は再生を scenes[0] だけに差し替えてしまう）。
               events={novelEvents}
               jumpSceneIndex={allScenes}
+              onResolveMissingScene={resolveMissingScene}
               assetBaseUrl={assetBaseUrl}
               aspectRatio={doc?.aspect_ratio}
               choiceStyle={doc?.choice_style ?? null}
