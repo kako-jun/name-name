@@ -39,10 +39,13 @@ interface DebugState {
 export function DebugOverlay({
   rendererRef,
   open,
+  debugInfo = [],
 }: {
   rendererRef: React.MutableRefObject<NovelRenderer | null>
   /** D ボタンで制御する展開状態。false のとき本文は描画しない（ポーリングも止める）。 */
   open: boolean
+  /** PlayerScreen など renderer 外で分かる読み込み診断。 */
+  debugInfo?: string[]
 }) {
   const [state, setState] = useState<DebugState | null>(null)
   const [copied, setCopied] = useState(false)
@@ -83,6 +86,7 @@ export function DebugOverlay({
       `auto: ${state.autoMode ? 'ON' : 'off'} / wait: ${state.waitingForWait ? 'YES' : '-'} / choice: ${state.waitingForChoice ? 'YES' : '-'}`,
       `font: ${state.currentResolvedFontFamily ?? '(default)'}`,
       ...(state.audioWarning ? [`⚠ ${state.audioWarning}`] : []),
+      ...(debugInfo.length > 0 ? ['load:', ...debugInfo.map((line) => `・${line}`)] : []),
       `characters (${state.characters.length}):`,
       ...state.characters.map(
         (c) =>
@@ -164,6 +168,14 @@ export function DebugOverlay({
           <div>font: {state.currentResolvedFontFamily ?? '(default)'}</div>
           {state.audioWarning && (
             <div style={{ color: '#fb7185', marginTop: 4 }}>⚠ {state.audioWarning}</div>
+          )}
+          {debugInfo.length > 0 && (
+            <>
+              <div style={{ color: '#93c5fd', marginTop: 4 }}>load:</div>
+              {debugInfo.map((line) => (
+                <div key={line}>・{line}</div>
+              ))}
+            </>
           )}
           <div style={{ color: '#fde68a', marginTop: 4 }}>
             characters ({state.characters.length}):

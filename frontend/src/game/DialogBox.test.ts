@@ -28,6 +28,7 @@ import {
   NOVEL_TEXT_MARGIN_X,
   NOVEL_TEXT_TOP_RATIO,
   NOVEL_TEXT_MARGIN_BOTTOM,
+  normalizeDashGlyphsForDisplay,
 } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 
@@ -146,6 +147,27 @@ describe('DialogBox portrait (Issue #73 / #194)', () => {
     expect(i.currentPortraitToken).toBeGreaterThan(tokenAfterRedraw)
 
     box.dispose()
+  })
+})
+
+describe('DialogBox dash glyph display normalization (#315)', () => {
+  it('表示用に下寄りのダッシュ・罫線系を中央線 glyph に寄せる', () => {
+    expect(normalizeDashGlyphsForDisplay('あ——い−−うーーえ')).toBe('あ──い──う──え')
+  })
+
+  it('novel/borderless だけ本文表示のダッシュを中央線 glyph に寄せ、adv は原文のまま', () => {
+    const novel = makeRpgBox()
+    novel.setNovelMode(true)
+    novel.setDialog(null, 'あ——い')
+    novel.skipTypewriter()
+    expect(asInternals(novel).dialogText.text).toBe('あ──い')
+    novel.dispose()
+
+    const adv = makeRpgBox()
+    adv.setDialog(null, 'あ——い')
+    adv.skipTypewriter()
+    expect(asInternals(adv).dialogText.text).toBe('あ——い')
+    adv.dispose()
   })
 })
 

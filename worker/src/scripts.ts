@@ -45,6 +45,11 @@ export interface ScriptInfo {
   hidden: boolean;
 }
 
+// theo-hayami は 260 本超の短いセルを scriptsDir 配下に持つ。50 件で切ると
+// メニューのジャンプ先 scene が jumpSceneIndex に入らず、選択後に空表示になる。
+// 暴走防止は残すが、実運用の全セルを列挙できる余裕を持たせる。
+const MAX_SCRIPT_FILES = 500;
+
 interface ScriptsListResponse {
   scripts: ScriptInfo[];
 }
@@ -231,8 +236,10 @@ export async function handleListScripts(
     }
   }
 
-  // ファイル数上限: 50 個以上 .md がある repo は対象外（暴走防止）
-  candidates = candidates.slice(0, 50);
+  // ファイル数上限: 大量 MD プロジェクトでも全 scene を jumpSceneIndex に入れる。
+  // ここで落としたファイルの scene へ選択ジャンプすると再生不能になるため、
+  // theo-hayami の 260 本級を収めつつ暴走だけ止める上限にする。
+  candidates = candidates.slice(0, MAX_SCRIPT_FILES);
 
   // Step 2: 各 .md について content fetch → frontmatter peek
   const scripts: ScriptInfo[] = [];

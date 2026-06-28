@@ -113,6 +113,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadDebugInfo, setLoadDebugInfo] = useState<string[]>([])
   // script.md がまだリポに無い「未投入」状態。エラーではなく案内として扱う。
   const [unpopulated, setUnpopulated] = useState(false)
 
@@ -127,6 +128,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       setLoading(true)
       setError(null)
       setUnpopulated(false)
+      setLoadDebugInfo([])
       try {
         // 1. プロジェクト情報を取得（タイトル表示・assets ベース URL 解決用）
         const projects = await api.listProjects()
@@ -180,8 +182,17 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           if (cancelled) return
           const entryDoc = await parseMarkdown(data.content || '')
           if (cancelled) return
+          const entryScenes = flattenDocumentScenes(entryDoc)
           setDoc(entryDoc)
-          setAllScenes(flattenDocumentScenes(entryDoc))
+          setAllScenes(entryScenes)
+          setLoadDebugInfo([
+            'mode: single script fallback',
+            `entry: ${SCRIPT_BASENAME}`,
+            'scripts listed: unavailable',
+            'loaded docs: 1',
+            `scenes: ${entryScenes.length}`,
+            `events: ${flattenDocumentEvents(entryDoc).length}`,
+          ])
           return
         }
 
@@ -201,6 +212,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
 
         // 3. 全 .md を並列取得 → parse。エントリ doc を分離して保持する。
         const docByPath = new Map<string, EventDocument>()
+        const failedPaths: string[] = []
         await Promise.all(
           sortedPaths.map(async (path) => {
             try {
@@ -210,6 +222,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
             } catch (err) {
               // 個別 .md の取得・parse 失敗は全体を落とさずスキップ。
               console.warn(`PlayerScreen: failed to load script ${path}:`, err)
+              failedPaths.push(path)
             }
           })
         )
@@ -239,12 +252,23 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         warnDuplicateSceneIds(scenes)
         if (cancelled) return
         setAllScenes(scenes)
+        setLoadDebugInfo([
+          `entry: ${entryPath}`,
+          `scripts listed: ${scripts.length}`,
+          `playable paths: ${playablePaths.length}`,
+          `loaded docs: ${docByPath.size}`,
+          `failed docs: ${failedPaths.length}`,
+          ...(failedPaths.length > 0 ? [`failed: ${failedPaths.slice(0, 5).join(', ')}`] : []),
+          `scenes: ${scenes.length}`,
+          `events: ${flattenDocumentEvents(entryDoc).length}`,
+        ])
       } catch (e) {
         console.error('PlayerScreen: failed to load project:', e)
         if (!cancelled) {
           setError('ゲームデータの読み込みに失敗しました')
           setDoc(null)
           setAllScenes([])
+          setLoadDebugInfo([String(e instanceof Error ? e.message : e)])
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -359,6 +383,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               characterFadeMs={doc?.character_fade_ms ?? null}
               skipEnabled={doc?.skip_enabled ?? null}
               debugEnabled={doc?.debug_enabled ?? null}
+              debugInfo={loadDebugInfo}
               docKey={projectName}
               initialSkipMode={startWithSkip}
             />

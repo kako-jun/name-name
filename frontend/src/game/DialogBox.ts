@@ -142,6 +142,11 @@ const DEFAULT_MS_PER_CHAR = 30
 /** 枠なしモードの DropShadow 設定 */
 const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 8, distance: 3, alpha: 1 } as const
 
+/** novel/borderless 本文で下寄りに見えやすいダッシュ・罫線系を表示用に中央線へ寄せる (#315)。 */
+export function normalizeDashGlyphsForDisplay(text: string): string {
+  return text.replace(/[‐‑‒–—―−ー]/g, '─')
+}
+
 /**
  * クリッカー（インジケータ）の種別 (#292)。
  *  - `next`     : 同ページにまだ続く文がある（次は文の送り）。
@@ -399,7 +404,7 @@ export class DialogBox extends Container {
       if (isTypingActive(this.typewriter)) {
         const next = tickTypewriter(this.typewriter, this.ticker.deltaMS, this.msPerChar)
         if (next.displayedCharCount !== this.typewriter.displayedCharCount) {
-          this.dialogText.text = visibleText(next)
+          this.dialogText.text = this.visibleDialogText(next)
           this.updateRubyVisibility(next.displayedCharCount)
         }
         const justFinished = isTypingActive(this.typewriter) && !isTypingActive(next)
@@ -671,7 +676,7 @@ export class DialogBox extends Container {
     const fromCount = wrappedPrefixLength(fullText, clampedPlainPrefix)
     this.typewriter = startTypewriterFrom(fullText, fromCount)
     // 既出分（fromCount 文字）は即時表示する。残りは ticker がタイプする。
-    this.dialogText.text = visibleText(this.typewriter)
+    this.dialogText.text = this.visibleDialogText(this.typewriter)
     // novel 配置用に累積テキストの wrap 結果を保持する (#292)。
     this.novelWrappedLines = lines
     this.rubyPlacements = computeRubyPlacements(runs, lines)
@@ -712,7 +717,7 @@ export class DialogBox extends Container {
   skipTypewriter(): void {
     if (!isTypingActive(this.typewriter)) return
     this.typewriter = typewriterSkip(this.typewriter)
-    this.dialogText.text = visibleText(this.typewriter)
+    this.dialogText.text = this.visibleDialogText(this.typewriter)
     this.revealAllRuby()
     this.onTypingDone = null
     // スキップ完了で文末まで一気に出るので、novel ならインジケータを文末へ置き直す (#292)。
@@ -1154,6 +1159,11 @@ export class DialogBox extends Container {
       lineHeight: this.lineHeight(),
       dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
     })
+  }
+
+  private visibleDialogText(state: TypewriterState): string {
+    const text = visibleText(state)
+    return this.borderless ? normalizeDashGlyphsForDisplay(text) : text
   }
 
   /**

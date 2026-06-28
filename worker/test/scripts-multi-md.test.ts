@@ -390,9 +390,9 @@ hidden: true
     expect(hiddenScript?.hidden).toBe(true);
   });
 
-  it("件数上限: 起点 + サブ合計が 50 件を超えても 50 件で打ち切る", async () => {
-    // 起点直下に 60 件の .md を置く → candidates.slice(0, 50) で 50 件に絞られる
-    const many = Array.from({ length: 60 }, (_, i) =>
+  it("件数上限: theo-hayami の 260 本級を収め、暴走だけ 500 件で打ち切る", async () => {
+    // 起点直下に 520 件の .md を置く → candidates.slice(0, 500) で 500 件に絞られる
+    const many = Array.from({ length: 520 }, (_, i) =>
       entry(`s${i}.md`, `content/scripts/s${i}.md`, `sha-${i}`, 100),
     );
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -416,7 +416,7 @@ hidden: true
     const res = await worker.fetch(req, ENV, ctx);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { scripts: Array<{ path: string }> };
-    // 50 件で打ち切られる
-    expect(body.scripts.length).toBe(50);
+    // 500 件で打ち切られる
+    expect(body.scripts.length).toBe(500);
   });
 });

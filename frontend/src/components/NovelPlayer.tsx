@@ -74,6 +74,8 @@ interface NovelPlayerProps {
    *  /play では frontmatter `debug_enabled:` から流す（null/undefined/false で非表示・本番既定）。
    *  /edit は frontmatter 非依存で常時 true を渡す（編集者用）。 */
   debugEnabled?: boolean | null
+  /** DebugOverlay に出す renderer 外の読み込み診断 (#321)。 */
+  debugInfo?: string[]
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
   docKey?: string
   /**
@@ -102,6 +104,7 @@ function NovelPlayer({
   characterFadeMs,
   skipEnabled,
   debugEnabled,
+  debugInfo,
   docKey,
   initialSkipMode = false,
   onRendererReady,
@@ -405,7 +408,9 @@ function NovelPlayer({
     >
       {/* デバッグ HUD パネル (#310): D ボタンの展開状態に追従。debug_enabled(/play) or
           editor のときだけ出す。閉じている/無効のときは何も描かない（D ボタンが唯一の入口）。 */}
-      {debugAvailable && <DebugOverlay rendererRef={rendererRef} open={debugOpen} />}
+      {debugAvailable && (
+        <DebugOverlay rendererRef={rendererRef} open={debugOpen} debugInfo={debugInfo} />
+      )}
       <div
         ref={containerRef}
         className="overflow-hidden [&>canvas]:block [&>canvas]:w-full [&>canvas]:h-full"
