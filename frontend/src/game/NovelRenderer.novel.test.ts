@@ -77,6 +77,7 @@ interface RendererInternals {
     isNovelMode: boolean
     novelMaxLinesPerPage(): number
     measureLineCount(s: string): number
+    clearText(): void
   }
   novelPagesCache: { eventIndex: number; pages: unknown[] } | null
   getNovelPages(textEvt: { text: string[] }): Array<{ text: string; lineCount: number }>
@@ -721,6 +722,19 @@ describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 1 })
     // ページ最後の文 → 次イベントへ。
     i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
+  })
+
+  it('P6: novel で次イベントへ進む前に前ページ文字を clear する', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [dialog('カコ', '最初の文。'), dialog('トモ', '次。')])])
+    const i = internals(r)
+    const clearText = vi.spyOn(i.dialogBox, 'clearText')
+
+    i.advance()
+
+    expect(clearText).toHaveBeenCalled()
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
   })
 })

@@ -1500,6 +1500,15 @@ export class NovelRenderer {
     }
 
     // 次のイベントへ
+    if (novel) {
+      // ページ/イベントを離れる時は、次の立ち絵変化を始める前に前ページ文字を切りよく消す。
+      // showCharacterThenRender() は立ち絵遷移が落ち着くまで本文 reveal を遅延するため、
+      // ここで消しておかないと「前ページの文字が残ったまま次の立ち絵が動く」見え方になる。
+      this.dialogBox.clearText()
+      this.dialogBox.setIndicatorVisible(false)
+      this.updateNovelScrim(false)
+    }
+
     this.eventIndex++
     this.textIndex = 0
     // novel 文 index もイベントを跨ぐのでページ先頭にリセットする (#292)。

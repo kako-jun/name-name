@@ -140,7 +140,7 @@ export interface DialogBoxConfig {
 const DEFAULT_MS_PER_CHAR = 30
 
 /** 枠なしモードの DropShadow 設定 */
-const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 4, distance: 2, alpha: 0.9 } as const
+const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 8, distance: 3, alpha: 1 } as const
 
 /**
  * クリッカー（インジケータ）の種別 (#292)。
@@ -166,7 +166,7 @@ const INDICATOR_GLYPH: Record<IndicatorKind, string> = {
  * 全画面ノベル（ToHeart 式）では画面の大半をテキストに使う。本文は左上付近から始め、
  * 左右・上下に小さな余白を残す。テストが参照できるよう export する。
  */
-export const NOVEL_TEXT_MARGIN_X = 16
+export const NOVEL_TEXT_MARGIN_X = 6
 /** 本文域の上端 Y（画面高に対する比率）。本文はより左上から始める（端から少しだけ離す）。 */
 export const NOVEL_TEXT_TOP_RATIO = 0.012
 /** 本文域の下端マージン（px）。高さを使い切るため小さめ。 */
