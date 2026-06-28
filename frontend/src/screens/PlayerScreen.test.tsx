@@ -139,6 +139,20 @@ async function resolveMissingScene(sceneId: string): Promise<EventScene[] | null
   return result
 }
 
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (reason?: unknown) => void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 beforeEach(() => {
   listProjectsMock.mockReset()
   listScriptsMock.mockReset()
@@ -235,6 +249,53 @@ describe('PlayerScreen', () => {
     expect(screen.queryByText('アセット管理')).toBeNull()
     expect(screen.queryByRole('button', { name: 'ノベル' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'RPG' })).toBeNull()
+  })
+
+  it('#314: hard reload の cold path を短くするため project 情報待ちと scripts 一覧取得を並列に始める', async () => {
+    const projects = deferred<Array<{ name: string; title: string; repo: string }>>()
+    listProjectsMock.mockReturnValue(projects.promise)
+    listScriptsMock.mockResolvedValue([
+      { path: 'script.md', sha: 'entry-sha', size: 1, title: null, hidden: false },
+    ])
+    getContentsMock.mockResolvedValue({
+      path: 'script.md',
+      sha: 'entry-sha',
+      content: 'entry-markdown',
+    })
+    parseMarkdownMock.mockResolvedValue({
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes: [{ id: 'entry-scene', title: 'entry', view: 'TopDown', events: [] }],
+        },
+      ],
+    })
+
+    render(
+      <PlayerScreen
+        projectName="theo-hayami"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(listScriptsMock).toHaveBeenCalledWith('theo-hayami', 'main')
+    })
+    expect(screen.getByText('読み込み中...')).toBeInTheDocument()
+
+    await act(async () => {
+      projects.resolve([{ name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' }])
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+    })
   })
 
   it('#314: 初期ロードでは entry MD だけを取得して NovelPlayer に渡す', async () => {
