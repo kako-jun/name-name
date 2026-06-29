@@ -179,6 +179,39 @@ afterEach(() => {
 })
 
 describe('PlayerScreen', () => {
+  it('#341: visualViewport.height を PlayerScreen の高さに使う', () => {
+    const originalVisualViewport = window.visualViewport
+    listProjectsMock.mockReturnValue(new Promise(() => {}))
+
+    const visualViewport = new EventTarget() as VisualViewport
+    Object.defineProperty(visualViewport, 'height', {
+      configurable: true,
+      value: 615,
+    })
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: visualViewport,
+    })
+
+    const { container } = render(
+      <PlayerScreen
+        projectName="friday-1930"
+        apiBaseUrl="http://api.test"
+        isDark={false}
+        onBack={() => {}}
+      />
+    )
+
+    const root = container.firstElementChild as HTMLElement
+    expect(root.style.height).toBe('615px')
+    expect(root.style.minHeight).toBe('615px')
+
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: originalVisualViewport,
+    })
+  })
+
   it('main ブランチから章データを取得して NovelPlayer に渡す', async () => {
     listProjectsMock.mockResolvedValue([
       { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
