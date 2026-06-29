@@ -167,7 +167,7 @@ const INDICATOR_GLYPH: Record<IndicatorKind, string> = {
 }
 
 const INDICATOR_IMAGE_SIZE = 32
-const INDICATOR_FRAME_MS = 220
+const INDICATOR_FRAME_MS = 360
 const INDICATOR_IMAGE_PATHS: Record<IndicatorKind, string[]> = {
   next: [
     'ui/text-next-1.webp',
