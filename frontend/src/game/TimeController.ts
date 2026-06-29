@@ -39,6 +39,10 @@ export class TimeController {
   private virtualNow = 0
   /** virtual モード下の保留タイマー */
   private timers: VirtualTimer[] = []
+  /** virtual interval callback 内で clearInterval された id。callback 後の再登録を抑止する。 */
+  private clearedIntervals = new Set<number>()
+  /** 現在 callback 実行中の virtual interval id。clearInterval の再登録抑止判定に使う。 */
+  private firingIntervals = new Set<number>()
   private nextId = 1
 
   getMode(): TimeMode {
@@ -54,6 +58,8 @@ export class TimeController {
     this.mode = mode
     this.virtualNow = 0
     this.timers = []
+    this.clearedIntervals.clear()
+    this.firingIntervals.clear()
   }
 
   /** 現在時刻 (ms)。live モードでは performance.now()、virtual モードでは累積仮想時刻 */
@@ -96,6 +102,7 @@ export class TimeController {
       return
     }
     this.timers = this.timers.filter((t) => t.id !== id)
+    if (this.firingIntervals.has(id)) this.clearedIntervals.add(id)
   }
 
   /**
@@ -122,11 +129,15 @@ export class TimeController {
       // 先に Map から外す (interval の再登録より前)
       this.timers.splice(minIdx, 1)
       try {
+        if (next.interval !== undefined) this.firingIntervals.add(next.id)
         next.cb()
       } catch (err) {
         console.warn('[TimeController] virtual timer callback threw', err)
+      } finally {
+        if (next.interval !== undefined) this.firingIntervals.delete(next.id)
       }
       if (next.interval !== undefined) {
+        if (this.clearedIntervals.delete(next.id)) continue
         this.timers.push({
           id: next.id,
           firesAt: this.virtualNow + next.interval,
