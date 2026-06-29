@@ -17,7 +17,7 @@
  *   - 立ち絵 show は `characterLayer.show` を spy して「テキスト（render）より先に呼ばれる」ことを確認する。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { Assets } from 'pixi.js'
+import { Assets, Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 
@@ -105,6 +105,15 @@ function configureNovelRenderer(r: NovelRenderer, assetBaseUrl = '/assets'): voi
   r.setAssetBaseUrl(assetBaseUrl)
 }
 
+function isNovelIndicatorAsset(url: unknown): boolean {
+  return typeof url === 'string' && /\/images\/ui\/(?:text-next|page-turn)-[1-4]\.webp$/.test(url)
+}
+
+function expectCharacterLoadCalls(loadSpy: { mock: { calls: unknown[][] } }, count: number): void {
+  const characterCalls = loadSpy.mock.calls.filter(([url]) => !isNovelIndicatorAsset(url))
+  expect(characterCalls).toHaveLength(count)
+}
+
 describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -118,7 +127,10 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     const loadPromise = new Promise<unknown>((res) => {
       resolveLoad = res
     })
-    const loadSpy = vi.spyOn(Assets, 'load').mockReturnValue(loadPromise as never)
+    const loadSpy = vi.spyOn(Assets, 'load').mockImplementation((url: unknown) => {
+      if (isNovelIndicatorAsset(url)) return Promise.resolve(Texture.WHITE) as never
+      return loadPromise as never
+    })
     // setEvents 経路の Assets.unload も呼ばれるのでモックして握り潰す。
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
@@ -136,7 +148,7 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
 
     // 立ち絵 show は同期で呼ばれている（sprite 生成は同期）。
     expect(showSpy).toHaveBeenCalledTimes(1)
-    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expectCharacterLoadCalls(loadSpy, 1)
     // だがテキスト reveal（render）はテクスチャ load 保留中なので**まだ出ていない**＝順序逆転を防止。
     expect(renderSpy).not.toHaveBeenCalled()
 
@@ -154,7 +166,9 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
   //    立ち絵 ready 後の本文 reveal 遅延だけ通す（テキストが永久に出ない事故を防ぐ）。
   it('2: 立ち絵なし Dialog は load を待たず render される（テキストが詰まらない）', async () => {
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
-    const loadSpy = vi.spyOn(Assets, 'load')
+    const loadSpy = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>)
 
     const r = new NovelRenderer()
     configureNovelRenderer(r)
@@ -166,7 +180,7 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     r.setScenes([scene('s', [dialogNoPortrait('ナレ', '地の文。')])])
 
     // 立ち絵が無いので Assets.load は呼ばれず、本文 reveal 遅延後に render が1回呼ばれる。
-    expect(loadSpy).not.toHaveBeenCalled()
+    expectCharacterLoadCalls(loadSpy, 0)
     await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(1)
   })
@@ -197,7 +211,10 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     const loadPromise = new Promise<unknown>((res) => {
       resolveLoad = res
     })
-    const loadSpy = vi.spyOn(Assets, 'load').mockReturnValue(loadPromise as never)
+    const loadSpy = vi.spyOn(Assets, 'load').mockImplementation((url: unknown) => {
+      if (isNovelIndicatorAsset(url)) return Promise.resolve(Texture.WHITE) as never
+      return loadPromise as never
+    })
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = new NovelRenderer()
@@ -215,12 +232,12 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     resolveLoad(fakeTexture())
     await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(1)
-    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expectCharacterLoadCalls(loadSpy, 1)
 
     // event1 へ前進。同一立ち絵なので show は no-op → onReady 発火 → 本文 reveal 遅延後に render。
     h.advance()
     // 再ロードは起きない（load 呼び出し回数は 1 のまま）。
-    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expectCharacterLoadCalls(loadSpy, 1)
     await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(2)
   })
@@ -230,9 +247,10 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
   it('5: load 保留中に別イベントへ進んだら stale な onReady では render しない', async () => {
     // 2 つの load を別々に制御する。
     const resolvers: Array<(t: unknown) => void> = []
-    vi.spyOn(Assets, 'load').mockImplementation(
-      () => new Promise<unknown>((res) => resolvers.push(res)) as never
-    )
+    vi.spyOn(Assets, 'load').mockImplementation((url: unknown) => {
+      if (isNovelIndicatorAsset(url)) return Promise.resolve(Texture.WHITE) as never
+      return new Promise<unknown>((res) => resolvers.push(res)) as never
+    })
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = new NovelRenderer()
@@ -269,7 +287,10 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     const loadPromise = new Promise<unknown>((_res, rej) => {
       rejectLoad = rej
     })
-    vi.spyOn(Assets, 'load').mockReturnValue(loadPromise as never)
+    vi.spyOn(Assets, 'load').mockImplementation((url: unknown) => {
+      if (isNovelIndicatorAsset(url)) return Promise.resolve(Texture.WHITE) as never
+      return loadPromise as never
+    })
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
     // 失敗時の console.warn を握り潰す。
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -323,7 +344,10 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     const loadPromise = new Promise<unknown>((res) => {
       resolveLoad = res
     })
-    const loadSpy = vi.spyOn(Assets, 'load').mockReturnValue(loadPromise as never)
+    const loadSpy = vi.spyOn(Assets, 'load').mockImplementation((url: unknown) => {
+      if (isNovelIndicatorAsset(url)) return Promise.resolve(Texture.WHITE) as never
+      return loadPromise as never
+    })
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = new NovelRenderer()
@@ -341,12 +365,12 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     resolveLoad(fakeTexture())
     await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(1)
-    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expectCharacterLoadCalls(loadSpy, 1)
 
     // event1 へ前進。位置のみ変更（texture 据え置き）なので再ロードせず、本文 reveal 遅延後に render。
     h.advance()
     // 再ロードは起きない（load 呼び出し回数は 1 のまま）。
-    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expectCharacterLoadCalls(loadSpy, 1)
     await flushDeferredTextRender()
     expect(renderSpy).toHaveBeenCalledTimes(2)
   })
@@ -362,8 +386,10 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
     h.initialized = true
 
-    const transitionSpy = vi.spyOn(h.characterLayer, 'hasActivePortraitTransition')
-    transitionSpy.mockReturnValueOnce(true).mockReturnValue(false)
+    let transitionActive = true
+    vi.spyOn(h.characterLayer, 'hasActivePortraitTransition').mockImplementation(
+      () => transitionActive
+    )
 
     r.setScenes([scene('s', [dialogNoPortrait('ナレ', '本文。')])])
 
@@ -372,6 +398,7 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     expect(renderSpy).not.toHaveBeenCalled()
 
     // 次の 16ms poll で遷移完了扱いになり、初めて本文 reveal する。
+    transitionActive = false
     await sleep(25)
     expect(renderSpy).toHaveBeenCalledTimes(1)
   })

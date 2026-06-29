@@ -31,7 +31,7 @@ import {
   tickTypewriter,
   visibleText,
 } from './typewriter'
-import { computeNovelIndicatorPlacement, wrappedPrefixLength } from './novelLayout'
+import { computeNovelIndicatorPlacement, resolveAssetUrl, wrappedPrefixLength } from './novelLayout'
 
 // ---------------------------------------------------------------------------
 // portrait レイアウト定数（テストが参照する）
@@ -166,6 +166,23 @@ const INDICATOR_GLYPH: Record<IndicatorKind, string> = {
   pageturn: '❯',
 }
 
+const INDICATOR_IMAGE_SIZE = 32
+const INDICATOR_FRAME_MS = 140
+const INDICATOR_IMAGE_PATHS: Record<IndicatorKind, string[]> = {
+  next: [
+    'ui/text-next-1.webp',
+    'ui/text-next-2.webp',
+    'ui/text-next-3.webp',
+    'ui/text-next-4.webp',
+  ],
+  pageturn: [
+    'ui/page-turn-1.webp',
+    'ui/page-turn-2.webp',
+    'ui/page-turn-3.webp',
+    'ui/page-turn-4.webp',
+  ],
+}
+
 /**
  * novel スタイル (#283) のテキスト領域マージン（px、論理座標）。
  * 全画面ノベル（ToHeart 式）では画面の大半をテキストに使う。本文は左上付近から始め、
@@ -208,9 +225,16 @@ export class DialogBox extends Container {
   private rubyEntries: Array<{ placement: RubyPlacement; text: Text }> = []
   private rubyPlacements: RubyPlacement[] = []
   // --- ▼インジケーター ---
-  private indicator: Text
+  private indicator: Container
+  private indicatorGlyph: Text
+  private indicatorSprite: Sprite
   private indicatorBaseY: number
   private indicatorTime = 0
+  private indicatorFrameElapsed = 0
+  private indicatorFrameIndex = 0
+  private indicatorAssetBaseUrl = ''
+  private indicatorFrameTextures: Partial<Record<IndicatorKind, Texture[]>> = {}
+  private failedIndicatorKinds = new Set<IndicatorKind>()
   /**
    * インジケータ種別 (#292)。`next`=次の文（▼明滅）/ `pageturn`=改頁（❯）。
    * `setIndicatorKind` で切り替え、グリフは INDICATOR_GLYPH 表から引く。
@@ -387,7 +411,14 @@ export class DialogBox extends Container {
       fontSize: 20,
       fill: 0xa8dadc,
     })
-    this.indicator = new Text({ text: '▼', style: indicatorStyle })
+    this.indicator = new Container()
+    this.indicatorGlyph = new Text({ text: '▼', style: indicatorStyle })
+    this.indicatorSprite = new Sprite(Texture.EMPTY)
+    this.indicatorSprite.width = INDICATOR_IMAGE_SIZE
+    this.indicatorSprite.height = INDICATOR_IMAGE_SIZE
+    this.indicatorSprite.visible = false
+    this.indicator.addChild(this.indicatorSprite)
+    this.indicator.addChild(this.indicatorGlyph)
     this.indicatorBaseY = this.boxY + this.boxH - 30
     this.indicator.x = this.boxX + this.boxW - 40
     this.indicator.y = this.indicatorBaseY
@@ -399,6 +430,7 @@ export class DialogBox extends Container {
       // ▼バウンス（明滅）。base y は novel/adv で算出元が違うが、バウンスは共通。
       this.indicatorTime = (this.indicatorTime + this.ticker.deltaMS / 1000) % ((2 * Math.PI) / 3)
       this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
+      this.tickIndicatorFrame(this.ticker.deltaMS)
 
       // typewriter
       if (isTypingActive(this.typewriter)) {
@@ -885,7 +917,7 @@ export class DialogBox extends Container {
         fontWeight: 'bold',
       })
     }
-    this.indicator.style = new TextStyle({
+    this.indicatorGlyph.style = new TextStyle({
       fontFamily: family,
       fontSize: 20,
       fill: 0xa8dadc,
@@ -1000,14 +1032,31 @@ export class DialogBox extends Container {
   }
 
   /**
+   * ゲームリポの assets/images ベース URL を設定する。`assets/images/ui/text-next-*.webp` /
+   * `page-turn-*.webp` が存在する作品では画像フレームのカーソルを使い、存在しない作品では
+   * 従来のグリフにフォールバックする。
+   */
+  setIndicatorAssetBaseUrl(url: string): void {
+    if (this.indicatorAssetBaseUrl === url) return
+    this.indicatorAssetBaseUrl = url
+    this.indicatorFrameTextures = {}
+    this.failedIndicatorKinds.clear()
+    this.loadIndicatorFrames(this.indicatorKind)
+  }
+
+  /**
    * インジケータの種別を切り替える (#292)。`next`=次の文（▼）/ `pageturn`=改頁（❯）。
    * グリフは INDICATOR_GLYPH 表（1 箇所集約）から引く。種別が変わったら配置も取り直す
    * （記号幅が変わるとはみ出しクランプが変わるため）。
    */
   setIndicatorKind(kind: IndicatorKind): void {
-    if (this.indicatorKind === kind && this.indicator.text === INDICATOR_GLYPH[kind]) return
+    if (this.indicatorKind === kind && this.indicatorGlyph.text === INDICATOR_GLYPH[kind]) return
     this.indicatorKind = kind
-    this.indicator.text = INDICATOR_GLYPH[kind]
+    this.indicatorGlyph.text = INDICATOR_GLYPH[kind]
+    this.indicatorFrameElapsed = 0
+    this.indicatorFrameIndex = 0
+    this.loadIndicatorFrames(kind)
+    this.applyIndicatorFrame()
     this.positionIndicator()
   }
 
@@ -1031,7 +1080,7 @@ export class DialogBox extends Container {
     const lastLine = lines.length > 0 ? lines[lines.length - 1] : ''
     const font = `${this.fontSize}px ${this.fontFamily}`
     const lastLineWidth = this.measureTextWidth(lastLine, font)
-    const indicatorWidth = this.measureTextWidth(this.indicator.text, font) || 20
+    const indicatorWidth = this.measureIndicatorWidth(font)
     // インジケータの高さ (#300)。本番（WebGL）では実測 height（fontSize 20 の ▼/❯ は行間込みで
     // おおむね ~24-27px）を使い、行 band の縦中央へ正確に揃える。jsdom は canvas 2d ctx が null で
     // Text.height が measureFont で throw するため measureIndicatorHeight() が 0 を返す。その場合だけ
@@ -1070,12 +1119,79 @@ export class DialogBox extends Container {
    * 返し、呼び出し側で fontSize ベース（20）にフォールバックさせる（measureTextWidth と同趣旨）。
    */
   private measureIndicatorHeight(): number {
+    if (this.hasIndicatorImages()) return INDICATOR_IMAGE_SIZE
     try {
-      const h = this.indicator.height
+      const h = this.indicatorGlyph.height
       return Number.isFinite(h) && h > 0 ? h : 0
     } catch {
       return 0
     }
+  }
+
+  private measureIndicatorWidth(font: string): number {
+    if (this.hasIndicatorImages()) return INDICATOR_IMAGE_SIZE
+    return this.measureTextWidth(this.indicatorGlyph.text, font) || 20
+  }
+
+  private hasIndicatorImages(): boolean {
+    return (this.indicatorFrameTextures[this.indicatorKind]?.length ?? 0) > 0
+  }
+
+  private loadIndicatorFrames(kind: IndicatorKind): void {
+    if (
+      !this.indicatorAssetBaseUrl ||
+      this.indicatorFrameTextures[kind] ||
+      this.failedIndicatorKinds.has(kind)
+    ) {
+      this.applyIndicatorFrame()
+      return
+    }
+    const baseUrl = this.indicatorAssetBaseUrl
+    const urls = INDICATOR_IMAGE_PATHS[kind].map((path) => resolveAssetUrl(baseUrl, 'images', path))
+    Promise.all(urls.map((url) => Assets.load(url)))
+      .then((loaded) => {
+        if (this.indicatorAssetBaseUrl !== baseUrl) return
+        const textures = loaded.filter((tex): tex is Texture => tex instanceof Texture)
+        if (textures.length !== urls.length) {
+          this.failedIndicatorKinds.add(kind)
+          return
+        }
+        this.indicatorFrameTextures[kind] = textures
+        if (this.indicatorKind === kind) {
+          this.applyIndicatorFrame()
+          this.positionIndicator()
+        }
+      })
+      .catch((err: unknown) => {
+        this.failedIndicatorKinds.add(kind)
+        console.warn(`[DialogBox] failed to load ${kind} indicator images:`, err)
+        if (this.indicatorKind === kind) this.applyIndicatorFrame()
+      })
+  }
+
+  private tickIndicatorFrame(deltaMs: number): void {
+    const frames = this.indicatorFrameTextures[this.indicatorKind]
+    if (!frames || frames.length === 0) return
+    this.indicatorFrameElapsed += deltaMs
+    if (this.indicatorFrameElapsed < INDICATOR_FRAME_MS) return
+    const steps = Math.floor(this.indicatorFrameElapsed / INDICATOR_FRAME_MS)
+    this.indicatorFrameElapsed %= INDICATOR_FRAME_MS
+    this.indicatorFrameIndex = (this.indicatorFrameIndex + steps) % frames.length
+    this.applyIndicatorFrame()
+  }
+
+  private applyIndicatorFrame(): void {
+    const frames = this.indicatorFrameTextures[this.indicatorKind]
+    if (frames && frames.length > 0) {
+      this.indicatorSprite.texture = frames[this.indicatorFrameIndex % frames.length]
+      this.indicatorSprite.width = INDICATOR_IMAGE_SIZE
+      this.indicatorSprite.height = INDICATOR_IMAGE_SIZE
+      this.indicatorSprite.visible = true
+      this.indicatorGlyph.visible = false
+      return
+    }
+    this.indicatorSprite.visible = false
+    this.indicatorGlyph.visible = true
   }
 
   dispose(): void {

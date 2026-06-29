@@ -7,6 +7,7 @@
  * #214: フォントロード非同期化（ensureFontLoaded + rubyBuildToken）のテスト。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { Assets, Texture } from 'pixi.js'
 
 // ensureFontLoaded をモック — 手動 resolve できる Promise を返す
 vi.mock('./FontLoader', () => ({
@@ -67,6 +68,8 @@ interface DialogBoxInternals {
   portraitFrame: { visible: boolean } | null
   dialogText: { x: number; text: string; visible: boolean; style: { fill: unknown } }
   indicator: { visible: boolean; x: number; y: number }
+  indicatorGlyph: { visible: boolean }
+  indicatorSprite: { visible: boolean; width: number; height: number }
   indicatorBaseY: number
   novelWrappedLines: string[]
   portraitSprite: { visible: boolean; texture: unknown } | null
@@ -79,6 +82,11 @@ interface DialogBoxInternals {
 
 function asInternals(box: DialogBox): DialogBoxInternals {
   return box as unknown as DialogBoxInternals
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 describe('DialogBox portrait (Issue #73 / #194)', () => {
@@ -306,6 +314,53 @@ describe('DialogBox typewriter (Issue #150 / #194)', () => {
     expect(i.indicator.y).toBe(i.indicatorBaseY)
     expect(i.indicator.y).toBeGreaterThan(oneLineY)
 
+    box.dispose()
+  })
+})
+
+describe('DialogBox image indicators (#320)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('assetBaseUrl があると text-next / page-turn の一般名フレームを読む', async () => {
+    const load = vi.spyOn(Assets, 'load')
+    load.mockImplementation(
+      async () => Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>
+    )
+    const box = makeRpgBox()
+
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    await flushPromises()
+
+    expect(load).toHaveBeenCalledTimes(4)
+    expect(load).toHaveBeenNthCalledWith(1, '/asset-base/images/ui/text-next-1.webp')
+    expect(load).toHaveBeenNthCalledWith(4, '/asset-base/images/ui/text-next-4.webp')
+
+    box.setIndicatorKind('pageturn')
+    await flushPromises()
+
+    expect(load).toHaveBeenCalledTimes(8)
+    expect(load).toHaveBeenNthCalledWith(5, '/asset-base/images/ui/page-turn-1.webp')
+    expect(load).toHaveBeenNthCalledWith(8, '/asset-base/images/ui/page-turn-4.webp')
+    box.dispose()
+  })
+
+  it('画像フレーム取得後は 32px Sprite を表示し、従来グリフを隠す', async () => {
+    const load = vi.spyOn(Assets, 'load')
+    load.mockImplementation(
+      async () => Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>
+    )
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    await flushPromises()
+
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicatorSprite.width).toBe(32)
+    expect(i.indicatorSprite.height).toBe(32)
+    expect(i.indicatorGlyph.visible).toBe(false)
     box.dispose()
   })
 })

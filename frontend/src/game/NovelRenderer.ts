@@ -886,6 +886,7 @@ export class NovelRenderer {
    */
   setAssetBaseUrl(url: string): void {
     this.assetBaseUrl = url
+    this.dialogBox.setIndicatorAssetBaseUrl(url)
     // 動画レイヤも同じベース URL で相対パスを URL 化するため伝播する (#252)
     this.videoLayer.setAssetBaseUrl(url)
   }
