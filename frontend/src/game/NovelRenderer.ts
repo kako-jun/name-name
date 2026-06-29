@@ -180,6 +180,23 @@ export const NOVEL_SCRIM_RETREAT_MS = 220
 /** novel スクリム退避後、絵を見せたまま保持する時間（ms）。退避→ホールド→復帰の中段 (#283)。 */
 export const NOVEL_SCRIM_HOLD_MS = 500
 
+export const BACKGROUND_CROSSFADE_MS = 700
+
+interface BackgroundEntry {
+  sprite: Sprite
+  mask: Sprite | null
+  fadeAnimation: BackgroundFadeAnimation | null
+}
+
+interface BackgroundFadeAnimation {
+  startMs: number
+  durationMs: number
+  fromAlpha: number
+  toAlpha: number
+  /** true なら fade-out 完了時に sprite/mask を破棄して bgEntries から消す */
+  destroyOnComplete: boolean
+}
+
 export class NovelRenderer {
   private app: Application
   /** init() 完了済みかのフラグ。React StrictMode 等で init 中に destroy が呼ばれたときの no-op 判定に使う */
@@ -223,6 +240,8 @@ export class NovelRenderer {
   private textureCache: Map<string, Texture> = new Map()
   /** setBackground の非同期ロード用トークン。destroy / 再入 の race 回避に使う */
   private bgLoadToken = 0
+  /** 現在表示対象としてロード待ち中の背景 token。本文 reveal の背景待ち判定に使う。 */
+  private pendingBackgroundLoadToken: number | null = null
   private audioManager: AudioManager
 
   /** ゲーム状態（フラグストア）— 章またぎで保持 */
@@ -342,8 +361,14 @@ export class NovelRenderer {
    *  null/未指定は原画のまま（tint=白）。背景スプライト生成/復元時に tint として乗算適用する。 */
   private currentBackgroundBrightness: number | null = null
 
-  /** 現在の背景に適用中のマスク Sprite (#250)。解放時に破棄する */
+  /** 背景 sprite と対応 mask の所有リスト。クロスフェード中は旧 + 新の複数枚になる。 */
+  private bgEntries: BackgroundEntry[] = []
+
+  /** 現在の背景に適用中のマスク Sprite (#250)。解放時に破棄する。互換用に最前面 mask を指す */
   private bgMaskSprite: Sprite | null = null
+
+  /** 背景クロスフェード用タイマー。GameState には持たない演出中間状態。 */
+  private bgCrossfadeTimer: number | null = null
 
   /** 現在の BGM パス（スナップショット用） */
   private currentBgmPath: string | null = null
@@ -1183,6 +1208,8 @@ export class NovelRenderer {
     if (on) {
       // スキップモードとオートモードは排他: スキップ ON 時にオートを解除 (#140)
       this.setAutoMode(false)
+      // 既に走っている背景クロスフェードも畳み、skip 中の表示を最新状態へ即時収束させる。
+      this.finishBackgroundCrossfadeInstant()
     }
     if (!on && this.skipTimer) {
       this.time.clearTimeout(this.skipTimer)
@@ -1252,8 +1279,8 @@ export class NovelRenderer {
       console.warn('[name-name] テクスチャの解放に失敗', err)
     })
     this.textureCache.clear()
-    // canvas 由来マスクテクスチャの GPU リソースを解放する (#250)
-    this.disposeBgMask()
+    // canvas 由来マスクテクスチャを含む背景 entry を全て解放する (#250/#319)
+    this.clearBackgroundEntries()
     this.app.destroy(true, { children: true })
     this.initialized = false
   }
@@ -1736,7 +1763,9 @@ export class NovelRenderer {
 
     // 背景復元
     if (state.backgroundPath) {
-      this.setBackground(state.backgroundPath, state.backgroundFade, state.backgroundBrightness)
+      this.setBackground(state.backgroundPath, state.backgroundFade, state.backgroundBrightness, {
+        instant: true,
+      })
     } else {
       this.clearBackground()
     }
@@ -2302,15 +2331,16 @@ export class NovelRenderer {
   }
 
   /**
-   * forward（前進）パスで「立ち絵 →（同時/直後に）テキスト」の順序を保証して描画する (#293)。
+   * forward（前進）パスで「背景 → 立ち絵 → テキスト」の順序を保証して描画する (#293/#319)。
    *
    * 問題: テキスト reveal（typewriter）は render() → DialogBox で**同期開始**するのに対し、
    * 立ち絵は CharacterLayer が Assets.load で**非同期に**テクスチャ取得する。そのため呼び出し順は
    * 立ち絵が先でも、見た目は「文字が出てから立ち絵が遅れて出る」順序逆転になっていた。
    *
-   * 対策: novel スタイルでは showCharacterFromDialog の onReady（テクスチャ用意完了）まで render() を
-   * 遅延し、立ち絵がフレームに乗ってからテキストをタイプし始める。adv / skip 中 / 立ち絵なし Dialog は
-   * 従来どおり同期描画（onReady は即時発火するため実質ノーディレイ＝非回帰）。
+   * 対策: novel スタイルではまず直前の [背景:] クロスフェード完了を待ち、その後
+   * showCharacterFromDialog の onReady（テクスチャ用意完了）まで render() を遅延し、立ち絵がフレームに
+   * 乗ってからテキストをタイプし始める。adv / skip 中 / 立ち絵なし Dialog は従来どおり同期描画
+   * （onReady は即時発火するため実質ノーディレイ＝非回帰）。
    *
    * 重要: 立ち絵 sprite の生成と `afterShow`（スナップショット記録）は **同期** で済ませる。
    * snapshot は CharacterLayer の現在状態を写すため、立ち絵を出した後・テキスト reveal の前に
@@ -2335,7 +2365,7 @@ export class NovelRenderer {
       this.render()
       return
     }
-    // novel forward: onReady（テクスチャ用意完了）まで render を遅延し、順序を保証する。
+    // novel forward: 背景フェードと onReady（テクスチャ用意完了）まで render を遅延し、順序を保証する。
     // 保留中に advance 等で表示位置が動いたら stale な発火では描画しない。
     // 設計判断 (Q2): タイムアウトで先に render しない（低速回線で先に出すと #293 で直した
     // 「文字先行→立ち絵後出し」が再発するため。load 失敗は CharacterLayer の `.finally` → onReady で
@@ -2343,28 +2373,27 @@ export class NovelRenderer {
     const expectedEventIndex = this.eventIndex
     const expectedTextIndex = this.textIndex
     const expectedSentenceIndex = this.sentenceIndex
+    const token = ++this.deferredTextRenderToken
+    const isStillCurrent = () =>
+      token === this.deferredTextRenderToken &&
+      this.eventIndex === expectedEventIndex &&
+      this.textIndex === expectedTextIndex &&
+      this.sentenceIndex === expectedSentenceIndex
     let rendered = false
     const renderOnce = () => {
       if (rendered) return
       rendered = true
-      const token = ++this.deferredTextRenderToken
       const run = () => {
         // 保留中に進行した（別イベント/別ページ/別文へ移った／レンダラ破棄）場合は描画しない。
-        if (token !== this.deferredTextRenderToken) return
+        if (!isStillCurrent()) return
         if (!this.initialized) return
-        if (this.eventIndex !== expectedEventIndex) return
-        if (this.textIndex !== expectedTextIndex) return
-        if (this.sentenceIndex !== expectedSentenceIndex) return
         this.render()
       }
       const runAfterPortraitSettles = () => {
         const startedAt = this.time.now()
         const poll = () => {
-          if (token !== this.deferredTextRenderToken) return
+          if (!isStillCurrent()) return
           if (!this.initialized) return
-          if (this.eventIndex !== expectedEventIndex) return
-          if (this.textIndex !== expectedTextIndex) return
-          if (this.sentenceIndex !== expectedSentenceIndex) return
           // 立ち絵の fade / nudge / transform が落ち着くまでは本文 reveal を始めない。
           // renderOnly のタイトル演出やカーソル点滅は CharacterLayer 側で除外している。
           if (
@@ -2388,18 +2417,34 @@ export class NovelRenderer {
         this.time.setTimeout(runAfterPortraitSettles, 0)
       }
     }
-    // showCharacterFromDialog は sprite を**同期**生成し（CharacterLayer.show 内）、
-    // onReady（renderOnce）は show 経路で必ず1回呼ばれる契約:
-    //  - 立ち絵なし Dialog / no-op / 位置のみ変更 / assetBaseUrl 空 → 同期発火（この場で即 render）。
-    //  - 新規・表情/フィット変更で texture load → load の settle 後に発火（render を遅延＝順序保証）。
-    // Assets.load は必ず settle（resolve/reject）し finally で onReady を呼ぶため、テキストが
-    // 永久に出ない事態は起きない。
-    // 注意（将来の改変者へ）: 現状この関数の末尾にフォールバックの renderOnce() は無い。将来も
-    // 足してはいけない。非同期 load 中に末尾で先に render すると、立ち絵より文字が先に出る
-    // 順序逆転（#293 で直した不具合）が再発する。onReady（renderOnce）だけが唯一の render 起点。
-    this.showCharacterFromDialog(event, renderOnce)
-    // sprite は上の呼び出しで同期生成済み。スナップショットはここで撮る（テキスト reveal の前）。
-    afterShow?.()
+    const showAfterBackgroundSettles = () => {
+      const startedAt = this.time.now()
+      const poll = () => {
+        if (!isStillCurrent()) return
+        this.updateBackgroundFadeFrame()
+        if (
+          (this.hasPendingBackgroundLoad() || this.hasActiveBackgroundFade()) &&
+          this.time.now() - startedAt < 6_000
+        ) {
+          this.time.setTimeout(poll, 16)
+          return
+        }
+        // showCharacterFromDialog は sprite を**同期**生成し（CharacterLayer.show 内）、
+        // onReady（renderOnce）は show 経路で必ず1回呼ばれる契約:
+        //  - 立ち絵なし Dialog / no-op / 位置のみ変更 / assetBaseUrl 空 → 同期発火（この場で即 render）。
+        //  - 新規・表情/フィット変更で texture load → load の settle 後に発火（render を遅延＝順序保証）。
+        // Assets.load は必ず settle（resolve/reject）し finally で onReady を呼ぶため、テキストが
+        // 永久に出ない事態は起きない。
+        // 注意（将来の改変者へ）: 現状この関数の末尾にフォールバックの renderOnce() は無い。将来も
+        // 足してはいけない。非同期 load 中に末尾で先に render すると、立ち絵より文字が先に出る
+        // 順序逆転（#293 で直した不具合）が再発する。onReady（renderOnce）だけが唯一の render 起点。
+        this.showCharacterFromDialog(event, renderOnce)
+        // sprite は上の呼び出しで同期生成済み。スナップショットはここで撮る（テキスト reveal の前）。
+        afterShow?.()
+      }
+      poll()
+    }
+    showAfterBackgroundSettles()
   }
 
   /**
@@ -2409,49 +2454,196 @@ export class NovelRenderer {
   private setBackground(
     path: string,
     fade?: BackgroundFade | null,
-    brightness?: number | null
+    brightness?: number | null,
+    opts?: { instant?: boolean }
   ): void {
+    const previousPath = this.currentBackgroundPath
     this.currentBackgroundPath = path
-    this.currentBackgroundFade = normalizeBackgroundFade(fade)
-    this.currentBackgroundBrightness = normalizeBackgroundBrightness(brightness)
-    this.disposeBgMask()
-    this.bgContainer.removeChildren()
+    const normalizedFade = normalizeBackgroundFade(fade)
+    const normalizedBrightness = normalizeBackgroundBrightness(brightness)
+    this.currentBackgroundFade = normalizedFade
+    this.currentBackgroundBrightness = normalizedBrightness
 
-    if (!this.assetBaseUrl) return
+    if (!this.assetBaseUrl) {
+      this.clearBackgroundEntries()
+      return
+    }
 
     const url = resolveAssetUrl(this.assetBaseUrl, 'images', path)
+    const instant =
+      opts?.instant === true ||
+      this.skipMode ||
+      !previousPath ||
+      previousPath === path ||
+      this.bgEntries.length === 0
 
     // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ。
     // キャッシュヒットで同期描画する場合も必ず進めること。さもないと直前に
     // 走っていた別背景の Assets.load().then が後から解決し、即描画した背景の上に
     // 古い sprite+fade を addChild してしまう。
     const token = ++this.bgLoadToken
+    this.pendingBackgroundLoadToken = null
 
     // キャッシュ済みの Texture があれば再利用（戻る操作時のフリッカー防止）
     const cached = this.textureCache.get(url)
     if (cached) {
-      const sprite = new Sprite(cached)
-      this.applyCoverFit(sprite)
-      this.applyBrightnessTint(sprite)
-      this.bgContainer.addChild(sprite)
-      this.applyEdgeFadeMask(sprite)
+      this.showLoadedBackground(cached, {
+        fade: normalizedFade,
+        brightness: normalizedBrightness,
+        instant,
+      })
       return
     }
 
+    this.pendingBackgroundLoadToken = token
     Assets.load(url)
       .then((texture) => {
         if (token !== this.bgLoadToken) return
+        if (this.pendingBackgroundLoadToken === token) this.pendingBackgroundLoadToken = null
         if (!this.initialized) return
         this.textureCache.set(url, texture)
-        const sprite = new Sprite(texture)
-        this.applyCoverFit(sprite)
-        this.applyBrightnessTint(sprite)
-        this.bgContainer.addChild(sprite)
-        this.applyEdgeFadeMask(sprite)
+        this.showLoadedBackground(texture, {
+          fade: normalizedFade,
+          brightness: normalizedBrightness,
+          instant: instant || this.skipMode,
+        })
       })
       .catch((err) => {
+        if (this.pendingBackgroundLoadToken === token) this.pendingBackgroundLoadToken = null
         console.warn('[name-name] 背景画像の読み込みに失敗: ' + url, err)
       })
+  }
+
+  private showLoadedBackground(
+    texture: Texture,
+    opts: {
+      fade: BackgroundFade | null
+      brightness: number | null
+      instant: boolean
+    }
+  ): void {
+    const sprite = new Sprite(texture)
+    this.applyCoverFit(sprite)
+    this.applyBrightnessTint(sprite, opts.brightness)
+    const mask = this.applyEdgeFadeMask(sprite, opts.fade)
+    const entry: BackgroundEntry = { sprite, mask, fadeAnimation: null }
+    this.bgMaskSprite = mask
+
+    if (opts.instant) {
+      this.replaceBackgroundEntries(entry)
+      return
+    }
+
+    this.crossfadeToBackgroundEntry(entry)
+  }
+
+  private replaceBackgroundEntries(entry: BackgroundEntry): void {
+    this.stopBackgroundCrossfade()
+    this.clearBackgroundEntries()
+    entry.sprite.alpha = 1
+    entry.fadeAnimation = null
+    this.addBackgroundEntryToContainer(entry)
+    this.bgEntries = [entry]
+    this.bgMaskSprite = entry.mask
+  }
+
+  private crossfadeToBackgroundEntry(next: BackgroundEntry): void {
+    this.stopBackgroundCrossfade()
+    const startMs = this.time.now()
+    const durationMs = BACKGROUND_CROSSFADE_MS
+    const previous = [...this.bgEntries]
+    for (const entry of previous) {
+      entry.fadeAnimation = {
+        startMs,
+        durationMs,
+        fromAlpha: entry.sprite.alpha,
+        toAlpha: 0,
+        destroyOnComplete: true,
+      }
+    }
+    next.sprite.alpha = 0
+    next.fadeAnimation = {
+      startMs,
+      durationMs,
+      fromAlpha: 0,
+      toAlpha: 1,
+      destroyOnComplete: false,
+    }
+    this.addBackgroundEntryToContainer(next)
+    this.bgEntries = [...previous, next]
+    this.updateBackgroundFadeFrame()
+    this.ensureBackgroundCrossfadeTicker()
+  }
+
+  private stopBackgroundCrossfade(): void {
+    if (this.bgCrossfadeTimer == null) return
+    this.time.clearInterval(this.bgCrossfadeTimer)
+    this.bgCrossfadeTimer = null
+  }
+
+  private finishBackgroundCrossfadeInstant(): void {
+    if (!this.hasActiveBackgroundFade()) return
+    this.stopBackgroundCrossfade()
+    const latest = this.bgEntries[this.bgEntries.length - 1]
+    for (const entry of this.bgEntries) {
+      if (entry !== latest) this.destroyBackgroundEntry(entry)
+    }
+    if (!latest) {
+      this.bgEntries = []
+      this.bgMaskSprite = null
+      return
+    }
+    latest.sprite.alpha = 1
+    latest.fadeAnimation = null
+    this.bgEntries = [latest]
+    this.bgMaskSprite = latest.mask
+  }
+
+  private ensureBackgroundCrossfadeTicker(): void {
+    if (this.bgCrossfadeTimer != null) return
+    if (!this.hasActiveBackgroundFade()) return
+    this.bgCrossfadeTimer = this.time.setInterval(() => {
+      this.updateBackgroundFadeFrame()
+    }, 16)
+  }
+
+  private hasActiveBackgroundFade(): boolean {
+    return this.bgEntries.some((entry) => entry.fadeAnimation !== null)
+  }
+
+  private hasPendingBackgroundLoad(): boolean {
+    return this.pendingBackgroundLoadToken === this.bgLoadToken
+  }
+
+  private updateBackgroundFadeFrame(): void {
+    let anyActive = false
+    for (const entry of [...this.bgEntries]) {
+      const f = entry.fadeAnimation
+      if (!f) continue
+      const t =
+        f.durationMs <= 0
+          ? 1
+          : Math.min(1, Math.max(0, (this.time.now() - f.startMs) / f.durationMs))
+      if (t >= 1) {
+        entry.sprite.alpha = f.toAlpha
+        entry.fadeAnimation = null
+        if (f.destroyOnComplete) {
+          this.destroyBackgroundEntry(entry)
+          this.bgEntries = this.bgEntries.filter((candidate) => candidate !== entry)
+        }
+      } else {
+        anyActive = true
+        entry.sprite.alpha = f.fromAlpha + (f.toAlpha - f.fromAlpha) * t
+      }
+    }
+    const top = this.bgEntries[this.bgEntries.length - 1] ?? null
+    this.bgMaskSprite = top?.mask ?? null
+    if (!anyActive) this.stopBackgroundCrossfade()
+  }
+
+  private addBackgroundEntryToContainer(entry: BackgroundEntry): void {
+    this.bgContainer.addChild(entry.sprite)
+    if (entry.mask) this.bgContainer.addChild(entry.mask)
   }
 
   /**
@@ -2460,8 +2652,11 @@ export class NovelRenderer {
    * `tint = rgb(round(b*255), round(b*255), round(b*255))` で全体を b 倍に減光する。
    * null/未指定（＝原画のまま）は 0xffffff（白＝tint 無効）で従来動作。
    */
-  private applyBrightnessTint(sprite: Sprite): void {
-    sprite.tint = brightnessToTint(this.currentBackgroundBrightness)
+  private applyBrightnessTint(
+    sprite: { tint: number },
+    brightness: number | null = this.currentBackgroundBrightness
+  ): void {
+    sprite.tint = brightnessToTint(brightness)
   }
 
   private applyCoverFit(sprite: Sprite): void {
@@ -2475,27 +2670,39 @@ export class NovelRenderer {
    * 現在の currentBackgroundFade に基づいて端フェードマスク (#250) を sprite に適用する。
    * フェード指定がなければ何もしない（従来動作）。
    */
-  private applyEdgeFadeMask(sprite: Sprite): void {
+  private applyEdgeFadeMask(
+    sprite: Sprite,
+    fade: BackgroundFade | null = this.currentBackgroundFade
+  ): Sprite | null {
     // #252 で共通ユーティリティ buildEdgeFadeMask に切り出した（VideoLayer と共有）。
-    const maskSprite = buildEdgeFadeMask(
-      this.currentBackgroundFade,
-      this.screenWidth,
-      this.screenHeight
-    )
-    if (!maskSprite) return
-    this.bgMaskSprite = maskSprite
-    this.bgContainer.addChild(maskSprite)
+    const maskSprite = buildEdgeFadeMask(fade, this.screenWidth, this.screenHeight)
+    if (!maskSprite) return null
     sprite.mask = maskSprite
+    return maskSprite
   }
 
-  /** 背景マスク Sprite と そのテクスチャを破棄する (#250)。メモリリーク防止 */
-  private disposeBgMask(): void {
-    if (this.bgMaskSprite) {
-      this.bgMaskSprite.removeFromParent()
+  /** 背景 entry が所有する mask Sprite とそのテクスチャを破棄する (#250)。メモリリーク防止 */
+  private disposeBgMask(maskSprite: Sprite | null = this.bgMaskSprite): void {
+    if (maskSprite) {
+      maskSprite.removeFromParent()
       // canvas 由来のテクスチャは textureCache に乗らないので確実に破棄する
-      this.bgMaskSprite.destroy({ texture: true, textureSource: true })
-      this.bgMaskSprite = null
+      maskSprite.destroy({ texture: true, textureSource: true })
+      if (this.bgMaskSprite === maskSprite) this.bgMaskSprite = null
     }
+  }
+
+  private destroyBackgroundEntry(entry: BackgroundEntry): void {
+    entry.sprite.removeFromParent()
+    entry.sprite.destroy()
+    this.disposeBgMask(entry.mask)
+  }
+
+  private clearBackgroundEntries(): void {
+    this.stopBackgroundCrossfade()
+    for (const entry of this.bgEntries) this.destroyBackgroundEntry(entry)
+    this.bgEntries = []
+    this.bgMaskSprite = null
+    this.bgContainer.removeChildren()
   }
 
   /**
@@ -2505,8 +2712,9 @@ export class NovelRenderer {
     this.currentBackgroundPath = null
     this.currentBackgroundFade = null
     this.currentBackgroundBrightness = null
-    this.disposeBgMask()
-    this.bgContainer.removeChildren()
+    this.bgLoadToken++
+    this.pendingBackgroundLoadToken = null
+    this.clearBackgroundEntries()
     // 動画レイヤも背景と同じ扱いでクリアする (#252)
     this.videoLayer.remove()
   }
