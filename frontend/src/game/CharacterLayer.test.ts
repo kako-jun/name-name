@@ -404,7 +404,10 @@ describe('CharacterLayer applyUnderline (#270)', () => {
 // ===== #271: 点滅カーソル（効果=タイプ 専用）=====
 interface CursorTitleLike {
   textEffect: {
-    cursor: { gfx: { destroyed: boolean }; blinkMs: number } | null
+    cursor: {
+      gfx: { destroyed: boolean; visible: boolean; x: number; y: number }
+      blinkMs: number
+    } | null
     glyphs: Array<{ glyph: { visible: boolean } }>
     typewriter: { displayedCharCount: number; acc: number } | null
     settled: boolean
@@ -480,6 +483,19 @@ describe('CharacterLayer cursor (#271)', () => {
     const st = getTitleC(layer)
     // 2: blink_ms 未指定なので既定値。直書きせず定数を参照（陳腐化防止）。
     expect(st.textEffect!.cursor!.blinkMs).toBe(CURSOR_DEFAULTS.blinkMs)
+  })
+
+  it('cursor=on の初期フレームで配置済み・表示済みになり、未配置原点を見せない（#333）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    await layer.applyTextEffect('Title', { effect: 'Typewriter', cursor: true, ms_per_char: 70 })
+    const cursor = getTitleC(layer).textEffect!.cursor!.gfx
+
+    expect(cursor.destroyed).toBe(false)
+    expect(cursor.visible).toBe(true)
+    expect(cursor.y).toBe(0)
+    // buildCursor は (0,0) で作るが、初期 updateTextEffectFrame が先頭グリフ左端へ同期する。
+    expect(cursor.x).not.toBe(0)
   })
 
   it('カーソルがある限り hasActiveAnimation()===true（reveal 完了・settle 後も止まらない＝settle モデルの小例外）', async () => {

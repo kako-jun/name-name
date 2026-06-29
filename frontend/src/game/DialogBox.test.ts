@@ -66,7 +66,9 @@ const TEXT_X_WITH_PORTRAIT = PORTRAIT_X + PORTRAIT_SIZE + PORTRAIT_MARGIN
 interface DialogBoxInternals {
   portraitFrame: { visible: boolean } | null
   dialogText: { x: number; text: string; visible: boolean; style: { fill: unknown } }
-  indicator: { visible: boolean }
+  indicator: { visible: boolean; x: number; y: number }
+  indicatorBaseY: number
+  novelWrappedLines: string[]
   portraitSprite: { visible: boolean; texture: unknown } | null
   currentPortraitToken: number
   rubyEntries: Array<{ placement: unknown; text: { x: number; style: { fill: unknown } } }>
@@ -264,6 +266,46 @@ describe('DialogBox typewriter (Issue #150 / #194)', () => {
     box.setNovelDialogProgressive(null, 'firstsecond', 'first'.length)
     expect(box.isTyping()).toBe(true)
     expect(i.indicator.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('novel progressive のインジケータ再配置は ticker を待たず y へ反映される（#333）', () => {
+    const box = makeRpgBox()
+    box.setNovelMode(true)
+    const i = asInternals(box)
+
+    box.setNovelDialogProgressive(null, 'first', 0)
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+    const firstBaseY = i.indicatorBaseY
+    expect(i.indicator.y).toBe(firstBaseY)
+
+    box.setNovelDialogProgressive(null, 'firstsecond', 'first'.length)
+    expect(i.indicator.visible).toBe(false)
+    expect(i.indicator.y).toBe(i.indicatorBaseY)
+
+    box.dispose()
+  })
+
+  it('novel progressive の複数行インジケータも visible 直前に現在 y へ同期する（#333）', () => {
+    const box = makeRpgBox()
+    box.setNovelMode(true)
+    const i = asInternals(box)
+
+    box.setNovelDialogProgressive(null, 'first', 0)
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+    const oneLineY = i.indicator.y
+
+    // jsdom の canvas 可否で wordwrap 結果が揺れないよう、ここでは DialogBox 内部の
+    // 「wrap 済み行」を明示し、複数行化後の positionIndicator 配線だけを検証する。
+    i.novelWrappedLines = ['line 1', 'line 2', 'line 3']
+    box.setIndicatorVisible(true)
+
+    expect(i.indicator.visible).toBe(true)
+    expect(i.indicator.y).toBe(i.indicatorBaseY)
+    expect(i.indicator.y).toBeGreaterThan(oneLineY)
+
     box.dispose()
   })
 })

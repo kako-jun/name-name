@@ -681,6 +681,9 @@ export class DialogBox extends Container {
     this.indicator.visible = false
     // novel 配置用に累積テキストの wrap 結果を保持する (#292)。
     this.novelWrappedLines = lines
+    // 表示はタイプ完了まで抑えるが、座標はこの時点で現在文末へ同期しておく。
+    // 旧座標のまま visible になる 1 フレームの跳ねを防ぐ (#333)。
+    this.positionIndicator()
     this.rubyPlacements = computeRubyPlacements(runs, lines)
     this.rubyBuildToken += 1
     const rubyToken = this.rubyBuildToken
@@ -992,6 +995,7 @@ export class DialogBox extends Container {
 
   setIndicatorVisible(visible: boolean): void {
     this.indicatorWanted = visible
+    if (visible) this.positionIndicator()
     this.indicator.visible = visible && !isTypingActive(this.typewriter)
   }
 
@@ -1018,6 +1022,7 @@ export class DialogBox extends Container {
       // adv: 従来の右下固定。redraw 等が既に設定している x/baseY を尊重しつつ再アサート。
       this.indicator.x = this.boxX + this.boxW - 40
       this.indicatorBaseY = this.boxY + this.boxH - 30
+      this.indicator.y = this.indicatorBaseY
       return
     }
     // novel: 最終 wrap 行の右端へ。lines が空（未設定）なら 1 行 / 幅 0 として扱う。
@@ -1048,6 +1053,7 @@ export class DialogBox extends Container {
     })
     this.indicator.x = placement.x
     this.indicatorBaseY = placement.y
+    this.indicator.y = this.indicatorBaseY
   }
 
   /** 指定 font で文字列の表示幅（px）を測る。ctx が無い jsdom では 0 を返す（配置は退化的に左端寄せ）。 */
