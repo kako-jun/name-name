@@ -1419,6 +1419,9 @@ export class CharacterLayer extends Container {
     const gfx = new Graphics()
     // 左端基準・縦中央基準で矩形を描く（rect の中心が原点に来るよう左上を負方向に置く）。
     gfx.rect(0, -height / 2, width, height).fill(colorNum)
+    // build 直後はまだ reveal head へ配置されていない。positionCursor() が初期フレームで
+    // 座標を確定してから表示することで、(0,0) 起点の一瞬表示を防ぐ (#333)。
+    gfx.visible = false
     container.addChild(gfx)
     return {
       gfx,
