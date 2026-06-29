@@ -716,7 +716,7 @@ export class NovelRenderer {
 
   private startScene(sceneId: string, scene: EventScene): void {
     this.currentSceneId = sceneId
-    this.resetAndStartEvents([...scene.events])
+    this.resetAndStartEvents([...scene.events], { preserveBackgroundForTransition: true })
     this.onSceneChangeCallback?.(sceneId)
   }
 
@@ -817,7 +817,10 @@ export class NovelRenderer {
   /**
    * イベント配列をリセットし、最初のテキストイベントまで進めて描画する
    */
-  private resetAndStartEvents(events: Event[]): void {
+  private resetAndStartEvents(
+    events: Event[],
+    options?: { preserveBackgroundForTransition?: boolean }
+  ): void {
     this.waitingForChoice = false
     this.waitingForWait = false
     if (this.waitTimer) {
@@ -846,7 +849,14 @@ export class NovelRenderer {
     }
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
-    this.clearBackground()
+    if (options?.preserveBackgroundForTransition) {
+      this.bgLoadToken++
+      this.pendingBackgroundLoadToken = null
+      this.finishBackgroundCrossfadeInstant()
+      this.videoLayer.remove()
+    } else {
+      this.clearBackground()
+    }
     this.characterLayer.clear()
     this.blackoutOverlay.visible = false
     this.currentBgmPath = null

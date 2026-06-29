@@ -10,6 +10,7 @@ import { Assets, Texture } from 'pixi.js'
 import { BACKGROUND_CROSSFADE_MS, NovelRenderer } from './NovelRenderer'
 import type { NovelGameState } from './GameState'
 import { defaultTimeController } from './TimeController'
+import type { Event, EventScene } from '../types'
 
 interface BackgroundEntryForTest {
   sprite: {
@@ -79,6 +80,27 @@ function baseState(r: NovelRenderer): NovelGameState {
     characters: [],
     currentBgmPath: null,
   }
+}
+
+function background(path: string): Event {
+  return {
+    Background: {
+      path,
+      fade_top: null,
+      fade_bottom: null,
+      fade_left: null,
+      fade_right: null,
+      brightness: null,
+    },
+  }
+}
+
+function narration(text: string): Event {
+  return { Narration: { text: [text], voice_path: null, font_family: null } }
+}
+
+function scene(id: string, events: Event[]): EventScene {
+  return { id, title: id, view: 'TopDown', events }
 }
 
 describe('NovelRenderer 背景クロスフェード', () => {
@@ -356,5 +378,40 @@ describe('NovelRenderer 背景クロスフェード', () => {
     expect(inner.bgEntries[0].sprite.alpha).toBe(1)
     expect(inner.bgEntries[0].fadeAnimation).toBeNull()
     expect(inner.bgCrossfadeTimer).toBeNull()
+  })
+
+  it('通常の scene jump は前シーン背景を残し、次シーン先頭の背景へクロスフェードする', () => {
+    const r = makeRenderer()
+    r.setDialogStyle('novel')
+    const inner = internals(r)
+    inner.render = vi.fn()
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      cb(0)
+      return 0
+    })
+
+    r.setScenes([
+      scene('old-scene', [narration('old')]),
+      scene('new-scene', [background('new.png'), narration('new')]),
+    ])
+    cacheTexture(r, 'old.png')
+    cacheTexture(r, 'new.png')
+    inner.setBackground('old.png')
+    expect(inner.bgEntries).toHaveLength(1)
+    expect(inner.bgEntries[0].sprite.alpha).toBe(1)
+
+    r.jumpToScene('new-scene')
+
+    expect(inner.bgEntries).toHaveLength(2)
+    expect(inner.bgEntries[0].fadeAnimation).toMatchObject({
+      fromAlpha: 1,
+      toAlpha: 0,
+      destroyOnComplete: true,
+    })
+    expect(inner.bgEntries[1].fadeAnimation).toMatchObject({
+      fromAlpha: 0,
+      toAlpha: 1,
+      destroyOnComplete: false,
+    })
   })
 })

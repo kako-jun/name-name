@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Assets } from 'pixi.js'
+import { Assets, Texture } from 'pixi.js'
 import {
   CHARACTER_Y_RATIO,
   CharacterLayer,
@@ -21,8 +21,10 @@ interface FadeAnimationLike {
 }
 
 interface CharacterStateLike {
-  sprite: { alpha: number; x: number; y: number }
+  sprite: { alpha: number; x: number; y: number; parent?: unknown }
   fadeAnimation: FadeAnimationLike | null
+  snapshotHidden?: boolean
+  attached?: boolean
 }
 
 interface CharacterLayerInternals {
@@ -1897,6 +1899,79 @@ describe('CharacterLayer 1 位置 1 キャラ衝突退場 (#303)', () => {
     const names = layer.getCharacterStates().map((s) => s.name)
     expect(names).not.toContain('ヴィンチア')
     expect(names).toContain('カンティア')
+  })
+})
+
+describe('CharacterLayer 立ち絵 transition semantics (#337)', () => {
+  beforeEach(() => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(Texture.WHITE as never)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('同位置の別人物交代は、旧人物 fade-out 完了後に新人物 fade-in を始める', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('old', 'normal', '中央', '/assets', { instant: true })
+    layer.show('new', 'normal', '中央', '/assets')
+
+    await flushPromises()
+
+    const states = asInternals(layer).characters
+    const oldState = states.get('old')
+    const newState = states.get('new')
+    expect(oldState).toBeDefined()
+    expect(newState).toBeDefined()
+    expect(oldState!.fadeAnimation).toMatchObject({
+      toAlpha: 0,
+      destroyOnComplete: true,
+    })
+    expect(newState!.attached).toBe(false)
+    expect(newState!.sprite.parent).toBeNull()
+    expect(newState!.fadeAnimation).toBeNull()
+
+    const internal = layer as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 10000
+    internal.animTicker?.update()
+
+    expect(states.has('old')).toBe(false)
+    expect(states.get('new')!.attached).toBe(true)
+    expect(states.get('new')!.fadeAnimation).toMatchObject({
+      fromAlpha: 0,
+      toAlpha: 1,
+      destroyOnComplete: false,
+    })
+  })
+
+  it('同一人物の表情変更は旧 sprite と新 sprite を重ねてクロスフェードする', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.show('hero', 'smile', '中央', '/assets')
+
+    await flushPromises()
+
+    const states = asInternals(layer).characters
+    const current = states.get('hero')
+    const old = Array.from(states.entries()).find(([name]) => name.startsWith('hero__transition_'))
+    expect(current).toBeDefined()
+    expect(old).toBeDefined()
+    expect(old![1].snapshotHidden).toBe(true)
+    expect(old![1].fadeAnimation).toMatchObject({
+      fromAlpha: 1,
+      toAlpha: 0,
+      destroyOnComplete: true,
+    })
+    expect(current!.fadeAnimation).toMatchObject({
+      fromAlpha: 0,
+      toAlpha: 1,
+      destroyOnComplete: false,
+    })
+    expect(layer.getCharacterStates()).toEqual([
+      { name: 'hero', expression: 'smile', position: 'center' },
+    ])
   })
 })
 

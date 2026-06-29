@@ -224,12 +224,16 @@ interface CharacterState {
    *  `NovelGameState.characters` に漏れない（doctrine 規律3: 立ち絵 show だけが復元対象）。
    *  Title / Label / Image はセーブ/シーク/任意局面起動で再 emit されない（spec L520, ADR0002）。 */
   renderOnly?: boolean
+  /** 同一人物クロスフェード用の旧 sprite。描画・待機対象だが NovelGameState には入れない。 */
+  snapshotHidden?: boolean
   /** 円形マスク用 Graphics (#274)。`[画像: 円形]` のとき sprite.mask に設定する。退場で破棄する。 */
   maskGraphics?: Graphics
   /** ラベルの水平 anchor (#275)。左=0 / 中央=0.5 / 右=1。label.anchor.x と一致させて保持する。
    *  グリフ演出 (buildTextEffect) のグリフ群オフセット (glyphAnchorOffset) とカーソル位置
    *  (positionCursor) が anchor を尊重するために参照する。未設定（立ち絵等）は 0.5 扱い。 */
   anchorX?: number
+  /** false の間は GameState 上の最終表示としては存在するが、旧人物 fade-out 待ちで描画ツリーには未追加。 */
+  attached?: boolean
 }
 
 interface FadeAnimation {
@@ -239,6 +243,8 @@ interface FadeAnimation {
   toAlpha: number
   /** true なら 0 に到達した時点で sprite を破棄して characters Map から消す */
   destroyOnComplete: boolean
+  /** fade-out 完了後に次の人物の fade-in を開始するためのローカル hook。GameState には出さない。 */
+  onComplete?: () => void
 }
 
 /**
@@ -387,6 +393,7 @@ interface UnderlineAnimation {
 
 export class CharacterLayer extends Container {
   private characters: Map<string, CharacterState> = new Map()
+  private transitionSerial = 0
   /** アニメーション駆動用 ticker。動いているキャラがいないときは停止しておく */
   private animTicker: Ticker | null = null
   /** ticker.deltaMS の累計を保持してアニメ進行に使う */
@@ -470,6 +477,104 @@ export class CharacterLayer extends Container {
     this.characterFadeMs = next
   }
 
+  private createPortraitState(
+    character: string,
+    expression: string,
+    normalizedPosition: string,
+    assetBaseUrl: string,
+    targetX: number,
+    fit: boolean,
+    alpha: number,
+    attached: boolean
+  ): CharacterState {
+    const sprite = new Sprite()
+    sprite.anchor.set(0.5, 1)
+    sprite.x = targetX
+    sprite.y = this.characterY
+    sprite.alpha = alpha
+
+    let label: Text | undefined
+    if (normalizedPosition === 'off_right' || normalizedPosition === 'off_left') {
+      const labelFont = 'bellpoke_font, sans-serif'
+      label = new Text({
+        text: character,
+        style: new TextStyle({ fontFamily: labelFont, fontSize: 48, fill: 0xffffff }),
+      })
+      label.anchor.set(0.5, 1)
+      label.x = sprite.x
+      label.y = this.screenHeight * 0.18
+      label.alpha = alpha
+      const labelRef = label
+      void ensureFontLoaded(labelFont)
+        .then(() => {
+          if (labelRef.destroyed) return
+          labelRef.style = new TextStyle({ fontFamily: labelFont, fontSize: 48, fill: 0xffffff })
+        })
+        .catch(() => {})
+    }
+
+    return {
+      sprite,
+      label,
+      position: normalizedPosition,
+      expression,
+      assetBaseUrl,
+      fit,
+      animation: null,
+      poseNudge: null,
+      fadeAnimation: null,
+      textEffect: null,
+      underline: null,
+      attached,
+    }
+  }
+
+  private attachCharacterState(state: CharacterState): void {
+    state.attached = true
+    if (!state.sprite.parent) this.addChild(state.sprite)
+    if (state.label && !state.label.parent) this.addChild(state.label)
+  }
+
+  private destroyCharacterState(state: CharacterState): void {
+    if (state.idleIntervalId) {
+      this.time.clearInterval(state.idleIntervalId)
+      state.idleIntervalId = undefined
+    }
+    this.clearTextEffect(state)
+    this.clearUnderline(state)
+    this.clearMask(state)
+    state.sprite.removeFromParent()
+    state.sprite.destroy()
+    if (state.label) {
+      state.label.removeFromParent()
+      state.label.destroy()
+      state.label = undefined
+    }
+  }
+
+  private startFade(
+    state: CharacterState,
+    fromAlpha: number,
+    toAlpha: number,
+    destroyOnComplete: boolean,
+    onComplete?: () => void
+  ): void {
+    state.fadeAnimation = {
+      startMs: this.elapsedMs,
+      durationMs: this.characterFadeMs,
+      fromAlpha,
+      toAlpha,
+      destroyOnComplete,
+      onComplete,
+    }
+    this.ensureTicker()
+  }
+
+  private nextTransitionName(character: string): string {
+    this.transitionSerial += 1
+    return `${character}__transition_${this.transitionSerial}`
+  }
+
   /**
    * キャラクター立ち絵を表示する。既に表示中なら position / expression を更新する。
    *
@@ -513,14 +618,7 @@ export class CharacterLayer extends Container {
           existing.sprite.alpha = 1
           existing.fadeAnimation = null
         } else {
-          existing.fadeAnimation = {
-            startMs: this.elapsedMs,
-            durationMs: this.characterFadeMs,
-            fromAlpha: existing.sprite.alpha,
-            toAlpha: 1,
-            destroyOnComplete: false,
-          }
-          this.ensureTicker()
+          this.startFade(existing, existing.sprite.alpha, 1, false)
         }
       }
 
@@ -550,6 +648,62 @@ export class CharacterLayer extends Container {
       // 旧実装は overrideXChanged だけ（position トークンは同一）のとき `existing.position` への
       // 再代入が no-op になっていた。position は実際に変化したときだけ更新して意図を明確にする。
       const positionChanged = existing.position !== normalizedPosition
+      const textureChanged = existing.expression !== expression || existing.fit !== fit
+      if (textureChanged && !instant && this.characterFadeMs > 0) {
+        // 同一人物の表情・ポーズ/fit 変更は旧 sprite を即 texture 差し替えせず、
+        // 旧 sprite と新 sprite を重ねて同時クロスフェードする (#337)。
+        if (positionChanged || overrideXChanged) {
+          this.evictCollidersAt(targetX, character, instant)
+        }
+        if (existing.idleIntervalId) {
+          this.time.clearInterval(existing.idleIntervalId)
+          existing.idleIntervalId = undefined
+        }
+
+        const oldKey = this.nextTransitionName(character)
+        existing.snapshotHidden = true
+        this.characters.delete(character)
+        this.characters.set(oldKey, existing)
+
+        const nextState = this.createPortraitState(
+          character,
+          expression,
+          normalizedPosition,
+          assetBaseUrl,
+          targetX,
+          fit,
+          0,
+          true
+        )
+        this.attachCharacterState(nextState)
+        this.characters.set(character, nextState)
+
+        void this.loadTexture(
+          nextState.sprite,
+          expression,
+          assetBaseUrl,
+          nextState.label,
+          fit,
+          onReady
+        ).then((loaded) => {
+          if (this.characters.get(character) !== nextState) return
+          if (this.characters.get(oldKey) !== existing) return
+          if (!loaded && assetBaseUrl) {
+            this.destroyCharacterState(nextState)
+            this.characters.delete(character)
+            existing.fadeAnimation = null
+            existing.snapshotHidden = false
+            existing.sprite.alpha = 1
+            this.characters.delete(oldKey)
+            this.characters.set(character, existing)
+            return
+          }
+          this.startFade(existing, existing.sprite.alpha, 0, true)
+          this.startFade(nextState, 0, 1, false)
+        })
+        return
+      }
+
       if (positionChanged || overrideXChanged) {
         // 1 位置 1 キャラ (#303): 移動先 x を別キャラが占有していたら退場させる。
         // 自分自身（character）と renderOnly（Title/Label/Image）は対象外。
@@ -563,10 +717,17 @@ export class CharacterLayer extends Container {
       // 表情変更・またはフィット指定変更 (#294) のとき texture を再ロードする。
       // どちらの場合も loadTexture が最新の fit に基づいて scale を取り直す
       // （表情据え置きでフィットだけ変わったケースも再ロードで反映する）。
-      if (existing.expression !== expression || existing.fit !== fit) {
+      if (textureChanged) {
         existing.fit = fit
         // texture 再ロード経路では onReady を loadTexture に委ねる（load 完了/失敗で発火）(#293)。
-        this.loadTexture(existing.sprite, expression, assetBaseUrl, existing.label, fit, onReady)
+        void this.loadTexture(
+          existing.sprite,
+          expression,
+          assetBaseUrl,
+          existing.label,
+          fit,
+          onReady
+        )
         existing.expression = expression
       } else {
         // 位置/x だけの変更（texture 据え置き）。待つ必要はないので即 ready (#293)。
@@ -575,71 +736,54 @@ export class CharacterLayer extends Container {
       return
     }
 
-    // 1 位置 1 キャラ (#303): 新規立ち絵を置く前に、この x を占有している別キャラを退場させる。
-    // ヴィンチア(右) → カンティア(右) のように同じ位置に別キャラが続けて出るとき、前のキャラを
-    // フェードアウトして重なりを解消する。自分自身・renderOnly は evictCollidersAt が除外する。
-    this.evictCollidersAt(targetX, character, instant)
-
-    // 新規表示。novel 役割配置 (#286) の override x があればそれを使う。
-    const x = targetX
-    const sprite = new Sprite()
-    sprite.anchor.set(0.5, 1)
-    sprite.x = x
-    sprite.y = this.characterY
     const shouldFade = !instant && this.characterFadeMs > 0
-    sprite.alpha = shouldFade ? 0 : 1
-    this.addChild(sprite)
-
-    // off_right/off_left で登場した立ち絵には名前ラベルを上に自動付与する。
-    // llll-ll-media の「車の画像と同じ幅で上に名前」を実現するため。
-    // sprite と同じ x を毎フレーム追従させるので、アニメ時も自然に一緒に動く。
-    let label: Text | undefined
-    if (normalizedPosition === 'off_right' || normalizedPosition === 'off_left') {
-      const labelFont = 'bellpoke_font, sans-serif'
-      label = new Text({
-        text: character,
-        style: new TextStyle({ fontFamily: labelFont, fontSize: 48, fill: 0xffffff }),
-      })
-      label.anchor.set(0.5, 1)
-      label.x = sprite.x
-      label.y = this.screenHeight * 0.18 // 画面上から 18% の位置 (label の下端)
-      label.alpha = shouldFade ? 0 : 1
-      this.addChild(label)
-      const labelRef = label
-      void ensureFontLoaded(labelFont)
-        .then(() => {
-          if (labelRef.destroyed) return
-          labelRef.style = new TextStyle({ fontFamily: labelFont, fontSize: 48, fill: 0xffffff })
-        })
-        .catch(() => {})
-    }
-
-    const state: CharacterState = {
-      sprite,
-      label,
-      position: normalizedPosition,
+    const state = this.createPortraitState(
+      character,
       expression,
+      normalizedPosition,
       assetBaseUrl,
+      targetX,
       fit,
-      animation: null,
-      poseNudge: null,
-      fadeAnimation: shouldFade
-        ? {
-            startMs: this.elapsedMs,
-            durationMs: this.characterFadeMs,
-            fromAlpha: 0,
-            toAlpha: 1,
-            destroyOnComplete: false,
-          }
-        : null,
-      textEffect: null,
-      underline: null,
-    }
+      shouldFade ? 0 : 1,
+      false
+    )
     this.characters.set(character, state)
-    if (state.fadeAnimation) this.ensureTicker()
+    let entranceStarted = false
+    let collidersGone = false
+    let textureReady = false
+    let textureLoaded = false
+    const attachEntrance = () => {
+      if (entranceStarted) return
+      entranceStarted = true
+      this.attachCharacterState(state)
+      if (shouldFade) {
+        this.startFade(state, 0, 1, false)
+      }
+    }
+    const startEntrance = () => {
+      if (entranceStarted) return
+      if (!collidersGone || !textureReady) return
+      if (this.characters.get(character) !== state) return
+      if (!textureLoaded && assetBaseUrl) return
+      attachEntrance()
+    }
+    const colliderCount = this.evictCollidersAt(targetX, character, instant, () => {
+      collidersGone = true
+      startEntrance()
+    })
+    if (colliderCount === 0 || instant) {
+      collidersGone = true
+      attachEntrance()
+    }
     // 新規立ち絵: texture load 完了/失敗で onReady を発火（#293）。これでテキスト reveal が
     // 立ち絵の用意完了に揃う。
-    this.loadTexture(sprite, expression, assetBaseUrl, label, fit, onReady)
+    void this.loadTexture(state.sprite, expression, assetBaseUrl, state.label, fit, onReady).then(
+      (loaded) => {
+        textureReady = true
+        textureLoaded = loaded
+        startEntrance()
+      }
+    )
   }
 
   /**
@@ -664,7 +808,7 @@ export class CharacterLayer extends Container {
       const nextExpression = `${basename}-${frame}`
       cur.expression = nextExpression
       // 2コマ自動切替でも fit (#294) を維持する。
-      this.loadTexture(cur.sprite, nextExpression, assetBaseUrl, cur.label, cur.fit)
+      void this.loadTexture(cur.sprite, nextExpression, assetBaseUrl, cur.label, cur.fit)
     }, 1000)
     state.idleIntervalId = intervalId
   }
@@ -681,7 +825,7 @@ export class CharacterLayer extends Container {
       if (state.expression !== aExpression) {
         state.expression = aExpression
         // idle cycle 停止で -a に戻すときも fit (#294) を維持する。
-        this.loadTexture(state.sprite, aExpression, assetBaseUrl, state.label, state.fit)
+        void this.loadTexture(state.sprite, aExpression, assetBaseUrl, state.label, state.fit)
       }
     }
   }
@@ -1067,7 +1211,7 @@ export class CharacterLayer extends Container {
     if (state.expression === expression) return
     state.expression = expression
     // 表情のみ差し替えでも fit (#294) を維持する。
-    this.loadTexture(state.sprite, expression, assetBaseUrl, state.label, state.fit)
+    void this.loadTexture(state.sprite, expression, assetBaseUrl, state.label, state.fit)
   }
 
   /**
@@ -1802,20 +1946,12 @@ export class CharacterLayer extends Container {
             // （0.97〜0.99 等）で固定され、[ラベル] 文字が恒久的に半透明になる。
             if (state.label) state.label.alpha = f.toAlpha
             state.fadeAnimation = null
+            const onComplete = f.onComplete
             if (f.destroyOnComplete) {
-              if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
-              this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
-              this.clearUnderline(state) // 下線 gfx を破棄 (#270)
-              this.clearMask(state) // 円形マスク gfx を破棄 (#274)
-              this.removeChild(state.sprite)
-              state.sprite.destroy()
-              if (state.label) {
-                this.removeChild(state.label)
-                state.label.destroy()
-                state.label = undefined
-              }
+              this.destroyCharacterState(state)
               this.characters.delete(name)
             }
+            onComplete?.()
           } else {
             anyActive = true
             state.sprite.alpha = f.fromAlpha + (f.toAlpha - f.fromAlpha) * tf
@@ -1914,8 +2050,16 @@ export class CharacterLayer extends Container {
    * characters Map から消える（getCharacterStates は退場後の状態を写す）ので、任意局面起動・goBack/seek
    * の復元でも重なり・消えすぎは起きない。
    */
-  private evictCollidersAt(targetX: number, keepName: string, instant: boolean): void {
-    if (!Number.isFinite(targetX)) return
+  private evictCollidersAt(
+    targetX: number,
+    keepName: string,
+    instant: boolean,
+    onComplete?: () => void
+  ): number {
+    if (!Number.isFinite(targetX)) {
+      onComplete?.()
+      return 0
+    }
     // 走査中に remove() が characters を delete するため、対象名を先に集めてから退場させる。
     const colliders: string[] = []
     for (const [name, state] of this.characters) {
@@ -1926,9 +2070,19 @@ export class CharacterLayer extends Container {
         colliders.push(name)
       }
     }
-    for (const name of colliders) {
-      this.remove(name, { instant })
+    if (colliders.length === 0) {
+      onComplete?.()
+      return 0
     }
+    let remaining = colliders.length
+    const markDone = () => {
+      remaining -= 1
+      if (remaining === 0) onComplete?.()
+    }
+    for (const name of colliders) {
+      this.remove(name, { instant, onComplete: markDone })
+    }
+    return colliders.length
   }
 
   /**
@@ -1937,37 +2091,25 @@ export class CharacterLayer extends Container {
    * デフォルトでは alpha 1 → 0 のフェードアウト後に sprite を破棄する（#177）。
    * 即時退場が必要な場合は `options.instant: true`（旧挙動と等価）。
    */
-  remove(character: string, options?: { instant?: boolean }): void {
+  remove(character: string, options?: { instant?: boolean; onComplete?: () => void }): void {
     const state = this.characters.get(character)
-    if (!state) return
+    if (!state) {
+      options?.onComplete?.()
+      return
+    }
     const instant = options?.instant === true
     if (state.idleIntervalId) {
       this.time.clearInterval(state.idleIntervalId)
       state.idleIntervalId = undefined
     }
     if (instant || this.characterFadeMs <= 0) {
-      this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
-      this.clearUnderline(state) // 下線 gfx を破棄 (#270)
-      this.clearMask(state) // 円形マスク gfx を破棄 (#274)
-      this.removeChild(state.sprite)
-      state.sprite.destroy()
-      if (state.label) {
-        this.removeChild(state.label)
-        state.label.destroy()
-        state.label = undefined
-      }
+      this.destroyCharacterState(state)
       this.characters.delete(character)
       this.maybeStopTicker()
+      options?.onComplete?.()
       return
     }
-    state.fadeAnimation = {
-      startMs: this.elapsedMs,
-      durationMs: this.characterFadeMs,
-      fromAlpha: state.sprite.alpha,
-      toAlpha: 0,
-      destroyOnComplete: true,
-    }
-    this.ensureTicker()
+    this.startFade(state, state.sprite.alpha, 0, true, options?.onComplete)
   }
 
   /**
@@ -1983,6 +2125,7 @@ export class CharacterLayer extends Container {
     const result: Array<{ name: string; expression: string; position: string }> = []
     for (const [name, state] of this.characters) {
       if (state.renderOnly) continue
+      if (state.snapshotHidden) continue
       // 退場フェード中（destroyOnComplete）のキャラは概念上もう退場済みなのでスナップショットに
       // 含めない (#303)。1 位置 1 キャラの衝突退場で fade-out 中の前キャラがまだ Map に残っていても、
       // セーブ/シーク/任意局面起動の復元で「退場しかけのキャラ」が立ち絵として蘇らないようにする。
@@ -1997,16 +2140,7 @@ export class CharacterLayer extends Container {
    */
   clear(): void {
     for (const [, state] of this.characters) {
-      if (state.idleIntervalId) this.time.clearInterval(state.idleIntervalId)
-      this.clearTextEffect(state) // グリフ container/glyphs を破棄 (#268)
-      this.clearUnderline(state) // 下線 gfx を破棄 (#270)
-      this.clearMask(state) // 円形マスク gfx を破棄 (#274)
-      this.removeChild(state.sprite)
-      state.sprite.destroy()
-      if (state.label) {
-        this.removeChild(state.label)
-        state.label.destroy()
-      }
+      this.destroyCharacterState(state)
     }
     this.characters.clear()
     this.maybeStopTicker()
@@ -2027,52 +2161,56 @@ export class CharacterLayer extends Container {
     label?: Text,
     fit = false,
     onReady?: () => void
-  ): void {
+  ): Promise<boolean> {
     if (!assetBaseUrl) {
       // 描画できないので待たせない。テキスト側が詰まらないよう即座に ready 扱いにする (#293)。
       onReady?.()
-      return
+      return Promise.resolve(true)
     }
 
     const cleanExpression = expression.replace(/^\//, '')
     const url = `${assetBaseUrl}/images/${cleanExpression}.png`
 
-    Assets.load(url)
-      .then((texture) => {
-        // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
-        // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。
-        if (sprite.destroyed) return
-        // 立ち絵は既定で原寸（scale=1）。画面全体をブラウザ枠に合わせて縮める系統
-        // （PixiJS canvas の wrapper スケール）が唯一の常時縮小であり、立ち絵を個別に
-        // 自動 fit-down してはいけない。論理画面の上端・左右をはみ出してもよい。
-        // ※ [アニメ] 等の脚本駆動 scale 演出（animate()）はこれとは別物で、ここでは触らない。
-        //
-        // 例外: 脚本の話者行に `フィット` / `fit` を書いた立ち絵だけ (#294)、旧 fit-down を
-        // 明示適用する（論理画面より大きいときだけ画面内に収める・小さい時は原寸）。
-        // サイズや位置では自動分岐しない。novel/adv でも分けない（fit フラグだけが分岐の根拠）。
-        const scale = fit
-          ? computeFitScale(texture.width, texture.height, this.screenWidth, this.screenHeight)
-          : 1
-        sprite.scale.set(scale)
-        // ラベルを車の幅に収める。
-        // - natural width が車幅を超えたら縮小、収まっていれば等倍のまま (大きくしない)
-        // - label.anchor=(0.5, 1) なので label.x = sprite.x で水平方向は中央揃え
-        if (label && !label.destroyed) {
-          const spriteW = sprite.width
-          label.scale.set(1, 1)
-          const naturalW = label.width
-          if (naturalW > spriteW && naturalW > 0) {
-            const s = spriteW / naturalW
-            label.scale.set(s, s)
+    return (
+      Assets.load(url)
+        .then((texture) => {
+          // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
+          // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。
+          if (sprite.destroyed) return false
+          // 立ち絵は既定で原寸（scale=1）。画面全体をブラウザ枠に合わせて縮める系統
+          // （PixiJS canvas の wrapper スケール）が唯一の常時縮小であり、立ち絵を個別に
+          // 自動 fit-down してはいけない。論理画面の上端・左右をはみ出してもよい。
+          // ※ [アニメ] 等の脚本駆動 scale 演出（animate()）はこれとは別物で、ここでは触らない。
+          //
+          // 例外: 脚本の話者行に `フィット` / `fit` を書いた立ち絵だけ (#294)、旧 fit-down を
+          // 明示適用する（論理画面より大きいときだけ画面内に収める・小さい時は原寸）。
+          // サイズや位置では自動分岐しない。novel/adv でも分けない（fit フラグだけが分岐の根拠）。
+          const scale = fit
+            ? computeFitScale(texture.width, texture.height, this.screenWidth, this.screenHeight)
+            : 1
+          sprite.scale.set(scale)
+          // ラベルを車の幅に収める。
+          // - natural width が車幅を超えたら縮小、収まっていれば等倍のまま (大きくしない)
+          // - label.anchor=(0.5, 1) なので label.x = sprite.x で水平方向は中央揃え
+          if (label && !label.destroyed) {
+            const spriteW = sprite.width
+            label.scale.set(1, 1)
+            const naturalW = label.width
+            if (naturalW > spriteW && naturalW > 0) {
+              const s = spriteW / naturalW
+              label.scale.set(s, s)
+            }
           }
-        }
-        sprite.texture = texture
-      })
-      .catch((err) => {
-        console.warn('[name-name] 立ち絵の読み込みに失敗: ' + url, err)
-      })
-      // 成功/失敗/破棄いずれでも ready を1回だけ通知する (#293)。これでテキスト reveal が
-      // 立ち絵の用意完了に揃い、ロード失敗でもテキストが詰まらない。
-      .finally(() => onReady?.())
+          sprite.texture = texture
+          return true
+        })
+        .catch((err) => {
+          console.warn('[name-name] 立ち絵の読み込みに失敗: ' + url, err)
+          return false
+        })
+        // 成功/失敗/破棄いずれでも ready を1回だけ通知する (#293)。これでテキスト reveal が
+        // 立ち絵の用意完了に揃い、ロード失敗でもテキストが詰まらない。
+        .finally(() => onReady?.())
+    )
   }
 }
