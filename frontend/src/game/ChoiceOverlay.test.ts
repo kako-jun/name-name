@@ -66,12 +66,29 @@ describe('resolveStyle', () => {
 })
 
 describe('ChoiceOverlay rendering', () => {
-  it('show は一瞬表示ではなく alpha 0 から fade-in を開始する', () => {
+  it('show は一瞬表示ではなくボタン alpha 0 から fade-in を開始する', () => {
     const overlay = new ChoiceOverlay(800, 450)
     overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn())
 
     expect(overlay.visible).toBe(true)
-    expect(overlay.alpha).toBe(0)
+    expect(overlay.alpha).toBe(1)
+    expect(overlay.children[0].alpha).toBe(0)
+
+    overlay.hide()
+  })
+
+  it('複数ボタンは後続ボタンも alpha 0 から開始し、同時に全表示されない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(
+      [
+        { text: 'A', jump: 'a' },
+        { text: 'B', jump: 'b' },
+        { text: 'C', jump: 'c' },
+      ],
+      vi.fn()
+    )
+
+    expect(overlay.children.map((child) => child.alpha)).toEqual([0, 0, 0])
 
     overlay.hide()
   })

@@ -22,7 +22,9 @@ const BUTTON_HEIGHT = 52
 const BUTTON_GAP = 16
 const HOVER_SCALE = 1.05
 const SHADOW_OFFSET = 4
-const SHOW_FADE_MS = 180
+const SHOW_FADE_MS = 240
+const SHOW_STAGGER_MS = 18
+const MAX_SHOW_STAGGER_MS = 260
 
 export type ChoiceStyleName = 'default' | 'soft' | 'monochrome'
 
@@ -183,6 +185,7 @@ export class ChoiceOverlay extends Container {
       const buttonContainer = new Container()
       buttonContainer.eventMode = 'static'
       buttonContainer.cursor = 'pointer'
+      buttonContainer.alpha = 0
 
       // pivot を中央に置いて scale 拡大時にボタン中心が動かないようにする
       buttonContainer.pivot.set(BUTTON_WIDTH / 2, BUTTON_HEIGHT / 2)
@@ -243,7 +246,7 @@ export class ChoiceOverlay extends Container {
     })
 
     this.visible = true
-    this.alpha = 0
+    this.alpha = 1
     this.startFadeIn()
   }
 
@@ -284,10 +287,14 @@ export class ChoiceOverlay extends Container {
     const ticker = new Ticker()
     ticker.add(() => {
       this.fadeElapsedMs += ticker.deltaMS
-      const t = Math.min(1, this.fadeElapsedMs / SHOW_FADE_MS)
-      this.alpha = t
-      if (t >= 1) {
-        this.alpha = 1
+      let allDone = true
+      this.children.forEach((child, i) => {
+        const delayMs = Math.min(i * SHOW_STAGGER_MS, MAX_SHOW_STAGGER_MS)
+        const t = Math.min(1, Math.max(0, (this.fadeElapsedMs - delayMs) / SHOW_FADE_MS))
+        child.alpha = t
+        if (t < 1) allDone = false
+      })
+      if (allDone) {
         this.stopFadeTicker()
       }
     })
