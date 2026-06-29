@@ -12,15 +12,17 @@
  * pixi-filters への依存は避けるため、影は半透明黒の矩形を背面に重ねて表現する。
  */
 
-import { Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
+import { Container, Graphics, Text as PixiText, TextStyle, Ticker } from 'pixi.js'
 import { ChoiceOption } from '../types'
 import type { AudioManager } from './AudioManager'
+import type { DestroyOptions } from 'pixi.js'
 
 const BUTTON_WIDTH = 480
 const BUTTON_HEIGHT = 52
 const BUTTON_GAP = 16
 const HOVER_SCALE = 1.05
 const SHADOW_OFFSET = 4
+const SHOW_FADE_MS = 180
 
 export type ChoiceStyleName = 'default' | 'soft' | 'monochrome'
 
@@ -112,6 +114,9 @@ export function resolveStyle(name?: string | null): ChoiceTheme {
 export class ChoiceOverlay extends Container {
   private onSelect: ((jump: string) => void) | null = null
   private audioManager: AudioManager | null = null
+  private renderResolution = 1
+  private fadeTicker: Ticker | null = null
+  private fadeElapsedMs = 0
   // 直前にホバー音を鳴らしたボタン index。マウスがボタン境界をジリジリ動いて
   // pointerover が連続発火しても、別ボタンへ移動した時だけ再生するための記録 (#146 R1 S1)
   private lastHoverIdx: number | null = null
@@ -133,6 +138,15 @@ export class ChoiceOverlay extends Container {
   }
 
   /**
+   * Pixi Text は既定 resolution=1 で canvas 化されるため、DPR 描画時に選択肢文字だけ
+   * 低解像度に見える。Renderer の resolution を渡して、ボタン内 Text を同じ密度で描く。
+   */
+  setRenderResolution(resolution: number): void {
+    if (!(resolution > 0) || !Number.isFinite(resolution)) return
+    this.renderResolution = resolution
+  }
+
+  /**
    * 選択肢を表示する。
    *
    * @param options 表示する選択肢
@@ -142,6 +156,7 @@ export class ChoiceOverlay extends Container {
   show(options: ChoiceOption[], onSelect: (jump: string) => void, style?: string | null): void {
     if (options.length === 0) return
     this.onSelect = onSelect
+    this.stopFadeTicker()
     // 連続呼び出しで子オブジェクトが滞留しないよう明示 destroy する (#146 R1 S3)
     for (const child of this.removeChildren()) {
       child.destroy({ children: true })
@@ -182,7 +197,12 @@ export class ChoiceOverlay extends Container {
       this.drawButton(bg, theme, theme.fillNormal, theme.borderNormal)
       buttonContainer.addChild(bg)
 
-      const label = new PixiText({ text: option.text, style: textStyle })
+      const label = new PixiText({
+        text: option.text,
+        style: textStyle,
+        resolution: this.renderResolution,
+        roundPixels: true,
+      })
       label.x = BUTTON_WIDTH / 2
       label.y = BUTTON_HEIGHT / 2
       label.anchor.set(0.5, 0.5)
@@ -223,6 +243,8 @@ export class ChoiceOverlay extends Container {
     })
 
     this.visible = true
+    this.alpha = 0
+    this.startFadeIn()
   }
 
   /**
@@ -231,12 +253,19 @@ export class ChoiceOverlay extends Container {
    * GPU リソースを解放する (#146 R1 S3)。
    */
   hide(): void {
+    this.stopFadeTicker()
     this.visible = false
+    this.alpha = 1
     for (const child of this.removeChildren()) {
       child.destroy({ children: true })
     }
     this.onSelect = null
     this.lastHoverIdx = null
+  }
+
+  override destroy(options?: DestroyOptions): void {
+    this.stopFadeTicker()
+    super.destroy(options)
   }
 
   private drawButton(
@@ -248,5 +277,28 @@ export class ChoiceOverlay extends Container {
     g.roundRect(0, 0, BUTTON_WIDTH, BUTTON_HEIGHT, theme.radius)
     g.fill(fillColor)
     g.stroke({ color: borderColor, width: theme.borderWidth })
+  }
+
+  private startFadeIn(): void {
+    this.fadeElapsedMs = 0
+    const ticker = new Ticker()
+    ticker.add(() => {
+      this.fadeElapsedMs += ticker.deltaMS
+      const t = Math.min(1, this.fadeElapsedMs / SHOW_FADE_MS)
+      this.alpha = t
+      if (t >= 1) {
+        this.alpha = 1
+        this.stopFadeTicker()
+      }
+    })
+    ticker.start()
+    this.fadeTicker = ticker
+  }
+
+  private stopFadeTicker(): void {
+    if (!this.fadeTicker) return
+    this.fadeTicker.stop()
+    this.fadeTicker.destroy()
+    this.fadeTicker = null
   }
 }

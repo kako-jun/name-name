@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { resolveStyle } from './ChoiceOverlay'
+import { Text as PixiText } from 'pixi.js'
+import { ChoiceOverlay, resolveStyle } from './ChoiceOverlay'
 
 describe('resolveStyle', () => {
   it('未指定 (undefined) は default テーマ、警告なし', () => {
@@ -61,5 +62,33 @@ describe('resolveStyle', () => {
     resolveStyle('sof')
     expect(warnSpy).toHaveBeenCalledOnce()
     warnSpy.mockRestore()
+  })
+})
+
+describe('ChoiceOverlay rendering', () => {
+  it('show は一瞬表示ではなく alpha 0 から fade-in を開始する', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn())
+
+    expect(overlay.visible).toBe(true)
+    expect(overlay.alpha).toBe(0)
+
+    overlay.hide()
+  })
+
+  it('Text resolution に renderer resolution を反映して文字を高密度で描く', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setRenderResolution(2)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn())
+
+    const button = overlay.children[0]
+    const label = button?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+    expect(label).toBeDefined()
+    expect(label!.resolution).toBe(2)
+    expect(label!.roundPixels).toBe(true)
+
+    overlay.hide()
   })
 })
