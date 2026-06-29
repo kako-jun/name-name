@@ -1975,6 +1975,38 @@ describe('CharacterLayer 立ち絵 transition semantics (#337)', () => {
   })
 })
 
+describe('CharacterLayer scene transition fade', () => {
+  it('clearForSceneTransition は標準立ち絵を即時破棄せず fade-out に入れる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('せお', 'normal', '左', '/assets', { instant: true })
+
+    layer.clearForSceneTransition()
+
+    const seo = asInternals(layer).characters.get('せお')
+    expect(seo).toBeDefined()
+    expect(seo!.fadeAnimation).toMatchObject({
+      toAlpha: 0,
+      destroyOnComplete: true,
+    })
+    expect(layer.getCharacterStates()).toEqual([])
+  })
+
+  it('scene transition fade-out 中に同名キャラが再 show されると fade-in に戻る', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('せお', 'normal', '左', '/assets', { instant: true })
+    layer.clearForSceneTransition()
+
+    layer.show('せお', 'normal', '左', '/assets')
+
+    const seo = asInternals(layer).characters.get('せお')
+    expect(seo).toBeDefined()
+    expect(seo!.fadeAnimation).toMatchObject({
+      toAlpha: 1,
+      destroyOnComplete: false,
+    })
+  })
+})
+
 // =====================================================================================
 // #308: 立ち絵の足元 Y 比率 per-game 上書き（setCharacterYRatio）。
 //   既定 1.0（後方互換）。CharacterLayer が null/NaN/±Inf→1.0、範囲外→[0,2] クランプを一元所有する。

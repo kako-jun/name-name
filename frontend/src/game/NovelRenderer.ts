@@ -857,7 +857,11 @@ export class NovelRenderer {
     } else {
       this.clearBackground()
     }
-    this.characterLayer.clear()
+    if (options?.preserveBackgroundForTransition) {
+      this.characterLayer.clearForSceneTransition()
+    } else {
+      this.characterLayer.clear()
+    }
     this.blackoutOverlay.visible = false
     this.currentBgmPath = null
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）

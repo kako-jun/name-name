@@ -52,6 +52,24 @@ interface RendererInternals {
   eventIndex: number
   resolvedEvents: Event[]
   advance(): void
+  characterLayer: {
+    show(
+      character: string,
+      expression: string,
+      position: string,
+      assetBaseUrl: string,
+      options?: { instant?: boolean }
+    ): void
+    characters: Map<
+      string,
+      {
+        fadeAnimation: null | {
+          toAlpha: number
+          destroyOnComplete: boolean
+        }
+      }
+    >
+  }
 }
 function internals(r: NovelRenderer): RendererInternals {
   return r as unknown as RendererInternals
@@ -141,6 +159,24 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
     r.jumpToScene('far-scene')
     expect(r.getCurrentSceneId()).toBe('far-scene')
     expect(r.getDebugState().eventText).toContain('far-line-a')
+  })
+
+  it('通常の jumpToScene は前シーン立ち絵を即時 clear せず fade-out へ入れる', () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const jumpIndex: EventScene[] = [...entryScenes, scene('far-scene', [narration('far-line')])]
+    const r = new NovelRenderer()
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(jumpIndex)
+    internals(r).characterLayer.show('せお', 'normal', '左', '', { instant: true })
+
+    r.jumpToScene('far-scene')
+
+    const seo = internals(r).characterLayer.characters.get('せお')
+    expect(seo).toBeDefined()
+    expect(seo!.fadeAnimation).toMatchObject({
+      toAlpha: 0,
+      destroyOnComplete: true,
+    })
   })
 
   it('setJumpSceneIndex は再生ストリーム（resolvedEvents / 現在位置）を置換しない', () => {

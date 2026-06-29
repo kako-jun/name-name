@@ -2147,6 +2147,28 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 通常の scene jump 用クリア。
+   *
+   * セーブ復元・seek・destroy の clear() は中間状態を作らず即時破棄する。一方で通常再生の
+   * Choice → jumpToScene では、前シーンの立ち絵が一瞬で消えると演出として不自然なので、
+   * 標準立ち絵だけ fade-out に入れる。次シーン先頭で同じ人物が再 show された場合は show() 側の
+   * 「退場フェード中の同名キャラ再 show」経路で fade-in に戻るため、メニュー間の主人公は瞬断しない。
+   */
+  clearForSceneTransition(): void {
+    const names = Array.from(this.characters.keys())
+    for (const name of names) {
+      const state = this.characters.get(name)
+      if (!state) continue
+      if (state.renderOnly) {
+        this.destroyCharacterState(state)
+        this.characters.delete(name)
+        continue
+      }
+      this.remove(name)
+    }
+  }
+
+  /**
    * テクスチャをロードして Sprite に適用する。
    *
    * `onReady` (#293): テクスチャの用意が済んだ（または素早く諦めた）タイミングで**必ず1回だけ**
