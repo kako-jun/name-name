@@ -468,6 +468,7 @@ export class NovelRenderer {
       autoDensity: false,
     })
     this.appInitialized = true
+    this.choiceOverlay.setRenderResolution(this.getRenderResolution())
 
     container.appendChild(this.app.canvas as HTMLCanvasElement)
 
@@ -778,6 +779,7 @@ export class NovelRenderer {
     if (!this.app?.renderer) return
     if (!(resolution > 0) || !Number.isFinite(resolution)) return
     this.app.renderer.resize(this.screenWidth, this.screenHeight, resolution)
+    this.choiceOverlay.setRenderResolution(resolution)
   }
 
   /**
