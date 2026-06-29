@@ -71,6 +71,7 @@ interface DialogBoxInternals {
   indicatorGlyph: { visible: boolean }
   indicatorSprite: { visible: boolean; width: number; height: number }
   indicatorBaseY: number
+  tickIndicatorMotion(deltaMs: number): void
   novelWrappedLines: string[]
   portraitSprite: { visible: boolean; texture: unknown } | null
   currentPortraitToken: number
@@ -361,6 +362,36 @@ describe('DialogBox image indicators (#320)', () => {
     expect(i.indicatorSprite.width).toBe(32)
     expect(i.indicatorSprite.height).toBe(32)
     expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('画像フレーム表示中は上下バウンスせず、基準 y に固定する', async () => {
+    const load = vi.spyOn(Assets, 'load')
+    load.mockImplementation(
+      async () => Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>
+    )
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    await flushPromises()
+    i.indicator.y = i.indicatorBaseY + 4
+
+    i.tickIndicatorMotion(100)
+
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicator.y).toBe(i.indicatorBaseY)
+    box.dispose()
+  })
+
+  it('画像フレームが無い fallback グリフでは従来どおり上下バウンスする', () => {
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    i.tickIndicatorMotion(100)
+
+    expect(i.indicatorSprite.visible).toBe(false)
+    expect(i.indicator.y).not.toBe(i.indicatorBaseY)
     box.dispose()
   })
 })

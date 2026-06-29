@@ -427,10 +427,8 @@ export class DialogBox extends Container {
     // --- ticker ---
     this.ticker = new Ticker()
     this.ticker.add(() => {
-      // ▼バウンス（明滅）。base y は novel/adv で算出元が違うが、バウンスは共通。
-      this.indicatorTime = (this.indicatorTime + this.ticker.deltaMS / 1000) % ((2 * Math.PI) / 3)
-      this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
       this.tickIndicatorFrame(this.ticker.deltaMS)
+      this.tickIndicatorMotion(this.ticker.deltaMS)
 
       // typewriter
       if (isTypingActive(this.typewriter)) {
@@ -1178,6 +1176,16 @@ export class DialogBox extends Container {
     this.indicatorFrameElapsed %= INDICATOR_FRAME_MS
     this.indicatorFrameIndex = (this.indicatorFrameIndex + steps) % frames.length
     this.applyIndicatorFrame()
+  }
+
+  private tickIndicatorMotion(deltaMs: number): void {
+    if (this.hasIndicatorImages()) {
+      this.indicator.y = this.indicatorBaseY
+      return
+    }
+    // グリフ fallback 用の従来バウンス。画像フレームは自前で動くため揺らさない。
+    this.indicatorTime = (this.indicatorTime + deltaMs / 1000) % ((2 * Math.PI) / 3)
+    this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
   }
 
   private applyIndicatorFrame(): void {
