@@ -8,6 +8,7 @@ import { parseMarkdown } from '../wasm/parser'
 import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
 import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '../api/client'
 import { loadReadProgress, clearReadProgress } from '../game/readProgress'
+import { useVisualViewportHeight } from '../utils/useVisualViewportHeight'
 import {
   getCachedParsedScriptDocument,
   getCachedScriptContent,
@@ -134,6 +135,7 @@ function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] 
 }
 
 function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenProps) {
+  const viewportHeight = useVisualViewportHeight()
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
   // doc: エントリ MD のドキュメント。通常再生ストリーム（線形 events）の供給元であり、
   // かつ RPG 判定・aspect_ratio / choice_style / font_family 等の per-game 設定の
@@ -467,7 +469,10 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const [hasSaveData, setHasSaveData] = useState(() => loadReadProgress(projectName).size > 0)
 
   return (
-    <div className={`flex flex-col h-screen ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}>
+    <div
+      className={`flex flex-col overflow-hidden ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}
+      style={{ height: viewportHeight, minHeight: viewportHeight }}
+    >
       <header
         className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
       >
