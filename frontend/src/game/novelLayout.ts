@@ -373,6 +373,77 @@ export function computeSeekBarPosition(displayIndex: number, total: number): See
   return { current: Math.max(0, displayIndex - 1), total }
 }
 
+// ---------------------------------------------------------------------------
+// 下部丸ボタン + SeekBar の共有レイアウト定数 (#350)
+// ---------------------------------------------------------------------------
+
+/**
+ * play 画面下部の丸ボタン（S/A/⚙/D）と SeekBar（シナリオスライダ）の縦位置を**同じ定数から**導く
+ * ための共有レイアウト値 (#350)。
+ *
+ * 目的: つまみ中心を丸ボタンの中央を貫く高さに上げ、「ボタンが手前・スライダが背面でボタンの円を
+ * 貫くライン」に見せる。NovelPlayer（DOM 丸ボタン）と SeekBar（Pixi キャンバス内）の双方がこの
+ * 定数を参照するため、片方を変えてももう片方が揃う（doctrine: テスト陳腐化予防＝期待値に
+ * `12 + 36/2` のような定数計算を直書きしない）。
+ *
+ * px は NovelPlayer の Tailwind クラス（`bottom-3`=12px / `right-3`=12px / `w-9 h-9`=36px /
+ * スロット間隔=ボタン幅 36 + 余白 8 = 44px）と一致させてある。
+ */
+/** 下部丸ボタンの直径（px）。Tailwind `w-9 h-9` = 2.25rem = 36px と一致。 */
+export const PLAYER_BUTTON_SIZE_PX = 36
+/** 下部丸ボタンの画面下端からのマージン（px）。Tailwind `bottom-3` = 0.75rem = 12px と一致。 */
+export const PLAYER_BUTTON_BOTTOM_MARGIN_PX = 12
+/** 下部丸ボタンの画面右端からのマージン（px）。スロット採番の基点。Tailwind `right-3` = 12px と一致。 */
+export const PLAYER_BUTTON_RIGHT_MARGIN_PX = 12
+/** 下部丸ボタンのスロット間隔（px）。ボタン幅 36 + 余白 8。 */
+export const PLAYER_BUTTON_SLOT_GAP_PX = 44
+
+/**
+ * 下部丸ボタンの中央 Y を「画面下端からのオフセット px」で表した値 (#350)。
+ * = ボタン下端マージン + 半径。SeekBar のつまみ中心 Y をこの高さに合わせ、ボタンの円を貫くラインにする。
+ * `PLAYER_BUTTON_BOTTOM_MARGIN_PX` / `PLAYER_BUTTON_SIZE_PX` を変えると自動で追従する。
+ */
+export const PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX =
+  PLAYER_BUTTON_BOTTOM_MARGIN_PX + PLAYER_BUTTON_SIZE_PX / 2
+
+/** SeekBar の幾何（px・論理座標）。`computeSeekBarGeometry` の戻り値。 */
+export interface SeekBarGeometry {
+  /** トラック左端 X（px） */
+  barX: number
+  /** トラック幅（px） */
+  barWidth: number
+  /** トラック（バー）の top Y（px） */
+  barY: number
+  /** つまみ中心 Y（px）。丸ボタン中央と一致する（#350） */
+  thumbCenterY: number
+}
+
+/**
+ * SeekBar のトラック矩形とつまみ中心 Y を算出する純粋関数 (#350)。
+ *
+ * つまみ中心 Y は `screenHeight - PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX`（＝丸ボタン中央）に合わせる。
+ * トラック（バー）はその中心に縦中央で重ねる（`barY = thumbCenterY - barHeight/2`）。左右は
+ * `marginX` で内側に寄せる。`marginX` / `barHeight` は SeekBar 側の見た目定数を引数で受け取り、
+ * 縦位置（ボタン中央連動）だけをここで一元計算する。
+ *
+ * 旧実装（バー top = `screenHeight - 12`、つまみ中心 = `screenHeight - 9`）と違い、つまみが
+ * 画面最下部ではなくボタン中央の高さに来る。Math.random など非決定要素は使わない決定論的写像。
+ */
+export function computeSeekBarGeometry(
+  screenWidth: number,
+  screenHeight: number,
+  marginX: number,
+  barHeight: number
+): SeekBarGeometry {
+  const thumbCenterY = screenHeight - PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX
+  return {
+    barX: marginX,
+    barWidth: screenWidth - marginX * 2,
+    barY: thumbCenterY - barHeight / 2,
+    thumbCenterY,
+  }
+}
+
 /** デバッグ HUD 用に 1 イベントから取り出した種別と本文プレビュー。 */
 export interface DebugEventDescriptor {
   /** イベント種別。`Dialog` / `Background` 等のキー名。判定不能は `'(none)'` / `'(unknown)'` */
