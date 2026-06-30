@@ -6,8 +6,9 @@
  * 動画プレイヤー的な見た目のスクラブバー。
  *
  * #350: つまみ中心を下部丸ボタンの中央を貫く高さへ上げ（`computeSeekBarGeometry`）、通常時も
- * 控えめに常時表示する。スライダの実操作（タップ/ドラッグ）で `active` に入り、つまみ拡大＋背面に
- * 影を敷いて前面感を出す（ホバーでは入らない）。active は **GameState に持たない transient な演出/UI
+ * 控えめに常時表示する。スライダの実操作（タップ/ドラッグ）で `active` に入り、つまみを拡大して
+ * 前面感を出す（ホバーでは入らない）。初回タップ（inactive→active）は「操作可能化」だけでシークせず、
+ * active 中の以降のタップ/ドラッグでシークする。active は **GameState に持たない transient な演出/UI
  * 状態**（ADR 0002）。一定時間無操作で inactive に戻す。動画書き出し中は `setExportSuppressed(true)`、
  * 暗転中は `setBlackoutHidden(true)` で非表示にし（表示可否は `updateVisibility` に一元化）、録画や
  * 黒画面にスライダが焼き込まれない・残らないようにする。
@@ -31,24 +32,14 @@ const BAR_RADIUS = 3
 /** つまみの半径 */
 const THUMB_RADIUS = 7
 
-/** active 時のつまみ拡大率 (#350)。丸ボタン退避中にスライダを前面に感じさせる。 */
+/** active 時のつまみ拡大率 (#350)。スライダを前面に感じさせる。 */
 export const ACTIVE_THUMB_SCALE = 1.6
 /** 通常（inactive）時のコンテナ不透明度 (#350)。控えめに常時表示しつつボタンより背面に見せる。 */
-export const INACTIVE_ALPHA = 0.5
-/** 操作（タップ/ドラッグ/ホバー）が止まってから inactive に戻すまでの時間 (ms) (#350)。 */
+export const INACTIVE_ALPHA = 0.2
+/** 操作（タップ/ドラッグ）が止まってから inactive に戻すまでの時間 (ms) (#350)。 */
 export const INACTIVITY_MS = 2800
 
-/** active 時にスライダ背面へ敷く影（半透明黒の矩形）の見た目 (#350)。ChoiceOverlay の影実装が手本。 */
-const SHADOW_COLOR = 0x000000
-const SHADOW_ALPHA = 0.45
-/** 影のずれ（右下方向、px） */
-const SHADOW_OFFSET = 3
-/** 影帯の左右パディング（バー両端より少し外へ広げる、px） */
-const SHADOW_PAD_X = 10
-
 export class SeekBar extends Container {
-  /** active 時にスライダ背面へ敷く影。最背面の子。 */
-  private shadow: Graphics
   private barBg: Graphics
   private barFill: Graphics
   private thumb: Graphics
@@ -101,21 +92,6 @@ export class SeekBar extends Container {
     this.barWidth = geom.barWidth
     this.barY = geom.barY
     this.thumbCenterY = geom.thumbCenterY
-
-    // 影（active 時のみ表示）。最背面に置き、スライダ全体を浮かせて見せる。
-    // pixi-filters 依存は避け、半透明黒の矩形を背面に重ねる方式（ChoiceOverlay が手本）。
-    this.shadow = new Graphics()
-    const bandHeight = THUMB_RADIUS * 2 * ACTIVE_THUMB_SCALE + 10
-    this.shadow.roundRect(
-      this.barX - SHADOW_PAD_X + SHADOW_OFFSET,
-      this.thumbCenterY - bandHeight / 2 + SHADOW_OFFSET,
-      this.barWidth + SHADOW_PAD_X * 2,
-      bandHeight,
-      bandHeight / 2
-    )
-    this.shadow.fill({ color: SHADOW_COLOR, alpha: SHADOW_ALPHA })
-    this.shadow.visible = false
-    this.addChild(this.shadow)
 
     // 透明ヒットエリア（タップ/ドラッグ開始の検出を広めに取る）。つまみ中心の上下に余裕を持たせる。
     const hitHeight = THUMB_RADIUS * 2 * ACTIVE_THUMB_SCALE + 16
@@ -211,6 +187,29 @@ export class SeekBar extends Container {
   }
 
   /**
+   * つまみ中心 Y（論理 px）を更新して縦位置を再配置する (#350)。
+   *
+   * 下部丸ボタンは DOM の固定 CSS px（`bottom` + 半径）で配置され、キャンバスの表示倍率で
+   * スケールしない。一方このスライダは Pixi 論理座標で描かれ表示倍率でスケールするため、表示高さが
+   * 論理高さと異なると丸ボタン中央からズレる。NovelRenderer が `canvas.clientHeight` から実倍率を
+   * 求め、ボタンの実中央（固定 CSS px）に一致する論理 Y を算出して渡す。resize/回転でも追従させる。
+   */
+  setVerticalCenter(thumbCenterY: number): void {
+    if (!Number.isFinite(thumbCenterY)) return
+    this.thumbCenterY = thumbCenterY
+    this.barY = thumbCenterY - BAR_HEIGHT / 2
+    this.thumb.y = thumbCenterY
+
+    const hitHeight = THUMB_RADIUS * 2 * ACTIVE_THUMB_SCALE + 16
+    this.clickRegion.clear()
+    this.clickRegion.rect(this.barX, thumbCenterY - hitHeight / 2, this.barWidth, hitHeight)
+    this.clickRegion.fill({ color: 0x000000, alpha: 0 })
+
+    this.drawBar(this.barBg, BAR_BG_COLOR, this.barWidth, 0.6)
+    this.updateVisual()
+  }
+
+  /**
    * 現在位置と合計を更新する
    */
   update(current: number, total: number): void {
@@ -232,10 +231,9 @@ export class SeekBar extends Container {
     this.onActiveChange?.(active)
   }
 
-  /** active/inactive に応じて見た目（不透明度・影・つまみ拡大）を反映する (#350)。 */
+  /** active/inactive に応じて見た目（不透明度・つまみ拡大）を反映する (#350)。 */
   private applyActiveVisual(): void {
     this.alpha = this._active ? 1 : INACTIVE_ALPHA
-    this.shadow.visible = this._active
     const scale = this._active ? ACTIVE_THUMB_SCALE : 1
     this.thumb.scale.set(scale)
   }
@@ -276,8 +274,11 @@ export class SeekBar extends Container {
   }
 
   private handleClick = (e: FederatedPointerEvent): void => {
-    // スライダ操作（タップ/ドラッグ開始）で active に入る (#350)。
+    const wasActive = this._active
+    // スライダの実操作で active に入る (#350)。初回タップ（inactive→active）は「操作可能化」だけ
+    // にしてシークしない。すでに active のとき（2回目以降のタップ/ドラッグ）だけシークする。
     this.activate()
+    if (!wasActive) return
 
     if (this._total <= 0) return
 
