@@ -2,15 +2,14 @@
  * SeekBar（シナリオスライダ）の active 状態・無操作タイマー・書き出し抑制の単体テスト (#350)。
  *
  * 検証方針（CLAUDE.md ルール7 / 設計に従う）:
- *  - jsdom で観測可能な状態のみ縛る: isActive() / alpha / shadow.visible / thumb.scale.x /
+ *  - jsdom で観測可能な状態のみ縛る: isActive() / alpha / thumb.scale.x /
  *    thumb.y / thumb.visible / visible / onActiveChange の発火回数と引数。
  *  - 実 Pixi 描画・computed style・pointer-events 実効・EventSystem の DOM 先行発火の実 race は
  *    観測不能なので実ブラウザ（blink）に委ね、ここでは書かない。
  *  - タイマーは実 setTimeout / fake timers でなく **virtual モードの TimeController を注入**し、
  *    `tick()` で決定論的に進める。リークは `getPendingTimerCount()` で検証する。
  *  - 期待値は SeekBar / novelLayout の export 定数のみで組み、2800 や 0.5 を直書きしない。
- *  - shadow / thumb は private graphics なので internals キャストで読む（emit でなく公開メソッド・
- *    状態で駆動する設計どおり）。
+ *  - thumb / clickRegion は private graphics なので internals キャストで読む（公開メソッド・状態で駆動）。
  */
 import { describe, it, expect, vi } from 'vitest'
 import { SeekBar, ACTIVE_THUMB_SCALE, INACTIVE_ALPHA, INACTIVITY_MS } from './SeekBar'
@@ -27,27 +26,26 @@ function virtualTime(): TimeController {
   return t
 }
 
-/** private graphics（shadow / thumb）を読むための internals ビュー。 */
+/** private graphics（thumb / clickRegion）を読むための internals ビュー。 */
 interface SeekBarInternals {
-  shadow: { visible: boolean }
   thumb: { visible: boolean; y: number; scale: { x: number } }
+  clickRegion: { emit: (event: string, ...args: unknown[]) => boolean }
 }
 function internals(sb: SeekBar): SeekBarInternals {
   return sb as unknown as SeekBarInternals
 }
 
 describe('SeekBar 初期状態・active 遷移 (#350 B 群)', () => {
-  // B-1: 控えめ常時表示の回帰固定。初期は inactive で alpha=INACTIVE_ALPHA・影なし・つまみ等倍・可視。
-  it('B-1: 初期は inactive（alpha=INACTIVE_ALPHA・影なし・つまみ等倍・常時可視）', () => {
+  // B-1: 控えめ常時表示の回帰固定。初期は inactive で alpha=INACTIVE_ALPHA・つまみ等倍・可視。
+  it('B-1: 初期は inactive（alpha=INACTIVE_ALPHA・つまみ等倍・常時可視）', () => {
     const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
     expect(sb.isActive()).toBe(false)
     expect(sb.alpha).toBe(INACTIVE_ALPHA)
-    expect(internals(sb).shadow.visible).toBe(false)
     expect(internals(sb).thumb.scale.x).toBe(1)
     expect(sb.visible).toBe(true)
   })
 
-  // B-2: activate で active 見た目（alpha=1・影表示・つまみ拡大）になり onActiveChange(true) を 1 回呼ぶ。
+  // B-2: activate で active 見た目（alpha=1・つまみ拡大）になり onActiveChange(true) を 1 回呼ぶ。
   it('B-2: activate で active 見た目になり onActiveChange(true) を 1 回呼ぶ', () => {
     const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
     const cb = vi.fn()
@@ -55,7 +53,6 @@ describe('SeekBar 初期状態・active 遷移 (#350 B 群)', () => {
     sb.activate()
     expect(sb.isActive()).toBe(true)
     expect(sb.alpha).toBe(1)
-    expect(internals(sb).shadow.visible).toBe(true)
     expect(internals(sb).thumb.scale.x).toBe(ACTIVE_THUMB_SCALE)
     expect(cb).toHaveBeenCalledTimes(1)
     expect(cb).toHaveBeenCalledWith(true)
@@ -83,7 +80,6 @@ describe('SeekBar 初期状態・active 遷移 (#350 B 群)', () => {
     sb.deactivate()
     expect(sb.isActive()).toBe(false)
     expect(sb.alpha).toBe(INACTIVE_ALPHA)
-    expect(internals(sb).shadow.visible).toBe(false)
     expect(internals(sb).thumb.scale.x).toBe(1)
     expect(cb).toHaveBeenCalledTimes(1)
     expect(cb).toHaveBeenCalledWith(false)
@@ -301,5 +297,36 @@ describe('SeekBar setBlackoutHidden（暗転中の非表示） (#350 C 群)', ()
     // blackout も解除 → 両方 false で表示。
     sb.setBlackoutHidden(false)
     expect(sb.visible).toBe(true)
+  })
+})
+
+describe('SeekBar タップ挙動・縦位置追従 (#350 追修正)', () => {
+  // 初回タップ（inactive）は active 化だけでシークせず、active 中の以降のタップでシークする。
+  it('初回タップは active 化のみ（シークしない）、active 中のタップでシークする', () => {
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
+    sb.update(2, 5) // total>0 にしてシーク可能に
+    const seekCb = vi.fn()
+    sb.setOnSeek(seekCb)
+    const region = internals(sb).clickRegion
+    const ev = { globalX: SCREEN_W / 2 }
+
+    // inactive での初回タップ: 前面化だけ・シークしない
+    region.emit('pointerdown', ev)
+    expect(sb.isActive()).toBe(true)
+    expect(seekCb).not.toHaveBeenCalled()
+
+    // active 中の以降のタップ: シークする
+    region.emit('pointerdown', ev)
+    expect(seekCb).toHaveBeenCalledTimes(1)
+  })
+
+  // setVerticalCenter でつまみ中心 Y が更新される（表示倍率追従のための再配置）。
+  it('setVerticalCenter でつまみ中心 Y が更新される', () => {
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
+    sb.update(1, 4)
+    // 既定はボタン中央（screenHeight - PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX）
+    expect(internals(sb).thumb.y).toBe(SCREEN_H - PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX)
+    sb.setVerticalCenter(600)
+    expect(internals(sb).thumb.y).toBe(600)
   })
 })

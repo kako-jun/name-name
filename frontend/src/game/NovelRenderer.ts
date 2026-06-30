@@ -55,6 +55,7 @@ import {
   resolveFontFamily,
   formatCounterText,
   computeSeekBarPosition,
+  PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX,
   describeEventForDebug,
   findSceneById,
   resolveSceneTitle,
@@ -413,6 +414,9 @@ export class NovelRenderer {
    *  フェード退避に繋ぐ（onAutoModeChange と同じ配線パターン）。 */
   private onSeekActiveChange: ((active: boolean) => void) | null = null
 
+  /** SeekBar の縦位置をキャンバス表示倍率に追従させる ResizeObserver (#350)。 */
+  private seekBarResizeObserver: ResizeObserver | null = null
+
   // ---- 画面効果 (#143) ----
   /** flash/fade 用全画面オーバーレイ Graphics */
   private effectOverlay: Graphics | null = null
@@ -534,7 +538,13 @@ export class NovelRenderer {
       this.seekToTextEventDisplayIndex(displayIndex)
     })
     // active 変化を React 側へ伝え、丸ボタン行をフェード退避させる (#350)。
-    this.seekBar.setOnActiveChange((active) => this.onSeekActiveChange?.(active))
+    this.seekBar.setOnActiveChange((active) => {
+      // 起こすタップ（inactive→active）でも本文を送らないよう、この native pointerdown の後続
+      // handleAdvance を 1 回抑止する (#350)。シーク無しの「操作可能化だけ」のタップでも、同フレームの
+      // canvas pointerdown で dialogue が進むのを防ぐ（onSeek 経路と同じ suppressNextAdvance を使う）。
+      if (active) this.suppressNextAdvance = true
+      this.onSeekActiveChange?.(active)
+    })
     this.app.stage.addChild(this.seekBar)
     // #350: 通常時も控えめに常時表示する（モバイルはホバー不可・Issue「ボタンより背面に見える」を満たす）。
     // active はスライダの実操作（SeekBar.handleClick 内の activate）だけで入る。デスクトップのホバーで
@@ -544,6 +554,14 @@ export class NovelRenderer {
     if (this.app.canvas) {
       const canvas = this.app.canvas as HTMLCanvasElement
       canvas.addEventListener('mouseleave', this.handleCanvasMouseLeave)
+      // #350: スライダのつまみ中心を「丸ボタンの実中央（固定 CSS px）」へ合わせる。Pixi 論理座標は
+      // キャンバスの表示倍率でスケールするため、表示高さ≠論理高さだと丸ボタン中央からズレる。実倍率を
+      // canvas.clientHeight から求めて補正し、resize/回転にも追従する（ResizeObserver 未対応環境は初期同期のみ）。
+      this.syncSeekBarVerticalToButtons()
+      if (typeof ResizeObserver !== 'undefined') {
+        this.seekBarResizeObserver = new ResizeObserver(() => this.syncSeekBarVerticalToButtons())
+        this.seekBarResizeObserver.observe(canvas)
+      }
     }
 
     // シーンカウンター
@@ -1288,6 +1306,8 @@ export class NovelRenderer {
     this.app.canvas.removeEventListener('pointerdown', this.handleAdvance)
     this.app.canvas.removeEventListener('wheel', this.handleWheel)
     this.app.canvas.removeEventListener('mouseleave', this.handleCanvasMouseLeave)
+    this.seekBarResizeObserver?.disconnect()
+    this.seekBarResizeObserver = null
     window.removeEventListener('keydown', this.handleKeyDown)
     if (this.waitTimer) {
       this.time.clearTimeout(this.waitTimer)
@@ -1911,6 +1931,23 @@ export class NovelRenderer {
   }
 
   /**
+   * SeekBar のつまみ中心を下部丸ボタンの実中央（固定 CSS px）に一致させる (#350)。
+   * 丸ボタンは DOM の固定 px（`bottom` + 半径 = PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX）でスケールしない。
+   * スライダは Pixi 論理座標で表示倍率に応じてスケールするため、`canvas.clientHeight / screenHeight` の
+   * 実倍率で割って「画面下端から常に固定 CSS px」に来る論理 Y を算出して渡す。これで表示高さが論理と
+   * 異なる端末でもボタン中央を貫く。clientHeight 不明（0/未測定）のときは触らない（constructor 既定のまま）。
+   */
+  private syncSeekBarVerticalToButtons(): void {
+    const canvas = this.app?.canvas as HTMLCanvasElement | undefined
+    if (!canvas) return
+    const clientH = canvas.clientHeight
+    if (!(clientH > 0)) return
+    const scale = clientH / this.screenHeight
+    const logicalFromBottom = PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX / scale
+    this.seekBar.setVerticalCenter(this.screenHeight - logicalFromBottom)
+  }
+
+  /**
    * 暗転オーバーレイの表示を切り替え、SeekBar の可視ゲートと同期する (#350)。
    * 暗転中はスライダを隠す（z 順は変えず可視性ゲートで対処し、黒の上に薄いスライダ線が残らない）。
    * active も SeekBar 側で解除する。GameState の永続 isBlackout から導出する transient な見た目同期で、
@@ -1937,6 +1974,9 @@ export class NovelRenderer {
       this.suppressNextAdvance = false
       return
     }
+    // ここに到達 = スライダ以外への通常タップ/送り。SeekBar が active なら即 inactive へ戻して
+    // 丸ボタンを復帰させる（無操作タイマー満了を待たない） (#350)。inactive 時は no-op。
+    this.seekBar.deactivate()
     this.audioManager.ensureContext()
     if (this.backlogOverlay.visible) {
       this.backlogOverlay.hide()
