@@ -33,6 +33,7 @@ const { rendererInstances, MockRenderer } = vi.hoisted(() => {
     setAssetBaseUrl = vi.fn()
     setOnAutoModeChange = vi.fn()
     setOnSkipModeChange = vi.fn()
+    setOnSeekActiveChange = vi.fn()
     setDocKey = vi.fn()
     setChoiceStyle = vi.fn()
     setFontFamily = vi.fn()

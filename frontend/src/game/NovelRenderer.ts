@@ -318,6 +318,14 @@ export class NovelRenderer {
   /** 選択肢クリック直後の同フレーム advance を抑制するフラグ (#211) */
   private justSelectedChoice = false
 
+  /**
+   * SeekBar 操作（タップ/クリックでシーク）直後の同フレーム advance を抑制するフラグ (#350)。
+   * SeekBar の clickRegion(Pixi federated) は canvas の DOM pointerdown(handleAdvance) より先に
+   * 発火する（Pixi の EventSystem が init() で先に canvas へ listener を張るため）。スライダを
+   * 常時タップ可能にした結果、下端帯タップが「シーク＋1つ進む」と二重発火するのを防ぐ
+   * （justSelectedChoice と同型の抑制）。 */
+  private suppressNextAdvance = false
+
   /** Wait イベント実行中フラグ */
   private waitingForWait = false
 
@@ -401,6 +409,10 @@ export class NovelRenderer {
   /** skipMode 変更時の React 側同期コールバック */
   private onSkipModeChange: ((on: boolean) => void) | null = null
 
+  /** SeekBar の active 変化時の React 側同期コールバック (#350)。NovelPlayer の丸ボタン
+   *  フェード退避に繋ぐ（onAutoModeChange と同じ配線パターン）。 */
+  private onSeekActiveChange: ((active: boolean) => void) | null = null
+
   // ---- 画面効果 (#143) ----
   /** flash/fade 用全画面オーバーレイ Graphics */
   private effectOverlay: Graphics | null = null
@@ -444,7 +456,8 @@ export class NovelRenderer {
       this.saveManager
     )
     this.backlogOverlay = new BacklogOverlay(this.screenWidth, this.screenHeight)
-    this.seekBar = new SeekBar(this.screenWidth, this.screenHeight)
+    // SeekBar の無操作タイマーも既存の TimeController 流儀に乗せる (#350)。
+    this.seekBar = new SeekBar(this.screenWidth, this.screenHeight, this.time)
   }
 
   /**
@@ -514,20 +527,29 @@ export class NovelRenderer {
     // ダイアログボックス
     this.app.stage.addChild(this.dialogBox)
 
-    // シークバー（ダイアログボックスの下）
-    this.seekBar.setOnSeek((displayIndex) => this.seekToTextEventDisplayIndex(displayIndex))
+    // シークバー（シナリオスライダ）。つまみ中心は下部丸ボタンの中央を貫く高さ (#350)。
+    this.seekBar.setOnSeek((displayIndex) => {
+      // スライダ操作は「シーク」であって「1つ進む」ではない。同フレームの handleAdvance を抑止する (#350)。
+      this.suppressNextAdvance = true
+      this.seekToTextEventDisplayIndex(displayIndex)
+    })
+    // active 変化を React 側へ伝え、丸ボタン行をフェード退避させる (#350)。
+    this.seekBar.setOnActiveChange((active) => this.onSeekActiveChange?.(active))
     this.app.stage.addChild(this.seekBar)
-    // デフォルトで非表示。マウスがキャンバス下端付近に来たら表示する (簡易ホバー)
-    this.seekBar.visible = false
+    // #350: 通常時も控えめに常時表示する（モバイルはホバー不可・Issue「ボタンより背面に見える」を満たす）。
+    // デスクトップはキャンバス下端帯ホバーで active に入れる（モバイルはスライダのタップ/ドラッグで active）。
+    // 領域外（下端帯の外）へ出たら active を解除する。書き出し中は setExporting(true) で非表示にする。
     if (this.app.canvas) {
       const canvas = this.app.canvas as HTMLCanvasElement
       canvas.addEventListener('mousemove', (e) => {
         const rect = canvas.getBoundingClientRect()
         const yRatio = (e.clientY - rect.top) / rect.height
-        this.seekBar.visible = yRatio > 0.78
+        if (yRatio > 0.78) {
+          this.seekBar.activate()
+        }
       })
       canvas.addEventListener('mouseleave', () => {
-        this.seekBar.visible = false
+        this.seekBar.deactivate()
       })
     }
 
@@ -790,6 +812,16 @@ export class NovelRenderer {
    */
   async prepareVideosForExport(): Promise<void> {
     await this.videoLayer.prepareForExport()
+  }
+
+  /**
+   * 動画書き出しの開始/終了をレンダラに通知する (#350)。
+   * 現状は SeekBar を抑制（非表示）して録画にスライダが焼き込まれないようにするだけだが、
+   * 将来ほかの UI（HUD 等）も書き出し中に退避させたくなったらここにぶら下げる薄い 1 メソッド。
+   * VideoExporter が録画開始で true / 終了（cleanup・例外時を含む）で false を必ず呼ぶ。
+   */
+  setExporting(exporting: boolean): void {
+    this.seekBar.setExportSuppressed(exporting)
   }
 
   /** シーン切り替えコールバックを登録する (#228) */
@@ -1238,6 +1270,12 @@ export class NovelRenderer {
   /** スキップモード変更コールバックを登録する */
   setOnSkipModeChange(cb: (on: boolean) => void): void {
     this.onSkipModeChange = cb
+  }
+
+  /** SeekBar の active 変化コールバックを登録する (#350)。NovelPlayer が下部丸ボタン行の
+   *  フェード退避に繋ぐ（setOnAutoModeChange / setOnSkipModeChange と同じ配線パターン）。 */
+  setOnSeekActiveChange(cb: (active: boolean) => void): void {
+    this.onSeekActiveChange = cb
   }
 
   /** スキップモードの現在状態を取得する */
@@ -1872,6 +1910,13 @@ export class NovelRenderer {
   private handleAdvance = (): void => {
     if (this.justSelectedChoice) {
       this.justSelectedChoice = false
+      return
+    }
+    // SeekBar の clickRegion(Pixi) が同じ native pointerdown でこの DOM ハンドラより先に発火し
+    // onSeek 内で suppressNextAdvance を立てる (#350)。スライダ下端帯タップが「シーク＋1つ進む」と
+    // 二重発火するのを防ぐため、立っていれば 1 回だけ消費して早期 return する（justSelectedChoice と同型）。
+    if (this.suppressNextAdvance) {
+      this.suppressNextAdvance = false
       return
     }
     this.audioManager.ensureContext()
