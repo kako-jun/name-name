@@ -12,10 +12,10 @@
  * pixi-filters への依存は避けるため、影は半透明黒の矩形を背面に重ねて表現する。
  */
 
-import { Container, Graphics, Text as PixiText, TextStyle, Ticker } from 'pixi.js'
+import { Container, Graphics, Rectangle, Text as PixiText, TextStyle, Ticker } from 'pixi.js'
 import { ChoiceOption } from '../types'
 import type { AudioManager } from './AudioManager'
-import type { DestroyOptions } from 'pixi.js'
+import type { DestroyOptions, FederatedPointerEvent } from 'pixi.js'
 
 const BUTTON_WIDTH = 480
 const BUTTON_HEIGHT = 52
@@ -25,6 +25,8 @@ const SHADOW_OFFSET = 4
 const SHOW_FADE_MS = 240
 const SHOW_STAGGER_MS = 18
 const MAX_SHOW_STAGGER_MS = 260
+const VIEWPORT_VERTICAL_MARGIN = 24
+const TAP_MOVE_THRESHOLD_PX = 8
 
 export type ChoiceStyleName = 'default' | 'soft' | 'monochrome'
 
@@ -119,6 +121,16 @@ export class ChoiceOverlay extends Container {
   private renderResolution = 1
   private fadeTicker: Ticker | null = null
   private fadeElapsedMs = 0
+  private contentContainer: Container | null = null
+  private buttonContainers: Container[] = []
+  private scrollOffset = 0
+  private maxScroll = 0
+  private viewportY = 0
+  private dragPointerId: number | null = null
+  private dragLastY = 0
+  private pressPointerId: number | null = null
+  private pressStartX = 0
+  private pressStartY = 0
   // 直前にホバー音を鳴らしたボタン index。マウスがボタン境界をジリジリ動いて
   // pointerover が連続発火しても、別ボタンへ移動した時だけ再生するための記録 (#146 R1 S1)
   private lastHoverIdx: number | null = null
@@ -164,6 +176,7 @@ export class ChoiceOverlay extends Container {
       child.destroy({ children: true })
     }
     this.lastHoverIdx = null
+    this.resetScrollState()
     // セーブデータからのロード直後など、最初のユーザー入力が選択肢クリックになる
     // ケースで AudioContext が未初期化のまま playSelectTone が無音になるのを防ぐ。
     // pointerdown 時点でも resume できるが、show 時にも保険で叩いておく (#146 R1 S2)
@@ -172,7 +185,32 @@ export class ChoiceOverlay extends Container {
     const theme = resolveStyle(style)
 
     const totalHeight = options.length * BUTTON_HEIGHT + (options.length - 1) * BUTTON_GAP
+    const maxViewportHeight = Math.max(
+      BUTTON_HEIGHT,
+      this.screenHeight - VIEWPORT_VERTICAL_MARGIN * 2
+    )
+    const viewportHeight = Math.min(totalHeight, maxViewportHeight)
+    this.maxScroll = Math.max(0, totalHeight - viewportHeight)
+    const scrollable = this.maxScroll > 0
     const startY = (this.screenHeight - totalHeight) / 2
+
+    if (scrollable) {
+      this.viewportY = (this.screenHeight - viewportHeight) / 2
+      this.hitArea = new Rectangle(0, this.viewportY, this.screenWidth, viewportHeight)
+      const contentContainer = new Container()
+      this.contentContainer = contentContainer
+      const mask = new Graphics()
+      mask.rect(0, this.viewportY, this.screenWidth, viewportHeight)
+      mask.fill(0xffffff)
+      mask.renderable = false
+      this.addChild(mask)
+      contentContainer.mask = mask
+      this.on('pointerdown', this.handleDragStart)
+      this.on('pointermove', this.handleDragMove)
+      this.on('pointerup', this.handleDragEnd)
+      this.on('pointerupoutside', this.handleDragEnd)
+      this.on('pointercancel', this.handleDragEnd)
+    }
 
     const textStyle = new TextStyle({
       fontFamily: theme.fontFamily,
@@ -213,7 +251,9 @@ export class ChoiceOverlay extends Container {
 
       // pivot を中央に動かしたため、ボタン中心を所定位置に置く
       buttonContainer.x = this.screenWidth / 2
-      buttonContainer.y = startY + i * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
+      buttonContainer.y = scrollable
+        ? i * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
+        : startY + i * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
 
       buttonContainer.on('pointerover', () => {
         bg.clear()
@@ -235,15 +275,60 @@ export class ChoiceOverlay extends Container {
         }
       })
 
-      buttonContainer.on('pointerdown', (e) => {
+      const selectChoice = (e: FederatedPointerEvent) => {
         e.stopPropagation()
         this.audioManager?.ensureContext()
         this.audioManager?.playSelectTone()
         this.onSelect?.(option.jump)
+      }
+      buttonContainer.on('pointerdown', (e) => {
+        this.pressPointerId = e.pointerId
+        this.pressStartX = e.global.x
+        this.pressStartY = e.global.y
+        if (scrollable) {
+          this.handleDragStart(e)
+        }
+        e.stopPropagation()
+      })
+      buttonContainer.on('pointerup', (e) => {
+        if (this.pressPointerId !== e.pointerId) return
+        const dx = e.global.x - this.pressStartX
+        const dy = e.global.y - this.pressStartY
+        if (scrollable) {
+          this.handleDragEnd(e)
+        }
+        this.clearChoicePress()
+        if (Math.hypot(dx, dy) > TAP_MOVE_THRESHOLD_PX) return
+        selectChoice(e)
+      })
+      buttonContainer.on('pointerupoutside', (e) => {
+        if (this.pressPointerId === e.pointerId) {
+          if (scrollable) {
+            this.handleDragEnd(e)
+          }
+          this.clearChoicePress()
+        }
+      })
+      buttonContainer.on('pointercancel', (e) => {
+        if (this.pressPointerId === e.pointerId) {
+          if (scrollable) {
+            this.handleDragEnd(e)
+          }
+          this.clearChoicePress()
+        }
       })
 
-      this.addChild(buttonContainer)
+      if (this.contentContainer) {
+        this.contentContainer.addChild(buttonContainer)
+      } else {
+        this.addChild(buttonContainer)
+      }
+      this.buttonContainers.push(buttonContainer)
     })
+    if (scrollable && this.contentContainer) {
+      this.addChild(this.contentContainer)
+      this.applyScrollOffset()
+    }
 
     this.visible = true
     this.alpha = 1
@@ -264,6 +349,7 @@ export class ChoiceOverlay extends Container {
     }
     this.onSelect = null
     this.lastHoverIdx = null
+    this.resetScrollState()
   }
 
   override destroy(options?: DestroyOptions): void {
@@ -288,10 +374,10 @@ export class ChoiceOverlay extends Container {
     ticker.add(() => {
       this.fadeElapsedMs += ticker.deltaMS
       let allDone = true
-      this.children.forEach((child, i) => {
+      this.buttonContainers.forEach((button, i) => {
         const delayMs = Math.min(i * SHOW_STAGGER_MS, MAX_SHOW_STAGGER_MS)
         const t = Math.min(1, Math.max(0, (this.fadeElapsedMs - delayMs) / SHOW_FADE_MS))
-        child.alpha = t
+        button.alpha = t
         if (t < 1) allDone = false
       })
       if (allDone) {
@@ -307,5 +393,66 @@ export class ChoiceOverlay extends Container {
     this.fadeTicker.stop()
     this.fadeTicker.destroy()
     this.fadeTicker = null
+  }
+
+  handleWheel(deltaY: number): boolean {
+    return this.scrollBy(deltaY)
+  }
+
+  private scrollBy(deltaY: number): boolean {
+    if (this.maxScroll <= 0) return false
+    const before = this.scrollOffset
+    this.scrollOffset = Math.max(0, Math.min(this.maxScroll, this.scrollOffset + deltaY))
+    this.applyScrollOffset()
+    return this.scrollOffset !== before
+  }
+
+  private applyScrollOffset(): void {
+    if (!this.contentContainer) return
+    this.contentContainer.y = this.viewportY - this.scrollOffset
+  }
+
+  private handleDragStart = (e: FederatedPointerEvent): void => {
+    if (this.maxScroll <= 0) return
+    this.dragPointerId = e.pointerId
+    this.dragLastY = e.global.y
+  }
+
+  private handleDragMove = (e: FederatedPointerEvent): void => {
+    if (this.dragPointerId !== e.pointerId) return
+    const y = e.global.y
+    const delta = this.dragLastY - y
+    this.dragLastY = y
+    if (this.scrollBy(delta)) {
+      e.stopPropagation()
+    }
+  }
+
+  private handleDragEnd = (e: FederatedPointerEvent): void => {
+    if (this.dragPointerId !== e.pointerId) return
+    this.dragPointerId = null
+  }
+
+  private clearChoicePress(): void {
+    this.pressPointerId = null
+    this.pressStartX = 0
+    this.pressStartY = 0
+  }
+
+  private resetScrollState(): void {
+    this.off('pointerdown', this.handleDragStart)
+    this.off('pointermove', this.handleDragMove)
+    this.off('pointerup', this.handleDragEnd)
+    this.off('pointerupoutside', this.handleDragEnd)
+    this.off('pointercancel', this.handleDragEnd)
+    this.contentContainer = null
+    this.buttonContainers = []
+    this.scrollOffset = 0
+    this.maxScroll = 0
+    this.viewportY = 0
+    this.dragPointerId = null
+    this.dragLastY = 0
+    this.clearChoicePress()
+    this.hitArea = null
   }
 }

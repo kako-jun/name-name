@@ -1887,6 +1887,10 @@ export class NovelRenderer {
   }
 
   private handleWheel = (e: WheelEvent): void => {
+    if (this.waitingForChoice && this.choiceOverlay.handleWheel(e.deltaY)) {
+      e.preventDefault()
+      return
+    }
     if (this.backlogOverlay.visible) {
       e.preventDefault()
       this.backlogOverlay.handleWheel(e.deltaY)
