@@ -261,3 +261,45 @@ describe('SeekBar setExportSuppressed（書き出し抑制） (#350 C 群)', () 
     expect(cb).not.toHaveBeenCalled()
   })
 })
+
+describe('SeekBar setBlackoutHidden（暗転中の非表示） (#350 C 群)', () => {
+  // C-5: 暗転中は非表示、暗転解除で表示が復帰する（exportSuppressed が無ければ visible は blackout に従う）。
+  it('C-5: setBlackoutHidden(true) で非表示・(false) で表示復帰', () => {
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
+    sb.setBlackoutHidden(true)
+    expect(sb.visible).toBe(false)
+    sb.setBlackoutHidden(false)
+    expect(sb.visible).toBe(true)
+  })
+
+  // C-6: 暗転に入ると active も解除する（暗転中にスライダ操作 active が残らない）。
+  it('C-6: active 中の setBlackoutHidden(true) で非表示かつ active 解除・onActiveChange(false)', () => {
+    const time = virtualTime()
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, time)
+    const cb = vi.fn()
+    sb.setOnActiveChange(cb)
+    sb.activate()
+    cb.mockClear()
+    sb.setBlackoutHidden(true)
+    expect(sb.visible).toBe(false)
+    expect(sb.isActive()).toBe(false)
+    expect(cb).toHaveBeenCalledTimes(1)
+    expect(cb).toHaveBeenCalledWith(false)
+    expect(time.getPendingTimerCount()).toBe(0)
+  })
+
+  // C-7: exportSuppressed と blackout の両ゲート: 片方でも true なら非表示・両方 false で初めて表示。
+  it('C-7: export/blackout のどちらか true で非表示・両方 false で表示', () => {
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
+    // 両方 true → 非表示。
+    sb.setExportSuppressed(true)
+    sb.setBlackoutHidden(true)
+    expect(sb.visible).toBe(false)
+    // export だけ解除（blackout はまだ true）→ なお非表示。
+    sb.setExportSuppressed(false)
+    expect(sb.visible).toBe(false)
+    // blackout も解除 → 両方 false で表示。
+    sb.setBlackoutHidden(false)
+    expect(sb.visible).toBe(true)
+  })
+})

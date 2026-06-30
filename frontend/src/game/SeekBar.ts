@@ -6,10 +6,11 @@
  * 動画プレイヤー的な見た目のスクラブバー。
  *
  * #350: つまみ中心を下部丸ボタンの中央を貫く高さへ上げ（`computeSeekBarGeometry`）、通常時も
- * 控えめに常時表示する。スライダ操作/ホバーで `active` に入り、つまみ拡大＋背面に影を敷いて
- * 前面感を出す。active は **GameState に持たない transient な演出/UI 状態**（ADR 0002）。
- * 一定時間無操作で inactive に戻す。動画書き出し中は `setExportSuppressed(true)` で抑制し、
- * 録画にスライダが焼き込まれないようにする。
+ * 控えめに常時表示する。スライダの実操作（タップ/ドラッグ）で `active` に入り、つまみ拡大＋背面に
+ * 影を敷いて前面感を出す（ホバーでは入らない）。active は **GameState に持たない transient な演出/UI
+ * 状態**（ADR 0002）。一定時間無操作で inactive に戻す。動画書き出し中は `setExportSuppressed(true)`、
+ * 暗転中は `setBlackoutHidden(true)` で非表示にし（表示可否は `updateVisibility` に一元化）、録画や
+ * 黒画面にスライダが焼き込まれない・残らないようにする。
  */
 
 import { Container, FederatedPointerEvent, Graphics } from 'pixi.js'
@@ -69,6 +70,11 @@ export class SeekBar extends Container {
   private _active = false
   /** 動画書き出し中の抑制フラグ (#350)。true の間は非表示・active 無効。 */
   private exportSuppressed = false
+  /**
+   * 暗転（blackout）中の非表示フラグ (#350)。GameState の永続 isBlackout から導出する transient ゲート。
+   * true の間は非表示にし、暗転オーバーレイ（黒）の上に薄いスライダ線が残らないようにする。
+   */
+  private blackoutHidden = false
   /** 無操作で inactive に戻すタイマー（TimeController 経由なので number）。 */
   private inactivityTimer: number | null = null
 
@@ -161,7 +167,7 @@ export class SeekBar extends Container {
 
   /**
    * active に入る／無操作タイマーを延長する (#350)。
-   * スライダ領域でのタップ/ドラッグ開始（モバイル）やデスクトップの下端帯ホバーで呼ぶ。
+   * スライダ領域での実操作（タップ/ドラッグ/クリック開始）で呼ぶ（ホバーでは呼ばない）。
    * 動画書き出し中（exportSuppressed）は no-op。
    */
   activate(): void {
@@ -183,12 +189,25 @@ export class SeekBar extends Container {
   setExportSuppressed(suppressed: boolean): void {
     if (this.exportSuppressed === suppressed) return
     this.exportSuppressed = suppressed
-    if (suppressed) {
-      this.deactivate()
-      this.visible = false
-    } else {
-      this.visible = true
-    }
+    if (suppressed) this.deactivate()
+    this.updateVisibility()
+  }
+
+  /**
+   * 暗転（blackout）の適用/解除に応じてスライダの表示を切り替える (#350)。
+   * 暗転中は非表示にして黒オーバーレイの上に薄線が残らないようにし、active も解除する。
+   * 表示可否は exportSuppressed と併せて updateVisibility に一元化する。
+   */
+  setBlackoutHidden(hidden: boolean): void {
+    if (this.blackoutHidden === hidden) return
+    this.blackoutHidden = hidden
+    if (hidden) this.deactivate()
+    this.updateVisibility()
+  }
+
+  /** exportSuppressed / blackoutHidden の両ゲートから表示可否を一元決定する (#350)。 */
+  private updateVisibility(): void {
+    this.visible = !this.exportSuppressed && !this.blackoutHidden
   }
 
   /**

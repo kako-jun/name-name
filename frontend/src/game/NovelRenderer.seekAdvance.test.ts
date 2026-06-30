@@ -76,9 +76,10 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
     expect(adv).toHaveBeenCalledTimes(1)
   })
 
-  // D-4: justSelectedChoice ガードが先頭。両方立っていても choice ガードで return し、
-  //      suppressNextAdvance は消費されず残る（ガード順の固定）。
-  it('D-4: justSelectedChoice と suppress が両立すると choice ガードが先勝ちで suppress は残る', () => {
+  // D-4: justSelectedChoice ガードが先頭。両方立っていても choice ガードで return するが、
+  //      このフレームで進めないと決まった時点で suppressNextAdvance も一緒に消費して固着させない
+  //      （#350 防御: 後続の独立ポインタジェスチャへ漏らさず「1 ジェスチャ 1 回」を厳守する）。
+  it('D-4: justSelectedChoice と suppress が両立すると choice ガードが先勝ちで両フラグとも消費される', () => {
     const r = new NovelRenderer()
     const adv = spyAdvance(r)
     internals(r).justSelectedChoice = true
@@ -86,7 +87,21 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
     internals(r).handleAdvance()
     expect(adv).not.toHaveBeenCalled()
     expect(internals(r).justSelectedChoice).toBe(false) // choice ガードが消費
-    expect(internals(r).suppressNextAdvance).toBe(true) // 後段に届かず未消費で残る
+    expect(internals(r).suppressNextAdvance).toBe(false) // 同フレームで一緒に消費し残留させない
+  })
+
+  // D-4b: choice ガードで両フラグ消費後、次の独立 handleAdvance は通常どおり advance する
+  //       （suppress が前ジェスチャから漏れて誤抑止しないことの回帰）。
+  it('D-4b: D-4 後の 2 回目 handleAdvance は suppress 残留なしで通常どおり advance する', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    const adv = spyAdvance(r)
+    internals(r).justSelectedChoice = true
+    internals(r).suppressNextAdvance = true
+    internals(r).handleAdvance() // 1 回目: choice ガードで両フラグ消費
+    expect(adv).not.toHaveBeenCalled()
+    internals(r).handleAdvance() // 2 回目: 両フラグとも false なので進む
+    expect(adv).toHaveBeenCalledTimes(1)
   })
 
   // D-5: setExporting(true/false) が SeekBar.setExportSuppressed(true/false) へ伝播する。
