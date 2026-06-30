@@ -137,6 +137,7 @@ describe('exportVideo resolution bump (#279)', () => {
       setRenderResolution: (r: number) => {
         calls.push(r)
       },
+      setExporting: () => {},
       setOnSceneChange: () => {},
       setOnEnd: () => {},
       takeOnEnd: () => null,
@@ -187,6 +188,7 @@ describe('exportVideo resolution bump (#279)', () => {
         setRenderResolution: (r: number) => {
           calls.push(r)
         },
+        setExporting: () => {},
         setOnSceneChange: () => {},
         setOnEnd: () => {},
         takeOnEnd: () => null,

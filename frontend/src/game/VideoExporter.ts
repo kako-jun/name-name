@@ -132,13 +132,18 @@ export async function exportVideo(
   const exportResolution = exportResolutionOpt ?? Math.max(3, prevResolution)
   renderer.setRenderResolution(exportResolution)
 
+  // #350: 録画中はシナリオスライダ(SeekBar)を抑制し、録画にスライダが焼き込まれないようにする。
+  // 解像度 bump と同じく副作用なので、早期 throw / cleanup の全経路で必ず false に戻す。
+  renderer.setExporting(true)
+
   const audio = renderer.getAudioManager()
   audio.ensureContext()
   const audioStream = audio.enableCapture()
   if (!audioStream) {
-    // 解像度・録画フラグを必ず巻き戻してから throw（前段で副作用を起こしているため）。
+    // 解像度・SeekBar 抑制・録画フラグを必ず巻き戻してから throw（前段で副作用を起こしているため）。
     audio.disableCapture()
     renderer.setRenderResolution(prevResolution)
+    renderer.setExporting(false)
     isExporting = false
     throw new Error('AudioManager could not provide MediaStream (AudioContext init failed)')
   }
@@ -158,6 +163,7 @@ export async function exportVideo(
   } catch (e) {
     audio.disableCapture()
     renderer.setRenderResolution(prevResolution)
+    renderer.setExporting(false)
     isExporting = false
     throw e instanceof Error ? e : new Error(String(e))
   }
@@ -192,6 +198,8 @@ export async function exportVideo(
       audio.disableCapture()
       // #279: 録画用に上げた解像度を元（device DPI）へ戻す。
       renderer.setRenderResolution(prevResolution)
+      // #350: 録画中に抑制した SeekBar を元へ戻す（通常プレイで再びスライダが見える）。
+      renderer.setExporting(false)
     } catch (e) {
       console.warn('[VideoExporter] cleanup failed', e)
     }
