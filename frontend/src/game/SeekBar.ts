@@ -31,11 +31,11 @@ const BAR_RADIUS = 3
 const THUMB_RADIUS = 7
 
 /** active 時のつまみ拡大率 (#350)。丸ボタン退避中にスライダを前面に感じさせる。 */
-const ACTIVE_THUMB_SCALE = 1.6
+export const ACTIVE_THUMB_SCALE = 1.6
 /** 通常（inactive）時のコンテナ不透明度 (#350)。控えめに常時表示しつつボタンより背面に見せる。 */
-const INACTIVE_ALPHA = 0.5
+export const INACTIVE_ALPHA = 0.5
 /** 操作（タップ/ドラッグ/ホバー）が止まってから inactive に戻すまでの時間 (ms) (#350)。 */
-const INACTIVITY_MS = 2800
+export const INACTIVITY_MS = 2800
 
 /** active 時にスライダ背面へ敷く影（半透明黒の矩形）の見た目 (#350)。ChoiceOverlay の影実装が手本。 */
 const SHADOW_COLOR = 0x000000

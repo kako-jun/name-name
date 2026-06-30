@@ -344,3 +344,76 @@ describe('NovelPlayer デバッグ HUD トグルと永続化（T1-T7）', () => 
     }
   })
 })
+
+describe('NovelPlayer 下部ボタン行フェード退避（#350 E 群）', () => {
+  // SeekBar の active 変化は renderer.setOnSeekActiveChange に渡したコールバックで届く。
+  // それを捕捉して act() 内で叩き、ラッパ div の className / aria-hidden を縛る。
+  // 実 opacity の computed style・pointer-events 実効は jsdom では観測できないので（blink 任せ）、
+  // ここでは Tailwind クラスと aria-hidden（=DOM 上の値）だけを検証する。
+  // active 時はラッパが aria-hidden=true になり通常の getByRole から外れる（=退避が効いている証拠）。
+  // active/inactive 両状態で同じ要素を掴めるよう hidden:true で引く。
+  const settingsBtn = () => screen.getByRole('button', { name: '設定を開く', hidden: true })
+  // 設定ボタンの親 = フェード退避するラッパ div。
+  const fadeWrapper = () => settingsBtn().parentElement as HTMLElement
+  // init().then(...) で渡された onSeekActiveChange コールバックを捕捉する。
+  const capturedSeekCb = (): ((active: boolean) => void) => {
+    const r = rendererInstances[rendererInstances.length - 1]
+    return r.setOnSeekActiveChange.mock.calls[0][0] as (active: boolean) => void
+  }
+
+  it('E-1: 既定（inactive）ではラッパが opacity-100・pointer-events-auto・aria-hidden=false', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const w = fadeWrapper()
+    expect(w.className).toContain('opacity-100')
+    expect(w.className).toContain('[&_button]:pointer-events-auto')
+    expect(w.getAttribute('aria-hidden')).toBe('false')
+  })
+
+  it('E-2: active（cb(true)）でラッパが opacity-0・pointer-events-none・aria-hidden=true', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    act(() => capturedSeekCb()(true))
+    const w = fadeWrapper()
+    expect(w.className).toContain('opacity-0')
+    expect(w.className).toContain('[&_button]:pointer-events-none')
+    expect(w.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('E-3: active → inactive（cb(true)→cb(false)）で既定の見た目へ復帰する', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    act(() => capturedSeekCb()(true))
+    act(() => capturedSeekCb()(false))
+    const w = fadeWrapper()
+    expect(w.className).toContain('opacity-100')
+    expect(w.className).toContain('[&_button]:pointer-events-auto')
+    expect(w.getAttribute('aria-hidden')).toBe('false')
+  })
+
+  it('E-4: init 後に renderer.setOnSeekActiveChange が 1 回登録される', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setOnSeekActiveChange).toHaveBeenCalledTimes(1)
+    expect(r.setOnSeekActiveChange).toHaveBeenCalledWith(expect.any(Function))
+  })
+
+  it('E-5: active でも子ボタンの style.right は不変（ボタンは消えず位置も変わらない）', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={true} debugEnabled={true} />)
+    await flushAsync()
+    // フェードはラッパの opacity/pointer-events だけで、子ボタンのレイアウト（slot 採番）は不変。
+    // active 時は aria-hidden で外れるので hidden:true で「依然存在し位置も同じ」ことを確かめる。
+    act(() => capturedSeekCb()(true))
+    expect(settingsBtn().style.right).toBe('12px')
+    expect(screen.getByRole('button', { name: /オートモードを/, hidden: true }).style.right).toBe(
+      '56px'
+    )
+    expect(screen.getByRole('button', { name: /スキップモードを/, hidden: true }).style.right).toBe(
+      '100px'
+    )
+    expect(screen.getByRole('button', { name: /デバッグ情報を/, hidden: true }).style.right).toBe(
+      '144px'
+    )
+  })
+})
