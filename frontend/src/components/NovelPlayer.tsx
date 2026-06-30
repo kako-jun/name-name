@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 import { parseDebugQuery } from '../game/debugQuery'
@@ -419,6 +419,16 @@ function NovelPlayer({
   if (debugAvailable) buttonOrder.push('debug')
   const slotOf = (id: 'settings' | 'auto' | 'skip' | 'debug'): number => buttonOrder.indexOf(id)
 
+  // ゲーム描画箱（letterbox/pillarbox 後の内接矩形）の寸法 (#350)。canvas ラッパと下部ボタン行の
+  // 両方に同じ寸法を当て、**ボタンをキャンバス箱に重ねる**ことで、丸ボタンの下端基準＝キャンバス下端と
+  // 一致させる。これをしないとボタンは root（画面）下端基準になり、レターボックスがある端末で
+  // 「画面下端」と「キャンバス下端」がズレ、キャンバス内のスライダと丸ボタンの上下中心が合わない。
+  const gameBoxStyle: CSSProperties = {
+    aspectRatio: `${gameWidth} / ${gameHeight}`,
+    width: `min(100cqw, calc(100cqh * ${gameWidth} / ${gameHeight}))`,
+    height: `min(100cqh, calc(100cqw * ${gameHeight} / ${gameWidth}))`,
+  }
+
   return (
     <div
       className="relative w-full h-full flex items-center justify-center bg-black"
@@ -429,21 +439,13 @@ function NovelPlayer({
       {debugAvailable && (
         <DebugOverlay rendererRef={rendererRef} open={debugOpen} debugInfo={debugInfo} />
       )}
+      {/* 親 (bg-black, container-type: size) を基準に letterbox/pillarbox する内接矩形。
+          ゲーム比率を維持して親に内接させる（縦長スマホは上下に黒帯、横長は左右に黒帯）。
+          寸法は gameBoxStyle に集約し、下部ボタン行と共有する (#350)。 */}
       <div
         ref={containerRef}
         className="overflow-hidden [&>canvas]:block [&>canvas]:w-full [&>canvas]:h-full"
-        style={{
-          // 親 (bg-black, container-type: size) を基準に letterbox/pillarbox する。
-          // ゲーム比率を維持したまま親に内接するサイズを container query 単位で計算する。
-          // 縦長スマホでは上下に黒帯、横長デスクトップでは左右に黒帯が出る。
-          //
-          // width / height の min/calc だけで内接矩形は決まる（aspect-ratio は冗長）が、
-          // cq 単位が解釈されない極端なフォールバック環境（古いブラウザ、CSS 計算前の
-          // 一瞬等）でも比率を保てるようセーフティネットとして aspect-ratio を併記。
-          aspectRatio: `${gameWidth} / ${gameHeight}`,
-          width: `min(100cqw, calc(100cqh * ${gameWidth} / ${gameHeight}))`,
-          height: `min(100cqh, calc(100cqw * ${gameHeight} / ${gameWidth}))`,
-        }}
+        style={gameBoxStyle}
       />
       {/* 操作ボタン列 (#310): クリッカー/ダイアログ送り/シークバーと干渉しない右下隅に集約。
           右端から ⚙→A→S→D の順に並べ、消えるボタンがあっても詰めて隙間を作らない。
@@ -457,11 +459,15 @@ function NovelPlayer({
       <div
         {...(seekActive ? { inert: '' } : {})}
         aria-hidden={seekActive}
-        className={`absolute inset-0 pointer-events-none transition-opacity duration-200 ${
+        // #350: inset-0 + m-auto + gameBoxStyle で **キャンバス箱とぴったり重ねる**（root 全体でなく）。
+        // これで丸ボタンの bottom-3 がキャンバス下端基準になり、レターボックス端末でもキャンバス内の
+        // スライダと丸ボタンの上下中心が一致する。pointer-events-none で canvas のクリックは透過。
+        className={`absolute inset-0 m-auto pointer-events-none transition-opacity duration-200 ${
           seekActive
             ? 'opacity-0 [&_button]:pointer-events-none'
             : 'opacity-100 [&_button]:pointer-events-auto'
         }`}
+        style={gameBoxStyle}
       >
         {/* スキップボタン (#140): docKey がある場合のみ有効。skip_enabled=false で非表示 (#310) */}
         {showSkipButton && (
