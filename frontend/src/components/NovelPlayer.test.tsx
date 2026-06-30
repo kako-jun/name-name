@@ -361,16 +361,18 @@ describe('NovelPlayer 下部ボタン行フェード退避（#350 E 群）', () 
     return r.setOnSeekActiveChange.mock.calls[0][0] as (active: boolean) => void
   }
 
-  it('E-1: 既定（inactive）ではラッパが opacity-100・pointer-events-auto・aria-hidden=false', async () => {
+  it('E-1: 既定（inactive）ではラッパが opacity-100・pointer-events-auto・aria-hidden=false・inert なし', async () => {
     render(<NovelPlayer events={[]} />)
     await flushAsync()
     const w = fadeWrapper()
     expect(w.className).toContain('opacity-100')
     expect(w.className).toContain('[&_button]:pointer-events-auto')
     expect(w.getAttribute('aria-hidden')).toBe('false')
+    // a11y(#350): 通常時は子ボタンがフォーカス可能（inert を付けない）。
+    expect(w.hasAttribute('inert')).toBe(false)
   })
 
-  it('E-2: active（cb(true)）でラッパが opacity-0・pointer-events-none・aria-hidden=true', async () => {
+  it('E-2: active（cb(true)）でラッパが opacity-0・pointer-events-none・aria-hidden=true・inert あり', async () => {
     render(<NovelPlayer events={[]} />)
     await flushAsync()
     act(() => capturedSeekCb()(true))
@@ -378,9 +380,11 @@ describe('NovelPlayer 下部ボタン行フェード退避（#350 E 群）', () 
     expect(w.className).toContain('opacity-0')
     expect(w.className).toContain('[&_button]:pointer-events-none')
     expect(w.getAttribute('aria-hidden')).toBe('true')
+    // a11y(#350): active 時は inert でサブツリーをフォーカス不能＋a11y ツリー外にする。
+    expect(w.hasAttribute('inert')).toBe(true)
   })
 
-  it('E-3: active → inactive（cb(true)→cb(false)）で既定の見た目へ復帰する', async () => {
+  it('E-3: active → inactive（cb(true)→cb(false)）で既定の見た目へ復帰し inert も外れる', async () => {
     render(<NovelPlayer events={[]} />)
     await flushAsync()
     act(() => capturedSeekCb()(true))
@@ -389,6 +393,7 @@ describe('NovelPlayer 下部ボタン行フェード退避（#350 E 群）', () 
     expect(w.className).toContain('opacity-100')
     expect(w.className).toContain('[&_button]:pointer-events-auto')
     expect(w.getAttribute('aria-hidden')).toBe('false')
+    expect(w.hasAttribute('inert')).toBe(false)
   })
 
   it('E-4: init 後に renderer.setOnSeekActiveChange が 1 回登録される', async () => {

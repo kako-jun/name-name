@@ -450,8 +450,12 @@ function NovelPlayer({
           #350: スライダ操作中(seekActive)はこの行ごと opacity でフェード退避し、pointer-events も
           切ってスライダのタップを邪魔しない。ラッパ自身は inset-0 + pointer-events-none で canvas の
           クリック（ダイアログ送り）を透過し、子ボタンだけ pointer-events-auto で拾う。キーボード
-          ショートカット(Ctrl/⌘+, / F5 / F8)は window レベル listener なのでフェードの影響を受けない。 */}
+          ショートカット(Ctrl/⌘+, / F5 / F8)は window レベル listener なのでフェードの影響を受けない。
+          a11y(#350): active 時は inert を付け、フェード退避中の子ボタンをフォーカス不能＋a11y ツリー外
+          ＋ポインタ不能に一括で落とす（aria-hidden サブツリー内に focusable が残る問題を解消）。
+          React 18 の型には inert が無いので属性スプレッドで付与し、見た目のフェードは opacity に残す。 */}
       <div
+        {...(seekActive ? { inert: '' } : {})}
         aria-hidden={seekActive}
         className={`absolute inset-0 pointer-events-none transition-opacity duration-200 ${
           seekActive
