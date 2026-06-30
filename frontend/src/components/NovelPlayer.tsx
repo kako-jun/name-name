@@ -4,6 +4,7 @@ import { NovelRenderer } from '../game/NovelRenderer'
 import { parseDebugQuery } from '../game/debugQuery'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import { type AspectRatio, ASPECT_RATIOS, parseAspectRatio } from '../game/constants'
+import { PLAYER_BUTTON_RIGHT_MARGIN_PX, PLAYER_BUTTON_SLOT_GAP_PX } from '../game/novelLayout'
 import SettingsOverlay from './SettingsOverlay'
 import { DebugOverlay } from './DebugOverlay'
 
@@ -130,6 +131,11 @@ function NovelPlayer({
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
 
+  // シナリオスライダ(SeekBar)操作中フラグ (#350)。renderer の onSeekActiveChange で同期し、
+  // active の間は下部丸ボタン行(S/A/⚙/D)をフェード退避させてスライダと重ならないようにする。
+  // 演出/UI の transient 状態なので GameState には持たない（ADR 0002・renderer 側も transient）。
+  const [seekActive, setSeekActive] = useState(false)
+
   // デバッグ HUD の展開状態 (#310)。右下ボタン列の「D」ボタンで開閉する。
   // 既定は畳んだ状態（#301 の collapsed 既定 true を引き継ぐ＝open 既定 false）。
   // 状態は localStorage（旧 DebugOverlay と同じキー意味）に best-effort で永続化する。
@@ -165,6 +171,8 @@ function NovelPlayer({
       renderer.setOnAutoModeChange((on) => setAutoMode(on))
       // renderer が未読到達で skipMode を OFF にしたとき React state を同期 (#140)
       renderer.setOnSkipModeChange((on) => setSkipMode(on))
+      // スライダ操作中（active）は下部丸ボタン行をフェード退避させる (#350)
+      renderer.setOnSeekActiveChange((active) => setSeekActive(active))
       if (docKey) {
         renderer.setDocKey(docKey)
       }
@@ -400,8 +408,10 @@ function NovelPlayer({
   // 右下ボタン列のレイアウト (#310)。右端から ⚙→A→S→D の順に 44px 間隔で左へ並べる。
   // 条件付きで消える S / D があっても隙間が空かないよう、実際に出るボタンだけを右から
   // 詰めてスロット番号を採番し、`right = 12 + slot*44`(px) で位置を導出する（特例分岐を作らない）。
-  const SLOT_GAP_PX = 44 // ボタン幅 36px(w-9) + 余白 8px
-  const SLOT_BASE_PX = 12 // 右端マージン（旧 right-3 = 0.75rem）
+  // #350: SeekBar(novelLayout) と同じ定数を参照し、片方を変えてももう片方が揃うようにする
+  // （ボタン中央高さ＝つまみ中心高さの一致を定数で担保。期待値の二重定義を避ける）。
+  const SLOT_GAP_PX = PLAYER_BUTTON_SLOT_GAP_PX // ボタン幅 36px(w-9) + 余白 8px
+  const SLOT_BASE_PX = PLAYER_BUTTON_RIGHT_MARGIN_PX // 右端マージン（旧 right-3 = 0.75rem）
   const slotRight = (slot: number): string => `${SLOT_BASE_PX + slot * SLOT_GAP_PX}px`
   // 採番順 = 右から（settings が slot 0）。出るボタンだけを push して詰める。
   const buttonOrder: Array<'settings' | 'auto' | 'skip' | 'debug'> = ['settings', 'auto']
@@ -436,69 +446,86 @@ function NovelPlayer({
         }}
       />
       {/* 操作ボタン列 (#310): クリッカー/ダイアログ送り/シークバーと干渉しない右下隅に集約。
-          右端から ⚙→A→S→D の順に並べ、消えるボタンがあっても詰めて隙間を作らない。 */}
-      {/* スキップボタン (#140): docKey がある場合のみ有効。skip_enabled=false で非表示 (#310) */}
-      {showSkipButton && (
-        <button
-          type="button"
-          onClick={handleSkipToggle}
-          disabled={!docKey}
-          aria-label={skipMode ? 'スキップモードをオフにする' : 'スキップモードをオンにする'}
-          title="スキップ（既読のみ）"
-          style={{ right: slotRight(slotOf('skip')) }}
-          className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-            skipMode
-              ? 'bg-green-500/80 hover:bg-green-500 text-white'
-              : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
-          }`}
-        >
-          S
-        </button>
-      )}
-      {/* オートモードボタン (#139) */}
-      <button
-        type="button"
-        onClick={handleAutoToggle}
-        aria-label={autoMode ? 'オートモードをオフにする' : 'オートモードをオンにする'}
-        title="オートモード (A)"
-        style={{ right: slotRight(slotOf('auto')) }}
-        className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
-          autoMode
-            ? 'bg-blue-500/80 hover:bg-blue-500 text-white'
-            : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
+          右端から ⚙→A→S→D の順に並べ、消えるボタンがあっても詰めて隙間を作らない。
+          #350: スライダ操作中(seekActive)はこの行ごと opacity でフェード退避し、pointer-events も
+          切ってスライダのタップを邪魔しない。ラッパ自身は inset-0 + pointer-events-none で canvas の
+          クリック（ダイアログ送り）を透過し、子ボタンだけ pointer-events-auto で拾う。キーボード
+          ショートカット(Ctrl/⌘+, / F5 / F8)は window レベル listener なのでフェードの影響を受けない。
+          a11y(#350): active 時は inert を付け、フェード退避中の子ボタンをフォーカス不能＋a11y ツリー外
+          ＋ポインタ不能に一括で落とす（aria-hidden サブツリー内に focusable が残る問題を解消）。
+          React 18 の型には inert が無いので属性スプレッドで付与し、見た目のフェードは opacity に残す。 */}
+      <div
+        {...(seekActive ? { inert: '' } : {})}
+        aria-hidden={seekActive}
+        className={`absolute inset-0 pointer-events-none transition-opacity duration-200 ${
+          seekActive
+            ? 'opacity-0 [&_button]:pointer-events-none'
+            : 'opacity-100 [&_button]:pointer-events-auto'
         }`}
       >
-        A
-      </button>
-      <button
-        type="button"
-        onClick={() => setSettingsOpen(true)}
-        aria-label="設定を開く"
-        title="設定 (Ctrl/Cmd + ,)"
-        style={{ right: slotRight(slotOf('settings')) }}
-        className="absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white text-lg"
-      >
-        ⚙
-      </button>
-      {/* デバッグ HUD トグル「D」ボタン (#310): debug_enabled(/play) or editor のときだけ出す。
-          押すと DebugOverlay パネルを展開・再押しで畳む（既定は畳んだ状態）。 */}
-      {debugAvailable && (
+        {/* スキップボタン (#140): docKey がある場合のみ有効。skip_enabled=false で非表示 (#310) */}
+        {showSkipButton && (
+          <button
+            type="button"
+            onClick={handleSkipToggle}
+            disabled={!docKey}
+            aria-label={skipMode ? 'スキップモードをオフにする' : 'スキップモードをオンにする'}
+            title="スキップ（既読のみ）"
+            style={{ right: slotRight(slotOf('skip')) }}
+            className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+              skipMode
+                ? 'bg-green-500/80 hover:bg-green-500 text-white'
+                : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
+            }`}
+          >
+            S
+          </button>
+        )}
+        {/* オートモードボタン (#139) */}
         <button
           type="button"
-          onClick={handleDebugToggle}
-          aria-label={debugOpen ? 'デバッグ情報を閉じる' : 'デバッグ情報を開く'}
-          aria-pressed={debugOpen}
-          title="デバッグ (D)"
-          style={{ right: slotRight(slotOf('debug')) }}
+          onClick={handleAutoToggle}
+          aria-label={autoMode ? 'オートモードをオフにする' : 'オートモードをオンにする'}
+          title="オートモード (A)"
+          style={{ right: slotRight(slotOf('auto')) }}
           className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
-            debugOpen
-              ? 'bg-cyan-500/80 hover:bg-cyan-500 text-white'
+            autoMode
+              ? 'bg-blue-500/80 hover:bg-blue-500 text-white'
               : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
           }`}
         >
-          D
+          A
         </button>
-      )}
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="設定を開く"
+          title="設定 (Ctrl/Cmd + ,)"
+          style={{ right: slotRight(slotOf('settings')) }}
+          className="absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white text-lg"
+        >
+          ⚙
+        </button>
+        {/* デバッグ HUD トグル「D」ボタン (#310): debug_enabled(/play) or editor のときだけ出す。
+            押すと DebugOverlay パネルを展開・再押しで畳む（既定は畳んだ状態）。 */}
+        {debugAvailable && (
+          <button
+            type="button"
+            onClick={handleDebugToggle}
+            aria-label={debugOpen ? 'デバッグ情報を閉じる' : 'デバッグ情報を開く'}
+            aria-pressed={debugOpen}
+            title="デバッグ (D)"
+            style={{ right: slotRight(slotOf('debug')) }}
+            className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
+              debugOpen
+                ? 'bg-cyan-500/80 hover:bg-cyan-500 text-white'
+                : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
+            }`}
+          >
+            D
+          </button>
+        )}
+      </div>
       <SettingsOverlay
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

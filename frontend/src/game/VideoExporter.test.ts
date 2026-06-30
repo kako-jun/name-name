@@ -137,6 +137,7 @@ describe('exportVideo resolution bump (#279)', () => {
       setRenderResolution: (r: number) => {
         calls.push(r)
       },
+      setExporting: () => {},
       setOnSceneChange: () => {},
       setOnEnd: () => {},
       takeOnEnd: () => null,
@@ -187,6 +188,7 @@ describe('exportVideo resolution bump (#279)', () => {
         setRenderResolution: (r: number) => {
           calls.push(r)
         },
+        setExporting: () => {},
         setOnSceneChange: () => {},
         setOnEnd: () => {},
         takeOnEnd: () => null,
@@ -208,5 +210,187 @@ describe('exportVideo resolution bump (#279)', () => {
       exportVideo(rendererWithAudio(2, calls2), { startSceneId: 'a', endSceneId: 'b', fps: 30 })
     ).rejects.toThrow()
     expect(calls2).toEqual([3, 2])
+  })
+})
+
+describe('exportVideo setExporting 復元（#350 F 群）', () => {
+  // VideoExporter は録画開始で setExporting(true)・終了/失敗/例外の全経路で setExporting(false) を
+  // 必ず呼び、SeekBar の書き出し抑制を確実に巻き戻す。ここでは setExporting の呼び出し列だけを
+  // 観測し、Pixi 実描画や実 MediaRecorder の挙動には踏み込まない（jsdom 観測可能域に限定）。
+  let savedMR: unknown
+  let savedMS: unknown
+  beforeEach(() => {
+    savedMR = (globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder
+    savedMS = (globalThis as unknown as { MediaStream?: unknown }).MediaStream
+    // MediaStream は jsdom に無い。new MediaStream([...tracks]) を通すため最小スタブを置く。
+    class FakeMediaStream {
+      constructor(_tracks?: unknown) {}
+    }
+    ;(globalThis as unknown as { MediaStream?: unknown }).MediaStream = FakeMediaStream
+  })
+  afterEach(() => {
+    ;(globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder = savedMR
+    ;(globalThis as unknown as { MediaStream?: unknown }).MediaStream = savedMS
+  })
+
+  /** 録画完走をシミュレートできる制御可能な MediaRecorder。start で recording・stop で onstop 発火。 */
+  function installRecordableMediaRecorder(onStarted: () => void) {
+    class FakeMediaRecorder {
+      static isTypeSupported() {
+        return true
+      }
+      state = 'inactive'
+      ondataavailable: ((e: { data?: { size: number } }) => void) | null = null
+      onstop: (() => void) | null = null
+      onerror: ((e: Event) => void) | null = null
+      constructor(_stream: unknown, _opts: unknown) {}
+      start(_timeslice?: number) {
+        this.state = 'recording'
+        onStarted()
+      }
+      stop() {
+        this.state = 'inactive'
+        this.onstop?.()
+      }
+    }
+    ;(globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder
+  }
+
+  /** 成功経路用レンダラ。onEnd を捕捉し、enableCapture/captureStream を成功させる。 */
+  function successRenderer(exportCalls: boolean[], captureOnEnd: (cb: () => void) => void) {
+    return {
+      getCanvas: () => ({ captureStream: () => ({ getVideoTracks: () => [] }) }),
+      getAudioManager: () => ({
+        ensureContext: () => {},
+        enableCapture: () => ({ getAudioTracks: () => [] }),
+        disableCapture: () => {},
+      }),
+      getRenderResolution: () => 3,
+      setRenderResolution: () => {},
+      setExporting: (e: boolean) => {
+        exportCalls.push(e)
+      },
+      setOnSceneChange: () => {},
+      setOnEnd: (cb: () => void) => captureOnEnd(cb),
+      takeOnEnd: () => null,
+      takeOnSceneChange: () => null,
+      jumpToScene: () => {},
+      setAutoMode: () => {},
+      prepareVideosForExport: async () => {},
+    } as unknown as Parameters<typeof import('./VideoExporter').exportVideo>[0]
+  }
+
+  // F-1: 正常完走で setExporting(true)→…→(false)。最終 false で、true→false の順を固定する。
+  it('F-1: 録画完走で setExporting(true) → 最終 (false) を呼ぶ（true→false 順）', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    let started!: () => void
+    const startedPromise = new Promise<void>((res) => {
+      started = res
+    })
+    installRecordableMediaRecorder(() => started())
+
+    const exportCalls: boolean[] = []
+    let onEnd: (() => void) | null = null
+    const renderer = successRenderer(exportCalls, (cb) => {
+      onEnd = cb
+    })
+
+    const p = exportVideo(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      fps: 30,
+      preRollMs: 0,
+      postRollMs: 0,
+    })
+    await startedPromise // recorder.start まで到達＝録画開始済み
+    onEnd!() // 全イベント完走 → finalize → stop → cleanup（setExporting(false)）
+    await p
+    expect(exportCalls).toEqual([true, false])
+  })
+
+  // F-2: audioStream 取得失敗（enableCapture→null）でも throw 前に setExporting(false) を呼び最終 false。
+  it('F-2: audioStream 失敗時も throw 前に setExporting(false) を呼び最終 false', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    class FakeMediaRecorder {
+      static isTypeSupported() {
+        return true
+      }
+    }
+    ;(globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder
+
+    const exportCalls: boolean[] = []
+    const renderer = {
+      getCanvas: () => ({ captureStream: () => ({ getVideoTracks: () => [] }) }),
+      getAudioManager: () => ({
+        ensureContext: () => {},
+        enableCapture: () => null, // 失敗させる
+        disableCapture: () => {},
+      }),
+      getRenderResolution: () => 3,
+      setRenderResolution: () => {},
+      setExporting: (e: boolean) => {
+        exportCalls.push(e)
+      },
+      setOnSceneChange: () => {},
+      setOnEnd: () => {},
+      takeOnEnd: () => null,
+      takeOnSceneChange: () => null,
+      jumpToScene: () => {},
+      setAutoMode: () => {},
+    } as unknown as Parameters<typeof exportVideo>[0]
+
+    await expect(
+      exportVideo(renderer, { startSceneId: 'a', endSceneId: 'b', fps: 30 })
+    ).rejects.toThrow(/AudioManager could not provide MediaStream/)
+    expect(exportCalls).toEqual([true, false])
+  })
+
+  // F-3: recorder コンストラクタ throw でも catch 内 setExporting(false) で復元。2 回目 export でも対が揃う。
+  it('F-3: recorder コンストラクタ throw でも setExporting(false) で復元し、2 回目も true/false 対が揃う', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    class ThrowingMediaRecorder {
+      static isTypeSupported() {
+        return true
+      }
+      constructor() {
+        throw new Error('boom: recorder constructor failed')
+      }
+    }
+    ;(globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder = ThrowingMediaRecorder
+
+    function rendererWithAudio(exportCalls: boolean[]) {
+      return {
+        getCanvas: () => ({ captureStream: () => ({ getVideoTracks: () => [] }) }),
+        getAudioManager: () => ({
+          ensureContext: () => {},
+          enableCapture: () => ({ getAudioTracks: () => [] }), // audioStream は成功
+          disableCapture: () => {},
+        }),
+        getRenderResolution: () => 3,
+        setRenderResolution: () => {},
+        setExporting: (e: boolean) => {
+          exportCalls.push(e)
+        },
+        setOnSceneChange: () => {},
+        setOnEnd: () => {},
+        takeOnEnd: () => null,
+        takeOnSceneChange: () => null,
+        jumpToScene: () => {},
+        setAutoMode: () => {},
+      } as unknown as Parameters<typeof exportVideo>[0]
+    }
+
+    const calls1: boolean[] = []
+    await expect(
+      exportVideo(rendererWithAudio(calls1), { startSceneId: 'a', endSceneId: 'b', fps: 30 })
+    ).rejects.toThrow(/boom/)
+    expect(calls1).toEqual([true, false])
+
+    // isExporting が戻っていれば 2 回目も同じ対を踏む（"already running" にならない）。
+    const calls2: boolean[] = []
+    await expect(
+      exportVideo(rendererWithAudio(calls2), { startSceneId: 'a', endSceneId: 'b', fps: 30 })
+    ).rejects.toThrow(/boom/)
+    expect(calls2).toEqual([true, false])
   })
 })

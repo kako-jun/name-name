@@ -8,6 +8,10 @@ import {
   resolveFontFamily,
   formatCounterText,
   computeSeekBarPosition,
+  computeSeekBarGeometry,
+  PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX,
+  PLAYER_BUTTON_BOTTOM_MARGIN_PX,
+  PLAYER_BUTTON_SIZE_PX,
   describeEventForDebug,
   findSceneById,
   resolveSceneTitle,
@@ -1307,5 +1311,123 @@ describe('computeNovelIndicatorPlacement 行折り返し (#306)', () => {
     const clamped = Math.min(nextLineY, args.boxBottom - base.indicatorHeight) // 90
     expect(p.y).toBe(Math.max(sameLineY(args), clamped)) // 90
     expect(p.y).toBeLessThan(nextLineY) // クランプで上がった
+  })
+})
+
+describe('computeSeekBarGeometry (#350)', () => {
+  // つまみ中心 Y を「画面下端からのオフセット px」で表したリファレンス・オラクル。
+  // 期待値は novelLayout の export 定数からのみ組み、30 や 12+36/2 を直書きしない。
+  function oracle(w: number, h: number, marginX: number, barHeight: number) {
+    const thumbCenterY = h - (PLAYER_BUTTON_BOTTOM_MARGIN_PX + PLAYER_BUTTON_SIZE_PX / 2)
+    return {
+      barX: marginX,
+      barWidth: w - marginX * 2,
+      barY: thumbCenterY - barHeight / 2,
+      thumbCenterY,
+    }
+  }
+
+  // A-1/2/3: 代表アスペクト比でつまみ中心が「画面下端 - ボタン中央オフセット」に乗り、
+  // バーはその中心へ縦中央、左右は marginX で内寄せされる（全て定数/引数参照で）。
+  it('A-1: 9:16 (450x800) でつまみ中心＝下端-ボタン中央・バーは縦中央・左右内寄せ', () => {
+    const marginX = 20
+    const barHeight = 6
+    const g = computeSeekBarGeometry(450, 800, marginX, barHeight)
+    expect(g.thumbCenterY).toBe(800 - PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX)
+    expect(g.barY).toBe(g.thumbCenterY - barHeight / 2)
+    expect(g.barX).toBe(marginX)
+    expect(g.barWidth).toBe(450 - marginX * 2)
+  })
+
+  it('A-2: 16:9 (800x450) でも同じ規則（高さだけがつまみ中心を決める）', () => {
+    const marginX = 20
+    const barHeight = 6
+    const g = computeSeekBarGeometry(800, 450, marginX, barHeight)
+    expect(g.thumbCenterY).toBe(450 - PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX)
+    expect(g.barY).toBe(g.thumbCenterY - barHeight / 2)
+    expect(g.barX).toBe(marginX)
+    expect(g.barWidth).toBe(800 - marginX * 2)
+  })
+
+  it('A-3: 4:3 (800x600) でも同じ規則', () => {
+    const marginX = 20
+    const barHeight = 6
+    const g = computeSeekBarGeometry(800, 600, marginX, barHeight)
+    expect(g.thumbCenterY).toBe(600 - PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX)
+    expect(g.barY).toBe(g.thumbCenterY - barHeight / 2)
+    expect(g.barX).toBe(marginX)
+    expect(g.barWidth).toBe(800 - marginX * 2)
+  })
+
+  // A-4: リファレンスオラクル（h - (bottomMargin + size/2)）と全戻り値が一致し、
+  // かつ「PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX === bottomMargin + size/2」の定義不変条件も縛る。
+  it('A-4: オラクルと全戻り値一致＋中央オフセット定義の不変条件', () => {
+    expect(PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX).toBe(
+      PLAYER_BUTTON_BOTTOM_MARGIN_PX + PLAYER_BUTTON_SIZE_PX / 2
+    )
+    const cases: Array<[number, number, number, number]> = [
+      [450, 800, 20, 6],
+      [800, 450, 20, 6],
+      [800, 600, 12, 10],
+      [1080, 1920, 40, 3],
+    ]
+    for (const [w, h, m, bh] of cases) {
+      expect(computeSeekBarGeometry(w, h, m, bh)).toEqual(oracle(w, h, m, bh))
+    }
+  })
+
+  // A-5: barWidth は w - marginX*2 をそのまま返す（クランプしない）。marginX=0/通常/
+  // screenWidth/2（barWidth=0）/screenWidth（barWidth=負）の各段で素直に算出する。
+  it('A-5: barWidth = w - marginX*2 をクランプせず返す（0 や負も素通し）', () => {
+    const w = 800
+    expect(computeSeekBarGeometry(w, 600, 0, 6).barWidth).toBe(w) // marginX=0 → 全幅
+    expect(computeSeekBarGeometry(w, 600, 20, 6).barWidth).toBe(w - 40) // 通常
+    expect(computeSeekBarGeometry(w, 600, w / 2, 6).barWidth).toBe(0) // 左右で食い尽くす
+    expect(computeSeekBarGeometry(w, 600, w, 6).barWidth).toBe(-w) // 過剰マージン → 負のまま
+  })
+
+  // A-6: barHeight=0 なら barY===thumbCenterY。偶奇どちらでも barY=thumbCenterY-barHeight/2
+  // （小数許容）。thumbCenterY は barHeight に依存しない。
+  it('A-6: barY は thumbCenterY-barHeight/2（barHeight=0/偶/奇）、thumbCenterY は barHeight 非依存', () => {
+    const w = 450
+    const h = 800
+    const center = h - PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX
+    const g0 = computeSeekBarGeometry(w, h, 20, 0)
+    expect(g0.barY).toBe(center) // barHeight=0 → 中心に一致
+    const gEven = computeSeekBarGeometry(w, h, 20, 8)
+    expect(gEven.barY).toBe(center - 4)
+    const gOdd = computeSeekBarGeometry(w, h, 20, 7)
+    expect(gOdd.barY).toBe(center - 3.5) // 奇数 → 小数
+    // つまみ中心は barHeight が何であっても同じ。
+    expect(g0.thumbCenterY).toBe(center)
+    expect(gEven.thumbCenterY).toBe(center)
+    expect(gOdd.thumbCenterY).toBe(center)
+  })
+
+  // A-7: screenHeight が中央オフセットちょうどなら thumbCenterY=0、未満なら負をそのまま返す。
+  it('A-7: screenHeight==中央オフセットで thumbCenterY=0、未満で負をそのまま', () => {
+    const exact = computeSeekBarGeometry(450, PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX, 20, 6)
+    expect(exact.thumbCenterY).toBe(0)
+    const below = computeSeekBarGeometry(450, PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX - 10, 20, 6)
+    expect(below.thumbCenterY).toBe(-10)
+  })
+
+  // A-8: 退化入力（0/負/NaN/Infinity）でもオラクル式と完全一致（toEqual は NaN 同値を含む）。
+  it('A-8: 退化入力（0/負/NaN/Infinity）でもオラクル式と一致（NaN 同値含む）', () => {
+    const degenerate: Array<[number, number, number, number]> = [
+      [0, 0, 0, 0],
+      [-450, -800, 20, 6],
+      [NaN, 800, 20, 6],
+      [450, NaN, 20, 6],
+      [450, 800, NaN, 6],
+      [450, 800, 20, NaN],
+      [Infinity, 800, 20, 6],
+      [450, Infinity, 20, 6],
+      [450, 800, Infinity, 6],
+      [450, 800, 20, Infinity],
+    ]
+    for (const [w, h, m, bh] of degenerate) {
+      expect(computeSeekBarGeometry(w, h, m, bh)).toEqual(oracle(w, h, m, bh))
+    }
   })
 })

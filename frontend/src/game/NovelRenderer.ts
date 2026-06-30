@@ -318,6 +318,14 @@ export class NovelRenderer {
   /** 選択肢クリック直後の同フレーム advance を抑制するフラグ (#211) */
   private justSelectedChoice = false
 
+  /**
+   * SeekBar 操作（タップ/クリックでシーク）直後の同フレーム advance を抑制するフラグ (#350)。
+   * SeekBar の clickRegion(Pixi federated) は canvas の DOM pointerdown(handleAdvance) より先に
+   * 発火する（Pixi の EventSystem が init() で先に canvas へ listener を張るため）。スライダを
+   * 常時タップ可能にした結果、下端帯タップが「シーク＋1つ進む」と二重発火するのを防ぐ
+   * （justSelectedChoice と同型の抑制）。 */
+  private suppressNextAdvance = false
+
   /** Wait イベント実行中フラグ */
   private waitingForWait = false
 
@@ -401,6 +409,10 @@ export class NovelRenderer {
   /** skipMode 変更時の React 側同期コールバック */
   private onSkipModeChange: ((on: boolean) => void) | null = null
 
+  /** SeekBar の active 変化時の React 側同期コールバック (#350)。NovelPlayer の丸ボタン
+   *  フェード退避に繋ぐ（onAutoModeChange と同じ配線パターン）。 */
+  private onSeekActiveChange: ((active: boolean) => void) | null = null
+
   // ---- 画面効果 (#143) ----
   /** flash/fade 用全画面オーバーレイ Graphics */
   private effectOverlay: Graphics | null = null
@@ -444,7 +456,8 @@ export class NovelRenderer {
       this.saveManager
     )
     this.backlogOverlay = new BacklogOverlay(this.screenWidth, this.screenHeight)
-    this.seekBar = new SeekBar(this.screenWidth, this.screenHeight)
+    // SeekBar の無操作タイマーも既存の TimeController 流儀に乗せる (#350)。
+    this.seekBar = new SeekBar(this.screenWidth, this.screenHeight, this.time)
   }
 
   /**
@@ -499,7 +512,7 @@ export class NovelRenderer {
     // 暗転レイヤー
     this.blackoutOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
     this.blackoutOverlay.fill(0x000000)
-    this.blackoutOverlay.visible = false
+    this.setBlackout(false)
     this.app.stage.addChild(this.blackoutOverlay)
 
     // 画面効果オーバーレイ（#143: flash/fade — blackout より上、dialog より下）
@@ -514,21 +527,23 @@ export class NovelRenderer {
     // ダイアログボックス
     this.app.stage.addChild(this.dialogBox)
 
-    // シークバー（ダイアログボックスの下）
-    this.seekBar.setOnSeek((displayIndex) => this.seekToTextEventDisplayIndex(displayIndex))
+    // シークバー（シナリオスライダ）。つまみ中心は下部丸ボタンの中央を貫く高さ (#350)。
+    this.seekBar.setOnSeek((displayIndex) => {
+      // スライダ操作は「シーク」であって「1つ進む」ではない。同フレームの handleAdvance を抑止する (#350)。
+      this.suppressNextAdvance = true
+      this.seekToTextEventDisplayIndex(displayIndex)
+    })
+    // active 変化を React 側へ伝え、丸ボタン行をフェード退避させる (#350)。
+    this.seekBar.setOnActiveChange((active) => this.onSeekActiveChange?.(active))
     this.app.stage.addChild(this.seekBar)
-    // デフォルトで非表示。マウスがキャンバス下端付近に来たら表示する (簡易ホバー)
-    this.seekBar.visible = false
+    // #350: 通常時も控えめに常時表示する（モバイルはホバー不可・Issue「ボタンより背面に見える」を満たす）。
+    // active はスライダの実操作（SeekBar.handleClick 内の activate）だけで入る。デスクトップのホバーで
+    // active にすると、カーソルを下部へ寄せただけで丸ボタンが退避し押しづらくなる（帯から離れても戻らない）
+    // ため mousemove 起動は廃止した (#350)。キャンバスから出たら即 active を解除してボタンを戻す
+    // （書き出し中は setExporting(true) で非表示）。
     if (this.app.canvas) {
       const canvas = this.app.canvas as HTMLCanvasElement
-      canvas.addEventListener('mousemove', (e) => {
-        const rect = canvas.getBoundingClientRect()
-        const yRatio = (e.clientY - rect.top) / rect.height
-        this.seekBar.visible = yRatio > 0.78
-      })
-      canvas.addEventListener('mouseleave', () => {
-        this.seekBar.visible = false
-      })
+      canvas.addEventListener('mouseleave', this.handleCanvasMouseLeave)
     }
 
     // シーンカウンター
@@ -792,6 +807,16 @@ export class NovelRenderer {
     await this.videoLayer.prepareForExport()
   }
 
+  /**
+   * 動画書き出しの開始/終了をレンダラに通知する (#350)。
+   * 現状は SeekBar を抑制（非表示）して録画にスライダが焼き込まれないようにするだけだが、
+   * 将来ほかの UI（HUD 等）も書き出し中に退避させたくなったらここにぶら下げる薄い 1 メソッド。
+   * VideoExporter が録画開始で true / 終了（cleanup・例外時を含む）で false を必ず呼ぶ。
+   */
+  setExporting(exporting: boolean): void {
+    this.seekBar.setExportSuppressed(exporting)
+  }
+
   /** シーン切り替えコールバックを登録する (#228) */
   setOnSceneChange(cb: ((sceneId: string) => void) | null): void {
     this.onSceneChangeCallback = cb
@@ -864,7 +889,7 @@ export class NovelRenderer {
     } else {
       this.characterLayer.clear()
     }
-    this.blackoutOverlay.visible = false
+    this.setBlackout(false)
     this.currentBgmPath = null
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
     this.dialogBox.clearText()
@@ -1240,6 +1265,12 @@ export class NovelRenderer {
     this.onSkipModeChange = cb
   }
 
+  /** SeekBar の active 変化コールバックを登録する (#350)。NovelPlayer が下部丸ボタン行の
+   *  フェード退避に繋ぐ（setOnAutoModeChange / setOnSkipModeChange と同じ配線パターン）。 */
+  setOnSeekActiveChange(cb: (active: boolean) => void): void {
+    this.onSeekActiveChange = cb
+  }
+
   /** スキップモードの現在状態を取得する */
   isSkipMode(): boolean {
     return this.skipMode
@@ -1256,6 +1287,7 @@ export class NovelRenderer {
     }
     this.app.canvas.removeEventListener('pointerdown', this.handleAdvance)
     this.app.canvas.removeEventListener('wheel', this.handleWheel)
+    this.app.canvas.removeEventListener('mouseleave', this.handleCanvasMouseLeave)
     window.removeEventListener('keydown', this.handleKeyDown)
     if (this.waitTimer) {
       this.time.clearTimeout(this.waitTimer)
@@ -1799,8 +1831,8 @@ export class NovelRenderer {
     // 動画には触れないため（show が単一スロットを置換、なしなら remove）、背景復元の後に行う。
     this.videoLayer.restore(state.video)
 
-    // 暗転復元
-    this.blackoutOverlay.visible = state.isBlackout
+    // 暗転復元（セーブ/ロード・シーク・任意局面起動の applyState はすべてここを通る #350）
+    this.setBlackout(state.isBlackout)
 
     // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）。
     // novel 役割配置 (#286): protagonist 指定時は復元でも質問役=左 / 回答役=右の x を当てる
@@ -1869,9 +1901,40 @@ export class NovelRenderer {
     this.advance()
   }
 
+  /**
+   * キャンバスからカーソルが出たら SeekBar の active を解除して丸ボタンを戻す (#350)。
+   * 匿名リスナにせずフィールド束縛し、destroy で removeEventListener できるようにする
+   * （handleAdvance / handleWheel / handleKeyDown と同じ流儀）。
+   */
+  private handleCanvasMouseLeave = (): void => {
+    this.seekBar.deactivate()
+  }
+
+  /**
+   * 暗転オーバーレイの表示を切り替え、SeekBar の可視ゲートと同期する (#350)。
+   * 暗転中はスライダを隠す（z 順は変えず可視性ゲートで対処し、黒の上に薄いスライダ線が残らない）。
+   * active も SeekBar 側で解除する。GameState の永続 isBlackout から導出する transient な見た目同期で、
+   * 適用/解除/復元（processDirective / restoreToScene / applyState）すべてこの 1 経路に集約する。
+   */
+  private setBlackout(visible: boolean): void {
+    this.blackoutOverlay.visible = visible
+    this.seekBar.setBlackoutHidden(visible)
+  }
+
   private handleAdvance = (): void => {
     if (this.justSelectedChoice) {
       this.justSelectedChoice = false
+      // 「1 ポインタジェスチャで 1 回だけ」を守るため、このフレームで進めないと決まった時点で
+      // suppressNextAdvance も一緒に消費する (#350)。choice 直後の同フレームに SeekBar 由来の
+      // suppressNextAdvance が同居していても、固着させて後続の独立ポインタへ漏らさない。
+      this.suppressNextAdvance = false
+      return
+    }
+    // SeekBar の clickRegion(Pixi) が同じ native pointerdown でこの DOM ハンドラより先に発火し
+    // onSeek 内で suppressNextAdvance を立てる (#350)。スライダ下端帯タップが「シーク＋1つ進む」と
+    // 二重発火するのを防ぐため、立っていれば 1 回だけ消費して早期 return する（justSelectedChoice と同型）。
+    if (this.suppressNextAdvance) {
+      this.suppressNextAdvance = false
       return
     }
     this.audioManager.ensureContext()
@@ -2004,7 +2067,7 @@ export class NovelRenderer {
         this.clearBackground()
         // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
         this.videoLayer.remove()
-        this.blackoutOverlay.visible = false
+        this.setBlackout(false)
         // novel: 場面転換でスクリム+文字を退避して新しい絵を見せ、戻す (#283)
         this.retreatNovelScrim()
       }
@@ -2055,7 +2118,7 @@ export class NovelRenderer {
       return
     }
     if ('Blackout' in event) {
-      this.blackoutOverlay.visible = event.Blackout.action === 'On'
+      this.setBlackout(event.Blackout.action === 'On')
       return
     }
     if ('Bgm' in event) {
