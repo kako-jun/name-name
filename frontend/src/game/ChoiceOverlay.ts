@@ -202,7 +202,9 @@ export class ChoiceOverlay extends Container {
       const mask = new Graphics()
       mask.rect(0, this.viewportY, this.screenWidth, viewportHeight)
       mask.fill(0xffffff)
-      mask.renderable = false
+      // PixiJS v8 ではオブジェクトを `.mask` に割り当てた時点で通常描画から自動的に
+      // 除外される。ここで renderable=false を付けるとステンシルにマスク形状が書き込まれず、
+      // クリップ領域が空になって選択肢が一切描画されなくなる (#339 regression)。
       this.addChild(mask)
       contentContainer.mask = mask
       this.on('pointerdown', this.handleDragStart)
