@@ -44,4 +44,43 @@ describe('canonicalizeBodyText 表示用ダイグラフ正準化 (#340)', () => 
   it('`--` と `…` の混在を同時に正準化する', () => {
     expect(canonicalizeBodyText('そうか--でも…もういい')).toBe('そうか──でも⋯もういい')
   })
+
+  it('空文字は恒等（境界条件・#340 B1）', () => {
+    expect(canonicalizeBodyText('')).toBe('')
+  })
+
+  it('ルビ記法（｜漢字《かんじ》）は非破壊・中の `--` だけ ── 化（#340 B2）', () => {
+    // 制御文字 `｜`『《』は表示本文の一部なので温存し、`--` だけを ── に置換する。
+    expect(canonicalizeBodyText('｜漢字《かんじ》--です')).toBe('｜漢字《かんじ》──です')
+    // ルビだけ（ダイグラフ無し）は完全恒等。
+    expect(canonicalizeBodyText('漢字《かんじ》')).toBe('漢字《かんじ》')
+  })
+
+  it('敵対的コーパスで冪等（f(f(x))==f(x)）かつ U+2026 残存ゼロ（#340 B3）', () => {
+    // 注意: `--` を部分文字列で探すと `---`(3連) の出力 `---` が偽陽性になるため、
+    // オラクルは「冪等」と「U+2026(…) 残存ゼロ」だけにする（`--`/`-` は不変で正当に残りうる）。
+    const corpus = [
+      '',
+      '---',
+      '-----',
+      '--…--',
+      '─--',
+      '⋯…',
+      'a--—--b',
+      '--',
+      '…--',
+      '--…',
+      '----…',
+      '-',
+      '—',
+      '……あと五分……',
+      '待って--行かないで…',
+    ]
+    for (const x of corpus) {
+      const once = canonicalizeBodyText(x)
+      const twice = canonicalizeBodyText(once)
+      expect(twice).toBe(once) // 冪等
+      expect(once.includes('…')).toBe(false) // U+2026(…) 残存ゼロ
+    }
+  })
 })

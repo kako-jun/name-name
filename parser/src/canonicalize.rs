@@ -151,6 +151,57 @@ mod tests {
     }
 
     #[test]
+    fn empty_line_is_identity() {
+        // 空文字は恒等（境界条件・#340 A1）。
+        assert_eq!(canonicalize_body_line(""), "");
+    }
+
+    #[test]
+    fn ruby_markup_is_preserved_only_diagraph_replaced() {
+        // ルビ記法（`｜漢字《かんじ》`）の制御文字 `｜`『《』は表示本文の一部なので温存し、
+        // その中の `--` だけを ── に置換する（ルビ非破壊・#340 A2）。
+        assert_eq!(
+            canonicalize_body_line("｜漢字《かんじ》--です"),
+            "｜漢字《かんじ》──です"
+        );
+        // ルビだけ（ダイグラフ無し）は完全恒等。
+        assert_eq!(canonicalize_body_line("漢字《かんじ》"), "漢字《かんじ》");
+    }
+
+    #[test]
+    fn is_idempotent_on_adversarial_corpus() {
+        // 敵対的コーパスで f(f(x)) == f(x)（冪等）かつ出力に U+2026(…) が残らないことを縛る (#340 A3)。
+        // 注意: `--` を部分文字列で探すと `---`(3 連) の出力 `---` が偽陽性になるため、
+        // オラクルは「冪等」と「U+2026 残存ゼロ」だけにする（`--`/`-` は不変で正当に残りうる）。
+        let corpus = [
+            "",
+            "---",
+            "-----",
+            "--…--",
+            "─--",
+            "⋯…",
+            "a--—--b",
+            "--",
+            "…--",
+            "--…",
+            "----…",
+            "-",
+            "—",
+            "……あと五分……",
+            "待って--行かないで…",
+        ];
+        for x in corpus {
+            let once = canonicalize_body_line(x);
+            let twice = canonicalize_body_line(&once);
+            assert_eq!(once, twice, "not idempotent for input {x:?}");
+            assert!(
+                !once.contains('\u{2026}'),
+                "U+2026 (…) survived in output {once:?} for input {x:?}"
+            );
+        }
+    }
+
+    #[test]
     fn choice_title_label_canonicalized_rpg_master_unchanged() {
         // 実 parse を通して、読ませる表示テキスト（Choice/TitleShow/Label）は正準化され、
         // RPG マスタ（Monster の name/id）は不変であることを縛る (#340)。
@@ -251,6 +302,31 @@ mod tests {
                 other => panic!("expected inner Dialog, got {other:?}"),
             },
             other => panic!("expected Condition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn events_pass_leaves_dialog_character_untouched() {
+        // 話者名（Dialog.character）は表示本文ではないので `A--B` のまま温存し、text だけ ── 化する
+        // （話者名にダイグラフ正準化を漏らさない・#340 A4）。
+        let mut events = vec![Event::Dialog {
+            character: Some("A--B".to_string()),
+            expression: None,
+            position: None,
+            text: vec!["待って--".to_string()],
+            voice_path: None,
+            font_family: None,
+            fit: false,
+        }];
+        canonicalize_events(&mut events);
+        match &events[0] {
+            Event::Dialog {
+                character, text, ..
+            } => {
+                assert_eq!(character.as_deref(), Some("A--B"));
+                assert_eq!(text, &vec!["待って──".to_string()]);
+            }
+            other => panic!("expected Dialog, got {other:?}"),
         }
     }
 }

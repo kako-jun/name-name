@@ -153,3 +153,84 @@ describe('parseMarkdown + normalizeEvents: 表示テキストの正準化 (#340)
     expect(monster && 'Monster' in monster && monster.Monster.id).toBe('boss--1')
   })
 })
+
+describe('parseMarkdown 表示テキスト正準化のスコープガード end-to-end (#340)', () => {
+  // 実 parse（Rust wasm）→ normalizeEvents（JS 二段目）を単一 .md フィクスチャで通し、
+  // 「読ませる本文だけ正準化・それ以外（frontmatter / 見出し / 話者名 / アセットパス / 3連ハイフン /
+  // 単独 --- 改頁）は不変」を 1 観点ずつ縛る。#308 の二段漏れ（片側だけ直して素の値が出る）と、
+  // markdown hr との衝突（3連/単独 ---）を end-to-end で恒久固定する。
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: a--b', // C8: chapter.title は不変（frontmatter 値・フェンス破綻せず parse 成功）
+    '---',
+    '',
+    '## s1: 章--見出し', // C7: scene.title は不変（見出し）
+    '',
+    '[背景: a--b.png]', // C5: Background.path は不変（アセットパス）
+    '',
+    '**カコ--A**:', // C6: Dialog.character は不変（話者名）
+    'そう……', // C2: … 連続の個数保持（そう…… → そう⋯⋯）
+    'A---B', // C3: 3連ハイフンは本文でも不変（markdown hr 誤置換ガード）
+    '',
+    '---', // C4: 単独 --- は PageBreak（───化 / Dialog化しない）
+    '',
+    '次。',
+    '',
+  ].join('\n')
+
+  const collectEvents = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
+
+  it('C2: `…` の個数を保持して正準化する（そう…… → そう⋯⋯）', async () => {
+    // 先頭 Dialog（カコ--A）の 1 行目。… 2 連 → ⋯ 2 連（個数保持）。
+    const events = collectEvents(await parseMarkdown(markdown))
+    const dialog = events.find((e) => typeof e === 'object' && 'Dialog' in e)
+    expect(dialog && 'Dialog' in dialog && dialog.Dialog.text[0]).toBe('そう⋯⋯')
+  })
+
+  it('C3: 本文中の 3 連ハイフン `A---B` は不変（markdown hr 誤置換ガード）', async () => {
+    const events = collectEvents(await parseMarkdown(markdown))
+    const dialog = events.find((e) => typeof e === 'object' && 'Dialog' in e)
+    // 2 行目は 3 連なので ── 化されずそのまま。
+    expect(dialog && 'Dialog' in dialog && dialog.Dialog.text[1]).toBe('A---B')
+  })
+
+  it('C4: 単独 `---` 行は PageBreak として存在し、───化 / Dialog化しない', async () => {
+    const events = collectEvents(await parseMarkdown(markdown))
+    // 単独 --- は一級の PageBreak（JS 上は文字列 "PageBreak"）。
+    expect(events).toContain('PageBreak')
+    // 本文テキスト行に「───（誤正準化）」も「---（Dialog化）」も現れない。
+    // （A---B は '───' とも '---' 単独とも一致しないので偽陽性にならない）。
+    const bodyLines = events.flatMap((e) => {
+      if (typeof e === 'object' && 'Dialog' in e) return e.Dialog.text
+      if (typeof e === 'object' && 'Narration' in e) return e.Narration.text
+      return []
+    })
+    expect(bodyLines).not.toContain('───')
+    expect(bodyLines).not.toContain('---')
+  })
+
+  it('C5: `[背景: a--b.png]` のアセットパスは不変（a--b.png）', async () => {
+    const events = collectEvents(await parseMarkdown(markdown))
+    const bg = events.find((e) => typeof e === 'object' && 'Background' in e)
+    expect(bg && 'Background' in bg && bg.Background.path).toBe('a--b.png')
+  })
+
+  it('C6: 話者名 `カコ--A` は不変（Dialog.character）', async () => {
+    const events = collectEvents(await parseMarkdown(markdown))
+    const dialog = events.find((e) => typeof e === 'object' && 'Dialog' in e)
+    expect(dialog && 'Dialog' in dialog && dialog.Dialog.character).toBe('カコ--A')
+  })
+
+  it('C7: 見出しタイトル `章--見出し` は不変（scene.title）', async () => {
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].title).toBe('章--見出し')
+  })
+
+  it('C8: frontmatter の chapter.title `a--b` は不変（フェンス破綻せず parse 成功）', async () => {
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].title).toBe('a--b')
+  })
+})
