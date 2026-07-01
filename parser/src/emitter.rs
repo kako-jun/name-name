@@ -46,6 +46,10 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ratio) = doc.character_y_ratio {
             out.push_str(&format!("character_y_ratio: {ratio}\n"));
         }
+        // Emit character_height_ratio only when present (#360)。数値なので quote 不要（character_y_ratio と同じ）。
+        if let Some(ratio) = doc.character_height_ratio {
+            out.push_str(&format!("character_height_ratio: {ratio}\n"));
+        }
         if let Some(ms) = doc.character_fade_ms {
             out.push_str(&format!("character_fade_ms: {ms}\n"));
         }
@@ -1144,6 +1148,7 @@ mod tests {
             dialog_style: None,
             protagonist: None,
             character_y_ratio: None,
+            character_height_ratio: None,
             character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
@@ -1251,6 +1256,36 @@ mod tests {
         assert_eq!(doc1, doc2, "master data round-trip should be stable");
     }
 
+    #[test]
+    fn round_trip_character_height_ratio() {
+        // frontmatter の character_height_ratio (#360) が parse → emit → parse で保持されること。
+        // character_y_ratio(#308) と同型の per-game 数値設定。emit は quote なしの数値行で出す。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\ncharacter_height_ratio: 0.8\n---\n\n## 1-1: シーン\n\nナレ。\n";
+        let doc1 = crate::parser::parse(input);
+        assert_eq!(
+            doc1.character_height_ratio,
+            Some(0.8),
+            "frontmatter の character_height_ratio が数値で parse されること"
+        );
+
+        let emitted = emit(&doc1);
+        assert!(
+            emitted.contains("character_height_ratio: 0.8"),
+            "emit 出力に character_height_ratio が含まれること（quote なしの数値）: {emitted}"
+        );
+
+        let doc2 = crate::parser::parse(&emitted);
+        assert_eq!(
+            doc2.character_height_ratio,
+            Some(0.8),
+            "round-trip で character_height_ratio が保持される"
+        );
+        assert_eq!(
+            doc1, doc2,
+            "character_height_ratio round-trip should be stable"
+        );
+    }
+
     fn make_doc_with_event(event: Event) -> Document {
         Document {
             engine: "name-name".to_string(),
@@ -1261,6 +1296,7 @@ mod tests {
             dialog_style: None,
             protagonist: None,
             character_y_ratio: None,
+            character_height_ratio: None,
             character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,

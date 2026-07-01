@@ -3695,6 +3695,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         dialog_style: None,
         protagonist: None,
         character_y_ratio: None,
+        character_height_ratio: None,
         character_fade_ms: None,
         skip_enabled: None,
         debug_enabled: None,
@@ -3997,6 +3998,133 @@ title: "テスト"
     assert_eq!(doc2.font_family.as_deref(), Some("Hina Mincho, serif"));
     assert_eq!(doc2.font_size, Some(26));
     assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+}
+
+#[test]
+fn test_document_character_height_ratio_parses_from_frontmatter() {
+    // frontmatter `character_height_ratio:` が Some(f64) で parse されること (#360)。
+    // character_y_ratio(#308) と同型。値は parser では生のまま透過し、範囲クランプは runtime で行う。
+
+    // 正常な数値は Some(0.8)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_height_ratio: 0.8
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.character_height_ratio,
+        Some(0.8),
+        "frontmatter の character_height_ratio が数値で parse されること"
+    );
+
+    // 未指定なら None（runtime 側で原寸にフォールバック）。
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert_eq!(doc_none.character_height_ratio, None);
+
+    // 空文字（`character_height_ratio:`）なら None（character_y_ratio と同じ規約）。
+    let input_empty = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_height_ratio:
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_empty = parser::parse(input_empty);
+    assert_eq!(doc_empty.character_height_ratio, None);
+
+    // 非数値（`character_height_ratio: tall`）なら None（parse 失敗を握りつぶす）。
+    let input_bad = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_height_ratio: tall
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_bad = parser::parse(input_bad);
+    assert_eq!(doc_bad.character_height_ratio, None);
+}
+
+#[test]
+fn test_character_height_ratio_round_trip_with_other_frontmatter() {
+    // parse → emit → parse で character_height_ratio が保持され、character_y_ratio と共存すること (#360)。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+character_y_ratio: 1.05
+character_height_ratio: 0.8
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_height_ratio, Some(0.8));
+    assert_eq!(doc.character_y_ratio, Some(1.05));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("character_height_ratio: 0.8"),
+        "emit 出力に character_height_ratio が含まれること（quote なしの数値）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.character_height_ratio,
+        Some(0.8),
+        "round-trip で character_height_ratio が保持される"
+    );
+    // 共存フィールドも壊れていないこと。
+    assert_eq!(doc2.character_y_ratio, Some(1.05));
+    assert_eq!(doc2.aspect_ratio, "9:16");
+}
+
+#[test]
+fn test_character_height_ratio_none_omits_emit_line() {
+    // character_height_ratio が None なら emit に `character_height_ratio:` 行が出ないこと (#360)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("character_height_ratio:"),
+        "character_height_ratio が None なら emit に出ない: {emitted}"
+    );
 }
 
 #[test]
