@@ -817,6 +817,13 @@ pub fn parse(input: &str) -> Document {
         scenes.push(scene);
     }
 
+    // 本文テキストを表示用ダイグラフに正準化する (#340)。Dialog/Narration の text 行にだけ掛け、
+    // frontmatter・見出し・ディレクティブ引数・アセットパス・話者名には触れない（マスタ/ドメイン分離）。
+    // JS 側 normalizeEvents（frontend/src/wasm/parser.ts）と対象範囲・挙動を揃える（#308 二段漏れ回避）。
+    for scene in scenes.iter_mut() {
+        crate::canonicalize::canonicalize_events(&mut scene.events);
+    }
+
     Document {
         engine,
         aspect_ratio,

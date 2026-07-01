@@ -1035,6 +1035,82 @@ describe('splitIntoSentences 設計8〜11（分割規則の回帰固定 #283）'
   })
 })
 
+describe('splitIntoSentences 余韻横棒 ── を文送り境界にする (#340)', () => {
+  // 正準化後の `──`（U+2500×2、原稿 `--`）は文送り境界。`──` 自体は前の表示単位に含める。
+  it('`A──B` は `──` で止まり、`──` は前の文に含む', () => {
+    expect(splitIntoSentences('A──B')).toEqual(['A──', 'B'])
+  })
+
+  it('受け入れ条件: `A──B。` は `A──` / `B。` に文送りする', () => {
+    expect(splitIntoSentences('A──B。')).toEqual(['A──', 'B。'])
+  })
+
+  it('受け入れ条件: `A、B。` は `、` では止まらない（従来どおり）', () => {
+    expect(splitIntoSentences('A、B。')).toEqual(['A、B。'])
+  })
+
+  // 隣接する停止境界は 1 回にまとめる（二重に止まらない）。
+  it('`A。──B` は `。` と `──` をまとめて `A。──` / `B` で 1 停止', () => {
+    expect(splitIntoSentences('A。──B')).toEqual(['A。──', 'B'])
+  })
+
+  it('`A──。B` は `──` と `。` をまとめて `A──。` / `B` で 1 停止', () => {
+    expect(splitIntoSentences('A──。B')).toEqual(['A──。', 'B'])
+  })
+
+  it('`A。B──C` は `。` と `──` で別々に止まる（間に本文がある）', () => {
+    expect(splitIntoSentences('A。B──C')).toEqual(['A。', 'B──', 'C'])
+  })
+
+  // `⋯`（U+22EF、言いよどみ）は境界にしない。`──` とは別扱い。
+  it('`⋯⋯──` は `──` で 1 回だけ止まる（`⋯` は境界にしない）', () => {
+    expect(splitIntoSentences('⋯⋯──あと')).toEqual(['⋯⋯──', 'あと'])
+  })
+
+  it('`⋯⋯。` は従来どおり `。` で 1 回止まる', () => {
+    expect(splitIntoSentences('⋯⋯。次')).toEqual(['⋯⋯。', '次'])
+  })
+
+  it('`⋯⋯。──` は `。` と `──` をまとめて 1 回だけ止まる', () => {
+    expect(splitIntoSentences('⋯⋯。──次')).toEqual(['⋯⋯。──', '次'])
+  })
+
+  it('`⋯⋯？──` も `？` と `──` をまとめて 1 回だけ止まる', () => {
+    expect(splitIntoSentences('⋯⋯？──次')).toEqual(['⋯⋯？──', '次'])
+  })
+
+  // `──` 直後の閉じ括弧は前の文に含める（トレーラ吸収と両立）。
+  it('`「──」` は閉じ括弧まで前の文に含める', () => {
+    expect(splitIntoSentences('彼は「──」と黙った。')).toEqual(['彼は「──」', 'と黙った。'])
+  })
+
+  // 離れて出る `──` はそれぞれ別停止。
+  it('離れて出る `──` はそれぞれ別停止', () => {
+    expect(splitIntoSentences('待って──行くな──やめろ')).toEqual(['待って──', '行くな──', 'やめろ'])
+  })
+
+  // D1: 先頭の `──`（前に本文が無い）でも境界になり、`──` だけの先頭停止単位を作る。
+  it('D1: 先頭 `──B` → `──` / `B`（本文の無い先頭境界）', () => {
+    expect(splitIntoSentences('──B')).toEqual(['──', 'B'])
+  })
+
+  // D2: 末尾の `──`（後ろに本文が無い）は末尾断片として 1 停止で終わる（空要素を作らない）。
+  it('D2: 末尾 `A──` → `A──`（後続の空要素を作らない）', () => {
+    expect(splitIntoSentences('A──')).toEqual(['A──'])
+  })
+
+  // D3: `。──。` の交互連鎖（文末 → ── → 文末）を 1 停止にまとめる（三連続でも二重に止まらない）。
+  it('D3: `A。──。B` → `A。──。` / `B`（。──。 の交互連鎖を 1 停止に統合）', () => {
+    expect(splitIntoSentences('A。──。B')).toEqual(['A。──。', 'B'])
+  })
+
+  // D4: `？──！` は `──` が `？` と `！` を橋渡しして 1 停止にする。
+  //     間に `──` を挟まない `？！`（=2停止・design8〜11 で固定済み）との対比になる。
+  it('D4: `A？──！B` → `A？──！` / `B`（── が ？ と ！ を 1 停止に橋渡し）', () => {
+    expect(splitIntoSentences('A？──！B')).toEqual(['A？──！', 'B'])
+  })
+})
+
 // ===== #292: wrappedPrefixLength（既出 plain 文字数 → wrapped 上の fromCount）=====
 //
 // 文単位送りの最重要ヘルパー。wordwrap が挿入する `\n` を計数から除外し、plain 文字

@@ -14,6 +14,7 @@
 import type { BackgroundFade, NovelGameState } from './GameState'
 import type { SaveSlotData } from './SaveManager'
 import type { EventScene } from '../types'
+import { MIDLINE_RULE } from './textCanonical'
 
 /** カバーフィット後の背景スプライト寸法と配置（px）。 */
 export interface CoverFit {
@@ -555,11 +556,27 @@ const SENTENCE_TERMINATORS = '。！？!?'
 const SENTENCE_TRAILERS = '」』】〕〗〙）］｝〉》”’｠、，'
 
 /**
- * 本文を文境界で分割する純粋関数 (#283)。
+ * 余韻横棒 `──`（U+2500 の連続）を文送り境界として扱うか判定する 1 文字述語 (#340)。
+ *
+ * 正準化パス（textCanonical.ts）が原稿 `--`（ASCII 2 連）を `──` へ置換済み。この中央罫線を
+ * novel の文送り境界にする（#340 本題）。言いよどみ `⋯`（U+22EF）は境界にしないため対象外。
+ */
+function isMidlineRule(ch: string): boolean {
+  return ch === MIDLINE_RULE
+}
+
+/**
+ * 本文を文境界で分割する純粋関数 (#283 / #340)。
  *
  * 句点・感嘆符・疑問符を文末とみなし、直後に続く閉じ括弧・閉じ引用符（および句読点）は
- * その文に含める。文末記号を持たない末尾の断片（記号で終わらない最後の塊）も 1 文として返す。
+ * その文に含める。加えて余韻横棒 `──`（U+2500 の連続、原稿 `--` の正準化後）も文送り境界とし、
+ * `──` 自体は前の表示単位に含める (#340)。文末記号を持たない末尾の断片も 1 文として返す。
  * 改行（`\n`）は文の途中の改行として温存し、文境界とはしない（wordwrap が別途処理する）。
+ *
+ * 隣接する停止境界は 1 回にまとめる (#340): `。──` / `──。` のように文末記号と `──` が
+ * 隣り合う場合は 1 文にまとめて二重に止まらない。ただし `？！` のような文末記号どうし（間に
+ * `──` を挟まない）は従来どおり別々に止める（#283 の回帰固定を維持）。`⋯`（U+22EF）は境界に
+ * しないため、`⋯⋯──` は `──` で 1 回、`⋯⋯。` は `。` で 1 回止まる。
  *
  * - 空文字・空白だけの入力は空配列 `[]` を返す。
  * - 文の前後の余分な空白はトリムするが、文中の空白は保持する。
@@ -569,20 +586,76 @@ const SENTENCE_TRAILERS = '」』】〕〗〙）］｝〉》”’｠、，'
  */
 export function splitIntoSentences(text: string): string[] {
   const sentences: string[] = []
-  let current = ''
   const chars = Array.from(text)
-  for (let i = 0; i < chars.length; i++) {
+  const n = chars.length
+  let current = ''
+
+  const isTerminator = (ch: string) => SENTENCE_TERMINATORS.includes(ch)
+  const isTrailer = (ch: string) => SENTENCE_TRAILERS.includes(ch)
+
+  const flush = () => {
+    const trimmed = current.trim()
+    if (trimmed !== '') sentences.push(trimmed)
+    current = ''
+  }
+
+  // 直後の閉じ括弧・閉じ引用符・句読点を同じ文へ取り込む。i を最後に吸収した位置へ進めて返す。
+  const absorbTrailers = (i: number): number => {
+    while (i + 1 < n && isTrailer(chars[i + 1])) {
+      i++
+      current += chars[i]
+    }
+    return i
+  }
+
+  // 停止チェーンを延長する (#340)。current には既に最初の停止トークン（文末記号 or `──`）が入っている。
+  // 規則:
+  //  - 閉じ括弧・句読点トレーラは常に吸収する（既存 #283 挙動）。
+  //  - `──` は直前が文末記号でも `──` でも吸収する（`。──` を 1 停止にまとめる）。
+  //  - 文末記号は直前が `──` のときだけ吸収する（`──。` を 1 停止に）。文末記号どうし（`？！`）は
+  //    間に `──` を挟まない限りまとめない＝別停止のまま（#283 回帰固定を守る）。
+  const extendStopChain = (i: number, lastWasRule: boolean): number => {
+    for (;;) {
+      i = absorbTrailers(i)
+      const next = i + 1 < n ? chars[i + 1] : ''
+      if (isMidlineRule(next)) {
+        // `──` の連続をまとめて吸収する。
+        while (i + 1 < n && isMidlineRule(chars[i + 1])) {
+          i++
+          current += chars[i]
+        }
+        lastWasRule = true
+        continue
+      }
+      // `next !== ''` ガードは必須 (#340): 文字列末尾では next が番兵の '' になり、
+      // `''.includes()` セマンティクスで `isTerminator('')` が true を返す。ガードが無いと
+      // 末尾 `──`（lastWasRule=true）で存在しない次文字を吸収しに行き `chars[i]=undefined` を
+      // current に連結して "undefined" が本文に混入する（例: `A──` → `A──undefined`）。
+      if (next !== '' && isTerminator(next) && lastWasRule) {
+        i++
+        current += chars[i]
+        lastWasRule = false
+        continue
+      }
+      break
+    }
+    return i
+  }
+
+  for (let i = 0; i < n; i++) {
     const ch = chars[i]
     current += ch
-    if (SENTENCE_TERMINATORS.includes(ch)) {
-      // 文末記号の直後に続く閉じ括弧・閉じ引用符・句読点を同じ文に取り込む。
-      while (i + 1 < chars.length && SENTENCE_TRAILERS.includes(chars[i + 1])) {
+    if (isMidlineRule(ch)) {
+      // 余韻横棒 `──`（U+2500 の連続）＝文送り境界 (#340)。連続分をまとめて 1 停止にする。
+      while (i + 1 < n && isMidlineRule(chars[i + 1])) {
         i++
         current += chars[i]
       }
-      const trimmed = current.trim()
-      if (trimmed !== '') sentences.push(trimmed)
-      current = ''
+      i = extendStopChain(i, true)
+      flush()
+    } else if (isTerminator(ch)) {
+      i = extendStopChain(i, false)
+      flush()
     }
   }
   // 文末記号で終わらない末尾の断片も 1 文として拾う。

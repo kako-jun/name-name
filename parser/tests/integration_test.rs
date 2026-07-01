@@ -110,7 +110,7 @@ fn test_parse_sample() {
             assert_eq!(position, &Some("左".to_string()));
             assert_eq!(
                 text,
-                &vec!["ちくしょう……。".to_string(), "なんで！".to_string()]
+                &vec!["ちくしょう⋯⋯。".to_string(), "なんで！".to_string()]
             );
         }
         other => panic!("Expected Dialog, got {other:?}"),
@@ -137,7 +137,7 @@ fn test_parse_sample() {
             assert_eq!(character, &Some("カコ".to_string()));
             assert_eq!(expression, &Some("suppin_1".to_string()));
             assert_eq!(position, &Some("左".to_string()));
-            assert_eq!(text, &vec!["こうなるんだよぅ……ッ！".to_string()]);
+            assert_eq!(text, &vec!["こうなるんだよぅ⋯⋯ッ！".to_string()]);
         }
         other => panic!("Expected Dialog continuation, got {other:?}"),
     }
@@ -157,8 +157,8 @@ fn test_parse_sample() {
             assert_eq!(
                 text,
                 &vec![
-                    "あなたを信じることはできない……。".to_string(),
-                    "だって……".to_string(),
+                    "あなたを信じることはできない⋯⋯。".to_string(),
+                    "だって⋯⋯".to_string(),
                     "そんなの絶対おかしいよ！".to_string(),
                 ]
             );
@@ -243,7 +243,7 @@ fn test_parse_sample() {
             character, text, ..
         } => {
             assert_eq!(character, &Some("カコ".to_string()));
-            assert_eq!(text, &vec!["私は……".to_string()]);
+            assert_eq!(text, &vec!["私は⋯⋯".to_string()]);
         }
         other => panic!("Expected Dialog, got {other:?}"),
     }

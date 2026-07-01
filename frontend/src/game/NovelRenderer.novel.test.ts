@@ -814,3 +814,47 @@ describe('NovelRenderer 主人公本文色 (#305)', () => {
     expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF6E6)
   })
 })
+
+// ===== #340: 余韻横棒 `──`（正準化後 U+2500）が novel の文送り配線に到達する =====
+//
+// novelLayout.test.ts は splitIntoSentences（純粋関数）を直接縛るが、ここでは NovelRenderer の
+// ページ化・文送り配線（getNovelPages / currentPageCount / advance）まで `──` が実際に届き、
+// 「句点が無くても `──` で文が割れて 1 ページ内 2 文停止・改頁が起きる」ことを end-to-end で固定する。
+// events は直接構築するので、正準化パスは経由せず**正準化済みの `──`（U+2500×2）**を渡す。
+describe('NovelRenderer novel: 余韻横棒 `──` が文送り境界として配線に届く (#340)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // U+2500×2（正準化後の余韻横棒）。原稿 `--` を canonicalize した後の実データ形。
+  const RULE = '\u{2500}\u{2500}'
+
+  // F1: 句点の無い `文1──文2` が 1 ページ内で 2 文に割れ、advance で sentenceIndex 0→1 を踏む。
+  //     `──` が無ければ 1 文＝次イベントへ抜ける（sentenceIndex は動かない）ので、
+  //     sentenceIndex が前進する事実そのものが「`──` が split 配線に到達した」証明になる。
+  it('F1: 句点無し `文1──文2` は 1 ページ 2 文になり advance で sentenceIndex 0→1 を踏む', () => {
+    const text = `文1${RULE}文2`
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [narration(text), narration('次。')])])
+    const i = internals(r)
+    // cap 大・各文 1 行（jsdom）→ 2 文が 1 ページに収まる。
+    expect(i.currentPageCount({ text: [text] })).toBe(1)
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
+    i.advance()
+    // 同一イベント・同一ページのまま文 index だけ前進する（`──` 境界が効いている証拠）。
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 1 })
+  })
+
+  // F2: `──` 区切りセグメントが cap を超える数だけ並ぶと、ページ総数が ceil(セグメント数 / cap) になる。
+  //     句点を一切使わず `──` だけで改頁が起きることを縛る（`──` が paginate まで配線されている）。
+  it('F2: cap 超過数の `──` 区切りセグメントは ceil(セグメント数 / cap) ページに改頁される', () => {
+    const n = NOVEL_CAP + 1 // cap を 1 つ超える → 2 ページ以上
+    // seg1──seg2──…──segN（各セグメント 1 文 = 1 行、句点なし）。
+    const text = Array.from({ length: n }, (_, k) => `${k + 1}`).join(RULE)
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [narration(text)])])
+    expect(internals(r).currentPageCount({ text: [text] })).toBe(Math.ceil(n / NOVEL_CAP))
+  })
+})
