@@ -142,11 +142,6 @@ const DEFAULT_MS_PER_CHAR = 30
 /** 枠なしモードの DropShadow 設定 */
 const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 8, distance: 3, alpha: 1 } as const
 
-/** novel/borderless 本文で下寄りに見えやすいダッシュ・罫線系を表示用に中央線へ寄せる (#315)。 */
-export function normalizeDashGlyphsForDisplay(text: string): string {
-  return text.replace(/[‐‑‒–—―−ー]/g, '─')
-}
-
 /**
  * クリッカー（インジケータ）の種別 (#292)。
  *  - `next`     : 同ページにまだ続く文がある（次は文の送り）。
@@ -1294,8 +1289,9 @@ export class DialogBox extends Container {
   }
 
   private visibleDialogText(state: TypewriterState): string {
-    const text = visibleText(state)
-    return this.borderless ? normalizeDashGlyphsForDisplay(text) : text
+    // 本文は verbatim で描く (#356)。ダッシュ・長音符などの glyph 統一はエンジンで行わない
+    // （原稿＝単一情報源を描画層が書き換えない）。表記統一が要るなら原稿側で揃える。
+    return visibleText(state)
   }
 
   /**

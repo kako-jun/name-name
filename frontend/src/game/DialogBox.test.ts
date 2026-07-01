@@ -29,7 +29,6 @@ import {
   NOVEL_TEXT_MARGIN_X,
   NOVEL_TEXT_TOP_RATIO,
   NOVEL_TEXT_MARGIN_BOTTOM,
-  normalizeDashGlyphsForDisplay,
 } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 
@@ -162,23 +161,23 @@ describe('DialogBox portrait (Issue #73 / #194)', () => {
   })
 })
 
-describe('DialogBox dash glyph display normalization (#315)', () => {
-  it('表示用に下寄りのダッシュ・罫線系を中央線 glyph に寄せる', () => {
-    expect(normalizeDashGlyphsForDisplay('あ——い−−うーーえ')).toBe('あ──い──う──え')
-  })
-
-  it('novel/borderless だけ本文表示のダッシュを中央線 glyph に寄せ、adv は原文のまま', () => {
+describe('DialogBox 本文は verbatim で描く（glyph 統一しない・#356 / 旧 #315 撤去）', () => {
+  it('novel/borderless でも本文の長音符・ダッシュ・罫線を書き換えない', () => {
+    // 旧 #315 は borderless で [‐‑‒–—―−ー]→─ の glyph 統一を掛け、長音符 ー(U+30FC) まで
+    // 罫線 ─ に潰していた。エンジンは原稿を書き換えない（表記統一は原稿側の責務）。
     const novel = makeRpgBox()
     novel.setNovelMode(true)
-    novel.setDialog(null, 'あ——い')
+    novel.setDialog(null, 'コーヒーと──余韻') // 長音符 ー ×2 + 余韻の中央罫線 ── を含む
     novel.skipTypewriter()
-    expect(asInternals(novel).dialogText.text).toBe('あ──い')
+    expect(asInternals(novel).dialogText.text).toBe('コーヒーと──余韻') // verbatim（ー も ── もそのまま）
     novel.dispose()
+  })
 
+  it('adv でも同様に本文を書き換えない', () => {
     const adv = makeRpgBox()
-    adv.setDialog(null, 'あ——い')
+    adv.setDialog(null, 'コーヒーと——余韻')
     adv.skipTypewriter()
-    expect(asInternals(adv).dialogText.text).toBe('あ——い')
+    expect(asInternals(adv).dialogText.text).toBe('コーヒーと——余韻')
     adv.dispose()
   })
 })
