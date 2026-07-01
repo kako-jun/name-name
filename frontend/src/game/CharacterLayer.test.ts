@@ -36,6 +36,11 @@ function asInternals(layer: CharacterLayer): CharacterLayerInternals {
 }
 
 describe('CharacterLayer fade (Issue #177)', () => {
+  // Assets.load の spy 等を毎テスト後に確実に戻す（assert が throw しても mock が後続へ漏れない）。
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('show() の新規表示は texture load 完了後に alpha 0 から fade-in を開始する（#17: texture-gate）', async () => {
     // 退場衝突が無い（colliderCount===0）新規立ち絵でも、フェードは texture 読込後に始める。
     // 読込前にフェードを走らせると、初回コールドキャッシュで texture が fade より遅いとき
@@ -54,7 +59,6 @@ describe('CharacterLayer fade (Issue #177)', () => {
     expect(state!.fadeAnimation!.fromAlpha).toBe(0)
     expect(state!.fadeAnimation!.toAlpha).toBe(1)
     expect(state!.fadeAnimation!.destroyOnComplete).toBe(false)
-    vi.restoreAllMocks()
   })
 
   it('show() に instant: true を渡すと alpha 1 で即時表示し fadeAnimation は無し', () => {
