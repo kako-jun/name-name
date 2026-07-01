@@ -156,7 +156,8 @@ export function computeFitScale(
  *
  * `fit`（#294）と違い「大きい時だけ縮める」ではなく、常に目標高さへ合わせる（拡大もする）。
  * 呼び出し側で [0.05, 2.0] にクランプ済みの ratio を渡す想定だが、関数内でも 0 除算・NaN を
- * ガードする。不正（非有限・非正の texH/screenH、非有限 ratio）は原寸 (1) に倒す。
+ * ガードする。不正な引数は全て原寸 (1) に倒す：非有限・非正の texH/screenH に加え、非有限の
+ * ratio および非正の ratio（ratio<=0 だと scale=0 で不可視・負で反転になるため）も 1 に倒す。
  *
  * テストが定数計算を直書きして陳腐化しないよう export する（規律4 / #262 の教訓）。
  */
@@ -170,7 +171,8 @@ export function computeTargetHeightScale(
     texH <= 0 ||
     !Number.isFinite(screenH) ||
     screenH <= 0 ||
-    !Number.isFinite(targetHeightRatio)
+    !Number.isFinite(targetHeightRatio) ||
+    targetHeightRatio <= 0
   ) {
     return 1
   }
@@ -510,6 +512,25 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 名札ラベルを立ち絵 sprite の幅に収める (#275)。
+   *
+   * label.scale を一旦 1 に戻して natural width を測り、sprite 幅を超えていれば等比縮小する。
+   * 収まっていれば等倍のまま（大きくしない）。label.anchor=(0.5,1) なので水平中央は sprite.x に追従する。
+   * loadTexture（初回ロード・表情変更・2コマ切替）と setCharacterHeightRatio のライブ再スケール (#360) の
+   * 両方から呼び、fit ロジックを一箇所に集約して重複を避ける（規律4）。label 無し・destroy 済みは no-op。
+   */
+  private fitLabelToSprite(sprite: Sprite, label: Text | undefined): void {
+    if (!label || label.destroyed) return
+    const spriteW = sprite.width
+    label.scale.set(1, 1)
+    const naturalW = label.width
+    if (naturalW > spriteW && naturalW > 0) {
+      const s = spriteW / naturalW
+      label.scale.set(s, s)
+    }
+  }
+
+  /**
    * 立ち絵の目標表示高さ比率を per-game 値で上書きする (#360)。
    * frontmatter `character_height_ratio:` の値を渡す。null/undefined/非有限は null（＝原寸 scale=1・後方互換）、
    * 有効値は [CHARACTER_HEIGHT_RATIO_MIN, CHARACTER_HEIGHT_RATIO_MAX] = [0.05, 2] へクランプして保持する。
@@ -537,6 +558,8 @@ export class CharacterLayer extends Container {
       const scale =
         next === null ? 1 : computeTargetHeightScale(texture.height, next, this.screenHeight)
       state.sprite.scale.set(scale)
+      // sprite 幅が変わったので名札も追従して収め直す（縮んだ立ち絵から名札がはみ出さない #360）。
+      this.fitLabelToSprite(state.sprite, state.label)
     }
   }
 
@@ -2316,18 +2339,10 @@ export class CharacterLayer extends Container {
             scale = 1
           }
           sprite.scale.set(scale)
-          // ラベルを車の幅に収める。
-          // - natural width が車幅を超えたら縮小、収まっていれば等倍のまま (大きくしない)
-          // - label.anchor=(0.5, 1) なので label.x = sprite.x で水平方向は中央揃え
-          if (label && !label.destroyed) {
-            const spriteW = sprite.width
-            label.scale.set(1, 1)
-            const naturalW = label.width
-            if (naturalW > spriteW && naturalW > 0) {
-              const s = spriteW / naturalW
-              label.scale.set(s, s)
-            }
-          }
+          // ラベルを立ち絵（sprite）の幅に収める。natural width が sprite 幅を超えたら縮小、
+          // 収まっていれば等倍のまま（大きくしない）。setCharacterHeightRatio のライブ再スケール (#360)
+          // と共有するヘルパで、fit ロジックの重複を避ける（規律4）。
+          this.fitLabelToSprite(sprite, label)
           sprite.texture = texture
           return true
         })
