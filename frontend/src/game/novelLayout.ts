@@ -627,7 +627,11 @@ export function splitIntoSentences(text: string): string[] {
         lastWasRule = true
         continue
       }
-      if (isTerminator(next) && lastWasRule) {
+      // `next !== ''` ガードは必須 (#340): 文字列末尾では next が番兵の '' になり、
+      // `''.includes()` セマンティクスで `isTerminator('')` が true を返す。ガードが無いと
+      // 末尾 `──`（lastWasRule=true）で存在しない次文字を吸収しに行き `chars[i]=undefined` を
+      // current に連結して "undefined" が本文に混入する（例: `A──` → `A──undefined`）。
+      if (next !== '' && isTerminator(next) && lastWasRule) {
         i++
         current += chars[i]
         lastWasRule = false
