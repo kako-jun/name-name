@@ -1035,6 +1035,61 @@ describe('splitIntoSentences 設計8〜11（分割規則の回帰固定 #283）'
   })
 })
 
+describe('splitIntoSentences 余韻横棒 ── を文送り境界にする (#340)', () => {
+  // 正準化後の `──`（U+2500×2、原稿 `--`）は文送り境界。`──` 自体は前の表示単位に含める。
+  it('`A──B` は `──` で止まり、`──` は前の文に含む', () => {
+    expect(splitIntoSentences('A──B')).toEqual(['A──', 'B'])
+  })
+
+  it('受け入れ条件: `A──B。` は `A──` / `B。` に文送りする', () => {
+    expect(splitIntoSentences('A──B。')).toEqual(['A──', 'B。'])
+  })
+
+  it('受け入れ条件: `A、B。` は `、` では止まらない（従来どおり）', () => {
+    expect(splitIntoSentences('A、B。')).toEqual(['A、B。'])
+  })
+
+  // 隣接する停止境界は 1 回にまとめる（二重に止まらない）。
+  it('`A。──B` は `。` と `──` をまとめて `A。──` / `B` で 1 停止', () => {
+    expect(splitIntoSentences('A。──B')).toEqual(['A。──', 'B'])
+  })
+
+  it('`A──。B` は `──` と `。` をまとめて `A──。` / `B` で 1 停止', () => {
+    expect(splitIntoSentences('A──。B')).toEqual(['A──。', 'B'])
+  })
+
+  it('`A。B──C` は `。` と `──` で別々に止まる（間に本文がある）', () => {
+    expect(splitIntoSentences('A。B──C')).toEqual(['A。', 'B──', 'C'])
+  })
+
+  // `⋯`（U+22EF、言いよどみ）は境界にしない。`──` とは別扱い。
+  it('`⋯⋯──` は `──` で 1 回だけ止まる（`⋯` は境界にしない）', () => {
+    expect(splitIntoSentences('⋯⋯──あと')).toEqual(['⋯⋯──', 'あと'])
+  })
+
+  it('`⋯⋯。` は従来どおり `。` で 1 回止まる', () => {
+    expect(splitIntoSentences('⋯⋯。次')).toEqual(['⋯⋯。', '次'])
+  })
+
+  it('`⋯⋯。──` は `。` と `──` をまとめて 1 回だけ止まる', () => {
+    expect(splitIntoSentences('⋯⋯。──次')).toEqual(['⋯⋯。──', '次'])
+  })
+
+  it('`⋯⋯？──` も `？` と `──` をまとめて 1 回だけ止まる', () => {
+    expect(splitIntoSentences('⋯⋯？──次')).toEqual(['⋯⋯？──', '次'])
+  })
+
+  // `──` 直後の閉じ括弧は前の文に含める（トレーラ吸収と両立）。
+  it('`「──」` は閉じ括弧まで前の文に含める', () => {
+    expect(splitIntoSentences('彼は「──」と黙った。')).toEqual(['彼は「──」', 'と黙った。'])
+  })
+
+  // 離れて出る `──` はそれぞれ別停止。
+  it('離れて出る `──` はそれぞれ別停止', () => {
+    expect(splitIntoSentences('待って──行くな──やめろ')).toEqual(['待って──', '行くな──', 'やめろ'])
+  })
+})
+
 // ===== #292: wrappedPrefixLength（既出 plain 文字数 → wrapped 上の fromCount）=====
 //
 // 文単位送りの最重要ヘルパー。wordwrap が挿入する `\n` を計数から除外し、plain 文字
