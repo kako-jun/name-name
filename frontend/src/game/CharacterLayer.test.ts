@@ -36,12 +36,25 @@ function asInternals(layer: CharacterLayer): CharacterLayerInternals {
 }
 
 describe('CharacterLayer fade (Issue #177)', () => {
-  it('show() の新規表示は alpha 0 から fade-in を開始する', () => {
+  // Assets.load の spy 等を毎テスト後に確実に戻す（assert が throw しても mock が後続へ漏れない）。
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('show() の新規表示は texture load 完了後に alpha 0 から fade-in を開始する（#17: texture-gate）', async () => {
+    // 退場衝突が無い（colliderCount===0）新規立ち絵でも、フェードは texture 読込後に始める。
+    // 読込前にフェードを走らせると、初回コールドキャッシュで texture が fade より遅いとき
+    // alpha が 1 に達し切ってから絵が現れ、フェードが見えず突然出る（本編入口の司会など・#17）。
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 200, height: 400 } as never)
     const layer = new CharacterLayer(800, 450)
     layer.show('hero', 'normal', '中央', '/assets')
     const state = asInternals(layer).characters.get('hero')
     expect(state).toBeDefined()
+    // 読込前: alpha 0 で待機、フェードはまだ開始していない。
     expect(state!.sprite.alpha).toBe(0)
+    expect(state!.fadeAnimation).toBeNull()
+    // texture 読込完了 → ここで初めてフェードイン開始。
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(state!.fadeAnimation).not.toBeNull()
     expect(state!.fadeAnimation!.fromAlpha).toBe(0)
     expect(state!.fadeAnimation!.toAlpha).toBe(1)
