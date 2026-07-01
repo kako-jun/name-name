@@ -114,6 +114,22 @@ function normalizeEvents(events: Event[]): Event[] {
         },
       }
     }
+    if ('RpgEvent' in event) {
+      // RPG イベント（[イベント]）内の会話も表示テキストなので正準化する (#340)。
+      // 各コマンドの Dialog/Narration の text にだけ掛け、話者名 character・他コマンドは
+      // spread で不変に保つ。RpgEvent.name も spread で保持（#308 の dropped-field 罠を避ける）。
+      return {
+        RpgEvent: {
+          ...event.RpgEvent,
+          commands: event.RpgEvent.commands.map((command) => {
+            if (command.type === 'Dialog' || command.type === 'Narration') {
+              return { ...command, text: command.text.map(canonicalizeBodyText) }
+            }
+            return command
+          }),
+        },
+      }
+    }
     if ('Background' in event) {
       // Rust 側の Option<u32> / Option<f32> は WASM 経由で undefined になるため、
       // frontend の規約（types.ts）に合わせて null に正規化する。

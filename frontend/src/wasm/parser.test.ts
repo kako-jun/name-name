@@ -234,3 +234,53 @@ describe('parseMarkdown 表示テキスト正準化のスコープガード end-
     expect(doc.chapters[0].title).toBe('a--b')
   })
 })
+
+describe('parseMarkdown RpgEvent 内会話の正準化スコープ end-to-end (#340 / S1)', () => {
+  // 実 parse（Rust wasm）→ normalizeEvents（JS 二段目）で、`[イベント]`（RpgEvent）内の会話
+  // （EventCommand::Dialog/Narration の text）が正準化され、話者名・`[NPC]` の message・NPC 名は
+  // 不変であることを end-to-end で固定する。
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## m: マップ',
+    '',
+    '[NPC 村人 @1,1 色=#ffcc00]',
+    'また--きて…', // 対象外: NpcData.message は不変
+    '[/NPC]',
+    '',
+    '[イベント talk]',
+    '**司会--A**:', // 対象外: 話者名は不変
+    '待って--行かないで…', // 対象: RpgEvent Dialog.text → 待って──行かないで⋯
+    '> 風が--吹いた…', // 対象: RpgEvent Narration.text → 風が──吹いた⋯
+    '[/イベント]',
+    '',
+  ].join('\n')
+
+  const collectEvents = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
+
+  it('RpgEvent 内の Dialog/Narration の text は正準化・話者名は不変', async () => {
+    const events = collectEvents(await parseMarkdown(markdown))
+    const rpg = events.find((e) => typeof e === 'object' && 'RpgEvent' in e)
+    if (!rpg || typeof rpg !== 'object' || !('RpgEvent' in rpg)) {
+      throw new Error('RpgEvent not found')
+    }
+    const commands = rpg.RpgEvent.commands
+    const dialog = commands.find((c) => c.type === 'Dialog')
+    const narration = commands.find((c) => c.type === 'Narration')
+    expect(dialog?.type === 'Dialog' && dialog.text).toEqual(['待って──行かないで⋯'])
+    expect(dialog?.type === 'Dialog' && dialog.character).toBe('司会--A') // 話者名は不変
+    expect(narration?.type === 'Narration' && narration.text).toEqual(['風が──吹いた⋯'])
+  })
+
+  it('対象外: `[NPC]` の message と NPC 名は不変', async () => {
+    const events = collectEvents(await parseMarkdown(markdown))
+    const npc = events.find((e) => typeof e === 'object' && 'Npc' in e)
+    expect(npc && 'Npc' in npc && npc.Npc.message).toEqual(['また--きて…'])
+    expect(npc && 'Npc' in npc && npc.Npc.name).toBe('村人')
+  })
+})

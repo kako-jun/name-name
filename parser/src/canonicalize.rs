@@ -8,7 +8,7 @@
 //! スコープ: Dialog / Narration の本文 text 行にだけ掛ける（`canonicalize_events`）。
 //! frontmatter の `---`、見出し `##`、ディレクティブ引数・ID・アセットパス・話者名には触れない。
 
-use crate::models::Event;
+use crate::models::{Event, EventCommand};
 
 /// U+2500 BOX DRAWINGS LIGHT HORIZONTAL（余韻横棒の表示字形 `─`）。
 pub const MIDLINE_RULE: char = '\u{2500}';
@@ -61,12 +61,18 @@ pub fn canonicalize_body_line(line: &str) -> String {
 /// 読ませる表示テキストにだけ正準化を適用する再帰パス (#340)。
 ///
 /// 対象は「画面に本文的に出るテキスト」: Dialog / Narration の本文（複数行）、Choice の各
-/// 選択肢ボタン本文、TitleShow / Label の表示文字列。Condition の入れ子イベントにも再帰する
-/// （JS 側 `normalizeEvents` と対象範囲を揃える）。
+/// 選択肢ボタン本文、TitleShow / Label の表示文字列、RpgEvent（`[イベント]`）内の会話
+/// （EventCommand::Dialog / Narration の text＝RPG モードで DialogBox に描画される本文）。
+/// Condition の入れ子イベントにも再帰する（JS 側 `normalizeEvents` と対象範囲を揃える）。
 ///
-/// 対象外（不変）: RPG マスタ（Monster/Item/Spell/PartyMember の name、Npc の name/message）・
-/// 話者名・ディレクティブ引数・アセットパス・ID・frontmatter・見出し。これらは以下の match で
-/// 分岐を持たず `_ => {}` に落ちるため、一切触れない（マスタ／ドメイン分離）。
+/// 対象外（不変）:
+///  - **RpgEvent 内の Dialog.character（話者名）** は不変（top-level Dialog.character と同じ扱い）。
+///  - **`NpcData.message`（NPC に話しかけた時の台詞）** は kako-jun が明示的に対象外と決定。
+///  - マスタ名（Monster/Item/Spell/PartyMember の name、`NpcData.name`）・ディレクティブ引数・
+///    アセットパス・ID・frontmatter・見出し。
+///
+/// これら対象外は以下の match で分岐を持たず（Npc は `_ => {}` に落ち、話者名は match 内で
+/// 触らない）一切変更しない（マスタ／ドメイン分離）。
 pub fn canonicalize_events(events: &mut [Event]) {
     for event in events.iter_mut() {
         match event {
@@ -86,8 +92,30 @@ pub fn canonicalize_events(events: &mut [Event]) {
             Event::TitleShow { text, .. } | Event::Label { text, .. } => {
                 *text = canonicalize_body_line(text);
             }
+            // RPG イベント（`[イベント]`）内の会話も表示テキスト（#340）。
+            // commands の Dialog/Narration の text にだけ掛ける（話者名 character は不変）。
+            Event::RpgEvent { commands, .. } => {
+                canonicalize_commands(commands);
+            }
             Event::Condition { events: inner, .. } => {
                 canonicalize_events(inner);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// RpgEvent の commands 内の会話テキストだけ正準化する (#340)。
+///
+/// `EventCommand::Dialog.text` / `EventCommand::Narration.text` にだけ掛け、`Dialog.character`
+/// （話者名）・`NpcMove` / `Wait` 等の他コマンドは触らない。
+fn canonicalize_commands(commands: &mut [EventCommand]) {
+    for command in commands.iter_mut() {
+        match command {
+            EventCommand::Dialog { text, .. } | EventCommand::Narration { text } => {
+                for line in text.iter_mut() {
+                    *line = canonicalize_body_line(line);
+                }
             }
             _ => {}
         }
@@ -248,6 +276,72 @@ mod tests {
         // RPG マスタ名・ID は不変（`_ => {}` に落ちるため触らない）。
         assert_eq!(monster_name.as_deref(), Some("王--様"));
         assert_eq!(monster_id.as_deref(), Some("boss--1"));
+    }
+
+    #[test]
+    fn rpg_event_conversation_canonicalized_speaker_and_npc_message_unchanged() {
+        use crate::models::NpcData;
+        let mut events = vec![
+            Event::RpgEvent {
+                name: "talk".to_string(),
+                commands: vec![
+                    EventCommand::Dialog {
+                        // 話者名 character は不変（top-level Dialog.character と同じ扱い）。
+                        character: Some("A--B".to_string()),
+                        text: vec!["待って--行かないで…".to_string()],
+                    },
+                    EventCommand::Narration {
+                        text: vec!["そう……".to_string()],
+                    },
+                    // 会話以外のコマンドは触らない。
+                    EventCommand::Wait { ms: 500 },
+                ],
+            },
+            // NpcData.message は明示的に対象外（不変）。
+            Event::Npc(NpcData {
+                id: "villager".to_string(),
+                name: "村人--A".to_string(),
+                x: 1,
+                y: 1,
+                color: 0xffcc00,
+                message: vec!["また--きて…".to_string()],
+                sprite: None,
+                frames: None,
+                direction: None,
+                portrait: None,
+                expressions: std::collections::HashMap::new(),
+                scene: None,
+            }),
+        ];
+        canonicalize_events(&mut events);
+        match &events[0] {
+            Event::RpgEvent { commands, .. } => {
+                match &commands[0] {
+                    EventCommand::Dialog { character, text } => {
+                        // text は正準化・character は不変。
+                        assert_eq!(text, &vec!["待って──行かないで⋯".to_string()]);
+                        assert_eq!(character, &Some("A--B".to_string()));
+                    }
+                    other => panic!("expected Dialog, got {other:?}"),
+                }
+                match &commands[1] {
+                    EventCommand::Narration { text } => {
+                        assert_eq!(text, &vec!["そう⋯⋯".to_string()])
+                    }
+                    other => panic!("expected Narration, got {other:?}"),
+                }
+                assert!(matches!(commands[2], EventCommand::Wait { ms: 500 }));
+            }
+            other => panic!("expected RpgEvent, got {other:?}"),
+        }
+        // NpcData.message / name は対象外＝不変。
+        match &events[1] {
+            Event::Npc(npc) => {
+                assert_eq!(npc.message, vec!["また--きて…".to_string()]);
+                assert_eq!(npc.name, "村人--A");
+            }
+            other => panic!("expected Npc, got {other:?}"),
+        }
     }
 
     #[test]
