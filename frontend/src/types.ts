@@ -426,6 +426,13 @@ export interface EventDocument {
    *  null/undefined のときは runtime 既定 1.0（後方互換）。frontmatter `character_y_ratio:` から流す。
    *  dialog_style: novel/adv 非依存（両モードで同じ足元）。 */
   character_y_ratio?: number | null
+  /** 立ち絵の目標表示高さ比率 (#360)。`resting scale = (character_height_ratio × screenHeight) / texture.height`。
+   *  高解像度化した立ち絵（例: 2倍リサイズ 696×1396px）を原寸 scale=1 で置くと巨大化するため、
+   *  「画面高に対する立ち絵高さの割合」(0..1) を指定すると、元画像が 2 倍でも 4 倍でも画面上の
+   *  大きさが不変になるよう自動スケールする（幅はアスペクト比で追従）。runtime で [0.05, 2.0] にクランプ。
+   *  null/undefined のときは原寸 scale=1（後方互換の絶対条件）。frontmatter `character_height_ratio:` から流す。
+   *  対象は show() の立ち絵のみ（Title/Label/Image は非対象）。fit(#294) 指定時は fit を優先する。 */
+  character_height_ratio?: number | null
   /** 立ち絵の新規表示・退場フェード時間 (ms)。
    *  null/undefined のときは runtime 既定 300ms（後方互換）。frontmatter `character_fade_ms:` から流す。 */
   character_fade_ms?: number | null
