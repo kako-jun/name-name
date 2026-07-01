@@ -197,6 +197,14 @@ export interface Document {
      */
     character_y_ratio?: number;
     /**
+     * 立ち絵の目標表示高さ比率 (#360)。sprite 高さ = screenHeight * character_height_ratio。未指定は原寸。
+     * character_y_ratio(#308) と同じ per-game 数値設定で、立ち絵をゲームごとに拡大・縮小して
+     * 画面高さに対する見た目の大きさを揃えるための比率。character_y_ratio が足元位置なのに対し、
+     * こちらは表示サイズ。未指定の既存作品は原寸のままで後方互換（runtime 側でフォールバック）。
+     * dialog_style: novel/adv 非依存。比率なので f64。空・非数値は None 扱い。
+     */
+    character_height_ratio?: number;
+    /**
      * 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms:` から流す。
      * 未指定なら runtime 既定 300ms（後方互換）。作品ごとに ToHeart 式のじわっとした登場へ
      * 調整するための per-game 数値設定。空・非数値は None 扱い。
@@ -348,8 +356,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly emit_markdown: (a: any) => [number, number, number, number];
+    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

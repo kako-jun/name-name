@@ -6,6 +6,7 @@ import {
   normalizePosition,
   alignToAnchorX,
   computeFitScale,
+  computeTargetHeightScale,
 } from './CharacterLayer'
 import { CURSOR_DEFAULTS } from './textEffect'
 import { NovelRenderer } from './NovelRenderer'
@@ -2232,5 +2233,492 @@ describe('CharacterLayer character_y_ratio (#308)', () => {
     const yAdv = yInternals(advLayer).characterY
     expect(yNovel).toBeCloseTo(H * 0.5, 5)
     expect(yNovel).toBe(yAdv)
+  })
+})
+
+// =====================================================================================
+// #360: 立ち絵の目標表示高さ比率（character_height_ratio）。
+//   高解像度化した立ち絵（例: 2倍リサイズ）を原寸で置くと巨大化するため、
+//   目標高さ = ratio * screenH に uniform scale で合わせる純関数 computeTargetHeightScale。
+//   期待値は必ず式（(ratio*screenH)/texH）で書き、screenH は ASPECT_RATIOS から取る（#262 直書き禁止）。
+// =====================================================================================
+describe('computeTargetHeightScale 純粋関数（#360 目標表示高さ）', () => {
+  // 9:16（縦長）の論理画面高さを参照。定数直書きせず ASPECT_RATIOS から取る（#262）。
+  const { height: SH } = ASPECT_RATIOS['9:16']
+
+  it('基本: (ratio*screenH)/texH を返す', () => {
+    const texH = 1396 // 高解像度リサイズ後の立ち絵の縦px（例）
+    const ratio = 0.8
+    expect(computeTargetHeightScale(texH, ratio, SH)).toBeCloseTo((ratio * SH) / texH, 10)
+  })
+
+  // ---- この機能の肝: 高解像度不変性 ----
+  // 同じ ratio・screenH のまま texH を 2 倍にすると scale は半分になり、
+  // 画面上の表示高さ scale*texH = ratio*screenH は texH に依らず一定であること。
+  it('高解像度不変性: texH を 2 倍にすると scale は半分になり、表示高さ scale*texH は不変', () => {
+    const ratio = 0.8
+    const base = 700
+    const s1 = computeTargetHeightScale(base, ratio, SH)
+    const s2 = computeTargetHeightScale(base * 2, ratio, SH)
+    // texH 2 倍 → scale 半分。
+    expect(s2).toBeCloseTo(s1 / 2, 10)
+    // 画面上の表示高さ scale*texH は texH に依らず ratio*screenH で一定。
+    expect(s1 * base).toBeCloseTo(ratio * SH, 6)
+    expect(s2 * (base * 2)).toBeCloseTo(ratio * SH, 6)
+    expect(s1 * base).toBeCloseTo(s2 * (base * 2), 6)
+  })
+
+  // texH の倍率をいくつ変えても、画面上の表示高さは常に ratio*screenH（高解像度化の吸収）。
+  it.each([[1], [2], [4], [8]] as const)(
+    'texH の倍率 %ix によらず表示高さ scale*texH = ratio*screenH で一定',
+    (mult) => {
+      const ratio = 0.6
+      const base = 500
+      const texH = base * mult
+      const s = computeTargetHeightScale(texH, ratio, SH)
+      expect(s * texH).toBeCloseTo(ratio * SH, 6)
+    }
+  )
+
+  it('非有限・非正の texH は原寸 1 に倒す（0 除算・NaN ガード）', () => {
+    expect(computeTargetHeightScale(Number.NaN, 0.8, SH)).toBe(1)
+    expect(computeTargetHeightScale(Number.POSITIVE_INFINITY, 0.8, SH)).toBe(1)
+    expect(computeTargetHeightScale(0, 0.8, SH)).toBe(1)
+    expect(computeTargetHeightScale(-100, 0.8, SH)).toBe(1)
+  })
+
+  it('非有限 ratio は原寸 1 に倒す', () => {
+    expect(computeTargetHeightScale(1000, Number.NaN, SH)).toBe(1)
+    expect(computeTargetHeightScale(1000, Number.POSITIVE_INFINITY, SH)).toBe(1)
+    expect(computeTargetHeightScale(1000, Number.NEGATIVE_INFINITY, SH)).toBe(1)
+  })
+
+  // ---- 非正 ratio ガードの対称化（#360 セルフレビュー nit a）----
+  // texH/screenH は「非有限 or 非正」をガードするのに、以前は ratio が非有限しかガードされず、
+  // 有限で ratio<=0 だと scale=0（不可視）や負（上下反転）を返した。全引数で「不正入力→1」に統一する。
+  it('非正の ratio（0・負値）は原寸 1 に倒す（scale=0 の不可視・負の反転を防ぐ）', () => {
+    expect(computeTargetHeightScale(1000, 0, SH)).toBe(1)
+    expect(computeTargetHeightScale(1000, -0.5, SH)).toBe(1)
+    expect(computeTargetHeightScale(1000, -1, SH)).toBe(1)
+    // 有限で正の最小級（下限クランプ前の生値）は素通し＝式どおり（非正だけを弾く）。
+    expect(computeTargetHeightScale(1000, 0.0001, SH)).toBeCloseTo((0.0001 * SH) / 1000, 12)
+  })
+
+  it('非有限・非正の screenH は原寸 1 に倒す（screen 側ガード）', () => {
+    expect(computeTargetHeightScale(1000, 0.8, Number.NaN)).toBe(1)
+    expect(computeTargetHeightScale(1000, 0.8, Number.POSITIVE_INFINITY)).toBe(1)
+    expect(computeTargetHeightScale(1000, 0.8, 0)).toBe(1)
+    expect(computeTargetHeightScale(1000, 0.8, -SH)).toBe(1)
+  })
+})
+
+// =====================================================================================
+// #360: setCharacterHeightRatio のクランプ/正規化。
+//   null/undefined/非有限 → null（原寸）、有効値は [0.05, 2.0] へクランプ。
+//   保持値は private characterHeightRatio を直読みして縛る（#308 の characterY 直読みと同じ流儀）。
+//   境界は端点±ε の 3 点を縛り、`>=`/`>` と `<=`/`<` の取り違えを狙う。
+// =====================================================================================
+describe('CharacterLayer setCharacterHeightRatio クランプ/正規化（#360）', () => {
+  interface HRatioInternals {
+    characterHeightRatio: number | null
+  }
+  function hInternals(layer: CharacterLayer): HRatioInternals {
+    return layer as unknown as HRatioInternals
+  }
+
+  it('初期値（setter 未呼び出し）は null（原寸・後方互換）', () => {
+    const layer = new CharacterLayer(450, 800)
+    expect(hInternals(layer).characterHeightRatio).toBeNull()
+  })
+
+  // ---- 非有効値（null / undefined / 非有限）は null（原寸挙動）に倒す ----
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['NaN', Number.NaN],
+    ['+Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+  ] as const)('非有効値 %s → characterHeightRatio は null（原寸）', (_label, input) => {
+    const layer = new CharacterLayer(450, 800)
+    // 一度有効値を入れてから無効値で null へ戻ることも確かめる（残留しない）。
+    layer.setCharacterHeightRatio(0.5)
+    expect(hInternals(layer).characterHeightRatio).toBe(0.5)
+    layer.setCharacterHeightRatio(input)
+    expect(hInternals(layer).characterHeightRatio).toBeNull()
+  })
+
+  it('0.01 は下限 0.05 にクランプされる', () => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterHeightRatio(0.01)
+    expect(hInternals(layer).characterHeightRatio).toBeCloseTo(0.05, 10)
+  })
+
+  it('5 は上限 2.0 にクランプされる', () => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterHeightRatio(5)
+    expect(hInternals(layer).characterHeightRatio).toBeCloseTo(2.0, 10)
+  })
+
+  it('0.88 はそのまま透過する（クランプされない）', () => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterHeightRatio(0.88)
+    expect(hInternals(layer).characterHeightRatio).toBeCloseTo(0.88, 10)
+  })
+
+  // ---- 下端境界 3 点（端点±ε）。下限 0.05 の `>=`/`>` 取り違え狙い ----
+  it.each([
+    [0.0499, 0.05], // 下限未満 → 0.05 にクランプ
+    [0.05, 0.05], // 下限ちょうど → 透過
+    [0.0501, 0.0501], // 下限直上 → 透過
+  ] as const)('下端境界 ratio=%f は characterHeightRatio = %f', (input, effective) => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterHeightRatio(input)
+    expect(hInternals(layer).characterHeightRatio).toBeCloseTo(effective, 10)
+  })
+
+  // ---- 上端境界 3 点（端点±ε）。上限 2.0 の `<=`/`<` 取り違え狙い ----
+  it.each([
+    [1.9999, 1.9999], // 上限直下 → 透過
+    [2, 2], // 上限ちょうど → 透過
+    [2.0001, 2], // 上限超過 → 2.0 にクランプ
+  ] as const)('上端境界 ratio=%f は characterHeightRatio = %f', (input, effective) => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterHeightRatio(input)
+    expect(hInternals(layer).characterHeightRatio).toBeCloseTo(effective, 10)
+  })
+})
+
+// =====================================================================================
+// #360: loadTexture の scale 優先順位（fit > character_height_ratio > 原寸1）と後方互換。
+//   立ち絵の実 scale を Assets.load モック + flushPromises で観測する（#294 の fit テストと同流儀）。
+//   render-only（Title/Image）は loadTexture 非経由なので heightRatio の影響を受けないことも縛る。
+//   期待値は computeTargetHeightScale / computeFitScale を参照し、計算結果を直書きしない（#262）。
+// =====================================================================================
+describe('CharacterLayer character_height_ratio loadTexture 優先順位・後方互換（#360）', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  // 縦長 9:16（この機能の主戦場は縦長の高解像度立ち絵）。
+  const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
+
+  // ---- (a) 後方互換: setter 未呼び出し（既定 null）→ 立ち絵は原寸 scale=1 ----
+  it('(a) 後方互換: setCharacterHeightRatio 未呼び出しなら大きい立ち絵でも scale=1', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+
+  // 非有効値を setter に渡しても null（原寸）に倒れ、立ち絵は scale=1（後方互換の絶対条件）。
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['NaN', Number.NaN],
+    ['+Infinity', Number.POSITIVE_INFINITY],
+  ] as const)(
+    '(a) 非有効値 %s を設定しても立ち絵は原寸 scale=1（loadTexture 経由で確認）',
+    async (_label, input) => {
+      vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+      const layer = new CharacterLayer(SW, SH)
+      layer.setCharacterHeightRatio(input)
+      layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+      await flushPromises()
+      const st = imageChars(layer).characters.get('hero')!
+      expect(st.sprite.scale.x).toBe(1)
+      expect(st.sprite.scale.y).toBe(1)
+    }
+  )
+
+  // ---- (b) heightRatio 設定・fit=false → scale = computeTargetHeightScale 相当 ----
+  it('(b) heightRatio 設定・fit=false の立ち絵は computeTargetHeightScale で目標高さへ合わせる', async () => {
+    const texH = SH * 2 // 高解像度立ち絵
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    const ratio = 0.8
+    layer.setCharacterHeightRatio(ratio)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    const expected = computeTargetHeightScale(texH, ratio, SH)
+    expect(st.sprite.scale.x).toBeCloseTo(expected, 10)
+    expect(st.sprite.scale.y).toBeCloseTo(expected, 10)
+    // 目標高さ scale*texH = ratio*screenH（原寸 1 とは明確に異なる）。
+    expect(st.sprite.scale.y * texH).toBeCloseTo(ratio * SH, 6)
+    expect(st.sprite.scale.x).not.toBe(1)
+  })
+
+  // ---- (c) fit=true かつ heightRatio 設定 → computeFitScale が勝つ（heightRatio 無視）----
+  it('(c) fit=true は heightRatio より優先され computeFitScale が勝つ', async () => {
+    const texW = SW * 2
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(texW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    const ratio = 0.8
+    layer.setCharacterHeightRatio(ratio)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, fit: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    const fitScale = computeFitScale(texW, texH, SW, SH)
+    const heightScale = computeTargetHeightScale(texH, ratio, SH)
+    expect(st.sprite.scale.x).toBe(fitScale)
+    expect(st.sprite.scale.y).toBe(fitScale)
+    // fit が勝つので、heightRatio 由来の scale ではない（両者が別値であることを前提に反証）。
+    expect(fitScale).not.toBeCloseTo(heightScale, 6)
+    expect(st.sprite.scale.y).not.toBeCloseTo(heightScale, 6)
+  })
+
+  // ---- (d) render-only 非対象: showImage / showTitle は loadTexture 非経由で heightRatio 無影響 ----
+  it('(d) showImage は heightRatio 設定後も自前 sizing のまま（loadTexture 非経由・scale 不変）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    // 設定を先に入れておく。
+    layer.setCharacterHeightRatio(0.8)
+    // size 未指定の画像は自前 sizing で自然サイズ scale=(1,1)（#274）。heightRatio の影響を受けない。
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    const before = imageChars(layer).characters.get('avatar')!
+    expect(before.sprite.scale.x).toBe(1)
+    expect(before.sprite.scale.y).toBe(1)
+    // 表示後に heightRatio を変えても render-only は即再適用の対象外（scale 不変）。
+    layer.setCharacterHeightRatio(0.3)
+    const after = imageChars(layer).characters.get('avatar')!
+    expect(after.sprite.scale.x).toBe(1)
+    expect(after.sprite.scale.y).toBe(1)
+  })
+
+  it('(d) showTitle は heightRatio 設定後も sprite.scale=(1,1)（render-only・loadTexture 非経由）', () => {
+    const layer = new CharacterLayer(SW, SH)
+    layer.setCharacterHeightRatio(0.8)
+    layer.showTitle('orber', 'sans-serif')
+    const st = imageChars(layer).characters.get('Title')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+    // 表示後に heightRatio を変えても Title の scale は不変（renderOnly は即再適用の対象外）。
+    layer.setCharacterHeightRatio(0.3)
+    const st2 = imageChars(layer).characters.get('Title')!
+    expect(st2.sprite.scale.x).toBe(1)
+    expect(st2.sprite.scale.y).toBe(1)
+  })
+
+  // ---- (e) 即再適用: 表示中の静的立ち絵に setCharacterHeightRatio → sprite.scale 更新・null 復帰で 1 ----
+  it('(e) 表示中の静的立ち絵に setCharacterHeightRatio を呼ぶと sprite.scale が即再適用され、null 復帰で 1 に戻る', async () => {
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    // 設定前は原寸 1（後方互換）。
+    expect(st.sprite.scale.x).toBe(1)
+    // heightRatio を設定 → texture ロード済みなので即再スケール。
+    const ratio = 0.8
+    layer.setCharacterHeightRatio(ratio)
+    const expected = computeTargetHeightScale(texH, ratio, SH)
+    expect(st.sprite.scale.x).toBeCloseTo(expected, 10)
+    expect(st.sprite.scale.y).toBeCloseTo(expected, 10)
+    expect(st.sprite.scale.x).not.toBe(1)
+    // null 復帰 → 原寸 1 へ即戻す。
+    layer.setCharacterHeightRatio(null)
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+
+  // fit の立ち絵は即再適用の対象外（fit が優先されるため heightRatio 変更で scale を触らない）。
+  it('(e) fit=true の立ち絵は setCharacterHeightRatio の即再適用対象外（scale は fit のまま不変）', async () => {
+    const texW = SW * 2
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(texW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, fit: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    const fitScale = computeFitScale(texW, texH, SW, SH)
+    expect(st.sprite.scale.x).toBe(fitScale)
+    // heightRatio を設定しても fit の立ち絵は触らない（即再適用がスキップ）。
+    layer.setCharacterHeightRatio(0.3)
+    expect(st.sprite.scale.x).toBe(fitScale)
+    expect(st.sprite.scale.y).toBe(fitScale)
+  })
+
+  // ---- (e) アニメ進行中の立ち絵は即再適用の対象外（animation !== null 除外・#360 修正3）----
+  //   setCharacterYRatio の F14 と対称。ticker は進めないので animate(dy) は scale を焼き込まず、
+  //   除外が効いていれば scale は据え置きのまま。texture はロード済み（height>0）なので、
+  //   scale が動かない理由が「texture 未ロード」ではなく「アニメ除外」であることを分離できる。
+  it('(e) アニメ進行中（animation 非 null）の立ち絵は setCharacterHeightRatio の即再適用対象外（scale 不変）', async () => {
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')! as unknown as {
+      sprite: { scale: { x: number; y: number } }
+      animation: unknown
+    }
+    // texture ロード済み・heightRatio 未設定なので原寸 1。
+    expect(st.sprite.scale.x).toBe(1)
+    // 非ゼロ duration の animate で animation を進行中にする（dy 移動なので scale は即時変更しない）。
+    layer.animate('hero', { dy: '-100', duration_ms: 500 })
+    expect(st.animation).not.toBeNull()
+    expect(st.sprite.scale.x).toBe(1)
+    // heightRatio を設定してもアニメ中なので即再適用はスキップされ、scale は据え置き。
+    const ratio = 0.3
+    layer.setCharacterHeightRatio(ratio)
+    const wouldBe = computeTargetHeightScale(texH, ratio, SH)
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+    // 除外されなければ wouldBe(≠1) になっていたはず＝アニメ除外が効いている裏取り。
+    expect(wouldBe).not.toBeCloseTo(1, 6)
+    expect(st.sprite.scale.x).not.toBeCloseTo(wouldBe, 6)
+  })
+
+  // ---- (e) 名札の再フィット: 縮んだ立ち絵から名札がはみ出さない（#360 修正1・should）----
+  //   off_right/off_left で登場した名札付き立ち絵は、ライブに heightRatio を変えると sprite が縮む。
+  //   このとき loadTexture と同じ「名札を sprite 幅に収める」処理（fitLabelToSprite）を即再適用ループ
+  //   からも呼び、名札が縮んだ sprite からはみ出さないようにする。
+  //
+  //   jsdom 制約: 実 PixiJS Text の width 測定は canvas 2D コンテキストを要し、jsdom（canvas 未
+  //   インストール）では読むだけで throw する（"Cannot set properties of null (setting 'font')"）。
+  //   さらに実 Sprite.width は texture.orig.width を要し、偽 texture には無い。そこで観測可能にするため
+  //   (1) sprite.texture に orig 付きの偽 texture を与え（Sprite.width = scale.x * orig.width を計算可能に）、
+  //   (2) state.label を width getter が scale 連動する観測可能な偽ラベルに差し替える。
+  //   これで setCharacterHeightRatio の実ループ → fitLabelToSprite の実 fit 演算（配線＋計算）を縛れる。
+  it('(e) 名札付き立ち絵の即再適用で名札が縮んだ sprite 幅に収め直される（#360 修正1・配線＋fit）', async () => {
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    // 中央（名札なし）で出して texture をロード（off_right の実 Text は jsdom で width 測定不可）。
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const raw = imageChars(layer).characters.get('hero')! as unknown as {
+      sprite: { scale: { x: number }; texture: unknown }
+      label?: unknown
+    }
+    // Sprite.width = scale.x * orig.width を計算可能にするため orig 付き texture を与える。
+    raw.sprite.texture = { width: SW, height: texH, orig: { width: SW, height: texH } }
+    // 観測可能な偽ラベル。実 Text の width は canvas 測定に依存するので、scale 連動の getter で模す
+    // （fitLabelToSprite は scale=1 に戻して natural width を測る → 実 Text と同じ意味論）。
+    const naturalW = 10_000 // sprite 幅より確実に広い長い名札
+    const fakeScale = {
+      x: 1,
+      y: 1,
+      set(a: number, b?: number) {
+        this.x = a
+        this.y = b ?? a
+      },
+    }
+    raw.label = {
+      destroyed: false,
+      scale: fakeScale,
+      get width(): number {
+        return naturalW * fakeScale.x
+      },
+    }
+    // heightRatio を設定 → 立ち絵を縮小し、名札も新しい sprite 幅へ収め直す。
+    const ratio = 0.3
+    layer.setCharacterHeightRatio(ratio)
+    const spriteScale = computeTargetHeightScale(texH, ratio, SH)
+    const spriteW = SW * spriteScale
+    // 名札 scale = sprite幅 / 名札自然幅（等比縮小）。
+    expect(fakeScale.x).toBeCloseTo(spriteW / naturalW, 6)
+    expect(fakeScale.x).toBe(fakeScale.y)
+    // 収め直した名札の表示幅は sprite 幅以内（はみ出さない）。
+    expect(naturalW * fakeScale.x).toBeCloseTo(spriteW, 4)
+    expect(naturalW * fakeScale.x).toBeLessThanOrEqual(spriteW + 1e-6)
+  })
+})
+
+// =====================================================================================
+// #360: fitLabelToSprite ヘルパ単体（修正1で loadTexture と即再適用ループが共有する fit 演算）。
+//   実 PixiJS Text/Sprite の width は jsdom で canvas を要して測れないため、演算そのものを
+//   偽オブジェクトで純粋に縛る（規律4: 単一責務ヘルパの契約を直接テスト）。width getter は
+//   scale.x に連動させ、実 Text の「scale=1 に戻して natural width を測る」意味論を再現する。
+// =====================================================================================
+describe('CharacterLayer fitLabelToSprite ヘルパ（#360 修正1）', () => {
+  const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
+
+  interface FakeLabel {
+    destroyed: boolean
+    scale: { x: number; y: number; set: (a: number, b?: number) => void }
+    readonly width: number
+  }
+  function makeFakeLabel(naturalW: number, destroyed = false): FakeLabel {
+    const scale = {
+      x: 1,
+      y: 1,
+      set(a: number, b?: number): void {
+        this.x = a
+        this.y = b ?? a
+      },
+    }
+    return {
+      destroyed,
+      scale,
+      get width(): number {
+        return naturalW * scale.x
+      },
+    }
+  }
+  function callFit(layer: CharacterLayer, sprite: unknown, label: unknown): void {
+    ;(layer as unknown as { fitLabelToSprite: (s: unknown, l: unknown) => void }).fitLabelToSprite(
+      sprite,
+      label
+    )
+  }
+
+  it('名札の natural 幅が sprite 幅を超えたら等比縮小する（scale = sprite幅 / 名札幅）', () => {
+    const layer = new CharacterLayer(SW, SH)
+    const label = makeFakeLabel(200)
+    callFit(layer, { width: 100 }, label)
+    expect(label.scale.x).toBeCloseTo(0.5, 10)
+    expect(label.scale.y).toBeCloseTo(0.5, 10)
+    // 収め直した表示幅は sprite 幅に一致（はみ出さない）。
+    expect(label.width).toBeCloseTo(100, 10)
+  })
+
+  it('名札が sprite 幅に収まっていれば等倍のまま（拡大しない）', () => {
+    const layer = new CharacterLayer(SW, SH)
+    const label = makeFakeLabel(80)
+    callFit(layer, { width: 100 }, label)
+    expect(label.scale.x).toBe(1)
+    expect(label.scale.y).toBe(1)
+  })
+
+  it('前回縮小済み（scale<1）でも一旦 1 に戻してから測り直す（sprite が広がれば等倍へ復帰）', () => {
+    const layer = new CharacterLayer(SW, SH)
+    const label = makeFakeLabel(80)
+    label.scale.set(0.2, 0.2) // 前回の縮小状態を模す
+    // sprite が名札より広い → 1 に戻して測り直し、収まるので等倍。
+    callFit(layer, { width: 100 }, label)
+    expect(label.scale.x).toBe(1)
+  })
+
+  it('label 無し（undefined）は no-op（throw しない）', () => {
+    const layer = new CharacterLayer(SW, SH)
+    expect(() => callFit(layer, { width: 100 }, undefined)).not.toThrow()
+  })
+
+  it('destroy 済み label は no-op（UAF 防止・sprite.width も読まない）', () => {
+    const layer = new CharacterLayer(SW, SH)
+    const label = makeFakeLabel(200, true)
+    // destroyed なら sprite にすら触らない。sprite.width が throw する細工でも安全。
+    const sprite = {
+      get width(): number {
+        throw new Error('should not read sprite.width for destroyed label')
+      },
+    }
+    expect(() => callFit(layer, sprite, label)).not.toThrow()
+    // scale は触られない（縮小されない）。
+    expect(label.scale.x).toBe(1)
   })
 })

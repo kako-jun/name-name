@@ -205,6 +205,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     protagonist: nullIfEmpty(doc.protagonist),
     // 立ち絵足元 Y 比率 (#308)。数値なので ?? null（未指定は runtime 既定 1.0）。
     character_y_ratio: doc.character_y_ratio ?? null,
+    // 立ち絵の目標表示高さ比率 (#360)。数値なので ?? null（未指定は原寸 scale=1）。
+    character_height_ratio: doc.character_height_ratio ?? null,
     character_fade_ms: doc.character_fade_ms ?? null,
     // スキップ/デバッグの per-game 出し分け (#310)。boolean なので ?? null（未指定は下流で既定: skip=true / debug=false）。
     skip_enabled: doc.skip_enabled ?? null,

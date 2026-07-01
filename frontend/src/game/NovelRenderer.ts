@@ -1028,6 +1028,18 @@ export class NovelRenderer {
   }
 
   /**
+   * 立ち絵の目標表示高さ比率を設定する (#360)。
+   * frontmatter `character_height_ratio:` の値を渡す。null/undefined のときは原寸 (scale=1)＝後方互換。
+   *
+   * setCharacterYRatio (#308) と対称に、値の所有権は CharacterLayer 側にあるため renderer は
+   * フィールドを持たず素通しする（renderer 側の再計算に値が要らない）。クランプ・原寸フォールバックは
+   * CharacterLayer.setCharacterHeightRatio が担う。高解像度立ち絵を per-game の目標高さで表示する。
+   */
+  setCharacterHeightRatio(ratio: number | null | undefined): void {
+    this.characterLayer.setCharacterHeightRatio(ratio ?? null)
+  }
+
+  /**
    * 立ち絵の新規表示・退場フェード時間を設定する。
    * frontmatter `character_fade_ms:` の値（ms）を渡す。null/undefined のときは既定 300ms。
    */
