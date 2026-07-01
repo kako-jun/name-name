@@ -5,7 +5,11 @@ const DB_VERSION = 2
 const CONTENT_STORE_NAME = 'scriptContents'
 const DOCUMENT_STORE_NAME = 'scriptDocuments'
 const PATH_INDEX = 'byPathKey'
-export const PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION = 1
+// #340: 本文の表示用ダイグラフ正準化（`--`→`──` / `…`→`⋯`）を parser に追加した。
+// キャッシュ済み EventDocument は parseMarkdown/normalizeEvents を経ずに直接復元されるため
+// （PlayerScreen の getCachedParsedScriptDocument 経路）、旧スキーマ（素の `--`/`…`）を無効化して
+// 再パースさせる。1→2。
+export const PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION = 2
 
 export interface ScriptContentCacheKey {
   projectName: string

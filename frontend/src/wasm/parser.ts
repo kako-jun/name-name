@@ -1,5 +1,6 @@
 import init, { parse_markdown, emit_markdown } from '../../../parser/pkg/name_name_parser.js'
 import type { EventDocument, Event } from '../types'
+import { canonicalizeBodyText } from '../game/textCanonical'
 
 // WASM 本体を JS バンドルに base64 で埋め込んで fetch なしで読み込む。
 // 経緯: corp proxy 配下では `/parser-pkg/*.bin` を直接 URL アクセスすると binary が
@@ -59,7 +60,9 @@ function normalizeEvents(events: Event[]): Event[] {
           character: event.Dialog.character ?? null,
           expression: event.Dialog.expression ?? null,
           position: event.Dialog.position ?? null,
-          text: event.Dialog.text,
+          // 本文の表示用ダイグラフ正準化 (#340)。Rust パーサ側と同じ挙動でここでも掛ける
+          // （wasm が古い / キャッシュ経由等でも素の `--`/`…` を出さないための二段目・#308）。
+          text: event.Dialog.text.map(canonicalizeBodyText),
           // voice_path / font_family は WASM 経由で undefined になるが、
           // frontend の規約に合わせ null に正規化する (#144 / #147)。
           // 空文字も null に倒す (#147 R1 N5)。
@@ -74,7 +77,8 @@ function normalizeEvents(events: Event[]): Event[] {
     if ('Narration' in event) {
       return {
         Narration: {
-          text: event.Narration.text,
+          // 本文の表示用ダイグラフ正準化 (#340)。Dialog と同じく二段目として掛ける。
+          text: event.Narration.text.map(canonicalizeBodyText),
           voice_path: nullIfEmpty(event.Narration.voice_path),
           font_family: nullIfEmpty(event.Narration.font_family),
         },
