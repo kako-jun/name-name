@@ -58,18 +58,33 @@ pub fn canonicalize_body_line(line: &str) -> String {
     out
 }
 
-/// Dialog / Narration の本文 text にだけ正準化を適用する再帰パス (#340)。
+/// 読ませる表示テキストにだけ正準化を適用する再帰パス (#340)。
 ///
-/// Condition の入れ子イベントにも再帰する（JS 側 `normalizeEvents` と対象範囲を揃える）。
-/// マスタ定義・ディレクティブ引数・話者名・アセットパス・frontmatter には触れない
-/// （それらは Dialog/Narration の text 以外のフィールド or 別イベントに載る）。
+/// 対象は「画面に本文的に出るテキスト」: Dialog / Narration の本文（複数行）、Choice の各
+/// 選択肢ボタン本文、TitleShow / Label の表示文字列。Condition の入れ子イベントにも再帰する
+/// （JS 側 `normalizeEvents` と対象範囲を揃える）。
+///
+/// 対象外（不変）: RPG マスタ（Monster/Item/Spell/PartyMember の name、Npc の name/message）・
+/// 話者名・ディレクティブ引数・アセットパス・ID・frontmatter・見出し。これらは以下の match で
+/// 分岐を持たず `_ => {}` に落ちるため、一切触れない（マスタ／ドメイン分離）。
 pub fn canonicalize_events(events: &mut [Event]) {
     for event in events.iter_mut() {
         match event {
+            // 本文（会話文・地の文）: 複数行 Vec<String>。
             Event::Dialog { text, .. } | Event::Narration { text, .. } => {
                 for line in text.iter_mut() {
                     *line = canonicalize_body_line(line);
                 }
+            }
+            // 選択肢の各ボタン本文（画面に出る本文的テキスト・#340）。
+            Event::Choice { options } => {
+                for option in options.iter_mut() {
+                    option.text = canonicalize_body_line(&option.text);
+                }
+            }
+            // タイトルカード / ラベルの表示文字列（単一 String・#340）。
+            Event::TitleShow { text, .. } | Event::Label { text, .. } => {
+                *text = canonicalize_body_line(text);
             }
             Event::Condition { events: inner, .. } => {
                 canonicalize_events(inner);
@@ -133,6 +148,55 @@ mod tests {
             canonicalize_body_line("そうか--でも…もういい"),
             "そうか──でも⋯もういい"
         );
+    }
+
+    #[test]
+    fn choice_title_label_canonicalized_rpg_master_unchanged() {
+        // 実 parse を通して、読ませる表示テキスト（Choice/TitleShow/Label）は正準化され、
+        // RPG マスタ（Monster の name/id）は不変であることを縛る (#340)。
+        let md = concat!(
+            "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n\n",
+            "## data: マスター\n\n",
+            "[モンスター boss--1]\n名前: 王--様\nHP: 10\nATK: 3\nDEF: 1\nAGI: 2\nEXP: 2\nGOLD: 1\n[/モンスター]\n\n",
+            "## s1: シーン\n\n",
+            "[タイトル: orber--now]\n\n",
+            "[ラベル: kako--jun, 位置=中]\n\n",
+            "[選択]\n- 行く--戻る → a\n- そう…だね → b\n[/選択]\n",
+        );
+        let doc = crate::parser::parse(md);
+        let mut monster_name = None;
+        let mut monster_id = None;
+        let mut title_text = None;
+        let mut label_text = None;
+        let mut choice_texts: Vec<String> = Vec::new();
+        for scene in &doc.chapters[0].scenes {
+            for ev in &scene.events {
+                match ev {
+                    Event::Monster(m) => {
+                        monster_name = Some(m.name.clone());
+                        monster_id = Some(m.id.clone());
+                    }
+                    Event::TitleShow { text, .. } => title_text = Some(text.clone()),
+                    Event::Label { text, .. } => label_text = Some(text.clone()),
+                    Event::Choice { options } => {
+                        for o in options {
+                            choice_texts.push(o.text.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // 表示テキストは正準化される。
+        assert_eq!(title_text.as_deref(), Some("orber──now"));
+        assert_eq!(label_text.as_deref(), Some("kako──jun"));
+        assert_eq!(
+            choice_texts,
+            vec!["行く──戻る".to_string(), "そう⋯だね".to_string()]
+        );
+        // RPG マスタ名・ID は不変（`_ => {}` に落ちるため触らない）。
+        assert_eq!(monster_name.as_deref(), Some("王--様"));
+        assert_eq!(monster_id.as_deref(), Some("boss--1"));
     }
 
     #[test]

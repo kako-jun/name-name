@@ -84,6 +84,36 @@ function normalizeEvents(events: Event[]): Event[] {
         },
       }
     }
+    if ('Choice' in event) {
+      // 選択肢ボタン本文も表示テキストなので正準化する (#340)。
+      // text 以外（jump 等）は保持する（スプレッド）。
+      return {
+        Choice: {
+          options: event.Choice.options.map((option) => ({
+            ...option,
+            text: canonicalizeBodyText(option.text),
+          })),
+        },
+      }
+    }
+    if ('TitleShow' in event) {
+      // タイトルカードの表示文字列を正準化する (#340)。他フィールド（色・位置・サイズ等）は保持。
+      return {
+        TitleShow: {
+          ...event.TitleShow,
+          text: canonicalizeBodyText(event.TitleShow.text),
+        },
+      }
+    }
+    if ('Label' in event) {
+      // ラベルの表示文字列を正準化する (#340)。他フィールド（色・位置・id 等）は保持。
+      return {
+        Label: {
+          ...event.Label,
+          text: canonicalizeBodyText(event.Label.text),
+        },
+      }
+    }
     if ('Background' in event) {
       // Rust 側の Option<u32> / Option<f32> は WASM 経由で undefined になるため、
       // frontend の規約（types.ts）に合わせて null に正規化する。

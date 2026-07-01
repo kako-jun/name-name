@@ -81,3 +81,75 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
     expect(doc.debug_enabled).toBeNull()
   })
 })
+
+describe('parseMarkdown + normalizeEvents: 表示テキストの正準化 (#340)', () => {
+  // 実 parse（Rust wasm）→ normalizeEvents（JS 二段目）を通し、読ませる表示テキスト
+  // （Dialog/Narration/Choice/TitleShow/Label）が中央字へ正準化されること、RPG マスタ名は
+  // 不変であることを縛る。#308 の二段漏れ（片側だけ直して素の値が出る）を恒久的に防ぐ。
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## data: マスター',
+    '',
+    '[モンスター boss--1]',
+    '名前: 王--様',
+    'HP: 10',
+    'ATK: 3',
+    'DEF: 1',
+    'AGI: 2',
+    'EXP: 2',
+    'GOLD: 1',
+    '[/モンスター]',
+    '',
+    '## s1: シーン',
+    '',
+    '[タイトル: orber--now]',
+    '',
+    '[ラベル: kako--jun, 位置=中]',
+    '',
+    '**A**:',
+    '待って--行かないで…',
+    '',
+    '> 風が吹いた--そして…',
+    '',
+    '[選択]',
+    '- 行く--戻る → a',
+    '- そう…だね → b',
+    '[/選択]',
+    '',
+  ].join('\n')
+
+  const collectEvents = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
+
+  it('Dialog / Narration / Choice / TitleShow / Label を中央字に正準化する', async () => {
+    const events = collectEvents(await parseMarkdown(markdown))
+    const dialog = events.find((e) => typeof e === 'object' && 'Dialog' in e)
+    const narration = events.find((e) => typeof e === 'object' && 'Narration' in e)
+    const choice = events.find((e) => typeof e === 'object' && 'Choice' in e)
+    const title = events.find((e) => typeof e === 'object' && 'TitleShow' in e)
+    const label = events.find((e) => typeof e === 'object' && 'Label' in e)
+
+    expect(dialog && 'Dialog' in dialog && dialog.Dialog.text).toEqual(['待って──行かないで⋯'])
+    expect(narration && 'Narration' in narration && narration.Narration.text).toEqual([
+      '風が吹いた──そして⋯',
+    ])
+    expect(choice && 'Choice' in choice && choice.Choice.options.map((o) => o.text)).toEqual([
+      '行く──戻る',
+      'そう⋯だね',
+    ])
+    expect(title && 'TitleShow' in title && title.TitleShow.text).toBe('orber──now')
+    expect(label && 'Label' in label && label.Label.text).toBe('kako──jun')
+  })
+
+  it('RPG マスタ名（Monster の name/id）は不変', async () => {
+    const events = collectEvents(await parseMarkdown(markdown))
+    const monster = events.find((e) => typeof e === 'object' && 'Monster' in e)
+    expect(monster && 'Monster' in monster && monster.Monster.name).toBe('王--様')
+    expect(monster && 'Monster' in monster && monster.Monster.id).toBe('boss--1')
+  })
+})
