@@ -146,6 +146,38 @@ export function computeFitScale(
 }
 
 /**
+ * per-game 目標表示高さ (#360) の立ち絵スケールを計算する純粋関数。
+ *
+ * frontmatter `character_height_ratio`（画面高さに対する割合 0..1）を指定した立ち絵に適用する。
+ * 高解像度化した立ち絵（例: 2倍リサイズ 696×1396px）を原寸 (scale=1) で置くと論理画面
+ * (`screenH`) に対して巨大化するため、`目標高さ = character_height_ratio × screenH` を
+ * テクスチャ高さで割った uniform scale を返す（幅はアスペクト比で追従）。元画像が 2 倍でも
+ * 4 倍でも画面上の大きさは不変になる。
+ *
+ * `fit`（#294）と違い「大きい時だけ縮める」ではなく、常に目標高さへ合わせる（拡大もする）。
+ * 呼び出し側で [0.05, 2.0] にクランプ済みの ratio を渡す想定だが、関数内でも 0 除算・NaN を
+ * ガードする。不正（非有限・非正の texH/screenH、非有限 ratio）は原寸 (1) に倒す。
+ *
+ * テストが定数計算を直書きして陳腐化しないよう export する（規律4 / #262 の教訓）。
+ */
+export function computeTargetHeightScale(
+  texH: number,
+  targetHeightRatio: number,
+  screenH: number
+): number {
+  if (
+    !Number.isFinite(texH) ||
+    texH <= 0 ||
+    !Number.isFinite(screenH) ||
+    screenH <= 0 ||
+    !Number.isFinite(targetHeightRatio)
+  ) {
+    return 1
+  }
+  return (targetHeightRatio * screenH) / texH
+}
+
+/**
  * ラベルの `揃え` / `align`（正規化済み left/center/right）を Pixi の anchor.x に写す (#275)。
  *
  * 左=0 / 中央=0.5 / 右=1。parser が日本語/英語を `left`/`center`/`right` に正規化済みなので
@@ -185,6 +217,13 @@ const CHARACTER_Y_RATIO_MIN = 0
 /** character_y_ratio の許容上限 (#308)。1 画面分下まで（足が下端の 1 画面下＝完全に画面外）。
  *  靴を切る用途（>1.0）は許すが、暴走値で立ち絵を遥か下に飛ばさないよう上限を設ける。 */
 const CHARACTER_Y_RATIO_MAX = 2
+
+/** character_height_ratio の許容下限 (#360)。0 だと立ち絵が消える（scale=0）ため、
+ *  極小でも視認できる下限を設ける（画面高の 5%）。 */
+const CHARACTER_HEIGHT_RATIO_MIN = 0.05
+/** character_height_ratio の許容上限 (#360)。画面高の 2 倍まで（拡大用途を許容しつつ暴走を防ぐ）。
+ *  character_y_ratio (#308) と同じく安全側にクランプする。 */
+const CHARACTER_HEIGHT_RATIO_MAX = 2
 
 interface CharacterState {
   sprite: Sprite
@@ -403,6 +442,11 @@ export class CharacterLayer extends Container {
   /** 足元 Y 比率 (#308)。既定は CHARACTER_Y_RATIO（1.0）。frontmatter `character_y_ratio` 由来の
    *  per-game 値を setCharacterYRatio で受けて上書きする。未指定なら 1.0 で後方互換。 */
   private characterYRatio: number = CHARACTER_Y_RATIO
+  /** 立ち絵の目標表示高さ比率 (#360)。null = 未設定＝原寸 (scale=1) で後方互換。
+   *  frontmatter `character_height_ratio` 由来の per-game 値を setCharacterHeightRatio で受けて
+   *  [CHARACTER_HEIGHT_RATIO_MIN, MAX] にクランプして保持する。設定時は loadTexture が
+   *  computeTargetHeightScale で目標高さへ合わせる（fit=true の立ち絵は #294 優先で対象外）。 */
+  private characterHeightRatio: number | null = null
   /** 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms` 由来。 */
   private characterFadeMs: number = DEFAULT_FADE_MS
   /** auto-scale 計算のために screenWidth / screenHeight を保持 */
@@ -462,6 +506,37 @@ export class CharacterLayer extends Container {
       if (state.animation === null && state.poseNudge === null) {
         state.sprite.y = this.characterY
       }
+    }
+  }
+
+  /**
+   * 立ち絵の目標表示高さ比率を per-game 値で上書きする (#360)。
+   * frontmatter `character_height_ratio:` の値を渡す。null/undefined/非有限は null（＝原寸 scale=1・後方互換）、
+   * 有効値は [CHARACTER_HEIGHT_RATIO_MIN, CHARACTER_HEIGHT_RATIO_MAX] = [0.05, 2] へクランプして保持する。
+   *
+   * scale の実適用は loadTexture が担う（優先順位: fit(#294) > height_ratio > 原寸1）。ここで保持した
+   * 値は次の show / 表情変更 / 2コマ切替の texture ロード時に反映される。
+   *
+   * setCharacterYRatio (#308) と対称に、既に表示中で位置アニメが走っておらず fit でない静的な
+   * 立ち絵は、texture がロード済み（height>0）なら新しい target-height scale を即再適用する
+   * （後から比率が変わっても破綻させない）。アニメ中・fit・render-only（Title/Label/Image）の
+   * sprite は触らない（中間状態の焼き込み回避 / render-only は各自の sizing のまま #274）。
+   */
+  setCharacterHeightRatio(ratio: number | null | undefined): void {
+    const next =
+      ratio == null || !Number.isFinite(ratio)
+        ? null
+        : Math.min(CHARACTER_HEIGHT_RATIO_MAX, Math.max(CHARACTER_HEIGHT_RATIO_MIN, ratio))
+    this.characterHeightRatio = next
+    for (const state of this.characters.values()) {
+      // render-only（Title/Label/Image #274）と fit（#294）・アニメ中の sprite は対象外。
+      if (state.renderOnly || state.fit || state.animation !== null) continue
+      const texture = state.sprite.texture
+      // texture 未ロード（height<=0）なら次の loadTexture に委ねる（ここでは触らない）。
+      if (!texture || texture.height <= 0) continue
+      const scale =
+        next === null ? 1 : computeTargetHeightScale(texture.height, next, this.screenHeight)
+      state.sprite.scale.set(scale)
     }
   }
 
@@ -2216,9 +2291,30 @@ export class CharacterLayer extends Container {
           // 例外: 脚本の話者行に `フィット` / `fit` を書いた立ち絵だけ (#294)、旧 fit-down を
           // 明示適用する（論理画面より大きいときだけ画面内に収める・小さい時は原寸）。
           // サイズや位置では自動分岐しない。novel/adv でも分けない（fit フラグだけが分岐の根拠）。
-          const scale = fit
-            ? computeFitScale(texture.width, texture.height, this.screenWidth, this.screenHeight)
-            : 1
+          //
+          // 優先順位 (#360): per-line フィット(fit=true, #294) > per-game character_height_ratio
+          //   > 既定 原寸(1)。fit のときは従来通り computeFitScale。fit=false で height ratio が
+          //   設定済みなら computeTargetHeightScale で目標表示高さへ合わせる（高解像度立ち絵の
+          //   巨大化を per-game の目標高さで吸収）。どちらも無ければ原寸 1（後方互換の絶対条件）。
+          // ※ loadTexture は show() の立ち絵専用。render-only（Title/Label/Image）は通らないので
+          //   height ratio は自動的に立ち絵のみへ効く。
+          let scale: number
+          if (fit) {
+            scale = computeFitScale(
+              texture.width,
+              texture.height,
+              this.screenWidth,
+              this.screenHeight
+            )
+          } else if (this.characterHeightRatio !== null) {
+            scale = computeTargetHeightScale(
+              texture.height,
+              this.characterHeightRatio,
+              this.screenHeight
+            )
+          } else {
+            scale = 1
+          }
           sprite.scale.set(scale)
           // ラベルを車の幅に収める。
           // - natural width が車幅を超えたら縮小、収まっていれば等倍のまま (大きくしない)
