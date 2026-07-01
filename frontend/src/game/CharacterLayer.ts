@@ -771,9 +771,18 @@ export class CharacterLayer extends Container {
       collidersGone = true
       startEntrance()
     })
-    if (colliderCount === 0 || instant) {
+    if (instant) {
+      // instant 表示（skip / 復元）は texture を待たず即出す。
       collidersGone = true
       attachEntrance()
+    } else if (colliderCount === 0) {
+      // 退場対象がいない新規立ち絵でも、フェードインは texture load 完了後に始める (#17)。
+      // 直接 attachEntrance すると、texture 読込が fade より遅い初回（コールドキャッシュ）で
+      // alpha が 1 に達し切ってから texture が現れ、フェードが見えず突然出る（例: 本編入口で
+      // 初出の司会。ハブに居らず退場衝突が無いため colliderCount===0 でこの経路を踏む）。
+      // colliderCount>0 の経路（上の evict コールバック）と同じく startEntrance で texture-gate する。
+      collidersGone = true
+      startEntrance()
     }
     // 新規立ち絵: texture load 完了/失敗で onReady を発火（#293）。これでテキスト reveal が
     // 立ち絵の用意完了に揃う。
