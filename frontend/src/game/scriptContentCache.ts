@@ -7,9 +7,11 @@ const DOCUMENT_STORE_NAME = 'scriptDocuments'
 const PATH_INDEX = 'byPathKey'
 // #340: 本文の表示用ダイグラフ正準化（`--`→`──` / `…`→`⋯`）を parser に追加した。
 // キャッシュ済み EventDocument は parseMarkdown/normalizeEvents を経ずに直接復元されるため
-// （PlayerScreen の getCachedParsedScriptDocument 経路）、旧スキーマ（素の `--`/`…`）を無効化して
-// 再パースさせる。1→2。
-export const PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION = 2
+// （PlayerScreen の getCachedParsedScriptDocument 経路）、parse 出力（正規形）が変わるたびに
+// schema を上げて旧キャッシュを別キーに孤立させ再パースを強制する。
+// 履歴: 1→2 = Dialog/Narration/Choice/TitleShow/Label の正準化導入。
+//       2→3 = RpgEvent（[イベント]）内会話（EventCommand の Dialog/Narration）の正準化を追加（#340 完全形）。
+export const PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION = 3
 
 export interface ScriptContentCacheKey {
   projectName: string

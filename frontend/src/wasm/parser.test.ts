@@ -248,7 +248,7 @@ describe('parseMarkdown RpgEvent 内会話の正準化スコープ end-to-end (#
     '',
     '## m: マップ',
     '',
-    '[NPC 村人 @1,1 色=#ffcc00]',
+    '[NPC 村人--A @1,1 色=#ffcc00]',
     'また--きて…', // 対象外: NpcData.message は不変
     '[/NPC]',
     '',
@@ -281,6 +281,7 @@ describe('parseMarkdown RpgEvent 内会話の正準化スコープ end-to-end (#
     const events = collectEvents(await parseMarkdown(markdown))
     const npc = events.find((e) => typeof e === 'object' && 'Npc' in e)
     expect(npc && 'Npc' in npc && npc.Npc.message).toEqual(['また--きて…'])
-    expect(npc && 'Npc' in npc && npc.Npc.name).toBe('村人')
+    // NPC 名も対象外＝`--` を含んでも正準化されず不変（Rust 側と対称）。
+    expect(npc && 'Npc' in npc && npc.Npc.name).toBe('村人--A')
   })
 })

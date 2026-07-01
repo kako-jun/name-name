@@ -5,8 +5,11 @@
 //! 大変なため。自動置換してよいのは正当な literal 表示用途が存在しない書き方だけ（`--` / `…`）で、
 //! `？`/`！`/空白/単独ハイフンは literal 用途があるので触らない（原稿側で正しく書く）。
 //!
-//! スコープ: Dialog / Narration の本文 text 行にだけ掛ける（`canonicalize_events`）。
-//! frontmatter の `---`、見出し `##`、ディレクティブ引数・ID・アセットパス・話者名には触れない。
+//! スコープ（`canonicalize_events`）: 読ませる表示テキストにだけ掛ける＝Dialog / Narration の
+//! 本文、Choice.options[].text、TitleShow.text、Label.text、RpgEvent（`[イベント]`）内会話
+//! （EventCommand の Dialog / Narration の text）。対象外＝話者名（Dialog.character / RpgEvent の
+//! 話者）、`NpcData.message` / `NpcData.name`、マスタ名（Monster / Item / Spell / PartyMember の
+//! name）、frontmatter の `---`、見出し `##`、ディレクティブ引数・ID・アセットパスには触れない。
 
 use crate::models::{Event, EventCommand};
 

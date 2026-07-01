@@ -6,9 +6,11 @@
  * 大変なため。自動置換してよいのは正当な literal 表示用途が存在しない書き方だけ（`--` / `…`）で、
  * `？`/`！`/空白/単独ハイフンは literal 用途があるので触らない（原稿側で正しく書く）。
  *
- * スコープ: Dialog / Narration の本文 text 行にだけ掛ける（`frontend/src/wasm/parser.ts` の
- * normalizeEvents が適用）。frontmatter の `---`、見出し `##`、ディレクティブ引数・ID・
- * アセットパス・話者名には触れない。Rust 側 `canonicalize_body_line`
+ * `canonicalizeBodyText` は「表示テキスト 1 行」に対する行単位の純変換。どの行に掛けるか
+ * （＝対象スコープ）は呼び出し側 `frontend/src/wasm/parser.ts` の normalizeEvents が決める:
+ * Dialog / Narration の本文、Choice.options[].text、TitleShow.text、Label.text、RpgEvent 内会話
+ * （EventCommand の Dialog / Narration の text）。対象外＝話者名・NpcData.message/name・マスタ名・
+ * frontmatter・見出し `##`・ディレクティブ引数・ID・アセットパス。Rust 側 `canonicalize_body_line`
  * （parser/src/canonicalize.rs）と同一挙動で、#308 の二段漏れ（片側だけ直して素の値が出る）を防ぐ。
  */
 
