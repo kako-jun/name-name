@@ -190,16 +190,29 @@ async function handlePutContents(req, res, owner, repo, relPath) {
 // scriptsDir を使う別リポで巨大ディレクトリを踏まないための防御。
 const TREE_EXCLUDED_DIRS = new Set([".git", "node_modules"]);
 
+// 呼び出し元 (`worker/src/scripts.ts` の `listScriptsFromTree` / `pickMdFiles`)
+// が実際に使うのは `.md` かつ `size <= 64 * 1024` のファイルだけ、という
+// フィルタ条件を先取りして無駄な readFile を避けるための早期判定用の閾値。
+// フィルタ条件そのものの正本は呼び出し元にあり、ここではそれと同じ値を
+// 重複させて「どうせ後で捨てられるなら読まない」という I/O 最適化にだけ
+// 使う（walkTree 自身がフィルタするわけではない。詳細は下の docstring）。
+const MD_SHA_MAX_SIZE_BYTES = 64 * 1024;
+
 /**
  * リポのワーキングディレクトリを再帰的に歩き、GitHub Git Trees API
  * (`recursive=1`) のレスポンス形状に沿ったエントリ配列を組み立てる。
  *
  * パフォーマンス最重要: theo-hayami の作業ツリーは docs 配下の参考画像等を
  * 含めて 1GB 超ある。呼び出し元 (`listScriptsFromTree`) が実際に使うのは
- * `.md` かつ 64KB 以下のファイルだけなので、blob sha を計算するために
- * 全文を読み込むのは `.md` ファイルだけに限定する。それ以外は stat のみで
- * サイズを取り、sha は空文字列を返す（呼び出し元は .md 以外を filter で
- * 先に弾くため sha を読まない）。
+ * `.md` かつ `MD_SHA_MAX_SIZE_BYTES` 以下のファイルだけなので、blob sha を
+ * 計算するために全文を読み込むのは、その条件を満たす `.md` ファイルだけに
+ * 限定する。それ以外（非 `.md`、または `.md` でも閾値超のファイル）は
+ * stat のみでサイズを取り、sha は空文字列を返す（呼び出し元はどちらの
+ * ケースも filter で弾くため sha を読まない）。
+ *
+ * 注意: これは walkTree 自体が呼び出し元のフィルタ条件を代行している
+ * わけではない。エントリ自体は（サイズに関わらず）常に一覧に含める。
+ * あくまで「どうせ後で捨てられる readFile」を避けるための早期判定。
  *
  * HTTP ハンドラ本体から分離してあるのは、テストがこの関数を直接呼んで
  * 走査ロジックだけを検証できるようにするため。export しているのも同じ理由
@@ -226,7 +239,7 @@ export async function walkTree(repoDir) {
       const cs = await stat(childPath);
 
       let sha = "";
-      if (dirent.name.toLowerCase().endsWith(".md")) {
+      if (dirent.name.toLowerCase().endsWith(".md") && cs.size <= MD_SHA_MAX_SIZE_BYTES) {
         try {
           sha = gitBlobSha(await readFile(childPath));
         } catch {

@@ -357,8 +357,33 @@ function allocPort() {
 }
 
 /**
+ * 子プロセスに SIGTERM を送り、実際に `exit` イベントが発火するまで待つ。
+ * `timeoutMs` 以内に exit しなければ SIGKILL にエスカレーションする。
+ * kill シグナル送信だけで待たずに戻ると、負荷の高い CI で次のテストの
+ * ポート確保や後片付けと競合してプロセスが残留し得るため (should #373)。
+ */
+function killAndWaitForExit(child, { timeoutMs = 3000 } = {}) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(escalate);
+      resolve();
+    };
+    child.once("exit", finish);
+    const escalate = setTimeout(() => {
+      if (settled) return;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    child.kill("SIGTERM");
+  });
+}
+
+/**
  * `node scripts/local-fs-proxy.mjs` を子プロセスとして起動し、listen ログを
- * 確認してから baseUrl を返す。t.after で確実に kill する。
+ * 確認してから baseUrl を返す。t.after で確実に kill し、exit まで待つ。
  */
 function startProxy(t, { reposBase, port = allocPort() }) {
   return new Promise((resolve, reject) => {
@@ -395,9 +420,7 @@ function startProxy(t, { reposBase, port = allocPort() }) {
       reject(new Error(`local-fs-proxy exited early (code=${code}): ${stderrBuf}`));
     });
 
-    t.after(async () => {
-      if (!child.killed) child.kill("SIGTERM");
-    });
+    t.after(() => killAndWaitForExit(child));
   });
 }
 
