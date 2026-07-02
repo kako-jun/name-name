@@ -663,10 +663,12 @@ export function splitIntoSentences(text: string): string[] {
     const ch = chars[i]
     if (isMidlineRule(ch)) {
       if (precededByTerminator(i)) {
-        // 先頭ダッシュ (#374): 直前の文末記号までを 1 単位として確定し（current は文末記号分岐で
-        // 既に flush 済み。句点直後の空白だけが溜まっていればここで捨てる）、`──` は次の単位の
-        // 先頭に置く。ここでは停止せず、次の停止（文末記号 or 文中 `──`）まで累積する。
-        flush()
+        // 先頭ダッシュ (#374): 直前の文末記号は文末記号分岐で既に flush 済みなので、この `──` は
+        // 次の単位の先頭に置く。ここで flush はしない — 文末記号と `──` の間に溜まった空白
+        // （`。 ──` / `？ ──`、半角・全角 U+3000 とも）は、その空白のみの current をそのまま次単位の
+        // **先頭空白**として温存する（`flush()` で捨てると #362/theo-hayami#12 の `？`/`！` 直後
+        // スペース保護を破る）。current は常に空白のみ or 空なので、非空白の本文が漏れることはない。
+        // ここでは停止せず、次の停止（文末記号 or 文中 `──`）まで累積する。
         current += ch
         i = absorbRuleRun(i)
       } else {
