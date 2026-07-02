@@ -1330,6 +1330,68 @@ mod tests {
         );
     }
 
+    #[test]
+    fn character_height_ratios_emit_sorts_by_utf8_byte_order_including_japanese_keys() {
+        // #364: 3 キー以上、日本語キー混在でも UTF-8 バイト順で決定的にソートされること。
+        // ASCII "theo"(0x74..) < ひらがな "あ"(E3 81 82) < 漢字 "長老"(E9 95 B7) の順。
+        // 入力の記述順はあえて期待ソート順と違えて、単なる echo でなく実ソートを縛る。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\ncharacter_height_ratios: 長老:0.5,theo:0.7,あ:0.6\n---\n\n## 1-1: シーン\n\nナレ。\n";
+        let doc = crate::parser::parse(input);
+        assert_eq!(doc.character_height_ratios.len(), 3);
+        let emitted = emit(&doc);
+        assert!(
+            emitted.contains("character_height_ratios: theo:0.7,あ:0.6,長老:0.5"),
+            "emit should sort keys by UTF-8 byte order (ASCII < あ < 長老): {emitted}"
+        );
+    }
+
+    #[test]
+    fn character_height_ratios_emit_omits_singular_line_when_only_plural_set() {
+        // #364: character_height_ratio（単数形）が None・character_height_ratios（複数形）のみ
+        // 設定されているとき、単数形の行は出さず複数形の行だけを出す。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\ncharacter_height_ratios: theo:0.65\n---\n\n## 1-1: シーン\n\nナレ。\n";
+        let doc = crate::parser::parse(input);
+        assert_eq!(doc.character_height_ratio, None);
+        let emitted = emit(&doc);
+        assert!(
+            !emitted.contains("character_height_ratio: "),
+            "singular line must not appear when unset: {emitted}"
+        );
+        assert!(emitted.contains("character_height_ratios: theo:0.65"));
+    }
+
+    #[test]
+    fn character_height_ratios_emit_omits_line_when_map_empty() {
+        // #364: character_height_ratios が空マップのとき frontmatter に行を出さない。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+        let doc = crate::parser::parse(input);
+        assert!(doc.character_height_ratios.is_empty());
+        let emitted = emit(&doc);
+        assert!(
+            !emitted.contains("character_height_ratios:"),
+            "empty map must not emit a line: {emitted}"
+        );
+    }
+
+    #[test]
+    fn character_height_ratios_emit_integer_value_formats_without_decimal_and_round_trips() {
+        // #364: 整数値 (1.0) は "theo:1"（小数点なし）で emit され、round-trip でも 1.0 に戻ること。
+        // Rust の f64 Display は 1.0 → "1"（character_y_ratio の整数値 emit テストと同じ規約）。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\ncharacter_height_ratios: theo:1\n---\n\n## 1-1: シーン\n\nナレ。\n";
+        let doc1 = crate::parser::parse(input);
+        assert_eq!(doc1.character_height_ratios.get("theo"), Some(&1.0));
+        let emitted = emit(&doc1);
+        assert!(
+            emitted.contains("character_height_ratios: theo:1"),
+            "whole-number ratio should emit without decimal point: {emitted}"
+        );
+        let doc2 = crate::parser::parse(&emitted);
+        assert_eq!(
+            doc1, doc2,
+            "integer-valued character_height_ratios round-trip should be stable"
+        );
+    }
+
     fn make_doc_with_event(event: Event) -> Document {
         Document {
             engine: "name-name".to_string(),

@@ -4148,4 +4148,126 @@ title: "test"
         let d4 = parse(&emitted3);
         assert_eq!(d3, d4, "plain-text label round-trip should be stable");
     }
+
+    // ===== #364: character_height_ratios（キャラごとの立ち絵目標表示高さ比率 override）=====
+    // expressions= と同じ「カンマ区切り key:value」書式。不正な値・空key・空valueはスキップする。
+    fn height_ratios_doc(fm_extra: &str) -> String {
+        format!(
+            "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n{fm_extra}---\n\n## 1-1: シーン\n\nナレ。\n"
+        )
+    }
+
+    #[test]
+    fn character_height_ratios_parses_multiple_keys() {
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratios: theo:0.65,hue:0.68,aristo:0.68\n",
+        ));
+        assert_eq!(doc.character_height_ratios.get("theo"), Some(&0.65));
+        assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
+        assert_eq!(doc.character_height_ratios.get("aristo"), Some(&0.68));
+        assert_eq!(doc.character_height_ratios.len(), 3);
+    }
+
+    #[test]
+    fn character_height_ratios_absent_field_is_empty() {
+        let doc = parse(&height_ratios_doc(""));
+        assert!(doc.character_height_ratios.is_empty());
+    }
+
+    #[test]
+    fn character_height_ratios_empty_value_is_empty() {
+        let doc = parse(&height_ratios_doc("character_height_ratios:\n"));
+        assert!(doc.character_height_ratios.is_empty());
+    }
+
+    #[test]
+    fn character_height_ratios_empty_key_is_skipped() {
+        // ":0.65" は key が空文字なので捨てる。hue だけが残る。
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratios: :0.65,hue:0.68\n",
+        ));
+        assert_eq!(doc.character_height_ratios.len(), 1);
+        assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
+    }
+
+    #[test]
+    fn character_height_ratios_empty_value_pair_is_skipped() {
+        // "theo:" は value が空文字で f64 parse に失敗するので捨てる。
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratios: theo:,hue:0.68\n",
+        ));
+        assert!(!doc.character_height_ratios.contains_key("theo"));
+        assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
+        assert_eq!(doc.character_height_ratios.len(), 1);
+    }
+
+    #[test]
+    fn character_height_ratios_pair_without_colon_is_skipped_without_panic() {
+        // "theo"（コロン無し）は split_once(':') が None になり無視される（panic しない）。
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratios: theo,hue:0.68\n",
+        ));
+        assert!(!doc.character_height_ratios.contains_key("theo"));
+        assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
+        assert_eq!(doc.character_height_ratios.len(), 1);
+    }
+
+    #[test]
+    fn character_height_ratios_trims_whitespace_around_keys_and_values() {
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratios:  theo : 0.65 , hue : 0.68 \n",
+        ));
+        assert_eq!(doc.character_height_ratios.get("theo"), Some(&0.65));
+        assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
+        assert_eq!(doc.character_height_ratios.len(), 2);
+    }
+
+    #[test]
+    fn character_height_ratios_duplicate_key_last_wins() {
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratios: theo:0.5,theo:0.7\n",
+        ));
+        assert_eq!(doc.character_height_ratios.get("theo"), Some(&0.7));
+        assert_eq!(doc.character_height_ratios.len(), 1);
+    }
+
+    #[test]
+    fn character_height_ratios_non_numeric_value_is_skipped() {
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratios: theo:tall,hue:0.68\n",
+        ));
+        assert!(!doc.character_height_ratios.contains_key("theo"));
+        assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
+        assert_eq!(doc.character_height_ratios.len(), 1);
+    }
+
+    #[test]
+    fn character_height_ratios_raw_values_pass_through_without_clamping() {
+        // 範囲クランプは runtime 側（CharacterLayer）の責務。parser は生の数値を透過する。
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratios: theo:-5,hue:0\n",
+        ));
+        assert_eq!(doc.character_height_ratios.get("theo"), Some(&-5.0));
+        assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.0));
+    }
+
+    #[test]
+    fn character_height_ratio_singular_and_plural_coexist_independently() {
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratio: 0.3\ncharacter_height_ratios: theo:0.65\n",
+        ));
+        assert_eq!(doc.character_height_ratio, Some(0.3));
+        assert_eq!(doc.character_height_ratios.get("theo"), Some(&0.65));
+        assert_eq!(doc.character_height_ratios.len(), 1);
+    }
+
+    #[test]
+    fn character_height_ratios_quoted_value_is_unquoted_before_parsing() {
+        let doc = parse(&height_ratios_doc(
+            "character_height_ratios: \"theo:0.65,hue:0.68\"\n",
+        ));
+        assert_eq!(doc.character_height_ratios.get("theo"), Some(&0.65));
+        assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
+        assert_eq!(doc.character_height_ratios.len(), 2);
+    }
 }

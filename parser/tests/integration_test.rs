@@ -4129,6 +4129,106 @@ title: "テスト"
 }
 
 #[test]
+fn test_document_character_height_ratios_parses_from_frontmatter() {
+    // frontmatter `character_height_ratios:` がキャラごとの HashMap<String, f64> で parse
+    // されること (#364)。expressions= と同じ「カンマ区切り key:value」書式。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_height_ratios: theo:0.65,hue:0.68,aristo:0.68
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_height_ratios.get("theo"), Some(&0.65));
+    assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
+    assert_eq!(doc.character_height_ratios.get("aristo"), Some(&0.68));
+    assert_eq!(doc.character_height_ratios.len(), 3);
+
+    // 未指定なら空 HashMap（character_height_ratio / 原寸へのフォールバックは runtime 側の責務）。
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert!(doc_none.character_height_ratios.is_empty());
+}
+
+#[test]
+fn test_character_height_ratios_round_trip_with_other_frontmatter() {
+    // parse → emit → parse で character_height_ratios が保持され、character_y_ratio /
+    // character_height_ratio（単数形）と共存すること (#364)。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+character_y_ratio: 1.05
+character_height_ratio: 0.3
+character_height_ratios: theo:0.65,hue:0.68
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_height_ratios.get("theo"), Some(&0.65));
+    assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
+    assert_eq!(doc.character_height_ratio, Some(0.3));
+    assert_eq!(doc.character_y_ratio, Some(1.05));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("character_height_ratios: hue:0.68,theo:0.65"),
+        "emit 出力にキーでソートされた character_height_ratios が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc, doc2,
+        "character_height_ratios round-trip should be stable"
+    );
+    // 共存フィールドも壊れていないこと。
+    assert_eq!(doc2.character_height_ratio, Some(0.3));
+    assert_eq!(doc2.character_y_ratio, Some(1.05));
+    assert_eq!(doc2.aspect_ratio, "9:16");
+}
+
+#[test]
+fn test_character_height_ratios_empty_map_omits_emit_line() {
+    // character_height_ratios が空 HashMap のとき emit に `character_height_ratios:` 行が
+    // 出ないこと (#364)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert!(doc.character_height_ratios.is_empty());
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("character_height_ratios:"),
+        "character_height_ratios が空なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
 fn test_character_y_ratio_integer_round_trips_as_float() {
     // R-7: 整数値 `1` は Some(1.0) で parse され、emit → 再 parse でも Some(1.0) を保つこと (#308)。
     //   Rust の f64 Display は 1.0 → "1" なので emit 行は `character_y_ratio: 1` になり、
