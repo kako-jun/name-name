@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
+import { clearReadProgress, loadReadSceneProgress } from './readProgress'
 import type { Step } from './GameState'
 import type { Event, EventScene } from '../types'
 
@@ -44,6 +45,7 @@ interface RendererInternals {
   isReplaying: boolean
   justSelectedChoice: boolean
   waitingForChoice: boolean
+  choiceOverlay: { show: ReturnType<typeof vi.fn> }
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -67,7 +69,9 @@ const SCENES_BRANCH: EventScene[] = [
 describe('NovelRenderer.playScript (#220)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
     vi.useRealTimers()
+    clearReadProgress('novel-renderer-read-completion-test')
   })
 
   // ===== A. msPerChar 退避復元 =====
@@ -103,6 +107,37 @@ describe('NovelRenderer.playScript (#220)', () => {
     })
     await expect(r.playScript([{ type: 'advance' }])).rejects.toThrow('boom')
     expect(getMsPerChar(r)).toBe(40)
+  })
+
+  it('#366: scene 既読は本文開始時ではなく Choice 到達時に立つ', () => {
+    const docKey = 'novel-renderer-read-completion-test'
+    const r = makeRenderer([
+      scene('cell', [
+        narration('body'),
+        { Choice: { options: [{ text: '戻る', jump: 'hub' }] } } as Event,
+      ]),
+      scene('hub', [narration('hub')]),
+    ])
+    internals(r).choiceOverlay.show = vi.fn()
+    r.setDocKey(docKey)
+
+    expect(loadReadSceneProgress(docKey).has('cell')).toBe(false)
+
+    internals(r).advance()
+
+    expect(loadReadSceneProgress(docKey).has('cell')).toBe(true)
+  })
+
+  it('#366: Choice が無い scene はスクリプト末尾到達時に既読になる', () => {
+    const docKey = 'novel-renderer-read-completion-test'
+    const r = makeRenderer([scene('ending', [narration('body')])])
+    r.setDocKey(docKey)
+
+    expect(loadReadSceneProgress(docKey).has('ending')).toBe(false)
+
+    internals(r).advance()
+
+    expect(loadReadSceneProgress(docKey).has('ending')).toBe(true)
   })
 
   it('4: 元 msPerChar が 0 のときも復元値 0（破壊しない）', async () => {

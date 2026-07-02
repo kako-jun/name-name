@@ -404,7 +404,7 @@ frontmatter の `choice_style` で per-game に切替可能 (#146)。runtime（C
 
 未指定 or 未知の値は `default` にフォールバックする。すべてのスタイルでホバー時に 1.05 倍スケール拡大、影レイヤ（半透明矩形）、確定時 / ホバー時に Web Audio で生成した tone を SE 系統で鳴らす（SE 音量設定と同期）。pixi-filters への依存は持たない。
 
-既読進捗は `projectName` 単位で `localStorage` に保存する。複数の埋め込みでも、同じ origin の Name×Name runtime が同じ `projectName` を開くなら既読データは共有される。別 origin ではブラウザ仕様上共有されない。既読キーは読み込んだ MD の数や列挙順に依存させず、選択肢の jump 先 `sceneId` 文字列を正本にする。本文行のスキップ判定は scene ジャンプ後に `sceneId#displayIndex` を使い、別シナリオ MD の同じ行番号へ既読が誤爆しないようにする。従来の display index 既読しかない既存データは、最初に遭遇した scene の `sceneId#displayIndex` へ best-effort 移行し、以後は scene-aware key を使う。ChoiceOverlay は jump 先 `sceneId` が既読なら既読用の色で選択肢を表示する（#366）。
+既読進捗は `projectName` 単位で `localStorage` に保存する。複数の埋め込みでも、同じ origin の Name×Name runtime が同じ `projectName` を開くなら既読データは共有される。別 origin ではブラウザ仕様上共有されない。既読キーは読み込んだ MD の数や列挙順に依存させず、選択肢の jump 先 `sceneId` 文字列を正本にする。本文行のスキップ判定は scene ジャンプ後に `sceneId#displayIndex` を使い、別シナリオ MD の同じ行番号へ既読が誤爆しないようにする。従来の display index 既読しかない既存データは、最初に遭遇した scene の `sceneId#displayIndex` へ best-effort 移行し、以後は scene-aware key を使う。ChoiceOverlay は jump 先 `sceneId` が既読なら既読用の色で選択肢を表示する。`sceneId` 自体は本文を読み始めた時点ではなく、その scene の末尾（次の `[選択]` に到達した時点、またはスクリプト末尾）で既読になる（#366）。
 
 ## 文字ウィンドウ枠の ON/OFF
 

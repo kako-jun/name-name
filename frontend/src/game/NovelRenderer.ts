@@ -45,7 +45,6 @@ import { Event, EventScene } from '../types'
 import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
 import {
   isRead,
-  isSceneRead,
   isReadForLine,
   loadReadLineProgress,
   loadReadProgress,
@@ -1307,6 +1306,11 @@ export class NovelRenderer {
     this.readSceneProgress = loadReadSceneProgress(docKey)
   }
 
+  private markCurrentSceneRead(): void {
+    if (!this.docKey || !this.currentSceneId) return
+    markReadScene(this.docKey, this.readSceneProgress, this.currentSceneId)
+  }
+
   /**
    * スキップモードの ON/OFF を切り替える (#140)。
    * OFF にした場合はスキップタイマーをキャンセルする。
@@ -1701,6 +1705,7 @@ export class NovelRenderer {
 
     if (this.eventIndex >= this.resolvedEvents.length) {
       // 全イベント完了
+      this.markCurrentSceneRead()
       this.dialogBox.setDialog(null, '')
       this.dialogBox.setIndicatorVisible(false)
       this.updateCounter()
@@ -2243,6 +2248,8 @@ export class NovelRenderer {
       return
     }
     if ('Choice' in event) {
+      // Choice に到達した時点で、そこまでの本文を読み終えた scene とみなす (#366)。
+      this.markCurrentSceneRead()
       // 選択肢に到達したらスキップモードを解除（手動選択が必要） (#140)
       this.setSkipMode(false)
       // 複数埋め込みで他インスタンスが読んだ scene を、選択肢表示直前に反映する (#366)。
@@ -3252,9 +3259,6 @@ export class NovelRenderer {
       markRead(this.docKey, this.readProgress, displayIndex)
       if (readLineKey) {
         markReadLine(this.docKey, this.readLineProgress, readLineKey)
-      }
-      if (this.currentSceneId && !isSceneRead(this.readSceneProgress, this.currentSceneId)) {
-        markReadScene(this.docKey, this.readSceneProgress, this.currentSceneId)
       }
     }
 
