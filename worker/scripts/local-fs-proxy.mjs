@@ -25,6 +25,7 @@ import http from "node:http";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.LOCAL_FS_PROXY_PORT ?? "9092");
 const BASES = (process.env.LOCAL_REPOS_BASE ?? "")
@@ -201,9 +202,10 @@ const TREE_EXCLUDED_DIRS = new Set([".git", "node_modules"]);
  * 先に弾くため sha を読まない）。
  *
  * HTTP ハンドラ本体から分離してあるのは、テストがこの関数を直接呼んで
- * 走査ロジックだけを検証できるようにするため。
+ * 走査ロジックだけを検証できるようにするため。export しているのも同じ理由
+ * (#371 テストからの white-box import 用)。
  */
-async function walkTree(repoDir) {
+export async function walkTree(repoDir) {
   const entries = [];
 
   async function walk(dir, relDir) {
@@ -314,6 +316,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`[local-fs-proxy] listening on http://127.0.0.1:${PORT} (bases: ${BASES.join(", ")})`);
-});
+// エントリポイントガード: `node scripts/local-fs-proxy.mjs` として直接起動
+// されたときだけ listen する。テストが `walkTree` を white-box import する
+// ときに副作用として port を握ってしまわないようにするため (#371)。
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMainModule) {
+  server.listen(PORT, "127.0.0.1", () => {
+    console.log(`[local-fs-proxy] listening on http://127.0.0.1:${PORT} (bases: ${BASES.join(", ")})`);
+  });
+}
