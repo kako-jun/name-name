@@ -1292,6 +1292,7 @@ interface ImageStateLike {
   position: string
   label?: unknown
   textEffect: unknown
+  snapshotHidden?: boolean
 }
 function imageChars(layer: CharacterLayer): { characters: Map<string, ImageStateLike> } {
   return layer as unknown as { characters: Map<string, ImageStateLike> }
@@ -3194,17 +3195,16 @@ describe('CharacterLayer character_height_ratios ライブ再適用（#364）', 
 })
 
 // =====================================================================================
-// #364: クロスフェード中の新旧 sprite と height_ratio 再適用の現状挙動（要確認・実装者判断）。
+// #364: クロスフェード中の新旧 sprite と height_ratio 再適用。
 //   show() の表情変更クロスフェード（#337）は旧 sprite を `${character}__transition_N` という
-//   別キーへリネームして両立させる。reapplyCharacterHeightRatios は Map のキーをそのまま
-//   characterName として resolveCharacterHeightRatio に渡すため、旧 sprite は override 解決に
-//   失敗し（transition key は override マップに存在しない）、script-level デフォルト（無ければ
-//   原寸 1）へ落ちる。新 sprite は loadTexture が実際の character 名を明示引数で渡すため、
-//   texture ロード完了後は正しく override が効く。結果として、クロスフェード中に override を
-//   変更すると旧/新 sprite の scale が食い違う瞬間が生じる。
-//   このテストは是非を判断せず、現状の実装がそう振る舞うことを固定する（回帰の早期検知用）。
+//   別キー（snapshotHidden: true）へリネームして両立させる。reapplyCharacterHeightRatios は
+//   getCharacterStates（#337 の前例）と同じく snapshotHidden な state を再スケール対象から除外する。
+//   旧 sprite は Map キーがそのまま override 解決に使われる訳ではなくなり（そもそも触らない）、
+//   クロスフェード中に override を変更しても旧 sprite は元のスケールのまま変化しない。
+//   新 sprite は loadTexture が実際の character 名を明示引数で渡すため、texture ロード完了後に
+//   正しく override が効く。
 // =====================================================================================
-describe('CharacterLayer クロスフェード中の character_height_ratios 再適用: 現状挙動の記録（#364）', () => {
+describe('CharacterLayer クロスフェード中の character_height_ratios 再適用: 旧 sprite を除外して不一致を防ぐ（#364）', () => {
   beforeEach(() => {
     __setDocumentForTest(null)
     resetFontLoaderCache()
@@ -3218,7 +3218,7 @@ describe('CharacterLayer クロスフェード中の character_height_ratios 再
   const fakeTexture = (width: number, height: number): unknown => ({ width, height })
   const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
 
-  it('T-RACE-01: クロスフェード中に override を変更すると、旧 sprite（transition key）は override が効かず原寸へ、新 sprite は texture ロード完了後に override が正しく効く（現状挙動）', async () => {
+  it('T-RACE-01: クロスフェード中に override を変更しても、旧 sprite（transition key・snapshotHidden）は再スケール対象から除外され元のスケールのまま変化せず、新 sprite は texture ロード完了後に新 override が正しく効く', async () => {
     const texH = SH * 2
     vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
     const layer = new CharacterLayer(SW, SH)
@@ -3230,18 +3230,20 @@ describe('CharacterLayer クロスフェード中の character_height_ratios 再
     expect(beforeScale).toBeCloseTo(computeTargetHeightScale(texH, 0.5, SH), 10)
 
     // 表情変更 → 非 instant・既定 fade あり → クロスフェード分岐（#337）。
-    // 旧 sprite は `hero__transition_N` へリネームされ、新 sprite が新規に 'hero' キーへ入る。
+    // 旧 sprite は `hero__transition_N` へリネームされ（snapshotHidden: true）、
+    // 新 sprite が新規に 'hero' キーへ入る。
     layer.show('hero', 'sad', '中央', '/assets')
     const oldKey = [...chars.keys()].find((k) => k !== 'hero')!
     expect(oldKey).toMatch(/^hero__transition_/)
+    expect(chars.get(oldKey)!.snapshotHidden).toBe(true)
 
     // クロスフェード中（新 sprite の texture load 未完了）に override を変更する。
     layer.setCharacterHeightRatios({ hero: 0.9 })
 
-    // 現状の挙動: 旧 sprite は map key（transition key）で override 解決を試みるため、
-    // "hero" の override（0.9）に一致せず、script-level デフォルト（未設定＝null）へ
-    // フォールバックし、原寸 scale=1 に戻ってしまう。
-    expect(chars.get(oldKey)!.sprite.scale.x).toBe(1)
+    // 修正後の挙動: 旧 sprite は snapshotHidden により再スケール対象から除外されるため、
+    // override 変更の影響を受けず、クロスフェード開始時点のスケールのまま変化しない
+    // （transition key が override マップにヒットせず原寸 1 に落ちる、という不一致は起きない）。
+    expect(chars.get(oldKey)!.sprite.scale.x).toBeCloseTo(beforeScale, 10)
 
     await flushPromises()
 
@@ -3250,10 +3252,9 @@ describe('CharacterLayer クロスフェード中の character_height_ratios 再
     const newScaleAfterLoad = chars.get('hero')!.sprite.scale.x
     expect(newScaleAfterLoad).toBeCloseTo(computeTargetHeightScale(texH, 0.9, SH), 10)
 
-    // 旧 sprite はその後 fade 完了（ticker 進行）まで触られないため、原寸 1 のまま残り、
-    // 新 sprite と scale が食い違う（不一致が残る）。
+    // 旧 sprite はその後も reapplyCharacterHeightRatios の対象外のままなので、
+    // クロスフェード開始時点のスケールを保ち続ける（新 sprite に引きずられて崩れない）。
     const oldScaleAfterLoad = chars.get(oldKey)!.sprite.scale.x
-    expect(oldScaleAfterLoad).toBe(1)
-    expect(oldScaleAfterLoad).not.toBeCloseTo(newScaleAfterLoad, 6)
+    expect(oldScaleAfterLoad).toBeCloseTo(beforeScale, 10)
   })
 })

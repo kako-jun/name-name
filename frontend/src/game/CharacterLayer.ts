@@ -624,7 +624,12 @@ export class CharacterLayer extends Container {
   private reapplyCharacterHeightRatios(): void {
     for (const [name, state] of this.characters.entries()) {
       // render-only（Title/Label/Image #274）と fit（#294）・アニメ中の sprite は対象外。
-      if (state.renderOnly || state.fit || state.animation !== null) continue
+      // クロスフェード中の旧 sprite（snapshotHidden、キーは `${character}__transition_N`）も対象外
+      // （getCharacterStates と同じ理由 #337）。Map キーをそのまま名前として解決すると override
+      // マップにヒットせず旧 sprite だけ既定比率にフォールバックし、新 sprite との間で一時的な
+      // サイズ不一致が起きる。旧 sprite はまもなく破棄されるので再スケールする意味もない。
+      if (state.renderOnly || state.fit || state.animation !== null || state.snapshotHidden)
+        continue
       const texture = state.sprite.texture
       // texture 未ロード（height<=0）なら次の loadTexture に委ねる（ここでは触らない）。
       if (!texture || texture.height <= 0) continue
