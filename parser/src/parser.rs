@@ -21,6 +21,8 @@ pub fn parse(input: &str) -> Document {
     let mut protagonist: Option<String> = None;
     let mut character_y_ratio: Option<f64> = None;
     let mut character_height_ratio: Option<f64> = None;
+    let mut character_height_ratios: std::collections::HashMap<String, f64> =
+        std::collections::HashMap::new();
     let mut character_fade_ms: Option<u32> = None;
     let mut skip_enabled: Option<bool> = None;
     let mut debug_enabled: Option<bool> = None;
@@ -88,6 +90,20 @@ pub fn parse(input: &str) -> Document {
                 // 空・非数値は None のまま（runtime 側で原寸にフォールバック）。
                 // 範囲クランプは runtime 側（CharacterLayer）で行う（parser は生の数値を透過）。
                 character_height_ratio = unquote(val.trim()).parse::<f64>().ok();
+            } else if let Some(val) = line.strip_prefix("character_height_ratios:") {
+                // キャラごとの立ち絵目標表示高さ比率 override (#364)。
+                // "theo:0.65,hue:0.68" 形式（expressions= と同じカンマ区切り key:value）。
+                // 不正な値・空key・空valueは無視してスキップする（expressions= と同じ流儀）。
+                for pair in unquote(val.trim()).split(',') {
+                    if let Some((key, ratio)) = pair.split_once(':') {
+                        let k = key.trim().to_string();
+                        if let Ok(v) = ratio.trim().parse::<f64>() {
+                            if !k.is_empty() {
+                                character_height_ratios.insert(k, v);
+                            }
+                        }
+                    }
+                }
             } else if let Some(val) = line.strip_prefix("character_fade_ms:") {
                 // 立ち絵の新規表示・退場フェード時間（ms）。数値のみ受ける。
                 // 空・非数値は None のまま（runtime 既定 300ms にフォールバック）。
@@ -840,6 +856,7 @@ pub fn parse(input: &str) -> Document {
         protagonist,
         character_y_ratio,
         character_height_ratio,
+        character_height_ratios,
         character_fade_ms,
         skip_enabled,
         debug_enabled,

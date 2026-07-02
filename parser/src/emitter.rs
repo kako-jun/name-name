@@ -50,6 +50,18 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ratio) = doc.character_height_ratio {
             out.push_str(&format!("character_height_ratio: {ratio}\n"));
         }
+        // Emit character_height_ratios only when non-empty (#364)。expressions= と同じく
+        // キーでソートして決定的な出力にする（保存のたびに diff が出るのを防ぐ）。
+        if !doc.character_height_ratios.is_empty() {
+            let mut pairs: Vec<_> = doc.character_height_ratios.iter().collect();
+            pairs.sort_by_key(|(k, _)| k.as_str());
+            let joined = pairs
+                .iter()
+                .map(|(k, v)| format!("{k}:{v}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            out.push_str(&format!("character_height_ratios: {joined}\n"));
+        }
         if let Some(ms) = doc.character_fade_ms {
             out.push_str(&format!("character_fade_ms: {ms}\n"));
         }
@@ -1149,6 +1161,7 @@ mod tests {
             protagonist: None,
             character_y_ratio: None,
             character_height_ratio: None,
+            character_height_ratios: std::collections::HashMap::new(),
             character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
@@ -1286,6 +1299,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn round_trip_character_height_ratios() {
+        // frontmatter の character_height_ratios (#364) が parse → emit → parse で保持されること。
+        // expressions= と同じ「カンマ区切り key:value」書式。emit はキーでソートして決定的に出す。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\ncharacter_height_ratios: theo:0.65,hue:0.68\n---\n\n## 1-1: シーン\n\nナレ。\n";
+        let doc1 = crate::parser::parse(input);
+        assert_eq!(
+            doc1.character_height_ratios.get("theo"),
+            Some(&0.65),
+            "frontmatter の character_height_ratios から theo の比率が parse されること"
+        );
+        assert_eq!(
+            doc1.character_height_ratios.get("hue"),
+            Some(&0.68),
+            "frontmatter の character_height_ratios から hue の比率が parse されること"
+        );
+        assert_eq!(doc1.character_height_ratios.len(), 2);
+
+        let emitted = emit(&doc1);
+        assert!(
+            emitted.contains("character_height_ratios: hue:0.68,theo:0.65"),
+            "emit 出力はキーでソートされた character_height_ratios を含むこと: {emitted}"
+        );
+
+        let doc2 = crate::parser::parse(&emitted);
+        assert_eq!(
+            doc1, doc2,
+            "character_height_ratios round-trip should be stable"
+        );
+    }
+
     fn make_doc_with_event(event: Event) -> Document {
         Document {
             engine: "name-name".to_string(),
@@ -1297,6 +1341,7 @@ mod tests {
             protagonist: None,
             character_y_ratio: None,
             character_height_ratio: None,
+            character_height_ratios: std::collections::HashMap::new(),
             character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
