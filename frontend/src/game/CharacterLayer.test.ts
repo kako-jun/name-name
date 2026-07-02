@@ -132,6 +132,12 @@ describe('normalizePosition', () => {
     expect(normalizePosition('foo')).toBe('foo')
   })
 
+  // own-property ルックアップ修正の確認（#368。#364 resolveCharacterHeightRatio と同種の
+  // prototype pollution 相当の不具合）。
+  it('修正確認: Object.prototype のプロパティ名 "constructor" は未知の値としてそのまま返す（関数オブジェクトを返さない）', () => {
+    expect(normalizePosition('constructor')).toBe('constructor')
+  })
+
   it('空文字は center に倒す', () => {
     expect(normalizePosition('')).toBe('center')
   })
@@ -171,6 +177,26 @@ describe('CharacterLayer X position ratio (Issue #216)', () => {
     const layer = new CharacterLayer(800, 450)
     layer.show('hero', 'normal', 'center', '/assets', { instant: true })
     const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.sprite.x).toBeCloseTo(400, 0)
+  })
+
+  // own-property ルックアップ修正の確認（#368）。position トークンが Object.prototype の
+  // プロパティ名と一致しても、positionX テーブルの own-property が無ければ center にフォールバック
+  // する（関数オブジェクトを sprite.x に代入しない）。
+  it('修正確認: position が "constructor" でも sprite.x は center (800 * 0.5 = 400) にフォールバックする', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', 'constructor', '/assets', { instant: true })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.sprite.x).toBeCloseTo(400, 0)
+  })
+
+  it('修正確認: 既存 Title を position "constructor" で再配置（x/y override 無し）しても sprite.x は center にフォールバックする', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('orber', 'sans-serif')
+    layer.showTitle('orber', 'sans-serif', 'constructor')
+    const state = asInternals(layer).characters.get('Title')
     expect(state).toBeDefined()
     expect(state!.sprite.x).toBeCloseTo(400, 0)
   })

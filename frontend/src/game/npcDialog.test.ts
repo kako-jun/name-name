@@ -71,6 +71,16 @@ describe('resolveNpcPortrait', () => {
     })
     expect(resolveNpcPortrait(npc)).toBe('normal.png')
   })
+
+  // ---- own-property ルックアップ修正の確認（#368） ----
+  it('修正確認: expression 名が Object.prototype のプロパティ名 "constructor" でも own-property が無ければ portrait にフォールバックする（関数オブジェクトを返さない）', () => {
+    const npc = makeNpc({
+      portrait: 'elder.png',
+      expressions: { normal: 'elder_normal.png' },
+      message: '[expression=constructor]\nなにか',
+    })
+    expect(resolveNpcPortrait(npc)).toBe('elder.png')
+  })
 })
 
 describe('stripExpressionDirectives', () => {

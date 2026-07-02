@@ -14,6 +14,7 @@
  */
 
 import type { UiNpcData } from '../types/rpg'
+import { hasOwn } from './ownProperty'
 
 /** `[expression=xxx]` にマッチする正規表現（非グローバル: exec が安全） */
 const EXPRESSION_RE = /\[expression=([^\]]+)\]/
@@ -32,8 +33,13 @@ export function resolveNpcPortrait(npc: UiNpcData): string | undefined {
     const m = EXPRESSION_RE.exec(npc.message)
     if (m) {
       const expr = m[1].trim()
-      const path = npc.expressions[expr]
-      if (path) return path
+      // own-property のみ見る (#368)。素朴な `npc.expressions[expr]` は Object.prototype も辿って
+      // しまい、message 側が自由記述の `expr` が `constructor` 等と一致すると `if (path)` の
+      // 真偽判定を通過して関数オブジェクトを portrait パスとして返してしまう。
+      if (hasOwn(npc.expressions, expr)) {
+        const path = npc.expressions[expr]
+        if (path) return path
+      }
     }
   }
   return npc.portrait
