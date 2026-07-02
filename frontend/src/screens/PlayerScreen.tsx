@@ -550,6 +550,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               characterYRatio={doc?.character_y_ratio ?? null}
               characterHeightRatio={doc?.character_height_ratio ?? null}
               characterHeightRatios={doc?.character_height_ratios}
+              characterScale={doc?.character_scale ?? null}
               characterFadeMs={doc?.character_fade_ms ?? null}
               skipEnabled={doc?.skip_enabled ?? null}
               debugEnabled={doc?.debug_enabled ?? null}

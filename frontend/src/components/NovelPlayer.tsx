@@ -74,6 +74,11 @@ interface NovelPlayerProps {
    *  キーはキャラクター表示名。マップに無いキャラは characterHeightRatio へフォールバックする。
    *  null/undefined/空オブジェクトで override なし（後方互換）。 */
   characterHeightRatios?: Record<string, number> | null
+  /** 立ち絵の元絵基準の一律スケール (#378)。frontmatter `character_scale:` から流す。
+   *  null/undefined で未設定＝下位優先順位（characterHeightRatios > characterHeightRatio > 原寸 scale=1）へ
+   *  フォールバック（後方互換）。character_height_ratio(#360) が画面基準で元絵の縦pxを割り消し身長差を潰すのに
+   *  対し、character_scale は元絵基準（sprite.scale = 値）で元絵に焼き込んだ身長差をそのまま出す。 */
+  characterScale?: number | null
   /** 立ち絵の新規表示・退場フェード時間 (ms)。frontmatter `character_fade_ms:` から流す。 */
   characterFadeMs?: number | null
   /** Skip(S) ボタンを出すか (#310)。frontmatter `skip_enabled:` から流す。
@@ -114,6 +119,7 @@ function NovelPlayer({
   characterYRatio,
   characterHeightRatio,
   characterHeightRatios,
+  characterScale,
   characterFadeMs,
   skipEnabled,
   debugEnabled,
@@ -208,6 +214,10 @@ function NovelPlayer({
       // setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、初回描画から per-character の
       // 目標高さでスケールする（身長差のあるキャストで共通 ratio が身長差を潰すのを防ぐ）。
       renderer.setCharacterHeightRatios(characterHeightRatios ?? null)
+      // 立ち絵の元絵基準スケール (#378)。setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、
+      // 初回描画から fit(#294) の次（height_ratio より優先）で元絵基準の一律スケールを適用する
+      // （元絵に焼き込んだ身長差をそのまま出す）。未指定なら下位優先順位へフォールバック（後方互換）。
+      renderer.setCharacterScale(characterScale ?? null)
       // 立ち絵フェード時間。初回 show より前に設定し、ToHeart 式のじわっとした登場を作品単位で調整する。
       renderer.setCharacterFadeMs(characterFadeMs ?? null)
       // 主人公セリフの本文色 (#305) は renderer 既定 #FFF6E6 のまま使う。frontmatter での
@@ -310,6 +320,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setCharacterHeightRatios(characterHeightRatios ?? null)
   }, [characterHeightRatios])
+
+  // characterScale が変化したときに renderer に反映 (#378)
+  useEffect(() => {
+    rendererRef.current?.setCharacterScale(characterScale ?? null)
+  }, [characterScale])
 
   useEffect(() => {
     rendererRef.current?.setCharacterFadeMs(characterFadeMs ?? null)

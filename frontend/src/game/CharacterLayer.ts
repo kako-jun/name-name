@@ -207,6 +207,32 @@ export function computeTargetHeightScale(
   return (targetHeightRatio * screenH) / texH
 }
 
+/** character_scale の許容下限 (#378)。元絵基準の一律スケール。0 だと立ち絵が消える（scale=0）ため、
+ *  極小でも視認できる下限を設ける。値は character_height_ratio (#360) の下限と同じ 0.05 を再利用するが、
+ *  意味（元絵基準 vs 画面基準）を明確にするため専用定数として持つ。 */
+const CHARACTER_SCALE_MIN = 0.05
+/** character_scale の許容上限 (#378)。元絵基準スケールは元絵解像度に依存し、身長差を焼き込んだ立ち絵を
+ *  そのまま拡大する用途があるため、画面基準の character_height_ratio (#360, 上限2) より広く 4 まで許容する
+ *  （暴走値で立ち絵を画面外まで巨大化させないよう上限は設ける）。 */
+const CHARACTER_SCALE_MAX = 4
+
+/**
+ * 立ち絵の元絵基準スケール character_scale (#378) を許容範囲へクランプする純粋関数。
+ *
+ * `character_scale` は **元絵基準** の一律スケール（`sprite.scale = 値` ＝ 表示px = 値 × texture.height）。
+ * 元絵に焼き込んだ縦px差（身長差）をそのまま画面へ出す。これは **画面基準** の
+ * `character_height_ratio`（#360, 表示高さ = 値 × screenH でテクスチャの縦pxを割り消す）と対照的で、
+ * 画面基準は元絵解像度に関わらず身長差を潰すのに対し、元絵基準は身長差を保存する。
+ *
+ * 値を [CHARACTER_SCALE_MIN, CHARACTER_SCALE_MAX] = [0.05, 4] にクランプして返す。
+ * 呼び出し側（setCharacterScale）が非有限・非正を弾いた後の有効値だけを渡す想定。
+ *
+ * テストが定数（0.05 / 4）を直書きして陳腐化しないよう export する（規律4 / #262 の教訓）。
+ */
+export function clampCharacterScale(scale: number): number {
+  return Math.min(CHARACTER_SCALE_MAX, Math.max(CHARACTER_SCALE_MIN, scale))
+}
+
 /**
  * per-character の character_height_ratios override (#364) を解決する純粋関数。
  *
@@ -511,6 +537,15 @@ export class CharacterLayer extends Container {
    *  characterHeightRatio（スクリプト単位）へフォールバックする（resolveCharacterHeightRatio）。
    *  未指定なら空 Record で後方互換。 */
   private characterHeightRatios: Record<string, number> = {}
+  /** 立ち絵の元絵基準の一律スケール (#378)。null = 未設定＝下位優先順位
+   *  （character_height_ratios > character_height_ratio > 原寸1）へフォールバック（後方互換）。
+   *  frontmatter `character_scale` 由来の per-game 値を setCharacterScale で受けて
+   *  [CHARACTER_SCALE_MIN, CHARACTER_SCALE_MAX] にクランプして保持する。設定時は loadTexture /
+   *  reapplyCharacterHeightRatios が fit(#294) の次（最優先）で `sprite.scale = 値` を適用する。
+   *  character_height_ratio(#360) が**画面基準**（表示高さ = 値 × screenHeight でテクスチャの縦pxを
+   *  割り消し身長差を潰す）なのに対し、character_scale は**元絵基準**（表示px = 値 × texture.height）で
+   *  元絵に焼き込んだ身長差をそのまま出す。 */
+  private characterScale: number | null = null
   /** 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms` 由来。 */
   private characterFadeMs: number = DEFAULT_FADE_MS
   /** auto-scale 計算のために screenWidth / screenHeight を保持 */
@@ -645,13 +680,36 @@ export class CharacterLayer extends Container {
   }
 
   /**
-   * 表示中の立ち絵に現在の characterHeightRatio(s) を即再適用する (#360 / #364)。
-   * setCharacterHeightRatio / setCharacterHeightRatios の共通ライブ再スケールロジック（規律4）。
+   * 立ち絵の元絵基準スケール character_scale を per-game 値で上書きする (#378)。
+   * frontmatter `character_scale:` の値を渡す。null/undefined/非有限/非正は null（＝未設定＝下位優先順位
+   * (character_height_ratios > character_height_ratio > 原寸1) へフォールバック・後方互換）、有効値は
+   * clampCharacterScale で [CHARACTER_SCALE_MIN, CHARACTER_SCALE_MAX] = [0.05, 4] へクランプして保持する。
+   *
+   * character_scale は**元絵基準**（sprite.scale = 値 ＝ 表示px = 値 × texture.height）で、**画面基準**の
+   * character_height_ratio (#360, 表示高さ = 値 × screenHeight でテクスチャの縦pxを割り消す) と違い元絵の
+   * 縦pxを割り消さない＝元絵に焼き込んだ身長差をそのまま出す。
+   *
+   * setCharacterHeightRatio (#360) と同じ構造で、保持後にライブ再適用する（reapplyCharacterHeightRatios）。
+   * scale の実適用は loadTexture / reapplyCharacterHeightRatios が担う（優先順位: fit(#294) >
+   * character_scale(#378) > height_ratios(#364) > height_ratio(#360) > 原寸1）。
+   */
+  setCharacterScale(scale: number | null | undefined): void {
+    const next =
+      scale == null || !Number.isFinite(scale) || scale <= 0 ? null : clampCharacterScale(scale)
+    this.characterScale = next
+    this.reapplyCharacterHeightRatios()
+  }
+
+  /**
+   * 表示中の立ち絵に現在の characterScale (#378) / characterHeightRatio(s) を即再適用する (#360 / #364 / #378)。
+   * setCharacterScale / setCharacterHeightRatio / setCharacterHeightRatios の共通ライブ再スケールロジック（規律4）。
    *
    * 既に表示中で位置アニメが走っておらず fit でない静的な立ち絵は、texture がロード済み
-   * （height>0）なら新しい target-height scale を即再適用する（後から比率が変わっても破綻させない）。
-   * アニメ中・fit・render-only（Title/Label/Image）の sprite は触らない（中間状態の焼き込み回避 /
-   * render-only は各自の sizing のまま #274）。
+   * （height>0）なら新しい scale を即再適用する（後から値が変わっても破綻させない）。
+   * loadTexture と同じ優先順位で決める: character_scale(#378, 元絵基準・sprite.scale=値) が最優先、
+   * 無ければ character_height_ratios / character_height_ratio（画面基準・target-height scale）、
+   * どちらも無ければ原寸 1。アニメ中・fit・render-only（Title/Label/Image）の sprite は触らない
+   * （中間状態の焼き込み回避 / render-only は各自の sizing のまま #274）。
    */
   private reapplyCharacterHeightRatios(): void {
     for (const [name, state] of this.characters.entries()) {
@@ -665,15 +723,22 @@ export class CharacterLayer extends Container {
       const texture = state.sprite.texture
       // texture 未ロード（height<=0）なら次の loadTexture に委ねる（ここでは触らない）。
       if (!texture || texture.height <= 0) continue
-      const targetRatio = resolveCharacterHeightRatio(
-        name,
-        this.characterHeightRatios,
-        this.characterHeightRatio
-      )
-      const scale =
-        targetRatio === null
-          ? 1
-          : computeTargetHeightScale(texture.height, targetRatio, this.screenHeight)
+      // 優先順位 (#378): character_scale（元絵基準・既に [0.05,4] クランプ済み）> character_height_ratios /
+      // character_height_ratio（画面基準）> 原寸 1。loadTexture の scale 決定分岐と同じ順序。
+      let scale: number
+      if (this.characterScale !== null) {
+        scale = this.characterScale
+      } else {
+        const targetRatio = resolveCharacterHeightRatio(
+          name,
+          this.characterHeightRatios,
+          this.characterHeightRatio
+        )
+        scale =
+          targetRatio === null
+            ? 1
+            : computeTargetHeightScale(texture.height, targetRatio, this.screenHeight)
+      }
       state.sprite.scale.set(scale)
       // sprite 幅が変わったので名札も追従して収め直す（縮んだ立ち絵から名札がはみ出さない #360）。
       this.fitLabelToSprite(state.sprite, state.label)
@@ -2461,14 +2526,17 @@ export class CharacterLayer extends Container {
           // 明示適用する（論理画面より大きいときだけ画面内に収める・小さい時は原寸）。
           // サイズや位置では自動分岐しない。novel/adv でも分けない（fit フラグだけが分岐の根拠）。
           //
-          // 優先順位 (#360 / #364): per-line フィット(fit=true, #294) > per-character
-          //   character_height_ratios override > per-game character_height_ratio > 既定 原寸(1)。
-          //   fit のときは従来通り computeFitScale。fit=false のときは resolveCharacterHeightRatio で
-          //   このキャラの目標比率（per-character override があればそれ、なければスクリプト単位の
-          //   character_height_ratio）を解決し、あれば computeTargetHeightScale で目標表示高さへ
-          //   合わせる（高解像度立ち絵の巨大化を吸収）。どちらも無ければ原寸 1（後方互換の絶対条件）。
+          // 優先順位 (#360 / #364 / #378): per-line フィット(fit=true, #294) > per-game
+          //   character_scale(#378, 元絵基準) > per-character character_height_ratios override >
+          //   per-game character_height_ratio > 既定 原寸(1)。
+          //   fit のときは従来通り computeFitScale。fit=false かつ character_scale 指定時は元絵基準の
+          //   一律スケール（sprite.scale = 値・既に [0.05,4] クランプ済み）をそのまま使う＝元絵に焼き込んだ
+          //   身長差を保存する。character_scale 未指定時は resolveCharacterHeightRatio でこのキャラの目標比率
+          //   （per-character override があればそれ、なければスクリプト単位の character_height_ratio）を解決し、
+          //   あれば computeTargetHeightScale で**画面基準**の目標表示高さへ合わせる（高解像度立ち絵の巨大化を
+          //   吸収しつつ身長差は潰れる）。どちらも無ければ原寸 1（後方互換の絶対条件）。
           // ※ loadTexture は show() の立ち絵専用。render-only（Title/Label/Image）は通らないので
-          //   height ratio は自動的に立ち絵のみへ効く。
+          //   character_scale / height ratio は自動的に立ち絵のみへ効く。
           let scale: number
           if (fit) {
             scale = computeFitScale(
@@ -2477,6 +2545,10 @@ export class CharacterLayer extends Container {
               this.screenWidth,
               this.screenHeight
             )
+          } else if (this.characterScale !== null) {
+            // character_scale (#378): 元絵基準の一律スケール（既に setCharacterScale で [0.05,4] クランプ済み）。
+            // 画面基準の height_ratio と違いテクスチャの縦pxを割り消さず、表示px = 値 × texture.height。
+            scale = this.characterScale
           } else {
             const targetRatio = resolveCharacterHeightRatio(
               characterName,

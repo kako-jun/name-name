@@ -216,6 +216,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
       const m = doc.character_height_ratios as unknown as Map<string, number> | undefined
       return m && m.size > 0 ? Object.fromEntries(m) : {}
     })(),
+    // 立ち絵の元絵基準スケール (#378)。数値なので ?? null（未指定は下位優先順位へフォールバック）。
+    character_scale: doc.character_scale ?? null,
     character_fade_ms: doc.character_fade_ms ?? null,
     // スキップ/デバッグの per-game 出し分け (#310)。boolean なので ?? null（未指定は下流で既定: skip=true / debug=false）。
     skip_enabled: doc.skip_enabled ?? null,

@@ -747,6 +747,7 @@ function EditorScreen({
                 characterYRatio={doc?.character_y_ratio ?? null}
                 characterHeightRatio={doc?.character_height_ratio ?? null}
                 characterHeightRatios={doc?.character_height_ratios}
+                characterScale={doc?.character_scale ?? null}
                 characterFadeMs={doc?.character_fade_ms ?? null}
                 // Skip(S) は doc 由来（#310）。skip_enabled=false の作品は編集プレビューでも S を隠す。
                 skipEnabled={doc?.skip_enabled ?? null}

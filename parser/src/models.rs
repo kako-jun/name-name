@@ -878,6 +878,17 @@ pub struct Document {
     /// カンマ区切り key:value 書式）から流す。
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub character_height_ratios: std::collections::HashMap<String, f64>,
+    /// 立ち絵の元絵基準の一律スケール (#378)。`sprite.scale = character_scale`（uniform、幅もアスペクト比で追従）。
+    /// `character_height_ratio`（#360）/`character_height_ratios`（#364）は**画面基準**で
+    /// 表示高さ = 値 × screenHeight となり、元絵の縦px（texH）を割り消すため、身長差を焼き込んだ
+    /// 立ち絵の身長差が潰れる。それに対し character_scale は**元絵基準**で 表示px = 値 × textureHeight。
+    /// 元絵に焼き込んだ縦px差（身長差）をそのまま画面に出す。
+    /// 優先順位（runtime 側）: フィット/fit(#294) > character_scale(#378) > character_height_ratios(#364)
+    /// > character_height_ratio(#360) > 原寸 scale=1。両方指定なら character_scale を採用。
+    /// 対象は立ち絵（show）のみ。範囲クランプ・非有限/非正の未設定扱いは runtime 側（CharacterLayer）。
+    /// 空・非数値は None 扱い（後方互換）。frontmatter `character_scale:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_scale: Option<f64>,
     /// 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms:` から流す。
     /// 未指定なら runtime 既定 300ms（後方互換）。作品ごとに ToHeart 式のじわっとした登場へ
     /// 調整するための per-game 数値設定。空・非数値は None 扱い。

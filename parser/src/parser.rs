@@ -23,6 +23,7 @@ pub fn parse(input: &str) -> Document {
     let mut character_height_ratio: Option<f64> = None;
     let mut character_height_ratios: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
+    let mut character_scale: Option<f64> = None;
     let mut character_fade_ms: Option<u32> = None;
     let mut skip_enabled: Option<bool> = None;
     let mut debug_enabled: Option<bool> = None;
@@ -104,6 +105,14 @@ pub fn parse(input: &str) -> Document {
                         }
                     }
                 }
+            } else if let Some(val) = line.strip_prefix("character_scale:") {
+                // 立ち絵の元絵基準スケール (#378)。数値のみ受ける（character_height_ratio と同じ流儀）。
+                // character_height_ratio(#360) が画面基準（表示高さ = 値 × screenHeight）で元絵の縦px
+                // を割り消して身長差を潰すのに対し、こちらは元絵基準（sprite.scale = 値）で
+                // 表示px = 値 × textureHeight となり、元絵に焼き込んだ身長差をそのまま出す。
+                // 空・非数値は None のまま（runtime 側で下位優先順位へフォールバック）。
+                // 範囲クランプは runtime 側（CharacterLayer）で行う（parser は生の数値を透過）。
+                character_scale = unquote(val.trim()).parse::<f64>().ok();
             } else if let Some(val) = line.strip_prefix("character_fade_ms:") {
                 // 立ち絵の新規表示・退場フェード時間（ms）。数値のみ受ける。
                 // 空・非数値は None のまま（runtime 既定 300ms にフォールバック）。
@@ -857,6 +866,7 @@ pub fn parse(input: &str) -> Document {
         character_y_ratio,
         character_height_ratio,
         character_height_ratios,
+        character_scale,
         character_fade_ms,
         skip_enabled,
         debug_enabled,

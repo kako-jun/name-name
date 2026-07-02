@@ -62,6 +62,10 @@ pub fn emit(doc: &Document) -> String {
                 .join(",");
             out.push_str(&format!("character_height_ratios: {joined}\n"));
         }
+        // Emit character_scale only when present (#378)。元絵基準スケール。数値なので quote 不要。
+        if let Some(scale) = doc.character_scale {
+            out.push_str(&format!("character_scale: {scale}\n"));
+        }
         if let Some(ms) = doc.character_fade_ms {
             out.push_str(&format!("character_fade_ms: {ms}\n"));
         }
@@ -1162,6 +1166,7 @@ mod tests {
             character_y_ratio: None,
             character_height_ratio: None,
             character_height_ratios: std::collections::HashMap::new(),
+            character_scale: None,
             character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
@@ -1404,6 +1409,7 @@ mod tests {
             character_y_ratio: None,
             character_height_ratio: None,
             character_height_ratios: std::collections::HashMap::new(),
+            character_scale: None,
             character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
