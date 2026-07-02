@@ -60,7 +60,7 @@
 - `[暗転解除]` ✓
 - `[待機: ms]` ✓
 - `[アニメ: target=<char>, x/y/scale/rotation/duration/easing]` ✓（位置・スケール・回転すべて利用）
-- `**Name** (path/to/expression, 右):` 形式で `assets/images/{path}/{expression}.png` を立ち絵として読み込み ✓
+- `**Name** (path/to/expression, 右):` 形式で立ち絵を読み込み ✓。パスは**拡張子省略**で、エンジンが `assets/images/{path}/{expression}.webp` を先に試し、無ければ `.png` にフォールバックして解決する（#376。軽量 webp を name-name-api の 1 MiB 制限内に収めるため。背景は `[背景: ...]` と拡張子明記なので対象外）
 - `**Name** → new-expression:` の表情変更（2コマ idle に流用） ✓
 - `[SE: shape-enter.wav]` ✓
 
