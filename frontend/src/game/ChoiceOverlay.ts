@@ -33,10 +33,15 @@ export type ChoiceStyleName = 'default' | 'soft' | 'monochrome'
 interface ChoiceTheme {
   fillNormal: number
   fillHover: number
+  fillRead: number
+  fillReadHover: number
   borderNormal: number
   borderHover: number
+  borderRead: number
+  borderReadHover: number
   borderWidth: number
   textColor: number
+  textReadColor: number
   fontFamily: string
   fontWeight: 'normal' | 'bold'
   fontSize: number
@@ -45,14 +50,25 @@ interface ChoiceTheme {
   shadowAlpha: number
 }
 
+interface ChoiceVisual {
+  fill: number
+  border: number
+  text: number
+}
+
 const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
   default: {
     fillNormal: 0x1a1a2e,
     fillHover: 0x16213e,
+    fillRead: 0x2f3542,
+    fillReadHover: 0x3d4658,
     borderNormal: 0xa8dadc,
     borderHover: 0xf1faee,
+    borderRead: 0x9aa4b2,
+    borderReadHover: 0xd1d5db,
     borderWidth: 2,
     textColor: 0xf1faee,
+    textReadColor: 0xcbd5e1,
     fontFamily: "'Noto Sans JP', sans-serif",
     fontWeight: 'bold',
     fontSize: 20,
@@ -64,10 +80,15 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
   soft: {
     fillNormal: 0xffe5ec,
     fillHover: 0xffd1dc,
+    fillRead: 0xe8e1f0,
+    fillReadHover: 0xded5ec,
     borderNormal: 0xffb3c1,
     borderHover: 0xff8fa3,
+    borderRead: 0xb8a8ca,
+    borderReadHover: 0x9d8bb8,
     borderWidth: 3,
     textColor: 0x5d2952,
+    textReadColor: 0x5d536b,
     fontFamily: "'Noto Sans JP', sans-serif",
     fontWeight: 'bold',
     fontSize: 22,
@@ -79,10 +100,15 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
   monochrome: {
     fillNormal: 0x000000,
     fillHover: 0x222222,
+    fillRead: 0x2a2a2a,
+    fillReadHover: 0x3a3a3a,
     borderNormal: 0xffffff,
     borderHover: 0xffffff,
+    borderRead: 0x888888,
+    borderReadHover: 0xbbbbbb,
     borderWidth: 2,
     textColor: 0xffffff,
+    textReadColor: 0xbdbdbd,
     fontFamily: "'Noto Serif JP', serif",
     fontWeight: 'normal',
     fontSize: 20,
@@ -113,6 +139,25 @@ export function resolveStyle(name?: string | null): ChoiceTheme {
     ).join(' / ')}`
   )
   return STYLE_THEMES.default
+}
+
+export function resolveChoiceVisual(
+  theme: ChoiceTheme,
+  alreadyRead: boolean,
+  hover: boolean
+): ChoiceVisual {
+  if (alreadyRead) {
+    return {
+      fill: hover ? theme.fillReadHover : theme.fillRead,
+      border: hover ? theme.borderReadHover : theme.borderRead,
+      text: theme.textReadColor,
+    }
+  }
+  return {
+    fill: hover ? theme.fillHover : theme.fillNormal,
+    border: hover ? theme.borderHover : theme.borderNormal,
+    text: theme.textColor,
+  }
 }
 
 export class ChoiceOverlay extends Container {
@@ -167,7 +212,12 @@ export class ChoiceOverlay extends Container {
    * @param onSelect 確定時のコールバック
    * @param style   `default` / `soft` / `monochrome`。未指定 or 不明値は `default` 扱い
    */
-  show(options: ChoiceOption[], onSelect: (jump: string) => void, style?: string | null): void {
+  show(
+    options: ChoiceOption[],
+    onSelect: (jump: string) => void,
+    style?: string | null,
+    readJumps?: ReadonlySet<string>
+  ): void {
     if (options.length === 0) return
     this.onSelect = onSelect
     this.stopFadeTicker()
@@ -214,14 +264,15 @@ export class ChoiceOverlay extends Container {
       this.on('pointercancel', this.handleDragEnd)
     }
 
-    const textStyle = new TextStyle({
-      fontFamily: theme.fontFamily,
-      fontSize: theme.fontSize,
-      fill: theme.textColor,
-      fontWeight: theme.fontWeight,
-    })
-
     options.forEach((option, i) => {
+      const alreadyRead = readJumps?.has(option.jump) ?? false
+      const normalVisual = resolveChoiceVisual(theme, alreadyRead, false)
+      const textStyle = new TextStyle({
+        fontFamily: theme.fontFamily,
+        fontSize: theme.fontSize,
+        fill: normalVisual.text,
+        fontWeight: theme.fontWeight,
+      })
       const buttonContainer = new Container()
       buttonContainer.eventMode = 'static'
       buttonContainer.cursor = 'pointer'
@@ -237,7 +288,7 @@ export class ChoiceOverlay extends Container {
       buttonContainer.addChild(shadow)
 
       const bg = new Graphics()
-      this.drawButton(bg, theme, theme.fillNormal, theme.borderNormal)
+      this.drawButton(bg, theme, normalVisual.fill, normalVisual.border)
       buttonContainer.addChild(bg)
 
       const label = new PixiText({
@@ -258,8 +309,9 @@ export class ChoiceOverlay extends Container {
         : startY + i * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
 
       buttonContainer.on('pointerover', () => {
+        const hoverVisual = resolveChoiceVisual(theme, alreadyRead, true)
         bg.clear()
-        this.drawButton(bg, theme, theme.fillHover, theme.borderHover)
+        this.drawButton(bg, theme, hoverVisual.fill, hoverVisual.border)
         buttonContainer.scale.set(HOVER_SCALE)
         // 同一ボタンで pointerover が連発しても再生しない (#146 R1 S1)
         if (this.lastHoverIdx !== i) {
@@ -270,7 +322,7 @@ export class ChoiceOverlay extends Container {
 
       buttonContainer.on('pointerout', () => {
         bg.clear()
-        this.drawButton(bg, theme, theme.fillNormal, theme.borderNormal)
+        this.drawButton(bg, theme, normalVisual.fill, normalVisual.border)
         buttonContainer.scale.set(1)
         if (this.lastHoverIdx === i) {
           this.lastHoverIdx = null

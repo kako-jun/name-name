@@ -43,7 +43,19 @@ import { SeekBar } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { Event, EventScene } from '../types'
 import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
-import { isRead, loadReadProgress, markRead } from './readProgress'
+import {
+  isRead,
+  isSceneRead,
+  isReadForLine,
+  loadReadLineProgress,
+  loadReadProgress,
+  loadReadSceneProgress,
+  makeReadLineKey,
+  migrateLegacyReadProgressForScene,
+  markRead,
+  markReadLine,
+  markReadScene,
+} from './readProgress'
 import { TimeController, defaultTimeController } from './TimeController'
 import { computeShakeOffset, computeFlashAlpha, computeFadeAlpha } from './screenEffects'
 import {
@@ -405,6 +417,10 @@ export class NovelRenderer {
   private skipTimer: number | null = null
   /** 既読進捗（display index の Set）。docKey が設定されている場合に使用 */
   private readProgress: Set<number> = new Set()
+  /** 既読進捗（sceneId + display index の Set）。scene ジャンプ後のスキップに使用 */
+  private readLineProgress: Set<string> = new Set()
+  /** 既読 sceneId の Set。選択肢の既読表示に使用 */
+  private readSceneProgress: Set<string> = new Set()
   /** 既読永続化のキー（undefined の場合はスキップ機能無効） */
   private docKey: string | undefined = undefined
   /** skipMode 変更時の React 側同期コールバック */
@@ -1280,7 +1296,15 @@ export class NovelRenderer {
    */
   setDocKey(docKey: string): void {
     this.docKey = docKey
+    this.reloadReadProgress()
+  }
+
+  private reloadReadProgress(): void {
+    if (!this.docKey) return
+    const docKey = this.docKey
     this.readProgress = loadReadProgress(docKey)
+    this.readLineProgress = loadReadLineProgress(docKey)
+    this.readSceneProgress = loadReadSceneProgress(docKey)
   }
 
   /**
@@ -1291,6 +1315,8 @@ export class NovelRenderer {
     if (this.skipMode === on) return
     this.skipMode = on
     if (on) {
+      // 別の埋め込みインスタンスが増やした既読も、スキップ開始時点で取り込む (#366)。
+      this.reloadReadProgress()
       // スキップモードとオートモードは排他: スキップ ON 時にオートを解除 (#140)
       this.setAutoMode(false)
       // 既に走っている背景クロスフェードも畳み、skip 中の表示を最新状態へ即時収束させる。
@@ -2219,6 +2245,8 @@ export class NovelRenderer {
     if ('Choice' in event) {
       // 選択肢に到達したらスキップモードを解除（手動選択が必要） (#140)
       this.setSkipMode(false)
+      // 複数埋め込みで他インスタンスが読んだ scene を、選択肢表示直前に反映する (#366)。
+      this.reloadReadProgress()
       this.waitingForChoice = true
       this.choiceOverlay.show(
         event.Choice.options,
@@ -2233,7 +2261,8 @@ export class NovelRenderer {
           this.choiceOverlay.hide()
           this.jumpToScene(jump)
         },
-        this.choiceStyle
+        this.choiceStyle,
+        this.readSceneProgress
       )
       return
     }
@@ -3192,10 +3221,24 @@ export class NovelRenderer {
     // line は scrim 可視判定や（adv の）表示テキストに使う。novel は累積テキスト。
     const line = novel ? cumulativeText : (textEvt.text[this.textIndex] ?? '')
     const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
+    const readLineKey = this.currentSceneId
+      ? makeReadLineKey(this.currentSceneId, displayIndex)
+      : null
+    if (this.docKey && this.currentSceneId) {
+      migrateLegacyReadProgressForScene(
+        this.docKey,
+        this.readProgress,
+        this.readLineProgress,
+        this.currentSceneId
+      )
+    }
 
     // スキップモード処理 (#140): 既読チェックはマーク前に行う
     if (this.skipMode && this.docKey) {
-      if (!isRead(this.readProgress, displayIndex)) {
+      const alreadyRead = readLineKey
+        ? isReadForLine(this.readProgress, this.readLineProgress, this.currentSceneId, displayIndex)
+        : isRead(this.readProgress, displayIndex)
+      if (!alreadyRead) {
         // 未読到達 → スキップ終了（現在の行は表示して待機）
         this.setSkipMode(false)
       } else {
@@ -3207,6 +3250,12 @@ export class NovelRenderer {
     // 既読マーク (#140): チェック後にマーク（次回以降は既読として扱う）
     if (this.docKey) {
       markRead(this.docKey, this.readProgress, displayIndex)
+      if (readLineKey) {
+        markReadLine(this.docKey, this.readLineProgress, readLineKey)
+      }
+      if (this.currentSceneId && !isSceneRead(this.readSceneProgress, this.currentSceneId)) {
+        markReadScene(this.docKey, this.readSceneProgress, this.currentSceneId)
+      }
     }
 
     // 空行 = 改ページ（テキストクリア後に次行へ自動進行はしない。空表示する）
@@ -3315,8 +3364,8 @@ export class NovelRenderer {
    * タイプライターをスキップしてから advance() を setTimeout(0) で呼ぶ。
    * Choice / Wait 到達時は processDirective() 内で setSkipMode(false) が呼ばれるため、
    * タイマー発火時に skipMode が false になっており advance() は通常呼び出しになる。
-   * 同一イベントの複数 text 行は同じ displayIndex を持つため、
-   * 2 行目以降も「既読」として扱い全行をスキップする（意図的な設計）。
+   * sceneId がある場面では `sceneId#displayIndex` を使うため、別 MD / 別 scene の
+   * 同じ行番号へ既読が誤爆しない。
    */
   private scheduleSkipStep(): void {
     if (!this.skipMode) return

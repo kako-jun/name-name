@@ -7,7 +7,7 @@ import type { RPGProject } from '../types/rpg'
 import { parseMarkdown } from '../wasm/parser'
 import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
 import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '../api/client'
-import { loadReadProgress, clearReadProgress } from '../game/readProgress'
+import { clearReadProgress, hasAnyReadProgress } from '../game/readProgress'
 import { useVisualViewportHeight } from '../utils/useVisualViewportHeight'
 import {
   getCachedParsedScriptDocument,
@@ -466,7 +466,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const title = projectInfo?.title || projectName
 
   // 「つづきから」ボタンの有効判定: 既読データが存在するか (#141)
-  const [hasSaveData, setHasSaveData] = useState(() => loadReadProgress(projectName).size > 0)
+  const [hasSaveData, setHasSaveData] = useState(() => hasAnyReadProgress(projectName))
 
   return (
     <div
@@ -581,10 +581,12 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
                     window as {
                       __renderer?: {
                         audioManager?: { ensureContext?: () => void }
+                        setDocKey?: (docKey: string) => void
                         restart?: () => void
                       }
                     }
                   ).__renderer
+                  renderer?.setDocKey?.(projectName)
                   renderer?.audioManager?.ensureContext?.()
                   renderer?.restart?.()
                 }}

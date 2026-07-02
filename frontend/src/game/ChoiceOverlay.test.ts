@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Text as PixiText } from 'pixi.js'
-import { ChoiceOverlay, resolveStyle } from './ChoiceOverlay'
+import { ChoiceOverlay, resolveChoiceVisual, resolveStyle } from './ChoiceOverlay'
 import type { FederatedPointerEvent } from 'pixi.js'
 
 function pointerEvent(x: number, y: number, pointerId = 1): FederatedPointerEvent {
@@ -129,6 +129,57 @@ describe('ChoiceOverlay rendering', () => {
     expect(label!.roundPixels).toBe(true)
 
     overlay.hide()
+  })
+
+  it('既読 jump の選択肢は既読用の文字色で描く', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const theme = resolveStyle('default')
+    overlay.show(
+      [
+        { text: '未読', jump: 'new-scene' },
+        { text: '既読', jump: 'read-scene' },
+      ],
+      vi.fn(),
+      'default',
+      new Set(['read-scene'])
+    )
+
+    const unreadLabel = overlay.children[0]?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+    const readLabel = overlay.children[1]?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+
+    expect(unreadLabel?.style.fill).toBe(theme.textColor)
+    expect(readLabel?.style.fill).toBe(theme.textReadColor)
+
+    overlay.hide()
+  })
+
+  it('resolveChoiceVisual は既読/未読と hover で fill/border/text を切り替える', () => {
+    const theme = resolveStyle('default')
+
+    expect(resolveChoiceVisual(theme, false, false)).toEqual({
+      fill: theme.fillNormal,
+      border: theme.borderNormal,
+      text: theme.textColor,
+    })
+    expect(resolveChoiceVisual(theme, false, true)).toEqual({
+      fill: theme.fillHover,
+      border: theme.borderHover,
+      text: theme.textColor,
+    })
+    expect(resolveChoiceVisual(theme, true, false)).toEqual({
+      fill: theme.fillRead,
+      border: theme.borderRead,
+      text: theme.textReadColor,
+    })
+    expect(resolveChoiceVisual(theme, true, true)).toEqual({
+      fill: theme.fillReadHover,
+      border: theme.borderReadHover,
+      text: theme.textReadColor,
+    })
   })
 })
 
