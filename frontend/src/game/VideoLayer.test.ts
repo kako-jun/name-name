@@ -63,4 +63,10 @@ describe('normalizeVideoPosition', () => {
   it('空文字は falsy として既定 center になる', () => {
     expect(normalizeVideoPosition('')).toBe('center')
   })
+
+  // own-property ルックアップ修正の確認（#368）。position が Object.prototype のプロパティ名と
+  // 一致しても未知の値と同じ既定 center になる（関数オブジェクトを文字列として返さない）。
+  it('修正確認: "constructor" でも既定 center になる', () => {
+    expect(normalizeVideoPosition('constructor')).toBe('center')
+  })
 })

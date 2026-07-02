@@ -107,4 +107,24 @@ describe('未登録の builtin', () => {
     expect(log[0]).toContain('foobar')
     warn.mockRestore()
   })
+
+  // own-property ルックアップ修正の確認（#368）。builtinId が Object.prototype のプロパティ名
+  // と一致しても未登録扱いになる（関数オブジェクトを呼び出さない）。
+  it('修正確認: builtinId が "constructor" でも未登録扱いになる（呪文）', () => {
+    const a = makeEntity()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const log = invokeBuiltinSpell('constructor', makeCtx([a]))
+    expect(warn).toHaveBeenCalled()
+    expect(log[0]).toContain('constructor')
+    warn.mockRestore()
+  })
+
+  it('修正確認: builtinId が "constructor" でも未登録扱いになる（アイテム）', () => {
+    const a = makeEntity()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const log = invokeBuiltinItem('constructor', makeCtx([a]))
+    expect(warn).toHaveBeenCalled()
+    expect(log[0]).toContain('constructor')
+    warn.mockRestore()
+  })
 })

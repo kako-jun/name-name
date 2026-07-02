@@ -127,6 +127,15 @@ describe('applyEffect', () => {
     expect(target.hp).toBe(50 - 20)
   })
 
+  // own-property ルックアップ修正の確認（#368）。effect.type が Object.prototype のプロパティ名
+  // と一致しても resist に未登録扱いになり等倍 (1.0) になる（関数オブジェクトを乗数として
+  // 使わない）。
+  it('修正確認: type が "constructor" でも resist 未登録として等倍 (1.0) になる', () => {
+    const target = makeEntity({ hp: 50, resist: { fire: 0.5 } })
+    applyEffect({ kind: 'damage', min: 20, max: 20, type: 'constructor' }, makeCtx([target]))
+    expect(target.hp).toBe(50 - 20) // 20 * 1.0 = 20（登録なし=等倍）
+  })
+
   it('damage_full は即死', () => {
     const target = makeEntity({ hp: 999, maxHp: 999 })
     applyEffect({ kind: 'damage_full' }, makeCtx([target]))

@@ -109,6 +109,22 @@ describe('rollEncounter (Issue #172)', () => {
     warn.mockRestore()
   })
 
+  // own-property ルックアップ修正の確認（#368）。id が Object.prototype のプロパティ名と
+  // 一致しても「未定義 ID」と同じ warning + スキップ扱いになる（関数オブジェクトを敵として
+  // 組み立てない）。
+  it('修正確認: id が "constructor" でも未定義 ID と同じ warning + スキップになる', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const enemies = rollEncounter({
+      rate: 1,
+      groups: ['constructor'],
+      masters: { slime },
+      rng: () => 0,
+    })
+    expect(enemies).toBeNull()
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('複合グループの一部が未定義でも残りで戦闘', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const enemies = rollEncounter({

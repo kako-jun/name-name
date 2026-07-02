@@ -738,6 +738,13 @@ describe('resolveLayoutPosition (#274)', () => {
     expect(resolveLayoutPosition('斜め')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
   })
 
+  // own-property ルックアップ修正の確認（#368）。token が Object.prototype のプロパティ名と
+  // 一致しても未知の値と同じ中央フォールバックになる（関数オブジェクトを yRatio/xRatio に
+  // 混ぜない）。
+  it('修正確認: token が "constructor" でも中央にフォールバックする', () => {
+    expect(resolveLayoutPosition('constructor')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+  })
+
   it('前後の空白を trim してから解釈する', () => {
     expect(resolveLayoutPosition('  中上  ')).toEqual({ xRatio: 0.5, yRatio: 0.34 })
   })
