@@ -138,6 +138,21 @@ describe('normalizePosition', () => {
     expect(normalizePosition('constructor')).toBe('constructor')
   })
 
+  it.each([
+    'toString',
+    'valueOf',
+    'hasOwnProperty',
+    'isPrototypeOf',
+    'propertyIsEnumerable',
+    'toLocaleString',
+    '__proto__',
+  ])(
+    '修正確認: position が Object.prototype のプロパティ名 "%s" でも own-property が無ければそのまま返す',
+    (name) => {
+      expect(normalizePosition(name)).toBe(name)
+    }
+  )
+
   it('空文字は center に倒す', () => {
     expect(normalizePosition('')).toBe('center')
   })
@@ -192,6 +207,30 @@ describe('CharacterLayer X position ratio (Issue #216)', () => {
     expect(state!.sprite.x).toBeCloseTo(400, 0)
   })
 
+  it.each(['toString', '__proto__', 'hasOwnProperty'])(
+    '修正確認: position "%s" でも sprite.x は center にフォールバックする',
+    (name) => {
+      const layer = new CharacterLayer(800, 450)
+      layer.show('hero', 'normal', name, '/assets', { instant: true })
+      const state = asInternals(layer).characters.get('hero')
+      expect(state).toBeDefined()
+      expect(state!.sprite.x).toBeCloseTo(400, 0)
+    }
+  )
+
+  it('状態遷移確認: constructor で center フォールバック後、left へ再配置すると正しく反映される', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', 'constructor', '/assets', { instant: true })
+    const stateBefore = asInternals(layer).characters.get('hero')
+    expect(stateBefore).toBeDefined()
+    expect(stateBefore!.sprite.x).toBeCloseTo(400, 0)
+    layer.show('hero', 'normal', 'left', '/assets', { instant: true })
+    const stateAfter = asInternals(layer).characters.get('hero')
+    expect(stateAfter).toBeDefined()
+    // left = screenWidth(800) * CHARACTER_X_RATIO.left(150/800) = 150
+    expect(stateAfter!.sprite.x).toBeCloseTo(150, 0)
+  })
+
   it('修正確認: 既存 Title を position "constructor" で再配置（x/y override 無し）しても sprite.x は center にフォールバックする', () => {
     const layer = new CharacterLayer(800, 450)
     layer.showTitle('orber', 'sans-serif')
@@ -200,6 +239,18 @@ describe('CharacterLayer X position ratio (Issue #216)', () => {
     expect(state).toBeDefined()
     expect(state!.sprite.x).toBeCloseTo(400, 0)
   })
+
+  it.each(['toString', '__proto__'])(
+    '修正確認: 既存 Title を position "%s" で再配置しても center にフォールバックする',
+    (name) => {
+      const layer = new CharacterLayer(800, 450)
+      layer.showTitle('orber', 'sans-serif')
+      layer.showTitle('orber', 'sans-serif', name)
+      const state = asInternals(layer).characters.get('Title')
+      expect(state).toBeDefined()
+      expect(state!.sprite.x).toBeCloseTo(400, 0)
+    }
+  )
 })
 
 interface GlyphEntryLike {

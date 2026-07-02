@@ -127,4 +127,28 @@ describe('未登録の builtin', () => {
     expect(log[0]).toContain('constructor')
     warn.mockRestore()
   })
+
+  it.each(['toString', 'valueOf', 'hasOwnProperty', '__proto__'])(
+    '修正確認: builtinId "%s" でも未登録扱いになる（呪文）',
+    (name) => {
+      const a = makeEntity()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const log = invokeBuiltinSpell(name, makeCtx([a]))
+      expect(warn).toHaveBeenCalled()
+      expect(log[0]).toContain(name)
+      warn.mockRestore()
+    }
+  )
+
+  it.each(['toString', 'valueOf', 'hasOwnProperty', '__proto__'])(
+    '修正確認: builtinId "%s" でも未登録扱いになる（アイテム）',
+    (name) => {
+      const a = makeEntity()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const log = invokeBuiltinItem(name, makeCtx([a]))
+      expect(warn).toHaveBeenCalled()
+      expect(log[0]).toContain(name)
+      warn.mockRestore()
+    }
+  )
 })

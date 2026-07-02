@@ -125,6 +125,61 @@ describe('rollEncounter (Issue #172)', () => {
     warn.mockRestore()
   })
 
+  it.each(['toString', 'valueOf', '__proto__'])(
+    '修正確認: id "%s" でも未定義 ID と同じ扱いになる',
+    (name) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const enemies = rollEncounter({
+        rate: 1,
+        groups: [name],
+        masters: { slime },
+        rng: () => 0,
+      })
+      expect(enemies).toBeNull()
+      expect(warn).toHaveBeenCalled()
+      warn.mockRestore()
+    }
+  )
+
+  it('複合グループ: 実在idとconstructorを混ぜてもconstructor以外で戦闘成立する', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const enemies = rollEncounter({
+      rate: 1,
+      groups: ['slime+constructor'],
+      masters: { slime },
+      rng: () => 0,
+    })
+    expect(enemies).not.toBeNull()
+    expect(enemies!.length).toBe(1)
+    expect(enemies![0].id).toBe('slime')
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('own-key regression: masters に own の "constructor" キーがあれば正しく敵を組み立てる', () => {
+    const constructorMonster: MonsterDef = {
+      id: 'constructor',
+      name: 'コンストラクター',
+      hp: 20,
+      mp: 0,
+      atk: 4,
+      def: 2,
+      agi: 3,
+      exp: 5,
+      gold: 2,
+    }
+    const enemies = rollEncounter({
+      rate: 1,
+      groups: ['constructor'],
+      masters: { constructor: constructorMonster },
+      rng: () => 0,
+    })
+    expect(enemies).not.toBeNull()
+    expect(enemies!.length).toBe(1)
+    expect(enemies![0].id).toBe('constructor')
+    expect(enemies![0].name).toBe('コンストラクター')
+  })
+
   it('複合グループの一部が未定義でも残りで戦闘', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const enemies = rollEncounter({

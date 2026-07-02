@@ -81,6 +81,36 @@ describe('resolveNpcPortrait', () => {
     })
     expect(resolveNpcPortrait(npc)).toBe('elder.png')
   })
+
+  it.each(['toString', 'valueOf', '__proto__'])(
+    '修正確認: expression 名が "%s" でも own-property が無ければ portrait にフォールバックする',
+    (name) => {
+      const npc = makeNpc({
+        portrait: 'elder.png',
+        expressions: { normal: 'elder_normal.png' },
+        message: `[expression=${name}]\nなにか`,
+      })
+      expect(resolveNpcPortrait(npc)).toBe('elder.png')
+    }
+  )
+
+  it('own-key regression: expressions に own の "constructor" キーが明示設定されていれば正しく解決する', () => {
+    const npc = makeNpc({
+      portrait: 'elder.png',
+      expressions: { constructor: 'elder_constructor.png' },
+      message: '[expression=constructor]\nなにか',
+    })
+    expect(resolveNpcPortrait(npc)).toBe('elder_constructor.png')
+  })
+
+  it('own-but-falsy: expressions の own "constructor" が空文字なら portrait にフォールバックする', () => {
+    const npc = makeNpc({
+      portrait: 'elder.png',
+      expressions: { constructor: '' },
+      message: '[expression=constructor]\nなにか',
+    })
+    expect(resolveNpcPortrait(npc)).toBe('elder.png')
+  })
 })
 
 describe('stripExpressionDirectives', () => {

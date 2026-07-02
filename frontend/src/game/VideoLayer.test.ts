@@ -69,4 +69,20 @@ describe('normalizeVideoPosition', () => {
   it('修正確認: "constructor" でも既定 center になる', () => {
     expect(normalizeVideoPosition('constructor')).toBe('center')
   })
+
+  // 他の proto 名（toString/valueOf 等）は `.toLowerCase()` で文字列自体が変化し
+  // 実在の Object.prototype メンバー名と一致しなくなるため対象外（例: 'toString'→'tostring' は
+  // 本物の member 名ではなく、修正前後で挙動差が出ない）。'Constructor'/'__proto__' は
+  // lowercase 後も実在メンバー名のままなので、大文字化・空白付きの回帰として検証する。
+  it('修正確認: 大文字混在 "Constructor" も lowercase 後に衝突するが center になる', () => {
+    expect(normalizeVideoPosition('Constructor')).toBe('center')
+  })
+
+  it('修正確認: 前後空白付き "  constructor  " も center になる', () => {
+    expect(normalizeVideoPosition('  constructor  ')).toBe('center')
+  })
+
+  it('修正確認: "__proto__" でも center になる', () => {
+    expect(normalizeVideoPosition('__proto__')).toBe('center')
+  })
 })

@@ -745,6 +745,13 @@ describe('resolveLayoutPosition (#274)', () => {
     expect(resolveLayoutPosition('constructor')).toEqual({ xRatio: 0.5, yRatio: 0.5 })
   })
 
+  it.each(['toString', 'valueOf', '__proto__'])(
+    '修正確認: token "%s" でも中央（xRatio:0.5, yRatio:0.5）にフォールバックする',
+    (name) => {
+      expect(resolveLayoutPosition(name)).toEqual({ xRatio: 0.5, yRatio: 0.5 })
+    }
+  )
+
   it('前後の空白を trim してから解釈する', () => {
     expect(resolveLayoutPosition('  中上  ')).toEqual({ xRatio: 0.5, yRatio: 0.34 })
   })
