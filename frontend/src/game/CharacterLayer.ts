@@ -4,7 +4,7 @@
  * PixiJS Container 上でキャラクター立ち絵の表示・表情変更・退場を管理する。
  */
 
-import { Assets, Container, Graphics, Sprite, Text, TextStyle, Ticker } from 'pixi.js'
+import { Assets, Container, Graphics, Sprite, Text, Texture, TextStyle, Ticker } from 'pixi.js'
 import type { Easing } from '../types'
 import { applyEasing, resolveDelta } from './easing'
 import { ensureFontLoaded } from './FontLoader'
@@ -45,11 +45,11 @@ import { hasOwn, safeAssign } from './ownProperty'
  * webp→png フォールバック用。すべて失敗したら最後のエラーで reject する。
  * 候補が 1 本だけなら従来通り単純ロードと等価。
  */
-async function loadFirstAvailableTexture(urls: string[]): Promise<unknown> {
+async function loadFirstAvailableTexture(urls: string[]): Promise<Texture> {
   let lastError: unknown
   for (const url of urls) {
     try {
-      return await Assets.load(url)
+      return await Assets.load<Texture>(url)
     } catch (err) {
       lastError = err
     }
@@ -2448,8 +2448,7 @@ export class CharacterLayer extends Container {
 
     return (
       loadFirstAvailableTexture(urls)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 候補順ロードのため戻り値を unknown で束ねる。texture は従来 Assets.load が返す Texture と同一 (#376)
-        .then((texture: any) => {
+        .then((texture) => {
           // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
           // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。
           if (sprite.destroyed) return false
