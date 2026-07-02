@@ -563,6 +563,9 @@ const SENTENCE_TRAILERS = '」』】〕〗〙）］｝〉》”’｠、，'
 // 先頭ダッシュ (#374) を導く「括りの終わり」の閉じ括弧・閉じ引用符。SENTENCE_TRAILERS から
 // 読点 `、，` を除いた集合（読点は句の途中なので `--` は文中扱いのまま）。SENTENCE_TRAILERS に
 // 閉じ括弧を足せば自動追従する。
+// 注意 (#374 レビュー): `’`(U+2019) は閉じ一重引用符だが英語アポストロフィも兼ねる。理論上
+// `don’t--stop` がアポストロフィ後で先頭ダッシュ化するが、JA ノベル台本では発生せず既存
+// SENTENCE_TRAILERS の分類を踏襲するため、あえて除外しない（実害なし・意識的に据え置き）。
 const CLOSING_BRACKETS = Array.from(SENTENCE_TRAILERS)
   .filter((ch) => ch !== '、' && ch !== '，')
   .join('')
