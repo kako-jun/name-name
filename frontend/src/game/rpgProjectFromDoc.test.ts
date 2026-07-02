@@ -1132,4 +1132,56 @@ describe('mergeMasterDataFromDocs (#238)', () => {
     expect(project.items?.['やくそう']?.name).toBe('やくそう')
     expect(project.party?.hero?.name).toBe('ゆうしゃ')
   })
+
+  // #370: Monster/Item/Spell/PartyMember の id が "__proto__" だと、素朴な
+  // `monsters[id] = ...` および Object.assign によるマージが monsters/merged 自身の
+  // [[Prototype]] を書き換えてしまう（prototype pollution）。own-property として
+  // 登録・読み取りでき、[[Prototype]] が汚染されないことを確認する。
+  it('id が "__proto__" のマスター定義でも [[Prototype]] を汚染せず own-property として登録される', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'data',
+          hidden: true,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'data-master',
+              title: 'マスター',
+              view: 'TopDown',
+              events: [
+                {
+                  Monster: {
+                    id: '__proto__',
+                    name: '汚染モンスター',
+                    hp: 1,
+                    mp: 0,
+                    atk: 1,
+                    def: 1,
+                    agi: 1,
+                    exp: 1,
+                    gold: 1,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    // 単一 doc（collectMasterData 内の safeAssign 経路）
+    const single = mergeMasterDataFromDocs([doc])
+    expect(Object.getPrototypeOf(single.monsters)).toBe(Object.prototype)
+    expect(single.monsters['__proto__']?.name).toBe('汚染モンスター')
+
+    // 複数 doc（merged への safeAssignAll コピー経路。旧実装は Object.assign で汚染しうる）
+    const multi = mergeMasterDataFromDocs([doc, masterDoc()])
+    expect(Object.getPrototypeOf(multi.monsters)).toBe(Object.prototype)
+    expect(multi.monsters['__proto__']?.name).toBe('汚染モンスター')
+    // 通常の id (slime) 側も引き続き正しくマージされる
+    expect(multi.monsters.slime?.name).toBe('スライム')
+  })
 })

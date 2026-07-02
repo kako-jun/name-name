@@ -23,7 +23,7 @@
  * 不正な式は `parseEffect` で `null` を返し、runtime は warning を出して no-op する。
  */
 
-import { hasOwn } from './ownProperty'
+import { hasOwn, safeAssign } from './ownProperty'
 
 export type EffectKind =
   | 'heal'
@@ -282,7 +282,8 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
       if (!effect.state) return ['(警告: status の state 名なし)']
       for (const t of ctx.targets) {
         if (!t.status) t.status = {}
-        t.status[effect.state] = effect.duration ?? 1
+        // #370: state は DSL の自由記述文字列。"__proto__" でも own-property として書く
+        safeAssign(t.status, effect.state, effect.duration ?? 1)
         log.push(`${t.name} は ${effect.state} になった！`)
       }
       return log

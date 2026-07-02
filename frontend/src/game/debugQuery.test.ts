@@ -166,4 +166,15 @@ describe('parseDebugQuery (#220)', () => {
       scene: { sceneId: '1-2' },
     })
   })
+
+  // #370: debug_flags の key が "__proto__" だと、素朴な `flags[key] = val` は
+  // flags オブジェクト自身の [[Prototype]] を書き換えてしまう（prototype pollution）。
+  // own-property として登録され、[[Prototype]] が汚染されないことを確認する。
+  it('22: debug_flags の key が "__proto__" でも [[Prototype]] を汚染せず own-property として登録される', () => {
+    const r = parseDebugQuery('?debug_scene=1-2&debug_flags=__proto__:true,ok:true')
+    const flags = (r as { scene: { flags: Record<string, FlagValue> } }).scene.flags
+    expect(Object.getPrototypeOf(flags)).toBe(Object.prototype)
+    expect(flags['__proto__']).toEqual({ Bool: true })
+    expect(flags.ok).toEqual({ Bool: true })
+  })
 })

@@ -13,6 +13,7 @@
 
 import type { Step, StartFromOptions } from './GameState'
 import type { FlagValue } from '../types'
+import { safeAssign } from './ownProperty'
 
 /** parseDebugQuery の戻り値。script 指定 / scene 指定 / 該当なし(null) の三択。 */
 export type DebugQueryResult = { script: Step[] } | { scene: StartFromOptions } | null
@@ -83,7 +84,8 @@ function parseFlags(value: string): Record<string, FlagValue> {
     const key = pair.slice(0, sep).trim()
     if (key === '') continue
     const val = pair.slice(sep + 1)
-    flags[key] = toFlagValue(val)
+    // #370: key が "__proto__" でも own-property として書く（prototype pollution 回避）
+    safeAssign(flags, key, toFlagValue(val))
   }
   return flags
 }

@@ -193,6 +193,17 @@ describe('applyEffect', () => {
     expect(target.status?.poison).toBe(4)
   })
 
+  // #370: state が "__proto__" だと、素朴な `t.status[state] = ...` は t.status 自身の
+  // [[Prototype]] を書き換えてしまう（prototype pollution）。own-property として
+  // 登録され、[[Prototype]] が汚染されないことを確認する。
+  it('修正確認: state が "__proto__" でも t.status の [[Prototype]] を汚染せず own-property として登録される', () => {
+    const target = makeEntity()
+    applyEffect({ kind: 'status', state: '__proto__', duration: 4 }, makeCtx([target]))
+    expect(target.status).toBeDefined()
+    expect(Object.getPrototypeOf(target.status!)).toBe(Object.prototype)
+    expect(target.status?.['__proto__']).toBe(4)
+  })
+
   it('escape_battle はログだけ返してエンティティを変更しない', () => {
     const target = makeEntity({ hp: 10 })
     const log = applyEffect({ kind: 'escape_battle' }, makeCtx([target]))
