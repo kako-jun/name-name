@@ -8,8 +8,9 @@
     "dev": "node scripts/dev.mjs",
     "deploy": "wrangler deploy",
     "build": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run && npm run test:proxy",
+    "test:watch": "vitest",
+    "test:proxy": "node --experimental-test-module-mocks --test scripts/local-fs-proxy.test.mjs"
   },
   "dependencies": {
     "@octokit/core": "^5.2.0",
