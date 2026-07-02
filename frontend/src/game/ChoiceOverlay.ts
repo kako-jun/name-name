@@ -15,6 +15,7 @@
 import { Container, Graphics, Rectangle, Text as PixiText, TextStyle, Ticker } from 'pixi.js'
 import { ChoiceOption } from '../types'
 import type { AudioManager } from './AudioManager'
+import { hasOwn } from './ownProperty'
 import type { DestroyOptions, FederatedPointerEvent } from 'pixi.js'
 
 const BUTTON_WIDTH = 480
@@ -130,7 +131,11 @@ export function resolveStyle(name?: string | null): ChoiceTheme {
   if (!name || name === 'default') {
     return STYLE_THEMES.default
   }
-  if (name in STYLE_THEMES) {
+  // own-property のみ見る (#368)。`in` 演算子は Object.prototype も辿ってしまい、脚本側の
+  // 自由記述である name（frontmatter `choice_style:` の生文字列）が `constructor` 等と一致すると
+  // `name in STYLE_THEMES` が誤って true になり、後続の `STYLE_THEMES[name]` が
+  // ChoiceTheme ではなく Object コンストラクタ関数等を返してしまう。
+  if (hasOwn(STYLE_THEMES, name)) {
     return STYLE_THEMES[name as ChoiceStyleName]
   }
   console.warn(
