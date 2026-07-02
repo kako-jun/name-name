@@ -224,7 +224,9 @@ export class VideoLayer extends Container {
       const s = Math.max(this.screenWidth / vw, this.screenHeight / vh)
       sprite.scale.set(s, s)
     }
-    const xRatio = VIDEO_X_RATIO[position] ?? VIDEO_X_RATIO.center
+    // own-property のみ見る (#368)。position は normalizeVideoPosition() 経由で
+    // 'left'|'center'|'right' に正規化済みだが、他の VIDEO_X_RATIO 参照箇所と書き方を揃える。
+    const xRatio = hasOwn(VIDEO_X_RATIO, position) ? VIDEO_X_RATIO[position] : VIDEO_X_RATIO.center
     sprite.x = this.screenWidth * xRatio
     sprite.y = this.screenHeight * 0.5
   }
