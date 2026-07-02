@@ -14,7 +14,7 @@
 // ここに 1 ケース追加する運用にする。
 
 import { describe, expect, it } from 'vitest'
-import { parseMarkdown } from './parser'
+import { parseMarkdown, emitMarkdown } from './parser'
 
 describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive normalize (#310)', () => {
   // #308 / #310 / 既存 (#283 dialog_style / #286 protagonist) をまとめて持つ最小スクリプト。
@@ -151,6 +151,107 @@ describe('parseMarkdown + normalizeEvents: 表示テキストの正準化 (#340)
     const monster = events.find((e) => typeof e === 'object' && 'Monster' in e)
     expect(monster && 'Monster' in monster && monster.Monster.name).toBe('王--様')
     expect(monster && 'Monster' in monster && monster.Monster.id).toBe('boss--1')
+  })
+})
+
+// #364 / #360 穴埋め: character_height_ratio(s) は wasm 境界で Rust の HashMap<String, f64> が
+// tsify 経由で Map になって返るため、normalizeDocument が Object.fromEntries で Record に変換する
+// （parser.ts の character_height_ratios コメント参照）。この変換自体はこのファイルに一件も
+// テストが無かった穴なので、#364 の per-character override 分と併せて実 parseMarkdown（WASM 経由）
+// で縛る。
+describe('parseMarkdown: character_height_ratios の wasm 境界正規化 (#364 / #360 穴埋め)', () => {
+  it('T-WASM-01: character_height_ratios: theo:0.65,hue:0.68 は doc.character_height_ratios が {theo:0.65, hue:0.68} になる', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      'character_height_ratios: theo:0.65,hue:0.68',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.character_height_ratios).toEqual({ theo: 0.65, hue: 0.68 })
+  })
+
+  it('T-WASM-02: 未指定なら doc.character_height_ratios は空オブジェクト {}（null/undefined ではないことが型契約上重要）', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.character_height_ratios).toEqual({})
+    expect(doc.character_height_ratios).not.toBeNull()
+    expect(doc.character_height_ratios).not.toBeUndefined()
+  })
+
+  it('T-WASM-03: character_height_ratio（単数形・#360）も character_height_ratios（複数形・#364）と同時に正しく parse される（#360 の穴埋め）', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      'character_height_ratio: 0.8',
+      'character_height_ratios: theo:0.65',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.character_height_ratio).toBe(0.8)
+    expect(doc.character_height_ratios).toEqual({ theo: 0.65 })
+  })
+})
+
+// このファイルに emitMarkdown 呼び出しテストが一件も無かったので新設する（#364）。
+describe('emitMarkdown: character_height_ratios の emit (#364)', () => {
+  const minimalMarkdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s',
+    '',
+    '**A**:',
+    'x',
+    '',
+  ].join('\n')
+
+  it('T-WASM-04: character_height_ratios を含む EventDocument から正しくソートされた frontmatter 行を emit する', async () => {
+    const doc = await parseMarkdown(minimalMarkdown)
+    const withRatios = { ...doc, character_height_ratios: { theo: 0.65, hue: 0.68 } }
+    const emitted = await emitMarkdown(withRatios)
+    expect(emitted).toContain('character_height_ratios: hue:0.68,theo:0.65')
+  })
+
+  it('T-WASM-05: character_height_ratios キー自体を持たない legacy 形状の document を渡してもクラッシュしない', async () => {
+    const doc = await parseMarkdown(minimalMarkdown)
+    const legacy = { ...doc } as Record<string, unknown>
+    delete legacy.character_height_ratios
+    const emitted = await emitMarkdown(legacy as never)
+    expect(typeof emitted).toBe('string')
+    // 未指定（フィールド欠落）は空マップ扱いと同じく行を出さない。
+    expect(emitted).not.toContain('character_height_ratios')
   })
 })
 
