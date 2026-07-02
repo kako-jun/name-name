@@ -329,6 +329,60 @@ test("walkTree: T15 .md の readFile 失敗は sha:\"\" にサイレントフォ
   assert.deepEqual(warnCalls, [], "現状は console.warn も呼ばない");
 });
 
+test("walkTree: T26 ちょうど64KB (65536B) の .md は境界内として sha が計算される (spy)", async (t) => {
+  const dir = await makeTmpDir("t26-boundary-in-");
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const content = Buffer.alloc(64 * 1024, "a"); // ちょうど 65536 バイト
+  await writeFile(path.join(dir, "boundary.md"), content);
+
+  const calls = [];
+  const mocked = mock.module("node:fs/promises", {
+    namedExports: {
+      ...realFsPromises,
+      readFile: async (...args) => {
+        calls.push(args[0]);
+        return realFsPromises.readFile(...args);
+      },
+    },
+  });
+  t.after(() => mocked.restore());
+
+  const walkTree = await importWalkTree();
+  const tree = await walkTree(dir);
+  const entry = findEntry(tree, "boundary.md");
+  assert.ok(entry);
+  assert.equal(entry.size, 64 * 1024);
+  assert.equal(entry.sha, gitHashObjectStdin(content), "境界値ちょうど (65536B) は sha が実際に計算される");
+  assert.equal(calls.length, 1, "境界値ちょうど (65536B) は readFile が呼ばれる");
+});
+
+test("walkTree: T27 64KB+1 (65537B) の .md は境界外として sha:\"\" になり readFile が呼ばれない (spy)", async (t) => {
+  const dir = await makeTmpDir("t27-boundary-out-");
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const content = Buffer.alloc(64 * 1024 + 1, "a"); // 65537 バイト (64KB 超)
+  await writeFile(path.join(dir, "over-boundary.md"), content);
+
+  const calls = [];
+  const mocked = mock.module("node:fs/promises", {
+    namedExports: {
+      ...realFsPromises,
+      readFile: async (...args) => {
+        calls.push(args[0]);
+        return realFsPromises.readFile(...args);
+      },
+    },
+  });
+  t.after(() => mocked.restore());
+
+  const walkTree = await importWalkTree();
+  const tree = await walkTree(dir);
+  const entry = findEntry(tree, "over-boundary.md");
+  assert.ok(entry);
+  assert.equal(entry.size, 64 * 1024 + 1);
+  assert.equal(entry.sha, "", "境界値超 (65537B) は sha が空文字列になる");
+  assert.deepEqual(calls, [], "境界値超 (65537B) は readFile が呼ばれない (性能最適化の契約)");
+});
+
 test("import only: エントリポイントガードにより import しただけではサーバが listen されない", async () => {
   // #371 最小リファクタの検証: `node scripts/local-fs-proxy.mjs` として直接
   // 実行された場合だけ listen し、import 経路では listen しないこと。
