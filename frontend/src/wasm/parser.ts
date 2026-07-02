@@ -207,6 +207,15 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     character_y_ratio: doc.character_y_ratio ?? null,
     // 立ち絵の目標表示高さ比率 (#360)。数値なので ?? null（未指定は原寸 scale=1）。
     character_height_ratio: doc.character_height_ratio ?? null,
+    // キャラごとの立ち絵目標表示高さ比率 override (#364)。Rust の HashMap<String, f64> は
+    // tsify 経由で Map になって返るため、Record に変換する（npc.expressions と同じ変換パターン、
+    // rpgProjectFromDoc.ts 参照）。未指定時は空オブジェクト（後方互換）。
+    // ここを忘れると Rust 側は正しくパースされているのに wasm 経由で undefined になり、
+    // テストは緑のまま本番だけ壊れる（#308 の教訓）。
+    character_height_ratios: (() => {
+      const m = doc.character_height_ratios as unknown as Map<string, number> | undefined
+      return m && m.size > 0 ? Object.fromEntries(m) : {}
+    })(),
     character_fade_ms: doc.character_fade_ms ?? null,
     // スキップ/デバッグの per-game 出し分け (#310)。boolean なので ?? null（未指定は下流で既定: skip=true / debug=false）。
     skip_enabled: doc.skip_enabled ?? null,

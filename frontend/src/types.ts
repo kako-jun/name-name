@@ -433,6 +433,14 @@ export interface EventDocument {
    *  null/undefined のときは原寸 scale=1（後方互換の絶対条件）。frontmatter `character_height_ratio:` から流す。
    *  対象は show() の立ち絵のみ（Title/Label/Image は非対象）。fit(#294) 指定時は fit を優先する。 */
   character_height_ratio?: number | null
+  /** キャラごとの立ち絵目標表示高さ比率 override (#364)。
+   *  `character_height_ratio`（#360）はスクリプト単位の単一値のため、1つのスクリプトに登場する
+   *  全キャラの表示高さがテクスチャの縦pxに関わらず同一値に強制収束してしまう（身長差が潰れる）。
+   *  キーはキャラクター表示名、値は character_height_ratio と同じ意味の比率。
+   *  このマップに該当キャラがいなければ character_height_ratio（スクリプト単位）にフォールバックし、
+   *  どちらにも該当しなければ原寸（scale=1）にフォールバックする。
+   *  未指定時は空オブジェクト（後方互換）。frontmatter `character_height_ratios:` から流す。 */
+  character_height_ratios?: Record<string, number>
   /** 立ち絵の新規表示・退場フェード時間 (ms)。
    *  null/undefined のときは runtime 既定 300ms（後方互換）。frontmatter `character_fade_ms:` から流す。 */
   character_fade_ms?: number | null
