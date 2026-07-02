@@ -42,6 +42,7 @@ const { rendererInstances, MockRenderer } = vi.hoisted(() => {
     setProtagonist = vi.fn()
     setCharacterYRatio = vi.fn()
     setCharacterHeightRatio = vi.fn()
+    setCharacterHeightRatios = vi.fn()
     setCharacterFadeMs = vi.fn()
     applySettings = vi.fn()
     setScenes = vi.fn()

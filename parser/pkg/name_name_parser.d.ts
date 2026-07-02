@@ -205,6 +205,19 @@ export interface Document {
      */
     character_height_ratio?: number;
     /**
+     * キャラごとの立ち絵目標表示高さ比率 override (#364)。
+     * `character_height_ratio`（#360）はスクリプト単位の単一値のため、1つのスクリプトに登場する
+     * 全キャラの表示高さがテクスチャの縦pxに関わらず同一値に強制収束してしまう（身長差が潰れる）。
+     * #360 では「大半は override 不要」としてこの per-character 対応を先送りしたが、
+     * theo-hayami の10人キャストのように身長差を意図的に持たせるケースで必要になったため追加。
+     * キーはキャラクター表示名、値は character_height_ratio と同じ意味の比率。
+     * このマップに該当キャラがいなければ character_height_ratio（スクリプト単位）にフォールバックし、
+     * どちらにも該当しなければ原寸（scale=1）にフォールバックする。
+     * frontmatter `character_height_ratios: theo:0.65,hue:0.68,...` の形式（expressions= と同じ
+     * カンマ区切り key:value 書式）から流す。
+     */
+    character_height_ratios?: Map<string, number>;
+    /**
      * 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms:` から流す。
      * 未指定なら runtime 既定 300ms（後方互換）。作品ごとに ToHeart 式のじわっとした登場へ
      * 調整するための per-game 数値設定。空・非数値は None 扱い。
@@ -356,8 +369,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly emit_markdown: (a: any) => [number, number, number, number];
     readonly parse_markdown: (a: number, b: number) => [number, number, number];
+    readonly emit_markdown: (a: any) => [number, number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

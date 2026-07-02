@@ -180,6 +180,33 @@ export function computeTargetHeightScale(
 }
 
 /**
+ * per-character の character_height_ratios override (#364) を解決する純粋関数。
+ *
+ * `character_height_ratio`（#360）はスクリプト単位の単一値のため、1つのスクリプトに登場する
+ * 全キャラの表示高さが同一値に強制収束してしまう（テクスチャの縦pxに関わらず身長差が潰れる）。
+ * per-character override マップを持たせて、キャラごとに違う目標高さを指定できるようにする。
+ *
+ * 優先順位: `ratios[characterName]`（per-character override）> `defaultRatio`（character_height_ratio、
+ * スクリプト単位）> `null`（呼び出し側で原寸 scale=1 にフォールバック）。
+ * `setCharacterHeightRatios` が保存前に [CHARACTER_HEIGHT_RATIO_MIN, MAX] へクランプ・不正値除去
+ * 済みのため、ここでは単純なルックアップのみ行う（値の検証はこの関数の責務ではない）。
+ *
+ * テストが期待値を直書きして陳腐化しないよう export する（規律4 / #262 の教訓）。
+ */
+export function resolveCharacterHeightRatio(
+  characterName: string,
+  ratios: Record<string, number>,
+  defaultRatio: number | null
+): number | null {
+  // own-property のみ見る（#364 セルフレビュー修正）。`ratios[characterName]` の素朴なブラケット
+  // アクセスは prototype chain も辿ってしまい、キャラ名が `constructor` / `toString` 等の
+  // Object.prototype のプロパティ名と一致すると関数オブジェクトを返してしまう
+  // （呼び出し側 computeTargetHeightScale の Number.isFinite ガードで静かに scale=1 に化ける）。
+  const hasOwn = Object.prototype.hasOwnProperty.call(ratios, characterName)
+  return hasOwn ? ratios[characterName] : defaultRatio
+}
+
+/**
  * ラベルの `揃え` / `align`（正規化済み left/center/right）を Pixi の anchor.x に写す (#275)。
  *
  * 左=0 / 中央=0.5 / 右=1。parser が日本語/英語を `left`/`center`/`right` に正規化済みなので
@@ -449,6 +476,12 @@ export class CharacterLayer extends Container {
    *  [CHARACTER_HEIGHT_RATIO_MIN, MAX] にクランプして保持する。設定時は loadTexture が
    *  computeTargetHeightScale で目標高さへ合わせる（fit=true の立ち絵は #294 優先で対象外）。 */
   private characterHeightRatio: number | null = null
+  /** キャラごとの立ち絵目標表示高さ比率 override (#364)。キーはキャラクター表示名。
+   *  frontmatter `character_height_ratios` 由来の per-character 値を setCharacterHeightRatios で
+   *  受けて各値を [CHARACTER_HEIGHT_RATIO_MIN, MAX] にクランプして保持する。マップに無いキャラは
+   *  characterHeightRatio（スクリプト単位）へフォールバックする（resolveCharacterHeightRatio）。
+   *  未指定なら空 Record で後方互換。 */
+  private characterHeightRatios: Record<string, number> = {}
   /** 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms` 由来。 */
   private characterFadeMs: number = DEFAULT_FADE_MS
   /** auto-scale 計算のために screenWidth / screenHeight を保持 */
@@ -549,14 +582,66 @@ export class CharacterLayer extends Container {
         ? null
         : Math.min(CHARACTER_HEIGHT_RATIO_MAX, Math.max(CHARACTER_HEIGHT_RATIO_MIN, ratio))
     this.characterHeightRatio = next
-    for (const state of this.characters.values()) {
+    this.reapplyCharacterHeightRatios()
+  }
+
+  /**
+   * キャラごとの立ち絵目標表示高さ比率 override を per-game 値で上書きする (#364)。
+   * frontmatter `character_height_ratios:` から流した Record を渡す。null/undefined は空 Record
+   * 扱い（＝マップ override なし・全キャラ character_height_ratio へフォールバック、後方互換）。
+   *
+   * setCharacterHeightRatio (#360) と同じ規約で、各値を [CHARACTER_HEIGHT_RATIO_MIN, MAX] へ
+   * クランプする。非有限・非正の値は捨てる（そのキャラはマップ override なし扱いになり、
+   * resolveCharacterHeightRatio 経由で character_height_ratio へフォールバックする）。
+   *
+   * setCharacterHeightRatio と同じくライブ再適用ロジックを共有する（reapplyCharacterHeightRatios）。
+   */
+  setCharacterHeightRatios(ratios: Record<string, number> | null | undefined): void {
+    const next: Record<string, number> = {}
+    if (ratios) {
+      for (const [name, value] of Object.entries(ratios)) {
+        if (Number.isFinite(value) && value > 0) {
+          next[name] = Math.min(
+            CHARACTER_HEIGHT_RATIO_MAX,
+            Math.max(CHARACTER_HEIGHT_RATIO_MIN, value)
+          )
+        }
+      }
+    }
+    this.characterHeightRatios = next
+    this.reapplyCharacterHeightRatios()
+  }
+
+  /**
+   * 表示中の立ち絵に現在の characterHeightRatio(s) を即再適用する (#360 / #364)。
+   * setCharacterHeightRatio / setCharacterHeightRatios の共通ライブ再スケールロジック（規律4）。
+   *
+   * 既に表示中で位置アニメが走っておらず fit でない静的な立ち絵は、texture がロード済み
+   * （height>0）なら新しい target-height scale を即再適用する（後から比率が変わっても破綻させない）。
+   * アニメ中・fit・render-only（Title/Label/Image）の sprite は触らない（中間状態の焼き込み回避 /
+   * render-only は各自の sizing のまま #274）。
+   */
+  private reapplyCharacterHeightRatios(): void {
+    for (const [name, state] of this.characters.entries()) {
       // render-only（Title/Label/Image #274）と fit（#294）・アニメ中の sprite は対象外。
-      if (state.renderOnly || state.fit || state.animation !== null) continue
+      // クロスフェード中の旧 sprite（snapshotHidden、キーは `${character}__transition_N`）も対象外
+      // （getCharacterStates と同じ理由 #337）。Map キーをそのまま名前として解決すると override
+      // マップにヒットせず旧 sprite だけ既定比率にフォールバックし、新 sprite との間で一時的な
+      // サイズ不一致が起きる。旧 sprite はまもなく破棄されるので再スケールする意味もない。
+      if (state.renderOnly || state.fit || state.animation !== null || state.snapshotHidden)
+        continue
       const texture = state.sprite.texture
       // texture 未ロード（height<=0）なら次の loadTexture に委ねる（ここでは触らない）。
       if (!texture || texture.height <= 0) continue
+      const targetRatio = resolveCharacterHeightRatio(
+        name,
+        this.characterHeightRatios,
+        this.characterHeightRatio
+      )
       const scale =
-        next === null ? 1 : computeTargetHeightScale(texture.height, next, this.screenHeight)
+        targetRatio === null
+          ? 1
+          : computeTargetHeightScale(texture.height, targetRatio, this.screenHeight)
       state.sprite.scale.set(scale)
       // sprite 幅が変わったので名札も追従して収め直す（縮んだ立ち絵から名札がはみ出さない #360）。
       this.fitLabelToSprite(state.sprite, state.label)
@@ -778,6 +863,7 @@ export class CharacterLayer extends Container {
 
         void this.loadTexture(
           nextState.sprite,
+          character,
           expression,
           assetBaseUrl,
           nextState.label,
@@ -820,6 +906,7 @@ export class CharacterLayer extends Container {
         // texture 再ロード経路では onReady を loadTexture に委ねる（load 完了/失敗で発火）(#293)。
         void this.loadTexture(
           existing.sprite,
+          character,
           expression,
           assetBaseUrl,
           existing.label,
@@ -884,13 +971,19 @@ export class CharacterLayer extends Container {
     }
     // 新規立ち絵: texture load 完了/失敗で onReady を発火（#293）。これでテキスト reveal が
     // 立ち絵の用意完了に揃う。
-    void this.loadTexture(state.sprite, expression, assetBaseUrl, state.label, fit, onReady).then(
-      (loaded) => {
-        textureReady = true
-        textureLoaded = loaded
-        startEntrance()
-      }
-    )
+    void this.loadTexture(
+      state.sprite,
+      character,
+      expression,
+      assetBaseUrl,
+      state.label,
+      fit,
+      onReady
+    ).then((loaded) => {
+      textureReady = true
+      textureLoaded = loaded
+      startEntrance()
+    })
   }
 
   /**
@@ -915,7 +1008,7 @@ export class CharacterLayer extends Container {
       const nextExpression = `${basename}-${frame}`
       cur.expression = nextExpression
       // 2コマ自動切替でも fit (#294) を維持する。
-      void this.loadTexture(cur.sprite, nextExpression, assetBaseUrl, cur.label, cur.fit)
+      void this.loadTexture(cur.sprite, character, nextExpression, assetBaseUrl, cur.label, cur.fit)
     }, 1000)
     state.idleIntervalId = intervalId
   }
@@ -932,7 +1025,14 @@ export class CharacterLayer extends Container {
       if (state.expression !== aExpression) {
         state.expression = aExpression
         // idle cycle 停止で -a に戻すときも fit (#294) を維持する。
-        void this.loadTexture(state.sprite, aExpression, assetBaseUrl, state.label, state.fit)
+        void this.loadTexture(
+          state.sprite,
+          character,
+          aExpression,
+          assetBaseUrl,
+          state.label,
+          state.fit
+        )
       }
     }
   }
@@ -1318,7 +1418,7 @@ export class CharacterLayer extends Container {
     if (state.expression === expression) return
     state.expression = expression
     // 表情のみ差し替えでも fit (#294) を維持する。
-    void this.loadTexture(state.sprite, expression, assetBaseUrl, state.label, state.fit)
+    void this.loadTexture(state.sprite, character, expression, assetBaseUrl, state.label, state.fit)
   }
 
   /**
@@ -2282,9 +2382,13 @@ export class CharacterLayer extends Container {
    * 呼ぶ。NovelRenderer がテキスト reveal をこの完了に揃えて「立ち絵 →（同時/直後に）テキスト」
    * の順序を保証するためのフック。assetBaseUrl 空（描画できない）・load 成功・load 失敗のいずれでも
    * 発火させ、テキストが永遠に出ない事故を防ぐ。
+   *
+   * `characterName` (#364): character_height_ratios の per-character override 解決に使う
+   * キャラクター表示名。`this.characters` の key と同じ値を渡す（呼び出し側の `character` 変数）。
    */
   private loadTexture(
     sprite: Sprite,
+    characterName: string,
     expression: string,
     assetBaseUrl: string,
     label?: Text,
@@ -2315,10 +2419,12 @@ export class CharacterLayer extends Container {
           // 明示適用する（論理画面より大きいときだけ画面内に収める・小さい時は原寸）。
           // サイズや位置では自動分岐しない。novel/adv でも分けない（fit フラグだけが分岐の根拠）。
           //
-          // 優先順位 (#360): per-line フィット(fit=true, #294) > per-game character_height_ratio
-          //   > 既定 原寸(1)。fit のときは従来通り computeFitScale。fit=false で height ratio が
-          //   設定済みなら computeTargetHeightScale で目標表示高さへ合わせる（高解像度立ち絵の
-          //   巨大化を per-game の目標高さで吸収）。どちらも無ければ原寸 1（後方互換の絶対条件）。
+          // 優先順位 (#360 / #364): per-line フィット(fit=true, #294) > per-character
+          //   character_height_ratios override > per-game character_height_ratio > 既定 原寸(1)。
+          //   fit のときは従来通り computeFitScale。fit=false のときは resolveCharacterHeightRatio で
+          //   このキャラの目標比率（per-character override があればそれ、なければスクリプト単位の
+          //   character_height_ratio）を解決し、あれば computeTargetHeightScale で目標表示高さへ
+          //   合わせる（高解像度立ち絵の巨大化を吸収）。どちらも無ければ原寸 1（後方互換の絶対条件）。
           // ※ loadTexture は show() の立ち絵専用。render-only（Title/Label/Image）は通らないので
           //   height ratio は自動的に立ち絵のみへ効く。
           let scale: number
@@ -2329,14 +2435,16 @@ export class CharacterLayer extends Container {
               this.screenWidth,
               this.screenHeight
             )
-          } else if (this.characterHeightRatio !== null) {
-            scale = computeTargetHeightScale(
-              texture.height,
-              this.characterHeightRatio,
-              this.screenHeight
-            )
           } else {
-            scale = 1
+            const targetRatio = resolveCharacterHeightRatio(
+              characterName,
+              this.characterHeightRatios,
+              this.characterHeightRatio
+            )
+            scale =
+              targetRatio === null
+                ? 1
+                : computeTargetHeightScale(texture.height, targetRatio, this.screenHeight)
           }
           sprite.scale.set(scale)
           // ラベルを立ち絵（sprite）の幅に収める。natural width が sprite 幅を超えたら縮小、
