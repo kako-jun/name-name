@@ -560,6 +560,15 @@ export function resolveSceneTitle(
 const SENTENCE_TERMINATORS = '。！？!?'
 // 文末記号の直後に同じ文へ取り込む閉じ括弧・閉じ引用符・読点
 const SENTENCE_TRAILERS = '」』】〕〗〙）］｝〉》”’｠、，'
+// 先頭ダッシュ (#374) を導く「括りの終わり」の閉じ括弧・閉じ引用符。SENTENCE_TRAILERS から
+// 読点 `、，` を除いた集合（読点は句の途中なので `--` は文中扱いのまま）。SENTENCE_TRAILERS に
+// 閉じ括弧を足せば自動追従する。
+// 注意 (#374 レビュー): `’`(U+2019) は閉じ一重引用符だが英語アポストロフィも兼ねる。理論上
+// `don’t--stop` がアポストロフィ後で先頭ダッシュ化するが、JA ノベル台本では発生せず既存
+// SENTENCE_TRAILERS の分類を踏襲するため、あえて除外しない（実害なし・意識的に据え置き）。
+const CLOSING_BRACKETS = Array.from(SENTENCE_TRAILERS)
+  .filter((ch) => ch !== '、' && ch !== '，')
+  .join('')
 
 /**
  * 余韻横棒 `──`（U+2500 の連続）を文送り境界として扱うか判定する 1 文字述語 (#340)。
@@ -572,17 +581,28 @@ function isMidlineRule(ch: string): boolean {
 }
 
 /**
- * 本文を文境界で分割する純粋関数 (#283 / #340)。
+ * 本文を文境界で分割する純粋関数 (#283 / #340 / #374)。
  *
  * 句点・感嘆符・疑問符を文末とみなし、直後に続く閉じ括弧・閉じ引用符（および句読点）は
- * その文に含める。加えて余韻横棒 `──`（U+2500 の連続、原稿 `--` の正準化後）も文送り境界とし、
- * `──` 自体は前の表示単位に含める (#340)。文末記号を持たない末尾の断片も 1 文として返す。
- * 改行（`\n`）は文の途中の改行として温存し、文境界とはしない（wordwrap が別途処理する）。
+ * その文に含める。加えて余韻横棒 `──`（U+2500 の連続、原稿 `--` の正準化後）も文送り境界とする。
+ * 文末記号を持たない末尾の断片も 1 文として返す。改行（`\n`）は文の途中の改行として温存し、
+ * 文境界とはしない（wordwrap が別途処理する）。
  *
- * 隣接する停止境界は 1 回にまとめる (#340): `。──` / `──。` のように文末記号と `──` が
- * 隣り合う場合は 1 文にまとめて二重に止まらない。ただし `？！` のような文末記号どうし（間に
- * `──` を挟まない）は従来どおり別々に止める（#283 の回帰固定を維持）。`⋯`（U+22EF）は境界に
- * しないため、`⋯⋯──` は `──` で 1 回、`⋯⋯。` は `。` で 1 回止まる。
+ * `──` の帰属は直前の「括りの終わり」の有無で決まる (#374)。括りの終わり＝文末記号（`。！？!?`）
+ * または閉じ括弧/閉じ引用符（`」』）…`。読点 `、` は含めない＝句の途中）:
+ *  - **括りの終わりの直後の `──`（`。──` / `」──` 等）**＝「次のかたまりを導く先頭ダッシュ」。括りの
+ *    終わりで切って `──` は**次の**表示単位の先頭に回す。例: `です。──それと` → `['です。', '──それと']`、
+ *    `「お題」──本文` → `['「お題」', '──本文']`。`です。`／`「お題」`まで表示→クリック→`──…`が一気に
+ *    出る自然な息継ぎにする（theo-hayami のフィードバック）。括りの終わりと `──` の間の空白（`。 ──`／
+ *    `「お題」 ──`）は捨てず次単位の先頭空白として温存する。
+ *  - **それ以外の `──`（直前が括りの終わりでない・文中）**＝従来どおり `──` の後で停止し、`──` は前の
+ *    単位に含める (#340)。例: `私はこう見ている──在る` → `['私はこう見ている──', '在る']`、
+ *    `A、──B` → `['A、──', 'B']`（読点は括りの終わりでない）。この場合は直後に文末記号が続けば
+ *    `──。` として 1 停止にまとめる（二重に止まらない）。
+ *
+ * `？！` のような文末記号どうし（間に `──` を挟まない）は従来どおり別々に止める（#283 の回帰固定を
+ * 維持）。`⋯`（U+22EF）は境界にしないため、`⋯⋯──` は `──` で 1 回、`⋯⋯。` は `。` で 1 回止まる。
+ * `⋯⋯。──` は `。` で切って `──` が次の単位を導く (#374)。
  *
  * - 空文字・空白だけの入力は空配列 `[]` を返す。
  * - テキスト全体の先頭・末尾（外周）の余分な空白は関数冒頭で 1 回だけトリムするが、
@@ -621,54 +641,71 @@ export function splitIntoSentences(text: string): string[] {
     return i
   }
 
-  // 停止チェーンを延長する (#340)。current には既に最初の停止トークン（文末記号 or `──`）が入っている。
-  // 規則:
-  //  - 閉じ括弧・句読点トレーラは常に吸収する（既存 #283 挙動）。
-  //  - `──` は直前が文末記号でも `──` でも吸収する（`。──` を 1 停止にまとめる）。
-  //  - 文末記号は直前が `──` のときだけ吸収する（`──。` を 1 停止に）。文末記号どうし（`？！`）は
-  //    間に `──` を挟まない限りまとめない＝別停止のまま（#283 回帰固定を守る）。
-  const extendStopChain = (i: number, lastWasRule: boolean): number => {
-    for (;;) {
-      i = absorbTrailers(i)
-      const next = i + 1 < n ? chars[i + 1] : ''
-      if (isMidlineRule(next)) {
-        // `──` の連続をまとめて吸収する。
-        while (i + 1 < n && isMidlineRule(chars[i + 1])) {
-          i++
-          current += chars[i]
-        }
-        lastWasRule = true
-        continue
-      }
-      // `next !== ''` ガードは必須 (#340): 文字列末尾では next が番兵の '' になり、
-      // `''.includes()` セマンティクスで `isTerminator('')` が true を返す。ガードが無いと
-      // 末尾 `──`（lastWasRule=true）で存在しない次文字を吸収しに行き `chars[i]=undefined` を
-      // current に連結して "undefined" が本文に混入する（例: `A──` → `A──undefined`）。
-      if (next !== '' && isTerminator(next) && lastWasRule) {
-        i++
-        current += chars[i]
-        lastWasRule = false
-        continue
-      }
-      break
+  // 連続する `──` を current に取り込み、末尾の index を返す (#340)。
+  const absorbRuleRun = (i: number): number => {
+    while (i + 1 < n && isMidlineRule(chars[i + 1])) {
+      i++
+      current += chars[i]
     }
     return i
   }
 
+  // 文中 `──`（trailing）の後処理 (#340/#374): 直後の閉じ括弧トレーラを吸収し、さらに直後に
+  // 文末記号が続けば `──。` として 1 停止にまとめる（そのトレーラも吸収）。文末記号側から `──` を
+  // 吸収する向き（`。──`）は #374 で廃止し、先頭ダッシュ分岐で処理する。
+  const absorbRuleTrail = (i: number): number => {
+    i = absorbTrailers(i)
+    if (i + 1 < n && isTerminator(chars[i + 1])) {
+      i++
+      current += chars[i]
+      i = absorbTrailers(i)
+    }
+    return i
+  }
+
+  // runStart の `──` の直前（空白を飛ばした最後の実文字）が「括りの終わり」＝文末記号 or
+  // 閉じ括弧/閉じ引用符か。true ならこの `──` は「次のかたまりを導く先頭ダッシュ」で、括りの終わりで
+  // 切って `──` を次の単位の先頭に回す (#374)。読点 `、` は括りの終わりに含めない（文中扱い）。
+  const precededByClauseEnd = (runStart: number): boolean => {
+    let p = runStart - 1
+    while (p >= 0 && /\s/.test(chars[p])) p--
+    if (p < 0) return false
+    return isTerminator(chars[p]) || CLOSING_BRACKETS.includes(chars[p])
+  }
+
   for (let i = 0; i < n; i++) {
     const ch = chars[i]
-    current += ch
     if (isMidlineRule(ch)) {
-      // 余韻横棒 `──`（U+2500 の連続）＝文送り境界 (#340)。連続分をまとめて 1 停止にする。
-      while (i + 1 < n && isMidlineRule(chars[i + 1])) {
-        i++
-        current += chars[i]
+      if (precededByClauseEnd(i)) {
+        // 先頭ダッシュ (#374): 括りの終わり（文末記号 or 閉じ括弧）で切り、この `──` を次の単位の
+        // 先頭に置く。current を「末尾空白」と「それ以外の本文」に分け、本文を 1 単位として flush し、
+        // 末尾空白は次単位の先頭空白として温存する:
+        //  - 文末記号ケース（`。 ──`）: 本文は文末記号分岐で既に flush 済み → current は空白のみ or 空。
+        //    本文 flush は no-op、空白だけが次単位の先頭に残る（#362/theo-hayami#12 の `？`/`！` 直後
+        //    スペース保護を先頭ダッシュ経路でも守る。`flush()` で丸ごと捨てると空白が消える）。
+        //  - 閉じ括弧ケース（`「…」──`）: `」` は flush されずに current に溜まっている → 本文 `「…」`
+        //    をここで 1 単位として確定する。末尾空白（`「…」 ──`）は次単位の先頭に温存する。
+        // ここでは停止せず、次の停止（括りの終わり or 文中 `──`）まで累積する。
+        const trailingWs = (current.match(/\s*$/) as RegExpMatchArray)[0]
+        current = current.slice(0, current.length - trailingWs.length)
+        flush() // 本文（空でなければ）を確定。空白のみ/空なら no-op で current='' に。
+        current = trailingWs + ch
+        i = absorbRuleRun(i)
+      } else {
+        // 文中 `──`（trailing, #340）: `──`（連続分含む）の後で停止し、前の単位に含める。
+        current += ch
+        i = absorbRuleRun(i)
+        i = absorbRuleTrail(i)
+        flush()
       }
-      i = extendStopChain(i, true)
-      flush()
     } else if (isTerminator(ch)) {
-      i = extendStopChain(i, false)
+      // 文末記号: 直後のトレーラを吸収して停止する。直後の `──` は吸収しない (#374)。
+      // 文末記号どうし（`？！`）は間に `──` を挟まない限り別停止のまま（#283 回帰固定）。
+      current += ch
+      i = absorbTrailers(i)
       flush()
+    } else {
+      current += ch
     }
   }
   // 文末記号で終わらない末尾の断片も 1 文として拾う。判定は trim、push は untrimmed (#362)。
