@@ -12,9 +12,10 @@
 //   ときも push 前のローカルツリーから読む。
 //
 // 実装範囲:
-//   - GET  /repos/:owner/:repo/contents/:path  (file / dir)
-//   - PUT  /repos/:owner/:repo/contents/:path  (sha optional, mtime ベースの楽観ロック)
-//   - GET  /raw/:owner/:repo/:path             (download_url 用 raw 配信)
+//   - GET  /repos/:owner/:repo/contents/:path        (file / dir)
+//   - PUT  /repos/:owner/:repo/contents/:path        (sha optional, mtime ベースの楽観ロック)
+//   - GET  /repos/:owner/:repo/git/trees/:tree_sha   (常に再帰・ワーキングツリー現状を返す。#371)
+//   - GET  /raw/:owner/:repo/:path                   (download_url 用 raw 配信)
 //
 // ゲームリポの探索:
 //   `LOCAL_REPOS_BASE` で `:` 区切りの親ディレクトリを指定 (環境ごとに異なるので
@@ -184,6 +185,77 @@ async function handlePutContents(req, res, owner, repo, relPath) {
   });
 }
 
+// git/trees でスキップするディレクトリ。theo-hayami 自体には無いが、将来
+// scriptsDir を使う別リポで巨大ディレクトリを踏まないための防御。
+const TREE_EXCLUDED_DIRS = new Set([".git", "node_modules"]);
+
+/**
+ * リポのワーキングディレクトリを再帰的に歩き、GitHub Git Trees API
+ * (`recursive=1`) のレスポンス形状に沿ったエントリ配列を組み立てる。
+ *
+ * パフォーマンス最重要: theo-hayami の作業ツリーは docs 配下の参考画像等を
+ * 含めて 1GB 超ある。呼び出し元 (`listScriptsFromTree`) が実際に使うのは
+ * `.md` かつ 64KB 以下のファイルだけなので、blob sha を計算するために
+ * 全文を読み込むのは `.md` ファイルだけに限定する。それ以外は stat のみで
+ * サイズを取り、sha は空文字列を返す（呼び出し元は .md 以外を filter で
+ * 先に弾くため sha を読まない）。
+ *
+ * HTTP ハンドラ本体から分離してあるのは、テストがこの関数を直接呼んで
+ * 走査ロジックだけを検証できるようにするため。
+ */
+async function walkTree(repoDir) {
+  const entries = [];
+
+  async function walk(dir, relDir) {
+    const dirents = await readdir(dir, { withFileTypes: true });
+    for (const dirent of dirents) {
+      if (dirent.isDirectory()) {
+        if (TREE_EXCLUDED_DIRS.has(dirent.name)) continue;
+        await walk(
+          path.join(dir, dirent.name),
+          path.posix.join(relDir, dirent.name),
+        );
+        continue;
+      }
+      if (!dirent.isFile()) continue; // symlink 等は対象外
+
+      const childPath = path.join(dir, dirent.name);
+      const relPath = path.posix.join(relDir, dirent.name);
+      const cs = await stat(childPath);
+
+      let sha = "";
+      if (dirent.name.toLowerCase().endsWith(".md")) {
+        try {
+          sha = gitBlobSha(await readFile(childPath));
+        } catch {
+          // unreadable file — fall through with empty sha
+        }
+      }
+
+      entries.push({
+        path: relPath,
+        mode: "100644",
+        type: "blob",
+        sha,
+        size: cs.size,
+      });
+    }
+  }
+
+  await walk(repoDir, "");
+  return entries;
+}
+
+async function handleGetTree(req, res, owner, repo) {
+  const repoDir = await findRepoDir(repo);
+  if (!repoDir) return jsonResponse(res, 404, { message: `repo not found locally: ${repo}` });
+  const tree = await walkTree(repoDir);
+  // tree_sha / recursive クエリは無視: ローカル fs モードは常にワーキング
+  // ツリーの現状を再帰的に返す（呼び出し元は常に recursive=1 で呼ぶ唯一の
+  // 用途しか無いため）。
+  return jsonResponse(res, 200, { sha: "local", tree, truncated: false });
+}
+
 async function handleRaw(req, res, owner, repo, relPath) {
   const repoDir = await findRepoDir(repo);
   if (!repoDir) {
@@ -217,6 +289,13 @@ const server = http.createServer(async (req, res) => {
       if (isUnsafePath(relPath)) return jsonResponse(res, 400, { message: "unsafe path" });
       if (req.method === "GET") return handleGetContents(req, res, owner, repo, relPath);
       if (req.method === "PUT") return handlePutContents(req, res, owner, repo, relPath);
+      return jsonResponse(res, 405, { message: "method not allowed" });
+    }
+
+    m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/git\/trees\/([^/]+)$/);
+    if (m) {
+      const [, owner, repo] = m; // tree_sha は無視（常に HEAD ワーキングツリー相当）
+      if (req.method === "GET") return handleGetTree(req, res, owner, repo);
       return jsonResponse(res, 405, { message: "method not allowed" });
     }
 
