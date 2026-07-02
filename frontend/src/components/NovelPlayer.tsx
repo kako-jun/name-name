@@ -70,6 +70,10 @@ interface NovelPlayerProps {
   /** 立ち絵の目標表示高さ比率 (#360)。frontmatter `character_height_ratio:` から流す。
    *  null/undefined で原寸 (scale=1)＝後方互換。0..1 で「画面高に対する立ち絵高さの割合」に自動スケール。 */
   characterHeightRatio?: number | null
+  /** キャラごとの立ち絵目標表示高さ比率 override (#364)。frontmatter `character_height_ratios:` から流す。
+   *  キーはキャラクター表示名。マップに無いキャラは characterHeightRatio へフォールバックする。
+   *  null/undefined/空オブジェクトで override なし（後方互換）。 */
+  characterHeightRatios?: Record<string, number> | null
   /** 立ち絵の新規表示・退場フェード時間 (ms)。frontmatter `character_fade_ms:` から流す。 */
   characterFadeMs?: number | null
   /** Skip(S) ボタンを出すか (#310)。frontmatter `skip_enabled:` から流す。
@@ -109,6 +113,7 @@ function NovelPlayer({
   protagonist,
   characterYRatio,
   characterHeightRatio,
+  characterHeightRatios,
   characterFadeMs,
   skipEnabled,
   debugEnabled,
@@ -199,6 +204,10 @@ function NovelPlayer({
       // 立ち絵の目標表示高さ比率 (#360)。setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、
       // 初回描画から per-game の目標高さで立ち絵をスケールする（高解像度立ち絵の巨大化を吸収）。
       renderer.setCharacterHeightRatio(characterHeightRatio ?? null)
+      // キャラごとの立ち絵目標表示高さ比率 override (#364)。characterHeightRatio と同じく
+      // setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、初回描画から per-character の
+      // 目標高さでスケールする（身長差のあるキャストで共通 ratio が身長差を潰すのを防ぐ）。
+      renderer.setCharacterHeightRatios(characterHeightRatios ?? null)
       // 立ち絵フェード時間。初回 show より前に設定し、ToHeart 式のじわっとした登場を作品単位で調整する。
       renderer.setCharacterFadeMs(characterFadeMs ?? null)
       // 主人公セリフの本文色 (#305) は renderer 既定 #FFF6E6 のまま使う。frontmatter での
@@ -296,6 +305,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setCharacterHeightRatio(characterHeightRatio ?? null)
   }, [characterHeightRatio])
+
+  // characterHeightRatios が変化したときに renderer に反映 (#364)
+  useEffect(() => {
+    rendererRef.current?.setCharacterHeightRatios(characterHeightRatios ?? null)
+  }, [characterHeightRatios])
 
   useEffect(() => {
     rendererRef.current?.setCharacterFadeMs(characterFadeMs ?? null)

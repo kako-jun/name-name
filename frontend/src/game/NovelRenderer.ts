@@ -1040,6 +1040,19 @@ export class NovelRenderer {
   }
 
   /**
+   * キャラごとの立ち絵目標表示高さ比率 override を設定する (#364)。
+   * frontmatter `character_height_ratios:` の値（キー=キャラ表示名、値=character_height_ratio と
+   * 同じ意味の比率）を渡す。null/undefined のときは空 Record（＝マップ override なし・後方互換）。
+   *
+   * setCharacterHeightRatio (#360) と対称に、値の所有権は CharacterLayer 側にあるため renderer は
+   * フィールドを持たず素通しする。マップに無いキャラは character_height_ratio（スクリプト単位）へ
+   * フォールバックする解決ロジックは CharacterLayer.setCharacterHeightRatios / loadTexture が担う。
+   */
+  setCharacterHeightRatios(ratios: Record<string, number> | null | undefined): void {
+    this.characterLayer.setCharacterHeightRatios(ratios ?? null)
+  }
+
+  /**
    * 立ち絵の新規表示・退場フェード時間を設定する。
    * frontmatter `character_fade_ms:` の値（ms）を渡す。null/undefined のときは既定 300ms。
    */
