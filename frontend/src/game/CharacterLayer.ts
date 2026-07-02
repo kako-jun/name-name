@@ -33,7 +33,7 @@ import {
 // 色パーサ・2D 位置・URL 解決は novelLayout.ts（色/幾何の純関数置き場）に集約 (#273 / #274)。
 import { parseColorToNumber, resolvePositionWithOverride, resolveAssetUrl } from './novelLayout'
 import { startTypewriter, tickTypewriter, type TypewriterState } from './typewriter'
-import { hasOwn } from './ownProperty'
+import { hasOwn, safeAssign } from './ownProperty'
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
 const CHARACTER_X_RATIO: Record<string, number> = {
@@ -608,9 +608,12 @@ export class CharacterLayer extends Container {
     if (ratios) {
       for (const [name, value] of Object.entries(ratios)) {
         if (Number.isFinite(value) && value > 0) {
-          next[name] = Math.min(
-            CHARACTER_HEIGHT_RATIO_MAX,
-            Math.max(CHARACTER_HEIGHT_RATIO_MIN, value)
+          // #370: name はキャラ名（frontmatter 由来の自由文字列）。"__proto__" でも
+          // own-property として書く（prototype pollution 回避）
+          safeAssign(
+            next,
+            name,
+            Math.min(CHARACTER_HEIGHT_RATIO_MAX, Math.max(CHARACTER_HEIGHT_RATIO_MIN, value))
           )
         }
       }

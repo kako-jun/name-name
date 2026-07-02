@@ -16,6 +16,7 @@ import type {
   UiRpgEvent,
   UiRpgTrigger,
 } from '../types/rpg'
+import { safeAssign, safeAssignAll } from './ownProperty'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -86,10 +87,11 @@ export function collectMasterData(doc: EventDocument): {
     for (const scene of chapter.scenes) {
       for (const ev of scene.events) {
         if (typeof ev === 'string') continue
-        if ('Monster' in ev) monsters[ev.Monster.id] = ev.Monster
-        else if ('Item' in ev) items[ev.Item.id] = ev.Item
-        else if ('Spell' in ev) spells[ev.Spell.id] = ev.Spell
-        else if ('PartyMember' in ev) party[ev.PartyMember.id] = ev.PartyMember
+        // #370: id が "__proto__" と衝突する場合の prototype pollution を避けて own-property として書く
+        if ('Monster' in ev) safeAssign(monsters, ev.Monster.id, ev.Monster)
+        else if ('Item' in ev) safeAssign(items, ev.Item.id, ev.Item)
+        else if ('Spell' in ev) safeAssign(spells, ev.Spell.id, ev.Spell)
+        else if ('PartyMember' in ev) safeAssign(party, ev.PartyMember.id, ev.PartyMember)
       }
     }
   }
@@ -120,10 +122,12 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
   }
   for (const doc of docs) {
     const m = collectMasterData(doc)
-    Object.assign(merged.monsters, m.monsters)
-    Object.assign(merged.items, m.items)
-    Object.assign(merged.spells, m.spells)
-    Object.assign(merged.party, m.party)
+    // #370: Object.assign は target への [[Set]] を使うため、id が "__proto__" だと
+    // merged 側の [[Prototype]] を書き換えてしまう。safeAssignAll で own-property コピーする
+    safeAssignAll(merged.monsters, m.monsters)
+    safeAssignAll(merged.items, m.items)
+    safeAssignAll(merged.spells, m.spells)
+    safeAssignAll(merged.party, m.party)
   }
   return merged
 }

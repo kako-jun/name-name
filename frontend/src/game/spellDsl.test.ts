@@ -193,6 +193,47 @@ describe('applyEffect', () => {
     expect(target.status?.poison).toBe(4)
   })
 
+  // #370: state が "__proto__" だと、素朴な `t.status[state] = ...` は t.status 自身の
+  // [[Prototype]] を書き換えてしまう（prototype pollution）。own-property として
+  // 登録され、[[Prototype]] が汚染されないことを確認する。
+  it('修正確認: state が "__proto__" でも t.status の [[Prototype]] を汚染せず own-property として登録される', () => {
+    const target = makeEntity()
+    applyEffect({ kind: 'status', state: '__proto__', duration: 4 }, makeCtx([target]))
+    expect(target.status).toBeDefined()
+    expect(Object.getPrototypeOf(target.status!)).toBe(Object.prototype)
+    expect(target.status?.['__proto__']).toBe(4)
+  })
+
+  // #370: 同一 target に state="__proto__" の status を2回適用しても、safeAssign の
+  // 「後勝ち」で duration が上書きされ、かつ [[Prototype]] は汚染されないことを確認する。
+  it('修正確認: 同一targetにstate="__proto__"のstatusを2回適用すると後勝ちで上書きされ [[Prototype]] は汚染されない', () => {
+    const target = makeEntity()
+    applyEffect({ kind: 'status', state: '__proto__', duration: 3 }, makeCtx([target]))
+    applyEffect({ kind: 'status', state: '__proto__', duration: 7 }, makeCtx([target]))
+    expect(Object.getPrototypeOf(target.status!)).toBe(Object.prototype)
+    expect(target.status?.['__proto__']).toBe(7)
+  })
+
+  // #370: 既存の通常 state（poison）を持つ target に "__proto__" state を追加しても、
+  // poison 側が巻き込まれて消えたりしないことを確認する（safeAssign は隣接キーを保持する）。
+  it('既存の通常state(poison)を持つtargetに"__proto__" stateを追加してもpoisonは残る（共存確認）', () => {
+    const target = makeEntity()
+    applyEffect({ kind: 'status', state: 'poison', duration: 4 }, makeCtx([target]))
+    applyEffect({ kind: 'status', state: '__proto__', duration: 2 }, makeCtx([target]))
+    expect(target.status?.poison).toBe(4)
+    expect(target.status?.['__proto__']).toBe(2)
+  })
+
+  // #370: applyEffect は `effect.duration ?? 1` で duration 未指定時のデフォルト値 1 を使う。
+  // state="__proto__" でこのデフォルト経路を通っても正しく own-property として登録されることを
+  // 確認する（duration 明示指定のケースと別の分岐なので独立して検証する）。
+  it('state="__proto__"でduration未指定ならデフォルト値(1)が正しくown-propertyとして登録される', () => {
+    const target = makeEntity()
+    applyEffect({ kind: 'status', state: '__proto__' }, makeCtx([target]))
+    expect(Object.prototype.hasOwnProperty.call(target.status!, '__proto__')).toBe(true)
+    expect(target.status?.['__proto__']).toBe(1)
+  })
+
   it('escape_battle はログだけ返してエンティティを変更しない', () => {
     const target = makeEntity({ hp: 10 })
     const log = applyEffect({ kind: 'escape_battle' }, makeCtx([target]))

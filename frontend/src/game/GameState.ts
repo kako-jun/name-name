@@ -6,6 +6,7 @@
  */
 
 import { Event, FlagValue } from '../types'
+import { safeAssign } from './ownProperty'
 
 /**
  * 背景画像の端フェードマスク設定 (#250)。
@@ -188,7 +189,8 @@ export class GameState {
   toJSON(): Record<string, FlagValue> {
     const obj: Record<string, FlagValue> = {}
     this.flags.forEach((value, key) => {
-      obj[key] = value
+      // #370: フラグ名が "__proto__" でも own-property として書く（prototype pollution 回避）
+      safeAssign(obj, key, value)
     })
     return obj
   }
