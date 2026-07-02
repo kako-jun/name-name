@@ -204,12 +204,13 @@ export function resolveCharacterHeightRatio(
   ratios: Record<string, number>,
   defaultRatio: number | null
 ): number | null {
-  // own-property のみ見る（#364 セルフレビュー修正）。`ratios[characterName]` の素朴なブラケット
-  // アクセスは prototype chain も辿ってしまい、キャラ名が `constructor` / `toString` 等の
-  // Object.prototype のプロパティ名と一致すると関数オブジェクトを返してしまう
+  // own-property のみ見る（#364 セルフレビュー修正 / #368 で共通ヘルパーへ統一）。
+  // `ratios[characterName]` の素朴なブラケットアクセスは prototype chain も辿ってしまい、
+  // キャラ名が `constructor` / `toString` 等の Object.prototype のプロパティ名と一致すると
+  // 関数オブジェクトを返してしまう
   // （呼び出し側 computeTargetHeightScale の Number.isFinite ガードで静かに scale=1 に化ける）。
-  const hasOwn = Object.prototype.hasOwnProperty.call(ratios, characterName)
-  return hasOwn ? ratios[characterName] : defaultRatio
+  const isOwn = hasOwn(ratios, characterName)
+  return isOwn ? ratios[characterName] : defaultRatio
 }
 
 /**
