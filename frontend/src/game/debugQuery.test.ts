@@ -177,4 +177,27 @@ describe('parseDebugQuery (#220)', () => {
     expect(flags['__proto__']).toEqual({ Bool: true })
     expect(flags.ok).toEqual({ Bool: true })
   })
+
+  // #370: debug_flags の key は `pair.slice(0, sep).trim()` で trim される。URL エンコードされた
+  // 前後空白付き key（`%20__proto__%20` → URLSearchParams のデコードで " __proto__ "）でも
+  // trim 後は "__proto__" として同じ安全経路（safeAssign）で処理されることを確認する。
+  it('23: debug_flags の key が前後空白付き "%20__proto__%20" でも trim 後は "__proto__" として安全に処理される', () => {
+    const r = parseDebugQuery('?debug_scene=1-2&debug_flags=%20__proto__%20:true,ok:true')
+    const flags = (r as { scene: { flags: Record<string, FlagValue> } }).scene.flags
+    expect(Object.getPrototypeOf(flags)).toBe(Object.prototype)
+    expect(Object.prototype.hasOwnProperty.call(flags, '__proto__')).toBe(true)
+    expect(flags['__proto__']).toEqual({ Bool: true })
+    expect(flags.ok).toEqual({ Bool: true })
+  })
+
+  // #370: safeAssign 自体が通常キーと同じ「後勝ち」で上書きされる（ownProperty.test.ts の
+  // 「既存の own property を同じ key で上書きできる」と同じ挙動）ことを、debug_flags の
+  // "__proto__" キーが複数回登場するケースで固定する。
+  it('24: debug_flags に "__proto__" キーが2回登場すると後勝ちで上書きされる', () => {
+    const r = parseDebugQuery('?debug_scene=1-2&debug_flags=__proto__:1,__proto__:2')
+    const flags = (r as { scene: { flags: Record<string, FlagValue> } }).scene.flags
+    expect(Object.getPrototypeOf(flags)).toBe(Object.prototype)
+    expect(Object.prototype.hasOwnProperty.call(flags, '__proto__')).toBe(true)
+    expect(flags['__proto__']).toEqual({ Number: 2 })
+  })
 })

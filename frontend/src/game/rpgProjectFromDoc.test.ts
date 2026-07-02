@@ -4,6 +4,7 @@ import {
   applyRpgProjectToDoc,
   findAllRpgScenes,
   mergeMasterDataFromDocs,
+  collectMasterData,
 } from './rpgProjectFromDoc'
 import type { EventDocument, NpcData } from '../types'
 import type { RPGProject } from '../types/rpg'
@@ -1183,5 +1184,174 @@ describe('mergeMasterDataFromDocs (#238)', () => {
     expect(multi.monsters['__proto__']?.name).toBe('汚染モンスター')
     // 通常の id (slime) 側も引き続き正しくマージされる
     expect(multi.monsters.slime?.name).toBe('スライム')
+  })
+
+  function protoMonsterDoc(name: string): EventDocument {
+    return {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'data',
+          hidden: true,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'data-master',
+              title: 'マスター',
+              view: 'TopDown',
+              events: [
+                {
+                  Monster: {
+                    id: '__proto__',
+                    name,
+                    hp: 1,
+                    mp: 0,
+                    atk: 1,
+                    def: 1,
+                    agi: 1,
+                    exp: 1,
+                    gold: 1,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+  }
+
+  // #370: 複数 doc の両方が id="__proto__" の Monster を持つ場合でも、通常 id と同じ
+  // 「後勝ち」ルールが成り立ち、[[Prototype]] も汚染されないことを確認する。
+  it('複数docで両方とも id="__proto__" の Monster → 後勝ちで上書きされ [[Prototype]] は不変', () => {
+    const first = protoMonsterDoc('最初のモンスター')
+    const second = protoMonsterDoc('あとのモンスター')
+    const merged = mergeMasterDataFromDocs([first, second])
+    expect(Object.getPrototypeOf(merged.monsters)).toBe(Object.prototype)
+    expect(merged.monsters['__proto__']?.name).toBe('あとのモンスター')
+  })
+
+  // #370: 同一 doc・同一 scene 内で id="__proto__" の Monster を 2 回記述したとき、
+  // collectMasterData 単体（safeAssign の連続呼び出し経路）でも後勝ちになることを確認する。
+  it('同一doc・同一sceneでMonster id="__proto__"を2回記述 → collectMasterData単体で後勝ち', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'data',
+          hidden: true,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'data-master',
+              title: 'マスター',
+              view: 'TopDown',
+              events: [
+                {
+                  Monster: {
+                    id: '__proto__',
+                    name: '一回目',
+                    hp: 1,
+                    mp: 0,
+                    atk: 1,
+                    def: 1,
+                    agi: 1,
+                    exp: 1,
+                    gold: 1,
+                  },
+                },
+                {
+                  Monster: {
+                    id: '__proto__',
+                    name: '二回目',
+                    hp: 2,
+                    mp: 0,
+                    atk: 1,
+                    def: 1,
+                    agi: 1,
+                    exp: 1,
+                    gold: 1,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const m = collectMasterData(doc)
+    expect(Object.getPrototypeOf(m.monsters)).toBe(Object.prototype)
+    expect(m.monsters['__proto__']?.name).toBe('二回目')
+    expect(m.monsters['__proto__']?.hp).toBe(2)
+  })
+
+  // #370: 通常 id (slime) と "__proto__" id が同一 doc に共存しても、両方が own-property として
+  // 正しく登録される（片方が他方を巻き込んで消えたり、[[Prototype]] 経由の誤検出を起こさない）。
+  it('通常id(slime)と"__proto__"idが同一docに共存しても両方正しく登録される', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'data',
+          hidden: true,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'data-master',
+              title: 'マスター',
+              view: 'TopDown',
+              events: [
+                {
+                  Monster: {
+                    id: 'slime',
+                    name: 'スライム',
+                    hp: 10,
+                    mp: 0,
+                    atk: 3,
+                    def: 1,
+                    agi: 2,
+                    exp: 2,
+                    gold: 1,
+                  },
+                },
+                {
+                  Monster: {
+                    id: '__proto__',
+                    name: '汚染モンスター',
+                    hp: 1,
+                    mp: 0,
+                    atk: 1,
+                    def: 1,
+                    agi: 1,
+                    exp: 1,
+                    gold: 1,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const m = collectMasterData(doc)
+    expect(Object.keys(m.monsters).sort()).toEqual(['__proto__', 'slime'])
+    expect(m.monsters.slime?.name).toBe('スライム')
+    expect(m.monsters['__proto__']?.name).toBe('汚染モンスター')
+  })
+
+  // #370: 公開エントリポイント rpgProjectFromDoc() を通した end-to-end 回帰。extraDocs
+  // （data.md 相当）に id="__proto__" の Monster が含まれていても、内部の
+  // mergeMasterDataFromDocs/collectMasterData を経由して安全に統合されることを確認する。
+  it('rpgProjectFromDoc()本体を通したend-to-end回帰: extraDocsに"__proto__"id含む場合も安全に統合される', () => {
+    const active = makeDoc() // RpgMap + NPC のみ、マスター無し
+    const data = protoMonsterDoc('汚染モンスター')
+    const project = rpgProjectFromDoc(active, undefined, 'test', [data])
+    expect(project).not.toBeNull()
+    if (!project) throw new Error('project is null')
+    expect(Object.getPrototypeOf(project.monsters)).toBe(Object.prototype)
+    expect(project.monsters?.['__proto__']?.name).toBe('汚染モンスター')
   })
 })

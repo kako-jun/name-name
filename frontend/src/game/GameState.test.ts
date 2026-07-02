@@ -47,4 +47,24 @@ describe('GameState.toJSON', () => {
     gs.fromJSON(data)
     expect(gs.toJSON()).toEqual(data)
   })
+
+  // #370: "__proto__" フラグを含むセーブデータを fromJSON で読み込み、toJSON で書き出す
+  // ラウンドトリップが安全に一致することを確認する（fromJSON は Map.set のため key 名に
+  // 依存する脆弱性は無いが、書き出し側 toJSON の safeAssign 経路を通した回帰として固定する）。
+  // computed key で own property として "__proto__" を持つ入力を作る点に注意
+  // （object literal の `{ __proto__: x }` は proto 設定として特別扱いされ own property にならない）。
+  it('"__proto__" フラグを含む状態で fromJSON → toJSON のラウンドトリップが一致する', () => {
+    const gs = new GameState()
+    const data: Record<string, FlagValue> = {
+      saw_intro: { Bool: true },
+      ['__proto__']: { String: 'ゆうしゃ' },
+    }
+    gs.fromJSON(data)
+    const result = gs.toJSON()
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype)
+    expect(Object.prototype.hasOwnProperty.call(result, '__proto__')).toBe(true)
+    expect(result['__proto__']).toEqual({ String: 'ゆうしゃ' })
+    expect(result.saw_intro).toEqual({ Bool: true })
+    expect(result).toEqual(data)
+  })
 })
