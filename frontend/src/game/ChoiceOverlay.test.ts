@@ -85,6 +85,21 @@ describe('resolveStyle', () => {
     expect(warnSpy).toHaveBeenCalledOnce()
     warnSpy.mockRestore()
   })
+
+  // own-property ルックアップ修正の確認（#368）。choice_style が Object.prototype の
+  // プロパティ名と一致しても、未知値と同じ扱いで default にフォールバックし警告を出す
+  // （`constructor` 等が誤って ChoiceTheme として返らない）。
+  it.each(['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty'])(
+    '修正確認: choice_style "%s" は Object.prototype 由来でも未知値と同じく default にフォールバックし警告を出す',
+    (name) => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const t = resolveStyle(name)
+      expect(t.radius).toBe(8)
+      expect(t.fontFamily).toContain('Noto Sans JP')
+      expect(warnSpy).toHaveBeenCalledOnce()
+      warnSpy.mockRestore()
+    }
+  )
 })
 
 describe('ChoiceOverlay rendering', () => {

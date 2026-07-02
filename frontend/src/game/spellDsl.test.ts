@@ -127,6 +127,44 @@ describe('applyEffect', () => {
     expect(target.hp).toBe(50 - 20)
   })
 
+  // own-property ルックアップ修正の確認（#368）。effect.type が Object.prototype のプロパティ名
+  // と一致しても resist に未登録扱いになり等倍 (1.0) になる（関数オブジェクトを乗数として
+  // 使わない）。
+  it('修正確認: type が "constructor" でも resist 未登録として等倍 (1.0) になる', () => {
+    const target = makeEntity({ hp: 50, resist: { fire: 0.5 } })
+    applyEffect({ kind: 'damage', min: 20, max: 20, type: 'constructor' }, makeCtx([target]))
+    expect(target.hp).toBe(50 - 20) // 20 * 1.0 = 20（登録なし=等倍）
+  })
+
+  it.each(['toString', 'valueOf', '__proto__'])(
+    '修正確認: type "%s" でも resist 未登録として等倍 (1.0) になる',
+    (name) => {
+      const target = makeEntity({ hp: 50, resist: { fire: 0.5 } })
+      applyEffect({ kind: 'damage', min: 20, max: 20, type: name }, makeCtx([target]))
+      expect(target.hp).toBe(50 - 20) // 20 * 1.0 = 20（登録なし=等倍）
+    }
+  )
+
+  it('t.resist が undefined でも type 指定時に例外を投げず等倍 (1.0) になる', () => {
+    const target = makeEntity({ hp: 50 }) // resist フィールド自体を持たない
+    expect(() =>
+      applyEffect({ kind: 'damage', min: 20, max: 20, type: 'fire' }, makeCtx([target]))
+    ).not.toThrow()
+    expect(target.hp).toBe(50 - 20) // 20 * 1.0 = 20（resist 未指定=等倍）
+  })
+
+  it('resist はあるが type キー自体が未登録なら等倍 (1.0)', () => {
+    const target = makeEntity({ hp: 50, resist: { ice: 2.0 } })
+    applyEffect({ kind: 'damage', min: 20, max: 20, type: 'fire' }, makeCtx([target]))
+    expect(target.hp).toBe(50 - 20) // 20 * 1.0 = 20（fire は未登録=等倍）
+  })
+
+  it('own-key regression: resist に own の "constructor" キーが明示設定されていれば正しく乗算される', () => {
+    const target = makeEntity({ hp: 50, resist: { constructor: 0.3 } })
+    applyEffect({ kind: 'damage', min: 20, max: 20, type: 'constructor' }, makeCtx([target]))
+    expect(target.hp).toBe(50 - 6) // 20 * 0.3 = 6
+  })
+
   it('damage_full は即死', () => {
     const target = makeEntity({ hp: 999, maxHp: 999 })
     applyEffect({ kind: 'damage_full' }, makeCtx([target]))

@@ -23,6 +23,8 @@
  * 不正な式は `parseEffect` で `null` を返し、runtime は warning を出して no-op する。
  */
 
+import { hasOwn } from './ownProperty'
+
 export type EffectKind =
   | 'heal'
   | 'heal_full'
@@ -239,7 +241,14 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
           ? Infinity
           : rollRange(effect.min ?? 0, effect.max ?? 0, ctx.rng)
       for (const t of ctx.targets) {
-        const resist = effect.type ? (t.resist?.[effect.type] ?? 1.0) : 1.0
+        // own-property のみ見る (#368)。素朴な `t.resist?.[effect.type]` は Object.prototype も
+        // 辿ってしまい、DSL の `type=...` が自由記述の effect.type が `constructor` 等と一致すると
+        // （truthy な関数オブジェクトを返すため）`??` のフォールバックが発火せず耐性倍率が
+        // 数値でなくなってしまう。
+        const resist =
+          effect.type && t.resist && hasOwn(t.resist, effect.type)
+            ? (t.resist[effect.type] ?? 1.0)
+            : 1.0
         const dealt = effect.kind === 'damage_full' ? t.hp : Math.floor(base * resist)
         t.hp = Math.max(0, t.hp - dealt)
         log.push(`${t.name} に ${dealt} のダメージ！`)

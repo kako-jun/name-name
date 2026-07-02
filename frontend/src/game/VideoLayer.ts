@@ -15,6 +15,7 @@ import { Container, Sprite, Texture, VideoSource } from 'pixi.js'
 import { BackgroundFade, VideoState } from './GameState'
 import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { AudioManager } from './AudioManager'
+import { hasOwn } from './ownProperty'
 
 /** 配置位置（screenWidth に対する中心 x の比率）。背景的に敷く用途では中央が既定。 */
 const VIDEO_X_RATIO: Record<string, number> = {
@@ -48,7 +49,10 @@ export function normalizeVideoPosition(position?: string | null): string {
     centre: 'center',
     right: 'right',
   }
-  return map[key] ?? 'center'
+  // own-property のみ見る (#368)。素朴な `map[key] ?? 'center'` は Object.prototype も辿ってしまい、
+  // key が `constructor` 等と一致すると（truthy な関数オブジェクトを返すため）`??` のフォールバック
+  // が発火せず、戻り値の型が `string` の契約を破って関数オブジェクトを返してしまう。
+  return hasOwn(map, key) ? map[key] : 'center'
 }
 
 export interface VideoShowOptions {
@@ -220,7 +224,9 @@ export class VideoLayer extends Container {
       const s = Math.max(this.screenWidth / vw, this.screenHeight / vh)
       sprite.scale.set(s, s)
     }
-    const xRatio = VIDEO_X_RATIO[position] ?? VIDEO_X_RATIO.center
+    // own-property のみ見る (#368)。position は normalizeVideoPosition() 経由で
+    // 'left'|'center'|'right' に正規化済みだが、他の VIDEO_X_RATIO 参照箇所と書き方を揃える。
+    const xRatio = hasOwn(VIDEO_X_RATIO, position) ? VIDEO_X_RATIO[position] : VIDEO_X_RATIO.center
     sprite.x = this.screenWidth * xRatio
     sprite.y = this.screenHeight * 0.5
   }

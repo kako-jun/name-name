@@ -33,6 +33,7 @@ import {
 // 色パーサ・2D 位置・URL 解決は novelLayout.ts（色/幾何の純関数置き場）に集約 (#273 / #274)。
 import { parseColorToNumber, resolvePositionWithOverride, resolveAssetUrl } from './novelLayout'
 import { startTypewriter, tickTypewriter, type TypewriterState } from './typewriter'
+import { hasOwn } from './ownProperty'
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
 const CHARACTER_X_RATIO: Record<string, number> = {
@@ -105,7 +106,12 @@ const POSITION_ALIASES_EN: Record<string, string> = {
 export function normalizePosition(position: string): string {
   // 空文字 / null 相当は早期に center に倒す (review #152 nit)
   if (!position) return 'center'
-  return POSITION_ALIASES_JA[position] ?? POSITION_ALIASES_EN[position] ?? position
+  // own-property のみ見る (#368)。素朴な `POSITION_ALIASES_JA[position]` は Object.prototype も
+  // 辿ってしまい、position が `constructor` 等と一致すると `??` の後続（EN 表・生 position への
+  // フォールバック）が発火せず関数オブジェクトを返してしまう。
+  if (hasOwn(POSITION_ALIASES_JA, position)) return POSITION_ALIASES_JA[position]
+  if (hasOwn(POSITION_ALIASES_EN, position)) return POSITION_ALIASES_EN[position]
+  return position
 }
 
 /**
@@ -198,12 +204,13 @@ export function resolveCharacterHeightRatio(
   ratios: Record<string, number>,
   defaultRatio: number | null
 ): number | null {
-  // own-property のみ見る（#364 セルフレビュー修正）。`ratios[characterName]` の素朴なブラケット
-  // アクセスは prototype chain も辿ってしまい、キャラ名が `constructor` / `toString` 等の
-  // Object.prototype のプロパティ名と一致すると関数オブジェクトを返してしまう
+  // own-property のみ見る（#364 セルフレビュー修正 / #368 で共通ヘルパーへ統一）。
+  // `ratios[characterName]` の素朴なブラケットアクセスは prototype chain も辿ってしまい、
+  // キャラ名が `constructor` / `toString` 等の Object.prototype のプロパティ名と一致すると
+  // 関数オブジェクトを返してしまう
   // （呼び出し側 computeTargetHeightScale の Number.isFinite ガードで静かに scale=1 に化ける）。
-  const hasOwn = Object.prototype.hasOwnProperty.call(ratios, characterName)
-  return hasOwn ? ratios[characterName] : defaultRatio
+  const isOwn = hasOwn(ratios, characterName)
+  return isOwn ? ratios[characterName] : defaultRatio
 }
 
 /**
@@ -791,7 +798,14 @@ export class CharacterLayer extends Container {
     const overrideX = hasXOverride ? this.screenWidth * (options?.xRatio as number) : undefined
     // この show が立ち絵を置く先の水平座標 (#303)。override x > position トークン > center の順で解決する。
     // 「1 位置に 1 キャラ」を保証するため、別キャラがこの x を占有していたら退場させる判定に使う。
-    const targetX = overrideX ?? this.positionX[normalizedPosition] ?? this.positionX['center']
+    // own-property のみ見る (#368)。素朴な `this.positionX[normalizedPosition]` は Object.prototype
+    // も辿ってしまい、normalizedPosition が `constructor` 等と一致すると `??` のフォールバックが
+    // 発火せず関数オブジェクトを返してしまう。
+    const targetX =
+      overrideX ??
+      (hasOwn(this.positionX, normalizedPosition)
+        ? this.positionX[normalizedPosition]
+        : this.positionX['center'])
     const existing = this.characters.get(character)
 
     if (existing) {
@@ -1094,7 +1108,10 @@ export class CharacterLayer extends Container {
       } else if (position) {
         // position が指定されていれば再配置する (再度別 position から登場させる用途)
         const normalized = normalizePosition(position)
-        const newX = this.positionX[normalized] ?? this.screenWidth * 0.5
+        // own-property のみ見る (#368)。理由は show() 側の targetX 解決コメントと同様。
+        const newX = hasOwn(this.positionX, normalized)
+          ? this.positionX[normalized]
+          : this.screenWidth * 0.5
         existing.sprite.x = newX
         if (existing.label && !existing.label.destroyed) {
           existing.label.x = newX

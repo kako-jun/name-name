@@ -15,6 +15,7 @@ import type { BackgroundFade, NovelGameState } from './GameState'
 import type { SaveSlotData } from './SaveManager'
 import type { EventScene } from '../types'
 import { MIDLINE_RULE } from './textCanonical'
+import { hasOwn } from './ownProperty'
 
 /** カバーフィット後の背景スプライト寸法と配置（px）。 */
 export interface CoverFit {
@@ -184,14 +185,19 @@ export function resolveLayoutPosition(position: string | undefined): LayoutPosit
   if (token.length === 0) return DEFAULT
 
   // 1) 完全一致を先に試す（`中` を「中上」等の部分一致より優先するため）。
-  if (token in VERTICAL_RATIO && token in HORIZONTAL_RATIO) {
+  // own-property のみ見る (#368)。`in` 演算子は Object.prototype も辿ってしまい、脚本側の
+  // 自由記述である token が `constructor` 等と一致すると `token in VERTICAL_RATIO` が
+  // 誤って true になり、後続の `VERTICAL_RATIO[token]` が関数オブジェクトを返してしまう。
+  const inVertical = hasOwn(VERTICAL_RATIO, token)
+  const inHorizontal = hasOwn(HORIZONTAL_RATIO, token)
+  if (inVertical && inHorizontal) {
     // 同一トークンが両表に存在することは無い（語彙が排他）。保険として縦優先。
     return { xRatio: 0.5, yRatio: VERTICAL_RATIO[token] }
   }
-  if (token in VERTICAL_RATIO) {
+  if (inVertical) {
     return { xRatio: 0.5, yRatio: VERTICAL_RATIO[token] }
   }
-  if (token in HORIZONTAL_RATIO) {
+  if (inHorizontal) {
     return { xRatio: HORIZONTAL_RATIO[token], yRatio: 0.5 }
   }
 

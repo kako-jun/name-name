@@ -22,6 +22,7 @@
  */
 
 import type { BattleEntity, EffectContext } from './spellDsl'
+import { hasOwn } from './ownProperty'
 
 /**
  * builtin 関数のシグネチャ。
@@ -106,7 +107,10 @@ export const BUILTIN_ITEMS: Record<string, BuiltinItemFn> = {
  * builtin 呪文を呼び出す。未登録なら warning + no-op ログを返す。
  */
 export function invokeBuiltinSpell(builtinId: string, ctx: EffectContext): string[] {
-  const fn = BUILTIN_SPELLS[builtinId]
+  // own-property のみ見る (#368)。素朴な `BUILTIN_SPELLS[builtinId]` は Object.prototype も
+  // 辿ってしまい、master データの spell.builtin が `constructor` 等と一致すると `!fn` ガードを
+  // すり抜けて関数オブジェクトを呼び出してしまう。
+  const fn = hasOwn(BUILTIN_SPELLS, builtinId) ? BUILTIN_SPELLS[builtinId] : undefined
   if (!fn) {
     console.warn(`[name-name] builtin spell '${builtinId}' is not implemented`)
     return [`(builtin spell '${builtinId}' は未実装)`]
@@ -118,7 +122,8 @@ export function invokeBuiltinSpell(builtinId: string, ctx: EffectContext): strin
  * builtin アイテムを呼び出す。未登録なら warning + no-op ログを返す。
  */
 export function invokeBuiltinItem(builtinId: string, ctx: EffectContext): string[] {
-  const fn = BUILTIN_ITEMS[builtinId]
+  // own-property のみ見る (#368)。理由は invokeBuiltinSpell と同様。
+  const fn = hasOwn(BUILTIN_ITEMS, builtinId) ? BUILTIN_ITEMS[builtinId] : undefined
   if (!fn) {
     console.warn(`[name-name] builtin item '${builtinId}' is not implemented`)
     return [`(builtin item '${builtinId}' は未実装)`]

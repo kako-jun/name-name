@@ -12,6 +12,7 @@
 
 import type { MonsterDef } from '../types'
 import type { BattleEntity } from './spellDsl'
+import { hasOwn } from './ownProperty'
 
 export function rollEncounter(input: {
   rate: number
@@ -30,7 +31,10 @@ export function rollEncounter(input: {
     .filter(Boolean)
   const enemies: BattleEntity[] = []
   for (const id of monsterIds) {
-    const def = input.masters[id]
+    // own-property のみ見る (#368)。素朴な `input.masters[id]` は Object.prototype も辿ってしまい、
+    // エンカウントグループの id が `constructor` 等と一致すると `!def` ガードをすり抜けて
+    // 関数オブジェクトを敵マスターとして組み立ててしまう。
+    const def = hasOwn(input.masters, id) ? input.masters[id] : undefined
     if (!def) {
       console.warn(`[name-name] encounter group references unknown monster '${id}'`)
       continue
