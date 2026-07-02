@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Assets, Texture } from 'pixi.js'
+import { Assets, Sprite, Texture } from 'pixi.js'
 import {
   CHARACTER_Y_RATIO,
   CharacterLayer,
@@ -13,7 +13,7 @@ import { CURSOR_DEFAULTS } from './textEffect'
 import { NovelRenderer } from './NovelRenderer'
 import { ASPECT_RATIOS } from './constants'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
-import { saveSlotToGameState } from './novelLayout'
+import { saveSlotToGameState, resolveCharacterImageUrls } from './novelLayout'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 
 interface FadeAnimationLike {
@@ -3383,5 +3383,223 @@ describe('CharacterLayer クロスフェード中の character_height_ratios 再
     // クロスフェード開始時点のスケールを保ち続ける（新 sprite に引きずられて崩れない）。
     const oldScaleAfterLoad = chars.get(oldKey)!.sprite.scale.x
     expect(oldScaleAfterLoad).toBeCloseTo(beforeScale, 10)
+  })
+})
+
+// =====================================================================================
+// #376: loadTexture の webp→png フォールバック（loadFirstAvailableTexture 経由）。
+//   候補は resolveCharacterImageUrls が作る [.webp, .png]。loadTexture は先頭から Assets.load し、
+//   最初に成功した Texture を使う。全滅時のみ console.warn（joined URL・最後のエラー）で false を返す。
+//   onReady は 成功 / フォールバック成功 / 全滅 / assetBaseUrl 空 いずれでも finally でちょうど 1 回
+//   発火する（#293 セマンティクス）。
+//
+//   loadTexture は private。戻り値 Promise<boolean>・onReady 発火回数・console.warn・どの URL を
+//   load したかは全て CPU 側で観測できるので、show() の非公開経路に頼らず cast で直接叩いて縛る
+//   （show() は boolean を露出しないため。jsdom の canvas 未実装は迂回不要＝観測点が CPU 側で完結）。
+//   texture は既存 showImage/#294 テストと同流儀の plain object で足りる（Sprite.texture は dynamic
+//   でない値には .on を張らないので plain object を代入・読み戻しできる）。
+// =====================================================================================
+describe('CharacterLayer loadTexture webp→png フォールバック (#376)', () => {
+  afterEach(() => {
+    // Assets.load / console.warn の spy を毎テスト後に戻す（assert が throw しても後続へ漏らさない）。
+    vi.restoreAllMocks()
+  })
+
+  interface LoadTextureInternals {
+    loadTexture: (
+      sprite: Sprite,
+      characterName: string,
+      expression: string,
+      assetBaseUrl: string,
+      label?: unknown,
+      fit?: boolean,
+      onReady?: () => void
+    ) => Promise<boolean>
+  }
+  function asLoadable(layer: CharacterLayer): LoadTextureInternals {
+    return layer as unknown as LoadTextureInternals
+  }
+
+  // 期待 URL は候補列を作る当の関数 resolveCharacterImageUrls で組み立てて陳腐化を防ぐ（doctrine 規律4）。
+  // loadTexture が内部で使うのと同一の候補なので、生の URL 文字列を直書きしていない。
+  const BASE = '/assets'
+  const EXPR = 'spino/soften'
+  const [WEBP_URL, PNG_URL] = resolveCharacterImageUrls(BASE, EXPR)
+
+  // 偽 texture（{width,height} で sprite.texture 代入・scale 計算に足りる。__tag で webp/png を弁別する）。
+  const fakeTexture = (tag: 'webp' | 'png'): unknown => ({ width: 100, height: 200, __tag: tag })
+  const textureTag = (sprite: Sprite): string | undefined =>
+    (sprite.texture as unknown as { __tag?: string }).__tag
+
+  // 観点7: webp 成功 → webp だけを load して使う（png は試さない）・warn なし・onReady 1 回・戻り値 true。
+  it('webp 成功なら webp だけを load して使う（png は試さない・warn なし・onReady 1 回・true）', async () => {
+    const loadSpy = vi
+      .spyOn(Assets, 'load')
+      .mockImplementation((url: unknown) =>
+        String(url).endsWith('.webp')
+          ? (Promise.resolve(fakeTexture('webp')) as never)
+          : (Promise.resolve(fakeTexture('png')) as never)
+      )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    const sprite = new Sprite()
+    let onReadyCount = 0
+    const result = await asLoadable(layer).loadTexture(
+      sprite,
+      'spino',
+      EXPR,
+      BASE,
+      undefined,
+      false,
+      () => {
+        onReadyCount++
+      }
+    )
+    expect(result).toBe(true)
+    // webp が先頭で成功したので png は試されない（1 回のみ・webp URL）。
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expect(loadSpy).toHaveBeenNthCalledWith(1, WEBP_URL)
+    expect(loadSpy).not.toHaveBeenCalledWith(PNG_URL)
+    // 使われた texture は webp。
+    expect(textureTag(sprite)).toBe('webp')
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(onReadyCount).toBe(1)
+  })
+
+  // 観点8: webp 失敗 → png 成功。png Texture へフォールバックし warn なし・onReady 1 回・戻り値 true。
+  it('webp が失敗し png が成功すれば png へフォールバックする（warn なし・onReady 1 回・true）', async () => {
+    const loadSpy = vi
+      .spyOn(Assets, 'load')
+      .mockImplementation((url: unknown) =>
+        String(url).endsWith('.webp')
+          ? (Promise.reject(new Error('webp 413')) as never)
+          : (Promise.resolve(fakeTexture('png')) as never)
+      )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    const sprite = new Sprite()
+    let onReadyCount = 0
+    const result = await asLoadable(layer).loadTexture(
+      sprite,
+      'spino',
+      EXPR,
+      BASE,
+      undefined,
+      false,
+      () => {
+        onReadyCount++
+      }
+    )
+    expect(result).toBe(true)
+    // webp → png の順で試し、png で成功する。
+    expect(loadSpy).toHaveBeenCalledTimes(2)
+    expect(loadSpy).toHaveBeenNthCalledWith(1, WEBP_URL)
+    expect(loadSpy).toHaveBeenNthCalledWith(2, PNG_URL)
+    // フォールバック先の png texture が使われる。
+    expect(textureTag(sprite)).toBe('png')
+    // webp が落ちても png が拾えたので警告は出さない。
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(onReadyCount).toBe(1)
+  })
+
+  // 観点9: 全滅（webp/png とも reject）→ console.warn が joined URL（' , ' 区切り）で 1 回・
+  //   第 2 引数は最後（png）のエラー・戻り値 false・onReady 1 回。
+  it('webp/png とも失敗なら warn（joined URL・最後のエラー）を 1 回出し false を返す（onReady 1 回）', async () => {
+    const webpErr = new Error('webp fail')
+    const pngErr = new Error('png fail')
+    const loadSpy = vi
+      .spyOn(Assets, 'load')
+      .mockImplementation((url: unknown) =>
+        String(url).endsWith('.webp')
+          ? (Promise.reject(webpErr) as never)
+          : (Promise.reject(pngErr) as never)
+      )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    const sprite = new Sprite()
+    let onReadyCount = 0
+    const result = await asLoadable(layer).loadTexture(
+      sprite,
+      'spino',
+      EXPR,
+      BASE,
+      undefined,
+      false,
+      () => {
+        onReadyCount++
+      }
+    )
+    expect(result).toBe(false)
+    // 先頭から順に両方試す。
+    expect(loadSpy).toHaveBeenCalledTimes(2)
+    expect(loadSpy).toHaveBeenNthCalledWith(1, WEBP_URL)
+    expect(loadSpy).toHaveBeenNthCalledWith(2, PNG_URL)
+    // warn は 1 回だけ。メッセージは joined URL（' , ' 区切り）、第 2 引数は最後（png）のエラー。
+    const expectedMsg = '[name-name] 立ち絵の読み込みに失敗: ' + [WEBP_URL, PNG_URL].join(' , ')
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalledWith(expectedMsg, pngErr)
+    expect(onReadyCount).toBe(1)
+  })
+
+  // 観点10: assetBaseUrl 空 → Assets.load を呼ばず即 true・onReady 1 回（描画不能でテキストを詰まらせない）。
+  it('assetBaseUrl が空ならロードせず即 true・onReady 1 回（Assets.load を呼ばない）', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    const sprite = new Sprite()
+    let onReadyCount = 0
+    const result = await asLoadable(layer).loadTexture(
+      sprite,
+      'spino',
+      EXPR,
+      '',
+      undefined,
+      false,
+      () => {
+        onReadyCount++
+      }
+    )
+    expect(result).toBe(true)
+    expect(loadSpy).not.toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(onReadyCount).toBe(1)
+  })
+
+  // 観点11: onReady はどの経路でも複数回発火しない。成功 / フォールバック / 全滅の 3 経路を通し、
+  //   各経路で onReady 呼び出しがちょうど 1 回であることを縛る（#293 の finally ちょうど 1 回）。
+  it('onReady は成功・フォールバック・全滅のいずれの経路でもちょうど 1 回だけ発火する', async () => {
+    const layer = new CharacterLayer(800, 450)
+
+    // 成功経路（webp 成功）。
+    let successCount = 0
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture('webp') as never)
+    await asLoadable(layer).loadTexture(new Sprite(), 'a', EXPR, BASE, undefined, false, () => {
+      successCount++
+    })
+    expect(successCount).toBe(1)
+    vi.restoreAllMocks()
+
+    // フォールバック経路（webp 失敗 → png 成功）。
+    let fallbackCount = 0
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(Assets, 'load').mockImplementation((url: unknown) =>
+      String(url).endsWith('.webp')
+        ? (Promise.reject(new Error('x')) as never)
+        : (Promise.resolve(fakeTexture('png')) as never)
+    )
+    await asLoadable(layer).loadTexture(new Sprite(), 'b', EXPR, BASE, undefined, false, () => {
+      fallbackCount++
+    })
+    expect(fallbackCount).toBe(1)
+    vi.restoreAllMocks()
+
+    // 全滅経路（webp/png とも失敗）。
+    let failCount = 0
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(Assets, 'load').mockRejectedValue(new Error('all fail'))
+    await asLoadable(layer).loadTexture(new Sprite(), 'c', EXPR, BASE, undefined, false, () => {
+      failCount++
+    })
+    expect(failCount).toBe(1)
   })
 })
