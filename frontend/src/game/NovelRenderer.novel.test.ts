@@ -202,6 +202,26 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
   })
 
+  // 25e: 閉じ括弧直後の `」──`（先頭ダッシュ #374 閉じ括弧拡張。script.md のお題選択行相当）は
+  //      `「お題」` で息継ぎし、`──本文` を次のクリックで一気に表示する。実行時経路（getNovelPages →
+  //      splitIntoSentences）で sentences 配列とクリック送りを観測する。
+  it('25e: `「お題」──本文` は `「お題」` / `──本文` の2文になり、間に1クリック入る（#374 閉じ括弧）', () => {
+    const line = '「人がうらやましい」──この胸を、誰に聞こう。'
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setScenes([scene('s', [narration(line), narration('次。')])])
+    const i = internals(r)
+    const pages = i.getNovelPages({ text: [line] }) as unknown as Array<{ sentences: string[] }>
+    expect(pages).toHaveLength(1)
+    expect(pages[0].sentences).toEqual(['「人がうらやましい」', '──この胸を、誰に聞こう。'])
+
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 1 })
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
+  })
+
   // 25b: ページ総数が「文数 / cap の切り上げ」になる（純計算経路の確認）。
   it('25b: novel のページ総数は ceil(文数 / cap) になる（2*cap+1 文 → 3 ページ）', () => {
     const r = new NovelRenderer()
