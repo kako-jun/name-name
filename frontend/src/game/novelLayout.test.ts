@@ -1256,6 +1256,12 @@ describe('splitIntoSentences 文境界空白の温存 (#362)', () => {
     expect(splitIntoSentences('A。　──B')).toEqual(['A。', '　──B'])
   })
 
+  // 改行境界も同様に温存する（純粋関数の契約。runtime は NovelRenderer が改行を空白へ正規化するため
+  // この入力には至らないが、splitIntoSentences 単体の空白温存不変条件として固定する）。
+  it('`A。\\n──B`（改行挟み）も捨てず `\\n──B` を次の単位にする', () => {
+    expect(splitIntoSentences('A。\n──B')).toEqual(['A。', '\n──B'])
+  })
+
   it('終端記号とトレーラの間に空白があるとトレーラは吸収されず、境界スペースごと次の文へ回る（回帰確認）', () => {
     expect(splitIntoSentences('A？ 」B')).toEqual(['A？', ' 」B'])
   })
