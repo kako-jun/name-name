@@ -4,6 +4,7 @@ import {
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
+  resolveCharacterImageUrls,
   saveSlotToGameState,
   resolveFontFamily,
   formatCounterText,
@@ -256,6 +257,78 @@ describe('resolveAssetUrl', () => {
     expect(resolveAssetUrl('/assets', 'sounds', '/bgm.mp3')).toBe('/assets/sounds/bgm.mp3')
     // 二重スラッシュは 1 つだけ落ちる（元 replace(/^\//) の挙動）
     expect(resolveAssetUrl('/assets', 'sounds', '//bgm.mp3')).toBe('/assets/sounds//bgm.mp3')
+  })
+})
+
+// =====================================================================================
+// #376: resolveCharacterImageUrls（立ち絵の webp→png フォールバック候補列）。
+//   拡張子なしは [.webp, .png] の 2 候補（webp 先）、明示指定は 1 本だけ（多重拡張子を作らない）、
+//   拡張子判定は大小無視。各候補は resolveAssetUrl 経由なので images/ prefix と先頭 / 除去が効く。
+//   期待 URL は資料値の直書きでなく resolveAssetUrl で組み立てて陳腐化を防ぐ（doctrine 規律4）。
+// =====================================================================================
+describe('resolveCharacterImageUrls (#376)', () => {
+  // 観点1: 拡張子なしは webp→png の 2 候補で、[0]=webp / [1]=png・各 URL は resolveAssetUrl 経由。
+  it('拡張子なしは [.webp, .png] の 2 候補（webp が [0]・png が [1]）', () => {
+    const base = 'https://x'
+    const urls = resolveCharacterImageUrls(base, 'spino/soften')
+    expect(urls).toEqual([
+      resolveAssetUrl(base, 'images', 'spino/soften.webp'),
+      resolveAssetUrl(base, 'images', 'spino/soften.png'),
+    ])
+    expect(urls.length).toBe(2)
+    expect(urls[0].endsWith('.webp')).toBe(true)
+    expect(urls[1].endsWith('.png')).toBe(true)
+  })
+
+  // 観点2: 先頭 / 付きパス → resolveAssetUrl の先頭スラッシュ除去が効き images// にならない。
+  it('先頭 / 付きパスは resolveAssetUrl が先頭スラッシュを 1 つ落とす（images// にならない）', () => {
+    const base = 'https://x'
+    const urls = resolveCharacterImageUrls(base, '/spino/x')
+    expect(urls).toEqual([
+      resolveAssetUrl(base, 'images', '/spino/x.webp'),
+      resolveAssetUrl(base, 'images', '/spino/x.png'),
+    ])
+    // 具体形の確認: images// の二重スラッシュを作らない。
+    expect(urls[0]).toBe('https://x/images/spino/x.webp')
+    expect(urls[1]).toBe('https://x/images/spino/x.png')
+    expect(urls[0]).not.toContain('images//')
+    expect(urls[1]).not.toContain('images//')
+  })
+
+  // 観点3: .webp 明示指定は 1 本のみ（png を追加しない）。
+  it('.webp 明示指定は 1 本のみ（png を足さない）', () => {
+    const base = 'https://x'
+    const urls = resolveCharacterImageUrls(base, 'spino/soften.webp')
+    expect(urls).toEqual([resolveAssetUrl(base, 'images', 'spino/soften.webp')])
+    expect(urls.length).toBe(1)
+  })
+
+  // 観点4: .png 明示指定は 1 本のみ（webp を追加しない・.png.png の多重拡張子を作らない）。
+  it('.png 明示指定は 1 本のみ（webp を足さない・.png.png にしない）', () => {
+    const base = 'https://x'
+    const urls = resolveCharacterImageUrls(base, 'spino/soften.png')
+    expect(urls).toEqual([resolveAssetUrl(base, 'images', 'spino/soften.png')])
+    expect(urls.length).toBe(1)
+    expect(urls[0].endsWith('.png.png')).toBe(false)
+  })
+
+  // 観点5: 拡張子判定は toLowerCase() で大小無視。.WEBP / .PNG / .Png / .WebP はすべて明示扱い＝1 本。
+  it.each(['a/b.WEBP', 'a/b.PNG', 'a/b.Png', 'a/b.WebP'])(
+    '拡張子判定は大小無視: %s は明示指定扱いで 1 本のみ（元の大小を保持した URL）',
+    (path) => {
+      const base = 'https://x'
+      const urls = resolveCharacterImageUrls(base, path)
+      // 明示扱いなので候補は 1 本。URL は cleanPath をそのまま（大小を潰さず）連結する。
+      expect(urls).toEqual([resolveAssetUrl(base, 'images', path)])
+      expect(urls.length).toBe(1)
+    }
+  )
+
+  // 観点6: baseUrl は末尾スラッシュなし前提で /images/ を 1 つの / で挟んで連結する。
+  it('baseUrl 末尾スラッシュなし前提で https://x/images/... に連結する', () => {
+    const urls = resolveCharacterImageUrls('https://cdn.example.com', 'hero/smile')
+    expect(urls[0]).toBe('https://cdn.example.com/images/hero/smile.webp')
+    expect(urls[1]).toBe('https://cdn.example.com/images/hero/smile.png')
   })
 })
 
