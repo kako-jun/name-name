@@ -862,8 +862,10 @@ describe('splitIntoSentences (#283 novel 改頁の文境界分割)', () => {
     expect(splitIntoSentences('一文目。記号なし末尾')).toEqual(['一文目。', '記号なし末尾'])
   })
 
-  it('文の前後の余分な空白はトリムする（文中の空白は保持）', () => {
-    expect(splitIntoSentences('  a b。 c d。')).toEqual(['a b。', 'c d。'])
+  it('テキスト全体の外周の余分な空白はトリムするが、文と文の境界の空白は温存する (#362)', () => {
+    // 外周（先頭の 2 スペース）は 1 回だけ trim される。文境界（。の直後）の空白は
+    // ？/！ 直後の半角スペース規約 (theo-hayami#12) を保持するため落とさない。
+    expect(splitIntoSentences('  a b。 c d。')).toEqual(['a b。', ' c d。'])
   })
 })
 
@@ -1026,12 +1028,12 @@ describe('splitIntoSentences 設計8〜11（分割規則の回帰固定 #283）'
   })
 
   // 11: 文中の改行（\n）は文の一部として温存し、文境界にしない。
-  //     文境界（終端記号）をまたぐ改行は trim で落ちる。
-  it('11: 文中の改行は温存し、文境界の改行は trim で落とす', () => {
+  //     文境界（終端記号）をまたぐ改行も、外周でなければ温存する (#362)。
+  it('11: 文中の改行も文境界の改行も温存する（外周のみ trim）(#362)', () => {
     // 終端記号のない改行は同じ文の中に残る
     expect(splitIntoSentences('1行目\n2行目。3行目')).toEqual(['1行目\n2行目。', '3行目'])
-    // 文と文の境目の改行は前後 trim で消える（行頭/行末の空白扱い）
-    expect(splitIntoSentences('一文目。\n二文目。')).toEqual(['一文目。', '二文目。'])
+    // 文と文の境目の改行はテキスト全体の外周ではないため trim されず、次の文の先頭に残る
+    expect(splitIntoSentences('一文目。\n二文目。')).toEqual(['一文目。', '\n二文目。'])
   })
 })
 

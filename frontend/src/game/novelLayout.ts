@@ -579,23 +579,30 @@ function isMidlineRule(ch: string): boolean {
  * しないため、`⋯⋯──` は `──` で 1 回、`⋯⋯。` は `。` で 1 回止まる。
  *
  * - 空文字・空白だけの入力は空配列 `[]` を返す。
- * - 文の前後の余分な空白はトリムするが、文中の空白は保持する。
+ * - テキスト全体の先頭・末尾（外周）の余分な空白は関数冒頭で 1 回だけトリムするが、
+ *   文と文の**境界**にある空白・改行はトリムせず温存する (#362)。`？`/`！` 直後の半角スペースは
+ *   theo-hayami#12 で確定した演出情報であり、境界を跨いで連結（`joinSentences`）される際に
+ *   消してはならない。判定（空文字かどうか）には `trim()` した値を使うが、push する値は
+ *   常に untrimmed の `current` にする。
  *
  * @param text 本文（イベントの text 行を連結したもの。ルビ記法は stripRubyMarkup 済みを渡す想定）
  * @returns 文の配列（空要素は含まない）
  */
 export function splitIntoSentences(text: string): string[] {
+  // 外周だけ 1 回 trim する。文中・文境界の空白/改行は以降一切トリムしない (#362)。
+  const outerTrimmed = text.trim()
   const sentences: string[] = []
-  const chars = Array.from(text)
+  const chars = Array.from(outerTrimmed)
   const n = chars.length
   let current = ''
 
   const isTerminator = (ch: string) => SENTENCE_TERMINATORS.includes(ch)
   const isTrailer = (ch: string) => SENTENCE_TRAILERS.includes(ch)
 
+  // 判定には trim() した値を使うが、push する値は untrimmed の current にする (#362)。
+  // 文と文の境界にある空白・改行を落とさないため。
   const flush = () => {
-    const trimmed = current.trim()
-    if (trimmed !== '') sentences.push(trimmed)
+    if (current.trim() !== '') sentences.push(current)
     current = ''
   }
 
@@ -658,9 +665,8 @@ export function splitIntoSentences(text: string): string[] {
       flush()
     }
   }
-  // 文末記号で終わらない末尾の断片も 1 文として拾う。
-  const tail = current.trim()
-  if (tail !== '') sentences.push(tail)
+  // 文末記号で終わらない末尾の断片も 1 文として拾う。判定は trim、push は untrimmed (#362)。
+  if (current.trim() !== '') sentences.push(current)
   return sentences
 }
 
