@@ -178,6 +178,30 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
   })
 
+  // 25d: 句点直後の余韻横棒 `。──`（先頭ダッシュ #374）は `。` で息継ぎし、`──それと、` を
+  //      次のクリックで一気に表示する。イベント text（parser で `--`→`──` 正準化済み）→
+  //      getNovelPages → splitIntoSentences の実行時経路で sentences 配列を観測する。
+  it('25d: `です。──それと、` は `です。` / `──それと、` の2文になり、間に1クリック入る（#374）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    // narration の text は parser 正準化後の姿（`--` → `──`）を直接与える。
+    r.setScenes([scene('s', [narration('です。──それと、'), narration('次。')])])
+    const i = internals(r)
+    const pages = i.getNovelPages({ text: ['です。──それと、'] }) as unknown as Array<{
+      sentences: string[]
+    }>
+    // 1 ページに収まり（jsdom で各文 1 行・cap 内）、句点で切れて `──` が次の文の先頭に回る。
+    expect(pages).toHaveLength(1)
+    expect(pages[0].sentences).toEqual(['です。', '──それと、'])
+
+    // クリック（advance）で `です。`（文0）→ `──それと、`（文1）→ 次イベントへ、と 1 文ずつ進む。
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 1 })
+    i.advance()
+    expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
+  })
+
   // 25b: ページ総数が「文数 / cap の切り上げ」になる（純計算経路の確認）。
   it('25b: novel のページ総数は ceil(文数 / cap) になる（2*cap+1 文 → 3 ページ）', () => {
     const r = new NovelRenderer()
