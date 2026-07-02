@@ -862,8 +862,10 @@ describe('splitIntoSentences (#283 novel 改頁の文境界分割)', () => {
     expect(splitIntoSentences('一文目。記号なし末尾')).toEqual(['一文目。', '記号なし末尾'])
   })
 
-  it('文の前後の余分な空白はトリムする（文中の空白は保持）', () => {
-    expect(splitIntoSentences('  a b。 c d。')).toEqual(['a b。', 'c d。'])
+  it('テキスト全体の外周の余分な空白はトリムするが、文と文の境界の空白は温存する (#362)', () => {
+    // 外周（先頭の 2 スペース）は 1 回だけ trim される。文境界（。の直後）の空白は
+    // ？/！ 直後の半角スペース規約 (theo-hayami#12) を保持するため落とさない。
+    expect(splitIntoSentences('  a b。 c d。')).toEqual(['a b。', ' c d。'])
   })
 })
 
@@ -1026,12 +1028,12 @@ describe('splitIntoSentences 設計8〜11（分割規則の回帰固定 #283）'
   })
 
   // 11: 文中の改行（\n）は文の一部として温存し、文境界にしない。
-  //     文境界（終端記号）をまたぐ改行は trim で落ちる。
-  it('11: 文中の改行は温存し、文境界の改行は trim で落とす', () => {
+  //     文境界（終端記号）をまたぐ改行も、外周でなければ温存する (#362)。
+  it('11: 文中の改行も文境界の改行も温存する（外周のみ trim）(#362)', () => {
     // 終端記号のない改行は同じ文の中に残る
     expect(splitIntoSentences('1行目\n2行目。3行目')).toEqual(['1行目\n2行目。', '3行目'])
-    // 文と文の境目の改行は前後 trim で消える（行頭/行末の空白扱い）
-    expect(splitIntoSentences('一文目。\n二文目。')).toEqual(['一文目。', '二文目。'])
+    // 文と文の境目の改行はテキスト全体の外周ではないため trim されず、次の文の先頭に残る
+    expect(splitIntoSentences('一文目。\n二文目。')).toEqual(['一文目。', '\n二文目。'])
   })
 })
 
@@ -1108,6 +1110,118 @@ describe('splitIntoSentences 余韻横棒 ── を文送り境界にする (#3
   //     間に `──` を挟まない `？！`（=2停止・design8〜11 で固定済み）との対比になる。
   it('D4: `A？──！B` → `A？──！` / `B`（── が ？ と ！ を 1 停止に橋渡し）', () => {
     expect(splitIntoSentences('A？──！B')).toEqual(['A？──！', 'B'])
+  })
+})
+
+describe('splitIntoSentences 文境界空白の温存 (#362)', () => {
+  it('？/！ 直後の半角スペースが次の文へ持ち越されて保持される', () => {
+    expect(splitIntoSentences('本当に？ はい！ そうですか。')).toEqual([
+      '本当に？',
+      ' はい！',
+      ' そうですか。',
+    ])
+  })
+
+  it('文末記号で終わらない末尾断片の直前でも境界の半角スペースを温存する', () => {
+    expect(splitIntoSentences('A。 B')).toEqual(['A。', ' B'])
+  })
+
+  it('外周の複数スペースは trim し、文境界の複数スペースは温存する（Issue の核心例）', () => {
+    expect(splitIntoSentences('  A？ B！ C。  ')).toEqual(['A？', ' B！', ' C。'])
+  })
+
+  it('外周スペースが 0 文字・1 文字のいずれでも文境界の 1 スペースは同じく温存する', () => {
+    // 外周 0 文字（先頭・末尾ともに余分な空白なし）
+    expect(splitIntoSentences('A？ B！ C。')).toEqual(['A？', ' B！', ' C。'])
+    // 外周 1 文字（先頭・末尾に半角スペース 1 つずつ）
+    expect(splitIntoSentences(' A？ B！ C。 ')).toEqual(['A？', ' B！', ' C。'])
+  })
+
+  it('文境界の全角スペースも温存する', () => {
+    expect(splitIntoSentences('元気？　うん！')).toEqual(['元気？', '　うん！'])
+  })
+
+  it('文境界の連続半角スペースは個数そのまま温存する', () => {
+    expect(splitIntoSentences('元気？  うん！')).toEqual(['元気？', '  うん！'])
+  })
+
+  it('文境界の半角スペース＋改行の混在も温存する', () => {
+    expect(splitIntoSentences('元気？ \nうん！')).toEqual(['元気？', ' \nうん！'])
+  })
+
+  it('文境界のタブも温存する', () => {
+    expect(splitIntoSentences('A。\tB')).toEqual(['A。', '\tB'])
+  })
+
+  it('外周のタブは trim で除去する', () => {
+    expect(splitIntoSentences('\tA。')).toEqual(['A。'])
+  })
+
+  it('ASCII の ?/! 直後の境界スペースも温存する（i18n）', () => {
+    expect(splitIntoSentences('Really? Yes! Sure.')).toEqual(['Really?', ' Yes!', ' Sure.'])
+  })
+
+  it('サロゲートペア（絵文字）を含む文の境界スペースも温存する', () => {
+    expect(splitIntoSentences('やった🎉？ 次だ！')).toEqual(['やった🎉？', ' 次だ！'])
+  })
+
+  it('空白のみ（改行・タブ・半角混在）の入力は引き続き空配列', () => {
+    expect(splitIntoSentences('\n\t  \n')).toEqual([])
+  })
+
+  it('文末記号が無ければ外周 trim だけで済み、文中の空白は温存する', () => {
+    expect(splitIntoSentences('  Hello World  ')).toEqual(['Hello World'])
+  })
+
+  it('外周が先頭のみ 1 文字の空白でも trim される', () => {
+    expect(splitIntoSentences(' A。')).toEqual(['A。'])
+  })
+
+  it('外周が末尾のみ 1 文字の空白でも trim される', () => {
+    expect(splitIntoSentences('A。 ')).toEqual(['A。'])
+  })
+
+  it('外周先頭・末尾ちょうど 1 文字の空白は両方 trim され、文中の空白には影響しない', () => {
+    expect(splitIntoSentences(' 。 ')).toEqual(['。'])
+  })
+
+  it('終端記号の直前（文中）の空白は境界ではないため従来どおり温存する', () => {
+    expect(splitIntoSentences('A 。B')).toEqual(['A 。', 'B'])
+  })
+
+  it('`──` 直後の境界スペースも温存する（#340 との相互作用）', () => {
+    expect(splitIntoSentences('待って── 行くな')).toEqual(['待って──', ' 行くな'])
+  })
+
+  it('トレーラ吸収・`──`・境界スペースが同時に絡んでも、吸収済みトレーラの外側だけ次の文へ回る', () => {
+    expect(splitIntoSentences('彼は「──」 と黙った。')).toEqual(['彼は「──」', ' と黙った。'])
+  })
+
+  it('文末記号＋`──`の結合停止（#340）の直後の境界スペースも温存する', () => {
+    expect(splitIntoSentences('A。── B')).toEqual(['A。──', ' B'])
+  })
+
+  it('終端記号とトレーラの間に空白があるとトレーラは吸収されず、境界スペースごと次の文へ回る（回帰確認）', () => {
+    expect(splitIntoSentences('A？ 」B')).toEqual(['A？', ' 」B'])
+  })
+
+  it('境界セグメントが空白＋終端記号のみでも flush 判定が機能し 3 分割になる', () => {
+    expect(splitIntoSentences('A？ ！B')).toEqual(['A？', ' ！', 'B'])
+  })
+})
+
+describe('paginateSentencesByLines 境界空白を含む文の合成 (#362)', () => {
+  it('分割→既定 join のラウンドトリップで境界空白を含む元の文字列が復元される', () => {
+    const sentences = splitIntoSentences('本当に？ はい！ そうですか。')
+    const lineCounts = sentences.map(() => 1)
+    const pages = paginateSentencesByLines(sentences, lineCounts, 3)
+    expect(pages.map((p) => p.text)).toEqual(['本当に？ はい！ そうですか。'])
+  })
+
+  it('ページ跨ぎで改頁しても各ページの文頭境界空白が欠落しない', () => {
+    const sentences = ['本当に？', ' はい！', ' そうですか。']
+    const pages = paginateSentencesByLines(sentences, [1, 1, 1], 1) // cap=1 で 1 文ずつ改頁
+    expect(pages.map((p) => p.text)).toEqual(['本当に？', ' はい！', ' そうですか。'])
   })
 })
 
