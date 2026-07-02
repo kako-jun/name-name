@@ -273,6 +273,30 @@ export function resolveAssetUrl(baseUrl: string, kind: AssetKind, path: string):
 }
 
 /**
+ * 立ち絵（拡張子を省略したキャラ画像）を配信 URL に解決する候補列を優先順で返す (#376)。
+ *
+ * エンジンは従来 `${base}/images/{path}/{expr}.png` と `.png` 固定で読み込んでいたが、
+ * 2倍解像度 PNG が name-name-api の 1 MiB 安全上限を超えて 413 になる作品向けに、
+ * **軽量 webp を先に試し、無ければ png にフォールバック**する。呼び出し側（CharacterLayer.loadTexture）は
+ * 返った候補を先頭から Assets.load し、最初に成功した Texture を使う。
+ *
+ * - 拡張子なし（従来の立ち絵パス `char/expr`）→ `[.webp, .png]` の 2 候補。
+ * - 既に `.webp` / `.png` が付いている（明示指定）→ その 1 本だけ（`.png.png` のような多重拡張子を避ける）。
+ *
+ * 背景・単独画像・portrait は呼び出し側が拡張子を明記するのでここは通らない（それらは resolveAssetUrl を直接使う）。
+ */
+export function resolveCharacterImageUrls(baseUrl: string, cleanPath: string): string[] {
+  const lower = cleanPath.toLowerCase()
+  if (lower.endsWith('.webp') || lower.endsWith('.png')) {
+    return [resolveAssetUrl(baseUrl, 'images', cleanPath)]
+  }
+  return [
+    resolveAssetUrl(baseUrl, 'images', `${cleanPath}.webp`),
+    resolveAssetUrl(baseUrl, 'images', `${cleanPath}.png`),
+  ]
+}
+
+/**
  * セーブスロットデータ (`SaveSlotData`) を復元用の `NovelGameState` に変換する純粋関数。
  *
  * 元 `NovelRenderer.loadFromSaveData` 内に直書きされていた state 構築ブロックと同一の

@@ -31,9 +31,31 @@ import {
   type UnderlineParams,
 } from './underline'
 // 色パーサ・2D 位置・URL 解決は novelLayout.ts（色/幾何の純関数置き場）に集約 (#273 / #274)。
-import { parseColorToNumber, resolvePositionWithOverride, resolveAssetUrl } from './novelLayout'
+import {
+  parseColorToNumber,
+  resolvePositionWithOverride,
+  resolveAssetUrl,
+  resolveCharacterImageUrls,
+} from './novelLayout'
 import { startTypewriter, tickTypewriter, type TypewriterState } from './typewriter'
 import { hasOwn, safeAssign } from './ownProperty'
+
+/**
+ * URL 候補を先頭から順に Assets.load し、最初に成功した読み込み結果を返す (#376)。
+ * webp→png フォールバック用。すべて失敗したら最後のエラーで reject する。
+ * 候補が 1 本だけなら従来通り単純ロードと等価。
+ */
+async function loadFirstAvailableTexture(urls: string[]): Promise<unknown> {
+  let lastError: unknown
+  for (const url of urls) {
+    try {
+      return await Assets.load(url)
+    } catch (err) {
+      lastError = err
+    }
+  }
+  throw lastError
+}
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
 const CHARACTER_X_RATIO: Record<string, number> = {
@@ -2422,11 +2444,12 @@ export class CharacterLayer extends Container {
     }
 
     const cleanExpression = expression.replace(/^\//, '')
-    const url = `${assetBaseUrl}/images/${cleanExpression}.png`
+    const urls = resolveCharacterImageUrls(assetBaseUrl, cleanExpression)
 
     return (
-      Assets.load(url)
-        .then((texture) => {
+      loadFirstAvailableTexture(urls)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 候補順ロードのため戻り値を unknown で束ねる。texture は従来 Assets.load が返す Texture と同一 (#376)
+        .then((texture: any) => {
           // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
           // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。
           if (sprite.destroyed) return false
@@ -2475,7 +2498,7 @@ export class CharacterLayer extends Container {
           return true
         })
         .catch((err) => {
-          console.warn('[name-name] 立ち絵の読み込みに失敗: ' + url, err)
+          console.warn('[name-name] 立ち絵の読み込みに失敗: ' + urls.join(' , '), err)
           return false
         })
         // 成功/失敗/破棄いずれでも ready を1回だけ通知する (#293)。これでテキスト reveal が
