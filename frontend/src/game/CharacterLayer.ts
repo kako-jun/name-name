@@ -209,12 +209,14 @@ export function computeTargetHeightScale(
 
 /** character_scale の許容下限 (#378)。元絵基準の一律スケール。0 だと立ち絵が消える（scale=0）ため、
  *  極小でも視認できる下限を設ける。値は character_height_ratio (#360) の下限と同じ 0.05 を再利用するが、
- *  意味（元絵基準 vs 画面基準）を明確にするため専用定数として持つ。 */
-const CHARACTER_SCALE_MIN = 0.05
+ *  意味（元絵基準 vs 画面基準）を明確にするため専用定数として持つ。
+ *  テストが期待値（0.05）を直書きして陳腐化しないよう export する（規律4 / #262 の教訓）。 */
+export const CHARACTER_SCALE_MIN = 0.05
 /** character_scale の許容上限 (#378)。元絵基準スケールは元絵解像度に依存し、身長差を焼き込んだ立ち絵を
  *  そのまま拡大する用途があるため、画面基準の character_height_ratio (#360, 上限2) より広く 4 まで許容する
- *  （暴走値で立ち絵を画面外まで巨大化させないよう上限は設ける）。 */
-const CHARACTER_SCALE_MAX = 4
+ *  （暴走値で立ち絵を画面外まで巨大化させないよう上限は設ける）。
+ *  テストが期待値（4）を直書きして陳腐化しないよう export する（規律4 / #262 の教訓）。 */
+export const CHARACTER_SCALE_MAX = 4
 
 /**
  * 立ち絵の元絵基準スケール character_scale (#378) を許容範囲へクランプする純粋関数。

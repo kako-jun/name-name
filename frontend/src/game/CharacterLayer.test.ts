@@ -2,9 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Assets, Sprite, Texture } from 'pixi.js'
 import {
   CHARACTER_Y_RATIO,
+  CHARACTER_SCALE_MIN,
+  CHARACTER_SCALE_MAX,
   CharacterLayer,
   normalizePosition,
   alignToAnchorX,
+  clampCharacterScale,
   computeFitScale,
   computeTargetHeightScale,
   resolveCharacterHeightRatio,
@@ -3601,5 +3604,441 @@ describe('CharacterLayer loadTexture webp→png フォールバック (#376)', (
       failCount++
     })
     expect(failCount).toBe(1)
+  })
+})
+
+// =====================================================================================
+// #378: clampCharacterScale 純粋関数（立ち絵の元絵基準スケールのクランプ）。
+//   値を [CHARACTER_SCALE_MIN, CHARACTER_SCALE_MAX] = [0.05, 4] にクランプする。
+//   期待値は export された定数を参照し、0.05 / 4 を直書きしない（#262 直書き禁止）。
+//   境界は端点±ε の 3 点を縛り、`>=`/`>` と `<=`/`<` の取り違えを狙う。
+//   非有限・非正の弾き（→ null）は setCharacterScale の責務なので、ここでは有限値のクランプだけを縛る。
+// =====================================================================================
+describe('clampCharacterScale 純粋関数（#378 元絵基準スケールのクランプ）', () => {
+  it('範囲内（下限〜上限の間）の値はそのまま返す', () => {
+    expect(clampCharacterScale(0.5)).toBe(0.5)
+    expect(clampCharacterScale(1)).toBe(1)
+    expect(clampCharacterScale(3.9)).toBe(3.9)
+  })
+
+  it('下限未満は CHARACTER_SCALE_MIN にクランプされる（0.04 / 0 / 負）', () => {
+    expect(clampCharacterScale(0.04)).toBe(CHARACTER_SCALE_MIN)
+    expect(clampCharacterScale(0)).toBe(CHARACTER_SCALE_MIN)
+    expect(clampCharacterScale(-1)).toBe(CHARACTER_SCALE_MIN)
+  })
+
+  it('上限超過は CHARACTER_SCALE_MAX にクランプされる（5 / 100）', () => {
+    expect(clampCharacterScale(5)).toBe(CHARACTER_SCALE_MAX)
+    expect(clampCharacterScale(100)).toBe(CHARACTER_SCALE_MAX)
+  })
+
+  // ±Infinity は clamp のみ（NaN・非正の弾きは setCharacterScale 側）。
+  // Math.min/Math.max の素の挙動で +Infinity は上限へ、-Infinity は下限へ落ちる。
+  it('+Infinity は上限、-Infinity は下限へクランプされる', () => {
+    expect(clampCharacterScale(Number.POSITIVE_INFINITY)).toBe(CHARACTER_SCALE_MAX)
+    expect(clampCharacterScale(Number.NEGATIVE_INFINITY)).toBe(CHARACTER_SCALE_MIN)
+  })
+
+  // ---- 下端境界 3 点（端点±ε）。下限 CHARACTER_SCALE_MIN の `>=`/`>` 取り違え狙い ----
+  it.each([
+    [CHARACTER_SCALE_MIN - 0.0001, CHARACTER_SCALE_MIN], // 下限未満 → クランプ
+    [CHARACTER_SCALE_MIN, CHARACTER_SCALE_MIN], // 下限ちょうど → 透過
+    [CHARACTER_SCALE_MIN + 0.0001, CHARACTER_SCALE_MIN + 0.0001], // 下限直上 → 透過
+  ] as const)('下端境界 scale=%f → %f', (input, effective) => {
+    expect(clampCharacterScale(input)).toBeCloseTo(effective, 10)
+  })
+
+  // ---- 上端境界 3 点（端点±ε）。上限 CHARACTER_SCALE_MAX の `<=`/`<` 取り違え狙い ----
+  it.each([
+    [CHARACTER_SCALE_MAX - 0.0001, CHARACTER_SCALE_MAX - 0.0001], // 上限直下 → 透過
+    [CHARACTER_SCALE_MAX, CHARACTER_SCALE_MAX], // 上限ちょうど → 透過
+    [CHARACTER_SCALE_MAX + 0.0001, CHARACTER_SCALE_MAX], // 上限超過 → クランプ
+  ] as const)('上端境界 scale=%f → %f', (input, effective) => {
+    expect(clampCharacterScale(input)).toBeCloseTo(effective, 10)
+  })
+})
+
+// =====================================================================================
+// #378: setCharacterScale の未設定判定/クランプ。
+//   null/undefined/非有限/≤0 → null（未設定＝下位優先順位へフォールバック）。
+//   有効値は clampCharacterScale で [CHARACTER_SCALE_MIN, MAX] へクランプして保持する。
+//   保持値は private characterScale を直読みして縛る（#360 characterHeightRatio と同じ流儀）。
+// =====================================================================================
+describe('CharacterLayer setCharacterScale 未設定判定/クランプ（#378）', () => {
+  interface ScaleInternals {
+    characterScale: number | null
+  }
+  function sInternals(layer: CharacterLayer): ScaleInternals {
+    return layer as unknown as ScaleInternals
+  }
+
+  it('初期値（setter 未呼び出し）は null（未設定・後方互換）', () => {
+    const layer = new CharacterLayer(450, 800)
+    expect(sInternals(layer).characterScale).toBeNull()
+  })
+
+  // null/undefined/NaN/±Infinity/0/負 は全て null（未設定＝下位フォールバック）へ倒す。
+  // 一度有効値を入れてから無効値で null へ戻ることも確かめる（残留しない）。
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['NaN', Number.NaN],
+    ['+Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+    ['0', 0],
+    ['-1', -1],
+  ] as const)('非有効値 %s → characterScale は null（未設定）', (_label, input) => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterScale(1.5)
+    expect(sInternals(layer).characterScale).toBe(1.5)
+    layer.setCharacterScale(input)
+    expect(sInternals(layer).characterScale).toBeNull()
+  })
+
+  it('有効値 0.5 はそのまま透過する（クランプされない）', () => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterScale(0.5)
+    expect(sInternals(layer).characterScale).toBeCloseTo(0.5, 10)
+  })
+
+  it('上限超過 10 は CHARACTER_SCALE_MAX にクランプされる', () => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterScale(10)
+    expect(sInternals(layer).characterScale).toBeCloseTo(CHARACTER_SCALE_MAX, 10)
+  })
+
+  it('下限未満の正値 0.01 は CHARACTER_SCALE_MIN にクランプされる', () => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterScale(0.01)
+    expect(sInternals(layer).characterScale).toBeCloseTo(CHARACTER_SCALE_MIN, 10)
+  })
+
+  // 下端境界: 0 は「非正で null」、CHARACTER_SCALE_MIN ちょうどは「採用・透過」に分岐する
+  // （setCharacterScale の `<= 0` 弾きと clampCharacterScale の下限クランプの境目）。
+  it('下端境界: 0 は非正で null、CHARACTER_SCALE_MIN ちょうどは採用して透過', () => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterScale(0)
+    expect(sInternals(layer).characterScale).toBeNull()
+    layer.setCharacterScale(CHARACTER_SCALE_MIN)
+    expect(sInternals(layer).characterScale).toBeCloseTo(CHARACTER_SCALE_MIN, 10)
+  })
+
+  // ---- 上端境界 3 点（端点±ε）。上限 CHARACTER_SCALE_MAX の `<=`/`<` 取り違え狙い ----
+  it.each([
+    [CHARACTER_SCALE_MAX - 0.0001, CHARACTER_SCALE_MAX - 0.0001],
+    [CHARACTER_SCALE_MAX, CHARACTER_SCALE_MAX],
+    [CHARACTER_SCALE_MAX + 0.0001, CHARACTER_SCALE_MAX],
+  ] as const)('上端境界 scale=%f は characterScale = %f', (input, effective) => {
+    const layer = new CharacterLayer(450, 800)
+    layer.setCharacterScale(input)
+    expect(sInternals(layer).characterScale).toBeCloseTo(effective, 10)
+  })
+})
+
+// =====================================================================================
+// #378: loadTexture の scale 優先順位（fit > character_scale > height_ratios > height_ratio > 原寸1）
+//   と character_scale の「元絵基準（身長差保存）」の核。
+//   立ち絵の実 scale を Assets.load モック + flushPromises で観測する（#360 と同流儀）。
+//   期待値は export 定数 / computeFitScale / computeTargetHeightScale を参照し、計算結果を直書きしない（#262）。
+// =====================================================================================
+describe('CharacterLayer character_scale loadTexture 優先順位・元絵基準（#378）', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
+
+  // ---- character_scale は元絵基準: sprite.scale = 値（texture.height に依らず一定）----
+  it('character_scale 設定時、sprite.scale = 値（元絵基準・texture.height に依らず一定）', async () => {
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.setCharacterScale(0.5)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    expect(st.sprite.scale.x).toBe(0.5)
+    expect(st.sprite.scale.y).toBe(0.5)
+  })
+
+  // ---- 身長差保存の核 ----
+  //   異なる texture.height（1000 / 1400）に同じ character_scale を与えると、両 sprite の scale は
+  //   等しくなり（元絵基準＝値そのまま）、表示高さ scale*texH の比は texH 比 1000:1400 に保たれる。
+  it('身長差保存: 異なる texH（1000/1400）に同じ character_scale を与えると scale は等しく、表示高さ比 = texH 比', async () => {
+    const scaleValue = 0.5
+
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, 1000) as never)
+    const layerA = new CharacterLayer(SW, SH)
+    layerA.setCharacterScale(scaleValue)
+    layerA.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const scaleA = imageChars(layerA).characters.get('hero')!.sprite.scale.x
+
+    vi.restoreAllMocks()
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, 1400) as never)
+    const layerB = new CharacterLayer(SW, SH)
+    layerB.setCharacterScale(scaleValue)
+    layerB.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const scaleB = imageChars(layerB).characters.get('hero')!.sprite.scale.x
+
+    // 元絵基準: texture.height に依らず scale は同じ値（= character_scale）。
+    expect(scaleA).toBe(scaleValue)
+    expect(scaleB).toBe(scaleValue)
+    expect(scaleA).toBe(scaleB)
+    // 表示高さ = scale * texH。scale が同じなので表示高さ比は texH 比 1000:1400 に保たれる（身長差保存）。
+    const displayA = scaleA * 1000
+    const displayB = scaleB * 1400
+    expect(displayA / displayB).toBeCloseTo(1000 / 1400, 10)
+    // 表示高さそのものは揃わない（元絵に焼き込んだ身長差が残る）。
+    expect(displayA).not.toBeCloseTo(displayB, 6)
+  })
+
+  // ---- 対比（画面基準）: character_height_ratio は同 ratio・異 texH でも表示高さが揃う（身長差が潰れる）----
+  it('対比（画面基準）: character_height_ratio は異なる texH でも表示高さが揃い、身長差が潰れる', async () => {
+    const ratio = 0.8
+
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, 1000) as never)
+    const layerA = new CharacterLayer(SW, SH)
+    layerA.setCharacterHeightRatio(ratio)
+    layerA.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const scaleA = imageChars(layerA).characters.get('hero')!.sprite.scale.x
+
+    vi.restoreAllMocks()
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, 1400) as never)
+    const layerB = new CharacterLayer(SW, SH)
+    layerB.setCharacterHeightRatio(ratio)
+    layerB.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const scaleB = imageChars(layerB).characters.get('hero')!.sprite.scale.x
+
+    // 画面基準: scale = (ratio*screenH)/texH。texH が違えば scale も違う（元絵基準と逆）。
+    expect(scaleA).toBeCloseTo(computeTargetHeightScale(1000, ratio, SH), 10)
+    expect(scaleB).toBeCloseTo(computeTargetHeightScale(1400, ratio, SH), 10)
+    expect(scaleA).not.toBeCloseTo(scaleB, 6)
+    // 表示高さ scale*texH は両者とも ratio*screenH で揃う（身長差が潰れる）。
+    expect(scaleA * 1000).toBeCloseTo(ratio * SH, 6)
+    expect(scaleB * 1400).toBeCloseTo(ratio * SH, 6)
+    expect(scaleA * 1000).toBeCloseTo(scaleB * 1400, 6)
+  })
+
+  // ---- fit=true は character_scale より優先（computeFitScale が勝つ）----
+  it('fit=true は character_scale より優先され computeFitScale が勝つ', async () => {
+    const texW = SW * 2
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(texW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    // character_scale は fitScale(=min(SW/texW,SH/texH)=0.5) とは別値の 0.7 にする（反証を成立させる）。
+    const scaleValue = 0.7
+    layer.setCharacterScale(scaleValue)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, fit: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    const fitScale = computeFitScale(texW, texH, SW, SH)
+    expect(st.sprite.scale.x).toBe(fitScale)
+    expect(st.sprite.scale.y).toBe(fitScale)
+    // fit が勝つので character_scale(0.7) ではない（両者が別値であることを前提に反証）。
+    expect(fitScale).not.toBeCloseTo(scaleValue, 6)
+    expect(st.sprite.scale.x).not.toBeCloseTo(scaleValue, 6)
+  })
+
+  // ---- character_scale は character_height_ratio（スクリプト単位・画面基準）より優先 ----
+  it('character_scale は character_height_ratio より優先される（元絵基準の値がそのまま出る）', async () => {
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.setCharacterHeightRatio(0.8)
+    layer.setCharacterScale(0.5)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    const heightScale = computeTargetHeightScale(texH, 0.8, SH)
+    expect(st.sprite.scale.x).toBe(0.5)
+    // height_ratio 由来の scale ではない（character_scale が勝つ裏取り）。
+    expect(st.sprite.scale.x).not.toBeCloseTo(heightScale, 6)
+  })
+
+  // ---- character_scale は character_height_ratios（per-character override・画面基準）より優先 ----
+  it('character_scale は character_height_ratios（per-character override）より優先される', async () => {
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.setCharacterHeightRatios({ hero: 0.9 })
+    layer.setCharacterScale(0.5)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    const overrideScale = computeTargetHeightScale(texH, 0.9, SH)
+    expect(st.sprite.scale.x).toBe(0.5)
+    expect(st.sprite.scale.x).not.toBeCloseTo(overrideScale, 6)
+  })
+
+  // ---- character_scale 未設定は下位（height_ratio / 原寸1）へフォールバック ----
+  it('character_scale 未設定なら character_height_ratio へフォールバックする', async () => {
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.setCharacterHeightRatio(0.8)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    expect(st.sprite.scale.x).toBeCloseTo(computeTargetHeightScale(texH, 0.8, SH), 10)
+  })
+
+  it('character_scale・height_ratio ともに未設定なら原寸 scale=1（後方互換）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+})
+
+// =====================================================================================
+// #378: setCharacterScale のライブ再適用（reapplyCharacterHeightRatios 共有ループ）。
+//   #360/#364 の "即再適用" テスト群と対称の観点を character_scale で縛る。
+//   除外条件（fit / アニメ中 / render-only / snapshotHidden）は同じ実装（reapplyCharacterHeightRatios）を通る。
+// =====================================================================================
+describe('CharacterLayer character_scale ライブ再適用（#378）', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
+
+  it('表示中の静的立ち絵に setCharacterScale を呼ぶと sprite.scale が即再適用される', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    // 設定前は原寸 1（後方互換）。
+    expect(st.sprite.scale.x).toBe(1)
+    // character_scale を設定 → texture ロード済みなので即再スケール（元絵基準・値そのまま）。
+    layer.setCharacterScale(0.5)
+    expect(st.sprite.scale.x).toBe(0.5)
+    expect(st.sprite.scale.y).toBe(0.5)
+    // 別値へ変更しても即追従する。
+    layer.setCharacterScale(2)
+    expect(st.sprite.scale.x).toBe(2)
+    expect(st.sprite.scale.y).toBe(2)
+  })
+
+  it('character_scale を null に戻すと character_height_ratio へ、それも無ければ原寸 1 へ即降格する', async () => {
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.setCharacterHeightRatio(0.8)
+    layer.setCharacterScale(0.5)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    expect(st.sprite.scale.x).toBe(0.5)
+    // null 復帰 → character_height_ratio（画面基準）の scale へ即降格。
+    layer.setCharacterScale(null)
+    const heightScale = computeTargetHeightScale(texH, 0.8, SH)
+    expect(st.sprite.scale.x).toBeCloseTo(heightScale, 10)
+    expect(st.sprite.scale.x).not.toBe(0.5)
+    // height_ratio も外すと原寸 1 へ。
+    layer.setCharacterHeightRatio(null)
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+
+  it('fit=true の立ち絵は setCharacterScale の即再適用対象外（scale は fit のまま不変）', async () => {
+    const texW = SW * 2
+    const texH = SH * 2
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(texW, texH) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, fit: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    const fitScale = computeFitScale(texW, texH, SW, SH)
+    expect(st.sprite.scale.x).toBe(fitScale)
+    layer.setCharacterScale(0.5)
+    expect(st.sprite.scale.x).toBe(fitScale)
+    expect(st.sprite.scale.y).toBe(fitScale)
+  })
+
+  it('アニメ進行中（animation 非 null）の立ち絵は setCharacterScale の即再適用対象外（scale 不変）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')! as unknown as {
+      sprite: { scale: { x: number; y: number } }
+      animation: unknown
+    }
+    expect(st.sprite.scale.x).toBe(1)
+    // 非ゼロ duration の animate で animation を進行中にする（dy 移動なので scale は即時変更しない）。
+    layer.animate('hero', { dy: '-100', duration_ms: 500 })
+    expect(st.animation).not.toBeNull()
+    // アニメ中なので即再適用はスキップされ、scale は据え置き（1 のまま）。
+    layer.setCharacterScale(0.5)
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+  })
+
+  it('render-only（showImage / showTitle）は setCharacterScale の即再適用対象外（自前 sizing のまま不変）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    layer.showTitle('orber', 'sans-serif')
+    // 表示後に character_scale を変えても render-only は触らない（scale 不変）。
+    layer.setCharacterScale(0.5)
+    const image = imageChars(layer).characters.get('avatar')!
+    const title = imageChars(layer).characters.get('Title')!
+    expect(image.sprite.scale.x).toBe(1)
+    expect(image.sprite.scale.y).toBe(1)
+    expect(title.sprite.scale.x).toBe(1)
+    expect(title.sprite.scale.y).toBe(1)
+  })
+
+  // クロスフェード中（#337）の旧 sprite は snapshotHidden で再スケール対象から除外される
+  // （#364 の T-RACE-01 と対称）。旧 sprite は元のスケールを保ち、新 sprite は texture ロード完了後に
+  // 新 character_scale が効く。
+  it('クロスフェード中の旧 sprite（snapshotHidden）は setCharacterScale の即再適用対象外（元のスケールのまま）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.setCharacterScale(0.5)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    await flushPromises()
+    const chars = imageChars(layer).characters
+    const beforeScale = chars.get('hero')!.sprite.scale.x
+    expect(beforeScale).toBe(0.5)
+
+    // 表情変更 → 非 instant・既定 fade あり → クロスフェード分岐（#337）。旧 sprite は snapshotHidden。
+    layer.show('hero', 'sad', '中央', '/assets')
+    const oldKey = [...chars.keys()].find((k) => k !== 'hero')!
+    expect(oldKey).toMatch(/^hero__transition_/)
+    expect(chars.get(oldKey)!.snapshotHidden).toBe(true)
+
+    // クロスフェード中に character_scale を変更 → 旧 sprite は snapshotHidden により再スケール対象外。
+    layer.setCharacterScale(2)
+    expect(chars.get(oldKey)!.sprite.scale.x).toBe(beforeScale)
+
+    await flushPromises()
+    // 新 sprite は loadTexture 完了後に新 character_scale(2) が効く。
+    expect(chars.get('hero')!.sprite.scale.x).toBe(2)
+    // 旧 sprite は対象外のままなので元のスケールを保つ（新 sprite に引きずられない）。
+    expect(chars.get(oldKey)!.sprite.scale.x).toBe(beforeScale)
   })
 })
