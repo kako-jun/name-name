@@ -212,6 +212,13 @@ default_bgm: amehure.ogg
 
 パーサーは `parser/`（Rust）で実装。WASM経由でフロントエンドから使用する。
 
+> ⚠️ **Rust パーサ（`parser/src/*.rs`）を変えたら `cargo test`（native）だけでは本番に反映されない。** 本番で動くのは**コミット済みの `parser/pkg/name_name_parser_bg.wasm`**（`.gitignore` されているが `git add -f` 済み・deploy 対象。CF Pages は `npm run build` の `prebuild`=`frontend/scripts/sync-wasm.mjs` でこの wasm を `frontend/src/wasm/wasm-bytes.generated.ts`〈未追跡〉へ焼き込んで配信する）。よって Rust 変更時は必ず:
+> 1. `cd parser && wasm-pack build --target web`
+> 2. `git add -f parser/pkg/name_name_parser_bg.wasm parser/pkg/*.d.ts` してコミット
+> 3. 検証は**フロントの実パーサ経路**で（`parseMarkdown()` に frontmatter を渡して `Document` のフィールドを確認）。CharacterLayer 等の setter を直接呼ぶハーネスは**パーサを迂回するので偽陽性**になる。
+>
+> 怠ると本番パーサは新しい frontmatter キーを未知として黙って捨て、その挙動がサイレントにフォールバックする（2026-07-03: `character_scale` #378 が落ち、立ち絵が原寸 scale=1 で「等倍」表示された事故）。
+
 ## よく使うコマンド
 
 ### バックエンド開発
