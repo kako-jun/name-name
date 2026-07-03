@@ -967,7 +967,7 @@ describe('DialogBox setFontFamily インライン名追従 (#287 review nit)', (
 
 // ===== #305: 本文テキスト色（setBodyTextColor） =====
 //
-// NovelRenderer が話者から導出した本文色（主人公=暖アイボリー #FFF6E6 / 住人=白）を DialogBox に
+// NovelRenderer が話者から導出した本文色（主人公=やや暖かいアイボリー #FFF0D8 / 住人=白）を DialogBox に
 // 渡す受け渡し経路の検証。dialogText.style.fill に反映され、表示中ルビにも当たることを確認する。
 describe('DialogBox setBodyTextColor (#305)', () => {
   it('既定の本文色は純白 0xffffff', () => {
@@ -976,17 +976,17 @@ describe('DialogBox setBodyTextColor (#305)', () => {
     box.dispose()
   })
 
-  it('setBodyTextColor(#FFF6E6 相当の数値) で dialogText.style.fill が更新される', () => {
+  it('setBodyTextColor(#FFF0D8 相当の数値) で dialogText.style.fill が更新される', () => {
     const box = makeRpgBox()
-    box.setBodyTextColor(0xfff6e6)
-    expect(box.getBodyTextColor()).toBe(0xfff6e6)
-    expect(asInternals(box).dialogText.style.fill).toBe(0xfff6e6)
+    box.setBodyTextColor(0xfff0d8)
+    expect(box.getBodyTextColor()).toBe(0xfff0d8)
+    expect(asInternals(box).dialogText.style.fill).toBe(0xfff0d8)
     box.dispose()
   })
 
   it('住人色（純白）に戻せる', () => {
     const box = makeRpgBox()
-    box.setBodyTextColor(0xfff6e6)
+    box.setBodyTextColor(0xfff0d8)
     box.setBodyTextColor(0xffffff)
     expect(box.getBodyTextColor()).toBe(0xffffff)
     expect(asInternals(box).dialogText.style.fill).toBe(0xffffff)
@@ -995,9 +995,9 @@ describe('DialogBox setBodyTextColor (#305)', () => {
 
   it('同じ色の再設定は no-op（getBodyTextColor は維持）', () => {
     const box = makeRpgBox()
-    box.setBodyTextColor(0xfff6e6)
-    box.setBodyTextColor(0xfff6e6)
-    expect(box.getBodyTextColor()).toBe(0xfff6e6)
+    box.setBodyTextColor(0xfff0d8)
+    box.setBodyTextColor(0xfff0d8)
+    expect(box.getBodyTextColor()).toBe(0xfff0d8)
     box.dispose()
   })
 
@@ -1007,11 +1007,11 @@ describe('DialogBox setBodyTextColor (#305)', () => {
     // ルビは ensureFontLoaded().then() で構築されるため microtask を flush してから色を当てる。
     await Promise.resolve()
     await Promise.resolve()
-    box.setBodyTextColor(0xfff6e6)
+    box.setBodyTextColor(0xfff0d8)
     const ruby = asInternals(box).rubyEntries
     expect(ruby.length).toBeGreaterThan(0)
     for (const e of ruby) {
-      expect(e.text.style.fill).toBe(0xfff6e6)
+      expect(e.text.style.fill).toBe(0xfff0d8)
     }
     box.dispose()
   })
