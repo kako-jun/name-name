@@ -280,7 +280,7 @@ export class NovelRenderer {
    *  resetAndStartEvents / シーン遷移でリセットする（前シーンの話者を引きずらない）。 */
   private lastSpeaker: string | null = null
 
-  /** 主人公セリフの本文色 (#305)。固定で黄みのある暖アイボリー #FFEAC6。
+  /** 主人公セリフの本文色 (#305)。固定でやや暖かいアイボリー #FFF0D8。
    *  protagonist と一致する話者の novel 本文をこの色にし、住人は純白 (#FFFFFF) のまま。
    *  `setProtagonistTextColor` は内部/テスト用フックで本番経路からは呼ばれない（frontmatter 上書きは未実装）。
    *  protagonist 未指定なら色差は起こさず全員白（後方互換）。 */
@@ -292,8 +292,8 @@ export class NovelRenderer {
   /** 住人（非主人公）の本文色 (#305)。純白。protagonist 未指定時は全員これになる。 */
   private static readonly RESIDENT_TEXT_COLOR = 0xffffff
 
-  /** 主人公本文色の既定 (#305)。kako-jun 確定の黄みのある暖アイボリー #FFEAC6。 */
-  private static readonly DEFAULT_PROTAGONIST_TEXT_COLOR = '#FFEAC6'
+  /** 主人公本文色の既定 (#305)。kako-jun 確定のやや暖かいアイボリー #FFF0D8。 */
+  private static readonly DEFAULT_PROTAGONIST_TEXT_COLOR = '#FFF0D8'
 
   /** per-game デフォルトフォント (#147)。frontmatter `font_family:` の値。
    *  null なら DialogBox の組み込み既定 (`'Noto Sans JP', sans-serif`) を使う。
@@ -1091,13 +1091,13 @@ export class NovelRenderer {
 
   /**
    * 主人公セリフの本文色を設定する (#305)。CSS hex を渡す。null/undefined/空文字・不正値の
-   * ときは既定の黄みのある暖アイボリー #FFEAC6 に倒す（parseColorToNumber の fallback）。
+   * ときは既定のやや暖かいアイボリー #FFF0D8 に倒す（parseColorToNumber の fallback）。
    *
    * protagonist と一致する話者の novel 本文をこの色にし、住人は純白のまま。
    * protagonist 未指定なら色差は起こさない（全員白＝後方互換）。adv では色差しない（novel 限定）。
    *
    * 注意（#305 / #307）: 現状この setter を呼ぶ本番経路は無い（parser は色を解析せず、NovelPlayer も
-   * 渡さない）。本番の主人公本文色は常に renderer 既定 #FFEAC6。この setter はテストと将来の
+   * 渡さない）。本番の主人公本文色は常に renderer 既定 #FFF0D8。この setter はテストと将来の
    * frontmatter 上書き実装に備えた内部フックとして残してある（呼ばなければ既定が効く）。
    */
   setProtagonistTextColor(color: string | null | undefined): void {
@@ -1109,7 +1109,7 @@ export class NovelRenderer {
   /**
    * 現在の話者から本文色を決定論的に導出する (#305)。
    *  - adv / protagonist 未指定 / 話者不明 → 住人色（純白）。色差しない（後方互換）。
-   *  - novel かつ話者が protagonist と一致 → 主人公本文色（既定 #FFEAC6）。
+   *  - novel かつ話者が protagonist と一致 → 主人公本文色（既定 #FFF0D8）。
    *  - それ以外（novel の住人）→ 住人色（純白）。
    * 演出中間状態でなく per-line の描画属性なので、render() の都度ここで導出して DialogBox に渡す。
    */
