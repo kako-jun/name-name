@@ -783,23 +783,23 @@ describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
   })
 })
 
-// ===== #305: 主人公の本文色（暖アイボリー #FFF6E6）／住人は純白 =====
+// ===== #305: 主人公の本文色（黄みのある暖アイボリー #FFEAC6）／住人は純白 =====
 //
 // 本文色は render() 時に話者から決定論的に導出して DialogBox.setBodyTextColor に渡す per-line の
 // 描画属性（GameState には持たない）。ここでは導出の純粋部分（resolveBodyTextColor）を直接検証する。
 // DialogBox への受け渡し（dialogText.style.fill 反映）は DialogBox.test.ts で検証する。
-const FFF6E6 = 0xfff6e6 // 暖アイボリー（kako-jun 確定）
+const FFEAC6 = 0xffeac6 // 黄みのある暖アイボリー（kako-jun 確定）
 const WHITE = 0xffffff
 describe('NovelRenderer 主人公本文色 (#305)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('novel + protagonist 一致話者は既定の暖アイボリー #FFF6E6 に解決する', () => {
+  it('novel + protagonist 一致話者は既定の暖アイボリー #FFEAC6 に解決する', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF6E6)
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFEAC6)
   })
 
   it('novel の住人（非主人公）は純白に解決する', () => {
@@ -841,21 +841,21 @@ describe('NovelRenderer 主人公本文色 (#305)', () => {
     expect(internals(r).resolveBodyTextColor('ひな')).toBe(WHITE)
   })
 
-  it('setProtagonistTextColor(null) は既定 #FFF6E6 に倒す', () => {
+  it('setProtagonistTextColor(null) は既定 #FFEAC6 に倒す', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
     r.setProtagonistTextColor('#112233')
     r.setProtagonistTextColor(null)
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF6E6)
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFEAC6)
   })
 
-  it('不正な色指定は既定 #FFF6E6 にフォールバックする', () => {
+  it('不正な色指定は既定 #FFEAC6 にフォールバックする', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
     r.setProtagonistTextColor('not-a-color')
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF6E6)
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFEAC6)
   })
 })
 
