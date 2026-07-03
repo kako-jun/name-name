@@ -4817,7 +4817,7 @@ fn test_document_speaker_nudge_is_case_insensitive() {
 
 #[test]
 fn test_document_speaker_nudge_unspecified_is_none() {
-    // A3: frontmatter にキーが無ければ None（runtime 既定 true=発火にフォールバック＝#286 後方互換）。
+    // A3: frontmatter にキーが無ければ None（runtime 既定 false＝非発火にフォールバック＝opt-in）。
     let input = r#"---
 engine: name-name
 chapter: 1
@@ -4831,7 +4831,7 @@ title: "テスト"
     let doc = parser::parse(input);
     assert_eq!(
         doc.speaker_nudge, None,
-        "speaker_nudge 未指定は None（既定 true にフォールバック）"
+        "speaker_nudge 未指定は None（既定 false にフォールバック）"
     );
 }
 
@@ -4853,7 +4853,7 @@ fn test_document_speaker_nudge_empty_is_none() {
 fn test_document_speaker_nudge_does_not_coerce_truthy_values() {
     // A5（重要）: `yes` / `1` / `on` は coerce せず None に倒す（厳格＝true/false 以外は無効）。
     //   YAML 緩い真偽を受けると frontmatter の意味が曖昧になるため、parse_bool_kv は `true`/`false`
-    //   だけを真偽として扱い、それ以外は「未指定」と同じ None にする（既定 true にフォールバック）。
+    //   だけを真偽として扱い、それ以外は「未指定」と同じ None にする（既定 false にフォールバック）。
     for truthy in ["yes", "1", "on"] {
         let doc = parser::parse(&speaker_nudge_doc(&format!(" {truthy}")));
         assert_eq!(

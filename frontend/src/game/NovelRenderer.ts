@@ -2542,8 +2542,8 @@ export class NovelRenderer {
 
     // 話者交代でポーズ変化 (#286)。novel のみ・スキップ中は抑制（高速進行で乱発しない）。
     // #283 の scrim 自動退避に相乗りして「絵を見せる」タイミングと揃える。
-    // speaker_nudge: false (#382) の作品は nudge を抑制する（ポーズ差し替え運用で不要なため）が、
-    // scrim 退避は「絵を見せる」タイミングとして nudge とは独立に維持する。
+    // nudge は既定オフ・opt-in (#382)。`speaker_nudge: true` の作品だけ発火する（未指定/false は非発火）。
+    // scrim 退避は「絵を見せる」タイミングとして nudge とは独立に維持する（nudge の有無に関わらず退避する）。
     if (speakerChanged && this.isNovelStyle() && !this.skipMode) {
       if (this.speakerNudge) {
         this.characterLayer.nudgePose(speaker)

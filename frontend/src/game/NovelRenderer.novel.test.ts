@@ -502,19 +502,25 @@ describe('NovelRenderer novel 話者交代ポーズ変化 (#286)', () => {
   })
 
   // 同じ話者が連続する間は nudge しない（改行で同一話者が続くだけならポーズ変化を乱発しない）。
+  // nudge は既定オフ（opt-in・#382）なので有効化した上で「同一話者では非発火」を縛る（speakerChanged
+  // 検出が壊れて同一話者でも発火し始めたら落ちる状態にする）。
   it('同一話者が連続する間は nudgePose しない', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
+    r.setSpeakerNudge(true) // #382: nudge は opt-in。同一話者が抑制要因だと縛るため nudge を有効化する。
     r.setScenes([scene('s', [dialog('せお', '一文目。'), dialog('せお', '二文目。')])])
     internals(r).advance() // せお → せお（交代なし）
     expect(layerOf(r).getPoseNudgeState('せお')).toBeNull()
   })
 
   // adv では話者交代があっても nudge しない（演出は novel 限定）。adv 非回帰。
+  // nudge を有効化しても adv（setDialogStyle('novel') を呼ばない）では novel-only ゲートで非発火。
+  // ゲートが壊れて adv で発火し始めたら落ちる。
   it('adv では話者交代があっても nudgePose しない', () => {
     const r = new NovelRenderer()
     r.setProtagonist('せお')
+    r.setSpeakerNudge(true) // #382: nudge を有効化しても adv の novel-only ゲートで非発火だと縛る。
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
     internals(r).advance()
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
@@ -762,6 +768,9 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
   // D5: setSpeakerNudge(true) は opt-in で発火し、retreatNovelScrim も呼ばれる。
   //   D2/D3（抑制でも retreat 独立）と対で、nudge 抑制×scrim 発火の独立を両側から縛る。
   it('D5: setSpeakerNudge(true) は話者交代で nudgePose が発火し、retreatNovelScrim も呼ばれる', () => {
+    // #382: nudge オフ経路（D9）だけでなく発火経路のログ健全性も縛る（nudgePose 経路で console を汚さない）。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const r = new NovelRenderer()
     const retreat = spyRetreat(r)
     r.setDialogStyle('novel')
@@ -772,6 +781,9 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     expect(layerOf(r).getPoseNudgeState('ひな')).not.toBeNull()
     expect(layerOf(r).getPoseNudgeState('ひな')!.active).toBe(true)
     expect(retreat).toHaveBeenCalled()
+    // 発火経路でも console.warn / console.error を出さない（D9 の非発火経路と対で健全性を両側から縛る）。
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
   })
 
   // D6: speaker_nudge=true でも skipMode 中は nudge を発火しない（skip 抑制の非回帰）。

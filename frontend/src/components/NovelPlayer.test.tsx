@@ -442,7 +442,7 @@ describe('NovelPlayer speakerNudge の renderer 転送 (#382)', () => {
     expect(lastRenderer().setSpeakerNudge).toHaveBeenCalledWith(false)
   })
 
-  it('F2: speakerNudge 未指定なら renderer.setSpeakerNudge が null で呼ばれる（?? null・既定 true 相当）', async () => {
+  it('F2: speakerNudge 未指定なら renderer.setSpeakerNudge が null で呼ばれる（?? null・既定 false 相当）', async () => {
     render(<NovelPlayer events={[]} />)
     await flushAsync()
     expect(lastRenderer().setSpeakerNudge).toHaveBeenCalledWith(null)
