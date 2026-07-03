@@ -128,8 +128,8 @@ pub fn parse(input: &str) -> Document {
                 debug_enabled = parse_bool_kv(&unquote(val.trim()));
             } else if let Some(val) = line.strip_prefix("speaker_nudge:") {
                 // 話者交代 nudge（ぴょこ）を novel で発火させるか (#382)。`true` / `false` のみ受ける（parse_bool_kv）。
-                // 空・不正値は None のまま（runtime 既定 true ＝発火＝#286 後方互換）。
-                // theo-hayami のように話者ターンごとにポーズを差し替える作品は false で抑制する。
+                // 空・不正値は None のまま（runtime 既定 false ＝非発火＝nudge は opt-in）。
+                // 標準はポーズ差し替え（#337）が話者合図を担うため nudge は不要。欲しい作品だけ true で opt-in する。
                 speaker_nudge = parse_bool_kv(&unquote(val.trim()));
             }
             pos += 1;

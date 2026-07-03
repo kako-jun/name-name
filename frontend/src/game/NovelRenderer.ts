@@ -281,9 +281,10 @@ export class NovelRenderer {
   private lastSpeaker: string | null = null
 
   /** 話者交代 nudge（ぴょこ）を novel で発火させるか (#382)。frontmatter `speaker_nudge:` の値。
-   *  既定 true（発火＝#286 後方互換）。false で話者交代時の nudgePose を発火させない。
-   *  話者ターンごとにポーズを差し替える作品（theo-hayami）向けに nudge を抑制する。 */
-  private speakerNudge: boolean = true
+   *  既定 false・nudge は opt-in（`speaker_nudge: true` で発火）。標準は話者交代時のポーズ差し替え
+   *  （#337 クロスフェード）が「今この人」の合図を担うため nudge は不要。nudge は開発中の稀な合図で、
+   *  欲しい作品だけ opt-in する。theo-hayami は未指定のまま（＝非発火）。 */
+  private speakerNudge: boolean = false
 
   /** 主人公セリフの本文色 (#305)。固定で暖アイボリー #FFF6E6。
    *  protagonist と一致する話者の novel 本文をこの色にし、住人は純白 (#FFFFFF) のまま。
@@ -1036,14 +1037,15 @@ export class NovelRenderer {
 
   /**
    * 話者交代 nudge（ぴょこ）を発火させるか設定する (#382)。
-   * frontmatter `speaker_nudge:` の値を渡す。null/undefined/true は発火（既定・#286 後方互換）、
-   * false は非発火。話者ターンごとにポーズを差し替える作品（theo-hayami）では false で抑制する。
+   * frontmatter `speaker_nudge:` の値を渡す。true のときだけ発火（opt-in）。
+   * null/undefined/false は非発火（既定オフ）。標準はポーズ差し替え（#337 クロスフェード）が
+   * 話者合図を担うため nudge は不要で、稀に nudge を欲しい作品だけ `speaker_nudge: true` で opt-in する。
    *
    * #286 の nudge ロジック自体は変えない。showCharacterFromDialog の発火条件
    *（novel かつ話者交代かつ非スキップ）にこのフラグを AND するだけ。adv では元々 nudge しない。
    */
   setSpeakerNudge(enabled: boolean | null | undefined): void {
-    this.speakerNudge = enabled !== false
+    this.speakerNudge = enabled === true
   }
 
   /**

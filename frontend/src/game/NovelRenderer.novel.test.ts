@@ -486,10 +486,12 @@ describe('NovelRenderer novel 話者交代ポーズ変化 (#286)', () => {
   })
 
   // 話者が変わったら新話者の立ち絵に nudge がかかる。初回（場面冒頭）は交代でないので nudge しない。
+  // nudge は既定オフ（opt-in・#382）なので、firing 機構を観測するために speaker_nudge=true を明示する。
   it('話者交代で新話者に nudgePose がかかる（初回はかからない）', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
+    r.setSpeakerNudge(true) // #382: nudge は opt-in。機構を観測するため明示的に有効化する。
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
     // 初回（せお登場）は話者交代ではない → nudge なし
     expect(layerOf(r).getPoseNudgeState('せお')).toBeNull()
@@ -557,6 +559,7 @@ describe('NovelRenderer novel 復元経路の役割配置と誤 nudge 防止 (#2
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
+    r.setSpeakerNudge(true) // #382: nudge は opt-in。同一話者が抑制要因だと縛るため nudge を有効化する。
     // event0 せお（質問役=左）/ event1 ひな（住人=右）/ event2 ひな（同一話者）
     r.setScenes([
       scene('s', [dialog('せお', 'q。'), dialog('ひな', 'a1。'), dialog('ひな', 'a2。')]),
@@ -602,6 +605,7 @@ describe('NovelRenderer novel 復元経路の役割配置と誤 nudge 防止 (#2
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
+    r.setSpeakerNudge(true) // #382: nudge は opt-in。再シード機構を nudge 発火で観測するため有効化する。
     // event0 せお（質問役=左）/ event1 ひな（住人=右）/ event2 せお（質問役=左・話者交代）
     r.setScenes([
       scene('s', [dialog('せお', 'q1。'), dialog('ひな', 'a。'), dialog('せお', 'q2。')]),
@@ -650,6 +654,7 @@ describe('NovelRenderer novel 復元経路の役割配置と誤 nudge 防止 (#2
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
+    r.setSpeakerNudge(true) // #382: nudge は opt-in。復元自体が nudge しないと縛るため nudge を有効化する。
     r.setScenes([scene('s', [dialog('せお', 'q。'), dialog('ひな', 'a。')])])
     expect(r.quickLoad()).toBe(true)
 
@@ -671,6 +676,7 @@ describe('NovelRenderer novel skipMode の nudge 抑制 (#286 follow-up S2)', ()
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
+    r.setSpeakerNudge(true) // #382: nudge は opt-in。skip が抑制要因だと縛るため nudge を有効化する。
     r.setSkipMode(true)
     r.setScenes([scene('s', [dialog('せお', 'q。'), dialog('ひな', 'a。')])])
     // せお（質問役=左）が表示され、skip でも役割 x は当たる。
@@ -685,9 +691,10 @@ describe('NovelRenderer novel skipMode の nudge 抑制 (#286 follow-up S2)', ()
 
 // ===== #382: speaker_nudge フラグによる話者交代 nudge の抑制 =====
 //
-// frontmatter `speaker_nudge: false` の作品（theo-hayami 等・話者ターンごとにポーズ差し替え）は
-// 話者交代の nudgePose（ぴょこ）を発火させない。ゲートは NovelRenderer.setSpeakerNudge で、
-// `enabled !== false`（null/undefined/true → 発火＝#286 後方互換 / false → 非発火）。
+// nudge は既定オフ。標準はポーズ差し替え（#337 クロスフェード）が話者合図を担うため、話者交代の
+// nudgePose（ぴょこ）は発火させない。稀に欲しい作品だけ frontmatter `speaker_nudge: true` で opt-in する
+// （theo-hayami 等は未指定のまま＝非発火）。ゲートは NovelRenderer.setSpeakerNudge で、
+// `enabled === true`（true → 発火＝opt-in / null/undefined/false → 非発火＝既定オフ）。
 //
 // 設計の要点（実装で確認済み）:
 //   - nudgePose は speaker_nudge に AND される。
@@ -725,35 +732,38 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     expect(retreat).toHaveBeenCalled()
   })
 
-  // D3: 既定（setSpeakerNudge を呼ばない＝true）では話者交代で nudgePose が発火し、retreat も呼ばれる（D2 と対）。
-  it('D3: 既定（未設定＝true）は話者交代で nudgePose が発火し、retreatNovelScrim も呼ばれる', () => {
+  // D3: 既定（setSpeakerNudge を呼ばない＝false・opt-in）では話者交代でも nudgePose を発火しない。
+  //   一方 scrim 退避（retreatNovelScrim）は nudge とは独立に呼ばれる（既定でも「絵を見せる」タイミングは維持）。
+  it('D3: 既定（未設定＝false・opt-in）は話者交代で nudgePose を発火せず、retreatNovelScrim は独立に呼ばれる', () => {
     const r = new NovelRenderer()
     const retreat = spyRetreat(r)
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
-    // setSpeakerNudge を呼ばない = フィールド既定 true（発火）。
+    // setSpeakerNudge を呼ばない = フィールド既定 false（非発火・opt-in）。
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
     internals(r).advance()
-    expect(layerOf(r).getPoseNudgeState('ひな')).not.toBeNull()
-    expect(layerOf(r).getPoseNudgeState('ひな')!.active).toBe(true)
+    // せお→ひな の交代だが既定オフなので nudge は発火しない。
+    expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
+    // nudge を抑制しても scrim 退避は独立に維持される（AND されるのは nudgePose だけ）。
     expect(retreat).toHaveBeenCalled()
   })
 
-  // D4: setSpeakerNudge(null) は発火する（null !== false）。未指定（null）は既定 true にフォールバック。
-  it('D4: setSpeakerNudge(null) は話者交代で nudgePose が発火する（null !== false）', () => {
+  // D4: setSpeakerNudge(null) は発火しない（null === true が false）。未指定（null）は既定オフに倒れる。
+  it('D4: setSpeakerNudge(null) は話者交代で nudgePose を発火しない（null === true が false）', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
     r.setSpeakerNudge(null)
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
     internals(r).advance()
-    expect(layerOf(r).getPoseNudgeState('ひな')).not.toBeNull()
-    expect(layerOf(r).getPoseNudgeState('ひな')!.active).toBe(true)
+    expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
   })
 
-  // D5: setSpeakerNudge(true) は明示指定でも発火する。
-  it('D5: setSpeakerNudge(true) は話者交代で nudgePose が発火する', () => {
+  // D5: setSpeakerNudge(true) は opt-in で発火し、retreatNovelScrim も呼ばれる。
+  //   D2/D3（抑制でも retreat 独立）と対で、nudge 抑制×scrim 発火の独立を両側から縛る。
+  it('D5: setSpeakerNudge(true) は話者交代で nudgePose が発火し、retreatNovelScrim も呼ばれる', () => {
     const r = new NovelRenderer()
+    const retreat = spyRetreat(r)
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
     r.setSpeakerNudge(true)
@@ -761,6 +771,7 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     internals(r).advance()
     expect(layerOf(r).getPoseNudgeState('ひな')).not.toBeNull()
     expect(layerOf(r).getPoseNudgeState('ひな')!.active).toBe(true)
+    expect(retreat).toHaveBeenCalled()
   })
 
   // D6: speaker_nudge=true でも skipMode 中は nudge を発火しない（skip 抑制の非回帰）。
@@ -791,17 +802,17 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     expect(error).not.toHaveBeenCalled()
   })
 
-  // 注記（off-type）: setSpeakerNudge に文字列 "false" を渡すと `"false" !== false` で発火する
-  //   （ゲートは厳密比較で boolean false のみ抑制する）。parser 側で "false" は Some(false)＝boolean に
-  //   正規化されるため本番経路では踏まないが、ゲートの厳密性を明示するため 1 本だけ縛る。
-  it('off-type: setSpeakerNudge("false"（文字列）) は boolean false ではないので発火する', () => {
+  // 注記（off-type）: setSpeakerNudge に文字列 "false" を渡すと `"false" === true` が false で発火しない
+  //   （ゲートは厳密比較で boolean true のみ発火する）。parser 側で "false" は Some(false)＝boolean に
+  //   正規化されるため本番経路では踏まないが、ゲートの厳密性（型境界）を明示するため 1 本だけ縛る。
+  it('off-type: setSpeakerNudge("false"（文字列）) は boolean true ではないので発火しない', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
     r.setSpeakerNudge('false' as unknown as boolean)
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
     internals(r).advance()
-    expect(layerOf(r).getPoseNudgeState('ひな')).not.toBeNull()
+    expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
   })
 })
 
