@@ -4765,6 +4765,236 @@ title: "テスト"
     assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
 }
 
+// --- #382: speaker_nudge (話者交代 nudge の per-game 出し分け) ---
+//
+// frontmatter `speaker_nudge:` を Option<bool> で透過する。skip_enabled / debug_enabled と同型で
+// `parse_bool_kv` を共有し、`true`/`false`（大文字小文字無視）のみ受理、空・不正値・coerce 系
+//（yes/1/on）は None（runtime 既定: true=発火＝#286 後方互換）にフォールバックする。
+// parser は private な parse_bool_kv を直接公開しないため、parse() 経由で doc フィールドを縛る。
+
+/// `speaker_nudge: <value>` だけを frontmatter に持つ最小ドキュメントを組み立てる。
+fn speaker_nudge_doc(value: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nspeaker_nudge:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n"
+    )
+}
+
+#[test]
+fn test_document_speaker_nudge_parses_true_false() {
+    // A1: `true` → Some(true) / `false` → Some(false)（厳格な真偽の素直な往復）。
+    let doc_true = parser::parse(&speaker_nudge_doc(" true"));
+    assert_eq!(
+        doc_true.speaker_nudge,
+        Some(true),
+        "speaker_nudge: true は Some(true)"
+    );
+
+    let doc_false = parser::parse(&speaker_nudge_doc(" false"));
+    assert_eq!(
+        doc_false.speaker_nudge,
+        Some(false),
+        "speaker_nudge: false は Some(false)"
+    );
+}
+
+#[test]
+fn test_document_speaker_nudge_is_case_insensitive() {
+    // A2: `TRUE` / `False` → 大文字小文字を無視して Some に倒す（parse_bool_kv の to_ascii_lowercase）。
+    let doc_upper = parser::parse(&speaker_nudge_doc(" TRUE"));
+    assert_eq!(
+        doc_upper.speaker_nudge,
+        Some(true),
+        "speaker_nudge: TRUE は大文字無視で Some(true)"
+    );
+
+    let doc_mixed = parser::parse(&speaker_nudge_doc(" False"));
+    assert_eq!(
+        doc_mixed.speaker_nudge,
+        Some(false),
+        "speaker_nudge: False は大文字小文字無視で Some(false)"
+    );
+}
+
+#[test]
+fn test_document_speaker_nudge_unspecified_is_none() {
+    // A3: frontmatter にキーが無ければ None（runtime 既定 true=発火にフォールバック＝#286 後方互換）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.speaker_nudge, None,
+        "speaker_nudge 未指定は None（既定 true にフォールバック）"
+    );
+}
+
+#[test]
+fn test_document_speaker_nudge_empty_is_none() {
+    // A4: 空 `speaker_nudge:`（値なし）・空引用 `""` はどちらも None
+    //   （parse_bool_kv が trim 後の空文字を弾く。skip_enabled の空文字規約と同じ向き）。
+    let doc_empty = parser::parse(&speaker_nudge_doc(""));
+    assert_eq!(doc_empty.speaker_nudge, None, "空 speaker_nudge: は None");
+
+    let doc_empty_quote = parser::parse(&speaker_nudge_doc(" \"\""));
+    assert_eq!(
+        doc_empty_quote.speaker_nudge, None,
+        "speaker_nudge: \"\" は unquote 後に空文字となり None"
+    );
+}
+
+#[test]
+fn test_document_speaker_nudge_does_not_coerce_truthy_values() {
+    // A5（重要）: `yes` / `1` / `on` は coerce せず None に倒す（厳格＝true/false 以外は無効）。
+    //   YAML 緩い真偽を受けると frontmatter の意味が曖昧になるため、parse_bool_kv は `true`/`false`
+    //   だけを真偽として扱い、それ以外は「未指定」と同じ None にする（既定 true にフォールバック）。
+    for truthy in ["yes", "1", "on"] {
+        let doc = parser::parse(&speaker_nudge_doc(&format!(" {truthy}")));
+        assert_eq!(
+            doc.speaker_nudge, None,
+            "speaker_nudge: {truthy} は coerce されず None（厳格）"
+        );
+    }
+}
+
+#[test]
+fn test_document_speaker_nudge_garbage_is_none() {
+    // A6: 完全に無関係なゴミ文字列も None（parse 失敗を握りつぶす）。
+    let doc = parser::parse(&speaker_nudge_doc(" maybe-later"));
+    assert_eq!(
+        doc.speaker_nudge, None,
+        "speaker_nudge: maybe-later（garbage）は None"
+    );
+}
+
+#[test]
+fn test_speaker_nudge_false_round_trips() {
+    // B1: speaker_nudge: false → emit に `speaker_nudge: false` を含み、再 parse で Some(false)。
+    //   falsy（false）でも Some なら emit から消えないこと（skip_serializing は None だけ）を縛る。
+    //   これが抜けると「false を書いたのに round-trip で消える＝抑制が効かなくなる」事故になる。
+    let doc = parser::parse(&speaker_nudge_doc(" false"));
+    assert_eq!(doc.speaker_nudge, Some(false));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("speaker_nudge: false"),
+        "emit に `speaker_nudge: false` が含まれること（false を落とさない）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.speaker_nudge,
+        Some(false),
+        "round-trip で speaker_nudge: false が保持される"
+    );
+}
+
+#[test]
+fn test_speaker_nudge_true_round_trips() {
+    // B2: speaker_nudge: true → emit に `speaker_nudge: true` を含み、再 parse で Some(true)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+speaker_nudge: true
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.speaker_nudge, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("speaker_nudge: true"),
+        "emit に `speaker_nudge: true` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.speaker_nudge,
+        Some(true),
+        "round-trip で speaker_nudge: true が保持される"
+    );
+}
+
+#[test]
+fn test_speaker_nudge_none_omits_emit_line() {
+    // B3: None なら emit に `speaker_nudge:` 行が出ない（skip_serializing_if = Option::is_none）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.speaker_nudge, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("speaker_nudge:"),
+        "speaker_nudge が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_speaker_nudge_round_trip_with_other_frontmatter() {
+    // B4: speaker_nudge を他の per-game frontmatter（skip_enabled / dialog_style / aspect_ratio 等）と
+    //   同居させ、parse → emit → parse で全フィールドが保持されること。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+dialog_style: "novel"
+character_y_ratio: 1.05
+character_fade_ms: 700
+skip_enabled: false
+debug_enabled: true
+speaker_nudge: false
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.speaker_nudge, Some(false));
+    assert_eq!(doc.skip_enabled, Some(false));
+    assert_eq!(doc.debug_enabled, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+
+    // speaker_nudge が保持される。
+    assert_eq!(
+        doc2.speaker_nudge,
+        Some(false),
+        "speaker_nudge が round-trip で保持される"
+    );
+    // 共存フィールドも壊れていないこと。
+    assert_eq!(doc2.skip_enabled, Some(false));
+    assert_eq!(doc2.debug_enabled, Some(true));
+    assert_eq!(doc2.aspect_ratio, "9:16");
+    assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+    assert_eq!(doc2.character_y_ratio, Some(1.05));
+    assert_eq!(doc2.character_fade_ms, Some(700));
+    // ドキュメント全体が安定（parse → emit → parse が冪等）。
+    assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
+}
+
 #[test]
 fn test_ruby_markup_passthrough_in_dialog_text() {
     // ルビ記法 (#148) は parser/Rust 側ではスキーマを拡張せず、

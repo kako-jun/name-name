@@ -82,6 +82,57 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
   })
 })
 
+describe('parseMarkdown + normalizeDocument: speaker_nudge が normalize を生き残る (#382)', () => {
+  // #378 の「wasm がキーを黙って捨てる」回帰防止線。normalizeDocument の列挙に speaker_nudge を
+  // 書き忘れると WASM が parse した値が /play runtime（NovelRenderer.setSpeakerNudge）に届かず、
+  // false（nudge 抑制）が効かなくなる。実 parseMarkdown を通し、値が normalize を生き残ることを縛る。
+  function docWith(nudgeLine: string): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      'dialog_style: novel',
+      nudgeLine,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('C1: speaker_nudge: false → doc.speaker_nudge === false（既定 true と異なる値が生き残る）', async () => {
+    const doc = await parseMarkdown(docWith('speaker_nudge: false'))
+    expect(doc.speaker_nudge).toBe(false)
+  })
+
+  it('C2: speaker_nudge: true → doc.speaker_nudge === true', async () => {
+    const doc = await parseMarkdown(docWith('speaker_nudge: true'))
+    expect(doc.speaker_nudge).toBe(true)
+  })
+
+  it('C3: speaker_nudge 省略 → doc.speaker_nudge === null（未指定は下流で既定 true＝発火）', async () => {
+    const minimal = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(minimal)
+    expect(doc.speaker_nudge).toBeNull()
+  })
+})
+
 describe('parseMarkdown + normalizeEvents: 表示テキストの正準化 (#340)', () => {
   // 実 parse（Rust wasm）→ normalizeEvents（JS 二段目）を通し、読ませる表示テキスト
   // （Dialog/Narration/Choice/TitleShow/Label）が中央字へ正準化されること、RPG マスタ名は

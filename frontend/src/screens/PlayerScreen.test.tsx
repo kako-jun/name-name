@@ -1116,6 +1116,7 @@ describe('PlayerScreen', () => {
   async function renderWithFrontmatter(frontmatter: {
     skip_enabled?: boolean | null
     debug_enabled?: boolean | null
+    speaker_nudge?: boolean | null
   }) {
     listProjectsMock.mockResolvedValue([
       { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
@@ -1167,5 +1168,22 @@ describe('PlayerScreen', () => {
     const props = lastNovelPlayerProps()
     expect(props.skipEnabled).toBeNull()
     expect(props.debugEnabled).toBeNull()
+  })
+
+  // --- #382: speaker_nudge を NovelPlayer に転送する ---
+
+  it('#382: doc.speaker_nudge を NovelPlayer に speakerNudge として転送する（true/false）', async () => {
+    await renderWithFrontmatter({ speaker_nudge: false })
+    expect(lastNovelPlayerProps().speakerNudge).toBe(false)
+
+    // 別レンダーで true も確認（doc.speaker_nudge がそのまま流れること）。
+    await renderWithFrontmatter({ speaker_nudge: true })
+    expect(lastNovelPlayerProps().speakerNudge).toBe(true)
+  })
+
+  it('#382: doc に speaker_nudge が無ければ null を転送する（?? null）', async () => {
+    // frontmatter にキーが無い = undefined → PlayerScreen は `?? null` で null に正規化する。
+    await renderWithFrontmatter({})
+    expect(lastNovelPlayerProps().speakerNudge).toBeNull()
   })
 })

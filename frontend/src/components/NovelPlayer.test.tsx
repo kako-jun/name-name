@@ -426,3 +426,37 @@ describe('NovelPlayer 下部ボタン行フェード退避（#350 E 群）', () 
     )
   })
 })
+
+// --- #382: speakerNudge prop を renderer.setSpeakerNudge に転送する ---
+//
+// NovelPlayer は init 時（setEvents/setScenes より前）と、speakerNudge 変化時の useEffect の
+// 双方で renderer.setSpeakerNudge(speakerNudge ?? null) を呼ぶ。frontmatter `speaker_nudge:` が
+// PlayerScreen → NovelPlayer prop → renderer まで届く配線を、スタブ renderer の呼び出しで縛る。
+// （renderer 内部の nudge 抑制ロジックそのものは NovelRenderer.novel.test.ts の D 群が担保する。）
+describe('NovelPlayer speakerNudge の renderer 転送 (#382)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  it('F1: speakerNudge={false} なら renderer.setSpeakerNudge が false で呼ばれる', async () => {
+    render(<NovelPlayer events={[]} speakerNudge={false} />)
+    await flushAsync()
+    expect(lastRenderer().setSpeakerNudge).toHaveBeenCalledWith(false)
+  })
+
+  it('F2: speakerNudge 未指定なら renderer.setSpeakerNudge が null で呼ばれる（?? null・既定 true 相当）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(lastRenderer().setSpeakerNudge).toHaveBeenCalledWith(null)
+  })
+
+  it('F3: speakerNudge を false→true に変更すると setSpeakerNudge が true で再コールされる（useEffect 状態遷移）', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} speakerNudge={false} />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.setSpeakerNudge).toHaveBeenCalledWith(false)
+
+    // prop を true に変えると [speakerNudge] useEffect が再走して renderer に反映する。
+    rerender(<NovelPlayer events={[]} speakerNudge={true} />)
+    await flushAsync()
+    expect(r.setSpeakerNudge).toHaveBeenCalledWith(true)
+  })
+})
