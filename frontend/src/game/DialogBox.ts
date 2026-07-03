@@ -795,7 +795,7 @@ export class DialogBox extends Container {
   /**
    * 本文テキスト色を設定する (#305)。
    *
-   * NovelRenderer が render() 時に話者から決定論的に決めて呼ぶ（主人公=黄みのある暖アイボリー #FFEAC6 /
+   * NovelRenderer が render() 時に話者から決定論的に決めて呼ぶ（主人公=やや暖かいアイボリー #FFF0D8 /
    * 住人=純白 #FFFFFF）。本文 (`dialogText`) と表示中ルビ (`rubyEntries`) の両方に当てる。
    * 値が同じなら no-op（毎 render 呼び出しでも style を作り直さない）。
    *
