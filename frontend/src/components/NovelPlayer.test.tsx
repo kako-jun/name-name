@@ -40,6 +40,7 @@ const { rendererInstances, MockRenderer } = vi.hoisted(() => {
     setFontSize = vi.fn()
     setDialogStyle = vi.fn()
     setProtagonist = vi.fn()
+    setSpeakerNudge = vi.fn()
     setCharacterYRatio = vi.fn()
     setCharacterHeightRatio = vi.fn()
     setCharacterHeightRatios = vi.fn()

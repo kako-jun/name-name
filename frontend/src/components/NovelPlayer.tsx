@@ -89,6 +89,10 @@ interface NovelPlayerProps {
    *  /play では frontmatter `debug_enabled:` から流す（null/undefined/false で非表示・本番既定）。
    *  /edit は frontmatter 非依存で常時 true を渡す（編集者用）。 */
   debugEnabled?: boolean | null
+  /** 話者交代 nudge（ぴょこ）を novel で発火させるか (#382)。frontmatter `speaker_nudge:` から流す。
+   *  null/undefined/true で発火（既定・#286 後方互換）。false で発火しない。
+   *  話者ターンごとにポーズを差し替える作品（theo-hayami）は false で抑制する。 */
+  speakerNudge?: boolean | null
   /** DebugOverlay に出す renderer 外の読み込み診断 (#321)。 */
   debugInfo?: string[]
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
@@ -123,6 +127,7 @@ function NovelPlayer({
   characterFadeMs,
   skipEnabled,
   debugEnabled,
+  speakerNudge,
   debugInfo,
   docKey,
   initialSkipMode = false,
@@ -204,6 +209,8 @@ function NovelPlayer({
       // 質問役（主人公）の話者名 (#286)。setEvents/setScenes より前に設定し、初回の
       // novel 立ち絵配置（質問役=左 / 回答役=右）が正しい役割で決まるようにする。
       renderer.setProtagonist(protagonist ?? null)
+      // 話者交代 nudge の発火可否 (#382)。null/undefined/true で発火（既定）、false で抑制。
+      renderer.setSpeakerNudge(speakerNudge ?? null)
       // 立ち絵の足元 Y 比率 (#308)。setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、
       // 初回描画から per-game の足元位置（全身 / 靴を切る）で立つようにする。
       renderer.setCharacterYRatio(characterYRatio ?? null)
@@ -305,6 +312,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setProtagonist(protagonist ?? null)
   }, [protagonist])
+
+  // speakerNudge が変化したときに renderer に反映 (#382)
+  useEffect(() => {
+    rendererRef.current?.setSpeakerNudge(speakerNudge ?? null)
+  }, [speakerNudge])
 
   // characterYRatio が変化したときに renderer に反映 (#308)
   useEffect(() => {

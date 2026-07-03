@@ -280,6 +280,11 @@ export class NovelRenderer {
    *  resetAndStartEvents / シーン遷移でリセットする（前シーンの話者を引きずらない）。 */
   private lastSpeaker: string | null = null
 
+  /** 話者交代 nudge（ぴょこ）を novel で発火させるか (#382)。frontmatter `speaker_nudge:` の値。
+   *  既定 true（発火＝#286 後方互換）。false で話者交代時の nudgePose を発火させない。
+   *  話者ターンごとにポーズを差し替える作品（theo-hayami）向けに nudge を抑制する。 */
+  private speakerNudge: boolean = true
+
   /** 主人公セリフの本文色 (#305)。固定で暖アイボリー #FFF6E6。
    *  protagonist と一致する話者の novel 本文をこの色にし、住人は純白 (#FFFFFF) のまま。
    *  `setProtagonistTextColor` は内部/テスト用フックで本番経路からは呼ばれない（frontmatter 上書きは未実装）。
@@ -1027,6 +1032,18 @@ export class NovelRenderer {
    */
   setProtagonist(name: string | null | undefined): void {
     this.protagonist = name && name.length > 0 ? name : null
+  }
+
+  /**
+   * 話者交代 nudge（ぴょこ）を発火させるか設定する (#382)。
+   * frontmatter `speaker_nudge:` の値を渡す。null/undefined/true は発火（既定・#286 後方互換）、
+   * false は非発火。話者ターンごとにポーズを差し替える作品（theo-hayami）では false で抑制する。
+   *
+   * #286 の nudge ロジック自体は変えない。showCharacterFromDialog の発火条件
+   *（novel かつ話者交代かつ非スキップ）にこのフラグを AND するだけ。adv では元々 nudge しない。
+   */
+  setSpeakerNudge(enabled: boolean | null | undefined): void {
+    this.speakerNudge = enabled !== false
   }
 
   /**
@@ -2523,8 +2540,12 @@ export class NovelRenderer {
 
     // 話者交代でポーズ変化 (#286)。novel のみ・スキップ中は抑制（高速進行で乱発しない）。
     // #283 の scrim 自動退避に相乗りして「絵を見せる」タイミングと揃える。
+    // speaker_nudge: false (#382) の作品は nudge を抑制する（ポーズ差し替え運用で不要なため）が、
+    // scrim 退避は「絵を見せる」タイミングとして nudge とは独立に維持する。
     if (speakerChanged && this.isNovelStyle() && !this.skipMode) {
-      this.characterLayer.nudgePose(speaker)
+      if (this.speakerNudge) {
+        this.characterLayer.nudgePose(speaker)
+      }
       this.retreatNovelScrim()
     }
   }

@@ -462,6 +462,10 @@ export interface EventDocument {
    *  `/edit`（EditorScreen）は frontmatter 非依存で常時出す（別経路）。
    *  frontmatter `debug_enabled:` から流す。 */
   debug_enabled?: boolean | null
+  /** 話者交代 nudge（ぴょこ）を novel で発火させるか (#382)。true=発火（既定・後方互換）/ false=発火しない。
+   *  話者ターンごとにポーズを差し替える作品（theo-hayami）は false で抑制する。
+   *  null/undefined のときは runtime 既定 true（発火＝#286 後方互換）。frontmatter `speaker_nudge:` から流す。 */
+  speaker_nudge?: boolean | null
   chapters: EventChapter[]
 }
 

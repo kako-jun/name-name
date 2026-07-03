@@ -753,6 +753,8 @@ function EditorScreen({
                 skipEnabled={doc?.skip_enabled ?? null}
                 // デバッグ(D) は frontmatter 非依存で常時有効（編集者用 #310）。debug_enabled は /play 専用。
                 debugEnabled={true}
+                // 話者交代 nudge (#382)。doc 由来。speaker_nudge=false の作品は編集プレビューでも nudge を抑制する。
+                speakerNudge={doc?.speaker_nudge ?? null}
                 // Worker proxy 経由で assets を取得（private repo でも動作する）。
                 // NOTE: EditorScreen は develop ブランチでスクリプトを編集するが、
                 // assetBaseUrl はクエリパラメータを持てない設計のため ref=main 固定になる。
