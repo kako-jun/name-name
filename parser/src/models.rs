@@ -909,6 +909,15 @@ pub struct Document {
     /// `"true"` / `"false"` のみ受け、それ以外は None（既定 false）にフォールバック。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub debug_enabled: Option<bool>,
+    /// 話者交代 nudge（ぴょこ）を novel で発火させるか (#382)。`true` = 発火（既定・後方互換）。
+    /// `false` で話者交代時のポーズ変化（nudgePose）を発火させない。
+    /// theo-hayami のように話者ターンごとに立ち絵ポーズを差し替える運用では nudge が不要になったため、
+    /// 削除でなくフラグで抑制する（ポーズを変えない他作品では nudge が話者合図として有効）。
+    /// #286 の nudge ロジック自体は変えない。novel かつ話者交代かつ非スキップの発火条件に AND するだけ。
+    /// frontmatter `speaker_nudge:` から流す。未指定なら None（runtime で true 扱い＝#286 後方互換）。
+    /// `"true"` / `"false"` のみ受け、それ以外（空・非真偽値）は None（既定 true）にフォールバック。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_nudge: Option<bool>,
     pub chapters: Vec<Chapter>,
 }
 

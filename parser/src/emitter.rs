@@ -77,6 +77,10 @@ pub fn emit(doc: &Document) -> String {
         if let Some(enabled) = doc.debug_enabled {
             out.push_str(&format!("debug_enabled: {enabled}\n"));
         }
+        // Emit speaker_nudge only when present (#382)。skip_enabled / debug_enabled と同じ流儀。
+        if let Some(enabled) = doc.speaker_nudge {
+            out.push_str(&format!("speaker_nudge: {enabled}\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1170,6 +1174,7 @@ mod tests {
             character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
+            speaker_nudge: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1413,6 +1418,7 @@ mod tests {
             character_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
+            speaker_nudge: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),
