@@ -8,6 +8,7 @@ import { parseMarkdown } from '../wasm/parser'
 import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
 import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '../api/client'
 import { clearReadProgress, hasAnyReadProgress } from '../game/readProgress'
+import { parseSceneQuery } from '../game/sceneQuery'
 import { useVisualViewportHeight } from '../utils/useVisualViewportHeight'
 import {
   getCachedParsedScriptDocument,
@@ -153,6 +154,10 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const [loadDebugInfo, setLoadDebugInfo] = useState<string[]>([])
   // script.md がまだリポに無い「未投入」状態。エラーではなく案内として扱う。
   const [unpopulated, setUnpopulated] = useState(false)
+  // `?scene=<sceneId>` の解決結果 (#386)。対象 sceneId が属する script を事前ロードして
+  // allScenes に反映できた場合だけ sceneId を保持する。見つからない/未指定は null＝
+  // NovelPlayer には initialSceneId を渡さず、現行どおりエントリ（ハブ）から開始する。
+  const [startSceneId, setStartSceneId] = useState<string | null>(null)
   const sortedPlayablePathsRef = useRef<string[]>([])
   const scriptInfoByPathRef = useRef<Map<string, ScriptInfo>>(new Map())
   const entryPathRef = useRef<string | null>(null)
@@ -296,11 +301,16 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       setError(null)
       setUnpopulated(false)
       setLoadDebugInfo([])
+      setStartSceneId(null)
       sortedPlayablePathsRef.current = []
       scriptInfoByPathRef.current = new Map()
       entryPathRef.current = null
       loadedDocsRef.current = new Map()
       loadingDocsRef.current = new Map()
+      // `?scene=<sceneId>` ディープリンク (#386)。production でも常時有効（DEV 限定の
+      // debug_scene とは別系統）。読み込み完了まで NovelPlayer はマウントされないため、
+      // ここで一度読めば十分（マウント後のクエリ変化への追従は対象外）。
+      const sceneParam = parseSceneQuery(window.location.search)
       try {
         // 1. プロジェクト情報と scripts 一覧は独立しているので並列に開始する (#314)。
         //    hard reload の cold path で、project metadata 待ちが entry MD 取得開始を
@@ -368,6 +378,11 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           loadedDocsRef.current.set(SCRIPT_BASENAME, entryDoc)
           setDoc(entryDoc)
           setAllScenes(entryScenes)
+          // #386: listScripts 不能時はクロスファイル解決ができないため、entry 自身の
+          // シーンに含まれる場合だけ resolve する（無ければエントリ開始にフォールバック）。
+          const resolvedStartSceneId =
+            sceneParam && entryScenes.some((s) => s.id === sceneParam) ? sceneParam : null
+          setStartSceneId(resolvedStartSceneId)
           setLoadDebugInfo([
             'mode: single script fallback',
             `entry: ${SCRIPT_BASENAME}`,
@@ -375,6 +390,11 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
             'loaded docs: 1',
             `scenes: ${entryScenes.length}`,
             `events: ${flattenDocumentEvents(entryDoc).length}`,
+            ...(sceneParam
+              ? [
+                  `scene param: ${sceneParam} → ${resolvedStartSceneId ? 'resolved' : 'not found (fallback to entry)'}`,
+                ]
+              : []),
           ])
           return
         }
@@ -410,8 +430,23 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         //    供給元はエントリ doc (#284 S1)。
         setDoc(entryDoc)
 
-        // 初期ジャンプ解決索引は entry のシーンだけ。未ロード target は NovelRenderer の
-        // missingSceneResolver が必要時に追加する (#314)。
+        // #386: `?scene=` 指定があれば、対象 sceneId が属する script を NovelPlayer
+        // マウント前に事前解決・ロードする。resolveMissingScene（#314）をそのまま再利用し、
+        // sceneId→script のマッピングロジック（inferScriptPathsForSceneId）を重複実装しない。
+        // 見つかった場合は loadedDocsRef が更新済みなので、直後の buildSceneIndex に自然に乗る。
+        // 見つからない/無効な sceneId は null のまま＝現行どおりエントリから開始する。
+        let resolvedStartSceneId: string | null = null
+        if (sceneParam) {
+          const scenesWithTarget = await resolveMissingScene(sceneParam)
+          if (cancelled) return
+          if (scenesWithTarget && scenesWithTarget.some((s) => s.id === sceneParam)) {
+            resolvedStartSceneId = sceneParam
+          }
+        }
+        setStartSceneId(resolvedStartSceneId)
+
+        // 初期ジャンプ解決索引は entry のシーン + #386 で事前ロードした対象 script のシーン。
+        // 未ロード target は NovelRenderer の missingSceneResolver が必要時に追加する (#314)。
         const scenes = buildSceneIndex(entryPath, sortedPaths, loadedDocsRef.current)
         warnDuplicateSceneIds(scenes)
         if (cancelled) return
@@ -424,6 +459,11 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           `persistent cache: enabled`,
           `lazy loading: enabled`,
           `scenes: ${scenes.length}`,
+          ...(sceneParam
+            ? [
+                `scene param: ${sceneParam} → ${resolvedStartSceneId ? 'resolved' : 'not found (fallback to entry)'}`,
+              ]
+            : []),
           `events: ${flattenDocumentEvents(entryDoc).length}`,
         ])
       } catch (e) {
@@ -442,7 +482,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
     return () => {
       cancelled = true
     }
-  }, [api, loadScriptDoc, projectName])
+  }, [api, loadScriptDoc, projectName, resolveMissingScene])
 
   // 通常再生ストリーム = エントリ doc を線形に flatten した Event[] (#284 M2)。
   // これを NovelPlayer に events= で渡すことで多シーンの線形自動進行が成立する。
@@ -540,6 +580,10 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               events={novelEvents}
               jumpSceneIndex={allScenes}
               onResolveMissingScene={resolveMissingScene}
+              // #386: `?scene=<sceneId>` ディープリンク。事前解決できた場合のみ渡し、
+              // NovelPlayer マウント時に startFrom で該当シーンから開始する。
+              // null（未指定/未解決）なら渡さず、現行どおりエントリから開始する。
+              initialSceneId={startSceneId}
               assetBaseUrl={assetBaseUrl}
               aspectRatio={doc?.aspect_ratio}
               choiceStyle={doc?.choice_style ?? null}

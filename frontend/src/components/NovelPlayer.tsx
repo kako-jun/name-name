@@ -46,6 +46,15 @@ interface NovelPlayerProps {
   jumpSceneIndex?: EventScene[]
   /** 未ロード sceneId を必要時に追加解決する hook (#314)。 */
   onResolveMissingScene?: (sceneId: string) => Promise<EventScene[] | null>
+  /**
+   * production でも有効な起点シーン指定 (#386)。`?scene=<sceneId>` の解決結果を
+   * 呼び出し側（PlayerScreen）が渡す。渡す時点で対象 sceneId は `jumpSceneIndex` に
+   * 含まれている前提（クロスファイルの事前ロードは呼び出し側の責務）。
+   * マウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ。
+   * 不正/未解決（jumpSceneIndex に無い）sceneId は startFrom 内で no-op になり、
+   * 通常のエントリ再生（events）にフォールバックする。null/undefined で指定なし。
+   */
+  initialSceneId?: string | null
   assetBaseUrl?: string
   /** 画面比率。"16:9" / "4:3" / "9:16"。デフォルト "16:9" (#136) */
   aspectRatio?: AspectRatio | string
@@ -113,6 +122,7 @@ function NovelPlayer({
   scenes,
   jumpSceneIndex,
   onResolveMissingScene,
+  initialSceneId,
   assetBaseUrl,
   aspectRatio: aspectRatioProp,
   choiceStyle,
@@ -246,9 +256,19 @@ function NovelPlayer({
         }
         renderer.setEvents(events)
       }
+      // production でも有効な起点シーン指定 (#386)。sceneId が属する script の事前ロードは
+      // PlayerScreen 側の責務（呼び出し時点で jumpSceneIndex に反映済みの前提）。ここでは
+      // 既存の startFrom(#220) をそのまま呼ぶだけで、renderer 側に新規ロジックは持ち込まない。
+      // 不正/未解決 sceneId は startFrom 内で no-op（現行どおりエントリ再生にフォールバック）。
+      if (initialSceneId) {
+        renderer.startFrom({ sceneId: initialSceneId })
+      }
+
       // URL クエリによるデバッグ起点指定 (#220 Phase 3)。
       // DEV ビルドでのみ有効。production ではこのブロックごと tree-shake される。
       // debug_scene は sceneId 前提。scenes / jumpSceneIndex のどちらの索引でも解決する。
+      // initialSceneId(#386) より後に評価するため、dev では debug_scene が指定時に優先される
+      // （デバッグ目的の上書きを production 経路より優先させる）。
       if (import.meta.env.DEV) {
         const debug = parseDebugQuery(window.location.search)
         if (debug && 'script' in debug) {
