@@ -220,7 +220,7 @@ function NovelPlayer({
       renderer.setCharacterScale(characterScale ?? null)
       // 立ち絵フェード時間。初回 show より前に設定し、ToHeart 式のじわっとした登場を作品単位で調整する。
       renderer.setCharacterFadeMs(characterFadeMs ?? null)
-      // 主人公セリフの本文色 (#305) は renderer 既定 #FFF6E6 のまま使う。frontmatter での
+      // 主人公セリフの本文色 (#305) は renderer 既定 #FFEAC6 のまま使う。frontmatter での
       // 色上書きは未実装のため、ここでは設定しない（renderer フィールド初期値が効く）。
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
