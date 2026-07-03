@@ -883,8 +883,8 @@ pub struct Document {
     /// 表示高さ = 値 × screenHeight となり、元絵の縦px（texH）を割り消すため、身長差を焼き込んだ
     /// 立ち絵の身長差が潰れる。それに対し character_scale は**元絵基準**で 表示px = 値 × textureHeight。
     /// 元絵に焼き込んだ縦px差（身長差）をそのまま画面に出す。
-    /// 優先順位（runtime 側）: フィット/fit(#294) > character_scale(#378) > character_height_ratios(#364)
-    /// > character_height_ratio(#360) > 原寸 scale=1。両方指定なら character_scale を採用。
+    /// 優先順位（runtime 側）: フィット/fit(#294) → character_scale(#378) → character_height_ratios(#364)
+    /// → character_height_ratio(#360) → 原寸 scale=1。両方指定なら character_scale を採用。
     /// 対象は立ち絵（show）のみ。範囲クランプ・非有限/非正の未設定扱いは runtime 側（CharacterLayer）。
     /// 空・非数値は None 扱い（後方互換）。frontmatter `character_scale:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
