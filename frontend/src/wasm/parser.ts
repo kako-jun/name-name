@@ -222,6 +222,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // スキップ/デバッグの per-game 出し分け (#310)。boolean なので ?? null（未指定は下流で既定: skip=true / debug=false）。
     skip_enabled: doc.skip_enabled ?? null,
     debug_enabled: doc.debug_enabled ?? null,
+    // 話者交代 nudge の per-game 出し分け (#382)。boolean なので ?? null（未指定は下流で既定 false＝非発火・opt-in）。
+    speaker_nudge: doc.speaker_nudge ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

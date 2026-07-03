@@ -27,6 +27,7 @@ pub fn parse(input: &str) -> Document {
     let mut character_fade_ms: Option<u32> = None;
     let mut skip_enabled: Option<bool> = None;
     let mut debug_enabled: Option<bool> = None;
+    let mut speaker_nudge: Option<bool> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -125,6 +126,11 @@ pub fn parse(input: &str) -> Document {
                 // デバッグ HUD（D ボタン）を /play に出すか (#310)。`true` / `false` のみ受ける（parse_bool_kv）。
                 // 空・不正値は None のまま（runtime 既定 false ＝出さない＝本番非表示）。
                 debug_enabled = parse_bool_kv(&unquote(val.trim()));
+            } else if let Some(val) = line.strip_prefix("speaker_nudge:") {
+                // 話者交代 nudge（ぴょこ）を novel で発火させるか (#382)。`true` / `false` のみ受ける（parse_bool_kv）。
+                // 空・不正値は None のまま（runtime 既定 false ＝非発火＝nudge は opt-in）。
+                // 標準はポーズ差し替え（#337）が話者合図を担うため nudge は不要。欲しい作品だけ true で opt-in する。
+                speaker_nudge = parse_bool_kv(&unquote(val.trim()));
             }
             pos += 1;
         }
@@ -870,6 +876,7 @@ pub fn parse(input: &str) -> Document {
         character_fade_ms,
         skip_enabled,
         debug_enabled,
+        speaker_nudge,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

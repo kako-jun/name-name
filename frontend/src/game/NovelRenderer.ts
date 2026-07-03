@@ -280,6 +280,12 @@ export class NovelRenderer {
    *  resetAndStartEvents / シーン遷移でリセットする（前シーンの話者を引きずらない）。 */
   private lastSpeaker: string | null = null
 
+  /** 話者交代 nudge（ぴょこ）を novel で発火させるか (#382)。frontmatter `speaker_nudge:` の値。
+   *  既定 false・nudge は opt-in（`speaker_nudge: true` で発火）。標準は話者交代時のポーズ差し替え
+   *  （#337 クロスフェード）が「今この人」の合図を担うため nudge は不要。nudge は開発中の稀な合図で、
+   *  欲しい作品だけ opt-in する。theo-hayami は未指定のまま（＝非発火）。 */
+  private speakerNudge: boolean = false
+
   /** 主人公セリフの本文色 (#305)。固定でやや暖かいアイボリー #FFF0D8。
    *  protagonist と一致する話者の novel 本文をこの色にし、住人は純白 (#FFFFFF) のまま。
    *  `setProtagonistTextColor` は内部/テスト用フックで本番経路からは呼ばれない（frontmatter 上書きは未実装）。
@@ -1027,6 +1033,19 @@ export class NovelRenderer {
    */
   setProtagonist(name: string | null | undefined): void {
     this.protagonist = name && name.length > 0 ? name : null
+  }
+
+  /**
+   * 話者交代 nudge（ぴょこ）を発火させるか設定する (#382)。
+   * frontmatter `speaker_nudge:` の値を渡す。true のときだけ発火（opt-in）。
+   * null/undefined/false は非発火（既定オフ）。標準はポーズ差し替え（#337 クロスフェード）が
+   * 話者合図を担うため nudge は不要で、稀に nudge を欲しい作品だけ `speaker_nudge: true` で opt-in する。
+   *
+   * #286 の nudge ロジック自体は変えない。showCharacterFromDialog の発火条件
+   *（novel かつ話者交代かつ非スキップ）にこのフラグを AND するだけ。adv では元々 nudge しない。
+   */
+  setSpeakerNudge(enabled: boolean | null | undefined): void {
+    this.speakerNudge = enabled === true
   }
 
   /**
@@ -2523,8 +2542,12 @@ export class NovelRenderer {
 
     // 話者交代でポーズ変化 (#286)。novel のみ・スキップ中は抑制（高速進行で乱発しない）。
     // #283 の scrim 自動退避に相乗りして「絵を見せる」タイミングと揃える。
+    // nudge は既定オフ・opt-in (#382)。`speaker_nudge: true` の作品だけ発火する（未指定/false は非発火）。
+    // scrim 退避は「絵を見せる」タイミングとして nudge とは独立に維持する（nudge の有無に関わらず退避する）。
     if (speakerChanged && this.isNovelStyle() && !this.skipMode) {
-      this.characterLayer.nudgePose(speaker)
+      if (this.speakerNudge) {
+        this.characterLayer.nudgePose(speaker)
+      }
       this.retreatNovelScrim()
     }
   }

@@ -462,6 +462,11 @@ export interface EventDocument {
    *  `/edit`（EditorScreen）は frontmatter 非依存で常時出す（別経路）。
    *  frontmatter `debug_enabled:` から流す。 */
   debug_enabled?: boolean | null
+  /** 話者交代 nudge（ぴょこ）を novel で発火させるか (#382)。既定 false＝非発火（opt-in）。`true` で発火。
+   *  標準は話者交代時のポーズ差し替えが「今この人」の合図を担うため nudge は不要。欲しい作品だけ
+   *  `speaker_nudge: true` で opt-in する。null/undefined/未指定は false 扱い（非発火）。
+   *  frontmatter `speaker_nudge:` から流す。 */
+  speaker_nudge?: boolean | null
   chapters: EventChapter[]
 }
 
