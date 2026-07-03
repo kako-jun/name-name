@@ -3697,6 +3697,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         character_y_ratio: None,
         character_height_ratio: None,
         character_height_ratios: std::collections::HashMap::new(),
+        character_scale: None,
         character_fade_ms: None,
         skip_enabled: None,
         debug_enabled: None,
@@ -4225,6 +4226,139 @@ title: "テスト"
     assert!(
         !emitted.contains("character_height_ratios:"),
         "character_height_ratios が空なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_document_character_scale_parses_from_frontmatter() {
+    // frontmatter `character_scale:` が Some(f64) で parse されること (#378)。
+    // character_height_ratio(#360) と同型（数値のみ・生値透過、範囲クランプは runtime）。
+    // character_scale は元絵基準（sprite.scale = 値）で、画面基準の character_height_ratio と対照的。
+
+    // 正常な数値は Some(0.5)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_scale: 0.5
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.character_scale,
+        Some(0.5),
+        "frontmatter の character_scale が数値で parse されること"
+    );
+
+    // 未指定なら None（runtime 側で下位優先順位／原寸へフォールバック）。
+    let input_none = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_none = parser::parse(input_none);
+    assert_eq!(doc_none.character_scale, None);
+
+    // 空文字（`character_scale:`）なら None（character_height_ratio と同じ規約）。
+    let input_empty = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_scale:
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_empty = parser::parse(input_empty);
+    assert_eq!(doc_empty.character_scale, None);
+
+    // 非数値（`character_scale: abc`）なら None（parse 失敗を握りつぶす）。
+    let input_bad = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_scale: abc
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc_bad = parser::parse(input_bad);
+    assert_eq!(doc_bad.character_scale, None);
+}
+
+#[test]
+fn test_character_scale_round_trip_with_other_frontmatter() {
+    // parse → emit → parse で character_scale が保持され、character_y_ratio /
+    // character_height_ratio（画面基準・別軸）と共存すること (#378)。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+character_y_ratio: 1.05
+character_height_ratio: 0.3
+character_scale: 0.5
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_scale, Some(0.5));
+    assert_eq!(doc.character_height_ratio, Some(0.3));
+    assert_eq!(doc.character_y_ratio, Some(1.05));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("character_scale: 0.5"),
+        "emit 出力に character_scale が含まれること（quote なしの数値）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.character_scale,
+        Some(0.5),
+        "round-trip で character_scale が保持される"
+    );
+    // 共存フィールドも壊れていないこと（元絵基準の scale と画面基準の height_ratio が両立）。
+    assert_eq!(doc2.character_height_ratio, Some(0.3));
+    assert_eq!(doc2.character_y_ratio, Some(1.05));
+    assert_eq!(doc2.aspect_ratio, "9:16");
+}
+
+#[test]
+fn test_character_scale_none_omits_emit_line() {
+    // character_scale が None なら emit に `character_scale:` 行が出ないこと (#378)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_scale, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("character_scale:"),
+        "character_scale が None なら emit に出ない: {emitted}"
     );
 }
 

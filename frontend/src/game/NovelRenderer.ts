@@ -1068,6 +1068,20 @@ export class NovelRenderer {
   }
 
   /**
+   * 立ち絵の元絵基準の一律スケールを設定する (#378)。
+   * frontmatter `character_scale:` の値を渡す。null/undefined/非有限/非正のときは未設定＝下位優先順位
+   * （character_height_ratios > character_height_ratio > 原寸 scale=1）へフォールバック（後方互換）。
+   *
+   * setCharacterHeightRatio (#360) と対称に、値の所有権は CharacterLayer 側にあるため renderer は
+   * フィールドを持たず素通しする。クランプ・未設定フォールバックは CharacterLayer.setCharacterScale が担う。
+   * character_height_ratio (#360, 画面基準) が元絵の縦pxを割り消し身長差を潰すのに対し、character_scale は
+   * 元絵基準（sprite.scale = 値）で元絵に焼き込んだ身長差をそのまま出す。
+   */
+  setCharacterScale(scale: number | null | undefined): void {
+    this.characterLayer.setCharacterScale(scale ?? null)
+  }
+
+  /**
    * 立ち絵の新規表示・退場フェード時間を設定する。
    * frontmatter `character_fade_ms:` の値（ms）を渡す。null/undefined のときは既定 300ms。
    */

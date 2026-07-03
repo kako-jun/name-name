@@ -441,6 +441,15 @@ export interface EventDocument {
    *  どちらにも該当しなければ原寸（scale=1）にフォールバックする。
    *  未指定時は空オブジェクト（後方互換）。frontmatter `character_height_ratios:` から流す。 */
   character_height_ratios?: Record<string, number>
+  /** 立ち絵の元絵基準の一律スケール (#378)。`sprite.scale = character_scale`（uniform・幅もアスペクト比で追従）。
+   *  `character_height_ratio`(#360)/`character_height_ratios`(#364) は**画面基準**で
+   *  表示高さ = 値 × screenHeight となり元絵の縦px（texture.height）を割り消すため、身長差を焼き込んだ
+   *  立ち絵の身長差が潰れる。character_scale は**元絵基準**で 表示px = 値 × texture.height となり、
+   *  元絵の縦px差（身長差）をそのまま出す。runtime で [0.05, 4] にクランプ。非有限/非正は未設定扱い。
+   *  優先順位: fit(#294) > character_scale(#378) > character_height_ratios(#364) > character_height_ratio(#360)
+   *  > 原寸 scale=1。両方指定なら character_scale を採用。null/undefined で未設定＝下位優先順位へフォールバック
+   *  （後方互換）。対象は show() の立ち絵のみ（Title/Label/Image は非対象）。frontmatter `character_scale:` から流す。 */
+  character_scale?: number | null
   /** 立ち絵の新規表示・退場フェード時間 (ms)。
    *  null/undefined のときは runtime 既定 300ms（後方互換）。frontmatter `character_fade_ms:` から流す。 */
   character_fade_ms?: number | null
