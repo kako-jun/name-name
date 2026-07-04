@@ -24,8 +24,9 @@ interface TitleOverlayProps {
   onOpenSettings: () => void
   /** 「終了」ボタン押下時（プロジェクト一覧に戻る） */
   onBack: () => void
-  /** ダークモード */
-  isDark?: boolean
+  /** タイトル画面の暗さ。true で #111827（gray-900）、false で #1e1b4b（indigo-950）。
+   *  App の darkMode ではなくプレイヤーテーマ（playerDark）を渡す想定（#394）。 */
+  dark?: boolean
 }
 
 function TitleOverlay({
@@ -36,7 +37,7 @@ function TitleOverlay({
   onContinue,
   onOpenSettings,
   onBack,
-  isDark = false,
+  dark = false,
 }: TitleOverlayProps) {
   const [imageLoaded, setImageLoaded] = useState(false)
   const [imageFailed, setImageFailed] = useState(false)
@@ -46,7 +47,7 @@ function TitleOverlay({
   return (
     <div
       className="absolute inset-0 flex flex-col items-center justify-center z-50"
-      style={{ background: isDark ? '#111827' : '#1e1b4b' }}
+      style={{ background: dark ? '#111827' : '#1e1b4b' }}
     >
       {/* タイトル */}
       <div className="mb-10 flex flex-col items-center">

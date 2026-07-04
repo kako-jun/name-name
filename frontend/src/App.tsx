@@ -57,7 +57,6 @@ function App() {
       <PlayerScreen
         projectName={gameSubdomain}
         apiBaseUrl={apiBaseUrl}
-        isDark={isDark}
         onBack={() => {
           // サブドメイン経由では戻る先が無いので name-name 本体トップに飛ばす
           window.location.href = 'https://name-name.llll-ll.com/'
@@ -85,7 +84,7 @@ function App() {
         />
         <Route
           path="/play/:projectName"
-          element={<PlayerScreenWrapper apiBaseUrl={apiBaseUrl} isDark={isDark} />}
+          element={<PlayerScreenWrapper apiBaseUrl={apiBaseUrl} />}
         />
         <Route
           path="/edit/:projectName"
@@ -342,7 +341,7 @@ function AssetsScreenWrapper({
   )
 }
 
-function PlayerScreenWrapper({ apiBaseUrl, isDark }: { apiBaseUrl: string; isDark: boolean }) {
+function PlayerScreenWrapper({ apiBaseUrl }: { apiBaseUrl: string }) {
   const { projectName } = useParams<{ projectName: string }>()
   const navigate = useNavigate()
 
@@ -361,14 +360,7 @@ function PlayerScreenWrapper({ apiBaseUrl, isDark }: { apiBaseUrl: string; isDar
     navigate('/')
   }
 
-  return (
-    <PlayerScreen
-      projectName={projectName}
-      apiBaseUrl={apiBaseUrl}
-      isDark={isDark}
-      onBack={handleBack}
-    />
-  )
+  return <PlayerScreen projectName={projectName} apiBaseUrl={apiBaseUrl} onBack={handleBack} />
 }
 
 export default App

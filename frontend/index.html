@@ -15,7 +15,15 @@
       rel="stylesheet"
     />
   </head>
-  <body>
+  <!-- #394: React マウント前の初期背景を黒にする。プレイヤーの見た目デフォルトは黒（dark）で、
+       theo-hayami 等のダークな埋め込み先で pre-JS の白フラッシュが額縁から浮くのを防ぐ。
+       インライン style なので CSS バンドル読込前（HTML パース時）から効く。マウント後は各トップ
+       画面が自前の全面背景〈エディタ=desk-paper クリーム(#f5ecd9)、ProjectList/Assets=bg-white、
+       Player=?theme 既定 bg-black〉で覆うので、body 黒は定常状態では見えない（?theme=light 埋め込みも
+       app root が覆う）。
+       トレードオフ（意図的）: iOS ラバーバンド overscroll とルート遷移の一瞬だけ body 黒が覗く。
+       light エディタではここが従来の白→黒に変わるが、埋め込み白フラッシュ根治の対価として許容する。 -->
+  <body style="background-color: #000000">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
