@@ -3406,6 +3406,8 @@ describe('CharacterLayer loadTexture webp→png フォールバック (#376)', (
   afterEach(() => {
     // Assets.load / console.warn の spy を毎テスト後に戻す（assert が throw しても後続へ漏らさない）。
     vi.restoreAllMocks()
+    // #389 の瞬断リトライ待機を fake timer で進めるテストがあるので、必ず実タイマーへ戻す。
+    vi.useRealTimers()
   })
 
   interface LoadTextureInternals {
@@ -3508,6 +3510,8 @@ describe('CharacterLayer loadTexture webp→png フォールバック (#376)', (
   // 観点9: 全滅（webp/png とも reject）→ console.warn が joined URL（' , ' 区切り）で 1 回・
   //   第 2 引数は最後（png）のエラー・戻り値 false・onReady 1 回。
   it('webp/png とも失敗なら warn（joined URL・最後のエラー）を 1 回出し false を返す（onReady 1 回）', async () => {
+    // #389: 全滅時は 300ms 待機を挟んで 1 回リトライする。実時間を待たず fake timer で進める。
+    vi.useFakeTimers()
     const webpErr = new Error('webp fail')
     const pngErr = new Error('png fail')
     const loadSpy = vi
@@ -3521,17 +3525,12 @@ describe('CharacterLayer loadTexture webp→png フォールバック (#376)', (
     const layer = new CharacterLayer(800, 450)
     const sprite = new Sprite()
     let onReadyCount = 0
-    const result = await asLoadable(layer).loadTexture(
-      sprite,
-      'spino',
-      EXPR,
-      BASE,
-      undefined,
-      false,
-      () => {
-        onReadyCount++
-      }
-    )
+    const p = asLoadable(layer).loadTexture(sprite, 'spino', EXPR, BASE, undefined, false, () => {
+      onReadyCount++
+    })
+    // 1 巡目の失敗を消化し、300ms 待機を越えてリトライ 2 巡目（これも全滅）まで走らせて確定させる。
+    await vi.advanceTimersByTimeAsync(300)
+    const result = await p
     expect(result).toBe(false)
     // 先頭から順に両方試す。全滅時は #389 の瞬断リトライで、待機後もう一巡（webp→png）試す
     // ため計 4 回呼ばれる（初回 2 + リトライ 2）。1〜2 が初回、3〜4 がリトライ。
@@ -3600,13 +3599,24 @@ describe('CharacterLayer loadTexture webp→png フォールバック (#376)', (
     expect(fallbackCount).toBe(1)
     vi.restoreAllMocks()
 
-    // 全滅経路（webp/png とも失敗）。
+    // 全滅経路（webp/png とも失敗）。#389 の 300ms リトライ待機は fake timer で進める。
+    vi.useFakeTimers()
     let failCount = 0
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(Assets, 'load').mockRejectedValue(new Error('all fail'))
-    await asLoadable(layer).loadTexture(new Sprite(), 'c', EXPR, BASE, undefined, false, () => {
-      failCount++
-    })
+    const failP = asLoadable(layer).loadTexture(
+      new Sprite(),
+      'c',
+      EXPR,
+      BASE,
+      undefined,
+      false,
+      () => {
+        failCount++
+      }
+    )
+    await vi.advanceTimersByTimeAsync(300)
+    await failP
     expect(failCount).toBe(1)
   })
 })
