@@ -41,17 +41,37 @@ import { startTypewriter, tickTypewriter, type TypewriterState } from './typewri
 import { hasOwn, safeAssign } from './ownProperty'
 
 /**
+ * 瞬断リトライ前の待機時間 (ms) (#389)。全候補が一巡失敗したらこの時間だけ待って再試行する。
+ * 一時的なネットワーク瞬断の回復を待つのが目的。長くしすぎると #293 の onReady 発火（テキスト
+ * 解禁）までの待ちが伸びるため、短く抑える。
+ */
+const LOAD_RETRY_DELAY_MS = 300
+
+/**
  * URL 候補を先頭から順に Assets.load し、最初に成功した読み込み結果を返す (#376)。
- * webp→png フォールバック用。すべて失敗したら最後のエラーで reject する。
- * 候補が 1 本だけなら従来通り単純ロードと等価。
+ * webp→png フォールバック用。候補が 1 本だけなら従来通り単純ロードと等価。
+ *
+ * 全候補が一巡失敗した場合、短い待機を挟んで **1 回だけ**もう一巡リトライしてから reject する
+ * (#389)。一時的なネットワーク瞬断で #293 のフォールバック（ロード成否に関わらず onReady 発火）
+ * が「立ち絵なし・テキストあり」に倒れるのを緩和する。PixiJS v8 の Loader は失敗した URL を
+ * `promiseCache` から削除する（キャッシュ済み reject を残さない）ため、同一 URL のリトライも
+ * 実際に再取得を試みる＝ネット回復・別 URL 候補の両方に効く。過剰にしないため、リトライは
+ * 1 巡だけ（計 2 巡）で打ち切る。#293 の順序保証とは両立する（失敗が確定すれば従来どおり
+ * onReady が発火してテキストは解禁される。リトライぶん解禁が遅れるだけで詰まらせない）。
  */
 async function loadFirstAvailableTexture(urls: string[]): Promise<Texture> {
   let lastError: unknown
-  for (const url of urls) {
-    try {
-      return await Assets.load<Texture>(url)
-    } catch (err) {
-      lastError = err
+  const maxAttempts = 2 // 初回 + 瞬断リトライ 1 回
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, LOAD_RETRY_DELAY_MS))
+    }
+    for (const url of urls) {
+      try {
+        return await Assets.load<Texture>(url)
+      } catch (err) {
+        lastError = err
+      }
     }
   }
   throw lastError

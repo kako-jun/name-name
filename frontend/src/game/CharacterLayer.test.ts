@@ -3533,11 +3533,15 @@ describe('CharacterLayer loadTexture webp→png フォールバック (#376)', (
       }
     )
     expect(result).toBe(false)
-    // 先頭から順に両方試す。
-    expect(loadSpy).toHaveBeenCalledTimes(2)
+    // 先頭から順に両方試す。全滅時は #389 の瞬断リトライで、待機後もう一巡（webp→png）試す
+    // ため計 4 回呼ばれる（初回 2 + リトライ 2）。1〜2 が初回、3〜4 がリトライ。
+    expect(loadSpy).toHaveBeenCalledTimes(4)
     expect(loadSpy).toHaveBeenNthCalledWith(1, WEBP_URL)
     expect(loadSpy).toHaveBeenNthCalledWith(2, PNG_URL)
-    // warn は 1 回だけ。メッセージは joined URL（' , ' 区切り）、第 2 引数は最後（png）のエラー。
+    expect(loadSpy).toHaveBeenNthCalledWith(3, WEBP_URL)
+    expect(loadSpy).toHaveBeenNthCalledWith(4, PNG_URL)
+    // warn は 1 回だけ（リトライ後の確定失敗で 1 回のみ）。メッセージは joined URL（' , ' 区切り）、
+    // 第 2 引数は最後（png）のエラー。
     const expectedMsg = '[name-name] 立ち絵の読み込みに失敗: ' + [WEBP_URL, PNG_URL].join(' , ')
     expect(warnSpy).toHaveBeenCalledTimes(1)
     expect(warnSpy).toHaveBeenCalledWith(expectedMsg, pngErr)

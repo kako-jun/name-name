@@ -305,9 +305,13 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     expect(renderSpy).not.toHaveBeenCalled()
 
     rejectLoad(new Error('not found'))
+    // #389: 全候補失敗時は短い待機（LOAD_RETRY_DELAY_MS=300ms）を挟んで 1 回だけリトライして
+    // から確定失敗する。リトライぶんの待機を越えてから onReady(.finally)→render を確認する
+    // （テキストは詰まらず、リトライぶん解禁が遅れるだけ）。
+    await new Promise((resolve) => setTimeout(resolve, 350))
     await flushDeferredTextRender()
 
-    // .finally(onReady) が走り、ロード失敗でもテキスト reveal は出る。
+    // .finally(onReady) が走り、ロード失敗でもテキスト reveal は出る（リトライ確定後）。
     expect(renderSpy).toHaveBeenCalledTimes(1)
     expect(warnSpy).toHaveBeenCalled()
   })
