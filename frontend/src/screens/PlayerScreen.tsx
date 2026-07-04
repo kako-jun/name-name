@@ -9,6 +9,7 @@ import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
 import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '../api/client'
 import { clearReadProgress, hasAnyReadProgress } from '../game/readProgress'
 import { parseSceneQuery } from '../game/sceneQuery'
+import { parseThemeQuery } from '../game/themeQuery'
 import { useVisualViewportHeight } from '../utils/useVisualViewportHeight'
 import { isEmbedded } from '../utils/isEmbedded'
 import {
@@ -171,6 +172,11 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   const viewportHeight = useVisualViewportHeight()
   // iframe 埋め込み表示か (#392)。マウント中は不変なので state 化せずレンダー時に一度評価する。
   const embedded = isEmbedded()
+  // プレイヤーの見た目テーマ (#394)。App の darkMode（エディタ UI 用トグル）ではなく
+  // `?theme=` で決める。既定は dark で、キャンバスの黒 (0x000000) にロード画面を継ぎ目なく
+  // 繋ぐ。theo-hayami のようなライトな埋め込み先だけが `?theme=light` を明示する。
+  // isEmbedded() 同様マウント中は不変なのでレンダー時に一度評価する。
+  const playerDark = parseThemeQuery(window.location.search) === 'dark'
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
   // doc: エントリ MD のドキュメント。通常再生ストリーム（線形 events）の供給元であり、
   // かつ RPG 判定・aspect_ratio / choice_style / font_family 等の per-game 設定の
@@ -561,7 +567,9 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
 
   return (
     <div
-      className={`flex flex-col overflow-hidden ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}
+      // #394: プレイヤーの見た目デフォルトは黒。dark 時はキャンバスの背景色 (0x000000) に
+      // 一致する bg-black にして、ロード画面（黒）→キャンバス（黒）を継ぎ目なく繋ぐ。
+      className={`flex flex-col overflow-hidden ${playerDark ? 'dark bg-black' : 'bg-white'}`}
       style={{ height: viewportHeight, minHeight: viewportHeight }}
     >
       {/* プレイヤーヘッダ（戻る＋タイトル）(#392):
@@ -578,14 +586,16 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
           visual viewport 全高で header 高さ前提を持たない）。 */}
       {!embedded && (
         <header
-          className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
+          // #394: ヘッダも playerDark に合わせる。ルート背景が黒（dark 既定）なのに
+          // ヘッダだけ light 配色だと食い違うため、プレイヤーテーマに一致させる。
+          className={`border-b ${playerDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
         >
           <div className="px-6 py-2 flex items-center gap-3">
             <button
               onClick={onBack}
               aria-label="プロジェクト一覧に戻る"
               className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
-                isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
+                playerDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
               }`}
               title="プロジェクト一覧に戻る"
             >
@@ -598,7 +608,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
                 />
               </svg>
             </button>
-            <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+            <h1 className={`text-lg font-semibold ${playerDark ? 'text-white' : 'text-gray-900'}`}>
               {title}
             </h1>
           </div>
@@ -607,25 +617,30 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
 
       <main className="flex-1 overflow-hidden relative">
         {loading ? (
+          // #394: ローディングはルート背景（dark 既定=黒）に乗るので playerDark で分岐。
+          // dark 時は明色（text-gray-400）で黒地に可読、その後キャンバスの黒へ継ぎ目なく繋ぐ。
           <div
-            className={`flex items-center justify-center h-full ${isDark ? 'text-gray-400' : 'text-gray-600'}`}
+            className={`flex items-center justify-center h-full ${playerDark ? 'text-gray-400' : 'text-gray-600'}`}
           >
             読み込み中...
           </div>
         ) : error !== null ? (
+          // #394: エラー文言もルート背景に乗るので playerDark で分岐（isDark のままだと黒地に
+          // 暗文字で読めなくなる）。
           <div
-            className={`flex items-center justify-center h-full ${isDark ? 'text-gray-300' : 'text-gray-700'}`}
+            className={`flex items-center justify-center h-full ${playerDark ? 'text-gray-300' : 'text-gray-700'}`}
           >
             <p role="alert">{error}</p>
           </div>
         ) : unpopulated ? (
+          // #394: 未投入案内もルート背景に乗るので playerDark で分岐。
           <div
             className={`flex flex-col items-center justify-center h-full gap-2 px-6 text-center ${
-              isDark ? 'text-gray-300' : 'text-gray-700'
+              playerDark ? 'text-gray-300' : 'text-gray-700'
             }`}
           >
             <p className="text-lg font-semibold">{title} はまだ準備中です</p>
-            <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+            <p className={`text-sm ${playerDark ? 'text-gray-400' : 'text-gray-500'}`}>
               シナリオ（script.md）が公開されると、ここで再生できるようになります。
             </p>
           </div>
