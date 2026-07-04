@@ -43,7 +43,6 @@ function basename(path: string): string {
 interface PlayerScreenProps {
   projectName: string
   apiBaseUrl: string
-  isDark: boolean
   onBack: () => void
 }
 
@@ -168,7 +167,7 @@ function findConfinedSceneIds(
   return null
 }
 
-function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenProps) {
+function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   const viewportHeight = useVisualViewportHeight()
   // iframe 埋め込み表示か (#392)。マウント中は不変なので state 化せずレンダー時に一度評価する。
   const embedded = isEmbedded()
@@ -703,7 +702,12 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
                 title={title}
                 titleImageUrl={`${assetBaseUrl}/images/title.png`}
                 hasSaveData={hasSaveData}
-                isDark={isDark}
+                // #394: TitleOverlay もプレイヤーテーマ（playerDark）に揃える。他の chrome
+                // （ルート/ヘッダ/ローディング/エラー/未投入）が playerDark に移った中で、
+                // ここだけ App の darkMode トグル（isDark）に追従すると、同一 URL でエディタ側
+                // トグルにより色が動く不整合になり、docs の「プレイヤーの見た目は ?theme
+                // （既定 dark）だけで決まる」に反する。ヘッダ bg-gray-900 とも整合する。
+                isDark={playerDark}
                 onNewGame={() => {
                   // 新規開始: 既読データをクリアして最初から
                   clearReadProgress(projectName)

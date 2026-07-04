@@ -207,12 +207,7 @@ describe('PlayerScreen', () => {
     })
 
     const { container } = render(
-      <PlayerScreen
-        projectName="friday-1930"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     const root = container.firstElementChild as HTMLElement
@@ -262,12 +257,7 @@ describe('PlayerScreen', () => {
     })
 
     render(
-      <PlayerScreen
-        projectName="friday-1930"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -322,12 +312,7 @@ describe('PlayerScreen', () => {
     })
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -381,12 +366,7 @@ describe('PlayerScreen', () => {
     }))
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -446,12 +426,7 @@ describe('PlayerScreen', () => {
     }))
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -498,12 +473,7 @@ describe('PlayerScreen', () => {
     })
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -551,12 +521,7 @@ describe('PlayerScreen', () => {
     })
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -611,12 +576,7 @@ describe('PlayerScreen', () => {
     }))
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -670,12 +630,7 @@ describe('PlayerScreen', () => {
     })
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -730,12 +685,7 @@ describe('PlayerScreen', () => {
     })
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -784,12 +734,7 @@ describe('PlayerScreen', () => {
     }))
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -850,12 +795,7 @@ describe('PlayerScreen', () => {
     })
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -918,14 +858,7 @@ describe('PlayerScreen', () => {
       ],
     })
 
-    render(
-      <PlayerScreen
-        projectName="demo"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
-    )
+    render(<PlayerScreen projectName="demo" apiBaseUrl="http://api.test" onBack={() => {}} />)
 
     await waitFor(() => {
       expect(screen.getByTestId('rpg-player')).toBeInTheDocument()
@@ -942,14 +875,7 @@ describe('PlayerScreen', () => {
     // listScripts は応答するが再生対象 .md が 1 つも無い（= まだ原稿が投入されていない）。
     listScriptsMock.mockResolvedValue([])
 
-    render(
-      <PlayerScreen
-        projectName="missing"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
-    )
+    render(<PlayerScreen projectName="missing" apiBaseUrl="http://api.test" onBack={() => {}} />)
 
     expect(await screen.findByText('まだ無いゲーム はまだ準備中です')).toBeInTheDocument()
     // エラー扱いではないので alert role は出ない
@@ -971,14 +897,7 @@ describe('PlayerScreen', () => {
     // その単一 script.md も 404（リポにまだ原稿が無い）→ 準備中扱い。
     getContentsMock.mockRejectedValue(new ApiError(404, { error: 'not found' }, 'Not Found'))
 
-    render(
-      <PlayerScreen
-        projectName="missing"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
-    )
+    render(<PlayerScreen projectName="missing" apiBaseUrl="http://api.test" onBack={() => {}} />)
 
     expect(await screen.findByText('まだ無いゲーム はまだ準備中です')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).toBeNull()
@@ -1037,12 +956,7 @@ describe('PlayerScreen', () => {
     })
 
     render(
-      <PlayerScreen
-        projectName="theo-hayami"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     // 「準備中」ではなく再生（NovelPlayer）に入る
@@ -1087,14 +1001,7 @@ describe('PlayerScreen', () => {
     ])
     getContentsMock.mockRejectedValue(new Error('network down'))
 
-    render(
-      <PlayerScreen
-        projectName="broken"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
-    )
+    render(<PlayerScreen projectName="broken" apiBaseUrl="http://api.test" onBack={() => {}} />)
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('ゲームデータの読み込みに失敗しました')
@@ -1114,9 +1021,7 @@ describe('PlayerScreen', () => {
     parseMarkdownMock.mockResolvedValue({ engine: 'name-name', chapters: [] })
 
     const onBack = vi.fn()
-    render(
-      <PlayerScreen projectName="x" apiBaseUrl="http://api.test" isDark={false} onBack={onBack} />
-    )
+    render(<PlayerScreen projectName="x" apiBaseUrl="http://api.test" onBack={onBack} />)
 
     const backButton = await screen.findByLabelText('プロジェクト一覧に戻る')
     backButton.click()
@@ -1155,12 +1060,7 @@ describe('PlayerScreen', () => {
     })
 
     render(
-      <PlayerScreen
-        projectName="friday-1930"
-        apiBaseUrl="http://api.test"
-        isDark={false}
-        onBack={() => {}}
-      />
+      <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
     )
 
     await waitFor(() => {
@@ -1257,12 +1157,7 @@ describe('PlayerScreen', () => {
     async function renderMultiDocProject() {
       mockMultiDocProject()
       render(
-        <PlayerScreen
-          projectName="theo-hayami"
-          apiBaseUrl="http://api.test"
-          isDark={false}
-          onBack={() => {}}
-        />
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
       )
       await waitFor(() => {
         expect(screen.getByTestId('novel-player')).toBeInTheDocument()
@@ -1331,12 +1226,7 @@ describe('PlayerScreen', () => {
       })
 
       render(
-        <PlayerScreen
-          projectName="theo-hayami"
-          apiBaseUrl="http://api.test"
-          isDark={false}
-          onBack={() => {}}
-        />
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
       )
       await waitFor(() => {
         expect(screen.getByTestId('novel-player')).toBeInTheDocument()
@@ -1383,12 +1273,7 @@ describe('PlayerScreen', () => {
       }))
 
       render(
-        <PlayerScreen
-          projectName="theo-hayami"
-          apiBaseUrl="http://api.test"
-          isDark={false}
-          onBack={() => {}}
-        />
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
       )
       await waitFor(() => {
         expect(screen.getByTestId('novel-player')).toBeInTheDocument()
@@ -1534,22 +1419,19 @@ describe('PlayerScreen', () => {
     const DARK_ROOT_CLASSES = ['dark', 'bg-black']
     const LIGHT_ROOT_CLASS = 'bg-white'
     const DARK_LOADING_TEXT_CLASS = 'text-gray-400'
+    const LIGHT_LOADING_TEXT_CLASS = 'text-gray-600'
 
     /**
      * ローディング状態のまま固定して PlayerScreen を描画し、ルート div を返す。
      * listProjects を未解決 Promise にすると loading=true のまま（#341 と同じ手法）。
      * playerDark は window.location.search 依存なので、呼ぶ前に pushState で ?theme= を
-     * 設定しておくこと。
+     * 設定しておくこと。#394 で PlayerScreen は isDark prop を持たない＝プレイヤーの見た目は
+     * App の darkMode トグルに一切依存せず ?theme（既定 dark）だけで決まる。
      */
     function renderLoadingRoot(): HTMLElement {
       listProjectsMock.mockReturnValue(new Promise(() => {}))
       const { container } = render(
-        <PlayerScreen
-          projectName="theo-hayami"
-          apiBaseUrl="http://api.test"
-          isDark={false}
-          onBack={() => {}}
-        />
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
       )
       return container.firstElementChild as HTMLElement
     }
@@ -1578,6 +1460,16 @@ describe('PlayerScreen', () => {
       renderLoadingRoot()
       const loading = screen.getByText('読み込み中...')
       expect(loading.classList.contains(DARK_LOADING_TEXT_CLASS)).toBe(true)
+    })
+
+    it('14: ?theme=light のローディング文字は暗色（text-gray-600）＝白地に可読', () => {
+      // light 側のローディング文字色。白地に乗るので暗色（text-gray-600）でなければ読めない
+      // （dark 側は test13 が明色 text-gray-400 を固定）。文字色も playerDark で分岐することの担保。
+      window.history.pushState({}, '', '?theme=light')
+      renderLoadingRoot()
+      const loading = screen.getByText('読み込み中...')
+      expect(loading.classList.contains(LIGHT_LOADING_TEXT_CLASS)).toBe(true)
+      expect(loading.classList.contains(DARK_LOADING_TEXT_CLASS)).toBe(false)
     })
   })
 })
