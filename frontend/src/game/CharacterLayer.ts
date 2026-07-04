@@ -41,17 +41,46 @@ import { startTypewriter, tickTypewriter, type TypewriterState } from './typewri
 import { hasOwn, safeAssign } from './ownProperty'
 
 /**
- * URL 候補を先頭から順に Assets.load し、最初に成功した読み込み結果を返す (#376)。
- * webp→png フォールバック用。すべて失敗したら最後のエラーで reject する。
- * 候補が 1 本だけなら従来通り単純ロードと等価。
+ * 瞬断リトライ前の待機時間 (ms) (#389)。全候補が一巡失敗したらこの時間だけ待って再試行する。
+ * 一時的なネットワーク瞬断の回復を待つのが目的。長くしすぎると #293 の onReady 発火（テキスト
+ * 解禁）までの待ちが伸びるため、短く抑える。
  */
-async function loadFirstAvailableTexture(urls: string[]): Promise<Texture> {
+const LOAD_RETRY_DELAY_MS = 300
+
+/**
+ * URL 候補を先頭から順に Assets.load し、最初に成功した読み込み結果を返す (#376)。
+ * webp→png フォールバック用。候補が 1 本だけなら従来通り単純ロードと等価。
+ *
+ * 全候補が一巡失敗した場合、短い待機を挟んで **1 回だけ**もう一巡リトライしてから reject する
+ * (#389)。一時的なネットワーク瞬断で #293 のフォールバック（ロード成否に関わらず onReady 発火）
+ * が「立ち絵なし・テキストあり」に倒れるのを緩和する。PixiJS v8 の Loader は失敗した URL を
+ * `promiseCache` から削除する（キャッシュ済み reject を残さない）ため、同一 URL のリトライも
+ * 実際に再取得を試みる＝ネット回復・別 URL 候補の両方に効く。過剰にしないため、リトライは
+ * 1 巡だけ（計 2 巡）で打ち切る。#293 の順序保証とは両立する（失敗が確定すれば従来どおり
+ * onReady が発火してテキストは解禁される。リトライぶん解禁が遅れるだけで詰まらせない）。
+ *
+ * リトライ待機は呼び出し元から `delay` で注入する。本番経路（`loadTexture`）は `this.time`
+ * (TimeController) 経由の遅延を渡し、全タイマーを TimeController に通す規律に揃える＝仮想時間
+ * エクスポート（Phase 2）でも決定論 replay とズレない。デフォルトは生 `setTimeout` フォールバックで、
+ * module-level 関数を直接叩く単体テストが遅延関数を差し替えずに済むようにしてある。
+ */
+async function loadFirstAvailableTexture(
+  urls: string[],
+  delay: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+): Promise<Texture> {
   let lastError: unknown
-  for (const url of urls) {
-    try {
-      return await Assets.load<Texture>(url)
-    } catch (err) {
-      lastError = err
+  const maxAttempts = 2 // 初回 + 瞬断リトライ 1 回
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      // 待機は TimeController 経由（仮想時間エクスポートと整合）。注入された delay を使う。
+      await delay(LOAD_RETRY_DELAY_MS)
+    }
+    for (const url of urls) {
+      try {
+        return await Assets.load<Texture>(url)
+      } catch (err) {
+        lastError = err
+      }
     }
   }
   throw lastError
@@ -2514,7 +2543,12 @@ export class CharacterLayer extends Container {
     const urls = resolveCharacterImageUrls(assetBaseUrl, cleanExpression)
 
     return (
-      loadFirstAvailableTexture(urls)
+      // リトライ待機は this.time (TimeController) 経由に通す（生 setTimeout を使わない）。
+      // 全タイマーを TimeController に集約する規律に従い、仮想時間エクスポートと整合させる (#389)。
+      loadFirstAvailableTexture(
+        urls,
+        (ms) => new Promise<void>((resolve) => this.time.setTimeout(resolve, ms))
+      )
         .then((texture) => {
           // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
           // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。

@@ -117,6 +117,9 @@ function expectCharacterLoadCalls(loadSpy: { mock: { calls: unknown[][] } }, cou
 describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    // #389 の瞬断リトライ待機を fake timer で進めるテスト（6）があるので、必ず実タイマーへ戻す
+    // （他テストは実 rAF ベースの flushDeferredTextRender を使うため）。
+    vi.useRealTimers()
   })
 
   // 1: novel forward — 立ち絵テクスチャ load が保留中はテキスト reveal（render）を出さず、
@@ -283,6 +286,10 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
 
   // 6: 立ち絵テクスチャ load が失敗（reject）してもテキストは出る（onReady は .finally で発火）。
   it('6: 立ち絵 load 失敗でも render は出る（テキストが詰まらない）', async () => {
+    // #389: 全候補失敗時は短い待機（LOAD_RETRY_DELAY_MS=300ms）を挟んで 1 回だけリトライして
+    // から確定失敗する。実時間を待たず fake timer で「300ms 待機 + リトライ 2 巡目（全滅）+
+    // その後の deferred render（rAF×2）」まで一気に進める。
+    vi.useFakeTimers()
     let rejectLoad: (e: unknown) => void = () => {}
     const loadPromise = new Promise<unknown>((_res, rej) => {
       rejectLoad = rej
@@ -305,9 +312,11 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
     expect(renderSpy).not.toHaveBeenCalled()
 
     rejectLoad(new Error('not found'))
-    await flushDeferredTextRender()
+    // 300ms 待機 → リトライ 2 巡目も全滅 → onReady(.finally) → rAF×2 → render まで進める
+    // （テキストは詰まらず、リトライぶん解禁が遅れるだけ）。
+    await vi.advanceTimersByTimeAsync(400)
 
-    // .finally(onReady) が走り、ロード失敗でもテキスト reveal は出る。
+    // .finally(onReady) が走り、ロード失敗でもテキスト reveal は出る（リトライ確定後）。
     expect(renderSpy).toHaveBeenCalledTimes(1)
     expect(warnSpy).toHaveBeenCalled()
   })

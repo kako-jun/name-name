@@ -63,6 +63,7 @@ import {
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
+  resolveCharacterImageUrls,
   saveSlotToGameState,
   resolveFontFamily,
   formatCounterText,
@@ -76,6 +77,13 @@ import {
   type NovelPage,
 } from './novelLayout'
 import { stripRubyMarkup } from './ruby'
+
+/**
+ * 立ち絵・背景先読み (#389) の緩い上限。分岐までが極端に長い場合に、この個数ぶんの
+ * テキストイベント（`getTextEvent` 非 null）を先読みしたら走査を打ち切る。残りは進行に
+ * 合わせて次回の `preloadUpcomingAssets` 呼び出しで積まれる。
+ */
+const PRELOAD_MAX_TEXT_EVENTS = 8
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -268,6 +276,15 @@ export class NovelRenderer {
   private onStoryEndedChangeCallback: ((ended: boolean) => void) | null = null
   private assetBaseUrl: string = ''
   private textureCache: Map<string, Texture> = new Map()
+  /**
+   * 先読み済みアセット URL の集合 (#389)。`preloadUpcomingAssets` が同一 URL を
+   * `Assets.backgroundLoad` に二重に積まないための重複除去。backgroundLoad 自体は冪等だが
+   * 無駄呼び出しを避ける。イベント列を差し替える `resetAndStartEvents` でクリアする＝
+   * 新しいイベント列では先読み状態も作り直す。`setEvents` は表示済み背景を `Assets.unload`
+   * するので、クリアしないと「積み済み」誤判定で先読みがスキップされコールドロードに戻る
+   * （エディタのライブプレビュー等で再表示するケース）。`destroy` でもリーク予防にクリアする。
+   */
+  private preloadedUrls: Set<string> = new Set()
   /** setBackground の非同期ロード用トークン。destroy / 再入 の race 回避に使う */
   private bgLoadToken = 0
   /** 現在表示対象としてロード待ち中の背景 token。本文 reveal の背景待ち判定に使う。 */
@@ -1104,6 +1121,11 @@ export class NovelRenderer {
     this.history = []
     // novel 改頁キャッシュ (#283) はイベント列に紐づくので破棄する。
     this.novelPagesCache = null
+    // 先読み済み URL 集合 (#389) もイベント列に紐づくので破棄する。setEvents は表示済み背景を
+    // Assets.unload するため、ここでクリアしないと「積み済み」誤判定で先読みがスキップされ
+    // コールドロードに戻る。新しいイベント列＝先読み状態も作り直すのが正しい（末尾の
+    // processUntilNextTextEvent → preloadUpcomingAssets が先頭から積み直す）。
+    this.preloadedUrls.clear()
     // 話者交代追跡 (#286) をリセット（前シーン末尾の話者を引きずらない）。
     // resetAndStartEvents 直後の最初の Dialog で初めて話者がセットされ、初回は nudge しない
     // （何もないところから登場する初回は「交代」ではない）。
@@ -1598,6 +1620,8 @@ export class NovelRenderer {
       console.warn('[name-name] テクスチャの解放に失敗', err)
     })
     this.textureCache.clear()
+    // 先読み済み URL 集合もクリアする（リーク予防・#389）。
+    this.preloadedUrls.clear()
     // canvas 由来マスクテクスチャを含む背景 entry を全て解放する (#250/#319)
     this.clearBackgroundEntries()
     this.app.destroy(true, { children: true })
@@ -2361,6 +2385,100 @@ export class NovelRenderer {
       if (this.waitingForChoice || this.waitingForWait) break
       this.eventIndex++
     }
+    // 次に出る立ち絵・背景をバックグラウンドで先読みする (#389)。
+    // advance / setScenes / jumpToScene は全てここを通るので、この 1 箇所で全トリガーを覆う。
+    // 走査は同期・実ダウンロードは backgroundLoad に投げっぱなし（await しない＝本編を待たせない）。
+    this.preloadUpcomingAssets()
+  }
+
+  /**
+   * 立ち絵・背景テクスチャの先読み (#389)。
+   *
+   * 立ち絵・背景は従来「表示の瞬間に初めて `Assets.load`」する遅延ロード（初出は必ず
+   * ネット取得のコールドロード）で、遅延・瞬断すると #293 のフォールバック（ロード成否に
+   * 関わらず onReady 発火でテキスト解禁）により「立ち絵なし・テキストあり」を招く。これを
+   * 緩和するため、現在の `eventIndex` から `resolvedEvents` を前方走査し、次に出るアセット
+   * URL を PixiJS の `Assets.backgroundLoad` に積んで事前に温めておく。
+   *
+   * - 走査は**次の分岐に当たるまで**。分岐 = `Choice`（`{ Choice: {...} }`）または
+   *   `Condition`（`{ Condition: {...} }`、フラグ依存分岐）。分岐先が確定するまで先読みは
+   *   できないため、当たったら止める（配列末尾でも止める）。
+   *   ※ `Condition` は `resolveEvents` で展開済みのため `resolvedEvents` には通常現れないが、
+   *     仕様として境界扱いを明示しておく（防御的・非回帰）。
+   * - 収集対象: `Dialog` / `ExpressionChange` の立ち絵（`resolveCharacterImageUrls`、
+   *   webp/png の複数候補）と `Background` の背景画像（`resolveAssetUrl`）。Video 等
+   *   `Assets.load` 経路でないものは対象外。単独画像 `[画像:]`（#274, renderOnly）も対象外＝
+   *   先読みは立ち絵・背景に限定する。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
+   *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。
+   * - **緩い上限**: 分岐までが極端に長い場合に備え、先読みするテキストイベント
+   *   （`getTextEvent` 非 null）を最大 {@link PRELOAD_MAX_TEXT_EVENTS} 個ぶんに抑える。
+   *   テキストイベント以外（Background / ExpressionChange 等）は予算に数えず、予算を使い切った
+   *   後の**次のテキストイベントに達した時点で**走査を終了する（そこに至るまでの Background 等は
+   *   積む＝test18 が固定する挙動。上限で即座に走査終了するわけではない）。
+   * - **重複除去**: `preloadedUrls` で既に積んだ URL はスキップする。
+   * - **ガード**: `assetBaseUrl` が空なら何もしない。実ダウンロードは投げっぱなしで、
+   *   失敗は握りつぶす（先読み失敗で本編を止めない）。#293 の順序保証とは独立で、先読みが
+   *   未完でも従来どおりテキストは詰まらない（後方互換）。
+   */
+  private preloadUpcomingAssets(): void {
+    if (!this.assetBaseUrl) return
+
+    const urls: string[] = []
+    let textEventCount = 0
+
+    // 走査開始 i = this.eventIndex は「今表示するテキストイベント」を含む（未来だけでなく現在も
+    // 先読み対象）。したがって予算 PRELOAD_MAX_TEXT_EVENTS=8 は「現在 + 未来 7」のテキストイベント。
+    for (let i = this.eventIndex; i < this.resolvedEvents.length; i++) {
+      const event = this.resolvedEvents[i]
+      // 文字列 variant（'SceneTransition' / 'PageBreak' / 'VideoExit' 等）は分岐でも
+      // テキストでも先読み対象アセットでもないので読み飛ばす。
+      if (typeof event !== 'object' || event === null) continue
+
+      // 分岐に当たったら走査終了（分岐先が確定しないと先読みできない）
+      if ('Choice' in event || 'Condition' in event) break
+
+      // テキストイベント数の緩い上限で打ち切る（Dialog も下でアセットを積むので判定を先に）
+      if (getTextEvent(event) !== null) {
+        if (textEventCount >= PRELOAD_MAX_TEXT_EVENTS) break
+        textEventCount++
+      }
+
+      if ('Dialog' in event) {
+        // 実表示ガード（showCharacterFromDialog: `!expression || !position || !speaker`）に
+        // 揃える＝立ち絵を実際に show する Dialog だけ先読みする。falsy チェックで空文字も弾き、
+        // position も要求する（空文字 expression の無効 URL 先読みを消す）。
+        const { character, expression, position } = event.Dialog
+        if (expression && character && position) {
+          for (const u of resolveCharacterImageUrls(
+            this.assetBaseUrl,
+            expression.replace(/^\//, '')
+          )) {
+            urls.push(u)
+          }
+        }
+      } else if ('ExpressionChange' in event) {
+        // ExpressionChange は position を持たない。expression / character の falsy チェックに
+        // 揃える（空文字を弾く）。
+        const { character, expression } = event.ExpressionChange
+        if (expression && character) {
+          for (const u of resolveCharacterImageUrls(
+            this.assetBaseUrl,
+            expression.replace(/^\//, '')
+          )) {
+            urls.push(u)
+          }
+        }
+      } else if ('Background' in event) {
+        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Background.path))
+      }
+    }
+
+    // 未積みの URL だけを backgroundLoad に積む（同期は走査のみ・実 DL は投げっぱなし）
+    const fresh = urls.filter((u) => !this.preloadedUrls.has(u))
+    if (fresh.length === 0) return
+    for (const u of fresh) this.preloadedUrls.add(u)
+    // 先読み失敗で本編を止めない。#293 のフォールバックがテキストは従来どおり解禁する。
+    Assets.backgroundLoad(fresh).catch(() => {})
   }
 
   /**
