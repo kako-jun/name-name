@@ -704,10 +704,10 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                 hasSaveData={hasSaveData}
                 // #394: TitleOverlay もプレイヤーテーマ（playerDark）に揃える。他の chrome
                 // （ルート/ヘッダ/ローディング/エラー/未投入）が playerDark に移った中で、
-                // ここだけ App の darkMode トグル（isDark）に追従すると、同一 URL でエディタ側
+                // ここだけ App の darkMode トグルに追従すると、同一 URL でエディタ側
                 // トグルにより色が動く不整合になり、docs の「プレイヤーの見た目は ?theme
                 // （既定 dark）だけで決まる」に反する。ヘッダ bg-gray-900 とも整合する。
-                isDark={playerDark}
+                dark={playerDark}
                 onNewGame={() => {
                   // 新規開始: 既読データをクリアして最初から
                   clearReadProgress(projectName)
