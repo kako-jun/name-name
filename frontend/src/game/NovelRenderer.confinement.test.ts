@@ -39,6 +39,11 @@ interface RendererInternals {
   ): void
   setBackgroundColor(color: string): void
   initialized: boolean
+  history: unknown[]
+  currentBgmPath: string | null
+  shakeTimer: number | null
+  effectTimer: number | null
+  effectOverlay: { alpha: number; visible: boolean } | null
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -48,6 +53,15 @@ function internals(r: NovelRenderer): RendererInternals {
 // entry: 在圏に含める / in-scene: 在圏に含める / out-scene: allScenes には実在するが圏外
 const SCENES: EventScene[] = [
   scene('entry', [narration('start')]),
+  scene('in-scene', [narration('inside')]),
+  scene('out-scene', [narration('outside but exists in allScenes')]),
+]
+
+// goBack/seekTo 回帰用: entry に複数イベントを持たせ、advance で history を複数積めるようにする
+// （pushSnapshot は「次のイベントへ」進んだときだけ発火するため、1 イベント/1 行の SCENES では
+// history.length が 1 のままになり goBack の history.pop() 分岐に届かない）。
+const SCENES_MULTI_EVENT: EventScene[] = [
+  scene('entry', [narration('one'), narration('two'), narration('three')]),
   scene('in-scene', [narration('inside')]),
   scene('out-scene', [narration('outside but exists in allScenes')]),
 ]
@@ -212,4 +226,109 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     await Promise.resolve()
     expect(r.getSnapshot().backgroundPath).toBeNull()
   })
+
+  // ===== I. 終劇後の goBack/seekTo 無効化 (#386 レビュー M1) =====
+  //
+  // endStory() は pushSnapshot() を呼ばない（新しいシーンへ進んだわけではないため）。
+  // そのため history の末尾には、confinement 違反前の最後のテキストイベント
+  // （storyEnded: false のスナップショット）がそのまま残っている。goBack()/seekTo() を
+  // storyEnded でガードしないと、終劇後にこれらを呼ぶと applyState() が storyEnded を
+  // false に巻き戻し、"to be continued..." が消えて背景/立ち絵/BGM が直前の状態に
+  // 戻ってしまう（終劇の無効化）。
+
+  it('28: 終劇後に goBack() を呼んでも storyEnded は true のまま維持される（M1 回帰）', async () => {
+    const r = makeRenderer(SCENES_MULTI_EVENT)
+    // entry (one/two/three の3イベント) を2回 advance して history を複数積む。
+    await r.playScript([{ type: 'advance' }, { type: 'advance' }])
+    expect(internals(r).history.length).toBeGreaterThan(1)
+
+    r.setConfinedSceneIds(['entry'])
+    r.jumpToScene('out-scene') // 圏外 → 終劇
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    const historyLenAfterEnd = internals(r).history.length
+
+    r.goBack()
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    // 早期 return で history.pop() にも到達しない（history 自体も不変）。
+    expect(internals(r).history.length).toBe(historyLenAfterEnd)
+  })
+
+  it('29: 終劇後に seekTo() を呼んでも storyEnded は true のまま維持される（M1 回帰: SeekBar ドラッグでの巻き戻し防止）', async () => {
+    const r = makeRenderer(SCENES_MULTI_EVENT)
+    await r.playScript([{ type: 'advance' }, { type: 'advance' }])
+    expect(internals(r).history.length).toBeGreaterThan(1)
+
+    r.setConfinedSceneIds(['entry'])
+    r.jumpToScene('out-scene') // 圏外 → 終劇
+    expect(r.getSnapshot().storyEnded).toBe(true)
+
+    r.seekTo(0) // history の先頭（storyEnded: false の時点）へ戻ろうとする
+    expect(r.getSnapshot().storyEnded).toBe(true)
+  })
+
+  // ===== J. 終劇後の BGM 停止 (#386 レビュー M2) =====
+  //
+  // resetAndStartEvents()（通常のシーン遷移）は毎回 stopBgm(0) + currentBgmPath=null するが、
+  // endStory() にはこれが無かった。終劇は物語上の終端で以後 Bgm イベントは来ないため、
+  // 一度このバグを踏むと BGM が永久に鳴り続ける（初見訪問者にはセーブが無く止める手段がない）。
+  // playBgm() 自体は AudioContext/アセット読込を伴い jsdom 対象外のため、他のテストと同じく
+  // 追跡フィールド（currentBgmPath）だけ直接セットし、stopBgm 呼び出しはスパイで検証する。
+
+  it('30: endStory() は BGM を停止し currentBgmPath を null にする（M2 回帰）', () => {
+    const r = makeRenderer(SCENES)
+    const stopBgmSpy = vi.spyOn(r.getAudioManager(), 'stopBgm').mockImplementation(() => {})
+    internals(r).currentBgmPath = 'bgm/loop.mp3'
+    expect(r.getSnapshot().currentBgmPath).toBe('bgm/loop.mp3')
+
+    r.setConfinedSceneIds(['entry'])
+    r.jumpToScene('out-scene')
+
+    expect(stopBgmSpy).toHaveBeenCalled()
+    expect(r.getSnapshot().currentBgmPath).toBeNull()
+  })
+
+  // ===== K. 終劇後の画面効果クリア (#386 レビュー S1) =====
+  //
+  // Shake/Flash/Fade は fire-and-forget なタイマー演出。これらを仕込んだ直後の text から
+  // confinement 外への choice が続くシーンでは、endStory() 後もタイマー/オーバーレイが
+  // 残ってしまう（特に Fade で画面を色で覆う演出中だと、その色が "to be continued..." 画面に
+  // 残留する）。applyState() の画面効果リセットブロックと同じロジックを endStory() にも
+  // 適用したことを検証する。
+
+  it('31: endStory() は shakeTimer/effectTimer をクリアし effectOverlay を隠す（S1 回帰）', () => {
+    const r = makeRenderer(SCENES)
+    // Shake/Flash/Fade の fire-and-forget な内部状態を直接仕込む（実際のトリガーは
+    // processDirective 経由だが、ここでは endStory 側の後始末だけを対象にする）。
+    internals(r).shakeTimer = 12345
+    internals(r).effectTimer = 67890
+    internals(r).effectOverlay = { alpha: 0.6, visible: true }
+
+    r.setConfinedSceneIds(['entry'])
+    r.jumpToScene('out-scene')
+
+    expect(internals(r).shakeTimer).toBeNull()
+    expect(internals(r).effectTimer).toBeNull()
+    expect(internals(r).effectOverlay).toEqual({ alpha: 0, visible: false })
+  })
+
+  // ===== L. confinement 圏外 + 未知 sceneId の dev 診断 (#386 レビュー Q1) =====
+  //
+  // fail-closed（圏外は理由を問わず終劇）という設計自体は維持しつつ、原稿の typo で
+  // どこにも存在しない sceneId が「正常な終劇（例: hub への遷移）」に偽装されて気づかれない
+  // 事故を、開発時にだけ検知できるようにする。production の挙動・見た目は変えない
+  // （console.warn は import.meta.env.DEV でのみ評価される）。
+
+  it('32: 圏外かつ allScenes にも存在しない sceneId は DEV で console.warn される（Q1: typo が正常な終劇に偽装されない）', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer(SCENES)
+    r.setConfinedSceneIds(['entry', 'in-scene'])
+
+    r.jumpToScene('typo-scene-id')
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('typo-scene-id'))
+    // fail-closed の挙動自体は不変（警告があっても終劇にはなる）。
+    expect(r.getSnapshot().storyEnded).toBe(true)
+  })
+  // 「圏外だが allScenes に実在する sceneId は console.warn されない」は既存テスト20が担保する
+  // （out-scene は allScenes に実在するため、本テストの 'typo-scene-id' と対照的な既存カバレッジ）。
 })

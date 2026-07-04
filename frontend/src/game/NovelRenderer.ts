@@ -790,6 +790,17 @@ export class NovelRenderer {
     // choke point。scene の存在チェックより前に判定する（allScenes に実在する hub 等でも
     // 圏外なら即終劇＝lazy load すら試みない）。
     if (!isSceneIdConfined(sceneId, this.confinedSceneIds)) {
+      // #386 レビュー Q1（dev 診断のみ・production の挙動/見た目は不変）:
+      // fail-closed（圏外は理由を問わず終劇）という設計は維持する。ただし「圏外だが
+      // 実在するシーン（例: hub。意図した終劇）」と「原稿の typo でどこにも存在しない
+      // sceneId（正常な終劇に偽装された事故）」を区別できないと、typo が気づかれない
+      // まま「正常な終劇」として素通りしてしまう。allScenes（entry + 圏内 script の
+      // 全シーン）にも見つからない場合だけ、開発時に気づけるよう警告を残す。
+      if (import.meta.env.DEV && !findSceneById(this.allScenes, sceneId)) {
+        console.warn(
+          `[name-name] confinement: sceneId "${sceneId}" は allScenes にも存在しません。終劇として扱いますが、原稿の typo の可能性があります（意図した圏外遷移なら無視してください）。`
+        )
+      }
       this.endStory()
       return
     }
@@ -861,6 +872,30 @@ export class NovelRenderer {
     this.choiceOverlay.hide()
     this.dialogBox.clearText()
 
+    // 画面効果の後始末 (#386 レビュー S1)。Shake/Flash/Fade は fire-and-forget なので、
+    // これらを仕込んだ直後の text から confinement 外への choice が続くと、そのタイマーが
+    // endStory() 後も生き続けて "to be continued..." 画面に効果（Fade の色かぶり等）が
+    // 残ってしまう。applyState() の画面効果リセットブロックと同じロジックをそのまま流用する。
+    if (this.shakeTimer) {
+      this.time.clearTimeout(this.shakeTimer)
+      this.shakeTimer = null
+    }
+    this.app.stage.position.set(0, 0)
+    if (this.effectTimer) {
+      this.time.clearInterval(this.effectTimer)
+      this.effectTimer = null
+    }
+    if (this.effectOverlay) {
+      this.effectOverlay.alpha = 0
+      this.effectOverlay.visible = false
+    }
+
+    // BGM を止める (#386 レビュー M2)。終劇は物語上の終端で、以後 BGM を止める Bgm イベントは
+    // 二度と来ないため、ここで止めないと BGM が永久に鳴り続ける（初見訪問者はセーブが無いため
+    // 止める手段がない）。見た目のフェードと揃えて BACKGROUND_CROSSFADE_MS でフェードアウトする。
+    this.audioManager.stopBgm(BACKGROUND_CROSSFADE_MS)
+    this.currentBgmPath = null
+
     // 宣言的な終端状態を即座に確定する（背景/色地/動画/立ち絵はすべて「なし」）。
     // 見た目のフェードはこの下で別途アニメさせるが、GameState としては最初からこの値。
     this.currentBackgroundPath = null
@@ -879,6 +914,28 @@ export class NovelRenderer {
   }
 
   /**
+   * 複数の背景 entry に「alpha 0 へフェードアウト → 完了後に破棄」の fadeAnimation を
+   * 一括で仕込む (#386 セルフレビュー nit)。`crossfadeToBackgroundEntry`（次背景を追加する
+   * クロスフェード）と `fadeOutBackgroundEntries`（次背景を追加しない終劇演出）の両方が
+   * 「旧背景を消す」部分としてこの手続きを共有する（重複実装の解消）。
+   */
+  private beginFadeOutEntries(
+    entries: BackgroundEntry[],
+    startMs: number,
+    durationMs: number
+  ): void {
+    for (const entry of entries) {
+      entry.fadeAnimation = {
+        startMs,
+        durationMs,
+        fromAlpha: entry.sprite.alpha,
+        toAlpha: 0,
+        destroyOnComplete: true,
+      }
+    }
+  }
+
+  /**
    * 現在の背景画像 entry 群をフェードアウトさせる (#386 終劇演出)。
    * `crossfadeToBackgroundEntry` の「旧背景を消す」半分だけを取り出した形（次背景を
    * 追加しない）。完了後は `updateBackgroundFadeFrame` の `destroyOnComplete` で自動的に
@@ -889,15 +946,7 @@ export class NovelRenderer {
     if (this.bgEntries.length === 0) return
     this.stopBackgroundCrossfade()
     const startMs = this.time.now()
-    for (const entry of this.bgEntries) {
-      entry.fadeAnimation = {
-        startMs,
-        durationMs,
-        fromAlpha: entry.sprite.alpha,
-        toAlpha: 0,
-        destroyOnComplete: true,
-      }
-    }
+    this.beginFadeOutEntries(this.bgEntries, startMs, durationMs)
     this.updateBackgroundFadeFrame()
     this.ensureBackgroundCrossfadeTicker()
   }
@@ -1925,6 +1974,12 @@ export class NovelRenderer {
    * 1つ前の表示イベントに戻る（スナップショットベースの宣言的復元）
    */
   goBack(): void {
+    // #386: 終劇後は無効化する。endStory() は pushSnapshot() を呼ばないため、
+    // history の末尾には confinement 違反前の最後のテキストイベント（storyEnded: false の
+    // スナップショット）が残ったままになる。ここをガードしないと goBack で applyState が
+    // storyEnded を false に巻き戻し、"to be continued..." が消えて背景/立ち絵/BGM が
+    // 直前の状態に戻ってしまう（終劇の無効化）。
+    if (this.storyEnded) return
     if (this.resolvedEvents.length === 0) return
     if (this.waitingForChoice || this.waitingForWait) return
 
@@ -1970,6 +2025,8 @@ export class NovelRenderer {
    * 履歴の任意位置にジャンプする（シークバーから呼ばれる）
    */
   seekTo(historyIndex: number): void {
+    // #386: goBack() と同じ理由で終劇後は無効化する（SeekBar ドラッグでの巻き戻し防止）。
+    if (this.storyEnded) return
     if (historyIndex < 0 || historyIndex >= this.history.length) return
     if (this.waitingForChoice || this.waitingForWait) return
 
@@ -2895,15 +2952,7 @@ export class NovelRenderer {
     const startMs = this.time.now()
     const durationMs = BACKGROUND_CROSSFADE_MS
     const previous = [...this.bgEntries]
-    for (const entry of previous) {
-      entry.fadeAnimation = {
-        startMs,
-        durationMs,
-        fromAlpha: entry.sprite.alpha,
-        toAlpha: 0,
-        destroyOnComplete: true,
-      }
-    }
+    this.beginFadeOutEntries(previous, startMs, durationMs)
     next.sprite.alpha = 0
     next.fadeAnimation = {
       startMs,
