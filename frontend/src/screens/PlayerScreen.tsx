@@ -655,8 +655,18 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               docKey={projectName}
               initialSkipMode={startWithSkip}
             />
-            {/* タイトル画面オーバーレイ (#141): ゲーム開始前に表示 */}
-            {!titleDismissed && (
+            {/* タイトル画面オーバーレイ (#141): ゲーム開始前に表示。
+                #388: `?scene=` ディープリンク解決時（startSceneId 非 null＝deep-link モード）は
+                タイトルを一切出さず、NovelPlayer が startFrom(initialSceneId) で開始した該当シーンを
+                そのまま見せる。startSceneId はスクリプトロード後に非同期解決されるが、
+                setStartSceneId と setLoading(false) は同一の非同期継続内でバッチされるため、
+                loading=false になる最初のレンダー時点で startSceneId は確定済み。ここで
+                render gate として直接判定すれば effect 同期のような 1 フレームのタイトルちらつきが
+                出ない。deep-link モードでは TitleOverlay 自体を描かないので、onNewGame の副作用
+                （clearReadProgress / renderer.restart()）が発火することも構造的にあり得ず、
+                startFrom(initialSceneId) の開始位置が保たれる。
+                通常フロー（`?scene=` 無し＝startSceneId null）は従来どおりタイトルを出す（後方互換）。 */}
+            {startSceneId === null && !titleDismissed && (
               <TitleOverlay
                 title={title}
                 titleImageUrl={`${assetBaseUrl}/images/title.png`}

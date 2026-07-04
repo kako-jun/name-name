@@ -1395,5 +1395,32 @@ describe('PlayerScreen', () => {
       const debugInfo = lastNovelPlayerProps().debugInfo as string[]
       expect(debugInfo).toContain('scene param: no-such-scene → not found (fallback to entry)')
     })
+
+    // #388: ディープリンク解決時は TitleOverlay を出さず該当シーンへ直行する。
+    // TitleOverlay の存在は「新規開始」ボタン（TitleOverlay 固有の文言）で判定する。
+    it('48【#388】: ?scene= 解決時（deep-link モード）は TitleOverlay（新規開始ボタン）を出さない', async () => {
+      window.history.pushState({}, '', '?scene=cell-scene-1')
+      await renderMultiDocProject()
+      // 前提: deep-link が解決されている（initialSceneId 非 null）
+      expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
+      // タイトルは出ない＝startFrom(initialSceneId) の該当シーンをそのまま見せる
+      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+    })
+
+    it('49【#388】: ?scene= 未指定時（通常フロー）は従来どおり TitleOverlay（新規開始ボタン）を出す', async () => {
+      await renderMultiDocProject()
+      expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+      expect(screen.getByRole('button', { name: '新規開始' })).toBeInTheDocument()
+    })
+
+    it('50【#388】: ?scene=<entry(hub)自身の sceneId> でも解決されれば deep-link モードとして TitleOverlay を出さない', async () => {
+      // hub 自身指定は confinedSceneIds=null（無制限）にフォールバックするが、
+      // initialSceneId は解決される（#386 修正2）。deep-link モード判定は startSceneId 非 null なので
+      // この場合もタイトルは出さない（startFrom(hub-scene) の位置を保つ）。
+      window.history.pushState({}, '', '?scene=hub-scene')
+      await renderMultiDocProject()
+      expect(lastNovelPlayerProps().initialSceneId).toBe('hub-scene')
+      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+    })
   })
 })
