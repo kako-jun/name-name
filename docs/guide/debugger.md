@@ -5,6 +5,13 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 
 エディタ／プレイヤーの基本操作は [操作ガイド](./controls.md)・[エディタガイド](./editor.md) を参照。
 
+> **`?scene=` との違い**: このページで扱う `debug_scene` 系クエリは DEV ビルド限定のデバッグ起点。
+> production でも常時有効な特定シーンへの直接ディープリンクは `?scene=<sceneId>`（#386）で、
+> 別系統・別パーサ（`sceneQuery.ts`）。sceneId 単体のみ指定でき、対象ファイル自身に
+> confinement（在圏）されて hub 等の圏外へは「終劇」扱いになる。詳細は
+> [`docs/architecture.md`](../architecture.md) の「production 向けシーン直接ディープリンク
+> `?scene=`」セクションと [ADR 0002](../adr/0002-deterministic-state-and-debuggability.md) を参照。
+
 ## URL クエリで起点を指定する（DEV ビルド限定）
 
 `import.meta.env.DEV` のときだけ有効。production ビルドでは配線ごと tree-shake され、URL を付けても何も起きない（`NovelPlayer.tsx`）。また `scenes` を渡す経路（`setScenes`）でのみ動く。

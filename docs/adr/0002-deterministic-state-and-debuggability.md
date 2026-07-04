@@ -117,6 +117,46 @@ renderer.startFrom({
 `import.meta.env.DEV` の場合のみ有効。本番では無視する。
 実装: 純粋パーサ `frontend/src/game/debugQuery.ts` の `parseDebugQuery(search)` が `{script}` / `{scene}` / `null` を返し、`NovelPlayer.tsx` が `setScenes` 後に DEV ガード付きで `playScript`/`startFrom` を呼ぶ。`debug_script` 優先。vitest 20 ケース。**これで #220 の全 Phase（1 playScript / 2 startFrom / 3 URL クエリ）が完了。**
 
+### 5. `?scene=` ディープリンク + confinement（在圏）+ 終劇（`storyEnded`）（#386、production 対応）✅ 実装済み（2026-07-04）
+
+Phase 3 の `debug_scene` は開発環境限定のデバッグ起点だった。production でも常時有効な
+「特定シーンへの直接ディープリンク」は別系統として追加する。両者の違い:
+
+| | `debug_scene`（#220 Phase 3） | `?scene=`（#386） |
+| --- | --- | --- |
+| 有効ビルド | DEV のみ（`import.meta.env.DEV`。production は配線ごと tree-shake） | production 含め常時 |
+| 指定できる状態 | scene + flags + eventIndex + textIndex | scene（sceneId）のみ |
+| 用途 | バグ再現・デバッグ起点の共有 | 特定シーンの直接埋め込み（theo-hayami の会話劇セル1本を外部ページに埋め込む用途） |
+| パーサ | `debugQuery.ts` の `parseDebugQuery` | `sceneQuery.ts` の `parseSceneQuery` |
+| 遷移範囲 | 無制限（通常のハブ経由フローと同じ） | 対象ファイル自身に confinement（在圏）される |
+
+`NovelPlayer` は両方を配線するが、`initialSceneId`（`?scene=` 由来）を `debug_scene` ブロックより
+前に評価するため、DEV で両方指定された場合は `debug_scene` が後勝ちで優先される（デバッグ目的の
+上書きを production 経路より優先させる）。
+
+`?scene=` 単独埋め込みは対象ファイル外（hub・他ファイル）への choice ジャンプを許さない
+（theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の HTML リンクで行う設計）。
+`PlayerScreen` が対象ファイル自身の sceneId 一覧（entry doc/hub 自身は除く）を
+`NovelRenderer.setConfinedSceneIds` に渡し、`jumpToScene`（唯一の choke point）はこの集合外への
+遷移を検知すると通常のシーン遷移をせず `endStory()` を呼ぶ。`?scene=` が hub 自身の sceneId を
+指した場合は confinement を組まず無制限フローにフォールバックする（hub → 各お題への通常 choice
+遷移を壊さないため）。
+
+`endStory()` は `NovelGameState.storyEnded` という**宣言的フラグ**を true にする。この設計は
+本 ADR の核心（演出の中間状態を持たない・完全にシリアライズ可能）にそのまま従う: 背景・立ち絵の
+フェードアウト自体は一度きりの見た目でしかなく、状態として確定するのは「背景も立ち絵もない
+終劇後」という終端値だけである。`getSnapshot()`/`applyState()` は他のフィールドと同様に
+`storyEnded` をそのまま往復し（goBack/seekTo/startFrom/loadFromSaveData いずれも即時反映、
+フェードの再生はしない）。ただしセーブだけは例外で、`saveSlotToGameState` は常に `false` を返す
+（セーブは終劇状態を持ち越さない設計。終劇後の eventIndex をそのままセーブすると、ロード時に
+「`storyEnded=false` なのに choice イベント位置で止まっている」行き止まりになるため）。
+`quickSave()`/`openSaveMenu()` は `storyEnded` 中は no-op（終劇後のセーブによる行き止まり防止）、
+`quickLoad()`/`openLoadMenu()` は許可する（脱出手段として維持）。
+
+実装: `frontend/src/game/sceneQuery.ts`（`parseSceneQuery`）、`frontend/src/game/sceneConfinement.ts`
+（`isSceneIdConfined`）、`NovelRenderer.setConfinedSceneIds`/`endStory`/`setOnStoryEndedChange`、
+`PlayerScreen.findConfinedSceneIds`。
+
 ## Consequences（影響）
 
 ### 利点
@@ -135,7 +175,10 @@ renderer.startFrom({
 ## 関連
 
 - `GameState.ts`: `NovelGameState` 定義
-- `NovelRenderer.ts`: `applyState`、`restoreToScene`（`startFrom`/`loadFromSaveData` 共通コア）、`seekTo`、`advance`、`jumpToScene`
-- `docs/architecture.md`: 「状態管理: NovelGameState」セクション
+- `NovelRenderer.ts`: `applyState`、`restoreToScene`（`startFrom`/`loadFromSaveData` 共通コア）、`seekTo`、`advance`、`jumpToScene`、`setConfinedSceneIds`、`endStory`
+- `frontend/src/game/sceneQuery.ts` / `frontend/src/game/sceneConfinement.ts`: `?scene=` パーサ・confinement 判定（#386）
+- `docs/architecture.md`: 「状態管理: NovelGameState」セクション、「production 向けシーン直接ディープリンク `?scene=`」セクション
+- `docs/guide/debugger.md`: `debug_scene`（DEV 専用）の使い方ガイド
 - Issue #220: `playScript` / `startFrom` 実装
 - Issue #256: `startFrom` / `loadFromSaveData` の状態復元コア共通化（`restoreToScene`）
+- Issue #386: `?scene=` ディープリンク + confinement + 終劇（`storyEnded`）
