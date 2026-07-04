@@ -106,6 +106,15 @@ vi.mock('../components/RPGPlayer', () => ({
   },
 }))
 
+// #392: iframe 埋め込み検知 isEmbedded() を stub する。純粋関数なので true/false を
+// 切り替えるだけでヘッダ抑制ゲート（PlayerScreen: const embedded = isEmbedded() →
+// {!embedded && <header>...}）を分岐できる（window.top 差し替えより堅牢）。既定値は
+// 下の global beforeEach で false（standalone）に固定し、埋め込みテストだけ true に上書きする。
+const { isEmbeddedMock } = vi.hoisted(() => ({ isEmbeddedMock: vi.fn() }))
+vi.mock('../utils/isEmbedded', () => ({
+  isEmbedded: isEmbeddedMock,
+}))
+
 import PlayerScreen from './PlayerScreen'
 
 /**
@@ -172,6 +181,10 @@ beforeEach(() => {
   parseMarkdownMock.mockReset()
   novelPlayerProps.mockReset()
   rpgPlayerProps.mockReset()
+  isEmbeddedMock.mockReset()
+  // 既定は standalone（非 iframe）。jsdom の本物 isEmbedded() も self===top で false を
+  // 返すので後方互換。埋め込みを検証するテストだけ mockReturnValue(true) で上書きする。
+  isEmbeddedMock.mockReturnValue(false)
 })
 
 afterEach(() => {
@@ -1427,20 +1440,22 @@ describe('PlayerScreen', () => {
       expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
     })
 
-    // --- #392: `?scene=` 埋め込み時はプレイヤーヘッダ（戻る＋タイトル）を描画しない ---
+    // --- #392: iframe 埋め込み表示時はプレイヤーヘッダ（戻る＋タイトル）を描画しない ---
     //
-    // ゲートは #388 の TitleOverlay と同じ startSceneId===null。ヘッダの有無は
-    // ユーザー可視要素で判定する:
+    // 抑制ゲートは iframe 埋め込み検知 isEmbedded()（PlayerScreen.tsx:
+    // `const embedded = isEmbedded()` → `{!embedded && <header>...}`）。
+    // isEmbedded は純粋関数なのでファイル先頭で vi.mock し、true/false を切り替えて分岐させる
+    // （window.top 差し替えより堅牢）。既定は global beforeEach で false（standalone）に固定。
+    // ヘッダの有無はユーザー可視要素で判定する:
     //   - 戻るボタン: aria-label='プロジェクト一覧に戻る'（ヘッダ固有。TitleOverlay の
     //     終了ボタンは text '終了' で aria-label を持たないため衝突しない）
     //   - <header> 要素（暗黙 role=banner）内のタイトル h1
-    // startSceneId 非 null（deep-link/埋め込み）で消え、null（通常フロー・無効 scene の
-    // フォールバック）で出ることを、否定・肯定の両側で担保する。
+    // 埋め込み(true)で消え、standalone(false)で出ることを否定・肯定の両側で担保する。
+    // ヘッダ抑制は `?scene=`（#388 の startSceneId ゲート）と直交する。
     describe('プレイヤーヘッダ（戻る/タイトル）の表示制御 (#392)', () => {
-      it('通常フロー（?scene= 未指定）は戻るボタンとタイトル h1 を持つヘッダを描画する', async () => {
+      it('standalone（isEmbedded()===false）は戻るボタンとタイトル h1 を持つヘッダを描画する', async () => {
+        // 既定 false のまま（global beforeEach の mockReturnValue(false)）
         await renderMultiDocProject()
-        // 前提: deep-link ではない（startSceneId=null 相当＝initialSceneId 未解決）
-        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
         // ヘッダ固有の戻るボタンが存在する
         expect(screen.queryByLabelText('プロジェクト一覧に戻る')).not.toBeNull()
         // <header>（banner）内にプロジェクトタイトルの h1 が出る（title.png は jsdom で
@@ -1449,37 +1464,35 @@ describe('PlayerScreen', () => {
         expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe(MULTI_DOC_TITLE)
       })
 
-      it('?scene=<cell の sceneId> 解決時（deep-link モード）はヘッダ（戻る/タイトル）を描画しない', async () => {
+      it('埋め込み（isEmbedded()===true）はヘッダ（戻るボタン/banner）を描画しない', async () => {
+        isEmbeddedMock.mockReturnValue(true)
+        await renderMultiDocProject()
+        expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
+        expect(screen.queryByRole('banner')).toBeNull()
+      })
+
+      it('埋め込み時は ?scene=<cell の sceneId> ディープリンク有りでもヘッダを描画しない（当初の startSceneId 誤設計への回帰防止）', async () => {
+        isEmbeddedMock.mockReturnValue(true)
         window.history.pushState({}, '', '?scene=cell-scene-1')
         await renderMultiDocProject()
-        // 前提: deep-link が解決している（startSceneId 非 null）
+        // 前提: ?scene= は実際に解決している（scene param が効いていることの確認）。
+        // それでもヘッダ抑制は isEmbedded() が担い、startSceneId には依存しない。
         expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
-        // 戻るボタンも <header>（banner）も描画されない
         expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
         expect(screen.queryByRole('banner')).toBeNull()
       })
 
-      it('?scene=<entry(hub)自身の sceneId>（confinedSceneIds=null でも startSceneId 非 null）ならヘッダを描画しない', async () => {
-        window.history.pushState({}, '', '?scene=hub-scene')
+      it('埋め込み判定は #388 の TitleOverlay ゲート（startSceneId）と直交する（埋め込みでヘッダは消えるが ?scene= 未指定なら TitleOverlay の新規開始は従来どおり出る）', async () => {
+        isEmbeddedMock.mockReturnValue(true)
         await renderMultiDocProject()
-        // 前提: startSceneId は解決されるが confinement は無制限（#386 修正2）。
-        // ヘッダゲートは startSceneId のみに依存し confinedSceneIds には依存しないことの担保。
-        expect(lastNovelPlayerProps().initialSceneId).toBe('hub-scene')
-        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+        // ヘッダは isEmbedded()===true で消える
         expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
         expect(screen.queryByRole('banner')).toBeNull()
-      })
-
-      it('?scene=<存在しない sceneId> フォールバック（startSceneId が null に戻る）はヘッダを描画する', async () => {
-        window.history.pushState({}, '', '?scene=no-such-scene')
-        await renderMultiDocProject()
-        // 前提: 解決失敗で startSceneId=null にフォールバック（initialSceneId=null）。
-        // ゲートが initialSceneId prop でなく startSceneId state であることの回帰防止:
-        // 無効 scene でも通常フロー扱いに戻ってヘッダ（戻る/タイトル）が復活する。
+        // 一方 TitleOverlay は startSceneId===null（?scene= 未指定）なので従来どおり出る。
+        // ＝ヘッダ抑制ゲート（isEmbedded）が TitleOverlay 表示ゲート（startSceneId）に
+        // 影響しないことの担保。
         expect(lastNovelPlayerProps().initialSceneId).toBeNull()
-        expect(screen.queryByLabelText('プロジェクト一覧に戻る')).not.toBeNull()
-        const banner = screen.getByRole('banner')
-        expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe(MULTI_DOC_TITLE)
+        expect(screen.getByRole('button', { name: '新規開始' })).toBeInTheDocument()
       })
     })
   })
