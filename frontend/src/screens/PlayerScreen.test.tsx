@@ -1513,4 +1513,71 @@ describe('PlayerScreen', () => {
       })
     })
   })
+
+  // --- #394: プレイヤーの見た目テーマ（既定 dark・?theme=light で light）---
+  //
+  // App の darkMode（エディタ UI 用の isDark prop）ではなく `?theme=` で決まる。
+  // playerDark はマウント時に `parseThemeQuery(window.location.search) === 'dark'` で
+  // 一度だけ評価されるので、render 前に history.pushState で ?theme= を設定する（#386/#392
+  // と同じ流儀）。loading 状態は listProjects を未解決のままにして固定する（#341 と同じ手法）。
+  // 検証はルート div の className（背景テーマ）と、ローディング文字色（白フラッシュ防止）。
+  describe('PlayerScreen プレイヤーテーマ (#394)', () => {
+    beforeEach(() => {
+      window.history.pushState({}, '', '/')
+    })
+    afterEach(() => {
+      window.history.pushState({}, '', '/')
+    })
+
+    // 実装（PlayerScreen.tsx）と一致させる必要のあるクラス名。ここで一度だけ定義して各テストで
+    // 共有し、期待値の散在・二重管理を避ける。
+    const DARK_ROOT_CLASSES = ['dark', 'bg-black']
+    const LIGHT_ROOT_CLASS = 'bg-white'
+    const DARK_LOADING_TEXT_CLASS = 'text-gray-400'
+
+    /**
+     * ローディング状態のまま固定して PlayerScreen を描画し、ルート div を返す。
+     * listProjects を未解決 Promise にすると loading=true のまま（#341 と同じ手法）。
+     * playerDark は window.location.search 依存なので、呼ぶ前に pushState で ?theme= を
+     * 設定しておくこと。
+     */
+    function renderLoadingRoot(): HTMLElement {
+      listProjectsMock.mockReturnValue(new Promise(() => {}))
+      const { container } = render(
+        <PlayerScreen
+          projectName="theo-hayami"
+          apiBaseUrl="http://api.test"
+          isDark={false}
+          onBack={() => {}}
+        />
+      )
+      return container.firstElementChild as HTMLElement
+    }
+
+    it('11: theme 未指定（既定 dark）はルート div が dark/bg-black を持ち bg-white を持たない', () => {
+      // ?theme= 無し（beforeEach で '/' に戻し済み）＝既定の dark。
+      const root = renderLoadingRoot()
+      for (const cls of DARK_ROOT_CLASSES) {
+        expect(root.classList.contains(cls)).toBe(true)
+      }
+      expect(root.classList.contains(LIGHT_ROOT_CLASS)).toBe(false)
+    })
+
+    it('12: ?theme=light はルート div が bg-white を持ち dark/bg-black を持たない', () => {
+      window.history.pushState({}, '', '?theme=light')
+      const root = renderLoadingRoot()
+      expect(root.classList.contains(LIGHT_ROOT_CLASS)).toBe(true)
+      for (const cls of DARK_ROOT_CLASSES) {
+        expect(root.classList.contains(cls)).toBe(false)
+      }
+    })
+
+    it('13: 既定 dark のローディング文字は明色（text-gray-400）＝黒地に可読で白フラッシュにならない', () => {
+      // ?theme= 無し（既定 dark）。読み込み中の文字はルート背景（黒）に乗るので、明色でなければ
+      // 白地×暗文字の白フラッシュになる。dark 用の明色クラスが当たっていることを固定する。
+      renderLoadingRoot()
+      const loading = screen.getByText('読み込み中...')
+      expect(loading.classList.contains(DARK_LOADING_TEXT_CLASS)).toBe(true)
+    })
+  })
 })
