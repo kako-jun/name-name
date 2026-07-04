@@ -13,5 +13,8 @@
  */
 export function isEmbedded(): boolean {
   if (typeof window === 'undefined') return false
-  return window.self !== window.top
+  // window.top が null（detached document 等、フレーム木から切り離された状態）のときは
+  // 状況が不確実なので安全側＝非埋め込み（ヘッダを出す）に倒す。null ガードを外すと
+  // `window.self !== null` が true になり detached を埋め込みと誤判定する。
+  return window.top != null && window.self !== window.top
 }
