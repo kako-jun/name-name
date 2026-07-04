@@ -173,6 +173,15 @@ TitleOverlay 飛ばしの条件）とは関心が別（ゲートも別）。
 UI 用トグル、`isDark`）とは独立＝プレイヤーの見た目は `?theme`（既定 dark）だけで決まる。`?scene=`
 （#388）・`isEmbedded()`（#392）とも独立した第3の埋め込み引数。
 
+**完読の親通知 postMessage（#395）**: 埋め込み側（theo-hayami 等）に「どのセルを読み終わったか」を
+知らせるため、**終劇（endStory）到達時に、iframe 埋め込み時（`isEmbedded()`）のみ親ウィンドウへ
+`window.parent.postMessage({ source:'name-name', type:'story-ended', scene, project }, '*')` を送る**
+（`game/storyEndedMessage.ts` の純粋関数 `buildStoryEndedMessage` が本体を組み立て、`NovelPlayer` の
+`onStoryEndedChange` が `ended===true && isEmbedded()` のときだけ発火）。name-name の既読 localStorage は
+別オリジンで埋め込み側から読めないため、完読の事実だけを渡し、埋め込み側が自前で既読を記録・表示する
+（theo-hayami #30）。`scene` は `?scene=` の sceneId（無ければ null）、`project` は projectName。
+standalone や `ended===false`（終劇解除）では送らない。origin は `'*'`（受信側が origin 検証する前提）。
+
 ### 再生時
 
 ```
