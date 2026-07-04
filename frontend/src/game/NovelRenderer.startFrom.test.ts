@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
-import type { StartFromOptions } from './GameState'
+import type { NovelGameState, StartFromOptions } from './GameState'
 import type { Event, EventScene, FlagValue } from '../types'
 
 // --- fixture helpers（playScript.test.ts と同じスタイル） ---
@@ -51,6 +51,7 @@ interface RendererInternals {
   waitingForWait: boolean
   waitTimer: number | null
   advance(): void
+  applyState(state: NovelGameState): void
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -333,5 +334,26 @@ describe('NovelRenderer.startFrom (#220)', () => {
     const r = makeRenderer(SCENES)
     const over = internals(r).resolvedEvents.length + 100
     expect(() => r.startFrom({ sceneId: 'start', eventIndex: over })).not.toThrow()
+  })
+
+  // ===== K. 終劇状態 (#386) =====
+
+  it('28: startFrom 開始直後は getSnapshot().storyEnded === false', () => {
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'start' })
+    expect(r.getSnapshot().storyEnded).toBe(false)
+  })
+
+  it('29: storyEnded=true を含む NovelGameState を applyState 直接キャストで復元すると true になり callback が発火する（本番導線には無い経路。goBack/seekTo/セーブ復元は通常のシーン遷移か quickLoad 経由でしか applyState を呼ばず、いずれも storyEnded=false のスナップショット/セーブしか渡さない）', () => {
+    const cb = vi.fn()
+    const r = makeRenderer(SCENES)
+    r.setOnStoryEndedChange(cb)
+    r.startFrom({ sceneId: 'start' })
+    const endedState: NovelGameState = { ...r.getSnapshot(), storyEnded: true }
+
+    internals(r).applyState(endedState)
+
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    expect(cb).toHaveBeenCalledWith(true)
   })
 })

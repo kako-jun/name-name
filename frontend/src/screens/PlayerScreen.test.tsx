@@ -1186,4 +1186,214 @@ describe('PlayerScreen', () => {
     await renderWithFrontmatter({})
     expect(lastNovelPlayerProps().speakerNudge).toBeNull()
   })
+
+  // --- #386: `?scene=<sceneId>` ディープリンク + confinement ---
+  //
+  // マルチ MD 構成（エントリ = hub、別 MD = 個別セル）で `?scene=` を解決し、
+  // NovelPlayer に initialSceneId / confinedSceneIds として渡る配線を検証する。
+  // findConfinedSceneIds は PlayerScreen 内の非公開関数なので、直接ではなく
+  // lastNovelPlayerProps() 経由で観測する（既存の #310/#382 転送テストと同じ流儀）。
+  describe('PlayerScreen `?scene=` ディープリンク + confinement (#386)', () => {
+    beforeEach(() => {
+      window.history.pushState({}, '', '/')
+    })
+    afterEach(() => {
+      window.history.pushState({}, '', '/')
+    })
+
+    /** hub(script.md) 1 シーン + 別 MD(cell) 2 シーンの標準的なマルチ MD 構成をセットアップする。 */
+    function mockMultiDocProject() {
+      listProjectsMock.mockResolvedValue([
+        { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+      ])
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'content/scripts/free/a.md', sha: 's1', size: 1, title: null, hidden: false },
+      ])
+      getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+        path,
+        sha: 'x',
+        content: path,
+      }))
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        const isEntry = md === 'script.md'
+        return {
+          engine: 'name-name',
+          chapters: [
+            {
+              number: 1,
+              title: 'c',
+              hidden: false,
+              default_bgm: null,
+              scenes: isEntry
+                ? [{ id: 'hub-scene', title: 'hub', view: 'TopDown', events: [] }]
+                : [
+                    { id: 'cell-scene-1', title: 'cell1', view: 'TopDown', events: [] },
+                    { id: 'cell-scene-2', title: 'cell2', view: 'TopDown', events: [] },
+                  ],
+            },
+          ],
+        }
+      })
+    }
+
+    async function renderMultiDocProject() {
+      mockMultiDocProject()
+      render(
+        <PlayerScreen
+          projectName="theo-hayami"
+          apiBaseUrl="http://api.test"
+          isDark={false}
+          onBack={() => {}}
+        />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+    }
+
+    it('40: ?scene=<別MDのcell sceneId> 指定時、initialSceneId が解決済み sceneId になる', async () => {
+      window.history.pushState({}, '', '?scene=cell-scene-1')
+      await renderMultiDocProject()
+      expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
+    })
+
+    it('41: 上記と同条件で、confinedSceneIds はその cell ファイル自身の sceneId 一覧のみ（hub の sceneId を含まない）', async () => {
+      window.history.pushState({}, '', '?scene=cell-scene-1')
+      await renderMultiDocProject()
+      expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+    })
+
+    it('42: ?scene= 未指定時、initialSceneId/confinedSceneIds はともに null のまま', async () => {
+      await renderMultiDocProject()
+      expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+      expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+    })
+
+    it('43: ?scene=<存在しない sceneId> 指定時、initialSceneId/confinedSceneIds ともに null にフォールバックする', async () => {
+      window.history.pushState({}, '', '?scene=no-such-scene')
+      await renderMultiDocProject()
+      expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+      expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+      // フォールバックであってエラー扱いにはならない
+      expect(screen.queryByRole('alert')).toBeNull()
+    })
+
+    it('44【修正2】: ?scene=<entry(hub)自身の sceneId> 指定時、initialSceneId は解決されるが confinedSceneIds は null のまま（無制限フローへフォールバック）', async () => {
+      window.history.pushState({}, '', '?scene=hub-scene')
+      await renderMultiDocProject()
+      expect(lastNovelPlayerProps().initialSceneId).toBe('hub-scene')
+      // hub 自身を confinement にすると hub→各お題への通常遷移まで即終劇になってしまうため、
+      // findConfinedSceneIds は entry doc を候補から除外して null を返す（無制限フロー）。
+      expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+    })
+
+    it('45: listScripts 失敗（単一 script.md フォールバック）時、?scene= が entry 内で解決できても confinedSceneIds は常に null のままである', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      window.history.pushState({}, '', '?scene=only-scene')
+      listProjectsMock.mockResolvedValue([
+        { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+      ])
+      listScriptsMock.mockRejectedValue(new Error('listScripts unavailable'))
+      getContentsMock.mockResolvedValue({
+        path: 'script.md',
+        sha: 'sha-entry',
+        content: 'script.md',
+      })
+      parseMarkdownMock.mockResolvedValue({
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [{ id: 'only-scene', title: 'only', view: 'TopDown', events: [] }],
+          },
+        ],
+      })
+
+      render(
+        <PlayerScreen
+          projectName="theo-hayami"
+          apiBaseUrl="http://api.test"
+          isDark={false}
+          onBack={() => {}}
+        />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+
+      expect(lastNovelPlayerProps().initialSceneId).toBe('only-scene')
+      expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+    })
+
+    it('46: ?scene= 解決に必要な別 MD の取得が失敗しても（resolveMissingScene が内部で catch して null を返す）クラッシュせず entry 再生にフォールバックする', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      window.history.pushState({}, '', '?scene=unreachable-scene')
+      listProjectsMock.mockResolvedValue([
+        { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+      ])
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'content/scripts/broken.md', sha: 's1', size: 1, title: null, hidden: false },
+      ])
+      getContentsMock.mockImplementation(async (_name: string, path: string) => {
+        if (path === 'content/scripts/broken.md') {
+          throw new Error('network down')
+        }
+        return { path, sha: 'x', content: path }
+      })
+      parseMarkdownMock.mockImplementation(async (md: string) => ({
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [
+              {
+                id: md === 'script.md' ? 'hub-scene' : 'unreachable-scene',
+                title: md,
+                view: 'TopDown',
+                events: [],
+              },
+            ],
+          },
+        ],
+      }))
+
+      render(
+        <PlayerScreen
+          projectName="theo-hayami"
+          apiBaseUrl="http://api.test"
+          isDark={false}
+          onBack={() => {}}
+        />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+
+      expect(screen.queryByRole('alert')).toBeNull()
+      expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+      expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+    })
+
+    it('47a: ?scene= 解決成功時、debugInfo に "scene param: ... → resolved" の行が入る', async () => {
+      window.history.pushState({}, '', '?scene=cell-scene-1')
+      await renderMultiDocProject()
+      const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+      expect(debugInfo).toContain('scene param: cell-scene-1 → resolved')
+    })
+
+    it('47b: ?scene= 解決失敗時、debugInfo に "scene param: ... → not found (fallback to entry)" の行が入る', async () => {
+      window.history.pushState({}, '', '?scene=no-such-scene')
+      await renderMultiDocProject()
+      const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+      expect(debugInfo).toContain('scene param: no-such-scene → not found (fallback to entry)')
+    })
+  })
 })
