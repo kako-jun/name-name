@@ -3612,6 +3612,197 @@ describe('CharacterLayer loadTexture webp→png フォールバック (#376)', (
 })
 
 // =====================================================================================
+// #389: loadFirstAvailableTexture の瞬断リトライ（loadTexture 経由）。
+//   全候補（webp→png）が一巡失敗したら、LOAD_RETRY_DELAY_MS(=300ms) だけ待って **1 回だけ**
+//   もう一巡リトライしてから確定する。一時的なネットワーク瞬断で #293 のフォールバックが
+//   「立ち絵なし・テキストあり」に倒れるのを緩和する。#376 のフォールバック（webp→png）と
+//   両立し、成功が挟まればリトライには入らない（過剰ロードを避ける）。
+//
+//   観測点は #376 と同じく loadTexture を cast で直接叩く（戻り値 boolean・onReady 回数・
+//   console.warn・Assets.load の呼び出し列が CPU 側で完結）。待機の 300ms は fake timer で進めるため
+//   実時間を待たない（loadTexture の Promise と advanceTimersByTimeAsync を併走させる）。
+//   期待 URL は候補を作る resolveCharacterImageUrls で組み立て、生 URL を直書きしない。
+// =====================================================================================
+describe('CharacterLayer loadFirstAvailableTexture 瞬断リトライ (#389)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    // fake timer を使うテストがあるので必ず実タイマーへ戻す（他 describe へ漏らさない）。
+    vi.useRealTimers()
+  })
+
+  interface LoadTextureInternals {
+    loadTexture: (
+      sprite: Sprite,
+      characterName: string,
+      expression: string,
+      assetBaseUrl: string,
+      label?: unknown,
+      fit?: boolean,
+      onReady?: () => void
+    ) => Promise<boolean>
+  }
+  function asLoadable(layer: CharacterLayer): LoadTextureInternals {
+    return layer as unknown as LoadTextureInternals
+  }
+
+  const BASE = '/assets'
+  const EXPR = 'spino/soften' // 拡張子なし → webp/png の 2 候補。
+  const [WEBP_URL, PNG_URL] = resolveCharacterImageUrls(BASE, EXPR)
+  // 拡張子明示 → 候補 1 本（.png のみ）。単一候補の全滅リトライ用。
+  const EXPR_PNG = 'spino/soften.png'
+  const [PNG_ONLY] = resolveCharacterImageUrls(BASE, EXPR_PNG)
+
+  const fakeTexture = (tag: 'webp' | 'png'): unknown => ({ width: 100, height: 200, __tag: tag })
+  const textureTag = (sprite: Sprite): string | undefined =>
+    (sprite.texture as unknown as { __tag?: string }).__tag
+
+  // 観点19: 1 巡目 webp/png とも失敗 → 待機 → 2 巡目 webp 成功。load は webp,png,webp の 3 回。
+  //   warn なし・戻り値 true・onReady 1 回・texture は webp（瞬断が回復して拾えたら警告は出さない）。
+  it('19: 1 巡目全滅→リトライ 2 巡目 webp 成功（load 3 回・warn なし・true・onReady 1）', async () => {
+    vi.useFakeTimers()
+    let webpCalls = 0
+    const loadSpy = vi.spyOn(Assets, 'load').mockImplementation((url: unknown) => {
+      if (String(url).endsWith('.webp')) {
+        webpCalls++
+        // 1 巡目 webp は失敗、リトライ（2 回目）で成功する。
+        return (
+          webpCalls >= 2
+            ? Promise.resolve(fakeTexture('webp'))
+            : Promise.reject(new Error('webp glitch'))
+        ) as never
+      }
+      return Promise.reject(new Error('png glitch')) as never
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    const sprite = new Sprite()
+    let onReadyCount = 0
+    const p = asLoadable(layer).loadTexture(sprite, 'spino', EXPR, BASE, undefined, false, () => {
+      onReadyCount++
+    })
+    // 1 巡目の失敗を消化し、300ms 待機を越えてリトライ 2 巡目を走らせる。
+    await vi.advanceTimersByTimeAsync(300)
+    const result = await p
+    expect(result).toBe(true)
+    // 1 巡目 webp,png（失敗）→ 2 巡目 webp（成功）。png はリトライで試す前に webp で成功する。
+    expect(loadSpy.mock.calls.map((c) => c[0])).toEqual([WEBP_URL, PNG_URL, WEBP_URL])
+    expect(textureTag(sprite)).toBe('webp')
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(onReadyCount).toBe(1)
+  })
+
+  // 観点20: 1 巡目全滅 → 待機 → 2 巡目 webp 失敗・png 成功。load は webp,png,webp,png の 4 回。
+  //   warn なし・true・onReady 1 回・texture は png（リトライ内でも webp→png のフォールバック順を保つ）。
+  it('20: 1 巡目全滅→リトライ 2 巡目 png 成功（load 4 回・warn なし・true・onReady 1・png）', async () => {
+    vi.useFakeTimers()
+    let pngCalls = 0
+    const loadSpy = vi.spyOn(Assets, 'load').mockImplementation((url: unknown) => {
+      if (String(url).endsWith('.webp')) return Promise.reject(new Error('webp glitch')) as never
+      pngCalls++
+      // 1 巡目 png は失敗、リトライ（2 回目）で成功する。
+      return (
+        pngCalls >= 2
+          ? Promise.resolve(fakeTexture('png'))
+          : Promise.reject(new Error('png glitch'))
+      ) as never
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    const sprite = new Sprite()
+    let onReadyCount = 0
+    const p = asLoadable(layer).loadTexture(sprite, 'spino', EXPR, BASE, undefined, false, () => {
+      onReadyCount++
+    })
+    await vi.advanceTimersByTimeAsync(300)
+    const result = await p
+    expect(result).toBe(true)
+    expect(loadSpy.mock.calls.map((c) => c[0])).toEqual([WEBP_URL, PNG_URL, WEBP_URL, PNG_URL])
+    expect(textureTag(sprite)).toBe('png')
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(onReadyCount).toBe(1)
+  })
+
+  // 観点21: リトライは 300ms 待機を挟む。1 巡目全滅→2 巡目成功のケースで、300ms 未満では未解決、
+  //   300ms 経過で初めて解決する（待機時間 LOAD_RETRY_DELAY_MS の存在を縛る）。
+  it('21: リトライ前に 300ms 待機する（299ms では未解決・300ms で解決）', async () => {
+    vi.useFakeTimers()
+    let webpCalls = 0
+    vi.spyOn(Assets, 'load').mockImplementation((url: unknown) => {
+      if (String(url).endsWith('.webp')) {
+        webpCalls++
+        return (
+          webpCalls >= 2
+            ? Promise.resolve(fakeTexture('webp'))
+            : Promise.reject(new Error('webp glitch'))
+        ) as never
+      }
+      return Promise.reject(new Error('png glitch')) as never
+    })
+    const layer = new CharacterLayer(800, 450)
+    let settled = false
+    const p = asLoadable(layer)
+      .loadTexture(new Sprite(), 'spino', EXPR, BASE)
+      .then((r) => {
+        settled = true
+        return r
+      })
+    // 1 巡目の失敗は消化されるが、待機（300ms）が明けないのでリトライ成功はまだ来ない。
+    await vi.advanceTimersByTimeAsync(299)
+    expect(settled).toBe(false)
+    // 残り 1ms で 300ms に到達 → リトライ 2 巡目 webp 成功で解決する。
+    await vi.advanceTimersByTimeAsync(1)
+    await p
+    expect(settled).toBe(true)
+  })
+
+  // 観点22: 候補 1 本（expression に `.png` 明示）の全滅は「初回 + リトライ」で最大 2 回 load して確定。
+  //   warn 1 回（joined URL は 1 本ぶん・最後のエラー）・戻り値 false・onReady 1 回。
+  it('22: 候補 1 本(.png 明示)の全滅は最大 2 回 load で確定（warn 1・false・onReady 1）', async () => {
+    vi.useFakeTimers()
+    const err = new Error('png glitch')
+    const loadSpy = vi.spyOn(Assets, 'load').mockRejectedValue(err as never)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    let onReadyCount = 0
+    const p = asLoadable(layer).loadTexture(
+      new Sprite(),
+      'spino',
+      EXPR_PNG,
+      BASE,
+      undefined,
+      false,
+      () => {
+        onReadyCount++
+      }
+    )
+    await vi.advanceTimersByTimeAsync(300)
+    const result = await p
+    expect(result).toBe(false)
+    // 候補は .png の 1 本。初回 1 + リトライ 1 = 計 2 回試して確定失敗する。
+    expect(loadSpy.mock.calls.map((c) => c[0])).toEqual([PNG_ONLY, PNG_ONLY])
+    // warn は確定失敗で 1 回だけ。メッセージは候補 1 本ぶんの URL・第 2 引数は最後のエラー。
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalledWith('[name-name] 立ち絵の読み込みに失敗: ' + PNG_ONLY, err)
+    expect(onReadyCount).toBe(1)
+  })
+
+  // 観点23: 1 巡目 webp 成功はリトライに入らない。load は 1 回だけで、待機（setTimeout）も入らない
+  //   （タイマーを一切進めずに await が解決することで「待機なし」を縛る）。
+  it('23: 1 巡目 webp 成功はリトライも待機もしない（load 1 回・タイマー未進行で解決）', async () => {
+    vi.useFakeTimers()
+    const loadSpy = vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture('webp') as never)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    // タイマーを進めずに await する。リトライ待機（setTimeout）が挟まればここで解決せずハングする。
+    const result = await asLoadable(layer).loadTexture(new Sprite(), 'spino', EXPR, BASE)
+    expect(result).toBe(true)
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expect(loadSpy).toHaveBeenCalledWith(WEBP_URL)
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+})
+
+// =====================================================================================
 // #378: clampCharacterScale 純粋関数（立ち絵の元絵基準スケールのクランプ）。
 //   値を [CHARACTER_SCALE_MIN, CHARACTER_SCALE_MAX] = [0.05, 4] にクランプする。
 //   期待値は export された定数を参照し、0.05 / 4 を直書きしない（#262 直書き禁止）。
