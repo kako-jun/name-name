@@ -128,6 +128,34 @@ basename が `script.md`** のもの（無ければ先頭）を選ぶ。
 重複は warn）。なおエントリ doc のみが RPG 判定・`aspect_ratio`/`choice_style`/`font_family`/
 `font_size`/`dialog_style`/`protagonist` の供給元（サブ MD の RPG シーンは未対応）。
 
+#### production 向けシーン直接ディープリンク `?scene=`（#386）
+
+`?scene=<sceneId>` は production ビルドでも常時有効な、特定シーンへの直接埋め込み用の入口。
+`import.meta.env.DEV` 限定の `debug_scene`（[デバッグガイド](./guide/debugger.md) 参照。flags/
+eventIndex/textIndex も指定できるデバッグ起点）とは別系統で、こちらは sceneId 単体のみを受け取る
+最小限のパーサ（`frontend/src/game/sceneQuery.ts` の `parseSceneQuery`）。theo-hayami の
+「1 セル 1 URL＝1 遅延埋め込み」設計のための経路で、他 .md の会話劇セルを 1 本だけ外部ページに
+埋め込むときに使う。
+
+`PlayerScreen` が `?scene=` を読み、対象 sceneId が属する script を（上記の missing scene
+resolver 経由で）事前解決・ロードしてから `NovelPlayer` に `initialSceneId` として渡す。
+`NovelPlayer` はマウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ
+（DEV 専用の `debug_scene` ブロックより前に評価するため、DEV で両方指定されると `debug_scene`
+側が後勝ちで優先される）。無効・未解決の sceneId は現行どおりエントリ（ハブ）から開始する。
+
+**confinement（在圏）+ 終劇**: 単独埋め込みは対象 script ファイルの外（hub・他ファイル）へ
+choice で漏れてはいけない（theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の
+HTML リンクで行う設計）。`PlayerScreen` の `findConfinedSceneIds(targetSceneId, docs, entryPath)`
+が対象 sceneId が属する script ファイル自身の sceneId 一覧を算出し（entry doc/hub 自身は候補から
+除外）、`NovelPlayer` → `NovelRenderer.setConfinedSceneIds` に渡す。`jumpToScene`（唯一の
+choke point）はこの集合外への遷移を検知すると通常のシーン遷移をせず `endStory()` を呼び、
+`NovelGameState.storyEnded` を true にする（背景・立ち絵はフェードアウトし、DOM 側は控えめな
+"to be continued..." を表示する）。`?scene=` が hub 自身の sceneId を指した場合は
+`findConfinedSceneIds` が null を返し、confinement を組まず無制限フローにフォールバックする
+（hub → 各お題への通常 choice 遷移を壊さないため）。`storyEnded` の設計上の位置づけ
+（ADR 0002 の「演出の中間状態を持たない」規律との関係）は
+[ADR 0002](./adr/0002-deterministic-state-and-debuggability.md) を参照。
+
 ### 再生時
 
 ```
@@ -236,6 +264,7 @@ interface NovelGameState {
   isBlackout: boolean; // 暗転中か
   characters: Array<{ name: string; expression: string; position: string }>; // 立ち絵のみ。タイトル/ラベル/画像は演出表示(renderOnly)で除外(#274)
   currentBgmPath: string | null; // 再生中のBGM
+  storyEnded: boolean; // 終劇状態（#386）。confinement（在圏）外への choice ジャンプで true になる宣言的フラグ。演出の中間状態ではない
 }
 ```
 
@@ -259,6 +288,8 @@ interface NovelGameState {
 | `applyState(state)`                                     | スナップショットから画面を復元                                                                                                                   |
 | `playScript(steps)`                                     | 操作列（`advance`/`choice`/`wait`）を決定論的にリプレイ（#220 Phase 1、デバッグ/テスト用。再生中 msPerChar=0、完了・例外時に復元、再入は throw） |
 | `startFrom({sceneId, flags?, eventIndex?, textIndex?})` | 任意シーン+フラグ状態から開始（#220 Phase 2、デバッグ/テスト用。history リセット、flags 置換、不正 sceneId は完全 no-op）                        |
+| `setConfinedSceneIds(ids \| null)`                       | confinement（在圏）一覧を設定する（#386）。null（既定）なら制限なし。設定すると `jumpToScene` はこの集合外への遷移を通常のシーン遷移にせず `endStory()`（終劇）にする。呼び出し元は `PlayerScreen`（`?scene=` ディープリンク単独埋め込み時のみ） |
+| `setOnStoryEndedChange(cb)`                              | 終劇状態の変化コールバックを登録する（#386）。`NovelPlayer` が "to be continued..." の DOM 表示に使う                                              |
 
 ## レンダリングパイプライン
 

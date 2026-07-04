@@ -46,6 +46,24 @@ interface NovelPlayerProps {
   jumpSceneIndex?: EventScene[]
   /** 未ロード sceneId を必要時に追加解決する hook (#314)。 */
   onResolveMissingScene?: (sceneId: string) => Promise<EventScene[] | null>
+  /**
+   * production でも有効な起点シーン指定 (#386)。`?scene=<sceneId>` の解決結果を
+   * 呼び出し側（PlayerScreen）が渡す。渡す時点で対象 sceneId は `jumpSceneIndex` に
+   * 含まれている前提（クロスファイルの事前ロードは呼び出し側の責務）。
+   * マウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ。
+   * 不正/未解決（jumpSceneIndex に無い）sceneId は startFrom 内で no-op になり、
+   * 通常のエントリ再生（events）にフォールバックする。null/undefined で指定なし。
+   */
+  initialSceneId?: string | null
+  /**
+   * `?scene=` ディープリンク単独埋め込みの confinement（在圏）一覧 (#386)。
+   * `initialSceneId` が属する script ファイル自身の sceneId 一覧を呼び出し側
+   * （PlayerScreen）が渡す。渡された場合、その集合の外への choice ジャンプ
+   * （hub や他ファイルへの「別の問いを聞く」等）は通常のシーン遷移にならず、
+   * 終劇（"to be continued..." 表示）になる（NovelRenderer.jumpToScene 参照）。
+   * null/undefined で制限なし（通常のハブ経由フロー、後方互換）。
+   */
+  confinedSceneIds?: string[] | null
   assetBaseUrl?: string
   /** 画面比率。"16:9" / "4:3" / "9:16"。デフォルト "16:9" (#136) */
   aspectRatio?: AspectRatio | string
@@ -113,6 +131,8 @@ function NovelPlayer({
   scenes,
   jumpSceneIndex,
   onResolveMissingScene,
+  initialSceneId,
+  confinedSceneIds,
   assetBaseUrl,
   aspectRatio: aspectRatioProp,
   choiceStyle,
@@ -156,6 +176,10 @@ function NovelPlayer({
   // 演出/UI の transient 状態なので GameState には持たない（ADR 0002・renderer 側も transient）。
   const [seekActive, setSeekActive] = useState(false)
 
+  // 終劇状態 (#386)。renderer の onStoryEndedChange で同期する（GameState 上の宣言的フラグ
+  // NovelGameState.storyEnded のミラー）。true の間だけ「to be continued...」を表示する。
+  const [storyEnded, setStoryEnded] = useState(false)
+
   // デバッグ HUD の展開状態 (#310)。右下ボタン列の「D」ボタンで開閉する。
   // 既定は畳んだ状態（#301 の collapsed 既定 true を引き継ぐ＝open 既定 false）。
   // 状態は localStorage（旧 DebugOverlay と同じキー意味）に best-effort で永続化する。
@@ -187,12 +211,17 @@ function NovelPlayer({
         renderer.setAssetBaseUrl(assetBaseUrl)
       }
       renderer.setMissingSceneResolver?.(onResolveMissingScene ?? null)
+      // `?scene=` ディープリンク単独埋め込みの confinement (#386)。setEvents/setJumpSceneIndex/
+      // startFrom より前に設定し、以降のどの choice ジャンプも圏外判定の対象にする。
+      renderer.setConfinedSceneIds(confinedSceneIds ?? null)
       // renderer が手動操作で autoMode を OFF にしたとき React state を同期 (#139)
       renderer.setOnAutoModeChange((on) => setAutoMode(on))
       // renderer が未読到達で skipMode を OFF にしたとき React state を同期 (#140)
       renderer.setOnSkipModeChange((on) => setSkipMode(on))
       // スライダ操作中（active）は下部丸ボタン行をフェード退避させる (#350)
       renderer.setOnSeekActiveChange((active) => setSeekActive(active))
+      // 終劇状態が変化したら "to be continued..." の表示を同期する (#386)
+      renderer.setOnStoryEndedChange((ended) => setStoryEnded(ended))
       if (docKey) {
         renderer.setDocKey(docKey)
       }
@@ -246,9 +275,19 @@ function NovelPlayer({
         }
         renderer.setEvents(events)
       }
+      // production でも有効な起点シーン指定 (#386)。sceneId が属する script の事前ロードは
+      // PlayerScreen 側の責務（呼び出し時点で jumpSceneIndex に反映済みの前提）。ここでは
+      // 既存の startFrom(#220) をそのまま呼ぶだけで、renderer 側に新規ロジックは持ち込まない。
+      // 不正/未解決 sceneId は startFrom 内で no-op（現行どおりエントリ再生にフォールバック）。
+      if (initialSceneId) {
+        renderer.startFrom({ sceneId: initialSceneId })
+      }
+
       // URL クエリによるデバッグ起点指定 (#220 Phase 3)。
       // DEV ビルドでのみ有効。production ではこのブロックごと tree-shake される。
       // debug_scene は sceneId 前提。scenes / jumpSceneIndex のどちらの索引でも解決する。
+      // initialSceneId(#386) より後に評価するため、dev では debug_scene が指定時に優先される
+      // （デバッグ目的の上書きを production 経路より優先させる）。
       if (import.meta.env.DEV) {
         const debug = parseDebugQuery(window.location.search)
         if (debug && 'script' in debug) {
@@ -585,6 +624,27 @@ function NovelPlayer({
           </button>
         )}
       </div>
+      {/* 終劇表示 (#386): confinement 外への choice ジャンプで NovelRenderer.endStory() が
+          発火した後に出す、控えめな "to be continued..." 表示。中央の大演出にはせず、
+          右下ボタン行より少し上（SLOT_BASE_PX + SLOT_GAP_PX ぶん）に小さく置く。
+          話者名・選択肢UIと区別するため斜体・低コントラストにする。背景/立ち絵のフェード
+          アウト自体は NovelRenderer 側（PixiJS）が行い、これはその後に重ねる DOM 側の文字。
+          pointer-events-none: タップしても何も起きない（advance は storyEnded で no-op のため
+          二重の安全策だが、見た目のヒットテストにも参加させない）。 */}
+      {storyEnded && (
+        <div className="absolute inset-0 m-auto pointer-events-none" style={gameBoxStyle}>
+          <p
+            className="absolute text-white/60 text-sm italic select-none"
+            style={{
+              right: `${SLOT_BASE_PX}px`,
+              bottom: `${SLOT_BASE_PX + SLOT_GAP_PX}px`,
+              fontFamily: fontFamily || undefined,
+            }}
+          >
+            to be continued...
+          </p>
+        </div>
+      )}
       <SettingsOverlay
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

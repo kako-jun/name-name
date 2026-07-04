@@ -41,6 +41,7 @@ import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
 import { SeekBar } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
+import { isSceneIdConfined } from './sceneConfinement'
 import { Event, EventScene } from '../types'
 import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
 import {
@@ -248,6 +249,23 @@ export class NovelRenderer {
   private onSceneChangeCallback: ((sceneId: string) => void) | null = null
   private missingSceneResolver: ((sceneId: string) => Promise<EventScene[] | null>) | null = null
   private pendingMissingScenes = new Set<string>()
+  /**
+   * `?scene=` ディープリンク単独埋め込みの confinement（在圏）一覧 (#386)。
+   * null なら制限なし（通常のハブ経由フロー）。非 null のときは `jumpToScene` がこの
+   * 集合の外への遷移を検出し、通常のシーン遷移ではなく `endStory()`（終劇）にする。
+   * `setConfinedSceneIds` で設定する（呼び出し側は `PlayerScreen` が対象 script ファイル
+   * 自身の sceneId 一覧を渡す）。
+   */
+  private confinedSceneIds: string[] | null = null
+  /**
+   * 終劇状態 (#386)。GameState 上の宣言的フラグ（`NovelGameState.storyEnded`）と対になる
+   * 実行時フィールド。true の間は `advance()` が no-op になり（choice/advance は反応しない）、
+   * `jumpToScene` も再入しない。goBack/seekTo/セーブ復元は `applyState` 経由でこの値を
+   * そのまま反映する（フェード演出は再生しない＝宣言的な瞬時反映）。
+   */
+  private storyEnded = false
+  /** storyEnded 変化を DOM 側（NovelPlayer）に伝える hook (#386)。"to be continued..." 表示用。 */
+  private onStoryEndedChangeCallback: ((ended: boolean) => void) | null = null
   private assetBaseUrl: string = ''
   private textureCache: Map<string, Texture> = new Map()
   /** setBackground の非同期ロード用トークン。destroy / 再入 の race 回避に使う */
@@ -754,9 +772,38 @@ export class NovelRenderer {
   }
 
   /**
+   * `?scene=` ディープリンク単独埋め込みの confinement（在圏）一覧を設定する (#386)。
+   * null（既定）なら制限なし。渡した場合、`jumpToScene` はこの集合の外への遷移を
+   * 終劇として扱う（`endStory()`）。通常のハブ経由フロー（`/play/:projectName`）では
+   * 呼ばれない、または null を渡す想定。
+   */
+  setConfinedSceneIds(ids: string[] | null): void {
+    this.confinedSceneIds = ids
+  }
+
+  /**
    * 指定シーンにジャンプする
    */
   jumpToScene(sceneId: string): void {
+    // #386: confinement（在圏）外への choice ジャンプは通常のシーン遷移にせず終劇にする。
+    // theo-hayami の hub（別の問いを聞く → hub）等、埋め込み外の内容が漏れるのを防ぐ唯一の
+    // choke point。scene の存在チェックより前に判定する（allScenes に実在する hub 等でも
+    // 圏外なら即終劇＝lazy load すら試みない）。
+    if (!isSceneIdConfined(sceneId, this.confinedSceneIds)) {
+      // #386 レビュー Q1（dev 診断のみ・production の挙動/見た目は不変）:
+      // fail-closed（圏外は理由を問わず終劇）という設計は維持する。ただし「圏外だが
+      // 実在するシーン（例: hub。意図した終劇）」と「原稿の typo でどこにも存在しない
+      // sceneId（正常な終劇に偽装された事故）」を区別できないと、typo が気づかれない
+      // まま「正常な終劇」として素通りしてしまう。allScenes（entry + 圏内 script の
+      // 全シーン）にも見つからない場合だけ、開発時に気づけるよう警告を残す。
+      if (import.meta.env.DEV && !findSceneById(this.allScenes, sceneId)) {
+        console.warn(
+          `[name-name] confinement: sceneId "${sceneId}" は allScenes にも存在しません。終劇として扱いますが、原稿の typo の可能性があります（意図した圏外遷移なら無視してください）。`
+        )
+      }
+      this.endStory()
+      return
+    }
     const scene = findSceneById(this.allScenes, sceneId)
     if (!scene) {
       if (this.missingSceneResolver) {
@@ -770,6 +817,13 @@ export class NovelRenderer {
   }
 
   private startScene(sceneId: string, scene: EventScene): void {
+    // #386: 通常のシーン遷移が成立する経路なので、終劇状態は解除しておく（宣言的整合性の保険。
+    // 通常はここに来る前に jumpToScene の confinement チェックで弾かれるため storyEnded は
+    // 既に false のはずだが、デバッグ等から直接呼ばれた場合の保険として明示的に戻す）。
+    if (this.storyEnded) {
+      this.storyEnded = false
+      this.onStoryEndedChangeCallback?.(false)
+    }
     this.currentSceneId = sceneId
     this.resetAndStartEvents([...scene.events], { preserveBackgroundForTransition: true })
     this.onSceneChangeCallback?.(sceneId)
@@ -793,6 +847,108 @@ export class NovelRenderer {
     } finally {
       this.pendingMissingScenes.delete(sceneId)
     }
+  }
+
+  /**
+   * confinement（在圏）外へのシーンジャンプを終劇として扱う (#386)。
+   *
+   * `?scene=` ディープリンク単独埋め込み（`confinedSceneIds` が設定されている場合のみ）で、
+   * hub や他ファイルへの choice ジャンプが埋め込みの外側の内容を漏らさないようにする
+   * （theo-hayami #20: 他住人/業一覧への遷移は埋め込み内の choice ではなく HTML リンクで行う設計）。
+   *
+   * `storyEnded` は演出の中間状態ではなく GameState 上の宣言的フラグとして持つ（ADR0002 /
+   * doctrine 規律3）。フェード演出（背景・立ち絵）はこの一度きりの遷移に付随する見た目でしか
+   * なく、確定する状態そのものは「背景も立ち絵もない終劇後」という終端値（下記で即座に確定）。
+   * これにより getSnapshot/applyState の往復（goBack・seekTo・セーブ復元）は常にこの終端状態
+   * をそのまま扱えばよく、フェード途中を再現する必要がない。
+   *
+   * 通常のハブ経由フロー（confinedSceneIds が null）では jumpToScene 側の判定により
+   * ここには来ない。
+   */
+  private endStory(): void {
+    if (this.storyEnded) return // 二重発火防止（連打等でフェード/コールバックを重複させない）
+    this.storyEnded = true
+    this.waitingForChoice = false
+    this.choiceOverlay.hide()
+    this.dialogBox.clearText()
+
+    // 画面効果の後始末 (#386 レビュー S1)。Shake/Flash/Fade は fire-and-forget なので、
+    // これらを仕込んだ直後の text から confinement 外への choice が続くと、そのタイマーが
+    // endStory() 後も生き続けて "to be continued..." 画面に効果（Fade の色かぶり等）が
+    // 残ってしまう。applyState() の画面効果リセットブロックと同じロジックをそのまま流用する。
+    if (this.shakeTimer) {
+      this.time.clearTimeout(this.shakeTimer)
+      this.shakeTimer = null
+    }
+    this.app.stage.position.set(0, 0)
+    if (this.effectTimer) {
+      this.time.clearInterval(this.effectTimer)
+      this.effectTimer = null
+    }
+    if (this.effectOverlay) {
+      this.effectOverlay.alpha = 0
+      this.effectOverlay.visible = false
+    }
+
+    // BGM を止める (#386 レビュー M2)。終劇は物語上の終端で、以後 BGM を止める Bgm イベントは
+    // 二度と来ないため、ここで止めないと BGM が永久に鳴り続ける（初見訪問者はセーブが無いため
+    // 止める手段がない）。見た目のフェードと揃えて BACKGROUND_CROSSFADE_MS でフェードアウトする。
+    this.audioManager.stopBgm(BACKGROUND_CROSSFADE_MS)
+    this.currentBgmPath = null
+
+    // 宣言的な終端状態を即座に確定する（背景/色地/動画/立ち絵はすべて「なし」）。
+    // 見た目のフェードはこの下で別途アニメさせるが、GameState としては最初からこの値。
+    this.currentBackgroundPath = null
+    this.currentBackgroundFade = null
+    this.currentBackgroundBrightness = null
+    this.bgLoadToken++
+    this.pendingBackgroundLoadToken = null
+    this.clearBackgroundColor()
+    this.videoLayer.remove()
+
+    // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
+    this.fadeOutBackgroundEntries(BACKGROUND_CROSSFADE_MS)
+    this.characterLayer.clearForSceneTransition()
+
+    this.onStoryEndedChangeCallback?.(true)
+  }
+
+  /**
+   * 複数の背景 entry に「alpha 0 へフェードアウト → 完了後に破棄」の fadeAnimation を
+   * 一括で仕込む (#386 セルフレビュー nit)。`crossfadeToBackgroundEntry`（次背景を追加する
+   * クロスフェード）と `fadeOutBackgroundEntries`（次背景を追加しない終劇演出）の両方が
+   * 「旧背景を消す」部分としてこの手続きを共有する（重複実装の解消）。
+   */
+  private beginFadeOutEntries(
+    entries: BackgroundEntry[],
+    startMs: number,
+    durationMs: number
+  ): void {
+    for (const entry of entries) {
+      entry.fadeAnimation = {
+        startMs,
+        durationMs,
+        fromAlpha: entry.sprite.alpha,
+        toAlpha: 0,
+        destroyOnComplete: true,
+      }
+    }
+  }
+
+  /**
+   * 現在の背景画像 entry 群をフェードアウトさせる (#386 終劇演出)。
+   * `crossfadeToBackgroundEntry` の「旧背景を消す」半分だけを取り出した形（次背景を
+   * 追加しない）。完了後は `updateBackgroundFadeFrame` の `destroyOnComplete` で自動的に
+   * 破棄される。ステージ最背面の `bgGraphics`（既定/設定色）は endStory 側で先に黒へ
+   * リセット済みのため、フェード完了後は自然に黒が残る。
+   */
+  private fadeOutBackgroundEntries(durationMs: number): void {
+    if (this.bgEntries.length === 0) return
+    this.stopBackgroundCrossfade()
+    const startMs = this.time.now()
+    this.beginFadeOutEntries(this.bgEntries, startMs, durationMs)
+    this.updateBackgroundFadeFrame()
+    this.ensureBackgroundCrossfadeTicker()
   }
 
   /** 現在表示中のシーンID (#228 動画エクスポート用) */
@@ -1377,6 +1533,12 @@ export class NovelRenderer {
     this.onSeekActiveChange = cb
   }
 
+  /** 終劇状態の変化コールバックを登録する (#386)。NovelPlayer が "to be continued..." の
+   *  DOM 表示に繋ぐ（setOnAutoModeChange 等と同じ配線パターン）。 */
+  setOnStoryEndedChange(cb: ((ended: boolean) => void) | null): void {
+    this.onStoryEndedChangeCallback = cb
+  }
+
   /** スキップモードの現在状態を取得する */
   isSkipMode(): boolean {
     return this.skipMode
@@ -1663,6 +1825,7 @@ export class NovelRenderer {
       isBlackout: this.blackoutOverlay.visible,
       characters: this.characterLayer.getCharacterStates(),
       currentBgmPath: this.currentBgmPath,
+      storyEnded: this.storyEnded,
     }
   }
 
@@ -1670,6 +1833,8 @@ export class NovelRenderer {
    * 次のテキスト / 次のイベントへ進む
    */
   advance(): void {
+    // #386: 終劇後は入力を受け付けない（タップしても何も起きない状態を維持する）。
+    if (this.storyEnded) return
     if (this.resolvedEvents.length === 0) return
     if (this.waitingForChoice || this.waitingForWait) return
 
@@ -1809,6 +1974,12 @@ export class NovelRenderer {
    * 1つ前の表示イベントに戻る（スナップショットベースの宣言的復元）
    */
   goBack(): void {
+    // #386: 終劇後は無効化する。endStory() は pushSnapshot() を呼ばないため、
+    // history の末尾には confinement 違反前の最後のテキストイベント（storyEnded: false の
+    // スナップショット）が残ったままになる。ここをガードしないと goBack で applyState が
+    // storyEnded を false に巻き戻し、"to be continued..." が消えて背景/立ち絵/BGM が
+    // 直前の状態に戻ってしまう（終劇の無効化）。
+    if (this.storyEnded) return
     if (this.resolvedEvents.length === 0) return
     if (this.waitingForChoice || this.waitingForWait) return
 
@@ -1854,6 +2025,8 @@ export class NovelRenderer {
    * 履歴の任意位置にジャンプする（シークバーから呼ばれる）
    */
   seekTo(historyIndex: number): void {
+    // #386: goBack() と同じ理由で終劇後は無効化する（SeekBar ドラッグでの巻き戻し防止）。
+    if (this.storyEnded) return
     if (historyIndex < 0 || historyIndex >= this.history.length) return
     if (this.waitingForChoice || this.waitingForWait) return
 
@@ -1918,6 +2091,11 @@ export class NovelRenderer {
     // novel 改頁キャッシュは派生。任意局面復元で events / 幾何 / eventIndex が変わり得るので破棄し、
     // render() 側で現在の eventIndex に対して再計算させる (#283)。
     this.novelPagesCache = null
+
+    // 終劇状態の復元 (#386)。goBack/seekTo/セーブ復元はすべて即時反映（フェード演出はしない）。
+    // DOM 側（NovelPlayer の "to be continued..." 表示）は callback で同期する。
+    this.storyEnded = state.storyEnded
+    this.onStoryEndedChangeCallback?.(state.storyEnded)
 
     // 背景復元
     if (state.backgroundPath) {
@@ -2774,15 +2952,7 @@ export class NovelRenderer {
     const startMs = this.time.now()
     const durationMs = BACKGROUND_CROSSFADE_MS
     const previous = [...this.bgEntries]
-    for (const entry of previous) {
-      entry.fadeAnimation = {
-        startMs,
-        durationMs,
-        fromAlpha: entry.sprite.alpha,
-        toAlpha: 0,
-        destroyOnComplete: true,
-      }
-    }
+    this.beginFadeOutEntries(previous, startMs, durationMs)
     next.sprite.alpha = 0
     next.fadeAnimation = {
       startMs,
@@ -2971,11 +3141,18 @@ export class NovelRenderer {
 
   /**
    * 現在のゲーム状態をクイックセーブスロットに保存する。
-   * 選択肢・Wait 待機中は保存しない（不整合状態を避けるため）。
+   * 選択肢・Wait 待機中・終劇後は保存しない（不整合状態を避けるため）。
+   *
+   * 終劇後 (#386) を除外する理由: `endStory()` は `waitingForChoice` を false に戻すため
+   * その条件だけでは終劇後のセーブを防げない。また `SaveSlotData`/`saveSlotToGameState` は
+   * 意図的に `storyEnded` を保存しない設計（常に false で復元）なので、もし終劇後の
+   * eventIndex（圏外 choice に到達したまま止まっている位置）でセーブを許すと、ロード時に
+   * 「storyEnded=false なのに Choice イベント位置で止まっている」行き止まり（テキストも
+   * 選択肢も "to be continued..." も出ない空白画面）になる。
    * 成功したら true、保存できない状態なら false を返す。
    */
   quickSave(): boolean {
-    if (this.waitingForChoice || this.waitingForWait) return false
+    if (this.waitingForChoice || this.waitingForWait || this.storyEnded) return false
 
     // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
     // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
@@ -3025,9 +3202,12 @@ export class NovelRenderer {
   }
 
   /**
-   * セーブメニューを表示する
+   * セーブメニューを表示する。
+   * 終劇後 (#386) はメニュー自体を開かない。理由は quickSave() の doc コメント参照
+   * （SaveSlotData は storyEnded を持たないため、終劇後のセーブは行き止まりの原因になる）。
    */
   private openSaveMenu(): void {
+    if (this.storyEnded) return
     this.saveLoadOverlay.showSave((slot: number) => {
       // quickSave と共通のシーンタイトル解決 (#260)。
       const sceneName = resolveSceneTitle(this.allScenes, this.currentSceneId)
@@ -3183,6 +3363,7 @@ export class NovelRenderer {
       isBlackout: false,
       characters: [],
       currentBgmPath: null,
+      storyEnded: false,
     }
     this.restoreToScene(scene, state)
   }

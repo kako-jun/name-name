@@ -34,6 +34,8 @@ const { rendererInstances, MockRenderer } = vi.hoisted(() => {
     setOnAutoModeChange = vi.fn()
     setOnSkipModeChange = vi.fn()
     setOnSeekActiveChange = vi.fn()
+    setOnStoryEndedChange = vi.fn()
+    setConfinedSceneIds = vi.fn()
     setDocKey = vi.fn()
     setChoiceStyle = vi.fn()
     setFontFamily = vi.fn()
@@ -458,5 +460,96 @@ describe('NovelPlayer speakerNudge の renderer 転送 (#382)', () => {
     rerender(<NovelPlayer events={[]} speakerNudge={true} />)
     await flushAsync()
     expect(r.setSpeakerNudge).toHaveBeenCalledWith(true)
+  })
+})
+
+// --- #386: `?scene=` ディープリンク（initialSceneId）+ confinement + 終劇表示 ---
+//
+// PlayerScreen が解決した initialSceneId / confinedSceneIds をそのまま renderer に配線する
+// ことと、renderer.setOnStoryEndedChange 経由で届く終劇状態が "to be continued..." の
+// DOM 表示に反映されることを検証する。DEV 限定の debug_scene（#220）との優先順位
+// （initialSceneId → debug_scene の順に startFrom が呼ばれ、後勝ちで debug 側が効く）も含む。
+describe('NovelPlayer `?scene=` ディープリンク + confinement + 終劇表示 (#386)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+  const storyEndedText = () => screen.queryByText('to be continued...')
+
+  it('G1: initialSceneId を渡すと mount 時に renderer.startFrom({ sceneId }) が1回だけ呼ばれる', async () => {
+    render(<NovelPlayer events={[]} initialSceneId="scene-x" />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.startFrom).toHaveBeenCalledTimes(1)
+    expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+  })
+
+  it('G2: initialSceneId 未指定なら startFrom は呼ばれない', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(lastRenderer().startFrom).not.toHaveBeenCalled()
+  })
+
+  it('G3: initialSceneId={null} でも startFrom は呼ばれない', async () => {
+    render(<NovelPlayer events={[]} initialSceneId={null} />)
+    await flushAsync()
+    expect(lastRenderer().startFrom).not.toHaveBeenCalled()
+  })
+
+  it('G4: confinedSceneIds を渡すと mount 時に renderer.setConfinedSceneIds がその配列で呼ばれる', async () => {
+    render(<NovelPlayer events={[]} confinedSceneIds={['a', 'b']} />)
+    await flushAsync()
+    expect(lastRenderer().setConfinedSceneIds).toHaveBeenCalledWith(['a', 'b'])
+  })
+
+  it('G5: confinedSceneIds 未指定なら renderer.setConfinedSceneIds が null で呼ばれる（無制限＝後方互換）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(lastRenderer().setConfinedSceneIds).toHaveBeenCalledWith(null)
+  })
+
+  it('G6: mount 直後（onStoryEndedChange 未発火）は "to be continued..." が現れない', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(storyEndedText()).toBeNull()
+  })
+
+  it('G7: onStoryEndedChange(true) が発火した時だけ "to be continued..." が表示される', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const cb = lastRenderer().setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
+    act(() => cb(true))
+    expect(storyEndedText()).not.toBeNull()
+  })
+
+  it('G8: onStoryEndedChange(false) では "to be continued..." は現れない', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const cb = lastRenderer().setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
+    act(() => cb(false))
+    expect(storyEndedText()).toBeNull()
+  })
+
+  it('G9: onStoryEndedChange(true) の後に false で発火し直すと "to be continued..." が消える', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const cb = lastRenderer().setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
+    act(() => cb(true))
+    expect(storyEndedText()).not.toBeNull()
+    act(() => cb(false))
+    expect(storyEndedText()).toBeNull()
+  })
+
+  it('G10: DEV モードで `?scene=` 由来の initialSceneId と `?debug_scene=` が同時指定された場合、debug_scene 側の startFrom が後勝ちする', async () => {
+    window.history.pushState({}, '', '?debug_scene=dbg-scene')
+    try {
+      render(<NovelPlayer events={[]} initialSceneId="prod-scene" />)
+      await flushAsync()
+      const r = lastRenderer()
+      // initialSceneId(#386) が先に startFrom され、その後 DEV 限定の debug_scene(#220) が
+      // 上書きする（NovelPlayer 側のコメント通り、デバッグ目的の上書きを優先させる設計）。
+      expect(r.startFrom).toHaveBeenNthCalledWith(1, { sceneId: 'prod-scene' })
+      expect(r.startFrom).toHaveBeenNthCalledWith(2, { sceneId: 'dbg-scene' })
+      expect(r.startFrom).toHaveBeenCalledTimes(2)
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
   })
 })

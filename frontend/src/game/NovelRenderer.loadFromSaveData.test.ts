@@ -24,6 +24,7 @@
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
+import type { NovelGameState } from './GameState'
 import type { Event, EventScene, FlagValue } from '../types'
 import { SaveManager, SaveSlotData } from './SaveManager'
 
@@ -53,6 +54,7 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
 interface RendererInternals {
   history: unknown[]
   justSelectedChoice: boolean
+  applyState(state: NovelGameState): void
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -389,5 +391,34 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     r.quickLoad()
     expect(warnSpy).not.toHaveBeenCalled()
     expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  // ===== K. 終劇状態 (#386) =====
+  //
+  // SaveSlotData / saveSlotToGameState は storyEnded を持たない設計（novelLayout.ts 参照）。
+  // このセクションは「終劇後もセーブ自体が起きない（quickSave が false を返す）」
+  // 「万一 storyEnded=true な GameState からセーブ相当のロードをしても常に false に
+  // 復元される」という #386 修正後の正しい挙動を確認する。
+
+  it('30: storyEnded=true の状態から quickLoad しても、saveSlotToGameState により常に storyEnded=false で復元される', () => {
+    // quickLoad 前に「終劇済み」の状態を人為的に作る（confinement 外ジャンプの再現は
+    // NovelRenderer.confinement.test.ts の責務なので、ここでは applyState 直接キャストで作る。
+    // 本番導線には無い経路であることは startFrom.test.ts #29 と同様）。
+    seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 0 }))
+    const r = makeRenderer(SCENES)
+    internals(r).applyState({ ...r.getSnapshot(), storyEnded: true })
+    expect(r.getSnapshot().storyEnded).toBe(true)
+
+    r.quickLoad()
+
+    expect(r.getSnapshot().storyEnded).toBe(false)
+  })
+
+  it('31: 終劇後（storyEnded=true）は quickSave() が false を返す（保存自体が起きない・行き止まり防止）', () => {
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'a' })
+    internals(r).applyState({ ...r.getSnapshot(), storyEnded: true })
+
+    expect(r.quickSave()).toBe(false)
   })
 })

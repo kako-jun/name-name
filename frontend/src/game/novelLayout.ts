@@ -314,6 +314,7 @@ export function resolveCharacterImageUrls(baseUrl: string, cleanPath: string): s
  *   isBlackout     = data.isBlackout ?? false
  *   characters     = data.characters ?? []
  *   currentBgmPath = data.currentBgmPath ?? null
+ *   storyEnded     = false  // SaveSlotData 未対応 (#386)。セーブ/ロードは常に「終劇していない」扱い
  *
  * `backgroundFade` の正規化（`normalizeBackgroundFade` / `edgeFadeMask`）は PixiJS を間接
  * 参照するため、このモジュールを PixiJS 非依存に保つ目的で「正規化済みの値」を引数で受け取る。
@@ -343,6 +344,9 @@ export function saveSlotToGameState(
     isBlackout: data.isBlackout ?? false,
     characters: data.characters ?? [],
     currentBgmPath: data.currentBgmPath ?? null,
+    // 終劇状態 (#386) はセーブデータに持たせない（SaveSlotData 未対応・古いセーブにも無い）。
+    // quicksave/quickload・スロット保存はすべて「終劇していない」状態として復元する。
+    storyEnded: false,
   }
 }
 
