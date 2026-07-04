@@ -10,6 +10,7 @@ import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '..
 import { clearReadProgress, hasAnyReadProgress } from '../game/readProgress'
 import { parseSceneQuery } from '../game/sceneQuery'
 import { useVisualViewportHeight } from '../utils/useVisualViewportHeight'
+import { isEmbedded } from '../utils/isEmbedded'
 import {
   getCachedParsedScriptDocument,
   getCachedScriptContent,
@@ -168,6 +169,8 @@ function findConfinedSceneIds(
 
 function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenProps) {
   const viewportHeight = useVisualViewportHeight()
+  // iframe 埋め込み表示か (#392)。マウント中は不変なので state 化せずレンダー時に一度評価する。
+  const embedded = isEmbedded()
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
   // doc: エントリ MD のドキュメント。通常再生ストリーム（線形 events）の供給元であり、
   // かつ RPG 判定・aspect_ratio / choice_style / font_family 等の per-game 設定の
@@ -562,14 +565,18 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       style={{ height: viewportHeight, minHeight: viewportHeight }}
     >
       {/* プレイヤーヘッダ（戻る＋タイトル）(#392):
-          #388 と同じゲート startSceneId===null を使う。`?scene=` ディープリンク解決時
-          （startSceneId 非 null＝deep-link/埋め込みモード）は、theo-hayami 等の埋め込み側が
-          既に HTML 額縁とタイトルを出しており、name-name 自身のヘッダはタイトル二重・
-          戻るボタンが無意味・没入破壊になるため描画しない（delivery ショーケースモード）。
-          通常フロー（`?scene=` 無し＝startSceneId null）は従来どおりヘッダを出す（後方互換）。
+          iframe 埋め込み表示時（isEmbedded()）は描画しない。theo-hayami 等の埋め込み側が
+          既に HTML 額縁とタイトルを出しており、name-name トップへ戻る導線は埋め込み文脈で
+          無意味・タイトル二重・没入破壊になるため（delivery ショーケースモード）。
+          埋め込み条件は「iframe 内か」であって `?scene=` の有無ではない。`?scene=` は #388 の
+          タイトル飛ばし（startSceneId）の条件であり、ヘッダ抑制の条件ではない。
+          standalone タブで name-name.llll-ll.com/play/... を直接開いたときは name-name 自身の
+          サイトなので従来どおりヘッダを出す（後方互換）。
+          （#388 の TitleOverlay ゲートは deep-link 意図で startSceneId のまま。こちらは
+          埋め込み文脈判定で isEmbedded()。関心が別なのでゲートも別。）
           ヘッダを外しても外枠は flex-col、<main> が flex-1 で全高を埋める（viewportHeight は
           visual viewport 全高で header 高さ前提を持たない）。 */}
-      {startSceneId === null && (
+      {!embedded && (
         <header
           className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
         >
