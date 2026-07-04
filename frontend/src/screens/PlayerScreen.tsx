@@ -10,6 +10,7 @@ import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '..
 import { clearReadProgress, hasAnyReadProgress } from '../game/readProgress'
 import { parseSceneQuery } from '../game/sceneQuery'
 import { useVisualViewportHeight } from '../utils/useVisualViewportHeight'
+import { isEmbedded } from '../utils/isEmbedded'
 import {
   getCachedParsedScriptDocument,
   getCachedScriptContent,
@@ -168,6 +169,8 @@ function findConfinedSceneIds(
 
 function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenProps) {
   const viewportHeight = useVisualViewportHeight()
+  // iframe 埋め込み表示か (#392)。マウント中は不変なので state 化せずレンダー時に一度評価する。
+  const embedded = isEmbedded()
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
   // doc: エントリ MD のドキュメント。通常再生ストリーム（線形 events）の供給元であり、
   // かつ RPG 判定・aspect_ratio / choice_style / font_family 等の per-game 設定の
@@ -561,32 +564,46 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       className={`flex flex-col overflow-hidden ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}
       style={{ height: viewportHeight, minHeight: viewportHeight }}
     >
-      <header
-        className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
-      >
-        <div className="px-6 py-2 flex items-center gap-3">
-          <button
-            onClick={onBack}
-            aria-label="プロジェクト一覧に戻る"
-            className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
-              isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
-            }`}
-            title="プロジェクト一覧に戻る"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15 19l-7-7 7-7"
-              />
-            </svg>
-          </button>
-          <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-            {title}
-          </h1>
-        </div>
-      </header>
+      {/* プレイヤーヘッダ（戻る＋タイトル）(#392):
+          iframe 埋め込み表示時（isEmbedded()）は描画しない。theo-hayami 等の埋め込み側が
+          既に HTML 額縁とタイトルを出しており、name-name トップへ戻る導線は埋め込み文脈で
+          無意味・タイトル二重・没入破壊になるため（delivery ショーケースモード）。
+          埋め込み条件は「iframe 内か」であって `?scene=` の有無ではない。`?scene=` は #388 の
+          タイトル飛ばし（startSceneId）の条件であり、ヘッダ抑制の条件ではない。
+          standalone タブで name-name.llll-ll.com/play/... を直接開いたときは name-name 自身の
+          サイトなので従来どおりヘッダを出す（後方互換）。
+          （#388 の TitleOverlay ゲートは deep-link 意図で startSceneId のまま。こちらは
+          埋め込み文脈判定で isEmbedded()。関心が別なのでゲートも別。）
+          ヘッダを外しても外枠は flex-col、<main> が flex-1 で全高を埋める（viewportHeight は
+          visual viewport 全高で header 高さ前提を持たない）。 */}
+      {!embedded && (
+        <header
+          className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
+        >
+          <div className="px-6 py-2 flex items-center gap-3">
+            <button
+              onClick={onBack}
+              aria-label="プロジェクト一覧に戻る"
+              className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
+                isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+              title="プロジェクト一覧に戻る"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+            </button>
+            <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+              {title}
+            </h1>
+          </div>
+        </header>
+      )}
 
       <main className="flex-1 overflow-hidden relative">
         {loading ? (

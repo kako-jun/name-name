@@ -156,6 +156,14 @@ choke point）はこの集合外への遷移を検知すると通常のシーン
 （ADR 0002 の「演出の中間状態を持たない」規律との関係）は
 [ADR 0002](./adr/0002-deterministic-state-and-debuggability.md) を参照。
 
+**埋め込み時のヘッダ抑制（#392）**: `PlayerScreen` 上端のヘッダ（プロジェクト一覧への戻る
+ボタン＋タイトル）は、**iframe に埋め込まれて表示されているとき（`utils/isEmbedded.ts` の
+`isEmbedded()` ＝ `window.self !== window.top`）は描画しない**。埋め込み文脈では name-name の
+トップへ戻る導線が無意味で、埋め込み側（theo-hayami 等）が既に額縁とタイトルを出しており二重に
+なるため。standalone タブで `/play/*` を直接開いたときは従来どおりヘッダを出す（後方互換）。
+これは `?scene=` に依存しない一般的な埋め込み挙動で、`?scene=`（＝ディープリンク意図＝#388 の
+TitleOverlay 飛ばしの条件）とは関心が別（ゲートも別）。
+
 ### 再生時
 
 ```
