@@ -1471,15 +1471,32 @@ describe('PlayerScreen', () => {
         expect(screen.queryByRole('banner')).toBeNull()
       })
 
-      it('埋め込み時は ?scene=<cell の sceneId> ディープリンク有りでもヘッダを描画しない（当初の startSceneId 誤設計への回帰防止）', async () => {
+      it('埋め込み時は ?scene=<cell の sceneId> ディープリンク有りでもヘッダを描画しない（?scene= 有無に依存しない＝直交の担保）', async () => {
         isEmbeddedMock.mockReturnValue(true)
         window.history.pushState({}, '', '?scene=cell-scene-1')
         await renderMultiDocProject()
         // 前提: ?scene= は実際に解決している（scene param が効いていることの確認）。
         // それでもヘッダ抑制は isEmbedded() が担い、startSceneId には依存しない。
+        // 注: 旧 startSceneId 設計の回帰そのものは、この embedded×scene 条件では新旧どちらも
+        // ヘッダが隠れて弁別しない。旧設計を射抜くのは embedded×no-scene の上の2ケース
+        // （旧設計なら startSceneId===null でヘッダが出てしまい赤くなる）。本ケースの価値は
+        // 「埋め込みなら ?scene= が有ってもヘッダを再表示させない」＝直交の担保。
         expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
         expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
         expect(screen.queryByRole('banner')).toBeNull()
+      })
+
+      it('standalone は ?scene=<cell の sceneId> ディープリンク有りでもヘッダを描画する（抑制は isEmbedded が担い ?scene= は無関係・4象限を閉じる）', async () => {
+        // 既定 false（standalone）のまま。architecture.md の約束＝`?scene=` 標準タブ直開きは
+        // ヘッダ有。抑制ゲートが isEmbedded() であり startSceneId/?scene= に依存しないことを
+        // standalone 方向でも固定する（embedded×scene と対を成す）。
+        window.history.pushState({}, '', '?scene=cell-scene-1')
+        await renderMultiDocProject()
+        // ?scene= は解決している（deep-link だが standalone なのでヘッダは出る）
+        expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
+        expect(screen.queryByLabelText('プロジェクト一覧に戻る')).not.toBeNull()
+        const banner = screen.getByRole('banner')
+        expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe(MULTI_DOC_TITLE)
       })
 
       it('埋め込み判定は #388 の TitleOverlay ゲート（startSceneId）と直交する（埋め込みでヘッダは消えるが ?scene= 未指定なら TitleOverlay の新規開始は従来どおり出る）', async () => {
