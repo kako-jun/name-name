@@ -135,6 +135,29 @@ function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] 
   return paths.filter((path) => basenames.has(basename(path)))
 }
 
+/**
+ * 対象 sceneId が属する doc（script ファイル）自身のシーンID一覧を返す (#386 confinement)。
+ *
+ * `?scene=` ディープリンク単独埋め込みでは、対象ファイル外（hub・他ファイル）への choice
+ * ジャンプが埋め込みの外側の内容を漏らしてしまう（theo-hayami #20 の「他ファイルへは
+ * HTML リンクで、埋め込み内の choice では遷移しない」という設計と矛盾する）。この一覧を
+ * `NovelRenderer.setConfinedSceneIds` に渡し、圏外へのジャンプを終劇として扱わせる。
+ *
+ * 見つからなければ null（呼び出し側は confinement を有効化しない＝無制限のまま）。
+ * sceneId は全 MD でグローバル一意が前提（warnDuplicateSceneIds 参照）なので、
+ * 最初に見つかった doc をそのまま採用する。
+ */
+function findConfinedSceneIds(
+  targetSceneId: string,
+  docs: Map<string, EventDocument>
+): string[] | null {
+  for (const doc of docs.values()) {
+    const ids = flattenDocumentScenes(doc).map((s) => s.id)
+    if (ids.includes(targetSceneId)) return ids
+  }
+  return null
+}
+
 function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenProps) {
   const viewportHeight = useVisualViewportHeight()
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
@@ -158,6 +181,11 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
   // allScenes に反映できた場合だけ sceneId を保持する。見つからない/未指定は null＝
   // NovelPlayer には initialSceneId を渡さず、現行どおりエントリ（ハブ）から開始する。
   const [startSceneId, setStartSceneId] = useState<string | null>(null)
+  // confinement（在圏）一覧 (#386)。startSceneId が解決できた（＝?scene= ディープリンク単独
+  // 埋め込みモード）ときだけ、対象 script ファイル自身の sceneId 一覧を持つ。null は
+  // 制限なし＝通常のハブ経由フロー（listScripts 不能の単一ファイルフォールバックも、
+  // 元々ファイルをまたげないため null のままでよい）。
+  const [confinedSceneIds, setConfinedSceneIds] = useState<string[] | null>(null)
   const sortedPlayablePathsRef = useRef<string[]>([])
   const scriptInfoByPathRef = useRef<Map<string, ScriptInfo>>(new Map())
   const entryPathRef = useRef<string | null>(null)
@@ -302,6 +330,7 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       setUnpopulated(false)
       setLoadDebugInfo([])
       setStartSceneId(null)
+      setConfinedSceneIds(null)
       sortedPlayablePathsRef.current = []
       scriptInfoByPathRef.current = new Map()
       entryPathRef.current = null
@@ -445,6 +474,15 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         }
         setStartSceneId(resolvedStartSceneId)
 
+        // confinement（在圏）一覧 (#386)。対象 sceneId が属する doc 自身の sceneId 一覧に
+        // 限定する。これにより NovelRenderer.jumpToScene がこの集合外（hub・他ファイル）への
+        // choice ジャンプを終劇として扱い、単独埋め込みに hub の内容が漏れるのを防ぐ
+        // （theo-hayami #20: 他ファイルへは HTML リンクで、埋め込み内の choice では遷移しない）。
+        const confinedIds = resolvedStartSceneId
+          ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current)
+          : null
+        setConfinedSceneIds(confinedIds)
+
         // 初期ジャンプ解決索引は entry のシーン + #386 で事前ロードした対象 script のシーン。
         // 未ロード target は NovelRenderer の missingSceneResolver が必要時に追加する (#314)。
         const scenes = buildSceneIndex(entryPath, sortedPaths, loadedDocsRef.current)
@@ -584,6 +622,10 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
               // NovelPlayer マウント時に startFrom で該当シーンから開始する。
               // null（未指定/未解決）なら渡さず、現行どおりエントリから開始する。
               initialSceneId={startSceneId}
+              // #386: 対象 script ファイル自身の sceneId 一覧。hub 等その集合外への choice
+              // ジャンプは通常のシーン遷移ではなく終劇として扱われる（NovelPlayer 経由で
+              // NovelRenderer.setConfinedSceneIds に渡る）。null（未指定/未解決）は無制限。
+              confinedSceneIds={confinedSceneIds}
               assetBaseUrl={assetBaseUrl}
               aspectRatio={doc?.aspect_ratio}
               choiceStyle={doc?.choice_style ?? null}

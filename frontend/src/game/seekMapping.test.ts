@@ -27,6 +27,7 @@ function makeState(eventIndex: number): NovelGameState {
     isBlackout: false,
     characters: [],
     currentBgmPath: null,
+    storyEnded: false,
   }
 }
 

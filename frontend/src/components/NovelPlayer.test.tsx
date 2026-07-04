@@ -34,6 +34,8 @@ const { rendererInstances, MockRenderer } = vi.hoisted(() => {
     setOnAutoModeChange = vi.fn()
     setOnSkipModeChange = vi.fn()
     setOnSeekActiveChange = vi.fn()
+    setOnStoryEndedChange = vi.fn()
+    setConfinedSceneIds = vi.fn()
     setDocKey = vi.fn()
     setChoiceStyle = vi.fn()
     setFontFamily = vi.fn()

@@ -77,6 +77,16 @@ export interface NovelGameState {
   isBlackout: boolean
   characters: Array<{ name: string; expression: string; position: string }>
   currentBgmPath: string | null
+  /**
+   * 終劇状態 (#386)。`?scene=` ディープリンク単独埋め込みの confinement（在圏）外へ
+   * choice でジャンプしようとしたときに true になる、宣言的なフラグ。
+   * 演出の中間状態ではない（ADR 0002 / 規律3）: フェード演出自体はこのフラグの発火に
+   * 付随する一度きりの見た目でしかなく、GameState としては「背景も立ち絵もない
+   * 終劇後」という終端状態を指す。goBack/seekTo/セーブ復元（applyState）はすべて
+   * このフラグをそのまま宣言的に反映する（フェードのやり直しはしない）。
+   * 通常のハブ経由フロー（confinement 無効）では常に false。
+   */
+  storyEnded: boolean
 }
 
 /**
