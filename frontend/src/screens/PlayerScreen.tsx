@@ -143,15 +143,23 @@ function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] 
  * HTML リンクで、埋め込み内の choice では遷移しない」という設計と矛盾する）。この一覧を
  * `NovelRenderer.setConfinedSceneIds` に渡し、圏外へのジャンプを終劇として扱わせる。
  *
- * 見つからなければ null（呼び出し側は confinement を有効化しない＝無制限のまま）。
+ * entry doc（hub。`entryPath` が指すファイル）は候補から除外する (#386 修正2)。
+ * `?scene=` が hub 自身の sceneId を指した場合、confinement を hub のシーン集合に
+ * してしまうと、hub → 各お題への通常 choice 遷移まで軒並み「圏外」＝即終劇になり、
+ * 汎用フローを壊す。hub 自身が指定された場合は null を返し、呼び出し側は confinement を
+ * 有効化しない（無制限フロー扱い）という割り切りにする。
+ *
+ * それ以外で見つからなければ null（呼び出し側は confinement を有効化しない＝無制限のまま）。
  * sceneId は全 MD でグローバル一意が前提（warnDuplicateSceneIds 参照）なので、
- * 最初に見つかった doc をそのまま採用する。
+ * 最初に見つかった（entry 以外の）doc をそのまま採用する。
  */
 function findConfinedSceneIds(
   targetSceneId: string,
-  docs: Map<string, EventDocument>
+  docs: Map<string, EventDocument>,
+  entryPath: string | null
 ): string[] | null {
-  for (const doc of docs.values()) {
+  for (const [path, doc] of docs) {
+    if (path === entryPath) continue // hub 自身は confinement の対象にしない
     const ids = flattenDocumentScenes(doc).map((s) => s.id)
     if (ids.includes(targetSceneId)) return ids
   }
@@ -475,11 +483,13 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
         setStartSceneId(resolvedStartSceneId)
 
         // confinement（在圏）一覧 (#386)。対象 sceneId が属する doc 自身の sceneId 一覧に
-        // 限定する。これにより NovelRenderer.jumpToScene がこの集合外（hub・他ファイル）への
-        // choice ジャンプを終劇として扱い、単独埋め込みに hub の内容が漏れるのを防ぐ
-        // （theo-hayami #20: 他ファイルへは HTML リンクで、埋め込み内の choice では遷移しない）。
+        // 限定する（entry/hub 自身は候補から除外・修正2）。これにより NovelRenderer.jumpToScene
+        // がこの集合外（hub・他ファイル）への choice ジャンプを終劇として扱い、単独埋め込みに
+        // hub の内容が漏れるのを防ぐ（theo-hayami #20: 他ファイルへは HTML リンクで、埋め込み
+        // 内の choice では遷移しない）。`?scene=` が hub 自身の sceneId を指した場合は
+        // findConfinedSceneIds が null を返す＝無制限フローにフォールバックする。
         const confinedIds = resolvedStartSceneId
-          ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current)
+          ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current, entryPath)
           : null
         setConfinedSceneIds(confinedIds)
 

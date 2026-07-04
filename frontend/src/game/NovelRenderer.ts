@@ -3092,11 +3092,18 @@ export class NovelRenderer {
 
   /**
    * 現在のゲーム状態をクイックセーブスロットに保存する。
-   * 選択肢・Wait 待機中は保存しない（不整合状態を避けるため）。
+   * 選択肢・Wait 待機中・終劇後は保存しない（不整合状態を避けるため）。
+   *
+   * 終劇後 (#386) を除外する理由: `endStory()` は `waitingForChoice` を false に戻すため
+   * その条件だけでは終劇後のセーブを防げない。また `SaveSlotData`/`saveSlotToGameState` は
+   * 意図的に `storyEnded` を保存しない設計（常に false で復元）なので、もし終劇後の
+   * eventIndex（圏外 choice に到達したまま止まっている位置）でセーブを許すと、ロード時に
+   * 「storyEnded=false なのに Choice イベント位置で止まっている」行き止まり（テキストも
+   * 選択肢も "to be continued..." も出ない空白画面）になる。
    * 成功したら true、保存できない状態なら false を返す。
    */
   quickSave(): boolean {
-    if (this.waitingForChoice || this.waitingForWait) return false
+    if (this.waitingForChoice || this.waitingForWait || this.storyEnded) return false
 
     // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
     // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
@@ -3146,9 +3153,12 @@ export class NovelRenderer {
   }
 
   /**
-   * セーブメニューを表示する
+   * セーブメニューを表示する。
+   * 終劇後 (#386) はメニュー自体を開かない。理由は quickSave() の doc コメント参照
+   * （SaveSlotData は storyEnded を持たないため、終劇後のセーブは行き止まりの原因になる）。
    */
   private openSaveMenu(): void {
+    if (this.storyEnded) return
     this.saveLoadOverlay.showSave((slot: number) => {
       // quickSave と共通のシーンタイトル解決 (#260)。
       const sceneName = resolveSceneTitle(this.allScenes, this.currentSceneId)
