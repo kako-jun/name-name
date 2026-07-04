@@ -279,7 +279,10 @@ export class NovelRenderer {
   /**
    * 先読み済みアセット URL の集合 (#389)。`preloadUpcomingAssets` が同一 URL を
    * `Assets.backgroundLoad` に二重に積まないための重複除去。backgroundLoad 自体は冪等だが
-   * 無駄呼び出しを避ける。破棄は不要（URL は配信絶対パスで一意・温めたまま保持でよい）。
+   * 無駄呼び出しを避ける。イベント列を差し替える `resetAndStartEvents` でクリアする＝
+   * 新しいイベント列では先読み状態も作り直す。`setEvents` は表示済み背景を `Assets.unload`
+   * するので、クリアしないと「積み済み」誤判定で先読みがスキップされコールドロードに戻る
+   * （エディタのライブプレビュー等で再表示するケース）。`destroy` でもリーク予防にクリアする。
    */
   private preloadedUrls: Set<string> = new Set()
   /** setBackground の非同期ロード用トークン。destroy / 再入 の race 回避に使う */
@@ -1118,6 +1121,11 @@ export class NovelRenderer {
     this.history = []
     // novel 改頁キャッシュ (#283) はイベント列に紐づくので破棄する。
     this.novelPagesCache = null
+    // 先読み済み URL 集合 (#389) もイベント列に紐づくので破棄する。setEvents は表示済み背景を
+    // Assets.unload するため、ここでクリアしないと「積み済み」誤判定で先読みがスキップされ
+    // コールドロードに戻る。新しいイベント列＝先読み状態も作り直すのが正しい（末尾の
+    // processUntilNextTextEvent → preloadUpcomingAssets が先頭から積み直す）。
+    this.preloadedUrls.clear()
     // 話者交代追跡 (#286) をリセット（前シーン末尾の話者を引きずらない）。
     // resetAndStartEvents 直後の最初の Dialog で初めて話者がセットされ、初回は nudge しない
     // （何もないところから登場する初回は「交代」ではない）。
@@ -1612,6 +1620,8 @@ export class NovelRenderer {
       console.warn('[name-name] テクスチャの解放に失敗', err)
     })
     this.textureCache.clear()
+    // 先読み済み URL 集合もクリアする（リーク予防・#389）。
+    this.preloadedUrls.clear()
     // canvas 由来マスクテクスチャを含む背景 entry を全て解放する (#250/#319)
     this.clearBackgroundEntries()
     this.app.destroy(true, { children: true })
@@ -2397,10 +2407,14 @@ export class NovelRenderer {
    *     仕様として境界扱いを明示しておく（防御的・非回帰）。
    * - 収集対象: `Dialog` / `ExpressionChange` の立ち絵（`resolveCharacterImageUrls`、
    *   webp/png の複数候補）と `Background` の背景画像（`resolveAssetUrl`）。Video 等
-   *   `Assets.load` 経路でないものは対象外。
+   *   `Assets.load` 経路でないものは対象外。単独画像 `[画像:]`（#274, renderOnly）も対象外＝
+   *   先読みは立ち絵・背景に限定する。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
+   *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。
    * - **緩い上限**: 分岐までが極端に長い場合に備え、先読みするテキストイベント
-   *   （`getTextEvent` 非 null）を最大 {@link PRELOAD_MAX_TEXT_EVENTS} 個ぶんで打ち切る。
-   *   テキストイベント以外（Background 等）は数に数えないが、上限超過で走査は終了する。
+   *   （`getTextEvent` 非 null）を最大 {@link PRELOAD_MAX_TEXT_EVENTS} 個ぶんに抑える。
+   *   テキストイベント以外（Background / ExpressionChange 等）は予算に数えず、予算を使い切った
+   *   後の**次のテキストイベントに達した時点で**走査を終了する（そこに至るまでの Background 等は
+   *   積む＝test18 が固定する挙動。上限で即座に走査終了するわけではない）。
    * - **重複除去**: `preloadedUrls` で既に積んだ URL はスキップする。
    * - **ガード**: `assetBaseUrl` が空なら何もしない。実ダウンロードは投げっぱなしで、
    *   失敗は握りつぶす（先読み失敗で本編を止めない）。#293 の順序保証とは独立で、先読みが
@@ -2412,6 +2426,8 @@ export class NovelRenderer {
     const urls: string[] = []
     let textEventCount = 0
 
+    // 走査開始 i = this.eventIndex は「今表示するテキストイベント」を含む（未来だけでなく現在も
+    // 先読み対象）。したがって予算 PRELOAD_MAX_TEXT_EVENTS=8 は「現在 + 未来 7」のテキストイベント。
     for (let i = this.eventIndex; i < this.resolvedEvents.length; i++) {
       const event = this.resolvedEvents[i]
       // 文字列 variant（'SceneTransition' / 'PageBreak' / 'VideoExit' 等）は分岐でも
@@ -2428,8 +2444,11 @@ export class NovelRenderer {
       }
 
       if ('Dialog' in event) {
-        const { character, expression } = event.Dialog
-        if (expression != null && character != null) {
+        // 実表示ガード（showCharacterFromDialog: `!expression || !position || !speaker`）に
+        // 揃える＝立ち絵を実際に show する Dialog だけ先読みする。falsy チェックで空文字も弾き、
+        // position も要求する（空文字 expression の無効 URL 先読みを消す）。
+        const { character, expression, position } = event.Dialog
+        if (expression && character && position) {
           for (const u of resolveCharacterImageUrls(
             this.assetBaseUrl,
             expression.replace(/^\//, '')
@@ -2438,8 +2457,10 @@ export class NovelRenderer {
           }
         }
       } else if ('ExpressionChange' in event) {
+        // ExpressionChange は position を持たない。expression / character の falsy チェックに
+        // 揃える（空文字を弾く）。
         const { character, expression } = event.ExpressionChange
-        if (expression != null && character != null) {
+        if (expression && character) {
           for (const u of resolveCharacterImageUrls(
             this.assetBaseUrl,
             expression.replace(/^\//, '')
