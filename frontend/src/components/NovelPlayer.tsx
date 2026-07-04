@@ -5,6 +5,8 @@ import { parseDebugQuery } from '../game/debugQuery'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import { type AspectRatio, ASPECT_RATIOS, parseAspectRatio } from '../game/constants'
 import { PLAYER_BUTTON_RIGHT_MARGIN_PX, PLAYER_BUTTON_SLOT_GAP_PX } from '../game/novelLayout'
+import { buildStoryEndedMessage } from '../game/storyEndedMessage'
+import { isEmbedded } from '../utils/isEmbedded'
 import SettingsOverlay from './SettingsOverlay'
 import { DebugOverlay } from './DebugOverlay'
 
@@ -220,8 +222,28 @@ function NovelPlayer({
       renderer.setOnSkipModeChange((on) => setSkipMode(on))
       // スライダ操作中（active）は下部丸ボタン行をフェード退避させる (#350)
       renderer.setOnSeekActiveChange((active) => setSeekActive(active))
-      // 終劇状態が変化したら "to be continued..." の表示を同期する (#386)
-      renderer.setOnStoryEndedChange((ended) => setStoryEnded(ended))
+      // 終劇状態が変化したら "to be continued..." の表示を同期する (#386)。
+      // さらに終劇（ended の true 立ち上がり）に達した瞬間、iframe 埋め込み時のみ
+      // 親ウィンドウへ「このセルを読み終わった」を postMessage で通知する (#395)。
+      // 埋め込み側（theo-hayami）は name-name の別オリジン既読 localStorage を読めないため、
+      // ここで完読を通知して自前で記録させる。false（終劇解除＝復元/巻き戻し）や standalone
+      // （非埋め込み）では送らない。endStory() 側が二重発火を弾くので true は 1 遷移 1 回だけ届く。
+      // メッセージ組み立ては純粋関数 buildStoryEndedMessage に切り出し（doctrine 規律6）、
+      // 発火（副作用）だけここで行う。契約は theo-hayami #30 と共有・厳守。
+      // 送信先 origin は '*'（埋め込み側を name-name は知らない。機微情報なし＝受信側で origin 検証する前提）。
+      // once-only の前提: この「true は 1 遷移 1 回」は endStory() の二重発火ガードに加え、
+      // storyEnded が seekable history / セーブに載らない（#386 が意図的に除外）ことに依存する。
+      // 将来 storyEnded を復元対象に含める変更を入れると applyState(true) 経由で goBack/seekTo/
+      // ロードのたびに再発火するので、その際はここのガードを見直すこと。
+      // initialSceneId/docKey は空 deps init effect 内で mount 時にキャプチャする。埋め込み経路では
+      // ?scene=/project が変わる＝iframe 再読み込み＝再マウントなので stale にならない。
+      renderer.setOnStoryEndedChange((ended) => {
+        setStoryEnded(ended)
+        if (ended && isEmbedded()) {
+          const message = buildStoryEndedMessage(initialSceneId ?? null, docKey ?? '')
+          window.parent.postMessage(message, '*')
+        }
+      })
       if (docKey) {
         renderer.setDocKey(docKey)
       }
