@@ -561,32 +561,42 @@ function PlayerScreen({ projectName, apiBaseUrl, isDark, onBack }: PlayerScreenP
       className={`flex flex-col overflow-hidden ${isDark ? 'dark bg-gray-900' : 'bg-white'}`}
       style={{ height: viewportHeight, minHeight: viewportHeight }}
     >
-      <header
-        className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
-      >
-        <div className="px-6 py-2 flex items-center gap-3">
-          <button
-            onClick={onBack}
-            aria-label="プロジェクト一覧に戻る"
-            className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
-              isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
-            }`}
-            title="プロジェクト一覧に戻る"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15 19l-7-7 7-7"
-              />
-            </svg>
-          </button>
-          <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-            {title}
-          </h1>
-        </div>
-      </header>
+      {/* プレイヤーヘッダ（戻る＋タイトル）(#392):
+          #388 と同じゲート startSceneId===null を使う。`?scene=` ディープリンク解決時
+          （startSceneId 非 null＝deep-link/埋め込みモード）は、theo-hayami 等の埋め込み側が
+          既に HTML 額縁とタイトルを出しており、name-name 自身のヘッダはタイトル二重・
+          戻るボタンが無意味・没入破壊になるため描画しない（delivery ショーケースモード）。
+          通常フロー（`?scene=` 無し＝startSceneId null）は従来どおりヘッダを出す（後方互換）。
+          ヘッダを外しても外枠は flex-col、<main> が flex-1 で全高を埋める（viewportHeight は
+          visual viewport 全高で header 高さ前提を持たない）。 */}
+      {startSceneId === null && (
+        <header
+          className={`border-b ${isDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
+        >
+          <div className="px-6 py-2 flex items-center gap-3">
+            <button
+              onClick={onBack}
+              aria-label="プロジェクト一覧に戻る"
+              className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
+                isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+              title="プロジェクト一覧に戻る"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+            </button>
+            <h1 className={`text-lg font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+              {title}
+            </h1>
+          </div>
+        </header>
+      )}
 
       <main className="flex-1 overflow-hidden relative">
         {loading ? (
