@@ -8,7 +8,7 @@
 //   - データ取得失敗時にエラーメッセージが表示される
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 // #284: NovelRenderer.jumpToScene が使う実シーン解決プリミティブ。
 // PlayerScreen が連結した scenes に対してクロスファイルのジャンプが解決することを、
 // 実装で実際に使われるこの純粋関数で確認する（Pixi/NovelRenderer は jsdom で init 不可）。
@@ -1201,10 +1201,14 @@ describe('PlayerScreen', () => {
       window.history.pushState({}, '', '/')
     })
 
+    // マルチ MD 構成のプロジェクトタイトル。mock（listProjects）と #392 のヘッダ h1
+    // アサーションで同じ定数を参照し、期待値の直書き・二重管理を避ける。
+    const MULTI_DOC_TITLE = 'せおはやみ'
+
     /** hub(script.md) 1 シーン + 別 MD(cell) 2 シーンの標準的なマルチ MD 構成をセットアップする。 */
     function mockMultiDocProject() {
       listProjectsMock.mockResolvedValue([
-        { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+        { name: 'theo-hayami', title: MULTI_DOC_TITLE, repo: 'kako-jun/theo-hayami' },
       ])
       listScriptsMock.mockResolvedValue([
         { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
@@ -1421,6 +1425,62 @@ describe('PlayerScreen', () => {
       await renderMultiDocProject()
       expect(lastNovelPlayerProps().initialSceneId).toBe('hub-scene')
       expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+    })
+
+    // --- #392: `?scene=` 埋め込み時はプレイヤーヘッダ（戻る＋タイトル）を描画しない ---
+    //
+    // ゲートは #388 の TitleOverlay と同じ startSceneId===null。ヘッダの有無は
+    // ユーザー可視要素で判定する:
+    //   - 戻るボタン: aria-label='プロジェクト一覧に戻る'（ヘッダ固有。TitleOverlay の
+    //     終了ボタンは text '終了' で aria-label を持たないため衝突しない）
+    //   - <header> 要素（暗黙 role=banner）内のタイトル h1
+    // startSceneId 非 null（deep-link/埋め込み）で消え、null（通常フロー・無効 scene の
+    // フォールバック）で出ることを、否定・肯定の両側で担保する。
+    describe('プレイヤーヘッダ（戻る/タイトル）の表示制御 (#392)', () => {
+      it('通常フロー（?scene= 未指定）は戻るボタンとタイトル h1 を持つヘッダを描画する', async () => {
+        await renderMultiDocProject()
+        // 前提: deep-link ではない（startSceneId=null 相当＝initialSceneId 未解決）
+        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+        // ヘッダ固有の戻るボタンが存在する
+        expect(screen.queryByLabelText('プロジェクト一覧に戻る')).not.toBeNull()
+        // <header>（banner）内にプロジェクトタイトルの h1 が出る（title.png は jsdom で
+        // 読み込まれないため TitleOverlay 側にも h1 は出るが、banner スコープ内の 1 本を見る）
+        const banner = screen.getByRole('banner')
+        expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe(MULTI_DOC_TITLE)
+      })
+
+      it('?scene=<cell の sceneId> 解決時（deep-link モード）はヘッダ（戻る/タイトル）を描画しない', async () => {
+        window.history.pushState({}, '', '?scene=cell-scene-1')
+        await renderMultiDocProject()
+        // 前提: deep-link が解決している（startSceneId 非 null）
+        expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
+        // 戻るボタンも <header>（banner）も描画されない
+        expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
+        expect(screen.queryByRole('banner')).toBeNull()
+      })
+
+      it('?scene=<entry(hub)自身の sceneId>（confinedSceneIds=null でも startSceneId 非 null）ならヘッダを描画しない', async () => {
+        window.history.pushState({}, '', '?scene=hub-scene')
+        await renderMultiDocProject()
+        // 前提: startSceneId は解決されるが confinement は無制限（#386 修正2）。
+        // ヘッダゲートは startSceneId のみに依存し confinedSceneIds には依存しないことの担保。
+        expect(lastNovelPlayerProps().initialSceneId).toBe('hub-scene')
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+        expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
+        expect(screen.queryByRole('banner')).toBeNull()
+      })
+
+      it('?scene=<存在しない sceneId> フォールバック（startSceneId が null に戻る）はヘッダを描画する', async () => {
+        window.history.pushState({}, '', '?scene=no-such-scene')
+        await renderMultiDocProject()
+        // 前提: 解決失敗で startSceneId=null にフォールバック（initialSceneId=null）。
+        // ゲートが initialSceneId prop でなく startSceneId state であることの回帰防止:
+        // 無効 scene でも通常フロー扱いに戻ってヘッダ（戻る/タイトル）が復活する。
+        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+        expect(screen.queryByLabelText('プロジェクト一覧に戻る')).not.toBeNull()
+        const banner = screen.getByRole('banner')
+        expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe(MULTI_DOC_TITLE)
+      })
     })
   })
 })
