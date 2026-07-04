@@ -115,6 +115,8 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
   })
 
   it('21: 圏外かつ allScenes に存在しない sceneId への jumpToScene も終劇になり、missingSceneResolver は呼ばれない', () => {
+    // このパスは Q1 の DEV console.warn（typo 診断）を踏むため silence する（テスト32 と同様・実行ログのノイズ防止）。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const resolver = vi.fn().mockResolvedValue(null)
     const r = makeRenderer(SCENES)
     r.setConfinedSceneIds(['entry', 'in-scene'])
@@ -122,6 +124,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     r.jumpToScene('totally-unknown-scene')
     expect(r.getSnapshot().storyEnded).toBe(true)
     expect(resolver).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
   })
 
   it('24: 終劇後も currentSceneId は変化しない（endStory は startScene を経由しない）', () => {
