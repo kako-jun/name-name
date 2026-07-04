@@ -231,6 +231,12 @@ function NovelPlayer({
       // メッセージ組み立ては純粋関数 buildStoryEndedMessage に切り出し（doctrine 規律6）、
       // 発火（副作用）だけここで行う。契約は theo-hayami #30 と共有・厳守。
       // 送信先 origin は '*'（埋め込み側を name-name は知らない。機微情報なし＝受信側で origin 検証する前提）。
+      // once-only の前提: この「true は 1 遷移 1 回」は endStory() の二重発火ガードに加え、
+      // storyEnded が seekable history / セーブに載らない（#386 が意図的に除外）ことに依存する。
+      // 将来 storyEnded を復元対象に含める変更を入れると applyState(true) 経由で goBack/seekTo/
+      // ロードのたびに再発火するので、その際はここのガードを見直すこと。
+      // initialSceneId/docKey は空 deps init effect 内で mount 時にキャプチャする。埋め込み経路では
+      // ?scene=/project が変わる＝iframe 再読み込み＝再マウントなので stale にならない。
       renderer.setOnStoryEndedChange((ended) => {
         setStoryEnded(ended)
         if (ended && isEmbedded()) {
