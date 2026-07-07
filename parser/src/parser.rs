@@ -966,6 +966,11 @@ fn parse_directive(line: &str) -> Option<Event> {
     if content == "場面転換" {
         return Some(Event::SceneTransition);
     }
+    // [登場: 名前 (sprite/表情, 位置)] — 無言で立ち絵を表示する (#401)。
+    // 話者タグと同書式・本文なし。退場 (`退場:`) の対になるディレクティブ。
+    if let Some(rest) = content.strip_prefix("登場:") {
+        return parse_enter_directive(rest);
+    }
     if let Some(character) = content.strip_prefix("退場:") {
         return Some(Event::Exit {
             character: character.trim().to_string(),
@@ -1890,27 +1895,63 @@ fn parse_speaker_line(line: &str) -> (String, Option<String>, Option<String>, bo
     if let Some(paren_start) = rest.find('(') {
         if let Some(paren_end) = rest.find(')') {
             let attrs = &rest[paren_start + 1..paren_end];
-            // フィット (#294) は真偽フラグなので、まず全トークンから抜き出して位置取りから除外する。
-            // 残ったトークンが従来どおり expression=先頭 / position=2 番目 の位置取りを保つ。
-            let mut fit = false;
-            let positional: Vec<&str> = attrs
-                .split(',')
-                .filter(|s| {
-                    if is_fit_token(s) {
-                        fit = true;
-                        false
-                    } else {
-                        true
-                    }
-                })
-                .collect();
-            let expression = positional.first().map(|s| s.trim().to_string());
-            let position = positional.get(1).map(|s| s.trim().to_string());
+            let (expression, position, fit) = parse_character_attrs(attrs);
             return (character, expression, position, fit);
         }
     }
 
     (character, None, None, false)
+}
+
+/// 括弧内の立ち絵属性 `expression, position, フィット?` をパースする (#294 / #401)。
+/// 話者タグ (`parse_speaker_line`) と登場ディレクティブ (`parse_enter_directive`) の共通処理。
+/// フィット (#294) は真偽フラグなので、まず全トークンから抜き出して位置取りから除外する。
+/// 残ったトークンを従来どおり expression=先頭 / position=2 番目 の位置取りで読む。
+fn parse_character_attrs(attrs: &str) -> (Option<String>, Option<String>, bool) {
+    let mut fit = false;
+    let positional: Vec<&str> = attrs
+        .split(',')
+        .filter(|s| {
+            if is_fit_token(s) {
+                fit = true;
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    let expression = positional.first().map(|s| s.trim().to_string());
+    let position = positional.get(1).map(|s| s.trim().to_string());
+    (expression, position, fit)
+}
+
+/// `[登場: 名前 (sprite/表情, 位置)]` の本体（`登場:` 以降）をパースして `Enter` Event を作る (#401)。
+/// 話者タグ `名前 (expression, position, フィット?)` と同じ属性書式を `parse_character_attrs` で共有する。
+/// 本文は持たない（無言で立ち絵を出す）。名前が空なら None（無効 = 何も emit しない）。
+/// 括弧が無ければ属性なし（expression/position は None）で名前だけの Enter を返す。
+fn parse_enter_directive(content: &str) -> Option<Event> {
+    let content = content.trim();
+    let (character, expression, position, fit) = if let Some(paren_start) = content.find('(') {
+        let name = content[..paren_start].trim().to_string();
+        let attrs = if let Some(paren_end) = content.find(')') {
+            &content[paren_start + 1..paren_end]
+        } else {
+            &content[paren_start + 1..]
+        };
+        let (expression, position, fit) = parse_character_attrs(attrs);
+        (name, expression, position, fit)
+    } else {
+        (content.to_string(), None, None, false)
+    };
+    if character.is_empty() {
+        return None;
+    }
+    Some(Event::Enter {
+        character,
+        expression,
+        position,
+        fit,
+    })
 }
 
 fn parse_expression_change(line: &str) -> Option<Event> {
@@ -2627,6 +2668,71 @@ title: "テスト"
                 action: BgmAction::Stop,
                 fade_ms: None,
             }
+        );
+    }
+
+    #[test]
+    fn test_parse_enter_directive() {
+        // [登場: 名前 (sprite/表情, 位置)] は無言の Enter Event として parse される (#401)。
+        // 複数並記で複数キャラを同時に立てられる。話者タグと同書式・本文なし。
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 登場テスト
+
+[登場: せお (theo/normal, 左)]
+[登場: スピノ (spino/normal, 右)]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0],
+            Event::Enter {
+                character: "せお".to_string(),
+                expression: Some("theo/normal".to_string()),
+                position: Some("左".to_string()),
+                fit: false,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::Enter {
+                character: "スピノ".to_string(),
+                expression: Some("spino/normal".to_string()),
+                position: Some("右".to_string()),
+                fit: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_enter_directive_with_fit_and_roundtrip() {
+        // 話者タグ (#294) と同じく末尾の `フィット` トークンを fit=true として読む。
+        // emit は `[登場: 名前 (表情, 位置, フィット)]` に戻し、往復で安定する（#401）。
+        let input = "[登場: せお (theo/akarame, 左, フィット)]\n";
+        let event = parse_directive(input.trim()).expect("登場 directive should parse");
+        assert_eq!(
+            event,
+            Event::Enter {
+                character: "せお".to_string(),
+                expression: Some("theo/akarame".to_string()),
+                position: Some("左".to_string()),
+                fit: true,
+            }
+        );
+
+        // round-trip: Enter を含む最小 Document を emit → 同じディレクティブ行が出る。
+        let doc = parse(&format!(
+            "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## s: t\n\n{input}"
+        ));
+        let emitted = crate::emitter::emit(&doc);
+        assert!(
+            emitted.contains("[登場: せお (theo/akarame, 左, フィット)]"),
+            "emitted should contain the 登場 directive, got:\n{emitted}"
         );
     }
 
