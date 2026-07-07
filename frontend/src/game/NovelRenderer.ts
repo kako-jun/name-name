@@ -3479,12 +3479,39 @@ export class NovelRenderer {
       return
     }
 
-    // 最小 NovelGameState を構築して共通コアで復元
+    const eventIndex = opts.eventIndex ?? 0
+    const textIndex = opts.textIndex ?? 0
+    const sentenceIndex = opts.sentenceIndex ?? 0
+
+    // #399: シーン先頭からの新規開始（本番の `?scene=` deep-link は常に eventIndex=0 固定）は、
+    // 通常入場（jumpToScene → startScene）と同じ fresh-start 経路に乗せる。startScene →
+    // resetAndStartEvents は末尾で processUntilNextTextEvent（冒頭の [背景:]/[BGM:] 等の
+    // ディレクティブを最初のテキストまで実行）と showCharacterThenRender（最初の話者の立ち絵を
+    // 表示）を通すため、開始直後に背景と立ち絵が出る。
+    //
+    // これに対し restoreToScene は「完成済み state を applyState で宣言的に復元する」経路で、
+    // 冒頭ディレクティブを一切実行しない（eventIndex=0 のまま render するだけ）。だから従来の
+    // startFrom は背景も立ち絵も出ず eventIndex=0 で止まっていた（#399 の症状）。restoreToScene
+    // は save/load 復元専用（完成状態を持つ SaveSlotData を渡す loadFromSaveData）として残す。
+    //
+    // eventIndex/textIndex/sentenceIndex が指定されるのは DEV の debug_scene（シーン途中からの
+    // 起動）だけ。fresh-start 経路は resetAndStartEvents が index を 0 にリセットしてしまうため
+    // 途中局面を再現できない。そのため index 指定がある場合だけ従来どおり restoreToScene の
+    // 宣言的復元にフォールバックする（production は常に 0 なのでこの分岐には入らない）。
+    if (eventIndex === 0 && textIndex === 0 && sentenceIndex === 0) {
+      // フラグを先に確定させる（resetAndStartEvents 内の resolveEvents が this.gameState の
+      // flags に依存するため）。fromJSON は置換セマンティクス（restoreToScene と同じ）。
+      this.gameState.fromJSON(flags)
+      this.startScene(opts.sceneId, scene)
+      return
+    }
+
+    // DEV（debug_scene で index 指定あり）: 最小 NovelGameState を構築して共通コアで宣言的復元。
     const state: NovelGameState = {
       sceneId: opts.sceneId,
-      eventIndex: opts.eventIndex ?? 0,
-      textIndex: opts.textIndex ?? 0,
-      sentenceIndex: opts.sentenceIndex ?? 0,
+      eventIndex,
+      textIndex,
+      sentenceIndex,
       flags,
       backgroundPath: null,
       backgroundColor: null,
