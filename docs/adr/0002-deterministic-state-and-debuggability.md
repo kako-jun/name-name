@@ -92,7 +92,7 @@ await renderer.playScript(steps: Step[]): Promise<void>
 
 sceneId と flags を直接指定して任意の状態から開始する API。
 history はリセットされる（デバッグ用）。
-実装: `NovelRenderer.startFrom`、`StartFromOptions` 型は `GameState.ts`。状態復元コアは `loadFromSaveData` と共通化済み（#256）— 両者とも private `restoreToScene(scene, state)` を呼ぶ（フラグ設定 → 選択肢/待機リセット → resolveEvents → applyState → history リセット → render）。シーン探索と「見つからない場合の挙動」は呼び出し側の責務で、`startFrom` は不正 sceneId で完全 no-op（フラグも復元しない）、`loadFromSaveData` はシーン欠落時もフラグだけ復元する。flags は置換セマンティクス、検証を flags 適用より先に行う、eventIndex/textIndex は範囲チェックなし（呼び出し側責任）。vitest 25 ケース。
+実装: `NovelRenderer.startFrom`、`StartFromOptions` 型は `GameState.ts`。`startFrom` は 2 経路に分岐する（#399）: **`eventIndex=textIndex=sentenceIndex=0`（本番の `?scene=` は常にこれ）は通常入場と同じ fresh-start 経路**（`gameState.fromJSON(flags)` → `startScene` → `resetAndStartEvents`）に乗せ、冒頭の `[背景:]`/`[BGM:]` を実行し最初の話者の立ち絵を出してから最初のテキストで止まる。**`eventIndex>0` 等の途中局面指定（DEV の `debug_scene`）だけ**、宣言的復元コア private `restoreToScene(scene, state)`（フラグ設定 → 選択肢/待機リセット → resolveEvents → applyState → history リセット → render）にフォールバックする。この `restoreToScene` は `loadFromSaveData`（セーブ復元＝完成 state を持つ）と共通化済み（#256）。従来は startFrom も常に restoreToScene を通していたため冒頭ディレクティブが実行されず、埋め込み開始時に背景も立ち絵も出ず `eventIndex=0` で止まっていた（#399 の症状）。fresh-start 経路は `resetAndStartEvents` が index を 0 にリセットしてしまうため途中局面を再現できず、そのため index 指定時だけ `restoreToScene` に倒す。シーン探索と「見つからない場合の挙動」は呼び出し側の責務で、`startFrom` は不正 sceneId で完全 no-op（フラグも復元しない）、`loadFromSaveData` はシーン欠落時もフラグだけ復元する。flags は置換セマンティクス、検証を flags 適用より先に行う、eventIndex/textIndex は範囲チェックなし（呼び出し側責任）。vitest 30 ケース（#399 の fresh-start 経路 3 ケースを追加）。
 
 ```typescript
 renderer.startFrom({
@@ -137,10 +137,16 @@ Phase 3 の `debug_scene` は開発環境限定のデバッグ起点だった。
 `?scene=` 単独埋め込みは対象ファイル外（hub・他ファイル）への choice ジャンプを許さない
 （theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の HTML リンクで行う設計）。
 `PlayerScreen` が対象ファイル自身の sceneId 一覧（entry doc/hub 自身は除く）を
-`NovelRenderer.setConfinedSceneIds` に渡し、`jumpToScene`（唯一の choke point）はこの集合外への
-遷移を検知すると通常のシーン遷移をせず `endStory()` を呼ぶ。`?scene=` が hub 自身の sceneId を
-指した場合は confinement を組まず無制限フローにフォールバックする（hub → 各お題への通常 choice
-遷移を壊さないため）。
+`NovelRenderer.setConfinedSceneIds` に渡す。圏外への遷移を検知すると通常のシーン遷移をせず
+`endStory()` を呼ぶ。終劇の判定箇所は 2 つある: **選んだ jump 先**が圏外なら `jumpToScene`
+（choice 確定後）が終劇する。加えて **全 option の jump 先が圏外の `[選択]` に到達した場合**は、
+選択肢を描画せず `processDirective` の Choice 分岐で先回りして終劇する（#398）。後者が無いと、
+全 option 圏外の choice は「クリックするまで」`jumpToScene` に届かず、`storyEnded` の
+postMessage（#395/#397）が発火しないため埋め込み側で既読化されなかった。既読化
+（`markCurrentSceneRead`）を済ませてから終劇するので、選択肢を出さずに完読を通知できる。
+`?scene=` が hub 自身の sceneId を指した場合は confinement を組まず無制限フローにフォールバック
+する（`confinedSceneIds === null` では両判定とも短絡しない。hub → 各お題への通常 choice 遷移を
+壊さないため）。
 
 `endStory()` は `NovelGameState.storyEnded` という**宣言的フラグ**を true にする。この設計は
 本 ADR の核心（演出の中間状態を持たない・完全にシリアライズ可能）にそのまま従う: 背景・立ち絵の
@@ -175,10 +181,12 @@ Phase 3 の `debug_scene` は開発環境限定のデバッグ起点だった。
 ## 関連
 
 - `GameState.ts`: `NovelGameState` 定義
-- `NovelRenderer.ts`: `applyState`、`restoreToScene`（`startFrom`/`loadFromSaveData` 共通コア）、`seekTo`、`advance`、`jumpToScene`、`setConfinedSceneIds`、`endStory`
+- `NovelRenderer.ts`: `applyState`、`startFrom`（`eventIndex=0` は `startScene` の fresh-start 経路、#399）、`restoreToScene`（startFrom の途中局面指定 / `loadFromSaveData` 共通コア）、`seekTo`、`advance`、`jumpToScene`、`processDirective`（Choice 短絡での終劇、#398）、`setConfinedSceneIds`、`endStory`
 - `frontend/src/game/sceneQuery.ts` / `frontend/src/game/sceneConfinement.ts`: `?scene=` パーサ・confinement 判定（#386）
 - `docs/architecture.md`: 「状態管理: NovelGameState」セクション、「production 向けシーン直接ディープリンク `?scene=`」セクション
 - `docs/guide/debugger.md`: `debug_scene`（DEV 専用）の使い方ガイド
 - Issue #220: `playScript` / `startFrom` 実装
 - Issue #256: `startFrom` / `loadFromSaveData` の状態復元コア共通化（`restoreToScene`）
 - Issue #386: `?scene=` ディープリンク + confinement + 終劇（`storyEnded`）
+- Issue #398: 全 option 圏外の `[選択]` は描画せず `processDirective` の Choice 分岐で先回りして終劇する
+- Issue #399: 埋め込み開始（`?scene=`, `eventIndex=0`）を fresh-start 経路に乗せ、冒頭ディレクティブ実行＋立ち絵表示を通す

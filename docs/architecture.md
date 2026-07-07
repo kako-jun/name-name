@@ -142,15 +142,25 @@ resolver 経由で）事前解決・ロードしてから `NovelPlayer` に `ini
 `NovelPlayer` はマウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ
 （DEV 専用の `debug_scene` ブロックより前に評価するため、DEV で両方指定されると `debug_scene`
 側が後勝ちで優先される）。無効・未解決の sceneId は現行どおりエントリ（ハブ）から開始する。
+`?scene=` の startFrom は `eventIndex=0`（シーン先頭）固定なので、**通常入場と同じ fresh-start
+経路**（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の
+話者の立ち絵を出してから最初のテキストで止まる（#399）。従来は宣言的復元の `restoreToScene` に
+乗せていたため、冒頭ディレクティブが実行されず背景も立ち絵も出ないまま `eventIndex=0` で
+止まっていた。DEV の `debug_scene` で `eventIndex>0` を指定した途中局面起動だけ `restoreToScene`
+にフォールバックする（詳細は [ADR 0002](./adr/0002-deterministic-state-and-debuggability.md) の §3）。
 
 **confinement（在圏）+ 終劇**: 単独埋め込みは対象 script ファイルの外（hub・他ファイル）へ
 choice で漏れてはいけない（theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の
 HTML リンクで行う設計）。`PlayerScreen` の `findConfinedSceneIds(targetSceneId, docs, entryPath)`
 が対象 sceneId が属する script ファイル自身の sceneId 一覧を算出し（entry doc/hub 自身は候補から
-除外）、`NovelPlayer` → `NovelRenderer.setConfinedSceneIds` に渡す。`jumpToScene`（唯一の
-choke point）はこの集合外への遷移を検知すると通常のシーン遷移をせず `endStory()` を呼び、
-`NovelGameState.storyEnded` を true にする（背景・立ち絵はフェードアウトし、DOM 側は控えめな
-"to be continued..." を表示する）。`?scene=` が hub 自身の sceneId を指した場合は
+除外）、`NovelPlayer` → `NovelRenderer.setConfinedSceneIds` に渡す。集合外への遷移を検知すると
+通常のシーン遷移をせず `endStory()` を呼び、`NovelGameState.storyEnded` を true にする（背景・
+立ち絵はフェードアウトし、DOM 側は控えめな "to be continued..." を表示する）。判定箇所は 2 つ:
+**選んだ jump 先**が圏外なら `jumpToScene`（choice 確定後）が終劇する。さらに **全 option の
+jump 先が圏外の `[選択]` に到達した場合**は、選択肢を描画せず `processDirective` の Choice 分岐で
+先回りして終劇する（#398。全 option 圏外の choice はクリックするまで `jumpToScene` に届かず、
+`storyEnded` の postMessage が発火しないため既読化されなかった。`markCurrentSceneRead` を済ませて
+から終劇し、選択肢を出さずに完読を親へ通知する）。`?scene=` が hub 自身の sceneId を指した場合は
 `findConfinedSceneIds` が null を返し、confinement を組まず無制限フローにフォールバックする
 （hub → 各お題への通常 choice 遷移を壊さないため）。`storyEnded` の設計上の位置づけ
 （ADR 0002 の「演出の中間状態を持たない」規律との関係）は
