@@ -25,6 +25,24 @@ function dialog(character: string, ...lines: string[]): Event {
   return { Dialog: { character, expression: null, position: null, text: lines } }
 }
 
+/** 立ち絵付き Dialog（character + expression + position が全て埋まる → 立ち絵が載る）(#399)。 */
+function dialogWithPortrait(
+  character: string,
+  expression: string,
+  position: string,
+  ...lines: string[]
+): Event {
+  return { Dialog: { character, expression, position, text: lines } }
+}
+
+function background(path: string): Event {
+  return { Background: { path } }
+}
+
+function bgm(path: string): Event {
+  return { Bgm: { path, action: 'Play' } }
+}
+
 function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
@@ -93,6 +111,24 @@ const SCENES_CHOICE: EventScene[] = [
 // Wait を含むシーン（playScript で waitingForWait=true を作る用）
 const SCENES_WAIT: EventScene[] = [
   scene('start', [narration('intro'), { Wait: { ms: 100000 } } as Event, narration('after')]),
+]
+
+// #399 冒頭ディレクティブ実行用: [背景:] → [BGM:] → 最初の Dialog。
+// fresh-start 経路（eventIndex=0）は resetAndStartEvents → processUntilNextTextEvent が
+// 冒頭の Background / Bgm を最初のテキストまで実行するため、開始直後に背景/BGM が state に立つ。
+const SCENES_INTRO_DIRECTIVES: EventScene[] = [
+  scene('intro', [background('room.png'), bgm('theme.mp3'), dialog('A', 'おはよう')]),
+]
+
+// #399 立ち絵表示用: 最初の Dialog が character+expression+position を全て持つ。
+const SCENES_PORTRAIT: EventScene[] = [
+  scene('stage', [dialogWithPortrait('ヒロイン', 'smile', 'center', 'こんにちは')]),
+]
+
+// #399 DEV回帰用: 冒頭に [背景:] を持つシーン。eventIndex 指定の有無で経路が分岐する
+// （0 → fresh-start で背景を実行 / >0 → restoreToScene で宣言的復元・冒頭ディレクティブ不実行）。
+const SCENES_BG_THEN_DIALOG: EventScene[] = [
+  scene('bg', [background('sky.png'), dialog('A', 'ここ')]),
 ]
 
 describe('NovelRenderer.startFrom (#220)', () => {
@@ -355,5 +391,73 @@ describe('NovelRenderer.startFrom (#220)', () => {
 
     expect(r.getSnapshot().storyEnded).toBe(true)
     expect(cb).toHaveBeenCalledWith(true)
+  })
+})
+
+// ===================================================================================
+// #399: 埋め込み開始（`?scene=` deep-link, eventIndex=0）の fresh-start 経路
+// ===================================================================================
+//
+// 本番の `?scene=` 単独埋め込みは常に eventIndex=0 で startFrom する。この経路を通常入場
+// （jumpToScene → startScene → resetAndStartEvents）と揃え、冒頭の [背景:]/[BGM:] を実行し
+// 最初の話者の立ち絵を載せる（従来の restoreToScene 宣言的復元は冒頭ディレクティブを実行せず、
+// 背景も立ち絵も出ず eventIndex=0 で止まっていた ＝ #399 の症状）。
+//
+// index 指定あり（DEV の debug_scene）は従来どおり restoreToScene にフォールバックする。
+// 背景アセットの実ロード（WebGL）は jsdom 対象外だが、backgroundPath / currentBgmPath /
+// characters は Assets.load を待たず同期で確定するフィールドなので、これらの state が
+// 「開始直後に立つ」ことだけを検証する（実描画は CLAUDE.md ルール7 の実機 golden path に委ねる）。
+
+describe('NovelRenderer.startFrom fresh-start 経路 (#399)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  // ===== 1. 冒頭ディレクティブ（背景 / BGM）が開始直後に実行される =====
+
+  it('399-1: 先頭が [背景:]→[BGM:]→Dialog のシーンを startFrom すると、backgroundPath / currentBgmPath が開始直後に立ち、eventIndex が最初のテキスト（Dialog）まで進む', () => {
+    const r = makeRenderer(SCENES_INTRO_DIRECTIVES)
+    r.startFrom({ sceneId: 'intro' })
+
+    const s = r.getSnapshot()
+    // 冒頭の Background / Bgm ディレクティブが fresh-start で実行され、state に立っている。
+    expect(s.backgroundPath).toBe('room.png')
+    expect(s.currentBgmPath).toBe('theme.mp3')
+    // eventIndex は 2 つの冒頭ディレクティブを越え、最初のテキストイベント（Dialog, index 2）に到達。
+    expect(s.eventIndex).toBe(2)
+    expect(s.storyEnded).toBe(false)
+  })
+
+  // ===== 2. 最初の話者の立ち絵が開始直後に characters に載る =====
+
+  it('399-2: 最初の Dialog が character+expression+position を持つシーンを startFrom すると、その 1 体が characters に載る', () => {
+    const r = makeRenderer(SCENES_PORTRAIT)
+    r.startFrom({ sceneId: 'stage' })
+
+    // CharacterLayer.show は sprite を同期生成して Map に登録する（テクスチャ実ロードは待たない）。
+    // getSnapshot().characters は Map から renderOnly/退場中を除いて返すので、開始直後に 1 体入る。
+    const chars = r.getSnapshot().characters
+    expect(chars).toHaveLength(1)
+    expect(chars[0]).toMatchObject({ name: 'ヒロイン', expression: 'smile', position: 'center' })
+  })
+
+  // ===== 3. fresh-start（index=0）は冒頭ディレクティブを実行、DEV（index>0）は restoreToScene で不実行 =====
+
+  it('399-3: 同じシーンでも eventIndex=0 は冒頭 [背景:] を実行し、eventIndex 指定ありは restoreToScene 経路（冒頭ディレクティブ不実行）に分岐する', () => {
+    // fresh-start（index 省略 = 0）: 冒頭 Background を実行 → backgroundPath が立ち、Dialog(index 1) まで進む。
+    const rFresh = makeRenderer(SCENES_BG_THEN_DIALOG)
+    rFresh.startFrom({ sceneId: 'bg' })
+    const fresh = rFresh.getSnapshot()
+    expect(fresh.backgroundPath).toBe('sky.png')
+    expect(fresh.eventIndex).toBe(1)
+
+    // DEV（eventIndex=1 指定）: restoreToScene の宣言的復元。冒頭 Background は実行されないため
+    // backgroundPath は null のまま、eventIndex は指定値 1 が保たれる（fresh reset されない）。
+    const rDev = makeRenderer(SCENES_BG_THEN_DIALOG)
+    rDev.startFrom({ sceneId: 'bg', eventIndex: 1 })
+    const dev = rDev.getSnapshot()
+    expect(dev.backgroundPath).toBeNull()
+    expect(dev.eventIndex).toBe(1)
   })
 })
