@@ -2468,6 +2468,18 @@ export class NovelRenderer {
             urls.push(u)
           }
         }
+      } else if ('Enter' in event) {
+        // 無言登場 (#401) の立ち絵も先読みする。Dialog の立ち絵と同じ実表示ガード
+        // （expression / position / character が全て truthy）に揃える。
+        const { character, expression, position } = event.Enter
+        if (expression && character && position) {
+          for (const u of resolveCharacterImageUrls(
+            this.assetBaseUrl,
+            expression.replace(/^\//, '')
+          )) {
+            urls.push(u)
+          }
+        }
       } else if ('Background' in event) {
         urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Background.path))
       }
@@ -2628,6 +2640,25 @@ export class NovelRenderer {
     if ('Exit' in event) {
       // スキップモード中はフェードを抑制して即時退場（既読を素早く流す UX に揃える）#177
       this.characterLayer.remove(event.Exit.character, { instant: this.skipMode })
+      return
+    }
+    if ('Enter' in event) {
+      // 無言の立ち絵登場 (#401)。`[登場: 名前 (sprite/表情, 位置)]`。
+      // Dialog 経由の showCharacterFromDialog と同じ show ロジック（役割配置の xRatio / fit /
+      // skip 中の即時表示）で立ち絵を出すが、本文を持たないため lastSpeaker 追跡・nudge・
+      // scrim 退避は行わない（無言のまま立たせるだけ・話者交代の合図ではない）。
+      // expression / position / character が揃っていない不完全な指定は showCharacterFromDialog の
+      // 実表示ガードに揃えて silent skip（立ち絵を出さない）。
+      // 冪等: 同一 name/expression/position/fit の再宣言は CharacterLayer.show 側の no-op ガードで無効。
+      const { character, expression, position, fit } = event.Enter
+      if (character && expression && position) {
+        const xRatio = this.resolveNovelRoleXRatio(character)
+        this.characterLayer.show(character, expression, position, this.assetBaseUrl, {
+          instant: this.skipMode,
+          xRatio,
+          fit: fit === true,
+        })
+      }
       return
     }
     if ('Animate' in event) {

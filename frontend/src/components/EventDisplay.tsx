@@ -94,6 +94,18 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     return <div className={`text-xs italic ml-2 ${meta}`}>退場: {event.Exit.character}</div>
   }
 
+  if ('Enter' in event) {
+    const e = event.Enter
+    const attrs = [e.expression, e.position].filter(Boolean).join(', ')
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        登場: {e.character}
+        {attrs && ` (${attrs})`}
+        {e.fit && ' [フィット]'}
+      </div>
+    )
+  }
+
   if ('Wait' in event) {
     return <div className={`text-xs italic ml-2 ${meta}`}>待機: {event.Wait.ms}ms</div>
   }

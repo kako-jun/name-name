@@ -236,6 +236,21 @@ export type Event =
    * そのまま強制ページ境界になる。`---` を含まない脚本は従来挙動と完全に同じ（非回帰）。 */
   | 'PageBreak'
   | { Exit: { character: string } }
+  /**
+   * 無言の立ち絵登場 (#401)。`[登場: 名前 (sprite/表情, 位置)]` で本文を伴わず立ち絵を出す。
+   * 話者タグ（Dialog の立ち絵指定）と同じ属性書式・意味論だが text を持たない非テキストイベント。
+   * runtime は CharacterLayer.show を本文なしで呼ぶ（processDirective / processUntilNextTextEvent
+   * で冒頭実行される）。冪等（同一 name/expression/position/fit の再宣言は show 側の no-op ガードで無効）。
+   * fit は Dialog.fit と同義（#294）。
+   */
+  | {
+      Enter: {
+        character: string
+        expression?: string | null
+        position?: string | null
+        fit?: boolean
+      }
+    }
   | { Wait: { ms: number } }
   | { Choice: { options: ChoiceOption[] } }
   | { Flag: { name: string; value: FlagValue } }
