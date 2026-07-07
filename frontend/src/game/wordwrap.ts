@@ -2,7 +2,7 @@
  * 日本語ワードラップ（禁則処理付き）
  *
  * PixiJS にはPhaserの useAdvancedWrap 相当がないため自前実装。
- * Canvas の measureText でピクセル幅を計算して折り返し位置を決定する。
+ * 中核ロジックは幅計測関数を注入し、wordwrap() だけが Canvas に依存する。
  */
 
 /** 行頭禁止文字（句読点、閉じ括弧など） */
@@ -32,23 +32,28 @@ function getContext(): CanvasRenderingContext2D | null {
   return cachedCtx
 }
 
+type MeasureTextWidth = (text: string) => number
+
+function pushLine(lines: string[], line: string): void {
+  if (line.length > 0) {
+    lines.push(line)
+  }
+}
+
 /**
  * テキストを指定幅で折り返す
  * @param text 折り返し対象テキスト（改行なしの1段落）
  * @param maxWidth 折り返し幅（ピクセル）
- * @param font CSS font 文字列（例: "22px 'Noto Sans JP', sans-serif"）
+ * @param measure 文字列の幅を返す関数
  * @returns 折り返し済み行の配列
  */
-export function wordwrap(text: string, maxWidth: number, font: string): string[] {
+export function wrapTextWithMeasure(
+  text: string,
+  maxWidth: number,
+  measure: MeasureTextWidth
+): string[] {
   if (text.length === 0) return ['']
   if (maxWidth <= 0) return [text]
-
-  const ctx = getContext()
-  if (!ctx) return [text]
-
-  ctx.font = font
-
-  const measure = (s: string): number => ctx.measureText(s).width
 
   const lines: string[] = []
   let currentLine = ''
@@ -64,9 +69,11 @@ export function wordwrap(text: string, maxWidth: number, font: string): string[]
 
     // candidate が maxWidth を超えた — ここで折り返す
 
-    // 禁則処理: 次の文字が行頭禁止文字なら、その文字を現在行に含める
+    // 禁則処理: 次の文字が行頭禁止文字なら、その文字を現在行に含める。
+    // この1文字ぶんの超過は許すが、後続文字を同じ超過行へ連鎖させない。
     if (isLineStartProhibited(ch)) {
-      currentLine += ch
+      pushLine(lines, currentLine + ch)
+      currentLine = ''
       continue
     }
 
@@ -74,23 +81,33 @@ export function wordwrap(text: string, maxWidth: number, font: string): string[]
     if (currentLine.length > 0 && isLineEndProhibited(currentLine[currentLine.length - 1])) {
       const lastChar = currentLine[currentLine.length - 1]
       currentLine = currentLine.slice(0, -1)
-      if (currentLine.length > 0) {
-        lines.push(currentLine)
-      }
+      pushLine(lines, currentLine)
       currentLine = lastChar + ch
       continue
     }
 
     // 通常の折り返し
-    if (currentLine.length > 0) {
-      lines.push(currentLine)
-    }
+    pushLine(lines, currentLine)
     currentLine = ch
   }
 
-  if (currentLine.length > 0) {
-    lines.push(currentLine)
-  }
+  pushLine(lines, currentLine)
 
   return lines.length > 0 ? lines : ['']
+}
+
+/**
+ * テキストを指定幅で折り返す
+ * @param text 折り返し対象テキスト（改行なしの1段落）
+ * @param maxWidth 折り返し幅（ピクセル）
+ * @param font CSS font 文字列（例: "22px 'Noto Sans JP', sans-serif"）
+ * @returns 折り返し済み行の配列
+ */
+export function wordwrap(text: string, maxWidth: number, font: string): string[] {
+  const ctx = getContext()
+  if (!ctx) return text.length === 0 ? [''] : [text]
+
+  ctx.font = font
+
+  return wrapTextWithMeasure(text, maxWidth, (s) => ctx.measureText(s).width)
 }
