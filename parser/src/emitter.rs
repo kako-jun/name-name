@@ -357,6 +357,37 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[退場: {character}]\n"));
                 prev_was_dialog_or_text = false;
             }
+            Event::Enter {
+                character,
+                expression,
+                position,
+                fit,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // 話者タグの `(表情, 位置, フィット)` と同じ位置取りで属性を組み立てる (#401)。
+                // 話者行 (`emit_events` の Dialog 分岐) と同じく: position があれば expression が
+                // 空でも位置取りを保つため両方積む。フィット (#294) は末尾に `フィット` トークン。
+                let expr = expression.as_deref().unwrap_or("");
+                let pos = position.as_deref().unwrap_or("");
+                let mut attrs: Vec<&str> = Vec::new();
+                if !pos.is_empty() {
+                    attrs.push(expr);
+                    attrs.push(pos);
+                } else if !expr.is_empty() {
+                    attrs.push(expr);
+                }
+                if *fit {
+                    attrs.push("フィット");
+                }
+                if attrs.is_empty() {
+                    out.push_str(&format!("[登場: {character}]\n"));
+                } else {
+                    out.push_str(&format!("[登場: {character} ({})]\n", attrs.join(", ")));
+                }
+                prev_was_dialog_or_text = false;
+            }
             Event::Wait { ms } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');

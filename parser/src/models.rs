@@ -414,6 +414,23 @@ pub enum Event {
     Exit {
         character: String,
     },
+    /// 無言の立ち絵登場 (#401)。`[登場: 名前 (sprite/表情, 位置)]` で本文を伴わず立ち絵を表示する。
+    /// 話者タグ（`Dialog` の立ち絵指定 `名前 (sprite/表情, 位置)`）と同じ属性書式・意味論だが、
+    /// テキストを持たない（誰も喋る前に舞台へキャストを立てる冒頭用途 #399 と組む）。
+    /// runtime は `CharacterLayer.show` を本文なしで呼ぶ。冪等（同一 name/expression/position/fit の
+    /// 再宣言は show 側の no-op ガードで何もしない）。話者継続状態（`last_*`）は更新しない
+    /// ＝直後の素テキストをこのキャラのセリフに紐付けない（無言のまま立たせるだけ）。
+    Enter {
+        character: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expression: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        position: Option<String>,
+        /// 立ち絵の明示フィット指定 (#294)。`Dialog::fit` と同じ意味論
+        /// （true のときだけ論理画面より大きい立ち絵を画面内に収める旧 fit-down を適用）。
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        fit: bool,
+    },
     Wait {
         ms: u32,
     },

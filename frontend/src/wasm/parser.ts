@@ -84,6 +84,19 @@ function normalizeEvents(events: Event[]): Event[] {
         },
       }
     }
+    if ('Enter' in event) {
+      // 無言の立ち絵登場 (#401)。Dialog と同じ立ち絵属性なので同じ規約で正規化する。
+      // WASM 経由で undefined になる expression/position は null に、fit は false のとき
+      // undefined を返すため明示 boolean に倒す（新フィールド欠落の罠回避・Dialog #294 と同じ）。
+      return {
+        Enter: {
+          character: event.Enter.character,
+          expression: event.Enter.expression ?? null,
+          position: event.Enter.position ?? null,
+          fit: event.Enter.fit === true,
+        },
+      }
+    }
     if ('Choice' in event) {
       // 選択肢ボタン本文も表示テキストなので正準化する (#340)。
       // text 以外（jump 等）は保持する（スプレッド）。
