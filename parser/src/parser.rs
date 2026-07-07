@@ -1928,18 +1928,24 @@ fn parse_character_attrs(attrs: &str) -> (Option<String>, Option<String>, bool) 
 /// `[登場: 名前 (sprite/表情, 位置)]` の本体（`登場:` 以降）をパースして `Enter` Event を作る (#401)。
 /// 話者タグ `名前 (expression, position, フィット?)` と同じ属性書式を `parse_character_attrs` で共有する。
 /// 本文は持たない（無言で立ち絵を出す）。名前が空なら None（無効 = 何も emit しない）。
-/// 括弧が無ければ属性なし（expression/position は None）で名前だけの Enter を返す。
+///
+/// 括弧の扱いは話者タグ (`parse_speaker_line`) に揃える: **両括弧が揃う時だけ属性を読む**。
+/// `(` があっても対応する（`(` より後ろの）`)` が無ければ属性を読まず、名前のみ
+/// （expression/position=None）として扱う。こうすると閉じ括弧の欠けた malformed 入力は
+/// engine の実表示ガード（character && expression && position）で立ち絵を出さない silent skip に落ちる。
+/// 括弧が無ければ元々属性なし（名前だけの Enter）で、正常系（両括弧が揃う）は現状維持。
 fn parse_enter_directive(content: &str) -> Option<Event> {
     let content = content.trim();
     let (character, expression, position, fit) = if let Some(paren_start) = content.find('(') {
         let name = content[..paren_start].trim().to_string();
-        let attrs = if let Some(paren_end) = content.find(')') {
-            &content[paren_start + 1..paren_end]
+        // 対応する閉じ括弧は開き括弧より後ろを探す。無ければ属性を無視して名前のみ。
+        if let Some(rel_end) = content[paren_start + 1..].find(')') {
+            let attrs = &content[paren_start + 1..paren_start + 1 + rel_end];
+            let (expression, position, fit) = parse_character_attrs(attrs);
+            (name, expression, position, fit)
         } else {
-            &content[paren_start + 1..]
-        };
-        let (expression, position, fit) = parse_character_attrs(attrs);
-        (name, expression, position, fit)
+            (name, None, None, false)
+        }
     } else {
         (content.to_string(), None, None, false)
     };
@@ -2733,6 +2739,62 @@ title: "テスト"
         assert!(
             emitted.contains("[登場: せお (theo/akarame, 左, フィット)]"),
             "emitted should contain the 登場 directive, got:\n{emitted}"
+        );
+    }
+
+    #[test]
+    fn test_parse_enter_directive_edge_cases() {
+        // 登場ディレクティブのエッジケース (#401)。
+        // 期待挙動は engine の実表示ガード（character && expression && position）と整合させる:
+        // expression/position が揃わない指定は Enter を emit しても立ち絵は silent skip される。
+
+        // 名前のみ（括弧なし）→ 名前だけの Enter（expression/position=None）。
+        // engine 側で expression/position が無いため立ち絵は出ない（silent skip）。
+        assert_eq!(
+            parse_directive("[登場: せお]"),
+            Some(Event::Enter {
+                character: "せお".to_string(),
+                expression: None,
+                position: None,
+                fit: false,
+            })
+        );
+
+        // 空（名前なし）→ None（Event を emit しない）。
+        assert_eq!(parse_directive("[登場:]"), None);
+
+        // 位置省略（expression のみ）→ expression=Some, position=None。
+        assert_eq!(
+            parse_directive("[登場: せお (theo/normal)]"),
+            Some(Event::Enter {
+                character: "せお".to_string(),
+                expression: Some("theo/normal".to_string()),
+                position: None,
+                fit: false,
+            })
+        );
+
+        // 閉じ括弧なし（修正1）→ 属性を無視して名前のみ（expression/position=None）。
+        // 話者タグと同じく「両括弧が揃う時だけ属性を読む」に揃えた結果。
+        assert_eq!(
+            parse_directive("[登場: せお (theo]"),
+            Some(Event::Enter {
+                character: "せお".to_string(),
+                expression: None,
+                position: None,
+                fit: false,
+            })
+        );
+
+        // 開き括弧の直後が空・閉じ括弧なし → 同上（旧実装は expression=Some("") にしていた）。
+        assert_eq!(
+            parse_directive("[登場: せお (]"),
+            Some(Event::Enter {
+                character: "せお".to_string(),
+                expression: None,
+                position: None,
+                fit: false,
+            })
         );
     }
 
