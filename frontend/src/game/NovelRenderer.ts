@@ -2579,6 +2579,19 @@ export class NovelRenderer {
     if ('Choice' in event) {
       // Choice に到達した時点で、そこまでの本文を読み終えた scene とみなす (#366)。
       this.markCurrentSceneRead()
+      // #398: `?scene=` 単独埋め込み（confinement 設定時）で、全 option が圏外を指す choice は
+      // 描画せずに終劇へ倒す。jumpToScene は「選んだ jump 先」でしか圏外判定できないため、
+      // クリックするまで endStory に到達せず、その結果 #395/#397 の story-ended postMessage が
+      // 発火せず theo 側で既読化されなかった。既読化（上の markCurrentSceneRead）を済ませてから
+      // ここで先回りして終劇する＝選択肢を出さずに完読を通知できる。通常のハブ経由フロー
+      // （confinedSceneIds === null）では isSceneIdConfined が常に true を返すため短絡しない。
+      if (
+        this.confinedSceneIds !== null &&
+        event.Choice.options.every((o) => !isSceneIdConfined(o.jump, this.confinedSceneIds))
+      ) {
+        this.endStory()
+        return
+      }
       // 選択肢に到達したらスキップモードを解除（手動選択が必要） (#140)
       this.setSkipMode(false)
       // 複数埋め込みで他インスタンスが読んだ scene を、選択肢表示直前に反映する (#366)。
