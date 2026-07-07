@@ -17,7 +17,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
-import type { Event, EventScene } from '../types'
+import type { Event, EventScene, ChoiceOption } from '../types'
 
 // --- fixture helpers（startFrom.test.ts と同じスタイル） ---
 
@@ -27,6 +27,11 @@ function narration(...lines: string[]): Event {
 
 function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
+}
+
+/** narration → Choice の 2 イベントシーン。advance 1 回で Choice に到達する（#398）。 */
+function choiceScene(id: string, options: ChoiceOption[]): EventScene {
+  return scene(id, [narration('本文'), { Choice: { options } } as Event])
 }
 
 /** confinement 検証用の内部アクセサ */
@@ -44,6 +49,9 @@ interface RendererInternals {
   shakeTimer: number | null
   effectTimer: number | null
   effectOverlay: { alpha: number; visible: boolean } | null
+  waitingForChoice: boolean
+  readSceneProgress: Set<string>
+  choiceOverlay: { show: (...args: unknown[]) => void; hide: () => void }
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -334,4 +342,99 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
   })
   // 「圏外だが allScenes に実在する sceneId は console.warn されない」は既存テスト20が担保する
   // （out-scene は allScenes に実在するため、本テストの 'typo-scene-id' と対照的な既存カバレッジ）。
+})
+
+// ===================================================================================
+// #398: Choice ディレクティブ経由の短絡（全 option 圏外なら選択肢を出さず終劇へ倒す）
+// ===================================================================================
+//
+// 既存テスト（17〜32）は jumpToScene 起点の endStory（選んだ jump 先が圏外）だけをカバーする。
+// #398 は「そもそも全 option が圏外なら、クリックを待たず choice 描画前に短絡して終劇する」経路。
+// setter 直呼びでなく、narration → Choice を advance で再生して processDirective の Choice 分岐を
+// 実際に踏む。choiceOverlay.show() は AudioManager.ensureContext()（jsdom に AudioContext なし）と
+// PixiJS 実描画を伴うため、短絡しない（choice 表示に進む）ケースだけ show を no-op spy に差し替える
+// （短絡ケースは show に到達しないので差し替え不要）。
+
+describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    defaultTimeController.setMode('live')
+    // markCurrentSceneRead は docKey ごとに localStorage へ書くため、テスト間で持ち越さない。
+    localStorage.clear()
+  })
+
+  // ===== 1. 全 option 圏外 → 短絡して終劇 =====
+
+  it('398-1: 全 option の jump が圏外を指す Choice に到達すると、choice を出さず storyEnded=true にする', async () => {
+    const cb = vi.fn()
+    const r = makeRenderer([
+      choiceScene('entry', [
+        { text: 'ハブへ', jump: 'hub' },
+        { text: '他業へ', jump: 'other' },
+      ]),
+      scene('hub', [narration('hub')]),
+      scene('other', [narration('other')]),
+    ])
+    r.setDocKey('doc-398-all-out') // markCurrentSceneRead を実際に効かせる（既読集合を観測するため）
+    r.setOnStoryEndedChange(cb)
+    r.setConfinedSceneIds(['entry']) // 圏内は entry のみ。hub / other は圏外
+    // choiceOverlay.show に到達しないことを spy で担保する（短絡なら呼ばれない）。
+    const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show')
+
+    // narration('本文') → advance 1 回で Choice に到達（processDirective の Choice 分岐を再生経路で踏む）。
+    await r.playScript([{ type: 'advance' }])
+
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    // waitingForChoice は立たず、choiceOverlay も表示されない（短絡で choice UI に進まない）。
+    expect(internals(r).waitingForChoice).toBe(false)
+    expect(showSpy).not.toHaveBeenCalled()
+    // onStoryEndedChange は true で 1 回だけ発火する。
+    expect(cb).toHaveBeenCalledTimes(1)
+    expect(cb).toHaveBeenCalledWith(true)
+    // Choice 到達時の markCurrentSceneRead が短絡より前に走り、シーンが既読になっている。
+    expect(internals(r).readSceneProgress.has('entry')).toBe(true)
+  })
+
+  // ===== 2. 一部 option が圏内 → 短絡せず choice 表示 =====
+
+  it('398-2: 一部 option が圏内なら短絡せず choice を表示する（waitingForChoice=true / storyEnded=false）', async () => {
+    const r = makeRenderer([
+      choiceScene('entry', [
+        { text: '中へ', jump: 'inside' }, // 圏内
+        { text: 'ハブへ', jump: 'hub' }, // 圏外
+      ]),
+      scene('inside', [narration('inside')]),
+      scene('hub', [narration('hub')]),
+    ])
+    r.setConfinedSceneIds(['entry', 'inside'])
+    // 圏内 option があるので choice 表示に進む。show は AudioContext/PixiJS を触るので no-op に差し替える。
+    const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation(() => {})
+
+    await r.playScript([{ type: 'advance' }])
+
+    expect(r.getSnapshot().storyEnded).toBe(false)
+    expect(internals(r).waitingForChoice).toBe(true)
+    expect(showSpy).toHaveBeenCalledTimes(1)
+  })
+
+  // ===== 3. confinedSceneIds === null（通常フロー） → 常に短絡しない（後方互換） =====
+
+  it('398-3: confinedSceneIds が null（既定）なら、全 option が圏外相当でも短絡せず choice を表示する（後方互換）', async () => {
+    const r = makeRenderer([
+      choiceScene('entry', [
+        { text: 'ハブへ', jump: 'hub' },
+        { text: '他業へ', jump: 'other' },
+      ]),
+      scene('hub', [narration('hub')]),
+      scene('other', [narration('other')]),
+    ])
+    // setConfinedSceneIds を呼ばない（confinedSceneIds は既定 null）。
+    const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation(() => {})
+
+    await r.playScript([{ type: 'advance' }])
+
+    expect(r.getSnapshot().storyEnded).toBe(false)
+    expect(internals(r).waitingForChoice).toBe(true)
+    expect(showSpy).toHaveBeenCalledTimes(1)
+  })
 })
