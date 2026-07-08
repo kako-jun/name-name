@@ -1,10 +1,8 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { wordwrap, wrapTextWithMeasure } from './wordwrap'
 
-// jsdom 環境では canvas.getContext('2d') が null を返すため、
-// measureText に依存するテストは制約がある。
-// ここでは getContext が null の場合のフォールバック（テキストそのまま返却）と、
-// 空文字列・基本的な境界値をテストする。
+// Canvas measureText に依存する公開 API は mock / fallback で接続を確認し、
+// 禁則ロジック本体は wrapTextWithMeasure に幅計測関数を注入して境界値を固定する。
 
 const FONT = '22px sans-serif'
 const len = (s: string) => s.length

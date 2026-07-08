@@ -104,8 +104,11 @@ export function wrapTextWithMeasure(
  * @returns 折り返し済み行の配列
  */
 export function wordwrap(text: string, maxWidth: number, font: string): string[] {
+  if (text.length === 0) return ['']
+  if (maxWidth <= 0) return [text]
+
   const ctx = getContext()
-  if (!ctx) return text.length === 0 ? [''] : [text]
+  if (!ctx) return [text]
 
   ctx.font = font
 
