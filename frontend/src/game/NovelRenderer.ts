@@ -203,6 +203,11 @@ export const NOVEL_SCRIM_HOLD_MS = 500
 
 export const BACKGROUND_CROSSFADE_MS = 700
 
+/** 背景フェード時間の下限（ms）。character_fade_ms（CharacterLayer）と対称の [0, 5000] レンジ (#407)。 */
+const BACKGROUND_FADE_MS_MIN = 0
+/** 背景フェード時間の上限（ms）。character_fade_ms（CharacterLayer）と対称の [0, 5000] レンジ (#407)。 */
+const BACKGROUND_FADE_MS_MAX = 5_000
+
 interface BackgroundEntry {
   sprite: Sprite
   mask: Sprite | null
@@ -320,6 +325,13 @@ export class NovelRenderer {
    *  （#337 クロスフェード）が「今この人」の合図を担うため nudge は不要。nudge は開発中の稀な合図で、
    *  欲しい作品だけ opt-in する。theo-hayami は未指定のまま（＝非発火）。 */
   private speakerNudge: boolean = false
+
+  /** 背景クロスフェード・退場（終劇）フェード時間（ms）(#407)。frontmatter `background_fade_ms:` の値。
+   *  `character_fade_ms`（立ち絵）と対称の per-game 数値設定。背景の表示（イン）・切り替え
+   *  （クロスフェード）・退場（アウト）すべてこの時間で動く（余韻用途の「ものすごくゆっくり」も可）。
+   *  初期値は現行の既定 `BACKGROUND_CROSSFADE_MS`（700ms）で、未指定作品は非回帰。
+   *  `setBackgroundFadeMs` が [0, 5000] にクランプして保持し、null/非有限は既定へフォールバックする。 */
+  private backgroundFadeMs: number = BACKGROUND_CROSSFADE_MS
 
   /** 主人公セリフの本文色 (#305)。固定でやや暖かいアイボリー #FFF0D8。
    *  protagonist と一致する話者の novel 本文をこの色にし、住人は純白 (#FFFFFF) のまま。
@@ -909,8 +921,8 @@ export class NovelRenderer {
 
     // BGM を止める (#386 レビュー M2)。終劇は物語上の終端で、以後 BGM を止める Bgm イベントは
     // 二度と来ないため、ここで止めないと BGM が永久に鳴り続ける（初見訪問者はセーブが無いため
-    // 止める手段がない）。見た目のフェードと揃えて BACKGROUND_CROSSFADE_MS でフェードアウトする。
-    this.audioManager.stopBgm(BACKGROUND_CROSSFADE_MS)
+    // 止める手段がない）。見た目のフェードと揃えて背景フェード時間（#407）でフェードアウトする。
+    this.audioManager.stopBgm(this.backgroundFadeMs)
     this.currentBgmPath = null
 
     // 宣言的な終端状態を即座に確定する（背景/色地/動画/立ち絵はすべて「なし」）。
@@ -924,7 +936,7 @@ export class NovelRenderer {
     this.videoLayer.remove()
 
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
-    this.fadeOutBackgroundEntries(BACKGROUND_CROSSFADE_MS)
+    this.fadeOutBackgroundEntries(this.backgroundFadeMs)
     this.characterLayer.clearForSceneTransition()
 
     this.onStoryEndedChangeCallback?.(true)
@@ -1280,10 +1292,23 @@ export class NovelRenderer {
 
   /**
    * 立ち絵の新規表示・退場フェード時間を設定する。
-   * frontmatter `character_fade_ms:` の値（ms）を渡す。null/undefined のときは既定 300ms。
+   * frontmatter `character_fade_ms:` の値（ms）を渡す。null/undefined のときは既定 700ms (#407)。
    */
   setCharacterFadeMs(ms: number | null | undefined): void {
     this.characterLayer.setCharacterFadeMs(ms ?? null)
+  }
+
+  /**
+   * 背景クロスフェード・退場（終劇）フェード時間を設定する (#407)。
+   * frontmatter `background_fade_ms:` の値（ms）を渡す。null/undefined/非有限のときは既定
+   * `BACKGROUND_CROSSFADE_MS`（700ms）にフォールバックし、範囲外は [0, 5000] にクランプする
+   * （setCharacterFadeMs と対称）。背景の表示（イン）・切り替え・退場（アウト）すべてに効く。
+   */
+  setBackgroundFadeMs(ms: number | null | undefined): void {
+    this.backgroundFadeMs =
+      ms == null || !Number.isFinite(ms)
+        ? BACKGROUND_CROSSFADE_MS
+        : Math.min(BACKGROUND_FADE_MS_MAX, Math.max(BACKGROUND_FADE_MS_MIN, Math.floor(ms)))
   }
 
   /**
@@ -3112,7 +3137,7 @@ export class NovelRenderer {
   private crossfadeToBackgroundEntry(next: BackgroundEntry): void {
     this.stopBackgroundCrossfade()
     const startMs = this.time.now()
-    const durationMs = BACKGROUND_CROSSFADE_MS
+    const durationMs = this.backgroundFadeMs
     const previous = [...this.bgEntries]
     this.beginFadeOutEntries(previous, startMs, durationMs)
     next.sprite.alpha = 0

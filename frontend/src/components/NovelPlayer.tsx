@@ -101,6 +101,9 @@ interface NovelPlayerProps {
   characterScale?: number | null
   /** 立ち絵の新規表示・退場フェード時間 (ms)。frontmatter `character_fade_ms:` から流す。 */
   characterFadeMs?: number | null
+  /** 背景クロスフェード・退場（終劇）フェード時間 (ms) (#407)。frontmatter `background_fade_ms:` から流す。
+   *  null/undefined で runtime 既定 700ms（BACKGROUND_CROSSFADE_MS）＝後方互換。 */
+  backgroundFadeMs?: number | null
   /** Skip(S) ボタンを出すか (#310)。frontmatter `skip_enabled:` から流す。
    *  null/undefined/true で Skip(S) ボタンを描画する（既定・後方互換）。false で描画しない。
    *  skip-read-only ロジック（未読は解除）自体は不変。ボタンの有無だけを制御する。 */
@@ -147,6 +150,7 @@ function NovelPlayer({
   characterHeightRatios,
   characterScale,
   characterFadeMs,
+  backgroundFadeMs,
   skipEnabled,
   debugEnabled,
   speakerNudge,
@@ -278,6 +282,9 @@ function NovelPlayer({
       renderer.setCharacterScale(characterScale ?? null)
       // 立ち絵フェード時間。初回 show より前に設定し、ToHeart 式のじわっとした登場を作品単位で調整する。
       renderer.setCharacterFadeMs(characterFadeMs ?? null)
+      // 背景フェード時間 (#407)。初回背景表示より前に設定し、背景の表示（イン）・切り替え・退場（アウト）を
+      // 作品単位で調整する（未指定なら既定 700ms＝BACKGROUND_CROSSFADE_MS で非回帰）。
+      renderer.setBackgroundFadeMs(backgroundFadeMs ?? null)
       // 主人公セリフの本文色 (#305) は renderer 既定 #FFF0D8 のまま使う。frontmatter での
       // 色上書きは未実装のため、ここでは設定しない（renderer フィールド初期値が効く）。
       // init 完了直後に現在の settings を反映 (#138)
@@ -402,6 +409,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setCharacterFadeMs(characterFadeMs ?? null)
   }, [characterFadeMs])
+
+  // backgroundFadeMs が変化したときに renderer に反映 (#407)
+  useEffect(() => {
+    rendererRef.current?.setBackgroundFadeMs(backgroundFadeMs ?? null)
+  }, [backgroundFadeMs])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {
