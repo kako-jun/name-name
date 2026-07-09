@@ -234,6 +234,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     character_fade_ms: doc.character_fade_ms ?? null,
     // 背景クロスフェード・退場（終劇）フェード時間 (#407)。数値なので ?? null（未指定は runtime 既定 700＝BACKGROUND_CROSSFADE_MS）。
     background_fade_ms: doc.background_fade_ms ?? null,
+    // 下地ベタ（bgGraphics）の既定色 (#409)。文字列なので ?? null（未指定は runtime 既定の黒）。
+    background_color: doc.background_color ?? null,
     // スキップ/デバッグの per-game 出し分け (#310)。boolean なので ?? null（未指定は下流で既定: skip=true / debug=false）。
     skip_enabled: doc.skip_enabled ?? null,
     debug_enabled: doc.debug_enabled ?? null,

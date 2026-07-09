@@ -104,6 +104,9 @@ interface NovelPlayerProps {
   /** 背景クロスフェード・退場（終劇）フェード時間 (ms) (#407)。frontmatter `background_fade_ms:` から流す。
    *  null/undefined で runtime 既定 700ms（BACKGROUND_CROSSFADE_MS）＝後方互換。 */
   backgroundFadeMs?: number | null
+  /** 下地ベタ（ステージ最背面 bgGraphics）の既定色 (#409)。frontmatter `background_color:` から流す。
+   *  最初の背景絵がこの色から `background_fade_ms` でフェードインする。null/undefined で黒（後方互換）。 */
+  backgroundColor?: string | null
   /** Skip(S) ボタンを出すか (#310)。frontmatter `skip_enabled:` から流す。
    *  null/undefined/true で Skip(S) ボタンを描画する（既定・後方互換）。false で描画しない。
    *  skip-read-only ロジック（未読は解除）自体は不変。ボタンの有無だけを制御する。 */
@@ -151,6 +154,7 @@ function NovelPlayer({
   characterScale,
   characterFadeMs,
   backgroundFadeMs,
+  backgroundColor,
   skipEnabled,
   debugEnabled,
   speakerNudge,
@@ -285,6 +289,9 @@ function NovelPlayer({
       // 背景フェード時間 (#407)。初回背景表示より前に設定し、背景の表示（イン）・切り替え・退場（アウト）を
       // 作品単位で調整する（未指定なら既定 700ms＝BACKGROUND_CROSSFADE_MS で非回帰）。
       renderer.setBackgroundFadeMs(backgroundFadeMs ?? null)
+      // 下地ベタの既定色 (#409)。初回背景表示より前に設定し、最初の背景絵がこの地色から
+      // フェードインするようにする（未指定なら黒で非回帰）。setBackgroundFadeMs と対称の per-game 設定。
+      renderer.setDefaultBackgroundColor(backgroundColor ?? null)
       // 主人公セリフの本文色 (#305) は renderer 既定 #FFF0D8 のまま使う。frontmatter での
       // 色上書きは未実装のため、ここでは設定しない（renderer フィールド初期値が効く）。
       // init 完了直後に現在の settings を反映 (#138)
@@ -414,6 +421,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setBackgroundFadeMs(backgroundFadeMs ?? null)
   }, [backgroundFadeMs])
+
+  // backgroundColor（下地ベタの既定色）が変化したときに renderer に反映 (#409)
+  useEffect(() => {
+    rendererRef.current?.setDefaultBackgroundColor(backgroundColor ?? null)
+  }, [backgroundColor])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {

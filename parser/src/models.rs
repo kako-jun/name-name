@@ -917,6 +917,13 @@ pub struct Document {
     /// 作品ごとにゆっくり／速くして余韻を調整する。空・非数値は None 扱い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_fade_ms: Option<u32>,
+    /// 下地ベタ（ステージ最背面の全面塗り＝`bgGraphics`）の既定色（`#rrggbb`）(#409)。
+    /// frontmatter `background_color:` から流す per-game 設定で、最初の背景絵がこの色から
+    /// `background_fade_ms` でフェードインする（未指定なら黒 `#000000`）。シーン単位の
+    /// `[背景色:]`（#273）の上書きとは別スロットで、上書きが無いときの戻り先＝地色になる。
+    /// 空文字は None 扱い（＝既定の黒）。文字列としてそのまま透過させる（色解決は runtime）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
     /// Skip(S) ボタンを再生 UI に出すか (#310)。`true` = 出す（既定・後方互換）。
     /// `false` で Skip(S) ボタンを描画しない（読み物として既読スキップを使わせたくない作品向け）。
     /// skip-read-only ロジック（未読は解除）自体は変えない。ボタンの有無だけを制御する。

@@ -423,9 +423,15 @@ export class NovelRenderer {
   /** 現在の背景パス */
   private currentBackgroundPath: string | null = null
 
-  /** 現在の単色地色 (#273)。背景パスと同じ永続状態。なしなら null（既定の黒）。
+  /** 現在の単色地色 (#273)。背景パスと同じ永続状態。なしなら null（既定色＝下地ベタ）。
    *  背景画像とは独立スロット: bgGraphics を塗り直すだけで bgContainer の画像には触れない。 */
   private currentBackgroundColor: string | null = null
+
+  /** 下地ベタ（bgGraphics）の既定色 (#409)。frontmatter `background_color:` の値。
+   *  `[背景色:]`（#273）のシーン上書きが無いとき（`currentBackgroundColor === null`）の実塗り色になり、
+   *  最初の背景絵がこの色から `background_fade_ms` でフェードインする。null なら黒 0x000000（後方互換）。
+   *  `setDefaultBackgroundColor` が init 前後に受けて保持し、上書きが無ければ bgGraphics を塗り直す。 */
+  private defaultBackgroundColor: string | null = null
 
   /** 現在の背景端フェードマスク (#250)。なしなら null */
   private currentBackgroundFade: BackgroundFade | null = null
@@ -557,9 +563,10 @@ export class NovelRenderer {
 
     container.appendChild(this.app.canvas as HTMLCanvasElement)
 
-    // 黒背景
+    // 下地ベタ（既定色・#409）。frontmatter `background_color:` の既定色（未指定なら黒）で全面を塗る。
+    // 最初の背景絵はこの地色の上に alpha 0→1 で重なってフェードインする（コールドスタート）。
     this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.bgGraphics.fill(0x000000)
+    this.bgGraphics.fill(this.defaultBackgroundColorNum())
     this.app.stage.addChild(this.bgGraphics)
 
     // 背景画像コンテナ
@@ -968,8 +975,9 @@ export class NovelRenderer {
    * 現在の背景画像 entry 群をフェードアウトさせる (#386 終劇演出)。
    * `crossfadeToBackgroundEntry` の「旧背景を消す」半分だけを取り出した形（次背景を
    * 追加しない）。完了後は `updateBackgroundFadeFrame` の `destroyOnComplete` で自動的に
-   * 破棄される。ステージ最背面の `bgGraphics`（既定/設定色）は endStory 側で先に黒へ
-   * リセット済みのため、フェード完了後は自然に黒が残る。
+   * 破棄される。ステージ最背面の `bgGraphics` は endStory 側の `clearBackgroundColor()` で
+   * 先に下地ベタの既定色（`background_color:` #409。未指定なら黒）へリセット済みのため、
+   * フェード完了後は自然にその地色が残る。
    */
   private fadeOutBackgroundEntries(durationMs: number): void {
     if (this.bgEntries.length === 0) return
@@ -3057,12 +3065,14 @@ export class NovelRenderer {
     }
 
     const url = resolveAssetUrl(this.assetBaseUrl, 'images', path)
-    const instant =
-      opts?.instant === true ||
-      this.skipMode ||
-      !previousPath ||
-      previousPath === path ||
-      this.bgEntries.length === 0
+    // #409: コールドスタート（直前に背景画像が無い＝物語/シーンの最初の背景）も
+    // crossfade 経路（alpha 0→1）で `background_fade_ms` フェードインさせる。ステージ最背面の
+    // bgGraphics は下地ベタの既定色（frontmatter `background_color:`・未指定なら黒 0x000000）なので、
+    // これは「下地ベタ（既定は黒）から浮かび上がる」フェードインになる（黒フラッシュにはならない）。
+    // 復元（applyState が opts.instant:true を明示＝goBack/seekTo/セーブ復元/任意局面起動）と
+    // skipMode・同一 path だけを即時に残す。以前あった `!previousPath` /
+    // `this.bgEntries.length === 0`（＝コールドスタート指標）は #409 で削除した。
+    const instant = opts?.instant === true || this.skipMode || previousPath === path
 
     // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ。
     // キャッシュヒットで同期描画する場合も必ず進めること。さもないと直前に
@@ -3314,14 +3324,44 @@ export class NovelRenderer {
   }
 
   /**
-   * 単色の地色をリセットする (#273)。地色を既定の黒 (0x000000) に戻す。
-   * 背景画像の clearBackground と対をなす（背景色スロットだけを初期化する）。
+   * 単色の地色をリセットする (#273)。地色を下地ベタの既定色（`background_color:` #409。未指定なら黒）に戻す。
+   * 背景画像の clearBackground と対をなす（背景色スロットだけを初期化する）。`[背景色:]` の解除・終劇で呼ぶ。
    */
   private clearBackgroundColor(): void {
     this.currentBackgroundColor = null
     this.bgGraphics.clear()
     this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.bgGraphics.fill(0x000000)
+    this.bgGraphics.fill(this.defaultBackgroundColorNum())
+  }
+
+  /**
+   * 下地ベタ（bgGraphics）の既定色を数値で解決する (#409)。`defaultBackgroundColor`（frontmatter
+   * `background_color:`）が設定されていれば parseColorToNumber で解決、未指定なら黒 0x000000（後方互換）。
+   */
+  private defaultBackgroundColorNum(): number {
+    return this.defaultBackgroundColor
+      ? parseColorToNumber(this.defaultBackgroundColor, 0x000000)
+      : 0x000000
+  }
+
+  /**
+   * 下地ベタ（bgGraphics）の既定色を設定する (#409)。frontmatter `background_color:` の値（`#rrggbb`）を
+   * 渡す。`setBackgroundFadeMs`（#407）と対称の per-game 設定で、`NovelPlayer` の init（初回背景表示より前）で
+   * 一度呼ばれ、以後の下地色になる。null/空文字は既定の黒に倒す。
+   *
+   * `[背景色:]`（#273）のシーン上書きが**無い**とき（`currentBackgroundColor === null`）だけ bgGraphics を
+   * 即座に塗り直す。上書きが有効な間は `currentBackgroundColor` が勝つ（上書きを踏み潰さない）。
+   * 復元（applyState → setBackgroundColor / clearBackgroundColor）は不変で、null 復元時の戻り先が
+   * この既定色になるだけ（従来は暗黙の黒）。
+   */
+  setDefaultBackgroundColor(color: string | null | undefined): void {
+    this.defaultBackgroundColor = color && color.length > 0 ? color : null
+    // シーン上書きが無いときだけ地色を新しい既定色へ即反映する。上書き中は触らない。
+    if (this.currentBackgroundColor === null) {
+      this.bgGraphics.clear()
+      this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
+      this.bgGraphics.fill(this.defaultBackgroundColorNum())
+    }
   }
 
   // --- クイックセーブ / クイックロード (#142) ---

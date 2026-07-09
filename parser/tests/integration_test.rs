@@ -3700,6 +3700,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         character_scale: None,
         character_fade_ms: None,
         background_fade_ms: None,
+        background_color: None,
         skip_enabled: None,
         debug_enabled: None,
         speaker_nudge: None,
@@ -4926,6 +4927,194 @@ background_fade_ms: 2000
     assert_eq!(doc2.character_fade_ms, Some(500));
     assert_eq!(doc2.background_fade_ms, Some(2000));
     assert_eq!(doc, doc2, "両フェード時間共存の round-trip が安定する");
+}
+
+// --- #409: background_color (下地ベタ＝bgGraphics の既定色の per-game 設定) ---
+//
+// frontmatter `background_color:` を Option<String> で透過する。font_family と同じく
+// `unquote(val.trim())` を通し、空なら None（runtime で既定の黒 #000000 にフォールバック）にする。
+// 色解決（#rrggbb → 数値）は runtime 側の責務で、parser は文字列をそのまま素通しする（不正 hex も保持）。
+// parser は内部変数を直接公開しないため、parse() 経由で doc.background_color を縛る。
+
+/// `background_color: <value>` だけを frontmatter に持つ最小ドキュメントを組み立てる。
+fn background_color_doc(value: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nbackground_color:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n"
+    )
+}
+
+#[test]
+fn test_document_background_color_parses_quoted_hex() {
+    // A1: `background_color: "#334455"` は unquote されて Some("#334455")。
+    let doc = parser::parse(&background_color_doc(" \"#334455\""));
+    assert_eq!(
+        doc.background_color,
+        Some("#334455".to_string()),
+        "background_color: \"#334455\" は unquote 後に Some(\"#334455\")"
+    );
+}
+
+#[test]
+fn test_document_background_color_parses_unquoted_hex() {
+    // A1': 引用符なし `#334455` もそのまま Some("#334455")（font_family と同じ生透過）。
+    let doc = parser::parse(&background_color_doc(" #334455"));
+    assert_eq!(
+        doc.background_color,
+        Some("#334455".to_string()),
+        "引用符なし background_color も Some(\"#334455\")"
+    );
+}
+
+#[test]
+fn test_document_background_color_unspecified_is_none() {
+    // A2: frontmatter にキーが無ければ None（runtime 既定の黒 #000000 にフォールバック）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.background_color, None,
+        "background_color 未指定は None（既定の黒にフォールバック）"
+    );
+}
+
+#[test]
+fn test_document_background_color_empty_is_none() {
+    // A3: 空 `background_color:`（値なし）・空引用 `""` はどちらも None（unquote 後に空文字→None）。
+    let doc_empty = parser::parse(&background_color_doc(""));
+    assert_eq!(
+        doc_empty.background_color, None,
+        "空 background_color: は None"
+    );
+
+    let doc_empty_quote = parser::parse(&background_color_doc(" \"\""));
+    assert_eq!(
+        doc_empty_quote.background_color, None,
+        "background_color: \"\" は unquote 後に空文字となり None"
+    );
+}
+
+#[test]
+fn test_document_background_color_preserves_invalid_string() {
+    // A4: 不正 hex（garbage）も文字列としてそのまま保持する（色解決は runtime、描画は黒に倒れる）。
+    let doc = parser::parse(&background_color_doc(" \"#zzz\""));
+    assert_eq!(
+        doc.background_color,
+        Some("#zzz".to_string()),
+        "不正 hex #zzz も文字列として Some(\"#zzz\") で保持（round-trip 保持）"
+    );
+}
+
+#[test]
+fn test_background_color_round_trip_quoted() {
+    // B1: parse → emit → parse で値が保持され、emit に `background_color: "#334455"` が
+    //   （font_family 同様 double-quote 付きで）出る（emitter 対称）。
+    let doc = parser::parse(&background_color_doc(" \"#334455\""));
+    assert_eq!(doc.background_color, Some("#334455".to_string()));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("background_color: \"#334455\""),
+        "emit に `background_color: \"#334455\"`（double-quote 付き）が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.background_color,
+        Some("#334455".to_string()),
+        "round-trip で background_color が保持される"
+    );
+}
+
+#[test]
+fn test_background_color_none_omits_emit_line() {
+    // B2: None なら emit に `background_color:` 行が出ない（skip_serializing_if = Option::is_none）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.background_color, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("background_color:"),
+        "background_color が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_background_color_coexists_with_fade_ms_fields() {
+    // B3: character_fade_ms / background_fade_ms と独立・対称に共存する（値が互いに混ざらない）。
+    //   #409 の「下地色・立ち絵フェード・背景フェードを別々の per-game 値で持つ」独立性を縛る。
+    // 値に `"#...` を含むため raw string は `r##"..."##`（`"#` が区切りに化けるのを防ぐ）。
+    let input = r##"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_fade_ms: 500
+background_fade_ms: 2000
+background_color: "#112233"
+---
+
+## 1-1: シーン
+
+ナレ。
+"##;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.character_fade_ms,
+        Some(500),
+        "character_fade_ms は独立に Some(500)"
+    );
+    assert_eq!(
+        doc.background_fade_ms,
+        Some(2000),
+        "background_fade_ms は独立に Some(2000)"
+    );
+    assert_eq!(
+        doc.background_color,
+        Some("#112233".to_string()),
+        "background_color は独立に Some(\"#112233\")"
+    );
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.character_fade_ms, Some(500));
+    assert_eq!(doc2.background_fade_ms, Some(2000));
+    assert_eq!(doc2.background_color, Some("#112233".to_string()));
+    assert_eq!(doc, doc2, "3 フィールド共存の round-trip が安定する");
+}
+
+#[test]
+fn test_background_color_emit_strips_inner_quotes_to_protect_round_trip() {
+    // B4: 値に `"` が混じっても emit 時に取り除き round-trip を壊さない（font_family と同じ流儀）。
+    //   実用上 `"` を含む色文字列は無いが、emitter の double-quote 包みが破れない保証を固定する。
+    let doc = parser::parse(&background_color_doc(" #33\"44\"55"));
+    // unquote は「両端が同じ引用符のとき」だけ剥がすため、内側 `"` を含むこの値は素通しで保持される。
+    assert_eq!(doc.background_color, Some("#33\"44\"55".to_string()));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("background_color: \"#334455\""),
+        "emit は内側の `\"` を除去して `background_color: \"#334455\"` を出す: {emitted}"
+    );
+    // 除去後の値で round-trip が安定する（emit → parse で double-quote が破れない）。
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.background_color, Some("#334455".to_string()));
 }
 
 // --- #382: speaker_nudge (話者交代 nudge の per-game 出し分け) ---
