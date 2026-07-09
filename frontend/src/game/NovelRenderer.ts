@@ -3057,12 +3057,14 @@ export class NovelRenderer {
     }
 
     const url = resolveAssetUrl(this.assetBaseUrl, 'images', path)
-    const instant =
-      opts?.instant === true ||
-      this.skipMode ||
-      !previousPath ||
-      previousPath === path ||
-      this.bgEntries.length === 0
+    // #409: コールドスタート（直前に背景画像が無い＝物語/シーンの最初の背景）も
+    // crossfade 経路（alpha 0→1）で `background_fade_ms` フェードインさせる。ステージ最背面の
+    // bgGraphics は既定で黒（0x000000・app init も background:0x000000）なので、これは
+    // 「黒ベタから浮かび上がる」フェードインになる。
+    // 復元（applyState が opts.instant:true を明示＝goBack/seekTo/セーブ復元/任意局面起動）と
+    // skipMode・同一 path だけを即時に残す。以前あった `!previousPath` /
+    // `this.bgEntries.length === 0`（＝コールドスタート指標）は #409 で削除した。
+    const instant = opts?.instant === true || this.skipMode || previousPath === path
 
     // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ。
     // キャッシュヒットで同期描画する場合も必ず進めること。さもないと直前に
