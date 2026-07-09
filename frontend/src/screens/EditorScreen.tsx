@@ -750,6 +750,7 @@ function EditorScreen({
                 characterScale={doc?.character_scale ?? null}
                 characterFadeMs={doc?.character_fade_ms ?? null}
                 backgroundFadeMs={doc?.background_fade_ms ?? null}
+                backgroundColor={doc?.background_color ?? null}
                 // Skip(S) は doc 由来（#310）。skip_enabled=false の作品は編集プレビューでも S を隠す。
                 skipEnabled={doc?.skip_enabled ?? null}
                 // デバッグ(D) は frontmatter 非依存で常時有効（編集者用 #310）。debug_enabled は /play 専用。

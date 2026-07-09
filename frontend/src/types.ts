@@ -473,6 +473,11 @@ export interface EventDocument {
    *  null/undefined のときは runtime 既定 700ms（現行 BACKGROUND_CROSSFADE_MS＝後方互換）。
    *  frontmatter `background_fade_ms:` から流す。 */
   background_fade_ms?: number | null
+  /** 下地ベタ（ステージ最背面 `bgGraphics`）の既定色 (#409)。`#rrggbb`。
+   *  最初の背景絵がこの色から `background_fade_ms` でフェードインする（未指定＝黒 `#000000`）。
+   *  シーン単位の `[背景色:]`（#273）の上書きとは別スロットで、上書きが無いときの戻り先＝地色。
+   *  null/undefined のときは黒。frontmatter `background_color:` から流す per-game 設定。 */
+  background_color?: string | null
   /** Skip(S) ボタンを再生 UI に出すか (#310)。true=出す（既定・後方互換）/ false=描画しない。
    *  skip-read-only ロジック（未読は解除）自体は不変。ボタンの有無だけを制御する。
    *  null/undefined のときは runtime 既定 true（出す）。frontmatter `skip_enabled:` から流す。 */
