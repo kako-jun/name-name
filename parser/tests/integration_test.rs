@@ -3699,6 +3699,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         character_height_ratios: std::collections::HashMap::new(),
         character_scale: None,
         character_fade_ms: None,
+        background_fade_ms: None,
         skip_enabled: None,
         debug_enabled: None,
         speaker_nudge: None,
@@ -4763,6 +4764,168 @@ title: "テスト"
     assert_eq!(doc2.character_fade_ms, Some(700));
     // ドキュメント全体が安定（parse → emit → parse が冪等）。
     assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
+}
+
+// --- #407: background_fade_ms (背景クロスフェード・退場フェード時間の per-game 設定) ---
+//
+// frontmatter `background_fade_ms:` を Option<u32> で透過する。character_fade_ms と対称の流儀で
+// `unquote(val.trim()).parse::<u32>().ok()` を通し、数値（引用符許容）のみ受理する。空・非数値・
+// 負値・小数は None（runtime 既定: BACKGROUND_CROSSFADE_MS=700ms にフォールバック）にする。
+// parser は内部変数を直接公開しないため、parse() 経由で doc.background_fade_ms を縛る。
+
+/// `background_fade_ms: <value>` だけを frontmatter に持つ最小ドキュメントを組み立てる。
+fn background_fade_ms_doc(value: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nbackground_fade_ms:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n"
+    )
+}
+
+#[test]
+fn test_document_background_fade_ms_parses_number() {
+    // A1: 数値はそのまま Some(N)（ms・u32）。character_fade_ms と同じ流儀。
+    let doc = parser::parse(&background_fade_ms_doc(" 2000"));
+    assert_eq!(
+        doc.background_fade_ms,
+        Some(2000),
+        "background_fade_ms: 2000 は Some(2000)"
+    );
+}
+
+#[test]
+fn test_document_background_fade_ms_unspecified_is_none() {
+    // A2: frontmatter にキーが無ければ None（runtime 既定 700ms=BACKGROUND_CROSSFADE_MS にフォールバック）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.background_fade_ms, None,
+        "background_fade_ms 未指定は None（既定 700ms にフォールバック）"
+    );
+}
+
+#[test]
+fn test_document_background_fade_ms_empty_is_none() {
+    // A3: 空 `background_fade_ms:`（値なし）・空引用 `""` はどちらも None（parse::<u32> 失敗を握りつぶす）。
+    let doc_empty = parser::parse(&background_fade_ms_doc(""));
+    assert_eq!(
+        doc_empty.background_fade_ms, None,
+        "空 background_fade_ms: は None"
+    );
+
+    let doc_empty_quote = parser::parse(&background_fade_ms_doc(" \"\""));
+    assert_eq!(
+        doc_empty_quote.background_fade_ms, None,
+        "background_fade_ms: \"\" は unquote 後に空文字となり None"
+    );
+}
+
+#[test]
+fn test_document_background_fade_ms_non_numeric_is_none() {
+    // A4: 非数値（garbage）・負値・小数・全角数字は u32 parse 失敗で None（character_fade_ms と対称）。
+    for garbage in ["fast", "2000ms", "-1", "1.5", "２０００"] {
+        let doc = parser::parse(&background_fade_ms_doc(&format!(" {garbage}")));
+        assert_eq!(
+            doc.background_fade_ms, None,
+            "background_fade_ms: {garbage}（非 u32）は None"
+        );
+    }
+}
+
+#[test]
+fn test_document_background_fade_ms_quoted_number_parses() {
+    // A5: 引用符付き数値は unquote されて Some(N)（character_fade_ms と同じ unquote 経路）。
+    let doc = parser::parse(&background_fade_ms_doc(" \"2000\""));
+    assert_eq!(
+        doc.background_fade_ms,
+        Some(2000),
+        "background_fade_ms: \"2000\" は unquote 後に Some(2000)"
+    );
+}
+
+#[test]
+fn test_background_fade_ms_round_trip() {
+    // B1: parse → emit → parse で値が保持され、emit に `background_fade_ms: 2000` が出る（emitter 対称）。
+    let doc = parser::parse(&background_fade_ms_doc(" 2000"));
+    assert_eq!(doc.background_fade_ms, Some(2000));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("background_fade_ms: 2000"),
+        "emit に `background_fade_ms: 2000` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.background_fade_ms,
+        Some(2000),
+        "round-trip で background_fade_ms が保持される"
+    );
+}
+
+#[test]
+fn test_background_fade_ms_none_omits_emit_line() {
+    // B2: None なら emit に `background_fade_ms:` 行が出ない（skip_serializing_if = Option::is_none）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.background_fade_ms, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("background_fade_ms:"),
+        "background_fade_ms が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_background_fade_ms_coexists_with_character_fade_ms() {
+    // B3: character_fade_ms と対称・独立に共存する（片方の値がもう片方へ混ざらない）。#407 の
+    //   「背景フェードと立ち絵フェードを別々の per-game 数値で持つ」対称性を縛る。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_fade_ms: 500
+background_fade_ms: 2000
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.character_fade_ms,
+        Some(500),
+        "character_fade_ms は独立に Some(500)"
+    );
+    assert_eq!(
+        doc.background_fade_ms,
+        Some(2000),
+        "background_fade_ms は独立に Some(2000)"
+    );
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.character_fade_ms, Some(500));
+    assert_eq!(doc2.background_fade_ms, Some(2000));
+    assert_eq!(doc, doc2, "両フェード時間共存の round-trip が安定する");
 }
 
 // --- #382: speaker_nudge (話者交代 nudge の per-game 出し分け) ---

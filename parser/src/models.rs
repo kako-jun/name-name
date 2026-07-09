@@ -907,10 +907,16 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character_scale: Option<f64>,
     /// 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms:` から流す。
-    /// 未指定なら runtime 既定 300ms（後方互換）。作品ごとに ToHeart 式のじわっとした登場へ
+    /// 未指定なら runtime 既定 700ms（後方互換）。作品ごとに ToHeart 式のじわっとした登場へ
     /// 調整するための per-game 数値設定。空・非数値は None 扱い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character_fade_ms: Option<u32>,
+    /// 背景クロスフェード・退場（終劇）フェード時間（ms）。frontmatter `background_fade_ms:` から流す。
+    /// 未指定なら runtime 既定 700ms（現行 `BACKGROUND_CROSSFADE_MS`＝後方互換）。`character_fade_ms`
+    /// と対称の per-game 数値設定で、背景の表示（イン）・切り替え（クロスフェード）・退場（アウト）を
+    /// 作品ごとにゆっくり／速くして余韻を調整する。空・非数値は None 扱い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_fade_ms: Option<u32>,
     /// Skip(S) ボタンを再生 UI に出すか (#310)。`true` = 出す（既定・後方互換）。
     /// `false` で Skip(S) ボタンを描画しない（読み物として既読スキップを使わせたくない作品向け）。
     /// skip-read-only ロジック（未読は解除）自体は変えない。ボタンの有無だけを制御する。

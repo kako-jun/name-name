@@ -13,7 +13,7 @@ import {
   resolveCharacterHeightRatio,
 } from './CharacterLayer'
 import { CURSOR_DEFAULTS } from './textEffect'
-import { NovelRenderer } from './NovelRenderer'
+import { NovelRenderer, BACKGROUND_CROSSFADE_MS } from './NovelRenderer'
 import { ASPECT_RATIOS } from './constants'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
 import { saveSlotToGameState, resolveCharacterImageUrls } from './novelLayout'
@@ -103,6 +103,38 @@ describe('CharacterLayer fade (Issue #177)', () => {
     expect(state!.fadeAnimation).not.toBeNull()
     expect(state!.fadeAnimation!.toAlpha).toBe(1)
     expect(state!.fadeAnimation!.destroyOnComplete).toBe(false)
+  })
+
+  // #407: 立ち絵フェードの既定値が 300ms → 700ms に変わったことの固定（DEFAULT_FADE_MS）。
+  //   character_fade_ms 未指定（setCharacterFadeMs 未呼び出し）の全作品の立ち絵フェードが 700ms になる。
+  //   DEFAULT_FADE_MS は export されていないので、挙動（fadeAnimation.durationMs）で観測する。
+  //   併せて背景フェード既定 BACKGROUND_CROSSFADE_MS と揃っている（#407 の意図）ことも縛る。
+  it('character_fade_ms 未指定の show() フェードインは既定 700ms(#407) で走る', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 200, height: 400 } as never)
+    const layer = new CharacterLayer(800, 450)
+    // setCharacterFadeMs を呼ばない ＝ frontmatter 未指定 ＝ 既定 characterFadeMs(DEFAULT_FADE_MS)。
+    layer.show('hero', 'normal', '中央', '/assets')
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    // texture-gate: 読込完了後にフェード開始（#17 と同じ経路）。
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(state!.fadeAnimation).not.toBeNull()
+    const fade = state!.fadeAnimation as unknown as { durationMs: number }
+    expect(fade.durationMs).toBe(700) // #407 で 300→700
+    expect(fade.durationMs).toBe(BACKGROUND_CROSSFADE_MS) // 背景フェード既定と揃う
+  })
+
+  it('character_fade_ms 未指定の remove() フェードアウトも既定 700ms(#407)', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.remove('hero')
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.fadeAnimation).not.toBeNull()
+    const fade = state!.fadeAnimation as unknown as { durationMs: number; toAlpha: number }
+    expect(fade.toAlpha).toBe(0)
+    expect(fade.durationMs).toBe(700) // #407 で 300→700
+    expect(fade.durationMs).toBe(BACKGROUND_CROSSFADE_MS)
   })
 })
 

@@ -69,6 +69,10 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ms) = doc.character_fade_ms {
             out.push_str(&format!("character_fade_ms: {ms}\n"));
         }
+        // Emit background_fade_ms only when present。character_fade_ms と同じ流儀（数値・quote 不要）。
+        if let Some(ms) = doc.background_fade_ms {
+            out.push_str(&format!("background_fade_ms: {ms}\n"));
+        }
         // Emit skip_enabled / debug_enabled only when present (#310)。bool なので Some のときだけ
         // `true` / `false` を素で出す（None は省略＝runtime 既定にフォールバック）。
         if let Some(enabled) = doc.skip_enabled {
@@ -1203,6 +1207,7 @@ mod tests {
             character_height_ratios: std::collections::HashMap::new(),
             character_scale: None,
             character_fade_ms: None,
+            background_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
             speaker_nudge: None,
@@ -1447,6 +1452,7 @@ mod tests {
             character_height_ratios: std::collections::HashMap::new(),
             character_scale: None,
             character_fade_ms: None,
+            background_fade_ms: None,
             skip_enabled: None,
             debug_enabled: None,
             speaker_nudge: None,

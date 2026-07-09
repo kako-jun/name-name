@@ -426,8 +426,10 @@ interface PoseNudge {
 /**
  * 立ち絵のフェードイン/アウトのデフォルト時間 (ms)。
  * 仕様書 docs/spec/markdown-v0.1.md と数値を揃えて変更する。
+ * #407: 300→700 に変更（背景フェード既定 BACKGROUND_CROSSFADE_MS=700 と揃え、ToHeart 式の
+ * じわっとした登場を既定にする）。`character_fade_ms` 未指定の全作品の立ち絵フェードが 700ms になる。
  */
-const DEFAULT_FADE_MS = 300
+const DEFAULT_FADE_MS = 700
 const CHARACTER_FADE_MS_MIN = 0
 const CHARACTER_FADE_MS_MAX = 5_000
 
@@ -778,7 +780,7 @@ export class CharacterLayer extends Container {
 
   /**
    * 立ち絵の新規表示・退場フェード時間を per-game 値で上書きする。
-   * null/undefined/非有限値は既定 300ms、範囲外は [0, 5000] にクランプする。
+   * null/undefined/非有限値は既定 700ms (#407)、範囲外は [0, 5000] にクランプする。
    */
   setCharacterFadeMs(ms: number | null | undefined): void {
     const next =

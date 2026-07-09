@@ -17,17 +17,20 @@ import { describe, expect, it } from 'vitest'
 import { parseMarkdown, emitMarkdown } from './parser'
 
 describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive normalize (#310)', () => {
-  // #308 / #310 / 既存 (#283 dialog_style / #286 protagonist) をまとめて持つ最小スクリプト。
-  // character_y_ratio=1.05（既定 1.0 と異なる値）/ character_fade_ms=700（既定 300 と異なる値）/
-  // skip_enabled=false（既定 true と異なる）/
-  // debug_enabled=true（既定 false と異なる）を明示し、normalize が値を保持することを見る。
+  // #308 / #310 / #407 / 既存 (#283 dialog_style / #286 protagonist) をまとめて持つ最小スクリプト。
+  // 各値はあえて「既定と異なる値」にして、normalize が黙って既定へ倒す退行も捕まえる。
+  // character_y_ratio=1.05（既定 1.0 と異なる）/ character_fade_ms=500（#407 で既定が 300→700 に
+  // 変わったので、既定 700 と異なる 500 に更新）/ background_fade_ms=2000（既定 700 と異なる・#407）/
+  // skip_enabled=false（既定 true と異なる）/ debug_enabled=true（既定 false と異なる）を明示し、
+  // normalize が値を保持することを見る。
   const markdown = [
     '---',
     'engine: name-name',
     'chapter: 1',
     'title: t',
     'character_y_ratio: 1.05',
-    'character_fade_ms: 700',
+    'character_fade_ms: 500',
+    'background_fade_ms: 2000',
     'skip_enabled: false',
     'debug_enabled: true',
     'dialog_style: novel',
@@ -41,12 +44,13 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
     '',
   ].join('\n')
 
-  it('keeps character_y_ratio / character_fade_ms / skip_enabled / debug_enabled from frontmatter', async () => {
+  it('keeps character_y_ratio / character_fade_ms / background_fade_ms / skip_enabled / debug_enabled from frontmatter', async () => {
     const doc = await parseMarkdown(markdown)
-    // ここが core: #308 / #310 のフィールドが normalize を生き残ること。
+    // ここが core: #308 / #310 / #407 のフィールドが normalize を生き残ること。
     // normalizeDocument の return から該当行を消すと undefined になり落ちる（修正前の状態）。
     expect(doc.character_y_ratio).toBe(1.05)
-    expect(doc.character_fade_ms).toBe(700)
+    expect(doc.character_fade_ms).toBe(500)
+    expect(doc.background_fade_ms).toBe(2000)
     expect(doc.skip_enabled).toBe(false)
     expect(doc.debug_enabled).toBe(true)
   })
@@ -77,6 +81,7 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
     // undefined を null に倒すこと自体も normalize の責務なので併せて縛る。
     expect(doc.character_y_ratio).toBeNull()
     expect(doc.character_fade_ms).toBeNull()
+    expect(doc.background_fade_ms).toBeNull()
     expect(doc.skip_enabled).toBeNull()
     expect(doc.debug_enabled).toBeNull()
   })

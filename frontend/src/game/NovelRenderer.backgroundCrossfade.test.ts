@@ -51,6 +51,10 @@ interface RendererInternals {
   bgCrossfadeTimer: number | null
   textureCache: Map<string, Texture>
   initialized: boolean
+  /** #407: setBackgroundFadeMs が clamp/フォールバックして保持する背景フェード時間（ms）。 */
+  backgroundFadeMs: number
+  /** #407: 終劇時に stopBgm(backgroundFadeMs) を検証するための AudioManager 参照。 */
+  audioManager: { stopBgm: (ms?: number) => void }
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -413,5 +417,115 @@ describe('NovelRenderer 背景クロスフェード', () => {
       toAlpha: 1,
       destroyOnComplete: false,
     })
+  })
+})
+
+// =====================================================================================
+// #407: background_fade_ms — 背景フェード時間の per-game 可変化。
+//   frontmatter `background_fade_ms:` → NovelPlayer → renderer.setBackgroundFadeMs(ms)。
+//   背景クロスフェード（表示イン・切替）・終劇フェードアウト（退場）・BGM 停止フェードの
+//   3 経路すべてがこの時間で動く。未指定は既定 BACKGROUND_CROSSFADE_MS(=700ms) で非回帰。
+//   setter は [0, 5000] にクランプ、null/undefined/非有限は既定へフォールバックする
+//   （CharacterLayer.setCharacterFadeMs と対称）。
+// =====================================================================================
+describe('NovelRenderer 背景フェード時間 background_fade_ms (#407)', () => {
+  afterEach(() => {
+    defaultTimeController.setMode('live')
+    vi.restoreAllMocks()
+  })
+
+  it('setBackgroundFadeMs(2000) 後の背景クロスフェードは durationMs=2000 で走る', () => {
+    const r = makeRenderer()
+    cacheTexture(r, 'old.png')
+    cacheTexture(r, 'new.png')
+    r.setBackgroundFadeMs(2000)
+    internals(r).setBackground('old.png') // 初回は instant（bgEntries 空）
+    internals(r).setBackground('new.png') // クロスフェード（durationMs = backgroundFadeMs）
+
+    const entries = internals(r).bgEntries
+    expect(entries).toHaveLength(2)
+    // old(退場) / new(登場) 両方が 2000ms のフェードになる。
+    expect(entries[0].fadeAnimation?.durationMs).toBe(2000)
+    expect(entries[1].fadeAnimation?.durationMs).toBe(2000)
+  })
+
+  it('未指定（setter 未呼び出し）の背景クロスフェードは既定 BACKGROUND_CROSSFADE_MS のまま（非回帰）', () => {
+    const r = makeRenderer()
+    cacheTexture(r, 'old.png')
+    cacheTexture(r, 'new.png')
+    // setBackgroundFadeMs を呼ばない ＝ frontmatter 未指定の作品。
+    internals(r).setBackground('old.png')
+    internals(r).setBackground('new.png')
+
+    const entries = internals(r).bgEntries
+    expect(entries).toHaveLength(2)
+    // 定数を参照して将来の既定変更に追随する（直書き 700 にしない）。
+    expect(entries[0].fadeAnimation?.durationMs).toBe(BACKGROUND_CROSSFADE_MS)
+    expect(entries[1].fadeAnimation?.durationMs).toBe(BACKGROUND_CROSSFADE_MS)
+  })
+
+  it('setBackgroundFadeMs は [0,5000] にクランプし null/undefined/非有限は既定へフォールバックする', () => {
+    const r = makeRenderer()
+    const inner = internals(r)
+
+    r.setBackgroundFadeMs(2000)
+    expect(inner.backgroundFadeMs).toBe(2000)
+    r.setBackgroundFadeMs(2000.9) // Math.floor
+    expect(inner.backgroundFadeMs).toBe(2000)
+
+    // 上限クランプ: 99999 → 5000。
+    r.setBackgroundFadeMs(99999)
+    expect(inner.backgroundFadeMs).toBe(5000)
+    // 下限クランプ: -1 → 0（実装 clamp [0,5000]。下限は 0 であって既定 700 ではない）。
+    r.setBackgroundFadeMs(-1)
+    expect(inner.backgroundFadeMs).toBe(0)
+    // 境界値そのものは保持される。
+    r.setBackgroundFadeMs(0)
+    expect(inner.backgroundFadeMs).toBe(0)
+    r.setBackgroundFadeMs(5000)
+    expect(inner.backgroundFadeMs).toBe(5000)
+
+    // null/undefined/NaN/±Infinity は既定 BACKGROUND_CROSSFADE_MS にフォールバック。
+    for (const bad of [null, undefined, NaN, Infinity, -Infinity]) {
+      r.setBackgroundFadeMs(2000) // 一度別値にしてからフォールバックを観測
+      r.setBackgroundFadeMs(bad as number | null | undefined)
+      expect(inner.backgroundFadeMs).toBe(BACKGROUND_CROSSFADE_MS)
+    }
+  })
+
+  it('上限クランプは実クロスフェードの durationMs にも効く（99999 → 5000）', () => {
+    const r = makeRenderer()
+    cacheTexture(r, 'old.png')
+    cacheTexture(r, 'new.png')
+    r.setBackgroundFadeMs(99999)
+    internals(r).setBackground('old.png')
+    internals(r).setBackground('new.png')
+
+    const entries = internals(r).bgEntries
+    expect(entries).toHaveLength(2)
+    expect(entries[1].fadeAnimation?.durationMs).toBe(5000)
+  })
+
+  it('終劇（圏外ジャンプ）の背景フェードアウトと BGM 停止フェードも background_fade_ms を使う', () => {
+    const r = makeRenderer()
+    r.setScenes([scene('entry', [narration('start')]), scene('out', [narration('outside')])])
+    r.setConfinedSceneIds(['entry'])
+    cacheTexture(r, 'bg.png')
+    internals(r).setBackground('bg.png') // instant（bgEntries 空）で 1 枚表示
+    expect(internals(r).bgEntries).toHaveLength(1)
+
+    const stopBgmSpy = vi.spyOn(internals(r).audioManager, 'stopBgm')
+    r.setBackgroundFadeMs(2000)
+    r.jumpToScene('out') // 圏外 → 終劇（endStory）
+
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    // 背景フェードアウト（退場）が 2000ms・destroyOnComplete で走る。
+    const entries = internals(r).bgEntries
+    expect(entries).toHaveLength(1)
+    expect(entries[0].fadeAnimation?.durationMs).toBe(2000)
+    expect(entries[0].fadeAnimation?.toAlpha).toBe(0)
+    expect(entries[0].fadeAnimation?.destroyOnComplete).toBe(true)
+    // BGM 停止フェードも同じ時間（#407）。
+    expect(stopBgmSpy).toHaveBeenCalledWith(2000)
   })
 })

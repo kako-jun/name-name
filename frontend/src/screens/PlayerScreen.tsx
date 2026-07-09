@@ -679,6 +679,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
               characterHeightRatios={doc?.character_height_ratios}
               characterScale={doc?.character_scale ?? null}
               characterFadeMs={doc?.character_fade_ms ?? null}
+              backgroundFadeMs={doc?.background_fade_ms ?? null}
               skipEnabled={doc?.skip_enabled ?? null}
               debugEnabled={doc?.debug_enabled ?? null}
               speakerNudge={doc?.speaker_nudge ?? null}

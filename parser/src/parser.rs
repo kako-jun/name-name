@@ -25,6 +25,7 @@ pub fn parse(input: &str) -> Document {
         std::collections::HashMap::new();
     let mut character_scale: Option<f64> = None;
     let mut character_fade_ms: Option<u32> = None;
+    let mut background_fade_ms: Option<u32> = None;
     let mut skip_enabled: Option<bool> = None;
     let mut debug_enabled: Option<bool> = None;
     let mut speaker_nudge: Option<bool> = None;
@@ -116,8 +117,12 @@ pub fn parse(input: &str) -> Document {
                 character_scale = unquote(val.trim()).parse::<f64>().ok();
             } else if let Some(val) = line.strip_prefix("character_fade_ms:") {
                 // 立ち絵の新規表示・退場フェード時間（ms）。数値のみ受ける。
-                // 空・非数値は None のまま（runtime 既定 300ms にフォールバック）。
+                // 空・非数値は None のまま（runtime 既定 700ms にフォールバック）。
                 character_fade_ms = unquote(val.trim()).parse::<u32>().ok();
+            } else if let Some(val) = line.strip_prefix("background_fade_ms:") {
+                // 背景クロスフェード・退場（終劇）フェード時間（ms）。character_fade_ms と同じ流儀・u32。
+                // 空・非数値は None のまま（runtime 既定 700ms＝BACKGROUND_CROSSFADE_MS にフォールバック）。
+                background_fade_ms = unquote(val.trim()).parse::<u32>().ok();
             } else if let Some(val) = line.strip_prefix("skip_enabled:") {
                 // Skip(S) ボタンを再生 UI に出すか (#310)。`true` / `false` のみ受ける（parse_bool_kv）。
                 // 空・不正値は None のまま（runtime 既定 true ＝出す＝後方互換）。
@@ -874,6 +879,7 @@ pub fn parse(input: &str) -> Document {
         character_height_ratios,
         character_scale,
         character_fade_ms,
+        background_fade_ms,
         skip_enabled,
         debug_enabled,
         speaker_nudge,
