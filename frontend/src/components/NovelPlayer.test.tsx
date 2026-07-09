@@ -653,3 +653,29 @@ describe('NovelPlayer 終劇→埋め込み親へ postMessage 通知 (#395)', ()
     expect(post.mock.calls[0][1]).toBe('*')
   })
 })
+
+// #409: doc.background_color → renderer.setDefaultBackgroundColor 配線。
+// setBackgroundFadeMs（#407）と対称の per-game 設定で、init（初回背景表示より前）で流す。
+// null/undefined は `?? null` で「既定の黒」に倒す（後方互換）。
+describe('NovelPlayer 下地ベタの既定色 background_color 配線 (#409)', () => {
+  it('backgroundColor を渡すと init 時に renderer.setDefaultBackgroundColor(値) が呼ばれる', async () => {
+    render(<NovelPlayer events={[]} backgroundColor="#112233" />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setDefaultBackgroundColor).toHaveBeenCalledWith('#112233')
+  })
+
+  it('backgroundColor 未指定なら null で呼ぶ（既定の黒＝後方互換）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setDefaultBackgroundColor).toHaveBeenCalledWith(null)
+  })
+
+  it('backgroundColor={null} でも null で呼ぶ（明示 null＝黒）', async () => {
+    render(<NovelPlayer events={[]} backgroundColor={null} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setDefaultBackgroundColor).toHaveBeenCalledWith(null)
+  })
+})

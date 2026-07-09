@@ -116,7 +116,10 @@ describe('NovelRenderer 背景クロスフェード', () => {
   it('新背景がロード済みになるまで旧背景を消さない', async () => {
     const r = makeRenderer()
     cacheTexture(r, 'old.png')
-    internals(r).setBackground('old.png')
+    // #409 で最初の背景（コールドスタート）も alpha 0→1 でフェードインするようになったため、
+    // 「2 枚目へのクロスフェード」を検証する本テストでは 1 枚目を instant で settle（alpha=1）させ、
+    // 「既に前景がある」状態を precondition として作る（このテストは初回背景の fade 自体は検証しない）。
+    internals(r).setBackground('old.png', undefined, undefined, { instant: true })
 
     let resolveLoad!: (texture: Texture) => void
     vi.spyOn(Assets, 'load').mockReturnValue(
@@ -154,7 +157,9 @@ describe('NovelRenderer 背景クロスフェード', () => {
     const r = makeRenderer()
     cacheTexture(r, 'old.png')
     cacheTexture(r, 'new.png')
-    internals(r).setBackground('old.png')
+    // #409: 1 枚目は instant で settle（alpha=1）。これで 2 枚目の crossfade は old(1→0)/new(0→1) の
+    // クリーンな対称フェードになる（コールドスタート fade 中の中途 alpha が混ざらない）。
+    internals(r).setBackground('old.png', undefined, undefined, { instant: true })
     internals(r).setBackground('new.png')
 
     const halfDuration = BACKGROUND_CROSSFADE_MS / 2
@@ -351,7 +356,11 @@ describe('NovelRenderer 背景クロスフェード', () => {
 
     resolveLoad(Texture.WHITE)
     await Promise.resolve()
-    r.getTimeController().tick(16)
+    // #409: ロード解決後、コールドスタート初回背景も alpha 0→1 でフェードインするようになったため、
+    // 本文描画（renderOnce/afterShow）は「ロード完了」に加えて「そのフェード完了」まで待つ。
+    // ロード完了ゲート自体は resolveLoad 前の afterShow/render 未呼び出しアサートで担保済み。
+    // ここではフェード分も進めて解禁を観測する（tick を fade 時間ぶんに伸ばすだけ・アサートは不変）。
+    r.getTimeController().tick(BACKGROUND_CROSSFADE_MS + 16)
 
     expect(afterShow).toHaveBeenCalledTimes(1)
     expect(inner.render).toHaveBeenCalledTimes(1)
@@ -400,7 +409,9 @@ describe('NovelRenderer 背景クロスフェード', () => {
     ])
     cacheTexture(r, 'old.png')
     cacheTexture(r, 'new.png')
-    inner.setBackground('old.png')
+    // #409: 前シーンの背景は既に settle 済み（instant で alpha=1）とし、scene jump で走る
+    // 「次シーン先頭背景への crossfade」を検証する。1 枚目は初回背景の fade 対象ではない。
+    inner.setBackground('old.png', undefined, undefined, { instant: true })
     expect(inner.bgEntries).toHaveLength(1)
     expect(inner.bgEntries[0].sprite.alpha).toBe(1)
 
@@ -439,7 +450,9 @@ describe('NovelRenderer 背景フェード時間 background_fade_ms (#407)', () 
     cacheTexture(r, 'old.png')
     cacheTexture(r, 'new.png')
     r.setBackgroundFadeMs(2000)
-    internals(r).setBackground('old.png') // 初回は instant（bgEntries 空）
+    // #409 以降、初回背景は放置すると alpha 0→1 でフェードインするため、2 枚目の crossfade 時間を
+    // 測る本テストでは 1 枚目を明示的に instant で settle させる（前景 alpha=1 を precondition に）。
+    internals(r).setBackground('old.png', undefined, undefined, { instant: true })
     internals(r).setBackground('new.png') // クロスフェード（durationMs = backgroundFadeMs）
 
     const entries = internals(r).bgEntries
@@ -454,7 +467,8 @@ describe('NovelRenderer 背景フェード時間 background_fade_ms (#407)', () 
     cacheTexture(r, 'old.png')
     cacheTexture(r, 'new.png')
     // setBackgroundFadeMs を呼ばない ＝ frontmatter 未指定の作品。
-    internals(r).setBackground('old.png')
+    // #409: 1 枚目は instant で settle し、2 枚目の crossfade duration（既定 700）だけを見る。
+    internals(r).setBackground('old.png', undefined, undefined, { instant: true })
     internals(r).setBackground('new.png')
 
     const entries = internals(r).bgEntries
@@ -498,7 +512,8 @@ describe('NovelRenderer 背景フェード時間 background_fade_ms (#407)', () 
     cacheTexture(r, 'old.png')
     cacheTexture(r, 'new.png')
     r.setBackgroundFadeMs(99999)
-    internals(r).setBackground('old.png')
+    // #409: 1 枚目は instant で settle。2 枚目の crossfade duration に上限クランプ（5000）が効くのを見る。
+    internals(r).setBackground('old.png', undefined, undefined, { instant: true })
     internals(r).setBackground('new.png')
 
     const entries = internals(r).bgEntries
@@ -511,7 +526,9 @@ describe('NovelRenderer 背景フェード時間 background_fade_ms (#407)', () 
     r.setScenes([scene('entry', [narration('start')]), scene('out', [narration('outside')])])
     r.setConfinedSceneIds(['entry'])
     cacheTexture(r, 'bg.png')
-    internals(r).setBackground('bg.png') // instant（bgEntries 空）で 1 枚表示
+    // #409: 1 枚目を instant で settle（alpha=1）させ、終劇の背景フェードアウトが「表示中の 1 枚」を
+    // 1→0 で退場させるのを見る（初回背景の cold-start fade とは別経路）。
+    internals(r).setBackground('bg.png', undefined, undefined, { instant: true })
     expect(internals(r).bgEntries).toHaveLength(1)
 
     const stopBgmSpy = vi.spyOn(internals(r).audioManager, 'stopBgm')
