@@ -3700,6 +3700,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         character_scale: None,
         character_fade_ms: None,
         background_fade_ms: None,
+        background_color: None,
         skip_enabled: None,
         debug_enabled: None,
         speaker_nudge: None,

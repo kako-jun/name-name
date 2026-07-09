@@ -26,6 +26,7 @@ pub fn parse(input: &str) -> Document {
     let mut character_scale: Option<f64> = None;
     let mut character_fade_ms: Option<u32> = None;
     let mut background_fade_ms: Option<u32> = None;
+    let mut background_color: Option<String> = None;
     let mut skip_enabled: Option<bool> = None;
     let mut debug_enabled: Option<bool> = None;
     let mut speaker_nudge: Option<bool> = None;
@@ -123,6 +124,13 @@ pub fn parse(input: &str) -> Document {
                 // 背景クロスフェード・退場（終劇）フェード時間（ms）。character_fade_ms と同じ流儀・u32。
                 // 空・非数値は None のまま（runtime 既定 700ms＝BACKGROUND_CROSSFADE_MS にフォールバック）。
                 background_fade_ms = unquote(val.trim()).parse::<u32>().ok();
+            } else if let Some(val) = line.strip_prefix("background_color:") {
+                // 下地ベタ（bgGraphics）の既定色 (#409)。font_family と同じ流儀で文字列を生透過。
+                // 空なら None のまま（runtime で既定の黒にフォールバック）。色解決は runtime 側。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    background_color = Some(v);
+                }
             } else if let Some(val) = line.strip_prefix("skip_enabled:") {
                 // Skip(S) ボタンを再生 UI に出すか (#310)。`true` / `false` のみ受ける（parse_bool_kv）。
                 // 空・不正値は None のまま（runtime 既定 true ＝出す＝後方互換）。
@@ -880,6 +888,7 @@ pub fn parse(input: &str) -> Document {
         character_scale,
         character_fade_ms,
         background_fade_ms,
+        background_color,
         skip_enabled,
         debug_enabled,
         speaker_nudge,
