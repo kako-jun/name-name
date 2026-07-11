@@ -992,7 +992,11 @@ fn parse_directive(line: &str) -> Option<Event> {
         });
     }
     if let Some(ms_str) = content.strip_prefix("待機:") {
-        if let Ok(ms) = ms_str.trim().parse() {
+        let wait_target = ms_str.trim();
+        if wait_target == "表示完了" {
+            return Some(Event::WaitDisplayComplete);
+        }
+        if let Ok(ms) = wait_target.parse() {
             return Some(Event::Wait { ms });
         }
     }
@@ -2510,12 +2514,11 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
     let first = parts.next()?;
     if first == "auto" {
         auto = true;
-    } else if let Some(coord) = first.strip_prefix('@') {
+    } else {
+        let coord = first.strip_prefix('@')?;
         let (x_str, y_str) = coord.split_once(',')?;
         x = Some(x_str.trim().parse().ok()?);
         y = Some(y_str.trim().parse().ok()?);
-    } else {
-        return None;
     }
 
     for p in parts {

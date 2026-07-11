@@ -550,6 +550,8 @@ interface UnderlineAnimation {
 export class CharacterLayer extends Container {
   private characters: Map<string, CharacterState> = new Map()
   private transitionSerial = 0
+  /** show/changeExpression から起動した立ち絵 texture load の未完数。 */
+  private pendingPortraitLoads = 0
   /** アニメーション駆動用 ticker。動いているキャラがいないときは停止しておく */
   private animTicker: Ticker | null = null
   /** ticker.deltaMS の累計を保持してアニメ進行に使う */
@@ -2233,6 +2235,15 @@ export class CharacterLayer extends Container {
     return false
   }
 
+  /**
+   * `[待機: 表示完了]` 用の観測 API。
+   * 現時点の対象は標準立ち絵の load / fade / transform / nudge。
+   * 将来イベント絵などを CharacterLayer 管轄に足す場合は、この集約点に含める。
+   */
+  hasPendingVisualTransition(): boolean {
+    return this.pendingPortraitLoads > 0 || this.hasActivePortraitTransition()
+  }
+
   /** グリフ演出がまだ進行中か（完了済みなら container は保持するが ticker は止めてよい）。 */
   private isTextEffectActive(effect: TextEffectAnimation): boolean {
     // 完了後もカーソル（点滅）があれば ticker を回し続ける（#271 小例外）。
@@ -2543,6 +2554,7 @@ export class CharacterLayer extends Container {
 
     const cleanExpression = expression.replace(/^\//, '')
     const urls = resolveCharacterImageUrls(assetBaseUrl, cleanExpression)
+    this.pendingPortraitLoads += 1
 
     return (
       // リトライ待機は this.time (TimeController) 経由に通す（生 setTimeout を使わない）。
@@ -2612,7 +2624,10 @@ export class CharacterLayer extends Container {
         })
         // 成功/失敗/破棄いずれでも ready を1回だけ通知する (#293)。これでテキスト reveal が
         // 立ち絵の用意完了に揃い、ロード失敗でもテキストが詰まらない。
-        .finally(() => onReady?.())
+        .finally(() => {
+          this.pendingPortraitLoads = Math.max(0, this.pendingPortraitLoads - 1)
+          onReady?.()
+        })
     )
   }
 }

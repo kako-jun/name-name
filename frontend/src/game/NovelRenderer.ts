@@ -399,6 +399,8 @@ export class NovelRenderer {
 
   /** Wait タイマー（destroy 時キャンセル用）。TimeController 経由なので number */
   private waitTimer: number | null = null
+  /** `[待機: 表示完了]` の polling timer。通常 Wait と同じ waitingForWait gate を使う。 */
+  private waitDisplayCompleteTimer: number | null = null
   /** タイマー抽象化レイヤー (#228 動画エクスポート対応の土台) */
   private time: TimeController = defaultTimeController
 
@@ -1086,6 +1088,7 @@ export class NovelRenderer {
       this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
     }
+    this.clearWaitDisplayCompleteTimer()
     if (this.autoTimer) {
       this.time.clearTimeout(this.autoTimer)
       this.autoTimer = null
@@ -1618,6 +1621,7 @@ export class NovelRenderer {
       this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
     }
+    this.clearWaitDisplayCompleteTimer()
     if (this.autoTimer) {
       this.time.clearTimeout(this.autoTimer)
       this.autoTimer = null
@@ -2545,6 +2549,9 @@ export class NovelRenderer {
         // [動画退場] で動画レイヤをクリア (#252)
         this.videoLayer.remove()
       }
+      if (event === 'WaitDisplayComplete') {
+        this.beginWaitDisplayComplete()
+      }
       return
     }
     if ('Background' in event) {
@@ -2857,6 +2864,50 @@ export class NovelRenderer {
         this.showCharacterThenRender(() => this.pushSnapshot())
       }, event.Wait.ms)
       return
+    }
+  }
+
+  private clearWaitDisplayCompleteTimer(): void {
+    if (this.waitDisplayCompleteTimer == null) return
+    this.time.clearInterval(this.waitDisplayCompleteTimer)
+    this.waitDisplayCompleteTimer = null
+  }
+
+  private hasPendingVisualTransition(): boolean {
+    // `[待機: 表示完了]` の視覚演出集約点。現対象は背景 load/fade と立ち絵 load/fade/transform/nudge。
+    // 将来イベント絵などを足す場合も、各レイヤの pending API をここに OR する。
+    return (
+      this.hasPendingBackgroundLoad() ||
+      this.hasActiveBackgroundFade() ||
+      this.characterLayer.hasPendingVisualTransition()
+    )
+  }
+
+  private finishWaitAndContinue(): void {
+    if (!this.initialized) return
+    this.waitingForWait = false
+    this.eventIndex++
+    this.processUntilNextTextEvent()
+    // [待機] 明け後の表示も「立ち絵 →（同時/直後に）テキスト」の順序保証 (#293)。
+    // 立ち絵 sprite を同期生成してからスナップショットを記録（afterShow）する。
+    this.showCharacterThenRender(() => this.pushSnapshot())
+  }
+
+  private beginWaitDisplayComplete(): void {
+    this.setSkipMode(false)
+    this.waitingForWait = true
+
+    const poll = () => {
+      this.updateBackgroundFadeFrame()
+      if (this.hasPendingVisualTransition()) return
+      this.clearWaitDisplayCompleteTimer()
+      this.finishWaitAndContinue()
+    }
+
+    // processUntilNextTextEvent() がこの directive 呼び出し後に waitingForWait を見て停止するため、
+    // たとえ既に落ち着いていても同期完了させず、次 tick の polling で eventIndex を進める。
+    if (this.waitDisplayCompleteTimer == null) {
+      this.waitDisplayCompleteTimer = this.time.setInterval(poll, 16)
     }
   }
 
@@ -3510,6 +3561,7 @@ export class NovelRenderer {
       this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
     }
+    this.clearWaitDisplayCompleteTimer()
     this.choiceOverlay.hide()
 
     // 元イベントを保持し、Condition をフラグに基づいて展開

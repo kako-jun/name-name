@@ -18,6 +18,12 @@ describe('EventDisplay', () => {
     expect(container.textContent).toContain('場面転換')
   })
 
+  it('renders WaitDisplayComplete as display wait, not SceneTransition', () => {
+    const { container } = renderEvent('WaitDisplayComplete')
+    expect(container.textContent).toContain('待機: 表示完了')
+    expect(container.textContent).not.toContain('場面転換')
+  })
+
   it('renders Dialog with voice and font badges (#144 / #147)', () => {
     const { container } = renderEvent({
       Dialog: {

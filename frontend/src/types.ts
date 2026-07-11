@@ -252,6 +252,11 @@ export type Event =
       }
     }
   | { Wait: { ms: number } }
+  /**
+   * `[待機: 表示完了]`。その時点で進行中の視覚要素（背景・立ち絵など）の
+   * ロード/フェード/移動が落ち着くまで待つ unit variant。
+   */
+  | 'WaitDisplayComplete'
   | { Choice: { options: ChoiceOption[] } }
   | { Flag: { name: string; value: FlagValue } }
   | { Condition: { flag: string; events: Event[] } }

@@ -405,6 +405,13 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str(&format!("[待機: {ms}]\n"));
                 prev_was_dialog_or_text = false;
             }
+            Event::WaitDisplayComplete => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[待機: 表示完了]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::Choice { options } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
