@@ -45,7 +45,7 @@ function variantLabel(event: Event): string {
  * - Choice / Flag / Condition → 青ペンの分岐メモ (desk-fusen-b)
  * - Monster / Item / Spell / PartyMember → 資料の付箋 (desk-fusen-g)
  * - Npc / RpgMap / PlayerStart / RpgEvent / RpgTrigger → RPG メモ (desk-fusen-p)
- * - その他演出系 (Background, Bgm, Se, Wait, Animate, TextEffect, Underline, Shake, Flash, Fade, ...) → 黄付箋
+ * - その他演出系 (Background, Bgm, Se, Wait, WaitDisplayComplete, Animate, TextEffect, Underline, Shake, Flash, Fade, ...) → 黄付箋
  */
 function variantToDeskClass(event: Event): string {
   if (typeof event === 'string') return 'desk-fusen' // SceneTransition
@@ -61,7 +61,7 @@ function variantToDeskClass(event: Event): string {
     'RpgTrigger' in event
   )
     return 'desk-fusen desk-fusen-p'
-  return 'desk-fusen' // 演出系 (Bgm / Se / Background / Wait / Animate / TextEffect / Underline / Shake / Flash / Fade / ...)
+  return 'desk-fusen' // 演出系 (Bgm / Se / Background / Wait / WaitDisplayComplete / Animate / TextEffect / Underline / Shake / Flash / Fade / ...)
 }
 
 function EventCard({

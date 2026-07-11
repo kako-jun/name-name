@@ -20,6 +20,9 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
   const head = isDark ? 'text-gray-300' : 'text-gray-700'
 
   if (typeof event === 'string') {
+    if (event === 'WaitDisplayComplete') {
+      return <div className={`text-xs italic ml-2 ${meta}`}>待機: 表示完了</div>
+    }
     return <div className={`text-sm italic ml-2 ${accent}`}>[場面転換]</div>
   }
 

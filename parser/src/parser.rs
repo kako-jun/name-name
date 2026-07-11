@@ -992,7 +992,11 @@ fn parse_directive(line: &str) -> Option<Event> {
         });
     }
     if let Some(ms_str) = content.strip_prefix("待機:") {
-        if let Ok(ms) = ms_str.trim().parse() {
+        let wait_target = ms_str.trim();
+        if wait_target == "表示完了" {
+            return Some(Event::WaitDisplayComplete);
+        }
+        if let Ok(ms) = wait_target.parse() {
             return Some(Event::Wait { ms });
         }
     }

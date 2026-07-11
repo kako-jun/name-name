@@ -434,6 +434,9 @@ pub enum Event {
     Wait {
         ms: u32,
     },
+    /// その時点で進行中の視覚要素（背景・立ち絵など）のロード/フェード/移動が落ち着くまで待つ。
+    /// Markdown では `[待機: 表示完了]`。
+    WaitDisplayComplete,
     Choice {
         options: Vec<ChoiceOption>,
     },

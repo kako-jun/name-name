@@ -267,6 +267,44 @@ fn test_parse_sample() {
 }
 
 #[test]
+fn test_wait_display_complete_parse_and_round_trip() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "表示完了待機"
+---
+
+## 1-1: シーン
+
+[背景: bg.png]
+[待機: 表示完了]
+[待機: 700]
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+
+    assert!(matches!(events[1], Event::WaitDisplayComplete));
+    assert_eq!(events[2], Event::Wait { ms: 700 });
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("[待機: 表示完了]"),
+        "emit に `[待機: 表示完了]` が含まれること: {emitted}"
+    );
+    assert!(
+        emitted.contains("[待機: 700]"),
+        "既存 `[待機: N]` が維持されること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc, doc2,
+        "WaitDisplayComplete を含む round-trip が安定する"
+    );
+}
+
+#[test]
 fn test_roundtrip() {
     let doc = parser::parse(SAMPLE_MARKDOWN);
     let emitted = emitter::emit(&doc);

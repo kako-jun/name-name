@@ -210,6 +210,63 @@ describe('parseMarkdown + normalizeEvents: 表示テキストの正準化 (#340)
   })
 })
 
+describe('parseMarkdown: WaitDisplayComplete (#411)', () => {
+  const collectEvents = (markdown: string) =>
+    parseMarkdown(markdown).then((doc) =>
+      doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
+    )
+
+  function markdownWithWait(line: string): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## 1-1: シーン',
+      '',
+      '[背景: bg.png]',
+      line,
+      '',
+      '**A**:',
+      'after',
+      '',
+    ].join('\n')
+  }
+
+  it('[待機: 表示完了] は WASM 実 parse 経路で WaitDisplayComplete として届く', async () => {
+    const events = await collectEvents(markdownWithWait('[待機: 表示完了]'))
+    expect(events).toContain('WaitDisplayComplete')
+    expect(events).not.toContain('SceneTransition')
+  })
+
+  it('[待機: 700] は既存互換の Wait(ms) として届く', async () => {
+    const events = await collectEvents(markdownWithWait('[待機: 700]'))
+    expect(events).toContainEqual({ Wait: { ms: 700 } })
+    expect(events).not.toContain('WaitDisplayComplete')
+  })
+
+  it('[待機: 表示完了 ] / [待機:表示完了] も WaitDisplayComplete として受理する', async () => {
+    await expect(collectEvents(markdownWithWait('[待機: 表示完了 ]'))).resolves.toContain(
+      'WaitDisplayComplete'
+    )
+    await expect(collectEvents(markdownWithWait('[待機:表示完了]'))).resolves.toContain(
+      'WaitDisplayComplete'
+    )
+  })
+
+  it('[待機:] / [待機: ] は Wait 系イベント化されない', async () => {
+    const empty = await collectEvents(markdownWithWait('[待機:]'))
+    const blank = await collectEvents(markdownWithWait('[待機: ]'))
+
+    for (const events of [empty, blank]) {
+      expect(events).not.toContain('WaitDisplayComplete')
+      expect(events.some((e) => typeof e === 'object' && 'Wait' in e)).toBe(false)
+    }
+  })
+})
+
 // #364 / #360 穴埋め: character_height_ratio(s) は wasm 境界で Rust の HashMap<String, f64> が
 // tsify 経由で Map になって返るため、normalizeDocument が Object.fromEntries で Record に変換する
 // （parser.ts の character_height_ratios コメント参照）。この変換自体はこのファイルに一件も
