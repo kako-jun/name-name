@@ -79,11 +79,17 @@ import {
 import { stripRubyMarkup } from './ruby'
 
 /**
- * 立ち絵・背景先読み (#389) の緩い上限。分岐までが極端に長い場合に、この個数ぶんの
- * テキストイベント（`getTextEvent` 非 null）を先読みしたら走査を打ち切る。残りは進行に
- * 合わせて次回の `preloadUpcomingAssets` 呼び出しで積まれる。
+ * 立ち絵・背景先読み (#389) のテキストイベント数上限。旧仕様（8）は theo-hayami の実測値
+ * （1話あたり Dialog 平均 13.9 件・最大 19 件、`free/` 業×住人セル 296 話計測）が上回っており、
+ * 十分な読み込み時間があるにもかかわらず先読みが途中で打ち切られ立ち絵切り替えが遅延する事故を
+ * 招いたため撤廃した (#417)。先読みの実質的な境界は「次の分岐（Choice/Condition）または配列末尾
+ * まで」のまま変わらない（このループ構造自体は変更していない）。
+ *
+ * ⚠️ 無制限に安全というわけではない: 現時点で実運用中のゲームは theo-hayami のみのため撤廃の
+ * 影響範囲は限定的だが、将来「分岐なしで極端に長い区間」を持つゲームが出た場合は、その時点で
+ * 個別に上限を再検討する必要がある。
  */
-const PRELOAD_MAX_TEXT_EVENTS = 8
+const PRELOAD_MAX_TEXT_EVENTS = Infinity
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -2464,7 +2470,8 @@ export class NovelRenderer {
     let textEventCount = 0
 
     // 走査開始 i = this.eventIndex は「今表示するテキストイベント」を含む（未来だけでなく現在も
-    // 先読み対象）。したがって予算 PRELOAD_MAX_TEXT_EVENTS=8 は「現在 + 未来 7」のテキストイベント。
+    // 先読み対象）。PRELOAD_MAX_TEXT_EVENTS=Infinity のため、この予算チェック自体は常に false
+    // になり実質的な上限は「次の分岐（Choice/Condition）または配列末尾まで」に一本化される (#417)。
     for (let i = this.eventIndex; i < this.resolvedEvents.length; i++) {
       const event = this.resolvedEvents[i]
       // 文字列 variant（'SceneTransition' / 'PageBreak' / 'VideoExit' 等）は分岐でも
