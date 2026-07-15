@@ -325,7 +325,7 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
   //    一括で積み切るため、同一シーン内での advance() は原理的に「既に積み済みの範囲の再走査」に
   //    しかならず、2回目の backgroundLoad 呼び出しは発生しなくなった。distinctDialogs(10)
   //    セットアップ後に advance() を呼び、bgSpy が(mockClear を挟んで)呼ばれないことを固定する。
-  it('17: advance()跨ぎでは新規URLは発生しない（cap撤廃による新しい不変条件）', () => {
+  it('17: 初回スキャンで分岐前の全件を先読み済みのため、同一シーン内advance()では2回目のbackgroundLoadが発火しない（cap撤廃後の不変条件）', () => {
     const { r, h, bgSpy } = setup()
     r.setScenes([scene('s', distinctDialogs(10))])
     expect(bgSpy).toHaveBeenCalledTimes(1)
