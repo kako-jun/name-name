@@ -79,11 +79,17 @@ import {
 import { stripRubyMarkup } from './ruby'
 
 /**
- * 立ち絵・背景先読み (#389) の緩い上限。分岐までが極端に長い場合に、この個数ぶんの
- * テキストイベント（`getTextEvent` 非 null）を先読みしたら走査を打ち切る。残りは進行に
- * 合わせて次回の `preloadUpcomingAssets` 呼び出しで積まれる。
+ * 立ち絵・背景先読み (#389) のテキストイベント数上限。旧仕様（8）は theo-hayami の実測値
+ * （1話あたり Dialog 平均 13.9 件・最大 19 件、`free/` 業×住人セル 296 話計測）が上回っており、
+ * 十分な読み込み時間があるにもかかわらず先読みが途中で打ち切られ立ち絵切り替えが遅延する事故を
+ * 招いたため撤廃した (#417)。先読みの実質的な境界は「次の分岐（Choice/Condition）または配列末尾
+ * まで」のまま変わらない（このループ構造自体は変更していない）。
+ *
+ * ⚠️ 無制限に安全というわけではない: 現時点で実運用中のゲームは theo-hayami のみのため撤廃の
+ * 影響範囲は限定的だが、将来「分岐なしで極端に長い区間」を持つゲームが出た場合は、その時点で
+ * 個別に上限を再検討する必要がある。
  */
-const PRELOAD_MAX_TEXT_EVENTS = 8
+const PRELOAD_MAX_TEXT_EVENTS = Infinity
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -2452,7 +2458,10 @@ export class NovelRenderer {
    *   テキストイベント以外（Background / ExpressionChange 等）は予算に数えず、予算を使い切った
    *   後の**次のテキストイベントに達した時点で**走査を終了する（そこに至るまでの Background 等は
    *   積む＝test18 が固定する挙動。上限で即座に走査終了するわけではない）。
-   * - **重複除去**: `preloadedUrls` で既に積んだ URL はスキップする。
+   * - **重複除去**: まずスキャン内（`urls`）で重複する URL を除去する（同じキャラの表情が
+   *   Dialog→ExpressionChange で連続する、同じ表情が複数回登場する等で発生し得る。近い順の並びを
+   *   保つため初出＝最も近い方を残す）。その上で `preloadedUrls` で既に積んだ URL もスキップする
+   *   （#417）。
    * - **ガード**: `assetBaseUrl` が空なら何もしない。実ダウンロードは投げっぱなしで、
    *   失敗は握りつぶす（先読み失敗で本編を止めない）。#293 の順序保証とは独立で、先読みが
    *   未完でも従来どおりテキストは詰まらない（後方互換）。
@@ -2464,7 +2473,8 @@ export class NovelRenderer {
     let textEventCount = 0
 
     // 走査開始 i = this.eventIndex は「今表示するテキストイベント」を含む（未来だけでなく現在も
-    // 先読み対象）。したがって予算 PRELOAD_MAX_TEXT_EVENTS=8 は「現在 + 未来 7」のテキストイベント。
+    // 先読み対象）。PRELOAD_MAX_TEXT_EVENTS=Infinity のため、この予算チェック自体は常に false
+    // になり実質的な上限は「次の分岐（Choice/Condition）または配列末尾まで」に一本化される (#417)。
     for (let i = this.eventIndex; i < this.resolvedEvents.length; i++) {
       const event = this.resolvedEvents[i]
       // 文字列 variant（'SceneTransition' / 'PageBreak' / 'VideoExit' 等）は分岐でも
@@ -2522,8 +2532,17 @@ export class NovelRenderer {
       }
     }
 
+    // スキャン内での重複URL（同じキャラの表情が2回以上登場する等）を先に除去する（#417）。
+    // 近い順の並びを保つため、初出（最も近い方）を残して後続の重複を落とす。
+    const seen = new Set<string>()
+    const dedupedUrls = urls.filter((u) => {
+      if (seen.has(u)) return false
+      seen.add(u)
+      return true
+    })
+
     // 未積みの URL だけを backgroundLoad に積む（同期は走査のみ・実 DL は投げっぱなし）
-    const fresh = urls.filter((u) => !this.preloadedUrls.has(u))
+    const fresh = dedupedUrls.filter((u) => !this.preloadedUrls.has(u))
     if (fresh.length === 0) return
     for (const u of fresh) this.preloadedUrls.add(u)
     // 先読み失敗で本編を止めない。#293 のフォールバックがテキストは従来どおり解禁する。
