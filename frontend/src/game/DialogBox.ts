@@ -1038,6 +1038,13 @@ export class DialogBox extends Container {
     this.indicatorAssetBaseUrl = url
     this.indicatorFrameTextures = {}
     this.failedIndicatorKinds.clear()
+    // #413 S1: pendingIndicatorKinds も併せてクリアする。`loadIndicatorFrames` は S1 で
+    // 「既に pending 中なら再フェッチしない」ガードを持つため、ここでクリアしないと旧 baseUrl
+    // の未解決 fetch が残した pending 状態のせいで、新 baseUrl 用の正当な再フェッチが誤って
+    // 短絡されてしまう（旧 fetch の解決は下の `.then`/`.catch` の baseUrl 不一致ガードで
+    // 別途無視されるので、ここで消しても「触ると新 fetch 完了前に一瞬 pending が外れる」問題は
+    // 起きない＝直後の `loadIndicatorFrames` 呼び出しが同期的に入れ直す）。
+    this.pendingIndicatorKinds.clear()
     this.loadIndicatorFrames(this.indicatorKind)
   }
 
@@ -1047,7 +1054,16 @@ export class DialogBox extends Container {
    * （記号幅が変わるとはみ出しクランプが変わるため）。
    */
   setIndicatorKind(kind: IndicatorKind): void {
-    if (this.indicatorKind === kind && this.indicatorGlyph.text === INDICATOR_GLYPH[kind]) return
+    if (this.indicatorKind === kind && this.indicatorGlyph.text === INDICATOR_GLYPH[kind]) {
+      // #413 M1: この早期return自体は変わらないが、`applyIndicatorFrame()` を呼ばずに戻ると
+      // pending 状態の変化（例: この呼び出し直前に `setIndicatorAssetBaseUrl` が fetch を開始した
+      // ばかり）が glyph/sprite の可視状態へ反映されない。コンストラクタ既定値 kind='next' と
+      // 一致するセッション最初の `setIndicatorKind('next')` 呼び出しがまさにこの分岐を通るため、
+      // ここで呼ばないと #413 が最も一般的なケース（最初に使う kind が既定値と一致）で再発する。
+      // `applyIndicatorFrame()` は現在の3集合を読むだけの冪等関数なので毎回呼んでも安全。
+      this.applyIndicatorFrame()
+      return
+    }
     this.indicatorKind = kind
     this.indicatorGlyph.text = INDICATOR_GLYPH[kind]
     this.indicatorFrameElapsed = 0
@@ -1138,7 +1154,10 @@ export class DialogBox extends Container {
    * 種別 1 つ分の画像フレームをロードする (#292)。
    *
    * #413: 「読み込み中かどうか」を確定させるため 3 分岐に分ける。
-   *  1. 既にロード済み／既に確定失敗済み → 再フェッチせず、現在の確定状態を再適用するだけ。
+   *  1. 既にロード済み／既に確定失敗済み／既に fetch が in-flight（`pendingIndicatorKinds`）
+   *     → 再フェッチせず、現在の確定状態（または pending 中の非表示状態）を再適用するだけ。
+   *     pending 判定 (#413 S1) が無いと、同一 kind への短時間の出入り（例: next→pageturn→next
+   *     と戻ってきたが next の fetch がまだ解決していない）で `Assets.load` が重複発火する。
    *  2. `indicatorAssetBaseUrl` が未設定（＝そもそもこの作品にアセットが設定されていない＝
    *     将来も絶対に成功しない）→ 即座に確定失敗として扱う（▼ フォールバックを即表示させる）。
    *  3. それ以外（実際にフェッチする）→ `pendingIndicatorKinds` に載せてから fetch を開始する。
@@ -1146,7 +1165,11 @@ export class DialogBox extends Container {
    *     出さない「読み込み中は何も見せない」状態を保つ。
    */
   private loadIndicatorFrames(kind: IndicatorKind): void {
-    if (this.indicatorFrameTextures[kind] || this.failedIndicatorKinds.has(kind)) {
+    if (
+      this.indicatorFrameTextures[kind] ||
+      this.failedIndicatorKinds.has(kind) ||
+      this.pendingIndicatorKinds.has(kind)
+    ) {
       this.applyIndicatorFrame()
       return
     }

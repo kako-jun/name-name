@@ -696,6 +696,50 @@ describe('DialogBox #413 pending中は何も出さない（画像インジケー
     expect(error).not.toHaveBeenCalled()
     box.dispose()
   })
+
+  // DB-12（回帰・独立レビュー M1）: setIndicatorKind の早期returnガードは
+  // `indicatorKind === kind && glyph.text === INDICATOR_GLYPH[kind]` で判定するため、
+  // コンストラクタ既定値 kind='next'/glyph='▼' と一致するセッション最初の
+  // setIndicatorKind('next') 呼び出しは常にこの分岐に入る。このガードで applyIndicatorFrame()
+  // を呼ばないと、直前の setIndicatorAssetBaseUrl が pendingIndicatorKinds に 'next' を
+  // 積んだだけで glyph/sprite の可視状態を更新しないまま抜けてしまい、fetch 未解決の間ずっと
+  // indicatorGlyph.visible が初期値 true のまま ▼ が表示され続ける（#413 が最も一般的な
+  // ケース＝最初に使う kind が既定値と一致する場合に再発する）。
+  it("DB-12: setIndicatorAssetBaseUrl → 既定値と一致する setIndicatorKind('next') 呼び出しでも pending 中は glyph/sprite ともに隠す（#413 M1 回帰）", () => {
+    mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base') // 'next' fetch 開始（pendingIndicatorKinds に積むだけ）
+    box.setIndicatorKind('next') // 既定値と一致 → 早期return分岐。ここで applyIndicatorFrame() が必須
+
+    expect(i.pendingIndicatorKinds.has('next')).toBe(true)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    expect(i.indicatorSprite.visible).toBe(false)
+    box.dispose()
+  })
+
+  // DB-13（回帰・独立レビュー S1）: loadIndicatorFrames の最初のガードは indicatorFrameTextures /
+  // failedIndicatorKinds は見るが pendingIndicatorKinds を見ていなかった。このガードが無いと、
+  // 既に fetch が in-flight（未解決）な kind へ短時間で出入りするだけで Assets.load が
+  // 重複発火する（next→pageturn→next と戻った時点で next はまだ未解決なのに再フェッチする）。
+  it('DB-13: pending 中の kind へ他 kind を経由して戻っても Assets.load を再発火しない（#413 S1 回帰）', () => {
+    const { load } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base') // 'next' fetch開始（4件）
+    box.setIndicatorKind('pageturn') // 'pageturn' fetch開始（4件）、計8件
+    expect(load).toHaveBeenCalledTimes(8)
+
+    box.setIndicatorKind('next') // 'next' はまだ pending 中（fetch未解決）のはず
+
+    expect(load).toHaveBeenCalledTimes(8) // pending 判定が無いと 12 件に増える
+    expect(i.pendingIndicatorKinds.has('next')).toBe(true)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    expect(i.indicatorSprite.visible).toBe(false)
+    box.dispose()
+  })
 })
 
 describe('computePortraitContainFit (Issue #104 / #194)', () => {
