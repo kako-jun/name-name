@@ -740,6 +740,36 @@ describe('DialogBox #413 pending中は何も出さない（画像インジケー
     expect(i.indicatorSprite.visible).toBe(false)
     box.dispose()
   })
+
+  // DB-14（回帰・独立レビュー2巡目 should）: setIndicatorAssetBaseUrl の「フレッシュフェッチ」
+  // 分岐（indicatorFrameTextures/failedIndicatorKinds/pendingIndicatorKinds のいずれにも
+  // 載っていない kind の新規 fetch を loadIndicatorFrames 内で開始するケース）は
+  // applyIndicatorFrame() を同期呼びしない設計のため、旧 baseUrl で既に確定表示していた
+  // スプライト（visible=true・旧テクスチャ）が新 baseUrl の fetch 解決まで残存表示されて
+  // しまっていた（このPR以前から存在した既存の穴）。setIndicatorAssetBaseUrl 内で
+  // loadIndicatorFrames 呼び出し直後に applyIndicatorFrame() を追加で呼ぶことで、baseUrl
+  // 切替の瞬間にも「pending中は何も出さない」不変条件を同期的に適用する。
+  // この行が無いと baseUrl 切替直後に旧ゲームの画像が一瞬残存表示される。
+  it('DB-14: 旧baseUrlで表示済みのスプライトは、新baseUrlへ切替直後（fetch未解決の間）に残存表示されない（#413 re-review should）', async () => {
+    const { calls } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    // 旧baseUrlでフェッチ成功済み（sprite可視・旧テクスチャ表示）の状態を作る。
+    box.setIndicatorAssetBaseUrl('/gameA') // next 4件 = calls[0..3]
+    calls.slice(0, 4).forEach((c) => c.resolve(Texture.WHITE))
+    await flushPromises()
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicatorGlyph.visible).toBe(false)
+
+    // 新baseUrlへ切り替える（次の fetch はまだ未解決）。
+    box.setIndicatorAssetBaseUrl('/gameB') // next 4件（新規fetch）= calls[4..7]、まだ未解決
+
+    // 切り替え直後（新フェッチが未解決の間）に旧テクスチャが残存表示されないこと。
+    expect(i.indicatorSprite.visible).toBe(false)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
 })
 
 describe('computePortraitContainFit (Issue #104 / #194)', () => {

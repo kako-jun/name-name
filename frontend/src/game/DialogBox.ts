@@ -1046,6 +1046,13 @@ export class DialogBox extends Container {
     // 起きない＝直後の `loadIndicatorFrames` 呼び出しが同期的に入れ直す）。
     this.pendingIndicatorKinds.clear()
     this.loadIndicatorFrames(this.indicatorKind)
+    // #413 re-review S1: `loadIndicatorFrames` がフレッシュフェッチ分岐（in-flight を新規に
+    // 開始するケース）に入ると `applyIndicatorFrame()` を同期的に呼ばない設計のため、旧 baseUrl
+    // で既に確定表示していたスプライト（visible=true・旧テクスチャ）がここで止まると新 fetch が
+    // 解決するまで残存表示されてしまう。M1 と同じ理屈で `applyIndicatorFrame()` は現在の3集合を
+    // 読むだけの冪等関数なので、ここで明示的に呼び直して pending 中は非表示にする不変条件を
+    // baseUrl 切替の瞬間にも適用する。
+    this.applyIndicatorFrame()
   }
 
   /**
