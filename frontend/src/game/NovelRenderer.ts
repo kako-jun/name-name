@@ -2458,7 +2458,10 @@ export class NovelRenderer {
    *   テキストイベント以外（Background / ExpressionChange 等）は予算に数えず、予算を使い切った
    *   後の**次のテキストイベントに達した時点で**走査を終了する（そこに至るまでの Background 等は
    *   積む＝test18 が固定する挙動。上限で即座に走査終了するわけではない）。
-   * - **重複除去**: `preloadedUrls` で既に積んだ URL はスキップする。
+   * - **重複除去**: まずスキャン内（`urls`）で重複する URL を除去する（同じキャラの表情が
+   *   Dialog→ExpressionChange で連続する、同じ表情が複数回登場する等で発生し得る。近い順の並びを
+   *   保つため初出＝最も近い方を残す）。その上で `preloadedUrls` で既に積んだ URL もスキップする
+   *   （#417）。
    * - **ガード**: `assetBaseUrl` が空なら何もしない。実ダウンロードは投げっぱなしで、
    *   失敗は握りつぶす（先読み失敗で本編を止めない）。#293 の順序保証とは独立で、先読みが
    *   未完でも従来どおりテキストは詰まらない（後方互換）。
@@ -2529,8 +2532,17 @@ export class NovelRenderer {
       }
     }
 
+    // スキャン内での重複URL（同じキャラの表情が2回以上登場する等）を先に除去する（#417）。
+    // 近い順の並びを保つため、初出（最も近い方）を残して後続の重複を落とす。
+    const seen = new Set<string>()
+    const dedupedUrls = urls.filter((u) => {
+      if (seen.has(u)) return false
+      seen.add(u)
+      return true
+    })
+
     // 未積みの URL だけを backgroundLoad に積む（同期は走査のみ・実 DL は投げっぱなし）
-    const fresh = urls.filter((u) => !this.preloadedUrls.has(u))
+    const fresh = dedupedUrls.filter((u) => !this.preloadedUrls.has(u))
     if (fresh.length === 0) return
     for (const u of fresh) this.preloadedUrls.add(u)
     // 先読み失敗で本編を止めない。#293 のフォールバックがテキストは従来どおり解禁する。
