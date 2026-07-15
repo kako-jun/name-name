@@ -2527,7 +2527,17 @@ export class NovelRenderer {
     if (fresh.length === 0) return
     for (const u of fresh) this.preloadedUrls.add(u)
     // 先読み失敗で本編を止めない。#293 のフォールバックがテキストは従来どおり解禁する。
-    Assets.backgroundLoad(fresh).catch(() => {})
+    //
+    // fresh は近い順（nearest→farthest）に組み立てているが、PixiJS v8 の BackgroundLoader
+    // （node_modules/pixi.js/lib/assets/BackgroundLoader.mjs）は add() で配列末尾へ push した
+    // アセットを _next() で Array.pop()（末尾取り出し＝LIFO）で消化する非公開の内部実装になっている。
+    // そのままだと最も遠い（優先度が低い）アセットから読まれ、直後に必要な立ち絵が最後回しになる
+    // (#414)。reverse() して [farthest, ..., nearest] にしてから渡すことで、末尾＝nearest が
+    // 最初に pop されるようにする。
+    // ⚠️ これは PixiJS の非公開内部実装（pop=LIFO）依存の脆い前提。将来の PixiJS バージョンアップで
+    // BackgroundLoader の消化順が変わったら、この reverse は無意味になるか逆効果になり得る
+    // （#414 が静かに再発し得る）。
+    Assets.backgroundLoad(fresh.reverse()).catch(() => {})
   }
 
   /**
