@@ -22,9 +22,10 @@
  *     検知できないため、振る舞いレベルの検証として追加）。
  *
  * #417（PRELOAD_MAX_TEXT_EVENTS を 8 → Infinity へ）により、cap 到達を前提にセットアップしていた
- * 観点 6 / 11 / 16 / 17 / 24 は前提が崩れ it.skip + TODO(#417) コメントで一時停止中。特に 24 は
- * #414（LIFO cross-call 回帰）の唯一の検知テストだったため、cap 以外の手段での再設計が急務
- * （各 it.skip 直上の TODO コメント参照）。
+ * 観点 6 / 11 / 16 / 17 / 24 は前提が崩れていたが、cap 撤廃後の仕様に合わせて全件再設計済み
+ * （it.skip は解除済み）。24 は advance() 跨ぎでは #414 の再発検知条件が成立しなくなったため、
+ * Choice→jumpToScene によるシーン境界跨ぎに置き換えて #414（LIFO cross-call 回帰）の検知役を
+ * 引き継いだ。さらに #417 で追加されたスキャン内 dedup（同一 URL の初出保持）を D1〜D3 で新規カバーする。
  *
  * テスト設計（jsdom・canvas 非依存。既存 NovelRenderer.tachieTiming.test.ts の構築・spy 流儀に合わせる）:
  *   - `Assets.load`（立ち絵/背景の実表示ロード）と `Assets.unload` はモックで握り潰す。
@@ -186,16 +187,16 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     expect(preloadedUrls(bgSpy)).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'y/b')))
   })
 
-  // 6: Narration は立ち絵を積まないが、テキストイベント予算は 1 消費する。Narration×8 で予算を
-  //    使い切ると、9 個目のテキストイベント（有効 Dialog）は打ち切りで積まれない。
-  // TODO(#417): PRELOAD_MAX_TEXT_EVENTS=8 の打ち切り自体を検証するテストのため、Infinity 化で
-  //   前提が消滅（打ち切られなくなり Dialog は積まれる）。cap 撤廃後の仕様に合わせた再設計が必要。
-  it.skip('6: Narration は積まないが予算を 1 消費する（Narration×8→9 個目 Dialog は積まれない）', () => {
+  // 6 再設計(#417 cap 撤廃固定・cap 復活ガード): Narration は立ち絵を積まないが、旧 cap=8 の下では
+  //    テキストイベント予算を消費するため Narration×8 で予算切れとなり、9 個目のテキストイベント
+  //    （後続 Dialog）は打ち切られ立ち絵は積まれなかった。PRELOAD_MAX_TEXT_EVENTS=Infinity 化後は
+  //    打ち切りが発生しないため、Narration×20（旧 cap を大きく超える件数）を挟んでも後続 Dialog の
+  //    立ち絵は積まれることを固定する。将来 cap が復活したら本テストが検知する。
+  it('6: Narration大量(20件)でも後続Dialogの立ち絵は打ち切られず積まれる（cap撤廃固定・cap復活ガード）', () => {
     const { r, bgSpy } = setup()
-    const narrs = Array.from({ length: 8 }, (_, i) => narration('n' + i))
+    const narrs = Array.from({ length: 20 }, (_, i) => narration('n' + i))
     r.setScenes([scene('s', [...narrs, dialog('c', 'z/x', 't')])])
-    // 予算切れで 9 個目 Dialog は走査打ち切り。立ち絵は 1 本も積まれない。
-    expect(bgSpy).not.toHaveBeenCalled()
+    expect(preloadedUrls(bgSpy)).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'z/x')))
   })
 
   // 7: Video / BackgroundColor / Bgm / Blackout は先読み対象外（1 本も積まれない）。
@@ -249,16 +250,18 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     }
   })
 
-  // 11: 境界 — 連続 Dialog 9 件は先頭 8 件のみ（9 個目のテキストイベントで打ち切り、その立ち絵は落ちる）。
-  // TODO(#417): PRELOAD_MAX_TEXT_EVENTS=8 の打ち切り境界を検証するテストのため、Infinity 化で
-  //   前提が消滅（9 件目も積まれる）。cap 撤廃後の仕様に合わせた再設計が必要。
-  it.skip('11: 連続 Dialog 9 件は先頭 8 件のみ積む（9 件目は積まない）', () => {
+  // 11 再設計(#417 cap 撤廃固定・cap 復活ガード): 旧 cap=8 なら連続 Dialog 9 件目以降は打ち切られ
+  //    積まれなかった境界だが、cap 撤廃後は分岐/末尾に達するまで打ち切られない。theo-hayami の
+  //    実測最大値である 19 件（Issue #417 本文の実測値）を1シーンに置き、分岐なしで末尾まで到達
+  //    させ、全19件×2=38URLが積まれることを固定する。
+  it('11: 連続Dialog多数件(19件=theo-hayami実測max)でも全件積まれる（cap撤廃固定・cap復活ガード）', () => {
     const { r, bgSpy } = setup()
-    r.setScenes([scene('s', distinctDialogs(9))])
+    r.setScenes([scene('s', distinctDialogs(19))])
     const urls = preloadedUrls(bgSpy)
-    expect(urls.length).toBe(16)
-    // 9 件目（index 8 = ex/e8）の立ち絵は積まれない。
-    for (const u of resolveCharacterImageUrls(BASE, 'ex/e8')) expect(urls).not.toContain(u)
+    expect(urls.length).toBe(38)
+    for (let i = 0; i < 19; i++) {
+      for (const u of resolveCharacterImageUrls(BASE, 'ex/e' + i)) expect(urls).toContain(u)
+    }
   })
 
   // 12: Choice に当たったら走査停止。Choice より後ろの Dialog は積まない。
@@ -304,45 +307,32 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     expect(bgSpy).not.toHaveBeenCalled()
   })
 
-  // 16: 一度先読み済みの expression が別 Dialog で再登場しても、preloadedUrls の dedup で再送しない。
-  //     予算超過で初回スキャン枠の外に置いた同一 expression の Dialog を、advance で枠に入れて確認する。
-  // TODO(#417): 「予算超過で2個目の同一 expression Dialog を初回スキャン枠の外に出す」というセット
-  //   アップ自体が PRELOAD_MAX_TEXT_EVENTS=8 前提。Infinity 化で2個目も初回スキャンに含まれ、
-  //   cap 撤廃後の仕様に合わせた再設計が必要（同一走査内で同一 expression が複数回出現するケースの
-  //   dedup 挙動は cap 撤廃前は cap によって偶然露出していなかった可能性があり要確認）。
-  it.skip('16: 既に先読み済みの同一 expression 再登場は backgroundLoad に再送しない', () => {
+  // 16 再設計(cross-call dedup の character urls 版): 既存 test23 は Background(1URL) でこの経路を
+  //    検証しているが、Dialog/ExpressionChange の webp/png 2URL ペアでは未検証だった。同一
+  //    eventIndex から preloadUpcomingAssets() を2回呼び、2回目は両URLとも既に preloadedUrls
+  //    登録済みで fresh=0 となり backgroundLoad が呼ばれないことを確認する。
+  it('16: 既に先読み済みの立ち絵(webp/png 2URL)は同一eventIndexからの再呼び出しで再送しない（cross-call dedupのcharacter urls版）', () => {
     const { r, h, bgSpy } = setup()
-    // dialog(same/e) を先頭に置き、Narration×7 で予算を使い切って 2 個目の same/e を初回枠の外に出す。
-    const narrs = Array.from({ length: 7 }, (_, i) => narration('n' + i))
-    r.setScenes([scene('s', [dialog('a', 'same/e', 't'), ...narrs, dialog('b', 'same/e', 't')])])
-    // 初回は same/e を 1 度だけ積む（重複なし）。
-    expect(preloadedUrls(bgSpy)).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'same/e')))
+    r.setScenes([scene('s', [dialog('a', 'aa/happy', 'x')])])
+    expect(bgSpy).toHaveBeenCalledTimes(1)
 
     bgSpy.mockClear()
-    // advance で 2 個目 same/e が走査枠に入るが、既に積み済みなので再送されない。
-    h.advance()
+    h.preloadUpcomingAssets()
     expect(bgSpy).not.toHaveBeenCalled()
   })
 
-  // 17: advance 跨ぎの累積 dedup。予算で初回に積めなかった新規立ち絵だけが 2 手目 advance で積まれ、
-  //     既に積んだ URL は再送されない。
-  // TODO(#417): 「予算で初回に一部だけ積む」というセットアップ自体が PRELOAD_MAX_TEXT_EVENTS=8
-  //   前提。Infinity 化で初回に全10件が積まれ advance 後の新規積みが発生しなくなるため、
-  //   cap 撤廃後の仕様に合わせた再設計が必要。
-  it.skip('17: advance 跨ぎで既積み URL は再送せず新規 URL だけ積む', () => {
+  // 17 再設計(cap 撤廃による新しい不変条件): cap=Infinity の結果、初回スキャンが分岐/末尾まで
+  //    一括で積み切るため、同一シーン内での advance() は原理的に「既に積み済みの範囲の再走査」に
+  //    しかならず、2回目の backgroundLoad 呼び出しは発生しなくなった。distinctDialogs(10)
+  //    セットアップ後に advance() を呼び、bgSpy が(mockClear を挟んで)呼ばれないことを固定する。
+  it('17: advance()跨ぎでは新規URLは発生しない（cap撤廃による新しい不変条件）', () => {
     const { r, h, bgSpy } = setup()
-    // Dialog 10 件。初回は予算 8 で ex/e0..e7 を積み、ex/e8/e9 は枠外。
     r.setScenes([scene('s', distinctDialogs(10))])
-    expect(preloadedUrls(bgSpy).length).toBe(16)
+    expect(bgSpy).toHaveBeenCalledTimes(1)
 
     bgSpy.mockClear()
-    // 1 手 advance すると走査枠が index1..index8 に移り、ex/e8 が新規で入る（ex/e9 はまだ予算外）。
     h.advance()
-    const urls = preloadedUrls(bgSpy)
-    // 新規 ex/e8 の 2 URL だけが積まれる。
-    expect(urls).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'ex/e8')))
-    // 既に積んだ ex/e1 等は再送されない。
-    for (const u of resolveCharacterImageUrls(BASE, 'ex/e1')) expect(urls).not.toContain(u)
+    expect(bgSpy).not.toHaveBeenCalled()
   })
 
   // 18: 予算超過後の Background は積まれる（Background は予算に数えないため、Dialog×8 直後でも積む）。
@@ -418,32 +408,43 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     expect(bgSpy).not.toHaveBeenCalled()
   })
 
-  // 24: Issue必須シナリオ④・最重要 — advance跨ぎで複数回backgroundLoadが呼ばれるとき、前回
-  //     呼び出し分の未消化キュー残と今回の新規reverse分を合成したpop順で、新規（今回分＝より近い）
-  //     が前回残存分より先に消化されること。
-  //     ⚠️ このテストが無いと、「1回の呼び出し内だけreverseすれば足りる」という誤った縮退実装でも
-  //     テストが気づけない（Issue #414 の本質は複数回呼び出しをまたいだキュー蓄積）。
-  // TODO(#417・要優先対応): distinctDialogs(10) を advance 1 回だけで backgroundLoad 2 回に
-  //   分割する仕掛けが PRELOAD_MAX_TEXT_EVENTS=8 前提（初回8件+advanceで9件目）だった。Infinity化で
-  //   初回1回のscanで10件全部積まれてしまい2回目呼び出しが発生しなくなったため、このテストは
-  //   #414 回帰検知の効力を失っている。cap 以外の手段（例: 走査を複数回に分けて呼ばせる・シーン分割
-  //   等）で「2回のbackgroundLoad呼び出しをまたいだLIFO消化順」を再現するシナリオへの再設計が
-  //   他の TODO(#417) より優先度高（#414 の回帰ガードが本テスト以外に存在しない可能性がある）。
-  it.skip('24: advance跨ぎの2回目backgroundLoad新規分が1回目残存分より先にpopされる (#414 回帰検知・最重要)', () => {
-    const { r, h, bgSpy } = setup()
-    // Dialog 10 件。初回は予算8でex/e0..e7（16URL・1回目backgroundLoad呼び出し）を積み、
-    // advanceでex/e8（2URL・2回目backgroundLoad呼び出し）が新規で入る（test17と同じ走査）。
-    r.setScenes([scene('s', distinctDialogs(10))])
-    h.advance()
-    expect(bgSpy.mock.calls.length).toBe(2)
+  // 24 再設計(#417 cap 撤廃・Choice→jumpToScene 経由での #414 保護再構築・最重要):
+  //    cap 撤廃により、単一シーン内での advance() 跨ぎ複数回呼び出しは(test17 の通り)もう起こらない。
+  //    今後2回以上の backgroundLoad 呼び出しが自然発生する唯一の経路はシーン境界
+  //    （Choice→jumpToScene）であり、これは Issue #414 が想定した「複数回呼び出しをまたいだ
+  //    キュー蓄積」の中で今もなお現実に起こり得るケース。jumpToScene は Choice 選択 callback が
+  //    実際に呼ぶ本体そのもの（public API, NovelRenderer.ts:831）なので、choiceOverlay の
+  //    UI/AudioContext 依存を回避しつつ実際の選択肢確定と同じコードパスを通せる（既存の
+  //    NovelRenderer.confinement.test.ts でも同じ手法で jumpToScene を直接呼んでいる実績あり）。
+  //    各segmentを2Dialog(4 URL)にして、batch内nearest-first順序も同時に確認する。
+  //    ⚠️ このテストが無いと、「1回の呼び出し内だけreverseすれば足りる」という誤った縮退実装でも
+  //    テストが気づけない（Issue #414 の本質は複数回呼び出しをまたいだキュー蓄積）。cap 撤廃後は
+  //    このテストだけが #414（LIFO順序逆転）の再発を検知できる唯一のガードになる。
+  it('24: Choice→jumpToSceneのシーン跨ぎ2回目backgroundLoadで新規分(2回目)が旧分(1回目)より先にLIFO消化される (#414 回帰検知・最重要)', () => {
+    const { r, bgSpy } = setup()
+    const scene1Events = [
+      dialog('a1', 'aa/e1', 't1'),
+      dialog('a2', 'aa/e2', 't2'),
+      choice('scene2'),
+    ]
+    const scene2Events = [dialog('b1', 'bb/e1', 't1'), dialog('b2', 'bb/e2', 't2')]
+    r.setScenes([scene('scene1', scene1Events), scene('scene2', scene2Events)])
+    // 1回目 backgroundLoad(4 urls, Choiceで走査停止)
+    expect(bgSpy).toHaveBeenCalledTimes(1)
+
+    // jumpToScene は Choice 選択 callback が実際に呼ぶ本体と同一のコードパス。
+    r.jumpToScene('scene2')
+    // 2回目 backgroundLoad(4 urls)
+    expect(bgSpy).toHaveBeenCalledTimes(2)
 
     const consumeOrder = simulateLifoConsumeOrder(bgSpy.mock.calls.map((c) => c[0] as string[]))
-    const firstBatch = Array.from({ length: 8 }, (_, i) =>
-      resolveCharacterImageUrls(BASE, 'ex/e' + i)
-    ).flat()
-    const secondBatch = resolveCharacterImageUrls(BASE, 'ex/e8')
-    // 2回目（新規・より近い）の全URLが、1回目残存分より先に消化される。
-    expect(consumeOrder).toEqual([...secondBatch, ...firstBatch])
+    // 新規（2回目・scene2＝より近い）の全URLが、旧（1回目・scene1）残存分より先に消化される。
+    expect(consumeOrder).toEqual([
+      ...resolveCharacterImageUrls(BASE, 'bb/e1'),
+      ...resolveCharacterImageUrls(BASE, 'bb/e2'),
+      ...resolveCharacterImageUrls(BASE, 'aa/e1'),
+      ...resolveCharacterImageUrls(BASE, 'aa/e2'),
+    ])
   })
 
   // 25(任意・回帰固定・低優先): fresh.reverse() は破壊的操作（fresh 自体を in-place で反転する）
@@ -454,5 +455,60 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     r.setScenes([scene('s', [dialog('a', 'aa/happy', 'x')])])
     const registered = Array.from(h.preloadedUrls)
     expect(registered).toEqual(resolveCharacterImageUrls(BASE, 'aa/happy'))
+  })
+
+  // --- ここから #417 dedup 機能(スキャン内重複URL除去)の新規テスト ---
+  // デシジョンテーブル(dedup: スキャン内dup × preloadedUrls既存登録):
+  //   1. dup無×既存無 → 1回積まれる(通常、既存テストでカバー済み)
+  //   2. dup無×既存有 → 0回(再送しない、既存test16/23でカバー済み)
+  //   3. dup有×既存無 → 1回だけ積まれる(scan内で1つに収束してから通過) ... D1
+  //   4. dup有×既存有 → 0回 ... D2
+  // いずれの組み合わせでも同一URLが2回以上backgroundLoadに渡ることは構造的に起こり得ない
+  // （dedupedUrlsのfilterとfreshのfilterが直列に効くため）。これが dedup 機能の正しさの核心。
+
+  // D1(デシジョンテーブル cell 3): 同一expressionがDialog→Dialogで2回登場しても、スキャン内dedupで
+  //    URLは1回(webp/png2件ちょうど。4件でない)しか積まれない。
+  it('D1: 同一expressionがDialog→Dialogで2回登場してもURLは1回(2件)しか積まれない(scan内dedup・デシジョンテーブルcell3)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([scene('s', [dialog('a', 'same/e', 't1'), dialog('b', 'same/e', 't2')])])
+    const urls = preloadedUrls(bgSpy)
+    expect(urls).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'same/e')))
+  })
+
+  // D2(デシジョンテーブル cell 4): D1と同一セットアップで1回目呼び出し後、scan内dedupが解消された
+  //    後でも cross-call dedup(preloadedUrls)が独立して効き、同一eventIndexでの再呼び出しは
+  //    再送しない。#417 の申し送り事項どおり、シーン境界を跨がず同一シーン内で検証する
+  //    （resetAndStartEvents は preloadedUrls をクリアするため、シーンジャンプで組むと成立しない）。
+  it('D2: dedup後も既にpreloadedUrls登録済みなら再送しない(cross-call dedup・デシジョンテーブルcell4)', () => {
+    const { r, h, bgSpy } = setup()
+    r.setScenes([scene('s', [dialog('a', 'same/e', 't1'), dialog('b', 'same/e', 't2')])])
+    expect(bgSpy).toHaveBeenCalledTimes(1)
+
+    bgSpy.mockClear()
+    h.preloadUpcomingAssets()
+    expect(bgSpy).not.toHaveBeenCalled()
+  })
+
+  // D3(dedupの順序保証・最重要): same/e が1件目と3件目に重複登場し、間にother/eを挟む。dedupが
+  //    「初出(最も近い)を残す」正しい実装なら、LIFO実消化順は same/e(近い)→other/e(遠い) になる。
+  //    もし誤って「後発を残す/末尾を残す」実装だと、other/eが先に来てしまう。単なる件数チェック
+  //    (D1)だけでは「どちらの出現位置を残したか」を区別できないため、順序を
+  //    simulateLifoConsumeOrder経由で見る本テストが必要。
+  //    ⚠️ このテストが無いと、dedupの初出保証（近い順を保つ実装）が崩れて #414 型の順序逆転が
+  //    再発してもテストが検知できない。
+  it('D3: dedupは初出(最も近い)位置を残す=順序は近い順のまま(dedupの順序保証・最重要)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([
+      scene('s', [
+        dialog('a', 'same/e', 't1'),
+        dialog('x', 'other/e', 't2'),
+        dialog('b', 'same/e', 't3'),
+      ]),
+    ])
+    const consumeOrder = simulateLifoConsumeOrder(bgSpy.mock.calls.map((c) => c[0] as string[]))
+    expect(consumeOrder).toEqual([
+      ...resolveCharacterImageUrls(BASE, 'same/e'),
+      ...resolveCharacterImageUrls(BASE, 'other/e'),
+    ])
   })
 })
