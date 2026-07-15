@@ -223,6 +223,14 @@ export class DialogBox extends Container {
   private indicatorFrameTextures: Partial<Record<IndicatorKind, Texture[]>> = {}
   private failedIndicatorKinds = new Set<IndicatorKind>()
   /**
+   * 画像フレームの fetch が「実際に in-flight」な種別の集合 (#413)。
+   * `failedIndicatorKinds`（確定失敗）にも `indicatorFrameTextures`（確定成功）にも属さない
+   * “未確定” のうち、ここに載っている種別だけが「結果待ち＝▼ も出さない」対象になる。載って
+   * いない“未確定”（`setIndicatorAssetBaseUrl`/`setIndicatorKind` が一度も呼ばれていない＝
+   * そもそも fetch を試みていない作品・RPG モード等）は非回帰で ▼ を即表示する。
+   */
+  private pendingIndicatorKinds = new Set<IndicatorKind>()
+  /**
    * インジケータ種別 (#292)。`next`=次の文（▼明滅）/ `pageturn`=改頁（❯）。
    * `setIndicatorKind` で切り替え、グリフは INDICATOR_GLYPH 表から引く。
    */
@@ -400,6 +408,10 @@ export class DialogBox extends Container {
     })
     this.indicator = new Container()
     this.indicatorGlyph = new Text({ text: '▼', style: indicatorStyle })
+    // 既定は表示 (#413)。画像フレームの fetch が実際に始まった（pendingIndicatorKinds に載る）
+    // 種別だけ applyIndicatorFrame() が一時的に隠す。fetch を一度も試みていない作品（画像なし・
+    // RPG モード等）はここでの true のまま＝非回帰で ▼ が即表示される。
+    this.indicatorGlyph.visible = true
     this.indicatorSprite = new Sprite(Texture.EMPTY)
     this.indicatorSprite.width = INDICATOR_IMAGE_SIZE
     this.indicatorSprite.height = INDICATOR_IMAGE_SIZE
@@ -1122,23 +1134,40 @@ export class DialogBox extends Container {
     return (this.indicatorFrameTextures[this.indicatorKind]?.length ?? 0) > 0
   }
 
+  /**
+   * 種別 1 つ分の画像フレームをロードする (#292)。
+   *
+   * #413: 「読み込み中かどうか」を確定させるため 3 分岐に分ける。
+   *  1. 既にロード済み／既に確定失敗済み → 再フェッチせず、現在の確定状態を再適用するだけ。
+   *  2. `indicatorAssetBaseUrl` が未設定（＝そもそもこの作品にアセットが設定されていない＝
+   *     将来も絶対に成功しない）→ 即座に確定失敗として扱う（▼ フォールバックを即表示させる）。
+   *  3. それ以外（実際にフェッチする）→ `pendingIndicatorKinds` に載せてから fetch を開始する。
+   *     結果が確定する（then/catch）までは `applyIndicatorFrame()` を呼ばない＝▼ もスプライトも
+   *     出さない「読み込み中は何も見せない」状態を保つ。
+   */
   private loadIndicatorFrames(kind: IndicatorKind): void {
-    if (
-      !this.indicatorAssetBaseUrl ||
-      this.indicatorFrameTextures[kind] ||
-      this.failedIndicatorKinds.has(kind)
-    ) {
+    if (this.indicatorFrameTextures[kind] || this.failedIndicatorKinds.has(kind)) {
+      this.applyIndicatorFrame()
+      return
+    }
+    if (!this.indicatorAssetBaseUrl) {
+      this.failedIndicatorKinds.add(kind)
       this.applyIndicatorFrame()
       return
     }
     const baseUrl = this.indicatorAssetBaseUrl
     const urls = getIndicatorImageUrls(baseUrl, kind)
+    this.pendingIndicatorKinds.add(kind)
     Promise.all(urls.map((url) => Assets.load(url)))
       .then((loaded) => {
+        // baseUrl が変わっていたら古い結果。pendingIndicatorKinds は新しい fetch の分をまだ
+        // 表しているはずなので触らない（触ると新 fetch 完了前に一瞬 pending が外れてしまう）。
         if (this.indicatorAssetBaseUrl !== baseUrl) return
+        this.pendingIndicatorKinds.delete(kind)
         const textures = loaded.filter((tex): tex is Texture => tex instanceof Texture)
         if (textures.length !== urls.length) {
           this.failedIndicatorKinds.add(kind)
+          if (this.indicatorKind === kind) this.applyIndicatorFrame()
           return
         }
         this.indicatorFrameTextures[kind] = textures
@@ -1148,6 +1177,8 @@ export class DialogBox extends Container {
         }
       })
       .catch((err: unknown) => {
+        if (this.indicatorAssetBaseUrl !== baseUrl) return
+        this.pendingIndicatorKinds.delete(kind)
         this.failedIndicatorKinds.add(kind)
         console.warn(`[DialogBox] failed to load ${kind} indicator images:`, err)
         if (this.indicatorKind === kind) this.applyIndicatorFrame()
@@ -1175,6 +1206,15 @@ export class DialogBox extends Container {
     this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
   }
 
+  /**
+   * 表示中インジケータ（sprite/glyph）の可視状態を確定する (#292 / #413)。
+   *
+   * 3 状態:
+   *  - 画像フレームが揃っている → sprite を表示し ▼ グリフは隠す（従来どおり）。
+   *  - 画像フレームは無いが fetch が in-flight（`pendingIndicatorKinds` に載っている）→
+   *    sprite も ▼ グリフも隠す。「結果未確定の間は何も見せない」が #413 の本題。
+   *  - それ以外（fetch を試みていない／確定失敗） → 従来どおり ▼ グリフへフォールバックする。
+   */
   private applyIndicatorFrame(): void {
     const frames = this.indicatorFrameTextures[this.indicatorKind]
     if (frames && frames.length > 0) {
@@ -1186,7 +1226,7 @@ export class DialogBox extends Container {
       return
     }
     this.indicatorSprite.visible = false
-    this.indicatorGlyph.visible = true
+    this.indicatorGlyph.visible = !this.pendingIndicatorKinds.has(this.indicatorKind)
   }
 
   dispose(): void {
