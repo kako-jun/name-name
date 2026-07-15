@@ -5,6 +5,7 @@ import {
   parseColorToNumber,
   resolveAssetUrl,
   resolveCharacterImageUrls,
+  getIndicatorImageUrls,
   saveSlotToGameState,
   resolveFontFamily,
   formatCounterText,
@@ -329,6 +330,60 @@ describe('resolveCharacterImageUrls (#376)', () => {
     const urls = resolveCharacterImageUrls('https://cdn.example.com', 'hero/smile')
     expect(urls[0]).toBe('https://cdn.example.com/images/hero/smile.webp')
     expect(urls[1]).toBe('https://cdn.example.com/images/hero/smile.png')
+  })
+})
+
+// =====================================================================================
+// #413: getIndicatorImageUrls（ページ送りインジケータ画像 URL 組み立ての純関数）。
+//   DialogBox.loadIndicatorFrames と NovelPlayer の先読み useEffect が共に参照する唯一の
+//   情報源。期待 URL は資料値の直書きでなく resolveAssetUrl で組み立てて陳腐化を防ぐ
+//   （doctrine 規律4、resolveCharacterImageUrls のテストと同じ流儀）。
+// =====================================================================================
+describe('getIndicatorImageUrls (#413)', () => {
+  // NL-1（正常系）: next は text-next-{1..4}.webp の 4 件を順序どおり返す。
+  it('next は text-next-1..4.webp を順序どおり返す', () => {
+    const base = 'https://x'
+    const urls = getIndicatorImageUrls(base, 'next')
+    expect(urls).toEqual([
+      resolveAssetUrl(base, 'images', 'ui/text-next-1.webp'),
+      resolveAssetUrl(base, 'images', 'ui/text-next-2.webp'),
+      resolveAssetUrl(base, 'images', 'ui/text-next-3.webp'),
+      resolveAssetUrl(base, 'images', 'ui/text-next-4.webp'),
+    ])
+  })
+
+  // NL-2（正常系/同値分割）: pageturn は next とパス prefix が異なる同型の 4 件を返す。
+  it('pageturn は page-turn-1..4.webp を順序どおり返す', () => {
+    const base = 'https://x'
+    const urls = getIndicatorImageUrls(base, 'pageturn')
+    expect(urls).toEqual([
+      resolveAssetUrl(base, 'images', 'ui/page-turn-1.webp'),
+      resolveAssetUrl(base, 'images', 'ui/page-turn-2.webp'),
+      resolveAssetUrl(base, 'images', 'ui/page-turn-3.webp'),
+      resolveAssetUrl(base, 'images', 'ui/page-turn-4.webp'),
+    ])
+  })
+
+  // NL-3（正常系）: 同一 baseUrl で next と pageturn を合わせると 8 件・重複なし
+  //   （NovelPlayer の先読み useEffect が両種別を flatMap する前提を固定する）。
+  it('next + pageturn を合わせて 8 件、重複なし', () => {
+    const base = 'https://x'
+    const all = [...getIndicatorImageUrls(base, 'next'), ...getIndicatorImageUrls(base, 'pageturn')]
+    expect(all.length).toBe(8)
+    expect(new Set(all).size).toBe(8)
+  })
+
+  // NL-4（境界/null空文字未設定）: baseUrl='' でも例外を投げず、resolveAssetUrl と同じ規則
+  //   （先頭を '/images/...' にする）で組み立てる。
+  it('baseUrl が空文字でも例外を投げず resolveAssetUrl と同じ規則で組み立てる', () => {
+    const urls = getIndicatorImageUrls('', 'next')
+    expect(urls).toEqual([
+      resolveAssetUrl('', 'images', 'ui/text-next-1.webp'),
+      resolveAssetUrl('', 'images', 'ui/text-next-2.webp'),
+      resolveAssetUrl('', 'images', 'ui/text-next-3.webp'),
+      resolveAssetUrl('', 'images', 'ui/text-next-4.webp'),
+    ])
+    expect(urls[0]).toBe('/images/ui/text-next-1.webp')
   })
 })
 

@@ -17,6 +17,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
+import { Assets, Texture } from 'pixi.js'
+import { getIndicatorImageUrls } from '../game/novelLayout'
 
 // NovelRenderer を完全スタブ化（PixiJS 構築・init を無効化）。
 // NovelPlayer は init().then(...) 内で多数の setter を呼ぶので、すべて no-op で受ける。
@@ -25,10 +27,17 @@ import { act, render, screen } from '@testing-library/react'
 // `new NovelRenderer(...)` で構築されるため、mock はコンストラクタ（クラス本体）を返す必要がある。
 // vi.mock の factory は冒頭にホイストされるので、クラス・生成インスタンス記録は vi.hoisted で
 // 一緒にホイストして factory から参照できるようにする（top-level 変数参照の TDZ を回避）。
-const { rendererInstances, MockRenderer } = vi.hoisted(() => {
+//
+// #413: setInitNeverResolves(true) を render() 前に呼ぶと、次に構築される MockRenderer の
+// init() が永久 pending の Promise を返す（NP-6: renderer.init() 未解決でもインジケータ画像の
+// 先読みが独立して発火することを検証するため）。既定は従来どおり即 resolve。
+const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() => {
   const instances: MockRenderer[] = []
+  let initNeverResolves = false
   class MockRenderer {
-    init = vi.fn().mockResolvedValue(undefined)
+    init = vi.fn(() =>
+      initNeverResolves ? new Promise<void>(() => {}) : Promise.resolve(undefined)
+    )
     destroy = vi.fn()
     setAssetBaseUrl = vi.fn()
     setOnAutoModeChange = vi.fn()
@@ -77,7 +86,13 @@ const { rendererInstances, MockRenderer } = vi.hoisted(() => {
       instances.push(this)
     }
   }
-  return { rendererInstances: instances, MockRenderer }
+  return {
+    rendererInstances: instances,
+    MockRenderer,
+    setInitNeverResolves: (v: boolean) => {
+      initNeverResolves = v
+    },
+  }
 })
 type MockRenderer = InstanceType<typeof MockRenderer>
 
@@ -125,6 +140,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   // #395: 既定は standalone（非埋め込み）。埋め込みテストだけ true に上書きする。
   isEmbeddedMock.mockReturnValue(false)
+  // #413: 既定は即 resolve。NP-6 だけ render() 前に true へ上書きする。
+  setInitNeverResolves(false)
 })
 
 afterEach(() => {
@@ -677,5 +694,140 @@ describe('NovelPlayer 下地ベタの既定色 background_color 配線 (#409)', 
     await flushAsync()
     const r = rendererInstances[rendererInstances.length - 1]
     expect(r.setDefaultBackgroundColor).toHaveBeenCalledWith(null)
+  })
+})
+
+// #413: インジケータ画像（next/pageturn 各4枚=計8枚）の先読み useEffect。
+// `renderer`/`rendererRef` を一切参照しない、`[assetBaseUrl]` だけに依存する独立 effect（下の
+// renderer 生成/init effect とは別物）であることが本題。pixi.js はこのテストファイルでは
+// NovelRenderer 経由でしか使っていない（vi.mock 済み）ため未モックで、DialogBox.test.ts と同じ
+// 流儀で `Assets.load` を直接 spy する。期待 URL は資料値の直書きでなく getIndicatorImageUrls で
+// 組み立てて陳腐化を防ぐ（doctrine 規律4）。
+describe('NovelPlayer インジケータ画像先読み (#413)', () => {
+  const expectedUrls = (base: string) =>
+    (['next', 'pageturn'] as const).flatMap((kind) => getIndicatorImageUrls(base, kind))
+
+  it('NP-1: assetBaseUrl を最初から渡してmountすると8URL全てで Assets.load が呼ばれる', async () => {
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>)
+
+    render(<NovelPlayer events={[]} assetBaseUrl="/asset-base" />)
+    await flushAsync()
+
+    const urls = expectedUrls('/asset-base')
+    expect(urls.length).toBe(8)
+    expect(load).toHaveBeenCalledTimes(8)
+    urls.forEach((url) => expect(load).toHaveBeenCalledWith(url))
+  })
+
+  it('NP-2: assetBaseUrl=undefined でmount→rerenderで値確定すると、mount時0回・確定後8回', async () => {
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>)
+
+    const { rerender } = render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(load).not.toHaveBeenCalled()
+
+    rerender(<NovelPlayer events={[]} assetBaseUrl="/asset-base" />)
+    await flushAsync()
+
+    expect(load).toHaveBeenCalledTimes(8)
+  })
+
+  it('NP-3: assetBaseUrl を最後まで渡さないと Assets.load は一度も呼ばれない', async () => {
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>)
+
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+
+    expect(load).not.toHaveBeenCalled()
+  })
+
+  it('NP-3b: assetBaseUrl="" でも Assets.load は一度も呼ばれない（境界: 空文字も未設定扱い）', async () => {
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>)
+
+    render(<NovelPlayer events={[]} assetBaseUrl="" />)
+    await flushAsync()
+
+    expect(load).not.toHaveBeenCalled()
+  })
+
+  it('NP-4: assetBaseUrl が /a→/b と変わると追加で8回呼ばれる（計16回）', async () => {
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>)
+
+    const { rerender } = render(<NovelPlayer events={[]} assetBaseUrl="/a" />)
+    await flushAsync()
+    expect(load).toHaveBeenCalledTimes(8)
+
+    rerender(<NovelPlayer events={[]} assetBaseUrl="/b" />)
+    await flushAsync()
+
+    expect(load).toHaveBeenCalledTimes(16)
+  })
+
+  it('NP-5: fetch未解決のうちに unmount しても例外を投げない', async () => {
+    vi.spyOn(Assets, 'load').mockImplementation(
+      () => new Promise<never>(() => {}) // 永久 pending
+    )
+
+    const { unmount } = render(<NovelPlayer events={[]} assetBaseUrl="/asset-base" />)
+    await flushAsync()
+
+    expect(() => unmount()).not.toThrow()
+  })
+
+  it('NP-6: renderer.init() が永久 pending でも Assets.load は呼ばれる（#413 の核心の直接検証）', async () => {
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>)
+    setInitNeverResolves(true)
+
+    render(<NovelPlayer events={[]} assetBaseUrl="/asset-base" />)
+    await flushAsync()
+
+    // このuseEffectが renderer/rendererRef に一切依存しない独立実装で無いと Issue #413 が
+    // 再発する: renderer.init() の解決を待ってから先読みを始めると、初回表示に一瞬 ▼
+    // フォールバックが挟まる事故（#413 本題）が起きる。renderer.init() は下のアサーションで
+    // 呼ばれたことだけ確認する（＝このテストで本当に「init 未解決」状況を作れている証拠）。
+    // init() の解決を要件にする別経路（setAssetBaseUrl の [assetBaseUrl] useEffect 配線）は
+    // rendererRef.current 自体を init() 完了前から参照するため、ここでは検証対象にしない。
+    expect(load).toHaveBeenCalledTimes(8)
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.init).toHaveBeenCalled()
+  })
+
+  it('NP-7: 8URL全てrejectしても例外を投げず console 出力もない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(Assets, 'load').mockRejectedValue(new Error('404'))
+
+    render(<NovelPlayer events={[]} assetBaseUrl="/asset-base" />)
+    await flushAsync()
+
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('NP-8: 同じ assetBaseUrl で再render しても依存配列により呼び出し回数が増えない', async () => {
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>)
+
+    const { rerender } = render(<NovelPlayer events={[]} assetBaseUrl="/asset-base" />)
+    await flushAsync()
+    expect(load).toHaveBeenCalledTimes(8)
+
+    rerender(<NovelPlayer events={[]} assetBaseUrl="/asset-base" />)
+    await flushAsync()
+
+    expect(load).toHaveBeenCalledTimes(8)
   })
 })

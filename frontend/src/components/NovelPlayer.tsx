@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Assets } from 'pixi.js'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 import { parseDebugQuery } from '../game/debugQuery'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import { type AspectRatio, ASPECT_RATIOS, parseAspectRatio } from '../game/constants'
-import { PLAYER_BUTTON_RIGHT_MARGIN_PX, PLAYER_BUTTON_SLOT_GAP_PX } from '../game/novelLayout'
+import {
+  getIndicatorImageUrls,
+  PLAYER_BUTTON_RIGHT_MARGIN_PX,
+  PLAYER_BUTTON_SLOT_GAP_PX,
+} from '../game/novelLayout'
 import { buildStoryEndedMessage } from '../game/storyEndedMessage'
 import { isEmbedded } from '../utils/isEmbedded'
 import SettingsOverlay from './SettingsOverlay'
@@ -198,6 +203,23 @@ function NovelPlayer({
   // 有効な AspectRatio に正規化
   const aspectRatio = parseAspectRatio(aspectRatioProp)
   const { width: gameWidth, height: gameHeight } = ASPECT_RATIOS[aspectRatio]
+
+  // インジケータ画像の先読み (#413)。assetBaseUrl が分かった時点で、renderer の生成/初期化
+  // （下の init effect の `renderer.init(...).then(...)`）を待たずにインジケータ画像（next/pageturn
+  // 計8枚）の Assets.load() を fire-and-forget で開始する。renderer/DialogBox の状態には
+  // 一切触れない独立した effect なので、renderer 生成前でも安全（rendererRef を参照しない）。
+  // PixiJS の Assets.load() は同一 URL の in-flight/解決済み Promise をキャッシュ共有するため、
+  // ここが早く走るほど、後段の DialogBox.loadIndicatorFrames（renderer.init() 完了後に発火）が
+  // 同じ URL を要求したときには既に解決済み/解決間近になり、初回表示時に一瞬 ▼ フォールバックが
+  // 挟まる事故（#413 本題）を防げる。失敗（404 等）は DialogBox 側の本読み込みが別途拾うので、
+  // ここでは黙って握りつぶす。
+  useEffect(() => {
+    if (!assetBaseUrl) return
+    const urls = (['next', 'pageturn'] as const).flatMap((kind) =>
+      getIndicatorImageUrls(assetBaseUrl, kind)
+    )
+    Promise.all(urls.map((url) => Assets.load(url))).catch(() => {})
+  }, [assetBaseUrl])
 
   // ライフサイクル管理: init + destroy
   // aspectRatio が変わる場合はコンポーネントを再マウントすること

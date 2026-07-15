@@ -31,7 +31,12 @@ import {
   tickTypewriter,
   visibleText,
 } from './typewriter'
-import { computeNovelIndicatorPlacement, resolveAssetUrl, wrappedPrefixLength } from './novelLayout'
+import {
+  computeNovelIndicatorPlacement,
+  getIndicatorImageUrls,
+  type IndicatorKind,
+  wrappedPrefixLength,
+} from './novelLayout'
 
 // ---------------------------------------------------------------------------
 // portrait レイアウト定数（テストが参照する）
@@ -143,12 +148,13 @@ const DEFAULT_MS_PER_CHAR = 30
 const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 8, distance: 3, alpha: 1 } as const
 
 /**
- * クリッカー（インジケータ）の種別 (#292)。
+ * クリッカー（インジケータ）の種別 (#292)。`IndicatorKind` 本体は画像パス一覧
+ * `getIndicatorImageUrls` と同じ novelLayout.ts に定義する（種別と一覧の食い違いを防ぐ #413）。
+ * ここでは既存の `import { IndicatorKind } from './DialogBox'` 経路を維持するため re-export する。
  *  - `next`     : 同ページにまだ続く文がある（次は文の送り）。
  *  - `pageturn` : そのページの最後の文（クリックでページを離れる＝次ページ or 次イベント）。
- * 種別で形が即座に違い、次が「文」か「改頁」か目で分かるようにする。
  */
-export type IndicatorKind = 'next' | 'pageturn'
+export type { IndicatorKind }
 
 /**
  * 種別 → プレースホルダ記号（グリフ）の対応表 (#292)。**ここ 1 箇所に集約**する。
@@ -163,20 +169,6 @@ const INDICATOR_GLYPH: Record<IndicatorKind, string> = {
 
 const INDICATOR_IMAGE_SIZE = 32
 const INDICATOR_FRAME_MS = 360
-const INDICATOR_IMAGE_PATHS: Record<IndicatorKind, string[]> = {
-  next: [
-    'ui/text-next-1.webp',
-    'ui/text-next-2.webp',
-    'ui/text-next-3.webp',
-    'ui/text-next-4.webp',
-  ],
-  pageturn: [
-    'ui/page-turn-1.webp',
-    'ui/page-turn-2.webp',
-    'ui/page-turn-3.webp',
-    'ui/page-turn-4.webp',
-  ],
-}
 
 /**
  * novel スタイル (#283) のテキスト領域マージン（px、論理座標）。
@@ -230,6 +222,14 @@ export class DialogBox extends Container {
   private indicatorAssetBaseUrl = ''
   private indicatorFrameTextures: Partial<Record<IndicatorKind, Texture[]>> = {}
   private failedIndicatorKinds = new Set<IndicatorKind>()
+  /**
+   * 画像フレームの fetch が「実際に in-flight」な種別の集合 (#413)。
+   * `failedIndicatorKinds`（確定失敗）にも `indicatorFrameTextures`（確定成功）にも属さない
+   * “未確定” のうち、ここに載っている種別だけが「結果待ち＝▼ も出さない」対象になる。載って
+   * いない“未確定”（`setIndicatorAssetBaseUrl`/`setIndicatorKind` が一度も呼ばれていない＝
+   * そもそも fetch を試みていない作品・RPG モード等）は非回帰で ▼ を即表示する。
+   */
+  private pendingIndicatorKinds = new Set<IndicatorKind>()
   /**
    * インジケータ種別 (#292)。`next`=次の文（▼明滅）/ `pageturn`=改頁（❯）。
    * `setIndicatorKind` で切り替え、グリフは INDICATOR_GLYPH 表から引く。
@@ -408,6 +408,10 @@ export class DialogBox extends Container {
     })
     this.indicator = new Container()
     this.indicatorGlyph = new Text({ text: '▼', style: indicatorStyle })
+    // 既定は表示 (#413)。画像フレームの fetch が実際に始まった（pendingIndicatorKinds に載る）
+    // 種別だけ applyIndicatorFrame() が一時的に隠す。fetch を一度も試みていない作品（画像なし・
+    // RPG モード等）はここでの true のまま＝非回帰で ▼ が即表示される。
+    this.indicatorGlyph.visible = true
     this.indicatorSprite = new Sprite(Texture.EMPTY)
     this.indicatorSprite.width = INDICATOR_IMAGE_SIZE
     this.indicatorSprite.height = INDICATOR_IMAGE_SIZE
@@ -1034,7 +1038,21 @@ export class DialogBox extends Container {
     this.indicatorAssetBaseUrl = url
     this.indicatorFrameTextures = {}
     this.failedIndicatorKinds.clear()
+    // #413 S1: pendingIndicatorKinds も併せてクリアする。`loadIndicatorFrames` は S1 で
+    // 「既に pending 中なら再フェッチしない」ガードを持つため、ここでクリアしないと旧 baseUrl
+    // の未解決 fetch が残した pending 状態のせいで、新 baseUrl 用の正当な再フェッチが誤って
+    // 短絡されてしまう（旧 fetch の解決は下の `.then`/`.catch` の baseUrl 不一致ガードで
+    // 別途無視されるので、ここで消しても「触ると新 fetch 完了前に一瞬 pending が外れる」問題は
+    // 起きない＝直後の `loadIndicatorFrames` 呼び出しが同期的に入れ直す）。
+    this.pendingIndicatorKinds.clear()
     this.loadIndicatorFrames(this.indicatorKind)
+    // #413 re-review S1: `loadIndicatorFrames` がフレッシュフェッチ分岐（in-flight を新規に
+    // 開始するケース）に入ると `applyIndicatorFrame()` を同期的に呼ばない設計のため、旧 baseUrl
+    // で既に確定表示していたスプライト（visible=true・旧テクスチャ）がここで止まると新 fetch が
+    // 解決するまで残存表示されてしまう。M1 と同じ理屈で `applyIndicatorFrame()` は現在の3集合を
+    // 読むだけの冪等関数なので、ここで明示的に呼び直して pending 中は非表示にする不変条件を
+    // baseUrl 切替の瞬間にも適用する。
+    this.applyIndicatorFrame()
   }
 
   /**
@@ -1043,7 +1061,16 @@ export class DialogBox extends Container {
    * （記号幅が変わるとはみ出しクランプが変わるため）。
    */
   setIndicatorKind(kind: IndicatorKind): void {
-    if (this.indicatorKind === kind && this.indicatorGlyph.text === INDICATOR_GLYPH[kind]) return
+    if (this.indicatorKind === kind && this.indicatorGlyph.text === INDICATOR_GLYPH[kind]) {
+      // #413 M1: この早期return自体は変わらないが、`applyIndicatorFrame()` を呼ばずに戻ると
+      // pending 状態の変化（例: この呼び出し直前に `setIndicatorAssetBaseUrl` が fetch を開始した
+      // ばかり）が glyph/sprite の可視状態へ反映されない。コンストラクタ既定値 kind='next' と
+      // 一致するセッション最初の `setIndicatorKind('next')` 呼び出しがまさにこの分岐を通るため、
+      // ここで呼ばないと #413 が最も一般的なケース（最初に使う kind が既定値と一致）で再発する。
+      // `applyIndicatorFrame()` は現在の3集合を読むだけの冪等関数なので毎回呼んでも安全。
+      this.applyIndicatorFrame()
+      return
+    }
     this.indicatorKind = kind
     this.indicatorGlyph.text = INDICATOR_GLYPH[kind]
     this.indicatorFrameElapsed = 0
@@ -1130,23 +1157,47 @@ export class DialogBox extends Container {
     return (this.indicatorFrameTextures[this.indicatorKind]?.length ?? 0) > 0
   }
 
+  /**
+   * 種別 1 つ分の画像フレームをロードする (#292)。
+   *
+   * #413: 「読み込み中かどうか」を確定させるため 3 分岐に分ける。
+   *  1. 既にロード済み／既に確定失敗済み／既に fetch が in-flight（`pendingIndicatorKinds`）
+   *     → 再フェッチせず、現在の確定状態（または pending 中の非表示状態）を再適用するだけ。
+   *     pending 判定 (#413 S1) が無いと、同一 kind への短時間の出入り（例: next→pageturn→next
+   *     と戻ってきたが next の fetch がまだ解決していない）で `Assets.load` が重複発火する。
+   *  2. `indicatorAssetBaseUrl` が未設定（＝そもそもこの作品にアセットが設定されていない＝
+   *     将来も絶対に成功しない）→ 即座に確定失敗として扱う（▼ フォールバックを即表示させる）。
+   *  3. それ以外（実際にフェッチする）→ `pendingIndicatorKinds` に載せてから fetch を開始する。
+   *     結果が確定する（then/catch）までは `applyIndicatorFrame()` を呼ばない＝▼ もスプライトも
+   *     出さない「読み込み中は何も見せない」状態を保つ。
+   */
   private loadIndicatorFrames(kind: IndicatorKind): void {
     if (
-      !this.indicatorAssetBaseUrl ||
       this.indicatorFrameTextures[kind] ||
-      this.failedIndicatorKinds.has(kind)
+      this.failedIndicatorKinds.has(kind) ||
+      this.pendingIndicatorKinds.has(kind)
     ) {
       this.applyIndicatorFrame()
       return
     }
+    if (!this.indicatorAssetBaseUrl) {
+      this.failedIndicatorKinds.add(kind)
+      this.applyIndicatorFrame()
+      return
+    }
     const baseUrl = this.indicatorAssetBaseUrl
-    const urls = INDICATOR_IMAGE_PATHS[kind].map((path) => resolveAssetUrl(baseUrl, 'images', path))
+    const urls = getIndicatorImageUrls(baseUrl, kind)
+    this.pendingIndicatorKinds.add(kind)
     Promise.all(urls.map((url) => Assets.load(url)))
       .then((loaded) => {
+        // baseUrl が変わっていたら古い結果。pendingIndicatorKinds は新しい fetch の分をまだ
+        // 表しているはずなので触らない（触ると新 fetch 完了前に一瞬 pending が外れてしまう）。
         if (this.indicatorAssetBaseUrl !== baseUrl) return
+        this.pendingIndicatorKinds.delete(kind)
         const textures = loaded.filter((tex): tex is Texture => tex instanceof Texture)
         if (textures.length !== urls.length) {
           this.failedIndicatorKinds.add(kind)
+          if (this.indicatorKind === kind) this.applyIndicatorFrame()
           return
         }
         this.indicatorFrameTextures[kind] = textures
@@ -1156,6 +1207,8 @@ export class DialogBox extends Container {
         }
       })
       .catch((err: unknown) => {
+        if (this.indicatorAssetBaseUrl !== baseUrl) return
+        this.pendingIndicatorKinds.delete(kind)
         this.failedIndicatorKinds.add(kind)
         console.warn(`[DialogBox] failed to load ${kind} indicator images:`, err)
         if (this.indicatorKind === kind) this.applyIndicatorFrame()
@@ -1183,6 +1236,15 @@ export class DialogBox extends Container {
     this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
   }
 
+  /**
+   * 表示中インジケータ（sprite/glyph）の可視状態を確定する (#292 / #413)。
+   *
+   * 3 状態:
+   *  - 画像フレームが揃っている → sprite を表示し ▼ グリフは隠す（従来どおり）。
+   *  - 画像フレームは無いが fetch が in-flight（`pendingIndicatorKinds` に載っている）→
+   *    sprite も ▼ グリフも隠す。「結果未確定の間は何も見せない」が #413 の本題。
+   *  - それ以外（fetch を試みていない／確定失敗） → 従来どおり ▼ グリフへフォールバックする。
+   */
   private applyIndicatorFrame(): void {
     const frames = this.indicatorFrameTextures[this.indicatorKind]
     if (frames && frames.length > 0) {
@@ -1194,7 +1256,7 @@ export class DialogBox extends Container {
       return
     }
     this.indicatorSprite.visible = false
-    this.indicatorGlyph.visible = true
+    this.indicatorGlyph.visible = !this.pendingIndicatorKinds.has(this.indicatorKind)
   }
 
   dispose(): void {
