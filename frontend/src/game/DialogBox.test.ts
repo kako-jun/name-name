@@ -29,6 +29,7 @@ import {
   NOVEL_TEXT_MARGIN_X,
   NOVEL_TEXT_TOP_RATIO,
   NOVEL_TEXT_MARGIN_BOTTOM,
+  type IndicatorKind,
 } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 
@@ -71,6 +72,16 @@ interface DialogBoxInternals {
   indicatorSprite: { visible: boolean; width: number; height: number }
   indicatorBaseY: number
   tickIndicatorMotion(deltaMs: number): void
+  /** #413: フレームアニメ tick（frames が揃っている種別のみ index を進める）。 */
+  tickIndicatorFrame(deltaMs: number): void
+  /** #413: 種別ごとの確定成功フレーム。値ありなら「ロード済み」。 */
+  indicatorFrameTextures: Partial<Record<IndicatorKind, unknown[]>>
+  /** #413: fetch が確定失敗した種別の集合。 */
+  failedIndicatorKinds: Set<IndicatorKind>
+  /** #413: fetch が in-flight（結果未確定）な種別の集合。 */
+  pendingIndicatorKinds: Set<IndicatorKind>
+  /** 現在の表示種別。 */
+  indicatorKind: IndicatorKind
   novelWrappedLines: string[]
   portraitSprite: { visible: boolean; texture: unknown } | null
   currentPortraitToken: number
@@ -391,6 +402,298 @@ describe('DialogBox image indicators (#320)', () => {
 
     expect(i.indicatorSprite.visible).toBe(false)
     expect(i.indicator.y).not.toBe(i.indicatorBaseY)
+    box.dispose()
+  })
+})
+
+// =====================================================================================
+// #413: 「読み込み中は▼もsprite も出さない」ステートマシン
+//   (indicatorFrameTextures 未着手/pendingIndicatorKinds/failedIndicatorKinds の3集合)。
+//
+// 前提: setIndicatorAssetBaseUrl 単体は、結果が確定する（fetch の then/catch）まで
+//   applyIndicatorFrame() を呼ばない（pendingIndicatorKinds に載せるだけ）。pending中の
+//   非表示が実際に見た目へ反映されるのは setIndicatorKind() 経由（setIndicatorKind は
+//   loadIndicatorFrames() の直後に自分で applyIndicatorFrame() を呼ぶ）。実運用でも
+//   NovelRenderer.setAssetBaseUrl() → dialogBox.setIndicatorAssetBaseUrl() は起動時に1回、
+//   dialogBox.setIndicatorKind() は文ごとに呼ばれるため、この呼び出し順序は実際のフローと一致する。
+//
+// 既存の「DialogBox image indicators (#320)」ブロックは単一 mockImplementation で全呼び出しを
+// 即 resolve させる流儀だが、#413 は「未解決の間」の状態そのものを検証する必要があるため、
+// Assets.load の呼び出しごとに個別の手動解決 Promise を返すキュー化モックを使う。
+// =====================================================================================
+describe('DialogBox #413 pending中は何も出さない（画像インジケータ先読み）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  /** Assets.load を呼び出しごとに独立した手動解決 Promise で応答するキュー化モック。 */
+  function mockAssetsLoadQueue() {
+    const calls: Array<{
+      url: string
+      resolve: (v: unknown) => void
+      reject: (e: unknown) => void
+    }> = []
+    const load = vi.spyOn(Assets, 'load')
+    load.mockImplementation(((url: string) => {
+      return new Promise((resolve, reject) => {
+        calls.push({ url, resolve, reject })
+      })
+    }) as unknown as typeof Assets.load)
+    return { load, calls }
+  }
+
+  // DB-5（null/未設定・回帰防止・最重要）: setIndicatorAssetBaseUrl も setIndicatorKind も
+  // 一度も呼ばれていない新規 box は、fetch を一度も試みていない＝非回帰で ▼ を即表示する（S0）。
+  it('DB-5: 一度も setIndicatorAssetBaseUrl/setIndicatorKind を呼んでいない新規 box は ▼ を既定表示する（RPGモード相当・S0）', () => {
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    expect(i.indicatorGlyph.visible).toBe(true)
+    expect(i.indicatorSprite.visible).toBe(false)
+    box.dispose()
+  })
+
+  // DB-6（境界/同値分割）: baseUrl が空のまま setIndicatorKind だけ呼ぶ → この作品は画像を
+  // 一切持たないと確定できるので、fetch を試みずに即座に確定失敗化し ▼ へフォールバックする。
+  it('DB-6: baseUrl 未設定のまま setIndicatorKind を呼ぶと即座に確定失敗化され glyph 表示・pending には一切乗らない', () => {
+    const { load } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorKind('pageturn')
+
+    expect(load).not.toHaveBeenCalled()
+    expect(i.indicatorSprite.visible).toBe(false)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    expect(i.pendingIndicatorKinds.has('pageturn')).toBe(false)
+    expect(i.failedIndicatorKinds.has('pageturn')).toBe(true)
+    box.dispose()
+  })
+
+  // DB-1（状態遷移・重点）: fetch が未解決の間は sprite/glyph ともに非表示のまま。
+  it('DB-1: fetch未解決の間は sprite/glyph ともに非表示になる（pending中は何も出さない＝#413の本題）', () => {
+    const { calls } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('pageturn')
+
+    // next（baseUrl設定時の既定kind）4件 + pageturn（切替時）4件 = 8件が in-flight のはず。
+    expect(calls.length).toBe(8)
+    // この行 (`applyIndicatorFrame` 内の `!pendingIndicatorKinds.has(this.indicatorKind)`) が
+    // 無いと Issue #413 が再発する: pending中でも ▼ が即表示されてしまう。
+    expect(i.indicatorSprite.visible).toBe(false)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    expect(i.pendingIndicatorKinds.has('pageturn')).toBe(true)
+    box.dispose()
+  })
+
+  // DB-1b（タイミング/ticker干渉なし）: pending中に ticker を進めても表示状態は変化しない。
+  it('DB-1b: pending中に tickIndicatorFrame/tickIndicatorMotion を複数回進めても表示状態は変化しない', () => {
+    mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('pageturn')
+    expect(i.indicatorSprite.visible).toBe(false)
+    expect(i.indicatorGlyph.visible).toBe(false)
+
+    i.tickIndicatorFrame(1000)
+    i.tickIndicatorMotion(1000)
+    i.tickIndicatorFrame(1000)
+    i.tickIndicatorMotion(1000)
+
+    expect(i.indicatorSprite.visible).toBe(false)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  // DB-2（状態遷移）: pending → 4/4 成功で resolve → sprite 表示・glyph 非表示へ切り替わる。
+  it('DB-2: pending → 4/4 成功で resolve すると sprite 表示・glyph 非表示に遷移する', async () => {
+    const { calls } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('pageturn')
+    expect(i.indicatorSprite.visible).toBe(false)
+    expect(i.indicatorGlyph.visible).toBe(false)
+
+    // pageturn 用の4件（後半4件）を全て有効 Texture で resolve する。
+    calls.slice(4, 8).forEach((c) => c.resolve(Texture.WHITE))
+    await flushPromises()
+
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  // DB-3（異常系・境界・最重要）: 4枚中1枚が非Texture値でresolve（3/4）
+  // → failedIndicatorKinds化し、新規追加された applyIndicatorFrame() 呼び出しにより
+  //   glyph が再表示される（sprite は非表示のまま）。
+  it('DB-3: 4枚中1枚が非Textureで resolve（3/4）でも確定失敗として glyph へフォールバックする', async () => {
+    const { calls } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('pageturn')
+
+    const pageturnCalls = calls.slice(4, 8)
+    pageturnCalls[0].resolve(Texture.WHITE)
+    pageturnCalls[1].resolve(Texture.WHITE)
+    pageturnCalls[2].resolve(Texture.WHITE)
+    pageturnCalls[3].resolve('not-a-texture') // 無効値混入（instanceof Texture を満たさない）
+    await flushPromises()
+
+    // この行 (`if (this.indicatorKind === kind) this.applyIndicatorFrame()`) が無いと
+    // Issue #413 が再発する: pendingIndicatorKinds.delete(kind) だけが実行されて
+    // applyIndicatorFrame() が呼ばれず、glyph が永久に非表示のままスタックする
+    // （sprite 側も false なので何も見えない状態で固まる）。
+    expect(i.indicatorSprite.visible).toBe(false)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    expect(i.failedIndicatorKinds.has('pageturn')).toBe(true)
+    expect(i.pendingIndicatorKinds.has('pageturn')).toBe(false)
+    box.dispose()
+  })
+
+  // DB-4（API失敗/console）: Assets.load が reject → pending解除・failed化・console.warn 1回・glyph再表示。
+  it('DB-4: Assets.load が reject すると pending解除・failed化し console.warn が1回呼ばれ glyph へフォールバックする', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { calls } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('pageturn')
+
+    calls.slice(4, 8)[0].reject(new Error('404'))
+    await flushPromises()
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(i.indicatorSprite.visible).toBe(false)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    expect(i.failedIndicatorKinds.has('pageturn')).toBe(true)
+    expect(i.pendingIndicatorKinds.has('pageturn')).toBe(false)
+    box.dispose()
+  })
+
+  // DB-7（並行実行/race）: baseUrl変更中の旧fetchが後から解決しても pending/frames を汚染しない。
+  it('DB-7: baseUrl を /a→/b と切り替えた後、旧 /a 側が後から成功解決しても現在の状態を汚染しない', async () => {
+    const { calls } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/a') // next 4件 = calls[0..3]
+    box.setIndicatorAssetBaseUrl('/b') // next 4件（baseUrl差し替え）= calls[4..7]
+
+    // 旧 /a 側が後から成功で解決しても、現在の baseUrl はもう /b なので無視されるはず。
+    calls.slice(0, 4).forEach((c) => c.resolve(Texture.WHITE))
+    await flushPromises()
+    expect(i.indicatorFrameTextures['next']).toBeUndefined()
+
+    // /b 側が解決すると正しく反映される。
+    calls.slice(4, 8).forEach((c) => c.resolve(Texture.WHITE))
+    await flushPromises()
+
+    expect(i.indicatorFrameTextures['next']?.length).toBe(4)
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  // DB-8（並行実行/race・順序反転）: DB-7の逆順（/b が先に解決、/a が後から解決）でも安全。
+  it('DB-8: /b が先に成功解決した後で旧 /a 側が遅れて失敗解決しても、確定済み状態を汚染しない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { calls } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/a') // calls[0..3]
+    box.setIndicatorAssetBaseUrl('/b') // calls[4..7]
+
+    calls.slice(4, 8).forEach((c) => c.resolve(Texture.WHITE))
+    await flushPromises()
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicatorGlyph.visible).toBe(false)
+
+    // 旧 /a 側が後から reject しても、現在の baseUrl は /b なので無視され console.warn も出ない。
+    calls.slice(0, 4).forEach((c) => c.reject(new Error('stale 404')))
+    await flushPromises()
+
+    expect(warn).not.toHaveBeenCalled()
+    expect(i.indicatorFrameTextures['next']?.length).toBe(4)
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  // DB-9（二重送信/冪等）: pending中に同一kindへ setIndicatorKind を連打しても
+  // Assets.load の呼び出し回数が増えない（setIndicatorKind 冒頭のガードで短絡する）。
+  it('DB-9: pending中に同一kindへ setIndicatorKind を連打しても Assets.load の呼び出し回数が増えない', () => {
+    const { load } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+
+    box.setIndicatorAssetBaseUrl('/asset-base') // next 4件
+    box.setIndicatorKind('pageturn') // pageturn 4件、計8件
+    expect(load).toHaveBeenCalledTimes(8)
+
+    box.setIndicatorKind('pageturn')
+    box.setIndicatorKind('pageturn')
+    box.setIndicatorKind('pageturn')
+
+    expect(load).toHaveBeenCalledTimes(8)
+    box.dispose()
+  })
+
+  // DB-10（状態遷移/冪等）: 成功後（S2）に他kindを経由して同じkindへ戻っても再フェッチしない
+  // （loadIndicatorFrames 冒頭の「既にロード済み」キャッシュ判定で短絡する。DB-9 の
+  //   setIndicatorKind 冒頭ガードとは別の短絡経路であることを区別して確認する）。
+  it('DB-10: 成功後に他kindを経由して同じkindへ戻っても再フェッチしない（ロード済みキャッシュの再適用のみ）', async () => {
+    const { load, calls } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+    const i = asInternals(box)
+
+    box.setIndicatorAssetBaseUrl('/asset-base') // next 4件 = calls[0..3]
+    box.setIndicatorKind('pageturn') // pageturn 4件 = calls[4..7]
+    calls.slice(0, 4).forEach((c) => c.resolve(Texture.WHITE))
+    calls.slice(4, 8).forEach((c) => c.resolve(Texture.WHITE))
+    await flushPromises()
+    expect(i.indicatorFrameTextures['pageturn']?.length).toBe(4)
+    expect(load).toHaveBeenCalledTimes(8)
+
+    box.setIndicatorKind('next') // 既にロード済みの next へ（キャッシュ再適用のみ）
+    box.setIndicatorKind('pageturn') // pageturn へ戻る（キャッシュ再適用のみ）
+
+    expect(load).toHaveBeenCalledTimes(8) // 増えていない
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  // DB-11（console汚染/現状仕様固定）: DB-3（枚数不一致）のケースで console.warn/error が
+  // 呼ばれないことを確認する。reject経路（DB-4）との非対称は現状仕様として明記する
+  // （診断ログが無く原因追跡しづらいので将来 issue 化の候補）。
+  it('DB-11: 枚数不一致の確定失敗では console.warn/error を呼ばない（reject経路との非対称・現状仕様）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { calls } = mockAssetsLoadQueue()
+    const box = makeRpgBox()
+
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('pageturn')
+
+    const pageturnCalls = calls.slice(4, 8)
+    pageturnCalls[0].resolve(Texture.WHITE)
+    pageturnCalls[1].resolve(Texture.WHITE)
+    pageturnCalls[2].resolve(Texture.WHITE)
+    pageturnCalls[3].resolve('not-a-texture')
+    await flushPromises()
+
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
     box.dispose()
   })
 })
