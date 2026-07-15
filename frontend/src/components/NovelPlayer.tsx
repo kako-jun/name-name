@@ -205,7 +205,7 @@ function NovelPlayer({
   const { width: gameWidth, height: gameHeight } = ASPECT_RATIOS[aspectRatio]
 
   // インジケータ画像の先読み (#413)。assetBaseUrl が分かった時点で、renderer の生成/初期化
-  // （下の init effect の `renderer.init(...).then(...)`）を待たずに pen 画像（next/pageturn
+  // （下の init effect の `renderer.init(...).then(...)`）を待たずにインジケータ画像（next/pageturn
   // 計8枚）の Assets.load() を fire-and-forget で開始する。renderer/DialogBox の状態には
   // 一切触れない独立した effect なので、renderer 生成前でも安全（rendererRef を参照しない）。
   // PixiJS の Assets.load() は同一 URL の in-flight/解決済み Promise をキャッシュ共有するため、
