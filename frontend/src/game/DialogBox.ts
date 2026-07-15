@@ -31,7 +31,12 @@ import {
   tickTypewriter,
   visibleText,
 } from './typewriter'
-import { computeNovelIndicatorPlacement, resolveAssetUrl, wrappedPrefixLength } from './novelLayout'
+import {
+  computeNovelIndicatorPlacement,
+  getIndicatorImageUrls,
+  type IndicatorKind,
+  wrappedPrefixLength,
+} from './novelLayout'
 
 // ---------------------------------------------------------------------------
 // portrait レイアウト定数（テストが参照する）
@@ -143,12 +148,13 @@ const DEFAULT_MS_PER_CHAR = 30
 const BORDERLESS_DROP_SHADOW = { color: 0x000000, blur: 8, distance: 3, alpha: 1 } as const
 
 /**
- * クリッカー（インジケータ）の種別 (#292)。
+ * クリッカー（インジケータ）の種別 (#292)。`IndicatorKind` 本体は画像パス一覧
+ * `getIndicatorImageUrls` と同じ novelLayout.ts に定義する（種別と一覧の食い違いを防ぐ #413）。
+ * ここでは既存の `import { IndicatorKind } from './DialogBox'` 経路を維持するため re-export する。
  *  - `next`     : 同ページにまだ続く文がある（次は文の送り）。
  *  - `pageturn` : そのページの最後の文（クリックでページを離れる＝次ページ or 次イベント）。
- * 種別で形が即座に違い、次が「文」か「改頁」か目で分かるようにする。
  */
-export type IndicatorKind = 'next' | 'pageturn'
+export type { IndicatorKind }
 
 /**
  * 種別 → プレースホルダ記号（グリフ）の対応表 (#292)。**ここ 1 箇所に集約**する。
@@ -163,20 +169,6 @@ const INDICATOR_GLYPH: Record<IndicatorKind, string> = {
 
 const INDICATOR_IMAGE_SIZE = 32
 const INDICATOR_FRAME_MS = 360
-const INDICATOR_IMAGE_PATHS: Record<IndicatorKind, string[]> = {
-  next: [
-    'ui/text-next-1.webp',
-    'ui/text-next-2.webp',
-    'ui/text-next-3.webp',
-    'ui/text-next-4.webp',
-  ],
-  pageturn: [
-    'ui/page-turn-1.webp',
-    'ui/page-turn-2.webp',
-    'ui/page-turn-3.webp',
-    'ui/page-turn-4.webp',
-  ],
-}
 
 /**
  * novel スタイル (#283) のテキスト領域マージン（px、論理座標）。
@@ -1140,7 +1132,7 @@ export class DialogBox extends Container {
       return
     }
     const baseUrl = this.indicatorAssetBaseUrl
-    const urls = INDICATOR_IMAGE_PATHS[kind].map((path) => resolveAssetUrl(baseUrl, 'images', path))
+    const urls = getIndicatorImageUrls(baseUrl, kind)
     Promise.all(urls.map((url) => Assets.load(url)))
       .then((loaded) => {
         if (this.indicatorAssetBaseUrl !== baseUrl) return

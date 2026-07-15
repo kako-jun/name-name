@@ -297,6 +297,48 @@ export function resolveCharacterImageUrls(baseUrl: string, cleanPath: string): s
 }
 
 /**
+ * ページ送りインジケータ（▼/❯ の代替となる pen 風 4 フレーム連番画像）の種別 (#292)。
+ *  - `next`     : 同ページにまだ続く文がある（次は文の送り）。
+ *  - `pageturn` : そのページの最後の文（クリックでページを離れる＝次ページ or 次イベント）。
+ * DialogBox（本体ロード）と NovelPlayer（先読み #413）の両方が参照する。
+ */
+export type IndicatorKind = 'next' | 'pageturn'
+
+/**
+ * インジケータ画像の相対パス一覧 (#292)。next=`ui/text-next-{1..4}.webp` /
+ * pageturn=`ui/page-turn-{1..4}.webp`。`getIndicatorImageUrls` の唯一の情報源。
+ * DialogBox.loadIndicatorFrames と NovelPlayer の先読み（#413: renderer.init() を待たない
+ * early fetch）が同じ一覧を参照することで、パス一覧の重複・食い違いを避ける（doctrine 規律4）。
+ */
+const INDICATOR_IMAGE_PATHS: Record<IndicatorKind, string[]> = {
+  next: [
+    'ui/text-next-1.webp',
+    'ui/text-next-2.webp',
+    'ui/text-next-3.webp',
+    'ui/text-next-4.webp',
+  ],
+  pageturn: [
+    'ui/page-turn-1.webp',
+    'ui/page-turn-2.webp',
+    'ui/page-turn-3.webp',
+    'ui/page-turn-4.webp',
+  ],
+}
+
+/**
+ * インジケータ 1 種別分の画像フレーム URL 一覧を配信用の絶対 URL に解決する純粋関数 (#413)。
+ *
+ * `INDICATOR_IMAGE_PATHS[kind]` を `resolveAssetUrl(baseUrl, 'images', path)` で URL 化するだけ。
+ * DialogBox.loadIndicatorFrames（本体ロード）と NovelPlayer（mount 時／assetBaseUrl 確定時の
+ * 早期先読み）の両方がこの 1 関数を呼ぶ。PixiJS の `Assets.load()` は同一 URL キーに対して
+ * in-flight/解決済みの Promise をキャッシュ共有するため、先に先読みが同じ URL を要求しておけば
+ * 後段の DialogBox 側の読み込みは実質即解決になる。
+ */
+export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): string[] {
+  return INDICATOR_IMAGE_PATHS[kind].map((path) => resolveAssetUrl(baseUrl, 'images', path))
+}
+
+/**
  * セーブスロットデータ (`SaveSlotData`) を復元用の `NovelGameState` に変換する純粋関数。
  *
  * 元 `NovelRenderer.loadFromSaveData` 内に直書きされていた state 構築ブロックと同一の
