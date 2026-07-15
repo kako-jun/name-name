@@ -91,6 +91,16 @@ function preloadedUrls(bgSpy: { mock: { calls: unknown[][] } }): string[] {
   return bgSpy.mock.calls.flatMap((c) => c[0] as string[])
 }
 
+/**
+ * resolveCharacterImageUrls は [webp, png] の近い順で候補を返すが、preloadUpcomingAssets は
+ * BackgroundLoader の LIFO 消化に対処するため fresh 配列全体を reverse してから backgroundLoad に
+ * 渡す (#414)。単一 Dialog/ExpressionChange だけが走査枠に入るケースでは、その 1 アセット分の
+ * [webp, png] 自体も丸ごと反転されて [png, webp] で観測される。期待値側もこの反転を織り込む。
+ */
+function reversedUrls(urls: string[]): string[] {
+  return [...urls].reverse()
+}
+
 describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#389)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -100,7 +110,7 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
   it('1: Dialog(char+expr) 1 件で立ち絵の webp/png 2 URL が積まれる', () => {
     const { r, bgSpy } = setup()
     r.setScenes([scene('s', [dialog('ひな', 'aa/happy', 'x')])])
-    expect(preloadedUrls(bgSpy)).toEqual(resolveCharacterImageUrls(BASE, 'aa/happy'))
+    expect(preloadedUrls(bgSpy)).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'aa/happy')))
   })
 
   // 2: Background 1 件で images 配下の背景 URL が 1 本積まれる（Narration をアンカーに後続へ置く）。
@@ -127,7 +137,7 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     const { r, bgSpy } = setup()
     r.setScenes([scene('s', [dialog(null, 'x/a', 't'), dialog('c', 'y/b', 't')])])
     const urls = preloadedUrls(bgSpy)
-    expect(urls).toEqual(resolveCharacterImageUrls(BASE, 'y/b'))
+    expect(urls).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'y/b')))
     for (const u of resolveCharacterImageUrls(BASE, 'x/a')) expect(urls).not.toContain(u)
   })
 
@@ -135,7 +145,7 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
   it('5: Dialog expression=null は積まない', () => {
     const { r, bgSpy } = setup()
     r.setScenes([scene('s', [dialog('c', null, 't'), dialog('c2', 'y/b', 't')])])
-    expect(preloadedUrls(bgSpy)).toEqual(resolveCharacterImageUrls(BASE, 'y/b'))
+    expect(preloadedUrls(bgSpy)).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'y/b')))
   })
 
   // 6: Narration は立ち絵を積まないが、テキストイベント予算は 1 消費する。Narration×8 で予算を
@@ -174,7 +184,7 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
         dialog('c', 'w/x', 't'),
       ]),
     ])
-    expect(preloadedUrls(bgSpy)).toEqual(resolveCharacterImageUrls(BASE, 'w/x'))
+    expect(preloadedUrls(bgSpy)).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'w/x')))
   })
 
   // 9: 境界 — 連続 Dialog 7 件（予算未満）は 7×2=14 URL 全部積む。
@@ -214,7 +224,7 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     const { r, bgSpy } = setup()
     r.setScenes([scene('s', [dialog('a', 'aa/happy', 'x'), choice(), dialog('b', 'bb/sad', 'y')])])
     const urls = preloadedUrls(bgSpy)
-    expect(urls).toEqual(resolveCharacterImageUrls(BASE, 'aa/happy'))
+    expect(urls).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'aa/happy')))
     for (const u of resolveCharacterImageUrls(BASE, 'bb/sad')) expect(urls).not.toContain(u)
   })
 
@@ -241,7 +251,7 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     h.preloadUpcomingAssets()
     const urls = preloadedUrls(bgSpy)
     // Condition 手前までは積み、Condition 以降（ex/after）は積まない。
-    expect(urls).toEqual(resolveCharacterImageUrls(BASE, 'ex/before'))
+    expect(urls).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'ex/before')))
     for (const u of resolveCharacterImageUrls(BASE, 'ex/after')) expect(urls).not.toContain(u)
   })
 
@@ -260,7 +270,7 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     const narrs = Array.from({ length: 7 }, (_, i) => narration('n' + i))
     r.setScenes([scene('s', [dialog('a', 'same/e', 't'), ...narrs, dialog('b', 'same/e', 't')])])
     // 初回は same/e を 1 度だけ積む（重複なし）。
-    expect(preloadedUrls(bgSpy)).toEqual(resolveCharacterImageUrls(BASE, 'same/e'))
+    expect(preloadedUrls(bgSpy)).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'same/e')))
 
     bgSpy.mockClear()
     // advance で 2 個目 same/e が走査枠に入るが、既に積み済みなので再送されない。
@@ -281,7 +291,7 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     h.advance()
     const urls = preloadedUrls(bgSpy)
     // 新規 ex/e8 の 2 URL だけが積まれる。
-    expect(urls).toEqual(resolveCharacterImageUrls(BASE, 'ex/e8'))
+    expect(urls).toEqual(reversedUrls(resolveCharacterImageUrls(BASE, 'ex/e8')))
     // 既に積んだ ex/e1 等は再送されない。
     for (const u of resolveCharacterImageUrls(BASE, 'ex/e1')) expect(urls).not.toContain(u)
   })
