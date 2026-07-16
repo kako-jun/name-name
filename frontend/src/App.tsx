@@ -17,6 +17,31 @@ import { defaultApiBaseUrl } from './api/client'
  * `name-name.llll-ll.com` と `localhost` / 開発用 IP は通常ルーティング。
  */
 const RESERVED_HOSTS = new Set(['name-name', 'www', 'admin'])
+function isLocalHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1'
+}
+
+function isLocalApiBaseUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+  } catch {
+    return false
+  }
+}
+
+function initialApiBaseUrl(): string {
+  const fallback = defaultApiBaseUrl()
+  const stored = get('apiBaseUrl')
+  if (!stored) return fallback
+
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : ''
+  if (!isLocalHost(hostname) && isLocalApiBaseUrl(stored)) {
+    return fallback
+  }
+  return stored
+}
+
 function detectGameSubdomain(): string | null {
   if (typeof window === 'undefined') return null
   const m = window.location.hostname.match(/^([a-z0-9-]+)\.llll-ll\.com$/i)
@@ -33,11 +58,11 @@ function App() {
 
   const [showSettings, setShowSettings] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
-  // kako-jun/name-name#107: 既定値を Worker (localhost:8787) に変更。
-  //   localStorage に旧値 (localhost:7373) が残っているケースは
-  //   設定モーダルで上書きできる。VITE_API_URL があればそれが既定値。
+  // kako-jun/name-name#107/#314: 公開ホストでは localStorage に残った
+  // localhost API URL を捨て、本番 Worker を使う。VITE_API_URL があれば
+  // それが既定値。
   const [apiBaseUrl, setApiBaseUrl] = useState(() => {
-    return get('apiBaseUrl') ?? defaultApiBaseUrl()
+    return initialApiBaseUrl()
   })
 
   useEffect(() => {

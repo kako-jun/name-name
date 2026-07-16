@@ -33,7 +33,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('defaultApiBaseUrl', () => {
-  it('未指定時は localhost:8787 を返す', () => {
+  it('未指定時は何らかの API URL を返す', () => {
     // VITE_API_URL は vitest 実行環境で未設定が既定
     const url = defaultApiBaseUrl()
     // CI で VITE_API_URL を入れることもあるので「localhost:8787 か空でない文字列」を許容
@@ -41,13 +41,28 @@ describe('defaultApiBaseUrl', () => {
     expect(url.length).toBeGreaterThan(0)
   })
 
-  // PR #120 review N3: VITE_API_URL を空にすると 'http://localhost:8787' を返すこと、
+  // PR #120 review N3: VITE_API_URL を空にすると環境に応じた既定 URL を返すこと、
   //   値が入っていればその値を返すことを vi.stubEnv で確定させる。
-  it('VITE_API_URL が空文字なら http://localhost:8787 を返す', () => {
+  it('VITE_API_URL が空文字で localhost なら http://localhost:8787 を返す', () => {
     vi.stubEnv('VITE_API_URL', '')
     try {
       expect(defaultApiBaseUrl()).toBe('http://localhost:8787')
     } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('VITE_API_URL が空文字で公開ホストなら本番 Worker を返す', () => {
+    vi.stubEnv('VITE_API_URL', '')
+    const original = window.location
+    try {
+      Object.defineProperty(window, 'location', {
+        value: { hostname: 'name-name.llll-ll.com' },
+        configurable: true,
+      })
+      expect(defaultApiBaseUrl()).toBe('https://name-name-api.kako-jun.workers.dev')
+    } finally {
+      Object.defineProperty(window, 'location', { value: original, configurable: true })
       vi.unstubAllEnvs()
     }
   })
