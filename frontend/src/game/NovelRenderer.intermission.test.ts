@@ -410,6 +410,8 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       characterFadeMs: 10,
     })
     r.setConfinedSceneIds(['entry']) // hub / other は圏外
+    const skipCb = vi.fn()
+    r.setOnSkipModeChange(skipCb)
     r.setSkipMode(true)
     expect(r.isSkipMode()).toBe(true)
 
@@ -419,6 +421,10 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     await r.playScript([{ type: 'advance' }])
     expect(r.getSnapshot().storyEnded).toBe(true)
     expect(r.isSkipMode()).toBe(false) // must 修正: endStory() 冒頭で skipMode がリセットされる
+    // re-review should 修正: skipMode は NovelGameState/applyState の対象外（ADR0002）で
+    // あり、onSkipModeChange が React 側（NovelPlayer の Skip ボタン表示）へ true→false を
+    // 伝える唯一の経路。直接代入だけでは NovelPlayer 側の state が true のまま取り残される。
+    expect(skipCb).toHaveBeenCalledWith(false)
 
     // タブロー描画（intermissionTimer の遅延発火）を通すため、endStory() 後に initialized を立てる。
     internals(r).initialized = true

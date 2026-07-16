@@ -951,9 +951,16 @@ export class NovelRenderer {
     // endStory() へ来るため、skipMode=true のままここに到達し得る。renderIntermissionTableau
     // が委譲する Label/Image は instant: this.skipMode を見るため、リセットしないと段階フェード
     // （#424 の目玉機能）が瞬間タブローに退行する。this.storyEnded=true により以後 advance() は
-    // no-op になるので skipMode の実効的な意味は既に無く、setSkipMode() の副作用（reloadReadProgress
-    // 等）を経由せず直接代入するだけで安全にリセットできる。
-    this.skipMode = false
+    // no-op になるので skipMode の実効的な意味は既に無いが、onSkipModeChange コールバックは
+    // React 側（NovelPlayer）の Skip ボタン表示状態を同期する唯一の経路であり、skipMode は
+    // NovelGameState/applyState の対象外（ADR0002 で意図的に除外）なので他に同期手段がない
+    // (#424 re-review should)。setSkipMode() 自身は storyEnded ガードで no-op になり呼べない
+    // ため、true→false の遷移が実際に起きた時だけ setSkipMode() と同じ意味論でコールバックを
+    // 発火させる（skipMode===on なら何もしない、というガードと同じ形）。
+    if (this.skipMode) {
+      this.skipMode = false
+      this.onSkipModeChange?.(false)
+    }
     this.waitingForChoice = false
     this.choiceOverlay.hide()
     this.dialogBox.clearText()
