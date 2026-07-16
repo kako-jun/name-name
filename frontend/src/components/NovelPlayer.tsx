@@ -112,6 +112,20 @@ interface NovelPlayerProps {
   /** 下地ベタ（ステージ最背面 bgGraphics）の既定色 (#409)。frontmatter `background_color:` から流す。
    *  最初の背景絵がこの色から `background_fade_ms` でフェードインする。null/undefined で黒（後方互換）。 */
   backgroundColor?: string | null
+  /**
+   * intermission.md 専用シーン (#404)。`assets/scripts/intermission.md` を取得・parse できた場合に
+   * PlayerScreen が渡す flatten 済み Event 列。null/undefined/空配列は「未設定」＝endStory() は
+   * 従来どおりフェードのみで終わり、下記 DOM 側 "to be continued..." 表示（フェーズ1）にフォールバック
+   * する（完全後方互換・オプトイン）。
+   */
+  intermissionEvents?: Event[] | null
+  /** intermission.md 自身の frontmatter `background_fade_ms:` の値 (#404)。物語本編の
+   *  `backgroundFadeMs` とは独立（endStory() の消去フェードにだけ使う）。null/undefined は
+   *  intermission 用既定（1500ms）にフォールバック。 */
+  intermissionBackgroundFadeMs?: number | null
+  /** intermission.md 自身の frontmatter `character_fade_ms:` の値 (#404)。物語本編の
+   *  `characterFadeMs` とは独立（endStory() の立ち絵消去フェードにだけ使う）。 */
+  intermissionCharacterFadeMs?: number | null
   /** Skip(S) ボタンを出すか (#310)。frontmatter `skip_enabled:` から流す。
    *  null/undefined/true で Skip(S) ボタンを描画する（既定・後方互換）。false で描画しない。
    *  skip-read-only ロジック（未読は解除）自体は不変。ボタンの有無だけを制御する。 */
@@ -160,6 +174,9 @@ function NovelPlayer({
   characterFadeMs,
   backgroundFadeMs,
   backgroundColor,
+  intermissionEvents,
+  intermissionBackgroundFadeMs,
+  intermissionCharacterFadeMs,
   skipEnabled,
   debugEnabled,
   speakerNudge,
@@ -194,6 +211,15 @@ function NovelPlayer({
   // 終劇状態 (#386)。renderer の onStoryEndedChange で同期する（GameState 上の宣言的フラグ
   // NovelGameState.storyEnded のミラー）。true の間だけ「to be continued...」を表示する。
   const [storyEnded, setStoryEnded] = useState(false)
+
+  // intermission.md 専用シーンが使われたか (#404)。storyEnded が true に立ち上がった瞬間の
+  // renderer.hasIntermissionScene() を1回だけスナップショットする（true の間ずっと再評価しない）。
+  // 理由: intermissionEvents prop は PlayerScreen の非同期取得結果で、endStory() 発火より後に
+  // 遅れて届く可能性がある。ライブに rendererRef.current?.hasIntermissionScene() を毎レンダー
+  // 参照すると、「DOM フォールバック表示済みの直後に intermission が届いて表示だけ消える」
+  // （PixiJS タブローは endStory() の時点で未設定だったため描かれない）事故になる。
+  // true 固定タイミングは onStoryEndedChangeCallback と同じ（#386 契約と同じ「1遷移1回」）。
+  const [usedIntermissionScene, setUsedIntermissionScene] = useState(false)
 
   // 終劇表示中に左上へ出す埋め込み元プロジェクトロゴの読み込み失敗フラグ (#404)。
   // TitleOverlay の imageFailed と同じ onError パターン。ロゴが無い/失敗したプロジェクトでは
@@ -274,6 +300,9 @@ function NovelPlayer({
       // ?scene=/project が変わる＝iframe 再読み込み＝再マウントなので stale にならない。
       renderer.setOnStoryEndedChange((ended) => {
         setStoryEnded(ended)
+        // #404: intermission.md 専用シーンが使われたかを ended の立ち上がり時点でスナップショット
+        // する（DOM "to be continued..." 表示との排他はこの値で判定する。上の宣言コメント参照）。
+        setUsedIntermissionScene(ended && renderer.hasIntermissionScene())
         if (ended && isEmbedded()) {
           const message = buildStoryEndedMessage(initialSceneId ?? null, docKey ?? '')
           window.parent.postMessage(message, '*')
@@ -319,6 +348,13 @@ function NovelPlayer({
       // 下地ベタの既定色 (#409)。初回背景表示より前に設定し、最初の背景絵がこの地色から
       // フェードインするようにする（未指定なら黒で非回帰）。setBackgroundFadeMs と対称の per-game 設定。
       renderer.setDefaultBackgroundColor(backgroundColor ?? null)
+      // intermission.md 専用シーン (#404)。PlayerScreen が非同期取得するため、マウント時点では
+      // まだ未解決（null）のことが多いが、後段の setEvents/startFrom より前に一度呼んでおく
+      // （解決後は下の intermissionEvents 変化 effect が反映する）。
+      renderer.setIntermissionScene(intermissionEvents ?? null, {
+        backgroundFadeMs: intermissionBackgroundFadeMs ?? null,
+        characterFadeMs: intermissionCharacterFadeMs ?? null,
+      })
       // 主人公セリフの本文色 (#305) は renderer 既定 #FFF0D8 のまま使う。frontmatter での
       // 色上書きは未実装のため、ここでは設定しない（renderer フィールド初期値が効く）。
       // init 完了直後に現在の settings を反映 (#138)
@@ -460,6 +496,16 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setDefaultBackgroundColor(backgroundColor ?? null)
   }, [backgroundColor])
+
+  // intermission.md 専用シーン (#404)。PlayerScreen の非同期取得（assets/raw 経由）は
+  // マウント後に解決することが多いため、init effect（マウント時1回）だけでは反映できない。
+  // 値が届き次第 renderer に反映する。
+  useEffect(() => {
+    rendererRef.current?.setIntermissionScene(intermissionEvents ?? null, {
+      backgroundFadeMs: intermissionBackgroundFadeMs ?? null,
+      characterFadeMs: intermissionCharacterFadeMs ?? null,
+    })
+  }, [intermissionEvents, intermissionBackgroundFadeMs, intermissionCharacterFadeMs])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {
@@ -710,8 +756,10 @@ function NovelPlayer({
           区別のため斜体は維持しつつ、視認性を上げるため text-white/60 → /80 に上げている。
           背景/立ち絵のフェードアウト自体は NovelRenderer 側（PixiJS）が行い、これはその後に
           重ねる DOM 側の文字。pointer-events-none: タップしても何も起きない（advance は
-          storyEnded で no-op のため二重の安全策だが、見た目のヒットテストにも参加させない）。 */}
-      {storyEnded && (
+          storyEnded で no-op のため二重の安全策だが、見た目のヒットテストにも参加させない）。
+          intermission.md 専用シーン (#404) が使われた場合はこの DOM 表示を出さない
+          （PixiJS 側のタブローに一本化し、二重表示を避ける。usedIntermissionScene 参照）。 */}
+      {storyEnded && !usedIntermissionScene && (
         <div className="absolute inset-0 m-auto pointer-events-none" style={gameBoxStyle}>
           {/* 埋め込み元プロジェクトのロゴ (#404): TitleOverlay と同じ title.png 規約
               (`${assetBaseUrl}/images/title.png`) を流用する。TitleOverlay の imageFailed と
