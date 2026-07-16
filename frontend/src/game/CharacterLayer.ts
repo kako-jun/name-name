@@ -900,10 +900,21 @@ export class CharacterLayer extends Container {
    * `sprite.destroyed`/`label.destroyed` はまだ false でガードを素通りしてしまい、無条件にフェード
    * インへ上書きすると `remove()` による退場が取り消されてしまう（要素が復活し、二度と破棄されない
    * リークにもなる）。このヘルパーで「既に退場フェードが予約されているなら何もしない」を保証する。
+   *
+   * ガードは `destroyOnComplete` に限定せず、`fadeAnimation` が何かしら張られていれば無条件に
+   * 無視する（#429 re-review）。理由: load/font 解決前に
+   * remove()（destroyOnComplete=true 予約）→ showLabel/showImage 再表示（#429 の「退場フェード
+   * 予約中の再表示」分岐が destroyOnComplete=false の復活フェードへ差し替え）という順で events が
+   * 起きると、その時点で fadeAnimation は既に「正しい」ものに置き換わっている。ここで
+   * destroyOnComplete のみを見るガードだと素通りしてしまい、進行中の復活フェード（alpha が中間値
+   * まで進んでいるかもしれない）を `{ fromAlpha: 0, toAlpha: 1 }` の新規入場フェードで丸ごと
+   * 上書きして alpha を巻き戻す。`fadeAnimation` の有無だけで判定すれば、どちらの経路が先に
+   * fadeAnimation を張っていても「後から来た入場フェードの初期化」は無視され、この巻き戻りは
+   * 起きない。
    */
   private startEntranceFade(state: CharacterState, instant: boolean): void {
     if (instant) return
-    if (state.fadeAnimation?.destroyOnComplete) return
+    if (state.fadeAnimation) return
     state.fadeAnimation = {
       startMs: this.elapsedMs,
       durationMs: TITLE_CARD_FADE_MS,
