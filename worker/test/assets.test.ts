@@ -652,3 +652,100 @@ describe("POST /api/projects/:name/assets/:type", () => {
     expect(res.status).toBe(422);
   });
 });
+
+// GET /api/projects/:name/assets/raw/*path (#404: intermission.md 用 mimeMap['md'] 追加)
+//
+// handleRawAsset は GitHub Contents API から取得した1ファイルを content-type 付きで
+// そのまま返す。#404 で拡張子 md → text/plain のエントリを mimeMap に追加したので、
+// 既存拡張子（回帰）・未知拡張子（既定 application/octet-stream）・404 passthrough・
+// 1 MiB 超 413（Contents API の content 空文字列フォールバック）と併せて固定する。
+describe("GET /api/projects/:name/assets/raw/*path (#404 md content-type)", () => {
+  /**
+   * UTF-8 文字列を base64 化する（GitHub Contents API の content フィールドと同じ規則）。
+   * btoa() は Latin1 前提（コードポイント 0-255 以外は workerd で例外を吐く）なので、
+   * 日本語等の非 ASCII を含むテキストはまず UTF-8 バイト列に変換してから渡す。
+   */
+  function base64EncodeUtf8(s: string): string {
+    const bytes = new TextEncoder().encode(s);
+    let binary = "";
+    for (const b of bytes) binary += String.fromCharCode(b);
+    return btoa(binary);
+  }
+
+  /** GitHub Contents API の GET .../contents/{path} レスポンス（1ファイル）を組み立てる。 */
+  function contentsFileResponse(opts: { content: string; size?: number }): Response {
+    return jsonResponse({
+      type: "file",
+      content: base64EncodeUtf8(opts.content),
+      encoding: "base64",
+      size: opts.size ?? opts.content.length,
+    });
+  }
+
+  it("returns content-type: text/plain for assets/scripts/intermission.md", async () => {
+    const body = "# intermission\n\n- narration: つづく\n";
+    globalThis.fetch = vi.fn(async () => contentsFileResponse({ content: body })) as typeof fetch;
+
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/assets/raw/scripts/intermission.md",
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/plain");
+    expect(await res.text()).toBe(body);
+  });
+
+  it.each([
+    ["images/title.png", "image/png"],
+    ["sounds/bgm.mp3", "audio/mpeg"],
+  ] as const)("keeps existing content-type for %s (regression: %s)", async (path, expected) => {
+    globalThis.fetch = vi.fn(async () =>
+      contentsFileResponse({ content: "binary-ish-content" }),
+    ) as typeof fetch;
+
+    const req = new Request(
+      `https://name-name-api.workers.dev/api/projects/ogurasia/assets/raw/${path}`,
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe(expected);
+  });
+
+  it("returns application/octet-stream for an unknown extension", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      contentsFileResponse({ content: "???" }),
+    ) as typeof fetch;
+
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/assets/raw/misc/data.xyz",
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+  });
+
+  it("passes through 404 when GitHub Contents API responds 404 (e.g. intermission.md not placed)", async () => {
+    globalThis.fetch = vi.fn(async () => jsonResponse({ message: "Not Found" }, 404)) as typeof fetch;
+
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/assets/raw/scripts/intermission.md",
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 413 for a >1MiB md file (Contents API returns empty content for oversized files, regression)", async () => {
+    // GitHub Contents API は 1 MiB 超のファイルで content を空文字列にして返す（実挙動の再現）。
+    globalThis.fetch = vi.fn(async () =>
+      contentsFileResponse({ content: "", size: 2_000_000 }),
+    ) as typeof fetch;
+
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/assets/raw/scripts/intermission.md",
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(413);
+    const bodyText = await res.text();
+    expect(bodyText).toContain("too large");
+  });
+});
