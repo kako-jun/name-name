@@ -389,6 +389,23 @@ interface CharacterState {
   anchorX?: number
   /** false の間は GameState 上の最終表示としては存在するが、旧人物 fade-out 待ちで描画ツリーには未追加。 */
   attached?: boolean
+  /**
+   * `reviveFromExitFade` が退場フェード予約を打ち消して復活させるたびに +1 する世代カウンタ (#429 2巡目 re-review)。
+   *
+   * showLabel/showImage は id 再利用時に state オブジェクトを差し替えず in-place で更新するため、
+   * `this.characters.get(id) !== state` という state 一致チェック（show() の `entranceStarted` 経路が使う手）
+   * は復活を検知できない。`state.fadeAnimation` の有無で判定する旧ガード（#429 re-review）も、
+   * **instant 復活**（`reviveFromExitFade` の instant 分岐が `sprite.alpha=1` かつ `fadeAnimation=null` に
+   * 即時リセットする）では「復活後」も `fadeAnimation` が null に戻ってしまい、pending だった古い
+   * `.then()`（`ensureFontLoaded`/`Assets.load` 完了コールバック）が `startEntranceFade` を素通りして
+   * alpha を巻き戻すレースを検知できなかった（instant でない復活の fade が完了して `fadeAnimation` が
+   * 自然に null へ戻るタイミングでも同様）。
+   *
+   * この世代カウンタを「新規表示時に捕捉した値」と「`.then()` 発火時点の値」で比較することで、
+   * `fadeAnimation` の値そのものに頼らず「捕捉後に復活が起きたか」を検知できる。詳細は
+   * `reviveFromExitFade` / `startEntranceFade` の JSDoc 参照。
+   */
+  reviveGeneration?: number
 }
 
 interface FadeAnimation {
@@ -902,6 +919,10 @@ export class CharacterLayer extends Container {
    * （fadeAnimation 進行中だけ label.alpha を sprite.alpha に揃える）に頼れない instant 経路だけ
    * label.alpha を手動で揃える必要があり、これを extraSync で表現する。showImage/show() には
    * この同期が不要なので渡さない。
+   *
+   * 実際に予約を打ち消して復活させたときは `existing.reviveGeneration` を +1 する (#429 2巡目
+   * re-review)。`startEntranceFade` が pending 中の古い `.then()` から「捕捉時点より後に復活が
+   * 起きたか」を検知するために参照する。詳細は `CharacterState.reviveGeneration` の JSDoc 参照。
    */
   private reviveFromExitFade(
     existing: CharacterState,
@@ -909,6 +930,7 @@ export class CharacterLayer extends Container {
     extraSync?: () => void
   ): void {
     if (!existing.fadeAnimation?.destroyOnComplete) return
+    existing.reviveGeneration = (existing.reviveGeneration ?? 0) + 1
     if (instant || this.characterFadeMs <= 0) {
       existing.sprite.alpha = 1
       extraSync?.()
@@ -940,11 +962,30 @@ export class CharacterLayer extends Container {
    * まで進んでいるかもしれない）を `{ fromAlpha: 0, toAlpha: 1 }` の新規入場フェードで丸ごと
    * 上書きして alpha を巻き戻す。`fadeAnimation` の有無だけで判定すれば、どちらの経路が先に
    * fadeAnimation を張っていても「後から来た入場フェードの初期化」は無視され、この巻き戻りは
-   * 起きない。
+   * 起きない —— ただしこれは **非 instant 復活**（`reviveFromExitFade` が `startFade` で新しい
+   * `fadeAnimation` オブジェクトを張る経路）に限った話だった（#429 2巡目 re-review で発覚）。
+   *
+   * **instant 復活**（`reviveFromExitFade` の instant 分岐）は `sprite.alpha=1` にした直後
+   * `fadeAnimation=null` に戻す。捕捉時点でも既に null、復活後も null なので `fadeAnimation` の
+   * 有無だけを見るガードでは「捕捉後に復活が起きた」ことを検知できず、素通りして alpha が
+   * 瞬間的に 1→0 付近まで巻き戻ってから再度フェードインし直す（`showImage` も同型で再現）。
+   * 非 instant 復活のフェードが `.then()` 解決より先に完了して `fadeAnimation` が自然に null へ
+   * 戻るケースも同じ穴を持つ。
+   *
+   * これを塞ぐため `expectedGeneration` を追加した。呼び出し側（showLabel/showImage）は state
+   * 新規作成直後（＝まだ一度も復活していない時点）の `state.reviveGeneration` を捕捉して渡し、
+   * ここで現在値と比較する。捕捉後に `reviveFromExitFade` が一度でも実際に復活処理を行っていれば
+   * 世代が進んでいて不一致になるため、`fadeAnimation` の値に関わらず「後から来た入場フェード
+   * 初期化」を無視できる。詳細は `CharacterState.reviveGeneration` の JSDoc 参照。
    */
-  private startEntranceFade(state: CharacterState, instant: boolean): void {
+  private startEntranceFade(
+    state: CharacterState,
+    instant: boolean,
+    expectedGeneration: number
+  ): void {
     if (instant) return
     if (state.fadeAnimation) return
+    if ((state.reviveGeneration ?? 0) !== expectedGeneration) return
     state.fadeAnimation = {
       startMs: this.elapsedMs,
       durationMs: TITLE_CARD_FADE_MS,
@@ -1498,6 +1539,10 @@ export class CharacterLayer extends Container {
       anchorX,
     }
     this.characters.set(NAME, state)
+    // 復活検知用に「まだ一度も復活していない」時点の世代を捕捉する (#429 2巡目 re-review)。
+    // 新規作成直後なので常に 0 のはずだが、reviveGeneration の JSDoc の意図どおり値そのものは
+    // startEntranceFade 側に委ね、ここでは読むだけにする。
+    const expectedGeneration = state.reviveGeneration ?? 0
 
     void ensureFontLoaded(opts.fontFamily)
       .then(() => {
@@ -1507,8 +1552,10 @@ export class CharacterLayer extends Container {
         // id 再利用で別 state に置き換わるケースは showLabel には実質無いため、show() の
         // textureReady ゲートのような state 一致チェックまでは不要と判断し、label.destroyed のみで足りるとした。
         // 何らかの fadeAnimation が既に張られていれば上書きしない（startEntranceFade 内部ガード、
-        // #427 re-review・#429 re-review でガードを destroyOnComplete 限定から広げた）。
-        this.startEntranceFade(state, instant)
+        // #427 re-review・#429 re-review でガードを destroyOnComplete 限定から広げた）。加えて
+        // instant 復活（fadeAnimation が null に戻る経路）も expectedGeneration で検知する
+        // （#429 2巡目 re-review、詳細は startEntranceFade の JSDoc 参照）。
+        this.startEntranceFade(state, instant, expectedGeneration)
       })
       .catch(() => {})
   }
@@ -1583,6 +1630,9 @@ export class CharacterLayer extends Container {
       renderOnly: true,
     }
     this.characters.set(NAME, state)
+    // 復活検知用に「まだ一度も復活していない」時点の世代を捕捉する (#429 2巡目 re-review)。
+    // 詳細は showLabel 側の同名変数コメント、および CharacterState.reviveGeneration の JSDoc 参照。
+    const expectedGeneration = state.reviveGeneration ?? 0
 
     // 任意ファイル名パスの url 解決は背景画像と同じ resolveAssetUrl 経由（#274）。
     const url = resolveAssetUrl(opts.assetBaseUrl, 'images', opts.path)
@@ -1621,8 +1671,10 @@ export class CharacterLayer extends Container {
         // id 再利用で別 state に置き換わるケースは showImage には実質無いため、show() の
         // textureReady ゲートのような state 一致チェックまでは不要と判断し、sprite.destroyed のみで足りるとした。
         // 何らかの fadeAnimation が既に張られていれば上書きしない（startEntranceFade 内部ガード、
-        // #427 re-review・#429 re-review でガードを destroyOnComplete 限定から広げた）。
-        this.startEntranceFade(state, instant)
+        // #427 re-review・#429 re-review でガードを destroyOnComplete 限定から広げた）。加えて
+        // instant 復活（fadeAnimation が null に戻る経路）も expectedGeneration で検知する
+        // （#429 2巡目 re-review、詳細は startEntranceFade の JSDoc 参照）。
+        this.startEntranceFade(state, instant, expectedGeneration)
       })
       .catch((err) => {
         console.warn('[name-name] 画像の読み込みに失敗: ' + url, err)
