@@ -16,7 +16,7 @@
 //   存在しないため対象外。ここでは「debugEnabled=true を渡せば D が出る」ことだけ DT2 で縛る。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Assets, Texture } from 'pixi.js'
 import { getIndicatorImageUrls } from '../game/novelLayout'
 
@@ -668,6 +668,102 @@ describe('NovelPlayer 終劇→埋め込み親へ postMessage 通知 (#395)', ()
     await flushAsync()
     act(() => capturedStoryEndedCb()(true))
     expect(post.mock.calls[0][1]).toBe('*')
+  })
+})
+
+// --- #404: 終劇表示中の埋め込み元プロジェクトロゴ ---
+//
+// storyEnded 中、左上に `${assetBaseUrl}/images/title.png` を表示する。TitleOverlay の
+// imageFailed と同じ onError 検知パターンだが、こちらはテキストへのフォールバックをしない
+// （ロゴが無ければ単に出さない）。表示条件は `assetBaseUrl && !storyEndedLogoFailed`、
+// storyEndedLogoFailed は onError で true になり、docKey 変化でだけ false にリセットされる。
+//
+// 非適用（書かない）: 権限/二重送信/race（該当ロジックなし）/ タイムゾーン・i18n（該当なし）/
+//   モバイル表示（jsdom にレイアウトエンジンがなく単体テスト不可。ライブ確認は別途）/
+//   console error ログ（TitleOverlay と同一パターンで既に許容されている慣習）。
+describe('NovelPlayer 終劇ロゴ表示 (#404)', () => {
+  const ASSET_BASE = '/asset-base'
+  const LOGO_SRC = `${ASSET_BASE}/images/title.png`
+  const capturedStoryEndedCb = (): ((ended: boolean) => void) => {
+    const r = rendererInstances[rendererInstances.length - 1]
+    return r.setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
+  }
+  // alt="" の img は role が potentially presentation 扱いになるため getByRole は使わず、
+  // src 属性で直接引く（テスト設計メモの推奨どおり）。
+  const logoImg = () => document.querySelector(`img[src="${LOGO_SRC}"]`) as HTMLImageElement | null
+  const storyEndedText = () => screen.queryByText('to be continued...')
+
+  it('L1: storyEnded=true かつ assetBaseUrl 指定時、ロゴ img が表示される', async () => {
+    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} />)
+    await flushAsync()
+    act(() => capturedStoryEndedCb()(true))
+    expect(logoImg()).not.toBeNull()
+  })
+
+  it('L2: storyEnded=true かつ assetBaseUrl 未指定時、ロゴ img は現れず "to be continued..." は表示される', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    act(() => capturedStoryEndedCb()(true))
+    expect(logoImg()).toBeNull()
+    expect(storyEndedText()).not.toBeNull()
+  })
+
+  it('L3: img の onError 発火後、ロゴ img がDOMから消え、テキストへのフォールバックは無い（TitleOverlay と異なる仕様）', async () => {
+    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} />)
+    await flushAsync()
+    act(() => capturedStoryEndedCb()(true))
+    const img = logoImg()
+    expect(img).not.toBeNull()
+    act(() => {
+      fireEvent.error(img!)
+    })
+    expect(logoImg()).toBeNull()
+    // ロゴが消えた後も他の img（フォールバック画像）に差し替わっていない
+    expect(document.querySelectorAll('img').length).toBe(0)
+    // "to be continued..." テキストはロゴの成否と無関係に表示され続ける
+    expect(storyEndedText()).not.toBeNull()
+  })
+
+  it('L4: assetBaseUrl="" のとき、ロゴは表示されない（境界: 空文字も未設定扱い）', async () => {
+    render(<NovelPlayer events={[]} assetBaseUrl="" />)
+    await flushAsync()
+    act(() => capturedStoryEndedCb()(true))
+    expect(logoImg()).toBeNull()
+  })
+
+  it('L5: onError 発火後、docKey が変化すると再びロゴが表示される（別プロジェクト再利用の想定）', async () => {
+    const { rerender } = render(
+      <NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} docKey="doc-a" />
+    )
+    await flushAsync()
+    act(() => capturedStoryEndedCb()(true))
+    const img = logoImg()
+    expect(img).not.toBeNull()
+    act(() => {
+      fireEvent.error(img!)
+    })
+    expect(logoImg()).toBeNull()
+
+    rerender(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} docKey="doc-b" />)
+    await flushAsync()
+    expect(logoImg()).not.toBeNull()
+  })
+
+  it('L6: onError 発火後、docKey が同一値のまま storyEnded を false→true にしてもロゴは再表示されない（フラグが尾を引く）', async () => {
+    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} docKey="doc-a" />)
+    await flushAsync()
+    const cb = capturedStoryEndedCb()
+    act(() => cb(true))
+    const img = logoImg()
+    expect(img).not.toBeNull()
+    act(() => {
+      fireEvent.error(img!)
+    })
+    expect(logoImg()).toBeNull()
+
+    act(() => cb(false))
+    act(() => cb(true))
+    expect(logoImg()).toBeNull()
   })
 })
 

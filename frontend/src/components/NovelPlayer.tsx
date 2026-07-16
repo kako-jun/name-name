@@ -195,6 +195,11 @@ function NovelPlayer({
   // NovelGameState.storyEnded のミラー）。true の間だけ「to be continued...」を表示する。
   const [storyEnded, setStoryEnded] = useState(false)
 
+  // 終劇表示中に左上へ出す埋め込み元プロジェクトロゴの読み込み失敗フラグ (#404)。
+  // TitleOverlay の imageFailed と同じ onError パターン。ロゴが無い/失敗したプロジェクトでは
+  // テキストへのフォールバックはせず、単に出さない（Issue 方針）。
+  const [storyEndedLogoFailed, setStoryEndedLogoFailed] = useState(false)
+
   // デバッグ HUD の展開状態 (#310)。右下ボタン列の「D」ボタンで開閉する。
   // 既定は畳んだ状態（#301 の collapsed 既定 true を引き継ぐ＝open 既定 false）。
   // 状態は localStorage（旧 DebugOverlay と同じキー意味）に best-effort で永続化する。
@@ -383,6 +388,13 @@ function NovelPlayer({
     if (docKey) {
       rendererRef.current?.setDocKey(docKey)
     }
+  }, [docKey])
+
+  // docKey が変化したら終劇ロゴの読み込み失敗フラグをリセットする (#404): 同じコンポーネント
+  // インスタンスが別プロジェクトに再利用された場合、前のプロジェクトでの読み込み失敗が
+  // 新プロジェクトのロゴ表示を誤って抑止しないようにする。
+  useEffect(() => {
+    setStoryEndedLogoFailed(false)
   }, [docKey])
 
   // choiceStyle が変化したときに renderer に反映 (#146)
@@ -692,20 +704,31 @@ function NovelPlayer({
           </button>
         )}
       </div>
-      {/* 終劇表示 (#386): confinement 外への choice ジャンプで NovelRenderer.endStory() が
-          発火した後に出す、控えめな "to be continued..." 表示。中央の大演出にはせず、
-          右下ボタン行より少し上（SLOT_BASE_PX + SLOT_GAP_PX ぶん）に小さく置く。
-          話者名・選択肢UIと区別するため斜体・低コントラストにする。背景/立ち絵のフェード
-          アウト自体は NovelRenderer 側（PixiJS）が行い、これはその後に重ねる DOM 側の文字。
-          pointer-events-none: タップしても何も起きない（advance は storyEnded で no-op のため
-          二重の安全策だが、見た目のヒットテストにも参加させない）。 */}
+      {/* 終劇表示 (#386, #404): confinement 外への choice ジャンプで NovelRenderer.endStory() が
+          発火した後に出す "to be continued..." 表示。#404 で「文字が小さすぎる」不満を解消する
+          ため、右下の控えめな配置から画面中央寄せ・大きめの文字に変更した。話者名・選択肢UIとの
+          区別のため斜体は維持しつつ、視認性を上げるため text-white/60 → /80 に上げている。
+          背景/立ち絵のフェードアウト自体は NovelRenderer 側（PixiJS）が行い、これはその後に
+          重ねる DOM 側の文字。pointer-events-none: タップしても何も起きない（advance は
+          storyEnded で no-op のため二重の安全策だが、見た目のヒットテストにも参加させない）。 */}
       {storyEnded && (
         <div className="absolute inset-0 m-auto pointer-events-none" style={gameBoxStyle}>
+          {/* 埋め込み元プロジェクトのロゴ (#404): TitleOverlay と同じ title.png 規約
+              (`${assetBaseUrl}/images/title.png`) を流用する。TitleOverlay の imageFailed と
+              同様 onError で読み込み失敗を検知するが、こちらはテキストへのフォールバックは
+              せず、ロゴが無ければ単に出さない（Issue 方針。confinement 元が不明な場合に
+              誤ったテキストを出さないため）。 */}
+          {assetBaseUrl && !storyEndedLogoFailed && (
+            <img
+              src={`${assetBaseUrl}/images/title.png`}
+              alt=""
+              onError={() => setStoryEndedLogoFailed(true)}
+              className="absolute top-3 left-3 max-w-[20%] max-h-16 object-contain select-none"
+            />
+          )}
           <p
-            className="absolute text-white/60 text-sm italic select-none"
+            className="absolute inset-0 flex items-center justify-center text-center px-8 text-white/80 text-3xl italic select-none"
             style={{
-              right: `${SLOT_BASE_PX}px`,
-              bottom: `${SLOT_BASE_PX + SLOT_GAP_PX}px`,
               fontFamily: fontFamily || undefined,
             }}
           >
