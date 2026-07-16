@@ -1501,6 +1501,36 @@ describe('CharacterLayer showLabel フェード遅延タイミング (#427)', ()
     expect(loadSpy).not.toHaveBeenCalled()
     expect(labelChars(layer).characters.has('ghost')).toBe(false)
   })
+
+  // 観点11（must, #427 セルフレビュー再レビュー指摘の再現テスト）: remove()（非 instant）は destroy を
+  //   即座に行わず、startFade で destroyOnComplete=true のフェードアウトを「予約」するだけで、実破棄は
+  //   ticker がフェード完了時に行う。ensureFontLoaded がその「予約済みだが未破棄」の窓に解決すると、
+  //   旧ガード（label.destroyed のみ）は素通りして退場フェードを登場フェード（toAlpha=1）で上書きして
+  //   しまい、remove() による退場が取り消されていた。startEntranceFade の destroyOnComplete ガードで、
+  //   フォント解決後も退場フェード予約が保たれることを確認する（showImage 側と対になる再現テスト）。
+  it('ensureFontLoaded 解決前に remove()（非 instant）で退場フェードを予約すると、解決後も退場フェードがフェードインで上書きされない', async () => {
+    let resolveFont!: () => void
+    const pending = new Promise<void>((resolve) => {
+      resolveFont = resolve
+    })
+    vi.spyOn(FontLoader, 'ensureFontLoaded').mockReturnValue(pending)
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif' })
+    const st = asInternals(layer).characters.get('name')!
+    // 非 instant remove(): destroy はまだされない（destroyOnComplete=true のフェードアウト予約のみ）。
+    layer.remove('name')
+    expect(asInternals(layer).characters.has('name')).toBe(true)
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(true)
+    expect(st.fadeAnimation!.toAlpha).toBe(0)
+    // フォントが解決しても、退場フェード予約はフェードインで上書きされない（要素は復活しない）。
+    resolveFont()
+    await flushPromises()
+    expect(asInternals(layer).characters.has('name')).toBe(true)
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(true)
+    expect(st.fadeAnimation!.toAlpha).toBe(0)
+  })
 })
 
 interface ImageStateLike {
@@ -1836,6 +1866,36 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     await flushPromises()
     expect(st.sprite.texture).toEqual({ width: 20, height: 20 })
     expect(loadSpy).toHaveBeenCalledTimes(2)
+  })
+
+  // 観点6（must, #427 セルフレビュー再レビュー指摘の再現テスト）: remove()（非 instant）は destroy を
+  //   即座に行わず、startFade で destroyOnComplete=true のフェードアウトを「予約」するだけで、実破棄は
+  //   ticker がフェード完了時に行う。load がその「予約済みだが未破棄」の窓に解決すると、旧ガード
+  //   （sprite.destroyed のみ）は素通りして退場フェードを登場フェード（toAlpha=1）で上書きしてしまい、
+  //   remove() による退場が取り消されていた（要素が復活し、二度と破棄されないリークにもなる）。
+  //   startEntranceFade の destroyOnComplete ガードで、load 解決後も退場フェード予約が保たれることを確認する。
+  it('load 解決前に remove()（非 instant）で退場フェードを予約すると、load 解決後も退場フェードがフェードインで上書きされない', async () => {
+    let resolveLoad!: (texture: unknown) => void
+    const pending = new Promise((resolve) => {
+      resolveLoad = resolve
+    })
+    vi.spyOn(Assets, 'load').mockReturnValue(pending as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'x', path: 'a.png', assetBaseUrl: '/assets' })
+    const st = asInternals(layer).characters.get('x')!
+    // 非 instant remove(): destroy はまだされない（destroyOnComplete=true のフェードアウト予約のみ）。
+    layer.remove('x')
+    expect(asInternals(layer).characters.has('x')).toBe(true)
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(true)
+    expect(st.fadeAnimation!.toAlpha).toBe(0)
+    // load が解決しても、退場フェード予約はフェードインで上書きされない（要素は復活しない）。
+    resolveLoad(fakeTexture(10, 10))
+    await flushPromises()
+    expect(asInternals(layer).characters.has('x')).toBe(true)
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(true)
+    expect(st.fadeAnimation!.toAlpha).toBe(0)
   })
 
   // 20: 本丸。画像は `[文字演出: id]` の対象になれない（label 無し → 早期 return、reject しない）。
