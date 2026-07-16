@@ -1506,7 +1506,8 @@ export class CharacterLayer extends Container {
         // フェード開始はフォント確定後 (#427)。instant 時は label.alpha が既に 1 のままなので張らない。
         // id 再利用で別 state に置き換わるケースは showLabel には実質無いため、show() の
         // textureReady ゲートのような state 一致チェックまでは不要と判断し、label.destroyed のみで足りるとした。
-        // 退場フェード予約済み（destroyOnComplete）なら上書きしない（startEntranceFade 内部ガード、#427 re-review）。
+        // 何らかの fadeAnimation が既に張られていれば上書きしない（startEntranceFade 内部ガード、
+        // #427 re-review・#429 re-review でガードを destroyOnComplete 限定から広げた）。
         this.startEntranceFade(state, instant)
       })
       .catch(() => {})
@@ -1619,7 +1620,8 @@ export class CharacterLayer extends Container {
         // フェード開始は texture 反映後 (#427)。instant 時は sprite.alpha が既に 1 のままなので張らない。
         // id 再利用で別 state に置き換わるケースは showImage には実質無いため、show() の
         // textureReady ゲートのような state 一致チェックまでは不要と判断し、sprite.destroyed のみで足りるとした。
-        // 退場フェード予約済み（destroyOnComplete）なら上書きしない（startEntranceFade 内部ガード、#427 re-review）。
+        // 何らかの fadeAnimation が既に張られていれば上書きしない（startEntranceFade 内部ガード、
+        // #427 re-review・#429 re-review でガードを destroyOnComplete 限定から広げた）。
         this.startEntranceFade(state, instant)
       })
       .catch((err) => {
