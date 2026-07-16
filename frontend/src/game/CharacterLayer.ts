@@ -889,6 +889,36 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 退場フェード予約中（destroyOnComplete）の同 id 再表示を、フェードアウトの取り消し→
+   * 再フェードイン（instant / characterFadeMs<=0 なら即時表示）に切り替える共通ヘルパー。
+   *
+   * show() の「退場フェード中の再 show」分岐 (#177) が元。showLabel/showImage も同 id 再表示で
+   * 同じパターンが必要になり (#429)、ほぼ同一のブロックが 3 箇所に複製されていたためここへ切り出した
+   * （規律4, should-4）。
+   *
+   * `existing.fadeAnimation?.destroyOnComplete` が false（退場フェード予約が無い）なら no-op。
+   * `extraSync` は instant 経路（sprite.alpha を即座に 1 へ揃える側）でだけ呼ばれる追加同期フック。
+   * showLabel は sprite が不可視アンカーで label が唯一の可視要素のため、ticker のフェード同期
+   * （fadeAnimation 進行中だけ label.alpha を sprite.alpha に揃える）に頼れない instant 経路だけ
+   * label.alpha を手動で揃える必要があり、これを extraSync で表現する。showImage/show() には
+   * この同期が不要なので渡さない。
+   */
+  private reviveFromExitFade(
+    existing: CharacterState,
+    instant: boolean,
+    extraSync?: () => void
+  ): void {
+    if (!existing.fadeAnimation?.destroyOnComplete) return
+    if (instant || this.characterFadeMs <= 0) {
+      existing.sprite.alpha = 1
+      extraSync?.()
+      existing.fadeAnimation = null
+    } else {
+      this.startFade(existing, existing.sprite.alpha, 1, false)
+    }
+  }
+
+  /**
    * タイトルカード補助要素（ラベル/画像 #274）の入場フェードを開始する共通ヘルパー (#427)。
    *
    * showLabel/showImage の load/font 解決後の `.then()` から呼ぶ。両者でほぼ同一のフェード設定
@@ -974,15 +1004,8 @@ export class CharacterLayer extends Container {
     const existing = this.characters.get(character)
 
     if (existing) {
-      // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す
-      if (existing.fadeAnimation?.destroyOnComplete) {
-        if (instant || this.characterFadeMs <= 0) {
-          existing.sprite.alpha = 1
-          existing.fadeAnimation = null
-        } else {
-          this.startFade(existing, existing.sprite.alpha, 1, false)
-        }
-      }
+      // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す (#177)
+      this.reviveFromExitFade(existing, instant)
 
       // novel 役割配置 (#286): override x がある再 show は、現在の sprite.x と違えば
       // 「横位置変更あり」とみなす（position トークンは同じでも質問役↔回答役の入替で x が動く）。
@@ -1397,20 +1420,12 @@ export class CharacterLayer extends Container {
     if (existing) {
       // 退場フェード予約中（destroyOnComplete）の同 id 再表示: フェードアウトを取り消して
       // 再フェードイン（または instant なら即時表示）に切り替える (#429)。show() の「退場フェード中の
-      // 再 show」分岐 (#177) と同じパターン。startEntranceFade は「新規登場」専用ヘルパー
-      // （fromAlpha=0 固定・TITLE_CARD_FADE_MS 固定）でこの用途（現在 alpha から 1 へ戻す）には
-      // 使えないため、ここでは show() と同じく startFade を直接呼ぶ。
-      if (existing.fadeAnimation?.destroyOnComplete) {
-        if (instant || this.characterFadeMs <= 0) {
-          existing.sprite.alpha = 1
-          // label はここが唯一の可視要素（sprite は不可視のアンカー）。ticker の同期は
-          // fadeAnimation 進行中だけなので、instant 経路では手動で揃える必要がある。
-          if (existing.label) existing.label.alpha = 1
-          existing.fadeAnimation = null
-        } else {
-          this.startFade(existing, existing.sprite.alpha, 1, false)
-        }
-      }
+      // 再 show」分岐 (#177) と同じパターンなので reviveFromExitFade ヘルパーを使う（should-4）。
+      // label はここが唯一の可視要素（sprite は不可視のアンカー）。ticker の同期は fadeAnimation
+      // 進行中だけなので、instant 経路では extraSync で手動で揃える必要がある。
+      this.reviveFromExitFade(existing, instant, () => {
+        if (existing.label && !existing.label.destroyed) existing.label.alpha = 1
+      })
       // 差し替え時は進行中のグリフ演出・下線を破棄（テキスト/幅が変わるため不整合になる）。
       this.clearTextEffect(existing)
       this.clearUnderline(existing)
@@ -1531,17 +1546,8 @@ export class CharacterLayer extends Container {
     if (existing) {
       // 退場フェード予約中（destroyOnComplete）の同 id 再表示: フェードアウトを取り消して
       // 再フェードイン（または instant なら即時表示）に切り替える (#429)。show() の「退場フェード中の
-      // 再 show」分岐 (#177) と同じパターン。startEntranceFade は「新規登場」専用ヘルパー
-      // （fromAlpha=0 固定・TITLE_CARD_FADE_MS 固定）でこの用途（現在 alpha から 1 へ戻す）には
-      // 使えないため、ここでは show() と同じく startFade を直接呼ぶ。
-      if (existing.fadeAnimation?.destroyOnComplete) {
-        if (instant || this.characterFadeMs <= 0) {
-          existing.sprite.alpha = 1
-          existing.fadeAnimation = null
-        } else {
-          this.startFade(existing, existing.sprite.alpha, 1, false)
-        }
-      }
+      // 再 show」分岐 (#177) と同じパターンなので reviveFromExitFade ヘルパーを使う（should-4）。
+      this.reviveFromExitFade(existing, instant)
       // 同 id 再表示は位置のみ更新する（テクスチャ差し替えは想定しないため最小挙動）。
       existing.sprite.x = x
       existing.sprite.y = y
