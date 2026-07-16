@@ -389,6 +389,23 @@ interface CharacterState {
   anchorX?: number
   /** false の間は GameState 上の最終表示としては存在するが、旧人物 fade-out 待ちで描画ツリーには未追加。 */
   attached?: boolean
+  /**
+   * `reviveFromExitFade` が退場フェード予約を打ち消して復活させるたびに +1 する世代カウンタ (#429 2巡目 re-review)。
+   *
+   * showLabel/showImage は id 再利用時に state オブジェクトを差し替えず in-place で更新するため、
+   * `this.characters.get(id) !== state` という state 一致チェック（show() の `entranceStarted` 経路が使う手）
+   * は復活を検知できない。`state.fadeAnimation` の有無で判定する旧ガード（#429 re-review）も、
+   * **instant 復活**（`reviveFromExitFade` の instant 分岐が `sprite.alpha=1` かつ `fadeAnimation=null` に
+   * 即時リセットする）では「復活後」も `fadeAnimation` が null に戻ってしまい、pending だった古い
+   * `.then()`（`ensureFontLoaded`/`Assets.load` 完了コールバック）が `startEntranceFade` を素通りして
+   * alpha を巻き戻すレースを検知できなかった（instant でない復活の fade が完了して `fadeAnimation` が
+   * 自然に null へ戻るタイミングでも同様）。
+   *
+   * この世代カウンタを「新規表示時に捕捉した値」と「`.then()` 発火時点の値」で比較することで、
+   * `fadeAnimation` の値そのものに頼らず「捕捉後に復活が起きたか」を検知できる。詳細は
+   * `reviveFromExitFade` / `startEntranceFade` の JSDoc 参照。
+   */
+  reviveGeneration?: number
 }
 
 interface FadeAnimation {
@@ -889,6 +906,41 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 退場フェード予約中（destroyOnComplete）の同 id 再表示を、フェードアウトの取り消し→
+   * 再フェードイン（instant / characterFadeMs<=0 なら即時表示）に切り替える共通ヘルパー。
+   *
+   * show() の「退場フェード中の再 show」分岐 (#177) が元。showLabel/showImage も同 id 再表示で
+   * 同じパターンが必要になり (#429)、ほぼ同一のブロックが 3 箇所に複製されていたためここへ切り出した
+   * （規律4, should-4）。
+   *
+   * `existing.fadeAnimation?.destroyOnComplete` が false（退場フェード予約が無い）なら no-op。
+   * `extraSync` は instant 経路（sprite.alpha を即座に 1 へ揃える側）でだけ呼ばれる追加同期フック。
+   * showLabel は sprite が不可視アンカーで label が唯一の可視要素のため、ticker のフェード同期
+   * （fadeAnimation 進行中だけ label.alpha を sprite.alpha に揃える）に頼れない instant 経路だけ
+   * label.alpha を手動で揃える必要があり、これを extraSync で表現する。showImage/show() には
+   * この同期が不要なので渡さない。
+   *
+   * 実際に予約を打ち消して復活させたときは `existing.reviveGeneration` を +1 する (#429 2巡目
+   * re-review)。`startEntranceFade` が pending 中の古い `.then()` から「捕捉時点より後に復活が
+   * 起きたか」を検知するために参照する。詳細は `CharacterState.reviveGeneration` の JSDoc 参照。
+   */
+  private reviveFromExitFade(
+    existing: CharacterState,
+    instant: boolean,
+    extraSync?: () => void
+  ): void {
+    if (!existing.fadeAnimation?.destroyOnComplete) return
+    existing.reviveGeneration = (existing.reviveGeneration ?? 0) + 1
+    if (instant || this.characterFadeMs <= 0) {
+      existing.sprite.alpha = 1
+      extraSync?.()
+      existing.fadeAnimation = null
+    } else {
+      this.startFade(existing, existing.sprite.alpha, 1, false)
+    }
+  }
+
+  /**
    * タイトルカード補助要素（ラベル/画像 #274）の入場フェードを開始する共通ヘルパー (#427)。
    *
    * showLabel/showImage の load/font 解決後の `.then()` から呼ぶ。両者でほぼ同一のフェード設定
@@ -900,10 +952,40 @@ export class CharacterLayer extends Container {
    * `sprite.destroyed`/`label.destroyed` はまだ false でガードを素通りしてしまい、無条件にフェード
    * インへ上書きすると `remove()` による退場が取り消されてしまう（要素が復活し、二度と破棄されない
    * リークにもなる）。このヘルパーで「既に退場フェードが予約されているなら何もしない」を保証する。
+   *
+   * ガードは `destroyOnComplete` に限定せず、`fadeAnimation` が何かしら張られていれば無条件に
+   * 無視する（#429 re-review）。理由: load/font 解決前に
+   * remove()（destroyOnComplete=true 予約）→ showLabel/showImage 再表示（#429 の「退場フェード
+   * 予約中の再表示」分岐が destroyOnComplete=false の復活フェードへ差し替え）という順で events が
+   * 起きると、その時点で fadeAnimation は既に「正しい」ものに置き換わっている。ここで
+   * destroyOnComplete のみを見るガードだと素通りしてしまい、進行中の復活フェード（alpha が中間値
+   * まで進んでいるかもしれない）を `{ fromAlpha: 0, toAlpha: 1 }` の新規入場フェードで丸ごと
+   * 上書きして alpha を巻き戻す。`fadeAnimation` の有無だけで判定すれば、どちらの経路が先に
+   * fadeAnimation を張っていても「後から来た入場フェードの初期化」は無視され、この巻き戻りは
+   * 起きない —— ただしこれは **非 instant 復活**（`reviveFromExitFade` が `startFade` で新しい
+   * `fadeAnimation` オブジェクトを張る経路）に限った話だった（#429 2巡目 re-review で発覚）。
+   *
+   * **instant 復活**（`reviveFromExitFade` の instant 分岐）は `sprite.alpha=1` にした直後
+   * `fadeAnimation=null` に戻す。捕捉時点でも既に null、復活後も null なので `fadeAnimation` の
+   * 有無だけを見るガードでは「捕捉後に復活が起きた」ことを検知できず、素通りして alpha が
+   * 瞬間的に 1→0 付近まで巻き戻ってから再度フェードインし直す（`showImage` も同型で再現）。
+   * 非 instant 復活のフェードが `.then()` 解決より先に完了して `fadeAnimation` が自然に null へ
+   * 戻るケースも同じ穴を持つ。
+   *
+   * これを塞ぐため `expectedGeneration` を追加した。呼び出し側（showLabel/showImage）は state
+   * 新規作成直後（＝まだ一度も復活していない時点）の `state.reviveGeneration` を捕捉して渡し、
+   * ここで現在値と比較する。捕捉後に `reviveFromExitFade` が一度でも実際に復活処理を行っていれば
+   * 世代が進んでいて不一致になるため、`fadeAnimation` の値に関わらず「後から来た入場フェード
+   * 初期化」を無視できる。詳細は `CharacterState.reviveGeneration` の JSDoc 参照。
    */
-  private startEntranceFade(state: CharacterState, instant: boolean): void {
+  private startEntranceFade(
+    state: CharacterState,
+    instant: boolean,
+    expectedGeneration: number
+  ): void {
     if (instant) return
-    if (state.fadeAnimation?.destroyOnComplete) return
+    if (state.fadeAnimation) return
+    if ((state.reviveGeneration ?? 0) !== expectedGeneration) return
     state.fadeAnimation = {
       startMs: this.elapsedMs,
       durationMs: TITLE_CARD_FADE_MS,
@@ -963,15 +1045,8 @@ export class CharacterLayer extends Container {
     const existing = this.characters.get(character)
 
     if (existing) {
-      // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す
-      if (existing.fadeAnimation?.destroyOnComplete) {
-        if (instant || this.characterFadeMs <= 0) {
-          existing.sprite.alpha = 1
-          existing.fadeAnimation = null
-        } else {
-          this.startFade(existing, existing.sprite.alpha, 1, false)
-        }
-      }
+      // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す (#177)
+      this.reviveFromExitFade(existing, instant)
 
       // novel 役割配置 (#286): override x がある再 show は、現在の sprite.x と違えば
       // 「横位置変更あり」とみなす（position トークンは同じでも質問役↔回答役の入替で x が動く）。
@@ -1384,6 +1459,14 @@ export class CharacterLayer extends Container {
       return
     }
     if (existing) {
+      // 退場フェード予約中（destroyOnComplete）の同 id 再表示: フェードアウトを取り消して
+      // 再フェードイン（または instant なら即時表示）に切り替える (#429)。show() の「退場フェード中の
+      // 再 show」分岐 (#177) と同じパターンなので reviveFromExitFade ヘルパーを使う（should-4）。
+      // label はここが唯一の可視要素（sprite は不可視のアンカー）。ticker の同期は fadeAnimation
+      // 進行中だけなので、instant 経路では extraSync で手動で揃える必要がある。
+      this.reviveFromExitFade(existing, instant, () => {
+        if (existing.label && !existing.label.destroyed) existing.label.alpha = 1
+      })
       // 差し替え時は進行中のグリフ演出・下線を破棄（テキスト/幅が変わるため不整合になる）。
       this.clearTextEffect(existing)
       this.clearUnderline(existing)
@@ -1456,6 +1539,10 @@ export class CharacterLayer extends Container {
       anchorX,
     }
     this.characters.set(NAME, state)
+    // 復活検知用に「まだ一度も復活していない」時点の世代を捕捉する (#429 2巡目 re-review)。
+    // 新規作成直後なので常に 0 のはずだが、reviveGeneration の JSDoc の意図どおり値そのものは
+    // startEntranceFade 側に委ね、ここでは読むだけにする。
+    const expectedGeneration = state.reviveGeneration ?? 0
 
     void ensureFontLoaded(opts.fontFamily)
       .then(() => {
@@ -1464,8 +1551,11 @@ export class CharacterLayer extends Container {
         // フェード開始はフォント確定後 (#427)。instant 時は label.alpha が既に 1 のままなので張らない。
         // id 再利用で別 state に置き換わるケースは showLabel には実質無いため、show() の
         // textureReady ゲートのような state 一致チェックまでは不要と判断し、label.destroyed のみで足りるとした。
-        // 退場フェード予約済み（destroyOnComplete）なら上書きしない（startEntranceFade 内部ガード、#427 re-review）。
-        this.startEntranceFade(state, instant)
+        // 何らかの fadeAnimation が既に張られていれば上書きしない（startEntranceFade 内部ガード、
+        // #427 re-review・#429 re-review でガードを destroyOnComplete 限定から広げた）。加えて
+        // instant 復活（fadeAnimation が null に戻る経路）も expectedGeneration で検知する
+        // （#429 2巡目 re-review、詳細は startEntranceFade の JSDoc 参照）。
+        this.startEntranceFade(state, instant, expectedGeneration)
       })
       .catch(() => {})
   }
@@ -1502,6 +1592,10 @@ export class CharacterLayer extends Container {
 
     const existing = this.characters.get(NAME)
     if (existing) {
+      // 退場フェード予約中（destroyOnComplete）の同 id 再表示: フェードアウトを取り消して
+      // 再フェードイン（または instant なら即時表示）に切り替える (#429)。show() の「退場フェード中の
+      // 再 show」分岐 (#177) と同じパターンなので reviveFromExitFade ヘルパーを使う（should-4）。
+      this.reviveFromExitFade(existing, instant)
       // 同 id 再表示は位置のみ更新する（テクスチャ差し替えは想定しないため最小挙動）。
       existing.sprite.x = x
       existing.sprite.y = y
@@ -1536,6 +1630,9 @@ export class CharacterLayer extends Container {
       renderOnly: true,
     }
     this.characters.set(NAME, state)
+    // 復活検知用に「まだ一度も復活していない」時点の世代を捕捉する (#429 2巡目 re-review)。
+    // 詳細は showLabel 側の同名変数コメント、および CharacterState.reviveGeneration の JSDoc 参照。
+    const expectedGeneration = state.reviveGeneration ?? 0
 
     // 任意ファイル名パスの url 解決は背景画像と同じ resolveAssetUrl 経由（#274）。
     const url = resolveAssetUrl(opts.assetBaseUrl, 'images', opts.path)
@@ -1573,8 +1670,11 @@ export class CharacterLayer extends Container {
         // フェード開始は texture 反映後 (#427)。instant 時は sprite.alpha が既に 1 のままなので張らない。
         // id 再利用で別 state に置き換わるケースは showImage には実質無いため、show() の
         // textureReady ゲートのような state 一致チェックまでは不要と判断し、sprite.destroyed のみで足りるとした。
-        // 退場フェード予約済み（destroyOnComplete）なら上書きしない（startEntranceFade 内部ガード、#427 re-review）。
-        this.startEntranceFade(state, instant)
+        // 何らかの fadeAnimation が既に張られていれば上書きしない（startEntranceFade 内部ガード、
+        // #427 re-review・#429 re-review でガードを destroyOnComplete 限定から広げた）。加えて
+        // instant 復活（fadeAnimation が null に戻る経路）も expectedGeneration で検知する
+        // （#429 2巡目 re-review、詳細は startEntranceFade の JSDoc 参照）。
+        this.startEntranceFade(state, instant, expectedGeneration)
       })
       .catch((err) => {
         console.warn('[name-name] 画像の読み込みに失敗: ' + url, err)
