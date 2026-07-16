@@ -32,6 +32,7 @@ import {
 } from './underline'
 // 色パーサ・2D 位置・URL 解決は novelLayout.ts（色/幾何の純関数置き場）に集約 (#273 / #274)。
 import {
+  clampFadeMs,
   parseColorToNumber,
   resolvePositionWithOverride,
   resolveAssetUrl,
@@ -785,11 +786,12 @@ export class CharacterLayer extends Container {
    * null/undefined/非有限値は既定 700ms (#407)、範囲外は [0, 5000] にクランプする。
    */
   setCharacterFadeMs(ms: number | null | undefined): void {
-    const next =
-      ms == null || !Number.isFinite(ms)
-        ? DEFAULT_FADE_MS
-        : Math.min(CHARACTER_FADE_MS_MAX, Math.max(CHARACTER_FADE_MS_MIN, Math.floor(ms)))
-    this.characterFadeMs = next
+    this.characterFadeMs = clampFadeMs(
+      ms,
+      DEFAULT_FADE_MS,
+      CHARACTER_FADE_MS_MIN,
+      CHARACTER_FADE_MS_MAX
+    )
   }
 
   private createPortraitState(
@@ -872,11 +874,12 @@ export class CharacterLayer extends Container {
     fromAlpha: number,
     toAlpha: number,
     destroyOnComplete: boolean,
-    onComplete?: () => void
+    onComplete?: () => void,
+    durationMsOverride?: number
   ): void {
     state.fadeAnimation = {
       startMs: this.elapsedMs,
-      durationMs: this.characterFadeMs,
+      durationMs: durationMsOverride ?? this.characterFadeMs,
       fromAlpha,
       toAlpha,
       destroyOnComplete,
@@ -2449,7 +2452,15 @@ export class CharacterLayer extends Container {
    * デフォルトでは alpha 1 → 0 のフェードアウト後に sprite を破棄する（#177）。
    * 即時退場が必要な場合は `options.instant: true`（旧挙動と等価）。
    */
-  remove(character: string, options?: { instant?: boolean; onComplete?: () => void }): void {
+  remove(
+    character: string,
+    options?: {
+      instant?: boolean
+      onComplete?: () => void
+      /** このコールだけ characterFadeMs を上書きする (#404 intermission 用)。フィールドは変更しない。 */
+      durationMsOverride?: number
+    }
+  ): void {
     const state = this.characters.get(character)
     if (!state) {
       options?.onComplete?.()
@@ -2460,14 +2471,15 @@ export class CharacterLayer extends Container {
       this.time.clearInterval(state.idleIntervalId)
       state.idleIntervalId = undefined
     }
-    if (instant || this.characterFadeMs <= 0) {
+    const durationMs = options?.durationMsOverride ?? this.characterFadeMs
+    if (instant || durationMs <= 0) {
       this.destroyCharacterState(state)
       this.characters.delete(character)
       this.maybeStopTicker()
       options?.onComplete?.()
       return
     }
-    this.startFade(state, state.sprite.alpha, 0, true, options?.onComplete)
+    this.startFade(state, state.sprite.alpha, 0, true, options?.onComplete, durationMs)
   }
 
   /**
@@ -2511,8 +2523,13 @@ export class CharacterLayer extends Container {
    * Choice → jumpToScene では、前シーンの立ち絵が一瞬で消えると演出として不自然なので、
    * 標準立ち絵だけ fade-out に入れる。次シーン先頭で同じ人物が再 show された場合は show() 側の
    * 「退場フェード中の同名キャラ再 show」経路で fade-in に戻るため、メニュー間の主人公は瞬断しない。
+   *
+   * `durationMsOverride` (#404): intermission.md 専用シーンへの終劇消去では、per-game
+   * `character_fade_ms`（このクラスが保持する `characterFadeMs`）を流用せず intermission.md
+   * 自身のフェード時間を使う。フィールド自体は変更しない一度きりの override（ゲーム本編の
+   * 以降のトランジションに影響を残さない）。未指定（呼び出し省略）は従来どおり `characterFadeMs`。
    */
-  clearForSceneTransition(): void {
+  clearForSceneTransition(durationMsOverride?: number): void {
     const names = Array.from(this.characters.keys())
     for (const name of names) {
       const state = this.characters.get(name)
@@ -2522,7 +2539,7 @@ export class CharacterLayer extends Container {
         this.characters.delete(name)
         continue
       }
-      this.remove(name)
+      this.remove(name, durationMsOverride !== undefined ? { durationMsOverride } : undefined)
     }
   }
 

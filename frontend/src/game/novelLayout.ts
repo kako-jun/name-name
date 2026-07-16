@@ -418,6 +418,26 @@ export function resolveFontFamily(
 }
 
 /**
+ * per-game フェード時間 (ms) のパース・クランプ純粋関数 (#407 / #404)。
+ *
+ * `NovelRenderer.setBackgroundFadeMs`（frontmatter `background_fade_ms:`）と
+ * `CharacterLayer.setCharacterFadeMs`（frontmatter `character_fade_ms:`）が同じ規則
+ * （null/undefined/非有限は既定へフォールバック、範囲外は [min, max] にクランプ）を
+ * 個別実装していたのをここに集約する。intermission.md 用のフェード時間（#404、既定が
+ * 700ms ではなく別値）もこの関数を共有する — 既定値だけが違うだけで規則は同じため。
+ */
+export function clampFadeMs(
+  ms: number | null | undefined,
+  fallbackMs: number,
+  min = 0,
+  max = 5_000
+): number {
+  return ms == null || !Number.isFinite(ms)
+    ? fallbackMs
+    : Math.min(max, Math.max(min, Math.floor(ms)))
+}
+
+/**
  * シーンカウンターの表示文字列を返す純粋関数 (#260)。
  *
  * 元 `NovelRenderer.updateCounter` の `this.counterText.text = \`${displayIndex} / ${this.displayEventCount}\``
