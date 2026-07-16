@@ -49,6 +49,17 @@ pub enum BlackoutAction {
     Off,
 }
 
+/// イベント絵の背面（背景・立ち絵）扱い (#351)。既定は `Hide`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum EventImageBack {
+    /// 表示中は背景・立ち絵を隠す（本物のイベント絵用途）。
+    #[default]
+    Hide,
+    /// 背景・立ち絵は裏で維持したまま前面画像だけ出す（物証アップ/一時ズーム用途）。
+    Keep,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ChoiceOption {
@@ -363,6 +374,34 @@ pub enum Event {
     },
     /// 動画レイヤをクリアする (#252)。Markdown 構文: `[動画退場]`。
     VideoExit,
+    /// イベント絵レイヤー (#351)。テキストより背面・背景/立ち絵より前面に出る、画面ぴったりの
+    /// 単一スロット画像。背景/動画と同じ単一スロット意味論で、新しい `[イベント絵:]` は前の
+    /// イベント絵を置換する。
+    ///
+    /// `back` (既定 `Hide`): 表示中は背景・立ち絵を隠す「本物のイベント絵」用途。
+    /// `Keep`: 背景・立ち絵は裏で維持したまま前面画像だけ出す（物証アップ/一時ズーム用途）。
+    /// 可視性トグルは NovelRenderer 側で `back` 値に応じて毎回宣言的に行う（一回限りの
+    /// アニメーションにはしない。ADR-0002: スナップショットは常に settled 状態のみを持つ）。
+    ///
+    /// Markdown 構文: `[イベント絵: story/act2/spino-empty-seat.webp, 背面=hide, フェード=800]`。
+    /// キーは日本語 `背面` / 英語 alias `back`（値は英語トークン固定 `hide`/`keep`、大小無視、
+    /// 未知値は既定 `Hide` に倒す）。`フェード` / `fade` は表示フェードイン時間 (ms)。
+    EventImage {
+        path: String,
+        #[serde(default)]
+        back: EventImageBack,
+        /// 表示フェードイン時間 (ms)。`None` は即時表示。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_ms: Option<u32>,
+    },
+    /// イベント絵レイヤーをクリアする (#351)。Markdown 構文:
+    /// `[イベント絵終了]` / `[イベント絵終了: フェード=600]`。
+    /// `back=Hide` で表示していた場合、クリアと同時に背景・立ち絵の可視性トグルも
+    /// （NovelRenderer 側で）宣言的に戻る。`フェード` / `fade` は退場フェードアウト時間 (ms)。
+    EventImageExit {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_ms: Option<u32>,
+    },
     /// 単色の地色 (#273)。背景画像 (`Background`) と同じ永続状態として扱う。
     /// `[背景色: #f5f0e8]` で画面全面を 1 色で塗る。NovelGameState に持たせ、
     /// snapshot / applyState / セーブ復元の全経路で復元可能（doctrine 規律3）。

@@ -297,6 +297,36 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str("[動画退場]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::EventImage {
+                path,
+                back,
+                fade_ms,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // #351 kv を 背面→フェード の順、日本語キーで正規化出力する（Some/非既定のものだけ。
+                // round-trip 安定。back=Hide は既定値なので省略する＝brightness=1.0 と同じ流儀）。
+                let mut kv = String::new();
+                if *back == EventImageBack::Keep {
+                    kv.push_str(", 背面=keep");
+                }
+                if let Some(ms) = fade_ms {
+                    kv.push_str(&format!(", フェード={ms}"));
+                }
+                out.push_str(&format!("[イベント絵: {path}{kv}]\n"));
+                prev_was_dialog_or_text = false;
+            }
+            Event::EventImageExit { fade_ms } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                match fade_ms {
+                    Some(ms) => out.push_str(&format!("[イベント絵終了: フェード={ms}]\n")),
+                    None => out.push_str("[イベント絵終了]\n"),
+                }
+                prev_was_dialog_or_text = false;
+            }
             Event::Bgm {
                 path,
                 action,
