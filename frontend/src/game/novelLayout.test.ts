@@ -23,6 +23,7 @@ import {
   paginateSentencesByLines,
   wrappedPrefixLength,
   computeNovelIndicatorPlacement,
+  clampFadeMs,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -1834,5 +1835,41 @@ describe('computeSeekBarGeometry (#350)', () => {
     for (const [w, h, m, bh] of degenerate) {
       expect(computeSeekBarGeometry(w, h, m, bh)).toEqual(oracle(w, h, m, bh))
     }
+  })
+})
+
+// clampFadeMs (#407 / #404): setBackgroundFadeMs/setCharacterFadeMs/setIntermissionScene が
+// 共有するフェード時間パース・クランプ純関数。null/undefined/非有限は既定へフォールバックし、
+// 有限値は [min, max] にクランプ、小数は切り捨てる。
+describe('clampFadeMs (#407 / #404)', () => {
+  it('境界値: ms=-1 は min（既定 0）にクランプされる', () => {
+    expect(clampFadeMs(-1, 700)).toBe(0)
+  })
+
+  it('境界値: ms=5000（既定 max）はそのまま通る', () => {
+    expect(clampFadeMs(5000, 700)).toBe(5000)
+  })
+
+  it('境界値: ms=5001（既定 max 超過）は max にクランプされる', () => {
+    expect(clampFadeMs(5001, 700)).toBe(5000)
+  })
+
+  it('同値分割: null/undefined/NaN/Infinity はすべて fallbackMs になる', () => {
+    expect(clampFadeMs(null, 700)).toBe(700)
+    expect(clampFadeMs(undefined, 700)).toBe(700)
+    expect(clampFadeMs(NaN, 700)).toBe(700)
+    expect(clampFadeMs(Infinity, 700)).toBe(700)
+    expect(clampFadeMs(-Infinity, 700)).toBe(700)
+  })
+
+  it('同値分割: 小数（123.7）は Math.floor されて 123 になる', () => {
+    expect(clampFadeMs(123.7, 700)).toBe(123)
+  })
+
+  it('境界値: min/max を明示的に変えて呼ぶとそのレンジが反映される（intermission 既定 1500 の運用を再現）', () => {
+    expect(clampFadeMs(-10, 1500, 100, 2000)).toBe(100) // min クランプ
+    expect(clampFadeMs(2500, 1500, 100, 2000)).toBe(2000) // max クランプ
+    expect(clampFadeMs(null, 1500, 100, 2000)).toBe(1500) // フォールバックは min/max と独立
+    expect(clampFadeMs(900, 1500, 100, 2000)).toBe(900) // レンジ内はそのまま
   })
 })
