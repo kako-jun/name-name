@@ -1,9 +1,11 @@
 /**
- * NovelRenderer の intermission.md 専用シーン化 (#404 フェーズ2) のテスト。
+ * NovelRenderer の intermission.md 専用シーン化 (#404 フェーズ2 / #424 段階フェード) のテスト。
  *
  * `setIntermissionScene(events, options)` で登録した Event[] は、endStory() のフェード演出が
- * 終わった後に一度だけ「静止画タブロー」として描画され、そこで凍結する
- * （renderIntermissionTableau。GameState には持たず、advance() は storyEnded で no-op のまま）。
+ * 終わった後に「静止画タブロー」として描画され、そこで凍結する（renderIntermissionTableau。
+ * GameState には持たず、advance() は storyEnded で no-op のまま）。`Wait { ms }` を含む場合は
+ * #424 でタブロー専用のローカル・ステージングとして扱われ、指定 ms 後に残りのイベントから
+ * 再開する（それ以外は endStory 直後に一括で処理される）。
  *
  * `NovelRenderer.confinement.test.ts` と同じ最小構成（`new NovelRenderer()` → `setScenes(...)`）で
  * 行い、PixiJS 実描画・アセット非同期読込は対象外（CLAUDE.md ルール7 の実機 golden path に委ねる）。
@@ -72,7 +74,7 @@ interface RendererInternals {
   dialogBox: { dialogText: { text: string } }
   characterLayer: { clearForSceneTransition: (durationMsOverride?: number) => void }
   fadeOutBackgroundEntries: (durationMs: number) => void
-  renderIntermissionTableau: (events: Event[]) => void
+  renderIntermissionTableau: (events: Event[], startIndex?: number) => void
   applyState: (state: NovelGameState) => void
 }
 
@@ -259,9 +261,14 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     expect(internals(r).dialogBox.dialogText.text).toBe('さん')
   })
 
-  // ===== G. Choice/Wait/WaitDisplayComplete は無視系（例外を投げず継続） =====
+  // ===== G. Choice/WaitDisplayComplete は無視系（例外を投げず継続） =====
+  //
+  // Wait { ms } は #424 でタブロー専用のローカル・ステージング対象になった（この「無視して
+  // 継続」グループからは外れた）ため、ここでは対象外にする。Wait のステージング挙動
+  // （フェード中の中間状態・時間経過後の再開・タイマーキャンセル）は次段階のテスト作成
+  // エージェントが別途カバーする。
 
-  it('11: Choice/Wait/WaitDisplayComplete を含む events は例外を投げず、DEV でだけ console.warn し、他のイベント処理は継続する', () => {
+  it('11: Choice/WaitDisplayComplete を含む events は例外を投げず、DEV でだけ console.warn し、他のイベント処理は継続する', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
@@ -271,7 +278,6 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
         narration('前'),
         { Choice: { options: [] } } as Event,
         'WaitDisplayComplete',
-        { Wait: { ms: 100 } } as Event,
         narration('後'),
       ],
       { backgroundFadeMs: 10, characterFadeMs: 10 }
@@ -281,11 +287,11 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
 
     expect(() => r.getTimeController().tick(10)).not.toThrow()
 
-    // 無視された3イベント分だけ dev warn が出て、前後の narration は普通に処理され続ける。
+    // 無視された2イベント分だけ dev warn が出て、前後の narration は普通に処理され続ける。
     const intermissionWarns = warnSpy.mock.calls.filter((call) =>
       String(call[0]).includes('intermission.md')
     )
-    expect(intermissionWarns.length).toBe(3)
+    expect(intermissionWarns.length).toBe(2)
     expect(internals(r).dialogBox.dialogText.text).toBe('後')
   })
 
@@ -419,30 +425,9 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     expect(r.getSnapshot().flags).toEqual({})
   })
 
-  // ===== K. skipMode の例外時復元 (#404 セルフレビュー S3) =====
+  // ===== K. skipMode の例外時復元 (#404 セルフレビュー S3) は #424 で撤去 =====
   //
-  // renderIntermissionTableau は開始直後に skipMode を true へ一時的に切り替え（instant 表示のため
-  // processDirective 内の `instant: this.skipMode` 判定を流用する）、finally で呼び出し前の値へ
-  // 戻す。try/finally の実装自体は #404 フェーズ2から存在するが、それを直接検証するテストが
-  // 無かったため追加する（processDirective が例外を投げる経路を明示的に作って確認する）。
-
-  it('17: renderIntermissionTableau 内で processDirective が例外を投げても、finally で skipMode は呼び出し前の値へ確実に戻る（S3 直接検証）', () => {
-    const r = makeRenderer(SCENES)
-    r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
-    expect(r.isSkipMode()).toBe(false) // 呼び出し前の値（既定 false）
-
-    const boom = new Error('boom')
-    vi.spyOn(
-      r as unknown as { processDirective: (event: Event) => void },
-      'processDirective'
-    ).mockImplementation(() => {
-      throw boom
-    })
-
-    expect(() => internals(r).renderIntermissionTableau([backgroundColor('#000000')])).toThrow(boom)
-
-    // 例外がそのまま外へ伝播しても、finally が呼び出し前の値（false）へ確実に戻す。
-    expect(r.isSkipMode()).toBe(false)
-  })
+  // renderIntermissionTableau が開始直後に skipMode を true へ一時的に切り替える強制（前後の値の
+  // 退避・finally での復元）は #424 で撤去した（Label/Image のネイティブフェードインを素直に効かせる
+  // ため）。この節が検証していた try/finally の revert 挙動はもう存在しないため、旧テスト17は削除した。
 })

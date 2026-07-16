@@ -1020,23 +1020,30 @@ export class NovelRenderer {
   }
 
   /**
-   * intermission.md 専用シーンのイベント列を静止画タブローとして1回だけ処理し、そこで凍結する (#404)。
+   * intermission.md 専用シーンのイベント列を静止画タブローとして処理し、そこで凍結する (#404, #424)。
    *
    * 通常再生ストリーム（rawEvents/resolvedEvents/eventIndex/history/currentSceneId/既読進捗）には
    * 一切触れない — intermission は `storyEnded` に付随する一度きりの見た目でしかなく、GameState に
    * 新しい可変状態を持ち込まない（doctrine 規律3。ADR0002 の storyEnded 除外方針をそのまま踏襲）。
-   * `storyEnded=true` により以後 `advance()` は no-op のため、複数拍の演出やタイプライター進行は
-   * 実装しない（静止画1枚で完結する設計。設計確定コメント #404 参照）。
+   * `storyEnded=true` により以後 `advance()` は no-op のため、Choice によるプレイヤー操作介入や
+   * タイプライター進行は実装しない。ただし `Wait { ms }` による段階的な演出（#424: 黒くなった後
+   * "To Be Continued..." がじわっと出て、それからタイトルロゴもさらにじわっと出る、等）は下記の
+   * とおり `startIndex` からの再入可能な処理としてサポートする。GameState 自体は書き換えない
+   * タブロー専用のローカル・ステージングなので、規律3には抵触しない。
    *
    * 演出プリミティブは既存のものを再利用する（規律4・重複実装の回避）:
    * - Background/BackgroundColor/Enter/Exit/Label/Image/TitleShow 等のディレクティブ →
-   *   `processDirective` にそのまま委譲する。フェード無しの瞬間表示にするため、`processDirective`
-   *   内の各所にある `instant: this.skipMode` 判定を静止画用に一時的に流用する（呼び出し後に必ず
-   *   元の値へ戻す。他の演出用途で `skipMode` の値を恒久的に書き換えてはいけない）。
+   *   `processDirective` にそのまま委譲する。skipMode はもう一時的に強制しない (#424) ため、
+   *   Label/Image はそれぞれのネイティブフェードイン（`CharacterLayer.TITLE_CARD_FADE_MS` = 700ms）
+   *   で表示される。
    * - Dialog/Narration（テキスト）→ `render()` のタイプライター/ボイス/既読マーク/オート進行は
    *   一度きりのタブローには不要なため、DialogBox の `setDialog`/`setNovelDialogProgressive` +
    *   `skipTypewriter()` の組み合わせ（advanceOrSkipTypewriter と同じ2手）で全文を直接・即時表示する。
-   * - Choice/Wait/WaitDisplayComplete/Flag は resolvedEvents/eventIndex を前提にする（Choice/Wait）か
+   * - `Wait { ms }`（#424）→ 通常再生ストリーム（eventIndex/waitingForWait 等）には一切触れない、
+   *   タブロー専用のローカル・ステージング。`this.intermissionTimer`（endStory() の初回描画待ちと
+   *   同じフィールドを再利用。destroy/resetAndStartEvents/applyState で既にキャンセルされる）で
+   *   指定 ms 後に `renderIntermissionTableau(events, i + 1)` を呼び、残りのイベントから再開する。
+   * - Choice/WaitDisplayComplete/Flag は resolvedEvents/eventIndex を前提にする（Choice）か
    *   `NovelGameState` を恒久的に書き換える（Flag → `gameState.setFlag` + `reResolveEvents`）かのいずれかで、
    *   単発タブローには意味を持たない・持たせてはいけないため無視する（dev のみ warn）。特に Flag は
    *   docstring 冒頭の「GameState には一切触れない」を破るため、他の演出ディレクティブと違い明示除外が必須。
@@ -1045,47 +1052,57 @@ export class NovelRenderer {
    *   `currentBgmPath`/`AudioManager`/`VideoLayer` 止まりで GameState 自体は汚さないため対象外。
    *   `endStory()` 冒頭で本編 BGM を止めているのは「以後本編の Bgm イベントは来ない」ためであり、
    *   intermission.md 経由で新たに Bgm が鳴ること自体は妨げない（意図した上書き）。
+   *
+   * @param startIndex Wait ステージングの再開位置 (#424)。省略時 0（endStory からの初回呼び出しと
+   *   後方互換）。
    */
-  private renderIntermissionTableau(events: Event[]): void {
-    const previousSkipMode = this.skipMode
-    this.skipMode = true
-    try {
-      for (const event of events) {
-        const textEvt = getTextEvent(event)
-        if (textEvt) {
-          const name = textEvt.type === 'dialog' ? textEvt.character : null
-          const text = textEvt.text.join('\n')
-          this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
-          if (this.isNovelStyle()) {
-            this.dialogBox.setNovelDialogProgressive(name, text, 0, null)
-          } else {
-            this.dialogBox.setDialog(name, text)
-          }
-          this.dialogBox.skipTypewriter()
-          // novel スクリムはセリフが表示されている間だけ敷く。render() と同じ判定を流用する。
-          const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
-          this.updateNovelScrim(hasVisibleText)
-          // 凍結タブローには「次へ」が無いため、進行を示唆するインジケータは出さない。
-          this.dialogBox.setIndicatorVisible(false)
-          continue
+  private renderIntermissionTableau(events: Event[], startIndex = 0): void {
+    for (let i = startIndex; i < events.length; i++) {
+      const event = events[i]
+      const textEvt = getTextEvent(event)
+      if (textEvt) {
+        const name = textEvt.type === 'dialog' ? textEvt.character : null
+        const text = textEvt.text.join('\n')
+        this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
+        if (this.isNovelStyle()) {
+          this.dialogBox.setNovelDialogProgressive(name, text, 0, null)
+        } else {
+          this.dialogBox.setDialog(name, text)
         }
-        if (
-          event === 'WaitDisplayComplete' ||
-          (typeof event === 'object' &&
-            event !== null &&
-            ('Choice' in event || 'Wait' in event || 'Flag' in event))
-        ) {
-          if (import.meta.env.DEV) {
-            console.warn(
-              '[name-name] intermission.md: Choice/Wait/[待機: 表示完了]/Flag は静止画タブローでは無視されます'
-            )
-          }
-          continue
-        }
-        this.processDirective(event)
+        this.dialogBox.skipTypewriter()
+        // novel スクリムはセリフが表示されている間だけ敷く。render() と同じ判定を流用する。
+        const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
+        this.updateNovelScrim(hasVisibleText)
+        // 凍結タブローには「次へ」が無いため、進行を示唆するインジケータは出さない。
+        this.dialogBox.setIndicatorVisible(false)
+        continue
       }
-    } finally {
-      this.skipMode = previousSkipMode
+      if (typeof event === 'object' && event !== null && 'Wait' in event) {
+        // タブロー専用のローカル・ステージング (#424)。通常再生ストリームには一切触れず、
+        // intermissionTimer で ms 後に自分自身を i+1 から再入する（二重発火防止のため念のため
+        // 既存タイマーを先に破棄する。endStory/前回のステージング完了時点では通常 null のはず）。
+        if (this.intermissionTimer) this.time.clearTimeout(this.intermissionTimer)
+        this.intermissionTimer = this.time.setTimeout(() => {
+          this.intermissionTimer = null
+          // goBack/seekTo で storyEnded が解除されていたら描画しない（applyState 側でも
+          // このタイマーをキャンセルするが、二重の安全策として storyEnded も確認する）。
+          if (!this.initialized || !this.storyEnded) return
+          this.renderIntermissionTableau(events, i + 1)
+        }, event.Wait.ms)
+        return
+      }
+      if (
+        event === 'WaitDisplayComplete' ||
+        (typeof event === 'object' && event !== null && ('Choice' in event || 'Flag' in event))
+      ) {
+        if (import.meta.env.DEV) {
+          console.warn(
+            '[name-name] intermission.md: Choice/[待機: 表示完了]/Flag は静止画タブローでは無視されます'
+          )
+        }
+        continue
+      }
+      this.processDirective(event)
     }
   }
 
