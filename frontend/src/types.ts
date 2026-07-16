@@ -10,6 +10,8 @@ export type Mode = 'edit' | 'play'
 
 export type BgmAction = 'Play' | 'Stop'
 export type BlackoutAction = 'On' | 'Off'
+/** イベント絵の背面（背景・立ち絵）扱い (#351)。既定は 'Hide' */
+export type EventImageBack = 'Hide' | 'Keep'
 
 export interface ChoiceOption {
   text: string
@@ -209,6 +211,28 @@ export type Event =
       }
     }
   | 'VideoExit'
+  | {
+      /**
+       * イベント絵レイヤー (#351)。テキストより背面・背景/立ち絵より前面に出る画面ぴったりの
+       * 単一スロット画像。`back` (既定 'Hide') は表示中、背景・立ち絵を隠す「本物のイベント絵」用途。
+       * 'Keep' は背景・立ち絵を裏で維持したまま前面画像だけ出す（物証アップ/一時ズーム用途）。
+       */
+      EventImage: {
+        path: string
+        /** #351 背面（背景・立ち絵）扱い。wasm は #[serde(default)] のため型上は optional だが、
+         *  実際の parse_markdown() 出力では常に 'Hide'/'Keep' のどちらかが入る（parser.ts で正規化）。 */
+        back?: EventImageBack
+        /** 表示フェードイン時間 ms。未指定/null は即時表示 */
+        fade_ms?: number | null
+      }
+    }
+  | {
+      /** イベント絵レイヤーをクリアする (#351)。`[イベント絵終了: フェード=600]` */
+      EventImageExit: {
+        /** 退場フェードアウト時間 ms。未指定/null は即時消去 */
+        fade_ms?: number | null
+      }
+    }
   | {
       /** 単色の地色 (#273)。`[背景色: #f5f0e8]`。背景画像 (Background) と同じ永続状態として
        *  NovelGameState に持たせ、snapshot / applyState / セーブ復元で復元する。 */

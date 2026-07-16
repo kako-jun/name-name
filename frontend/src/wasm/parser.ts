@@ -176,6 +176,26 @@ function normalizeEvents(events: Event[]): Event[] {
         },
       }
     }
+    if ('EventImage' in event) {
+      // #351: Rust 側は `back: EventImageBack`（Option ではないが #[serde(default)] のため
+      // tsify の型上は optional）。実運用では常に値が入るはずだが、他フィールドと同じ防御的
+      // 正規化として undefined を既定値 'Hide' に倒す。fade_ms は Option<u32> なので null に倒す。
+      const ei = event.EventImage
+      return {
+        EventImage: {
+          path: ei.path,
+          back: ei.back ?? 'Hide',
+          fade_ms: ei.fade_ms ?? null,
+        },
+      }
+    }
+    if ('EventImageExit' in event) {
+      return {
+        EventImageExit: {
+          fade_ms: event.EventImageExit.fade_ms ?? null,
+        },
+      }
+    }
     if ('Condition' in event) {
       return {
         Condition: {
