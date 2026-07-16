@@ -185,6 +185,11 @@ beforeEach(() => {
   // 既定は standalone（非 iframe）。jsdom の本物 isEmbedded() も self===top で false を
   // 返すので後方互換。埋め込みを検証するテストだけ mockReturnValue(true) で上書きする。
   isEmbeddedMock.mockReturnValue(false)
+  // #404: intermission.md 取得（assets/raw 経由の生 fetch）を 404（未配置）で既定応答させる。
+  // title.png と違い <img> ではなく fetch() を直接叩くため、モックしないと jsdom で実ネットワーク
+  // アクセスが発生して失敗し、無関係なテストの console.warn 検証を汚染する。intermission.md の
+  // 取得/parse 自体を検証するテストは個別に上書きする。
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 404 } as Response)
 })
 
 afterEach(() => {

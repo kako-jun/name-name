@@ -213,6 +213,16 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   // 「つづきから」で開始した場合 true: ゲーム開始直後にスキップモードで未読位置まで進める
   const [startWithSkip, setStartWithSkip] = useState(false)
 
+  // intermission.md 専用シーン (#404)。`assets/scripts/intermission.md`（配置していないプロジェクトは
+  // 404 で黙ってスキップ＝完全オプトイン）を取得・parse できた場合だけ非 null になる。
+  // NovelPlayer に渡し、NovelRenderer.setIntermissionScene 経由で endStory() の消去後に一度だけ
+  // 描画されるタブローとして使われる。
+  const [intermissionScene, setIntermissionScene] = useState<{
+    events: Event[]
+    backgroundFadeMs: number | null
+    characterFadeMs: number | null
+  } | null>(null)
+
   const loadScriptDoc = useCallback(
     async (path: string): Promise<EventDocument | null> => {
       const cached = loadedDocsRef.current.get(path)
@@ -559,6 +569,41 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   // /api/projects/:name/assets/raw/:path で GitHub Contents API を経由して取得する
   const assetBaseUrl = `${apiBaseUrl}/api/projects/${projectName}/assets/raw`
 
+  // intermission.md 専用シーン (#404) の取得・parse。title.png（TitleOverlay）と同じ assets/raw
+  // 経路・同じタイミング（assetBaseUrl 確定後）で試みる。配置していないプロジェクトは 404 を
+  // 受けて黙ってスキップする（フェーズ1の DOM "to be continued..." 表示にフォールバック。
+  // 完全後方互換・オプトイン。新規追加の worker 側 mimeMap 'md' エントリで text として取得できる）。
+  useEffect(() => {
+    let cancelled = false
+    setIntermissionScene(null)
+    ;(async () => {
+      try {
+        const res = await fetch(`${assetBaseUrl}/scripts/intermission.md`)
+        if (!res.ok) return // 404 等 = 未配置。エラー扱いにしない。
+        const markdown = await res.text()
+        const parsed = await parseMarkdown(markdown)
+        if (cancelled) return
+        const events = flattenDocumentEvents(parsed)
+        if (events.length === 0) return
+        setIntermissionScene({
+          events,
+          backgroundFadeMs: parsed.background_fade_ms ?? null,
+          characterFadeMs: parsed.character_fade_ms ?? null,
+        })
+      } catch (err) {
+        // ネットワークエラー・parse 失敗のいずれも致命ではない。フェーズ1の DOM 表示に
+        // フォールバックするだけなので、warn に留めてゲーム自体は続行する。
+        console.warn(
+          'PlayerScreen: intermission.md の取得/解析に失敗しました（"to be continued..." の DOM 表示にフォールバック）:',
+          err
+        )
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [assetBaseUrl])
+
   const title = projectInfo?.title || projectName
 
   // 「つづきから」ボタンの有効判定: 既読データが存在するか (#141)
@@ -681,6 +726,9 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
               characterFadeMs={doc?.character_fade_ms ?? null}
               backgroundFadeMs={doc?.background_fade_ms ?? null}
               backgroundColor={doc?.background_color ?? null}
+              intermissionEvents={intermissionScene?.events ?? null}
+              intermissionBackgroundFadeMs={intermissionScene?.backgroundFadeMs ?? null}
+              intermissionCharacterFadeMs={intermissionScene?.characterFadeMs ?? null}
               skipEnabled={doc?.skip_enabled ?? null}
               debugEnabled={doc?.debug_enabled ?? null}
               speakerNudge={doc?.speaker_nudge ?? null}
