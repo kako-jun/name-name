@@ -16,6 +16,7 @@ import { CURSOR_DEFAULTS } from './textEffect'
 import { NovelRenderer, BACKGROUND_CROSSFADE_MS } from './NovelRenderer'
 import { ASPECT_RATIOS } from './constants'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
+import * as FontLoader from './FontLoader'
 import { saveSlotToGameState, resolveCharacterImageUrls } from './novelLayout'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 
@@ -866,6 +867,7 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
   afterEach(() => {
     __setDocumentForTest(typeof document === 'undefined' ? null : document)
     resetFontLoaderCache()
+    vi.restoreAllMocks()
   })
 
   interface CharsInternals {
@@ -883,7 +885,7 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
     return layer as unknown as CharsInternals
   }
 
-  it('showLabel は id で登録し、色・サイズ・2D 位置を反映してフェードインする', () => {
+  it('showLabel は id で登録し、色・サイズ・2D 位置を反映してフェードインする', async () => {
     const layer = new CharacterLayer(800, 450)
     layer.showLabel({
       id: 'division',
@@ -902,15 +904,20 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
     expect(st!.label!.text).toBe('Planning Div. 42')
     expect(st!.label!.style.fontSize).toBe(16)
     expect(st!.label!.style.fill).toBe(0x7a9abf)
-    // 登場フェードイン（alpha 0 → 1）。
+    // フォント読み込み完了前: alpha 0 で待機、フェードはまだ開始していない (#427)。
     expect(st!.sprite.alpha).toBe(0)
+    expect(st!.fadeAnimation).toBeNull()
+    // フォント読み込み完了後（ensureFontLoaded().then()）に登場フェードイン（alpha 0 → 1）が始まる。
+    await flushPromises()
     expect(st!.fadeAnimation).not.toBeNull()
     expect(st!.fadeAnimation!.toAlpha).toBe(1)
   })
 
-  it('showLabel フェードイン完了で label.alpha が toAlpha(=1) に揃う（sprite と同期）', () => {
+  it('showLabel フェードイン完了で label.alpha が toAlpha(=1) に揃う（sprite と同期）', async () => {
     const layer = new CharacterLayer(800, 450)
     layer.showLabel({ id: 'name', text: 'kako-jun', fontFamily: 'sans-serif' })
+    // フォント読み込み完了（ensureFontLoaded().then()）を待ってから fadeAnimation が張られる (#427)。
+    await flushPromises()
     // 内部 ticker を完了まで決定論的に駆動する（elapsedMs を fade 期間より先へ進めて 1 フレーム更新）。
     const internal = layer as unknown as {
       animTicker: { update: () => void } | null
@@ -950,14 +957,20 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
     expect(chars(layer).characters.has('x')).toBe(false)
   })
 
-  it('showImage は id で登録し 2D 位置を反映、フェードインする', () => {
+  it('showImage は id で登録し 2D 位置を反映、フェードインする', async () => {
+    // Assets.load 完了後にフェードが始まる (#427) ため、実 load（jsdom で解決しない）ではなく成功をモックする。
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
     const layer = new CharacterLayer(800, 450)
     layer.showImage({ id: 'avatar', path: 'a.png', position: '上', assetBaseUrl: '/assets' })
     const st = chars(layer).characters.get('avatar')
     expect(st).toBeDefined()
     expect(st!.sprite.x).toBe(800 * 0.5)
     expect(st!.sprite.y).toBeCloseTo(450 * 0.16, 5)
+    // load 完了前: alpha 0 で待機、フェードはまだ開始していない (#427)。
     expect(st!.sprite.alpha).toBe(0)
+    expect(st!.fadeAnimation).toBeNull()
+    // load 完了後（Assets.load().then()）に登場フェードイン（alpha 0 → 1）が始まる。
+    await flushPromises()
     expect(st!.fadeAnimation!.toAlpha).toBe(1)
   })
 
@@ -1390,6 +1403,136 @@ describe('CharacterLayer showLabel 差し替え・演出対象・既定 (#274)',
   })
 })
 
+// #427 追加: showLabel のフェード開始を ensureFontLoaded() 完了後に遅延させたことに伴う境界値・
+//   font 読み込み失敗・destroy 競合・同 id 連続呼び出しの観点。デシジョンテーブル 6/7/8/9/10 に対応。
+//
+// 方針 (a) を採用: このブロック内だけ `vi.spyOn(FontLoader, 'ensureFontLoaded')` で差し替える
+// （afterEach で vi.restoreAllMocks() して他 describe に漏らさない）。
+// 他ブロックが使う `__setDocumentForTest(null)` 経由の no-op resolve 版 ensureFontLoaded は
+// 常に即時 resolve するため、reject させたり resolve タイミングを手で制御できない。
+// 一方 FontLoader.test.ts 方式（実 document + 手製 <link> + onerror 発火）は、このためだけに
+// document モックを組む必要があり本テストの関心（CharacterLayer 側の state 遷移）から遠い。
+// モジュール境界での spyOn は影響範囲をこの describe 内の呼び出しだけに絞れるため、こちらを選んだ。
+describe('CharacterLayer showLabel フェード遅延タイミング (#427)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  // 観点6: instant:true は font 読み込み完了後も fadeAnimation===null・alpha===1 のまま変化しない（非回帰）。
+  it('instant:true は ensureFontLoaded 完了後も fadeAnimation===null・alpha===1 のまま', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif', instant: true })
+    const st = labelChars(layer).characters.get('name')!
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.fadeAnimation).toBeNull()
+    await flushPromises()
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.fadeAnimation).toBeNull()
+  })
+
+  // 観点7（最重要）: font 読み込み失敗（reject）→ fadeAnimation は設定されず、例外を投げず、
+  //   console.warn も出ない（showImage と違い showLabel の失敗経路は無音仕様）。
+  it('ensureFontLoaded が reject しても fadeAnimation は設定されず、例外を投げず、console.warn も出ない（無音仕様）', async () => {
+    vi.spyOn(FontLoader, 'ensureFontLoaded').mockRejectedValueOnce(new Error('font load failed'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    expect(() =>
+      layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif' })
+    ).not.toThrow()
+    await flushPromises()
+    const st = labelChars(layer).characters.get('name')!
+    expect(st.fadeAnimation).toBeNull()
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  // 観点8（最重要・観点3と対）: font 読み込み解決前に clear() で破棄 → 破棄後に resolve しても
+  //   例外を投げず、fadeAnimation は設定されず、label（destroy 済みで undefined）も再適用されない。
+  it('ensureFontLoaded 解決前に clear() で破棄すると、破棄後に resolve しても例外を投げず fadeAnimation も設定されない', async () => {
+    let resolveFont!: () => void
+    const pending = new Promise<void>((resolve) => {
+      resolveFont = resolve
+    })
+    vi.spyOn(FontLoader, 'ensureFontLoaded').mockReturnValue(pending)
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif' })
+    const st = labelChars(layer).characters.get('name')!
+    layer.clear()
+    expect(labelChars(layer).characters.has('name')).toBe(false)
+    // 破棄後（label.destroyed）に font が解決する。label.destroyed ガードで無視されるはず。
+    expect(() => resolveFont()).not.toThrow()
+    await expect(flushPromises()).resolves.toBeUndefined()
+    expect(st.fadeAnimation).toBeNull()
+    expect(st.label).toBeUndefined()
+  })
+
+  // 観点9: font 未解決中の同 id 連続呼び出しは ensureFontLoaded を再発行しない（既存 state を更新するだけ）。
+  //   2 回目のテキスト変更は反映されつつ、resolve 後は「現在」の state へ正しく fadeAnimation が設定される。
+  it('font 未解決中の同 id 再呼び出しは ensureFontLoaded を再発行せず、2 回目のテキストを反映しつつ resolve 後に fadeAnimation が設定される', async () => {
+    let resolveFont!: () => void
+    const pending = new Promise<void>((resolve) => {
+      resolveFont = resolve
+    })
+    const loadSpy = vi.spyOn(FontLoader, 'ensureFontLoaded').mockReturnValue(pending)
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'first', fontFamily: 'sans-serif' })
+    // font 未解決中に同 id で 2 回目を呼ぶ（差し替えパスに入り、ensureFontLoaded は呼ばれない）。
+    layer.showLabel({ id: 'name', text: 'second', fontFamily: 'sans-serif' })
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    const st = labelChars(layer).characters.get('name')!
+    expect(st.label!.text).toBe('second')
+    expect(st.fadeAnimation).toBeNull()
+    resolveFont()
+    await flushPromises()
+    expect(st.fadeAnimation).not.toBeNull()
+    expect((st.fadeAnimation as { toAlpha: number }).toAlpha).toBe(1)
+  })
+
+  // 観点10: 空文字 showLabel（既存キャラなし）は ensureFontLoaded を一切呼ばない（pending Promise を作らない）。
+  it('空文字・既存キャラなしの showLabel は ensureFontLoaded を一切呼ばない', () => {
+    const loadSpy = vi.spyOn(FontLoader, 'ensureFontLoaded')
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'ghost', text: '', fontFamily: 'sans-serif' })
+    expect(loadSpy).not.toHaveBeenCalled()
+    expect(labelChars(layer).characters.has('ghost')).toBe(false)
+  })
+
+  // 観点11（must, #427 セルフレビュー再レビュー指摘の再現テスト）: remove()（非 instant）は destroy を
+  //   即座に行わず、startFade で destroyOnComplete=true のフェードアウトを「予約」するだけで、実破棄は
+  //   ticker がフェード完了時に行う。ensureFontLoaded がその「予約済みだが未破棄」の窓に解決すると、
+  //   旧ガード（label.destroyed のみ）は素通りして退場フェードを登場フェード（toAlpha=1）で上書きして
+  //   しまい、remove() による退場が取り消されていた。startEntranceFade の destroyOnComplete ガードで、
+  //   フォント解決後も退場フェード予約が保たれることを確認する（showImage 側と対になる再現テスト）。
+  it('ensureFontLoaded 解決前に remove()（非 instant）で退場フェードを予約すると、解決後も退場フェードがフェードインで上書きされない', async () => {
+    let resolveFont!: () => void
+    const pending = new Promise<void>((resolve) => {
+      resolveFont = resolve
+    })
+    vi.spyOn(FontLoader, 'ensureFontLoaded').mockReturnValue(pending)
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif' })
+    const st = asInternals(layer).characters.get('name')!
+    // 非 instant remove(): destroy はまだされない（destroyOnComplete=true のフェードアウト予約のみ）。
+    layer.remove('name')
+    expect(asInternals(layer).characters.has('name')).toBe(true)
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(true)
+    expect(st.fadeAnimation!.toAlpha).toBe(0)
+    // フォントが解決しても、退場フェード予約はフェードインで上書きされない（要素は復活しない）。
+    resolveFont()
+    await flushPromises()
+    expect(asInternals(layer).characters.has('name')).toBe(true)
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(true)
+    expect(st.fadeAnimation!.toAlpha).toBe(0)
+  })
+})
+
 interface ImageStateLike {
   sprite: {
     x: number
@@ -1603,8 +1746,8 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     expect(loadSpy).toHaveBeenCalledTimes(1)
   })
 
-  // 19: Assets.load reject → console.warn 1 回・例外を投げない・fade state は残る（例外握り潰し禁止）。
-  it('Assets.load 失敗時は console.warn を 1 回出し、例外を投げず fade state を残す', async () => {
+  // 19: Assets.load reject → console.warn 1 回・例外を投げない・fadeAnimation は張られない（#427: load 完了後にしか張らない設計 = 失敗時は残留しない）。
+  it('Assets.load 失敗時は console.warn を 1 回出し、例外を投げず fadeAnimation は残留しない', async () => {
     vi.spyOn(Assets, 'load').mockRejectedValue(new Error('load failed'))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const layer = new CharacterLayer(800, 450)
@@ -1613,9 +1756,146 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     await flushPromises()
     // warn は 1 回だけ。
     expect(warnSpy).toHaveBeenCalledTimes(1)
-    // fade state（登場フェードイン）は残る（load 失敗で消えない）。
+    // fadeAnimation は Assets.load().then() 内でのみ設定するため、reject 経路では
+    // そもそも設定されない（#427: load 完了前にフェードを始めない設計の裏返し）。
     const st = imageChars(layer).characters.get('x')!
+    expect(st.fadeAnimation).toBeNull()
+  })
+
+  // #427 追加分: fadeAnimation を load 完了後（.then() 内）に遅延させたことに伴う境界値・destroy 競合・
+  //   id 再利用の観点。テスト観点整理エージェントのデシジョンテーブル 1/3/4/5/6 に対応。
+
+  // 観点1: instant:true は load 完了後も fadeAnimation===null・alpha===1 のまま変化しない（非回帰）。
+  it('instant:true は Assets.load 完了後も fadeAnimation===null・alpha===1 のまま', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true })
+    const st = imageChars(layer).characters.get('avatar')!
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.fadeAnimation).toBeNull()
+    // load 完了後（.then() 内の instant ガード）も alpha/fadeAnimation は変わらない。
+    await flushPromises()
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.fadeAnimation).toBeNull()
+  })
+
+  // 観点2: instant:true で load 失敗（reject）→ console.warn 1 回・例外を投げない・
+  //   fadeAnimation===null・alpha は最初から 1 のまま変化しない（instant はそもそも .then() 未到達）。
+  it('instant:true で Assets.load が失敗しても console.warn を 1 回出し、alpha=1・fadeAnimation=null のまま', async () => {
+    vi.spyOn(Assets, 'load').mockRejectedValue(new Error('load failed'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    expect(() =>
+      layer.showImage({ id: 'x', path: 'a.png', assetBaseUrl: '/assets', instant: true })
+    ).not.toThrow()
+    const st = imageChars(layer).characters.get('x')!
+    expect(st.sprite.alpha).toBe(1)
+    await flushPromises()
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.fadeAnimation).toBeNull()
+  })
+
+  // 観点3（最重要）: load 解決前に destroy（remove(instant:true)）→ destroy 後に load が解決しても
+  //   例外を投げず、破棄済み sprite に fadeAnimation もセットされず texture も更新されない。
+  it('load 解決前に remove(instant:true) で破棄すると、destroy 後に load が解決しても例外を投げず texture も fadeAnimation も更新されない', async () => {
+    let resolveLoad!: (texture: unknown) => void
+    const pending = new Promise((resolve) => {
+      resolveLoad = resolve
+    })
+    vi.spyOn(Assets, 'load').mockReturnValue(pending as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'x', path: 'a.png', assetBaseUrl: '/assets' })
+    const st = imageChars(layer).characters.get('x')!
+    layer.remove('x', { instant: true })
+    expect(imageChars(layer).characters.has('x')).toBe(false)
+    // destroy() 直後の texture（Pixi の destroy() 自体が texture を null にする）を基準に、
+    // load 解決後も「変化していない」ことを見る（destroy 前の値と比較すると destroy() 自体の
+    // texture クリアと混同するため、比較基準は destroy 直後の値にする）。
+    const textureAfterDestroy = st.sprite.texture
+    // destroy 後に load が解決する。sprite.destroyed ガードで無視されるはず。
+    expect(() => resolveLoad(fakeTexture(999, 999))).not.toThrow()
+    await expect(flushPromises()).resolves.toBeUndefined()
+    expect(st.sprite.texture).toBe(textureAfterDestroy)
+    expect(st.fadeAnimation).toBeNull()
+  })
+
+  // 観点4: load 未解決中の同 id 連続呼び出しは Assets.load を再発行しない（既存 state を更新するだけ）。
+  //   resolve 後は「現在」の state（＝同じ state オブジェクト）へ正しく fadeAnimation が設定される。
+  it('load 未解決中の同 id 再呼び出しは Assets.load を再発行せず、resolve 後に現在の state へ fadeAnimation が設定される', async () => {
+    let resolveLoad!: (texture: unknown) => void
+    const pending = new Promise((resolve) => {
+      resolveLoad = resolve
+    })
+    const loadSpy = vi.spyOn(Assets, 'load').mockReturnValue(pending as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'a.png', position: '上', assetBaseUrl: '/assets' })
+    // load 未解決中に同 id で 2 回目を呼ぶ（位置のみ更新パスに入り、Assets.load は呼ばれない）。
+    layer.showImage({ id: 'avatar', path: 'a.png', position: '下', assetBaseUrl: '/assets' })
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    const st = imageChars(layer).characters.get('avatar')!
+    expect(st.position).toBe('下')
+    expect(st.fadeAnimation).toBeNull()
+    resolveLoad(fakeTexture(10, 10))
+    await flushPromises()
     expect(st.fadeAnimation).not.toBeNull()
+    expect((st.fadeAnimation as { toAlpha: number }).toAlpha).toBe(1)
+  })
+
+  // 観点5: remove() 後の同 id 再利用。旧 .then() が後から解決しても新 state の texture/fadeAnimation を汚さない
+  //   （id 再利用時に state 一致チェックまでは入れていない設計判断の裏付け。sprite.destroyed ガードで足りる）。
+  it('remove() 後の同 id 再利用は、旧 load が後から解決しても新 state の texture・fadeAnimation を汚さない', async () => {
+    let resolveOld!: (texture: unknown) => void
+    const oldPending = new Promise((resolve) => {
+      resolveOld = resolve
+    })
+    const loadSpy = vi
+      .spyOn(Assets, 'load')
+      .mockReturnValueOnce(oldPending as never)
+      .mockResolvedValueOnce(fakeTexture(20, 20) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'old.png', assetBaseUrl: '/assets' })
+    layer.remove('avatar', { instant: true })
+    layer.showImage({ id: 'avatar', path: 'new.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('avatar')!
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.sprite.texture).toEqual({ width: 20, height: 20 })
+    // 旧 load（1 回目呼び出し分）を今ごろ解決させても、新 state には一切影響しない。
+    resolveOld(fakeTexture(999, 999))
+    await flushPromises()
+    expect(st.sprite.texture).toEqual({ width: 20, height: 20 })
+    expect(loadSpy).toHaveBeenCalledTimes(2)
+  })
+
+  // 観点6（must, #427 セルフレビュー再レビュー指摘の再現テスト）: remove()（非 instant）は destroy を
+  //   即座に行わず、startFade で destroyOnComplete=true のフェードアウトを「予約」するだけで、実破棄は
+  //   ticker がフェード完了時に行う。load がその「予約済みだが未破棄」の窓に解決すると、旧ガード
+  //   （sprite.destroyed のみ）は素通りして退場フェードを登場フェード（toAlpha=1）で上書きしてしまい、
+  //   remove() による退場が取り消されていた（要素が復活し、二度と破棄されないリークにもなる）。
+  //   startEntranceFade の destroyOnComplete ガードで、load 解決後も退場フェード予約が保たれることを確認する。
+  it('load 解決前に remove()（非 instant）で退場フェードを予約すると、load 解決後も退場フェードがフェードインで上書きされない', async () => {
+    let resolveLoad!: (texture: unknown) => void
+    const pending = new Promise((resolve) => {
+      resolveLoad = resolve
+    })
+    vi.spyOn(Assets, 'load').mockReturnValue(pending as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'x', path: 'a.png', assetBaseUrl: '/assets' })
+    const st = asInternals(layer).characters.get('x')!
+    // 非 instant remove(): destroy はまだされない（destroyOnComplete=true のフェードアウト予約のみ）。
+    layer.remove('x')
+    expect(asInternals(layer).characters.has('x')).toBe(true)
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(true)
+    expect(st.fadeAnimation!.toAlpha).toBe(0)
+    // load が解決しても、退場フェード予約はフェードインで上書きされない（要素は復活しない）。
+    resolveLoad(fakeTexture(10, 10))
+    await flushPromises()
+    expect(asInternals(layer).characters.has('x')).toBe(true)
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(true)
+    expect(st.fadeAnimation!.toAlpha).toBe(0)
   })
 
   // 20: 本丸。画像は `[文字演出: id]` の対象になれない（label 無し → 早期 return、reject しない）。

@@ -888,6 +888,32 @@ export class CharacterLayer extends Container {
     this.ensureTicker()
   }
 
+  /**
+   * タイトルカード補助要素（ラベル/画像 #274）の入場フェードを開始する共通ヘルパー (#427)。
+   *
+   * showLabel/showImage の load/font 解決後の `.then()` から呼ぶ。両者でほぼ同一のフェード設定
+   * ブロックが重複していたため切り出した（規律4）。
+   *
+   * `remove()`（非 instant）は destroy を即座に行わず、`startFade` で
+   * `{ toAlpha: 0, destroyOnComplete: true }`（退場フェード予約）を張るだけで、実破棄は ticker が
+   * フェード完了時に行う。そのため load/font 解決がこの「予約済みだがまだ未破棄」の窓に来ると、
+   * `sprite.destroyed`/`label.destroyed` はまだ false でガードを素通りしてしまい、無条件にフェード
+   * インへ上書きすると `remove()` による退場が取り消されてしまう（要素が復活し、二度と破棄されない
+   * リークにもなる）。このヘルパーで「既に退場フェードが予約されているなら何もしない」を保証する。
+   */
+  private startEntranceFade(state: CharacterState, instant: boolean): void {
+    if (instant) return
+    if (state.fadeAnimation?.destroyOnComplete) return
+    state.fadeAnimation = {
+      startMs: this.elapsedMs,
+      durationMs: TITLE_CARD_FADE_MS,
+      fromAlpha: 0,
+      toAlpha: 1,
+      destroyOnComplete: false,
+    }
+    this.ensureTicker()
+  }
+
   private nextTransitionName(character: string): string {
     this.transitionSerial += 1
     return `${character}__transition_${this.transitionSerial}`
@@ -1402,12 +1428,6 @@ export class CharacterLayer extends Container {
     label.y = y
     label.alpha = instant ? 1 : 0
     this.addChild(label)
-    void ensureFontLoaded(opts.fontFamily)
-      .then(() => {
-        if (label.destroyed) return
-        label.style = new TextStyle({ fontFamily: opts.fontFamily, fontSize, fill })
-      })
-      .catch(() => {})
 
     const state: CharacterState = {
       sprite,
@@ -1419,15 +1439,11 @@ export class CharacterLayer extends Container {
       fit: false,
       animation: null,
       poseNudge: null,
-      fadeAnimation: instant
-        ? null
-        : {
-            startMs: this.elapsedMs,
-            durationMs: TITLE_CARD_FADE_MS,
-            fromAlpha: 0,
-            toAlpha: 1,
-            destroyOnComplete: false,
-          },
+      // フェード開始は ensureFontLoaded() 完了後（下記 .then() 内）に遅延する (#427)。
+      // 即座に張ると、font load がフェード時間より遅いケースで alpha が 1 まで進み切ってから
+      // フォント確定後の label が現れ、フェードが見えず突然出てしまう（#17 と同じバグクラス）。
+      // instant 時はそもそも null のまま変更しない。
+      fadeAnimation: null,
       textEffect: null,
       underline: null,
       // 文字色をグリフ演出・カーソルに波及させる（Title と同じ役割）。
@@ -1440,7 +1456,18 @@ export class CharacterLayer extends Container {
       anchorX,
     }
     this.characters.set(NAME, state)
-    if (state.fadeAnimation) this.ensureTicker()
+
+    void ensureFontLoaded(opts.fontFamily)
+      .then(() => {
+        if (label.destroyed) return
+        label.style = new TextStyle({ fontFamily: opts.fontFamily, fontSize, fill })
+        // フェード開始はフォント確定後 (#427)。instant 時は label.alpha が既に 1 のままなので張らない。
+        // id 再利用で別 state に置き換わるケースは showLabel には実質無いため、show() の
+        // textureReady ゲートのような state 一致チェックまでは不要と判断し、label.destroyed のみで足りるとした。
+        // 退場フェード予約済み（destroyOnComplete）なら上書きしない（startEntranceFade 内部ガード、#427 re-review）。
+        this.startEntranceFade(state, instant)
+      })
+      .catch(() => {})
   }
 
   /**
@@ -1499,21 +1526,16 @@ export class CharacterLayer extends Container {
       fit: false,
       animation: null,
       poseNudge: null,
-      fadeAnimation: instant
-        ? null
-        : {
-            startMs: this.elapsedMs,
-            durationMs: TITLE_CARD_FADE_MS,
-            fromAlpha: 0,
-            toAlpha: 1,
-            destroyOnComplete: false,
-          },
+      // フェード開始は Assets.load() 完了後（下記 .then() 内）に遅延する (#427)。
+      // ここで即座に fadeAnimation を張ると、load がフェード時間より遅い初回（コールドキャッシュ）で
+      // texture が現れる前に alpha が 1 まで進み切り、フェードが見えず突然出てしまう
+      // （#17 の立ち絵 show() と同じバグクラス）。instant 時はそもそも null のまま変更しない。
+      fadeAnimation: null,
       textEffect: null,
       underline: null,
       renderOnly: true,
     }
     this.characters.set(NAME, state)
-    if (state.fadeAnimation) this.ensureTicker()
 
     // 任意ファイル名パスの url 解決は背景画像と同じ resolveAssetUrl 経由（#274）。
     const url = resolveAssetUrl(opts.assetBaseUrl, 'images', opts.path)
@@ -1548,6 +1570,11 @@ export class CharacterLayer extends Container {
           const st = this.characters.get(NAME)
           if (st) st.maskGraphics = mask
         }
+        // フェード開始は texture 反映後 (#427)。instant 時は sprite.alpha が既に 1 のままなので張らない。
+        // id 再利用で別 state に置き換わるケースは showImage には実質無いため、show() の
+        // textureReady ゲートのような state 一致チェックまでは不要と判断し、sprite.destroyed のみで足りるとした。
+        // 退場フェード予約済み（destroyOnComplete）なら上書きしない（startEntranceFade 内部ガード、#427 re-review）。
+        this.startEntranceFade(state, instant)
       })
       .catch((err) => {
         console.warn('[name-name] 画像の読み込みに失敗: ' + url, err)
