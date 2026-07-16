@@ -40,6 +40,16 @@ function wait(ms: number): Event {
   return { Wait: { ms } }
 }
 
+/** `[ラベル: text]` イベント (#274)。instant フラグの直接検証用 (#424 セルフレビュー should)。 */
+function label(text: string): Event {
+  return { Label: { text } } as Event
+}
+
+/** `[画像: path]` イベント (#274)。instant フラグの直接検証用 (#424 セルフレビュー should)。 */
+function image(path: string): Event {
+  return { Image: { path } } as Event
+}
+
 function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
@@ -81,7 +91,11 @@ interface RendererInternals {
     setDialog: (name: string | null, text: string) => void
     setMsPerChar: (ms: number) => void
   }
-  characterLayer: { clearForSceneTransition: (durationMsOverride?: number) => void }
+  characterLayer: {
+    clearForSceneTransition: (durationMsOverride?: number) => void
+    showLabel: (...args: unknown[]) => void
+    showImage: (...args: unknown[]) => void
+  }
   fadeOutBackgroundEntries: (durationMs: number) => void
   renderIntermissionTableau: (events: Event[], startIndex?: number) => void
   applyState: (state: NovelGameState) => void
@@ -357,6 +371,65 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     r.getTimeController().tick(10)
 
     expect(skipCb).not.toHaveBeenCalled()
+  })
+
+  // ===== H2. Label/Image に渡る instant フラグの直接検証 (#424 セルフレビュー should) =====
+  //
+  // 上のセクション E〜G は BackgroundColor/Dialog という同期確定フィールドでタブローの描画結果を
+  // 間接的に確認するのみで、processDirective が Label/Image に渡す `instant: this.skipMode`
+  // （NovelRenderer.ts の showLabel/showImage 呼び出し）そのものを検証するテストがこれまで
+  // 1本もなかった。これが「skipMode=true のまま endStory() に入ると #424 の段階フェードが
+  // 瞬間タブローに退行する」must バグを実装・テスト双方で見逃した直接の原因。
+  // Label は同期処理・Image は Assets.load を裏で fire-and-forget するが、ここでは呼び出し
+  // 引数だけを見るため await は不要（CharacterLayer.test.ts の showImage 系テストと同じ割り切り）。
+
+  it('31: 既定 skipMode=false では、タブロー内の Label/Image は instant: false で呼ばれる', () => {
+    const r = makeRenderer(SCENES)
+    r.getTimeController().setMode('virtual')
+    internals(r).initialized = true
+    const showLabelSpy = vi.spyOn(internals(r).characterLayer, 'showLabel')
+    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+    r.setIntermissionScene([label('見出し'), image('avatar.png')], {
+      backgroundFadeMs: 10,
+      characterFadeMs: 10,
+    })
+    r.setConfinedSceneIds(['entry'])
+    r.jumpToScene('out-scene')
+
+    r.getTimeController().tick(10)
+
+    expect(showLabelSpy).toHaveBeenCalledWith(expect.objectContaining({ instant: false }))
+    expect(showImageSpy).toHaveBeenCalledWith(expect.objectContaining({ instant: false }))
+  })
+
+  it('32: skipMode=true 中に全 option 圏外の Choice で終劇へ短絡しても endStory() 側で skipMode がリセットされ、タブロー内の Label/Image は instant: false で呼ばれる（must 修正の直接回帰）', async () => {
+    const r = makeRenderer(CHOICE_SCENES)
+    r.getTimeController().setMode('virtual')
+    r.setIntermissionScene([label('見出し'), image('avatar.png')], {
+      backgroundFadeMs: 10,
+      characterFadeMs: 10,
+    })
+    r.setConfinedSceneIds(['entry']) // hub / other は圏外
+    r.setSkipMode(true)
+    expect(r.isSkipMode()).toBe(true)
+
+    // narration('本文') → advance 1 回で Choice に到達 → 全 option 圏外の短絡（#398）→ endStory()。
+    // この経路は通常の Choice 表示前の setSkipMode(false) を通らないため、修正前は skipMode=true
+    // のまま endStory() に入っていた。
+    await r.playScript([{ type: 'advance' }])
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    expect(r.isSkipMode()).toBe(false) // must 修正: endStory() 冒頭で skipMode がリセットされる
+
+    // タブロー描画（intermissionTimer の遅延発火）を通すため、endStory() 後に initialized を立てる。
+    internals(r).initialized = true
+    const showLabelSpy = vi.spyOn(internals(r).characterLayer, 'showLabel')
+    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+    r.getTimeController().tick(10)
+
+    // 修正前は skipMode=true のまま renderIntermissionTableau に入り、instant: true（瞬間表示）で
+    // 呼ばれていた（#424 の段階フェードが瞬間タブローに退行するバグ）。
+    expect(showLabelSpy).toHaveBeenCalledWith(expect.objectContaining({ instant: false }))
+    expect(showImageSpy).toHaveBeenCalledWith(expect.objectContaining({ instant: false }))
   })
 
   // ===== I. タイマーキャンセル経路（restart / applyState / destroy） =====

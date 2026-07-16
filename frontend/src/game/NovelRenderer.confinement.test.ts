@@ -494,4 +494,34 @@ describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)
     expect(internals(r).waitingForChoice).toBe(true)
     expect(showSpy).toHaveBeenCalledTimes(1)
   })
+
+  // ===== 4. skipMode リセット (#424 セルフレビュー must) =====
+  //
+  // 通常の Choice 表示は choiceOverlay.show() の直前に setSkipMode(false) を呼ぶが、全 option
+  // 圏外の短絡（上のテスト398-1）はこれを飛ばして直接 endStory() へ向かう。そのため
+  // setSkipMode(true) の状態でこの経路に到達すると、修正前は this.skipMode が true のまま
+  // endStory() に入っていた。renderIntermissionTableau が委譲する Label/Image は
+  // instant: this.skipMode を見るため（NovelRenderer.intermission.test.ts テスト31/32参照）、
+  // このリセット漏れは #424 の目玉機能（段階フェード）を丸ごと無効化する実害があった。
+
+  it('398-4: setSkipMode(true) 中に全 option 圏外の Choice で終劇へ短絡しても、endStory() 側で skipMode がリセットされる（must 回帰）', async () => {
+    const r = makeRenderer([
+      choiceScene('entry', [
+        { text: 'ハブへ', jump: 'hub' },
+        { text: '他業へ', jump: 'other' },
+      ]),
+      scene('hub', [narration('hub')]),
+      scene('other', [narration('other')]),
+    ])
+    r.setConfinedSceneIds(['entry']) // hub / other は圏外
+    r.setSkipMode(true)
+    expect(r.isSkipMode()).toBe(true)
+    const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show')
+
+    await r.playScript([{ type: 'advance' }]) // narration → Choice 到達 → 全滅短絡 → endStory()
+
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    expect(showSpy).not.toHaveBeenCalled() // 短絡なので choice UI には進まない
+    expect(r.isSkipMode()).toBe(false)
+  })
 })

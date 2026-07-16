@@ -946,6 +946,14 @@ export class NovelRenderer {
   private endStory(): void {
     if (this.storyEnded) return // 二重発火防止（連打等でフェード/コールバックを重複させない）
     this.storyEnded = true
+    // skipMode を宣言的にリセットする (#424 セルフレビュー must)。通常の Choice 表示は
+    // setSkipMode(false) を経由するが、全 option 圏外の短絡（#398）はそれを飛ばして直接
+    // endStory() へ来るため、skipMode=true のままここに到達し得る。renderIntermissionTableau
+    // が委譲する Label/Image は instant: this.skipMode を見るため、リセットしないと段階フェード
+    // （#424 の目玉機能）が瞬間タブローに退行する。this.storyEnded=true により以後 advance() は
+    // no-op になるので skipMode の実効的な意味は既に無く、setSkipMode() の副作用（reloadReadProgress
+    // 等）を経由せず直接代入するだけで安全にリセットできる。
+    this.skipMode = false
     this.waitingForChoice = false
     this.choiceOverlay.hide()
     this.dialogBox.clearText()
