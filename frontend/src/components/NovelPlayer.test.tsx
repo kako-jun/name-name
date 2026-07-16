@@ -59,6 +59,8 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setCharacterFadeMs = vi.fn()
     setBackgroundFadeMs = vi.fn()
     setDefaultBackgroundColor = vi.fn()
+    setIntermissionScene = vi.fn()
+    hasIntermissionScene = vi.fn().mockReturnValue(false)
     applySettings = vi.fn()
     setScenes = vi.fn()
     setEvents = vi.fn()
@@ -764,6 +766,115 @@ describe('NovelPlayer 終劇ロゴ表示 (#404)', () => {
     act(() => cb(false))
     act(() => cb(true))
     expect(logoImg()).toBeNull()
+  })
+})
+
+// #404 フェーズ2: intermission.md 専用シーンの renderer 配線 + usedIntermissionScene の
+// race 固定化（デシジョンテーブル行6/7の直接証明）。
+//
+// usedIntermissionScene は「storyEnded が true に立ち上がった瞬間の renderer.hasIntermissionScene()」
+// を1回だけスナップショットし、以後 intermissionEvents prop が変化してもライブ再評価しない設計
+// （早すぎる fetch で intermission がまだ届いていない場合、後から届いても DOM フォールバック表示が
+// 消えない＝「同時に消えるだけの空白画面」を避けるための意図的な仕様。session ノート参照）。
+describe('NovelPlayer intermission.md 専用シーン配線 (#404 フェーズ2)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+  const storyEndedText = () => screen.queryByText('to be continued...')
+  const captureCb = (): ((ended: boolean) => void) =>
+    lastRenderer().setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
+  const EV1 = [{ Narration: { text: ['つづく'] } }]
+
+  it('NP-IM-1: マウント時に renderer.setIntermissionScene が intermissionEvents prop の初期値で呼ばれる', async () => {
+    render(
+      <NovelPlayer
+        events={[]}
+        intermissionEvents={EV1}
+        intermissionBackgroundFadeMs={900}
+        intermissionCharacterFadeMs={800}
+      />
+    )
+    await flushAsync()
+    expect(lastRenderer().setIntermissionScene).toHaveBeenCalledWith(EV1, {
+      backgroundFadeMs: 900,
+      characterFadeMs: 800,
+    })
+  })
+
+  it('NP-IM-2: intermissionEvents prop を後から変更して rerender すると、専用 effect が renderer.setIntermissionScene を再度呼ぶ', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} intermissionEvents={null} />)
+    await flushAsync()
+    const r = lastRenderer()
+    r.setIntermissionScene.mockClear()
+
+    rerender(<NovelPlayer events={[]} intermissionEvents={EV1} />)
+    await flushAsync()
+
+    expect(r.setIntermissionScene).toHaveBeenCalledWith(EV1, {
+      backgroundFadeMs: null,
+      characterFadeMs: null,
+    })
+  })
+
+  it('NP-IM-3 (race・最重要): storyEnded=true 発火時に hasIntermissionScene()=false だと、後から intermissionEvents が届いても usedIntermissionScene は false のまま固定される（デシジョンテーブル行7）', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} intermissionEvents={null} />)
+    await flushAsync()
+    const r = lastRenderer()
+    r.hasIntermissionScene.mockReturnValue(false) // 早すぎる fetch: intermission はまだ未到着
+    act(() => captureCb()(true))
+    expect(storyEndedText()).not.toBeNull() // DOM フォールバックが表示される
+
+    // intermission が遅れて届く（PlayerScreen の非同期 fetch 解決）。
+    // hasIntermissionScene を true に切り替えても、usedIntermissionScene は再評価しない
+    // （storyEnded の再発火が無い限りスナップショットは更新されない）。
+    r.hasIntermissionScene.mockReturnValue(true)
+    rerender(<NovelPlayer events={[]} intermissionEvents={EV1} />)
+    await flushAsync()
+    expect(storyEndedText()).not.toBeNull() // 表示され続ける（消えない）
+  })
+
+  it('NP-IM-4 (対照系): intermissionEvents を先に非空にしてから hasIntermissionScene()=true で storyEnded 発火すると usedIntermissionScene=true で DOM 非表示になる', async () => {
+    render(<NovelPlayer events={[]} intermissionEvents={EV1} />)
+    await flushAsync()
+    const r = lastRenderer()
+    r.hasIntermissionScene.mockReturnValue(true)
+
+    act(() => captureCb()(true))
+
+    expect(storyEndedText()).toBeNull()
+  })
+
+  it('NP-IM-5: onStoryEndedChange(true)→(false)（goBack 相当）で usedIntermissionScene が false に戻る（再評価は次の true 発火時）', async () => {
+    render(<NovelPlayer events={[]} intermissionEvents={EV1} />)
+    await flushAsync()
+    const r = lastRenderer()
+    const cb = captureCb()
+
+    r.hasIntermissionScene.mockReturnValue(true)
+    act(() => cb(true))
+    expect(storyEndedText()).toBeNull() // usedIntermissionScene=true → DOM 非表示
+
+    act(() => cb(false)) // goBack 相当。ended=false なので usedIntermissionScene も false に戻る
+    expect(storyEndedText()).toBeNull() // storyEnded=false 自体で非表示（この時点では区別不可）
+
+    // usedIntermissionScene が「true に固定されたまま」ではなく実際に false へ戻っていることを、
+    // hasIntermissionScene を false に切り替えてから再度 true 発火して確認する
+    // （固定されたままなら hasIntermissionScene の変更を無視して非表示のままになるはず）。
+    r.hasIntermissionScene.mockReturnValue(false)
+    act(() => cb(true))
+    expect(storyEndedText()).not.toBeNull() // 新しい判定 (true && false) が効いて表示される
+  })
+
+  it('NP-IM-6 (二重表示防止): usedIntermissionScene=true のとき "to be continued..." のブロック自体が DOM ツリーに存在しない（ロゴ img も含む）', async () => {
+    render(<NovelPlayer events={[]} intermissionEvents={EV1} assetBaseUrl="/asset-base" />)
+    await flushAsync()
+    const r = lastRenderer()
+    r.hasIntermissionScene.mockReturnValue(true)
+
+    act(() => captureCb()(true))
+
+    expect(storyEndedText()).toBeNull()
+    // storyEnded && !usedIntermissionScene で丸ごと JSX ツリーから外れる（CSS 非表示ではない）ので、
+    // 同じブロック内にあるロゴ img も一緒に消えている。
+    expect(document.querySelector('img[src="/asset-base/images/title.png"]')).toBeNull()
   })
 })
 

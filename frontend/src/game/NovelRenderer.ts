@@ -59,6 +59,7 @@ import {
 import { TimeController, defaultTimeController } from './TimeController'
 import { computeShakeOffset, computeFlashAlpha, computeFadeAlpha } from './screenEffects'
 import {
+  clampFadeMs,
   computeCoverFit,
   parseHexColor,
   parseColorToNumber,
@@ -214,6 +215,15 @@ const BACKGROUND_FADE_MS_MIN = 0
 /** 背景フェード時間の上限（ms）。character_fade_ms（CharacterLayer）と対称の [0, 5000] レンジ (#407)。 */
 const BACKGROUND_FADE_MS_MAX = 5_000
 
+/**
+ * intermission.md 専用シーン (#404) の背景/立ち絵消去フェード既定値（ms）。
+ * `background_fade_ms`/`character_fade_ms` フロントマターが intermission.md 自身に無いときの
+ * フォールバック。通常の物語中トランジション既定 `BACKGROUND_CROSSFADE_MS`（700ms）より遅めにして
+ * 「幕がゆっくり降りる」演出にする（設計確定コメント #404 参照）。クランプ範囲は
+ * BACKGROUND_FADE_MS_MIN/MAX と同じ [0, 5000] を共有する（clampFadeMs 経由）。
+ */
+const INTERMISSION_FADE_MS_DEFAULT = 1_500
+
 interface BackgroundEntry {
   sprite: Sprite
   mask: Sprite | null
@@ -338,6 +348,29 @@ export class NovelRenderer {
    *  初期値は現行の既定 `BACKGROUND_CROSSFADE_MS`（700ms）で、未指定作品は非回帰。
    *  `setBackgroundFadeMs` が [0, 5000] にクランプして保持し、null/非有限は既定へフォールバックする。 */
   private backgroundFadeMs: number = BACKGROUND_CROSSFADE_MS
+
+  /**
+   * intermission.md 専用シーン (#404)。`assets/scripts/intermission.md` から取得・parse された
+   * イベント列。null（未設定/取得失敗/空）なら endStory() は従来どおりフェードのみで終わり、
+   * NovelPlayer 側の DOM "to be continued..." 表示にフォールバックする（完全オプトイン）。
+   * `setIntermissionScene` が設定する。GameState には持たない（storyEnded 同様、演出の中間状態
+   * ではなく一度きりの見た目でしかないため、セーブ/シークの対象外 — doctrine 規律3）。
+   */
+  private intermissionEvents: Event[] | null = null
+
+  /** intermission.md 自身の frontmatter `background_fade_ms:` から読んだ消去フェード時間（ms）。
+   *  物語本編の `backgroundFadeMs`（共有フィールド）は流用しない。未指定は
+   *  `INTERMISSION_FADE_MS_DEFAULT` へフォールバックし、[0, 5000] にクランプする（clampFadeMs 共有）。 */
+  private intermissionBackgroundFadeMs: number = INTERMISSION_FADE_MS_DEFAULT
+
+  /** intermission.md 自身の frontmatter `character_fade_ms:` から読んだ立ち絵消去フェード時間（ms）。
+   *  CharacterLayer が保持する per-game `characterFadeMs`（共有フィールド）は流用せず、
+   *  `clearForSceneTransition` の呼び出し時に一度きりの override として渡す。 */
+  private intermissionCharacterFadeMs: number = INTERMISSION_FADE_MS_DEFAULT
+
+  /** intermission タブロー描画をフェード完了後に遅延実行するタイマー (#404)。goBack/seekTo/destroy で
+   *  必ずキャンセルする（フェード中に巻き戻された後、古いタイマーが復元済みの画面を上書きする事故防止）。 */
+  private intermissionTimer: number | null = null
 
   /** 主人公セリフの本文色 (#305)。固定でやや暖かいアイボリー #FFF0D8。
    *  protagonist と一致する話者の novel 本文をこの色にし、住人は純白 (#FFFFFF) のまま。
@@ -934,10 +967,21 @@ export class NovelRenderer {
       this.effectOverlay.visible = false
     }
 
+    // 消去フェード時間の決定 (#404): intermission.md 専用シーンが設定されているときは、
+    // 物語本編の per-game `backgroundFadeMs`/CharacterLayer の `characterFadeMs`（他の全
+    // トランジションに影響する共有フィールド）を流用せず、intermission.md 自身の frontmatter
+    // 値（`setIntermissionScene` で受け取り済み）を使う。未設定時は従来どおり backgroundFadeMs。
+    const eraseBackgroundFadeMs = this.intermissionEvents
+      ? this.intermissionBackgroundFadeMs
+      : this.backgroundFadeMs
+    const eraseCharacterFadeMs = this.intermissionEvents
+      ? this.intermissionCharacterFadeMs
+      : undefined
+
     // BGM を止める (#386 レビュー M2)。終劇は物語上の終端で、以後 BGM を止める Bgm イベントは
     // 二度と来ないため、ここで止めないと BGM が永久に鳴り続ける（初見訪問者はセーブが無いため
     // 止める手段がない）。見た目のフェードと揃えて背景フェード時間（#407）でフェードアウトする。
-    this.audioManager.stopBgm(this.backgroundFadeMs)
+    this.audioManager.stopBgm(eraseBackgroundFadeMs)
     this.currentBgmPath = null
 
     // 宣言的な終端状態を即座に確定する（背景/色地/動画/立ち絵はすべて「なし」）。
@@ -951,10 +995,98 @@ export class NovelRenderer {
     this.videoLayer.remove()
 
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
-    this.fadeOutBackgroundEntries(this.backgroundFadeMs)
-    this.characterLayer.clearForSceneTransition()
+    this.fadeOutBackgroundEntries(eraseBackgroundFadeMs)
+    this.characterLayer.clearForSceneTransition(eraseCharacterFadeMs)
 
+    // #404: onStoryEndedChangeCallback の発火位置・タイミングは変更しない（postMessage 契約の正本）。
     this.onStoryEndedChangeCallback?.(true)
+
+    // intermission.md 専用シーン (#404): 消去フェードが終わった後にタブローを1回だけ描画して
+    // 凍結する。通常のシーン遷移機構（resetAndStartEvents/jumpToScene）には一切乗せない —
+    // resetAndStartEvents は背景を finishBackgroundCrossfadeInstant() で瞬間消去する別経路であり、
+    // ここに乗せると「幕がゆっくり降りる」演出がフェード無しの瞬間消去に負けて台無しになる。
+    if (this.intermissionEvents) {
+      const events = this.intermissionEvents
+      if (this.intermissionTimer) this.time.clearTimeout(this.intermissionTimer)
+      const delayMs = Math.max(eraseBackgroundFadeMs, this.intermissionCharacterFadeMs)
+      this.intermissionTimer = this.time.setTimeout(() => {
+        this.intermissionTimer = null
+        // goBack/seekTo で storyEnded が解除されていたら描画しない（applyState 側でも
+        // このタイマーをキャンセルするが、二重の安全策として storyEnded も確認する）。
+        if (!this.initialized || !this.storyEnded) return
+        this.renderIntermissionTableau(events)
+      }, delayMs)
+    }
+  }
+
+  /**
+   * intermission.md 専用シーンのイベント列を静止画タブローとして1回だけ処理し、そこで凍結する (#404)。
+   *
+   * 通常再生ストリーム（rawEvents/resolvedEvents/eventIndex/history/currentSceneId/既読進捗）には
+   * 一切触れない — intermission は `storyEnded` に付随する一度きりの見た目でしかなく、GameState に
+   * 新しい可変状態を持ち込まない（doctrine 規律3。ADR0002 の storyEnded 除外方針をそのまま踏襲）。
+   * `storyEnded=true` により以後 `advance()` は no-op のため、複数拍の演出やタイプライター進行は
+   * 実装しない（静止画1枚で完結する設計。設計確定コメント #404 参照）。
+   *
+   * 演出プリミティブは既存のものを再利用する（規律4・重複実装の回避）:
+   * - Background/BackgroundColor/Enter/Exit/Label/Image/TitleShow 等のディレクティブ →
+   *   `processDirective` にそのまま委譲する。フェード無しの瞬間表示にするため、`processDirective`
+   *   内の各所にある `instant: this.skipMode` 判定を静止画用に一時的に流用する（呼び出し後に必ず
+   *   元の値へ戻す。他の演出用途で `skipMode` の値を恒久的に書き換えてはいけない）。
+   * - Dialog/Narration（テキスト）→ `render()` のタイプライター/ボイス/既読マーク/オート進行は
+   *   一度きりのタブローには不要なため、DialogBox の `setDialog`/`setNovelDialogProgressive` +
+   *   `skipTypewriter()` の組み合わせ（advanceOrSkipTypewriter と同じ2手）で全文を直接・即時表示する。
+   * - Choice/Wait/WaitDisplayComplete/Flag は resolvedEvents/eventIndex を前提にする（Choice/Wait）か
+   *   `NovelGameState` を恒久的に書き換える（Flag → `gameState.setFlag` + `reResolveEvents`）かのいずれかで、
+   *   単発タブローには意味を持たない・持たせてはいけないため無視する（dev のみ warn）。特に Flag は
+   *   docstring 冒頭の「GameState には一切触れない」を破るため、他の演出ディレクティブと違い明示除外が必須。
+   * - Bgm/Se/Video 等はここでは意図的に素通しして `processDirective` に委譲する（エンディング演出の
+   *   柔軟性を優先）。無視/素通しの基準は「GameState を書き換えるか」であり、Bgm/Se/Video は
+   *   `currentBgmPath`/`AudioManager`/`VideoLayer` 止まりで GameState 自体は汚さないため対象外。
+   *   `endStory()` 冒頭で本編 BGM を止めているのは「以後本編の Bgm イベントは来ない」ためであり、
+   *   intermission.md 経由で新たに Bgm が鳴ること自体は妨げない（意図した上書き）。
+   */
+  private renderIntermissionTableau(events: Event[]): void {
+    const previousSkipMode = this.skipMode
+    this.skipMode = true
+    try {
+      for (const event of events) {
+        const textEvt = getTextEvent(event)
+        if (textEvt) {
+          const name = textEvt.type === 'dialog' ? textEvt.character : null
+          const text = textEvt.text.join('\n')
+          this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
+          if (this.isNovelStyle()) {
+            this.dialogBox.setNovelDialogProgressive(name, text, 0, null)
+          } else {
+            this.dialogBox.setDialog(name, text)
+          }
+          this.dialogBox.skipTypewriter()
+          // novel スクリムはセリフが表示されている間だけ敷く。render() と同じ判定を流用する。
+          const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
+          this.updateNovelScrim(hasVisibleText)
+          // 凍結タブローには「次へ」が無いため、進行を示唆するインジケータは出さない。
+          this.dialogBox.setIndicatorVisible(false)
+          continue
+        }
+        if (
+          event === 'WaitDisplayComplete' ||
+          (typeof event === 'object' &&
+            event !== null &&
+            ('Choice' in event || 'Wait' in event || 'Flag' in event))
+        ) {
+          if (import.meta.env.DEV) {
+            console.warn(
+              '[name-name] intermission.md: Choice/Wait/[待機: 表示完了]/Flag は静止画タブローでは無視されます'
+            )
+          }
+          continue
+        }
+        this.processDirective(event)
+      }
+    } finally {
+      this.skipMode = previousSkipMode
+    }
   }
 
   /**
@@ -1095,6 +1227,12 @@ export class NovelRenderer {
       this.waitTimer = null
     }
     this.clearWaitDisplayCompleteTimer()
+    // intermission タブロー描画の遅延タイマーをキャンセルする (#404)。restart()/jumpToScene で
+    // 新しいシーンが始まった後、endStory() で仕込んだ古いタイマーが発火して上書きする事故を防ぐ。
+    if (this.intermissionTimer) {
+      this.time.clearTimeout(this.intermissionTimer)
+      this.intermissionTimer = null
+    }
     if (this.autoTimer) {
       this.time.clearTimeout(this.autoTimer)
       this.autoTimer = null
@@ -1322,10 +1460,56 @@ export class NovelRenderer {
    * （setCharacterFadeMs と対称）。背景の表示（イン）・切り替え・退場（アウト）すべてに効く。
    */
   setBackgroundFadeMs(ms: number | null | undefined): void {
-    this.backgroundFadeMs =
-      ms == null || !Number.isFinite(ms)
-        ? BACKGROUND_CROSSFADE_MS
-        : Math.min(BACKGROUND_FADE_MS_MAX, Math.max(BACKGROUND_FADE_MS_MIN, Math.floor(ms)))
+    this.backgroundFadeMs = clampFadeMs(
+      ms,
+      BACKGROUND_CROSSFADE_MS,
+      BACKGROUND_FADE_MS_MIN,
+      BACKGROUND_FADE_MS_MAX
+    )
+  }
+
+  /**
+   * intermission.md 専用シーンを設定する (#404)。
+   *
+   * `events` は `assets/scripts/intermission.md` を parseMarkdown した EventDocument から
+   * flatten した Event 列（呼び出し側 = PlayerScreen の責務）。null/undefined/空配列は
+   * 「未設定」として扱い、endStory() は従来どおりフェードのみで終わる（NovelPlayer の DOM
+   * "to be continued..." 表示にフォールバック。完全後方互換・オプトイン）。
+   *
+   * `options.backgroundFadeMs`/`characterFadeMs` は intermission.md 自身の frontmatter
+   * `background_fade_ms:`/`character_fade_ms:` の値。物語本編の同名 per-game 設定
+   * （`backgroundFadeMs`/CharacterLayer の `characterFadeMs`、他の全トランジションに影響する
+   * 共有フィールド）とは独立に保持し、endStory() の消去フェードにだけ使う。未指定（null/
+   * undefined/非有限）は `INTERMISSION_FADE_MS_DEFAULT`（1500ms、通常既定 700ms より遅い
+   * 「幕が降りる」用の値）にフォールバックし、[0, 5000] にクランプする
+   * （setBackgroundFadeMs/setCharacterFadeMs と同じ clampFadeMs を共有）。
+   */
+  setIntermissionScene(
+    events: Event[] | null | undefined,
+    options?: { backgroundFadeMs?: number | null; characterFadeMs?: number | null }
+  ): void {
+    this.intermissionEvents = events && events.length > 0 ? events : null
+    this.intermissionBackgroundFadeMs = clampFadeMs(
+      options?.backgroundFadeMs,
+      INTERMISSION_FADE_MS_DEFAULT,
+      BACKGROUND_FADE_MS_MIN,
+      BACKGROUND_FADE_MS_MAX
+    )
+    this.intermissionCharacterFadeMs = clampFadeMs(
+      options?.characterFadeMs,
+      INTERMISSION_FADE_MS_DEFAULT,
+      BACKGROUND_FADE_MS_MIN,
+      BACKGROUND_FADE_MS_MAX
+    )
+  }
+
+  /**
+   * intermission.md 専用シーンが設定されているか (#404)。
+   * NovelPlayer が DOM 側 "to be continued..." 表示（フェーズ1）を出すかどうかの判定に使う
+   * （intermission シーン設定時は PixiJS 側のタブローに一本化し、二重表示を避ける）。
+   */
+  hasIntermissionScene(): boolean {
+    return this.intermissionEvents !== null
   }
 
   /**
@@ -1567,8 +1751,19 @@ export class NovelRenderer {
   /**
    * スキップモードの ON/OFF を切り替える (#140)。
    * OFF にした場合はスキップタイマーをキャンセルする。
+   *
+   * 終劇後 (#386) はガードして no-op にする (#404 セルフレビュー S1)。`endStory()` の
+   * `fadeOutBackgroundEntries()`（次背景を追加しない全消去フェード）進行中に呼ばれると、
+   * `finishBackgroundCrossfadeInstant()` が「crossfade 中で次背景が来る」前提のまま
+   * 「最後の bgEntry = 次背景」の alpha を 1 にリセットしてしまい、消去フェード中だった
+   * 背景を誤って完全不透明へ巻き戻す事故があった（tick が止まる skip 中はそのまま固定）。
+   * `advance()`/`quickSave()`/`openSaveMenu()` と同じ「storyEnded 中は根本メソッド自体で
+   * no-op」の設計イディオム（ADR0002）をここにも適用する。ボタン側の disabled 制御だけでは
+   * Skip(S) ボタン以外から setSkipMode を直接呼ぶ経路（`NovelPlayer` の「つづきから」初期化等）
+   * を防げないため必須。
    */
   setSkipMode(on: boolean): void {
+    if (this.storyEnded) return
     if (this.skipMode === on) return
     this.skipMode = on
     if (on) {
@@ -1628,6 +1823,10 @@ export class NovelRenderer {
       this.waitTimer = null
     }
     this.clearWaitDisplayCompleteTimer()
+    if (this.intermissionTimer) {
+      this.time.clearTimeout(this.intermissionTimer)
+      this.intermissionTimer = null
+    }
     if (this.autoTimer) {
       this.time.clearTimeout(this.autoTimer)
       this.autoTimer = null
@@ -2127,6 +2326,12 @@ export class NovelRenderer {
    * スナップショットから状態を宣言的に復元する
    */
   private applyState(state: NovelGameState): void {
+    // intermission タブロー描画の遅延タイマーをキャンセルする (#404)。goBack/seekTo でフェード中の
+    // 終劇が巻き戻された後、古いタイマーが発火して復元済みの画面をタブローで上書きしてしまう事故を防ぐ。
+    if (this.intermissionTimer) {
+      this.time.clearTimeout(this.intermissionTimer)
+      this.intermissionTimer = null
+    }
     // 画面効果をリセット（シーク・バック時に演出が残留しないよう）
     if (this.shakeTimer) {
       this.time.clearTimeout(this.shakeTimer)

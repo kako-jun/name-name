@@ -148,6 +148,9 @@ export async function handleRawAsset(
       wav: "audio/wav",
       mp4: "video/mp4",
       webm: "video/webm",
+      // intermission.md (#404) 等の assets/scripts/*.md をテキストとして取得できるようにする。
+      // markdown 専用 MIME は厳密に用意する必要がなく、text/plain で十分（fetch().text() で読む）。
+      md: "text/plain",
     };
     const contentType = mimeMap[ext] ?? "application/octet-stream";
 

@@ -4279,3 +4279,82 @@ describe('CharacterLayer character_scale ライブ再適用（#378）', () => {
     expect(chars.get(oldKey)!.sprite.scale.x).toBe(beforeScale)
   })
 })
+
+// =====================================================================================
+// #404: remove()/clearForSceneTransition() の durationMsOverride。
+//   intermission.md 専用シーンの終劇消去では、per-game characterFadeMs（フィールド自体）を
+//   変更せずに一度きりのフェード時間を渡す。フィールドが変わらないことと、以後の通常 remove()
+//   が元の characterFadeMs に戻ることの両方を固定する。
+// =====================================================================================
+describe('CharacterLayer durationMsOverride (#404)', () => {
+  interface CharacterLayerFadeMsInternals {
+    characterFadeMs: number
+  }
+  function fadeMsInternals(layer: CharacterLayer): CharacterLayerFadeMsInternals {
+    return layer as unknown as CharacterLayerFadeMsInternals
+  }
+
+  it('remove(name, { durationMsOverride }) はフェードだけ指定msで走り、characterFadeMs フィールド自体は変更しない', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.setCharacterFadeMs(700)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+
+    layer.remove('hero', { durationMsOverride: 1500 })
+
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    const fade = state!.fadeAnimation as unknown as { durationMs: number; toAlpha: number }
+    expect(fade.toAlpha).toBe(0)
+    expect(fade.durationMs).toBe(1500) // override が効く
+    expect(fadeMsInternals(layer).characterFadeMs).toBe(700) // フィールド自体は不変
+  })
+
+  it('clearForSceneTransition(1500) は全キャラが1500msフェードになるが、以後の通常 remove() は元の characterFadeMs に戻る', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.setCharacterFadeMs(700)
+    layer.show('せお', 'normal', '左', '/assets', { instant: true })
+    layer.show('ゆき', 'normal', '右', '/assets', { instant: true })
+
+    layer.clearForSceneTransition(1500)
+
+    const seo = asInternals(layer).characters.get('せお') as unknown as {
+      fadeAnimation: { durationMs: number }
+    }
+    const yuki = asInternals(layer).characters.get('ゆき') as unknown as {
+      fadeAnimation: { durationMs: number }
+    }
+    expect(seo.fadeAnimation.durationMs).toBe(1500)
+    expect(yuki.fadeAnimation.durationMs).toBe(1500)
+    expect(fadeMsInternals(layer).characterFadeMs).toBe(700) // フィールド自体は不変
+
+    // 以後の通常 remove()（override 省略）は元の characterFadeMs(700) に戻る（非回帰）。
+    layer.show('あきら', 'normal', '中央', '/assets', { instant: true })
+    layer.remove('あきら')
+    const akira = asInternals(layer).characters.get('あきら') as unknown as {
+      fadeAnimation: { durationMs: number }
+    }
+    expect(akira.fadeAnimation.durationMs).toBe(700)
+  })
+
+  it('境界値: durationMsOverride=0 で即時破棄になる（characters から消える）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.setCharacterFadeMs(700) // フィールドは 0 でなくても override=0 が優先される
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+
+    layer.remove('hero', { durationMsOverride: 0 })
+
+    expect(asInternals(layer).characters.has('hero')).toBe(false)
+  })
+
+  it('同値分割: durationMsOverride 省略時は従来どおり this.characterFadeMs が使われる（非回帰）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.setCharacterFadeMs(1200)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+
+    layer.remove('hero') // durationMsOverride 省略
+
+    const state = asInternals(layer).characters.get('hero')
+    const fade = state!.fadeAnimation as unknown as { durationMs: number }
+    expect(fade.durationMs).toBe(1200)
+  })
+})
