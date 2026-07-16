@@ -1477,4 +1477,267 @@ describe('PlayerScreen', () => {
       expect(loading.classList.contains(DARK_LOADING_TEXT_CLASS)).toBe(false)
     })
   })
+
+  // #404 フェーズ2: intermission.md 専用シーンの取得・parse effect。
+  // fetch は `${assetBaseUrl}/scripts/intermission.md` を叩く（beforeEach の既定は 404）。
+  // 404 は「未配置」として黙ってスキップし、それ以外の失敗（ネットワーク例外・不正 md）は
+  // console.warn してゲーム自体は続行する（doctrine: 完全後方互換・オプトイン機能が壊れても
+  // 本編再生を止めない）。
+  describe('PlayerScreen intermission.md 専用シーン取得 (#404 フェーズ2)', () => {
+    const ENTRY_MD = 'ENTRY_MD'
+    const INTERMISSION_MD = 'INTERMISSION_MD'
+
+    /** 通常の entry doc（parseMarkdown 呼び出し）を1シーン・イベント無しで解決する既定応答。 */
+    function entryDoc() {
+      return {
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [{ id: 's1', title: 's', view: 'TopDown', events: [] }],
+          },
+        ],
+      }
+    }
+
+    function setupEntryProject(name: string) {
+      listProjectsMock.mockResolvedValue([{ name, title: name, repo: `kako-jun/${name}` }])
+      getContentsMock.mockResolvedValue({ path: 'script.md', sha: 's1', content: ENTRY_MD })
+    }
+
+    /** intermission.md の GET だけ差し替え、それ以外の raw fetch は既定どおり 404 にする。 */
+    function mockIntermissionFetch(impl: (url: string) => Promise<Response> | Response): void {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.endsWith('/scripts/intermission.md')) {
+          return impl(url)
+        }
+        return { ok: false, status: 404 } as Response
+      })
+    }
+
+    async function waitForNovelPlayer(): Promise<void> {
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+    }
+
+    it('#404-1: fetch が 200 + 有効な md を返すと、NovelPlayer に intermissionEvents（非空配列）・fade 値が渡る', async () => {
+      setupEntryProject('friday-1930')
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        if (md === INTERMISSION_MD) {
+          return {
+            engine: 'name-name',
+            chapters: [
+              {
+                number: 1,
+                title: 'im',
+                hidden: false,
+                default_bgm: null,
+                scenes: [
+                  {
+                    id: 'im',
+                    title: 'im',
+                    view: 'TopDown',
+                    events: [{ Narration: { text: ['つづく'] } }],
+                  },
+                ],
+              },
+            ],
+            background_fade_ms: 900,
+            character_fade_ms: 800,
+          }
+        }
+        return entryDoc()
+      })
+      mockIntermissionFetch(
+        async () => ({ ok: true, status: 200, text: async () => INTERMISSION_MD }) as Response
+      )
+
+      render(
+        <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitForNovelPlayer()
+      await waitFor(() => {
+        expect(lastNovelPlayerProps().intermissionEvents).not.toBeNull()
+      })
+
+      const props = lastNovelPlayerProps()
+      expect(props.intermissionEvents).toEqual([{ Narration: { text: ['つづく'] } }])
+      expect(props.intermissionBackgroundFadeMs).toBe(900)
+      expect(props.intermissionCharacterFadeMs).toBe(800)
+    })
+
+    it('#404-2: fetch が 404 のとき、NovelPlayer への intermissionEvents は null のまま・console.warn は呼ばれない（未配置はエラー扱いにしない）', async () => {
+      setupEntryProject('friday-1930')
+      parseMarkdownMock.mockResolvedValue(entryDoc())
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // fetch は beforeEach の既定（404）のまま上書きしない。
+
+      render(
+        <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitForNovelPlayer()
+
+      expect(lastNovelPlayerProps().intermissionEvents).toBeNull()
+      const intermissionWarns = warnSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('intermission.md')
+      )
+      expect(intermissionWarns.length).toBe(0)
+    })
+
+    it('#404-3: fetch がネットワーク例外で reject すると、console.warn が1回呼ばれゲーム自体は続行する', async () => {
+      setupEntryProject('friday-1930')
+      parseMarkdownMock.mockResolvedValue(entryDoc())
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      mockIntermissionFetch(async () => {
+        throw new Error('network down')
+      })
+
+      render(
+        <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitForNovelPlayer() // ゲーム自体は続行し NovelPlayer が描画される
+
+      await waitFor(() => {
+        const intermissionWarns = warnSpy.mock.calls.filter((call) =>
+          String(call[0]).includes('intermission.md')
+        )
+        expect(intermissionWarns.length).toBe(1)
+      })
+      expect(lastNovelPlayerProps().intermissionEvents).toBeNull()
+    })
+
+    it('#404-4: fetch は 200 だが parseMarkdown が例外を投げる（不正 md）と、console.warn が1回呼ばれゲーム自体は続行する', async () => {
+      setupEntryProject('friday-1930')
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        if (md === INTERMISSION_MD) throw new Error('parse error: 不正な md')
+        return entryDoc()
+      })
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      mockIntermissionFetch(
+        async () => ({ ok: true, status: 200, text: async () => INTERMISSION_MD }) as Response
+      )
+
+      render(
+        <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitForNovelPlayer()
+
+      await waitFor(() => {
+        const intermissionWarns = warnSpy.mock.calls.filter((call) =>
+          String(call[0]).includes('intermission.md')
+        )
+        expect(intermissionWarns.length).toBe(1)
+      })
+      expect(lastNovelPlayerProps().intermissionEvents).toBeNull()
+    })
+
+    it('#404-5: fetch/parse は成功するが flattenDocumentEvents の結果が空配列のとき、intermissionEvents は null のまま渡る', async () => {
+      setupEntryProject('friday-1930')
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        if (md === INTERMISSION_MD) {
+          return {
+            engine: 'name-name',
+            chapters: [
+              {
+                number: 1,
+                title: 'im',
+                hidden: false,
+                default_bgm: null,
+                scenes: [{ id: 'im', title: 'im', view: 'TopDown', events: [] }], // イベント無し
+              },
+            ],
+          }
+        }
+        return entryDoc()
+      })
+      mockIntermissionFetch(
+        async () => ({ ok: true, status: 200, text: async () => INTERMISSION_MD }) as Response
+      )
+
+      render(
+        <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitForNovelPlayer()
+
+      // 空配列判定は非同期 fetch/parse 完了後に確定するため、他の prop が届いた後の最終状態で確認する。
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(lastNovelPlayerProps().intermissionEvents).toBeNull()
+    })
+
+    it('#404-6: assetBaseUrl が変わる（projectName 切替）と intermissionEvents は一旦 null にリセットされ、旧 fetch が遅れて解決しても無視される（stale response 防止）', async () => {
+      listProjectsMock.mockResolvedValue([
+        { name: 'proj-a', title: 'A', repo: 'kako-jun/proj-a' },
+        { name: 'proj-b', title: 'B', repo: 'kako-jun/proj-b' },
+      ])
+      getContentsMock.mockResolvedValue({ path: 'script.md', sha: 's1', content: ENTRY_MD })
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        if (md === 'STALE_INTERMISSION_MD') {
+          return {
+            engine: 'name-name',
+            chapters: [
+              {
+                number: 1,
+                title: 'im',
+                hidden: false,
+                default_bgm: null,
+                scenes: [
+                  {
+                    id: 'im',
+                    title: 'im',
+                    view: 'TopDown',
+                    events: [{ Narration: { text: ['stale'] } }],
+                  },
+                ],
+              },
+            ],
+          }
+        }
+        return entryDoc()
+      })
+
+      const staleFetch = deferred<Response>()
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/projects/proj-a/') && url.endsWith('/scripts/intermission.md')) {
+          return staleFetch.promise // proj-a 分は意図的に pending のまま保持する
+        }
+        return { ok: false, status: 404 } as Response // proj-b 分（新 assetBaseUrl）は未配置
+      })
+
+      const { rerender } = render(
+        <PlayerScreen projectName="proj-a" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitForNovelPlayer()
+      expect(lastNovelPlayerProps().assetBaseUrl).toBe(
+        'http://api.test/api/projects/proj-a/assets/raw'
+      )
+
+      // projectName 切替＝assetBaseUrl 変化。新 effect 先頭で intermissionEvents は null にリセットされる
+      // （proj-a の fetch がまだ pending の状態で切り替える）。
+      rerender(<PlayerScreen projectName="proj-b" apiBaseUrl="http://api.test" onBack={() => {}} />)
+      await waitFor(() => {
+        expect(lastNovelPlayerProps().assetBaseUrl).toBe(
+          'http://api.test/api/projects/proj-b/assets/raw'
+        )
+      })
+      expect(lastNovelPlayerProps().intermissionEvents).toBeNull()
+
+      // 古い proj-a 分の fetch が遅れて成功で解決しても、cancelled フラグにより無視される。
+      await act(async () => {
+        staleFetch.resolve({
+          ok: true,
+          status: 200,
+          text: async () => 'STALE_INTERMISSION_MD',
+        } as Response)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(lastNovelPlayerProps().intermissionEvents).toBeNull()
+    })
+  })
 })
