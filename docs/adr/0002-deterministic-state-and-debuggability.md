@@ -163,6 +163,12 @@ postMessage（#395/#397）が発火しないため埋め込み側で既読化さ
 （`isSceneIdConfined`）、`NovelRenderer.setConfinedSceneIds`/`endStory`/`setOnStoryEndedChange`、
 `PlayerScreen.findConfinedSceneIds`。
 
+**追記（#404、2026-07-16）**: `endStory()` の見た目は intermission.md 専用シーン（`assets/scripts/
+intermission.md`。プロジェクト opt-in）の有無で分岐するようになった。ただし `storyEnded` を
+宣言的フラグとして扱う本節の設計原則（演出の中間状態を持たない・GameState には持ち込まない）は
+そのまま——intermission タブローも一度きりの見た目でしかなく、セーブ/シーク対象にはしていない。
+詳細は `docs/architecture.md` の「confinement（在圏）+ 終劇」節を参照。
+
 ## Consequences（影響）
 
 ### 利点
