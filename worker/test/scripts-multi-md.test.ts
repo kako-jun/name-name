@@ -134,9 +134,9 @@ describe("GET /api/projects/:name/scripts (scriptsDir / fast directory listing #
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls.map((call) => call[0].toString())).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("/contents/content%2Fscripts"),
-        expect.stringContaining("/contents/content%2Fscripts%2Ffree"),
-        expect.stringContaining("/contents/content%2Fscripts%2Fmain"),
+        expect.stringContaining("/contents/content/scripts"),
+        expect.stringContaining("/contents/content/scripts/free"),
+        expect.stringContaining("/contents/content/scripts/main"),
       ]),
     );
   });

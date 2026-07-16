@@ -134,15 +134,13 @@ interface DirEntry {
   type: string;
 }
 
-type Octokit = ReturnType<typeof createGitHub>;
-
 /**
  * 指定ディレクトリ（リポ相対 path。`""` はリポ直下）を Contents API で listing する。
  * directory でないファイル単体 path だった場合・listing 失敗時は null を返す
  * （呼び出し側でスキップ）。
  */
 async function listDirectory(
-  octokit: Octokit,
+  env: Env,
   owner: string,
   repo: string,
   path: string,
@@ -150,20 +148,37 @@ async function listDirectory(
   logLabel: string,
 ): Promise<DirEntry[] | null> {
   try {
-    const res = await octokit.request(
-      "GET /repos/{owner}/{repo}/contents/{path}",
+    const baseUrl = env.GITHUB_API_BASE ?? "https://api.github.com";
+    const encodedPath = path
+      .split("/")
+      .filter((part) => part.length > 0)
+      .map(encodeURIComponent)
+      .join("/");
+    const res = await fetch(
+      `${baseUrl.replace(/\/$/, "")}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodedPath}${ref ? `?ref=${encodeURIComponent(ref)}` : ""}`,
       {
-        owner,
-        repo,
-        path,
-        ref: ref ?? undefined,
+        headers: {
+          accept: "application/vnd.github+json",
+          "user-agent": "name-name-api/0.1.0",
+          ...(env.GITHUB_TOKEN
+            ? { authorization: `Bearer ${env.GITHUB_TOKEN}` }
+            : {}),
+        },
       },
     );
-    logRateLimit(
-      logLabel,
-      res.headers as Record<string, string | number | undefined>,
-    );
-    const data = res.data as ContentsGetResponseData;
+    const responseHeaders = Object.fromEntries(res.headers.entries());
+    logRateLimit(logLabel, responseHeaders);
+    const data = (await res.json()) as
+      | ContentsGetResponseData
+      | { message?: string };
+    if (!res.ok) {
+      throw {
+        status: res.status,
+        message:
+          "message" in data && data.message ? data.message : "GitHub API error",
+        response: { headers: responseHeaders },
+      };
+    }
     if (!Array.isArray(data)) return null;
     return data as unknown as DirEntry[];
   } catch (err) {
@@ -177,14 +192,14 @@ async function listDirectory(
 }
 
 async function listScriptsFromDirectories(
-  octokit: Octokit,
+  env: Env,
   owner: string,
   repo: string,
   baseDir: string,
   ref: string | null,
 ): Promise<ScriptInfo[]> {
   const baseListing = await listDirectory(
-    octokit,
+    env,
     owner,
     repo,
     baseDir,
@@ -210,7 +225,7 @@ async function listScriptsFromDirectories(
   for (const dir of subDirs) {
     try {
       const subListing = await listDirectory(
-        octokit,
+        env,
         owner,
         repo,
         dir.path,
@@ -274,7 +289,13 @@ export async function handleListScripts(
   if (project.scriptsDir) {
     try {
       const body: ScriptsListResponse = {
-        scripts: await listScriptsFromDirectories(octokit, owner, repo, baseDir, ref),
+        scripts: await listScriptsFromDirectories(
+          env,
+          owner,
+          repo,
+          baseDir,
+          ref,
+        ),
       };
       const response = jsonResponse(body, 200, { "x-cache": "MISS" });
       await cachePut(cacheKey, response);
@@ -289,7 +310,7 @@ export async function handleListScripts(
   let baseListing: DirEntry[];
   try {
     const listed = await listDirectory(
-      octokit,
+      env,
       owner,
       repo,
       baseDir,
@@ -334,7 +355,7 @@ export async function handleListScripts(
       let subListing: DirEntry[] | null;
       try {
         subListing = await listDirectory(
-          octokit,
+          env,
           owner,
           repo,
           dir.path,
