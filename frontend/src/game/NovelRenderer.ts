@@ -219,10 +219,11 @@ const BACKGROUND_FADE_MS_MAX = 5_000
  * intermission.md 専用シーン (#404) の背景/立ち絵消去フェード既定値（ms）。
  * `background_fade_ms`/`character_fade_ms` フロントマターが intermission.md 自身に無いときの
  * フォールバック。通常の物語中トランジション既定 `BACKGROUND_CROSSFADE_MS`（700ms）より遅めにして
- * 「幕がゆっくり降りる」演出にする（設計確定コメント #404 参照）。クランプ範囲は
+ * 「幕がゆっくり降りる」演出にする（設計確定コメント #404 参照）。値はフェード時間の推奨3値
+ * （基本700ms・短め300ms・長め1400ms＝700の2倍。#424）のうち「長め」を採用。クランプ範囲は
  * BACKGROUND_FADE_MS_MIN/MAX と同じ [0, 5000] を共有する（clampFadeMs 経由）。
  */
-const INTERMISSION_FADE_MS_DEFAULT = 1_500
+const INTERMISSION_FADE_MS_DEFAULT = 1_400
 
 interface BackgroundEntry {
   sprite: Sprite
@@ -945,6 +946,21 @@ export class NovelRenderer {
   private endStory(): void {
     if (this.storyEnded) return // 二重発火防止（連打等でフェード/コールバックを重複させない）
     this.storyEnded = true
+    // skipMode を宣言的にリセットする (#424 セルフレビュー must)。通常の Choice 表示は
+    // setSkipMode(false) を経由するが、全 option 圏外の短絡（#398）はそれを飛ばして直接
+    // endStory() へ来るため、skipMode=true のままここに到達し得る。renderIntermissionTableau
+    // が委譲する Label/Image は instant: this.skipMode を見るため、リセットしないと段階フェード
+    // （#424 の目玉機能）が瞬間タブローに退行する。this.storyEnded=true により以後 advance() は
+    // no-op になるので skipMode の実効的な意味は既に無いが、onSkipModeChange コールバックは
+    // React 側（NovelPlayer）の Skip ボタン表示状態を同期する唯一の経路であり、skipMode は
+    // NovelGameState/applyState の対象外（ADR0002 で意図的に除外）なので他に同期手段がない
+    // (#424 re-review should)。setSkipMode() 自身は storyEnded ガードで no-op になり呼べない
+    // ため、true→false の遷移が実際に起きた時だけ setSkipMode() と同じ意味論でコールバックを
+    // 発火させる（skipMode===on なら何もしない、というガードと同じ形）。
+    if (this.skipMode) {
+      this.skipMode = false
+      this.onSkipModeChange?.(false)
+    }
     this.waitingForChoice = false
     this.choiceOverlay.hide()
     this.dialogBox.clearText()
@@ -1020,23 +1036,30 @@ export class NovelRenderer {
   }
 
   /**
-   * intermission.md 専用シーンのイベント列を静止画タブローとして1回だけ処理し、そこで凍結する (#404)。
+   * intermission.md 専用シーンのイベント列を静止画タブローとして処理し、そこで凍結する (#404, #424)。
    *
    * 通常再生ストリーム（rawEvents/resolvedEvents/eventIndex/history/currentSceneId/既読進捗）には
    * 一切触れない — intermission は `storyEnded` に付随する一度きりの見た目でしかなく、GameState に
    * 新しい可変状態を持ち込まない（doctrine 規律3。ADR0002 の storyEnded 除外方針をそのまま踏襲）。
-   * `storyEnded=true` により以後 `advance()` は no-op のため、複数拍の演出やタイプライター進行は
-   * 実装しない（静止画1枚で完結する設計。設計確定コメント #404 参照）。
+   * `storyEnded=true` により以後 `advance()` は no-op のため、Choice によるプレイヤー操作介入や
+   * タイプライター進行は実装しない。ただし `Wait { ms }` による段階的な演出（#424: 黒くなった後
+   * "To Be Continued..." がじわっと出て、それからタイトルロゴもさらにじわっと出る、等）は下記の
+   * とおり `startIndex` からの再入可能な処理としてサポートする。GameState 自体は書き換えない
+   * タブロー専用のローカル・ステージングなので、規律3には抵触しない。
    *
    * 演出プリミティブは既存のものを再利用する（規律4・重複実装の回避）:
    * - Background/BackgroundColor/Enter/Exit/Label/Image/TitleShow 等のディレクティブ →
-   *   `processDirective` にそのまま委譲する。フェード無しの瞬間表示にするため、`processDirective`
-   *   内の各所にある `instant: this.skipMode` 判定を静止画用に一時的に流用する（呼び出し後に必ず
-   *   元の値へ戻す。他の演出用途で `skipMode` の値を恒久的に書き換えてはいけない）。
+   *   `processDirective` にそのまま委譲する。skipMode はもう一時的に強制しない (#424) ため、
+   *   Label/Image はそれぞれのネイティブフェードイン（`CharacterLayer.TITLE_CARD_FADE_MS` = 700ms）
+   *   で表示される。
    * - Dialog/Narration（テキスト）→ `render()` のタイプライター/ボイス/既読マーク/オート進行は
    *   一度きりのタブローには不要なため、DialogBox の `setDialog`/`setNovelDialogProgressive` +
    *   `skipTypewriter()` の組み合わせ（advanceOrSkipTypewriter と同じ2手）で全文を直接・即時表示する。
-   * - Choice/Wait/WaitDisplayComplete/Flag は resolvedEvents/eventIndex を前提にする（Choice/Wait）か
+   * - `Wait { ms }`（#424）→ 通常再生ストリーム（eventIndex/waitingForWait 等）には一切触れない、
+   *   タブロー専用のローカル・ステージング。`this.intermissionTimer`（endStory() の初回描画待ちと
+   *   同じフィールドを再利用。destroy/resetAndStartEvents/applyState で既にキャンセルされる）で
+   *   指定 ms 後に `renderIntermissionTableau(events, i + 1)` を呼び、残りのイベントから再開する。
+   * - Choice/WaitDisplayComplete/Flag は resolvedEvents/eventIndex を前提にする（Choice）か
    *   `NovelGameState` を恒久的に書き換える（Flag → `gameState.setFlag` + `reResolveEvents`）かのいずれかで、
    *   単発タブローには意味を持たない・持たせてはいけないため無視する（dev のみ warn）。特に Flag は
    *   docstring 冒頭の「GameState には一切触れない」を破るため、他の演出ディレクティブと違い明示除外が必須。
@@ -1045,47 +1068,57 @@ export class NovelRenderer {
    *   `currentBgmPath`/`AudioManager`/`VideoLayer` 止まりで GameState 自体は汚さないため対象外。
    *   `endStory()` 冒頭で本編 BGM を止めているのは「以後本編の Bgm イベントは来ない」ためであり、
    *   intermission.md 経由で新たに Bgm が鳴ること自体は妨げない（意図した上書き）。
+   *
+   * @param startIndex Wait ステージングの再開位置 (#424)。省略時 0（endStory からの初回呼び出しと
+   *   後方互換）。
    */
-  private renderIntermissionTableau(events: Event[]): void {
-    const previousSkipMode = this.skipMode
-    this.skipMode = true
-    try {
-      for (const event of events) {
-        const textEvt = getTextEvent(event)
-        if (textEvt) {
-          const name = textEvt.type === 'dialog' ? textEvt.character : null
-          const text = textEvt.text.join('\n')
-          this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
-          if (this.isNovelStyle()) {
-            this.dialogBox.setNovelDialogProgressive(name, text, 0, null)
-          } else {
-            this.dialogBox.setDialog(name, text)
-          }
-          this.dialogBox.skipTypewriter()
-          // novel スクリムはセリフが表示されている間だけ敷く。render() と同じ判定を流用する。
-          const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
-          this.updateNovelScrim(hasVisibleText)
-          // 凍結タブローには「次へ」が無いため、進行を示唆するインジケータは出さない。
-          this.dialogBox.setIndicatorVisible(false)
-          continue
+  private renderIntermissionTableau(events: Event[], startIndex = 0): void {
+    for (let i = startIndex; i < events.length; i++) {
+      const event = events[i]
+      const textEvt = getTextEvent(event)
+      if (textEvt) {
+        const name = textEvt.type === 'dialog' ? textEvt.character : null
+        const text = textEvt.text.join('\n')
+        this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
+        if (this.isNovelStyle()) {
+          this.dialogBox.setNovelDialogProgressive(name, text, 0, null)
+        } else {
+          this.dialogBox.setDialog(name, text)
         }
-        if (
-          event === 'WaitDisplayComplete' ||
-          (typeof event === 'object' &&
-            event !== null &&
-            ('Choice' in event || 'Wait' in event || 'Flag' in event))
-        ) {
-          if (import.meta.env.DEV) {
-            console.warn(
-              '[name-name] intermission.md: Choice/Wait/[待機: 表示完了]/Flag は静止画タブローでは無視されます'
-            )
-          }
-          continue
-        }
-        this.processDirective(event)
+        this.dialogBox.skipTypewriter()
+        // novel スクリムはセリフが表示されている間だけ敷く。render() と同じ判定を流用する。
+        const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
+        this.updateNovelScrim(hasVisibleText)
+        // 凍結タブローには「次へ」が無いため、進行を示唆するインジケータは出さない。
+        this.dialogBox.setIndicatorVisible(false)
+        continue
       }
-    } finally {
-      this.skipMode = previousSkipMode
+      if (typeof event === 'object' && event !== null && 'Wait' in event) {
+        // タブロー専用のローカル・ステージング (#424)。通常再生ストリームには一切触れず、
+        // intermissionTimer で ms 後に自分自身を i+1 から再入する（二重発火防止のため念のため
+        // 既存タイマーを先に破棄する。endStory/前回のステージング完了時点では通常 null のはず）。
+        if (this.intermissionTimer) this.time.clearTimeout(this.intermissionTimer)
+        this.intermissionTimer = this.time.setTimeout(() => {
+          this.intermissionTimer = null
+          // goBack/seekTo で storyEnded が解除されていたら描画しない（applyState 側でも
+          // このタイマーをキャンセルするが、二重の安全策として storyEnded も確認する）。
+          if (!this.initialized || !this.storyEnded) return
+          this.renderIntermissionTableau(events, i + 1)
+        }, event.Wait.ms)
+        return
+      }
+      if (
+        event === 'WaitDisplayComplete' ||
+        (typeof event === 'object' && event !== null && ('Choice' in event || 'Flag' in event))
+      ) {
+        if (import.meta.env.DEV) {
+          console.warn(
+            '[name-name] intermission.md: Choice/[待機: 表示完了]/Flag は静止画タブローでは無視されます'
+          )
+        }
+        continue
+      }
+      this.processDirective(event)
     }
   }
 
@@ -1480,7 +1513,7 @@ export class NovelRenderer {
    * `background_fade_ms:`/`character_fade_ms:` の値。物語本編の同名 per-game 設定
    * （`backgroundFadeMs`/CharacterLayer の `characterFadeMs`、他の全トランジションに影響する
    * 共有フィールド）とは独立に保持し、endStory() の消去フェードにだけ使う。未指定（null/
-   * undefined/非有限）は `INTERMISSION_FADE_MS_DEFAULT`（1500ms、通常既定 700ms より遅い
+   * undefined/非有限）は `INTERMISSION_FADE_MS_DEFAULT`（1400ms、通常既定 700ms より遅い
    * 「幕が降りる」用の値）にフォールバックし、[0, 5000] にクランプする
    * （setBackgroundFadeMs/setCharacterFadeMs と同じ clampFadeMs を共有）。
    */

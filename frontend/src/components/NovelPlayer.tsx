@@ -121,7 +121,7 @@ interface NovelPlayerProps {
   intermissionEvents?: Event[] | null
   /** intermission.md 自身の frontmatter `background_fade_ms:` の値 (#404)。物語本編の
    *  `backgroundFadeMs` とは独立（endStory() の消去フェードにだけ使う）。null/undefined は
-   *  intermission 用既定（1500ms）にフォールバック。 */
+   *  intermission 用既定（1400ms）にフォールバック。 */
   intermissionBackgroundFadeMs?: number | null
   /** intermission.md 自身の frontmatter `character_fade_ms:` の値 (#404)。物語本編の
    *  `characterFadeMs` とは独立（endStory() の立ち絵消去フェードにだけ使う）。 */

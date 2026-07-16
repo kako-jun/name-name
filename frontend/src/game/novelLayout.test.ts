@@ -1866,10 +1866,10 @@ describe('clampFadeMs (#407 / #404)', () => {
     expect(clampFadeMs(123.7, 700)).toBe(123)
   })
 
-  it('境界値: min/max を明示的に変えて呼ぶとそのレンジが反映される（intermission 既定 1500 の運用を再現）', () => {
-    expect(clampFadeMs(-10, 1500, 100, 2000)).toBe(100) // min クランプ
-    expect(clampFadeMs(2500, 1500, 100, 2000)).toBe(2000) // max クランプ
-    expect(clampFadeMs(null, 1500, 100, 2000)).toBe(1500) // フォールバックは min/max と独立
-    expect(clampFadeMs(900, 1500, 100, 2000)).toBe(900) // レンジ内はそのまま
+  it('境界値: min/max を明示的に変えて呼ぶとそのレンジが反映される（intermission 既定 1400 の運用を再現）', () => {
+    expect(clampFadeMs(-10, 1400, 100, 2000)).toBe(100) // min クランプ
+    expect(clampFadeMs(2500, 1400, 100, 2000)).toBe(2000) // max クランプ
+    expect(clampFadeMs(null, 1400, 100, 2000)).toBe(1400) // フォールバックは min/max と独立
+    expect(clampFadeMs(900, 1400, 100, 2000)).toBe(900) // レンジ内はそのまま
   })
 })
