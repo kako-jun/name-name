@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
-import { NovelRenderer } from './NovelRenderer'
+import { BACKGROUND_CROSSFADE_MS, NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
 import type { Event, EventScene, ChoiceOption } from '../types'
 
@@ -52,6 +52,18 @@ interface RendererInternals {
   waitingForChoice: boolean
   readSceneProgress: Set<string>
   choiceOverlay: { show: (...args: unknown[]) => void; hide: () => void }
+  bgEntries: Array<{
+    sprite: { alpha: number; removeFromParent: () => void; destroy: () => void }
+    mask: null
+    fadeAnimation: null | {
+      startMs: number
+      durationMs: number
+      fromAlpha: number
+      toAlpha: number
+      destroyOnComplete: boolean
+    }
+  }>
+  updateBackgroundFadeFrame(): void
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -275,6 +287,51 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
 
     r.seekTo(0) // history の先頭（storyEnded: false の時点）へ戻ろうとする
     expect(r.getSnapshot().storyEnded).toBe(true)
+  })
+
+  // ===== I2. 終劇の消去フェード中に setSkipMode(true) を呼んでも巻き戻らない (#404 セルフレビュー S1) =====
+  //
+  // endStory() の fadeOutBackgroundEntries()（次背景を追加しない全消去フェード）進行中に
+  // setSkipMode(true) が呼ばれると、finishBackgroundCrossfadeInstant() が「crossfade 中で
+  // 次背景が来る」前提のまま「最後の bgEntry = 次背景」の alpha を 1 にリセットしてしまい、
+  // 消去フェード中だった背景を誤って完全不透明へ巻き戻す事故があった（skip 中は tick が
+  // 止まるためそのまま固定される）。setSkipMode() 自体を storyEnded 中 no-op にするガード
+  // （goBack/seekTo と同じ M1 系イディオム）でこれを防いだことを検証する。
+
+  it('33: 終劇の消去フェード進行中に setSkipMode(true) を呼んでも背景 alpha は巻き戻らず、skipMode も変化しない（S1 回帰）', () => {
+    const r = makeRenderer(SCENES)
+    r.getTimeController().setMode('virtual')
+    // 実アセットロードを経由せず、フェード対象の背景 entry を直接注入する
+    // （backgroundCrossfade.test.ts と同じ割り切り）。
+    const bgEntry = {
+      sprite: { alpha: 1, removeFromParent: vi.fn(), destroy: vi.fn() },
+      mask: null,
+      fadeAnimation: null,
+    }
+    internals(r).bgEntries = [bgEntry]
+
+    r.setConfinedSceneIds(['entry'])
+    r.jumpToScene('out-scene') // 圏外 → endStory() → fadeOutBackgroundEntries(BACKGROUND_CROSSFADE_MS)
+
+    // 消去フェード（1→0）が仕込まれていることを確認する（クロスフェードの 0→1 と混同しないよう明示）。
+    expect(internals(r).bgEntries).toEqual([bgEntry])
+    expect(bgEntry.fadeAnimation).toMatchObject({ fromAlpha: 1, toAlpha: 0 })
+
+    // フェードを1/3ほど進める（alpha が 1 でも 0 でもない中間状態を作る）。
+    const partialMs = Math.round(BACKGROUND_CROSSFADE_MS / 3)
+    r.getTimeController().tick(partialMs)
+    internals(r).updateBackgroundFadeFrame()
+    const alphaBeforeSkip = bgEntry.sprite.alpha
+    expect(alphaBeforeSkip).toBeGreaterThan(0)
+    expect(alphaBeforeSkip).toBeLessThan(1)
+
+    r.setSkipMode(true)
+
+    // 修正前は finishBackgroundCrossfadeInstant() が alpha を 1 に巻き戻していた。
+    expect(bgEntry.sprite.alpha).toBe(alphaBeforeSkip)
+    expect(bgEntry.fadeAnimation).toMatchObject({ fromAlpha: 1, toAlpha: 0 })
+    // setSkipMode() 自体が storyEnded 中は no-op のため、skipMode も変化しない。
+    expect(r.isSkipMode()).toBe(false)
   })
 
   // ===== J. 終劇後の BGM 停止 (#386 レビュー M2) =====

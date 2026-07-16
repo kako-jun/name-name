@@ -692,7 +692,9 @@ function NovelPlayer({
           <button
             type="button"
             onClick={handleSkipToggle}
-            disabled={!docKey}
+            // #404 セルフレビュー S1: 終劇後は setSkipMode() 自体が renderer 側で no-op になるが、
+            // ボタンも押せない見た目に揃える（根本ガードの上乗せ UX。防御の主体は renderer 側）。
+            disabled={!docKey || storyEnded}
             aria-label={skipMode ? 'スキップモードをオフにする' : 'スキップモードをオンにする'}
             title="スキップ（既読のみ）"
             style={{ right: slotRight(slotOf('skip')) }}

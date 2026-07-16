@@ -1036,8 +1036,15 @@ export class NovelRenderer {
    * - Dialog/Narration（テキスト）→ `render()` のタイプライター/ボイス/既読マーク/オート進行は
    *   一度きりのタブローには不要なため、DialogBox の `setDialog`/`setNovelDialogProgressive` +
    *   `skipTypewriter()` の組み合わせ（advanceOrSkipTypewriter と同じ2手）で全文を直接・即時表示する。
-   * - Choice/Wait/WaitDisplayComplete は resolvedEvents/eventIndex を前提にしており、単発タブローでは
-   *   進行させる相手がいない（意味を持たない）ため無視する（dev のみ warn）。
+   * - Choice/Wait/WaitDisplayComplete/Flag は resolvedEvents/eventIndex を前提にする（Choice/Wait）か
+   *   `NovelGameState` を恒久的に書き換える（Flag → `gameState.setFlag` + `reResolveEvents`）かのいずれかで、
+   *   単発タブローには意味を持たない・持たせてはいけないため無視する（dev のみ warn）。特に Flag は
+   *   docstring 冒頭の「GameState には一切触れない」を破るため、他の演出ディレクティブと違い明示除外が必須。
+   * - Bgm/Se/Video 等はここでは意図的に素通しして `processDirective` に委譲する（エンディング演出の
+   *   柔軟性を優先）。無視/素通しの基準は「GameState を書き換えるか」であり、Bgm/Se/Video は
+   *   `currentBgmPath`/`AudioManager`/`VideoLayer` 止まりで GameState 自体は汚さないため対象外。
+   *   `endStory()` 冒頭で本編 BGM を止めているのは「以後本編の Bgm イベントは来ない」ためであり、
+   *   intermission.md 経由で新たに Bgm が鳴ること自体は妨げない（意図した上書き）。
    */
   private renderIntermissionTableau(events: Event[]): void {
     const previousSkipMode = this.skipMode
@@ -1064,11 +1071,13 @@ export class NovelRenderer {
         }
         if (
           event === 'WaitDisplayComplete' ||
-          (typeof event === 'object' && event !== null && ('Choice' in event || 'Wait' in event))
+          (typeof event === 'object' &&
+            event !== null &&
+            ('Choice' in event || 'Wait' in event || 'Flag' in event))
         ) {
           if (import.meta.env.DEV) {
             console.warn(
-              '[name-name] intermission.md: Choice/Wait/[待機: 表示完了] は静止画タブローでは無視されます'
+              '[name-name] intermission.md: Choice/Wait/[待機: 表示完了]/Flag は静止画タブローでは無視されます'
             )
           }
           continue
@@ -1742,8 +1751,19 @@ export class NovelRenderer {
   /**
    * スキップモードの ON/OFF を切り替える (#140)。
    * OFF にした場合はスキップタイマーをキャンセルする。
+   *
+   * 終劇後 (#386) はガードして no-op にする (#404 セルフレビュー S1)。`endStory()` の
+   * `fadeOutBackgroundEntries()`（次背景を追加しない全消去フェード）進行中に呼ばれると、
+   * `finishBackgroundCrossfadeInstant()` が「crossfade 中で次背景が来る」前提のまま
+   * 「最後の bgEntry = 次背景」の alpha を 1 にリセットしてしまい、消去フェード中だった
+   * 背景を誤って完全不透明へ巻き戻す事故があった（tick が止まる skip 中はそのまま固定）。
+   * `advance()`/`quickSave()`/`openSaveMenu()` と同じ「storyEnded 中は根本メソッド自体で
+   * no-op」の設計イディオム（ADR0002）をここにも適用する。ボタン側の disabled 制御だけでは
+   * Skip(S) ボタン以外から setSkipMode を直接呼ぶ経路（`NovelPlayer` の「つづきから」初期化等）
+   * を防げないため必須。
    */
   setSkipMode(on: boolean): void {
+    if (this.storyEnded) return
     if (this.skipMode === on) return
     this.skipMode = on
     if (on) {
