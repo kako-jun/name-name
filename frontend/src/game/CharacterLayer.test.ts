@@ -4638,3 +4638,370 @@ describe('CharacterLayer durationMsOverride (#404)', () => {
     expect(fade.durationMs).toBe(1200)
   })
 })
+
+// =====================================================================================
+// #429: showLabel/showImage の同 id 再表示で、退場フェード予約中（destroyOnComplete）の要素を
+//   誤って消し去っていた不具合の再現・回帰防止。
+//   remove()（非 instant）は destroy を即座に行わず startFade で { toAlpha: 0, destroyOnComplete: true }
+//   を「予約」するだけで実破棄は ticker 完了時。その「予約済みだが未破棄」の窓に同 id で再
+//   showLabel/showImage すると、旧実装はテキスト/位置だけ更新して退場フェードを止めず、ticker が
+//   予約どおり要素を破棄してしまっていた（再表示したはずのキャラが消える）。
+//   show() の「退場フェード中の再 show」分岐 (#177) と同じパターンを showLabel/showImage にも
+//   適用したことの固定。デシジョンテーブルは Issue #429 参照。
+// =====================================================================================
+describe('CharacterLayer showLabel/showImage 退場フェード予約中の再表示 (#429)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+    vi.restoreAllMocks()
+  })
+
+  interface Show429FadeAnimation {
+    fromAlpha: number
+    toAlpha: number
+    destroyOnComplete: boolean
+  }
+  interface Show429StateLike {
+    sprite: { x: number; y: number; alpha: number }
+    label?: { text: string; alpha: number; style: { fontSize: number; fill: number } }
+    fadeAnimation: Show429FadeAnimation | null
+  }
+  function show429Chars(layer: CharacterLayer): { characters: Map<string, Show429StateLike> } {
+    return layer as unknown as { characters: Map<string, Show429StateLike> }
+  }
+
+  // 1: Issue 再現手順そのもの。予約中(非 instant remove 後)に非 instant 再 showLabel すると、
+  //    fadeAnimation が {toAlpha:1, destroyOnComplete:false} に切り替わり、要素が characters から
+  //    消えないまま残る。
+  it('showLabel: 退場フェード予約中の再showは fadeAnimation を再フェードインに切り替え、要素を消さない（Issue 再現）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'kako-jun', fontFamily: 'sans-serif', instant: true })
+    layer.remove('name') // 非 instant remove → destroyOnComplete=true の退場フェードを予約
+    expect(show429Chars(layer).characters.get('name')!.fadeAnimation!.destroyOnComplete).toBe(true)
+
+    layer.showLabel({ id: 'name', text: 'kako-jun', fontFamily: 'sans-serif' }) // 非 instant 再 show
+
+    expect(show429Chars(layer).characters.has('name')).toBe(true) // 復活せず消える旧バグの回帰確認
+    const st = show429Chars(layer).characters.get('name')!
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.toAlpha).toBe(1)
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(false)
+  })
+
+  // 2: showImage 版の同再現。sprite.alpha 基準で同じ切り替えを確認し、label が無いことも確認する。
+  it('showImage: 退場フェード予約中の再showは fadeAnimation を再フェードインに切り替え、要素を消さない（label 無し, Issue 再現）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true })
+    await flushPromises()
+    layer.remove('avatar') // 非 instant remove → 退場フェードを予約
+    const before = show429Chars(layer).characters.get('avatar')!
+    expect(before.fadeAnimation!.destroyOnComplete).toBe(true)
+    expect(before.label).toBeUndefined()
+
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' }) // 非 instant 再 show
+
+    expect(show429Chars(layer).characters.has('avatar')).toBe(true)
+    const st = show429Chars(layer).characters.get('avatar')!
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.toAlpha).toBe(1)
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(false)
+    expect(st.label).toBeUndefined()
+  })
+
+  // 3: 境界=0。setCharacterFadeMs(0) 後、予約中要素へ非 instant 再 show → instant-path
+  //    （sprite.alpha=1・fadeAnimation=null）を通る。fadeMs<=0 は instant と同格に扱われる。
+  it('境界値 characterFadeMs=0: 予約中要素への非instant再showLabelはinstant-path（sprite.alpha=1・fadeAnimation=null）を通る', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif', instant: true })
+    layer.remove('name') // 既定 characterFadeMs(700) で退場フェードを予約
+    layer.setCharacterFadeMs(0) // 再show時点の fadeMs を境界値 0 に変更
+
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif' }) // instant 未指定
+
+    const st = show429Chars(layer).characters.get('name')!
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.fadeAnimation).toBeNull()
+  })
+
+  // 4: 境界+1=1。setCharacterFadeMs(1) 後、同様の再show → fade-path
+  //    （fadeAnimation!==null・destroyOnComplete:false）を通る。
+  it('境界値+1 characterFadeMs=1: 予約中要素への非instant再showLabelはfade-path（fadeAnimation!==null・destroyOnComplete:false）を通る', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif', instant: true })
+    layer.remove('name')
+    layer.setCharacterFadeMs(1)
+
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif' })
+
+    const st = show429Chars(layer).characters.get('name')!
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(false)
+    expect(st.fadeAnimation!.toAlpha).toBe(1)
+  })
+
+  // 5: 同値分割/instant優先。characterFadeMs>0（既定700）でも instant:true を渡した再show は
+  //    常に instant-path を通る。
+  it('同値分割: characterFadeMs>0(既定700)でも instant:true を渡した再showImageは常にinstant-pathを通る', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true })
+    await flushPromises()
+    layer.remove('avatar') // characterFadeMs 既定700で退場フェードを予約
+
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true })
+
+    const st = show429Chars(layer).characters.get('avatar')!
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.fadeAnimation).toBeNull()
+  })
+
+  // 6a: 同値分割/非発火1(showLabel)。予約なし（fadeAnimation===null）の通常再showは新分岐が
+  //    発火せず、text/position等が従来どおり更新されるのみ（非回帰）。
+  it('showLabel: 予約なし(fadeAnimation===null)の通常再showは新分岐が発火せず、text/positionが従来どおり更新されるだけ', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({
+      id: 'name',
+      text: 'old',
+      position: '上',
+      fontFamily: 'sans-serif',
+      instant: true,
+    })
+    expect(show429Chars(layer).characters.get('name')!.fadeAnimation).toBeNull() // 予約なし前提
+
+    layer.showLabel({ id: 'name', text: 'new', position: '下', fontFamily: 'sans-serif' })
+
+    const st = show429Chars(layer).characters.get('name')!
+    expect(st.fadeAnimation).toBeNull() // 新分岐は発火しない
+    expect(st.label!.text).toBe('new')
+    expect(st.sprite.y).toBeCloseTo(450 * 0.84, 5) // 下 の position
+  })
+
+  // 6b: 同値分割/非発火1(showImage)。
+  it('showImage: 予約なし(fadeAnimation===null)の通常再showは新分岐が発火せず、位置が従来どおり更新されるだけ', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'avatar',
+      path: 'a.png',
+      position: '上',
+      assetBaseUrl: '/assets',
+      instant: true,
+    })
+    await flushPromises()
+    expect(show429Chars(layer).characters.get('avatar')!.fadeAnimation).toBeNull() // 予約なし前提
+
+    layer.showImage({ id: 'avatar', path: 'a.png', position: '下', assetBaseUrl: '/assets' })
+
+    const st = show429Chars(layer).characters.get('avatar')!
+    expect(st.fadeAnimation).toBeNull()
+    expect(st.sprite.y).toBeCloseTo(450 * 0.84, 5)
+  })
+
+  // 7a: 同値分割/非発火2(showLabel)。入場フェード進行中（destroyOnComplete:false）の再showは
+  //    新分岐が発火しない（オプショナルチェイン誤爆なしの確認）。
+  it('showLabel: 入場フェード進行中(destroyOnComplete:false)への再showは新分岐が発火しない（オプショナルチェイン誤爆なし）', async () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'old', fontFamily: 'sans-serif' }) // 非 instant 新規表示
+    await flushPromises() // ensureFontLoaded 完了 → 入場フェード開始 (destroyOnComplete:false)
+    const before = show429Chars(layer).characters.get('name')!
+    expect(before.fadeAnimation).not.toBeNull()
+    expect(before.fadeAnimation!.destroyOnComplete).toBe(false)
+    const fadeRef = before.fadeAnimation
+
+    layer.showLabel({ id: 'name', text: 'new', fontFamily: 'sans-serif' }) // 非 instant 再 show
+
+    const after = show429Chars(layer).characters.get('name')!
+    // 新分岐が発火していなければ fadeAnimation オブジェクトは差し替わらず継続する。
+    expect(after.fadeAnimation).toBe(fadeRef)
+    expect(after.fadeAnimation!.destroyOnComplete).toBe(false)
+    expect(after.label!.text).toBe('new') // text 更新は従来どおり効く
+  })
+
+  // 7b: 同値分割/非発火2(showImage)。
+  it('showImage: 入場フェード進行中(destroyOnComplete:false)への再showは新分岐が発火しない（オプショナルチェイン誤爆なし）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' }) // 非 instant 新規表示
+    await flushPromises() // Assets.load 完了 → 入場フェード開始
+    const before = show429Chars(layer).characters.get('avatar')!
+    expect(before.fadeAnimation).not.toBeNull()
+    expect(before.fadeAnimation!.destroyOnComplete).toBe(false)
+    const fadeRef = before.fadeAnimation
+
+    layer.showImage({ id: 'avatar', path: 'a.png', position: '下', assetBaseUrl: '/assets' })
+
+    const after = show429Chars(layer).characters.get('avatar')!
+    expect(after.fadeAnimation).toBe(fadeRef)
+    expect(after.fadeAnimation!.destroyOnComplete).toBe(false)
+    expect(after.sprite.y).toBeCloseTo(450 * 0.84, 5) // position 更新は従来どおり効く
+  })
+
+  // 8: showLabel固有。instant-path 経路では sprite.alpha だけでなく existing.label.alpha も 1 に
+  //    同期される（showImage には同等の行が無い差分を明示的に固定する）。
+  it('showLabel固有: instant:true指定のinstant-pathで sprite.alpha だけでなく label.alpha も 1 に同期される（showImageに対応行が無い非対称の固定）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif', instant: true })
+    layer.remove('name') // 既定 characterFadeMs(700) で退場フェードを予約
+
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif', instant: true }) // instant 明示
+
+    const st = show429Chars(layer).characters.get('name')!
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.label!.alpha).toBe(1)
+    expect(st.fadeAnimation).toBeNull()
+  })
+
+  // 9a: fromAlpha の正確性(showLabel)。退場フェードを ticker で部分的に進行させた状態
+  //    （sprite.alpha が中間値）で再showすると、新しい fadeAnimation.fromAlpha が 1 固定ではなく
+  //    「その時点の sprite.alpha」になる。
+  it('showLabel: 退場フェード進行中(sprite.alphaが中間値)の再showは、新fadeAnimation.fromAlphaが1固定でなく現在のsprite.alphaになる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.setCharacterFadeMs(1000)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif', instant: true })
+    layer.remove('name') // fromAlpha=1→toAlpha=0, durationMs=1000 の退場フェードを予約
+
+    const internal = layer as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 400 // フェードを部分的に進行させる（destroyOnComplete のまま tf<1 を維持）
+    internal.animTicker?.update()
+
+    const mid = show429Chars(layer).characters.get('name')!
+    const midAlpha = mid.sprite.alpha
+    expect(midAlpha).toBeGreaterThan(0)
+    expect(midAlpha).toBeLessThan(1) // 中間値であることの前提確認（フェードが実際に進行した）
+
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif' }) // 非 instant 再show → fade-path
+
+    const after = show429Chars(layer).characters.get('name')!
+    expect(after.fadeAnimation).not.toBeNull()
+    expect(after.fadeAnimation!.fromAlpha).toBe(midAlpha) // 1 固定ではなく現在の alpha
+  })
+
+  // 9b: fromAlpha の正確性(showImage)。
+  it('showImage: 退場フェード進行中(sprite.alphaが中間値)の再showは、新fadeAnimation.fromAlphaが1固定でなく現在のsprite.alphaになる', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.setCharacterFadeMs(1000)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true })
+    await flushPromises()
+    layer.remove('avatar')
+
+    const internal = layer as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 400
+    internal.animTicker?.update()
+
+    const mid = show429Chars(layer).characters.get('avatar')!
+    const midAlpha = mid.sprite.alpha
+    expect(midAlpha).toBeGreaterThan(0)
+    expect(midAlpha).toBeLessThan(1)
+
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+
+    const after = show429Chars(layer).characters.get('avatar')!
+    expect(after.fadeAnimation).not.toBeNull()
+    expect(after.fadeAnimation!.fromAlpha).toBe(midAlpha)
+  })
+
+  // 10: 機能合成/showLabel。予約中要素への再showLabelで、フェード切替と同じ呼び出し内で
+  //    text/color/size/position が新値に更新される。
+  it('機能合成/showLabel: 予約中要素への再showLabelは、フェード切替と同じ呼び出し内でtext/color/size/positionが新値に更新される', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({
+      id: 'name',
+      text: 'old',
+      color: '#111111',
+      position: '上',
+      size: 16,
+      fontFamily: 'sans-serif',
+      instant: true,
+    })
+    layer.remove('name') // 退場フェードを予約
+
+    layer.showLabel({
+      id: 'name',
+      text: 'new',
+      color: '#abcdef',
+      position: '下',
+      size: 40,
+      fontFamily: 'sans-serif',
+    })
+
+    const st = show429Chars(layer).characters.get('name')!
+    // フェード切替（fade-path）も同時に効く。
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(false)
+    // text/color/size/position も同じ呼び出しで新値に更新される。
+    expect(st.label!.text).toBe('new')
+    expect(st.label!.style.fill).toBe(0xabcdef)
+    expect(st.label!.style.fontSize).toBe(40)
+    expect(st.sprite.y).toBeCloseTo(450 * 0.84, 5)
+  })
+
+  // 11: 機能合成/showImage。予約中要素への再showImageで、フェード切替と同じ呼び出し内で
+  //    x/y 位置が新値に更新される。
+  it('機能合成/showImage: 予約中要素への再showImageは、フェード切替と同じ呼び出し内でx/y位置が新値に更新される', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'avatar',
+      path: 'a.png',
+      position: '上',
+      assetBaseUrl: '/assets',
+      instant: true,
+    })
+    await flushPromises()
+    layer.remove('avatar')
+
+    layer.showImage({ id: 'avatar', path: 'a.png', position: '下', assetBaseUrl: '/assets' })
+
+    const st = show429Chars(layer).characters.get('avatar')!
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation!.destroyOnComplete).toBe(false)
+    expect(st.sprite.x).toBe(800 * 0.5)
+    expect(st.sprite.y).toBeCloseTo(450 * 0.84, 5)
+  })
+
+  // 12: 二重送信/再実行。予約中要素へinstant再show直後にもう一度再show（2回目）を同期的に呼ぶと、
+  //    2回目は fadeAnimation===null のため新分岐が発火せず、通常のtext/position更新のみが起きる。
+  it('二重送信: 予約中要素へinstant再show直後の2回目再showは、fadeAnimation===nullのため新分岐が発火せずtext更新のみが起きる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'first', fontFamily: 'sans-serif', instant: true })
+    layer.remove('name') // 退場フェードを予約
+
+    // 1回目の再show(instant) → instant-path で fadeAnimation=null に。
+    layer.showLabel({ id: 'name', text: 'second', fontFamily: 'sans-serif', instant: true })
+    expect(show429Chars(layer).characters.get('name')!.fadeAnimation).toBeNull()
+
+    // 2回目(非instant) → 予約が既に無いので新分岐は発火しない。
+    layer.showLabel({ id: 'name', text: 'third', fontFamily: 'sans-serif' })
+
+    const st = show429Chars(layer).characters.get('name')!
+    expect(st.fadeAnimation).toBeNull() // 新分岐が誤発火していれば fade-path で非nullになるはず
+    expect(st.label!.text).toBe('third') // 通常の text 更新だけは効く
+  })
+
+  // 13: null/空文字/優先順位(showLabelのみ)。予約中の同idへ text:'' の showLabel を呼ぶと、
+  //    新しい destroyOnComplete キャンセル分岐より前に空文字ガード（remove(instant:true)）が
+  //    優先され、要素は復活せず即座に消える。
+  it('showLabel: 予約中の同idへtext:\'\'を渡すと、destroyOnCompleteキャンセル分岐より空文字ガードが優先され即座に消える', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showLabel({ id: 'name', text: 'hi', fontFamily: 'sans-serif', instant: true })
+    layer.remove('name') // 退場フェードを予約(destroyOnComplete=true)
+    expect(show429Chars(layer).characters.has('name')).toBe(true)
+
+    layer.showLabel({ id: 'name', text: '', fontFamily: 'sans-serif' }) // 空文字
+
+    // 空文字ガードが優先され、要素は復活せず即座に消える（新分岐が先に走ってフェードイン化しない）。
+    expect(show429Chars(layer).characters.has('name')).toBe(false)
+  })
+})
