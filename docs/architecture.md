@@ -155,7 +155,8 @@ HTML リンクで行う設計）。`PlayerScreen` の `findConfinedSceneIds(targ
 が対象 sceneId が属する script ファイル自身の sceneId 一覧を算出し（entry doc/hub 自身は候補から
 除外）、`NovelPlayer` → `NovelRenderer.setConfinedSceneIds` に渡す。集合外への遷移を検知すると
 通常のシーン遷移をせず `endStory()` を呼び、`NovelGameState.storyEnded` を true にする（背景・
-立ち絵はフェードアウトし、DOM 側は控えめな "to be continued..." を表示する）。判定箇所は 2 つ:
+立ち絵はフェードアウトし、DOM 側は中央に大きく "to be continued..." を表示し、`assetBaseUrl` の
+`title.png` があれば左上に埋め込み元プロジェクトのロゴを重ねる。#404）。判定箇所は 2 つ:
 **選んだ jump 先**が圏外なら `jumpToScene`（choice 確定後）が終劇する。さらに **全 option の
 jump 先が圏外の `[選択]` に到達した場合**は、選択肢を描画せず `processDirective` の Choice 分岐で
 先回りして終劇する（#398。全 option 圏外の choice はクリックするまで `jumpToScene` に届かず、
