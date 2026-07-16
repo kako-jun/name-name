@@ -219,10 +219,11 @@ const BACKGROUND_FADE_MS_MAX = 5_000
  * intermission.md 専用シーン (#404) の背景/立ち絵消去フェード既定値（ms）。
  * `background_fade_ms`/`character_fade_ms` フロントマターが intermission.md 自身に無いときの
  * フォールバック。通常の物語中トランジション既定 `BACKGROUND_CROSSFADE_MS`（700ms）より遅めにして
- * 「幕がゆっくり降りる」演出にする（設計確定コメント #404 参照）。クランプ範囲は
+ * 「幕がゆっくり降りる」演出にする（設計確定コメント #404 参照）。値はフェード時間の推奨3値
+ * （基本700ms・短め300ms・長め1400ms＝700の2倍。#424）のうち「長め」を採用。クランプ範囲は
  * BACKGROUND_FADE_MS_MIN/MAX と同じ [0, 5000] を共有する（clampFadeMs 経由）。
  */
-const INTERMISSION_FADE_MS_DEFAULT = 1_500
+const INTERMISSION_FADE_MS_DEFAULT = 1_400
 
 interface BackgroundEntry {
   sprite: Sprite
@@ -1497,7 +1498,7 @@ export class NovelRenderer {
    * `background_fade_ms:`/`character_fade_ms:` の値。物語本編の同名 per-game 設定
    * （`backgroundFadeMs`/CharacterLayer の `characterFadeMs`、他の全トランジションに影響する
    * 共有フィールド）とは独立に保持し、endStory() の消去フェードにだけ使う。未指定（null/
-   * undefined/非有限）は `INTERMISSION_FADE_MS_DEFAULT`（1500ms、通常既定 700ms より遅い
+   * undefined/非有限）は `INTERMISSION_FADE_MS_DEFAULT`（1400ms、通常既定 700ms より遅い
    * 「幕が降りる」用の値）にフォールバックし、[0, 5000] にクランプする
    * （setBackgroundFadeMs/setCharacterFadeMs と同じ clampFadeMs を共有）。
    */
