@@ -866,6 +866,7 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
   afterEach(() => {
     __setDocumentForTest(typeof document === 'undefined' ? null : document)
     resetFontLoaderCache()
+    vi.restoreAllMocks()
   })
 
   interface CharsInternals {
@@ -883,7 +884,7 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
     return layer as unknown as CharsInternals
   }
 
-  it('showLabel は id で登録し、色・サイズ・2D 位置を反映してフェードインする', () => {
+  it('showLabel は id で登録し、色・サイズ・2D 位置を反映してフェードインする', async () => {
     const layer = new CharacterLayer(800, 450)
     layer.showLabel({
       id: 'division',
@@ -902,15 +903,20 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
     expect(st!.label!.text).toBe('Planning Div. 42')
     expect(st!.label!.style.fontSize).toBe(16)
     expect(st!.label!.style.fill).toBe(0x7a9abf)
-    // 登場フェードイン（alpha 0 → 1）。
+    // フォント読み込み完了前: alpha 0 で待機、フェードはまだ開始していない (#427)。
     expect(st!.sprite.alpha).toBe(0)
+    expect(st!.fadeAnimation).toBeNull()
+    // フォント読み込み完了後（ensureFontLoaded().then()）に登場フェードイン（alpha 0 → 1）が始まる。
+    await flushPromises()
     expect(st!.fadeAnimation).not.toBeNull()
     expect(st!.fadeAnimation!.toAlpha).toBe(1)
   })
 
-  it('showLabel フェードイン完了で label.alpha が toAlpha(=1) に揃う（sprite と同期）', () => {
+  it('showLabel フェードイン完了で label.alpha が toAlpha(=1) に揃う（sprite と同期）', async () => {
     const layer = new CharacterLayer(800, 450)
     layer.showLabel({ id: 'name', text: 'kako-jun', fontFamily: 'sans-serif' })
+    // フォント読み込み完了（ensureFontLoaded().then()）を待ってから fadeAnimation が張られる (#427)。
+    await flushPromises()
     // 内部 ticker を完了まで決定論的に駆動する（elapsedMs を fade 期間より先へ進めて 1 フレーム更新）。
     const internal = layer as unknown as {
       animTicker: { update: () => void } | null
@@ -950,14 +956,20 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
     expect(chars(layer).characters.has('x')).toBe(false)
   })
 
-  it('showImage は id で登録し 2D 位置を反映、フェードインする', () => {
+  it('showImage は id で登録し 2D 位置を反映、フェードインする', async () => {
+    // Assets.load 完了後にフェードが始まる (#427) ため、実 load（jsdom で解決しない）ではなく成功をモックする。
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
     const layer = new CharacterLayer(800, 450)
     layer.showImage({ id: 'avatar', path: 'a.png', position: '上', assetBaseUrl: '/assets' })
     const st = chars(layer).characters.get('avatar')
     expect(st).toBeDefined()
     expect(st!.sprite.x).toBe(800 * 0.5)
     expect(st!.sprite.y).toBeCloseTo(450 * 0.16, 5)
+    // load 完了前: alpha 0 で待機、フェードはまだ開始していない (#427)。
     expect(st!.sprite.alpha).toBe(0)
+    expect(st!.fadeAnimation).toBeNull()
+    // load 完了後（Assets.load().then()）に登場フェードイン（alpha 0 → 1）が始まる。
+    await flushPromises()
     expect(st!.fadeAnimation!.toAlpha).toBe(1)
   })
 
@@ -1603,8 +1615,8 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     expect(loadSpy).toHaveBeenCalledTimes(1)
   })
 
-  // 19: Assets.load reject → console.warn 1 回・例外を投げない・fade state は残る（例外握り潰し禁止）。
-  it('Assets.load 失敗時は console.warn を 1 回出し、例外を投げず fade state を残す', async () => {
+  // 19: Assets.load reject → console.warn 1 回・例外を投げない・fadeAnimation は張られない（#427: load 完了後にしか張らない設計 = 失敗時は残留しない）。
+  it('Assets.load 失敗時は console.warn を 1 回出し、例外を投げず fadeAnimation は残留しない', async () => {
     vi.spyOn(Assets, 'load').mockRejectedValue(new Error('load failed'))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const layer = new CharacterLayer(800, 450)
@@ -1613,9 +1625,10 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     await flushPromises()
     // warn は 1 回だけ。
     expect(warnSpy).toHaveBeenCalledTimes(1)
-    // fade state（登場フェードイン）は残る（load 失敗で消えない）。
+    // fadeAnimation は Assets.load().then() 内でのみ設定するため、reject 経路では
+    // そもそも設定されない（#427: load 完了前にフェードを始めない設計の裏返し）。
     const st = imageChars(layer).characters.get('x')!
-    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.fadeAnimation).toBeNull()
   })
 
   // 20: 本丸。画像は `[文字演出: id]` の対象になれない（label 無し → 早期 return、reject しない）。

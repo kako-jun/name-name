@@ -1402,12 +1402,6 @@ export class CharacterLayer extends Container {
     label.y = y
     label.alpha = instant ? 1 : 0
     this.addChild(label)
-    void ensureFontLoaded(opts.fontFamily)
-      .then(() => {
-        if (label.destroyed) return
-        label.style = new TextStyle({ fontFamily: opts.fontFamily, fontSize, fill })
-      })
-      .catch(() => {})
 
     const state: CharacterState = {
       sprite,
@@ -1419,15 +1413,11 @@ export class CharacterLayer extends Container {
       fit: false,
       animation: null,
       poseNudge: null,
-      fadeAnimation: instant
-        ? null
-        : {
-            startMs: this.elapsedMs,
-            durationMs: TITLE_CARD_FADE_MS,
-            fromAlpha: 0,
-            toAlpha: 1,
-            destroyOnComplete: false,
-          },
+      // フェード開始は ensureFontLoaded() 完了後（下記 .then() 内）に遅延する (#427)。
+      // 即座に張ると、font load がフェード時間より遅いケースで alpha が 1 まで進み切ってから
+      // フォント確定後の label が現れ、フェードが見えず突然出てしまう（#17 と同じバグクラス）。
+      // instant 時はそもそも null のまま変更しない。
+      fadeAnimation: null,
       textEffect: null,
       underline: null,
       // 文字色をグリフ演出・カーソルに波及させる（Title と同じ役割）。
@@ -1440,7 +1430,26 @@ export class CharacterLayer extends Container {
       anchorX,
     }
     this.characters.set(NAME, state)
-    if (state.fadeAnimation) this.ensureTicker()
+
+    void ensureFontLoaded(opts.fontFamily)
+      .then(() => {
+        if (label.destroyed) return
+        label.style = new TextStyle({ fontFamily: opts.fontFamily, fontSize, fill })
+        // フェード開始はフォント確定後 (#427)。instant 時は label.alpha が既に 1 のままなので張らない。
+        // id 再利用で別 state に置き換わるケースは showLabel には実質無いため、show() の
+        // textureReady ゲートのような state 一致チェックまでは不要と判断し、label.destroyed のみで足りるとした。
+        if (!instant) {
+          state.fadeAnimation = {
+            startMs: this.elapsedMs,
+            durationMs: TITLE_CARD_FADE_MS,
+            fromAlpha: 0,
+            toAlpha: 1,
+            destroyOnComplete: false,
+          }
+          this.ensureTicker()
+        }
+      })
+      .catch(() => {})
   }
 
   /**
@@ -1499,21 +1508,16 @@ export class CharacterLayer extends Container {
       fit: false,
       animation: null,
       poseNudge: null,
-      fadeAnimation: instant
-        ? null
-        : {
-            startMs: this.elapsedMs,
-            durationMs: TITLE_CARD_FADE_MS,
-            fromAlpha: 0,
-            toAlpha: 1,
-            destroyOnComplete: false,
-          },
+      // フェード開始は Assets.load() 完了後（下記 .then() 内）に遅延する (#427)。
+      // ここで即座に fadeAnimation を張ると、load がフェード時間より遅い初回（コールドキャッシュ）で
+      // texture が現れる前に alpha が 1 まで進み切り、フェードが見えず突然出てしまう
+      // （#17 の立ち絵 show() と同じバグクラス）。instant 時はそもそも null のまま変更しない。
+      fadeAnimation: null,
       textEffect: null,
       underline: null,
       renderOnly: true,
     }
     this.characters.set(NAME, state)
-    if (state.fadeAnimation) this.ensureTicker()
 
     // 任意ファイル名パスの url 解決は背景画像と同じ resolveAssetUrl 経由（#274）。
     const url = resolveAssetUrl(opts.assetBaseUrl, 'images', opts.path)
@@ -1547,6 +1551,19 @@ export class CharacterLayer extends Container {
           sprite.mask = mask
           const st = this.characters.get(NAME)
           if (st) st.maskGraphics = mask
+        }
+        // フェード開始は texture 反映後 (#427)。instant 時は sprite.alpha が既に 1 のままなので張らない。
+        // id 再利用で別 state に置き換わるケースは showImage には実質無いため、show() の
+        // textureReady ゲートのような state 一致チェックまでは不要と判断し、sprite.destroyed のみで足りるとした。
+        if (!instant) {
+          state.fadeAnimation = {
+            startMs: this.elapsedMs,
+            durationMs: TITLE_CARD_FADE_MS,
+            fromAlpha: 0,
+            toAlpha: 1,
+            destroyOnComplete: false,
+          }
+          this.ensureTicker()
         }
       })
       .catch((err) => {
