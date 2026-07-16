@@ -1384,6 +1384,22 @@ export class CharacterLayer extends Container {
       return
     }
     if (existing) {
+      // 退場フェード予約中（destroyOnComplete）の同 id 再表示: フェードアウトを取り消して
+      // 再フェードイン（または instant なら即時表示）に切り替える (#429)。show() の「退場フェード中の
+      // 再 show」分岐 (#177) と同じパターン。startEntranceFade は「新規登場」専用ヘルパー
+      // （fromAlpha=0 固定・TITLE_CARD_FADE_MS 固定）でこの用途（現在 alpha から 1 へ戻す）には
+      // 使えないため、ここでは show() と同じく startFade を直接呼ぶ。
+      if (existing.fadeAnimation?.destroyOnComplete) {
+        if (instant || this.characterFadeMs <= 0) {
+          existing.sprite.alpha = 1
+          // label はここが唯一の可視要素（sprite は不可視のアンカー）。ticker の同期は
+          // fadeAnimation 進行中だけなので、instant 経路では手動で揃える必要がある。
+          if (existing.label) existing.label.alpha = 1
+          existing.fadeAnimation = null
+        } else {
+          this.startFade(existing, existing.sprite.alpha, 1, false)
+        }
+      }
       // 差し替え時は進行中のグリフ演出・下線を破棄（テキスト/幅が変わるため不整合になる）。
       this.clearTextEffect(existing)
       this.clearUnderline(existing)
@@ -1502,6 +1518,19 @@ export class CharacterLayer extends Container {
 
     const existing = this.characters.get(NAME)
     if (existing) {
+      // 退場フェード予約中（destroyOnComplete）の同 id 再表示: フェードアウトを取り消して
+      // 再フェードイン（または instant なら即時表示）に切り替える (#429)。show() の「退場フェード中の
+      // 再 show」分岐 (#177) と同じパターン。startEntranceFade は「新規登場」専用ヘルパー
+      // （fromAlpha=0 固定・TITLE_CARD_FADE_MS 固定）でこの用途（現在 alpha から 1 へ戻す）には
+      // 使えないため、ここでは show() と同じく startFade を直接呼ぶ。
+      if (existing.fadeAnimation?.destroyOnComplete) {
+        if (instant || this.characterFadeMs <= 0) {
+          existing.sprite.alpha = 1
+          existing.fadeAnimation = null
+        } else {
+          this.startFade(existing, existing.sprite.alpha, 1, false)
+        }
+      }
       // 同 id 再表示は位置のみ更新する（テクスチャ差し替えは想定しないため最小挙動）。
       existing.sprite.x = x
       existing.sprite.y = y
