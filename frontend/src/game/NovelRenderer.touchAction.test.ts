@@ -18,10 +18,10 @@
  *   init() 経由の配線であり、jsdom では検証不能なため対象外（実機 golden path に委ねる）。
  */
 import { describe, it, expect } from 'vitest'
-import { NovelRenderer } from './NovelRenderer'
+import { NovelRenderer, type CanvasTouchAction } from './NovelRenderer'
 
 interface TouchActionInternals {
-  setCanvasTouchAction(value: string): void
+  setCanvasTouchAction(value: CanvasTouchAction): void
 }
 
 function internals(r: NovelRenderer): TouchActionInternals {

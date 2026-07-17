@@ -117,7 +117,7 @@ const PRELOAD_MAX_TEXT_EVENTS = Infinity
  */
 
 /** canvas.style.touchAction に実際に設定する値 (#434)。novel 型はこの2値しか使わない。 */
-type CanvasTouchAction = 'none' | 'pan-y'
+export type CanvasTouchAction = 'none' | 'pan-y'
 
 const NOVEL_CANVAS_TOUCH_ACTION: CanvasTouchAction = 'pan-y'
 
