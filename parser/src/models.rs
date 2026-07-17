@@ -990,6 +990,11 @@ pub struct Document {
     /// `"true"` / `"false"` のみ受け、それ以外（空・非真偽値）は None（既定 false）にフォールバック。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_nudge: Option<bool>,
+    /// オート再生を最初からONにするか (#436)。frontmatter `auto_play:` から流す。
+    /// 未指定なら None（runtime で false 扱い＝手送り既定）。
+    /// `"true"` / `"false"` のみ受け、それ以外（空・非真偽値）は None（既定 false）にフォールバック。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_play: Option<bool>,
     pub chapters: Vec<Chapter>,
 }
 
