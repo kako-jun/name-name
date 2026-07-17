@@ -3743,6 +3743,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         debug_enabled: None,
         speaker_nudge: None,
         auto_play: None,
+        seekbar_color: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -5095,6 +5096,79 @@ title: "テスト"
     );
 }
 
+// #440: seekbar_color（SeekBar のフィル／つまみ色）— background_color と同じ流儀。
+fn seekbar_color_doc(value: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nseekbar_color:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n"
+    )
+}
+
+#[test]
+fn test_document_seekbar_color_parses_quoted_hex() {
+    // seekbar_color: "#b8934f" は unquote されて Some("#b8934f")。
+    let doc = parser::parse(&seekbar_color_doc(" \"#b8934f\""));
+    assert_eq!(
+        doc.seekbar_color,
+        Some("#b8934f".to_string()),
+        "seekbar_color: \"#b8934f\" は unquote 後に Some(\"#b8934f\")"
+    );
+}
+
+#[test]
+fn test_document_seekbar_color_parses_unquoted_hex() {
+    // 引用符なし #b8934f もそのまま Some("#b8934f")。
+    let doc = parser::parse(&seekbar_color_doc(" #b8934f"));
+    assert_eq!(doc.seekbar_color, Some("#b8934f".to_string()));
+}
+
+#[test]
+fn test_document_seekbar_color_unspecified_is_none() {
+    // 未指定は None（runtime 既定の水色 #a8dadc にフォールバック）。
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.seekbar_color, None,
+        "seekbar_color 未指定は None（既定の水色にフォールバック）"
+    );
+}
+
+#[test]
+fn test_document_seekbar_color_empty_is_none() {
+    // 空 seekbar_color:（値なし）・空引用 "" はどちらも None。
+    assert_eq!(parser::parse(&seekbar_color_doc("")).seekbar_color, None);
+    assert_eq!(
+        parser::parse(&seekbar_color_doc(" \"\"")).seekbar_color,
+        None
+    );
+}
+
+#[test]
+fn test_seekbar_color_round_trip_quoted() {
+    // parse → emit → parse で値が保持され、emit に double-quote 付きで出る。
+    let doc = parser::parse(&seekbar_color_doc(" \"#b8934f\""));
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("seekbar_color: \"#b8934f\""),
+        "emit に `seekbar_color: \"#b8934f\"` が含まれること: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.seekbar_color, Some("#b8934f".to_string()));
+}
+
+#[test]
+fn test_seekbar_color_none_omits_emit_line() {
+    // None なら emit に `seekbar_color:` 行が出ない。
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("seekbar_color:"),
+        "seekbar_color が None なら emit に出ない: {emitted}"
+    );
+}
+
 #[test]
 fn test_background_color_coexists_with_fade_ms_fields() {
     // B3: character_fade_ms / background_fade_ms と独立・対称に共存する（値が互いに混ざらない）。
@@ -5405,14 +5479,18 @@ fn test_auto_play_true_false_round_trips() {
         );
 
         let doc2 = parser::parse(&emitted);
-        assert_eq!(doc2.auto_play, expected, "round-trip で auto_play が保持される");
+        assert_eq!(
+            doc2.auto_play, expected,
+            "round-trip で auto_play が保持される"
+        );
     }
 }
 
 #[test]
 fn test_auto_play_unspecified_is_none_and_omitted() {
     // #436: 未指定なら None（runtime 既定 false＝手送り）。emit にも `auto_play:` 行は出ない。
-    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
     let doc = parser::parse(input);
     assert_eq!(doc.auto_play, None);
     let emitted = emitter::emit(&doc);

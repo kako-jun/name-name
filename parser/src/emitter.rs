@@ -95,6 +95,12 @@ pub fn emit(doc: &Document) -> String {
         if let Some(v) = doc.auto_play {
             out.push_str(&format!("auto_play: {v}\n"));
         }
+        // Emit seekbar_color only when present (#440)。background_color と同じく double-quote で
+        // 包んで round-trip を安定させる（`"` は除去）。#rrggbb 前提だが色解決は runtime 側。
+        if let Some(ref color) = doc.seekbar_color {
+            let sanitized = color.replace('"', "");
+            out.push_str(&format!("seekbar_color: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1260,6 +1266,7 @@ mod tests {
             debug_enabled: None,
             speaker_nudge: None,
             auto_play: None,
+            seekbar_color: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1507,6 +1514,7 @@ mod tests {
             debug_enabled: None,
             speaker_nudge: None,
             auto_play: None,
+            seekbar_color: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),
