@@ -328,6 +328,7 @@ interface NovelGameState {
   backgroundPath: string | null; // 表示中の背景
   backgroundColor: string | null; // 単色の地色（#273。背景画像の下に敷く。復元対象）
   backgroundBrightness: number | null; // 背景の明るさ 0.0〜1.0（同一画像をシーン毎に減光。sprite.tint 乗算。null=原画。復元対象）
+  eventImage: EventImageState | null; // イベント絵レイヤー（#351）。{path, back: 'Hide'|'Keep'}。テキストより背面・背景/立ち絵より前面の画面ぴったり単一スロット画像。null=非表示
   isBlackout: boolean; // 暗転中か
   characters: Array<{ name: string; expression: string; position: string }>; // 立ち絵のみ。タイトル/ラベル/画像は演出表示(renderOnly)で除外(#274)
   currentBgmPath: string | null; // 再生中のBGM
@@ -343,6 +344,8 @@ interface NovelGameState {
 4. **宣言的復元**: `applyState(snapshot)` で画面を完全に再構築
 
 背景クロスフェード (#319) は立ち絵フェードと同じ render-only 演出で、`NovelGameState` には中間 alpha を持たない。`NovelRenderer` は背景 sprite/mask を entry として管理し、通常進行の `[背景:]` では旧 entry を fade-out、新 entry を fade-in する。フェード時間はフロントマター `background_fade_ms`（未指定は既定 `BACKGROUND_CROSSFADE_MS`=700ms・#407）を `NovelRenderer.setBackgroundFadeMs` で受け、クロスフェード・終劇のフェードアウト・BGM 停止フェードすべてに適用する（`character_fade_ms` と対称の per-game 設定）。fade-out 完了時に旧 sprite と端フェード mask を破棄する。`dialog_style: novel` の forward 経路では、背景フェード完了を待ってから立ち絵 show / settle を待ち、その後に本文 `render()` を呼ぶため、「背景 → 立ち絵 → 本文」の舞台進行になる。物語/シーンの最初の背景（直前に背景が無いコールドスタート＝`processDirective` 経由の前進再生）も、旧 entry が空のまま新 entry を alpha 0→1 でフェードインさせる（ステージ最背面 `bgGraphics` の下地ベタ既定色 — フロントマター `background_color`（#409）を `NovelRenderer.setDefaultBackgroundColor` で受け、未指定は黒 `0x000000` — の上から浮かび上がるので黒フラッシュにはならない）。この下地ベタ既定色は `[背景色:]`（#273）のシーン上書きが無いとき（`currentBackgroundColor === null`）の実塗り色で、`clearBackgroundColor`（`[背景色]` 解除・終劇）の戻り先でもある。即時置換は `applyState`（`opts.instant:true` を明示＝seek / save load / 任意局面復元）と skip・同一 path だけで、任意局面復元で不要なフェードを再生しない。
+
+イベント絵レイヤー (`EventImageLayer.ts`・#351) はテキストより背面・背景/立ち絵より前面に出る、画面ぴったりの単一スロット画像で、`VideoLayer` と同じ単一スロット意味論を踏襲する。`NovelGameState.eventImage`（`{path, back}`）は settled state のみを持ち（フェード時間は一度きりの演出パラメータなので含まない・ADR-0002）、フェード開始は必ずテクスチャロード完了後（`Assets.load().then()` 内）に行う（#427/#428 と同じ「未ロードのままフェード開始してしまう」事故の回避策）。`back` 値による背景・立ち絵の可視性トグルは `NovelRenderer.applyEventImageVisibility()`（`setBlackout` と同じ単一の宣言的セッター）が担い、`processDirective`（ライブ進行）と `applyState`（goBack/seekTo/セーブ復元）の両方から呼ばれる。`back=Hide`（既定）は背景・立ち絵を隠し、`back=Keep` は両方とも表示したまま前面にイベント絵だけを重ねる。シーン遷移・終劇・レイヤー破棄時にはイベント絵を明示的に `remove()` して可視性を戻す（作者が `[イベント絵終了]` を書き忘れても背景・立ち絵が隠れたまま持ち越されない防御）。`hasPendingVisualTransition()`（`[待機: 表示完了]` の集約点）にもロード/フェードの pending 判定を OR で加える。
 
 ### 主要API
 
@@ -385,6 +388,7 @@ NovelRenderer (PixiJS)          ← 1イベントずつ描画
 以下のイベントはユーザー操作を待たず即時実行し、次のイベントに自動進行する:
 
 - `Background` — 背景変更
+- `EventImage` / `EventImageExit` — イベント絵レイヤーの表示/終了（#351）
 - `Blackout` — 暗転/暗転解除（action: On/Off）
 - `SceneTransition` — 場面転換
 - `PageBreak` — 手動改頁マーカー（`---`）。何もせず読み飛ばす（次の text イベントが新ページから始まる、#292 Phase 2）
