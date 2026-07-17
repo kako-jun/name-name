@@ -622,6 +622,13 @@ function NovelPlayer({
     })
   }
 
+  // デバッグ HUD のパネル内 × ボタン: 常に閉じるだけ。全体化中で D ボタンが裏に回り
+  // 再押下で畳めなくなる問題への主対応 (#438)。トグルではなく閉じる専用。
+  const handleDebugClose = () => {
+    setDebugOpen(false)
+    writeDebugOpen(false)
+  }
+
   // デバッグ HUD（D ボタン + パネル）を出すか (#310)。
   // /play は debug_enabled（frontmatter）、/edit は常時 true（EditorScreen が渡す）。
   const debugAvailable = debugEnabled === true
@@ -660,7 +667,12 @@ function NovelPlayer({
       {/* デバッグ HUD パネル (#310): D ボタンの展開状態に追従。debug_enabled(/play) or
           editor のときだけ出す。閉じている/無効のときは何も描かない（D ボタンが唯一の入口）。 */}
       {debugAvailable && (
-        <DebugOverlay rendererRef={rendererRef} open={debugOpen} debugInfo={debugInfo} />
+        <DebugOverlay
+          rendererRef={rendererRef}
+          open={debugOpen}
+          debugInfo={debugInfo}
+          onClose={handleDebugClose}
+        />
       )}
       {/* 親 (bg-black, container-type: size) を基準に letterbox/pillarbox する内接矩形。
           ゲーム比率を維持して親に内接させる（縦長スマホは上下に黒帯、横長は左右に黒帯）。

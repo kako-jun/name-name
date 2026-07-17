@@ -335,6 +335,22 @@ describe('NovelPlayer デバッグ HUD トグルと永続化（T1-T7）', () => 
     expect(debugPanel()).toBeNull()
   })
 
+  it('T8: パネル内の × ボタンで閉じられる（全体化中に D が裏に回っても閉じられる #438）', async () => {
+    localStorage.setItem(LS_DEBUG_OPEN, '1')
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    expect(debugPanel()).not.toBeNull()
+
+    const closeBtn = screen.getByRole('button', { name: 'デバッグパネルを閉じる' })
+    await act(async () => {
+      closeBtn.click()
+    })
+
+    expect(debugPanel()).toBeNull()
+    expect(debugButton()!.getAttribute('aria-pressed')).toBe('false')
+    expect(localStorage.getItem(LS_DEBUG_OPEN)).toBe('0')
+  })
+
   it('T6: localStorage.setItem が throw しても UI トグルは動き、例外を投げない・console.error も出さない', async () => {
     const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('QuotaExceeded / private mode')
