@@ -388,3 +388,151 @@ describe('ChoiceOverlay scroll lifecycle', () => {
     overlay.hide()
   })
 })
+
+describe('ChoiceOverlay scroll-lock notification (#434)', () => {
+  it('show は scrollable (n=3, 境界値ちょうど) のときコールバックを true で呼ぶ', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+
+    overlay.show(choices(3), vi.fn())
+
+    expect(onScrollLockChange).toHaveBeenCalledOnce()
+    expect(onScrollLockChange).toHaveBeenCalledWith(true)
+
+    overlay.hide()
+  })
+
+  it('show は non-scrollable (n=2, 境界値-1) のときコールバックを false で呼ぶ', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+
+    overlay.show(choices(2), vi.fn())
+
+    expect(onScrollLockChange).toHaveBeenCalledOnce()
+    expect(onScrollLockChange).toHaveBeenCalledWith(false)
+
+    overlay.hide()
+  })
+
+  it('show は n=4（境界値+1）でもコールバックを true で呼ぶ', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+
+    overlay.show(choices(4), vi.fn())
+
+    expect(onScrollLockChange).toHaveBeenCalledWith(true)
+
+    overlay.hide()
+  })
+
+  it('hide は直前が scrollable=true でも無条件でコールバックを false で呼ぶ', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+    overlay.show(choices(3), vi.fn())
+    onScrollLockChange.mockClear()
+
+    overlay.hide()
+
+    expect(onScrollLockChange).toHaveBeenCalledOnce()
+    expect(onScrollLockChange).toHaveBeenCalledWith(false)
+  })
+
+  it('hide は直前が既に non-scrollable でも false で呼ぶ（冪等性）', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+    overlay.show(choices(2), vi.fn())
+    onScrollLockChange.mockClear()
+
+    overlay.hide()
+
+    expect(onScrollLockChange).toHaveBeenCalledOnce()
+    expect(onScrollLockChange).toHaveBeenCalledWith(false)
+  })
+
+  it('show([]) は早期returnし、コールバックを一切呼ばない（非回帰）', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+
+    overlay.show([], vi.fn())
+
+    expect(onScrollLockChange).not.toHaveBeenCalled()
+  })
+
+  it('setOnScrollLockChange 未登録でも show/hide は例外を投げない', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+
+    expect(() => {
+      overlay.show(choices(3), vi.fn())
+      overlay.hide()
+    }).not.toThrow()
+  })
+
+  it('show(scrollable)→hide→show(non-scrollable) の一連でコールバックが true/false/false の順に呼ばれる', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+
+    overlay.show(choices(3), vi.fn())
+    overlay.hide()
+    overlay.show(choices(2), vi.fn())
+
+    expect(onScrollLockChange.mock.calls.map((args) => args[0])).toEqual([true, false, false])
+
+    overlay.hide()
+  })
+
+  it('hide 後も登録済みコールバックは消えず、次の show でも通知される', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+    overlay.show(choices(3), vi.fn())
+    overlay.hide()
+    onScrollLockChange.mockClear()
+
+    overlay.show(choices(3), vi.fn())
+
+    expect(onScrollLockChange).toHaveBeenCalledWith(true)
+
+    overlay.hide()
+  })
+
+  it('show を連続で呼んでも（間に hide なし）都度その時点の scrollable 値で1回ずつ呼ばれる', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+
+    overlay.show(choices(3), vi.fn())
+    overlay.show(choices(2), vi.fn())
+    overlay.show(choices(4), vi.fn())
+
+    expect(onScrollLockChange).toHaveBeenCalledTimes(3)
+    expect(onScrollLockChange.mock.calls.map((args) => args[0])).toEqual([true, false, true])
+
+    overlay.hide()
+  })
+
+  it('show/hide/scroll-lock 切り替えの一連の進行で console.warn/console.error を出さない', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const overlay = new ChoiceOverlay(800, 220)
+    const onScrollLockChange = vi.fn()
+    overlay.setOnScrollLockChange(onScrollLockChange)
+
+    overlay.show(choices(3), vi.fn())
+    overlay.hide()
+    overlay.show(choices(2), vi.fn())
+    overlay.hide()
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+})
