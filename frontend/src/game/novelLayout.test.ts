@@ -419,6 +419,8 @@ describe('saveSlotToGameState', () => {
       backgroundFade: normalizedFade,
       backgroundBrightness: data.backgroundBrightness ?? null,
       video: data.video ?? null,
+      // イベント絵レイヤー (#351)。古いセーブには無い → ?? null（イベント絵なし）に倒す。
+      eventImage: data.eventImage ?? null,
       isBlackout: data.isBlackout ?? false,
       characters: data.characters ?? [],
       currentBgmPath: data.currentBgmPath ?? null,
@@ -447,6 +449,7 @@ describe('saveSlotToGameState', () => {
       backgroundFade: null,
       backgroundBrightness: null,
       video: null,
+      eventImage: null,
       isBlackout: true,
       characters: [{ name: 'A', expression: 'smile', position: 'center' }],
       currentBgmPath: 'bgm/main.mp3',

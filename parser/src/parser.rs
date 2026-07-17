@@ -938,6 +938,18 @@ fn parse_directive(line: &str) -> Option<Event> {
     if let Some(rest) = content.strip_prefix("動画:") {
         return Some(parse_video_directive(rest));
     }
+    // [イベント絵終了] / [イベント絵終了: フェード=600] — イベント絵レイヤーをクリアする (#351)。
+    // 「イベント絵:」の prefix 一致に巻き込まれないよう先に判定する（動画退場/動画: と同じ順序規約。
+    // 実際には "イベント絵終了" は "イベント絵:" と prefix 衝突しないが、規約を揃えて事故を避ける）。
+    if content == "イベント絵終了" {
+        return Some(Event::EventImageExit { fade_ms: None });
+    }
+    if let Some(rest) = content.strip_prefix("イベント絵終了:") {
+        return Some(parse_event_image_exit_directive(rest));
+    }
+    if let Some(rest) = content.strip_prefix("イベント絵:") {
+        return Some(parse_event_image_directive(rest));
+    }
     // [BGM停止] / [BGM停止: 2000] / [BGM停止: フェード=2000] (#145)
     if content == "BGM停止" {
         return Some(Event::Bgm {
@@ -1303,6 +1315,63 @@ fn parse_video_directive(content: &str) -> Event {
         fade_left,
         fade_right,
     }
+}
+
+/// `[イベント絵: path]` / `[イベント絵: path, 背面=keep, フェード=800]` の本体を分解する (#351)。
+/// `parse_background_directive` / `parse_video_directive` と同じく最初の `,` で path / kv を分離する。
+/// キーは日本語 `背面` / 英語 alias `back`（値は英語トークン固定 `hide`/`keep`、大小無視、未知値は
+/// 既定 `Hide` に倒す）。フェードは BGM/SE と同じく `parse_fade_kv` を再利用する（単一のフェード値
+/// のみ持つため、背景/動画の複数端フェードとは異なり専用の kv パーサを持たせる必要がない）。
+/// 未知のキーは silent skip する（後方互換重視）。
+fn parse_event_image_directive(content: &str) -> Event {
+    let (path_part, kv_part) = match content.split_once(',') {
+        Some((p, rest)) => (p, Some(rest)),
+        None => (content, None),
+    };
+    let path = path_part.trim().to_string();
+
+    let mut back = EventImageBack::Hide;
+    let mut fade_ms: Option<u32> = None;
+
+    if let Some(kv) = kv_part {
+        for raw in kv.split(',') {
+            let pair = raw.trim();
+            if pair.is_empty() {
+                continue;
+            }
+            if let Some(n) = parse_fade_kv(pair, false) {
+                fade_ms = Some(n);
+                continue;
+            }
+            if let Some((k, v)) = pair.split_once('=') {
+                if matches!(k.trim(), "背面" | "back") {
+                    back = match v.trim().to_ascii_lowercase().as_str() {
+                        "keep" => EventImageBack::Keep,
+                        _ => EventImageBack::Hide,
+                    };
+                }
+            }
+        }
+    }
+
+    Event::EventImage {
+        path,
+        back,
+        fade_ms,
+    }
+}
+
+/// `[イベント絵終了: フェード=600]` の引数部分を fade_ms として解釈する (#351)。
+/// `parse_audio_fade_args`（BGM停止）と同じ流儀。bare 数字は受理しない
+/// （このディレクティブに path が無いため曖昧さは無いが、構文は `フェード=` 固定で揃える）。
+fn parse_event_image_exit_directive(content: &str) -> Event {
+    let mut fade_ms: Option<u32> = None;
+    for raw in content.split(',') {
+        if let Some(n) = parse_fade_kv(raw, false) {
+            fade_ms = Some(n);
+        }
+    }
+    Event::EventImageExit { fade_ms }
 }
 
 /// `true` / `false`（大文字小文字無視）を bool に解釈する (#252)。それ以外は None。

@@ -7,7 +7,7 @@
  */
 
 import { FlagValue } from '../types'
-import { BackgroundFade, VideoState } from './GameState'
+import { BackgroundFade, EventImageState, VideoState } from './GameState'
 
 const SLOT_COUNT = 3
 const STORAGE_PREFIX = 'name-name-save-'
@@ -46,6 +46,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined/null は動画なし扱い。
    */
   video?: VideoState | null
+  /**
+   * イベント絵レイヤー (#351)。
+   * 後方互換: 古いセーブデータには無い → undefined/null はイベント絵なし扱い。
+   */
+  eventImage?: EventImageState | null
   /** 暗転状態 */
   isBlackout: boolean
   /** 表示中のキャラクター情報 */

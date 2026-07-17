@@ -24,6 +24,7 @@ function makeState(eventIndex: number): NovelGameState {
     backgroundFade: null,
     backgroundBrightness: null,
     video: null,
+    eventImage: null,
     isBlackout: false,
     characters: [],
     currentBgmPath: null,

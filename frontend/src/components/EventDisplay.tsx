@@ -65,6 +65,30 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     return <div className={`text-xs italic ml-2 ${meta}`}>背景: {event.Background.path}</div>
   }
 
+  if ('EventImage' in event) {
+    const ei = event.EventImage
+    const parts: string[] = []
+    if (ei.back === 'Keep') parts.push('背面=keep')
+    if (ei.fade_ms != null) parts.push(`フェード=${ei.fade_ms}ms`)
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        イベント絵: {ei.path}
+        {parts.length > 0 ? ` (${parts.join(', ')})` : ''}
+      </div>
+    )
+  }
+
+  if ('EventImageExit' in event) {
+    const fade =
+      event.EventImageExit.fade_ms != null ? ` (フェード ${event.EventImageExit.fade_ms}ms)` : ''
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        イベント絵終了
+        {fade}
+      </div>
+    )
+  }
+
   if ('Bgm' in event) {
     const fade = event.Bgm.fade_ms != null ? ` (フェード ${event.Bgm.fade_ms}ms)` : ''
     return (
