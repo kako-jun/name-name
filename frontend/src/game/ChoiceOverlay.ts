@@ -167,7 +167,7 @@ export function resolveChoiceVisual(
 
 export class ChoiceOverlay extends Container {
   private onSelect: ((jump: string) => void) | null = null
-  private onScrollLockChange: ((locked: boolean) => void) | null = null
+  private onScrollableChange: ((scrollable: boolean) => void) | null = null
   private audioManager: AudioManager | null = null
   private renderResolution = 1
   private fadeTicker: Ticker | null = null
@@ -215,12 +215,16 @@ export class ChoiceOverlay extends Container {
    * スクロール可能な選択肢リスト（#339）の表示状態が変わるたびに呼ばれるコールバックを設定する。
    *
    * このリストは縦方向ドラッグ（`handleDragMove` の `deltaY`）で操作するため、呼び出し側
-   * （NovelRenderer）は locked=true の間だけ canvas の touch-action を 'none' に戻す必要がある。
+   * （NovelRenderer）は scrollable=true の間だけ canvas の touch-action を 'none' に戻す必要がある。
    * 'pan-y' のままだと、ブラウザがその縦ドラッグをネイティブスクロールとして横取りしてしまい
    * （`pointercancel` でジェスチャが中断される）、リストが操作できなくなる (#434)。
+   *
+   * ChoiceOverlay 自身は「ロック」という概念を持たず、自分がスクロール可能かどうか（`scrollable`
+   * = `maxScroll > 0`）を知っているだけ。touch-action をどう扱うかは呼び出し側（NovelRenderer）の
+   * 責務であり、その変換ロジックはここには持たない。
    */
-  setOnScrollLockChange(callback: (locked: boolean) => void): void {
-    this.onScrollLockChange = callback
+  setOnScrollableChange(callback: (scrollable: boolean) => void): void {
+    this.onScrollableChange = callback
   }
 
   /**
@@ -260,8 +264,8 @@ export class ChoiceOverlay extends Container {
     const viewportHeight = Math.min(totalHeight, maxViewportHeight)
     this.maxScroll = Math.max(0, totalHeight - viewportHeight)
     const scrollable = this.maxScroll > 0
-    // touch-action の scroll-lock 通知 (#434)。詳細は setOnScrollLockChange 参照。
-    this.onScrollLockChange?.(scrollable)
+    // touch-action の scroll-lock 通知 (#434)。詳細は setOnScrollableChange 参照。
+    this.onScrollableChange?.(scrollable)
     const startY = (this.screenHeight - totalHeight) / 2
 
     if (scrollable) {
@@ -425,7 +429,7 @@ export class ChoiceOverlay extends Container {
     this.lastHoverIdx = null
     this.resetScrollState()
     // 非表示になった時点でスクロール可能状態ではなくなるので、無条件で scroll-lock を解除する (#434)。
-    this.onScrollLockChange?.(false)
+    this.onScrollableChange?.(false)
   }
 
   override destroy(options?: DestroyOptions): void {

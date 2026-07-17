@@ -112,9 +112,14 @@ const PRELOAD_MAX_TEXT_EVENTS = Infinity
  * スワイプ移動/タップメニューでスワイプ自体をゲーム操作として捕捉する必要があるため、
  * touch-action:'none' のまま無改修とする（このファイルの対象外）。
  * 「ゲームタイプごとに入力要件が異なるので touch-action もレンダラーごとに自身の入力要件に応じて
- * 宣言する」という設計であり、novel 型だけの特別扱いハックではない。
+ * 宣言する」という設計であり、novel 型だけの特別扱いハックではない（設計方針の記録は
+ * docs/architecture.md「レンダリングパイプライン」参照）。
  */
-const NOVEL_CANVAS_TOUCH_ACTION = 'pan-y'
+
+/** canvas.style.touchAction に実際に設定する値 (#434)。novel 型はこの2値しか使わない。 */
+type CanvasTouchAction = 'none' | 'pan-y'
+
+const NOVEL_CANVAS_TOUCH_ACTION: CanvasTouchAction = 'pan-y'
 
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
@@ -740,8 +745,10 @@ export class NovelRenderer {
     // スクロール可能な選択肢リスト（#339）は縦方向ドラッグで操作する。touch-action:'pan-y' の
     // ままだとブラウザがその縦ドラッグをネイティブスクロールとして奪ってしまうため、表示中だけ
     // 'none' に戻し、非表示に戻ったら NOVEL_CANVAS_TOUCH_ACTION（'pan-y'）へ復帰させる (#434)。
-    this.choiceOverlay.setOnScrollLockChange((locked) => {
-      this.setCanvasTouchAction(locked ? 'none' : NOVEL_CANVAS_TOUCH_ACTION)
+    // ChoiceOverlay 自身は「ロック」ではなく「スクロール可能かどうか」しか知らないため、
+    // touch-action への変換（scrollable → 'none'/'pan-y'）はここ（NovelRenderer 側）の責務。
+    this.choiceOverlay.setOnScrollableChange((scrollable) => {
+      this.setCanvasTouchAction(scrollable ? 'none' : NOVEL_CANVAS_TOUCH_ACTION)
     })
 
     // セーブ/ロードオーバーレイ
@@ -2568,9 +2575,10 @@ export class NovelRenderer {
   /**
    * canvas の touch-action を設定する (#434)。canvas 未初期化時は no-op。
    * 既定は NOVEL_CANVAS_TOUCH_ACTION（'pan-y'）。スクロール可能な選択肢リスト（#339）表示中だけ
-   * ChoiceOverlay からの scroll-lock コールバックで 'none' に戻す（下記 init 内の配線を参照）。
+   * ChoiceOverlay からの setOnScrollableChange 通知（scrollable=true）で 'none' に戻す
+   * （下記 init 内の配線を参照）。
    */
-  private setCanvasTouchAction(value: string): void {
+  private setCanvasTouchAction(value: CanvasTouchAction): void {
     if (!this.appInitialized) return
     const canvas = this.app.canvas as HTMLCanvasElement
     canvas.style.touchAction = value
