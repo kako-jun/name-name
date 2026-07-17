@@ -383,6 +383,8 @@ export function saveSlotToGameState(
     // 背景の明るさ。古いセーブには無い → ?? null で原画のまま（tint=白）に倒す。
     backgroundBrightness: data.backgroundBrightness ?? null,
     video: data.video ?? null,
+    // イベント絵レイヤー (#351)。古いセーブには無い → ?? null（イベント絵なし）に倒す。
+    eventImage: data.eventImage ?? null,
     isBlackout: data.isBlackout ?? false,
     characters: data.characters ?? [],
     currentBgmPath: data.currentBgmPath ?? null,
