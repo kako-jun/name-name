@@ -59,6 +59,7 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setCharacterFadeMs = vi.fn()
     setBackgroundFadeMs = vi.fn()
     setDefaultBackgroundColor = vi.fn()
+    setSeekBarColor = vi.fn()
     setIntermissionScene = vi.fn()
     hasIntermissionScene = vi.fn().mockReturnValue(false)
     applySettings = vi.fn()
@@ -938,6 +939,32 @@ describe('NovelPlayer 下地ベタの既定色 background_color 配線 (#409)', 
     await flushAsync()
     const r = rendererInstances[rendererInstances.length - 1]
     expect(r.setDefaultBackgroundColor).toHaveBeenCalledWith(null)
+  })
+})
+
+// #440: doc.seekbar_color → renderer.setSeekBarColor 配線。
+// setDefaultBackgroundColor（#409）と対称の per-game 設定で、init で流す。
+// null/undefined は `?? null` で「既定の水色」に倒す（後方互換）。
+describe('NovelPlayer SeekBar 色 seekbar_color 配線 (#440)', () => {
+  it('seekbarColor を渡すと init 時に renderer.setSeekBarColor(値) が呼ばれる', async () => {
+    render(<NovelPlayer events={[]} seekbarColor="#b8934f" />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setSeekBarColor).toHaveBeenCalledWith('#b8934f')
+  })
+
+  it('seekbarColor 未指定なら null で呼ぶ（既定の水色＝後方互換）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setSeekBarColor).toHaveBeenCalledWith(null)
+  })
+
+  it('seekbarColor={null} でも null で呼ぶ（明示 null＝既定色）', async () => {
+    render(<NovelPlayer events={[]} seekbarColor={null} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setSeekBarColor).toHaveBeenCalledWith(null)
   })
 })
 

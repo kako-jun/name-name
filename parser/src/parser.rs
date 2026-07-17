@@ -31,6 +31,7 @@ pub fn parse(input: &str) -> Document {
     let mut debug_enabled: Option<bool> = None;
     let mut speaker_nudge: Option<bool> = None;
     let mut auto_play: Option<bool> = None;
+    let mut seekbar_color: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -149,6 +150,13 @@ pub fn parse(input: &str) -> Document {
                 // オート再生を最初からONにするか (#436)。`true` / `false` のみ受ける（parse_bool_kv）。
                 // 空・不正値は None のまま（runtime 既定 false ＝手送り）。
                 auto_play = parse_bool_kv(&unquote(val.trim()));
+            } else if let Some(val) = line.strip_prefix("seekbar_color:") {
+                // SeekBar のフィル／つまみ色 (#440)。background_color と同じ流儀で文字列を生透過。
+                // 空なら None のまま（runtime で既定の水色 #a8dadc にフォールバック）。色解決は runtime 側。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    seekbar_color = Some(v);
+                }
             }
             pos += 1;
         }
@@ -898,6 +906,7 @@ pub fn parse(input: &str) -> Document {
         debug_enabled,
         speaker_nudge,
         auto_play,
+        seekbar_color,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

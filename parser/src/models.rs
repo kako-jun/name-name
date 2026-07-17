@@ -995,6 +995,13 @@ pub struct Document {
     /// `"true"` / `"false"` のみ受け、それ以外（空・非真偽値）は None（既定 false）にフォールバック。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_play: Option<bool>,
+    /// SeekBar（シナリオスライダ）のフィル／つまみ色（`#rrggbb`）(#440)。`background_color:` と同じ
+    /// 流儀で文字列を生透過し、色解決は runtime 側（未指定なら既定の水色 `#a8dadc`）。トラック背景
+    /// （暗いグレー）は据え置き。theo-hayami の金色トグルにスライダを揃えるための per-game 設定で、
+    /// SeekBar は全ゲーム共有部品ゆえグローバル変更せず frontmatter で作品ごとに指定する。
+    /// 空文字は None 扱い（＝既定色）。frontmatter `seekbar_color:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seekbar_color: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

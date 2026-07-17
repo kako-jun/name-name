@@ -44,6 +44,7 @@ choice_style: "default"
 | `debug_enabled` | boolean | No | デバッグ(D)ボタンを `/play`（公開再生）で出すかの per-game 設定。`true`=表示、`false`/未指定=非表示（**既定＝本番では出さない**）。エディタ `/edit` では本設定に関係なく常時表示（編集者用）。D ボタン押下でデバッグパネルを展開/折りたたみ。`true`/`false` のみ受理（他は既定 false）(#310) |
 | `speaker_nudge` | boolean | No | novel の**話者交代 nudge**（立ち絵を軽く上下させるぴょこ・#286）を出すかの per-game 設定。**既定 false**（未指定/`false`=nudge なし）、`true`=opt-in で発火。標準はポーズのクロスフェード（#337）が動き＋「今この人」の合図を担うため nudge は不要で既定オフ。nudge は開発中の稀な合図で、**欲しい作品だけ** `speaker_nudge: true` で opt-in する。`true`/`false` のみ受理（他は既定 false）。表情変化／場面転換のスクリム自動退避（#283）は本設定と**独立**に維持される（nudge だけを抑制）(#382) |
 | `auto_play` | boolean | No | オート再生を最初から ON にするかの per-game 設定。**既定 false**（未指定/`false`=起動時は手送り）、`true`=起動時からオート ON（従来挙動。llll-ll-media 等の動画用途向け）。起動後はいずれも再生 UI のオート(A)トグルで随時 ON/OFF 切替可能。`true`/`false` のみ受理（他は既定 false）(#436) |
+| `seekbar_color` | string | No | 画面下部の SeekBar（シナリオスライダ）の**フィル／つまみ色**を指定する per-game 設定（#440。`background_color` と同じ流儀で `#rrggbb`）。例: `seekbar_color: "#b8934f"`（theo-hayami の金トグルにスライダを揃える）。**未指定は水色 `#a8dadc`**（後方互換）。トラック背景（暗いグレー `#333333`）は据え置きで変わらない。SeekBar は全ゲーム共有部品なのでグローバルには変えず、揃えたい作品だけこのキーで指定する。不正・空の色は既定の水色に倒れるが、文字列自体は round-trip で保持される。エントリ `script.md` の frontmatter に書けば `?scene=` deep-link 起動を含めゲーム全編に効く。(#440) |
 
 フロントマターは Event ではなく、parser の Chapter 構造体（Rust 側）のフィールドとしてパースされる。フロントエンド側の EventChapter 型とは別物なので注意する。
 

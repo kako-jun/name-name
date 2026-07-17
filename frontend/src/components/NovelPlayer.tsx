@@ -112,6 +112,9 @@ interface NovelPlayerProps {
   /** 下地ベタ（ステージ最背面 bgGraphics）の既定色 (#409)。frontmatter `background_color:` から流す。
    *  最初の背景絵がこの色から `background_fade_ms` でフェードインする。null/undefined で黒（後方互換）。 */
   backgroundColor?: string | null
+  /** SeekBar（シナリオスライダ）のフィル／つまみ色 (#440)。frontmatter `seekbar_color:` から流す。
+   *  null/undefined/不正値で既定の水色 #a8dadc（後方互換）。トラック背景は据え置き。 */
+  seekbarColor?: string | null
   /**
    * intermission.md 専用シーン (#404)。`assets/scripts/intermission.md` を取得・parse できた場合に
    * PlayerScreen が渡す flatten 済み Event 列。null/undefined/空配列は「未設定」＝endStory() は
@@ -178,6 +181,7 @@ function NovelPlayer({
   characterFadeMs,
   backgroundFadeMs,
   backgroundColor,
+  seekbarColor,
   intermissionEvents,
   intermissionBackgroundFadeMs,
   intermissionCharacterFadeMs,
@@ -353,6 +357,9 @@ function NovelPlayer({
       // 下地ベタの既定色 (#409)。初回背景表示より前に設定し、最初の背景絵がこの地色から
       // フェードインするようにする（未指定なら黒で非回帰）。setBackgroundFadeMs と対称の per-game 設定。
       renderer.setDefaultBackgroundColor(backgroundColor ?? null)
+      // SeekBar のフィル／つまみ色 (#440)。setDefaultBackgroundColor と対称の per-game 設定。
+      // 未指定/不正値なら既定の水色にフォールバック（後方互換）。
+      renderer.setSeekBarColor(seekbarColor ?? null)
       // intermission.md 専用シーン (#404)。PlayerScreen が非同期取得するため、マウント時点では
       // まだ未解決（null）のことが多いが、後段の setEvents/startFrom より前に一度呼んでおく
       // （解決後は下の intermissionEvents 変化 effect が反映する）。
@@ -501,6 +508,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setDefaultBackgroundColor(backgroundColor ?? null)
   }, [backgroundColor])
+
+  // seekbarColor（SeekBar のフィル／つまみ色）が変化したときに renderer に反映 (#440)
+  useEffect(() => {
+    rendererRef.current?.setSeekBarColor(seekbarColor ?? null)
+  }, [seekbarColor])
 
   // intermission.md 専用シーン (#404)。PlayerScreen の非同期取得（assets/raw 経由）は
   // マウント後に解決することが多いため、init effect（マウント時1回）だけでは反映できない。
