@@ -167,6 +167,7 @@ export function resolveChoiceVisual(
 
 export class ChoiceOverlay extends Container {
   private onSelect: ((jump: string) => void) | null = null
+  private onScrollLockChange: ((locked: boolean) => void) | null = null
   private audioManager: AudioManager | null = null
   private renderResolution = 1
   private fadeTicker: Ticker | null = null
@@ -211,6 +212,18 @@ export class ChoiceOverlay extends Container {
   }
 
   /**
+   * スクロール可能な選択肢リスト（#339）の表示状態が変わるたびに呼ばれるコールバックを設定する。
+   *
+   * このリストは縦方向ドラッグ（`handleDragMove` の `deltaY`）で操作するため、呼び出し側
+   * （NovelRenderer）は locked=true の間だけ canvas の touch-action を 'none' に戻す必要がある。
+   * 'pan-y' のままだと、ブラウザがその縦ドラッグをネイティブスクロールとして横取りしてしまい
+   * （`pointercancel` でジェスチャが中断される）、リストが操作できなくなる (#434)。
+   */
+  setOnScrollLockChange(callback: (locked: boolean) => void): void {
+    this.onScrollLockChange = callback
+  }
+
+  /**
    * 選択肢を表示する。
    *
    * @param options 表示する選択肢
@@ -247,6 +260,8 @@ export class ChoiceOverlay extends Container {
     const viewportHeight = Math.min(totalHeight, maxViewportHeight)
     this.maxScroll = Math.max(0, totalHeight - viewportHeight)
     const scrollable = this.maxScroll > 0
+    // touch-action の scroll-lock 通知 (#434)。詳細は setOnScrollLockChange 参照。
+    this.onScrollLockChange?.(scrollable)
     const startY = (this.screenHeight - totalHeight) / 2
 
     if (scrollable) {
@@ -409,6 +424,8 @@ export class ChoiceOverlay extends Container {
     this.onSelect = null
     this.lastHoverIdx = null
     this.resetScrollState()
+    // 非表示になった時点でスクロール可能状態ではなくなるので、無条件で scroll-lock を解除する (#434)。
+    this.onScrollLockChange?.(false)
   }
 
   override destroy(options?: DestroyOptions): void {
