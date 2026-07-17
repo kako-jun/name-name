@@ -10,8 +10,10 @@
 //     content/scripts/main/）まで再帰列挙する。再帰は 1 段で十分。
 //
 // 戦略:
-//   - `scriptsDir` 指定プロジェクトは Git Trees API の recursive tree で `.md` を一括列挙する。
-//     theo-hayami のような 260 本級で、一覧APIが各MD本文を260回 fetch して1分級になるのを避ける。
+//   - `scriptsDir` 指定プロジェクトは Contents API の directory listing で
+//     起点直下 + サブディレクトリ 1 段だけを列挙する。Git Trees API の recursive tree は
+//     リポ全体が大きくなると GitHub が 503 HTML を返すことがあるため使わない。
+//     theo-hayami のような 300 本級でも、本文 peek はせず listing だけで済ませる。
 //   - `scriptsDir` 未指定プロジェクトは従来どおり、リポ直下 .md の本文を peek して
 //     frontmatter (`engine: name-name`, `hidden`, `title`) を読む。ルート直下は通常数本なので許容。
 //
@@ -33,9 +35,6 @@ import type { Env } from "./types";
 
 type ContentsGetResponseData =
   Endpoints["GET /repos/{owner}/{repo}/contents/{path}"]["response"]["data"];
-type GitTreeResponseData =
-  Endpoints["GET /repos/{owner}/{repo}/git/trees/{tree_sha}"]["response"]["data"];
-
 export interface ScriptInfo {
   path: string;
   sha: string;
@@ -135,23 +134,13 @@ interface DirEntry {
   type: string;
 }
 
-interface TreeEntry {
-  path?: string;
-  mode?: string;
-  type?: string;
-  sha?: string;
-  size?: number;
-}
-
-type Octokit = ReturnType<typeof createGitHub>;
-
 /**
  * 指定ディレクトリ（リポ相対 path。`""` はリポ直下）を Contents API で listing する。
  * directory でないファイル単体 path だった場合・listing 失敗時は null を返す
  * （呼び出し側でスキップ）。
  */
 async function listDirectory(
-  octokit: Octokit,
+  env: Env,
   owner: string,
   repo: string,
   path: string,
@@ -159,20 +148,37 @@ async function listDirectory(
   logLabel: string,
 ): Promise<DirEntry[] | null> {
   try {
-    const res = await octokit.request(
-      "GET /repos/{owner}/{repo}/contents/{path}",
+    const baseUrl = env.GITHUB_API_BASE ?? "https://api.github.com";
+    const encodedPath = path
+      .split("/")
+      .filter((part) => part.length > 0)
+      .map(encodeURIComponent)
+      .join("/");
+    const res = await fetch(
+      `${baseUrl.replace(/\/$/, "")}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodedPath}${ref ? `?ref=${encodeURIComponent(ref)}` : ""}`,
       {
-        owner,
-        repo,
-        path,
-        ref: ref ?? undefined,
+        headers: {
+          accept: "application/vnd.github+json",
+          "user-agent": "name-name-api/0.1.0",
+          ...(env.GITHUB_TOKEN
+            ? { authorization: `Bearer ${env.GITHUB_TOKEN}` }
+            : {}),
+        },
       },
     );
-    logRateLimit(
-      logLabel,
-      res.headers as Record<string, string | number | undefined>,
-    );
-    const data = res.data as ContentsGetResponseData;
+    const responseHeaders = Object.fromEntries(res.headers.entries());
+    logRateLimit(logLabel, responseHeaders);
+    const data = (await res.json()) as
+      | ContentsGetResponseData
+      | { message?: string };
+    if (!res.ok) {
+      throw {
+        status: res.status,
+        message:
+          "message" in data && data.message ? data.message : "GitHub API error",
+        response: { headers: responseHeaders },
+      };
+    }
     if (!Array.isArray(data)) return null;
     return data as unknown as DirEntry[];
   } catch (err) {
@@ -185,57 +191,64 @@ async function listDirectory(
   }
 }
 
-async function listScriptsFromTree(
-  octokit: Octokit,
+async function listScriptsFromDirectories(
+  env: Env,
   owner: string,
   repo: string,
   baseDir: string,
   ref: string | null,
 ): Promise<ScriptInfo[]> {
-  const res = await octokit.request(
-    "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
-    {
-      owner,
-      repo,
-      tree_sha: ref ?? "HEAD",
-      recursive: "1",
-    },
+  const baseListing = await listDirectory(
+    env,
+    owner,
+    repo,
+    baseDir,
+    ref,
+    "scripts.list.root",
   );
-  logRateLimit(
-    "scripts.tree",
-    res.headers as Record<string, string | number | undefined>,
-  );
-  const data = res.data as GitTreeResponseData;
-  const prefix = baseDir.length > 0 ? `${baseDir}/` : "";
-  const scripts = (data.tree as TreeEntry[])
-    .filter((entry) => {
-      if (entry.type !== "blob") return false;
-      if (!entry.path?.startsWith(prefix)) return false;
-      const relative = entry.path.slice(prefix.length);
-      if (
-        !relative ||
-        (relative.includes("/") && relative.split("/").length > 2)
-      )
-        return false;
-      if (relative.toLowerCase() === "readme.md") return false;
-      return (
-        entry.path.toLowerCase().endsWith(".md") &&
-        (entry.size ?? 0) <= 64 * 1024
+  if (baseListing === null) return [];
+
+  const pickMdFiles = (entries: DirEntry[]): DirEntry[] =>
+    entries.filter(
+      (entry) =>
+        entry.type === "file" &&
+        entry.name.toLowerCase().endsWith(".md") &&
+        entry.name.toLowerCase() !== "readme.md" &&
+        entry.size <= 64 * 1024,
+    );
+
+  let candidates = pickMdFiles(baseListing);
+  const subDirs = baseListing
+    .filter((entry) => entry.type === "dir")
+    .slice(0, 50);
+
+  for (const dir of subDirs) {
+    try {
+      const subListing = await listDirectory(
+        env,
+        owner,
+        repo,
+        dir.path,
+        ref,
+        "scripts.list.sub",
       );
-    })
-    .slice(0, MAX_SCRIPT_FILES)
-    .map((entry) => ({
-      path: entry.path as string,
-      sha: entry.sha ?? "",
-      size: entry.size ?? 0,
-      title: null,
-      hidden: false,
-    }));
+      if (subListing) candidates = candidates.concat(pickMdFiles(subListing));
+    } catch {
+      continue;
+    }
+  }
+
+  const scripts = candidates.slice(0, MAX_SCRIPT_FILES).map((entry) => ({
+    path: entry.path,
+    sha: entry.sha,
+    size: entry.size,
+    title: null,
+    hidden: false,
+  }));
 
   scripts.sort(compareScriptInfo);
   return scripts;
 }
-
 function compareScriptInfo(a: ScriptInfo, b: ScriptInfo): number {
   if (a.path === "script.md" || a.path.endsWith("/script.md")) return -1;
   if (b.path === "script.md" || b.path.endsWith("/script.md")) return 1;
@@ -276,7 +289,13 @@ export async function handleListScripts(
   if (project.scriptsDir) {
     try {
       const body: ScriptsListResponse = {
-        scripts: await listScriptsFromTree(octokit, owner, repo, baseDir, ref),
+        scripts: await listScriptsFromDirectories(
+          env,
+          owner,
+          repo,
+          baseDir,
+          ref,
+        ),
       };
       const response = jsonResponse(body, 200, { "x-cache": "MISS" });
       await cachePut(cacheKey, response);
@@ -291,7 +310,7 @@ export async function handleListScripts(
   let baseListing: DirEntry[];
   try {
     const listed = await listDirectory(
-      octokit,
+      env,
       owner,
       repo,
       baseDir,
@@ -336,7 +355,7 @@ export async function handleListScripts(
       let subListing: DirEntry[] | null;
       try {
         subListing = await listDirectory(
-          octokit,
+          env,
           owner,
           repo,
           dir.path,

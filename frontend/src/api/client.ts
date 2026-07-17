@@ -1,11 +1,11 @@
 // Worker (CF Workers) 用 API クライアント。kako-jun/name-name#107 で
 // 旧 FastAPI (`localhost:7373`) ベースから Worker (`localhost:8787` / 本番
-// `name-name-api.workers.dev`) ベースに切り替えた。
+// `name-name-api.kako-jun.workers.dev`) ベースに切り替えた。
 //
 // 設計メモ:
 // - すべての API 呼び出しはこのモジュールに集約する。`fetch` を直接
 //   各画面から叩かない。Worker URL をハードコードしない。
-// - base URL は VITE_API_URL → `apiBaseUrl` 引数 → 既定 `localhost:8787`
+// - base URL は VITE_API_URL → `apiBaseUrl` 引数 → ホスト別既定値
 //   の優先順位。runtime には `apiBaseUrl` 引数が最終決定値で渡るため、
 //   このモジュールが直接 import.meta.env を読むのは「明示指定が無い場合の
 //   既定値」を作るときだけにする。
@@ -14,11 +14,12 @@
 //   `commit` / `discard` / `getTags` は #108 (Editor/Player 統合) で
 //   UI を整理するまでの間だけスタブとして残す。
 
-const DEFAULT_API_URL = 'http://localhost:8787'
+const LOCAL_API_URL = 'http://localhost:8787'
+const PRODUCTION_API_URL = 'https://name-name-api.kako-jun.workers.dev'
 
 /**
  * 環境変数による既定 base URL。`VITE_API_URL` を最優先、未設定なら
- * `localhost:8787`。createApiClient() に明示的に baseUrl を渡せば
+ * localhost では `localhost:8787`、公開ホストでは本番 Worker。createApiClient() に明示的に baseUrl を渡せば
  * そちらが優先される（App.tsx の設定 UI から動的に変更できる）。
  */
 export function defaultApiBaseUrl(): string {
@@ -28,7 +29,9 @@ export function defaultApiBaseUrl(): string {
     typeof import.meta !== 'undefined' && import.meta.env
       ? (import.meta.env.VITE_API_URL as string | undefined)
       : undefined
-  return envUrl && envUrl.length > 0 ? envUrl : DEFAULT_API_URL
+  if (envUrl && envUrl.length > 0) return envUrl
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : ''
+  return hostname === 'localhost' || hostname === '127.0.0.1' ? LOCAL_API_URL : PRODUCTION_API_URL
 }
 
 // ---- レスポンス・リクエスト型 ----
