@@ -40,12 +40,15 @@ export function DebugOverlay({
   rendererRef,
   open,
   debugInfo = [],
+  onClose,
 }: {
   rendererRef: React.MutableRefObject<NovelRenderer | null>
   /** D ボタンで制御する展開状態。false のとき本文は描画しない（ポーリングも止める）。 */
   open: boolean
   /** PlayerScreen など renderer 外で分かる読み込み診断。 */
   debugInfo?: string[]
+  /** ヘッダの × から呼ぶ閉じるハンドラ。全体化中で D ボタンが裏に回っても閉じられる (#438)。 */
+  onClose?: () => void
 }) {
   const [state, setState] = useState<DebugState | null>(null)
   const [copied, setCopied] = useState(false)
@@ -153,6 +156,25 @@ export function DebugOverlay({
         >
           {copied ? 'copied ✓' : 'copy'}
         </button>
+        {onClose && (
+          <button
+            type="button"
+            onClick={() => onClose()}
+            aria-label="デバッグパネルを閉じる"
+            title="デバッグパネルを閉じる"
+            style={{
+              background: 'rgba(103, 232, 249, 0.15)',
+              color: '#67e8f9',
+              border: '1px solid #2a3140',
+              borderRadius: 3,
+              cursor: 'pointer',
+              fontSize: 10,
+              padding: '2px 6px',
+            }}
+          >
+            ×
+          </button>
+        )}
       </div>
       {state ? (
         <>
