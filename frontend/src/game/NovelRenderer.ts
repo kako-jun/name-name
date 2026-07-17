@@ -35,6 +35,7 @@ import {
 } from './GameState'
 import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { VideoLayer } from './VideoLayer'
+import { EventImageLayer } from './EventImageLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
 import { SaveManager, SaveSlotData } from './SaveManager'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
@@ -250,6 +251,8 @@ export class NovelRenderer {
   /** 動画入力レイヤ (#252)。背景の直後・立ち絵の下に配置 */
   private videoLayer: VideoLayer
   private characterLayer: CharacterLayer
+  /** イベント絵レイヤー (#351)。テキストより背面・背景/立ち絵より前面（立ち絵の直後）に配置 */
+  private eventImageLayer: EventImageLayer
   private blackoutOverlay: Graphics
   /** novel スタイル (#283) の全画面スクリム。セリフ表示中だけ半透明黒を敷く。
    *  z 順は characterLayer の上・blackoutOverlay の下。adv では常に visible=false。 */
@@ -557,6 +560,9 @@ export class NovelRenderer {
     this.screenWidth = ASPECT_RATIOS[ratio].width
     this.screenHeight = ASPECT_RATIOS[ratio].height
     this.characterLayer = new CharacterLayer(this.screenWidth, this.screenHeight, this.time)
+    // イベント絵レイヤー (#351)。立ち絵と同じ TimeController を共有し、動画 export でも
+    // フェードが決定論的に進む（this.time が virtual モードなら仮想時刻で駆動される）。
+    this.eventImageLayer = new EventImageLayer(this.screenWidth, this.screenHeight, this.time)
     this.blackoutOverlay = new Graphics()
     this.defaultDialogBorderless = config?.dialogBorderless ?? false
     this.dialogBox = new DialogBox({
@@ -619,6 +625,10 @@ export class NovelRenderer {
 
     // 立ち絵レイヤー
     this.app.stage.addChild(this.characterLayer)
+
+    // イベント絵レイヤー (#351)。z 順はテキストより背面・背景/立ち絵より前面
+    // （立ち絵の直後・novelScrim/ダイアログより前）。
+    this.app.stage.addChild(this.eventImageLayer)
 
     // novel スタイルの全画面スクリム (#283)。z 順は立ち絵の上・暗転/効果/ダイアログの下。
     // セリフ表示中だけ半透明黒を敷き、白文字の可読性を上げつつ ToHeart 的な「絵を薄く沈める」
@@ -1009,6 +1019,10 @@ export class NovelRenderer {
     this.pendingBackgroundLoadToken = null
     this.clearBackgroundColor()
     this.videoLayer.remove()
+    // イベント絵レイヤーも終劇で「なし」に確定する (#351)。back=Hide で背景・立ち絵を隠したまま
+    // 終劇していると、可視性を戻さない限り以後（intermission タブロー等）ずっと隠れたままになる。
+    this.eventImageLayer.remove()
+    this.applyEventImageVisibility()
 
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     this.fadeOutBackgroundEntries(eraseBackgroundFadeMs)
@@ -1301,6 +1315,10 @@ export class NovelRenderer {
     } else {
       this.characterLayer.clear()
     }
+    // イベント絵レイヤーは新しいイベント列の開始で常にクリアする (#351)。前シーンのイベント絵は
+    // 引き継がない（両分岐共通）。back=Hide で隠れていた背景・立ち絵の可視性もここで戻す。
+    this.eventImageLayer.remove()
+    this.applyEventImageVisibility()
     this.setBlackout(false)
     this.currentBgmPath = null
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
@@ -1347,6 +1365,8 @@ export class NovelRenderer {
     this.dialogBox.setIndicatorAssetBaseUrl(url)
     // 動画レイヤも同じベース URL で相対パスを URL 化するため伝播する (#252)
     this.videoLayer.setAssetBaseUrl(url)
+    // イベント絵レイヤーも同じベース URL で相対パスを URL 化するため伝播する (#351)
+    this.eventImageLayer.setAssetBaseUrl(url)
   }
 
   /**
@@ -1883,6 +1903,8 @@ export class NovelRenderer {
     // 動画レイヤを破棄（video 要素解放・AudioManager から detach・Sprite/Texture/mask 破棄）(#252)。
     // audioManager.destroy() より前に呼んで detach を確実に通す。
     this.videoLayer.remove()
+    // イベント絵レイヤーも破棄する（sprite/texture 参照を解放）(#351)。
+    this.eventImageLayer.remove()
     this.audioManager.destroy()
     this.characterLayer.clear()
     this.choiceOverlay.hide()
@@ -2121,6 +2143,7 @@ export class NovelRenderer {
       backgroundFade: this.currentBackgroundFade,
       backgroundBrightness: this.currentBackgroundBrightness,
       video: this.videoLayer.getState(),
+      eventImage: this.eventImageLayer.getState(),
       isBlackout: this.blackoutOverlay.visible,
       characters: this.characterLayer.getCharacterStates(),
       currentBgmPath: this.currentBgmPath,
@@ -2423,6 +2446,12 @@ export class NovelRenderer {
     // 動画には触れないため（show が単一スロットを置換、なしなら remove）、背景復元の後に行う。
     this.videoLayer.restore(state.video)
 
+    // イベント絵レイヤー復元 (#351)。フェードは行わず即時反映（ADR-0002）。背景・立ち絵の
+    // 可視性は eventImageLayer の復元後の状態を見て宣言的に再計算する（processDirective と
+    // 同じ applyEventImageVisibility を共有）。
+    this.eventImageLayer.restore(state.eventImage)
+    this.applyEventImageVisibility()
+
     // 暗転復元（セーブ/ロード・シーク・任意局面起動の applyState はすべてここを通る #350）
     this.setBlackout(state.isBlackout)
 
@@ -2528,6 +2557,24 @@ export class NovelRenderer {
   private setBlackout(visible: boolean): void {
     this.blackoutOverlay.visible = visible
     this.seekBar.setBlackoutHidden(visible)
+  }
+
+  /**
+   * イベント絵レイヤー (#351) の `back` 値に応じて、背景・立ち絵の可視性を宣言的にトグルする。
+   *
+   * `setBlackout` と同じ「単一の宣言的セッター」パターン: processDirective（ライブ進行）と
+   * applyState（goBack/seekTo/セーブ復元）の両方から、eventImageLayer の現在状態を毎回
+   * 素直に読んで反映するだけにする。退避 → 復元のような一回限りのアニメーションは持たない
+   * （ADR-0002: スナップショットは常に settled 状態のみを持つ）。
+   *
+   * `back=Hide`（イベント絵表示中かつ既定値）のときだけ背景・立ち絵を隠す。イベント絵が無い、
+   * または `back=Keep` のときは常に両方とも表示する。
+   */
+  private applyEventImageVisibility(): void {
+    const hide = this.eventImageLayer.getState()?.back === 'Hide'
+    this.bgGraphics.visible = !hide
+    this.bgContainer.visible = !hide
+    this.characterLayer.visible = !hide
   }
 
   private handleAdvance = (): void => {
@@ -2808,6 +2855,10 @@ export class NovelRenderer {
         this.clearBackground()
         // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
         this.videoLayer.remove()
+        // イベント絵レイヤーも場面転換でクリアする (#351)。作者が [イベント絵終了] を書き忘れても
+        // 背景・立ち絵が隠れたまま次のシーンに持ち越されないようにする防御。
+        this.eventImageLayer.remove()
+        this.applyEventImageVisibility()
         this.setBlackout(false)
         // novel: 場面転換でスクリム+文字を退避して新しい絵を見せ、戻す (#283)
         this.retreatNovelScrim()
@@ -2859,6 +2910,24 @@ export class NovelRenderer {
           }),
         })
       }
+      return
+    }
+    if ('EventImage' in event) {
+      // イベント絵レイヤー (#351)。URL 構築は EventImageLayer 側（assetBaseUrl + '/images/' + path）
+      // に委譲する。表示後、背面（背景・立ち絵）の可視性を back 値に応じて宣言的に更新する
+      // （applyEventImageVisibility は setBlackout と同じく processDirective / applyState の
+      // 両方から呼ばれる単一の宣言的トグル。一回限りのアニメーションにはしない・ADR-0002）。
+      const ei = event.EventImage
+      if (this.assetBaseUrl) {
+        this.eventImageLayer.show(ei.path, { back: ei.back, fadeMs: ei.fade_ms })
+        this.applyEventImageVisibility()
+      }
+      return
+    }
+    if ('EventImageExit' in event) {
+      // [イベント絵終了] でイベント絵レイヤーをクリアする (#351)。
+      this.eventImageLayer.remove({ fadeMs: event.EventImageExit.fade_ms })
+      this.applyEventImageVisibility()
       return
     }
     if ('Blackout' in event) {
@@ -3141,12 +3210,14 @@ export class NovelRenderer {
   }
 
   private hasPendingVisualTransition(): boolean {
-    // `[待機: 表示完了]` の視覚演出集約点。現対象は背景 load/fade と立ち絵 load/fade/transform/nudge。
-    // 将来イベント絵などを足す場合も、各レイヤの pending API をここに OR する。
+    // `[待機: 表示完了]` の視覚演出集約点。対象は背景 load/fade・立ち絵 load/fade/transform/nudge・
+    // イベント絵 load/fade (#351)。将来さらにレイヤを足す場合も、各レイヤの pending API を
+    // ここに OR する。
     return (
       this.hasPendingBackgroundLoad() ||
       this.hasActiveBackgroundFade() ||
-      this.characterLayer.hasPendingVisualTransition()
+      this.characterLayer.hasPendingVisualTransition() ||
+      this.eventImageLayer.hasPendingVisualTransition()
     )
   }
 
@@ -3716,6 +3787,7 @@ export class NovelRenderer {
       backgroundFade: snapshot.backgroundFade,
       backgroundBrightness: snapshot.backgroundBrightness,
       video: snapshot.video,
+      eventImage: snapshot.eventImage,
       isBlackout: snapshot.isBlackout,
       characters: snapshot.characters,
       currentBgmPath: snapshot.currentBgmPath,
@@ -3770,6 +3842,7 @@ export class NovelRenderer {
         backgroundFade: snapshot.backgroundFade,
         backgroundBrightness: snapshot.backgroundBrightness,
         video: snapshot.video,
+        eventImage: snapshot.eventImage,
         isBlackout: snapshot.isBlackout,
         characters: snapshot.characters,
         currentBgmPath: snapshot.currentBgmPath,
@@ -3933,6 +4006,7 @@ export class NovelRenderer {
       backgroundFade: normalizeBackgroundFade(undefined),
       backgroundBrightness: null,
       video: null,
+      eventImage: null,
       isBlackout: false,
       characters: [],
       currentBgmPath: null,
