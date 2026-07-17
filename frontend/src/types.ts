@@ -521,6 +521,10 @@ export interface EventDocument {
    *  `speaker_nudge: true` で opt-in する。null/undefined/未指定は false 扱い（非発火）。
    *  frontmatter `speaker_nudge:` から流す。 */
   speaker_nudge?: boolean | null
+  /** オート再生を最初から ON にするか (#436)。既定 false＝手送り。`true` で起動時からオート ON。
+   *  llll-ll-media 等の動画用途では `auto_play: true` を明示する。null/undefined/未指定は false 扱い。
+   *  frontmatter `auto_play:` から流す。 */
+  auto_play?: boolean | null
   chapters: EventChapter[]
 }
 

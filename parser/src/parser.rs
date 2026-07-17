@@ -30,6 +30,7 @@ pub fn parse(input: &str) -> Document {
     let mut skip_enabled: Option<bool> = None;
     let mut debug_enabled: Option<bool> = None;
     let mut speaker_nudge: Option<bool> = None;
+    let mut auto_play: Option<bool> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -144,6 +145,10 @@ pub fn parse(input: &str) -> Document {
                 // 空・不正値は None のまま（runtime 既定 false ＝非発火＝nudge は opt-in）。
                 // 標準はポーズ差し替え（#337）が話者合図を担うため nudge は不要。欲しい作品だけ true で opt-in する。
                 speaker_nudge = parse_bool_kv(&unquote(val.trim()));
+            } else if let Some(val) = line.strip_prefix("auto_play:") {
+                // オート再生を最初からONにするか (#436)。`true` / `false` のみ受ける（parse_bool_kv）。
+                // 空・不正値は None のまま（runtime 既定 false ＝手送り）。
+                auto_play = parse_bool_kv(&unquote(val.trim()));
             }
             pos += 1;
         }
@@ -892,6 +897,7 @@ pub fn parse(input: &str) -> Document {
         skip_enabled,
         debug_enabled,
         speaker_nudge,
+        auto_play,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

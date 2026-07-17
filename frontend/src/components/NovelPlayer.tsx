@@ -138,6 +138,10 @@ interface NovelPlayerProps {
    *  既定 false＝非発火（opt-in）。`true` で発火。null/undefined/false は非発火。
    *  標準はポーズ差し替え（theo-hayami 等）が話者合図を担うため nudge は不要。欲しい作品だけ true で opt-in する。 */
   speakerNudge?: boolean | null
+  /** オート再生を最初から ON にするか (#436)。frontmatter `auto_play:` から流す。
+   *  既定 false＝手送り（null/undefined/false で最初は手送り）。`true` で起動時からオート ON。
+   *  llll-ll-media 等の動画用途では `auto_play: true` を明示する。 */
+  autoPlay?: boolean | null
   /** DebugOverlay に出す renderer 外の読み込み診断 (#321)。 */
   debugInfo?: string[]
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
@@ -180,6 +184,7 @@ function NovelPlayer({
   skipEnabled,
   debugEnabled,
   speakerNudge,
+  autoPlay,
   debugInfo,
   docKey,
   initialSkipMode = false,
@@ -193,9 +198,9 @@ function NovelPlayer({
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
   const [settingsOpen, setSettingsOpen] = useState(false)
   // オートモード ON/OFF (#139)
-  // llll-ll-media 等の動画用途では起動時 ON が正解。ノベルゲーで止まりたい場合は
-  // UI のオートトグルで切る運用（後で frontmatter `auto_play: false` を追加する）
-  const [autoMode, setAutoMode] = useState(true)
+  // 既定は OFF＝手送り (#436)。frontmatter `auto_play: true` で起動時から ON にできる
+  // （llll-ll-media 等の動画用途）。起動後は UI のオートトグルで随時切り替える。
+  const [autoMode, setAutoMode] = useState(autoPlay ?? false)
   // スキップモード ON/OFF (#140)
   const [skipMode, setSkipMode] = useState(false)
   // クイックセーブ/ロード完了通知 toast (#142)

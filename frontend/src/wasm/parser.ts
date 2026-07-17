@@ -261,6 +261,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     debug_enabled: doc.debug_enabled ?? null,
     // 話者交代 nudge の per-game 出し分け (#382)。boolean なので ?? null（未指定は下流で既定 false＝非発火・opt-in）。
     speaker_nudge: doc.speaker_nudge ?? null,
+    // オート再生の per-game 出し分け (#436)。boolean なので ?? null（未指定は下流で既定 false＝手送り）。
+    auto_play: doc.auto_play ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

@@ -282,6 +282,12 @@ export interface Document {
      * `\"true\"` / `\"false\"` のみ受け、それ以外（空・非真偽値）は None（既定 false）にフォールバック。
      */
     speaker_nudge?: boolean;
+    /**
+     * オート再生を最初からONにするか (#436)。frontmatter `auto_play:` から流す。
+     * 未指定なら None（runtime で false 扱い＝手送り既定）。
+     * `\"true\"` / `\"false\"` のみ受け、それ以外（空・非真偽値）は None（既定 false）にフォールバック。
+     */
+    auto_play?: boolean;
     chapters: Chapter[];
 }
 
@@ -411,8 +417,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly emit_markdown: (a: any) => [number, number, number, number];
+    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

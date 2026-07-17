@@ -3742,6 +3742,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         skip_enabled: None,
         debug_enabled: None,
         speaker_nudge: None,
+        auto_play: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -5383,6 +5384,42 @@ title: "テスト"
     assert_eq!(doc2.character_fade_ms, Some(700));
     // ドキュメント全体が安定（parse → emit → parse が冪等）。
     assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
+}
+
+#[test]
+fn test_auto_play_true_false_round_trips() {
+    // #436: auto_play: true / false が parse → emit → parse で保持される。
+    //   false（falsy）でも Some なら emit から消えないこと（skip_serializing は None だけ）を縛る。
+    for (val, expected) in [(" true", Some(true)), (" false", Some(false))] {
+        let input = format!(
+            "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nauto_play:{val}\n---\n\n## 1-1: シーン\n\nナレ。\n"
+        );
+        let doc = parser::parse(&input);
+        assert_eq!(doc.auto_play, expected, "auto_play:{val} が parse される");
+
+        let emitted = emitter::emit(&doc);
+        let want = format!("auto_play: {}", expected.unwrap());
+        assert!(
+            emitted.contains(&want),
+            "emit に `{want}` が含まれること: {emitted}"
+        );
+
+        let doc2 = parser::parse(&emitted);
+        assert_eq!(doc2.auto_play, expected, "round-trip で auto_play が保持される");
+    }
+}
+
+#[test]
+fn test_auto_play_unspecified_is_none_and_omitted() {
+    // #436: 未指定なら None（runtime 既定 false＝手送り）。emit にも `auto_play:` 行は出ない。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(doc.auto_play, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("auto_play:"),
+        "None のとき emit に `auto_play:` 行が出ない: {emitted}"
+    );
 }
 
 #[test]

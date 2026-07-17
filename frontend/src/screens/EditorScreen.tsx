@@ -757,6 +757,8 @@ function EditorScreen({
                 debugEnabled={true}
                 // 話者交代 nudge (#382)。doc 由来・既定オフの opt-in。speaker_nudge: true の作品だけ編集プレビューでも発火する。
                 speakerNudge={doc?.speaker_nudge ?? null}
+                // オート再生 (#436)。doc 由来・既定オフ。auto_play: true の作品だけ編集プレビューでも起動時オート ON。
+                autoPlay={doc?.auto_play ?? null}
                 // Worker proxy 経由で assets を取得（private repo でも動作する）。
                 // NOTE: EditorScreen は develop ブランチでスクリプトを編集するが、
                 // assetBaseUrl はクエリパラメータを持てない設計のため ref=main 固定になる。
