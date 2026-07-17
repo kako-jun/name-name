@@ -2571,8 +2571,9 @@ export class NovelRenderer {
    * ChoiceOverlay からの scroll-lock コールバックで 'none' に戻す（下記 init 内の配線を参照）。
    */
   private setCanvasTouchAction(value: string): void {
-    const canvas = this.app?.canvas as HTMLCanvasElement | undefined
-    if (canvas) canvas.style.touchAction = value
+    if (!this.appInitialized) return
+    const canvas = this.app.canvas as HTMLCanvasElement
+    canvas.style.touchAction = value
   }
 
   /**
