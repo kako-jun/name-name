@@ -751,6 +751,8 @@ function EditorScreen({
                 characterFadeMs={doc?.character_fade_ms ?? null}
                 backgroundFadeMs={doc?.background_fade_ms ?? null}
                 backgroundColor={doc?.background_color ?? null}
+                // SeekBar 色 (#440)。doc 由来・未指定は既定の水色。seekbar_color 指定作品は編集プレビューでも反映。
+                seekbarColor={doc?.seekbar_color ?? null}
                 // Skip(S) は doc 由来（#310）。skip_enabled=false の作品は編集プレビューでも S を隠す。
                 skipEnabled={doc?.skip_enabled ?? null}
                 // デバッグ(D) は frontmatter 非依存で常時有効（編集者用 #310）。debug_enabled は /play 専用。

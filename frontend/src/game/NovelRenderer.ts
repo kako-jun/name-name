@@ -40,7 +40,7 @@ import { ChoiceOverlay } from './ChoiceOverlay'
 import { SaveManager, SaveSlotData } from './SaveManager'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
-import { SeekBar } from './SeekBar'
+import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { isSceneIdConfined } from './sceneConfinement'
 import { Event, EventScene } from '../types'
@@ -3823,6 +3823,20 @@ export class NovelRenderer {
       this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
       this.bgGraphics.fill(this.defaultBackgroundColorNum())
     }
+  }
+
+  /**
+   * SeekBar（シナリオスライダ）のフィル／つまみ色を設定する (#440)。frontmatter `seekbar_color:` の
+   * 値（`#rrggbb`）を渡す。`setDefaultBackgroundColor`（#409）と対称の per-game 設定で、`NovelPlayer`
+   * の init／prop 変化時に呼ばれる。null/空文字/不正値は `parseColorToNumber` により既定の水色
+   * `DEFAULT_BAR_FILL_COLOR` に倒れる。トラック背景色は据え置き。
+   */
+  setSeekBarColor(color: string | null | undefined): void {
+    const num =
+      color && color.length > 0
+        ? parseColorToNumber(color, DEFAULT_BAR_FILL_COLOR)
+        : DEFAULT_BAR_FILL_COLOR
+    this.seekBar.setFillColor(num)
   }
 
   // --- クイックセーブ / クイックロード (#142) ---

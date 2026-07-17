@@ -25,8 +25,12 @@ const BAR_MARGIN_X = 20
 
 /** バー背景色（暗いグレー） */
 const BAR_BG_COLOR = 0x333333
-/** バー進捗色（水色系、DialogBox のインジケーター色に合わせる） */
-const BAR_FILL_COLOR = 0xa8dadc
+/**
+ * バー進捗色（フィル／つまみ）の既定値（水色系、DialogBox のインジケーター色に合わせる）(#440)。
+ * per-game の `seekbar_color:` 未指定時のフォールバック。SeekBar は全ゲーム共有部品なので
+ * ここをグローバルに変えず、作品ごとに `setFillColor` で上書きする。
+ */
+export const DEFAULT_BAR_FILL_COLOR = 0xa8dadc
 /** バーの丸み */
 const BAR_RADIUS = 3
 /** つまみの半径 */
@@ -53,6 +57,12 @@ export class SeekBar extends Container {
 
   private _total = 0
   private _current = 0
+
+  /**
+   * フィル／つまみ色 (#440)。per-game の `seekbar_color:` を反映する。既定は水色（後方互換）。
+   * トラック背景 `BAR_BG_COLOR` は据え置きで、この色だけを上書きする。
+   */
+  private fillColor: number = DEFAULT_BAR_FILL_COLOR
 
   /**
    * 演出/UI の一時状態 (#350)。`visible` とは別概念で、GameState には持たない transient フラグ。
@@ -115,7 +125,7 @@ export class SeekBar extends Container {
     // つまみ
     this.thumb = new Graphics()
     this.thumb.circle(0, 0, THUMB_RADIUS)
-    this.thumb.fill({ color: BAR_FILL_COLOR, alpha: 0.9 })
+    this.thumb.fill({ color: this.fillColor, alpha: 0.9 })
     this.thumb.y = this.thumbCenterY
     this.addChild(this.thumb)
 
@@ -134,6 +144,22 @@ export class SeekBar extends Container {
   /** active 状態変化コールバックを設定する (#350)。 */
   setOnActiveChange(callback: (active: boolean) => void): void {
     this.onActiveChange = callback
+  }
+
+  /**
+   * フィル／つまみ色を上書きする (#440)。per-game の `seekbar_color:` を反映する。
+   * 呼び出し側で `parseColorToNumber` により文字列→数値に解決済みの色を渡す（不正/未指定は
+   * 既定の水色にフォールバック済み）。トラック背景は変えない。即座に再描画して反映する。
+   */
+  setFillColor(color: number): void {
+    if (!Number.isFinite(color) || this.fillColor === color) return
+    this.fillColor = color
+    // つまみ色を描き直す（円は原点基準・scale/位置は据え置き）。
+    this.thumb.clear()
+    this.thumb.circle(0, 0, THUMB_RADIUS)
+    this.thumb.fill({ color: this.fillColor, alpha: 0.9 })
+    // フィルバーは updateVisual が this.fillColor を参照して描き直す。
+    this.updateVisual()
   }
 
   /** 現在 active かどうか (#350)。 */
@@ -266,7 +292,7 @@ export class SeekBar extends Container {
 
     this.barFill.clear()
     this.barFill.roundRect(this.barX, this.barY, fillWidth, BAR_HEIGHT, BAR_RADIUS)
-    this.barFill.fill({ color: BAR_FILL_COLOR, alpha: 0.8 })
+    this.barFill.fill({ color: this.fillColor, alpha: 0.8 })
 
     // つまみ位置（X のみ。Y はつまみ中心＝ボタン中央で固定）
     this.thumb.x = this.barX + this.barWidth * ratio

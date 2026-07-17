@@ -12,7 +12,13 @@
  *  - thumb / clickRegion は private graphics なので internals キャストで読む（公開メソッド・状態で駆動）。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { SeekBar, ACTIVE_THUMB_SCALE, INACTIVE_ALPHA, INACTIVITY_MS } from './SeekBar'
+import {
+  SeekBar,
+  ACTIVE_THUMB_SCALE,
+  INACTIVE_ALPHA,
+  INACTIVITY_MS,
+  DEFAULT_BAR_FILL_COLOR,
+} from './SeekBar'
 import { TimeController } from './TimeController'
 import { PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX } from './novelLayout'
 
@@ -30,6 +36,7 @@ function virtualTime(): TimeController {
 interface SeekBarInternals {
   thumb: { visible: boolean; y: number; scale: { x: number } }
   clickRegion: { emit: (event: string, ...args: unknown[]) => boolean }
+  fillColor: number
 }
 function internals(sb: SeekBar): SeekBarInternals {
   return sb as unknown as SeekBarInternals
@@ -328,5 +335,26 @@ describe('SeekBar タップ挙動・縦位置追従 (#350 追修正)', () => {
     expect(internals(sb).thumb.y).toBe(SCREEN_H - PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX)
     sb.setVerticalCenter(600)
     expect(internals(sb).thumb.y).toBe(600)
+  })
+})
+
+// #440: フィル／つまみ色の per-game 上書き。既定は水色（後方互換）で、setFillColor で上書きできる。
+// トラック背景（BAR_BG_COLOR）は据え置きなので触らない。数値色は internals.fillColor で読む。
+describe('SeekBar フィル色 setFillColor (#440)', () => {
+  it('初期の fillColor は既定の水色 DEFAULT_BAR_FILL_COLOR', () => {
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
+    expect(internals(sb).fillColor).toBe(DEFAULT_BAR_FILL_COLOR)
+  })
+
+  it('setFillColor で金色に上書きできる', () => {
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
+    sb.setFillColor(0xb8934f)
+    expect(internals(sb).fillColor).toBe(0xb8934f)
+  })
+
+  it('非有限値（NaN）は無視して既定を保つ', () => {
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
+    sb.setFillColor(Number.NaN)
+    expect(internals(sb).fillColor).toBe(DEFAULT_BAR_FILL_COLOR)
   })
 })

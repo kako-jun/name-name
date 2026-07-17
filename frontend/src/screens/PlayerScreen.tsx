@@ -726,6 +726,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
               characterFadeMs={doc?.character_fade_ms ?? null}
               backgroundFadeMs={doc?.background_fade_ms ?? null}
               backgroundColor={doc?.background_color ?? null}
+              seekbarColor={doc?.seekbar_color ?? null}
               intermissionEvents={intermissionScene?.events ?? null}
               intermissionBackgroundFadeMs={intermissionScene?.backgroundFadeMs ?? null}
               intermissionCharacterFadeMs={intermissionScene?.characterFadeMs ?? null}

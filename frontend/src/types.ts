@@ -525,6 +525,11 @@ export interface EventDocument {
    *  llll-ll-media 等の動画用途では `auto_play: true` を明示する。null/undefined/未指定は false 扱い。
    *  frontmatter `auto_play:` から流す。 */
   auto_play?: boolean | null
+  /** SeekBar（シナリオスライダ）のフィル／つまみ色 (#440)。`#rrggbb`。null/undefined/未指定・不正値は
+   *  既定の水色 `#a8dadc` にフォールバック。トラック背景（暗いグレー）は据え置き。SeekBar は全ゲーム共有
+   *  部品ゆえグローバル変更せず、theo-hayami の金トグル等に揃えたい作品だけ frontmatter で指定する。
+   *  frontmatter `seekbar_color:` から流す per-game 設定。 */
+  seekbar_color?: string | null
   chapters: EventChapter[]
 }
 
