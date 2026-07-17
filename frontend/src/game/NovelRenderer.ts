@@ -93,6 +93,29 @@ import { stripRubyMarkup } from './ruby'
  */
 const PRELOAD_MAX_TEXT_EVENTS = Infinity
 
+/**
+ * novel 型 canvas の既定 touch-action (#434)。
+ *
+ * PixiJS の `Application.init()` はゲームタイプに関係なく無条件で canvas に
+ * `touch-action: none` を設定する（Pixi 内部の EventSystem 実装。`eventFeatures` オプションの
+ * 適用より後に効くため、Pixi 標準オプションでは無効化できない）。そのため init 完了後に
+ * こちらで明示的に上書きする必要がある。
+ *
+ * novel 型はクリック/タップで1行送りするだけのポインター操作しか使わず、スワイプそのものを
+ * ゲーム入力として消費しない。iframe 埋め込み（theo-hayami 等）で touch-action:'none' のままだと、
+ * 埋め込み枠内のスワイプがすべて「ゲーム側のタップ」として捕捉されてしまい、外側ページの
+ * スクロールができなくなる (#434)。縦方向のスワイプはブラウザのネイティブスクロール/パンへ
+ * 開放してよいため 'pan-y' にする。横方向は 'none' のまま維持し、ピンチズーム等の意図しない
+ * ネイティブジェスチャは禁止する。
+ *
+ * RPG型 (`TopDownRenderer.ts`) ・raycast型 (`RaycastRenderer.ts`) は `touchInput.ts` の
+ * スワイプ移動/タップメニューでスワイプ自体をゲーム操作として捕捉する必要があるため、
+ * touch-action:'none' のまま無改修とする（このファイルの対象外）。
+ * 「ゲームタイプごとに入力要件が異なるので touch-action もレンダラーごとに自身の入力要件に応じて
+ * 宣言する」という設計であり、novel 型だけの特別扱いハックではない。
+ */
+const NOVEL_CANVAS_TOUCH_ACTION = 'pan-y'
+
 /** Dialog / Narration から text を取り出すヘルパー */
 export function getTextEvent(event: Event):
   | {
@@ -609,6 +632,11 @@ export class NovelRenderer {
     this.appInitialized = true
     this.choiceOverlay.setRenderResolution(this.getRenderResolution())
 
+    // Pixi が init() 内で設定した touch-action:'none' を上書きする (#434)。
+    // 詳細な判断根拠は NOVEL_CANVAS_TOUCH_ACTION 定義部のコメント参照。init() 完了直後
+    // （Pixi 自身の設定が済んだ後）でなければ上書きしても意味がないため、ここで行う。
+    this.setCanvasTouchAction(NOVEL_CANVAS_TOUCH_ACTION)
+
     container.appendChild(this.app.canvas as HTMLCanvasElement)
 
     // 下地ベタ（既定色・#409）。frontmatter `background_color:` の既定色（未指定なら黒）で全面を塗る。
@@ -709,6 +737,12 @@ export class NovelRenderer {
     // 選択肢オーバーレイ（カウンターより上に配置）
     this.choiceOverlay.visible = false
     this.app.stage.addChild(this.choiceOverlay)
+    // スクロール可能な選択肢リスト（#339）は縦方向ドラッグで操作する。touch-action:'pan-y' の
+    // ままだとブラウザがその縦ドラッグをネイティブスクロールとして奪ってしまうため、表示中だけ
+    // 'none' に戻し、非表示に戻ったら NOVEL_CANVAS_TOUCH_ACTION（'pan-y'）へ復帰させる (#434)。
+    this.choiceOverlay.setOnScrollLockChange((locked) => {
+      this.setCanvasTouchAction(locked ? 'none' : NOVEL_CANVAS_TOUCH_ACTION)
+    })
 
     // セーブ/ロードオーバーレイ
     this.app.stage.addChild(this.saveLoadOverlay)
@@ -2529,6 +2563,16 @@ export class NovelRenderer {
       return
     }
     this.advance()
+  }
+
+  /**
+   * canvas の touch-action を設定する (#434)。canvas 未初期化時は no-op。
+   * 既定は NOVEL_CANVAS_TOUCH_ACTION（'pan-y'）。スクロール可能な選択肢リスト（#339）表示中だけ
+   * ChoiceOverlay からの scroll-lock コールバックで 'none' に戻す（下記 init 内の配線を参照）。
+   */
+  private setCanvasTouchAction(value: string): void {
+    const canvas = this.app?.canvas as HTMLCanvasElement | undefined
+    if (canvas) canvas.style.touchAction = value
   }
 
   /**
