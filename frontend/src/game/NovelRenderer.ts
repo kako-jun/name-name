@@ -804,6 +804,9 @@ export class NovelRenderer {
       console.warn('[name-name] テクスチャの解放に失敗', err)
     })
     this.textureCache.clear()
+    // イベント絵レイヤーのテクスチャも同じタイミングで解放する (#351 セルフレビュー指摘:
+    // 背景と違い textureCache 相当の登録先が無く、GPU テクスチャが解放されずリークしていた)。
+    this.eventImageLayer.disposeTextures()
     this.resetAndStartEvents([...events])
   }
 
@@ -1905,6 +1908,9 @@ export class NovelRenderer {
     this.videoLayer.remove()
     // イベント絵レイヤーも破棄する（sprite/texture 参照を解放）(#351)。
     this.eventImageLayer.remove()
+    // イベント絵レイヤーが読み込んだテクスチャも解放する (#351 セルフレビュー指摘。
+    // setEvents() と同じ理由: textureCache 相当の登録先が無いと GPU テクスチャがリークする)。
+    this.eventImageLayer.disposeTextures()
     this.audioManager.destroy()
     this.characterLayer.clear()
     this.choiceOverlay.hide()
@@ -2446,10 +2452,13 @@ export class NovelRenderer {
     // 動画には触れないため（show が単一スロットを置換、なしなら remove）、背景復元の後に行う。
     this.videoLayer.restore(state.video)
 
-    // イベント絵レイヤー復元 (#351)。フェードは行わず即時反映（ADR-0002）。背景・立ち絵の
+    // イベント絵レイヤー復元 (#351)。フェードは行わず即時反映（ADR-0002）。背景・立ち絵・動画の
     // 可視性は eventImageLayer の復元後の状態を見て宣言的に再計算する（processDirective と
-    // 同じ applyEventImageVisibility を共有）。
-    this.eventImageLayer.restore(state.eventImage)
+    // 同じ applyEventImageVisibility を共有）。onSettled でロード完了/失敗後にも再計算する
+    // （processDirective の EventImage 分岐と同じセルフレビュー対応）。
+    this.eventImageLayer.restore(state.eventImage, {
+      onSettled: () => this.applyEventImageVisibility(),
+    })
     this.applyEventImageVisibility()
 
     // 暗転復元（セーブ/ロード・シーク・任意局面起動の applyState はすべてここを通る #350）
@@ -2560,20 +2569,24 @@ export class NovelRenderer {
   }
 
   /**
-   * イベント絵レイヤー (#351) の `back` 値に応じて、背景・立ち絵の可視性を宣言的にトグルする。
+   * イベント絵レイヤー (#351) の `back` 値に応じて、背景・立ち絵・動画の可視性を宣言的にトグルする。
    *
    * `setBlackout` と同じ「単一の宣言的セッター」パターン: processDirective（ライブ進行）と
    * applyState（goBack/seekTo/セーブ復元）の両方から、eventImageLayer の現在状態を毎回
    * 素直に読んで反映するだけにする。退避 → 復元のような一回限りのアニメーションは持たない
    * （ADR-0002: スナップショットは常に settled 状態のみを持つ）。
    *
-   * `back=Hide`（イベント絵表示中かつ既定値）のときだけ背景・立ち絵を隠す。イベント絵が無い、
-   * または `back=Keep` のときは常に両方とも表示する。
+   * 判定は `eventImageLayer.shouldHideBackLayer()` に委ねる（`getState()?.back==='Hide'` の単純な
+   * 意図参照ではなく、ロード失敗時は覆うものが無いため隠さない可視性専用ロジック。セルフレビュー
+   * 指摘: back=Hide のままロードが永久に失敗すると背面が隠れっぱなしになる事故を防ぐ）。
+   * `videoLayer`（#252）も背面スタックの一部（characterLayer と bgContainer の間に位置）なので
+   * 同じトグルに含める（セルフレビュー指摘: event image の前面に動画だけ透けて見える事故を防ぐ）。
    */
   private applyEventImageVisibility(): void {
-    const hide = this.eventImageLayer.getState()?.back === 'Hide'
+    const hide = this.eventImageLayer.shouldHideBackLayer()
     this.bgGraphics.visible = !hide
     this.bgContainer.visible = !hide
+    this.videoLayer.visible = !hide
     this.characterLayer.visible = !hide
   }
 
@@ -2914,12 +2927,18 @@ export class NovelRenderer {
     }
     if ('EventImage' in event) {
       // イベント絵レイヤー (#351)。URL 構築は EventImageLayer 側（assetBaseUrl + '/images/' + path）
-      // に委譲する。表示後、背面（背景・立ち絵）の可視性を back 値に応じて宣言的に更新する
+      // に委譲する。表示後、背面（背景・立ち絵・動画）の可視性を back 値に応じて宣言的に更新する
       // （applyEventImageVisibility は setBlackout と同じく processDirective / applyState の
       // 両方から呼ばれる単一の宣言的トグル。一回限りのアニメーションにはしない・ADR-0002）。
+      // onSettled でロード完了/失敗後にも再計算する（セルフレビュー指摘: ロード失敗のまま
+      // back=Hide が残ると背面が隠れっぱなしになる事故を防ぐ。shouldHideBackLayer() 参照）。
       const ei = event.EventImage
       if (this.assetBaseUrl) {
-        this.eventImageLayer.show(ei.path, { back: ei.back, fadeMs: ei.fade_ms })
+        this.eventImageLayer.show(ei.path, {
+          back: ei.back,
+          fadeMs: ei.fade_ms,
+          onSettled: () => this.applyEventImageVisibility(),
+        })
         this.applyEventImageVisibility()
       }
       return

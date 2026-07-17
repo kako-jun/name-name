@@ -25,6 +25,14 @@ export interface EventImageShowOptions {
   back?: 'Hide' | 'Keep' | null
   /** 表示フェードイン時間 (ms)。未指定/0 以下は即時表示 */
   fadeMs?: number | null
+  /**
+   * ロード成否に関わらず一度だけ発火する（CharacterLayer の #293 `onReady` と同じ流儀）。
+   * 呼び出し元（NovelRenderer）はこれを機に `applyEventImageVisibility()` を再計算する。
+   * ロード失敗時に `shouldHideBackLayer()` が false へ切り替わることを反映させ、覆うものが
+   * 無いのに背面（背景・立ち絵）だけ隠れっぱなしになる事故を防ぐ（セルフレビュー指摘）。
+   * 世代が古い（後から来た show()/remove() に追い越された）呼び出しでは発火しない。
+   */
+  onSettled?: () => void
 }
 
 export interface EventImageRemoveOptions {
@@ -62,6 +70,16 @@ export class EventImageLayer extends Container {
   private loadToken = 0
   /** ロード待ち中かどうかの判定用（`[待機: 表示完了]` の観測対象） */
   private pendingLoadToken: number | null = null
+  /**
+   * 直近の show() のロードが失敗したか（現行世代のみ）。`current`（settled state・ADR-0002）は
+   * ロード成否に関わらず作者の意図（path/back）を保持し続けるが、`shouldHideBackLayer()`（可視性
+   * 判定専用）はこのフラグを見て「覆うものが実際に無い」間は背面を隠さないようにする
+   * （セルフレビュー指摘: ロード失敗のまま back=Hide が残ると背景・立ち絵が永久に隠れっぱなしになる事故）。
+   */
+  private loadFailed = false
+
+  /** これまでにロードした画像 URL（GPU テクスチャのリーク防止用。NovelRenderer.textureCache と同じ流儀） */
+  private loadedUrls: Set<string> = new Set()
 
   constructor(
     screenWidth: number,
@@ -97,11 +115,13 @@ export class EventImageLayer extends Container {
   show(path: string, opts: EventImageShowOptions = {}): void {
     const back: 'Hide' | 'Keep' = opts.back === 'Keep' ? 'Keep' : 'Hide'
     const fadeMs = typeof opts.fadeMs === 'number' && opts.fadeMs > 0 ? opts.fadeMs : 0
+    const onSettled = opts.onSettled
 
     this.destroySprite()
     this.stopFadeTimer()
     this.fadeAnimation = null
     this.current = { path, back }
+    this.loadFailed = false
 
     if (!this.assetBaseUrl) return
 
@@ -114,6 +134,7 @@ export class EventImageLayer extends Container {
         // 新しい show()/remove() が後から呼ばれていれば、この読み込みは無効（古い世代）。
         if (token !== this.loadToken) return
         this.pendingLoadToken = null
+        this.loadedUrls.add(url)
 
         const sprite = new Sprite(texture)
         Object.assign(
@@ -137,10 +158,16 @@ export class EventImageLayer extends Container {
         } else {
           sprite.alpha = 1
         }
+        onSettled?.()
       })
       .catch((err: unknown) => {
         if (this.pendingLoadToken === token) this.pendingLoadToken = null
         console.warn('[name-name] イベント絵の読み込みに失敗: ' + url, err)
+        // 現行世代の失敗だけ shouldHideBackLayer() に反映する（古い世代の失敗は現在の current に無関係）。
+        if (token === this.loadToken) {
+          this.loadFailed = true
+          onSettled?.()
+        }
       })
   }
 
@@ -238,12 +265,12 @@ export class EventImageLayer extends Container {
    * フェードは行わない（復元は settled 状態への瞬時反映。CharacterLayer.show の
    * instant 復元・VideoLayer.restore と同じ流儀。ADR-0002）。
    */
-  restore(state: EventImageState | null): void {
+  restore(state: EventImageState | null, opts: { onSettled?: () => void } = {}): void {
     if (!state) {
       this.remove()
       return
     }
-    this.show(state.path, { back: state.back })
+    this.show(state.path, { back: state.back, onSettled: opts.onSettled })
   }
 
   /**
@@ -252,5 +279,34 @@ export class EventImageLayer extends Container {
    */
   hasPendingVisualTransition(): boolean {
     return this.pendingLoadToken !== null || this.fadeAnimation !== null
+  }
+
+  /**
+   * `back=Hide` によって背面（背景・立ち絵）を実際に隠すべきかを返す（NovelRenderer.
+   * applyEventImageVisibility() の可視性判定専用 API）。
+   *
+   * `getState()`（settled state・ADR-0002・作者の意図として path/back を保持し続ける。
+   * セーブ/リトライのため load 成否に関わらず不変）とは別に、こちらは「実際に画像が
+   * 覆っているか」を返す。ロードが失敗した世代では覆うものが存在しないため false を返し、
+   * 背景・立ち絵が永久に隠れっぱなしになる事故を防ぐ（セルフレビュー指摘）。
+   */
+  shouldHideBackLayer(): boolean {
+    return this.current !== null && !this.loadFailed && this.current.back === 'Hide'
+  }
+
+  /**
+   * これまでにロードした画像 URL を PixiJS の Assets キャッシュから解放する
+   * （GPU テクスチャのリーク防止。NovelRenderer.textureCache と同じ流儀・fire-and-forget）。
+   * 呼び出し後も表示中の sprite はそのまま（Texture オブジェクト自体への参照は保持されるため
+   * 描画は壊れない。破棄すべきタイミングは呼び出し元が新しいイベント列の開始・レンダラ破棄と
+   * 同期させる責務を持つ）。
+   */
+  disposeTextures(): void {
+    const urls = Array.from(this.loadedUrls)
+    this.loadedUrls.clear()
+    if (urls.length === 0) return
+    Promise.all(urls.map((u) => Assets.unload(u))).catch((err: unknown) => {
+      console.warn('[name-name] イベント絵テクスチャの解放に失敗', err)
+    })
   }
 }
