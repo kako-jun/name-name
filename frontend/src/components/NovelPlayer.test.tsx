@@ -176,6 +176,27 @@ describe('NovelPlayer ボタン出し分け', () => {
     expect(skipButton()).toBeNull()
   })
 
+  // --- DT-A: オート再生の初期状態 (#436) ---
+  const autoToggle = () => screen.queryByRole('button', { name: /オートモードを/ })
+
+  it('DT-A: autoPlay 未指定なら起動時オート OFF（手送り・ラベルが「オンにする」）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(autoToggle()).toHaveAttribute('aria-label', 'オートモードをオンにする')
+  })
+
+  it('DT-A: autoPlay={false} なら起動時オート OFF', async () => {
+    render(<NovelPlayer events={[]} autoPlay={false} />)
+    await flushAsync()
+    expect(autoToggle()).toHaveAttribute('aria-label', 'オートモードをオンにする')
+  })
+
+  it('DT-A: autoPlay={true} なら起動時オート ON（ラベルが「オフにする」）', async () => {
+    render(<NovelPlayer events={[]} autoPlay={true} />)
+    await flushAsync()
+    expect(autoToggle()).toHaveAttribute('aria-label', 'オートモードをオフにする')
+  })
+
   // --- DT2: Debug(D) ボタン + DebugOverlay の mount ---
   it('DT2: debugEnabled={true} なら Debug(D) ボタンを描画する', async () => {
     render(<NovelPlayer events={[]} debugEnabled={true} />)

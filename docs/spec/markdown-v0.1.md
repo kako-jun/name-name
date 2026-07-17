@@ -43,6 +43,7 @@ choice_style: "default"
 | `skip_enabled` | boolean | No | スキップ(S)ボタンを出すかの per-game 設定。`true`=表示（既定・後方互換）、`false`=Skip ボタンを描画しない（スキップ不要なゲーム向け）。**skip-read-only（既読のみ飛ばす・#140）のロジック自体には影響しない**＝ボタンの有無のみ。`true`/`false` のみ受理（他は既定 true）(#310) |
 | `debug_enabled` | boolean | No | デバッグ(D)ボタンを `/play`（公開再生）で出すかの per-game 設定。`true`=表示、`false`/未指定=非表示（**既定＝本番では出さない**）。エディタ `/edit` では本設定に関係なく常時表示（編集者用）。D ボタン押下でデバッグパネルを展開/折りたたみ。`true`/`false` のみ受理（他は既定 false）(#310) |
 | `speaker_nudge` | boolean | No | novel の**話者交代 nudge**（立ち絵を軽く上下させるぴょこ・#286）を出すかの per-game 設定。**既定 false**（未指定/`false`=nudge なし）、`true`=opt-in で発火。標準はポーズのクロスフェード（#337）が動き＋「今この人」の合図を担うため nudge は不要で既定オフ。nudge は開発中の稀な合図で、**欲しい作品だけ** `speaker_nudge: true` で opt-in する。`true`/`false` のみ受理（他は既定 false）。表情変化／場面転換のスクリム自動退避（#283）は本設定と**独立**に維持される（nudge だけを抑制）(#382) |
+| `auto_play` | boolean | No | オート再生を最初から ON にするかの per-game 設定。**既定 false**（未指定/`false`=起動時は手送り）、`true`=起動時からオート ON（従来挙動。llll-ll-media 等の動画用途向け）。起動後はいずれも再生 UI のオート(A)トグルで随時 ON/OFF 切替可能。`true`/`false` のみ受理（他は既定 false）(#436) |
 
 フロントマターは Event ではなく、parser の Chapter 構造体（Rust 側）のフィールドとしてパースされる。フロントエンド側の EventChapter 型とは別物なので注意する。
 
