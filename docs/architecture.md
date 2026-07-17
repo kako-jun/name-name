@@ -400,6 +400,13 @@ NovelRenderer (PixiJS)          ← 1イベントずつ描画
 
 `Dialog` と `Narration` のみユーザー操作（クリック/キー）で進行する。
 
+### canvas の touch-action 方針 (#434)
+
+「ゲームタイプごとに入力要件が異なるので touch-action もレンダラーごとに自身の入力要件に応じて宣言する」という設計方針。次にレンダラーを足す・touch-action を触るときはこの規約に従うこと。
+
+- **novel 型**（`NovelRenderer.ts`）: canvas の touch-action は `'pan-y'`（`init()` 完了直後に上書きする。PixiJS の `Application.init()` は既定で `'none'` を設定するが、そのままだと iframe 埋め込み内のスワイプが外側ページのスクロールを奪えなくなる）。ただしスクロール可能な選択肢リスト表示中（#339, `ChoiceOverlay`）だけは `'none'` に戻す（`ChoiceOverlay.setOnScrollableChange` 経由の通知を受けて `NovelRenderer` が切り替える）。
+- **RPG 型**（`TopDownRenderer.ts`）・**raycast 型**（`RaycastRenderer.ts`）: `touchInput.ts` がスワイプ移動/タップメニューにスワイプ自体をゲーム操作として使うため、touch-action は `'none'` 固定・無改修。
+
 ### NovelRenderer の純粋計算モジュール (#260)
 
 `NovelRenderer.ts` は god-object 化しやすいため、入力→出力が決定論的で `this` / PixiJS / DOM / TimeController に一切依存しない計算を専用モジュールへ漸進分離している（#260）。`ruby.ts` / `rubyLayout.ts` / `raycastProjection.ts` と同じ流儀で、NovelRenderer 側は「いつ計算するか」「結果をどの表示オブジェクト・オーディオに当てるか」だけを保持する。各関数は抽出前に NovelRenderer 内へ直書きされていた式・数値・文字列と完全一致し（挙動不変）、リファレンス等価性をユニットテストで機械的に担保する。
