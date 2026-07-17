@@ -6236,6 +6236,210 @@ fn test_video_only_partial_fade_roundtrip() {
     );
 }
 
+// ============================================================================
+// #351 イベント絵レイヤー ([イベント絵: ...] / [イベント絵終了]) のパーサー / エミッターテスト
+// ============================================================================
+
+/// `[イベント絵: ...]` / `[イベント絵終了...]` 1 行だけを含む最小ドキュメントをパースし、
+/// 最初の Event を取り出すヘルパ。
+fn parse_single_event_image(directive_line: &str) -> Event {
+    let input = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n{directive_line}\n"
+    );
+    let doc = parser::parse(&input);
+    doc.chapters[0].scenes[0].events[0].clone()
+}
+
+#[test]
+fn test_event_image_path_only_defaults_to_hide_and_no_fade() {
+    // 観点1: path のみ → back は既定 Hide、fade_ms は None
+    let event = parse_single_event_image("[イベント絵: story/act1/x.webp]");
+    assert_eq!(
+        event,
+        Event::EventImage {
+            path: "story/act1/x.webp".to_string(),
+            back: EventImageBack::Hide,
+            fade_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_event_image_full_kv() {
+    // 観点2: 全 kv 指定 → 全フィールドが反映される
+    let event =
+        parse_single_event_image("[イベント絵: story/act2/y.webp, 背面=keep, フェード=800]");
+    assert_eq!(
+        event,
+        Event::EventImage {
+            path: "story/act2/y.webp".to_string(),
+            back: EventImageBack::Keep,
+            fade_ms: Some(800),
+        }
+    );
+}
+
+#[test]
+fn test_event_image_english_alias_equals_japanese() {
+    // 観点3: 英語 alias（back/fade）は日本語指定と同一 Event
+    let en = parse_single_event_image("[イベント絵: x.webp, back=keep, fade=400]");
+    let ja = parse_single_event_image("[イベント絵: x.webp, 背面=keep, フェード=400]");
+    assert_eq!(en, ja);
+}
+
+#[test]
+fn test_event_image_back_unknown_value_defaults_to_hide() {
+    // 観点4: 未知の背面値は既定 Hide に倒れる（enum 慣例: 未知→既定）
+    let event = parse_single_event_image("[イベント絵: x.webp, 背面=overlay]");
+    match event {
+        Event::EventImage { back, .. } => assert_eq!(back, EventImageBack::Hide),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_back_case_insensitive() {
+    // 観点5: 背面値は大小無視（KEEP も keep として解釈される）
+    let event = parse_single_event_image("[イベント絵: x.webp, 背面=KEEP]");
+    match event {
+        Event::EventImage { back, .. } => assert_eq!(back, EventImageBack::Keep),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_exit_bare() {
+    // 観点6: [イベント絵終了] → fade_ms なしの EventImageExit
+    let event = parse_single_event_image("[イベント絵終了]");
+    assert_eq!(event, Event::EventImageExit { fade_ms: None });
+}
+
+#[test]
+fn test_event_image_exit_with_fade() {
+    // 観点7: [イベント絵終了: フェード=600] → fade_ms=Some(600)
+    let event = parse_single_event_image("[イベント絵終了: フェード=600]");
+    assert_eq!(event, Event::EventImageExit { fade_ms: Some(600) });
+}
+
+#[test]
+fn test_event_image_exit_with_english_fade_alias() {
+    // 観点8: [イベント絵終了: fade=600] も同じ Event に解釈される
+    let event = parse_single_event_image("[イベント絵終了: fade=600]");
+    assert_eq!(event, Event::EventImageExit { fade_ms: Some(600) });
+}
+
+#[test]
+fn test_event_image_hide_default_is_omitted_in_emit() {
+    // 観点9: back=Hide（既定）は emit されない。fade_ms も未指定なら kv なしの `[イベント絵: path]`。
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵: story/x.webp]\n",
+    );
+    let md = emitter::emit(&doc);
+    assert!(
+        md.contains("[イベント絵: story/x.webp]\n"),
+        "kv なしで emit されるべき:\n{md}"
+    );
+    assert!(
+        !md.contains("[イベント絵: story/x.webp,"),
+        "既定値 Hide で kv が付いてはいけない:\n{md}"
+    );
+}
+
+#[test]
+fn test_event_image_roundtrip_normalized_order() {
+    // 観点10: emit は 背面→フェード の順、日本語キーに正規化される。
+    // 英語 alias で与え、parse → emit が正規化形になることを確認する（round-trip 安定）。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵: story/x.webp, fade=800, back=keep]\n";
+    let doc = parser::parse(input);
+    let md = emitter::emit(&doc);
+    assert!(
+        md.contains("[イベント絵: story/x.webp, 背面=keep, フェード=800]\n"),
+        "emit 結果:\n{md}"
+    );
+    let reparsed = parser::parse(&md);
+    assert_eq!(
+        reparsed.chapters[0].scenes[0].events[0],
+        doc.chapters[0].scenes[0].events[0]
+    );
+    assert_eq!(
+        doc.chapters[0].scenes[0].events[0],
+        Event::EventImage {
+            path: "story/x.webp".to_string(),
+            back: EventImageBack::Keep,
+            fade_ms: Some(800),
+        }
+    );
+}
+
+#[test]
+fn test_event_image_exit_roundtrip() {
+    // 観点11: [イベント絵終了: フェード=600] の emit / re-parse round-trip
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵終了: フェード=600]\n";
+    let doc = parser::parse(input);
+    let md = emitter::emit(&doc);
+    assert!(
+        md.contains("[イベント絵終了: フェード=600]\n"),
+        "emit 結果:\n{md}"
+    );
+    let reparsed = parser::parse(&md);
+    assert_eq!(
+        reparsed.chapters[0].scenes[0].events[0],
+        Event::EventImageExit { fade_ms: Some(600) }
+    );
+}
+
+#[test]
+fn test_event_image_exit_bare_roundtrip() {
+    // 観点12: [イベント絵終了]（fade_ms 無し）の emit / re-parse round-trip
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵終了]\n";
+    let doc = parser::parse(input);
+    let md = emitter::emit(&doc);
+    assert!(md.contains("[イベント絵終了]\n"), "emit 結果:\n{md}");
+    let reparsed = parser::parse(&md);
+    assert_eq!(
+        reparsed.chapters[0].scenes[0].events[0],
+        Event::EventImageExit { fade_ms: None }
+    );
+}
+
+#[test]
+fn test_event_image_path_is_trimmed() {
+    // 観点13: path 前後の空白は trim される
+    let event = parse_single_event_image("[イベント絵:   story/x.webp   ]");
+    match event {
+        Event::EventImage { path, .. } => assert_eq!(path, "story/x.webp"),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_unknown_key_and_malformed_kv_are_skipped() {
+    // 観点14: 未知キー・空 kv 要素・`=` なし要素は silent skip され、既知キーだけ反映される
+    let event =
+        parse_single_event_image("[イベント絵: x.webp, なぞ=99, , 背面のみ, 背面=keep, =値だけ]");
+    assert_eq!(
+        event,
+        Event::EventImage {
+            path: "x.webp".to_string(),
+            back: EventImageBack::Keep,
+            fade_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_event_image_exit_does_not_collide_with_event_image_prefix() {
+    // 観点15: 「イベント絵終了」は「イベント絵:」の prefix 一致に巻き込まれず、専用分岐で処理される
+    // （動画退場/動画: と同じ順序規約。parser.rs のコメント参照）。
+    let event = parse_single_event_image("[イベント絵終了]");
+    assert_eq!(event, Event::EventImageExit { fade_ms: None });
+    let event_with_fade = parse_single_event_image("[イベント絵終了: フェード=100]");
+    assert_eq!(
+        event_with_fade,
+        Event::EventImageExit { fade_ms: Some(100) }
+    );
+}
+
 // =====================================================================================
 // #294: 立ち絵の明示フィット指定 `フィット` / `fit`。
 //   話者行オプションに `フィット` を書いたときだけ Dialog.fit=true（既定 false）。
