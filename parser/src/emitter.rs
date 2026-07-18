@@ -73,6 +73,9 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ms) = doc.background_fade_ms {
             out.push_str(&format!("background_fade_ms: {ms}\n"));
         }
+        if let Some(ms) = doc.event_image_fade_ms {
+            out.push_str(&format!("event_image_fade_ms: {ms}\n"));
+        }
         // Emit background_color only when present (#409)。下地ベタの既定色。#rrggbb 前提だが
         // font_family と同じく double-quote で包んで round-trip を安定させる（`"` は除去）。
         if let Some(ref color) = doc.background_color {
@@ -1261,6 +1264,7 @@ mod tests {
             character_scale: None,
             character_fade_ms: None,
             background_fade_ms: None,
+            event_image_fade_ms: None,
             background_color: None,
             skip_enabled: None,
             debug_enabled: None,
@@ -1509,6 +1513,7 @@ mod tests {
             character_scale: None,
             character_fade_ms: None,
             background_fade_ms: None,
+            event_image_fade_ms: None,
             background_color: None,
             skip_enabled: None,
             debug_enabled: None,

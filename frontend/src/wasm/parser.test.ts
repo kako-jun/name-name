@@ -31,6 +31,7 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
     'character_y_ratio: 1.05',
     'character_fade_ms: 500',
     'background_fade_ms: 2000',
+    'event_image_fade_ms: 1400',
     'skip_enabled: false',
     'debug_enabled: true',
     'dialog_style: novel',
@@ -44,13 +45,14 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
     '',
   ].join('\n')
 
-  it('keeps character_y_ratio / character_fade_ms / background_fade_ms / skip_enabled / debug_enabled from frontmatter', async () => {
+  it('keeps character_y_ratio / character_fade_ms / background_fade_ms / event_image_fade_ms / skip_enabled / debug_enabled from frontmatter', async () => {
     const doc = await parseMarkdown(markdown)
     // ここが core: #308 / #310 / #407 のフィールドが normalize を生き残ること。
     // normalizeDocument の return から該当行を消すと undefined になり落ちる（修正前の状態）。
     expect(doc.character_y_ratio).toBe(1.05)
     expect(doc.character_fade_ms).toBe(500)
     expect(doc.background_fade_ms).toBe(2000)
+    expect(doc.event_image_fade_ms).toBe(1400)
     expect(doc.skip_enabled).toBe(false)
     expect(doc.debug_enabled).toBe(true)
   })
@@ -82,6 +84,7 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
     expect(doc.character_y_ratio).toBeNull()
     expect(doc.character_fade_ms).toBeNull()
     expect(doc.background_fade_ms).toBeNull()
+    expect(doc.event_image_fade_ms).toBeNull()
     expect(doc.skip_enabled).toBeNull()
     expect(doc.debug_enabled).toBeNull()
   })

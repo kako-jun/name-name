@@ -383,22 +383,25 @@ pub enum Event {
     /// 可視性トグルは NovelRenderer 側で `back` 値に応じて毎回宣言的に行う（一回限りの
     /// アニメーションにはしない。ADR-0002: スナップショットは常に settled 状態のみを持つ）。
     ///
-    /// Markdown 構文: `[イベント絵: story/act2/spino-empty-seat.webp, 背面=hide, フェード=800]`。
+    /// Markdown 構文: `[イベント絵: story/act2/spino-empty-seat.webp, 背面=hide, フェード=1400]`。
     /// キーは日本語 `背面` / 英語 alias `back`（値は英語トークン固定 `hide`/`keep`、大小無視、
     /// 未知値は既定 `Hide` に倒す）。`フェード` / `fade` は表示フェードイン時間 (ms)。
     EventImage {
         path: String,
         #[serde(default)]
         back: EventImageBack,
-        /// 表示フェードイン時間 (ms)。`None` は即時表示。
+        /// 個別の表示フェードイン時間 (ms)。`None` は runtime 側の event_image_fade_ms 既定に委ねる。
+        /// `Some(0)` は即時表示。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fade_ms: Option<u32>,
     },
     /// イベント絵レイヤーをクリアする (#351)。Markdown 構文:
-    /// `[イベント絵終了]` / `[イベント絵終了: フェード=600]`。
+    /// `[イベント絵終了]` / `[イベント絵終了: フェード=700]`。
     /// `back=Hide` で表示していた場合、クリアと同時に背景・立ち絵の可視性トグルも
     /// （NovelRenderer 側で）宣言的に戻る。`フェード` / `fade` は退場フェードアウト時間 (ms)。
     EventImageExit {
+        /// 個別の退場フェードアウト時間 (ms)。`None` は runtime 側の event_image_fade_ms 既定に委ねる。
+        /// `Some(0)` は即時消去。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fade_ms: Option<u32>,
     },
@@ -959,6 +962,12 @@ pub struct Document {
     /// 作品ごとにゆっくり／速くして余韻を調整する。空・非数値は None 扱い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_fade_ms: Option<u32>,
+    /// イベント絵の表示・退場フェード時間（ms）。frontmatter `event_image_fade_ms:` から流す。
+    /// 個別の `[イベント絵: ..., フェード=N]` / `[イベント絵終了: フェード=N]` がある場合は
+    /// そちらを優先し、未指定時だけ runtime がこの値を使う。未指定なら runtime 既定 700ms。
+    /// 空・非数値は None 扱い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_image_fade_ms: Option<u32>,
     /// 下地ベタ（ステージ最背面の全面塗り＝`bgGraphics`）の既定色（`#rrggbb`）(#409)。
     /// frontmatter `background_color:` から流す per-game 設定で、最初の背景絵がこの色から
     /// `background_fade_ms` でフェードインする（未指定なら黒 `#000000`）。シーン単位の

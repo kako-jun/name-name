@@ -221,6 +221,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
     events: Event[]
     backgroundFadeMs: number | null
     characterFadeMs: number | null
+    eventImageFadeMs: number | null
   } | null>(null)
 
   const loadScriptDoc = useCallback(
@@ -589,6 +590,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           events,
           backgroundFadeMs: parsed.background_fade_ms ?? null,
           characterFadeMs: parsed.character_fade_ms ?? null,
+          eventImageFadeMs: parsed.event_image_fade_ms ?? null,
         })
       } catch (err) {
         // ネットワークエラー・parse 失敗のいずれも致命ではない。フェーズ1の DOM 表示に
@@ -725,11 +727,13 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
               characterScale={doc?.character_scale ?? null}
               characterFadeMs={doc?.character_fade_ms ?? null}
               backgroundFadeMs={doc?.background_fade_ms ?? null}
+              eventImageFadeMs={doc?.event_image_fade_ms ?? null}
               backgroundColor={doc?.background_color ?? null}
               seekbarColor={doc?.seekbar_color ?? null}
               intermissionEvents={intermissionScene?.events ?? null}
               intermissionBackgroundFadeMs={intermissionScene?.backgroundFadeMs ?? null}
               intermissionCharacterFadeMs={intermissionScene?.characterFadeMs ?? null}
+              intermissionEventImageFadeMs={intermissionScene?.eventImageFadeMs ?? null}
               skipEnabled={doc?.skip_enabled ?? null}
               debugEnabled={doc?.debug_enabled ?? null}
               speakerNudge={doc?.speaker_nudge ?? null}

@@ -3738,6 +3738,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         character_scale: None,
         character_fade_ms: None,
         background_fade_ms: None,
+        event_image_fade_ms: None,
         background_color: None,
         skip_enabled: None,
         debug_enabled: None,
@@ -4932,6 +4933,72 @@ title: "テスト"
         !emitted.contains("background_fade_ms:"),
         "background_fade_ms が None なら emit に出ない: {emitted}"
     );
+}
+
+// --- event_image_fade_ms (イベント絵フェード時間の per-game 設定) ---
+
+fn event_image_fade_ms_doc(value: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nevent_image_fade_ms:{value}\n---\n\n## 1-1: シーン\n\n[イベント絵: story/x.webp]\n本文。\n[イベント絵終了]\n"
+    )
+}
+
+#[test]
+fn test_document_event_image_fade_ms_parses_number() {
+    let doc = parser::parse(&event_image_fade_ms_doc(" 700"));
+    assert_eq!(doc.event_image_fade_ms, Some(700));
+}
+
+#[test]
+fn test_document_event_image_fade_ms_invalid_values_are_none() {
+    for garbage in ["", "\"\"", "slow", "-1", "1.5", "７００"] {
+        let doc = parser::parse(&event_image_fade_ms_doc(&format!(" {garbage}")));
+        assert_eq!(
+            doc.event_image_fade_ms, None,
+            "event_image_fade_ms: {garbage}（非 u32）は None"
+        );
+    }
+}
+
+#[test]
+fn test_event_image_fade_ms_round_trip() {
+    let doc = parser::parse(&event_image_fade_ms_doc(" \"1400\""));
+    assert_eq!(doc.event_image_fade_ms, Some(1400));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("event_image_fade_ms: 1400"),
+        "emit に `event_image_fade_ms: 1400` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.event_image_fade_ms, Some(1400));
+}
+
+#[test]
+fn test_event_image_fade_ms_coexists_with_character_and_background_fade_ms() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+character_fade_ms: 500
+background_fade_ms: 2000
+event_image_fade_ms: 700
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_fade_ms, Some(500));
+    assert_eq!(doc.background_fade_ms, Some(2000));
+    assert_eq!(doc.event_image_fade_ms, Some(700));
+
+    let doc2 = parser::parse(&emitter::emit(&doc));
+    assert_eq!(doc2.character_fade_ms, Some(500));
+    assert_eq!(doc2.background_fade_ms, Some(2000));
+    assert_eq!(doc2.event_image_fade_ms, Some(700));
 }
 
 #[test]
@@ -6383,13 +6450,13 @@ fn test_event_image_path_only_defaults_to_hide_and_no_fade() {
 fn test_event_image_full_kv() {
     // 観点2: 全 kv 指定 → 全フィールドが反映される
     let event =
-        parse_single_event_image("[イベント絵: story/act2/y.webp, 背面=keep, フェード=800]");
+        parse_single_event_image("[イベント絵: story/act2/y.webp, 背面=keep, フェード=1400]");
     assert_eq!(
         event,
         Event::EventImage {
             path: "story/act2/y.webp".to_string(),
             back: EventImageBack::Keep,
-            fade_ms: Some(800),
+            fade_ms: Some(1400),
         }
     );
 }
@@ -6397,8 +6464,8 @@ fn test_event_image_full_kv() {
 #[test]
 fn test_event_image_english_alias_equals_japanese() {
     // 観点3: 英語 alias（back/fade）は日本語指定と同一 Event
-    let en = parse_single_event_image("[イベント絵: x.webp, back=keep, fade=400]");
-    let ja = parse_single_event_image("[イベント絵: x.webp, 背面=keep, フェード=400]");
+    let en = parse_single_event_image("[イベント絵: x.webp, back=keep, fade=300]");
+    let ja = parse_single_event_image("[イベント絵: x.webp, 背面=keep, フェード=300]");
     assert_eq!(en, ja);
 }
 
@@ -6431,16 +6498,16 @@ fn test_event_image_exit_bare() {
 
 #[test]
 fn test_event_image_exit_with_fade() {
-    // 観点7: [イベント絵終了: フェード=600] → fade_ms=Some(600)
-    let event = parse_single_event_image("[イベント絵終了: フェード=600]");
-    assert_eq!(event, Event::EventImageExit { fade_ms: Some(600) });
+    // 観点7: [イベント絵終了: フェード=700] → fade_ms=Some(700)
+    let event = parse_single_event_image("[イベント絵終了: フェード=700]");
+    assert_eq!(event, Event::EventImageExit { fade_ms: Some(700) });
 }
 
 #[test]
 fn test_event_image_exit_with_english_fade_alias() {
-    // 観点8: [イベント絵終了: fade=600] も同じ Event に解釈される
-    let event = parse_single_event_image("[イベント絵終了: fade=600]");
-    assert_eq!(event, Event::EventImageExit { fade_ms: Some(600) });
+    // 観点8: [イベント絵終了: fade=700] も同じ Event に解釈される
+    let event = parse_single_event_image("[イベント絵終了: fade=700]");
+    assert_eq!(event, Event::EventImageExit { fade_ms: Some(700) });
 }
 
 #[test]
@@ -6464,11 +6531,11 @@ fn test_event_image_hide_default_is_omitted_in_emit() {
 fn test_event_image_roundtrip_normalized_order() {
     // 観点10: emit は 背面→フェード の順、日本語キーに正規化される。
     // 英語 alias で与え、parse → emit が正規化形になることを確認する（round-trip 安定）。
-    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵: story/x.webp, fade=800, back=keep]\n";
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵: story/x.webp, fade=1400, back=keep]\n";
     let doc = parser::parse(input);
     let md = emitter::emit(&doc);
     assert!(
-        md.contains("[イベント絵: story/x.webp, 背面=keep, フェード=800]\n"),
+        md.contains("[イベント絵: story/x.webp, 背面=keep, フェード=1400]\n"),
         "emit 結果:\n{md}"
     );
     let reparsed = parser::parse(&md);
@@ -6481,25 +6548,25 @@ fn test_event_image_roundtrip_normalized_order() {
         Event::EventImage {
             path: "story/x.webp".to_string(),
             back: EventImageBack::Keep,
-            fade_ms: Some(800),
+            fade_ms: Some(1400),
         }
     );
 }
 
 #[test]
 fn test_event_image_exit_roundtrip() {
-    // 観点11: [イベント絵終了: フェード=600] の emit / re-parse round-trip
-    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵終了: フェード=600]\n";
+    // 観点11: [イベント絵終了: フェード=700] の emit / re-parse round-trip
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵終了: フェード=700]\n";
     let doc = parser::parse(input);
     let md = emitter::emit(&doc);
     assert!(
-        md.contains("[イベント絵終了: フェード=600]\n"),
+        md.contains("[イベント絵終了: フェード=700]\n"),
         "emit 結果:\n{md}"
     );
     let reparsed = parser::parse(&md);
     assert_eq!(
         reparsed.chapters[0].scenes[0].events[0],
-        Event::EventImageExit { fade_ms: Some(600) }
+        Event::EventImageExit { fade_ms: Some(700) }
     );
 }
 
@@ -6548,10 +6615,10 @@ fn test_event_image_exit_does_not_collide_with_event_image_prefix() {
     // （動画退場/動画: と同じ順序規約。parser.rs のコメント参照）。
     let event = parse_single_event_image("[イベント絵終了]");
     assert_eq!(event, Event::EventImageExit { fade_ms: None });
-    let event_with_fade = parse_single_event_image("[イベント絵終了: フェード=100]");
+    let event_with_fade = parse_single_event_image("[イベント絵終了: フェード=300]");
     assert_eq!(
         event_with_fade,
-        Event::EventImageExit { fade_ms: Some(100) }
+        Event::EventImageExit { fade_ms: Some(300) }
     );
 }
 

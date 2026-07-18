@@ -50,6 +50,13 @@ function image(path: string): Event {
   return { Image: { path } } as Event
 }
 
+function eventImage(
+  path: string,
+  opts?: { back?: 'Hide' | 'Keep'; fadeMs?: number | null }
+): Event {
+  return { EventImage: { path, back: opts?.back, fade_ms: opts?.fadeMs ?? null } } as Event
+}
+
 function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
@@ -95,6 +102,9 @@ interface RendererInternals {
     clearForSceneTransition: (durationMsOverride?: number) => void
     showLabel: (...args: unknown[]) => void
     showImage: (...args: unknown[]) => void
+  }
+  eventImageLayer: {
+    show: (...args: unknown[]) => void
   }
   fadeOutBackgroundEntries: (durationMs: number) => void
   renderIntermissionTableau: (events: Event[], startIndex?: number) => void
@@ -199,6 +209,25 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
 
     expect(bgSpy).toHaveBeenCalledWith(900)
     expect(charSpy).toHaveBeenCalledWith(800)
+  })
+
+  it('4b: intermission 内の [イベント絵] は本編値ではなく intermission 自身の eventImageFadeMs を使う', () => {
+    const r = makeRenderer(SCENES)
+    r.setAssetBaseUrl('/assets')
+    r.setEventImageFadeMs(300)
+    r.setIntermissionScene([eventImage('story/intermission.webp')], {
+      backgroundFadeMs: 10,
+      characterFadeMs: 10,
+      eventImageFadeMs: 1400,
+    })
+    const showSpy = vi.spyOn(internals(r).eventImageLayer, 'show').mockImplementation(() => {})
+
+    internals(r).renderIntermissionTableau([eventImage('story/intermission.webp')])
+
+    expect(showSpy).toHaveBeenCalledWith(
+      'story/intermission.webp',
+      expect.objectContaining({ back: undefined, fadeMs: 1400 })
+    )
   })
 
   it('5: intermission 設定済みで Choice 全滅 → 上記2メソッドが intermission 自身の fade 値で呼ばれ、かつ既読化される', async () => {

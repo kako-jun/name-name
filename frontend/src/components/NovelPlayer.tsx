@@ -109,6 +109,9 @@ interface NovelPlayerProps {
   /** 背景クロスフェード・退場（終劇）フェード時間 (ms) (#407)。frontmatter `background_fade_ms:` から流す。
    *  null/undefined で runtime 既定 700ms（BACKGROUND_CROSSFADE_MS）＝後方互換。 */
   backgroundFadeMs?: number | null
+  /** イベント絵の表示・退場フェード時間 (ms)。frontmatter `event_image_fade_ms:` から流す。
+   *  個別 `フェード=` が無い `[イベント絵:]` / `[イベント絵終了]` に効く。 */
+  eventImageFadeMs?: number | null
   /** 下地ベタ（ステージ最背面 bgGraphics）の既定色 (#409)。frontmatter `background_color:` から流す。
    *  最初の背景絵がこの色から `background_fade_ms` でフェードインする。null/undefined で黒（後方互換）。 */
   backgroundColor?: string | null
@@ -129,6 +132,9 @@ interface NovelPlayerProps {
   /** intermission.md 自身の frontmatter `character_fade_ms:` の値 (#404)。物語本編の
    *  `characterFadeMs` とは独立（endStory() の立ち絵消去フェードにだけ使う）。 */
   intermissionCharacterFadeMs?: number | null
+  /** intermission.md 自身の frontmatter `event_image_fade_ms:` の値。物語本編の
+   *  `eventImageFadeMs` とは独立し、intermission タブロー内のイベント絵にだけ使う。 */
+  intermissionEventImageFadeMs?: number | null
   /** Skip(S) ボタンを出すか (#310)。frontmatter `skip_enabled:` から流す。
    *  null/undefined/true で Skip(S) ボタンを描画する（既定・後方互換）。false で描画しない。
    *  skip-read-only ロジック（未読は解除）自体は不変。ボタンの有無だけを制御する。 */
@@ -180,11 +186,13 @@ function NovelPlayer({
   characterScale,
   characterFadeMs,
   backgroundFadeMs,
+  eventImageFadeMs,
   backgroundColor,
   seekbarColor,
   intermissionEvents,
   intermissionBackgroundFadeMs,
   intermissionCharacterFadeMs,
+  intermissionEventImageFadeMs,
   skipEnabled,
   debugEnabled,
   speakerNudge,
@@ -354,6 +362,8 @@ function NovelPlayer({
       // 背景フェード時間 (#407)。初回背景表示より前に設定し、背景の表示（イン）・切り替え・退場（アウト）を
       // 作品単位で調整する（未指定なら既定 700ms＝BACKGROUND_CROSSFADE_MS で非回帰）。
       renderer.setBackgroundFadeMs(backgroundFadeMs ?? null)
+      // イベント絵フェード時間。個別 `フェード=` が無いイベント絵の表示・退場に使う。
+      renderer.setEventImageFadeMs(eventImageFadeMs ?? null)
       // 下地ベタの既定色 (#409)。初回背景表示より前に設定し、最初の背景絵がこの地色から
       // フェードインするようにする（未指定なら黒で非回帰）。setBackgroundFadeMs と対称の per-game 設定。
       renderer.setDefaultBackgroundColor(backgroundColor ?? null)
@@ -366,6 +376,7 @@ function NovelPlayer({
       renderer.setIntermissionScene(intermissionEvents ?? null, {
         backgroundFadeMs: intermissionBackgroundFadeMs ?? null,
         characterFadeMs: intermissionCharacterFadeMs ?? null,
+        eventImageFadeMs: intermissionEventImageFadeMs ?? null,
       })
       // 主人公セリフの本文色 (#305) は renderer 既定 #FFF0D8 のまま使う。frontmatter での
       // 色上書きは未実装のため、ここでは設定しない（renderer フィールド初期値が効く）。
@@ -504,6 +515,10 @@ function NovelPlayer({
     rendererRef.current?.setBackgroundFadeMs(backgroundFadeMs ?? null)
   }, [backgroundFadeMs])
 
+  useEffect(() => {
+    rendererRef.current?.setEventImageFadeMs(eventImageFadeMs ?? null)
+  }, [eventImageFadeMs])
+
   // backgroundColor（下地ベタの既定色）が変化したときに renderer に反映 (#409)
   useEffect(() => {
     rendererRef.current?.setDefaultBackgroundColor(backgroundColor ?? null)
@@ -521,8 +536,14 @@ function NovelPlayer({
     rendererRef.current?.setIntermissionScene(intermissionEvents ?? null, {
       backgroundFadeMs: intermissionBackgroundFadeMs ?? null,
       characterFadeMs: intermissionCharacterFadeMs ?? null,
+      eventImageFadeMs: intermissionEventImageFadeMs ?? null,
     })
-  }, [intermissionEvents, intermissionBackgroundFadeMs, intermissionCharacterFadeMs])
+  }, [
+    intermissionEvents,
+    intermissionBackgroundFadeMs,
+    intermissionCharacterFadeMs,
+    intermissionEventImageFadeMs,
+  ])
 
   // 設定パネルの開閉ショートカット (#138): Ctrl/Cmd + , で開く
   useEffect(() => {

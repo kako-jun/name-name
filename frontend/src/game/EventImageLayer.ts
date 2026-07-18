@@ -1,7 +1,7 @@
 /**
  * イベント絵レイヤー (#351)。
  *
- * `[イベント絵: path, 背面=hide/keep, フェード=800]` / `[イベント絵終了: フェード=600]` から
+ * `[イベント絵: path, 背面=hide/keep, フェード=1400]` / `[イベント絵終了: フェード=700]` から
  * 駆動される、テキストより背面・背景/立ち絵より前面に出る「画面ぴったり」の単一スロット画像。
  * VideoLayer と同じ単一スロット意味論（新しい show() が前の画像を置換する）を踏襲するが、
  * 動画ではなく静止画で、位置/スケール指定は持たず常に画面全体を cover-fit で覆う。
@@ -23,7 +23,7 @@ import { TimeController, defaultTimeController } from './TimeController'
 export interface EventImageShowOptions {
   /** 背面（背景・立ち絵）扱い。未指定は 'Hide'（既定） */
   back?: 'Hide' | 'Keep' | null
-  /** 表示フェードイン時間 (ms)。未指定/0 以下は即時表示 */
+  /** 表示フェードイン時間 (ms)。呼び出し元が個別指定または per-game 既定を渡す。0 以下は即時表示 */
   fadeMs?: number | null
   /**
    * ロード成否に関わらず一度だけ発火する（CharacterLayer の #293 `onReady` と同じ流儀）。
@@ -33,10 +33,15 @@ export interface EventImageShowOptions {
    * 世代が古い（後から来た show()/remove() に追い越された）呼び出しでは発火しない。
    */
   onSettled?: () => void
+  /**
+   * 背面の可視性判定が変わりうるタイミングで発火する。
+   * 例: back=Hide のイベント絵がフェードイン完了し、背面を隠してよい状態になったとき。
+   */
+  onVisibilityChange?: () => void
 }
 
 export interface EventImageRemoveOptions {
-  /** 退場フェードアウト時間 (ms)。未指定/0 以下は即時消去 */
+  /** 退場フェードアウト時間 (ms)。呼び出し元が個別指定または per-game 既定を渡す。0 以下は即時消去 */
   fadeMs?: number | null
 }
 
@@ -47,6 +52,7 @@ interface EventImageFadeAnimation {
   toAlpha: number
   /** true なら fade-out 完了時に sprite を破棄する（退場フェード用） */
   destroyOnComplete: boolean
+  onComplete?: () => void
 }
 
 export class EventImageLayer extends Container {
@@ -116,6 +122,7 @@ export class EventImageLayer extends Container {
     const back: 'Hide' | 'Keep' = opts.back === 'Keep' ? 'Keep' : 'Hide'
     const fadeMs = typeof opts.fadeMs === 'number' && opts.fadeMs > 0 ? opts.fadeMs : 0
     const onSettled = opts.onSettled
+    const onVisibilityChange = opts.onVisibilityChange
 
     this.destroySprite()
     this.stopFadeTimer()
@@ -153,6 +160,7 @@ export class EventImageLayer extends Container {
             fromAlpha: 0,
             toAlpha: 1,
             destroyOnComplete: false,
+            onComplete: onVisibilityChange,
           }
           this.ensureFadeTimer()
         } else {
@@ -229,11 +237,13 @@ export class EventImageLayer extends Container {
     const { alpha, done } = computeFadeAlpha(elapsed, f.fromAlpha, f.toAlpha, f.durationMs)
     this.sprite.alpha = alpha
     if (done) {
+      const onComplete = f.onComplete
       this.fadeAnimation = null
       this.stopFadeTimer()
       if (f.destroyOnComplete) {
         this.destroySprite()
       }
+      onComplete?.()
     }
   }
 
@@ -287,11 +297,21 @@ export class EventImageLayer extends Container {
    *
    * `getState()`（settled state・ADR-0002・作者の意図として path/back を保持し続ける。
    * セーブ/リトライのため load 成否に関わらず不変）とは別に、こちらは「実際に画像が
-   * 覆っているか」を返す。ロードが失敗した世代では覆うものが存在しないため false を返し、
-   * 背景・立ち絵が永久に隠れっぱなしになる事故を防ぐ（セルフレビュー指摘）。
+   * 覆っているか」を返す。ロード前・フェードイン中は背面を残して暗転フラッシュを避け、
+   * ロードが失敗した世代では覆うものが存在しないため false を返し、背景・立ち絵が永久に
+   * 隠れっぱなしになる事故も防ぐ（セルフレビュー指摘）。
    */
   shouldHideBackLayer(): boolean {
-    return this.current !== null && !this.loadFailed && this.current.back === 'Hide'
+    if (this.current === null || this.current.back !== 'Hide' || this.loadFailed) return false
+    if (this.pendingLoadToken !== null || this.sprite === null) return false
+    if (
+      this.fadeAnimation &&
+      !this.fadeAnimation.destroyOnComplete &&
+      this.fadeAnimation.toAlpha === 1
+    ) {
+      return false
+    }
+    return true
   }
 
   /**

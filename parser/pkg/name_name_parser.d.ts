@@ -248,6 +248,13 @@ export interface Document {
      */
     background_fade_ms?: number;
     /**
+     * イベント絵の表示・退場フェード時間（ms）。frontmatter `event_image_fade_ms:` から流す。
+     * 個別の `[イベント絵: ..., フェード=N]` / `[イベント絵終了: フェード=N]` がある場合は
+     * そちらを優先し、未指定時だけ runtime がこの値を使う。未指定なら runtime 既定 700ms。
+     * 空・非数値は None 扱い。
+     */
+    event_image_fade_ms?: number;
+    /**
      * 下地ベタ（ステージ最背面の全面塗り＝`bgGraphics`）の既定色（`#rrggbb`）(#409)。
      * frontmatter `background_color:` から流す per-game 設定で、最初の背景絵がこの色から
      * `background_fade_ms` でフェードインする（未指定なら黒 `#000000`）。シーン単位の

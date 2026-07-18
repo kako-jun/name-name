@@ -158,12 +158,12 @@ HTML リンクで行う設計）。`PlayerScreen` の `findConfinedSceneIds(targ
 
 `endStory()` の見た目は2段構え（#404）。**`assets/scripts/intermission.md` をプロジェクトが
 配置していれば**（`PlayerScreen` が `assets/raw` 経由で取得・parse し `NovelRenderer.
-setIntermissionScene(events, {backgroundFadeMs, characterFadeMs})` に渡す。取得は `title.png` と
+setIntermissionScene(events, {backgroundFadeMs, characterFadeMs, eventImageFadeMs})` に渡す。取得は `title.png` と
 同じ経路・タイミング）、`endStory()` は**既存の専用消去コード**（`fadeOutBackgroundEntries()` +
 `characterLayer.clearForSceneTransition()`）だけをそのまま使い、通常のシーン遷移機構
 （`resetAndStartEvents`/`jumpToScene`。背景を `finishBackgroundCrossfadeInstant()` で瞬間消去する
 別経路）には一切乗せない——乗せると「幕がゆっくり降りる」演出がフェード無しの瞬間消去に負けて
-台無しになるため。消去フェード時間は**物語本編の `background_fade_ms`/`character_fade_ms`
+台無しになるため。消去フェード時間とタブロー内イベント絵フェード時間は**物語本編の `background_fade_ms`/`character_fade_ms`/`event_image_fade_ms`
 （他の全トランジションに影響する共有フィールド）を流用せず、intermission.md 自身の frontmatter**
 から読む（未指定は `INTERMISSION_FADE_MS_DEFAULT`=1400ms、通常既定 700ms より遅めの「幕が降りる」
 値。フェード時間の推奨3値＝基本700ms・短め300ms・長め1400ms のうち「長め」を採用・#424）。消去フェード完了後、intermission.md 自身のイベント列を `renderIntermissionTableau()` が
@@ -345,7 +345,7 @@ interface NovelGameState {
 
 背景クロスフェード (#319) は立ち絵フェードと同じ render-only 演出で、`NovelGameState` には中間 alpha を持たない。`NovelRenderer` は背景 sprite/mask を entry として管理し、通常進行の `[背景:]` では旧 entry を fade-out、新 entry を fade-in する。フェード時間はフロントマター `background_fade_ms`（未指定は既定 `BACKGROUND_CROSSFADE_MS`=700ms・#407）を `NovelRenderer.setBackgroundFadeMs` で受け、クロスフェード・終劇のフェードアウト・BGM 停止フェードすべてに適用する（`character_fade_ms` と対称の per-game 設定）。fade-out 完了時に旧 sprite と端フェード mask を破棄する。`dialog_style: novel` の forward 経路では、背景フェード完了を待ってから立ち絵 show / settle を待ち、その後に本文 `render()` を呼ぶため、「背景 → 立ち絵 → 本文」の舞台進行になる。物語/シーンの最初の背景（直前に背景が無いコールドスタート＝`processDirective` 経由の前進再生）も、旧 entry が空のまま新 entry を alpha 0→1 でフェードインさせる（ステージ最背面 `bgGraphics` の下地ベタ既定色 — フロントマター `background_color`（#409）を `NovelRenderer.setDefaultBackgroundColor` で受け、未指定は黒 `0x000000` — の上から浮かび上がるので黒フラッシュにはならない）。この下地ベタ既定色は `[背景色:]`（#273）のシーン上書きが無いとき（`currentBackgroundColor === null`）の実塗り色で、`clearBackgroundColor`（`[背景色]` 解除・終劇）の戻り先でもある。即時置換は `applyState`（`opts.instant:true` を明示＝seek / save load / 任意局面復元）と skip・同一 path だけで、任意局面復元で不要なフェードを再生しない。
 
-イベント絵レイヤー (`EventImageLayer.ts`・#351) はテキストより背面・背景/立ち絵より前面に出る、画面ぴったりの単一スロット画像で、`VideoLayer` と同じ単一スロット意味論を踏襲する。`NovelGameState.eventImage`（`{path, back}`）は settled state のみを持ち（フェード時間は一度きりの演出パラメータなので含まない・ADR-0002）、フェード開始は必ずテクスチャロード完了後（`Assets.load().then()` 内）に行う（#427/#428 と同じ「未ロードのままフェード開始してしまう」事故の回避策）。`back` 値による背景・立ち絵・動画（`videoLayer`）の可視性トグルは `NovelRenderer.applyEventImageVisibility()`（`setBlackout` と同じ単一の宣言的セッター）が担い、`processDirective`（ライブ進行）と `applyState`（goBack/seekTo/セーブ復元）の両方から呼ばれる。`back=Hide`（既定）は背景・立ち絵・動画を隠し、`back=Keep` はすべて表示したまま前面にイベント絵だけを重ねる。シーン遷移・終劇・レイヤー破棄時にはイベント絵を明示的に `remove()` して可視性を戻す（作者が `[イベント絵終了]` を書き忘れても背景・立ち絵が隠れたまま持ち越されない防御）。`hasPendingVisualTransition()`（`[待機: 表示完了]` の集約点）にもロード/フェードの pending 判定を OR で加える。可視性の実際の判定は `EventImageLayer.shouldHideBackLayer()` に委ねる: `getState()`（settled state・ADR-0002・作者の意図として path/back を load 成否に関わらず保持し続ける）とは別に、ロードが恒久的に失敗した世代では false を返し、覆う画像が無いのに背面が隠れっぱなしになる事故を防ぐ（`EventImageShowOptions.onSettled` コールバックで load 成功/失敗の両方から再計算をトリガーする。CharacterLayer の #293 `onReady` と同じ「成否に関わらず一度だけ発火」の流儀）。画像テクスチャは `EventImageLayer.disposeTextures()` で `NovelRenderer.textureCache`（背景）と同じタイミング（`setEvents()` / `destroy()`）に PixiJS の `Assets.unload` で解放し、GPU テクスチャのリークを防ぐ。
+イベント絵レイヤー (`EventImageLayer.ts`・#351) はテキストより背面・背景/立ち絵より前面に出る、画面ぴったりの単一スロット画像で、`VideoLayer` と同じ単一スロット意味論を踏襲する。`NovelGameState.eventImage`（`{path, back}`）は settled state のみを持ち（フェード時間は一度きりの演出パラメータなので含まない・ADR-0002）、フェード開始は必ずテクスチャロード完了後（`Assets.load().then()` 内）に行う（#427/#428 と同じ「未ロードのままフェード開始してしまう」事故の回避策）。フェード時間は frontmatter `event_image_fade_ms`（未指定は 700ms）を `NovelRenderer.setEventImageFadeMs` で受け、個別 `フェード=` がある場合だけそちらを優先する。`back` 値による背景・立ち絵・動画（`videoLayer`）の可視性トグルは `NovelRenderer.applyEventImageVisibility()`（`setBlackout` と同じ単一の宣言的セッター）が担い、`processDirective`（ライブ進行）と `applyState`（goBack/seekTo/セーブ復元）の両方から呼ばれる。`back=Hide`（既定）は最終的に背景・立ち絵・動画を隠すが、ロード前・フェードイン中は背面を残し、イベント絵が完全表示された後に隠すことで暗転フラッシュを避ける。`back=Keep` はすべて表示したまま前面にイベント絵だけを重ねる。シーン遷移・終劇・レイヤー破棄時にはイベント絵を明示的に `remove()` して可視性を戻す（作者が `[イベント絵終了]` を書き忘れても背景・立ち絵が隠れたまま持ち越されない防御）。`hasPendingVisualTransition()`（`[待機: 表示完了]` の集約点）にもロード/フェードの pending 判定を OR で加える。可視性の実際の判定は `EventImageLayer.shouldHideBackLayer()` に委ねる: `getState()`（settled state・ADR-0002・作者の意図として path/back を load 成否に関わらず保持し続ける）とは別に、ロードが恒久的に失敗した世代では false を返し、覆う画像が無いのに背面が隠れっぱなしになる事故を防ぐ（`EventImageShowOptions.onSettled` コールバックで load 成功/失敗の両方から再計算をトリガーする。CharacterLayer の #293 `onReady` と同じ「成否に関わらず一度だけ発火」の流儀）。画像テクスチャは `EventImageLayer.disposeTextures()` で `NovelRenderer.textureCache`（背景）と同じタイミング（`setEvents()` / `destroy()`）に PixiJS の `Assets.unload` で解放し、GPU テクスチャのリークを防ぐ。
 
 ### 主要API
 
@@ -360,7 +360,7 @@ interface NovelGameState {
 | `startFrom({sceneId, flags?, eventIndex?, textIndex?})` | 任意シーン+フラグ状態から開始（#220 Phase 2、デバッグ/テスト用。history リセット、flags 置換、不正 sceneId は完全 no-op）                        |
 | `setConfinedSceneIds(ids \| null)`                       | confinement（在圏）一覧を設定する（#386）。null（既定）なら制限なし。設定すると `jumpToScene` はこの集合外への遷移を通常のシーン遷移にせず `endStory()`（終劇）にする。呼び出し元は `PlayerScreen`（`?scene=` ディープリンク単独埋め込み時のみ） |
 | `setOnStoryEndedChange(cb)`                              | 終劇状態の変化コールバックを登録する（#386）。`NovelPlayer` が "to be continued..." の DOM 表示に使う                                              |
-| `setIntermissionScene(events, {backgroundFadeMs?, characterFadeMs?})` | intermission.md 専用シーンを設定する（#404）。`events` は `assets/scripts/intermission.md` を parse した Event 列。null/空配列は「未設定」として `endStory()` を従来どおりのフェード＋DOM表示にフォールバックさせる。fade 値は intermission.md 自身の frontmatter 由来で物語本編の設定とは独立 |
+| `setIntermissionScene(events, {backgroundFadeMs?, characterFadeMs?, eventImageFadeMs?})` | intermission.md 専用シーンを設定する（#404）。`events` は `assets/scripts/intermission.md` を parse した Event 列。null/空配列は「未設定」として `endStory()` を従来どおりのフェード＋DOM表示にフォールバックさせる。fade 値は intermission.md 自身の frontmatter 由来で物語本編の設定とは独立 |
 | `hasIntermissionScene()`                                | intermission.md 専用シーンが設定済みかを返す（#404）。`NovelPlayer` が DOM "to be continued..." 表示と PixiJS タブローの排他判定に使う |
 
 ## レンダリングパイプライン

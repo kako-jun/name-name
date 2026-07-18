@@ -238,6 +238,7 @@ export const NOVEL_SCRIM_RETREAT_MS = 220
 export const NOVEL_SCRIM_HOLD_MS = 500
 
 export const BACKGROUND_CROSSFADE_MS = 700
+export const EVENT_IMAGE_FADE_MS = 700
 
 /** 背景フェード時間の下限（ms）。character_fade_ms（CharacterLayer）と対称の [0, 5000] レンジ (#407)。 */
 const BACKGROUND_FADE_MS_MIN = 0
@@ -381,6 +382,11 @@ export class NovelRenderer {
    *  `setBackgroundFadeMs` が [0, 5000] にクランプして保持し、null/非有限は既定へフォールバックする。 */
   private backgroundFadeMs: number = BACKGROUND_CROSSFADE_MS
 
+  /** イベント絵の表示・退場フェード時間（ms）。frontmatter `event_image_fade_ms:` の値。
+   *  個別ディレクティブの `フェード=` がある場合はそちらが優先され、未指定時だけ使う。
+   *  初期値は 700ms。立ち絵/背景と同じ [0, 5000] クランプを使う。 */
+  private eventImageFadeMs: number = EVENT_IMAGE_FADE_MS
+
   /**
    * intermission.md 専用シーン (#404)。`assets/scripts/intermission.md` から取得・parse された
    * イベント列。null（未設定/取得失敗/空）なら endStory() は従来どおりフェードのみで終わり、
@@ -399,6 +405,10 @@ export class NovelRenderer {
    *  CharacterLayer が保持する per-game `characterFadeMs`（共有フィールド）は流用せず、
    *  `clearForSceneTransition` の呼び出し時に一度きりの override として渡す。 */
   private intermissionCharacterFadeMs: number = INTERMISSION_FADE_MS_DEFAULT
+
+  /** intermission.md 自身の frontmatter `event_image_fade_ms:` から読んだイベント絵フェード時間（ms）。
+   *  物語本編の `eventImageFadeMs` は流用せず、intermission タブロー描画中だけ一時適用する。 */
+  private intermissionEventImageFadeMs: number = INTERMISSION_FADE_MS_DEFAULT
 
   /** intermission タブロー描画をフェード完了後に遅延実行するタイマー (#404)。goBack/seekTo/destroy で
    *  必ずキャンセルする（フェード中に巻き戻された後、古いタイマーが復元済みの画面を上書きする事故防止）。 */
@@ -1131,52 +1141,58 @@ export class NovelRenderer {
    *   後方互換）。
    */
   private renderIntermissionTableau(events: Event[], startIndex = 0): void {
-    for (let i = startIndex; i < events.length; i++) {
-      const event = events[i]
-      const textEvt = getTextEvent(event)
-      if (textEvt) {
-        const name = textEvt.type === 'dialog' ? textEvt.character : null
-        const text = textEvt.text.join('\n')
-        this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
-        if (this.isNovelStyle()) {
-          this.dialogBox.setNovelDialogProgressive(name, text, 0, null)
-        } else {
-          this.dialogBox.setDialog(name, text)
+    const previousEventImageFadeMs = this.eventImageFadeMs
+    this.eventImageFadeMs = this.intermissionEventImageFadeMs
+    try {
+      for (let i = startIndex; i < events.length; i++) {
+        const event = events[i]
+        const textEvt = getTextEvent(event)
+        if (textEvt) {
+          const name = textEvt.type === 'dialog' ? textEvt.character : null
+          const text = textEvt.text.join('\n')
+          this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
+          if (this.isNovelStyle()) {
+            this.dialogBox.setNovelDialogProgressive(name, text, 0, null)
+          } else {
+            this.dialogBox.setDialog(name, text)
+          }
+          this.dialogBox.skipTypewriter()
+          // novel スクリムはセリフが表示されている間だけ敷く。render() と同じ判定を流用する。
+          const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
+          this.updateNovelScrim(hasVisibleText)
+          // 凍結タブローには「次へ」が無いため、進行を示唆するインジケータは出さない。
+          this.dialogBox.setIndicatorVisible(false)
+          continue
         }
-        this.dialogBox.skipTypewriter()
-        // novel スクリムはセリフが表示されている間だけ敷く。render() と同じ判定を流用する。
-        const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
-        this.updateNovelScrim(hasVisibleText)
-        // 凍結タブローには「次へ」が無いため、進行を示唆するインジケータは出さない。
-        this.dialogBox.setIndicatorVisible(false)
-        continue
-      }
-      if (typeof event === 'object' && event !== null && 'Wait' in event) {
-        // タブロー専用のローカル・ステージング (#424)。通常再生ストリームには一切触れず、
-        // intermissionTimer で ms 後に自分自身を i+1 から再入する（二重発火防止のため念のため
-        // 既存タイマーを先に破棄する。endStory/前回のステージング完了時点では通常 null のはず）。
-        if (this.intermissionTimer) this.time.clearTimeout(this.intermissionTimer)
-        this.intermissionTimer = this.time.setTimeout(() => {
-          this.intermissionTimer = null
-          // goBack/seekTo で storyEnded が解除されていたら描画しない（applyState 側でも
-          // このタイマーをキャンセルするが、二重の安全策として storyEnded も確認する）。
-          if (!this.initialized || !this.storyEnded) return
-          this.renderIntermissionTableau(events, i + 1)
-        }, event.Wait.ms)
-        return
-      }
-      if (
-        event === 'WaitDisplayComplete' ||
-        (typeof event === 'object' && event !== null && ('Choice' in event || 'Flag' in event))
-      ) {
-        if (import.meta.env.DEV) {
-          console.warn(
-            '[name-name] intermission.md: Choice/[待機: 表示完了]/Flag は静止画タブローでは無視されます'
-          )
+        if (typeof event === 'object' && event !== null && 'Wait' in event) {
+          // タブロー専用のローカル・ステージング (#424)。通常再生ストリームには一切触れず、
+          // intermissionTimer で ms 後に自分自身を i+1 から再入する（二重発火防止のため念のため
+          // 既存タイマーを先に破棄する。endStory/前回のステージング完了時点では通常 null のはず）。
+          if (this.intermissionTimer) this.time.clearTimeout(this.intermissionTimer)
+          this.intermissionTimer = this.time.setTimeout(() => {
+            this.intermissionTimer = null
+            // goBack/seekTo で storyEnded が解除されていたら描画しない（applyState 側でも
+            // このタイマーをキャンセルするが、二重の安全策として storyEnded も確認する）。
+            if (!this.initialized || !this.storyEnded) return
+            this.renderIntermissionTableau(events, i + 1)
+          }, event.Wait.ms)
+          return
         }
-        continue
+        if (
+          event === 'WaitDisplayComplete' ||
+          (typeof event === 'object' && event !== null && ('Choice' in event || 'Flag' in event))
+        ) {
+          if (import.meta.env.DEV) {
+            console.warn(
+              '[name-name] intermission.md: Choice/[待機: 表示完了]/Flag は静止画タブローでは無視されます'
+            )
+          }
+          continue
+        }
+        this.processDirective(event)
       }
-      this.processDirective(event)
+    } finally {
+      this.eventImageFadeMs = previousEventImageFadeMs
     }
   }
 
@@ -1565,6 +1581,15 @@ export class NovelRenderer {
     )
   }
 
+  setEventImageFadeMs(ms: number | null | undefined): void {
+    this.eventImageFadeMs = clampFadeMs(
+      ms,
+      EVENT_IMAGE_FADE_MS,
+      BACKGROUND_FADE_MS_MIN,
+      BACKGROUND_FADE_MS_MAX
+    )
+  }
+
   /**
    * intermission.md 専用シーンを設定する (#404)。
    *
@@ -1573,8 +1598,8 @@ export class NovelRenderer {
    * 「未設定」として扱い、endStory() は従来どおりフェードのみで終わる（NovelPlayer の DOM
    * "to be continued..." 表示にフォールバック。完全後方互換・オプトイン）。
    *
-   * `options.backgroundFadeMs`/`characterFadeMs` は intermission.md 自身の frontmatter
-   * `background_fade_ms:`/`character_fade_ms:` の値。物語本編の同名 per-game 設定
+   * `options.backgroundFadeMs`/`characterFadeMs`/`eventImageFadeMs` は intermission.md 自身の frontmatter
+   * `background_fade_ms:`/`character_fade_ms:`/`event_image_fade_ms:` の値。物語本編の同名 per-game 設定
    * （`backgroundFadeMs`/CharacterLayer の `characterFadeMs`、他の全トランジションに影響する
    * 共有フィールド）とは独立に保持し、endStory() の消去フェードにだけ使う。未指定（null/
    * undefined/非有限）は `INTERMISSION_FADE_MS_DEFAULT`（1400ms、通常既定 700ms より遅い
@@ -1583,7 +1608,11 @@ export class NovelRenderer {
    */
   setIntermissionScene(
     events: Event[] | null | undefined,
-    options?: { backgroundFadeMs?: number | null; characterFadeMs?: number | null }
+    options?: {
+      backgroundFadeMs?: number | null
+      characterFadeMs?: number | null
+      eventImageFadeMs?: number | null
+    }
   ): void {
     this.intermissionEvents = events && events.length > 0 ? events : null
     this.intermissionBackgroundFadeMs = clampFadeMs(
@@ -1594,6 +1623,12 @@ export class NovelRenderer {
     )
     this.intermissionCharacterFadeMs = clampFadeMs(
       options?.characterFadeMs,
+      INTERMISSION_FADE_MS_DEFAULT,
+      BACKGROUND_FADE_MS_MIN,
+      BACKGROUND_FADE_MS_MAX
+    )
+    this.intermissionEventImageFadeMs = clampFadeMs(
+      options?.eventImageFadeMs,
       INTERMISSION_FADE_MS_DEFAULT,
       BACKGROUND_FADE_MS_MIN,
       BACKGROUND_FADE_MS_MAX
@@ -2989,8 +3024,9 @@ export class NovelRenderer {
       if (this.assetBaseUrl) {
         this.eventImageLayer.show(ei.path, {
           back: ei.back,
-          fadeMs: ei.fade_ms,
+          fadeMs: ei.fade_ms ?? this.eventImageFadeMs,
           onSettled: () => this.applyEventImageVisibility(),
+          onVisibilityChange: () => this.applyEventImageVisibility(),
         })
         this.applyEventImageVisibility()
       }
@@ -2998,7 +3034,7 @@ export class NovelRenderer {
     }
     if ('EventImageExit' in event) {
       // [イベント絵終了] でイベント絵レイヤーをクリアする (#351)。
-      this.eventImageLayer.remove({ fadeMs: event.EventImageExit.fade_ms })
+      this.eventImageLayer.remove({ fadeMs: event.EventImageExit.fade_ms ?? this.eventImageFadeMs })
       this.applyEventImageVisibility()
       return
     }

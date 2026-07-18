@@ -750,6 +750,7 @@ function EditorScreen({
                 characterScale={doc?.character_scale ?? null}
                 characterFadeMs={doc?.character_fade_ms ?? null}
                 backgroundFadeMs={doc?.background_fade_ms ?? null}
+                eventImageFadeMs={doc?.event_image_fade_ms ?? null}
                 backgroundColor={doc?.background_color ?? null}
                 // SeekBar 色 (#440)。doc 由来・未指定は既定の水色。seekbar_color 指定作品は編集プレビューでも反映。
                 seekbarColor={doc?.seekbar_color ?? null}

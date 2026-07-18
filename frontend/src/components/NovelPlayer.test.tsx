@@ -58,6 +58,7 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setCharacterScale = vi.fn()
     setCharacterFadeMs = vi.fn()
     setBackgroundFadeMs = vi.fn()
+    setEventImageFadeMs = vi.fn()
     setDefaultBackgroundColor = vi.fn()
     setSeekBarColor = vi.fn()
     setIntermissionScene = vi.fn()
@@ -828,12 +829,14 @@ describe('NovelPlayer intermission.md 専用シーン配線 (#404 フェーズ2)
         intermissionEvents={EV1}
         intermissionBackgroundFadeMs={900}
         intermissionCharacterFadeMs={800}
+        intermissionEventImageFadeMs={700}
       />
     )
     await flushAsync()
     expect(lastRenderer().setIntermissionScene).toHaveBeenCalledWith(EV1, {
       backgroundFadeMs: 900,
       characterFadeMs: 800,
+      eventImageFadeMs: 700,
     })
   })
 
@@ -849,6 +852,7 @@ describe('NovelPlayer intermission.md 専用シーン配線 (#404 フェーズ2)
     expect(r.setIntermissionScene).toHaveBeenCalledWith(EV1, {
       backgroundFadeMs: null,
       characterFadeMs: null,
+      eventImageFadeMs: null,
     })
   })
 

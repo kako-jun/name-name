@@ -222,14 +222,14 @@ export type Event =
         /** #351 背面（背景・立ち絵）扱い。wasm は #[serde(default)] のため型上は optional だが、
          *  実際の parse_markdown() 出力では常に 'Hide'/'Keep' のどちらかが入る（parser.ts で正規化）。 */
         back?: EventImageBack
-        /** 表示フェードイン時間 ms。未指定/null は即時表示 */
+        /** 表示フェードイン時間 ms。未指定/null は `event_image_fade_ms` または runtime 既定 700ms */
         fade_ms?: number | null
       }
     }
   | {
-      /** イベント絵レイヤーをクリアする (#351)。`[イベント絵終了: フェード=600]` */
+      /** イベント絵レイヤーをクリアする (#351)。`[イベント絵終了: フェード=700]` */
       EventImageExit: {
-        /** 退場フェードアウト時間 ms。未指定/null は即時消去 */
+        /** 退場フェードアウト時間 ms。未指定/null は `event_image_fade_ms` または runtime 既定 700ms */
         fade_ms?: number | null
       }
     }
@@ -502,6 +502,10 @@ export interface EventDocument {
    *  null/undefined のときは runtime 既定 700ms（現行 BACKGROUND_CROSSFADE_MS＝後方互換）。
    *  frontmatter `background_fade_ms:` から流す。 */
   background_fade_ms?: number | null
+  /** イベント絵の表示・退場フェード時間 (ms)。
+   *  個別の `フェード=` が無い `[イベント絵:]` / `[イベント絵終了]` に使う。
+   *  null/undefined のときは runtime 既定 700ms。frontmatter `event_image_fade_ms:` から流す。 */
+  event_image_fade_ms?: number | null
   /** 下地ベタ（ステージ最背面 `bgGraphics`）の既定色 (#409)。`#rrggbb`。
    *  最初の背景絵がこの色から `background_fade_ms` でフェードインする（未指定＝黒 `#000000`）。
    *  シーン単位の `[背景色:]`（#273）の上書きとは別スロットで、上書きが無いときの戻り先＝地色。

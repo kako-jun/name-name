@@ -26,6 +26,7 @@ pub fn parse(input: &str) -> Document {
     let mut character_scale: Option<f64> = None;
     let mut character_fade_ms: Option<u32> = None;
     let mut background_fade_ms: Option<u32> = None;
+    let mut event_image_fade_ms: Option<u32> = None;
     let mut background_color: Option<String> = None;
     let mut skip_enabled: Option<bool> = None;
     let mut debug_enabled: Option<bool> = None;
@@ -126,6 +127,10 @@ pub fn parse(input: &str) -> Document {
                 // 背景クロスフェード・退場（終劇）フェード時間（ms）。character_fade_ms と同じ流儀・u32。
                 // 空・非数値は None のまま（runtime 既定 700ms＝BACKGROUND_CROSSFADE_MS にフォールバック）。
                 background_fade_ms = unquote(val.trim()).parse::<u32>().ok();
+            } else if let Some(val) = line.strip_prefix("event_image_fade_ms:") {
+                // イベント絵の表示・退場フェード時間（ms）。character/background と同じ流儀・u32。
+                // 個別ディレクティブの `フェード=` が優先し、未指定時に runtime がこの値を使う。
+                event_image_fade_ms = unquote(val.trim()).parse::<u32>().ok();
             } else if let Some(val) = line.strip_prefix("background_color:") {
                 // 下地ベタ（bgGraphics）の既定色 (#409)。font_family と同じ流儀で文字列を生透過。
                 // 空なら None のまま（runtime で既定の黒にフォールバック）。色解決は runtime 側。
@@ -901,6 +906,7 @@ pub fn parse(input: &str) -> Document {
         character_scale,
         character_fade_ms,
         background_fade_ms,
+        event_image_fade_ms,
         background_color,
         skip_enabled,
         debug_enabled,
@@ -953,7 +959,7 @@ fn parse_directive(line: &str) -> Option<Event> {
     if let Some(rest) = content.strip_prefix("動画:") {
         return Some(parse_video_directive(rest));
     }
-    // [イベント絵終了] / [イベント絵終了: フェード=600] — イベント絵レイヤーをクリアする (#351)。
+    // [イベント絵終了] / [イベント絵終了: フェード=700] — イベント絵レイヤーをクリアする (#351)。
     // 「イベント絵:」の prefix 一致に巻き込まれないよう先に判定する（動画退場/動画: と同じ順序規約。
     // 実際には "イベント絵終了" は "イベント絵:" と prefix 衝突しないが、規約を揃えて事故を避ける）。
     if content == "イベント絵終了" {
@@ -1332,7 +1338,7 @@ fn parse_video_directive(content: &str) -> Event {
     }
 }
 
-/// `[イベント絵: path]` / `[イベント絵: path, 背面=keep, フェード=800]` の本体を分解する (#351)。
+/// `[イベント絵: path]` / `[イベント絵: path, 背面=keep, フェード=1400]` の本体を分解する (#351)。
 /// `parse_background_directive` / `parse_video_directive` と同じく最初の `,` で path / kv を分離する。
 /// キーは日本語 `背面` / 英語 alias `back`（値は英語トークン固定 `hide`/`keep`、大小無視、未知値は
 /// 既定 `Hide` に倒す）。フェードは BGM/SE と同じく `parse_fade_kv` を再利用する（単一のフェード値
@@ -1376,7 +1382,7 @@ fn parse_event_image_directive(content: &str) -> Event {
     }
 }
 
-/// `[イベント絵終了: フェード=600]` の引数部分を fade_ms として解釈する (#351)。
+/// `[イベント絵終了: フェード=700]` の引数部分を fade_ms として解釈する (#351)。
 /// `parse_audio_fade_args`（BGM停止）と同じ流儀。bare 数字は受理しない
 /// （このディレクティブに path が無いため曖昧さは無いが、構文は `フェード=` 固定で揃える）。
 fn parse_event_image_exit_directive(content: &str) -> Event {
