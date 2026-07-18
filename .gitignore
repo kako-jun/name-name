@@ -17,6 +17,8 @@ lerna-debug.log*
 target/
 
 # Backend has its own .gitignore
+__pycache__/
+*.py[cod]
 
 # Docker
 *.env.local
