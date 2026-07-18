@@ -240,9 +240,6 @@ export const NOVEL_SCRIM_HOLD_MS = 500
 /** novel スクリムの通常表示/非表示フェード時間（ms）。ページ送り時の明暗ジャンプを抑える。 */
 export const NOVEL_SCRIM_VISIBILITY_FADE_MS = 180
 
-/** 本文を描き始める前に同期的に確保するスクリムの最低 alpha。本文先行の白フラッシュを防ぐ。 */
-export const NOVEL_SCRIM_ENTRY_ALPHA_FLOOR = NOVEL_SCRIM_ALPHA * 0.7
-
 export const BACKGROUND_CROSSFADE_MS = 700
 export const EVENT_IMAGE_FADE_MS = 700
 
@@ -1158,9 +1155,6 @@ export class NovelRenderer {
         if (textEvt) {
           const name = textEvt.type === 'dialog' ? textEvt.character : null
           const text = textEvt.text.join('\n')
-          const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
-          // novel は本文より先に最低限の黒みを用意する。本文先行の白フラッシュを避けるため。
-          if (this.isNovelStyle() && hasVisibleText) this.updateNovelScrim(true)
           this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
           if (this.isNovelStyle()) {
             this.dialogBox.setNovelDialogProgressive(name, text, 0, null)
@@ -1169,7 +1163,8 @@ export class NovelRenderer {
           }
           this.dialogBox.skipTypewriter()
           // novel スクリムはセリフが表示されている間だけ敷く。render() と同じ判定を流用する。
-          if (!this.isNovelStyle() || !hasVisibleText) this.updateNovelScrim(hasVisibleText)
+          const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
+          this.updateNovelScrim(hasVisibleText)
           // 凍結タブローには「次へ」が無いため、進行を示唆するインジケータは出さない。
           this.dialogBox.setIndicatorVisible(false)
           continue
@@ -1757,17 +1752,13 @@ export class NovelRenderer {
     if (!this.novelScrim) return
     this.cancelNovelScrimVisibilityFade()
     const targetAlpha = visibleForDialog ? NOVEL_SCRIM_ALPHA : 0
-    const currentAlpha = this.novelScrim.visible ? this.novelScrim.alpha : 0
-    const fromAlpha = visibleForDialog
-      ? Math.max(currentAlpha, NOVEL_SCRIM_ENTRY_ALPHA_FLOOR)
-      : currentAlpha
+    const fromAlpha = this.novelScrim.visible ? this.novelScrim.alpha : 0
     if (fromAlpha === targetAlpha) {
       this.novelScrim.visible = visibleForDialog
       this.novelScrim.alpha = targetAlpha
       return
     }
     this.novelScrim.visible = true
-    this.novelScrim.alpha = fromAlpha
     const durationMs = NOVEL_SCRIM_VISIBILITY_FADE_MS
     const startedAt = this.time.now()
     const tick = () => {
@@ -4359,12 +4350,6 @@ export class NovelRenderer {
     // adv / protagonist 未指定では常に白＝後方互換。setDialog/setNovelDialogProgressive の前に当てる。
     this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
 
-    // novel スクリム (#283): セリフが表示されている間だけ半透明黒を敷く。
-    // 空ページ（立ち絵だけの空ダイアログ）はテキスト非表示なのでスクリムも出さない。
-    const hasVisibleText = line.replace(/[\s\u3000]/g, '') !== ''
-    // novel は本文より先に最低限の黒みを用意する。本文先行の白フラッシュを避けるため。
-    if (novel && hasVisibleText) this.updateNovelScrim(true)
-
     // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)。
     // voice 有無に関わらず typing onDone で進める (voice は fire-and-forget)。
     const onTypingDone = this.autoMode ? () => this.scheduleAutoAdvance() : null
@@ -4375,7 +4360,10 @@ export class NovelRenderer {
       this.dialogBox.setDialog(name, line, onTypingDone)
     }
 
-    if (!novel || !hasVisibleText) this.updateNovelScrim(hasVisibleText)
+    // novel スクリム (#283): セリフが表示されている間だけ半透明黒を敷く。
+    // 空ページ（立ち絵だけの空ダイアログ）はテキスト非表示なのでスクリムも出さない。
+    const hasVisibleText = line.replace(/[\s\u3000]/g, '') !== ''
+    this.updateNovelScrim(hasVisibleText)
 
     // インジケータ (#292):
     //  - 種別: novel で「現在がそのページの最後の文」なら pageturn（❯・改頁）、それ以外は next（▼・次の文）。
