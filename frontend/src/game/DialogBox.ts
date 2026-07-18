@@ -926,7 +926,12 @@ export class DialogBox extends Container {
       const plainText = stripRubyMarkup(this.currentText)
       const lines = wordwrap(plainText, maxTextWidth, font)
       const fullText = lines.join('\n')
-      this.typewriter = startTypewriter(fullText)
+      const visiblePlainLength = this.visibleDialogText(this.typewriter).replace(/\n/g, '').length
+      this.typewriter = startTypewriterFrom(
+        fullText,
+        wrappedPrefixLength(fullText, visiblePlainLength)
+      )
+      this.dialogText.text = this.visibleDialogText(this.typewriter)
       this.rubyPlacements = computeRubyPlacements(runs, lines)
       this.rubyBuildToken += 1
       const rubyToken = this.rubyBuildToken

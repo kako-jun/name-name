@@ -67,6 +67,7 @@ const TEXT_X_WITH_PORTRAIT = PORTRAIT_X + PORTRAIT_SIZE + PORTRAIT_MARGIN
 interface DialogBoxInternals {
   portraitFrame: { visible: boolean } | null
   dialogText: { x: number; text: string; visible: boolean; style: { fill: unknown } }
+  typewriter: { fullText: string; displayedCharCount: number; acc: number }
   indicator: { visible: boolean; x: number; y: number }
   indicatorGlyph: { visible: boolean }
   indicatorSprite: { visible: boolean; width: number; height: number }
@@ -253,6 +254,23 @@ describe('DialogBox typewriter (Issue #150 / #194)', () => {
     box.show('村人', 'second')
     const i = asInternals(box)
     expect(i.dialogText.text).toBe('')
+    expect(box.isTyping()).toBe(true)
+    box.dispose()
+  })
+
+  it('フォント変更時は表示済みプレフィックスを維持し、タイプを先頭に戻さない', () => {
+    const box = makeRpgBox()
+    const text = '改ページ後の表示済みプレフィックスと、まだ続く本文。'
+    const visiblePrefix = '改ページ後の表示済みプレフィックス'
+    box.setDialog(null, text)
+    const i = asInternals(box)
+    i.typewriter = { fullText: text, displayedCharCount: visiblePrefix.length, acc: 0 }
+    i.dialogText.text = visiblePrefix
+
+    box.setFontFamily('serif')
+
+    expect(i.dialogText.text).toBe(visiblePrefix)
+    expect(i.typewriter.displayedCharCount).toBe(visiblePrefix.length)
     expect(box.isTyping()).toBe(true)
     box.dispose()
   })
