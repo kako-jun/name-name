@@ -82,6 +82,7 @@ interface RendererTestHooks {
   render(): void
   advance(): void
   initialized: boolean
+  scrimRetreatActive: boolean
   characterLayer: {
     show: (...args: unknown[]) => void
     hasActivePortraitTransition: () => boolean
@@ -408,6 +409,29 @@ describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', 
 
     // 次の 16ms poll で遷移完了扱いになり、初めて本文 reveal する。
     transitionActive = false
+    await sleep(25)
+    expect(renderSpy).toHaveBeenCalledTimes(1)
+  })
+
+  // 10: novel forward — 話者交代で立ち絵 show が no-op でも、scrim 退避は dialogBox.alpha を触る。
+  //     退避中に本文 reveal を始めると「数文字出る → 消える → また出る」ので、退避完了まで待つ。
+  it('10: novel は話者交代のスクリム退避中も本文 reveal を待つ', async () => {
+    vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
+
+    const r = new NovelRenderer()
+    configureNovelRenderer(r)
+    const h = hooks(r)
+    const renderSpy = vi.spyOn(h, 'render').mockImplementation(() => {})
+    vi.spyOn(h.characterLayer, 'hasActivePortraitTransition').mockReturnValue(false)
+    h.initialized = true
+
+    r.setScenes([scene('s', [dialogNoPortrait('ナレ', '本文。')])])
+    h.scrimRetreatActive = true
+
+    await flushDeferredTextRender()
+    expect(renderSpy).not.toHaveBeenCalled()
+
+    h.scrimRetreatActive = false
     await sleep(25)
     expect(renderSpy).toHaveBeenCalledTimes(1)
   })

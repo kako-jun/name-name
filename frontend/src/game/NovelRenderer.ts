@@ -3526,10 +3526,12 @@ export class NovelRenderer {
         const poll = () => {
           if (!isStillCurrent()) return
           if (!this.initialized) return
-          // 立ち絵の fade / nudge / transform が落ち着くまでは本文 reveal を始めない。
+          // 立ち絵の fade / nudge / transform、または novel スクリム退避が落ち着くまでは
+          // 本文 reveal を始めない。話者交代で立ち絵 show が no-op でも、retreatNovelScrim() は
+          // dialogBox.alpha を一時的に下げるため、ここで待たないと数文字だけ出て消える。
           // renderOnly のタイトル演出やカーソル点滅は CharacterLayer 側で除外している。
           if (
-            this.characterLayer.hasActivePortraitTransition() &&
+            (this.characterLayer.hasActivePortraitTransition() || this.scrimRetreatActive) &&
             this.time.now() - startedAt < 6_000
           ) {
             this.time.setTimeout(poll, 16)
