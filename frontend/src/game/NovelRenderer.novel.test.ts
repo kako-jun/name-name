@@ -25,6 +25,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import {
   NovelRenderer,
   NOVEL_SCRIM_ALPHA,
+  NOVEL_SCRIM_ENTRY_ALPHA_FLOOR,
   NOVEL_SCRIM_VISIBILITY_FADE_MS,
   getTextEvent,
 } from './NovelRenderer'
@@ -961,10 +962,10 @@ describe('NovelRenderer novel スクリム通常フェード', () => {
 
     i.updateNovelScrim(true)
     expect(i.novelScrim?.visible).toBe(true)
-    expect(i.novelScrim?.alpha).toBe(0)
+    expect(i.novelScrim?.alpha).toBe(NOVEL_SCRIM_ENTRY_ALPHA_FLOOR)
 
     r.getTimeController().tick(NOVEL_SCRIM_VISIBILITY_FADE_MS / 2)
-    expect(i.novelScrim?.alpha).toBeGreaterThan(0)
+    expect(i.novelScrim?.alpha).toBeGreaterThan(NOVEL_SCRIM_ENTRY_ALPHA_FLOOR)
     expect(i.novelScrim?.alpha).toBeLessThan(NOVEL_SCRIM_ALPHA)
 
     r.getTimeController().tick(NOVEL_SCRIM_VISIBILITY_FADE_MS + 32)
