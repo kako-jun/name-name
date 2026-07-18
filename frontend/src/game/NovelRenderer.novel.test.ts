@@ -16,12 +16,18 @@
  *     （#283 補遺で 40 に復元）と novel 余白に依存するため measureNovelCap() で実測する。
  *
  * 非適用（実機・描画委譲。CLAUDE.md ルール7）:
- *   - スクリム可視性・退避フェードの描画反映（init 必須・jsdom 観測不能）。
+ *   - 実 stage 上のスクリム描画反映（init 必須）。通常フェードの alpha 補間は fake scrim +
+ *     virtual time で単体検査する。
  *   - race（in-flight ロード）と render 依存の見た目（スクリム描画・フェード輝度）。
  *     → これらは書かない。
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { NovelRenderer, getTextEvent } from './NovelRenderer'
+import {
+  NovelRenderer,
+  NOVEL_SCRIM_ALPHA,
+  NOVEL_SCRIM_VISIBILITY_FADE_MS,
+  getTextEvent,
+} from './NovelRenderer'
 import { NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO } from './constants'
 import { SaveManager, type SaveSlotData } from './SaveManager'
@@ -89,6 +95,20 @@ interface RendererInternals {
 
 function internals(r: NovelRenderer): RendererInternals {
   return r as unknown as RendererInternals
+}
+
+interface NovelScrimInternals {
+  updateNovelScrim(visibleForDialog: boolean): void
+  resetNovelScrimState(): void
+  novelScrim: { visible: boolean; alpha: number } | null
+}
+function scrimInternals(r: NovelRenderer): NovelScrimInternals {
+  return r as unknown as NovelScrimInternals
+}
+function attachFakeNovelScrim(r: NovelRenderer): NovelScrimInternals {
+  const i = scrimInternals(r)
+  i.novelScrim = { visible: false, alpha: 0 }
+  return i
 }
 
 /**
@@ -925,6 +945,83 @@ describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
 
     expect(clearText).toHaveBeenCalled()
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 1, textIndex: 0, sentenceIndex: 0 })
+  })
+})
+
+describe('NovelRenderer novel スクリム通常フェード', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('セリフ用スクリムは表示/非表示を即時ジャンプさせず短時間でフェードする', () => {
+    const r = new NovelRenderer()
+    r.getTimeController().setMode('virtual')
+    r.setDialogStyle('novel')
+    const i = attachFakeNovelScrim(r)
+
+    i.updateNovelScrim(true)
+    expect(i.novelScrim?.visible).toBe(true)
+    expect(i.novelScrim?.alpha).toBe(0)
+
+    r.getTimeController().tick(NOVEL_SCRIM_VISIBILITY_FADE_MS / 2)
+    expect(i.novelScrim?.alpha).toBeGreaterThan(0)
+    expect(i.novelScrim?.alpha).toBeLessThan(NOVEL_SCRIM_ALPHA)
+
+    r.getTimeController().tick(NOVEL_SCRIM_VISIBILITY_FADE_MS + 32)
+    expect(i.novelScrim?.visible).toBe(true)
+    expect(i.novelScrim?.alpha).toBe(NOVEL_SCRIM_ALPHA)
+
+    i.updateNovelScrim(false)
+    expect(i.novelScrim?.visible).toBe(true)
+    expect(i.novelScrim?.alpha).toBe(NOVEL_SCRIM_ALPHA)
+
+    r.getTimeController().tick(NOVEL_SCRIM_VISIBILITY_FADE_MS / 2)
+    expect(i.novelScrim?.alpha).toBeGreaterThan(0)
+    expect(i.novelScrim?.alpha).toBeLessThan(NOVEL_SCRIM_ALPHA)
+
+    r.getTimeController().tick(NOVEL_SCRIM_VISIBILITY_FADE_MS + 32)
+    expect(i.novelScrim?.visible).toBe(false)
+    expect(i.novelScrim?.alpha).toBe(0)
+    r.getTimeController().setMode('live')
+  })
+
+  it('スクリムフェード中に逆方向へ切り替えても現在 alpha から滑らかに戻る', () => {
+    const r = new NovelRenderer()
+    r.getTimeController().setMode('virtual')
+    r.setDialogStyle('novel')
+    const i = attachFakeNovelScrim(r)
+
+    i.updateNovelScrim(true)
+    r.getTimeController().tick(NOVEL_SCRIM_VISIBILITY_FADE_MS / 3)
+    const midAlpha = i.novelScrim?.alpha ?? 0
+    expect(midAlpha).toBeGreaterThan(0)
+    expect(midAlpha).toBeLessThan(NOVEL_SCRIM_ALPHA)
+
+    i.updateNovelScrim(false)
+    expect(i.novelScrim?.visible).toBe(true)
+    expect(i.novelScrim?.alpha).toBe(midAlpha)
+
+    r.getTimeController().tick(NOVEL_SCRIM_VISIBILITY_FADE_MS + 32)
+    expect(i.novelScrim?.visible).toBe(false)
+    expect(i.novelScrim?.alpha).toBe(0)
+    r.getTimeController().setMode('live')
+  })
+
+  it('復元リセットではフェード途中を保存せずスクリムを即時クリアする', () => {
+    const r = new NovelRenderer()
+    r.getTimeController().setMode('virtual')
+    r.setDialogStyle('novel')
+    const i = attachFakeNovelScrim(r)
+
+    i.updateNovelScrim(true)
+    r.getTimeController().tick(NOVEL_SCRIM_VISIBILITY_FADE_MS / 2)
+    expect(i.novelScrim?.alpha).toBeGreaterThan(0)
+
+    i.resetNovelScrimState()
+    expect(i.novelScrim?.visible).toBe(false)
+    expect(i.novelScrim?.alpha).toBe(0)
+    expect(r.getTimeController().getPendingTimerCount()).toBe(0)
+    r.getTimeController().setMode('live')
   })
 })
 

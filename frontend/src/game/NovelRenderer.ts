@@ -237,6 +237,9 @@ export const NOVEL_SCRIM_RETREAT_MS = 220
 /** novel スクリム退避後、絵を見せたまま保持する時間（ms）。退避→ホールド→復帰の中段 (#283)。 */
 export const NOVEL_SCRIM_HOLD_MS = 500
 
+/** novel スクリムの通常表示/非表示フェード時間（ms）。ページ送り時の明暗ジャンプを抑える。 */
+export const NOVEL_SCRIM_VISIBILITY_FADE_MS = 180
+
 export const BACKGROUND_CROSSFADE_MS = 700
 export const EVENT_IMAGE_FADE_MS = 700
 
@@ -589,6 +592,8 @@ export class NovelRenderer {
   private scrimRetreatActive = false
   /** スクリム退避フェード用タイマー */
   private scrimRetreatTimer: number | null = null
+  /** スクリム通常表示/非表示フェード用タイマー */
+  private scrimVisibilityTimer: number | null = null
 
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
@@ -1712,8 +1717,7 @@ export class NovelRenderer {
     this.dialogBox.setFontSize(this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE)
     if (!novel && this.novelScrim) {
       // adv ではスクリムを常に消す。
-      this.novelScrim.visible = false
-      this.novelScrim.alpha = 0
+      this.setNovelScrimImmediate(false, 0)
     }
     // 改頁は幾何（boxH）依存なので、スタイル切替で派生キャッシュを破棄する (#283)。
     this.novelPagesCache = null
@@ -1726,22 +1730,58 @@ export class NovelRenderer {
   /**
    * novel スクリムの表示状態を「セリフ表示中か」に合わせて更新する (#283)。
    * adv では no-op。退避フェード中（scrimRetreatActive）は触らない（フェードが制御する）。
+   * 通常のページ/イベント送りでは短くフェードさせ、立ち絵切替時の明暗ジャンプを抑える。
    */
   private updateNovelScrim(visibleForDialog: boolean): void {
     if (!this.novelScrim) return
     if (!this.isNovelStyle()) {
-      this.novelScrim.visible = false
-      this.novelScrim.alpha = 0
+      this.setNovelScrimImmediate(false, 0)
       return
     }
     if (this.scrimRetreatActive) return
-    if (visibleForDialog) {
-      this.novelScrim.visible = true
-      this.novelScrim.alpha = NOVEL_SCRIM_ALPHA
-    } else {
-      this.novelScrim.visible = false
-      this.novelScrim.alpha = 0
+    this.startNovelScrimVisibilityFade(visibleForDialog)
+  }
+
+  private cancelNovelScrimVisibilityFade(): void {
+    if (!this.scrimVisibilityTimer) return
+    this.time.clearInterval(this.scrimVisibilityTimer)
+    this.scrimVisibilityTimer = null
+  }
+
+  private startNovelScrimVisibilityFade(visibleForDialog: boolean): void {
+    if (!this.novelScrim) return
+    this.cancelNovelScrimVisibilityFade()
+    const targetAlpha = visibleForDialog ? NOVEL_SCRIM_ALPHA : 0
+    const fromAlpha = this.novelScrim.visible ? this.novelScrim.alpha : 0
+    if (fromAlpha === targetAlpha) {
+      this.novelScrim.visible = visibleForDialog
+      this.novelScrim.alpha = targetAlpha
+      return
     }
+    this.novelScrim.visible = true
+    const durationMs = NOVEL_SCRIM_VISIBILITY_FADE_MS
+    const startedAt = this.time.now()
+    const tick = () => {
+      if (!this.novelScrim) return
+      const elapsed = this.time.now() - startedAt
+      const { alpha, done } = computeFadeAlpha(elapsed, fromAlpha, targetAlpha, durationMs)
+      this.novelScrim.alpha = alpha
+      if (!done) return
+      this.novelScrim.alpha = targetAlpha
+      this.novelScrim.visible = visibleForDialog
+      this.cancelNovelScrimVisibilityFade()
+    }
+    tick()
+    if (!this.scrimVisibilityTimer) {
+      this.scrimVisibilityTimer = this.time.setInterval(tick, 1000 / 60)
+    }
+  }
+
+  private setNovelScrimImmediate(visible: boolean, alpha: number): void {
+    if (!this.novelScrim) return
+    this.cancelNovelScrimVisibilityFade()
+    this.novelScrim.visible = visible
+    this.novelScrim.alpha = alpha
   }
 
   /**
@@ -1979,6 +2019,7 @@ export class NovelRenderer {
       this.time.clearInterval(this.scrimRetreatTimer)
       this.scrimRetreatTimer = null
     }
+    this.cancelNovelScrimVisibilityFade()
     // 動画レイヤを破棄（video 要素解放・AudioManager から detach・Sprite/Texture/mask 破棄）(#252)。
     // audioManager.destroy() より前に呼んで detach を確実に通す。
     this.videoLayer.remove()
@@ -2134,16 +2175,14 @@ export class NovelRenderer {
    * 退避中間状態（フェード途中）は GameState に持たないため、復元では「退避していない」前提に倒す。
    */
   private resetNovelScrimState(): void {
+    this.cancelNovelScrimVisibilityFade()
     if (this.scrimRetreatTimer) {
       this.time.clearInterval(this.scrimRetreatTimer)
       this.scrimRetreatTimer = null
     }
     this.scrimRetreatActive = false
     this.dialogBox.alpha = 1
-    if (this.novelScrim) {
-      this.novelScrim.alpha = 0
-      this.novelScrim.visible = false
-    }
+    this.setNovelScrimImmediate(false, 0)
   }
 
   /**
@@ -2161,6 +2200,7 @@ export class NovelRenderer {
     // セリフが表示されておらずスクリムが既に消えているなら退避不要。
     if (!this.novelScrim.visible || this.novelScrim.alpha <= 0) return
 
+    this.cancelNovelScrimVisibilityFade()
     if (this.scrimRetreatTimer) {
       this.time.clearInterval(this.scrimRetreatTimer)
       this.scrimRetreatTimer = null
