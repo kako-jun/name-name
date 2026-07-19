@@ -48,7 +48,18 @@ interface RendererInternals {
   currentBgmPath: string | null
   shakeTimer: number | null
   effectTimer: number | null
-  effectOverlay: { alpha: number; visible: boolean } | null
+  effectOverlay: {
+    alpha: number
+    visible: boolean
+    clear: () => void
+    rect: (...args: unknown[]) => void
+    fill: (...args: unknown[]) => void
+  } | null
+  eventImageLayer: {
+    restore: (state: { path: string; back: 'Hide' | 'Keep' } | null) => void
+    remove: (...args: unknown[]) => void
+    getState: () => { path: string; back: 'Hide' | 'Keep' } | null
+  }
   waitingForChoice: boolean
   readSceneProgress: Set<string>
   choiceOverlay: { show: (...args: unknown[]) => void; hide: () => void }
@@ -68,6 +79,18 @@ interface RendererInternals {
 
 function internals(r: NovelRenderer): RendererInternals {
   return r as unknown as RendererInternals
+}
+
+function installEffectOverlay(r: NovelRenderer): NonNullable<RendererInternals['effectOverlay']> {
+  const overlay = {
+    alpha: 0,
+    visible: false,
+    clear: vi.fn(),
+    rect: vi.fn(),
+    fill: vi.fn(),
+  }
+  internals(r).effectOverlay = overlay
+  return overlay
 }
 
 // entry: 在圏に含める / in-scene: 在圏に含める / out-scene: allScenes には実在するが圏外
@@ -334,6 +357,40 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     expect(r.isSkipMode()).toBe(false)
   })
 
+  it('34: イベント絵表示中の終劇は黒フェード完了まで eventImageLayer を消さない', () => {
+    const r = makeRenderer(SCENES)
+    r.getTimeController().setMode('virtual')
+    r.setBackgroundFadeMs(BACKGROUND_CROSSFADE_MS)
+    installEffectOverlay(r)
+    internals(r).eventImageLayer.restore({ path: 'story/ending.webp', back: 'Hide' })
+    const removeSpy = vi.spyOn(internals(r).eventImageLayer, 'remove')
+
+    r.setConfinedSceneIds(['entry'])
+    r.jumpToScene('out-scene')
+
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    expect(removeSpy).not.toHaveBeenCalled()
+    expect(internals(r).eventImageLayer.getState()).toEqual({
+      path: 'story/ending.webp',
+      back: 'Hide',
+    })
+    expect(internals(r).effectOverlay).toMatchObject({ visible: true, alpha: 0 })
+
+    r.getTimeController().tick(Math.floor(BACKGROUND_CROSSFADE_MS / 2))
+    expect(removeSpy).not.toHaveBeenCalled()
+    expect(internals(r).eventImageLayer.getState()).toEqual({
+      path: 'story/ending.webp',
+      back: 'Hide',
+    })
+    expect(internals(r).effectOverlay?.alpha ?? 0).toBeGreaterThan(0)
+    expect(internals(r).effectOverlay?.alpha ?? 0).toBeLessThan(1)
+
+    r.getTimeController().tick(BACKGROUND_CROSSFADE_MS)
+    expect(removeSpy).toHaveBeenCalledTimes(1)
+    expect(internals(r).eventImageLayer.getState()).toBeNull()
+    expect(internals(r).effectOverlay).toMatchObject({ visible: true, alpha: 1 })
+  })
+
   // ===== J. 終劇後の BGM 停止 (#386 レビュー M2) =====
   //
   // resetAndStartEvents()（通常のシーン遷移）は毎回 stopBgm(0) + currentBgmPath=null するが、
@@ -363,20 +420,22 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
   // 残留する）。applyState() の画面効果リセットブロックと同じロジックを endStory() にも
   // 適用したことを検証する。
 
-  it('31: endStory() は shakeTimer/effectTimer をクリアし effectOverlay を隠す（S1 回帰）', () => {
+  it('31: endStory() は既存の shake/effect をクリアし、effectOverlay を終劇黒フェードに使う（S1 回帰）', () => {
     const r = makeRenderer(SCENES)
     // Shake/Flash/Fade の fire-and-forget な内部状態を直接仕込む（実際のトリガーは
     // processDirective 経由だが、ここでは endStory 側の後始末だけを対象にする）。
     internals(r).shakeTimer = 12345
     internals(r).effectTimer = 67890
-    internals(r).effectOverlay = { alpha: 0.6, visible: true }
+    const overlay = installEffectOverlay(r)
+    overlay.alpha = 0.6
+    overlay.visible = true
 
     r.setConfinedSceneIds(['entry'])
     r.jumpToScene('out-scene')
 
     expect(internals(r).shakeTimer).toBeNull()
-    expect(internals(r).effectTimer).toBeNull()
-    expect(internals(r).effectOverlay).toEqual({ alpha: 0, visible: false })
+    expect(internals(r).effectTimer).not.toBe(67890)
+    expect(internals(r).effectOverlay).toMatchObject({ alpha: 0, visible: true })
   })
 
   // ===== L. confinement 圏外 + 未知 sceneId の dev 診断 (#386 レビュー Q1) =====

@@ -1078,14 +1078,19 @@ export class NovelRenderer {
     this.pendingBackgroundLoadToken = null
     this.clearBackgroundColor()
     this.videoLayer.remove()
-    // イベント絵レイヤーも終劇で「なし」に確定する (#351)。back=Hide で背景・立ち絵を隠したまま
-    // 終劇していると、可視性を戻さない限り以後（intermission タブロー等）ずっと隠れたままになる。
-    this.eventImageLayer.remove()
-    this.applyEventImageVisibility()
-
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
+    // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
+    // 元背景・立ち絵が一瞬見える。終劇専用の黒フェードで画面を覆い切った後に片付ける。
     this.fadeOutBackgroundEntries(eraseBackgroundFadeMs)
     this.characterLayer.clearForSceneTransition(eraseCharacterFadeMs)
+    const eraseVisualFadeMs = Math.max(eraseBackgroundFadeMs, eraseCharacterFadeMs ?? 0)
+    this.startEndStoryBlackoutFade(eraseVisualFadeMs, () => {
+      if (!this.storyEnded) return
+      // イベント絵レイヤーも終劇で「なし」に確定する (#351)。黒で覆った後なら、
+      // back=Hide の背面可視性を戻しても読者には黒しか見えない。
+      this.eventImageLayer.remove()
+      this.applyEventImageVisibility()
+    })
 
     // #404: onStoryEndedChangeCallback の発火位置・タイミングは変更しない（postMessage 契約の正本）。
     this.onStoryEndedChangeCallback?.(true)
@@ -1097,15 +1102,67 @@ export class NovelRenderer {
     if (this.intermissionEvents) {
       const events = this.intermissionEvents
       if (this.intermissionTimer) this.time.clearTimeout(this.intermissionTimer)
-      const delayMs = Math.max(eraseBackgroundFadeMs, this.intermissionCharacterFadeMs)
+      const delayMs = Math.max(eraseVisualFadeMs, this.intermissionCharacterFadeMs)
       this.intermissionTimer = this.time.setTimeout(() => {
         this.intermissionTimer = null
         // goBack/seekTo で storyEnded が解除されていたら描画しない（applyState 側でも
         // このタイマーをキャンセルするが、二重の安全策として storyEnded も確認する）。
         if (!this.initialized || !this.storyEnded) return
+        if (this.effectOverlay) {
+          this.effectOverlay.visible = false
+          this.effectOverlay.alpha = 0
+        }
         this.renderIntermissionTableau(events)
       }, delayMs)
     }
+  }
+
+  /**
+   * 終劇専用の黒フェード。
+   *
+   * endStory() では背景・立ち絵・イベント絵を最終的に消すが、イベント絵が出ている状態で
+   * 先に eventImageLayer.remove() すると背面が戻ってしまう。eventImageLayer より上の
+   * effectOverlay を黒へフェードし、黒で覆い切った後に後始末する。
+   */
+  private startEndStoryBlackoutFade(durationMs: number, onComplete: () => void): void {
+    if (!this.effectOverlay) {
+      onComplete()
+      return
+    }
+    if (this.effectTimer) {
+      this.time.clearInterval(this.effectTimer)
+      this.effectTimer = null
+    }
+
+    this.effectOverlay.clear()
+    this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.effectOverlay.fill(0x000000)
+    this.effectOverlay.alpha = durationMs > 0 ? 0 : 1
+    this.effectOverlay.visible = true
+
+    if (durationMs <= 0) {
+      onComplete()
+      return
+    }
+
+    const startMs = this.time.now()
+    const FPS = 60
+    const intervalMs = 1000 / FPS
+
+    this.effectTimer = this.time.setInterval(() => {
+      const elapsed = this.time.now() - startMs
+      if (!this.effectOverlay) return
+      const { alpha, done } = computeFadeAlpha(elapsed, 0, 1, durationMs)
+      this.effectOverlay.alpha = alpha
+      if (done) {
+        this.effectOverlay.alpha = 1
+        if (this.effectTimer) {
+          this.time.clearInterval(this.effectTimer)
+          this.effectTimer = null
+        }
+        onComplete()
+      }
+    }, intervalMs)
   }
 
   /**
