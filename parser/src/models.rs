@@ -455,6 +455,11 @@ pub enum Event {
     PageBreak,
     Exit {
         character: String,
+        /// 個別の退場フェードアウト時間 (ms)。`None` は runtime 側の character_fade_ms 既定に委ねる。
+        ///
+        /// Markdown 構文: `[退場: ヒロイン, フェード=2100]` / `[退場: ヒロイン, fade=2100]`。
+        /// 既存の `[退場: ヒロイン]` は `None` のままなので後方互換。
+        fade_ms: Option<u32>,
     },
     /// 無言の立ち絵登場 (#401)。`[登場: 名前 (sprite/表情, 位置)]` で本文を伴わず立ち絵を表示する。
     /// 話者タグ（`Dialog` の立ち絵指定 `名前 (sprite/表情, 位置)`）と同じ属性書式・意味論だが、

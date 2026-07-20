@@ -1019,10 +1019,8 @@ fn parse_directive(line: &str) -> Option<Event> {
     if let Some(rest) = content.strip_prefix("登場:") {
         return parse_enter_directive(rest);
     }
-    if let Some(character) = content.strip_prefix("退場:") {
-        return Some(Event::Exit {
-            character: character.trim().to_string(),
-        });
+    if let Some(rest) = content.strip_prefix("退場:") {
+        return Some(parse_exit_directive(rest));
     }
     if let Some(ms_str) = content.strip_prefix("待機:") {
         let wait_target = ms_str.trim();
@@ -1206,6 +1204,24 @@ fn parse_audio_path_and_fade(content: &str) -> (String, Option<u32>) {
         }
     }
     (path, fade_ms)
+}
+
+/// `[退場: 名前]` / `[退場: 名前, フェード=2100]` の本体を分解する。
+/// 最初の `,` 区切り要素を character、残りを fade kv として解釈する。
+/// 既存構文との後方互換のため、未知キーや不正なフェード値は silent skip する。
+fn parse_exit_directive(content: &str) -> Event {
+    let mut parts = content.split(',');
+    let character = parts
+        .next()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let mut fade_ms: Option<u32> = None;
+    for raw in parts {
+        if let Some(n) = parse_fade_kv(raw, false) {
+            fade_ms = Some(n);
+        }
+    }
+    Event::Exit { character, fade_ms }
 }
 
 /// `[背景: path]` / `[背景: path, フェード上=40, フェード下=60, ..., 明るさ=0.6]` の本体を分解する (#250)。
@@ -2771,7 +2787,8 @@ title: "テスト"
         assert_eq!(
             events[6],
             Event::Exit {
-                character: "トモ".to_string()
+                character: "トモ".to_string(),
+                fade_ms: None
             }
         );
         assert_eq!(events[7], Event::Wait { ms: 1000 });

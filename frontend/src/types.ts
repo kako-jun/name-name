@@ -259,7 +259,13 @@ export type Event =
    * 各 text イベントは独立にページ分割されるため、`---` で割られたイベントの切れ目が
    * そのまま強制ページ境界になる。`---` を含まない脚本は従来挙動と完全に同じ（非回帰）。 */
   | 'PageBreak'
-  | { Exit: { character: string } }
+  | {
+      Exit: {
+        character: string
+        /** この退場だけのフェードアウト時間 ms。未指定/null は character_fade_ms または runtime 既定 */
+        fade_ms?: number | null
+      }
+    }
   /**
    * 無言の立ち絵登場 (#401)。`[登場: 名前 (sprite/表情, 位置)]` で本文を伴わず立ち絵を出す。
    * 話者タグ（Dialog の立ち絵指定）と同じ属性書式・意味論だが text を持たない非テキストイベント。

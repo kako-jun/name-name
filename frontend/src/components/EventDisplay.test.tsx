@@ -66,6 +66,9 @@ describe('EventDisplay', () => {
   it('renders Blackout / Exit / Wait / ExpressionChange', () => {
     expect(renderEvent({ Blackout: { action: 'On' } }).container.textContent).toContain('暗転')
     expect(renderEvent({ Exit: { character: '長老' } }).container.textContent).toContain('長老')
+    expect(
+      renderEvent({ Exit: { character: '長老', fade_ms: 2100 } }).container.textContent
+    ).toContain('フェード 2100ms')
     expect(renderEvent({ Wait: { ms: 400 } }).container.textContent).toContain('400ms')
     expect(
       renderEvent({ ExpressionChange: { character: 'A', expression: 'sad' } }).container.textContent

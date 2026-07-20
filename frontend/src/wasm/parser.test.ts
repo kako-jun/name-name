@@ -38,7 +38,7 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
     'protagonist: せお',
     '---',
     '',
-    '## s',
+    '## s:',
     '',
     '**A**:',
     'x',
@@ -87,6 +87,34 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
     expect(doc.event_image_fade_ms).toBeNull()
     expect(doc.skip_enabled).toBeNull()
     expect(doc.debug_enabled).toBeNull()
+  })
+})
+
+describe('parseMarkdown + normalizeDocument: character exit fade survives normalize', () => {
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s:',
+    '',
+    '[退場: ヴィンチア, fade=2100]',
+    '',
+  ].join('\n')
+
+  it('keeps per-exit fade_ms from [退場: name, フェード=N]', async () => {
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      Exit: { character: 'ヴィンチア', fade_ms: 2100 },
+    })
+  })
+
+  it('emits per-exit fade_ms in normalized Japanese key order', async () => {
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[退場: ヴィンチア, フェード=2100]')
   })
 })
 

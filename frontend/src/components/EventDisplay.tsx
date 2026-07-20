@@ -118,7 +118,13 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
   }
 
   if ('Exit' in event) {
-    return <div className={`text-xs italic ml-2 ${meta}`}>退場: {event.Exit.character}</div>
+    const fade = event.Exit.fade_ms != null ? ` (フェード ${event.Exit.fade_ms}ms)` : ''
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        退場: {event.Exit.character}
+        {fade}
+      </div>
+    )
   }
 
   if ('Enter' in event) {

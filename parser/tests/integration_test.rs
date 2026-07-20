@@ -219,7 +219,8 @@ fn test_parse_sample() {
     assert_eq!(
         events[11],
         Event::Exit {
-            character: "トモ".to_string()
+            character: "トモ".to_string(),
+            fade_ms: None
         }
     );
     // [場面転換]
@@ -6619,6 +6620,53 @@ fn test_event_image_exit_does_not_collide_with_event_image_prefix() {
     assert_eq!(
         event_with_fade,
         Event::EventImageExit { fade_ms: Some(300) }
+    );
+}
+
+#[test]
+fn test_character_exit_with_fade_roundtrip() {
+    // 退場ごとのフェード指定。未指定時は従来どおり runtime の character_fade_ms を使う。
+    // 英語 alias は他フェード系と同じく parse し、emit では日本語キーに正規化する。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 退場テスト\n\n[退場: ヴィンチア, fade=2100]\n";
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.chapters[0].scenes[0].events[0],
+        Event::Exit {
+            character: "ヴィンチア".to_string(),
+            fade_ms: Some(2100),
+        }
+    );
+    let md = emitter::emit(&doc);
+    assert!(
+        md.contains("[退場: ヴィンチア, フェード=2100]\n"),
+        "emit 結果:\n{md}"
+    );
+    let reparsed = parser::parse(&md);
+    assert_eq!(
+        reparsed.chapters[0].scenes[0].events[0],
+        Event::Exit {
+            character: "ヴィンチア".to_string(),
+            fade_ms: Some(2100),
+        }
+    );
+}
+
+#[test]
+fn test_character_exit_without_fade_stays_legacy_shape_on_emit() {
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: 退場テスト\n\n[退場: トモ]\n";
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.chapters[0].scenes[0].events[0],
+        Event::Exit {
+            character: "トモ".to_string(),
+            fade_ms: None,
+        }
+    );
+    let md = emitter::emit(&doc);
+    assert!(md.contains("[退場: トモ]\n"), "emit 結果:\n{md}");
+    assert!(
+        !md.contains("[退場: トモ,"),
+        "未指定 fade を emit してはいけない:\n{md}"
     );
 }
 

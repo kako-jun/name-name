@@ -403,11 +403,14 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 }
                 out.push_str("---\n");
             }
-            Event::Exit { character } => {
+            Event::Exit { character, fade_ms } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!("[退場: {character}]\n"));
+                match fade_ms {
+                    Some(ms) => out.push_str(&format!("[退場: {character}, フェード={ms}]\n")),
+                    None => out.push_str(&format!("[退場: {character}]\n")),
+                }
                 prev_was_dialog_or_text = false;
             }
             Event::Enter {

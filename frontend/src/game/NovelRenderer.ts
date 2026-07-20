@@ -3220,7 +3220,10 @@ export class NovelRenderer {
     }
     if ('Exit' in event) {
       // スキップモード中はフェードを抑制して即時退場（既読を素早く流す UX に揃える）#177
-      this.characterLayer.remove(event.Exit.character, { instant: this.skipMode })
+      this.characterLayer.remove(event.Exit.character, {
+        instant: this.skipMode,
+        durationMsOverride: event.Exit.fade_ms ?? undefined,
+      })
       return
     }
     if ('Enter' in event) {

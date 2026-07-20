@@ -97,6 +97,14 @@ function normalizeEvents(events: Event[]): Event[] {
         },
       }
     }
+    if ('Exit' in event) {
+      return {
+        Exit: {
+          character: event.Exit.character,
+          fade_ms: event.Exit.fade_ms ?? null,
+        },
+      }
+    }
     if ('Choice' in event) {
       // 選択肢ボタン本文も表示テキストなので正準化する (#340)。
       // text 以外（jump 等）は保持する（スプレッド）。
