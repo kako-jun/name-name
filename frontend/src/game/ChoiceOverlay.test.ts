@@ -598,9 +598,7 @@ describe('ChoiceOverlay setSplitLayoutRegion (#442 self-review should-5)', () =>
 
     expect(button.x).toBe(PORTRAIT_REGION.x + PORTRAIT_REGION.width / 2)
     expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(PORTRAIT_REGION.x)
-    expect(button.x + button.pivot.x).toBeLessThanOrEqual(
-      PORTRAIT_REGION.x + PORTRAIT_REGION.width
-    )
+    expect(button.x + button.pivot.x).toBeLessThanOrEqual(PORTRAIT_REGION.x + PORTRAIT_REGION.width)
 
     overlay.hide()
   })
