@@ -84,6 +84,72 @@ export function parseHexColor(hex: string): number {
   return isNaN(n) ? 0xffffff : n
 }
 
+/** 矩形（px・論理座標）。split_layout の画像/テキスト領域の共通表現。 */
+export interface LayoutRect {
+  /** 左上 X（px） */
+  x: number
+  /** 左上 Y（px） */
+  y: number
+  /** 幅（px） */
+  width: number
+  /** 高さ（px） */
+  height: number
+}
+
+/** `computeSplitLayoutRegions` の結果（#442）。 */
+export interface SplitLayoutRegions {
+  /** 横長・正方形＝'landscape'（左右分割） / 縦長＝'portrait'（上下分割）。 */
+  orientation: 'landscape' | 'portrait'
+  /** キャラ画像を収める領域。 */
+  character: LayoutRect
+  /** テキストウィンドウを収める領域。 */
+  text: LayoutRect
+}
+
+/**
+ * frontmatter `split_layout: true`（#442）用に、画面比率からキャラ画像領域・テキスト領域を
+ * 左右/上下に振り分ける純粋関数。
+ *
+ * dialog_style（adv/novel、テキスト送りの挙動）とは独立の軸で、こちらは「画像を画面全面＋
+ * テキストをオーバーレイ」という既存の重畳ジオメトリの**代わりに**、画面を隙間なく 2 分割し
+ * 画像とテキストを別領域に収める第三のジオメトリを提供する。
+ *
+ * 判定規則:
+ *  - `screenWidth >= screenHeight`（横長 **or ちょうど正方形**）→ `'landscape'`。
+ *    左半分＝画像、右半分＝テキスト（`x` で左右に 2 等分）。
+ *  - `screenWidth < screenHeight`（縦長）→ `'portrait'`。
+ *    上半分＝画像、下半分＝テキスト（`y` で上下に 2 等分）。
+ *
+ * 正方形（`screenWidth === screenHeight`）は横長側（左右分割）に倒す。分割点の面積は
+ * どちらの軸で切っても同じ（ちょうど半分）なので見た目の破綻はなく、判定を単純な `>=` 1つに
+ * 統一するための割り切り。`constants.ts` の `pickFluidAspectRatio`（fluid `aspect_ratio: auto`
+ * 用に横長/縦長の離散比率を選ぶ関数）も同じ `>=` 規約（正方形は横長側）を使う。両者が食い違うと
+ * 「キャンバスの実形」と「split_layout の領域分割」が矛盾するため、どちらかを変える場合は
+ * 必ずもう一方も揃えること。
+ *
+ * 領域は隙間なく画面いっぱいを 2 等分する（合計が screenWidth × screenHeight に一致する）。
+ * Math.random など非決定要素は使わない決定論的写像。
+ */
+export function computeSplitLayoutRegions(
+  screenWidth: number,
+  screenHeight: number
+): SplitLayoutRegions {
+  if (screenWidth >= screenHeight) {
+    const half = screenWidth / 2
+    return {
+      orientation: 'landscape',
+      character: { x: 0, y: 0, width: half, height: screenHeight },
+      text: { x: half, y: 0, width: screenWidth - half, height: screenHeight },
+    }
+  }
+  const half = screenHeight / 2
+  return {
+    orientation: 'portrait',
+    character: { x: 0, y: 0, width: screenWidth, height: half },
+    text: { x: 0, y: half, width: screenWidth, height: screenHeight - half },
+  }
+}
+
 /**
  * CSS カラー文字列（"#1a4a7a" / "#222" / "1a4a7a"）を Pixi の数値カラーに変換する純粋関数 (#270 / #273)。
  *

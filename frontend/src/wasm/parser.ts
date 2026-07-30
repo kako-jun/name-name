@@ -275,6 +275,9 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     auto_play: doc.auto_play ?? null,
     // SeekBar のフィル／つまみ色 (#440)。文字列なので ?? null（未指定は下流で既定の水色 #a8dadc）。
     seekbar_color: doc.seekbar_color ?? null,
+    // 画面比率に応じた画像/テキストの左右・上下分割配置 (#442)。boolean なので ?? null
+    // （未指定は下流で既定 false ＝従来の全面+オーバーレイ）。
+    split_layout: doc.split_layout ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

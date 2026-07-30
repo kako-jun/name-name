@@ -35,6 +35,7 @@ import {
   computeNovelIndicatorPlacement,
   getIndicatorImageUrls,
   type IndicatorKind,
+  type LayoutRect,
   wrappedPrefixLength,
 } from './novelLayout'
 
@@ -282,6 +283,13 @@ export class DialogBox extends Container {
   private novelMode = false
   /** adv モードの ADV 箱高さ（novel → adv 復帰時に boxH を戻すため保持 #283） */
   private advBoxHeight: number
+  /**
+   * split_layout (#442) のテキスト領域。null = 従来ジオメトリ（adv 下部バー or novel 全画面）。
+   * dialog_style（novel/adv）とは独立の軸。設定時も adv/novel どちらの見た目（枠・名札の有無・
+   * DropShadow 等は setBorderless/setNovelMode が管理）にも触れず、ジオメトリ（boxX/Y/W/H）だけを
+   * この矩形に固定する。`setSplitLayoutRegion` で設定・解除する。
+   */
+  private splitLayoutRegion: LayoutRect | null = null
 
   // --- 状態 ---
   private currentText: string = ''
@@ -513,16 +521,53 @@ export class DialogBox extends Container {
   }
 
   /**
+   * split_layout (#442) 用に、渡された領域（テキストウィンドウ側の半分）へ boxX/Y/W/H を合わせる。
+   * `NOVEL_TEXT_MARGIN_X` / `NOVEL_TEXT_TOP_RATIO` / `NOVEL_TEXT_MARGIN_BOTTOM` と同じ余白規約を、
+   * 画面全体ではなく `region` 基準で適用する（`NOVEL_TEXT_TOP_RATIO` は region.height に対する比率）。
+   * dialogText/ruby/indicator への反映は呼び出し側（`applyNovelGeometry` / `redraw`）が既存の
+   * 手順でそのまま行う（このメソッドは矩形の確定だけを担う）。
+   */
+  private applySplitLayoutBoxGeometry(region: LayoutRect): void {
+    const topY = region.y + Math.round(region.height * NOVEL_TEXT_TOP_RATIO)
+    this.boxX = region.x + NOVEL_TEXT_MARGIN_X
+    this.boxW = region.width - NOVEL_TEXT_MARGIN_X * 2
+    this.boxY = topY
+    this.boxH = region.y + region.height - topY - NOVEL_TEXT_MARGIN_BOTTOM
+  }
+
+  /**
+   * split_layout (#442) のテキスト領域を設定・解除する。`novelLayout.ts` の
+   * `computeSplitLayoutRegions(...).text` をそのまま渡す想定。
+   * null で解除し、従来ジオメトリ（adv 下部バー or novel 全画面）に戻す。
+   * dialog_style（`setNovelMode` / `setBorderless`）には触れない — 見た目（枠・名札・
+   * DropShadow の有無）は変えず、配置（boxX/Y/W/H）だけを変える。
+   */
+  setSplitLayoutRegion(region: LayoutRect | null): void {
+    this.splitLayoutRegion = region
+    if (this.novelMode) {
+      this.applyNovelGeometry()
+    } else {
+      this.redraw(this.screenWidth, this.screenHeight)
+    }
+  }
+
+  /**
    * novel スタイル (#283) の全画面テキスト領域へ幾何を再計算する。
    * 画面の下 60%（`NOVEL_TEXT_TOP_RATIO` 以下）をテキスト域にし、左右・下に小さな余白を残す。
    * 改頁はこの領域に収まる行数 (`novelMaxLinesPerPage`) で行う。
+   * split_layout (#442) 指定時は全画面ではなく `splitLayoutRegion` の矩形に収める。
    */
   private applyNovelGeometry(): void {
-    const topY = Math.round(this.screenHeight * NOVEL_TEXT_TOP_RATIO)
-    this.boxX = NOVEL_TEXT_MARGIN_X
-    this.boxW = this.screenWidth - NOVEL_TEXT_MARGIN_X * 2
-    this.boxY = topY
-    this.boxH = this.screenHeight - topY - NOVEL_TEXT_MARGIN_BOTTOM
+    if (this.splitLayoutRegion) {
+      // split_layout (#442): 全画面ではなく渡された領域（テキストウィンドウ側の半分）へ収める。
+      this.applySplitLayoutBoxGeometry(this.splitLayoutRegion)
+    } else {
+      const topY = Math.round(this.screenHeight * NOVEL_TEXT_TOP_RATIO)
+      this.boxX = NOVEL_TEXT_MARGIN_X
+      this.boxW = this.screenWidth - NOVEL_TEXT_MARGIN_X * 2
+      this.boxY = topY
+      this.boxH = this.screenHeight - topY - NOVEL_TEXT_MARGIN_BOTTOM
+    }
 
     // テキスト位置更新（borderless 前提なので背景・名札は描かない）。
     this.dialogText.x = this.textStartX()
@@ -547,9 +592,14 @@ export class DialogBox extends Container {
       this.applyNovelGeometry()
       return
     }
-    this.boxW = screenWidth - this.marginX * 2
-    this.boxX = this.marginX
-    this.boxY = screenHeight - this.boxH - this.marginBottom
+    if (this.splitLayoutRegion) {
+      // split_layout (#442): adv でも下部バーではなくテキスト領域へ固定する（dialog_style 非依存）。
+      this.applySplitLayoutBoxGeometry(this.splitLayoutRegion)
+    } else {
+      this.boxW = screenWidth - this.marginX * 2
+      this.boxX = this.marginX
+      this.boxY = screenHeight - this.boxH - this.marginBottom
+    }
 
     // 背景再描画
     this.bg.clear()

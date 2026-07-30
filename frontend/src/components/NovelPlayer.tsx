@@ -4,7 +4,14 @@ import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 import { parseDebugQuery } from '../game/debugQuery'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
-import { type AspectRatio, ASPECT_RATIOS, parseAspectRatio } from '../game/constants'
+import {
+  type AspectRatio,
+  ASPECT_RATIOS,
+  DEFAULT_ASPECT_RATIO,
+  parseAspectRatio,
+  isAutoAspectRatio,
+  pickFluidAspectRatio,
+} from '../game/constants'
 import {
   getIndicatorImageUrls,
   PLAYER_BUTTON_RIGHT_MARGIN_PX,
@@ -151,6 +158,10 @@ interface NovelPlayerProps {
    *  既定 false＝手送り（null/undefined/false で最初は手送り）。`true` で起動時からオート ON。
    *  llll-ll-media 等の動画用途では `auto_play: true` を明示する。 */
   autoPlay?: boolean | null
+  /** 画面比率に応じて画像/テキストを左右・上下に分割配置する split_layout モード (#442)。
+   *  frontmatter `split_layout:` から流す。既定 false＝従来どおり（画像全面 + テキストオーバーレイ）。
+   *  dialog_style（adv/novel、テキスト送りの挙動）とは独立の軸で、両者は併用できる。 */
+  splitLayout?: boolean | null
   /** DebugOverlay に出す renderer 外の読み込み診断 (#321)。 */
   debugInfo?: string[]
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
@@ -197,6 +208,7 @@ function NovelPlayer({
   debugEnabled,
   speakerNudge,
   autoPlay,
+  splitLayout,
   debugInfo,
   docKey,
   initialSkipMode = false,
@@ -204,6 +216,9 @@ function NovelPlayer({
 }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
+  // fluid aspect ratio (#442) 用: ルート要素（常に w-full h-full）の実サイズを測る ref。
+  // aspect_ratio: auto のときだけ ResizeObserver で監視する（非 auto では未使用）。
+  const fluidRootRef = useRef<HTMLDivElement>(null)
 
   // 設定 (Issue #138): localStorage と同期。スライダー drag による書き込み連打は
   // debounce で吸収する (review #155 should-2)
@@ -248,9 +263,45 @@ function NovelPlayer({
   // 状態は localStorage（旧 DebugOverlay と同じキー意味）に best-effort で永続化する。
   const [debugOpen, setDebugOpen] = useState<boolean>(() => readDebugOpen())
 
-  // 有効な AspectRatio に正規化
-  const aspectRatio = parseAspectRatio(aspectRatioProp)
+  // fluid aspect ratio (#442): frontmatter `aspect_ratio: auto` のときは固定比率にロックせず、
+  // ルート要素（w-full h-full＝実ビューポート追従）の実測サイズの向きから '16:9'/'9:16' を
+  // 都度選ぶ。既存の 3 値（16:9/4:3/9:16）を明示指定した作品は isFluid=false のまま非破壊。
+  const isFluid = isAutoAspectRatio(aspectRatioProp)
+  // 初期値は window サイズからの概算（SSR安全に typeof window で分岐）。マウント後すぐ下の
+  // ResizeObserver がルート要素の実測値で補正する（向きカテゴリが違えば 1 回だけ再マウントする）。
+  const [fluidRatio, setFluidRatio] = useState<AspectRatio>(() => {
+    if (!isFluid || typeof window === 'undefined') return DEFAULT_ASPECT_RATIO
+    return pickFluidAspectRatio(window.innerWidth, window.innerHeight)
+  })
+  // 有効な AspectRatio に正規化。fluid のときは向き追従の fluidRatio を使う。
+  const aspectRatio = isFluid ? fluidRatio : parseAspectRatio(aspectRatioProp)
   const { width: gameWidth, height: gameHeight } = ASPECT_RATIOS[aspectRatio]
+  // fluid のときだけ、向きカテゴリが変わったら renderer を再マウントするためのキー (#442)。
+  // 非 fluid では常に null（値が変わらないので後述のマウント effect の deps は従来どおり
+  // 「初回のみ実行」のまま＝既存ゲームは非破壊）。
+  const fluidRemountKey = isFluid ? fluidRatio : null
+
+  // fluid モード専用: ルート要素の実サイズを ResizeObserver で監視し、向きカテゴリ
+  // （横長/正方形 vs 縦長）が変わったときだけ fluidRatio を更新する (#442)。同カテゴリ内の
+  // ピクセル単位の変化（デスクトップでウィンドウ幅を少し変える等）では state を更新しない
+  // ＝再マウントしない（renderer の再マウントは PixiJS シーン全体を作り直すコストがあるため、
+  // 見た目の「箱の形」が変わる瞬間だけに限定する）。非 fluid では何もしない（早期 return）＝
+  // 完全非破壊。
+  useEffect(() => {
+    if (!isFluid) return
+    const root = fluidRootRef.current
+    if (!root || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      const { width, height } = entry.contentRect
+      if (width <= 0 || height <= 0) return
+      const next = pickFluidAspectRatio(width, height)
+      setFluidRatio((prev) => (prev === next ? prev : next))
+    })
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [isFluid])
 
   // インジケータ画像の先読み (#413)。assetBaseUrl が分かった時点で、renderer の生成/初期化
   // （下の init effect の `renderer.init(...).then(...)`）を待たずにインジケータ画像（next/pageturn
@@ -270,8 +321,11 @@ function NovelPlayer({
   }, [assetBaseUrl])
 
   // ライフサイクル管理: init + destroy
-  // aspectRatio が変わる場合はコンポーネントを再マウントすること
-  // （依存配列は空：レンダラーはマウント時に1度だけ生成する設計）
+  // aspectRatio（非 fluid）が変わる場合はコンポーネントを再マウントすること
+  // （依存配列は fluidRemountKey のみ：レンダラーは基本マウント時に1度だけ生成する設計。
+  // fluid（aspect_ratio: auto）のときだけ、向きカテゴリが変わるたびに fluidRemountKey が
+  // 変化して自動的に再マウントする (#442)。非 fluid では fluidRemountKey は常に null で
+  // 不変のため、この effect は従来どおり「初回のみ実行」＝既存ゲームは非破壊。）
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -343,6 +397,9 @@ function NovelPlayer({
       renderer.setProtagonist(protagonist ?? null)
       // 話者交代 nudge の発火可否 (#382)。既定 false＝非発火（opt-in）。true でのみ発火、null/undefined/false は非発火。
       renderer.setSpeakerNudge(speakerNudge ?? null)
+      // 画面比率に応じた画像/テキストの左右・上下分割配置 (#442)。dialog_style とは独立の軸。
+      // setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、初回描画から領域確定済みにする。
+      renderer.setSplitLayout(splitLayout ?? null)
       // 立ち絵の足元 Y 比率 (#308)。setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、
       // 初回描画から per-game の足元位置（全身 / 靴を切る）で立つようにする。
       renderer.setCharacterYRatio(characterYRatio ?? null)
@@ -427,7 +484,7 @@ function NovelPlayer({
       renderer.destroy()
       rendererRef.current = null
     }
-  }, [])
+  }, [fluidRemountKey])
 
   // 設定変更を renderer に反映 + localStorage に保存 (#138)
   useEffect(() => {
@@ -485,6 +542,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setSpeakerNudge(speakerNudge ?? null)
   }, [speakerNudge])
+
+  // splitLayout が変化したときに renderer に反映 (#442)
+  useEffect(() => {
+    rendererRef.current?.setSplitLayout(splitLayout ?? null)
+  }, [splitLayout])
 
   // characterYRatio が変化したときに renderer に反映 (#308)
   useEffect(() => {
@@ -694,6 +756,7 @@ function NovelPlayer({
 
   return (
     <div
+      ref={fluidRootRef}
       className="relative w-full h-full flex items-center justify-center bg-black"
       style={{ containerType: 'size' }}
     >
