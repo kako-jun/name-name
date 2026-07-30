@@ -5569,6 +5569,312 @@ fn test_auto_play_unspecified_is_none_and_omitted() {
     );
 }
 
+// --- #442: split_layout（画像/テキストを左右・上下に分割配置するモード） ---
+//
+// frontmatter `split_layout:` を Option<bool> で透過する。skip_enabled / speaker_nudge と同型で
+// `parse_bool_kv` を共有し、`true`/`false`（大文字小文字無視）のみ受理、空・不正値・coerce 系
+//（yes/1/on）は None（runtime 既定: false=従来の全面+オーバーレイ）にフォールバックする。
+// このリポで繰り返し起きている事故パターン（#310/#378/#436/#440＝新フィールドが parser か
+// normalizeDocument のどちらかで黙って消える）の parser 側生存確認。
+
+/// `split_layout: <value>` だけを frontmatter に持つ最小ドキュメントを組み立てる。
+fn split_layout_doc(value: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nsplit_layout:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n"
+    )
+}
+
+#[test]
+fn test_document_split_layout_parses_true_false() {
+    // G1: `true` → Some(true) / `false` → Some(false)（厳格な真偽の素直な往復）。
+    let doc_true = parser::parse(&split_layout_doc(" true"));
+    assert_eq!(
+        doc_true.split_layout,
+        Some(true),
+        "split_layout: true は Some(true)"
+    );
+
+    let doc_false = parser::parse(&split_layout_doc(" false"));
+    assert_eq!(
+        doc_false.split_layout,
+        Some(false),
+        "split_layout: false は Some(false)"
+    );
+}
+
+#[test]
+fn test_document_split_layout_is_case_insensitive() {
+    // G2: `TRUE` / `False` → 大文字小文字を無視して Some に倒す（parse_bool_kv の to_ascii_lowercase）。
+    let doc_upper = parser::parse(&split_layout_doc(" TRUE"));
+    assert_eq!(
+        doc_upper.split_layout,
+        Some(true),
+        "split_layout: TRUE は大文字無視で Some(true)"
+    );
+
+    let doc_mixed = parser::parse(&split_layout_doc(" False"));
+    assert_eq!(
+        doc_mixed.split_layout,
+        Some(false),
+        "split_layout: False は大文字小文字無視で Some(false)"
+    );
+}
+
+#[test]
+fn test_document_split_layout_unspecified_is_none() {
+    // G3: frontmatter にキーが無ければ None（runtime 既定 false＝従来の全面+オーバーレイにフォールバック）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.split_layout, None,
+        "split_layout 未指定は None（既定 false にフォールバック）"
+    );
+}
+
+#[test]
+fn test_document_split_layout_empty_is_none() {
+    // G4: 空 `split_layout:`（値なし）・空引用 `""` はどちらも None
+    //   （parse_bool_kv が trim 後の空文字を弾く。skip_enabled / speaker_nudge と同じ向き）。
+    let doc_empty = parser::parse(&split_layout_doc(""));
+    assert_eq!(doc_empty.split_layout, None, "空 split_layout: は None");
+
+    let doc_empty_quote = parser::parse(&split_layout_doc(" \"\""));
+    assert_eq!(
+        doc_empty_quote.split_layout, None,
+        "split_layout: \"\" は unquote 後に空文字となり None"
+    );
+}
+
+#[test]
+fn test_document_split_layout_does_not_coerce_truthy_values() {
+    // G5（重要）: `yes` / `1` / `on` は coerce せず None に倒す（厳格＝true/false 以外は無効）。
+    //   YAML 緩い真偽（yes/on/1）を受けると frontmatter の意味が曖昧になるため、parse_bool_kv は
+    //   `true`/`false` だけを真偽として扱い、それ以外は「未指定」と同じ None にする。
+    for truthy in ["yes", "1", "on"] {
+        let doc = parser::parse(&split_layout_doc(&format!(" {truthy}")));
+        assert_eq!(
+            doc.split_layout, None,
+            "split_layout: {truthy} は coerce されず None（厳格）"
+        );
+    }
+}
+
+#[test]
+fn test_document_split_layout_garbage_is_none() {
+    // G6: 完全に無関係なゴミ文字列も None（parse 失敗を握りつぶす）。
+    let doc = parser::parse(&split_layout_doc(" maybe-later"));
+    assert_eq!(
+        doc.split_layout, None,
+        "split_layout: maybe-later（garbage）は None"
+    );
+}
+
+#[test]
+fn test_split_layout_false_round_trips() {
+    // G7: split_layout: false → emit に `split_layout: false` を含み、再 parse で Some(false)。
+    //   falsy（false）でも Some なら emit から消えないこと（skip_serializing は None だけ）を縛る。
+    //   これが抜けると「false を書いたのに round-trip で消える＝分割配置の抑制が効かなくなる」事故になる。
+    let doc = parser::parse(&split_layout_doc(" false"));
+    assert_eq!(doc.split_layout, Some(false));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("split_layout: false"),
+        "emit に `split_layout: false` が含まれること（false を落とさない）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.split_layout,
+        Some(false),
+        "round-trip で split_layout: false が保持される"
+    );
+}
+
+#[test]
+fn test_split_layout_true_round_trips() {
+    // G8: split_layout: true → emit に `split_layout: true` を含み、再 parse で Some(true)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+split_layout: true
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.split_layout, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("split_layout: true"),
+        "emit に `split_layout: true` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.split_layout,
+        Some(true),
+        "round-trip で split_layout: true が保持される"
+    );
+}
+
+#[test]
+fn test_split_layout_none_omits_emit_line() {
+    // G9: None なら emit に `split_layout:` 行が出ない（skip_serializing_if = Option::is_none）。
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(doc.split_layout, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("split_layout:"),
+        "split_layout が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_split_layout_unspecified_stays_none_through_round_trip() {
+    // G9b: 未指定 → emit されない → 再 parse でも None のまま（往復で false 等に化けない）。
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.split_layout, None,
+        "未指定の round-trip は None のまま（false へ化けない）"
+    );
+}
+
+#[test]
+fn test_split_layout_round_trip_with_other_per_game_frontmatter() {
+    // G10: split_layout を他の per-game frontmatter（skip_enabled / dialog_style / aspect_ratio 等）と
+    //   同居させ、parse → emit → parse で全フィールドが保持され、互いに値が潰れないこと。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+dialog_style: "novel"
+character_y_ratio: 1.05
+character_fade_ms: 700
+skip_enabled: false
+debug_enabled: true
+speaker_nudge: false
+split_layout: true
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.split_layout, Some(true));
+    assert_eq!(doc.speaker_nudge, Some(false));
+    assert_eq!(doc.skip_enabled, Some(false));
+    assert_eq!(doc.debug_enabled, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+
+    // split_layout が round-trip で保持される。
+    assert_eq!(
+        doc2.split_layout,
+        Some(true),
+        "split_layout が round-trip で保持される"
+    );
+    // 共存フィールドも壊れていないこと。
+    assert_eq!(doc2.speaker_nudge, Some(false));
+    assert_eq!(doc2.skip_enabled, Some(false));
+    assert_eq!(doc2.debug_enabled, Some(true));
+    assert_eq!(doc2.aspect_ratio, "9:16");
+    assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+    assert_eq!(doc2.character_y_ratio, Some(1.05));
+    assert_eq!(doc2.character_fade_ms, Some(700));
+    // ドキュメント全体が安定（parse → emit → parse が冪等）。
+    assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
+}
+
+// --- #442: aspect_ratio に "auto"（fluid モード）を追加受理する ---
+//
+// 既存 3 値（16:9/4:3/9:16）と対等に受理し、大文字 "AUTO" や不正値は従来どおり既定 "16:9" へ
+// フォールバックする（大文字小文字を区別する厳密一致・既存挙動の非回帰）。
+
+#[test]
+fn test_document_aspect_ratio_accepts_all_four_values_including_auto() {
+    // H1: 16:9 / 4:3 / 9:16 / auto の 4 値すべてがそのまま parse される。
+    for v in ["16:9", "4:3", "9:16", "auto"] {
+        let input = format!(
+            "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\naspect_ratio: \"{v}\"\n---\n\n## 1-1: シーン\n\nナレ。\n"
+        );
+        let doc = parser::parse(&input);
+        assert_eq!(
+            doc.aspect_ratio, v,
+            "aspect_ratio: {v} がそのまま保持される"
+        );
+    }
+}
+
+#[test]
+fn test_document_aspect_ratio_uppercase_auto_falls_back_to_default() {
+    // H2: "AUTO"（大文字）は非受理値として既定 "16:9" にフォールバックする（大文字小文字を区別する）。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\naspect_ratio: \"AUTO\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.aspect_ratio, "16:9",
+        "aspect_ratio: AUTO（大文字）は既定 16:9 にフォールバック"
+    );
+}
+
+#[test]
+fn test_document_aspect_ratio_invalid_value_falls_back_to_default() {
+    // H3: 未知の値（21:9 等）・空文字は既定 "16:9" にフォールバックする（既存挙動の非回帰）。
+    for bad in ["21:9", "1:1", "bad", ""] {
+        let input = format!(
+            "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\naspect_ratio: \"{bad}\"\n---\n\n## 1-1: シーン\n\nナレ。\n"
+        );
+        let doc = parser::parse(&input);
+        assert_eq!(
+            doc.aspect_ratio, "16:9",
+            "aspect_ratio: {bad:?} は既定 16:9 にフォールバック"
+        );
+    }
+}
+
+#[test]
+fn test_aspect_ratio_auto_round_trips() {
+    // H4: aspect_ratio: auto は emit → 再 parse でも "auto" のまま保持される（非デフォルト値として emit）。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\naspect_ratio: \"auto\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(doc.aspect_ratio, "auto");
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("aspect_ratio: \"auto\""),
+        "emit に `aspect_ratio: \"auto\"` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.aspect_ratio, "auto",
+        "round-trip で aspect_ratio: auto が保持される"
+    );
+}
+
 #[test]
 fn test_ruby_markup_passthrough_in_dialog_text() {
     // ルビ記法 (#148) は parser/Rust 側ではスキーマを拡張せず、

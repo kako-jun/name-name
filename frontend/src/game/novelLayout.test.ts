@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeCoverFit,
+  computeSplitLayoutRegions,
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
@@ -167,6 +168,105 @@ describe('computeCoverFit', () => {
     expect(fit.width).toBe(4000)
     expect(fit.x).toBe((1920 - 4000) / 2) // 左右均等（負値）
     expect(fit.y).toBe(0)
+  })
+})
+
+// =====================================================================================
+// #442: computeSplitLayoutRegions（split_layout: true 用の画像/テキスト領域の左右/上下分割）。
+//   dialog_style（adv/novel、テキスト送りの挙動）とは独立の軸。screenWidth >= screenHeight
+//  （横長 **or ちょうど正方形**）→ 左右分割（landscape）、それ以外 → 上下分割（portrait）。
+//   正方形は横長側に倒す。constants.ts の pickFluidAspectRatio と同じ `>=` 境界規約
+//  （両関数の境界一致は constants.test.ts 側で別途縛る）。
+// =====================================================================================
+describe('computeSplitLayoutRegions (#442)', () => {
+  it('横長 (800x450): 左半分=character・右半分=text にちょうど2等分される', () => {
+    const regions = computeSplitLayoutRegions(800, 450)
+    expect(regions.orientation).toBe('landscape')
+    expect(regions.character).toEqual({ x: 0, y: 0, width: 400, height: 450 })
+    expect(regions.text).toEqual({ x: 400, y: 0, width: 400, height: 450 })
+  })
+
+  it('縦長 (450x800): 上半分=character・下半分=text にちょうど2等分される', () => {
+    const regions = computeSplitLayoutRegions(450, 800)
+    expect(regions.orientation).toBe('portrait')
+    expect(regions.character).toEqual({ x: 0, y: 0, width: 450, height: 400 })
+    expect(regions.text).toEqual({ x: 0, y: 400, width: 450, height: 400 })
+  })
+
+  it('境界: 正方形 (800x800) は横長側（landscape・左右分割）に倒す', () => {
+    const regions = computeSplitLayoutRegions(800, 800)
+    expect(regions.orientation).toBe('landscape')
+    expect(regions.character).toEqual({ x: 0, y: 0, width: 400, height: 800 })
+    expect(regions.text).toEqual({ x: 400, y: 0, width: 400, height: 800 })
+  })
+
+  it('境界-1: (800,801)（高さが1px大きい）は portrait（縦長側）に倒れる', () => {
+    expect(computeSplitLayoutRegions(800, 801).orientation).toBe('portrait')
+  })
+
+  it('境界+1: (801,800)（幅が1px大きい）は landscape（横長側）に倒れる', () => {
+    expect(computeSplitLayoutRegions(801, 800).orientation).toBe('landscape')
+  })
+
+  it('不変条件: character 領域 + text 領域の面積合計が screenWidth * screenHeight に一致する（landscape/portrait/境界/極小を含む全ケース）', () => {
+    const cases: Array<[number, number]> = [
+      [800, 450], // landscape（16:9）
+      [450, 800], // portrait（9:16）
+      [800, 800], // 正方形境界
+      [799, 800], // portrait 境界-1
+      [800, 799], // landscape 境界+1
+      [1920, 1080], // 実解像度相当
+      [1, 1], // 極小正方形
+      [3, 7], // 半端な奇数比
+    ]
+    for (const [w, h] of cases) {
+      const regions = computeSplitLayoutRegions(w, h)
+      const totalArea =
+        regions.character.width * regions.character.height +
+        regions.text.width * regions.text.height
+      expect(totalArea).toBe(w * h)
+    }
+  })
+
+  // 異常系: parser/constants の他の純関数（computeCoverFit 等）と同じく「呼び出し側（NovelRenderer
+  // の screenWidth/screenHeight）が正の有限値を渡す前提」の割り切りで、追加のガードを持たない。
+  // ここではガードなしの現状挙動を固定する（将来ガードを追加/撤去したときに気づけるようにするための
+  // 回帰ピンであって、「これが正しい」という仕様表明ではない）。
+  it('異常系pin: (0,0) は幅・高さとも0の矩形を返す（ガードなし・現状挙動の固定）', () => {
+    const regions = computeSplitLayoutRegions(0, 0)
+    expect(regions).toEqual({
+      orientation: 'landscape', // 0 >= 0 は true
+      character: { x: 0, y: 0, width: 0, height: 0 },
+      text: { x: 0, y: 0, width: 0, height: 0 },
+    })
+  })
+
+  it('異常系pin: 負値 (-800,-450) は判定式 `>=` が false になり portrait 分岐へ落ち、負のままの矩形を返す（ガードなし・現状挙動の固定）', () => {
+    const regions = computeSplitLayoutRegions(-800, -450)
+    expect(regions).toEqual({
+      orientation: 'portrait', // -800 >= -450 は false（-800 の方がより負）
+      character: { x: 0, y: 0, width: -800, height: -225 },
+      text: { x: 0, y: -225, width: -800, height: -225 },
+    })
+  })
+
+  it('異常系pin: 幅が NaN (NaN,800) は判定式が false になり portrait 分岐へ落ち、NaN を含む矩形を返す（ガードなし・現状挙動の固定）', () => {
+    // toEqual は NaN 同士を一致と見なす（Object.is ベース）ので退化系でも縛れる（computeCoverFit と同じ流儀）。
+    const regions = computeSplitLayoutRegions(NaN, 800)
+    expect(regions).toEqual({
+      orientation: 'portrait', // NaN との比較は常に false
+      character: { x: 0, y: 0, width: NaN, height: 400 },
+      text: { x: 0, y: 400, width: NaN, height: 400 },
+    })
+  })
+
+  it('異常系pin: 幅が Infinity (Infinity,800) は landscape 分岐へ落ち、text.width が Infinity-Infinity=NaN になる（ガードなし・現状挙動の固定）', () => {
+    const regions = computeSplitLayoutRegions(Infinity, 800)
+    expect(regions).toEqual({
+      orientation: 'landscape', // Infinity >= 800 は true
+      character: { x: 0, y: 0, width: Infinity, height: 800 },
+      text: { x: Infinity, y: 0, width: NaN, height: 800 },
+    })
   })
 })
 

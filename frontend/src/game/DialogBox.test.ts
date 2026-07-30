@@ -31,6 +31,7 @@ import {
   NOVEL_TEXT_MARGIN_BOTTOM,
   type IndicatorKind,
 } from './DialogBox'
+import type { LayoutRect } from './novelLayout'
 import { ensureFontLoaded } from './FontLoader'
 
 // デフォルトは即 resolve — 既存テストが影響を受けないようにする
@@ -1241,6 +1242,177 @@ describe('DialogBox novel mode (#283)', () => {
   it('21: 初期状態は adv（novel ではない）', () => {
     const box = makeBox()
     expect(box.isNovelMode).toBe(false)
+    box.dispose()
+  })
+})
+
+// split_layout (#442) のテキスト領域固定。dialog_style（adv/novel）とは独立の軸で、
+// setSplitLayoutRegion は adv・novel どちらでも渡された矩形へ boxX/Y/W/H を固定するだけで、
+// 枠・名札の有無等の見た目（setBorderless/setNovelMode の管轄）には一切触れない。
+// NovelRenderer.applySplitLayout() が computeSplitLayoutRegions(...).text をそのまま渡す想定。
+describe('DialogBox setSplitLayoutRegion (#442)', () => {
+  const W = 800
+  const H = 450
+
+  interface SplitInternals {
+    bg: { visible: boolean }
+    nameBox: { visible: boolean }
+    boxX: number
+    boxW: number
+    boxY: number
+    boxH: number
+  }
+  function splitInternals(box: DialogBox): SplitInternals {
+    return box as unknown as SplitInternals
+  }
+
+  function makeBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: 20,
+      fontSize: 40,
+    })
+  }
+
+  // computeSplitLayoutRegions(800, 450).text 相当（横長・右半分がテキスト領域）。
+  const region: LayoutRect = { x: 400, y: 0, width: 400, height: 450 }
+
+  // applySplitLayoutBoxGeometry と同形の参照オラクル（NOVEL_TEXT_* 定数から算出・直書きしない）。
+  function expectedGeometry(r: LayoutRect) {
+    const topY = r.y + Math.round(r.height * NOVEL_TEXT_TOP_RATIO)
+    return {
+      boxX: r.x + NOVEL_TEXT_MARGIN_X,
+      boxW: r.width - NOVEL_TEXT_MARGIN_X * 2,
+      boxY: topY,
+      boxH: r.y + r.height - topY - NOVEL_TEXT_MARGIN_BOTTOM,
+    }
+  }
+
+  it('adv（novelMode=false）で region を設定すると boxX/Y/W/H が region 基準の幾何になる', () => {
+    const box = makeBox()
+    box.setSplitLayoutRegion(region)
+    const i = splitInternals(box)
+    const exp = expectedGeometry(region)
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxH).toBe(exp.boxH)
+    box.dispose()
+  })
+
+  it('novel（novelMode=true）で region を設定すると boxX/Y/W/H が region 基準の幾何になる', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    box.setSplitLayoutRegion(region)
+    const i = splitInternals(box)
+    const exp = expectedGeometry(region)
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxH).toBe(exp.boxH)
+    box.dispose()
+  })
+
+  // 重要: split_layout の中核契約——同一 region を adv/novel どちらに設定しても
+  // boxX/Y/W/H は完全一致する（split_layout はジオメトリだけを固定し、枠・名札の有無等の
+  // 見た目差は setBorderless/setNovelMode の管轄のまま独立に保たれる）。
+  it('重要: 同一 region を adv/novel 双方に設定すると boxX/Y/W/H が完全一致する', () => {
+    const advBox = makeBox()
+    advBox.setSplitLayoutRegion(region)
+    const advGeom = { ...splitInternals(advBox) }
+
+    const novelBox = makeBox()
+    novelBox.setNovelMode(true)
+    novelBox.setSplitLayoutRegion(region)
+    const novelGeom = { ...splitInternals(novelBox) }
+
+    expect(novelGeom.boxX).toBe(advGeom.boxX)
+    expect(novelGeom.boxY).toBe(advGeom.boxY)
+    expect(novelGeom.boxW).toBe(advGeom.boxW)
+    expect(novelGeom.boxH).toBe(advGeom.boxH)
+
+    advBox.dispose()
+    novelBox.dispose()
+  })
+
+  it('setNovelMode(true)⇄(false) を往復しても region ジオメトリを維持する', () => {
+    const box = makeBox()
+    box.setSplitLayoutRegion(region)
+    const exp = expectedGeometry(region)
+
+    box.setNovelMode(true)
+    let i = splitInternals(box)
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxH).toBe(exp.boxH)
+
+    box.setNovelMode(false)
+    i = splitInternals(box)
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxH).toBe(exp.boxH)
+
+    box.dispose()
+  })
+
+  it('setSplitLayoutRegion(null) で adv の従来ジオメトリ（下部 ADV 箱）に復帰する', () => {
+    const box = makeBox()
+    const advGeomBefore = { ...splitInternals(box) }
+    box.setSplitLayoutRegion(region)
+    box.setSplitLayoutRegion(null)
+    const i = splitInternals(box)
+    expect(i.boxX).toBe(advGeomBefore.boxX)
+    expect(i.boxY).toBe(advGeomBefore.boxY)
+    expect(i.boxW).toBe(advGeomBefore.boxW)
+    expect(i.boxH).toBe(advGeomBefore.boxH)
+    box.dispose()
+  })
+
+  it('setSplitLayoutRegion(null) で novel の従来ジオメトリ（全画面）に復帰する', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const novelGeomBefore = { ...splitInternals(box) }
+    box.setSplitLayoutRegion(region)
+    box.setSplitLayoutRegion(null)
+    const i = splitInternals(box)
+    expect(i.boxX).toBe(novelGeomBefore.boxX)
+    expect(i.boxY).toBe(novelGeomBefore.boxY)
+    expect(i.boxW).toBe(novelGeomBefore.boxW)
+    expect(i.boxH).toBe(novelGeomBefore.boxH)
+    box.dispose()
+  })
+
+  it('同一 region を2回連続で設定しても冪等（値が変わらない）', () => {
+    const box = makeBox()
+    box.setSplitLayoutRegion(region)
+    const first = { ...splitInternals(box) }
+    box.setSplitLayoutRegion(region)
+    const second = splitInternals(box)
+    expect(second.boxX).toBe(first.boxX)
+    expect(second.boxY).toBe(first.boxY)
+    expect(second.boxW).toBe(first.boxW)
+    expect(second.boxH).toBe(first.boxH)
+    box.dispose()
+  })
+
+  // 見た目非干渉: setSplitLayoutRegion はジオメトリ（boxX/Y/W/H）だけを変え、
+  // 枠・名札の可視状態（setBorderless/setDialog が管理）には触れない。
+  // 名前ありで setDialog すると nameText.width の canvas 計測が jsdom で null になり落ちるため
+  // （12b と同じ既知の制約）、名前なし（null）で bg.visible だけを観測する。
+  it('見た目非干渉: setSplitLayoutRegion 呼び出し前後で bg.visible / nameBox.visible が変化しない', () => {
+    const box = makeBox()
+    box.setDialog(null, 'セリフ。')
+    const bgBefore = splitInternals(box).bg.visible
+    const nameBoxBefore = splitInternals(box).nameBox.visible
+    box.setSplitLayoutRegion(region)
+    expect(splitInternals(box).bg.visible).toBe(bgBefore)
+    expect(splitInternals(box).nameBox.visible).toBe(nameBoxBefore)
     box.dispose()
   })
 })

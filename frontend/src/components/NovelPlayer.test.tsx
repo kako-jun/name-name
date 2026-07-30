@@ -973,6 +973,81 @@ describe('NovelPlayer SeekBar 色 seekbar_color 配線 (#440)', () => {
   })
 })
 
+// --- #442: splitLayout prop を renderer.setSplitLayout に転送する ---
+//
+// NovelPlayer は init 時（setEvents/setScenes より前）と、splitLayout 変化時の専用 useEffect の
+// 双方で renderer.setSplitLayout(splitLayout ?? null) を呼ぶ。frontmatter `split_layout:` が
+// PlayerScreen/EditorScreen → NovelPlayer prop → renderer まで届く配線を、スタブ renderer の
+// 呼び出しで縛る（speakerNudge #382 と対称の配線パターン）。
+describe('NovelPlayer splitLayout の renderer 転送 (#442)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  it('I1: splitLayout={true} なら renderer.setSplitLayout が true で呼ばれる', async () => {
+    render(<NovelPlayer events={[]} splitLayout={true} />)
+    await flushAsync()
+    expect(lastRenderer().setSplitLayout).toHaveBeenCalledWith(true)
+  })
+
+  it('I2: splitLayout 未指定なら renderer.setSplitLayout が null で呼ばれる（?? null・既定 false 相当）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(lastRenderer().setSplitLayout).toHaveBeenCalledWith(null)
+  })
+
+  it('I3: splitLayout={null} でも null で呼ばれる（明示 null＝既定の全面+オーバーレイ）', async () => {
+    render(<NovelPlayer events={[]} splitLayout={null} />)
+    await flushAsync()
+    expect(lastRenderer().setSplitLayout).toHaveBeenCalledWith(null)
+  })
+
+  it('I4: splitLayout を false→true に変更すると setSplitLayout が true で再コールされる（専用 useEffect の状態遷移）', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} splitLayout={false} />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.setSplitLayout).toHaveBeenCalledWith(false)
+
+    rerender(<NovelPlayer events={[]} splitLayout={true} />)
+    await flushAsync()
+    expect(r.setSplitLayout).toHaveBeenCalledWith(true)
+  })
+})
+
+// --- #442: 非 fluid（aspect_ratio 16:9/4:3/9:16/未指定）では aspectRatio 変更で再マウントしない ---
+//
+// mount effect の依存配列は [fluidRemountKey] のみ。fluid（aspect_ratio: auto）以外は
+// fluidRemountKey が常に null で不変なため、aspectRatio prop 自体が変わっても effect は
+// 再実行されない＝renderer は再構築されない（既存ゲームの「マウント時に1度だけ生成」を維持する
+// 非回帰）。ResizeObserver は isFluid=false の早期 return で一切使われないため、モックなしで
+// 検証できる（このリポの既存方針＝seekBarResizeObserver 等も ResizeObserver 自体はモックしない
+// 先例に倣う）。
+describe('NovelPlayer 非fluid時はaspectRatio変更で再マウントしない (#442)', () => {
+  it('J1: aspectRatio を "16:9"→"9:16" に変更しても renderer は再構築されない（fluidRemountKey が常に null）', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    const r = rendererInstances[0]
+
+    rerender(<NovelPlayer events={[]} aspectRatio="9:16" />)
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(r.destroy).not.toHaveBeenCalled()
+  })
+
+  it('J2: aspectRatio 未指定のまま他の prop が変わっても renderer は再構築されない', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    const r = rendererInstances[0]
+
+    rerender(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(r.destroy).not.toHaveBeenCalled()
+  })
+})
+
 // #413: インジケータ画像（next/pageturn 各4枚=計8枚）の先読み useEffect。
 // `renderer`/`rendererRef` を一切参照しない、`[assetBaseUrl]` だけに依存する独立 effect（下の
 // renderer 生成/init effect とは別物）であることが本題。pixi.js はこのテストファイルでは
