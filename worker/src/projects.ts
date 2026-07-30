@@ -11,7 +11,7 @@ export const PROJECTS: ReadonlyArray<Project> = [
   { name: "attama", title: "あったま空っぽのほうが", repo: "kako-jun/attama" },
   { name: "skirts-colour", title: "宇宙の果てわ、なに色か？", repo: "kako-jun/skirts-colour" },
   { name: "friday-1930", title: "Friday 19:30", repo: "kako-jun/friday-1930" },
-  { name: "gymnasia", title: "Gymnasia", repo: "kako-jun/gymnasia" },
+  { name: "gymnasia", title: "Gymnasia", repo: "kako-jun/gymnasia", scriptsDir: "docs/scripts/drafts" },
   { name: "llll-ll-media", title: "llll-ll-media", repo: "kako-jun/llll-ll-media" },
   { name: "amanuma", title: "amanuma", repo: "kako-jun/amanuma", external_url: "https://amanuma.llll-ll.com" },
   { name: "cee-lo-rings", title: "cee-lo-rings", repo: "kako-jun/cee-lo-rings", external_url: "https://cee-lo-rings.llll-ll.com" },
