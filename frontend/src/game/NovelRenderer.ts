@@ -1608,12 +1608,16 @@ export class NovelRenderer {
     if (!this.splitLayout) {
       this.dialogBox.setSplitLayoutRegion(null)
       this.characterLayer.setSplitLayoutRegion(null)
+      this.choiceOverlay.setSplitLayoutRegion(null)
       this.resetNovelScrimRegion()
       return
     }
     const regions = computeSplitLayoutRegions(this.screenWidth, this.screenHeight)
     this.dialogBox.setSplitLayoutRegion(regions.text)
     this.characterLayer.setSplitLayoutRegion(regions.character)
+    // 選択肢UIもテキスト領域へ収める (#442 self-review should-5)。キャラ画像パネルへの
+    // 重なりを防ぐ（[選択] ブロックは Gymnasia の実脚本で使われるためスコープ外にできない）。
+    this.choiceOverlay.setSplitLayoutRegion(regions.text)
     this.applyNovelScrimRegion(regions.text)
   }
 
