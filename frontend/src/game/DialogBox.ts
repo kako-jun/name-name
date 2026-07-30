@@ -183,6 +183,15 @@ export const NOVEL_TEXT_TOP_RATIO = 0.012
 export const NOVEL_TEXT_MARGIN_BOTTOM = 20
 
 /**
+ * 話者名ボックス（`drawNameBox`）の高さ・本文ボックスとの間隔（px）。
+ * `drawNameBox` 本体と、split_layout の上部クリアランス計算（`applySplitLayoutBoxGeometry`、
+ * #442 self-review must-1）の両方が同じ値を参照する共通定数。テストも参照できるよう export する。
+ */
+export const NAME_BOX_HEIGHT = 36
+/** 名札ボックスと本文ボックスの間隔（px）。`nameBoxY = boxY - NAME_BOX_HEIGHT - NAME_BOX_GAP`。 */
+export const NAME_BOX_GAP = 4
+
+/**
  * ルビの x 位置計算用の Canvas measure コンテキスト。
  */
 let cachedRubyCanvas: HTMLCanvasElement | null = null
@@ -526,9 +535,18 @@ export class DialogBox extends Container {
    * 画面全体ではなく `region` 基準で適用する（`NOVEL_TEXT_TOP_RATIO` は region.height に対する比率）。
    * dialogText/ruby/indicator への反映は呼び出し側（`applyNovelGeometry` / `redraw`）が既存の
    * 手順でそのまま行う（このメソッドは矩形の確定だけを担う）。
+   *
+   * #442 self-review must-1: `drawNameBox` は常に名札を箱の**上**（`boxY - NAME_BOX_HEIGHT -
+   * NAME_BOX_GAP`）に描く。`NOVEL_TEXT_TOP_RATIO` は「ほぼ余白なし」の novel 全画面向け設計値
+   * なので、そのまま adv（名札を描画する）に適用すると region 上端付近で名札が画面外・隣接する
+   * キャラ画像領域へはみ出す。`!this.borderless`（＝名札を実際に描く adv 相当）のときだけ、
+   * 名札 1 個分の上部クリアランスを追加で確保する。novel（borderless、名札を描かない）は
+   * 従来どおり最小余白のまま。`updateNameDisplay` の `this.borderless` 判定と同じ軸で分岐する。
    */
   private applySplitLayoutBoxGeometry(region: LayoutRect): void {
-    const topY = region.y + Math.round(region.height * NOVEL_TEXT_TOP_RATIO)
+    const topMargin = Math.round(region.height * NOVEL_TEXT_TOP_RATIO)
+    const nameBoxClearance = this.borderless ? 0 : NAME_BOX_HEIGHT + NAME_BOX_GAP
+    const topY = region.y + topMargin + nameBoxClearance
     this.boxX = region.x + NOVEL_TEXT_MARGIN_X
     this.boxW = region.width - NOVEL_TEXT_MARGIN_X * 2
     this.boxY = topY
@@ -1384,9 +1402,9 @@ export class DialogBox extends Container {
 
   private drawNameBox(textWidth: number): void {
     const nameBoxW = textWidth + this.padding * 2 + 16
-    const nameBoxH = 36
+    const nameBoxH = NAME_BOX_HEIGHT
     const nameBoxX = this.boxX
-    const nameBoxY = this.boxY - nameBoxH - 4
+    const nameBoxY = this.boxY - nameBoxH - NAME_BOX_GAP
 
     this.nameBox.clear()
     this.nameBox.roundRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH, 6)
