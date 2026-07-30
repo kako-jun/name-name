@@ -596,6 +596,10 @@ export class DialogBox extends Container {
       // split_layout (#442): adv でも下部バーではなくテキスト領域へ固定する（dialog_style 非依存）。
       this.applySplitLayoutBoxGeometry(this.splitLayoutRegion)
     } else {
+      // adv 下部バー: split_layout 解除直後は boxH が直前の applySplitLayoutBoxGeometry による
+      // split 由来の値のまま残っているため、advBoxHeight へ確実にリセットしてから boxY を
+      // 再計算する（setNovelMode(false) と同じパターン #442）。
+      this.boxH = this.advBoxHeight
       this.boxW = screenWidth - this.marginX * 2
       this.boxX = this.marginX
       this.boxY = screenHeight - this.boxH - this.marginBottom
