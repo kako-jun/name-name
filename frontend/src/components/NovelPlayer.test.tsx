@@ -120,6 +120,36 @@ vi.mock('../utils/isEmbedded', () => ({
   isEmbedded: isEmbeddedMock,
 }))
 
+// #442 self-review should-4: fluid（aspect_ratio: auto）モードの中核契約
+// （ResizeObserver が向きカテゴリ変化を検知したら renderer を再マウントする）をコンポーネント
+// レベルで検証するための簡易グローバル Mock。jsdom には ResizeObserver が実装されていないため、
+// observe/disconnect を持つスタブクラスを用意し、テストコード側から contentRect を指定して
+// コールバックを手動発火できるようにする（NovelPlayer 本体は「向き」の判定にしか contentRect の
+// width/height を使わないため、モックの entry 形は最小限でよい）。
+interface FakeResizeObserverEntry {
+  contentRect: { width: number; height: number }
+}
+const { ResizeObserverMock, triggerResize, resetResizeObserverMock } = vi.hoisted(() => {
+  let lastCallback: ((entries: FakeResizeObserverEntry[]) => void) | null = null
+  class ResizeObserverMock {
+    constructor(callback: (entries: FakeResizeObserverEntry[]) => void) {
+      lastCallback = callback
+    }
+    observe = vi.fn()
+    unobserve = vi.fn()
+    disconnect = vi.fn()
+  }
+  return {
+    ResizeObserverMock,
+    triggerResize: (width: number, height: number) => {
+      lastCallback?.([{ contentRect: { width, height } }])
+    },
+    resetResizeObserverMock: () => {
+      lastCallback = null
+    },
+  }
+})
+
 import NovelPlayer from './NovelPlayer'
 
 const LS_DEBUG_OPEN = 'nn.debugOverlay.open'
@@ -1045,6 +1075,98 @@ describe('NovelPlayer 非fluid時はaspectRatio変更で再マウントしない
 
     expect(rendererInstances.length).toBe(1)
     expect(r.destroy).not.toHaveBeenCalled()
+  })
+})
+
+// #442 self-review should-4: fluid（aspect_ratio: auto）モードの中核契約
+// ——ResizeObserver が向きカテゴリ変化を検知したら renderer を再マウントする——を
+// コンポーネントレベルで検証する。J1/J2（非fluid）は「再マウントしない」side しか見ておらず、
+// fluid 側の「実際に再マウントされる」契約が未検証だったための追加（上の ResizeObserverMock 参照）。
+//
+// jsdom の window.innerWidth/innerHeight は既定 1024×768（横長）のため、初期 fluidRatio は
+// '16:9' になる（pickFluidAspectRatio(1024, 768) === '16:9'）。getBoundingClientRect() は
+// jsdom では常に 0 を返すため、useLayoutEffect の同期補正（should-3）は発火せず、この初期値の
+// まま最初の renderer が作られる（既存の非fluidテストと同じ前提）。
+describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウント (#442 self-review should-4)', () => {
+  let originalResizeObserver: typeof ResizeObserver | undefined
+
+  beforeEach(() => {
+    originalResizeObserver = window.ResizeObserver
+    window.ResizeObserver = ResizeObserverMock as unknown as typeof ResizeObserver
+    resetResizeObserverMock()
+  })
+
+  afterEach(() => {
+    window.ResizeObserver = originalResizeObserver as typeof ResizeObserver
+  })
+
+  it('K1: 向きカテゴリが変わるリサイズ通知（横長→縦長）で renderer が再マウントされる（destroy→new）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    const first = rendererInstances[0]
+    expect(first.destroy).not.toHaveBeenCalled()
+
+    act(() => {
+      triggerResize(400, 800) // 縦長 → fluidRatio '16:9'→'9:16' でカテゴリが変わる
+    })
+    await flushAsync()
+
+    expect(first.destroy).toHaveBeenCalledOnce()
+    expect(rendererInstances.length).toBe(2)
+    expect(rendererInstances[1]).not.toBe(first)
+  })
+
+  it('K2: 同一カテゴリ内のリサイズ（横長のまま）では renderer は再マウントされない', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    const first = rendererInstances[0]
+
+    act(() => {
+      triggerResize(1200, 700) // まだ横長（16:9 カテゴリのまま）
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(first.destroy).not.toHaveBeenCalled()
+  })
+
+  it('K3: 縦長→横長→縦長と往復しても、その都度1回ずつ再マウントされる（累積ドリフトしない）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1) // 初期は横長(16:9)
+
+    act(() => {
+      triggerResize(400, 800) // → 縦長(9:16)
+    })
+    await flushAsync()
+    expect(rendererInstances.length).toBe(2)
+
+    act(() => {
+      triggerResize(1200, 700) // → 横長(16:9) に戻る
+    })
+    await flushAsync()
+    expect(rendererInstances.length).toBe(3)
+
+    expect(rendererInstances[0].destroy).toHaveBeenCalledOnce()
+    expect(rendererInstances[1].destroy).toHaveBeenCalledOnce()
+    expect(rendererInstances[2].destroy).not.toHaveBeenCalled()
+  })
+
+  it('K4: 非fluid（aspectRatio 明示指定）では ResizeObserver 自体が使われない（observe が呼ばれない）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+
+    // isFluid=false の早期 return で ResizeObserverMock は一度もインスタンス化されない
+    // ＝ observe が一切呼ばれない（triggerResize しても届く先が無いことの間接確認）。
+    act(() => {
+      triggerResize(400, 800)
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(rendererInstances[0].destroy).not.toHaveBeenCalled()
   })
 })
 

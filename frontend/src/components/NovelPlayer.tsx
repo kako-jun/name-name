@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react'
 import { Assets } from 'pixi.js'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
@@ -287,10 +295,35 @@ function NovelPlayer({
   // ＝再マウントしない（renderer の再マウントは PixiJS シーン全体を作り直すコストがあるため、
   // 見た目の「箱の形」が変わる瞬間だけに限定する）。非 fluid では何もしない（早期 return）＝
   // 完全非破壊。
-  useEffect(() => {
+  //
+  // #442 self-review should-3: 初期 fluidRatio は window サイズからの概算で、実コンテナ
+  // （例: PlayerScreen ではヘッダー分だけ狭い main 領域）とは形が食い違うことがある。
+  // 素の useEffect（passive effect）で ResizeObserver を貼るだけだと、初回コールバックが
+  // 届いた時点で既に「誤った初期値」で renderer 生成 effect が走った後になり得るため、
+  // 直後にもう1回 renderer を作り直す（PixiJS シーン全体を破棄＋再構築する）無駄なコストが
+  // 発生し得る。ここでは useLayoutEffect にして、mount 直後・renderer 生成 useEffect（passive
+  // effect）が走るより必ず前に `getBoundingClientRect()` で実寸を同期測定し、必要なら
+  // fluidRatio をその場で補正する。React は layout effect 内の state 更新を「次の passive
+  // effect フェーズに入る前」に同期的に反映するため、renderer 生成 effect が初回に走る時点
+  // では既に補正済みの値を見る＝初回の無駄な作り直しが起きない（PixiJS レンダラーは1個目から
+  // 正しい aspectRatio で作られる）。
+  // 見送った代替案: 「ResizeObserver の初回コールバックが届くまで renderer 生成を待つ」設計
+  // （非同期にする）も検討したが、ResizeObserver 非対応環境（極端に古いブラウザ・jsdom 等）で
+  // fluidRatio が永久に未確定のままになり renderer が一切作られない退行リスクがあり、
+  // 「マウント時に1度だけレンダラーを生成する」という既存の設計方針と衝突して複雑化するため
+  // 見送った。今回の同期測定方式は non-fluid の既存 useEffect 構造・依存配列を一切変えず、
+  // getBoundingClientRect() が 0 を返す環境（jsdom 等）では単に補正をスキップして
+  // 従来どおり window ベースの概算のまま進む（非破壊フォールバック）。
+  useLayoutEffect(() => {
     if (!isFluid) return
     const root = fluidRootRef.current
-    if (!root || typeof ResizeObserver === 'undefined') return
+    if (!root) return
+    const rect = root.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      const measured = pickFluidAspectRatio(rect.width, rect.height)
+      setFluidRatio((prev) => (prev === measured ? prev : measured))
+    }
+    if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
       if (!entry) return
