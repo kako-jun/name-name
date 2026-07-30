@@ -29,8 +29,12 @@ import {
   NOVEL_TEXT_MARGIN_X,
   NOVEL_TEXT_TOP_RATIO,
   NOVEL_TEXT_MARGIN_BOTTOM,
+  NAME_BOX_HEIGHT,
+  NAME_BOX_GAP,
   type IndicatorKind,
 } from './DialogBox'
+import type { LayoutRect } from './novelLayout'
+import { computeSplitLayoutRegions } from './novelLayout'
 import { ensureFontLoaded } from './FontLoader'
 
 // デフォルトは即 resolve — 既存テストが影響を受けないようにする
@@ -1241,6 +1245,256 @@ describe('DialogBox novel mode (#283)', () => {
   it('21: 初期状態は adv（novel ではない）', () => {
     const box = makeBox()
     expect(box.isNovelMode).toBe(false)
+    box.dispose()
+  })
+})
+
+// split_layout (#442) のテキスト領域固定。dialog_style（adv/novel）とは独立の軸で、
+// setSplitLayoutRegion は adv・novel どちらでも渡された矩形へ boxX/Y/W/H を固定するだけで、
+// 枠・名札の有無等の見た目（setBorderless/setNovelMode の管轄）には一切触れない。
+// NovelRenderer.applySplitLayout() が computeSplitLayoutRegions(...).text をそのまま渡す想定。
+describe('DialogBox setSplitLayoutRegion (#442)', () => {
+  const W = 800
+  const H = 450
+
+  interface SplitInternals {
+    bg: { visible: boolean }
+    nameBox: { visible: boolean }
+    boxX: number
+    boxW: number
+    boxY: number
+    boxH: number
+  }
+  function splitInternals(box: DialogBox): SplitInternals {
+    return box as unknown as SplitInternals
+  }
+
+  function makeBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: 20,
+      fontSize: 40,
+    })
+  }
+
+  // computeSplitLayoutRegions(800, 450).text 相当（横長・右半分がテキスト領域）。
+  const region: LayoutRect = { x: 400, y: 0, width: 400, height: 450 }
+
+  // applySplitLayoutBoxGeometry と同形の参照オラクル（NOVEL_TEXT_* 定数から算出・直書きしない）。
+  // #442 self-review must-1: adv（borderless=false、名札を描画する）のときだけ、drawNameBox が
+  // 使う NAME_BOX_HEIGHT + NAME_BOX_GAP 分の上部クリアランスを追加で確保する。novel
+  // （borderless=true）はクリアランス無しのまま（従来どおり最小余白）。
+  function expectedGeometry(r: LayoutRect, opts?: { borderless?: boolean }) {
+    const borderless = opts?.borderless ?? false
+    const topMargin = Math.round(r.height * NOVEL_TEXT_TOP_RATIO)
+    const nameBoxClearance = borderless ? 0 : NAME_BOX_HEIGHT + NAME_BOX_GAP
+    const topY = r.y + topMargin + nameBoxClearance
+    return {
+      boxX: r.x + NOVEL_TEXT_MARGIN_X,
+      boxW: r.width - NOVEL_TEXT_MARGIN_X * 2,
+      boxY: topY,
+      boxH: r.y + r.height - topY - NOVEL_TEXT_MARGIN_BOTTOM,
+    }
+  }
+
+  it('adv（novelMode=false）で region を設定すると boxX/Y/W/H が名札クリアランス込みの region 基準幾何になる', () => {
+    const box = makeBox()
+    box.setSplitLayoutRegion(region)
+    const i = splitInternals(box)
+    const exp = expectedGeometry(region) // borderless=false（既定）＝adv
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxH).toBe(exp.boxH)
+    box.dispose()
+  })
+
+  it('novel（novelMode=true）で region を設定すると boxX/Y/W/H が（クリアランス無しの）region 基準幾何になる', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    box.setSplitLayoutRegion(region)
+    const i = splitInternals(box)
+    const exp = expectedGeometry(region, { borderless: true })
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxH).toBe(exp.boxH)
+    box.dispose()
+  })
+
+  // 重要: split_layout の中核契約——同一 region を adv/novel どちらに設定しても
+  // boxX/boxW（横方向）は完全一致する。縦方向（boxY/boxH）は #442 self-review must-1 により
+  // adv だけ名札 1 個分（NAME_BOX_HEIGHT + NAME_BOX_GAP）の上部クリアランスを追加で確保するため、
+  // adv の boxY は novel よりクリアランス分だけ大きく（下）、boxH はその分小さくなる。
+  it('重要: 同一 region で adv は novel より名札クリアランス分だけ boxY が下がる（boxX/boxW は不変）', () => {
+    const advBox = makeBox()
+    advBox.setSplitLayoutRegion(region)
+    const advGeom = { ...splitInternals(advBox) }
+
+    const novelBox = makeBox()
+    novelBox.setNovelMode(true)
+    novelBox.setSplitLayoutRegion(region)
+    const novelGeom = { ...splitInternals(novelBox) }
+
+    expect(novelGeom.boxX).toBe(advGeom.boxX)
+    expect(novelGeom.boxW).toBe(advGeom.boxW)
+
+    const clearance = NAME_BOX_HEIGHT + NAME_BOX_GAP
+    expect(advGeom.boxY - novelGeom.boxY).toBe(clearance)
+    expect(novelGeom.boxH - advGeom.boxH).toBe(clearance)
+
+    advBox.dispose()
+    novelBox.dispose()
+  })
+
+  it('setNovelMode(true)⇄(false) を往復しても region ジオメトリ（各モードのクリアランス込み期待値）を維持する', () => {
+    const box = makeBox()
+    box.setSplitLayoutRegion(region)
+    const advExp = expectedGeometry(region) // borderless=false＝adv
+    const novelExp = expectedGeometry(region, { borderless: true })
+
+    let i = splitInternals(box)
+    expect(i.boxX).toBe(advExp.boxX)
+    expect(i.boxY).toBe(advExp.boxY)
+    expect(i.boxW).toBe(advExp.boxW)
+    expect(i.boxH).toBe(advExp.boxH)
+
+    box.setNovelMode(true)
+    i = splitInternals(box)
+    expect(i.boxX).toBe(novelExp.boxX)
+    expect(i.boxY).toBe(novelExp.boxY)
+    expect(i.boxW).toBe(novelExp.boxW)
+    expect(i.boxH).toBe(novelExp.boxH)
+
+    box.setNovelMode(false)
+    i = splitInternals(box)
+    expect(i.boxX).toBe(advExp.boxX)
+    expect(i.boxY).toBe(advExp.boxY)
+    expect(i.boxW).toBe(advExp.boxW)
+    expect(i.boxH).toBe(advExp.boxH)
+
+    box.dispose()
+  })
+
+  it('setSplitLayoutRegion(null) で adv の従来ジオメトリ（下部 ADV 箱）に復帰する', () => {
+    const box = makeBox()
+    const advGeomBefore = { ...splitInternals(box) }
+    box.setSplitLayoutRegion(region)
+    box.setSplitLayoutRegion(null)
+    const i = splitInternals(box)
+    expect(i.boxX).toBe(advGeomBefore.boxX)
+    expect(i.boxY).toBe(advGeomBefore.boxY)
+    expect(i.boxW).toBe(advGeomBefore.boxW)
+    expect(i.boxH).toBe(advGeomBefore.boxH)
+    box.dispose()
+  })
+
+  it('setSplitLayoutRegion(null) で novel の従来ジオメトリ（全画面）に復帰する', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const novelGeomBefore = { ...splitInternals(box) }
+    box.setSplitLayoutRegion(region)
+    box.setSplitLayoutRegion(null)
+    const i = splitInternals(box)
+    expect(i.boxX).toBe(novelGeomBefore.boxX)
+    expect(i.boxY).toBe(novelGeomBefore.boxY)
+    expect(i.boxW).toBe(novelGeomBefore.boxW)
+    expect(i.boxH).toBe(novelGeomBefore.boxH)
+    box.dispose()
+  })
+
+  it('同一 region を2回連続で設定しても冪等（値が変わらない）', () => {
+    const box = makeBox()
+    box.setSplitLayoutRegion(region)
+    const first = { ...splitInternals(box) }
+    box.setSplitLayoutRegion(region)
+    const second = splitInternals(box)
+    expect(second.boxX).toBe(first.boxX)
+    expect(second.boxY).toBe(first.boxY)
+    expect(second.boxW).toBe(first.boxW)
+    expect(second.boxH).toBe(first.boxH)
+    box.dispose()
+  })
+
+  // 見た目非干渉: setSplitLayoutRegion はジオメトリ（boxX/Y/W/H）だけを変え、
+  // 枠・名札の可視状態（setBorderless/setDialog が管理）には触れない。
+  // 名前ありで setDialog すると nameText.width の canvas 計測が jsdom で null になり落ちるため
+  // （12b と同じ既知の制約）、名前なし（null）で bg.visible だけを観測する。
+  it('見た目非干渉: setSplitLayoutRegion 呼び出し前後で bg.visible / nameBox.visible が変化しない', () => {
+    const box = makeBox()
+    box.setDialog(null, 'セリフ。')
+    const bgBefore = splitInternals(box).bg.visible
+    const nameBoxBefore = splitInternals(box).nameBox.visible
+    box.setSplitLayoutRegion(region)
+    expect(splitInternals(box).bg.visible).toBe(bgBefore)
+    expect(splitInternals(box).nameBox.visible).toBe(nameBoxBefore)
+    box.dispose()
+  })
+})
+
+// #442 self-review must-1 の回帰テスト: adv + split_layout + 話者名ありで実際に setDialog を呼び、
+// drawNameBox が描く名札の矩形（roundRect 呼び出し引数）が region 内に収まる
+// （画面外に出ない・隣接するキャラ画像領域へ食い込まない）ことを検証する。
+// jsdom は canvas 2d ctx が null で nameText.width の実測ができず素の setDialog(name, ...) は
+// 例外を投げる（"見た目非干渉" テストのコメント参照）ため、nameText.width の getter だけを
+// インスタンス単位で一時スタブし、実際に drawNameBox が通る経路のまま検証する。
+describe('DialogBox split_layout + adv 名札の描画位置 (#442 self-review must-1)', () => {
+  interface NameBoxRoundRectTarget {
+    roundRect: (...args: number[]) => unknown
+  }
+  interface NameTextWidthTarget {
+    width: number
+  }
+
+  function stubNameTextWidth(box: DialogBox, width: number): void {
+    const nameText = (box as unknown as { nameText: NameTextWidthTarget }).nameText
+    Object.defineProperty(nameText, 'width', { get: () => width, configurable: true })
+  }
+
+  /** drawNameBox が実際に roundRect へ渡した [x, y, w, h, radius] のうち最初の呼び出しを返す。 */
+  function captureNameBoxY(box: DialogBox, name: string, text: string): number {
+    const nameBox = (box as unknown as { nameBox: NameBoxRoundRectTarget }).nameBox
+    const spy = vi.spyOn(nameBox, 'roundRect')
+    stubNameTextWidth(box, 80)
+    box.setDialog(name, text)
+    const firstCall = spy.mock.calls[0] as unknown as number[]
+    spy.mockRestore()
+    return firstCall[1] // y 引数
+  }
+
+  it('landscape (800x450, region.y=0): nameBox が画面外(負のY)にはみ出さない', () => {
+    const w = 800
+    const h = 450
+    const region = computeSplitLayoutRegions(w, h).text // { x: 400, y: 0, width: 400, height: 450 }
+    const box = new DialogBox({ screenWidth: w, screenHeight: h })
+    box.setSplitLayoutRegion(region)
+
+    const nameBoxY = captureNameBoxY(box, '花子', 'テスト本文。')
+
+    // 修正前は topY=5 → boxY=5 → nameBoxY = 5-40 = -35（画面外・不可視）だった。
+    const topMargin = Math.round(region.height * NOVEL_TEXT_TOP_RATIO)
+    expect(nameBoxY).toBe(region.y + topMargin)
+    expect(nameBoxY).toBeGreaterThanOrEqual(region.y)
+    box.dispose()
+  })
+
+  it('portrait (450x800, region.y=400): nameBox がキャラ画像領域(y<400)へ食い込まない', () => {
+    const w = 450
+    const h = 800
+    const region = computeSplitLayoutRegions(w, h).text // { x: 0, y: 400, width: 450, height: 400 }
+    const box = new DialogBox({ screenWidth: w, screenHeight: h })
+    box.setSplitLayoutRegion(region)
+
+    const nameBoxY = captureNameBoxY(box, '花子', 'テスト本文。')
+
+    // 修正前は topY=405 → boxY=405 → nameBoxY = 405-40 = 365（テキスト領域の上端400より上＝食い込み）だった。
+    const topMargin = Math.round(region.height * NOVEL_TEXT_TOP_RATIO)
+    expect(nameBoxY).toBe(region.y + topMargin)
+    expect(nameBoxY).toBeGreaterThanOrEqual(region.y)
     box.dispose()
   })
 })

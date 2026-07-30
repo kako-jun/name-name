@@ -33,6 +33,7 @@ pub fn parse(input: &str) -> Document {
     let mut speaker_nudge: Option<bool> = None;
     let mut auto_play: Option<bool> = None;
     let mut seekbar_color: Option<String> = None;
+    let mut split_layout: Option<bool> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -53,7 +54,9 @@ pub fn parse(input: &str) -> Document {
                 }
             } else if let Some(val) = line.strip_prefix("aspect_ratio:") {
                 let v = unquote(val.trim());
-                if v == "16:9" || v == "4:3" || v == "9:16" {
+                // "auto" (#442): 固定比率にロックしない fluid モード。runtime 側（NovelPlayer）が
+                // 実ビューポートの向きから '16:9'/'9:16' を都度選ぶ。既存 3 値と対等に受理する。
+                if v == "16:9" || v == "4:3" || v == "9:16" || v == "auto" {
                     aspect_ratio = v;
                 }
             } else if let Some(val) = line.strip_prefix("choice_style:") {
@@ -162,6 +165,10 @@ pub fn parse(input: &str) -> Document {
                 if !v.is_empty() {
                     seekbar_color = Some(v);
                 }
+            } else if let Some(val) = line.strip_prefix("split_layout:") {
+                // 画面比率に応じた画像/テキストの左右・上下分割配置 (#442)。`true` / `false` のみ受ける
+                // （parse_bool_kv）。空・不正値は None のまま（runtime 既定 false ＝従来の全面+オーバーレイ）。
+                split_layout = parse_bool_kv(&unquote(val.trim()));
             }
             pos += 1;
         }
@@ -913,6 +920,7 @@ pub fn parse(input: &str) -> Document {
         speaker_nudge,
         auto_play,
         seekbar_color,
+        split_layout,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

@@ -267,6 +267,83 @@ describe('parseMarkdown + normalizeDocument: seekbar_color が normalize を生�
   })
 })
 
+describe('parseMarkdown + normalizeDocument: split_layout が normalize を生き残る (#442)', () => {
+  // このリポで繰り返し起きている事故パターン（#310/#378/#436/#440＝新しい frontmatter フィールドが
+  // Rust parser か normalizeDocument のどちらかで黙って消える）の frontend 側生存確認。
+  // normalizeDocument の列挙に split_layout を書き忘れると WASM が parse した値が /play runtime
+  // （NovelRenderer.setSplitLayout）に届かず、Gymnasia 向けの画像/テキスト分割配置が効かなくなる。
+  // 実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）を通し、値が normalize を生き残ることを縛る。
+  function docWith(splitLayoutLine: string): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      'dialog_style: novel',
+      splitLayoutLine,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('G1: split_layout: true → doc.split_layout === true', async () => {
+    const doc = await parseMarkdown(docWith('split_layout: true'))
+    expect(doc.split_layout).toBe(true)
+  })
+
+  it('G2: split_layout: false → doc.split_layout === false（値が normalize を生き残る・false が null に潰れない）', async () => {
+    const doc = await parseMarkdown(docWith('split_layout: false'))
+    expect(doc.split_layout).toBe(false)
+  })
+
+  it('G3: split_layout 省略 → doc.split_layout === null（未指定は下流で既定 false＝従来の全面+オーバーレイ）', async () => {
+    const minimal = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(minimal)
+    expect(doc.split_layout).toBeNull()
+  })
+})
+
+describe('parseMarkdown: aspect_ratio: auto が実 parse を通して保持される (#442)', () => {
+  // fluid モード（NovelPlayer の pickFluidAspectRatio 分岐）の判定元。既存 3 値（16:9/4:3/9:16）と
+  // 対等に、Rust parser → normalizeDocument（`aspect_ratio: doc.aspect_ratio` は素通し）を通しても
+  // "auto" の文字列がそのまま保持されることを確認する。
+  it('H1: aspect_ratio: auto → doc.aspect_ratio === "auto"', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      'aspect_ratio: auto',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.aspect_ratio).toBe('auto')
+  })
+})
+
 describe('parseMarkdown + normalizeEvents: 表示テキストの正準化 (#340)', () => {
   // 実 parse（Rust wasm）→ normalizeEvents（JS 二段目）を通し、読ませる表示テキスト
   // （Dialog/Narration/Choice/TitleShow/Label）が中央字へ正準化されること、RPG マスタ名は

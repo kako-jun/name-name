@@ -37,6 +37,7 @@ import {
   resolvePositionWithOverride,
   resolveAssetUrl,
   resolveCharacterImageUrls,
+  type LayoutRect,
 } from './novelLayout'
 import { startTypewriter, tickTypewriter, type TypewriterState } from './typewriter'
 import { hasOwn, safeAssign } from './ownProperty'
@@ -235,6 +236,50 @@ export function computeTargetHeightScale(
     return 1
   }
   return (targetHeightRatio * screenH) / texH
+}
+
+/** split_layout (#442) 用に、CharacterLayer の native 座標系（screenWidth × screenHeight）全体を
+ *  指定領域へ収める変換。Container 自身の `scale`/`position` にそのまま適用する。 */
+export interface SplitLayoutTransform {
+  /** 一様スケール（幅・高さ両方に同じ値を掛ける。アスペクト比を保つ）。 */
+  scale: number
+  /** Container.position.x に設定する平行移動量（px）。 */
+  x: number
+  /** Container.position.y に設定する平行移動量（px）。 */
+  y: number
+}
+
+/**
+ * split_layout (#442) で、立ち絵レイヤーの native 座標系（`screenWidth` × `screenHeight`。
+ * 各キャラは従来どおりこの座標系内で `CHARACTER_X_RATIO` 等の比率から自身の位置を決める）を、
+ * アスペクト比を保ったまま `region`（画面の左半分 or 上半分＝キャラ画像領域）に収める
+ * （contain）変換を計算する純粋関数。
+ *
+ * `computeCoverFit`/`computePortraitContainFit`（novelLayout.ts / DialogBox.ts）は個々の
+ * テクスチャを矩形に収めるが、これは **CharacterLayer Container 全体**（内部の個々の立ち絵の
+ * 座標計算には一切触れない）を丸ごと 1 つの矩形へ射影する点が異なる。適用側
+ * （`CharacterLayer.setSplitLayoutRegion`）は `this.scale.set(scale)` / `this.position.set(x, y)`
+ * を呼ぶだけで、個々のキャラの位置・スケール計算は完全に無傷（screenWidth/screenHeight 基準の
+ * まま）に保てる — 単一責務・変更範囲の最小化（doctrine 規律4）。
+ *
+ * `scale = min(region.width / nativeWidth, region.height / nativeHeight)`（contain。はみ出さない）。
+ * 中央寄せのオフセットで `region` 内に収める。0 除算・非有限値は呼び出し側（NovelRenderer 経由で
+ * 渡る screenWidth/screenHeight は常に正の有限値）を前提とし、ここでは追加のガードをしない
+ * （`computeCoverFit` と同じ割り切り）。
+ */
+export function computeCharacterLayerSplitTransform(
+  nativeWidth: number,
+  nativeHeight: number,
+  region: LayoutRect
+): SplitLayoutTransform {
+  const scale = Math.min(region.width / nativeWidth, region.height / nativeHeight)
+  const scaledWidth = nativeWidth * scale
+  const scaledHeight = nativeHeight * scale
+  return {
+    scale,
+    x: region.x + (region.width - scaledWidth) / 2,
+    y: region.y + (region.height - scaledHeight) / 2,
+  }
 }
 
 /** character_scale の許容下限 (#378)。元絵基準の一律スケール。0 だと立ち絵が消える（scale=0）ため、
@@ -604,6 +649,10 @@ export class CharacterLayer extends Container {
   /** auto-scale 計算のために screenWidth / screenHeight を保持 */
   private readonly screenWidth: number
   private readonly screenHeight: number
+  /** split_layout (#442) のキャラ画像領域。null = 従来どおり全画面。個々のキャラの位置計算
+   *  （positionX 等）は screenWidth/screenHeight 基準のまま変えず、Container 全体の
+   *  scale/position で領域内へ射影する（`setSplitLayoutRegion` 参照）。 */
+  private splitLayoutRegion: LayoutRect | null = null
   /** X 座標テーブル（screenWidth * CHARACTER_X_RATIO[pos]） */
   private readonly positionX: Record<string, number>
   /** タイマーの抽象化 (動画エクスポート用 virtual モード対応) */
@@ -659,6 +708,32 @@ export class CharacterLayer extends Container {
         state.sprite.y = this.characterY
       }
     }
+  }
+
+  /**
+   * split_layout (#442) のキャラ画像領域を設定・解除する。`novelLayout.ts` の
+   * `computeSplitLayoutRegions(...).character` をそのまま渡す想定。
+   *
+   * 個々のキャラの位置計算（`positionX` / `characterY` / xRatio 等）は screenWidth/screenHeight
+   * 基準のまま一切変えない。Container 全体（`this`）の `scale`/`position` に
+   * `computeCharacterLayerSplitTransform` の結果を適用し、native 座標系ごと領域内へ射影する
+   * （単一責務・変更範囲の最小化）。null で解除し、等倍・原点（0, 0）に戻す（後方互換）。
+   */
+  setSplitLayoutRegion(region: LayoutRect | null): void {
+    this.splitLayoutRegion = region
+    if (region) {
+      const t = computeCharacterLayerSplitTransform(this.screenWidth, this.screenHeight, region)
+      this.scale.set(t.scale)
+      this.position.set(t.x, t.y)
+    } else {
+      this.scale.set(1)
+      this.position.set(0, 0)
+    }
+  }
+
+  /** 現在の split_layout キャラ画像領域 (#442)。null = 従来どおり全画面。テスト・配線検証用。 */
+  getSplitLayoutRegion(): LayoutRect | null {
+    return this.splitLayoutRegion
   }
 
   /**

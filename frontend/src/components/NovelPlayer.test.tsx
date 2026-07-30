@@ -52,6 +52,7 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setDialogStyle = vi.fn()
     setProtagonist = vi.fn()
     setSpeakerNudge = vi.fn()
+    setSplitLayout = vi.fn()
     setCharacterYRatio = vi.fn()
     setCharacterHeightRatio = vi.fn()
     setCharacterHeightRatios = vi.fn()
@@ -118,6 +119,36 @@ const { isEmbeddedMock } = vi.hoisted(() => ({ isEmbeddedMock: vi.fn() }))
 vi.mock('../utils/isEmbedded', () => ({
   isEmbedded: isEmbeddedMock,
 }))
+
+// #442 self-review should-4: fluid（aspect_ratio: auto）モードの中核契約
+// （ResizeObserver が向きカテゴリ変化を検知したら renderer を再マウントする）をコンポーネント
+// レベルで検証するための簡易グローバル Mock。jsdom には ResizeObserver が実装されていないため、
+// observe/disconnect を持つスタブクラスを用意し、テストコード側から contentRect を指定して
+// コールバックを手動発火できるようにする（NovelPlayer 本体は「向き」の判定にしか contentRect の
+// width/height を使わないため、モックの entry 形は最小限でよい）。
+interface FakeResizeObserverEntry {
+  contentRect: { width: number; height: number }
+}
+const { ResizeObserverMock, triggerResize, resetResizeObserverMock } = vi.hoisted(() => {
+  let lastCallback: ((entries: FakeResizeObserverEntry[]) => void) | null = null
+  class ResizeObserverMock {
+    constructor(callback: (entries: FakeResizeObserverEntry[]) => void) {
+      lastCallback = callback
+    }
+    observe = vi.fn()
+    unobserve = vi.fn()
+    disconnect = vi.fn()
+  }
+  return {
+    ResizeObserverMock,
+    triggerResize: (width: number, height: number) => {
+      lastCallback?.([{ contentRect: { width, height } }])
+    },
+    resetResizeObserverMock: () => {
+      lastCallback = null
+    },
+  }
+})
 
 import NovelPlayer from './NovelPlayer'
 
@@ -969,6 +1000,173 @@ describe('NovelPlayer SeekBar 色 seekbar_color 配線 (#440)', () => {
     await flushAsync()
     const r = rendererInstances[rendererInstances.length - 1]
     expect(r.setSeekBarColor).toHaveBeenCalledWith(null)
+  })
+})
+
+// --- #442: splitLayout prop を renderer.setSplitLayout に転送する ---
+//
+// NovelPlayer は init 時（setEvents/setScenes より前）と、splitLayout 変化時の専用 useEffect の
+// 双方で renderer.setSplitLayout(splitLayout ?? null) を呼ぶ。frontmatter `split_layout:` が
+// PlayerScreen/EditorScreen → NovelPlayer prop → renderer まで届く配線を、スタブ renderer の
+// 呼び出しで縛る（speakerNudge #382 と対称の配線パターン）。
+describe('NovelPlayer splitLayout の renderer 転送 (#442)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  it('I1: splitLayout={true} なら renderer.setSplitLayout が true で呼ばれる', async () => {
+    render(<NovelPlayer events={[]} splitLayout={true} />)
+    await flushAsync()
+    expect(lastRenderer().setSplitLayout).toHaveBeenCalledWith(true)
+  })
+
+  it('I2: splitLayout 未指定なら renderer.setSplitLayout が null で呼ばれる（?? null・既定 false 相当）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(lastRenderer().setSplitLayout).toHaveBeenCalledWith(null)
+  })
+
+  it('I3: splitLayout={null} でも null で呼ばれる（明示 null＝既定の全面+オーバーレイ）', async () => {
+    render(<NovelPlayer events={[]} splitLayout={null} />)
+    await flushAsync()
+    expect(lastRenderer().setSplitLayout).toHaveBeenCalledWith(null)
+  })
+
+  it('I4: splitLayout を false→true に変更すると setSplitLayout が true で再コールされる（専用 useEffect の状態遷移）', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} splitLayout={false} />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.setSplitLayout).toHaveBeenCalledWith(false)
+
+    rerender(<NovelPlayer events={[]} splitLayout={true} />)
+    await flushAsync()
+    expect(r.setSplitLayout).toHaveBeenCalledWith(true)
+  })
+})
+
+// --- #442: 非 fluid（aspect_ratio 16:9/4:3/9:16/未指定）では aspectRatio 変更で再マウントしない ---
+//
+// mount effect の依存配列は [fluidRemountKey] のみ。fluid（aspect_ratio: auto）以外は
+// fluidRemountKey が常に null で不変なため、aspectRatio prop 自体が変わっても effect は
+// 再実行されない＝renderer は再構築されない（既存ゲームの「マウント時に1度だけ生成」を維持する
+// 非回帰）。ResizeObserver は isFluid=false の早期 return で一切使われないため、モックなしで
+// 検証できる（このリポの既存方針＝seekBarResizeObserver 等も ResizeObserver 自体はモックしない
+// 先例に倣う）。
+describe('NovelPlayer 非fluid時はaspectRatio変更で再マウントしない (#442)', () => {
+  it('J1: aspectRatio を "16:9"→"9:16" に変更しても renderer は再構築されない（fluidRemountKey が常に null）', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    const r = rendererInstances[0]
+
+    rerender(<NovelPlayer events={[]} aspectRatio="9:16" />)
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(r.destroy).not.toHaveBeenCalled()
+  })
+
+  it('J2: aspectRatio 未指定のまま他の prop が変わっても renderer は再構築されない', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    const r = rendererInstances[0]
+
+    rerender(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(r.destroy).not.toHaveBeenCalled()
+  })
+})
+
+// #442 self-review should-4: fluid（aspect_ratio: auto）モードの中核契約
+// ——ResizeObserver が向きカテゴリ変化を検知したら renderer を再マウントする——を
+// コンポーネントレベルで検証する。J1/J2（非fluid）は「再マウントしない」side しか見ておらず、
+// fluid 側の「実際に再マウントされる」契約が未検証だったための追加（上の ResizeObserverMock 参照）。
+//
+// jsdom の window.innerWidth/innerHeight は既定 1024×768（横長）のため、初期 fluidRatio は
+// '16:9' になる（pickFluidAspectRatio(1024, 768) === '16:9'）。getBoundingClientRect() は
+// jsdom では常に 0 を返すため、useLayoutEffect の同期補正（should-3）は発火せず、この初期値の
+// まま最初の renderer が作られる（既存の非fluidテストと同じ前提）。
+describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウント (#442 self-review should-4)', () => {
+  let originalResizeObserver: typeof ResizeObserver | undefined
+
+  beforeEach(() => {
+    originalResizeObserver = window.ResizeObserver
+    window.ResizeObserver = ResizeObserverMock as unknown as typeof ResizeObserver
+    resetResizeObserverMock()
+  })
+
+  afterEach(() => {
+    window.ResizeObserver = originalResizeObserver as typeof ResizeObserver
+  })
+
+  it('K1: 向きカテゴリが変わるリサイズ通知（横長→縦長）で renderer が再マウントされる（destroy→new）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    const first = rendererInstances[0]
+    expect(first.destroy).not.toHaveBeenCalled()
+
+    act(() => {
+      triggerResize(400, 800) // 縦長 → fluidRatio '16:9'→'9:16' でカテゴリが変わる
+    })
+    await flushAsync()
+
+    expect(first.destroy).toHaveBeenCalledOnce()
+    expect(rendererInstances.length).toBe(2)
+    expect(rendererInstances[1]).not.toBe(first)
+  })
+
+  it('K2: 同一カテゴリ内のリサイズ（横長のまま）では renderer は再マウントされない', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    const first = rendererInstances[0]
+
+    act(() => {
+      triggerResize(1200, 700) // まだ横長（16:9 カテゴリのまま）
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(first.destroy).not.toHaveBeenCalled()
+  })
+
+  it('K3: 縦長→横長→縦長と往復しても、その都度1回ずつ再マウントされる（累積ドリフトしない）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1) // 初期は横長(16:9)
+
+    act(() => {
+      triggerResize(400, 800) // → 縦長(9:16)
+    })
+    await flushAsync()
+    expect(rendererInstances.length).toBe(2)
+
+    act(() => {
+      triggerResize(1200, 700) // → 横長(16:9) に戻る
+    })
+    await flushAsync()
+    expect(rendererInstances.length).toBe(3)
+
+    expect(rendererInstances[0].destroy).toHaveBeenCalledOnce()
+    expect(rendererInstances[1].destroy).toHaveBeenCalledOnce()
+    expect(rendererInstances[2].destroy).not.toHaveBeenCalled()
+  })
+
+  it('K4: 非fluid（aspectRatio 明示指定）では ResizeObserver 自体が使われない（observe が呼ばれない）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+
+    // isFluid=false の早期 return で ResizeObserverMock は一度もインスタンス化されない
+    // ＝ observe が一切呼ばれない（triggerResize しても届く先が無いことの間接確認）。
+    act(() => {
+      triggerResize(400, 800)
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(rendererInstances[0].destroy).not.toHaveBeenCalled()
   })
 })
 

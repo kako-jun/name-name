@@ -17,6 +17,7 @@ import { ChoiceOption } from '../types'
 import type { AudioManager } from './AudioManager'
 import { hasOwn } from './ownProperty'
 import type { DestroyOptions, FederatedPointerEvent } from 'pixi.js'
+import type { LayoutRect } from './novelLayout'
 
 const BUTTON_WIDTH = 480
 const BUTTON_HEIGHT = 52
@@ -28,6 +29,15 @@ const SHOW_STAGGER_MS = 18
 const MAX_SHOW_STAGGER_MS = 260
 const VIEWPORT_VERTICAL_MARGIN = 24
 const TAP_MOVE_THRESHOLD_PX = 8
+/**
+ * split_layout (#442 self-review should-5) でテキスト領域に選択肢を収めるときの内側余白 (px)。
+ * BUTTON_WIDTH (480px) はテキスト領域より広いことがある（例: 16:9 800x450 の左右分割は
+ * 各領域幅400px）ため、region 指定時はボタン幅をこの余白を引いた領域幅にクランプする。
+ * region 未指定（従来の全画面）のときは触れず、BUTTON_WIDTH のまま非破壊。
+ */
+const CHOICE_REGION_MARGIN_X = 24
+/** クランプ後のボタン幅の下限 (px)。極端に狭い領域でもラベルが読めなくなるほど潰さない。 */
+const CHOICE_REGION_MIN_BUTTON_WIDTH = 160
 
 export type ChoiceStyleName = 'default' | 'soft' | 'monochrome'
 
@@ -185,6 +195,17 @@ export class ChoiceOverlay extends Container {
   // 直前にホバー音を鳴らしたボタン index。マウスがボタン境界をジリジリ動いて
   // pointerover が連続発火しても、別ボタンへ移動した時だけ再生するための記録 (#146 R1 S1)
   private lastHoverIdx: number | null = null
+  /**
+   * split_layout (#442 self-review should-5) のテキスト領域。null = 従来どおり画面全体中央寄せ。
+   * `NovelRenderer.applySplitLayout()` から `computeSplitLayoutRegions(...).text` をそのまま
+   * 渡す想定（DialogBox.setSplitLayoutRegion / CharacterLayer.setSplitLayoutRegion と同じ契約）。
+   */
+  private splitLayoutRegion: LayoutRect | null = null
+  /**
+   * 実際に描画するボタン幅 (px)。region 未指定時は BUTTON_WIDTH のまま、region 指定時は
+   * `show()` が region 幅に収まるようクランプし直す（`drawButton` 等はこの値を参照する）。
+   */
+  private layoutButtonWidth = BUTTON_WIDTH
 
   constructor(
     private screenWidth: number,
@@ -200,6 +221,25 @@ export class ChoiceOverlay extends Container {
    */
   setAudioManager(audio: AudioManager | null): void {
     this.audioManager = audio
+  }
+
+  /**
+   * split_layout (#442 self-review should-5) のテキスト領域を設定・解除する。
+   * `novelLayout.ts` の `computeSplitLayoutRegions(...).text` をそのまま渡す想定。
+   * null で解除し、従来の全画面中央寄せジオメトリに戻す（DialogBox.setSplitLayoutRegion /
+   * CharacterLayer.setSplitLayoutRegion と同じ null=後方互換の契約）。
+   *
+   * ChoiceOverlay は DialogBox と異なり常時表示のジオメトリを持たず、`show()` のたびに
+   * ボタンを作り直すため、ここでは値を保持するだけで即時の再レイアウトはしない
+   * （次の `show()` 呼び出しから反映される）。
+   */
+  setSplitLayoutRegion(region: LayoutRect | null): void {
+    this.splitLayoutRegion = region
+  }
+
+  /** 現在の split_layout テキスト領域 (#442)。null = 従来どおり全画面。テスト・配線検証用。 */
+  getSplitLayoutRegion(): LayoutRect | null {
+    return this.splitLayoutRegion
   }
 
   /**
@@ -256,25 +296,38 @@ export class ChoiceOverlay extends Container {
 
     const theme = resolveStyle(style)
 
+    // split_layout (#442 self-review should-5): region 指定時はテキスト領域だけに収める。
+    // 未指定（従来）は画面全体のまま非破壊（areaX/areaY=0, areaWidth/Height=画面全体)。
+    const region = this.splitLayoutRegion
+    const areaX = region?.x ?? 0
+    const areaY = region?.y ?? 0
+    const areaWidth = region?.width ?? this.screenWidth
+    const areaHeight = region?.height ?? this.screenHeight
+    // BUTTON_WIDTH (480px) は分割後のテキスト領域より広いことがあるため、region 指定時は
+    // 領域幅（内側余白を引いた分）にクランプする。region 未指定時は BUTTON_WIDTH のまま。
+    this.layoutButtonWidth = region
+      ? Math.max(
+          CHOICE_REGION_MIN_BUTTON_WIDTH,
+          Math.min(BUTTON_WIDTH, areaWidth - CHOICE_REGION_MARGIN_X * 2)
+        )
+      : BUTTON_WIDTH
+
     const totalHeight = options.length * BUTTON_HEIGHT + (options.length - 1) * BUTTON_GAP
-    const maxViewportHeight = Math.max(
-      BUTTON_HEIGHT,
-      this.screenHeight - VIEWPORT_VERTICAL_MARGIN * 2
-    )
+    const maxViewportHeight = Math.max(BUTTON_HEIGHT, areaHeight - VIEWPORT_VERTICAL_MARGIN * 2)
     const viewportHeight = Math.min(totalHeight, maxViewportHeight)
     this.maxScroll = Math.max(0, totalHeight - viewportHeight)
     const scrollable = this.maxScroll > 0
     // touch-action の scroll-lock 通知 (#434)。詳細は setOnScrollableChange 参照。
     this.onScrollableChange?.(scrollable)
-    const startY = (this.screenHeight - totalHeight) / 2
+    const startY = areaY + (areaHeight - totalHeight) / 2
 
     if (scrollable) {
-      this.viewportY = (this.screenHeight - viewportHeight) / 2
-      this.hitArea = new Rectangle(0, this.viewportY, this.screenWidth, viewportHeight)
+      this.viewportY = areaY + (areaHeight - viewportHeight) / 2
+      this.hitArea = new Rectangle(areaX, this.viewportY, areaWidth, viewportHeight)
       const contentContainer = new Container()
       this.contentContainer = contentContainer
       const mask = new Graphics()
-      mask.rect(0, this.viewportY, this.screenWidth, viewportHeight)
+      mask.rect(areaX, this.viewportY, areaWidth, viewportHeight)
       mask.fill(0xffffff)
       // PixiJS v8 ではオブジェクトを `.mask` に割り当てた時点で通常描画から自動的に
       // 除外される。ここで renderable=false を付けるとステンシルにマスク形状が書き込まれず、
@@ -303,11 +356,17 @@ export class ChoiceOverlay extends Container {
       buttonContainer.alpha = 0
 
       // pivot を中央に置いて scale 拡大時にボタン中心が動かないようにする
-      buttonContainer.pivot.set(BUTTON_WIDTH / 2, BUTTON_HEIGHT / 2)
+      buttonContainer.pivot.set(this.layoutButtonWidth / 2, BUTTON_HEIGHT / 2)
 
       // 影レイヤ（pixi-filters 依存回避のため半透明矩形で代用）
       const shadow = new Graphics()
-      shadow.roundRect(SHADOW_OFFSET, SHADOW_OFFSET, BUTTON_WIDTH, BUTTON_HEIGHT, theme.radius)
+      shadow.roundRect(
+        SHADOW_OFFSET,
+        SHADOW_OFFSET,
+        this.layoutButtonWidth,
+        BUTTON_HEIGHT,
+        theme.radius
+      )
       shadow.fill({ color: theme.shadowColor, alpha: theme.shadowAlpha })
       buttonContainer.addChild(shadow)
 
@@ -321,13 +380,13 @@ export class ChoiceOverlay extends Container {
         resolution: this.renderResolution,
         roundPixels: true,
       })
-      label.x = BUTTON_WIDTH / 2
+      label.x = this.layoutButtonWidth / 2
       label.y = BUTTON_HEIGHT / 2
       label.anchor.set(0.5, 0.5)
       buttonContainer.addChild(label)
 
-      // pivot を中央に動かしたため、ボタン中心を所定位置に置く
-      buttonContainer.x = this.screenWidth / 2
+      // pivot を中央に動かしたため、ボタン中心を所定位置（region 指定時はその中心）に置く
+      buttonContainer.x = areaX + areaWidth / 2
       buttonContainer.y = scrollable
         ? i * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
         : startY + i * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
@@ -443,7 +502,7 @@ export class ChoiceOverlay extends Container {
     fillColor: number,
     borderColor: number
   ): void {
-    g.roundRect(0, 0, BUTTON_WIDTH, BUTTON_HEIGHT, theme.radius)
+    g.roundRect(0, 0, this.layoutButtonWidth, BUTTON_HEIGHT, theme.radius)
     g.fill(fillColor)
     g.stroke({ color: borderColor, width: theme.borderWidth })
   }

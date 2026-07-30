@@ -762,6 +762,9 @@ function EditorScreen({
                 speakerNudge={doc?.speaker_nudge ?? null}
                 // オート再生 (#436)。doc 由来・既定オフ。auto_play: true の作品だけ編集プレビューでも起動時オート ON。
                 autoPlay={doc?.auto_play ?? null}
+                // 画面比率に応じた画像/テキストの左右・上下分割配置 (#442)。doc 由来・既定オフ。
+                // split_layout: true の作品だけ編集プレビューでも領域分割で表示する。
+                splitLayout={doc?.split_layout ?? null}
                 // Worker proxy 経由で assets を取得（private repo でも動作する）。
                 // NOTE: EditorScreen は develop ブランチでスクリプトを編集するが、
                 // assetBaseUrl はクエリパラメータを持てない設計のため ref=main 固定になる。

@@ -885,7 +885,10 @@ pub struct Chapter {
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct Document {
     pub engine: String,
-    /// 画面比率。"16:9" / "4:3" / "9:16"。未指定時は "16:9"。
+    /// 画面比率。"16:9" / "4:3" / "9:16" / "auto"。未指定時は "16:9"。
+    /// "auto" (#442) は固定比率にロックせず、実ビューポートの向き（横長/縦長）に runtime 側
+    /// （NovelPlayer）が都度 '16:9'（横長・正方形）/ '9:16'（縦長）を選び直す fluid モード。
+    /// 既存作品（明示的に 16:9/4:3/9:16 を指定）は対象外・非破壊（runtime 側で分岐）。
     #[serde(default = "default_aspect_ratio")]
     pub aspect_ratio: String,
     /// 選択肢スタイル名 (#146)。`default` / `soft` / `monochrome` を想定。
@@ -1016,6 +1019,15 @@ pub struct Document {
     /// 空文字は None 扱い（＝既定色）。frontmatter `seekbar_color:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seekbar_color: Option<String>,
+    /// 画面比率に応じて画像/テキストを左右・上下に分割配置する split_layout モード (#442)。
+    /// `true` = 横長ではキャラ画像を左半分・テキストウィンドウを右半分、縦長では画像を上半分・
+    /// テキストを下半分に固定配置する（Gymnasia 向け）。既存の `dialog_style`（adv/novel、
+    /// テキスト送りの挙動）とは独立の軸で、両者は併用できる。
+    /// 未指定・`false` は従来どおり（画像全面 + テキストオーバーレイ、後方互換）。
+    /// `"true"` / `"false"` のみ受け、それ以外（空・非真偽値）は None（既定 false）にフォールバック。
+    /// frontmatter `split_layout:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_layout: Option<bool>,
     pub chapters: Vec<Chapter>,
 }
 

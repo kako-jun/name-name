@@ -738,6 +738,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
               debugEnabled={doc?.debug_enabled ?? null}
               speakerNudge={doc?.speaker_nudge ?? null}
               autoPlay={doc?.auto_play ?? null}
+              splitLayout={doc?.split_layout ?? null}
               debugInfo={loadDebugInfo}
               docKey={projectName}
               initialSkipMode={startWithSkip}

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { Text as PixiText } from 'pixi.js'
+import { Text as PixiText, Rectangle } from 'pixi.js'
 import { ChoiceOverlay, resolveChoiceVisual, resolveStyle } from './ChoiceOverlay'
+import { computeSplitLayoutRegions } from './novelLayout'
 import type { FederatedPointerEvent } from 'pixi.js'
 
 function pointerEvent(x: number, y: number, pointerId = 1): FederatedPointerEvent {
@@ -534,5 +535,98 @@ describe('ChoiceOverlay scroll-lock notification (#434)', () => {
 
     warnSpy.mockRestore()
     errorSpy.mockRestore()
+  })
+})
+
+// #442 self-review should-5: ChoiceOverlay が split_layout の領域分割を認識しておらず、
+// 選択肢が常に画面全幅・全体中央に配置されキャラ画像パネルに重なっていた不具合の回帰テスト。
+// DialogBox.setSplitLayoutRegion / CharacterLayer.setSplitLayoutRegion と同じ契約
+// （region を渡すとその矩形基準の幾何になり、null で従来の全画面ジオメトリへ戻る）を検証する。
+describe('ChoiceOverlay setSplitLayoutRegion (#442 self-review should-5)', () => {
+  // computeSplitLayoutRegions(800, 450).text 相当（横長・右半分）。BUTTON_WIDTH(480px) より
+  // 領域幅(400px)が狭いため、ボタン幅がクランプされる契約もあわせて検証できる。
+  const LANDSCAPE_REGION = computeSplitLayoutRegions(800, 450).text
+  // computeSplitLayoutRegions(450, 800).text 相当（縦長・下半分）。幅450pxもBUTTON_WIDTHより狭い。
+  const PORTRAIT_REGION = computeSplitLayoutRegions(450, 800).text
+
+  it('getSplitLayoutRegion は既定で null、setSplitLayoutRegion 後はそのまま返す', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    expect(overlay.getSplitLayoutRegion()).toBeNull()
+    overlay.setSplitLayoutRegion(LANDSCAPE_REGION)
+    expect(overlay.getSplitLayoutRegion()).toEqual(LANDSCAPE_REGION)
+    overlay.setSplitLayoutRegion(null)
+    expect(overlay.getSplitLayoutRegion()).toBeNull()
+  })
+
+  it('region 未指定（従来）ではボタン中心が画面中央のまま非破壊', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn())
+    const button = overlay.children[0]
+    expect(button.x).toBe(400) // screenWidth / 2
+    overlay.hide()
+  })
+
+  it('setSplitLayoutRegion(region) 後は選択肢中心が region 中心になり、ボタン幅が region 内に収まる（landscape）', () => {
+    const overlayDefault = new ChoiceOverlay(800, 450)
+    overlayDefault.show([{ text: '選ぶ', jump: 'next' }], vi.fn())
+    const defaultButtonWidth = overlayDefault.children[0].pivot.x * 2
+    overlayDefault.hide()
+
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setSplitLayoutRegion(LANDSCAPE_REGION)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn())
+    const button = overlay.children[0]
+
+    expect(button.x).toBe(LANDSCAPE_REGION.x + LANDSCAPE_REGION.width / 2)
+    // BUTTON_WIDTH がテキスト領域より広いケース: 従来幅よりクランプされて狭くなる。
+    const regionButtonWidth = button.pivot.x * 2
+    expect(regionButtonWidth).toBeLessThan(defaultButtonWidth)
+    // 収まる契約: ボタンの左右端が region の外へはみ出さない（キャラ画像パネルへ重ならない）。
+    expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(LANDSCAPE_REGION.x)
+    expect(button.x + button.pivot.x).toBeLessThanOrEqual(
+      LANDSCAPE_REGION.x + LANDSCAPE_REGION.width
+    )
+
+    overlay.hide()
+  })
+
+  it('setSplitLayoutRegion(region) 後は選択肢が region 内に収まる（portrait・上下分割）', () => {
+    const overlay = new ChoiceOverlay(450, 800)
+    overlay.setSplitLayoutRegion(PORTRAIT_REGION)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn())
+    const button = overlay.children[0]
+
+    expect(button.x).toBe(PORTRAIT_REGION.x + PORTRAIT_REGION.width / 2)
+    expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(PORTRAIT_REGION.x)
+    expect(button.x + button.pivot.x).toBeLessThanOrEqual(PORTRAIT_REGION.x + PORTRAIT_REGION.width)
+
+    overlay.hide()
+  })
+
+  it('setSplitLayoutRegion(null) で従来の全画面中央寄せジオメトリに戻る', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setSplitLayoutRegion(LANDSCAPE_REGION)
+    overlay.setSplitLayoutRegion(null)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn())
+    const button = overlay.children[0]
+    expect(button.x).toBe(400) // screenWidth / 2 の従来ジオメトリに復帰
+    overlay.hide()
+  })
+
+  it('scrollable（多数選択肢）でも hitArea/mask が region 内（areaX起点・areaWidth幅）に収まる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setSplitLayoutRegion(LANDSCAPE_REGION)
+    overlay.show(choices(20), vi.fn())
+
+    const hitArea = overlay.hitArea as Rectangle
+    expect(hitArea.x).toBe(LANDSCAPE_REGION.x)
+    expect(hitArea.width).toBe(LANDSCAPE_REGION.width)
+
+    overlay.hide()
+  })
+
+  it('setSplitLayoutRegion は show() 呼び出し前に設定しても即座に例外を投げない（値の保持のみ）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    expect(() => overlay.setSplitLayoutRegion(LANDSCAPE_REGION)).not.toThrow()
   })
 })

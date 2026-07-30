@@ -104,6 +104,10 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = color.replace('"', "");
             out.push_str(&format!("seekbar_color: \"{sanitized}\"\n"));
         }
+        // Emit split_layout only when present (#442)。skip_enabled / debug_enabled と同じ流儀。
+        if let Some(v) = doc.split_layout {
+            out.push_str(&format!("split_layout: {v}\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1274,6 +1278,7 @@ mod tests {
             speaker_nudge: None,
             auto_play: None,
             seekbar_color: None,
+            split_layout: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1523,6 +1528,7 @@ mod tests {
             speaker_nudge: None,
             auto_play: None,
             seekbar_color: None,
+            split_layout: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

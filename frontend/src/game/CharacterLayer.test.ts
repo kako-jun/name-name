@@ -11,6 +11,7 @@ import {
   computeFitScale,
   computeTargetHeightScale,
   resolveCharacterHeightRatio,
+  computeCharacterLayerSplitTransform,
 } from './CharacterLayer'
 import { CURSOR_DEFAULTS } from './textEffect'
 import { NovelRenderer, BACKGROUND_CROSSFADE_MS } from './NovelRenderer'
@@ -287,6 +288,97 @@ describe('CharacterLayer X position ratio (Issue #216)', () => {
       expect(state!.sprite.x).toBeCloseTo(400, 0)
     }
   )
+})
+
+// =====================================================================================
+// #442: computeCharacterLayerSplitTransform（split_layout 用に CharacterLayer の native 座標系
+//   全体を領域へ contain フィットさせる変換の計算）。適用側 setSplitLayoutRegion は Container
+//   全体（this.scale/this.position）にこの結果を適用するだけで、個々のキャラの位置計算
+//  （positionX/characterY 等）には一切触れない（下の describe で検証）。
+// =====================================================================================
+describe('computeCharacterLayerSplitTransform (#442)', () => {
+  it('native座標系がregionにちょうど収まる場合、scale=1・オフセットなし(0,0)になる', () => {
+    // native 800x450 を同サイズの region へ収める → scale=1, x=y=0。
+    const t = computeCharacterLayerSplitTransform(800, 450, { x: 0, y: 0, width: 800, height: 450 })
+    expect(t.scale).toBe(1)
+    expect(t.x).toBe(0)
+    expect(t.y).toBe(0)
+  })
+
+  it('regionが横半分（幅だけ半分）の場合、幅基準でscale計算され高さ方向に中央寄せの余白ができる', () => {
+    // native 800x450 を 400x450（左半分）へ contain フィット。
+    // scale = min(400/800, 450/450) = 0.5 → scaledWidth=400(ぴったり)・scaledHeight=225(余白あり)。
+    const t = computeCharacterLayerSplitTransform(800, 450, { x: 0, y: 0, width: 400, height: 450 })
+    expect(t.scale).toBe(0.5)
+    expect(t.x).toBe(0) // scaledWidth(400) が region.width(400) にちょうど一致し左右余白なし
+    expect(t.y).toBe((450 - 225) / 2) // 高さ方向は余白ができ上下中央寄せ
+  })
+
+  it('regionにオフセット(x,y)がある場合、そのオフセット分だけ平行移動に加算される', () => {
+    // split_layout の右半分（テキスト側と対称の位置、x=400 始まり）へ収めるケースに相当。
+    const t = computeCharacterLayerSplitTransform(800, 450, {
+      x: 400,
+      y: 0,
+      width: 400,
+      height: 450,
+    })
+    expect(t.scale).toBe(0.5)
+    expect(t.x).toBe(400) // region.x のオフセットがそのまま反映される
+    expect(t.y).toBe((450 - 225) / 2)
+  })
+})
+
+describe('CharacterLayer setSplitLayoutRegion / getSplitLayoutRegion (#442)', () => {
+  it('region 設定で Container 全体の scale/position が computeCharacterLayerSplitTransform の結果になる', () => {
+    const layer = new CharacterLayer(800, 450)
+    const region = { x: 0, y: 0, width: 400, height: 450 }
+    layer.setSplitLayoutRegion(region)
+    const t = computeCharacterLayerSplitTransform(800, 450, region)
+    expect(layer.scale.x).toBeCloseTo(t.scale, 6)
+    expect(layer.scale.y).toBeCloseTo(t.scale, 6)
+    expect(layer.position.x).toBeCloseTo(t.x, 6)
+    expect(layer.position.y).toBeCloseTo(t.y, 6)
+  })
+
+  // 重要: setSplitLayoutRegion は CharacterLayer（Container）全体の transform だけを変え、
+  // 個々のキャラの sprite.x/y（positionX/characterY/xRatio 等 screenWidth/screenHeight 基準の
+  // 個別座標計算）には一切触れない。screenWidth/screenHeight 自体は construct 時の native
+  // 座標系のまま変わらないため、region 適用前後で個々の座標は不変であるはず。
+  it('重要: 個々のキャラの sprite.x/y は setSplitLayoutRegion 適用前後で変化しない', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '左', '/assets', { instant: true })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    const xBefore = state!.sprite.x
+    const yBefore = state!.sprite.y
+
+    layer.setSplitLayoutRegion({ x: 0, y: 0, width: 400, height: 450 })
+
+    expect(state!.sprite.x).toBe(xBefore)
+    expect(state!.sprite.y).toBe(yBefore)
+  })
+
+  it('setSplitLayoutRegion(null) で等倍・原点 (0,0) に復帰する', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.setSplitLayoutRegion({ x: 0, y: 0, width: 400, height: 450 })
+    layer.setSplitLayoutRegion(null)
+    expect(layer.scale.x).toBe(1)
+    expect(layer.scale.y).toBe(1)
+    expect(layer.position.x).toBe(0)
+    expect(layer.position.y).toBe(0)
+  })
+
+  it('getSplitLayoutRegion は未設定時 null・設定後は設定値をそのまま返す（テスト・配線検証用アクセサ）', () => {
+    const layer = new CharacterLayer(800, 450)
+    expect(layer.getSplitLayoutRegion()).toBeNull()
+
+    const region = { x: 400, y: 0, width: 400, height: 450 }
+    layer.setSplitLayoutRegion(region)
+    expect(layer.getSplitLayoutRegion()).toEqual(region)
+
+    layer.setSplitLayoutRegion(null)
+    expect(layer.getSplitLayoutRegion()).toBeNull()
+  })
 })
 
 interface GlyphEntryLike {

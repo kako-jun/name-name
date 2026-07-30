@@ -450,7 +450,9 @@ export interface EventChapter {
 
 export interface EventDocument {
   engine: string
-  /** 画面比率。省略時は "16:9" がデフォルト (Issue #136) */
+  /** 画面比率。省略時は "16:9" がデフォルト (Issue #136)。
+   *  "auto" (#442) は固定比率にロックせず、実ビューポートの向き（横長/縦長）に runtime 側
+   *  （NovelPlayer）が都度 '16:9'/'9:16' を選び直す fluid モード。既存作品は対象外・非破壊。 */
   aspect_ratio?: string
   /** 選択肢スタイル名。`default` / `soft` / `monochrome` (#146)。
    *  null/undefined のときは runtime で `default` 扱い。 */
@@ -540,6 +542,13 @@ export interface EventDocument {
    *  部品ゆえグローバル変更せず、theo-hayami の金トグル等に揃えたい作品だけ frontmatter で指定する。
    *  frontmatter `seekbar_color:` から流す per-game 設定。 */
   seekbar_color?: string | null
+  /** 画面比率に応じて画像/テキストを左右・上下に分割配置する split_layout モード (#442)。
+   *  `true` = 横長ではキャラ画像を左半分・テキストウィンドウを右半分、縦長では画像を上半分・
+   *  テキストを下半分に固定配置する（Gymnasia 向け）。既存の `dialog_style`（adv/novel、
+   *  テキスト送りの挙動）とは独立の軸で、両者は併用できる。
+   *  null/undefined・false は従来どおり（画像全面 + テキストオーバーレイ、後方互換）。
+   *  frontmatter `split_layout:` から流す。 */
+  split_layout?: boolean | null
   chapters: EventChapter[]
 }
 

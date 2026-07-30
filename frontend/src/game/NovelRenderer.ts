@@ -77,6 +77,8 @@ import {
   splitIntoSentences,
   paginateSentencesByLines,
   type NovelPage,
+  computeSplitLayoutRegions,
+  type LayoutRect,
 } from './novelLayout'
 import { stripRubyMarkup } from './ruby'
 
@@ -377,6 +379,15 @@ export class NovelRenderer {
    *  （#337 クロスフェード）が「今この人」の合図を担うため nudge は不要。nudge は開発中の稀な合図で、
    *  欲しい作品だけ opt-in する。theo-hayami は未指定のまま（＝非発火）。 */
   private speakerNudge: boolean = false
+
+  /** 画面比率に応じて画像/テキストを左右・上下に分割配置する split_layout モード (#442)。
+   *  frontmatter `split_layout:` の値。既定 false＝従来どおり（画像全面 + テキストオーバーレイ）。
+   *  dialog_style（adv/novel、テキスト送りの挙動）とは独立の軸で、両者は併用できる。
+   *  true のとき `applySplitLayout()` が screenWidth/screenHeight から画像/テキスト領域を算出し、
+   *  DialogBox・CharacterLayer 双方へ配る。screenWidth/screenHeight は construct 時に固定される
+   *  （#442: fluid `aspect_ratio: auto` は向きが変わるたびに NovelPlayer が renderer ごと
+   *  再マウントする設計のため、renderer 自身は resize ハンドラを持たない）。 */
+  private splitLayout: boolean = false
 
   /** 背景クロスフェード・退場（終劇）フェード時間（ms）(#407)。frontmatter `background_fade_ms:` の値。
    *  `character_fade_ms`（立ち絵）と対称の per-game 数値設定。背景の表示（イン）・切り替え
@@ -1566,6 +1577,70 @@ export class NovelRenderer {
    */
   setSpeakerNudge(enabled: boolean | null | undefined): void {
     this.speakerNudge = enabled === true
+  }
+
+  /**
+   * split_layout モードを設定する (#442)。
+   * frontmatter `split_layout:` の値を渡す。null/undefined/false は従来どおり（既定・後方互換）。
+   *
+   * dialog_style（adv/novel、テキスト送りの挙動）とは独立の軸。true のとき、画面比率に応じて
+   * キャラ画像とテキストウィンドウを左右（横長）/上下（縦長）に隙間なく分割配置する
+   * （`computeSplitLayoutRegions` 参照）。false/未指定は画像全面 + テキストオーバーレイのまま
+   * 一切変えない（既存ゲームは非破壊）。
+   */
+  setSplitLayout(enabled: boolean | null | undefined): void {
+    this.splitLayout = enabled === true
+    this.applySplitLayout()
+  }
+
+  /**
+   * 現在の splitLayout フラグを DialogBox / CharacterLayer / novelScrim に反映する (#442)。
+   * screenWidth/screenHeight は construct 時に固定（fluid `aspect_ratio: auto` は向きが変わる
+   * たびに NovelPlayer が renderer ごと再マウントするため、ここで resize を待つ必要はない）。
+   * false のときは両者へ null を渡し、従来ジオメトリ（adv 下部バー/novel 全画面・立ち絵全画面）に戻す。
+   *
+   * #442 self-review must-2: novelScrim（セリフ表示中に画面全体へ敷く半透明黒）も、split_layout
+   * 有効時はテキスト領域だけに矩形を絞る（キャラ画像領域には暗幕をかけず、はっきり見せる）。
+   * scrim の表示/非表示・alpha フェードは既存の updateNovelScrim 系がそのまま制御し、ここでは
+   * 矩形（`rect()` の引数）だけを更新する。
+   */
+  private applySplitLayout(): void {
+    if (!this.splitLayout) {
+      this.dialogBox.setSplitLayoutRegion(null)
+      this.characterLayer.setSplitLayoutRegion(null)
+      this.choiceOverlay.setSplitLayoutRegion(null)
+      this.resetNovelScrimRegion()
+      return
+    }
+    const regions = computeSplitLayoutRegions(this.screenWidth, this.screenHeight)
+    this.dialogBox.setSplitLayoutRegion(regions.text)
+    this.characterLayer.setSplitLayoutRegion(regions.character)
+    // 選択肢UIもテキスト領域へ収める (#442 self-review should-5)。キャラ画像パネルへの
+    // 重なりを防ぐ（[選択] ブロックは Gymnasia の実脚本で使われるためスコープ外にできない）。
+    this.choiceOverlay.setSplitLayoutRegion(regions.text)
+    this.applyNovelScrimRegion(regions.text)
+  }
+
+  /**
+   * novelScrim の矩形を split_layout のテキスト領域に絞る (#442 self-review must-2)。
+   * `novelScrim` は init() 完了後にしか存在しない（コンストラクタでは未生成）ため、
+   * まだ無ければ何もしない（init() 完了後の `applyDialogStyle` 経由の再適用や resize 相当の
+   * 呼び出しは無い設計 — screenWidth/screenHeight は construct 時に固定・上のコメント参照 —
+   * なので null チェックで十分。次に applySplitLayout が呼ばれた時点で改めて適用される）。
+   */
+  private applyNovelScrimRegion(region: LayoutRect): void {
+    if (!this.novelScrim) return
+    this.novelScrim.clear()
+    this.novelScrim.rect(region.x, region.y, region.width, region.height)
+    this.novelScrim.fill(0x000000)
+  }
+
+  /** novelScrim の矩形を画面全体に戻す (#442 self-review must-2)。split_layout 無効時の従来どおり。 */
+  private resetNovelScrimRegion(): void {
+    if (!this.novelScrim) return
+    this.novelScrim.clear()
+    this.novelScrim.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.novelScrim.fill(0x000000)
   }
 
   /**
