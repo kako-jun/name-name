@@ -78,6 +78,7 @@ import {
   paginateSentencesByLines,
   type NovelPage,
   computeSplitLayoutRegions,
+  type LayoutRect,
 } from './novelLayout'
 import { stripRubyMarkup } from './ruby'
 
@@ -1593,20 +1594,49 @@ export class NovelRenderer {
   }
 
   /**
-   * 現在の splitLayout フラグを DialogBox / CharacterLayer に反映する (#442)。
+   * 現在の splitLayout フラグを DialogBox / CharacterLayer / novelScrim に反映する (#442)。
    * screenWidth/screenHeight は construct 時に固定（fluid `aspect_ratio: auto` は向きが変わる
    * たびに NovelPlayer が renderer ごと再マウントするため、ここで resize を待つ必要はない）。
    * false のときは両者へ null を渡し、従来ジオメトリ（adv 下部バー/novel 全画面・立ち絵全画面）に戻す。
+   *
+   * #442 self-review must-2: novelScrim（セリフ表示中に画面全体へ敷く半透明黒）も、split_layout
+   * 有効時はテキスト領域だけに矩形を絞る（キャラ画像領域には暗幕をかけず、はっきり見せる）。
+   * scrim の表示/非表示・alpha フェードは既存の updateNovelScrim 系がそのまま制御し、ここでは
+   * 矩形（`rect()` の引数）だけを更新する。
    */
   private applySplitLayout(): void {
     if (!this.splitLayout) {
       this.dialogBox.setSplitLayoutRegion(null)
       this.characterLayer.setSplitLayoutRegion(null)
+      this.resetNovelScrimRegion()
       return
     }
     const regions = computeSplitLayoutRegions(this.screenWidth, this.screenHeight)
     this.dialogBox.setSplitLayoutRegion(regions.text)
     this.characterLayer.setSplitLayoutRegion(regions.character)
+    this.applyNovelScrimRegion(regions.text)
+  }
+
+  /**
+   * novelScrim の矩形を split_layout のテキスト領域に絞る (#442 self-review must-2)。
+   * `novelScrim` は init() 完了後にしか存在しない（コンストラクタでは未生成）ため、
+   * まだ無ければ何もしない（init() 完了後の `applyDialogStyle` 経由の再適用や resize 相当の
+   * 呼び出しは無い設計 — screenWidth/screenHeight は construct 時に固定・上のコメント参照 —
+   * なので null チェックで十分。次に applySplitLayout が呼ばれた時点で改めて適用される）。
+   */
+  private applyNovelScrimRegion(region: LayoutRect): void {
+    if (!this.novelScrim) return
+    this.novelScrim.clear()
+    this.novelScrim.rect(region.x, region.y, region.width, region.height)
+    this.novelScrim.fill(0x000000)
+  }
+
+  /** novelScrim の矩形を画面全体に戻す (#442 self-review must-2)。split_layout 無効時の従来どおり。 */
+  private resetNovelScrimRegion(): void {
+    if (!this.novelScrim) return
+    this.novelScrim.clear()
+    this.novelScrim.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.novelScrim.fill(0x000000)
   }
 
   /**
