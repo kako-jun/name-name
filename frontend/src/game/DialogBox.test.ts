@@ -2076,10 +2076,10 @@ describe('DialogBox 2窓インジケータの話者色 indicatorGlyphColor (#447
   })
 })
 
-// C: positionIndicator の非novel経路（Part 1 修正後の本題）。jsdom は canvas 2d ctx が常に
-// null で measureTextWidth が 0 を返すため、px 単位の厳密一致ではなく「旧固定値と異なる/一致する」
-// という不等式・等式アサーションで検証する（テスト設計フェーズの注記どおり）。
-describe('DialogBox 2窓インジケータの位置 positionIndicator 非novel (#447)', () => {
+// C: positionIndicator の非novel経路。#447 で 2窓 adv だけ文末追従にしたが、kako-jun の
+// 実機確認「adv なんだしカーソルは右下固定だと思っていた」を受け #450 で右下固定へ戻した。
+// 2窓の有無に関わらず adv は常に boxY+boxH-30 固定になることを縛る。
+describe('DialogBox 2窓インジケータの位置 positionIndicator 非novel (#450 右下固定へ復帰)', () => {
   const W = 800
   const H = 450
   const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
@@ -2108,13 +2108,13 @@ describe('DialogBox 2窓インジケータの位置 positionIndicator 非novel (
     })
   }
 
-  it('C-1: 非novel + setDualWindowRegions(regions) 後、setDialog+skipTypewriter でインジケータが旧固定 boxY+boxH-30 と異なる位置にある', () => {
+  it('C-1: 非novel + setDualWindowRegions(regions) 後、setDialog+skipTypewriter でも文末追従にならず indicator.y === boxY+boxH-30（#450 固定式に戻す）', () => {
     const box = makeBox()
     box.setDualWindowRegions({ opponent, self: self_ })
     box.setDialog(null, 'テスト用のセリフです。')
     box.skipTypewriter()
     const i = pi(box)
-    expect(i.indicator.y).not.toBe(i.boxY + i.boxH - 30)
+    expect(i.indicator.y).toBe(i.boxY + i.boxH - 30)
     box.dispose()
   })
 
@@ -2130,9 +2130,12 @@ describe('DialogBox 2窓インジケータの位置 positionIndicator 非novel (
 
 // D: Part 1（redraw() 巻き戻りバグ）の回帰テスト。setDualWindowActiveRole() は非novelのとき
 // redraw() を呼ぶため、修正前は末尾の旧式直書きが positionIndicator() の結果を上書きしていた。
-// C ブロックと同じ理由（jsdom は canvas 2d ctx が常に null で measureTextWidth が px 単位の実測値
-// を返せない）で、ここも厳密一致ではなく「旧固定値と異なる」という不等式アサーションで検証する。
-describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テスト (#447 Part 1)', () => {
+// #450 で positionIndicator() の非novel経路自体が固定式に戻ったため「旧固定値と異なる」という
+// 検証はもう成立しない（両者が同じ式になった）。テストの意図（redraw() 経由でも
+// positionIndicator() 単体呼び出しでも同じ値になるべき、という一貫性）自体は生きているので、
+// redraw() が独自の直書きに戻っていないことを「redraw() 経由の値と positionIndicator() を
+// 直接呼んだ値が一致する」比較で縛り直す。
+describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テスト (#447 Part 1 / #450)', () => {
   const W = 800
   const H = 450
   const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
@@ -2144,6 +2147,7 @@ describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テス
     boxY: number
     boxW: number
     boxH: number
+    positionIndicator(): void
   }
   function ri(box: DialogBox): RedrawInternals {
     return box as unknown as RedrawInternals
@@ -2161,17 +2165,18 @@ describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テス
     })
   }
 
-  it("D-1: ADV+2窓で setDualWindowActiveRole('opponent') を呼んだ直後、indicatorBaseY が redraw() の旧固定式でなく positionIndicator() 相当（文末配置）になっている", () => {
+  it("D-1: ADV+2窓で setDualWindowActiveRole('opponent') を呼んだ直後の indicatorBaseY が、positionIndicator() を直接呼んだ値と一致する（redraw() が旧式を独自に直書きしていない回帰確認）", () => {
     const box = makeBox()
     box.setDualWindowRegions({ opponent, self: self_ })
     box.setDialog(null, 'テスト用のセリフです。')
     box.skipTypewriter()
     box.setDualWindowActiveRole('opponent')
     const i = ri(box)
-    // 修正前（バグ）は redraw() 末尾の boxY+boxH-30 直書きにより indicatorBaseY がこの値と
-    // 一致してしまう。修正後は positionIndicator() 経由の文末配置になり、この値とは一致しない。
-    const oldFixedBaseY = i.boxY + i.boxH - 30
-    expect(i.indicatorBaseY).not.toBe(oldFixedBaseY)
+    const viaRedraw = i.indicatorBaseY
+    i.positionIndicator()
+    expect(i.indicatorBaseY).toBe(viaRedraw)
+    // #450: 実値そのものも右下固定式（boxY+boxH-30）であることを併せて確認する。
+    expect(i.indicatorBaseY).toBe(i.boxY + i.boxH - 30)
     box.dispose()
   })
 })

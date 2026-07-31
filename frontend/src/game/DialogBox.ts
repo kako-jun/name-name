@@ -276,9 +276,9 @@ export class DialogBox extends Container {
    */
   private indicatorKind: IndicatorKind = 'next'
   /**
-   * 文末インジケータ配置に使う、現在の表示テキストの wordwrap 結果 (#292 / #447)。
-   * setNovelDialogProgressive（novel）と setDialog（adv）の両方で更新する。2窓モードでない
-   * adv では positionIndicator() が右下固定のため参照されない（非2窓 adv は非回帰）。
+   * novel の文末インジケータ配置に使う、現在の表示テキストの wordwrap 結果 (#292)。
+   * setNovelDialogProgressive でのみ更新する。adv（2窓含む）は #450 で positionIndicator() が
+   * 右下固定へ戻ったため参照しない。
    */
   private novelWrappedLines: string[] = []
   // --- portrait ---
@@ -783,9 +783,9 @@ export class DialogBox extends Container {
     this.dialogText.y = this.textStartY()
     this.rubyContainer.x = this.dialogText.x
     this.rubyContainer.y = this.dialogText.y
-    // インジケータ配置は positionIndicator() 経由に統一する（#447）。ここで旧来の右下固定
-    // （boxX+boxW-40, boxY+boxH-30）を直書きすると、2窓 adv で setDualWindowActiveRole() が
-    // 呼ぶ redraw() のたびに文末配置（#447 Part 3）を上書きして旧固定位置へ巻き戻ってしまう。
+    // インジケータ配置は positionIndicator() 経由に統一する（#447 Part 1）。#450 で non-novel
+    // （2窓含む）は positionIndicator() 自体が右下固定を返すようになったため直書きと等価だが、
+    // 二重実装を避けるためこの経路のまま維持する。
     this.positionIndicator()
 
     // 名前テキスト位置
@@ -855,9 +855,6 @@ export class DialogBox extends Container {
     this.typewriter = startTypewriter(lines.join('\n'))
     this.dialogText.text = ''
     this.indicator.visible = false
-    // 2窓モード (#447) の adv 文末配置用に wrap 結果を保持する。非2窓 adv では positionIndicator()
-    // が右下固定のまま参照しないため無害（novelWrappedLines のドキュメント参照）。
-    this.novelWrappedLines = lines
     this.rubyPlacements = computeRubyPlacements(runs, lines)
     this.rubyBuildToken += 1
     const rubyToken = this.rubyBuildToken
@@ -1311,24 +1308,25 @@ export class DialogBox extends Container {
   }
 
   /**
-   * インジケータの基準位置を現在のモードに合わせて確定する (#292 / #447)。
-   *  - novel、または 2窓モード (#444) の adv: 表示テキストの**最後の wrap 行の右端**（文末の右）。
-   *    2窓 adv は #447 指摘2（旧来の `boxY + boxH - 30` 固定オフセットが、2窓化で小さくなった
-   *    箱に対して実際の文末よりずっと下に浮いて見える）を解消するため novel と同じ配置にする。
-   *  - 2窓モードでない adv: 従来どおり右下固定（`boxX + boxW - 40`, `boxY + boxH - 30`）＝非回帰。
+   * インジケータの基準位置を現在のモードに合わせて確定する (#292 / #450)。
+   *  - novel: 表示テキストの**最後の wrap 行の右端**（文末の右）。
+   *  - adv（2窓含む）: 常に右下固定（`boxX + boxW - 40`, `boxY + boxH - 30`）。
+   *    #447 で 2窓 adv だけ novel と同じ文末追従に変えたが、kako-jun の実機確認で「adv なんだし
+   *    カーソルは右下固定だと思っていた」との指摘を受け #450 で右下固定へ戻した。2窓の boxY/boxH
+   *    は `applyDualWindowBoxGeometry()` によりアクティブなサブ領域（相手=上/自分=下）自身の値に
+   *    なっているため、この固定オフセットはサブ領域自身の右下付近になる。
    * `indicatorBaseY` を設定し、x を確定する。実 y は 2窓モードでは静止・それ以外はバウンスのため
    * ticker が base に sin を足す（#447）。
    */
   private positionIndicator(): void {
-    if (!this.novelMode && !this.dualWindowActive) {
-      // 2窓モードでない adv: 従来の右下固定。redraw 等が既に設定している x/baseY を尊重しつつ再アサート。
+    if (!this.novelMode) {
+      // adv（2窓含む）: 右下固定。redraw 等が既に設定している x/baseY を尊重しつつ再アサート。
       this.indicator.x = this.boxX + this.boxW - 40
       this.indicatorBaseY = this.boxY + this.boxH - 30
       this.indicator.y = this.indicatorBaseY
       return
     }
-    // novel、または 2窓モードの adv (#447): 最終 wrap 行の右端へ。lines が空（未設定）なら
-    // 1 行 / 幅 0 として扱う。
+    // novel: 最終 wrap 行の右端へ。lines が空（未設定）なら 1 行 / 幅 0 として扱う。
     const lines = this.novelWrappedLines
     const lineCount = lines.length >= 1 ? lines.length : 1
     const lastLine = lines.length > 0 ? lines[lines.length - 1] : ''
