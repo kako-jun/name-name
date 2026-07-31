@@ -3747,6 +3747,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         auto_play: None,
         seekbar_color: None,
         split_layout: None,
+        sentence_per_page: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -5803,6 +5804,249 @@ title: "テスト"
     assert_eq!(doc2.debug_enabled, Some(true));
     assert_eq!(doc2.aspect_ratio, "9:16");
     assert_eq!(doc2.dialog_style.as_deref(), Some("novel"));
+    assert_eq!(doc2.character_y_ratio, Some(1.05));
+    assert_eq!(doc2.character_fade_ms, Some(700));
+    // ドキュメント全体が安定（parse → emit → parse が冪等）。
+    assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
+}
+
+// --- #448: sentence_per_page（文単位の厳密改頁を dialog_style と独立に有効化） ---
+//
+// frontmatter `sentence_per_page:` を Option<bool> で透過する。skip_enabled / speaker_nudge /
+// split_layout と同型で `parse_bool_kv` を共有し、`true`/`false`（大文字小文字無視）のみ受理、
+// 空・不正値・coerce 系（yes/1/on）は None（runtime 既定: false=従来どおり複数文が1ページに
+// 同居しうる）にフォールバックする。このリポで繰り返し起きている事故パターン（#310/#378/#436/
+// #440/#442＝新フィールドが parser か normalizeDocument のどちらかで黙って消える）の parser 側生存確認。
+
+/// `sentence_per_page: <value>` だけを frontmatter に持つ最小ドキュメントを組み立てる。
+fn sentence_per_page_doc(value: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nsentence_per_page:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n"
+    )
+}
+
+#[test]
+fn test_document_sentence_per_page_parses_true_false() {
+    // I1: `true` → Some(true) / `false` → Some(false)（厳格な真偽の素直な往復）。
+    let doc_true = parser::parse(&sentence_per_page_doc(" true"));
+    assert_eq!(
+        doc_true.sentence_per_page,
+        Some(true),
+        "sentence_per_page: true は Some(true)"
+    );
+
+    let doc_false = parser::parse(&sentence_per_page_doc(" false"));
+    assert_eq!(
+        doc_false.sentence_per_page,
+        Some(false),
+        "sentence_per_page: false は Some(false)"
+    );
+}
+
+#[test]
+fn test_document_sentence_per_page_is_case_insensitive() {
+    // I2: `TRUE` / `False` → 大文字小文字を無視して Some に倒す（parse_bool_kv の to_ascii_lowercase）。
+    let doc_upper = parser::parse(&sentence_per_page_doc(" TRUE"));
+    assert_eq!(
+        doc_upper.sentence_per_page,
+        Some(true),
+        "sentence_per_page: TRUE は大文字無視で Some(true)"
+    );
+
+    let doc_mixed = parser::parse(&sentence_per_page_doc(" False"));
+    assert_eq!(
+        doc_mixed.sentence_per_page,
+        Some(false),
+        "sentence_per_page: False は大文字小文字無視で Some(false)"
+    );
+}
+
+#[test]
+fn test_document_sentence_per_page_unspecified_is_none() {
+    // I3: frontmatter にキーが無ければ None（runtime 既定 false＝従来動作にフォールバック）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.sentence_per_page, None,
+        "sentence_per_page 未指定は None（既定 false にフォールバック）"
+    );
+}
+
+#[test]
+fn test_document_sentence_per_page_empty_is_none() {
+    // I4: 空 `sentence_per_page:`（値なし）・空引用 `""` はどちらも None
+    //   （parse_bool_kv が trim 後の空文字を弾く。skip_enabled / split_layout と同じ向き）。
+    let doc_empty = parser::parse(&sentence_per_page_doc(""));
+    assert_eq!(
+        doc_empty.sentence_per_page, None,
+        "空 sentence_per_page: は None"
+    );
+
+    let doc_empty_quote = parser::parse(&sentence_per_page_doc(" \"\""));
+    assert_eq!(
+        doc_empty_quote.sentence_per_page, None,
+        "sentence_per_page: \"\" は unquote 後に空文字となり None"
+    );
+}
+
+#[test]
+fn test_document_sentence_per_page_does_not_coerce_truthy_values() {
+    // I5（重要）: `yes` / `1` / `on` は coerce せず None に倒す（厳格＝true/false 以外は無効）。
+    for truthy in ["yes", "1", "on"] {
+        let doc = parser::parse(&sentence_per_page_doc(&format!(" {truthy}")));
+        assert_eq!(
+            doc.sentence_per_page, None,
+            "sentence_per_page: {truthy} は coerce されず None（厳格）"
+        );
+    }
+}
+
+#[test]
+fn test_document_sentence_per_page_garbage_is_none() {
+    // I6: 完全に無関係なゴミ文字列も None（parse 失敗を握りつぶす）。
+    let doc = parser::parse(&sentence_per_page_doc(" maybe-later"));
+    assert_eq!(
+        doc.sentence_per_page, None,
+        "sentence_per_page: maybe-later（garbage）は None"
+    );
+}
+
+#[test]
+fn test_sentence_per_page_false_round_trips() {
+    // I7: sentence_per_page: false → emit に `sentence_per_page: false` を含み、再 parse で Some(false)。
+    //   falsy（false）でも Some なら emit から消えないこと（skip_serializing は None だけ）を縛る。
+    let doc = parser::parse(&sentence_per_page_doc(" false"));
+    assert_eq!(doc.sentence_per_page, Some(false));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("sentence_per_page: false"),
+        "emit に `sentence_per_page: false` が含まれること（false を落とさない）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.sentence_per_page,
+        Some(false),
+        "round-trip で sentence_per_page: false が保持される"
+    );
+}
+
+#[test]
+fn test_sentence_per_page_true_round_trips() {
+    // I8: sentence_per_page: true → emit に `sentence_per_page: true` を含み、再 parse で Some(true)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+sentence_per_page: true
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.sentence_per_page, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("sentence_per_page: true"),
+        "emit に `sentence_per_page: true` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.sentence_per_page,
+        Some(true),
+        "round-trip で sentence_per_page: true が保持される"
+    );
+}
+
+#[test]
+fn test_sentence_per_page_none_omits_emit_line() {
+    // I9: None なら emit に `sentence_per_page:` 行が出ない（skip_serializing_if = Option::is_none）。
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(doc.sentence_per_page, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("sentence_per_page:"),
+        "sentence_per_page が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_sentence_per_page_unspecified_stays_none_through_round_trip() {
+    // I9b: 未指定 → emit されない → 再 parse でも None のまま（往復で false 等に化けない）。
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.sentence_per_page, None,
+        "未指定の round-trip は None のまま（false へ化けない）"
+    );
+}
+
+#[test]
+fn test_sentence_per_page_round_trip_with_other_per_game_frontmatter() {
+    // I10: sentence_per_page を他の per-game frontmatter（skip_enabled / dialog_style / split_layout 等）と
+    //   同居させ、parse → emit → parse で全フィールドが保持され、互いに値が潰れないこと。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+dialog_style: "adv"
+character_y_ratio: 1.05
+character_fade_ms: 700
+skip_enabled: false
+debug_enabled: true
+speaker_nudge: false
+split_layout: true
+sentence_per_page: true
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.sentence_per_page, Some(true));
+    assert_eq!(doc.split_layout, Some(true));
+    assert_eq!(doc.speaker_nudge, Some(false));
+    assert_eq!(doc.skip_enabled, Some(false));
+    assert_eq!(doc.debug_enabled, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+
+    // sentence_per_page が round-trip で保持される。
+    assert_eq!(
+        doc2.sentence_per_page,
+        Some(true),
+        "sentence_per_page が round-trip で保持される"
+    );
+    // 共存フィールドも壊れていないこと。
+    assert_eq!(doc2.split_layout, Some(true));
+    assert_eq!(doc2.speaker_nudge, Some(false));
+    assert_eq!(doc2.skip_enabled, Some(false));
+    assert_eq!(doc2.debug_enabled, Some(true));
+    assert_eq!(doc2.aspect_ratio, "9:16");
+    assert_eq!(doc2.dialog_style.as_deref(), Some("adv"));
     assert_eq!(doc2.character_y_ratio, Some(1.05));
     assert_eq!(doc2.character_fade_ms, Some(700));
     // ドキュメント全体が安定（parse → emit → parse が冪等）。
