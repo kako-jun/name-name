@@ -180,3 +180,79 @@ export function stripRubyMarkup(line: string): string {
     .map((r) => r.base)
     .join('')
 }
+
+/**
+ * 文境界分割（`splitIntoSentences`）は stripRubyMarkup 済みの plain text に対して行う必要がある
+ * （ルビ記法混在のままだと `》` が文末トレーラ（SENTENCE_TRAILERS の 1 つ）として誤吸収されうる
+ * ため）。しかし表示にはルビ記法を保持したテキストを渡したい（#448 バグ1）。
+ *
+ * 本関数は、plain text 上で計算済みの文（`plainSentences` = `splitIntoSentences(stripRubyMarkup(rawText))`
+ * の結果）を、ルビ記法込みの `rawText` 上の対応区間へマッピングし直す純粋関数。
+ *
+ * アルゴリズム:
+ *  1. `parseRubyText(rawText)` で `RubyRun[]` を得る（`runs.map(r => r.base).join('')` が
+ *     `stripRubyMarkup(rawText)` と一致する）。
+ *  2. 各 run を「plain 文字 1 個ごとの原文チャンク」に展開する。plain run は 1 文字 1 チャンク。
+ *     ruby run は先頭文字だけが `{base}《{ruby}》`（base が全て CJK 漢字なら implicit 記法のまま・
+ *     そうでなければ明示グルーピング `｜{base}《{ruby}》`）を丸ごと持ち、2 文字目以降は空文字
+ *     （同じルビを重複させない）。implicit/explicit の判定は `parseRubyText` 自身の CJK 自動連結
+ *     規則と同じ `isCjkIdeograph` を使うため、再パースしても同一 base 境界に戻る（原文の見た目を
+ *     極力保つ・#448 バグ1 セルフレビューで `｜` 過剰付与を避けるため implicit 判定を追加）。
+ *  3. `plainSentences` の各文を、その plain 文字数だけチャンク列から順に消費して連結し、
+ *     その文の「ルビ込み原文」とする。
+ *
+ * 安全策（壊さない方針、`parseRubyText` と同じ流儀）: 消費結果からルビ記法を除いたものが
+ * 元の plain 文と一致しない場合（マッピング崩れ・呼び出し側の入力不整合など）は、その文だけ
+ * ルビなしの `plainSentences` の値へフォールバックする。文が消える・重複する・化けるよりは
+ * ルビが欠けるだけの安全な劣化を優先する。
+ *
+ * 前提: `plainSentences.join('')` は `stripRubyMarkup(rawText).trim()` と一致する
+ * （`splitIntoSentences` は外周だけ trim するため、先頭の空白分だけチャンク消費開始位置をずらす）。
+ * 文境界がルビ base の途中（複数文字 base の中間）に来ることは実運用上ない
+ * （base は文末記号を含まない CJK 漢字列 or 明示グルーピングされた語句のため）。
+ *
+ * @param rawText ルビ記法込みの原文（イベントの text 行を連結したもの）
+ * @param plainSentences `splitIntoSentences(stripRubyMarkup(rawText))` の結果
+ * @returns 各文をルビ記法込みの原文へマッピングし直した配列（`plainSentences` と同じ長さ）
+ */
+export function mapSentencesToRubyPreservedText(
+  rawText: string,
+  plainSentences: string[]
+): string[] {
+  if (plainSentences.length === 0) return []
+  // ルビ記法を含まない → マッピング不要でそのまま返す（高速パス、通常ケース）。
+  if (!rawText.includes(OPEN) && !rawText.includes(GROUP_MARK)) return plainSentences
+
+  const runs = parseRubyText(rawText)
+  const chunks: string[] = []
+  for (const run of runs) {
+    const baseChars = Array.from(run.base)
+    if (baseChars.length === 0) continue
+    if (run.ruby === null) {
+      chunks.push(...baseChars)
+    } else {
+      // base が全て CJK 漢字なら implicit 記法（｜なし）のまま再構成できる（parseRubyText の
+      // 末尾 CJK 自動連結規則で同じ base に戻る）。そうでなければ｜で明示グルーピングする。
+      const allCjk = baseChars.every((ch) => isCjkIdeograph(ch))
+      const marked = allCjk
+        ? `${run.base}${OPEN}${run.ruby}${CLOSE}`
+        : `${GROUP_MARK}${run.base}${OPEN}${run.ruby}${CLOSE}`
+      chunks.push(marked)
+      for (let k = 1; k < baseChars.length; k++) chunks.push('')
+    }
+  }
+
+  const plain = runs.map((r) => r.base).join('')
+  const trimmedStart = plain.trimStart()
+  const leadingTrimLen = Array.from(plain.slice(0, plain.length - trimmedStart.length)).length
+
+  let cursor = leadingTrimLen
+  const result: string[] = []
+  for (const sentence of plainSentences) {
+    const len = Array.from(sentence).length
+    const mapped = chunks.slice(cursor, cursor + len).join('')
+    cursor += len
+    result.push(stripRubyMarkup(mapped) === sentence ? mapped : sentence)
+  }
+  return result
+}

@@ -81,7 +81,7 @@ import {
   splitTextRegionForDualWindow,
   type LayoutRect,
 } from './novelLayout'
-import { stripRubyMarkup } from './ruby'
+import { stripRubyMarkup, mapSentencesToRubyPreservedText } from './ruby'
 
 /**
  * 立ち絵・背景先読み (#389) のテキストイベント数上限。旧仕様（8）は theo-hayami の実測値
@@ -4471,17 +4471,47 @@ export class NovelRenderer {
    * 1 文がボックス高さを超える場合の折返しは従来と同じ wordwrap がそのまま処理する（挙動不変）。
    *
    * - **派生**であり GameState には持たない。eventIndex 単位で `advSentencePagesCache` にキャッシュする。
-   * - `textEvt.text[]` を連結し `stripRubyMarkup` → `splitIntoSentences`（novel と同じ手順・関数を再利用）。
    * - テキストが空なら 1 ページ（空文字）を返し、従来の空表示を保つ。
+   *
+   * バグ1（ルビ記法の消失・#448 テスト設計で発覚）: 文境界判定（`splitIntoSentences`）は
+   * `stripRubyMarkup` 済みの plain text に対して行う必要がある（`》` が SENTENCE_TRAILERS の
+   * 1 つのため、ルビ記法混在のままだと文末トレーラとして誤吸収されうる）。しかし `DialogBox.setDialog`
+   * に渡す表示テキストはルビ記法を保持したままにしたい（setDialog は自前で `parseRubyText` を呼ぶ設計。
+   * novel は元々ルビ非対応＝既存の前例で非回帰だが、adv は従来ルビ対応していたためここだけ新規に
+   * 失われる）。`mapSentencesToRubyPreservedText` で plain 文境界をルビ込み原文へマッピングし直す。
+   *
+   * バグ2（Narration の空白ポーズページ消滅・#448 テスト設計で発覚）: parser.rs の `>` 単独行は
+   * `narration_lines.push(String::new())` で意図的な空文字要素を作り、従来 adv（sentence_per_page:false）
+   * では「間を置く」空白ページとして機能していた（`["一言目。", "", "二言目。"]` → 3 ページ）。単純に
+   * `text[].join('\n').replace(/\n+/g,' ')` すると連続 `\n\n`（空要素由来）が半角スペース 1 個に
+   * 潰れて空白ページが消えるため、`text[]` を空文字要素で分割し、各グループを独立に文分割してから
+   * グループの間に空文字 1 ページを挿入する。
    */
   private getAdvSentencePages(textEvt: { text: string[] }): string[] {
     if (this.advSentencePagesCache && this.advSentencePagesCache.eventIndex === this.eventIndex) {
       return this.advSentencePagesCache.pages
     }
-    const joined = textEvt.text.join('\n').replace(/\n+/g, ' ')
-    const plain = stripRubyMarkup(joined)
-    const sentences = splitIntoSentences(plain)
-    const pages = sentences.length > 0 ? sentences : ['']
+    const pages: string[] = []
+    let group: string[] = []
+    const flushGroup = (): void => {
+      if (group.length === 0) return
+      const joined = group.join('\n').replace(/\n+/g, ' ')
+      const plain = stripRubyMarkup(joined)
+      const sentences = splitIntoSentences(plain)
+      pages.push(...mapSentencesToRubyPreservedText(joined, sentences))
+      group = []
+    }
+    for (const line of textEvt.text) {
+      if (line === '') {
+        // `>` 単独行由来の空文字要素 (#448 バグ2) = 意図的な空白ポーズページ。
+        flushGroup()
+        pages.push('')
+      } else {
+        group.push(line)
+      }
+    }
+    flushGroup()
+    if (pages.length === 0) pages.push('')
     this.advSentencePagesCache = { eventIndex: this.eventIndex, pages }
     return pages
   }
