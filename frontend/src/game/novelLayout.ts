@@ -169,9 +169,10 @@ export interface DualWindowTextRegions {
  * （`text.width` は左右方向に分割しないためそのまま両ウィンドウで共有する）。
  *
  * 上半分＝相手（opponent、話者 ≠ protagonist）、下半分＝自分（self、話者 = protagonist）固定。
- * 隙間なく2等分する（opponent.height + self.height === text.height）。奇数 px の端数は
- * self（下）側が吸収する（`computeSplitLayoutRegions` と同じ「後半が残差を引き取る」規約）。
- * Math.random など非決定要素は使わない決定論的写像。
+ * 隙間なく厳密に2等分する（opponent.height + self.height === text.height）。整数丸め
+ * （Math.floor 等）は行わないため、奇数 height では両ウィンドウとも小数 px になる
+ * （例: height=101 → 50.5 ずつ、非対称な「端数吸収」は起きない）。PixiJS は小数 px 座標を
+ * 問題なく描画するため実害はない。Math.random など非決定要素は使わない決定論的写像。
  */
 export function splitTextRegionForDualWindow(text: LayoutRect): DualWindowTextRegions {
   const half = text.height / 2

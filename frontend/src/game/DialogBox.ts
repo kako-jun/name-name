@@ -606,11 +606,23 @@ export class DialogBox extends Container {
    * 未指定なら novel 全画面 / adv 下部バー）に戻る。
    *
    * `setSplitLayoutRegion` と同様、幾何のみを担う（typewriter/テキスト内容には触れない）。
-   * 背景・名札の可視状態は次の `setDialog`/`setNovelDialogProgressive` 呼び出し時に
+   * 背景（bg）の可視状態は次の `setDialog`/`setNovelDialogProgressive` 呼び出し時に
    * `effectiveBorderless()` から再導出されるため、ここで個別に操作する必要はない。
+   *
+   * ただし名札（nameBox/nameText/inlineNameText）は例外: `setProtagonist` 経由で台詞表示中に
+   * 動的に2窓モードへ入ると、次の `updateNameDisplay` 呼び出し（＝次のセリフ表示）まで旧位置・
+   * 旧可視状態の名札が一瞬取り残される（self-review S2）。2窓モードは常に無枠・名札なしという
+   * 不変条件（`effectiveBorderless()`）と一致させるため、regions が null でなくなる（2窓モードに
+   * 入る）瞬間にここで即座に隠す。null 解除時（2窓モード終了）は次の `updateNameDisplay` で
+   * 正しい状態に戻るので触らない。
    */
   setDualWindowRegions(regions: DualWindowTextRegions | null): void {
     this.dualWindowRegions = regions
+    if (regions !== null) {
+      this.nameBox.visible = false
+      this.nameText.visible = false
+      if (this.inlineNameText) this.inlineNameText.visible = false
+    }
     if (this.novelMode) {
       this.applyNovelGeometry()
     } else {

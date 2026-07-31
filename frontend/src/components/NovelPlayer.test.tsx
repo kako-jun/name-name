@@ -1191,6 +1191,26 @@ describe('NovelPlayer fluid + splitLayout の CSS aspect-ratio 配線 (#444)', (
 
     expect(gameBox()?.style.aspectRatio).toBe('800 / 450')
   })
+
+  // N1（self-review nit）: NP-1 の横長ケースと対称に、縦長ビューポートでも配線されることを確認する。
+  // window.innerWidth/innerHeight を縦長（768×1024）に差し替えて mount する（NP-1 と同じ実装、
+  // ビューポートサイズだけ入れ替える）。pickFluidAspectRatio(768, 1024, true) は 768 < 1024 の
+  // portrait 分岐で '1:2' を返し、ASPECT_RATIOS['1:2'] は {width: 450, height: 900}。
+  it('NP-4: aspectRatio="auto" + splitLayout={true} + 縦長ビューポート（768×1024）で CSS aspect-ratio が "450 / 900"（1:2）になる', async () => {
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+    Object.defineProperty(window, 'innerWidth', { value: 768, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 1024, configurable: true })
+    try {
+      render(<NovelPlayer events={[]} aspectRatio="auto" splitLayout={true} />)
+      await flushAsync()
+
+      expect(gameBox()?.style.aspectRatio).toBe('450 / 900')
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: originalHeight, configurable: true })
+    }
+  })
 })
 
 // #413: インジケータ画像（next/pageturn 各4枚=計8枚）の先読み useEffect。

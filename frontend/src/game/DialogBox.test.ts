@@ -1650,6 +1650,25 @@ describe('DialogBox 話者別2窓モード dualWindowRegions (#444)', () => {
     box.dispose()
   })
 
+  it('DB-11: 台詞表示中に動的2窓化 — setDialog で nameBox.visible=true にしてから setDualWindowRegions を呼ぶと、次の setDialog を待たず即座に nameBox.visible/nameText.visible が false になる（self-review S2 回帰pin）', () => {
+    const box = makeBox()
+    // jsdom は canvas 2d ctx が null で nameText.width の実測ができず、非2窓状態での素の
+    // setDialog(name, ...) は例外を投げる（#442 self-review must-1 の stubNameTextWidth と同じ手当て）。
+    const nameTextTarget = (box as unknown as { nameText: { width: number } }).nameText
+    Object.defineProperty(nameTextTarget, 'width', { get: () => 80, configurable: true })
+
+    box.setDialog('せお', 'セリフ。')
+    const before = dwInternals(box)
+    expect(before.nameBox.visible).toBe(true)
+    expect(before.nameText.visible).toBe(true)
+
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = dwInternals(box)
+    expect(i.nameBox.visible).toBe(false)
+    expect(i.nameText.visible).toBe(false)
+    box.dispose()
+  })
+
   it('DB-12: 解除時の復帰 — setDualWindowRegions(null) 後、adv 本来の borderless(=false) に戻り bg.visible===true', () => {
     const box = makeBox()
     box.setDualWindowRegions({ opponent, self: self_ })

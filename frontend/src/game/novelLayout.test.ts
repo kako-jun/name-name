@@ -286,7 +286,7 @@ describe('splitTextRegionForDualWindow (#444)', () => {
     const cases = [
       { x: 400, y: 0, width: 400, height: 450 }, // 偶数
       { x: 0, y: 400, width: 450, height: 400 }, // 偶数（portrait 由来）
-      { x: 0, y: 0, width: 100, height: 101 }, // 奇数（端数は self が吸収する規約）
+      { x: 0, y: 0, width: 100, height: 101 }, // 奇数（丸めなし・両ウィンドウとも50.5になる）
       { x: 0, y: 0, width: 100, height: 1 }, // 極小
     ]
     for (const text of cases) {
