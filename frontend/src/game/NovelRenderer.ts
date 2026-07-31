@@ -1646,11 +1646,19 @@ export class NovelRenderer {
    * に固定する（novel は行数キャップに「1 ページ最大 1 文」を追加で重ねる／adv は markdown 行単位
    * の `text[]` をやめ `splitIntoSentences` 由来の 1 文＝1 ページに切り替える。詳細は
    * `getNovelPages` / `getAdvSentencePages` 参照）。派生ページキャッシュはページ単位が変わるため破棄する。
+   *
+   * `setDialogStyle`（`applyDialogStyle`）と同じパターンで、既にテキスト表示中なら即座に新ページ構成で
+   * 描き直す (#448 Part2)。EditorScreen のライブプレビューは frontmatter をライブバインドしているため、
+   * これが無いとテキスト表示中に `sentence_per_page` を ON/OFF しても次のクリックまで画面が古いページ
+   * 構成のまま stale になる。
    */
   setSentencePerPage(enabled: boolean | null | undefined): void {
     this.sentencePerPage = enabled === true
     this.novelPagesCache = null
     this.advSentencePagesCache = null
+    if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
+      this.render()
+    }
   }
 
   /**
