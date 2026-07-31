@@ -279,7 +279,7 @@ function NovelPlayer({
   // ResizeObserver がルート要素の実測値で補正する（向きカテゴリが違えば 1 回だけ再マウントする）。
   const [fluidRatio, setFluidRatio] = useState<AspectRatio>(() => {
     if (!isFluid || typeof window === 'undefined') return DEFAULT_ASPECT_RATIO
-    return pickFluidAspectRatio(window.innerWidth, window.innerHeight)
+    return pickFluidAspectRatio(window.innerWidth, window.innerHeight, splitLayout ?? false)
   })
   // 有効な AspectRatio に正規化。fluid のときは向き追従の fluidRatio を使う。
   const aspectRatio = isFluid ? fluidRatio : parseAspectRatio(aspectRatioProp)
@@ -320,7 +320,7 @@ function NovelPlayer({
     if (!root) return
     const rect = root.getBoundingClientRect()
     if (rect.width > 0 && rect.height > 0) {
-      const measured = pickFluidAspectRatio(rect.width, rect.height)
+      const measured = pickFluidAspectRatio(rect.width, rect.height, splitLayout ?? false)
       setFluidRatio((prev) => (prev === measured ? prev : measured))
     }
     if (typeof ResizeObserver === 'undefined') return
@@ -329,11 +329,14 @@ function NovelPlayer({
       if (!entry) return
       const { width, height } = entry.contentRect
       if (width <= 0 || height <= 0) return
-      const next = pickFluidAspectRatio(width, height)
+      const next = pickFluidAspectRatio(width, height, splitLayout ?? false)
       setFluidRatio((prev) => (prev === next ? prev : next))
     })
     observer.observe(root)
     return () => observer.disconnect()
+    // splitLayout は #442 と同じ設計で「construct 時に固定」の値として扱う（動的変更は
+    // 向きカテゴリ変化と同じ再マウント経路に乗らない）。isFluid のみを deps にする既存方針を
+    // 踏襲し、値は closure 経由でそのまま使う（react-hooks/exhaustive-deps はこのプロジェクトでは未設定）。
   }, [isFluid])
 
   // インジケータ画像の先読み (#413)。assetBaseUrl が分かった時点で、renderer の生成/初期化

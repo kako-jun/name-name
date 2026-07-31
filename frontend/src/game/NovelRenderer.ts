@@ -78,6 +78,7 @@ import {
   paginateSentencesByLines,
   type NovelPage,
   computeSplitLayoutRegions,
+  splitTextRegionForDualWindow,
   type LayoutRect,
 } from './novelLayout'
 import { stripRubyMarkup } from './ruby'
@@ -439,6 +440,14 @@ export class NovelRenderer {
 
   /** 住人（非主人公）の本文色 (#305)。純白。protagonist 未指定時は全員これになる。 */
   private static readonly RESIDENT_TEXT_COLOR = 0xffffff
+
+  /**
+   * 2窓モード（#444）で相手側（上窓）の本文色。淡い水色。
+   * TUI 版 gymnasia#39「文字色: プレイヤー側は白、相手側は水色」に準拠。
+   * `split_layout: true` + `protagonist:` 指定時のみ使う（#305 の主人公色とは別軸・別配色）。
+   * 2窓モードの自分側（下窓）は既存 `RESIDENT_TEXT_COLOR`（白）をそのまま流用する。
+   */
+  private static readonly OPPONENT_TEXT_COLOR = 0x9ad4e8
 
   /** 主人公本文色の既定 (#305)。kako-jun 確定のやや暖かいアイボリー #FFF0D8。 */
   private static readonly DEFAULT_PROTAGONIST_TEXT_COLOR = '#FFF0D8'
@@ -1223,6 +1232,12 @@ export class NovelRenderer {
         if (textEvt) {
           const name = textEvt.type === 'dialog' ? textEvt.character : null
           const text = textEvt.text.join('\n')
+          // 2窓モード (#444): setBodyTextColor/setDialog 系より前にアクティブ側を確定する。
+          if (this.isDualWindowMode()) {
+            this.dialogBox.setDualWindowActiveRole(
+              this.resolveDualWindowIsSelf(name) ? 'self' : 'opponent'
+            )
+          }
           this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
           if (this.isNovelStyle()) {
             this.dialogBox.setNovelDialogProgressive(name, text, 0, null)
@@ -1561,9 +1576,15 @@ export class NovelRenderer {
    * novel スタイルでこの名前と一致する話者を質問役＝左、それ以外（住人）を回答役＝右に振る。
    * 未指定なら立ち絵は従来配置（脚本の position トークンのまま）＝後方互換。
    * adv では一切使わない（左右配置は novel 限定）。
+   *
+   * #444: `split_layout: true` と組み合わさっていると「2窓モード」の有効/無効も決まる
+   * （`applySplitLayout()` 参照）ため、protagonist が変わったらここで再適用する。
+   * 通常は setSplitLayout より先に一度だけ呼ばれる（mount 時）ため実質 no-op だが、
+   * protagonist prop が後から動的に変わるケースでも 2窓判定が追従するようにする。
    */
   setProtagonist(name: string | null | undefined): void {
     this.protagonist = name && name.length > 0 ? name : null
+    this.applySplitLayout()
   }
 
   /**
@@ -1607,6 +1628,7 @@ export class NovelRenderer {
   private applySplitLayout(): void {
     if (!this.splitLayout) {
       this.dialogBox.setSplitLayoutRegion(null)
+      this.dialogBox.setDualWindowRegions(null)
       this.characterLayer.setSplitLayoutRegion(null)
       this.choiceOverlay.setSplitLayoutRegion(null)
       this.resetNovelScrimRegion()
@@ -1614,11 +1636,36 @@ export class NovelRenderer {
     }
     const regions = computeSplitLayoutRegions(this.screenWidth, this.screenHeight)
     this.dialogBox.setSplitLayoutRegion(regions.text)
+    // 2窓モード (#444): 新規frontmatterフィールドを増やさず、既存の split_layout: true +
+    // protagonist: の組み合わせをこのモードの明示トリガーにする（実装方針）。protagonist
+    // 未指定なら従来どおり単一テキストウィンドウ（枠あり）のまま変わらない。
+    this.dialogBox.setDualWindowRegions(
+      this.isDualWindowMode() ? splitTextRegionForDualWindow(regions.text) : null
+    )
     this.characterLayer.setSplitLayoutRegion(regions.character)
     // 選択肢UIもテキスト領域へ収める (#442 self-review should-5)。キャラ画像パネルへの
     // 重なりを防ぐ（[選択] ブロックは Gymnasia の実脚本で使われるためスコープ外にできない）。
     this.choiceOverlay.setSplitLayoutRegion(regions.text)
     this.applyNovelScrimRegion(regions.text)
+  }
+
+  /**
+   * 話者別2窓（相手=上/自分=下、#444）表示モードが有効か。
+   * `split_layout: true` かつ `protagonist:` 指定時のみ true（dialog_style/novel 判定は問わない
+   * — 2窓モードは #305/#286 の novel 限定機能とは独立の軸）。
+   */
+  private isDualWindowMode(): boolean {
+    return this.splitLayout && this.protagonist !== null
+  }
+
+  /**
+   * 2窓モード (#444) で話者が自分側（protagonist）か相手側かを判定する。
+   * 既存の protagonist 一致判定（`resolveNovelRoleXRatio`/`resolveBodyTextColor` の
+   * `speaker === this.protagonist` と同じ考え方）を流用する。話者不明（ナレーション等）は
+   * 相手側（上窓）に倒す — 「自分」を名乗るのは明示的に protagonist と一致したときだけ。
+   */
+  private resolveDualWindowIsSelf(speaker: string | null): boolean {
+    return speaker !== null && speaker === this.protagonist
   }
 
   /**
@@ -1799,13 +1846,21 @@ export class NovelRenderer {
   }
 
   /**
-   * 現在の話者から本文色を決定論的に導出する (#305)。
+   * 現在の話者から本文色を決定論的に導出する (#305 / #444)。
+   *  - 2窓モード（#444: split_layout + protagonist 指定）→ dialog_style（novel/adv）に関わらず
+   *    常にこちらを優先。自分（protagonist 一致）＝白（`RESIDENT_TEXT_COLOR`）、
+   *    相手（それ以外・話者不明含む）＝水色（`OPPONENT_TEXT_COLOR`）。
    *  - adv / protagonist 未指定 / 話者不明 → 住人色（純白）。色差しない（後方互換）。
    *  - novel かつ話者が protagonist と一致 → 主人公本文色（既定 #FFF0D8）。
    *  - それ以外（novel の住人）→ 住人色（純白）。
    * 演出中間状態でなく per-line の描画属性なので、render() の都度ここで導出して DialogBox に渡す。
    */
   private resolveBodyTextColor(speaker: string | null): number {
+    if (this.isDualWindowMode()) {
+      return this.resolveDualWindowIsSelf(speaker)
+        ? NovelRenderer.RESIDENT_TEXT_COLOR
+        : NovelRenderer.OPPONENT_TEXT_COLOR
+    }
     if (!this.isNovelStyle()) return NovelRenderer.RESIDENT_TEXT_COLOR
     if (this.protagonist === null) return NovelRenderer.RESIDENT_TEXT_COLOR
     if (!speaker) return NovelRenderer.RESIDENT_TEXT_COLOR
@@ -4483,8 +4538,17 @@ export class NovelRenderer {
         console.warn('[name-name] フォントロードに失敗', resolvedFontFamily, err)
       })
 
-    // 本文色 (#305): 話者から決定論的に導出して DialogBox に渡す（主人公=暖アイボリー / 住人=白）。
-    // adv / protagonist 未指定では常に白＝後方互換。setDialog/setNovelDialogProgressive の前に当てる。
+    // 2窓モード (#444): setBodyTextColor/setDialog 系より前にアクティブ側（自分=下/相手=上）を確定する。
+    // dualWindowRegions が未設定（2窓モード無効）なら DialogBox 側で no-op になる。
+    if (this.isDualWindowMode()) {
+      this.dialogBox.setDualWindowActiveRole(
+        this.resolveDualWindowIsSelf(name) ? 'self' : 'opponent'
+      )
+    }
+
+    // 本文色 (#305 / #444): 話者から決定論的に導出して DialogBox に渡す（主人公=暖アイボリー / 住人=白 /
+    // 2窓モードは自分=白・相手=水色）。adv / protagonist 未指定では常に白＝後方互換。
+    // setDialog/setNovelDialogProgressive の前に当てる。
     this.dialogBox.setBodyTextColor(this.resolveBodyTextColor(name))
 
     // オートモード時はタイピング完了後に autoWaitMs 待機してから自動進行 (#139)。
