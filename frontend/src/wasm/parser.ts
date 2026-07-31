@@ -278,6 +278,10 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // 画面比率に応じた画像/テキストの左右・上下分割配置 (#442)。boolean なので ?? null
     // （未指定は下流で既定 false ＝従来の全面+オーバーレイ）。
     split_layout: doc.split_layout ?? null,
+    // 文単位の厳密改頁 (#448)。boolean なので ?? null（未指定は下流で既定 false ＝従来どおり）。
+    // ここを忘れると Rust 側は正しくパースされているのに wasm 経由で undefined になり、
+    // テストは緑のまま本番だけ壊れる（#310/#378 と同じ事故パターン）。
+    sentence_per_page: doc.sentence_per_page ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

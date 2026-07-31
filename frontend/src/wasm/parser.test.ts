@@ -320,6 +320,59 @@ describe('parseMarkdown + normalizeDocument: split_layout が normalize を生�
   })
 })
 
+describe('parseMarkdown + normalizeDocument: sentence_per_page が normalize を生き残る (#448)', () => {
+  // このリポで繰り返し起きている事故パターン（#310/#378/#436/#440/#442＝新しい frontmatter フィールドが
+  // Rust parser か normalizeDocument のどちらかで黙って消える）の frontend 側生存確認。
+  // normalizeDocument の列挙に sentence_per_page を書き忘れると WASM が parse した値が /play runtime
+  // （NovelRenderer.setSentencePerPage）に届かず、文単位の厳密改頁が効かなくなる。
+  // 実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）を通し、値が normalize を生き残ることを縛る。
+  function docWith(sentencePerPageLine: string): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      'dialog_style: novel',
+      sentencePerPageLine,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('J1: sentence_per_page: true → doc.sentence_per_page === true', async () => {
+    const doc = await parseMarkdown(docWith('sentence_per_page: true'))
+    expect(doc.sentence_per_page).toBe(true)
+  })
+
+  it('J2: sentence_per_page: false → doc.sentence_per_page === false（値が normalize を生き残る・false が null に潰れない）', async () => {
+    const doc = await parseMarkdown(docWith('sentence_per_page: false'))
+    expect(doc.sentence_per_page).toBe(false)
+  })
+
+  it('J3: sentence_per_page 省略 → doc.sentence_per_page === null（未指定は下流で既定 false＝従来どおり）', async () => {
+    const minimal = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(minimal)
+    expect(doc.sentence_per_page).toBeNull()
+  })
+})
+
 describe('parseMarkdown: aspect_ratio: auto が実 parse を通して保持される (#442)', () => {
   // fluid モード（NovelPlayer の pickFluidAspectRatio 分岐）の判定元。既存 3 値（16:9/4:3/9:16）と
   // 対等に、Rust parser → normalizeDocument（`aspect_ratio: doc.aspect_ratio` は素通し）を通しても
