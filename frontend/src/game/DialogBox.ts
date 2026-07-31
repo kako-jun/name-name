@@ -513,7 +513,7 @@ export class DialogBox extends Container {
         }
       }
 
-      this.indicator.visible = this.indicatorWanted && !isTypingActive(this.typewriter)
+      this.applyIndicatorContainerVisibility()
     })
     this.ticker.start()
   }
@@ -1253,7 +1253,9 @@ export class DialogBox extends Container {
   setIndicatorVisible(visible: boolean): void {
     this.indicatorWanted = visible
     if (visible) this.positionIndicator()
-    this.indicator.visible = visible && !isTypingActive(this.typewriter)
+    // #447 must: 点滅位相の ON リセットも含め、可視性確定は applyIndicatorContainerVisibility()
+    // に一本化する（ticker からの呼び出しと同じ「非表示→表示」判定を通す）。
+    this.applyIndicatorContainerVisibility()
   }
 
   /**
@@ -1492,12 +1494,50 @@ export class DialogBox extends Container {
       this.indicatorBlinkOn = true
       return
     }
+    // tickIndicatorFrame と同じ O(1) スタイル（累積 → Math.floor で経過ステップ数を出し、
+    // %= で余りに丸める）に揃える。奇数ステップ分だけ ON/OFF が反転する（偶数ステップは往復して元に戻る）。
     this.indicatorBlinkElapsed += deltaMs
-    while (this.indicatorBlinkElapsed >= INDICATOR_BLINK_MS) {
-      this.indicatorBlinkElapsed -= INDICATOR_BLINK_MS
-      this.indicatorBlinkOn = !this.indicatorBlinkOn
+    const steps = Math.floor(this.indicatorBlinkElapsed / INDICATOR_BLINK_MS)
+    if (steps > 0) {
+      this.indicatorBlinkElapsed %= INDICATOR_BLINK_MS
+      if (steps % 2 === 1) {
+        this.indicatorBlinkOn = !this.indicatorBlinkOn
+      }
     }
     this.indicatorGlyph.visible = this.indicatorBlinkOn
+  }
+
+  /**
+   * `indicator` コンテナの可視性を「非表示 → 表示」の遷移として確定する (#447 self-review must)。
+   *
+   * `tickIndicatorBlink` は `indicator` が実際に見えているかに関わらず毎フレーム無条件に呼ばれる
+   * ため、`indicatorBlinkElapsed` はタイプ表示中（`indicator` 自体が非表示）も壁時計時間で積み
+   * 上がり続ける。その状態のままタイプが完了して `indicator` が実際に見える瞬間を迎えると、
+   * `indicatorGlyph.visible` が壁時計基準で ON/OFF どちらになっているか分からず、約半分の行で
+   * 「読み終わって送りたいのに▼が最大1秒近く見えない」事故になっていた。
+   *
+   * ここで「今フレームの新しい可視状態」と「直前の可視状態」を比較し、非表示 → 表示へ切り替わる
+   * 瞬間だけ点滅位相を `indicatorBlinkElapsed = 0` / `indicatorBlinkOn = true`（ON）へ明示リセット
+   * する。2窓モードのグリフ点滅（画像フレームなし）が対象で、画像フレーム表示中はグリフの
+   * 可視性を `applyIndicatorFrame()` に委ねるため触らない。
+   *
+   * ticker（毎フレーム）と `setIndicatorVisible`（NovelRenderer からの明示呼び出し。タイプが
+   * 既に完了済み＝msPerChar=0 やページ内で追加文字が無いケースはここが実際の遷移点になる）の
+   * 両方から呼ぶ — どちらが本番で実際の遷移フレームになるかは呼び出し順とタイミング次第のため。
+   */
+  private applyIndicatorContainerVisibility(): void {
+    const newVisible = this.indicatorWanted && !isTypingActive(this.typewriter)
+    if (
+      newVisible &&
+      !this.indicator.visible &&
+      this.dualWindowActive &&
+      !this.hasIndicatorImages()
+    ) {
+      this.indicatorBlinkElapsed = 0
+      this.indicatorBlinkOn = true
+      this.indicatorGlyph.visible = true
+    }
+    this.indicator.visible = newVisible
   }
 
   /**

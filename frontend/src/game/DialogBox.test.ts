@@ -2130,6 +2130,8 @@ describe('DialogBox 2窓インジケータの位置 positionIndicator 非novel (
 
 // D: Part 1（redraw() 巻き戻りバグ）の回帰テスト。setDualWindowActiveRole() は非novelのとき
 // redraw() を呼ぶため、修正前は末尾の旧式直書きが positionIndicator() の結果を上書きしていた。
+// C ブロックと同じ理由（jsdom は canvas 2d ctx が常に null で measureTextWidth が px 単位の実測値
+// を返せない）で、ここも厳密一致ではなく「旧固定値と異なる」という不等式アサーションで検証する。
 describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テスト (#447 Part 1)', () => {
   const W = 800
   const H = 450
@@ -2183,6 +2185,7 @@ describe('DialogBox 2窓インジケータの機械的点滅 tickIndicatorBlink 
   const self_: LayoutRect = { x: 400, y: 225, width: 400, height: 225 }
 
   interface BlinkInternals {
+    indicator: { visible: boolean }
     indicatorGlyph: { visible: boolean }
     tickIndicatorBlink(deltaMs: number): void
     indicatorFrameTextures: Partial<Record<IndicatorKind, unknown[]>>
@@ -2261,6 +2264,66 @@ describe('DialogBox 2窓インジケータの機械的点滅 tickIndicatorBlink 
 
     // 解除後は2窓でなくなっているため、以後 tickIndicatorBlink を進めても再点滅しない。
     i.tickIndicatorBlink(1000)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  // E-6〜E-8: self-review must「点滅の位相が実際に見える瞬間にリセットされない」の回帰テスト。
+  // tickIndicatorBlink はタイプ表示中（indicator 自体が非表示）も無条件に呼ばれ続けるため、
+  // indicatorBlinkElapsed が壁時計時間で積み上がる。タイプ完了→ indicator が実際に表示される
+  // 瞬間（setDialog+skipTypewriter+setIndicatorVisible(true) で再現）に、蓄積済みの位相を
+  // 無視して必ず ON から点滅を開始することを確認する。
+  it('E-6: タイプ中に位相が OFF 側へずれていても、タイプ完了→インジケータ表示の瞬間は indicatorGlyph.visible が true にリセットされる', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+
+    // タイプ表示中に壁時計時間が経過し、位相が OFF 側へずれていた状態を再現する
+    // （この時点では indicator コンテナ自体は非表示なので、実プレイでは見えない）。
+    i.tickIndicatorBlink(1200)
+    expect(i.indicatorGlyph.visible).toBe(false)
+
+    // タイプ完了 → インジケータ表示。setDialog が indicator.visible を明示的に false へ戻し、
+    // skipTypewriter でタイプ完了、setIndicatorVisible(true) が「非表示→表示」の遷移点になる。
+    box.setDialog(null, 'テスト用のセリフです。')
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+
+    expect(i.indicator.visible).toBe(true)
+    // 壁時計上の位相（OFF 側）に関わらず、表示開始時は必ず ON から始まる（位相リセットの確認）。
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  it('E-7: リセット後も 1000ms 経過で false になる（周期は保たれる）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+
+    i.tickIndicatorBlink(1200)
+    box.setDialog(null, 'テスト用のセリフです。')
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+    expect(i.indicatorGlyph.visible).toBe(true)
+
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('E-8: リセット後さらに 1000ms 経過で true に戻る（周期は保たれる）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+
+    i.tickIndicatorBlink(1200)
+    box.setDialog(null, 'テスト用のセリフです。')
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
     i.tickIndicatorBlink(1000)
     expect(i.indicatorGlyph.visible).toBe(true)
     box.dispose()
