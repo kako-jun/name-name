@@ -170,6 +170,10 @@ interface NovelPlayerProps {
    *  frontmatter `split_layout:` から流す。既定 false＝従来どおり（画像全面 + テキストオーバーレイ）。
    *  dialog_style（adv/novel、テキスト送りの挙動）とは独立の軸で、両者は併用できる。 */
   splitLayout?: boolean | null
+  /** 文単位の厳密改頁 (#448)。frontmatter `sentence_per_page:` から流す。既定 false＝従来どおり
+   *  （novel は行数キャップで複数文が1ページに同居しうる／adv は markdown 行単位でページが決まる）。
+   *  dialog_style（adv/novel）とは独立の軸で、true のときどちらのスタイルでも 1 ページ＝厳密に 1 文になる。 */
+  sentencePerPage?: boolean | null
   /** DebugOverlay に出す renderer 外の読み込み診断 (#321)。 */
   debugInfo?: string[]
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
@@ -217,6 +221,7 @@ function NovelPlayer({
   speakerNudge,
   autoPlay,
   splitLayout,
+  sentencePerPage,
   debugInfo,
   docKey,
   initialSkipMode = false,
@@ -436,6 +441,9 @@ function NovelPlayer({
       // 画面比率に応じた画像/テキストの左右・上下分割配置 (#442)。dialog_style とは独立の軸。
       // setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、初回描画から領域確定済みにする。
       renderer.setSplitLayout(splitLayout ?? null)
+      // 文単位の厳密改頁 (#448)。dialog_style とは独立の軸。setEvents/setScenes（＝初回改頁計算）
+      // より前に設定し、初回描画から「1 ページ=1 文」が反映済みになるようにする。
+      renderer.setSentencePerPage(sentencePerPage ?? null)
       // 立ち絵の足元 Y 比率 (#308)。setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、
       // 初回描画から per-game の足元位置（全身 / 靴を切る）で立つようにする。
       renderer.setCharacterYRatio(characterYRatio ?? null)
@@ -583,6 +591,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setSplitLayout(splitLayout ?? null)
   }, [splitLayout])
+
+  // sentencePerPage が変化したときに renderer に反映 (#448)
+  useEffect(() => {
+    rendererRef.current?.setSentencePerPage(sentencePerPage ?? null)
+  }, [sentencePerPage])
 
   // characterYRatio が変化したときに renderer に反映 (#308)
   useEffect(() => {
