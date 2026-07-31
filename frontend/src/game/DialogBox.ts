@@ -481,7 +481,7 @@ export class DialogBox extends Container {
     this.indicatorSprite.visible = false
     this.indicator.addChild(this.indicatorSprite)
     this.indicator.addChild(this.indicatorGlyph)
-    this.indicatorBaseY = this.boxY + this.boxH - 30
+    this.indicatorBaseY = this.boxY + this.boxH - 45
     this.indicator.x = this.boxX + this.boxW - 40
     this.indicator.y = this.indicatorBaseY
     this.addChild(this.indicator)
@@ -740,7 +740,7 @@ export class DialogBox extends Container {
     this.rubyContainer.x = this.dialogText.x
     this.rubyContainer.y = this.dialogText.y
     // novel のインジケータは文末（最終 wrap 行の右）に置く (#292)。ここで adv の右下固定
-    // （boxX+boxW-40, boxY+boxH-30）を再設定すると、resize のたびに文末配置を上書きして
+    // （boxX+boxW-40, boxY+boxH-45）を再設定すると、resize のたびに文末配置を上書きして
     // 一瞬右下へ戻ってしまう（#292 セルフレビュー N2）。novelWrappedLines は保持済みなので
     // positionIndicator() で現在の文末へ置き直す。実 y はバウンスで ticker が base に sin を足す。
     this.positionIndicator()
@@ -1308,13 +1308,15 @@ export class DialogBox extends Container {
   }
 
   /**
-   * インジケータの基準位置を現在のモードに合わせて確定する (#292 / #450)。
+   * インジケータの基準位置を現在のモードに合わせて確定する (#292 / #450 / #452)。
    *  - novel: 表示テキストの**最後の wrap 行の右端**（文末の右）。
-   *  - adv（2窓含む）: 常に右下固定（`boxX + boxW - 40`, `boxY + boxH - 30`）。
+   *  - adv（2窓含む）: 常に右下固定（`boxX + boxW - 40`, `boxY + boxH - 45`）。
    *    #447 で 2窓 adv だけ novel と同じ文末追従に変えたが、kako-jun の実機確認で「adv なんだし
-   *    カーソルは右下固定だと思っていた」との指摘を受け #450 で右下固定へ戻した。2窓の boxY/boxH
-   *    は `applyDualWindowBoxGeometry()` によりアクティブなサブ領域（相手=上/自分=下）自身の値に
-   *    なっているため、この固定オフセットはサブ領域自身の右下付近になる。
+   *    カーソルは右下固定だと思っていた」との指摘を受け #450 で右下固定へ戻した。さらに #452 で
+   *    kako-jun の実機確認「下向き三角はもうちょっと上でいい」を受け、オフセットを -30 から -45
+   *    へ変更（上方向へ15px）。2窓の boxY/boxH は `applyDualWindowBoxGeometry()` によりアクティブな
+   *    サブ領域（相手=上/自分=下）自身の値になっているため、この固定オフセットはサブ領域自身の
+   *    右下付近になる。
    * `indicatorBaseY` を設定し、x を確定する。実 y は 2窓モードでは静止・それ以外はバウンスのため
    * ticker が base に sin を足す（#447）。
    */
@@ -1322,7 +1324,7 @@ export class DialogBox extends Container {
     if (!this.novelMode) {
       // adv（2窓含む）: 右下固定。redraw 等が既に設定している x/baseY を尊重しつつ再アサート。
       this.indicator.x = this.boxX + this.boxW - 40
-      this.indicatorBaseY = this.boxY + this.boxH - 30
+      this.indicatorBaseY = this.boxY + this.boxH - 45
       this.indicator.y = this.indicatorBaseY
       return
     }

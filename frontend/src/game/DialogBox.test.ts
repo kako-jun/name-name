@@ -2078,7 +2078,8 @@ describe('DialogBox 2窓インジケータの話者色 indicatorGlyphColor (#447
 
 // C: positionIndicator の非novel経路。#447 で 2窓 adv だけ文末追従にしたが、kako-jun の
 // 実機確認「adv なんだしカーソルは右下固定だと思っていた」を受け #450 で右下固定へ戻した。
-// 2窓の有無に関わらず adv は常に boxY+boxH-30 固定になることを縛る。
+// さらに #452 で「もうちょっと上でいい」を受けオフセットを -30 から -45 へ変更。
+// 2窓の有無に関わらず adv は常に boxY+boxH-45 固定になることを縛る。
 describe('DialogBox 2窓インジケータの位置 positionIndicator 非novel (#450 右下固定へ復帰)', () => {
   const W = 800
   const H = 450
@@ -2108,22 +2109,22 @@ describe('DialogBox 2窓インジケータの位置 positionIndicator 非novel (
     })
   }
 
-  it('C-1: 非novel + setDualWindowRegions(regions) 後、setDialog+skipTypewriter でも文末追従にならず indicator.y === boxY+boxH-30（#450 固定式に戻す）', () => {
+  it('C-1: 非novel + setDualWindowRegions(regions) 後、setDialog+skipTypewriter でも文末追従にならず indicator.y === boxY+boxH-45（#452 でオフセット調整）', () => {
     const box = makeBox()
     box.setDualWindowRegions({ opponent, self: self_ })
     box.setDialog(null, 'テスト用のセリフです。')
     box.skipTypewriter()
     const i = pi(box)
-    expect(i.indicator.y).toBe(i.boxY + i.boxH - 30)
+    expect(i.indicator.y).toBe(i.boxY + i.boxH - 45)
     box.dispose()
   })
 
-  it('C-2: 非novel + 2窓未設定のまま setDialog+skipTypewriter → 従来通り indicator.y === boxY+boxH-30（非回帰）', () => {
+  it('C-2: 非novel + 2窓未設定のまま setDialog+skipTypewriter → 従来通り indicator.y === boxY+boxH-45（非回帰）', () => {
     const box = makeBox()
     box.setDialog(null, 'テスト用のセリフです。')
     box.skipTypewriter()
     const i = pi(box)
-    expect(i.indicator.y).toBe(i.boxY + i.boxH - 30)
+    expect(i.indicator.y).toBe(i.boxY + i.boxH - 45)
     box.dispose()
   })
 })
@@ -2187,8 +2188,8 @@ describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テス
     expect(spy).toHaveBeenCalled()
 
     spy.mockRestore()
-    // #450: 実値そのものも右下固定式（boxY+boxH-30）であることを併せて確認する。
-    expect(i.indicatorBaseY).toBe(i.boxY + i.boxH - 30)
+    // #450 / #452: 実値そのものも右下固定式（boxY+boxH-45）であることを併せて確認する。
+    expect(i.indicatorBaseY).toBe(i.boxY + i.boxH - 45)
     box.dispose()
   })
 })
