@@ -169,6 +169,19 @@ const INDICATOR_GLYPH: Record<IndicatorKind, string> = {
   pageturn: '❯',
 }
 
+/** インジケータグリフの既定色（淡い水色）。2窓モードでない全ゲーム共通・非回帰。 */
+const INDICATOR_GLYPH_COLOR = 0xa8dadc
+
+/**
+ * 2窓モード (#444 / #447) の▼グリフ色。kako-jun 実機指摘3（静止した白/水色の▼で十分）を受け、
+ * 自分(self)アクティブ時=白・相手(opponent)アクティブ時=水色にする。NovelRenderer の
+ * `RESIDENT_TEXT_COLOR` / `OPPONENT_TEXT_COLOR`（#305 本文色、TUI 版 gymnasia#39 準拠）と
+ * 同じ値を再利用する。DialogBox → NovelRenderer の逆依存は作れないため値は複製しているが、
+ * 変更する場合は両方揃えること。
+ */
+const DUAL_WINDOW_SELF_INDICATOR_COLOR = 0xffffff
+const DUAL_WINDOW_OPPONENT_INDICATOR_COLOR = 0x9ad4e8
+
 const INDICATOR_IMAGE_SIZE = 32
 const INDICATOR_FRAME_MS = 360
 
@@ -433,13 +446,10 @@ export class DialogBox extends Container {
     this.addChild(this.rubyContainer)
 
     // --- ▼インジケーター ---
-    const indicatorStyle = new TextStyle({
-      fontFamily,
-      fontSize: 20,
-      fill: 0xa8dadc,
-    })
     this.indicator = new Container()
-    this.indicatorGlyph = new Text({ text: '▼', style: indicatorStyle })
+    // makeIndicatorGlyphStyle() はこの時点で必要な this.fontFamily / dualWindowActive の両方が
+    // 既に確定済み（前者は上のコンストラクタ冒頭、後者はクラスフィールド初期値 null）(#447)。
+    this.indicatorGlyph = new Text({ text: '▼', style: this.makeIndicatorGlyphStyle() })
     // 既定は表示 (#413)。画像フレームの fetch が実際に始まった（pendingIndicatorKinds に載る）
     // 種別だけ applyIndicatorFrame() が一時的に隠す。fetch を一度も試みていない作品（画像なし・
     // RPG モード等）はここでの true のまま＝非回帰で ▼ が即表示される。
@@ -615,9 +625,14 @@ export class DialogBox extends Container {
    * 不変条件（`effectiveBorderless()`）と一致させるため、regions が null でなくなる（2窓モードに
    * 入る）瞬間にここで即座に隠す。null 解除時（2窓モード終了）は次の `updateNameDisplay` で
    * 正しい状態に戻るので触らない。
+   *
+   * ▼インジケータグリフの色（#447）も `dualWindowActive` に連動するため、regions 確定直後に
+   * `indicatorGlyph.style` を再生成する（2窓モードに入った瞬間に旧・水色のまま残る/2窓モードを
+   * 抜けた瞬間に話者色のまま残る、の両方を防ぐ）。
    */
   setDualWindowRegions(regions: DualWindowTextRegions | null): void {
     this.dualWindowRegions = regions
+    this.indicatorGlyph.style = this.makeIndicatorGlyphStyle()
     if (regions !== null) {
       this.nameBox.visible = false
       this.nameText.visible = false
@@ -634,11 +649,14 @@ export class DialogBox extends Container {
    * 2窓モード (#444) で次に表示する話者側を指定する。`setDialog`/`setNovelDialogProgressive`
    * より前に呼ぶこと（呼ばれた時点の boxX/Y/W/H を使ってテキスト/ルビ/インジケータを
    * 配置するため）。`dualWindowRegions` が null（2窓モード無効）のときは no-op。
+   *
+   * ▼インジケータグリフの色（#447）もここでロール（self=白/opponent=水色）に連動させる。
    */
   setDualWindowActiveRole(role: 'self' | 'opponent'): void {
     if (!this.dualWindowRegions) return
     if (this.dualWindowActiveRole === role) return
     this.dualWindowActiveRole = role
+    this.indicatorGlyph.style = this.makeIndicatorGlyphStyle()
     if (this.novelMode) {
       this.applyNovelGeometry()
     } else {
@@ -1087,11 +1105,7 @@ export class DialogBox extends Container {
         fontWeight: 'bold',
       })
     }
-    this.indicatorGlyph.style = new TextStyle({
-      fontFamily: family,
-      fontSize: 20,
-      fill: 0xa8dadc,
-    })
+    this.indicatorGlyph.style = this.makeIndicatorGlyphStyle()
     if (this.currentText) {
       const font = `${this.fontSize}px ${this.fontFamily}`
       const maxTextWidth = this.maxTextWidth()
@@ -1532,6 +1546,26 @@ export class DialogBox extends Container {
       fill: this.bodyTextColor,
       lineHeight: this.lineHeight(),
       dropShadow: this.effectiveBorderless() ? BORDERLESS_DROP_SHADOW : false,
+    })
+  }
+
+  /**
+   * ▼インジケータグリフの色を現在の状態から決定する (#447)。2窓モードでなければ従来の水色
+   * （非回帰）。2窓モードでは `dualWindowActiveRole` に連動: 自分=白 / 相手=水色。
+   */
+  private indicatorGlyphColor(): number {
+    if (!this.dualWindowActive) return INDICATOR_GLYPH_COLOR
+    return this.dualWindowActiveRole === 'self'
+      ? DUAL_WINDOW_SELF_INDICATOR_COLOR
+      : DUAL_WINDOW_OPPONENT_INDICATOR_COLOR
+  }
+
+  /** ▼インジケータグリフ用 TextStyle を作る (#447)。フォント切替・2窓ロール切替の両方から呼ぶ。 */
+  private makeIndicatorGlyphStyle(): TextStyle {
+    return new TextStyle({
+      fontFamily: this.fontFamily,
+      fontSize: 20,
+      fill: this.indicatorGlyphColor(),
     })
   }
 
