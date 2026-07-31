@@ -1409,6 +1409,13 @@ export class DialogBox extends Container {
       this.indicator.y = this.indicatorBaseY
       return
     }
+    if (this.dualWindowActive) {
+      // 2窓モード (#447 指摘1): 端末/ドット風の世界観にバウンスが合わないという kako-jun の
+      // 実機指摘を受け、フォールバック▼グリフも画像フレームと同様に静止させる（他ゲームの
+      // 従来バウンスは非2窓なので下の分岐のまま非回帰）。
+      this.indicator.y = this.indicatorBaseY
+      return
+    }
     // グリフ fallback 用の従来バウンス。画像フレームは自前で動くため揺らさない。
     this.indicatorTime = (this.indicatorTime + deltaMs / 1000) % ((2 * Math.PI) / 3)
     this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
