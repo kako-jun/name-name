@@ -150,6 +150,37 @@ export function computeSplitLayoutRegions(
   }
 }
 
+/** `splitTextRegionForDualWindow` の結果 (#444)。話者別2窓（相手=上/自分=下）のテキスト領域。 */
+export interface DualWindowTextRegions {
+  /** 相手側テキストウィンドウ（上半分）。 */
+  opponent: LayoutRect
+  /** 自分側テキストウィンドウ（下半分）。 */
+  self: LayoutRect
+}
+
+/**
+ * split_layout (#442) のテキスト領域（`computeSplitLayoutRegions(...).text`）を、話者別2窓
+ * （相手=上 / 自分=下）にさらに上下2分割する純粋関数 (#444)。
+ *
+ * Issue #444 確定仕様: `split_layout: true` + `protagonist:` 指定時、テキスト領域を上下2つの
+ * ウィンドウに固定配置する（横長時は正方形2つを横に並べた形をさらに上下に割る、縦長時は同じ構造を
+ * 90度回転）。`computeSplitLayoutRegions` が既に orientation（landscape/portrait）を
+ * `text.height` に折り込み済みのため、この関数はどちらの orientation でも同じ式で良い
+ * （`text.width` は左右方向に分割しないためそのまま両ウィンドウで共有する）。
+ *
+ * 上半分＝相手（opponent、話者 ≠ protagonist）、下半分＝自分（self、話者 = protagonist）固定。
+ * 隙間なく2等分する（opponent.height + self.height === text.height）。奇数 px の端数は
+ * self（下）側が吸収する（`computeSplitLayoutRegions` と同じ「後半が残差を引き取る」規約）。
+ * Math.random など非決定要素は使わない決定論的写像。
+ */
+export function splitTextRegionForDualWindow(text: LayoutRect): DualWindowTextRegions {
+  const half = text.height / 2
+  return {
+    opponent: { x: text.x, y: text.y, width: text.width, height: half },
+    self: { x: text.x, y: text.y + half, width: text.width, height: text.height - half },
+  }
+}
+
 /**
  * CSS カラー文字列（"#1a4a7a" / "#222" / "1a4a7a"）を Pixi の数値カラーに変換する純粋関数 (#270 / #273)。
  *
