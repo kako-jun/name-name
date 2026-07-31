@@ -1043,6 +1043,45 @@ describe('NovelPlayer splitLayout の renderer 転送 (#442)', () => {
   })
 })
 
+// --- #448: sentencePerPage prop を renderer.setSentencePerPage に転送する ---
+//
+// NovelPlayer は init 時（setEvents/setScenes より前）と、sentencePerPage 変化時の専用 useEffect の
+// 双方で renderer.setSentencePerPage(sentencePerPage ?? null) を呼ぶ。frontmatter `sentence_per_page:`
+// が PlayerScreen/EditorScreen → NovelPlayer prop → renderer まで届く配線を、スタブ renderer の
+// 呼び出しで縛る（splitLayout #442 と対称の配線パターン）。
+describe('NovelPlayer sentencePerPage の renderer 転送 (#448)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  it('sentencePerPage={true} なら renderer.setSentencePerPage が true で呼ばれる', async () => {
+    render(<NovelPlayer events={[]} sentencePerPage={true} />)
+    await flushAsync()
+    expect(lastRenderer().setSentencePerPage).toHaveBeenCalledWith(true)
+  })
+
+  it('sentencePerPage 未指定なら renderer.setSentencePerPage が null で呼ばれる（?? null・既定 false 相当）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(lastRenderer().setSentencePerPage).toHaveBeenCalledWith(null)
+  })
+
+  it('sentencePerPage={null} でも null で呼ばれる（明示 null＝既定の従来ページングのまま）', async () => {
+    render(<NovelPlayer events={[]} sentencePerPage={null} />)
+    await flushAsync()
+    expect(lastRenderer().setSentencePerPage).toHaveBeenCalledWith(null)
+  })
+
+  it('sentencePerPage を false→true に変更すると setSentencePerPage が true で再コールされる（専用 useEffect の状態遷移）', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} sentencePerPage={false} />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.setSentencePerPage).toHaveBeenCalledWith(false)
+
+    rerender(<NovelPlayer events={[]} sentencePerPage={true} />)
+    await flushAsync()
+    expect(r.setSentencePerPage).toHaveBeenCalledWith(true)
+  })
+})
+
 // --- #442: 非 fluid（aspect_ratio 16:9/4:3/9:16/未指定）では aspectRatio 変更で再マウントしない ---
 //
 // mount effect の依存配列は [fluidRemountKey] のみ。fluid（aspect_ratio: auto）以外は
