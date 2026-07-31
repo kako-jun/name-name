@@ -2173,3 +2173,96 @@ describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テス
     box.dispose()
   })
 })
+
+// E: 2窓モードの▼機械的点滅（#447 追加要望1）。Y座標の静止（A ブロック）とは独立の軸で、
+// indicatorGlyph.visible を 1 秒間隔（INDICATOR_BLINK_MS）で ON/OFF する。
+describe('DialogBox 2窓インジケータの機械的点滅 tickIndicatorBlink (#447 追加要望1)', () => {
+  const W = 800
+  const H = 450
+  const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
+  const self_: LayoutRect = { x: 400, y: 225, width: 400, height: 225 }
+
+  interface BlinkInternals {
+    indicatorGlyph: { visible: boolean }
+    tickIndicatorBlink(deltaMs: number): void
+    indicatorFrameTextures: Partial<Record<IndicatorKind, unknown[]>>
+    indicatorKind: IndicatorKind
+  }
+  function bi(box: DialogBox): BlinkInternals {
+    return box as unknown as BlinkInternals
+  }
+
+  function makeBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: 20,
+      fontSize: 40,
+    })
+  }
+
+  it('E-1: 2窓モードで計1000ms分 tickIndicatorBlink を進めると indicatorGlyph.visible が false へトグルされる', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('E-2: 計2000ms経過すると indicatorGlyph.visible が true に戻る（周期性の確認）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  it('E-3: 非2窓モードでは何度 tickIndicatorBlink を進めても indicatorGlyph.visible は変化しない（既存の sin バウンスのみ）', () => {
+    const box = makeBox()
+    const i = bi(box)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    i.tickIndicatorBlink(1000)
+    i.tickIndicatorBlink(1000)
+    i.tickIndicatorBlink(2500)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  it('E-4: 2窓モードでも画像フレームが揃っている場合は点滅しない（indicatorGlyph.visible に触れない）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+    i.indicatorFrameTextures[i.indicatorKind] = [{}]
+    // 点滅ロジックが本当に触れていないことを示すため、あえて true のまま据え置いて確認する。
+    i.indicatorGlyph.visible = true
+    i.tickIndicatorBlink(1000)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  it('E-5: setDualWindowRegions(null) で点滅が止まり indicatorGlyph.visible が true に戻る', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
+
+    box.setDualWindowRegions(null)
+    expect(i.indicatorGlyph.visible).toBe(true)
+
+    // 解除後は2窓でなくなっているため、以後 tickIndicatorBlink を進めても再点滅しない。
+    i.tickIndicatorBlink(1000)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+})

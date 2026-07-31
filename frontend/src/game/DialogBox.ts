@@ -186,6 +186,12 @@ const INDICATOR_IMAGE_SIZE = 32
 const INDICATOR_FRAME_MS = 360
 
 /**
+ * 2窓モード (#447 追加要望1) の▼グリフ点滅間隔（ms）。端末カーソル風の機械的な ON/OFF
+ * （なめらかなフェードではない）。
+ */
+const INDICATOR_BLINK_MS = 1000
+
+/**
  * novel スタイル (#283) のテキスト領域マージン（px、論理座標）。
  * 全画面ノベル（ToHeart 式）では画面の大半をテキストに使う。本文は左上付近から始め、
  * 左右・上下に小さな余白を残す。テストが参照できるよう export する。
@@ -243,6 +249,9 @@ export class DialogBox extends Container {
   private indicatorTime = 0
   private indicatorFrameElapsed = 0
   private indicatorFrameIndex = 0
+  /** 2窓モード点滅 (#447 追加要望1) の累積経過時間（ms）・現在の ON/OFF 状態。 */
+  private indicatorBlinkElapsed = 0
+  private indicatorBlinkOn = true
   private indicatorAssetBaseUrl = ''
   private indicatorFrameTextures: Partial<Record<IndicatorKind, Texture[]>> = {}
   private failedIndicatorKinds = new Set<IndicatorKind>()
@@ -471,6 +480,7 @@ export class DialogBox extends Container {
     this.ticker.add(() => {
       this.tickIndicatorFrame(this.ticker.deltaMS)
       this.tickIndicatorMotion(this.ticker.deltaMS)
+      this.tickIndicatorBlink(this.ticker.deltaMS)
 
       // typewriter
       if (isTypingActive(this.typewriter)) {
@@ -630,6 +640,11 @@ export class DialogBox extends Container {
    * ▼インジケータグリフの色（#447）も `dualWindowActive` に連動するため、regions 確定直後に
    * `indicatorGlyph.style` を再生成する（2窓モードに入った瞬間に旧・水色のまま残る/2窓モードを
    * 抜けた瞬間に話者色のまま残る、の両方を防ぐ）。
+   *
+   * ▼インジケータの点滅（#447 追加要望1）も `dualWindowActive` 連動なので、regions が null に
+   * なった瞬間に点滅タイマーをリセットする。可視性自体は `applyIndicatorFrame()` に再計算させる
+   * （画像フレームがある作品ではグリフでなくスプライト側が正しい表示のため、blind に
+   * `visible = true` を代入すると2窓解除直後にグリフがスプライトへ重なって一瞬見えてしまう）。
    */
   setDualWindowRegions(regions: DualWindowTextRegions | null): void {
     this.dualWindowRegions = regions
@@ -638,6 +653,11 @@ export class DialogBox extends Container {
       this.nameBox.visible = false
       this.nameText.visible = false
       if (this.inlineNameText) this.inlineNameText.visible = false
+    } else {
+      // 2窓モード終了: 点滅を止め、OFF位相のまま抜けて▼が消えたまま残る事故を防ぐ。
+      this.indicatorBlinkElapsed = 0
+      this.indicatorBlinkOn = true
+      this.applyIndicatorFrame()
     }
     if (this.novelMode) {
       this.applyNovelGeometry()
@@ -1442,6 +1462,31 @@ export class DialogBox extends Container {
     // グリフ fallback 用の従来バウンス。画像フレームは自前で動くため揺らさない。
     this.indicatorTime = (this.indicatorTime + deltaMs / 1000) % ((2 * Math.PI) / 3)
     this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
+  }
+
+  /**
+   * 2窓モード (#447 追加要望1) の▼グリフを 1 秒間隔で機械的に点滅させる（端末カーソル風。
+   * なめらかなフェードではなく visible を ON/OFF でカチッと切り替える）。
+   *
+   * `tickIndicatorMotion` が担う Y座標の静止とは独立の軸: 位置には触れず可視性だけを反転する。
+   * 画像フレーム（`hasIndicatorImages()`）のときは対象外（グリフフォールバック限定の演出。
+   * 既存の sin バウンスも画像フレームには適用されない設計なので同じ条件分岐に倣う）。
+   * 2窓モードでないとき、または画像フレームがあるときは `indicatorGlyph.visible` に触れない
+   * （可視性は `applyIndicatorFrame()` 等の既存ロジックに委ねる）。累積値だけリセットしておき、
+   * 次に2窓モード・グリフフォールバックへ入った瞬間に ON（可視）から点滅を開始できるようにする。
+   */
+  private tickIndicatorBlink(deltaMs: number): void {
+    if (this.hasIndicatorImages() || !this.dualWindowActive) {
+      this.indicatorBlinkElapsed = 0
+      this.indicatorBlinkOn = true
+      return
+    }
+    this.indicatorBlinkElapsed += deltaMs
+    while (this.indicatorBlinkElapsed >= INDICATOR_BLINK_MS) {
+      this.indicatorBlinkElapsed -= INDICATOR_BLINK_MS
+      this.indicatorBlinkOn = !this.indicatorBlinkOn
+    }
+    this.indicatorGlyph.visible = this.indicatorBlinkOn
   }
 
   /**
