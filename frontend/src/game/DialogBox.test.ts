@@ -2130,11 +2130,13 @@ describe('DialogBox 2窓インジケータの位置 positionIndicator 非novel (
 
 // D: Part 1（redraw() 巻き戻りバグ）の回帰テスト。setDualWindowActiveRole() は非novelのとき
 // redraw() を呼ぶため、修正前は末尾の旧式直書きが positionIndicator() の結果を上書きしていた。
-// #450 で positionIndicator() の非novel経路自体が固定式に戻ったため「旧固定値と異なる」という
-// 検証はもう成立しない（両者が同じ式になった）。テストの意図（redraw() 経由でも
-// positionIndicator() 単体呼び出しでも同じ値になるべき、という一貫性）自体は生きているので、
-// redraw() が独自の直書きに戻っていないことを「redraw() 経由の値と positionIndicator() を
-// 直接呼んだ値が一致する」比較で縛り直す。
+// #450 で positionIndicator() の非novel経路自体が固定式に戻ったため、redraw() 経由の値と
+// positionIndicator() 直接呼び出しの値を比較するだけでは boxX/boxY/boxW/boxH が不変な限り
+// 常に一致してしまい（同じ固定式を読むだけ）、「redraw() が旧式を独自に直書きしていない」の
+// 確認として弱い（positionIndicator() が一度も呼ばれず indicatorBaseY が直前のロールのまま
+// stale で残るケースしか検出できない）。そこで vi.spyOn で positionIndicator() 自体に
+// スパイを立て、redraw() および setDualWindowActiveRole() の内部から実際に positionIndicator()
+// が呼ばれていることを直接縛る（値の一致ではなく呼び出しの有無を検証する、より強い回帰pin）。
 describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テスト (#447 Part 1 / #450)', () => {
   const W = 800
   const H = 450
@@ -2165,16 +2167,26 @@ describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テス
     })
   }
 
-  it("D-1: ADV+2窓で setDualWindowActiveRole('opponent') を呼んだ直後の indicatorBaseY が、positionIndicator() を直接呼んだ値と一致する（redraw() が旧式を独自に直書きしていない回帰確認）", () => {
+  it("D-1: ADV+2窓で redraw() と setDualWindowActiveRole('opponent') が実際に positionIndicator() を呼ぶ（redraw() が旧式を独自に直書きしていない回帰確認）", () => {
     const box = makeBox()
     box.setDualWindowRegions({ opponent, self: self_ })
     box.setDialog(null, 'テスト用のセリフです。')
     box.skipTypewriter()
-    box.setDualWindowActiveRole('opponent')
     const i = ri(box)
-    const viaRedraw = i.indicatorBaseY
-    i.positionIndicator()
-    expect(i.indicatorBaseY).toBe(viaRedraw)
+
+    const spy = vi.spyOn(i, 'positionIndicator')
+
+    // setDualWindowActiveRole() は非novelのとき内部で redraw() を呼ぶ経路。
+    spy.mockClear()
+    box.setDualWindowActiveRole('opponent')
+    expect(spy).toHaveBeenCalled()
+
+    // redraw() 単体でも positionIndicator() を呼ぶことを別途縛る（直書きへの巻き戻り検出）。
+    spy.mockClear()
+    box.redraw(W, H)
+    expect(spy).toHaveBeenCalled()
+
+    spy.mockRestore()
     // #450: 実値そのものも右下固定式（boxY+boxH-30）であることを併せて確認する。
     expect(i.indicatorBaseY).toBe(i.boxY + i.boxH - 30)
     box.dispose()
