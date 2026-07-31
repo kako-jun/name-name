@@ -1170,6 +1170,29 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
   })
 })
 
+// #444: fluid（aspect_ratio: auto）モードで splitLayout={true} を渡すと、pickFluidAspectRatio が
+// 通常の 16:9/9:16 ではなく 2:1/1:2（split_layout 2窓モード用に半分がちょうど正方形になる専用比率）
+// を選ぶ。ここではキャンバス箱（`.overflow-hidden` — gameBoxStyle を当てる containerRef 要素）の
+// CSS `aspect-ratio` に実際にその値が反映されることを結合レベルで確認する。
+// jsdom の window.innerWidth/innerHeight は既定 1024×768（横長）— K 群のコメントと同じ前提。
+describe('NovelPlayer fluid + splitLayout の CSS aspect-ratio 配線 (#444)', () => {
+  const gameBox = () => document.querySelector('.overflow-hidden') as HTMLElement | null
+
+  it('NP-1: aspectRatio="auto" + splitLayout={true} + 横長ビューポートで CSS aspect-ratio が "900 / 450"（2:1）になる', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" splitLayout={true} />)
+    await flushAsync()
+
+    expect(gameBox()?.style.aspectRatio).toBe('900 / 450')
+  })
+
+  it('NP-3: 非破壊 — aspectRatio="auto" + splitLayout 未指定（??false）では従来どおり "800 / 450"（16:9）のまま', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+
+    expect(gameBox()?.style.aspectRatio).toBe('800 / 450')
+  })
+})
+
 // #413: インジケータ画像（next/pageturn 各4枚=計8枚）の先読み useEffect。
 // `renderer`/`rendererRef` を一切参照しない、`[assetBaseUrl]` だけに依存する独立 effect（下の
 // renderer 生成/init effect とは別物）であることが本題。pixi.js はこのテストファイルでは

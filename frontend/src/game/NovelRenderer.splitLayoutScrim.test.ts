@@ -17,7 +17,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { computeSplitLayoutRegions } from './novelLayout'
-import type { AspectRatio } from './constants'
+import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO, type AspectRatio } from './constants'
 
 interface FakeScrimGraphics {
   visible: boolean
@@ -107,5 +107,50 @@ describe('NovelRenderer split_layout + novelScrim 矩形 (#442 self-review must-
     // attachFakeScrim を呼ばない = novelScrim は null のまま。
     expect(() => renderer.setSplitLayout(true)).not.toThrow()
     expect(() => renderer.setSplitLayout(false)).not.toThrow()
+  })
+
+  // #444: 2窓モード（split_layout:true + protagonist 指定）が成立していても、novelScrim は
+  // 話者別2窓（相手上/自分下）に追従して分割されず、従来どおり split_layout のテキスト領域
+  // 全体（computeSplitLayoutRegions(...).text）のまま——という非破壊確認（E群 / NR-15）。
+  it('2窓モード (#444: split_layout:true + protagonist 設定) でも novelScrim の矩形は分割されず computeSplitLayoutRegions(...).text 全体のまま', () => {
+    const renderer = makeRenderer('16:9')
+    const scrim = attachFakeScrim(renderer)
+    const { screenWidth, screenHeight } = scrimInternals(renderer)
+
+    renderer.setProtagonist('せお')
+    renderer.setSplitLayout(true)
+
+    const region = computeSplitLayoutRegions(screenWidth, screenHeight).text
+    expect(scrim.rect).toHaveBeenLastCalledWith(region.x, region.y, region.width, region.height)
+  })
+})
+
+// #444: NovelRenderer コンストラクタの aspectRatio 解決（実バグの回帰pin）。
+//
+// 修正前は `parseAspectRatio(config?.aspectRatio)` を通していたため、'2:1'/'1:2'（#444 で
+// AspectRatio 型に追加された値）が parseAspectRatio の raw 文字列パーサ（3値専用）で無効値扱いされ、
+// 黙って DEFAULT_ASPECT_RATIO（16:9・800x450）に落ちていた。修正後は「呼び出し側で検証済みの
+// AspectRatio が渡される」前提で ASPECT_RATIOS を直接引き、未指定時だけ DEFAULT_ASPECT_RATIO に
+// フォールバックする。
+describe('NovelRenderer コンストラクタの aspectRatio 解決 (#444 回帰pin)', () => {
+  it('aspectRatio: "2:1" は内部 screenWidth/screenHeight が 900/450 になる（黙って16:9に落ちない）', () => {
+    const renderer = makeRenderer('2:1')
+    const { screenWidth, screenHeight } = scrimInternals(renderer)
+    expect(screenWidth).toBe(900)
+    expect(screenHeight).toBe(450)
+  })
+
+  it('aspectRatio: "1:2" は内部 screenWidth/screenHeight が 450/900 になる（黙って9:16に落ちない）', () => {
+    const renderer = makeRenderer('1:2')
+    const { screenWidth, screenHeight } = scrimInternals(renderer)
+    expect(screenWidth).toBe(450)
+    expect(screenHeight).toBe(900)
+  })
+
+  it('対照: aspectRatio: undefined は従来どおり DEFAULT_ASPECT_RATIO(16:9・800x450) にフォールバックする', () => {
+    const renderer = new NovelRenderer({ aspectRatio: undefined })
+    const { screenWidth, screenHeight } = scrimInternals(renderer)
+    expect(screenWidth).toBe(ASPECT_RATIOS[DEFAULT_ASPECT_RATIO].width)
+    expect(screenHeight).toBe(ASPECT_RATIOS[DEFAULT_ASPECT_RATIO].height)
   })
 })
