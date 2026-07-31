@@ -752,9 +752,10 @@ export class DialogBox extends Container {
     this.dialogText.y = this.textStartY()
     this.rubyContainer.x = this.dialogText.x
     this.rubyContainer.y = this.dialogText.y
-    this.indicator.x = this.boxX + this.boxW - 40
-    this.indicatorBaseY = this.boxY + this.boxH - 30
-    this.indicator.y = this.indicatorBaseY
+    // インジケータ配置は positionIndicator() 経由に統一する（#447）。ここで旧来の右下固定
+    // （boxX+boxW-40, boxY+boxH-30）を直書きすると、2窓 adv で setDualWindowActiveRole() が
+    // 呼ぶ redraw() のたびに文末配置（#447 Part 3）を上書きして旧固定位置へ巻き戻ってしまう。
+    this.positionIndicator()
 
     // 名前テキスト位置
     this.nameText.x = this.boxX + this.padding + 8
