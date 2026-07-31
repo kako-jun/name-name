@@ -169,8 +169,34 @@ const INDICATOR_GLYPH: Record<IndicatorKind, string> = {
   pageturn: '❯',
 }
 
+/** インジケータグリフの既定色（淡い水色）。2窓モードでない全ゲーム共通・非回帰。 */
+const INDICATOR_GLYPH_COLOR = 0xa8dadc
+
+/**
+ * 2窓モード (#444 / #447) の▼グリフ色。kako-jun 実機指摘3（静止した白/水色の▼で十分）を受け、
+ * 自分(self)アクティブ時=白・相手(opponent)アクティブ時=水色にする。NovelRenderer の
+ * `RESIDENT_TEXT_COLOR` / `OPPONENT_TEXT_COLOR`（#305 本文色、TUI 版 gymnasia#39 準拠）と
+ * 同じ値を再利用する。DialogBox → NovelRenderer の逆依存は作れないため値は複製しているが、
+ * 変更する場合は両方揃えること。
+ */
+const DUAL_WINDOW_SELF_INDICATOR_COLOR = 0xffffff
+const DUAL_WINDOW_OPPONENT_INDICATOR_COLOR = 0x9ad4e8
+
 const INDICATOR_IMAGE_SIZE = 32
 const INDICATOR_FRAME_MS = 360
+
+/**
+ * 2窓モード (#447 追加要望1) の▼グリフ点滅間隔（ms）。端末カーソル風の機械的な ON/OFF
+ * （なめらかなフェードではない）。
+ */
+const INDICATOR_BLINK_MS = 1000
+
+/**
+ * ▼グリフの縦方向スケール (#447 追加要望2)。1 未満にして平べったく見せる。2窓モード限定の
+ * 演出ではなく（話者色・点滅と異なりグリフ自体の形状の話のため）全ゲーム共通・常時適用する。
+ * kako-jun が実機で見て微調整する前提の初期値。
+ */
+const INDICATOR_GLYPH_SCALE_Y = 0.6
 
 /**
  * novel スタイル (#283) のテキスト領域マージン（px、論理座標）。
@@ -230,6 +256,9 @@ export class DialogBox extends Container {
   private indicatorTime = 0
   private indicatorFrameElapsed = 0
   private indicatorFrameIndex = 0
+  /** 2窓モード点滅 (#447 追加要望1) の累積経過時間（ms）・現在の ON/OFF 状態。 */
+  private indicatorBlinkElapsed = 0
+  private indicatorBlinkOn = true
   private indicatorAssetBaseUrl = ''
   private indicatorFrameTextures: Partial<Record<IndicatorKind, Texture[]>> = {}
   private failedIndicatorKinds = new Set<IndicatorKind>()
@@ -247,8 +276,9 @@ export class DialogBox extends Container {
    */
   private indicatorKind: IndicatorKind = 'next'
   /**
-   * novel モードのインジケータ配置に使う、現在の累積表示テキストの wordwrap 結果 (#292)。
-   * setNovelDialogProgressive で更新する。adv モードでは使わない（右下固定のまま）。
+   * 文末インジケータ配置に使う、現在の表示テキストの wordwrap 結果 (#292 / #447)。
+   * setNovelDialogProgressive（novel）と setDialog（adv）の両方で更新する。2窓モードでない
+   * adv では positionIndicator() が右下固定のため参照されない（非2窓 adv は非回帰）。
    */
   private novelWrappedLines: string[] = []
   // --- portrait ---
@@ -433,13 +463,14 @@ export class DialogBox extends Container {
     this.addChild(this.rubyContainer)
 
     // --- ▼インジケーター ---
-    const indicatorStyle = new TextStyle({
-      fontFamily,
-      fontSize: 20,
-      fill: 0xa8dadc,
-    })
     this.indicator = new Container()
-    this.indicatorGlyph = new Text({ text: '▼', style: indicatorStyle })
+    // makeIndicatorGlyphStyle() はこの時点で必要な this.fontFamily / dualWindowActive の両方が
+    // 既に確定済み（前者は上のコンストラクタ冒頭、後者はクラスフィールド初期値 null）(#447)。
+    this.indicatorGlyph = new Text({ text: '▼', style: this.makeIndicatorGlyphStyle() })
+    // ▼を縦方向にやや潰す (#447 追加要望2)。scale は Text の transform（style/text とは独立）
+    // なので、setIndicatorKind() 等が後で style/text を再設定してもリセットされない。生成が
+    // 1 箇所（ここ）だけなので、この 1 行だけで以降ずっと保持される。
+    this.indicatorGlyph.scale.y = INDICATOR_GLYPH_SCALE_Y
     // 既定は表示 (#413)。画像フレームの fetch が実際に始まった（pendingIndicatorKinds に載る）
     // 種別だけ applyIndicatorFrame() が一時的に隠す。fetch を一度も試みていない作品（画像なし・
     // RPG モード等）はここでの true のまま＝非回帰で ▼ が即表示される。
@@ -460,6 +491,7 @@ export class DialogBox extends Container {
     this.ticker.add(() => {
       this.tickIndicatorFrame(this.ticker.deltaMS)
       this.tickIndicatorMotion(this.ticker.deltaMS)
+      this.tickIndicatorBlink(this.ticker.deltaMS)
 
       // typewriter
       if (isTypingActive(this.typewriter)) {
@@ -481,7 +513,7 @@ export class DialogBox extends Container {
         }
       }
 
-      this.indicator.visible = this.indicatorWanted && !isTypingActive(this.typewriter)
+      this.applyIndicatorContainerVisibility()
     })
     this.ticker.start()
   }
@@ -615,13 +647,28 @@ export class DialogBox extends Container {
    * 不変条件（`effectiveBorderless()`）と一致させるため、regions が null でなくなる（2窓モードに
    * 入る）瞬間にここで即座に隠す。null 解除時（2窓モード終了）は次の `updateNameDisplay` で
    * 正しい状態に戻るので触らない。
+   *
+   * ▼インジケータグリフの色（#447）も `dualWindowActive` に連動するため、regions 確定直後に
+   * `indicatorGlyph.style` を再生成する（2窓モードに入った瞬間に旧・水色のまま残る/2窓モードを
+   * 抜けた瞬間に話者色のまま残る、の両方を防ぐ）。
+   *
+   * ▼インジケータの点滅（#447 追加要望1）も `dualWindowActive` 連動なので、regions が null に
+   * なった瞬間に点滅タイマーをリセットする。可視性自体は `applyIndicatorFrame()` に再計算させる
+   * （画像フレームがある作品ではグリフでなくスプライト側が正しい表示のため、blind に
+   * `visible = true` を代入すると2窓解除直後にグリフがスプライトへ重なって一瞬見えてしまう）。
    */
   setDualWindowRegions(regions: DualWindowTextRegions | null): void {
     this.dualWindowRegions = regions
+    this.indicatorGlyph.style = this.makeIndicatorGlyphStyle()
     if (regions !== null) {
       this.nameBox.visible = false
       this.nameText.visible = false
       if (this.inlineNameText) this.inlineNameText.visible = false
+    } else {
+      // 2窓モード終了: 点滅を止め、OFF位相のまま抜けて▼が消えたまま残る事故を防ぐ。
+      this.indicatorBlinkElapsed = 0
+      this.indicatorBlinkOn = true
+      this.applyIndicatorFrame()
     }
     if (this.novelMode) {
       this.applyNovelGeometry()
@@ -634,11 +681,14 @@ export class DialogBox extends Container {
    * 2窓モード (#444) で次に表示する話者側を指定する。`setDialog`/`setNovelDialogProgressive`
    * より前に呼ぶこと（呼ばれた時点の boxX/Y/W/H を使ってテキスト/ルビ/インジケータを
    * 配置するため）。`dualWindowRegions` が null（2窓モード無効）のときは no-op。
+   *
+   * ▼インジケータグリフの色（#447）もここでロール（self=白/opponent=水色）に連動させる。
    */
   setDualWindowActiveRole(role: 'self' | 'opponent'): void {
     if (!this.dualWindowRegions) return
     if (this.dualWindowActiveRole === role) return
     this.dualWindowActiveRole = role
+    this.indicatorGlyph.style = this.makeIndicatorGlyphStyle()
     if (this.novelMode) {
       this.applyNovelGeometry()
     } else {
@@ -733,9 +783,10 @@ export class DialogBox extends Container {
     this.dialogText.y = this.textStartY()
     this.rubyContainer.x = this.dialogText.x
     this.rubyContainer.y = this.dialogText.y
-    this.indicator.x = this.boxX + this.boxW - 40
-    this.indicatorBaseY = this.boxY + this.boxH - 30
-    this.indicator.y = this.indicatorBaseY
+    // インジケータ配置は positionIndicator() 経由に統一する（#447）。ここで旧来の右下固定
+    // （boxX+boxW-40, boxY+boxH-30）を直書きすると、2窓 adv で setDualWindowActiveRole() が
+    // 呼ぶ redraw() のたびに文末配置（#447 Part 3）を上書きして旧固定位置へ巻き戻ってしまう。
+    this.positionIndicator()
 
     // 名前テキスト位置
     this.nameText.x = this.boxX + this.padding + 8
@@ -804,6 +855,9 @@ export class DialogBox extends Container {
     this.typewriter = startTypewriter(lines.join('\n'))
     this.dialogText.text = ''
     this.indicator.visible = false
+    // 2窓モード (#447) の adv 文末配置用に wrap 結果を保持する。非2窓 adv では positionIndicator()
+    // が右下固定のまま参照しないため無害（novelWrappedLines のドキュメント参照）。
+    this.novelWrappedLines = lines
     this.rubyPlacements = computeRubyPlacements(runs, lines)
     this.rubyBuildToken += 1
     const rubyToken = this.rubyBuildToken
@@ -1087,11 +1141,7 @@ export class DialogBox extends Container {
         fontWeight: 'bold',
       })
     }
-    this.indicatorGlyph.style = new TextStyle({
-      fontFamily: family,
-      fontSize: 20,
-      fill: 0xa8dadc,
-    })
+    this.indicatorGlyph.style = this.makeIndicatorGlyphStyle()
     if (this.currentText) {
       const font = `${this.fontSize}px ${this.fontFamily}`
       const maxTextWidth = this.maxTextWidth()
@@ -1203,7 +1253,9 @@ export class DialogBox extends Container {
   setIndicatorVisible(visible: boolean): void {
     this.indicatorWanted = visible
     if (visible) this.positionIndicator()
-    this.indicator.visible = visible && !isTypingActive(this.typewriter)
+    // #447 must: 点滅位相の ON リセットも含め、可視性確定は applyIndicatorContainerVisibility()
+    // に一本化する（ticker からの呼び出しと同じ「非表示→表示」判定を通す）。
+    this.applyIndicatorContainerVisibility()
   }
 
   /**
@@ -1259,20 +1311,24 @@ export class DialogBox extends Container {
   }
 
   /**
-   * インジケータの基準位置を現在のモードに合わせて確定する (#292)。
-   *  - novel: 表示テキストの**最後の wrap 行の右端**（文末の右）。右下固定を廃止。
-   *  - adv  : 従来どおり右下固定（`boxX + boxW - 40`, `boxY + boxH - 30`）＝非回帰。
-   * `indicatorBaseY` を設定し、x を確定する。実 y はバウンスのため ticker が base に sin を足す。
+   * インジケータの基準位置を現在のモードに合わせて確定する (#292 / #447)。
+   *  - novel、または 2窓モード (#444) の adv: 表示テキストの**最後の wrap 行の右端**（文末の右）。
+   *    2窓 adv は #447 指摘2（旧来の `boxY + boxH - 30` 固定オフセットが、2窓化で小さくなった
+   *    箱に対して実際の文末よりずっと下に浮いて見える）を解消するため novel と同じ配置にする。
+   *  - 2窓モードでない adv: 従来どおり右下固定（`boxX + boxW - 40`, `boxY + boxH - 30`）＝非回帰。
+   * `indicatorBaseY` を設定し、x を確定する。実 y は 2窓モードでは静止・それ以外はバウンスのため
+   * ticker が base に sin を足す（#447）。
    */
   private positionIndicator(): void {
-    if (!this.novelMode) {
-      // adv: 従来の右下固定。redraw 等が既に設定している x/baseY を尊重しつつ再アサート。
+    if (!this.novelMode && !this.dualWindowActive) {
+      // 2窓モードでない adv: 従来の右下固定。redraw 等が既に設定している x/baseY を尊重しつつ再アサート。
       this.indicator.x = this.boxX + this.boxW - 40
       this.indicatorBaseY = this.boxY + this.boxH - 30
       this.indicator.y = this.indicatorBaseY
       return
     }
-    // novel: 最終 wrap 行の右端へ。lines が空（未設定）なら 1 行 / 幅 0 として扱う。
+    // novel、または 2窓モードの adv (#447): 最終 wrap 行の右端へ。lines が空（未設定）なら
+    // 1 行 / 幅 0 として扱う。
     const lines = this.novelWrappedLines
     const lineCount = lines.length >= 1 ? lines.length : 1
     const lastLine = lines.length > 0 ? lines[lines.length - 1] : ''
@@ -1409,9 +1465,79 @@ export class DialogBox extends Container {
       this.indicator.y = this.indicatorBaseY
       return
     }
+    if (this.dualWindowActive) {
+      // 2窓モード (#447 指摘1): 端末/ドット風の世界観にバウンスが合わないという kako-jun の
+      // 実機指摘を受け、フォールバック▼グリフも画像フレームと同様に静止させる（他ゲームの
+      // 従来バウンスは非2窓なので下の分岐のまま非回帰）。
+      this.indicator.y = this.indicatorBaseY
+      return
+    }
     // グリフ fallback 用の従来バウンス。画像フレームは自前で動くため揺らさない。
     this.indicatorTime = (this.indicatorTime + deltaMs / 1000) % ((2 * Math.PI) / 3)
     this.indicator.y = this.indicatorBaseY + Math.sin(this.indicatorTime * 3) * 4
+  }
+
+  /**
+   * 2窓モード (#447 追加要望1) の▼グリフを 1 秒間隔で機械的に点滅させる（端末カーソル風。
+   * なめらかなフェードではなく visible を ON/OFF でカチッと切り替える）。
+   *
+   * `tickIndicatorMotion` が担う Y座標の静止とは独立の軸: 位置には触れず可視性だけを反転する。
+   * 画像フレーム（`hasIndicatorImages()`）のときは対象外（グリフフォールバック限定の演出。
+   * 既存の sin バウンスも画像フレームには適用されない設計なので同じ条件分岐に倣う）。
+   * 2窓モードでないとき、または画像フレームがあるときは `indicatorGlyph.visible` に触れない
+   * （可視性は `applyIndicatorFrame()` 等の既存ロジックに委ねる）。累積値だけリセットしておき、
+   * 次に2窓モード・グリフフォールバックへ入った瞬間に ON（可視）から点滅を開始できるようにする。
+   */
+  private tickIndicatorBlink(deltaMs: number): void {
+    if (this.hasIndicatorImages() || !this.dualWindowActive) {
+      this.indicatorBlinkElapsed = 0
+      this.indicatorBlinkOn = true
+      return
+    }
+    // tickIndicatorFrame と同じ O(1) スタイル（累積 → Math.floor で経過ステップ数を出し、
+    // %= で余りに丸める）に揃える。奇数ステップ分だけ ON/OFF が反転する（偶数ステップは往復して元に戻る）。
+    this.indicatorBlinkElapsed += deltaMs
+    const steps = Math.floor(this.indicatorBlinkElapsed / INDICATOR_BLINK_MS)
+    if (steps > 0) {
+      this.indicatorBlinkElapsed %= INDICATOR_BLINK_MS
+      if (steps % 2 === 1) {
+        this.indicatorBlinkOn = !this.indicatorBlinkOn
+      }
+    }
+    this.indicatorGlyph.visible = this.indicatorBlinkOn
+  }
+
+  /**
+   * `indicator` コンテナの可視性を「非表示 → 表示」の遷移として確定する (#447 self-review must)。
+   *
+   * `tickIndicatorBlink` は `indicator` が実際に見えているかに関わらず毎フレーム無条件に呼ばれる
+   * ため、`indicatorBlinkElapsed` はタイプ表示中（`indicator` 自体が非表示）も壁時計時間で積み
+   * 上がり続ける。その状態のままタイプが完了して `indicator` が実際に見える瞬間を迎えると、
+   * `indicatorGlyph.visible` が壁時計基準で ON/OFF どちらになっているか分からず、約半分の行で
+   * 「読み終わって送りたいのに▼が最大1秒近く見えない」事故になっていた。
+   *
+   * ここで「今フレームの新しい可視状態」と「直前の可視状態」を比較し、非表示 → 表示へ切り替わる
+   * 瞬間だけ点滅位相を `indicatorBlinkElapsed = 0` / `indicatorBlinkOn = true`（ON）へ明示リセット
+   * する。2窓モードのグリフ点滅（画像フレームなし）が対象で、画像フレーム表示中はグリフの
+   * 可視性を `applyIndicatorFrame()` に委ねるため触らない。
+   *
+   * ticker（毎フレーム）と `setIndicatorVisible`（NovelRenderer からの明示呼び出し。タイプが
+   * 既に完了済み＝msPerChar=0 やページ内で追加文字が無いケースはここが実際の遷移点になる）の
+   * 両方から呼ぶ — どちらが本番で実際の遷移フレームになるかは呼び出し順とタイミング次第のため。
+   */
+  private applyIndicatorContainerVisibility(): void {
+    const newVisible = this.indicatorWanted && !isTypingActive(this.typewriter)
+    if (
+      newVisible &&
+      !this.indicator.visible &&
+      this.dualWindowActive &&
+      !this.hasIndicatorImages()
+    ) {
+      this.indicatorBlinkElapsed = 0
+      this.indicatorBlinkOn = true
+      this.indicatorGlyph.visible = true
+    }
+    this.indicator.visible = newVisible
   }
 
   /**
@@ -1525,6 +1651,26 @@ export class DialogBox extends Container {
       fill: this.bodyTextColor,
       lineHeight: this.lineHeight(),
       dropShadow: this.effectiveBorderless() ? BORDERLESS_DROP_SHADOW : false,
+    })
+  }
+
+  /**
+   * ▼インジケータグリフの色を現在の状態から決定する (#447)。2窓モードでなければ従来の水色
+   * （非回帰）。2窓モードでは `dualWindowActiveRole` に連動: 自分=白 / 相手=水色。
+   */
+  private indicatorGlyphColor(): number {
+    if (!this.dualWindowActive) return INDICATOR_GLYPH_COLOR
+    return this.dualWindowActiveRole === 'self'
+      ? DUAL_WINDOW_SELF_INDICATOR_COLOR
+      : DUAL_WINDOW_OPPONENT_INDICATOR_COLOR
+  }
+
+  /** ▼インジケータグリフ用 TextStyle を作る (#447)。フォント切替・2窓ロール切替の両方から呼ぶ。 */
+  private makeIndicatorGlyphStyle(): TextStyle {
+    return new TextStyle({
+      fontFamily: this.fontFamily,
+      fontSize: 20,
+      fill: this.indicatorGlyphColor(),
     })
   }
 

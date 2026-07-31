@@ -1934,3 +1934,423 @@ describe('DialogBox setOnTypingDone (#304 follow-up)', () => {
     box.dispose()
   })
 })
+
+// =====================================================================================
+// #447: 2窓インジケータの静止化・話者色・文末配置。テスト設計フェーズの観点表より。
+// region 値は #444 ブロックと同じ computeSplitLayoutRegions(800,450).text
+// （{x:400,y:0,width:400,height:450}）を splitTextRegionForDualWindow したもの。
+// =====================================================================================
+
+describe('DialogBox 2窓インジケータの静止化 tickIndicatorMotion (#447)', () => {
+  const W = 800
+  const H = 450
+  const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
+  const self_: LayoutRect = { x: 400, y: 225, width: 400, height: 225 }
+
+  interface MotionInternals {
+    indicator: { x: number; y: number }
+    indicatorBaseY: number
+    tickIndicatorMotion(deltaMs: number): void
+  }
+  function mi(box: DialogBox): MotionInternals {
+    return box as unknown as MotionInternals
+  }
+
+  function makeBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: 20,
+      fontSize: 40,
+    })
+  }
+
+  it('A-1: setDualWindowRegions(regions) 後、tickIndicatorMotion を複数回叩いても indicator.y === indicatorBaseY のまま変化しない', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = mi(box)
+    for (let n = 0; n < 5; n++) {
+      i.tickIndicatorMotion(16)
+      expect(i.indicator.y).toBe(i.indicatorBaseY)
+    }
+    box.dispose()
+  })
+
+  it('A-2: 非2窓では従来通りバウンスする（非回帰）', () => {
+    const box = makeBox()
+    const i = mi(box)
+    i.tickIndicatorMotion(100)
+    expect(i.indicator.y).not.toBe(i.indicatorBaseY)
+    box.dispose()
+  })
+
+  it('A-3: setDualWindowRegions(regions)→静止確認→setDualWindowRegions(null)→バウンス再開（解除の回帰）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = mi(box)
+    i.tickIndicatorMotion(16)
+    expect(i.indicator.y).toBe(i.indicatorBaseY)
+
+    box.setDualWindowRegions(null)
+    i.tickIndicatorMotion(100)
+    expect(i.indicator.y).not.toBe(i.indicatorBaseY)
+    box.dispose()
+  })
+})
+
+describe('DialogBox 2窓インジケータの話者色 indicatorGlyphColor (#447)', () => {
+  const W = 800
+  const H = 450
+  const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
+  const self_: LayoutRect = { x: 400, y: 225, width: 400, height: 225 }
+
+  interface ColorInternals {
+    indicatorGlyph: { style: { fill: unknown } }
+  }
+  function ci(box: DialogBox): ColorInternals {
+    return box as unknown as ColorInternals
+  }
+
+  function makeBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: 20,
+      fontSize: 40,
+    })
+  }
+
+  it('B-1: 既定ロール self のまま setDualWindowRegions(regions) → indicatorGlyph.style.fill === 0xffffff', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    expect(ci(box).indicatorGlyph.style.fill).toBe(0xffffff)
+    box.dispose()
+  })
+
+  it("B-2: setDualWindowActiveRole('opponent') → indicatorGlyph.style.fill === 0x9ad4e8", () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDualWindowActiveRole('opponent')
+    expect(ci(box).indicatorGlyph.style.fill).toBe(0x9ad4e8)
+    box.dispose()
+  })
+
+  it('B-3: setDualWindowRegions(null) → 既定色 0xa8dadc に復帰する', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDualWindowActiveRole('opponent')
+    box.setDualWindowRegions(null)
+    expect(ci(box).indicatorGlyph.style.fill).toBe(0xa8dadc)
+    box.dispose()
+  })
+
+  it('B-4: self→opponent→self 往復で色がドリフトしない', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDualWindowActiveRole('opponent')
+    box.setDualWindowActiveRole('self')
+    expect(ci(box).indicatorGlyph.style.fill).toBe(0xffffff)
+    box.dispose()
+  })
+
+  it('B-7: setFontFamily(別フォント) 前後で色が保持される（fontFamily 早期 return を踏まないよう既定と異なる family を渡す）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDualWindowActiveRole('opponent')
+    box.setFontFamily('serif')
+    expect(ci(box).indicatorGlyph.style.fill).toBe(0x9ad4e8)
+    box.dispose()
+  })
+
+  it("B-8: dualWindowRegions 未設定のまま setDualWindowActiveRole('opponent') を呼んでも例外なし・色は既定のまま", () => {
+    const box = makeBox()
+    expect(() => box.setDualWindowActiveRole('opponent')).not.toThrow()
+    expect(ci(box).indicatorGlyph.style.fill).toBe(0xa8dadc)
+    box.dispose()
+  })
+})
+
+// C: positionIndicator の非novel経路（Part 1 修正後の本題）。jsdom は canvas 2d ctx が常に
+// null で measureTextWidth が 0 を返すため、px 単位の厳密一致ではなく「旧固定値と異なる/一致する」
+// という不等式・等式アサーションで検証する（テスト設計フェーズの注記どおり）。
+describe('DialogBox 2窓インジケータの位置 positionIndicator 非novel (#447)', () => {
+  const W = 800
+  const H = 450
+  const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
+  const self_: LayoutRect = { x: 400, y: 225, width: 400, height: 225 }
+
+  interface PositionInternals {
+    indicator: { x: number; y: number }
+    boxX: number
+    boxY: number
+    boxW: number
+    boxH: number
+  }
+  function pi(box: DialogBox): PositionInternals {
+    return box as unknown as PositionInternals
+  }
+
+  function makeBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: 20,
+      fontSize: 40,
+    })
+  }
+
+  it('C-1: 非novel + setDualWindowRegions(regions) 後、setDialog+skipTypewriter でインジケータが旧固定 boxY+boxH-30 と異なる位置にある', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDialog(null, 'テスト用のセリフです。')
+    box.skipTypewriter()
+    const i = pi(box)
+    expect(i.indicator.y).not.toBe(i.boxY + i.boxH - 30)
+    box.dispose()
+  })
+
+  it('C-2: 非novel + 2窓未設定のまま setDialog+skipTypewriter → 従来通り indicator.y === boxY+boxH-30（非回帰）', () => {
+    const box = makeBox()
+    box.setDialog(null, 'テスト用のセリフです。')
+    box.skipTypewriter()
+    const i = pi(box)
+    expect(i.indicator.y).toBe(i.boxY + i.boxH - 30)
+    box.dispose()
+  })
+})
+
+// D: Part 1（redraw() 巻き戻りバグ）の回帰テスト。setDualWindowActiveRole() は非novelのとき
+// redraw() を呼ぶため、修正前は末尾の旧式直書きが positionIndicator() の結果を上書きしていた。
+// C ブロックと同じ理由（jsdom は canvas 2d ctx が常に null で measureTextWidth が px 単位の実測値
+// を返せない）で、ここも厳密一致ではなく「旧固定値と異なる」という不等式アサーションで検証する。
+describe('DialogBox redraw() のインジケータ位置巻き戻り回帰テスト (#447 Part 1)', () => {
+  const W = 800
+  const H = 450
+  const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
+  const self_: LayoutRect = { x: 400, y: 225, width: 400, height: 225 }
+
+  interface RedrawInternals {
+    indicatorBaseY: number
+    boxX: number
+    boxY: number
+    boxW: number
+    boxH: number
+  }
+  function ri(box: DialogBox): RedrawInternals {
+    return box as unknown as RedrawInternals
+  }
+
+  function makeBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: 20,
+      fontSize: 40,
+    })
+  }
+
+  it("D-1: ADV+2窓で setDualWindowActiveRole('opponent') を呼んだ直後、indicatorBaseY が redraw() の旧固定式でなく positionIndicator() 相当（文末配置）になっている", () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDialog(null, 'テスト用のセリフです。')
+    box.skipTypewriter()
+    box.setDualWindowActiveRole('opponent')
+    const i = ri(box)
+    // 修正前（バグ）は redraw() 末尾の boxY+boxH-30 直書きにより indicatorBaseY がこの値と
+    // 一致してしまう。修正後は positionIndicator() 経由の文末配置になり、この値とは一致しない。
+    const oldFixedBaseY = i.boxY + i.boxH - 30
+    expect(i.indicatorBaseY).not.toBe(oldFixedBaseY)
+    box.dispose()
+  })
+})
+
+// E: 2窓モードの▼機械的点滅（#447 追加要望1）。Y座標の静止（A ブロック）とは独立の軸で、
+// indicatorGlyph.visible を 1 秒間隔（INDICATOR_BLINK_MS）で ON/OFF する。
+describe('DialogBox 2窓インジケータの機械的点滅 tickIndicatorBlink (#447 追加要望1)', () => {
+  const W = 800
+  const H = 450
+  const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
+  const self_: LayoutRect = { x: 400, y: 225, width: 400, height: 225 }
+
+  interface BlinkInternals {
+    indicator: { visible: boolean }
+    indicatorGlyph: { visible: boolean }
+    tickIndicatorBlink(deltaMs: number): void
+    indicatorFrameTextures: Partial<Record<IndicatorKind, unknown[]>>
+    indicatorKind: IndicatorKind
+  }
+  function bi(box: DialogBox): BlinkInternals {
+    return box as unknown as BlinkInternals
+  }
+
+  function makeBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: 20,
+      fontSize: 40,
+    })
+  }
+
+  it('E-1: 2窓モードで計1000ms分 tickIndicatorBlink を進めると indicatorGlyph.visible が false へトグルされる', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('E-2: 計2000ms経過すると indicatorGlyph.visible が true に戻る（周期性の確認）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  it('E-3: 非2窓モードでは何度 tickIndicatorBlink を進めても indicatorGlyph.visible は変化しない（既存の sin バウンスのみ）', () => {
+    const box = makeBox()
+    const i = bi(box)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    i.tickIndicatorBlink(1000)
+    i.tickIndicatorBlink(1000)
+    i.tickIndicatorBlink(2500)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  it('E-4: 2窓モードでも画像フレームが揃っている場合は点滅しない（indicatorGlyph.visible に触れない）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+    i.indicatorFrameTextures[i.indicatorKind] = [{}]
+    // 点滅ロジックが本当に触れていないことを示すため、あえて true のまま据え置いて確認する。
+    i.indicatorGlyph.visible = true
+    i.tickIndicatorBlink(1000)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  it('E-5: setDualWindowRegions(null) で点滅が止まり indicatorGlyph.visible が true に戻る', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
+
+    box.setDualWindowRegions(null)
+    expect(i.indicatorGlyph.visible).toBe(true)
+
+    // 解除後は2窓でなくなっているため、以後 tickIndicatorBlink を進めても再点滅しない。
+    i.tickIndicatorBlink(1000)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  // E-6〜E-8: self-review must「点滅の位相が実際に見える瞬間にリセットされない」の回帰テスト。
+  // tickIndicatorBlink はタイプ表示中（indicator 自体が非表示）も無条件に呼ばれ続けるため、
+  // indicatorBlinkElapsed が壁時計時間で積み上がる。タイプ完了→ indicator が実際に表示される
+  // 瞬間（setDialog+skipTypewriter+setIndicatorVisible(true) で再現）に、蓄積済みの位相を
+  // 無視して必ず ON から点滅を開始することを確認する。
+  it('E-6: タイプ中に位相が OFF 側へずれていても、タイプ完了→インジケータ表示の瞬間は indicatorGlyph.visible が true にリセットされる', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+
+    // タイプ表示中に壁時計時間が経過し、位相が OFF 側へずれていた状態を再現する
+    // （この時点では indicator コンテナ自体は非表示なので、実プレイでは見えない）。
+    i.tickIndicatorBlink(1200)
+    expect(i.indicatorGlyph.visible).toBe(false)
+
+    // タイプ完了 → インジケータ表示。setDialog が indicator.visible を明示的に false へ戻し、
+    // skipTypewriter でタイプ完了、setIndicatorVisible(true) が「非表示→表示」の遷移点になる。
+    box.setDialog(null, 'テスト用のセリフです。')
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+
+    expect(i.indicator.visible).toBe(true)
+    // 壁時計上の位相（OFF 側）に関わらず、表示開始時は必ず ON から始まる（位相リセットの確認）。
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+
+  it('E-7: リセット後も 1000ms 経過で false になる（周期は保たれる）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+
+    i.tickIndicatorBlink(1200)
+    box.setDialog(null, 'テスト用のセリフです。')
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+    expect(i.indicatorGlyph.visible).toBe(true)
+
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('E-8: リセット後さらに 1000ms 経過で true に戻る（周期は保たれる）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = bi(box)
+
+    i.tickIndicatorBlink(1200)
+    box.setDialog(null, 'テスト用のセリフです。')
+    box.skipTypewriter()
+    box.setIndicatorVisible(true)
+
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(false)
+    i.tickIndicatorBlink(1000)
+    expect(i.indicatorGlyph.visible).toBe(true)
+    box.dispose()
+  })
+})
+
+// F: ▼グリフの縦方向スケール（#447 追加要望2）。2窓モード限定ではなく全ゲーム共通・常時適用。
+describe('DialogBox ▼グリフの縦スケール (#447 追加要望2)', () => {
+  interface ScaleInternals {
+    indicatorGlyph: { scale: { y: number } }
+  }
+  function si(box: DialogBox): ScaleInternals {
+    return box as unknown as ScaleInternals
+  }
+
+  it('F-1: コンストラクタ直後、indicatorGlyph.scale.y が 1 未満に設定されている', () => {
+    const box = makeRpgBox()
+    expect(si(box).indicatorGlyph.scale.y).toBeLessThan(1)
+    box.dispose()
+  })
+
+  it('F-2: setIndicatorKind で種別を切り替えて text/style を再設定した後も indicatorGlyph.scale.y が保持される', () => {
+    const box = makeRpgBox()
+    const before = si(box).indicatorGlyph.scale.y
+    box.setIndicatorKind('pageturn')
+    expect(si(box).indicatorGlyph.scale.y).toBe(before)
+    expect(si(box).indicatorGlyph.scale.y).toBeLessThan(1)
+    box.dispose()
+  })
+})
