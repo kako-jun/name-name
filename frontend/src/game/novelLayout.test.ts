@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeCoverFit,
   computeSplitLayoutRegions,
+  splitTextRegionForDualWindow,
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
@@ -267,6 +268,67 @@ describe('computeSplitLayoutRegions (#442)', () => {
       character: { x: 0, y: 0, width: Infinity, height: 800 },
       text: { x: Infinity, y: 0, width: NaN, height: 800 },
     })
+  })
+})
+
+// =====================================================================================
+// #444: splitTextRegionForDualWindow（split_layout のテキスト領域を話者別2窓＝相手上/自分下に
+// さらに上下2分割する純粋関数）。computeSplitLayoutRegions(...).text をそのまま受け取る想定。
+// =====================================================================================
+describe('splitTextRegionForDualWindow (#444)', () => {
+  it('横長テキスト領域 (x:400,y:0,w:400,h:450) を上下2分割すると opponent=上半分・self=下半分になる', () => {
+    const result = splitTextRegionForDualWindow({ x: 400, y: 0, width: 400, height: 450 })
+    expect(result.opponent).toEqual({ x: 400, y: 0, width: 400, height: 225 })
+    expect(result.self).toEqual({ x: 400, y: 225, width: 400, height: 225 })
+  })
+
+  it('不変条件: opponent.height + self.height が text.height に一致する（偶数/奇数/極小を含む複数ケース）', () => {
+    const cases = [
+      { x: 400, y: 0, width: 400, height: 450 }, // 偶数
+      { x: 0, y: 400, width: 450, height: 400 }, // 偶数（portrait 由来）
+      { x: 0, y: 0, width: 100, height: 101 }, // 奇数（丸めなし・両ウィンドウとも50.5になる）
+      { x: 0, y: 0, width: 100, height: 1 }, // 極小
+    ]
+    for (const text of cases) {
+      const result = splitTextRegionForDualWindow(text)
+      expect(result.opponent.height + result.self.height).toBe(text.height)
+    }
+  })
+
+  it('不変条件: opponent.width と self.width がともに text.width に一致する', () => {
+    const text = { x: 10, y: 20, width: 333, height: 450 }
+    const result = splitTextRegionForDualWindow(text)
+    expect(result.opponent.width).toBe(text.width)
+    expect(result.self.width).toBe(text.width)
+  })
+
+  it('不変条件: opponent.x と self.x がともに text.x に一致する', () => {
+    const text = { x: 77, y: 20, width: 333, height: 450 }
+    const result = splitTextRegionForDualWindow(text)
+    expect(result.opponent.x).toBe(text.x)
+    expect(result.self.x).toBe(text.x)
+  })
+
+  it('境界値: self.y が opponent.y + opponent.height に一致する（隙間なし・重なりなし）', () => {
+    const text = { x: 0, y: 100, width: 400, height: 451 } // 奇数高さの端数ケースも含める
+    const result = splitTextRegionForDualWindow(text)
+    expect(result.self.y).toBe(result.opponent.y + result.opponent.height)
+  })
+
+  it('異常系pin: text.height=0 は opponent.height===self.height===0 になり、例外を投げない', () => {
+    const text = { x: 0, y: 0, width: 400, height: 0 }
+    expect(() => splitTextRegionForDualWindow(text)).not.toThrow()
+    const result = splitTextRegionForDualWindow(text)
+    expect(result.opponent.height).toBe(0)
+    expect(result.self.height).toBe(0)
+  })
+
+  it('結合: computeSplitLayoutRegions(900,450)（2:1 の本番値）の text（450x450正方形）を分割すると450幅x225高の2窓になる', () => {
+    const text = computeSplitLayoutRegions(900, 450).text
+    expect(text).toEqual({ x: 450, y: 0, width: 450, height: 450 })
+    const result = splitTextRegionForDualWindow(text)
+    expect(result.opponent).toEqual({ x: 450, y: 0, width: 450, height: 225 })
+    expect(result.self).toEqual({ x: 450, y: 225, width: 450, height: 225 })
   })
 })
 

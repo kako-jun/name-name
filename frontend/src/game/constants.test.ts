@@ -22,6 +22,14 @@ describe('ASPECT_RATIOS', () => {
   it('9:16 は 450×800', () => {
     expect(ASPECT_RATIOS['9:16']).toEqual({ width: 450, height: 800 })
   })
+
+  it('2:1 は 900×450 (#444 split_layout 2窓モード用)', () => {
+    expect(ASPECT_RATIOS['2:1']).toEqual({ width: 900, height: 450 })
+  })
+
+  it('1:2 は 450×900 (#444 split_layout 2窓モード用)', () => {
+    expect(ASPECT_RATIOS['1:2']).toEqual({ width: 450, height: 900 })
+  })
 })
 
 describe('DEFAULT_ASPECT_RATIO', () => {
@@ -75,6 +83,11 @@ describe('parseAspectRatio', () => {
 
   it('"auto"（#442 fluid モード）は3値のいずれにも一致せずデフォルトにフォールバックする（isAutoAspectRatio が別途処理する分岐）', () => {
     expect(parseAspectRatio('auto')).toBe(DEFAULT_ASPECT_RATIO)
+  })
+
+  it('"2:1"/"1:2"（#444 で AspectRatio 型に追加された値）も3値専用のままデフォルトにフォールバックする（#444 の設計意図の回帰pin: AspectRatio 型拡張後も parseAspectRatio を介さず直接 ASPECT_RATIOS で解決すべき）', () => {
+    expect(parseAspectRatio('2:1')).toBe(DEFAULT_ASPECT_RATIO)
+    expect(parseAspectRatio('1:2')).toBe(DEFAULT_ASPECT_RATIO)
   })
 })
 
@@ -133,6 +146,35 @@ describe('pickFluidAspectRatio (#442)', () => {
 
   it('極小 1x1 は正方形と同じく横長側の 16:9 に倒す', () => {
     expect(pickFluidAspectRatio(1, 1)).toBe('16:9')
+  })
+
+  it('splitLayout=true: 横長は 2:1 (#444)', () => {
+    expect(pickFluidAspectRatio(1920, 1080, true)).toBe('2:1')
+  })
+
+  it('splitLayout=true: 縦長は 1:2 (#444)', () => {
+    expect(pickFluidAspectRatio(1080, 1920, true)).toBe('1:2')
+  })
+
+  it('splitLayout=true: 正方形は横長側の 2:1 に倒す（#444、既存の「正方形は横長側」規約を継承）', () => {
+    expect(pickFluidAspectRatio(800, 800, true)).toBe('2:1')
+  })
+
+  it('splitLayout=true 境界: width が height より 1px 大きい (801,800) は 2:1 (#444)', () => {
+    expect(pickFluidAspectRatio(801, 800, true)).toBe('2:1')
+  })
+
+  it('splitLayout=true 境界: width が height より 1px 小さい (800,801) は 1:2 (#444)', () => {
+    expect(pickFluidAspectRatio(800, 801, true)).toBe('1:2')
+  })
+
+  it('後方互換: 第3引数(splitLayout)を省略しても従来どおり 16:9/9:16 を返す (#444 signature 拡張の回帰pin)', () => {
+    expect(pickFluidAspectRatio(1920, 1080)).toBe('16:9')
+    expect(pickFluidAspectRatio(1080, 1920)).toBe('9:16')
+  })
+
+  it('splitLayout=false を明示指定しても従来どおり 16:9 のまま（#444、非破壊）', () => {
+    expect(pickFluidAspectRatio(1920, 1080, false)).toBe('16:9')
   })
 })
 

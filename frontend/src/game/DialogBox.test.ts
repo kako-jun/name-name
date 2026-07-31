@@ -1499,6 +1499,186 @@ describe('DialogBox split_layout + adv 名札の描画位置 (#442 self-review m
   })
 })
 
+// =====================================================================================
+// #444: 話者別2窓（相手=上/自分=下）モード。setDualWindowRegions/setDualWindowActiveRole が
+// boxX/Y/W/H を正しいサブ領域へ配置し、常に無枠・名札なし（effectiveBorderless()）で描くことを縛る。
+// region 値は computeSplitLayoutRegions(800,450).text（{x:400,y:0,width:400,height:450}）を
+// splitTextRegionForDualWindow したもの（novelLayout.test.ts NL-1 と同じ値）。
+// =====================================================================================
+describe('DialogBox 話者別2窓モード dualWindowRegions (#444)', () => {
+  const W = 800
+  const H = 450
+  const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
+  const self_: LayoutRect = { x: 400, y: 225, width: 400, height: 225 }
+
+  interface DualWindowInternals {
+    bg: { visible: boolean }
+    nameBox: { visible: boolean }
+    nameText: { visible: boolean }
+    boxX: number
+    boxW: number
+    boxY: number
+    boxH: number
+  }
+  function dwInternals(box: DialogBox): DualWindowInternals {
+    return box as unknown as DualWindowInternals
+  }
+
+  function makeBox(): DialogBox {
+    return new DialogBox({
+      screenWidth: W,
+      screenHeight: H,
+      boxHeight: 180,
+      marginX: 20,
+      marginBottom: 20,
+      padding: 20,
+      fontSize: 40,
+    })
+  }
+
+  // applyDualWindowBoxGeometry と同形の参照オラクル（NOVEL_TEXT_* 定数から算出・直書きしない）。
+  // 2窓モードは常に無枠・名札なしなので、setSplitLayoutRegion と違い nameBoxClearance は加えない。
+  function expectedDualGeometry(r: LayoutRect) {
+    const topMargin = Math.round(r.height * NOVEL_TEXT_TOP_RATIO)
+    return {
+      boxX: r.x + NOVEL_TEXT_MARGIN_X,
+      boxW: r.width - NOVEL_TEXT_MARGIN_X * 2,
+      boxY: r.y + topMargin,
+      boxH: r.height - topMargin - NOVEL_TEXT_MARGIN_BOTTOM,
+    }
+  }
+
+  it('DB-1: setDualWindowRegions 設定後、既定ロール self で box が self 領域に配置される', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = dwInternals(box)
+    const exp = expectedDualGeometry(self_)
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxH).toBe(exp.boxH)
+    box.dispose()
+  })
+
+  it('DB-2: setDualWindowActiveRole(opponent) で box が opponent 領域に再配置される', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDualWindowActiveRole('opponent')
+    const i = dwInternals(box)
+    const exp = expectedDualGeometry(opponent)
+    expect(i.boxX).toBe(exp.boxX)
+    expect(i.boxY).toBe(exp.boxY)
+    expect(i.boxW).toBe(exp.boxW)
+    expect(i.boxH).toBe(exp.boxH)
+    box.dispose()
+  })
+
+  it('DB-3: 冪等性 — 同一ロールを連続 setDualWindowActiveRole しても座標が変化しない', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDualWindowActiveRole('opponent')
+    const first = { ...dwInternals(box) }
+    box.setDualWindowActiveRole('opponent')
+    const second = dwInternals(box)
+    expect(second.boxX).toBe(first.boxX)
+    expect(second.boxY).toBe(first.boxY)
+    expect(second.boxW).toBe(first.boxW)
+    expect(second.boxH).toBe(first.boxH)
+    box.dispose()
+  })
+
+  it('DB-4: self→opponent→self と往復しても座標がドリフトしない', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const selfExp = expectedDualGeometry(self_)
+
+    box.setDualWindowActiveRole('opponent')
+    box.setDualWindowActiveRole('self')
+    const i = dwInternals(box)
+    expect(i.boxX).toBe(selfExp.boxX)
+    expect(i.boxY).toBe(selfExp.boxY)
+    expect(i.boxW).toBe(selfExp.boxW)
+    expect(i.boxH).toBe(selfExp.boxH)
+    box.dispose()
+  })
+
+  it('DB-6: setDualWindowRegions(null) で従来ジオメトリ（adv 下部バー）に復帰する', () => {
+    const box = makeBox()
+    const advGeomBefore = { ...dwInternals(box) }
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDualWindowRegions(null)
+    const i = dwInternals(box)
+    expect(i.boxX).toBe(advGeomBefore.boxX)
+    expect(i.boxY).toBe(advGeomBefore.boxY)
+    expect(i.boxW).toBe(advGeomBefore.boxW)
+    expect(i.boxH).toBe(advGeomBefore.boxH)
+    box.dispose()
+  })
+
+  it('DB-8: dualWindowRegions 未設定のまま setDualWindowActiveRole を呼んでも no-op（例外なし・座標不変）', () => {
+    const box = makeBox()
+    const before = { ...dwInternals(box) }
+    expect(() => box.setDualWindowActiveRole('opponent')).not.toThrow()
+    const i = dwInternals(box)
+    expect(i.boxX).toBe(before.boxX)
+    expect(i.boxY).toBe(before.boxY)
+    expect(i.boxW).toBe(before.boxW)
+    expect(i.boxH).toBe(before.boxH)
+    box.dispose()
+  })
+
+  // 見た目: 2窓モードは dialog_style（adv/novel）に関わらず常に無枠・名札なしで描く（Issue #444 確定仕様）。
+  // adv（novelMode=false, borderless=false 既定）で検証することで「adv 本来は枠・名札ありのはずが
+  // 強制的に消える」ことを示す。名前ありでも安全（effectiveBorderless()===true で
+  // updateNameDisplay が drawNameBox/measureText に到達する前に早期 return するため）。
+  it('DB-9: setDualWindowRegions 設定後、adv(novelMode=false, borderless=false既定) でも bg.visible===false（強制無枠）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDialog(null, 'セリフ。')
+    expect(box.isNovelMode).toBe(false)
+    expect(dwInternals(box).bg.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('DB-10: 同条件で nameBox.visible / nameText.visible も強制的に非表示になる（話者名指定時も含む）', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDialog('せお', 'セリフ。')
+    const i = dwInternals(box)
+    expect(i.nameBox.visible).toBe(false)
+    expect(i.nameText.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('DB-11: 台詞表示中に動的2窓化 — setDialog で nameBox.visible=true にしてから setDualWindowRegions を呼ぶと、次の setDialog を待たず即座に nameBox.visible/nameText.visible が false になる（self-review S2 回帰pin）', () => {
+    const box = makeBox()
+    // jsdom は canvas 2d ctx が null で nameText.width の実測ができず、非2窓状態での素の
+    // setDialog(name, ...) は例外を投げる（#442 self-review must-1 の stubNameTextWidth と同じ手当て）。
+    const nameTextTarget = (box as unknown as { nameText: { width: number } }).nameText
+    Object.defineProperty(nameTextTarget, 'width', { get: () => 80, configurable: true })
+
+    box.setDialog('せお', 'セリフ。')
+    const before = dwInternals(box)
+    expect(before.nameBox.visible).toBe(true)
+    expect(before.nameText.visible).toBe(true)
+
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const i = dwInternals(box)
+    expect(i.nameBox.visible).toBe(false)
+    expect(i.nameText.visible).toBe(false)
+    box.dispose()
+  })
+
+  it('DB-12: 解除時の復帰 — setDualWindowRegions(null) 後、adv 本来の borderless(=false) に戻り bg.visible===true', () => {
+    const box = makeBox()
+    box.setDualWindowRegions({ opponent, self: self_ })
+    box.setDualWindowRegions(null)
+    box.setDialog(null, 'セリフ。')
+    expect(dwInternals(box).bg.visible).toBe(true)
+    box.dispose()
+  })
+})
+
 describe('DialogBox setFontSize (#283 補遺 per-game font_size)', () => {
   const W = 800
   const H = 600
@@ -1639,6 +1819,16 @@ describe('DialogBox setBodyTextColor (#305)', () => {
     box.setBodyTextColor(0xffffff)
     expect(box.getBodyTextColor()).toBe(0xffffff)
     expect(asInternals(box).dialogText.style.fill).toBe(0xffffff)
+    box.dispose()
+  })
+
+  // DB-14 (#444): 2窓モードの相手側本文色 0x9ad4e8（水色）も、既存の setBodyTextColor 配線
+  // （getBodyTextColor / dialogText.style.fill）にそのまま乗ることを確認する。
+  it('setBodyTextColor(0x9ad4e8 相当・#444 2窓モード相手側色) でも getBodyTextColor/dialogText.style.fill が更新される', () => {
+    const box = makeRpgBox()
+    box.setBodyTextColor(0x9ad4e8)
+    expect(box.getBodyTextColor()).toBe(0x9ad4e8)
+    expect(asInternals(box).dialogText.style.fill).toBe(0x9ad4e8)
     box.dispose()
   })
 

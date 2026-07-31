@@ -1101,6 +1101,141 @@ describe('NovelRenderer 主人公本文色 (#305)', () => {
   })
 })
 
+// ===== #444: 話者別2窓（split_layout + protagonist）モードの本文色解決 =====
+//
+// #305（novel 限定・主人公=暖アイボリー/住人=白）とは別軸。2窓モードは split_layout: true +
+// protagonist: 指定時に dialog_style（novel/adv）を問わず常に優先し、自分=白（RESIDENT_TEXT_COLOR
+// を流用）・相手=水色（OPPONENT_TEXT_COLOR）に解決する。話者不明は相手側（水色）に倒す。
+interface DualWindowRendererInternals {
+  isDualWindowMode(): boolean
+  dialogBox: {
+    dualWindowRegions: unknown | null
+  }
+}
+function dualWindowInternals(r: NovelRenderer): DualWindowRendererInternals {
+  return r as unknown as DualWindowRendererInternals
+}
+const OPPONENT_COLOR = 0x9ad4e8 // TUI 版 gymnasia#39 準拠の水色（NovelRenderer.OPPONENT_TEXT_COLOR）
+describe('NovelRenderer 2窓モード本文色解決 (#444)', () => {
+  it('NR-1: split_layout:true + protagonist 一致話者は白（RESIDENT_TEXT_COLOR）に解決する', () => {
+    const r = new NovelRenderer()
+    r.setProtagonist('せお')
+    r.setSplitLayout(true)
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(WHITE)
+  })
+
+  it('NR-2: 同条件で不一致話者（住人）は水色 0x9ad4e8 に解決する', () => {
+    const r = new NovelRenderer()
+    r.setProtagonist('せお')
+    r.setSplitLayout(true)
+    expect(internals(r).resolveBodyTextColor('ひな')).toBe(OPPONENT_COLOR)
+  })
+
+  it('NR-3: 同条件で話者不明（null）は相手側に倒して水色に解決する', () => {
+    const r = new NovelRenderer()
+    r.setProtagonist('せお')
+    r.setSplitLayout(true)
+    expect(internals(r).resolveBodyTextColor(null)).toBe(OPPONENT_COLOR)
+  })
+
+  it('NR-5: 非破壊 — protagonist 未指定では split_layout:true でも2窓不成立、resolveBodyTextColor は #442 既存の白のまま', () => {
+    const r = new NovelRenderer()
+    r.setSplitLayout(true)
+    expect(dualWindowInternals(r).isDualWindowMode()).toBe(false)
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(WHITE)
+  })
+
+  it('NR-6: 非破壊 — split_layout:false では protagonist 指定でも2窓不成立、resolveBodyTextColor は #305 のまま変化しない（novel + 主人公一致 = 暖アイボリー）', () => {
+    const r = new NovelRenderer()
+    r.setDialogStyle('novel')
+    r.setProtagonist('せお')
+    r.setSplitLayout(false)
+    expect(dualWindowInternals(r).isDualWindowMode()).toBe(false)
+    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF0D8)
+  })
+
+  it('NR-14: 話者名の部分一致（せお vs せおちゃん）は不一致（相手側）扱いになる厳密 === 比較', () => {
+    const r = new NovelRenderer()
+    r.setProtagonist('せお')
+    r.setSplitLayout(true)
+    expect(internals(r).resolveBodyTextColor('せおちゃん')).toBe(OPPONENT_COLOR)
+  })
+})
+
+// ===== #444: 2窓モードの有効/無効の状態遷移 =====
+describe('NovelRenderer 2窓モードの有効/無効遷移 (#444)', () => {
+  it('NR-9: setProtagonist → setSplitLayout(true) → setSplitLayout(false) で dialogBox.dualWindowRegions が null に戻る', () => {
+    const r = new NovelRenderer()
+    r.setProtagonist('せお')
+    r.setSplitLayout(true)
+    expect(dualWindowInternals(r).dialogBox.dualWindowRegions).not.toBeNull()
+
+    r.setSplitLayout(false)
+    expect(dualWindowInternals(r).dialogBox.dualWindowRegions).toBeNull()
+  })
+})
+
+// ===== #444: render() 経路での2窓モード話者ロール配線（スパイ確認） =====
+//
+// 上の resolveBodyTextColor 直接検証と異なり、ここでは実際に render()（setScenes/advance() 経由）を
+// 走らせ、話者が交代するたびに dialogBox.setDualWindowActiveRole が正しい順序で呼ばれることを
+// スパイで確認する。立ち絵の非同期テクスチャロードを避けるため expression/position を持たない
+// Dialog（tachieTiming.test.ts の dialogNoPortrait と同形）を使う。dialog_style 未指定（adv）だと
+// showCharacterThenRender が同期的に render() を呼ぶため（#293/#319）、initialized=true にするだけで
+// 実 render() 本体を安全に駆動できる（他の NovelRenderer.*.test.ts と同じ initialized フラグ流儀）。
+interface RenderWiringInternals {
+  initialized: boolean
+  advance(): void
+  dialogBox: {
+    setDualWindowActiveRole(role: 'self' | 'opponent'): void
+  }
+}
+function renderWiringInternals(r: NovelRenderer): RenderWiringInternals {
+  return r as unknown as RenderWiringInternals
+}
+describe('NovelRenderer render() 経路の2窓モード話者ロール配線 (#444)', () => {
+  function dialogNoPortrait(character: string, ...lines: string[]): Event {
+    return {
+      Dialog: {
+        character,
+        expression: null,
+        position: null,
+        text: lines,
+        voice_path: null,
+        font_family: null,
+      },
+    }
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('NR-17: 話者 A(protagonist)→B(住人)→A の3イベントで setDualWindowActiveRole が self→opponent→self の順に呼ばれる', () => {
+    const r = new NovelRenderer()
+    r.setProtagonist('せお')
+    r.setSplitLayout(true)
+    const h = renderWiringInternals(r)
+    h.initialized = true
+    const spy = vi.spyOn(h.dialogBox, 'setDualWindowActiveRole')
+
+    r.setScenes([
+      scene('s', [
+        dialogNoPortrait('せお', '質問。'),
+        dialogNoPortrait('ひな', '回答。'),
+        dialogNoPortrait('せお', '再質問。'),
+      ]),
+    ])
+    expect(spy.mock.calls.map((c) => c[0])).toEqual(['self'])
+
+    h.advance()
+    expect(spy.mock.calls.map((c) => c[0])).toEqual(['self', 'opponent'])
+
+    h.advance()
+    expect(spy.mock.calls.map((c) => c[0])).toEqual(['self', 'opponent', 'self'])
+  })
+})
+
 // ===== #340: 余韻横棒 `──`（正準化後 U+2500）が novel の文送り配線に到達する =====
 //
 // novelLayout.test.ts は splitIntoSentences（純粋関数）を直接縛るが、ここでは NovelRenderer の

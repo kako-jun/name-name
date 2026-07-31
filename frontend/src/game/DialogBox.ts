@@ -33,6 +33,7 @@ import {
 } from './typewriter'
 import {
   computeNovelIndicatorPlacement,
+  type DualWindowTextRegions,
   getIndicatorImageUrls,
   type IndicatorKind,
   type LayoutRect,
@@ -299,6 +300,20 @@ export class DialogBox extends Container {
    * この矩形に固定する。`setSplitLayoutRegion` で設定・解除する。
    */
   private splitLayoutRegion: LayoutRect | null = null
+
+  /**
+   * 2窓モード (#444) のテキスト領域（相手=上/自分=下）。null = 無効（従来の単一テキスト
+   * ウィンドウ、`splitLayoutRegion` 全体 or 全画面/下部バー）。`split_layout: true` かつ
+   * `protagonist:` 指定時にだけ NovelRenderer が `setDualWindowRegions` で設定する。
+   * 設定時は dialog_style（novel/adv）に関わらず常に無枠・名札なし（`effectiveBorderless()`）
+   * で描く（Issue #444 確定仕様）。
+   */
+  private dualWindowRegions: DualWindowTextRegions | null = null
+  /**
+   * 2窓モードで現在アクティブな話者側 (#444)。`dualWindowRegions` が null のときは幾何計算に
+   * 使われない（無視される）。`setDualWindowActiveRole` で Dialog ごとに切り替える。
+   */
+  private dualWindowActiveRole: 'self' | 'opponent' = 'self'
 
   // --- 状態 ---
   private currentText: string = ''
@@ -569,6 +584,84 @@ export class DialogBox extends Container {
     }
   }
 
+  /** 2窓モード (#444) が有効か。`dualWindowRegions` が設定されていれば true。 */
+  private get dualWindowActive(): boolean {
+    return this.dualWindowRegions !== null
+  }
+
+  /**
+   * 実効的な borderless 判定 (#444)。2窓モードは dialog_style（novel/adv）に関わらず常に
+   * 無枠・名札なしで描く（Issue #444 確定仕様）。背景描画・名札表示・DropShadow の分岐を
+   * この 1 箇所（`this.borderless` との OR）に集約する。`this.borderless` 自体（novelMode /
+   * setBorderless 由来）は変えない — 2窓モード解除後に元の見た目へ正しく戻すため。
+   */
+  private effectiveBorderless(): boolean {
+    return this.borderless || this.dualWindowActive
+  }
+
+  /**
+   * 2窓モード (#444) のテキスト領域（相手=上/自分=下）を設定・解除する。
+   * `novelLayout.ts` の `splitTextRegionForDualWindow(computeSplitLayoutRegions(...).text)` を
+   * そのまま渡す想定。null で解除し、従来の単一テキストウィンドウ（`splitLayoutRegion` 全体、
+   * 未指定なら novel 全画面 / adv 下部バー）に戻る。
+   *
+   * `setSplitLayoutRegion` と同様、幾何のみを担う（typewriter/テキスト内容には触れない）。
+   * 背景（bg）の可視状態は次の `setDialog`/`setNovelDialogProgressive` 呼び出し時に
+   * `effectiveBorderless()` から再導出されるため、ここで個別に操作する必要はない。
+   *
+   * ただし名札（nameBox/nameText/inlineNameText）は例外: `setProtagonist` 経由で台詞表示中に
+   * 動的に2窓モードへ入ると、次の `updateNameDisplay` 呼び出し（＝次のセリフ表示）まで旧位置・
+   * 旧可視状態の名札が一瞬取り残される（self-review S2）。2窓モードは常に無枠・名札なしという
+   * 不変条件（`effectiveBorderless()`）と一致させるため、regions が null でなくなる（2窓モードに
+   * 入る）瞬間にここで即座に隠す。null 解除時（2窓モード終了）は次の `updateNameDisplay` で
+   * 正しい状態に戻るので触らない。
+   */
+  setDualWindowRegions(regions: DualWindowTextRegions | null): void {
+    this.dualWindowRegions = regions
+    if (regions !== null) {
+      this.nameBox.visible = false
+      this.nameText.visible = false
+      if (this.inlineNameText) this.inlineNameText.visible = false
+    }
+    if (this.novelMode) {
+      this.applyNovelGeometry()
+    } else {
+      this.redraw(this.screenWidth, this.screenHeight)
+    }
+  }
+
+  /**
+   * 2窓モード (#444) で次に表示する話者側を指定する。`setDialog`/`setNovelDialogProgressive`
+   * より前に呼ぶこと（呼ばれた時点の boxX/Y/W/H を使ってテキスト/ルビ/インジケータを
+   * 配置するため）。`dualWindowRegions` が null（2窓モード無効）のときは no-op。
+   */
+  setDualWindowActiveRole(role: 'self' | 'opponent'): void {
+    if (!this.dualWindowRegions) return
+    if (this.dualWindowActiveRole === role) return
+    this.dualWindowActiveRole = role
+    if (this.novelMode) {
+      this.applyNovelGeometry()
+    } else {
+      this.redraw(this.screenWidth, this.screenHeight)
+    }
+  }
+
+  /**
+   * 2窓モード (#444) で、現在アクティブな話者側（self/opponent）の領域へ boxX/Y/W/H を合わせる。
+   * `applySplitLayoutBoxGeometry` と同じ余白規約（NOVEL_TEXT_MARGIN_X / NOVEL_TEXT_TOP_RATIO /
+   * NOVEL_TEXT_MARGIN_BOTTOM）を使うが、2窓モードは常に無枠・名札なしなので名札クリアランス
+   * （`applySplitLayoutBoxGeometry` の `nameBoxClearance`）は加えない（常に 0 相当）。
+   */
+  private applyDualWindowBoxGeometry(): void {
+    if (!this.dualWindowRegions) return
+    const region = this.dualWindowRegions[this.dualWindowActiveRole]
+    const topMargin = Math.round(region.height * NOVEL_TEXT_TOP_RATIO)
+    this.boxX = region.x + NOVEL_TEXT_MARGIN_X
+    this.boxW = region.width - NOVEL_TEXT_MARGIN_X * 2
+    this.boxY = region.y + topMargin
+    this.boxH = region.height - topMargin - NOVEL_TEXT_MARGIN_BOTTOM
+  }
+
   /**
    * novel スタイル (#283) の全画面テキスト領域へ幾何を再計算する。
    * 画面の下 60%（`NOVEL_TEXT_TOP_RATIO` 以下）をテキスト域にし、左右・下に小さな余白を残す。
@@ -576,7 +669,11 @@ export class DialogBox extends Container {
    * split_layout (#442) 指定時は全画面ではなく `splitLayoutRegion` の矩形に収める。
    */
   private applyNovelGeometry(): void {
-    if (this.splitLayoutRegion) {
+    if (this.dualWindowRegions) {
+      // 2窓モード (#444): split_layout のテキスト領域全体ではなく、現在アクティブな
+      // 話者側（相手=上/自分=下）のサブ領域へ収める。splitLayoutRegion より優先する。
+      this.applyDualWindowBoxGeometry()
+    } else if (this.splitLayoutRegion) {
       // split_layout (#442): 全画面ではなく渡された領域（テキストウィンドウ側の半分）へ収める。
       this.applySplitLayoutBoxGeometry(this.splitLayoutRegion)
     } else {
@@ -610,7 +707,11 @@ export class DialogBox extends Container {
       this.applyNovelGeometry()
       return
     }
-    if (this.splitLayoutRegion) {
+    if (this.dualWindowRegions) {
+      // 2窓モード (#444): adv でもテキスト領域全体ではなく、現在アクティブな話者側の
+      // サブ領域へ固定する（dialog_style 非依存。splitLayoutRegion より優先）。
+      this.applyDualWindowBoxGeometry()
+    } else if (this.splitLayoutRegion) {
       // split_layout (#442): adv でも下部バーではなくテキスト領域へ固定する（dialog_style 非依存）。
       this.applySplitLayoutBoxGeometry(this.splitLayoutRegion)
     } else {
@@ -625,7 +726,7 @@ export class DialogBox extends Container {
 
     // 背景再描画
     this.bg.clear()
-    if (!this.borderless) this.drawBackground()
+    if (!this.effectiveBorderless()) this.drawBackground()
 
     // テキスト位置更新
     this.dialogText.x = this.textStartX()
@@ -688,7 +789,7 @@ export class DialogBox extends Container {
     }
     this.currentText = text
     this.showing = true
-    this.bg.visible = !this.borderless
+    this.bg.visible = !this.effectiveBorderless()
 
     // 話者名
     this.updateNameDisplay(name)
@@ -760,7 +861,7 @@ export class DialogBox extends Container {
     }
     this.currentText = cumulativeText
     this.showing = true
-    this.bg.visible = !this.borderless
+    this.bg.visible = !this.effectiveBorderless()
 
     // 話者名（novel = borderless で updateNameDisplay は名札を出さないが、経路は揃える）
     this.updateNameDisplay(name)
@@ -897,7 +998,7 @@ export class DialogBox extends Container {
     if (this.borderless === borderless) return
     this.borderless = borderless
     this.bg.clear()
-    if (!this.borderless) {
+    if (!this.effectiveBorderless()) {
       this.drawBackground()
     }
     this.dialogText.style = this.makeDialogTextStyle()
@@ -905,7 +1006,7 @@ export class DialogBox extends Container {
     for (const e of this.rubyEntries) {
       e.text.style = rubyStyle
     }
-    if (this.borderless) {
+    if (this.effectiveBorderless()) {
       this.nameBox.visible = false
       this.nameText.visible = false
       if (this.inlineNameText) this.inlineNameText.visible = false
@@ -1369,7 +1470,7 @@ export class DialogBox extends Container {
   }
 
   private updateNameDisplay(name: string | null): void {
-    if (this.borderless || !name) {
+    if (this.effectiveBorderless() || !name) {
       this.nameBox.visible = false
       this.nameText.visible = false
       if (this.inlineNameText) this.inlineNameText.visible = false
@@ -1423,7 +1524,7 @@ export class DialogBox extends Container {
       // 本文色 (#305): 既定は白。主人公セリフのときだけ NovelRenderer が暖アイボリーに切り替える。
       fill: this.bodyTextColor,
       lineHeight: this.lineHeight(),
-      dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
+      dropShadow: this.effectiveBorderless() ? BORDERLESS_DROP_SHADOW : false,
     })
   }
 
@@ -1444,7 +1545,7 @@ export class DialogBox extends Container {
       fontSize: this.rubyFontSize(),
       // ルビも本文色 (#305) に合わせる（主人公=暖アイボリー / 住人=白）。
       fill: this.bodyTextColor,
-      dropShadow: this.borderless ? BORDERLESS_DROP_SHADOW : false,
+      dropShadow: this.effectiveBorderless() ? BORDERLESS_DROP_SHADOW : false,
     })
   }
 
