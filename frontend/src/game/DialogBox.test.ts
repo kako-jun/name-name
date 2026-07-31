@@ -2266,3 +2266,28 @@ describe('DialogBox 2窓インジケータの機械的点滅 tickIndicatorBlink 
     box.dispose()
   })
 })
+
+// F: ▼グリフの縦方向スケール（#447 追加要望2）。2窓モード限定ではなく全ゲーム共通・常時適用。
+describe('DialogBox ▼グリフの縦スケール (#447 追加要望2)', () => {
+  interface ScaleInternals {
+    indicatorGlyph: { scale: { y: number } }
+  }
+  function si(box: DialogBox): ScaleInternals {
+    return box as unknown as ScaleInternals
+  }
+
+  it('F-1: コンストラクタ直後、indicatorGlyph.scale.y が 1 未満に設定されている', () => {
+    const box = makeRpgBox()
+    expect(si(box).indicatorGlyph.scale.y).toBeLessThan(1)
+    box.dispose()
+  })
+
+  it('F-2: setIndicatorKind で種別を切り替えて text/style を再設定した後も indicatorGlyph.scale.y が保持される', () => {
+    const box = makeRpgBox()
+    const before = si(box).indicatorGlyph.scale.y
+    box.setIndicatorKind('pageturn')
+    expect(si(box).indicatorGlyph.scale.y).toBe(before)
+    expect(si(box).indicatorGlyph.scale.y).toBeLessThan(1)
+    box.dispose()
+  })
+})

@@ -192,6 +192,13 @@ const INDICATOR_FRAME_MS = 360
 const INDICATOR_BLINK_MS = 1000
 
 /**
+ * ▼グリフの縦方向スケール (#447 追加要望2)。1 未満にして平べったく見せる。2窓モード限定の
+ * 演出ではなく（話者色・点滅と異なりグリフ自体の形状の話のため）全ゲーム共通・常時適用する。
+ * kako-jun が実機で見て微調整する前提の初期値。
+ */
+const INDICATOR_GLYPH_SCALE_Y = 0.6
+
+/**
  * novel スタイル (#283) のテキスト領域マージン（px、論理座標）。
  * 全画面ノベル（ToHeart 式）では画面の大半をテキストに使う。本文は左上付近から始め、
  * 左右・上下に小さな余白を残す。テストが参照できるよう export する。
@@ -460,6 +467,10 @@ export class DialogBox extends Container {
     // makeIndicatorGlyphStyle() はこの時点で必要な this.fontFamily / dualWindowActive の両方が
     // 既に確定済み（前者は上のコンストラクタ冒頭、後者はクラスフィールド初期値 null）(#447)。
     this.indicatorGlyph = new Text({ text: '▼', style: this.makeIndicatorGlyphStyle() })
+    // ▼を縦方向にやや潰す (#447 追加要望2)。scale は Text の transform（style/text とは独立）
+    // なので、setIndicatorKind() 等が後で style/text を再設定してもリセットされない。生成が
+    // 1 箇所（ここ）だけなので、この 1 行だけで以降ずっと保持される。
+    this.indicatorGlyph.scale.y = INDICATOR_GLYPH_SCALE_Y
     // 既定は表示 (#413)。画像フレームの fetch が実際に始まった（pendingIndicatorKinds に載る）
     // 種別だけ applyIndicatorFrame() が一時的に隠す。fetch を一度も試みていない作品（画像なし・
     // RPG モード等）はここでの true のまま＝非回帰で ▼ が即表示される。
