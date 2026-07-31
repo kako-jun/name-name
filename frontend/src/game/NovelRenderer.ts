@@ -44,7 +44,7 @@ import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { isSceneIdConfined } from './sceneConfinement'
 import { Event, EventScene } from '../types'
-import { ASPECT_RATIOS, type AspectRatio, parseAspectRatio } from './constants'
+import { ASPECT_RATIOS, type AspectRatio, DEFAULT_ASPECT_RATIO } from './constants'
 import {
   isRead,
   isReadForLine,
@@ -619,7 +619,13 @@ export class NovelRenderer {
     this.app = new Application()
     this.bgGraphics = new Graphics()
     this.bgContainer = new Container()
-    const ratio = parseAspectRatio(config?.aspectRatio)
+    // config.aspectRatio は既に厳密な AspectRatio 型（呼び出し側 NovelPlayer が生の
+    // frontmatter 文字列を parseAspectRatio で検証・解決済み。fluid 時は pickFluidAspectRatio
+    // が '2:1'/'1:2'（#444）を含めて選ぶ）。ここで再度 parseAspectRatio に通すと、
+    // parseAspectRatio 自身は raw 文字列用に '16:9'/'4:3'/'9:16' の3値しか認識しないため
+    // '2:1'/'1:2' が無効値として黙って DEFAULT_ASPECT_RATIO に落ちてしまう（#444 で発覚した
+    // 実バグ）。すでに検証済みの値を渡された前提で、未指定時のフォールバックだけ行う。
+    const ratio = config?.aspectRatio ?? DEFAULT_ASPECT_RATIO
     this.screenWidth = ASPECT_RATIOS[ratio].width
     this.screenHeight = ASPECT_RATIOS[ratio].height
     this.characterLayer = new CharacterLayer(this.screenWidth, this.screenHeight, this.time)
