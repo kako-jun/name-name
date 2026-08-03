@@ -4403,6 +4403,16 @@ export class NovelRenderer {
    *
    * 呼び出し側の責務: `allScenes` が構築済み（setEvents/setScenes 呼び出し後）である
    * タイミングで呼ぶこと（そうでないと findSceneById が常に不発になる）。
+   *
+   * #460 再発修正: Gymnasia のような hub(entry doc) + ルート別 md のマルチMD構成では、
+   * 再マウント直後の新 renderer の `allScenes` には entry doc のシーンしか無く、ルート側の
+   * sceneId（例: `r01-01-terminal-light`）はまだ遅延ロードされていない。そのため
+   * `findSceneById` が不発になり、常にフラグのみ復元＋warn のフォールバックに落ちて
+   * hub 冒頭へ巻き戻って見えていた。`jumpToScene` → `resolveMissingSceneAndJump` と同じ
+   * パターン（`missingSceneResolver` で当該 md を非同期取得 → `setJumpSceneIndex` で
+   * `allScenes` を更新 → 再探索）に倣い、非同期で解決を試みてから復元する。
+   * `jumpToScene` と同じく本メソッド自体は void のまま（fire-and-forget）で、内部の非同期
+   * 解決は `resolveMissingSceneAndRestore` に委譲する。
    */
   restoreSnapshot(snapshot: NovelGameState): void {
     // AudioContext 初期化 (#460 セルフレビュー must M1): この renderer は NovelPlayer の
@@ -4424,13 +4434,29 @@ export class NovelRenderer {
     }
 
     const scene = findSceneById(this.allScenes, snapshot.sceneId)
-    if (!scene) {
-      // シーンが無い場合はフラグだけ復元（loadFromSaveData と同じフォールバック）
-      this.gameState.fromJSON(snapshot.flags)
-      console.warn(`[name-name] restoreSnapshot: シーンが見つからない: ${snapshot.sceneId}`)
+    if (scene) {
+      this.restoreSnapshotToScene(scene, snapshot)
       return
     }
 
+    // #460 再発: allScenes に無い＝マルチMD構成でまだ遅延ロードされていない可能性がある。
+    // missingSceneResolver があれば jumpToScene と同じ非同期解決パターンで再挑戦する。
+    if (this.missingSceneResolver) {
+      void this.resolveMissingSceneAndRestore(snapshot)
+      return
+    }
+
+    // resolver が無い（単一ファイル構成等）場合のみ、従来どおりフラグだけ復元して warn する
+    // （loadFromSaveData と同じフォールバック）。
+    this.gameState.fromJSON(snapshot.flags)
+    console.warn(`[name-name] restoreSnapshot: シーンが見つからない: ${snapshot.sceneId}`)
+  }
+
+  /**
+   * restoreSnapshot 内でシーンが見つかった場合の共通処理 (#460)。
+   * storyEnded の重複発火防止 (M2) を先に行ってから restoreToScene に委譲する。
+   */
+  private restoreSnapshotToScene(scene: EventScene, snapshot: NovelGameState): void {
     // storyEnded 重複発火防止 (#460 セルフレビュー must M2): このメソッドは新規 construct された
     // renderer インスタンス（this.storyEnded は常にデフォルト false）に対して呼ばれる。下の
     // applyState は「前回値と比較して変化した時だけ onStoryEndedChangeCallback を発火する」ガードを
@@ -4442,6 +4468,62 @@ export class NovelRenderer {
     this.storyEnded = snapshot.storyEnded
 
     this.restoreToScene(scene, snapshot)
+  }
+
+  /**
+   * restoreSnapshot のシーン未発見フォールバック（マルチMD遅延ロード経由）(#460)。
+   *
+   * `jumpToScene` → `resolveMissingSceneAndJump` と全く同じ「missingSceneResolver で該当 md
+   * を非同期取得 → setJumpSceneIndex で allScenes 更新 → 再探索」のパターンをなぞる。
+   * `pendingMissingScenes` も共有し、同一 sceneId の解決が jumpToScene 側と重複しないように
+   * する（restoreSnapshot は新規 renderer に対して起動直後に1回だけ呼ばれる設計のため、実際に
+   * 衝突する場面は考えにくいが、念のため既存のガードをそのまま流用する）。
+   *
+   * 解決できてもシーンが見つからない/resolver が失敗した場合は、loadFromSaveData と同じ
+   * 「フラグだけ復元して warn」のフォールバックに落ちる。
+   */
+  private async resolveMissingSceneAndRestore(snapshot: NovelGameState): Promise<void> {
+    const sceneId = snapshot.sceneId
+    if (!sceneId) return
+    if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) {
+      // #460 セルフレビュー should S2: この早期 return だけ、他の全終端が必ず行っている
+      // flags 復元をスキップしていた。「最低でも flags だけは必ず反映する」という
+      // restoreSnapshot 全体の契約に合わせる。pendingMissingScenes 側は同時実行中の解決に
+      // 任せる正常系に近いため warn は出さない。
+      this.gameState.fromJSON(snapshot.flags)
+      return
+    }
+    this.pendingMissingScenes.add(sceneId)
+    try {
+      const scenes = await this.missingSceneResolver(sceneId)
+      // #460 セルフレビュー should S1: await 中に renderer が destroy() され得る（連続remount
+      // で新しい renderer に既に切り替わっているケース）。destroy 後は applyState が
+      // this.app.stage を触るため、initialized チェック無しで先に進むと例外を投げうる。
+      if (!this.initialized) return
+      if (!scenes) {
+        this.gameState.fromJSON(snapshot.flags)
+        console.warn(`[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`)
+        return
+      }
+      this.setJumpSceneIndex(scenes)
+      const scene = findSceneById(this.allScenes, sceneId)
+      if (!scene) {
+        this.gameState.fromJSON(snapshot.flags)
+        console.warn(
+          `[name-name] restoreSnapshot: lazy load 後もシーンが見つかりません: ${sceneId}`
+        )
+        return
+      }
+      this.restoreSnapshotToScene(scene, snapshot)
+    } catch (err) {
+      this.gameState.fromJSON(snapshot.flags)
+      console.warn(
+        `[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`,
+        err
+      )
+    } finally {
+      this.pendingMissingScenes.delete(sceneId)
+    }
   }
 
   /**
