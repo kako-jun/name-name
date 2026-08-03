@@ -19,6 +19,8 @@ import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 import type { NovelGameState } from './GameState'
 import { SaveManager, SaveSlotData } from './SaveManager'
+import { computeCoverFit, computeSplitLayoutRegions, type LayoutRect } from './novelLayout'
+import type { AspectRatio } from './constants'
 
 // --- fixture helpers（既存 NovelRenderer 系テストと同じスタイル）---
 
@@ -43,8 +45,8 @@ function scene(id: string, events: Event[]): EventScene {
 // （CharacterLayer.test.ts / EventImageLayer.test.ts と同じ流儀）。
 const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
-function makeRenderer(scenes: EventScene[]): NovelRenderer {
-  const r = new NovelRenderer()
+function makeRenderer(scenes: EventScene[], aspectRatio?: AspectRatio): NovelRenderer {
+  const r = new NovelRenderer({ aspectRatio })
   r.setAssetBaseUrl('/assets')
   r.setEventImageFadeMs(0)
   r.setScenes(scenes)
@@ -57,6 +59,10 @@ interface EventImageLayerForTest {
   hasPendingVisualTransition(): boolean
   shouldHideBackLayer(): boolean
   disposeTextures(): void
+  getSplitLayoutRegion(): LayoutRect | null
+  // #464: 実際に描画された sprite の幾何（region 反映の end-to-end 検証用）。テスト専用アクセサ
+  // ではなく private フィールドへの直接キャストのため、Sprite が無ければ null。
+  sprite: { x: number; y: number; width: number; height: number } | null
 }
 interface RendererInternals {
   applyState(state: NovelGameState): void
@@ -64,12 +70,18 @@ interface RendererInternals {
   bgGraphics: { visible: boolean }
   bgContainer: { visible: boolean }
   videoLayer: { visible: boolean }
-  characterLayer: { visible: boolean; hasPendingVisualTransition: () => boolean }
+  characterLayer: {
+    visible: boolean
+    hasPendingVisualTransition: () => boolean
+    getSplitLayoutRegion(): LayoutRect | null
+  }
   eventIndex: number
   waitingForWait: boolean
   initialized: boolean
   appInitialized: boolean
   app: { canvas: unknown; destroy: (...args: unknown[]) => void }
+  screenWidth: number
+  screenHeight: number
   render(): void
 }
 function internals(r: NovelRenderer): RendererInternals {
@@ -462,5 +474,116 @@ describe('NovelRenderer WaitDisplayComplete とイベント絵の統合 (#351)',
     r.getTimeController().tick(16)
     expect(h.eventIndex).toBe(2)
     expect(h.waitingForWait).toBe(false)
+  })
+})
+
+// =====================================================================================
+// #464: split_layout (#442) 有効時、eventImageLayer が CharacterLayer と同じ画像側領域
+// （regions.character）を受け取る配線の検証。EventImageLayer 自体の cover-fit + offset 計算は
+// EventImageLayer.test.ts でカバー済みのため、ここでは NovelRenderer.applySplitLayout() が
+// 正しい領域を渡していること・CharacterLayer と取り違えないこと・実際のディレクティブ経由
+// end-to-end の3点に絞る。
+// =====================================================================================
+describe('NovelRenderer split_layout (#442) と eventImageLayer の領域配線 (#464)', () => {
+  beforeEach(() => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(Texture.WHITE as never)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('setSplitLayout(true)（landscape既定16:9）→ eventImageLayer.getSplitLayoutRegion() が computeSplitLayoutRegions(...).character と一致する', () => {
+    const r = makeRenderer([scene('a', [narration('x')])])
+    const { screenWidth, screenHeight } = internals(r)
+
+    r.setSplitLayout(true)
+
+    const expected = computeSplitLayoutRegions(screenWidth, screenHeight).character
+    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toEqual(expected)
+  })
+
+  it('setSplitLayout(true)（portrait 9:16）でも computeSplitLayoutRegions(...).character と一致する', () => {
+    const r = makeRenderer([scene('a', [narration('x')])], '9:16')
+    const { screenWidth, screenHeight } = internals(r)
+
+    r.setSplitLayout(true)
+
+    const expected = computeSplitLayoutRegions(screenWidth, screenHeight).character
+    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toEqual(expected)
+  })
+
+  it('setSplitLayout(false)（既定）では eventImageLayer.getSplitLayoutRegion() が null のまま', () => {
+    const r = makeRenderer([scene('a', [narration('x')])])
+
+    r.setSplitLayout(false)
+
+    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toBeNull()
+  })
+
+  it('setSplitLayout(true) → setSplitLayout(false) で null に戻る', () => {
+    const r = makeRenderer([scene('a', [narration('x')])])
+
+    r.setSplitLayout(true)
+    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).not.toBeNull()
+    r.setSplitLayout(false)
+
+    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toBeNull()
+  })
+
+  // #464 の設計意図そのものの直接検証: CharacterLayer と EventImageLayer は常に同じ画像側領域を
+  // 共有する（片方だけ古い/別の値になる配線ミスの回帰ガード）。
+  it('（優先度高）eventImageLayer.getSplitLayoutRegion() と characterLayer.getSplitLayoutRegion() は常に同じ値になる', () => {
+    const r = makeRenderer([scene('a', [narration('x')])])
+
+    r.setSplitLayout(true)
+    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toEqual(
+      internals(r).characterLayer.getSplitLayoutRegion()
+    )
+
+    r.setSplitLayout(false)
+    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toEqual(
+      internals(r).characterLayer.getSplitLayoutRegion()
+    )
+  })
+
+  // regions.text（テキスト側）を誤って渡す取り違えの回帰ガード。
+  it('（優先度高）eventImageLayer.getSplitLayoutRegion() は regions.text ではなく regions.character である', () => {
+    const r = makeRenderer([scene('a', [narration('x')])])
+    const { screenWidth, screenHeight } = internals(r)
+
+    r.setSplitLayout(true)
+
+    const regions = computeSplitLayoutRegions(screenWidth, screenHeight)
+    const actual = internals(r).eventImageLayer.getSplitLayoutRegion()
+    expect(actual).toEqual(regions.character)
+    expect(actual).not.toEqual(regions.text)
+  })
+
+  // end-to-end: [イベント絵:] ディレクティブ + split_layout: true 併用で、ロード完了後の
+  // sprite 幾何が実際に region 基準になっていることを確認する（既存の playScript/startFrom 流儀）。
+  it('[イベント絵: path] を setSplitLayout(true) 併用時に処理すると、ロード完了後の sprite 幾何が region 基準になる', async () => {
+    const r = makeRenderer([
+      scene('a', [narration('x'), eventImage('story/x.webp'), narration('y')]),
+    ])
+    const { screenWidth, screenHeight } = internals(r)
+    r.setSplitLayout(true)
+    r.startFrom({ sceneId: 'a' })
+
+    await r.playScript([{ type: 'advance' }])
+    await flushPromises()
+
+    const region = computeSplitLayoutRegions(screenWidth, screenHeight).character
+    const fit = computeCoverFit(
+      Texture.WHITE.width,
+      Texture.WHITE.height,
+      region.width,
+      region.height
+    )
+    const sprite = internals(r).eventImageLayer.sprite
+    expect(sprite).not.toBeNull()
+    expect(sprite!.x).toBe(fit.x + region.x)
+    expect(sprite!.y).toBe(fit.y + region.y)
+    expect(sprite!.width).toBe(fit.width)
+    expect(sprite!.height).toBe(fit.height)
   })
 })

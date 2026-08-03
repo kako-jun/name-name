@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { EventImageLayer } from './EventImageLayer'
 import { TimeController } from './TimeController'
+import { computeCoverFit, type LayoutRect } from './novelLayout'
 import type { EventImageState } from './GameState'
 
 const SCREEN_W = 800
@@ -28,7 +29,14 @@ function virtualTime(): TimeController {
 
 /** private sprite/fadeAnimation/current/loadToken を読むための internals ビュー。 */
 interface EventImageLayerInternals {
-  sprite: { alpha: number; destroyed?: boolean } | null
+  sprite: {
+    alpha: number
+    x: number
+    y: number
+    width: number
+    height: number
+    destroyed?: boolean
+  } | null
   fadeAnimation: {
     startMs: number
     durationMs: number
@@ -51,6 +59,11 @@ const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(r
 
 function mockTexture(): Texture {
   return { width: 100, height: 50 } as unknown as Texture
+}
+
+/** 任意の幅・高さを持つテクスチャのモック（split_layout region の cover-fit 検証用）。 */
+function mockTextureSized(width: number, height: number): Texture {
+  return { width, height } as unknown as Texture
 }
 
 /**
@@ -605,5 +618,252 @@ describe('EventImageLayer disposeTextures（GPU テクスチャのリーク防�
 
     layer.disposeTextures()
     expect(unloadSpy).not.toHaveBeenCalled()
+  })
+})
+
+// =====================================================================================
+// #464: split_layout のイベント絵領域（setSplitLayoutRegion/getSplitLayoutRegion）。
+//
+// EventImageLayer は CharacterLayer（Container 全体の scale/position で region に収める）とは
+// 異なり、sprite 個別の x/y/width/height を computeCoverFit(texW, texH, region.width,
+// region.height) の結果に region.x/y を後から加算して求める（意図的に異なる方式・バグではない。
+// EventImageLayer.ts の doc comment 参照）。region 参照は「show() 呼び出し時点」ではなく
+// 「Assets.load().then() が解決した時点」であるため、その間の race・既存 sprite 不変の契約も
+// あわせて検証する。
+// =====================================================================================
+describe('EventImageLayer setSplitLayoutRegion / getSplitLayoutRegion と show() の cover-fit 反映 (#464)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // 画面(800x450)の左半分相当・かつオフセット非ゼロで CharacterLayer.test.ts の
+  // 「regionにオフセット(x,y)がある場合」テストと同じ意図の矩形を使う。
+  const REGION: LayoutRect = { x: 50, y: 20, width: 400, height: 450 }
+
+  it('getSplitLayoutRegion() は初期状態で null', () => {
+    const layer = makeLayer(virtualTime())
+    expect(layer.getSplitLayoutRegion()).toBeNull()
+  })
+
+  it('setSplitLayoutRegion(region) → getSplitLayoutRegion() が同じ値を返す（round-trip）', () => {
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    expect(layer.getSplitLayoutRegion()).toEqual(REGION)
+  })
+
+  it('setSplitLayoutRegion(region) → setSplitLayoutRegion(null) → null に戻る', () => {
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    layer.setSplitLayoutRegion(null)
+    expect(layer.getSplitLayoutRegion()).toBeNull()
+  })
+
+  it('region=null で show(): 従来どおり screenWidth/screenHeight 基準の cover-fit になる（リグレッションガード）', async () => {
+    mockAssetsLoadResolved()
+    const layer = makeLayer(virtualTime())
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    const fit = computeCoverFit(100, 50, SCREEN_W, SCREEN_H)
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(fit.x)
+    expect(sprite.y).toBe(fit.y)
+    expect(sprite.width).toBe(fit.width)
+    expect(sprite.height).toBe(fit.height)
+  })
+
+  it('region 設定 + テクスチャアスペクト比が region と完全一致（境界）: クロップなしで region の矩形そのものになる', async () => {
+    // 400x450 は REGION と同じアスペクト比（400/450）→ scale=1・クロップなし。
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 450) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(REGION.x)
+    expect(sprite.y).toBe(REGION.y)
+    expect(sprite.width).toBe(REGION.width)
+    expect(sprite.height).toBe(REGION.height)
+  })
+
+  it('region 設定 + テクスチャが横長超過（上の境界一致ケースより横長側）: 横方向にオーバーフローし x が負値側にずれる、height は region.height にフィットする', async () => {
+    // 800x450 は REGION（400x450）より横長 → 横方向がオーバーフローする。
+    // 「境界+1px」という厳密な意味ではなく、上のアスペクト比一致ケースに対して横長側の
+    // カテゴリであることを表す（比率のカテゴリ分けの一例）。
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(800, 450) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    const fit = computeCoverFit(800, 450, REGION.width, REGION.height)
+    expect(fit.x).toBeLessThan(0) // 前提: このテクスチャ比では横方向にオーバーフローする
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(fit.x + REGION.x)
+    expect(sprite.y).toBe(fit.y + REGION.y)
+    expect(sprite.height).toBe(REGION.height)
+    expect(sprite.width).toBeGreaterThan(REGION.width)
+  })
+
+  it('region 設定 + テクスチャが縦長超過（上の境界一致ケースより縦長側）: 縦方向にオーバーフローし y が負値側にずれる、width は region.width にフィットする', async () => {
+    // 100x450 は REGION（400x450）より縦長 → 縦方向がオーバーフローする。
+    // 「境界-1px」という厳密な意味ではなく、上のアスペクト比一致ケースに対して縦長側の
+    // カテゴリであることを表す（比率のカテゴリ分けの一例）。
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(100, 450) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    const fit = computeCoverFit(100, 450, REGION.width, REGION.height)
+    expect(fit.y).toBeLessThan(0) // 前提: このテクスチャ比では縦方向にオーバーフローする
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(fit.x + REGION.x)
+    expect(sprite.y).toBe(fit.y + REGION.y)
+    expect(sprite.width).toBe(REGION.width)
+    expect(sprite.height).toBeGreaterThan(REGION.height)
+  })
+
+  it('region のオフセット(x,y 非ゼロ)が computeCoverFit の結果に正しく加算される', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(120, 80) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    const fit = computeCoverFit(120, 80, REGION.width, REGION.height)
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(fit.x + REGION.x)
+    expect(sprite.y).toBe(fit.y + REGION.y)
+    expect(sprite.width).toBe(fit.width)
+    expect(sprite.height).toBe(fit.height)
+  })
+
+  it('portrait 形状の region（width<height）でも同じ cover-fit + offset 計算が成立する', async () => {
+    const portraitRegion: LayoutRect = { x: 10, y: 5, width: 300, height: 600 }
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(200, 100) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(portraitRegion)
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    const fit = computeCoverFit(200, 100, portraitRegion.width, portraitRegion.height)
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(fit.x + portraitRegion.x)
+    expect(sprite.y).toBe(fit.y + portraitRegion.y)
+    expect(sprite.width).toBe(fit.width)
+    expect(sprite.height).toBe(fit.height)
+  })
+
+  it('show() 呼び出し前に setSplitLayoutRegion() を設定した場合、ロード完了後の sprite に正しく反映される（実運用の初期化順序どおり）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(100, 50) as never)
+    const layer = makeLayer(virtualTime())
+    // 実運用どおり: applySplitLayout()（setSplitLayoutRegion）が mount 時に先に呼ばれ、
+    // その後にディレクティブ経由で show() が呼ばれる順序。
+    layer.setSplitLayoutRegion(REGION)
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    const fit = computeCoverFit(100, 50, REGION.width, REGION.height)
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(fit.x + REGION.x)
+    expect(sprite.y).toBe(fit.y + REGION.y)
+  })
+
+  it('（race）show() 呼び出し後・ロード未解決の間に region を変更すると、ロード解決時点の最新 region が使われる', async () => {
+    const resolvers: Record<string, (t: Texture) => void> = {}
+    vi.spyOn(Assets, 'load').mockImplementation(
+      (url: unknown) =>
+        new Promise((resolve) => {
+          resolvers[String(url)] = resolve
+        }) as never
+    )
+    const layer = makeLayer(virtualTime())
+    const regionAtShowTime: LayoutRect = { x: 0, y: 0, width: 400, height: 450 }
+    const regionAtResolveTime: LayoutRect = { x: 400, y: 0, width: 400, height: 450 }
+
+    layer.setSplitLayoutRegion(regionAtShowTime)
+    layer.show('story/x.webp')
+    // ロード未解決の間に region を差し替える（例: applySplitLayout の再適用がロード中に割り込む）。
+    layer.setSplitLayoutRegion(regionAtResolveTime)
+
+    resolvers['/assets/images/story/x.webp'](mockTextureSized(100, 50))
+    await flushPromises()
+
+    const fit = computeCoverFit(100, 50, regionAtResolveTime.width, regionAtResolveTime.height)
+    const sprite = internals(layer).sprite!
+    // show() 呼び出し時点の region（regionAtShowTime）ではなく、解決時点の最新 region が使われる。
+    expect(sprite.x).toBe(fit.x + regionAtResolveTime.x)
+    expect(sprite.y).toBe(fit.y + regionAtResolveTime.y)
+  })
+
+  it('（既存 sprite 不変の契約）sprite 表示済みの状態で setSplitLayoutRegion() を呼んでも、既存 sprite の x/y/width/height は変化しない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(100, 50) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    const sprite = internals(layer).sprite!
+    const before = { x: sprite.x, y: sprite.y, width: sprite.width, height: sprite.height }
+
+    // setSplitLayoutRegion は this.splitLayoutRegion への代入のみで、次の show() まで
+    // 既存 sprite には反映しない契約（EventImageLayer.ts の doc comment 参照）。
+    layer.setSplitLayoutRegion({ x: 400, y: 0, width: 400, height: 450 })
+
+    expect(sprite.x).toBe(before.x)
+    expect(sprite.y).toBe(before.y)
+    expect(sprite.width).toBe(before.width)
+    expect(sprite.height).toBe(before.height)
+  })
+
+  it('region 設定済みのまま 2 回目の show()（単一スロット置換）を呼んでも、新しい sprite にも同じ region が適用される', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(100, 50) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    layer.show('story/a.webp')
+    await flushPromises()
+    const firstSprite = internals(layer).sprite
+
+    layer.show('story/b.webp')
+    await flushPromises()
+    const secondSprite = internals(layer).sprite!
+
+    expect(secondSprite).not.toBe(firstSprite)
+    const fit = computeCoverFit(100, 50, REGION.width, REGION.height)
+    expect(secondSprite.x).toBe(fit.x + REGION.x)
+    expect(secondSprite.y).toBe(fit.y + REGION.y)
+  })
+
+  it('region 設定 → remove() → 再度 show()（region 設定のまま）でも正しく領域に収まる', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(100, 50) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    layer.show('story/x.webp')
+    await flushPromises()
+    layer.remove()
+    expect(internals(layer).sprite).toBeNull()
+
+    layer.show('story/y.webp')
+    await flushPromises()
+
+    const fit = computeCoverFit(100, 50, REGION.width, REGION.height)
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(fit.x + REGION.x)
+    expect(sprite.y).toBe(fit.y + REGION.y)
+  })
+
+  it('region 設定状態でロード失敗（Assets.load reject）しても console.warn は従来どおり1回のみ・例外なし・sprite=null', async () => {
+    vi.spyOn(Assets, 'load').mockRejectedValue(new Error('missing') as never)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+
+    expect(() => layer.show('story/broken.webp')).not.toThrow()
+    await flushPromises()
+
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(internals(layer).sprite).toBeNull()
   })
 })

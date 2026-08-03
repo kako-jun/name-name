@@ -1703,6 +1703,7 @@ export class NovelRenderer {
       this.dialogBox.setDualWindowRegions(null)
       this.characterLayer.setSplitLayoutRegion(null)
       this.choiceOverlay.setSplitLayoutRegion(null)
+      this.eventImageLayer.setSplitLayoutRegion(null)
       this.resetNovelScrimRegion()
       return
     }
@@ -1715,6 +1716,9 @@ export class NovelRenderer {
       this.isDualWindowMode() ? splitTextRegionForDualWindow(regions.text) : null
     )
     this.characterLayer.setSplitLayoutRegion(regions.character)
+    // イベント絵も画像側領域へ収める (#464)。CharacterLayer と同じ regions.character を使い、
+    // テキスト領域には重ねない（画面全体に引き伸ばされていたバグの修正）。
+    this.eventImageLayer.setSplitLayoutRegion(regions.character)
     // 選択肢UIもテキスト領域へ収める (#442 self-review should-5)。キャラ画像パネルへの
     // 重なりを防ぐ（[選択] ブロックは Gymnasia の実脚本で使われるためスコープ外にできない）。
     this.choiceOverlay.setSplitLayoutRegion(regions.text)
