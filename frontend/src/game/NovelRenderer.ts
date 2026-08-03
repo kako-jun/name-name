@@ -2810,8 +2810,19 @@ export class NovelRenderer {
 
     // 終劇状態の復元 (#386)。goBack/seekTo/セーブ復元はすべて即時反映（フェード演出はしない）。
     // DOM 側（NovelPlayer の "to be continued..." 表示）は callback で同期する。
+    // #460 セルフレビュー must M2: 値が実際に変化した時だけコールバックを発火する（変化なしなら
+    // 発火しない）。goBack/seekTo/loadFromSaveData は同一 renderer インスタンス上で this.storyEnded
+    // が真の直前状態を保持しているため、この比較は「本当に変わったか」を正しく判定できる
+    // （例: 終劇直後に goBack で false に戻り、再度 advance して true に達すれば、両方とも
+    // prevStoryEnded と異なるので発火し続ける＝既存挙動を壊さない）。restoreSnapshot（fluid 再マウント
+    // で新規 renderer インスタンスに対して呼ばれる）は、呼び出し側で this.storyEnded を復元先の値に
+    // 事前セットしてから applyState を呼ぶため、ここでは常に「変化なし」となり発火しない
+    // （再マウントのたびに終劇 postMessage が重複送信されるのを防ぐ）。
+    const prevStoryEnded = this.storyEnded
     this.storyEnded = state.storyEnded
-    this.onStoryEndedChangeCallback?.(state.storyEnded)
+    if (prevStoryEnded !== state.storyEnded) {
+      this.onStoryEndedChangeCallback?.(state.storyEnded)
+    }
 
     // 背景復元
     if (state.backgroundPath) {
@@ -4394,6 +4405,17 @@ export class NovelRenderer {
    * タイミングで呼ぶこと（そうでないと findSceneById が常に不発になる）。
    */
   restoreSnapshot(snapshot: NovelGameState): void {
+    // AudioContext 初期化 (#460 セルフレビュー must M1): この renderer は NovelPlayer の
+    // マウント effect（ユーザー操作を伴わない非同期コールバック）から生成される新規インスタンスで、
+    // ensureContext() が一度も呼ばれていない＝AudioManager.ctx が null のまま。この後
+    // restoreToScene → applyState の BGM 復元が audioManager.playBgm() を呼ぶが、playBgm は
+    // ctx が無いと即 return するため、何もしないと BGM がサイレントに止まったまま復帰しない。
+    // 通常経路（goBack/seekTo/loadFromSaveData）は同一 renderer インスタンス上でユーザー操作
+    // （handleAdvance/handleKeyDown 等）を経て既に ensureContext 済みのためこの穴が露呈しない。
+    // 注意: ブラウザの自動再生ポリシー上、ユーザー操作を経ていない状態での AudioContext.resume()
+    // が実際に有効になるかはブラウザ依存の可能性がある。実機での動作確認が必要。
+    this.audioManager.ensureContext()
+
     if (!snapshot.sceneId) {
       // sceneId が無いスナップショットはフラグだけ復元して終了（restoreToScene を通さない。
       // loadFromSaveData の空セーブ分岐と同じ扱い）
@@ -4408,6 +4430,16 @@ export class NovelRenderer {
       console.warn(`[name-name] restoreSnapshot: シーンが見つからない: ${snapshot.sceneId}`)
       return
     }
+
+    // storyEnded 重複発火防止 (#460 セルフレビュー must M2): このメソッドは新規 construct された
+    // renderer インスタンス（this.storyEnded は常にデフォルト false）に対して呼ばれる。下の
+    // applyState は「前回値と比較して変化した時だけ onStoryEndedChangeCallback を発火する」ガードを
+    // 持つが、新規インスタンスの初期値 false のままだと「true で復元＝変化あり」と誤判定され、
+    // fluid 再マウントのたびに終劇 postMessage（NovelPlayer 側）が再送されてしまう。ここで復元先の
+    // 値を先に直接セットしておき、applyState の比較を「変化なし」にして二重発火を防ぐ。
+    // ("to be continued..." 表示自体は NovelPlayer 側の React state が再マウント effect を跨いで
+    // 保持されるため、ここでコールバックを発火させなくても表示は正しく維持される。)
+    this.storyEnded = snapshot.storyEnded
 
     this.restoreToScene(scene, snapshot)
   }

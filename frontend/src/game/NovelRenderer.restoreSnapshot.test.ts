@@ -33,8 +33,19 @@ function condition(flag: string, events: Event[]): Event {
 
 const boolFlag = (b: boolean): FlagValue => ({ Bool: b })
 
+/**
+ * ensureContext の jsdom 制約回避（NovelRenderer.seekAdvance.test.ts の muteAudio と同じパターン）。
+ * restoreSnapshot は #460 セルフレビュー M1 修正で内部的に audioManager.ensureContext() を呼ぶが、
+ * jsdom には AudioContext が無いため呼ぶと ReferenceError になる。この呼び出し自体を検証する
+ * M1 専用テストを除き、ensureContext を no-op spy に差し替えて実 AudioContext 構築を避ける。
+ */
+function muteAudio(r: NovelRenderer): void {
+  vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
+}
+
 function makeRenderer(scenes: EventScene[]): NovelRenderer {
   const r = new NovelRenderer()
+  muteAudio(r)
   r.setScenes(scenes)
   return r
 }
@@ -237,6 +248,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
   it('R11: setScenes/setEvents 未実行（allScenes 空）の状態で restoreSnapshot を呼んでも例外を投げない', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = new NovelRenderer() // setScenes/setEvents を呼ばない
+    muteAudio(r)
     expect(() => r.restoreSnapshot(craftSnapshot({ sceneId: 'a' }))).not.toThrow()
   })
 
@@ -244,5 +256,66 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     const r = makeRenderer(SCENES)
     r.destroy()
     expect(() => r.getSnapshot()).not.toThrow()
+  })
+
+  // ===== I. セルフレビュー修正 (#460 must M1): AudioContext 初期化 =====
+  //
+  // restoreSnapshot は NovelPlayer のマウント effect（ユーザー操作を伴わない非同期コールバック）
+  // から新規 renderer インスタンスに対して呼ばれるため、AudioManager.ensureContext() が一度も
+  // 呼ばれておらず ctx が null のまま。この状態で BGM 復元（applyState 内 playBgm）を呼んでも
+  // playBgm は ctx が無いと即 return し、BGM がサイレントに止まったまま復帰しない。
+  // restoreSnapshot が ensureContext() を呼ぶことを検証する（実際に AudioContext が resume される
+  // かどうかはブラウザの自動再生ポリシー依存のため、実機確認が別途必要）。
+  it('M1: restoreSnapshot 呼び出し時に audioManager.ensureContext() が呼ばれる', () => {
+    const r = makeRenderer(SCENES)
+    // makeRenderer 内の muteAudio() が既に ensureContext を no-op spy に差し替え済み
+    // （jsdom には AudioContext が無いため実装は呼べない）。ここではその spy の呼び出しを検証する。
+    const ensureContextMock = vi.mocked(r.getAudioManager().ensureContext)
+    ensureContextMock.mockClear()
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'a' }))
+
+    expect(ensureContextMock).toHaveBeenCalled()
+  })
+
+  it('M1: sceneId が見つからない場合でも ensureContext() は呼ばれる（early return より前に呼ぶ設計）', () => {
+    const r = makeRenderer(SCENES)
+    const ensureContextMock = vi.mocked(r.getAudioManager().ensureContext)
+    ensureContextMock.mockClear()
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'ghost' }))
+
+    expect(ensureContextMock).toHaveBeenCalled()
+  })
+
+  // ===== J. セルフレビュー修正 (#460 must M2): storyEnded 重複 postMessage 防止 =====
+  //
+  // restoreSnapshot は新規 construct された renderer インスタンス（this.storyEnded は常に
+  // デフォルト false）に対して呼ばれる。applyState 側に「storyEnded の値が変化した時だけ
+  // onStoryEndedChangeCallback を発火する」ガードを入れても、素朴に this.storyEnded の初期値
+  // false のまま比較すると「true で復元＝変化あり」と誤判定されるため、restoreSnapshot は
+  // restoreToScene を呼ぶ前に this.storyEnded を復元先の値へ直接セットしておく（結果、
+  // applyState 側の比較は常に「変化なし」になり、fluid 再マウントのたびに終劇 postMessage
+  // （NovelPlayer 側）が重複送信されるのを防ぐ）。
+  it('M2: storyEnded:true のスナップショットを新規 renderer に restoreSnapshot しても、onStoryEndedChangeCallback は発火しない', () => {
+    const cb = vi.fn()
+    const r = makeRenderer(SCENES)
+    r.setOnStoryEndedChange(cb)
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'a', storyEnded: true }))
+
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    expect(cb).not.toHaveBeenCalled()
+  })
+
+  it('M2: storyEnded:false のスナップショットを新規 renderer に restoreSnapshot してもコールバックは発火しない（デフォルト値のままなので変化なし）', () => {
+    const cb = vi.fn()
+    const r = makeRenderer(SCENES)
+    r.setOnStoryEndedChange(cb)
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'a', storyEnded: false }))
+
+    expect(r.getSnapshot().storyEnded).toBe(false)
+    expect(cb).not.toHaveBeenCalled()
   })
 })

@@ -392,6 +392,58 @@ describe('NovelRenderer.startFrom (#220)', () => {
     expect(r.getSnapshot().storyEnded).toBe(true)
     expect(cb).toHaveBeenCalledWith(true)
   })
+
+  // ===== L. #460 セルフレビュー must M2: storyEnded 変化ガード =====
+  //
+  // applyState は「前回値と復元後の値が変化した時だけ onStoryEndedChangeCallback を発火する」
+  // ガードを持つ（goBack/seekTo/loadFromSaveData は同一 renderer インスタンス上で this.storyEnded
+  // が真の直前状態を保持しているため、この比較は「本当に変わったか」を正しく判定できる）。
+
+  it('30: 同じ storyEnded:true で applyState を2回呼んでも、2回目は callback が発火しない（変化なしガード）', () => {
+    const cb = vi.fn()
+    const r = makeRenderer(SCENES)
+    r.setOnStoryEndedChange(cb)
+    r.startFrom({ sceneId: 'start' })
+    const endedState: NovelGameState = { ...r.getSnapshot(), storyEnded: true }
+
+    internals(r).applyState(endedState)
+    expect(cb).toHaveBeenCalledTimes(1)
+    expect(cb).toHaveBeenCalledWith(true)
+
+    cb.mockClear()
+    internals(r).applyState(endedState)
+    expect(cb).not.toHaveBeenCalled()
+    expect(r.getSnapshot().storyEnded).toBe(true)
+  })
+
+  it('31: storyEnded が true→false→true と変化するたびに applyState 呼び出しごとに callback が発火する（終劇直後に goBack で巻き戻り、再度 advance して終劇に達するケースの再現）', () => {
+    const cb = vi.fn()
+    const r = makeRenderer(SCENES)
+    r.setOnStoryEndedChange(cb)
+    r.startFrom({ sceneId: 'start' })
+    const baseState = r.getSnapshot()
+
+    internals(r).applyState({ ...baseState, storyEnded: true })
+    internals(r).applyState({ ...baseState, storyEnded: false })
+    internals(r).applyState({ ...baseState, storyEnded: true })
+
+    expect(cb).toHaveBeenNthCalledWith(1, true)
+    expect(cb).toHaveBeenNthCalledWith(2, false)
+    expect(cb).toHaveBeenNthCalledWith(3, true)
+    expect(cb).toHaveBeenCalledTimes(3)
+  })
+
+  it('32: 同じ storyEnded:false で applyState を2回呼んでも callback は発火しない（初期値と同じ＝変化なし）', () => {
+    const cb = vi.fn()
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'start' })
+    r.setOnStoryEndedChange(cb)
+    const baseState = r.getSnapshot()
+
+    internals(r).applyState({ ...baseState, storyEnded: false })
+
+    expect(cb).not.toHaveBeenCalled()
+  })
 })
 
 // ===================================================================================
