@@ -2095,80 +2095,105 @@ describe('clampFadeMs (#407 / #404)', () => {
 // 「CSS 引き伸ばし倍率 (displayWidth/screenWidth) × devicePixelRatio」が基本式で、
 // displayWidth/screenWidth が非正・NaN のときは引き伸ばし倍率 1 扱い（dpr にフォールバック）、
 // devicePixelRatio 自体が非正・NaN・Infinity のときは 1 にフォールバックする（2 系統のフォールバックが
-// 独立している点に注意）。
+// 独立している点に注意）。上限クランプの基準は screenWidth/screenHeight の大きい方（Math.max）。
 describe('computeDynamicRenderResolution (#446)', () => {
-  it('正常系: displayWidth=1600, screenWidth=800, dpr=2 → 引き伸ばし倍率2×dpr2=4', () => {
-    expect(computeDynamicRenderResolution(1600, 800, 2)).toBe(4)
+  it('正常系: displayWidth=1600, screenWidth=800, screenHeight=450, dpr=2 → 引き伸ばし倍率2×dpr2=4', () => {
+    expect(computeDynamicRenderResolution(1600, 800, 450, 2)).toBe(4)
   })
 
   it('正常系: 引き伸ばしなし(displayWidth===screenWidth)なら結果はdprと一致する', () => {
-    expect(computeDynamicRenderResolution(800, 800, 2)).toBe(2)
-    expect(computeDynamicRenderResolution(800, 800, 1.5)).toBe(1.5)
+    expect(computeDynamicRenderResolution(800, 800, 450, 2)).toBe(2)
+    expect(computeDynamicRenderResolution(800, 800, 450, 1.5)).toBe(1.5)
   })
 
   it('同値分割: 縮小方向(displayWidth<screenWidth)でも計算式どおり1未満の引き伸ばし倍率が素直に反映され、フォールバックしない', () => {
     // dpr=1 で引き伸ばし倍率だけを見る: 400/800=0.5倍 → 結果も0.5（1にもdprにも切り上げない）。
-    expect(computeDynamicRenderResolution(400, 800, 1)).toBe(0.5)
+    expect(computeDynamicRenderResolution(400, 800, 450, 1)).toBe(0.5)
   })
 
   it('境界値: displayWidth=0 はdprにフォールバックする（0除算を避ける）', () => {
-    expect(computeDynamicRenderResolution(0, 800, 2)).toBe(2)
+    expect(computeDynamicRenderResolution(0, 800, 450, 2)).toBe(2)
   })
 
   it('境界値: displayWidthが負値(-1)はdprにフォールバックする', () => {
-    expect(computeDynamicRenderResolution(-1, 800, 2)).toBe(2)
+    expect(computeDynamicRenderResolution(-1, 800, 450, 2)).toBe(2)
   })
 
   it('境界値: screenWidth=0 はdprにフォールバックする（0除算を避ける）', () => {
-    expect(computeDynamicRenderResolution(1600, 0, 2)).toBe(2)
+    expect(computeDynamicRenderResolution(1600, 0, 450, 2)).toBe(2)
   })
 
   it('境界値: screenWidthが負値はdprにフォールバックする', () => {
-    expect(computeDynamicRenderResolution(1600, -800, 2)).toBe(2)
+    expect(computeDynamicRenderResolution(1600, -800, 450, 2)).toBe(2)
   })
 
   it('異常系: screenWidth=NaN はdprにフォールバックする', () => {
-    expect(computeDynamicRenderResolution(1600, NaN, 2)).toBe(2)
+    expect(computeDynamicRenderResolution(1600, NaN, 450, 2)).toBe(2)
   })
 
   it('異常系: displayWidth=NaN はdprにフォールバックする', () => {
-    expect(computeDynamicRenderResolution(NaN, 800, 2)).toBe(2)
+    expect(computeDynamicRenderResolution(NaN, 800, 450, 2)).toBe(2)
   })
 
   it('境界値: devicePixelRatio=0 は1にフォールバックする（displayWidth/screenWidthは有効なら引き伸ばし計算は生きる）', () => {
     // dprフォールバック(1) × 引き伸ばし倍率(1600/800=2) = 2
-    expect(computeDynamicRenderResolution(1600, 800, 0)).toBe(2)
+    expect(computeDynamicRenderResolution(1600, 800, 450, 0)).toBe(2)
   })
 
   it('境界値: devicePixelRatioが負値は1にフォールバックする', () => {
-    expect(computeDynamicRenderResolution(1600, 800, -2)).toBe(2)
+    expect(computeDynamicRenderResolution(1600, 800, 450, -2)).toBe(2)
   })
 
   it('異常系: devicePixelRatio=NaN は1にフォールバックする', () => {
-    expect(computeDynamicRenderResolution(1600, 800, NaN)).toBe(2)
+    expect(computeDynamicRenderResolution(1600, 800, 450, NaN)).toBe(2)
   })
 
   it('異常系: devicePixelRatio=Infinity は1にフォールバックする（Number.isFiniteでInfiniteを弾く）', () => {
-    expect(computeDynamicRenderResolution(1600, 800, Infinity)).toBe(2)
+    expect(computeDynamicRenderResolution(1600, 800, 450, Infinity)).toBe(2)
+  })
+
+  it('境界値: screenHeightが不正(0/負値/NaN/非有限)なら screenWidth を基準にフォールバックする', () => {
+    // screenWidth=800, dpr=3, displayWidth=8000（素の計算値30）を各種不正 screenHeight で流しても、
+    // 従来どおり screenWidth=800 基準の上限 8192/800=10.24 に切り詰められる（screenHeight は無視）。
+    const expected = MAX_RENDER_BACKBUFFER_WIDTH_PX / 800
+    expect(computeDynamicRenderResolution(8000, 800, 0, 3)).toBe(expected)
+    expect(computeDynamicRenderResolution(8000, 800, -100, 3)).toBe(expected)
+    expect(computeDynamicRenderResolution(8000, 800, NaN, 3)).toBe(expected)
+    expect(computeDynamicRenderResolution(8000, 800, Infinity, 3)).toBe(expected)
   })
 
   it('境界値: displayWidth=Infinity（>0なので縮退扱いされない）×有限screenWidthでも上限クランプでInfinityにならない', () => {
     // displayWidth>0 は true（Infinity>0）なので早期フォールバックの対象外になり、
     // dpr(2) * (Infinity/800) = Infinity が素の計算結果になるが、#446 セルフレビュー should対応の
-    // 上限クランプ（MAX_RENDER_BACKBUFFER_WIDTH_PX/screenWidth）により screenWidth=800 の上限
-    // 4096/800=5.12 に切り詰められる。呼び出し側の NovelRenderer.setRenderResolution だけに
-    // 依存しない多重防御に強化された契約をここで固定する。
-    expect(computeDynamicRenderResolution(Infinity, 800, 2)).toBe(
+    // 上限クランプ（MAX_RENDER_BACKBUFFER_WIDTH_PX/screenWidth、screenHeight=450<800なのでscreenWidth基準）
+    // により screenWidth=800 の上限 8192/800=10.24 に切り詰められる。呼び出し側の
+    // NovelRenderer.setRenderResolution だけに依存しない多重防御に強化された契約をここで固定する。
+    expect(computeDynamicRenderResolution(Infinity, 800, 450, 2)).toBe(
       MAX_RENDER_BACKBUFFER_WIDTH_PX / 800
     )
   })
 
   it('should対応: 上限を超える引き伸ばし率が入力されると裏バッファ幅がMAX_RENDER_BACKBUFFER_WIDTH_PXに収まるようクランプされる', () => {
     // 複数モニタにまたがる横幅の広いウィンドウ(displayWidth=8000)+高DPR(dpr=3)の極端なケース。
-    // 素の計算値は 3 * (8000/800) = 30 だが、screenWidth=800 での上限は 4096/800=5.12 なので
-    // そちらに切り詰められる（裏バッファ幅 800*5.12=4096 ≦ MAX_RENDER_BACKBUFFER_WIDTH_PX）。
-    const result = computeDynamicRenderResolution(8000, 800, 3)
+    // 素の計算値は 3 * (8000/800) = 30 だが、screenWidth=800(>screenHeight=450)での上限は
+    // 8192/800=10.24 なのでそちらに切り詰められる（裏バッファ幅 800*10.24=8192 ≦
+    // MAX_RENDER_BACKBUFFER_WIDTH_PX）。
+    const result = computeDynamicRenderResolution(8000, 800, 450, 3)
     expect(result).toBe(MAX_RENDER_BACKBUFFER_WIDTH_PX / 800)
     expect(result * 800).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_WIDTH_PX)
+  })
+
+  it('question対応: 縦長アスペクト比(9:16, screenWidth=450 < screenHeight=800)では screenHeight 基準でクランプされ、裏バッファの高さも上限を超えない', () => {
+    // 修正前は screenWidth=450 だけを基準にクランプしていたため、maxResolution=8192/450≈18.2 まで
+    // 許容してしまい、裏バッファの高さ = screenHeight(800) × resolution が MAX を大きく超えうる
+    // バグがあった（#446 再レビュー question対応）。今は screenWidth/screenHeight の大きい方
+    // （ここでは screenHeight=800）を基準にするため、裏バッファ高さがちょうど上限に収まる。
+    // 素の計算値: dpr(4) * (displayWidth=3600 / screenWidth=450) = 32 → 大幅に超過するのでクランプ対象。
+    const result = computeDynamicRenderResolution(3600, 450, 800, 4)
+    expect(result).toBe(MAX_RENDER_BACKBUFFER_WIDTH_PX / 800)
+    // 縦長ゲームの保護対象である「高さ」側の裏バッファが上限に収まることを直接検証する。
+    expect(result * 800).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_WIDTH_PX)
+    // ついでに幅側もこのケースでは同時に収まる（screenWidth < screenHeight なので当然余裕がある）。
+    expect(result * 450).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_WIDTH_PX)
   })
 })

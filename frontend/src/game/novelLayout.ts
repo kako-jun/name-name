@@ -67,10 +67,17 @@ export function computeCoverFit(
 }
 
 /**
- * `computeDynamicRenderResolution` が許容する裏バッファ幅の上限（px）。GPU の
- * `MAX_TEXTURE_SIZE`（一般に 8192〜16384）に対して十分な余裕を持たせた保守的な固定値。
+ * `computeDynamicRenderResolution` が許容する裏バッファの幅・高さそれぞれの上限（px）。GPU の
+ * `MAX_TEXTURE_SIZE`（2015年以降の GPU はほぼ全て 8192 以上をサポート）に対して十分な余裕を
+ * 持たせた保守的な固定値。
+ *
+ * 4096 だった旧値は、27インチ 5K iMac / Studio Display（dpr=2、論理解像度 2560×1440 程度）で
+ * NovelPlayer をフルウィンドウ表示するだけで発動してしまい（displayWidth≈2560, screenWidth=800
+ * (16:9) → raw=6.4 > maxResolution=5.12 でクランプ）、Issue #446 本来の目的（大画面での文字の
+ * 精細さ向上）をごく普通の高DPI単体モニタ環境でも部分的に打ち消していた（#446 再レビュー
+ * should対応）。8192 まで引き上げることで、単体モニタでの通常利用ではまず発動しない。
  */
-export const MAX_RENDER_BACKBUFFER_WIDTH_PX = 4096
+export const MAX_RENDER_BACKBUFFER_WIDTH_PX = 8192
 
 /**
  * 実表示サイズに応じたレンダラ解像度を算出する純粋関数 (#446)。
@@ -90,25 +97,39 @@ export const MAX_RENDER_BACKBUFFER_WIDTH_PX = 4096
  * （0 除算・NaN・負値を避ける）。`devicePixelRatio` 自体が不正（0 以下・NaN・Infinity）な
  * 場合も 1 にフォールバックする。
  *
- * 上限クランプ (#446 セルフレビュー should対応): 裏バッファ幅（PixiJS が実際に確保する
- * `screenWidth × resolution`）は GPU の `MAX_TEXTURE_SIZE`（一般に 8192〜16384）を超えられない。
+ * 上限クランプ (#446 セルフレビュー should対応 / 再レビュー question対応): 裏バッファの幅・高さ
+ * （PixiJS が実際に確保する `screenWidth × resolution` / `screenHeight × resolution`）は
+ * GPU の `MAX_TEXTURE_SIZE`（2015年以降の GPU はほぼ全て 8192 以上）を超えられない。
  * 複数モニタにまたがる横幅の広いウィンドウ＋高DPRのような極端な構成では
  * `displayWidth/screenWidth × dpr` が際限なく大きくなりうるため、`MAX_RENDER_BACKBUFFER_WIDTH_PX`
- * （裏バッファ幅が概ねこの値に収まる保守的な固定値）を超えないよう結果をクランプする。
- * GPU ごとの正確な上限は実行時に取得できないため、低スペック環境でも安全な余裕を持たせた値を採用する。
- * 上限に達した場合、返り値は「screenWidth 側で裏バッファ幅が `MAX_RENDER_BACKBUFFER_WIDTH_PX` に
- * 一致する resolution」に切り詰められる（見た目には Retina 表示の鮮明さが頭打ちになるだけで、
- * クラッシュや真っ黒描画は避けられる）。
+ * を超えないよう結果をクランプする。GPU ごとの正確な上限は実行時に取得できないため、
+ * 低スペック環境でも安全な余裕を持たせた値を採用する。
+ *
+ * クランプ基準は `screenWidth`/`screenHeight` の**大きい方**（`Math.max`）にする。`screenWidth`
+ * のみを基準にすると、9:16 のような縦長アスペクト比（`screenHeight > screenWidth`）で裏バッファの
+ * **高さ**（`screenHeight × resolution`）がクランプの計算式で保護されず、`MAX_RENDER_BACKBUFFER_WIDTH_PX`
+ * を超えうる（#446 再レビュー question対応）。大きい方の軸を基準にすれば、その軸の裏バッファは
+ * ちょうど上限に収まり、小さい方の軸は同じ resolution で必ずそれ以下になる（矩形の短辺と長辺の
+ * 関係は resolution を掛けても変わらないため）。`screenHeight` が不正（0 以下・NaN・非有限）な
+ * 場合は `screenWidth` をそのまま基準にする（screenHeight 未指定・不明時のフォールバック）。
+ *
+ * 上限に達した場合、返り値は「クランプ基準側で裏バッファ幅（or 高さ）が
+ * `MAX_RENDER_BACKBUFFER_WIDTH_PX` に一致する resolution」に切り詰められる（見た目には Retina
+ * 表示の鮮明さが頭打ちになるだけで、クラッシュや真っ黒描画は避けられる）。
  */
 export function computeDynamicRenderResolution(
   displayWidth: number,
   screenWidth: number,
+  screenHeight: number,
   devicePixelRatio: number
 ): number {
   const dpr = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1
   if (!(displayWidth > 0) || !(screenWidth > 0)) return dpr
   const raw = dpr * (displayWidth / screenWidth)
-  const maxResolution = MAX_RENDER_BACKBUFFER_WIDTH_PX / screenWidth
+  const safeScreenHeight =
+    Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : screenWidth
+  const clampBasis = Math.max(screenWidth, safeScreenHeight)
+  const maxResolution = MAX_RENDER_BACKBUFFER_WIDTH_PX / clampBasis
   return Math.min(raw, maxResolution)
 }
 

@@ -390,7 +390,9 @@ function NovelPlayer({
       // 復元後にサイズが変わっていれば次のリサイズで本 effect が改めて追従する）。
       if (renderer.isExporting()) return
       const dpr = resolveDevicePixelRatio()
-      renderer.setRenderResolution(computeDynamicRenderResolution(displayWidth, gameWidth, dpr))
+      renderer.setRenderResolution(
+        computeDynamicRenderResolution(displayWidth, gameWidth, gameHeight, dpr)
+      )
     }
 
     const scheduleApply = (displayWidth: number) => {
@@ -419,11 +421,14 @@ function NovelPlayer({
       observer.disconnect()
       if (debounceTimer) clearTimeout(debounceTimer)
     }
-    // gameWidth はアスペクト比が変わると変化する（fluid の向きカテゴリ変化・非fluid の
-    // aspectRatio prop 変化）。変化のたびに effect を張り直し、closure 内の gameWidth を
-    // 常に現在の論理幅に保つ（rendererRef 経由なので再マウント有無に関わらず現在の renderer を
-    // 常に指す。上の fluidRemountKey 再マウント effect とは独立）。
-  }, [gameWidth])
+    // gameWidth/gameHeight はアスペクト比が変わると変化する（fluid の向きカテゴリ変化・非fluid の
+    // aspectRatio prop 変化）。変化のたびに effect を張り直し、closure 内の gameWidth/gameHeight を
+    // 常に現在の論理サイズに保つ（rendererRef 経由なので再マウント有無に関わらず現在の renderer を
+    // 常に指す。上の fluidRemountKey 再マウント effect とは独立）。gameHeight も deps に含めるのは、
+    // `16:9`(800×450)→`4:3`(800×600) のように gameWidth は不変でも gameHeight だけが変わる
+    // 組み合わせ（ASPECT_RATIOS 参照）で closure 内の gameHeight が stale にならないようにするため
+    // （#446 再レビュー question対応でクランプ計算に gameHeight を使うようになったのに伴う追従）。
+  }, [gameWidth, gameHeight])
 
   // インジケータ画像の先読み (#413)。assetBaseUrl が分かった時点で、renderer の生成/初期化
   // （下の init effect の `renderer.init(...).then(...)`）を待たずにインジケータ画像（next/pageturn
@@ -473,6 +478,7 @@ function NovelPlayer({
         computeDynamicRenderResolution(
           containerRef.current?.getBoundingClientRect().width ?? 0,
           gameWidth,
+          gameHeight,
           resolveDevicePixelRatio()
         )
       )

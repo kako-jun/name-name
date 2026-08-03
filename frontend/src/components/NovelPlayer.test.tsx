@@ -1263,10 +1263,12 @@ describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + 
     })
   })
 
-  // aspectRatio="16:9" 固定（非fluid）の gameWidth（ASPECT_RATIOS['16:9'].width, constants.ts）。
+  // aspectRatio="16:9" 固定（非fluid）の gameWidth/gameHeight（ASPECT_RATIOS['16:9'], constants.ts）。
   const GAME_WIDTH_16_9 = 800
-  // aspectRatio="9:16" 固定（非fluid）の gameWidth（ASPECT_RATIOS['9:16'].width, constants.ts）。
+  const GAME_HEIGHT_16_9 = 450
+  // aspectRatio="9:16" 固定（非fluid）の gameWidth/gameHeight（ASPECT_RATIOS['9:16'], constants.ts）。
   const GAME_WIDTH_9_16 = 450
+  const GAME_HEIGHT_9_16 = 800
 
   it('C1: リサイズから200ms経過でrenderer.setRenderResolution(表示幅/論理幅×dprの計算値)が呼ばれる', async () => {
     render(<NovelPlayer events={[]} aspectRatio="16:9" />)
@@ -1284,7 +1286,7 @@ describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + 
     const dpr = window.devicePixelRatio || 1
     expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
     expect(r.setRenderResolution).toHaveBeenCalledWith(
-      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, dpr)
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, GAME_HEIGHT_16_9, dpr)
     )
   })
 
@@ -1336,7 +1338,7 @@ describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + 
     const dpr = window.devicePixelRatio || 1
     expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
     expect(r.setRenderResolution).toHaveBeenCalledWith(
-      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, dpr)
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, GAME_HEIGHT_16_9, dpr)
     )
   })
 
@@ -1363,11 +1365,11 @@ describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + 
     expect(r.setRenderResolution).toHaveBeenCalledTimes(2)
     expect(r.setRenderResolution).toHaveBeenNthCalledWith(
       1,
-      computeDynamicRenderResolution(1000, GAME_WIDTH_16_9, dpr)
+      computeDynamicRenderResolution(1000, GAME_WIDTH_16_9, GAME_HEIGHT_16_9, dpr)
     )
     expect(r.setRenderResolution).toHaveBeenNthCalledWith(
       2,
-      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, dpr)
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, GAME_HEIGHT_16_9, dpr)
     )
   })
 
@@ -1409,7 +1411,7 @@ describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + 
     const dpr = window.devicePixelRatio || 1
     expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
     expect(r.setRenderResolution).toHaveBeenCalledWith(
-      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, dpr)
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, GAME_HEIGHT_16_9, dpr)
     )
   })
 
@@ -1477,7 +1479,7 @@ describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + 
     const dpr = window.devicePixelRatio || 1
     expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
     expect(r.setRenderResolution).toHaveBeenCalledWith(
-      computeDynamicRenderResolution(900, GAME_WIDTH_9_16, dpr)
+      computeDynamicRenderResolution(900, GAME_WIDTH_9_16, GAME_HEIGHT_9_16, dpr)
     )
   })
 
@@ -1563,7 +1565,7 @@ describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + 
 
     expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
     expect(r.setRenderResolution).toHaveBeenCalledWith(
-      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, 2)
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, GAME_HEIGHT_16_9, 2)
     )
   })
 })
