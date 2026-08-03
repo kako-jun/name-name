@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeCoverFit,
   computeDynamicRenderResolution,
-  MAX_RENDER_BACKBUFFER_WIDTH_PX,
+  MAX_RENDER_BACKBUFFER_DIMENSION_PX,
   computeSplitLayoutRegions,
   splitTextRegionForDualWindow,
   parseHexColor,
@@ -2155,7 +2155,7 @@ describe('computeDynamicRenderResolution (#446)', () => {
   it('境界値: screenHeightが不正(0/負値/NaN/非有限)なら screenWidth を基準にフォールバックする', () => {
     // screenWidth=800, dpr=3, displayWidth=8000（素の計算値30）を各種不正 screenHeight で流しても、
     // 従来どおり screenWidth=800 基準の上限 8192/800=10.24 に切り詰められる（screenHeight は無視）。
-    const expected = MAX_RENDER_BACKBUFFER_WIDTH_PX / 800
+    const expected = MAX_RENDER_BACKBUFFER_DIMENSION_PX / 800
     expect(computeDynamicRenderResolution(8000, 800, 0, 3)).toBe(expected)
     expect(computeDynamicRenderResolution(8000, 800, -100, 3)).toBe(expected)
     expect(computeDynamicRenderResolution(8000, 800, NaN, 3)).toBe(expected)
@@ -2165,22 +2165,22 @@ describe('computeDynamicRenderResolution (#446)', () => {
   it('境界値: displayWidth=Infinity（>0なので縮退扱いされない）×有限screenWidthでも上限クランプでInfinityにならない', () => {
     // displayWidth>0 は true（Infinity>0）なので早期フォールバックの対象外になり、
     // dpr(2) * (Infinity/800) = Infinity が素の計算結果になるが、#446 セルフレビュー should対応の
-    // 上限クランプ（MAX_RENDER_BACKBUFFER_WIDTH_PX/screenWidth、screenHeight=450<800なのでscreenWidth基準）
+    // 上限クランプ（MAX_RENDER_BACKBUFFER_DIMENSION_PX/screenWidth、screenHeight=450<800なのでscreenWidth基準）
     // により screenWidth=800 の上限 8192/800=10.24 に切り詰められる。呼び出し側の
     // NovelRenderer.setRenderResolution だけに依存しない多重防御に強化された契約をここで固定する。
     expect(computeDynamicRenderResolution(Infinity, 800, 450, 2)).toBe(
-      MAX_RENDER_BACKBUFFER_WIDTH_PX / 800
+      MAX_RENDER_BACKBUFFER_DIMENSION_PX / 800
     )
   })
 
-  it('should対応: 上限を超える引き伸ばし率が入力されると裏バッファ幅がMAX_RENDER_BACKBUFFER_WIDTH_PXに収まるようクランプされる', () => {
+  it('should対応: 上限を超える引き伸ばし率が入力されると裏バッファ幅がMAX_RENDER_BACKBUFFER_DIMENSION_PXに収まるようクランプされる', () => {
     // 複数モニタにまたがる横幅の広いウィンドウ(displayWidth=8000)+高DPR(dpr=3)の極端なケース。
     // 素の計算値は 3 * (8000/800) = 30 だが、screenWidth=800(>screenHeight=450)での上限は
     // 8192/800=10.24 なのでそちらに切り詰められる（裏バッファ幅 800*10.24=8192 ≦
-    // MAX_RENDER_BACKBUFFER_WIDTH_PX）。
+    // MAX_RENDER_BACKBUFFER_DIMENSION_PX）。
     const result = computeDynamicRenderResolution(8000, 800, 450, 3)
-    expect(result).toBe(MAX_RENDER_BACKBUFFER_WIDTH_PX / 800)
-    expect(result * 800).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_WIDTH_PX)
+    expect(result).toBe(MAX_RENDER_BACKBUFFER_DIMENSION_PX / 800)
+    expect(result * 800).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_DIMENSION_PX)
   })
 
   it('question対応: 縦長アスペクト比(9:16, screenWidth=450 < screenHeight=800)では screenHeight 基準でクランプされ、裏バッファの高さも上限を超えない', () => {
@@ -2190,10 +2190,10 @@ describe('computeDynamicRenderResolution (#446)', () => {
     // （ここでは screenHeight=800）を基準にするため、裏バッファ高さがちょうど上限に収まる。
     // 素の計算値: dpr(4) * (displayWidth=3600 / screenWidth=450) = 32 → 大幅に超過するのでクランプ対象。
     const result = computeDynamicRenderResolution(3600, 450, 800, 4)
-    expect(result).toBe(MAX_RENDER_BACKBUFFER_WIDTH_PX / 800)
+    expect(result).toBe(MAX_RENDER_BACKBUFFER_DIMENSION_PX / 800)
     // 縦長ゲームの保護対象である「高さ」側の裏バッファが上限に収まることを直接検証する。
-    expect(result * 800).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_WIDTH_PX)
+    expect(result * 800).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_DIMENSION_PX)
     // ついでに幅側もこのケースでは同時に収まる（screenWidth < screenHeight なので当然余裕がある）。
-    expect(result * 450).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_WIDTH_PX)
+    expect(result * 450).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_DIMENSION_PX)
   })
 })
