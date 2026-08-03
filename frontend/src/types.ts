@@ -549,6 +549,13 @@ export interface EventDocument {
    *  null/undefined・false は従来どおり（画像全面 + テキストオーバーレイ、後方互換）。
    *  frontmatter `split_layout:` から流す。 */
   split_layout?: boolean | null
+  /** 文単位の厳密改頁 (#448)。`true` = adv/novel どちらの `dialog_style` でも 1 ページ＝厳密に 1 文に
+   *  固定する。novel は既存の行数キャップ式オーバーフロー安全策（1 文だけで maxLinesPerPage を超える
+   *  場合はその文単独で1ページ）はそのまま、追加で「1 ページ最大 1 文」を重ねる。adv は markdown 行
+   *  単位の `text[]` をやめ、splitIntoSentences 由来の 1 文＝1 ページに切り替える。`dialog_style`
+   *  （adv/novel、テキスト送りの挙動）とは独立の軸で、両者は併用できる。
+   *  null/undefined・false は従来どおり（後方互換）。frontmatter `sentence_per_page:` から流す。 */
+  sentence_per_page?: boolean | null
   chapters: EventChapter[]
 }
 

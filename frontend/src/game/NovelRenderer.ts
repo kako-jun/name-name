@@ -81,7 +81,7 @@ import {
   splitTextRegionForDualWindow,
   type LayoutRect,
 } from './novelLayout'
-import { stripRubyMarkup } from './ruby'
+import { stripRubyMarkup, mapSentencesToRubyPreservedText } from './ruby'
 
 /**
  * 立ち絵・背景先読み (#389) のテキストイベント数上限。旧仕様（8）は theo-hayami の実測値
@@ -390,6 +390,16 @@ export class NovelRenderer {
    *  再マウントする設計のため、renderer 自身は resize ハンドラを持たない）。 */
   private splitLayout: boolean = false
 
+  /** 文単位の厳密改頁 (#448)。frontmatter `sentence_per_page:` の値。既定 false＝従来どおり
+   *  （novel は行数キャップで複数文が1ページに同居しうる／adv は markdown 行単位でページが決まる）。
+   *  dialog_style（adv/novel）とは独立の軸で、両者と併用できる。true のとき、adv/novel どちらでも
+   *  1 ページ＝厳密に 1 文になる:
+   *   - novel: `paginateSentencesByLines` の行数キャップ（オーバーフロー防止・常時 ON）はそのまま、
+   *     追加で「1 ページ最大 1 文」を重ねる（`getNovelPages` が `maxSentencesPerPage` を渡す）。
+   *   - adv: markdown 行単位の `text[]` を捨て、`getAdvSentencePages` が `splitIntoSentences` で
+   *     割った 1 文＝1 ページに切り替える。 */
+  private sentencePerPage: boolean = false
+
   /** 背景クロスフェード・退場（終劇）フェード時間（ms）(#407)。frontmatter `background_fade_ms:` の値。
    *  `character_fade_ms`（立ち絵）と対称の per-game 数値設定。背景の表示（イン）・切り替え
    *  （クロスフェード）・退場（アウト）すべてこの時間で動く（余韻用途の「ものすごくゆっくり」も可）。
@@ -474,6 +484,12 @@ export class NovelRenderer {
    * eventIndex が変わったら破棄して再計算する（cacheEventIndex で識別）。
    */
   private novelPagesCache: { eventIndex: number; pages: NovelPage[] } | null = null
+  /**
+   * adv 文単位ページキャッシュ (#448)。`sentence_per_page: true` のとき、現在の text イベントを
+   * `splitIntoSentences` で 1 文=1 ページに割った結果（`getAdvSentencePages`）。
+   * `novelPagesCache` と同じく**派生**（GameState には持たない）で、eventIndex が変わったら破棄する。
+   */
+  private advSentencePagesCache: { eventIndex: number; pages: string[] } | null = null
   /** #293: 立ち絵 ready 後に本文 reveal を遅延する描画トークン。古い rAF/setTimeout を無効化する。 */
   private deferredTextRenderToken = 0
 
@@ -1493,6 +1509,8 @@ export class NovelRenderer {
     this.history = []
     // novel 改頁キャッシュ (#283) はイベント列に紐づくので破棄する。
     this.novelPagesCache = null
+    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
+    this.advSentencePagesCache = null
     // 先読み済み URL 集合 (#389) もイベント列に紐づくので破棄する。setEvents は表示済み背景を
     // Assets.unload するため、ここでクリアしないと「積み済み」誤判定で先読みがスキップされ
     // コールドロードに戻る。新しいイベント列＝先読み状態も作り直すのが正しい（末尾の
@@ -1618,6 +1636,29 @@ export class NovelRenderer {
   setSplitLayout(enabled: boolean | null | undefined): void {
     this.splitLayout = enabled === true
     this.applySplitLayout()
+  }
+
+  /**
+   * 文単位の厳密改頁を設定する (#448)。
+   * frontmatter `sentence_per_page:` の値を渡す。null/undefined/false は従来どおり（既定・後方互換）。
+   *
+   * dialog_style（adv/novel）とは独立の軸で true のとき、どちらのスタイルでも 1 ページ＝厳密に 1 文
+   * に固定する（novel は行数キャップに「1 ページ最大 1 文」を追加で重ねる／adv は markdown 行単位
+   * の `text[]` をやめ `splitIntoSentences` 由来の 1 文＝1 ページに切り替える。詳細は
+   * `getNovelPages` / `getAdvSentencePages` 参照）。派生ページキャッシュはページ単位が変わるため破棄する。
+   *
+   * `setDialogStyle`（`applyDialogStyle`）と同じパターンで、既にテキスト表示中なら即座に新ページ構成で
+   * 描き直す (#448 Part2)。EditorScreen のライブプレビューは frontmatter をライブバインドしているため、
+   * これが無いとテキスト表示中に `sentence_per_page` を ON/OFF しても次のクリックまで画面が古いページ
+   * 構成のまま stale になる。
+   */
+  setSentencePerPage(enabled: boolean | null | undefined): void {
+    this.sentencePerPage = enabled === true
+    this.novelPagesCache = null
+    this.advSentencePagesCache = null
+    if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
+      this.render()
+    }
   }
 
   /**
@@ -1914,6 +1955,8 @@ export class NovelRenderer {
     }
     // 改頁は幾何（boxH）依存なので、スタイル切替で派生キャッシュを破棄する (#283)。
     this.novelPagesCache = null
+    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
+    this.advSentencePagesCache = null
     // 既にテキスト表示中なら新スタイルで描き直す（adv↔novel 切替が即反映される）。
     if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
       this.render()
@@ -2506,16 +2549,17 @@ export class NovelRenderer {
       }
       // 2b) 最後のページ → 下の「次イベントへ」へフォールスルー。
     } else if (textEvt) {
-      // --- adv（従来どおり・#283） ---
-      // 現在表示中の text 行をそのまま backlog に記録する。
-      const currentLine = textEvt.text[this.textIndex] ?? ''
+      // --- adv（従来どおり・#283 / sentence_per_page 有効時は文単位ページ #448） ---
+      // 現在表示中のページ（text 行、または文単位ページ）をそのまま backlog に記録する。
+      const advPages = this.sentencePerPage ? this.getAdvSentencePages(textEvt) : textEvt.text
+      const currentLine = advPages[this.textIndex] ?? ''
       const character = textEvt.type === 'dialog' ? textEvt.character : null
       this.backlogOverlay.addEntry(character, currentLine)
 
       this.textIndex++
       const pageCount = this.currentPageCount(textEvt)
       if (this.textIndex < pageCount) {
-        // まだ text 行が残っている → クリック = 改頁（次行をクリア表示）
+        // まだページが残っている → クリック = 改頁（次ページをクリア表示）
         this.render()
         return
       }
@@ -2537,6 +2581,8 @@ export class NovelRenderer {
     this.sentenceIndex = 0
     // novel 改頁キャッシュは eventIndex 単位。次イベントへ進むので破棄する (#283)。
     this.novelPagesCache = null
+    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
+    this.advSentencePagesCache = null
 
     if (this.eventIndex >= this.resolvedEvents.length) {
       // 全イベント完了
@@ -2734,6 +2780,8 @@ export class NovelRenderer {
     // novel 改頁キャッシュは派生。任意局面復元で events / 幾何 / eventIndex が変わり得るので破棄し、
     // render() 側で現在の eventIndex に対して再計算させる (#283)。
     this.novelPagesCache = null
+    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
+    this.advSentencePagesCache = null
 
     // 終劇状態の復元 (#386)。goBack/seekTo/セーブ復元はすべて即時反映（フェード演出はしない）。
     // DOM 側（NovelPlayer の "to be continued..." 表示）は callback で同期する。
@@ -2815,6 +2863,8 @@ export class NovelRenderer {
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
     // novel 改頁キャッシュは展開後のイベント列に紐づくので破棄する (#283)。
     this.novelPagesCache = null
+    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
+    this.advSentencePagesCache = null
 
     // 再展開で配列長が変わった場合、eventIndex を安全な範囲に収める
     if (oldIndex >= this.resolvedEvents.length) {
@@ -4386,6 +4436,8 @@ export class NovelRenderer {
    *  2. `splitIntoSentences` で文境界に割る（純粋関数）。
    *  3. 各文を現フォントで wordwrap した行数（`DialogBox.measureLineCount`）を測る。
    *  4. `paginateSentencesByLines` で利用可能行数（`DialogBox.novelMaxLinesPerPage`）に貪欲改頁（純粋関数）。
+   *     `sentence_per_page: true` (#448) のときは追加で `maxSentencesPerPage=1` を渡し、行数キャップ
+   *     （オーバーフロー防止・常時 ON）はそのまま「1 ページ最大 1 文」を重ねる。
    *
    * テキストが空（立ち絵だけの空ダイアログ等）なら 1 ページ（空文字）を返し、従来の空表示を保つ。
    */
@@ -4404,16 +4456,79 @@ export class NovelRenderer {
       pages = [{ text: '', sentences: [], lineCount: 0 }]
     } else {
       const lineCounts = sentences.map((s) => this.dialogBox.measureLineCount(s))
-      pages = paginateSentencesByLines(sentences, lineCounts, this.dialogBox.novelMaxLinesPerPage())
+      pages = paginateSentencesByLines(
+        sentences,
+        lineCounts,
+        this.dialogBox.novelMaxLinesPerPage(),
+        undefined,
+        this.sentencePerPage ? 1 : undefined
+      )
       if (pages.length === 0) pages = [{ text: '', sentences: [], lineCount: 0 }]
     }
     this.novelPagesCache = { eventIndex: this.eventIndex, pages }
     return pages
   }
 
-  /** 現在の text イベントの総ページ数 (#283)。novel は改頁数、adv は text 行数。 */
+  /**
+   * 現在の text イベントを adv スタイルの「文単位ページ」へ分割して返す (#448)。
+   * `sentence_per_page: true` のときだけ呼ばれる（false なら従来どおり `textEvt.text[]` を直接使う）。
+   *
+   * `getNovelPages` と違い行数キャップは持たない — 現行 adv はそもそも 1 ページの行数上限・スクロールを
+   * 持たず、`DialogBox.setDialog` が wordwrap した結果をそのまま箱に収める（既存のオーバーフロー安全策
+   * ＝wordwrap 任せ）。sentence_per_page はページを区切る単位を「markdown 行」から「文」に変えるだけで、
+   * 1 文がボックス高さを超える場合の折返しは従来と同じ wordwrap がそのまま処理する（挙動不変）。
+   *
+   * - **派生**であり GameState には持たない。eventIndex 単位で `advSentencePagesCache` にキャッシュする。
+   * - テキストが空なら 1 ページ（空文字）を返し、従来の空表示を保つ。
+   *
+   * バグ1（ルビ記法の消失・#448 テスト設計で発覚）: 文境界判定（`splitIntoSentences`）は
+   * `stripRubyMarkup` 済みの plain text に対して行う必要がある（`》` が SENTENCE_TRAILERS の
+   * 1 つのため、ルビ記法混在のままだと文末トレーラとして誤吸収されうる）。しかし `DialogBox.setDialog`
+   * に渡す表示テキストはルビ記法を保持したままにしたい（setDialog は自前で `parseRubyText` を呼ぶ設計。
+   * novel は元々ルビ非対応＝既存の前例で非回帰だが、adv は従来ルビ対応していたためここだけ新規に
+   * 失われる）。`mapSentencesToRubyPreservedText` で plain 文境界をルビ込み原文へマッピングし直す。
+   *
+   * バグ2（Narration の空白ポーズページ消滅・#448 テスト設計で発覚）: parser.rs の `>` 単独行は
+   * `narration_lines.push(String::new())` で意図的な空文字要素を作り、従来 adv（sentence_per_page:false）
+   * では「間を置く」空白ページとして機能していた（`["一言目。", "", "二言目。"]` → 3 ページ）。単純に
+   * `text[].join('\n').replace(/\n+/g,' ')` すると連続 `\n\n`（空要素由来）が半角スペース 1 個に
+   * 潰れて空白ページが消えるため、`text[]` を空文字要素で分割し、各グループを独立に文分割してから
+   * グループの間に空文字 1 ページを挿入する。
+   */
+  private getAdvSentencePages(textEvt: { text: string[] }): string[] {
+    if (this.advSentencePagesCache && this.advSentencePagesCache.eventIndex === this.eventIndex) {
+      return this.advSentencePagesCache.pages
+    }
+    const pages: string[] = []
+    let group: string[] = []
+    const flushGroup = (): void => {
+      if (group.length === 0) return
+      const joined = group.join('\n').replace(/\n+/g, ' ')
+      const plain = stripRubyMarkup(joined)
+      const sentences = splitIntoSentences(plain)
+      pages.push(...mapSentencesToRubyPreservedText(joined, sentences))
+      group = []
+    }
+    for (const line of textEvt.text) {
+      if (line === '') {
+        // `>` 単独行由来の空文字要素 (#448 バグ2) = 意図的な空白ポーズページ。
+        flushGroup()
+        pages.push('')
+      } else {
+        group.push(line)
+      }
+    }
+    flushGroup()
+    if (pages.length === 0) pages.push('')
+    this.advSentencePagesCache = { eventIndex: this.eventIndex, pages }
+    return pages
+  }
+
+  /** 現在の text イベントの総ページ数 (#283)。novel は改頁数、adv は text 行数
+   *  （`sentence_per_page: true` のときは adv も文単位ページ数 #448）。 */
   private currentPageCount(textEvt: { text: string[] }): number {
     if (this.isNovelStyle()) return this.getNovelPages(textEvt).length
+    if (this.sentencePerPage) return this.getAdvSentencePages(textEvt).length
     return textEvt.text.length
   }
 
@@ -4451,7 +4566,11 @@ export class NovelRenderer {
       shownPlainLength = novelPageSentences.slice(0, novelSentenceIndex).join('').length
     }
     // line は scrim 可視判定や（adv の）表示テキストに使う。novel は累積テキスト。
-    const line = novel ? cumulativeText : (textEvt.text[this.textIndex] ?? '')
+    // adv は sentence_per_page (#448) が有効なら文単位ページ、無効なら従来どおり text[] 行。
+    const advLine = this.sentencePerPage
+      ? (this.getAdvSentencePages(textEvt)[this.textIndex] ?? '')
+      : (textEvt.text[this.textIndex] ?? '')
+    const line = novel ? cumulativeText : advLine
     const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
     const readLineKey = this.currentSceneId
       ? makeReadLineKey(this.currentSceneId, displayIndex)

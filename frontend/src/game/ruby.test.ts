@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { parseRubyText, stripRubyMarkup, type RubyRun } from './ruby'
+import {
+  parseRubyText,
+  stripRubyMarkup,
+  mapSentencesToRubyPreservedText,
+  type RubyRun,
+} from './ruby'
 
 const plain = (s: string): RubyRun => ({ base: s, ruby: null })
 const ruby = (base: string, r: string): RubyRun => ({ base, ruby: r })
@@ -135,5 +140,67 @@ describe('parseRubyText 追加カバレッジ (#148 R1 N8)', () => {
   it('｜ で明示すればひらがなも base にできる', () => {
     const runs = parseRubyText('｜あいうえお《アイウエオ》')
     expect(runs).toEqual([{ base: 'あいうえお', ruby: 'アイウエオ' }])
+  })
+})
+
+// ===== #448 バグ1: adv + sentence_per_page: true でルビ記法が消える修正の要 =====
+//
+// getAdvSentencePages は文境界判定を stripRubyMarkup 済みの plain text で行うが（`》` が
+// SENTENCE_TRAILERS の一員のため生ルビ記法混在だと誤って文末トレーラに吸収されうる）、
+// DialogBox.setDialog に渡す表示テキストにはルビ記法を保持したい。この橋渡しをする
+// mapSentencesToRubyPreservedText 自体を純粋関数として直接縛る。
+describe('mapSentencesToRubyPreservedText (#448)', () => {
+  it('空配列の plainSentences は空配列を返す', () => {
+    expect(mapSentencesToRubyPreservedText('猫が鳴く。', [])).toEqual([])
+  })
+
+  it('ルビ記法を含まない rawText はそのまま返す（高速パス）', () => {
+    expect(
+      mapSentencesToRubyPreservedText('猫が鳴く。犬も鳴く。', ['猫が鳴く。', '犬も鳴く。'])
+    ).toEqual(['猫が鳴く。', '犬も鳴く。'])
+  })
+
+  it('1 文内のルビが保持される', () => {
+    const raw = '漢字《かんじ》を読む。'
+    const plainSentences = ['漢字を読む。']
+    expect(mapSentencesToRubyPreservedText(raw, plainSentences)).toEqual(['漢字《かんじ》を読む。'])
+  })
+
+  it('複数文にまたがるルビがそれぞれの文へ正しく振り分けられる', () => {
+    const raw = '今日《きょう》は晴天《せいてん》。明日《あした》は曇天《どんてん》。'
+    const plainSentences = ['今日は晴天。', '明日は曇天。']
+    expect(mapSentencesToRubyPreservedText(raw, plainSentences)).toEqual([
+      '今日《きょう》は晴天《せいてん》。',
+      '明日《あした》は曇天《どんてん》。',
+    ])
+  })
+
+  it('implicit な CJK 自動連結ルビ（｜なし）は原文と同一のまま再構成される（base が全て CJK のため）', () => {
+    const raw = '東京都庁《とうきょうとちょう》です。'
+    const plainSentences = ['東京都庁です。']
+    expect(mapSentencesToRubyPreservedText(raw, plainSentences)).toEqual([raw])
+  })
+
+  it('base が全て CJK なら｜による冗長な明示グルーピングは正規化で落ちる（意味は同一・stripRubyMarkup結果で確認）', () => {
+    // 東京都庁（全て CJK）は implicit のままでも一意に base が決まるため、著者が念のため付けた
+    // ｜ は再構成時に落ちる。バイト同一ではなくなるが、再パース結果（RubyRun）は同一で表示は変わらない。
+    const raw = '｜東京都庁《とうきょうとちょう》です。'
+    const plainSentences = ['東京都庁です。']
+    const mapped = mapSentencesToRubyPreservedText(raw, plainSentences)
+    expect(mapped).toEqual(['東京都庁《とうきょうとちょう》です。'])
+    expect(stripRubyMarkup(mapped[0])).toBe(plainSentences[0])
+  })
+
+  it('｜ で明示グルーピングされた非 CJK base（英字等）も原文と同一のまま再構成される', () => {
+    const raw = '｜go to《ごーとぅー》の意味です。'
+    const plainSentences = ['go toの意味です。']
+    expect(mapSentencesToRubyPreservedText(raw, plainSentences)).toEqual([raw])
+  })
+
+  it('マッピング崩れ（plainSentences が rawText と対応しない）は該当文をそのままフォールバックする（壊さない方針）', () => {
+    // 意図的に不整合な plainSentences を渡す。安全確認（stripRubyMarkup(mapped)===sentence）に
+    // 失敗するので、ルビなしの与えられた文字列そのものへ落ちる（クラッシュ・文字化けしない）。
+    const mapped = mapSentencesToRubyPreservedText('猫《ねこ》。', ['まったく違う文'])
+    expect(mapped).toEqual(['まったく違う文'])
   })
 })

@@ -1309,6 +1309,56 @@ describe('paginateSentencesByLines 境界値 (#283 設計1〜7)', () => {
   })
 })
 
+// ===== #448: maxSentencesPerPage（1 ページに置ける文数の上限）追加テスト =====
+//
+// sentence_per_page: true の実運用では maxSentencesPerPage=1 を渡し「1 ページ厳密 1 文」に
+// する。既存の行数キャップ（cap）はそのまま生きたまま、文数キャップを OR 条件で追加するだけ
+// なので、cap 側の境界値テスト（設計1〜7 上記）とは独立に「文数側」の境界だけをここで縛る。
+describe('paginateSentencesByLines maxSentencesPerPage (#448)', () => {
+  it('maxSentencesPerPage=1 で文数=ページ数になる（1ページ厳密1文）', () => {
+    const sentences = ['a。', 'b。', 'c。']
+    // cap を大きく取り、行数キャップでは絶対に割れない条件にした上で maxSentencesPerPage だけで割る。
+    const pages = paginateSentencesByLines(sentences, [1, 1, 1], 100, undefined, 1)
+    expect(pages.map((p) => p.text)).toEqual(['a。', 'b。', 'c。'])
+  })
+
+  it('maxSentencesPerPage 省略は従来の複数文貪欲改頁のまま（非回帰）', () => {
+    const sentences = ['a', 'b', 'c']
+    // cap=2・各文1行 → 省略時は貪欲に [ab]/[c] のまま（maxSentencesPerPage を渡した時と挙動が変わる）。
+    const pages = paginateSentencesByLines(sentences, [1, 1, 1], 2)
+    expect(pages.map((p) => p.text)).toEqual(['ab', 'c'])
+  })
+
+  it('maxSentencesPerPage=1 かつ 1 文だけで cap 超過 → オーバーフロー安全策と同じ単独ページ（空ページ・文の重複なし）', () => {
+    // 'verylong' が cap(3) を超える 5 行。maxSentencesPerPage=1 でも「1 文だけで cap 超過は単独ページ」
+    // という既存安全策（設計4）を迂回・重複させない。
+    const pages = paginateSentencesByLines(['verylong'], [5], 3, undefined, 1)
+    expect(pages.map((p) => p.text)).toEqual(['verylong'])
+    expect(pages).toHaveLength(1)
+  })
+
+  it('maxSentencesPerPage=2 で2文ごとに改頁', () => {
+    const sentences = ['a', 'b', 'c', 'd', 'e']
+    const pages = paginateSentencesByLines(sentences, [1, 1, 1, 1, 1], 100, undefined, 2)
+    expect(pages.map((p) => p.text)).toEqual(['ab', 'cd', 'e'])
+  })
+
+  it('境界: maxSentencesPerPage=0/0.5/-1/NaN は Infinity（無制限）にフォールバックする', () => {
+    const sentences = ['a', 'b', 'c']
+    const lineCounts = [1, 1, 1]
+    // cap=2 のみが効く貪欲改頁の結果と一致すれば「文数キャップが無効化された」と分かる。
+    const baseline = paginateSentencesByLines(sentences, lineCounts, 2)
+    for (const invalid of [0, 0.5, -1, NaN]) {
+      const pages = paginateSentencesByLines(sentences, lineCounts, 2, undefined, invalid)
+      expect(pages.map((p) => p.text)).toEqual(baseline.map((p) => p.text))
+    }
+  })
+
+  it('空配列 × maxSentencesPerPage=1 → 空ページ配列', () => {
+    expect(paginateSentencesByLines([], [], 3, undefined, 1)).toEqual([])
+  })
+})
+
 describe('splitIntoSentences 設計8〜11（分割規則の回帰固定 #283）', () => {
   // 8: 半角ピリオド `.` は SENTENCE_TERMINATORS に含まれないので文境界にしない。
   //    `3.14は円周率です。` は `.` で割れず 1 文（QA 設計の「3.14 誤分割」は誤報。逆を固定する）。

@@ -316,6 +316,18 @@ export interface Document {
      * frontmatter `split_layout:` から流す。
      */
     split_layout?: boolean;
+    /**
+     * 文単位の厳密改頁 (#448)。`true` = ADV/novel どちらの `dialog_style` でも 1 ページ＝厳密に 1 文
+     * に固定する。novel は既存の `paginateSentencesByLines` オーバーフロー安全策（1 文だけで
+     * `maxLinesPerPage` を超える場合はその文単独で 1 ページ＝文途中改頁を避ける）はそのまま維持し、
+     * その上に「1 ページに詰め込める文の上限を常に 1 文に固定する」制約を重ねるだけ（自動改ページ
+     * 自体は常時 ON・オフ不可）。adv は現行の「Markdown 行単位で `text[]` を 1 ページとする」動作を
+     * やめ、Dialog/Narration の `text[]` を連結して `splitIntoSentences` で分割し、1 文＝1 ページにする。
+     * `dialog_style`（adv/novel の送り挙動）とは独立の軸で、両者と併用できる。
+     * 未指定・`false` は従来どおり（後方互換）。`\"true\"` / `\"false\"` のみ受け、それ以外（空・非真偽値）
+     * は None（既定 false）にフォールバック。frontmatter `sentence_per_page:` から流す。
+     */
+    sentence_per_page?: boolean;
     chapters: Chapter[];
 }
 

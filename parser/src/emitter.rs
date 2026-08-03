@@ -108,6 +108,10 @@ pub fn emit(doc: &Document) -> String {
         if let Some(v) = doc.split_layout {
             out.push_str(&format!("split_layout: {v}\n"));
         }
+        // Emit sentence_per_page only when present (#448)。skip_enabled / debug_enabled と同じ流儀。
+        if let Some(v) = doc.sentence_per_page {
+            out.push_str(&format!("sentence_per_page: {v}\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1279,6 +1283,7 @@ mod tests {
             auto_play: None,
             seekbar_color: None,
             split_layout: None,
+            sentence_per_page: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1529,6 +1534,7 @@ mod tests {
             auto_play: None,
             seekbar_color: None,
             split_layout: None,
+            sentence_per_page: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

@@ -933,20 +933,34 @@ export interface NovelPage {
  * 加えて各ページを構成した文の配列を `NovelPage.sentences` に持たせる (#292)。文単位送りでは
  * `sentences.slice(0, k+1)` の累積テキストを wordwrap して 1 文ずつ表示する。
  *
+ * `maxSentencesPerPage` (#448): frontmatter `sentence_per_page: true` 用の**追加の**制約。
+ * 既定 `Infinity`（未指定）は従来どおり行数キャップだけで貪欲に複数文を詰める（非回帰）。
+ * 有限値（実運用では 1）を渡すと、1 ページに置ける文の数をその上限に固定する — 行数キャップ
+ * （オーバーフロー防止・常時 ON）はそのまま生きたまま、「文数」でも改頁するようになるだけで、
+ * 上記の「1 文だけで cap を超える場合は単独ページ」安全策は変更・迂回しない（両方の条件を OR で
+ * 判定するだけなので、どちらか一方が先に発火してもページ内容は同じになる）。
+ *
  * @param sentences 文の配列（`splitIntoSentences` の結果）
  * @param sentenceLineCounts 各文を単独で wordwrap したときの行数（`sentences` と同じ長さ・1 以上）
  * @param maxLinesPerPage 1 ページに収まる最大行数（1 以上。利用可能高さ ÷ 行高 で算出）
  * @param joinSentences 同一ページ内の文を連結する関数（既定は素朴な空文字連結）
+ * @param maxSentencesPerPage 1 ページに置ける文数の上限 (#448)。既定 `Infinity`（制約なし＝後方互換）
  * @returns ページ配列（各ページの text と占有行数）
  */
 export function paginateSentencesByLines(
   sentences: string[],
   sentenceLineCounts: number[],
   maxLinesPerPage: number,
-  joinSentences: (sentencesOnPage: string[]) => string = (s) => s.join('')
+  joinSentences: (sentencesOnPage: string[]) => string = (s) => s.join(''),
+  maxSentencesPerPage: number = Number.POSITIVE_INFINITY
 ): NovelPage[] {
   // maxLinesPerPage は 1 未満を許さない（0 だと 1 文も置けず無限ループになる）。
   const cap = Math.max(1, Math.floor(maxLinesPerPage))
+  // maxSentencesPerPage も同様に 1 未満・非有限（NaN 等）を許さない。未指定/Infinity は無制限のまま。
+  const sentenceCap =
+    Number.isFinite(maxSentencesPerPage) && maxSentencesPerPage >= 1
+      ? Math.floor(maxSentencesPerPage)
+      : Number.POSITIVE_INFINITY
   const pages: NovelPage[] = []
   let pageSentences: string[] = []
   let pageLines = 0
@@ -969,8 +983,11 @@ export function paginateSentencesByLines(
     // NaN は `?? 1` をすり抜け Math.max/floor でも残り pageLines を汚染するため Number.isFinite で弾く。
     const rawLineCount = sentenceLineCounts[i]
     const lines = Number.isFinite(rawLineCount) ? Math.max(1, Math.floor(rawLineCount)) : 1
-    if (pageSentences.length > 0 && pageLines + lines > cap) {
-      // この文を足すと溢れる → 改頁してから新ページの先頭に置く。
+    if (
+      pageSentences.length > 0 &&
+      (pageLines + lines > cap || pageSentences.length >= sentenceCap)
+    ) {
+      // この文を足すと溢れる、または文数上限 (#448) に達した → 改頁してから新ページの先頭に置く。
       flush()
     }
     pageSentences.push(sentences[i])
