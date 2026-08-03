@@ -10,6 +10,7 @@ import {
 import { Assets } from 'pixi.js'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
+import { type NovelGameState } from '../game/GameState'
 import { parseDebugQuery } from '../game/debugQuery'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import {
@@ -234,6 +235,11 @@ function NovelPlayer({
   // fluid aspect ratio (#442) 用: ルート要素（常に w-full h-full）の実サイズを測る ref。
   // aspect_ratio: auto のときだけ ResizeObserver で監視する（非 auto では未使用）。
   const fluidRootRef = useRef<HTMLDivElement>(null)
+  // fluid 再マウント (#460) 用: 向きカテゴリ変化で renderer が作り直される直前に
+  // 旧 renderer.getSnapshot() を保持し、新 renderer の初期化直後に restoreSnapshot で
+  // 読み進め位置を引き継ぐ。初回マウント・非 fluid・向きカテゴリ不変（再マウント自体が
+  // 起きない）では常に null のまま＝従来どおり initialSceneId ベースの起動になる。
+  const pendingSnapshotRef = useRef<NovelGameState | null>(null)
 
   // 設定 (Issue #138): localStorage と同期。スライダー drag による書き込み連打は
   // debounce で吸収する (review #155 should-2)
@@ -589,11 +595,19 @@ function NovelPlayer({
         }
         renderer.setEvents(events)
       }
-      // production でも有効な起点シーン指定 (#386)。sceneId が属する script の事前ロードは
-      // PlayerScreen 側の責務（呼び出し時点で jumpSceneIndex に反映済みの前提）。ここでは
-      // 既存の startFrom(#220) をそのまま呼ぶだけで、renderer 側に新規ロジックは持ち込まない。
-      // 不正/未解決 sceneId は startFrom 内で no-op（現行どおりエントリ再生にフォールバック）。
-      if (initialSceneId) {
+      // fluid 再マウント (#460): 直前 renderer から引き継いだスナップショットがあれば
+      // restoreSnapshot で読み進め位置（背景/立ち絵/BGM 込み）を復元する。setEvents/setScenes
+      // 直後（allScenes 構築済み）のこのタイミングでのみ呼べる。この経路を通った場合、下の
+      // initialSceneId ベースの startFrom は行わない（二重に位置決めしない）。
+      const pendingSnapshot = pendingSnapshotRef.current
+      pendingSnapshotRef.current = null
+      if (pendingSnapshot) {
+        renderer.restoreSnapshot(pendingSnapshot)
+      } else if (initialSceneId) {
+        // production でも有効な起点シーン指定 (#386)。sceneId が属する script の事前ロードは
+        // PlayerScreen 側の責務（呼び出し時点で jumpSceneIndex に反映済みの前提）。ここでは
+        // 既存の startFrom(#220) をそのまま呼ぶだけで、renderer 側に新規ロジックは持ち込まない。
+        // 不正/未解決 sceneId は startFrom 内で no-op（現行どおりエントリ再生にフォールバック）。
         renderer.startFrom({ sceneId: initialSceneId })
       }
 
@@ -616,6 +630,13 @@ function NovelPlayer({
     return () => {
       destroyed = true
       onRendererReady?.(null)
+      // fluid 再マウント (#460): 破棄前に現在位置のスナップショットを保持し、次の renderer
+      // 初期化時に restoreSnapshot で引き継ぐ。getSnapshot() は init() 未完了でも安全に呼べる
+      // （constructor で作られる値オブジェクトの読み出しのみで this.app には触れない）が、
+      // その状態では sceneId が null（＝setEvents/setScenes すら走っていない）ため意味のある
+      // スナップショットにならない。その場合は保持しない（初回マウント直後の即 unmount 等）。
+      const snapshot = renderer.getSnapshot()
+      pendingSnapshotRef.current = snapshot.sceneId !== null ? snapshot : null
       renderer.destroy()
       rendererRef.current = null
     }

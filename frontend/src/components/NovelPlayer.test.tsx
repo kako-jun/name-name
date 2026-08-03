@@ -76,6 +76,28 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setAutoMode = vi.fn()
     setSkipMode = vi.fn()
     startFrom = vi.fn()
+    // #460: fluid 再マウント cleanup が destroy() 直前に必ず呼ぶ。既定は sceneId: null
+    // （setEvents/setScenes 未実行の「意味のないスナップショット」相当）を返し、NovelPlayer 側の
+    // 「sceneId が null なら保持しない」ガードにより従来どおり initialSceneId ベースの起動になる
+    // （= 既存テストの期待値を変えない）。位置復元そのものを検証するテストは個別に上書きする。
+    getSnapshot = vi.fn().mockReturnValue({
+      sceneId: null,
+      eventIndex: 0,
+      textIndex: 0,
+      sentenceIndex: 0,
+      flags: {},
+      backgroundPath: null,
+      backgroundColor: null,
+      backgroundFade: null,
+      backgroundBrightness: null,
+      video: null,
+      eventImage: null,
+      isBlackout: false,
+      characters: [],
+      currentBgmPath: null,
+      storyEnded: false,
+    })
+    restoreSnapshot = vi.fn()
     playScript = vi.fn().mockResolvedValue(undefined)
     quickSave = vi.fn().mockReturnValue(false)
     quickLoad = vi.fn().mockReturnValue(false)
