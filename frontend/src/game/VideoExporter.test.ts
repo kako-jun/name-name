@@ -219,6 +219,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
   // 観測し、Pixi 実描画や実 MediaRecorder の挙動には踏み込まない（jsdom 観測可能域に限定）。
   let savedMR: unknown
   let savedMS: unknown
+  let savedDpr: number
   beforeEach(() => {
     savedMR = (globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder
     savedMS = (globalThis as unknown as { MediaStream?: unknown }).MediaStream
@@ -227,10 +228,12 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       constructor(_tracks?: unknown) {}
     }
     ;(globalThis as unknown as { MediaStream?: unknown }).MediaStream = FakeMediaStream
+    savedDpr = window.devicePixelRatio
   })
   afterEach(() => {
     ;(globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder = savedMR
     ;(globalThis as unknown as { MediaStream?: unknown }).MediaStream = savedMS
+    window.devicePixelRatio = savedDpr
   })
 
   /** 録画完走をシミュレートできる制御可能な MediaRecorder。start で recording・stop で onstop 発火。 */
@@ -392,6 +395,71 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       exportVideo(rendererWithAudio(calls2), { startSceneId: 'a', endSceneId: 'b', fps: 30 })
     ).rejects.toThrow(/boom/)
     expect(calls2).toEqual([true, false])
+  })
+
+  // F-4 (#455 セルフレビュー should対応): resolveCleanupResolution の3箇所目の呼び出し元
+  // （正常 cleanup、`VideoExporter.ts` cleanup 内）を、F-1 と同じ
+  // onEnd()→finalize→recorder.onstop→cleanup() の完走フローで直接踏み、実測幅からの
+  // 再計算値が復元されることを確認する。F-1 の canvas mock には getBoundingClientRect が無く
+  // フォールバック分岐しか踏めていなかった（セルフレビュー指摘）ため、ここでは
+  // getBoundingClientRect あり・getScreenSize が displayWidth と異なる論理幅を返す
+  // resize-aware な canvas/renderer を使う（#455 cleanup 解像度復元テスト群と同じ構図）。
+  it('F-4: 正常完走のcleanupでも実測幅から再計算した解像度が復元される（#455 resolveCleanupResolution 正常系）', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    window.devicePixelRatio = 2
+
+    let started!: () => void
+    const startedPromise = new Promise<void>((res) => {
+      started = res
+    })
+    installRecordableMediaRecorder(() => started())
+
+    const resolutionCalls: number[] = []
+    let onEnd: (() => void) | null = null
+    // prevResolution=2・displayWidth=1600・screenWidth=800・dpr=2 は #455 cleanup 解像度復元
+    // テスト群と同じ組み合わせ。実測ベースの再計算値は 2*(1600/800)=4 になり、
+    // prevResolution(2) とは異なる値（=リサイズを取りこぼしていない）ことを確認できる。
+    const renderer = {
+      getCanvas: () => ({
+        captureStream: () => ({ getVideoTracks: () => [] }),
+        getBoundingClientRect: () => ({ width: 1600 }),
+      }),
+      getScreenSize: () => ({ width: 800, height: 450 }),
+      getAudioManager: () => ({
+        ensureContext: () => {},
+        enableCapture: () => ({ getAudioTracks: () => [] }),
+        disableCapture: () => {},
+      }),
+      getRenderResolution: () => 2,
+      setRenderResolution: (r: number) => {
+        resolutionCalls.push(r)
+      },
+      setExporting: () => {},
+      setOnSceneChange: () => {},
+      setOnEnd: (cb: () => void) => {
+        onEnd = cb
+      },
+      takeOnEnd: () => null,
+      takeOnSceneChange: () => null,
+      jumpToScene: () => {},
+      setAutoMode: () => {},
+      prepareVideosForExport: async () => {},
+    } as unknown as Parameters<typeof exportVideo>[0]
+
+    const p = exportVideo(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      fps: 30,
+      preRollMs: 0,
+      postRollMs: 0,
+    })
+    await startedPromise // recorder.start まで到達＝録画開始済み
+    onEnd!() // 全イベント完走 → finalize → stop → cleanup（正常系の resolveCleanupResolution）
+    await p
+
+    // resolutionCalls[0] は bump（max(3, prev=2)）、[1] が正常 cleanup での復元値。
+    expect(resolutionCalls).toEqual([3, 4])
+    expect(resolutionCalls[1]).not.toBe(2) // prevResolution そのままではない（#455 本題の直接検証）
   })
 })
 
