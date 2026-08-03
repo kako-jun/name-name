@@ -4300,7 +4300,7 @@ export class NovelRenderer {
   /**
    * 指定シーン + 完成済み NovelGameState へ宣言的に復元する共通コア (#256)。
    *
-   * loadFromSaveData / startFrom の均質な骨格を集約する:
+   * loadFromSaveData / startFrom / restoreSnapshot の均質な骨格を集約する:
    * 「フラグ設定 → 選択肢/待機リセット → resolveEvents → applyState → history リセット → render」。
    *
    * 呼び出し側の責務:
@@ -4377,6 +4377,39 @@ export class NovelRenderer {
     // normalizeBackgroundFade をここで適用し、純粋関数には正規化済みの値を渡す。
     const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
     this.restoreToScene(scene, state)
+  }
+
+  /**
+   * 完成済み NovelGameState スナップショットへ宣言的に復元する (#460)。
+   *
+   * fluid（`aspect_ratio: auto`）モードで向きカテゴリが変わり NovelPlayer が renderer を
+   * 再マウントする際 (#442)、旧 renderer の `getSnapshot()` をそのままこの新 renderer に
+   * 渡すことで、読み進め位置（背景/立ち絵/BGM 等の視覚状態込み）を引き継ぐために使う。
+   *
+   * loadFromSaveData と同じ薄いラッパー: sceneId でシーンを探し、見つかれば restoreToScene
+   * に委譲するだけ。見つからない場合はフラグだけ復元して warn する（loadFromSaveData の
+   * 対応分岐と同じ挙動）。
+   *
+   * 呼び出し側の責務: `allScenes` が構築済み（setEvents/setScenes 呼び出し後）である
+   * タイミングで呼ぶこと（そうでないと findSceneById が常に不発になる）。
+   */
+  restoreSnapshot(snapshot: NovelGameState): void {
+    if (!snapshot.sceneId) {
+      // sceneId が無いスナップショットはフラグだけ復元して終了（restoreToScene を通さない。
+      // loadFromSaveData の空セーブ分岐と同じ扱い）
+      this.gameState.fromJSON(snapshot.flags)
+      return
+    }
+
+    const scene = findSceneById(this.allScenes, snapshot.sceneId)
+    if (!scene) {
+      // シーンが無い場合はフラグだけ復元（loadFromSaveData と同じフォールバック）
+      this.gameState.fromJSON(snapshot.flags)
+      console.warn(`[name-name] restoreSnapshot: シーンが見つからない: ${snapshot.sceneId}`)
+      return
+    }
+
+    this.restoreToScene(scene, snapshot)
   }
 
   /**
