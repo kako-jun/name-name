@@ -77,7 +77,7 @@ export function computeCoverFit(
  * 精細さ向上）をごく普通の高DPI単体モニタ環境でも部分的に打ち消していた（#446 再レビュー
  * should対応）。8192 まで引き上げることで、単体モニタでの通常利用ではまず発動しない。
  */
-export const MAX_RENDER_BACKBUFFER_WIDTH_PX = 8192
+export const MAX_RENDER_BACKBUFFER_DIMENSION_PX = 8192
 
 /**
  * 実表示サイズに応じたレンダラ解像度を算出する純粋関数 (#446)。
@@ -101,20 +101,20 @@ export const MAX_RENDER_BACKBUFFER_WIDTH_PX = 8192
  * （PixiJS が実際に確保する `screenWidth × resolution` / `screenHeight × resolution`）は
  * GPU の `MAX_TEXTURE_SIZE`（2015年以降の GPU はほぼ全て 8192 以上）を超えられない。
  * 複数モニタにまたがる横幅の広いウィンドウ＋高DPRのような極端な構成では
- * `displayWidth/screenWidth × dpr` が際限なく大きくなりうるため、`MAX_RENDER_BACKBUFFER_WIDTH_PX`
+ * `displayWidth/screenWidth × dpr` が際限なく大きくなりうるため、`MAX_RENDER_BACKBUFFER_DIMENSION_PX`
  * を超えないよう結果をクランプする。GPU ごとの正確な上限は実行時に取得できないため、
  * 低スペック環境でも安全な余裕を持たせた値を採用する。
  *
  * クランプ基準は `screenWidth`/`screenHeight` の**大きい方**（`Math.max`）にする。`screenWidth`
  * のみを基準にすると、9:16 のような縦長アスペクト比（`screenHeight > screenWidth`）で裏バッファの
- * **高さ**（`screenHeight × resolution`）がクランプの計算式で保護されず、`MAX_RENDER_BACKBUFFER_WIDTH_PX`
+ * **高さ**（`screenHeight × resolution`）がクランプの計算式で保護されず、`MAX_RENDER_BACKBUFFER_DIMENSION_PX`
  * を超えうる（#446 再レビュー question対応）。大きい方の軸を基準にすれば、その軸の裏バッファは
  * ちょうど上限に収まり、小さい方の軸は同じ resolution で必ずそれ以下になる（矩形の短辺と長辺の
  * 関係は resolution を掛けても変わらないため）。`screenHeight` が不正（0 以下・NaN・非有限）な
  * 場合は `screenWidth` をそのまま基準にする（screenHeight 未指定・不明時のフォールバック）。
  *
  * 上限に達した場合、返り値は「クランプ基準側で裏バッファ幅（or 高さ）が
- * `MAX_RENDER_BACKBUFFER_WIDTH_PX` に一致する resolution」に切り詰められる（見た目には Retina
+ * `MAX_RENDER_BACKBUFFER_DIMENSION_PX` に一致する resolution」に切り詰められる（見た目には Retina
  * 表示の鮮明さが頭打ちになるだけで、クラッシュや真っ黒描画は避けられる）。
  */
 export function computeDynamicRenderResolution(
@@ -129,7 +129,7 @@ export function computeDynamicRenderResolution(
   const safeScreenHeight =
     Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : screenWidth
   const clampBasis = Math.max(screenWidth, safeScreenHeight)
-  const maxResolution = MAX_RENDER_BACKBUFFER_WIDTH_PX / clampBasis
+  const maxResolution = MAX_RENDER_BACKBUFFER_DIMENSION_PX / clampBasis
   return Math.min(raw, maxResolution)
 }
 
