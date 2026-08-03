@@ -4485,10 +4485,21 @@ export class NovelRenderer {
   private async resolveMissingSceneAndRestore(snapshot: NovelGameState): Promise<void> {
     const sceneId = snapshot.sceneId
     if (!sceneId) return
-    if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) return
+    if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) {
+      // #460 セルフレビュー should S2: この早期 return だけ、他の全終端が必ず行っている
+      // flags 復元をスキップしていた。「最低でも flags だけは必ず反映する」という
+      // restoreSnapshot 全体の契約に合わせる。pendingMissingScenes 側は同時実行中の解決に
+      // 任せる正常系に近いため warn は出さない。
+      this.gameState.fromJSON(snapshot.flags)
+      return
+    }
     this.pendingMissingScenes.add(sceneId)
     try {
       const scenes = await this.missingSceneResolver(sceneId)
+      // #460 セルフレビュー should S1: await 中に renderer が destroy() され得る（連続remount
+      // で新しい renderer に既に切り替わっているケース）。destroy 後は applyState が
+      // this.app.stage を触るため、initialized チェック無しで先に進むと例外を投げうる。
+      if (!this.initialized) return
       if (!scenes) {
         this.gameState.fromJSON(snapshot.flags)
         console.warn(`[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`)

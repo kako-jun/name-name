@@ -70,10 +70,27 @@ function flatten(scenes: EventScene[]): Event[] {
 interface RendererInternals {
   history: unknown[]
   justSelectedChoice: boolean
+  initialized: boolean
+  pendingMissingScenes: Set<string>
 }
 
 function internals(r: NovelRenderer): RendererInternals {
   return r as unknown as RendererInternals
+}
+
+/**
+ * `init()` 完了後の状態を模す (#460 セルフレビュー should S1)。
+ *
+ * restoreSnapshot（延いては resolveMissingSceneAndRestore）は実運用では必ず
+ * `renderer.init(container)` 完了後にのみ呼ばれる（NovelPlayer.tsx の
+ * `renderer.init(...).then(() => renderer.restoreSnapshot(...))`）。jsdom には実 PixiJS
+ * canvas が無く `init()` を最後まで実行できないため、K系/S系テストでは init() 完了相当の
+ * 状態をこのフラグ操作で模す（`this.initialized` のデフォルト値 false のままだと
+ * resolveMissingSceneAndRestore の S1 ガードが常に早期returnし、正常系の解決すら
+ * テストできなくなってしまう）。
+ */
+function markInitialized(r: NovelRenderer): void {
+  internals(r).initialized = true
 }
 
 /**
@@ -352,6 +369,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.setEvents(flatten(entryScenes))
     r.setJumpSceneIndex(entryScenes)
     r.setMissingSceneResolver(resolver)
+    markInitialized(r)
 
     // 新規 renderer 直後は allScenes に route-scene がまだ無い（マルチMD遅延ロード前の状態）
     expect(r.getAllSceneIds()).toEqual(['entry-hub'])
@@ -380,6 +398,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.setEvents(flatten(entryScenes))
     r.setJumpSceneIndex(entryScenes)
     r.setMissingSceneResolver(resolver)
+    markInitialized(r)
     r.startFrom({ sceneId: 'entry-hub' })
     const sceneBefore = r.getCurrentSceneId()
 
@@ -406,6 +425,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.setEvents(flatten(entryScenes))
     r.setJumpSceneIndex(entryScenes)
     r.setMissingSceneResolver(resolver)
+    markInitialized(r)
 
     r.restoreSnapshot(craftSnapshot({ sceneId: 'target-route', flags: { x: boolFlag(true) } }))
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -426,6 +446,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.setEvents(flatten(entryScenes))
     r.setJumpSceneIndex(entryScenes)
     r.setMissingSceneResolver(resolver)
+    markInitialized(r)
 
     expect(() =>
       r.restoreSnapshot(craftSnapshot({ sceneId: 'target-route', flags: { y: boolFlag(true) } }))
@@ -447,6 +468,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.setEvents(flatten(entryScenes))
     r.setJumpSceneIndex(entryScenes)
     r.setMissingSceneResolver(resolver)
+    markInitialized(r)
     r.setOnStoryEndedChange(cb)
 
     r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', storyEnded: true }))
@@ -466,6 +488,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.setEvents(flatten(entryScenes))
     r.setJumpSceneIndex(entryScenes)
     r.setMissingSceneResolver(resolver)
+    markInitialized(r)
 
     r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01' }))
     r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01' })) // 同一tick内の二重呼び出し
@@ -473,5 +496,83 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
 
     expect(resolver).toHaveBeenCalledTimes(1)
     expect(r.getCurrentSceneId()).toBe('r01-01')
+  })
+
+  // ===== L. セルフレビュー修正 (#460 should S1/S2): 連続remount中の非同期解決 =====
+  //
+  // K1-K6 はいずれも単発remount→単発非同期解決のみを検証しており、「非同期解決が完了する前に
+  // さらに次のremount（destroy）が来る」ケースが未検証だった。
+
+  it('S1: missingSceneResolver の解決待ち中に destroy() されても、resolve 後に例外を投げず復元処理も実行されない', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const routeScene = scene('r01-01', [narration('route-line')])
+    let resolveScenes: ((scenes: EventScene[]) => void) | undefined
+    const resolver = vi.fn(
+      () =>
+        new Promise<EventScene[]>((resolve) => {
+          resolveScenes = resolve
+        })
+    )
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+
+    r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'r01-01', eventIndex: 1, flags: { seen: boolFlag(true) } })
+    )
+    expect(resolver).toHaveBeenCalledWith('r01-01')
+
+    // 連続remount想定: resolver がまだ解決していない間に、この renderer 自身が destroy() される。
+    // R13 と同じ理由（jsdom には実 PixiJS canvas が無く init() を最後まで実行できない）で、この
+    // テスト環境では appInitialized が立っておらず destroy() 自体は早期returnの安全な no-op になる
+    // （React StrictMode の unmount-before-init 対応と同じ経路）。そのため、実機で appInitialized
+    // 済みの場合に destroy() が行う「initialized = false」をここでは直接模して、S1 ガードの分岐を
+    // 実際に踏ませる。
+    expect(() => r.destroy()).not.toThrow()
+    internals(r).initialized = false
+
+    // destroy 後に resolver が解決しても例外を投げない（S1 ガードが無いと applyState 等が
+    // 破棄済みの this.app.stage を触り得る）
+    expect(() => {
+      resolveScenes?.([...entryScenes, routeScene])
+    }).not.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // S1 ガードにより setJumpSceneIndex/restoreToScene 相当の処理が一切実行されない
+    // → allScenes に route scene が追加されず、currentSceneId も未設定のまま
+    expect(r.getAllSceneIds()).toEqual(['entry-hub'])
+    expect(r.getCurrentSceneId()).toBeNull()
+  })
+
+  it('S2: pendingMissingScenes に既に同一 sceneId が入っている状態で restoreSnapshot を呼ぶと、resolver は起動されず flags だけが渡した値に更新される', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const resolver = vi.fn(async () => entryScenes)
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+    r.startFrom({ sceneId: 'entry-hub' })
+    const sceneBefore = r.getCurrentSceneId()
+
+    // jumpToScene 側の resolveMissingSceneAndJump が同一 sceneId を既に解決中、という状況を再現
+    // （#460 セルフレビュー S2: この分岐にヒットするケースだけ flags すら復元されていなかった）
+    internals(r).pendingMissingScenes.add('r01-01')
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', flags: { restored: boolFlag(true) } }))
+
+    // このガードは await を経ないため、fromJSON(flags) は同期的に完了している
+    expect(r.getSnapshot().flags).toEqual({ restored: boolFlag(true) })
+    // restoreToScene は呼ばれていない（currentSceneId は変化しない）
+    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(resolver).not.toHaveBeenCalled()
   })
 })
