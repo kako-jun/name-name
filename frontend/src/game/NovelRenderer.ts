@@ -610,6 +610,12 @@ export class NovelRenderer {
    *  フェード退避に繋ぐ（onAutoModeChange と同じ配線パターン）。 */
   private onSeekActiveChange: ((active: boolean) => void) | null = null
 
+  /** 動画書き出し中かどうか (#446)。setExporting() 経由で更新される。NovelPlayer の
+   *  実表示サイズ追従 ResizeObserver（containerRef 監視・#446）が、VideoExporter が
+   *  書き出し中だけ一時的に上げているレンダラ解像度を誤って通常値へ巻き戻さないための
+   *  ガードに isExporting() 経由で使う。 */
+  private exporting = false
+
   /** SeekBar の縦位置をキャンバス表示倍率に追従させる ResizeObserver (#350)。 */
   private seekBarResizeObserver: ResizeObserver | null = null
 
@@ -1403,7 +1409,17 @@ export class NovelRenderer {
    * VideoExporter が録画開始で true / 終了（cleanup・例外時を含む）で false を必ず呼ぶ。
    */
   setExporting(exporting: boolean): void {
+    this.exporting = exporting
     this.seekBar.setExportSuppressed(exporting)
+  }
+
+  /**
+   * 動画書き出し中かどうかを返す (#446)。NovelPlayer の実表示サイズ追従 ResizeObserver が、
+   * VideoExporter が書き出し中だけ一時的に上げているレンダラ解像度（#279）を誤って
+   * 通常値へ巻き戻さないためのガードに使う。
+   */
+  isExporting(): boolean {
+    return this.exporting
   }
 
   /** シーン切り替えコールバックを登録する (#228) */
