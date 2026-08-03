@@ -1440,6 +1440,44 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     expect(warnSpy).not.toHaveBeenCalled()
     expect(errorSpy).not.toHaveBeenCalled()
   })
+
+  // #460 セルフレビュー should S1: pendingSnapshotRef は単一の共有 ref で、cleanup 内で毎回
+  // getSnapshot() の結果を無条件上書きしていた。gen0→gen1(init 未完了)→gen2 と短時間に連続
+  // remount すると、gen1 の cleanup が「まだ何も進行していない空スナップショット」(sceneId: null)
+  // で gen0 の有効なスナップショットを上書き消去してしまい、gen2 が結局位置ロストしていた。
+  // 修正: cleanup 内で新しい getSnapshot().sceneId が null のときは pendingSnapshotRef を
+  // 上書きしない（直前の有効な値を保持し続ける）。
+  it('P10 (#460 S1): 二重連続remount（gen1 が init() 未完了のまま gen2 remount が来る）でも、gen0 の有効なスナップショットが保持され gen2 に引き継がれる', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const gen0 = rendererInstances[0]
+    const snap0: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: 'gen0-scene' }
+    gen0.getSnapshot.mockReturnValue(snap0)
+
+    // gen1 の init() を永久 pending にする。gen1 は「まだ何も進行していない」
+    // （getSnapshot 既定値 sceneId: null のまま）状態で次の remount により destroy される。
+    setInitNeverResolves(true)
+    act(() => {
+      triggerResize(400, 800) // 横長 → 縦長: gen0 destroy（snap0 を pendingSnapshotRef へ）→ gen1 mount
+    })
+    expect(rendererInstances.length).toBe(2)
+    const gen1 = rendererInstances[1]
+    // gen1.getSnapshot は既定のまま上書きしない（sceneId: null の空スナップショット）
+
+    // gen1 の init() が未解決のまま、さらにカテゴリが変わるリサイズが来て gen1 が destroy される。
+    setInitNeverResolves(false)
+    act(() => {
+      triggerResize(1200, 700) // 縦長 → 横長: gen1(init未完了) destroy → gen2 mount
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(3)
+    const gen2 = rendererInstances[2]
+    // gen1 の空スナップショットで上書きされず、gen0 の有効なスナップショットが gen2 に渡る
+    expect(gen2.restoreSnapshot).toHaveBeenCalledTimes(1)
+    expect(gen2.restoreSnapshot).toHaveBeenCalledWith(snap0)
+    expect(gen1.getSnapshot).toHaveBeenCalled()
+  })
 })
 
 // #446: containerRef（letterbox 内接矩形、canvas が CSS で引き伸ばされる箱）の実表示サイズを
