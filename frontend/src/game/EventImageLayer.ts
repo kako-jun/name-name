@@ -117,15 +117,18 @@ export class EventImageLayer extends Container {
    * `computeSplitLayoutRegions(...).character`（CharacterLayer と同じ画像側領域）をそのまま
    * 渡す想定。null で解除し、従来どおり画面全体（this.screenWidth/screenHeight 基準）に戻す。
    *
-   * `show()` が呼ばれた時点の `splitLayoutRegion` を参照して cover-fit の基準矩形を決めるだけで、
-   * 既に表示中の sprite の位置・サイズはここでは触らない（`setSplitLayout`/`setProtagonist` は
-   * いずれも通常 mount 時、最初の `show()` より前に呼ばれるため実運用上は問題にならない）。
+   * 参照タイミングは `show()` の同期呼び出し時点ではなく、ロード完了（`Assets.load()` 解決）
+   * 時点の最新の `splitLayoutRegion` で cover-fit の基準矩形を決める（ロード未解決の間に
+   * region を差し替えた場合は解決時点の値が使われる。`EventImageLayer.test.ts` の
+   * race テスト参照）。既に表示中の sprite の位置・サイズはここでは触らない
+   * （`setSplitLayout`/`setProtagonist` はいずれも通常 mount 時、最初の `show()` より前に
+   * 呼ばれるため実運用上は問題にならない）。
    */
   setSplitLayoutRegion(region: LayoutRect | null): void {
     this.splitLayoutRegion = region
   }
 
-  /** 現在の split_layout イベント絵領域 (#464)。null = 従来どおり全画面。配線検証・テスト用。 */
+  /** 現在の split_layout イベント絵領域 (#464)。null = 従来どおり全画面。テスト・配線検証用。 */
   getSplitLayoutRegion(): LayoutRect | null {
     return this.splitLayoutRegion
   }
@@ -168,19 +171,19 @@ export class EventImageLayer extends Container {
         this.loadedUrls.add(url)
 
         const sprite = new Sprite(texture)
-        const region = this.splitLayoutRegion
-        if (region) {
-          // computeCoverFit は常に原点 (0, 0) 基準の矩形を返すため、region のオフセット分を
-          // 後から足す（CharacterLayer とは異なり、EventImageLayer は Container 全体の
-          // scale/position ではなく sprite 個別の x/y/width/height で領域に収める）。
-          const fit = computeCoverFit(texture.width, texture.height, region.width, region.height)
-          Object.assign(sprite, { ...fit, x: fit.x + region.x, y: fit.y + region.y })
-        } else {
-          Object.assign(
-            sprite,
-            computeCoverFit(texture.width, texture.height, this.screenWidth, this.screenHeight)
-          )
+        // region 未設定（従来どおり全画面）の場合は原点起点・画面サイズの矩形で代用する
+        // （x/y=0 なので下の加算は実質 no-op になる）。
+        const region = this.splitLayoutRegion ?? {
+          x: 0,
+          y: 0,
+          width: this.screenWidth,
+          height: this.screenHeight,
         }
+        // computeCoverFit は常に原点 (0, 0) 基準の矩形を返すため、region のオフセット分を
+        // 後から足す（CharacterLayer とは異なり、EventImageLayer は Container 全体の
+        // scale/position ではなく sprite 個別の x/y/width/height で領域に収める）。
+        const fit = computeCoverFit(texture.width, texture.height, region.width, region.height)
+        Object.assign(sprite, { ...fit, x: fit.x + region.x, y: fit.y + region.y })
         this.sprite = sprite
         this.addChild(sprite)
 

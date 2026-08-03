@@ -687,8 +687,10 @@ describe('EventImageLayer setSplitLayoutRegion / getSplitLayoutRegion と show()
     expect(sprite.height).toBe(REGION.height)
   })
 
-  it('region 設定 + テクスチャが横長超過（境界+1）: 横方向にオーバーフローし x が負値側にずれる、height は region.height にフィットする', async () => {
+  it('region 設定 + テクスチャが横長超過（上の境界一致ケースより横長側）: 横方向にオーバーフローし x が負値側にずれる、height は region.height にフィットする', async () => {
     // 800x450 は REGION（400x450）より横長 → 横方向がオーバーフローする。
+    // 「境界+1px」という厳密な意味ではなく、上のアスペクト比一致ケースに対して横長側の
+    // カテゴリであることを表す（比率のカテゴリ分けの一例）。
     vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(800, 450) as never)
     const layer = makeLayer(virtualTime())
     layer.setSplitLayoutRegion(REGION)
@@ -704,8 +706,10 @@ describe('EventImageLayer setSplitLayoutRegion / getSplitLayoutRegion と show()
     expect(sprite.width).toBeGreaterThan(REGION.width)
   })
 
-  it('region 設定 + テクスチャが縦長超過（境界-1）: 縦方向にオーバーフローし y が負値側にずれる、width は region.width にフィットする', async () => {
+  it('region 設定 + テクスチャが縦長超過（上の境界一致ケースより縦長側）: 縦方向にオーバーフローし y が負値側にずれる、width は region.width にフィットする', async () => {
     // 100x450 は REGION（400x450）より縦長 → 縦方向がオーバーフローする。
+    // 「境界-1px」という厳密な意味ではなく、上のアスペクト比一致ケースに対して縦長側の
+    // カテゴリであることを表す（比率のカテゴリ分けの一例）。
     vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(100, 450) as never)
     const layer = makeLayer(virtualTime())
     layer.setSplitLayoutRegion(REGION)
