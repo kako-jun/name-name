@@ -134,6 +134,24 @@ export function computeDynamicRenderResolution(
 }
 
 /**
+ * `window.devicePixelRatio` を安全に読む (#446 セルフレビュー nit 対応 / #455 nit 対応で
+ * `NovelPlayer.tsx` のローカル関数からここへ移設)。
+ *
+ * SSR/jsdom 等 `window` が存在しない場合、または `devicePixelRatio` が未設定・0 の場合は
+ * 1（等倍）にフォールバックする。`computeDynamicRenderResolution` の `devicePixelRatio` 引数を
+ * 埋める値の取得元として、`NovelPlayer.tsx`（初期解像度適用・ResizeObserver 追従の2箇所）と
+ * `VideoExporter.ts`（#455 `resolveCleanupResolution`、書き出し終了時の解像度復元）が共有する。
+ *
+ * このモジュールの他の関数と異なり `window` というグローバル環境を直接読むため、厳密には
+ * 「引数だけから出力が決まる」純粋関数ではない（同じ呼び出しでも window の状態次第で値が
+ * 変わる）。それでも、呼び出し側 3 箇所でバイト単位同一の式が重複していた実害（#455 セルフ
+ * レビュー nit）を解消する実利を優先し、他の純粋計算と同じくここに集約する。
+ */
+export function resolveDevicePixelRatio(): number {
+  return typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+}
+
+/**
  * `#RRGGBB` 形式（またはプレフィックス省略の `RRGGBB`）を PixiJS 用の数値色に変換する純粋関数。
  *
  * 元 `NovelRenderer.parseHexColor` と同一:

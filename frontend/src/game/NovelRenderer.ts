@@ -1372,6 +1372,15 @@ export class NovelRenderer {
   }
 
   /**
+   * 論理解像度（screenWidth/screenHeight）を返す (#455)。construct 時に固定・以後不変
+   * （上のコンストラクタ参照）。VideoExporter が書き出し終了時に実表示幅から
+   * `computeDynamicRenderResolution` で解像度を再計算する際、論理サイズの分母として使う。
+   */
+  getScreenSize(): { width: number; height: number } {
+    return { width: this.screenWidth, height: this.screenHeight }
+  }
+
+  /**
    * 現在のレンダラ解像度を返す (#279 動画書き出しの高解像度化)。
    * 書き出し前後で bump → restore するために退避用として使う。
    */
