@@ -8,6 +8,7 @@
  * Phase 2 で virtual time + ffmpeg.wasm 経路に置き換える際は本モジュールごと差し替える想定。
  */
 import type { NovelRenderer } from './NovelRenderer'
+import { computeDynamicRenderResolution } from './novelLayout'
 
 export interface VideoExportOptions {
   /** 録画開始シーンID。jumpToScene でここから自動再生する */
@@ -82,6 +83,37 @@ export function sanitizeFilename(s: string): string {
 let isExporting = false
 
 /**
+ * 書き出し終了時にレンダラへ復元する解像度を決定する (#455)。
+ *
+ * `prevResolution`（書き出し開始時点の解像度）をそのまま復元する単純な設計だと、
+ * 書き出し中にウィンドウリサイズが起きた場合に問題が起きる。NovelPlayer の自動追従
+ * ResizeObserver（#446、containerRef の実表示サイズ変化を検知して setRenderResolution
+ * を呼ぶ）は `renderer.isExporting() === true` の間スキップされるため、書き出し終了直後の
+ * 解像度が「書き出し開始時点の表示サイズ」のまま stale になり、書き出し終了後に新たな
+ * リサイズが一度も起きない限り自己修復しない（#455 本題）。
+ *
+ * `renderer.getCanvas()` で取得できる実際の `<canvas>` 要素は CSS で親要素
+ * （containerRef）いっぱいに引き伸ばされる設計なので、`getBoundingClientRect().width` が
+ * 「復元すべき実表示幅」として使える。これを `computeDynamicRenderResolution`
+ * （#446、NovelPlayer の自動追従と同一の計算式）に通して再計算することで、書き出し中の
+ * リサイズを取りこぼさず反映する。書き出し中にリサイズが一切起きなかった通常ケースでは
+ * 実測幅 = 書き出し開始時の表示幅と一致するため、結果は従来どおり `prevResolution` と
+ * 一致する（非回帰）。
+ *
+ * canvas が取得できない、unmount 済み等で width が測れない、または（テストダブル等）
+ * `getBoundingClientRect` を持たない場合は安全側の `prevResolution` にフォールバックする
+ * （`getBoundingClientRect?.()` によるオプショナル呼び出しでどちらの欠落も吸収する）。
+ */
+function resolveCleanupResolution(renderer: NovelRenderer, prevResolution: number): number {
+  const canvas = renderer.getCanvas()
+  const displayWidth = canvas?.getBoundingClientRect?.().width ?? 0
+  if (!(displayWidth > 0)) return prevResolution
+  const { width: screenWidth, height: screenHeight } = renderer.getScreenSize()
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  return computeDynamicRenderResolution(displayWidth, screenWidth, screenHeight, dpr)
+}
+
+/**
  * シナリオ範囲を録画して `Blob` を返す。失敗時は throw する。
  *
  * 終了検出: 録画開始後に「currentSceneId が一度 endSceneId になり、その後別シーンに変わった」
@@ -142,7 +174,7 @@ export async function exportVideo(
   if (!audioStream) {
     // 解像度・SeekBar 抑制・録画フラグを必ず巻き戻してから throw（前段で副作用を起こしているため）。
     audio.disableCapture()
-    renderer.setRenderResolution(prevResolution)
+    renderer.setRenderResolution(resolveCleanupResolution(renderer, prevResolution))
     renderer.setExporting(false)
     isExporting = false
     throw new Error('AudioManager could not provide MediaStream (AudioContext init failed)')
@@ -162,7 +194,7 @@ export async function exportVideo(
     recorder = new MediaRecorder(combined, { mimeType })
   } catch (e) {
     audio.disableCapture()
-    renderer.setRenderResolution(prevResolution)
+    renderer.setRenderResolution(resolveCleanupResolution(renderer, prevResolution))
     renderer.setExporting(false)
     isExporting = false
     throw e instanceof Error ? e : new Error(String(e))
@@ -196,8 +228,10 @@ export async function exportVideo(
       renderer.setOnSceneChange(prevOnSceneChange)
       renderer.setOnEnd(prevOnEnd)
       audio.disableCapture()
-      // #279: 録画用に上げた解像度を元（device DPI）へ戻す。
-      renderer.setRenderResolution(prevResolution)
+      // #279: 録画用に上げた解像度を元（device DPI 相当）へ戻す。
+      // #455: 書き出し中にリサイズが起きていた場合に備え、prevResolution をそのまま
+      // 復元せず resolveCleanupResolution で実表示幅から再計算する（詳細は同関数の JSDoc）。
+      renderer.setRenderResolution(resolveCleanupResolution(renderer, prevResolution))
       // #350: 録画中に抑制した SeekBar を元へ戻す（通常プレイで再びスライダが見える）。
       renderer.setExporting(false)
     } catch (e) {
