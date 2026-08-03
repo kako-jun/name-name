@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeCoverFit,
   computeDynamicRenderResolution,
+  MAX_RENDER_BACKBUFFER_WIDTH_PX,
   computeSplitLayoutRegions,
   splitTextRegionForDualWindow,
   parseHexColor,
@@ -2151,10 +2152,23 @@ describe('computeDynamicRenderResolution (#446)', () => {
     expect(computeDynamicRenderResolution(1600, 800, Infinity)).toBe(2)
   })
 
-  it('参考(下流の多重防御を裏取り): displayWidth=Infinity（>0なので縮退扱いされない）×有限screenWidthは結果がInfinityになる契約を固定する', () => {
+  it('境界値: displayWidth=Infinity（>0なので縮退扱いされない）×有限screenWidthでも上限クランプでInfinityにならない', () => {
     // displayWidth>0 は true（Infinity>0）なので早期フォールバックの対象外になり、
-    // dpr(2) * (Infinity/800) = Infinity がそのまま返る。この関数自身はInfinityをガードせず、
-    // 呼び出し側のNovelRenderer.setRenderResolutionが最終防波堤になる設計（多重防御）を示すピン。
-    expect(computeDynamicRenderResolution(Infinity, 800, 2)).toBe(Infinity)
+    // dpr(2) * (Infinity/800) = Infinity が素の計算結果になるが、#446 セルフレビュー should対応の
+    // 上限クランプ（MAX_RENDER_BACKBUFFER_WIDTH_PX/screenWidth）により screenWidth=800 の上限
+    // 4096/800=5.12 に切り詰められる。呼び出し側の NovelRenderer.setRenderResolution だけに
+    // 依存しない多重防御に強化された契約をここで固定する。
+    expect(computeDynamicRenderResolution(Infinity, 800, 2)).toBe(
+      MAX_RENDER_BACKBUFFER_WIDTH_PX / 800
+    )
+  })
+
+  it('should対応: 上限を超える引き伸ばし率が入力されると裏バッファ幅がMAX_RENDER_BACKBUFFER_WIDTH_PXに収まるようクランプされる', () => {
+    // 複数モニタにまたがる横幅の広いウィンドウ(displayWidth=8000)+高DPR(dpr=3)の極端なケース。
+    // 素の計算値は 3 * (8000/800) = 30 だが、screenWidth=800 での上限は 4096/800=5.12 なので
+    // そちらに切り詰められる（裏バッファ幅 800*5.12=4096 ≦ MAX_RENDER_BACKBUFFER_WIDTH_PX）。
+    const result = computeDynamicRenderResolution(8000, 800, 3)
+    expect(result).toBe(MAX_RENDER_BACKBUFFER_WIDTH_PX / 800)
+    expect(result * 800).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_WIDTH_PX)
   })
 })

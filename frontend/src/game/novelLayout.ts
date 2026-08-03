@@ -67,6 +67,12 @@ export function computeCoverFit(
 }
 
 /**
+ * `computeDynamicRenderResolution` が許容する裏バッファ幅の上限（px）。GPU の
+ * `MAX_TEXTURE_SIZE`（一般に 8192〜16384）に対して十分な余裕を持たせた保守的な固定値。
+ */
+export const MAX_RENDER_BACKBUFFER_WIDTH_PX = 4096
+
+/**
  * 実表示サイズに応じたレンダラ解像度を算出する純粋関数 (#446)。
  *
  * PixiJS のレンダリング解像度は元々 `devicePixelRatio`（Retina 補正）だけで固定していたが、
@@ -83,6 +89,16 @@ export function computeCoverFit(
  * 安全側の `devicePixelRatio`（引き伸ばし倍率 1 扱い）にフォールバックする
  * （0 除算・NaN・負値を避ける）。`devicePixelRatio` 自体が不正（0 以下・NaN・Infinity）な
  * 場合も 1 にフォールバックする。
+ *
+ * 上限クランプ (#446 セルフレビュー should対応): 裏バッファ幅（PixiJS が実際に確保する
+ * `screenWidth × resolution`）は GPU の `MAX_TEXTURE_SIZE`（一般に 8192〜16384）を超えられない。
+ * 複数モニタにまたがる横幅の広いウィンドウ＋高DPRのような極端な構成では
+ * `displayWidth/screenWidth × dpr` が際限なく大きくなりうるため、`MAX_RENDER_BACKBUFFER_WIDTH_PX`
+ * （裏バッファ幅が概ねこの値に収まる保守的な固定値）を超えないよう結果をクランプする。
+ * GPU ごとの正確な上限は実行時に取得できないため、低スペック環境でも安全な余裕を持たせた値を採用する。
+ * 上限に達した場合、返り値は「screenWidth 側で裏バッファ幅が `MAX_RENDER_BACKBUFFER_WIDTH_PX` に
+ * 一致する resolution」に切り詰められる（見た目には Retina 表示の鮮明さが頭打ちになるだけで、
+ * クラッシュや真っ黒描画は避けられる）。
  */
 export function computeDynamicRenderResolution(
   displayWidth: number,
@@ -91,7 +107,9 @@ export function computeDynamicRenderResolution(
 ): number {
   const dpr = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1
   if (!(displayWidth > 0) || !(screenWidth > 0)) return dpr
-  return dpr * (displayWidth / screenWidth)
+  const raw = dpr * (displayWidth / screenWidth)
+  const maxResolution = MAX_RENDER_BACKBUFFER_WIDTH_PX / screenWidth
+  return Math.min(raw, maxResolution)
 }
 
 /**

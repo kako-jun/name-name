@@ -1504,6 +1504,7 @@ describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + 
     render(<NovelPlayer events={[]} aspectRatio="auto" />)
     await flushAsync()
     const first = rendererInstances[0]
+    first.setRenderResolution.mockClear() // マウント時の init effect 由来の1回を除外する
 
     expect(() => {
       act(() => {
@@ -1523,6 +1524,13 @@ describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + 
         vi.advanceTimersByTime(200)
       })
     }).not.toThrow()
+
+    // セルフレビュー nit 対応: 「例外にならない」だけでは、既にdestroyされた旧rendererへ
+    // debounce発火が誤って setRenderResolution を叩いてしまうケースを見逃す。containerRef effect
+    // は gameWidth 変化のたびに張り直され、クリーンアップで旧 debounceTimer を確実に clearTimeout
+    // する設計（apply() 内の renderer も呼び出し時点の rendererRef.current を都度参照する）なので、
+    // 旧renderer（first）の setRenderResolution が一切呼ばれていないことを直接アサートする。
+    expect(first.setRenderResolution).not.toHaveBeenCalled()
   })
 
   it('境界値/縮退: containerRef.currentがあってもgetBoundingClientRect().width<=0（jsdom既定）なら初回同期測定でapply()は呼ばれない', () => {

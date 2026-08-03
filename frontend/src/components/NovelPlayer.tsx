@@ -53,6 +53,16 @@ function writeDebugOpen(open: boolean): void {
   }
 }
 
+/**
+ * `window.devicePixelRatio` を安全に読む（#446 セルフレビュー nit 対応）。
+ * SSR/jsdom 等 `window` が存在しない場合、または `devicePixelRatio` が未設定・0 の場合は
+ * 1（等倍）にフォールバックする。初期解像度適用（init effect）と ResizeObserver 追従
+ * （containerRef effect）の2箇所で同一式が重複していたのをここへ集約する。
+ */
+function resolveDevicePixelRatio(): number {
+  return typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+}
+
 interface NovelPlayerProps {
   events: Event[]
   scenes?: EventScene[]
@@ -379,7 +389,7 @@ function NovelPlayer({
       // （書き出し終了は VideoExporter の cleanup が prevResolution へ確実に復元する設計。
       // 復元後にサイズが変わっていれば次のリサイズで本 effect が改めて追従する）。
       if (renderer.isExporting()) return
-      const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+      const dpr = resolveDevicePixelRatio()
       renderer.setRenderResolution(computeDynamicRenderResolution(displayWidth, gameWidth, dpr))
     }
 
@@ -463,7 +473,7 @@ function NovelPlayer({
         computeDynamicRenderResolution(
           containerRef.current?.getBoundingClientRect().width ?? 0,
           gameWidth,
-          typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+          resolveDevicePixelRatio()
         )
       )
       if (assetBaseUrl) {
