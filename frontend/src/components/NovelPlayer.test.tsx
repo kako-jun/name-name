@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Assets, Texture } from 'pixi.js'
 import { computeDynamicRenderResolution, getIndicatorImageUrls } from '../game/novelLayout'
+import type { NovelGameState } from '../game/GameState'
 
 // NovelRenderer を完全スタブ化（PixiJS 構築・init を無効化）。
 // NovelPlayer は init().then(...) 内で多数の setter を呼ぶので、すべて no-op で受ける。
@@ -76,6 +77,28 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setAutoMode = vi.fn()
     setSkipMode = vi.fn()
     startFrom = vi.fn()
+    // #460: fluid 再マウント cleanup が destroy() 直前に必ず呼ぶ。既定は sceneId: null
+    // （setEvents/setScenes 未実行の「意味のないスナップショット」相当）を返し、NovelPlayer 側の
+    // 「sceneId が null なら保持しない」ガードにより従来どおり initialSceneId ベースの起動になる
+    // （= 既存テストの期待値を変えない）。位置復元そのものを検証するテストは個別に上書きする。
+    getSnapshot = vi.fn().mockReturnValue({
+      sceneId: null,
+      eventIndex: 0,
+      textIndex: 0,
+      sentenceIndex: 0,
+      flags: {},
+      backgroundPath: null,
+      backgroundColor: null,
+      backgroundFade: null,
+      backgroundBrightness: null,
+      video: null,
+      eventImage: null,
+      isBlackout: false,
+      characters: [],
+      currentBgmPath: null,
+      storyEnded: false,
+    })
+    restoreSnapshot = vi.fn()
     playScript = vi.fn().mockResolvedValue(undefined)
     quickSave = vi.fn().mockReturnValue(false)
     quickLoad = vi.fn().mockReturnValue(false)
@@ -1227,6 +1250,233 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
 
     expect(rendererInstances.length).toBe(1)
     expect(rendererInstances[0].destroy).not.toHaveBeenCalled()
+  })
+
+  // #460: fluid 再マウント時に旧 renderer の getSnapshot() を新 renderer の restoreSnapshot() へ
+  // 引き継ぎ、読み進め位置（背景/立ち絵/BGM 込み）を維持する契約。K1-K4 は「再マウントされる/
+  // されない」だけを見ており、位置引き継ぎそのものは未検証だったための追加。
+  //
+  // MockRenderer.getSnapshot() の既定値は sceneId: null（NovelPlayer.test.tsx 冒頭のコメント参照）。
+  // 「意味のあるスナップショット」を作るテストだけ、対象 renderer インスタンスの getSnapshot を
+  // 明示的に上書きする。
+  const NEUTRAL_SNAPSHOT: NovelGameState = {
+    sceneId: null,
+    eventIndex: 0,
+    textIndex: 0,
+    sentenceIndex: 0,
+    flags: {},
+    backgroundPath: null,
+    backgroundColor: null,
+    backgroundFade: null,
+    backgroundBrightness: null,
+    video: null,
+    eventImage: null,
+    isBlackout: false,
+    characters: [],
+    currentBgmPath: null,
+    storyEnded: false,
+  }
+
+  it('P1: 旧 renderer の getSnapshot が有効な sceneId 付きの値を返すとき、新 renderer の restoreSnapshot がそのオブジェクトで1回だけ呼ばれる', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const first = rendererInstances[0]
+    const snapshot: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: 'scene-a', eventIndex: 2 }
+    first.getSnapshot.mockReturnValue(snapshot)
+
+    act(() => {
+      triggerResize(400, 800) // 横長 → 縦長でカテゴリが変わる
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(2)
+    const second = rendererInstances[1]
+    expect(second.restoreSnapshot).toHaveBeenCalledTimes(1)
+    expect(second.restoreSnapshot).toHaveBeenCalledWith(snapshot)
+  })
+
+  it('P2: restoreSnapshot される場合、initialSceneId が指定されていても新 renderer の startFrom は呼ばれない（restoreSnapshot 優先・二重位置決め防止）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" initialSceneId="scene-x" />)
+    await flushAsync()
+    const first = rendererInstances[0]
+    // 初回マウントは G1 と同条件: initialSceneId により startFrom が呼ばれている
+    expect(first.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+
+    const snapshot: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: 'scene-a' }
+    first.getSnapshot.mockReturnValue(snapshot)
+
+    act(() => {
+      triggerResize(400, 800)
+    })
+    await flushAsync()
+
+    const second = rendererInstances[1]
+    expect(second.restoreSnapshot).toHaveBeenCalledTimes(1)
+    expect(second.startFrom).not.toHaveBeenCalled()
+  })
+
+  it('P3: 旧 renderer の getSnapshot が既定の sceneId: null のままリサイズすると restoreSnapshot は呼ばれず、initialSceneId 指定時は従来どおり新 renderer で startFrom が呼ばれる', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" initialSceneId="scene-x" />)
+    await flushAsync()
+    // getSnapshot は既定のまま（sceneId: null）上書きしない
+
+    act(() => {
+      triggerResize(400, 800)
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(2)
+    const second = rendererInstances[1]
+    expect(second.restoreSnapshot).not.toHaveBeenCalled()
+    expect(second.startFrom).toHaveBeenCalledTimes(1)
+    expect(second.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+  })
+
+  it('P4: 縦→横→縦と2回remountさせても、2回目の restoreSnapshot は1回目に生成された renderer 自身の getSnapshot 戻り値で呼ばれ、初代(0世代目)の値が混入しない', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const gen0 = rendererInstances[0]
+    const snap0: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: 'gen0-scene' }
+    gen0.getSnapshot.mockReturnValue(snap0)
+
+    act(() => {
+      triggerResize(400, 800) // 横長 → 縦長: gen0 destroy → gen1 mount
+    })
+    await flushAsync()
+    expect(rendererInstances.length).toBe(2)
+    const gen1 = rendererInstances[1]
+    expect(gen1.restoreSnapshot).toHaveBeenCalledWith(snap0)
+
+    const snap1: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: 'gen1-scene' }
+    gen1.getSnapshot.mockReturnValue(snap1)
+
+    act(() => {
+      triggerResize(1200, 700) // 縦長 → 横長: gen1 destroy → gen2 mount
+    })
+    await flushAsync()
+    expect(rendererInstances.length).toBe(3)
+    const gen2 = rendererInstances[2]
+
+    // 2回目の restoreSnapshot は gen1 自身の値で呼ばれる（gen0 の値が混入していない）
+    expect(gen2.restoreSnapshot).toHaveBeenCalledTimes(1)
+    expect(gen2.restoreSnapshot).toHaveBeenCalledWith(snap1)
+    expect(gen2.restoreSnapshot).not.toHaveBeenCalledWith(snap0)
+  })
+
+  it('P5: 非fluid（aspectRatio 固定）ではリサイズ通知が来ても再マウント自体が起きず、restoreSnapshot も呼ばれない', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    const r = rendererInstances[0]
+
+    act(() => {
+      triggerResize(400, 800)
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(r.restoreSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('P6: fluid で同一カテゴリ内のリサイズでは再マウントされず restoreSnapshot も呼ばれない', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+
+    act(() => {
+      triggerResize(1200, 700) // まだ横長（16:9 カテゴリのまま）
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(1)
+    expect(r.restoreSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('P7: 旧 renderer の init() が永久 pending でもカテゴリ変化リサイズは例外を投げず、cleanup の getSnapshot() が安全に呼ばれる（既定 null）ため restoreSnapshot は呼ばれない', async () => {
+    setInitNeverResolves(true)
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const first = rendererInstances[0]
+
+    // cleanup の getSnapshot() 呼び出しは init().then(...) の外（同期コード）なので、
+    // 旧 renderer の init() が未解決のままでも安全に走ることを確認する。
+    expect(() => {
+      act(() => {
+        triggerResize(400, 800)
+      })
+    }).not.toThrow()
+    await flushAsync()
+
+    expect(first.getSnapshot).toHaveBeenCalled()
+    expect(first.destroy).toHaveBeenCalledOnce()
+
+    // 新 renderer が作られるが、getSnapshot 既定値（sceneId: null）のため restoreSnapshot は呼ばれない。
+    expect(rendererInstances.length).toBe(2)
+    const second = rendererInstances[1]
+    expect(second.restoreSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('P8: 初回 mount 時点では restoreSnapshot は呼ばれない（再マウント経由でのみ発火する回帰防止）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    expect(rendererInstances.length).toBe(1)
+    expect(rendererInstances[0].restoreSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('P9: restoreSnapshot 正常系フロー（P1 相当）で NovelPlayer 側が独自に console.error/console.warn を出さない', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const first = rendererInstances[0]
+    first.getSnapshot.mockReturnValue({ ...NEUTRAL_SNAPSHOT, sceneId: 'scene-a' })
+
+    act(() => {
+      triggerResize(400, 800)
+    })
+    await flushAsync()
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  // #460 セルフレビュー should S1: pendingSnapshotRef は単一の共有 ref で、cleanup 内で毎回
+  // getSnapshot() の結果を無条件上書きしていた。gen0→gen1(init 未完了)→gen2 と短時間に連続
+  // remount すると、gen1 の cleanup が「まだ何も進行していない空スナップショット」(sceneId: null)
+  // で gen0 の有効なスナップショットを上書き消去してしまい、gen2 が結局位置ロストしていた。
+  // 修正: cleanup 内で新しい getSnapshot().sceneId が null のときは pendingSnapshotRef を
+  // 上書きしない（直前の有効な値を保持し続ける）。
+  it('P10 (#460 S1): 二重連続remount（gen1 が init() 未完了のまま gen2 remount が来る）でも、gen0 の有効なスナップショットが保持され gen2 に引き継がれる', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const gen0 = rendererInstances[0]
+    const snap0: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: 'gen0-scene' }
+    gen0.getSnapshot.mockReturnValue(snap0)
+
+    // gen1 の init() を永久 pending にする。gen1 は「まだ何も進行していない」
+    // （getSnapshot 既定値 sceneId: null のまま）状態で次の remount により destroy される。
+    setInitNeverResolves(true)
+    act(() => {
+      triggerResize(400, 800) // 横長 → 縦長: gen0 destroy（snap0 を pendingSnapshotRef へ）→ gen1 mount
+    })
+    expect(rendererInstances.length).toBe(2)
+    const gen1 = rendererInstances[1]
+    // gen1.getSnapshot は既定のまま上書きしない（sceneId: null の空スナップショット）
+
+    // gen1 の init() が未解決のまま、さらにカテゴリが変わるリサイズが来て gen1 が destroy される。
+    setInitNeverResolves(false)
+    act(() => {
+      triggerResize(1200, 700) // 縦長 → 横長: gen1(init未完了) destroy → gen2 mount
+    })
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(3)
+    const gen2 = rendererInstances[2]
+    // gen1 の空スナップショットで上書きされず、gen0 の有効なスナップショットが gen2 に渡る
+    expect(gen2.restoreSnapshot).toHaveBeenCalledTimes(1)
+    expect(gen2.restoreSnapshot).toHaveBeenCalledWith(snap0)
+    expect(gen1.getSnapshot).toHaveBeenCalled()
   })
 })
 
