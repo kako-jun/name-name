@@ -4,7 +4,9 @@
  * `[イベント絵: path, 背面=hide/keep, フェード=1400]` / `[イベント絵終了: フェード=700]` から
  * 駆動される、テキストより背面・背景/立ち絵より前面に出る「画面ぴったり」の単一スロット画像。
  * VideoLayer と同じ単一スロット意味論（新しい show() が前の画像を置換する）を踏襲するが、
- * 動画ではなく静止画で、位置/スケール指定は持たず常に画面全体を cover-fit で覆う。
+ * 動画ではなく静止画で、独自の位置/スケール指定は持たず常に cover-fit で覆う。通常は画面全体、
+ * `split_layout: true`（#464）で `setSplitLayoutRegion` が設定されていればその矩形（キャラ画像側の
+ * 半分）を覆う（CharacterLayer と同じ画像側領域。テキスト領域には重ねない）。
  *
  * #427/#428 で見つかった「テクスチャ未ロードのままフェードを開始してしまう」バグを踏まないよう、
  * フェード開始（fadeAnimation のセット）は必ず Assets.load().then() の中で行う
@@ -16,7 +18,7 @@
 
 import { Assets, Container, Sprite, Texture } from 'pixi.js'
 import { EventImageState } from './GameState'
-import { computeCoverFit } from './novelLayout'
+import { computeCoverFit, type LayoutRect } from './novelLayout'
 import { computeFadeAlpha } from './screenEffects'
 import { TimeController, defaultTimeController } from './TimeController'
 
@@ -87,6 +89,10 @@ export class EventImageLayer extends Container {
   /** これまでにロードした画像 URL（GPU テクスチャのリーク防止用。NovelRenderer.textureCache と同じ流儀） */
   private loadedUrls: Set<string> = new Set()
 
+  /** split_layout (#464) のイベント絵領域。null = 従来どおり画面全体。CharacterLayer と同じ
+   *  画像側領域（`regions.character`）を渡す想定（`setSplitLayoutRegion` 参照）。 */
+  private splitLayoutRegion: LayoutRect | null = null
+
   constructor(
     screenWidth: number,
     screenHeight: number,
@@ -104,6 +110,24 @@ export class EventImageLayer extends Container {
    */
   setAssetBaseUrl(url: string): void {
     this.assetBaseUrl = url
+  }
+
+  /**
+   * split_layout (#442/#464) のイベント絵領域を設定・解除する。`novelLayout.ts` の
+   * `computeSplitLayoutRegions(...).character`（CharacterLayer と同じ画像側領域）をそのまま
+   * 渡す想定。null で解除し、従来どおり画面全体（this.screenWidth/screenHeight 基準）に戻す。
+   *
+   * `show()` が呼ばれた時点の `splitLayoutRegion` を参照して cover-fit の基準矩形を決めるだけで、
+   * 既に表示中の sprite の位置・サイズはここでは触らない（`setSplitLayout`/`setProtagonist` は
+   * いずれも通常 mount 時、最初の `show()` より前に呼ばれるため実運用上は問題にならない）。
+   */
+  setSplitLayoutRegion(region: LayoutRect | null): void {
+    this.splitLayoutRegion = region
+  }
+
+  /** 現在の split_layout イベント絵領域 (#464)。null = 従来どおり全画面。配線検証・テスト用。 */
+  getSplitLayoutRegion(): LayoutRect | null {
+    return this.splitLayoutRegion
   }
 
   private buildImageUrl(path: string): string {
@@ -144,10 +168,19 @@ export class EventImageLayer extends Container {
         this.loadedUrls.add(url)
 
         const sprite = new Sprite(texture)
-        Object.assign(
-          sprite,
-          computeCoverFit(texture.width, texture.height, this.screenWidth, this.screenHeight)
-        )
+        const region = this.splitLayoutRegion
+        if (region) {
+          // computeCoverFit は常に原点 (0, 0) 基準の矩形を返すため、region のオフセット分を
+          // 後から足す（CharacterLayer とは異なり、EventImageLayer は Container 全体の
+          // scale/position ではなく sprite 個別の x/y/width/height で領域に収める）。
+          const fit = computeCoverFit(texture.width, texture.height, region.width, region.height)
+          Object.assign(sprite, { ...fit, x: fit.x + region.x, y: fit.y + region.y })
+        } else {
+          Object.assign(
+            sprite,
+            computeCoverFit(texture.width, texture.height, this.screenWidth, this.screenHeight)
+          )
+        }
         this.sprite = sprite
         this.addChild(sprite)
 
