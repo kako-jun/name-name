@@ -25,6 +25,7 @@ import {
   getIndicatorImageUrls,
   PLAYER_BUTTON_RIGHT_MARGIN_PX,
   PLAYER_BUTTON_SLOT_GAP_PX,
+  resolveDevicePixelRatio,
 } from '../game/novelLayout'
 import { buildStoryEndedMessage } from '../game/storyEndedMessage'
 import { isEmbedded } from '../utils/isEmbedded'
@@ -51,16 +52,6 @@ function writeDebugOpen(open: boolean): void {
   } catch {
     // SSR/未対応/プライベートモード等。永続化できなくても UI 状態は React state で動く。
   }
-}
-
-/**
- * `window.devicePixelRatio` を安全に読む（#446 セルフレビュー nit 対応）。
- * SSR/jsdom 等 `window` が存在しない場合、または `devicePixelRatio` が未設定・0 の場合は
- * 1（等倍）にフォールバックする。初期解像度適用（init effect）と ResizeObserver 追従
- * （containerRef effect）の2箇所で同一式が重複していたのをここへ集約する。
- */
-function resolveDevicePixelRatio(): number {
-  return typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
 }
 
 interface NovelPlayerProps {

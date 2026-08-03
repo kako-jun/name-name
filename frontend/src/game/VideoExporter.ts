@@ -8,7 +8,7 @@
  * Phase 2 で virtual time + ffmpeg.wasm 経路に置き換える際は本モジュールごと差し替える想定。
  */
 import type { NovelRenderer } from './NovelRenderer'
-import { computeDynamicRenderResolution } from './novelLayout'
+import { computeDynamicRenderResolution, resolveDevicePixelRatio } from './novelLayout'
 
 export interface VideoExportOptions {
   /** 録画開始シーンID。jumpToScene でここから自動再生する */
@@ -109,7 +109,7 @@ function resolveCleanupResolution(renderer: NovelRenderer, prevResolution: numbe
   const displayWidth = canvas?.getBoundingClientRect?.().width ?? 0
   if (!(displayWidth > 0)) return prevResolution
   const { width: screenWidth, height: screenHeight } = renderer.getScreenSize()
-  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  const dpr = resolveDevicePixelRatio()
   return computeDynamicRenderResolution(displayWidth, screenWidth, screenHeight, dpr)
 }
 
