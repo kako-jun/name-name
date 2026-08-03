@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeCoverFit,
+  computeDynamicRenderResolution,
   computeSplitLayoutRegions,
   splitTextRegionForDualWindow,
   parseHexColor,
@@ -2086,5 +2087,74 @@ describe('clampFadeMs (#407 / #404)', () => {
     expect(clampFadeMs(2500, 1400, 100, 2000)).toBe(2000) // max クランプ
     expect(clampFadeMs(null, 1400, 100, 2000)).toBe(1400) // フォールバックは min/max と独立
     expect(clampFadeMs(900, 1400, 100, 2000)).toBe(900) // レンジ内はそのまま
+  })
+})
+
+// #446: computeDynamicRenderResolution（実表示サイズに応じたレンダラ解像度を算出する純粋関数）。
+// 「CSS 引き伸ばし倍率 (displayWidth/screenWidth) × devicePixelRatio」が基本式で、
+// displayWidth/screenWidth が非正・NaN のときは引き伸ばし倍率 1 扱い（dpr にフォールバック）、
+// devicePixelRatio 自体が非正・NaN・Infinity のときは 1 にフォールバックする（2 系統のフォールバックが
+// 独立している点に注意）。
+describe('computeDynamicRenderResolution (#446)', () => {
+  it('正常系: displayWidth=1600, screenWidth=800, dpr=2 → 引き伸ばし倍率2×dpr2=4', () => {
+    expect(computeDynamicRenderResolution(1600, 800, 2)).toBe(4)
+  })
+
+  it('正常系: 引き伸ばしなし(displayWidth===screenWidth)なら結果はdprと一致する', () => {
+    expect(computeDynamicRenderResolution(800, 800, 2)).toBe(2)
+    expect(computeDynamicRenderResolution(800, 800, 1.5)).toBe(1.5)
+  })
+
+  it('同値分割: 縮小方向(displayWidth<screenWidth)でも計算式どおり1未満の引き伸ばし倍率が素直に反映され、フォールバックしない', () => {
+    // dpr=1 で引き伸ばし倍率だけを見る: 400/800=0.5倍 → 結果も0.5（1にもdprにも切り上げない）。
+    expect(computeDynamicRenderResolution(400, 800, 1)).toBe(0.5)
+  })
+
+  it('境界値: displayWidth=0 はdprにフォールバックする（0除算を避ける）', () => {
+    expect(computeDynamicRenderResolution(0, 800, 2)).toBe(2)
+  })
+
+  it('境界値: displayWidthが負値(-1)はdprにフォールバックする', () => {
+    expect(computeDynamicRenderResolution(-1, 800, 2)).toBe(2)
+  })
+
+  it('境界値: screenWidth=0 はdprにフォールバックする（0除算を避ける）', () => {
+    expect(computeDynamicRenderResolution(1600, 0, 2)).toBe(2)
+  })
+
+  it('境界値: screenWidthが負値はdprにフォールバックする', () => {
+    expect(computeDynamicRenderResolution(1600, -800, 2)).toBe(2)
+  })
+
+  it('異常系: screenWidth=NaN はdprにフォールバックする', () => {
+    expect(computeDynamicRenderResolution(1600, NaN, 2)).toBe(2)
+  })
+
+  it('異常系: displayWidth=NaN はdprにフォールバックする', () => {
+    expect(computeDynamicRenderResolution(NaN, 800, 2)).toBe(2)
+  })
+
+  it('境界値: devicePixelRatio=0 は1にフォールバックする（displayWidth/screenWidthは有効なら引き伸ばし計算は生きる）', () => {
+    // dprフォールバック(1) × 引き伸ばし倍率(1600/800=2) = 2
+    expect(computeDynamicRenderResolution(1600, 800, 0)).toBe(2)
+  })
+
+  it('境界値: devicePixelRatioが負値は1にフォールバックする', () => {
+    expect(computeDynamicRenderResolution(1600, 800, -2)).toBe(2)
+  })
+
+  it('異常系: devicePixelRatio=NaN は1にフォールバックする', () => {
+    expect(computeDynamicRenderResolution(1600, 800, NaN)).toBe(2)
+  })
+
+  it('異常系: devicePixelRatio=Infinity は1にフォールバックする（Number.isFiniteでInfiniteを弾く）', () => {
+    expect(computeDynamicRenderResolution(1600, 800, Infinity)).toBe(2)
+  })
+
+  it('参考(下流の多重防御を裏取り): displayWidth=Infinity（>0なので縮退扱いされない）×有限screenWidthは結果がInfinityになる契約を固定する', () => {
+    // displayWidth>0 は true（Infinity>0）なので早期フォールバックの対象外になり、
+    // dpr(2) * (Infinity/800) = Infinity がそのまま返る。この関数自身はInfinityをガードせず、
+    // 呼び出し側のNovelRenderer.setRenderResolutionが最終防波堤になる設計（多重防御）を示すピン。
+    expect(computeDynamicRenderResolution(Infinity, 800, 2)).toBe(Infinity)
   })
 })

@@ -18,7 +18,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Assets, Texture } from 'pixi.js'
-import { getIndicatorImageUrls } from '../game/novelLayout'
+import { computeDynamicRenderResolution, getIndicatorImageUrls } from '../game/novelLayout'
 
 // NovelRenderer を完全スタブ化（PixiJS 構築・init を無効化）。
 // NovelPlayer は init().then(...) 内で多数の setter を呼ぶので、すべて no-op で受ける。
@@ -1227,6 +1227,357 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
 
     expect(rendererInstances.length).toBe(1)
     expect(rendererInstances[0].destroy).not.toHaveBeenCalled()
+  })
+})
+
+// #446: containerRef（letterbox 内接矩形、canvas が CSS で引き伸ばされる箱）の実表示サイズを
+// ResizeObserver で監視し、200ms debounce の後に renderer.setRenderResolution(...) で
+// レンダラ解像度を追従させる effect の単体テスト。isFluid に関係なく常時稼働する（K4 group と
+// 同じ window.ResizeObserver モック・triggerResize を再利用する）。
+//
+// isExporting() によるガードが本群の核心: VideoExporter の書き出し中はこの自動追従を止めないと
+// 書き出し品質を巻き戻してしまう。判定は「debounce 発火時点」の isExporting() の値で行う設計
+// （スケジュール時点ではない）ため、発火前に false へ戻れば適用される「自己修復」ケースと、
+// 発火時にまだ true でスキップされ、その後 false に戻っても新たなリサイズが無ければ二度と
+// 適用されない「stale」ケース（#455 として別 Issue 化済み・ここでは現状挙動の固定のみ）の
+// 両方を縛る。
+describe('NovelPlayer containerRef の実表示サイズ追従 ResizeObserver + debounce (#446)', () => {
+  let originalResizeObserver: typeof ResizeObserver | undefined
+  let originalDpr: number
+
+  beforeEach(() => {
+    originalResizeObserver = window.ResizeObserver
+    window.ResizeObserver = ResizeObserverMock as unknown as typeof ResizeObserver
+    resetResizeObserverMock()
+    originalDpr = window.devicePixelRatio
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    window.ResizeObserver = originalResizeObserver as typeof ResizeObserver
+    Object.defineProperty(window, 'devicePixelRatio', {
+      value: originalDpr,
+      configurable: true,
+      writable: true,
+    })
+  })
+
+  // aspectRatio="16:9" 固定（非fluid）の gameWidth（ASPECT_RATIOS['16:9'].width, constants.ts）。
+  const GAME_WIDTH_16_9 = 800
+  // aspectRatio="9:16" 固定（非fluid）の gameWidth（ASPECT_RATIOS['9:16'].width, constants.ts）。
+  const GAME_WIDTH_9_16 = 450
+
+  it('C1: リサイズから200ms経過でrenderer.setRenderResolution(表示幅/論理幅×dprの計算値)が呼ばれる', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear() // マウント時の init effect 由来の1回を除外する
+
+    act(() => {
+      triggerResize(1600, 900)
+    })
+    act(() => {
+      vi.advanceTimersByTime(200)
+    })
+
+    const dpr = window.devicePixelRatio || 1
+    expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
+    expect(r.setRenderResolution).toHaveBeenCalledWith(
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, dpr)
+    )
+  })
+
+  it('C2: 境界値199ms時点ではまだ呼ばれず、200msちょうどで呼ばれる', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear()
+
+    act(() => {
+      triggerResize(1600, 900)
+    })
+    act(() => {
+      vi.advanceTimersByTime(199)
+    })
+    expect(r.setRenderResolution).not.toHaveBeenCalled()
+
+    act(() => {
+      vi.advanceTimersByTime(1) // 累計200ms
+    })
+    expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
+  })
+
+  it('C3: 200ms窓内に連続3回リサイズすると最終値1回分だけsetRenderResolutionが呼ばれる（二重送信防止）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear()
+
+    act(() => {
+      triggerResize(1000, 600) // 1回目（窓内で上書きされ最終的に破棄される）
+    })
+    act(() => {
+      vi.advanceTimersByTime(50)
+    })
+    act(() => {
+      triggerResize(1200, 700) // 2回目（同じく窓内で上書き）
+    })
+    act(() => {
+      vi.advanceTimersByTime(50)
+    })
+    act(() => {
+      triggerResize(1600, 900) // 3回目（最終値。これだけが適用される）
+    })
+    act(() => {
+      vi.advanceTimersByTime(200) // 3回目から200ms経過
+    })
+
+    const dpr = window.devicePixelRatio || 1
+    expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
+    expect(r.setRenderResolution).toHaveBeenCalledWith(
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, dpr)
+    )
+  })
+
+  it('C4: 200ms窓を超えて2回リサイズ(間隔250ms)すると2回とも独立して呼ばれる', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear()
+
+    act(() => {
+      triggerResize(1000, 600)
+    })
+    act(() => {
+      vi.advanceTimersByTime(250)
+    })
+    act(() => {
+      triggerResize(1600, 900)
+    })
+    act(() => {
+      vi.advanceTimersByTime(250)
+    })
+
+    const dpr = window.devicePixelRatio || 1
+    expect(r.setRenderResolution).toHaveBeenCalledTimes(2)
+    expect(r.setRenderResolution).toHaveBeenNthCalledWith(
+      1,
+      computeDynamicRenderResolution(1000, GAME_WIDTH_16_9, dpr)
+    )
+    expect(r.setRenderResolution).toHaveBeenNthCalledWith(
+      2,
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, dpr)
+    )
+  })
+
+  it('デシジョンテーブル最重要ケース1: debounce発火時にisExporting()===trueならsetRenderResolutionは呼ばれない', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear()
+    r.isExporting.mockReturnValue(true)
+
+    act(() => {
+      triggerResize(1600, 900)
+    })
+    act(() => {
+      vi.advanceTimersByTime(200) // 発火時点でも isExporting()===true のまま
+    })
+
+    expect(r.setRenderResolution).not.toHaveBeenCalled()
+  })
+
+  it('デシジョンテーブル最重要ケース2(自己修復): リサイズ時isExporting()===trueでも200ms経過前にfalseへ変わればこの回は適用される', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear()
+    r.isExporting.mockReturnValue(true)
+
+    act(() => {
+      triggerResize(1600, 900)
+    })
+    act(() => {
+      vi.advanceTimersByTime(100) // まだ窓の途中
+    })
+    r.isExporting.mockReturnValue(false) // 書き出しが200ms経過前に終わる
+    act(() => {
+      vi.advanceTimersByTime(100) // 累計200ms＝発火時点は isExporting()===false
+    })
+
+    const dpr = window.devicePixelRatio || 1
+    expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
+    expect(r.setRenderResolution).toHaveBeenCalledWith(
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, dpr)
+    )
+  })
+
+  it('デシジョンテーブル最重要ケース3(stale・#455として別Issue化済・現状挙動の固定): 発火時もisExporting()===trueでスキップされた回は、その後falseに戻すだけでは適用されないまま終わる', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear()
+    r.isExporting.mockReturnValue(true)
+
+    act(() => {
+      triggerResize(1600, 900)
+    })
+    act(() => {
+      vi.advanceTimersByTime(200) // 発火時点でまだ true → スキップ（debounceTimer は消費済み）
+    })
+    expect(r.setRenderResolution).not.toHaveBeenCalled()
+
+    // 書き出しは終わったが、新たなリサイズは発生しない（#455: 現行実装はこのケースを
+    // 自己修復しない。ここでは「直す」のではなく現状挙動を固定するだけ）。
+    r.isExporting.mockReturnValue(false)
+    act(() => {
+      vi.advanceTimersByTime(5000)
+    })
+    expect(r.setRenderResolution).not.toHaveBeenCalled()
+  })
+
+  it('クリーンアップ: unmount時にpending中のdebounceタイマーがクリアされ、unmount後200ms経過してもsetRenderResolutionが呼ばれない', async () => {
+    const { unmount } = render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear()
+
+    act(() => {
+      triggerResize(1600, 900)
+    })
+    unmount()
+    act(() => {
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(r.setRenderResolution).not.toHaveBeenCalled()
+  })
+
+  it('C9: gameWidth変化（aspectRatio prop変更）でeffectが張り直され、旧ResizeObserverはdisconnectされる（同一リサイズで二重発火しない）', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+
+    rerender(<NovelPlayer events={[]} aspectRatio="9:16" />)
+    await flushAsync()
+    // 非fluidのaspectRatio変更はrendererを再構築しない（#442 J1と同じ前提）。
+    expect(rendererInstances.length).toBe(1)
+    r.setRenderResolution.mockClear()
+
+    act(() => {
+      triggerResize(900, 1600)
+    })
+    act(() => {
+      vi.advanceTimersByTime(200)
+    })
+
+    // 旧effect（gameWidth=800側）のコールバックがdisconnectされずに残っていれば、
+    // 同じtriggerResizeで2回呼ばれてしまう。新gameWidth(450)基準の1回だけが正しい。
+    const dpr = window.devicePixelRatio || 1
+    expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
+    expect(r.setRenderResolution).toHaveBeenCalledWith(
+      computeDynamicRenderResolution(900, GAME_WIDTH_9_16, dpr)
+    )
+  })
+
+  it('K4連動確認: 非fluid(aspectRatio="16:9"固定)でもcontainerRefのResizeObserverは常時稼働し、リサイズでsetRenderResolutionが呼ばれる（renderer自体は再マウントされない）', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear()
+
+    act(() => {
+      triggerResize(1600, 900)
+    })
+    act(() => {
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
+    // K4契約: renderer自体はdestroy→newされない（#446は解像度追従のみでrenderer再マウントとは無関係）。
+    expect(rendererInstances.length).toBe(1)
+    expect(r.destroy).not.toHaveBeenCalled()
+  })
+
+  it('fluid+向きカテゴリ変化との共存: K1と同条件のリサイズで、旧renderer破棄と#446 debounce発火が競合しても例外にならない', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const first = rendererInstances[0]
+
+    expect(() => {
+      act(() => {
+        triggerResize(400, 800) // K1と同条件: 横長→縦長で向きカテゴリが変わりrendererが再マウントされる
+      })
+    }).not.toThrow()
+    await flushAsync()
+
+    // K1契約の再確認: 旧rendererはdestroyされ、新rendererが作られている。
+    expect(first.destroy).toHaveBeenCalledOnce()
+    expect(rendererInstances.length).toBe(2)
+
+    // #446のdebounceタイマー（gameWidth変化でeffectごと張り直されているはずなので、生き残っていても
+    // 新gameWidthの新effect分のみのはず）が発火する200ms後まで進めても例外にならない。
+    expect(() => {
+      act(() => {
+        vi.advanceTimersByTime(200)
+      })
+    }).not.toThrow()
+  })
+
+  it('境界値/縮退: containerRef.currentがあってもgetBoundingClientRect().width<=0（jsdom既定）なら初回同期測定でapply()は呼ばれない', () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    // ここではまだ renderer.init(...).then(...) のmicrotaskをflushしていない。
+    // もし#446 layout effect自身の初回同期測定（containerRef.getBoundingClientRect().width<=0の
+    // はずのguard）が誤って発火していれば、この時点で既にsetRenderResolutionが呼ばれているはず。
+    const r = rendererInstances[0]
+    expect(r.setRenderResolution).not.toHaveBeenCalled()
+  })
+
+  it('dpr伝播確認: window.devicePixelRatioを2に差し替えてリサイズすると、渡る値にdpr=2が反映される', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="16:9" />)
+    await flushAsync()
+    const r = rendererInstances[0]
+    r.setRenderResolution.mockClear()
+
+    Object.defineProperty(window, 'devicePixelRatio', {
+      value: 2,
+      configurable: true,
+      writable: true,
+    })
+
+    act(() => {
+      triggerResize(1600, 900)
+    })
+    act(() => {
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(r.setRenderResolution).toHaveBeenCalledTimes(1)
+    expect(r.setRenderResolution).toHaveBeenCalledWith(
+      computeDynamicRenderResolution(1600, GAME_WIDTH_16_9, 2)
+    )
+  })
+})
+
+// #446: window.ResizeObserver 非対応環境（古いブラウザ・一部jsdom設定等）でも、containerRef用
+// effectがthrowせず・console.errorも出さずに黙って早期returnすることを縛る
+// （fluidRootRef用#442 effectと同じガード・同じ流儀）。上のdescribeブロックはwindow.ResizeObserverを
+// 常にモック化しているため、ここだけ独立してundefinedにする。
+describe('NovelPlayer containerRef ResizeObserver 非対応環境 (#446)', () => {
+  it('window.ResizeObserverがundefinedでもeffectがthrowせず、console.errorも出さない', async () => {
+    const original = window.ResizeObserver
+    // @ts-expect-error 意図的にResizeObserver非対応環境を模す
+    window.ResizeObserver = undefined
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      expect(() => render(<NovelPlayer events={[]} aspectRatio="16:9" />)).not.toThrow()
+      await flushAsync()
+      expect(errSpy).not.toHaveBeenCalled()
+    } finally {
+      window.ResizeObserver = original
+    }
   })
 })
 

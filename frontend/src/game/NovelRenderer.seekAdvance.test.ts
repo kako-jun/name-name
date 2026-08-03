@@ -105,6 +105,8 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
   })
 
   // D-5: setExporting(true/false) が SeekBar.setExportSuppressed(true/false) へ伝播する。
+  // #446 で setExporting() 内に `this.exporting = exporting` の代入が増えた後もこのテストは
+  // 無修正のまま緑を維持する＝ seekBar.setExportSuppressed() への伝播が非破壊であることの回帰確認を兼ねる。
   it('D-5: setExporting(true/false) が seekBar.setExportSuppressed(true/false) へ伝播する', () => {
     const r = new NovelRenderer()
     const spy = vi.spyOn(internals(r).seekBar, 'setExportSuppressed')
@@ -112,5 +114,42 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
     expect(spy).toHaveBeenNthCalledWith(1, true)
     r.setExporting(false)
     expect(spy).toHaveBeenNthCalledWith(2, false)
+  })
+})
+
+// #446: NovelRenderer.isExporting()（setExporting() で更新される書き出し中フラグの読み出し）。
+// NovelPlayer の containerRef ResizeObserver debounce（実表示サイズ→レンダラ解像度追従、#446）が
+// 「動画書き出し中はレンダラ解像度の自動追従を止める」ガードに使う公開 API。既定値・トグルの
+// 状態遷移だけを純粋に確認する（NovelPlayer 側での使われ方は NovelPlayer.test.tsx が別途縛る）。
+describe('NovelRenderer isExporting (#446)', () => {
+  // 状態遷移: コンストラクタ直後（setExporting 未呼び出し）は false（書き出し中でない）が既定値。
+  it('コンストラクタ直後（setExporting未呼び出し）のisExporting()既定値はfalse', () => {
+    const r = new NovelRenderer()
+    expect(r.isExporting()).toBe(false)
+  })
+
+  it('正常系: setExporting(true)直後にisExporting()がtrueを返す', () => {
+    const r = new NovelRenderer()
+    r.setExporting(true)
+    expect(r.isExporting()).toBe(true)
+  })
+
+  it('正常系: setExporting(false)直後にisExporting()がfalseを返す', () => {
+    const r = new NovelRenderer()
+    r.setExporting(true) // 既定のfalseとの差分を作ってからfalseに戻す
+    r.setExporting(false)
+    expect(r.isExporting()).toBe(false)
+  })
+
+  // 状態遷移: true→false→true と連続トグルしても、都度 isExporting() が最新値を返す
+  // （内部フラグが古い呼び出しの値に固着しない）。
+  it('状態遷移: true→false→trueと連続トグルしても都度isExporting()が最新値を返す', () => {
+    const r = new NovelRenderer()
+    r.setExporting(true)
+    expect(r.isExporting()).toBe(true)
+    r.setExporting(false)
+    expect(r.isExporting()).toBe(false)
+    r.setExporting(true)
+    expect(r.isExporting()).toBe(true)
   })
 })
