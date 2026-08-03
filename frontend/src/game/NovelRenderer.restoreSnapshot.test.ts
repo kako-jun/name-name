@@ -50,6 +50,22 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
   return r
 }
 
+/**
+ * 複数シーンを 1 本の Event[] に線形連結する（PlayerScreen.flattenDocumentEvents /
+ * NovelRenderer.linearAndJumpIndex.test.ts と同形）。マルチMD構成の K 系テストで、
+ * setScenes ではなく setEvents + setJumpSceneIndex の実運用に近い経路を再現するために使う。
+ */
+function flatten(scenes: EventScene[]): Event[] {
+  const events: Event[] = []
+  let first = true
+  for (const s of scenes) {
+    if (!first) events.push('SceneTransition')
+    first = false
+    events.push(...s.events)
+  }
+  return events
+}
+
 /** restoreSnapshot 検証用の内部アクセサ（startFrom.test.ts と同じ） */
 interface RendererInternals {
   history: unknown[]
@@ -317,5 +333,145 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
 
     expect(r.getSnapshot().storyEnded).toBe(false)
     expect(cb).not.toHaveBeenCalled()
+  })
+
+  // ===== K. マルチMD遅延ロード対応（#460 再発修正） =====
+  //
+  // Gymnasia のような hub(entry doc) + ルート別 md 構成では、fluid 再マウント直後の新 renderer の
+  // allScenes には entry doc のシーンしか無く、ルート側の sceneId はまだ遅延ロードされていない。
+  // jumpToScene → resolveMissingSceneAndJump（NovelRenderer.linearAndJumpIndex.test.ts の #314）と
+  // 対になる、restoreSnapshot 版の missingSceneResolver 経由解決を検証する。
+
+  it('K1: allScenes に無い sceneId でも missingSceneResolver 経由でロードされ復元できる（マルチMD再現）', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const routeScene = scene('r01-01', [narration('route-line-a', 'route-line-b')])
+    const resolver = vi.fn(async () => [...entryScenes, routeScene])
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+
+    // 新規 renderer 直後は allScenes に route-scene がまだ無い（マルチMD遅延ロード前の状態）
+    expect(r.getAllSceneIds()).toEqual(['entry-hub'])
+
+    r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'r01-01', eventIndex: 1, flags: { seen: boolFlag(true) } })
+    )
+    // resolveMissingSceneAndRestore は fire-and-forget（restoreSnapshot 自体は void）なので
+    // resolver の Promise 解決をマイクロタスクとして待つ（#314 と同じ待ち方）。
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(resolver).toHaveBeenCalledWith('r01-01')
+    expect(r.getAllSceneIds()).toEqual(['entry-hub', 'r01-01'])
+    expect(r.getCurrentSceneId()).toBe('r01-01')
+    expect(r.getSnapshot().eventIndex).toBe(1)
+    expect(r.getSnapshot().flags).toEqual({ seen: boolFlag(true) })
+  })
+
+  it('K2: missingSceneResolver が null を返す（解決失敗）→ flags のみ復元され console.warn が呼ばれる', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const resolver = vi.fn(async () => null)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    r.startFrom({ sceneId: 'entry-hub' })
+    const sceneBefore = r.getCurrentSceneId()
+
+    r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'ghost-route', flags: { restored: boolFlag(true) } })
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(resolver).toHaveBeenCalledWith('ghost-route')
+    expect(r.getSnapshot().flags).toEqual({ restored: boolFlag(true) })
+    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('K3: resolver がシーンを返すが目的の sceneId が含まれない → flags のみ復元され warn される', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const otherScene = scene('other-route', [narration('other-line')])
+    // 'target-route' を含まない解決結果（別ファイルを誤って返す/typo 等の想定）
+    const resolver = vi.fn(async () => [...entryScenes, otherScene])
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'target-route', flags: { x: boolFlag(true) } }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(r.getSnapshot().flags).toEqual({ x: boolFlag(true) })
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('K4: resolver が例外を投げる → flags のみ復元され warn される（例外を外に漏らさない）', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const resolver = vi.fn(async () => {
+      throw new Error('network error')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+
+    expect(() =>
+      r.restoreSnapshot(craftSnapshot({ sceneId: 'target-route', flags: { y: boolFlag(true) } }))
+    ).not.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(r.getSnapshot().flags).toEqual({ y: boolFlag(true) })
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('K5: 遅延解決経由の復元でも M2 と同様 storyEnded の重複コールバックは発火しない', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const routeScene = scene('r01-01', [narration('route-line')])
+    const resolver = vi.fn(async () => [...entryScenes, routeScene])
+    const cb = vi.fn()
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    r.setOnStoryEndedChange(cb)
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', storyEnded: true }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    expect(cb).not.toHaveBeenCalled()
+  })
+
+  it('K6: 同一 sceneId への restoreSnapshot 二重呼び出しでも resolver は重複起動しない（pendingMissingScenes 共有ガード）', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const routeScene = scene('r01-01', [narration('route-line')])
+    const resolver = vi.fn(async () => [...entryScenes, routeScene])
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01' }))
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01' })) // 同一tick内の二重呼び出し
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(resolver).toHaveBeenCalledTimes(1)
+    expect(r.getCurrentSceneId()).toBe('r01-01')
   })
 })

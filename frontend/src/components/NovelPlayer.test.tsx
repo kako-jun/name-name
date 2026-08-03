@@ -46,6 +46,9 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setOnSeekActiveChange = vi.fn()
     setOnStoryEndedChange = vi.fn()
     setConfinedSceneIds = vi.fn()
+    // #460 再発修正: マルチMD構成での restoreSnapshot 遅延解決の前提（setMissingSceneResolver が
+    // restoreSnapshot より前に呼ばれていること）を検証するために必要（P11）。
+    setMissingSceneResolver = vi.fn()
     setDocKey = vi.fn()
     setChoiceStyle = vi.fn()
     setFontFamily = vi.fn()
@@ -1477,6 +1480,38 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     expect(gen2.restoreSnapshot).toHaveBeenCalledTimes(1)
     expect(gen2.restoreSnapshot).toHaveBeenCalledWith(snap0)
     expect(gen1.getSnapshot).toHaveBeenCalled()
+  })
+
+  // #460 再発修正: Gymnasia のような hub(entry doc) + ルート別 md のマルチMD構成では、
+  // 再マウント直後の新 renderer の allScenes には entry doc のシーンしか無く、restoreSnapshot が
+  // 渡す sceneId は missingSceneResolver 経由の遅延ロードで初めて解決できる（NovelRenderer 側の
+  // 実装は NovelRenderer.restoreSnapshot.test.ts の K1-K6 で検証済み）。その遅延解決が機能する
+  // 前提条件は「新 renderer に対して setMissingSceneResolver が restoreSnapshot より前に呼ばれて
+  // いること」（NovelRenderer.restoreSnapshot は呼び出し時点の missingSceneResolver しか見ない）。
+  // NovelRenderer は本ファイルでは全面 mock のため実際の遅延解決ロジックはここでは検証できないが、
+  // その前提となる呼び出し順序の契約はここで縛れる（将来 NovelPlayer.tsx の呼び出し順が入れ替わる
+  // 回帰を防ぐ）。
+  it('P11 (#460 マルチMD): 再マウント後の新 renderer で setMissingSceneResolver が restoreSnapshot より前に呼ばれる', async () => {
+    const resolver = vi.fn(async () => null)
+    render(<NovelPlayer events={[]} aspectRatio="auto" onResolveMissingScene={resolver} />)
+    await flushAsync()
+    const first = rendererInstances[0]
+    const snapshot: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: 'route-scene' }
+    first.getSnapshot.mockReturnValue(snapshot)
+
+    act(() => {
+      triggerResize(400, 800)
+    })
+    await flushAsync()
+
+    const second = rendererInstances[1]
+    expect(second.setMissingSceneResolver).toHaveBeenCalledWith(resolver)
+    expect(second.restoreSnapshot).toHaveBeenCalledTimes(1)
+    expect(second.restoreSnapshot).toHaveBeenCalledWith(snapshot)
+
+    const resolverCallOrder = second.setMissingSceneResolver.mock.invocationCallOrder[0]
+    const restoreCallOrder = second.restoreSnapshot.mock.invocationCallOrder[0]
+    expect(resolverCallOrder).toBeLessThan(restoreCallOrder)
   })
 })
 
