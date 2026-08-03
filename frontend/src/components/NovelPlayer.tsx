@@ -21,6 +21,7 @@ import {
   pickFluidAspectRatio,
 } from '../game/constants'
 import {
+  computeDynamicRenderResolution,
   getIndicatorImageUrls,
   PLAYER_BUTTON_RIGHT_MARGIN_PX,
   PLAYER_BUTTON_SLOT_GAP_PX,
@@ -344,6 +345,76 @@ function NovelPlayer({
     // 踏襲し、値は closure 経由でそのまま使う（react-hooks/exhaustive-deps はこのプロジェクトでは未設定）。
   }, [isFluid])
 
+  // 実表示サイズに応じた canvas 解像度の動的追従 (#446)。containerRef（letterbox 内接矩形。
+  // canvas 要素はこの箱いっぱいに CSS で引き伸ばされる — 下の gameBoxStyle 定義箇所参照）の
+  // 実測 CSS 表示サイズを ResizeObserver で監視し、devicePixelRatio に加えて
+  // 「実表示幅 / 論理幅(gameWidth)」の引き伸ばし倍率もレンダラ解像度へ反映する
+  // （computeDynamicRenderResolution、novelLayout.ts）。
+  //
+  // 上の fluidRootRef 用 ResizeObserver（#442）とは目的が異なる別の観測: あちらは fluid
+  // （aspect_ratio: auto）時のみ・向きカテゴリ（横長/縦長）が変わったときだけ発火して
+  // renderer を再マウントする粗い監視。こちらは fluid/非fluid 問わず常時、実表示サイズの
+  // 連続的な変化（ウィンドウリサイズ・最大化等）を追い、既存 renderer のレンダラ解像度だけを
+  // setRenderResolution() で更新する（screenWidth/Height・PixiJS シーン自体は変えない）。
+  // isFluid の条件分岐に依存しないため、Gymnasia 以外の非 fluid ゲーム（theo-hayami/attama 等）
+  // でも同じく動作する。
+  //
+  // 初回マウント時の適用は上の renderer 生成 effect（`renderer.init(...).then(...)`内）が
+  // 担当する（app.renderer が確実に存在するタイミングで同期測定して1回適用する）。ここでの
+  // 初回同期測定（下の getBoundingClientRect）は fluidRootRef effect と同じパターンを踏襲した
+  // 保険（renderer 未初期化ならレンダラ側の no-op ガードで単に何もしない）。
+  //
+  // ドラッグリサイズ中の連打で毎フレーム renderer.resize() が走ると重いため debounce する。
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+    const apply = (displayWidth: number) => {
+      const renderer = rendererRef.current
+      if (!renderer) return
+      // 動画書き出し中 (#228/#279) は VideoExporter が意図的にレンダラ解像度を上げている。
+      // この自動追従で上書きすると書き出し品質が下がるため、書き出し中は何もしない
+      // （書き出し終了は VideoExporter の cleanup が prevResolution へ確実に復元する設計。
+      // 復元後にサイズが変わっていれば次のリサイズで本 effect が改めて追従する）。
+      if (renderer.isExporting()) return
+      const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+      renderer.setRenderResolution(computeDynamicRenderResolution(displayWidth, gameWidth, dpr))
+    }
+
+    const scheduleApply = (displayWidth: number) => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => apply(displayWidth), 200)
+    }
+
+    // 初回同期測定（fluidRootRef effect と同じパターン、#442 参照）。debounce せず即適用する。
+    const rect = container.getBoundingClientRect()
+    if (rect.width > 0) {
+      apply(rect.width)
+    }
+
+    if (typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      const { width } = entry.contentRect
+      if (width <= 0) return
+      scheduleApply(width)
+    })
+    observer.observe(container)
+
+    return () => {
+      observer.disconnect()
+      if (debounceTimer) clearTimeout(debounceTimer)
+    }
+    // gameWidth はアスペクト比が変わると変化する（fluid の向きカテゴリ変化・非fluid の
+    // aspectRatio prop 変化）。変化のたびに effect を張り直し、closure 内の gameWidth を
+    // 常に現在の論理幅に保つ（rendererRef 経由なので再マウント有無に関わらず現在の renderer を
+    // 常に指す。上の fluidRemountKey 再マウント effect とは独立）。
+  }, [gameWidth])
+
   // インジケータ画像の先読み (#413)。assetBaseUrl が分かった時点で、renderer の生成/初期化
   // （下の init effect の `renderer.init(...).then(...)`）を待たずにインジケータ画像（next/pageturn
   // 計8枚）の Assets.load() を fire-and-forget で開始する。renderer/DialogBox の状態には
@@ -382,6 +453,19 @@ function NovelPlayer({
         renderer.destroy()
         return
       }
+      // 実表示サイズに応じた初期解像度 (#446)。canvas は containerRef いっぱいに CSS で
+      // 引き伸ばされるため、devicePixelRatio だけでなく実測 CSS 幅と論理幅(gameWidth)の
+      // 引き伸ばし倍率もレンダラ解像度へ反映する。ここでは app.init() 完了直後（＝
+      // renderer.app.renderer が確実に存在するタイミング）に同期測定して1回適用する。
+      // 以降のサイズ変化（ウィンドウリサイズ・最大化等）は下の常設 ResizeObserver effect
+      // （containerRef 監視、fluid/非fluid 共通、#446）が引き継いで追従する。
+      renderer.setRenderResolution(
+        computeDynamicRenderResolution(
+          containerRef.current?.getBoundingClientRect().width ?? 0,
+          gameWidth,
+          typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+        )
+      )
       if (assetBaseUrl) {
         renderer.setAssetBaseUrl(assetBaseUrl)
       }

@@ -67,6 +67,34 @@ export function computeCoverFit(
 }
 
 /**
+ * 実表示サイズに応じたレンダラ解像度を算出する純粋関数 (#446)。
+ *
+ * PixiJS のレンダリング解像度は元々 `devicePixelRatio`（Retina 補正）だけで固定していたが、
+ * canvas 要素自体が CSS で表示サイズいっぱいに引き伸ばされる分（レターボックス内接矩形が
+ * 実ビューポートよりずっと大きい大画面・最大化時等）を考慮しておらず、DotGothic16 等で
+ * 文字の滲み・ジャギーが目立っていた（#446）。
+ *
+ * `displayWidth`（`containerRef` の実測 CSS 表示幅）と `screenWidth`（論理解像度幅。
+ * construct 時に固定、`ASPECT_RATIOS` 由来）の比率＝「CSS 引き伸ばし倍率」を
+ * `devicePixelRatio` に掛け合わせることで、実表示サイズに応じた裏バッファ密度を得る。
+ * `screenWidth`/`screenHeight`（論理サイズ）自体は変更しない（変えるのは裏バッファの密度だけ）。
+ *
+ * `displayWidth <= 0` または `screenWidth <= 0`（レイアウト未確定・jsdom 等）の場合は
+ * 安全側の `devicePixelRatio`（引き伸ばし倍率 1 扱い）にフォールバックする
+ * （0 除算・NaN・負値を避ける）。`devicePixelRatio` 自体が不正（0 以下・NaN・Infinity）な
+ * 場合も 1 にフォールバックする。
+ */
+export function computeDynamicRenderResolution(
+  displayWidth: number,
+  screenWidth: number,
+  devicePixelRatio: number
+): number {
+  const dpr = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1
+  if (!(displayWidth > 0) || !(screenWidth > 0)) return dpr
+  return dpr * (displayWidth / screenWidth)
+}
+
+/**
  * `#RRGGBB` 形式（またはプレフィックス省略の `RRGGBB`）を PixiJS 用の数値色に変換する純粋関数。
  *
  * 元 `NovelRenderer.parseHexColor` と同一:

@@ -65,6 +65,10 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setSeekBarColor = vi.fn()
     setIntermissionScene = vi.fn()
     hasIntermissionScene = vi.fn().mockReturnValue(false)
+    // #446: 実表示サイズに応じたレンダラ解像度追従。init().then() 内で無条件に1回呼ばれる
+    // ため常に必要（isExporting は既定 false＝書き出し中でない扱いで自動追従を通す）。
+    setRenderResolution = vi.fn()
+    isExporting = vi.fn().mockReturnValue(false)
     applySettings = vi.fn()
     setScenes = vi.fn()
     setEvents = vi.fn()
@@ -127,26 +131,39 @@ vi.mock('../utils/isEmbedded', () => ({
 // observe/disconnect を持つスタブクラスを用意し、テストコード側から contentRect を指定して
 // コールバックを手動発火できるようにする（NovelPlayer 本体は「向き」の判定にしか contentRect の
 // width/height を使わないため、モックの entry 形は最小限でよい）。
+//
+// #446: NovelPlayer は fluidRootRef 用（本コメント上の #442 契約）と containerRef 用
+// （実表示サイズ追従・#446）の2つの独立した ResizeObserver を持つようになった。
+// `window.ResizeObserver` を差し替えるこの describe 内ではどちらも本 Mock 経由で構築される
+// ため、コールバックを単一の `lastCallback` に保持すると後から構築された方が先勝ちを
+// 上書きしてしまう。登録された全コールバックの配列で保持し、`triggerResize` は「観測対象の
+// 要素がこのサイズになった」を全登録先へブロードキャストする（実ブラウザで同時に複数の
+// ResizeObserver が別要素を監視していても、テストが模擬する「画面がリサイズされた」という
+// 1つの事象は両方に伝わるのと同じ扱い）。
 interface FakeResizeObserverEntry {
   contentRect: { width: number; height: number }
 }
 const { ResizeObserverMock, triggerResize, resetResizeObserverMock } = vi.hoisted(() => {
-  let lastCallback: ((entries: FakeResizeObserverEntry[]) => void) | null = null
+  let callbacks: Array<(entries: FakeResizeObserverEntry[]) => void> = []
   class ResizeObserverMock {
+    private readonly callback: (entries: FakeResizeObserverEntry[]) => void
     constructor(callback: (entries: FakeResizeObserverEntry[]) => void) {
-      lastCallback = callback
+      this.callback = callback
+      callbacks.push(callback)
     }
     observe = vi.fn()
     unobserve = vi.fn()
-    disconnect = vi.fn()
+    disconnect = vi.fn(() => {
+      callbacks = callbacks.filter((cb) => cb !== this.callback)
+    })
   }
   return {
     ResizeObserverMock,
     triggerResize: (width: number, height: number) => {
-      lastCallback?.([{ contentRect: { width, height } }])
+      callbacks.forEach((cb) => cb([{ contentRect: { width, height } }]))
     },
     resetResizeObserverMock: () => {
-      lastCallback = null
+      callbacks = []
     },
   }
 })
@@ -1194,12 +1211,15 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     expect(rendererInstances[2].destroy).not.toHaveBeenCalled()
   })
 
-  it('K4: 非fluid（aspectRatio 明示指定）では ResizeObserver 自体が使われない（observe が呼ばれない）', async () => {
+  it('K4: 非fluid（aspectRatio 明示指定）ではリサイズ通知が来ても renderer は再マウントされない', async () => {
     render(<NovelPlayer events={[]} aspectRatio="16:9" />)
     await flushAsync()
 
-    // isFluid=false の早期 return で ResizeObserverMock は一度もインスタンス化されない
-    // ＝ observe が一切呼ばれない（triggerResize しても届く先が無いことの間接確認）。
+    // isFluid=false の早期 return で「向きカテゴリ変化→再マウント」契約（#442, fluidRootRef 用
+    // ResizeObserver）は発火しない。#446 で追加した containerRef 用 ResizeObserver（実表示サイズ→
+    // レンダラ解像度追従）は isFluid に関係なく常時 observe するため、この describe の
+    // window.ResizeObserver モック経由で triggerResize すると #446 側のコールバックにも届くが、
+    // それは setRenderResolution を呼ぶだけで renderer の再マウント（destroy→new）は起こさない。
     act(() => {
       triggerResize(400, 800)
     })
