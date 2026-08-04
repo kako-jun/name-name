@@ -1126,6 +1126,34 @@ describe('NovelPlayer sentencePerPage の renderer 転送 (#448)', () => {
   })
 })
 
+// --- #466: pixelArt prop を renderer.setPixelArt に転送する ---
+//
+// NovelPlayer は init 時（setEvents/setScenes より前）と、pixelArt 変化時の専用 useEffect の
+// 双方で renderer.setPixelArt(pixelArt ?? null) を呼ぶ。frontmatter `pixel_art:` が
+// PlayerScreen/EditorScreen → NovelPlayer prop → renderer まで届く配線を、スタブ renderer の
+// 呼び出しで縛る（sentencePerPage #448 と対称の配線パターン）。
+describe('NovelPlayer pixelArt の renderer 転送 (#466)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  it('NP1: pixelArt={true} なら renderer.setPixelArt が true で呼ばれる', async () => {
+    render(<NovelPlayer events={[]} pixelArt={true} />)
+    await flushAsync()
+    expect(lastRenderer().setPixelArt).toHaveBeenCalledWith(true)
+  })
+
+  it('NP2: pixelArt 未指定なら renderer.setPixelArt が null で呼ばれる（?? null・既定 linear 相当）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(lastRenderer().setPixelArt).toHaveBeenCalledWith(null)
+  })
+
+  it('NP3: pixelArt={false}（明示）でも false で呼ばれる（null に潰れない）', async () => {
+    render(<NovelPlayer events={[]} pixelArt={false} />)
+    await flushAsync()
+    expect(lastRenderer().setPixelArt).toHaveBeenCalledWith(false)
+  })
+})
+
 // --- #442: 非 fluid（aspect_ratio 16:9/4:3/9:16/未指定）では aspectRatio 変更で再マウントしない ---
 //
 // mount effect の依存配列は [fluidRemountKey] のみ。fluid（aspect_ratio: auto）以外は

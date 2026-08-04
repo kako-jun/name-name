@@ -28,7 +28,14 @@ interface FadeAnimationLike {
 }
 
 interface CharacterStateLike {
-  sprite: { alpha: number; x: number; y: number; parent?: unknown }
+  sprite: {
+    alpha: number
+    x: number
+    y: number
+    parent?: unknown
+    // texture.source.scaleMode 観測用（#466 pixel_art）。
+    texture?: { source?: { scaleMode?: string } }
+  }
   fadeAnimation: FadeAnimationLike | null
   snapshotHidden?: boolean
   attached?: boolean
@@ -145,6 +152,83 @@ describe('CharacterLayer fade (Issue #177)', () => {
     expect(fade.toAlpha).toBe(0)
     expect(fade.durationMs).toBe(700) // #407 で 300→700
     expect(fade.durationMs).toBe(BACKGROUND_CROSSFADE_MS)
+  })
+})
+
+describe('CharacterLayer pixel_art スケールモード（立ち絵 show 経路, #466）', () => {
+  // setPixelArt() で受け取った値を loadTexture の Assets.load().then() 内で
+  // texture.source.scaleMode に反映する（nearest = ドット絵向け / linear = 従来の滑らか）。
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function mockLoadResolves(): void {
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
+  }
+
+  it('C1: setPixelArt(true) 後の show() は texture.source.scaleMode が nearest になる', async () => {
+    mockLoadResolves()
+    const layer = new CharacterLayer(800, 450)
+    layer.setPixelArt(true)
+    layer.show('hero', 'normal', '中央', '/assets')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('nearest')
+  })
+
+  it('C2: setPixelArt(false)（明示）の show() は texture.source.scaleMode が linear のまま', async () => {
+    mockLoadResolves()
+    const layer = new CharacterLayer(800, 450)
+    layer.setPixelArt(false)
+    layer.show('hero', 'normal', '中央', '/assets')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('linear')
+  })
+
+  it('C3: setPixelArt を一度も呼ばない（既定）show() は texture.source.scaleMode が linear（後方互換の既定値固定）', async () => {
+    mockLoadResolves()
+    const layer = new CharacterLayer(800, 450)
+    // setPixelArt を呼ばない = frontmatter 未指定相当。
+    layer.show('hero', 'normal', '中央', '/assets')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('linear')
+  })
+
+  it('C4: setPixelArt(true) を呼んだ後、別の expression への再 show でも新しいロードが nearest を維持する', async () => {
+    mockLoadResolves()
+    const layer = new CharacterLayer(800, 450)
+    layer.setPixelArt(true)
+    layer.show('hero', 'normal', '中央', '/assets')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(asInternals(layer).characters.get('hero')!.sprite.texture!.source!.scaleMode).toBe(
+      'nearest'
+    )
+
+    // 別 expression への再 show（クロスフェード経由で新規 loadTexture が走る）。
+    layer.show('hero', 'angry', '中央', '/assets')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('nearest')
+  })
+
+  it('C5: 表示済み立ち絵がある状態で setPixelArt(true) を呼んでも、再 show するまで既存 sprite の scaleMode は変化しない（仕様pin）', async () => {
+    mockLoadResolves()
+    const layer = new CharacterLayer(800, 450)
+    // pixel_art 未設定（既定 false）のまま表示 → linear。
+    layer.show('hero', 'normal', '中央', '/assets')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('linear')
+
+    // setPixelArt() はフィールド代入のみで、既存表示済み sprite への遡及再適用はしない。
+    layer.setPixelArt(true)
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('linear')
   })
 })
 
@@ -2018,6 +2102,91 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     const st = imageChars(layer).characters.get('avatar')!
     expect(st.label).toBeUndefined()
     expect(st.textEffect).toBeNull()
+  })
+})
+
+describe('CharacterLayer pixel_art スケールモード（render-only showImage 経路, #466）', () => {
+  // setPixelArt() で受け取った値を showImage の Assets.load().then() 内で
+  // texture.source.scaleMode に反映する（nearest = ドット絵向け / linear = 従来の滑らか）。
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    source: { scaleMode: 'linear' },
+  })
+
+  it('C6: setPixelArt(true) 後の showImage() は texture.source.scaleMode が nearest になる', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.setPixelArt(true)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('avatar')!
+    expect((st.sprite.texture as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'nearest'
+    )
+  })
+
+  it('C7: setPixelArt(false)/未設定の showImage() は texture.source.scaleMode が linear のまま', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    // setPixelArt を呼ばない（既定 false 相当）。
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('avatar')!
+    expect((st.sprite.texture as { source: { scaleMode: string } }).source.scaleMode).toBe('linear')
+
+    // 明示 false でも同じ結果になることを確認する。
+    const layer2 = new CharacterLayer(800, 450)
+    layer2.setPixelArt(false)
+    layer2.showImage({ id: 'avatar2', path: 'a.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    const st2 = imageChars(layer2).characters.get('avatar2')!
+    expect((st2.sprite.texture as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'linear'
+    )
+  })
+
+  it('C8: 別インスタンスの setPixelArt 設定は互いに影響しない（インスタンス独立）', async () => {
+    // mockResolvedValue は全呼び出しに同一オブジェクト参照を返してしまい、2 インスタンスが
+    // 同じ texture.source を共有・上書きし合う偽陽性を生む。呼び出しごとに新しい texture を
+    // 返す mockImplementation で、実運用（毎回別 Assets.load 結果）に近い形にする。
+    vi.spyOn(Assets, 'load').mockImplementation(async () => fakeTexture(10, 10) as never)
+    const pixelLayer = new CharacterLayer(800, 450)
+    pixelLayer.setPixelArt(true)
+    const smoothLayer = new CharacterLayer(800, 450)
+    smoothLayer.setPixelArt(false)
+
+    pixelLayer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    smoothLayer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+
+    const pixelState = imageChars(pixelLayer).characters.get('avatar')!
+    const smoothState = imageChars(smoothLayer).characters.get('avatar')!
+    expect((pixelState.sprite.texture as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'nearest'
+    )
+    expect((smoothState.sprite.texture as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'linear'
+    )
+  })
+
+  // X1: Assets.load が reject するケースで、scaleMode 代入行（.then() 内）に到達せず例外も投げない。
+  //   pixel_art: true を設定していても異常系の分岐（catch）には影響しないことを縛る。
+  it('X1: setPixelArt(true) を設定していても Assets.load 失敗時は例外を投げず、scaleMode 代入行に到達しない', async () => {
+    vi.spyOn(Assets, 'load').mockRejectedValue(new Error('load failed'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    layer.setPixelArt(true)
+    expect(() => layer.showImage({ id: 'x', path: 'a.png', assetBaseUrl: '/assets' })).not.toThrow()
+    await flushPromises()
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    // .then() 未到達のため texture は初期値のまま（scaleMode 代入は起きない）＝ fadeAnimation も張られない。
+    const st = imageChars(layer).characters.get('x')!
+    expect(st.fadeAnimation).toBeNull()
   })
 })
 

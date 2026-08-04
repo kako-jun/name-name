@@ -36,6 +36,8 @@ interface EventImageLayerInternals {
     width: number
     height: number
     destroyed?: boolean
+    // texture.source.scaleMode 観測用（#466 pixel_art）。
+    texture?: { source?: { scaleMode?: string } }
   } | null
   fadeAnimation: {
     startMs: number
@@ -287,6 +289,91 @@ describe('EventImageLayer show/remove の基本', () => {
     expect(internals(layer).sprite).toBeNull()
     expect(layer.getState()).toBeNull()
     expect(layer.hasPendingVisualTransition()).toBe(false)
+  })
+})
+
+describe('EventImageLayer pixel_art スケールモード (#466)', () => {
+  // setPixelArt() で受け取った値を show() の Assets.load().then() 内で
+  // texture.source.scaleMode に反映する（nearest = ドット絵向け / linear = 従来の滑らか）。
+  //
+  // 観測方法の注意: 実 pixi.js の `new Sprite(texture)` はテクスチャの妥当性検証を行い、
+  // このテストが渡す偽 texture（実 GPU リソースを持たないプレーンオブジェクト）は
+  // Texture.EMPTY に差し替えられてしまう（`sprite.texture = texture` という代入だけの
+  // CharacterLayer とは異なる経路）。そのため sprite.texture 経由では scaleMode 代入の
+  // 有無を観測できない。`Assets.load` が解決するテクスチャ「オブジェクト自身」への
+  // 代入（プロダクションコードが実際に書き換える対象）を直接検証する。
+
+  it('E1: setPixelArt(true) 後の show() は texture.source.scaleMode が nearest になる', async () => {
+    const texture = mockTexture()
+    vi.spyOn(Assets, 'load').mockResolvedValue(texture as never)
+    const layer = makeLayer(virtualTime())
+    layer.setPixelArt(true)
+
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    expect((texture as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'nearest'
+    )
+  })
+
+  it('E2: setPixelArt(false)/未設定の show() は texture.source.scaleMode が linear のまま', async () => {
+    const texture = mockTexture()
+    vi.spyOn(Assets, 'load').mockResolvedValue(texture as never)
+    const layer = makeLayer(virtualTime())
+    // setPixelArt を呼ばない（既定 false 相当）。
+
+    layer.show('story/x.webp')
+    await flushPromises()
+    expect((texture as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'linear'
+    )
+
+    // 明示 false でも同じ結果になることを確認する。
+    const texture2 = mockTexture()
+    vi.restoreAllMocks()
+    vi.spyOn(Assets, 'load').mockResolvedValue(texture2 as never)
+    const layer2 = makeLayer(virtualTime())
+    layer2.setPixelArt(false)
+    layer2.show('story/y.webp')
+    await flushPromises()
+    expect((texture2 as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'linear'
+    )
+  })
+
+  it('E3: 世代ガード — show() を連続2回呼び、旧世代のロードが後から解決してもscaleMode代入行を通らない', async () => {
+    const resolvers: Record<string, (t: Texture) => void> = {}
+    vi.spyOn(Assets, 'load').mockImplementation(
+      (url: unknown) =>
+        new Promise((resolve) => {
+          resolvers[String(url)] = resolve
+        }) as never
+    )
+    const layer = makeLayer(virtualTime())
+    layer.setPixelArt(true)
+
+    layer.show('a.webp')
+    const urlA = '/assets/images/a.webp'
+    layer.show('b.webp')
+    const urlB = '/assets/images/b.webp'
+
+    // 旧世代(a)の texture は loadToken 不一致で早期 return され、scaleMode 代入行（texture.source.scaleMode = ...）
+    // を通らないため、mockTexture() が最初から持つ 'linear' のまま変化しない。
+    const textureA = mockTexture()
+    resolvers[urlA](textureA)
+    await flushPromises()
+    expect((textureA as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'linear'
+    )
+
+    // 最新世代(b)は scaleMode 代入行を通り、setPixelArt(true) が反映されnearestになる。
+    const textureB = mockTexture()
+    resolvers[urlB](textureB)
+    await flushPromises()
+    expect((textureB as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'nearest'
+    )
   })
 })
 

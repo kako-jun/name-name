@@ -6054,6 +6054,215 @@ title: "テスト"
     assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
 }
 
+// --- #466: pixel_art（テクスチャ拡大縮小フィルタを nearest-neighbor にするか） ---
+//
+// frontmatter `pixel_art:` を Option<bool> で透過する。sentence_per_page / split_layout と同型で
+// `parse_bool_kv` を共有し、`true`/`false`（大文字小文字無視）のみ受理、空・不正値・coerce 系
+// （yes/1/on）は None（runtime 既定: false=従来どおり linear、theo-hayami 等の塗り絵向け）に
+// フォールバックする。このリポで繰り返し起きている事故パターン（#310/#378/#436/#440/#442＝
+// 新フィールドが parser か normalizeDocument のどちらかで黙って消える）の parser 側生存確認。
+
+/// `pixel_art: <value>` だけを frontmatter に持つ最小ドキュメントを組み立てる。
+fn pixel_art_doc(value: &str) -> String {
+    format!("---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\npixel_art:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n")
+}
+
+#[test]
+fn test_document_pixel_art_parses_true_false() {
+    // P1: `true` → Some(true) / `false` → Some(false)（厳格な真偽の素直な往復）。
+    let doc_true = parser::parse(&pixel_art_doc(" true"));
+    assert_eq!(
+        doc_true.pixel_art,
+        Some(true),
+        "pixel_art: true は Some(true)"
+    );
+
+    let doc_false = parser::parse(&pixel_art_doc(" false"));
+    assert_eq!(
+        doc_false.pixel_art,
+        Some(false),
+        "pixel_art: false は Some(false)"
+    );
+}
+
+#[test]
+fn test_document_pixel_art_is_case_insensitive() {
+    // P2: `TRUE` / `False` → 大文字小文字を無視して Some に倒す（parse_bool_kv の to_ascii_lowercase）。
+    let doc_upper = parser::parse(&pixel_art_doc(" TRUE"));
+    assert_eq!(
+        doc_upper.pixel_art,
+        Some(true),
+        "pixel_art: TRUE は大文字無視で Some(true)"
+    );
+
+    let doc_mixed = parser::parse(&pixel_art_doc(" False"));
+    assert_eq!(
+        doc_mixed.pixel_art,
+        Some(false),
+        "pixel_art: False は大文字小文字無視で Some(false)"
+    );
+}
+
+#[test]
+fn test_document_pixel_art_unspecified_is_none() {
+    // P3: frontmatter にキーが無ければ None（runtime 既定 false＝従来どおり linear にフォールバック）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.pixel_art, None,
+        "pixel_art 未指定は None（既定 false にフォールバック）"
+    );
+}
+
+#[test]
+fn test_document_pixel_art_empty_is_none() {
+    // P4: 空 `pixel_art:`（値なし）・空引用 `""` はどちらも None
+    //   （parse_bool_kv が trim 後の空文字を弾く。sentence_per_page / split_layout と同じ向き）。
+    let doc_empty = parser::parse(&pixel_art_doc(""));
+    assert_eq!(doc_empty.pixel_art, None, "空 pixel_art: は None");
+
+    let doc_empty_quote = parser::parse(&pixel_art_doc(" \"\""));
+    assert_eq!(
+        doc_empty_quote.pixel_art, None,
+        "pixel_art: \"\" は unquote 後に空文字となり None"
+    );
+}
+
+#[test]
+fn test_document_pixel_art_does_not_coerce_truthy_values() {
+    // P5（重要）: `yes` / `1` / `on` は coerce せず None に倒す（厳格＝true/false 以外は無効）。
+    for truthy in ["yes", "1", "on"] {
+        let doc = parser::parse(&pixel_art_doc(&format!(" {truthy}")));
+        assert_eq!(
+            doc.pixel_art, None,
+            "pixel_art: {truthy} は coerce されず None（厳格）"
+        );
+    }
+}
+
+#[test]
+fn test_document_pixel_art_garbage_is_none() {
+    // P6: 完全に無関係なゴミ文字列も None（parse 失敗を握りつぶす）。
+    let doc = parser::parse(&pixel_art_doc(" maybe-later"));
+    assert_eq!(
+        doc.pixel_art, None,
+        "pixel_art: maybe-later（garbage）は None"
+    );
+}
+
+#[test]
+fn test_pixel_art_false_round_trips() {
+    // P7: pixel_art: false → emit に `pixel_art: false` を含み、再 parse で Some(false)。
+    //   falsy（false）でも Some なら emit から消えないこと（skip_serializing は None だけ）を縛る。
+    let doc = parser::parse(&pixel_art_doc(" false"));
+    assert_eq!(doc.pixel_art, Some(false));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("pixel_art: false"),
+        "emit に `pixel_art: false` が含まれること（false を落とさない）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.pixel_art,
+        Some(false),
+        "round-trip で pixel_art: false が保持される"
+    );
+}
+
+#[test]
+fn test_pixel_art_true_round_trips() {
+    // P8: pixel_art: true → emit に `pixel_art: true` を含み、再 parse で Some(true)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+pixel_art: true
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.pixel_art, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("pixel_art: true"),
+        "emit に `pixel_art: true` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.pixel_art,
+        Some(true),
+        "round-trip で pixel_art: true が保持される"
+    );
+}
+
+#[test]
+fn test_pixel_art_none_omits_emit_line() {
+    // P9: None なら emit に `pixel_art:` 行が出ない（skip_serializing_if = Option::is_none）。
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(doc.pixel_art, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("pixel_art:"),
+        "pixel_art が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_pixel_art_round_trip_with_other_per_game_frontmatter() {
+    // P10: pixel_art を他の per-game frontmatter（split_layout / sentence_per_page 等）と
+    //   同時に true で指定し、parse → emit → parse で全フィールドが独立して正しく保持されること。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+dialog_style: "adv"
+split_layout: true
+sentence_per_page: true
+pixel_art: true
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.pixel_art, Some(true));
+    assert_eq!(doc.split_layout, Some(true));
+    assert_eq!(doc.sentence_per_page, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+
+    assert_eq!(
+        doc2.pixel_art,
+        Some(true),
+        "pixel_art が round-trip で保持される"
+    );
+    assert_eq!(doc2.split_layout, Some(true));
+    assert_eq!(doc2.sentence_per_page, Some(true));
+    assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
+}
+
 // --- #442: aspect_ratio に "auto"（fluid モード）を追加受理する ---
 //
 // 既存 3 値（16:9/4:3/9:16）と対等に受理し、大文字 "AUTO" や不正値は従来どおり既定 "16:9" へ

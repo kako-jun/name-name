@@ -373,6 +373,58 @@ describe('parseMarkdown + normalizeDocument: sentence_per_page が normalize を
   })
 })
 
+describe('parseMarkdown + normalizeDocument: pixel_art が normalize を生き残る (#466)', () => {
+  // このリポで繰り返し起きている事故パターン（#310/#378/#436/#440/#442＝新しい frontmatter フィールドが
+  // Rust parser か normalizeDocument のどちらかで黙って消える）の frontend 側生存確認。
+  // normalizeDocument の列挙に pixel_art を書き忘れると WASM が parse した値が /play runtime
+  // （NovelRenderer.setPixelArt）に届かず、nearest-neighbor スケールが効かなくなる。
+  // 実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）を通し、値が normalize を生き残ることを縛る。
+  function docWith(pixelArtLine: string): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      pixelArtLine,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('W1: pixel_art: true → doc.pixel_art === true', async () => {
+    const doc = await parseMarkdown(docWith('pixel_art: true'))
+    expect(doc.pixel_art).toBe(true)
+  })
+
+  it('W2: pixel_art: false → doc.pixel_art === false（値が normalize を生き残る・false が null に潰れない）', async () => {
+    const doc = await parseMarkdown(docWith('pixel_art: false'))
+    expect(doc.pixel_art).toBe(false)
+  })
+
+  it('W3: pixel_art 省略 → doc.pixel_art === null（未指定は下流で既定 false＝従来どおり linear）', async () => {
+    const minimal = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(minimal)
+    expect(doc.pixel_art).toBeNull()
+  })
+})
+
 describe('parseMarkdown: aspect_ratio: auto が実 parse を通して保持される (#442)', () => {
   // fluid モード（NovelPlayer の pickFluidAspectRatio 分岐）の判定元。既存 3 値（16:9/4:3/9:16）と
   // 対等に、Rust parser → normalizeDocument（`aspect_ratio: doc.aspect_ratio` は素通し）を通しても
