@@ -362,4 +362,128 @@ mod tests {
             "buffer was: {done_text}"
         );
     }
+
+    /// バッファを行ごとのテキストに変換する（`buffer_text` の行分割版）。
+    /// ページ送りインジケータがどの行に付いているかを確認するテストで使う。
+    fn buffer_rows(buffer: &Buffer) -> Vec<String> {
+        let area = buffer.area();
+        (0..area.height)
+            .map(|y| {
+                let mut row = String::new();
+                let mut x = 0u16;
+                while x < area.width {
+                    let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                    row.push_str(symbol);
+                    x += symbol.cell_width().max(1);
+                }
+                row
+            })
+            .collect()
+    }
+
+    #[test]
+    fn draw_empty_text_dialog_with_done_reveal_shows_only_indicator() {
+        let config = Config::default();
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec![],
+        };
+        let now = Instant::now();
+        let reveal = reveal::skip_reveal(&config, &line, now);
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_attaches_to_last_line_of_multiline_body() {
+        let config = Config::default();
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["first line".to_string(), "second line".to_string()],
+        };
+        let now = Instant::now();
+        let reveal = reveal::skip_reveal(&config, &line, now);
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let rows = buffer_rows(terminal.backend().buffer());
+        let indicator_row = rows
+            .iter()
+            .find(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL));
+        assert!(indicator_row.is_some(), "rows were: {rows:?}");
+        assert!(
+            indicator_row.unwrap().contains("second line"),
+            "indicator should be attached to the last body line, rows were: {rows:?}"
+        );
+        let first_line_row = rows
+            .iter()
+            .find(|r| r.contains("first line"))
+            .expect("first line should be rendered");
+        assert!(
+            !first_line_row.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must not appear on a non-last line, rows were: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn draw_does_not_panic_at_height_one() {
+        let config = Config::default();
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["hi".to_string()],
+        };
+        let now = Instant::now();
+        let reveal = reveal::skip_reveal(&config, &line, now);
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+    }
 }

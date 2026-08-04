@@ -121,28 +121,251 @@ fn event_loop(
         })?;
 
         match input::poll_action(REDRAW)? {
-            Action::Advance => {
-                if let Some(line) = playback.current() {
-                    let reveal_done = current_reveal
-                        .as_ref()
-                        .map(|r| r.is_done(Instant::now()))
-                        .unwrap_or(true);
-                    if !reveal_done {
-                        // ブラウザ版 NovelRenderer の advanceOrSkipTypewriter と同じ
-                        // 「表示中の1手目は全文表示へのスキップに専念し、次の行へは
-                        // 進めない」挙動（カノソ方式）。
-                        current_reveal = Some(reveal::skip_reveal(config, line, Instant::now()));
-                    } else if playback.advance() {
-                        if let Some(next_line) = playback.current() {
-                            current_reveal =
-                                Some(reveal::build_reveal(config, next_line, Instant::now()));
-                        }
-                    }
-                }
-            }
+            Action::Advance => on_advance(playback, &mut current_reveal, config, Instant::now()),
             Action::Quit => break,
             Action::None => {}
         }
     }
     Ok(())
+}
+
+/// `Action::Advance` 受信時の意思決定（デシジョンテーブル、#472）。
+/// `Terminal<CrosstermBackend<Stdout>>` という具体型に結合していた `event_loop` から、
+/// `playback` / `current_reveal` / `config` / `now` だけを引数に取る純粋関数として切り出し、
+/// `TestBackend` 無しでもユニットテストできるようにした。挙動は元の `event_loop` 内の分岐と
+/// 同じ（切り出しに伴う `Instant::now()` の呼び出し回数の違いを除く）。
+///
+/// | # | 現在行 | reveal状態 | 次の行 | 動作 |
+/// |---|---|---|---|---|
+/// | 1 | 無し | ― | ― | 何もしない |
+/// | 2 | 有り | 未完了 | 存在する/最終行 | `skip_reveal` で即全文表示、`advance()` は呼ばない |
+/// | 3 | 有り | 完了 | 存在する | `advance()` → 次行の `build_reveal` |
+/// | 4 | 有り | 完了 | 最終行 | `advance()` → `current_reveal` は不変（no-op） |
+fn on_advance(
+    playback: &mut Playback,
+    current_reveal: &mut Option<RevealHandle>,
+    config: &Config,
+    now: Instant,
+) {
+    if let Some(line) = playback.current() {
+        let reveal_done = current_reveal
+            .as_ref()
+            .map(|r| r.is_done(now))
+            .unwrap_or(true);
+        if !reveal_done {
+            // ブラウザ版 NovelRenderer の advanceOrSkipTypewriter と同じ
+            // 「表示中の1手目は全文表示へのスキップに専念し、次の行へは
+            // 進めない」挙動（カノソ方式）。
+            *current_reveal = Some(reveal::skip_reveal(config, line, now));
+        } else if playback.advance() {
+            if let Some(next_line) = playback.current() {
+                *current_reveal = Some(reveal::build_reveal(config, next_line, now));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::playback::DisplayLine;
+
+    fn dline(speaker: Option<&str>, text: &str) -> DisplayLine {
+        DisplayLine {
+            speaker: speaker.map(|s| s.to_string()),
+            text: vec![text.to_string()],
+        }
+    }
+
+    /// reveal が即座には完了しない速度設定（境界確認に使う）。
+    fn slow_config() -> Config {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000;
+        config.typewriter.fade_duration_ms = 0;
+        config
+    }
+
+    /// reveal が構築と同時に完了する速度設定（「完了済み」の分岐確認に使う）。
+    fn instant_config() -> Config {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 0;
+        config.typewriter.fade_duration_ms = 0;
+        config
+    }
+
+    #[test]
+    fn on_advance_incomplete_reveal_skips_without_advancing_position() {
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "hello there"),
+            dline(Some("B"), "next line"),
+        ]);
+        let now = Instant::now();
+        let mut current_reveal = Some(reveal::build_reveal(
+            &config,
+            playback.current().expect("line"),
+            now,
+        ));
+        assert!(!current_reveal.as_ref().unwrap().is_done(now));
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert_eq!(playback.position(), 1, "スキップでは位置が進んではいけない");
+        assert!(current_reveal.as_ref().unwrap().is_done(now));
+    }
+
+    #[test]
+    fn on_advance_incomplete_reveal_at_last_line_skips_without_advancing_position() {
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "only line here")]);
+        let now = Instant::now();
+        let mut current_reveal = Some(reveal::build_reveal(
+            &config,
+            playback.current().expect("line"),
+            now,
+        ));
+        assert!(!current_reveal.as_ref().unwrap().is_done(now));
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert_eq!(playback.position(), 1);
+        assert!(playback.is_at_end());
+        assert!(current_reveal.as_ref().unwrap().is_done(now));
+    }
+
+    #[test]
+    fn on_advance_complete_reveal_with_next_line_advances_and_starts_new_reveal() {
+        let config = instant_config();
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "first"), dline(Some("B"), "second")]);
+        let now = Instant::now();
+        let mut current_reveal = Some(reveal::build_reveal(
+            &config,
+            playback.current().expect("line"),
+            now,
+        ));
+        assert!(current_reveal.as_ref().unwrap().is_done(now));
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert_eq!(playback.position(), 2);
+        assert_eq!(
+            playback.current().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(current_reveal.is_some());
+    }
+
+    #[test]
+    fn on_advance_complete_reveal_at_last_line_is_noop() {
+        let config = slow_config();
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "first"), dline(Some("B"), "second")]);
+        playback.advance(); // 最終行へ
+        let t0 = Instant::now();
+        let mut current_reveal = Some(reveal::build_reveal(
+            &config,
+            playback.current().expect("line"),
+            t0,
+        ));
+        // "second" は6グラフェム、char_interval=1000ms・fade=0ms なので
+        // t0 + 5000ms で完了する。
+        let t_call = t0 + Duration::from_millis(5000);
+        assert!(current_reveal.as_ref().unwrap().is_done(t_call));
+
+        on_advance(&mut playback, &mut current_reveal, &config, t_call);
+
+        assert_eq!(playback.position(), 2);
+        assert!(playback.is_at_end());
+        // no-op であれば current_reveal は t0 起点のまま = t_call 時点で全文表示済み。
+        // もし（バグで）t_call を起点に作り直されていたら、最初の1グラフェムしか
+        // 見えないはず（char_interval=1000msなので）。
+        let snap = current_reveal.as_ref().unwrap().snapshot(t_call);
+        assert_eq!(snap.len(), "second".chars().count());
+    }
+
+    #[test]
+    fn on_advance_no_current_line_is_noop() {
+        let config = Config::default();
+        let mut playback = Playback::from_lines(vec![]);
+        let mut current_reveal: Option<RevealHandle> = None;
+        let now = Instant::now();
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert_eq!(playback.position(), 0);
+        assert!(current_reveal.is_none());
+    }
+
+    #[test]
+    fn on_advance_full_lifecycle_across_two_lines() {
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "hello there"),
+            dline(Some("B"), "second line"),
+        ]);
+        let t0 = Instant::now();
+        let mut current_reveal = Some(reveal::build_reveal(
+            &config,
+            playback.current().expect("line"),
+            t0,
+        ));
+
+        // 1行目: reveal中
+        assert!(!current_reveal.as_ref().unwrap().is_done(t0));
+
+        // Advance(skip): 全文表示、位置は変わらない
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert_eq!(playback.position(), 1);
+        assert!(current_reveal.as_ref().unwrap().is_done(t0));
+
+        // Advance(進行): 完了済みなので2行目へ進む
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert_eq!(playback.position(), 2);
+        assert_eq!(
+            playback.current().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(!current_reveal.as_ref().unwrap().is_done(t0)); // 2行目 reveal中
+
+        // Advance(skip): 2行目を全文表示
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert!(current_reveal.as_ref().unwrap().is_done(t0));
+
+        // Advance(最終行no-op): 位置は変わらない
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert_eq!(playback.position(), 2);
+        assert!(playback.is_at_end());
+    }
+
+    #[test]
+    fn on_advance_single_call_never_advances_more_than_one_state() {
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "one"),
+            dline(Some("B"), "two"),
+            dline(Some("C"), "three"),
+        ]);
+        let now = Instant::now();
+        let mut current_reveal = Some(reveal::build_reveal(
+            &config,
+            playback.current().expect("line"),
+            now,
+        ));
+        assert_eq!(playback.position(), 1);
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+        assert_eq!(
+            playback.position(),
+            2,
+            "1回のAdvanceで2行以上進んではいけない"
+        );
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+        assert_eq!(
+            playback.position(),
+            3,
+            "1回のAdvanceで2行以上進んではいけない"
+        );
+    }
 }
