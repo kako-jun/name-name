@@ -653,6 +653,9 @@ export class CharacterLayer extends Container {
    *  （positionX 等）は screenWidth/screenHeight 基準のまま変えず、Container 全体の
    *  scale/position で領域内へ射影する（`setSplitLayoutRegion` 参照）。 */
   private splitLayoutRegion: LayoutRect | null = null
+  /** テクスチャ拡大縮小フィルタを nearest-neighbor にするか (#466)。既定 false ＝従来どおり linear。
+   *  frontmatter `pixel_art:` から `setPixelArt` 経由で反映される（Gymnasia の 128x128 ドット絵向け）。 */
+  private pixelArt = false
   /** X 座標テーブル（screenWidth * CHARACTER_X_RATIO[pos]） */
   private readonly positionX: Record<string, number>
   /** タイマーの抽象化 (動画エクスポート用 virtual モード対応) */
@@ -734,6 +737,50 @@ export class CharacterLayer extends Container {
   /** 現在の split_layout キャラ画像領域 (#442)。null = 従来どおり全画面。テスト・配線検証用。 */
   getSplitLayoutRegion(): LayoutRect | null {
     return this.splitLayoutRegion
+  }
+
+  /**
+   * テクスチャ拡大縮小フィルタを nearest-neighbor にするか設定する (#466)。
+   * frontmatter `pixel_art:` の値を渡す。以後 `loadTexture`/`showImage` でロードするテクスチャに
+   * 適用される（ロード完了 `Assets.load().then()` 内で最新値を参照する）。
+   *
+   * setCharacterScale (#378) 等と同じく、既に表示中の sprite にもその場で即再適用する
+   * （reapplyPixelArt。セルフレビュー指摘: character_scale/character_height_ratios と非対称に
+   * ならないよう、editor で `pixel_art: true` を追記した瞬間に表示中の立ち絵の見た目も揃える）。
+   */
+  setPixelArt(enabled: boolean): void {
+    this.pixelArt = enabled
+    this.reapplyPixelArt()
+  }
+
+  /**
+   * 表示中の全 sprite（立ち絵・render-only の Title/Label/Image・クロスフェード中の旧 sprite 問わず）
+   * に現在の pixelArt (#466) を即座に再適用する。setPixelArt の共通ライブ再適用ロジック
+   * （reapplyCharacterHeightRatios (#360/#364/#378) と同じ規律4のパターン）。
+   *
+   * scale 系のライブ再適用（reapplyCharacterHeightRatios）は position/scale というジオメトリを
+   * 動かすため、アニメ中・fit・render-only・snapshotHidden の sprite を中間状態の焼き込み回避で
+   * 除外する。pixelArt はテクスチャ拡大縮小フィルタの切り替えだけでジオメトリを一切変えないため、
+   * その種の除外は不要——表示中のテクスチャ全部にそのまま反映してよい。
+   * テクスチャが未ロード（`new Sprite()` 直後のプレースホルダ）のものは触らない（共有テクスチャの
+   * scaleMode を汚染しないため）。ロード完了時は loadTexture/showImage の `Assets.load().then()` 側が
+   * 最新の pixelArt を反映する。
+   *
+   * ガードは `texture === Texture.EMPTY` の identity チェックを使う（セルフレビュー指摘）。
+   * pixi.js（v8.18.1）の `new Sprite()` 既定テクスチャは共有シングルトン `Texture.EMPTY` で、
+   * その `height` は 1（0 ではない）。よって旧 `texture.height <= 0` ガードは
+   * `show()` 呼び出し後・`Assets.load()` 解決前の未ロード sprite をすり抜け、pixi.js アプリ全体で
+   * 共有される `Texture.EMPTY.source.scaleMode` を書き換えてしまっていた。
+   * `height <= 0` チェックも保険として残す（EMPTY 以外の非表示テクスチャを想定した既存の意図）。
+   */
+  private reapplyPixelArt(): void {
+    const mode = this.pixelArt ? 'nearest' : 'linear'
+    for (const state of this.characters.values()) {
+      if (state.sprite.destroyed) continue
+      const texture = state.sprite.texture
+      if (!texture || texture === Texture.EMPTY || texture.height <= 0) continue
+      texture.source.scaleMode = mode
+    }
   }
 
   /**
@@ -1714,6 +1761,9 @@ export class CharacterLayer extends Container {
     Assets.load(url)
       .then((texture) => {
         if (sprite.destroyed) return
+        // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
+        // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
+        texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
         sprite.texture = texture
         // 表示サイズ: size 指定時はその幅にアスペクト維持でスケール。未指定は自然サイズ。
         let displayWidth = texture.width
@@ -2786,6 +2836,9 @@ export class CharacterLayer extends Container {
           // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
           // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。
           if (sprite.destroyed) return false
+          // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
+          // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
+          texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
           // 立ち絵は既定で原寸（scale=1）。画面全体をブラウザ枠に合わせて縮める系統
           // （PixiJS canvas の wrapper スケール）が唯一の常時縮小であり、立ち絵を個別に
           // 自動 fit-down してはいけない。論理画面の上端・左右をはみ出してもよい。

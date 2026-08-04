@@ -35,6 +35,7 @@ pub fn parse(input: &str) -> Document {
     let mut seekbar_color: Option<String> = None;
     let mut split_layout: Option<bool> = None;
     let mut sentence_per_page: Option<bool> = None;
+    let mut pixel_art: Option<bool> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -174,6 +175,10 @@ pub fn parse(input: &str) -> Document {
                 // 文単位の厳密改頁 (#448)。`true` / `false` のみ受ける（parse_bool_kv）。
                 // 空・不正値は None のまま（runtime 既定 false ＝従来どおり複数文が1ページに同居しうる）。
                 sentence_per_page = parse_bool_kv(&unquote(val.trim()));
+            } else if let Some(val) = line.strip_prefix("pixel_art:") {
+                // テクスチャの拡大縮小フィルタを nearest-neighbor にするか (#466)。`true` / `false` のみ
+                // 受ける（parse_bool_kv）。空・不正値は None のまま（runtime 既定 false ＝従来どおり linear）。
+                pixel_art = parse_bool_kv(&unquote(val.trim()));
             }
             pos += 1;
         }
@@ -927,6 +932,7 @@ pub fn parse(input: &str) -> Document {
         seekbar_color,
         split_layout,
         sentence_per_page,
+        pixel_art,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

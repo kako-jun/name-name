@@ -328,6 +328,16 @@ export interface Document {
      * は None（既定 false）にフォールバック。frontmatter `sentence_per_page:` から流す。
      */
     sentence_per_page?: boolean;
+    /**
+     * テクスチャの拡大縮小フィルタを nearest-neighbor（ドット絵向け）にするか (#466)。
+     * `true` = イベント絵・立ち絵（EventImageLayer / CharacterLayer が読み込む全テクスチャ）を
+     * `texture.source.scaleMode = \'nearest\'` で拡大表示し、ブロック状のドットを保つ
+     * （Gymnasia の 128x128 ドット絵イベント絵向け）。未指定・`false` は従来どおり
+     * `\'linear\'`（滑らか、theo-hayami 等の塗り絵向け・後方互換）。
+     * `\"true\"` / `\"false\"` のみ受け、それ以外（空・非真偽値）は None（既定 false）にフォールバック。
+     * frontmatter `pixel_art:` から流す。
+     */
+    pixel_art?: boolean;
     chapters: Chapter[];
 }
 
@@ -457,8 +467,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly emit_markdown: (a: any) => [number, number, number, number];
+    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

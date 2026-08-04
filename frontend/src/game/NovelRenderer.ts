@@ -1687,6 +1687,21 @@ export class NovelRenderer {
   }
 
   /**
+   * テクスチャ拡大縮小フィルタを nearest-neighbor（ドット絵向け）にするか設定する (#466)。
+   * frontmatter `pixel_art:` の値を渡す。null/undefined/false は従来どおり linear（既定・後方互換、
+   * theo-hayami 等の滑らかな塗り絵に影響しない）。
+   *
+   * 値の所有権は CharacterLayer / EventImageLayer 側にあるため renderer はフィールドを持たず
+   * 素通しする（`setCharacterScale` と同じ流儀）。setEvents/setScenes（＝最初のテクスチャロード）
+   * より前に設定し、初回描画から反映されるようにする。
+   */
+  setPixelArt(enabled: boolean | null | undefined): void {
+    const v = enabled === true
+    this.characterLayer.setPixelArt(v)
+    this.eventImageLayer.setPixelArt(v)
+  }
+
+  /**
    * 現在の splitLayout フラグを DialogBox / CharacterLayer / novelScrim に反映する (#442)。
    * screenWidth/screenHeight は construct 時に固定（fluid `aspect_ratio: auto` は向きが変わる
    * たびに NovelPlayer が renderer ごと再マウントするため、ここで resize を待つ必要はない）。
