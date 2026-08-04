@@ -190,6 +190,10 @@ my-game/                # ゲームプロジェクト（別リポジトリ）
 - Rust（wasm-bindgen, tsify-next）
 - Markdown → Event[] の双方向変換
 
+### TUI版
+- Rust（ratatui, crossterm）
+- parserクレートをネイティブに流用（WASM経由ではない）
+
 ### バックエンド
 - FastAPI (Python)
 - GitPython
