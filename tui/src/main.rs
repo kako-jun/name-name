@@ -89,8 +89,9 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
 /// (`Action::Quit`)まで繰り返す。
 ///
 /// MVP（#471）はキー入力をブロッキングで待っていたが、タイプライター演出
-/// （`jiwa::RevealHandle`）は時間経過だけで見た目が変わるため、キー入力の有無に関わらず
-/// `REDRAW` 間隔で再描画するフレームベースのループに変更した（#472）。
+/// （`jiwa::RevealHandle`）とページ送りインジケータ（`jiwa::PulseHandle`）はどちらも
+/// 時間経過だけで見た目が変わるため、キー入力の有無に関わらず `REDRAW` 間隔で再描画する
+/// フレームベースのループに変更した（#472）。
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     config: &Config,
@@ -99,6 +100,9 @@ fn event_loop(
     let mut current_reveal: Option<RevealHandle> = playback
         .current()
         .map(|line| reveal::build_reveal(config, line, Instant::now()));
+    // ページ送りインジケータは話者・テキストに依存しないグローバルな明滅なので、
+    // 会話行が変わっても作り直さない（一度だけ開始する）。
+    let pulse = reveal::build_pulse(Instant::now());
 
     loop {
         let now = Instant::now();
@@ -111,6 +115,7 @@ fn event_loop(
                 playback.total(),
                 playback.is_at_end(),
                 current_reveal.as_ref(),
+                &pulse,
                 now,
             )
         })?;

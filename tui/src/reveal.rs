@@ -1,21 +1,26 @@
-//! `jiwa`（タイプライター演出）のオプション組み立てとスナップショット→ratatui変換を
-//! ここに閉じ込める（#472）。
+//! `jiwa`（タイプライター演出 + ページ送りインジケータ）のオプション組み立てと
+//! スナップショット→ratatui変換をここに閉じ込める（#472）。
 //!
-//! `jiwa::RevealHandle` はレンダラー非依存で `Rgb(u8, u8, u8)` を返すだけなので、
-//! ratatui の `Color` / `Line` / `Span` への変換と、既存の `Config` 配色
+//! `jiwa::RevealHandle` / `jiwa::PulseHandle` はレンダラー非依存で `Rgb(u8, u8, u8)` を
+//! 返すだけなので、ratatui の `Color` / `Line` / `Span` への変換と、既存の `Config` 配色
 //! （話者ごとの色名文字列）から `jiwa::RevealOpts` を組み立てる処理は tui 側の責務になる。
-//! kako-jun/type-globe の `src/ui/quiz.rs`（RevealHandle 使用例）と同じ設計 — 話者色を
-//! fade_to にし、速度だけを Config 化する — を踏襲する。
+//! kako-jun/type-globe の `src/ui/quiz.rs`（RevealHandle 使用例）/ `src/ui/listen.rs`
+//! （PulseHandle 使用例）と同じ設計 — 記号・色はハードコードし、速度だけを Config 化する —
+//! を踏襲する。
 
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use jiwa::{RevealHandle, RevealOpts, RevealedGrapheme, Rgb};
+use jiwa::{PulseHandle, PulseOpts, RevealHandle, RevealOpts, RevealedGrapheme, Rgb};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
 use crate::config::Config;
 use crate::playback::DisplayLine;
+
+/// ページ送りインジケータの記号。type-globe の `listen.rs` が `"♪"` をハードコードしているのに
+/// 倣い、記号・色は Config 化せず固定する（速度だけを Config 化する、という設計方針）。
+pub const PAGE_INDICATOR_SYMBOL: &str = "▼";
 
 /// リビール未着手のグラフェムが持つ開始色。`jiwa::RevealOpts::soft_green()` プリセットと同じ
 /// 「暗いグレーから話者色へ」というトーンを踏襲する（話者ごとに変える必要性が薄いため固定）。
@@ -47,6 +52,13 @@ pub fn build_reveal(config: &Config, line: &DisplayLine, now: Instant) -> Reveal
     let text = join_text(line);
     let opts = opts_for_line(config, line.speaker.as_deref());
     RevealHandle::start_at(&text, opts, now)
+}
+
+/// ページ送りインジケータ（▼ の明滅）を開始する。話者やテキストに依存しない単一の
+/// グローバルインジケータなので、会話行が変わっても作り直す必要はない
+/// （呼び出し側は `event_loop` の開始時に一度だけ呼べばよい）。
+pub fn build_pulse(now: Instant) -> PulseHandle {
+    PulseHandle::start_at(PAGE_INDICATOR_SYMBOL, PulseOpts::cyan_breath(), now)
 }
 
 /// `RevealHandle::snapshot` の出力を ratatui の `Line` 列に変換する。`\n` グラフェムは
@@ -176,5 +188,12 @@ mod tests {
     fn color_to_rgb_maps_named_colors() {
         assert_eq!(color_to_rgb(Color::White), Rgb(255, 255, 255));
         assert_eq!(color_to_rgb(Color::Rgb(1, 2, 3)), Rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn build_pulse_starts_with_page_indicator_symbol() {
+        let now = Instant::now();
+        let pulse = build_pulse(now);
+        assert_eq!(pulse.snapshot(now).text, PAGE_INDICATOR_SYMBOL);
     }
 }
