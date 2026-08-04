@@ -4,10 +4,8 @@ mod input;
 mod playback;
 mod ui;
 
-use std::io::Stdout;
-
 use anyhow::Context;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -68,7 +66,9 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_screens(&mut terminal, config, playback);
+    let result = run_screens(&mut terminal, config, playback, &mut || {
+        input::next_action()
+    });
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -79,31 +79,46 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
 
 /// スプラッシュ（`config.splash` が設定されていれば）→ 本編ループ、の順に画面を進める。
 /// スプラッシュ未設定（デフォルト）ならいきなり本編から始まる（後方互換）。
-fn run_screens(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+///
+/// `next_action` はキー入力の取得元を差し替え可能にするための注入点。本番の `run` からは
+/// `input::next_action`（実端末をブロッキングで読む）をそのまま渡すだけで従来通り動くが、
+/// テストからは固定の `Action` 列を返すクロージャを渡すことで、`TestBackend` +
+/// 合成キー入力で状態遷移をユニットテストできる。
+fn run_screens<B>(
+    terminal: &mut Terminal<B>,
     config: &Config,
     playback: &mut Playback,
-) -> anyhow::Result<()> {
+    next_action: &mut impl FnMut() -> anyhow::Result<Action>,
+) -> anyhow::Result<()>
+where
+    B: Backend,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     if config.should_show_splash() {
-        let advanced = show_splash(terminal, config)?;
+        let advanced = show_splash(terminal, config, next_action)?;
         if !advanced {
             // スプラッシュ画面で終了操作（q/Esc）された場合は本編に進まず終える。
             return Ok(());
         }
     }
-    event_loop(terminal, config, playback)
+    event_loop(terminal, config, playback, next_action)
 }
 
 /// スプラッシュ画面を描画し、キー入力を1件待つ。`Action::Advance` で `Ok(true)`
 /// （本編へ進む）、`Action::Quit` で `Ok(false)`（そのまま終了）を返す。
-fn show_splash(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+fn show_splash<B>(
+    terminal: &mut Terminal<B>,
     config: &Config,
-) -> anyhow::Result<bool> {
+    next_action: &mut impl FnMut() -> anyhow::Result<Action>,
+) -> anyhow::Result<bool>
+where
+    B: Backend,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     loop {
         terminal.draw(|frame| ui::draw_splash(frame, config))?;
 
-        match input::next_action()? {
+        match next_action()? {
             Action::Advance => return Ok(true),
             Action::Quit => return Ok(false),
             Action::None => {}
@@ -112,11 +127,16 @@ fn show_splash(
 }
 
 /// 描画 → キー入力待ち → 再生状態更新、を1件終了(`Action::Quit`)まで繰り返す。
-fn event_loop(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+fn event_loop<B>(
+    terminal: &mut Terminal<B>,
     config: &Config,
     playback: &mut Playback,
-) -> anyhow::Result<()> {
+    next_action: &mut impl FnMut() -> anyhow::Result<Action>,
+) -> anyhow::Result<()>
+where
+    B: Backend,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     loop {
         terminal.draw(|frame| {
             ui::draw(
@@ -129,7 +149,7 @@ fn event_loop(
             )
         })?;
 
-        match input::next_action()? {
+        match next_action()? {
             Action::Advance => {
                 playback.advance();
             }
