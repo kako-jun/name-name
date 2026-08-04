@@ -16,6 +16,8 @@ pub struct Cli {
 
 impl Cli {
     /// `--config <path>` / `--script <path>` を解釈する。未知の引数は無視する。
+    /// `--config`/`--script` は次のトークンを無条件に値として消費する
+    /// （それが `--script` のような別のフラグであっても）。
     pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Self {
         let mut cli = Cli::default();
         let mut iter = args.into_iter();

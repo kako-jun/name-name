@@ -2,8 +2,9 @@
 //!
 //! tui 本体のロジック（playback / ui / input）にゲーム固有の文字列を直書きしないための境界。
 //! デフォルト値は最初の適用対象である gymnasia の値
-//! （`docs/design/experience-system.md` の TUI Implementation Plan: プレイヤー側=白、相手側=水色）を
-//! サンプルとして使うが、他のゲームは別の Config を用意すればよい。全ゲーム対応を前提にした
+//! （gymnasia リポジトリの `docs/design/experience-system.md` の TUI Implementation Plan:
+//! プレイヤー側=白、相手側=水色）をサンプルとして使うが、他のゲームは別の Config を
+//! 用意すればよい。全ゲーム対応を前提にした
 //! 過剰な抽象化はしない。
 
 use std::path::{Path, PathBuf};

@@ -16,6 +16,38 @@ pub struct DisplayLine {
     pub text: Vec<String>,
 }
 
+/// ルビ記法（`｜` / `《...》`）を除去し、ベーステキストのみを残す。
+///
+/// parser はルビ記法をスキーマ化せず、Dialog/Narration の `text` に生 markdown の
+/// まま透過する設計（`docs/spec/markdown-v0.1.md`）。frontend は描画直前に
+/// `parseRubyText()` でルビを上下二段表示にするが、tui はターミナル上でその表示が
+/// 非現実的なため、ベーステキストのみを残す形で除去する。
+///
+/// - `｜`（U+FF5C、ルビの明示的な開始境界マーカー）は単純に除去する
+/// - `《...》`（U+300A/U+300B）は開き括弧から閉じ括弧までを中身ごと丸ごと除去する
+///   （例: `漢字《かんじ》` → `漢字`）
+/// - 対応する `》` が見つからない不正な `《`（閉じ忘れ）は、`《` 以降の文字を
+///   全て捨てて終了する（panic・無限ループしない）
+fn strip_ruby_markup(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '｜' => {}
+            '《' => {
+                // 対応する '》' まで読み飛ばす。見つからなければ末尾まで捨てて終了。
+                for inner in chars.by_ref() {
+                    if inner == '》' {
+                        break;
+                    }
+                }
+            }
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
 /// `Event` が画面に表示すべき会話行なら `DisplayLine` に変換する。
 /// Dialog / Narration 以外（背景・SE・BGM 等）は `None`。
 fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
@@ -24,11 +56,11 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
             character, text, ..
         } => Some(DisplayLine {
             speaker: character.clone(),
-            text: text.clone(),
+            text: text.iter().map(|line| strip_ruby_markup(line)).collect(),
         }),
         Event::Narration { text, .. } => Some(DisplayLine {
             speaker: None,
-            text: text.clone(),
+            text: text.iter().map(|line| strip_ruby_markup(line)).collect(),
         }),
         _ => None,
     }
@@ -93,6 +125,42 @@ mod tests {
     use super::*;
     use name_name_parser::models::{BgmAction, Chapter, ChoiceOption, Scene, SceneView};
     use std::collections::HashMap;
+
+    #[test]
+    fn strip_ruby_markup_removes_basic_ruby() {
+        assert_eq!(strip_ruby_markup("漢字《かんじ》です"), "漢字です");
+    }
+
+    #[test]
+    fn strip_ruby_markup_removes_explicit_boundary_marker() {
+        assert_eq!(
+            strip_ruby_markup("｜美少女《びしょうじょ》が微笑む"),
+            "美少女が微笑む"
+        );
+    }
+
+    #[test]
+    fn strip_ruby_markup_leaves_plain_text_unchanged() {
+        assert_eq!(strip_ruby_markup("こんにちは"), "こんにちは");
+    }
+
+    #[test]
+    fn strip_ruby_markup_removes_lone_pipes_without_ruby_body() {
+        assert_eq!(strip_ruby_markup("｜A｜B"), "AB");
+    }
+
+    #[test]
+    fn strip_ruby_markup_removes_multiple_rubies_in_one_line() {
+        assert_eq!(
+            strip_ruby_markup("今日《きょう》は良い天気《てんき》だ"),
+            "今日は良い天気だ"
+        );
+    }
+
+    #[test]
+    fn strip_ruby_markup_unclosed_bracket_discards_rest_without_panicking() {
+        assert_eq!(strip_ruby_markup("これは《閉じられない"), "これは");
+    }
 
     /// `Document` の非 chapters フィールドを全て無害な既定値で埋めるヘルパー。
     /// Document は Default を derive していないため、テストごとに20個のフィールドを
