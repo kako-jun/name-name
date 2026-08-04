@@ -3748,6 +3748,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         seekbar_color: None,
         split_layout: None,
         sentence_per_page: None,
+        pixel_art: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
