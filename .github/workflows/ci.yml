@@ -8,7 +8,7 @@ on:
 
 jobs:
   parser:
-    name: Parser (Rust)
+    name: Parser & TUI (Rust)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
