@@ -4,7 +4,7 @@
 use std::str::FromStr;
 use std::time::Instant;
 
-use jiwa::{PulseHandle, RevealHandle, Rgb};
+use jiwa::{PulseHandle, Rgb};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -17,9 +17,10 @@ use crate::reveal;
 
 /// 画面全体を左（画像プレースホルダ）40% / 右（テキスト）60% に分割して描画する。
 ///
-/// `reveal` は現在の会話行のタイプライター表示状態（`None` は行そのものが無いケース）、
-/// `pulse` はページ送りインジケータ（reveal 完了後にのみ表示する）、`now` はこのフレームの
-/// 描画時刻（`reveal`/`pulse` の `snapshot` に渡す基準時刻）。
+/// `reveal` は現在の会話行のタイプライター表示状態（[`reveal::RevealState`]、`None` は行
+/// そのものが無いケース）、`pulse` はページ送りインジケータ（reveal 完了後にのみ表示する）、
+/// `now` はこのフレームの描画時刻（`reveal`/`pulse` の `snapshot`/`body_lines` に渡す基準時刻。
+/// `RevealState::Done` はこれを無視する）。
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -28,7 +29,7 @@ pub fn draw(
     position: usize,
     total: usize,
     is_at_end: bool,
-    reveal: Option<&RevealHandle>,
+    reveal: Option<&reveal::RevealState>,
     pulse: &PulseHandle,
     now: Instant,
 ) {
@@ -61,10 +62,11 @@ fn draw_placeholder(frame: &mut Frame, area: Rect, config: &Config) {
 }
 
 /// 右側: 話者名 + 本文。話者がプレイヤー側かどうかで文字色を出し分ける
-/// （`Config::color_name_for` に判定を委譲する）。本文は `reveal`（`jiwa::RevealHandle`）が
-/// 与えられていればタイプライター表示のスナップショットから組み立て、reveal 完了後は
-/// `pulse`（`jiwa::PulseHandle`）によるページ送りインジケータを行末に付け足す。`reveal` が
-/// `None`（会話行そのものが無い等）の場合は従来どおりの静的表示にフォールバックする。
+/// （`Config::color_name_for` に判定を委譲する）。本文は `reveal`（[`reveal::RevealState`]）が
+/// 与えられていれば `RevealState::body_lines` から組み立て（`Animating` はタイプライター表示の
+/// スナップショット、`Done` はスキップ済みの全文）、reveal 完了後は `pulse`（`jiwa::PulseHandle`）
+/// によるページ送りインジケータを行末に付け足す。`reveal` が `None`（会話行そのものが無い等）の
+/// 場合は従来どおりの静的表示にフォールバックする。
 #[allow(clippy::too_many_arguments)]
 fn draw_text(
     frame: &mut Frame,
@@ -74,7 +76,7 @@ fn draw_text(
     position: usize,
     total: usize,
     is_at_end: bool,
-    reveal: Option<&RevealHandle>,
+    reveal: Option<&reveal::RevealState>,
     pulse: &PulseHandle,
     now: Instant,
 ) {
@@ -100,10 +102,9 @@ fn draw_text(
                 ));
             }
             match reveal {
-                Some(handle) => {
-                    let snapshot = handle.snapshot(now);
-                    let mut body_lines = reveal::snapshot_to_lines(&snapshot);
-                    if handle.is_done(now) {
+                Some(state) => {
+                    let mut body_lines = state.body_lines(now);
+                    if state.is_done(now) {
                         append_page_indicator(&mut body_lines, pulse, now);
                     }
                     rendered.extend(body_lines);
@@ -244,7 +245,7 @@ mod tests {
         let now = Instant::now();
         // reveal 完了済み(=ページ送りインジケータも同時に描画される)状態でも、
         // Layout::Percentage(40/60) が width=1 (40% が 0 に丸まる) で panic しないことを確認する。
-        let reveal = reveal::skip_reveal(&config, &line, now);
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         terminal
             .draw(|f| {
@@ -273,7 +274,7 @@ mod tests {
             text: vec!["hello".to_string()],
         };
         let now = Instant::now();
-        let reveal = reveal::build_reveal(&config, &line, now);
+        let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
         let pulse = reveal::build_pulse(now);
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
@@ -309,7 +310,8 @@ mod tests {
         let mut typing_config = Config::default();
         typing_config.typewriter.char_interval_ms = 1000;
         typing_config.typewriter.fade_duration_ms = 0;
-        let typing_reveal = reveal::build_reveal(&typing_config, &line, now);
+        let typing_reveal =
+            reveal::RevealState::Animating(reveal::build_reveal(&typing_config, &line, now));
         let typing_pulse = reveal::build_pulse(now);
         let mut typing_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         typing_terminal
@@ -338,7 +340,8 @@ mod tests {
         let mut done_config = Config::default();
         done_config.typewriter.char_interval_ms = 0;
         done_config.typewriter.fade_duration_ms = 0;
-        let done_reveal = reveal::build_reveal(&done_config, &line, now);
+        let done_reveal =
+            reveal::RevealState::Animating(reveal::build_reveal(&done_config, &line, now));
         let done_pulse = reveal::build_pulse(now);
         let mut done_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         done_terminal
@@ -389,7 +392,7 @@ mod tests {
             text: vec![],
         };
         let now = Instant::now();
-        let reveal = reveal::skip_reveal(&config, &line, now);
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
@@ -422,7 +425,7 @@ mod tests {
             text: vec!["first line".to_string(), "second line".to_string()],
         };
         let now = Instant::now();
-        let reveal = reveal::skip_reveal(&config, &line, now);
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
         terminal
@@ -467,7 +470,7 @@ mod tests {
             text: vec!["hi".to_string()],
         };
         let now = Instant::now();
-        let reveal = reveal::skip_reveal(&config, &line, now);
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
         terminal

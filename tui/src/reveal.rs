@@ -26,21 +26,43 @@ pub const PAGE_INDICATOR_SYMBOL: &str = "▼";
 /// 「暗いグレーから話者色へ」というトーンを踏襲する（話者ごとに変える必要性が薄いため固定）。
 const FADE_FROM: Rgb = Rgb(60, 60, 60);
 
-/// `RevealHandle::start_at` を過去に付け替えて即座に `is_done` にするための追加バッファ。
-/// 本文の総reveal所要時間（`char_interval * (グラフェム数-1) + fade_duration`、
-/// `RevealHandle::is_done` と同じ式）にこれを足した分だけ過去にずらす。
-///
-/// 以前はこのバッファ単体（24時間固定）をそのままアンカーのずらし幅として使っていたが、
-/// 総reveal所要時間が24時間を超える設定（例: `fade_duration_ms` を極端に大きくした場合）だと
-/// アンカーを24h前にずらしても `is_done(now)` が `true` にならず、「スキップしたのに
-/// 全文表示されない」バグになっていた。ずらし幅を「総所要時間 + バッファ」の動的な値にする
-/// ことで、どんな設定でも確実に `is_done(now) == true` になるようにする（#472）。
-const SKIP_ANCHOR_BUFFER: Duration = Duration::from_secs(24 * 60 * 60);
-
 /// `line` の本文（複数行）を単一のリビール対象文字列にする。行区切りは `\n` を挟む。
 /// [`snapshot_to_lines`] はこの `\n` グラフェムを行区切りとして解釈し直す。
 fn join_text(line: &DisplayLine) -> String {
     line.text.join("\n")
+}
+
+/// 現在の会話行のタイプライター表示状態。
+///
+/// `Animating` は `jiwa::RevealHandle` による時間経過ベースの表示中（自然完了後も含む —
+/// `RevealHandle::is_done` が `true` を返すだけで、ハンドル自体は差し替えない）。
+/// `Done` はユーザーによる明示スキップ（[`skip_lines`]）後の状態で、[`join_text`] で
+/// 組み立てた全文をあらかじめ色付き `Line` 列として構築済みのもの。`now` を一切使わず
+/// 常に完了扱いになるため、`RevealHandle` の時刻計算（開始時刻を過去にずらす等）を経由する
+/// 余地がない（#472 セルフレビュー: `Instant` 基準点付近での `checked_sub` underflow 対応）。
+pub enum RevealState {
+    Animating(RevealHandle),
+    Done(Vec<Line<'static>>),
+}
+
+impl RevealState {
+    /// 現在の表示が完了しているか。`Done` は定義上常に `true`（`now` に依存しない）。
+    pub fn is_done(&self, now: Instant) -> bool {
+        match self {
+            RevealState::Animating(handle) => handle.is_done(now),
+            RevealState::Done(_) => true,
+        }
+    }
+
+    /// `now` 時点で描画すべき本文行。`Animating` は `RevealHandle::snapshot` から
+    /// 都度組み立て、`Done` は事前構築済みの `Line` 列をそのまま複製して返す
+    /// （こちらは `now` を読まない）。
+    pub fn body_lines(&self, now: Instant) -> Vec<Line<'static>> {
+        match self {
+            RevealState::Animating(handle) => snapshot_to_lines(&handle.snapshot(now)),
+            RevealState::Done(lines) => lines.clone(),
+        }
+    }
 }
 
 /// 話者色（`Config::color_name_for`）を fade_to、速度を `Config.typewriter` から取った
@@ -69,22 +91,24 @@ pub fn build_reveal(config: &Config, line: &DisplayLine, now: Instant) -> Reveal
 /// `advanceOrSkipTypewriter`（タイプ中の1手目は全文表示へのスキップに専念し、次の行へは
 /// 進めない「カノソ方式」）と同じ2手構成に揃える（#472）。
 ///
-/// `jiwa::RevealHandle` は開始時刻を書き換える setter を持たないため、`started_at` を
-/// 十分過去（本文の総reveal所要時間 + [`SKIP_ANCHOR_BUFFER`]）に付け替えた新しいハンドルを
-/// 作ることで、同じテキスト・同じ配色のまま `is_done(now) == true` を保証する。
-pub fn skip_reveal(config: &Config, line: &DisplayLine, now: Instant) -> RevealHandle {
-    let text = join_text(line);
+/// 以前は `RevealHandle::start_at` の開始時刻を十分過去にずらして `is_done(now) == true` を
+/// 偽装していたが、`Instant` の基準点はプラットフォーム依存で未規定（Linux の
+/// `CLOCK_MONOTONIC` はブート時刻近くを0とする実装が一般的）なため、システム稼働時間が
+/// ずらし幅未満だと `checked_sub` が `None` を返し `unwrap_or(now)` で
+/// 「スキップしたのに全文表示されない」バグが再発しうった（セルフレビュー指摘）。
+/// 新実装は `RevealHandle` の時間計算を一切経由せず、[`join_text`] で組み立てた全文を
+/// そのまま `fade_to` 色の `Line` 列として直接構築する。**`Instant` を引数に取らない
+/// ことがそのまま「時刻計算に依存しない」ことの型上の保証になる。**
+pub fn skip_lines(config: &Config, line: &DisplayLine) -> Vec<Line<'static>> {
     let opts = opts_for_line(config, line.speaker.as_deref());
-    // `RevealHandle` はグラフェム数を直接計算する手段を公開していないため、`now` 起点の
-    // ハンドルを一つ作って `total_graphemes()` を読む（テキストの分割自体は軽量）。
-    let probe = RevealHandle::start_at(&text, opts, now);
-    let total_graphemes = probe.total_graphemes();
-    // `RevealHandle::is_done` と同じ式で総reveal所要時間を求める。
-    let total_runtime =
-        opts.char_interval * (total_graphemes.saturating_sub(1) as u32) + opts.fade_duration;
-    let anchor_offset = total_runtime + SKIP_ANCHOR_BUFFER;
-    let anchor = now.checked_sub(anchor_offset).unwrap_or(now);
-    RevealHandle::start_at(&text, opts, anchor)
+    let Rgb(r, g, b) = opts.fade_to;
+    let style = Style::default().fg(Color::Rgb(r, g, b));
+    let text = join_text(line);
+    // `join_text` が挟んだ `\n` で行を復元する。改行はASCIIバイトなので、マルチバイト
+    // グラフェムを跨いで分割してしまう心配はない。
+    text.split('\n')
+        .map(|body_line| Line::styled(body_line.to_string(), style))
+        .collect()
 }
 
 /// ページ送りインジケータ（▼ の明滅）を開始する。話者やテキストに依存しない単一の
@@ -189,23 +213,108 @@ mod tests {
         assert!(!handle.is_done(now));
     }
 
+    /// `Line` の全スパンを連結してプレーンテキストに戻す（テストの比較用）。
+    fn lines_to_text(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
     #[test]
-    fn skip_reveal_is_immediately_done() {
+    fn skip_lines_renders_full_text_in_a_single_line() {
         let config = Config::default();
         let l = line(Some("A"), vec!["a longer line of dialogue text"]);
+        let lines = skip_lines(&config, &l);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines_to_text(&lines),
+            vec!["a longer line of dialogue text"]
+        );
+    }
+
+    #[test]
+    fn skip_lines_splits_multiline_body_into_separate_lines() {
+        let config = Config::default();
+        let l = line(None, vec!["a", "b"]);
+        let lines = skip_lines(&config, &l);
+        assert_eq!(lines_to_text(&lines), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn skip_lines_multiline_japanese_text() {
+        let config = Config::default();
+        let l = line(None, vec!["こんにちは、世界", "two行目 mixed"]);
+        let lines = skip_lines(&config, &l);
+        assert_eq!(
+            lines_to_text(&lines),
+            vec!["こんにちは、世界", "two行目 mixed"]
+        );
+    }
+
+    /// `skip_lines` は `Instant` を一切引数に取らない。以前の `skip_reveal` は
+    /// `now: Instant` を受け取り `started_at` を過去にずらすアンカー計算をしていたため、
+    /// システム稼働時間が短い環境（起動直後の `Instant` 基準点付近）で `checked_sub` が
+    /// `None` を返し `unwrap_or(now)` にフォールバックして「スキップしたのに全文表示
+    /// されない」バグを再発しうった（セルフレビュー指摘）。新実装は `join_text` の結果を
+    /// そのまま `Line` に変換するだけで時刻を一切読まないため、この関数のシグネチャに
+    /// `Instant` が登場しないこと自体が「いつ呼んでも（起動直後でも）結果が変わらない」
+    /// ことの型上の証明になる。このテストは通常の `Instant::now()` 経由の呼び出しでも
+    /// 常に全文が表示されることを確認する（設計保証はシグネチャで担保、これは回帰ガード）。
+    #[test]
+    fn skip_lines_result_does_not_depend_on_when_it_is_called() {
+        let config = Config::default();
+        let l = line(Some("A"), vec!["hello"]);
+        let lines_a = skip_lines(&config, &l);
+        std::thread::sleep(Duration::from_millis(5));
+        let lines_b = skip_lines(&config, &l);
+        assert_eq!(lines_to_text(&lines_a), lines_to_text(&lines_b));
+    }
+
+    #[test]
+    fn reveal_state_done_is_always_done_regardless_of_now() {
+        let config = Config::default();
+        let l = line(Some("A"), vec!["hello"]);
+        let state = RevealState::Done(skip_lines(&config, &l));
         let now = Instant::now();
-        let handle = skip_reveal(&config, &l, now);
-        assert!(handle.is_done(now));
-        let snap = handle.snapshot(now);
-        assert_eq!(snap.len(), "a longer line of dialogue text".chars().count());
+        assert!(state.is_done(now));
+        // 遠い未来時刻を渡してもアンカー計算が絡まないので常に true のまま。
+        assert!(state.is_done(now + Duration::from_secs(999_999)));
+    }
+
+    #[test]
+    fn reveal_state_done_body_lines_ignore_now() {
+        let config = Config::default();
+        let l = line(Some("A"), vec!["hello", "world"]);
+        let state = RevealState::Done(skip_lines(&config, &l));
+        let t1 = Instant::now();
+        let t2 = t1 + Duration::from_secs(3600);
+        assert_eq!(
+            lines_to_text(&state.body_lines(t1)),
+            lines_to_text(&state.body_lines(t2))
+        );
+    }
+
+    #[test]
+    fn reveal_state_animating_delegates_is_done_to_handle() {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000;
+        config.typewriter.fade_duration_ms = 0;
+        let l = line(Some("A"), vec!["hello there"]);
+        let now = Instant::now();
+        let state = RevealState::Animating(build_reveal(&config, &l, now));
+        assert!(!state.is_done(now));
     }
 
     #[test]
     fn snapshot_to_lines_splits_on_newline_grapheme() {
-        let config = Config::default();
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 0;
+        config.typewriter.fade_duration_ms = 0;
         let l = line(None, vec!["a", "b"]);
         let now = Instant::now();
-        let handle = skip_reveal(&config, &l, now);
+        let handle = build_reveal(&config, &l, now);
+        assert!(handle.is_done(now));
         let snap = handle.snapshot(now);
         let lines = snapshot_to_lines(&snap);
         assert_eq!(lines.len(), 2);
@@ -227,50 +336,6 @@ mod tests {
         let now = Instant::now();
         let pulse = build_pulse(now);
         assert_eq!(pulse.snapshot(now).text, PAGE_INDICATOR_SYMBOL);
-    }
-
-    /// `skip_reveal` のアンカーずらし幅の境界値テスト（#472）。
-    /// `line(Some("A"), vec!["a"])` は単一グラフェムなので、`char_interval` の寄与
-    /// （`char_interval * (n-1)`）が常に0になり、総reveal所要時間 = `fade_duration_ms` に
-    /// 単純化できる。これにより「24時間ちょうど」の境界を `fade_duration_ms` だけで作れる。
-    const MARGIN_MS: u64 = 24 * 60 * 60 * 1000;
-
-    #[test]
-    fn skip_reveal_at_exactly_margin_boundary_is_done() {
-        let mut config = Config::default();
-        config.typewriter.char_interval_ms = 0;
-        config.typewriter.fade_duration_ms = MARGIN_MS - 1; // 総所要時間 = 24h - 1ms
-        let l = line(Some("A"), vec!["a"]);
-        let now = Instant::now();
-        let handle = skip_reveal(&config, &l, now);
-        assert!(handle.is_done(now));
-    }
-
-    #[test]
-    fn skip_reveal_at_exact_margin_is_done() {
-        let mut config = Config::default();
-        config.typewriter.char_interval_ms = 0;
-        config.typewriter.fade_duration_ms = MARGIN_MS; // 総所要時間 = ちょうど24h
-        let l = line(Some("A"), vec!["a"]);
-        let now = Instant::now();
-        let handle = skip_reveal(&config, &l, now);
-        assert!(handle.is_done(now));
-    }
-
-    /// 総reveal所要時間が固定24hマージンを1ms超える設定。修正前は `is_done(now)` が
-    /// `false` のまま（＝スキップしたのに全文表示されないバグ）だったが、アンカーの
-    /// ずらし幅を「総所要時間 + バッファ」の動的な値にしたことで常に `true` になる。
-    #[test]
-    fn skip_reveal_beyond_margin_may_not_complete() {
-        let mut config = Config::default();
-        config.typewriter.char_interval_ms = 0;
-        config.typewriter.fade_duration_ms = MARGIN_MS + 1; // 総所要時間 = 24h + 1ms
-        let l = line(Some("A"), vec!["a"]);
-        let now = Instant::now();
-        let handle = skip_reveal(&config, &l, now);
-        assert!(handle.is_done(now));
-        let snap = handle.snapshot(now);
-        assert_eq!(snap.len(), 1);
     }
 
     #[test]
@@ -307,10 +372,13 @@ mod tests {
 
     #[test]
     fn snapshot_to_lines_multiline_japanese_text() {
-        let config = Config::default();
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 0;
+        config.typewriter.fade_duration_ms = 0;
         let l = line(None, vec!["こんにちは、世界", "two行目 mixed"]);
         let now = Instant::now();
-        let handle = skip_reveal(&config, &l, now);
+        let handle = build_reveal(&config, &l, now);
+        assert!(handle.is_done(now));
         let snap = handle.snapshot(now);
         let lines = snapshot_to_lines(&snap);
         assert_eq!(lines.len(), 2);

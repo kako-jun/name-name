@@ -9,7 +9,6 @@ use std::io::Stdout;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use jiwa::RevealHandle;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
@@ -97,9 +96,9 @@ fn event_loop(
     config: &Config,
     playback: &mut Playback,
 ) -> anyhow::Result<()> {
-    let mut current_reveal: Option<RevealHandle> = playback
-        .current()
-        .map(|line| reveal::build_reveal(config, line, Instant::now()));
+    let mut current_reveal: Option<reveal::RevealState> = playback.current().map(|line| {
+        reveal::RevealState::Animating(reveal::build_reveal(config, line, Instant::now()))
+    });
     // ページ送りインジケータは話者・テキストに依存しないグローバルな明滅なので、
     // 会話行が変わっても作り直さない（一度だけ開始する）。
     let pulse = reveal::build_pulse(Instant::now());
@@ -138,12 +137,12 @@ fn event_loop(
 /// | # | 現在行 | reveal状態 | 次の行 | 動作 |
 /// |---|---|---|---|---|
 /// | 1 | 無し | ― | ― | 何もしない |
-/// | 2 | 有り | 未完了 | 存在する/最終行 | `skip_reveal` で即全文表示、`advance()` は呼ばない |
+/// | 2 | 有り | 未完了 | 存在する/最終行 | `skip_lines` で即全文表示、`advance()` は呼ばない |
 /// | 3 | 有り | 完了 | 存在する | `advance()` → 次行の `build_reveal` |
 /// | 4 | 有り | 完了 | 最終行 | `advance()` → `current_reveal` は不変（no-op） |
 fn on_advance(
     playback: &mut Playback,
-    current_reveal: &mut Option<RevealHandle>,
+    current_reveal: &mut Option<reveal::RevealState>,
     config: &Config,
     now: Instant,
 ) {
@@ -155,11 +154,14 @@ fn on_advance(
         if !reveal_done {
             // ブラウザ版 NovelRenderer の advanceOrSkipTypewriter と同じ
             // 「表示中の1手目は全文表示へのスキップに専念し、次の行へは
-            // 進めない」挙動（カノソ方式）。
-            *current_reveal = Some(reveal::skip_reveal(config, line, now));
+            // 進めない」挙動（カノソ方式）。`skip_lines` は `RevealHandle` の時間計算を
+            // 経由しない（#472 セルフレビュー対応）。
+            *current_reveal = Some(reveal::RevealState::Done(reveal::skip_lines(config, line)));
         } else if playback.advance() {
             if let Some(next_line) = playback.current() {
-                *current_reveal = Some(reveal::build_reveal(config, next_line, now));
+                *current_reveal = Some(reveal::RevealState::Animating(reveal::build_reveal(
+                    config, next_line, now,
+                )));
             }
         }
     }
@@ -193,6 +195,14 @@ mod tests {
         config
     }
 
+    fn animating(
+        config: &Config,
+        dline: &crate::playback::DisplayLine,
+        now: Instant,
+    ) -> reveal::RevealState {
+        reveal::RevealState::Animating(reveal::build_reveal(config, dline, now))
+    }
+
     #[test]
     fn on_advance_incomplete_reveal_skips_without_advancing_position() {
         let config = slow_config();
@@ -201,11 +211,7 @@ mod tests {
             dline(Some("B"), "next line"),
         ]);
         let now = Instant::now();
-        let mut current_reveal = Some(reveal::build_reveal(
-            &config,
-            playback.current().expect("line"),
-            now,
-        ));
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
         assert!(!current_reveal.as_ref().unwrap().is_done(now));
 
         on_advance(&mut playback, &mut current_reveal, &config, now);
@@ -219,11 +225,7 @@ mod tests {
         let config = slow_config();
         let mut playback = Playback::from_lines(vec![dline(Some("A"), "only line here")]);
         let now = Instant::now();
-        let mut current_reveal = Some(reveal::build_reveal(
-            &config,
-            playback.current().expect("line"),
-            now,
-        ));
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
         assert!(!current_reveal.as_ref().unwrap().is_done(now));
 
         on_advance(&mut playback, &mut current_reveal, &config, now);
@@ -239,11 +241,7 @@ mod tests {
         let mut playback =
             Playback::from_lines(vec![dline(Some("A"), "first"), dline(Some("B"), "second")]);
         let now = Instant::now();
-        let mut current_reveal = Some(reveal::build_reveal(
-            &config,
-            playback.current().expect("line"),
-            now,
-        ));
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
         assert!(current_reveal.as_ref().unwrap().is_done(now));
 
         on_advance(&mut playback, &mut current_reveal, &config, now);
@@ -263,11 +261,7 @@ mod tests {
             Playback::from_lines(vec![dline(Some("A"), "first"), dline(Some("B"), "second")]);
         playback.advance(); // 最終行へ
         let t0 = Instant::now();
-        let mut current_reveal = Some(reveal::build_reveal(
-            &config,
-            playback.current().expect("line"),
-            t0,
-        ));
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), t0));
         // "second" は6グラフェム、char_interval=1000ms・fade=0ms なので
         // t0 + 5000ms で完了する。
         let t_call = t0 + Duration::from_millis(5000);
@@ -280,15 +274,15 @@ mod tests {
         // no-op であれば current_reveal は t0 起点のまま = t_call 時点で全文表示済み。
         // もし（バグで）t_call を起点に作り直されていたら、最初の1グラフェムしか
         // 見えないはず（char_interval=1000msなので）。
-        let snap = current_reveal.as_ref().unwrap().snapshot(t_call);
-        assert_eq!(snap.len(), "second".chars().count());
+        let lines = current_reveal.as_ref().unwrap().body_lines(t_call);
+        assert_eq!(lines[0].spans.len(), "second".chars().count());
     }
 
     #[test]
     fn on_advance_no_current_line_is_noop() {
         let config = Config::default();
         let mut playback = Playback::from_lines(vec![]);
-        let mut current_reveal: Option<RevealHandle> = None;
+        let mut current_reveal: Option<reveal::RevealState> = None;
         let now = Instant::now();
 
         on_advance(&mut playback, &mut current_reveal, &config, now);
@@ -305,11 +299,7 @@ mod tests {
             dline(Some("B"), "second line"),
         ]);
         let t0 = Instant::now();
-        let mut current_reveal = Some(reveal::build_reveal(
-            &config,
-            playback.current().expect("line"),
-            t0,
-        ));
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), t0));
 
         // 1行目: reveal中
         assert!(!current_reveal.as_ref().unwrap().is_done(t0));
@@ -347,11 +337,7 @@ mod tests {
             dline(Some("C"), "three"),
         ]);
         let now = Instant::now();
-        let mut current_reveal = Some(reveal::build_reveal(
-            &config,
-            playback.current().expect("line"),
-            now,
-        ));
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
         assert_eq!(playback.position(), 1);
 
         on_advance(&mut playback, &mut current_reveal, &config, now);
