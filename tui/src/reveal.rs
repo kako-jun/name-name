@@ -26,6 +26,10 @@ pub const PAGE_INDICATOR_SYMBOL: &str = "▼";
 /// 「暗いグレーから話者色へ」というトーンを踏襲する（話者ごとに変える必要性が薄いため固定）。
 const FADE_FROM: Rgb = Rgb(60, 60, 60);
 
+/// `RevealHandle::start_at` を過去に付け替えて即座に `is_done` にするための安全マージン。
+/// どんな `char_interval` / `fade_duration` 設定の組み合わせでも確実に上回る値。
+const SKIP_ANCHOR_MARGIN: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// `line` の本文（複数行）を単一のリビール対象文字列にする。行区切りは `\n` を挟む。
 /// [`snapshot_to_lines`] はこの `\n` グラフェムを行区切りとして解釈し直す。
 fn join_text(line: &DisplayLine) -> String {
@@ -52,6 +56,20 @@ pub fn build_reveal(config: &Config, line: &DisplayLine, now: Instant) -> Reveal
     let text = join_text(line);
     let opts = opts_for_line(config, line.speaker.as_deref());
     RevealHandle::start_at(&text, opts, now)
+}
+
+/// 表示中のタイプライターを即座に全文表示へスキップする。ブラウザ版 NovelRenderer の
+/// `advanceOrSkipTypewriter`（タイプ中の1手目は全文表示へのスキップに専念し、次の行へは
+/// 進めない「カノソ方式」）と同じ2手構成に揃える（#472）。
+///
+/// `jiwa::RevealHandle` は開始時刻を書き換える setter を持たないため、`started_at` を
+/// 十分過去（[`SKIP_ANCHOR_MARGIN`]）に付け替えた新しいハンドルを作ることで、同じテキスト・
+/// 同じ配色のまま `is_done(now) == true` を保証する。
+pub fn skip_reveal(config: &Config, line: &DisplayLine, now: Instant) -> RevealHandle {
+    let text = join_text(line);
+    let opts = opts_for_line(config, line.speaker.as_deref());
+    let anchor = now.checked_sub(SKIP_ANCHOR_MARGIN).unwrap_or(now);
+    RevealHandle::start_at(&text, opts, anchor)
 }
 
 /// ページ送りインジケータ（▼ の明滅）を開始する。話者やテキストに依存しない単一の
@@ -157,24 +175,23 @@ mod tests {
     }
 
     #[test]
+    fn skip_reveal_is_immediately_done() {
+        let config = Config::default();
+        let l = line(Some("A"), vec!["a longer line of dialogue text"]);
+        let now = Instant::now();
+        let handle = skip_reveal(&config, &l, now);
+        assert!(handle.is_done(now));
+        let snap = handle.snapshot(now);
+        assert_eq!(snap.len(), "a longer line of dialogue text".chars().count());
+    }
+
+    #[test]
     fn snapshot_to_lines_splits_on_newline_grapheme() {
-        let snap = vec![
-            RevealedGrapheme {
-                text: "a".to_string(),
-                color: Rgb(0, 0, 0),
-                progress: 1.0,
-            },
-            RevealedGrapheme {
-                text: "\n".to_string(),
-                color: Rgb(0, 0, 0),
-                progress: 1.0,
-            },
-            RevealedGrapheme {
-                text: "b".to_string(),
-                color: Rgb(0, 0, 0),
-                progress: 1.0,
-            },
-        ];
+        let config = Config::default();
+        let l = line(None, vec!["a", "b"]);
+        let now = Instant::now();
+        let handle = skip_reveal(&config, &l, now);
+        let snap = handle.snapshot(now);
         let lines = snapshot_to_lines(&snap);
         assert_eq!(lines.len(), 2);
     }

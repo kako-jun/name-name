@@ -242,10 +242,10 @@ mod tests {
             text: vec!["hi".to_string()],
         };
         let now = Instant::now();
-        let reveal = reveal::build_reveal(&config, &line, now);
+        // reveal 完了済み(=ページ送りインジケータも同時に描画される)状態でも、
+        // Layout::Percentage(40/60) が width=1 (40% が 0 に丸まる) で panic しないことを確認する。
+        let reveal = reveal::skip_reveal(&config, &line, now);
         let pulse = reveal::build_pulse(now);
-        // The assertion here is simply that `draw` does not panic with
-        // Layout::Percentage(40/60) at width=1 (40% of 1 rounds to 0).
         terminal
             .draw(|f| {
                 draw(

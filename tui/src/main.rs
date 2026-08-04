@@ -122,10 +122,23 @@ fn event_loop(
 
         match input::poll_action(REDRAW)? {
             Action::Advance => {
-                playback.advance();
-                current_reveal = playback
-                    .current()
-                    .map(|line| reveal::build_reveal(config, line, Instant::now()));
+                if let Some(line) = playback.current() {
+                    let reveal_done = current_reveal
+                        .as_ref()
+                        .map(|r| r.is_done(Instant::now()))
+                        .unwrap_or(true);
+                    if !reveal_done {
+                        // ブラウザ版 NovelRenderer の advanceOrSkipTypewriter と同じ
+                        // 「表示中の1手目は全文表示へのスキップに専念し、次の行へは
+                        // 進めない」挙動（カノソ方式）。
+                        current_reveal = Some(reveal::skip_reveal(config, line, Instant::now()));
+                    } else if playback.advance() {
+                        if let Some(next_line) = playback.current() {
+                            current_reveal =
+                                Some(reveal::build_reveal(config, next_line, Instant::now()));
+                        }
+                    }
+                }
             }
             Action::Quit => break,
             Action::None => {}
