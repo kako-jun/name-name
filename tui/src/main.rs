@@ -54,7 +54,11 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            ratatui::crossterm::cursor::Show
+        );
         default_hook(info);
     }));
 

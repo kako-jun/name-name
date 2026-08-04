@@ -28,6 +28,9 @@ pub struct DisplayLine {
 ///   （例: `漢字《かんじ》` → `漢字`）
 /// - 対応する `》` が見つからない不正な `《`（閉じ忘れ）は、`《` 以降の文字を
 ///   全て捨てて終了する（panic・無限ループしない）
+/// - ネストした `《`（`《《a》b》` のような不正な記法）は非対応・未定義動作。
+///   panic・無限ループはしないが、内側の `》` で読み飛ばしが終わり外側の `》` が
+///   除去されずリテラルとして出力に残る（例: `《《a》b》` → `b》`）
 fn strip_ruby_markup(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.chars();
