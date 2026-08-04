@@ -1,0 +1,12 @@
+[package]
+name = "name-name-tui"
+version = "0.1.0"
+edition = "2021"
+description = "TUI display client for name-name visual novel engine"
+
+[dependencies]
+name-name-parser = { path = "../parser" }
+ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+anyhow = "1"
