@@ -375,6 +375,65 @@ describe('EventImageLayer pixel_art スケールモード (#466)', () => {
       'nearest'
     )
   })
+
+  it('E4: 表示済みイベント絵がある状態で setPixelArt(true) を呼ぶと、再 show を待たず既存 texture の scaleMode が即座に nearest へ切り替わる（ライブ再適用, CharacterLayer.setPixelArt と対称）', async () => {
+    const texture = mockTexture()
+    vi.spyOn(Assets, 'load').mockResolvedValue(texture as never)
+    const layer = makeLayer(virtualTime())
+    // pixel_art 未設定（既定 false）のまま表示 → linear。
+    layer.show('story/x.webp')
+    await flushPromises()
+    expect((texture as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'linear'
+    )
+
+    // CharacterLayer.setPixelArt/reapplyPixelArt (#466 セルフレビュー指摘) と同じく、既存表示済み
+    // texture にもその場で即再適用する。次の show を待たせない。
+    layer.setPixelArt(true)
+    expect((texture as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'nearest'
+    )
+  })
+
+  it('E5: setPixelArt(true) の後に setPixelArt(false) へ戻すと、表示済み texture も即座に linear へ戻る', async () => {
+    const texture = mockTexture()
+    vi.spyOn(Assets, 'load').mockResolvedValue(texture as never)
+    const layer = makeLayer(virtualTime())
+    layer.setPixelArt(true)
+    layer.show('story/x.webp')
+    await flushPromises()
+    expect((texture as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'nearest'
+    )
+
+    layer.setPixelArt(false)
+    expect((texture as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'linear'
+    )
+  })
+
+  it('E6: イベント絵が表示されていない状態で setPixelArt() を呼んでも例外を投げない（remove 後 / show 未呼び出し）', () => {
+    const layer = makeLayer(virtualTime())
+    expect(() => layer.setPixelArt(true)).not.toThrow()
+  })
+
+  it('E7: remove() 後に setPixelArt() を呼んでも、既に破棄済みの texture は再適用対象から外れる', async () => {
+    const texture = mockTexture()
+    vi.spyOn(Assets, 'load').mockResolvedValue(texture as never)
+    const layer = makeLayer(virtualTime())
+    layer.show('story/x.webp')
+    await flushPromises()
+    expect((texture as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'linear'
+    )
+
+    layer.remove()
+    // remove 後は currentTexture が null に戻るため、この texture オブジェクトはもう触られない。
+    expect(() => layer.setPixelArt(true)).not.toThrow()
+    expect((texture as unknown as { source: { scaleMode: string } }).source.scaleMode).toBe(
+      'linear'
+    )
+  })
 })
 
 describe('EventImageLayer back=Hide/Keep の値保持', () => {

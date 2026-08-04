@@ -743,9 +743,37 @@ export class CharacterLayer extends Container {
    * テクスチャ拡大縮小フィルタを nearest-neighbor にするか設定する (#466)。
    * frontmatter `pixel_art:` の値を渡す。以後 `loadTexture`/`showImage` でロードするテクスチャに
    * 適用される（ロード完了 `Assets.load().then()` 内で最新値を参照する）。
+   *
+   * setCharacterScale (#378) 等と同じく、既に表示中の sprite にもその場で即再適用する
+   * （reapplyPixelArt。セルフレビュー指摘: character_scale/character_height_ratios と非対称に
+   * ならないよう、editor で `pixel_art: true` を追記した瞬間に表示中の立ち絵の見た目も揃える）。
    */
   setPixelArt(enabled: boolean): void {
     this.pixelArt = enabled
+    this.reapplyPixelArt()
+  }
+
+  /**
+   * 表示中の全 sprite（立ち絵・render-only の Title/Label/Image・クロスフェード中の旧 sprite 問わず）
+   * に現在の pixelArt (#466) を即座に再適用する。setPixelArt の共通ライブ再適用ロジック
+   * （reapplyCharacterHeightRatios (#360/#364/#378) と同じ規律4のパターン）。
+   *
+   * scale 系のライブ再適用（reapplyCharacterHeightRatios）は position/scale というジオメトリを
+   * 動かすため、アニメ中・fit・render-only・snapshotHidden の sprite を中間状態の焼き込み回避で
+   * 除外する。pixelArt はテクスチャ拡大縮小フィルタの切り替えだけでジオメトリを一切変えないため、
+   * その種の除外は不要——表示中のテクスチャ全部にそのまま反映してよい。
+   * テクスチャが未ロード（`new Sprite()` 直後の Texture.EMPTY 等のプレースホルダ、height<=0）の
+   * ものは触らない（共有テクスチャの scaleMode を汚染しないため）。ロード完了時は
+   * loadTexture/showImage の `Assets.load().then()` 側が最新の pixelArt を反映する。
+   */
+  private reapplyPixelArt(): void {
+    const mode = this.pixelArt ? 'nearest' : 'linear'
+    for (const state of this.characters.values()) {
+      if (state.sprite.destroyed) continue
+      const texture = state.sprite.texture
+      if (!texture || texture.height <= 0) continue
+      texture.source.scaleMode = mode
+    }
   }
 
   /**

@@ -65,6 +65,13 @@ export class EventImageLayer extends Container {
   private assetBaseUrl = ''
 
   private sprite: Sprite | null = null
+  /** show() でロード成功した直近の Texture オブジェクトそのもの (#466 pixel_art ライブ再適用用)。
+   *  `sprite.texture` 経由だと、Sprite コンストラクタが実 Texture インスタンスでない値
+   *  （テストのプレーンオブジェクトモック等）を無条件に `Texture.EMPTY`（共有シングルトン）へ
+   *  差し替えてしまう pixi.js の挙動を踏んでしまう（EventImageLayer.test.ts 参照）ため、
+   *  show() が受け取った texture オブジェクトを直接保持し、それを再適用対象にする。
+   *  destroySprite() で null に戻す（表示中でなくなったら再適用対象からも外す）。 */
+  private currentTexture: Texture | null = null
   private fadeAnimation: EventImageFadeAnimation | null = null
   private fadeTimer: number | null = null
 
@@ -142,9 +149,18 @@ export class EventImageLayer extends Container {
    * frontmatter `pixel_art:` の値を渡す。以後 `show()` でロードするテクスチャに適用される
    * （`show()` の同期呼び出し時点ではなく、ロード完了 `Assets.load().then()` 内で最新値を参照する。
    * `setSplitLayoutRegion` と同じ「解決時点の最新値を使う」流儀）。
+   *
+   * CharacterLayer.setPixelArt/reapplyPixelArt (#466 セルフレビュー指摘) と同じく、既に表示中の
+   * sprite があればその場で即再適用する。EventImageLayer は単一スロット（this.sprite）なので、
+   * ロード済み（currentTexture が非 null＝Assets.load().then() 済み）ならそのまま scaleMode を
+   * 書き換えるだけでよい。`this.sprite.texture` ではなく `currentTexture` を使う理由は同フィールドの
+   * JSDoc 参照。
    */
   setPixelArt(enabled: boolean): void {
     this.pixelArt = enabled
+    if (this.currentTexture) {
+      this.currentTexture.source.scaleMode = enabled ? 'nearest' : 'linear'
+    }
   }
 
   private buildImageUrl(path: string): string {
@@ -202,6 +218,7 @@ export class EventImageLayer extends Container {
         const fit = computeCoverFit(texture.width, texture.height, region.width, region.height)
         Object.assign(sprite, { ...fit, x: fit.x + region.x, y: fit.y + region.y })
         this.sprite = sprite
+        this.currentTexture = texture
         this.addChild(sprite)
 
         if (fadeMs > 0) {
@@ -307,6 +324,8 @@ export class EventImageLayer extends Container {
     // （NovelRenderer.destroyBackgroundEntry と同じ流儀。再表示時の再ダウンロードを防ぐ）。
     this.sprite.destroy()
     this.sprite = null
+    // 表示中でなくなったので setPixelArt (#466) のライブ再適用対象からも外す。
+    this.currentTexture = null
   }
 
   /** 現在表示中/表示予定のイベント絵があるか（settled state 基準） */

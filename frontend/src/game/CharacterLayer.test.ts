@@ -217,7 +217,7 @@ describe('CharacterLayer pixel_art スケールモード（立ち絵 show 経路
     expect(state!.sprite.texture!.source!.scaleMode).toBe('nearest')
   })
 
-  it('C5: 表示済み立ち絵がある状態で setPixelArt(true) を呼んでも、再 show するまで既存 sprite の scaleMode は変化しない（仕様pin）', async () => {
+  it('C5: 表示済み立ち絵がある状態で setPixelArt(true) を呼ぶと、再 show を待たず既存 sprite の scaleMode が即座に nearest へ切り替わる（ライブ再適用）', async () => {
     mockLoadResolves()
     const layer = new CharacterLayer(800, 450)
     // pixel_art 未設定（既定 false）のまま表示 → linear。
@@ -226,9 +226,37 @@ describe('CharacterLayer pixel_art スケールモード（立ち絵 show 経路
     const state = asInternals(layer).characters.get('hero')
     expect(state!.sprite.texture!.source!.scaleMode).toBe('linear')
 
-    // setPixelArt() はフィールド代入のみで、既存表示済み sprite への遡及再適用はしない。
+    // setCharacterScale(#378)/setCharacterHeightRatio(s)(#360/#364) と同じく、既存表示済み sprite にも
+    // その場で即再適用する（reapplyPixelArt）。次の show を待たせない。
     layer.setPixelArt(true)
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('nearest')
+  })
+
+  it('C5b: setPixelArt(true) の後に setPixelArt(false) へ戻すと、表示済み sprite も即座に linear へ戻る', async () => {
+    mockLoadResolves()
+    const layer = new CharacterLayer(800, 450)
+    layer.setPixelArt(true)
+    layer.show('hero', 'normal', '中央', '/assets')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('nearest')
+
+    layer.setPixelArt(false)
     expect(state!.sprite.texture!.source!.scaleMode).toBe('linear')
+  })
+
+  it('C5c: テクスチャ未ロード（show() 呼び出し直後・Assets.load 未解決）の sprite は setPixelArt() で触らない', async () => {
+    mockLoadResolves()
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets')
+    // Assets.load().then() が解決する前（await を挟まない）に setPixelArt を呼ぶ。
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(() => layer.setPixelArt(true)).not.toThrow()
+    // 未ロードのプレースホルダ texture は触らない。ロード完了後は Assets.load().then() 側が
+    // 最新の pixelArt(true) を反映する。
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('nearest')
   })
 })
 
