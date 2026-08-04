@@ -26,9 +26,16 @@ pub const PAGE_INDICATOR_SYMBOL: &str = "▼";
 /// 「暗いグレーから話者色へ」というトーンを踏襲する（話者ごとに変える必要性が薄いため固定）。
 const FADE_FROM: Rgb = Rgb(60, 60, 60);
 
-/// `RevealHandle::start_at` を過去に付け替えて即座に `is_done` にするための安全マージン。
-/// どんな `char_interval` / `fade_duration` 設定の組み合わせでも確実に上回る値。
-const SKIP_ANCHOR_MARGIN: Duration = Duration::from_secs(24 * 60 * 60);
+/// `RevealHandle::start_at` を過去に付け替えて即座に `is_done` にするための追加バッファ。
+/// 本文の総reveal所要時間（`char_interval * (グラフェム数-1) + fade_duration`、
+/// `RevealHandle::is_done` と同じ式）にこれを足した分だけ過去にずらす。
+///
+/// 以前はこのバッファ単体（24時間固定）をそのままアンカーのずらし幅として使っていたが、
+/// 総reveal所要時間が24時間を超える設定（例: `fade_duration_ms` を極端に大きくした場合）だと
+/// アンカーを24h前にずらしても `is_done(now)` が `true` にならず、「スキップしたのに
+/// 全文表示されない」バグになっていた。ずらし幅を「総所要時間 + バッファ」の動的な値にする
+/// ことで、どんな設定でも確実に `is_done(now) == true` になるようにする（#472）。
+const SKIP_ANCHOR_BUFFER: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// `line` の本文（複数行）を単一のリビール対象文字列にする。行区切りは `\n` を挟む。
 /// [`snapshot_to_lines`] はこの `\n` グラフェムを行区切りとして解釈し直す。
@@ -63,12 +70,20 @@ pub fn build_reveal(config: &Config, line: &DisplayLine, now: Instant) -> Reveal
 /// 進めない「カノソ方式」）と同じ2手構成に揃える（#472）。
 ///
 /// `jiwa::RevealHandle` は開始時刻を書き換える setter を持たないため、`started_at` を
-/// 十分過去（[`SKIP_ANCHOR_MARGIN`]）に付け替えた新しいハンドルを作ることで、同じテキスト・
-/// 同じ配色のまま `is_done(now) == true` を保証する。
+/// 十分過去（本文の総reveal所要時間 + [`SKIP_ANCHOR_BUFFER`]）に付け替えた新しいハンドルを
+/// 作ることで、同じテキスト・同じ配色のまま `is_done(now) == true` を保証する。
 pub fn skip_reveal(config: &Config, line: &DisplayLine, now: Instant) -> RevealHandle {
     let text = join_text(line);
     let opts = opts_for_line(config, line.speaker.as_deref());
-    let anchor = now.checked_sub(SKIP_ANCHOR_MARGIN).unwrap_or(now);
+    // `RevealHandle` はグラフェム数を直接計算する手段を公開していないため、`now` 起点の
+    // ハンドルを一つ作って `total_graphemes()` を読む（テキストの分割自体は軽量）。
+    let probe = RevealHandle::start_at(&text, opts, now);
+    let total_graphemes = probe.total_graphemes();
+    // `RevealHandle::is_done` と同じ式で総reveal所要時間を求める。
+    let total_runtime =
+        opts.char_interval * (total_graphemes.saturating_sub(1) as u32) + opts.fade_duration;
+    let anchor_offset = total_runtime + SKIP_ANCHOR_BUFFER;
+    let anchor = now.checked_sub(anchor_offset).unwrap_or(now);
     RevealHandle::start_at(&text, opts, anchor)
 }
 
@@ -212,5 +227,96 @@ mod tests {
         let now = Instant::now();
         let pulse = build_pulse(now);
         assert_eq!(pulse.snapshot(now).text, PAGE_INDICATOR_SYMBOL);
+    }
+
+    /// `skip_reveal` のアンカーずらし幅の境界値テスト（#472）。
+    /// `line(Some("A"), vec!["a"])` は単一グラフェムなので、`char_interval` の寄与
+    /// （`char_interval * (n-1)`）が常に0になり、総reveal所要時間 = `fade_duration_ms` に
+    /// 単純化できる。これにより「24時間ちょうど」の境界を `fade_duration_ms` だけで作れる。
+    const MARGIN_MS: u64 = 24 * 60 * 60 * 1000;
+
+    #[test]
+    fn skip_reveal_at_exactly_margin_boundary_is_done() {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 0;
+        config.typewriter.fade_duration_ms = MARGIN_MS - 1; // 総所要時間 = 24h - 1ms
+        let l = line(Some("A"), vec!["a"]);
+        let now = Instant::now();
+        let handle = skip_reveal(&config, &l, now);
+        assert!(handle.is_done(now));
+    }
+
+    #[test]
+    fn skip_reveal_at_exact_margin_is_done() {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 0;
+        config.typewriter.fade_duration_ms = MARGIN_MS; // 総所要時間 = ちょうど24h
+        let l = line(Some("A"), vec!["a"]);
+        let now = Instant::now();
+        let handle = skip_reveal(&config, &l, now);
+        assert!(handle.is_done(now));
+    }
+
+    /// 総reveal所要時間が固定24hマージンを1ms超える設定。修正前は `is_done(now)` が
+    /// `false` のまま（＝スキップしたのに全文表示されないバグ）だったが、アンカーの
+    /// ずらし幅を「総所要時間 + バッファ」の動的な値にしたことで常に `true` になる。
+    #[test]
+    fn skip_reveal_beyond_margin_may_not_complete() {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 0;
+        config.typewriter.fade_duration_ms = MARGIN_MS + 1; // 総所要時間 = 24h + 1ms
+        let l = line(Some("A"), vec!["a"]);
+        let now = Instant::now();
+        let handle = skip_reveal(&config, &l, now);
+        assert!(handle.is_done(now));
+        let snap = handle.snapshot(now);
+        assert_eq!(snap.len(), 1);
+    }
+
+    #[test]
+    fn opts_for_line_invalid_color_name_falls_back_to_white() {
+        let mut config = Config::default();
+        config.colors.opponent = "not-a-real-color".to_string();
+        // player_speakers のデフォルトは ["主格"] なので "相手" は opponent 色になる。
+        let opts = opts_for_line(&config, Some("相手"));
+        assert_eq!(opts.fade_to, Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn color_to_rgb_covers_all_named_variants() {
+        assert_eq!(color_to_rgb(Color::Black), Rgb(0, 0, 0));
+        assert_eq!(color_to_rgb(Color::Red), Rgb(205, 49, 49));
+        assert_eq!(color_to_rgb(Color::Green), Rgb(13, 188, 121));
+        assert_eq!(color_to_rgb(Color::Yellow), Rgb(229, 229, 16));
+        assert_eq!(color_to_rgb(Color::Blue), Rgb(36, 114, 200));
+        assert_eq!(color_to_rgb(Color::Magenta), Rgb(188, 63, 188));
+        assert_eq!(color_to_rgb(Color::Cyan), Rgb(17, 168, 205));
+        assert_eq!(color_to_rgb(Color::Gray), Rgb(229, 229, 229));
+        assert_eq!(color_to_rgb(Color::DarkGray), Rgb(102, 102, 102));
+        assert_eq!(color_to_rgb(Color::LightRed), Rgb(241, 76, 76));
+        assert_eq!(color_to_rgb(Color::LightGreen), Rgb(35, 209, 139));
+        assert_eq!(color_to_rgb(Color::LightYellow), Rgb(245, 245, 67));
+        assert_eq!(color_to_rgb(Color::LightBlue), Rgb(59, 142, 234));
+        assert_eq!(color_to_rgb(Color::LightMagenta), Rgb(214, 112, 214));
+        assert_eq!(color_to_rgb(Color::LightCyan), Rgb(41, 184, 219));
+        assert_eq!(color_to_rgb(Color::White), Rgb(255, 255, 255));
+        // Config が使わない想定のバリアント（フォールバック分岐）。
+        assert_eq!(color_to_rgb(Color::Indexed(5)), Rgb(255, 255, 255));
+        assert_eq!(color_to_rgb(Color::Reset), Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn snapshot_to_lines_multiline_japanese_text() {
+        let config = Config::default();
+        let l = line(None, vec!["こんにちは、世界", "two行目 mixed"]);
+        let now = Instant::now();
+        let handle = skip_reveal(&config, &l, now);
+        let snap = handle.snapshot(now);
+        let lines = snapshot_to_lines(&snap);
+        assert_eq!(lines.len(), 2);
+        let first: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let second: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(first, "こんにちは、世界");
+        assert_eq!(second, "two行目 mixed");
     }
 }
