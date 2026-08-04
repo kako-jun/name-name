@@ -11,19 +11,14 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 /// 左側（画像プレースホルダ）の表示方法。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaceholderStyle {
     /// 罫線で囲った空き領域のみ表示する。
     Blank,
     /// 罫線で囲った領域の中央にラベル文字列（`label`）を表示する。
+    #[default]
     Label,
-}
-
-impl Default for PlaceholderStyle {
-    fn default() -> Self {
-        PlaceholderStyle::Label
-    }
 }
 
 /// 左側（画像プレースホルダ）の表示設定。
