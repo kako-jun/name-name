@@ -89,6 +89,32 @@ impl Default for TypewriterConfig {
     }
 }
 
+/// 起動直後に表示するスプラッシュ画面の設定。
+///
+/// `enabled` が `false`（既定）または `lines` が空の場合はスプラッシュを表示せず、
+/// 従来通りいきなり本編から始まる（後方互換）。ロゴの内容（ASCII アート本体）は
+/// ゲームごとに異なるため、`tui` 本体には一切埋め込まず、この設定を通じて外部化する。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SplashConfig {
+    /// スプラッシュ画面を表示するかどうか。
+    pub enabled: bool,
+    /// 画面中央に表示するロゴの行。1要素が1行に対応する。
+    pub lines: Vec<String>,
+    /// ロゴ行の文字色名（`ratatui::style::Color` の `FromStr` が解釈できる名前）。
+    pub color: String,
+}
+
+impl Default for SplashConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            lines: Vec::new(),
+            color: "white".to_string(),
+        }
+    }
+}
+
 /// ゲームごとに変わりうる値をまとめた設定。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -101,6 +127,8 @@ pub struct Config {
     pub entry_script: PathBuf,
     pub placeholder: PlaceholderConfig,
     pub colors: ColorConfig,
+    /// 起動直後に表示するスプラッシュ画面の設定。
+    pub splash: SplashConfig,
     /// この話者名リストに含まれる話者は「プレイヤー側」として扱う（`colors.player` を適用）。
     /// 含まれない話者（Dialog の character）は「相手側」として扱う（`colors.opponent` を適用）。
     /// 話者名を持たない Narration は `colors.narration` を適用する。
@@ -116,6 +144,7 @@ impl Default for Config {
             entry_script: PathBuf::from("route01/01-terminal-light.md"),
             placeholder: PlaceholderConfig::default(),
             colors: ColorConfig::default(),
+            splash: SplashConfig::default(),
             player_speakers: vec!["主格".to_string()],
             typewriter: TypewriterConfig::default(),
         }
@@ -151,6 +180,11 @@ impl Config {
         self.player_speakers.iter().any(|s| s == speaker)
     }
 
+    /// スプラッシュ画面を表示すべきか（`enabled` かつロゴ行が1行以上ある場合）。
+    pub fn should_show_splash(&self) -> bool {
+        self.splash.enabled && !self.splash.lines.is_empty()
+    }
+
     /// 話者（Dialog の character）から適用すべき文字色名を返す。
     /// `speaker` が `None`（Narration）の場合は `colors.narration` を返す。
     pub fn color_name_for(&self, speaker: Option<&str>) -> &str {
@@ -180,6 +214,9 @@ mod tests {
         assert_eq!(config.colors.player, "white");
         assert_eq!(config.colors.opponent, "cyan");
         assert_eq!(config.colors.narration, "gray");
+        assert!(!config.splash.enabled);
+        assert!(config.splash.lines.is_empty());
+        assert_eq!(config.splash.color, "white");
         assert_eq!(config.player_speakers, vec!["主格".to_string()]);
         assert_eq!(config.typewriter.char_interval_ms, 45);
         assert_eq!(config.typewriter.fade_duration_ms, 320);
@@ -366,5 +403,89 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(config.color_name_for(Some("")), config.colors.player);
+    }
+
+    #[test]
+    fn splash_disabled_by_default_from_empty_toml() {
+        let config = Config::from_toml_str("").expect("empty toml should parse");
+        assert!(!config.should_show_splash());
+    }
+
+    #[test]
+    fn splash_from_toml_with_lines_parses() {
+        let toml =
+            "[splash]\nenabled = true\nlines = [\"田田田\", \"回回回\"]\ncolor = \"yellow\"\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert_eq!(config.splash.lines, vec!["田田田", "回回回"]);
+        assert_eq!(config.splash.color, "yellow");
+        assert!(config.should_show_splash());
+    }
+
+    #[test]
+    fn should_show_splash_false_when_enabled_but_no_lines() {
+        let config = Config {
+            splash: SplashConfig {
+                enabled: true,
+                lines: vec![],
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(!config.should_show_splash());
+    }
+
+    #[test]
+    fn should_show_splash_false_when_lines_present_but_disabled() {
+        let config = Config {
+            splash: SplashConfig {
+                enabled: false,
+                lines: vec!["田".to_string()],
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(!config.should_show_splash());
+    }
+
+    #[test]
+    fn should_show_splash_true_when_enabled_and_lines_present() {
+        let config = Config {
+            splash: SplashConfig {
+                enabled: true,
+                lines: vec!["田".to_string()],
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(config.should_show_splash());
+    }
+
+    #[test]
+    fn should_show_splash_true_when_lines_contains_only_empty_string() {
+        // 要素数1件（空文字列のみ）は「lines が空」ではないため true になる。
+        // `should_show_splash` は要素数のみ見て中身の文字数までは判定しない仕様。
+        let config = Config {
+            splash: SplashConfig {
+                enabled: true,
+                lines: vec!["".to_string()],
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(config.should_show_splash());
+    }
+
+    #[test]
+    fn from_toml_str_splash_color_missing_defaults_to_white() {
+        let toml = "[splash]\nenabled = true\nlines = [\"田\"]\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert_eq!(config.splash.color, SplashConfig::default().color);
+    }
+
+    #[test]
+    fn from_toml_str_splash_lines_type_mismatch_is_err() {
+        let toml = "[splash]\nlines = [1, 2, 3]\n";
+        let result = Config::from_toml_str(toml);
+        assert!(result.is_err());
     }
 }
