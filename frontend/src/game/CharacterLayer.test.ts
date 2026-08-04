@@ -258,6 +258,39 @@ describe('CharacterLayer pixel_art スケールモード（立ち絵 show 経路
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(state!.sprite.texture!.source!.scaleMode).toBe('nearest')
   })
+
+  it('C5d: 未ロード sprite の texture は共有シングルトン Texture.EMPTY で、setPixelArt() で書き換えてはいけない（再レビュー指摘の回帰テスト）', async () => {
+    // #466 再レビュー must 指摘: 実 pixi.js（v8.18.1）の `new Sprite()` 既定テクスチャは
+    // 共有シングルトン Texture.EMPTY で、その height は 1（0 ではない）。旧
+    // `texture.height <= 0` ガードはこれをすり抜け、show() 後・Assets.load() 解決前に
+    // setPixelArt() を呼ぶと Texture.EMPTY.source.scaleMode というアプリ全体で共有される
+    // プレースホルダを書き換えてしまっていた。この test は C5c と異なり、state 自身の
+    // 最終的な scaleMode ではなく「共有シングルトンが汚染されないこと」を直接検証する。
+    const originalScaleMode = Texture.EMPTY.source.scaleMode
+    try {
+      // Assets.load を pending のまま止め、texture ロード完了（sprite.texture = texture 代入）が
+      // 一切起きない状態を作る。
+      vi.spyOn(Assets, 'load').mockReturnValue(new Promise(() => {}) as never)
+      const layer = new CharacterLayer(800, 450)
+      layer.show('hero', 'normal', '中央', '/assets')
+      const state = asInternals(layer).characters.get('hero')
+      expect(state).toBeDefined()
+      // 前提確認: この時点の sprite.texture は共有シングルトン Texture.EMPTY そのもの。
+      expect(state!.sprite.texture).toBe(
+        Texture.EMPTY as unknown as CharacterStateLike['sprite']['texture']
+      )
+
+      // await を挟まず（Assets.load 未解決のまま）setPixelArt(true) を呼ぶ。
+      expect(() => layer.setPixelArt(true)).not.toThrow()
+
+      // 共有シングルトンの scaleMode は変化していない（アプリ全体を汚染しない）。
+      expect(Texture.EMPTY.source.scaleMode).toBe(originalScaleMode)
+      expect(Texture.EMPTY.source.scaleMode).not.toBe('nearest')
+    } finally {
+      // 万一失敗して書き換わっていても、他テストへ波及させないため必ず元に戻す。
+      Texture.EMPTY.source.scaleMode = originalScaleMode
+    }
+  })
 })
 
 describe('normalizePosition', () => {

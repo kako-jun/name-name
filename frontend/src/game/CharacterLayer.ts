@@ -762,16 +762,23 @@ export class CharacterLayer extends Container {
    * 動かすため、アニメ中・fit・render-only・snapshotHidden の sprite を中間状態の焼き込み回避で
    * 除外する。pixelArt はテクスチャ拡大縮小フィルタの切り替えだけでジオメトリを一切変えないため、
    * その種の除外は不要——表示中のテクスチャ全部にそのまま反映してよい。
-   * テクスチャが未ロード（`new Sprite()` 直後の Texture.EMPTY 等のプレースホルダ、height<=0）の
-   * ものは触らない（共有テクスチャの scaleMode を汚染しないため）。ロード完了時は
-   * loadTexture/showImage の `Assets.load().then()` 側が最新の pixelArt を反映する。
+   * テクスチャが未ロード（`new Sprite()` 直後のプレースホルダ）のものは触らない（共有テクスチャの
+   * scaleMode を汚染しないため）。ロード完了時は loadTexture/showImage の `Assets.load().then()` 側が
+   * 最新の pixelArt を反映する。
+   *
+   * ガードは `texture === Texture.EMPTY` の identity チェックを使う（セルフレビュー指摘）。
+   * pixi.js（v8.18.1）の `new Sprite()` 既定テクスチャは共有シングルトン `Texture.EMPTY` で、
+   * その `height` は 1（0 ではない）。よって旧 `texture.height <= 0` ガードは
+   * `show()` 呼び出し後・`Assets.load()` 解決前の未ロード sprite をすり抜け、pixi.js アプリ全体で
+   * 共有される `Texture.EMPTY.source.scaleMode` を書き換えてしまっていた。
+   * `height <= 0` チェックも保険として残す（EMPTY 以外の非表示テクスチャを想定した既存の意図）。
    */
   private reapplyPixelArt(): void {
     const mode = this.pixelArt ? 'nearest' : 'linear'
     for (const state of this.characters.values()) {
       if (state.sprite.destroyed) continue
       const texture = state.sprite.texture
-      if (!texture || texture.height <= 0) continue
+      if (!texture || texture === Texture.EMPTY || texture.height <= 0) continue
       texture.source.scaleMode = mode
     }
   }
