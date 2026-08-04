@@ -28,6 +28,15 @@ name-name/
 │   │   └── emitter.rs        # Events → Markdown
 │   ├── pkg/                  # wasm-pack ビルド成果物（WASM + JS + .d.ts）
 │   └── tests/
+├── tui/                # Rust crate（TUI版プレイヤー、parserをネイティブ流用）
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs           # エントリポイント
+│       ├── cli.rs            # CLI引数パース
+│       ├── config.rs         # config.toml読み込み
+│       ├── playback.rs       # 再生ロジック
+│       ├── ui.rs             # ratatui描画
+│       └── input.rs          # キー入力処理
 ├── frontend/           # React + Vite + TypeScript
 │   ├── src/
 │   │   ├── components/ # UIコンポーネント
@@ -54,6 +63,8 @@ name-name/
 - **Name×Nameツール**: このリポジトリ（name-name）
 - **ゲームプロジェクト**: 別リポジトリ（例: ogurasia）
 - 各ゲームは`backend/projects/`にクローンされる（gitignore対象）
+
+`tui/`はfrontend/と対になるTUI版表示クライアント（全ゲームへの対応を強制しない、configで外出し）。
 
 ### 2. Windowsでも動作する
 - シンボリックリンクは使わない

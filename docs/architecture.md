@@ -14,6 +14,15 @@ name-name/
 │   │   ├── parser.rs         # Markdown → Events
 │   │   └── emitter.rs        # Events → Markdown
 │   └── tests/
+├── tui/                # Rust crate（TUI版プレイヤー、parserをネイティブ流用）
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs           # エントリポイント
+│       ├── cli.rs            # CLI引数パース
+│       ├── config.rs         # config.toml読み込み
+│       ├── playback.rs       # 再生ロジック
+│       ├── ui.rs             # ratatui描画
+│       └── input.rs          # キー入力処理
 ├── frontend/           # React + Vite + TypeScript
 │   ├── src/
 │   │   ├── components/       # UIコンポーネント
@@ -49,6 +58,7 @@ name-name/
 | ----------- | ----------------------------------------------------------------- | ------------------------------------------------------ |
 | `parser/`   | Markdown ↔ Event[] の双方向変換                                   | Yes（正本）                                            |
 | `frontend/` | エディタUI + ノベルプレイヤー（PixiJS） + RPGプレイヤー（PixiJS） | Yes（WASMで parser を呼ぶ。`src/wasm/parser.ts` 経由） |
+| `tui/`      | TUI版プレイヤー（ratatui, frontendと対になる表示クライアント）    | Yes（parserをネイティブ関数呼び出しで直接利用。WASM/JsValueは経由しない） |
 | `worker/`   | GitHub REST API プロキシ、CORS、認証ゲート、Cache API             | No（生テキスト中継）                                   |
 
 Worker はパースしない。GitHub から Markdown を取得してそのままフロントエンドに渡し、フロントエンドが WASM パーサー（`frontend/src/wasm/parser.ts`）で Event[] に変換する。WASM の初期化は遅延実行（初回呼び出し時に `init()` を実行）。
