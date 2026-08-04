@@ -418,4 +418,33 @@ mod tests {
         };
         assert!(config.should_show_splash());
     }
+
+    #[test]
+    fn should_show_splash_true_when_lines_contains_only_empty_string() {
+        // 要素数1件（空文字列のみ）は「lines が空」ではないため true になる。
+        // `should_show_splash` は要素数のみ見て中身の文字数までは判定しない仕様。
+        let config = Config {
+            splash: SplashConfig {
+                enabled: true,
+                lines: vec!["".to_string()],
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(config.should_show_splash());
+    }
+
+    #[test]
+    fn from_toml_str_splash_color_missing_defaults_to_white() {
+        let toml = "[splash]\nenabled = true\nlines = [\"田\"]\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert_eq!(config.splash.color, SplashConfig::default().color);
+    }
+
+    #[test]
+    fn from_toml_str_splash_lines_type_mismatch_is_err() {
+        let toml = "[splash]\nlines = [1, 2, 3]\n";
+        let result = Config::from_toml_str(toml);
+        assert!(result.is_err());
+    }
 }

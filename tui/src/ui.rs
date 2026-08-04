@@ -285,4 +285,41 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("田"), "buffer was: {text}");
     }
+
+    #[test]
+    fn draw_splash_content_fits_exactly_shows_hint() {
+        // ロゴ1行 + 空行1行 + ヒント1行 = content_height 3。
+        // Borders::ALL は上下1セルずつ占有するため、area.height=5 のとき
+        // inner.height もちょうど3になり、余白ゼロで全行が収まる境界。
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["田".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
+        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Enter"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_splash_content_overflows_by_one_line_does_not_panic() {
+        // 上のテストから area.height を1減らし、inner.height が content_height より
+        // 1行分小さい状態（ヒント行が収まりきらない）を作る。ratatui の Paragraph は
+        // wrap 未指定でも収まらない行を静かに切り詰めるだけで panic しないことの確認。
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["田".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+    }
+
+    #[test]
+    fn draw_splash_mixed_width_line_renders_without_panic() {
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["AB田C".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("AB田C"), "buffer was: {text}");
+    }
 }
