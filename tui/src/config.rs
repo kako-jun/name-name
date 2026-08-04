@@ -63,6 +63,32 @@ impl Default for ColorConfig {
     }
 }
 
+/// タイプライター演出（`jiwa::RevealHandle`）の速度設定（#472）。
+/// kako-jun/jiwa の `RevealOpts` のうち、色（`fade_from`/`fade_to`）は既存の
+/// `ColorConfig`（話者ごとの配色）から導出するため対象外。速度だけがゲームごとに
+/// 変わりうる値としてここに外出しされる。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct TypewriterConfig {
+    /// 1グラフェムごとの表示間隔（ミリ秒）。0 なら全文が一括で表示される
+    /// （`jiwa::RevealOpts::char_interval` と同じ意味）。
+    pub char_interval_ms: u64,
+    /// 各グラフェムがフェードインするのに掛ける時間（ミリ秒）。0 なら即座に最終色で表示される
+    /// （`jiwa::RevealOpts::fade_duration` と同じ意味）。
+    pub fade_duration_ms: u64,
+}
+
+impl Default for TypewriterConfig {
+    fn default() -> Self {
+        // `jiwa::RevealOpts::soft_green()` と同じ値（45ms 間隔 / 320ms フェード）。
+        // kako-jun/type-globe の `src/ui/quiz.rs` もこのプリセットをそのまま使っている。
+        Self {
+            char_interval_ms: 45,
+            fade_duration_ms: 320,
+        }
+    }
+}
+
 /// ゲームごとに変わりうる値をまとめた設定。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -79,6 +105,7 @@ pub struct Config {
     /// 含まれない話者（Dialog の character）は「相手側」として扱う（`colors.opponent` を適用）。
     /// 話者名を持たない Narration は `colors.narration` を適用する。
     pub player_speakers: Vec<String>,
+    pub typewriter: TypewriterConfig,
 }
 
 impl Default for Config {
@@ -90,6 +117,7 @@ impl Default for Config {
             placeholder: PlaceholderConfig::default(),
             colors: ColorConfig::default(),
             player_speakers: vec!["主格".to_string()],
+            typewriter: TypewriterConfig::default(),
         }
     }
 }
@@ -153,6 +181,8 @@ mod tests {
         assert_eq!(config.colors.opponent, "cyan");
         assert_eq!(config.colors.narration, "gray");
         assert_eq!(config.player_speakers, vec!["主格".to_string()]);
+        assert_eq!(config.typewriter.char_interval_ms, 45);
+        assert_eq!(config.typewriter.fade_duration_ms, 320);
     }
 
     #[test]
@@ -170,6 +200,17 @@ mod tests {
         assert_eq!(config.colors.narration, Config::default().colors.narration);
         assert_eq!(config.game_name, Config::default().game_name);
         assert_eq!(config.player_speakers, Config::default().player_speakers);
+    }
+
+    #[test]
+    fn from_toml_str_partial_typewriter_override_keeps_rest_default() {
+        let toml = "[typewriter]\nchar_interval_ms = 10\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert_eq!(config.typewriter.char_interval_ms, 10);
+        assert_eq!(
+            config.typewriter.fade_duration_ms,
+            Config::default().typewriter.fade_duration_ms
+        );
     }
 
     #[test]

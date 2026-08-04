@@ -2,7 +2,9 @@
 //! 左右セパレートレイアウト。
 
 use std::str::FromStr;
+use std::time::Instant;
 
+use jiwa::RevealHandle;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Text};
@@ -11,8 +13,13 @@ use ratatui::Frame;
 
 use crate::config::{Config, PlaceholderStyle};
 use crate::playback::DisplayLine;
+use crate::reveal;
 
 /// 画面全体を左（画像プレースホルダ）40% / 右（テキスト）60% に分割して描画する。
+///
+/// `reveal` は現在の会話行のタイプライター表示状態（`None` は行そのものが無いケース）、
+/// `now` はこのフレームの描画時刻（`reveal` の `snapshot` に渡す基準時刻）。
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     config: &Config,
@@ -20,6 +27,8 @@ pub fn draw(
     position: usize,
     total: usize,
     is_at_end: bool,
+    reveal: Option<&RevealHandle>,
+    now: Instant,
 ) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -27,7 +36,9 @@ pub fn draw(
         .split(frame.area());
 
     draw_placeholder(frame, columns[0], config);
-    draw_text(frame, columns[1], config, line, position, total, is_at_end);
+    draw_text(
+        frame, columns[1], config, line, position, total, is_at_end, reveal, now,
+    );
 }
 
 /// 左側: 画像プレースホルダ（罫線で囲った空き領域、または中央にラベル文字列）。
@@ -48,7 +59,10 @@ fn draw_placeholder(frame: &mut Frame, area: Rect, config: &Config) {
 }
 
 /// 右側: 話者名 + 本文。話者がプレイヤー側かどうかで文字色を出し分ける
-/// （`Config::color_name_for` に判定を委譲する）。
+/// （`Config::color_name_for` に判定を委譲する）。本文は `reveal`（`jiwa::RevealHandle`）が
+/// 与えられていればタイプライター表示のスナップショットから組み立てる。`reveal` が
+/// `None`（会話行そのものが無い等）の場合は従来どおりの静的表示にフォールバックする。
+#[allow(clippy::too_many_arguments)]
 fn draw_text(
     frame: &mut Frame,
     area: Rect,
@@ -57,6 +71,8 @@ fn draw_text(
     position: usize,
     total: usize,
     is_at_end: bool,
+    reveal: Option<&RevealHandle>,
+    now: Instant,
 ) {
     let title = if is_at_end {
         format!("{position}/{total} (END)")
@@ -79,8 +95,16 @@ fn draw_text(
                     style.add_modifier(Modifier::BOLD),
                 ));
             }
-            for text_line in &line.text {
-                rendered.push(Line::styled(text_line.clone(), style));
+            match reveal {
+                Some(handle) => {
+                    let snapshot = handle.snapshot(now);
+                    rendered.extend(reveal::snapshot_to_lines(&snapshot));
+                }
+                None => {
+                    for text_line in &line.text {
+                        rendered.push(Line::styled(text_line.clone(), style));
+                    }
+                }
             }
             Text::from(rendered)
         }
@@ -121,8 +145,9 @@ mod tests {
         config.placeholder.style = PlaceholderStyle::Label;
         config.placeholder.label = "[画像]".to_string();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
         terminal
-            .draw(|f| draw(f, &config, None, 0, 0, true))
+            .draw(|f| draw(f, &config, None, 0, 0, true, None, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("[画像]"), "buffer was: {text}");
@@ -134,8 +159,9 @@ mod tests {
         config.placeholder.style = PlaceholderStyle::Blank;
         config.placeholder.label = "[画像]".to_string();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
         terminal
-            .draw(|f| draw(f, &config, None, 0, 0, true))
+            .draw(|f| draw(f, &config, None, 0, 0, true, None, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(!text.contains("[画像]"), "buffer was: {text}");
@@ -145,8 +171,9 @@ mod tests {
     fn title_shows_end_marker_when_at_end() {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
         terminal
-            .draw(|f| draw(f, &config, None, 1, 1, true))
+            .draw(|f| draw(f, &config, None, 1, 1, true, None, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("(END)"), "buffer was: {text}");
@@ -156,8 +183,9 @@ mod tests {
     fn title_omits_end_marker_when_not_at_end() {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
         terminal
-            .draw(|f| draw(f, &config, None, 1, 2, false))
+            .draw(|f| draw(f, &config, None, 1, 2, false, None, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(!text.contains("(END)"), "buffer was: {text}");
@@ -167,8 +195,9 @@ mod tests {
     fn no_line_shows_placeholder_message() {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
         terminal
-            .draw(|f| draw(f, &config, None, 0, 0, true))
+            .draw(|f| draw(f, &config, None, 0, 0, true, None, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("会話行がありません"), "buffer was: {text}");
@@ -182,10 +211,33 @@ mod tests {
             speaker: Some("A".to_string()),
             text: vec!["hi".to_string()],
         };
+        let now = Instant::now();
+        let reveal = reveal::build_reveal(&config, &line, now);
         // The assertion here is simply that `draw` does not panic with
         // Layout::Percentage(40/60) at width=1 (40% of 1 rounds to 0).
         terminal
-            .draw(|f| draw(f, &config, Some(&line), 1, 1, true))
+            .draw(|f| draw(f, &config, Some(&line), 1, 1, true, Some(&reveal), now))
             .unwrap();
+    }
+
+    #[test]
+    fn typewriter_reveal_shows_only_visible_graphemes_before_done() {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000; // 十分長い間隔で確実に「一部だけ表示」を作る
+        config.typewriter.fade_duration_ms = 0;
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["hello".to_string()],
+        };
+        let now = Instant::now();
+        let reveal = reveal::build_reveal(&config, &line, now);
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| draw(f, &config, Some(&line), 1, 1, true, Some(&reveal), now))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        // t=0 では最初の1グラフェムしか見えない (jiwa::RevealHandle の仕様)。
+        assert!(text.contains('h'), "buffer was: {text}");
+        assert!(!text.contains("hello"), "buffer was: {text}");
     }
 }

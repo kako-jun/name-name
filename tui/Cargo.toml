@@ -10,3 +10,4 @@ ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 anyhow = "1"
+jiwa = "0.3"

@@ -2,11 +2,14 @@ mod cli;
 mod config;
 mod input;
 mod playback;
+mod reveal;
 mod ui;
 
 use std::io::Stdout;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use jiwa::RevealHandle;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
@@ -18,6 +21,11 @@ use cli::Cli;
 use config::Config;
 use input::Action;
 use playback::Playback;
+
+/// 描画の再チェック間隔。タイプライター演出（`jiwa::RevealHandle`）はフレームごとの
+/// `snapshot` で動くため、キー入力が無くてもこの間隔で再描画してアニメーションを進める
+/// （kako-jun/type-globe の `quiz.rs` の `REDRAW` と同じ値）。
+const REDRAW: Duration = Duration::from_millis(30);
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse(std::env::args());
@@ -77,13 +85,23 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     result
 }
 
-/// 描画 → キー入力待ち → 再生状態更新、を1件終了(`Action::Quit`)まで繰り返す。
+/// 描画 → 短いタイムアウト付きでキー入力を待つ → 再生状態更新、を1件終了
+/// (`Action::Quit`)まで繰り返す。
+///
+/// MVP（#471）はキー入力をブロッキングで待っていたが、タイプライター演出
+/// （`jiwa::RevealHandle`）は時間経過だけで見た目が変わるため、キー入力の有無に関わらず
+/// `REDRAW` 間隔で再描画するフレームベースのループに変更した（#472）。
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     config: &Config,
     playback: &mut Playback,
 ) -> anyhow::Result<()> {
+    let mut current_reveal: Option<RevealHandle> = playback
+        .current()
+        .map(|line| reveal::build_reveal(config, line, Instant::now()));
+
     loop {
+        let now = Instant::now();
         terminal.draw(|frame| {
             ui::draw(
                 frame,
@@ -92,12 +110,17 @@ fn event_loop(
                 playback.position(),
                 playback.total(),
                 playback.is_at_end(),
+                current_reveal.as_ref(),
+                now,
             )
         })?;
 
-        match input::next_action()? {
+        match input::poll_action(REDRAW)? {
             Action::Advance => {
                 playback.advance();
+                current_reveal = playback
+                    .current()
+                    .map(|line| reveal::build_reveal(config, line, Instant::now()));
             }
             Action::Quit => break,
             Action::None => {}
