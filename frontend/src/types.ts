@@ -556,6 +556,13 @@ export interface EventDocument {
    *  （adv/novel、テキスト送りの挙動）とは独立の軸で、両者は併用できる。
    *  null/undefined・false は従来どおり（後方互換）。frontmatter `sentence_per_page:` から流す。 */
   sentence_per_page?: boolean | null
+  /** テクスチャの拡大縮小フィルタを nearest-neighbor（ドット絵向け）にするか (#466)。
+   *  `true` = イベント絵・立ち絵（EventImageLayer / CharacterLayer が読み込む全テクスチャ）を
+   *  `texture.source.scaleMode = 'nearest'` で拡大表示し、ブロック状のドットを保つ
+   *  （Gymnasia の 128x128 ドット絵イベント絵向け）。
+   *  null/undefined・false は従来どおり `'linear'`（滑らか、theo-hayami 等の塗り絵向け・後方互換）。
+   *  frontmatter `pixel_art:` から流す。 */
+  pixel_art?: boolean | null
   chapters: EventChapter[]
 }
 

@@ -282,6 +282,10 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // ここを忘れると Rust 側は正しくパースされているのに wasm 経由で undefined になり、
     // テストは緑のまま本番だけ壊れる（#310/#378 と同じ事故パターン）。
     sentence_per_page: doc.sentence_per_page ?? null,
+    // テクスチャの拡大縮小フィルタを nearest-neighbor にするか (#466)。boolean なので ?? null
+    // （未指定は下流で既定 false ＝従来どおり linear）。ここを忘れると Rust 側は正しくパースされて
+    // いるのに wasm 経由で undefined になり、テストは緑のまま本番だけ壊れる（#310/#378 と同じ事故パターン）。
+    pixel_art: doc.pixel_art ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

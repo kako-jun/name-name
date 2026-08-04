@@ -768,6 +768,9 @@ function EditorScreen({
                 // 文単位の厳密改頁 (#448)。doc 由来・既定オフ。sentence_per_page: true の作品だけ
                 // 編集プレビューでも adv/novel 双方が 1 ページ=1 文で表示される。
                 sentencePerPage={doc?.sentence_per_page ?? null}
+                // テクスチャ拡大縮小フィルタ (#466)。doc 由来・既定オフ。pixel_art: true の作品だけ
+                // 編集プレビューでも立ち絵・イベント絵が nearest-neighbor（ドット絵）表示になる。
+                pixelArt={doc?.pixel_art ?? null}
                 // Worker proxy 経由で assets を取得（private repo でも動作する）。
                 // NOTE: EditorScreen は develop ブランチでスクリプトを編集するが、
                 // assetBaseUrl はクエリパラメータを持てない設計のため ref=main 固定になる。

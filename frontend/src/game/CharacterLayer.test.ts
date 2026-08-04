@@ -52,7 +52,11 @@ describe('CharacterLayer fade (Issue #177)', () => {
     // 退場衝突が無い（colliderCount===0）新規立ち絵でも、フェードは texture 読込後に始める。
     // 読込前にフェードを走らせると、初回コールドキャッシュで texture が fade より遅いとき
     // alpha が 1 に達し切ってから絵が現れ、フェードが見えず突然出る（本編入口の司会など・#17）。
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 200, height: 400 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
     const layer = new CharacterLayer(800, 450)
     layer.show('hero', 'normal', '中央', '/assets')
     const state = asInternals(layer).characters.get('hero')
@@ -112,7 +116,11 @@ describe('CharacterLayer fade (Issue #177)', () => {
   //   DEFAULT_FADE_MS は export されていないので、挙動（fadeAnimation.durationMs）で観測する。
   //   併せて背景フェード既定 BACKGROUND_CROSSFADE_MS と揃っている（#407 の意図）ことも縛る。
   it('character_fade_ms 未指定の show() フェードインは既定 700ms(#407) で走る', async () => {
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 200, height: 400 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
     const layer = new CharacterLayer(800, 450)
     // setCharacterFadeMs を呼ばない ＝ frontmatter 未指定 ＝ 既定 characterFadeMs(DEFAULT_FADE_MS)。
     layer.show('hero', 'normal', '中央', '/assets')
@@ -1051,7 +1059,11 @@ describe('CharacterLayer showLabel / showImage (#274)', () => {
 
   it('showImage は id で登録し 2D 位置を反映、フェードインする', async () => {
     // Assets.load 完了後にフェードが始まる (#427) ため、実 load（jsdom で解決しない）ではなく成功をモックする。
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
     const layer = new CharacterLayer(800, 450)
     layer.showImage({ id: 'avatar', path: 'a.png', position: '上', assetBaseUrl: '/assets' })
     const st = chars(layer).characters.get('avatar')
@@ -1660,7 +1672,12 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
   })
 
   // 偽 texture（{width,height} だけ持てば showImage のアスペクト計算には十分）。
-  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    // scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+    source: { scaleMode: 'linear' },
+  })
 
   // 12: url 解決。Assets.load が resolveAssetUrl(base,'images',path) の実値で呼ばれる。
   it('Assets.load は resolveAssetUrl(base, "images", path) の実 URL で呼ばれる', async () => {
@@ -1698,7 +1715,7 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     expect(st.maskGraphics).toBeDefined()
     expect(st.sprite.mask).toBe(st.maskGraphics)
     // texture も解決後に張られる。
-    expect(st.sprite.texture).toEqual({ width: 200, height: 100 })
+    expect(st.sprite.texture).toEqual({ width: 200, height: 100, source: { scaleMode: 'linear' } })
   })
 
   it('円形マスクの半径は表示幅/2（size=160 → Graphics.circle 半径 80）', async () => {
@@ -1952,11 +1969,11 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     await flushPromises()
     const st = imageChars(layer).characters.get('avatar')!
     expect(st.fadeAnimation).not.toBeNull()
-    expect(st.sprite.texture).toEqual({ width: 20, height: 20 })
+    expect(st.sprite.texture).toEqual({ width: 20, height: 20, source: { scaleMode: 'linear' } })
     // 旧 load（1 回目呼び出し分）を今ごろ解決させても、新 state には一切影響しない。
     resolveOld(fakeTexture(999, 999))
     await flushPromises()
-    expect(st.sprite.texture).toEqual({ width: 20, height: 20 })
+    expect(st.sprite.texture).toEqual({ width: 20, height: 20, source: { scaleMode: 'linear' } })
     expect(loadSpy).toHaveBeenCalledTimes(2)
   })
 
@@ -2021,7 +2038,12 @@ describe('CharacterLayer 立ち絵は原寸表示（fit-down 廃止 #294）', ()
     resetFontLoaderCache()
   })
 
-  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    // scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+    source: { scaleMode: 'linear' },
+  })
   const { width: SW, height: SH } = ASPECT_RATIOS['16:9']
 
   it('論理画面より大きい立ち絵（車のような横長）でも scale=1 のまま（個別縮小しない）', async () => {
@@ -2111,7 +2133,12 @@ describe('CharacterLayer 明示フィット show({ fit }) （#294）', () => {
     resetFontLoaderCache()
   })
 
-  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    // scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+    source: { scaleMode: 'linear' },
+  })
   const { width: SW, height: SH } = ASPECT_RATIOS['16:9']
 
   it('fit=true・論理画面より大きい立ち絵は computeFitScale で収める', async () => {
@@ -2168,7 +2195,11 @@ describe('CharacterLayer render-only 除外と save→load 往復 (#274)', () =>
   //     復元し、立ち絵だけ show され Label/Image が復元されないことを縛る（結合）。
   //     applyState の立ち絵復元ロジック（clear → state.characters を instant show）を直に再現する。
   it('save→load 往復: Label/Image を出した局面を保存・復元すると立ち絵だけ残り Label/Image は復元されない', async () => {
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
     // ---- セーブ前の局面: 立ち絵 + Label + Image + Title を出す ----
     const layer = new CharacterLayer(800, 450)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true })
@@ -3127,7 +3158,12 @@ describe('CharacterLayer character_height_ratio loadTexture 優先順位・後�
     resetFontLoaderCache()
   })
 
-  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    // scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+    source: { scaleMode: 'linear' },
+  })
   // 縦長 9:16（この機能の主戦場は縦長の高解像度立ち絵）。
   const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
 
@@ -3570,7 +3606,12 @@ describe('CharacterLayer character_height_ratios ライブ再適用（#364）', 
     resetFontLoaderCache()
   })
 
-  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    // scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+    source: { scaleMode: 'linear' },
+  })
   const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
 
   it('T-REAPPLY-01: 表示済みキャラに setCharacterHeightRatios を呼ぶと即座に再スケールされる', async () => {
@@ -3749,7 +3790,12 @@ describe('CharacterLayer クロスフェード中の character_height_ratios 再
     resetFontLoaderCache()
   })
 
-  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    // scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+    source: { scaleMode: 'linear' },
+  })
   const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
 
   it('T-RACE-01: クロスフェード中に override を変更しても、旧 sprite（transition key・snapshotHidden）は再スケール対象から除外され元のスケールのまま変化せず、新 sprite は texture ロード完了後に新 override が正しく効く', async () => {
@@ -3836,7 +3882,13 @@ describe('CharacterLayer loadTexture webp→png フォールバック (#376)', (
   const [WEBP_URL, PNG_URL] = resolveCharacterImageUrls(BASE, EXPR)
 
   // 偽 texture（{width,height} で sprite.texture 代入・scale 計算に足りる。__tag で webp/png を弁別する）。
-  const fakeTexture = (tag: 'webp' | 'png'): unknown => ({ width: 100, height: 200, __tag: tag })
+  // source.scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+  const fakeTexture = (tag: 'webp' | 'png'): unknown => ({
+    width: 100,
+    height: 200,
+    __tag: tag,
+    source: { scaleMode: 'linear' },
+  })
   const textureTag = (sprite: Sprite): string | undefined =>
     (sprite.texture as unknown as { __tag?: string }).__tag
 
@@ -4066,7 +4118,13 @@ describe('CharacterLayer loadFirstAvailableTexture 瞬断リトライ (#389)', (
   const EXPR_PNG = 'spino/soften.png'
   const [PNG_ONLY] = resolveCharacterImageUrls(BASE, EXPR_PNG)
 
-  const fakeTexture = (tag: 'webp' | 'png'): unknown => ({ width: 100, height: 200, __tag: tag })
+  const fakeTexture = (tag: 'webp' | 'png'): unknown => ({
+    width: 100,
+    height: 200,
+    __tag: tag,
+    // source.scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+    source: { scaleMode: 'linear' },
+  })
   const textureTag = (sprite: Sprite): string | undefined =>
     (sprite.texture as unknown as { __tag?: string }).__tag
 
@@ -4361,7 +4419,12 @@ describe('CharacterLayer character_scale loadTexture 優先順位・元絵基準
     resetFontLoaderCache()
   })
 
-  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    // scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+    source: { scaleMode: 'linear' },
+  })
   const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
 
   // ---- character_scale は元絵基準: sprite.scale = 値（texture.height に依らず一定）----
@@ -4529,7 +4592,12 @@ describe('CharacterLayer character_scale ライブ再適用（#378）', () => {
     resetFontLoaderCache()
   })
 
-  const fakeTexture = (width: number, height: number): unknown => ({ width, height })
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    // scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+    source: { scaleMode: 'linear' },
+  })
   const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
 
   it('表示中の静的立ち絵に setCharacterScale を呼ぶと sprite.scale が即再適用される', async () => {
@@ -4786,7 +4854,11 @@ describe('CharacterLayer showLabel/showImage 退場フェード予約中の再�
 
   // 2: showImage 版の同再現。sprite.alpha 基準で同じ切り替えを確認し、label が無いことも確認する。
   it('showImage: 退場フェード予約中の再showは fadeAnimation を再フェードインに切り替え、要素を消さない（label 無し, Issue 再現）', async () => {
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
     const layer = new CharacterLayer(800, 450)
     layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true })
     await flushPromises()
@@ -4839,7 +4911,11 @@ describe('CharacterLayer showLabel/showImage 退場フェード予約中の再�
   // 5: 同値分割/instant優先。characterFadeMs>0（既定700）でも instant:true を渡した再show は
   //    常に instant-path を通る。
   it('同値分割: characterFadeMs>0(既定700)でも instant:true を渡した再showImageは常にinstant-pathを通る', async () => {
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
     const layer = new CharacterLayer(800, 450)
     layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true })
     await flushPromises()
@@ -4875,7 +4951,11 @@ describe('CharacterLayer showLabel/showImage 退場フェード予約中の再�
 
   // 6b: 同値分割/非発火1(showImage)。
   it('showImage: 予約なし(fadeAnimation===null)の通常再showは新分岐が発火せず、位置が従来どおり更新されるだけ', async () => {
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
     const layer = new CharacterLayer(800, 450)
     layer.showImage({
       id: 'avatar',
@@ -4916,7 +4996,11 @@ describe('CharacterLayer showLabel/showImage 退場フェード予約中の再�
 
   // 7b: 同値分割/非発火2(showImage)。
   it('showImage: 入場フェード進行中(destroyOnComplete:false)への再showは新分岐が発火しない（オプショナルチェイン誤爆なし）', async () => {
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
     const layer = new CharacterLayer(800, 450)
     layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' }) // 非 instant 新規表示
     await flushPromises() // Assets.load 完了 → 入場フェード開始
@@ -4978,7 +5062,11 @@ describe('CharacterLayer showLabel/showImage 退場フェード予約中の再�
 
   // 9b: fromAlpha の正確性(showImage)。
   it('showImage: 退場フェード進行中(sprite.alphaが中間値)の再showは、新fadeAnimation.fromAlphaが1固定でなく現在のsprite.alphaになる', async () => {
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
     const layer = new CharacterLayer(800, 450)
     layer.setCharacterFadeMs(1000)
     layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true })
@@ -5042,7 +5130,11 @@ describe('CharacterLayer showLabel/showImage 退場フェード予約中の再�
   // 11: 機能合成/showImage。予約中要素への再showImageで、フェード切替と同じ呼び出し内で
   //    x/y 位置が新値に更新される。
   it('機能合成/showImage: 予約中要素への再showImageは、フェード切替と同じ呼び出し内でx/y位置が新値に更新される', async () => {
-    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 10, height: 10 } as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
     const layer = new CharacterLayer(800, 450)
     layer.showImage({
       id: 'avatar',
@@ -5246,7 +5338,7 @@ describe('CharacterLayer showLabel/showImage 退場フェード予約中の再�
     expect(st.fadeAnimation).toBeNull()
 
     // 4: ようやく 1 の Assets.load が解決する。修正前はここで新規入場フェードが張られていた。
-    resolveLoad({ width: 10, height: 10 })
+    resolveLoad({ width: 10, height: 10, source: { scaleMode: 'linear' } })
     await flushPromises()
 
     // 修正後: 世代不一致を検知して新規入場フェードは張られない。alpha は 1 のまま。

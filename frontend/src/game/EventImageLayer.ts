@@ -93,6 +93,10 @@ export class EventImageLayer extends Container {
    *  画像側領域（`regions.character`）を渡す想定（`setSplitLayoutRegion` 参照）。 */
   private splitLayoutRegion: LayoutRect | null = null
 
+  /** テクスチャ拡大縮小フィルタを nearest-neighbor にするか (#466)。既定 false ＝従来どおり linear。
+   *  frontmatter `pixel_art:` から `setPixelArt` 経由で反映される（Gymnasia の 128x128 ドット絵向け）。 */
+  private pixelArt = false
+
   constructor(
     screenWidth: number,
     screenHeight: number,
@@ -133,6 +137,16 @@ export class EventImageLayer extends Container {
     return this.splitLayoutRegion
   }
 
+  /**
+   * テクスチャ拡大縮小フィルタを nearest-neighbor にするか設定する (#466)。
+   * frontmatter `pixel_art:` の値を渡す。以後 `show()` でロードするテクスチャに適用される
+   * （`show()` の同期呼び出し時点ではなく、ロード完了 `Assets.load().then()` 内で最新値を参照する。
+   * `setSplitLayoutRegion` と同じ「解決時点の最新値を使う」流儀）。
+   */
+  setPixelArt(enabled: boolean): void {
+    this.pixelArt = enabled
+  }
+
   private buildImageUrl(path: string): string {
     const cleanPath = path.replace(/^\//, '')
     return `${this.assetBaseUrl}/images/${cleanPath}`
@@ -169,6 +183,9 @@ export class EventImageLayer extends Container {
         if (token !== this.loadToken) return
         this.pendingLoadToken = null
         this.loadedUrls.add(url)
+        // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
+        // nearest-neighbor に切り替え、cover-fit で拡大表示してもブロック状のドットを保つ。
+        texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
 
         const sprite = new Sprite(texture)
         // region 未設定（従来どおり全画面）の場合は原点起点・画面サイズの矩形で代用する

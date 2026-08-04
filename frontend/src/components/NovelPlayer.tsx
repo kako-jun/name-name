@@ -177,6 +177,11 @@ interface NovelPlayerProps {
    *  （novel は行数キャップで複数文が1ページに同居しうる／adv は markdown 行単位でページが決まる）。
    *  dialog_style（adv/novel）とは独立の軸で、true のときどちらのスタイルでも 1 ページ＝厳密に 1 文になる。 */
   sentencePerPage?: boolean | null
+  /** テクスチャ拡大縮小フィルタを nearest-neighbor（ドット絵向け）にするか (#466)。
+   *  frontmatter `pixel_art:` から流す。既定 false＝従来どおり linear（滑らか、theo-hayami 等の
+   *  塗り絵向け）。true で立ち絵・イベント絵の拡大表示がブロック状のドットを保つ
+   *  （Gymnasia の 128x128 ドット絵イベント絵向け）。 */
+  pixelArt?: boolean | null
   /** DebugOverlay に出す renderer 外の読み込み診断 (#321)。 */
   debugInfo?: string[]
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
@@ -225,6 +230,7 @@ function NovelPlayer({
   autoPlay,
   splitLayout,
   sentencePerPage,
+  pixelArt,
   debugInfo,
   docKey,
   initialSkipMode = false,
@@ -541,6 +547,10 @@ function NovelPlayer({
       // 文単位の厳密改頁 (#448)。dialog_style とは独立の軸。setEvents/setScenes（＝初回改頁計算）
       // より前に設定し、初回描画から「1 ページ=1 文」が反映済みになるようにする。
       renderer.setSentencePerPage(sentencePerPage ?? null)
+      // テクスチャ拡大縮小フィルタ (#466)。dialog_style/splitLayout とは独立の軸。
+      // setEvents/setScenes（＝最初のテクスチャロード）より前に設定し、初回表示から
+      // 立ち絵・イベント絵ともに nearest/linear が確定済みになるようにする。
+      renderer.setPixelArt(pixelArt ?? null)
       // 立ち絵の足元 Y 比率 (#308)。setEvents/setScenes（＝最初の立ち絵 show）より前に設定し、
       // 初回描画から per-game の足元位置（全身 / 靴を切る）で立つようにする。
       renderer.setCharacterYRatio(characterYRatio ?? null)
@@ -715,6 +725,11 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setSentencePerPage(sentencePerPage ?? null)
   }, [sentencePerPage])
+
+  // pixelArt が変化したときに renderer に反映 (#466)
+  useEffect(() => {
+    rendererRef.current?.setPixelArt(pixelArt ?? null)
+  }, [pixelArt])
 
   // characterYRatio が変化したときに renderer に反映 (#308)
   useEffect(() => {

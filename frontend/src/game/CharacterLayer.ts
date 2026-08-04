@@ -653,6 +653,9 @@ export class CharacterLayer extends Container {
    *  （positionX 等）は screenWidth/screenHeight 基準のまま変えず、Container 全体の
    *  scale/position で領域内へ射影する（`setSplitLayoutRegion` 参照）。 */
   private splitLayoutRegion: LayoutRect | null = null
+  /** テクスチャ拡大縮小フィルタを nearest-neighbor にするか (#466)。既定 false ＝従来どおり linear。
+   *  frontmatter `pixel_art:` から `setPixelArt` 経由で反映される（Gymnasia の 128x128 ドット絵向け）。 */
+  private pixelArt = false
   /** X 座標テーブル（screenWidth * CHARACTER_X_RATIO[pos]） */
   private readonly positionX: Record<string, number>
   /** タイマーの抽象化 (動画エクスポート用 virtual モード対応) */
@@ -734,6 +737,15 @@ export class CharacterLayer extends Container {
   /** 現在の split_layout キャラ画像領域 (#442)。null = 従来どおり全画面。テスト・配線検証用。 */
   getSplitLayoutRegion(): LayoutRect | null {
     return this.splitLayoutRegion
+  }
+
+  /**
+   * テクスチャ拡大縮小フィルタを nearest-neighbor にするか設定する (#466)。
+   * frontmatter `pixel_art:` の値を渡す。以後 `loadTexture`/`showImage` でロードするテクスチャに
+   * 適用される（ロード完了 `Assets.load().then()` 内で最新値を参照する）。
+   */
+  setPixelArt(enabled: boolean): void {
+    this.pixelArt = enabled
   }
 
   /**
@@ -1714,6 +1726,9 @@ export class CharacterLayer extends Container {
     Assets.load(url)
       .then((texture) => {
         if (sprite.destroyed) return
+        // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
+        // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
+        texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
         sprite.texture = texture
         // 表示サイズ: size 指定時はその幅にアスペクト維持でスケール。未指定は自然サイズ。
         let displayWidth = texture.width
@@ -2786,6 +2801,9 @@ export class CharacterLayer extends Container {
           // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
           // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。
           if (sprite.destroyed) return false
+          // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
+          // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
+          texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
           // 立ち絵は既定で原寸（scale=1）。画面全体をブラウザ枠に合わせて縮める系統
           // （PixiJS canvas の wrapper スケール）が唯一の常時縮小であり、立ち絵を個別に
           // 自動 fit-down してはいけない。論理画面の上端・左右をはみ出してもよい。

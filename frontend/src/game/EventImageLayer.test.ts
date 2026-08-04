@@ -58,12 +58,13 @@ function internals(layer: EventImageLayer): EventImageLayerInternals {
 const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 function mockTexture(): Texture {
-  return { width: 100, height: 50 } as unknown as Texture
+  // source.scaleMode 代入先（#466 pixel_art）。実 PixiJS Texture の `.source.scaleMode` 形状を模す。
+  return { width: 100, height: 50, source: { scaleMode: 'linear' } } as unknown as Texture
 }
 
 /** 任意の幅・高さを持つテクスチャのモック（split_layout region の cover-fit 検証用）。 */
 function mockTextureSized(width: number, height: number): Texture {
-  return { width, height } as unknown as Texture
+  return { width, height, source: { scaleMode: 'linear' } } as unknown as Texture
 }
 
 /**
