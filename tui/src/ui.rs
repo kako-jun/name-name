@@ -47,6 +47,47 @@ fn draw_placeholder(frame: &mut Frame, area: Rect, config: &Config) {
     frame.render_widget(paragraph, area);
 }
 
+/// スプラッシュ画面: `config.splash.lines` に設定されたロゴ行を画面中央に表示する。
+/// ロゴの内容はゲームごとに異なるため、このエンジン側は「中央寄せして表示する」
+/// という汎用的な描画だけを担い、内容そのものは持たない（`Config::splash` 参照）。
+pub fn draw_splash(frame: &mut Frame, config: &Config) {
+    let area = frame.area();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(config.game_name.as_str());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let color = Color::from_str(&config.splash.color).unwrap_or(Color::White);
+    let style = Style::default().fg(color);
+
+    let mut lines: Vec<Line> = config
+        .splash
+        .lines
+        .iter()
+        .map(|text_line| Line::styled(text_line.clone(), style))
+        .collect();
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Enter / Space で開始",
+        Style::default().add_modifier(Modifier::DIM),
+    ));
+
+    // 縦方向中央寄せ: ratatui の Paragraph は縦方向の中央寄せを持たないため、
+    // ロゴ全体の高さから上マージンを計算して描画領域をずらす。
+    let content_height = lines.len() as u16;
+    let top_margin = inner.height.saturating_sub(content_height) / 2;
+    let centered = Rect {
+        x: inner.x,
+        y: inner.y.saturating_add(top_margin),
+        width: inner.width,
+        height: inner.height.saturating_sub(top_margin),
+    };
+
+    let paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
+    frame.render_widget(paragraph, centered);
+}
+
 /// 右側: 話者名 + 本文。話者がプレイヤー側かどうかで文字色を出し分ける
 /// （`Config::color_name_for` に判定を委譲する）。
 fn draw_text(
@@ -187,5 +228,61 @@ mod tests {
         terminal
             .draw(|f| draw(f, &config, Some(&line), 1, 1, true))
             .unwrap();
+    }
+
+    #[test]
+    fn draw_splash_renders_configured_logo_lines() {
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["田田田".to_string(), "回回回".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("田田田"), "buffer was: {text}");
+        assert!(text.contains("回回回"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_splash_renders_continue_hint() {
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["田".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Enter"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_splash_shows_game_name_as_title() {
+        let mut config = Config::default();
+        config.game_name = "テストゲーム".to_string();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["田".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("テストゲーム"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_splash_extremely_small_terminal_does_not_panic() {
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["田田田田田田田田田田".to_string(); 20];
+        let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
+        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+    }
+
+    #[test]
+    fn draw_splash_invalid_color_name_falls_back_to_white_without_panic() {
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["田".to_string()];
+        config.splash.color = "not-a-real-color".to_string();
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("田"), "buffer was: {text}");
     }
 }

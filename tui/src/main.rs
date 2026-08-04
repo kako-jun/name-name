@@ -68,13 +68,47 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = event_loop(&mut terminal, config, playback);
+    let result = run_screens(&mut terminal, config, playback);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     result
+}
+
+/// スプラッシュ（`config.splash` が設定されていれば）→ 本編ループ、の順に画面を進める。
+/// スプラッシュ未設定（デフォルト）ならいきなり本編から始まる（後方互換）。
+fn run_screens(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    config: &Config,
+    playback: &mut Playback,
+) -> anyhow::Result<()> {
+    if config.should_show_splash() {
+        let advanced = show_splash(terminal, config)?;
+        if !advanced {
+            // スプラッシュ画面で終了操作（q/Esc）された場合は本編に進まず終える。
+            return Ok(());
+        }
+    }
+    event_loop(terminal, config, playback)
+}
+
+/// スプラッシュ画面を描画し、キー入力を1件待つ。`Action::Advance` で `Ok(true)`
+/// （本編へ進む）、`Action::Quit` で `Ok(false)`（そのまま終了）を返す。
+fn show_splash(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    config: &Config,
+) -> anyhow::Result<bool> {
+    loop {
+        terminal.draw(|frame| ui::draw_splash(frame, config))?;
+
+        match input::next_action()? {
+            Action::Advance => return Ok(true),
+            Action::Quit => return Ok(false),
+            Action::None => {}
+        }
+    }
 }
 
 /// 描画 → キー入力待ち → 再生状態更新、を1件終了(`Action::Quit`)まで繰り返す。
