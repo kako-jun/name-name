@@ -121,6 +121,14 @@ impl Playback {
     pub fn is_at_end(&self) -> bool {
         self.lines.is_empty() || self.index + 1 >= self.lines.len()
     }
+
+    /// テスト専用: 会話行リストから直接 `Playback` を組み立てる。`main.rs` の
+    /// `on_advance` テストなどで、`Document`（20個のフィールドを埋める必要がある）経由の
+    /// 冗長なフィクスチャ構築を避けるために使う（#472）。
+    #[cfg(test)]
+    pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
+        Self { lines, index: 0 }
+    }
 }
 
 #[cfg(test)]

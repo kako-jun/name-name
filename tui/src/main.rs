@@ -2,7 +2,10 @@ mod cli;
 mod config;
 mod input;
 mod playback;
+mod reveal;
 mod ui;
+
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -16,6 +19,11 @@ use cli::Cli;
 use config::Config;
 use input::Action;
 use playback::Playback;
+
+/// 描画の再チェック間隔。タイプライター演出（`jiwa::RevealHandle`）はフレームごとの
+/// `snapshot` で動くため、キー入力が無くてもこの間隔で再描画してアニメーションを進める
+/// （kako-jun/type-globe の `quiz.rs` の `REDRAW` と同じ値）。
+const REDRAW: Duration = Duration::from_millis(30);
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse(std::env::args());
@@ -66,8 +74,13 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ（`jiwa::PulseHandle`）は
+    // どちらも時間経過だけで見た目が変わるため、キー入力の有無に関わらず `REDRAW` 間隔で
+    // 再描画するポーリング方式にする（#472）。この `next_action` は `run_screens` を通じて
+    // `show_splash`/`event_loop` の両方へ渡り、スプラッシュ画面もこの間隔で再描画されるが、
+    // 静的な画面なので実害はない。
     let result = run_screens(&mut terminal, config, playback, &mut || {
-        input::next_action()
+        input::poll_action(REDRAW)
     });
 
     disable_raw_mode()?;
@@ -81,8 +94,8 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
 /// スプラッシュ未設定（デフォルト）ならいきなり本編から始まる（後方互換）。
 ///
 /// `next_action` はキー入力の取得元を差し替え可能にするための注入点。本番の `run` からは
-/// `input::next_action`（実端末をブロッキングで読む）をそのまま渡すだけで従来通り動くが、
-/// テストからは固定の `Action` 列を返すクロージャを渡すことで、`TestBackend` +
+/// `input::poll_action`（実端末を短いタイムアウト付きで読む）をそのまま渡すだけで従来通り
+/// 動くが、テストからは固定の `Action` 列を返すクロージャを渡すことで、`TestBackend` +
 /// 合成キー入力で状態遷移をユニットテストできる。
 fn run_screens<B>(
     terminal: &mut Terminal<B>,
@@ -126,7 +139,15 @@ where
     }
 }
 
-/// 描画 → キー入力待ち → 再生状態更新、を1件終了(`Action::Quit`)まで繰り返す。
+/// 描画 → 短いタイムアウト付きでキー入力を待つ → 再生状態更新、を1件終了
+/// (`Action::Quit`)まで繰り返す。
+///
+/// MVP（#471）はキー入力をブロッキングで待っていたが、タイプライター演出
+/// （`jiwa::RevealHandle`）とページ送りインジケータ（`jiwa::PulseHandle`）はどちらも
+/// 時間経過だけで見た目が変わるため、キー入力の有無に関わらず一定間隔で再描画する
+/// フレームベースのループに変更した（#472）。`Terminal<CrosstermBackend<Stdout>>` という
+/// 具体型への結合は、`show_splash`/`run_screens` と同じ `Backend` ジェネリック化・
+/// `next_action` 注入パターンで解消済み（#478 のリファクタをそのまま踏襲）。
 fn event_loop<B>(
     terminal: &mut Terminal<B>,
     config: &Config,
@@ -137,7 +158,15 @@ where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    let mut current_reveal: Option<reveal::RevealState> = playback.current().map(|line| {
+        reveal::RevealState::Animating(reveal::build_reveal(config, line, Instant::now()))
+    });
+    // ページ送りインジケータは話者・テキストに依存しないグローバルな明滅なので、
+    // 会話行が変わっても作り直さない（一度だけ開始する）。
+    let pulse = reveal::build_pulse(Instant::now());
+
     loop {
+        let now = Instant::now();
         terminal.draw(|frame| {
             ui::draw(
                 frame,
@@ -146,13 +175,14 @@ where
                 playback.position(),
                 playback.total(),
                 playback.is_at_end(),
+                current_reveal.as_ref(),
+                &pulse,
+                now,
             )
         })?;
 
         match next_action()? {
-            Action::Advance => {
-                playback.advance();
-            }
+            Action::Advance => on_advance(playback, &mut current_reveal, config, Instant::now()),
             Action::Quit => break,
             Action::None => {}
         }
@@ -160,11 +190,234 @@ where
     Ok(())
 }
 
+/// `Action::Advance` 受信時の意思決定（デシジョンテーブル、#472）。
+/// `Terminal<CrosstermBackend<Stdout>>` という具体型に結合していた `event_loop` から、
+/// `playback` / `current_reveal` / `config` / `now` だけを引数に取る純粋関数として切り出し、
+/// `TestBackend` 無しでもユニットテストできるようにした。挙動は元の `event_loop` 内の分岐と
+/// 同じ（切り出しに伴う `Instant::now()` の呼び出し回数の違いを除く）。
+///
+/// | # | 現在行 | reveal状態 | 次の行 | 動作 |
+/// |---|---|---|---|---|
+/// | 1 | 無し | ― | ― | 何もしない |
+/// | 2 | 有り | 未完了 | 存在する/最終行 | `skip_lines` で即全文表示、`advance()` は呼ばない |
+/// | 3 | 有り | 完了 | 存在する | `advance()` → 次行の `build_reveal` |
+/// | 4 | 有り | 完了 | 最終行 | `advance()` → `current_reveal` は不変（no-op） |
+fn on_advance(
+    playback: &mut Playback,
+    current_reveal: &mut Option<reveal::RevealState>,
+    config: &Config,
+    now: Instant,
+) {
+    if let Some(line) = playback.current() {
+        let reveal_done = current_reveal
+            .as_ref()
+            .map(|r| r.is_done(now))
+            .unwrap_or(true);
+        if !reveal_done {
+            // ブラウザ版 NovelRenderer の advanceOrSkipTypewriter と同じ
+            // 「表示中の1手目は全文表示へのスキップに専念し、次の行へは
+            // 進めない」挙動（カノソ方式）。`skip_lines` は `RevealHandle` の時間計算を
+            // 経由しない（#472 セルフレビュー対応）。
+            *current_reveal = Some(reveal::RevealState::Done(reveal::skip_lines(config, line)));
+        } else if playback.advance() {
+            if let Some(next_line) = playback.current() {
+                *current_reveal = Some(reveal::RevealState::Animating(reveal::build_reveal(
+                    config, next_line, now,
+                )));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::playback::DisplayLine;
     use ratatui::backend::TestBackend;
     use std::cell::RefCell;
+
+    fn dline(speaker: Option<&str>, text: &str) -> DisplayLine {
+        DisplayLine {
+            speaker: speaker.map(|s| s.to_string()),
+            text: vec![text.to_string()],
+        }
+    }
+
+    /// reveal が即座には完了しない速度設定（境界確認に使う）。
+    fn slow_config() -> Config {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000;
+        config.typewriter.fade_duration_ms = 0;
+        config
+    }
+
+    /// reveal が構築と同時に完了する速度設定（「完了済み」の分岐確認に使う）。
+    fn instant_config() -> Config {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 0;
+        config.typewriter.fade_duration_ms = 0;
+        config
+    }
+
+    fn animating(
+        config: &Config,
+        dline: &crate::playback::DisplayLine,
+        now: Instant,
+    ) -> reveal::RevealState {
+        reveal::RevealState::Animating(reveal::build_reveal(config, dline, now))
+    }
+
+    #[test]
+    fn on_advance_incomplete_reveal_skips_without_advancing_position() {
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "hello there"),
+            dline(Some("B"), "next line"),
+        ]);
+        let now = Instant::now();
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
+        assert!(!current_reveal.as_ref().unwrap().is_done(now));
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert_eq!(playback.position(), 1, "スキップでは位置が進んではいけない");
+        assert!(current_reveal.as_ref().unwrap().is_done(now));
+    }
+
+    #[test]
+    fn on_advance_incomplete_reveal_at_last_line_skips_without_advancing_position() {
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "only line here")]);
+        let now = Instant::now();
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
+        assert!(!current_reveal.as_ref().unwrap().is_done(now));
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert_eq!(playback.position(), 1);
+        assert!(playback.is_at_end());
+        assert!(current_reveal.as_ref().unwrap().is_done(now));
+    }
+
+    #[test]
+    fn on_advance_complete_reveal_with_next_line_advances_and_starts_new_reveal() {
+        let config = instant_config();
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "first"), dline(Some("B"), "second")]);
+        let now = Instant::now();
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
+        assert!(current_reveal.as_ref().unwrap().is_done(now));
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert_eq!(playback.position(), 2);
+        assert_eq!(
+            playback.current().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(current_reveal.is_some());
+    }
+
+    #[test]
+    fn on_advance_complete_reveal_at_last_line_is_noop() {
+        let config = slow_config();
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "first"), dline(Some("B"), "second")]);
+        playback.advance(); // 最終行へ
+        let t0 = Instant::now();
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), t0));
+        // "second" は6グラフェム、char_interval=1000ms・fade=0ms なので
+        // t0 + 5000ms で完了する。
+        let t_call = t0 + Duration::from_millis(5000);
+        assert!(current_reveal.as_ref().unwrap().is_done(t_call));
+
+        on_advance(&mut playback, &mut current_reveal, &config, t_call);
+
+        assert_eq!(playback.position(), 2);
+        assert!(playback.is_at_end());
+        // no-op であれば current_reveal は t0 起点のまま = t_call 時点で全文表示済み。
+        // もし（バグで）t_call を起点に作り直されていたら、最初の1グラフェムしか
+        // 見えないはず（char_interval=1000msなので）。
+        let lines = current_reveal.as_ref().unwrap().body_lines(t_call);
+        assert_eq!(lines[0].spans.len(), "second".chars().count());
+    }
+
+    #[test]
+    fn on_advance_no_current_line_is_noop() {
+        let config = Config::default();
+        let mut playback = Playback::from_lines(vec![]);
+        let mut current_reveal: Option<reveal::RevealState> = None;
+        let now = Instant::now();
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert_eq!(playback.position(), 0);
+        assert!(current_reveal.is_none());
+    }
+
+    #[test]
+    fn on_advance_full_lifecycle_across_two_lines() {
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "hello there"),
+            dline(Some("B"), "second line"),
+        ]);
+        let t0 = Instant::now();
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), t0));
+
+        // 1行目: reveal中
+        assert!(!current_reveal.as_ref().unwrap().is_done(t0));
+
+        // Advance(skip): 全文表示、位置は変わらない
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert_eq!(playback.position(), 1);
+        assert!(current_reveal.as_ref().unwrap().is_done(t0));
+
+        // Advance(進行): 完了済みなので2行目へ進む
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert_eq!(playback.position(), 2);
+        assert_eq!(
+            playback.current().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(!current_reveal.as_ref().unwrap().is_done(t0)); // 2行目 reveal中
+
+        // Advance(skip): 2行目を全文表示
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert!(current_reveal.as_ref().unwrap().is_done(t0));
+
+        // Advance(最終行no-op): 位置は変わらない
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert_eq!(playback.position(), 2);
+        assert!(playback.is_at_end());
+    }
+
+    #[test]
+    fn on_advance_single_call_never_advances_more_than_one_state() {
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "one"),
+            dline(Some("B"), "two"),
+            dline(Some("C"), "three"),
+        ]);
+        let now = Instant::now();
+        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
+        assert_eq!(playback.position(), 1);
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+        assert_eq!(
+            playback.position(),
+            2,
+            "1回のAdvanceで2行以上進んではいけない"
+        );
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+        assert_eq!(
+            playback.position(),
+            3,
+            "1回のAdvanceで2行以上進んではいけない"
+        );
+    }
 
     /// レンダリング済みバッファを1本の文字列に変換する（`ui.rs` のテストヘルパーと
     /// 同じ目的だが、全角文字の cell_width までは main.rs のテストでは問わないため

@@ -2,17 +2,26 @@
 //! 左右セパレートレイアウト。
 
 use std::str::FromStr;
+use std::time::Instant;
 
+use jiwa::{PulseHandle, Rgb};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Text};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::config::{Config, PlaceholderStyle};
 use crate::playback::DisplayLine;
+use crate::reveal;
 
 /// 画面全体を左（画像プレースホルダ）40% / 右（テキスト）60% に分割して描画する。
+///
+/// `reveal` は現在の会話行のタイプライター表示状態（[`reveal::RevealState`]、`None` は行
+/// そのものが無いケース）、`pulse` はページ送りインジケータ（reveal 完了後にのみ表示する）、
+/// `now` はこのフレームの描画時刻（`reveal`/`pulse` の `snapshot`/`body_lines` に渡す基準時刻。
+/// `RevealState::Done` はこれを無視する）。
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     config: &Config,
@@ -20,6 +29,9 @@ pub fn draw(
     position: usize,
     total: usize,
     is_at_end: bool,
+    reveal: Option<&reveal::RevealState>,
+    pulse: &PulseHandle,
+    now: Instant,
 ) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -27,7 +39,9 @@ pub fn draw(
         .split(frame.area());
 
     draw_placeholder(frame, columns[0], config);
-    draw_text(frame, columns[1], config, line, position, total, is_at_end);
+    draw_text(
+        frame, columns[1], config, line, position, total, is_at_end, reveal, pulse, now,
+    );
 }
 
 /// 左側: 画像プレースホルダ（罫線で囲った空き領域、または中央にラベル文字列）。
@@ -89,7 +103,12 @@ pub fn draw_splash(frame: &mut Frame, config: &Config) {
 }
 
 /// 右側: 話者名 + 本文。話者がプレイヤー側かどうかで文字色を出し分ける
-/// （`Config::color_name_for` に判定を委譲する）。
+/// （`Config::color_name_for` に判定を委譲する）。本文は `reveal`（[`reveal::RevealState`]）が
+/// 与えられていれば `RevealState::body_lines` から組み立て（`Animating` はタイプライター表示の
+/// スナップショット、`Done` はスキップ済みの全文）、reveal 完了後は `pulse`（`jiwa::PulseHandle`）
+/// によるページ送りインジケータを行末に付け足す。`reveal` が `None`（会話行そのものが無い等）の
+/// 場合は従来どおりの静的表示にフォールバックする。
+#[allow(clippy::too_many_arguments)]
 fn draw_text(
     frame: &mut Frame,
     area: Rect,
@@ -98,6 +117,9 @@ fn draw_text(
     position: usize,
     total: usize,
     is_at_end: bool,
+    reveal: Option<&reveal::RevealState>,
+    pulse: &PulseHandle,
+    now: Instant,
 ) {
     let title = if is_at_end {
         format!("{position}/{total} (END)")
@@ -120,8 +142,19 @@ fn draw_text(
                     style.add_modifier(Modifier::BOLD),
                 ));
             }
-            for text_line in &line.text {
-                rendered.push(Line::styled(text_line.clone(), style));
+            match reveal {
+                Some(state) => {
+                    let mut body_lines = state.body_lines(now);
+                    if state.is_done(now) {
+                        append_page_indicator(&mut body_lines, pulse, now);
+                    }
+                    rendered.extend(body_lines);
+                }
+                None => {
+                    for text_line in &line.text {
+                        rendered.push(Line::styled(text_line.clone(), style));
+                    }
+                }
             }
             Text::from(rendered)
         }
@@ -129,6 +162,23 @@ fn draw_text(
 
     let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+}
+
+/// reveal 完了後の入力待ちを示すページ送りインジケータ（既定では ▼）を、本文の最終行の
+/// 末尾に付け足す。本文行が1つも無い（空の会話行）場合は、インジケータだけの行を追加する。
+/// 表示中（未 reveal）にはこの関数を呼ばない — 呼び出し側（`draw_text`）が
+/// `handle.is_done(now)` で既にガードしている。
+fn append_page_indicator(lines: &mut Vec<Line<'static>>, pulse: &PulseHandle, now: Instant) {
+    let frame = pulse.snapshot(now);
+    let Rgb(r, g, b) = frame.color;
+    let span = Span::styled(
+        format!(" {}", frame.text),
+        Style::default().fg(Color::Rgb(r, g, b)),
+    );
+    match lines.last_mut() {
+        Some(last) => last.spans.push(span),
+        None => lines.push(Line::from(vec![span])),
+    }
 }
 
 #[cfg(test)]
@@ -162,8 +212,10 @@ mod tests {
         config.placeholder.style = PlaceholderStyle::Label;
         config.placeholder.label = "[画像]".to_string();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
         terminal
-            .draw(|f| draw(f, &config, None, 0, 0, true))
+            .draw(|f| draw(f, &config, None, 0, 0, true, None, &pulse, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("[画像]"), "buffer was: {text}");
@@ -175,8 +227,10 @@ mod tests {
         config.placeholder.style = PlaceholderStyle::Blank;
         config.placeholder.label = "[画像]".to_string();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
         terminal
-            .draw(|f| draw(f, &config, None, 0, 0, true))
+            .draw(|f| draw(f, &config, None, 0, 0, true, None, &pulse, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(!text.contains("[画像]"), "buffer was: {text}");
@@ -186,8 +240,10 @@ mod tests {
     fn title_shows_end_marker_when_at_end() {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
         terminal
-            .draw(|f| draw(f, &config, None, 1, 1, true))
+            .draw(|f| draw(f, &config, None, 1, 1, true, None, &pulse, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("(END)"), "buffer was: {text}");
@@ -197,8 +253,10 @@ mod tests {
     fn title_omits_end_marker_when_not_at_end() {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
         terminal
-            .draw(|f| draw(f, &config, None, 1, 2, false))
+            .draw(|f| draw(f, &config, None, 1, 2, false, None, &pulse, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(!text.contains("(END)"), "buffer was: {text}");
@@ -208,8 +266,10 @@ mod tests {
     fn no_line_shows_placeholder_message() {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
         terminal
-            .draw(|f| draw(f, &config, None, 0, 0, true))
+            .draw(|f| draw(f, &config, None, 0, 0, true, None, &pulse, now))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("会話行がありません"), "buffer was: {text}");
@@ -223,10 +283,251 @@ mod tests {
             speaker: Some("A".to_string()),
             text: vec!["hi".to_string()],
         };
-        // The assertion here is simply that `draw` does not panic with
-        // Layout::Percentage(40/60) at width=1 (40% of 1 rounds to 0).
+        let now = Instant::now();
+        // reveal 完了済み(=ページ送りインジケータも同時に描画される)状態でも、
+        // Layout::Percentage(40/60) が width=1 (40% が 0 に丸まる) で panic しないことを確認する。
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let pulse = reveal::build_pulse(now);
         terminal
-            .draw(|f| draw(f, &config, Some(&line), 1, 1, true))
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn typewriter_reveal_shows_only_visible_graphemes_before_done() {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000; // 十分長い間隔で確実に「一部だけ表示」を作る
+        config.typewriter.fade_duration_ms = 0;
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["hello".to_string()],
+        };
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        // t=0 では最初の1グラフェムしか見えない (jiwa::RevealHandle の仕様)。
+        assert!(text.contains('h'), "buffer was: {text}");
+        assert!(!text.contains("hello"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn page_indicator_is_absent_while_typing_and_present_once_done() {
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["hello".to_string()],
+        };
+        let now = Instant::now();
+
+        // 表示中（char_interval を長くして確実に未完了にする）はインジケータが出ない。
+        let mut typing_config = Config::default();
+        typing_config.typewriter.char_interval_ms = 1000;
+        typing_config.typewriter.fade_duration_ms = 0;
+        let typing_reveal =
+            reveal::RevealState::Animating(reveal::build_reveal(&typing_config, &line, now));
+        let typing_pulse = reveal::build_pulse(now);
+        let mut typing_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        typing_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &typing_config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&typing_reveal),
+                    &typing_pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let typing_text = buffer_text(typing_terminal.backend().buffer());
+        assert!(
+            !typing_text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "buffer was: {typing_text}"
+        );
+
+        // char_interval=0 かつ fade_duration=0 は t=0 から即座に is_done() なので、
+        // インジケータ側の「完了後だけ出す」挙動をスキップ機能無しで検証できる。
+        let mut done_config = Config::default();
+        done_config.typewriter.char_interval_ms = 0;
+        done_config.typewriter.fade_duration_ms = 0;
+        let done_reveal =
+            reveal::RevealState::Animating(reveal::build_reveal(&done_config, &line, now));
+        let done_pulse = reveal::build_pulse(now);
+        let mut done_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        done_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &done_config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&done_reveal),
+                    &done_pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let done_text = buffer_text(done_terminal.backend().buffer());
+        assert!(
+            done_text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "buffer was: {done_text}"
+        );
+    }
+
+    /// バッファを行ごとのテキストに変換する（`buffer_text` の行分割版）。
+    /// ページ送りインジケータがどの行に付いているかを確認するテストで使う。
+    fn buffer_rows(buffer: &Buffer) -> Vec<String> {
+        let area = buffer.area();
+        (0..area.height)
+            .map(|y| {
+                let mut row = String::new();
+                let mut x = 0u16;
+                while x < area.width {
+                    let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                    row.push_str(symbol);
+                    x += symbol.cell_width().max(1);
+                }
+                row
+            })
+            .collect()
+    }
+
+    #[test]
+    fn draw_empty_text_dialog_with_done_reveal_shows_only_indicator() {
+        let config = Config::default();
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec![],
+        };
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_attaches_to_last_line_of_multiline_body() {
+        let config = Config::default();
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["first line".to_string(), "second line".to_string()],
+        };
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let rows = buffer_rows(terminal.backend().buffer());
+        let indicator_row = rows
+            .iter()
+            .find(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL));
+        assert!(indicator_row.is_some(), "rows were: {rows:?}");
+        assert!(
+            indicator_row.unwrap().contains("second line"),
+            "indicator should be attached to the last body line, rows were: {rows:?}"
+        );
+        let first_line_row = rows
+            .iter()
+            .find(|r| r.contains("first line"))
+            .expect("first line should be rendered");
+        assert!(
+            !first_line_row.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must not appear on a non-last line, rows were: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn draw_does_not_panic_at_height_one() {
+        let config = Config::default();
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["hi".to_string()],
+        };
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                )
+            })
             .unwrap();
     }
 

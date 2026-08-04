@@ -1,5 +1,7 @@
 //! キー入力の解釈。Enter/Space で次の会話行へ進み、q/Esc で終了する。
 
+use std::time::Duration;
+
 use ratatui::crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEventKind};
 
 /// キー入力から導かれるアプリの動作。
@@ -16,6 +18,20 @@ pub enum Action {
 /// 次の端末イベントをブロッキングで待ち受け、`Action` に変換する。
 pub fn next_action() -> anyhow::Result<Action> {
     Ok(action_for_event(event::read()?))
+}
+
+/// `timeout` 以内に端末イベントが来なければ `Action::None` を返す（ノンブロッキング）。
+///
+/// タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ（`jiwa::PulseHandle`）は
+/// フレームごとの `snapshot` で進むため、`event_loop` はキー入力の有無に関わらず短い間隔で
+/// 再描画する必要がある（#472）。`next_action` の無条件ブロッキング待ちのままだと、
+/// キー入力が無い間はアニメーションが完全に静止してしまう。
+pub fn poll_action(timeout: Duration) -> anyhow::Result<Action> {
+    if event::poll(timeout)? {
+        next_action()
+    } else {
+        Ok(Action::None)
+    }
 }
 
 /// 単一の crossterm イベントから `Action` を導く純粋なマッピング（I/O を持たない）。
