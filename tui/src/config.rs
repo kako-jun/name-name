@@ -132,3 +132,197 @@ impl Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_default_matches_gymnasia_values() {
+        let config = Config::default();
+        assert_eq!(config.game_name, "gymnasia");
+        assert_eq!(config.script_dir, PathBuf::from("docs/scripts/drafts"));
+        assert_eq!(
+            config.entry_script,
+            PathBuf::from("route01/01-terminal-light.md")
+        );
+        assert_eq!(config.placeholder.style, PlaceholderStyle::Label);
+        assert_eq!(config.placeholder.label, "[画像]");
+        assert_eq!(config.colors.player, "white");
+        assert_eq!(config.colors.opponent, "cyan");
+        assert_eq!(config.colors.narration, "gray");
+        assert_eq!(config.player_speakers, vec!["主格".to_string()]);
+    }
+
+    #[test]
+    fn from_toml_str_empty_equals_default() {
+        let config = Config::from_toml_str("").expect("empty toml should parse");
+        assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn from_toml_str_partial_color_override_keeps_rest_default() {
+        let toml = "[colors]\nplayer = \"red\"\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert_eq!(config.colors.player, "red");
+        assert_eq!(config.colors.opponent, Config::default().colors.opponent);
+        assert_eq!(config.colors.narration, Config::default().colors.narration);
+        assert_eq!(config.game_name, Config::default().game_name);
+        assert_eq!(config.player_speakers, Config::default().player_speakers);
+    }
+
+    #[test]
+    fn from_toml_str_invalid_toml_is_err() {
+        let result = Config::from_toml_str("this is not = = valid toml [[[");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_missing_path_is_err_and_message_contains_path() {
+        let path = Path::new("tui/tests/fixtures/does-not-exist.toml");
+        let err = Config::load(path).expect_err("missing file should error");
+        assert!(
+            err.to_string().contains("does-not-exist.toml"),
+            "error message should mention the path: {err}"
+        );
+    }
+
+    #[test]
+    fn entry_script_path_joins_relative() {
+        let config = Config {
+            script_dir: PathBuf::from("scripts"),
+            entry_script: PathBuf::from("intro.md"),
+            ..Config::default()
+        };
+        assert_eq!(
+            config.entry_script_path(),
+            PathBuf::from("scripts/intro.md")
+        );
+    }
+
+    #[test]
+    fn entry_script_path_absolute_entry_script_ignores_script_dir() {
+        let config = Config {
+            script_dir: PathBuf::from("scripts"),
+            entry_script: PathBuf::from("/abs/intro.md"),
+            ..Config::default()
+        };
+        assert_eq!(config.entry_script_path(), PathBuf::from("/abs/intro.md"));
+    }
+
+    #[test]
+    fn entry_script_path_empty_script_dir_returns_entry_script_only() {
+        let config = Config {
+            script_dir: PathBuf::new(),
+            entry_script: PathBuf::from("intro.md"),
+            ..Config::default()
+        };
+        assert_eq!(config.entry_script_path(), PathBuf::from("intro.md"));
+    }
+
+    #[test]
+    fn is_player_speaker_true_when_name_in_list() {
+        let config = Config {
+            player_speakers: vec!["A".to_string()],
+            ..Config::default()
+        };
+        assert!(config.is_player_speaker("A"));
+    }
+
+    #[test]
+    fn is_player_speaker_false_when_name_not_in_list() {
+        let config = Config {
+            player_speakers: vec!["B".to_string()],
+            ..Config::default()
+        };
+        assert!(!config.is_player_speaker("A"));
+    }
+
+    #[test]
+    fn is_player_speaker_false_when_list_empty() {
+        let config = Config {
+            player_speakers: vec![],
+            ..Config::default()
+        };
+        assert!(!config.is_player_speaker("A"));
+    }
+
+    #[test]
+    fn is_player_speaker_false_for_case_mismatch() {
+        let config = Config {
+            player_speakers: vec!["a".to_string()],
+            ..Config::default()
+        };
+        assert!(!config.is_player_speaker("A"));
+    }
+
+    #[test]
+    fn is_player_speaker_false_for_trailing_whitespace_mismatch() {
+        let config = Config {
+            player_speakers: vec!["主格".to_string()],
+            ..Config::default()
+        };
+        assert!(!config.is_player_speaker("主格 "));
+    }
+
+    #[test]
+    fn is_player_speaker_false_for_fullwidth_halfwidth_mismatch() {
+        let config = Config {
+            player_speakers: vec!["A".to_string()],
+            ..Config::default()
+        };
+        // U+FF21 (fullwidth A) must not match halfwidth "A".
+        assert!(!config.is_player_speaker("Ａ"));
+    }
+
+    #[test]
+    fn color_name_for_none_returns_narration_color() {
+        let config = Config::default();
+        assert_eq!(config.color_name_for(None), config.colors.narration);
+    }
+
+    #[test]
+    fn color_name_for_player_speaker_returns_player_color() {
+        let config = Config {
+            player_speakers: vec!["A".to_string()],
+            ..Config::default()
+        };
+        assert_eq!(config.color_name_for(Some("A")), config.colors.player);
+    }
+
+    #[test]
+    fn color_name_for_non_player_speaker_returns_opponent_color() {
+        let config = Config {
+            player_speakers: vec!["B".to_string()],
+            ..Config::default()
+        };
+        assert_eq!(config.color_name_for(Some("A")), config.colors.opponent);
+    }
+
+    #[test]
+    fn color_name_for_case_mismatch_returns_opponent_color() {
+        let config = Config {
+            player_speakers: vec!["a".to_string()],
+            ..Config::default()
+        };
+        assert_eq!(config.color_name_for(Some("A")), config.colors.opponent);
+    }
+
+    #[test]
+    fn color_name_for_trailing_whitespace_mismatch_returns_opponent_color() {
+        let config = Config {
+            player_speakers: vec!["主格".to_string()],
+            ..Config::default()
+        };
+        assert_eq!(config.color_name_for(Some("主格 ")), config.colors.opponent);
+    }
+
+    #[test]
+    fn color_name_for_empty_string_speaker_matching_empty_in_list_returns_player_color() {
+        let config = Config {
+            player_speakers: vec!["".to_string()],
+            ..Config::default()
+        };
+        assert_eq!(config.color_name_for(Some("")), config.colors.player);
+    }
+}

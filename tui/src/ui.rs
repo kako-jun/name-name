@@ -89,3 +89,103 @@ fn draw_text(
     let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::{Buffer, CellWidth};
+    use ratatui::Terminal;
+
+    /// レンダリング済みバッファを行ごとのテキストに変換する。
+    /// 全角文字（幅2セル）の次のセルは、直前のグラフェムを表示するために予約された
+    /// 空セルであり内容を持たないため、`cell_width()` を見て読み飛ばす
+    /// （そのまま連結すると「[画像]」が「[画 像 ]」のように空白混じりになってしまう）。
+    fn buffer_text(buffer: &Buffer) -> String {
+        let area = buffer.area();
+        let mut out = String::new();
+        for y in 0..area.height {
+            let mut x = 0u16;
+            while x < area.width {
+                let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                out.push_str(symbol);
+                x += symbol.cell_width().max(1);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn placeholder_label_style_renders_label_text() {
+        let mut config = Config::default();
+        config.placeholder.style = PlaceholderStyle::Label;
+        config.placeholder.label = "[画像]".to_string();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| draw(f, &config, None, 0, 0, true))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("[画像]"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn placeholder_blank_style_renders_no_label_text() {
+        let mut config = Config::default();
+        config.placeholder.style = PlaceholderStyle::Blank;
+        config.placeholder.label = "[画像]".to_string();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| draw(f, &config, None, 0, 0, true))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(!text.contains("[画像]"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn title_shows_end_marker_when_at_end() {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| draw(f, &config, None, 1, 1, true))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("(END)"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn title_omits_end_marker_when_not_at_end() {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| draw(f, &config, None, 1, 2, false))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(!text.contains("(END)"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn no_line_shows_placeholder_message() {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| draw(f, &config, None, 0, 0, true))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("会話行がありません"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn extremely_narrow_terminal_does_not_panic() {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(1, 3)).unwrap();
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["hi".to_string()],
+        };
+        // The assertion here is simply that `draw` does not panic with
+        // Layout::Percentage(40/60) at width=1 (40% of 1 rounds to 0).
+        terminal
+            .draw(|f| draw(f, &config, Some(&line), 1, 1, true))
+            .unwrap();
+    }
+}

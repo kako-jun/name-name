@@ -30,3 +30,79 @@ impl Cli {
         cli
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Cli::parse` は argv[0] を読み捨てる実装のため、テストでも先頭にダミーの
+    /// 実行ファイルパスを含めて渡す。
+    fn parse(args: &[&str]) -> Cli {
+        let mut full = vec!["name-name-tui".to_string()];
+        full.extend(args.iter().map(|s| s.to_string()));
+        Cli::parse(full)
+    }
+
+    #[test]
+    fn parse_no_args_returns_none_for_both() {
+        let cli = parse(&[]);
+        assert_eq!(cli.config_path, None);
+        assert_eq!(cli.script_path, None);
+    }
+
+    #[test]
+    fn parse_config_only_sets_config_path() {
+        let cli = parse(&["--config", "c.toml"]);
+        assert_eq!(cli.config_path, Some(PathBuf::from("c.toml")));
+        assert_eq!(cli.script_path, None);
+    }
+
+    #[test]
+    fn parse_script_only_sets_script_path() {
+        let cli = parse(&["--script", "s.md"]);
+        assert_eq!(cli.config_path, None);
+        assert_eq!(cli.script_path, Some(PathBuf::from("s.md")));
+    }
+
+    #[test]
+    fn parse_config_and_script_sets_both() {
+        let cli = parse(&["--config", "c.toml", "--script", "s.md"]);
+        assert_eq!(cli.config_path, Some(PathBuf::from("c.toml")));
+        assert_eq!(cli.script_path, Some(PathBuf::from("s.md")));
+    }
+
+    #[test]
+    fn parse_config_flag_without_trailing_value_is_ignored() {
+        let cli = parse(&["--config"]);
+        assert_eq!(cli.config_path, None);
+        assert_eq!(cli.script_path, None);
+    }
+
+    #[test]
+    fn parse_config_flag_swallows_following_flag_as_its_value() {
+        // Hidden trap: `--config` unconditionally consumes the very next token,
+        // even if that token is itself a recognized flag like `--script`.
+        let cli = parse(&["--config", "--script", "s.md"]);
+        assert_eq!(cli.config_path, Some(PathBuf::from("--script")));
+        assert_eq!(cli.script_path, None);
+    }
+
+    #[test]
+    fn parse_repeated_config_flag_last_value_wins() {
+        let cli = parse(&["--config", "a.toml", "--config", "b.toml"]);
+        assert_eq!(cli.config_path, Some(PathBuf::from("b.toml")));
+    }
+
+    #[test]
+    fn parse_unknown_flag_is_ignored_and_parsing_continues() {
+        let cli = parse(&["--unknown", "x", "--config", "c.toml"]);
+        assert_eq!(cli.config_path, Some(PathBuf::from("c.toml")));
+    }
+
+    #[test]
+    fn parse_equals_syntax_is_not_supported_and_ignored() {
+        let cli = parse(&["--config=c.toml"]);
+        assert_eq!(cli.config_path, None);
+        assert_eq!(cli.script_path, None);
+    }
+}
