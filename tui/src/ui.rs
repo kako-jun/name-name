@@ -654,4 +654,546 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("AB田C"), "buffer was: {text}");
     }
+
+    // ---- #480: 画面分割(50/50・プレイヤー/相手ウィンドウ分離・枠なし)のテスト ----
+    //
+    // ratatui 0.30.2 の `Layout::split` は `Constraint::Percentage(50)/Percentage(50)` を
+    // 奇数サイズに適用したとき前者(左/上)が切り上げ・後者(右/下)が切り捨てになる（cargo test
+    // で `Layout::split` の戻り値を直接ダンプして実測・確認済み）。この非対称は `draw()` の
+    // 2段の分割（左右 columns、テキスト側 rows）双方に効き、特にテキスト側 rows split は
+    // ステータス行を引いた残り高さに対して掛かるため、端末高さが偶数のとき self(下/自分)窓が
+    // opponent(上/相手)窓より恒常的に1行少なくなる（H=2 では self が高さ0で消える）。
+    // これはバグ修正ではなく、現状の挙動を固定する characterization test。
+
+    /// テスト用に `DisplayLine` を組み立てる（19本のテストケースで多用するための局所ヘルパー）。
+    fn dialog_line(speaker: Option<&str>, text: Vec<&str>) -> DisplayLine {
+        DisplayLine {
+            speaker: speaker.map(|s| s.to_string()),
+            text: text.into_iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// `draw()` を指定サイズの `TestBackend` に1回描画し、結果バッファを返す簡易ヘルパー。
+    /// `position`/`total`/`is_at_end` はレイアウト・話者振り分けの検証には無関係なので固定値
+    /// （タイムスタンプに依存する `reveal::RevealState::Animating` の状態遷移テストは、この
+    /// ヘルパーを使わず既存テストと同じ手書きスタイルで `now` を共有する）。
+    fn render(
+        config: &Config,
+        line: Option<&DisplayLine>,
+        reveal: Option<&reveal::RevealState>,
+        width: u16,
+        height: u16,
+    ) -> Buffer {
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| draw(f, config, line, 1, 1, false, reveal, &pulse, now))
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// バッファの1行を、x座標の範囲を絞ってテキスト化する（`buffer_rows` の列範囲限定版）。
+    /// 左側プレースホルダ列と右側テキスト列は同じ行(y)を共有するため、「テキスト側の窓が
+    /// 空かどうか」を見るテストは行全体ではなく列範囲を絞って判定する必要がある
+    /// （プレースホルダ列の内容が行頭に混ざって誤判定になるのを避ける）。
+    fn buffer_rows_in_x_range(buffer: &Buffer, x_start: u16, x_end: u16) -> Vec<String> {
+        let area = buffer.area();
+        (0..area.height)
+            .map(|y| {
+                let mut row = String::new();
+                let mut x = x_start;
+                while x < x_end {
+                    let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                    row.push_str(symbol);
+                    x += symbol.cell_width().max(1);
+                }
+                row
+            })
+            .collect()
+    }
+
+    /// 指定した行 (y) のテキスト列（x_start以降）の中で最初に非空白文字が現れるセルの
+    /// 前景色を返す。話者識別が文字色（`Config::color_name_for`）で行われることを検証する
+    /// テストで使う。左側プレースホルダ列を除外するため x_start を指定する。
+    fn first_colored_cell_in_row(buffer: &Buffer, y: u16, x_start: u16) -> Option<Color> {
+        let area = buffer.area();
+        (x_start..area.width).find_map(|x| {
+            let cell = buffer.cell((x, y)).expect("in bounds");
+            if cell.symbol() == " " {
+                None
+            } else {
+                Some(cell.fg)
+            }
+        })
+    }
+
+    // -- A. 話者振り分け --
+
+    #[test]
+    fn player_speaker_text_renders_in_bottom_half_of_screen() {
+        // H=11(奇数) → root[0].height=10(偶数) → テキスト側 rows split はちょうど半分
+        // (opponent=5行/self=5行) になる、行位置の判定がぶれない対称ケースを選んでいる。
+        let config = Config {
+            player_speakers: vec!["Player".to_string()],
+            ..Config::default()
+        };
+        let line = dialog_line(Some("Player"), vec!["hello"]);
+        let buffer = render(&config, Some(&line), None, 40, 11);
+        let rows = buffer_rows(&buffer);
+        assert!(
+            rows[5..10].iter().any(|r| r.contains("hello")),
+            "player speaker text should render in the bottom half, rows were: {rows:?}"
+        );
+        assert!(
+            !rows[0..5].iter().any(|r| r.contains("hello")),
+            "player speaker text must not leak into the top half, rows were: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn opponent_speaker_text_renders_in_top_half_of_screen() {
+        let config = Config::default(); // player_speakers = ["主格"]
+        let line = dialog_line(Some("相手"), vec!["hello"]);
+        let buffer = render(&config, Some(&line), None, 40, 11);
+        let rows = buffer_rows(&buffer);
+        assert!(
+            rows[0..5].iter().any(|r| r.contains("hello")),
+            "unmatched speaker text should render in the top half, rows were: {rows:?}"
+        );
+        assert!(
+            !rows[5..10].iter().any(|r| r.contains("hello")),
+            "unmatched speaker text must not leak into the bottom half, rows were: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn narration_none_speaker_renders_in_top_half_with_narration_color() {
+        let config = Config::default();
+        let line = dialog_line(None, vec!["ナレーション"]);
+        let buffer = render(&config, Some(&line), None, 40, 11);
+        let rows = buffer_rows(&buffer);
+        let hit_row = rows[0..5].iter().position(|r| r.contains("ナレーション"));
+        assert!(
+            hit_row.is_some(),
+            "narration text should render in the top half, rows were: {rows:?}"
+        );
+        assert!(
+            !rows[5..10].iter().any(|r| r.contains("ナレーション")),
+            "narration text must not leak into the bottom half, rows were: {rows:?}"
+        );
+        let y = hit_row.unwrap() as u16;
+        // 左側プレースホルダ列(x<20)を避け、テキスト列(x>=20)だけを見る。
+        let color = first_colored_cell_in_row(&buffer, y, 20)
+            .expect("a colored cell should exist on the narration row");
+        assert_eq!(
+            color,
+            Color::Gray,
+            "None(Narration) speaker should use colors.narration (default: gray)"
+        );
+    }
+
+    #[test]
+    fn player_speaker_leaves_opponent_top_window_completely_blank() {
+        let config = Config::default();
+        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let buffer = render(&config, Some(&line), None, 40, 11);
+        // テキスト列(x>=20)だけを見る。左側プレースホルダ列は話者に関わらず常に何か描画する
+        // ため、行全体で判定すると誤検知する。
+        let rows = buffer_rows_in_x_range(&buffer, 20, 40);
+        assert!(
+            rows[0..5].iter().all(|r| r.trim().is_empty()),
+            "opponent(top) text window must be entirely blank while the player speaks, rows were: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn opponent_speaker_leaves_self_bottom_window_completely_blank() {
+        let config = Config::default();
+        let line = dialog_line(Some("相手"), vec!["hello"]);
+        let buffer = render(&config, Some(&line), None, 40, 11);
+        let rows = buffer_rows_in_x_range(&buffer, 20, 40);
+        assert!(
+            rows[5..10].iter().all(|r| r.trim().is_empty()),
+            "self(bottom) text window must be entirely blank while an opponent speaks, rows were: {rows:?}"
+        );
+    }
+
+    // -- B. 同値分割 --
+
+    #[test]
+    fn empty_player_speakers_list_routes_all_named_speakers_to_top_window() {
+        // player_speakers を空にすると、デフォルトなら player 側になる名前（"主格"）も
+        // 相手(上)側に落ちる（`Config::is_player_speaker` は空リストで常に false を返す）。
+        let config = Config {
+            player_speakers: vec![],
+            ..Config::default()
+        };
+        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let buffer = render(&config, Some(&line), None, 40, 11);
+        let rows = buffer_rows(&buffer);
+        assert!(
+            rows[0..5].iter().any(|r| r.contains("hello")),
+            "with an empty player_speakers list, even the default player name should go to the top window, rows were: {rows:?}"
+        );
+        assert!(
+            !rows[5..10].iter().any(|r| r.contains("hello")),
+            "rows were: {rows:?}"
+        );
+    }
+
+    // -- C. 境界値 --
+
+    #[test]
+    fn even_terminal_height_makes_self_window_one_row_shorter_than_opponent() {
+        // H=4(偶数) → root[0].height=3(ステータス行1を引いた残り) → テキスト側 rows split は
+        // 3の奇数丸めで opponent(上)=2行・self(下)=1行の非対称になる。Rect を直接覗く代わりに、
+        // 2行の本文を与えたとき何行まで収まるかで高さを実測する。
+        let config = Config::default();
+        let text = vec!["line1", "line2"];
+
+        let opponent_line = dialog_line(Some("相手"), text.clone());
+        let opponent_buffer = render(&config, Some(&opponent_line), None, 40, 4);
+        let opponent_text = buffer_text(&opponent_buffer);
+        assert!(
+            opponent_text.contains("line1"),
+            "buffer was: {opponent_text}"
+        );
+        assert!(
+            opponent_text.contains("line2"),
+            "opponent window (height 2) should fit both lines, buffer was: {opponent_text}"
+        );
+
+        let self_line = dialog_line(Some("主格"), text);
+        let self_buffer = render(&config, Some(&self_line), None, 40, 4);
+        let self_text = buffer_text(&self_buffer);
+        assert!(self_text.contains("line1"), "buffer was: {self_text}");
+        assert!(
+            !self_text.contains("line2"),
+            "self window (height 1) should clip the second line, buffer was: {self_text}"
+        );
+    }
+
+    #[test]
+    fn terminal_height_two_collapses_self_window_to_zero_height() {
+        // H=2 → root[0].height=1 → テキスト側 rows split(1) は opponent=1/self=0 になり、
+        // プレイヤー発言(self窓)は実質どこにも描画されなくなる。
+        let config = Config::default();
+        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let buffer = render(&config, Some(&line), None, 40, 2);
+        let text = buffer_text(&buffer);
+        assert!(
+            !text.contains("hello"),
+            "self window has height 0 at H=2, player text must not render anywhere, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn odd_terminal_height_splits_text_area_evenly() {
+        // H=3(奇数) → root[0].height=2(偶数) → テキスト側 rows split はちょうど半分に割れ、
+        // opponent(上)=1行・self(下)=1行の対称になる。H=4 の非対称（1つ上のテスト）と対を成す
+        // 対比ケース。
+        let config = Config::default();
+        let text = vec!["line1", "line2"];
+
+        let opponent_line = dialog_line(Some("相手"), text.clone());
+        let opponent_buffer = render(&config, Some(&opponent_line), None, 40, 3);
+        let opponent_text = buffer_text(&opponent_buffer);
+        assert!(
+            opponent_text.contains("line1"),
+            "buffer was: {opponent_text}"
+        );
+        assert!(
+            !opponent_text.contains("line2"),
+            "opponent window should also be height 1 at H=3 (symmetric with self), buffer was: {opponent_text}"
+        );
+
+        let self_line = dialog_line(Some("主格"), text);
+        let self_buffer = render(&config, Some(&self_line), None, 40, 3);
+        let self_text = buffer_text(&self_buffer);
+        assert!(self_text.contains("line1"), "buffer was: {self_text}");
+        assert!(
+            !self_text.contains("line2"),
+            "self window should be height 1 at H=3, buffer was: {self_text}"
+        );
+    }
+
+    #[test]
+    fn terminal_height_one_shows_status_line_only_no_body_content() {
+        // H=1 → root[0].height=0 → プレースホルダもテキストも描画領域が消え、
+        // 最下段のステータス行だけが残る。
+        let config = Config::default();
+        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let buffer = render(&config, Some(&line), None, 40, 1);
+        let text = buffer_text(&buffer);
+        assert!(
+            text.contains(&config.game_name),
+            "status line should still render, buffer was: {text}"
+        );
+        assert!(
+            !text.contains("hello"),
+            "body content must not render when height=1, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn odd_terminal_width_gives_placeholder_column_the_extra_cell() {
+        // W=7(奇数) → 左右 Percentage(50/50) は左(プレースホルダ)=ceil(7/2)=4・
+        // 右(テキスト)=floor(7/2)=3 に丸まる。テキスト側に単一ASCII文字を描画させ、
+        // その先頭セルの x 座標がその境界(x=4)と一致することで実測する。
+        //
+        // フォールバック文言「(会話行がありません)」は全角文字を含み、この幅では
+        // ratatui 側の Paragraph 折り返し処理がバッファ範囲外書き込みで panic する
+        // （`ratatui_widgets::paragraph::render_line` → `Buffer::index_mut` の既存バグ、
+        // #480 の分割ロジックとは無関係）ため、境界計測にはこの経路を使わない。
+        let config = Config::default();
+        let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
+        let buffer = render(&config, Some(&line), None, 7, 10);
+        let area = buffer.area();
+        let mut leftmost_y_x = None;
+        'outer: for y in 0..area.height {
+            for x in 0..area.width {
+                if buffer.cell((x, y)).expect("in bounds").symbol() == "Y" {
+                    leftmost_y_x = Some(x);
+                    break 'outer;
+                }
+            }
+        }
+        let x = leftmost_y_x.expect("text should render somewhere");
+        assert_eq!(
+            x, 4,
+            "text column should start at x=4 (ceil(7/2)) when width=7 splits 50/50; found at x={x}"
+        );
+    }
+
+    // -- D. null/空/未設定 --
+
+    #[test]
+    fn no_display_line_renders_placeholder_message_in_top_window_only() {
+        let config = Config::default();
+        let buffer = render(&config, None, None, 40, 11);
+        let rows = buffer_rows(&buffer);
+        assert!(
+            rows[0..5].iter().any(|r| r.contains("会話行がありません")),
+            "fallback message should render in the top window, rows were: {rows:?}"
+        );
+        let text_rows = buffer_rows_in_x_range(&buffer, 20, 40);
+        assert!(
+            text_rows[5..10].iter().all(|r| r.trim().is_empty()),
+            "self(bottom) text window should stay blank when there is no display line, rows were: {text_rows:?}"
+        );
+    }
+
+    #[test]
+    fn empty_text_vec_with_player_speaker_shows_indicator_only_in_bottom_window() {
+        let config = Config::default();
+        let line = dialog_line(Some("主格"), vec![]);
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 11);
+        let rows = buffer_rows(&buffer);
+        assert!(
+            rows[5..10]
+                .iter()
+                .any(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL)),
+            "page indicator should render in the bottom window for an empty player line, rows were: {rows:?}"
+        );
+        let text_rows = buffer_rows_in_x_range(&buffer, 20, 40);
+        assert!(
+            text_rows[0..5].iter().all(|r| r.trim().is_empty()),
+            "opponent(top) text window should stay blank, rows were: {text_rows:?}"
+        );
+    }
+
+    // -- E. 状態遷移 --
+
+    #[test]
+    fn player_speaker_typewriter_reveal_shows_partial_text_in_bottom_window() {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000; // 十分長い間隔で確実に「一部だけ表示」を作る
+        config.typewriter.fade_duration_ms = 0;
+        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    false,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let rows = buffer_rows(terminal.backend().buffer());
+        assert!(
+            rows[5..10].iter().any(|r| r.contains('h')),
+            "the first revealed grapheme should render in the bottom window, rows were: {rows:?}"
+        );
+        assert!(
+            !rows[5..10].iter().any(|r| r.contains("hello")),
+            "text should still be partial (typewriter in progress), rows were: {rows:?}"
+        );
+        assert!(
+            !rows[0..5].iter().any(|r| r.contains('h')),
+            "typewriter text must not leak into the top window, rows were: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn player_speaker_page_indicator_appears_only_after_done_in_bottom_window() {
+        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let now = Instant::now();
+
+        // 表示中（未完了）は下窓にもインジケータは出ない。
+        let mut typing_config = Config::default();
+        typing_config.typewriter.char_interval_ms = 1000;
+        typing_config.typewriter.fade_duration_ms = 0;
+        let typing_reveal =
+            reveal::RevealState::Animating(reveal::build_reveal(&typing_config, &line, now));
+        let typing_pulse = reveal::build_pulse(now);
+        let mut typing_terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
+        typing_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &typing_config,
+                    Some(&line),
+                    1,
+                    1,
+                    false,
+                    Some(&typing_reveal),
+                    &typing_pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let typing_rows = buffer_rows(typing_terminal.backend().buffer());
+        assert!(
+            !typing_rows
+                .iter()
+                .any(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL)),
+            "rows were: {typing_rows:?}"
+        );
+
+        // 完了後は下窓(self)にのみインジケータが出る。
+        let mut done_config = Config::default();
+        done_config.typewriter.char_interval_ms = 0;
+        done_config.typewriter.fade_duration_ms = 0;
+        let done_reveal =
+            reveal::RevealState::Animating(reveal::build_reveal(&done_config, &line, now));
+        let done_pulse = reveal::build_pulse(now);
+        let mut done_terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
+        done_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &done_config,
+                    Some(&line),
+                    1,
+                    1,
+                    false,
+                    Some(&done_reveal),
+                    &done_pulse,
+                    now,
+                )
+            })
+            .unwrap();
+        let done_rows = buffer_rows(done_terminal.backend().buffer());
+        assert!(
+            done_rows[5..10]
+                .iter()
+                .any(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL)),
+            "rows were: {done_rows:?}"
+        );
+        assert!(
+            !done_rows[0..5]
+                .iter()
+                .any(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL)),
+            "rows were: {done_rows:?}"
+        );
+    }
+
+    // -- F. i18n/文字種混在 --
+
+    #[test]
+    fn long_single_line_wraps_within_half_height_window_without_bleeding_into_other_window() {
+        let config = Config::default();
+        let long_text = "a".repeat(45); // テキスト列幅20 → opponent窓(高さ5)内に折り返される
+        let line = dialog_line(Some("相手"), vec![long_text.as_str()]);
+        let buffer = render(&config, Some(&line), None, 40, 11);
+        let rows = buffer_rows(&buffer);
+        let opponent_as: usize = rows[0..5].iter().map(|r| r.matches('a').count()).sum();
+        let self_as: usize = rows[5..10].iter().map(|r| r.matches('a').count()).sum();
+        assert_eq!(
+            opponent_as, 45,
+            "all wrapped characters should land in the opponent(top) window, rows were: {rows:?}"
+        );
+        assert_eq!(
+            self_as, 0,
+            "wrapped continuation must not bleed into the self(bottom) window, rows were: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn fullwidth_speaker_name_matches_player_list_exactly_routes_to_bottom() {
+        // Config::default() の player_speakers は実運用の gymnasia 設定値である全角 "主格"。
+        // config.rs 側の文字列一致の単体テストとは別に、描画パイプライン全体を通しても
+        // このデフォルト値がそのまま下窓にルーティングされることを確認する。
+        let config = Config::default();
+        let line = dialog_line(Some("主格"), vec!["台詞"]);
+        let buffer = render(&config, Some(&line), None, 40, 11);
+        let rows = buffer_rows(&buffer);
+        assert!(
+            rows[5..10].iter().any(|r| r.contains("台詞")),
+            "rows were: {rows:?}"
+        );
+        assert!(
+            !rows[0..5].iter().any(|r| r.contains("台詞")),
+            "rows were: {rows:?}"
+        );
+    }
+
+    // -- G. 退行防止（過去の事故パターンの固定化） --
+
+    #[test]
+    fn dual_window_output_never_contains_border_line_characters() {
+        // #480 で Borders::ALL を撤去した（枠なし化）。box-drawing 文字が復活していないことを
+        // 固定する退行防止テスト。
+        let config = Config::default();
+        let line = dialog_line(Some("A"), vec!["hi"]);
+        let buffer = render(&config, Some(&line), None, 40, 10);
+        let text = buffer_text(&buffer);
+        for border_char in ['│', '─', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼']
+        {
+            assert!(
+                !text.contains(border_char),
+                "border character {border_char:?} must not appear, buffer was: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn dual_window_output_never_contains_speaker_name_label() {
+        // #480 で話者名ラベル行の描画を撤去した。話者識別は窓の位置と文字色のみで行う設計を
+        // 固定する退行防止テスト。
+        let config = Config::default();
+        let line = dialog_line(Some("すぴーかー"), vec!["hello"]);
+        let buffer = render(&config, Some(&line), None, 40, 10);
+        let text = buffer_text(&buffer);
+        assert!(
+            text.contains("hello"),
+            "body text should still render, buffer was: {text}"
+        );
+        assert!(
+            !text.contains("すぴーかー"),
+            "speaker name must not appear as a separate label, buffer was: {text}"
+        );
+    }
 }
