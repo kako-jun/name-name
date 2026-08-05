@@ -703,7 +703,7 @@ mod tests {
     // これは self が opponent より恒常的に1行少なくなる片側固定バイアスをセルフレビューで
     // 発見し修正した結果であり、以下のテストは修正後の挙動（self が優先される）を固定する。
 
-    /// テスト用に `DisplayLine` を組み立てる（19本のテストケースで多用するための局所ヘルパー）。
+    /// テスト用に `DisplayLine` を組み立てる（複数のテストで多用するための局所ヘルパー）。
     fn dialog_line(speaker: Option<&str>, text: Vec<&str>) -> DisplayLine {
         DisplayLine {
             speaker: speaker.map(|s| s.to_string()),
