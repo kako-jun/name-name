@@ -1,11 +1,32 @@
-//! パース済み `Document` を、TUI で逐次表示するための一直線の再生位置に変換する。
+//! パース済み `Document` を、TUI で逐次表示するための再生位置に変換する。
 //!
-//! MVP スコープ: 会話文（Dialog / Narration）の逐次表示だけを対象にする。選択肢分岐・
-//! フラグ管理・セーブ/ロードは対象外（`parser::models::Event` にそれらの型があっても扱わない）。
-//! 背景・SE・BGM・立ち絵演出などその他のイベントは、今回は画面表示を変えないため読み飛ばす
-//! （左側は常にプレースホルダ表示のみ）。
+//! 会話文（Dialog / Narration）の逐次表示に加え、選択肢分岐（`Event::Choice`）にも対応する
+//! （#482）。フラグ管理・セーブ/ロードは引き続き対象外（`parser::models::Event` にそれらの
+//! 型があっても扱わない）。背景・SE・BGM・立ち絵演出などその他のイベントは、今回も画面表示を
+//! 変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。
+//!
+//! ## 選択肢分岐の設計 (#482)
+//!
+//! `Document` の chapters → scenes → events を一直線にフラット化する既存のシンプルな
+//! モデル（#471 MVP、以前は `Event::Choice` を他の非表示イベントと同様に読み飛ばしていた）は
+//! そのまま維持する。Choice イベントも `items`（旧 `lines`）の1要素（[`PlaybackItem::Choice`]）
+//! として保持するようにしただけで、フラット化そのものは変えていない。加えて、各シーンの
+//! 先頭 item のインデックスを `scene_start`（シーンID → `items` インデックス）として記録して
+//! おく。選択肢が確定すると、`items` 内の現在位置を選ばれた `jump` 先シーンの `scene_start`
+//! へ再配置するだけで遷移を実現する（[`Playback::select_current_choice`]）。
+//!
+//! GUI版 `NovelRenderer.jumpToScene`（`frontend/src/game/NovelRenderer.ts`）も `jump` 先を
+//! シーンIDで解決する点は同じだが、GUI版は選ばれたシーンの `events` だけを新しい再生ストリーム
+//! として張り直す（そのシーンの events を使い切ると `onEndCallback` で終劇になる、＝シーン境界を
+//! 越えて自動的に後続シーンへ読み進めることはない）。対して TUI版は既存のフラット化済み1本の
+//! `items` の中で現在位置を移動するだけなので、jump 先シーンの内容を読み終えると（GUI版のように
+//! 終劇にはならず）ドキュメント順で後続の items へそのまま読み進める、という設計上の違いがある。
+//! GUI版ほど厳密なシーン分離ではないが、既存の線形モデルをそのまま流用でき実装コストが小さいため
+//! この簡略化を採用した（Issue #482 の実装方針で明示的に許容されている割り切り）。
 
-use name_name_parser::models::{Document, Event};
+use std::collections::HashMap;
+
+use name_name_parser::models::{ChoiceOption, Document, Event};
 
 /// 画面に表示する1行分の内容（話者名 + 本文）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,65 +90,184 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
     }
 }
 
-/// `Document` の chapters → scenes → events を順番どおりに走査し、会話行だけを再生する状態。
+/// 再生列（`Playback::items`）の1要素。Dialog/Narration は `Line`、Choice は `Choice` になる。
+/// それ以外のイベント（背景・SE・BGM 等）は要素を生成しない（[`playback_item_from_event`]）。
+#[derive(Debug, Clone, PartialEq)]
+enum PlaybackItem {
+    Line(DisplayLine),
+    Choice(Vec<ChoiceOption>),
+}
+
+/// `Event` を再生列の1要素に変換する。Choice は選択肢一覧をそのまま保持する
+/// `PlaybackItem::Choice` に、Dialog/Narration は [`display_line_from_event`] 経由で
+/// `PlaybackItem::Line` になる。それ以外（背景・SE・BGM 等）は `None`（読み飛ばす）。
+fn playback_item_from_event(event: &Event) -> Option<PlaybackItem> {
+    match event {
+        Event::Choice { options } => Some(PlaybackItem::Choice(options.clone())),
+        _ => display_line_from_event(event).map(PlaybackItem::Line),
+    }
+}
+
+/// `Document` の chapters → scenes → events を順番どおりに走査し、会話行・選択肢を再生する状態。
+/// 設計の詳細（jump 解決・GUI版との違い）はモジュール冒頭のドキュメント参照（#482）。
 pub struct Playback {
-    lines: Vec<DisplayLine>,
+    items: Vec<PlaybackItem>,
     index: usize,
+    /// シーンID → そのシーンに属する最初の item の `items` 内インデックス。選択肢確定時の
+    /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
+    /// 1つも持たない場合（背景切り替えのみ等）は、そのシーンの位置＝まだ何も push していない
+    /// 時点の `items.len()`（＝後続シーンの先頭 item のインデックス、もしくは最後尾）を指す。
+    scene_start: HashMap<String, usize>,
+    /// 現在 Choice を表示中のときのカーソル位置（0始まり）。Line item にいる間は無視される。
+    /// 新しい Choice item へ移動するたびに `set_index` が 0 へリセットする。
+    choice_cursor: usize,
 }
 
 impl Playback {
-    /// `Document` から Dialog / Narration の行だけを抽出し、先頭に位置づけた再生状態を作る。
+    /// `Document` から Dialog / Narration / Choice を抽出し、先頭に位置づけた再生状態を作る。
     pub fn from_document(doc: &Document) -> Self {
-        let lines = doc
-            .chapters
-            .iter()
-            .flat_map(|chapter| chapter.scenes.iter())
-            .flat_map(|scene| scene.events.iter())
-            .filter_map(display_line_from_event)
-            .collect();
-        Self { lines, index: 0 }
+        let mut items = Vec::new();
+        let mut scene_start = HashMap::new();
+        for chapter in &doc.chapters {
+            for scene in &chapter.scenes {
+                // このシーンの最初の item になる（はずの）位置を、events を処理する前に記録する。
+                // 重複シーンIDは最初の出現を優先する（GUI版 `allScenes.find` が最初の一致を
+                // 返すのと同じ規約）。
+                scene_start.entry(scene.id.clone()).or_insert(items.len());
+                for event in &scene.events {
+                    if let Some(item) = playback_item_from_event(event) {
+                        items.push(item);
+                    }
+                }
+            }
+        }
+        Self {
+            items,
+            index: 0,
+            scene_start,
+            choice_cursor: 0,
+        }
     }
 
-    /// 現在位置の表示行。会話行が1件もない、または末尾を過ぎている場合は `None`。
-    pub fn current(&self) -> Option<&DisplayLine> {
-        self.lines.get(self.index)
+    /// 現在位置を更新する内部ヘルパー。新しい位置が Choice item であっても無くても、
+    /// カーソルは常に 0 にリセットする（Line item に対しては無視されるだけなので無害。
+    /// こうしておくことで「以前の Choice で選んでいたカーソル位置が、無関係な次の Choice に
+    /// 引き継がれる」事故を型的に起こしえなくする）。
+    fn set_index(&mut self, index: usize) {
+        self.index = index;
+        self.choice_cursor = 0;
     }
 
-    /// 次の会話行へ進む。進めた場合は `true`、既に末尾にいた場合は `false`。
+    /// 現在位置の会話行。現在位置が Choice item、会話行が1件もない、または末尾を過ぎている
+    /// 場合は `None`。
+    pub fn current_line(&self) -> Option<&DisplayLine> {
+        match self.items.get(self.index) {
+            Some(PlaybackItem::Line(line)) => Some(line),
+            _ => None,
+        }
+    }
+
+    /// 現在位置が選択肢なら `(選択肢一覧, カーソル位置)` を返す。会話行の途中や末尾越えでは
+    /// `None`。
+    pub fn current_choice(&self) -> Option<(&[ChoiceOption], usize)> {
+        match self.items.get(self.index) {
+            Some(PlaybackItem::Choice(options)) => Some((options.as_slice(), self.choice_cursor)),
+            _ => None,
+        }
+    }
+
+    /// 次の item へ進む。現在位置が選択肢（選択待ち）の場合は、[`Playback::select_current_choice`]
+    /// で確定する必要があるため進めず `false` を返す。既に末尾にいた場合も `false`。
     pub fn advance(&mut self) -> bool {
-        if self.index + 1 < self.lines.len() {
-            self.index += 1;
+        if matches!(self.items.get(self.index), Some(PlaybackItem::Choice(_))) {
+            return false;
+        }
+        if self.index + 1 < self.items.len() {
+            self.set_index(self.index + 1);
             true
         } else {
             false
         }
     }
 
-    /// 全会話行のうち何行目か（1始まり）。会話行が0件の場合は0。
-    pub fn position(&self) -> usize {
-        if self.lines.is_empty() {
-            0
-        } else {
-            self.index + 1
+    /// 選択肢表示中のみ有効。カーソルを1つ上へ動かす（先頭で頭打ち、末尾へのラップはしない）。
+    /// 選択肢を表示していないときの呼び出しは no-op。
+    pub fn move_choice_cursor_up(&mut self) {
+        if matches!(self.items.get(self.index), Some(PlaybackItem::Choice(_))) {
+            self.choice_cursor = self.choice_cursor.saturating_sub(1);
         }
     }
 
-    /// 会話行の総数。
-    pub fn total(&self) -> usize {
-        self.lines.len()
+    /// 選択肢表示中のみ有効。カーソルを1つ下へ動かす（末尾で頭打ち、先頭へのラップはしない）。
+    /// 選択肢を表示していないときの呼び出しは no-op。
+    pub fn move_choice_cursor_down(&mut self) {
+        if let Some(PlaybackItem::Choice(options)) = self.items.get(self.index) {
+            if self.choice_cursor + 1 < options.len() {
+                self.choice_cursor += 1;
+            }
+        }
     }
 
-    /// 末尾（最後の会話行）に到達しているか。
+    /// 現在カーソルが指している選択肢を確定し、その `jump` 先シーンへ遷移する。
+    ///
+    /// 選択肢を表示していない場合、カーソルが範囲外の場合（本来起こり得ないが防御的に）、
+    /// または `jump` 先のシーンIDが `scene_start` に見つからない場合（原稿の記述ミスで
+    /// 存在しないシーンIDを指している等）は、位置を変えずに `false` を返す。GUI版
+    /// `NovelRenderer.jumpToScene` の「シーンが見つからなければ何もせず console.warn するだけ」
+    /// という fail-soft 方針と同じだが、TUI は alternate screen 中で標準出力を使えないため
+    /// 警告そのものは出さない（呼び出し側が `false` を見て何もしない、という形で吸収する）。
+    pub fn select_current_choice(&mut self) -> bool {
+        let Some(PlaybackItem::Choice(options)) = self.items.get(self.index) else {
+            return false;
+        };
+        let Some(option) = options.get(self.choice_cursor) else {
+            return false;
+        };
+        let Some(&target) = self.scene_start.get(&option.jump) else {
+            return false;
+        };
+        self.set_index(target);
+        true
+    }
+
+    /// 会話行の総数（Choice item は含まない）。
+    pub fn total(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| matches!(item, PlaybackItem::Line(_)))
+            .count()
+    }
+
+    /// 現在位置が何行目か（1始まり、Choice item は含まない）。現在位置が Choice の場合は、
+    /// そこに至るまでに表示済みの会話行数を返す（例: 3行しゃべった直後に選択肢が出ている
+    /// 状態なら3を返す）。
+    pub fn position(&self) -> usize {
+        if self.items.is_empty() {
+            return 0;
+        }
+        self.items[..=self.index]
+            .iter()
+            .filter(|item| matches!(item, PlaybackItem::Line(_)))
+            .count()
+    }
+
+    /// 末尾（最後の item）に到達しているか。
     pub fn is_at_end(&self) -> bool {
-        self.lines.is_empty() || self.index + 1 >= self.lines.len()
+        self.items.is_empty() || self.index + 1 >= self.items.len()
     }
 
     /// テスト専用: 会話行リストから直接 `Playback` を組み立てる。`main.rs` の
     /// `on_advance` テストなどで、`Document`（20個のフィールドを埋める必要がある）経由の
-    /// 冗長なフィクスチャ構築を避けるために使う（#472）。
+    /// 冗長なフィクスチャ構築を避けるために使う（#472）。選択肢を含む状態遷移のテストは
+    /// `Document` 経由（`from_document`、`scene_start` の構築が必要なため）で行う。
     #[cfg(test)]
     pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
-        Self { lines, index: 0 }
+        Self {
+            items: lines.into_iter().map(PlaybackItem::Line).collect(),
+            index: 0,
+            scene_start: HashMap::new(),
+            choice_cursor: 0,
+        }
     }
 }
 
@@ -253,7 +393,7 @@ mod tests {
     fn dialog_with_character_produces_correct_display_line() {
         let doc = doc_single_scene(vec![dialog(Some("カコ"), vec!["やあ"])]);
         let pb = Playback::from_document(&doc);
-        let line = pb.current().expect("should have a line");
+        let line = pb.current_line().expect("should have a line");
         assert_eq!(line.speaker.as_deref(), Some("カコ"));
         assert_eq!(line.text, vec!["やあ".to_string()]);
     }
@@ -262,14 +402,14 @@ mod tests {
     fn narration_only_has_none_speaker() {
         let doc = doc_single_scene(vec![narration(vec!["静かな朝だった。"])]);
         let pb = Playback::from_document(&doc);
-        assert_eq!(pb.current().expect("line").speaker, None);
+        assert_eq!(pb.current_line().expect("line").speaker, None);
     }
 
     #[test]
     fn dialog_without_character_has_none_speaker() {
         let doc = doc_single_scene(vec![dialog(None, vec!["誰？"])]);
         let pb = Playback::from_document(&doc);
-        assert_eq!(pb.current().expect("line").speaker, None);
+        assert_eq!(pb.current_line().expect("line").speaker, None);
     }
 
     #[test]
@@ -277,13 +417,16 @@ mod tests {
         let doc = doc_single_scene(vec![dialog(Some("カコ"), vec![]), narration(vec![])]);
         let mut pb = Playback::from_document(&doc);
         assert_eq!(pb.total(), 2);
-        assert_eq!(pb.current().expect("line").text, Vec::<String>::new());
+        assert_eq!(pb.current_line().expect("line").text, Vec::<String>::new());
         pb.advance();
-        assert_eq!(pb.current().expect("line").text, Vec::<String>::new());
+        assert_eq!(pb.current_line().expect("line").text, Vec::<String>::new());
     }
 
     #[test]
-    fn non_display_events_are_excluded_from_lines() {
+    fn non_display_events_are_excluded_but_choice_still_produces_an_item() {
+        // Background/Bgm/Se は依然として画面表示イベントではないため items を生成しない。
+        // Choice は #482 で「読み飛ばし」対象から外れ、独立した item になった（以前は他の
+        // 非表示イベントと同様に丸ごと無視されており、選択肢が一切機能しない原因だった）。
         let doc = doc_single_scene(vec![
             Event::Background {
                 path: "bg.png".to_string(),
@@ -311,15 +454,21 @@ mod tests {
             dialog(Some("カコ"), vec!["こんにちは"]),
         ]);
         let pb = Playback::from_document(&doc);
+        // 会話行としては dialog の1件だけがカウントされる（Choice は数えない）。
         assert_eq!(pb.total(), 1);
-        assert_eq!(pb.current().expect("line").speaker.as_deref(), Some("カコ"));
+        // 再生位置としては Choice が最初の item になるため、いきなり選択肢が現れる。
+        assert_eq!(pb.current_line(), None);
+        let (options, cursor) = pb.current_choice().expect("choice should be current");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].text, "yes");
+        assert_eq!(cursor, 0);
     }
 
     #[test]
     fn zero_events_playback_has_no_current_and_is_at_end() {
         let doc = doc_single_scene(vec![]);
         let pb = Playback::from_document(&doc);
-        assert_eq!(pb.current(), None);
+        assert_eq!(pb.current_line(), None);
         assert_eq!(pb.position(), 0);
         assert_eq!(pb.total(), 0);
         assert!(pb.is_at_end());
@@ -387,10 +536,16 @@ mod tests {
         let mut pb = Playback::from_document(&doc);
         assert!(!pb.is_at_end());
         assert!(pb.advance());
-        assert_eq!(pb.current().expect("line").speaker.as_deref(), Some("B"));
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
+        );
         assert!(!pb.is_at_end());
         assert!(pb.advance());
-        assert_eq!(pb.current().expect("line").speaker.as_deref(), Some("C"));
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("C")
+        );
         assert!(pb.is_at_end());
     }
 
@@ -411,17 +566,17 @@ mod tests {
         let mut pb = Playback::from_document(&doc);
         assert_eq!(pb.total(), 3);
         assert_eq!(
-            pb.current().expect("line").text,
+            pb.current_line().expect("line").text,
             vec!["ch1-scene1".to_string()]
         );
         pb.advance();
         assert_eq!(
-            pb.current().expect("line").text,
+            pb.current_line().expect("line").text,
             vec!["ch1-scene2".to_string()]
         );
         pb.advance();
         assert_eq!(
-            pb.current().expect("line").text,
+            pb.current_line().expect("line").text,
             vec!["ch2-scene1".to_string()]
         );
     }
@@ -445,5 +600,118 @@ mod tests {
         let doc = document_with_chapters(vec![populated, empty_chapter]);
         let pb = Playback::from_document(&doc);
         assert_eq!(pb.total(), 1);
+    }
+
+    // ---- #482: 選択肢分岐（Choice / jump 解決）のテスト ----
+
+    fn choice(options: Vec<(&str, &str)>) -> Event {
+        Event::Choice {
+            options: options
+                .into_iter()
+                .map(|(text, jump)| ChoiceOption {
+                    text: text.to_string(),
+                    jump: jump.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    /// 2シーン構成: "1-1" は台詞→Choice（"1-2" へ jump）、"1-2" は台詞1件だけ。
+    fn two_scene_doc_with_choice() -> Document {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "1-2")]),
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("B"), vec!["次のシーン"])]),
+            ],
+        );
+        document_with_chapters(vec![ch1])
+    }
+
+    #[test]
+    fn select_current_choice_jumps_to_target_scene_start() {
+        let doc = two_scene_doc_with_choice();
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "台詞から Choice へ進めるはず");
+        assert!(pb.current_choice().is_some(), "Choice が現在位置のはず");
+
+        assert!(
+            pb.select_current_choice(),
+            "有効な jump 先なので成功するはず"
+        );
+
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").speaker.as_deref(),
+            Some("B")
+        );
+        assert_eq!(pb.current_choice(), None, "jump後はChoiceではないはず");
+    }
+
+    #[test]
+    fn select_current_choice_with_unknown_jump_target_is_noop() {
+        let ch1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![choice(vec![("存在しない先へ", "does-not-exist")])],
+            )],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.current_choice().is_some());
+
+        assert!(
+            !pb.select_current_choice(),
+            "存在しないシーンIDへのjumpは失敗するはず"
+        );
+        assert!(
+            pb.current_choice().is_some(),
+            "失敗時は選択肢表示のまま変わらないはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_clamps_at_both_ends_without_wrapping() {
+        let ch1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![choice(vec![("A", "x"), ("B", "y"), ("C", "z")])],
+            )],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        // 先頭でさらに上へ: 0 のまま。
+        pb.move_choice_cursor_up();
+        assert_eq!(pb.current_choice().unwrap().1, 0);
+
+        pb.move_choice_cursor_down();
+        pb.move_choice_cursor_down();
+        assert_eq!(pb.current_choice().unwrap().1, 2, "末尾(index 2)まで進む");
+
+        // 末尾でさらに下へ: 2 のまま（3 へラップ/オーバーフローしない）。
+        pb.move_choice_cursor_down();
+        assert_eq!(pb.current_choice().unwrap().1, 2);
+    }
+
+    #[test]
+    fn advance_while_choice_is_current_does_not_move() {
+        let doc = two_scene_doc_with_choice();
+        let mut pb = Playback::from_document(&doc);
+        pb.advance(); // 台詞 → Choice
+        assert!(pb.current_choice().is_some());
+
+        assert!(
+            !pb.advance(),
+            "Choice表示中の advance は select_current_choice を使うべきなので false"
+        );
+        assert!(pb.current_choice().is_some(), "位置が変わっていないはず");
     }
 }
