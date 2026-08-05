@@ -14,6 +14,7 @@ use std::str::FromStr;
 use std::time::Instant;
 
 use jiwa::{PulseHandle, Rgb};
+use name_name_parser::models::ChoiceOption;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -38,11 +39,22 @@ use crate::reveal;
 /// `RevealState::Done` はこれを無視する）。`image_fade` は左側に描画するイベント絵の
 /// クロスフェード状態（[`ImageFadeState`]、`None` は event_image を一切扱わない呼び出し元
 /// 向けのフォールバック）、`image_cache` はそのデコード結果キャッシュ（#481）。
+///
+/// `choice` が `Some((options, cursor))`（選択肢表示中、#482）のときは、右側テキスト領域
+/// （`columns[1]`、#480の50/50分割はそのまま）に選択肢一覧を描画し、通常の相手/自分
+/// 2ウィンドウ（`draw_text_windows`）は描かない。選択肢には特定の話者が無いため、相手/自分の
+/// 上下分割という概念自体が意味を持たない（`line`/`choice` は同時に `Some` にならない —
+/// `Playback::current_line`/`current_choice` が排他的なため。呼び出し側の `main.rs` はこの
+/// 排他性を意識せず、両方をそのまま渡すだけでよい）。選択肢表示中も左側のイベント絵/
+/// プレースホルダ（`image_fade`）はそのまま描画され続ける — 左カラムは `columns[0]` で
+/// 右カラム（テキスト/選択肢の切替）とは独立しているため、選択肢表示は画像側のフェードや
+/// サイズに影響しない。
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     config: &Config,
     line: Option<&DisplayLine>,
+    choice: Option<(&[ChoiceOption], usize)>,
     position: usize,
     total: usize,
     is_at_end: bool,
@@ -73,8 +85,44 @@ pub fn draw(
         )
     });
     draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
-    draw_text_windows(frame, columns[1], config, line, reveal, pulse, now);
+    match choice {
+        Some((options, cursor)) => draw_choice_list(frame, columns[1], options, cursor),
+        None => draw_text_windows(frame, columns[1], config, line, reveal, pulse, now),
+    }
     draw_status_line(frame, root[1], config, position, total, is_at_end);
+}
+
+/// 選択肢のカーソル行に付ける記号。`reveal::PAGE_INDICATOR_SYMBOL` と同じ方針
+/// （記号・強調スタイルはハードコードし、Config化しない）。
+const CHOICE_CURSOR_SYMBOL: &str = "▶ ";
+/// カーソル記号と同じ表示幅を保つための、非カーソル行の左詰めパディング。
+const CHOICE_CURSOR_PADDING: &str = "  ";
+
+/// 右側テキスト領域全体に選択肢を縦一列に描画する（#482）。相手/自分の2ウィンドウ分割
+/// （`draw_text_windows`）は使わない — 選択肢に話者は無いため。カーソル行は反転表示
+/// （`Modifier::REVERSED`）+ 先頭の [`CHOICE_CURSOR_SYMBOL`] で示す。左側（`columns[0]`）の
+/// イベント絵/プレースホルダは選択肢表示中も独立して描画され続けるため、ここでは一切触れない。
+fn draw_choice_list(frame: &mut Frame, area: Rect, options: &[ChoiceOption], cursor: usize) {
+    let lines: Vec<Line> = options
+        .iter()
+        .enumerate()
+        .map(|(i, option)| {
+            let is_selected = i == cursor;
+            let prefix = if is_selected {
+                CHOICE_CURSOR_SYMBOL
+            } else {
+                CHOICE_CURSOR_PADDING
+            };
+            let style = if is_selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            Line::styled(format!("{prefix}{}", option.text), style)
+        })
+        .collect();
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    render_wrapped_paragraph(frame, area, paragraph);
 }
 
 /// 左側: イベント絵（`image` が `Some` のとき、quadrant block グリッドとして描画）、または
@@ -391,6 +439,7 @@ mod tests {
                     f,
                     &config,
                     None,
+                    None,
                     0,
                     0,
                     true,
@@ -442,6 +491,7 @@ mod tests {
                         f,
                         &config,
                         None,
+                        None,
                         0,
                         0,
                         true,
@@ -473,6 +523,7 @@ mod tests {
                 draw(
                     f,
                     &config,
+                    None,
                     None,
                     0,
                     0,
@@ -517,6 +568,7 @@ mod tests {
                     f,
                     &config,
                     None,
+                    None,
                     0,
                     0,
                     true,
@@ -547,6 +599,7 @@ mod tests {
                     f,
                     &config,
                     None,
+                    None,
                     0,
                     0,
                     true,
@@ -574,6 +627,7 @@ mod tests {
                 draw(
                     f,
                     &config,
+                    None,
                     None,
                     1,
                     1,
@@ -603,6 +657,7 @@ mod tests {
                     f,
                     &config,
                     None,
+                    None,
                     1,
                     2,
                     false,
@@ -630,6 +685,7 @@ mod tests {
                 draw(
                     f,
                     &config,
+                    None,
                     None,
                     0,
                     0,
@@ -668,6 +724,7 @@ mod tests {
                     f,
                     &config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     true,
@@ -702,6 +759,7 @@ mod tests {
                     f,
                     &config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     true,
@@ -743,6 +801,7 @@ mod tests {
                     f,
                     &typing_config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     true,
@@ -776,6 +835,7 @@ mod tests {
                     f,
                     &done_config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     true,
@@ -831,6 +891,7 @@ mod tests {
                     f,
                     &config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     true,
@@ -868,6 +929,7 @@ mod tests {
                     f,
                     &config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     true,
@@ -917,6 +979,7 @@ mod tests {
                     f,
                     &config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     true,
@@ -1068,6 +1131,7 @@ mod tests {
                     f,
                     config,
                     line,
+                    None,
                     1,
                     1,
                     false,
@@ -1382,6 +1446,7 @@ mod tests {
                         f,
                         &config,
                         None,
+                        None,
                         0,
                         0,
                         true,
@@ -1453,6 +1518,7 @@ mod tests {
                     f,
                     &config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     false,
@@ -1499,6 +1565,7 @@ mod tests {
                     f,
                     &typing_config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     false,
@@ -1533,6 +1600,7 @@ mod tests {
                     f,
                     &done_config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     false,
@@ -1642,6 +1710,7 @@ mod tests {
                     f,
                     &config,
                     Some(&line),
+                    None,
                     1,
                     1,
                     false,
@@ -1688,5 +1757,245 @@ mod tests {
             !text.contains("すぴーかー"),
             "speaker name must not appear as a separate label, buffer was: {text}"
         );
+    }
+
+    // ---- #482: 選択肢UI（キーボードカーソル）のテスト ----
+
+    fn choice_option(text: &str, jump: &str) -> ChoiceOption {
+        ChoiceOption {
+            text: text.to_string(),
+            jump: jump.to_string(),
+        }
+    }
+
+    #[test]
+    fn choice_list_renders_all_option_texts_in_right_column() {
+        let config = Config::default();
+        let options = vec![
+            choice_option("はい", "a"),
+            choice_option("いいえ", "b"),
+            choice_option("わからない", "c"),
+        ];
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("はい"), "buffer was: {text}");
+        assert!(text.contains("いいえ"), "buffer was: {text}");
+        assert!(text.contains("わからない"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn choice_list_marks_only_the_cursor_row_with_reverse_style() {
+        let config = Config::default();
+        let options = vec![choice_option("A", "a"), choice_option("B", "b")];
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        // カーソルは index 1 ("B") を指している。
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 1)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // 'A'/'B' の実描画セル座標を探す（左半分はプレースホルダ列なので x=0 決め打ちは誤り。
+        // 選択肢は右半分の列にしかレンダリングされない）。
+        let find_cell = |needle: char| -> (u16, u16) {
+            let area = buffer.area();
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    if buffer.cell((x, y)).expect("in bounds").symbol() == needle.to_string() {
+                        return (x, y);
+                    }
+                }
+            }
+            panic!("option {needle:?} should render somewhere, buffer was: {buffer:?}");
+        };
+        let (ax, ay) = find_cell('A');
+        let (bx, by) = find_cell('B');
+        let a_reversed = buffer
+            .cell((ax, ay))
+            .expect("in bounds")
+            .modifier
+            .contains(Modifier::REVERSED);
+        let b_reversed = buffer
+            .cell((bx, by))
+            .expect("in bounds")
+            .modifier
+            .contains(Modifier::REVERSED);
+        assert!(!a_reversed, "非カーソル行は反転表示されないはず");
+        assert!(b_reversed, "カーソル行(index 1)は反転表示されるはず");
+    }
+
+    #[test]
+    fn choice_list_does_not_panic_at_extremely_narrow_width() {
+        let config = Config::default();
+        let options = vec![choice_option("選択肢", "a")];
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(1, 3)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn choice_list_with_many_options_does_not_panic_when_overflowing_area_height() {
+        // 選択肢数(50件)がterminalの高さ(8行)を大きく超える。draw_choice_list はスクロールを
+        // 実装していないため画面に収まらない分は単に見切れるが、panic しないことを確認する。
+        let config = Config::default();
+        let options: Vec<ChoiceOption> = (0..50)
+            .map(|i| choice_option(&format!("選択肢{i}"), "x"))
+            .collect();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn choice_list_full_width_long_option_wraps_without_panic_and_keeps_reversed_style_on_wrapped_rows(
+    ) {
+        // 全角文字を60個連ねた長い選択肢テキストを、右側テキスト列がその全文を1行に
+        // 収められない狭い terminal 幅で描画する。折り返し（Wrap）が発生しても panic せず、
+        // カーソル行（index 0、REVERSEDスタイル）の折り返し継続行にもスタイルが引き継がれる
+        // ことを確認する。
+        let config = Config::default();
+        let long_text = "あ".repeat(60);
+        let options = vec![choice_option(&long_text, "x")];
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(20, 15)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area();
+        let mut rows_with_a = 0;
+        for y in 0..area.height {
+            let mut row_has_a = false;
+            let mut all_reversed = true;
+            for x in 0..area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                if cell.symbol() == "あ" {
+                    row_has_a = true;
+                    if !cell.modifier.contains(Modifier::REVERSED) {
+                        all_reversed = false;
+                    }
+                }
+            }
+            if row_has_a {
+                rows_with_a += 1;
+                assert!(
+                    all_reversed,
+                    "折り返された行もカーソルのREVERSEDスタイルを保つはず (y={y})"
+                );
+            }
+        }
+        assert!(
+            rows_with_a >= 2,
+            "十分に長い全角文字列なので複数行に折り返されるはず（実際は{rows_with_a}行）"
+        );
+    }
+
+    #[test]
+    fn choice_list_renders_nothing_but_does_not_panic_when_options_empty() {
+        // Playback 側の修正（バグ2）後は options: [] の Choice が item 化されなくなるため
+        // ui.rs の描画経路には現れなくなるが、draw_choice_list 単体としての防御も別途
+        // 確認しておく価値がある（呼び出し側の前提が崩れても panic しないことの担保）。
+        let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_choice_list(f, area, &[], 0);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert_eq!(text.trim(), "", "空optionsでは何も描画されないはず");
     }
 }
