@@ -11,3 +11,6 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 anyhow = "1"
 jiwa = "0.3"
+# WebP のみ有効化（gymnasia のイベント絵アセットは WebP）。avif 等 default-formats の
+# 重量級コーデックを引き込まないよう default-features は無効化する（#481）。
+image = { version = "0.25", default-features = false, features = ["webp"] }
