@@ -1,9 +1,12 @@
 //! ratatui による画面描画。左に画像プレースホルダ、右に相手（上）/自分（下）の2ウィンドウで
-//! テキストを表示する。左右50/50・テキスト側はさらに上下50/50 に分割する GUI版
-//! （`frontend/src/game/novelLayout.ts` の `computeSplitLayoutRegions` /
-//! `splitTextRegionForDualWindow`）と同じジオメトリを踏襲する（#480）。GUI版の dual-window は
-//! 常に borderless のため、こちらも罫線の枠は描かない。話者名ラベルも表示しない — 話者識別は
-//! 「上下どちらの窓か」（位置）と `Config::color_name_for` の文字色で行う。
+//! テキストを表示する。左右は50/50（GUI版 `frontend/src/game/novelLayout.ts` の
+//! `computeSplitLayoutRegions` と同じ比率、#480）。テキスト側の上下分割も比率としては50/50
+//! だが、GUI版の `splitTextRegionForDualWindow` が浮動小数点で分割するのに対し、TUI版は
+//! 整数セル単位のため高さが奇数のとき端数が出る。GUI版と違いこの端数は self（自分＝
+//! プレイヤー発言側）に寄せる（`draw_text_windows` 参照）— self が opponent より恒常的に
+//! 損をする片側固定バイアスを避けるための意図的な差異（セルフレビュー修正）。GUI版の
+//! dual-window は常に borderless のため、こちらも罫線の枠は描かない。話者名ラベルも表示しない
+//! — 話者識別は「上下どちらの窓か」（位置）と `Config::color_name_for` の文字色で行う。
 
 use std::str::FromStr;
 use std::time::Instant;
@@ -19,9 +22,11 @@ use crate::config::{Config, PlaceholderStyle};
 use crate::playback::DisplayLine;
 use crate::reveal;
 
-/// 画面全体を左（画像プレースホルダ）50% / 右（テキスト、相手=上/自分=下にさらに50/50分割）に
-/// 分割して描画する。最下段1行は進行状況（ゲーム名 + 会話位置/総数）専用の帯にする — 罫線の
-/// title として表示していた情報を、枠を使わず最小限の形で残すためのもの（過剰な装飾はしない）。
+/// 画面全体を左（画像プレースホルダ）50% / 右（テキスト、相手=上/自分=下にさらに分割）に
+/// 分割して描画する。テキスト側の上下分割は整数セルの端数を self（自分）側に寄せる
+/// （`draw_text_windows` 参照。opponent が恒常的に得をする片側固定バイアスを避けるため）。
+/// 最下段1行は進行状況（ゲーム名 + 会話位置/総数）専用の帯にする — 罫線の title として
+/// 表示していた情報を、枠を使わず最小限の形で残すためのもの（過剰な装飾はしない）。
 ///
 /// `reveal` は現在の会話行のタイプライター表示状態（[`reveal::RevealState`]、`None` は行
 /// そのものが無いケース）、`pulse` はページ送りインジケータ（reveal 完了後にのみ表示する）、
@@ -106,9 +111,13 @@ pub fn draw_splash(frame: &mut Frame, config: &Config) {
     frame.render_widget(paragraph, centered);
 }
 
-/// 右側をさらに上（相手）/下（自分）50/50 に分割し、現在の会話行の話者側のウィンドウにだけ
-/// 本文を描画する（GUI版 `splitTextRegionForDualWindow`: 相手=上/自分=下、#480）。話者が
-/// `config.player_speakers` に含まれる場合のみ「自分」（下窓）、それ以外（Narration の
+/// 右側をさらに上（相手）/下（自分）に分割し、現在の会話行の話者側のウィンドウにだけ
+/// 本文を描画する（GUI版 `splitTextRegionForDualWindow`: 相手=上/自分=下、#480）。分割は
+/// `Constraint::Length` で明示的に高さを計算し、opponent=`height / 2`（切り捨て）・
+/// self=`height - opponent`（切り捨て分の端数を含む）とする — `Constraint::Percentage`
+/// のペアだと ratatui は前者を切り上げ・後者を切り捨てるため、そのまま使うと self が
+/// opponent より恒常的に1行少なくなる片側固定バイアスが生じる（セルフレビューで発見・修正）。
+/// 話者が `config.player_speakers` に含まれる場合のみ「自分」（下窓）、それ以外（Narration の
 /// 話者不明を含む — GUI版 `resolveDualWindowIsSelf` が話者不明を相手側に倒すのと同じ規則）は
 /// 「相手」（上窓）に描く。話者側でない方の窓は空のまま（前回発言のログ表示はスコープ外）。
 ///
@@ -125,16 +134,21 @@ fn draw_text_windows(
     pulse: &PulseHandle,
     now: Instant,
 ) {
+    let opponent_height = area.height / 2; // 切り捨て
+    let self_height = area.height - opponent_height; // 余りは self が受け取る（floor+余り=ceil相当）
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Length(opponent_height),
+            Constraint::Length(self_height),
+        ])
         .split(area);
     let opponent_area = rows[0];
     let self_area = rows[1];
 
     let Some(line) = line else {
         let paragraph = Paragraph::new("(会話行がありません)").wrap(Wrap { trim: false });
-        frame.render_widget(paragraph, opponent_area);
+        render_wrapped_paragraph(frame, opponent_area, paragraph);
         return;
     };
 
@@ -169,7 +183,26 @@ fn draw_text_windows(
     }
 
     let paragraph = Paragraph::new(Text::from(rendered)).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, target_area);
+    render_wrapped_paragraph(frame, target_area, paragraph);
+}
+
+/// wrap 付き `Paragraph` を描画する際、危険な極小幅を避けるための下限セル数。
+/// ratatui 0.30.2 / ratatui-widgets 0.3.2 は、半角/全角混在の文字列を `Wrap` 付き
+/// `Paragraph` で描画する幅がちょうど2セルのとき、内部の折り返し計算がバッファ範囲外に
+/// 書き込みpanicすることがある（`ratatui_widgets::paragraph::render_line` →
+/// `Buffer::index_mut`）。実測では幅2セル・高さ2以上で複数の入力文字列
+/// （例: フォールバック文言「(会話行がありません)」）について再現し、幅1セルおよび幅3セル
+/// 以上では再現しなかった。依存クレート側の折り返し計算バグのためこちら側では直接修正
+/// できず、危険な幅ではwrap描画そのものをスキップする防御的ガードとする。
+const MIN_SAFE_TEXT_WRAP_WIDTH: u16 = 3;
+
+/// [`MIN_SAFE_TEXT_WRAP_WIDTH`] 未満の極小幅では、ratatui内部のpanicを避けるため
+/// `Paragraph` の描画自体をスキップする（何も描かない）。それ以外は通常どおり描画する。
+fn render_wrapped_paragraph(frame: &mut Frame, area: Rect, paragraph: Paragraph<'_>) {
+    if area.width < MIN_SAFE_TEXT_WRAP_WIDTH {
+        return;
+    }
+    frame.render_widget(paragraph, area);
 }
 
 /// 画面最下段1行: ゲーム名 + 会話位置/総数（+ 終端マーカー）。枠の title として表示していた
@@ -315,8 +348,8 @@ mod tests {
         };
         let now = Instant::now();
         // reveal 完了済み(=ページ送りインジケータも同時に描画される)状態でも、
-        // 左右 Percentage(50/50)・テキスト側の上下 Percentage(50/50) がいずれも
-        // width/height=1 (50% が 0 に丸まる) で panic しないことを確認する。
+        // 左右 Percentage(50/50)・テキスト側の上下 Length(height/2 と余り) がいずれも
+        // width/height=1 (0 セルに丸まる) で panic しないことを確認する。
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         terminal
@@ -659,11 +692,16 @@ mod tests {
     //
     // ratatui 0.30.2 の `Layout::split` は `Constraint::Percentage(50)/Percentage(50)` を
     // 奇数サイズに適用したとき前者(左/上)が切り上げ・後者(右/下)が切り捨てになる（cargo test
-    // で `Layout::split` の戻り値を直接ダンプして実測・確認済み）。この非対称は `draw()` の
-    // 2段の分割（左右 columns、テキスト側 rows）双方に効き、特にテキスト側 rows split は
-    // ステータス行を引いた残り高さに対して掛かるため、端末高さが偶数のとき self(下/自分)窓が
-    // opponent(上/相手)窓より恒常的に1行少なくなる（H=2 では self が高さ0で消える）。
-    // これはバグ修正ではなく、現状の挙動を固定する characterization test。
+    // で `Layout::split` の戻り値を直接ダンプして実測・確認済み）。左右 columns（画像
+    // プレースホルダ/テキスト）の分割はこの丸めをそのまま使っている（対称性を要求しない分割
+    // のため問題ない。W=7 で左が1セル余分に取る例は下記
+    // `odd_terminal_width_gives_placeholder_column_the_extra_cell` 参照）。
+    //
+    // 一方、テキスト側の上下分割（相手=上/自分=下）は `Constraint::Percentage` ではなく
+    // `Constraint::Length` で明示的に高さを計算しており（`draw_text_windows` 内、
+    // opponent=`height/2`切り捨て・self=`height-opponent`）、self が余りの1行を必ず受け取る。
+    // これは self が opponent より恒常的に1行少なくなる片側固定バイアスをセルフレビューで
+    // 発見し修正した結果であり、以下のテストは修正後の挙動（self が優先される）を固定する。
 
     /// テスト用に `DisplayLine` を組み立てる（19本のテストケースで多用するための局所ヘルパー）。
     fn dialog_line(speaker: Option<&str>, text: Vec<&str>) -> DisplayLine {
@@ -845,10 +883,11 @@ mod tests {
     // -- C. 境界値 --
 
     #[test]
-    fn even_terminal_height_makes_self_window_one_row_shorter_than_opponent() {
+    fn even_terminal_height_gives_self_window_the_extra_row() {
         // H=4(偶数) → root[0].height=3(ステータス行1を引いた残り) → テキスト側 rows split は
-        // 3の奇数丸めで opponent(上)=2行・self(下)=1行の非対称になる。Rect を直接覗く代わりに、
-        // 2行の本文を与えたとき何行まで収まるかで高さを実測する。
+        // opponent=floor(3/2)=1行・self=3-1=2行になり、self(下/自分)側が余りの1行を受け取る
+        // （self が損をしないよう明示的な高さ計算にした、セルフレビュー修正）。Rect を直接
+        // 覗く代わりに、2行の本文を与えたとき何行まで収まるかで高さを実測する。
         let config = Config::default();
         let text = vec!["line1", "line2"];
 
@@ -860,8 +899,8 @@ mod tests {
             "buffer was: {opponent_text}"
         );
         assert!(
-            opponent_text.contains("line2"),
-            "opponent window (height 2) should fit both lines, buffer was: {opponent_text}"
+            !opponent_text.contains("line2"),
+            "opponent window (height 1) should clip the second line, buffer was: {opponent_text}"
         );
 
         let self_line = dialog_line(Some("主格"), text);
@@ -869,30 +908,31 @@ mod tests {
         let self_text = buffer_text(&self_buffer);
         assert!(self_text.contains("line1"), "buffer was: {self_text}");
         assert!(
-            !self_text.contains("line2"),
-            "self window (height 1) should clip the second line, buffer was: {self_text}"
+            self_text.contains("line2"),
+            "self window (height 2) should fit both lines, buffer was: {self_text}"
         );
     }
 
     #[test]
-    fn terminal_height_two_collapses_self_window_to_zero_height() {
-        // H=2 → root[0].height=1 → テキスト側 rows split(1) は opponent=1/self=0 になり、
-        // プレイヤー発言(self窓)は実質どこにも描画されなくなる。
+    fn terminal_height_two_collapses_opponent_window_to_zero_height() {
+        // H=2 → root[0].height=1 → テキスト側 rows split は opponent=floor(1/2)=0・
+        // self=1-0=1 になり、self が優先されるため、相手発言(opponent窓)が実質どこにも
+        // 描画されなくなる（旧実装では逆に self 側が消えていた。セルフレビュー修正）。
         let config = Config::default();
-        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let line = dialog_line(Some("相手"), vec!["hello"]);
         let buffer = render(&config, Some(&line), None, 40, 2);
         let text = buffer_text(&buffer);
         assert!(
             !text.contains("hello"),
-            "self window has height 0 at H=2, player text must not render anywhere, buffer was: {text}"
+            "opponent window has height 0 at H=2, opponent text must not render anywhere, buffer was: {text}"
         );
     }
 
     #[test]
     fn odd_terminal_height_splits_text_area_evenly() {
         // H=3(奇数) → root[0].height=2(偶数) → テキスト側 rows split はちょうど半分に割れ、
-        // opponent(上)=1行・self(下)=1行の対称になる。H=4 の非対称（1つ上のテスト）と対を成す
-        // 対比ケース。
+        // opponent(上)=1行・self(下)=1行の対称になる。H=4 で self が余りの1行を受け取る
+        // ケース（1つ上のテスト）と対を成す対比ケース。
         let config = Config::default();
         let text = vec!["line1", "line2"];
 
@@ -942,10 +982,14 @@ mod tests {
         // 右(テキスト)=floor(7/2)=3 に丸まる。テキスト側に単一ASCII文字を描画させ、
         // その先頭セルの x 座標がその境界(x=4)と一致することで実測する。
         //
-        // フォールバック文言「(会話行がありません)」は全角文字を含み、この幅では
-        // ratatui 側の Paragraph 折り返し処理がバッファ範囲外書き込みで panic する
-        // （`ratatui_widgets::paragraph::render_line` → `Buffer::index_mut` の既存バグ、
-        // #480 の分割ロジックとは無関係）ため、境界計測にはこの経路を使わない。
+        // フォールバック文言「(会話行がありません)」は全角文字を含み、テキスト側の幅が
+        // ちょうど2セル（W=5相当）になる条件では ratatui 側の Paragraph 折り返し処理が
+        // バッファ範囲外書き込みで panic することを実測で確認した（既知の依存クレート側
+        // バグ、`render_wrapped_paragraph` の極小幅ガードで回避している。回帰テストは
+        // `narrow_terminal_with_no_display_line_does_not_panic_on_fullwidth_fallback_message`
+        // 参照）。そのガードにより W=5（テキスト側幅2）ではそもそも何も描画されなくなる
+        // ため、この境界計測（x座標の実測）にはガードの影響を受けない W=7 と単一ASCII文字
+        // を使う。
         let config = Config::default();
         let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
         let buffer = render(&config, Some(&line), None, 7, 10);
@@ -964,6 +1008,26 @@ mod tests {
             x, 4,
             "text column should start at x=4 (ceil(7/2)) when width=7 splits 50/50; found at x={x}"
         );
+    }
+
+    #[test]
+    fn narrow_terminal_with_no_display_line_does_not_panic_on_fullwidth_fallback_message() {
+        // W=4/5・H=4以上は、左右 Percentage(50/50) 分割によりテキスト側ウィンドウ幅がちょうど
+        // 2セルになる。全角文字を含むフォールバック文言「(会話行がありません)」をその幅で
+        // wrap 描画しようとすると、ratatui 内部
+        // （`ratatui_widgets::paragraph::render_line` → `Buffer::index_mut`）で
+        // バッファ範囲外書き込みpanicすることを実測で確認した（幅1セル・幅3セル以上では
+        // 再現しない）。`render_wrapped_paragraph` の極小幅ガード（3セル未満はwrap描画を
+        // スキップ）でこの経路を回避できていることを固定する回帰テスト。
+        let config = Config::default();
+        for (w, h) in [(4u16, 4u16), (5, 4), (4, 5), (5, 6)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            let now = Instant::now();
+            let pulse = reveal::build_pulse(now);
+            terminal
+                .draw(|f| draw(f, &config, None, 0, 0, true, None, &pulse, now))
+                .unwrap();
+        }
     }
 
     // -- D. null/空/未設定 --
