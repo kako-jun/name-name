@@ -222,8 +222,20 @@ impl Config {
 
     /// Markdown 原稿中の画像相対パス（`DisplayLine::event_image`、例: `props/x.webp`）を
     /// `event_image.assets_dir` と結合し、実ファイルパスへ解決する（#481）。
-    pub fn resolve_image_path(&self, relative: &str) -> PathBuf {
-        self.event_image.assets_dir.join(relative)
+    ///
+    /// `relative` が `..`（親ディレクトリ参照）や絶対パス（`/` 始まり、Windows の
+    /// プレフィックス等）を含む場合は `assets_dir` の外を指しうるため `None` を返す
+    /// （呼び出し側 [`crate::image_fade`] はデコード失敗と同様にプレースホルダへ
+    /// フォールバックする）。原稿は基本的に信頼できる作者が書くものだが、
+    /// `assets_dir` に閉じ込める意図の関数として最低限のガードを持たせる。
+    pub fn resolve_image_path(&self, relative: &str) -> Option<PathBuf> {
+        let is_safe = Path::new(relative)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+        if !is_safe {
+            return None;
+        }
+        Some(self.event_image.assets_dir.join(relative))
     }
 }
 
@@ -308,8 +320,32 @@ mod tests {
         };
         assert_eq!(
             config.resolve_image_path("props/candle.webp"),
-            PathBuf::from("assets/images/props/candle.webp")
+            Some(PathBuf::from("assets/images/props/candle.webp"))
         );
+    }
+
+    #[test]
+    fn resolve_image_path_rejects_parent_dir_traversal() {
+        let config = Config {
+            event_image: EventImageConfig {
+                assets_dir: PathBuf::from("assets/images"),
+                ..EventImageConfig::default()
+            },
+            ..Config::default()
+        };
+        assert_eq!(config.resolve_image_path("../../secret.txt"), None);
+    }
+
+    #[test]
+    fn resolve_image_path_rejects_absolute_path() {
+        let config = Config {
+            event_image: EventImageConfig {
+                assets_dir: PathBuf::from("assets/images"),
+                ..EventImageConfig::default()
+            },
+            ..Config::default()
+        };
+        assert_eq!(config.resolve_image_path("/etc/passwd"), None);
     }
 
     #[test]

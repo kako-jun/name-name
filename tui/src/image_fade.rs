@@ -97,9 +97,10 @@ impl ImageFadeState {
     }
 }
 
-/// 相対パスをデコード済み画像から quadrant block グリッドへ解決する。デコードに失敗した
-/// 場合（ファイル不在・壊れたファイル等）は [`image_render::blank_grid`] にフォールバックし、
-/// 1枚の画像の問題で再生全体をクラッシュさせない。
+/// 相対パスをデコード済み画像から quadrant block グリッドへ解決する。パスの解決に失敗した
+/// 場合（`..`/絶対パス等の不正な相対パス、ファイル不在、壊れたファイル等）は
+/// [`image_render::blank_grid`] にフォールバックし、1枚の画像の問題で再生全体を
+/// クラッシュさせない。
 fn resolve_grid(
     cache: &mut ImageCache,
     config: &Config,
@@ -107,7 +108,9 @@ fn resolve_grid(
     cols: u16,
     rows: u16,
 ) -> RenderedImage {
-    let full_path = config.resolve_image_path(relative_path);
+    let Some(full_path) = config.resolve_image_path(relative_path) else {
+        return image_render::blank_grid(cols, rows);
+    };
     match cache.get_or_load(&full_path) {
         Some(decoded) => image_render::rgba_to_quadrant_grid(
             &decoded.rgba,
