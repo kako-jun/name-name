@@ -1,4 +1,5 @@
-//! キー入力の解釈。Enter/Space で次の会話行へ進み、q/Esc で終了する。
+//! キー入力の解釈。Enter/Space で次の会話行へ進み（選択肢表示中は確定になる、#482）、
+//! ↑/↓ で選択肢のカーソルを動かし、q/Esc で終了する。
 
 use std::time::Duration;
 
@@ -9,8 +10,15 @@ use ratatui::crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent
 pub enum Action {
     /// 何もしない（対象外のキー入力・キー離しイベント等）。
     None,
-    /// 次の会話行へ進む。
+    /// 次の会話行へ進む。選択肢表示中（`Playback::current_choice` が `Some`）は、
+    /// 意味が「カーソルが指す選択肢の確定」に変わる（#482、`main.rs::on_advance` 参照）。
+    /// Advance と兼用にしているのは、選択肢が無い既存スクリプトでは Enter/Space の意味を
+    /// 一切変えたくないため（新規 Action にすると呼び出し側で常に分岐が必要になる）。
     Advance,
+    /// 選択肢のカーソルを1つ上へ動かす。選択肢を表示していないときは no-op（#482）。
+    MoveUp,
+    /// 選択肢のカーソルを1つ下へ動かす。選択肢を表示していないときは no-op（#482）。
+    MoveDown,
     /// アプリを終了する。
     Quit,
 }
@@ -41,6 +49,8 @@ fn action_for_event(event: CrosstermEvent) -> Action {
     match event {
         CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => match key.code {
             KeyCode::Enter | KeyCode::Char(' ') => Action::Advance,
+            KeyCode::Up => Action::MoveUp,
+            KeyCode::Down => Action::MoveDown,
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             _ => Action::None,
         },
@@ -67,6 +77,18 @@ mod tests {
     fn space_press_returns_advance() {
         let action = action_for_event(key_event(KeyCode::Char(' '), KeyEventKind::Press));
         assert_eq!(action, Action::Advance);
+    }
+
+    #[test]
+    fn up_arrow_press_returns_move_up() {
+        let action = action_for_event(key_event(KeyCode::Up, KeyEventKind::Press));
+        assert_eq!(action, Action::MoveUp);
+    }
+
+    #[test]
+    fn down_arrow_press_returns_move_down() {
+        let action = action_for_event(key_event(KeyCode::Down, KeyEventKind::Press));
+        assert_eq!(action, Action::MoveDown);
     }
 
     #[test]
