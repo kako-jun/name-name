@@ -101,8 +101,16 @@ enum PlaybackItem {
 /// `Event` を再生列の1要素に変換する。Choice は選択肢一覧をそのまま保持する
 /// `PlaybackItem::Choice` に、Dialog/Narration は [`display_line_from_event`] 経由で
 /// `PlaybackItem::Line` になる。それ以外（背景・SE・BGM 等）は `None`（読み飛ばす）。
+///
+/// `options` が空の Choice（原稿の `[選択]\n[/選択]` のように中身が無いブロック。parser は
+/// これを許容する）も `None` にして読み飛ばす。空 Choice をそのまま item 化すると、
+/// `options.get(0)` が常に `None` になるため `select_current_choice` が恒久的に失敗し、
+/// `advance` も Choice 表示中は拒否するため、プレイヤーの入力を一切受け付けない詰み状態に
+/// なる。これは以前の「Choice を丸ごと無視していた」挙動と同じ扱いに揃えることで回避する
+/// （バグ修正、実装方針は Issue #482 コメント参照）。
 fn playback_item_from_event(event: &Event) -> Option<PlaybackItem> {
     match event {
+        Event::Choice { options } if options.is_empty() => None,
         Event::Choice { options } => Some(PlaybackItem::Choice(options.clone())),
         _ => display_line_from_event(event).map(PlaybackItem::Line),
     }
@@ -242,11 +250,15 @@ impl Playback {
     /// そこに至るまでに表示済みの会話行数を返す（例: 3行しゃべった直後に選択肢が出ている
     /// 状態なら3を返す）。
     pub fn position(&self) -> usize {
-        if self.items.is_empty() {
-            return 0;
-        }
-        self.items[..=self.index]
+        // `self.items[..=self.index]` だと `index == items.len()`（ジャンプ先シーンが
+        // イベント0件かつドキュメント末尾のとき `scene_start` がこの値を取り得る、
+        // `select_current_choice` 参照）のとき範囲外アクセスで panic する。`take` は
+        // `index` が範囲外でも自動的に全要素で打ち切られるため安全（「ドキュメント末尾を
+        // 超えた位置」＝「全会話行を読み終えた」なので、全 Line 数を返すのは意味的にも
+        // 正しい）。
+        self.items
             .iter()
+            .take(self.index.saturating_add(1))
             .filter(|item| matches!(item, PlaybackItem::Line(_)))
             .count()
     }
@@ -713,5 +725,98 @@ mod tests {
             "Choice表示中の advance は select_current_choice を使うべきなので false"
         );
         assert!(pb.current_choice().is_some(), "位置が変わっていないはず");
+    }
+
+    // ---- バグ修正の回帰テスト（実装バグ2件） ----
+
+    #[test]
+    fn position_after_jumping_into_zero_item_last_scene_does_not_panic() {
+        // "1-1": 台詞 + Choice("1-2"へjump)。"1-2": イベント0件かつ最終シーン。
+        // 旧実装は select_current_choice で index を items.len()（範囲外）へ設定した後、
+        // position() の `items[..=index]` が範囲外アクセスで panic していた（バグ1）。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "1-2")]),
+                    ],
+                ),
+                scene("1-2", vec![]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance(); // 台詞 → Choice
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+
+        // ここで panic しないことを確認する（バグ1の回帰）。
+        let position = pb.position();
+        assert_eq!(
+            position, 1,
+            "ジャンプ先が0件シーンでも、それまでの全Line数(1)を返すはず"
+        );
+    }
+
+    #[test]
+    fn is_at_end_true_when_jump_lands_on_out_of_bounds_index_of_zero_item_scene() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "1-2")]),
+                    ],
+                ),
+                scene("1-2", vec![]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance();
+        assert!(pb.select_current_choice());
+
+        assert!(
+            pb.is_at_end(),
+            "0件シーンへのjumpは実質ドキュメント末尾として扱われるはず"
+        );
+    }
+
+    #[test]
+    fn choice_with_empty_options_is_skipped_like_absent_choice() {
+        // parser は `[選択]\n[/選択]`（中身が空）のような options: [] の Choice を許容する。
+        // これを item 化してしまうと select_current_choice が常に失敗し、advance も
+        // Choice表示中は拒否するため、入力を一切受け付けない詰み状態になっていた（バグ2）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["どうする？"]),
+            Event::Choice { options: vec![] },
+            dialog(Some("B"), vec!["次のセリフ"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.current_choice(),
+            None,
+            "空Choiceはitem化されず最初から現れないはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("最初の台詞").speaker.as_deref(),
+            Some("A")
+        );
+
+        assert!(pb.advance(), "空Choiceを飛び越えて次の台詞に進めるはず");
+        assert_eq!(
+            pb.current_choice(),
+            None,
+            "advance後もChoiceは一度も現れないはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("次の台詞").speaker.as_deref(),
+            Some("B")
+        );
     }
 }
