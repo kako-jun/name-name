@@ -103,6 +103,11 @@ impl Playback {
             .flat_map(|scene| scene.events.iter())
         {
             match event {
+                // `path` の `..` は `back`（表示位置）と `fade_ms`（イベント個別のフェード時間
+                // 上書き）を意図的に捨てている。`fade_ms` は TUI 側では常に
+                // `config.event_image.crossfade_ms`（グローバル値、`main.rs` の `event_loop`
+                // 参照）しか使わない簡略化（MVPスコープ、#481）。GUI版のようなイベント単位の
+                // フェード時間上書きは今回の対象外。
                 Event::EventImage { path, .. } => {
                     current_event_image = Some(path.clone());
                 }

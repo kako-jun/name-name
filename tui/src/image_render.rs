@@ -34,6 +34,40 @@ pub fn load_image_rgba(path: &Path) -> anyhow::Result<DecodedImage> {
     })
 }
 
+/// テスト専用: バイト列を一意な一時ファイルへ書き出す（フィクスチャ生成の共通部分）。
+/// `ext` はファイル拡張子（ドット無し、例: `"webp"`）。テスト実行のたびに衝突しないよう
+/// プロセスID・ナノ秒時刻・単調カウンタを組み合わせて名前を一意化する。
+#[cfg(test)]
+pub(crate) fn write_test_bytes_fixture(bytes: &[u8], ext: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "name-name-tui-test-fixture-{}-{}-{unique}.{ext}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    ));
+    std::fs::write(&path, bytes).expect("should write test fixture to temp dir");
+    path
+}
+
+/// テスト専用: RGBA バイト列を WebP としてエンコードし、一意な一時ファイルパスへ書き出す
+/// （実デコード経路 [`load_image_rgba`] を外部ツール無しで検証するためのフィクスチャ生成
+/// ヘルパー。`image` crate 自身の `WebPEncoder`（`webp` feature）で作るため、`unfake.py` 等の
+/// 外部ツールへ依存しない）。`rgba.len()` は `width * height * 4` と一致していなければ
+/// ならない（呼び出し側の誤用は `WebPEncoder::encode` の assert で早期に panic する）。
+#[cfg(test)]
+pub(crate) fn write_test_webp_fixture(rgba: &[u8], width: u32, height: u32) -> PathBuf {
+    let mut encoded = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut encoded)
+        .encode(rgba, width, height, image::ExtendedColorType::Rgba8)
+        .expect("test fixture RGBA should encode to WebP without error");
+    write_test_bytes_fixture(&encoded, "webp")
+}
+
 /// パスをキーにデコード済み画像をキャッシュする。クロスフェード中は from/to 2枚を毎フレーム
 /// 参照するため、キャッシュが無いと同じファイルを毎フレーム（既定 30ms 間隔）デコードし
 /// 直す無駄が生じる。`Rc` で共有するのでクローンは軽量。
@@ -296,6 +330,56 @@ mod tests {
     }
 
     #[test]
+    fn load_image_rgba_corrupted_webp_bytes_is_err_without_panicking() {
+        // 拡張子は .webp だが中身がwebpのマジックバイトすら持たない壊れたファイル。
+        let path = write_test_bytes_fixture(&[1u8, 2, 3, 4, 5, 6, 7, 8], "webp");
+        let result = load_image_rgba(&path);
+        assert!(
+            result.is_err(),
+            "corrupted webp bytes should be Err, not panic"
+        );
+    }
+
+    #[test]
+    fn load_image_rgba_non_webp_file_is_err_given_webp_only_feature() {
+        // Cargo.toml で image crate は webp feature のみ有効（PNG等は無効化済み、#481）。
+        // 中身は正しい1x1 PNG（PIL等ではなく手組みの最小PNGバイト列）だが、
+        // PNGデコーダがビルドに含まれていないため Err になるはず。
+        #[rustfmt::skip]
+        const MINIMAL_1X1_PNG: [u8; 70] = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 218, 99, 56, 145,
+            98, 244, 31, 0, 5, 180, 2, 94, 192, 100, 233, 219, 0, 0, 0, 0, 73, 69, 78, 68, 174,
+            66, 96, 130,
+        ];
+        let path = write_test_bytes_fixture(&MINIMAL_1X1_PNG, "png");
+        let result = load_image_rgba(&path);
+        assert!(
+            result.is_err(),
+            "a valid PNG should still be Err because the png codec is not compiled in"
+        );
+    }
+
+    #[test]
+    fn load_image_rgba_valid_webp_fixture_roundtrips_exact_dimensions_and_pixels() {
+        // #481 follow-up: 実デコード経路(load_image_rgba)を、実在するがハンドメイドの
+        // 小さいWebPフィクスチャで初めて自動テスト化する（既存テストは存在しないパス/
+        // 壊れたバイト列のエラー経路のみをカバーしていた）。
+        let rgba: Vec<u8> = vec![
+            10, 20, 30, 255, 40, 50, 60, 255, // row0: 2px
+            70, 80, 90, 255, 100, 110, 120, 255, // row1: 2px
+        ];
+        let path = write_test_webp_fixture(&rgba, 2, 2);
+        let decoded = load_image_rgba(&path).expect("valid webp fixture should decode");
+        assert_eq!(decoded.width, 2);
+        assert_eq!(decoded.height, 2);
+        assert_eq!(
+            decoded.rgba, rgba,
+            "lossless webp roundtrip should preserve exact RGBA bytes"
+        );
+    }
+
+    #[test]
     fn image_cache_missing_path_returns_none_without_panicking() {
         let mut cache = ImageCache::new();
         let result = cache.get_or_load(Path::new("tui/tests/fixtures/does-not-exist.webp"));
@@ -363,6 +447,30 @@ mod tests {
         assert_eq!(cell.glyph, '▗');
         assert_eq!(cell.fg, (255, 0, 0));
         assert_eq!(cell.bg, (0, 0, 200));
+    }
+
+    #[test]
+    fn quadrant_cell_full_block_mask_is_structurally_unreachable() {
+        // `quadrant_cell_from_subpixels` のdoc commentに明記されている設計上の性質を
+        // 固定する回帰テスト: `farthest_pair` が返す ref_a は自分自身との距離が必ず0
+        // (dist_a=0 <= dist_b はどんな相手でも真)になるため、常に「背景」側(mask非セット)
+        // に分類される。よってmask(4bit)は最低1bitは常に0のままで、mask=15(フルブロック
+        // '█')には実装上絶対到達しない。バグではなく仕様であり、意図せず変わっていないかを
+        // ここで固定する。4色すべてがバラバラな複数パターンで確認する。
+        let cases: [[(u8, u8, u8); 4]; 5] = [
+            [(0, 0, 0), (255, 255, 255), (255, 0, 0), (0, 255, 0)],
+            [(10, 20, 30), (200, 210, 220), (5, 5, 5), (250, 250, 250)],
+            [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)],
+            [(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)],
+            [(1, 2, 3), (253, 252, 251), (4, 5, 6), (6, 5, 4)],
+        ];
+        for subpixels in cases {
+            let cell = quadrant_cell_from_subpixels(subpixels);
+            assert_ne!(
+                cell.glyph, '█',
+                "mask=15 should be structurally unreachable, subpixels={subpixels:?}"
+            );
+        }
     }
 
     #[test]

@@ -170,6 +170,145 @@ fn lerp(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
 mod tests {
     use super::*;
 
+    /// `w`x`h` px の単色 RGBA バイト列を作る（テストフィクスチャ用）。
+    fn solid_rgba(color: (u8, u8, u8), w: u32, h: u32) -> Vec<u8> {
+        let mut buf = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..(w * h) {
+            buf.extend_from_slice(&[color.0, color.1, color.2, 255]);
+        }
+        buf
+    }
+
+    /// `color` の単色WebPフィクスチャを書き出し、`Config::event_image.assets_dir` を
+    /// その置き場所へ向けた `Config` と、`DisplayLine::event_image` と同じ形の相対パス
+    /// （ファイル名のみ）を返す。
+    fn config_and_relative_path_for_solid_fixture(color: (u8, u8, u8)) -> (Config, String) {
+        let fixture_path = image_render::write_test_webp_fixture(&solid_rgba(color, 2, 2), 2, 2);
+        let mut config = Config::default();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        (config, relative)
+    }
+
+    #[test]
+    fn snapshot_from_none_to_some_path_interpolates_from_black_at_partial_progress() {
+        // デシジョンテーブル#2（None→Some(A)）の統合確認。既存の `blend()` 単体テストは
+        // 合成済み RenderedImage を直接渡すだけだったが、こちらは
+        // `ImageFadeState::snapshot` 経由でパス解決(resolve_grid)からの一気通貫を、
+        // 実在するフィクスチャの色で確認する。
+        let fixture_color = (200u8, 40u8, 210u8); // 全成分偶数(2で割り切れる)にして丸め誤差を避ける
+        let (config, relative) = config_and_relative_path_for_solid_fixture(fixture_color);
+
+        let started_at = Instant::now();
+        let state = ImageFadeState {
+            from: None,
+            to: Some(relative),
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let mut cache = ImageCache::new();
+        let grid = state
+            .snapshot(
+                &mut cache,
+                &config,
+                1,
+                1,
+                started_at + Duration::from_millis(500),
+            )
+            .expect("to=Someならグリッドが返る");
+
+        let half = (
+            fixture_color.0 / 2,
+            fixture_color.1 / 2,
+            fixture_color.2 / 2,
+        );
+        assert_eq!(
+            grid.cells[0].bg, half,
+            "t=0.5は黒(0,0,0)とfixture色のちょうど中間になる"
+        );
+        assert_ne!(
+            grid.cells[0].bg,
+            (0, 0, 0),
+            "黒そのままではなく既に補間が進んでいる"
+        );
+        assert_ne!(
+            grid.cells[0].bg, fixture_color,
+            "まだ完了していないのでfixtureの色そのものにはなっていない"
+        );
+    }
+
+    #[test]
+    fn snapshot_from_some_path_to_none_fades_toward_black_over_time() {
+        // デシジョンテーブル#3（Some(A)→None、退場フェードアウト）の統合確認。
+        let fixture_color = (200u8, 40u8, 210u8);
+        let (config, relative) = config_and_relative_path_for_solid_fixture(fixture_color);
+
+        let started_at = Instant::now();
+        let state = ImageFadeState {
+            from: Some(relative),
+            to: None,
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let mut cache = ImageCache::new();
+
+        let at_start = state
+            .snapshot(&mut cache, &config, 1, 1, started_at)
+            .expect("from=Someならグリッドが返る");
+        assert_eq!(
+            at_start.cells[0].bg, fixture_color,
+            "開始直後(t=0)はfromの色そのまま"
+        );
+
+        let near_end = state
+            .snapshot(
+                &mut cache,
+                &config,
+                1,
+                1,
+                started_at + Duration::from_millis(999),
+            )
+            .expect("グリッドが返る");
+        assert_eq!(
+            near_end.cells[0].bg,
+            (0, 0, 0),
+            "完了間際(t≈1)は黒(BLANK_CELLの色)へほぼ収束する"
+        );
+    }
+
+    #[test]
+    fn transition_to_mid_flight_uses_previous_to_path_not_interrupted_blend_color() {
+        // `ImageFadeState::transition_to` のdoc commentに明記された意図的な簡略化を
+        // 固定する回帰テスト: 遷移が完了する前(本当に進行中、t=0.5)にさらに別画像へ
+        // 切り替わっても、新しいfromは「中断時点のブレンド色」ではなく
+        // 「直前の遷移のtoパス」そのものになる。既存の
+        // `transition_to_carries_previous_target_as_new_from` は settled 状態
+        // （既に完了済み）からの遷移だったため、ここでは「本当に進行中」の状態から
+        // 呼ぶことを明示する。
+        let now0 = Instant::now();
+        let mid_flight = ImageFadeState {
+            from: Some("a.webp".to_string()),
+            to: Some("b.webp".to_string()),
+            started_at: now0,
+            duration: Duration::from_millis(1000),
+        };
+        let mid = now0 + Duration::from_millis(500);
+        assert_eq!(mid_flight.progress(mid), 0.5, "前提: まだ遷移の途中である");
+
+        let next =
+            mid_flight.transition_to(Some("c.webp".to_string()), Duration::from_millis(1000), mid);
+        assert_eq!(
+            next.from.as_deref(),
+            Some("b.webp"),
+            "新しいfromは中断時点のブレンド色ではなく、直前の遷移のtoパス(b)そのもの"
+        );
+        assert_eq!(next.to.as_deref(), Some("c.webp"));
+    }
+
     #[test]
     fn settled_progress_is_always_one() {
         let state = ImageFadeState::settled(Some("props/x.webp".to_string()));

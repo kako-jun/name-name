@@ -322,6 +322,186 @@ mod tests {
         out
     }
 
+    /// `w`x`h` px の単色 RGBA バイト列を作る（テストフィクスチャ用）。
+    fn solid_rgba(color: (u8, u8, u8), w: u32, h: u32) -> Vec<u8> {
+        let mut buf = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..(w * h) {
+            buf.extend_from_slice(&[color.0, color.1, color.2, 255]);
+        }
+        buf
+    }
+
+    /// `cols`x`rows`セル全域が確実に非空白グリフ('▞', fg=白/bg=黒)になるRGBA画像を
+    /// WebPフィクスチャとして書き出す。各セル分の2x2サブピクセルが黒/白の対角パターン
+    /// （UL/LR=黒, UR/LL=白）を繰り返す構成で、`image_render::quadrant_cell_from_subpixels`
+    /// のテスト（`quadrant_cell_full_block_when_all_subpixels_are_maximally_different`）と
+    /// 同じ入力パターンになるようにしている。
+    fn diagonal_pattern_webp_fixture(cols: u16, rows: u16) -> std::path::PathBuf {
+        let sub_w = cols as u32 * 2;
+        let sub_h = rows as u32 * 2;
+        let mut rgba = Vec::with_capacity((sub_w * sub_h * 4) as usize);
+        for y in 0..sub_h {
+            for x in 0..sub_w {
+                let is_black = (x % 2) == (y % 2);
+                let px = if is_black {
+                    [0u8, 0, 0, 255]
+                } else {
+                    [255u8, 255, 255, 255]
+                };
+                rgba.extend_from_slice(&px);
+            }
+        }
+        crate::image_render::write_test_webp_fixture(&rgba, sub_w, sub_h)
+    }
+
+    /// `image_fade` テスト用に `Config::event_image.assets_dir` をフィクスチャの置き場所へ
+    /// 向け、`DisplayLine::event_image` と同じ形（ファイル名のみ）の相対パスを返す。
+    fn config_and_relative_path_for(fixture_path: &std::path::Path) -> (Config, String) {
+        let mut config = Config::default();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        (config, relative)
+    }
+
+    // ---- #481 follow-up: draw() に Some(&ImageFadeState) を渡す統合テスト ----
+    //
+    // 既存テストは全て image_fade=None で呼んでおり、draw_image_grid が実際に呼ばれる
+    // 経路（左カラムに quadrant block 文字が描かれる）は自動テストで一度も検証されて
+    // いなかった（image_fade.rs/image_render.rs の純粋関数テストのみ）。以下はその穴を
+    // 埋める、実在パスを resolve した `Some(&ImageFadeState)` 経由の統合テスト。
+
+    #[test]
+    fn draw_with_resolved_image_fade_renders_quadrant_glyphs_not_placeholder() {
+        let fixture_path = diagonal_pattern_webp_fixture(5, 3);
+        let (mut config, relative) = config_and_relative_path_for(&fixture_path);
+        config.placeholder.label = "[画像]".to_string();
+        let image_fade = ImageFadeState::settled(Some(relative));
+
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    &pulse,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // placeholder_area = columns[0] = 幅ceil(10/2)=5 x 高さ(4-1)=3。フィクスチャは
+        // 全セルが対角パターンの '▞'（fg=白、bg=黒）になるよう作られている。
+        for y in 0..3u16 {
+            for x in 0..5u16 {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert_eq!(
+                    cell.symbol(),
+                    "▞",
+                    "cell ({x},{y}) should carry the quadrant glyph, not a placeholder blank"
+                );
+                assert_eq!(cell.fg, Color::Rgb(255, 255, 255));
+                assert_eq!(cell.bg, Color::Rgb(0, 0, 0));
+            }
+        }
+        let text = buffer_text(buffer);
+        assert!(
+            !text.contains("[画像]"),
+            "should not fall back to the placeholder label, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_with_resolved_image_fade_at_extremely_small_placeholder_area_does_not_panic() {
+        let fixture_path = diagonal_pattern_webp_fixture(1, 1);
+        let (config, relative) = config_and_relative_path_for(&fixture_path);
+        let image_fade = ImageFadeState::settled(Some(relative));
+
+        for (w, h) in [(1u16, 1u16), (2, 1), (1, 2), (2, 2), (1, 3)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            let now = Instant::now();
+            let pulse = reveal::build_pulse(now);
+            let mut image_cache = ImageCache::new();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &config,
+                        None,
+                        0,
+                        0,
+                        true,
+                        None,
+                        &pulse,
+                        now,
+                        Some(&image_fade),
+                        &mut image_cache,
+                    )
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn draw_with_one_pixel_source_image_upsampled_to_larger_grid_gives_every_cell_that_color() {
+        let color = (123u8, 45u8, 67u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 1, 1), 1, 1);
+        let (config, relative) = config_and_relative_path_for(&fixture_path);
+        let image_fade = ImageFadeState::settled(Some(relative));
+
+        let mut terminal = Terminal::new(TestBackend::new(20, 6)).unwrap();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    &pulse,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // placeholder_area = 幅ceil(20/2)=10 x 高さ(6-1)=5 = 50セル。1x1画像相当のRGBA
+        // データを大きいグリッドへ展開しても、範囲外アクセスでpanicしたり色が壊れたり
+        // せず、全セルが唯一のソース画素の色をそのまま持つことを確認する。
+        for y in 0..5u16 {
+            for x in 0..10u16 {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert_eq!(
+                    cell.bg,
+                    Color::Rgb(color.0, color.1, color.2),
+                    "cell ({x},{y}) should carry the single source pixel's color"
+                );
+            }
+        }
+    }
+
     #[test]
     fn placeholder_label_style_renders_label_text() {
         let mut config = Config::default();
@@ -1436,6 +1616,60 @@ mod tests {
                 "border character {border_char:?} must not appear, buffer was: {text}"
             );
         }
+    }
+
+    #[test]
+    fn draw_with_resolved_image_fade_keeps_480_text_column_start_x_unchanged() {
+        // #480の50/50レイアウト（左=画像プレースホルダ、右=テキスト）が、#481で
+        // image_fade に実在パスを渡すようになった後も変わっていないことを確認する。
+        // `odd_terminal_width_gives_placeholder_column_the_extra_cell` と同じ W=7 境界
+        // (左=ceil(7/2)=4, 右=floor(7/2)=3) を流用し、右カラムの先頭xが x=4 で
+        // 変わらないことを実測する（あちらは image_fade=None のケースだった）。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 2, 2), 2, 2);
+        let (config, relative) = config_and_relative_path_for(&fixture_path);
+        let image_fade = ImageFadeState::settled(Some(relative));
+
+        let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(7, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    1,
+                    1,
+                    false,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area();
+        let mut leftmost_y_x = None;
+        'outer: for y in 0..area.height {
+            for x in 0..area.width {
+                if buffer.cell((x, y)).expect("in bounds").symbol() == "Y" {
+                    leftmost_y_x = Some(x);
+                    break 'outer;
+                }
+            }
+        }
+        let x = leftmost_y_x.expect("text should render somewhere");
+        assert_eq!(
+            x, 4,
+            "text column should still start at x=4 (ceil(7/2)) with a resolved image_fade present; found at x={x}"
+        );
     }
 
     #[test]

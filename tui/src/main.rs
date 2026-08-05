@@ -204,6 +204,10 @@ where
                 if playback.position() != prev_position {
                     let target = playback.current().and_then(|line| line.event_image.clone());
                     if image_fade.current_target() != target.as_deref() {
+                        // `config.event_image.crossfade_ms`（グローバル値）を常に使う。
+                        // `Event::EventImage`/`EventImageExit` が持つイベント個別の `fade_ms`
+                        // 上書きは `playback.rs` の `Playback::from_document` で意図的に
+                        // 読み捨てている（MVPスコープの簡略化、#481）。
                         image_fade = image_fade.transition_to(
                             target,
                             Duration::from_millis(config.event_image.crossfade_ms),
@@ -263,6 +267,7 @@ mod tests {
     use super::*;
     use crate::playback::DisplayLine;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
     use std::cell::RefCell;
 
     fn dline(speaker: Option<&str>, text: &str) -> DisplayLine {
@@ -271,6 +276,37 @@ mod tests {
             text: vec![text.to_string()],
             event_image: None,
         }
+    }
+
+    /// `dline` の event_image 指定版（#481 の event_loop 統合テスト用）。
+    fn dline_with_image(
+        speaker: Option<&str>,
+        text: &str,
+        event_image: Option<String>,
+    ) -> DisplayLine {
+        DisplayLine {
+            speaker: speaker.map(|s| s.to_string()),
+            text: vec![text.to_string()],
+            event_image,
+        }
+    }
+
+    /// `w`x`h` px の単色 RGBA バイト列を作る（テストフィクスチャ用）。
+    fn solid_rgba(color: (u8, u8, u8), w: u32, h: u32) -> Vec<u8> {
+        let mut buf = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..(w * h) {
+            buf.extend_from_slice(&[color.0, color.1, color.2, 255]);
+        }
+        buf
+    }
+
+    /// 描画済みバッファのどこかのセルの背景色が `color` と一致するかを走査する。
+    fn buffer_has_bg_color(buffer: &ratatui::buffer::Buffer, color: (u8, u8, u8)) -> bool {
+        let area = buffer.area();
+        (0..area.width).any(|x| {
+            (0..area.height)
+                .any(|y| buffer.cell((x, y)).unwrap().bg == Color::Rgb(color.0, color.1, color.2))
+        })
     }
 
     /// reveal が即座には完了しない速度設定（境界確認に使う）。
@@ -446,6 +482,128 @@ mod tests {
             playback.position(),
             3,
             "1回のAdvanceで2行以上進んではいけない"
+        );
+    }
+
+    // ---- #481 follow-up: event_loop の event_image フェード開始判定（デシジョンテーブル） ----
+    //
+    // on_advance() 自体（position/reveal の遷移）は上のテスト群で既にカバーされているが、
+    // 「position が実際に進んだ時だけ event_image の変化を見てフェードを開始する」という
+    // event_loop 側のガード（本体の event_loop 内、on_advance 呼び出し直後のコメント参照）は
+    // これまで自動テストで一度も検証されていなかった（手動tmux確認のみ）。
+
+    #[test]
+    fn event_loop_advance_crossing_into_new_event_image_switches_placeholder_to_that_image() {
+        // デシジョンテーブル#2（None→Some(A)）の統合確認。crossfade_ms=0 にして、
+        // トランジション開始直後の描画が実時間経過に依存せず即座に新ターゲットの色を
+        // 表示するようにし、決定的なアサーションにする（`ImageFadeState::progress` は
+        // duration=0 のとき常に1.0を返す）。
+        let fixture_color = (123u8, 45u8, 67u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_color, 2, 2), 2, 2);
+        let mut config = instant_config();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        config.event_image.crossfade_ms = 0;
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut playback = Playback::from_lines(vec![
+            dline_with_image(Some("A"), "hello", None),
+            dline_with_image(Some("B"), "world", Some(relative)),
+        ]);
+
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
+        let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert!(
+            buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
+            "advancing into a line with a new event_image should switch the fade target to it"
+        );
+    }
+
+    #[test]
+    fn event_loop_advance_to_same_event_image_path_does_not_restart_fade_timer() {
+        // デシジョンテーブル#4（Some(A)→Some(A)、同一パスが連続する行）の回帰ガード:
+        // 無駄な再フェードトリガーの防止。crossfade_ms をテスト実行時間よりはるかに
+        // 長い60秒にし、最初の None→A フェードがまだ進行中の状態を作る。もし2回目の
+        // Advance(A→A、同一パス)が誤って transition_to を再度呼ぶと、from/to が
+        // 両方Aになり(同一画像同士の補間は t に関わらず即座にAの色そのものになる、
+        // `jiwa::lerp_u8` は a==b なら常に a を返すため)、本来まだ進行中で黒寄りの
+        // はずのフェードが「完了して見える」という観測可能な差が出る。これを利用して
+        // 再トリガーの有無を検出する。
+        let fixture_color = (250u8, 10u8, 10u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_color, 2, 2), 2, 2);
+        let mut config = instant_config();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        config.event_image.crossfade_ms = 60_000;
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut playback = Playback::from_lines(vec![
+            dline_with_image(Some("A"), "one", None),
+            dline_with_image(Some("B"), "two", Some(relative.clone())),
+            dline_with_image(Some("C"), "three", Some(relative)),
+        ]);
+
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
+        let (mut next_action, _remaining) =
+            action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert!(
+            !buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
+            "同一パスへの2回目のAdvanceでフェードが再トリガーされ、本来まだ進行中(60秒中の\
+             数ms)のはずのフェードが完了して見えてしまっている(無駄な再トリガー、退行)"
+        );
+    }
+
+    #[test]
+    fn event_loop_skip_advance_on_incomplete_reveal_does_not_start_image_fade() {
+        // タイプライタースキップ操作（reveal未完了時のAdvance）は position を進めない
+        // （on_advance のデシジョンテーブル#2、上のテスト群で確認済み）。event_loop側は
+        // それを受けて「position が実際に進んだ時だけ event_image の変化を見る」ガードを
+        // 持つ（event_loop 内、on_advance 呼び出し直後のコメント参照）。スキップ操作
+        // 単体では次行の event_image を先読みしてフェードを開始したりしないことを確認する。
+        let fixture_color = (77u8, 88u8, 99u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_color, 2, 2), 2, 2);
+        let mut config = slow_config();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut playback = Playback::from_lines(vec![
+            dline_with_image(Some("A"), "hello there this is long enough text", None),
+            dline_with_image(Some("B"), "next", Some(relative)),
+        ]);
+
+        let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
+        let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(
+            playback.position(),
+            1,
+            "スキップではpositionが進んではいけない"
+        );
+        assert!(
+            !buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
+            "スキップ操作(reveal未完了時のAdvance)だけでは次行のevent_imageへフェードが\
+             開始されてはいけない"
         );
     }
 
