@@ -1,5 +1,7 @@
-//! ratatui による画面描画。左に画像プレースホルダ、右に相手（上）/自分（下）の2ウィンドウで
-//! テキストを表示する。左右は50/50（GUI版 `frontend/src/game/novelLayout.ts` の
+//! ratatui による画面描画。左にイベント絵（quadrant block変換 + jiwaクロスフェード、
+//! `image_fade`/`image_render`、#481。未指定時は従来の画像プレースホルダにフォールバック）、
+//! 右に相手（上）/自分（下）の2ウィンドウでテキストを表示する。左右は50/50（GUI版
+//! `frontend/src/game/novelLayout.ts` の
 //! `computeSplitLayoutRegions` と同じ比率、#480）。テキスト側の上下分割も比率としては50/50
 //! だが、GUI版の `splitTextRegionForDualWindow` が浮動小数点で分割するのに対し、TUI版は
 //! 整数セル単位のため高さが奇数のとき端数が出る。GUI版と違いこの端数は self（自分＝
@@ -19,6 +21,8 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::config::{Config, PlaceholderStyle};
+use crate::image_fade::ImageFadeState;
+use crate::image_render::{ImageCache, RenderedImage};
 use crate::playback::DisplayLine;
 use crate::reveal;
 
@@ -31,7 +35,9 @@ use crate::reveal;
 /// `reveal` は現在の会話行のタイプライター表示状態（[`reveal::RevealState`]、`None` は行
 /// そのものが無いケース）、`pulse` はページ送りインジケータ（reveal 完了後にのみ表示する）、
 /// `now` はこのフレームの描画時刻（`reveal`/`pulse` の `snapshot`/`body_lines` に渡す基準時刻。
-/// `RevealState::Done` はこれを無視する）。
+/// `RevealState::Done` はこれを無視する）。`image_fade` は左側に描画するイベント絵の
+/// クロスフェード状態（[`ImageFadeState`]、`None` は event_image を一切扱わない呼び出し元
+/// 向けのフォールバック）、`image_cache` はそのデコード結果キャッシュ（#481）。
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -43,6 +49,8 @@ pub fn draw(
     reveal: Option<&reveal::RevealState>,
     pulse: &PulseHandle,
     now: Instant,
+    image_fade: Option<&ImageFadeState>,
+    image_cache: &mut ImageCache,
 ) {
     let root = Layout::default()
         .direction(Direction::Vertical)
@@ -54,19 +62,64 @@ pub fn draw(
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(root[0]);
 
-    draw_placeholder(frame, columns[0], config);
+    let placeholder_area = columns[0];
+    let rendered_image = image_fade.and_then(|state| {
+        state.snapshot(
+            image_cache,
+            config,
+            placeholder_area.width,
+            placeholder_area.height,
+            now,
+        )
+    });
+    draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
     draw_text_windows(frame, columns[1], config, line, reveal, pulse, now);
     draw_status_line(frame, root[1], config, position, total, is_at_end);
 }
 
-/// 左側: 画像プレースホルダ（罫線なし。中央にラベル文字列、または空欄）。
-fn draw_placeholder(frame: &mut Frame, area: Rect, config: &Config) {
+/// 左側: イベント絵（`image` が `Some` のとき、quadrant block グリッドとして描画）、または
+/// 従来の画像プレースホルダ（`image` が `None` のとき、罫線なし・中央にラベル文字列/空欄）
+/// （#481）。`image` が `None` になるのは、event_image が一度も設定されていないゲーム/
+/// シーンを再生している場合（後方互換のフォールバック）。
+fn draw_placeholder(frame: &mut Frame, area: Rect, config: &Config, image: Option<&RenderedImage>) {
+    if let Some(grid) = image {
+        draw_image_grid(frame, area, grid);
+        return;
+    }
+
     let label = match config.placeholder.style {
         PlaceholderStyle::Blank => "",
         PlaceholderStyle::Label => config.placeholder.label.as_str(),
     };
 
     let paragraph = Paragraph::new(label).alignment(Alignment::Center);
+    frame.render_widget(paragraph, area);
+}
+
+/// quadrant block 変換済みのセル格子（[`RenderedImage`]）を、セルごとに fg/bg 付き `Span` の
+/// `Paragraph` として描画する。`grid` の cols/rows は呼び出し側（`draw`）が `area` と同じ
+/// 寸法で構築するが、万一のズレ（フレーム間の解像度取りこぼし等）に備え `area` の範囲へ
+/// クランプし、範囲外アクセスで panic しないようにする。
+fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
+    let rows = grid.rows.min(area.height);
+    let cols = grid.cols.min(area.width);
+    let mut lines = Vec::with_capacity(rows as usize);
+    for y in 0..rows {
+        let mut spans = Vec::with_capacity(cols as usize);
+        for x in 0..cols {
+            let idx = y as usize * grid.cols as usize + x as usize;
+            if let Some(cell) = grid.cells.get(idx) {
+                let fg = Color::Rgb(cell.fg.0, cell.fg.1, cell.fg.2);
+                let bg = Color::Rgb(cell.bg.0, cell.bg.1, cell.bg.2);
+                spans.push(Span::styled(
+                    cell.glyph.to_string(),
+                    Style::default().fg(fg).bg(bg),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    let paragraph = Paragraph::new(Text::from(lines));
     frame.render_widget(paragraph, area);
 }
 
@@ -277,8 +330,23 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw(f, &config, None, 0, 0, true, None, &pulse, now))
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("[画像]"), "buffer was: {text}");
@@ -292,8 +360,23 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw(f, &config, None, 0, 0, true, None, &pulse, now))
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(!text.contains("[画像]"), "buffer was: {text}");
@@ -305,8 +388,23 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw(f, &config, None, 1, 1, true, None, &pulse, now))
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    1,
+                    1,
+                    true,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("(END)"), "buffer was: {text}");
@@ -318,8 +416,23 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw(f, &config, None, 1, 2, false, None, &pulse, now))
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    1,
+                    2,
+                    false,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(!text.contains("(END)"), "buffer was: {text}");
@@ -331,8 +444,23 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw(f, &config, None, 0, 0, true, None, &pulse, now))
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("会話行がありません"), "buffer was: {text}");
@@ -353,6 +481,7 @@ mod tests {
         // width/height=1 (0 セルに丸まる) で panic しないことを確認する。
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| {
                 draw(
@@ -365,6 +494,8 @@ mod tests {
                     Some(&reveal),
                     &pulse,
                     now,
+                    None,
+                    &mut image_cache,
                 )
             })
             .unwrap();
@@ -383,6 +514,7 @@ mod tests {
         let now = Instant::now();
         let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
             .draw(|f| {
@@ -396,6 +528,8 @@ mod tests {
                     Some(&reveal),
                     &pulse,
                     now,
+                    None,
+                    &mut image_cache,
                 )
             })
             .unwrap();
@@ -421,6 +555,7 @@ mod tests {
         let typing_reveal =
             reveal::RevealState::Animating(reveal::build_reveal(&typing_config, &line, now));
         let typing_pulse = reveal::build_pulse(now);
+        let mut typing_image_cache = ImageCache::new();
         let mut typing_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         typing_terminal
             .draw(|f| {
@@ -434,6 +569,8 @@ mod tests {
                     Some(&typing_reveal),
                     &typing_pulse,
                     now,
+                    None,
+                    &mut typing_image_cache,
                 )
             })
             .unwrap();
@@ -451,6 +588,7 @@ mod tests {
         let done_reveal =
             reveal::RevealState::Animating(reveal::build_reveal(&done_config, &line, now));
         let done_pulse = reveal::build_pulse(now);
+        let mut done_image_cache = ImageCache::new();
         let mut done_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         done_terminal
             .draw(|f| {
@@ -464,6 +602,8 @@ mod tests {
                     Some(&done_reveal),
                     &done_pulse,
                     now,
+                    None,
+                    &mut done_image_cache,
                 )
             })
             .unwrap();
@@ -503,6 +643,7 @@ mod tests {
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
             .draw(|f| {
@@ -516,6 +657,8 @@ mod tests {
                     Some(&reveal),
                     &pulse,
                     now,
+                    None,
+                    &mut image_cache,
                 )
             })
             .unwrap();
@@ -537,6 +680,7 @@ mod tests {
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
         terminal
             .draw(|f| {
@@ -550,6 +694,8 @@ mod tests {
                     Some(&reveal),
                     &pulse,
                     now,
+                    None,
+                    &mut image_cache,
                 )
             })
             .unwrap();
@@ -583,6 +729,7 @@ mod tests {
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
         terminal
             .draw(|f| {
@@ -596,6 +743,8 @@ mod tests {
                     Some(&reveal),
                     &pulse,
                     now,
+                    None,
+                    &mut image_cache,
                 )
             })
             .unwrap();
@@ -731,9 +880,24 @@ mod tests {
     ) -> Buffer {
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|f| draw(f, config, line, 1, 1, false, reveal, &pulse, now))
+            .draw(|f| {
+                draw(
+                    f,
+                    config,
+                    line,
+                    1,
+                    1,
+                    false,
+                    reveal,
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -1031,8 +1195,23 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             let now = Instant::now();
             let pulse = reveal::build_pulse(now);
+            let mut image_cache = ImageCache::new();
             terminal
-                .draw(|f| draw(f, &config, None, 0, 0, true, None, &pulse, now))
+                .draw(|f| {
+                    draw(
+                        f,
+                        &config,
+                        None,
+                        0,
+                        0,
+                        true,
+                        None,
+                        &pulse,
+                        now,
+                        None,
+                        &mut image_cache,
+                    )
+                })
                 .unwrap();
         }
     }
@@ -1086,6 +1265,7 @@ mod tests {
         let now = Instant::now();
         let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
         let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
         terminal
             .draw(|f| {
@@ -1099,6 +1279,8 @@ mod tests {
                     Some(&reveal),
                     &pulse,
                     now,
+                    None,
+                    &mut image_cache,
                 )
             })
             .unwrap();
@@ -1129,6 +1311,7 @@ mod tests {
         let typing_reveal =
             reveal::RevealState::Animating(reveal::build_reveal(&typing_config, &line, now));
         let typing_pulse = reveal::build_pulse(now);
+        let mut typing_image_cache = ImageCache::new();
         let mut typing_terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
         typing_terminal
             .draw(|f| {
@@ -1142,6 +1325,8 @@ mod tests {
                     Some(&typing_reveal),
                     &typing_pulse,
                     now,
+                    None,
+                    &mut typing_image_cache,
                 )
             })
             .unwrap();
@@ -1160,6 +1345,7 @@ mod tests {
         let done_reveal =
             reveal::RevealState::Animating(reveal::build_reveal(&done_config, &line, now));
         let done_pulse = reveal::build_pulse(now);
+        let mut done_image_cache = ImageCache::new();
         let mut done_terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
         done_terminal
             .draw(|f| {
@@ -1173,6 +1359,8 @@ mod tests {
                     Some(&done_reveal),
                     &done_pulse,
                     now,
+                    None,
+                    &mut done_image_cache,
                 )
             })
             .unwrap();

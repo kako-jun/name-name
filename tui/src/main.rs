@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod image_fade;
 mod image_render;
 mod input;
 mod playback;
@@ -166,6 +167,14 @@ where
     // 会話行が変わっても作り直さない（一度だけ開始する）。
     let pulse = reveal::build_pulse(Instant::now());
 
+    // イベント絵（`DisplayLine::event_image`）のデコード結果キャッシュとクロスフェード状態
+    // （#481）。`image_fade` は開始時点の会話行が持つ event_image を「既にトランジション無しで
+    // 表示され続けている」状態として初期化する（起動直後にフェードインさせない）。
+    let mut image_cache = image_render::ImageCache::new();
+    let mut image_fade = image_fade::ImageFadeState::settled(
+        playback.current().and_then(|line| line.event_image.clone()),
+    );
+
     loop {
         let now = Instant::now();
         terminal.draw(|frame| {
@@ -179,11 +188,30 @@ where
                 current_reveal.as_ref(),
                 &pulse,
                 now,
+                Some(&image_fade),
+                &mut image_cache,
             )
         })?;
 
         match next_action()? {
-            Action::Advance => on_advance(playback, &mut current_reveal, config, Instant::now()),
+            Action::Advance => {
+                let prev_position = playback.position();
+                on_advance(playback, &mut current_reveal, config, Instant::now());
+                // 会話行が実際に進んだ（＝スキップ操作ではなく次行へ移動した）ときだけ
+                // event_image の変化を見てクロスフェードを開始する。skip_lines 経路
+                // （on_advance がタイプライター表示を全文表示へ早送りしただけ）では
+                // position は変わらないため、ここには到達しない。
+                if playback.position() != prev_position {
+                    let target = playback.current().and_then(|line| line.event_image.clone());
+                    if image_fade.current_target() != target.as_deref() {
+                        image_fade = image_fade.transition_to(
+                            target,
+                            Duration::from_millis(config.event_image.crossfade_ms),
+                            Instant::now(),
+                        );
+                    }
+                }
+            }
             Action::Quit => break,
             Action::None => {}
         }
