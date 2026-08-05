@@ -134,7 +134,8 @@ where
         match next_action()? {
             Action::Advance => return Ok(true),
             Action::Quit => return Ok(false),
-            Action::None => {}
+            // スプラッシュ画面には選択肢が無いため、カーソル移動は無視する（#482）。
+            Action::MoveUp | Action::MoveDown | Action::None => {}
         }
     }
 }
@@ -158,9 +159,8 @@ where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    let mut current_reveal: Option<reveal::RevealState> = playback.current().map(|line| {
-        reveal::RevealState::Animating(reveal::build_reveal(config, line, Instant::now()))
-    });
+    let mut current_reveal: Option<reveal::RevealState> =
+        build_reveal_for_current(playback, config, Instant::now());
     // ページ送りインジケータは話者・テキストに依存しないグローバルな明滅なので、
     // 会話行が変わっても作り直さない（一度だけ開始する）。
     let pulse = reveal::build_pulse(Instant::now());
@@ -171,7 +171,8 @@ where
             ui::draw(
                 frame,
                 config,
-                playback.current(),
+                playback.current_line(),
+                playback.current_choice(),
                 playback.position(),
                 playback.total(),
                 playback.is_at_end(),
@@ -183,6 +184,9 @@ where
 
         match next_action()? {
             Action::Advance => on_advance(playback, &mut current_reveal, config, Instant::now()),
+            // 選択肢を表示していないとき（`Playback::current_choice` が `None`）は no-op（#482）。
+            Action::MoveUp => playback.move_choice_cursor_up(),
+            Action::MoveDown => playback.move_choice_cursor_down(),
             Action::Quit => break,
             Action::None => {}
         }
@@ -190,25 +194,50 @@ where
     Ok(())
 }
 
-/// `Action::Advance` 受信時の意思決定（デシジョンテーブル、#472）。
+/// 現在位置の会話行から新しい `RevealState::Animating` を組み立てる。現在位置が選択肢
+/// （`Playback::current_choice`）や、そもそも表示すべき item が無い場合は `None` — 選択肢の
+/// 文言はタイプライター演出の対象外（GUI版の選択肢オーバーレイに演出が無いのと同じ扱い、#482）。
+fn build_reveal_for_current(
+    playback: &Playback,
+    config: &Config,
+    now: Instant,
+) -> Option<reveal::RevealState> {
+    playback
+        .current_line()
+        .map(|line| reveal::RevealState::Animating(reveal::build_reveal(config, line, now)))
+}
+
+/// `Action::Advance` 受信時の意思決定（デシジョンテーブル、#472。選択肢分岐対応で #482 拡張）。
 /// `Terminal<CrosstermBackend<Stdout>>` という具体型に結合していた `event_loop` から、
 /// `playback` / `current_reveal` / `config` / `now` だけを引数に取る純粋関数として切り出し、
-/// `TestBackend` 無しでもユニットテストできるようにした。挙動は元の `event_loop` 内の分岐と
-/// 同じ（切り出しに伴う `Instant::now()` の呼び出し回数の違いを除く）。
+/// `TestBackend` 無しでもユニットテストできるようにした。
 ///
-/// | # | 現在行 | reveal状態 | 次の行 | 動作 |
+/// | # | 現在位置 | reveal状態 | 次 | 動作 |
 /// |---|---|---|---|---|
-/// | 1 | 無し | ― | ― | 何もしない |
-/// | 2 | 有り | 未完了 | 存在する/最終行 | `skip_lines` で即全文表示、`advance()` は呼ばない |
-/// | 3 | 有り | 完了 | 存在する | `advance()` → 次行の `build_reveal` |
-/// | 4 | 有り | 完了 | 最終行 | `advance()` → `current_reveal` は不変（no-op） |
+/// | 1 | 選択肢 | ― | ― | `select_current_choice` で確定を試みる。成功時のみ新しい位置の reveal を組み立て直す（失敗時＝無効な jump 先は選択肢表示のまま no-op） |
+/// | 2 | 無し | ― | ― | 何もしない |
+/// | 3 | 会話行 | 未完了 | 存在する/最終行 | `skip_lines` で即全文表示、`advance()` は呼ばない |
+/// | 4 | 会話行 | 完了 | 存在する | `advance()` → 次item の reveal（`build_reveal_for_current`。Line なら Animating、Choice なら None） |
+/// | 5 | 会話行 | 完了 | 最終行 | `advance()` が `false` を返し no-op（`current_reveal` は不変） |
+///
+/// 選択肢表示中（#1）は Advance（Enter/Space）の意味が「次の行へ進む」から「カーソルが
+/// 指す選択肢を確定する」に変わる（`input::Action::Advance` のドキュメント参照）。選択肢の
+/// 文言はタイプライター演出の対象外なので、reveal の完了/未完了を問わず常に即座に確定を試みる
+/// （#3/#4 のような reveal_done 分岐が不要）。
 fn on_advance(
     playback: &mut Playback,
     current_reveal: &mut Option<reveal::RevealState>,
     config: &Config,
     now: Instant,
 ) {
-    if let Some(line) = playback.current() {
+    if playback.current_choice().is_some() {
+        if playback.select_current_choice() {
+            *current_reveal = build_reveal_for_current(playback, config, now);
+        }
+        return;
+    }
+
+    if let Some(line) = playback.current_line() {
         let reveal_done = current_reveal
             .as_ref()
             .map(|r| r.is_done(now))
@@ -220,11 +249,7 @@ fn on_advance(
             // 経由しない（#472 セルフレビュー対応）。
             *current_reveal = Some(reveal::RevealState::Done(reveal::skip_lines(config, line)));
         } else if playback.advance() {
-            if let Some(next_line) = playback.current() {
-                *current_reveal = Some(reveal::RevealState::Animating(reveal::build_reveal(
-                    config, next_line, now,
-                )));
-            }
+            *current_reveal = build_reveal_for_current(playback, config, now);
         }
     }
 }
@@ -275,7 +300,11 @@ mod tests {
             dline(Some("B"), "next line"),
         ]);
         let now = Instant::now();
-        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
+        let mut current_reveal = Some(animating(
+            &config,
+            playback.current_line().expect("line"),
+            now,
+        ));
         assert!(!current_reveal.as_ref().unwrap().is_done(now));
 
         on_advance(&mut playback, &mut current_reveal, &config, now);
@@ -289,7 +318,11 @@ mod tests {
         let config = slow_config();
         let mut playback = Playback::from_lines(vec![dline(Some("A"), "only line here")]);
         let now = Instant::now();
-        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
+        let mut current_reveal = Some(animating(
+            &config,
+            playback.current_line().expect("line"),
+            now,
+        ));
         assert!(!current_reveal.as_ref().unwrap().is_done(now));
 
         on_advance(&mut playback, &mut current_reveal, &config, now);
@@ -305,14 +338,18 @@ mod tests {
         let mut playback =
             Playback::from_lines(vec![dline(Some("A"), "first"), dline(Some("B"), "second")]);
         let now = Instant::now();
-        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
+        let mut current_reveal = Some(animating(
+            &config,
+            playback.current_line().expect("line"),
+            now,
+        ));
         assert!(current_reveal.as_ref().unwrap().is_done(now));
 
         on_advance(&mut playback, &mut current_reveal, &config, now);
 
         assert_eq!(playback.position(), 2);
         assert_eq!(
-            playback.current().expect("line").speaker.as_deref(),
+            playback.current_line().expect("line").speaker.as_deref(),
             Some("B")
         );
         assert!(current_reveal.is_some());
@@ -325,7 +362,11 @@ mod tests {
             Playback::from_lines(vec![dline(Some("A"), "first"), dline(Some("B"), "second")]);
         playback.advance(); // 最終行へ
         let t0 = Instant::now();
-        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), t0));
+        let mut current_reveal = Some(animating(
+            &config,
+            playback.current_line().expect("line"),
+            t0,
+        ));
         // "second" は6グラフェム、char_interval=1000ms・fade=0ms なので
         // t0 + 5000ms で完了する。
         let t_call = t0 + Duration::from_millis(5000);
@@ -363,7 +404,11 @@ mod tests {
             dline(Some("B"), "second line"),
         ]);
         let t0 = Instant::now();
-        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), t0));
+        let mut current_reveal = Some(animating(
+            &config,
+            playback.current_line().expect("line"),
+            t0,
+        ));
 
         // 1行目: reveal中
         assert!(!current_reveal.as_ref().unwrap().is_done(t0));
@@ -377,7 +422,7 @@ mod tests {
         on_advance(&mut playback, &mut current_reveal, &config, t0);
         assert_eq!(playback.position(), 2);
         assert_eq!(
-            playback.current().expect("line").speaker.as_deref(),
+            playback.current_line().expect("line").speaker.as_deref(),
             Some("B")
         );
         assert!(!current_reveal.as_ref().unwrap().is_done(t0)); // 2行目 reveal中
@@ -401,7 +446,11 @@ mod tests {
             dline(Some("C"), "three"),
         ]);
         let now = Instant::now();
-        let mut current_reveal = Some(animating(&config, playback.current().expect("line"), now));
+        let mut current_reveal = Some(animating(
+            &config,
+            playback.current_line().expect("line"),
+            now,
+        ));
         assert_eq!(playback.position(), 1);
 
         on_advance(&mut playback, &mut current_reveal, &config, now);
@@ -525,5 +574,65 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(!text.contains("Enter"), "buffer was: {text}");
         assert!(text.contains("0/0"), "buffer was: {text}");
+    }
+
+    // ---- #482: on_advance の選択肢分岐（Choice/jump）配線テスト ----
+    //
+    // `Playback::from_lines` は会話行専用のテスト用コンストラクタで Choice を作れないため、
+    // ここだけ実際の Markdown を `parser::parse` した `Document` 経由で `Playback` を作る
+    // （playback.rs 側の jump 解決そのものの単体テストは `playback.rs` にあるので、ここでは
+    // 「on_advance 経由で正しく呼び分けられているか」という配線だけを確認する）。
+    fn choice_branch_source() -> &'static str {
+        "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n[選択]\n- 進む→1-2\n[/選択]\n\n## 1-2: 次\n\n**B**:\n次のセリフ\n"
+    }
+
+    #[test]
+    fn on_advance_choice_selection_jumps_to_target_scene_and_starts_new_reveal() {
+        let config = instant_config();
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal = build_reveal_for_current(&playback, &config, now);
+
+        // 最初のセリフ → Choice へ進む（reveal は instant_config なので即完了している）。
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+        assert!(playback.current_choice().is_some());
+        assert!(
+            current_reveal.is_none(),
+            "選択肢表示中は reveal を持たないはず"
+        );
+
+        // Choice を確定（カーソルは既定で先頭の唯一の選択肢）→ jump 先シーンの1行目が current になる。
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("jump先の会話行")
+                .speaker
+                .as_deref(),
+            Some("B")
+        );
+        assert!(
+            current_reveal.is_some(),
+            "jump後の会話行のrevealが組み立てられているはず"
+        );
+    }
+
+    #[test]
+    fn on_advance_choice_selection_with_invalid_jump_leaves_choice_displayed() {
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n[選択]\n- 行き先不明→does-not-exist\n[/選択]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(
+            playback.current_choice().is_some(),
+            "無効なjump先では選択肢表示のまま変わらないはず"
+        );
+        assert!(current_reveal.is_none());
     }
 }
