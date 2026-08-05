@@ -635,4 +635,72 @@ mod tests {
         );
         assert!(current_reveal.is_none());
     }
+
+    #[test]
+    fn choice_immediately_followed_by_another_choice_keeps_reveal_none_after_jump() {
+        // jump先シーンの先頭itemがまたChoiceであるケース（連続分岐）。build_reveal_for_current
+        // は current_line() が None（＝現在Choice）のとき None を返すため、jump直後も
+        // current_reveal は None のまま維持されるはず。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n[選択]\n- 進む→1-2\n[/選択]\n\n## 1-2: 次\n\n[選択]\n- さらに進む→1-3\n[/選択]\n\n## 1-3: 最後\n\n**C**:\n最後のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal = build_reveal_for_current(&playback, &config, now);
+        assert!(
+            current_reveal.is_none(),
+            "開始直後はChoiceなのでrevealは無いはず"
+        );
+
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(
+            playback.current_choice().is_some(),
+            "jump先の先頭itemも再びChoiceのはず"
+        );
+        assert!(
+            current_reveal.is_none(),
+            "jump先がChoiceの場合はrevealを持たないはず"
+        );
+    }
+
+    #[test]
+    fn on_advance_rapid_double_advance_after_valid_jump_does_not_double_jump() {
+        // jump成功直後にもう一度 on_advance を呼んでも、2回連続でjumpが発生しない
+        // （2回目の呼び出し時点では current_choice() が None になっているため、
+        // select_current_choice ではなく通常の1行分の advance だけが起こる）ことを確認する。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n[選択]\n- 進む→1-2\n[/選択]\n\n## 1-2: 次\n\n**B**:\n最初のセリフ\n\n**C**:\n次のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal = build_reveal_for_current(&playback, &config, now);
+
+        // 1回目: Choice確定 → "1-2" の先頭行 "B" へjump。
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("jump先の会話行")
+                .speaker
+                .as_deref(),
+            Some("B"),
+            "1回目の呼び出しでjump先の1行目(B)に到達するはず"
+        );
+        assert_eq!(playback.position(), 1);
+
+        // 2回目（rapid double advance）: 既にChoiceではないため、jumpは再発生せず
+        // 通常の1行送り（B→C）だけが起こるはず。
+        on_advance(&mut playback, &mut current_reveal, &config, now);
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("2回目の会話行")
+                .speaker
+                .as_deref(),
+            Some("C"),
+            "2回目の呼び出しはBからCへの1行送りだけのはず（2回連続jumpしない）"
+        );
+        assert_eq!(playback.position(), 2, "1回のadvanceにつき1行だけ進むはず");
+    }
 }

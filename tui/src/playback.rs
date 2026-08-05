@@ -761,6 +761,37 @@ mod tests {
     }
 
     #[test]
+    fn position_after_jumping_into_zero_item_non_last_scene_falls_through_to_next_scene_content() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "1-2")]),
+                    ],
+                ),
+                scene("1-2", vec![]), // イベント0件だが最終シーンではない
+                scene("1-3", vec![dialog(Some("B"), vec!["1-3の台詞"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance();
+        assert!(pb.select_current_choice());
+
+        // "1-2" は表示可能な item を1つも持たないため、jump先の位置は実質的に
+        // 後続シーン "1-3" の先頭 item と同じインデックスになり、そのまま "1-3" の
+        // 内容が現れる（シーン境界を越えてドキュメント順に読み進める設計、モジュール
+        // 冒頭のドキュメント参照）。
+        assert_eq!(
+            pb.current_line().expect("1-3の台詞").text,
+            vec!["1-3の台詞".to_string()]
+        );
+    }
+
+    #[test]
     fn is_at_end_true_when_jump_lands_on_out_of_bounds_index_of_zero_item_scene() {
         let ch1 = chapter(
             1,
@@ -817,6 +848,57 @@ mod tests {
         assert_eq!(
             pb.current_line().expect("次の台詞").speaker.as_deref(),
             Some("B")
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_up_down_are_noop_when_single_option() {
+        let ch1 = chapter(
+            1,
+            vec![scene("1-1", vec![choice(vec![("唯一の選択肢", "x")])])],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        pb.move_choice_cursor_up();
+        assert_eq!(pb.current_choice().unwrap().1, 0);
+
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            0,
+            "選択肢が1件のみなら↓してもカーソルは動かないはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_supports_backward_jump_to_earlier_scene() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![dialog(Some("A"), vec!["最初のシーン"])]),
+                scene(
+                    "1-2",
+                    vec![
+                        dialog(Some("B"), vec!["2番目のシーン"]),
+                        choice(vec![("戻る", "1-1")]),
+                    ],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance(); // "1-1"の台詞 → "1-2"の台詞
+        pb.advance(); // "1-2"の台詞 → Choice
+        assert!(pb.current_choice().is_some());
+
+        assert!(
+            pb.select_current_choice(),
+            "現在シーンより前のシーンへのjumpも成功するはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("戻り先の台詞").text,
+            vec!["最初のシーン".to_string()]
         );
     }
 }

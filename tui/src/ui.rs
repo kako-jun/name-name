@@ -1435,4 +1435,108 @@ mod tests {
             })
             .unwrap();
     }
+
+    #[test]
+    fn choice_list_with_many_options_does_not_panic_when_overflowing_area_height() {
+        // 選択肢数(50件)がterminalの高さ(8行)を大きく超える。draw_choice_list はスクロールを
+        // 実装していないため画面に収まらない分は単に見切れるが、panic しないことを確認する。
+        let config = Config::default();
+        let options: Vec<ChoiceOption> = (0..50)
+            .map(|i| choice_option(&format!("選択肢{i}"), "x"))
+            .collect();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn choice_list_full_width_long_option_wraps_without_panic_and_keeps_reversed_style_on_wrapped_rows(
+    ) {
+        // 全角文字を60個連ねた長い選択肢テキストを、右側テキスト列がその全文を1行に
+        // 収められない狭い terminal 幅で描画する。折り返し（Wrap）が発生しても panic せず、
+        // カーソル行（index 0、REVERSEDスタイル）の折り返し継続行にもスタイルが引き継がれる
+        // ことを確認する。
+        let config = Config::default();
+        let long_text = "あ".repeat(60);
+        let options = vec![choice_option(&long_text, "x")];
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(20, 15)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    &pulse,
+                    now,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area();
+        let mut rows_with_a = 0;
+        for y in 0..area.height {
+            let mut row_has_a = false;
+            let mut all_reversed = true;
+            for x in 0..area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                if cell.symbol() == "あ" {
+                    row_has_a = true;
+                    if !cell.modifier.contains(Modifier::REVERSED) {
+                        all_reversed = false;
+                    }
+                }
+            }
+            if row_has_a {
+                rows_with_a += 1;
+                assert!(
+                    all_reversed,
+                    "折り返された行もカーソルのREVERSEDスタイルを保つはず (y={y})"
+                );
+            }
+        }
+        assert!(
+            rows_with_a >= 2,
+            "十分に長い全角文字列なので複数行に折り返されるはず（実際は{rows_with_a}行）"
+        );
+    }
+
+    #[test]
+    fn choice_list_renders_nothing_but_does_not_panic_when_options_empty() {
+        // Playback 側の修正（バグ2）後は options: [] の Choice が item 化されなくなるため
+        // ui.rs の描画経路には現れなくなるが、draw_choice_list 単体としての防御も別途
+        // 確認しておく価値がある（呼び出し側の前提が崩れても panic しないことの担保）。
+        let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_choice_list(f, area, &[], 0);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert_eq!(text.trim(), "", "空optionsでは何も描画されないはず");
+    }
 }
