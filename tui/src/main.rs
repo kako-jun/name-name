@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod image_render;
 mod input;
 mod playback;
 mod reveal;

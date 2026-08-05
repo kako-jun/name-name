@@ -115,6 +115,28 @@ impl Default for SplashConfig {
     }
 }
 
+/// イベント絵アセット関連の設定（quadrant block描画 + jiwaクロスフェード、#481）。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct EventImageConfig {
+    /// Markdown 原稿中の `[イベント絵: props/x.webp]` のような相対パスの基点ディレクトリ。
+    /// gymnasia はリポジトリルート基準の `assets/images`。
+    pub assets_dir: PathBuf,
+    /// 画像切り替え（前の画像→次の画像。`None`⇄`Some` の出現/退場を含む）の
+    /// クロスフェード所要時間 (ms)。GUI版 `NovelRenderer.EVENT_IMAGE_FADE_MS`
+    /// （既定700ms）と揃え、TUI版の既定値もそれに合わせる。
+    pub crossfade_ms: u64,
+}
+
+impl Default for EventImageConfig {
+    fn default() -> Self {
+        Self {
+            assets_dir: PathBuf::from("assets/images"),
+            crossfade_ms: 700,
+        }
+    }
+}
+
 /// ゲームごとに変わりうる値をまとめた設定。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -134,6 +156,8 @@ pub struct Config {
     /// 話者名を持たない Narration は `colors.narration` を適用する。
     pub player_speakers: Vec<String>,
     pub typewriter: TypewriterConfig,
+    /// イベント絵アセットの基点ディレクトリ・クロスフェード時間（#481）。
+    pub event_image: EventImageConfig,
 }
 
 impl Default for Config {
@@ -147,6 +171,7 @@ impl Default for Config {
             splash: SplashConfig::default(),
             player_speakers: vec!["主格".to_string()],
             typewriter: TypewriterConfig::default(),
+            event_image: EventImageConfig::default(),
         }
     }
 }
@@ -194,6 +219,12 @@ impl Config {
             Some(_) => &self.colors.opponent,
         }
     }
+
+    /// Markdown 原稿中の画像相対パス（`DisplayLine::event_image`、例: `props/x.webp`）を
+    /// `event_image.assets_dir` と結合し、実ファイルパスへ解決する（#481）。
+    pub fn resolve_image_path(&self, relative: &str) -> PathBuf {
+        self.event_image.assets_dir.join(relative)
+    }
 }
 
 #[cfg(test)]
@@ -220,6 +251,11 @@ mod tests {
         assert_eq!(config.player_speakers, vec!["主格".to_string()]);
         assert_eq!(config.typewriter.char_interval_ms, 45);
         assert_eq!(config.typewriter.fade_duration_ms, 320);
+        assert_eq!(
+            config.event_image.assets_dir,
+            PathBuf::from("assets/images")
+        );
+        assert_eq!(config.event_image.crossfade_ms, 700);
     }
 
     #[test]
@@ -247,6 +283,32 @@ mod tests {
         assert_eq!(
             config.typewriter.fade_duration_ms,
             Config::default().typewriter.fade_duration_ms
+        );
+    }
+
+    #[test]
+    fn from_toml_str_partial_event_image_override_keeps_rest_default() {
+        let toml = "[event_image]\ncrossfade_ms = 250\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert_eq!(config.event_image.crossfade_ms, 250);
+        assert_eq!(
+            config.event_image.assets_dir,
+            Config::default().event_image.assets_dir
+        );
+    }
+
+    #[test]
+    fn resolve_image_path_joins_assets_dir_and_relative_path() {
+        let config = Config {
+            event_image: EventImageConfig {
+                assets_dir: PathBuf::from("assets/images"),
+                ..EventImageConfig::default()
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            config.resolve_image_path("props/candle.webp"),
+            PathBuf::from("assets/images/props/candle.webp")
         );
     }
 
