@@ -263,8 +263,15 @@ impl Playback {
             .count()
     }
 
-    /// 末尾（最後の item）に到達しているか。
+    /// 末尾（最後の item）に到達しているか。現在位置が未選択の Choice の場合は、
+    /// それがドキュメント上の最後の item であってもプレイヤーはまだ何も選んでおらず
+    /// 物語は終わっていないため常に `false`（[`Playback::current_choice`] を流用）。
+    /// これを見落とすと、`ui::draw_status_line` が画面下部に `(END)` を出しつつ右側では
+    /// 選択肢メニューが入力待ちで表示される、という矛盾した見た目になる。
     pub fn is_at_end(&self) -> bool {
+        if self.current_choice().is_some() {
+            return false;
+        }
         self.items.is_empty() || self.index + 1 >= self.items.len()
     }
 
@@ -899,6 +906,29 @@ mod tests {
         assert_eq!(
             pb.current_line().expect("戻り先の台詞").text,
             vec!["最初のシーン".to_string()]
+        );
+    }
+
+    // ---- セルフレビュー指摘の回帰テスト（PR #484 should）----
+
+    #[test]
+    fn is_at_end_is_false_while_unselected_choice_is_displayed_even_at_document_end() {
+        // ドキュメント最終シーンの最後の item が（空でない）Choice のケース。旧実装は
+        // アイテム種別を見ずに「最後の item にいるか」だけで判定していたため、プレイヤーが
+        // まだ何も選んでいない＝物語が終わっていない状態でも is_at_end が true を返し、
+        // `ui::draw_status_line` が (END) を表示する一方で選択肢メニューも入力待ちで表示
+        // される、という矛盾したUIになっていた。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["どうする？"]),
+            choice(vec![("進む", "1-1")]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance(); // 台詞 → Choice（ドキュメント最後の item）
+        assert!(pb.current_choice().is_some(), "Choice が現在位置のはず");
+
+        assert!(
+            !pb.is_at_end(),
+            "未選択のChoiceを表示中は、それがドキュメント末尾でも終端扱いしてはいけない"
         );
     }
 }
