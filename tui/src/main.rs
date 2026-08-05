@@ -240,6 +240,7 @@ mod tests {
         DisplayLine {
             speaker: speaker.map(|s| s.to_string()),
             text: vec![text.to_string()],
+            event_image: None,
         }
     }
 

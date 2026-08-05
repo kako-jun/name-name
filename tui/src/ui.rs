@@ -345,6 +345,7 @@ mod tests {
         let line = DisplayLine {
             speaker: Some("A".to_string()),
             text: vec!["hi".to_string()],
+            event_image: None,
         };
         let now = Instant::now();
         // reveal 完了済み(=ページ送りインジケータも同時に描画される)状態でも、
@@ -377,6 +378,7 @@ mod tests {
         let line = DisplayLine {
             speaker: Some("A".to_string()),
             text: vec!["hello".to_string()],
+            event_image: None,
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
@@ -408,6 +410,7 @@ mod tests {
         let line = DisplayLine {
             speaker: Some("A".to_string()),
             text: vec!["hello".to_string()],
+            event_image: None,
         };
         let now = Instant::now();
 
@@ -495,6 +498,7 @@ mod tests {
         let line = DisplayLine {
             speaker: Some("A".to_string()),
             text: vec![],
+            event_image: None,
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
@@ -528,6 +532,7 @@ mod tests {
         let line = DisplayLine {
             speaker: Some("A".to_string()),
             text: vec!["first line".to_string(), "second line".to_string()],
+            event_image: None,
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
@@ -573,6 +578,7 @@ mod tests {
         let line = DisplayLine {
             speaker: Some("A".to_string()),
             text: vec!["hi".to_string()],
+            event_image: None,
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
@@ -708,6 +714,7 @@ mod tests {
         DisplayLine {
             speaker: speaker.map(|s| s.to_string()),
             text: text.into_iter().map(|s| s.to_string()).collect(),
+            event_image: None,
         }
     }
 

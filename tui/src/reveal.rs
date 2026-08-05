@@ -178,6 +178,7 @@ mod tests {
         DisplayLine {
             speaker: speaker.map(|s| s.to_string()),
             text: text.into_iter().map(|s| s.to_string()).collect(),
+            event_image: None,
         }
     }
 
