@@ -3,7 +3,12 @@
 //! 会話文（Dialog / Narration）の逐次表示に加え、選択肢分岐（`Event::Choice`）にも対応する
 //! （#482）。フラグ管理・セーブ/ロードは引き続き対象外（`parser::models::Event` にそれらの
 //! 型があっても扱わない）。背景・SE・BGM・立ち絵演出などその他のイベントは、今回も画面表示を
-//! 変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。
+//! 変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。ただし `Event::EventImage` /
+//! `EventImageExit` だけは例外で、各 `DisplayLine` に `event_image`（その時点で表示されて
+//! いるべきイベント絵の相対パス）として反映する（#481）。左側は `event_image` が `None` の
+//! ときのみ従来どおりプレースホルダ表示になる。`Event::Choice` はこの状態に影響しない
+//! （Choice イベントを挟んでも、直前までの `event_image` はそのまま後続の `DisplayLine` に
+//! 引き継がれる）。
 //!
 //! ## 選択肢分岐の設計 (#482)
 //!
@@ -28,13 +33,19 @@ use std::collections::HashMap;
 
 use name_name_parser::models::{ChoiceOption, Document, Event};
 
-/// 画面に表示する1行分の内容（話者名 + 本文）。
+/// 画面に表示する1行分の内容（話者名 + 本文 + その時点のイベント絵）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayLine {
     /// 話者名。`Narration` イベントの場合は `None`。
     pub speaker: Option<String>,
     /// 本文（複数行）。
     pub text: Vec<String>,
+    /// この会話行の時点で表示されているべきイベント絵の相対パス
+    /// （`Event::EventImage { path, .. }` の `path`。`config.event_image.assets_dir` からの
+    /// 相対パス）。直前に `Event::EventImage` があれば `Some`、`Event::EventImageExit` で
+    /// クリアされていれば（または一度も出ていなければ）`None`。`Event::Choice` 等その他の
+    /// イベント種別はこの値に影響しない（#482 スコープの Choice を含め今回も対象外）。
+    pub event_image: Option<String>,
 }
 
 /// ルビ記法（`｜` / `《...》`）を除去し、ベーステキストのみを残す。
@@ -73,7 +84,9 @@ fn strip_ruby_markup(text: &str) -> String {
 }
 
 /// `Event` が画面に表示すべき会話行なら `DisplayLine` に変換する。
-/// Dialog / Narration 以外（背景・SE・BGM 等）は `None`。
+/// Dialog / Narration 以外（背景・SE・BGM・EventImage 等）は `None`。
+/// `event_image` は常に `None` で返す — 呼び出し側（`Playback::from_document`）が
+/// 直前までの `Event::EventImage`/`EventImageExit` 走査状態を見て上書きする。
 fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
     match event {
         Event::Dialog {
@@ -81,10 +94,12 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
         } => Some(DisplayLine {
             speaker: character.clone(),
             text: text.iter().map(|line| strip_ruby_markup(line)).collect(),
+            event_image: None,
         }),
         Event::Narration { text, .. } => Some(DisplayLine {
             speaker: None,
             text: text.iter().map(|line| strip_ruby_markup(line)).collect(),
+            event_image: None,
         }),
         _ => None,
     }
@@ -133,9 +148,16 @@ pub struct Playback {
 
 impl Playback {
     /// `Document` から Dialog / Narration / Choice を抽出し、先頭に位置づけた再生状態を作る。
+    /// 走査中、直近の `Event::EventImage`（表示開始）/ `EventImageExit`（退場）を
+    /// `current_event_image` として追跡し、Line item として積まれる各 `DisplayLine` に
+    /// その時点の値を刻む（#481）。チャプター/シーン境界をまたいでも状態は引き継がれる
+    /// （`Document` 全体を単一の時系列として走査するため）。Choice item 自体はこの状態に
+    /// 影響しない — Choice を挟んでも直前までの `current_event_image` はそのまま後続の
+    /// Line item に引き継がれる。
     pub fn from_document(doc: &Document) -> Self {
         let mut items = Vec::new();
         let mut scene_start = HashMap::new();
+        let mut current_event_image: Option<String> = None;
         for chapter in &doc.chapters {
             for scene in &chapter.scenes {
                 // このシーンの最初の item になる（はずの）位置を、events を処理する前に記録する。
@@ -143,8 +165,30 @@ impl Playback {
                 // 返すのと同じ規約）。
                 scene_start.entry(scene.id.clone()).or_insert(items.len());
                 for event in &scene.events {
-                    if let Some(item) = playback_item_from_event(event) {
-                        items.push(item);
+                    match event {
+                        // `path` の `..` は `back`（表示位置）と `fade_ms`（イベント個別の
+                        // フェード時間上書き）を意図的に捨てている。`fade_ms` は TUI 側では
+                        // 常に `config.event_image.crossfade_ms`（グローバル値、`main.rs` の
+                        // `event_loop` 参照）しか使わない簡略化（MVPスコープ、#481）。GUI版の
+                        // ようなイベント単位のフェード時間上書きは今回の対象外。
+                        Event::EventImage { path, .. } => {
+                            current_event_image = Some(path.clone());
+                        }
+                        Event::EventImageExit { .. } => {
+                            current_event_image = None;
+                        }
+                        _ => {
+                            if let Some(item) = playback_item_from_event(event) {
+                                let item = match item {
+                                    PlaybackItem::Line(mut line) => {
+                                        line.event_image = current_event_image.clone();
+                                        PlaybackItem::Line(line)
+                                    }
+                                    choice @ PlaybackItem::Choice(_) => choice,
+                                };
+                                items.push(item);
+                            }
+                        }
                     }
                 }
             }
@@ -401,6 +445,18 @@ mod tests {
             voice_path: None,
             font_family: None,
         }
+    }
+
+    fn event_image(path: &str) -> Event {
+        Event::EventImage {
+            path: path.to_string(),
+            back: name_name_parser::models::EventImageBack::default(),
+            fade_ms: None,
+        }
+    }
+
+    fn event_image_exit() -> Event {
+        Event::EventImageExit { fade_ms: None }
     }
 
     /// 単一チャプター・単一シーンに `events` を並べた `Document` を作る。
@@ -929,6 +985,125 @@ mod tests {
         assert!(
             !pb.is_at_end(),
             "未選択のChoiceを表示中は、それがドキュメント末尾でも終端扱いしてはいけない"
+        );
+    }
+
+    // ---- #481: EventImage / EventImageExit の event_image 追跡 ----
+
+    #[test]
+    fn lines_before_any_event_image_have_none() {
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["前"])]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_line().expect("line").event_image, None);
+    }
+
+    #[test]
+    fn dialog_after_event_image_carries_its_path() {
+        let doc = doc_single_scene(vec![
+            event_image("props/candle.webp"),
+            dialog(Some("A"), vec!["後"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("props/candle.webp")
+        );
+    }
+
+    #[test]
+    fn event_image_exit_clears_path_for_subsequent_lines() {
+        let doc = doc_single_scene(vec![
+            event_image("props/candle.webp"),
+            dialog(Some("A"), vec!["表示中"]),
+            event_image_exit(),
+            dialog(Some("A"), vec!["退場後"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("props/candle.webp")
+        );
+        pb.advance();
+        assert_eq!(pb.current_line().expect("line").event_image, None);
+    }
+
+    #[test]
+    fn later_event_image_replaces_the_previous_one() {
+        let doc = doc_single_scene(vec![
+            event_image("props/a.webp"),
+            dialog(Some("A"), vec!["1"]),
+            event_image("props/b.webp"),
+            dialog(Some("A"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("props/a.webp")
+        );
+        pb.advance();
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("props/b.webp")
+        );
+    }
+
+    #[test]
+    fn event_image_state_persists_across_scene_and_chapter_boundaries() {
+        let ch1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![
+                    event_image("props/candle.webp"),
+                    dialog(Some("A"), vec!["ch1"]),
+                ],
+            )],
+        );
+        let ch2 = chapter(2, vec![scene("2-1", vec![dialog(Some("B"), vec!["ch2"])])]);
+        let doc = document_with_chapters(vec![ch1, ch2]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance();
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("props/candle.webp"),
+            "イベント絵の状態はチャプター境界をまたいでも引き継がれる"
+        );
+    }
+
+    #[test]
+    fn choice_event_does_not_affect_event_image_state() {
+        // Choice を挟んでも event_image はリセットされず、jump 先の Line item にも
+        // 引き継がれることを確認する（#482 で Choice が item 化された後の回帰確認）。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        event_image("props/candle.webp"),
+                        Event::Choice {
+                            options: vec![ChoiceOption {
+                                text: "yes".to_string(),
+                                jump: "1-2".to_string(),
+                            }],
+                        },
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["後"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.current_choice().is_some(), "Choice が現在位置のはず");
+
+        assert!(
+            pb.select_current_choice(),
+            "有効な jump 先なので成功するはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("props/candle.webp"),
+            "Choiceはevent_image状態を変更しない（#482スコープ外）"
         );
     }
 }
