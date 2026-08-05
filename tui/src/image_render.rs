@@ -8,7 +8,7 @@
 //! - quadrant block 変換（後半）: 純粋関数。実ファイルを介さず合成した RGBA バイト列だけで
 //!   テストできる。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -68,12 +68,25 @@ pub(crate) fn write_test_webp_fixture(rgba: &[u8], width: u32, height: u32) -> P
     write_test_bytes_fixture(&encoded, "webp")
 }
 
+/// [`ImageCache`] が同時に保持するエントリ数の上限。クロスフェード中に実際に同時参照
+/// されるのは `ImageFadeState` の `from`/`to` 2枚程度だが、原稿の展開（別イベント絵への
+/// ジャンプ・章の遷移等）で参照パスが変わっても直近分は再デコードせず済むよう、多めに
+/// 余裕を持たせた小さな値にしている。gymnasia のような多数のイベント絵を持つゲームで
+/// 長時間プレイしても、デコード済み RGBA がプレイセッション全体で際限なく蓄積しないための
+/// 上限（#481 セルフレビュー指摘）。
+const MAX_CACHE_ENTRIES: usize = 32;
+
 /// パスをキーにデコード済み画像をキャッシュする。クロスフェード中は from/to 2枚を毎フレーム
 /// 参照するため、キャッシュが無いと同じファイルを毎フレーム（既定 30ms 間隔）デコードし
 /// 直す無駄が生じる。`Rc` で共有するのでクローンは軽量。
+///
+/// エントリ数が [`MAX_CACHE_ENTRIES`] を超えたら、最も古く挿入されたエントリから追い出す
+/// （挿入順ベースの単純な FIFO。アクセス順を追跡する本格的な LRU までは不要という判断）。
+/// `insertion_order` は `entries` に挿入した順にパスを積むキューで、先頭が最も古い。
 #[derive(Debug, Default)]
 pub struct ImageCache {
     entries: HashMap<PathBuf, Rc<DecodedImage>>,
+    insertion_order: VecDeque<PathBuf>,
 }
 
 impl ImageCache {
@@ -84,7 +97,8 @@ impl ImageCache {
     /// `path` のデコード済み画像を取得する（キャッシュ済みならそれを返し、無ければ
     /// デコードしてキャッシュへ格納する）。デコードに失敗した場合は `None` を返す
     /// （1枚の画像パスの問題で再生全体をクラッシュさせないため。呼び出し側は
-    /// プレースホルダ/直前の画像へのフォールバックができる）。
+    /// プレースホルダ/直前の画像へのフォールバックができる）。挿入後に
+    /// [`MAX_CACHE_ENTRIES`] を超えた場合は最も古いエントリを追い出す。
     pub fn get_or_load(&mut self, path: &Path) -> Option<Rc<DecodedImage>> {
         if let Some(existing) = self.entries.get(path) {
             return Some(existing.clone());
@@ -92,6 +106,14 @@ impl ImageCache {
         let decoded = load_image_rgba(path).ok()?;
         let rc = Rc::new(decoded);
         self.entries.insert(path.to_path_buf(), rc.clone());
+        self.insertion_order.push_back(path.to_path_buf());
+        while self.entries.len() > MAX_CACHE_ENTRIES {
+            if let Some(oldest) = self.insertion_order.pop_front() {
+                self.entries.remove(&oldest);
+            } else {
+                break;
+            }
+        }
         Some(rc)
     }
 }
@@ -395,6 +417,47 @@ mod tests {
         cache.get_or_load(path);
         cache.get_or_load(path);
         assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn image_cache_hit_returns_same_rc_without_redecoding() {
+        // 同一パスの2回目取得は再デコードせず、既存の Rc をそのまま返す
+        // （エビクション導入後も通常のキャッシュヒット挙動が壊れていないことの回帰ガード）。
+        let mut cache = ImageCache::new();
+        let path = write_test_webp_fixture(&[1, 2, 3, 255], 1, 1);
+        let first = cache.get_or_load(&path).expect("first load should decode");
+        let second = cache
+            .get_or_load(&path)
+            .expect("second load should hit cache");
+        assert!(
+            Rc::ptr_eq(&first, &second),
+            "cache hit should return the same Rc instance, not a freshly decoded one"
+        );
+    }
+
+    #[test]
+    fn image_cache_evicts_oldest_entry_when_exceeding_capacity() {
+        // MAX_CACHE_ENTRIES を超える件数を挿入すると、最も古く挿入されたエントリから
+        // 追い出されることを確認する（プレイセッション全体でRGBAが無制限に蓄積しないための
+        // 上限、#481 セルフレビュー指摘）。
+        let mut cache = ImageCache::new();
+        let paths: Vec<PathBuf> = (0..(MAX_CACHE_ENTRIES + 1))
+            .map(|i| write_test_webp_fixture(&[i as u8, i as u8, i as u8, 255], 1, 1))
+            .collect();
+        for path in &paths {
+            let result = cache.get_or_load(path);
+            assert!(result.is_some(), "each fixture should decode successfully");
+        }
+        let oldest = &paths[0];
+        assert!(
+            !cache.entries.contains_key(oldest),
+            "oldest entry should have been evicted once capacity is exceeded"
+        );
+        assert_eq!(
+            cache.entries.len(),
+            MAX_CACHE_ENTRIES,
+            "cache should not grow past the configured capacity"
+        );
     }
 
     // ---- quadrant block 変換（純粋関数）----
