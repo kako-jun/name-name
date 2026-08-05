@@ -1,5 +1,9 @@
-//! ratatui による画面描画。左に画像プレースホルダ、右に話者名 + 本文を表示する
-//! 左右セパレートレイアウト。
+//! ratatui による画面描画。左に画像プレースホルダ、右に相手（上）/自分（下）の2ウィンドウで
+//! テキストを表示する。左右50/50・テキスト側はさらに上下50/50 に分割する GUI版
+//! （`frontend/src/game/novelLayout.ts` の `computeSplitLayoutRegions` /
+//! `splitTextRegionForDualWindow`）と同じジオメトリを踏襲する（#480）。GUI版の dual-window は
+//! 常に borderless のため、こちらも罫線の枠は描かない。話者名ラベルも表示しない — 話者識別は
+//! 「上下どちらの窓か」（位置）と `Config::color_name_for` の文字色で行う。
 
 use std::str::FromStr;
 use std::time::Instant;
@@ -15,7 +19,9 @@ use crate::config::{Config, PlaceholderStyle};
 use crate::playback::DisplayLine;
 use crate::reveal;
 
-/// 画面全体を左（画像プレースホルダ）40% / 右（テキスト）60% に分割して描画する。
+/// 画面全体を左（画像プレースホルダ）50% / 右（テキスト、相手=上/自分=下にさらに50/50分割）に
+/// 分割して描画する。最下段1行は進行状況（ゲーム名 + 会話位置/総数）専用の帯にする — 罫線の
+/// title として表示していた情報を、枠を使わず最小限の形で残すためのもの（過剰な装飾はしない）。
 ///
 /// `reveal` は現在の会話行のタイプライター表示状態（[`reveal::RevealState`]、`None` は行
 /// そのものが無いケース）、`pulse` はページ送りインジケータ（reveal 完了後にのみ表示する）、
@@ -33,31 +39,29 @@ pub fn draw(
     pulse: &PulseHandle,
     now: Instant,
 ) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+    let root = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(frame.area());
 
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(root[0]);
+
     draw_placeholder(frame, columns[0], config);
-    draw_text(
-        frame, columns[1], config, line, position, total, is_at_end, reveal, pulse, now,
-    );
+    draw_text_windows(frame, columns[1], config, line, reveal, pulse, now);
+    draw_status_line(frame, root[1], config, position, total, is_at_end);
 }
 
-/// 左側: 画像プレースホルダ（罫線で囲った空き領域、または中央にラベル文字列）。
+/// 左側: 画像プレースホルダ（罫線なし。中央にラベル文字列、または空欄）。
 fn draw_placeholder(frame: &mut Frame, area: Rect, config: &Config) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(config.game_name.as_str());
-
     let label = match config.placeholder.style {
         PlaceholderStyle::Blank => "",
         PlaceholderStyle::Label => config.placeholder.label.as_str(),
     };
 
-    let paragraph = Paragraph::new(label)
-        .block(block)
-        .alignment(Alignment::Center);
+    let paragraph = Paragraph::new(label).alignment(Alignment::Center);
     frame.render_widget(paragraph, area);
 }
 
@@ -102,71 +106,97 @@ pub fn draw_splash(frame: &mut Frame, config: &Config) {
     frame.render_widget(paragraph, centered);
 }
 
-/// 右側: 話者名 + 本文。話者がプレイヤー側かどうかで文字色を出し分ける
-/// （`Config::color_name_for` に判定を委譲する）。本文は `reveal`（[`reveal::RevealState`]）が
-/// 与えられていれば `RevealState::body_lines` から組み立て（`Animating` はタイプライター表示の
-/// スナップショット、`Done` はスキップ済みの全文）、reveal 完了後は `pulse`（`jiwa::PulseHandle`）
-/// によるページ送りインジケータを行末に付け足す。`reveal` が `None`（会話行そのものが無い等）の
-/// 場合は従来どおりの静的表示にフォールバックする。
-#[allow(clippy::too_many_arguments)]
-fn draw_text(
+/// 右側をさらに上（相手）/下（自分）50/50 に分割し、現在の会話行の話者側のウィンドウにだけ
+/// 本文を描画する（GUI版 `splitTextRegionForDualWindow`: 相手=上/自分=下、#480）。話者が
+/// `config.player_speakers` に含まれる場合のみ「自分」（下窓）、それ以外（Narration の
+/// 話者不明を含む — GUI版 `resolveDualWindowIsSelf` が話者不明を相手側に倒すのと同じ規則）は
+/// 「相手」（上窓）に描く。話者側でない方の窓は空のまま（前回発言のログ表示はスコープ外）。
+///
+/// 本文は `reveal`（[`reveal::RevealState`]）が与えられていれば `RevealState::body_lines` から
+/// 組み立て（`Animating` はタイプライター表示のスナップショット、`Done` はスキップ済みの全文）、
+/// reveal 完了後は `pulse`（`jiwa::PulseHandle`）によるページ送りインジケータを行末に付け足す。
+/// `reveal` が `None`（会話行そのものが無い等）の場合は従来どおりの静的表示にフォールバックする。
+fn draw_text_windows(
     frame: &mut Frame,
     area: Rect,
     config: &Config,
     line: Option<&DisplayLine>,
-    position: usize,
-    total: usize,
-    is_at_end: bool,
     reveal: Option<&reveal::RevealState>,
     pulse: &PulseHandle,
     now: Instant,
 ) {
-    let title = if is_at_end {
-        format!("{position}/{total} (END)")
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    let opponent_area = rows[0];
+    let self_area = rows[1];
+
+    let Some(line) = line else {
+        let paragraph = Paragraph::new("(会話行がありません)").wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, opponent_area);
+        return;
+    };
+
+    let is_self_speaker = line
+        .speaker
+        .as_deref()
+        .is_some_and(|speaker| config.is_player_speaker(speaker));
+    let target_area = if is_self_speaker {
+        self_area
     } else {
-        format!("{position}/{total}")
+        opponent_area
     };
-    let block = Block::default().borders(Borders::ALL).title(title);
 
-    let text = match line {
-        None => Text::from("(会話行がありません)"),
-        Some(line) => {
-            let color_name = config.color_name_for(line.speaker.as_deref());
-            let color = Color::from_str(color_name).unwrap_or(Color::White);
-            let style = Style::default().fg(color);
+    let color_name = config.color_name_for(line.speaker.as_deref());
+    let color = Color::from_str(color_name).unwrap_or(Color::White);
+    let style = Style::default().fg(color);
 
-            let mut rendered = Vec::new();
-            if let Some(speaker) = &line.speaker {
-                rendered.push(Line::styled(
-                    speaker.clone(),
-                    style.add_modifier(Modifier::BOLD),
-                ));
+    let mut rendered = Vec::new();
+    match reveal {
+        Some(state) => {
+            let mut body_lines = state.body_lines(now);
+            if state.is_done(now) {
+                append_page_indicator(&mut body_lines, pulse, now);
             }
-            match reveal {
-                Some(state) => {
-                    let mut body_lines = state.body_lines(now);
-                    if state.is_done(now) {
-                        append_page_indicator(&mut body_lines, pulse, now);
-                    }
-                    rendered.extend(body_lines);
-                }
-                None => {
-                    for text_line in &line.text {
-                        rendered.push(Line::styled(text_line.clone(), style));
-                    }
-                }
-            }
-            Text::from(rendered)
+            rendered.extend(body_lines);
         }
-    };
+        None => {
+            for text_line in &line.text {
+                rendered.push(Line::styled(text_line.clone(), style));
+            }
+        }
+    }
 
-    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(Text::from(rendered)).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, target_area);
+}
+
+/// 画面最下段1行: ゲーム名 + 会話位置/総数（+ 終端マーカー）。枠の title として表示していた
+/// 情報を、枠なし化後もユーザーが状況を把握できるよう右寄せの単なる1行テキストとして残す
+/// （罫線・背景等の装飾は付けない）。
+fn draw_status_line(
+    frame: &mut Frame,
+    area: Rect,
+    config: &Config,
+    position: usize,
+    total: usize,
+    is_at_end: bool,
+) {
+    let status = if is_at_end {
+        format!("{} — {position}/{total} (END)", config.game_name)
+    } else {
+        format!("{} — {position}/{total}", config.game_name)
+    };
+    let paragraph = Paragraph::new(status)
+        .style(Style::default().add_modifier(Modifier::DIM))
+        .alignment(Alignment::Right);
     frame.render_widget(paragraph, area);
 }
 
 /// reveal 完了後の入力待ちを示すページ送りインジケータ（既定では ▼）を、本文の最終行の
 /// 末尾に付け足す。本文行が1つも無い（空の会話行）場合は、インジケータだけの行を追加する。
-/// 表示中（未 reveal）にはこの関数を呼ばない — 呼び出し側（`draw_text`）が
+/// 表示中（未 reveal）にはこの関数を呼ばない — 呼び出し側（`draw_text_windows`）が
 /// `handle.is_done(now)` で既にガードしている。
 fn append_page_indicator(lines: &mut Vec<Line<'static>>, pulse: &PulseHandle, now: Instant) {
     let frame = pulse.snapshot(now);
@@ -237,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn title_shows_end_marker_when_at_end() {
+    fn status_line_shows_end_marker_when_at_end() {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
@@ -250,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn title_omits_end_marker_when_not_at_end() {
+    fn status_line_omits_end_marker_when_not_at_end() {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
@@ -285,7 +315,8 @@ mod tests {
         };
         let now = Instant::now();
         // reveal 完了済み(=ページ送りインジケータも同時に描画される)状態でも、
-        // Layout::Percentage(40/60) が width=1 (40% が 0 に丸まる) で panic しないことを確認する。
+        // 左右 Percentage(50/50)・テキスト側の上下 Percentage(50/50) がいずれも
+        // width/height=1 (50% が 0 に丸まる) で panic しないことを確認する。
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         terminal
