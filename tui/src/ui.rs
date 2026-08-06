@@ -1538,6 +1538,36 @@ mod tests {
         assert!(!fits_required_size(Rect::new(0, 0, 0, 0)));
     }
 
+    // 以下4件は幅/高さそれぞれの過不足を混合させたデシジョンテーブルの欠落マス
+    // （既存テストは幅のみ不足・高さのみ不足・両方不足・両方過剰の4通りのみをカバーしており、
+    // 「片方不足+もう片方過剰」の組み合わせが未検証だった）。`fits_required_size` は両方が
+    // 要求値以上のときのみ `true` を返すAND条件のため、一方でも不足していれば他方が過剰でも
+    // `false` になるはずである。
+
+    #[test]
+    fn fits_required_size_width_deficient_height_excess_is_false() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH - 1, REQUIRED_TOTAL_HEIGHT + 1);
+        assert!(!fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_width_excess_height_deficient_is_false() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH + 1, REQUIRED_TOTAL_HEIGHT - 1);
+        assert!(!fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_one_cell_wider_only_is_true() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH + 1, REQUIRED_TOTAL_HEIGHT);
+        assert!(fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_one_cell_taller_only_is_true() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT + 1);
+        assert!(fits_required_size(actual));
+    }
+
     #[test]
     fn compute_centered_canvas_actual_equals_required_has_zero_offset() {
         let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
@@ -1558,6 +1588,18 @@ mod tests {
     }
 
     #[test]
+    fn compute_centered_canvas_height_only_excess_centers_vertically_width_unchanged() {
+        // 幅は required と一致させ、高さだけ超過させる（幅軸のオフセットが常に0のまま、
+        // 高さ軸だけが中央寄せされることの単独確認。上の
+        // `compute_centered_canvas_larger_actual_centers_with_even_margins` は両軸とも
+        // 過剰なケースのため、高さ単独の寄与を切り分けられていなかった）。
+        let required = Rect::new(0, 0, 10, 4);
+        let actual = Rect::new(0, 0, 10, 8);
+        let canvas = compute_centered_canvas(actual, required);
+        assert_eq!(canvas, Rect::new(0, 2, 10, 4));
+    }
+
+    #[test]
     fn compute_centered_canvas_odd_margin_favors_left_and_top() {
         // 幅の余白が奇数(1)のとき、整数除算により左側のオフセットが切り捨てられる
         // （右側に多く残る＝厳密な左右対称は要求しない、doc コメント参照）。
@@ -1569,6 +1611,20 @@ mod tests {
             "an odd margin should round down via integer division, leaving the extra cell on the right"
         );
         assert_eq!(canvas.width, 10);
+    }
+
+    #[test]
+    fn compute_centered_canvas_odd_vertical_margin_favors_top() {
+        // 上と対になる高さ軸版: 高さの余白が奇数(1)のとき、整数除算により上側のオフセットが
+        // 切り捨てられる（下側に多く残る＝厳密な上下対称は要求しない、doc コメント参照）。
+        let required = Rect::new(0, 0, 10, 4);
+        let actual = Rect::new(0, 0, 10, 5); // 余白1
+        let canvas = compute_centered_canvas(actual, required);
+        assert_eq!(
+            canvas.y, 0,
+            "an odd vertical margin should round down via integer division, leaving the extra cell on the bottom"
+        );
+        assert_eq!(canvas.height, 4);
     }
 
     #[test]
@@ -1634,6 +1690,25 @@ mod tests {
     }
 
     #[test]
+    fn draw_too_small_message_content_survives_at_moderately_narrow_width() {
+        // 上のテストは極小(0/1)や境界ぴったり(REQUIRED_TOTAL_WIDTH-1)のようなpanic有無の
+        // 確認に留まっており、それらの中間にあたる「狭いがゼロではない」幅でメッセージの
+        // 本文そのものが実際にバッファへ描画されるかは未検証だった。高さは
+        // REQUIRED_TOTAL_HEIGHT ちょうど(不足していない)にして、幅の狭さだけを効かせる。
+        let config = Config::default();
+        let moderately_narrow_width = REQUIRED_TOTAL_WIDTH / 2; // 極小でも境界ぴったりでもない中間幅
+        let buffer = render(
+            &config,
+            None,
+            None,
+            moderately_narrow_width,
+            REQUIRED_TOTAL_HEIGHT,
+        );
+        let text = buffer_text(&buffer);
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+    }
+
+    #[test]
     fn draw_larger_than_required_terminal_offsets_content_by_centering_margin() {
         // 実端末がCANVAS_W/CANVAS_Hより大きい場合、UI全体がcompute_centered_canvasの
         // オフセット分だけ右下にずれて描画されることを、テキスト列の開始位置で確認する
@@ -1665,6 +1740,36 @@ mod tests {
             x,
             canvas_text_column_x_start() + expected_x_offset,
             "text column should shift right by the centering margin"
+        );
+    }
+
+    #[test]
+    fn draw_taller_than_required_terminal_offsets_content_vertically_by_centering_margin() {
+        // 上の`draw_larger_than_required_terminal_offsets_content_by_centering_margin`
+        // （x軸版）と対になるy軸版。幅はCANVAS_Wちょうどに固定し、高さだけ超過させた
+        // terminalでdraw()を経由してrenderし、テキストの描画y座標が
+        // compute_centered_canvasの高さオフセット分だけ下にずれることを確認する。
+        let config = Config::default();
+        let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
+        let extra_h = 4u16;
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H + extra_h);
+        let area = buffer.area();
+        let mut topmost_y = None;
+        'outer: for y in 0..area.height {
+            for x in 0..area.width {
+                if buffer.cell((x, y)).expect("in bounds").symbol() == "Y" {
+                    topmost_y = Some(y);
+                    break 'outer;
+                }
+            }
+        }
+        let y = topmost_y.expect("text should render somewhere");
+        let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+        let actual = Rect::new(0, 0, CANVAS_W, CANVAS_H + extra_h);
+        let expected_y = compute_centered_canvas(actual, required).y;
+        assert_eq!(
+            y, expected_y,
+            "text row should shift down by the centering margin"
         );
     }
 
