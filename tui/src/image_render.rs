@@ -253,6 +253,89 @@ fn average(sum: (u32, u32, u32, u32)) -> (u8, u8, u8) {
     ((sum.0 / n) as u8, (sum.1 / n) as u8, (sum.2 / n) as u8)
 }
 
+/// ターミナルの1文字セルの実世界アスペクト比（幅 / 高さ）。文字セルは一般に正方形ではなく
+/// 縦長（幅の約2倍の高さ）と言われるが、実際の値はターミナルエミュレータ・フォント・
+/// フォントサイズに強く依存する近似値であり、実測に基づく確定値ではない（#489）。
+///
+/// quadrant block の2x2サブピクセルトリック（[`rgba_to_quadrant_grid`]）は1セルを単純に
+/// 縦横2等分するだけなので、サブピクセル自体の実世界アスペクト比もセルのアスペクト比を
+/// そのまま引き継ぐ。cover-fit のクロップ計算（[`compute_cover_crop`]）で使う「ターゲットの
+/// アスペクト比」は、文字セル数ベースの `sub_w:sub_h` をそのまま使うと実際の見た目とズレる
+/// ため、この定数で補正した実効値を使う。kako-jun 実機確認の結果、環境依存で見た目が
+/// 合わない場合は調整の余地がある（#488 の `IMAGE_TEXT_GAP_WIDTH` と同種の割り切り）。
+///
+/// `pub(crate)`: `ui.rs` のテストフィクスチャ（cover-fit クロップが発生しないアスペクト比の
+/// 画像を組み立てる）がこの値を直書きせず参照するために公開している。
+pub(crate) const TERMINAL_CELL_ASPECT_RATIO: f64 = 0.5;
+
+/// アスペクト比を保ったまま `target_w` x `target_h` の領域を覆う（cover-fit）ために、元画像
+/// （`img_w` x `img_h`）側から中央基準で切り出すべき矩形を計算する。
+///
+/// GUI 側（`frontend/src/game/novelLayout.ts` の `computeCoverFit`）は「スケールしてから
+/// 画面外へはみ出た分をクリップ」する設計だが、TUI は `downsample_box` が元画像を直接
+/// ターゲットグリッドへ比例マッピングする実装のため、見た目としては等価な逆方向の変換
+/// （「元画像側を先にクロップしてから、そのクロップ済み矩形をターゲットへ比例マッピング」）
+/// を取る。
+///
+/// 戻り値は `(crop_x, crop_y, crop_w, crop_h)`（すべて元画像の座標系）で、常に
+/// `crop_x + crop_w <= img_w` かつ `crop_y + crop_h <= img_h` を満たす。
+/// `img_w`/`img_h`/`target_w`/`target_h` のいずれかが 0 の場合はクロップ無し
+/// （`(0, 0, img_w, img_h)`）を返す（panicしない）。
+fn compute_cover_crop(
+    img_w: u32,
+    img_h: u32,
+    target_w: u32,
+    target_h: u32,
+) -> (u32, u32, u32, u32) {
+    if img_w == 0 || img_h == 0 || target_w == 0 || target_h == 0 {
+        return (0, 0, img_w, img_h);
+    }
+    let img_ratio = f64::from(img_w) / f64::from(img_h);
+    let target_ratio = f64::from(target_w) / f64::from(target_h);
+
+    if img_ratio > target_ratio {
+        // 元画像の方が相対的に横長: 高さはフルのまま、幅を中央基準でクロップする。
+        let crop_w = ((f64::from(img_h) * target_ratio).round() as u32).clamp(1, img_w);
+        let crop_x = (img_w - crop_w) / 2;
+        (crop_x, 0, crop_w, img_h)
+    } else {
+        // 元画像の方が相対的に縦長（または target と同じ）: 幅はフルのまま、高さを
+        // 中央基準でクロップする。
+        let crop_h = ((f64::from(img_w) / target_ratio).round() as u32).clamp(1, img_h);
+        let crop_y = (img_h - crop_h) / 2;
+        (0, crop_y, img_w, crop_h)
+    }
+}
+
+/// `pixels`（`img_w` x 高さ相当の RGBA straight alpha、行優先）から
+/// `(crop_x, crop_y, crop_w, crop_h)` の矩形を切り出した新しい RGBA バイト列を返す
+/// （行優先、`crop_w * crop_h * 4` バイト）。呼び出し元（[`compute_cover_crop`]）が返す矩形は
+/// 契約上常に元画像の範囲内に収まるが、防御的に範囲外の読み出しはせず、はみ出た分は
+/// 0（透明黒）で埋める（panicしない）。
+fn crop_rgba(
+    pixels: &[u8],
+    img_w: u32,
+    crop_x: u32,
+    crop_y: u32,
+    crop_w: u32,
+    crop_h: u32,
+) -> Vec<u8> {
+    let mut out = vec![0u8; crop_w as usize * crop_h as usize * 4];
+    for y in 0..crop_h {
+        let src_y = crop_y + y;
+        for x in 0..crop_w {
+            let src_x = crop_x + x;
+            let src_i = ((src_y * img_w + src_x) * 4) as usize;
+            if src_i + 4 > pixels.len() {
+                continue;
+            }
+            let dst_i = ((y * crop_w + x) * 4) as usize;
+            out[dst_i..dst_i + 4].copy_from_slice(&pixels[src_i..src_i + 4]);
+        }
+    }
+    out
+}
+
 /// 元画像（`pixels`: RGBA straight alpha、`img_w` x `img_h`）を、ボックス平均で
 /// `target_w` x `target_h` のサブピクセルグリッドへダウンサンプルする。
 /// `pixels.len() < img_w * img_h * 4` 等の不正な入力では空の `Vec` を返す（panicしない）。
@@ -303,6 +386,12 @@ fn downsample_box(
 /// 変換する（`docs/visual/reference/20260722-nearsighted-pixel-redraw/tui-plan.md` の設計に
 /// 従う）。セル数が 0、画像サイズが 0、または `pixels` が画像サイズに対して短すぎる場合は
 /// [`blank_grid`] を返す（panicしない）。
+///
+/// 端末の高さが変わっても画像が縦横に潰れて見えないよう、cover-fit でアスペクト比を保つ
+/// （#489）。ターゲットグリッド（`sub_w` x `sub_h`）へ単純に比例マッピングするのではなく、
+/// 先に元画像側を [`compute_cover_crop`] で中央基準クロップしてから [`downsample_box`] へ
+/// 渡す。クロップに使う実効ターゲット比は、文字セル数ベースの `sub_w:sub_h` を
+/// [`TERMINAL_CELL_ASPECT_RATIO`] で補正した値（セルが正方形でないことの近似補正）。
 pub fn rgba_to_quadrant_grid(
     pixels: &[u8],
     img_w: u32,
@@ -313,9 +402,23 @@ pub fn rgba_to_quadrant_grid(
     if cols == 0 || rows == 0 || img_w == 0 || img_h == 0 {
         return blank_grid(cols, rows);
     }
+    if pixels.len() < img_w as usize * img_h as usize * 4 {
+        return blank_grid(cols, rows);
+    }
     let sub_w = u32::from(cols) * 2;
     let sub_h = u32::from(rows) * 2;
-    let sub = downsample_box(pixels, img_w, img_h, sub_w, sub_h);
+
+    // 実効ターゲット比 = (sub_w:sub_h) をセルの実アスペクト比で補正したもの。
+    // TERMINAL_CELL_ASPECT_RATIO = セルの幅/高さ なので、sub_h を割ることで
+    // 「セルが縦長なぶん実効的な高さが大きくなる」効果を反映する。
+    let effective_target_h = (f64::from(sub_h) / TERMINAL_CELL_ASPECT_RATIO)
+        .round()
+        .max(1.0) as u32;
+    let (crop_x, crop_y, crop_w, crop_h) =
+        compute_cover_crop(img_w, img_h, sub_w, effective_target_h);
+    let cropped = crop_rgba(pixels, img_w, crop_x, crop_y, crop_w, crop_h);
+
+    let sub = downsample_box(&cropped, crop_w, crop_h, sub_w, sub_h);
     if sub.is_empty() {
         return blank_grid(cols, rows);
     }
@@ -534,6 +637,130 @@ mod tests {
                 "mask=15 should be structurally unreachable, subpixels={subpixels:?}"
             );
         }
+    }
+
+    // ---- cover-fit クロップ計算（純粋関数）----
+
+    #[test]
+    fn compute_cover_crop_wide_image_into_tall_target_crops_width_keeps_full_height() {
+        // 横長の元画像(2:1)を縦長のターゲット(1:2)へ cover-fit させる場合、高さはフルのまま
+        // 幅だけが中央基準でクロップされる。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(200, 100, 10, 20);
+        assert_eq!(crop_h, 100, "高さはフルのまま");
+        assert_eq!(crop_y, 0);
+        assert_eq!(crop_w, 50, "target比(1:2)に合わせて幅を50までクロップ");
+        assert_eq!(crop_x, 75, "中央基準: (200-50)/2");
+    }
+
+    #[test]
+    fn compute_cover_crop_tall_image_into_wide_target_crops_height_keeps_full_width() {
+        // 縦長の元画像(1:2)を横長のターゲット(2:1)へ cover-fit させる場合は逆に、幅はフルの
+        // まま高さだけが中央基準でクロップされる。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(100, 200, 20, 10);
+        assert_eq!(crop_w, 100, "幅はフルのまま");
+        assert_eq!(crop_x, 0);
+        assert_eq!(crop_h, 50, "target比(2:1)に合わせて高さを50までクロップ");
+        assert_eq!(crop_y, 75, "中央基準: (200-50)/2");
+    }
+
+    #[test]
+    fn compute_cover_crop_matching_aspect_ratio_crops_nothing() {
+        // 元画像とターゲットのアスペクト比が一致していれば、クロップは発生せず全体が
+        // そのまま返る（正方形どうしに限らず、比が一致していれば常にこうなるはず）。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(50, 50, 10, 10);
+        assert_eq!((crop_x, crop_y, crop_w, crop_h), (0, 0, 50, 50));
+
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(200, 100, 8, 4);
+        assert_eq!((crop_x, crop_y, crop_w, crop_h), (0, 0, 200, 100));
+    }
+
+    #[test]
+    fn compute_cover_crop_zero_dimension_returns_full_image_without_panicking() {
+        assert_eq!(compute_cover_crop(0, 100, 10, 10), (0, 0, 0, 100));
+        assert_eq!(compute_cover_crop(100, 0, 10, 10), (0, 0, 100, 0));
+        assert_eq!(compute_cover_crop(100, 100, 0, 10), (0, 0, 100, 100));
+        assert_eq!(compute_cover_crop(100, 100, 10, 0), (0, 0, 100, 100));
+    }
+
+    #[test]
+    fn compute_cover_crop_result_always_fits_within_source_image_bounds() {
+        // 不変条件テスト: どんな組み合わせでも、返るクロップ矩形は必ず元画像の範囲内に
+        // 収まる（はみ出た矩形を downsample_box に渡すと範囲外読み出しになりうるため）。
+        let img_sizes = [(1u32, 1u32), (3, 7), (7, 3), (128, 128), (1920, 1080)];
+        let target_sizes = [(1u32, 1u32), (2, 9), (9, 2), (64, 64), (13, 41)];
+        for &(img_w, img_h) in &img_sizes {
+            for &(target_w, target_h) in &target_sizes {
+                let (crop_x, crop_y, crop_w, crop_h) =
+                    compute_cover_crop(img_w, img_h, target_w, target_h);
+                assert!(
+                    crop_w >= 1 && crop_h >= 1,
+                    "クロップ矩形は空であってはならない"
+                );
+                assert!(
+                    crop_x + crop_w <= img_w,
+                    "crop_x+crop_w={} が img_w={} を超えた (img={img_w}x{img_h}, target={target_w}x{target_h})",
+                    crop_x + crop_w,
+                    img_w
+                );
+                assert!(
+                    crop_y + crop_h <= img_h,
+                    "crop_y+crop_h={} が img_h={} を超えた (img={img_w}x{img_h}, target={target_w}x{target_h})",
+                    crop_y + crop_h,
+                    img_h
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn crop_rgba_extracts_expected_subrectangle() {
+        // 4x2 の画像（列ごとに異なる色: 0,1,2,3）から中央2列(x=1..3)を切り出す。
+        let colors: [(u8, u8, u8, u8); 4] = [
+            (10, 0, 0, 255),
+            (20, 0, 0, 255),
+            (30, 0, 0, 255),
+            (40, 0, 0, 255),
+        ];
+        let mut pixels = Vec::new();
+        for _y in 0..2 {
+            for &(r, g, b, a) in &colors {
+                pixels.extend_from_slice(&[r, g, b, a]);
+            }
+        }
+        let cropped = crop_rgba(&pixels, 4, 1, 0, 2, 2);
+        assert_eq!(cropped.len(), 2 * 2 * 4);
+        // 各行とも列1,2の色（20,0,0,255）(30,0,0,255）が並ぶはず。
+        assert_eq!(&cropped[0..4], &[20, 0, 0, 255]);
+        assert_eq!(&cropped[4..8], &[30, 0, 0, 255]);
+        assert_eq!(&cropped[8..12], &[20, 0, 0, 255]);
+        assert_eq!(&cropped[12..16], &[30, 0, 0, 255]);
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_cover_fit_crops_out_far_edge_color() {
+        // 統合確認: 横長(4x2)の画像の左半分(列0-1)が赤、右半分(列2-3)が緑。単純な比例
+        // マッピング（クロップ無し）なら1x1セルの結果は赤緑が混ざった色になるはずだが、
+        // cover-fit クロップにより中央寄りの列（赤側）だけが使われ、緑は一切現れない。
+        let red = [255u8, 0, 0, 255];
+        let green = [0u8, 255, 0, 255];
+        let mut pixels = Vec::new();
+        for _y in 0..2 {
+            pixels.extend_from_slice(&red);
+            pixels.extend_from_slice(&red);
+            pixels.extend_from_slice(&green);
+            pixels.extend_from_slice(&green);
+        }
+        let grid = rgba_to_quadrant_grid(&pixels, 4, 2, 1, 1);
+        assert_eq!(grid.cells.len(), 1);
+        assert_eq!(
+            grid.cells[0].bg,
+            (255, 0, 0),
+            "cover-fitクロップにより緑側は完全に切り落とされ赤のみが残るはず"
+        );
+        assert_eq!(
+            grid.cells[0].glyph, ' ',
+            "単色クロップ結果は無地セルになるはず"
+        );
     }
 
     #[test]
