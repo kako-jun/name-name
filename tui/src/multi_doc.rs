@@ -290,6 +290,249 @@ mod tests {
     }
 
     #[test]
+    fn collect_markdown_files_returns_sorted_order_independent_of_creation_order() {
+        // 作成順をあえて逆順（z→a→m）にし、収集結果が作成順ではなくパス文字列昇順で
+        // 決定的に返ることを直接アサートする。
+        let dir = make_temp_dir();
+        let z = write_md(&dir, "z.md", "");
+        let a = write_md(&dir, "a.md", "");
+        let m = write_md(&dir, "m.md", "");
+
+        let files = collect_markdown_files(&dir).expect("should collect");
+
+        assert_eq!(
+            files,
+            vec![a, m, z],
+            "作成順(z→a→m)に関わらずパス文字列昇順で返るはず"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_merged_document_duplicate_scene_id_between_two_non_entry_files_first_by_sort_order_wins(
+    ) {
+        // entry 自体は "dup" シーンを含まない。"dup" を定義する非entryファイル2つのうち、
+        // パス文字列順で先に来る方（"b-dup.md" < "c-dup.md"）の定義が採用されることを確認する
+        // （entry・非entry問わず、マージ順で最初に出現したファイルが勝つという規約の
+        // 「両方とも非entry」パターンでの裏取り）。
+        let dir = make_temp_dir();
+        let entry = write_md(
+            &dir,
+            "entry.md",
+            &format!("{FRONTMATTER}## start: 開始\n\n[選択]\n- 分岐へ→dup\n[/選択]\n"),
+        );
+        write_md(
+            &dir,
+            "b-dup.md",
+            &format!("{FRONTMATTER}## dup: B定義\n\n**B**:\nBファイルの台詞\n"),
+        );
+        write_md(
+            &dir,
+            "c-dup.md",
+            &format!("{FRONTMATTER}## dup: C定義\n\n**C**:\nCファイルの台詞\n"),
+        );
+
+        let doc = load_merged_document(&dir, &entry).expect("should merge");
+        let mut pb = crate::playback::Playback::from_document(&doc);
+        assert!(
+            pb.select_current_choice(),
+            "dup シーンへのjumpが成功するはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("dupシーンの台詞").text,
+            vec!["Bファイルの台詞".to_string()],
+            "非entryファイル間の重複はパス文字列で先に来るファイル(b-dup.md)の定義が採用されるはず"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_merged_document_single_file_equal_to_entry() {
+        // script_dir 配下が entry 1件のみの最小構成。マージ処理を経ても、entry単体を
+        // 直接 parse した Document と完全一致するはず（他ファイルとの統合ロジックが
+        // 単一ファイルの内容を変質させないことの確認）。
+        let dir = make_temp_dir();
+        let source = format!("{FRONTMATTER}## only: 単独\n\n**A**:\n単独ファイルの台詞\n");
+        let entry = write_md(&dir, "only.md", &source);
+
+        let merged = load_merged_document(&dir, &entry).expect("should merge");
+        let direct = name_name_parser::parser::parse(&source);
+
+        assert_eq!(merged, direct);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_merged_document_entry_outside_with_multiple_files_in_script_dir() {
+        // entry_script_path が script_dir 外を指すケース（後方互換）に、script_dir 内に
+        // 複数ファイルがある構成を組み合わせても、両方の内部ファイルの内容がマージされ、
+        // それぞれへジャンプできることを確認する（既存の
+        // `entry_script_outside_script_dir_is_still_included` は script_dir 内が1ファイルのみ）。
+        let dir = make_temp_dir();
+        let outside_dir = make_temp_dir();
+        let entry = write_md(
+            &outside_dir,
+            "outside-entry.md",
+            &format!(
+                "{FRONTMATTER}## hub: 開始\n\n[選択]\n- 内部1へ→inside1\n- 内部2へ→inside2\n[/選択]\n"
+            ),
+        );
+        write_md(
+            &dir,
+            "inside1.md",
+            &format!("{FRONTMATTER}## inside1: 内部1\n\n**P**:\n内部1の台詞\n"),
+        );
+        write_md(
+            &dir,
+            "inside2.md",
+            &format!("{FRONTMATTER}## inside2: 内部2\n\n**Q**:\n内部2の台詞\n"),
+        );
+
+        let doc = load_merged_document(&dir, &entry).expect("should merge");
+
+        let mut pb_first = crate::playback::Playback::from_document(&doc);
+        assert!(
+            pb_first.select_current_choice(),
+            "1番目の選択肢のjumpが成功するはず"
+        );
+        assert_eq!(
+            pb_first.current_line().expect("内部1の台詞").text,
+            vec!["内部1の台詞".to_string()]
+        );
+
+        let mut pb_second = crate::playback::Playback::from_document(&doc);
+        pb_second.move_choice_cursor_down();
+        assert!(
+            pb_second.select_current_choice(),
+            "2番目の選択肢のjumpが成功するはず"
+        );
+        assert_eq!(
+            pb_second.current_line().expect("内部2の台詞").text,
+            vec!["内部2の台詞".to_string()]
+        );
+
+        fs::remove_dir_all(&dir).ok();
+        fs::remove_dir_all(&outside_dir).ok();
+    }
+
+    #[test]
+    fn load_merged_document_entry_script_path_does_not_exist_is_err() {
+        // script_dir は実在し .md も1件あるが、entry_script_path が指すファイルは
+        // script_dir 配下に存在しない（tui-config.toml の entry_script 設定ミス相当）。
+        // 存在しないファイルを読み込もうとして Err になることを確認する。
+        let dir = make_temp_dir();
+        write_md(
+            &dir,
+            "actual.md",
+            &format!("{FRONTMATTER}## a: A\n\n**A**:\nAの台詞\n"),
+        );
+        let missing_entry = dir.join("does-not-exist.md");
+
+        let result = load_merged_document(&dir, &missing_entry);
+
+        assert!(result.is_err());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn load_merged_document_unreadable_file_among_valid_files_is_err() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = make_temp_dir();
+        let entry = write_md(
+            &dir,
+            "entry.md",
+            &format!("{FRONTMATTER}## a: A\n\n**A**:\nAの台詞\n"),
+        );
+        let unreadable = write_md(
+            &dir,
+            "unreadable.md",
+            &format!("{FRONTMATTER}## b: B\n\n**B**:\nBの台詞\n"),
+        );
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
+            .expect("should set permissions");
+
+        // root（や owner の権限チェックを無視するファイルシステム）で実行されていると
+        // パーミッション0でも読めてしまい、このテストの前提が崩れる。`nix`/`libc` 等を
+        // 新規依存に追加して euid を判定する代わりに、実際に読めるかどうかを直接観測して
+        // 判定する（読めてしまう＝このテストでは検証不能なので早期 pass 扱いでskipする）。
+        let permission_enforced = fs::read(&unreadable).is_err();
+        if !permission_enforced {
+            fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).ok();
+            fs::remove_dir_all(&dir).ok();
+            return;
+        }
+
+        let result = load_merged_document(&dir, &entry);
+
+        assert!(result.is_err(), "権限0のファイルが混在するとErrになるはず");
+
+        // ディレクトリ削除できるよう権限を戻してから後片付けする。
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).ok();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_merged_document_empty_md_file_does_not_break_merge() {
+        // frontmatterもシーンも無い空 .md ファイルが混在していてもpanicせず正常にマージできる
+        // ことを確認する（`parser::parse("")` は0シーンのChapterを返すだけで、マージ処理側で
+        // 空ファイルを特別扱いする必要はないはず）。
+        let dir = make_temp_dir();
+        let entry = write_md(
+            &dir,
+            "entry.md",
+            &format!("{FRONTMATTER}## a: A\n\n**A**:\n本編の台詞\n"),
+        );
+        write_md(&dir, "blank.md", "");
+
+        let doc =
+            load_merged_document(&dir, &entry).expect("空.mdが混ざっていてもErrにならないはず");
+        let pb = crate::playback::Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_line().expect("entryの台詞").text,
+            vec!["本編の台詞".to_string()]
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_merged_document_hidden_dotfile_with_md_extension_is_included() {
+        // `collect_markdown_files` の doc comment にある「隠しファイル除外はしない」という
+        // 主張の裏取り。`.draft.md` のような隠しファイルもマージ対象に含まれ、jumpで
+        // 到達できることを確認する。
+        let dir = make_temp_dir();
+        let entry = write_md(
+            &dir,
+            "entry.md",
+            &format!("{FRONTMATTER}## hub: 開始\n\n[選択]\n- 下書きへ→draft-scene\n[/選択]\n"),
+        );
+        write_md(
+            &dir,
+            ".draft.md",
+            &format!("{FRONTMATTER}## draft-scene: 下書き\n\n**D**:\n隠しファイルの台詞\n"),
+        );
+
+        let doc = load_merged_document(&dir, &entry).expect("should merge");
+        let mut pb = crate::playback::Playback::from_document(&doc);
+        assert!(
+            pb.select_current_choice(),
+            "隠しファイルに定義されたシーンへのjumpが成功するはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("隠しファイルの台詞").text,
+            vec!["隠しファイルの台詞".to_string()]
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn load_merged_document_entry_script_outside_script_dir_is_still_included() {
         // `entry_script` に絶対パス等 script_dir 外を指す値が設定されている場合
         // （`Config::entry_script_path` の後方互換ケース）でも、そのファイルを先頭に
