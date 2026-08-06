@@ -71,7 +71,11 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// `reveal` は現在の会話行のタイプライター表示状態（[`reveal::RevealState`]、`None` は行
 /// そのものが無いケース）、`indicator_started_at` はページ送りインジケータの点滅基準時刻
 /// （reveal 完了後にのみ表示する。[`reveal::blink_visible`] にそのまま渡す。色はウィンドウ
-/// （自分側/相手側）ごとに `draw_text_windows` が決める、#495）、`now` はこのフレームの
+/// （自分側/相手側）ごとに `draw_text_windows` が決める、#495）。呼び出し側（`main.rs` の
+/// `event_loop`）が [`reveal::indicator_blink_started_at`] で毎フレーム更新した値を渡す —
+/// reveal が非表示→表示に切り替わった瞬間（＝reveal完了の瞬間）に限りリセットされるため、
+/// この関数自身は基準時刻をそのまま下流に渡すだけで固定/可変を意識しない（#495 追加修正）。
+/// `now` はこのフレームの
 /// 描画時刻（`reveal`/`indicator_started_at` の `body_lines`/`blink_visible` に渡す基準時刻。
 /// `RevealState::Done` はこれを無視する）。`image_fade` は左側に描画するイベント絵の
 /// クロスフェード状態（[`ImageFadeState`]、`None` は event_image を一切扱わない呼び出し元
