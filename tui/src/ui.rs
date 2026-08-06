@@ -13,6 +13,20 @@
 //! 損をする片側固定バイアスを避けるための意図的な差異（セルフレビュー修正）。GUI版の
 //! dual-window は常に borderless のため、こちらも罫線の枠は描かない。話者名ラベルも表示しない
 //! — 話者識別は「上下どちらの窓か」（位置）と `Config::color_name_for` の文字色で行う。
+//!
+//! 画面全体は [`Constraint::Percentage`] による端末サイズへの動的追従をやめ、固定寸法の
+//! キャンバス（[`REQUIRED_TOTAL_WIDTH`] x [`REQUIRED_TOTAL_HEIGHT`]）+ センタリング +
+//! 最小サイズゲートにしている（#494）。GUI版の `aspect_ratio: auto` 機構
+//! （`pickFluidAspectRatio`/`computeSplitLayoutRegions`）はブラウザウィンドウを動的に
+//! 「都合の良い形」へ再構成してから描画するピクセルベース特有の前提に依存しており、
+//! セル/グリフ単位の離散描画である TUI には原理的に移植できない（kako-jun確認: 「TUIは
+//! それをできないので完全に合わせることはもともとむりだ」）。代わりに、端末が固定サイズ
+//! より大きい場合はキャンバス全体を中央配置（レターボックス/ピラーボックス、
+//! [`compute_centered_canvas`]）し、小さい場合は縮小描画をせず案内メッセージのみを表示する
+//! （[`fits_required_size`]/[`draw_too_small_message`]、kako-jun確認:「それでいい。縮小された
+//! 絵を見ても仕方ないからね」）。[`split_columns`] 自体は「渡された `Rect` を画像/gap/テキストへ
+//! 3分割する」という責務のまま変更しておらず、渡ってくる `Rect` が「実際の端末サイズ」から
+//! 「固定サイズ＋センタリング後の `Rect`」に変わるだけである。
 
 use std::str::FromStr;
 use std::time::Instant;
@@ -39,6 +53,119 @@ use crate::reveal;
 /// 全方向パディングまでは #488 のスコープ外）。
 const IMAGE_TEXT_GAP_WIDTH: u16 = 2;
 
+/// 固定キャンバスの本編領域（画像ペイン・テキストペイン共通の高さ、ステータス行を除く）の
+/// セル数（#494）。この値そのものに強い根拠は無く（`IMAGE_TEXT_GAP_WIDTH`と同種の実機調整
+/// 前提の初期値）、[`REQUIRED_IMAGE_COLS`] の導出元になる点が重要 — 詳細は下記を参照。
+const REQUIRED_MAIN_CONTENT_ROWS: u16 = 20;
+
+/// 画像ペインに必要な幅（セル数）。正方形画像（gymnasiaの128x128マスター想定）を
+/// クロップ無しで表示するための式（#494）。
+///
+/// quadrant block の2x2サブピクセルグリッドは `sub_w = image_cols*2`,
+/// `sub_h = image_rows*2` であり、`image_render::rgba_to_quadrant_grid` は
+/// `effective_target_h = sub_h / TERMINAL_CELL_ASPECT_RATIO`
+/// （[`crate::image_render::TERMINAL_CELL_ASPECT_RATIO`]、既定0.5）を実効ターゲット高さとして
+/// cover-fit のクロップ計算に渡す。正方形画像でクロップを0にするには
+/// `sub_w == effective_target_h` が必要で、これを解くと
+/// `image_cols*2 == (image_rows*2) / TERMINAL_CELL_ASPECT_RATIO` → 定数0.5のとき
+/// `image_cols = image_rows * 2` になる（この関係は `TERMINAL_CELL_ASPECT_RATIO = 0.5` という
+/// 具体値そのものに依存しており、式を逆算すると AR はこの値に一意に定まる。AR非依存で
+/// 不変なのはむしろ逆で、`REQUIRED_MAIN_CONTENT_ROWS`（rows）の具体値の方 —
+/// `sub_w = rows*4` と `effective_target_h = (rows*2)/TERMINAL_CELL_ASPECT_RATIO` の式で
+/// rows は両辺で約分されて消えるため自由に選べる。将来 `TERMINAL_CELL_ASPECT_RATIO` を
+/// 調整する場合は、この `*2` の式も合わせて見直す必要がある）。実際にクロップ0になることは
+/// `tests::fixed_canvas_square_image_crops_nothing_at_required_image_pane_size` で検算する。
+const REQUIRED_IMAGE_COLS: u16 = REQUIRED_MAIN_CONTENT_ROWS * 2;
+
+/// テキストペインに必要な幅（セル数、#494）。日本語の折返しに十分な幅であることに加え、
+/// `REQUIRED_IMAGE_COLS + 2` という一見不思議な値には理由がある: `split_columns` は
+/// `Constraint::Percentage(50)/Length(GAP)/Percentage(50)` を使っており、ratatui の
+/// cassowary ソルバーは `Length` を優先的に満たした残り幅を2分割する際、幅が十分広い
+/// steady state では前者（画像側）を「半分-1」・後者（テキスト側）を「半分+1」に割り当てる
+/// （`split_columns` のdoc コメント、`split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state`
+/// で実測済みの挙動）。画像ペインの実際のレンダリング幅を[`REQUIRED_IMAGE_COLS`]ちょうどに
+/// するには、`(REQUIRED_IMAGE_COLS + REQUIRED_TEXT_COLS)/2 - 1 == REQUIRED_IMAGE_COLS`を
+/// 満たす必要があり、これを解くと `REQUIRED_TEXT_COLS = REQUIRED_IMAGE_COLS + 2` になる
+/// （実際に画像ペイン幅が過不足なく一致することは
+/// `tests::fixed_canvas_image_pane_width_matches_required_image_cols` で検算する）。
+const REQUIRED_TEXT_COLS: u16 = REQUIRED_IMAGE_COLS + 2;
+
+/// 固定キャンバス全体の必要幅（画像 + スペーサー + テキスト、#494）。`pub(crate)`:
+/// `main.rs` の統合テストが `TestBackend` のサイズをハードコードせずここから導出するために
+/// 公開している（`draw` を経由する以上、これ未満の端末サイズでは常に
+/// [`draw_too_small_message`] だけが表示され、通常のゲームUIの検証にならないため）。
+pub(crate) const REQUIRED_TOTAL_WIDTH: u16 =
+    REQUIRED_IMAGE_COLS + IMAGE_TEXT_GAP_WIDTH + REQUIRED_TEXT_COLS;
+
+/// 固定キャンバス全体の必要高さ（本編領域 + ステータス行1、#494）。`pub(crate)`の理由は
+/// [`REQUIRED_TOTAL_WIDTH`] と同じ。
+pub(crate) const REQUIRED_TOTAL_HEIGHT: u16 = REQUIRED_MAIN_CONTENT_ROWS + 1;
+
+/// 実際の端末サイズ（`frame.area()`）が、固定キャンバスを描画するのに十分かどうかを判定する
+/// 純粋関数（#494）。幅・高さのどちらか一方でも [`REQUIRED_TOTAL_WIDTH`]/
+/// [`REQUIRED_TOTAL_HEIGHT`] に満たなければ `false` を返す。`draw` はこれが `false` のとき
+/// 通常のゲームUI描画を一切行わず、代わりに [`draw_too_small_message`] だけを表示する
+/// （GUI版のような動的リサイズはTUIでは原理的に成立しないという設計判断、モジュールdoc
+/// コメント参照）。
+fn fits_required_size(actual: Rect) -> bool {
+    actual.width >= REQUIRED_TOTAL_WIDTH && actual.height >= REQUIRED_TOTAL_HEIGHT
+}
+
+/// `actual`（実際の端末の描画領域）の中央に、`required`（固定必要サイズ、`draw` からは常に
+/// `Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT)` が渡る）と同じ幅・高さの
+/// 矩形を配置した結果を返す純粋関数（#494）。実際の端末サイズの方が大きい場合、余った幅/高さは
+/// 2で割った分だけ左/上に寄せる（`width`が奇数の余りは右側に残る＝GUI版のセンタリングと同様、
+/// 厳密な左右対称は要求しない）。呼び出し前提は `fits_required_size(actual)` が真であること
+/// （`draw` 参照）だが、この関数自体は `actual` が `required` より小さくても panic しないよう
+/// 幅/高さをそれぞれ `required.*.min(actual.*)` へクランプしてから中央配置を計算する
+/// （呼び出し側の防御的な保険。実運用ではこの縮小クランプ分岐には入らない）。
+fn compute_centered_canvas(actual: Rect, required: Rect) -> Rect {
+    let width = required.width.min(actual.width);
+    let height = required.height.min(actual.height);
+    let x = actual.x + (actual.width - width) / 2;
+    let y = actual.y + (actual.height - height) / 2;
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// [`fits_required_size`] が `false` のとき、通常のゲームUIの代わりに表示する案内メッセージ
+/// （#494）。btop等のTUIダッシュボードが小さすぎる端末で通常のダッシュボードの代わりに警告を
+/// 出す方式と同じ発想 — ドット絵をピクセル単位で滑らかに縮小できないTUIでは、無理な縮小描画
+/// より固定サイズ+レターボックスの方が画質を保てるため、`actual` が要求サイズに満たない場合は
+/// 一切ゲームUIを描画しない（kako-jun確認: 「それでいい。縮小された絵を見ても仕方ないから
+/// ね」）。過度に凝ったUI（枠・色等）は付けない（Issueのスコープ外）。
+///
+/// `Wrap` は使わない — ratatui 0.30.2 / ratatui-widgets 0.3.2 は特定の折り返し幅（実測:
+/// 半角/全角混在の文字列で幅ちょうど2セル）で `Wrap` 付き `Paragraph` がバッファ範囲外書き込み
+/// panic することがある既知のバグがある（[`MIN_SAFE_TEXT_WRAP_WIDTH`]/[`render_wrapped_paragraph`]
+/// 参照）。ここへ来る `actual` は要求サイズ未満というだけで具体的な幅は0を含め任意になり得る
+/// ため、危険幅を個別にガードするより wrap 無しのシンプルな1行表示（収まらない分は
+/// `Alignment::Center` の描画がそのまま末尾を切り詰める）に留める方が安全かつ単純である。
+fn draw_too_small_message(frame: &mut Frame, actual: Rect) {
+    let message = format!(
+        "端末を広げてください（現在 {}x{}、必要 {}x{}）",
+        actual.width, actual.height, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT
+    );
+    let paragraph = Paragraph::new(message).alignment(Alignment::Center);
+    // 縦方向中央寄せ: 1行想定のメッセージを実際の高さの中央付近の行に置く。
+    // `draw_splash` と違い折り返し高さを事前計算しない分単純化しているが、それで十分
+    // （Issueのスコープ外の凝った表現は避ける）。高さ0の極小端末では描画領域自体を
+    // 0にしてpanicを避ける。
+    let height = if actual.height == 0 { 0 } else { 1 };
+    let y = actual.y + actual.height / 2;
+    let area = Rect {
+        x: actual.x,
+        y,
+        width: actual.width,
+        height,
+    };
+    frame.render_widget(paragraph, area);
+}
+
 /// 画面上段を「画像プレースホルダ」「スペーサー」「テキスト」の横3分割にする純粋関数
 /// （#488）。`Layout::split` の呼び出しをここへ切り出すことで、テスト側は実際のレイアウト
 /// 計算結果をそのまま期待値として使える（手計算した固定値をテストに直書きしない）。
@@ -63,11 +190,15 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
     (columns[0], columns[1], columns[2])
 }
 
-/// 画面全体を左（画像プレースホルダ）50% / 右（テキスト、相手=上/自分=下にさらに分割）に
-/// 分割して描画する。テキスト側の上下分割は整数セルの端数を self（自分）側に寄せる
-/// （`draw_text_windows` 参照。opponent が恒常的に得をする片側固定バイアスを避けるため）。
-/// 最下段1行は進行状況（ゲーム名 + 会話位置/総数）専用の帯にする — 罫線の title として
-/// 表示していた情報を、枠を使わず最小限の形で残すためのもの（過剰な装飾はしない）。
+/// 実際の端末サイズ（`frame.area()`）が固定必要サイズに満たない場合は
+/// [`fits_required_size`] で検知し、通常のゲームUI描画を一切せず [`draw_too_small_message`]
+/// だけを表示して早期returnする（#494）。十分な場合は [`compute_centered_canvas`] で固定
+/// サイズのキャンバスを中央配置してから、以下の画面全体を左（画像プレースホルダ）50% /
+/// 右（テキスト、相手=上/自分=下にさらに分割）に分割して描画する。テキスト側の上下分割は
+/// 整数セルの端数を self（自分）側に寄せる（`draw_text_windows` 参照。opponent が恒常的に
+/// 得をする片側固定バイアスを避けるため）。最下段1行は進行状況（ゲーム名 + 会話位置/総数）
+/// 専用の帯にする — 罫線の title として表示していた情報を、枠を使わず最小限の形で残すための
+/// もの（過剰な装飾はしない）。
 ///
 /// `reveal` は現在の会話行のタイプライター表示状態（[`reveal::RevealState`]、`None` は行
 /// そのものが無いケース）、`pulse` はページ送りインジケータ（reveal 完了後にのみ表示する）、
@@ -100,10 +231,18 @@ pub fn draw(
     image_fade: Option<&ImageFadeState>,
     image_cache: &mut ImageCache,
 ) {
+    let actual = frame.area();
+    if !fits_required_size(actual) {
+        draw_too_small_message(frame, actual);
+        return;
+    }
+    let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+    let canvas = compute_centered_canvas(actual, required);
+
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(frame.area());
+        .split(canvas);
 
     let (placeholder_area, _gap_area, text_area) = split_columns(root[0]);
 
@@ -503,19 +642,18 @@ mod tests {
 
     #[test]
     fn draw_with_resolved_image_fade_renders_quadrant_glyphs_not_placeholder() {
-        // placeholder_area は #488 のスペーサー追加後 `split_columns` が実際に計算する幅に
-        // なる（W=10 のとき手計算の ceil(10/2)=5 ではなく 3 に縮む — スペーサーの
-        // `Constraint::Length` を満たす分が画像側の `Constraint::Percentage` から差し引かれる
-        // ため）。手計算した固定値をテストに直書きせず、本番コードと同じ `split_columns` を
-        // 呼んで期待値を得る。
-        let (placeholder_area, _gap, _text) = split_columns(Rect::new(0, 0, 10, 3));
+        // placeholder_area は #494 以降、常に固定キャンバス(CANVAS_W x CANVAS_H)に対して
+        // `split_columns` が実際に計算する幅になる。手計算した固定値をテストに直書きせず、
+        // 本番コードと同じ `split_columns` を呼んで期待値を得る。
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
         let fixture_path =
             diagonal_pattern_webp_fixture(placeholder_area.width, placeholder_area.height);
         let (mut config, relative) = config_and_relative_path_for(&fixture_path);
         config.placeholder.label = "[画像]".to_string();
         let image_fade = ImageFadeState::settled(Some(relative));
 
-        let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
@@ -561,6 +699,10 @@ mod tests {
 
     #[test]
     fn draw_with_resolved_image_fade_at_extremely_small_placeholder_area_does_not_panic() {
+        // #494以降、これらの極小サイズは fits_required_size を満たさず
+        // draw_too_small_message 側の分岐に入るため image_fade は実際には参照されないが、
+        // 「resolved image_fade を渡した状態でどれだけ小さい端末でも draw() が panic しない」
+        // という回帰ガードとしての価値はそのまま残る。
         let fixture_path = diagonal_pattern_webp_fixture(1, 1);
         let (config, relative) = config_and_relative_path_for(&fixture_path);
         let image_fade = ImageFadeState::settled(Some(relative));
@@ -599,7 +741,7 @@ mod tests {
         let (config, relative) = config_and_relative_path_for(&fixture_path);
         let image_fade = ImageFadeState::settled(Some(relative));
 
-        let mut terminal = Terminal::new(TestBackend::new(20, 6)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
@@ -623,12 +765,13 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        // placeholder_area は #488 のスペーサー追加後 `split_columns` が計算する幅（W=20 の
-        // とき手計算の ceil(20/2)=10 ではなく 8 に縮む）。手計算した固定値を直書きせず、
-        // 本番コードと同じ `split_columns` を呼んで期待値を得る。1x1画像相当のRGBAデータを
-        // 大きいグリッドへ展開しても、範囲外アクセスでpanicしたり色が壊れたりせず、全セルが
-        // 唯一のソース画素の色をそのまま持つことを確認する。
-        let (placeholder_area, _gap, _text) = split_columns(Rect::new(0, 0, 20, 5));
+        // placeholder_area は #494 以降、常に固定キャンバス(CANVAS_W x CANVAS_H)に対して
+        // `split_columns` が計算する幅になる。手計算した固定値を直書きせず、本番コードと
+        // 同じ `split_columns` を呼んで期待値を得る。1x1画像相当のRGBAデータを大きいグリッド
+        // へ展開しても、範囲外アクセスでpanicしたり色が壊れたりせず、全セルが唯一のソース
+        // 画素の色をそのまま持つことを確認する。
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
         for y in 0..placeholder_area.height {
             for x in 0..placeholder_area.width {
                 let cell = buffer.cell((x, y)).expect("in bounds");
@@ -646,7 +789,11 @@ mod tests {
         let mut config = Config::default();
         config.placeholder.style = PlaceholderStyle::Label;
         config.placeholder.label = "[画像]".to_string();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
@@ -677,7 +824,11 @@ mod tests {
         let mut config = Config::default();
         config.placeholder.style = PlaceholderStyle::Blank;
         config.placeholder.label = "[画像]".to_string();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
@@ -706,7 +857,11 @@ mod tests {
     #[test]
     fn status_line_shows_end_marker_when_at_end() {
         let config = Config::default();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
@@ -735,7 +890,11 @@ mod tests {
     #[test]
     fn status_line_omits_end_marker_when_not_at_end() {
         let config = Config::default();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
@@ -764,7 +923,11 @@ mod tests {
     #[test]
     fn no_line_shows_placeholder_message() {
         let config = Config::default();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
@@ -800,9 +963,10 @@ mod tests {
             event_image: None,
         };
         let now = Instant::now();
-        // reveal 完了済み(=ページ送りインジケータも同時に描画される)状態でも、
-        // 左右 Percentage(50/50)・テキスト側の上下 Length(height/2 と余り) がいずれも
-        // width/height=1 (0 セルに丸まる) で panic しないことを確認する。
+        // #494以降、W=1x H=3 は fits_required_size を満たさず draw_too_small_message 側の
+        // 分岐に入るため、旧コメントが述べていた「左右Percentage(50/50)分割が0セルに丸まる
+        // 経路」は実際には通らなくなったが、「reveal完了済みの極小端末でdraw()がpanicしない」
+        // という回帰ガードとしての価値はそのまま残る。
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
@@ -840,7 +1004,11 @@ mod tests {
         let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -882,7 +1050,11 @@ mod tests {
             reveal::RevealState::Animating(reveal::build_reveal(&typing_config, &line, now));
         let typing_pulse = reveal::build_pulse(now);
         let mut typing_image_cache = ImageCache::new();
-        let mut typing_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut typing_terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         typing_terminal
             .draw(|f| {
                 draw(
@@ -916,7 +1088,11 @@ mod tests {
             reveal::RevealState::Animating(reveal::build_reveal(&done_config, &line, now));
         let done_pulse = reveal::build_pulse(now);
         let mut done_image_cache = ImageCache::new();
-        let mut done_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut done_terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         done_terminal
             .draw(|f| {
                 draw(
@@ -972,7 +1148,11 @@ mod tests {
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -1014,7 +1194,7 @@ mod tests {
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -1037,15 +1217,17 @@ mod tests {
         let rows = buffer_rows(buffer);
 
         // speaker "A" は Config::default() の player_speakers に含まれないため相手（上）窓。
-        // 60x10端末 → root[0]=(60,9)（status行1を除く）→ columns[1]=(x30,y0,w30,h9）→
-        // opponent_height=9/2=4（切り捨て）→ opponent_area=(x30,y0,w30,h4)。この分割算出
-        // 自体は #480 由来の既存ロジック（本Issueのスコープ外）で、変更後の期待値だけを
-        // `page_indicator_area`（本Issueで抽出した純粋関数）に委ねてハードコードを避ける。
+        // #494: 端末サイズは固定キャンバス(CANVAS_W x CANVAS_H)ちょうどなので、テキスト列の
+        // Rectはsplit_columnsから、高さはcanvas_text_rows_splitから、それぞれ導出する
+        // （手計算した固定値をテストに直書きしない）。
+        let (_placeholder, _gap, text_area) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        let (opponent_height, _self_height) = canvas_text_rows_split();
         let opponent_area = Rect {
-            x: 30,
+            x: text_area.x,
             y: 0,
-            width: 30,
-            height: 4,
+            width: text_area.width,
+            height: opponent_height,
         };
         let indicator_cell = page_indicator_area(opponent_area);
         let cell = buffer
@@ -1294,25 +1476,327 @@ mod tests {
         })
     }
 
+    /// #494以降の統合テストで使う既定の端末サイズ: 固定必要サイズちょうど
+    /// （[`REQUIRED_TOTAL_WIDTH`] x [`REQUIRED_TOTAL_HEIGHT`]）。この値以上を渡せば
+    /// `fits_required_size` を満たし、`draw()` は必ずこのサイズの固定キャンバスを描画する
+    /// （実端末サイズがちょうどこのサイズなら `compute_centered_canvas` のオフセットも0になり、
+    /// 期待値の計算が最も単純になる）。以下の統合テストの多くは実端末サイズの違いではなく
+    /// 話者振り分け・テキストレイアウト自体の検証が目的なので、一貫してこの既定値を使う
+    /// （小さすぎる端末での挙動は別途 [`draw_too_small_message`] 関連のテストで検証する）。
+    const CANVAS_W: u16 = REQUIRED_TOTAL_WIDTH;
+    const CANVAS_H: u16 = REQUIRED_TOTAL_HEIGHT;
+
+    /// `render()`(`draw()`)が`CANVAS_W`x`CANVAS_H`のとき渡すキャンバス上でテキスト列が
+    /// 開始するx座標を`split_columns`から導出する（手計算した固定値をテストに直書きしない）。
+    fn canvas_text_column_x_start() -> u16 {
+        let (_placeholder, _gap, text) = split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        text.x
+    }
+
+    /// `draw_text_windows`内の相手(opponent)/自分(self)の上下分割の高さを、`CANVAS_H`のときの
+    /// 値として導出する（`draw_text_windows`のopponent=height/2切り捨て・self=height-opponentと
+    /// 同じ式。root[0].height = CANVAS_H - 1(ステータス行分)が入力になる）。
+    fn canvas_text_rows_split() -> (u16, u16) {
+        let root0_height = CANVAS_H - 1;
+        let opponent_height = root0_height / 2;
+        let self_height = root0_height - opponent_height;
+        (opponent_height, self_height)
+    }
+
+    // ---- #494: fits_required_size / compute_centered_canvas の境界値テスト ----
+
+    #[test]
+    fn fits_required_size_exactly_required_is_true() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+        assert!(fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_one_cell_narrower_is_false() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH - 1, REQUIRED_TOTAL_HEIGHT);
+        assert!(!fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_one_cell_shorter_is_false() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT - 1);
+        assert!(!fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_one_cell_narrower_and_shorter_is_false() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH - 1, REQUIRED_TOTAL_HEIGHT - 1);
+        assert!(!fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_larger_in_both_dimensions_is_true() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH + 10, REQUIRED_TOTAL_HEIGHT + 10);
+        assert!(fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_zero_sized_is_false() {
+        assert!(!fits_required_size(Rect::new(0, 0, 0, 0)));
+    }
+
+    // 以下4件は幅/高さそれぞれの過不足を混合させたデシジョンテーブルの欠落マス
+    // （既存テストは幅のみ不足・高さのみ不足・両方不足・両方過剰の4通りのみをカバーしており、
+    // 「片方不足+もう片方過剰」の組み合わせが未検証だった）。`fits_required_size` は両方が
+    // 要求値以上のときのみ `true` を返すAND条件のため、一方でも不足していれば他方が過剰でも
+    // `false` になるはずである。
+
+    #[test]
+    fn fits_required_size_width_deficient_height_excess_is_false() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH - 1, REQUIRED_TOTAL_HEIGHT + 1);
+        assert!(!fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_width_excess_height_deficient_is_false() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH + 1, REQUIRED_TOTAL_HEIGHT - 1);
+        assert!(!fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_one_cell_wider_only_is_true() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH + 1, REQUIRED_TOTAL_HEIGHT);
+        assert!(fits_required_size(actual));
+    }
+
+    #[test]
+    fn fits_required_size_one_cell_taller_only_is_true() {
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT + 1);
+        assert!(fits_required_size(actual));
+    }
+
+    #[test]
+    fn compute_centered_canvas_actual_equals_required_has_zero_offset() {
+        let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+        let canvas = compute_centered_canvas(required, required);
+        assert_eq!(
+            canvas, required,
+            "when actual exactly matches required, there is no margin to center within"
+        );
+    }
+
+    #[test]
+    fn compute_centered_canvas_larger_actual_centers_with_even_margins() {
+        let required = Rect::new(0, 0, 10, 4);
+        // 余白: 幅+20(左右10ずつ)、高さ+8(上下4ずつ)。
+        let actual = Rect::new(0, 0, 30, 12);
+        let canvas = compute_centered_canvas(actual, required);
+        assert_eq!(canvas, Rect::new(10, 4, 10, 4));
+    }
+
+    #[test]
+    fn compute_centered_canvas_height_only_excess_centers_vertically_width_unchanged() {
+        // 幅は required と一致させ、高さだけ超過させる（幅軸のオフセットが常に0のまま、
+        // 高さ軸だけが中央寄せされることの単独確認。上の
+        // `compute_centered_canvas_larger_actual_centers_with_even_margins` は両軸とも
+        // 過剰なケースのため、高さ単独の寄与を切り分けられていなかった）。
+        let required = Rect::new(0, 0, 10, 4);
+        let actual = Rect::new(0, 0, 10, 8);
+        let canvas = compute_centered_canvas(actual, required);
+        assert_eq!(canvas, Rect::new(0, 2, 10, 4));
+    }
+
+    #[test]
+    fn compute_centered_canvas_odd_margin_favors_left_and_top() {
+        // 幅の余白が奇数(1)のとき、整数除算により左側のオフセットが切り捨てられる
+        // （右側に多く残る＝厳密な左右対称は要求しない、doc コメント参照）。
+        let required = Rect::new(0, 0, 10, 4);
+        let actual = Rect::new(0, 0, 11, 4); // 余白1
+        let canvas = compute_centered_canvas(actual, required);
+        assert_eq!(
+            canvas.x, 0,
+            "an odd margin should round down via integer division, leaving the extra cell on the right"
+        );
+        assert_eq!(canvas.width, 10);
+    }
+
+    #[test]
+    fn compute_centered_canvas_odd_vertical_margin_favors_top() {
+        // 上と対になる高さ軸版: 高さの余白が奇数(1)のとき、整数除算により上側のオフセットが
+        // 切り捨てられる（下側に多く残る＝厳密な上下対称は要求しない、doc コメント参照）。
+        let required = Rect::new(0, 0, 10, 4);
+        let actual = Rect::new(0, 0, 10, 5); // 余白1
+        let canvas = compute_centered_canvas(actual, required);
+        assert_eq!(
+            canvas.y, 0,
+            "an odd vertical margin should round down via integer division, leaving the extra cell on the bottom"
+        );
+        assert_eq!(canvas.height, 4);
+    }
+
+    #[test]
+    fn compute_centered_canvas_respects_nonzero_actual_origin() {
+        let required = Rect::new(0, 0, 10, 4);
+        let actual = Rect::new(5, 7, 30, 12);
+        let canvas = compute_centered_canvas(actual, required);
+        assert_eq!(canvas, Rect::new(5 + 10, 7 + 4, 10, 4));
+    }
+
+    #[test]
+    fn compute_centered_canvas_actual_smaller_than_required_clamps_without_panicking() {
+        // draw() からは fits_required_size(actual) が真の場合のみ呼ばれる想定だが、
+        // 関数自体は縮小クランプにより防御的にpanicしないことを確認する（doc コメント参照）。
+        let required = Rect::new(0, 0, 10, 4);
+        let actual = Rect::new(0, 0, 3, 2);
+        let canvas = compute_centered_canvas(actual, required);
+        assert_eq!(canvas.width, 3);
+        assert_eq!(canvas.height, 2);
+    }
+
+    #[test]
+    fn draw_too_small_message_shows_actual_and_required_dimensions() {
+        let config = Config::default();
+        let buffer = render(
+            &config,
+            None,
+            None,
+            REQUIRED_TOTAL_WIDTH - 1,
+            REQUIRED_TOTAL_HEIGHT,
+        );
+        let text = buffer_text(&buffer);
+        assert!(
+            text.contains(&format!(
+                "現在 {}x{}",
+                REQUIRED_TOTAL_WIDTH - 1,
+                REQUIRED_TOTAL_HEIGHT
+            )),
+            "buffer was: {text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "必要 {REQUIRED_TOTAL_WIDTH}x{REQUIRED_TOTAL_HEIGHT}"
+            )),
+            "buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_too_small_message_does_not_panic_across_tiny_and_edge_sizes() {
+        let config = Config::default();
+        for (w, h) in [
+            (0u16, 0u16),
+            (1, 1),
+            (0, 5),
+            (5, 0),
+            (1, REQUIRED_TOTAL_HEIGHT),
+            (REQUIRED_TOTAL_WIDTH, 1),
+            (REQUIRED_TOTAL_WIDTH - 1, REQUIRED_TOTAL_HEIGHT - 1),
+        ] {
+            let _ = render(&config, None, None, w, h); // panicしないことのみ確認する
+        }
+    }
+
+    #[test]
+    fn draw_too_small_message_content_survives_at_moderately_narrow_width() {
+        // 上のテストは極小(0/1)や境界ぴったり(REQUIRED_TOTAL_WIDTH-1)のようなpanic有無の
+        // 確認に留まっており、それらの中間にあたる「狭いがゼロではない」幅でメッセージの
+        // 本文そのものが実際にバッファへ描画されるかは未検証だった。高さは
+        // REQUIRED_TOTAL_HEIGHT ちょうど(不足していない)にして、幅の狭さだけを効かせる。
+        let config = Config::default();
+        let moderately_narrow_width = REQUIRED_TOTAL_WIDTH / 2; // 極小でも境界ぴったりでもない中間幅
+        let buffer = render(
+            &config,
+            None,
+            None,
+            moderately_narrow_width,
+            REQUIRED_TOTAL_HEIGHT,
+        );
+        let text = buffer_text(&buffer);
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_larger_than_required_terminal_offsets_content_by_centering_margin() {
+        // 実端末がCANVAS_W/CANVAS_Hより大きい場合、UI全体がcompute_centered_canvasの
+        // オフセット分だけ右下にずれて描画されることを、テキスト列の開始位置で確認する
+        // （レターボックス/ピラーボックス、#494）。
+        let config = Config::default();
+        let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
+        let extra_w = 6u16;
+        let extra_h = 4u16;
+        let buffer = render(
+            &config,
+            Some(&line),
+            None,
+            CANVAS_W + extra_w,
+            CANVAS_H + extra_h,
+        );
+        let area = buffer.area();
+        let mut leftmost_y_x = None;
+        'outer: for y in 0..area.height {
+            for x in 0..area.width {
+                if buffer.cell((x, y)).expect("in bounds").symbol() == "Y" {
+                    leftmost_y_x = Some(x);
+                    break 'outer;
+                }
+            }
+        }
+        let x = leftmost_y_x.expect("text should render somewhere");
+        let expected_x_offset = extra_w / 2;
+        assert_eq!(
+            x,
+            canvas_text_column_x_start() + expected_x_offset,
+            "text column should shift right by the centering margin"
+        );
+    }
+
+    #[test]
+    fn draw_taller_than_required_terminal_offsets_content_vertically_by_centering_margin() {
+        // 上の`draw_larger_than_required_terminal_offsets_content_by_centering_margin`
+        // （x軸版）と対になるy軸版。幅はCANVAS_Wちょうどに固定し、高さだけ超過させた
+        // terminalでdraw()を経由してrenderし、テキストの描画y座標が
+        // compute_centered_canvasの高さオフセット分だけ下にずれることを確認する。
+        let config = Config::default();
+        let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
+        let extra_h = 4u16;
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H + extra_h);
+        let area = buffer.area();
+        let mut topmost_y = None;
+        'outer: for y in 0..area.height {
+            for x in 0..area.width {
+                if buffer.cell((x, y)).expect("in bounds").symbol() == "Y" {
+                    topmost_y = Some(y);
+                    break 'outer;
+                }
+            }
+        }
+        let y = topmost_y.expect("text should render somewhere");
+        let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+        let actual = Rect::new(0, 0, CANVAS_W, CANVAS_H + extra_h);
+        let expected_y = compute_centered_canvas(actual, required).y;
+        assert_eq!(
+            y, expected_y,
+            "text row should shift down by the centering margin"
+        );
+    }
+
     // -- A. 話者振り分け --
 
     #[test]
     fn player_speaker_text_renders_in_bottom_half_of_screen() {
-        // H=11(奇数) → root[0].height=10(偶数) → テキスト側 rows split はちょうど半分
-        // (opponent=5行/self=5行) になる、行位置の判定がぶれない対称ケースを選んでいる。
+        // #494: 実端末サイズを CANVAS_W x CANVAS_H(固定必要サイズちょうど)にすると、
+        // draw()が内部で使う root[0].height は常に (CANVAS_H - 1) になる。行境界は
+        // `canvas_text_rows_split` から導出し、手計算した固定値をテストに直書きしない。
         let config = Config {
             player_speakers: vec!["Player".to_string()],
             ..Config::default()
         };
         let line = dialog_line(Some("Player"), vec!["hello"]);
-        let buffer = render(&config, Some(&line), None, 40, 11);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
         let rows = buffer_rows(&buffer);
+        let (opponent_height, _self_height) = canvas_text_rows_split();
+        let (top, bottom) = rows.split_at(opponent_height as usize);
         assert!(
-            rows[5..10].iter().any(|r| r.contains("hello")),
+            bottom.iter().any(|r| r.contains("hello")),
             "player speaker text should render in the bottom half, rows were: {rows:?}"
         );
         assert!(
-            !rows[0..5].iter().any(|r| r.contains("hello")),
+            !top.iter().any(|r| r.contains("hello")),
             "player speaker text must not leak into the top half, rows were: {rows:?}"
         );
     }
@@ -1321,14 +1805,16 @@ mod tests {
     fn opponent_speaker_text_renders_in_top_half_of_screen() {
         let config = Config::default(); // player_speakers = ["主格"]
         let line = dialog_line(Some("相手"), vec!["hello"]);
-        let buffer = render(&config, Some(&line), None, 40, 11);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
         let rows = buffer_rows(&buffer);
+        let (opponent_height, _self_height) = canvas_text_rows_split();
+        let (top, bottom) = rows.split_at(opponent_height as usize);
         assert!(
-            rows[0..5].iter().any(|r| r.contains("hello")),
+            top.iter().any(|r| r.contains("hello")),
             "unmatched speaker text should render in the top half, rows were: {rows:?}"
         );
         assert!(
-            !rows[5..10].iter().any(|r| r.contains("hello")),
+            !bottom.iter().any(|r| r.contains("hello")),
             "unmatched speaker text must not leak into the bottom half, rows were: {rows:?}"
         );
     }
@@ -1337,20 +1823,22 @@ mod tests {
     fn narration_none_speaker_renders_in_top_half_with_narration_color() {
         let config = Config::default();
         let line = dialog_line(None, vec!["ナレーション"]);
-        let buffer = render(&config, Some(&line), None, 40, 11);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
         let rows = buffer_rows(&buffer);
-        let hit_row = rows[0..5].iter().position(|r| r.contains("ナレーション"));
+        let (opponent_height, _self_height) = canvas_text_rows_split();
+        let (top, bottom) = rows.split_at(opponent_height as usize);
+        let hit_row = top.iter().position(|r| r.contains("ナレーション"));
         assert!(
             hit_row.is_some(),
             "narration text should render in the top half, rows were: {rows:?}"
         );
         assert!(
-            !rows[5..10].iter().any(|r| r.contains("ナレーション")),
+            !bottom.iter().any(|r| r.contains("ナレーション")),
             "narration text must not leak into the bottom half, rows were: {rows:?}"
         );
         let y = hit_row.unwrap() as u16;
-        // 左側プレースホルダ列(x<20)を避け、テキスト列(x>=20)だけを見る。
-        let color = first_colored_cell_in_row(&buffer, y, 20)
+        // 左側プレースホルダ列を避け、テキスト列だけを見る。
+        let color = first_colored_cell_in_row(&buffer, y, canvas_text_column_x_start())
             .expect("a colored cell should exist on the narration row");
         assert_eq!(
             color,
@@ -1363,12 +1851,15 @@ mod tests {
     fn player_speaker_leaves_opponent_top_window_completely_blank() {
         let config = Config::default();
         let line = dialog_line(Some("主格"), vec!["hello"]);
-        let buffer = render(&config, Some(&line), None, 40, 11);
-        // テキスト列(x>=20)だけを見る。左側プレースホルダ列は話者に関わらず常に何か描画する
-        // ため、行全体で判定すると誤検知する。
-        let rows = buffer_rows_in_x_range(&buffer, 20, 40);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
+        // テキスト列だけを見る。左側プレースホルダ列は話者に関わらず常に何か描画するため、
+        // 行全体で判定すると誤検知する。
+        let rows = buffer_rows_in_x_range(&buffer, canvas_text_column_x_start(), CANVAS_W);
+        let (opponent_height, _self_height) = canvas_text_rows_split();
         assert!(
-            rows[0..5].iter().all(|r| r.trim().is_empty()),
+            rows[..opponent_height as usize]
+                .iter()
+                .all(|r| r.trim().is_empty()),
             "opponent(top) text window must be entirely blank while the player speaks, rows were: {rows:?}"
         );
     }
@@ -1377,10 +1868,14 @@ mod tests {
     fn opponent_speaker_leaves_self_bottom_window_completely_blank() {
         let config = Config::default();
         let line = dialog_line(Some("相手"), vec!["hello"]);
-        let buffer = render(&config, Some(&line), None, 40, 11);
-        let rows = buffer_rows_in_x_range(&buffer, 20, 40);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
+        let rows = buffer_rows_in_x_range(&buffer, canvas_text_column_x_start(), CANVAS_W);
+        let (opponent_height, self_height) = canvas_text_rows_split();
+        // ステータス行（最終行）は self ウィンドウの外なので範囲に含めない。
         assert!(
-            rows[5..10].iter().all(|r| r.trim().is_empty()),
+            rows[opponent_height as usize..(opponent_height + self_height) as usize]
+                .iter()
+                .all(|r| r.trim().is_empty()),
             "self(bottom) text window must be entirely blank while an opponent speaks, rows were: {rows:?}"
         );
     }
@@ -1396,31 +1891,62 @@ mod tests {
             ..Config::default()
         };
         let line = dialog_line(Some("主格"), vec!["hello"]);
-        let buffer = render(&config, Some(&line), None, 40, 11);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
         let rows = buffer_rows(&buffer);
+        let (opponent_height, _self_height) = canvas_text_rows_split();
+        let (top, bottom) = rows.split_at(opponent_height as usize);
         assert!(
-            rows[0..5].iter().any(|r| r.contains("hello")),
+            top.iter().any(|r| r.contains("hello")),
             "with an empty player_speakers list, even the default player name should go to the top window, rows were: {rows:?}"
         );
         assert!(
-            !rows[5..10].iter().any(|r| r.contains("hello")),
+            !bottom.iter().any(|r| r.contains("hello")),
             "rows were: {rows:?}"
         );
     }
 
     // -- C. 境界値 --
+    //
+    // #494: `draw()` は固定必要サイズ未満の端末では常に [`draw_too_small_message`] だけを
+    // 表示するようになったため、`draw_text_windows` 固有の行分割算術（極小高さでの端数の
+    // 挙動）を検証する以下のテストは、`draw()`（`render()`ヘルパー）ではなく
+    // `draw_text_windows` を直接呼ぶ `render_text_windows` ヘルパー経由に切り替える。
+    // `draw_text_windows` は画像プレースホルダ列を知らないぶん、`area.height` がそのまま
+    // 行分割の入力になる（`draw()` 経由だった旧テストのようにステータス行1を引く必要が
+    // 無くなった点に注意）。
+
+    /// `render()`(`draw()`)ではなく [`draw_text_windows`] を直接指定サイズの `TestBackend` に
+    /// 描画するヘルパー（#494）。相手/自分の行分割という `draw_text_windows` 固有の算術を
+    /// 検証するテストは、`draw()` の固定必要サイズゲートを経由せずこの関数を直接叩く。
+    fn render_text_windows(
+        config: &Config,
+        line: Option<&DisplayLine>,
+        reveal: Option<&reveal::RevealState>,
+        width: u16,
+        height: u16,
+    ) -> Buffer {
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_text_windows(f, area, config, line, reveal, &pulse, now);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
 
     #[test]
-    fn even_terminal_height_gives_self_window_the_extra_row() {
-        // H=4(偶数) → root[0].height=3(ステータス行1を引いた残り) → テキスト側 rows split は
-        // opponent=floor(3/2)=1行・self=3-1=2行になり、self(下/自分)側が余りの1行を受け取る
-        // （self が損をしないよう明示的な高さ計算にした、セルフレビュー修正）。Rect を直接
-        // 覗く代わりに、2行の本文を与えたとき何行まで収まるかで高さを実測する。
+    fn odd_text_area_height_gives_self_window_the_extra_row() {
+        // area.height=3(奇数) → opponent=floor(3/2)=1行・self=3-1=2行になり、self(下/自分)側が
+        // 余りの1行を受け取る（self が損をしないよう明示的な高さ計算にした、セルフレビュー
+        // 修正）。Rect を直接覗く代わりに、2行の本文を与えたとき何行まで収まるかで高さを実測する。
         let config = Config::default();
         let text = vec!["line1", "line2"];
 
         let opponent_line = dialog_line(Some("相手"), text.clone());
-        let opponent_buffer = render(&config, Some(&opponent_line), None, 40, 4);
+        let opponent_buffer = render_text_windows(&config, Some(&opponent_line), None, 40, 3);
         let opponent_text = buffer_text(&opponent_buffer);
         assert!(
             opponent_text.contains("line1"),
@@ -1432,7 +1958,7 @@ mod tests {
         );
 
         let self_line = dialog_line(Some("主格"), text);
-        let self_buffer = render(&config, Some(&self_line), None, 40, 4);
+        let self_buffer = render_text_windows(&config, Some(&self_line), None, 40, 3);
         let self_text = buffer_text(&self_buffer);
         assert!(self_text.contains("line1"), "buffer was: {self_text}");
         assert!(
@@ -1442,30 +1968,29 @@ mod tests {
     }
 
     #[test]
-    fn terminal_height_two_collapses_opponent_window_to_zero_height() {
-        // H=2 → root[0].height=1 → テキスト側 rows split は opponent=floor(1/2)=0・
-        // self=1-0=1 になり、self が優先されるため、相手発言(opponent窓)が実質どこにも
-        // 描画されなくなる（旧実装では逆に self 側が消えていた。セルフレビュー修正）。
+    fn text_area_height_one_collapses_opponent_window_to_zero_height() {
+        // area.height=1 → opponent=floor(1/2)=0・self=1-0=1 になり、self が優先されるため、
+        // 相手発言(opponent窓)が実質どこにも描画されなくなる（旧実装では逆に self 側が
+        // 消えていた。セルフレビュー修正）。
         let config = Config::default();
         let line = dialog_line(Some("相手"), vec!["hello"]);
-        let buffer = render(&config, Some(&line), None, 40, 2);
+        let buffer = render_text_windows(&config, Some(&line), None, 40, 1);
         let text = buffer_text(&buffer);
         assert!(
             !text.contains("hello"),
-            "opponent window has height 0 at H=2, opponent text must not render anywhere, buffer was: {text}"
+            "opponent window has height 0 at area.height=1, opponent text must not render anywhere, buffer was: {text}"
         );
     }
 
     #[test]
-    fn odd_terminal_height_splits_text_area_evenly() {
-        // H=3(奇数) → root[0].height=2(偶数) → テキスト側 rows split はちょうど半分に割れ、
-        // opponent(上)=1行・self(下)=1行の対称になる。H=4 で self が余りの1行を受け取る
-        // ケース（1つ上のテスト）と対を成す対比ケース。
+    fn even_text_area_height_splits_evenly() {
+        // area.height=2(偶数) → opponent(上)=1行・self(下)=1行の対称になる。height=3で self
+        // が余りの1行を受け取るケース（1つ上のテスト）と対を成す対比ケース。
         let config = Config::default();
         let text = vec!["line1", "line2"];
 
         let opponent_line = dialog_line(Some("相手"), text.clone());
-        let opponent_buffer = render(&config, Some(&opponent_line), None, 40, 3);
+        let opponent_buffer = render_text_windows(&config, Some(&opponent_line), None, 40, 2);
         let opponent_text = buffer_text(&opponent_buffer);
         assert!(
             opponent_text.contains("line1"),
@@ -1473,51 +1998,54 @@ mod tests {
         );
         assert!(
             !opponent_text.contains("line2"),
-            "opponent window should also be height 1 at H=3 (symmetric with self), buffer was: {opponent_text}"
+            "opponent window should also be height 1 at area.height=2 (symmetric with self), buffer was: {opponent_text}"
         );
 
         let self_line = dialog_line(Some("主格"), text);
-        let self_buffer = render(&config, Some(&self_line), None, 40, 3);
+        let self_buffer = render_text_windows(&config, Some(&self_line), None, 40, 2);
         let self_text = buffer_text(&self_buffer);
         assert!(self_text.contains("line1"), "buffer was: {self_text}");
         assert!(
             !self_text.contains("line2"),
-            "self window should be height 1 at H=3, buffer was: {self_text}"
+            "self window should be height 1 at area.height=2, buffer was: {self_text}"
         );
     }
 
     #[test]
-    fn terminal_height_one_shows_status_line_only_no_body_content() {
-        // H=1 → root[0].height=0 → プレースホルダもテキストも描画領域が消え、
-        // 最下段のステータス行だけが残る。
+    fn terminal_smaller_than_required_shows_too_small_message_not_body_content() {
+        // #494: H=1 のような固定必要サイズ未満の端末では、draw() は通常のゲームUI
+        // （ステータス行を含む）を一切描画せず、代わりに「端末を広げてください」
+        // メッセージだけを表示する。
         let config = Config::default();
         let line = dialog_line(Some("主格"), vec!["hello"]);
         let buffer = render(&config, Some(&line), None, 40, 1);
         let text = buffer_text(&buffer);
         assert!(
-            text.contains(&config.game_name),
-            "status line should still render, buffer was: {text}"
+            !text.contains(&config.game_name),
+            "the normal status line must not render below the required size, buffer was: {text}"
         );
         assert!(
             !text.contains("hello"),
-            "body content must not render when height=1, buffer was: {text}"
+            "body content must not render below the required size, buffer was: {text}"
+        );
+        assert!(
+            text.contains("端末を広げてください"),
+            "a too-small guidance message should render instead, buffer was: {text}"
         );
     }
 
     #[test]
-    fn odd_terminal_width_gives_placeholder_column_the_extra_cell() {
-        // W=7(奇数) の3分割（画像/スペーサー/テキスト、#488）は `split_columns` を直接呼んで
-        // 期待値を得る（手計算した固定値をテストに直書きしない）。W=7 はスペーサー幅
-        // ([`IMAGE_TEXT_GAP_WIDTH`]=2) を画像側の `Constraint::Percentage` から差し引いても
-        // まだ1セル残るため、テキスト側の開始x座標・幅は#480当時の2分割（左=ceil(7/2)=4・
-        // 右=floor(7/2)=3）とたまたま一致する（`split_columns` の doc comment 参照）。W=7を
-        // 選んでいるのは、テキスト側幅がちょうど2セルになる幅（ratatuiのParagraph折り返しが
-        // panicする既知の依存クレート側バグの再現条件、
-        // `narrow_terminal_with_no_display_line_does_not_panic_on_fullwidth_fallback_message`
-        // 参照）を避けるため。
+    fn draw_wires_split_columns_text_column_start_x_on_the_fixed_canvas() {
+        // #494: draw()が渡すcanvasは固定サイズ(CANVAS_W x CANVAS_H)なので、旧#480テストが
+        // 検証していた「任意の端末幅Wでのsplit_columnsの丸め」という統合確認はできなくなった
+        // （split_columns自体の丸め挙動は複数の直接呼び出しテストが引き続きカバーしている、
+        // `split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state`等
+        // 参照）。ここでは「draw()がCANVAS_W/CANVAS_Hのとき、テキスト列の開始位置が
+        // split_columnsの計算結果と一致する」という配線自体を固定する。手計算した固定値を
+        // テストに直書きしない。
         let config = Config::default();
         let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
-        let buffer = render(&config, Some(&line), None, 7, 10);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
         let area = buffer.area();
         let mut leftmost_y_x = None;
         'outer: for y in 0..area.height {
@@ -1529,16 +2057,15 @@ mod tests {
             }
         }
         let x = leftmost_y_x.expect("text should render somewhere");
-        let (_placeholder, _gap, expected_text_area) =
-            split_columns(Rect::new(0, 0, area.width, area.height - 1));
         assert_eq!(
-            x, expected_text_area.x,
+            x,
+            canvas_text_column_x_start(),
             "text column should start where split_columns places it; found at x={x}"
         );
     }
 
     #[test]
-    fn narrow_terminal_with_no_display_line_does_not_panic_on_fullwidth_fallback_message() {
+    fn narrow_text_area_with_no_display_line_does_not_panic_on_fullwidth_fallback_message() {
         // 全角文字を含むフォールバック文言「(会話行がありません)」をテキスト側ウィンドウ幅が
         // ちょうど2セルの状態で wrap 描画しようとすると、ratatui 内部
         // （`ratatui_widgets::paragraph::render_line` → `Buffer::index_mut`）で
@@ -1546,39 +2073,20 @@ mod tests {
         // 再現しない）。`render_wrapped_paragraph` の極小幅ガード（3セル未満はwrap描画を
         // スキップ）でこの経路を回避できていることを固定する回帰テスト。
         //
-        // #488 でスペーサー（[`IMAGE_TEXT_GAP_WIDTH`]=2）を挟む3分割になったことで、
-        // テキスト側幅がちょうど2セルになる総幅は #480 当時の W=4/5 から W=6 に変わった
-        // （`split_columns` がスペーサー分を画像側の `Constraint::Percentage` から差し引くため。
-        // W=4/5 では新レイアウトのテキスト側幅がそれぞれ0/1セルになり、この既知バグの再現
-        // 条件からは外れる）。危険な幅そのものを固定値ではなく `split_columns` で確認しつつ、
-        // 実際に危険幅(2)になる W=6 を複数の高さで検証する。
+        // #494: draw()は固定キャンバス化され、テキスト列の幅は常に REQUIRED_TEXT_COLS
+        // 基準の十分な幅になるため、この危険幅(2)は draw() 経由ではもう自然発生しない。
+        // draw_text_windows を直接呼び、area幅そのものを危険幅(2)に固定して検証する
+        // （旧テストは split_columns がこの幅を生む総端末幅Wを探して間接的に再現していたが、
+        // draw_text_windows は area を直接受け取るため、その必要が無くなった）。
         let config = Config::default();
-        let (_placeholder, _gap, text_area_at_w6) = split_columns(Rect::new(0, 0, 6, 3));
-        assert_eq!(
-            text_area_at_w6.width, 2,
-            "this test only guards the real bug condition when the text column width is 2"
-        );
-        for (w, h) in [(6u16, 4u16), (6, 5), (6, 6)] {
-            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        for h in [2u16, 3, 4, 10] {
+            let mut terminal = Terminal::new(TestBackend::new(2, h)).unwrap();
             let now = Instant::now();
             let pulse = reveal::build_pulse(now);
-            let mut image_cache = ImageCache::new();
             terminal
                 .draw(|f| {
-                    draw(
-                        f,
-                        &config,
-                        None,
-                        None,
-                        0,
-                        0,
-                        true,
-                        None,
-                        &pulse,
-                        now,
-                        None,
-                        &mut image_cache,
-                    )
+                    let area = f.area();
+                    draw_text_windows(f, area, &config, None, None, &pulse, now);
                 })
                 .unwrap();
         }
@@ -1589,15 +2097,22 @@ mod tests {
     #[test]
     fn no_display_line_renders_placeholder_message_in_top_window_only() {
         let config = Config::default();
-        let buffer = render(&config, None, None, 40, 11);
+        let buffer = render(&config, None, None, CANVAS_W, CANVAS_H);
         let rows = buffer_rows(&buffer);
+        let (opponent_height, _self_height) = canvas_text_rows_split();
         assert!(
-            rows[0..5].iter().any(|r| r.contains("会話行がありません")),
+            rows[..opponent_height as usize]
+                .iter()
+                .any(|r| r.contains("会話行がありません")),
             "fallback message should render in the top window, rows were: {rows:?}"
         );
-        let text_rows = buffer_rows_in_x_range(&buffer, 20, 40);
+        let text_rows = buffer_rows_in_x_range(&buffer, canvas_text_column_x_start(), CANVAS_W);
+        let (_opponent_height, self_height) = canvas_text_rows_split();
+        // ステータス行（最終行）は self ウィンドウの外なので範囲に含めない。
         assert!(
-            text_rows[5..10].iter().all(|r| r.trim().is_empty()),
+            text_rows[opponent_height as usize..(opponent_height + self_height) as usize]
+                .iter()
+                .all(|r| r.trim().is_empty()),
             "self(bottom) text window should stay blank when there is no display line, rows were: {text_rows:?}"
         );
     }
@@ -1607,17 +2122,20 @@ mod tests {
         let config = Config::default();
         let line = dialog_line(Some("主格"), vec![]);
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let buffer = render(&config, Some(&line), Some(&reveal), 40, 11);
+        let buffer = render(&config, Some(&line), Some(&reveal), CANVAS_W, CANVAS_H);
         let rows = buffer_rows(&buffer);
+        let (opponent_height, _self_height) = canvas_text_rows_split();
         assert!(
-            rows[5..10]
+            rows[opponent_height as usize..]
                 .iter()
                 .any(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL)),
             "page indicator should render in the bottom window for an empty player line, rows were: {rows:?}"
         );
-        let text_rows = buffer_rows_in_x_range(&buffer, 20, 40);
+        let text_rows = buffer_rows_in_x_range(&buffer, canvas_text_column_x_start(), CANVAS_W);
         assert!(
-            text_rows[0..5].iter().all(|r| r.trim().is_empty()),
+            text_rows[..opponent_height as usize]
+                .iter()
+                .all(|r| r.trim().is_empty()),
             "opponent(top) text window should stay blank, rows were: {text_rows:?}"
         );
     }
@@ -1634,7 +2152,7 @@ mod tests {
         let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -1654,16 +2172,18 @@ mod tests {
             })
             .unwrap();
         let rows = buffer_rows(terminal.backend().buffer());
+        let (opponent_height, _self_height) = canvas_text_rows_split();
+        let (top, bottom) = rows.split_at(opponent_height as usize);
         assert!(
-            rows[5..10].iter().any(|r| r.contains('h')),
+            bottom.iter().any(|r| r.contains('h')),
             "the first revealed grapheme should render in the bottom window, rows were: {rows:?}"
         );
         assert!(
-            !rows[5..10].iter().any(|r| r.contains("hello")),
+            !bottom.iter().any(|r| r.contains("hello")),
             "text should still be partial (typewriter in progress), rows were: {rows:?}"
         );
         assert!(
-            !rows[0..5].iter().any(|r| r.contains('h')),
+            !top.iter().any(|r| r.contains('h')),
             "typewriter text must not leak into the top window, rows were: {rows:?}"
         );
     }
@@ -1672,6 +2192,7 @@ mod tests {
     fn player_speaker_page_indicator_appears_only_after_done_in_bottom_window() {
         let line = dialog_line(Some("主格"), vec!["hello"]);
         let now = Instant::now();
+        let (opponent_height, _self_height) = canvas_text_rows_split();
 
         // 表示中（未完了）は下窓にもインジケータは出ない。
         let mut typing_config = Config::default();
@@ -1681,7 +2202,7 @@ mod tests {
             reveal::RevealState::Animating(reveal::build_reveal(&typing_config, &line, now));
         let typing_pulse = reveal::build_pulse(now);
         let mut typing_image_cache = ImageCache::new();
-        let mut typing_terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
+        let mut typing_terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         typing_terminal
             .draw(|f| {
                 draw(
@@ -1716,7 +2237,7 @@ mod tests {
             reveal::RevealState::Animating(reveal::build_reveal(&done_config, &line, now));
         let done_pulse = reveal::build_pulse(now);
         let mut done_image_cache = ImageCache::new();
-        let mut done_terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
+        let mut done_terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         done_terminal
             .draw(|f| {
                 draw(
@@ -1736,14 +2257,15 @@ mod tests {
             })
             .unwrap();
         let done_rows = buffer_rows(done_terminal.backend().buffer());
+        let (done_top, done_bottom) = done_rows.split_at(opponent_height as usize);
         assert!(
-            done_rows[5..10]
+            done_bottom
                 .iter()
                 .any(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL)),
             "rows were: {done_rows:?}"
         );
         assert!(
-            !done_rows[0..5]
+            !done_top
                 .iter()
                 .any(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL)),
             "rows were: {done_rows:?}"
@@ -1755,12 +2277,18 @@ mod tests {
     #[test]
     fn long_single_line_wraps_within_half_height_window_without_bleeding_into_other_window() {
         let config = Config::default();
-        let long_text = "a".repeat(45); // テキスト列幅20 → opponent窓(高さ5)内に折り返される
+        let long_text = "a".repeat(45); // opponent窓(高さ十分)内に折り返される
         let line = dialog_line(Some("相手"), vec![long_text.as_str()]);
-        let buffer = render(&config, Some(&line), None, 40, 11);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
         let rows = buffer_rows(&buffer);
-        let opponent_as: usize = rows[0..5].iter().map(|r| r.matches('a').count()).sum();
-        let self_as: usize = rows[5..10].iter().map(|r| r.matches('a').count()).sum();
+        let (opponent_height, self_height) = canvas_text_rows_split();
+        let top = &rows[..opponent_height as usize];
+        // ステータス行（最終行、game_name="gymnasia"に'a'が2つ含まれる）は self ウィンドウの
+        // 外なので、bottom の範囲から明示的に除外する（さもないとステータス行の'a'まで
+        // self_as に数えてしまい誤検知する）。
+        let bottom = &rows[opponent_height as usize..(opponent_height + self_height) as usize];
+        let opponent_as: usize = top.iter().map(|r| r.matches('a').count()).sum();
+        let self_as: usize = bottom.iter().map(|r| r.matches('a').count()).sum();
         assert_eq!(
             opponent_as, 45,
             "all wrapped characters should land in the opponent(top) window, rows were: {rows:?}"
@@ -1778,14 +2306,16 @@ mod tests {
         // このデフォルト値がそのまま下窓にルーティングされることを確認する。
         let config = Config::default();
         let line = dialog_line(Some("主格"), vec!["台詞"]);
-        let buffer = render(&config, Some(&line), None, 40, 11);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
         let rows = buffer_rows(&buffer);
+        let (opponent_height, _self_height) = canvas_text_rows_split();
+        let (top, bottom) = rows.split_at(opponent_height as usize);
         assert!(
-            rows[5..10].iter().any(|r| r.contains("台詞")),
+            bottom.iter().any(|r| r.contains("台詞")),
             "rows were: {rows:?}"
         );
         assert!(
-            !rows[0..5].iter().any(|r| r.contains("台詞")),
+            !top.iter().any(|r| r.contains("台詞")),
             "rows were: {rows:?}"
         );
     }
@@ -1798,7 +2328,7 @@ mod tests {
         // 固定する退行防止テスト。
         let config = Config::default();
         let line = dialog_line(Some("A"), vec!["hi"]);
-        let buffer = render(&config, Some(&line), None, 40, 10);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
         let text = buffer_text(&buffer);
         for border_char in ['│', '─', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼']
         {
@@ -1813,9 +2343,10 @@ mod tests {
     fn draw_with_resolved_image_fade_keeps_480_text_column_start_x_unchanged() {
         // #480の画像/テキスト分割（#488でスペーサーを挟む3分割になった、`split_columns`）が、
         // #481で image_fade に実在パスを渡すようになった後も変わっていないことを確認する。
-        // `odd_terminal_width_gives_placeholder_column_the_extra_cell` と同じ W=7 を流用し、
-        // 期待値は同テストと同じく `split_columns` から得る（あちらは image_fade=None の
-        // ケースだった）。
+        // #494以降 draw() は固定キャンバス(CANVAS_W x CANVAS_H)を使うため、
+        // `draw_wires_split_columns_text_column_start_x_on_the_fixed_canvas`
+        // （あちらは image_fade=None のケース）と同じサイズを流用し、期待値も同じ
+        // `canvas_text_column_x_start` から得る。
         let fixture_path =
             crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 2, 2), 2, 2);
         let (config, relative) = config_and_relative_path_for(&fixture_path);
@@ -1826,7 +2357,7 @@ mod tests {
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(7, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -1858,10 +2389,9 @@ mod tests {
             }
         }
         let x = leftmost_y_x.expect("text should render somewhere");
-        let (_placeholder, _gap, expected_text_area) =
-            split_columns(Rect::new(0, 0, area.width, area.height - 1));
         assert_eq!(
-            x, expected_text_area.x,
+            x,
+            canvas_text_column_x_start(),
             "text column should still start where split_columns places it with a resolved image_fade present; found at x={x}"
         );
     }
@@ -1872,7 +2402,7 @@ mod tests {
         // 固定する退行防止テスト。
         let config = Config::default();
         let line = dialog_line(Some("すぴーかー"), vec!["hello"]);
-        let buffer = render(&config, Some(&line), None, 40, 10);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
         let text = buffer_text(&buffer);
         assert!(
             text.contains("hello"),
@@ -1898,8 +2428,9 @@ mod tests {
         // なので、画像列の内容がスペーサー列へはみ出していないことも合わせて確認できる。
         let config = Config::default();
         let line = dialog_line(Some("A"), vec!["hello"]); // opponent(上)
-        let buffer = render(&config, Some(&line), None, 40, 11);
-        let (placeholder_area, gap_area, _text_area) = split_columns(Rect::new(0, 0, 40, 10)); // root[0].height = 11 - 1
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
+        let (placeholder_area, gap_area, _text_area) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1)); // root[0].height = CANVAS_H - 1
         let gap_rows = buffer_rows_in_x_range(
             &buffer,
             placeholder_area.width,
@@ -2019,7 +2550,11 @@ mod tests {
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -2051,7 +2586,11 @@ mod tests {
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         // カーソルは index 1 ("B") を指している。
         terminal
             .draw(|f| {
@@ -2132,8 +2671,11 @@ mod tests {
     #[test]
     fn choice_list_does_not_panic_at_gap_boundary_widths() {
         // #488で追加されたgap分割の境界幅（W=IMAGE_TEXT_GAP_WIDTHちょうど、および+1）でも
-        // choice_list描画がpanicしないことを確認する。既存の
+        // draw()がpanicしないことを確認する。既存の
         // `choice_list_does_not_panic_at_extremely_narrow_width` はW=1のみをカバーしていた。
+        // #494以降これらの幅は fits_required_size を満たさず draw_too_small_message 側の
+        // 分岐に入るため、実際に draw_choice_list のgap境界そのものを踏むわけではないが、
+        // 「この幅でdraw()がpanicしない」という回帰ガードとしての価値は変わらず残す。
         let config = Config::default();
         let options = vec![choice_option("選択肢", "a")];
         let now = Instant::now();
@@ -2207,7 +2749,7 @@ mod tests {
         let now = Instant::now();
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 15)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -2519,18 +3061,19 @@ mod tests {
         };
         let line = dialog_line(Some("Player"), vec!["first line", "second line"]);
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+        let buffer = render(&config, Some(&line), Some(&reveal), CANVAS_W, CANVAS_H);
 
-        // #480 由来の分割ロジック（本Issueのスコープ外）: 40x10端末 → root[0]=(40,9)
-        // （status行1を除く）→ columns[1]=(x20,y0,w20,h9) → opponent_height=9/2=4
-        // （切り捨て）→ self_area=(x20,y4,w20,h5)（余りはselfが受け取る）。分割算出自体は
-        // 既存ロジックのため、変更後の期待値だけを page_indicator_area（本Issueで抽出した
-        // 純粋関数）に委ねてハードコードを避ける。
+        // #494: 端末サイズは固定キャンバス(CANVAS_W x CANVAS_H)ちょうどなので、テキスト列の
+        // Rectはsplit_columnsから、上下分割の高さはcanvas_text_rows_splitから、それぞれ
+        // 導出する（手計算した固定値をテストに直書きしない）。
+        let (_placeholder, _gap, text_area) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        let (opponent_height, self_height) = canvas_text_rows_split();
         let self_area = Rect {
-            x: 20,
-            y: 4,
-            width: 20,
-            height: 5,
+            x: text_area.x,
+            y: opponent_height,
+            width: text_area.width,
+            height: self_height,
         };
         let indicator_cell = page_indicator_area(self_area);
         let cell = buffer
@@ -2563,7 +3106,11 @@ mod tests {
 
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -2612,7 +3159,11 @@ mod tests {
         let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
 
-        let mut before_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut before_terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         before_terminal
             .draw(|f| {
                 draw(
@@ -2637,7 +3188,11 @@ mod tests {
             "indicator must be absent before reveal completes, buffer was: {before_text}"
         );
 
-        let mut after_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut after_terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         after_terminal
             .draw(|f| {
                 draw(
@@ -2707,5 +3262,77 @@ mod tests {
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert_eq!(text.trim(), "", "空optionsでは何も描画されないはず");
+    }
+
+    // ---- #494: 固定必要サイズの検算 ----
+
+    #[test]
+    fn fixed_canvas_image_pane_width_matches_required_image_cols() {
+        // REQUIRED_TEXT_COLS = REQUIRED_IMAGE_COLS + 2 という一見不思議な式（定数の
+        // doc コメント参照）が、実際に split_columns 経由で画像ペインを
+        // REQUIRED_IMAGE_COLS ちょうどの幅にすることを検算する。ここがズレると
+        // 正方形画像のクロップ0保証（`fixed_canvas_square_image_crops_nothing_at_required_image_pane_size`）
+        // の前提が崩れる。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        assert_eq!(
+            img.width, REQUIRED_IMAGE_COLS,
+            "image pane width should exactly match REQUIRED_IMAGE_COLS at the fixed canvas size"
+        );
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(text.width, REQUIRED_TEXT_COLS);
+    }
+
+    #[test]
+    fn fixed_canvas_square_image_crops_nothing_at_required_image_pane_size() {
+        // #494の核心の検算: gymnasiaの128x128マスター相当の正方形画像を、固定キャンバスの
+        // 画像ペイン(REQUIRED_IMAGE_COLS x REQUIRED_MAIN_CONTENT_ROWS)へ実際に
+        // rgba_to_quadrant_grid で変換したとき、cover-fitのクロップが発生しないことを
+        // 実データで確認する（`compute_cover_crop`の純粋関数レベルの検算は
+        // image_render.rs 側の `compute_cover_crop_result_aspect_ratio_matches_effective_target_ratio_within_rounding`
+        // に既にあるが、ここでは本Issueで導入した具体的な定数の組み合わせで実際にクロップ0に
+        // なることそのものを固定する）。
+        let img_w = 128u32;
+        let img_h = 128u32;
+        let mut pixels = Vec::with_capacity((img_w * img_h * 4) as usize);
+        for y in 0..img_h {
+            for x in 0..img_w {
+                // 縁(外側1px)だけ緑、それ以外は赤 — クロップが少しでも発生すれば緑が
+                // 混入して検出できるようにする。
+                let is_edge = x == 0 || y == 0 || x == img_w - 1 || y == img_h - 1;
+                if is_edge {
+                    pixels.extend_from_slice(&[0, 255, 0, 255]);
+                } else {
+                    pixels.extend_from_slice(&[255, 0, 0, 255]);
+                }
+            }
+        }
+        let grid = crate::image_render::rgba_to_quadrant_grid(
+            &pixels,
+            img_w,
+            img_h,
+            REQUIRED_IMAGE_COLS,
+            REQUIRED_MAIN_CONTENT_ROWS,
+        );
+        assert_eq!(grid.cols, REQUIRED_IMAGE_COLS);
+        assert_eq!(grid.rows, REQUIRED_MAIN_CONTENT_ROWS);
+        // クロップが発生していれば、外周セルの緑が失われ全セルが赤一色になる。
+        // クロップ無しなら外周セル(少なくとも四隅)には緑が残るはず。
+        let has_green_influence = |fg: (u8, u8, u8), bg: (u8, u8, u8)| fg.1 > 0 || bg.1 > 0;
+        let top_left = grid.cells[0];
+        let top_right = grid.cells[(REQUIRED_IMAGE_COLS - 1) as usize];
+        let bottom_left =
+            grid.cells[(REQUIRED_IMAGE_COLS as usize) * (REQUIRED_MAIN_CONTENT_ROWS - 1) as usize];
+        let bottom_right = grid.cells[grid.cells.len() - 1];
+        for (name, cell) in [
+            ("top_left", top_left),
+            ("top_right", top_right),
+            ("bottom_left", bottom_left),
+            ("bottom_right", bottom_right),
+        ] {
+            assert!(
+                has_green_influence(cell.fg, cell.bg),
+                "{name} corner cell should retain some green from the uncropped source edge, got {cell:?}"
+            );
+        }
     }
 }
