@@ -126,7 +126,16 @@ pub const PAGE_INDICATOR_BLINK_PERIOD_MS: u64 = 1000;
 /// 完全な on/off 切り替えを表す（#495）。`elapsed_ms / period_ms` が偶数なら表示区間、
 /// 奇数なら非表示区間になる。`now` が `started_at` より前（クロックの巻き戻り等の防御）でも
 /// `saturating_duration_since` で経過時間を0にクランプし、必ず表示区間（`true`）から始まる。
+///
+/// `period_ms == 0` はゼロ除算になる未定義入力のため、常に表示区間（`true`）扱いにフォール
+/// バックする（呼び出し元は常に定数 [`PAGE_INDICATOR_BLINK_PERIOD_MS`] を渡すため実運用では
+/// 到達しないが、この関数は `pub` な純粋関数として任意の `period_ms` を受け取れる形をして
+/// いるため、防御を省くとテストや将来の呼び出し元がここで panic しうる。テスト設計エージェント
+/// 指摘）。
 pub fn blink_visible(started_at: Instant, now: Instant, period_ms: u64) -> bool {
+    if period_ms == 0 {
+        return true;
+    }
     let elapsed_ms = now.saturating_duration_since(started_at).as_millis() as u64;
     (elapsed_ms / period_ms) % 2 == 0
 }
@@ -421,6 +430,18 @@ mod tests {
         let t = Instant::now();
         let earlier = t.checked_sub(Duration::from_millis(1)).unwrap_or(t);
         assert!(blink_visible(t, earlier, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_with_zero_period_ms_does_not_panic_and_stays_visible() {
+        // `period_ms=0` は `elapsed_ms / period_ms` がゼロ除算になる未定義入力。呼び出し元は
+        // 常に定数 `PAGE_INDICATOR_BLINK_PERIOD_MS`（非ゼロ）を渡すため実運用では起きないが、
+        // `blink_visible` は `pub` な純粋関数なので任意の `period_ms` を受け取れてしまう —
+        // ここでガードして常に表示区間（`true`）にフォールバックすることを固定する
+        // （テスト設計エージェント指摘、観点1）。
+        let t = Instant::now();
+        let now = t + Duration::from_millis(500);
+        assert!(blink_visible(t, now, 0));
     }
 
     #[test]
