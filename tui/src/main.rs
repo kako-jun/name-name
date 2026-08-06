@@ -5,6 +5,7 @@ mod image_render;
 mod input;
 mod playback;
 mod reveal;
+mod sentence;
 mod ui;
 
 use std::time::{Duration, Instant};
