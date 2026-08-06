@@ -3,6 +3,7 @@ mod config;
 mod image_fade;
 mod image_render;
 mod input;
+mod multi_doc;
 mod playback;
 mod reveal;
 mod sentence;
@@ -37,20 +38,37 @@ fn main() -> anyhow::Result<()> {
         None => Config::default(),
     };
 
-    let script_path = cli
-        .script_path
-        .clone()
-        .unwrap_or_else(|| config.entry_script_path());
-    let source = std::fs::read_to_string(&script_path).with_context(|| {
-        format!(
-            "Markdown原稿の読み込みに失敗しました: {}",
-            script_path.display()
-        )
-    })?;
-
-    let document = name_name_parser::parser::parse(&source);
-    let mut playback =
-        Playback::from_document(&document).with_sentence_per_page(config.sentence_per_page);
+    // `--script` は単一ファイルを直接指定する動作確認用の経路（`cli.rs` の doc comment
+    // 参照）。この場合は script_dir 配下の一括マージをせず、従来どおりそのファイル単体を
+    // parse する（単一ファイルなのでファイル境界情報は不要、`Playback::from_document`）。
+    // 未指定（通常の起動経路）は script_dir 配下の全 .md を一括マージし、クロスファイル
+    // ジャンプを解決できるようにする（#496）。この経路は複数ファイルが混在しうるため、
+    // マージが返すファイル境界情報（`chapter_file_ids`）を渡せる `Playback::from_merged_document`
+    // を使い、暗黙の advance がファイルをまたいで別ルートへ漏れないようにする（#496 追加スコープ）。
+    let playback = match &cli.script_path {
+        Some(script_path) => {
+            let source = std::fs::read_to_string(script_path).with_context(|| {
+                format!(
+                    "Markdown原稿の読み込みに失敗しました: {}",
+                    script_path.display()
+                )
+            })?;
+            let document = name_name_parser::parser::parse(&source);
+            Playback::from_document(&document)
+        }
+        None => {
+            let merged =
+                multi_doc::load_merged_document(&config.script_dir, &config.entry_script_path())
+                    .with_context(|| {
+                        format!(
+                            "script_dir 配下のMarkdown原稿マージに失敗しました: {}",
+                            config.script_dir.display()
+                        )
+                    })?;
+            Playback::from_merged_document(&merged.document, &merged.chapter_file_ids)
+        }
+    };
+    let mut playback = playback.with_sentence_per_page(config.sentence_per_page);
 
     run(&config, &mut playback)
 }
