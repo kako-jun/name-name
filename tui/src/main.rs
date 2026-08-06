@@ -3,6 +3,7 @@ mod config;
 mod image_fade;
 mod image_render;
 mod input;
+mod multi_doc;
 mod playback;
 mod reveal;
 mod sentence;
@@ -37,18 +38,28 @@ fn main() -> anyhow::Result<()> {
         None => Config::default(),
     };
 
-    let script_path = cli
-        .script_path
-        .clone()
-        .unwrap_or_else(|| config.entry_script_path());
-    let source = std::fs::read_to_string(&script_path).with_context(|| {
-        format!(
-            "Markdown原稿の読み込みに失敗しました: {}",
-            script_path.display()
-        )
-    })?;
-
-    let document = name_name_parser::parser::parse(&source);
+    // `--script` は単一ファイルを直接指定する動作確認用の経路（`cli.rs` の doc comment
+    // 参照）。この場合は script_dir 配下の一括マージをせず、従来どおりそのファイル単体を
+    // parse する。未指定（通常の起動経路）は script_dir 配下の全 .md を一括マージし、
+    // クロスファイルジャンプを解決できるようにする（#496）。
+    let document = match &cli.script_path {
+        Some(script_path) => {
+            let source = std::fs::read_to_string(script_path).with_context(|| {
+                format!(
+                    "Markdown原稿の読み込みに失敗しました: {}",
+                    script_path.display()
+                )
+            })?;
+            name_name_parser::parser::parse(&source)
+        }
+        None => multi_doc::load_merged_document(&config.script_dir, &config.entry_script_path())
+            .with_context(|| {
+                format!(
+                    "script_dir 配下のMarkdown原稿マージに失敗しました: {}",
+                    config.script_dir.display()
+                )
+            })?,
+    };
     let mut playback =
         Playback::from_document(&document).with_sentence_per_page(config.sentence_per_page);
 
