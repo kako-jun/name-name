@@ -224,7 +224,8 @@ pub fn draw_splash(frame: &mut Frame, config: &Config) {
 ///
 /// 本文は `reveal`（[`reveal::RevealState`]）が与えられていれば `RevealState::body_lines` から
 /// 組み立て（`Animating` はタイプライター表示のスナップショット、`Done` はスキップ済みの全文）、
-/// reveal 完了後は `pulse`（`jiwa::PulseHandle`）によるページ送りインジケータを行末に付け足す。
+/// reveal 完了後は `pulse`（`jiwa::PulseHandle`）によるページ送りインジケータをウィンドウ右下の
+/// 固定位置に描画する（[`draw_page_indicator`] 参照、#487）。
 /// `reveal` が `None`（会話行そのものが無い等）の場合は従来どおりの静的表示にフォールバックする。
 fn draw_text_windows(
     frame: &mut Frame,
@@ -268,13 +269,11 @@ fn draw_text_windows(
     let style = Style::default().fg(color);
 
     let mut rendered = Vec::new();
+    let mut show_page_indicator = false;
     match reveal {
         Some(state) => {
-            let mut body_lines = state.body_lines(now);
-            if state.is_done(now) {
-                append_page_indicator(&mut body_lines, pulse, now);
-            }
-            rendered.extend(body_lines);
+            rendered.extend(state.body_lines(now));
+            show_page_indicator = state.is_done(now);
         }
         None => {
             for text_line in &line.text {
@@ -285,6 +284,10 @@ fn draw_text_windows(
 
     let paragraph = Paragraph::new(Text::from(rendered)).wrap(Wrap { trim: false });
     render_wrapped_paragraph(frame, target_area, paragraph);
+
+    if show_page_indicator {
+        draw_page_indicator(frame, target_area, pulse, now);
+    }
 }
 
 /// wrap 付き `Paragraph` を描画する際、危険な極小幅を避けるための下限セル数。
@@ -328,21 +331,52 @@ fn draw_status_line(
     frame.render_widget(paragraph, area);
 }
 
-/// reveal 完了後の入力待ちを示すページ送りインジケータ（既定では ▼）を、本文の最終行の
-/// 末尾に付け足す。本文行が1つも無い（空の会話行）場合は、インジケータだけの行を追加する。
-/// 表示中（未 reveal）にはこの関数を呼ばない — 呼び出し側（`draw_text_windows`）が
-/// `handle.is_done(now)` で既にガードしている。
-fn append_page_indicator(lines: &mut Vec<Line<'static>>, pulse: &PulseHandle, now: Instant) {
-    let frame = pulse.snapshot(now);
-    let Rgb(r, g, b) = frame.color;
-    let span = Span::styled(
-        format!(" {}", frame.text),
-        Style::default().fg(Color::Rgb(r, g, b)),
-    );
-    match lines.last_mut() {
-        Some(last) => last.spans.push(span),
-        None => lines.push(Line::from(vec![span])),
+/// ページ送りインジケータ（▼）をウィンドウ右下から固定するセル数
+/// （GUI版 `frontend/src/game/DialogBox.ts:1323-1329` の adv 右下固定
+/// `boxX + boxW - 40`, `boxY + boxH - 45` を踏襲、#487）。GUI側はpx単位だが、TUI側は
+/// セル単位の座標系のためpxをそのまま換算せず、右端/下端から数セル内側という見た目の
+/// 意図だけを移植する。`PAGE_INDICATOR_INSET_COLS` は「右からNセル目」の意味で、
+/// N=3なら右端の2セルぶんは常に空けたまま（角にめり込ませない）。
+const PAGE_INDICATOR_INSET_COLS: u16 = 3;
+/// [`PAGE_INDICATOR_INSET_COLS`] の下端版。N=2なら下端の1セルぶんは常に空ける。
+const PAGE_INDICATOR_INSET_ROWS: u16 = 2;
+
+/// [`PAGE_INDICATOR_INSET_COLS`]/[`PAGE_INDICATOR_INSET_ROWS`] を使って、`area`（opponent_area/
+/// self_area いずれかのウィンドウ矩形）内の右下固定インジケータ位置（幅・高さ1セル）を返す
+/// 純粋関数（レンダラ非依存、テストで直接検証できるよう `draw_page_indicator` から分離）。
+/// `area` の幅/高さがオフセット未満の極小ウィンドウでは `saturating_sub` で `area` の左上角
+/// （x=area.x/y=area.y）側へクランプし、`area` の外へはみ出さないようにする。
+fn page_indicator_area(area: Rect) -> Rect {
+    let x = area.x + area.width.saturating_sub(PAGE_INDICATOR_INSET_COLS);
+    let y = area.y + area.height.saturating_sub(PAGE_INDICATOR_INSET_ROWS);
+    Rect {
+        x,
+        y,
+        width: 1,
+        height: 1,
     }
+}
+
+/// reveal 完了後の入力待ちを示すページ送りインジケータ（既定では ▼）を、`area`（発言側の
+/// ウィンドウ、opponent_area/self_area いずれか）の右下固定位置（[`page_indicator_area`]）に
+/// 描画する。#487 より前は本文最終行の末尾に文末追従で付けていたが、GUI版のadv固定仕様
+/// （`DialogBox.ts` 参照）に合わせてウィンドウ右下固定へ変更した — gymnasiaの `dialog_style`
+/// は常にadvのため、TUI側もdialog_style分岐を作らずadv右下固定のみを実装する。
+/// 表示中（未 reveal）にはこの関数を呼ばない — 呼び出し側（`draw_text_windows`）が
+/// `state.is_done(now)` で既にガードしている。`area` の幅が [`MIN_SAFE_TEXT_WRAP_WIDTH`]
+/// 未満、または高さが0の極小ウィンドウでは何もしない — 幅ガードは
+/// [`render_wrapped_paragraph`] が本文パラグラフの描画をスキップする閾値と揃えたもので、
+/// これが無いと「本文は消えるがインジケータだけ浮く」表示不整合が起きる（セルフレビュー
+/// 指摘、#487）。
+fn draw_page_indicator(frame: &mut Frame, area: Rect, pulse: &PulseHandle, now: Instant) {
+    if area.width < MIN_SAFE_TEXT_WRAP_WIDTH || area.height == 0 {
+        return;
+    }
+    let snapshot = pulse.snapshot(now);
+    let Rgb(r, g, b) = snapshot.color;
+    let span = Span::styled(snapshot.text, Style::default().fg(Color::Rgb(r, g, b)));
+    let paragraph = Paragraph::new(Line::from(span));
+    frame.render_widget(paragraph, page_indicator_area(area));
 }
 
 #[cfg(test)]
@@ -911,7 +945,11 @@ mod tests {
     }
 
     #[test]
-    fn page_indicator_attaches_to_last_line_of_multiline_body() {
+    fn page_indicator_is_fixed_at_window_bottom_right_not_attached_to_body_text() {
+        // #487: GUI版advの右下固定（DialogBox.ts:1323-1329）に合わせ、文末追従をやめた。
+        // 旧テスト（page_indicator_attaches_to_last_line_of_multiline_body）は文末追従を
+        // 検証していたが、新仕様ではインジケータは本文の長さに関わらずウィンドウ右下の
+        // 固定セルに描画される。
         let config = Config::default();
         let line = DisplayLine {
             speaker: Some("A".to_string()),
@@ -941,22 +979,37 @@ mod tests {
                 )
             })
             .unwrap();
-        let rows = buffer_rows(terminal.backend().buffer());
-        let indicator_row = rows
-            .iter()
-            .find(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL));
-        assert!(indicator_row.is_some(), "rows were: {rows:?}");
-        assert!(
-            indicator_row.unwrap().contains("second line"),
-            "indicator should be attached to the last body line, rows were: {rows:?}"
+        let buffer = terminal.backend().buffer();
+        let rows = buffer_rows(buffer);
+
+        // speaker "A" は Config::default() の player_speakers に含まれないため相手（上）窓。
+        // 60x10端末 → root[0]=(60,9)（status行1を除く）→ columns[1]=(x30,y0,w30,h9）→
+        // opponent_height=9/2=4（切り捨て）→ opponent_area=(x30,y0,w30,h4)。この分割算出
+        // 自体は #480 由来の既存ロジック（本Issueのスコープ外）で、変更後の期待値だけを
+        // `page_indicator_area`（本Issueで抽出した純粋関数）に委ねてハードコードを避ける。
+        let opponent_area = Rect {
+            x: 30,
+            y: 0,
+            width: 30,
+            height: 4,
+        };
+        let indicator_cell = page_indicator_area(opponent_area);
+        let cell = buffer
+            .cell((indicator_cell.x, indicator_cell.y))
+            .expect("in bounds");
+        assert_eq!(
+            cell.symbol(),
+            reveal::PAGE_INDICATOR_SYMBOL,
+            "indicator should render at the fixed bottom-right cell, rows were: {rows:?}"
         );
-        let first_line_row = rows
+
+        let second_line_row = rows
             .iter()
-            .find(|r| r.contains("first line"))
-            .expect("first line should be rendered");
+            .find(|r| r.contains("second line"))
+            .expect("second line should be rendered");
         assert!(
-            !first_line_row.contains(reveal::PAGE_INDICATOR_SYMBOL),
-            "indicator must not appear on a non-last line, rows were: {rows:?}"
+            !second_line_row.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must no longer attach to the body's last line (adv fixed position), rows were: {rows:?}"
         );
     }
 
@@ -1980,6 +2033,443 @@ mod tests {
         assert!(
             rows_with_a >= 2,
             "十分に長い全角文字列なので複数行に折り返されるはず（実際は{rows_with_a}行）"
+        );
+    }
+
+    // -- D. page_indicator_area 単体テスト（#487） --
+    //
+    // `draw_page_indicator` から抽出した純粋関数（Frame不要）の境界値テスト。
+    // `PAGE_INDICATOR_INSET_COLS`/`PAGE_INDICATOR_INSET_ROWS` を直値で書き写さず、
+    // 定数からの相対値・関数呼び出しの戻り値から期待値を導出する
+    // （docs/operations/doctrine/name-name/guidelines/README.md の
+    // 「テストの期待値に定数の計算結果を直書きしない」規約）。
+
+    /// x軸の境界値テスト共通の高さ。`PAGE_INDICATOR_INSET_ROWS` の境界から十分離しておき、
+    /// y側のクランプが混ざってx側の判定を汚染しないようにする。
+    fn safe_height_above_row_inset() -> u16 {
+        PAGE_INDICATOR_INSET_ROWS + 50
+    }
+
+    /// y軸の境界値テスト共通の幅。上記の列版。
+    fn safe_width_above_col_inset() -> u16 {
+        PAGE_INDICATOR_INSET_COLS + 50
+    }
+
+    #[test]
+    fn page_indicator_area_clamps_x_when_width_below_inset() {
+        // width = inset - 1: saturating_sub は 0 未満へ潜らずクランプするため、
+        // インジケータは area の左上角(x=area.x)まで寄る。
+        let width = PAGE_INDICATOR_INSET_COLS - 1;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: safe_height_above_row_inset(),
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.x, area.x,
+            "width(inset-1) should clamp x to area.x, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_clamps_x_when_width_equals_inset() {
+        // width == inset: saturating_sub が自然に 0 になる境界（クランプ分岐と結果は
+        // 上のテストと同じだが、算術的な経路が異なるため明示的に区別する）。
+        let width = PAGE_INDICATOR_INSET_COLS;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: safe_height_above_row_inset(),
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.x, area.x,
+            "width == inset should still clamp x to area.x, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_offsets_x_when_width_above_inset() {
+        // width = inset + 1: クランプが外れ、x は area.x から (width - inset) だけ
+        // 内側に入る（実装の `area.width.saturating_sub(INSET)` と同じ式で期待値を導出）。
+        let width = PAGE_INDICATOR_INSET_COLS + 1;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: safe_height_above_row_inset(),
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.x,
+            area.x + (width - PAGE_INDICATOR_INSET_COLS),
+            "width(inset+1) should offset x by (width - inset), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_clamps_y_when_height_below_inset() {
+        let height = PAGE_INDICATOR_INSET_ROWS - 1;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: safe_width_above_col_inset(),
+            height,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.y, area.y,
+            "height(inset-1) should clamp y to area.y, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_clamps_y_when_height_equals_inset() {
+        let height = PAGE_INDICATOR_INSET_ROWS;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: safe_width_above_col_inset(),
+            height,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.y, area.y,
+            "height == inset should still clamp y to area.y, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_offsets_y_when_height_above_inset() {
+        let height = PAGE_INDICATOR_INSET_ROWS + 1;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: safe_width_above_col_inset(),
+            height,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.y,
+            area.y + (height - PAGE_INDICATOR_INSET_ROWS),
+            "height(inset+1) should offset y by (height - inset), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_returns_1x1_rect_regardless_of_area_size() {
+        // 大きな area でも、インジケータのセル自体は常に 1x1（1文字幅の記号を1セルに描く）。
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            (result.width, result.height),
+            (1, 1),
+            "indicator rect must always be 1x1 regardless of area size, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_at_zero_sized_area_does_not_panic_and_pins_to_origin() {
+        // area.width==0 && area.height==0 は draw_text_windows 側で target_area として
+        // そのまま渡り得る極小端末のケース。saturating_sub のおかげでオーバーフローせず、
+        // area の原点にピン留めされる。
+        let area = Rect {
+            x: 5,
+            y: 7,
+            width: 0,
+            height: 0,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            (result.x, result.y),
+            (area.x, area.y),
+            "zero-sized area should pin the indicator to its own origin, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_respects_nonzero_area_origin() {
+        // self_area は y=0 始まりとは限らない（opponent_area の下に続く）。原点をずらしても
+        // 「area の右下から一定オフセット」という相対関係そのものは変わらないことを、
+        // 原点0のareaとの差分比較で確認する（絶対座標を直書きしない回帰防止）。
+        let width = safe_width_above_col_inset();
+        let height = safe_height_above_row_inset();
+        let origin_area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+        let shifted_area = Rect {
+            x: 37,
+            y: 19,
+            width,
+            height,
+        };
+        let origin_result = page_indicator_area(origin_area);
+        let shifted_result = page_indicator_area(shifted_area);
+        assert_eq!(
+            shifted_result.x - shifted_area.x,
+            origin_result.x - origin_area.x,
+            "x offset from area origin should be identical regardless of area.x, \
+             origin={origin_result:?} shifted={shifted_result:?}"
+        );
+        assert_eq!(
+            shifted_result.y - shifted_area.y,
+            origin_result.y - origin_area.y,
+            "y offset from area origin should be identical regardless of area.y, \
+             origin={origin_result:?} shifted={shifted_result:?}"
+        );
+    }
+
+    // -- E. draw_page_indicator / draw_text_windows 経由テスト（#487、Terminal+Frame必要） --
+
+    #[test]
+    fn draw_page_indicator_skipped_when_target_area_width_zero() {
+        // w=1 端末では columns[1](テキスト側カラム)の幅がPercentage(50/50)分割で0になる
+        // （opponent/self とも幅0）。この場合 draw_page_indicator の `area.width == 0` ガードで
+        // 描画自体がスキップされ、PAGE_INDICATOR_SYMBOL がバッファに一切出現しない。
+        let config = Config::default();
+        let line = dialog_line(Some("相手"), vec!["hi"]); // player_speakers非該当=opponent側
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 1, 10);
+        let text = buffer_text(&buffer);
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must not render when the target window has zero width, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_page_indicator_skipped_when_target_area_width_below_min_safe_wrap() {
+        // w=4 端末では columns[1](テキスト側カラム)の幅がPercentage(50/50)分割で2になる
+        // （ceilを取る左=columns[0]が2、floorを取る右=columns[1]が2 — w=4は偶数なので両方2。
+        // opponent/self とも幅2を引き継ぐ）。これは0ではないが MIN_SAFE_TEXT_WRAP_WIDTH(3)
+        // 未満であり、本文側の render_wrapped_paragraph は既にこの幅で描画をスキップする
+        // （セルフレビューで実測された「幅4端末で▼が浮く」ケース）。draw_page_indicator も
+        // 同じ閾値でスキップし、本文が消えているのにインジケータだけ空白領域に残る表示不整合
+        // が起きないことを確認する。
+        let config = Config::default();
+        let line = dialog_line(Some("相手"), vec!["hi"]); // player_speakers非該当=opponent側
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 4, 10);
+        let text = buffer_text(&buffer);
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must not render when the target window width is below \
+             MIN_SAFE_TEXT_WRAP_WIDTH, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_page_indicator_skipped_when_target_area_height_zero() {
+        // w=40,h=2 端末では root/status行分離後の残り高さが1セルになり、テキスト側の
+        // opponent/self 上下分割 (height/2切り捨て・余り) で opponent 側が高さ0になる
+        // （既存の draw_does_not_panic_at_height_one と同系統のセットアップ、症状として
+        // 「描画有無」を見る点が異なる）。draw_page_indicator の `area.height == 0` ガードで
+        // スキップされ、PAGE_INDICATOR_SYMBOL が出現しないことを確認する。
+        let config = Config::default();
+        let line = dialog_line(Some("相手"), vec!["hi"]); // player_speakers非該当=opponent側
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 2);
+        let text = buffer_text(&buffer);
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must not render when the target window has zero height, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_shown_in_self_window_when_speaker_is_player() {
+        // 既存の page_indicator_is_fixed_at_window_bottom_right_not_attached_to_body_text は
+        // opponent側(話者がplayer_speakers非該当)のみを検証しており、self側の分岐
+        // （draw_text_windows の is_self_speaker == true → target_area = self_area）は
+        // 未カバーだった。self側でも同じ右下固定ロジックが適用されることを確認する。
+        let config = Config {
+            player_speakers: vec!["Player".to_string()],
+            ..Config::default()
+        };
+        let line = dialog_line(Some("Player"), vec!["first line", "second line"]);
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+
+        // #480 由来の分割ロジック（本Issueのスコープ外）: 40x10端末 → root[0]=(40,9)
+        // （status行1を除く）→ columns[1]=(x20,y0,w20,h9) → opponent_height=9/2=4
+        // （切り捨て）→ self_area=(x20,y4,w20,h5)（余りはselfが受け取る）。分割算出自体は
+        // 既存ロジックのため、変更後の期待値だけを page_indicator_area（本Issueで抽出した
+        // 純粋関数）に委ねてハードコードを避ける。
+        let self_area = Rect {
+            x: 20,
+            y: 4,
+            width: 20,
+            height: 5,
+        };
+        let indicator_cell = page_indicator_area(self_area);
+        let cell = buffer
+            .cell((indicator_cell.x, indicator_cell.y))
+            .expect("in bounds");
+        assert_eq!(
+            cell.symbol(),
+            reveal::PAGE_INDICATOR_SYMBOL,
+            "indicator should render at the self window's fixed bottom-right cell"
+        );
+    }
+
+    #[test]
+    fn page_indicator_absent_while_reveal_is_animating_not_done() {
+        // RevealState::Animating が未完了（is_done(now)==false）の間は draw_text_windows が
+        // show_page_indicator=false のまま draw_page_indicator を一切呼ばない。char_interval を
+        // 十分長くして「now時点では確実に未完了」を作る（render() ヘルパーは内部で新しい
+        // Instant::now() を取ってしまうため、Animating の時刻依存テストではこのテストの
+        // ドキュメントコメントの指針どおり手書きで now を共有する）。
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000;
+        config.typewriter.fade_duration_ms = 0;
+        let line = dialog_line(Some("A"), vec!["hello"]);
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
+        assert!(
+            !reveal.is_done(now),
+            "test precondition: must not be done yet"
+        );
+
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must stay absent while typing is still in progress, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_appears_at_the_instant_reveal_completes() {
+        // 同一の RevealHandle を2つの時刻でスナップショットし、is_done() が false→true に
+        // 切り替わる瞬間にインジケータの出現もトグルすることを1テスト内で確認する
+        // （ハンドルを2つ作る page_indicator_is_absent_while_typing_and_present_once_done とは
+        // 違い、同一ハンドルへの2回の draw で「同じアニメーションの前後」を見る）。
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 100;
+        config.typewriter.fade_duration_ms = 0;
+        let line = dialog_line(Some("A"), vec!["hi"]); // 2グラフェーム: total_runtime=100ms*1
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
+        let not_done_at = now;
+        let done_at = now + std::time::Duration::from_millis(150);
+        assert!(
+            !reveal.is_done(not_done_at),
+            "test precondition: not yet done"
+        );
+        assert!(reveal.is_done(done_at), "test precondition: done by 150ms");
+
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+
+        let mut before_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        before_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    not_done_at,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let before_text = buffer_text(before_terminal.backend().buffer());
+        assert!(
+            !before_text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must be absent before reveal completes, buffer was: {before_text}"
+        );
+
+        let mut after_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        after_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    done_at,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let after_text = buffer_text(after_terminal.backend().buffer());
+        assert!(
+            after_text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must appear the instant reveal completes, buffer was: {after_text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_symbol_renders_correctly_in_single_cell() {
+        // PAGE_INDICATOR_SYMBOL（▼）は East Asian Width = Ambiguous な記号で、フォント/端末に
+        // よって半角/全角の解釈が割れる。page_indicator_area が返す 1x1 の Rect にこの記号を
+        // 描画したとき、セルの symbol() がそのまま1個の PAGE_INDICATOR_SYMBOL になっており、
+        // 隣接セルへのはみ出しや空白パディングで壊れていないことを確認する（i18n観点）。
+        // width は MIN_SAFE_TEXT_WRAP_WIDTH ちょうど（#487 セルフレビュー後の draw_page_indicator
+        // ガードがこれ未満をスキップするため、それ以上を指定する必要がある。
+        // PAGE_INDICATOR_INSET_COLS と同値でもあるため x のクランプ挙動は変わらない）。
+        let area = Rect {
+            x: 2,
+            y: 2,
+            width: MIN_SAFE_TEXT_WRAP_WIDTH,
+            height: 1,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(6, 6)).unwrap();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        terminal
+            .draw(|f| draw_page_indicator(f, area, &pulse, now))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let cell = buffer.cell((area.x, area.y)).expect("in bounds");
+        assert_eq!(
+            cell.symbol(),
+            reveal::PAGE_INDICATOR_SYMBOL,
+            "the single target cell should carry exactly the indicator symbol"
         );
     }
 
