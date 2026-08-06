@@ -620,7 +620,11 @@ mod tests {
             dline_with_image(Some("B"), "world", Some(relative)),
         ]);
 
-        let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
 
         event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
@@ -659,7 +663,11 @@ mod tests {
             dline_with_image(Some("C"), "three", Some(relative)),
         ]);
 
-        let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let (mut next_action, _remaining) =
             action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
 
@@ -695,7 +703,11 @@ mod tests {
             dline_with_image(Some("B"), "next", Some(relative)),
         ]);
 
-        let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
 
         event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
@@ -763,7 +775,11 @@ mod tests {
     #[test]
     fn show_splash_advance_action_returns_true_without_entering_event_loop() {
         let config = splash_config();
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let (mut next_action, _remaining) = action_queue(vec![Action::Advance]);
 
         let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
@@ -774,7 +790,11 @@ mod tests {
     #[test]
     fn show_splash_quit_action_returns_false() {
         let config = splash_config();
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let (mut next_action, _remaining) = action_queue(vec![Action::Quit]);
 
         let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
@@ -785,7 +805,11 @@ mod tests {
     #[test]
     fn show_splash_none_action_keeps_looping_and_redraws() {
         let config = splash_config();
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let (mut next_action, remaining) = action_queue(vec![
             Action::None,
             Action::None,
@@ -806,7 +830,11 @@ mod tests {
     fn run_screens_skips_splash_when_should_show_splash_is_false() {
         let config = Config::default(); // splash.enabled == false（既定）
         assert!(!config.should_show_splash());
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let document = name_name_parser::parser::parse("");
         let mut playback = Playback::from_document(&document);
         let (mut next_action, _remaining) = action_queue(vec![Action::Quit]);
