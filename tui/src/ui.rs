@@ -2033,6 +2033,419 @@ mod tests {
         );
     }
 
+    // -- D. page_indicator_area 単体テスト（#487） --
+    //
+    // `draw_page_indicator` から抽出した純粋関数（Frame不要）の境界値テスト。
+    // `PAGE_INDICATOR_INSET_COLS`/`PAGE_INDICATOR_INSET_ROWS` を直値で書き写さず、
+    // 定数からの相対値・関数呼び出しの戻り値から期待値を導出する
+    // （docs/operations/doctrine/name-name/guidelines/README.md の
+    // 「テストの期待値に定数の計算結果を直書きしない」規約）。
+
+    /// x軸の境界値テスト共通の高さ。`PAGE_INDICATOR_INSET_ROWS` の境界から十分離しておき、
+    /// y側のクランプが混ざってx側の判定を汚染しないようにする。
+    fn safe_height_above_row_inset() -> u16 {
+        PAGE_INDICATOR_INSET_ROWS + 50
+    }
+
+    /// y軸の境界値テスト共通の幅。上記の列版。
+    fn safe_width_above_col_inset() -> u16 {
+        PAGE_INDICATOR_INSET_COLS + 50
+    }
+
+    #[test]
+    fn page_indicator_area_clamps_x_when_width_below_inset() {
+        // width = inset - 1: saturating_sub は 0 未満へ潜らずクランプするため、
+        // インジケータは area の左上角(x=area.x)まで寄る。
+        let width = PAGE_INDICATOR_INSET_COLS - 1;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: safe_height_above_row_inset(),
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.x, area.x,
+            "width(inset-1) should clamp x to area.x, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_clamps_x_when_width_equals_inset() {
+        // width == inset: saturating_sub が自然に 0 になる境界（クランプ分岐と結果は
+        // 上のテストと同じだが、算術的な経路が異なるため明示的に区別する）。
+        let width = PAGE_INDICATOR_INSET_COLS;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: safe_height_above_row_inset(),
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.x, area.x,
+            "width == inset should still clamp x to area.x, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_offsets_x_when_width_above_inset() {
+        // width = inset + 1: クランプが外れ、x は area.x から (width - inset) だけ
+        // 内側に入る（実装の `area.width.saturating_sub(INSET)` と同じ式で期待値を導出）。
+        let width = PAGE_INDICATOR_INSET_COLS + 1;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: safe_height_above_row_inset(),
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.x,
+            area.x + (width - PAGE_INDICATOR_INSET_COLS),
+            "width(inset+1) should offset x by (width - inset), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_clamps_y_when_height_below_inset() {
+        let height = PAGE_INDICATOR_INSET_ROWS - 1;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: safe_width_above_col_inset(),
+            height,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.y, area.y,
+            "height(inset-1) should clamp y to area.y, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_clamps_y_when_height_equals_inset() {
+        let height = PAGE_INDICATOR_INSET_ROWS;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: safe_width_above_col_inset(),
+            height,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.y, area.y,
+            "height == inset should still clamp y to area.y, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_offsets_y_when_height_above_inset() {
+        let height = PAGE_INDICATOR_INSET_ROWS + 1;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: safe_width_above_col_inset(),
+            height,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            result.y,
+            area.y + (height - PAGE_INDICATOR_INSET_ROWS),
+            "height(inset+1) should offset y by (height - inset), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_returns_1x1_rect_regardless_of_area_size() {
+        // 大きな area でも、インジケータのセル自体は常に 1x1（1文字幅の記号を1セルに描く）。
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            (result.width, result.height),
+            (1, 1),
+            "indicator rect must always be 1x1 regardless of area size, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_at_zero_sized_area_does_not_panic_and_pins_to_origin() {
+        // area.width==0 && area.height==0 は draw_text_windows 側で target_area として
+        // そのまま渡り得る極小端末のケース。saturating_sub のおかげでオーバーフローせず、
+        // area の原点にピン留めされる。
+        let area = Rect {
+            x: 5,
+            y: 7,
+            width: 0,
+            height: 0,
+        };
+        let result = page_indicator_area(area);
+        assert_eq!(
+            (result.x, result.y),
+            (area.x, area.y),
+            "zero-sized area should pin the indicator to its own origin, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_area_respects_nonzero_area_origin() {
+        // self_area は y=0 始まりとは限らない（opponent_area の下に続く）。原点をずらしても
+        // 「area の右下から一定オフセット」という相対関係そのものは変わらないことを、
+        // 原点0のareaとの差分比較で確認する（絶対座標を直書きしない回帰防止）。
+        let width = safe_width_above_col_inset();
+        let height = safe_height_above_row_inset();
+        let origin_area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+        let shifted_area = Rect {
+            x: 37,
+            y: 19,
+            width,
+            height,
+        };
+        let origin_result = page_indicator_area(origin_area);
+        let shifted_result = page_indicator_area(shifted_area);
+        assert_eq!(
+            shifted_result.x - shifted_area.x,
+            origin_result.x - origin_area.x,
+            "x offset from area origin should be identical regardless of area.x, \
+             origin={origin_result:?} shifted={shifted_result:?}"
+        );
+        assert_eq!(
+            shifted_result.y - shifted_area.y,
+            origin_result.y - origin_area.y,
+            "y offset from area origin should be identical regardless of area.y, \
+             origin={origin_result:?} shifted={shifted_result:?}"
+        );
+    }
+
+    // -- E. draw_page_indicator / draw_text_windows 経由テスト（#487、Terminal+Frame必要） --
+
+    #[test]
+    fn draw_page_indicator_skipped_when_target_area_width_zero() {
+        // w=1 端末では columns[1](テキスト側カラム)の幅がPercentage(50/50)分割で0になる
+        // （opponent/self とも幅0）。この場合 draw_page_indicator の `area.width == 0` ガードで
+        // 描画自体がスキップされ、PAGE_INDICATOR_SYMBOL がバッファに一切出現しない。
+        let config = Config::default();
+        let line = dialog_line(Some("相手"), vec!["hi"]); // player_speakers非該当=opponent側
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 1, 10);
+        let text = buffer_text(&buffer);
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must not render when the target window has zero width, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_page_indicator_skipped_when_target_area_height_zero() {
+        // w=40,h=2 端末では root/status行分離後の残り高さが1セルになり、テキスト側の
+        // opponent/self 上下分割 (height/2切り捨て・余り) で opponent 側が高さ0になる
+        // （既存の draw_does_not_panic_at_height_one と同系統のセットアップ、症状として
+        // 「描画有無」を見る点が異なる）。draw_page_indicator の `area.height == 0` ガードで
+        // スキップされ、PAGE_INDICATOR_SYMBOL が出現しないことを確認する。
+        let config = Config::default();
+        let line = dialog_line(Some("相手"), vec!["hi"]); // player_speakers非該当=opponent側
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 2);
+        let text = buffer_text(&buffer);
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must not render when the target window has zero height, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_shown_in_self_window_when_speaker_is_player() {
+        // 既存の page_indicator_is_fixed_at_window_bottom_right_not_attached_to_body_text は
+        // opponent側(話者がplayer_speakers非該当)のみを検証しており、self側の分岐
+        // （draw_text_windows の is_self_speaker == true → target_area = self_area）は
+        // 未カバーだった。self側でも同じ右下固定ロジックが適用されることを確認する。
+        let config = Config {
+            player_speakers: vec!["Player".to_string()],
+            ..Config::default()
+        };
+        let line = dialog_line(Some("Player"), vec!["first line", "second line"]);
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+
+        // #480 由来の分割ロジック（本Issueのスコープ外）: 40x10端末 → root[0]=(40,9)
+        // （status行1を除く）→ columns[1]=(x20,y0,w20,h9) → opponent_height=9/2=4
+        // （切り捨て）→ self_area=(x20,y4,w20,h5)（余りはselfが受け取る）。分割算出自体は
+        // 既存ロジックのため、変更後の期待値だけを page_indicator_area（本Issueで抽出した
+        // 純粋関数）に委ねてハードコードを避ける。
+        let self_area = Rect {
+            x: 20,
+            y: 4,
+            width: 20,
+            height: 5,
+        };
+        let indicator_cell = page_indicator_area(self_area);
+        let cell = buffer
+            .cell((indicator_cell.x, indicator_cell.y))
+            .expect("in bounds");
+        assert_eq!(
+            cell.symbol(),
+            reveal::PAGE_INDICATOR_SYMBOL,
+            "indicator should render at the self window's fixed bottom-right cell"
+        );
+    }
+
+    #[test]
+    fn page_indicator_absent_while_reveal_is_animating_not_done() {
+        // RevealState::Animating が未完了（is_done(now)==false）の間は draw_text_windows が
+        // show_page_indicator=false のまま draw_page_indicator を一切呼ばない。char_interval を
+        // 十分長くして「now時点では確実に未完了」を作る（render() ヘルパーは内部で新しい
+        // Instant::now() を取ってしまうため、Animating の時刻依存テストではこのテストの
+        // ドキュメントコメントの指針どおり手書きで now を共有する）。
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000;
+        config.typewriter.fade_duration_ms = 0;
+        let line = dialog_line(Some("A"), vec!["hello"]);
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
+        assert!(
+            !reveal.is_done(now),
+            "test precondition: must not be done yet"
+        );
+
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must stay absent while typing is still in progress, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_appears_at_the_instant_reveal_completes() {
+        // 同一の RevealHandle を2つの時刻でスナップショットし、is_done() が false→true に
+        // 切り替わる瞬間にインジケータの出現もトグルすることを1テスト内で確認する
+        // （ハンドルを2つ作る page_indicator_is_absent_while_typing_and_present_once_done とは
+        // 違い、同一ハンドルへの2回の draw で「同じアニメーションの前後」を見る）。
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 100;
+        config.typewriter.fade_duration_ms = 0;
+        let line = dialog_line(Some("A"), vec!["hi"]); // 2グラフェーム: total_runtime=100ms*1
+        let now = Instant::now();
+        let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
+        let not_done_at = now;
+        let done_at = now + std::time::Duration::from_millis(150);
+        assert!(
+            !reveal.is_done(not_done_at),
+            "test precondition: not yet done"
+        );
+        assert!(reveal.is_done(done_at), "test precondition: done by 150ms");
+
+        let pulse = reveal::build_pulse(now);
+        let mut image_cache = ImageCache::new();
+
+        let mut before_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        before_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    not_done_at,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let before_text = buffer_text(before_terminal.backend().buffer());
+        assert!(
+            !before_text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must be absent before reveal completes, buffer was: {before_text}"
+        );
+
+        let mut after_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        after_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    1,
+                    1,
+                    true,
+                    Some(&reveal),
+                    &pulse,
+                    done_at,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let after_text = buffer_text(after_terminal.backend().buffer());
+        assert!(
+            after_text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must appear the instant reveal completes, buffer was: {after_text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_symbol_renders_correctly_in_single_cell() {
+        // PAGE_INDICATOR_SYMBOL（▼）は East Asian Width = Ambiguous な記号で、フォント/端末に
+        // よって半角/全角の解釈が割れる。page_indicator_area が返す 1x1 の Rect にこの記号を
+        // 描画したとき、セルの symbol() がそのまま1個の PAGE_INDICATOR_SYMBOL になっており、
+        // 隣接セルへのはみ出しや空白パディングで壊れていないことを確認する（i18n観点）。
+        let area = Rect {
+            x: 2,
+            y: 2,
+            width: 1,
+            height: 1,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(6, 6)).unwrap();
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        terminal
+            .draw(|f| draw_page_indicator(f, area, &pulse, now))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let cell = buffer.cell((area.x, area.y)).expect("in bounds");
+        assert_eq!(
+            cell.symbol(),
+            reveal::PAGE_INDICATOR_SYMBOL,
+            "the single target cell should carry exactly the indicator symbol"
+        );
+    }
+
     #[test]
     fn choice_list_renders_nothing_but_does_not_panic_when_options_empty() {
         // Playback 側の修正（バグ2）後は options: [] の Choice が item 化されなくなるため
