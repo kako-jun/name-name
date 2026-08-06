@@ -268,6 +268,16 @@ fn average(sum: (u32, u32, u32, u32)) -> (u8, u8, u8) {
 /// 画像を組み立てる）がこの値を直書きせず参照するために公開している。
 pub(crate) const TERMINAL_CELL_ASPECT_RATIO: f64 = 0.5;
 
+/// 文字セル数ベースの `sub_h` を [`TERMINAL_CELL_ASPECT_RATIO`] で補正し、
+/// [`compute_cover_crop`] に渡す実効ターゲット高さ（`effective_target_h`）を導出する。
+/// `rgba_to_quadrant_grid` の本番計算とテストが同じ式を別々に再実装して重複しないよう、
+/// 両者から呼び出す共通の純粋関数として切り出している。
+fn effective_target_height(sub_h: u32) -> u32 {
+    (f64::from(sub_h) / TERMINAL_CELL_ASPECT_RATIO)
+        .round()
+        .max(1.0) as u32
+}
+
 /// アスペクト比を保ったまま `target_w` x `target_h` の領域を覆う（cover-fit）ために、元画像
 /// （`img_w` x `img_h`）側から中央基準で切り出すべき矩形を計算する。
 ///
@@ -411,9 +421,7 @@ pub fn rgba_to_quadrant_grid(
     // 実効ターゲット比 = (sub_w:sub_h) をセルの実アスペクト比で補正したもの。
     // TERMINAL_CELL_ASPECT_RATIO = セルの幅/高さ なので、sub_h を割ることで
     // 「セルが縦長なぶん実効的な高さが大きくなる」効果を反映する。
-    let effective_target_h = (f64::from(sub_h) / TERMINAL_CELL_ASPECT_RATIO)
-        .round()
-        .max(1.0) as u32;
+    let effective_target_h = effective_target_height(sub_h);
     let (crop_x, crop_y, crop_w, crop_h) =
         compute_cover_crop(img_w, img_h, sub_w, effective_target_h);
     let cropped = crop_rgba(pixels, img_w, crop_x, crop_y, crop_w, crop_h);
@@ -832,9 +840,9 @@ mod tests {
         // doctrine「等価性の機械的証明」: compute_cover_crop の戻り値のアスペクト比
         // (crop_w/crop_h) は、渡した target 側の比 (target_w/target_h) と整数丸め誤差の
         // 範囲内で一致するはず。rgba_to_quadrant_grid が実際に呼び出す際の target は
-        // 文字セル数(sub_w x sub_h)を TERMINAL_CELL_ASPECT_RATIO で補正した
-        // effective_target_h なので、その式をそのまま使い実利用に即した値で検証する
-        // （期待値を直書きせず、定数と実際の計算から導出する）。
+        // 文字セル数(sub_w x sub_h)を effective_target_height() で補正した
+        // effective_target_h なので、本番と同じ関数をそのまま呼び実利用に即した値で
+        // 検証する（期待値を直書きせず、本番の計算関数から導出する）。
         //
         // img は十分大きい値だけを使う（1x1 等の極小画像は `clamp(1, img_w/img_h)` で
         // 比が保てなくなることが意図された挙動であり、それは別テスト
@@ -853,9 +861,7 @@ mod tests {
         for &(cols, rows) in &cell_grids {
             let sub_w = u32::from(cols) * 2;
             let sub_h = u32::from(rows) * 2;
-            let effective_target_h = (f64::from(sub_h) / TERMINAL_CELL_ASPECT_RATIO)
-                .round()
-                .max(1.0) as u32;
+            let effective_target_h = effective_target_height(sub_h);
             let target_ratio = f64::from(sub_w) / f64::from(effective_target_h);
 
             for &(img_w, img_h) in &img_sizes {
