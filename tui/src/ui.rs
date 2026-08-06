@@ -17,7 +17,6 @@
 use std::str::FromStr;
 use std::time::Instant;
 
-use jiwa::{PulseHandle, Rgb};
 use name_name_parser::models::ChoiceOption;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -70,8 +69,10 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// 表示していた情報を、枠を使わず最小限の形で残すためのもの（過剰な装飾はしない）。
 ///
 /// `reveal` は現在の会話行のタイプライター表示状態（[`reveal::RevealState`]、`None` は行
-/// そのものが無いケース）、`pulse` はページ送りインジケータ（reveal 完了後にのみ表示する）、
-/// `now` はこのフレームの描画時刻（`reveal`/`pulse` の `snapshot`/`body_lines` に渡す基準時刻。
+/// そのものが無いケース）、`indicator_started_at` はページ送りインジケータの点滅基準時刻
+/// （reveal 完了後にのみ表示する。[`reveal::blink_visible`] にそのまま渡す。色はウィンドウ
+/// （自分側/相手側）ごとに `draw_text_windows` が決める、#495）、`now` はこのフレームの
+/// 描画時刻（`reveal`/`indicator_started_at` の `body_lines`/`blink_visible` に渡す基準時刻。
 /// `RevealState::Done` はこれを無視する）。`image_fade` は左側に描画するイベント絵の
 /// クロスフェード状態（[`ImageFadeState`]、`None` は event_image を一切扱わない呼び出し元
 /// 向けのフォールバック）、`image_cache` はそのデコード結果キャッシュ（#481）。
@@ -95,7 +96,7 @@ pub fn draw(
     total: usize,
     is_at_end: bool,
     reveal: Option<&reveal::RevealState>,
-    pulse: &PulseHandle,
+    indicator_started_at: Instant,
     now: Instant,
     image_fade: Option<&ImageFadeState>,
     image_cache: &mut ImageCache,
@@ -119,7 +120,15 @@ pub fn draw(
     draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
     match choice {
         Some((options, cursor)) => draw_choice_list(frame, text_area, options, cursor),
-        None => draw_text_windows(frame, text_area, config, line, reveal, pulse, now),
+        None => draw_text_windows(
+            frame,
+            text_area,
+            config,
+            line,
+            reveal,
+            indicator_started_at,
+            now,
+        ),
     }
     draw_status_line(frame, root[1], config, position, total, is_at_end);
 }
@@ -256,8 +265,12 @@ pub fn draw_splash(frame: &mut Frame, config: &Config) {
 ///
 /// 本文は `reveal`（[`reveal::RevealState`]）が与えられていれば `RevealState::body_lines` から
 /// 組み立て（`Animating` はタイプライター表示のスナップショット、`Done` はスキップ済みの全文）、
-/// reveal 完了後は `pulse`（`jiwa::PulseHandle`）によるページ送りインジケータをウィンドウ右下の
-/// 固定位置に描画する（[`draw_page_indicator`] 参照、#487）。
+/// reveal 完了後は [`reveal::blink_visible`] による1秒周期の完全on/off点滅でページ送り
+/// インジケータをウィンドウ右下の固定位置に描画する（[`draw_page_indicator`] 参照、#487/#495）。
+/// インジケータの色は「そのウィンドウが自分側(self)か相手側(opponent)か」に応じて
+/// `config.colors.player`/`config.colors.opponent` をそのまま使う（本文色と同じ配色設定を
+/// 再利用し、専用の色設定は増やさない — GUI版 `DialogBox.ts` の
+/// `DUAL_WINDOW_SELF_INDICATOR_COLOR`/`DUAL_WINDOW_OPPONENT_INDICATOR_COLOR` と同じ役割分担）。
 /// `reveal` が `None`（会話行そのものが無い等）の場合は従来どおりの静的表示にフォールバックする。
 fn draw_text_windows(
     frame: &mut Frame,
@@ -265,7 +278,7 @@ fn draw_text_windows(
     config: &Config,
     line: Option<&DisplayLine>,
     reveal: Option<&reveal::RevealState>,
-    pulse: &PulseHandle,
+    indicator_started_at: Instant,
     now: Instant,
 ) {
     let opponent_height = area.height / 2; // 切り捨て
@@ -318,7 +331,23 @@ fn draw_text_windows(
     render_wrapped_paragraph(frame, target_area, paragraph);
 
     if show_page_indicator {
-        draw_page_indicator(frame, target_area, pulse, now);
+        // 本文色（`color_name_for`、ナレーションでは3色目の gray もありうる）とは別に、
+        // インジケータは常に「自分側/相手側」の2択（GUI版 `DUAL_WINDOW_SELF_INDICATOR_COLOR`/
+        // `DUAL_WINDOW_OPPONENT_INDICATOR_COLOR` と同じ役割分担）。既存の `ColorConfig` の
+        // `player`/`opponent` フィールドをそのまま使い、新しい色設定は増やさない（#495）。
+        let indicator_color_name = if is_self_speaker {
+            config.colors.player.as_str()
+        } else {
+            config.colors.opponent.as_str()
+        };
+        let indicator_color = Color::from_str(indicator_color_name).unwrap_or(Color::White);
+        draw_page_indicator(
+            frame,
+            target_area,
+            indicator_color,
+            indicator_started_at,
+            now,
+        );
     }
 }
 
@@ -400,13 +429,30 @@ fn page_indicator_area(area: Rect) -> Rect {
 /// [`render_wrapped_paragraph`] が本文パラグラフの描画をスキップする閾値と揃えたもので、
 /// これが無いと「本文は消えるがインジケータだけ浮く」表示不整合が起きる（セルフレビュー
 /// 指摘、#487）。
-fn draw_page_indicator(frame: &mut Frame, area: Rect, pulse: &PulseHandle, now: Instant) {
+///
+/// `color` は呼び出し側（`draw_text_windows`）がウィンドウの自分側/相手側に応じて既に決定
+/// 済みの固定色（表示されている間ずっと同じ色 — `jiwa::PulseHandle` の連続色補間は使わない、
+/// #495）。`blink_started_at`/`now` は [`reveal::blink_visible`] にそのまま渡し、非表示区間
+/// （1秒周期の奇数区間）ではグリフの描画自体をスキップする（GUI版 `DialogBox.ts` の
+/// `this.indicatorGlyph.visible = this.indicatorBlinkOn` と同じ完全on/off切り替え）。
+fn draw_page_indicator(
+    frame: &mut Frame,
+    area: Rect,
+    color: Color,
+    blink_started_at: Instant,
+    now: Instant,
+) {
     if area.width < MIN_SAFE_TEXT_WRAP_WIDTH || area.height == 0 {
         return;
     }
-    let snapshot = pulse.snapshot(now);
-    let Rgb(r, g, b) = snapshot.color;
-    let span = Span::styled(snapshot.text, Style::default().fg(Color::Rgb(r, g, b)));
+    if !reveal::blink_visible(
+        blink_started_at,
+        now,
+        reveal::PAGE_INDICATOR_BLINK_PERIOD_MS,
+    ) {
+        return;
+    }
+    let span = Span::styled(reveal::PAGE_INDICATOR_SYMBOL, Style::default().fg(color));
     let paragraph = Paragraph::new(Line::from(span));
     frame.render_widget(paragraph, page_indicator_area(area));
 }
@@ -517,7 +563,6 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(10, 4)).unwrap();
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| {
@@ -530,7 +575,7 @@ mod tests {
                     0,
                     true,
                     None,
-                    &pulse,
+                    now,
                     now,
                     Some(&image_fade),
                     &mut image_cache,
@@ -568,7 +613,6 @@ mod tests {
         for (w, h) in [(1u16, 1u16), (2, 1), (1, 2), (2, 2), (1, 3)] {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             let now = Instant::now();
-            let pulse = reveal::build_pulse(now);
             let mut image_cache = ImageCache::new();
             terminal
                 .draw(|f| {
@@ -581,7 +625,7 @@ mod tests {
                         0,
                         true,
                         None,
-                        &pulse,
+                        now,
                         now,
                         Some(&image_fade),
                         &mut image_cache,
@@ -601,7 +645,6 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(20, 6)).unwrap();
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| {
@@ -614,7 +657,7 @@ mod tests {
                     0,
                     true,
                     None,
-                    &pulse,
+                    now,
                     now,
                     Some(&image_fade),
                     &mut image_cache,
@@ -648,7 +691,6 @@ mod tests {
         config.placeholder.label = "[画像]".to_string();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| {
@@ -661,7 +703,7 @@ mod tests {
                     0,
                     true,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -679,7 +721,6 @@ mod tests {
         config.placeholder.label = "[画像]".to_string();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| {
@@ -692,7 +733,7 @@ mod tests {
                     0,
                     true,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -708,7 +749,6 @@ mod tests {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| {
@@ -721,7 +761,7 @@ mod tests {
                     1,
                     true,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -737,7 +777,6 @@ mod tests {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| {
@@ -750,7 +789,7 @@ mod tests {
                     2,
                     false,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -766,7 +805,6 @@ mod tests {
         let config = Config::default();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| {
@@ -779,7 +817,7 @@ mod tests {
                     0,
                     true,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -804,7 +842,6 @@ mod tests {
         // 左右 Percentage(50/50)・テキスト側の上下 Length(height/2 と余り) がいずれも
         // width/height=1 (0 セルに丸まる) で panic しないことを確認する。
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| {
@@ -817,7 +854,7 @@ mod tests {
                     1,
                     true,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -838,7 +875,6 @@ mod tests {
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
@@ -852,7 +888,7 @@ mod tests {
                     1,
                     true,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -880,7 +916,6 @@ mod tests {
         typing_config.typewriter.fade_duration_ms = 0;
         let typing_reveal =
             reveal::RevealState::Animating(reveal::build_reveal(&typing_config, &line, now));
-        let typing_pulse = reveal::build_pulse(now);
         let mut typing_image_cache = ImageCache::new();
         let mut typing_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         typing_terminal
@@ -894,7 +929,7 @@ mod tests {
                     1,
                     true,
                     Some(&typing_reveal),
-                    &typing_pulse,
+                    now,
                     now,
                     None,
                     &mut typing_image_cache,
@@ -914,7 +949,6 @@ mod tests {
         done_config.typewriter.fade_duration_ms = 0;
         let done_reveal =
             reveal::RevealState::Animating(reveal::build_reveal(&done_config, &line, now));
-        let done_pulse = reveal::build_pulse(now);
         let mut done_image_cache = ImageCache::new();
         let mut done_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         done_terminal
@@ -928,7 +962,7 @@ mod tests {
                     1,
                     true,
                     Some(&done_reveal),
-                    &done_pulse,
+                    now,
                     now,
                     None,
                     &mut done_image_cache,
@@ -970,7 +1004,6 @@ mod tests {
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
@@ -984,7 +1017,7 @@ mod tests {
                     1,
                     true,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -1012,7 +1045,6 @@ mod tests {
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
         terminal
@@ -1026,7 +1058,7 @@ mod tests {
                     1,
                     true,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -1077,7 +1109,6 @@ mod tests {
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
         terminal
@@ -1091,7 +1122,7 @@ mod tests {
                     1,
                     true,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -1235,7 +1266,6 @@ mod tests {
         height: u16,
     ) -> Buffer {
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
@@ -1249,7 +1279,7 @@ mod tests {
                     1,
                     false,
                     reveal,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -1561,7 +1591,6 @@ mod tests {
         for (w, h) in [(6u16, 4u16), (6, 5), (6, 6)] {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             let now = Instant::now();
-            let pulse = reveal::build_pulse(now);
             let mut image_cache = ImageCache::new();
             terminal
                 .draw(|f| {
@@ -1574,7 +1603,7 @@ mod tests {
                         0,
                         true,
                         None,
-                        &pulse,
+                        now,
                         now,
                         None,
                         &mut image_cache,
@@ -1632,7 +1661,6 @@ mod tests {
         let line = dialog_line(Some("主格"), vec!["hello"]);
         let now = Instant::now();
         let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
         terminal
@@ -1646,7 +1674,7 @@ mod tests {
                     1,
                     false,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -1679,7 +1707,6 @@ mod tests {
         typing_config.typewriter.fade_duration_ms = 0;
         let typing_reveal =
             reveal::RevealState::Animating(reveal::build_reveal(&typing_config, &line, now));
-        let typing_pulse = reveal::build_pulse(now);
         let mut typing_image_cache = ImageCache::new();
         let mut typing_terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
         typing_terminal
@@ -1693,7 +1720,7 @@ mod tests {
                     1,
                     false,
                     Some(&typing_reveal),
-                    &typing_pulse,
+                    now,
                     now,
                     None,
                     &mut typing_image_cache,
@@ -1714,7 +1741,6 @@ mod tests {
         done_config.typewriter.fade_duration_ms = 0;
         let done_reveal =
             reveal::RevealState::Animating(reveal::build_reveal(&done_config, &line, now));
-        let done_pulse = reveal::build_pulse(now);
         let mut done_image_cache = ImageCache::new();
         let mut done_terminal = Terminal::new(TestBackend::new(40, 11)).unwrap();
         done_terminal
@@ -1728,7 +1754,7 @@ mod tests {
                     1,
                     false,
                     Some(&done_reveal),
-                    &done_pulse,
+                    now,
                     now,
                     None,
                     &mut done_image_cache,
@@ -1824,7 +1850,6 @@ mod tests {
         let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(7, 10)).unwrap();
         terminal
@@ -1838,7 +1863,7 @@ mod tests {
                     1,
                     false,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     now,
                     Some(&image_fade),
                     &mut image_cache,
@@ -2017,7 +2042,6 @@ mod tests {
             choice_option("わからない", "c"),
         ];
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
@@ -2031,7 +2055,7 @@ mod tests {
                     1,
                     false,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -2049,7 +2073,6 @@ mod tests {
         let config = Config::default();
         let options = vec![choice_option("A", "a"), choice_option("B", "b")];
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         // カーソルは index 1 ("B") を指している。
@@ -2064,7 +2087,7 @@ mod tests {
                     1,
                     false,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -2106,7 +2129,6 @@ mod tests {
         let config = Config::default();
         let options = vec![choice_option("選択肢", "a")];
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(1, 3)).unwrap();
         terminal
@@ -2120,7 +2142,7 @@ mod tests {
                     1,
                     false,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -2137,7 +2159,6 @@ mod tests {
         let config = Config::default();
         let options = vec![choice_option("選択肢", "a")];
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         for w in [IMAGE_TEXT_GAP_WIDTH, IMAGE_TEXT_GAP_WIDTH + 1] {
             let mut image_cache = ImageCache::new();
             let mut terminal = Terminal::new(TestBackend::new(w, 3)).unwrap();
@@ -2152,7 +2173,7 @@ mod tests {
                         1,
                         false,
                         None,
-                        &pulse,
+                        now,
                         now,
                         None,
                         &mut image_cache,
@@ -2171,7 +2192,6 @@ mod tests {
             .map(|i| choice_option(&format!("選択肢{i}"), "x"))
             .collect();
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
         terminal
@@ -2185,7 +2205,7 @@ mod tests {
                     1,
                     false,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -2205,7 +2225,6 @@ mod tests {
         let long_text = "あ".repeat(60);
         let options = vec![choice_option(&long_text, "x")];
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(20, 15)).unwrap();
         terminal
@@ -2219,7 +2238,7 @@ mod tests {
                     1,
                     false,
                     None,
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -2543,6 +2562,191 @@ mod tests {
         );
     }
 
+    // ---- #495: ページ送りインジケータの色・点滅仕様 ----
+    //
+    // GUI版 `frontend/src/game/DialogBox.ts` の DUAL_WINDOW_SELF_INDICATOR_COLOR(白)/
+    // DUAL_WINDOW_OPPONENT_INDICATOR_COLOR(水色) と INDICATOR_BLINK_MS(1000ms、完全on/off)
+    // に TUI 側を揃えたことを、draw() を通したレンダリング結果で確認する
+    // （reveal::blink_visible 自体の境界値テストは reveal.rs 側にある）。
+
+    /// `width`x`height` 端末での opponent(上)/self(下) ウィンドウの Rect を、ハードコードせず
+    /// `draw_text_windows` と同じ計算（`split_columns` → 上下 Length 分割）で導出する。
+    fn text_sub_areas(width: u16, height: u16) -> (Rect, Rect) {
+        let (_placeholder, _gap, text_area) = split_columns(Rect::new(0, 0, width, height - 1));
+        let opponent_height = text_area.height / 2;
+        let self_height = text_area.height - opponent_height;
+        let opponent_area = Rect {
+            x: text_area.x,
+            y: text_area.y,
+            width: text_area.width,
+            height: opponent_height,
+        };
+        let self_area = Rect {
+            x: text_area.x,
+            y: text_area.y + opponent_height,
+            width: text_area.width,
+            height: self_height,
+        };
+        (opponent_area, self_area)
+    }
+
+    #[test]
+    fn page_indicator_uses_configured_player_color_in_self_window() {
+        let mut config = Config::default();
+        config.colors.player = "yellow".to_string();
+        // "主格" は Config::default() の player_speakers に含まれる → self(下)窓。
+        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+
+        let (_opponent_area, self_area) = text_sub_areas(40, 10);
+        let indicator_cell = page_indicator_area(self_area);
+        let cell = buffer
+            .cell((indicator_cell.x, indicator_cell.y))
+            .expect("in bounds");
+        assert_eq!(cell.symbol(), reveal::PAGE_INDICATOR_SYMBOL);
+        assert_eq!(
+            cell.fg,
+            Color::Yellow,
+            "self window's indicator should use config.colors.player, not a hardcoded jiwa color"
+        );
+    }
+
+    #[test]
+    fn page_indicator_uses_configured_opponent_color_in_opponent_window() {
+        let mut config = Config::default();
+        config.colors.opponent = "magenta".to_string();
+        // "相手" は player_speakers ("主格") に含まれない → opponent(上)窓。
+        let line = dialog_line(Some("相手"), vec!["hello"]);
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+
+        let (opponent_area, _self_area) = text_sub_areas(40, 10);
+        let indicator_cell = page_indicator_area(opponent_area);
+        let cell = buffer
+            .cell((indicator_cell.x, indicator_cell.y))
+            .expect("in bounds");
+        assert_eq!(cell.symbol(), reveal::PAGE_INDICATOR_SYMBOL);
+        assert_eq!(
+            cell.fg,
+            Color::Magenta,
+            "opponent window's indicator should use config.colors.opponent, not a hardcoded jiwa color"
+        );
+    }
+
+    #[test]
+    fn page_indicator_self_and_opponent_use_different_default_colors() {
+        // GUI版の白(self)/水色相当(opponent)という「2つの窓が別の固定色を持つ」性質そのものを、
+        // デフォルト設定（colors.player="white"/colors.opponent="cyan"）で確認する。
+        let config = Config::default();
+
+        let self_line = dialog_line(Some("主格"), vec!["hello"]);
+        let self_reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &self_line));
+        let self_buffer = render(&config, Some(&self_line), Some(&self_reveal), 40, 10);
+        let (_opponent_area, self_area) = text_sub_areas(40, 10);
+        let self_indicator_cell = page_indicator_area(self_area);
+        let self_cell = self_buffer
+            .cell((self_indicator_cell.x, self_indicator_cell.y))
+            .expect("in bounds");
+
+        let opponent_line = dialog_line(Some("相手"), vec!["hello"]);
+        let opponent_reveal =
+            reveal::RevealState::Done(reveal::skip_lines(&config, &opponent_line));
+        let opponent_buffer = render(
+            &config,
+            Some(&opponent_line),
+            Some(&opponent_reveal),
+            40,
+            10,
+        );
+        let (opponent_area, _self_area) = text_sub_areas(40, 10);
+        let opponent_indicator_cell = page_indicator_area(opponent_area);
+        let opponent_cell = opponent_buffer
+            .cell((opponent_indicator_cell.x, opponent_indicator_cell.y))
+            .expect("in bounds");
+
+        assert_eq!(self_cell.fg, Color::White);
+        assert_eq!(opponent_cell.fg, Color::Cyan);
+        assert_ne!(
+            self_cell.fg, opponent_cell.fg,
+            "self/opponent windows must use distinct fixed colors, matching GUI's dual-window design"
+        );
+    }
+
+    #[test]
+    fn page_indicator_blinks_off_one_full_period_after_it_started() {
+        // 完全on/off点滅（jiwaの連続色補間ではない）を draw() 経由で確認する。1周期
+        // (PAGE_INDICATOR_BLINK_PERIOD_MS)ちょうど経過した時点は reveal::blink_visible の
+        // 境界テストで確認済みの「非表示区間の開始」— そのまま draw() を通しても
+        // インジケータのグリフが一切出現しないことを固定する。
+        let config = Config::default();
+        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let started_at = Instant::now();
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let now =
+            started_at + std::time::Duration::from_millis(reveal::PAGE_INDICATOR_BLINK_PERIOD_MS);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    1,
+                    1,
+                    false,
+                    Some(&reveal),
+                    started_at,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must fully disappear (not fade) during the off phase, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_blinks_back_on_after_two_full_periods() {
+        let config = Config::default();
+        let line = dialog_line(Some("主格"), vec!["hello"]);
+        let started_at = Instant::now();
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let now = started_at
+            + std::time::Duration::from_millis(reveal::PAGE_INDICATOR_BLINK_PERIOD_MS * 2 + 1);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    1,
+                    1,
+                    false,
+                    Some(&reveal),
+                    started_at,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must return to fully visible in its next on-phase, buffer was: {text}"
+        );
+    }
+
     #[test]
     fn page_indicator_absent_while_reveal_is_animating_not_done() {
         // RevealState::Animating が未完了（is_done(now)==false）の間は draw_text_windows が
@@ -2561,7 +2765,6 @@ mod tests {
             "test precondition: must not be done yet"
         );
 
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
@@ -2575,7 +2778,7 @@ mod tests {
                     1,
                     true,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     now,
                     None,
                     &mut image_cache,
@@ -2609,7 +2812,6 @@ mod tests {
         );
         assert!(reveal.is_done(done_at), "test precondition: done by 150ms");
 
-        let pulse = reveal::build_pulse(now);
         let mut image_cache = ImageCache::new();
 
         let mut before_terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
@@ -2624,7 +2826,7 @@ mod tests {
                     1,
                     true,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     not_done_at,
                     None,
                     &mut image_cache,
@@ -2649,7 +2851,7 @@ mod tests {
                     1,
                     true,
                     Some(&reveal),
-                    &pulse,
+                    now,
                     done_at,
                     None,
                     &mut image_cache,
@@ -2680,9 +2882,8 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(6, 6)).unwrap();
         let now = Instant::now();
-        let pulse = reveal::build_pulse(now);
         terminal
-            .draw(|f| draw_page_indicator(f, area, &pulse, now))
+            .draw(|f| draw_page_indicator(f, area, Color::White, now, now))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let cell = buffer.cell((area.x, area.y)).expect("in bounds");
