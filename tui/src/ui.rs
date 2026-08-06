@@ -3220,6 +3220,85 @@ mod tests {
     }
 
     #[test]
+    fn page_indicator_falls_back_to_white_when_configured_player_color_is_invalid() {
+        // `draw_splash_invalid_color_name_falls_back_to_white_without_panic` と同じパターンを
+        // indicator向けに複製する（観点3）。self側(下窓)のindicatorは config.colors.player を
+        // 使うため、無効な色名を入れても panic せず Color::White にフォールバックすることを
+        // 確認する。
+        let mut config = Config::default();
+        config.colors.player = "not-a-real-color".to_string();
+        let line = dialog_line(Some("主格"), vec!["hello"]); // self(下)窓
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+
+        let (_opponent_area, self_area) = text_sub_areas(40, 10);
+        let indicator_cell = page_indicator_area(self_area);
+        let cell = buffer
+            .cell((indicator_cell.x, indicator_cell.y))
+            .expect("in bounds");
+        assert_eq!(cell.symbol(), reveal::PAGE_INDICATOR_SYMBOL);
+        assert_eq!(
+            cell.fg,
+            Color::White,
+            "an unparseable colors.player name must fall back to White instead of panicking"
+        );
+    }
+
+    #[test]
+    fn page_indicator_falls_back_to_white_when_configured_opponent_color_is_invalid() {
+        // 上と同じフォールバックパターンを opponent側(上窓)の config.colors.opponent 向けに
+        // 複製する（観点3）。
+        let mut config = Config::default();
+        config.colors.opponent = "not-a-real-color".to_string();
+        let line = dialog_line(Some("相手"), vec!["hello"]); // opponent(上)窓
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+
+        let (opponent_area, _self_area) = text_sub_areas(40, 10);
+        let indicator_cell = page_indicator_area(opponent_area);
+        let cell = buffer
+            .cell((indicator_cell.x, indicator_cell.y))
+            .expect("in bounds");
+        assert_eq!(cell.symbol(), reveal::PAGE_INDICATOR_SYMBOL);
+        assert_eq!(
+            cell.fg,
+            Color::White,
+            "an unparseable colors.opponent name must fall back to White instead of panicking"
+        );
+    }
+
+    #[test]
+    fn page_indicator_uses_opponent_color_for_narration_with_no_speaker() {
+        // Narration（speaker: None）は `is_self_speaker` 判定（`Option::is_some_and`）が None
+        // に対し false を返すため常に opponent側(上窓)に倒れる（`draw_text_windows` ドキュメント
+        // 「話者不明を相手側に倒す」規則）。本文色は colors.narration（既定 gray）を使うが、
+        // indicator は本文色と独立に「自分/相手」の2択で決まるため、Narration でも
+        // colors.opponent を使い、colors.narration とは異なる色になることを固定する（観点4）。
+        let config = Config::default();
+        let line = dialog_line(None, vec!["hello"]); // Narration
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+
+        let (opponent_area, _self_area) = text_sub_areas(40, 10);
+        let indicator_cell = page_indicator_area(opponent_area);
+        let cell = buffer
+            .cell((indicator_cell.x, indicator_cell.y))
+            .expect("in bounds");
+        let expected_opponent_color =
+            Color::from_str(&config.colors.opponent).expect("default opponent color must parse");
+        assert_eq!(cell.symbol(), reveal::PAGE_INDICATOR_SYMBOL);
+        assert_eq!(
+            cell.fg, expected_opponent_color,
+            "narration (speaker: None) indicator should use config.colors.opponent, not colors.narration"
+        );
+        assert_ne!(
+            cell.fg,
+            Color::from_str(&config.colors.narration).expect("default narration color must parse"),
+            "indicator must not reuse the narration body color"
+        );
+    }
+
+    #[test]
     fn page_indicator_blinks_off_one_full_period_after_it_started() {
         // 完全on/off点滅（jiwaの連続色補間ではない）を draw() 経由で確認する。1周期
         // (PAGE_INDICATOR_BLINK_PERIOD_MS)ちょうど経過した時点は reveal::blink_visible の
@@ -3255,6 +3334,44 @@ mod tests {
         assert!(
             !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
             "indicator must fully disappear (not fade) during the off phase, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn page_indicator_blinks_off_one_full_period_after_it_started_in_opponent_window() {
+        // 既存の `page_indicator_blinks_off_one_full_period_after_it_started` は self側(下窓)
+        // のみを確認していた。opponent側(上窓)でも同じ非表示区間で draw() 経由のグリフが
+        // 一切出現しないことを固定する（観点2）。
+        let config = Config::default();
+        let line = dialog_line(Some("相手"), vec!["hello"]); // player_speakers非該当=opponent側
+        let started_at = Instant::now();
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let now =
+            started_at + std::time::Duration::from_millis(reveal::PAGE_INDICATOR_BLINK_PERIOD_MS);
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    1,
+                    1,
+                    false,
+                    Some(&reveal),
+                    started_at,
+                    now,
+                    None,
+                    &mut image_cache,
+                )
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "opponent window's indicator must fully disappear during the off phase too, buffer was: {text}"
         );
     }
 
