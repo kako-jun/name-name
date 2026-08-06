@@ -28,6 +28,16 @@
 //! 終劇にはならず）ドキュメント順で後続の items へそのまま読み進める、という設計上の違いがある。
 //! GUI版ほど厳密なシーン分離ではないが、既存の線形モデルをそのまま流用でき実装コストが小さいため
 //! この簡略化を採用した（Issue #482 の実装方針で明示的に許容されている割り切り）。
+//!
+//! ### ファイル境界の例外 (#496)
+//!
+//! 上記の「jump 先シーンを読み終えてもドキュメント順で後続へ読み進める」という割り切りは
+//! 単一ファイル前提（#482 当時は `tui-config.toml` の `entry_script` 1本のみ読み込んでいた）
+//! だった。複数の `.md` を1つの `Document` にマージする `multi_doc`（#496）以降、この割り切りを
+//! 無条件に適用すると「ルート1を読み終えて次へ押し続けるとルート2の冒頭に流れ込む」という
+//! リークが起きる。[`Playback::from_merged_document`] はこれを防ぐため、`items` にファイル
+//! 境界の情報（`item_file_ids`）を追加で持たせ、暗黙の `advance()` だけをファイル境界で
+//! 止める（選択肢ジャンプは対象外）。詳細は [`Playback`] 構造体の doc コメント参照。
 
 use std::collections::HashMap;
 
@@ -135,8 +145,25 @@ fn playback_item_from_event(event: &Event) -> Option<PlaybackItem> {
 
 /// `Document` の chapters → scenes → events を順番どおりに走査し、会話行・選択肢を再生する状態。
 /// 設計の詳細（jump 解決・GUI版との違い）はモジュール冒頭のドキュメント参照（#482）。
+///
+/// ## ファイル境界（#496 追加スコープ）
+///
+/// `Playback::from_document` 単体は「単一ファイル」を前提とし、`items` 全件を同じ合成ファイル
+/// id（`0`）として扱う。複数ファイルをマージした `Document`（`multi_doc::load_merged_document`）
+/// から構築する場合は [`Playback::from_merged_document`] を使うと、各 item に由来ファイルの id
+/// （`multi_doc::MergedDocument::chapter_file_ids` 経由）が刻まれ、`advance()` は「次の item が
+/// 現在の item と異なるファイル由来」なら実行せず `is_at_end()` 相当（＝そのファイルを読み終えた
+/// 扱い）にする。[`Playback::select_current_choice`] による明示的なジャンプはこの制限の対象外
+/// （ジャンプ先が別ファイルでも常に成功する）— 「ルート1を読み終えて次へ押し続けるとルート2の
+/// 冒頭に流れ込む」というリークを防ぎつつ、選択肢によるクロスファイル遷移（#496 の主目的）は
+/// 妨げない。
 pub struct Playback {
     items: Vec<PlaybackItem>,
+    /// `items[i]` の由来ファイル id（`items` と同じ長さを常に保つ）。`from_document`/
+    /// `from_lines` はファイル境界を知らないため全件 `0`（＝単一ファイル、境界チェックは
+    /// 常に「同じファイル」判定になり実質無効化される）。`from_merged_document` だけが
+    /// 複数の異なる id を持ちうる。
+    item_file_ids: Vec<usize>,
     index: usize,
     /// シーンID → そのシーンに属する最初の item の `items` 内インデックス。選択肢確定時の
     /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
@@ -174,10 +201,34 @@ impl Playback {
     /// 影響しない — Choice を挟んでも直前までの `current_event_image` はそのまま後続の
     /// Line item に引き継がれる。
     pub fn from_document(doc: &Document) -> Self {
+        Self::build(doc, None)
+    }
+
+    /// [`Playback::from_document`] の複数ファイル対応版（#496 追加スコープ）。`doc` は
+    /// `multi_doc::load_merged_document` が複数の `.md` をマージした `Document`、
+    /// `chapter_file_ids` は同関数が返す `MergedDocument::chapter_file_ids`
+    /// （`doc.chapters[i]` の由来ファイル id）をそのまま渡す想定。各 item に由来ファイルの id が
+    /// 刻まれ、`advance()` がファイル境界を越える暗黙の前進を拒否するようになる（構造体の
+    /// doc コメント参照）。`chapter_file_ids.len()` が `doc.chapters.len()` と一致しない
+    /// （呼び出し側の不整合、実運用では起こらない）場合は、対応が無いチャプターをその
+    /// チャプター自身の index で代用する — 各 index は一意なので、そのチャプターは前後と
+    /// 必ず別ファイル扱いになり、panic せず安全側（余分な境界が入るだけ）に倒れる。
+    pub fn from_merged_document(doc: &Document, chapter_file_ids: &[usize]) -> Self {
+        Self::build(doc, Some(chapter_file_ids))
+    }
+
+    /// `from_document` / `from_merged_document` 共通の構築ロジック。`chapter_file_ids` が
+    /// `None` のときは全 item を単一の合成ファイル id `0` として扱う（構造体の doc コメント
+    /// 参照）。
+    fn build(doc: &Document, chapter_file_ids: Option<&[usize]>) -> Self {
         let mut items = Vec::new();
+        let mut item_file_ids = Vec::new();
         let mut scene_start = HashMap::new();
         let mut current_event_image: Option<String> = None;
-        for chapter in &doc.chapters {
+        for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
+            let file_id = chapter_file_ids
+                .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
+                .unwrap_or(0);
             for scene in &chapter.scenes {
                 // このシーンの最初の item になる（はずの）位置を、events を処理する前に記録する。
                 // 重複シーンIDは最初の出現を優先する（GUI版 `allScenes.find` が最初の一致を
@@ -206,6 +257,7 @@ impl Playback {
                                     choice @ PlaybackItem::Choice(_) => choice,
                                 };
                                 items.push(item);
+                                item_file_ids.push(file_id);
                             }
                         }
                     }
@@ -214,6 +266,7 @@ impl Playback {
         }
         Self {
             items,
+            item_file_ids,
             index: 0,
             scene_start,
             choice_cursor: 0,
@@ -300,6 +353,11 @@ impl Playback {
     /// (#486)。次の item への遷移（`set_index`）は、現在行の全ページを表示し終えたときだけ
     /// 起こる — GUI版 `getAdvSentencePages` が「1 Event = 複数ページ」に分割するのと同じ
     /// 粒度を、既存の「1 advance = 1手前進」という状態遷移にそのまま重ねる形。
+    ///
+    /// 次の item が現在の item と異なるファイル由来（#496、`item_file_ids` 参照）の場合は、
+    /// 位置を変えず `false` を返す — フラット化済み `items` 上ではドキュメント順で後続に
+    /// 存在していても、暗黙の前進では別ファイルの内容へ進めない。ファイルをまたぐ遷移は
+    /// [`Playback::select_current_choice`] による明示的な選択肢ジャンプでのみ許可される。
     pub fn advance(&mut self) -> bool {
         if matches!(self.items.get(self.index), Some(PlaybackItem::Choice(_))) {
             return false;
@@ -312,6 +370,9 @@ impl Playback {
             return true;
         }
         if self.index + 1 < self.items.len() {
+            if self.item_file_ids[self.index + 1] != self.item_file_ids[self.index] {
+                return false;
+            }
             self.set_index(self.index + 1);
             true
         } else {
@@ -393,6 +454,10 @@ impl Playback {
     /// `sentence_per_page` が有効で、現在の Line item にまだ表示していない文単位ページが
     /// 残っている場合も同様に `false` にする (#486) — それがドキュメント最後の item でも、
     /// プレイヤーはまだ最後の文を読み切っていないため。
+    ///
+    /// 次の item が現在の item と異なるファイル由来（#496）の場合も `true` を返す —
+    /// `advance()` がそこへは進めない（ファイル境界を暗黙には越えられない）ため、意味的には
+    /// 「このファイルの内容を読み終えた」のと同じ状態として扱う。
     pub fn is_at_end(&self) -> bool {
         if self.current_choice().is_some() {
             return false;
@@ -400,7 +465,10 @@ impl Playback {
         if self.sentence_per_page && self.sentence_index + 1 < self.sentence_pages.len() {
             return false;
         }
-        self.items.is_empty() || self.index + 1 >= self.items.len()
+        if self.items.is_empty() || self.index + 1 >= self.items.len() {
+            return true;
+        }
+        self.item_file_ids[self.index + 1] != self.item_file_ids[self.index]
     }
 
     /// テスト専用: 会話行リストから直接 `Playback` を組み立てる。`main.rs` の
@@ -409,8 +477,10 @@ impl Playback {
     /// `Document` 経由（`from_document`、`scene_start` の構築が必要なため）で行う。
     #[cfg(test)]
     pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
+        let item_file_ids = vec![0; lines.len()];
         Self {
             items: lines.into_iter().map(PlaybackItem::Line).collect(),
+            item_file_ids,
             index: 0,
             scene_start: HashMap::new(),
             choice_cursor: 0,
@@ -1512,6 +1582,118 @@ mod tests {
         assert_eq!(
             default_pb.current_line().expect("line").text,
             explicit_false_pb.current_line().expect("line").text
+        );
+    }
+
+    // ---- #496 追加スコープ: ファイル境界（複数ファイルマージ時の暗黙advance制限） ----
+
+    /// `chapter_number` 1件・`scene_id` 1件・`lines` を台詞として並べた「1ファイル分」の
+    /// Chapter を作る（`route_chapter(1, "1-1", vec!["a", "b"])` = route1相当のファイル）。
+    fn route_chapter(chapter_number: u32, scene_id: &str, lines: Vec<&str>) -> Chapter {
+        chapter(
+            chapter_number,
+            vec![scene(
+                scene_id,
+                lines
+                    .into_iter()
+                    .map(|text| dialog(Some("A"), vec![text]))
+                    .collect(),
+            )],
+        )
+    }
+
+    #[test]
+    fn from_merged_document_advance_at_file_boundary_does_not_leak_into_next_file() {
+        // route1相当(file 0)に台詞2件、route2相当(file 1)に台詞1件。原稿側で明示的なChoiceの
+        // 閉じは無い（#496で修正する前のバグの再現条件そのもの: 「ルート1を読み終えて次へ
+        // 押し続けるとルート2の冒頭に流れ込む」）。
+        let route1 = route_chapter(1, "1-1", vec!["ルート1: 1文目", "ルート1: 最後の台詞"]);
+        let route2 = route_chapter(2, "2-1", vec!["ルート2: 最初の台詞"]);
+        let doc = document_with_chapters(vec![route1, route2]);
+        let chapter_file_ids = vec![0, 1];
+
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+        assert!(
+            pb.advance(),
+            "route1内の1文目→2文目(最後)へは同一ファイルなので進めるはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").text,
+            vec!["ルート1: 最後の台詞".to_string()]
+        );
+
+        assert!(
+            pb.is_at_end(),
+            "次のitemが別ファイル(route2)由来なので、route1最後の台詞の時点で終端扱いになるはず"
+        );
+        assert!(
+            !pb.advance(),
+            "別ファイルのitemへの暗黙advanceは拒否され、フラットなitems列上で物理的に \
+             後続に存在するルート2相当のシーンには進まないはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").text,
+            vec!["ルート1: 最後の台詞".to_string()],
+            "advance拒否後も表示内容は変わらないはず"
+        );
+    }
+
+    #[test]
+    fn from_merged_document_explicit_choice_jump_still_crosses_file_boundary() {
+        // route1(file 0)の最後にroute2(file 1)へ飛ぶChoiceを置いた構成。ファイル境界
+        // チェックは暗黙のadvanceだけに適用され、選択肢による明示的なジャンプは
+        // 別ファイル宛でも制限されないことを確認する（既存のクロスファイルジャンプ機能
+        // `multi_doc::load_merged_document_resolves_cross_file_scene_jump` 等と対になる、
+        // ファイル境界チェック導入後の回帰確認）。
+        let route1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![
+                    dialog(Some("A"), vec!["ルート1: 最後の台詞"]),
+                    choice(vec![("ルート2へ", "2-1")]),
+                ],
+            )],
+        );
+        let route2 = route_chapter(2, "2-1", vec!["ルート2: 最初の台詞"]);
+        let doc = document_with_chapters(vec![route1, route2]);
+        let chapter_file_ids = vec![0, 1];
+
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+        assert!(
+            pb.advance(),
+            "台詞→Choiceへは同一ファイル内の前進なので進めるはず"
+        );
+        assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
+
+        assert!(
+            pb.select_current_choice(),
+            "別ファイルのシーンへのjumpでも、ファイル境界チェックの対象外なので成功するはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").text,
+            vec!["ルート2: 最初の台詞".to_string()]
+        );
+    }
+
+    #[test]
+    fn from_merged_document_with_single_underlying_file_behaves_like_from_document() {
+        // multi_doc経由でも実質1ファイルしか無い場合（chapter_file_idsが全chapterに対して
+        // 同じidを持つ）は、境界が1つしか無い＝実害が無いはず（from_documentと同じ挙動）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1"]),
+            dialog(Some("B"), vec!["2"]),
+        ]);
+        let chapter_file_ids = vec![0]; // 単一chapter・単一file id
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+
+        assert!(
+            pb.advance(),
+            "同一file id内なのでfrom_document同様に通常どおり進めるはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
         );
     }
 }

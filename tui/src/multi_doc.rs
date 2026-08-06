@@ -65,6 +65,19 @@ fn visit_dir(dir: &Path, files: &mut Vec<PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// [`merge_files`] / [`load_merged_document`] の戻り値。マージ後の `Document` に加えて、
+/// `document.chapters[i]` が何番目の入力ファイル由来か（0始まり、マージ順＝`files` の並び順）を
+/// `chapter_file_ids[i]` として持つ（`chapter_file_ids.len() == document.chapters.len()` が
+/// 常に成立する）。ファイル境界をまたぐ暗黙の `advance()` を禁止する
+/// `Playback::from_merged_document`（#496 追加スコープ）に渡すための補助データ。
+/// `parser`/`Document` 自体は変更せず（GUI版と共有しているため）、`tui/` 側だけで完結させる
+/// ためにこの補助データを別建てで返す設計を選んだ（詳細は `playback.rs` 冒頭のdocコメント参照）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergedDocument {
+    pub document: Document,
+    pub chapter_file_ids: Vec<usize>,
+}
+
 /// `script_dir` 配下の全 `.md` を一括 parse して1つの `Document` へマージする。
 ///
 /// - `entry_script_path` が指すファイルを常にマージ順の先頭にする（`script_dir` の走査結果に
@@ -75,7 +88,7 @@ fn visit_dir(dir: &Path, files: &mut Vec<PathBuf>) -> anyhow::Result<()> {
 pub fn load_merged_document(
     script_dir: &Path,
     entry_script_path: &Path,
-) -> anyhow::Result<Document> {
+) -> anyhow::Result<MergedDocument> {
     let mut files = collect_markdown_files(script_dir)?;
     if files.is_empty() {
         anyhow::bail!(
@@ -97,11 +110,14 @@ pub fn load_merged_document(
 /// （`load_merged_document` が並べた `entry_script_path`）の `chapters` 以外のフィールド
 /// （`engine` / `aspect_ratio` 等）は、マージ後 `Document` のメタデータとしてそのまま採用する
 /// （`Playback::from_document` は `chapters` しか見ないため、他フィールドの選び方に実害はない）。
-fn merge_files(files: &[PathBuf]) -> anyhow::Result<Document> {
+/// `files` の中での位置（0始まり）をそのままファイル識別子として `chapter_file_ids` に積む
+/// （`MergedDocument` 参照）。
+fn merge_files(files: &[PathBuf]) -> anyhow::Result<MergedDocument> {
     let mut seen_scene_ids: HashMap<String, PathBuf> = HashMap::new();
     let mut merged: Option<Document> = None;
+    let mut chapter_file_ids: Vec<usize> = Vec::new();
 
-    for path in files {
+    for (file_id, path) in files.iter().enumerate() {
         let source = fs::read_to_string(path)
             .with_context(|| format!("Markdown原稿の読み込みに失敗しました: {}", path.display()))?;
         let doc = name_name_parser::parser::parse(&source);
@@ -124,13 +140,19 @@ fn merge_files(files: &[PathBuf]) -> anyhow::Result<Document> {
             }
         }
 
+        chapter_file_ids.extend(std::iter::repeat_n(file_id, doc.chapters.len()));
+
         match &mut merged {
             None => merged = Some(doc),
             Some(acc) => acc.chapters.extend(doc.chapters),
         }
     }
 
-    merged.context("マージ対象のMarkdownファイルがありません")
+    let document = merged.context("マージ対象のMarkdownファイルがありません")?;
+    Ok(MergedDocument {
+        document,
+        chapter_file_ids,
+    })
 }
 
 #[cfg(test)]
@@ -204,7 +226,9 @@ mod tests {
             &format!("{FRONTMATTER}## r01-start: ルート1\n\n**A**:\nルート1の最初のセリフ\n"),
         );
 
-        let doc = load_merged_document(&dir, &hub).expect("should merge");
+        let doc = load_merged_document(&dir, &hub)
+            .expect("should merge")
+            .document;
         let mut pb = crate::playback::Playback::from_document(&doc);
         assert!(
             pb.select_current_choice(),
@@ -232,7 +256,9 @@ mod tests {
             &format!("{FRONTMATTER}## dup: 後発\n\n**B**:\nこちらは無視される\n"),
         );
 
-        let doc = load_merged_document(&dir, &entry).expect("should merge");
+        let doc = load_merged_document(&dir, &entry)
+            .expect("should merge")
+            .document;
         let pb = crate::playback::Playback::from_document(&doc);
         // entry ファイル（"dup" の最初の出現）が先頭 chapter として merge されるため、
         // Playback は entry の内容から始まる。
@@ -278,7 +304,9 @@ mod tests {
             &format!("{FRONTMATTER}## entry-scene: 本命\n\n**Y**:\nエントリの台詞\n"),
         );
 
-        let doc = load_merged_document(&dir, &entry).expect("should merge");
+        let doc = load_merged_document(&dir, &entry)
+            .expect("should merge")
+            .document;
         let pb = crate::playback::Playback::from_document(&doc);
         assert_eq!(
             pb.current_line().expect("line").text,
@@ -333,7 +361,9 @@ mod tests {
             &format!("{FRONTMATTER}## dup: C定義\n\n**C**:\nCファイルの台詞\n"),
         );
 
-        let doc = load_merged_document(&dir, &entry).expect("should merge");
+        let doc = load_merged_document(&dir, &entry)
+            .expect("should merge")
+            .document;
         let mut pb = crate::playback::Playback::from_document(&doc);
         assert!(
             pb.select_current_choice(),
@@ -360,7 +390,12 @@ mod tests {
         let merged = load_merged_document(&dir, &entry).expect("should merge");
         let direct = name_name_parser::parser::parse(&source);
 
-        assert_eq!(merged, direct);
+        assert_eq!(merged.document, direct);
+        assert_eq!(
+            merged.chapter_file_ids,
+            vec![0; merged.document.chapters.len()],
+            "単一ファイルなら全chapterのfile idは0のはず"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -391,7 +426,9 @@ mod tests {
             &format!("{FRONTMATTER}## inside2: 内部2\n\n**Q**:\n内部2の台詞\n"),
         );
 
-        let doc = load_merged_document(&dir, &entry).expect("should merge");
+        let doc = load_merged_document(&dir, &entry)
+            .expect("should merge")
+            .document;
 
         let mut pb_first = crate::playback::Playback::from_document(&doc);
         assert!(
@@ -490,8 +527,9 @@ mod tests {
         );
         write_md(&dir, "blank.md", "");
 
-        let doc =
-            load_merged_document(&dir, &entry).expect("空.mdが混ざっていてもErrにならないはず");
+        let doc = load_merged_document(&dir, &entry)
+            .expect("空.mdが混ざっていてもErrにならないはず")
+            .document;
         let pb = crate::playback::Playback::from_document(&doc);
         assert_eq!(
             pb.current_line().expect("entryの台詞").text,
@@ -518,7 +556,9 @@ mod tests {
             &format!("{FRONTMATTER}## draft-scene: 下書き\n\n**D**:\n隠しファイルの台詞\n"),
         );
 
-        let doc = load_merged_document(&dir, &entry).expect("should merge");
+        let doc = load_merged_document(&dir, &entry)
+            .expect("should merge")
+            .document;
         let mut pb = crate::playback::Playback::from_document(&doc);
         assert!(
             pb.select_current_choice(),
@@ -550,7 +590,9 @@ mod tests {
             &format!("{FRONTMATTER}## inside-scene: 内部\n\n**W**:\n内部ファイルの台詞\n"),
         );
 
-        let doc = load_merged_document(&dir, &entry).expect("should merge");
+        let doc = load_merged_document(&dir, &entry)
+            .expect("should merge")
+            .document;
         let pb = crate::playback::Playback::from_document(&doc);
         assert_eq!(
             pb.current_line().expect("line").text,
@@ -559,5 +601,47 @@ mod tests {
 
         fs::remove_dir_all(&dir).ok();
         fs::remove_dir_all(&outside_dir).ok();
+    }
+
+    // ---- #496 追加スコープ: chapter_file_ids（ファイル境界の補助データ） ----
+
+    #[test]
+    fn merged_document_chapter_file_ids_track_originating_file_in_merge_order() {
+        // `parser::parse` は1ファイルにつき常にちょうど1 chapter を返す（frontmatterの
+        // `chapter:` は1ファイル1章の前提、`parser/src/parser.rs` 参照）。3ファイルを
+        // マージした場合、chapter_file_ids はマージ順（entryが先頭、残りはパス文字列昇順）に
+        // 沿った `[0, 1, 2]` になるはず — `Playback::from_merged_document` がこの対応を使って
+        // itemごとの由来ファイルを決めるための土台。
+        let dir = make_temp_dir();
+        let entry = write_md(
+            &dir,
+            "a-entry.md",
+            &format!("{FRONTMATTER}## e-1: エントリ\n\n**A**:\nエントリの台詞\n"),
+        );
+        write_md(
+            &dir,
+            "b-route.md",
+            &format!("{FRONTMATTER}## r-1: ルート1\n\n**B**:\nルート1の台詞\n"),
+        );
+        write_md(
+            &dir,
+            "c-route.md",
+            &format!("{FRONTMATTER}## r-2: ルート2\n\n**C**:\nルート2の台詞\n"),
+        );
+
+        let merged = load_merged_document(&dir, &entry).expect("should merge");
+
+        assert_eq!(
+            merged.chapter_file_ids.len(),
+            merged.document.chapters.len(),
+            "chapter_file_idsはchapter数と同じ長さのはず"
+        );
+        assert_eq!(
+            merged.chapter_file_ids,
+            vec![0, 1, 2],
+            "entry→b-route→c-routeのマージ順にfile idが0,1,2と振られるはず"
+        );
+
+        fs::remove_dir_all(&dir).ok();
     }
 }
