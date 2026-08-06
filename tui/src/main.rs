@@ -185,11 +185,20 @@ where
 {
     let mut current_reveal: Option<reveal::RevealState> =
         build_reveal_for_current(playback, config, Instant::now());
-    // ページ送りインジケータの点滅開始時刻。話者・テキストに依存しないグローバルな明滅
-    // （1秒周期の完全on/off、`reveal::blink_visible`、#495）なので、会話行が変わっても
-    // 作り直さない（一度だけ記録する）。色はウィンドウ（自分側/相手側）ごとに
-    // `ui::draw_text_windows` が `Config::colors` から決める。
-    let indicator_started_at = Instant::now();
+    // ページ送りインジケータの点滅基準時刻。1秒周期の完全on/off点滅自体は話者・テキストに
+    // 依存しないグローバルな明滅（`reveal::blink_visible`、#495）だが、基準時刻は固定ではなく
+    // 毎フレーム `reveal::indicator_blink_started_at` で更新する（#495 追加修正）。
+    //
+    // 当初の #495 実装は起動時に一度だけ記録して以後固定していたが、これだと「ある会話行の
+    // reveal完了が壁時計基準でたまたま非表示区間に重なると、読み終えたのに▼が最大1秒近く
+    // 見えない」という、GUI版が #447 で潰したのと同じ事故がTUI側で再現しうった
+    // （テスト設計エージェント指摘）。`indicator_was_shown` で前フレームの表示/非表示を
+    // 追跡し、非表示→表示に切り替わる瞬間（＝reveal完了の瞬間）だけ基準時刻を
+    // `Instant::now()` にリセットすることで、常に表示区間（ON）から点滅が始まるようにする。
+    // 色はウィンドウ（自分側/相手側）ごとに `ui::draw_text_windows` が `Config::colors` から
+    // 決める（この基準時刻の更新とは無関係）。
+    let mut indicator_started_at = Instant::now();
+    let mut indicator_was_shown = false;
 
     // イベント絵（`DisplayLine::event_image`）のデコード結果キャッシュとクロスフェード状態
     // （#481）。`image_fade` は開始時点の会話行が持つ event_image を「既にトランジション無しで
@@ -203,6 +212,20 @@ where
 
     loop {
         let now = Instant::now();
+        // インジケータを表示すべきか（reveal完了 かつ 選択肢非表示 かつ 会話行あり）。
+        // `ui::draw_text_windows` が実際の描画可否を判定する条件式と同じもの — 選択肢表示中
+        // (`current_choice` が `Some`) は draw_text_windows 自体が呼ばれずインジケータの
+        // 概念が無い、会話行が無ければ表示しようがない、という2つのガードを反映している。
+        let show_page_indicator = playback.current_choice().is_none()
+            && playback.current_line().is_some()
+            && current_reveal.as_ref().is_some_and(|r| r.is_done(now));
+        indicator_started_at = reveal::indicator_blink_started_at(
+            indicator_was_shown,
+            show_page_indicator,
+            indicator_started_at,
+            now,
+        );
+        indicator_was_shown = show_page_indicator;
         terminal.draw(|frame| {
             ui::draw(
                 frame,

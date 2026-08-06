@@ -131,6 +131,37 @@ pub fn blink_visible(started_at: Instant, now: Instant, period_ms: u64) -> bool 
     (elapsed_ms / period_ms) % 2 == 0
 }
 
+/// `show_page_indicator`（インジケータを表示すべきか＝reveal完了かつ選択肢非表示、呼び出し側
+/// `main.rs`/`ui::draw_text_windows` が判定する）が直前フレーム（`was_shown`）は `false` で
+/// 今フレームは `true` になった瞬間（非表示→表示への遷移）だけ、点滅の基準時刻を `now` に
+/// リセットする。それ以外（表示が続いている・まだ非表示のまま・表示から非表示に戻った）は
+/// `prev_started_at` をそのまま返す。
+///
+/// GUI版 `frontend/src/game/DialogBox.ts` の `applyIndicatorContainerVisibility`
+/// （`newVisible && !this.indicator.visible` を比較し、非表示→表示の遷移でだけ
+/// `indicatorBlinkElapsed = 0` / `indicatorBlinkOn = true` にリセットする、#447 self-review
+/// must 対応）と同じ frame-comparison 方式を踏襲する（#495 追加修正）。
+///
+/// 当初の #495 実装は `indicator_started_at` を `event_loop` 開始時に一度だけ `Instant::now()`
+/// で固定していた。しかし会話行（reveal）が完了する瞬間の壁時計時刻は会話ごとにバラバラ
+/// なので、あるrevealの完了がたまたま非表示区間（奇数区間）に重なると、GUI版が #447 で
+/// 潰したのと同じ事故（読み終えたのに▼が最大1秒近く見えない）がTUI側でも再現しうった
+/// （テスト設計エージェント指摘）。`event_loop` がこの関数を毎フレーム呼び、reveal完了の
+/// 瞬間に基準時刻をリセットすることで、どの会話行が・いつ完了しても、完了直後は必ず
+/// 表示区間（ON）から点滅が始まる。
+pub fn indicator_blink_started_at(
+    was_shown: bool,
+    show_page_indicator: bool,
+    prev_started_at: Instant,
+    now: Instant,
+) -> Instant {
+    if show_page_indicator && !was_shown {
+        now
+    } else {
+        prev_started_at
+    }
+}
+
 /// `RevealHandle::snapshot` の出力を ratatui の `Line` 列に変換する。`\n` グラフェムは
 /// 行区切りとして消費し（画面には出さない）、他のグラフェムはそれぞれ現在のフェード色を
 /// 持つ `Span` になる。空スナップショット（本文0文字、またはまだ何も見えていない）は
@@ -390,6 +421,49 @@ mod tests {
         let t = Instant::now();
         let earlier = t.checked_sub(Duration::from_millis(1)).unwrap_or(t);
         assert!(blink_visible(t, earlier, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn indicator_blink_started_at_resets_on_hidden_to_shown_transition() {
+        // 非表示(false)→表示(true)への遷移だけがリセットの引き金になる（#495 追加修正）。
+        let prev_started_at = Instant::now();
+        let now = prev_started_at + Duration::from_millis(1234);
+        let result = indicator_blink_started_at(false, true, prev_started_at, now);
+        assert_eq!(
+            result, now,
+            "非表示→表示の遷移では基準時刻が now にリセットされるべき"
+        );
+    }
+
+    #[test]
+    fn indicator_blink_started_at_keeps_previous_value_while_still_shown() {
+        // 表示が前フレームから続いている（true→true）場合はリセットしない。
+        let prev_started_at = Instant::now();
+        let now = prev_started_at + Duration::from_millis(500);
+        let result = indicator_blink_started_at(true, true, prev_started_at, now);
+        assert_eq!(
+            result, prev_started_at,
+            "表示が継続中は基準時刻を保持し続けるべき（毎フレームリセットすると点滅が止まる）"
+        );
+    }
+
+    #[test]
+    fn indicator_blink_started_at_keeps_previous_value_while_still_hidden() {
+        // まだ非表示のまま（false→false、reveal未完了が続いている）場合もリセットしない。
+        let prev_started_at = Instant::now();
+        let now = prev_started_at + Duration::from_millis(500);
+        let result = indicator_blink_started_at(false, false, prev_started_at, now);
+        assert_eq!(result, prev_started_at);
+    }
+
+    #[test]
+    fn indicator_blink_started_at_keeps_previous_value_on_shown_to_hidden_transition() {
+        // 表示→非表示（次の会話行の reveal が新たに始まった等）はリセット対象ではない
+        // （次に非表示→表示へ遷移した時点で改めてリセットされる）。
+        let prev_started_at = Instant::now();
+        let now = prev_started_at + Duration::from_millis(500);
+        let result = indicator_blink_started_at(true, false, prev_started_at, now);
+        assert_eq!(result, prev_started_at);
     }
 
     #[test]
