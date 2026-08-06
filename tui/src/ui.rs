@@ -363,10 +363,13 @@ fn page_indicator_area(area: Rect) -> Rect {
 /// （`DialogBox.ts` 参照）に合わせてウィンドウ右下固定へ変更した — gymnasiaの `dialog_style`
 /// は常にadvのため、TUI側もdialog_style分岐を作らずadv右下固定のみを実装する。
 /// 表示中（未 reveal）にはこの関数を呼ばない — 呼び出し側（`draw_text_windows`）が
-/// `state.is_done(now)` で既にガードしている。`area` の幅/高さが0の極小ウィンドウでは
-/// 描画すべきセルが無いため何もしない。
+/// `state.is_done(now)` で既にガードしている。`area` の幅が [`MIN_SAFE_TEXT_WRAP_WIDTH`]
+/// 未満、または高さが0の極小ウィンドウでは何もしない — 幅ガードは
+/// [`render_wrapped_paragraph`] が本文パラグラフの描画をスキップする閾値と揃えたもので、
+/// これが無いと「本文は消えるがインジケータだけ浮く」表示不整合が起きる（セルフレビュー
+/// 指摘、#487）。
 fn draw_page_indicator(frame: &mut Frame, area: Rect, pulse: &PulseHandle, now: Instant) {
-    if area.width == 0 || area.height == 0 {
+    if area.width < MIN_SAFE_TEXT_WRAP_WIDTH || area.height == 0 {
         return;
     }
     let snapshot = pulse.snapshot(now);
@@ -2246,6 +2249,27 @@ mod tests {
     }
 
     #[test]
+    fn draw_page_indicator_skipped_when_target_area_width_below_min_safe_wrap() {
+        // w=4 端末では columns[1](テキスト側カラム)の幅がPercentage(50/50)分割で2になる
+        // （ceilを取る左=columns[0]が2、floorを取る右=columns[1]が2 — w=4は偶数なので両方2。
+        // opponent/self とも幅2を引き継ぐ）。これは0ではないが MIN_SAFE_TEXT_WRAP_WIDTH(3)
+        // 未満であり、本文側の render_wrapped_paragraph は既にこの幅で描画をスキップする
+        // （セルフレビューで実測された「幅4端末で▼が浮く」ケース）。draw_page_indicator も
+        // 同じ閾値でスキップし、本文が消えているのにインジケータだけ空白領域に残る表示不整合
+        // が起きないことを確認する。
+        let config = Config::default();
+        let line = dialog_line(Some("相手"), vec!["hi"]); // player_speakers非該当=opponent側
+        let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
+        let buffer = render(&config, Some(&line), Some(&reveal), 4, 10);
+        let text = buffer_text(&buffer);
+        assert!(
+            !text.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must not render when the target window width is below \
+             MIN_SAFE_TEXT_WRAP_WIDTH, buffer was: {text}"
+        );
+    }
+
+    #[test]
     fn draw_page_indicator_skipped_when_target_area_height_zero() {
         // w=40,h=2 端末では root/status行分離後の残り高さが1セルになり、テキスト側の
         // opponent/self 上下分割 (height/2切り捨て・余り) で opponent 側が高さ0になる
@@ -2425,10 +2449,13 @@ mod tests {
         // よって半角/全角の解釈が割れる。page_indicator_area が返す 1x1 の Rect にこの記号を
         // 描画したとき、セルの symbol() がそのまま1個の PAGE_INDICATOR_SYMBOL になっており、
         // 隣接セルへのはみ出しや空白パディングで壊れていないことを確認する（i18n観点）。
+        // width は MIN_SAFE_TEXT_WRAP_WIDTH ちょうど（#487 セルフレビュー後の draw_page_indicator
+        // ガードがこれ未満をスキップするため、それ以上を指定する必要がある。
+        // PAGE_INDICATOR_INSET_COLS と同値でもあるため x のクランプ挙動は変わらない）。
         let area = Rect {
             x: 2,
             y: 2,
-            width: 1,
+            width: MIN_SAFE_TEXT_WRAP_WIDTH,
             height: 1,
         };
         let mut terminal = Terminal::new(TestBackend::new(6, 6)).unwrap();
