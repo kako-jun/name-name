@@ -96,7 +96,8 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ（`jiwa::PulseHandle`）は
+    // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ
+    // （`reveal::blink_visible` による1秒周期の完全on/off点滅、#495）は
     // どちらも時間経過だけで見た目が変わるため、キー入力の有無に関わらず `REDRAW` 間隔で
     // 再描画するポーリング方式にする（#472）。この `next_action` は `run_screens` を通じて
     // `show_splash`/`event_loop` の両方へ渡り、スプラッシュ画面もこの間隔で再描画されるが、
@@ -166,10 +167,11 @@ where
 /// (`Action::Quit`)まで繰り返す。
 ///
 /// MVP（#471）はキー入力をブロッキングで待っていたが、タイプライター演出
-/// （`jiwa::RevealHandle`）とページ送りインジケータ（`jiwa::PulseHandle`）はどちらも
-/// 時間経過だけで見た目が変わるため、キー入力の有無に関わらず一定間隔で再描画する
-/// フレームベースのループに変更した（#472）。`Terminal<CrosstermBackend<Stdout>>` という
-/// 具体型への結合は、`show_splash`/`run_screens` と同じ `Backend` ジェネリック化・
+/// （`jiwa::RevealHandle`）とページ送りインジケータ（`reveal::blink_visible` による
+/// 1秒周期の完全on/off点滅、#495）はどちらも時間経過だけで見た目が変わるため、
+/// キー入力の有無に関わらず一定間隔で再描画するフレームベースのループに変更した（#472）。
+/// `Terminal<CrosstermBackend<Stdout>>` という具体型への結合は、`show_splash`/`run_screens`
+/// と同じ `Backend` ジェネリック化・
 /// `next_action` 注入パターンで解消済み（#478 のリファクタをそのまま踏襲）。
 fn event_loop<B>(
     terminal: &mut Terminal<B>,
@@ -183,9 +185,11 @@ where
 {
     let mut current_reveal: Option<reveal::RevealState> =
         build_reveal_for_current(playback, config, Instant::now());
-    // ページ送りインジケータは話者・テキストに依存しないグローバルな明滅なので、
-    // 会話行が変わっても作り直さない（一度だけ開始する）。
-    let pulse = reveal::build_pulse(Instant::now());
+    // ページ送りインジケータの点滅開始時刻。話者・テキストに依存しないグローバルな明滅
+    // （1秒周期の完全on/off、`reveal::blink_visible`、#495）なので、会話行が変わっても
+    // 作り直さない（一度だけ記録する）。色はウィンドウ（自分側/相手側）ごとに
+    // `ui::draw_text_windows` が `Config::colors` から決める。
+    let indicator_started_at = Instant::now();
 
     // イベント絵（`DisplayLine::event_image`）のデコード結果キャッシュとクロスフェード状態
     // （#481）。`image_fade` は開始時点の会話行が持つ event_image を「既にトランジション無しで
@@ -209,7 +213,7 @@ where
                 playback.total(),
                 playback.is_at_end(),
                 current_reveal.as_ref(),
-                &pulse,
+                indicator_started_at,
                 now,
                 Some(&image_fade),
                 &mut image_cache,

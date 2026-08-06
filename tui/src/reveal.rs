@@ -1,17 +1,22 @@
-//! `jiwa`（タイプライター演出 + ページ送りインジケータ）のオプション組み立てと
-//! スナップショット→ratatui変換をここに閉じ込める（#472）。
+//! `jiwa`（タイプライター演出）のオプション組み立てとスナップショット→ratatui変換、および
+//! ページ送りインジケータの点滅判定をここに閉じ込める（#472、#495）。
 //!
-//! `jiwa::RevealHandle` / `jiwa::PulseHandle` はレンダラー非依存で `Rgb(u8, u8, u8)` を
-//! 返すだけなので、ratatui の `Color` / `Line` / `Span` への変換と、既存の `Config` 配色
-//! （話者ごとの色名文字列）から `jiwa::RevealOpts` を組み立てる処理は tui 側の責務になる。
-//! kako-jun/type-globe の `src/ui/quiz.rs`（RevealHandle 使用例）/ `src/ui/listen.rs`
-//! （PulseHandle 使用例）と同じ設計 — 記号・色はハードコードし、速度だけを Config 化する —
-//! を踏襲する。
+//! `jiwa::RevealHandle` はレンダラー非依存で `Rgb(u8, u8, u8)` を返すだけなので、ratatui の
+//! `Color` / `Line` / `Span` への変換と、既存の `Config` 配色（話者ごとの色名文字列）から
+//! `jiwa::RevealOpts` を組み立てる処理は tui 側の責務になる。kako-jun/type-globe の
+//! `src/ui/quiz.rs`（RevealHandle 使用例）と同じ設計 — 記号・色はハードコードし、速度だけを
+//! Config 化する — を踏襲する。
+//!
+//! ページ送りインジケータ（[`PAGE_INDICATOR_SYMBOL`]）は GUI版 `frontend/src/game/DialogBox.ts`
+//! の `indicatorBlinkOn` と同じ「完全な on/off 切り替え」（[`blink_visible`]）で点滅する。
+//! `jiwa::PulseHandle`（連続色補間の「呼吸」エフェクト専用設計、`PulseOpts::cyan_breath()` 等）
+//! はこの用途には合わないため使わない（#495）。色はウィンドウ（自分側/相手側）ごとに
+//! `Config::colors` の値を呼び出し側（`ui::draw_text_windows`）が固定して使う。
 
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use jiwa::{PulseHandle, PulseOpts, RevealHandle, RevealOpts, RevealedGrapheme, Rgb};
+use jiwa::{RevealHandle, RevealOpts, RevealedGrapheme, Rgb};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
@@ -111,11 +116,19 @@ pub fn skip_lines(config: &Config, line: &DisplayLine) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// ページ送りインジケータ（▼ の明滅）を開始する。話者やテキストに依存しない単一の
-/// グローバルインジケータなので、会話行が変わっても作り直す必要はない
-/// （呼び出し側は `event_loop` の開始時に一度だけ呼べばよい）。
-pub fn build_pulse(now: Instant) -> PulseHandle {
-    PulseHandle::start_at(PAGE_INDICATOR_SYMBOL, PulseOpts::cyan_breath(), now)
+/// ページ送りインジケータの点滅周期（ミリ秒）。GUI版 `frontend/src/game/DialogBox.ts` の
+/// `INDICATOR_BLINK_MS` と同じ値（#495）。
+pub const PAGE_INDICATOR_BLINK_PERIOD_MS: u64 = 1000;
+
+/// `started_at` を基準に `now` 時点でページ送りインジケータを表示すべきか（`true`）/
+/// 非表示にすべきか（`false`）を返す純粋関数。GUI版の
+/// `this.indicatorGlyph.visible = this.indicatorBlinkOn` と同じ、色の補間を挟まない
+/// 完全な on/off 切り替えを表す（#495）。`elapsed_ms / period_ms` が偶数なら表示区間、
+/// 奇数なら非表示区間になる。`now` が `started_at` より前（クロックの巻き戻り等の防御）でも
+/// `saturating_duration_since` で経過時間を0にクランプし、必ず表示区間（`true`）から始まる。
+pub fn blink_visible(started_at: Instant, now: Instant, period_ms: u64) -> bool {
+    let elapsed_ms = now.saturating_duration_since(started_at).as_millis() as u64;
+    (elapsed_ms / period_ms) % 2 == 0
 }
 
 /// `RevealHandle::snapshot` の出力を ratatui の `Line` 列に変換する。`\n` グラフェムは
@@ -333,10 +346,50 @@ mod tests {
     }
 
     #[test]
-    fn build_pulse_starts_with_page_indicator_symbol() {
-        let now = Instant::now();
-        let pulse = build_pulse(now);
-        assert_eq!(pulse.snapshot(now).text, PAGE_INDICATOR_SYMBOL);
+    fn blink_visible_true_at_the_instant_it_starts() {
+        let t = Instant::now();
+        assert!(blink_visible(t, t, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_true_just_before_first_period_ends() {
+        let t = Instant::now();
+        let now = t + Duration::from_millis(PAGE_INDICATOR_BLINK_PERIOD_MS - 1);
+        assert!(blink_visible(t, now, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_false_exactly_at_one_period_elapsed() {
+        // elapsed == period: 1000/1000 = 1（奇数）→ 非表示区間の開始。
+        let t = Instant::now();
+        let now = t + Duration::from_millis(PAGE_INDICATOR_BLINK_PERIOD_MS);
+        assert!(!blink_visible(t, now, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_false_in_the_middle_of_the_second_period() {
+        let t = Instant::now();
+        let now = t + Duration::from_millis(PAGE_INDICATOR_BLINK_PERIOD_MS + 500);
+        assert!(!blink_visible(t, now, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_true_again_at_two_periods_elapsed() {
+        // elapsed == 2*period: 2000/1000 = 2（偶数）→ 表示区間に戻る。
+        let t = Instant::now();
+        let now = t + Duration::from_millis(PAGE_INDICATOR_BLINK_PERIOD_MS * 2);
+        assert!(blink_visible(t, now, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_now_earlier_than_started_at_clamps_to_visible_without_panicking() {
+        // `Instant` は負の経過時間を表現できないため、`now < started_at`（クロックの巻き戻り等
+        // の防御）でも `saturating_duration_since` が0にクランプし、表示区間の扱いになる
+        // ことを確認する（`checked_sub`/`unwrap_or` の underflow 対応と同じ設計方針、
+        // `skip_lines` のコメント参照）。
+        let t = Instant::now();
+        let earlier = t.checked_sub(Duration::from_millis(1)).unwrap_or(t);
+        assert!(blink_visible(t, earlier, PAGE_INDICATOR_BLINK_PERIOD_MS));
     }
 
     #[test]
