@@ -253,6 +253,99 @@ fn average(sum: (u32, u32, u32, u32)) -> (u8, u8, u8) {
     ((sum.0 / n) as u8, (sum.1 / n) as u8, (sum.2 / n) as u8)
 }
 
+/// ターミナルの1文字セルの実世界アスペクト比（幅 / 高さ）。文字セルは一般に正方形ではなく
+/// 縦長（幅の約2倍の高さ）と言われるが、実際の値はターミナルエミュレータ・フォント・
+/// フォントサイズに強く依存する近似値であり、実測に基づく確定値ではない（#489）。
+///
+/// quadrant block の2x2サブピクセルトリック（[`rgba_to_quadrant_grid`]）は1セルを単純に
+/// 縦横2等分するだけなので、サブピクセル自体の実世界アスペクト比もセルのアスペクト比を
+/// そのまま引き継ぐ。cover-fit のクロップ計算（[`compute_cover_crop`]）で使う「ターゲットの
+/// アスペクト比」は、文字セル数ベースの `sub_w:sub_h` をそのまま使うと実際の見た目とズレる
+/// ため、この定数で補正した実効値を使う。kako-jun 実機確認の結果、環境依存で見た目が
+/// 合わない場合は調整の余地がある（#488 の `IMAGE_TEXT_GAP_WIDTH` と同種の割り切り）。
+///
+/// `pub(crate)`: `ui.rs` のテストフィクスチャ（cover-fit クロップが発生しないアスペクト比の
+/// 画像を組み立てる）がこの値を直書きせず参照するために公開している。
+pub(crate) const TERMINAL_CELL_ASPECT_RATIO: f64 = 0.5;
+
+/// 文字セル数ベースの `sub_h` を [`TERMINAL_CELL_ASPECT_RATIO`] で補正し、
+/// [`compute_cover_crop`] に渡す実効ターゲット高さ（`effective_target_h`）を導出する。
+/// `rgba_to_quadrant_grid` の本番計算とテストが同じ式を別々に再実装して重複しないよう、
+/// 両者から呼び出す共通の純粋関数として切り出している。
+fn effective_target_height(sub_h: u32) -> u32 {
+    (f64::from(sub_h) / TERMINAL_CELL_ASPECT_RATIO)
+        .round()
+        .max(1.0) as u32
+}
+
+/// アスペクト比を保ったまま `target_w` x `target_h` の領域を覆う（cover-fit）ために、元画像
+/// （`img_w` x `img_h`）側から中央基準で切り出すべき矩形を計算する。
+///
+/// GUI 側（`frontend/src/game/novelLayout.ts` の `computeCoverFit`）は「スケールしてから
+/// 画面外へはみ出た分をクリップ」する設計だが、TUI は `downsample_box` が元画像を直接
+/// ターゲットグリッドへ比例マッピングする実装のため、見た目としては等価な逆方向の変換
+/// （「元画像側を先にクロップしてから、そのクロップ済み矩形をターゲットへ比例マッピング」）
+/// を取る。
+///
+/// 戻り値は `(crop_x, crop_y, crop_w, crop_h)`（すべて元画像の座標系）で、常に
+/// `crop_x + crop_w <= img_w` かつ `crop_y + crop_h <= img_h` を満たす。
+/// `img_w`/`img_h`/`target_w`/`target_h` のいずれかが 0 の場合はクロップ無し
+/// （`(0, 0, img_w, img_h)`）を返す（panicしない）。
+fn compute_cover_crop(
+    img_w: u32,
+    img_h: u32,
+    target_w: u32,
+    target_h: u32,
+) -> (u32, u32, u32, u32) {
+    if img_w == 0 || img_h == 0 || target_w == 0 || target_h == 0 {
+        return (0, 0, img_w, img_h);
+    }
+    let img_ratio = f64::from(img_w) / f64::from(img_h);
+    let target_ratio = f64::from(target_w) / f64::from(target_h);
+
+    if img_ratio > target_ratio {
+        // 元画像の方が相対的に横長: 高さはフルのまま、幅を中央基準でクロップする。
+        let crop_w = ((f64::from(img_h) * target_ratio).round() as u32).clamp(1, img_w);
+        let crop_x = (img_w - crop_w) / 2;
+        (crop_x, 0, crop_w, img_h)
+    } else {
+        // 元画像の方が相対的に縦長（または target と同じ）: 幅はフルのまま、高さを
+        // 中央基準でクロップする。
+        let crop_h = ((f64::from(img_w) / target_ratio).round() as u32).clamp(1, img_h);
+        let crop_y = (img_h - crop_h) / 2;
+        (0, crop_y, img_w, crop_h)
+    }
+}
+
+/// `pixels`（`img_w` x 高さ相当の RGBA straight alpha、行優先）から
+/// `(crop_x, crop_y, crop_w, crop_h)` の矩形を切り出した新しい RGBA バイト列を返す
+/// （行優先、`crop_w * crop_h * 4` バイト）。呼び出し元（[`compute_cover_crop`]）が返す矩形は
+/// 契約上常に元画像の範囲内に収まるが、防御的に範囲外の読み出しはせず、はみ出た分は
+/// 0（透明黒）で埋める（panicしない）。
+fn crop_rgba(
+    pixels: &[u8],
+    img_w: u32,
+    crop_x: u32,
+    crop_y: u32,
+    crop_w: u32,
+    crop_h: u32,
+) -> Vec<u8> {
+    let mut out = vec![0u8; crop_w as usize * crop_h as usize * 4];
+    for y in 0..crop_h {
+        let src_y = crop_y + y;
+        for x in 0..crop_w {
+            let src_x = crop_x + x;
+            let src_i = ((src_y * img_w + src_x) * 4) as usize;
+            if src_i + 4 > pixels.len() {
+                continue;
+            }
+            let dst_i = ((y * crop_w + x) * 4) as usize;
+            out[dst_i..dst_i + 4].copy_from_slice(&pixels[src_i..src_i + 4]);
+        }
+    }
+    out
+}
+
 /// 元画像（`pixels`: RGBA straight alpha、`img_w` x `img_h`）を、ボックス平均で
 /// `target_w` x `target_h` のサブピクセルグリッドへダウンサンプルする。
 /// `pixels.len() < img_w * img_h * 4` 等の不正な入力では空の `Vec` を返す（panicしない）。
@@ -303,6 +396,12 @@ fn downsample_box(
 /// 変換する（`docs/visual/reference/20260722-nearsighted-pixel-redraw/tui-plan.md` の設計に
 /// 従う）。セル数が 0、画像サイズが 0、または `pixels` が画像サイズに対して短すぎる場合は
 /// [`blank_grid`] を返す（panicしない）。
+///
+/// 端末の高さが変わっても画像が縦横に潰れて見えないよう、cover-fit でアスペクト比を保つ
+/// （#489）。ターゲットグリッド（`sub_w` x `sub_h`）へ単純に比例マッピングするのではなく、
+/// 先に元画像側を [`compute_cover_crop`] で中央基準クロップしてから [`downsample_box`] へ
+/// 渡す。クロップに使う実効ターゲット比は、文字セル数ベースの `sub_w:sub_h` を
+/// [`TERMINAL_CELL_ASPECT_RATIO`] で補正した値（セルが正方形でないことの近似補正）。
 pub fn rgba_to_quadrant_grid(
     pixels: &[u8],
     img_w: u32,
@@ -313,9 +412,21 @@ pub fn rgba_to_quadrant_grid(
     if cols == 0 || rows == 0 || img_w == 0 || img_h == 0 {
         return blank_grid(cols, rows);
     }
+    if pixels.len() < img_w as usize * img_h as usize * 4 {
+        return blank_grid(cols, rows);
+    }
     let sub_w = u32::from(cols) * 2;
     let sub_h = u32::from(rows) * 2;
-    let sub = downsample_box(pixels, img_w, img_h, sub_w, sub_h);
+
+    // 実効ターゲット比 = (sub_w:sub_h) をセルの実アスペクト比で補正したもの。
+    // TERMINAL_CELL_ASPECT_RATIO = セルの幅/高さ なので、sub_h を割ることで
+    // 「セルが縦長なぶん実効的な高さが大きくなる」効果を反映する。
+    let effective_target_h = effective_target_height(sub_h);
+    let (crop_x, crop_y, crop_w, crop_h) =
+        compute_cover_crop(img_w, img_h, sub_w, effective_target_h);
+    let cropped = crop_rgba(pixels, img_w, crop_x, crop_y, crop_w, crop_h);
+
+    let sub = downsample_box(&cropped, crop_w, crop_h, sub_w, sub_h);
     if sub.is_empty() {
         return blank_grid(cols, rows);
     }
@@ -534,6 +645,344 @@ mod tests {
                 "mask=15 should be structurally unreachable, subpixels={subpixels:?}"
             );
         }
+    }
+
+    // ---- cover-fit クロップ計算（純粋関数）----
+
+    #[test]
+    fn compute_cover_crop_wide_image_into_tall_target_crops_width_keeps_full_height() {
+        // 横長の元画像(2:1)を縦長のターゲット(1:2)へ cover-fit させる場合、高さはフルのまま
+        // 幅だけが中央基準でクロップされる。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(200, 100, 10, 20);
+        assert_eq!(crop_h, 100, "高さはフルのまま");
+        assert_eq!(crop_y, 0);
+        assert_eq!(crop_w, 50, "target比(1:2)に合わせて幅を50までクロップ");
+        assert_eq!(crop_x, 75, "中央基準: (200-50)/2");
+    }
+
+    #[test]
+    fn compute_cover_crop_tall_image_into_wide_target_crops_height_keeps_full_width() {
+        // 縦長の元画像(1:2)を横長のターゲット(2:1)へ cover-fit させる場合は逆に、幅はフルの
+        // まま高さだけが中央基準でクロップされる。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(100, 200, 20, 10);
+        assert_eq!(crop_w, 100, "幅はフルのまま");
+        assert_eq!(crop_x, 0);
+        assert_eq!(crop_h, 50, "target比(2:1)に合わせて高さを50までクロップ");
+        assert_eq!(crop_y, 75, "中央基準: (200-50)/2");
+    }
+
+    #[test]
+    fn compute_cover_crop_matching_aspect_ratio_crops_nothing() {
+        // 元画像とターゲットのアスペクト比が一致していれば、クロップは発生せず全体が
+        // そのまま返る（正方形どうしに限らず、比が一致していれば常にこうなるはず）。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(50, 50, 10, 10);
+        assert_eq!((crop_x, crop_y, crop_w, crop_h), (0, 0, 50, 50));
+
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(200, 100, 8, 4);
+        assert_eq!((crop_x, crop_y, crop_w, crop_h), (0, 0, 200, 100));
+    }
+
+    #[test]
+    fn compute_cover_crop_zero_dimension_returns_full_image_without_panicking() {
+        assert_eq!(compute_cover_crop(0, 100, 10, 10), (0, 0, 0, 100));
+        assert_eq!(compute_cover_crop(100, 0, 10, 10), (0, 0, 100, 0));
+        assert_eq!(compute_cover_crop(100, 100, 0, 10), (0, 0, 100, 100));
+        assert_eq!(compute_cover_crop(100, 100, 10, 0), (0, 0, 100, 100));
+    }
+
+    #[test]
+    fn compute_cover_crop_result_always_fits_within_source_image_bounds() {
+        // 不変条件テスト: どんな組み合わせでも、返るクロップ矩形は必ず元画像の範囲内に
+        // 収まる（はみ出た矩形を downsample_box に渡すと範囲外読み出しになりうるため）。
+        let img_sizes = [(1u32, 1u32), (3, 7), (7, 3), (128, 128), (1920, 1080)];
+        let target_sizes = [(1u32, 1u32), (2, 9), (9, 2), (64, 64), (13, 41)];
+        for &(img_w, img_h) in &img_sizes {
+            for &(target_w, target_h) in &target_sizes {
+                let (crop_x, crop_y, crop_w, crop_h) =
+                    compute_cover_crop(img_w, img_h, target_w, target_h);
+                assert!(
+                    crop_w >= 1 && crop_h >= 1,
+                    "クロップ矩形は空であってはならない"
+                );
+                assert!(
+                    crop_x + crop_w <= img_w,
+                    "crop_x+crop_w={} が img_w={} を超えた (img={img_w}x{img_h}, target={target_w}x{target_h})",
+                    crop_x + crop_w,
+                    img_w
+                );
+                assert!(
+                    crop_y + crop_h <= img_h,
+                    "crop_y+crop_h={} が img_h={} を超えた (img={img_w}x{img_h}, target={target_w}x{target_h})",
+                    crop_y + crop_h,
+                    img_h
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compute_cover_crop_square_image_ratio_greater_than_target_crops_width() {
+        // デシジョンテーブル: img_w/img_hの絶対大小関係(ここでは正方形=同値)ではなく
+        // img_ratio と target_ratio の比較だけで分岐が決まることを確認する。
+        // 正方形(比1.0)を、より縦長のtarget(比0.5)へcover-fitさせると img_ratio(1.0) >
+        // target_ratio(0.5) となり幅がクロップされる。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(100, 100, 10, 20);
+        assert_eq!(crop_h, 100, "高さはフルのまま");
+        assert_eq!(crop_y, 0);
+        assert_eq!(crop_w, 50, "target比(0.5)に合わせて幅を50までクロップ");
+        assert_eq!(crop_x, 25, "中央基準: (100-50)/2");
+    }
+
+    #[test]
+    fn compute_cover_crop_tall_image_but_relatively_wider_than_extreme_tall_target_crops_width() {
+        // クロスケース回帰防止: img自体は縦長(w=100<h=200, 比0.5)だが、targetはさらに
+        // 極端に縦長(比0.1)なので、img_ratio(0.5) > target_ratio(0.1) となり「imgの方が
+        // 相対的に横長」判定になって幅がクロップされる。img_w<img_hという絶対関係だけを
+        // 見て「縦長だから高さクロップのはず」と誤判定しないことを確認する。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(100, 200, 1, 10);
+        assert_eq!(
+            crop_h, 200,
+            "高さはフルのまま(imgが相対的に横長扱いされるため)"
+        );
+        assert_eq!(crop_y, 0);
+        assert_eq!(
+            crop_w, 20,
+            "target比(0.1)に合わせて幅を20までクロップ: round(200*0.1)"
+        );
+        assert_eq!(crop_x, 40, "中央基準: (100-20)/2");
+    }
+
+    #[test]
+    fn compute_cover_crop_wide_image_but_relatively_taller_than_extreme_wide_target_crops_height() {
+        // クロスケース回帰防止（逆方向）: img自体は横長(w=200>h=100, 比2.0)だが、target は
+        // さらに極端に横長(比10.0)なので、img_ratio(2.0) <= target_ratio(10.0) となり
+        // 「imgの方が相対的に縦長」判定になって高さがクロップされる。img_w>img_hという
+        // 絶対関係だけを見て「横長だから幅クロップのはず」と誤判定しないことを確認する。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(200, 100, 100, 10);
+        assert_eq!(
+            crop_w, 200,
+            "幅はフルのまま(imgが相対的に縦長扱いされるため)"
+        );
+        assert_eq!(crop_x, 0);
+        assert_eq!(
+            crop_h, 20,
+            "target比(10.0)に合わせて高さを20までクロップ: round(200/10.0)"
+        );
+        assert_eq!(crop_y, 40, "中央基準: (100-20)/2");
+    }
+
+    #[test]
+    fn compute_cover_crop_square_image_ratio_less_than_target_crops_height() {
+        // 正方形(比1.0)を、より横長のtarget(比2.0)へcover-fitさせると img_ratio(1.0) <
+        // target_ratio(2.0) となり高さがクロップされる（item1の対称ケース）。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(100, 100, 20, 10);
+        assert_eq!(crop_w, 100, "幅はフルのまま");
+        assert_eq!(crop_x, 0);
+        assert_eq!(crop_h, 50, "target比(2.0)に合わせて高さを50までクロップ");
+        assert_eq!(crop_y, 25, "中央基準: (100-50)/2");
+    }
+
+    #[test]
+    fn compute_cover_crop_tall_image_ratio_equals_target_crops_nothing() {
+        // 縦長img(比0.5)とtarget(比0.5)の比が一致する場合、クロップは発生しない
+        // （既存の `compute_cover_crop_matching_aspect_ratio_crops_nothing` は正方形と
+        // 横長の組み合わせのみカバーしていたため、縦長側でも確認する）。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(50, 100, 1, 2);
+        assert_eq!((crop_x, crop_y, crop_w, crop_h), (0, 0, 50, 100));
+    }
+
+    #[test]
+    fn compute_cover_crop_ratio_just_above_boundary_crops_minimal_width() {
+        // 境界値: img_ratio(101/100=1.01)がtarget_ratio(1.0)よりわずかに大きいだけの
+        // ケース。分岐は「幅クロップ」側に倒れるが、クロップ量は最小(1px)になるはず。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(101, 100, 100, 100);
+        assert_eq!(crop_h, 100, "高さはフルのまま");
+        assert_eq!(crop_y, 0);
+        assert_eq!(
+            crop_w, 100,
+            "round(100*1.0)=100、img_w=101よりちょうど1px少ない"
+        );
+        assert_eq!(crop_x, 0, "(101-100)/2=0（整数除算で切り捨て）");
+    }
+
+    #[test]
+    fn compute_cover_crop_ratio_just_below_boundary_crops_minimal_height() {
+        // 対称ケース: img_ratio(100/101≈0.9901)がtarget_ratio(1.0)よりわずかに小さいだけ。
+        // 分岐は「高さクロップ」側(else)に倒れるが、クロップ量は最小(1px)になるはず。
+        let (crop_x, crop_y, crop_w, crop_h) = compute_cover_crop(100, 101, 100, 100);
+        assert_eq!(crop_w, 100, "幅はフルのまま");
+        assert_eq!(crop_x, 0);
+        assert_eq!(
+            crop_h, 100,
+            "round(100/1.0)=100、img_h=101よりちょうど1px少ない"
+        );
+        assert_eq!(crop_y, 0, "(101-100)/2=0（整数除算で切り捨て）");
+    }
+
+    #[test]
+    fn compute_cover_crop_1x1_image_returns_full_image_regardless_of_target() {
+        // 境界値: img_w/img_hが1(これ以上縮められない)の場合、crop_w/crop_hは
+        // `clamp(1, img_w)` / `clamp(1, img_h)` によりどちらも1に固定される。
+        // targetがどれだけ極端な比であっても常に画像全体(0,0,1,1)が返ることを、
+        // 複数のtargetで確認する（実装の意図の明示テスト）。
+        let targets = [(1u32, 1000u32), (1000, 1), (50, 50), (1, 1), (7, 3)];
+        for &(target_w, target_h) in &targets {
+            assert_eq!(
+                compute_cover_crop(1, 1, target_w, target_h),
+                (0, 0, 1, 1),
+                "target={target_w}x{target_h} でも1x1画像は常に全体を返すはず"
+            );
+        }
+    }
+
+    #[test]
+    fn compute_cover_crop_result_aspect_ratio_matches_effective_target_ratio_within_rounding() {
+        // doctrine「等価性の機械的証明」: compute_cover_crop の戻り値のアスペクト比
+        // (crop_w/crop_h) は、渡した target 側の比 (target_w/target_h) と整数丸め誤差の
+        // 範囲内で一致するはず。rgba_to_quadrant_grid が実際に呼び出す際の target は
+        // 文字セル数(sub_w x sub_h)を effective_target_height() で補正した
+        // effective_target_h なので、本番と同じ関数をそのまま呼び実利用に即した値で
+        // 検証する（期待値を直書きせず、本番の計算関数から導出する）。
+        //
+        // img は十分大きい値だけを使う（1x1 等の極小画像は `clamp(1, img_w/img_h)` で
+        // 比が保てなくなることが意図された挙動であり、それは別テスト
+        // `compute_cover_crop_1x1_image_returns_full_image_regardless_of_target` が
+        // カバーしている）。
+        let cell_grids: [(u16, u16); 4] = [(1, 1), (10, 5), (3, 20), (80, 24)];
+        let img_sizes: [(u32, u32); 6] = [
+            (100, 100),
+            (1920, 1080),
+            (1080, 1920),
+            (2000, 100),
+            (100, 2000),
+            (333, 777),
+        ];
+
+        for &(cols, rows) in &cell_grids {
+            let sub_w = u32::from(cols) * 2;
+            let sub_h = u32::from(rows) * 2;
+            let effective_target_h = effective_target_height(sub_h);
+            let target_ratio = f64::from(sub_w) / f64::from(effective_target_h);
+
+            for &(img_w, img_h) in &img_sizes {
+                let (_, _, crop_w, crop_h) =
+                    compute_cover_crop(img_w, img_h, sub_w, effective_target_h);
+                let crop_ratio = f64::from(crop_w) / f64::from(crop_h);
+                // crop_w/crop_hは整数への丸めを経るため、その丸め1px分の誤差を許容する。
+                let tolerance =
+                    1.0 / f64::from(crop_h.max(1)) + 1.0 / f64::from(crop_w.max(1)) + 1e-9;
+                assert!(
+                    (crop_ratio - target_ratio).abs() <= tolerance,
+                    "img={img_w}x{img_h} target={sub_w}x{effective_target_h}: crop比{crop_ratio} が target比{target_ratio} と丸め誤差({tolerance})を超えて乖離 (crop={crop_w}x{crop_h})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn crop_rgba_extracts_expected_subrectangle() {
+        // 4x2 の画像（列ごとに異なる色: 0,1,2,3）から中央2列(x=1..3)を切り出す。
+        let colors: [(u8, u8, u8, u8); 4] = [
+            (10, 0, 0, 255),
+            (20, 0, 0, 255),
+            (30, 0, 0, 255),
+            (40, 0, 0, 255),
+        ];
+        let mut pixels = Vec::new();
+        for _y in 0..2 {
+            for &(r, g, b, a) in &colors {
+                pixels.extend_from_slice(&[r, g, b, a]);
+            }
+        }
+        let cropped = crop_rgba(&pixels, 4, 1, 0, 2, 2);
+        assert_eq!(cropped.len(), 2 * 2 * 4);
+        // 各行とも列1,2の色（20,0,0,255）(30,0,0,255）が並ぶはず。
+        assert_eq!(&cropped[0..4], &[20, 0, 0, 255]);
+        assert_eq!(&cropped[4..8], &[30, 0, 0, 255]);
+        assert_eq!(&cropped[8..12], &[20, 0, 0, 255]);
+        assert_eq!(&cropped[12..16], &[30, 0, 0, 255]);
+    }
+
+    #[test]
+    fn crop_rgba_out_of_bounds_rect_zero_fills_without_panicking() {
+        // crop_rgba のdocコメントが明記する防御的挙動: 呼び出し元(compute_cover_crop)の
+        // 契約上は常にin-boundsな矩形しか渡らないはずだが、それでも範囲外の読み出しを
+        // せず0(透明黒)で埋めるガードが実装されている。この専用テストで直接検証する。
+        let pixels: Vec<u8> = vec![
+            1, 1, 1, 255, 2, 2, 2, 255, // row0: 2px
+            3, 3, 3, 255, 4, 4, 4,
+            255, // row1: 2px (img_w=2の2x2画像として16バイトのみ)
+        ];
+        // (crop_x=1, crop_y=1) を起点に2x2をクロップ要求すると、右端・下端が画像範囲外
+        // (存在するのは16バイト=2x2画素のみ)になる。
+        let cropped = crop_rgba(&pixels, 2, 1, 1, 2, 2);
+        assert_eq!(cropped.len(), 2 * 2 * 4, "サイズ自体は要求通りに確保される");
+        assert_eq!(
+            &cropped[0..4],
+            &[4, 4, 4, 255],
+            "in-boundsな唯一の画素(src=(1,1))はそのままコピーされる"
+        );
+        assert_eq!(&cropped[4..8], &[0, 0, 0, 0], "範囲外(src=(2,1))は0埋め");
+        assert_eq!(&cropped[8..12], &[0, 0, 0, 0], "範囲外(src=(1,2))は0埋め");
+        assert_eq!(&cropped[12..16], &[0, 0, 0, 0], "範囲外(src=(2,2))は0埋め");
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_cover_fit_crops_out_far_edge_color() {
+        // 統合確認: 横長画像の左右の縁だけが緑、中央の広い範囲が赤。単純な比例マッピング
+        // （クロップ無し）なら1x1セルの結果は赤緑が混ざった色になるはずだが、cover-fit
+        // クロップにより画像端の緑は完全に切り落とされ、赤のみが残る。
+        //
+        // #489セルフレビュー指摘: 以前はimg=4x2という極小フィクスチャで、
+        // TERMINAL_CELL_ASPECT_RATIO=0.5前提の1px境界に暗黙依存し、赤/緑境界を直書きして
+        // いた（定数を調整すると壊れる）。ここでは赤/緑の境界を画像端から十分離す（緑を
+        // 左右の縁だけの帯にする）ことで、TERMINAL_CELL_ASPECT_RATIO が多少調整されても
+        // クロップ結果が赤の範囲内に収まるようにする（doctrine: テストの期待値に定数の
+        // 計算結果を直書きしない）。
+        let img_w = 100u32;
+        let img_h = 10u32;
+        let red = [255u8, 0, 0, 255];
+        let green = [0u8, 255, 0, 255];
+        let red_range = 30..70; // 中央40px幅だけ赤、残りの左右各30pxは緑
+        let mut pixels = Vec::with_capacity((img_w * img_h * 4) as usize);
+        for _y in 0..img_h {
+            for x in 0..img_w {
+                let px = if red_range.contains(&x) { red } else { green };
+                pixels.extend_from_slice(&px);
+            }
+        }
+        let grid = rgba_to_quadrant_grid(&pixels, img_w, img_h, 1, 1);
+        assert_eq!(grid.cells.len(), 1);
+        assert_eq!(
+            grid.cells[0].bg,
+            (255, 0, 0),
+            "cover-fitクロップにより中央から十分離れた緑の縁は完全に切り落とされ赤のみが残るはず"
+        );
+        assert_eq!(
+            grid.cells[0].glyph, ' ',
+            "単色クロップ結果は無地セルになるはず"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_pixels_shorter_than_declared_size_returns_blank_grid_without_panicking(
+    ) {
+        // 最重要（事故パターン）: crop_rgba導入後、downsample_box自身が持つ同種チェック
+        // （`pixels.len() < img_w*img_h*4`）は、rgba_to_quadrant_grid経由の呼び出し経路
+        // では発火しなくなった。crop_rgbaが常に「crop_w*crop_h*4 ちょうど」のバッファを
+        // 新しく作ってdownsample_boxへ渡すため、downsample_box側からは常にサイズが
+        // 一致して見える（crop_rgba自体は範囲外を0埋めするだけでpanicはしないが、
+        // 不正な長さのpixelsに対して「blank_gridを返す」という契約を守れるのは、
+        // rgba_to_quadrant_grid冒頭の本ガードだけになった）。
+        let pixels = vec![255u8; 4]; // 1画素分しかないのに 4x4 を主張する不正な入力
+        let grid = rgba_to_quadrant_grid(&pixels, 4, 4, 2, 2);
+        assert_eq!(grid.cols, 2);
+        assert_eq!(grid.rows, 2);
+        assert_eq!(grid.cells.len(), 4);
+        assert!(
+            grid.cells.iter().all(|c| *c == BLANK_CELL),
+            "不正な長さのpixelsに対してはblank_gridを返すべき（panicしない）"
+        );
     }
 
     #[test]

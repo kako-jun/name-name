@@ -453,8 +453,18 @@ mod tests {
     fn diagonal_pattern_webp_fixture(cols: u16, rows: u16) -> std::path::PathBuf {
         let sub_w = cols as u32 * 2;
         let sub_h = rows as u32 * 2;
-        let mut rgba = Vec::with_capacity((sub_w * sub_h * 4) as usize);
+        // #489: rgba_to_quadrant_grid は cover-fit + ターミナルセルのアスペクト比補正
+        // （TERMINAL_CELL_ASPECT_RATIO）で元画像を先にクロップしてからダウンサンプルする
+        // ようになった。このフィクスチャはクロップが一切発生しないよう、実効ターゲット比
+        // （sub_w : sub_h/TERMINAL_CELL_ASPECT_RATIO）と同じアスペクト比の画像を作る —
+        // 各行を `1/TERMINAL_CELL_ASPECT_RATIO` 回だけ縦に複製して高さを増やす
+        // （複製した行どうしは同色なので、ボックス平均で潰しても純色のまま保たれ、
+        // このテストが検証したい「各セルが厳密に単色2色の対角パターンになる」性質は崩れない）。
+        let row_repeat = (1.0 / crate::image_render::TERMINAL_CELL_ASPECT_RATIO).round() as u32;
+        let img_h = sub_h * row_repeat;
+        let mut rgba = Vec::with_capacity((sub_w * img_h * 4) as usize);
         for y in 0..sub_h {
+            let mut row = Vec::with_capacity((sub_w * 4) as usize);
             for x in 0..sub_w {
                 let is_black = (x % 2) == (y % 2);
                 let px = if is_black {
@@ -462,10 +472,13 @@ mod tests {
                 } else {
                     [255u8, 255, 255, 255]
                 };
-                rgba.extend_from_slice(&px);
+                row.extend_from_slice(&px);
+            }
+            for _ in 0..row_repeat {
+                rgba.extend_from_slice(&row);
             }
         }
-        crate::image_render::write_test_webp_fixture(&rgba, sub_w, sub_h)
+        crate::image_render::write_test_webp_fixture(&rgba, sub_w, img_h)
     }
 
     /// `image_fade` テスト用に `Config::event_image.assets_dir` をフィクスチャの置き場所へ
