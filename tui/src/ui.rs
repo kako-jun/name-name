@@ -68,10 +68,12 @@ const REQUIRED_MAIN_CONTENT_ROWS: u16 = 20;
 /// cover-fit のクロップ計算に渡す。正方形画像でクロップを0にするには
 /// `sub_w == effective_target_h` が必要で、これを解くと
 /// `image_cols*2 == (image_rows*2) / TERMINAL_CELL_ASPECT_RATIO` → 定数0.5のとき
-/// `image_cols = image_rows * 2` になる（この関係は `TERMINAL_CELL_ASPECT_RATIO` の具体値に
-/// よらず、`sub_w = rows*4` と `effective_target_h = (rows*2)/TERMINAL_CELL_ASPECT_RATIO`
-/// が既に `image_cols = image_rows*2` の時点で一致するため、`REQUIRED_MAIN_CONTENT_ROWS` の
-/// 値自体は自由に選べる）。実際にクロップ0になることは
+/// `image_cols = image_rows * 2` になる（この関係は `TERMINAL_CELL_ASPECT_RATIO = 0.5` という
+/// 具体値そのものに依存しており、式を逆算すると AR はこの値に一意に定まる。AR非依存で
+/// 不変なのはむしろ逆で、`REQUIRED_MAIN_CONTENT_ROWS`（rows）の具体値の方 —
+/// `sub_w = rows*4` と `effective_target_h = (rows*2)/TERMINAL_CELL_ASPECT_RATIO` の式で
+/// rows は両辺で約分されて消えるため自由に選べる。将来 `TERMINAL_CELL_ASPECT_RATIO` を
+/// 調整する場合は、この `*2` の式も合わせて見直す必要がある）。実際にクロップ0になることは
 /// `tests::fixed_canvas_square_image_crops_nothing_at_required_image_pane_size` で検算する。
 const REQUIRED_IMAGE_COLS: u16 = REQUIRED_MAIN_CONTENT_ROWS * 2;
 
