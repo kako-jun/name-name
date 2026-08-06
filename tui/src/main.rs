@@ -835,7 +835,11 @@ mod tests {
         let mut playback =
             Playback::from_lines(vec![dline(Some("A"), "hello"), dline(Some("B"), "world")]);
 
-        let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
 
         let mut call_count = 0u32;
         let mut next_action = move || -> anyhow::Result<Action> {

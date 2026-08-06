@@ -3153,9 +3153,9 @@ mod tests {
         // "主格" は Config::default() の player_speakers に含まれる → self(下)窓。
         let line = dialog_line(Some("主格"), vec!["hello"]);
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+        let buffer = render(&config, Some(&line), Some(&reveal), CANVAS_W, CANVAS_H);
 
-        let (_opponent_area, self_area) = text_sub_areas(40, 10);
+        let (_opponent_area, self_area) = text_sub_areas(CANVAS_W, CANVAS_H);
         let indicator_cell = page_indicator_area(self_area);
         let cell = buffer
             .cell((indicator_cell.x, indicator_cell.y))
@@ -3175,9 +3175,9 @@ mod tests {
         // "相手" は player_speakers ("主格") に含まれない → opponent(上)窓。
         let line = dialog_line(Some("相手"), vec!["hello"]);
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+        let buffer = render(&config, Some(&line), Some(&reveal), CANVAS_W, CANVAS_H);
 
-        let (opponent_area, _self_area) = text_sub_areas(40, 10);
+        let (opponent_area, _self_area) = text_sub_areas(CANVAS_W, CANVAS_H);
         let indicator_cell = page_indicator_area(opponent_area);
         let cell = buffer
             .cell((indicator_cell.x, indicator_cell.y))
@@ -3198,8 +3198,14 @@ mod tests {
 
         let self_line = dialog_line(Some("主格"), vec!["hello"]);
         let self_reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &self_line));
-        let self_buffer = render(&config, Some(&self_line), Some(&self_reveal), 40, 10);
-        let (_opponent_area, self_area) = text_sub_areas(40, 10);
+        let self_buffer = render(
+            &config,
+            Some(&self_line),
+            Some(&self_reveal),
+            CANVAS_W,
+            CANVAS_H,
+        );
+        let (_opponent_area, self_area) = text_sub_areas(CANVAS_W, CANVAS_H);
         let self_indicator_cell = page_indicator_area(self_area);
         let self_cell = self_buffer
             .cell((self_indicator_cell.x, self_indicator_cell.y))
@@ -3212,10 +3218,10 @@ mod tests {
             &config,
             Some(&opponent_line),
             Some(&opponent_reveal),
-            40,
-            10,
+            CANVAS_W,
+            CANVAS_H,
         );
-        let (opponent_area, _self_area) = text_sub_areas(40, 10);
+        let (opponent_area, _self_area) = text_sub_areas(CANVAS_W, CANVAS_H);
         let opponent_indicator_cell = page_indicator_area(opponent_area);
         let opponent_cell = opponent_buffer
             .cell((opponent_indicator_cell.x, opponent_indicator_cell.y))
@@ -3239,9 +3245,9 @@ mod tests {
         config.colors.player = "not-a-real-color".to_string();
         let line = dialog_line(Some("主格"), vec!["hello"]); // self(下)窓
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+        let buffer = render(&config, Some(&line), Some(&reveal), CANVAS_W, CANVAS_H);
 
-        let (_opponent_area, self_area) = text_sub_areas(40, 10);
+        let (_opponent_area, self_area) = text_sub_areas(CANVAS_W, CANVAS_H);
         let indicator_cell = page_indicator_area(self_area);
         let cell = buffer
             .cell((indicator_cell.x, indicator_cell.y))
@@ -3262,9 +3268,9 @@ mod tests {
         config.colors.opponent = "not-a-real-color".to_string();
         let line = dialog_line(Some("相手"), vec!["hello"]); // opponent(上)窓
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+        let buffer = render(&config, Some(&line), Some(&reveal), CANVAS_W, CANVAS_H);
 
-        let (opponent_area, _self_area) = text_sub_areas(40, 10);
+        let (opponent_area, _self_area) = text_sub_areas(CANVAS_W, CANVAS_H);
         let indicator_cell = page_indicator_area(opponent_area);
         let cell = buffer
             .cell((indicator_cell.x, indicator_cell.y))
@@ -3287,9 +3293,9 @@ mod tests {
         let config = Config::default();
         let line = dialog_line(None, vec!["hello"]); // Narration
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
-        let buffer = render(&config, Some(&line), Some(&reveal), 40, 10);
+        let buffer = render(&config, Some(&line), Some(&reveal), CANVAS_W, CANVAS_H);
 
-        let (opponent_area, _self_area) = text_sub_areas(40, 10);
+        let (opponent_area, _self_area) = text_sub_areas(CANVAS_W, CANVAS_H);
         let indicator_cell = page_indicator_area(opponent_area);
         let cell = buffer
             .cell((indicator_cell.x, indicator_cell.y))
@@ -3321,7 +3327,7 @@ mod tests {
         let now =
             started_at + std::time::Duration::from_millis(reveal::PAGE_INDICATOR_BLINK_PERIOD_MS);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -3359,7 +3365,7 @@ mod tests {
         let now =
             started_at + std::time::Duration::from_millis(reveal::PAGE_INDICATOR_BLINK_PERIOD_MS);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
             .draw(|f| {
                 draw(
@@ -3394,7 +3400,7 @@ mod tests {
         let now = started_at
             + std::time::Duration::from_millis(reveal::PAGE_INDICATOR_BLINK_PERIOD_MS * 2 + 1);
         let mut image_cache = ImageCache::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
             .draw(|f| {
                 draw(
