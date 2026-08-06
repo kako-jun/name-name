@@ -158,6 +158,12 @@ pub struct Config {
     pub typewriter: TypewriterConfig,
     /// イベント絵アセットの基点ディレクトリ・クロスフェード時間（#481）。
     pub event_image: EventImageConfig,
+    /// adv 表示を文単位（`splitIntoSentences` 相当）で改頁するか（#486）。既定 `false` は
+    /// 従来どおり markdown 行単位の一括表示（非破壊）。GUI版 frontmatter `sentence_per_page:`
+    /// とは別軸 — TUI は原稿の per-game frontmatter を読まず、`tui-config.toml` 側のこの
+    /// フィールドで独立に制御する（`dialog_style` を TUI が常に adv 固定で運用しているのと
+    /// 同じ「TUI は自前の Config で制御する」設計）。
+    pub sentence_per_page: bool,
 }
 
 impl Default for Config {
@@ -172,6 +178,7 @@ impl Default for Config {
             player_speakers: vec!["主格".to_string()],
             typewriter: TypewriterConfig::default(),
             event_image: EventImageConfig::default(),
+            sentence_per_page: false,
         }
     }
 }
@@ -268,6 +275,7 @@ mod tests {
             PathBuf::from("assets/images")
         );
         assert_eq!(config.event_image.crossfade_ms, 700);
+        assert!(!config.sentence_per_page);
     }
 
     #[test]
@@ -346,6 +354,21 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(config.resolve_image_path("/etc/passwd"), None);
+    }
+
+    #[test]
+    fn from_toml_str_sentence_per_page_true_at_top_level() {
+        // 既存フィールド（game_name 等）と同じ階層（サブテーブルなし）で読める（#486）。
+        let toml = "sentence_per_page = true\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert!(config.sentence_per_page);
+        assert_eq!(config.game_name, Config::default().game_name);
+    }
+
+    #[test]
+    fn from_toml_str_sentence_per_page_absent_defaults_to_false() {
+        let config = Config::from_toml_str("").expect("empty toml should parse");
+        assert!(!config.sentence_per_page);
     }
 
     #[test]
