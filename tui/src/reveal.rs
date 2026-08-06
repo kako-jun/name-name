@@ -137,7 +137,7 @@ pub fn blink_visible(started_at: Instant, now: Instant, period_ms: u64) -> bool 
         return true;
     }
     let elapsed_ms = now.saturating_duration_since(started_at).as_millis() as u64;
-    (elapsed_ms / period_ms) % 2 == 0
+    (elapsed_ms / period_ms).is_multiple_of(2)
 }
 
 /// ページ送りインジケータを表示すべきか（choice非表示 かつ 会話行あり かつ reveal完了）を
