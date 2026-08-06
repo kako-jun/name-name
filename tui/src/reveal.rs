@@ -140,6 +140,22 @@ pub fn blink_visible(started_at: Instant, now: Instant, period_ms: u64) -> bool 
     (elapsed_ms / period_ms) % 2 == 0
 }
 
+/// ページ送りインジケータを表示すべきか（choice非表示 かつ 会話行あり かつ reveal完了）を
+/// 判定する純粋関数。以前は `main.rs`（`event_loop`）と `ui.rs`（`draw_text_windows`）の
+/// 両方にこの可視条件が手書きで複製されており、現時点では数学的に等価でも将来どちらか
+/// 片方だけが変更されると黙って乖離するリスクがあった（セルフレビュー should 指摘、
+/// #495 追加修正2）。両呼び出し元がこの関数を経由することで、可視条件の定義を1箇所に
+/// 保つ。`reveal` が `None`（会話行そのものが無い等）の場合は reveal 完了として扱わない
+/// （常に `false`）。
+pub fn should_show_page_indicator(
+    has_choice: bool,
+    has_line: bool,
+    reveal: Option<&RevealState>,
+    now: Instant,
+) -> bool {
+    !has_choice && has_line && reveal.is_some_and(|r| r.is_done(now))
+}
+
 /// `show_page_indicator`（インジケータを表示すべきか＝reveal完了かつ選択肢非表示、呼び出し側
 /// `main.rs`/`ui::draw_text_windows` が判定する）が直前フレーム（`was_shown`）は `false` で
 /// 今フレームは `true` になった瞬間（非表示→表示への遷移）だけ、点滅の基準時刻を `now` に
@@ -157,7 +173,21 @@ pub fn blink_visible(started_at: Instant, now: Instant, period_ms: u64) -> bool 
 /// 潰したのと同じ事故（読み終えたのに▼が最大1秒近く見えない）がTUI側でも再現しうった
 /// （テスト設計エージェント指摘）。`event_loop` がこの関数を毎フレーム呼び、reveal完了の
 /// 瞬間に基準時刻をリセットすることで、どの会話行が・いつ完了しても、完了直後は必ず
-/// 表示区間（ON）から点滅が始まる。
+/// 表示区間（ON）から点滅が始まる ——
+///
+/// **ただしこの関数単体では保証できないケースが1つある**（セルフレビュー指摘、#495
+/// 追加修正2）。`char_interval_ms=0 && fade_duration_ms=0`（タイプライター演出を完全に
+/// 無効化する設定）では、[`build_reveal`] が返す `RevealHandle` は生成された瞬間に既に
+/// `is_done()==true` になる。この設定下で行Aの表示完了後（`was_shown=true`）に次の行Bへ
+/// 進むと、行Bの reveal も生成された瞬間に既に完了しているため `show_page_indicator` は
+/// `true→true` のまま一度も `false` を経由せず、この関数の「非表示→表示遷移」判定が
+/// 発火しない。この関数はフレーム間の `show_page_indicator` の値の差分しか見ておらず、
+/// 「会話行そのものが切り替わったか」を知らないため、これは原理的にこの関数だけでは
+/// 検出できない。呼び出し側（`main.rs` の `event_loop`）が `playback.position()` の変化
+/// （＝実際に新しい行へ進んだ）を検知して `was_shown` を強制的に `false` にリセットして
+/// から次フレームでこの関数を呼ぶことで、GUI版 `NovelRenderer` が新しい行/ページが始まる
+/// たびに明示的に `setIndicatorVisible(false)` を呼んでからタイプライターを開始するのと
+/// 同じ「行が変わったら一旦強制的に隠す」保証を得ている。
 pub fn indicator_blink_started_at(
     was_shown: bool,
     show_page_indicator: bool,
@@ -442,6 +472,57 @@ mod tests {
         let t = Instant::now();
         let now = t + Duration::from_millis(500);
         assert!(blink_visible(t, now, 0));
+    }
+
+    #[test]
+    fn should_show_page_indicator_true_when_no_choice_has_line_and_reveal_done() {
+        let config = Config::default();
+        let l = line(Some("A"), vec!["hello"]);
+        let state = RevealState::Done(skip_lines(&config, &l));
+        let now = Instant::now();
+        assert!(should_show_page_indicator(false, true, Some(&state), now));
+    }
+
+    #[test]
+    fn should_show_page_indicator_false_when_has_choice() {
+        // 選択肢表示中は reveal が完了していてもインジケータの概念が無い。
+        let config = Config::default();
+        let l = line(Some("A"), vec!["hello"]);
+        let state = RevealState::Done(skip_lines(&config, &l));
+        let now = Instant::now();
+        assert!(!should_show_page_indicator(true, true, Some(&state), now));
+    }
+
+    #[test]
+    fn should_show_page_indicator_false_when_no_line() {
+        let config = Config::default();
+        let l = line(Some("A"), vec!["hello"]);
+        let state = RevealState::Done(skip_lines(&config, &l));
+        let now = Instant::now();
+        assert!(!should_show_page_indicator(false, false, Some(&state), now));
+    }
+
+    #[test]
+    fn should_show_page_indicator_false_when_reveal_is_none() {
+        let now = Instant::now();
+        assert!(!should_show_page_indicator(false, true, None, now));
+    }
+
+    #[test]
+    fn should_show_page_indicator_false_when_reveal_not_done_yet() {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000;
+        config.typewriter.fade_duration_ms = 0;
+        let l = line(Some("A"), vec!["hello there"]);
+        let now = Instant::now();
+        let state = animating_state(&config, &l, now);
+        assert!(!should_show_page_indicator(false, true, Some(&state), now));
+    }
+
+    /// テスト専用ヘルパー: `main.rs` の `tests::animating` と同じ役割
+    /// （`Config`/`DisplayLine`/`now` から `RevealState::Animating` を組み立てる）。
+    fn animating_state(config: &Config, l: &DisplayLine, now: Instant) -> RevealState {
+        RevealState::Animating(build_reveal(config, l, now))
     }
 
     #[test]
