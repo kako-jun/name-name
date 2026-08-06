@@ -209,18 +209,34 @@ impl Playback {
     /// `chapter_file_ids` は同関数が返す `MergedDocument::chapter_file_ids`
     /// （`doc.chapters[i]` の由来ファイル id）をそのまま渡す想定。各 item に由来ファイルの id が
     /// 刻まれ、`advance()` がファイル境界を越える暗黙の前進を拒否するようになる（構造体の
-    /// doc コメント参照）。`chapter_file_ids.len()` が `doc.chapters.len()` と一致しない
-    /// （呼び出し側の不整合、実運用では起こらない）場合は、対応が無いチャプターをその
-    /// チャプター自身の index で代用する — 各 index は一意なので、そのチャプターは前後と
-    /// 必ず別ファイル扱いになり、panic せず安全側（余分な境界が入るだけ）に倒れる。
+    /// doc コメント参照）。`chapter_file_ids.len()` は常に `doc.chapters.len()` と一致する
+    /// 前提（`multi_doc::merge_files` が呼び出し元として保証する）で、`build` がこの前提を
+    /// `debug_assert_eq!` で検証する。前提が崩れた場合のフォールバック（対応の無いチャプターを
+    /// そのチャプター自身の index で代用する）は「安全側に倒れる」わけではない点に注意 —
+    /// フォールバック値（`chapter_index`）は他チャプターの明示的な file id と数値的に偶然
+    /// 一致しうるため、本来張られるべき境界が消え、ファイルをまたいだ内容漏れが静かに
+    /// 起こりうる（実測: `chapter_file_ids=[2,2]`、`doc.chapters.len()==3` のとき、3番目の
+    /// チャプターのフォールバック値 `2` が既存の file id `2` と衝突し、全チャプターが同一
+    /// ファイル扱いになって境界が機能しなくなる）。
     pub fn from_merged_document(doc: &Document, chapter_file_ids: &[usize]) -> Self {
         Self::build(doc, Some(chapter_file_ids))
     }
 
     /// `from_document` / `from_merged_document` 共通の構築ロジック。`chapter_file_ids` が
     /// `None` のときは全 item を単一の合成ファイル id `0` として扱う（構造体の doc コメント
-    /// 参照）。
+    /// 参照）。`Some` のときは長さが `doc.chapters.len()` と一致する前提を `debug_assert_eq!`
+    /// で検証する — 前提が崩れるとファイル境界の判定が静かに壊れうるため
+    /// （[`Playback::from_merged_document`] の doc コメント参照）、デバッグビルドでは
+    /// 早期に検出する。
     fn build(doc: &Document, chapter_file_ids: Option<&[usize]>) -> Self {
+        if let Some(ids) = chapter_file_ids {
+            debug_assert_eq!(
+                ids.len(),
+                doc.chapters.len(),
+                "chapter_file_ids.len() は doc.chapters.len() と一致する前提（multi_doc::merge_files \
+                 が保証）。不一致のまま進むとファイル境界の判定が壊れうる。"
+            );
+        }
         let mut items = Vec::new();
         let mut item_file_ids = Vec::new();
         let mut scene_start = HashMap::new();
