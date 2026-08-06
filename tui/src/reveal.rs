@@ -1,17 +1,22 @@
-//! `jiwa`（タイプライター演出 + ページ送りインジケータ）のオプション組み立てと
-//! スナップショット→ratatui変換をここに閉じ込める（#472）。
+//! `jiwa`（タイプライター演出）のオプション組み立てとスナップショット→ratatui変換、および
+//! ページ送りインジケータの点滅判定をここに閉じ込める（#472、#495）。
 //!
-//! `jiwa::RevealHandle` / `jiwa::PulseHandle` はレンダラー非依存で `Rgb(u8, u8, u8)` を
-//! 返すだけなので、ratatui の `Color` / `Line` / `Span` への変換と、既存の `Config` 配色
-//! （話者ごとの色名文字列）から `jiwa::RevealOpts` を組み立てる処理は tui 側の責務になる。
-//! kako-jun/type-globe の `src/ui/quiz.rs`（RevealHandle 使用例）/ `src/ui/listen.rs`
-//! （PulseHandle 使用例）と同じ設計 — 記号・色はハードコードし、速度だけを Config 化する —
-//! を踏襲する。
+//! `jiwa::RevealHandle` はレンダラー非依存で `Rgb(u8, u8, u8)` を返すだけなので、ratatui の
+//! `Color` / `Line` / `Span` への変換と、既存の `Config` 配色（話者ごとの色名文字列）から
+//! `jiwa::RevealOpts` を組み立てる処理は tui 側の責務になる。kako-jun/type-globe の
+//! `src/ui/quiz.rs`（RevealHandle 使用例）と同じ設計 — 記号・色はハードコードし、速度だけを
+//! Config 化する — を踏襲する。
+//!
+//! ページ送りインジケータ（[`PAGE_INDICATOR_SYMBOL`]）は GUI版 `frontend/src/game/DialogBox.ts`
+//! の `indicatorBlinkOn` と同じ「完全な on/off 切り替え」（[`blink_visible`]）で点滅する。
+//! `jiwa::PulseHandle`（連続色補間の「呼吸」エフェクト専用設計、`PulseOpts::cyan_breath()` 等）
+//! はこの用途には合わないため使わない（#495）。色はウィンドウ（自分側/相手側）ごとに
+//! `Config::colors` の値を呼び出し側（`ui::draw_text_windows`）が固定して使う。
 
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use jiwa::{PulseHandle, PulseOpts, RevealHandle, RevealOpts, RevealedGrapheme, Rgb};
+use jiwa::{RevealHandle, RevealOpts, RevealedGrapheme, Rgb};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
@@ -111,11 +116,89 @@ pub fn skip_lines(config: &Config, line: &DisplayLine) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// ページ送りインジケータ（▼ の明滅）を開始する。話者やテキストに依存しない単一の
-/// グローバルインジケータなので、会話行が変わっても作り直す必要はない
-/// （呼び出し側は `event_loop` の開始時に一度だけ呼べばよい）。
-pub fn build_pulse(now: Instant) -> PulseHandle {
-    PulseHandle::start_at(PAGE_INDICATOR_SYMBOL, PulseOpts::cyan_breath(), now)
+/// ページ送りインジケータの点滅周期（ミリ秒）。GUI版 `frontend/src/game/DialogBox.ts` の
+/// `INDICATOR_BLINK_MS` と同じ値（#495）。
+pub const PAGE_INDICATOR_BLINK_PERIOD_MS: u64 = 1000;
+
+/// `started_at` を基準に `now` 時点でページ送りインジケータを表示すべきか（`true`）/
+/// 非表示にすべきか（`false`）を返す純粋関数。GUI版の
+/// `this.indicatorGlyph.visible = this.indicatorBlinkOn` と同じ、色の補間を挟まない
+/// 完全な on/off 切り替えを表す（#495）。`elapsed_ms / period_ms` が偶数なら表示区間、
+/// 奇数なら非表示区間になる。`now` が `started_at` より前（クロックの巻き戻り等の防御）でも
+/// `saturating_duration_since` で経過時間を0にクランプし、必ず表示区間（`true`）から始まる。
+///
+/// `period_ms == 0` はゼロ除算になる未定義入力のため、常に表示区間（`true`）扱いにフォール
+/// バックする（呼び出し元は常に定数 [`PAGE_INDICATOR_BLINK_PERIOD_MS`] を渡すため実運用では
+/// 到達しないが、この関数は `pub` な純粋関数として任意の `period_ms` を受け取れる形をして
+/// いるため、防御を省くとテストや将来の呼び出し元がここで panic しうる。テスト設計エージェント
+/// 指摘）。
+pub fn blink_visible(started_at: Instant, now: Instant, period_ms: u64) -> bool {
+    if period_ms == 0 {
+        return true;
+    }
+    let elapsed_ms = now.saturating_duration_since(started_at).as_millis() as u64;
+    (elapsed_ms / period_ms) % 2 == 0
+}
+
+/// ページ送りインジケータを表示すべきか（choice非表示 かつ 会話行あり かつ reveal完了）を
+/// 判定する純粋関数。以前は `main.rs`（`event_loop`）と `ui.rs`（`draw_text_windows`）の
+/// 両方にこの可視条件が手書きで複製されており、現時点では数学的に等価でも将来どちらか
+/// 片方だけが変更されると黙って乖離するリスクがあった（セルフレビュー should 指摘、
+/// #495 追加修正2）。両呼び出し元がこの関数を経由することで、可視条件の定義を1箇所に
+/// 保つ。`reveal` が `None`（会話行そのものが無い等）の場合は reveal 完了として扱わない
+/// （常に `false`）。
+pub fn should_show_page_indicator(
+    has_choice: bool,
+    has_line: bool,
+    reveal: Option<&RevealState>,
+    now: Instant,
+) -> bool {
+    !has_choice && has_line && reveal.is_some_and(|r| r.is_done(now))
+}
+
+/// `show_page_indicator`（インジケータを表示すべきか＝reveal完了かつ選択肢非表示、呼び出し側
+/// `main.rs`/`ui::draw_text_windows` が判定する）が直前フレーム（`was_shown`）は `false` で
+/// 今フレームは `true` になった瞬間（非表示→表示への遷移）だけ、点滅の基準時刻を `now` に
+/// リセットする。それ以外（表示が続いている・まだ非表示のまま・表示から非表示に戻った）は
+/// `prev_started_at` をそのまま返す。
+///
+/// GUI版 `frontend/src/game/DialogBox.ts` の `applyIndicatorContainerVisibility`
+/// （`newVisible && !this.indicator.visible` を比較し、非表示→表示の遷移でだけ
+/// `indicatorBlinkElapsed = 0` / `indicatorBlinkOn = true` にリセットする、#447 self-review
+/// must 対応）と同じ frame-comparison 方式を踏襲する（#495 追加修正）。
+///
+/// 当初の #495 実装は `indicator_started_at` を `event_loop` 開始時に一度だけ `Instant::now()`
+/// で固定していた。しかし会話行（reveal）が完了する瞬間の壁時計時刻は会話ごとにバラバラ
+/// なので、あるrevealの完了がたまたま非表示区間（奇数区間）に重なると、GUI版が #447 で
+/// 潰したのと同じ事故（読み終えたのに▼が最大1秒近く見えない）がTUI側でも再現しうった
+/// （テスト設計エージェント指摘）。`event_loop` がこの関数を毎フレーム呼び、reveal完了の
+/// 瞬間に基準時刻をリセットすることで、どの会話行が・いつ完了しても、完了直後は必ず
+/// 表示区間（ON）から点滅が始まる ——
+///
+/// **ただしこの関数単体では保証できないケースが1つある**（セルフレビュー指摘、#495
+/// 追加修正2）。`char_interval_ms=0 && fade_duration_ms=0`（タイプライター演出を完全に
+/// 無効化する設定）では、[`build_reveal`] が返す `RevealHandle` は生成された瞬間に既に
+/// `is_done()==true` になる。この設定下で行Aの表示完了後（`was_shown=true`）に次の行Bへ
+/// 進むと、行Bの reveal も生成された瞬間に既に完了しているため `show_page_indicator` は
+/// `true→true` のまま一度も `false` を経由せず、この関数の「非表示→表示遷移」判定が
+/// 発火しない。この関数はフレーム間の `show_page_indicator` の値の差分しか見ておらず、
+/// 「会話行そのものが切り替わったか」を知らないため、これは原理的にこの関数だけでは
+/// 検出できない。呼び出し側（`main.rs` の `event_loop`）が `playback.position()` の変化
+/// （＝実際に新しい行へ進んだ）を検知して `was_shown` を強制的に `false` にリセットして
+/// から次フレームでこの関数を呼ぶことで、GUI版 `NovelRenderer` が新しい行/ページが始まる
+/// たびに明示的に `setIndicatorVisible(false)` を呼んでからタイプライターを開始するのと
+/// 同じ「行が変わったら一旦強制的に隠す」保証を得ている。
+pub fn indicator_blink_started_at(
+    was_shown: bool,
+    show_page_indicator: bool,
+    prev_started_at: Instant,
+    now: Instant,
+) -> Instant {
+    if show_page_indicator && !was_shown {
+        now
+    } else {
+        prev_started_at
+    }
 }
 
 /// `RevealHandle::snapshot` の出力を ratatui の `Line` 列に変換する。`\n` グラフェムは
@@ -333,10 +416,156 @@ mod tests {
     }
 
     #[test]
-    fn build_pulse_starts_with_page_indicator_symbol() {
+    fn blink_visible_true_at_the_instant_it_starts() {
+        let t = Instant::now();
+        assert!(blink_visible(t, t, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_true_just_before_first_period_ends() {
+        let t = Instant::now();
+        let now = t + Duration::from_millis(PAGE_INDICATOR_BLINK_PERIOD_MS - 1);
+        assert!(blink_visible(t, now, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_false_exactly_at_one_period_elapsed() {
+        // elapsed == period: 1000/1000 = 1（奇数）→ 非表示区間の開始。
+        let t = Instant::now();
+        let now = t + Duration::from_millis(PAGE_INDICATOR_BLINK_PERIOD_MS);
+        assert!(!blink_visible(t, now, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_false_in_the_middle_of_the_second_period() {
+        let t = Instant::now();
+        let now = t + Duration::from_millis(PAGE_INDICATOR_BLINK_PERIOD_MS + 500);
+        assert!(!blink_visible(t, now, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_true_again_at_two_periods_elapsed() {
+        // elapsed == 2*period: 2000/1000 = 2（偶数）→ 表示区間に戻る。
+        let t = Instant::now();
+        let now = t + Duration::from_millis(PAGE_INDICATOR_BLINK_PERIOD_MS * 2);
+        assert!(blink_visible(t, now, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_now_earlier_than_started_at_clamps_to_visible_without_panicking() {
+        // `Instant` は負の経過時間を表現できないため、`now < started_at`（クロックの巻き戻り等
+        // の防御）でも `saturating_duration_since` が0にクランプし、表示区間の扱いになる
+        // ことを確認する（`checked_sub`/`unwrap_or` の underflow 対応と同じ設計方針、
+        // `skip_lines` のコメント参照）。
+        let t = Instant::now();
+        let earlier = t.checked_sub(Duration::from_millis(1)).unwrap_or(t);
+        assert!(blink_visible(t, earlier, PAGE_INDICATOR_BLINK_PERIOD_MS));
+    }
+
+    #[test]
+    fn blink_visible_with_zero_period_ms_does_not_panic_and_stays_visible() {
+        // `period_ms=0` は `elapsed_ms / period_ms` がゼロ除算になる未定義入力。呼び出し元は
+        // 常に定数 `PAGE_INDICATOR_BLINK_PERIOD_MS`（非ゼロ）を渡すため実運用では起きないが、
+        // `blink_visible` は `pub` な純粋関数なので任意の `period_ms` を受け取れてしまう —
+        // ここでガードして常に表示区間（`true`）にフォールバックすることを固定する
+        // （テスト設計エージェント指摘、観点1）。
+        let t = Instant::now();
+        let now = t + Duration::from_millis(500);
+        assert!(blink_visible(t, now, 0));
+    }
+
+    #[test]
+    fn should_show_page_indicator_true_when_no_choice_has_line_and_reveal_done() {
+        let config = Config::default();
+        let l = line(Some("A"), vec!["hello"]);
+        let state = RevealState::Done(skip_lines(&config, &l));
         let now = Instant::now();
-        let pulse = build_pulse(now);
-        assert_eq!(pulse.snapshot(now).text, PAGE_INDICATOR_SYMBOL);
+        assert!(should_show_page_indicator(false, true, Some(&state), now));
+    }
+
+    #[test]
+    fn should_show_page_indicator_false_when_has_choice() {
+        // 選択肢表示中は reveal が完了していてもインジケータの概念が無い。
+        let config = Config::default();
+        let l = line(Some("A"), vec!["hello"]);
+        let state = RevealState::Done(skip_lines(&config, &l));
+        let now = Instant::now();
+        assert!(!should_show_page_indicator(true, true, Some(&state), now));
+    }
+
+    #[test]
+    fn should_show_page_indicator_false_when_no_line() {
+        let config = Config::default();
+        let l = line(Some("A"), vec!["hello"]);
+        let state = RevealState::Done(skip_lines(&config, &l));
+        let now = Instant::now();
+        assert!(!should_show_page_indicator(false, false, Some(&state), now));
+    }
+
+    #[test]
+    fn should_show_page_indicator_false_when_reveal_is_none() {
+        let now = Instant::now();
+        assert!(!should_show_page_indicator(false, true, None, now));
+    }
+
+    #[test]
+    fn should_show_page_indicator_false_when_reveal_not_done_yet() {
+        let mut config = Config::default();
+        config.typewriter.char_interval_ms = 1000;
+        config.typewriter.fade_duration_ms = 0;
+        let l = line(Some("A"), vec!["hello there"]);
+        let now = Instant::now();
+        let state = animating_state(&config, &l, now);
+        assert!(!should_show_page_indicator(false, true, Some(&state), now));
+    }
+
+    /// テスト専用ヘルパー: `main.rs` の `tests::animating` と同じ役割
+    /// （`Config`/`DisplayLine`/`now` から `RevealState::Animating` を組み立てる）。
+    fn animating_state(config: &Config, l: &DisplayLine, now: Instant) -> RevealState {
+        RevealState::Animating(build_reveal(config, l, now))
+    }
+
+    #[test]
+    fn indicator_blink_started_at_resets_on_hidden_to_shown_transition() {
+        // 非表示(false)→表示(true)への遷移だけがリセットの引き金になる（#495 追加修正）。
+        let prev_started_at = Instant::now();
+        let now = prev_started_at + Duration::from_millis(1234);
+        let result = indicator_blink_started_at(false, true, prev_started_at, now);
+        assert_eq!(
+            result, now,
+            "非表示→表示の遷移では基準時刻が now にリセットされるべき"
+        );
+    }
+
+    #[test]
+    fn indicator_blink_started_at_keeps_previous_value_while_still_shown() {
+        // 表示が前フレームから続いている（true→true）場合はリセットしない。
+        let prev_started_at = Instant::now();
+        let now = prev_started_at + Duration::from_millis(500);
+        let result = indicator_blink_started_at(true, true, prev_started_at, now);
+        assert_eq!(
+            result, prev_started_at,
+            "表示が継続中は基準時刻を保持し続けるべき（毎フレームリセットすると点滅が止まる）"
+        );
+    }
+
+    #[test]
+    fn indicator_blink_started_at_keeps_previous_value_while_still_hidden() {
+        // まだ非表示のまま（false→false、reveal未完了が続いている）場合もリセットしない。
+        let prev_started_at = Instant::now();
+        let now = prev_started_at + Duration::from_millis(500);
+        let result = indicator_blink_started_at(false, false, prev_started_at, now);
+        assert_eq!(result, prev_started_at);
+    }
+
+    #[test]
+    fn indicator_blink_started_at_keeps_previous_value_on_shown_to_hidden_transition() {
+        // 表示→非表示（次の会話行の reveal が新たに始まった等）はリセット対象ではない
+        // （次に非表示→表示へ遷移した時点で改めてリセットされる）。
+        let prev_started_at = Instant::now();
+        let now = prev_started_at + Duration::from_millis(500);
+        let result = indicator_blink_started_at(true, false, prev_started_at, now);
+        assert_eq!(result, prev_started_at);
     }
 
     #[test]

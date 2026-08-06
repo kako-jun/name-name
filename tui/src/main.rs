@@ -96,7 +96,8 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ（`jiwa::PulseHandle`）は
+    // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ
+    // （`reveal::blink_visible` による1秒周期の完全on/off点滅、#495）は
     // どちらも時間経過だけで見た目が変わるため、キー入力の有無に関わらず `REDRAW` 間隔で
     // 再描画するポーリング方式にする（#472）。この `next_action` は `run_screens` を通じて
     // `show_splash`/`event_loop` の両方へ渡り、スプラッシュ画面もこの間隔で再描画されるが、
@@ -166,10 +167,11 @@ where
 /// (`Action::Quit`)まで繰り返す。
 ///
 /// MVP（#471）はキー入力をブロッキングで待っていたが、タイプライター演出
-/// （`jiwa::RevealHandle`）とページ送りインジケータ（`jiwa::PulseHandle`）はどちらも
-/// 時間経過だけで見た目が変わるため、キー入力の有無に関わらず一定間隔で再描画する
-/// フレームベースのループに変更した（#472）。`Terminal<CrosstermBackend<Stdout>>` という
-/// 具体型への結合は、`show_splash`/`run_screens` と同じ `Backend` ジェネリック化・
+/// （`jiwa::RevealHandle`）とページ送りインジケータ（`reveal::blink_visible` による
+/// 1秒周期の完全on/off点滅、#495）はどちらも時間経過だけで見た目が変わるため、
+/// キー入力の有無に関わらず一定間隔で再描画するフレームベースのループに変更した（#472）。
+/// `Terminal<CrosstermBackend<Stdout>>` という具体型への結合は、`show_splash`/`run_screens`
+/// と同じ `Backend` ジェネリック化・
 /// `next_action` 注入パターンで解消済み（#478 のリファクタをそのまま踏襲）。
 fn event_loop<B>(
     terminal: &mut Terminal<B>,
@@ -183,9 +185,29 @@ where
 {
     let mut current_reveal: Option<reveal::RevealState> =
         build_reveal_for_current(playback, config, Instant::now());
-    // ページ送りインジケータは話者・テキストに依存しないグローバルな明滅なので、
-    // 会話行が変わっても作り直さない（一度だけ開始する）。
-    let pulse = reveal::build_pulse(Instant::now());
+    // ページ送りインジケータの点滅基準時刻。1秒周期の完全on/off点滅自体は話者・テキストに
+    // 依存しないグローバルな明滅（`reveal::blink_visible`、#495）だが、基準時刻は固定ではなく
+    // 毎フレーム `reveal::indicator_blink_started_at` で更新する（#495 追加修正）。
+    //
+    // 当初の #495 実装は起動時に一度だけ記録して以後固定していたが、これだと「ある会話行の
+    // reveal完了が壁時計基準でたまたま非表示区間に重なると、読み終えたのに▼が最大1秒近く
+    // 見えない」という、GUI版が #447 で潰したのと同じ事故がTUI側で再現しうった
+    // （テスト設計エージェント指摘）。`indicator_was_shown` で前フレームの表示/非表示を
+    // 追跡し、非表示→表示に切り替わる瞬間（＝reveal完了の瞬間）だけ基準時刻を
+    // `Instant::now()` にリセットすることで、常に表示区間（ON）から点滅が始まるようにする。
+    //
+    // ただし reveal完了の瞬間だけを見ていると、`char_interval_ms=0 && fade_duration_ms=0`
+    // （タイプライター演出を完全に無効化する設定）で reveal が生成直後から常に完了扱いに
+    // なるケースを取りこぼす（行Aの表示完了後に行Bへ進んでも `show_page_indicator` が
+    // `true→true` のまま一度も `false` を経由しないため、非表示→表示遷移が検出できず、
+    // 行Bが行Aの残り点滅位相を引き継いでしまう — セルフレビュー must対応、#495 追加修正2）。
+    // このため下のループ本体では、`playback.position()` が実際に変化した（＝新しい行へ
+    // 進んだ）瞬間にも `indicator_was_shown` を強制的に `false` にリセットする
+    // （`Action::Advance` 処理内、`reveal::indicator_blink_started_at` のdoc comment参照）。
+    // 色はウィンドウ（自分側/相手側）ごとに `ui::draw_text_windows` が `Config::colors` から
+    // 決める（この基準時刻の更新とは無関係）。
+    let mut indicator_started_at = Instant::now();
+    let mut indicator_was_shown = false;
 
     // イベント絵（`DisplayLine::event_image`）のデコード結果キャッシュとクロスフェード状態
     // （#481）。`image_fade` は開始時点の会話行が持つ event_image を「既にトランジション無しで
@@ -199,6 +221,24 @@ where
 
     loop {
         let now = Instant::now();
+        // インジケータを表示すべきか（reveal完了 かつ 選択肢非表示 かつ 会話行あり）。
+        // `ui::draw_text_windows` が実際の描画可否を判定するのと同じ条件式を
+        // `reveal::should_show_page_indicator` に集約して共有する（セルフレビュー should
+        // 対応、#495 追加修正2。以前はここと `draw_text_windows` の両方に手書きで複製
+        // されており、将来どちらか片方だけが変更されると黙って乖離するリスクがあった）。
+        let show_page_indicator = reveal::should_show_page_indicator(
+            playback.current_choice().is_some(),
+            playback.current_line().is_some(),
+            current_reveal.as_ref(),
+            now,
+        );
+        indicator_started_at = reveal::indicator_blink_started_at(
+            indicator_was_shown,
+            show_page_indicator,
+            indicator_started_at,
+            now,
+        );
+        indicator_was_shown = show_page_indicator;
         terminal.draw(|frame| {
             ui::draw(
                 frame,
@@ -209,7 +249,7 @@ where
                 playback.total(),
                 playback.is_at_end(),
                 current_reveal.as_ref(),
-                &pulse,
+                indicator_started_at,
                 now,
                 Some(&image_fade),
                 &mut image_cache,
@@ -228,6 +268,32 @@ where
                 // 早送りしただけ）や、無効な jump 先を選んで選択肢表示のまま no-op に終わった
                 // 場合は position が変わらないため、ここには到達しない。
                 if playback.position() != prev_position {
+                    // 会話行が実際に切り替わった瞬間。GUI版 `NovelRenderer` が新しい行/ページが
+                    // 始まるたびに明示的に `setIndicatorVisible(false)` を呼んでからタイプ
+                    // ライターを開始しているのと同じ「行が変わったら一旦強制的に隠す」ステップを
+                    // ここで再現する（セルフレビュー must対応、#495 追加修正2）。
+                    //
+                    // `char_interval_ms=0 && fade_duration_ms=0`（タイプライター演出を完全に
+                    // 無効化する設定）では、次の行の reveal は `build_reveal_for_current` で
+                    // 生成された瞬間に既に `is_done()==true` になる。行Aの表示完了後
+                    // （`indicator_was_shown=true`）にこのまま行Bへ進むと、行Bの
+                    // `show_page_indicator` も生成直後から `true` なので `true→true` のまま
+                    // 一度も `false` を経由せず、`reveal::indicator_blink_started_at` の
+                    // 「非表示→表示遷移」判定が発火しない。結果、行Aの残り点滅位相
+                    // （たまたま非表示区間かもしれない）を行Bがそのまま引き継いでしまう
+                    // （2908aaf が防いだのと同じ事故の退行）。
+                    //
+                    // `indicator_blink_started_at` はフレーム間の `show_page_indicator` の値の
+                    // 差分しか見ておらず「会話行そのものが切り替わったか」を知らないため、
+                    // これはあの関数だけでは検出できない。ここで使っている
+                    // `playback.position() != prev_position`（＝本当に新しい行へ進んだ）は
+                    // 既に上の image_fade トリガーが使っているのと同じ signal であり、これを
+                    // 使って `indicator_was_shown` を強制的に `false` にリセットしてから
+                    // 次フレームの `should_show_page_indicator`/`indicator_blink_started_at` に
+                    // 入ることで、reveal が瞬間完了かどうかに関わらず必ず非表示→表示の遷移
+                    // として扱われ、表示区間（ON）から点滅が始まり直す。
+                    indicator_was_shown = false;
+
                     let target = playback
                         .current_line()
                         .and_then(|line| line.event_image.clone());
@@ -739,6 +805,69 @@ mod tests {
             !buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
             "スキップ操作(reveal未完了時のAdvance)だけでは次行のevent_imageへフェードが\
              開始されてはいけない"
+        );
+    }
+
+    // ---- #495 追加修正2: instant-complete reveal での indicator 位相リセット（セルフレビュー
+    // must対応） ----
+    //
+    // `char_interval_ms=0 && fade_duration_ms=0`（タイプライター演出を完全に無効化する設定）
+    // では、新しい行の reveal は生成された瞬間に既に完了している。この場合
+    // `reveal::indicator_blink_started_at` の「非表示→表示遷移」判定は
+    // `show_page_indicator` のフレーム間差分だけでは発火しないため、`event_loop` が
+    // `playback.position()` の変化を検知して `indicator_was_shown` を強制的に `false` へ
+    // リセットする配線（本体の `Action::Advance` 処理内、`indicator_was_shown = false;` の
+    // 行）が無いと、前の行の残り点滅位相を次の行がそのまま引き継いでしまう。この配線は
+    // `on_advance`（純粋関数、上のテスト群でカバー済み）を経由しないため、`event_loop` を
+    // 実際に走らせる統合テストでしか検証できない。
+    #[test]
+    fn event_loop_instant_complete_reveal_shows_indicator_immediately_after_advancing_past_a_blink_off_phase(
+    ) {
+        // 行A表示中にインジケータの点滅基準時刻が記録される（instant_config なので生成直後
+        // から表示区間ONで始まる）。その後 `PAGE_INDICATOR_BLINK_PERIOD_MS` を1周期以上
+        // （かつ2周期未満、つまり非表示区間=奇数区間の途中）実時間で待ってから行Bへ
+        // advance する。`indicator_was_shown` の強制リセットが無ければ、行Bのフレームは
+        // 行Aの基準時刻をそのまま引き継ぎ、その時点でたまたま非表示区間に入っているため
+        // インジケータが描画されない（退行の再現条件）。修正後は position 変化で基準時刻が
+        // `now` にリセットされるため、行Bへ切り替わった直後のフレームは必ず表示区間(ON)から
+        // 描画される。
+        let config = instant_config();
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "hello"), dline(Some("B"), "world")]);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            if call_count == 1 {
+                // 行Aの最初の描画（indicator_started_at が記録された直後）から、1周期
+                // 経過後の非表示区間（奇数区間）へ確実に入るまで実時間で待つ。
+                std::thread::sleep(std::time::Duration::from_millis(
+                    reveal::PAGE_INDICATOR_BLINK_PERIOD_MS + 200,
+                ));
+                Ok(Action::Advance)
+            } else {
+                Ok(Action::Quit)
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(
+            playback.position(),
+            2,
+            "行Bへadvanceしているはず（`position` は1始まりでLine item数を数える）"
+        );
+        assert!(
+            buffer_text(&terminal).contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "行Bへ切り替わった直後のフレームは、行Aの残り点滅位相（非表示区間）を \
+             引き継がず、必ず表示区間(ON)から点滅が始まっているべき（セルフレビュー \
+             must対応の回帰ガード）"
         );
     }
 

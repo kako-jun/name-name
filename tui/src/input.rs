@@ -30,10 +30,11 @@ pub fn next_action() -> anyhow::Result<Action> {
 
 /// `timeout` 以内に端末イベントが来なければ `Action::None` を返す（ノンブロッキング）。
 ///
-/// タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ（`jiwa::PulseHandle`）は
-/// フレームごとの `snapshot` で進むため、`event_loop` はキー入力の有無に関わらず短い間隔で
-/// 再描画する必要がある（#472）。`next_action` の無条件ブロッキング待ちのままだと、
-/// キー入力が無い間はアニメーションが完全に静止してしまう。
+/// タイプライター演出（`jiwa::RevealHandle` の `snapshot`）とページ送りインジケータ
+/// （`reveal::blink_visible` による1秒周期の完全on/off点滅、#495）はどちらも時間経過だけで
+/// 進むため、`event_loop` はキー入力の有無に関わらず短い間隔で再描画する必要がある（#472）。
+/// `next_action` の無条件ブロッキング待ちのままだと、キー入力が無い間はアニメーションが
+/// 完全に静止してしまう。
 pub fn poll_action(timeout: Duration) -> anyhow::Result<Action> {
     if event::poll(timeout)? {
         next_action()
