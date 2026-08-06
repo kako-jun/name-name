@@ -224,7 +224,8 @@ pub fn draw_splash(frame: &mut Frame, config: &Config) {
 ///
 /// 本文は `reveal`（[`reveal::RevealState`]）が与えられていれば `RevealState::body_lines` から
 /// 組み立て（`Animating` はタイプライター表示のスナップショット、`Done` はスキップ済みの全文）、
-/// reveal 完了後は `pulse`（`jiwa::PulseHandle`）によるページ送りインジケータを行末に付け足す。
+/// reveal 完了後は `pulse`（`jiwa::PulseHandle`）によるページ送りインジケータをウィンドウ右下の
+/// 固定位置に描画する（[`draw_page_indicator`] 参照、#487）。
 /// `reveal` が `None`（会話行そのものが無い等）の場合は従来どおりの静的表示にフォールバックする。
 fn draw_text_windows(
     frame: &mut Frame,
@@ -268,13 +269,11 @@ fn draw_text_windows(
     let style = Style::default().fg(color);
 
     let mut rendered = Vec::new();
+    let mut show_page_indicator = false;
     match reveal {
         Some(state) => {
-            let mut body_lines = state.body_lines(now);
-            if state.is_done(now) {
-                append_page_indicator(&mut body_lines, pulse, now);
-            }
-            rendered.extend(body_lines);
+            rendered.extend(state.body_lines(now));
+            show_page_indicator = state.is_done(now);
         }
         None => {
             for text_line in &line.text {
@@ -285,6 +284,10 @@ fn draw_text_windows(
 
     let paragraph = Paragraph::new(Text::from(rendered)).wrap(Wrap { trim: false });
     render_wrapped_paragraph(frame, target_area, paragraph);
+
+    if show_page_indicator {
+        draw_page_indicator(frame, target_area, pulse, now);
+    }
 }
 
 /// wrap 付き `Paragraph` を描画する際、危険な極小幅を避けるための下限セル数。
@@ -328,21 +331,49 @@ fn draw_status_line(
     frame.render_widget(paragraph, area);
 }
 
-/// reveal 完了後の入力待ちを示すページ送りインジケータ（既定では ▼）を、本文の最終行の
-/// 末尾に付け足す。本文行が1つも無い（空の会話行）場合は、インジケータだけの行を追加する。
-/// 表示中（未 reveal）にはこの関数を呼ばない — 呼び出し側（`draw_text_windows`）が
-/// `handle.is_done(now)` で既にガードしている。
-fn append_page_indicator(lines: &mut Vec<Line<'static>>, pulse: &PulseHandle, now: Instant) {
-    let frame = pulse.snapshot(now);
-    let Rgb(r, g, b) = frame.color;
-    let span = Span::styled(
-        format!(" {}", frame.text),
-        Style::default().fg(Color::Rgb(r, g, b)),
-    );
-    match lines.last_mut() {
-        Some(last) => last.spans.push(span),
-        None => lines.push(Line::from(vec![span])),
+/// ページ送りインジケータ（▼）をウィンドウ右下から固定するセル数
+/// （GUI版 `frontend/src/game/DialogBox.ts:1323-1329` の adv 右下固定
+/// `boxX + boxW - 40`, `boxY + boxH - 45` を踏襲、#487）。GUI側はpx単位だが、TUI側は
+/// セル単位の座標系のためpxをそのまま換算せず、右端/下端から数セル内側という見た目の
+/// 意図だけを移植する。`PAGE_INDICATOR_INSET_COLS` は「右からNセル目」の意味で、
+/// N=3なら右端の2セルぶんは常に空けたまま（角にめり込ませない）。
+const PAGE_INDICATOR_INSET_COLS: u16 = 3;
+/// [`PAGE_INDICATOR_INSET_COLS`] の下端版。N=2なら下端の1セルぶんは常に空ける。
+const PAGE_INDICATOR_INSET_ROWS: u16 = 2;
+
+/// [`PAGE_INDICATOR_INSET_COLS`]/[`PAGE_INDICATOR_INSET_ROWS`] を使って、`area`（opponent_area/
+/// self_area いずれかのウィンドウ矩形）内の右下固定インジケータ位置（幅・高さ1セル）を返す
+/// 純粋関数（レンダラ非依存、テストで直接検証できるよう `draw_page_indicator` から分離）。
+/// `area` の幅/高さがオフセット未満の極小ウィンドウでは `saturating_sub` で `area` の左上角
+/// （x=area.x/y=area.y）側へクランプし、`area` の外へはみ出さないようにする。
+fn page_indicator_area(area: Rect) -> Rect {
+    let x = area.x + area.width.saturating_sub(PAGE_INDICATOR_INSET_COLS);
+    let y = area.y + area.height.saturating_sub(PAGE_INDICATOR_INSET_ROWS);
+    Rect {
+        x,
+        y,
+        width: 1,
+        height: 1,
     }
+}
+
+/// reveal 完了後の入力待ちを示すページ送りインジケータ（既定では ▼）を、`area`（発言側の
+/// ウィンドウ、opponent_area/self_area いずれか）の右下固定位置（[`page_indicator_area`]）に
+/// 描画する。#487 より前は本文最終行の末尾に文末追従で付けていたが、GUI版のadv固定仕様
+/// （`DialogBox.ts` 参照）に合わせてウィンドウ右下固定へ変更した — gymnasiaの `dialog_style`
+/// は常にadvのため、TUI側もdialog_style分岐を作らずadv右下固定のみを実装する。
+/// 表示中（未 reveal）にはこの関数を呼ばない — 呼び出し側（`draw_text_windows`）が
+/// `state.is_done(now)` で既にガードしている。`area` の幅/高さが0の極小ウィンドウでは
+/// 描画すべきセルが無いため何もしない。
+fn draw_page_indicator(frame: &mut Frame, area: Rect, pulse: &PulseHandle, now: Instant) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let snapshot = pulse.snapshot(now);
+    let Rgb(r, g, b) = snapshot.color;
+    let span = Span::styled(snapshot.text, Style::default().fg(Color::Rgb(r, g, b)));
+    let paragraph = Paragraph::new(Line::from(span));
+    frame.render_widget(paragraph, page_indicator_area(area));
 }
 
 #[cfg(test)]
@@ -911,7 +942,11 @@ mod tests {
     }
 
     #[test]
-    fn page_indicator_attaches_to_last_line_of_multiline_body() {
+    fn page_indicator_is_fixed_at_window_bottom_right_not_attached_to_body_text() {
+        // #487: GUI版advの右下固定（DialogBox.ts:1323-1329）に合わせ、文末追従をやめた。
+        // 旧テスト（page_indicator_attaches_to_last_line_of_multiline_body）は文末追従を
+        // 検証していたが、新仕様ではインジケータは本文の長さに関わらずウィンドウ右下の
+        // 固定セルに描画される。
         let config = Config::default();
         let line = DisplayLine {
             speaker: Some("A".to_string()),
@@ -941,22 +976,37 @@ mod tests {
                 )
             })
             .unwrap();
-        let rows = buffer_rows(terminal.backend().buffer());
-        let indicator_row = rows
-            .iter()
-            .find(|r| r.contains(reveal::PAGE_INDICATOR_SYMBOL));
-        assert!(indicator_row.is_some(), "rows were: {rows:?}");
-        assert!(
-            indicator_row.unwrap().contains("second line"),
-            "indicator should be attached to the last body line, rows were: {rows:?}"
+        let buffer = terminal.backend().buffer();
+        let rows = buffer_rows(buffer);
+
+        // speaker "A" は Config::default() の player_speakers に含まれないため相手（上）窓。
+        // 60x10端末 → root[0]=(60,9)（status行1を除く）→ columns[1]=(x30,y0,w30,h9）→
+        // opponent_height=9/2=4（切り捨て）→ opponent_area=(x30,y0,w30,h4)。この分割算出
+        // 自体は #480 由来の既存ロジック（本Issueのスコープ外）で、変更後の期待値だけを
+        // `page_indicator_area`（本Issueで抽出した純粋関数）に委ねてハードコードを避ける。
+        let opponent_area = Rect {
+            x: 30,
+            y: 0,
+            width: 30,
+            height: 4,
+        };
+        let indicator_cell = page_indicator_area(opponent_area);
+        let cell = buffer
+            .cell((indicator_cell.x, indicator_cell.y))
+            .expect("in bounds");
+        assert_eq!(
+            cell.symbol(),
+            reveal::PAGE_INDICATOR_SYMBOL,
+            "indicator should render at the fixed bottom-right cell, rows were: {rows:?}"
         );
-        let first_line_row = rows
+
+        let second_line_row = rows
             .iter()
-            .find(|r| r.contains("first line"))
-            .expect("first line should be rendered");
+            .find(|r| r.contains("second line"))
+            .expect("second line should be rendered");
         assert!(
-            !first_line_row.contains(reveal::PAGE_INDICATOR_SYMBOL),
-            "indicator must not appear on a non-last line, rows were: {rows:?}"
+            !second_line_row.contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "indicator must no longer attach to the body's last line (adv fixed position), rows were: {rows:?}"
         );
     }
 
