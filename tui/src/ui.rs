@@ -73,8 +73,13 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// （reveal 完了後にのみ表示する。[`reveal::blink_visible`] にそのまま渡す。色はウィンドウ
 /// （自分側/相手側）ごとに `draw_text_windows` が決める、#495）。呼び出し側（`main.rs` の
 /// `event_loop`）が [`reveal::indicator_blink_started_at`] で毎フレーム更新した値を渡す —
-/// reveal が非表示→表示に切り替わった瞬間（＝reveal完了の瞬間）に限りリセットされるため、
-/// この関数自身は基準時刻をそのまま下流に渡すだけで固定/可変を意識しない（#495 追加修正）。
+/// reveal が非表示→表示に切り替わった瞬間（＝reveal完了の瞬間）に加え、`playback.position()`
+/// が変化した（＝実際に新しい会話行へ進んだ）瞬間も `event_loop` 側が明示的に
+/// 非表示→表示の遷移として扱われるよう仕込んでいる（`char_interval_ms=0 &&
+/// fade_duration_ms=0` では新しい行の reveal が生成された瞬間に既に完了しているため、
+/// reveal 自体の遷移だけでは検出できない。[`reveal::indicator_blink_started_at`] のdoc
+/// comment参照、セルフレビュー must対応、#495 追加修正2）。この関数自身は基準時刻を
+/// そのまま下流に渡すだけで、リセットの発生条件を意識しない（#495 追加修正）。
 /// `now` はこのフレームの
 /// 描画時刻（`reveal`/`indicator_started_at` の `body_lines`/`blink_visible` に渡す基準時刻。
 /// `RevealState::Done` はこれを無視する）。`image_fade` は左側に描画するイベント絵の
@@ -269,8 +274,10 @@ pub fn draw_splash(frame: &mut Frame, config: &Config) {
 ///
 /// 本文は `reveal`（[`reveal::RevealState`]）が与えられていれば `RevealState::body_lines` から
 /// 組み立て（`Animating` はタイプライター表示のスナップショット、`Done` はスキップ済みの全文）、
-/// reveal 完了後は [`reveal::blink_visible`] による1秒周期の完全on/off点滅でページ送り
-/// インジケータをウィンドウ右下の固定位置に描画する（[`draw_page_indicator`] 参照、#487/#495）。
+/// 表示すべきか自体は [`reveal::should_show_page_indicator`]（`main.rs` の `event_loop` と共有
+/// する可視条件、#495 追加修正2）で判定し、表示すべきときは [`reveal::blink_visible`] による
+/// 1秒周期の完全on/off点滅でページ送りインジケータをウィンドウ右下の固定位置に描画する
+/// （[`draw_page_indicator`] 参照、#487/#495）。
 /// インジケータの色は「そのウィンドウが自分側(self)か相手側(opponent)か」に応じて
 /// `config.colors.player`/`config.colors.opponent` をそのまま使う（本文色と同じ配色設定を
 /// 再利用し、専用の色設定は増やさない — GUI版 `DialogBox.ts` の
@@ -318,11 +325,9 @@ fn draw_text_windows(
     let style = Style::default().fg(color);
 
     let mut rendered = Vec::new();
-    let mut show_page_indicator = false;
     match reveal {
         Some(state) => {
             rendered.extend(state.body_lines(now));
-            show_page_indicator = state.is_done(now);
         }
         None => {
             for text_line in &line.text {
@@ -330,6 +335,11 @@ fn draw_text_windows(
             }
         }
     }
+    // 可視条件（choice無し・line有り・reveal完了）は `reveal::should_show_page_indicator` に
+    // 集約済み（#495 should対応）。`draw_text_windows` はここに来る時点で choice=Noneが
+    // 呼び出し元（`draw`）の分岐で保証済み、line も早期returnで保証済みのため、それぞれ
+    // `false`/`true` を渡す。
+    let show_page_indicator = reveal::should_show_page_indicator(false, true, reveal, now);
 
     let paragraph = Paragraph::new(Text::from(rendered)).wrap(Wrap { trim: false });
     render_wrapped_paragraph(frame, target_area, paragraph);
