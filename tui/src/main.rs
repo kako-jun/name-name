@@ -49,7 +49,8 @@ fn main() -> anyhow::Result<()> {
     })?;
 
     let document = name_name_parser::parser::parse(&source);
-    let mut playback = Playback::from_document(&document);
+    let mut playback =
+        Playback::from_document(&document).with_sentence_per_page(config.sentence_per_page);
 
     run(&config, &mut playback)
 }
@@ -540,6 +541,53 @@ mod tests {
             3,
             "1回のAdvanceで2行以上進んではいけない"
         );
+    }
+
+    // ---- #486: sentence_per_page 有効時の on_advance 配線 ----
+    //
+    // Playback 側（playback.rs）の状態遷移自体は playback.rs のテストで検証済み。ここでは
+    // on_advance の「reveal未完了ならskip・完了していれば advance」というデシジョンテーブルが
+    // sentence_per_page 有効時にも変更なしで正しく機能する（＝1文ごとに新しい reveal が
+    // 始まる）ことを確認する。build_reveal_for_current が playback.current_line() を都度
+    // 読み直すだけで自動的に成立する設計であることの回帰ガード。
+
+    #[test]
+    fn on_advance_sentence_per_page_skip_then_advance_moves_one_sentence_at_a_time() {
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "1文目。2文目。")])
+            .with_sentence_per_page(true);
+        let t0 = Instant::now();
+        let mut current_reveal = Some(animating(
+            &config,
+            playback.current_line().expect("line"),
+            t0,
+        ));
+        assert!(!current_reveal.as_ref().unwrap().is_done(t0));
+
+        // Advance(skip): 1文目を全文表示。Line item は進まない。
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert_eq!(
+            playback.current_line().expect("line").text,
+            vec!["1文目。".to_string()]
+        );
+        assert!(current_reveal.as_ref().unwrap().is_done(t0));
+
+        // Advance(進行): 完了済みなので2文目へ。新しい reveal が始まり未完了に戻る。
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert_eq!(
+            playback.current_line().expect("line").text,
+            vec!["2文目。".to_string()]
+        );
+        assert_eq!(playback.position(), 1, "同一Line item内なのでposition不変");
+        assert!(
+            !current_reveal.as_ref().unwrap().is_done(t0),
+            "2文目用に新しいrevealが始まっているはず"
+        );
+
+        // Advance(skip): 2文目を全文表示。
+        on_advance(&mut playback, &mut current_reveal, &config, t0);
+        assert!(current_reveal.as_ref().unwrap().is_done(t0));
+        assert!(playback.is_at_end());
     }
 
     // ---- #481 follow-up: event_loop の event_image フェード開始判定（デシジョンテーブル） ----
