@@ -1376,4 +1376,142 @@ mod tests {
             vec!["次の文。".to_string()]
         );
     }
+
+    // ---- #486 追補: Line item 内の文送り状態遷移の交差点（デシジョンテーブルで判明した穴）----
+
+    #[test]
+    fn sentence_per_page_single_sentence_line_advances_directly_to_next_item() {
+        // sentence_pages.len() == 1 の境界: `advance` の `sentence_index + 1 <
+        // sentence_pages.len()` が `1 < 1` で偽に倒れ、最初の advance 呼び出しだけで items 内
+        // 移動の分岐へ直接フォールスルーすることを確認する（1文だけの Line item の直後に
+        // 別の Line item が続く文書）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["これだけの文。"]),
+            dialog(Some("B"), vec!["次のitem。"]),
+        ]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        assert_eq!(pb.position(), 1);
+
+        assert!(
+            pb.advance(),
+            "1文だけのLineは最初のadvanceで即座に次itemへ進むはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert_eq!(
+            pb.position(),
+            2,
+            "item自体が進んだのでLine item単位のカウントも増える"
+        );
+    }
+
+    #[test]
+    fn sentence_per_page_single_sentence_last_item_is_at_end_immediately() {
+        // 1文だけの Line item がドキュメント全体の最後の item である場合、advance を一度も
+        // 呼ばずに is_at_end が最初から true になる（2文以上のケース、
+        // `sentence_per_page_is_at_end_false_while_sentences_remain_on_last_line` との違いを
+        // 明示的に固定する）。
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["これだけの文。"])]);
+        let pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        assert!(pb.is_at_end(), "1文だけの最終itemはadvance前から終端のはず");
+    }
+
+    #[test]
+    fn sentence_per_page_last_sentence_advances_into_following_choice() {
+        // 複数文の Line item の直後に Choice item が続く文書で、Line 最後の文から advance
+        // した結果が Choice へ前進することを確認する（Line→Choice への前進遷移。既存テスト
+        // `select_current_choice_jumps_to_target_scene_start` 等は Choice→scene jump の
+        // 後方向のみカバーしている）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1文目。2文目。"]),
+            choice(vec![("進む", "1-1")]),
+        ]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        assert!(pb.advance(), "1文目 -> 2文目");
+        assert!(pb.advance(), "2文目(最後) -> Choiceへ前進");
+
+        assert!(
+            pb.current_choice().is_some(),
+            "Line最後の文からadvanceした先はChoiceのはず"
+        );
+        assert_eq!(
+            pb.current_line(),
+            None,
+            "Choiceへ前進した後はcurrent_lineはNoneのはず"
+        );
+    }
+
+    #[test]
+    fn sentence_per_page_advance_past_true_end_is_idempotent() {
+        // 非sentence版の既存 `advance_past_end_is_idempotent` の対（#486）。最後の Line item
+        // の最後の文まで到達した真の終端状態でさらに advance を呼んでも false を返し、状態が
+        // 変化しないことを確認する。
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["1文目。2文目。"])]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        assert!(pb.advance(), "1文目 -> 2文目（真の終端）");
+        assert!(pb.is_at_end());
+        let text_at_end = pb.current_line().expect("line").text.clone();
+
+        assert!(!pb.advance(), "真の終端での最初のadvance呼び出し");
+        assert_eq!(
+            pb.current_line().expect("line").text,
+            text_at_end,
+            "状態は変化しないはず"
+        );
+        assert!(
+            !pb.advance(),
+            "真の終端での2回目のadvance呼び出しも変化なし"
+        );
+        assert_eq!(pb.current_line().expect("line").text, text_at_end);
+        assert_eq!(pb.position(), 1);
+    }
+
+    #[test]
+    fn sentence_per_page_advance_on_choice_item_returns_false_regardless_of_flag() {
+        // Choiceチェックがsentence分岐より先に評価される設計の回帰ガード（#486）。
+        // sentence_per_page=false での Choice 上 advance は既存の
+        // `advance_while_choice_is_current_does_not_move` でカバー済みのため、ここでは
+        // sentence_per_page=true の側を固定する。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["どうする？"]),
+            choice(vec![("進む", "1-1")]),
+        ]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        assert!(pb.advance(), "1文だけのLine -> Choiceへ前進");
+        assert!(pb.current_choice().is_some());
+
+        assert!(
+            !pb.advance(),
+            "sentence_per_page=trueでもChoice表示中のadvanceはfalseのはず"
+        );
+        assert!(pb.current_choice().is_some(), "位置が変わっていないはず");
+    }
+
+    #[test]
+    fn sentence_per_page_sentence_pages_empty_when_positioned_on_choice() {
+        // `sync_sentence_pages` の早期returnパス（現在位置が Choice のとき）を直接カバーする。
+        let doc = doc_single_scene(vec![choice(vec![("進む", "1-1")])]);
+        let pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
+        assert_eq!(
+            pb.current_line(),
+            None,
+            "Choice位置ではcurrent_lineは常にNoneのはず"
+        );
+    }
+
+    #[test]
+    fn with_sentence_per_page_false_explicit_matches_default() {
+        // `.with_sentence_per_page(false)` を明示的に呼んだ場合とデフォルト（呼ばない場合）が
+        // 同じ結果になることを確認する。
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["最初の文。次の文。"])]);
+        let default_pb = Playback::from_document(&doc);
+        let explicit_false_pb = Playback::from_document(&doc).with_sentence_per_page(false);
+        assert_eq!(
+            default_pb.current_line().expect("line").text,
+            explicit_false_pb.current_line().expect("line").text
+        );
+    }
 }

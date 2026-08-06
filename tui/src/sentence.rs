@@ -465,6 +465,21 @@ mod tests {
     }
 
     #[test]
+    fn split_into_sentences_emoji_and_astral_char_boundary() {
+        // 絵文字（BMP外の astral code point、U+1F389 🎉）を含む入力で terminator 判定・
+        // 文字境界が壊れないことを確認する（低優先度、#486）。GUI版 `splitIntoSentences`
+        // （`frontend/src/game/novelLayout.ts`）を `npx tsx` で実際に実行して得た出力を
+        // そのままゴールデン値にした（推測しない）。JS の `Array.from` も Rust の `chars()`
+        // も、サロゲートペアで表現される astral code point を 1 文字として扱う点で一致する
+        // ため、絵文字は terminator/trailer のどちらでもない「本文の1文字」として current に
+        // 積まれるだけで文分割自体は乱れない。
+        assert_eq!(
+            split_into_sentences("やった！🎉次はどうする？"),
+            vec!["やった！", "🎉次はどうする？"]
+        );
+    }
+
+    #[test]
     fn adv_sentence_pages_single_line_multi_sentence() {
         assert_eq!(
             adv_sentence_pages(&["こんにちは。今日はいい天気ですね！".to_string()]),
