@@ -1,9 +1,10 @@
 //! ratatui による画面描画。左にイベント絵（quadrant block変換 + jiwaクロスフェード、
 //! `image_fade`/`image_render`、#481。未指定時は従来の画像プレースホルダにフォールバック）、
-//! 右に相手（上）/自分（下）の2ウィンドウでテキストを表示する。左右は50/50（GUI版
+//! 右に相手（上）/自分（下）の2ウィンドウでテキストを表示する。左右は基本50/50（GUI版
 //! `frontend/src/game/novelLayout.ts` の
-//! `computeSplitLayoutRegions` と同じ比率、#480）を基本としつつ、間に固定幅
-//! [`IMAGE_TEXT_GAP_WIDTH`] のスペーサーを挟む（#488。GUI版はテキスト側の内側マージン
+//! `computeSplitLayoutRegions` と同じ比率、#480）だが、間に固定幅
+//! [`IMAGE_TEXT_GAP_WIDTH`] のスペーサーを挟む都合上、実際にどちらへ何セル寄るかは端末幅
+//! 次第で非単調に変わる非対称な分割になる（#488。GUI版はテキスト側の内側マージン
 //! `NOVEL_TEXT_MARGIN_X` で密着を避けているが、TUI版は列間そのものにギャップを作る形で
 //! 対応する。詳細は [`split_columns`] を参照）。テキスト側の上下分割も比率としては50/50
 //! だが、GUI版の `splitTextRegionForDualWindow` が浮動小数点で分割するのに対し、TUI版は
@@ -45,9 +46,11 @@ const IMAGE_TEXT_GAP_WIDTH: u16 = 2;
 /// バッファを既定セル（空白）へリセットするため、明示的に描くコードが無くてもそこは単なる
 /// 空白の余白として見える。画像/テキストは基本 `Constraint::Percentage(50)` ずつだが、
 /// スペーサーの `Constraint::Length` を優先的に満たす ratatui のレイアウト解決の都合上、
-/// 不足分は主に画像側（先頭のPercentage制約）から差し引かれる形になる（両側が均等に
-/// 縮むわけではない。#480 が「対称性を要求しない分割」としていたのと同じ理由でここでも
-/// 問題ない）。
+/// 両者は均等に縮む/伸びるわけではない。どちらが有利になるかは単一方向のバイアスではなく
+/// 端末幅（W）によって非単調に変わる（W=3〜4のような狭い幅域では画像側が、W=9以降の
+/// 実用的な幅域ではテキスト側が恒常的に有利になり、その差は最大2セルにとどまる —
+/// steady state）。#480 が「対称性を要求しない分割」としていたのと同じ理由でここでも
+/// 問題ない。具体的な境界・数値は下記テスト群を参照。
 fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -1836,9 +1839,15 @@ mod tests {
             placeholder_area.width,
             placeholder_area.width + gap_area.width,
         );
+        // 最終行(y=10)はステータス行で、config.game_name が長いとその文字列がスペーサー列の
+        // x範囲まで届くことがある（本文描画とは無関係な誤検知を避けるため、
+        // placeholder_area.height 分＝本文描画領域の高さだけをチェック対象にする。同じ作法は
+        // 同ファイル内の player_speaker_leaves_opponent_top_window_completely_blank 等、
+        // rows[0..5]/rows[5..10] でステータス行を明示除外している既存テストにも見られる）。
+        let body_gap_rows = &gap_rows[..placeholder_area.height as usize];
         assert!(
-            gap_rows.iter().all(|r| r.trim().is_empty()),
-            "the gap column between image and text must stay blank, rows were: {gap_rows:?}"
+            body_gap_rows.iter().all(|r| r.trim().is_empty()),
+            "the gap column between image and text must stay blank, rows were: {body_gap_rows:?}"
         );
     }
 
@@ -1865,12 +1874,34 @@ mod tests {
     #[test]
     fn split_columns_at_area_one_cell_over_gap_width_gives_extra_cell_to_image_not_text() {
         // W=IMAGE_TEXT_GAP_WIDTH+1 になって初めて1セルの余剰が生まれるが、それはtextでは
-        // なくimg側（先頭のConstraint::Percentage）に付く。`split_columns`のdocコメントが
-        // 述べる非対称性（不足/剰余は画像側に偏る）を固定する回帰テスト。
+        // なくimg側（先頭のConstraint::Percentage）に付く。これはW=3〜4という狭い幅域限定で
+        // img側が優先される現象（#480由来の既存丸め規約の再現）を固定する回帰テストであり、
+        // `split_columns` 全体の一般的な傾向ではない — W=9以降のsteady stateでは逆にtext側が
+        // 恒常的に有利になる
+        // （`split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state`
+        // 参照）。
         let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH + 1, 10));
         assert_eq!(img.width, 1, "剰余の1セルはimg側に付くはず");
         assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
         assert_eq!(text.width, 0);
+    }
+
+    #[test]
+    fn split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state() {
+        // W=9以降は img/text の差が最大2セルにとどまりつつtext側が恒常的に有利になる
+        // steady stateに入る（W=3〜4の狭い幅域だけがimg優先になる例外区間で、それは上記
+        // `split_columns_at_area_one_cell_over_gap_width_gives_extra_cell_to_image_not_text`
+        // が固定している）。このsteady state自体を検知するテストが無かったため追加する
+        // （W=20はimg=8/gap=2/text=10で差がちょうど2になる実測値、cargo testで確認済み）。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, 20, 10));
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(
+            text.width,
+            img.width + 2,
+            "steady stateではtext側がimg側より2セル多いはず: img={}, text={}",
+            img.width,
+            text.width
+        );
     }
 
     #[test]
