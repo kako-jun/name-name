@@ -1,8 +1,12 @@
 //! ratatui による画面描画。左にイベント絵（quadrant block変換 + jiwaクロスフェード、
 //! `image_fade`/`image_render`、#481。未指定時は従来の画像プレースホルダにフォールバック）、
-//! 右に相手（上）/自分（下）の2ウィンドウでテキストを表示する。左右は50/50（GUI版
+//! 右に相手（上）/自分（下）の2ウィンドウでテキストを表示する。左右は基本50/50（GUI版
 //! `frontend/src/game/novelLayout.ts` の
-//! `computeSplitLayoutRegions` と同じ比率、#480）。テキスト側の上下分割も比率としては50/50
+//! `computeSplitLayoutRegions` と同じ比率、#480）だが、間に固定幅
+//! [`IMAGE_TEXT_GAP_WIDTH`] のスペーサーを挟む都合上、実際にどちらへ何セル寄るかは端末幅
+//! 次第で非単調に変わる非対称な分割になる（#488。GUI版はテキスト側の内側マージン
+//! `NOVEL_TEXT_MARGIN_X` で密着を避けているが、TUI版は列間そのものにギャップを作る形で
+//! 対応する。詳細は [`split_columns`] を参照）。テキスト側の上下分割も比率としては50/50
 //! だが、GUI版の `splitTextRegionForDualWindow` が浮動小数点で分割するのに対し、TUI版は
 //! 整数セル単位のため高さが奇数のとき端数が出る。GUI版と違いこの端数は self（自分＝
 //! プレイヤー発言側）に寄せる（`draw_text_windows` 参照）— self が opponent より恒常的に
@@ -27,6 +31,38 @@ use crate::image_render::{ImageCache, RenderedImage};
 use crate::playback::DisplayLine;
 use crate::reveal;
 
+/// 画像列とテキスト列の間に挟む固定幅スペーサーのセル数（#488）。テキストが画像に密着して
+/// 見える問題への対応で、kako-jun実機確認により「半角2つぶんくらい」が妥当と判断された値
+/// をそのまま採用している（1セル=半角1文字相当なので幅2）。GUI版はテキスト領域の内側
+/// マージン `NOVEL_TEXT_MARGIN_X`（`frontend/src/game/DialogBox.ts`）で密着を避けているが、
+/// こちらは列と列の「間」に入れる構造的なギャップという別の実装形（テキスト領域内側の
+/// 全方向パディングまでは #488 のスコープ外）。
+const IMAGE_TEXT_GAP_WIDTH: u16 = 2;
+
+/// 画面上段を「画像プレースホルダ」「スペーサー」「テキスト」の横3分割にする純粋関数
+/// （#488）。`Layout::split` の呼び出しをここへ切り出すことで、テスト側は実際のレイアウト
+/// 計算結果をそのまま期待値として使える（手計算した固定値をテストに直書きしない）。
+/// スペーサー領域（戻り値の2番目）には何も描画しない — ratatui は `Terminal::draw` のたびに
+/// バッファを既定セル（空白）へリセットするため、明示的に描くコードが無くてもそこは単なる
+/// 空白の余白として見える。画像/テキストは基本 `Constraint::Percentage(50)` ずつだが、
+/// スペーサーの `Constraint::Length` を優先的に満たす ratatui のレイアウト解決の都合上、
+/// 両者は均等に縮む/伸びるわけではない。どちらが有利になるかは単一方向のバイアスではなく
+/// 端末幅（W）によって非単調に変わる（W=3〜4のような狭い幅域では画像側が、W=7以降の
+/// 実用的な幅域ではテキスト側が恒常的に有利になり、その差は最大2セルにとどまる —
+/// steady state）。#480 が「対称性を要求しない分割」としていたのと同じ理由でここでも
+/// 問題ない。具体的な境界・数値は下記テスト群を参照。
+fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Length(IMAGE_TEXT_GAP_WIDTH),
+            Constraint::Percentage(50),
+        ])
+        .split(area);
+    (columns[0], columns[1], columns[2])
+}
+
 /// 画面全体を左（画像プレースホルダ）50% / 右（テキスト、相手=上/自分=下にさらに分割）に
 /// 分割して描画する。テキスト側の上下分割は整数セルの端数を self（自分）側に寄せる
 /// （`draw_text_windows` 参照。opponent が恒常的に得をする片側固定バイアスを避けるため）。
@@ -41,14 +77,14 @@ use crate::reveal;
 /// 向けのフォールバック）、`image_cache` はそのデコード結果キャッシュ（#481）。
 ///
 /// `choice` が `Some((options, cursor))`（選択肢表示中、#482）のときは、右側テキスト領域
-/// （`columns[1]`、#480の50/50分割はそのまま）に選択肢一覧を描画し、通常の相手/自分
-/// 2ウィンドウ（`draw_text_windows`）は描かない。選択肢には特定の話者が無いため、相手/自分の
-/// 上下分割という概念自体が意味を持たない（`line`/`choice` は同時に `Some` にならない —
-/// `Playback::current_line`/`current_choice` が排他的なため。呼び出し側の `main.rs` はこの
-/// 排他性を意識せず、両方をそのまま渡すだけでよい）。選択肢表示中も左側のイベント絵/
-/// プレースホルダ（`image_fade`）はそのまま描画され続ける — 左カラムは `columns[0]` で
-/// 右カラム（テキスト/選択肢の切替）とは独立しているため、選択肢表示は画像側のフェードや
-/// サイズに影響しない。
+/// （`split_columns` が返すテキスト領域、#480の50/50分割＋#488のスペーサーはそのまま）に
+/// 選択肢一覧を描画し、通常の相手/自分2ウィンドウ（`draw_text_windows`）は描かない。選択肢
+/// には特定の話者が無いため、相手/自分の上下分割という概念自体が意味を持たない
+/// （`line`/`choice` は同時に `Some` にならない — `Playback::current_line`/`current_choice`
+/// が排他的なため。呼び出し側の `main.rs` はこの排他性を意識せず、両方をそのまま渡すだけで
+/// よい）。選択肢表示中も左側のイベント絵/プレースホルダ（`image_fade`）はそのまま描画され
+/// 続ける — 左カラムは右カラム（テキスト/選択肢の切替）とは独立しているため、選択肢表示は
+/// 画像側のフェードやサイズに影響しない。
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -69,12 +105,8 @@ pub fn draw(
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(frame.area());
 
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(root[0]);
+    let (placeholder_area, _gap_area, text_area) = split_columns(root[0]);
 
-    let placeholder_area = columns[0];
     let rendered_image = image_fade.and_then(|state| {
         state.snapshot(
             image_cache,
@@ -86,8 +118,8 @@ pub fn draw(
     });
     draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
     match choice {
-        Some((options, cursor)) => draw_choice_list(frame, columns[1], options, cursor),
-        None => draw_text_windows(frame, columns[1], config, line, reveal, pulse, now),
+        Some((options, cursor)) => draw_choice_list(frame, text_area, options, cursor),
+        None => draw_text_windows(frame, text_area, config, line, reveal, pulse, now),
     }
     draw_status_line(frame, root[1], config, position, total, is_at_end);
 }
@@ -100,7 +132,7 @@ const CHOICE_CURSOR_PADDING: &str = "  ";
 
 /// 右側テキスト領域全体に選択肢を縦一列に描画する（#482）。相手/自分の2ウィンドウ分割
 /// （`draw_text_windows`）は使わない — 選択肢に話者は無いため。カーソル行は反転表示
-/// （`Modifier::REVERSED`）+ 先頭の [`CHOICE_CURSOR_SYMBOL`] で示す。左側（`columns[0]`）の
+/// （`Modifier::REVERSED`）+ 先頭の [`CHOICE_CURSOR_SYMBOL`] で示す。左側（画像プレースホルダ列）の
 /// イベント絵/プレースホルダは選択肢表示中も独立して描画され続けるため、ここでは一切触れない。
 fn draw_choice_list(frame: &mut Frame, area: Rect, options: &[ChoiceOption], cursor: usize) {
     let lines: Vec<Line> = options
@@ -458,7 +490,14 @@ mod tests {
 
     #[test]
     fn draw_with_resolved_image_fade_renders_quadrant_glyphs_not_placeholder() {
-        let fixture_path = diagonal_pattern_webp_fixture(5, 3);
+        // placeholder_area は #488 のスペーサー追加後 `split_columns` が実際に計算する幅に
+        // なる（W=10 のとき手計算の ceil(10/2)=5 ではなく 3 に縮む — スペーサーの
+        // `Constraint::Length` を満たす分が画像側の `Constraint::Percentage` から差し引かれる
+        // ため）。手計算した固定値をテストに直書きせず、本番コードと同じ `split_columns` を
+        // 呼んで期待値を得る。
+        let (placeholder_area, _gap, _text) = split_columns(Rect::new(0, 0, 10, 3));
+        let fixture_path =
+            diagonal_pattern_webp_fixture(placeholder_area.width, placeholder_area.height);
         let (mut config, relative) = config_and_relative_path_for(&fixture_path);
         config.placeholder.label = "[画像]".to_string();
         let image_fade = ImageFadeState::settled(Some(relative));
@@ -487,10 +526,9 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        // placeholder_area = columns[0] = 幅ceil(10/2)=5 x 高さ(4-1)=3。フィクスチャは
-        // 全セルが対角パターンの '▞'（fg=白、bg=黒）になるよう作られている。
-        for y in 0..3u16 {
-            for x in 0..5u16 {
+        // フィクスチャは全セルが対角パターンの '▞'（fg=白、bg=黒）になるよう作られている。
+        for y in 0..placeholder_area.height {
+            for x in 0..placeholder_area.width {
                 let cell = buffer.cell((x, y)).expect("in bounds");
                 assert_eq!(
                     cell.symbol(),
@@ -572,11 +610,14 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        // placeholder_area = 幅ceil(20/2)=10 x 高さ(6-1)=5 = 50セル。1x1画像相当のRGBA
-        // データを大きいグリッドへ展開しても、範囲外アクセスでpanicしたり色が壊れたり
-        // せず、全セルが唯一のソース画素の色をそのまま持つことを確認する。
-        for y in 0..5u16 {
-            for x in 0..10u16 {
+        // placeholder_area は #488 のスペーサー追加後 `split_columns` が計算する幅（W=20 の
+        // とき手計算の ceil(20/2)=10 ではなく 8 に縮む）。手計算した固定値を直書きせず、
+        // 本番コードと同じ `split_columns` を呼んで期待値を得る。1x1画像相当のRGBAデータを
+        // 大きいグリッドへ展開しても、範囲外アクセスでpanicしたり色が壊れたりせず、全セルが
+        // 唯一のソース画素の色をそのまま持つことを確認する。
+        let (placeholder_area, _gap, _text) = split_columns(Rect::new(0, 0, 20, 5));
+        for y in 0..placeholder_area.height {
+            for x in 0..placeholder_area.width {
                 let cell = buffer.cell((x, y)).expect("in bounds");
                 assert_eq!(
                     cell.bg,
@@ -1146,7 +1187,13 @@ mod tests {
     // で `Layout::split` の戻り値を直接ダンプして実測・確認済み）。左右 columns（画像
     // プレースホルダ/テキスト）の分割はこの丸めをそのまま使っている（対称性を要求しない分割
     // のため問題ない。W=7 で左が1セル余分に取る例は下記
-    // `odd_terminal_width_gives_placeholder_column_the_extra_cell` 参照）。
+    // `odd_terminal_width_gives_placeholder_column_the_extra_cell` 参照）。#488 でこの2分割の
+    // 間に固定幅スペーサー（[`IMAGE_TEXT_GAP_WIDTH`]）を挟む3分割（`split_columns`）に
+    // なったが、下記テストの多くは W=40 のような偶数幅を使っており、`Constraint::Length` を
+    // 満たす不足分がスペーサーに隣接する画像側から差し引かれる関係で、テキスト側
+    // （最終カラム）の開始x座標・幅は#480当時の2分割と偶然一致する（下記の各テストの
+    // コメント・`draw_with_resolved_image_fade_keeps_480_text_column_start_x_unchanged`
+    // 参照）。
     //
     // 一方、テキスト側の上下分割（相手=上/自分=下）は `Constraint::Percentage` ではなく
     // `Constraint::Length` で明示的に高さを計算しており（`draw_text_windows` 内、
@@ -1446,18 +1493,15 @@ mod tests {
 
     #[test]
     fn odd_terminal_width_gives_placeholder_column_the_extra_cell() {
-        // W=7(奇数) → 左右 Percentage(50/50) は左(プレースホルダ)=ceil(7/2)=4・
-        // 右(テキスト)=floor(7/2)=3 に丸まる。テキスト側に単一ASCII文字を描画させ、
-        // その先頭セルの x 座標がその境界(x=4)と一致することで実測する。
-        //
-        // フォールバック文言「(会話行がありません)」は全角文字を含み、テキスト側の幅が
-        // ちょうど2セル（W=5相当）になる条件では ratatui 側の Paragraph 折り返し処理が
-        // バッファ範囲外書き込みで panic することを実測で確認した（既知の依存クレート側
-        // バグ、`render_wrapped_paragraph` の極小幅ガードで回避している。回帰テストは
+        // W=7(奇数) の3分割（画像/スペーサー/テキスト、#488）は `split_columns` を直接呼んで
+        // 期待値を得る（手計算した固定値をテストに直書きしない）。W=7 はスペーサー幅
+        // ([`IMAGE_TEXT_GAP_WIDTH`]=2) を画像側の `Constraint::Percentage` から差し引いても
+        // まだ1セル残るため、テキスト側の開始x座標・幅は#480当時の2分割（左=ceil(7/2)=4・
+        // 右=floor(7/2)=3）とたまたま一致する（`split_columns` の doc comment 参照）。W=7を
+        // 選んでいるのは、テキスト側幅がちょうど2セルになる幅（ratatuiのParagraph折り返しが
+        // panicする既知の依存クレート側バグの再現条件、
         // `narrow_terminal_with_no_display_line_does_not_panic_on_fullwidth_fallback_message`
-        // 参照）。そのガードにより W=5（テキスト側幅2）ではそもそも何も描画されなくなる
-        // ため、この境界計測（x座標の実測）にはガードの影響を受けない W=7 と単一ASCII文字
-        // を使う。
+        // 参照）を避けるため。
         let config = Config::default();
         let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
         let buffer = render(&config, Some(&line), None, 7, 10);
@@ -1472,23 +1516,36 @@ mod tests {
             }
         }
         let x = leftmost_y_x.expect("text should render somewhere");
+        let (_placeholder, _gap, expected_text_area) =
+            split_columns(Rect::new(0, 0, area.width, area.height - 1));
         assert_eq!(
-            x, 4,
-            "text column should start at x=4 (ceil(7/2)) when width=7 splits 50/50; found at x={x}"
+            x, expected_text_area.x,
+            "text column should start where split_columns places it; found at x={x}"
         );
     }
 
     #[test]
     fn narrow_terminal_with_no_display_line_does_not_panic_on_fullwidth_fallback_message() {
-        // W=4/5・H=4以上は、左右 Percentage(50/50) 分割によりテキスト側ウィンドウ幅がちょうど
-        // 2セルになる。全角文字を含むフォールバック文言「(会話行がありません)」をその幅で
-        // wrap 描画しようとすると、ratatui 内部
+        // 全角文字を含むフォールバック文言「(会話行がありません)」をテキスト側ウィンドウ幅が
+        // ちょうど2セルの状態で wrap 描画しようとすると、ratatui 内部
         // （`ratatui_widgets::paragraph::render_line` → `Buffer::index_mut`）で
         // バッファ範囲外書き込みpanicすることを実測で確認した（幅1セル・幅3セル以上では
         // 再現しない）。`render_wrapped_paragraph` の極小幅ガード（3セル未満はwrap描画を
         // スキップ）でこの経路を回避できていることを固定する回帰テスト。
+        //
+        // #488 でスペーサー（[`IMAGE_TEXT_GAP_WIDTH`]=2）を挟む3分割になったことで、
+        // テキスト側幅がちょうど2セルになる総幅は #480 当時の W=4/5 から W=6 に変わった
+        // （`split_columns` がスペーサー分を画像側の `Constraint::Percentage` から差し引くため。
+        // W=4/5 では新レイアウトのテキスト側幅がそれぞれ0/1セルになり、この既知バグの再現
+        // 条件からは外れる）。危険な幅そのものを固定値ではなく `split_columns` で確認しつつ、
+        // 実際に危険幅(2)になる W=6 を複数の高さで検証する。
         let config = Config::default();
-        for (w, h) in [(4u16, 4u16), (5, 4), (4, 5), (5, 6)] {
+        let (_placeholder, _gap, text_area_at_w6) = split_columns(Rect::new(0, 0, 6, 3));
+        assert_eq!(
+            text_area_at_w6.width, 2,
+            "this test only guards the real bug condition when the text column width is 2"
+        );
+        for (w, h) in [(6u16, 4u16), (6, 5), (6, 6)] {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             let now = Instant::now();
             let pulse = reveal::build_pulse(now);
@@ -1741,11 +1798,11 @@ mod tests {
 
     #[test]
     fn draw_with_resolved_image_fade_keeps_480_text_column_start_x_unchanged() {
-        // #480の50/50レイアウト（左=画像プレースホルダ、右=テキスト）が、#481で
-        // image_fade に実在パスを渡すようになった後も変わっていないことを確認する。
-        // `odd_terminal_width_gives_placeholder_column_the_extra_cell` と同じ W=7 境界
-        // (左=ceil(7/2)=4, 右=floor(7/2)=3) を流用し、右カラムの先頭xが x=4 で
-        // 変わらないことを実測する（あちらは image_fade=None のケースだった）。
+        // #480の画像/テキスト分割（#488でスペーサーを挟む3分割になった、`split_columns`）が、
+        // #481で image_fade に実在パスを渡すようになった後も変わっていないことを確認する。
+        // `odd_terminal_width_gives_placeholder_column_the_extra_cell` と同じ W=7 を流用し、
+        // 期待値は同テストと同じく `split_columns` から得る（あちらは image_fade=None の
+        // ケースだった）。
         let fixture_path =
             crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 2, 2), 2, 2);
         let (config, relative) = config_and_relative_path_for(&fixture_path);
@@ -1788,9 +1845,11 @@ mod tests {
             }
         }
         let x = leftmost_y_x.expect("text should render somewhere");
+        let (_placeholder, _gap, expected_text_area) =
+            split_columns(Rect::new(0, 0, area.width, area.height - 1));
         assert_eq!(
-            x, 4,
-            "text column should still start at x=4 (ceil(7/2)) with a resolved image_fade present; found at x={x}"
+            x, expected_text_area.x,
+            "text column should still start where split_columns places it with a resolved image_fade present; found at x={x}"
         );
     }
 
@@ -1810,6 +1869,121 @@ mod tests {
             !text.contains("すぴーかー"),
             "speaker name must not appear as a separate label, buffer was: {text}"
         );
+    }
+
+    // ---- #488: 画像/テキスト間スペーサーのテスト ----
+
+    #[test]
+    fn split_columns_reserves_configured_gap_width() {
+        let (_placeholder, gap, _text) = split_columns(Rect::new(0, 0, 100, 20));
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+    }
+
+    #[test]
+    fn image_text_gap_column_renders_blank_between_placeholder_and_text() {
+        // デフォルト設定は PlaceholderStyle::Label（ラベル文字列を画像列内で中央寄せ）
+        // なので、画像列の内容がスペーサー列へはみ出していないことも合わせて確認できる。
+        let config = Config::default();
+        let line = dialog_line(Some("A"), vec!["hello"]); // opponent(上)
+        let buffer = render(&config, Some(&line), None, 40, 11);
+        let (placeholder_area, gap_area, _text_area) = split_columns(Rect::new(0, 0, 40, 10)); // root[0].height = 11 - 1
+        let gap_rows = buffer_rows_in_x_range(
+            &buffer,
+            placeholder_area.width,
+            placeholder_area.width + gap_area.width,
+        );
+        // 最終行(y=10)はステータス行で、config.game_name が長いとその文字列がスペーサー列の
+        // x範囲まで届くことがある（本文描画とは無関係な誤検知を避けるため、
+        // placeholder_area.height 分＝本文描画領域の高さだけをチェック対象にする。同じ作法は
+        // 同ファイル内の player_speaker_leaves_opponent_top_window_completely_blank 等、
+        // rows[0..5]/rows[5..10] でステータス行を明示除外している既存テストにも見られる）。
+        let body_gap_rows = &gap_rows[..placeholder_area.height as usize];
+        assert!(
+            body_gap_rows.iter().all(|r| r.trim().is_empty()),
+            "the gap column between image and text must stay blank, rows were: {body_gap_rows:?}"
+        );
+    }
+
+    #[test]
+    fn split_columns_at_area_narrower_than_gap_returns_gap_shrunk_to_available_width() {
+        // W=1 は IMAGE_TEXT_GAP_WIDTH(2) に満たないため、cassowary ソルバーは
+        // Constraint::Length を area 幅いっぱいまで縮めて確保する（画像/テキストは0幅）。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, 1, 10));
+        assert_eq!(gap.width, 1, "利用可能な幅(1)までgapが縮むはず");
+        assert_eq!(img.width, 0);
+        assert_eq!(text.width, 0);
+    }
+
+    #[test]
+    fn split_columns_at_area_exactly_gap_width_leaves_zero_width_image_and_text() {
+        // W=IMAGE_TEXT_GAP_WIDTH ちょうどでは、gapのConstraint::Lengthだけが満たされ
+        // 画像/テキストのConstraint::Percentage(50)には残余が無い。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH, 10));
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(img.width, 0);
+        assert_eq!(text.width, 0);
+    }
+
+    #[test]
+    fn split_columns_at_area_one_cell_over_gap_width_gives_extra_cell_to_image_not_text() {
+        // W=IMAGE_TEXT_GAP_WIDTH+1 になって初めて1セルの余剰が生まれるが、それはtextでは
+        // なくimg側（先頭のConstraint::Percentage）に付く。これはW=3〜4という狭い幅域限定で
+        // img側が優先される現象（#480由来の既存丸め規約の再現）を固定する回帰テストであり、
+        // `split_columns` 全体の一般的な傾向ではない — W=9以降のsteady stateでは逆にtext側が
+        // 恒常的に有利になる
+        // （`split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state`
+        // 参照）。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH + 1, 10));
+        assert_eq!(img.width, 1, "剰余の1セルはimg側に付くはず");
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(text.width, 0);
+    }
+
+    #[test]
+    fn split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state() {
+        // W=9以降は img/text の差が最大2セルにとどまりつつtext側が恒常的に有利になる
+        // steady stateに入る（W=3〜4の狭い幅域だけがimg優先になる例外区間で、それは上記
+        // `split_columns_at_area_one_cell_over_gap_width_gives_extra_cell_to_image_not_text`
+        // が固定している）。このsteady state自体を検知するテストが無かったため追加する
+        // （W=20はimg=8/gap=2/text=10で差がちょうど2になる実測値、cargo testで確認済み）。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, 20, 10));
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(
+            text.width,
+            img.width + 2,
+            "steady stateではtext側がimg側より2セル多いはず: img={}, text={}",
+            img.width,
+            text.width
+        );
+    }
+
+    #[test]
+    fn split_columns_areas_are_contiguous_and_never_exceed_input_width() {
+        // 個別幅の期待値ではなく、あらゆる入力幅で崩れてはいけない構造的な不変条件を
+        // プロパティテストとして固定する: 3列は隙間なく連続し、合計は入力幅を超えず、
+        // gapはIMAGE_TEXT_GAP_WIDTHを超えて広がらない。
+        for w in 0..=30u16 {
+            let area = Rect::new(0, 0, w, 10);
+            let (img, gap, text) = split_columns(area);
+            assert_eq!(
+                img.x + img.width,
+                gap.x,
+                "W={w}: imgとgapの間に隙間や重なりがあってはいけない"
+            );
+            assert_eq!(
+                gap.x + gap.width,
+                text.x,
+                "W={w}: gapとtextの間に隙間や重なりがあってはいけない"
+            );
+            assert!(
+                img.width + gap.width + text.width <= area.width,
+                "W={w}: 合計幅が入力幅を超えている"
+            );
+            assert!(
+                gap.width <= IMAGE_TEXT_GAP_WIDTH,
+                "W={w}: gapが設定値を超えて広がっている"
+            );
+        }
     }
 
     // ---- #482: 選択肢UI（キーボードカーソル）のテスト ----
@@ -1940,6 +2114,39 @@ mod tests {
                 )
             })
             .unwrap();
+    }
+
+    #[test]
+    fn choice_list_does_not_panic_at_gap_boundary_widths() {
+        // #488で追加されたgap分割の境界幅（W=IMAGE_TEXT_GAP_WIDTHちょうど、および+1）でも
+        // choice_list描画がpanicしないことを確認する。既存の
+        // `choice_list_does_not_panic_at_extremely_narrow_width` はW=1のみをカバーしていた。
+        let config = Config::default();
+        let options = vec![choice_option("選択肢", "a")];
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        for w in [IMAGE_TEXT_GAP_WIDTH, IMAGE_TEXT_GAP_WIDTH + 1] {
+            let mut image_cache = ImageCache::new();
+            let mut terminal = Terminal::new(TestBackend::new(w, 3)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &config,
+                        None,
+                        Some((&options, 0)),
+                        1,
+                        1,
+                        false,
+                        None,
+                        &pulse,
+                        now,
+                        None,
+                        &mut image_cache,
+                    )
+                })
+                .unwrap_or_else(|e| panic!("W={w}で描画がpanicした: {e}"));
+        }
     }
 
     #[test]
