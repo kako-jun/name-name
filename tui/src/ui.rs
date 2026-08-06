@@ -1842,6 +1842,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn split_columns_at_area_narrower_than_gap_returns_gap_shrunk_to_available_width() {
+        // W=1 は IMAGE_TEXT_GAP_WIDTH(2) に満たないため、cassowary ソルバーは
+        // Constraint::Length を area 幅いっぱいまで縮めて確保する（画像/テキストは0幅）。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, 1, 10));
+        assert_eq!(gap.width, 1, "利用可能な幅(1)までgapが縮むはず");
+        assert_eq!(img.width, 0);
+        assert_eq!(text.width, 0);
+    }
+
+    #[test]
+    fn split_columns_at_area_exactly_gap_width_leaves_zero_width_image_and_text() {
+        // W=IMAGE_TEXT_GAP_WIDTH ちょうどでは、gapのConstraint::Lengthだけが満たされ
+        // 画像/テキストのConstraint::Percentage(50)には残余が無い。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH, 10));
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(img.width, 0);
+        assert_eq!(text.width, 0);
+    }
+
+    #[test]
+    fn split_columns_at_area_one_cell_over_gap_width_gives_extra_cell_to_image_not_text() {
+        // W=IMAGE_TEXT_GAP_WIDTH+1 になって初めて1セルの余剰が生まれるが、それはtextでは
+        // なくimg側（先頭のConstraint::Percentage）に付く。`split_columns`のdocコメントが
+        // 述べる非対称性（不足/剰余は画像側に偏る）を固定する回帰テスト。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH + 1, 10));
+        assert_eq!(img.width, 1, "剰余の1セルはimg側に付くはず");
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(text.width, 0);
+    }
+
+    #[test]
+    fn split_columns_areas_are_contiguous_and_never_exceed_input_width() {
+        // 個別幅の期待値ではなく、あらゆる入力幅で崩れてはいけない構造的な不変条件を
+        // プロパティテストとして固定する: 3列は隙間なく連続し、合計は入力幅を超えず、
+        // gapはIMAGE_TEXT_GAP_WIDTHを超えて広がらない。
+        for w in 0..=30u16 {
+            let area = Rect::new(0, 0, w, 10);
+            let (img, gap, text) = split_columns(area);
+            assert_eq!(
+                img.x + img.width,
+                gap.x,
+                "W={w}: imgとgapの間に隙間や重なりがあってはいけない"
+            );
+            assert_eq!(
+                gap.x + gap.width,
+                text.x,
+                "W={w}: gapとtextの間に隙間や重なりがあってはいけない"
+            );
+            assert!(
+                img.width + gap.width + text.width <= area.width,
+                "W={w}: 合計幅が入力幅を超えている"
+            );
+            assert!(
+                gap.width <= IMAGE_TEXT_GAP_WIDTH,
+                "W={w}: gapが設定値を超えて広がっている"
+            );
+        }
+    }
+
     // ---- #482: 選択肢UI（キーボードカーソル）のテスト ----
 
     fn choice_option(text: &str, jump: &str) -> ChoiceOption {
@@ -1970,6 +2030,39 @@ mod tests {
                 )
             })
             .unwrap();
+    }
+
+    #[test]
+    fn choice_list_does_not_panic_at_gap_boundary_widths() {
+        // #488で追加されたgap分割の境界幅（W=IMAGE_TEXT_GAP_WIDTHちょうど、および+1）でも
+        // choice_list描画がpanicしないことを確認する。既存の
+        // `choice_list_does_not_panic_at_extremely_narrow_width` はW=1のみをカバーしていた。
+        let config = Config::default();
+        let options = vec![choice_option("選択肢", "a")];
+        let now = Instant::now();
+        let pulse = reveal::build_pulse(now);
+        for w in [IMAGE_TEXT_GAP_WIDTH, IMAGE_TEXT_GAP_WIDTH + 1] {
+            let mut image_cache = ImageCache::new();
+            let mut terminal = Terminal::new(TestBackend::new(w, 3)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &config,
+                        None,
+                        Some((&options, 0)),
+                        1,
+                        1,
+                        false,
+                        None,
+                        &pulse,
+                        now,
+                        None,
+                        &mut image_cache,
+                    )
+                })
+                .unwrap_or_else(|e| panic!("W={w}で描画がpanicした: {e}"));
+        }
     }
 
     #[test]
