@@ -371,6 +371,15 @@ impl Playback {
                         Event::Blackout { action } => {
                             current_blackout = matches!(action, BlackoutAction::On);
                         }
+                        // GUI版 `NovelRenderer.processDirective` の `Event::SceneTransition` 相当
+                        // （`this.setBlackout(false)`、#512）。spec（markdown-v0.1.md）は
+                        // `[場面転換]` を「背景クリア + 暗転解除」と定義しており、`[暗転]` で
+                        // オンにした暗転を明示的にオフへ戻す。背景クリア相当の永続 state を
+                        // TUI 側は持たない（`current_event_image`/`current_blackout` 以外に
+                        // クリア対象がない）ため、このスコープでは暗転解除のみ実装する。
+                        Event::SceneTransition => {
+                            current_blackout = false;
+                        }
                         _ => {
                             if let Some(item) = playback_item_from_event(event) {
                                 let item = match item {
@@ -2736,6 +2745,35 @@ mod tests {
             pb.pending_wait_ms(),
             Some(0),
             "no-opのadvance後もwait_msは変化しないはず"
+        );
+    }
+
+    /// spec（markdown-v0.1.md）は `[場面転換]` を「背景クリア + 暗転解除」と定義しており、
+    /// GUI版 `NovelRenderer.processDirective` は `Event::SceneTransition` で明示的に
+    /// `setBlackout(false)` を呼ぶ。`[暗転]` → (台詞) → `[場面転換]` → 台詞、という原稿で
+    /// 最後の台詞の時点では暗転が解除されているべき（#512 仕様漏れの回帰テスト）。
+    #[test]
+    fn scene_transition_resets_blackout_per_spec() {
+        let doc = doc_single_scene(vec![
+            Event::Blackout {
+                action: BlackoutAction::On,
+            },
+            dialog(Some("A"), vec!["暗転中の台詞"]),
+            Event::SceneTransition,
+            dialog(Some("B"), vec!["場面転換後の台詞"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.is_blackout(), "[暗転]直後の台詞はまだ暗転中のはず");
+
+        assert!(pb.advance(), "場面転換後の台詞へ進めるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(
+            !pb.is_blackout(),
+            "[場面転換]は spec 上「暗転解除」を伴うため、直後の台詞では暗転していないはず"
         );
     }
 }
