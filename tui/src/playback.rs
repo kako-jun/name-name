@@ -2813,7 +2813,10 @@ mod tests {
     fn dialog_after_blackout_on_is_blacked_out() {
         let doc = doc_single_scene(vec![blackout_on(), dialog(Some("A"), vec!["暗転中"])]);
         let pb = Playback::from_document(&doc);
-        assert!(pb.is_blackout(), "[暗転]直後の台詞はis_blackout()==trueのはず");
+        assert!(
+            pb.is_blackout(),
+            "[暗転]直後の台詞はis_blackout()==trueのはず"
+        );
     }
 
     #[test]
