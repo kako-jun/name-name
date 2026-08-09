@@ -2646,6 +2646,16 @@ export class NovelRenderer {
   }
 
   /**
+   * letterbox/pillarbox の黒帯（canvas の外側）タップ用の公開 API (#467)。
+   * canvas 自身に張っている `pointerdown` リスナー（`handleAdvance`）と全く同じ処理を、
+   * canvas の外側（NovelPlayer 側の `fluidRootRef` の黒帯部分）からも起動できるようにする。
+   * 黒帯には canvas が無いため canvas 自身のリスナーは発火しない — その代替経路。
+   */
+  handleOutsideCanvasTap(): void {
+    this.handleAdvance()
+  }
+
+  /**
    * デバッグ用リプレイ API (#220 Phase 1)。
    *
    * シーン+操作列（Step[]）を順に適用して任意の状態を再現する。

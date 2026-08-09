@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { Assets } from 'pixi.js'
 import { Event, EventScene } from '../types'
@@ -802,6 +803,17 @@ function NovelPlayer({
     return () => window.removeEventListener('keydown', handleKey)
   }, [])
 
+  // letterbox/pillarbox の黒帯（canvas 外）タップで進行する (#467)。fluidRootRef 直下の
+  // 黒帯部分（canvas を内接させる containerRef の外側）には canvas 自身の pointerdown
+  // リスナーが届かないため、fluidRootRef 側にも同じ「進める」処理を持たせる。
+  // `e.target === e.currentTarget` で「fluidRootRef 自身への直接タップ」だけに絞り込む
+  // （canvas・ボタン等の子要素タップはそれぞれ自前のリスナーで処理済みなので、ここで拾うと
+  // 二重発火する。バブリングで来た子要素タップは target が子要素のままなので弾かれる）。
+  const handleOutsideCanvasPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return
+    rendererRef.current?.handleOutsideCanvasTap()
+  }, [])
+
   // クイックセーブ/ロード 通知 toast を表示するヘルパー (#142)
   const showToast = useCallback((message: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
@@ -942,6 +954,9 @@ function NovelPlayer({
       ref={fluidRootRef}
       className="relative w-full h-full flex items-center justify-center bg-black"
       style={{ containerType: 'size' }}
+      // letterbox/pillarbox の黒帯タップで進行する (#467)。canvas 自身の pointerdown
+      // リスナーが届かない黒帯部分（このコンポーネント直下・canvas の外側）だけを拾う。
+      onPointerDown={handleOutsideCanvasPointerDown}
     >
       {/* デバッグ HUD パネル (#310): D ボタンの展開状態に追従。debug_enabled(/play) or
           editor のときだけ出す。閉じている/無効のときは何も描かない（D ボタンが唯一の入口）。 */}
