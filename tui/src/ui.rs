@@ -350,6 +350,16 @@ fn draw_choice_list(
 /// `area` の高さが総行数に満たない場合は、縦一列描画（`Wrap` 無しでは元々スクロール機構が
 /// 存在しない、`choice_list_with_many_options_does_not_panic_when_overflowing_area_height`
 /// 参照）と同様にそのまま見切れる — グリッド化に伴う新規の退行ではない。
+///
+/// `columns` は選択肢数（`total`）を超えないようここでもクランプする（バグ修正、#508）。
+/// 呼び出し元（`Playback::playback_item_from_event`）は既に選択肢数へクランプ済みの値しか
+/// 積まないはずだが、この関数は `pub(crate)` でテストからも直接呼ばれうるため、実際に
+/// ハングを起こす箇所（このすぐ下の `col_areas` の `Vec<Constraint>` 生成 —
+/// `columns` 個の要素を持つベクタを ratatui の `Layout::split`＝cassowary線形制約
+/// ソルバーに渡す）そのものにも多重にクランプを入れておく。実測: クランプ無しで
+/// `columns=2_000_000` を渡すと2分以上応答が返らずSIGKILLが必要だった。`columns >= total`
+/// のときクランプしても `rows = total.div_ceil(columns)` は常に `1` のままなので、
+/// 見た目（行数・各行の並び）はクランプの有無で変わらない — 純粋に性能上の安全弁。
 fn draw_choice_grid(
     frame: &mut Frame,
     area: Rect,
@@ -361,6 +371,7 @@ fn draw_choice_grid(
     if total == 0 || columns == 0 {
         return;
     }
+    let columns = columns.min(total);
     let rows = total.div_ceil(columns);
     let row_areas = Layout::default()
         .direction(Direction::Vertical)
@@ -3261,6 +3272,37 @@ mod tests {
                 draw_choice_grid(f, area, &options, 0, 10);
             })
             .unwrap_or_else(|e| panic!("極端に狭い幅×多列(10)でpanicした: {e}"));
+    }
+
+    // ---- #508 バグ修正の回帰テスト: columns の上限クランプが無いとハングする ----
+
+    #[test]
+    fn draw_choice_grid_completes_quickly_when_columns_vastly_exceeds_option_count() {
+        // レビューで実際にハングを再現した条件そのもの: 選択肢はわずか2件なのに
+        // columns=2_000_000（`[選択: 列=200000]` のような巨大値、または実際に確認された
+        // 2_000_000）が渡ってくるケース。クランプ無しだと `col_areas` の
+        // `Vec<Constraint>; columns` 生成 → ratatui `Layout::split`（cassowary線形制約
+        // ソルバー）が2分以上応答を返さずSIGKILLが必要だった。修正後は内部で `total`（2）
+        // までクランプされるため、他の（現実的な列数の）draw_choice_gridテストと同程度の
+        // 時間で完了するはず。「常識的な範囲での完了」を秒単位のタイムアウトで直接検証する
+        // （実際にハングするコードをそのままテストに残さないための実行時間アサーション）。
+        let options = vec![choice_option("A", "x"), choice_option("B", "y")];
+        let area = Rect::new(0, 0, 40, 3);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+        let start = std::time::Instant::now();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 2_000_000);
+            })
+            .unwrap_or_else(|e| panic!("巨大なcolumnsでpanicした: {e}"));
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "columns=2,000,000 でも選択肢数(2)にクランプされ高速に完了するはず（実測: {elapsed:?}）。\
+             2秒を超えるならクランプの退行（#508バグの再発）を疑う。"
+        );
     }
 
     #[test]

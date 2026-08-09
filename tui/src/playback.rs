@@ -120,11 +120,13 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
 /// 再生列（`Playback::items`）の1要素。Dialog/Narration は `Line`、Choice は `Choice` になる。
 /// それ以外のイベント（背景・SE・BGM 等）は要素を生成しない（[`playback_item_from_event`]）。
 ///
-/// `Choice` の第2要素は `Event::Choice.columns`（グリッド配置の列数、#508）をそのまま
-/// 引き継いだもの。`None`/`Some(0)`/`Some(1)` はいずれも従来どおりの縦一列表示を意味し、
-/// 実際に「グリッドとして扱うか」の正規化（0や1をどう1列と見なすか）は消費側
-/// （[`Playback::current_choice`]・カーソル移動系メソッド・`ui::draw_choice_list`）が
-/// 都度行う。
+/// `Choice` の第2要素は `Event::Choice.columns`（グリッド配置の列数、#508）を基に
+/// [`playback_item_from_event`] が選択肢数へクランプ済みの値。`None`/`Some(0)`/`Some(1)` は
+/// いずれも従来どおりの縦一列表示を意味し、実際に「グリッドとして扱うか」の正規化（0や1を
+/// どう1列と見なすか）は消費側（[`Playback::current_choice`]・カーソル移動系メソッド・
+/// `ui::draw_choice_list`）が都度行う。上限側の正規化（選択肢数を超える列数の切り詰め）は
+/// [`playback_item_from_event`] がここへ積む前に済ませてある（バグ修正、同関数の
+/// doc コメント参照）。
 #[derive(Debug, Clone, PartialEq)]
 enum PlaybackItem {
     Line(DisplayLine),
@@ -141,10 +143,25 @@ enum PlaybackItem {
 /// `advance` も Choice 表示中は拒否するため、プレイヤーの入力を一切受け付けない詰み状態に
 /// なる。これは以前の「Choice を丸ごと無視していた」挙動と同じ扱いに揃えることで回避する
 /// （バグ修正、実装方針は Issue #482 コメント参照）。
+///
+/// `columns` は選択肢数（`options.len()`）を超えないようクランプする（バグ修正、#508）。
+/// parser の `parse_choice_columns` は `u32 >= 1` ならどんな巨大な値も受理し上限
+/// バリデーションを持たない。`[選択: 列=200000]` のような原稿（タイプミスや意図的な巨大値）が
+/// そのまま通ると、`ui::draw_choice_grid` が `columns` 個の `Constraint` を生成して
+/// ratatui の `Layout::split`（cassowary線形制約ソルバー）に渡すことになり、実機で2分以上
+/// 応答が返らずSIGKILLが必要になる実害のあるハングを引き起こす（レビューで実測）。選択肢の
+/// 実数より多い列数を作る正当な理由は無い（列が余るだけ）ため、ここでクランプするのが唯一の
+/// 発生源であり、以降 `current_choice()`・`effective_columns()`・`move_choice_cursor_down`/
+/// `right`（いずれも `items` から直接 `columns` を読む）が呼び出し箇所を問わず自動的に妥当な
+/// 値だけを見るようになる。`ui::draw_choice_grid` 側にも同種のクランプを多重に入れてある
+/// （呼び出し元を問わない多重防御。実害のあるハングだったため）。
 fn playback_item_from_event(event: &Event) -> Option<PlaybackItem> {
     match event {
         Event::Choice { options, .. } if options.is_empty() => None,
-        Event::Choice { options, columns } => Some(PlaybackItem::Choice(options.clone(), *columns)),
+        Event::Choice { options, columns } => {
+            let clamped = columns.map(|c| c.min(options.len() as u32));
+            Some(PlaybackItem::Choice(options.clone(), clamped))
+        }
         _ => display_line_from_event(event).map(PlaybackItem::Line),
     }
 }
@@ -372,8 +389,9 @@ impl Playback {
     }
 
     /// 現在Choice表示中なら、正規化済みの有効列数（`None`/`0`/`1` はいずれも「非グリッド
-    /// 1列」として `1` に丸める）を返す。Choice表示中でなければ `None`（#508、カーソル
-    /// 移動系メソッド共通のヘルパー）。
+    /// 1列」として `1` に丸める）を返す。上限側（選択肢数を超える列数）は `items` に積む
+    /// 時点（[`playback_item_from_event`]）で既にクランプ済みのため、ここでは行わない。
+    /// Choice表示中でなければ `None`（#508、カーソル移動系メソッド共通のヘルパー）。
     fn effective_columns(&self) -> Option<usize> {
         match self.items.get(self.index) {
             Some(PlaybackItem::Choice(_, columns)) => Some(columns.unwrap_or(1).max(1) as usize),
@@ -444,10 +462,12 @@ impl Playback {
     /// キーボード操作を持たないため参考にできる先例が無く、これはTUI独自の判断）。
     /// 非グリッド（列数1）では従来どおり「1つ次の要素」に一致する。
     pub fn move_choice_cursor_down(&mut self) {
-        let Some(PlaybackItem::Choice(options, columns)) = self.items.get(self.index) else {
+        let Some(columns) = self.effective_columns() else {
             return;
         };
-        let columns = columns.unwrap_or(1).max(1) as usize;
+        let Some(PlaybackItem::Choice(options, _)) = self.items.get(self.index) else {
+            return;
+        };
         let total = options.len();
         let row = self.choice_cursor / columns;
         let rows = total.div_ceil(columns);
@@ -479,13 +499,15 @@ impl Playback {
     /// [`Playback::move_choice_cursor_left`] の右版。行の最終列、または（最終行が途中
     /// までしか埋まっていない場合の）その行に存在する最後の要素で頭打ちになる。
     pub fn move_choice_cursor_right(&mut self) {
-        let Some(PlaybackItem::Choice(options, columns)) = self.items.get(self.index) else {
+        let Some(columns) = self.effective_columns() else {
             return;
         };
-        let columns = columns.unwrap_or(1).max(1) as usize;
         if columns <= 1 {
             return;
         }
+        let Some(PlaybackItem::Choice(options, _)) = self.items.get(self.index) else {
+            return;
+        };
         let col = self.choice_cursor % columns;
         if col + 1 < columns && self.choice_cursor + 1 < options.len() {
             self.choice_cursor += 1;
@@ -2170,6 +2192,46 @@ mod tests {
         assert_eq!(
             cursor, 0,
             "前のグリッド選択肢の非0カーソルが、後続の非グリッド選択肢に漏れてはいけない"
+        );
+    }
+
+    // ---- #508 バグ修正の回帰テスト: columns の上限クランプ ----
+
+    #[test]
+    fn choice_columns_vastly_exceeding_option_count_is_clamped_to_option_count() {
+        // レビューで実際にハングを再現した原稿そのもの相当: `[選択: 列=200000]` だが
+        // 選択肢は2件しかない。parser の `parse_choice_columns` は `u32 >= 1` ならどんな
+        // 巨大な値も受理し上限バリデーションを持たないため、`Playback` 構築時
+        // （`playback_item_from_event`）でクランプしていないと、この生の巨大値が
+        // `ui::draw_choice_grid` までそのまま届いてハングする。実際に markdown を
+        // `parser::parse` した `Document` を経由させ、パイプライン全体でクランプが
+        // 効いていることを確認する。
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n[選択: 列=200000]\n- \
+                       進む→1-2\n- 戻る→1-2\n[/選択]\n\n## 1-2: 次\n\n**B**:\n次のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let pb = Playback::from_document(&document);
+
+        let (options, _cursor, columns) = pb.current_choice().expect("Choiceが最初の item のはず");
+        assert_eq!(options.len(), 2);
+        assert_eq!(
+            columns,
+            Some(2),
+            "列=200000 は選択肢数(2)へクランプされるはず（クランプ無しだとui::draw_choice_grid \
+             がハングする実害バグ、#508）"
+        );
+    }
+
+    #[test]
+    fn choice_columns_within_option_count_is_left_unchanged() {
+        // クランプは「選択肢数を超える」場合のみに効き、妥当な範囲の列数（<= 選択肢数）は
+        // 従来どおりそのまま通ることの確認（過剰なクランプで #508 の元機能を壊していないか）。
+        let doc = doc_single_scene(vec![choice_grid(8, Some(3), "x")]);
+        let pb = Playback::from_document(&doc);
+        let (_options, _cursor, columns) = pb.current_choice().expect("Choiceのはず");
+        assert_eq!(
+            columns,
+            Some(3),
+            "選択肢数(8)以下の列数(3)はクランプされないはず"
         );
     }
 }
