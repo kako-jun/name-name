@@ -11,6 +11,7 @@ import {
 import { Assets } from 'pixi.js'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
+import { INACTIVITY_MS } from '../game/SeekBar'
 import { type NovelGameState } from '../game/GameState'
 import { parseDebugQuery } from '../game/debugQuery'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
@@ -297,6 +298,21 @@ function NovelPlayer({
   // 実際に画面がフルスクリーンかどうかは document.fullscreenElement が正で、ここは
   // その追従用ミラー（ボタンのアイコン/aria-pressed 表示にだけ使う）。
   const [isFullscreen, setIsFullscreen] = useState(false)
+  // フルスクリーントグルの「タップ後の余韻」表示 (#468)。せおはやみ (theo-hayami)
+  // ReaderFrame.astro の nudgeActive と同じパターン: pointerdown/focus のたびに濃い表示
+  // (opacity 1) にし、INACTIVITY_MS（SeekBar と同じ 2.8 秒）操作が無ければ薄い表示
+  // (opacity .2) に戻す。hover/focus-visible 中は CSS 側で常時濃くなる（この state は
+  // 「操作の余韻」専用で、hover 自体はここに乗せない）。
+  const [fsToggleActive, setFsToggleActive] = useState(false)
+  const fsToggleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const nudgeFsToggleActive = useCallback(() => {
+    setFsToggleActive(true)
+    if (fsToggleTimerRef.current) clearTimeout(fsToggleTimerRef.current)
+    fsToggleTimerRef.current = setTimeout(() => {
+      setFsToggleActive(false)
+      fsToggleTimerRef.current = null
+    }, INACTIVITY_MS)
+  }, [])
 
   // fluid aspect ratio (#442): frontmatter `aspect_ratio: auto` のときは固定比率にロックせず、
   // ルート要素（w-full h-full＝実ビューポート追従）の実測サイズの向きから '16:9'/'9:16' を
@@ -892,6 +908,13 @@ function NovelPlayer({
     }
   }, [])
 
+  // unmount 時にフルスクリーントグルの余韻タイマーをクリア (#468)
+  useEffect(() => {
+    return () => {
+      if (fsToggleTimerRef.current) clearTimeout(fsToggleTimerRef.current)
+    }
+  }, [])
+
   // assetBaseUrl が変わったらレンダラーに反映
   useEffect(() => {
     if (rendererRef.current && assetBaseUrl) {
@@ -1020,38 +1043,29 @@ function NovelPlayer({
         className="overflow-hidden [&>canvas]:block [&>canvas]:w-full [&>canvas]:h-full"
         style={gameBoxStyle}
       />
-      {/* フルスクリーン最大化トグル (#468)。エンジン標準機能として全ゲーム共通で右上寄りに置く
+      {/* フルスクリーン最大化トグル (#468)。エンジン標準機能として全ゲーム共通で右上隅に置く
           （右下の ⚙→A→S→D 列とは別位置）。押すたびに fluidRootRef 全体（ゲーム画面自体。
           PlayerScreen のヘッダ等は含まない）をブラウザのフルスクリーン表示に出し入れする。
-          アイコンの向き（外向き矢印=通常表示中→押すと最大化 / 内向き矢印=最大化中→押すと解除）
-          で現在の状態を示す。 */}
+          デザインはせおはやみ (theo-hayami) の ReaderFrame.astro / global.css
+          (.th-reader__fs-toggle) と同一にする（kako-jun 直接指示）: 44x44 の透明なタップ領域の
+          右上隅に 20x20 の塗り三角を clip-path で置き、三角の向き（対角線の位置は同じ、塗りつぶす
+          側が変わる）で expand(埋め込み表示中→押すと広げる)/collapse(最大化中→押すと戻す) を示す。
+          常時は薄く(opacity .2、CSS 側 .nn-fs-toggle)、hover/focus-visible/タップ直後
+          (INACTIVITY_MS=2800、SeekBar と同じ余韻。fsToggleActive で表現)は濃く(opacity 1)なる。
+          色は theo-hayami と同じ --color-th-gold 系の値をこのボタン専用にそのまま使う（Player/
+          Runtime は DESIGN.md のトークン適用対象外）。 */}
       <button
         type="button"
         onClick={handleFullscreenToggle}
+        onPointerDown={nudgeFsToggleActive}
+        onFocus={nudgeFsToggleActive}
         aria-label={isFullscreen ? 'フルスクリーンを解除する' : 'フルスクリーンで表示する'}
         aria-pressed={isFullscreen}
         title="フルスクリーン"
-        className="absolute top-3 right-3 z-10 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white"
+        data-dir={isFullscreen ? 'collapse' : 'expand'}
+        className={`nn-fs-toggle${fsToggleActive ? ' nn-fs-toggle--active' : ''}`}
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          {isFullscreen ? (
-            // 内向き矢印（縮小 = フルスクリーン解除）
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"
-            />
-          ) : (
-            // 外向き矢印（拡大 = フルスクリーン化）
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
-            />
-          )}
-        </svg>
+        <span className="nn-fs-toggle__triangle" aria-hidden="true" />
       </button>
       {/* 操作ボタン列 (#310): クリッカー/ダイアログ送り/シークバーと干渉しない右下隅に集約。
           右端から ⚙→A→S→D の順に並べ、消えるボタンがあっても詰めて隙間を作らない。
