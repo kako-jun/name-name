@@ -25,7 +25,15 @@ pub enum Action {
     /// スキップモード（既読テキスト早送り）の ON/OFF を切り替える（#499、GUI版
     /// `setSkipMode` 相当）。選択肢表示中でも受け付ける（GUI版のボタンも常時操作可能）。
     ToggleSkip,
-    /// アプリを終了する。
+    /// バックログ（既読ログ）画面の表示/非表示を切り替える（#500、GUI版
+    /// `NovelRenderer.backlogOverlay.toggle()` / キー`b`/`B` 相当）。選択肢表示中でも
+    /// 受け付ける — バックログはゲーム進行に影響しない閲覧専用画面のため、選択肢待ちでも
+    /// 開いて構わない（`main.rs::event_loop` の `Overlay` 参照）。
+    ToggleBacklog,
+    /// アプリを終了する。オーバーレイ（バックログ画面）が開いているときは、
+    /// `main.rs::event_loop` がこれを「アプリ終了」ではなく「オーバーレイを閉じる」として
+    /// 解釈し直す（GUI版 `handleKeyDown` の「Escape: 開いているオーバーレイを閉じる」と
+    /// 同じ優先順位）。
     Quit,
 }
 
@@ -60,6 +68,7 @@ fn action_for_event(event: CrosstermEvent) -> Action {
             KeyCode::Down => Action::MoveDown,
             KeyCode::Char('a') | KeyCode::Char('A') => Action::ToggleAuto,
             KeyCode::Char('s') | KeyCode::Char('S') => Action::ToggleSkip,
+            KeyCode::Char('b') | KeyCode::Char('B') => Action::ToggleBacklog,
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             _ => Action::None,
         },
@@ -140,6 +149,18 @@ mod tests {
     fn char_s_uppercase_press_returns_toggle_skip() {
         let action = action_for_event(key_event(KeyCode::Char('S'), KeyEventKind::Press));
         assert_eq!(action, Action::ToggleSkip);
+    }
+
+    #[test]
+    fn char_b_lowercase_press_returns_toggle_backlog() {
+        let action = action_for_event(key_event(KeyCode::Char('b'), KeyEventKind::Press));
+        assert_eq!(action, Action::ToggleBacklog);
+    }
+
+    #[test]
+    fn char_b_uppercase_press_returns_toggle_backlog() {
+        let action = action_for_event(key_event(KeyCode::Char('B'), KeyEventKind::Press));
+        assert_eq!(action, Action::ToggleBacklog);
     }
 
     #[test]

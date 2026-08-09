@@ -510,6 +510,165 @@ fn draw_splash_text(frame: &mut Frame, config: &Config) {
     frame.render_widget(paragraph, centered);
 }
 
+/// 東アジアの全角文字（ひらがな・カタカナ・漢字・ハングル・全角記号等）かどうかを判定する
+/// 簡易ヒューリスティック。Unicode East Asian Width の厳密な実装ではなく、unicode-width
+/// クレートへの依存を増やさずに済ませるための代表的なレンジだけをカバーする簡略版
+/// （gymnasia 等、日本語主体のスクリプトで実務上十分な範囲、#500）。
+fn is_wide_char(c: char) -> bool {
+    let cp = c as u32;
+    matches!(cp,
+        0x1100..=0x115F   // ハングル字母
+        | 0x2E80..=0x303E // 部首補助・康熙部首・CJKの記号及び句読点
+        | 0x3041..=0x33FF // ひらがな〜CJK互換用文字
+        | 0x3400..=0x4DBF // CJK拡張A
+        | 0x4E00..=0x9FFF // CJK統合漢字
+        | 0xA000..=0xA4CF // 彝(イ)文字
+        | 0xAC00..=0xD7A3 // ハングル音節
+        | 0xF900..=0xFAFF // CJK互換漢字
+        | 0xFF00..=0xFF60 // 全角形
+        | 0xFFE0..=0xFFE6
+    )
+}
+
+/// [`is_wide_char`] が真なら2セル、それ以外は1セルとして扱う（半角/全角の簡易セル幅）。
+fn char_width(c: char) -> u16 {
+    if is_wide_char(c) {
+        2
+    } else {
+        1
+    }
+}
+
+/// 1行のテキストを `max_width` セル幅で文字単位に折り返す（単語境界は考慮しない —
+/// 日本語主体のダイアログには分かち書きが無いため、GUI版のCSS `word-break: break-all` 相当の
+/// 動きの方が実態に近い、#500）。
+///
+/// バックログ画面（[`draw_backlog`]）はこの結果の行数をそのままスクロール量のクランプに
+/// 使うため、ratatui の `Paragraph::wrap`（内部の折り返しアルゴリズムが端末幅に応じて
+/// 実行時にしか行数が定まらず、`unstable-rendered-line-info` feature 無しでは事前に
+/// 行数を取得できない）には頼らず、ここで折り返し済みの行を直接組み立てる。
+///
+/// `max_width == 0` は無限ループを避けるため、1文字ずつ個別の行にする。
+fn wrap_line(text: &str, max_width: u16) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    if max_width == 0 {
+        return text.chars().map(|c| c.to_string()).collect();
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width: u16 = 0;
+    for c in text.chars() {
+        let w = char_width(c);
+        if current_width + w > max_width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        current.push(c);
+        current_width += w;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// バックログの全エントリを、話者名（あれば太字+話者色）+ 本文（各行 [`wrap_line`] で
+/// `max_width` セルへ折り返し済み）+ エントリ間の空行区切り、という単一の `Line` 列に変換する
+/// （#500）。エントリが1件も無いときは「まだ何も無い」ことを示す1行だけを返す。
+fn wrap_backlog_lines(
+    config: &Config,
+    entries: &[DisplayLine],
+    max_width: u16,
+) -> Vec<Line<'static>> {
+    if entries.is_empty() {
+        return vec![Line::styled(
+            "(まだ表示された会話がありません)",
+            Style::default().add_modifier(Modifier::DIM),
+        )];
+    }
+    let mut lines = Vec::new();
+    for entry in entries {
+        let color_name = config.color_name_for(entry.speaker.as_deref());
+        let color = Color::from_str(color_name).unwrap_or(Color::White);
+        if let Some(speaker) = &entry.speaker {
+            for wrapped in wrap_line(speaker, max_width) {
+                lines.push(Line::styled(
+                    wrapped,
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ));
+            }
+        }
+        for text_line in &entry.text {
+            for wrapped in wrap_line(text_line, max_width) {
+                lines.push(Line::styled(wrapped, Style::default().fg(color)));
+            }
+        }
+        lines.push(Line::raw(""));
+    }
+    lines
+}
+
+/// バックログ（既読ログ）画面: これまで表示し終えた会話行を話者名込みで一覧表示し、
+/// スクロールで遡って読める（#500、GUI版 `frontend/src/game/BacklogOverlay.ts` 相当）。
+/// 閲覧専用 — この画面を描画している間、`event_loop` は会話の進行（オート/スキップモードの
+/// タイマー・reveal のタイプライター時間経過を含む）を完全に凍結する
+/// （`main.rs::Overlay::Backlog` 分岐参照）。
+///
+/// `entries` は表示済みの会話行の履歴（時系列順、最新が末尾）。`scroll` は呼び出し側が
+/// 保持する生のスクロール位置（折り返し後の行数単位）。実際のコンテンツ量より大きい値
+/// （`main.rs` はバックログを開いた直後に `u16::MAX` を渡す）を渡すと「末尾（最新）に
+/// クランプ」される。戻り値はこのフレームで実際に使われた（クランプ後の）スクロール位置 —
+/// 呼び出し側はこれを次フレームの `scroll` として保存し直す（`reveal::indicator_blink_started_at`
+/// 等、既存の「関数が計算した値を呼び出し側のループ変数へ書き戻す」パターンを踏襲する）。
+pub fn draw_backlog(
+    frame: &mut Frame,
+    config: &Config,
+    entries: &[DisplayLine],
+    scroll: u16,
+) -> u16 {
+    let actual = frame.area();
+    if !fits_required_size(actual) {
+        draw_too_small_message(frame, actual);
+        return scroll;
+    }
+    let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+    let canvas = compute_centered_canvas(actual, required);
+
+    let block = Block::default().borders(Borders::ALL).title("BACKLOG");
+    let inner = block.inner(canvas);
+    frame.render_widget(block, canvas);
+
+    if inner.width == 0 || inner.height == 0 {
+        return scroll;
+    }
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(inner);
+    let content_area = sections[0];
+    let footer_area = sections[1];
+
+    let lines = wrap_backlog_lines(config, entries, content_area.width);
+    let total_lines = lines.len() as u16;
+    let max_scroll = total_lines.saturating_sub(content_area.height);
+    let clamped = scroll.min(max_scroll);
+
+    let paragraph = Paragraph::new(Text::from(lines)).scroll((clamped, 0));
+    render_wrapped_paragraph(frame, content_area, paragraph);
+
+    let footer = Paragraph::new(Line::styled(
+        "↑↓ スクロール / Enter・B・Esc で閉じる",
+        Style::default().add_modifier(Modifier::DIM),
+    ))
+    .alignment(Alignment::Center);
+    frame.render_widget(footer, footer_area);
+
+    clamped
+}
+
 /// 右側をさらに上（相手）/下（自分）に分割し、現在の会話行の話者側のウィンドウにだけ
 /// 本文を描画する（GUI版 `splitTextRegionForDualWindow`: 相手=上/自分=下、#480）。分割は
 /// `Constraint::Length` で明示的に高さを計算し、opponent=`height / 2`（切り捨て）・
@@ -4009,5 +4168,125 @@ mod tests {
                 "{name} corner cell should retain some green from the uncropped source edge, got {cell:?}"
             );
         }
+    }
+
+    // ---- #500: バックログ画面 ----
+
+    #[test]
+    fn wrap_line_ascii_wraps_at_exact_width() {
+        assert_eq!(
+            wrap_line("hello world", 5),
+            vec!["hello".to_string(), " worl".to_string(), "d".to_string()]
+        );
+    }
+
+    #[test]
+    fn wrap_line_wide_chars_count_as_two_cells() {
+        // 全角3文字は6セル分。max_width=4なら2文字目までで折り返す（2+2=4で打ち切り）。
+        assert_eq!(
+            wrap_line("あいう", 4),
+            vec!["あい".to_string(), "う".to_string()]
+        );
+    }
+
+    #[test]
+    fn wrap_line_empty_string_returns_single_empty_line() {
+        assert_eq!(wrap_line("", 10), vec![String::new()]);
+    }
+
+    #[test]
+    fn wrap_line_zero_width_does_not_infinite_loop_and_splits_per_char() {
+        assert_eq!(wrap_line("ab", 0), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn wrap_backlog_lines_empty_entries_shows_placeholder() {
+        let config = Config::default();
+        let lines = wrap_backlog_lines(&config, &[], 40);
+        assert_eq!(lines.len(), 1);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("まだ"));
+    }
+
+    #[test]
+    fn wrap_backlog_lines_includes_speaker_name_and_body() {
+        let config = Config::default();
+        let entries = vec![dialog_line(Some("A"), vec!["hello"])];
+        let lines = wrap_backlog_lines(&config, &entries, 40);
+        let joined: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(joined.contains(&"A".to_string()));
+        assert!(joined.contains(&"hello".to_string()));
+    }
+
+    #[test]
+    fn draw_backlog_no_entries_renders_placeholder_message() {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_backlog(f, &config, &[], 0);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("BACKLOG"));
+        assert!(text.contains("まだ"));
+    }
+
+    #[test]
+    fn draw_backlog_renders_entry_speaker_and_text() {
+        let config = Config::default();
+        let entries = vec![dialog_line(Some("A"), vec!["hello there"])];
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_backlog(f, &config, &entries, 0);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("A"), "buffer was: {text}");
+        assert!(text.contains("hello there"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_backlog_scroll_beyond_content_clamps_to_max_scroll() {
+        // 大量のエントリを積んでスクロール可能な状態を作り、`u16::MAX`（開いた直後の合図）を
+        // 渡しても実際のコンテンツ量にクランプされることを確認する。
+        let config = Config::default();
+        let bodies: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+        let entries: Vec<DisplayLine> = bodies
+            .iter()
+            .map(|s| dialog_line(Some("A"), vec![s.as_str()]))
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut clamped = 0u16;
+        terminal
+            .draw(|f| {
+                clamped = draw_backlog(f, &config, &entries, u16::MAX);
+            })
+            .unwrap();
+        assert!(
+            clamped < u16::MAX,
+            "u16::MAX はコンテンツ量へクランプされるはず、実際: {clamped}"
+        );
+    }
+
+    #[test]
+    fn draw_backlog_scroll_within_bounds_is_unchanged() {
+        let config = Config::default();
+        let entries = vec![dialog_line(Some("A"), vec!["hello"])];
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut clamped = 999u16;
+        terminal
+            .draw(|f| {
+                clamped = draw_backlog(f, &config, &entries, 0);
+            })
+            .unwrap();
+        assert_eq!(
+            clamped, 0,
+            "コンテンツが少ない=そもそもスクロール不要な場合は0のまま"
+        );
     }
 }

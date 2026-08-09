@@ -23,12 +23,29 @@ use ratatui::Terminal;
 use cli::Cli;
 use config::Config;
 use input::Action;
-use playback::Playback;
+use playback::{DisplayLine, Playback};
 
 /// 描画の再チェック間隔。タイプライター演出（`jiwa::RevealHandle`）はフレームごとの
 /// `snapshot` で動くため、キー入力が無くてもこの間隔で再描画してアニメーションを進める
 /// （kako-jun/type-globe の `quiz.rs` の `REDRAW` と同じ値）。
 const REDRAW: Duration = Duration::from_millis(30);
+
+/// バックログ画面（#500）で ↑/↓ 1回あたりスクロールする行数。GUI版
+/// `BacklogOverlay.handleKeyScroll` の `LINE_HEIGHT * 3`（1回で3行ぶん動く）と同じ
+/// 「数行まとめて動く」感覚をセル単位で踏襲する。
+const BACKLOG_SCROLL_STEP: u16 = 3;
+
+/// ゲーム画面より前面に描画するフルスクリーンオーバーレイ。開いている間、`event_loop` は
+/// 会話の進行（オート/スキップモードのタイマー・reveal のタイプライター時間経過を含む）を
+/// 完全に凍結する — バックログ（#500 Issue本文「バックログを閉じると元のゲーム画面に戻る
+/// (ゲーム進行状態は変化しない、閲覧専用)」という明示要件）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overlay {
+    /// 通常のゲーム画面。
+    None,
+    /// バックログ（既読ログ）閲覧画面（#500）。
+    Backlog,
+}
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse(std::env::args());
@@ -211,9 +228,9 @@ where
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
                 target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
-            // スプラッシュ画面にはオート/スキップモードも無いため、各種トグルは無視する
-            // （#498 / #499）。
-            Action::ToggleAuto | Action::ToggleSkip | Action::None => {}
+            // スプラッシュ画面にはオート/スキップモードもバックログ画面も無いため、各種
+            // トグルは無視する（#498 / #499 / #500）。
+            Action::ToggleAuto | Action::ToggleSkip | Action::ToggleBacklog | Action::None => {}
         }
     }
 }
@@ -300,8 +317,70 @@ where
     let mut skip_mode = false;
     let mut read_positions: HashSet<usize> = HashSet::new();
 
+    // バックログ（#500）: これまで実際に表示し終えた会話行（話者名込み）の履歴。
+    // `Action::Advance` 処理内、行を実際に離れた瞬間（`on_advance` が `true` を返した
+    // とき）にその行を積む — `read_positions`（既読判定、位置の集合）とは別に、表示内容
+    // そのもの（`DisplayLine`）を時系列順に保持する。`sentence_per_page` が有効なときは
+    // 文単位ページごとに1エントリになる（GUI版 `NovelRenderer` がページを離れる時だけ
+    // backlog に記録するのと同じ粒度、`advanceOrSkipTypewriter` 参照）。
+    let mut backlog: Vec<DisplayLine> = Vec::new();
+    // バックログのスクロール位置（行数）。`ui::draw_backlog` が実際のコンテンツ量に合わせて
+    // クランプした値を返すので、ここへ書き戻す（`indicator_started_at` と同じ「関数が
+    // 計算した値をループ変数へ書き戻す」パターン）。`Overlay::Backlog` を開いた直後は
+    // `u16::MAX` をセットして「末尾（最新）にクランプ」させる。
+    let mut backlog_scroll: u16 = 0;
+
+    // 現在開いているオーバーレイ画面（#500）。既定は `Overlay::None`（通常のゲーム画面）。
+    let mut overlay = Overlay::None;
+
     loop {
         let now = Instant::now();
+
+        // オーバーレイ（バックログ画面）表示中は、通常のゲームロジック（オート/スキップ
+        // モードの締切判定・reveal のタイプライター経過・`Action::Advance` 等）を一切実行
+        // せず、ここで完結させて次の周回へ進む（#500）。こうすることで「開いている間は
+        // 会話が一切進まない」ことが構造的に保証される — 通常フローの奥深くに `if overlay ==
+        // Overlay::None` の条件分岐を無数に挟むより、入り口1箇所で早期分岐する方が
+        // 見落としのリスクが低い。
+        if overlay != Overlay::None {
+            terminal.draw(|frame| match overlay {
+                Overlay::Backlog => {
+                    backlog_scroll = ui::draw_backlog(frame, config, &backlog, backlog_scroll);
+                }
+                Overlay::None => unreachable!("overlay != Overlay::None はこの分岐の前提"),
+            })?;
+
+            match next_action()? {
+                // バックログ画面を開いたのと同じキーで閉じる（GUI版 `BacklogOverlay` の
+                // 「ESC / B / クリックで閉じる」の「B」に相当、#500）。
+                Action::ToggleBacklog => {
+                    overlay = Overlay::None;
+                }
+                // Enter/Space（GUI版 `handlePointerClick` がバックログ表示中のタップを
+                // 「進める」ではなく「閉じる」として吸収するのと同じ、#500）、および
+                // Quit（q/Esc、GUI版 `handleKeyDown` の「Escape: 開いているオーバーレイを
+                // 閉じる」と同じ優先順位）は、オーバーレイが開いている間はアプリ終了ではなく
+                // 「オーバーレイを閉じる」を意味する。
+                Action::Advance | Action::Quit => {
+                    overlay = Overlay::None;
+                }
+                // バックログ表示中の ↑/↓ はスクロール（#500）。`Action::MoveUp`/
+                // `Action::MoveDown` は「選択肢が無いときは no-op」というのが本来の意味だが
+                // （`input.rs` の doc comment参照）、選択肢が存在し得ないオーバーレイ画面の
+                // 文脈では別の意味へ読み替える — `Action::Advance` が選択肢確定へ読み替わる
+                // のと同じ、既存の「Action の文脈依存の再解釈」パターンを踏襲する。
+                Action::MoveUp => {
+                    backlog_scroll = backlog_scroll.saturating_sub(BACKLOG_SCROLL_STEP);
+                }
+                Action::MoveDown => {
+                    backlog_scroll = backlog_scroll.saturating_add(BACKLOG_SCROLL_STEP);
+                }
+                // 上記のどれにも当てはまらない入力（オート/スキップトグル等）はオーバーレイ
+                // 表示中は無視する。
+                _ => {}
+            }
+            continue;
+        }
 
         // スキップモード（#499）: この周回で即座に advance すべきか（`skip_triggered`、下記）
         // を判定する。適格でなくなっていれば（選択肢到達・進める先が無い・未読到達）、
@@ -429,9 +508,29 @@ where
                 // 比較では「本当に別の item へ移動したか」を取りこぼす。`current_choice()` の
                 // 有無の変化も合わせて見ることでこの遷移も拾う。
                 let was_choice_before = playback.current_choice().is_some();
+                // #500: バックログに積む候補（話者名込みの表示内容）を、状態を動かす前に
+                // 保存しておく。選択肢表示中は `current_line()` が `None` を返すため、この時点
+                // で自然と候補なしになる — 選択肢自体はバックログの対象外という方針
+                // （GUI版 #140 も text イベントだけを backlog の対象にしている）。
+                let prev_line_for_backlog = playback.current_line().cloned();
                 // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
                 // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
-                on_advance(playback, &mut current_reveal, config, Instant::now());
+                let advanced = on_advance(playback, &mut current_reveal, config, Instant::now());
+                // #500: 実際に行/文単位ページが1つ先へ進んだとき（`on_advance` が `true` を
+                // 返したとき、デシジョンテーブルのケース4）だけ、離れる直前の表示内容を
+                // バックログへ積む。選択肢確定（ケース1）・タイプライターのスキップのみ
+                // （ケース3、まだ同じ行にとどまる）・末尾での no-op（ケース5）ではいずれも
+                // `advanced` が偽になり、GUI版 `NovelRenderer.advanceOrSkipTypewriter` が
+                // 「ページを離れる時だけ backlog に記録する」のと同じ粒度になる。本文が空
+                // （改ページ専用の空行）のエントリは記録しない（GUI版 `BacklogOverlay.addEntry`
+                // の「空行は記録しない」を踏襲）。
+                if advanced {
+                    if let Some(entry) = prev_line_for_backlog {
+                        if !entry.text.iter().all(|line| line.is_empty()) {
+                            backlog.push(entry);
+                        }
+                    }
+                }
                 // #499: 会話行から実際に離脱した（＝別の item へ移動した）瞬間、離脱前の行を
                 // 既読としてマークする（`read_positions`、離脱ベースの既読判定 — 上の
                 // `skip_mode` 初期化コメント参照）。選択肢から離脱した場合（`was_choice_before`）
@@ -522,6 +621,15 @@ where
                     auto_deadline = None;
                 }
             }
+            Action::ToggleBacklog => {
+                // #500: 開いた瞬間は最新（末尾）を表示させたいが、実際の折り返し後の行数は
+                // `ui::draw_backlog` が描画時に初めて分かる。`u16::MAX` を渡しておくと
+                // `draw_backlog` がその場で「末尾にクランプ」した値を返すので、次フレーム
+                // 以降はその値を使う（`indicator_started_at` と同じ「関数の戻り値をループ
+                // 変数へ書き戻す」パターン）。
+                overlay = Overlay::Backlog;
+                backlog_scroll = u16::MAX;
+            }
             Action::Quit => break,
             Action::None => {}
         }
@@ -559,17 +667,24 @@ fn build_reveal_for_current(
 /// 指す選択肢を確定する」に変わる（`input::Action::Advance` のドキュメント参照）。選択肢の
 /// 文言はタイプライター演出の対象外なので、reveal の完了/未完了を問わず常に即座に確定を試みる
 /// （#3/#4 のような reveal_done 分岐が不要）。
+///
+/// 戻り値は「実際に会話行/文単位ページが1つ先へ進んだか」（デシジョンテーブルのケース4での
+/// み `true`）。呼び出し側 `event_loop` はこれを使ってバックログ（#500）に「離れる直前の
+/// 表示内容」を積むタイミングを判定する — 選択肢確定（ケース1）・タイプライターの
+/// スキップのみでまだ同じ行にとどまる（ケース3）・末尾での no-op（ケース5）はいずれも
+/// `false` を返す。既存の呼び出し元（テスト含む）は戻り値を無視しても動作に影響しない
+/// （`bool` は `#[must_use]` ではないため、無視しても警告は出ない）。
 fn on_advance(
     playback: &mut Playback,
     current_reveal: &mut Option<reveal::RevealState>,
     config: &Config,
     now: Instant,
-) {
+) -> bool {
     if playback.current_choice().is_some() {
         if playback.select_current_choice() {
             *current_reveal = build_reveal_for_current(playback, config, now);
         }
-        return;
+        return false;
     }
 
     if let Some(line) = playback.current_line() {
@@ -583,10 +698,13 @@ fn on_advance(
             // 進めない」挙動（カノソ方式）。`skip_lines` は `RevealHandle` の時間計算を
             // 経由しない（#472 セルフレビュー対応）。
             *current_reveal = Some(reveal::RevealState::Done(reveal::skip_lines(config, line)));
+            return false;
         } else if playback.advance() {
             *current_reveal = build_reveal_for_current(playback, config, now);
+            return true;
         }
     }
+    false
 }
 
 #[cfg(test)]
