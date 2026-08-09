@@ -19,6 +19,9 @@ pub enum Action {
     MoveUp,
     /// 選択肢のカーソルを1つ下へ動かす。選択肢を表示していないときは no-op（#482）。
     MoveDown,
+    /// オートモード（自動ページ送り）の ON/OFF を切り替える（#498、GUI版 `setAutoMode`
+    /// 相当）。選択肢表示中でも受け付ける（GUI版のボタンも常時操作可能）。
+    ToggleAuto,
     /// アプリを終了する。
     Quit,
 }
@@ -52,6 +55,7 @@ fn action_for_event(event: CrosstermEvent) -> Action {
             KeyCode::Enter | KeyCode::Char(' ') => Action::Advance,
             KeyCode::Up => Action::MoveUp,
             KeyCode::Down => Action::MoveDown,
+            KeyCode::Char('a') | KeyCode::Char('A') => Action::ToggleAuto,
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             _ => Action::None,
         },
@@ -106,8 +110,20 @@ mod tests {
 
     #[test]
     fn unmapped_key_press_returns_none() {
-        let action = action_for_event(key_event(KeyCode::Char('a'), KeyEventKind::Press));
+        let action = action_for_event(key_event(KeyCode::Char('z'), KeyEventKind::Press));
         assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn char_a_lowercase_press_returns_toggle_auto() {
+        let action = action_for_event(key_event(KeyCode::Char('a'), KeyEventKind::Press));
+        assert_eq!(action, Action::ToggleAuto);
+    }
+
+    #[test]
+    fn char_a_uppercase_press_returns_toggle_auto() {
+        let action = action_for_event(key_event(KeyCode::Char('A'), KeyEventKind::Press));
+        assert_eq!(action, Action::ToggleAuto);
     }
 
     #[test]

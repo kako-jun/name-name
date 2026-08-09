@@ -210,7 +210,8 @@ where
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
                 target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
-            Action::None => {}
+            // スプラッシュ画面にはオートモードも無いため、オートトグルは無視する（#498）。
+            Action::ToggleAuto | Action::None => {}
         }
     }
 }
@@ -271,8 +272,41 @@ where
             .and_then(|line| line.event_image.clone()),
     );
 
+    // オートモード（#498、GUI版 `NovelRenderer.autoMode`/`scheduleAutoAdvance` 相当）の
+    // 状態。`auto_deadline` は「現在行の reveal が完了してから `config.auto_wait_ms` 後」の
+    // 締切で、これを過ぎたらプレイヤーの入力を待たずに `Action::Advance` を合成する
+    // （#497 の `wait_deadline` と同じ「`Action` 経由にせず直接合成する」設計）。
+    let mut auto_mode = false;
+    let mut auto_deadline: Option<Instant> = None;
+
     loop {
         let now = Instant::now();
+
+        // オートモード（#498）: 締切を毎フレーム引き直すのではなく、「reveal完了 かつ
+        // 選択肢待ちでない かつ スクリプト末尾でない」条件を満たした最初のフレームでだけ
+        // 締切を1回セットする（#497 で踏んだ「毎周回上書きすると締切が無限に後退し続けて
+        // 発火しない」バグを踏まないため、`auto_deadline.is_none()` のときだけ書き込む）。
+        // 条件を外れたら（reveal未完了へ戻る＝新しい行へ進んだ、選択肢が出た、末尾に
+        // 達した、等）締切を破棄する。GUI版が choice/wait 待機中・スクリプト末尾で
+        // `scheduleAutoAdvance` を発火させないのと同じガード（`waitingForWait` 相当は
+        // TUI にまだ無いため対象外）。
+        if auto_mode {
+            let reveal_done = current_reveal
+                .as_ref()
+                .map(|r| r.is_done(now))
+                .unwrap_or(true);
+            let eligible =
+                reveal_done && playback.current_choice().is_none() && !playback.is_at_end();
+            if eligible {
+                if auto_deadline.is_none() {
+                    auto_deadline = Some(now + Duration::from_millis(config.auto_wait_ms));
+                }
+            } else {
+                auto_deadline = None;
+            }
+        } else {
+            auto_deadline = None;
+        }
         // インジケータを表示すべきか（reveal完了 かつ 選択肢非表示 かつ 会話行あり）。
         // `ui::draw_text_windows` が実際の描画可否を判定するのと同じ条件式を
         // `reveal::should_show_page_indicator` に集約して共有する（セルフレビュー should
@@ -308,8 +342,38 @@ where
             )
         })?;
 
-        match next_action()? {
+        // オートモード（#498）: 締切を過ぎていれば、キー入力を待たずに `Action::Advance` を
+        // 合成する（#497 の `deadline_triggered` と同じパターン）。`auto_triggered` は
+        // 下の `Action::Advance` 分岐で「これは自動送りか、プレイヤーの手動操作か」を
+        // 区別するために使う — 手動操作でのみオートモードを解除する（GUI版
+        // `handleAdvance`/`handleKeyDown` が `setAutoMode(false)` するのと同じだが、自動送り
+        // 自身がその直後に自分自身を解除してしまっては永久に1行しか進めなくなる）。
+        let auto_triggered = matches!(auto_deadline, Some(deadline) if now >= deadline);
+        if auto_triggered {
+            // 締切を消費したら即座に `None` へ戻す。ここでクリアしないと、次のループ先頭の
+            // オートモード判定ブロックは「`auto_deadline` が既に `Some`」と見て新しい締切への
+            // 上書きをスキップし（#497 で踏んだ「毎周回上書きすると発火しなくなる」バグを
+            // 避けるための意図的なガード）、advance 後の新しい行にも同じ過去の締切が
+            // 残り続けてしまう。結果、advance するたびに即座にまた `now >= deadline` が
+            // 真になり、`auto_wait_ms` の待機を1回も置かずに残り全行を一瞬で読み終える
+            // カスケード事故になる（tmux実機確認で発見）。
+            auto_deadline = None;
+        }
+        let action = if auto_triggered {
+            Action::Advance
+        } else {
+            next_action()?
+        };
+
+        match action {
             Action::Advance => {
+                if !auto_triggered {
+                    // 手動操作（Enter/Space）でオートモードをキャンセルする（#498、GUI版
+                    // `handleAdvance`/`handleKeyDown` の「手動操作で auto/skip を OFF にする」
+                    // 挙動を踏襲）。
+                    auto_mode = false;
+                    auto_deadline = None;
+                }
                 let prev_position = playback.position();
                 // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
                 // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
@@ -365,6 +429,14 @@ where
             // 選択肢を表示していないとき（`Playback::current_choice` が `None`）は no-op（#482）。
             Action::MoveUp => playback.move_choice_cursor_up(),
             Action::MoveDown => playback.move_choice_cursor_down(),
+            Action::ToggleAuto => {
+                // #498: トグルするだけで締切自体はここでは張らない。次ループ先頭の
+                // オートモード判定ブロックが、この後の `auto_mode`/reveal 状態から
+                // 改めて「eligibleか」を評価して締切を1回セットし直す（ON にした瞬間に
+                // 現在行がタイプ中でも表示完了済みでも、その状態に応じて正しく拾える）。
+                auto_mode = !auto_mode;
+                auto_deadline = None;
+            }
             Action::Quit => break,
             Action::None => {}
         }

@@ -181,6 +181,10 @@ pub struct Config {
     /// フィールドで独立に制御する（`dialog_style` を TUI が常に adv 固定で運用しているのと
     /// 同じ「TUI は自前の Config で制御する」設計）。
     pub sentence_per_page: bool,
+    /// オートモード（#498）で、現在行のタイプライター表示が完了してから次行へ自動的に
+    /// 進むまでの待機時間 (ms)。GUI版 `NovelRenderer.autoWaitMs`/`settings.autoWaitMs` の
+    /// 既定値（2500ms）と揃える。
+    pub auto_wait_ms: u64,
 }
 
 impl Default for Config {
@@ -196,6 +200,7 @@ impl Default for Config {
             typewriter: TypewriterConfig::default(),
             event_image: EventImageConfig::default(),
             sentence_per_page: false,
+            auto_wait_ms: 2500,
         }
     }
 }
@@ -304,6 +309,7 @@ mod tests {
         );
         assert_eq!(config.event_image.crossfade_ms, 700);
         assert!(!config.sentence_per_page);
+        assert_eq!(config.auto_wait_ms, 2500);
     }
 
     #[test]
