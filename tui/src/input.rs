@@ -22,6 +22,9 @@ pub enum Action {
     /// オートモード（自動ページ送り）の ON/OFF を切り替える（#498、GUI版 `setAutoMode`
     /// 相当）。選択肢表示中でも受け付ける（GUI版のボタンも常時操作可能）。
     ToggleAuto,
+    /// スキップモード（既読テキスト早送り）の ON/OFF を切り替える（#499、GUI版
+    /// `setSkipMode` 相当）。選択肢表示中でも受け付ける（GUI版のボタンも常時操作可能）。
+    ToggleSkip,
     /// アプリを終了する。
     Quit,
 }
@@ -56,6 +59,7 @@ fn action_for_event(event: CrosstermEvent) -> Action {
             KeyCode::Up => Action::MoveUp,
             KeyCode::Down => Action::MoveDown,
             KeyCode::Char('a') | KeyCode::Char('A') => Action::ToggleAuto,
+            KeyCode::Char('s') | KeyCode::Char('S') => Action::ToggleSkip,
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             _ => Action::None,
         },
@@ -124,6 +128,18 @@ mod tests {
     fn char_a_uppercase_press_returns_toggle_auto() {
         let action = action_for_event(key_event(KeyCode::Char('A'), KeyEventKind::Press));
         assert_eq!(action, Action::ToggleAuto);
+    }
+
+    #[test]
+    fn char_s_lowercase_press_returns_toggle_skip() {
+        let action = action_for_event(key_event(KeyCode::Char('s'), KeyEventKind::Press));
+        assert_eq!(action, Action::ToggleSkip);
+    }
+
+    #[test]
+    fn char_s_uppercase_press_returns_toggle_skip() {
+        let action = action_for_event(key_event(KeyCode::Char('S'), KeyEventKind::Press));
+        assert_eq!(action, Action::ToggleSkip);
     }
 
     #[test]

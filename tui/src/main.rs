@@ -9,6 +9,7 @@ mod reveal;
 mod sentence;
 mod ui;
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -210,8 +211,9 @@ where
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
                 target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
-            // スプラッシュ画面にはオートモードも無いため、オートトグルは無視する（#498）。
-            Action::ToggleAuto | Action::None => {}
+            // スプラッシュ画面にはオート/スキップモードも無いため、各種トグルは無視する
+            // （#498 / #499）。
+            Action::ToggleAuto | Action::ToggleSkip | Action::None => {}
         }
     }
 }
@@ -279,8 +281,47 @@ where
     let mut auto_mode = false;
     let mut auto_deadline: Option<Instant> = None;
 
+    // スキップモード（#499、GUI版 `NovelRenderer.setSkipMode`/`scheduleSkipStep` 相当）の
+    // 状態。GUI版はセーブファイルの永続化された既読進捗（`readProgress`）を使うが、TUI
+    // 側にはまだそのような永続化の仕組みが無いため、今回はランタイム中だけのメモリ上の
+    // 既読集合（`read_positions`、`Playback::position()` の値をキーにする）で最小実装する
+    // (#499 Issue本文の「永続化はスコープ外」指示どおり)。
+    //
+    // `read_positions` は「その行を**離脱した**ことがある」位置の集合であり、「その行を
+    // 表示したことがある」位置の集合ではない — マークは会話行から実際に advance で
+    // 離れた瞬間（下の `Action::Advance` 処理内）にだけ行う。「到達した瞬間に無条件で
+    // マークする」実装を最初に試したところ、REDRAW ポーリング（30msごとの再描画）が
+    // キー入力の有無に関わらず走り続けるため、プレイヤーがまだ一度も見ていない初見の行
+    // でも到達から30ms後には自分自身の描画によって「既読」扱いになってしまい、その後で
+    // スキップをONにすると初見の行を素通りしてしまう事故が tmux 実機確認で発覚した
+    // （GUI版は render() 呼び出し内で「チェック→マーク」を1行の遷移につき1回だけ
+    // アトミックに行うため、同じ問題が起きない）。離脱時マークならこの問題を構造的に
+    // 避けられる — 何フレーム見ていたかに関わらず、実際に次へ進むまでは既読集合に入らない。
+    let mut skip_mode = false;
+    let mut read_positions: HashSet<usize> = HashSet::new();
+
     loop {
         let now = Instant::now();
+
+        // スキップモード（#499）: この周回で即座に advance すべきか（`skip_triggered`、下記）
+        // を判定する。適格でなくなっていれば（選択肢到達・進める先が無い・未読到達）、
+        // ここで `skip_mode` 自体を降ろす（GUI版 `processDirective` の Choice 到達時
+        // `setSkipMode(false)` 等と同じ「その場で即座に解除する」挙動、#140）。
+        if skip_mode
+            && (playback.current_choice().is_some()
+                || playback.current_line().is_none()
+                || playback.is_at_end())
+        {
+            skip_mode = false;
+        }
+        // 既読 → この周回でキー入力を待たずに即座に advance する（GUI版 `scheduleSkipStep`
+        // の `setTimeout(…, 0)` 相当、「実質ウェイト無しで回し続ける」設計）。未読ならスキップ
+        // 終了（現在行は表示したまま待機、GUI版 #140 と同じ）——これは上のブロックが
+        // 拾わないので、ここで改めて判定する。
+        let skip_triggered = skip_mode && read_positions.contains(&playback.position());
+        if skip_mode && !skip_triggered {
+            skip_mode = false;
+        }
 
         // オートモード（#498）: 締切を毎フレーム引き直すのではなく、「reveal完了 かつ
         // 選択肢待ちでない かつ スクリプト末尾でない」条件を満たした最初のフレームでだけ
@@ -359,7 +400,12 @@ where
             // カスケード事故になる（tmux実機確認で発見）。
             auto_deadline = None;
         }
-        let action = if auto_triggered {
+        // 自動送り（オート／スキップいずれか）による合成 Advance かどうか。手動操作でのみ
+        // オート/スキップモード自体を解除するために使う（GUI版 `handleAdvance`/
+        // `handleKeyDown` が `setAutoMode(false)`/`setSkipMode(false)` するのと同じだが、
+        // 自動送り自身がその直後に自分自身を解除してしまっては永久に1行しか進めなくなる）。
+        let synthetic_advance = auto_triggered || skip_triggered;
+        let action = if synthetic_advance {
             Action::Advance
         } else {
             next_action()?
@@ -367,17 +413,35 @@ where
 
         match action {
             Action::Advance => {
-                if !auto_triggered {
-                    // 手動操作（Enter/Space）でオートモードをキャンセルする（#498、GUI版
-                    // `handleAdvance`/`handleKeyDown` の「手動操作で auto/skip を OFF にする」
-                    // 挙動を踏襲）。
+                if !synthetic_advance {
+                    // 手動操作（Enter/Space）でオート/スキップモードをキャンセルする
+                    // （#498/#499、GUI版 `handleAdvance`/`handleKeyDown` の「手動操作で
+                    // auto/skip を OFF にする」挙動を踏襲）。
                     auto_mode = false;
                     auto_deadline = None;
+                    skip_mode = false;
                 }
                 let prev_position = playback.position();
+                // #499: 既読マーク判定用に、on_advance で状態を動かす前の「選択肢表示中か」を
+                // 覚えておく。`playback.position()` は Choice item をカウントしないため、
+                // 「最後の会話行 → 直後の Choice」という遷移では `position()` の値が変わらず
+                // （#497 が `item_index()` を導入した理由と同種の制約）、`prev_position` だけの
+                // 比較では「本当に別の item へ移動したか」を取りこぼす。`current_choice()` の
+                // 有無の変化も合わせて見ることでこの遷移も拾う。
+                let was_choice_before = playback.current_choice().is_some();
                 // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
                 // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
                 on_advance(playback, &mut current_reveal, config, Instant::now());
+                // #499: 会話行から実際に離脱した（＝別の item へ移動した）瞬間、離脱前の行を
+                // 既読としてマークする（`read_positions`、離脱ベースの既読判定 — 上の
+                // `skip_mode` 初期化コメント参照）。選択肢から離脱した場合（`was_choice_before`）
+                // はマーク対象外 — 選択肢自体は会話行ではなく、GUI版も text イベントだけを
+                // 対象にしている（#140）。
+                let item_changed = playback.position() != prev_position
+                    || playback.current_choice().is_some() != was_choice_before;
+                if item_changed && !was_choice_before {
+                    read_positions.insert(prev_position);
+                }
                 // 会話行が実際に進んだ（＝スキップ操作でも選択肢の確定待ちでもなく、次の
                 // Line item へ移動した）ときだけ event_image の変化を見てクロスフェードを
                 // 開始する。skip_lines 経路（on_advance がタイプライター表示を全文表示へ
@@ -436,6 +500,27 @@ where
                 // 現在行がタイプ中でも表示完了済みでも、その状態に応じて正しく拾える）。
                 auto_mode = !auto_mode;
                 auto_deadline = None;
+                if auto_mode {
+                    // オートとスキップは排他（GUI版 `setSkipMode(true)` が `setAutoMode(false)`
+                    // する方向の排他を #140 から踏襲）。GUI版は逆方向（オートON時にスキップを
+                    // 切る）までは明示していないが、TUI は「同時に有効な締切は高々1つ」という
+                    // 単純なタイマー設計のため、両モードが同時に走る未定義状態を避けるべく
+                    // 対称に扱う。
+                    skip_mode = false;
+                }
+            }
+            Action::ToggleSkip => {
+                // #499: 同じ理由でスキップ側もトグルだけに留め、次ループ先頭の既読判定
+                // ブロックに「eligibleか」の再評価を委ねる。ON にした瞬間に現在行が未読なら
+                // その判定ブロックが即座に `skip_mode` を `false` に戻す（GUI版 #140 と同じ
+                // 「未読到達で即座に解除」挙動）。
+                skip_mode = !skip_mode;
+                if skip_mode {
+                    // スキップON時はオートを解除する（GUI版 `setSkipMode(true)` の
+                    // `this.setAutoMode(false)` をそのまま踏襲、#140）。
+                    auto_mode = false;
+                    auto_deadline = None;
+                }
             }
             Action::Quit => break,
             Action::None => {}
