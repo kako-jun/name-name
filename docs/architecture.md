@@ -190,12 +190,16 @@ Choice によるプレイヤー操作介入は無い。ただし `[待機: Nms]`
 `content/scripts/` は `listScripts()` で全列挙され `allScenes`/confinement グラフに乗ってしまい、
 `?scene=` 直リンクや原稿 typo で到達可能になる事故ルートになるため、意図的に外している。
 
-終劇の判定箇所は 2 つ:
+終劇の判定箇所は 3 つ:
 **選んだ jump 先**が圏外なら `jumpToScene`（choice 確定後）が終劇する。さらに **全 option の
 jump 先が圏外の `[選択]` に到達した場合**は、選択肢を描画せず `processDirective` の Choice 分岐で
 先回りして終劇する（#398。全 option 圏外の choice はクリックするまで `jumpToScene` に届かず、
 `storyEnded` の postMessage が発火しないため既読化されなかった。`markCurrentSceneRead` を済ませて
-から終劇し、選択肢を出さずに完読を親へ通知する）。`?scene=` が hub 自身の sceneId を指した場合は
+から終劇し、選択肢を出さずに完読を親へ通知する）。加えて **`[選択]` を持たないまま `advance()` が
+resolvedEvents を最後まで消化した場合**は、confinement とは無関係に、`onEndCallback`
+（VideoExporter 専用）が未登録であれば `endStory()` を呼ぶ（#470。記述が尽きたシーンが無反応で
+固まって見える不具合の修正。`onEndCallback` 登録時＝動画書き出し中はそちらに完全委譲し
+`endStory()` の演出は重ねない）。`?scene=` が hub 自身の sceneId を指した場合は
 `findConfinedSceneIds` が null を返し、confinement を組まず無制限フローにフォールバックする
 （hub → 各お題への通常 choice 遷移を壊さないため）。`storyEnded` の設計上の位置づけ
 （ADR 0002 の「演出の中間状態を持たない」規律との関係）は
