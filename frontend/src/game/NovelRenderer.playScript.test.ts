@@ -374,7 +374,10 @@ describe('NovelRenderer.playScript (#220)', () => {
   it('20 (N1): 呼び出し前から initialized=false（markInitialized 未実行）のまま advance を呼んでも例外を投げない', async () => {
     // #515 のガードは wait ステップ明けにのみ入る。wait を経由しない script（advance のみ）は
     // このガード自体を通らないため、initialized=false のままでも advance() 自体が投げないことを
-    // 固定する（advance() 経由の render()/showCharacterThenRender() 側の initialized ガードに委ねている）。
+    // 固定する。ただし advance() は render() を呼ぶ前に resolvedEvents/textEvt の分岐処理や
+    // backlogOverlay.addEntry() 等を実行しており、これらは initialized を見ずに動く。
+    // 「render() 側の initialized ガードで安全」という一般化はできず、今回のテストケースが
+    // たまたま例外を出さない構成（resolvedEvents が空などの早期 return）になっているだけである点に注意。
     const r = makeRenderer(SCENES_SINGLE)
     // markInitialized(r) を意図的に呼ばない = init() 未完了 / 破棄済みを模す
     await expect(r.playScript([{ type: 'advance' }])).resolves.toBeUndefined()
@@ -412,7 +415,10 @@ describe('NovelRenderer.playScript (#220)', () => {
     markInitialized(r)
     const jumpSpy = vi.spyOn(internals(r), 'jumpToScene')
 
-    const p = r.playScript([{ type: 'wait', ms: 100 }, { type: 'choice', jump: 'left' }])
+    const p = r.playScript([
+      { type: 'wait', ms: 100 },
+      { type: 'choice', jump: 'left' },
+    ])
     await Promise.resolve()
     internals(r).initialized = false
 
@@ -447,7 +453,10 @@ describe('NovelRenderer.playScript (#220)', () => {
     markInitialized(r)
     const jumpSpy = vi.spyOn(internals(r), 'jumpToScene')
 
-    const p = r.playScript([{ type: 'wait', ms: 100 }, { type: 'choice', jump: 'right' }])
+    const p = r.playScript([
+      { type: 'wait', ms: 100 },
+      { type: 'choice', jump: 'right' },
+    ])
     await vi.advanceTimersByTimeAsync(100)
     await expect(p).resolves.toBeUndefined()
 
