@@ -38,6 +38,19 @@ const TAP_MOVE_THRESHOLD_PX = 8
 const CHOICE_REGION_MARGIN_X = 24
 /** クランプ後のボタン幅の下限 (px)。極端に狭い領域でもラベルが読めなくなるほど潰さない。 */
 const CHOICE_REGION_MIN_BUTTON_WIDTH = 160
+/**
+ * グリッド配置 (#508) の列間ギャップ (px)。行間は既存の BUTTON_GAP をそのまま流用し、
+ * 列間だけ独立の定数として持つ（現状は同値だが、将来グリッド専用に調整できるよう分けておく）。
+ */
+const GRID_COLUMN_GAP = BUTTON_GAP
+/**
+ * グリッド配置時、画面（または split_layout region）端からの安全マージン (px)。
+ * CHOICE_REGION_MARGIN_X と同じ値だが、グリッドは region 未指定（全画面）でも列数に応じて
+ * ボタン幅を画面幅へ収める必要があるため、region の有無に関わらず適用する。
+ */
+const GRID_HORIZONTAL_MARGIN = 24
+/** グリッドボタン幅の下限 (px)。列数が多くてもラベルが読めなくなるほど潰さない。 */
+const GRID_MIN_BUTTON_WIDTH = 100
 
 export type ChoiceStyleName = 'default' | 'soft' | 'monochrome'
 
@@ -273,12 +286,16 @@ export class ChoiceOverlay extends Container {
    * @param options 表示する選択肢
    * @param onSelect 確定時のコールバック
    * @param style   `default` / `soft` / `monochrome`。未指定 or 不明値は `default` 扱い
+   * @param columns グリッド配置の列数 (#508)。`[選択: 列=N]` の N。未指定 or 1 以下は
+   *                従来どおりの縦一列表示（完全に非破壊）。2 以上でボタンを
+   *                `i % columns` 列目・`i / columns` 行目に並べるグリッドになる。
    */
   show(
     options: ChoiceOption[],
     onSelect: (jump: string) => void,
     style?: string | null,
-    readJumps?: ReadonlySet<string>
+    readJumps?: ReadonlySet<string>,
+    columns?: number | null
   ): void {
     if (options.length === 0) return
     this.onSelect = onSelect
@@ -303,16 +320,36 @@ export class ChoiceOverlay extends Container {
     const areaY = region?.y ?? 0
     const areaWidth = region?.width ?? this.screenWidth
     const areaHeight = region?.height ?? this.screenHeight
-    // BUTTON_WIDTH (480px) は分割後のテキスト領域より広いことがあるため、region 指定時は
-    // 領域幅（内側余白を引いた分）にクランプする。region 未指定時は BUTTON_WIDTH のまま。
-    this.layoutButtonWidth = region
-      ? Math.max(
-          CHOICE_REGION_MIN_BUTTON_WIDTH,
-          Math.min(BUTTON_WIDTH, areaWidth - CHOICE_REGION_MARGIN_X * 2)
-        )
-      : BUTTON_WIDTH
+    // グリッド配置 (#508)。columns が未指定 or 1 以下なら isGrid=false のまま従来の
+    // 縦一列レイアウトを一切変更しない（下の分岐でも old と同じ式のみ通す非破壊設計）。
+    const gridColumns = Math.max(1, Math.floor(columns ?? 1))
+    const isGrid = gridColumns > 1
+    const rows = isGrid ? Math.ceil(options.length / gridColumns) : options.length
 
-    const totalHeight = options.length * BUTTON_HEIGHT + (options.length - 1) * BUTTON_GAP
+    // BUTTON_WIDTH (480px) は分割後のテキスト領域や多列グリッドでは広すぎることがあるため、
+    // region 指定時 or グリッド時は利用可能幅にクランプする。どちらでもない（従来の縦一列・
+    // 全画面）ときは BUTTON_WIDTH のまま、既存コードと完全に同じ式で触らない。
+    if (isGrid) {
+      const availableWidth = areaWidth - GRID_HORIZONTAL_MARGIN * 2
+      const gapTotal = (gridColumns - 1) * GRID_COLUMN_GAP
+      this.layoutButtonWidth = Math.max(
+        GRID_MIN_BUTTON_WIDTH,
+        Math.min(BUTTON_WIDTH, Math.floor((availableWidth - gapTotal) / gridColumns))
+      )
+    } else {
+      this.layoutButtonWidth = region
+        ? Math.max(
+            CHOICE_REGION_MIN_BUTTON_WIDTH,
+            Math.min(BUTTON_WIDTH, areaWidth - CHOICE_REGION_MARGIN_X * 2)
+          )
+        : BUTTON_WIDTH
+    }
+
+    // グリッド時の横方向の開始 X（列全体を area 内で中央寄せ）。非グリッド時は未使用。
+    const gridRowWidth = gridColumns * this.layoutButtonWidth + (gridColumns - 1) * GRID_COLUMN_GAP
+    const gridStartX = areaX + (areaWidth - gridRowWidth) / 2
+
+    const totalHeight = rows * BUTTON_HEIGHT + (rows - 1) * BUTTON_GAP
     const maxViewportHeight = Math.max(BUTTON_HEIGHT, areaHeight - VIEWPORT_VERTICAL_MARGIN * 2)
     const viewportHeight = Math.min(totalHeight, maxViewportHeight)
     this.maxScroll = Math.max(0, totalHeight - viewportHeight)
@@ -385,11 +422,18 @@ export class ChoiceOverlay extends Container {
       label.anchor.set(0.5, 0.5)
       buttonContainer.addChild(label)
 
+      // グリッド (#508) の列・行。非グリッド (isGrid=false) では col は常に 0、
+      // row は常に i になるため、下の x/y 式は従来の縦一列と完全に同じ結果になる。
+      const col = isGrid ? i % gridColumns : 0
+      const row = isGrid ? Math.floor(i / gridColumns) : i
+
       // pivot を中央に動かしたため、ボタン中心を所定位置（region 指定時はその中心）に置く
-      buttonContainer.x = areaX + areaWidth / 2
+      buttonContainer.x = isGrid
+        ? gridStartX + col * (this.layoutButtonWidth + GRID_COLUMN_GAP) + this.layoutButtonWidth / 2
+        : areaX + areaWidth / 2
       buttonContainer.y = scrollable
-        ? i * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
-        : startY + i * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
+        ? row * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
+        : startY + row * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
 
       buttonContainer.on('pointerover', () => {
         const hoverVisual = resolveChoiceVisual(theme, alreadyRead, true)
