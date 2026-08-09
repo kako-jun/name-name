@@ -2634,7 +2634,17 @@ export class NovelRenderer {
       this.dialogBox.setDialog(null, '')
       this.dialogBox.setIndicatorVisible(false)
       this.updateCounter()
-      this.onEndCallback?.()
+      if (this.onEndCallback) {
+        // VideoExporter 等、onEnd/setOnEnd で専用の終了処理が登録されている場合はそちらに
+        // 完全に委譲する（endStory() の演出フェード・"to be continued..." 表示を重ねない）。
+        this.onEndCallback()
+      } else {
+        // [選択] を持たないまま記述が尽きたケース (#470)。confinement 経由の正規終劇
+        // （choice が圏外シーンへジャンプ→ jumpToScene 内で endStory()）とは発生源が違うが、
+        // 「無反応で固まる」を避けるため同じ終劇処理（"to be continued..." 表示・BGM 停止・
+        // 背景/立ち絵フェード）を流用する。endStory() 自身が二重発火ガードを持つ。
+        this.endStory()
+      }
       return
     }
 
