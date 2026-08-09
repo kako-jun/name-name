@@ -324,28 +324,41 @@ where
         // 画像コマ自動送り（#497）: 締切を過ぎていれば、キー入力を待たずに `Action::Advance`
         // を合成する。まだ過ぎていなければ従来どおり `next_action()` で入力を待つ（プレイヤーが
         // 締切前に手動で Enter/Space を押して早送りすることも引き続きできる）。
-        let action = match wait_deadline {
-            Some(deadline) if now >= deadline => Action::Advance,
-            _ => next_action()?,
+        // 締切超過により `Action::Advance` を合成したかどうかを覚えておく（#497 バグ修正）。
+        // この後 `on_advance` を呼んでも item が進まなかった（items 末尾で advance 相当が
+        // no-op に終わった）場合、下の締切引き直しをそのまま行うと `ms` が0（または実測上0と
+        // みなせる極小値）のとき新しい締切が「作った瞬間に既に過ぎている」ものになり、次周回の
+        // 「経過済み」判定が恒久的に真になり続けて `next_action()`（実キー入力を読む唯一の
+        // 経路）が二度と呼ばれなくなる — raw mode + alternate screen 中はこれが「アプリが
+        // 固まった」ように見え、プレイヤーが q キー等で終了できなくなる（テスト設計フェーズで
+        // 発見）。`deadline_triggered` と、行動前後の `item_index()` の変化を照合して、この
+        // 「進行不可能なのに締切だけが経過し続ける」組み合わせのときだけ締切をクリアし、通常の
+        // `next_action()` によるキー入力待ちにフォールバックする。
+        let deadline_triggered = matches!(wait_deadline, Some(deadline) if now >= deadline);
+        let action = if deadline_triggered {
+            Action::Advance
+        } else {
+            next_action()?
         };
+        let item_index_before_action = playback.item_index();
 
         match action {
             Action::Advance => {
+                // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
+                // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
+                on_advance(playback, &mut current_reveal, config, Instant::now());
                 // `position()`（会話行のみを数える）ではなく `item_index()`（生の `items`
                 // インデックス）で「実際に別の item へ移動したか」を判定する（#497）。画像コマ
                 // item（`PlaybackItem::Image`）への遷移は会話行ではないため `position()` を
                 // 変えないが、event_image は変わっているのでクロスフェードは起こす必要がある
                 // — `position()` のままだと画像コマへの遷移を取りこぼす。
-                let prev_item_index = playback.item_index();
-                // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
-                // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
-                on_advance(playback, &mut current_reveal, config, Instant::now());
+                //
                 // item が実際に進んだ（＝スキップ操作でも選択肢の確定待ちでもなく、次の
                 // item へ移動した）ときだけ event_image の変化を見てクロスフェードを
                 // 開始する。skip_lines 経路（on_advance がタイプライター表示を全文表示へ
                 // 早送りしただけ）や、無効な jump 先を選んで選択肢表示のまま no-op に終わった
                 // 場合は item_index が変わらないため、ここには到達しない。
-                if playback.item_index() != prev_item_index {
+                if playback.item_index() != item_index_before_action {
                     // 会話行が実際に切り替わった瞬間。GUI版 `NovelRenderer` が新しい行/ページが
                     // 始まるたびに明示的に `setIndicatorVisible(false)` を呼んでからタイプ
                     // ライターを開始しているのと同じ「行が変わったら一旦強制的に隠す」ステップを
@@ -364,7 +377,7 @@ where
                     // `indicator_blink_started_at` はフレーム間の `show_page_indicator` の値の
                     // 差分しか見ておらず「会話行そのものが切り替わったか」を知らないため、
                     // これはあの関数だけでは検出できない。ここで使っている
-                    // `playback.item_index() != prev_item_index`（＝本当に新しい item へ進んだ、
+                    // `playback.item_index() != item_index_before_action`（＝本当に新しい item へ進んだ、
                     // #497 で画像コマ item も拾えるよう `position()` から乗り換え）は
                     // 既に上の image_fade トリガーが使っているのと同じ signal であり、これを
                     // 使って `indicator_was_shown` を強制的に `false` にリセットしてから
@@ -403,9 +416,24 @@ where
         // `Action::Advance` 以外（MoveUp/MoveDown/None/Quit）では位置が変わらないため、
         // 同じ画像コマに留まっている場合は締切も変化しない（毎フレーム作り直すのではなく、
         // 都度 `pending_wait_ms()` から再計算するだけなので無駄な巻き戻りは起きない）。
-        wait_deadline = playback
-            .pending_wait_ms()
-            .map(|ms| Instant::now() + Duration::from_millis(u64::from(ms)));
+        //
+        // ただし締切超過で合成した `Action::Advance` が items 末尾で no-op に終わった
+        // （＝これ以上進行できない）場合はこの限りではない。ここでそのまま
+        // `pending_wait_ms()` から締切を引き直すと、同じ Image item に留まったまま
+        // `Some(ms)` を返し続けるため、`ms` が実質0とみなせる値のときは新しい締切が
+        // 「作った瞬間に既に過ぎている」ものになり、次周回以降ずっと `next_action()` を
+        // 経由せず即座に締切超過と判定され続けてしまう（バグ修正、上の
+        // `deadline_triggered` のコメント参照）。この組み合わせのときだけ締切を `None` に
+        // クリアし、通常の `next_action()` によるキー入力待ちにフォールバックする。
+        let deadline_advance_was_noop =
+            deadline_triggered && playback.item_index() == item_index_before_action;
+        wait_deadline = if deadline_advance_was_noop {
+            None
+        } else {
+            playback
+                .pending_wait_ms()
+                .map(|ms| Instant::now() + Duration::from_millis(u64::from(ms)))
+        };
     }
     Ok(())
 }
