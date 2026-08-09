@@ -374,10 +374,17 @@ describe('NovelRenderer.playScript (#220)', () => {
   it('20 (N1): 呼び出し前から initialized=false（markInitialized 未実行）のまま advance を呼んでも例外を投げない', async () => {
     // #515 のガードは wait ステップ明けにのみ入る。wait を経由しない script（advance のみ）は
     // このガード自体を通らないため、initialized=false のままでも advance() 自体が投げないことを
-    // 固定する。ただし advance() は render() を呼ぶ前に resolvedEvents/textEvt の分岐処理や
-    // backlogOverlay.addEntry() 等を実行しており、これらは initialized を見ずに動く。
-    // 「render() 側の initialized ガードで安全」という一般化はできず、今回のテストケースが
-    // たまたま例外を出さない構成（resolvedEvents が空などの早期 return）になっているだけである点に注意。
+    // 固定する。
+    //
+    // 実測済みの理由（render() に一時 console.log を仕込んで確認、2箇所とも到達を確認済み）:
+    // SCENES_SINGLE は resolvedEvents.length=2（空ではない）で、advance() は早期 return せず
+    // backlogOverlay.addEntry() まで実行したのち、adv 分岐の「まだページが残っている」ケース
+    // （textIndex=1 < pageCount=3）で this.render() を呼ぶところまで到達する。例外が出ないのは
+    // その render() 自身の先頭にある `if (!this.initialized) return`（NovelRenderer.ts の
+    // private render()）が初期化未完了を検知してそこで打ち切るためであり、advance() 側に
+    // initialized チェックがあるわけではない。なお makeRenderer() 内の setScenes() が呼ぶ
+    // 最初の render() 呼び出しも同じガードで既に早期 return している（advance 呼び出し前から
+    // 1回目の到達は起きている）。
     const r = makeRenderer(SCENES_SINGLE)
     // markInitialized(r) を意図的に呼ばない = init() 未完了 / 破棄済みを模す
     await expect(r.playScript([{ type: 'advance' }])).resolves.toBeUndefined()
