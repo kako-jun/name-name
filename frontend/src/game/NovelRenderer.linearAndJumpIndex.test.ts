@@ -52,6 +52,7 @@ interface RendererInternals {
   eventIndex: number
   resolvedEvents: Event[]
   initialized: boolean
+  pendingMissingScenes: Set<string>
   advance(): void
   characterLayer: {
     show(
@@ -273,6 +274,165 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
     // → allScenes に far-scene が追加されず、currentSceneId も未設定のまま
     expect(r.getAllSceneIds()).toEqual(['entry-hub'])
     expect(r.getCurrentSceneId()).toBeNull()
+  })
+
+  // ===== #463 テスト設計横展開: resolveMissingSceneAndRestore 側の K2/K3/K4/K6 相当を
+  //   resolveMissingSceneAndJump 側にも用意する（restore 側にはあるが jump 側に無かった漏れ）=====
+
+  it('J-K2: missingSceneResolver が null を解決すると jump 処理は実行されず（getCurrentSceneId 不変）、例外も投げない', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const resolver = vi.fn(async () => null)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+    // 直接解決できる scene へ一度ジャンプしておき、「変化しない」ことを意味のある比較にする
+    r.jumpToScene('entry-hub')
+    const sceneBefore = r.getCurrentSceneId()
+
+    expect(() => r.jumpToScene('ghost-route')).not.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(resolver).toHaveBeenCalledWith('ghost-route')
+    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+    // null 解決は「lazy load 後も見つからない」ケースとは異なる分岐（scenes 自体が無い）なので warn しない
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('J-K3: resolver がシーンを返すが sceneId を含まない配列を解決すると console.warn が1回呼ばれ jump は実行されない', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const otherScene = scene('other-route', [narration('other-line')])
+    // 'target-route' を含まない解決結果（別ファイルを誤って返す/typo 等の想定）
+    const resolver = vi.fn(async () => [...entryScenes, otherScene])
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+    r.jumpToScene('entry-hub')
+    const sceneBefore = r.getCurrentSceneId()
+
+    r.jumpToScene('target-route')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(resolver).toHaveBeenCalledWith('target-route')
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+  })
+
+  it('J-K4: missingSceneResolver が reject すると catch で warn され例外は外に漏れず、pendingMissingScenes は finally で削除される', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const resolver = vi.fn(async () => {
+      throw new Error('network error')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+
+    expect(() => r.jumpToScene('target-route')).not.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(warnSpy).toHaveBeenCalled()
+    // finally で pendingMissingScenes から削除されていなければ、以後同じ sceneId が
+    // 永遠に「解決中」扱いのまま固着する（デッドロック）。削除済みであることを直接確認する。
+    expect(internals(r).pendingMissingScenes.has('target-route')).toBe(false)
+  })
+
+  it('J-K4-destroy: destroy 後に missingSceneResolver が reject しても例外を投げず、warn も安全に発火する', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    let rejectScenes: ((err: Error) => void) | undefined
+    const resolver = vi.fn(
+      () =>
+        new Promise<EventScene[]>((_resolve, reject) => {
+          rejectScenes = reject
+        })
+    )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+
+    r.jumpToScene('far-scene')
+    expect(resolver).toHaveBeenCalledWith('far-scene')
+
+    // S1 と同じ想定: resolver 未解決中に destroy() される
+    expect(() => r.destroy()).not.toThrow()
+    internals(r).initialized = false
+
+    // catch は await 直後の initialized チェックより前で reject を受け取るため、
+    // destroy 後でも warn 自体は安全に発火する（例外は外に漏れない）
+    expect(() => {
+      rejectScenes?.(new Error('network error'))
+    }).not.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(r.getAllSceneIds()).toEqual(['entry-hub'])
+    expect(r.getCurrentSceneId()).toBeNull()
+  })
+
+  it('J-K6: resolver 未解決中に同一 sceneId へ jumpToScene を2回連続で呼んでも resolver は1回しか呼ばれない', () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const resolver = vi.fn(() => new Promise<EventScene[]>(() => {})) // 意図的に未解決のまま保持
+
+    const r = new NovelRenderer()
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+
+    r.jumpToScene('far-scene')
+    r.jumpToScene('far-scene') // 同一tick内の二重呼び出し（pendingMissingScenes 共有ガード）
+
+    expect(resolver).toHaveBeenCalledTimes(1)
+  })
+
+  it('状態遷移: destroy 中に resolve され pendingMissingScenes が削除された後、同一 sceneId へ再度 jumpToScene を呼ぶと missingSceneResolver が再起動する（デッドロックしない）', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const farScene = scene('far-scene', [narration('far-line')])
+    let resolveScenes: ((scenes: EventScene[]) => void) | undefined
+    const resolver = vi.fn(
+      () =>
+        new Promise<EventScene[]>((resolve) => {
+          resolveScenes = resolve
+        })
+    )
+
+    const r = new NovelRenderer()
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+
+    r.jumpToScene('far-scene')
+    expect(resolver).toHaveBeenCalledTimes(1)
+
+    // S1 と同じ手順: resolver 未解決中に destroy() → initialized=false を模す
+    expect(() => r.destroy()).not.toThrow()
+    internals(r).initialized = false
+    resolveScenes?.([...entryScenes, farScene])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // ガードにより setJumpSceneIndex 相当は実行されないが、finally で
+    // pendingMissingScenes からは削除されている（S1 と同じ結末）
+    expect(r.getAllSceneIds()).toEqual(['entry-hub'])
+
+    // 同一 sceneId へ再度 jumpToScene。pendingMissingScenes が残っていれば
+    // ここで無視され resolver は永遠に再起動しない（デッドロック）が、削除済みのため再起動する。
+    r.jumpToScene('far-scene')
+    expect(resolver).toHaveBeenCalledTimes(2)
   })
 
   it('単一 script は索引が自ファイルのシーンのみ = jumpToScene の解決対象も自シーンに限る', () => {
