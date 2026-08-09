@@ -368,4 +368,90 @@ describe('NovelRenderer.playScript (#220)', () => {
     expect(warnSpy).not.toHaveBeenCalled()
     expect(errorSpy).not.toHaveBeenCalled()
   })
+
+  // ===== G. destroy 後ガードの未カバー行 (#515 テスト設計 N1/N2/N3/N4/N7) =====
+
+  it('20 (N1): 呼び出し前から initialized=false（markInitialized 未実行）のまま advance を呼んでも例外を投げない', async () => {
+    // #515 のガードは wait ステップ明けにのみ入る。wait を経由しない script（advance のみ）は
+    // このガード自体を通らないため、initialized=false のままでも advance() 自体が投げないことを
+    // 固定する（advance() 経由の render()/showCharacterThenRender() 側の initialized ガードに委ねている）。
+    const r = makeRenderer(SCENES_SINGLE)
+    // markInitialized(r) を意図的に呼ばない = init() 未完了 / 破棄済みを模す
+    await expect(r.playScript([{ type: 'advance' }])).resolves.toBeUndefined()
+  })
+
+  it('21 (N2): waitが2連続のscriptで、1回目のwait明けadvanceは実行され2回目のwait中にdestroy相当になると3番目以降のstepは実行されない', async () => {
+    vi.useFakeTimers()
+    const r = makeRenderer(SCENES_SINGLE)
+    markInitialized(r)
+    const advanceSpy = vi.spyOn(internals(r), 'advance')
+
+    const p = r.playScript([
+      { type: 'wait', ms: 50 },
+      { type: 'advance' },
+      { type: 'wait', ms: 50 },
+      { type: 'advance' },
+    ])
+
+    // 1回目の wait 明け: initialized はまだ true なので advance が実行される
+    await vi.advanceTimersByTimeAsync(50)
+    expect(advanceSpy).toHaveBeenCalledTimes(1)
+
+    // 2回目の wait 待機中に destroy 相当（initialized=false）にする
+    internals(r).initialized = false
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(p).resolves.toBeUndefined()
+
+    // 2回目の wait 明けでガードが効き、4番目の advance は実行されない
+    expect(advanceSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('22 (N3): wait待機中にdestroy相当になった後の次stepがchoiceの場合もjumpToSceneが呼ばれない（advance版と対称）', async () => {
+    vi.useFakeTimers()
+    const r = makeRenderer(SCENES_BRANCH)
+    markInitialized(r)
+    const jumpSpy = vi.spyOn(internals(r), 'jumpToScene')
+
+    const p = r.playScript([{ type: 'wait', ms: 100 }, { type: 'choice', jump: 'left' }])
+    await Promise.resolve()
+    internals(r).initialized = false
+
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(p).resolves.toBeUndefined()
+
+    expect(jumpSpy).not.toHaveBeenCalled()
+    expect(r.getCurrentSceneId()).toBe('start')
+  })
+
+  it('23 (N4): destroy相当後finally実行までの間もconsole.warn/errorを呼ばない（既存test18/19は未アサートだった）', async () => {
+    vi.useFakeTimers()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const r = makeRenderer(SCENES_SINGLE)
+    markInitialized(r)
+
+    const p = r.playScript([{ type: 'wait', ms: 100 }, { type: 'advance' }])
+    await Promise.resolve()
+    internals(r).initialized = false
+
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(p).resolves.toBeUndefined()
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('24 (N7): wait→choiceの正常な並びでchoiceのjumpToSceneが正しく呼ばれる（destroyなし）', async () => {
+    vi.useFakeTimers()
+    const r = makeRenderer(SCENES_BRANCH)
+    markInitialized(r)
+    const jumpSpy = vi.spyOn(internals(r), 'jumpToScene')
+
+    const p = r.playScript([{ type: 'wait', ms: 100 }, { type: 'choice', jump: 'right' }])
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(p).resolves.toBeUndefined()
+
+    expect(jumpSpy).toHaveBeenCalledWith('right')
+    expect(r.getCurrentSceneId()).toBe('right')
+  })
 })
