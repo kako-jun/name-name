@@ -137,8 +137,8 @@ enum PlaybackItem {
 /// （バグ修正、実装方針は Issue #482 コメント参照）。
 fn playback_item_from_event(event: &Event) -> Option<PlaybackItem> {
     match event {
-        Event::Choice { options } if options.is_empty() => None,
-        Event::Choice { options } => Some(PlaybackItem::Choice(options.clone())),
+        Event::Choice { options, .. } if options.is_empty() => None,
+        Event::Choice { options, .. } => Some(PlaybackItem::Choice(options.clone())),
         _ => display_line_from_event(event).map(PlaybackItem::Line),
     }
 }
@@ -699,6 +699,7 @@ mod tests {
                     text: "yes".to_string(),
                     jump: "1-2".to_string(),
                 }],
+                columns: None,
             },
             dialog(Some("カコ"), vec!["こんにちは"]),
         ]);
@@ -862,6 +863,7 @@ mod tests {
                     jump: jump.to_string(),
                 })
                 .collect(),
+            columns: None,
         }
     }
 
@@ -1061,7 +1063,10 @@ mod tests {
         // Choice表示中は拒否するため、入力を一切受け付けない詰み状態になっていた（バグ2）。
         let doc = doc_single_scene(vec![
             dialog(Some("A"), vec!["どうする？"]),
-            Event::Choice { options: vec![] },
+            Event::Choice {
+                options: vec![],
+                columns: None,
+            },
             dialog(Some("B"), vec!["次のセリフ"]),
         ]);
         let mut pb = Playback::from_document(&doc);
@@ -1260,6 +1265,7 @@ mod tests {
                                 text: "yes".to_string(),
                                 jump: "1-2".to_string(),
                             }],
+                            columns: None,
                         },
                     ],
                 ),
