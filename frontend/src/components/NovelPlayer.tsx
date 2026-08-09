@@ -291,6 +291,13 @@ function NovelPlayer({
   // 状態は localStorage（旧 DebugOverlay と同じキー意味）に best-effort で永続化する。
   const [debugOpen, setDebugOpen] = useState<boolean>(() => readDebugOpen())
 
+  // フルスクリーン最大化トグル (#468)。per-game opt-in ではなくエンジン標準機能として
+  // 全ゲーム共通で提供する。対象要素は fluidRootRef（letterbox 込みのゲーム画面全体。
+  // PlayerScreen のヘッダ等は含まない＝「ゲーム画面自体」の最大化）。
+  // 実際に画面がフルスクリーンかどうかは document.fullscreenElement が正で、ここは
+  // その追従用ミラー（ボタンのアイコン/aria-pressed 表示にだけ使う）。
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
   // fluid aspect ratio (#442): frontmatter `aspect_ratio: auto` のときは固定比率にロックせず、
   // ルート要素（w-full h-full＝実ビューポート追従）の実測サイズの向きから '16:9'/'9:16' を
   // 都度選ぶ。既存の 3 値（16:9/4:3/9:16）を明示指定した作品は isFluid=false のまま非破壊。
@@ -803,6 +810,37 @@ function NovelPlayer({
     return () => window.removeEventListener('keydown', handleKey)
   }, [])
 
+  // フルスクリーン状態の追従 (#468)。ブラウザの Esc キー・OS 側操作等、ボタン以外の経路で
+  // フルスクリーンが解除/開始されるケースもあるため、document の 'fullscreenchange' を正として
+  // 都度ミラーする（自前 state を先行させない）。
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === fluidRootRef.current)
+    }
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  }, [])
+
+  // フルスクリーン最大化トグルの押下ハンドラ (#468)。対象は fluidRootRef（ゲーム画面自体）。
+  // 非対応ブラウザ（requestFullscreen が無い）・拒否（Promise reject）・iframe 埋め込みで
+  // Permissions Policy によりブロックされる場合（同期 throw のことがある）のいずれも例外を
+  // 握りつぶし、通常表示のまま何も起きない（完了条件: 非対応/拒否時のフォールバック）。
+  const handleFullscreenToggle = useCallback(() => {
+    const el = fluidRootRef.current
+    if (!el) return
+    try {
+      if (document.fullscreenElement) {
+        const result = document.exitFullscreen()
+        result?.catch(() => {})
+      } else if (el.requestFullscreen) {
+        const result = el.requestFullscreen()
+        result?.catch(() => {})
+      }
+    } catch {
+      // 非対応/拒否は握りつぶす（フォールバックは「何もしない」＝通常表示のまま）
+    }
+  }, [])
+
   // letterbox/pillarbox の黒帯（canvas 外）タップで進行する (#467)。fluidRootRef 直下の
   // 黒帯部分（canvas を内接させる containerRef の外側）には canvas 自身の pointerdown
   // リスナーが届かないため、fluidRootRef 側にも同じ「進める」処理を持たせる。
@@ -976,6 +1014,39 @@ function NovelPlayer({
         className="overflow-hidden [&>canvas]:block [&>canvas]:w-full [&>canvas]:h-full"
         style={gameBoxStyle}
       />
+      {/* フルスクリーン最大化トグル (#468)。エンジン標準機能として全ゲーム共通で右上寄りに置く
+          （右下の ⚙→A→S→D 列とは別位置）。押すたびに fluidRootRef 全体（ゲーム画面自体。
+          PlayerScreen のヘッダ等は含まない）をブラウザのフルスクリーン表示に出し入れする。
+          アイコンの向き（外向き矢印=通常表示中→押すと最大化 / 内向き矢印=最大化中→押すと解除）
+          で現在の状態を示す。 */}
+      <button
+        type="button"
+        onClick={handleFullscreenToggle}
+        aria-label={isFullscreen ? 'フルスクリーンを解除する' : 'フルスクリーンで表示する'}
+        aria-pressed={isFullscreen}
+        title="フルスクリーン"
+        className="absolute top-3 right-3 z-10 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          {isFullscreen ? (
+            // 内向き矢印（縮小 = フルスクリーン解除）
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"
+            />
+          ) : (
+            // 外向き矢印（拡大 = フルスクリーン化）
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
+            />
+          )}
+        </svg>
+      </button>
       {/* 操作ボタン列 (#310): クリッカー/ダイアログ送り/シークバーと干渉しない右下隅に集約。
           右端から ⚙→A→S→D の順に並べ、消えるボタンがあっても詰めて隙間を作らない。
           #350: スライダ操作中(seekActive)はこの行ごと opacity でフェード退避し、pointer-events も
