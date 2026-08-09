@@ -769,3 +769,141 @@ describe('ChoiceOverlay グリッド配置 (#508)', () => {
     overlay.hide()
   })
 })
+
+// #508 テスト観点整理フェーズで「要追加」と判定された境界値・null/undefined等価性・状態遷移・
+// i18n・レスポンシブの穴埋め。基本ケース・はみ出し修正自体は上の describe で既にカバー済みなので、
+// ここでは「列数と選択肢数の関係」「show/hide のライフサイクルで内部状態が残留しないか」
+// 「null と undefined が同一視されるか」など、まだ見ていなかった軸を狙う。
+describe('ChoiceOverlay グリッド配置 境界値・状態遷移 (#508 テスト観点整理フェーズ追加分)', () => {
+  it('選択肢数が列数より少ない場合（3個・列=5）は1行に3個だけ並び、余った列スロット分のボタンは生成されない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn(), null, undefined, 5)
+
+    const buttons = overlay.children
+    // 余った 2 列分の空ボタンが生成されていないこと（ボタン数 === 選択肢数）
+    expect(buttons.length).toBe(3)
+    // 1行のみなので全ボタンが同じ y
+    expect(new Set(buttons.map((b) => b.y)).size).toBe(1)
+    // 3個とも異なる x（3列分埋まる）
+    expect(new Set(buttons.map((b) => b.x)).size).toBe(3)
+
+    overlay.hide()
+  })
+
+  it('選択肢数が列数で割り切れない場合（7個・列=5）は2行になり、2行目は2個だけ左詰めで空白ボタンは生成されない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(7), vi.fn(), null, undefined, 5)
+
+    const buttons = overlay.children
+    // 5+2=7 のみ。3列分の空白パディングボタンは生成されない。
+    expect(buttons.length).toBe(7)
+
+    const row0 = buttons.slice(0, 5)
+    const row1 = buttons.slice(5, 7)
+    expect(new Set(row0.map((b) => b.y)).size).toBe(1)
+    expect(new Set(row1.map((b) => b.y)).size).toBe(1)
+    expect(row1[0].y).toBeGreaterThan(row0[0].y)
+
+    // 左詰め: 2行目の1・2列目のxは1行目の1・2列目と同じ（右側の空いた3列分は生成されず、
+    // 中央寄せなどでずれてもいない）。
+    expect(row1.map((b) => b.x)).toEqual(row0.slice(0, 2).map((b) => b.x))
+
+    overlay.hide()
+  })
+
+  it('columns に null を明示的に渡した場合と undefined を渡した場合で同一結果になる', () => {
+    const withNull = new ChoiceOverlay(800, 450)
+    withNull.show(choices(3), vi.fn(), null, undefined, null)
+    const nullX = withNull.children.map((c) => c.x)
+    const nullY = withNull.children.map((c) => c.y)
+    const nullWidth = withNull.children[0].pivot.x * 2
+    withNull.hide()
+
+    const withUndefined = new ChoiceOverlay(800, 450)
+    withUndefined.show(choices(3), vi.fn(), null, undefined, undefined)
+    const undefinedX = withUndefined.children.map((c) => c.x)
+    const undefinedY = withUndefined.children.map((c) => c.y)
+    const undefinedWidth = withUndefined.children[0].pivot.x * 2
+    withUndefined.hide()
+
+    expect(nullX).toEqual(undefinedX)
+    expect(nullY).toEqual(undefinedY)
+    expect(nullWidth).toBe(undefinedWidth)
+  })
+
+  it('列数が異なる複数の [選択] ブロックが hide()→show() を挟んで連続しても互いに影響しない（通常フロー）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+    const gridWidth = overlay.children[0].pivot.x * 2
+    const gridX0 = overlay.children[0].x
+    overlay.hide()
+
+    overlay.show(choices(3), vi.fn(), null, undefined, 1)
+    const singleWidth = overlay.children[0].pivot.x * 2
+    // 縦一列の幅はグリッドのクランプ幅を引きずらず、より広い（残留破損なし）。
+    expect(singleWidth).toBeGreaterThan(gridWidth)
+    for (const button of overlay.children) {
+      expect(button.x).toBe(400) // screenWidth / 2 の従来ジオメトリ
+    }
+    overlay.hide()
+
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+    // 再度同じ列数グリッドに戻すと元と同じ幅・x に戻る。
+    expect(overlay.children[0].pivot.x * 2).toBe(gridWidth)
+    expect(overlay.children[0].x).toBe(gridX0)
+
+    overlay.hide()
+  })
+
+  it('hide() を挟まず列数違いで show() を連続呼び出しても、直前の gridColumns 等の内部状態が残留しない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+    const gridWidth = overlay.children[0].pivot.x * 2
+    expect(overlay.children.length).toBe(10)
+
+    // hide() を呼ばずに列数1（縦一列）へ直接切り替える。
+    overlay.show(choices(3), vi.fn(), null, undefined, 1)
+    const singleWidth = overlay.children[0].pivot.x * 2
+    expect(singleWidth).toBeGreaterThan(gridWidth) // 前回のグリッド幅クランプが残っていない
+    expect(overlay.children.length).toBe(3) // 前回の10ボタン分が残留していない
+    for (const button of overlay.children) {
+      expect(button.x).toBe(400)
+    }
+
+    overlay.hide()
+  })
+
+  it('10文字以上の長い日本語選択肢テキストを列5の狭いグリッドで表示してもクラッシュせず、テキストは処理される', () => {
+    const longChoices = Array.from({ length: 5 }, (_, i) => ({
+      text: `とても長い選択肢のテキストです${i + 1}`, // 16文字前後
+      jump: `next-${i + 1}`,
+    }))
+    const overlay = new ChoiceOverlay(800, 450)
+
+    expect(() => overlay.show(longChoices, vi.fn(), null, undefined, 5)).not.toThrow()
+
+    const buttons = overlay.children
+    expect(buttons.length).toBe(5)
+    for (const button of buttons) {
+      const label = button.children.find((child) => child instanceof PixiText) as
+        | PixiText
+        | undefined
+      expect(label).toBeDefined()
+      expect(label!.text.length).toBeGreaterThan(10)
+    }
+
+    overlay.hide()
+  })
+
+  it('狭い画面幅（375px相当）で列5グリッドを表示してもボタン幅が自動的に縮み、はみ出さない', () => {
+    const overlay = new ChoiceOverlay(375, 667)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+
+    for (const button of overlay.children) {
+      expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(0)
+      expect(button.x + button.pivot.x).toBeLessThanOrEqual(375)
+    }
+
+    overlay.hide()
+  })
+})

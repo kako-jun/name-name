@@ -13,7 +13,7 @@
 // 「列挙漏れ→値が落ちる」を恒久的に縛るのが目的なので、新フィールドを足したら
 // ここに 1 ケース追加する運用にする。
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { parseMarkdown, emitMarkdown } from './parser'
 
 describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive normalize (#310)', () => {
@@ -596,6 +596,144 @@ describe('parseMarkdown + normalizeEvents: Choice.columns が normalize を生�
 
     const choice = findChoice(await parseMarkdown(markdown))
     expect(choice?.Choice.columns).toBeNull()
+  })
+})
+
+// #508 テスト観点整理フェーズで「要追加」と判定された異常系・境界値・round-trip の穴埋め。
+// TS 側（parseMarkdown 経由）の観点。Rust 側の parse_choice_columns 自体は
+// parser/tests/integration_test.rs（test_choice_grid_columns）で既にカバー済みなので、
+// ここでは wasm 境界を越えて normalizeEvents まで通した後の値・console 汚染・round-trip を見る。
+describe('parseMarkdown: [選択: 列=N] の異常値・記法ゆらぎ (#508 テスト観点整理フェーズ追加分)', () => {
+  function markdownWithChoiceTag(tag: string): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: シーン',
+      '',
+      tag,
+      '- A → a',
+      '- B → b',
+      '[/選択]',
+      '',
+    ].join('\n')
+  }
+
+  const findChoice = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters
+      .flatMap((c) => c.scenes.flatMap((s) => s.events))
+      .find((e) => typeof e === 'object' && 'Choice' in e) as
+      | { Choice: { options: { text: string; jump: string }[]; columns?: number | null } }
+      | undefined
+
+  it('列=-1（負数）は columns=null になる', async () => {
+    const doc = await parseMarkdown(markdownWithChoiceTag('[選択: 列=-1]'))
+    expect(findChoice(doc)?.Choice.columns).toBeNull()
+  })
+
+  it('列=abc（非数値）は columns=null になる', async () => {
+    const doc = await parseMarkdown(markdownWithChoiceTag('[選択: 列=abc]'))
+    expect(findChoice(doc)?.Choice.columns).toBeNull()
+  })
+
+  it('列=（値無し）は columns=null になる', async () => {
+    const doc = await parseMarkdown(markdownWithChoiceTag('[選択: 列=]'))
+    expect(findChoice(doc)?.Choice.columns).toBeNull()
+  })
+
+  it('[選択: 列=5,]（末尾カンマの記法ゆらぎ）は影響なく columns=5 として解釈される', async () => {
+    const doc = await parseMarkdown(markdownWithChoiceTag('[選択: 列=5,]'))
+    expect(findChoice(doc)?.Choice.columns).toBe(5)
+    // 末尾カンマがオプション自体の parse を壊していないことも併せて確認
+    expect(findChoice(doc)?.Choice.options.map((o) => o.text)).toEqual(['A', 'B'])
+  })
+
+  it('不正な列=値（負数/非数値/0）を含む .md を parse してもconsole.warn/errorを出さない（spec通り警告なしでフォールバック）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await parseMarkdown(markdownWithChoiceTag('[選択: 列=-1]'))
+    await parseMarkdown(markdownWithChoiceTag('[選択: 列=abc]'))
+    await parseMarkdown(markdownWithChoiceTag('[選択: 列=0]'))
+    await parseMarkdown(markdownWithChoiceTag('[選択: 列=]'))
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+})
+
+// TS 側の round-trip（parse → emit → parse）で columns が保持されることの確認。
+// Rust 側の parser::parse → emitter::emit → parser::parse は
+// parser/tests/integration_test.rs（test_choice_grid_columns）で既にカバー済みだが、
+// そちらは Rust の Event 構造体を直接比較するのみで、TS 側の normalizeEvents（wasm 境界の
+// フィールド列挙リビルド）を経由した emitMarkdown/parseMarkdown の往復は未カバーだった。
+describe('parseMarkdown + emitMarkdown: Choice.columns の round-trip (#508)', () => {
+  const findChoice = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters
+      .flatMap((c) => c.scenes.flatMap((s) => s.events))
+      .find((e) => typeof e === 'object' && 'Choice' in e) as
+      | { Choice: { options: { text: string; jump: string }[]; columns?: number | null } }
+      | undefined
+
+  it('parse → emit → parse を経ても列数が保持される', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: シーン',
+      '',
+      '[選択: 列=5]',
+      '- A → a',
+      '- B → b',
+      '- C → c',
+      '[/選択]',
+      '',
+    ].join('\n')
+
+    const doc1 = await parseMarkdown(markdown)
+    expect(findChoice(doc1)?.Choice.columns).toBe(5)
+
+    const emitted = await emitMarkdown(doc1)
+    expect(emitted).toContain('[選択: 列=5]')
+
+    const doc2 = await parseMarkdown(emitted)
+    expect(findChoice(doc2)?.Choice.columns).toBe(5)
+  })
+
+  it('列数指定なしの [選択] も round-trip で columns=null のまま保持される（非破壊の再確認）', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: シーン',
+      '',
+      '[選択]',
+      '- A → a',
+      '- B → b',
+      '[/選択]',
+      '',
+    ].join('\n')
+
+    const doc1 = await parseMarkdown(markdown)
+    expect(findChoice(doc1)?.Choice.columns).toBeNull()
+
+    const emitted = await emitMarkdown(doc1)
+    expect(emitted).not.toContain('列=')
+
+    const doc2 = await parseMarkdown(emitted)
+    expect(findChoice(doc2)?.Choice.columns).toBeNull()
   })
 })
 
