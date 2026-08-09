@@ -210,7 +210,8 @@ where
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
                 target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
-            Action::None => {}
+            // スプラッシュ画面には左右移動の対象となる複数列選択肢が無いため、無視する(#482、#508)。
+            Action::MoveLeft | Action::MoveRight | Action::None => {}
         }
     }
 }
@@ -363,8 +364,11 @@ where
                 }
             }
             // 選択肢を表示していないとき（`Playback::current_choice` が `None`）は no-op（#482）。
+            // MoveLeft/MoveRight は非グリッド（列数1以下）表示中も同様に no-op（#508）。
             Action::MoveUp => playback.move_choice_cursor_up(),
             Action::MoveDown => playback.move_choice_cursor_down(),
+            Action::MoveLeft => playback.move_choice_cursor_left(),
+            Action::MoveRight => playback.move_choice_cursor_right(),
             Action::Quit => break,
             Action::None => {}
         }
