@@ -231,6 +231,15 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// この排他性を意識せず、両方をそのまま渡すだけでよい）。選択肢表示中も左側のイベント絵/
 /// プレースホルダ（`image_fade`）はそのまま描画され続ける — 左カラムは右カラム（テキスト/
 /// 選択肢の切替）とは独立しているため、選択肢表示は画像側のフェードやサイズに影響しない。
+///
+/// `blackout`（`Playback::is_blackout`、#512）が `true` のときは、左側の画像プレースホルダ/
+/// イベント絵の代わりに黒一色を敷く。GUI版 `NovelRenderer` の `blackoutOverlay` が
+/// 背景・立ち絵・イベント絵レイヤーより前面・ダイアログボックスより背面に位置する
+/// （＝暗転中もテキストは黒地の上にそのまま読める）のに倣い、右側のテキスト/選択肢
+/// （`draw_text_windows`/`draw_choice_list`）は暗転の影響を受けず通常どおり描画する。
+/// `image_fade` のスナップショット計算自体は暗転中も継続する（クロスフェードの内部時刻を
+/// 止めない）が、その結果は使わず捨てる — 暗転解除後にイベント絵が変な位置から再開しない
+/// ようにするため。
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -245,6 +254,7 @@ pub fn draw(
     now: Instant,
     image_fade: Option<&ImageFadeState>,
     image_cache: &mut ImageCache,
+    blackout: bool,
 ) {
     let actual = frame.area();
     if !fits_required_size(actual) {
@@ -270,7 +280,11 @@ pub fn draw(
             now,
         )
     });
-    draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
+    if blackout {
+        draw_blackout(frame, placeholder_area);
+    } else {
+        draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
+    }
     match choice {
         Some((options, cursor, columns)) => {
             draw_choice_list(frame, text_area, options, cursor, columns)
@@ -419,6 +433,16 @@ fn draw_placeholder(frame: &mut Frame, area: Rect, config: &Config, image: Optio
 
     let paragraph = Paragraph::new(label).alignment(Alignment::Center);
     frame.render_widget(paragraph, area);
+}
+
+/// 暗転中（`Playback::is_blackout`、#512）に画像プレースホルダの代わりに描く、黒一色の塗り
+/// つぶし。`Block` に文字は乗せず背景色のみ黒にする — GUI版 `blackoutOverlay`（`fill(0x000000)`
+/// のみで文字を持たない全画面 `Graphics`）と同じ「黒で覆うだけ」の見た目。ラベルや罫線を
+/// 出さない（`draw_too_small_message` 等と違い、暗転は演出そのものが目的なので追加の文言は
+/// 不要）。
+fn draw_blackout(frame: &mut Frame, area: Rect) {
+    let block = Block::default().style(Style::default().bg(Color::Black));
+    frame.render_widget(block, area);
 }
 
 /// quadrant block 変換済みのセル格子（[`RenderedImage`]）を、セルごとに fg/bg 付き `Span` の
@@ -925,6 +949,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -979,6 +1004,7 @@ mod tests {
                         now,
                         Some(&image_fade),
                         &mut image_cache,
+                        false,
                     )
                 })
                 .unwrap();
@@ -1011,6 +1037,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1062,6 +1089,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1096,6 +1124,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1128,6 +1157,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1160,6 +1190,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1192,6 +1223,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1230,6 +1262,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1268,6 +1301,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1313,6 +1347,7 @@ mod tests {
                     now,
                     None,
                     &mut typing_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1350,6 +1385,7 @@ mod tests {
                     now,
                     None,
                     &mut done_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1409,6 +1445,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1450,6 +1487,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1516,6 +1554,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1902,6 +1941,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2632,6 +2672,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2681,6 +2722,7 @@ mod tests {
                     now,
                     None,
                     &mut typing_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2715,6 +2757,7 @@ mod tests {
                     now,
                     None,
                     &mut done_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2834,6 +2877,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3030,6 +3074,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3066,6 +3111,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3121,6 +3167,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3155,6 +3202,7 @@ mod tests {
                         now,
                         None,
                         &mut image_cache,
+                        false,
                     )
                 })
                 .unwrap_or_else(|e| panic!("W={w}で描画がpanicした: {e}"));
@@ -3187,6 +3235,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3220,6 +3269,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3944,6 +3994,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3982,6 +4033,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -4017,6 +4069,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -4066,6 +4119,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -4118,6 +4172,7 @@ mod tests {
                     not_done_at,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -4147,6 +4202,7 @@ mod tests {
                     done_at,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();

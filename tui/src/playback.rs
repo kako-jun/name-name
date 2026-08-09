@@ -54,7 +54,7 @@
 
 use std::collections::HashMap;
 
-use name_name_parser::models::{ChoiceOption, Document, Event};
+use name_name_parser::models::{BlackoutAction, ChoiceOption, Document, Event};
 
 use crate::sentence;
 
@@ -215,6 +215,14 @@ pub struct Playback {
     /// `Line`/`Choice`、および `Wait` を伴わない `EventImage`）は全て `None`
     /// （[`Playback::pending_wait_ms`] 参照）。
     item_wait_ms: Vec<Option<u32>>,
+    /// `items[i]` の表示時点で暗転しているべきか（`Event::Blackout`、#512）。`items` と同じ
+    /// 長さを常に保つ（`item_file_ids` と同じ並行 Vec のパターン）。GUI版 `NovelRenderer` が
+    /// `blackoutOverlay.visible` を `[暗転]`/`[暗転解除]` の直後から次に切り替わるまで
+    /// 宣言的に保持し続ける（＝現在暗転中かどうかだけを見る state、`setBlackout` 参照）のを、
+    /// TUI では「その item が生成された時点の暗転状態を焼き付けて持ち回る」形で再現する。
+    /// `Event::Choice` item も対象に含む（暗転中に選択肢が出る原稿は今回のスコープ外だが、
+    /// 状態追跡自体は他の非表示イベントと同じ走査ループの中で行うため、除外する理由がない）。
+    item_blackout: Vec<bool>,
     index: usize,
     /// シーンID → そのシーンに属する最初の item の `items` 内インデックス。選択肢確定時の
     /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
@@ -291,6 +299,7 @@ impl Playback {
         let mut items = Vec::new();
         let mut item_file_ids = Vec::new();
         let mut item_wait_ms = Vec::new();
+        let mut item_blackout = Vec::new();
         let mut scene_start = HashMap::new();
         let mut current_event_image: Option<String> = None;
         // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
@@ -300,6 +309,10 @@ impl Playback {
         // 無ければ「話者なし・本文なし」が初期値になる。
         let mut current_speaker: Option<String> = None;
         let mut current_text: Vec<String> = Vec::new();
+        // 現在暗転中かどうか（`Event::Blackout`、#512）。`Event::EventImage` 直後の
+        // `Wait` による自動画像コマ item（下記）にも `item_blackout` を同じタイミングで
+        // push する必要があるため、`current_event_image` と同じスコープで宣言する。
+        let mut current_blackout = false;
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
             let file_id = chapter_file_ids
                 .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
@@ -343,6 +356,7 @@ impl Playback {
                                 }));
                                 item_file_ids.push(file_id);
                                 item_wait_ms.push(Some(*ms));
+                                item_blackout.push(current_blackout);
                                 // EventImage と Wait の2件をまとめて消費する。
                                 event_index += 2;
                                 continue;
@@ -350,6 +364,12 @@ impl Playback {
                         }
                         Event::EventImageExit { .. } => {
                             current_event_image = None;
+                        }
+                        // GUI版 `setBlackout` 相当（#512）。オン/オフの2状態を単純に上書きする
+                        // だけの宣言的 state で、`current_event_image` と同じ「直近の値を次の
+                        // item に焼き付ける」走査パターンに乗せる。
+                        Event::Blackout { action } => {
+                            current_blackout = matches!(action, BlackoutAction::On);
                         }
                         _ => {
                             if let Some(item) = playback_item_from_event(event) {
@@ -369,6 +389,7 @@ impl Playback {
                                 items.push(item);
                                 item_file_ids.push(file_id);
                                 item_wait_ms.push(None);
+                                item_blackout.push(current_blackout);
                             }
                         }
                     }
@@ -380,6 +401,7 @@ impl Playback {
             items,
             item_file_ids,
             item_wait_ms,
+            item_blackout,
             index: 0,
             scene_start,
             choice_cursor: 0,
@@ -457,6 +479,13 @@ impl Playback {
             Some(PlaybackItem::Line(line)) => Some(line),
             _ => None,
         }
+    }
+
+    /// 現在位置の item が暗転中に表示されるべきか（`Event::Blackout`、#512）。
+    /// `items` が空、または現在位置が末尾を過ぎている場合は暗転していない扱い（`false`）。
+    /// GUI版 `blackoutOverlay.visible` に相当する、現在位置だけを見る宣言的な問い合わせ。
+    pub fn is_blackout(&self) -> bool {
+        self.item_blackout.get(self.index).copied().unwrap_or(false)
     }
 
     /// 現在位置が選択肢なら `(選択肢一覧, カーソル位置, グリッド列数)` を返す。会話行の途中や
@@ -702,10 +731,12 @@ impl Playback {
     pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
         let item_file_ids = vec![0; lines.len()];
         let item_wait_ms = vec![None; lines.len()];
+        let item_blackout = vec![false; lines.len()];
         Self {
             items: lines.into_iter().map(PlaybackItem::Line).collect(),
             item_file_ids,
             item_wait_ms,
+            item_blackout,
             index: 0,
             scene_start: HashMap::new(),
             choice_cursor: 0,
