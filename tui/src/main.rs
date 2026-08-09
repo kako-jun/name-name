@@ -795,6 +795,7 @@ mod tests {
     use super::*;
     use crate::playback::DisplayLine;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::CellWidth;
     use ratatui::style::Color;
     use std::cell::RefCell;
 
@@ -1291,6 +1292,26 @@ mod tests {
         for y in 0..area.height {
             for x in 0..area.width {
                 out.push_str(buffer.cell((x, y)).expect("in bounds").symbol());
+            }
+        }
+        out
+    }
+
+    /// [`buffer_text`] の全角対応版。全角文字の次のセルは直前のグラフェムの表示のために
+    /// 予約された継続セルであり、単純に連結すると全角文字どうしの間に余分な文字が
+    /// 混入してCJK文字列の内容比較が壊れる（`ui.rs` の `buffer_text` と同じ理由、参照）。
+    /// 既存の [`buffer_text`] はASCII中心の既存テストでは支障が無いためそのまま残し、
+    /// CJK文字列そのものを検証する新規テストのためにここだけ全角対応版を用意する。
+    fn buffer_text_wide_aware(terminal: &Terminal<TestBackend>) -> String {
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area();
+        let mut out = String::new();
+        for y in 0..area.height {
+            let mut x = 0u16;
+            while x < area.width {
+                let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                out.push_str(symbol);
+                x += symbol.cell_width().max(1);
             }
         }
         out
@@ -1793,5 +1814,677 @@ mod tests {
             "2回目の呼び出しはBからCへの1行送りだけのはず（2回連続jumpしない）"
         );
         assert_eq!(playback.position(), 2, "1回のadvanceにつき1行だけ進むはず");
+    }
+
+    // ---- テスト観点整理担当の指摘に基づく追加テスト（#497/#498型再発確認・状態遷移の
+    // 排他制御・境界値・null/空文字・正常系）。既存カバレッジと重複する範囲は避け、
+    // #498/#499/#500/#503（オート/スキップ/バックログ/設定オーバーレイ）のevent_loop
+    // レベルのテストがこれまで一件も存在しなかった領域に絞る。 ----
+
+    #[test]
+    fn event_loop_closing_backlog_overlay_resets_auto_deadline_preventing_stale_cascade() {
+        // #497/#498型の再発確認: バックログを開いている間にauto_wait_ms(締切)を実時間で
+        // 過ぎ去らせてから閉じても、閉じた直後の1フレームで過ぎ去った締切により
+        // 即座にauto advanceが起きてはいけない(`auto_deadline = None`リセットの回帰ガード)。
+        let mut config = instant_config();
+        config.auto_wait_ms = 200;
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto),
+                2 => Ok(Action::ToggleBacklog), // オーバーレイを開く
+                3 => {
+                    // auto_wait_ms(200ms)より十分長く待ち、開いている間に張られた締切を
+                    // 確実に過去のものにする。
+                    std::thread::sleep(Duration::from_millis(400));
+                    Ok(Action::ToggleBacklog) // 閉じる
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(
+            playback.position(),
+            1,
+            "オーバーレイを閉じた直後に過ぎ去ったauto_deadlineでカスケード的に \
+             自動送りされてはいけない(#497/#498型再発防止)"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn event_loop_closing_settings_overlay_also_resets_auto_deadline() {
+        // 上のテストの設定画面(#503)版。バックログと同じ`auto_deadline = None`リセットの
+        // コード経路が設定画面を閉じたときにも適用されることの回帰ガード。
+        let mut config = instant_config();
+        config.auto_wait_ms = 200;
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto),
+                2 => Ok(Action::ToggleSettings),
+                3 => {
+                    std::thread::sleep(Duration::from_millis(400));
+                    Ok(Action::ToggleSettings)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(playback.position(), 1);
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn event_loop_overlay_polling_does_not_mark_current_line_as_read() {
+        // #499型の再発確認: バックログ表示中もREDRAWポーリング（`Action::None`）は続くが、
+        // 「見ているだけ」で現在行がread_positionsへ新規追加されてはいけない
+        // （既読集合はAction::Advanceで実際に離脱した瞬間にのみ更新される設計）。
+        // オーバーレイを閉じた直後にスキップをONにして、まだ一度も離脱していない
+        // 1行目が即座に飛ばされない（＝スキップが即座に解除される）ことで間接的に確認する。
+        let config = instant_config();
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::ToggleBacklog,
+            Action::None,
+            Action::None,
+            Action::None,
+            Action::ToggleBacklog,
+            Action::ToggleSkip,
+            Action::Quit,
+        ]);
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(
+            playback.position(),
+            1,
+            "バックログを見ていただけの1行目がREDRAWポーリングで既読扱いになり、\
+             閉じた直後のスキップONで2行目へ自動的に飛ばされてはいけない"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn sentence_per_page_skip_after_revisiting_a_fully_read_line_fast_forwards_the_not_yet_seen_second_sentence(
+    ) {
+        // 【重要・実装バグの可能性】#499のread_positionsはLine item単位
+        // （`playback.position()`）でしか既読を記録しない一方、バックログ（#500）は
+        // 文単位（`advanced==true`になるたび）でエントリを積む——この粒度差により、
+        // 複数文を持つLine itemを一度最後まで読んで（read_positionsにそのLine itemの
+        // positionが記録された）後、選択肢で同じLine itemへジャンプし直して1文目で
+        // 止まっている状態からスキップをONにすると、read_positionsは「Line item全体が
+        // 既読」としか判定できないため、今回の訪問ではまだ1文目しか見ていないにも
+        // 関わらず2文目以降を確認なしに自動で飛ばしてしまう可能性がある
+        // （テスト観点整理担当の指摘）。実際に発生するか検証する。
+        //
+        // 実装修正はスコープ外（テスト実装担当の役割）。もしこのアサーションが失敗する
+        // （red のまま）場合は、read_positionsの粒度不一致による実装バグとして報告する。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n\
+                       最初の文。二番目の文。\n\n[選択]\n- 戻る→1-1\n[/選択]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document).with_sentence_per_page(true);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::Advance,    // 1文目 -> 2文目
+            Action::Advance,    // 2文目 -> 選択肢へ離脱（読了マーク、read_positions={pos(A)}）
+            Action::Advance,    // 選択肢確定「戻る」-> 1-1 の1文目へジャンプし直す
+            Action::ToggleSkip, // 再訪した1文目で一時停止した状態からスキップON
+            Action::Quit,
+        ]);
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert!(
+            playback.current_choice().is_none(),
+            "期待: 再訪した2文目(今回はまだ見ていない)に到達した時点でスキップが解除され、\
+             プレイヤーの確認を待つはず。実際: current_line={:?}, at_choice={} \
+             — read_positionsがLine item単位でしか既読を記録しないため文単位の未読を \
+             検出できていない実装バグの疑いを裏付ける",
+            playback.current_line(),
+            playback.current_choice().is_some()
+        );
+    }
+
+    #[test]
+    fn event_loop_backlog_overlay_ignores_auto_skip_settings_toggle_keys() {
+        // #500: バックログ表示中に a/s/c（オート/スキップ/設定トグル）を送っても、
+        // overlayを含む状態が変化してはいけない。a/s/cを送った直後もoverlayが
+        // Backlogのまま（Settingsへ変化していない）ことを描画内容で確認する。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleBacklog),
+                2 => Ok(Action::ToggleAuto),
+                3 => Ok(Action::ToggleSkip),
+                4 => Ok(Action::ToggleSettings),
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        assert!(result.is_err(), "テスト用の意図的な停止のはず");
+
+        let text = buffer_text_wide_aware(&terminal);
+        assert!(
+            text.contains("BACKLOG"),
+            "a/s/cキーでオーバーレイがBacklog以外へ変化してはいけない, buffer was: {text}"
+        );
+        assert!(!text.contains("設定"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn event_loop_settings_overlay_ignores_auto_skip_backlog_toggle_keys() {
+        // #503: 設定画面表示中に a/s/b（オート/スキップ/バックログトグル）を送っても、
+        // overlayを含む状態が変化してはいけない。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::ToggleAuto),
+                3 => Ok(Action::ToggleSkip),
+                4 => Ok(Action::ToggleBacklog),
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        assert!(result.is_err(), "テスト用の意図的な停止のはず");
+
+        let text = buffer_text_wide_aware(&terminal);
+        assert!(
+            text.contains("設定"),
+            "a/s/bキーでオーバーレイがSettings以外へ変化してはいけない, buffer was: {text}"
+        );
+        assert!(!text.contains("BACKLOG"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn event_loop_quit_while_overlay_open_only_closes_overlay_second_quit_terminates_app() {
+        // #500/#503: オーバーレイ表示中のq/Escはアプリ終了ではなくオーバーレイを閉じる
+        // だけ。もう一度q/Escを押して初めて本当に終了する（2段階操作）。
+        // `remaining`が0（3件すべて消費）まで進むことで、1回目のQuitで早期終了して
+        // いないことを確認する（もし早期終了していれば2件しか消費されず1が残る）。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, remaining) =
+            action_queue(vec![Action::ToggleBacklog, Action::Quit, Action::Quit]);
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(
+            *remaining.borrow(),
+            0,
+            "1回目のQuitはオーバーレイを閉じるだけで終了してはいけない \
+             (2回目のQuitまで消費されるはず)"
+        );
+    }
+
+    #[test]
+    fn event_loop_enabling_skip_while_auto_active_turns_off_auto_preventing_stale_auto_advance() {
+        // #498/#499: オートON中にスキップをONにすると、オートは排他的にOFFになる。
+        // OFFになっていなければ、auto_wait_ms経過後に（スキップの既読判定とは無関係に）
+        // 自動送りが発火して2行目へ進んでしまうはず。
+        let mut config = instant_config();
+        config.auto_wait_ms = 50;
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto),
+                2 => Ok(Action::ToggleSkip),
+                3 => {
+                    // 元のauto_wait_ms(50ms)よりはるかに長く待つ。オートが排他的にOFFに
+                    // なっていなければ、ここでauto_deadline発火が観測できるはず。
+                    std::thread::sleep(Duration::from_millis(200));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(
+            playback.position(),
+            1,
+            "スキップON操作でオートが排他的にOFFになるはず。OFFになっていなければ \
+             auto_wait_ms経過後に自動送りが発火し2行目へ進んでしまう"
+        );
+    }
+
+    #[test]
+    fn event_loop_enabling_auto_while_skip_active_turns_off_skip_and_auto_still_fires() {
+        // #498/#499: 逆方向（スキップON中にオートをONにする）でも排他が成り立つことを
+        // 確認する。スキップが残っていると誤動作しうるが、正しく排他が効いていれば
+        // オートだけがauto_wait_ms後に1行分だけ正常に発火する。
+        let mut config = instant_config();
+        config.auto_wait_ms = 50;
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "one"),
+            dline(Some("B"), "two"),
+            dline(Some("C"), "three"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSkip),
+                2 => Ok(Action::ToggleAuto),
+                3 => {
+                    std::thread::sleep(Duration::from_millis(200));
+                    Ok(Action::None)
+                }
+                4 => Ok(Action::None),
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(
+            playback.position(),
+            2,
+            "スキップ->オートの排他遷移後、オートがちょうど1回だけ発火してBへ進むはず"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn event_loop_skip_through_read_line_stops_exactly_at_choice_without_auto_confirming() {
+        // #499/#482: 既読の会話行をスキップで通過した先が選択肢の場合、選択肢に到達した
+        // 時点で自動的にスキップが解除され、選択肢を勝手に確定したりはしない
+        // （GUI版 #140の「選択肢到達で setSkipMode(false)」と同じ）。同時に、既読内容を
+        // 実際に自動送りできている（スキップが機能している）ことも確認する。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n\
+                       最初のセリフ\n\n[選択]\n- 進む→1-2\n- 戻る→1-1\n[/選択]\n\n\
+                       ## 1-2: 次\n\n**B**:\n次のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, remaining) = action_queue(vec![
+            Action::Advance,    // A読了 -> 選択肢へ離脱（read_positionsにAを記録）
+            Action::MoveDown,   // カーソルを「戻る」へ
+            Action::Advance,    // 「戻る」確定 -> 1-1のAへジャンプし直す
+            Action::ToggleSkip, // 既読のAからスキップ開始
+            Action::Quit,
+        ]);
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert!(
+            playback.current_choice().is_some(),
+            "既読行のスキップは選択肢に到達した時点で止まり、自動確定してはいけない"
+        );
+        assert_eq!(
+            *remaining.borrow(),
+            0,
+            "スキップが実際に機能していれば、追加のAdvance無しで選択肢まで到達するはず"
+        );
+    }
+
+    #[test]
+    fn event_loop_skip_stops_at_true_script_end_without_error() {
+        // #499: スキップ中にスクリプト末尾（is_at_end）に到達すると自動的にスキップが
+        // 解除される。最終行は「離脱」できないため原理的にread_positionsへ記録され得ず、
+        // 誤ってそこへ進もうとしてエラー/パニックしないことも合わせて確認する。
+        let config = instant_config();
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::Advance,    // A読了 -> B（最終行）へ
+            Action::ToggleSkip, // 末尾Bでスキップを試みる
+            Action::Quit,
+        ]);
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(playback.position(), 2);
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
+        assert!(playback.is_at_end());
+    }
+
+    #[test]
+    fn event_loop_skip_stops_at_first_unread_line_keeping_it_displayed_not_skipped() {
+        // #499: スキップ中に未読行に到達すると、その場でスキップが解除され現在行が
+        // （次へ飛ばされず）表示維持される。既読済みのAを通過した直後の未読Bで確認する
+        // （末尾ではない＝上のテストの「末尾到達」条件とは別の、純粋な「未読」条件を狙う）。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "one"),
+            dline(Some("B"), "two"),
+            dline(Some("C"), "three"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::Advance,    // A読了 -> B（未読）へ
+            Action::ToggleSkip, // 未読のBでスキップを試みる
+            Action::Quit,
+        ]);
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(
+            playback.position(),
+            2,
+            "未読行に到達した時点でスキップが解除され、Cへ飛ばされてはいけない"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn event_loop_backlog_gains_entry_only_after_leaving_a_line_not_while_still_displaying_it() {
+        // #500: バックログには「実際に離脱した」行だけが積まれる。まだ表示中（離脱前）の
+        // 行は積まれないことを、Aから離脱した直後にバックログを開いて中身を確認する
+        // ことで検証する（Advance直後の意図的な停止で中間状態を覗く）。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "first line"),
+            dline(Some("B"), "second line"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::Advance), // A -> B へ離脱、Aがバックログへ積まれるはず
+                2 => Ok(Action::ToggleBacklog), // 中身を確認するために開く
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("first line"),
+            "離脱済みのAはバックログに積まれているはず, buffer was: {text}"
+        );
+        assert!(
+            !text.contains("second line"),
+            "まだ表示中(離脱前)のBはバックログに積まれてはいけない, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn restart_reveal_for_speed_change_rebuilds_still_typing_reveal_with_new_speed() {
+        // #503: タイプライター表示中に速度変更すると、現在のrevealが新速度で
+        // 再構築される（見た目に即座に反映される）。
+        let slow = slow_config();
+        let playback = Playback::from_lines(vec![dline(Some("A"), "hello there")]);
+        let t0 = Instant::now();
+        let mut current_reveal = Some(animating(&slow, playback.current_line().expect("line"), t0));
+        assert!(
+            !current_reveal.as_ref().unwrap().is_done(t0),
+            "slow_config前提の確認: まだタイプ中のはず"
+        );
+
+        let instant = instant_config();
+        restart_reveal_for_speed_change(&playback, &mut current_reveal, &instant, t0);
+
+        assert!(
+            current_reveal.as_ref().unwrap().is_done(t0),
+            "タイプ中の行は新速度(瞬間表示)で再構築され、即座に完了しているはず"
+        );
+    }
+
+    #[test]
+    fn restart_reveal_for_speed_change_leaves_already_done_reveal_untouched() {
+        // #503: 表示完了済みの行は速度変更の対象外——再構築されていたら、新しい
+        // slow設定の下では「今」構築し直された分だけ未完了に戻ってしまうはず。
+        let instant = instant_config();
+        let playback = Playback::from_lines(vec![dline(Some("A"), "hello there")]);
+        let t0 = Instant::now();
+        let mut current_reveal = Some(animating(
+            &instant,
+            playback.current_line().expect("line"),
+            t0,
+        ));
+        assert!(
+            current_reveal.as_ref().unwrap().is_done(t0),
+            "instant_config前提の確認: 既に表示完了済みのはず"
+        );
+
+        let slow_new = slow_config();
+        let t1 = t0 + Duration::from_millis(1);
+        restart_reveal_for_speed_change(&playback, &mut current_reveal, &slow_new, t1);
+
+        assert!(
+            current_reveal.as_ref().unwrap().is_done(t1),
+            "既に表示完了済みの行はspeed change対象外のはず(再構築されていたら新しい \
+             slow設定の下でまだ未完了になっているはず)"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_char_interval_lower_bound_clamps_to_zero_and_stays() {
+        // #503: char_interval_msが5の状態で↑（MoveUp/減少）を押すと0になる（下限到達）。
+        // 0からさらに押しても0のまま（saturating_subの下限保持）。
+        let mut config = instant_config();
+        config.typewriter.char_interval_ms = 5;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveUp), // 5 -> 0
+                3 => Ok(Action::MoveUp), // 0 -> 0（下限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        assert!(result.is_err());
+
+        let text = buffer_text_wide_aware(&terminal);
+        assert!(
+            text.contains("瞬間表示"),
+            "2回目の↑後も0(瞬間表示)のままのはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_char_interval_upper_bound_clamps_to_200_and_stays() {
+        // #503: char_interval_msが195の状態で↓（MoveDown/増加）を押すと200になる
+        // （上限到達）。200からさらに押しても200のまま（205にはならない、
+        // `.min(TEXT_SPEED_MAX_MS)`）。
+        let mut config = instant_config();
+        config.typewriter.char_interval_ms = 195;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveDown), // 195 -> 200
+                3 => Ok(Action::MoveDown), // 200 -> 200（205にならず上限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        assert!(result.is_err());
+
+        let text = buffer_text_wide_aware(&terminal);
+        assert!(
+            text.contains("遅い (200ms)"),
+            "2回目の↓後も200msのままのはず(205等になっていないか), buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn toggle_auto_on_advances_after_wait_then_toggle_off_stops_further_auto_advance() {
+        // #498: aキーでオートON/OFFが正しく切り替わる。ONで待機後に自動送りが実際に
+        // 発火し、OFFにした後は同じだけ待っても発火しないことを確認する。
+        let mut config = instant_config();
+        config.auto_wait_ms = 50;
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "one"),
+            dline(Some("B"), "two"),
+            dline(Some("C"), "three"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto), // ON
+                2 => {
+                    std::thread::sleep(Duration::from_millis(150));
+                    Ok(Action::None)
+                }
+                3 => Ok(Action::ToggleAuto), // OFF（B到達直後のはず）
+                4 => {
+                    std::thread::sleep(Duration::from_millis(150));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(
+            playback.position(),
+            2,
+            "ON後の待機で1回だけ自動送りが発火し(A->B)、OFF後は再度待ってもCへは \
+             進まないはず"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
     }
 }

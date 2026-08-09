@@ -4403,4 +4403,60 @@ mod tests {
             })
             .unwrap();
     }
+
+    // ---- テスト観点整理担当の指摘に基づく追加テスト（境界値・null/空文字）。既存の
+    // `draw_backlog_scroll_beyond_content_clamps_to_max_scroll`（超過）と
+    // `draw_backlog_scroll_within_bounds_is_unchanged`（範囲内）はカバー済みだが、
+    // 「ちょうど境界」の値は未カバーだった。 ----
+
+    #[test]
+    fn draw_backlog_scroll_exactly_at_max_scroll_is_unclamped() {
+        let config = Config::default();
+        let bodies: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+        let entries: Vec<DisplayLine> = bodies
+            .iter()
+            .map(|s| dialog_line(Some("A"), vec![s.as_str()]))
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+
+        // まず u16::MAX でクランプ後の実際の max_scroll 値を得る。
+        let mut max_scroll = 0u16;
+        terminal
+            .draw(|f| {
+                max_scroll = draw_backlog(f, &config, &entries, u16::MAX);
+            })
+            .unwrap();
+        assert!(
+            max_scroll > 0,
+            "テスト前提: スクロール可能な量のエントリのはず"
+        );
+
+        let mut clamped = 0u16;
+        terminal
+            .draw(|f| {
+                clamped = draw_backlog(f, &config, &entries, max_scroll);
+            })
+            .unwrap();
+
+        assert_eq!(
+            clamped, max_scroll,
+            "max_scrollちょうどの値はクランプされず、そのまま使われるはず"
+        );
+    }
+
+    #[test]
+    fn draw_backlog_empty_speaker_name_does_not_panic() {
+        // #500: 話者名が空文字のエントリでもバックログ描画がpanicせず、本文は
+        // 表示されることを確認する。
+        let config = Config::default();
+        let entries = vec![dialog_line(Some(""), vec!["hello"])];
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_backlog(f, &config, &entries, 0);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("hello"), "buffer was: {text}");
+    }
 }
