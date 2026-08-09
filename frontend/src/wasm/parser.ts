@@ -108,12 +108,16 @@ function normalizeEvents(events: Event[]): Event[] {
     if ('Choice' in event) {
       // 選択肢ボタン本文も表示テキストなので正準化する (#340)。
       // text 以外（jump 等）は保持する（スプレッド）。
+      // columns (#508) は WASM 経由で未指定時 undefined になるため null に正規化する。
+      // ここでフィールド列挙から漏らすと wasm が返した値が黙って落ちる
+      // （#308/#310/#407 と同じ罠）ので明示的に含める。
       return {
         Choice: {
           options: event.Choice.options.map((option) => ({
             ...option,
             text: canonicalizeBodyText(option.text),
           })),
+          columns: event.Choice.columns ?? null,
         },
       }
     }

@@ -521,6 +521,84 @@ describe('parseMarkdown + normalizeEvents: 表示テキストの正準化 (#340)
   })
 })
 
+// #508: [選択: 列=N] のグリッド列数が normalizeEvents（frontend/src/wasm/parser.ts の
+// フィールド列挙リビルド）を生き残ることを実 parse 経路で縛る。normalizeEvents の Choice
+// ブランチは options を都度作り直すため、新フィールドを列挙に足し忘れると WASM が返した値が
+// 黙って落ちる（#308/#310/#407 と同種の罠）。setter 直呼びは検知できない偽陰性になるため
+// 必ず parseMarkdown() を通す。
+describe('parseMarkdown + normalizeEvents: Choice.columns が normalize を生き残る (#508)', () => {
+  const findChoice = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters
+      .flatMap((c) => c.scenes.flatMap((s) => s.events))
+      .find((e) => typeof e === 'object' && 'Choice' in e) as
+      | { Choice: { options: { text: string; jump: string }[]; columns?: number | null } }
+      | undefined
+
+  it('[選択: 列=5] → doc の Choice.columns === 5', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: シーン',
+      '',
+      '[選択: 列=5]',
+      '- A → a',
+      '- B → b',
+      '[/選択]',
+      '',
+    ].join('\n')
+
+    const choice = findChoice(await parseMarkdown(markdown))
+    expect(choice?.Choice.columns).toBe(5)
+    expect(choice?.Choice.options.map((o) => o.text)).toEqual(['A', 'B'])
+  })
+
+  it('[選択]（列数指定なし）→ doc の Choice.columns === null（従来どおりの縦一列、非破壊）', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: シーン',
+      '',
+      '[選択]',
+      '- A → a',
+      '- B → b',
+      '[/選択]',
+      '',
+    ].join('\n')
+
+    const choice = findChoice(await parseMarkdown(markdown))
+    expect(choice?.Choice.columns).toBeNull()
+  })
+
+  it('[選択: 列=0] のような不正値は columns が null になる（parser 側で 1 未満を弾く）', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: シーン',
+      '',
+      '[選択: 列=0]',
+      '- A → a',
+      '- B → b',
+      '[/選択]',
+      '',
+    ].join('\n')
+
+    const choice = findChoice(await parseMarkdown(markdown))
+    expect(choice?.Choice.columns).toBeNull()
+  })
+})
+
 describe('parseMarkdown: WaitDisplayComplete (#411)', () => {
   const collectEvents = (markdown: string) =>
     parseMarkdown(markdown).then((doc) =>
