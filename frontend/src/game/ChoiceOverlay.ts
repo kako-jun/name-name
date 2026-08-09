@@ -17,6 +17,7 @@ import { ChoiceOption } from '../types'
 import type { AudioManager } from './AudioManager'
 import { hasOwn } from './ownProperty'
 import type { DestroyOptions, FederatedPointerEvent } from 'pixi.js'
+import { computeChoiceGridLayout } from './novelLayout'
 import type { LayoutRect } from './novelLayout'
 
 const BUTTON_WIDTH = 480
@@ -330,20 +331,25 @@ export class ChoiceOverlay extends Container {
     const areaY = region?.y ?? 0
     const areaWidth = region?.width ?? this.screenWidth
     const areaHeight = region?.height ?? this.screenHeight
-    // グリッド配置 (#508)。columns が未指定 or 1 以下なら isGrid=false のまま従来の
-    // 縦一列レイアウトを一切変更しない（下の分岐でも old と同じ式のみ通す非破壊設計）。
-    const gridColumns = Math.max(1, Math.floor(columns ?? 1))
-    const isGrid = gridColumns > 1
-    const rows = isGrid ? Math.ceil(options.length / gridColumns) : options.length
+    // グリッド配置 (#508)。列/行の割付・fitWidth 計算・中央寄せ開始 X は純粋関数
+    // computeChoiceGridLayout (novelLayout.ts) に集約する (dev-doctrine 規約4)。
+    // columns が未指定 or 1 以下なら isGrid=false のまま従来の縦一列レイアウトを一切変更しない。
+    const gridLayout = computeChoiceGridLayout(
+      columns,
+      options.length,
+      { x: areaX, y: areaY, width: areaWidth, height: areaHeight },
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    const isGrid = gridLayout.isGrid
+    const rows = gridLayout.rows
 
     // BUTTON_WIDTH (480px) は分割後のテキスト領域や多列グリッドでは広すぎることがあるため、
     // region 指定時 or グリッド時は利用可能幅にクランプする。どちらでもない（従来の縦一列・
     // 全画面）ときは BUTTON_WIDTH のまま、既存コードと完全に同じ式で触らない。
     if (isGrid) {
-      const availableWidth = areaWidth - GRID_HORIZONTAL_MARGIN * 2
-      const gapTotal = (gridColumns - 1) * GRID_COLUMN_GAP
-      const fitWidth = Math.max(1, Math.floor((availableWidth - gapTotal) / gridColumns))
-      this.layoutButtonWidth = Math.min(BUTTON_WIDTH, fitWidth)
+      this.layoutButtonWidth = gridLayout.buttonWidth
     } else {
       this.layoutButtonWidth = region
         ? Math.max(
@@ -352,10 +358,6 @@ export class ChoiceOverlay extends Container {
           )
         : BUTTON_WIDTH
     }
-
-    // グリッド時の横方向の開始 X（列全体を area 内で中央寄せ）。非グリッド時は未使用。
-    const gridRowWidth = gridColumns * this.layoutButtonWidth + (gridColumns - 1) * GRID_COLUMN_GAP
-    const gridStartX = areaX + (areaWidth - gridRowWidth) / 2
 
     const totalHeight = rows * BUTTON_HEIGHT + (rows - 1) * BUTTON_GAP
     const maxViewportHeight = Math.max(BUTTON_HEIGHT, areaHeight - VIEWPORT_VERTICAL_MARGIN * 2)
@@ -430,15 +432,13 @@ export class ChoiceOverlay extends Container {
       label.anchor.set(0.5, 0.5)
       buttonContainer.addChild(label)
 
-      // グリッド (#508) の列・行。非グリッド (isGrid=false) では col は常に 0、
-      // row は常に i になるため、下の x/y 式は従来の縦一列と完全に同じ結果になる。
-      const col = isGrid ? i % gridColumns : 0
-      const row = isGrid ? Math.floor(i / gridColumns) : i
+      // グリッド (#508) の列・行・中心 X は computeChoiceGridLayout の結果をそのまま使う。
+      // 非グリッド (isGrid=false) では row は常に i になるため、下の y 式は
+      // 従来の縦一列と完全に同じ結果になる。
+      const { row, x: buttonCenterX } = gridLayout.positions[i]
 
       // pivot を中央に動かしたため、ボタン中心を所定位置（region 指定時はその中心）に置く
-      buttonContainer.x = isGrid
-        ? gridStartX + col * (this.layoutButtonWidth + GRID_COLUMN_GAP) + this.layoutButtonWidth / 2
-        : areaX + areaWidth / 2
+      buttonContainer.x = buttonCenterX
       buttonContainer.y = scrollable
         ? row * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
         : startY + row * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
