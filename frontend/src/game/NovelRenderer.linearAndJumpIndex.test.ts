@@ -51,6 +51,7 @@ function flatten(scenes: EventScene[]): Event[] {
 interface RendererInternals {
   eventIndex: number
   resolvedEvents: Event[]
+  initialized: boolean
   advance(): void
   characterLayer: {
     show(
@@ -73,6 +74,17 @@ interface RendererInternals {
 }
 function internals(r: NovelRenderer): RendererInternals {
   return r as unknown as RendererInternals
+}
+
+/**
+ * `init()` 完了後の状態を模す (#460 セルフレビュー should S1 / #463 で resolveMissingSceneAndJump
+ * にも同型ガードを追加した際の踏襲)。resolveMissingSceneAndJump は #463 で「resolver 解決後、
+ * this.initialized が false なら即 return」というガードを持つため、resolver 経由の正常解決を
+ * 検証するテストは実運用の `init()` 完了相当をこのフラグ操作で模す必要がある
+ * （NovelRenderer.restoreSnapshot.test.ts の markInitialized と同じパターン）。
+ */
+function markInitialized(r: NovelRenderer): void {
+  internals(r).initialized = true
 }
 
 describe('NovelRenderer 線形再生 (#284 M2)', () => {
@@ -207,6 +219,9 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
     r.setEvents(flatten(entryScenes))
     r.setJumpSceneIndex(entryScenes)
     r.setMissingSceneResolver(resolver)
+    // #463: resolveMissingSceneAndJump に destroy 後ガード（!this.initialized なら早期return）を
+    // 追加したため、resolver の正常解決を検証するにはこのテストでも init() 完了相当を模す必要がある。
+    markInitialized(r)
 
     r.jumpToScene('far-scene')
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -215,6 +230,49 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
     expect(r.getAllSceneIds()).toEqual(['entry-hub', 'far-scene'])
     expect(r.getCurrentSceneId()).toBe('far-scene')
     expect(r.getDebugState().eventText).toContain('far-line')
+  })
+
+  // ===== #463: resolveMissingSceneAndJump の destroy 後ガード
+  //   (resolveMissingSceneAndRestore の #460 S1 と同型のリスクへの対処) =====
+  it('S1: missingSceneResolver の解決待ち中に destroy() されても、resolve 後に例外を投げず jump 処理も実行されない', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const farScene = scene('far-scene', [narration('far-line')])
+    let resolveScenes: ((scenes: EventScene[]) => void) | undefined
+    const resolver = vi.fn(
+      () =>
+        new Promise<EventScene[]>((resolve) => {
+          resolveScenes = resolve
+        })
+    )
+
+    const r = new NovelRenderer()
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+
+    r.jumpToScene('far-scene')
+    expect(resolver).toHaveBeenCalledWith('far-scene')
+
+    // 連続remount想定: resolver がまだ解決していない間に、この renderer 自身が destroy() される。
+    // NovelRenderer.restoreSnapshot.test.ts の S1 と同じ理由（jsdom には実 PixiJS canvas が無く
+    // init() を最後まで実行できない）で、destroy() 自体は早期returnの安全な no-op になる。
+    // そのため、実機で appInitialized 済みの場合に destroy() が行う「initialized = false」を
+    // ここでは直接模して、ガードの分岐を実際に踏ませる。
+    expect(() => r.destroy()).not.toThrow()
+    internals(r).initialized = false
+
+    // destroy 後に resolver が解決しても例外を投げない（ガードが無いと startScene 等が
+    // 破棄済みの this.app.stage を触り得る）
+    expect(() => {
+      resolveScenes?.([...entryScenes, farScene])
+    }).not.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // ガードにより setJumpSceneIndex/startScene 相当の処理が一切実行されない
+    // → allScenes に far-scene が追加されず、currentSceneId も未設定のまま
+    expect(r.getAllSceneIds()).toEqual(['entry-hub'])
+    expect(r.getCurrentSceneId()).toBeNull()
   })
 
   it('単一 script は索引が自ファイルのシーンのみ = jumpToScene の解決対象も自シーンに限る', () => {
