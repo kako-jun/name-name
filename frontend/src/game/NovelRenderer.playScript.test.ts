@@ -9,6 +9,13 @@
  * スキップする。検証は getDebugState() / getSnapshot() / getCurrentSceneId() /
  * dialogBox.getMsPerChar() の公開 / 内部アクセサで行う（実描画・PixiJS は対象外、
  * CLAUDE.md ルール7 の実機 golden path に委ねる）。
+ *
+ * #515: playScript は `wait` step 明け直後に `this.initialized` を確認し、破棄済みなら
+ * 以降の step を処理せず抜ける（wait 待機中の destroy() 対策）。この分岐に到達する
+ * テスト（wait → advance の並び）だけ、restoreSnapshot.test.ts と同じ `markInitialized`
+ * パターンで明示的に true を立てる（そうしないと wait 明けで即 return し、後続 advance が
+ * 呼ばれなくなる）。wait を含まないテストは従来どおり `initialized` 未設定（false）のままで
+ * 影響を受けない。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
@@ -30,13 +37,6 @@ function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
 
-/** 単一シーン（ナレーション数行）を持つ renderer を作る */
-function makeRenderer(scenes: EventScene[]): NovelRenderer {
-  const r = new NovelRenderer()
-  r.setScenes(scenes)
-  return r
-}
-
 /** dialogBox の private msPerChar アクセサ（getMsPerChar）に到達するための型 */
 interface RendererInternals {
   dialogBox: { getMsPerChar(): number; setMsPerChar(ms: number): void }
@@ -46,6 +46,7 @@ interface RendererInternals {
   justSelectedChoice: boolean
   waitingForChoice: boolean
   choiceOverlay: { show: ReturnType<typeof vi.fn> }
+  initialized: boolean
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -54,6 +55,21 @@ function internals(r: NovelRenderer): RendererInternals {
 
 function getMsPerChar(r: NovelRenderer): number {
   return internals(r).dialogBox.getMsPerChar()
+}
+
+/**
+ * `init()` 完了後の状態を模す（NovelRenderer.restoreSnapshot.test.ts と同じパターン）。
+ * wait → advance/choice の並びを検証するテストでのみ使う（#515、上記ファイル doc 参照）。
+ */
+function markInitialized(r: NovelRenderer): void {
+  internals(r).initialized = true
+}
+
+/** 単一シーン（ナレーション数行）を持つ renderer を作る */
+function makeRenderer(scenes: EventScene[]): NovelRenderer {
+  const r = new NovelRenderer()
+  r.setScenes(scenes)
+  return r
 }
 
 const SCENES_SINGLE: EventScene[] = [
@@ -248,6 +264,7 @@ describe('NovelRenderer.playScript (#220)', () => {
   it('13: wait は指定 ms 待ってから次 step へ進む', async () => {
     vi.useFakeTimers()
     const r = makeRenderer(SCENES_SINGLE)
+    markInitialized(r) // #515: wait 明けの advance 続行には initialized=true が必要
     const advanceSpy = vi.spyOn(internals(r), 'advance')
 
     const p = r.playScript([{ type: 'wait', ms: 200 }, { type: 'advance' }])
@@ -262,9 +279,50 @@ describe('NovelRenderer.playScript (#220)', () => {
 
   it('14: wait ms=0 でも解決して後続 step を実行する', async () => {
     const r = makeRenderer(SCENES_SINGLE)
+    markInitialized(r) // #515: wait 明けの advance 続行には initialized=true が必要
     const advanceSpy = vi.spyOn(internals(r), 'advance')
     await r.playScript([{ type: 'wait', ms: 0 }, { type: 'advance' }])
     expect(advanceSpy).toHaveBeenCalledTimes(1)
+  })
+
+  // ===== E'. destroy 後ガード (#515) =====
+  //
+  // #460/#462/#463 と同型のパターン: wait ステップの await 中に destroy() が呼ばれると
+  // `this.initialized` が false になる。playScript は次 step（advance/choice）を処理する前に
+  // これを確認し、破棄済みの dialogBox/stage 等を触らない（#515 で追加したガード）。
+  it('18: wait 待機中に destroy 相当（initialized=false）になると、後続の advance は呼ばれず例外も投げない', async () => {
+    vi.useFakeTimers()
+    const r = makeRenderer(SCENES_SINGLE)
+    markInitialized(r) // init() 完了済み（実運用と同じ開始状態）を模す
+    const advanceSpy = vi.spyOn(internals(r), 'advance')
+
+    const p = r.playScript([{ type: 'wait', ms: 100 }, { type: 'advance' }])
+    await Promise.resolve()
+    // wait 待機中に destroy() が呼ばれた状態を模す（jsdom には実 destroy() を最後まで
+    // 走らせる canvas が無いため、restoreSnapshot.test.ts S1 と同じく直接フラグ操作で模す）。
+    internals(r).initialized = false
+
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(p).resolves.toBeUndefined()
+
+    expect(advanceSpy).not.toHaveBeenCalled()
+  })
+
+  it('19: destroy 相当後も isReplaying/msPerChar は finally で正しく後始末される', async () => {
+    vi.useFakeTimers()
+    const r = makeRenderer(SCENES_SINGLE)
+    markInitialized(r)
+    internals(r).dialogBox.setMsPerChar(30)
+
+    const p = r.playScript([{ type: 'wait', ms: 50 }, { type: 'advance' }])
+    await Promise.resolve()
+    internals(r).initialized = false
+
+    await vi.advanceTimersByTimeAsync(50)
+    await p
+
+    expect(internals(r).isReplaying).toBe(false)
+    expect(getMsPerChar(r)).toBe(30)
   })
 
   // ===== F. 空・組み合わせ・ログ =====
