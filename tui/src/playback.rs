@@ -119,13 +119,19 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
 
 /// 再生列（`Playback::items`）の1要素。Dialog/Narration は `Line`、Choice は `Choice` になる。
 /// それ以外のイベント（背景・SE・BGM 等）は要素を生成しない（[`playback_item_from_event`]）。
+///
+/// `Choice` の第2要素は `Event::Choice.columns`（グリッド配置の列数、#508）をそのまま
+/// 引き継いだもの。`None`/`Some(0)`/`Some(1)` はいずれも従来どおりの縦一列表示を意味し、
+/// 実際に「グリッドとして扱うか」の正規化（0や1をどう1列と見なすか）は消費側
+/// （[`Playback::current_choice`]・カーソル移動系メソッド・`ui::draw_choice_list`）が
+/// 都度行う。
 #[derive(Debug, Clone, PartialEq)]
 enum PlaybackItem {
     Line(DisplayLine),
-    Choice(Vec<ChoiceOption>),
+    Choice(Vec<ChoiceOption>, Option<u32>),
 }
 
-/// `Event` を再生列の1要素に変換する。Choice は選択肢一覧をそのまま保持する
+/// `Event` を再生列の1要素に変換する。Choice は選択肢一覧とグリッド列数をそのまま保持する
 /// `PlaybackItem::Choice` に、Dialog/Narration は [`display_line_from_event`] 経由で
 /// `PlaybackItem::Line` になる。それ以外（背景・SE・BGM 等）は `None`（読み飛ばす）。
 ///
@@ -138,7 +144,7 @@ enum PlaybackItem {
 fn playback_item_from_event(event: &Event) -> Option<PlaybackItem> {
     match event {
         Event::Choice { options, .. } if options.is_empty() => None,
-        Event::Choice { options, .. } => Some(PlaybackItem::Choice(options.clone())),
+        Event::Choice { options, columns } => Some(PlaybackItem::Choice(options.clone(), *columns)),
         _ => display_line_from_event(event).map(PlaybackItem::Line),
     }
 }
@@ -270,7 +276,7 @@ impl Playback {
                                         line.event_image = current_event_image.clone();
                                         PlaybackItem::Line(line)
                                     }
-                                    choice @ PlaybackItem::Choice(_) => choice,
+                                    choice @ PlaybackItem::Choice(_, _) => choice,
                                 };
                                 items.push(item);
                                 item_file_ids.push(file_id);
@@ -352,11 +358,25 @@ impl Playback {
         }
     }
 
-    /// 現在位置が選択肢なら `(選択肢一覧, カーソル位置)` を返す。会話行の途中や末尾越えでは
-    /// `None`。
-    pub fn current_choice(&self) -> Option<(&[ChoiceOption], usize)> {
+    /// 現在位置が選択肢なら `(選択肢一覧, カーソル位置, グリッド列数)` を返す。会話行の途中や
+    /// 末尾越えでは `None`。3番目の要素は `Event::Choice.columns`（#508）をそのまま渡す —
+    /// `None`/`Some(0)`/`Some(1)` はいずれも従来どおりの縦一列表示を意味し、その正規化は
+    /// 呼び出し側（`ui::draw_choice_list` 等）が行う。
+    pub fn current_choice(&self) -> Option<(&[ChoiceOption], usize, Option<u32>)> {
         match self.items.get(self.index) {
-            Some(PlaybackItem::Choice(options)) => Some((options.as_slice(), self.choice_cursor)),
+            Some(PlaybackItem::Choice(options, columns)) => {
+                Some((options.as_slice(), self.choice_cursor, *columns))
+            }
+            _ => None,
+        }
+    }
+
+    /// 現在Choice表示中なら、正規化済みの有効列数（`None`/`0`/`1` はいずれも「非グリッド
+    /// 1列」として `1` に丸める）を返す。Choice表示中でなければ `None`（#508、カーソル
+    /// 移動系メソッド共通のヘルパー）。
+    fn effective_columns(&self) -> Option<usize> {
+        match self.items.get(self.index) {
+            Some(PlaybackItem::Choice(_, columns)) => Some(columns.unwrap_or(1).max(1) as usize),
             _ => None,
         }
     }
@@ -375,7 +395,7 @@ impl Playback {
     /// 存在していても、暗黙の前進では別ファイルの内容へ進めない。ファイルをまたぐ遷移は
     /// [`Playback::select_current_choice`] による明示的な選択肢ジャンプでのみ許可される。
     pub fn advance(&mut self) -> bool {
-        if matches!(self.items.get(self.index), Some(PlaybackItem::Choice(_))) {
+        if matches!(self.items.get(self.index), Some(PlaybackItem::Choice(_, _))) {
             return false;
         }
         if self.sentence_per_page && self.sentence_index + 1 < self.sentence_pages.len() {
@@ -396,21 +416,79 @@ impl Playback {
         }
     }
 
-    /// 選択肢表示中のみ有効。カーソルを1つ上へ動かす（先頭で頭打ち、末尾へのラップはしない）。
-    /// 選択肢を表示していないときの呼び出しは no-op。
+    /// 選択肢表示中のみ有効。カーソルを1つ上の行へ動かす（先頭行で頭打ち、末尾行への
+    /// ラップはしない）。選択肢を表示していないときの呼び出しは no-op。
+    ///
+    /// グリッド表示（列数 >= 2、#508の`[選択: 列=N]`）では「1つ上の行の同じ列」へ移動する。
+    /// 非グリッド（列数1）では従来どおり「1つ前の要素」に一致する — 列数1のときは
+    /// 行=要素index・列=常に0になるため、特別扱いせず同じ計算式で両方を扱える。
     pub fn move_choice_cursor_up(&mut self) {
-        if matches!(self.items.get(self.index), Some(PlaybackItem::Choice(_))) {
-            self.choice_cursor = self.choice_cursor.saturating_sub(1);
+        let Some(columns) = self.effective_columns() else {
+            return;
+        };
+        if self.choice_cursor >= columns {
+            self.choice_cursor -= columns;
+        }
+        // else: 先頭行なので頭打ち（従来の非グリッド時と同じ「先頭で頭打ち」規約を踏襲）。
+    }
+
+    /// 選択肢表示中のみ有効。カーソルを1つ下の行へ動かす（末尾行で頭打ち、先頭行への
+    /// ラップはしない）。選択肢を表示していないときの呼び出しは no-op。
+    ///
+    /// グリッド表示では「1つ下の行の同じ列」へ移動する。ただし総数が列数で割り切れず
+    /// 最終行が途中までしか埋まっていない場合（例: 7要素・3列なら最終行は index 6 の
+    /// 1要素だけ）、移動先の列に要素が存在しないことがある。この場合はテキストエディタの
+    /// カーソル移動が短い行の末尾に寄せるのと同じ発想で、その行の最後の要素へ寄せる
+    /// （設計判断: 「存在しない列へは移動できず何もしない」より「近い有効な位置へ寄る」
+    /// 方が、短い最終行にある選択肢へも上下キーだけで到達できて自然だと判断した。GUI版は
+    /// キーボード操作を持たないため参考にできる先例が無く、これはTUI独自の判断）。
+    /// 非グリッド（列数1）では従来どおり「1つ次の要素」に一致する。
+    pub fn move_choice_cursor_down(&mut self) {
+        let Some(PlaybackItem::Choice(options, columns)) = self.items.get(self.index) else {
+            return;
+        };
+        let columns = columns.unwrap_or(1).max(1) as usize;
+        let total = options.len();
+        let row = self.choice_cursor / columns;
+        let rows = total.div_ceil(columns);
+        if row + 1 >= rows {
+            return; // 最終行なので頭打ち
+        }
+        let col = self.choice_cursor % columns;
+        let target_row = row + 1;
+        self.choice_cursor = (target_row * columns + col).min(total - 1);
+    }
+
+    /// 選択肢表示中かつグリッド表示（列数 >= 2、#508）のときのみ意味を持つ。カーソルを
+    /// 同じ行内で1つ左へ動かす（行の先頭列で頭打ち、前の行の末尾へのラップはしない —
+    /// 上下カーソルの「頭打ち・ラップしない」規約をそのまま左右にも適用した設計判断）。
+    /// 非グリッド（列数1）では常に no-op（列が1つしかないため左右移動という概念自体が
+    /// 無い）。選択肢を表示していないときの呼び出しも no-op。
+    pub fn move_choice_cursor_left(&mut self) {
+        let Some(columns) = self.effective_columns() else {
+            return;
+        };
+        if columns <= 1 {
+            return;
+        }
+        if !self.choice_cursor.is_multiple_of(columns) {
+            self.choice_cursor -= 1;
         }
     }
 
-    /// 選択肢表示中のみ有効。カーソルを1つ下へ動かす（末尾で頭打ち、先頭へのラップはしない）。
-    /// 選択肢を表示していないときの呼び出しは no-op。
-    pub fn move_choice_cursor_down(&mut self) {
-        if let Some(PlaybackItem::Choice(options)) = self.items.get(self.index) {
-            if self.choice_cursor + 1 < options.len() {
-                self.choice_cursor += 1;
-            }
+    /// [`Playback::move_choice_cursor_left`] の右版。行の最終列、または（最終行が途中
+    /// までしか埋まっていない場合の）その行に存在する最後の要素で頭打ちになる。
+    pub fn move_choice_cursor_right(&mut self) {
+        let Some(PlaybackItem::Choice(options, columns)) = self.items.get(self.index) else {
+            return;
+        };
+        let columns = columns.unwrap_or(1).max(1) as usize;
+        if columns <= 1 {
+            return;
+        }
+        let col = self.choice_cursor % columns;
+        if col + 1 < columns && self.choice_cursor + 1 < options.len() {
+            self.choice_cursor += 1;
         }
     }
 
@@ -423,7 +501,7 @@ impl Playback {
     /// という fail-soft 方針と同じだが、TUI は alternate screen 中で標準出力を使えないため
     /// 警告そのものは出さない（呼び出し側が `false` を見て何もしない、という形で吸収する）。
     pub fn select_current_choice(&mut self) -> bool {
-        let Some(PlaybackItem::Choice(options)) = self.items.get(self.index) else {
+        let Some(PlaybackItem::Choice(options, _columns)) = self.items.get(self.index) else {
             return false;
         };
         let Some(option) = options.get(self.choice_cursor) else {
@@ -708,7 +786,7 @@ mod tests {
         assert_eq!(pb.total(), 1);
         // 再生位置としては Choice が最初の item になるため、いきなり選択肢が現れる。
         assert_eq!(pb.current_line(), None);
-        let (options, cursor) = pb.current_choice().expect("choice should be current");
+        let (options, cursor, _columns) = pb.current_choice().expect("choice should be current");
         assert_eq!(options.len(), 1);
         assert_eq!(options[0].text, "yes");
         assert_eq!(cursor, 0);
