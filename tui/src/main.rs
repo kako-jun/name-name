@@ -334,6 +334,14 @@ where
         // 発見）。`deadline_triggered` と、行動前後の `item_index()` の変化を照合して、この
         // 「進行不可能なのに締切だけが経過し続ける」組み合わせのときだけ締切をクリアし、通常の
         // `next_action()` によるキー入力待ちにフォールバックする。
+        //
+        // `deadline_triggered` が真の間は `next_action()`（`REDRAW` = 30ms のポーリング間隔で
+        // 入力を待つ経路）を経由せずに直接 `Action::Advance` を合成するため、この分岐だけを
+        // 通り続ける限りループ本体はスリープしない。`[待機:0][イベント絵:B][待機:0]...` の
+        // ように ms=0 の画像コマ item が連続すると、締切は毎回「作った瞬間に既に過ぎている」
+        // ため `deadline_triggered` が常に真になり、その連鎖の間だけ CPU をビジーループで
+        // 回し続ける。バグではなく許容している設計上のトレードオフ（ms=0 は「即座に進める」
+        // という利用者の意図そのものであり、そこに人為的なウェイトを挟む理由が無いため）。
         let deadline_triggered = matches!(wait_deadline, Some(deadline) if now >= deadline);
         let action = if deadline_triggered {
             Action::Advance
