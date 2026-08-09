@@ -810,3 +810,73 @@ describe('parseMarkdown RpgEvent 内会話の正準化スコープ end-to-end (#
     expect(npc && 'Npc' in npc && npc.Npc.name).toBe('村人--A')
   })
 })
+
+describe('parseMarkdown + normalizeEvents: RpgMap の encounter_rate/encounter_groups が normalize を生き残る (#517)', () => {
+  // #172 で追加された encounter_rate/encounter_groups が normalizeEvents の RpgMap ブランチの
+  // フィールド列挙リビルドから漏れ、常に undefined に潰れていた回帰テスト（#308/#310/#407/#508 に
+  // 続く同型バグの5件目）。RpgMap ブランチを spread 方式に倒した修正が正しく効いていることを、
+  // 実 parseMarkdown（WASM 同梱）経由で確認する。
+  const markdownWithEncounter = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## m: マップ',
+    '',
+    '[マップ 3x3 タイル=32]',
+    'GGG',
+    'GGG',
+    'GGG',
+    '[/マップ]',
+    '[エンカウント率: 1/16]',
+    '[エンカウント群: slime, ghost]',
+    '',
+  ].join('\n')
+
+  const markdownWithoutEncounter = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## m: マップ',
+    '',
+    '[マップ 3x3 タイル=32]',
+    'GGG',
+    'GGG',
+    'GGG',
+    '[/マップ]',
+    '',
+  ].join('\n')
+
+  const findRpgMap = (doc: Awaited<ReturnType<typeof parseMarkdown>>) => {
+    const events = doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
+    const rpgMap = events.find((e) => typeof e === 'object' && 'RpgMap' in e)
+    if (!rpgMap || typeof rpgMap !== 'object' || !('RpgMap' in rpgMap)) {
+      throw new Error('RpgMap not found')
+    }
+    return rpgMap.RpgMap
+  }
+
+  it('encounter_rate/encounter_groups が normalize 後も保持される', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownWithEncounter))
+    expect(map.encounter_rate).toBe(16)
+    expect(map.encounter_groups).toEqual(['slime', 'ghost'])
+  })
+
+  it('同じ RpgMap の既存フィールド（width/height/tiles）も引き続き保持される（spread化の非回帰）', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownWithEncounter))
+    expect(map.width).toBe(3)
+    expect(map.height).toBe(3)
+    expect(map.tiles.length).toBe(3)
+  })
+
+  it('未指定時は encounter_rate/encounter_groups が null に正規化される（undefined ではない）', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownWithoutEncounter))
+    expect(map.encounter_rate).toBeNull()
+    expect(map.encounter_groups).toBeNull()
+  })
+})

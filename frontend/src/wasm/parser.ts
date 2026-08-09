@@ -213,17 +213,20 @@ function normalizeEvents(events: Event[]): Event[] {
       }
     }
     if ('RpgMap' in event) {
-      // Issue #90: Rust 側の Option<Vec<Vec<f64>>> は WASM 経由で undefined になるため、
-      // frontend の規約（types.ts）に合わせて null に正規化する。
+      // Issue #90: Rust 側の Option<Vec<Vec<f64>>> / Option<u32> / Option<Vec<String>> は
+      // WASM 経由で undefined になるため、frontend の規約（types.ts）に合わせて null に正規化する。
+      // #517: フィールド明示列挙だと新フィールド追加時に列挙し忘れて値を落とす罠がある
+      // （#308/#310/#407/#508 に続き実際に encounter_rate/encounter_groups が欠落した）。
+      // 他ブランチ（TitleShow/Label/RpgEvent 等）と同じ spread 方式に倒し、未知の Option
+      // フィールドだけ個別に null 正規化する。
       return {
         RpgMap: {
-          width: event.RpgMap.width,
-          height: event.RpgMap.height,
-          tile_size: event.RpgMap.tile_size,
-          tiles: event.RpgMap.tiles,
+          ...event.RpgMap,
           wall_heights: event.RpgMap.wall_heights ?? null,
           floor_heights: event.RpgMap.floor_heights ?? null,
           ceiling_heights: event.RpgMap.ceiling_heights ?? null,
+          encounter_rate: event.RpgMap.encounter_rate ?? null,
+          encounter_groups: event.RpgMap.encounter_groups ?? null,
         },
       }
     }
