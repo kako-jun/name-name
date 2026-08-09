@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Assets, Texture } from 'pixi.js'
 import { computeDynamicRenderResolution, getIndicatorImageUrls } from '../game/novelLayout'
+import { INACTIVITY_MS } from '../game/SeekBar'
 import type { NovelGameState } from '../game/GameState'
 
 // NovelRenderer を完全スタブ化（PixiJS 構築・init を無効化）。
@@ -2377,5 +2378,125 @@ describe('NovelPlayer フルスクリーン最大化トグル (#468, Fullscreen 
     // モック実装は resolve 時に this（呼び出し元＝fluidRootRef.current）を新しい fullscreenElement に
     // するため、自分がフルスクリーンになったこと（aria-pressed=true）まで確認できる。
     expect(btn.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  // --- #468 セルフレビュー指摘: 状態遷移ロジック（余韻タイマー・data-dir導出）のテストが
+  // 不足していたため追加。参考: SeekBar.test.ts B-6/B-7（同じ INACTIVITY_MS 境界パターン）。
+  // フルスクリーンAPI自体の遷移（enter/exit）は 9〜17 で担保済みなので、ここでは
+  // fsToggleActive（nn-fs-toggle--active クラス）と data-dir の導出だけを縛る。
+
+  it('18: pointerdownで即座にnn-fs-toggle--active（濃い表示）が付く', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+    expect(btn.className).not.toContain('nn-fs-toggle--active')
+
+    act(() => {
+      fireEvent.pointerDown(btn)
+    })
+
+    expect(btn.className).toContain('nn-fs-toggle--active')
+  })
+
+  it('19: focusでも同様にnn-fs-toggle--active（濃い表示）が付く', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+    expect(btn.className).not.toContain('nn-fs-toggle--active')
+
+    act(() => {
+      fireEvent.focus(btn)
+    })
+
+    expect(btn.className).toContain('nn-fs-toggle--active')
+  })
+
+  it('20: activate後 INACTIVITY_MS-1 の経過ではまだactiveのまま（境界未満）', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<NovelPlayer events={[]} />)
+      await flushAsync()
+      const btn = fullscreenButton()
+
+      act(() => {
+        fireEvent.pointerDown(btn)
+      })
+      act(() => {
+        vi.advanceTimersByTime(INACTIVITY_MS - 1)
+      })
+
+      expect(btn.className).toContain('nn-fs-toggle--active')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('21: activate後 INACTIVITY_MS ちょうどの経過で自動的にinactive（薄い表示）へ戻る', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<NovelPlayer events={[]} />)
+      await flushAsync()
+      const btn = fullscreenButton()
+
+      act(() => {
+        fireEvent.pointerDown(btn)
+      })
+      act(() => {
+        vi.advanceTimersByTime(INACTIVITY_MS)
+      })
+
+      expect(btn.className).not.toContain('nn-fs-toggle--active')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('22: isFullscreen=false のとき data-dir="expand"', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+
+    expect(btn.getAttribute('data-dir')).toBe('expand')
+  })
+
+  it('23: isFullscreen=true のとき data-dir="collapse"', async () => {
+    installFullscreenMock()
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+
+    await act(async () => {
+      btn.click()
+    })
+    await flushMicrotasks()
+
+    expect(btn.getAttribute('data-dir')).toBe('collapse')
+  })
+
+  it('24: unmount時に余韻タイマーがクリアされる（unmount後にタイマー期限が来てもconsole.errorが出ない・回帰）', async () => {
+    vi.useFakeTimers()
+    try {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { unmount } = render(<NovelPlayer events={[]} />)
+      await flushAsync()
+      const btn = fullscreenButton()
+
+      act(() => {
+        fireEvent.pointerDown(btn)
+      })
+
+      unmount()
+
+      // クリアされていなければ、unmount 後の setFsToggleActive(false) が
+      // 「unmounted component への state 更新」として console.error（React 警告）を出す。
+      expect(() => {
+        act(() => {
+          vi.advanceTimersByTime(INACTIVITY_MS)
+        })
+      }).not.toThrow()
+      expect(errSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
