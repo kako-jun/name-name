@@ -394,6 +394,33 @@ title: "テスト"
     assert_eq!(doc, doc2);
 }
 
+/// `[選択: 列=5, 列=3]` のように `列=` が複数指定された場合、
+/// 最初の1件（列=5）のみが採用される (#508)。
+#[test]
+fn test_choice_grid_columns_duplicate_takes_first() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 重複列数テスト
+
+[選択: 列=5, 列=3]
+- A → a
+- B → b
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    match &events[0] {
+        Event::Choice { columns, .. } => {
+            assert_eq!(*columns, Some(5));
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_flag() {
     let input = r#"---

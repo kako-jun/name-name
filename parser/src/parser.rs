@@ -2269,6 +2269,7 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
 /// 呼び出し側は従来どおりの縦一列表示にフォールバックする。
 fn parse_choice_columns(trimmed: &str) -> Option<u32> {
     let inner = trimmed.strip_prefix("[選択:")?.strip_suffix(']')?.trim();
+    // 複数の `列=` 指定（例: `[選択: 列=5, 列=3]`）は最初の1件のみ採用する。
     inner
         .split(',')
         .map(str::trim)
