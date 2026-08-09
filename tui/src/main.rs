@@ -21,7 +21,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::Terminal;
 
 use cli::Cli;
-use config::Config;
+use config::{Config, TEXT_SPEED_MAX_MS, TEXT_SPEED_STEP_MS};
 use input::Action;
 use playback::{DisplayLine, Playback};
 
@@ -38,13 +38,16 @@ const BACKLOG_SCROLL_STEP: u16 = 3;
 /// ゲーム画面より前面に描画するフルスクリーンオーバーレイ。開いている間、`event_loop` は
 /// 会話の進行（オート/スキップモードのタイマー・reveal のタイプライター時間経過を含む）を
 /// 完全に凍結する — バックログ（#500 Issue本文「バックログを閉じると元のゲーム画面に戻る
-/// (ゲーム進行状態は変化しない、閲覧専用)」という明示要件）。
+/// (ゲーム進行状態は変化しない、閲覧専用)」という明示要件）・設定画面（#503、値を調整して
+/// いる最中に裏で会話が進むのは直感に反するため、バックログと同じ扱いにする）共通の方針。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Overlay {
     /// 通常のゲーム画面。
     None,
     /// バックログ（既読ログ）閲覧画面（#500）。
     Backlog,
+    /// テキスト速度設定画面（#503）。
+    Settings,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -228,9 +231,13 @@ where
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
                 target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
-            // スプラッシュ画面にはオート/スキップモードもバックログ画面も無いため、各種
-            // トグルは無視する（#498 / #499 / #500）。
-            Action::ToggleAuto | Action::ToggleSkip | Action::ToggleBacklog | Action::None => {}
+            // スプラッシュ画面にはオート/スキップモードもバックログ/設定画面も無いため、
+            // 各種トグルは無視する（#498 / #499 / #500 / #503）。
+            Action::ToggleAuto
+            | Action::ToggleSkip
+            | Action::ToggleBacklog
+            | Action::ToggleSettings
+            | Action::None => {}
         }
     }
 }
@@ -255,8 +262,16 @@ where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    // テキスト速度をプレイ中に変更できるようにするため（#503）、以後この関数内では
+    // 呼び出し元から借りた `&Config` ではなく、この関数がオーナーシップを持つ可変コピーを
+    // 使う。イベント絵/配色/スプラッシュ等 typewriter 以外の設定値をプレイ中に書き換える
+    // 手段は無いため実質的に不変のままだが、`config.typewriter.char_interval_ms` だけは
+    // 下の `Overlay::Settings` 分岐（`Action::MoveUp`/`Action::MoveDown` の文脈依存の再利用）
+    // が書き換える。
+    let mut config = config.clone();
+
     let mut current_reveal: Option<reveal::RevealState> =
-        build_reveal_for_current(playback, config, Instant::now());
+        build_reveal_for_current(playback, &config, Instant::now());
     // ページ送りインジケータの点滅基準時刻。1秒周期の完全on/off点滅自体は話者・テキストに
     // 依存しないグローバルな明滅（`reveal::blink_visible`、#495）だが、基準時刻は固定ではなく
     // 毎フレーム `reveal::indicator_blink_started_at` で更新する（#495 追加修正）。
@@ -330,31 +345,43 @@ where
     // `u16::MAX` をセットして「末尾（最新）にクランプ」させる。
     let mut backlog_scroll: u16 = 0;
 
-    // 現在開いているオーバーレイ画面（#500）。既定は `Overlay::None`（通常のゲーム画面）。
+    // 現在開いているオーバーレイ画面（#500 / #503）。既定は `Overlay::None`（通常のゲーム画面）。
     let mut overlay = Overlay::None;
 
     loop {
         let now = Instant::now();
 
-        // オーバーレイ（バックログ画面）表示中は、通常のゲームロジック（オート/スキップ
+        // オーバーレイ（バックログ/設定画面）表示中は、通常のゲームロジック（オート/スキップ
         // モードの締切判定・reveal のタイプライター経過・`Action::Advance` 等）を一切実行
-        // せず、ここで完結させて次の周回へ進む（#500）。こうすることで「開いている間は
+        // せず、ここで完結させて次の周回へ進む（#500 / #503）。こうすることで「開いている間は
         // 会話が一切進まない」ことが構造的に保証される — 通常フローの奥深くに `if overlay ==
         // Overlay::None` の条件分岐を無数に挟むより、入り口1箇所で早期分岐する方が
         // 見落としのリスクが低い。
         if overlay != Overlay::None {
             terminal.draw(|frame| match overlay {
                 Overlay::Backlog => {
-                    backlog_scroll = ui::draw_backlog(frame, config, &backlog, backlog_scroll);
+                    backlog_scroll = ui::draw_backlog(frame, &config, &backlog, backlog_scroll);
+                }
+                Overlay::Settings => {
+                    ui::draw_settings(frame, config.typewriter.char_interval_ms);
                 }
                 Overlay::None => unreachable!("overlay != Overlay::None はこの分岐の前提"),
             })?;
 
             match next_action()? {
-                // バックログ画面を開いたのと同じキーで閉じる（GUI版 `BacklogOverlay` の
+                // バックログ/設定画面を開いたのと同じキーで閉じる（GUI版 `BacklogOverlay` の
                 // 「ESC / B / クリックで閉じる」の「B」に相当、#500）。
-                Action::ToggleBacklog => {
+                Action::ToggleBacklog if overlay == Overlay::Backlog => {
                     overlay = Overlay::None;
+                    // 復帰直後にオートモードの締切超過で即座に自動送りしてしまわないよう
+                    // （オーバーレイを開いていた間に締切だけが過去へ流れ去っている）、
+                    // 締切を破棄して次の周回で「reveal完了から改めて `auto_wait_ms` 待つ」
+                    // 状態に戻す（安全策）。
+                    auto_deadline = None;
+                }
+                Action::ToggleSettings if overlay == Overlay::Settings => {
+                    overlay = Overlay::None;
+                    auto_deadline = None;
                 }
                 // Enter/Space（GUI版 `handlePointerClick` がバックログ表示中のタップを
                 // 「進める」ではなく「閉じる」として吸収するのと同じ、#500）、および
@@ -363,20 +390,48 @@ where
                 // 「オーバーレイを閉じる」を意味する。
                 Action::Advance | Action::Quit => {
                     overlay = Overlay::None;
+                    auto_deadline = None;
                 }
                 // バックログ表示中の ↑/↓ はスクロール（#500）。`Action::MoveUp`/
                 // `Action::MoveDown` は「選択肢が無いときは no-op」というのが本来の意味だが
                 // （`input.rs` の doc comment参照）、選択肢が存在し得ないオーバーレイ画面の
                 // 文脈では別の意味へ読み替える — `Action::Advance` が選択肢確定へ読み替わる
                 // のと同じ、既存の「Action の文脈依存の再解釈」パターンを踏襲する。
-                Action::MoveUp => {
+                Action::MoveUp if overlay == Overlay::Backlog => {
                     backlog_scroll = backlog_scroll.saturating_sub(BACKLOG_SCROLL_STEP);
                 }
-                Action::MoveDown => {
+                Action::MoveDown if overlay == Overlay::Backlog => {
                     backlog_scroll = backlog_scroll.saturating_add(BACKLOG_SCROLL_STEP);
                 }
-                // 上記のどれにも当てはまらない入力（オート/スキップトグル等）はオーバーレイ
-                // 表示中は無視する。
+                // 設定画面表示中の ↑/↓ はテキスト速度の調整（#503）。GUI版
+                // `SettingsOverlay.tsx` の msPerChar スライダー（step=5）と同じ刻み幅。
+                // ↑ = 数値を減らす = 速く、↓ = 数値を増やす = 遅く（GUI版スライダーの
+                // 左/右と同じ向き。ratatui のカーソル上/下という空間的な向きとは対応しない
+                // 一方的な割り当てだが、他に基準となる向きが無いため choice cursor の
+                // Up=前身/Down=後退という「上へ行くほど数値が減る」既存の感覚に合わせる）。
+                Action::MoveUp if overlay == Overlay::Settings => {
+                    // `TEXT_SPEED_MIN_MS` は0固定（clippyの`unnecessary_min_or_max`が
+                    // 指摘する通り、u64の`saturating_sub`は既にそれ未満に落ちない）。
+                    // 将来 `TEXT_SPEED_MIN_MS` を0より大きい値へ変える場合はここで改めて
+                    // `.max(TEXT_SPEED_MIN_MS)` を足す必要がある。
+                    let next_ms = config
+                        .typewriter
+                        .char_interval_ms
+                        .saturating_sub(TEXT_SPEED_STEP_MS);
+                    config.typewriter.char_interval_ms = next_ms;
+                    restart_reveal_for_speed_change(playback, &mut current_reveal, &config, now);
+                }
+                Action::MoveDown if overlay == Overlay::Settings => {
+                    let next_ms = config
+                        .typewriter
+                        .char_interval_ms
+                        .saturating_add(TEXT_SPEED_STEP_MS)
+                        .min(TEXT_SPEED_MAX_MS);
+                    config.typewriter.char_interval_ms = next_ms;
+                    restart_reveal_for_speed_change(playback, &mut current_reveal, &config, now);
+                }
+                // 上記のどれにも当てはまらない入力（他方のオーバーレイ用トグルキー・
+                // オート/スキップトグル等）はオーバーレイ表示中は無視する。
                 _ => {}
             }
             continue;
@@ -448,7 +503,7 @@ where
         terminal.draw(|frame| {
             ui::draw(
                 frame,
-                config,
+                &config,
                 playback.current_line(),
                 playback.current_choice(),
                 playback.position(),
@@ -515,7 +570,7 @@ where
                 let prev_line_for_backlog = playback.current_line().cloned();
                 // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
                 // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
-                let advanced = on_advance(playback, &mut current_reveal, config, Instant::now());
+                let advanced = on_advance(playback, &mut current_reveal, &config, Instant::now());
                 // #500: 実際に行/文単位ページが1つ先へ進んだとき（`on_advance` が `true` を
                 // 返したとき、デシジョンテーブルのケース4）だけ、離れる直前の表示内容を
                 // バックログへ積む。選択肢確定（ケース1）・タイプライターのスキップのみ
@@ -630,6 +685,9 @@ where
                 overlay = Overlay::Backlog;
                 backlog_scroll = u16::MAX;
             }
+            Action::ToggleSettings => {
+                overlay = Overlay::Settings;
+            }
             Action::Quit => break,
             Action::None => {}
         }
@@ -648,6 +706,31 @@ fn build_reveal_for_current(
     playback
         .current_line()
         .map(|line| reveal::RevealState::Animating(reveal::build_reveal(config, line, now)))
+}
+
+/// テキスト速度の変更（#503、`Overlay::Settings`）を「見た目に即座に反映する」ための処理。
+/// 現在タイプ中（`current_reveal` が `Animating` かつ未完了）の行があれば、新しい速度で
+/// タイプライターを最初から組み立て直す。既に表示完了済み（`RevealState::Done`、または
+/// `Animating` で既に `is_done`）の行は触らない — 残りの文字が無い行を無意味に再度タイプ
+/// させ直すのは不自然なため。
+///
+/// GUI版 `typewriter.ts::tickTypewriter` は `msPerChar` を毎フレーム読み直すため、速度変更は
+/// 「そこから先の文字だけ」新速度になる。対して `jiwa::RevealHandle`（TUI側の実装）は構築時に
+/// 速度を固定する設計で、既に見えている文字の表示時刻を保ったまま速度だけ差し替えるAPIを
+/// 持たない。そのため、ここでは「タイプ中の行を新速度で最初から表示し直す」ことで同等の
+/// 即時性を実現する — 既に見えていた文字も含めて最初から出し直す分だけ、GUI版の
+/// 「そこから先だけ加速/減速する」動きとは厳密には一致しないが、体感できるほどの差では
+/// ない（1行の平均文字数・調整幅を考えれば、再タイプにかかる時間は高々数百ms）。
+fn restart_reveal_for_speed_change(
+    playback: &Playback,
+    current_reveal: &mut Option<reveal::RevealState>,
+    config: &Config,
+    now: Instant,
+) {
+    let still_typing = current_reveal.as_ref().is_some_and(|r| !r.is_done(now));
+    if still_typing {
+        *current_reveal = build_reveal_for_current(playback, config, now);
+    }
 }
 
 /// `Action::Advance` 受信時の意思決定（デシジョンテーブル、#472。選択肢分岐対応で #482 拡張）。

@@ -669,6 +669,76 @@ pub fn draw_backlog(
     clamped
 }
 
+/// テキスト速度の表示ラベル。GUI版 `SettingsOverlay.tsx` の msPerChar スライダーの
+/// `format` 関数と同じ区分・文言をそのまま踏襲する（#503）。
+fn format_speed_label(ms: u64) -> String {
+    if ms == 0 {
+        "瞬間表示".to_string()
+    } else if ms <= 15 {
+        format!("速い ({ms}ms)")
+    } else if ms >= 60 {
+        format!("遅い ({ms}ms)")
+    } else {
+        format!("{ms}ms/字")
+    }
+}
+
+/// テキスト速度設定画面（#503、GUI版 `frontend/src/game/settings.ts`/
+/// `SettingsOverlay.tsx` の msPerChar スライダー相当）。音量調整は対象外 — #502
+/// （ボイス/BGM/SE再生の実装要否）がkako-jun判断待ちで未決着のため、意図的にスコープ外に
+/// している（Issue #503 本文参照）。
+///
+/// 閲覧専用の [`draw_backlog`] と異なり、この画面は Up/Down
+/// （[`crate::input::Action::MoveUp`]/[`crate::input::Action::MoveDown`] の文脈依存の再利用、
+/// 選択肢カーソル移動と同じ設計）で `char_interval_ms` を書き換える — 実際の値変更は
+/// 呼び出し側 `main.rs` の `Overlay::Settings` 分岐が行い、この関数は現在値を表示するだけ。
+pub fn draw_settings(frame: &mut Frame, char_interval_ms: u64) {
+    let actual = frame.area();
+    if !fits_required_size(actual) {
+        draw_too_small_message(frame, actual);
+        return;
+    }
+    let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+    let canvas = compute_centered_canvas(actual, required);
+
+    let block = Block::default().borders(Borders::ALL).title("設定");
+    let inner = block.inner(canvas);
+    frame.render_widget(block, canvas);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let label = format_speed_label(char_interval_ms);
+    let lines = vec![
+        Line::raw(""),
+        Line::raw(format!("テキスト表示速度: {label}")),
+        Line::raw(""),
+        Line::styled(
+            "↑ で速く / ↓ で遅く (0〜200ms, 5ms刻み)",
+            Style::default().add_modifier(Modifier::DIM),
+        ),
+        Line::raw(""),
+        Line::styled(
+            "Enter / Esc で閉じる",
+            Style::default().add_modifier(Modifier::DIM),
+        ),
+    ];
+
+    // 縦方向中央寄せ（`draw_splash` と同じ手法）。
+    let content_height = lines.len() as u16;
+    let top_margin = inner.height.saturating_sub(content_height) / 2;
+    let centered = Rect {
+        x: inner.x,
+        y: inner.y.saturating_add(top_margin),
+        width: inner.width,
+        height: inner.height.saturating_sub(top_margin),
+    };
+
+    let paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
+    render_wrapped_paragraph(frame, centered, paragraph);
+}
+
 /// 右側をさらに上（相手）/下（自分）に分割し、現在の会話行の話者側のウィンドウにだけ
 /// 本文を描画する（GUI版 `splitTextRegionForDualWindow`: 相手=上/自分=下、#480）。分割は
 /// `Constraint::Length` で明示的に高さを計算し、opponent=`height / 2`（切り捨て）・
@@ -4288,5 +4358,49 @@ mod tests {
             clamped, 0,
             "コンテンツが少ない=そもそもスクロール不要な場合は0のまま"
         );
+    }
+
+    // ---- #503: テキスト速度設定画面 ----
+
+    #[test]
+    fn format_speed_label_zero_is_instant() {
+        assert_eq!(format_speed_label(0), "瞬間表示");
+    }
+
+    #[test]
+    fn format_speed_label_fast_range_shows_fast_label() {
+        assert_eq!(format_speed_label(10), "速い (10ms)");
+    }
+
+    #[test]
+    fn format_speed_label_slow_range_shows_slow_label() {
+        assert_eq!(format_speed_label(80), "遅い (80ms)");
+    }
+
+    #[test]
+    fn format_speed_label_middle_range_shows_plain_ms_label() {
+        assert_eq!(format_speed_label(30), "30ms/字");
+    }
+
+    #[test]
+    fn draw_settings_renders_current_speed_label() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("30ms/字"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_settings_extremely_small_terminal_does_not_panic() {
+        let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30);
+            })
+            .unwrap();
     }
 }

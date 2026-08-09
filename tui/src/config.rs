@@ -154,6 +154,19 @@ impl Default for EventImageConfig {
     }
 }
 
+/// テキスト速度調整UI（#503）がプレイ中に選べる `char_interval_ms` の上限・刻み幅。
+/// GUI版 `SettingsOverlay.tsx` の msPerChar スライダー（min=0, max=200, step=5）と同じ値を
+/// 採用し、TUI/GUI間で体感速度のレンジ感を揃える。GUI版 `clampSettings`
+/// （`frontend/src/game/settings.ts`）の実際の許容上限は500だが、それはスライダーの外側
+/// （手入力やlocalStorage改変）を想定した保険的な上限で、UI上で選べる範囲はスライダーの
+/// min/maxである0..200。TUIの設定画面もキー操作で選べる範囲として同じ0..200を採用する。
+/// 下限（0 = 瞬間表示）は明示定数を持たない — `char_interval_ms: u64` の自然な下限が既に
+/// 0であり、速くする方向の調整（`saturating_sub`）はそれ以上下がりようがないため、
+/// `TEXT_SPEED_MIN_MS: u64 = 0` を定義しても常に no-op になり clippy
+/// `unnecessary_min_or_max` に指摘される（実際に踏んで削除した、#503）。
+pub const TEXT_SPEED_MAX_MS: u64 = 200;
+pub const TEXT_SPEED_STEP_MS: u64 = 5;
+
 /// ゲームごとに変わりうる値をまとめた設定。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -282,6 +295,15 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_speed_range_matches_gui_slider_bounds() {
+        // GUI版 `SettingsOverlay.tsx` の msPerChar スライダー（min=0, max=200, step=5）と
+        // 同じ値であることを固定する（#503。下限0は `TypewriterConfig::char_interval_ms`
+        // の型（u64）が自然に持つ下限のため専用定数を持たない、上のdoc comment参照）。
+        assert_eq!(TEXT_SPEED_MAX_MS, 200);
+        assert_eq!(TEXT_SPEED_STEP_MS, 5);
+    }
 
     #[test]
     fn config_default_matches_gymnasia_values() {

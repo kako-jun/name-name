@@ -30,7 +30,12 @@ pub enum Action {
     /// 受け付ける — バックログはゲーム進行に影響しない閲覧専用画面のため、選択肢待ちでも
     /// 開いて構わない（`main.rs::event_loop` の `Overlay` 参照）。
     ToggleBacklog,
-    /// アプリを終了する。オーバーレイ（バックログ画面）が開いているときは、
+    /// テキスト速度設定画面の表示/非表示を切り替える（#503、GUI版 `SettingsOverlay` の
+    /// テキスト速度スライダー相当）。音量調整はGUI版にあるが、#502（ボイス/BGM/SE再生の
+    /// 実装要否）がkako-jun判断待ちで未決着のため今回は対象外（Issue #503 本文の明示スコープ）。
+    /// 選択肢表示中でも受け付ける（`ToggleBacklog` と同じ理由）。
+    ToggleSettings,
+    /// アプリを終了する。オーバーレイ（バックログ/設定画面）が開いているときは、
     /// `main.rs::event_loop` がこれを「アプリ終了」ではなく「オーバーレイを閉じる」として
     /// 解釈し直す（GUI版 `handleKeyDown` の「Escape: 開いているオーバーレイを閉じる」と
     /// 同じ優先順位）。
@@ -69,6 +74,7 @@ fn action_for_event(event: CrosstermEvent) -> Action {
             KeyCode::Char('a') | KeyCode::Char('A') => Action::ToggleAuto,
             KeyCode::Char('s') | KeyCode::Char('S') => Action::ToggleSkip,
             KeyCode::Char('b') | KeyCode::Char('B') => Action::ToggleBacklog,
+            KeyCode::Char('c') | KeyCode::Char('C') => Action::ToggleSettings,
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             _ => Action::None,
         },
@@ -161,6 +167,18 @@ mod tests {
     fn char_b_uppercase_press_returns_toggle_backlog() {
         let action = action_for_event(key_event(KeyCode::Char('B'), KeyEventKind::Press));
         assert_eq!(action, Action::ToggleBacklog);
+    }
+
+    #[test]
+    fn char_c_lowercase_press_returns_toggle_settings() {
+        let action = action_for_event(key_event(KeyCode::Char('c'), KeyEventKind::Press));
+        assert_eq!(action, Action::ToggleSettings);
+    }
+
+    #[test]
+    fn char_c_uppercase_press_returns_toggle_settings() {
+        let action = action_for_event(key_event(KeyCode::Char('C'), KeyEventKind::Press));
+        assert_eq!(action, Action::ToggleSettings);
     }
 
     #[test]
