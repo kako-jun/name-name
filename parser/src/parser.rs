@@ -2264,15 +2264,11 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
     })
 }
 
-/// Parse player start line: "@x,y 向き=..." → Some(PlayerStartData)
 /// `[選択: 列=N]` の `列=N` を取り出す (#508)。
 /// `[選択]`（`列=` なし）や不正値（非数値、0 以下）は None を返し、
 /// 呼び出し側は従来どおりの縦一列表示にフォールバックする。
 fn parse_choice_columns(trimmed: &str) -> Option<u32> {
-    let inner = trimmed
-        .strip_prefix("[選択:")?
-        .strip_suffix(']')?
-        .trim();
+    let inner = trimmed.strip_prefix("[選択:")?.strip_suffix(']')?.trim();
     inner
         .split(',')
         .map(str::trim)
@@ -2281,6 +2277,7 @@ fn parse_choice_columns(trimmed: &str) -> Option<u32> {
         .filter(|&n| n >= 1)
 }
 
+/// Parse player start line: "@x,y 向き=..." → Some(PlayerStartData)
 fn parse_player_line(s: &str) -> Option<PlayerStartData> {
     let at_pos = s.find('@')?;
     let after_at = &s[at_pos + 1..];
