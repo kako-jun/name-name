@@ -32,6 +32,7 @@ use std::str::FromStr;
 use std::time::Instant;
 
 use name_name_parser::models::ChoiceOption;
+use ratatui::buffer::CellWidth;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -510,33 +511,18 @@ fn draw_splash_text(frame: &mut Frame, config: &Config) {
     frame.render_widget(paragraph, centered);
 }
 
-/// 東アジアの全角文字（ひらがな・カタカナ・漢字・ハングル・全角記号等）かどうかを判定する
-/// 簡易ヒューリスティック。Unicode East Asian Width の厳密な実装ではなく、unicode-width
-/// クレートへの依存を増やさずに済ませるための代表的なレンジだけをカバーする簡略版
-/// （gymnasia 等、日本語主体のスクリプトで実務上十分な範囲、#500）。
-fn is_wide_char(c: char) -> bool {
-    let cp = c as u32;
-    matches!(cp,
-        0x1100..=0x115F   // ハングル字母
-        | 0x2E80..=0x303E // 部首補助・康熙部首・CJKの記号及び句読点
-        | 0x3041..=0x33FF // ひらがな〜CJK互換用文字
-        | 0x3400..=0x4DBF // CJK拡張A
-        | 0x4E00..=0x9FFF // CJK統合漢字
-        | 0xA000..=0xA4CF // 彝(イ)文字
-        | 0xAC00..=0xD7A3 // ハングル音節
-        | 0xF900..=0xFAFF // CJK互換漢字
-        | 0xFF00..=0xFF60 // 全角形
-        | 0xFFE0..=0xFFE6
-    )
-}
-
-/// [`is_wide_char`] が真なら2セル、それ以外は1セルとして扱う（半角/全角の簡易セル幅）。
+/// 1文字のセル幅（半角=1、全角=2 等）を、`ratatui`（`unicode-width` を推移的依存に持つ）の
+/// `CellWidth` トレイトを使って判定する。以前はここに Unicode East Asian Width の代表的な
+/// レンジだけをカバーする独自の簡易テーブル（[`is_wide_char`] 相当）を持っていたが、
+/// このファイルは既に他の箇所（[`buffer_text_wide_aware`] 等）で `CellWidth`/`cell_width()`
+/// を使っており、新規依存を増やさずに同じ判定ロジックへ統一できる。独自テーブルは
+/// カバー範囲が限定的で、[`MIN_SAFE_TEXT_WRAP_WIDTH`] まわりの既知バグ（幅判定の
+/// ミスマッチに由来）と根が同じ不整合リスクを持っていた（セルフレビュー should対応）。
+/// `CellWidth` は `str` 向けのトレイトのため、1文字をスタック上の小さいバッファへ
+/// UTF-8エンコードしてから呼ぶ。
 fn char_width(c: char) -> u16 {
-    if is_wide_char(c) {
-        2
-    } else {
-        1
-    }
+    let mut buf = [0u8; 4];
+    c.encode_utf8(&mut buf).cell_width()
 }
 
 /// 1行のテキストを `max_width` セル幅で文字単位に折り返す（単語境界は考慮しない —
@@ -720,7 +706,7 @@ pub fn draw_settings(frame: &mut Frame, char_interval_ms: u64) {
         ),
         Line::raw(""),
         Line::styled(
-            "Enter / Esc で閉じる",
+            "Enter・C・Esc で閉じる",
             Style::default().add_modifier(Modifier::DIM),
         ),
     ];
@@ -952,7 +938,7 @@ fn draw_page_indicator(
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
-    use ratatui::buffer::{Buffer, CellWidth};
+    use ratatui::buffer::Buffer;
     use ratatui::Terminal;
 
     /// レンダリング済みバッファを行ごとのテキストに変換する。
@@ -4289,6 +4275,28 @@ mod tests {
             .collect();
         assert!(joined.contains(&"A".to_string()));
         assert!(joined.contains(&"hello".to_string()));
+    }
+
+    #[test]
+    fn wrap_backlog_lines_narration_with_no_speaker_omits_speaker_line_but_keeps_body() {
+        // `wrap_backlog_lines` は `entry.speaker` が `Some` の場合のみ話者名の行を積む
+        // （`if let Some(speaker) = &entry.speaker` 分岐）。ナレーション行（話者
+        // `None`）にはこの分岐が無いテストが無かった（セルフレビュー should対応）。
+        // 話者名の行は追加されず、本文だけが積まれることを確認する。
+        let config = Config::default();
+        let entries = vec![dialog_line(None, vec!["ナレーション本文"])];
+        let lines = wrap_backlog_lines(&config, &entries, 40);
+        let joined: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(joined.contains(&"ナレーション本文".to_string()));
+        // 話者名の行が無い＝本文行 + エントリ区切りの空行だけの計2行のはず。
+        assert_eq!(
+            lines.len(),
+            2,
+            "話者Noneでは話者名の行が積まれず、本文+区切り空行の2行だけのはず: {joined:?}"
+        );
     }
 
     #[test]

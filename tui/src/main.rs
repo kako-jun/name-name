@@ -2520,6 +2520,114 @@ mod tests {
         assert!(playback.is_at_end());
     }
 
+    // ---- #498: オートモードの選択肢到達/スクリプト末尾での非発火（should対応） ----
+    //
+    // スキップモードには上の
+    // `event_loop_skip_through_read_line_stops_exactly_at_choice_without_auto_confirming`/
+    // `event_loop_skip_stops_at_true_script_end_without_error` という対のテストがあるが、
+    // オートモードには同種のテストが無かった（セルフレビュー指摘）。オートモードは
+    // `event_loop` の `eligible = reveal_done && current_choice().is_none() && !is_at_end`
+    // というガードで選択肢到達/末尾到達の両方をカバーしているはずだが、この2つのテストで
+    // 実際にその通り動くことを確認する。
+
+    #[test]
+    fn event_loop_auto_mode_does_not_auto_confirm_when_a_choice_is_reached() {
+        // オートモード中に自動送りで選択肢へ到達しても、選択肢を勝手に確定したりはしない
+        // （`eligible` が `current_choice().is_none()` を要求するため、選択肢到達時点で
+        // `auto_deadline` が再設定されなくなる）。手動 `Action::Advance` で選択肢へ進むと
+        // その操作自体がオートモードを解除してしまう（「手動操作でauto/skipをキャンセル
+        // する」既存挙動）ため、ここでは意図的にオートの自動送り自体で選択肢まで
+        // 到達させ、手動操作を一切使わない。
+        let mut config = instant_config();
+        config.auto_wait_ms = 30;
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n\
+                       最初のセリフ\n\n[選択]\n- 進む→1-2\n- 戻る→1-1\n[/選択]\n\n\
+                       ## 1-2: 次\n\n**B**:\n次のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto), // Aの行でオートON（reveal即完了）
+                2 => {
+                    // auto_wait_ms(30ms)を超えて待ち、オート自身の自動送りでAから
+                    // 選択肢へ進ませる（この待機の間にnext_action経由でなく
+                    // ループ側が合成Advanceを発火させる）。
+                    std::thread::sleep(Duration::from_millis(120));
+                    Ok(Action::None)
+                }
+                3 => {
+                    // 選択肢に到達した後、さらに待っても自動確定されないことを
+                    // 確認するための追加待機。
+                    std::thread::sleep(Duration::from_millis(120));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert!(
+            playback.current_choice().is_some(),
+            "オートモードは選択肢到達時点で発火が止まり、自動確定してはいけない"
+        );
+    }
+
+    #[test]
+    fn event_loop_auto_mode_stops_firing_at_true_script_end_without_error() {
+        // オートモードがスクリプト末尾（is_at_end）に到達すると、`eligible` の
+        // `!is_at_end` 条件により以後 `auto_deadline` が再設定されなくなる。
+        // 末尾到達後にさらに待っても、位置が異常に進んだりエラー/パニックになったり
+        // しないことを確認する。
+        let mut config = instant_config();
+        config.auto_wait_ms = 30;
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto), // Aの行でオートON
+                2 => {
+                    // auto_wait_ms(30ms)を超えて待ち、A(最終行の1つ手前)からB(末尾)への
+                    // 自動送りを起こす。
+                    std::thread::sleep(Duration::from_millis(120));
+                    Ok(Action::None)
+                }
+                3 => {
+                    // B(末尾)到達後、さらに待っても追加の発火が起きないことを確認する
+                    // ための追加待機。
+                    std::thread::sleep(Duration::from_millis(120));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert_eq!(playback.position(), 2);
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
+        assert!(playback.is_at_end());
+    }
+
     #[test]
     fn event_loop_skip_stops_at_first_unread_line_keeping_it_displayed_not_skipped() {
         // #499: スキップ中に未読行に到達すると、その場でスキップが解除され現在行が
