@@ -1944,20 +1944,41 @@ mod tests {
     }
 
     #[test]
-    fn sentence_per_page_skip_after_revisiting_a_fully_read_line_fast_forwards_the_not_yet_seen_second_sentence(
+    fn sentence_per_page_skip_after_revisiting_a_fully_read_line_fast_forwards_through_to_the_choice(
     ) {
-        // 【重要・実装バグの可能性】#499のread_positionsはLine item単位
-        // （`playback.position()`）でしか既読を記録しない一方、バックログ（#500）は
-        // 文単位（`advanced==true`になるたび）でエントリを積む——この粒度差により、
-        // 複数文を持つLine itemを一度最後まで読んで（read_positionsにそのLine itemの
-        // positionが記録された）後、選択肢で同じLine itemへジャンプし直して1文目で
-        // 止まっている状態からスキップをONにすると、read_positionsは「Line item全体が
-        // 既読」としか判定できないため、今回の訪問ではまだ1文目しか見ていないにも
-        // 関わらず2文目以降を確認なしに自動で飛ばしてしまう可能性がある
-        // （テスト観点整理担当の指摘）。実際に発生するか検証する。
+        // 【#499 実装バグ調査の結論、テスト実装担当の指摘を検証した結果】
         //
-        // 実装修正はスコープ外（テスト実装担当の役割）。もしこのアサーションが失敗する
-        // （red のまま）場合は、read_positionsの粒度不一致による実装バグとして報告する。
+        // 当初「read_positionsがLine item単位（`playback.position()`）でしか既読を記録しない
+        // 一方バックログは文単位でエントリを積むため、複数文を持つLine itemを再訪して1文目で
+        // 止まっている状態からスキップすると、今回まだ見ていない2文目以降を確認なしに
+        // 飛ばしてしまうのではないか」という懸念でこのテストは red のまま残されていた。
+        //
+        // 検証のため実際に `read_positions` を `(position, sentence_index)` の複合キーへ
+        // 変更し文単位の既読判定を実装したところ、この具体的なシナリオでは**挙動が一切
+        // 変わらなかった**（生成コードのdiffを戻してもこのテストのpanicメッセージは
+        // byte-exactに同一）。理由: このエンジンの `Playback::advance` は同一 Line item 内の
+        // 文を必ず 0→1→…→末尾の順に一度も飛ばさず辿る設計であり、「item全体が既読」という
+        // 粗い印（旧実装）が立つのは、必ずその item の**全ての文を実際に辿り終えた後**
+        // （item境界を越える最後の advance が成功した瞬間）だけ。つまり粗いitem単位の印は
+        // 「その中の全文を個別に辿り終えている」ことの必要十分条件であり、文単位に分解しても
+        // 判定結果は変わらない（ある文だけ未読のままitem全体が既読になる中間状態が原理的に
+        // 作れない）。
+        //
+        // さらに、この feature の仕様上の参照実装である GUI版
+        // （`frontend/src/game/NovelRenderer.ts` の `readProgress`/`markRead`、Issue #499 本文が
+        // 明記）も、`computeDisplayIndex`（イベント単位、文単位ページindexを含まない）だけを
+        // 既読キーにしており、GUI版そのものが文単位の細分をしていない——今回のシナリオの
+        // ような「一度最後まで読んだ行をジャンプで再訪し、スキップで再度通過する」動きは、
+        // 単一文の行に対してはこのすぐ下の
+        // `event_loop_skip_through_read_line_stops_exactly_at_choice_without_auto_confirming`
+        // が既に「選択肢まで一気に通過する」ことを正として検証済みであり、文単位ページを
+        // 使っていても結論は変わらないのが一貫した挙動。
+        //
+        // 以上により、これは実装バグではなく「一度最後まで読み終えた内容を再訪してスキップ
+        // すれば、選択肢まで一気に通過する」という正しいスキップ挙動だったと判断し、
+        // アサーションを実際の（かつ意図した）結果に合わせて修正する。「未読テキストに
+        // 到達したら止まる」という本質的な仕様は、他のテスト
+        // （`event_loop_overlay_polling_does_not_mark_current_line_as_read` 等）で別途保証済み。
         let config = instant_config();
         let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n\
                        最初の文。二番目の文。\n\n[選択]\n- 戻る→1-1\n[/選択]\n";
@@ -1969,24 +1990,27 @@ mod tests {
         ))
         .unwrap();
 
-        let (mut next_action, _remaining) = action_queue(vec![
+        let (mut next_action, remaining) = action_queue(vec![
             Action::Advance,    // 1文目 -> 2文目
-            Action::Advance,    // 2文目 -> 選択肢へ離脱（読了マーク、read_positions={pos(A)}）
+            Action::Advance,    // 2文目 -> 選択肢へ離脱（読了マーク）
             Action::Advance,    // 選択肢確定「戻る」-> 1-1 の1文目へジャンプし直す
-            Action::ToggleSkip, // 再訪した1文目で一時停止した状態からスキップON
+            Action::ToggleSkip, // 再訪した1文目（既読）からスキップON
             Action::Quit,
         ]);
 
         event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
 
         assert!(
-            playback.current_choice().is_none(),
-            "期待: 再訪した2文目(今回はまだ見ていない)に到達した時点でスキップが解除され、\
-             プレイヤーの確認を待つはず。実際: current_line={:?}, at_choice={} \
-             — read_positionsがLine item単位でしか既読を記録しないため文単位の未読を \
-             検出できていない実装バグの疑いを裏付ける",
+            playback.current_choice().is_some(),
+            "既読の行を再訪してスキップを機能させれば、1文目・2文目とも既読のため \
+             選択肢まで一気に通過するはず。実際: current_line={:?}, at_choice={}",
             playback.current_line(),
             playback.current_choice().is_some()
+        );
+        assert_eq!(
+            *remaining.borrow(),
+            0,
+            "スキップが実際に機能していれば、追加のAdvance無しで選択肢まで到達するはず"
         );
     }
 
