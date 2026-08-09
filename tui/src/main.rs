@@ -219,6 +219,18 @@ where
             .and_then(|line| line.event_image.clone()),
     );
 
+    // 画像コマ自動送り（#497）の締切。現在位置が画像コマ item（`playback.pending_wait_ms()`
+    // が `Some(ms)`、`Event::EventImage` 直後に `Event::Wait { ms }` が続いていたときだけ
+    // 生成される、`playback::PlaybackItem::Image` 参照）にいる間だけ `Some` になり、
+    // ループ本体はこれを過ぎたらプレイヤーの入力を待たずに自動的に `Action::Advance` 相当を
+    // 発生させる（GUI版 `NovelRenderer` の `Wait { ms }` + `setTimeout` + `waitingForWait` に
+    // 相当）。`Action` 経由にしない（`input::Action` はキー入力の解釈に特化した設計を維持する、
+    // Issue #497 の実装方針）ため、`Action` enum にはタイマー起因の variant を増やさず、
+    // ここで直接 `Action::Advance` を合成してから既存の `on_advance` 分岐へ流し込む。
+    let mut wait_deadline = playback
+        .pending_wait_ms()
+        .map(|ms| Instant::now() + Duration::from_millis(u64::from(ms)));
+
     loop {
         let now = Instant::now();
         // インジケータを表示すべきか（reveal完了 かつ 選択肢非表示 かつ 会話行あり）。
@@ -256,18 +268,31 @@ where
             )
         })?;
 
-        match next_action()? {
+        // 画像コマ自動送り（#497）: 締切を過ぎていれば、キー入力を待たずに `Action::Advance`
+        // を合成する。まだ過ぎていなければ従来どおり `next_action()` で入力を待つ（プレイヤーが
+        // 締切前に手動で Enter/Space を押して早送りすることも引き続きできる）。
+        let action = match wait_deadline {
+            Some(deadline) if now >= deadline => Action::Advance,
+            _ => next_action()?,
+        };
+
+        match action {
             Action::Advance => {
-                let prev_position = playback.position();
+                // `position()`（会話行のみを数える）ではなく `item_index()`（生の `items`
+                // インデックス）で「実際に別の item へ移動したか」を判定する（#497）。画像コマ
+                // item（`PlaybackItem::Image`）への遷移は会話行ではないため `position()` を
+                // 変えないが、event_image は変わっているのでクロスフェードは起こす必要がある
+                // — `position()` のままだと画像コマへの遷移を取りこぼす。
+                let prev_item_index = playback.item_index();
                 // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
                 // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
                 on_advance(playback, &mut current_reveal, config, Instant::now());
-                // 会話行が実際に進んだ（＝スキップ操作でも選択肢の確定待ちでもなく、次の
-                // Line item へ移動した）ときだけ event_image の変化を見てクロスフェードを
+                // item が実際に進んだ（＝スキップ操作でも選択肢の確定待ちでもなく、次の
+                // item へ移動した）ときだけ event_image の変化を見てクロスフェードを
                 // 開始する。skip_lines 経路（on_advance がタイプライター表示を全文表示へ
                 // 早送りしただけ）や、無効な jump 先を選んで選択肢表示のまま no-op に終わった
-                // 場合は position が変わらないため、ここには到達しない。
-                if playback.position() != prev_position {
+                // 場合は item_index が変わらないため、ここには到達しない。
+                if playback.item_index() != prev_item_index {
                     // 会話行が実際に切り替わった瞬間。GUI版 `NovelRenderer` が新しい行/ページが
                     // 始まるたびに明示的に `setIndicatorVisible(false)` を呼んでからタイプ
                     // ライターを開始しているのと同じ「行が変わったら一旦強制的に隠す」ステップを
@@ -286,7 +311,8 @@ where
                     // `indicator_blink_started_at` はフレーム間の `show_page_indicator` の値の
                     // 差分しか見ておらず「会話行そのものが切り替わったか」を知らないため、
                     // これはあの関数だけでは検出できない。ここで使っている
-                    // `playback.position() != prev_position`（＝本当に新しい行へ進んだ）は
+                    // `playback.item_index() != prev_item_index`（＝本当に新しい item へ進んだ、
+                    // #497 で画像コマ item も拾えるよう `position()` から乗り換え）は
                     // 既に上の image_fade トリガーが使っているのと同じ signal であり、これを
                     // 使って `indicator_was_shown` を強制的に `false` にリセットしてから
                     // 次フレームの `should_show_page_indicator`/`indicator_blink_started_at` に
@@ -316,21 +342,42 @@ where
             Action::Quit => break,
             Action::None => {}
         }
+
+        // 画像コマ自動送り（#497）: 今回のアクション処理後の現在位置に応じて締切を引き直す。
+        // `Action::Advance` 以外（MoveUp/MoveDown/None/Quit）では位置が変わらないため、
+        // 同じ画像コマに留まっている場合は締切も変化しない（毎フレーム作り直すのではなく、
+        // 都度 `pending_wait_ms()` から再計算するだけなので無駄な巻き戻りは起きない）。
+        wait_deadline = playback
+            .pending_wait_ms()
+            .map(|ms| Instant::now() + Duration::from_millis(u64::from(ms)));
     }
     Ok(())
 }
 
-/// 現在位置の会話行から新しい `RevealState::Animating` を組み立てる。現在位置が選択肢
+/// 現在位置の会話行から新しい reveal を組み立てる。現在位置が選択肢
 /// （`Playback::current_choice`）や、そもそも表示すべき item が無い場合は `None` — 選択肢の
 /// 文言はタイプライター演出の対象外（GUI版の選択肢オーバーレイに演出が無いのと同じ扱い、#482）。
+///
+/// `playback.pending_wait_ms()` が `Some`（＝画像コマ自動送り item、#497）の間は、通常の
+/// `RevealState::Animating`（タイプライターで少しずつ表示）ではなく即座に全文表示済みの
+/// `RevealState::Done` を返す。画像コマは話者・本文を直前の会話行からそのまま引き継いでいる
+/// だけ（`playback::Playback::build` 参照）なので、ここでもう一度同じ文をタイプライターで
+/// 再生し直すと、指定した `Wait { ms }` の間ずっと文字が少しずつ出続けるだけの見た目になり、
+/// `ms` 経過後の自動送りが「まだ全文表示し終えていない」ために足止めされうる
+/// （`on_advance` は reveal 未完了だと `advance()` を呼ばず全文表示へのスキップに専念するため、
+/// 自動送りの締切と実際に進むタイミングが `char_interval_ms` 分だけずれてしまう）。
 fn build_reveal_for_current(
     playback: &Playback,
     config: &Config,
     now: Instant,
 ) -> Option<reveal::RevealState> {
-    playback
-        .current_line()
-        .map(|line| reveal::RevealState::Animating(reveal::build_reveal(config, line, now)))
+    let line = playback.current_line()?;
+    if playback.pending_wait_ms().is_some() {
+        return Some(reveal::RevealState::Done(reveal::skip_lines(config, line)));
+    }
+    Some(reveal::RevealState::Animating(reveal::build_reveal(
+        config, line, now,
+    )))
 }
 
 /// `Action::Advance` 受信時の意思決定（デシジョンテーブル、#472。選択肢分岐対応で #482 拡張）。

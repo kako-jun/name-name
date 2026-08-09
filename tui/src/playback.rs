@@ -10,6 +10,19 @@
 //! （Choice イベントを挟んでも、直前までの `event_image` はそのまま後続の `DisplayLine` に
 //! 引き継がれる）。
 //!
+//! ## イベント絵の時間差自動連続表示 (#497)
+//!
+//! `Event::Wait { ms }` はパーサーで構文解析済みだが、以前は TUI ランタイムが完全に無視して
+//! いた。`[イベント絵: A][待機: 200][イベント絵: B]` のように `EventImage` の直後に `Wait` が
+//! 続く並びだけを検出し、その場面を独立した `PlaybackItem::Image` として `items` に反映する
+//! （`Playback::build` 参照）。話者・本文は直前の会話行のものをそのまま引き継ぎ、
+//! `event_image` だけが新しい画像に切り替わる — GUI版 `NovelRenderer` の `Wait` 処理が会話
+//! テキストに触れず、イベント絵レイヤーだけを更新するのと同じ見え方にするため。この item に
+//! 位置している間は [`Playback::pending_wait_ms`] が `Some(ms)` を返し、`main.rs::event_loop`
+//! がプレイヤーの入力を待たずに `ms` 経過後へ自動的に進める。`Wait` を伴わない単発の
+//! `EventImage`（既存スクリプトの大半）は従来どおり item を増やさない — 無条件に item 化すると
+//! 「画像だけのクリック待ちの1手」が新たに増えてしまう回帰になるため。
+//!
 //! ## 選択肢分岐の設計 (#482)
 //!
 //! `Document` の chapters → scenes → events を一直線にフラット化する既存のシンプルな
@@ -119,9 +132,18 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
 
 /// 再生列（`Playback::items`）の1要素。Dialog/Narration は `Line`、Choice は `Choice` になる。
 /// それ以外のイベント（背景・SE・BGM 等）は要素を生成しない（[`playback_item_from_event`]）。
+///
+/// `Image` は #497 で追加した、テキストを伴わない「画像コマ」専用の item。`Event::EventImage`
+/// の直後に `Event::Wait { ms }` が続く場合だけ生成される（`Playback::build` のスキャン参照）。
+/// 話者・本文はその時点まで表示されていた直前の会話行の値をそのまま引き継ぐ（GUI版
+/// `NovelRenderer` の Wait 処理が会話テキストには触れず、イベント絵レイヤーだけを更新するのと
+/// 同じ見え方にするため）。`event_image` だけがこの item 用に新しく差し替わる。この item に
+/// 到達している間は `Playback::pending_wait_ms` が `Some` を返し、`main.rs::event_loop` が
+/// プレイヤーの入力を待たずに一定時間後へ自動的に進める。
 #[derive(Debug, Clone, PartialEq)]
 enum PlaybackItem {
     Line(DisplayLine),
+    Image(DisplayLine),
     Choice(Vec<ChoiceOption>),
 }
 
@@ -164,6 +186,12 @@ pub struct Playback {
     /// 常に「同じファイル」判定になり実質無効化される）。`from_merged_document` だけが
     /// 複数の異なる id を持ちうる。
     item_file_ids: Vec<usize>,
+    /// `items[i]` に紐づく自動送りの待機時間（ミリ秒、#497）。`items` と同じ長さを常に保つ。
+    /// `Event::EventImage` の直後に `Event::Wait { ms }` が続いたときだけ、その画像コマ
+    /// （[`PlaybackItem::Image`]）に対応する要素が `Some(ms)` になる。それ以外の item（通常の
+    /// `Line`/`Choice`、および `Wait` を伴わない `EventImage`）は全て `None`
+    /// （[`Playback::pending_wait_ms`] 参照）。
+    item_wait_ms: Vec<Option<u32>>,
     index: usize,
     /// シーンID → そのシーンに属する最初の item の `items` 内インデックス。選択肢確定時の
     /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
@@ -239,8 +267,16 @@ impl Playback {
         }
         let mut items = Vec::new();
         let mut item_file_ids = Vec::new();
+        let mut item_wait_ms = Vec::new();
         let mut scene_start = HashMap::new();
         let mut current_event_image: Option<String> = None;
+        // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
+        // `Event::Wait` が続いたときに生成する画像コマ item（`PlaybackItem::Image`）へ
+        // そのまま引き継ぐ — Wait 中は会話テキストを変えず画像だけが切り替わる、という
+        // GUI版 `NovelRenderer` の Wait 処理と同じ見え方にするため。まだ一度も会話行が
+        // 無ければ「話者なし・本文なし」が初期値になる。
+        let mut current_speaker: Option<String> = None;
+        let mut current_text: Vec<String> = Vec::new();
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
             let file_id = chapter_file_ids
                 .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
@@ -250,7 +286,10 @@ impl Playback {
                 // 重複シーンIDは最初の出現を優先する（GUI版 `allScenes.find` が最初の一致を
                 // 返すのと同じ規約）。
                 scene_start.entry(scene.id.clone()).or_insert(items.len());
-                for event in &scene.events {
+                let events = &scene.events;
+                let mut event_index = 0;
+                while event_index < events.len() {
+                    let event = &events[event_index];
                     match event {
                         // `path` の `..` は `back`（表示位置）と `fade_ms`（イベント個別の
                         // フェード時間上書き）を意図的に捨てている。`fade_ms` は TUI 側では
@@ -259,6 +298,25 @@ impl Playback {
                         // ようなイベント単位のフェード時間上書きは今回の対象外。
                         Event::EventImage { path, .. } => {
                             current_event_image = Some(path.clone());
+                            // 直後が `Event::Wait { ms }` の場合だけ、画像コマ+待機の自動送り
+                            // item を作る（#497、Issue #475 が求める4コマ自動再生の受け皿）。
+                            // それ以外（次が Dialog/EventImage/EventImageExit 等）は従来どおり
+                            // `current_event_image` を更新するだけに留め、item は作らない —
+                            // ここで無条件に item 化すると、`[イベント絵:X]` の直後に台詞が
+                            // 続くだけの既存スクリプトにまで「クリック待ちの画像だけの1手」が
+                            // 増えてしまう（wait_ms 無しの item は自動で進まないため）回帰になる。
+                            if let Some(Event::Wait { ms }) = events.get(event_index + 1) {
+                                items.push(PlaybackItem::Image(DisplayLine {
+                                    speaker: current_speaker.clone(),
+                                    text: current_text.clone(),
+                                    event_image: current_event_image.clone(),
+                                }));
+                                item_file_ids.push(file_id);
+                                item_wait_ms.push(Some(*ms));
+                                // EventImage と Wait の2件をまとめて消費する。
+                                event_index += 2;
+                                continue;
+                            }
                         }
                         Event::EventImageExit { .. } => {
                             current_event_image = None;
@@ -268,21 +326,30 @@ impl Playback {
                                 let item = match item {
                                     PlaybackItem::Line(mut line) => {
                                         line.event_image = current_event_image.clone();
+                                        current_speaker = line.speaker.clone();
+                                        current_text = line.text.clone();
                                         PlaybackItem::Line(line)
                                     }
                                     choice @ PlaybackItem::Choice(_) => choice,
+                                    // `playback_item_from_event` は Dialog/Narration/Choice
+                                    // からしか item を作らないため Image は返さない
+                                    // （Image は上の EventImage+Wait 分岐でのみ生成される）。
+                                    image @ PlaybackItem::Image(_) => image,
                                 };
                                 items.push(item);
                                 item_file_ids.push(file_id);
+                                item_wait_ms.push(None);
                             }
                         }
                     }
+                    event_index += 1;
                 }
             }
         }
         Self {
             items,
             item_file_ids,
+            item_wait_ms,
             index: 0,
             scene_start,
             choice_cursor: 0,
@@ -342,7 +409,17 @@ impl Playback {
     /// 現在位置の会話行。現在位置が Choice item、会話行が1件もない、または末尾を過ぎている
     /// 場合は `None`。`sentence_per_page` が有効なときは、Line item の全文ではなく現在の
     /// 文単位ページ（`current_display`）だけを返す (#486)。
+    ///
+    /// 現在位置が画像コマ item（[`PlaybackItem::Image`]、#497）の場合は、`sentence_per_page`
+    /// の設定に関わらずその item が持つ `DisplayLine`（直前の会話行から引き継いだ話者・本文 +
+    /// 新しい `event_image`）をそのまま返す。画像コマは文単位改頁の対象外
+    /// （`sync_sentence_pages` が `Line` にしかマッチしないため `current_display` は
+    /// 積まれない）なので、ここで先に特別扱いしないと `sentence_per_page` 有効時に
+    /// 誤って `None` を返してしまう。
     pub fn current_line(&self) -> Option<&DisplayLine> {
+        if let Some(PlaybackItem::Image(line)) = self.items.get(self.index) {
+            return Some(line);
+        }
         if self.sentence_per_page {
             return self.current_display.as_ref();
         }
@@ -359,6 +436,26 @@ impl Playback {
             Some(PlaybackItem::Choice(options)) => Some((options.as_slice(), self.choice_cursor)),
             _ => None,
         }
+    }
+
+    /// 現在位置に紐づく自動送りの待機時間（ミリ秒、#497）。`Some` を返すのは、`items` 構築時に
+    /// `Event::EventImage` の直後に `Event::Wait { ms }` が続いていたことで生成された画像コマ
+    /// item（[`PlaybackItem::Image`]）に位置しているときだけ。`main.rs::event_loop` はこれが
+    /// `Some(ms)` の間、プレイヤーの入力（キー押下）を待たずに `ms` 経過後へ自動的に進める
+    /// （GUI版 `NovelRenderer` の `Wait { ms }` + `waitingForWait` に相当、Issue #475 が求める
+    /// イベント絵の複数コマ自動再生を実現する）。
+    pub fn pending_wait_ms(&self) -> Option<u32> {
+        self.item_wait_ms.get(self.index).copied().flatten()
+    }
+
+    /// `items` 内の生の現在位置（0始まり）。`position()`（会話行のみを数える1始まりのカウント）
+    /// とは異なり、画像コマ item（[`PlaybackItem::Image`]、#497）も1件として数える。
+    /// `main.rs::event_loop` が「実際に別の item へ移動したか」（＝新しい event_image への
+    /// クロスフェードを開始すべきか）を判定するのに使う — 画像コマへの遷移は `position()` の
+    /// 値を変えない（Line item ではないため）ので、`position()` の変化だけを見ていると
+    /// 画像コマへの遷移を検知し損ねる。
+    pub(crate) fn item_index(&self) -> usize {
+        self.index
     }
 
     /// 次の item へ進む。現在位置が選択肢（選択待ち）の場合は、[`Playback::select_current_choice`]
@@ -436,7 +533,9 @@ impl Playback {
         true
     }
 
-    /// 会話行の総数（Choice item は含まない）。
+    /// 会話行の総数（Choice item・画像コマ item は含まない、#497）。画像コマ
+    /// （[`PlaybackItem::Image`]）は元の会話行の話者・本文を引き継いだ表示上の中間状態に
+    /// すぎず、それ自体は新しい会話行ではないため数えない。
     pub fn total(&self) -> usize {
         self.items
             .iter()
@@ -444,9 +543,10 @@ impl Playback {
             .count()
     }
 
-    /// 現在位置が何行目か（1始まり、Choice item は含まない）。現在位置が Choice の場合は、
-    /// そこに至るまでに表示済みの会話行数を返す（例: 3行しゃべった直後に選択肢が出ている
-    /// 状態なら3を返す）。
+    /// 現在位置が何行目か（1始まり、Choice item・画像コマ item は含まない、#497）。現在位置が
+    /// Choice の場合は、そこに至るまでに表示済みの会話行数を返す（例: 3行しゃべった直後に
+    /// 選択肢が出ている状態なら3を返す）。画像コマ自動再生の途中（`pending_wait_ms` が
+    /// `Some`）でも、直前に表示済みだった会話行数のまま変化しない。
     pub fn position(&self) -> usize {
         // `self.items[..=self.index]` だと `index == items.len()`（ジャンプ先シーンが
         // イベント0件かつドキュメント末尾のとき `scene_start` がこの値を取り得る、
@@ -494,9 +594,11 @@ impl Playback {
     #[cfg(test)]
     pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
         let item_file_ids = vec![0; lines.len()];
+        let item_wait_ms = vec![None; lines.len()];
         Self {
             items: lines.into_iter().map(PlaybackItem::Line).collect(),
             item_file_ids,
+            item_wait_ms,
             index: 0,
             scene_start: HashMap::new(),
             choice_cursor: 0,
