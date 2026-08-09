@@ -204,9 +204,11 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// （reveal 完了後にのみ表示する。[`reveal::blink_visible`] にそのまま渡す。色はウィンドウ
 /// （自分側/相手側）ごとに `draw_text_windows` が決める、#495）。呼び出し側（`main.rs` の
 /// `event_loop`）が [`reveal::indicator_blink_started_at`] で毎フレーム更新した値を渡す —
-/// reveal が非表示→表示に切り替わった瞬間（＝reveal完了の瞬間）に加え、`playback.position()`
-/// が変化した（＝実際に新しい会話行へ進んだ）瞬間も `event_loop` 側が明示的に
-/// 非表示→表示の遷移として扱われるよう仕込んでいる（`char_interval_ms=0 &&
+/// reveal が非表示→表示に切り替わった瞬間（＝reveal完了の瞬間）に加え、`playback.item_index()`
+/// が変化した（＝実際に新しい item へ進んだ。会話行だけを数える `position()` だと画像コマ
+/// item への遷移を取りこぼすため、#497 で `item_index()` に乗り換え済み）瞬間も
+/// `event_loop` 側が明示的に非表示→表示の遷移として扱われるよう仕込んでいる
+/// （`char_interval_ms=0 &&
 /// fade_duration_ms=0` では新しい行の reveal が生成された瞬間に既に完了しているため、
 /// reveal 自体の遷移だけでは検出できない。[`reveal::indicator_blink_started_at`] のdoc
 /// comment参照、セルフレビュー must対応、#495 追加修正2）。この関数自身は基準時刻を

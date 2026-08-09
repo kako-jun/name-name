@@ -305,6 +305,13 @@ impl Playback {
                             // ここで無条件に item 化すると、`[イベント絵:X]` の直後に台詞が
                             // 続くだけの既存スクリプトにまで「クリック待ちの画像だけの1手」が
                             // 増えてしまう（wait_ms 無しの item は自動で進まないため）回帰になる。
+                            //
+                            // `events.get(event_index + 1)` は「直後」の1イベントしか見ない
+                            // ため、`[イベント絵:A][SE:...][待機:200]` のように間に BGM/SE 等の
+                            // 非表示イベントを挟むとこのパターンに一致せず、自動送りが黙って
+                            // 無効化される（`Event::Wait` は下の `_` 分岐で通常どおり処理され、
+                            // 孤立した待機として扱われる）。スクリプト側でこの隣接性を守る必要が
+                            // ある（要ドキュメント化、セルフレビュー should対応）。
                             if let Some(Event::Wait { ms }) = events.get(event_index + 1) {
                                 items.push(PlaybackItem::Image(DisplayLine {
                                     speaker: current_speaker.clone(),
