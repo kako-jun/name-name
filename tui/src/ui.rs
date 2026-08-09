@@ -1213,10 +1213,7 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text = buffer_text(buffer);
-        assert!(
-            text.contains("端末を広げてください"),
-            "buffer was: {text}"
-        );
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
         let area = buffer.area();
         let has_black_cell = (0..area.height).any(|y| {
             (0..area.width).any(|x| buffer.cell((x, y)).expect("in bounds").bg == Color::Black)
