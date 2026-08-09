@@ -2349,4 +2349,33 @@ describe('NovelPlayer フルスクリーン最大化トグル (#468, Fullscreen 
       document.dispatchEvent(new Event('fullscreenchange'))
     }).not.toThrow()
   })
+
+  it('17: document.fullscreenElement が別要素のときにボタンをクリックすると、他要素の exitFullscreen を呼ばず自分の要素へ requestFullscreen を試みる（=== 厳密比較の分岐）', async () => {
+    const { requestFullscreen, exitFullscreen, setCurrent } = installFullscreenMock()
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+
+    // fluidRootRef 以外の要素（document.body）が既にフルスクリーン中の状態を模す
+    // （ホストページの別ウィジェット等が独自にフルスクリーン化しているケース）。
+    setCurrent(document.body)
+    act(() => {
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    const btn = fullscreenButton()
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => {
+      btn.click()
+    })
+    await flushMicrotasks()
+
+    // truthy チェックのみだと document.fullscreenElement（=document.body）を「自分がフルスクリーン中」
+    // と誤認し、他要素の exitFullscreen() を呼んでしまう（意図と逆の副作用）。ここでは呼ばれないこと、
+    // 代わりに自分の要素へ requestFullscreen() が試みられることを確認する。
+    expect(exitFullscreen).not.toHaveBeenCalled()
+    expect(requestFullscreen).toHaveBeenCalledTimes(1)
+    // モック実装は resolve 時に this（呼び出し元＝fluidRootRef.current）を新しい fullscreenElement に
+    // するため、自分がフルスクリーンになったこと（aria-pressed=true）まで確認できる。
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+  })
 })

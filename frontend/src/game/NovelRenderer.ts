@@ -996,6 +996,11 @@ export class NovelRenderer {
           `[name-name] confinement: sceneId "${sceneId}" は allScenes にも存在しません。終劇として扱いますが、原稿の typo の可能性があります（意図した圏外遷移なら無視してください）。`
         )
       }
+      // ここは onEndCallback の有無を見ずに常に endStory() を呼ぶ（#386 由来）。advance() の
+      // 自然消化パス（#470）は onEndCallback 登録時に完全委譲し endStory() を呼ばないのと非対称だが、
+      // confinedSceneIds（PlayerScreen の `?scene=` 埋め込み限定）と onEndCallback（EditorScreen の
+      // VideoExporter 限定）が同時に有効になる画面配線が現状存在しないため到達不可能で実害はない。
+      // 将来この2つが同一画面で両立する機能が来たら、この非対称性を再点検すること。
       this.endStory()
       return
     }

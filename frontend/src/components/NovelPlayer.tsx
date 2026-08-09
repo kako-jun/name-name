@@ -825,11 +825,17 @@ function NovelPlayer({
   // 非対応ブラウザ（requestFullscreen が無い）・拒否（Promise reject）・iframe 埋め込みで
   // Permissions Policy によりブロックされる場合（同期 throw のことがある）のいずれも例外を
   // 握りつぶし、通常表示のまま何も起きない（完了条件: 非対応/拒否時のフォールバック）。
+  //
+  // 分岐条件は `document.fullscreenElement === el`（自分自身がフルスクリーン中か）で判定する。
+  // 上の isFullscreen state と同じ厳密比較にすることで、ホストページの別ウィジェット等
+  // 「別要素が既にフルスクリーン中」のケースを「自分がフルスクリーン中」と誤認しない。
+  // 誤認すると、ボタンの見た目は「フルスクリーンにする」なのに実際には他要素の
+  // exitFullscreen() を呼んでしまい、意図と逆の副作用（他要素のフルスクリーン解除）が起きる。
   const handleFullscreenToggle = useCallback(() => {
     const el = fluidRootRef.current
     if (!el) return
     try {
-      if (document.fullscreenElement) {
+      if (document.fullscreenElement === el) {
         const result = document.exitFullscreen()
         result?.catch(() => {})
       } else if (el.requestFullscreen) {
