@@ -1391,8 +1391,10 @@ mod tests {
 
     #[test]
     fn draw_splash_shows_game_name_as_title() {
-        let mut config = Config::default();
-        config.game_name = "テストゲーム".to_string();
+        let mut config = Config {
+            game_name: "テストゲーム".to_string(),
+            ..Config::default()
+        };
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
