@@ -1796,4 +1796,380 @@ mod tests {
             Some("B")
         );
     }
+
+    // ---- #508: 選択肢グリッド化（columns >= 2）のカーソル移動テスト ----
+    //
+    // 行優先の配置規則: `col = index % columns`, `row = index / columns`。端数行
+    // （最終行のみ、選択肢数が列数の倍数でない場合）は行優先埋めのため必ず最終行にのみ
+    // 発生する（実装の設計）。以下のテストは主に8選択肢・columns=3のフィクスチャ
+    // （`ragged_grid_playback`、row0=[0,1,2] row1=[3,4,5] row2=[6,7]、col2欠の端数行）を使う。
+
+    /// #508用フィクスチャヘルパー。`count`件・`columns`列で、選択肢の `jump` は全て
+    /// `target` に統一する（カーソル移動系のテストでは jump 先の中身は重要でないため、
+    /// カーソル位置の確認だけに集中できるよう簡略化している）。
+    fn choice_grid(count: usize, columns: Option<u32>, target: &str) -> Event {
+        Event::Choice {
+            options: (0..count)
+                .map(|i| ChoiceOption {
+                    text: format!("opt{i}"),
+                    jump: target.to_string(),
+                })
+                .collect(),
+            columns,
+        }
+    }
+
+    /// #508の主要フィクスチャ: 8選択肢・columns=3。行優先配置で
+    /// row0=[0,1,2] row1=[3,4,5] row2=[6,7]（col2欠の端数行）になる。
+    fn ragged_grid_playback() -> Playback {
+        let doc = doc_single_scene(vec![choice_grid(8, Some(3), "x")]);
+        Playback::from_document(&doc)
+    }
+
+    #[test]
+    fn move_choice_cursor_up_down_treat_columns_none_same_as_some_1() {
+        let doc_none = doc_single_scene(vec![choice_grid(3, None, "x")]);
+        let doc_some1 = doc_single_scene(vec![choice_grid(3, Some(1), "x")]);
+        let mut pb_none = Playback::from_document(&doc_none);
+        let mut pb_some1 = Playback::from_document(&doc_some1);
+
+        pb_none.move_choice_cursor_down();
+        pb_some1.move_choice_cursor_down();
+        assert_eq!(
+            pb_none.current_choice().unwrap().1,
+            pb_some1.current_choice().unwrap().1,
+            "columns=None と columns=Some(1) はdown後も同じカーソル位置のはず"
+        );
+
+        pb_none.move_choice_cursor_down();
+        pb_some1.move_choice_cursor_down();
+        assert_eq!(
+            pb_none.current_choice().unwrap().1,
+            2,
+            "末尾(index 2)まで進むはず"
+        );
+        assert_eq!(pb_some1.current_choice().unwrap().1, 2);
+
+        pb_none.move_choice_cursor_up();
+        pb_some1.move_choice_cursor_up();
+        assert_eq!(
+            pb_none.current_choice().unwrap().1,
+            1,
+            "up後も両者一致するはず"
+        );
+        assert_eq!(pb_some1.current_choice().unwrap().1, 1);
+    }
+
+    #[test]
+    fn move_choice_cursor_up_down_treat_columns_some_0_same_as_some_1() {
+        let doc_some0 = doc_single_scene(vec![choice_grid(3, Some(0), "x")]);
+        let doc_some1 = doc_single_scene(vec![choice_grid(3, Some(1), "x")]);
+        let mut pb_some0 = Playback::from_document(&doc_some0);
+        let mut pb_some1 = Playback::from_document(&doc_some1);
+
+        pb_some0.move_choice_cursor_down();
+        pb_some1.move_choice_cursor_down();
+        assert_eq!(
+            pb_some0.current_choice().unwrap().1,
+            pb_some1.current_choice().unwrap().1,
+            "columns=Some(0) と columns=Some(1) はdown後も同じカーソル位置のはず"
+        );
+
+        pb_some0.move_choice_cursor_down();
+        pb_some1.move_choice_cursor_down();
+        assert_eq!(pb_some0.current_choice().unwrap().1, 2);
+        assert_eq!(pb_some1.current_choice().unwrap().1, 2);
+
+        pb_some0.move_choice_cursor_up();
+        pb_some1.move_choice_cursor_up();
+        assert_eq!(pb_some0.current_choice().unwrap().1, 1);
+        assert_eq!(pb_some1.current_choice().unwrap().1, 1);
+    }
+
+    #[test]
+    fn move_choice_cursor_down_from_ragged_row_gap_snaps_to_last_existing_item_in_row() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_right(); // idx0 -> idx1
+        pb.move_choice_cursor_right(); // idx1 -> idx2 (row0, col2)
+        pb.move_choice_cursor_down(); // row0 col2 -> row1 col2 = idx5
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            5,
+            "前提: row1のcol2(idx5)にいるはず"
+        );
+
+        pb.move_choice_cursor_down(); // row2のcol2は存在しない(端数行)
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "row2にcol2が存在しないため、row2の最後の実在アイテム(idx7)へスナップするはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_right_at_ragged_last_row_stops_at_last_existing_item_not_grid_edge() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_down();
+        pb.move_choice_cursor_down(); // idx2 -> idx5 -> スナップして idx7
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "前提: idx7(row2,col1、端数行の実在最後)にいるはず"
+        );
+
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "列的にはまだ余裕(col1<columns-1=2)があるが、総数(8件)の終端が理由でno-opのはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_right_at_full_row_stops_at_grid_column_edge() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "前提: idx2(row0,col2、列は3列あるので列端)にいるはず"
+        );
+
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "総数の終端(8件)ではなく、グリッドの列端(columns=3)が理由でno-opのはず \
+             （前のテストとは頭打ちの理由が異なる対比）"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_down_at_last_row_is_noop_even_from_ragged_position() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_down();
+        pb.move_choice_cursor_down(); // idx0 -> idx3 -> idx6
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            6,
+            "前提: idx6(row2,col0)にいるはず"
+        );
+        pb.move_choice_cursor_down();
+        assert_eq!(pb.current_choice().unwrap().1, 6, "最終行なのでno-op");
+
+        pb.move_choice_cursor_right(); // idx6 -> idx7
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "前提: idx7(row2,col1)にいるはず"
+        );
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "端数行の実在位置からでも最終行はno-opのはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_up_at_first_row_is_noop_for_all_columns() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_up();
+        assert_eq!(pb.current_choice().unwrap().1, 0, "col0でno-op");
+
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_up();
+        assert_eq!(pb.current_choice().unwrap().1, 1, "col1でもno-op");
+
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_up();
+        assert_eq!(pb.current_choice().unwrap().1, 2, "col2でもno-op");
+    }
+
+    #[test]
+    fn move_choice_cursor_left_at_row_start_is_noop() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_left();
+        assert_eq!(pb.current_choice().unwrap().1, 0, "row0のcol0でno-op");
+
+        pb.move_choice_cursor_down();
+        pb.move_choice_cursor_left();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            3,
+            "row1のcol0でも前の行(row0)へまたいでleftしないはず"
+        );
+
+        pb.move_choice_cursor_down();
+        pb.move_choice_cursor_left();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            6,
+            "row2のcol0でも同様に行をまたがないはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_left_right_are_noop_when_columns_is_none_or_1() {
+        for columns in [None, Some(1)] {
+            let doc = doc_single_scene(vec![choice_grid(3, columns, "x")]);
+            let mut pb = Playback::from_document(&doc);
+            pb.move_choice_cursor_down(); // 非グリッドでは「1つ次の要素」= idx1
+            assert_eq!(pb.current_choice().unwrap().1, 1);
+
+            pb.move_choice_cursor_right();
+            assert_eq!(
+                pb.current_choice().unwrap().1,
+                1,
+                "columns={columns:?}: 非グリッドではrightはno-opのはず"
+            );
+
+            pb.move_choice_cursor_left();
+            assert_eq!(
+                pb.current_choice().unwrap().1,
+                1,
+                "columns={columns:?}: 非グリッドではleftもno-opのはず"
+            );
+        }
+    }
+
+    #[test]
+    fn move_choice_cursor_left_right_are_noop_when_choice_not_displayed() {
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["会話中"])]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.current_line().is_some(), "前提: Line表示中のはず");
+
+        // panicしないことが主目的。表示内容も変わらないことを合わせて確認する。
+        pb.move_choice_cursor_left();
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("A"),
+            "Choice以外の表示中はleft/rightで状態が変わらないはず"
+        );
+        assert_eq!(pb.current_choice(), None);
+    }
+
+    #[test]
+    fn move_choice_cursor_grid_columns_equal_option_count_forms_single_row() {
+        let doc = doc_single_scene(vec![choice_grid(8, Some(8), "x")]);
+        let mut pb = Playback::from_document(&doc);
+
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            0,
+            "1行のみのグリッドなのでdownは即頭打ちのはず"
+        );
+
+        for _ in 0..7 {
+            pb.move_choice_cursor_right();
+        }
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "rightだけで最終列まで到達できるはず"
+        );
+
+        pb.move_choice_cursor_right();
+        assert_eq!(pb.current_choice().unwrap().1, 7, "列端でno-opのはず");
+
+        pb.move_choice_cursor_up();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "1行のみのグリッドなのでupも即頭打ちのはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_grid_columns_greater_than_option_count_forms_single_ragged_row() {
+        let doc = doc_single_scene(vec![choice_grid(3, Some(5), "x")]);
+        let mut pb = Playback::from_document(&doc);
+
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "前提: 実在最後(idx2)にいるはず"
+        );
+
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "列数(5)にはまだ余裕があるが、実在アイテム終端(3件)が理由でno-opのはず"
+        );
+
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "1行のみのグリッドなのでdownもno-opのはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_resets_cursor_to_zero_even_when_jumping_between_different_grid_column_counts(
+    ) {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![choice_grid(8, Some(5), "1-2")]),
+                scene("1-2", vec![choice_grid(3, Some(2), "1-2")]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "前提: jump前にカーソルを非0位置に動かしておく"
+        );
+
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+        let (options, cursor, columns) = pb.current_choice().expect("jump先もChoiceのはず");
+        assert_eq!(options.len(), 3);
+        assert_eq!(columns, Some(2), "jump先は別のcolumns値を持つ選択肢のはず");
+        assert_eq!(
+            cursor, 0,
+            "jump元のcolumns(5)とjump先のcolumns(2)が異なっていても、cursorは0から始まるはず"
+        );
+    }
+
+    #[test]
+    fn consecutive_grid_and_non_grid_choices_do_not_leak_cursor_state() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![choice_grid(6, Some(3), "1-2")]),
+                scene("1-2", vec![choice(vec![("A", "x"), ("B", "y")])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        pb.move_choice_cursor_down(); // idx0(row0,col0) -> idx3(row1,col0)
+        assert_ne!(
+            pb.current_choice().unwrap().1,
+            0,
+            "前提: グリッド選択肢でカーソルを非0位置に動かしておく"
+        );
+
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+        let (options, cursor, columns) = pb.current_choice().expect("jump先もChoiceのはず");
+        assert_eq!(options.len(), 2);
+        assert_eq!(columns, None, "jump先は非グリッドの選択肢のはず");
+        assert_eq!(
+            cursor, 0,
+            "前のグリッド選択肢の非0カーソルが、後続の非グリッド選択肢に漏れてはいけない"
+        );
+    }
 }

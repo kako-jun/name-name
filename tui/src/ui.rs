@@ -3247,6 +3247,153 @@ mod tests {
         );
     }
 
+    // ---- #508: 選択肢グリッド描画（`draw_choice_grid`/`draw_choice_list`分岐）のテスト ----
+
+    #[test]
+    fn draw_choice_grid_does_not_panic_at_extremely_narrow_width_with_many_columns() {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&format!("o{i}"), "x"))
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(1, 3)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_choice_grid(f, area, &options, 0, 10);
+            })
+            .unwrap_or_else(|e| panic!("極端に狭い幅×多列(10)でpanicした: {e}"));
+    }
+
+    #[test]
+    fn draw_choice_grid_ragged_last_row_leaves_missing_cells_blank_without_panic() {
+        // 8件・columns=3。行優先配置で row0=[0,1,2] row1=[3,4,5] row2=[6,7]
+        // （col2欠の端数行）になる。
+        let options: Vec<ChoiceOption> = (0..8)
+            .map(|i| choice_option(&format!("O{i}"), "x"))
+            .collect();
+        let area = Rect::new(0, 0, 30, 3);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 3);
+            })
+            .unwrap_or_else(|e| panic!("端数行のあるグリッドでpanicした: {e}"));
+
+        // draw_choice_grid内部と同じLayout計算でrow2・col2のRectを再現し、
+        // そこに何も描画されず空白のままであることを確認する（欠けたセルは単に
+        // スキップされるだけでpanicはしない、という実装の意図を直接検証する）。
+        let buffer = terminal.backend().buffer();
+        let row_areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(1); 3])
+            .split(area);
+        let col_areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Ratio(1, 3); 3])
+            .split(row_areas[2]);
+        let missing_cell = col_areas[2];
+        for y in missing_cell.y..missing_cell.y + missing_cell.height {
+            for x in missing_cell.x..missing_cell.x + missing_cell.width {
+                let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                assert_eq!(
+                    symbol, " ",
+                    "欠けたセル(row2,col2)は描画されず空白のままのはず (x={x},y={y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_choice_grid_selected_cursor_cell_uses_reversed_style() {
+        // 6件・columns=3ちょうど（端数無し、2行×3列）。カーソルはindex4("E")。
+        let letters = ["A", "B", "C", "D", "E", "F"];
+        let options: Vec<ChoiceOption> = letters.iter().map(|l| choice_option(l, "x")).collect();
+        let area = Rect::new(0, 0, 30, 2);
+        let cursor = 4;
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, cursor, 3);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let find_cell = |needle: char| -> (u16, u16) {
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    if buffer.cell((x, y)).expect("in bounds").symbol() == needle.to_string() {
+                        return (x, y);
+                    }
+                }
+            }
+            panic!("option {needle:?} should render somewhere, buffer was: {buffer:?}");
+        };
+        for (i, letter) in letters.iter().enumerate() {
+            let ch = letter.chars().next().unwrap();
+            let (x, y) = find_cell(ch);
+            let reversed = buffer
+                .cell((x, y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::REVERSED);
+            if i == cursor {
+                assert!(
+                    reversed,
+                    "カーソル位置(index {i}, {letter})は反転表示されるはず"
+                );
+            } else {
+                assert!(
+                    !reversed,
+                    "非カーソル位置(index {i}, {letter})は反転表示されないはず"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_choice_list_dispatches_to_grid_only_when_columns_at_least_2() {
+        // A/Bが同じ行(y)に描画されるかどうかで、グリッド委譲(columns>=2)か
+        // 従来の縦一列描画(columns None/0/1)かを見分ける。
+        let options = vec![
+            choice_option("A", "x"),
+            choice_option("B", "x"),
+            choice_option("C", "x"),
+            choice_option("D", "x"),
+        ];
+        let area = Rect::new(0, 0, 20, 4);
+        for columns in [None, Some(0), Some(1), Some(2)] {
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw_choice_list(f, area, &options, 0, columns);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let find_y = |needle: char| -> u16 {
+                for y in 0..area.height {
+                    for x in 0..area.width {
+                        if buffer.cell((x, y)).expect("in bounds").symbol() == needle.to_string() {
+                            return y;
+                        }
+                    }
+                }
+                panic!("option {needle:?} should render somewhere");
+            };
+            let a_y = find_y('A');
+            let b_y = find_y('B');
+            let is_grid = a_y == b_y;
+            match columns {
+                Some(c) if c >= 2 => assert!(
+                    is_grid,
+                    "columns={columns:?}: draw_choice_gridへ委譲されA/Bが同じ行に並ぶはず"
+                ),
+                _ => assert!(
+                    !is_grid,
+                    "columns={columns:?}: 非グリッドなのでA/Bは別々の行のはず"
+                ),
+            }
+        }
+    }
+
     // -- D. page_indicator_area 単体テスト（#487） --
     //
     // `draw_page_indicator` から抽出した純粋関数（Frame不要）の境界値テスト。
