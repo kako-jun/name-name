@@ -49,8 +49,18 @@ const GRID_COLUMN_GAP = BUTTON_GAP
  * ボタン幅を画面幅へ収める必要があるため、region の有無に関わらず適用する。
  */
 const GRID_HORIZONTAL_MARGIN = 24
-/** グリッドボタン幅の下限 (px)。列数が多くてもラベルが読めなくなるほど潰さない。 */
-const GRID_MIN_BUTTON_WIDTH = 100
+/**
+ * グリッドボタン幅は「利用可能幅に N 列（脚本 `[選択: 列=N]` の指定どおり）を必ず収める」
+ * ことを最優先する（docs/spec/markdown-v0.1.md 参照: 「列数が増えるほどボタン幅は…自動的に
+ * 狭くなる」）。fitWidth = 利用可能幅ちょうどに N 列を敷き詰めたときの1ボタン幅であり、
+ * これが「収まる」ことを満たす唯一の値（これより広げると必ずはみ出す）。
+ *
+ * #508 実バグ: 当初は下限 100px でクランプしていたが、fitWidth がそれを下回る組み合わせ
+ * （例: 800px 画面で列8・10択、split_layout 有効時の列5 など）で `N * 100px + gap` が
+ * 利用可能幅を超えてはみ出していた。列数を自動で減らす案は「指定した N 列になる」という
+ * 仕様の約束と矛盾するため採らず、下限クランプ自体を撤廃して fitWidth をそのまま使う
+ * （列数が多いほどボタンは細くなるが、必ず利用可能幅に収まる）。
+ */
 
 export type ChoiceStyleName = 'default' | 'soft' | 'monochrome'
 
@@ -332,10 +342,8 @@ export class ChoiceOverlay extends Container {
     if (isGrid) {
       const availableWidth = areaWidth - GRID_HORIZONTAL_MARGIN * 2
       const gapTotal = (gridColumns - 1) * GRID_COLUMN_GAP
-      this.layoutButtonWidth = Math.max(
-        GRID_MIN_BUTTON_WIDTH,
-        Math.min(BUTTON_WIDTH, Math.floor((availableWidth - gapTotal) / gridColumns))
-      )
+      const fitWidth = Math.max(1, Math.floor((availableWidth - gapTotal) / gridColumns))
+      this.layoutButtonWidth = Math.min(BUTTON_WIDTH, fitWidth)
     } else {
       this.layoutButtonWidth = region
         ? Math.max(

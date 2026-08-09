@@ -732,4 +732,40 @@ describe('ChoiceOverlay グリッド配置 (#508)', () => {
     expect(content.children.length).toBe(50)
     overlay.hide()
   })
+
+  // #508 実バグ修正: ボタン幅の下限クランプ (100px) を先に適用すると、列数が多い/
+  // split_layout でテキスト領域が狭いケースで `列数 * 幅 + ガター` が利用可能幅を
+  // 超えてはみ出していた（テスト観点整理フェーズで発見）。下限クランプを撤廃し、
+  // 常にグリッド全体が利用可能幅に収まることを保証する。
+  it('列8・10択（800px画面）でもグリッド全体が画面幅に収まる（旧: 下限100pxクランプではみ出していた）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 8)
+    for (const button of overlay.children) {
+      expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(0)
+      expect(button.x + button.pivot.x).toBeLessThanOrEqual(800)
+    }
+    overlay.hide()
+  })
+
+  it('列10・10択（800px画面）でもグリッド全体が画面幅に収まる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 10)
+    for (const button of overlay.children) {
+      expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(0)
+      expect(button.x + button.pivot.x).toBeLessThanOrEqual(800)
+    }
+    overlay.hide()
+  })
+
+  it('split_layout有効・列5・10択（テキスト領域約400px）でもグリッド全体が領域幅に収まる（Gymnasia想定シナリオ）', () => {
+    const region = computeSplitLayoutRegions(800, 450).text
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setSplitLayoutRegion(region)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+    for (const button of overlay.children) {
+      expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(region.x)
+      expect(button.x + button.pivot.x).toBeLessThanOrEqual(region.x + region.width)
+    }
+    overlay.hide()
+  })
 })
