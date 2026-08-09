@@ -36,10 +36,20 @@ const REDRAW: Duration = Duration::from_millis(30);
 const BACKLOG_SCROLL_STEP: u16 = 3;
 
 /// ゲーム画面より前面に描画するフルスクリーンオーバーレイ。開いている間、`event_loop` は
-/// 会話の進行（オート/スキップモードのタイマー・reveal のタイプライター時間経過を含む）を
+/// 会話の進行（オート/スキップモードのタイマー判定・`Action::Advance` 等）を一切実行せず
 /// 完全に凍結する — バックログ（#500 Issue本文「バックログを閉じると元のゲーム画面に戻る
 /// (ゲーム進行状態は変化しない、閲覧専用)」という明示要件）・設定画面（#503、値を調整して
 /// いる最中に裏で会話が進むのは直感に反するため、バックログと同じ扱いにする）共通の方針。
+///
+/// **ただし reveal のタイプライター時間経過（`current_reveal`）とイベント絵クロスフェード
+/// （`image_fade`）は、この「凍結」の対象外だった（セルフレビュー must対応）**。
+/// どちらも `Instant` アンカーからの経過時間で見た目を計算する設計のため、オーバーレイが
+/// 開いている間に更新・描画を止めても、アンカー自体は現実の時計と共に進み続ける。閉じた
+/// 瞬間に初めて経過時間が読まれるため、開いていた実時間がそのままタイプライター表示の
+/// 進行やクロスフェードの進行に漏れ込んでしまう（レビュアー実機再現: `char_interval_ms=1000`
+/// で表示途中にバックログを開き実時間1.5秒待ってから閉じると、閉じた直後に1〜2文字余分に
+/// 表示される）。`event_loop` は閉じる際に `close_overlay` を呼び、開いていた実時間ぶん
+/// 両者のアンカーを前進させることでこの漏れを補正する（`close_overlay` のdoc comment参照）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Overlay {
     /// 通常のゲーム画面。
@@ -347,6 +357,11 @@ where
 
     // 現在開いているオーバーレイ画面（#500 / #503）。既定は `Overlay::None`（通常のゲーム画面）。
     let mut overlay = Overlay::None;
+    // `overlay` を `Overlay::None` 以外にした瞬間の実時刻。オーバーレイを閉じる際、
+    // ここからの経過時間ぶん `current_reveal`/`image_fade` のアンカーを前進させる
+    // （`close_overlay` 参照、セルフレビュー must対応）。`overlay == Overlay::None` の間は
+    // 参照されないため初期値は任意。
+    let mut overlay_opened_at = Instant::now();
 
     loop {
         let now = Instant::now();
@@ -372,16 +387,30 @@ where
                 // バックログ/設定画面を開いたのと同じキーで閉じる（GUI版 `BacklogOverlay` の
                 // 「ESC / B / クリックで閉じる」の「B」に相当、#500）。
                 Action::ToggleBacklog if overlay == Overlay::Backlog => {
-                    overlay = Overlay::None;
                     // 復帰直後にオートモードの締切超過で即座に自動送りしてしまわないよう
                     // （オーバーレイを開いていた間に締切だけが過去へ流れ去っている）、
                     // 締切を破棄して次の周回で「reveal完了から改めて `auto_wait_ms` 待つ」
-                    // 状態に戻す（安全策）。
-                    auto_deadline = None;
+                    // 状態に戻す（安全策）。加えて、オーバーレイ中に経過した実時間を
+                    // タイプライター表示/イベント絵クロスフェードのアンカーから除外する
+                    // （`close_overlay` 参照、セルフレビュー must対応）。
+                    close_overlay(
+                        &mut overlay,
+                        &mut auto_deadline,
+                        &mut current_reveal,
+                        &mut image_fade,
+                        overlay_opened_at,
+                        Instant::now(),
+                    );
                 }
                 Action::ToggleSettings if overlay == Overlay::Settings => {
-                    overlay = Overlay::None;
-                    auto_deadline = None;
+                    close_overlay(
+                        &mut overlay,
+                        &mut auto_deadline,
+                        &mut current_reveal,
+                        &mut image_fade,
+                        overlay_opened_at,
+                        Instant::now(),
+                    );
                 }
                 // Enter/Space（GUI版 `handlePointerClick` がバックログ表示中のタップを
                 // 「進める」ではなく「閉じる」として吸収するのと同じ、#500）、および
@@ -389,8 +418,14 @@ where
                 // 閉じる」と同じ優先順位）は、オーバーレイが開いている間はアプリ終了ではなく
                 // 「オーバーレイを閉じる」を意味する。
                 Action::Advance | Action::Quit => {
-                    overlay = Overlay::None;
-                    auto_deadline = None;
+                    close_overlay(
+                        &mut overlay,
+                        &mut auto_deadline,
+                        &mut current_reveal,
+                        &mut image_fade,
+                        overlay_opened_at,
+                        Instant::now(),
+                    );
                 }
                 // バックログ表示中の ↑/↓ はスクロール（#500）。`Action::MoveUp`/
                 // `Action::MoveDown` は「選択肢が無いときは no-op」というのが本来の意味だが
@@ -684,15 +719,66 @@ where
                 // 変数へ書き戻す」パターン）。
                 overlay = Overlay::Backlog;
                 backlog_scroll = u16::MAX;
+                overlay_opened_at = now;
             }
             Action::ToggleSettings => {
                 overlay = Overlay::Settings;
+                overlay_opened_at = now;
             }
             Action::Quit => break,
             Action::None => {}
         }
     }
     Ok(())
+}
+
+/// オーバーレイ（バックログ/設定画面）を閉じる際の後始末（#500 / #503）。
+///
+/// `Overlay` のdoc comment（本ファイル冒頭）は「オーバーレイ表示中はゲーム進行を完全に
+/// 凍結する」と書いているが、これは実際には「`event_loop` がオーバーレイ表示中
+/// `current_reveal`/`image_fade` を一切更新・描画しない」という意味に留まる。
+/// `current_reveal`（`jiwa::RevealHandle` ベース）と `image_fade` はどちらも `Instant`
+/// アンカーからの経過時間で見た目を計算するため、アンカー自体はオーバーレイが開いている
+/// 間も現実の時計と共に進み続ける。オーバーレイを閉じずに何もしなければ実害は無いが
+/// （次に描画/参照されるまで誰も経過時間を読まない）、閉じた瞬間に初めて経過時間が
+/// 読まれるため、オーバーレイを開いていた実時間がそのままタイプライター表示の進行や
+/// クロスフェードの進行に漏れ込んでしまう（セルフレビュー must対応: レビュアー実機再現
+/// `char_interval_ms=1000` で表示途中にバックログを開き実時間1.5秒待ってから閉じると、
+/// 閉じた直後に1〜2文字余分に表示される）。
+///
+/// これを防ぐため、閉じる際にオーバーレイが開いていた実時間（`overlay_opened_at` から
+/// `now` までの経過）ぶん、`current_reveal`/`image_fade` 双方のアンカーを前進させる
+/// （[`reveal::RevealState::shift_anchor_forward`]/`image_fade::ImageFadeState::shift_anchor_forward`）。
+/// これにより以後の経過時間計算からオーバーレイ中の実時間経過が差し引かれ、閉じた直後の
+/// 見た目はオーバーレイを開く直前と完全に一致する。
+///
+/// オートモードの締切（`auto_deadline`）破棄は既存の安全策（オーバーレイが開いていた間に
+/// 締切だけが過去へ流れ去っているのを防ぐ）で、上記のアンカー補正とは別の理由による処理
+/// だが、「オーバーレイを閉じる」という同じ操作の一部としてここにまとめる。
+///
+/// `now` は呼び出し側が `event_loop` のループ先頭で一度だけ計算した値をそのまま渡しては
+/// ならず、この関数を呼ぶ直前（`next_action()` がオーバーレイを閉じる `Action` を返した
+/// 「後」）に改めて `Instant::now()` を取り直したものを渡す必要がある。`next_action()`
+/// 自体がブロッキング/スリープを含みうる（本番の `input::poll_action` は最大 `REDRAW` だけ
+/// だが、テストの合成 `next_action` はもっと長く `thread::sleep` することがある）ため、
+/// ループ先頭の古い `now` を使うと `overlay_opened_at` からの経過時間を過小評価し、
+/// このアンカー補正自体が骨抜きになる（実装時に一度この誤りを踏んだ — オーバーレイの
+/// 実時間経過が結局漏れ込む退行を作ってしまい、下の回帰テストで検出した）。
+fn close_overlay(
+    overlay: &mut Overlay,
+    auto_deadline: &mut Option<Instant>,
+    current_reveal: &mut Option<reveal::RevealState>,
+    image_fade: &mut image_fade::ImageFadeState,
+    overlay_opened_at: Instant,
+    now: Instant,
+) {
+    *overlay = Overlay::None;
+    *auto_deadline = None;
+    let overlay_duration = now.saturating_duration_since(overlay_opened_at);
+    if let Some(reveal) = current_reveal.as_mut() {
+        reveal.shift_anchor_forward(overlay_duration);
+    }
+    image_fade.shift_anchor_forward(overlay_duration);
 }
 
 /// 現在位置の会話行から新しい `RevealState::Animating` を組み立てる。現在位置が選択肢
@@ -1900,6 +1986,172 @@ mod tests {
         assert_eq!(
             playback.current_line().unwrap().speaker.as_deref(),
             Some("A")
+        );
+    }
+
+    // ---- #500/#503 セルフレビュー must対応: オーバーレイの実時間経過がタイプライター表示/
+    // クロスフェードへ漏れ込まないことの回帰ガード ----
+    //
+    // `event_loop_closing_backlog_overlay_resets_auto_deadline_preventing_stale_cascade`
+    // 等の上のテスト群は `instant_config()`（char_interval_ms=0、生成と同時に完了扱い）を
+    // 使っているため、そもそも「タイプ中」の状態が存在せず、このバグを検出できない
+    // （レビュアー指摘）。ここでは `slow_config()`（char_interval_ms=1000）を使い、
+    // オーバーレイを開いた瞬間には1文字目しか見えていない状態を作ってから、
+    // オーバーレイを開いたまま実時間で1文字ぶんの間隔（1000ms）近くを待って閉じ、
+    // 閉じた直後の描画結果（`TestBackend` バッファ）に2文字目以降が漏れ出ていないことを
+    // 実際に表示された文字で確認する。
+
+    #[test]
+    fn event_loop_closing_backlog_overlay_does_not_leak_overlay_duration_into_typewriter() {
+        // 修正前の実装では、オーバーレイを開いていた実時間がそのまま `current_reveal`
+        // （`jiwa::RevealHandle` ベース）の経過時間計算に漏れ込み、閉じた直後に
+        // オーバーレイを開く前には見えていなかった文字が一気に表示されてしまっていた
+        // （レビュアー実機再現: char_interval_ms=1000で表示途中にバックログを開き実時間
+        // 1.5秒程度待ってから閉じると1〜2文字余分に表示される）。この回帰ガードはその
+        // 再現条件をほぼそのまま踏襲する。
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "abcdefghij")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                // 1回目のフレームはまだ何もキー入力していない状態で描画されている
+                // （＝reveal開始直後、"a"のみ可視）。ここで即座にバックログを開く。
+                1 => Ok(Action::ToggleBacklog),
+                2 => {
+                    // char_interval_ms(1000ms)を1境界ぶん超える実時間を、オーバーレイを
+                    // 開いたまま経過させる。修正前ならこの間に2文字目("b")が
+                    // 見えてしまうはずの長さ（800ms程度では1000msの境界を跨がず
+                    // 修正の有無に関わらず1文字のままになってしまうため、意図的に
+                    // 1000msを超える値にしている）。
+                    std::thread::sleep(Duration::from_millis(1200));
+                    Ok(Action::ToggleBacklog) // 閉じる
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains('a'), "1文字目は表示されているはず: {text:?}");
+        assert!(
+            !text.contains("ab"),
+            "オーバーレイを開いていた実時間(1200ms)が漏れ込み、2文字目まで表示されて \
+             しまっている(#500/#503セルフレビューmust再発防止): {text:?}"
+        );
+    }
+
+    #[test]
+    fn event_loop_closing_settings_overlay_does_not_leak_overlay_duration_into_typewriter() {
+        // 上のテストの設定画面(#503)版。バックログと同じ `close_overlay` 経路が
+        // 設定画面を閉じたときにも適用されることの回帰ガード。
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "abcdefghij")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => {
+                    // 上のバックログ版と同じ理由でchar_interval_ms(1000ms)の境界を
+                    // 超える長さにしている。
+                    std::thread::sleep(Duration::from_millis(1200));
+                    Ok(Action::ToggleSettings)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains('a'));
+        assert!(
+            !text.contains("ab"),
+            "設定画面を開いていた実時間が漏れ込み、2文字目まで表示されてしまっている: {text:?}"
+        );
+    }
+
+    #[test]
+    fn event_loop_closing_backlog_overlay_does_not_leak_overlay_duration_into_image_crossfade() {
+        // `image_fade`（イベント絵クロスフェード）も `current_reveal` と同じ `Instant`
+        // アンカー方式のため、同じ漏れ込みバグを抱えていないか確認する回帰ガード
+        // （セルフレビュー指摘: reveal と同じ方針で調査・修正すること）。
+        // crossfade_ms(300ms) をオーバーレイの実時間経過(500ms)より短くしておくことで、
+        // 「開いていた実時間がそのままフェード進行に加算される(バグ)」場合は
+        // t=500/300>1.0でクランプされ`to`の色そのものになり、「補正されている(修正後)」
+        // 場合はt≈0(オーバーバーヘッド分のみ)で`from`寄りの色のままになる、という
+        // 二値的で検出しやすい差にする。
+        let fixture_from = (10u8, 200u8, 10u8);
+        let fixture_to = (200u8, 10u8, 10u8);
+        let fixture_from_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_from, 2, 2), 2, 2);
+        let fixture_to_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_to, 2, 2), 2, 2);
+        let mut config = instant_config();
+        config.event_image.assets_dir = fixture_from_path.parent().unwrap().to_path_buf();
+        config.event_image.crossfade_ms = 300;
+        let relative_from = fixture_from_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let relative_to = fixture_to_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut playback = Playback::from_lines(vec![
+            dline_with_image(Some("A"), "one", Some(relative_from)),
+            dline_with_image(Some("B"), "two", Some(relative_to)),
+        ]);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                // 1行目→2行目へ進み、フェードを開始させる。
+                1 => Ok(Action::Advance),
+                // フェード開始直後にバックログを開く。
+                2 => Ok(Action::ToggleBacklog),
+                3 => {
+                    // crossfade_ms(300ms)より長い実時間をオーバーレイ表示中に経過させる。
+                    // 修正前ならこの分がそのままフェード進行に加算され、t>=1.0となって
+                    // 完了(`to`の色そのもの)扱いになってしまう。
+                    std::thread::sleep(Duration::from_millis(500));
+                    Ok(Action::ToggleBacklog)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        assert!(
+            !buffer_has_bg_color(terminal.backend().buffer(), fixture_to),
+            "オーバーレイを開いていた実時間(500ms)がクロスフェード(300ms)の進行に \
+             漏れ込み、本来ごくわずかしか進んでいないはずのフェードが完了して \
+             見えてしまっている(#500/#503セルフレビューmust再発防止)"
         );
     }
 

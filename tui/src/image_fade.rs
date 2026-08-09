@@ -64,6 +64,18 @@ impl ImageFadeState {
         (elapsed.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0)
     }
 
+    /// オーバーレイ（バックログ/設定画面）が開いていた実時間（`by`）ぶん、クロスフェードの
+    /// アンカー時刻を前進させる。`main.rs` の `close_overlay` が呼ぶ
+    /// （[`crate::reveal::RevealState::shift_anchor_forward`] と同じ理由・同じ方針、
+    /// セルフレビュー must対応: `current_reveal` だけでなく `image_fade` も `Instant`
+    /// アンカーからの経過時間でクロスフェード進行を計算する設計のため、同じ「オーバーレイ
+    /// 中の実時間漏れ込み」問題を抱えていた）。`duration` が `Duration::ZERO`（[`Self::settled`]
+    /// 経由、または `crossfade_ms=0`）の場合は [`Self::progress`] が常に `1.0` を返すため
+    /// この補正自体が観測可能な効果を持たない（無害）。
+    pub fn shift_anchor_forward(&mut self, by: Duration) {
+        self.started_at += by;
+    }
+
     /// `now` 時点で描画すべき画像セル格子（`cols` x `rows`）。`from`/`to` が両方 `None`
     /// （イベント絵が一度も指定されていない）の場合は `None` を返す — 呼び出し側
     /// （`ui::draw_placeholder`）は `config.placeholder` のラベル表示へフォールバックする。

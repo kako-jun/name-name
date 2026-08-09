@@ -37,16 +37,59 @@ fn join_text(line: &DisplayLine) -> String {
     line.text.join("\n")
 }
 
+/// タイプライター表示中の `jiwa::RevealHandle` を、アンカー時刻（開始時刻）を後から
+/// 補正できる形で包む。`jiwa::RevealHandle`（v0.3時点）は `started_at` を private
+/// フィールドとして持つのみでシフト用APIを持たないため、補正が必要になった時点で
+/// 同じ `text`/`opts` を使って新しい `RevealHandle` を望みの `started_at` で作り直す
+/// （[`Reveal::shift_anchor_forward`] 参照、セルフレビュー must対応）。
+pub struct Reveal {
+    handle: RevealHandle,
+    text: String,
+    opts: RevealOpts,
+    started_at: Instant,
+}
+
+impl Reveal {
+    fn new(text: String, opts: RevealOpts, started_at: Instant) -> Self {
+        let handle = RevealHandle::start_at(&text, opts, started_at);
+        Self {
+            handle,
+            text,
+            opts,
+            started_at,
+        }
+    }
+
+    fn is_done(&self, now: Instant) -> bool {
+        self.handle.is_done(now)
+    }
+
+    fn snapshot(&self, now: Instant) -> Vec<RevealedGrapheme> {
+        self.handle.snapshot(now)
+    }
+
+    /// アンカー（`started_at`）を `by` ぶん前進させ、`text`/`opts` はそのままに
+    /// `RevealHandle` を作り直す。オーバーレイ（バックログ/設定画面）を開いていた実時間
+    /// だけ `started_at` を後ろへずらすことで、以後の `is_done`/`snapshot` が計算する
+    /// 経過時間からオーバーレイ中の実時間経過を除外する（[`RevealState::shift_anchor_forward`]
+    /// 参照）。
+    fn shift_anchor_forward(&mut self, by: Duration) {
+        self.started_at += by;
+        self.handle = RevealHandle::start_at(&self.text, self.opts, self.started_at);
+    }
+}
+
 /// 現在の会話行のタイプライター表示状態。
 ///
-/// `Animating` は `jiwa::RevealHandle` による時間経過ベースの表示中（自然完了後も含む —
-/// `RevealHandle::is_done` が `true` を返すだけで、ハンドル自体は差し替えない）。
+/// `Animating` は [`Reveal`]（`jiwa::RevealHandle` ラッパー）による時間経過ベースの表示中
+/// （自然完了後も含む — `is_done` が `true` を返すだけで、ハンドル自体は差し替えない、
+/// [`RevealState::shift_anchor_forward`] による明示的な補正を除く）。
 /// `Done` はユーザーによる明示スキップ（[`skip_lines`]）後の状態で、[`join_text`] で
 /// 組み立てた全文をあらかじめ色付き `Line` 列として構築済みのもの。`now` を一切使わず
 /// 常に完了扱いになるため、`RevealHandle` の時刻計算（開始時刻を過去にずらす等）を経由する
 /// 余地がない（#472 セルフレビュー: `Instant` 基準点付近での `checked_sub` underflow 対応）。
 pub enum RevealState {
-    Animating(RevealHandle),
+    Animating(Reveal),
     Done(Vec<Line<'static>>),
 }
 
@@ -54,7 +97,7 @@ impl RevealState {
     /// 現在の表示が完了しているか。`Done` は定義上常に `true`（`now` に依存しない）。
     pub fn is_done(&self, now: Instant) -> bool {
         match self {
-            RevealState::Animating(handle) => handle.is_done(now),
+            RevealState::Animating(reveal) => reveal.is_done(now),
             RevealState::Done(_) => true,
         }
     }
@@ -64,8 +107,33 @@ impl RevealState {
     /// （こちらは `now` を読まない）。
     pub fn body_lines(&self, now: Instant) -> Vec<Line<'static>> {
         match self {
-            RevealState::Animating(handle) => snapshot_to_lines(&handle.snapshot(now)),
+            RevealState::Animating(reveal) => snapshot_to_lines(&reveal.snapshot(now)),
             RevealState::Done(lines) => lines.clone(),
+        }
+    }
+
+    /// オーバーレイ（バックログ/設定画面）が開いていた実時間（`by`）ぶん、タイプライター
+    /// 表示のアンカー時刻を前進させる。`main.rs` の `event_loop` がオーバーレイを閉じる
+    /// 際に呼ぶ（must対応）。
+    ///
+    /// **背景**: `Overlay` のdoc comment（`main.rs`）は「オーバーレイ表示中はゲーム進行を
+    /// 完全に凍結する」と書いているが、これは「オーバーレイが開いている間 `event_loop` が
+    /// `current_reveal`/`image_fade` を一切更新しない（描画もしない）」という意味に過ぎず、
+    /// `Reveal` 内部の `RevealHandle` が保持する `started_at`（`Instant`）は不変のまま
+    /// 現実時間の経過を計算し続ける。オーバーレイを1.5秒開いてから閉じると、閉じた
+    /// 直後の最初のフレームで `now - started_at` が「オーバーレイを開いていた1.5秒」を
+    /// 丸ごと含んでしまい、オーバーレイを開く前には見えていなかった文字が閉じた瞬間に
+    /// 一気に表示される（レビュアー実機再現: `char_interval_ms=1000` で表示途中に
+    /// バックログを開閉すると1〜2文字余分に表示される）。
+    ///
+    /// **修正**: オーバーレイを閉じる際、開いていた実時間ぶん `started_at` を前進させる
+    /// （`Reveal::shift_anchor_forward`）。これにより `now - started_at`（経過時間）から
+    /// オーバーレイ中に経過した実時間が差し引かれ、閉じた直後の見た目はオーバーレイを
+    /// 開く直前と完全に一致する。`Done`（スキップ済み・`now` を読まない）は元々この問題の
+    /// 影響を受けないため no-op。
+    pub fn shift_anchor_forward(&mut self, by: Duration) {
+        if let RevealState::Animating(reveal) = self {
+            reveal.shift_anchor_forward(by);
         }
     }
 }
@@ -85,11 +153,12 @@ fn opts_for_line(config: &Config, speaker: Option<&str>) -> RevealOpts {
     }
 }
 
-/// `now` を起点に新しいタイプライター表示（本文の Reveal）を開始する。
-pub fn build_reveal(config: &Config, line: &DisplayLine, now: Instant) -> RevealHandle {
+/// `now` を起点に新しいタイプライター表示（本文の Reveal）を開始する。戻り値の [`Reveal`]
+/// はそのまま [`RevealState::Animating`] のペイロードとして使う。
+pub fn build_reveal(config: &Config, line: &DisplayLine, now: Instant) -> Reveal {
     let text = join_text(line);
     let opts = opts_for_line(config, line.speaker.as_deref());
-    RevealHandle::start_at(&text, opts, now)
+    Reveal::new(text, opts, now)
 }
 
 /// 表示中のタイプライターを即座に全文表示へスキップする。ブラウザ版 NovelRenderer の
