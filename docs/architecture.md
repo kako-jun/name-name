@@ -215,6 +215,16 @@ resolvedEvents を最後まで消化した場合**は、confinement とは無関
 これは `?scene=` に依存しない一般的な埋め込み挙動で、`?scene=`（＝ディープリンク意図＝#388 の
 TitleOverlay 飛ばしの条件）とは関心が別（ゲートも別）。
 
+**standalone 再生時のヘッダ抑制 `header:`（#519）**: 上記の `isEmbedded()` 抑制とは**独立の軸**で、
+埋め込みでない standalone 再生（`name-name.llll-ll.com/play/...` を直接開く等）でもプレイヤーヘッダを
+抑制できる per-game frontmatter 設定。`"visible"`（既定・後方互換）/ `"hidden"`（完全非表示。戻る手段が
+無くなる想定なので原稿作者の判断に委ねる）/ `"collapsed"`（折りたたみ。画面上部中央に小さなハンドルを
+常時出し、タップでヘッダを一時展開する。展開中も `<main>` の高さを変えない absolute オーバーレイで、
+3秒操作が無ければ自動で再び折りたたむ）の3値。`isEmbedded()===true` のときは本設定に関係なく常に
+ヘッダを描画しない（embedded 抑制が優先し、`header:` は standalone のときだけ意味を持つ）。不正値・
+未指定は `"visible"` にフォールバックする（`dialog_style` と同じ後方互換パターン）。詳細は
+[Markdown 仕様書](./spec/markdown-v0.1.md) の `header` frontmatter を参照。
+
 **プレイヤーの見た目テーマ `?theme=light|dark`（#394）**: ノベルゲーム本体（PixiJS キャンバス）は
 常に `0x000000`＝黒なので、**プレイヤー（`/play/*`）の見た目デフォルトは黒（dark）**。ルート背景を
 `bg-black`、ローディングを黒地・明色文字にして「黒→黒」で継ぎ目なくキャンバスへ繋ぐ（暗い埋め込み

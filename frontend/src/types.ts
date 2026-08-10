@@ -567,6 +567,13 @@ export interface EventDocument {
    *  null/undefined・false は従来どおり `'linear'`（滑らか、theo-hayami 等の塗り絵向け・後方互換）。
    *  frontmatter `pixel_art:` から流す。 */
   pixel_art?: boolean | null
+  /** standalone 再生（埋め込みでない `/play/...` 直接オープン）時のプレイヤーヘッダ（戻る＋タイトル）
+   *  の出し方 (#519)。`"visible"`（既定・後方互換＝ヘッダを出す）/ `"hidden"`（完全非表示）/
+   *  `"collapsed"`（折りたたみ。普段は隠れているが操作で一時的に展開できる）の3択。
+   *  iframe 埋め込み判定（`isEmbedded()`、#392）とは独立の軸——埋め込み時は本設定に関係なく
+   *  従来どおりヘッダを出さない。null/undefined・未知値は `"visible"` にフォールバック
+   *  （`dialog_style` と同じ後方互換パターン）。frontmatter `header:` から流す。 */
+  header?: string | null
   chapters: EventChapter[]
 }
 
