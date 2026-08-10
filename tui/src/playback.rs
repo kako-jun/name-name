@@ -53,6 +53,17 @@
 //! `Event::Blackout` と同じ経路に拡張し、`Wait` の直後が `Event::SceneTransition` の場合も
 //! 追加の `PlaybackItem::Image` を生成する（`Playback::build` 参照）。
 //!
+//! **既知の制約2**（セルフレビュー対応、実データ未検証。実害が判明したら要対応）:
+//! `[イベント絵][待機][暗転][場面転換]` のように `Wait` の直後で `Blackout` と
+//! `SceneTransition` が連続する原稿では、検出は `Blackout` を優先し（`if let
+//! Some(Blackout) ... else if SceneTransition` の順）、`Blackout` が見つかった時点で
+//! 打ち切る。後続の `SceneTransition` は通常の match アーム（state 更新のみ、item は
+//! 生成しない）に落ちるため、この並びが原稿の末尾ならターミナル item は暗転状態の
+//! ままで、`SceneTransition` が本来行うはずの暗転解除・イベント絵クリアは画面に
+//! 一度も反映されない（GUI版 `processDirective` は逐次実行のため両方とも確実に
+//! 反映される点で TUI 版と異なる）。既知の制約1と同様、この並びを含む原稿は現状
+//! Gymnasia 側に存在しないため実害は未確認。
+//!
 //! ## 選択肢分岐の設計 (#482)
 //!
 //! `Document` の chapters → scenes → events を一直線にフラット化する既存のシンプルな
@@ -368,6 +379,29 @@ struct SceneScanState {
 /// `SceneScanState` は元々「シーンを跨いで引き継ぐランニング状態」専用の入れ物として
 /// 導入された経緯があり、性質の異なる `GameFlags` をそこに押し込むのは筋が悪いため、
 /// ここでは構造変更を避けて `allow` で抑止するに留める。
+/// Wait 直後の Blackout/SceneTransition 検出（#475/#524）が共通で行う、「その時点の
+/// `state`（呼び出し側で望む終端状態へ更新済み）を1つの画像コマ item として焼き付けて
+/// 4本の並行 Vec へ積む」処理をまとめたもの（セルフレビュー対応、重複除去）。この item は
+/// さらなる自動送りを持たない（`item_wait_ms` は常に `None`）— 「閉じきった最後のコマで
+/// 状態が切り替わる」で連鎖は完結し、この item から別の item へ自動で進む理由が無いため。
+fn push_wait_chain_terminal_item(
+    state: &SceneScanState,
+    file_id: usize,
+    items: &mut Vec<PlaybackItem>,
+    item_file_ids: &mut Vec<usize>,
+    item_wait_ms: &mut Vec<Option<u32>>,
+    item_blackout: &mut Vec<bool>,
+) {
+    items.push(PlaybackItem::Image(DisplayLine {
+        speaker: state.current_speaker.clone(),
+        text: state.current_text.clone(),
+        event_image: state.current_event_image.clone(),
+    }));
+    item_file_ids.push(file_id);
+    item_wait_ms.push(None);
+    item_blackout.push(state.current_blackout);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_scene_items(
     events: &[Event],
@@ -454,33 +488,36 @@ fn build_scene_items(
                     // 異なる。この分岐で `Event::SceneTransition` 自体を消費するため、
                     // 下の match 腕（`Event::SceneTransition => { .. }`）はここでは
                     // 実行されない（`Event::Blackout` を消費するときと同じ扱い）。
+                    //
+                    // 既知の制約2（モジュール冒頭doc参照）: 下の分岐は `if let
+                    // Some(Blackout) ... else if SceneTransition` の順で判定するため
+                    // Blackout を優先する。`Wait` の直後に Blackout と SceneTransition が
+                    // 両方続く原稿（`[イベント絵][待機][暗転][場面転換]`）では、Blackout側
+                    // で打ち切られ後続の SceneTransition は item を生成しない state 更新
+                    // のみになる。
                     let mut consumed = 2;
                     if let Some(Event::Blackout { action }) = events.get(event_index + 2) {
                         state.current_blackout = matches!(action, BlackoutAction::On);
-                        items.push(PlaybackItem::Image(DisplayLine {
-                            speaker: state.current_speaker.clone(),
-                            text: state.current_text.clone(),
-                            event_image: state.current_event_image.clone(),
-                        }));
-                        item_file_ids.push(file_id);
-                        // 暗転item自体はさらなる自動送りを持たない —
-                        // 「閉じきった最後のコマで暗転へ移る」で連鎖は完結し、
-                        // 暗転後にまた別のitemへ自動で進む必要は無い（#475スコープ）。
-                        item_wait_ms.push(None);
-                        item_blackout.push(state.current_blackout);
+                        push_wait_chain_terminal_item(
+                            state,
+                            file_id,
+                            items,
+                            item_file_ids,
+                            item_wait_ms,
+                            item_blackout,
+                        );
                         consumed = 3;
                     } else if matches!(events.get(event_index + 2), Some(Event::SceneTransition)) {
                         state.current_blackout = false;
                         state.current_event_image = None;
-                        items.push(PlaybackItem::Image(DisplayLine {
-                            speaker: state.current_speaker.clone(),
-                            text: state.current_text.clone(),
-                            event_image: state.current_event_image.clone(),
-                        }));
-                        item_file_ids.push(file_id);
-                        // Blackout終端itemと同じく、さらなる自動送りは持たない。
-                        item_wait_ms.push(None);
-                        item_blackout.push(state.current_blackout);
+                        push_wait_chain_terminal_item(
+                            state,
+                            file_id,
+                            items,
+                            item_file_ids,
+                            item_wait_ms,
+                            item_blackout,
+                        );
                         consumed = 3;
                     }
                     event_index += consumed;
@@ -4095,13 +4132,14 @@ mod tests {
 
     #[test]
     fn event_image_wait_blackout_scene_transition_chain_only_creates_blackout_item() {
-        // `[イベント絵][待機][暗転][場面転換]` という4連続パターン（#524で明示的に固定する
-        // 現状の実装挙動）。Wait直後の検出は `if let Some(Blackout) ... else if
-        // matches!(SceneTransition)` の順で判定するためBlackoutが優先され、Blackoutが
-        // 見つかった時点でconsumed=3として打ち切る。後続のSceneTransitionはこの特別処理の
-        // 対象にならず、通常のmatchアーム（`Event::SceneTransition => {..}`）でstateだけが
-        // 更新されitemは生成されない。結果として暗転itemだけが生成され、SceneTransitionの
-        // 効果（暗転解除・イベント絵クリア）はどのitemにも反映されない。
+        // `[イベント絵][待機][暗転][場面転換]` という4連続パターン（既知の制約2、
+        // モジュール冒頭doc・#524コメント参照。#524で明示的に固定する現状の実装挙動）。
+        // Wait直後の検出は `if let Some(Blackout) ... else if matches!(SceneTransition)`
+        // の順で判定するためBlackoutが優先され、Blackoutが見つかった時点でconsumed=3として
+        // 打ち切る。後続のSceneTransitionはこの特別処理の対象にならず、通常のmatchアーム
+        // （`Event::SceneTransition => {..}`）でstateだけが更新されitemは生成されない。
+        // 結果として暗転itemだけが生成され、SceneTransitionの効果（暗転解除・イベント絵
+        // クリア）はどのitemにも反映されない。
         let doc = doc_single_scene(vec![
             dialog(Some("A"), vec!["目を閉じていく"]),
             event_image("eyes_closing_3.webp"),
