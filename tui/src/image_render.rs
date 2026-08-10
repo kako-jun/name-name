@@ -317,53 +317,10 @@ fn compute_cover_crop(
     }
 }
 
-/// アスペクト比を保ったまま `max_cols` x `max_rows`（文字セル数）の枠へ収まる最大サイズを
-/// 計算する（contain-fit、#530）。[`compute_cover_crop`] の cover-fit（枠を覆うようクロップ
-/// する）とは逆に、画像全体がクロップ無しで見えるよう縮小する。文字セルは正方形ではない
-/// （[`TERMINAL_CELL_ASPECT_RATIO`]）ため、視覚上のアスペクト比を保つよう補正して計算する
-/// （具体的な補正式は [`rgba_to_quadrant_grid`] が cover-fit 側で使っているのと同じ
-/// `TERMINAL_CELL_ASPECT_RATIO` 換算）。
-///
-/// アルゴリズムは通常の `object-fit: contain` と同じ2段階判定: まず `max_cols` いっぱいに
-/// 幅を使ったときの高さを求め、それが `max_rows` に収まればそれを採用（幅優先）。収まらない
-/// 場合は逆に `max_rows` いっぱいに高さを使ったときの幅を採用する（高さ優先）。
-///
-/// フルキャンバス画像表示（`ui::draw_fullscreen_image`、#530）は高さ上限を持たない全幅表示
-/// へ専用計算を使うため、この関数は汎用2軸 contain-fit のテスト用ヘルパーとして残す。
-///
-/// `image_w`/`image_h`/`max_cols`/`max_rows` のいずれかが0の場合は `(0, 0)` を返す
-/// （panicしない）。戻り値は常に `1 <= fitted_cols <= max_cols` かつ
-/// `1 <= fitted_rows <= max_rows` を満たす（`max_cols`/`max_rows` がいずれも0でない限り）。
-#[cfg(test)]
-pub fn compute_contain_fit(image_w: u32, image_h: u32, max_cols: u16, max_rows: u16) -> (u16, u16) {
-    if image_w == 0 || image_h == 0 || max_cols == 0 || max_rows == 0 {
-        return (0, 0);
-    }
-    let ar = TERMINAL_CELL_ASPECT_RATIO;
-    // 「視覚上の」幅/高さ単位（セル比の非正方形を吸収した座標系）。セル幅は ar 単位、
-    // セル高さは1単位とみなすと、cols x rows セルの視覚サイズは (cols*ar, rows) になる。
-    let box_visual_w = f64::from(max_cols) * ar;
-    let box_visual_h = f64::from(max_rows);
-    let img_ratio = f64::from(image_w) / f64::from(image_h);
-
-    let width_constrained_h = box_visual_w / img_ratio;
-    let (visual_w, visual_h) = if width_constrained_h <= box_visual_h {
-        // 幅優先: 枠の幅をフルに使っても高さが収まる。
-        (box_visual_w, width_constrained_h)
-    } else {
-        // 高さ優先: 幅優先だと高さがはみ出すため、枠の高さをフルに使う側へ切り替える。
-        (box_visual_h * img_ratio, box_visual_h)
-    };
-
-    let fitted_cols = ((visual_w / ar).round() as i64).clamp(1, i64::from(max_cols)) as u16;
-    let fitted_rows = (visual_h.round() as i64).clamp(1, i64::from(max_rows)) as u16;
-    (fitted_cols, fitted_rows)
-}
-
 /// フルキャンバス画像表示（`ui::draw_fullscreen_image`、#530）専用: 画像全体をクロップ無しで
 /// **全幅**（`target_cols` セル）へ合わせたとき、必要になる総行数を返す。
 ///
-/// `compute_contain_fit(..., max_rows=十分大きい値)` と違い「高さ上限」を仮置きしないため、
+/// 通常の contain-fit（幅・高さ双方に上限を持つ）と違い「高さ上限」を仮置きしないため、
 /// 極端な縦長画像でも高さ優先枝へ落ちず、常に全幅表示の仕様をそのまま計算できる。
 /// ただし呼び出し側が保持するスクロールオフセットは `u16` 行単位なので、戻り値も
 /// `u16::MAX` へ飽和させる（オーバーフロー回避と、不合理に大きい行数のまま上位層へ
@@ -384,30 +341,6 @@ pub fn compute_full_width_rows(image_w: u32, image_h: u32, target_cols: u16) -> 
 pub fn clamp_scroll_offset(offset: u16, content_rows: u16, visible_rows: u16) -> u16 {
     let max_offset = content_rows.saturating_sub(visible_rows);
     offset.min(max_offset)
-}
-
-/// [`RenderedImage`] の縦方向の一部（`offset` 行目から最大 `count` 行）だけを切り出す
-/// （フルキャンバス画像表示のスクロール可視範囲抽出用、#530）。`offset` が `grid.rows` 以上の
-/// 場合は0行の空グリッドを返し、`offset + count` が `grid.rows` を超える場合は末尾で
-/// 切り詰める（`clamp_scroll_offset` で事前にクランプされている前提だが、この関数自体も
-/// 範囲外アクセスで panic しないよう独立して防御する）。
-#[cfg(test)]
-pub fn slice_rendered_image_rows(grid: &RenderedImage, offset: u16, count: u16) -> RenderedImage {
-    let start = offset.min(grid.rows);
-    let end = start.saturating_add(count).min(grid.rows);
-    let rows = end - start;
-    let start_idx = start as usize * grid.cols as usize;
-    let end_idx = end as usize * grid.cols as usize;
-    let cells = grid
-        .cells
-        .get(start_idx..end_idx)
-        .map(|slice| slice.to_vec())
-        .unwrap_or_default();
-    RenderedImage {
-        cols: grid.cols,
-        rows,
-        cells,
-    }
 }
 
 /// フルキャンバス画像表示のスクロールを目標位置へなめらかに追従させる ease-out
@@ -1286,84 +1219,7 @@ mod tests {
         assert!(grid.cells.iter().all(|c| *c == BLANK_CELL));
     }
 
-    // ---- contain-fit（フルキャンバス画像表示、#530）----
-
-    #[test]
-    fn compute_contain_fit_zero_image_width_returns_zero() {
-        assert_eq!(compute_contain_fit(0, 100, 10, 10), (0, 0));
-    }
-
-    #[test]
-    fn compute_contain_fit_zero_image_height_returns_zero() {
-        assert_eq!(compute_contain_fit(100, 0, 10, 10), (0, 0));
-    }
-
-    #[test]
-    fn compute_contain_fit_zero_max_cols_returns_zero() {
-        assert_eq!(compute_contain_fit(100, 100, 0, 10), (0, 0));
-    }
-
-    #[test]
-    fn compute_contain_fit_zero_max_rows_returns_zero() {
-        assert_eq!(compute_contain_fit(100, 100, 10, 0), (0, 0));
-    }
-
-    #[test]
-    fn compute_contain_fit_aspect_exactly_matches_box_fills_both_dimensions() {
-        // image_w=200,image_h=100(比2.0) を max_cols=20,max_rows=5 の枠へ contain-fit。
-        // 実効ボックス比(20*0.5 / 5 = 2.0)と画像比が完全一致するため、幅優先枝
-        // （`<=`の等号側）が採られ、両方いっぱいに埋まる。
-        assert_eq!(compute_contain_fit(200, 100, 20, 5), (20, 5));
-    }
-
-    #[test]
-    fn compute_contain_fit_slightly_wider_than_box_takes_width_branch_with_shorter_rows() {
-        // 比2.5(実効ボックス比2.0よりわずかに横長寄り)は幅優先枝に入り、
-        // fitted_cols は max_cols いっぱいまで使うが fitted_rows は max_rows未満になる。
-        let (cols, rows) = compute_contain_fit(250, 100, 20, 5);
-        assert_eq!(
-            cols, 20,
-            "幅優先枝なのでfitted_colsはmax_colsいっぱいになるはず"
-        );
-        assert!(
-            rows < 5,
-            "横長寄りなのでfitted_rowsはmax_rows未満のはず: rows={rows}"
-        );
-    }
-
-    #[test]
-    fn compute_contain_fit_slightly_taller_than_box_takes_height_branch_with_narrower_cols() {
-        // 比1.0(実効ボックス比2.0より縦長寄り)は高さ優先枝に入り、
-        // fitted_rows は max_rows いっぱいまで使うが fitted_cols は max_cols未満になる。
-        let (cols, rows) = compute_contain_fit(100, 100, 20, 5);
-        assert_eq!(
-            rows, 5,
-            "高さ優先枝なのでfitted_rowsはmax_rowsいっぱいになるはず"
-        );
-        assert!(
-            cols < 20,
-            "縦長寄りなのでfitted_colsはmax_cols未満のはず: cols={cols}"
-        );
-    }
-
-    #[test]
-    fn compute_contain_fit_1x1_box_and_1x1_image_returns_1x1() {
-        assert_eq!(compute_contain_fit(1, 1, 1, 1), (1, 1));
-    }
-
-    #[test]
-    fn compute_contain_fit_extremely_wide_image_into_small_box_keeps_at_least_one_row() {
-        let (cols, rows) = compute_contain_fit(10000, 1, 5, 5);
-        assert!(rows >= 1, "fitted_rowsは最低1になるはず: rows={rows}");
-        assert_eq!(cols, 5);
-    }
-
-    #[test]
-    fn compute_contain_fit_extremely_tall_image_into_small_box_keeps_at_least_one_col() {
-        let (cols, rows) = compute_contain_fit(1, 10000, 5, 5);
-        assert!(cols >= 1, "fitted_colsは最低1になるはず: cols={cols}");
-        assert_eq!(rows, 5);
-    }
+    // ---- フルキャンバス画像表示の必要行数（#530）----
 
     #[test]
     fn compute_full_width_rows_zero_dimensions_return_zero() {
@@ -1381,28 +1237,6 @@ mod tests {
     #[test]
     fn compute_full_width_rows_saturates_without_overflowing_for_extreme_aspect_ratio() {
         assert_eq!(compute_full_width_rows(1, u32::MAX, 40), u16::MAX);
-    }
-
-    #[test]
-    fn compute_contain_fit_result_always_within_box_bounds() {
-        // 不変条件テスト: image/boxのどんな組み合わせでも(0を除く)、fitted_cols/rows は
-        // 必ず [1, max_cols]/[1, max_rows] の範囲に収まる。
-        let image_sizes: [(u32, u32); 6] =
-            [(1, 1), (3, 7), (7, 3), (128, 128), (1920, 1080), (1, 10000)];
-        let box_sizes: [(u16, u16); 5] = [(1, 1), (10, 5), (5, 10), (84, 20), (2000, 1)];
-        for &(image_w, image_h) in &image_sizes {
-            for &(max_cols, max_rows) in &box_sizes {
-                let (cols, rows) = compute_contain_fit(image_w, image_h, max_cols, max_rows);
-                assert!(
-                    (1..=max_cols).contains(&cols),
-                    "image={image_w}x{image_h} box={max_cols}x{max_rows}: fitted_cols={cols} が範囲外"
-                );
-                assert!(
-                    (1..=max_rows).contains(&rows),
-                    "image={image_w}x{image_h} box={max_cols}x{max_rows}: fitted_rows={rows} が範囲外"
-                );
-            }
-        }
     }
 
     // ---- スクロールオフセットのクランプ（#530）----
@@ -1439,72 +1273,6 @@ mod tests {
         // visible_rows=0 のときは max_offset=content_rows自身になるため、
         // 大きなoffsetはcontent_rowsにクランプされるだけで0にはならない。
         assert_eq!(clamp_scroll_offset(100, 7, 0), 7);
-    }
-
-    // ---- 可視範囲の切り出し（#530）----
-
-    fn row_marked_grid(cols: u16, rows: u16) -> RenderedImage {
-        let mut cells = Vec::with_capacity(cols as usize * rows as usize);
-        for y in 0..rows {
-            for _x in 0..cols {
-                cells.push(QuadrantCell {
-                    glyph: ' ',
-                    fg: (y as u8, 0, 0),
-                    bg: (y as u8, 0, 0),
-                });
-            }
-        }
-        RenderedImage { cols, rows, cells }
-    }
-
-    #[test]
-    fn slice_rendered_image_rows_offset_within_bounds_extracts_requested_rows() {
-        let grid = row_marked_grid(2, 5);
-        let sliced = slice_rendered_image_rows(&grid, 1, 2);
-        assert_eq!(sliced.rows, 2);
-        assert_eq!(sliced.cells[0].fg, (1, 0, 0));
-        assert_eq!(sliced.cells[2].fg, (2, 0, 0));
-    }
-
-    #[test]
-    fn slice_rendered_image_rows_offset_equals_grid_rows_is_empty() {
-        let grid = row_marked_grid(2, 5);
-        let sliced = slice_rendered_image_rows(&grid, 5, 2);
-        assert_eq!(sliced.rows, 0);
-        assert!(sliced.cells.is_empty());
-    }
-
-    #[test]
-    fn slice_rendered_image_rows_offset_beyond_grid_rows_is_empty_without_panicking() {
-        let grid = row_marked_grid(2, 5);
-        let sliced = slice_rendered_image_rows(&grid, 10, 2);
-        assert_eq!(sliced.rows, 0);
-        assert!(sliced.cells.is_empty());
-    }
-
-    #[test]
-    fn slice_rendered_image_rows_zero_count_is_empty() {
-        let grid = row_marked_grid(2, 5);
-        let sliced = slice_rendered_image_rows(&grid, 0, 0);
-        assert_eq!(sliced.rows, 0);
-        assert!(sliced.cells.is_empty());
-    }
-
-    #[test]
-    fn slice_rendered_image_rows_count_beyond_remaining_rows_is_truncated() {
-        let grid = row_marked_grid(2, 5);
-        let sliced = slice_rendered_image_rows(&grid, 3, 10);
-        assert_eq!(
-            sliced.rows, 2,
-            "grid.rows(5) - offset(3) = 2行に切り詰められるはず"
-        );
-    }
-
-    #[test]
-    fn slice_rendered_image_rows_full_range_matches_original_grid() {
-        let grid = row_marked_grid(3, 4);
-        let sliced = slice_rendered_image_rows(&grid, 0, 4);
-        assert_eq!(sliced, grid);
     }
 
     // ---- スクロールease進行度（#530）----

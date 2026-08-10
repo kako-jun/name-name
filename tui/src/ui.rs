@@ -1639,7 +1639,7 @@ mod tests {
 
     #[test]
     fn draw_fullscreen_image_zero_sized_decoded_image_does_not_panic() {
-        // compute_contain_fit(0, 0, ..) は (0, 0) を返し、draw_fullscreen_image は
+        // compute_full_width_rows(0, 0, ..) は 0 を返し、draw_fullscreen_image は
         // fitted_cols/rowsが0のとき早期returnする(グリッド構築・描画をどちらもしない)。
         let image = DecodedImage {
             width: 0,
