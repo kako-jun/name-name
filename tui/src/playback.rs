@@ -369,9 +369,13 @@ impl Playback {
                                 // 見ているため、`[イベント絵][待機]` がシーン末尾・`[暗転]` が
                                 // 次シーン先頭、という原稿ではこのパターンに一致せず検出漏れに
                                 // なる（シーン境界をまたいだ Wait+Blackout 連鎖は検出できない）。
-                                // Wait+Blackout の連鎖は同一シーン内に収める必要がある。実際の
-                                // route10 原稿（目を閉じて暗転するシーケンス）は単一シーン内に
-                                // 完結しており実害は無いことを確認済み。
+                                // Wait+Blackout の連鎖は同一シーン内に収める必要がある。
+                                // シーン構造（`##` 見出し区切り）上、この演出を追記する箇所は
+                                // 単一シーンに収まる設計になっていると推測されるが、現時点で
+                                // Gymnasia 側に「目を閉じて暗転して終わる」シーケンス
+                                // （`[暗転]` タグ）自体を含む原稿がまだ一件も存在しないため
+                                // （画像素材が未制作で暫定対応中、Issue本文参照）、実データでの
+                                // 検証はできていない。実データが追加された時点で再検証が必要。
                                 //
                                 // 既知の制約2（同、対応しない）: `[イベント絵][待機][場面転換]`
                                 // で終わる原稿は、`Event::SceneTransition` がこの検出パターンに
@@ -3024,6 +3028,56 @@ mod tests {
         assert!(
             pb.is_at_end(),
             "暗転itemがドキュメント最後のitemなので終端扱いのはず"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_then_blackout_across_scene_boundary_is_not_detected() {
+        // 既知の制約1（モジュール冒頭doc・#475コメント参照）を固定するテスト。
+        // `[イベント絵][待機]` がシーンA末尾、`[暗転]` がシーンB先頭という原稿では、
+        // Wait+Blackoutパターンの探索が `events.get(event_index + 1/+2)`
+        // （`&scene.events` というシーンスコープのみ）しか見ないため、シーンBの
+        // `[暗転]` を検出できず、暗転を運ぶ独立itemが生成されない（検出漏れ）。
+        // 同一シーン内に収まるケースを固定した
+        // `build_event_image_wait_followed_by_blackout_creates_terminal_blackout_item`
+        // との対比で、シーン境界をまたぐと非対応になるという仕様上の制約を
+        // コードレベルでも担保する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["目を閉じていく"]),
+                        event_image("eyes_closing_3.webp"),
+                        wait(200),
+                    ],
+                ),
+                scene("1-2", vec![blackout_on()]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert!(!pb.is_blackout(), "画像コマ表示中はまだ暗転前のはず");
+
+        // シーンBの[暗転]が検出漏れになるため、画像コマitemがそのままドキュメント
+        // 最後のitemになってしまう（同一シーン内パターンなら、ここからさらに暗転item
+        // へ進めるはずだった）。
+        assert!(
+            pb.is_at_end(),
+            "シーン境界をまたいだBlackoutは検出されず画像コマitemが終端になる（既知の制約1）"
+        );
+        assert!(
+            !pb.advance(),
+            "検出漏れにより暗転item自体が存在せず進めない"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "暗転itemが生成されないため、シーンBのBlackout::OnがcurrentBlackoutを\
+             trueにしてもis_blackout()はfalseのまま反映されない"
         );
     }
 }
