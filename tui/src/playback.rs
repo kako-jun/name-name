@@ -38,6 +38,20 @@
 //! `Event::Blackout` にも同じ経路で対応するが、実際にこの拡張を要求した route10 最終回の
 //! ユースケースはオン（暗転して終わる）のみ。
 //!
+//! ### `Event::SceneTransition` とイベント絵クリアの GUI 版整合 (#524)
+//!
+//! GUI版 `NovelRenderer.processDirective` の `Event::SceneTransition` 分岐は
+//! `this.setBlackout(false)` に加えて `this.eventImageLayer.remove()` も呼び、暗転解除と
+//! イベント絵クリアの両方を行う。TUI版は #512 で `current_blackout = false` のみ実装しており
+//! `current_event_image` をクリアしていなかった（GUI版との差異）。#524 でこれを解消し、
+//! `Event::SceneTransition` は `current_blackout` と `current_event_image` の両方をリセット
+//! する。加えて、上記の Wait+Blackout 自動送り拡張（#475）と同様の非対称性が
+//! `Event::SceneTransition` にもあった — `[イベント絵][待機][場面転換]` で終わる原稿では
+//! `Wait` 直後の検出パターンに `SceneTransition` が含まれておらず、場面転換後の状態
+//! （暗転解除・イベント絵クリア）を焼き付けた item が生成されなかった。#524 でこの検出も
+//! `Event::Blackout` と同じ経路に拡張し、`Wait` の直後が `Event::SceneTransition` の場合も
+//! 追加の `PlaybackItem::Image` を生成する（`Playback::build` 参照）。
+//!
 //! ## 選択肢分岐の設計 (#482)
 //!
 //! `Document` の chapters → scenes → events を一直線にフラット化する既存のシンプルな
@@ -377,11 +391,16 @@ impl Playback {
                                 // （画像素材が未制作で暫定対応中、Issue本文参照）、実データでの
                                 // 検証はできていない。実データが追加された時点で再検証が必要。
                                 //
-                                // 既知の制約2（同、対応しない）: `[イベント絵][待機][場面転換]`
-                                // で終わる原稿は、`Event::SceneTransition` がこの検出パターンに
-                                // 含まれていないため、`Event::Blackout` とは非対称に「暗転解除
-                                // 相当の item」が生成されない（`SceneTransition` 自体は下の match
-                                // 腕で `current_blackout` を更新するが、Wait 直後の検出はしない）。
+                                // #524 で解消: `[イベント絵][待機][場面転換]` で終わる原稿も、
+                                // `Event::Blackout` と同じ経路で「場面転換後の状態を焼き付けた
+                                // item」を生成する。GUI版 `Event::SceneTransition` 分岐
+                                // （`setBlackout(false)` + `eventImageLayer.remove()`）に倣い、
+                                // `current_blackout=false` かつ `current_event_image=None` に
+                                // リセットした上で item を積む — Blackout の「On」と同じ役割だが、
+                                // 運ぶ状態は暗転そのものではなくイベント絵クリア後の状態である点が
+                                // 異なる。この分岐で `Event::SceneTransition` 自体を消費するため、
+                                // 下の match 腕（`Event::SceneTransition => { .. }`）はここでは
+                                // 実行されない（`Event::Blackout` を消費するときと同じ扱い）。
                                 let mut consumed = 2;
                                 if let Some(Event::Blackout { action }) =
                                     events.get(event_index + 2)
@@ -396,6 +415,22 @@ impl Playback {
                                     // 暗転item自体はさらなる自動送りを持たない —
                                     // 「閉じきった最後のコマで暗転へ移る」で連鎖は完結し、
                                     // 暗転後にまた別のitemへ自動で進む必要は無い（#475スコープ）。
+                                    item_wait_ms.push(None);
+                                    item_blackout.push(current_blackout);
+                                    consumed = 3;
+                                } else if matches!(
+                                    events.get(event_index + 2),
+                                    Some(Event::SceneTransition)
+                                ) {
+                                    current_blackout = false;
+                                    current_event_image = None;
+                                    items.push(PlaybackItem::Image(DisplayLine {
+                                        speaker: current_speaker.clone(),
+                                        text: current_text.clone(),
+                                        event_image: current_event_image.clone(),
+                                    }));
+                                    item_file_ids.push(file_id);
+                                    // Blackout終端itemと同じく、さらなる自動送りは持たない。
                                     item_wait_ms.push(None);
                                     item_blackout.push(current_blackout);
                                     consumed = 3;
@@ -414,13 +449,19 @@ impl Playback {
                             current_blackout = matches!(action, BlackoutAction::On);
                         }
                         // GUI版 `NovelRenderer.processDirective` の `Event::SceneTransition` 相当
-                        // （`this.setBlackout(false)`、#512）。spec（markdown-v0.1.md）は
-                        // `[場面転換]` を「背景クリア + 暗転解除」と定義しており、`[暗転]` で
-                        // オンにした暗転を明示的にオフへ戻す。背景クリア相当の永続 state を
-                        // TUI 側は持たない（`current_event_image`/`current_blackout` 以外に
-                        // クリア対象がない）ため、このスコープでは暗転解除のみ実装する。
+                        // （`this.setBlackout(false)` + `this.eventImageLayer.remove()`、#512/#524）。
+                        // spec（markdown-v0.1.md）は `[場面転換]` を「背景クリア + 暗転解除」と
+                        // 定義しており、`[暗転]` でオンにした暗転を明示的にオフへ戻すのに加え、
+                        // GUI版はイベント絵レイヤーも明示的にクリアする（作者が
+                        // `[イベント絵終了]` を書き忘れても場面転換で必ずイベント絵が消える
+                        // 防御的挙動、#351）。TUI 側もこれに合わせ `current_event_image` を
+                        // `None` に戻す（#524、旧実装は `current_blackout` のみリセットしており
+                        // GUI版との差異だった）。背景クリア相当の永続 state（`clearBackground` /
+                        // `videoLayer.remove` / `retreatNovelScrim`）は TUI 側が持たないため、
+                        // このスコープでは暗転解除・イベント絵クリアのみ実装する。
                         Event::SceneTransition => {
                             current_blackout = false;
+                            current_event_image = None;
                         }
                         _ => {
                             if let Some(item) = playback_item_from_event(event) {
