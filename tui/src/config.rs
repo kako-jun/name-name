@@ -154,6 +154,28 @@ impl Default for EventImageConfig {
     }
 }
 
+/// 音声アセット（BGM/SE共通）関連の設定（#502）。GUI版 `resolveAssetUrl(base, 'sounds', path)`
+/// （`frontend/src/game/novelLayout.ts`）が BGM/SE/voice を種別で分けず単一の `sounds/`
+/// ディレクトリから解決するのに倣い、TUI側も `bgm_assets_dir`/`se_assets_dir` のように
+/// 種別ごとに分けず単一の `assets_dir` を持つ設計にした（実装判断: Issue #502 本文は
+/// 種別ごとの分離を例示していたが、GUI版の実際のディレクトリ構造に意味論を合わせることを
+/// 優先した）。`event_image.assets_dir` と同じく、リポジトリルート基準の相対パス。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SoundConfig {
+    /// Markdown 原稿中の `[BGM: x.ogg]`/`[SE: x.wav]` のような相対パスの基点ディレクトリ。
+    /// gymnasia はリポジトリルート基準の `assets/sounds`（GUI版と同じディレクトリ構造）。
+    pub assets_dir: PathBuf,
+}
+
+impl Default for SoundConfig {
+    fn default() -> Self {
+        Self {
+            assets_dir: PathBuf::from("assets/sounds"),
+        }
+    }
+}
+
 /// ゲームごとに変わりうる値をまとめた設定。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -175,6 +197,8 @@ pub struct Config {
     pub typewriter: TypewriterConfig,
     /// イベント絵アセットの基点ディレクトリ・クロスフェード時間（#481）。
     pub event_image: EventImageConfig,
+    /// BGM/SE アセットの基点ディレクトリ（#502）。
+    pub sound: SoundConfig,
     /// adv 表示を文単位（`splitIntoSentences` 相当）で改頁するか（#486）。既定 `false` は
     /// 従来どおり markdown 行単位の一括表示（非破壊）。GUI版 frontmatter `sentence_per_page:`
     /// とは別軸 — TUI は原稿の per-game frontmatter を読まず、`tui-config.toml` 側のこの
@@ -195,6 +219,7 @@ impl Default for Config {
             player_speakers: vec!["主格".to_string()],
             typewriter: TypewriterConfig::default(),
             event_image: EventImageConfig::default(),
+            sound: SoundConfig::default(),
             sentence_per_page: false,
         }
     }
@@ -254,13 +279,7 @@ impl Config {
     /// フォールバックする）。原稿は基本的に信頼できる作者が書くものだが、
     /// `assets_dir` に閉じ込める意図の関数として最低限のガードを持たせる。
     pub fn resolve_image_path(&self, relative: &str) -> Option<PathBuf> {
-        let is_safe = Path::new(relative)
-            .components()
-            .all(|c| matches!(c, std::path::Component::Normal(_)));
-        if !is_safe {
-            return None;
-        }
-        Some(self.event_image.assets_dir.join(relative))
+        resolve_relative_asset_path(&self.event_image.assets_dir, relative)
     }
 
     /// `splash.logo_image`（`Some` の場合）を実ファイルパスへ解決する（#530）。
@@ -272,6 +291,26 @@ impl Config {
         let logo_image = self.splash.logo_image.as_ref()?;
         self.resolve_image_path(&logo_image.to_string_lossy())
     }
+
+    /// Markdown 原稿中の音声相対パス（`Event::Bgm`/`Event::Se` の `path`、例: `amehure.ogg`）を
+    /// `sound.assets_dir` と結合し、実ファイルパスへ解決する（#502）。ガード条件は
+    /// [`Config::resolve_image_path`] と同じ（`..`・絶対パスを含む場合は `None`）。
+    pub fn resolve_sound_path(&self, relative: &str) -> Option<PathBuf> {
+        resolve_relative_asset_path(&self.sound.assets_dir, relative)
+    }
+}
+
+/// `relative` が `assets_dir` の外を指しうる場合（`..`・絶対パス等）に `None` を返しつつ
+/// 結合するヘルパー。[`Config::resolve_image_path`]/[`Config::resolve_sound_path`] 共通
+/// （#502 で音声パスにも同じガードが必要になったため切り出した）。
+fn resolve_relative_asset_path(assets_dir: &Path, relative: &str) -> Option<PathBuf> {
+    let is_safe = Path::new(relative)
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)));
+    if !is_safe {
+        return None;
+    }
+    Some(assets_dir.join(relative))
 }
 
 #[cfg(test)]
@@ -303,6 +342,7 @@ mod tests {
             PathBuf::from("assets/images")
         );
         assert_eq!(config.event_image.crossfade_ms, 700);
+        assert_eq!(config.sound.assets_dir, PathBuf::from("assets/sounds"));
         assert!(!config.sentence_per_page);
     }
 
@@ -382,6 +422,75 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(config.resolve_image_path("/etc/passwd"), None);
+    }
+
+    #[test]
+    fn from_toml_str_partial_sound_override_keeps_rest_default() {
+        let toml = "[sound]\nassets_dir = \"custom/sfx\"\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert_eq!(config.sound.assets_dir, PathBuf::from("custom/sfx"));
+        assert_eq!(config.game_name, Config::default().game_name);
+    }
+
+    #[test]
+    fn resolve_sound_path_joins_assets_dir_and_relative_path() {
+        let config = Config {
+            sound: SoundConfig {
+                assets_dir: PathBuf::from("assets/sounds"),
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            config.resolve_sound_path("amehure.ogg"),
+            Some(PathBuf::from("assets/sounds/amehure.ogg"))
+        );
+    }
+
+    #[test]
+    fn resolve_sound_path_rejects_parent_dir_traversal() {
+        let config = Config::default();
+        assert_eq!(config.resolve_sound_path("../../secret.txt"), None);
+    }
+
+    #[test]
+    fn resolve_sound_path_rejects_absolute_path() {
+        let config = Config::default();
+        assert_eq!(config.resolve_sound_path("/etc/passwd"), None);
+    }
+
+    #[test]
+    fn resolve_sound_path_joins_japanese_filename_correctly() {
+        // 観点10: `[BGM: 扉の音.ogg]` のような日本語ファイル名パスも他の相対パスと
+        // 同様にassets_dirと結合される。traversalガードはPath::components()の各要素が
+        // Normalかどうかを見るだけなので、マルチバイト文字(日本語)が混ざっていても
+        // 問題なく動作するはず。
+        let config = Config {
+            sound: SoundConfig {
+                assets_dir: PathBuf::from("assets/sounds"),
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            config.resolve_sound_path("扉の音.ogg"),
+            Some(PathBuf::from("assets/sounds/扉の音.ogg"))
+        );
+    }
+
+    #[test]
+    fn resolve_sound_path_empty_string_returns_assets_dir_itself() {
+        // 観点11(境界値): 空文字列を渡すとPath::components()が空(全要素がNormalという
+        // 条件をvacuous trueで満たす)ためis_safeがtrueになり、assets_dir自体を指す
+        // Someが返る。
+        let config = Config {
+            sound: SoundConfig {
+                assets_dir: PathBuf::from("assets/sounds"),
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            config.resolve_sound_path(""),
+            Some(PathBuf::from("assets/sounds"))
+        );
     }
 
     #[test]

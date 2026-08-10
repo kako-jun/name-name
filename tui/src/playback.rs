@@ -2,14 +2,15 @@
 //!
 //! 会話文（Dialog / Narration）の逐次表示に加え、選択肢分岐（`Event::Choice`）にも対応する
 //! （#482）。フラグ管理・条件分岐（`Event::Flag`/`Event::Condition`）にも対応する（#509、
-//! 詳細は後述）。セーブ/ロードは引き続き対象外（#501、別Issue）。背景・SE・BGM・立ち絵演出
-//! などその他のイベントは、今回も画面表示を
-//! 変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。ただし `Event::EventImage` /
-//! `EventImageExit` だけは例外で、各 `DisplayLine` に `event_image`（その時点で表示されて
-//! いるべきイベント絵の相対パス）として反映する（#481）。左側は `event_image` が `None` の
-//! ときのみ従来どおりプレースホルダ表示になる。`Event::Choice` はこの状態に影響しない
-//! （Choice イベントを挟んでも、直前までの `event_image` はそのまま後続の `DisplayLine` に
-//! 引き継がれる）。
+//! 詳細は後述）。セーブ/ロードは引き続き対象外（#501、別Issue）。背景・立ち絵演出などその他の
+//! イベントは、今回も画面表示を変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。
+//! `Event::EventImage`/`EventImageExit` だけは例外で、各 `DisplayLine` に `event_image`
+//! （その時点で表示されているべきイベント絵の相対パス）として反映する（#481）。左側は
+//! `event_image` が `None` のときのみ従来どおりプレースホルダ表示になる。`Event::Choice` は
+//! この状態に影響しない（Choice イベントを挟んでも、直前までの `event_image` はそのまま
+//! 後続の `DisplayLine` に引き継がれる）。`Event::Bgm`/`Event::Se` も同様に状態として追跡する
+//! （画面表示は変えないが #502 で「読み飛ばし」対象から外れた）。詳細は [`Playback`] 構造体の
+//! `item_bgm`/`item_se` フィールドの doc comment 参照。
 //!
 //! ## イベント絵の時間差自動連続表示 (#497)
 //!
@@ -120,7 +121,7 @@
 
 use std::collections::HashMap;
 
-use name_name_parser::models::{BlackoutAction, ChoiceOption, Document, Event};
+use name_name_parser::models::{BgmAction, BlackoutAction, ChoiceOption, Document, Event};
 
 use crate::flags::GameFlags;
 use crate::sentence;
@@ -307,6 +308,22 @@ pub struct Playback {
     /// `Event::Choice` item も対象に含む（暗転中に選択肢が出る原稿は今回のスコープ外だが、
     /// 状態追跡自体は他の非表示イベントと同じ走査ループの中で行うため、除外する理由がない）。
     item_blackout: Vec<bool>,
+    /// `items[i]` の表示時点で再生されているべき BGM のパス（`Event::Bgm`、#502）。`items` と
+    /// 同じ長さを常に保つ（`item_file_ids` と同じ並行 Vec のパターン）。GUI版
+    /// `AudioManager.currentBgmUrl`（`NovelRenderer.currentBgmPath`）が「現在再生されている
+    /// べき BGM パス」を宣言的に持ち続けるのを、TUI では「その item が生成された時点の値を
+    /// 焼き付けて持ち回る」形で再現する。`Event::Choice` item も対象に含める（除外する理由が
+    /// ない）。
+    item_bgm: Vec<Option<String>>,
+    /// `items[i]` に到達した瞬間に一度だけ再生すべき SE のパス一覧（`Event::Se`、#502）。
+    /// 直前の item から現在の item までの間に出現した `[SE:]` を出現順にすべて含む
+    /// （複数の SE が連続していても取りこぼさない、通常は0〜1件）。BGM と異なり GUI版
+    /// `playSe` に持続する state は無い（ワンショット）ため、`item_bgm` のような「現在位置を
+    /// 問い合わせるだけの宣言的 state」ではなく、`event_loop` 側が「この item への新規到達」
+    /// （[`Playback::item_index`] の変化）を検出したときに一度だけ消費するトリガとして扱う想定。
+    /// ドキュメント末尾以降に出現した SE（後続 item が存在しない）は、どの item にも属せない
+    /// ため再生対象にならない（既知の制約、影響は軽微）。
+    item_se: Vec<Vec<String>>,
     index: usize,
     /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
     /// `from_document`/`from_merged_document` で埋まる。`advance`/`select_current_choice` が
@@ -366,6 +383,14 @@ struct SceneScanState {
     current_speaker: Option<String>,
     current_text: Vec<String>,
     current_blackout: bool,
+    /// 現在再生されているべき BGM のパス（`Event::Bgm`、#502）。`current_event_image`/
+    /// `current_blackout` と同じ「シーン・チャプター境界をまたいで引き継ぐ宣言的 state」
+    /// パターン（`Playback` 構造体の `item_bgm` doc comment参照）。
+    current_bgm: Option<String>,
+    /// 直前の item から現在位置までの間に出現した `[SE:]` の出現順一覧（#502）。次に item が
+    /// push されるタイミングで `item_se` へ焼き付けられ、その場で空に戻る
+    /// （`Playback` 構造体の `item_se` doc comment参照）。
+    pending_se: Vec<String>,
 }
 
 /// 1シーン分の生イベント列を処理し、items系のVecへ積む。`Playback::build` から各シーンごとに
@@ -375,22 +400,28 @@ struct SceneScanState {
 /// 丸ごと移動しただけ）。
 ///
 /// `flags`（#509 のフラグ管理）を `state`（`SceneScanState`）にまとめず独立の引数のまま
-/// 追加したため合計8引数になり `clippy::too_many_arguments`（既定閾値7）に抵触する。
-/// `SceneScanState` は元々「シーンを跨いで引き継ぐランニング状態」専用の入れ物として
-/// 導入された経緯があり、性質の異なる `GameFlags` をそこに押し込むのは筋が悪いため、
-/// ここでは構造変更を避けて `allow` で抑止するに留める。
+/// 追加したため合計8引数になり `clippy::too_many_arguments`（既定閾値7）に抵触する
+/// （#502 の `item_bgm`/`item_se` 追加で現在は10引数）。`SceneScanState` は元々
+/// 「シーンを跨いで引き継ぐランニング状態」専用の入れ物として導入された経緯があり、
+/// 性質の異なる `GameFlags` をそこに押し込むのは筋が悪いため、ここでは構造変更を避けて
+/// `allow` で抑止するに留める。
 /// Wait 直後の Blackout/SceneTransition 検出（#475/#524）が共通で行う、「その時点の
 /// `state`（呼び出し側で望む終端状態へ更新済み）を1つの画像コマ item として焼き付けて
 /// 4本の並行 Vec へ積む」処理をまとめたもの（セルフレビュー対応、重複除去）。この item は
 /// さらなる自動送りを持たない（`item_wait_ms` は常に `None`）— 「閉じきった最後のコマで
 /// 状態が切り替わる」で連鎖は完結し、この item から別の item へ自動で進む理由が無いため。
+/// BGM/SE の並行 Vec が増えたことで8引数になり `clippy::too_many_arguments`
+/// （既定閾値7）に抵触する（#502）。`build_scene_items` と同じ理由で `allow` に留める。
+#[allow(clippy::too_many_arguments)]
 fn push_wait_chain_terminal_item(
-    state: &SceneScanState,
+    state: &mut SceneScanState,
     file_id: usize,
     items: &mut Vec<PlaybackItem>,
     item_file_ids: &mut Vec<usize>,
     item_wait_ms: &mut Vec<Option<u32>>,
     item_blackout: &mut Vec<bool>,
+    item_bgm: &mut Vec<Option<String>>,
+    item_se: &mut Vec<Vec<String>>,
 ) {
     items.push(PlaybackItem::Image(DisplayLine {
         speaker: state.current_speaker.clone(),
@@ -400,6 +431,11 @@ fn push_wait_chain_terminal_item(
     item_file_ids.push(file_id);
     item_wait_ms.push(None);
     item_blackout.push(state.current_blackout);
+    // BGM/SE も他の並行 Vec と同じくこの合成 item に焼き付ける（#502）。この item を
+    // 経由しても pending な SE を取りこぼさないよう、他の push サイトと同じく
+    // `mem::take` で消費する。
+    item_bgm.push(state.current_bgm.clone());
+    item_se.push(std::mem::take(&mut state.pending_se));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -412,6 +448,8 @@ fn build_scene_items(
     item_file_ids: &mut Vec<usize>,
     item_wait_ms: &mut Vec<Option<u32>>,
     item_blackout: &mut Vec<bool>,
+    item_bgm: &mut Vec<Option<String>>,
+    item_se: &mut Vec<Vec<String>>,
 ) {
     let mut event_index = 0;
     while event_index < events.len() {
@@ -451,6 +489,9 @@ fn build_scene_items(
                     // `is_blackout()` 判定を静かにズラす（#475 実装時に発見した
                     // マージ由来のバグ、要修正）。
                     item_blackout.push(state.current_blackout);
+                    // BGM/SE も他の並行 Vec と同じくこの画像コマ item に焼き付ける（#502）。
+                    item_bgm.push(state.current_bgm.clone());
+                    item_se.push(std::mem::take(&mut state.pending_se));
 
                     // `Event::Wait` のさらに直後が `Event::Blackout` の場合、
                     // 暗転状態（オン/オフいずれも）を表示する独立した item を追加で
@@ -505,6 +546,8 @@ fn build_scene_items(
                             item_file_ids,
                             item_wait_ms,
                             item_blackout,
+                            item_bgm,
+                            item_se,
                         );
                         consumed = 3;
                     } else if matches!(events.get(event_index + 2), Some(Event::SceneTransition)) {
@@ -517,6 +560,8 @@ fn build_scene_items(
                             item_file_ids,
                             item_wait_ms,
                             item_blackout,
+                            item_bgm,
+                            item_se,
                         );
                         consumed = 3;
                     }
@@ -548,6 +593,27 @@ fn build_scene_items(
                 state.current_blackout = false;
                 state.current_event_image = None;
             }
+            // GUI版 `NovelRenderer` の `'Bgm' in event` 分岐（`audioManager.playBgm`/
+            // `stopBgm`）と同じ意味論（#502）。`action === 'Play' && path` の両方が
+            // 揃わない限り「停止」扱いになる GUI版の挙動をそのまま再現する
+            // （`action: Play` でも `path: None` なら停止 — 通常の原稿では起こらない
+            // 組み合わせだが、フォールバックとして GUI版に揃える）。`fade_ms` は
+            // `Event::EventImage` の `fade_ms` と同じ理由で意図的に捨てる（TUIは
+            // フェード無しの即時切り替え、MVPスコープ）。
+            Event::Bgm { path, action, .. } => {
+                state.current_bgm = match (action, path) {
+                    (BgmAction::Play, Some(p)) => Some(p.clone()),
+                    _ => None,
+                };
+            }
+            // GUI版 `playSe` はワンショット再生で持続 state を持たないため、
+            // `current_event_image`/`current_bgm` のような「直近の値」ではなく
+            // 「次に生成される item に紐づけて後で一度だけ再生するトリガ」として
+            // 貯めておく（`item_se` の doc comment 参照、#502）。`fade_ms` は BGM と
+            // 同じ理由で捨てる。
+            Event::Se { path, .. } => {
+                state.pending_se.push(path.clone());
+            }
             Event::Flag { name, value } => {
                 flags.set(name.clone(), value.clone());
             }
@@ -565,6 +631,8 @@ fn build_scene_items(
                         item_file_ids,
                         item_wait_ms,
                         item_blackout,
+                        item_bgm,
+                        item_se,
                     );
                 }
                 // false の場合は何もしない（inner を一切処理しない＝副作用もitem生成も無い）
@@ -588,6 +656,8 @@ fn build_scene_items(
                     item_file_ids.push(file_id);
                     item_wait_ms.push(None);
                     item_blackout.push(state.current_blackout);
+                    item_bgm.push(state.current_bgm.clone());
+                    item_se.push(std::mem::take(&mut state.pending_se));
                 }
             }
         }
@@ -644,6 +714,8 @@ impl Playback {
         let mut item_file_ids = Vec::new();
         let mut item_wait_ms = Vec::new();
         let mut item_blackout = Vec::new();
+        let mut item_bgm = Vec::new();
+        let mut item_se: Vec<Vec<String>> = Vec::new();
         let mut scene_order: Vec<SceneRef> = Vec::new();
         let mut scene_index_by_id = HashMap::new();
         // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
@@ -656,6 +728,8 @@ impl Playback {
             current_speaker: None,
             current_text: Vec::new(),
             current_blackout: false,
+            current_bgm: None,
+            pending_se: Vec::new(),
         };
         let mut flags = GameFlags::new();
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
@@ -687,6 +761,8 @@ impl Playback {
                 &mut item_file_ids,
                 &mut item_wait_ms,
                 &mut item_blackout,
+                &mut item_bgm,
+                &mut item_se,
             );
         }
         Self {
@@ -694,6 +770,8 @@ impl Playback {
             item_file_ids,
             item_wait_ms,
             item_blackout,
+            item_bgm,
+            item_se,
             index: 0,
             scene_order,
             scene_index_by_id,
@@ -753,6 +831,31 @@ impl Playback {
         self.index = index;
         self.choice_cursor = 0;
         self.sync_sentence_pages();
+    }
+
+    /// 現在位置の item に紐づく BGM 状態（`Event::Bgm`、#502）。GUI版
+    /// `AudioManager.currentBgmUrl` と同じ「現在再生されているべき BGM パス」を表す宣言的
+    /// state。`items` が空、または現在位置が末尾を過ぎている場合は `None`（＝BGM無し）。
+    /// `event_loop` 側はフレームごとにこの値を前フレームの値と比較し、変化していれば
+    /// 再生中の BGM を切り替える（`item_bgm` の doc comment 参照）。
+    pub fn current_bgm(&self) -> Option<&str> {
+        self.item_bgm.get(self.index).and_then(|b| b.as_deref())
+    }
+
+    /// 現在位置の item に到達した際に一度だけ再生すべき SE のパス一覧（`Event::Se`、#502）。
+    /// `items` が空、または現在位置が末尾を過ぎている場合は空スライス。呼び出し側
+    /// （`event_loop`）は [`Playback::item_index`] の変化（＝この item への新規到達）を検出
+    /// したときだけ、この一覧を消費して1回だけ再生する想定（`item_se` の doc comment 参照）。
+    /// `item_index()` は `PlaybackItem::Image`（#497）へのクロスフェード判定が使っているのと
+    /// 同じ「生の items インデックス」で、専用の `cursor()` を別途持たずそのまま流用できる —
+    /// [`Playback::position`]（Line item のみを数える会話行番号）と異なり Choice item への
+    /// 遷移でも変化する一方、`sentence_per_page` による同一 Line item 内の文送りでは変化しない
+    /// （同じ item に紐づく SE を文送りのたびに再トリガーしない、という意図した挙動でもある）。
+    pub fn current_se_cues(&self) -> &[String] {
+        self.item_se
+            .get(self.index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// 現在位置の会話行。現在位置が Choice item、会話行が1件もない、または末尾を過ぎている
@@ -824,7 +927,11 @@ impl Playback {
     /// `main.rs::event_loop` が「実際に別の item へ移動したか」（＝新しい event_image への
     /// クロスフェードを開始すべきか）を判定するのに使う — 画像コマへの遷移は `position()` の
     /// 値を変えない（Line item ではないため）ので、`position()` の変化だけを見ていると
-    /// 画像コマへの遷移を検知し損ねる。
+    /// 画像コマへの遷移を検知し損ねる。SE のワンショット再生（#502）も同じ signal で
+    /// 「新しい item に到達した瞬間」を検出する（[`Playback::current_se_cues`] のdoc
+    /// comment参照）— Choice item への遷移でも変化する一方、`sentence_per_page` による
+    /// 同一 Line item 内の文送りでは変化しないため、同じ item に紐づく SE を文送りのたびに
+    /// 再トリガーしない、という意図した挙動にもなる。
     pub(crate) fn item_index(&self) -> usize {
         self.index
     }
@@ -880,6 +987,8 @@ impl Playback {
                 &mut self.item_file_ids,
                 &mut self.item_wait_ms,
                 &mut self.item_blackout,
+                &mut self.item_bgm,
+                &mut self.item_se,
             );
             self.current_scene_idx = next_scene_idx;
             if self.items.len() > start {
@@ -1002,6 +1111,8 @@ impl Playback {
                 &mut self.item_file_ids,
                 &mut self.item_wait_ms,
                 &mut self.item_blackout,
+                &mut self.item_bgm,
+                &mut self.item_se,
             );
             self.current_scene_idx = scene_idx;
             if self.items.len() > start {
@@ -1058,6 +1169,8 @@ impl Playback {
             current_speaker: None,
             current_text: Vec::new(),
             current_blackout: false,
+            current_bgm: None,
+            pending_se: Vec::new(),
         };
         let mut flags = self.flags.clone();
         let mut count = 0;
@@ -1066,6 +1179,8 @@ impl Playback {
             let mut item_file_ids = Vec::new();
             let mut item_wait_ms = Vec::new();
             let mut item_blackout = Vec::new();
+            let mut item_bgm = Vec::new();
+            let mut item_se = Vec::new();
             build_scene_items(
                 &scene.events,
                 scene.file_id,
@@ -1075,6 +1190,8 @@ impl Playback {
                 &mut item_file_ids,
                 &mut item_wait_ms,
                 &mut item_blackout,
+                &mut item_bgm,
+                &mut item_se,
             );
             count += items
                 .iter()
@@ -1149,6 +1266,8 @@ impl Playback {
             let mut item_file_ids = Vec::new();
             let mut item_wait_ms = Vec::new();
             let mut item_blackout = Vec::new();
+            let mut item_bgm = Vec::new();
+            let mut item_se = Vec::new();
             build_scene_items(
                 &next_scene.events,
                 next_scene.file_id,
@@ -1158,6 +1277,8 @@ impl Playback {
                 &mut item_file_ids,
                 &mut item_wait_ms,
                 &mut item_blackout,
+                &mut item_bgm,
+                &mut item_se,
             );
             if !items.is_empty() {
                 return true;
@@ -1176,11 +1297,15 @@ impl Playback {
         let item_file_ids = vec![0; lines.len()];
         let item_wait_ms = vec![None; lines.len()];
         let item_blackout = vec![false; lines.len()];
+        let item_bgm = vec![None; lines.len()];
+        let item_se = vec![Vec::new(); lines.len()];
         Self {
             items: lines.into_iter().map(PlaybackItem::Line).collect(),
             item_file_ids,
             item_wait_ms,
             item_blackout,
+            item_bgm,
+            item_se,
             index: 0,
             scene_order: Vec::new(),
             scene_index_by_id: HashMap::new(),
@@ -1194,6 +1319,8 @@ impl Playback {
                 current_speaker: None,
                 current_text: Vec::new(),
                 current_blackout: false,
+                current_bgm: None,
+                pending_se: Vec::new(),
             },
             current_scene_idx: 0,
             flags: GameFlags::new(),
@@ -1367,7 +1494,9 @@ mod tests {
 
     #[test]
     fn non_display_events_are_excluded_but_choice_still_produces_an_item() {
-        // Background/Bgm/Se は依然として画面表示イベントではないため items を生成しない。
+        // Background/Bgm/Se は依然として画面表示イベントではないため独立した items を
+        // 生成しない（Bgm/Se は #502 で状態として追跡されるようになったが、それは次に
+        // 生成される item に焼き付けられるだけで、Bgm/Se 自体が item にはならない）。
         // Choice は #482 で「読み飛ばし」対象から外れ、独立した item になった（以前は他の
         // 非表示イベントと同様に丸ごと無視されており、選択肢が一切機能しない原因だった）。
         let doc = doc_single_scene(vec![
@@ -4565,5 +4694,457 @@ mod tests {
             .current_line()
             .expect("1-2のflag副作用が適用され1-3の条件が成立しているはず");
         assert_eq!(line.speaker.as_deref(), Some("B"));
+    }
+    // ---- #502: BGM (Event::Bgm) / SE (Event::Se) の追跡 ----
+
+    fn bgm_play(path: &str) -> Event {
+        Event::Bgm {
+            path: Some(path.to_string()),
+            action: BgmAction::Play,
+            fade_ms: None,
+        }
+    }
+
+    fn bgm_stop() -> Event {
+        Event::Bgm {
+            path: None,
+            action: BgmAction::Stop,
+            fade_ms: None,
+        }
+    }
+
+    fn se(path: &str) -> Event {
+        Event::Se {
+            path: path.to_string(),
+            fade_ms: None,
+        }
+    }
+
+    fn bgm_stop_with_path(path: &str) -> Event {
+        // 通常の原稿では起こらない組み合わせ（Stopなのにpathが付いている）だが、
+        // GUI版と同じ「actionがStopなら無条件で停止」という意味論を固定するために使う
+        // （デシジョンテーブル1' #3）。
+        Event::Bgm {
+            path: Some(path.to_string()),
+            action: BgmAction::Stop,
+            fade_ms: None,
+        }
+    }
+
+    #[test]
+    fn lines_before_any_bgm_have_none() {
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["前"])]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), None);
+    }
+
+    #[test]
+    fn dialog_after_bgm_play_carries_its_path() {
+        let doc = doc_single_scene(vec![bgm_play("amehure.ogg"), dialog(Some("A"), vec!["後"])]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("amehure.ogg"));
+    }
+
+    #[test]
+    fn bgm_stop_clears_current_bgm_for_subsequent_lines() {
+        let doc = doc_single_scene(vec![
+            bgm_play("amehure.ogg"),
+            dialog(Some("A"), vec!["再生中"]),
+            bgm_stop(),
+            dialog(Some("A"), vec!["停止後"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("amehure.ogg"));
+        pb.advance();
+        assert_eq!(pb.current_bgm(), None);
+    }
+
+    #[test]
+    fn later_bgm_play_replaces_the_previous_one() {
+        let doc = doc_single_scene(vec![
+            bgm_play("a.ogg"),
+            dialog(Some("A"), vec!["1"]),
+            bgm_play("b.ogg"),
+            dialog(Some("A"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        pb.advance();
+        assert_eq!(pb.current_bgm(), Some("b.ogg"));
+    }
+
+    #[test]
+    fn bgm_play_without_path_is_treated_as_stop_like_gui() {
+        // GUI版 `event.Bgm.action === 'Play' && event.Bgm.path` の両方が揃わない限り
+        // else（停止）分岐に落ちるのと同じ意味論（通常の原稿では起こらない組み合わせだが、
+        // フォールバックとして揃える）。
+        let doc = doc_single_scene(vec![
+            Event::Bgm {
+                path: None,
+                action: BgmAction::Play,
+                fade_ms: None,
+            },
+            dialog(Some("A"), vec!["後"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), None);
+    }
+
+    #[test]
+    fn bgm_state_persists_across_scene_and_chapter_boundaries() {
+        let ch1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![bgm_play("amehure.ogg"), dialog(Some("A"), vec!["ch1"])],
+            )],
+        );
+        let ch2 = chapter(2, vec![scene("2-1", vec![dialog(Some("B"), vec!["ch2"])])]);
+        let doc = document_with_chapters(vec![ch1, ch2]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance();
+        assert_eq!(
+            pb.current_bgm(),
+            Some("amehure.ogg"),
+            "BGM状態はチャプター境界をまたいでも引き継がれる"
+        );
+    }
+
+    #[test]
+    fn choice_event_does_not_affect_bgm_state() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![bgm_play("amehure.ogg"), choice(vec![("yes", "1-2")])],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["後"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_bgm(),
+            Some("amehure.ogg"),
+            "Choice item自体もBGM状態を持つ"
+        );
+        assert!(pb.select_current_choice());
+        assert_eq!(
+            pb.current_bgm(),
+            Some("amehure.ogg"),
+            "Choiceを挟んでもBGM状態は変わらない"
+        );
+    }
+
+    #[test]
+    fn lines_before_any_se_have_empty_cues() {
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["前"])]);
+        let pb = Playback::from_document(&doc);
+        assert!(pb.current_se_cues().is_empty());
+    }
+
+    #[test]
+    fn dialog_after_se_carries_its_path_as_a_one_shot_cue() {
+        let doc = doc_single_scene(vec![se("chime.wav"), dialog(Some("A"), vec!["後"])]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_se_cues(), &["chime.wav".to_string()]);
+    }
+
+    #[test]
+    fn next_line_does_not_repeat_the_previous_lines_se_cue() {
+        let doc = doc_single_scene(vec![
+            se("chime.wav"),
+            dialog(Some("A"), vec!["1"]),
+            dialog(Some("A"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_se_cues(), &["chime.wav".to_string()]);
+        pb.advance();
+        assert!(
+            pb.current_se_cues().is_empty(),
+            "SEは到達時の1itemだけに紐づき後続itemへ引き継がれない（BGMとの意味論の違い）"
+        );
+    }
+
+    #[test]
+    fn multiple_consecutive_se_before_one_line_accumulate_in_order() {
+        let doc = doc_single_scene(vec![
+            se("a.wav"),
+            se("b.wav"),
+            dialog(Some("A"), vec!["後"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_se_cues(),
+            &["a.wav".to_string(), "b.wav".to_string()]
+        );
+    }
+
+    #[test]
+    fn trailing_se_with_no_following_item_is_dropped() {
+        // ドキュメント末尾の直前にSEがあっても、後続itemが無いためどのitemにも紐づかず
+        // 再生対象にならない（既知の制約、item_seのdoc comment参照）。
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["最後の台詞"]), se("chime.wav")]);
+        let pb = Playback::from_document(&doc);
+        assert!(pb.current_se_cues().is_empty());
+    }
+
+    #[test]
+    fn cursor_changes_when_advancing_to_the_next_item() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1"]),
+            dialog(Some("B"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        let before = pb.item_index();
+        pb.advance();
+        assert_ne!(
+            before,
+            pb.item_index(),
+            "次のitemへ進んだのでcursorは変化するはず"
+        );
+    }
+
+    #[test]
+    fn cursor_stays_the_same_across_sentence_pages_within_one_line() {
+        // sentence_per_page有効時、同一Line item内の文送りはitemsの位置(self.index)を
+        // 動かさないため、cursorは変化しない（＝同じitemに紐づくSEを文送りのたびに
+        // 再トリガーしない、意図した挙動）。
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["最初の文。次の文。"])]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        let before = pb.item_index();
+        assert!(pb.advance(), "同じLine item内の次の文へ進めるはず");
+        assert_eq!(
+            before,
+            pb.item_index(),
+            "文送りだけではcursorは変化しないはず"
+        );
+    }
+
+    // ---- #502 追補: テスト設計担当のデシジョンテーブルに基づく追加ケース ----
+
+    #[test]
+    fn consecutive_same_bgm_path_keeps_state_unchanged() {
+        // デシジョンテーブル1 #3: 同一BGMパスが連続する場合([BGM:a][Dialog][BGM:a])、
+        // current_bgm()は変化せずSome(a)のままであることを確認する。値としては同じだが
+        // 「無条件で状態は保持される」ことの確認であり、実際に再生を再スタートしないかは
+        // audio.rs層の話なのでここでは扱わない。
+        let doc = doc_single_scene(vec![
+            bgm_play("a.ogg"),
+            dialog(Some("A"), vec!["1"]),
+            bgm_play("a.ogg"),
+            dialog(Some("A"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        pb.advance();
+        assert_eq!(
+            pb.current_bgm(),
+            Some("a.ogg"),
+            "同一パスの再Play後もcurrent_bgm()はSome(a.ogg)のまま"
+        );
+    }
+
+    #[test]
+    fn bgm_stop_with_path_present_still_clears_current_bgm() {
+        // デシジョンテーブル1' #3: Event::Bgm{action: Stop, path: Some(p)}
+        // (pathがあってもStopが優先)でcurrent_bgm()がNoneになることを確認する。
+        let doc = doc_single_scene(vec![
+            bgm_play("a.ogg"),
+            dialog(Some("A"), vec!["再生中"]),
+            bgm_stop_with_path("a.ogg"),
+            dialog(Some("A"), vec!["停止後"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        pb.advance();
+        assert_eq!(
+            pb.current_bgm(),
+            None,
+            "pathが付いていてもactionがStopなら停止扱いになるはず"
+        );
+    }
+
+    #[test]
+    fn choice_item_carries_se_attached_immediately_before_it() {
+        // デシジョンテーブル2 #2: Choice直前に[SE:x]があるケース(Choiceにitem_seが
+        // 付く)で、item_index()ベースのSE検出が正しく反応する(current_se_cues()が
+        // Choice item自体でも値を返す)ことを確認する。
+        let doc = doc_single_scene(vec![se("select.wav"), choice(vec![("進む", "1-1")])]);
+        let pb = Playback::from_document(&doc);
+        assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
+        assert_eq!(
+            pb.current_se_cues(),
+            &["select.wav".to_string()],
+            "Choice item自体もSEを保持する"
+        );
+    }
+
+    #[test]
+    fn moving_choice_cursor_does_not_change_playback_cursor() {
+        // デシジョンテーブル2 #3: Choice表示中のmove_choice_cursor_up/downは
+        // self.index(item_index())を変えないため、SEが再発火しないことを確認する。
+        let doc = doc_single_scene(vec![se("select.wav"), choice(vec![("A", "x"), ("B", "y")])]);
+        let mut pb = Playback::from_document(&doc);
+        let before = pb.item_index();
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            before,
+            pb.item_index(),
+            "カーソル移動だけではitem_index()は変化しないはず(SE再発火防止)"
+        );
+        assert_eq!(pb.current_se_cues(), &["select.wav".to_string()]);
+    }
+
+    #[test]
+    fn select_current_choice_success_exposes_jump_targets_own_se() {
+        // デシジョンテーブル2 #4: select_current_choice成功でjump先のitemが持つ
+        // item_seが正しく参照できることを確認する(jump先itemに[SE:]を仕込む)。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![choice(vec![("進む", "1-2")])]),
+                scene(
+                    "1-2",
+                    vec![se("arrival.wav"), dialog(Some("A"), vec!["到着"])],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+        assert_eq!(
+            pb.current_se_cues(),
+            &["arrival.wav".to_string()],
+            "jump先itemのSEが正しく参照できるはず"
+        );
+    }
+
+    #[test]
+    fn backward_jump_to_already_visited_scene_refires_its_se_by_design() {
+        // デシジョンテーブル2 #7: 後方jump(既訪問シーンへ戻る選択肢)で、そのitemのSEが
+        // 「再発火する」ことを仕様として明示的に固定する。item_se/current_se_cues()は
+        // cursor位置に対する純粋な参照であり、「一度発火したら二度と発火しない」ような
+        // 消費済みフラグは持たない設計のため、同じitemへ再訪すれば同じSEが再び
+        // current_se_cues()から観測される。これはバグではなく意図的な挙動である
+        // (event_loop側がitem_index()の変化を検出するたびに毎回消費する設計、#502)。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![se("bgm-room.wav"), dialog(Some("A"), vec!["最初のシーン"])],
+                ),
+                scene(
+                    "1-2",
+                    vec![
+                        dialog(Some("B"), vec!["2番目のシーン"]),
+                        choice(vec![("戻る", "1-1")]),
+                    ],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_se_cues(),
+            &["bgm-room.wav".to_string()],
+            "最初の訪問時にSEが記録されているはず"
+        );
+        pb.advance(); // "1-1"の台詞 → "1-2"の台詞
+        pb.advance(); // "1-2"の台詞 → Choice
+        assert!(
+            pb.select_current_choice(),
+            "既訪問シーンへの戻りjumpも成功するはず"
+        );
+        assert_eq!(
+            pb.current_se_cues(),
+            &["bgm-room.wav".to_string()],
+            "既訪問シーンへ戻っても同じSEが再びcurrent_se_cues()に現れる(仕様、バグではない)"
+        );
+    }
+
+    #[test]
+    fn multiple_se_are_all_recorded_regardless_of_path_validity() {
+        // 観点7: 複数SEのうち1件のパスが(config層のresolve_sound_pathでは弾かれる
+        // ような値)であっても、Playback層はパスの妥当性を検証しないため、全てのSEが
+        // item_se/current_se_cues()に記録されることを確認する(パス解決自体はconfig層の
+        // 話であり、ここでは「複数SEが全て記録される」ことのみ確認する)。
+        let doc = doc_single_scene(vec![
+            se("valid.wav"),
+            se("../escape.wav"), // resolve_sound_pathなら弾かれるパスだがPlayback層は関知しない
+            dialog(Some("A"), vec!["後"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_se_cues(),
+            &["valid.wav".to_string(), "../escape.wav".to_string()],
+            "パスの妥当性に関わらず両方のSEが記録される"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_failure_leaves_bgm_and_se_state_unchanged() {
+        // 観点8: select_current_choice失敗時(無効jump)にcurrent_bgm()/
+        // current_se_cues()相当が変化しないことを確認する。
+        let doc = doc_single_scene(vec![
+            bgm_play("room.ogg"),
+            se("warn.wav"),
+            choice(vec![("存在しない先へ", "does-not-exist")]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("room.ogg"));
+        assert_eq!(pb.current_se_cues(), &["warn.wav".to_string()]);
+
+        assert!(
+            !pb.select_current_choice(),
+            "存在しないシーンIDへのjumpは失敗するはず"
+        );
+
+        assert_eq!(
+            pb.current_bgm(),
+            Some("room.ogg"),
+            "jump失敗後もBGM状態は変わらないはず"
+        );
+        assert_eq!(
+            pb.current_se_cues(),
+            &["warn.wav".to_string()],
+            "jump失敗後もSE状態は変わらないはず"
+        );
+    }
+
+    #[test]
+    fn confirming_choice_jump_moves_cursor_away_from_source_choice_se() {
+        // 観点9: Choice確定ジャンプで遷移した際、遷移元Choice item自体のSEが
+        // 再発火しない(cursorが変わるのは遷移後のみ)ことを確認する。遷移元Choiceが
+        // 持っていたSEはジャンプ後には現れず(target itemが別のSEを持つため)、
+        // item_index()も遷移元とは異なる値に変化していることを確認する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![se("open-menu.wav"), choice(vec![("進む", "1-2")])],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["次のシーン"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_se_cues(), &["open-menu.wav".to_string()]);
+        let source_cursor = pb.item_index();
+
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+
+        assert_ne!(
+            source_cursor,
+            pb.item_index(),
+            "ジャンプ後はitem_index()が変化しているはず(遷移元Choiceへの再到達ではない)"
+        );
+        assert!(
+            pb.current_se_cues().is_empty(),
+            "遷移元Choice自体のSEは遷移後には現れない(target itemは別のSEを持つため)"
+        );
     }
 }

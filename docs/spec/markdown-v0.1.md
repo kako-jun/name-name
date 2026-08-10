@@ -328,6 +328,8 @@ emit 側では bare 数字構文も `[BGM停止: フェード=N]` の kv 形式�
 
 パーサー内部では `Bgm { action, path, fade_ms }` の単一バリアントで表現される（`fade_ms` は Play 時は fade-in、Stop 時は fade-out）。
 
+**TUI版限定: BGM/SEを実際に再生する（#502、rodioベース）が、`フェード=N`/`fade=N` は解析時点で読み捨てて全て即時切替になる**（暗転・場面転換がTUIではフェード無しなのと同じ判断基準）。パスは `tui-config.toml` の `sound.assets_dir`（既定 `assets/sounds`、GUI版と同じディレクトリ構造）から解決する。音声出力デバイスが無い環境（SSH経由・headless等）・ファイル未検出・デコード失敗のいずれもエラーにせず、音声再生だけを無効化して進行を続ける（fail-soft）。
+
 ## SE（効果音）
 
 ```markdown
@@ -337,6 +339,8 @@ emit 側では bare 数字構文も `[BGM停止: フェード=N]` の kv 形式�
 
 SEをワンショット再生する。複数のSEを同時に再生可能。パスは `assets/sounds/` からの相対パス。
 `フェード=N`（または `fade=N`）で fade-in 時間を ms 指定できる。未指定時は即時再生。
+
+**TUI版限定: 上記のBGMと同じくフェード無しの即時再生になる**（`フェード=N`/`fade=N` は読み捨て）。
 
 ## 暗転・暗転解除
 
