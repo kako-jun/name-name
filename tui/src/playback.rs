@@ -282,6 +282,188 @@ pub struct Playback {
     current_display: Option<DisplayLine>,
 }
 
+/// `build_scene_items` がシーンを跨いで引き継ぐランニング状態のまとめ役（#509 Phase A）。
+/// 個別の引数として渡すと `clippy::too_many_arguments` に抵触するため1つにまとめてある
+/// （挙動には影響しない、純粋な引数の持ち方の整理）。
+struct SceneScanState {
+    current_event_image: Option<String>,
+    current_speaker: Option<String>,
+    current_text: Vec<String>,
+    current_blackout: bool,
+}
+
+/// 1シーン分の生イベント列を処理し、items系のVecへ積む。`Playback::build` から各シーンごとに
+/// 呼ばれる、シーンを跨いで引き継ぐランニング状態（`current_event_image` 等、`state` にまとめて
+/// ある）は呼び出し側が保持し、可変参照として受け渡す（#509 Phase A、後でシーン単位に動的
+/// 呼び出しできるようにするための下ごしらえ。ロジックは `Playback::build` から一切変更せず
+/// 丸ごと移動しただけ）。
+fn build_scene_items(
+    events: &[Event],
+    file_id: usize,
+    state: &mut SceneScanState,
+    items: &mut Vec<PlaybackItem>,
+    item_file_ids: &mut Vec<usize>,
+    item_wait_ms: &mut Vec<Option<u32>>,
+    item_blackout: &mut Vec<bool>,
+) {
+    let mut event_index = 0;
+    while event_index < events.len() {
+        let event = &events[event_index];
+        match event {
+            // `path` の `..` は `back`（表示位置）と `fade_ms`（イベント個別の
+            // フェード時間上書き）を意図的に捨てている。`fade_ms` は TUI 側では
+            // 常に `config.event_image.crossfade_ms`（グローバル値、`main.rs` の
+            // `event_loop` 参照）しか使わない簡略化（MVPスコープ、#481）。GUI版の
+            // ようなイベント単位のフェード時間上書きは今回の対象外。
+            Event::EventImage { path, .. } => {
+                state.current_event_image = Some(path.clone());
+                // 直後が `Event::Wait { ms }` の場合だけ、画像コマ+待機の自動送り
+                // item を作る（#497、Issue #475 が求める4コマ自動再生の受け皿）。
+                // それ以外（次が Dialog/EventImage/EventImageExit 等）は従来どおり
+                // `state.current_event_image` を更新するだけに留め、item は作らない —
+                // ここで無条件に item 化すると、`[イベント絵:X]` の直後に台詞が
+                // 続くだけの既存スクリプトにまで「クリック待ちの画像だけの1手」が
+                // 増えてしまう（wait_ms 無しの item は自動で進まないため）回帰になる。
+                //
+                // `events.get(event_index + 1)` は「直後」の1イベントしか見ない
+                // ため、`[イベント絵:A][SE:...][待機:200]` のように間に BGM/SE 等の
+                // 非表示イベントを挟むとこのパターンに一致せず、自動送りが黙って
+                // 無効化される（`Event::Wait` は下の `_` 分岐で通常どおり処理され、
+                // 孤立した待機として扱われる）。スクリプト側でこの隣接性を守る必要が
+                // ある（要ドキュメント化、セルフレビューshould対応）。
+                if let Some(Event::Wait { ms }) = events.get(event_index + 1) {
+                    items.push(PlaybackItem::Image(DisplayLine {
+                        speaker: state.current_speaker.clone(),
+                        text: state.current_text.clone(),
+                        event_image: state.current_event_image.clone(),
+                    }));
+                    item_file_ids.push(file_id);
+                    item_wait_ms.push(Some(*ms));
+                    // #512 統合前は無かった並行 Vec。ここへの push 漏れは
+                    // `item_blackout` を `items` より1件短くし、以降の全 item の
+                    // `is_blackout()` 判定を静かにズラす（#475 実装時に発見した
+                    // マージ由来のバグ、要修正）。
+                    item_blackout.push(state.current_blackout);
+
+                    // `Event::Wait` のさらに直後が `Event::Blackout` の場合、
+                    // 暗転状態（オン/オフいずれも）を表示する独立した item を追加で
+                    // 生成する（Issue #475）。#512 の `Event::Blackout` 処理
+                    // （このmatchの少し下の腕）は、既存の Line/Choice/Image item に
+                    // 「表示中は暗転しているか」のフラグを後付けするだけで、暗転
+                    // 自体を運ぶ item を単独では作らない。そのため
+                    // `[イベント絵:C][待機:200][暗転]` のように、暗転の後に表示
+                    // すべき会話行が続かない原稿では、自動送りの連鎖が「暗転を表示
+                    // する item」へ着地できず、暗転が画面に一度も出ないまま終わって
+                    // しまう（Issue #475 の現状分析）。
+                    //
+                    // EventImage+Wait の2件消費に、Blackout も続く場合だけ+1する。
+                    //
+                    // 既知の制約1（Issue #475でスコープ外と判定済み、対応しない）:
+                    // `events` はここでは `&scene.events`（シーンスコープ）のみを
+                    // 見ているため、`[イベント絵][待機]` がシーン末尾・`[暗転]` が
+                    // 次シーン先頭、という原稿ではこのパターンに一致せず検出漏れに
+                    // なる（シーン境界をまたいだ Wait+Blackout 連鎖は検出できない）。
+                    // Wait+Blackout の連鎖は同一シーン内に収める必要がある。
+                    // シーン構造（`##` 見出し区切り）上、この演出を追記する箇所は
+                    // 単一シーンに収まる設計になっていると推測されるが、現時点で
+                    // Gymnasia 側に「目を閉じて暗転して終わる」シーケンス
+                    // （`[暗転]` タグ）自体を含む原稿がまだ一件も存在しないため
+                    // （画像素材が未制作で暫定対応中、Issue本文参照）、実データでの
+                    // 検証はできていない。実データが追加された時点で再検証が必要。
+                    //
+                    // #524 で解消: `[イベント絵][待機][場面転換]` で終わる原稿も、
+                    // `Event::Blackout` と同じ経路で「場面転換後の状態を焼き付けた
+                    // item」を生成する。GUI版 `Event::SceneTransition` 分岐
+                    // （`setBlackout(false)` + `eventImageLayer.remove()`）に倣い、
+                    // `state.current_blackout=false` かつ `state.current_event_image=None` に
+                    // リセットした上で item を積む — Blackout の「On」と同じ役割だが、
+                    // 運ぶ状態は暗転そのものではなくイベント絵クリア後の状態である点が
+                    // 異なる。この分岐で `Event::SceneTransition` 自体を消費するため、
+                    // 下の match 腕（`Event::SceneTransition => { .. }`）はここでは
+                    // 実行されない（`Event::Blackout` を消費するときと同じ扱い）。
+                    let mut consumed = 2;
+                    if let Some(Event::Blackout { action }) = events.get(event_index + 2) {
+                        state.current_blackout = matches!(action, BlackoutAction::On);
+                        items.push(PlaybackItem::Image(DisplayLine {
+                            speaker: state.current_speaker.clone(),
+                            text: state.current_text.clone(),
+                            event_image: state.current_event_image.clone(),
+                        }));
+                        item_file_ids.push(file_id);
+                        // 暗転item自体はさらなる自動送りを持たない —
+                        // 「閉じきった最後のコマで暗転へ移る」で連鎖は完結し、
+                        // 暗転後にまた別のitemへ自動で進む必要は無い（#475スコープ）。
+                        item_wait_ms.push(None);
+                        item_blackout.push(state.current_blackout);
+                        consumed = 3;
+                    } else if matches!(events.get(event_index + 2), Some(Event::SceneTransition)) {
+                        state.current_blackout = false;
+                        state.current_event_image = None;
+                        items.push(PlaybackItem::Image(DisplayLine {
+                            speaker: state.current_speaker.clone(),
+                            text: state.current_text.clone(),
+                            event_image: state.current_event_image.clone(),
+                        }));
+                        item_file_ids.push(file_id);
+                        // Blackout終端itemと同じく、さらなる自動送りは持たない。
+                        item_wait_ms.push(None);
+                        item_blackout.push(state.current_blackout);
+                        consumed = 3;
+                    }
+                    event_index += consumed;
+                    continue;
+                }
+            }
+            Event::EventImageExit { .. } => {
+                state.current_event_image = None;
+            }
+            // GUI版 `setBlackout` 相当（#512）。オン/オフの2状態を単純に上書きする
+            // だけの宣言的 state で、`state.current_event_image` と同じ「直近の値を次の
+            // item に焼き付ける」走査パターンに乗せる。
+            Event::Blackout { action } => {
+                state.current_blackout = matches!(action, BlackoutAction::On);
+            }
+            // GUI版 `NovelRenderer.processDirective` の `Event::SceneTransition` 相当
+            // （`this.setBlackout(false)` + `this.eventImageLayer.remove()`、#512/#524）。
+            // spec（markdown-v0.1.md）は `[場面転換]` を「背景クリア + 暗転解除」と
+            // 定義しており、`[暗転]` でオンにした暗転を明示的にオフへ戻すのに加え、
+            // GUI版はイベント絵レイヤーも明示的にクリアする（作者が
+            // `[イベント絵終了]` を書き忘れても場面転換で必ずイベント絵が消える
+            // 防御的挙動、#351）。TUI 側もこれに合わせ `state.current_event_image` を
+            // `None` に戻す（#524、旧実装は `state.current_blackout` のみリセットしており
+            // GUI版との差異だった）。背景クリア相当の永続 state（`clearBackground` /
+            // `videoLayer.remove` / `retreatNovelScrim`）は TUI 側が持たないため、
+            // このスコープでは暗転解除・イベント絵クリアのみ実装する。
+            Event::SceneTransition => {
+                state.current_blackout = false;
+                state.current_event_image = None;
+            }
+            _ => {
+                if let Some(item) = playback_item_from_event(event) {
+                    let item = match item {
+                        PlaybackItem::Line(mut line) => {
+                            line.event_image = state.current_event_image.clone();
+                            state.current_speaker = line.speaker.clone();
+                            state.current_text = line.text.clone();
+                            PlaybackItem::Line(line)
+                        }
+                        choice @ PlaybackItem::Choice(_) => choice,
+                        // `playback_item_from_event` は Dialog/Narration/Choice
+                        // からしか item を作らないため Image は返さない
+                        // （Image は上の EventImage+Wait 分岐でのみ生成される）。
+                        image @ PlaybackItem::Image(_) => image,
+                    };
+                    items.push(item);
+                    item_file_ids.push(file_id);
+                    item_wait_ms.push(None);
+                    item_blackout.push(state.current_blackout);
+                }
+            }
+        }
+        event_index += 1;
+    }
+}
+
 impl Playback {
     /// `Document` から Dialog / Narration / Choice を抽出し、先頭に位置づけた再生状態を作る。
     /// 走査中、直近の `Event::EventImage`（表示開始）/ `EventImageExit`（退場）を
@@ -334,15 +516,17 @@ impl Playback {
         let mut scene_start = HashMap::new();
         let mut scene_order: Vec<SceneRef> = Vec::new();
         let mut scene_index_by_id = HashMap::new();
-        let mut current_event_image: Option<String> = None;
         // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
         // `Event::Wait` が続いたときに生成する画像コマ item（`PlaybackItem::Image`）へ
         // そのまま引き継ぐ — Wait 中は会話テキストを変えず画像だけが切り替わる、という
         // GUI版 `NovelRenderer` の Wait 処理と同じ見え方にするため。まだ一度も会話行が
         // 無ければ「話者なし・本文なし」が初期値になる。
-        let mut current_speaker: Option<String> = None;
-        let mut current_text: Vec<String> = Vec::new();
-        let mut current_blackout = false;
+        let mut scan_state = SceneScanState {
+            current_event_image: None,
+            current_speaker: None,
+            current_text: Vec::new(),
+            current_blackout: false,
+        };
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
             let file_id = chapter_file_ids
                 .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
@@ -362,168 +546,15 @@ impl Playback {
                         });
                         scene_order.len() - 1
                     });
-                let events = &scene.events;
-                let mut event_index = 0;
-                while event_index < events.len() {
-                    let event = &events[event_index];
-                    match event {
-                        // `path` の `..` は `back`（表示位置）と `fade_ms`（イベント個別の
-                        // フェード時間上書き）を意図的に捨てている。`fade_ms` は TUI 側では
-                        // 常に `config.event_image.crossfade_ms`（グローバル値、`main.rs` の
-                        // `event_loop` 参照）しか使わない簡略化（MVPスコープ、#481）。GUI版の
-                        // ようなイベント単位のフェード時間上書きは今回の対象外。
-                        Event::EventImage { path, .. } => {
-                            current_event_image = Some(path.clone());
-                            // 直後が `Event::Wait { ms }` の場合だけ、画像コマ+待機の自動送り
-                            // item を作る（#497、Issue #475 が求める4コマ自動再生の受け皿）。
-                            // それ以外（次が Dialog/EventImage/EventImageExit 等）は従来どおり
-                            // `current_event_image` を更新するだけに留め、item は作らない —
-                            // ここで無条件に item 化すると、`[イベント絵:X]` の直後に台詞が
-                            // 続くだけの既存スクリプトにまで「クリック待ちの画像だけの1手」が
-                            // 増えてしまう（wait_ms 無しの item は自動で進まないため）回帰になる。
-                            //
-                            // `events.get(event_index + 1)` は「直後」の1イベントしか見ない
-                            // ため、`[イベント絵:A][SE:...][待機:200]` のように間に BGM/SE 等の
-                            // 非表示イベントを挟むとこのパターンに一致せず、自動送りが黙って
-                            // 無効化される（`Event::Wait` は下の `_` 分岐で通常どおり処理され、
-                            // 孤立した待機として扱われる）。スクリプト側でこの隣接性を守る必要が
-                            // ある（要ドキュメント化、セルフレビュー should対応）。
-                            if let Some(Event::Wait { ms }) = events.get(event_index + 1) {
-                                items.push(PlaybackItem::Image(DisplayLine {
-                                    speaker: current_speaker.clone(),
-                                    text: current_text.clone(),
-                                    event_image: current_event_image.clone(),
-                                }));
-                                item_file_ids.push(file_id);
-                                item_wait_ms.push(Some(*ms));
-                                // #512 統合前は無かった並行 Vec。ここへの push 漏れは
-                                // `item_blackout` を `items` より1件短くし、以降の全 item の
-                                // `is_blackout()` 判定を静かにズラす（#475 実装時に発見した
-                                // マージ由来のバグ、要修正）。
-                                item_blackout.push(current_blackout);
-
-                                // `Event::Wait` のさらに直後が `Event::Blackout` の場合、
-                                // 暗転状態（オン/オフいずれも）を表示する独立した item を追加で
-                                // 生成する（Issue #475）。#512 の `Event::Blackout` 処理
-                                // （このmatchの少し下の腕）は、既存の Line/Choice/Image item に
-                                // 「表示中は暗転しているか」のフラグを後付けするだけで、暗転
-                                // 自体を運ぶ item を単独では作らない。そのため
-                                // `[イベント絵:C][待機:200][暗転]` のように、暗転の後に表示
-                                // すべき会話行が続かない原稿では、自動送りの連鎖が「暗転を表示
-                                // する item」へ着地できず、暗転が画面に一度も出ないまま終わって
-                                // しまう（Issue #475 の現状分析）。
-                                //
-                                // EventImage+Wait の2件消費に、Blackout も続く場合だけ+1する。
-                                //
-                                // 既知の制約1（Issue #475でスコープ外と判定済み、対応しない）:
-                                // `events` はここでは `&scene.events`（シーンスコープ）のみを
-                                // 見ているため、`[イベント絵][待機]` がシーン末尾・`[暗転]` が
-                                // 次シーン先頭、という原稿ではこのパターンに一致せず検出漏れに
-                                // なる（シーン境界をまたいだ Wait+Blackout 連鎖は検出できない）。
-                                // Wait+Blackout の連鎖は同一シーン内に収める必要がある。
-                                // シーン構造（`##` 見出し区切り）上、この演出を追記する箇所は
-                                // 単一シーンに収まる設計になっていると推測されるが、現時点で
-                                // Gymnasia 側に「目を閉じて暗転して終わる」シーケンス
-                                // （`[暗転]` タグ）自体を含む原稿がまだ一件も存在しないため
-                                // （画像素材が未制作で暫定対応中、Issue本文参照）、実データでの
-                                // 検証はできていない。実データが追加された時点で再検証が必要。
-                                //
-                                // #524 で解消: `[イベント絵][待機][場面転換]` で終わる原稿も、
-                                // `Event::Blackout` と同じ経路で「場面転換後の状態を焼き付けた
-                                // item」を生成する。GUI版 `Event::SceneTransition` 分岐
-                                // （`setBlackout(false)` + `eventImageLayer.remove()`）に倣い、
-                                // `current_blackout=false` かつ `current_event_image=None` に
-                                // リセットした上で item を積む — Blackout の「On」と同じ役割だが、
-                                // 運ぶ状態は暗転そのものではなくイベント絵クリア後の状態である点が
-                                // 異なる。この分岐で `Event::SceneTransition` 自体を消費するため、
-                                // 下の match 腕（`Event::SceneTransition => { .. }`）はここでは
-                                // 実行されない（`Event::Blackout` を消費するときと同じ扱い）。
-                                let mut consumed = 2;
-                                if let Some(Event::Blackout { action }) =
-                                    events.get(event_index + 2)
-                                {
-                                    current_blackout = matches!(action, BlackoutAction::On);
-                                    items.push(PlaybackItem::Image(DisplayLine {
-                                        speaker: current_speaker.clone(),
-                                        text: current_text.clone(),
-                                        event_image: current_event_image.clone(),
-                                    }));
-                                    item_file_ids.push(file_id);
-                                    // 暗転item自体はさらなる自動送りを持たない —
-                                    // 「閉じきった最後のコマで暗転へ移る」で連鎖は完結し、
-                                    // 暗転後にまた別のitemへ自動で進む必要は無い（#475スコープ）。
-                                    item_wait_ms.push(None);
-                                    item_blackout.push(current_blackout);
-                                    consumed = 3;
-                                } else if matches!(
-                                    events.get(event_index + 2),
-                                    Some(Event::SceneTransition)
-                                ) {
-                                    current_blackout = false;
-                                    current_event_image = None;
-                                    items.push(PlaybackItem::Image(DisplayLine {
-                                        speaker: current_speaker.clone(),
-                                        text: current_text.clone(),
-                                        event_image: current_event_image.clone(),
-                                    }));
-                                    item_file_ids.push(file_id);
-                                    // Blackout終端itemと同じく、さらなる自動送りは持たない。
-                                    item_wait_ms.push(None);
-                                    item_blackout.push(current_blackout);
-                                    consumed = 3;
-                                }
-                                event_index += consumed;
-                                continue;
-                            }
-                        }
-                        Event::EventImageExit { .. } => {
-                            current_event_image = None;
-                        }
-                        // GUI版 `setBlackout` 相当（#512）。オン/オフの2状態を単純に上書きする
-                        // だけの宣言的 state で、`current_event_image` と同じ「直近の値を次の
-                        // item に焼き付ける」走査パターンに乗せる。
-                        Event::Blackout { action } => {
-                            current_blackout = matches!(action, BlackoutAction::On);
-                        }
-                        // GUI版 `NovelRenderer.processDirective` の `Event::SceneTransition` 相当
-                        // （`this.setBlackout(false)` + `this.eventImageLayer.remove()`、#512/#524）。
-                        // spec（markdown-v0.1.md）は `[場面転換]` を「背景クリア + 暗転解除」と
-                        // 定義しており、`[暗転]` でオンにした暗転を明示的にオフへ戻すのに加え、
-                        // GUI版はイベント絵レイヤーも明示的にクリアする（作者が
-                        // `[イベント絵終了]` を書き忘れても場面転換で必ずイベント絵が消える
-                        // 防御的挙動、#351）。TUI 側もこれに合わせ `current_event_image` を
-                        // `None` に戻す（#524、旧実装は `current_blackout` のみリセットしており
-                        // GUI版との差異だった）。背景クリア相当の永続 state（`clearBackground` /
-                        // `videoLayer.remove` / `retreatNovelScrim`）は TUI 側が持たないため、
-                        // このスコープでは暗転解除・イベント絵クリアのみ実装する。
-                        Event::SceneTransition => {
-                            current_blackout = false;
-                            current_event_image = None;
-                        }
-                        _ => {
-                            if let Some(item) = playback_item_from_event(event) {
-                                let item = match item {
-                                    PlaybackItem::Line(mut line) => {
-                                        line.event_image = current_event_image.clone();
-                                        current_speaker = line.speaker.clone();
-                                        current_text = line.text.clone();
-                                        PlaybackItem::Line(line)
-                                    }
-                                    choice @ PlaybackItem::Choice(_) => choice,
-                                    // `playback_item_from_event` は Dialog/Narration/Choice
-                                    // からしか item を作らないため Image は返さない
-                                    // （Image は上の EventImage+Wait 分岐でのみ生成される）。
-                                    image @ PlaybackItem::Image(_) => image,
-                                };
-                                items.push(item);
-                                item_file_ids.push(file_id);
-                                item_wait_ms.push(None);
-                                item_blackout.push(current_blackout);
-                            }
-                        }
-                    }
-                    event_index += 1;
-                }
+                build_scene_items(
+                    &scene.events,
+                    file_id,
+                    &mut scan_state,
+                    &mut items,
+                    &mut item_file_ids,
+                    &mut item_wait_ms,
+                    &mut item_blackout,
+                );
             }
         }
         Self {
