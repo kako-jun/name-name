@@ -477,6 +477,22 @@ interface SaveSlotData {
 
 Web Audio API を使用。
 
+### TUI版の音声再生 (#502)
+
+GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベースの pure Rust
+オーディオライブラリ）で BGM のループ再生・SE のワンショット再生（複数同時再生可）を行う。
+`Event::Bgm`/`Event::Se` の状態追跡自体は `tui/src/playback.rs`（`Playback` の
+`item_bgm`/`item_se`、GUI版 `currentBgmPath`/`playSe` と同じ意味論）にあり、`main.rs` の
+`event_loop` が毎フレーム `sync_bgm`/`play_new_se_cues` でその状態を実際の再生呼び出しに
+変換する。GUI版との既知の差分:
+
+- **フェード無し**: `fade_ms` は解析時点で読み捨てる（#512 暗転の「TUIはフェード無しの
+  瞬時切替」という判断基準を踏襲）。BGM 切り替え・停止は常に即時。
+- **音声出力デバイス無し環境への配慮**: `AudioPlayer::try_new()`（`OutputStream::
+  try_default()` に失敗すると `None`）・ファイル未検出/デコード失敗のいずれも、エラーに
+  せず音声再生だけを無効化して進行を続ける（SSH経由・headless環境等を想定）。
+- 音量制御・動画ミックス・エクスポート用キャプチャ配線（以下の各節）は対象外。
+
 ### BGM
 
 - ループ再生

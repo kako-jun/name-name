@@ -2,13 +2,15 @@
 //!
 //! 会話文（Dialog / Narration）の逐次表示に加え、選択肢分岐（`Event::Choice`）にも対応する
 //! （#482）。フラグ管理・セーブ/ロードは引き続き対象外（`parser::models::Event` にそれらの
-//! 型があっても扱わない）。背景・SE・BGM・立ち絵演出などその他のイベントは、今回も画面表示を
-//! 変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。ただし `Event::EventImage` /
-//! `EventImageExit` だけは例外で、各 `DisplayLine` に `event_image`（その時点で表示されて
-//! いるべきイベント絵の相対パス）として反映する（#481）。左側は `event_image` が `None` の
-//! ときのみ従来どおりプレースホルダ表示になる。`Event::Choice` はこの状態に影響しない
-//! （Choice イベントを挟んでも、直前までの `event_image` はそのまま後続の `DisplayLine` に
-//! 引き継がれる）。
+//! 型があっても扱わない）。背景・立ち絵演出などその他のイベントは、今回も画面表示を変えない
+//! ため読み飛ばす（左側は常にプレースホルダ表示のみ）。`Event::EventImage`/`EventImageExit`
+//! だけは例外で、各 `DisplayLine` に `event_image`（その時点で表示されているべきイベント絵の
+//! 相対パス）として反映する（#481）。左側は `event_image` が `None` のときのみ従来どおり
+//! プレースホルダ表示になる。`Event::Choice` はこの状態に影響しない（Choice イベントを
+//! 挟んでも、直前までの `event_image` はそのまま後続の `DisplayLine` に引き継がれる）。
+//! `Event::Bgm`/`Event::Se` も同様に状態として追跡する（画面表示は変えないが #502 で
+//! 「読み飛ばし」対象から外れた）。詳細は [`Playback`] 構造体の `item_bgm`/`item_se`
+//! フィールドの doc comment 参照。
 //!
 //! ## 選択肢分岐の設計 (#482)
 //!
@@ -753,7 +755,9 @@ mod tests {
 
     #[test]
     fn non_display_events_are_excluded_but_choice_still_produces_an_item() {
-        // Background/Bgm/Se は依然として画面表示イベントではないため items を生成しない。
+        // Background/Bgm/Se は依然として画面表示イベントではないため独立した items を
+        // 生成しない（Bgm/Se は #502 で状態として追跡されるようになったが、それは次に
+        // 生成される item に焼き付けられるだけで、Bgm/Se 自体が item にはならない）。
         // Choice は #482 で「読み飛ばし」対象から外れ、独立した item になった（以前は他の
         // 非表示イベントと同様に丸ごと無視されており、選択肢が一切機能しない原因だった）。
         let doc = doc_single_scene(vec![
