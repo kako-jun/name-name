@@ -3121,4 +3121,215 @@ mod tests {
              trueにしてもis_blackout()はfalseのまま反映されない"
         );
     }
+
+    // ---- #524: Event::SceneTransition のイベント絵クリア（GUI版eventImageLayer.remove()整合）----
+
+    /// `scene_transition_resets_blackout_per_spec` の event_image 版。既存テストは
+    /// `is_blackout()` のみを検証しており、`[イベント絵][B台詞][場面転換][C台詞]` という
+    /// 原稿で `[場面転換]` 後の `C` の `event_image` がクリアされることは未検証だった
+    /// （#524 の回帰テスト）。
+    #[test]
+    fn scene_transition_clears_event_image_per_spec() {
+        let doc = doc_single_scene(vec![
+            event_image("bg_a.webp"),
+            dialog(Some("B"), vec!["場面転換前の台詞"]),
+            Event::SceneTransition,
+            dialog(Some("C"), vec!["場面転換後の台詞"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("bg_a.webp"),
+            "[場面転換]前の台詞はまだイベント絵を引き継いでいるはず"
+        );
+
+        assert!(pb.advance(), "場面転換後の台詞へ進めるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("C")
+        );
+        assert_eq!(
+            pb.current_line().expect("line").event_image,
+            None,
+            "[場面転換]はGUI版のeventImageLayer.remove()相当でイベント絵もクリアするはず（#524）"
+        );
+    }
+
+    // ---- #524: Wait直後のSceneTransition検出（#475 Blackout版と対になる拡張）----
+
+    #[test]
+    fn build_event_image_wait_followed_by_scene_transition_creates_terminal_item() {
+        // `build_event_image_wait_followed_by_blackout_creates_terminal_blackout_item` の
+        // Event::SceneTransition版（#524）。`[イベント絵][待機][場面転換]` で終わる原稿でも、
+        // 場面転換後の状態（暗転解除＋イベント絵クリア）を焼き付けたitemが生成されるはず
+        // （旧実装ではBlackoutとは非対称にitemが生成されなかった）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["目を閉じていく"]),
+            event_image("eyes_closing_3.webp"),
+            wait(200),
+            Event::SceneTransition,
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(!pb.is_blackout(), "会話行の時点ではまだ暗転していない");
+        assert!(pb.advance(), "会話行から画像コマitemへ進めるはず");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("eyes_closing_3.webp")
+        );
+
+        assert!(
+            pb.advance(),
+            "待機経過後、場面転換後の状態を運ぶ独立itemへ進めるはず（Issue #524本体）"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "着地したitemはis_blackout()==falseのはず（Blackout版と違い暗転は運ばない）"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").event_image,
+            None,
+            "終端itemはeventImageLayer.remove()相当でevent_imageがクリアされているはず"
+        );
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "場面転換item自体はさらなる自動送りを持たないはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "場面転換itemがドキュメント最後のitemなので終端扱いのはず"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_scene_transition_pattern_consumes_exactly_three_events() {
+        // `event_image_wait_blackout_pattern_consumes_exactly_three_events` の
+        // Event::SceneTransition版（#524）。SceneTransition検出により消費イベント数が
+        // 2→3に変わるぶん、直後に続くはずの別イベントを誤って飲み込んでいないか
+        // （境界の1個ずれ）を確認する。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            wait(100),
+            Event::SceneTransition,
+            dialog(Some("B"), vec!["場面転換後も台詞は続く"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem（前に会話行が無い）なので、advance無しで
+        // 最初から画像コマitemに位置している。
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+
+        assert!(pb.advance(), "画像コマ -> 場面転換後の状態を運ぶitemへ");
+        assert!(!pb.is_blackout());
+        assert_eq!(pb.current_line().expect("line").event_image, None);
+        assert!(
+            !pb.is_at_end(),
+            "場面転換itemの後にまだ台詞が残っているので終端ではないはず"
+        );
+
+        assert!(
+            pb.advance(),
+            "場面転換item -> 次の台詞へ（3イベント消費の直後）"
+        );
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert_eq!(
+            line.event_image, None,
+            "[場面転換]で解除された状態を後続の台詞も引き継ぐはず"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_then_scene_transition_across_scene_boundary_is_not_detected() {
+        // `event_image_wait_then_blackout_across_scene_boundary_is_not_detected` の
+        // Event::SceneTransition版（#524）。既知の制約1（`events` がシーンスコープのみを
+        // 見る）はBlackoutだけでなくSceneTransitionにも同様に効く —
+        // `[イベント絵][待機]` がシーンA末尾、`[場面転換]` がシーンB先頭という原稿では
+        // このパターンに一致せず検出漏れになる。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["目を閉じていく"]),
+                        event_image("eyes_closing_3.webp"),
+                        wait(200),
+                    ],
+                ),
+                scene("1-2", vec![Event::SceneTransition]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+
+        // シーンBの[場面転換]が検出漏れになるため、画像コマitemがそのままドキュメント
+        // 最後のitemになってしまう（同一シーン内パターンなら、ここからさらに場面転換後
+        // itemへ進めるはずだった）。
+        assert!(
+            pb.is_at_end(),
+            "シーン境界をまたいだSceneTransitionは検出されず画像コマitemが終端になる（既知の制約1）"
+        );
+        assert!(
+            !pb.advance(),
+            "検出漏れにより場面転換を運ぶitem自体が存在せず進めない"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("eyes_closing_3.webp"),
+            "場面転換itemが生成されないため、シーンBのSceneTransitionがcurrent_event_imageを\
+             Noneにしてもevent_imageはクリア前の値のまま反映されない"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_blackout_scene_transition_chain_only_creates_blackout_item() {
+        // `[イベント絵][待機][暗転][場面転換]` という4連続パターン（#524で明示的に固定する
+        // 現状の実装挙動）。Wait直後の検出は `if let Some(Blackout) ... else if
+        // matches!(SceneTransition)` の順で判定するためBlackoutが優先され、Blackoutが
+        // 見つかった時点でconsumed=3として打ち切る。後続のSceneTransitionはこの特別処理の
+        // 対象にならず、通常のmatchアーム（`Event::SceneTransition => {..}`）でstateだけが
+        // 更新されitemは生成されない。結果として暗転itemだけが生成され、SceneTransitionの
+        // 効果（暗転解除・イベント絵クリア）はどのitemにも反映されない。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["目を閉じていく"]),
+            event_image("eyes_closing_3.webp"),
+            wait(200),
+            blackout_on(),
+            Event::SceneTransition,
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert!(!pb.is_blackout(), "画像コマ表示中はまだ暗転前のはず");
+
+        assert!(
+            pb.advance(),
+            "画像コマ -> 暗転item（Blackoutが優先されSceneTransitionは検出対象にならない）"
+        );
+        assert!(
+            pb.is_blackout(),
+            "検出されたのはBlackoutのため、着地したitemはis_blackout()==trueのはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("eyes_closing_3.webp"),
+            "Blackout経路はcurrent_event_imageをクリアしないため引き継がれるはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "後続のSceneTransitionはstateを更新するだけでitemを生成しないため、\
+             暗転itemがドキュメント最後のitemになるはず"
+        );
+        assert!(
+            !pb.advance(),
+            "SceneTransitionからitemが生成されないため、これ以上は進めない"
+        );
+    }
 }
