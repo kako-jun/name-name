@@ -143,14 +143,29 @@ where
 /// スプラッシュ画面を描画し、キー入力を1件待つ。`Action::Advance` で `Ok(true)`
 /// （本編へ進む）、`Action::Quit` で `Ok(false)`（そのまま終了）を返す。
 ///
-/// `image_cache`/`scroll_offset` はフルキャンバス画像表示モード（`config.splash.logo_image`
-/// が `Some` の場合、#530）専用のローカル状態。`image_cache` はロゴ画像のデコード結果を
-/// 保持し（`event_loop` 側の `ImageCache` とは別インスタンス — スプラッシュはイベント絵と
-/// 同時に表示されないため共有する必要が無く、シグネチャ変更の影響範囲を最小化する）、
-/// `scroll_offset` は `Action::MoveUp`/`Action::MoveDown` で増減するスクロール位置。
-/// テキストモード（`logo_image` が `None`）ではどちらも参照されない（`ui::draw_splash`
-/// 参照）。以前はカーソル移動を選択肢が無いという理由で無視していたが（#482）、
-/// フルキャンバス画像表示モードのスクロールに転用する（#530）。
+/// `image_cache` はフルキャンバス画像表示モード（`config.splash.logo_image` が `Some` の
+/// 場合、#530）専用のローカル状態。`event_loop` 側の `ImageCache` とは別インスタンス
+/// （スプラッシュはイベント絵と同時に表示されないため共有する必要が無く、シグネチャ変更の
+/// 影響範囲を最小化する）。
+///
+/// スクロール（`Action::MoveUp`/`Action::MoveDown`）は目標位置（`target_scroll_offset`）を
+/// 即座に更新するだけで、実際に描画する表示位置（`display_scroll_offset`）は
+/// `config.splash.scroll_ease_ms` の所要時間をかけて ease-out で追従する
+/// （kako-jun追加要望「スクロールはeaseにしたい」。`image_fade::ImageFadeState` の
+/// `from`/`to`/`started_at`/`duration` パターンを踏襲 — キー入力のたびに現在の表示位置を
+/// 新しいアニメーションの起点 `scroll_anim_start_offset` として引き継ぎ、開始時刻
+/// `scroll_anim_start` をリセットする点も `ImageFadeState::transition_to` と同じ設計）。
+/// 進行度・補間の計算自体は [`image_render::compute_scroll_ease_progress`]/
+/// [`image_render::compute_eased_scroll_offset`]（ターミナル/時刻I/Oに触れない純粋関数）に
+/// 委譲する。テキストモード（`logo_image` が `None`）ではどちらも参照されない
+/// （`ui::draw_splash` 参照。以前はカーソル移動を選択肢が無いという理由で無視していたが
+/// （#482）、フルキャンバス画像表示モードのスクロールに転用した、#530）。
+///
+/// アニメーション中も継続的に再描画されるのは、`next_action`（本番では
+/// `input::poll_action(REDRAW)`、`run` 参照）がキー入力の有無に関わらず [`REDRAW`] 間隔で
+/// `Action::None` を返してループを回し続けるため（`event_loop` のタイプライター演出・
+/// ページ送りインジケータ点滅と同じ既存の定期再描画の仕組みをそのまま利用するだけで、
+/// ここでの変更は不要）。
 fn show_splash<B>(
     terminal: &mut Terminal<B>,
     config: &Config,
@@ -161,18 +176,38 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     let mut image_cache = image_render::ImageCache::new();
-    let mut scroll_offset: u16 = 0;
+    let mut target_scroll_offset: u16 = 0;
+    let mut scroll_anim_start_offset: u16 = 0;
+    let mut scroll_anim_start = Instant::now();
     loop {
-        terminal.draw(|frame| ui::draw_splash(frame, config, &mut image_cache, scroll_offset))?;
+        let now = Instant::now();
+        let elapsed_ms = now.saturating_duration_since(scroll_anim_start).as_millis() as u64;
+        let progress =
+            image_render::compute_scroll_ease_progress(elapsed_ms, config.splash.scroll_ease_ms);
+        let display_scroll_offset = image_render::compute_eased_scroll_offset(
+            scroll_anim_start_offset,
+            target_scroll_offset,
+            progress,
+        );
+        terminal.draw(|frame| {
+            ui::draw_splash(frame, config, &mut image_cache, display_scroll_offset)
+        })?;
 
         match next_action()? {
             Action::Advance => return Ok(true),
             Action::Quit => return Ok(false),
-            // テキストモード（`logo_image` が `None`）では `ui::draw_splash` が
-            // `draw_fullscreen_image`（`scroll_offset` を参照する側）を一切呼ばないため、
-            // ここでオフセットを動かしても見た目は変わらない（実質no-op、#530）。
-            Action::MoveUp => scroll_offset = scroll_offset.saturating_sub(1),
-            Action::MoveDown => scroll_offset = scroll_offset.saturating_add(1),
+            Action::MoveUp => {
+                // 現在の表示位置（アニメーション途中点も含む）を新しいアニメーションの
+                // 起点として引き継ぐことで、連打してもジャンプせず滑らかに追従し続ける。
+                scroll_anim_start_offset = display_scroll_offset;
+                scroll_anim_start = now;
+                target_scroll_offset = target_scroll_offset.saturating_sub(1);
+            }
+            Action::MoveDown => {
+                scroll_anim_start_offset = display_scroll_offset;
+                scroll_anim_start = now;
+                target_scroll_offset = target_scroll_offset.saturating_add(1);
+            }
             Action::None => {}
         }
     }
