@@ -176,6 +176,20 @@ enum PlaybackItem {
     Choice(Vec<ChoiceOption>),
 }
 
+/// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
+///
+/// `Playback::scene_order` / `scene_index_by_id` の下ごしらえ（#509 Phase B 予定分の準備、
+/// 今回のスコープでは構築するだけで誰からも参照されない）。フラグに依存しない構造的な情報
+/// のみを保持する — `scene_id`/`file_id`（由来ファイル id、`item_file_ids` と同じ意味）に
+/// 加え、そのシーンの生イベント列を丸ごと複製して持つ。将来、選択肢ジャンプ時にシーン単位で
+/// フラグ評価（`flags::resolve_events`）を行う際の入力になる想定。
+#[allow(dead_code)]
+struct SceneRef {
+    scene_id: String,
+    file_id: usize,
+    events: Vec<Event>,
+}
+
 /// `Event` を再生列の1要素に変換する。Choice は選択肢一覧をそのまま保持する
 /// `PlaybackItem::Choice` に、Dialog/Narration は [`display_line_from_event`] 経由で
 /// `PlaybackItem::Line` になる。それ以外（背景・SE・BGM 等）は `None`（読み飛ばす）。
@@ -235,6 +249,17 @@ pub struct Playback {
     /// 1つも持たない場合（背景切り替えのみ等）は、そのシーンの位置＝まだ何も push していない
     /// 時点の `items.len()`（＝後続シーンの先頭 item のインデックス、もしくは最後尾）を指す。
     scene_start: HashMap<String, usize>,
+    /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報（#509 Phase A
+    /// 予定分の下ごしらえ）。`from_document`/`from_merged_document` で埋まる。今回のスコープ
+    /// ではまだ誰からも参照されない（`scene_start` によるフラット化 items 上のジャンプが
+    /// 引き続き使われる）。`from_lines` 経由の構築では空のまま。
+    #[allow(dead_code)]
+    scene_order: Vec<SceneRef>,
+    /// シーンID → `scene_order` 内のインデックス（#509 Phase A 予定分の下ごしらえ）。
+    /// `scene_order` と同様、今回のスコープではまだ誰からも参照されない。`from_lines` 経由の
+    /// 構築では空のまま。
+    #[allow(dead_code)]
+    scene_index_by_id: HashMap<String, usize>,
     /// 現在 Choice を表示中のときのカーソル位置（0始まり）。Line item にいる間は無視される。
     /// 新しい Choice item へ移動するたびに `set_index` が 0 へリセットする。
     choice_cursor: usize,
@@ -307,6 +332,8 @@ impl Playback {
         let mut item_wait_ms = Vec::new();
         let mut item_blackout = Vec::new();
         let mut scene_start = HashMap::new();
+        let mut scene_order: Vec<SceneRef> = Vec::new();
+        let mut scene_index_by_id = HashMap::new();
         let mut current_event_image: Option<String> = None;
         // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
         // `Event::Wait` が続いたときに生成する画像コマ item（`PlaybackItem::Image`）へ
@@ -325,6 +352,16 @@ impl Playback {
                 // 重複シーンIDは最初の出現を優先する（GUI版 `allScenes.find` が最初の一致を
                 // 返すのと同じ規約）。
                 scene_start.entry(scene.id.clone()).or_insert(items.len());
+                scene_index_by_id
+                    .entry(scene.id.clone())
+                    .or_insert_with(|| {
+                        scene_order.push(SceneRef {
+                            scene_id: scene.id.clone(),
+                            file_id,
+                            events: scene.events.clone(),
+                        });
+                        scene_order.len() - 1
+                    });
                 let events = &scene.events;
                 let mut event_index = 0;
                 while event_index < events.len() {
@@ -496,6 +533,8 @@ impl Playback {
             item_blackout,
             index: 0,
             scene_start,
+            scene_order,
+            scene_index_by_id,
             choice_cursor: 0,
             sentence_per_page: false,
             sentence_pages: Vec::new(),
@@ -754,6 +793,8 @@ impl Playback {
             item_blackout,
             index: 0,
             scene_start: HashMap::new(),
+            scene_order: Vec::new(),
+            scene_index_by_id: HashMap::new(),
             choice_cursor: 0,
             sentence_per_page: false,
             sentence_pages: Vec::new(),
