@@ -1163,7 +1163,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 0)),
+                    Some((&options, 0, None)),
                     1,
                     1,
                     false,
