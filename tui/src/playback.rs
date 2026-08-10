@@ -292,9 +292,8 @@ pub struct Playback {
     /// `scene_order` 内インデックス。`advance`/`select_current_choice` が次に
     /// どのシーンから遅延ビルドを再開すべきかの起点になる。
     current_scene_idx: usize,
-    /// フラグ管理（#509 Phase B 予定分の下ごしらえ）。今回のスコープではまだ誰からも
-    /// 参照されない。
-    #[allow(dead_code)]
+    /// フラグ管理（#509）。`Event::Flag`/`Event::Condition` を `build_scene_items` が
+    /// 逐次walk中にリアルタイムに評価・更新するための状態。
     flags: GameFlags,
 }
 
@@ -314,10 +313,18 @@ struct SceneScanState {
 /// ある）は呼び出し側が保持し、可変参照として受け渡す（#509 Phase A、後でシーン単位に動的
 /// 呼び出しできるようにするための下ごしらえ。ロジックは `Playback::build` から一切変更せず
 /// 丸ごと移動しただけ）。
+///
+/// `flags`（#509 のフラグ管理）を `state`（`SceneScanState`）にまとめず独立の引数のまま
+/// 追加したため合計8引数になり `clippy::too_many_arguments`（既定閾値7）に抵触する。
+/// `SceneScanState` は元々「シーンを跨いで引き継ぐランニング状態」専用の入れ物として
+/// 導入された経緯があり、性質の異なる `GameFlags` をそこに押し込むのは筋が悪いため、
+/// ここでは構造変更を避けて `allow` で抑止するに留める。
+#[allow(clippy::too_many_arguments)]
 fn build_scene_items(
     events: &[Event],
     file_id: usize,
     state: &mut SceneScanState,
+    flags: &mut GameFlags,
     items: &mut Vec<PlaybackItem>,
     item_file_ids: &mut Vec<usize>,
     item_wait_ms: &mut Vec<Option<u32>>,
@@ -455,6 +462,27 @@ fn build_scene_items(
                 state.current_blackout = false;
                 state.current_event_image = None;
             }
+            Event::Flag { name, value } => {
+                flags.set(name.clone(), value.clone());
+            }
+            Event::Condition {
+                flag,
+                events: inner,
+            } => {
+                if flags.check(flag) {
+                    build_scene_items(
+                        inner,
+                        file_id,
+                        state,
+                        flags,
+                        items,
+                        item_file_ids,
+                        item_wait_ms,
+                        item_blackout,
+                    );
+                }
+                // false の場合は何もしない（inner を一切処理しない＝副作用もitem生成も無い）
+            }
             _ => {
                 if let Some(item) = playback_item_from_event(event) {
                     let item = match item {
@@ -544,6 +572,7 @@ impl Playback {
             current_text: Vec::new(),
             current_blackout: false,
         };
+        let mut flags = GameFlags::new();
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
             let file_id = chapter_file_ids
                 .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
@@ -570,6 +599,7 @@ impl Playback {
                 &first_scene.events,
                 first_scene.file_id,
                 &mut scan_state,
+                &mut flags,
                 &mut items,
                 &mut item_file_ids,
                 &mut item_wait_ms,
@@ -592,7 +622,7 @@ impl Playback {
             current_display: None,
             scan_state,
             current_scene_idx: 0,
-            flags: GameFlags::new(),
+            flags,
         }
     }
 
@@ -748,6 +778,7 @@ impl Playback {
                 &events,
                 file_id,
                 &mut self.scan_state,
+                &mut self.flags,
                 &mut self.items,
                 &mut self.item_file_ids,
                 &mut self.item_wait_ms,
@@ -808,6 +839,7 @@ impl Playback {
                 &events,
                 file_id,
                 &mut self.scan_state,
+                &mut self.flags,
                 &mut self.items,
                 &mut self.item_file_ids,
                 &mut self.item_wait_ms,
@@ -857,6 +889,7 @@ impl Playback {
             current_text: Vec::new(),
             current_blackout: false,
         };
+        let mut flags = self.flags.clone();
         let mut count = 0;
         for scene in &self.scene_order {
             let mut items = Vec::new();
@@ -867,6 +900,7 @@ impl Playback {
                 &scene.events,
                 scene.file_id,
                 &mut scan_state,
+                &mut flags,
                 &mut items,
                 &mut item_file_ids,
                 &mut item_wait_ms,
@@ -930,6 +964,7 @@ impl Playback {
     /// ルックアヘッド（#509 Phase B、`is_at_end` の遅延ビルド対応）。
     fn has_more_scenes_with_items(&self) -> bool {
         let mut scan_state = self.scan_state.clone();
+        let mut flags = self.flags.clone();
         let mut scene_idx = self.current_scene_idx;
         loop {
             let next_scene_idx = scene_idx + 1;
@@ -947,6 +982,7 @@ impl Playback {
                 &next_scene.events,
                 next_scene.file_id,
                 &mut scan_state,
+                &mut flags,
                 &mut items,
                 &mut item_file_ids,
                 &mut item_wait_ms,
