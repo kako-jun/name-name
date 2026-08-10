@@ -1,8 +1,9 @@
 //! パース済み `Document` を、TUI で逐次表示するための再生位置に変換する。
 //!
 //! 会話文（Dialog / Narration）の逐次表示に加え、選択肢分岐（`Event::Choice`）にも対応する
-//! （#482）。フラグ管理・セーブ/ロードは引き続き対象外（`parser::models::Event` にそれらの
-//! 型があっても扱わない）。背景・SE・BGM・立ち絵演出などその他のイベントは、今回も画面表示を
+//! （#482）。フラグ管理・条件分岐（`Event::Flag`/`Event::Condition`）にも対応する（#509、
+//! 詳細は後述）。セーブ/ロードは引き続き対象外（#501、別Issue）。背景・SE・BGM・立ち絵演出
+//! などその他のイベントは、今回も画面表示を
 //! 変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。ただし `Event::EventImage` /
 //! `EventImageExit` だけは例外で、各 `DisplayLine` に `event_image`（その時点で表示されて
 //! いるべきイベント絵の相対パス）として反映する（#481）。左側は `event_image` が `None` の
@@ -55,21 +56,20 @@
 //! ## 選択肢分岐の設計 (#482)
 //!
 //! `Document` の chapters → scenes → events を一直線にフラット化する既存のシンプルな
-//! モデル（#471 MVP、以前は `Event::Choice` を他の非表示イベントと同様に読み飛ばしていた）は
-//! そのまま維持する。Choice イベントも `items`（旧 `lines`）の1要素（[`PlaybackItem::Choice`]）
-//! として保持するようにしただけで、フラット化そのものは変えていない。加えて、各シーンの
-//! 先頭 item のインデックスを `scene_start`（シーンID → `items` インデックス）として記録して
-//! おく。選択肢が確定すると、`items` 内の現在位置を選ばれた `jump` 先シーンの `scene_start`
-//! へ再配置するだけで遷移を実現する（[`Playback::select_current_choice`]）。
+//! モデル（#471 MVP、以前は `Event::Choice` を他の非表示イベントと同様に読み飛ばしていた）
+//! だったが、#509 でシーン単位の動的追記モデルに置き換えた（詳細は次節）。Choice イベントは
+//! `items`（旧 `lines`）の1要素（[`PlaybackItem::Choice`]）として保持する。選択肢が確定すると
+//! `jump` 先シーンの内容をその時点の `flags` で新たに構築し、`items` の末尾に追記して遷移する
+//! （[`Playback::select_current_choice`]）。
 //!
 //! GUI版 `NovelRenderer.jumpToScene`（`frontend/src/game/NovelRenderer.ts`）も `jump` 先を
 //! シーンIDで解決する点は同じだが、GUI版は選ばれたシーンの `events` だけを新しい再生ストリーム
 //! として張り直す（そのシーンの events を使い切ると `onEndCallback` で終劇になる、＝シーン境界を
-//! 越えて自動的に後続シーンへ読み進めることはない）。対して TUI版は既存のフラット化済み1本の
-//! `items` の中で現在位置を移動するだけなので、jump 先シーンの内容を読み終えると（GUI版のように
-//! 終劇にはならず）ドキュメント順で後続の items へそのまま読み進める、という設計上の違いがある。
-//! GUI版ほど厳密なシーン分離ではないが、既存の線形モデルをそのまま流用でき実装コストが小さいため
-//! この簡略化を採用した（Issue #482 の実装方針で明示的に許容されている割り切り）。
+//! 越えて自動的に後続シーンへ読み進めることはない）。対して TUI版は jump 先シーンの内容を
+//! 読み終えると（GUI版のように終劇にはならず）ドキュメント順で後続シーンの内容までそのまま
+//! 追記して読み進める、という設計上の違いがある（[`Playback::advance`] 参照）。GUI版ほど厳密な
+//! シーン分離ではないが、既存の線形モデルをそのまま流用でき実装コストが小さいためこの簡略化を
+//! 採用した（Issue #482 の実装方針で明示的に許容されている割り切り）。
 //!
 //! ### ファイル境界の例外 (#496)
 //!
@@ -80,6 +80,32 @@
 //! リークが起きる。[`Playback::from_merged_document`] はこれを防ぐため、`items` にファイル
 //! 境界の情報（`item_file_ids`）を追加で持たせ、暗黙の `advance()` だけをファイル境界で
 //! 止める（選択肢ジャンプは対象外）。詳細は [`Playback`] 構造体の doc コメント参照。
+//!
+//! ## フラグ管理・条件分岐の遅延評価 (#509)
+//!
+//! `Event::Flag`/`Event::Condition` は、GUI版 `GameState`/`resolveEvents`
+//! （`frontend/src/game/GameState.ts`）と同じ「実際にプレイヤーが辿った経路・その時点の
+//! フラグ状態で評価する」遅延評価モデルで対応する。「フラグを立てろという命令は、その行に
+//! 実際にたどり着いて実行されるまで効果を持たない」という順序を守る必要があるため、
+//! ドキュメント全体を起動時に一括構築する方式（旧 #482 MVP のフラット化モデル）とは
+//! 原理的に相容れない — 同じドキュメント上の位置でも、そこに至った経路（どの分岐を通ったか）
+//! によってフラグ状態、ひいては `Event::Condition` の展開結果が変わりうるため、共有の静的
+//! 配列に事前に焼き付けることができない。
+//!
+//! これを解決するため、`items` を「起動時に `Document` 全体を事前構築する」方式から
+//! 「プレイヤーが実際に訪れたシーンだけ、訪れた順にその場で追記していく」方式に変更した。
+//! [`Playback::build`] は最初のシーンだけを構築し、[`Playback::advance`]（ドキュメント順の
+//! 自動継続）と [`Playback::select_current_choice`]（選択肢ジャンプ）は、次に必要になった
+//! シーンをその時点の `flags`（[`GameFlags`]）で新たに構築して `items` に追記する。
+//! `total()`/`is_at_end()` 等、全体像や先読みが必要な read-only メソッドは、実プレイ状態
+//! （`self.flags`/`self.items`）を変更しない使い捨ての状態で試し計算する。
+//!
+//! `Event::Flag`/`Event::Condition` 自体は [`build_scene_items`] が、シーン内のイベント列を
+//! 逐次 walk する中でリアルタイムに処理する（GUI版のように一括変換の純粋関数を都度呼び直す
+//! のではなく、逐次 walk のループに直接組み込む設計）。`Event::Flag` に遭遇したら即座に
+//! `flags.set()` で副作用を適用し、`Event::Condition` に遭遇したら `flags.check()` で判定して
+//! 真なら内部 events を同じ関数に再帰的に渡す。これにより、同一シーン内で「Flag のすぐ後の
+//! Condition」が正しく反応する（GUI版 `reResolveEvents` と同じ効果を1本のループで実現する）。
 
 use std::collections::HashMap;
 
@@ -256,16 +282,14 @@ pub struct Playback {
     /// 遅延ビルド解決に切り替わったため、現在はどこからも参照されない（削除はスコープ外）。
     #[allow(dead_code)]
     scene_start: HashMap<String, usize>,
-    /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報（#509 Phase A
-    /// 予定分の下ごしらえ）。`from_document`/`from_merged_document` で埋まる。今回のスコープ
-    /// ではまだ誰からも参照されない（`scene_start` によるフラット化 items 上のジャンプが
-    /// 引き続き使われる）。`from_lines` 経由の構築では空のまま。
-    #[allow(dead_code)]
+    /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
+    /// `from_document`/`from_merged_document` で埋まる。`advance`/`select_current_choice` が
+    /// 次に構築すべきシーンを引くのに使う（#509 Phase B、モジュール冒頭のドキュメント参照）。
+    /// `from_lines` 経由の構築では空のまま。
     scene_order: Vec<SceneRef>,
-    /// シーンID → `scene_order` 内のインデックス（#509 Phase A 予定分の下ごしらえ）。
-    /// `scene_order` と同様、今回のスコープではまだ誰からも参照されない。`from_lines` 経由の
-    /// 構築では空のまま。
-    #[allow(dead_code)]
+    /// シーンID → `scene_order` 内のインデックス。`select_current_choice` が `jump` 先の
+    /// 解決に使う（#509 Phase B、`scene_start` に代わるジャンプ先解決手段）。`from_lines`
+    /// 経由の構築では空のまま。
     scene_index_by_id: HashMap<String, usize>,
     /// 現在 Choice を表示中のときのカーソル位置（0始まり）。Line item にいる間は無視される。
     /// 新しい Choice item へ移動するたびに `set_index` が 0 へリセットする。
