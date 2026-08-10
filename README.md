@@ -40,6 +40,7 @@ Markdownで原稿を書き、PixiJSで美しいノベルゲームとして実行
 - Python 3.11以上
 - Rust（パーサーのビルドに必要）
 - Git
+- （Linuxのみ）ALSA開発パッケージ: TUI版の音声再生（rodio/cpal）が内部でALSAを使うため、`sudo apt-get install -y libasound2-dev pkg-config` が必要
 
 ### クイックスタート
 

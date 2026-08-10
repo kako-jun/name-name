@@ -14,3 +14,7 @@ jiwa = "0.3"
 # WebP のみ有効化（gymnasia のイベント絵アセットは WebP）。avif 等 default-formats の
 # 重量級コーデックを引き込まないよう default-features は無効化する（#481）。
 image = { version = "0.25", default-features = false, features = ["webp"] }
+# cpal ベースの pure Rust オーディオ再生（#502）。docs/spec/markdown-v0.1.md の [BGM:]/[SE:]
+# 構文例が .ogg（BGM）/.wav（SE）を使っているため、その2フォーマットの decoder のみ有効化する
+# （symphonia 系や mp3/flac 等の重量級コーデックは対象外、image と同じ絞り込み方針）。
+rodio = { version = "0.19", default-features = false, features = ["wav", "vorbis"] }

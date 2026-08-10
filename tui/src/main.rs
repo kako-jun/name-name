@@ -1,5 +1,7 @@
+mod audio;
 mod cli;
 mod config;
+mod flags;
 mod image_fade;
 mod image_render;
 mod input;
@@ -127,15 +129,25 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // 音声出力デバイスを初期化する（#502）。SSH経由・headless環境等でデバイスが無い場合は
+    // `None` になるが、これはエラーではない — `event_loop` はその場合 BGM/SE の状態追跡だけ
+    // 行い実際の再生呼び出しをスキップして進行を続ける（`audio::AudioPlayer::try_new`
+    // のdoc comment参照）。
+    let mut audio_player = audio::AudioPlayer::try_new();
+
     // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ
     // （`reveal::blink_visible` による1秒周期の完全on/off点滅、#495）は
     // どちらも時間経過だけで見た目が変わるため、キー入力の有無に関わらず `REDRAW` 間隔で
     // 再描画するポーリング方式にする（#472）。この `next_action` は `run_screens` を通じて
     // `show_splash`/`event_loop` の両方へ渡り、スプラッシュ画面もこの間隔で再描画されるが、
     // 静的な画面なので実害はない。
-    let result = run_screens(&mut terminal, config, playback, &mut || {
-        input::poll_action(REDRAW)
-    });
+    let result = run_screens(
+        &mut terminal,
+        config,
+        playback,
+        &mut || input::poll_action(REDRAW),
+        audio_player.as_mut(),
+    );
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -156,6 +168,7 @@ fn run_screens<B>(
     config: &Config,
     playback: &mut Playback,
     next_action: &mut impl FnMut() -> anyhow::Result<Action>,
+    audio: Option<&mut audio::AudioPlayer>,
 ) -> anyhow::Result<()>
 where
     B: Backend,
@@ -168,7 +181,7 @@ where
             return Ok(());
         }
     }
-    event_loop(terminal, config, playback, next_action)
+    event_loop(terminal, config, playback, next_action, audio)
 }
 
 /// スプラッシュ画面を描画し、キー入力を1件待つ。`Action::Advance` で `Ok(true)`
@@ -270,6 +283,7 @@ fn event_loop<B>(
     config: &Config,
     playback: &mut Playback,
     next_action: &mut impl FnMut() -> anyhow::Result<Action>,
+    mut audio: Option<&mut audio::AudioPlayer>,
 ) -> anyhow::Result<()>
 where
     B: Backend,
@@ -318,6 +332,21 @@ where
             .current_line()
             .and_then(|line| line.event_image.clone()),
     );
+
+    // BGM（宣言的 state）/ SE（ワンショットトリガ）の再生状態（#502）。`current_bgm_path`/
+    // `last_se_cursor` はどちらも「実際に音を鳴らす副作用を起こす」ための直前状態で、
+    // `image_fade` と同様に開始時点の値で初期化してから毎フレーム同期する
+    // （`sync_bgm`/`play_new_se_cues` のdoc comment参照）。ここで一度呼ぶことで、
+    // 原稿の先頭に `[BGM:]`/`[SE:]` がある場合も advance を待たず起動直後から再生される。
+    let mut current_bgm_path: Option<String> = None;
+    sync_bgm(
+        &mut current_bgm_path,
+        playback,
+        &config,
+        audio.as_deref_mut(),
+    );
+    let mut last_se_cursor: Option<usize> = None;
+    play_new_se_cues(&mut last_se_cursor, playback, &config, audio.as_deref_mut());
 
     // 画像コマ自動送り（#497）の締切。現在位置が画像コマ item（`playback.pending_wait_ms()`
     // が `Some(ms)`、`Event::EventImage` 直後に `Event::Wait { ms }` が続いていたときだけ
@@ -682,6 +711,18 @@ where
                 // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
                 // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
                 let advanced = on_advance(playback, &mut current_reveal, &config, Instant::now());
+                // BGM/SE の同期は `position()`（Line item のみを数える）ではなく、内部で
+                // それぞれ「宣言的な値の変化」「生カーソルの変化」を見て判定するため、Choice
+                // item への遷移（position() は変化しない）でも正しく反応する（#502）。
+                // どちらも値が変わっていなければ no-op なので、advance が実質何もしなかった
+                // （末尾で false を返した等）場合も無条件に呼んで問題ない。
+                sync_bgm(
+                    &mut current_bgm_path,
+                    playback,
+                    &config,
+                    audio.as_deref_mut(),
+                );
+                play_new_se_cues(&mut last_se_cursor, playback, &config, audio.as_deref_mut());
                 // #500: 実際に行/文単位ページが1つ先へ進んだとき（`on_advance` が `true` を
                 // 返したとき、デシジョンテーブルのケース4）だけ、離れる直前の表示内容を
                 // バックログへ積む。選択肢確定（ケース1）・タイプライターのスキップのみ
@@ -1037,6 +1078,67 @@ fn on_advance(
     false
 }
 
+/// `playback.current_bgm()`（宣言的 state、#502）を実際の再生状態へ同期する。
+/// GUI版 `AudioManager.playBgm` の `if (this.currentBgmUrl === url) return`（同一URLなら
+/// 何もしない）と同じく、前回同期時の値（`current`）と変化が無ければ即座に返る —
+/// これにより毎フレーム無条件に呼んでも、実際に BGM が切り替わった瞬間だけ
+/// `AudioPlayer::play_bgm`/`stop_bgm` が呼ばれる。
+///
+/// `config.resolve_sound_path` がパストラバーサル等で `None` を返した場合（原稿の記述ミス）は
+/// 「BGM無し」と同じ扱いで `stop_bgm` に倒す（fail-soft、`image_fade` がデコード失敗時に
+/// プレースホルダへ倒すのと同じ考え方）。`audio` が `None`（音声出力デバイス無し、
+/// `AudioPlayer::try_new` 参照）の場合は `current` の追跡だけ行い実際の再生呼び出しはしない。
+fn sync_bgm(
+    current: &mut Option<String>,
+    playback: &Playback,
+    config: &Config,
+    audio: Option<&mut audio::AudioPlayer>,
+) {
+    let target = playback.current_bgm().map(str::to_string);
+    if *current == target {
+        return;
+    }
+    *current = target.clone();
+    let Some(audio) = audio else { return };
+    match target.and_then(|relative| config.resolve_sound_path(&relative)) {
+        Some(path) => audio.play_bgm(&path),
+        None => audio.stop_bgm(),
+    }
+}
+
+/// [`Playback::item_index`] が前回チェック時から変化していたら（＝新しい item に到達した
+/// 瞬間）、その item に紐づく `current_se_cues()` を出現順にすべて一度だけ再生する（#502）。
+/// SE は BGM と異なり持続する state を持たないワンショットのため、`sync_bgm` のような
+/// 「値そのもの」の比較ではなく「カーソルが動いたかどうか」のエッジ検出になる —
+/// 同じ item に居続ける限り（`sentence_per_page` の文送り等）何度呼んでも再生しない。
+/// `item_index()` は image_fade のクロスフェード判定（#497）が使っているのと同じ「生の
+/// items インデックス」で、SE の新規到達検出にもそのまま転用できる（専用の `cursor()` を
+/// 別途持たない）。`last_cursor` を `Option<usize>` にしているのは、起動直後の初回呼び出し
+/// （実インデックス値は常に有効な `usize`）を「前回と異なる」として確実に一致させ、原稿冒頭の
+/// `[SE:]` も取りこぼさないため。
+///
+/// パス解決に失敗した個別の SE（`config.resolve_sound_path` が `None`）は黙って読み飛ばし、
+/// 残りの SE の再生は継続する（1件の記述ミスで他の SE まで巻き込んで無音にしない）。
+/// `audio` が `None` の場合は `last_cursor` の追跡だけ行い実際の再生はしない。
+fn play_new_se_cues(
+    last_cursor: &mut Option<usize>,
+    playback: &Playback,
+    config: &Config,
+    audio: Option<&mut audio::AudioPlayer>,
+) {
+    let cursor = playback.item_index();
+    if *last_cursor == Some(cursor) {
+        return;
+    }
+    *last_cursor = Some(cursor);
+    let Some(audio) = audio else { return };
+    for relative in playback.current_se_cues() {
+        if let Some(path) = config.resolve_sound_path(relative) {
+            audio.play_se(&path);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1369,7 +1471,14 @@ mod tests {
         .unwrap();
         let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert!(
             buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
@@ -1413,7 +1522,14 @@ mod tests {
         let (mut next_action, _remaining) =
             action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert!(
             !buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
@@ -1452,7 +1568,14 @@ mod tests {
         .unwrap();
         let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.position(),
@@ -1514,7 +1637,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.position(),
@@ -1658,13 +1788,85 @@ mod tests {
         let mut playback = Playback::from_document(&document);
         let (mut next_action, _remaining) = action_queue(vec![Action::Quit]);
 
-        run_screens(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        run_screens(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         // スプラッシュ用の「Enter / Space で開始」ヒントが一切描画されておらず、
         // event_loop 側の描画（位置表示 "0/0"）だけが出ていることを確認する。
         let text = buffer_text(&terminal);
         assert!(!text.contains("Enter"), "buffer was: {text}");
         assert!(text.contains("0/0"), "buffer was: {text}");
+    }
+
+    // ---- #502: sync_bgm / play_new_se_cues（音声出力デバイス無しでの状態追跡）----
+    //
+    // `audio: None`（`AudioPlayer::try_new` がデバイス無し環境で返す値）を渡しても panic
+    // せず、また実ファイルI/Oを一切行わずに `current`/`last_cursor` の状態追跡だけが
+    // 正しく進むことを確認する（`sync_bgm`/`play_new_se_cues` の doc comment 参照:
+    // `audio` が `None` の分岐は状態更新後に早期returnするだけで `resolve_sound_path` すら
+    // 呼ばない）。
+
+    #[test]
+    fn sync_bgm_tracks_current_bgm_without_audio_device() {
+        let source =
+            "---\nengine: name-name\n---\n\n## 1-1: start\n\n[BGM: amehure.ogg]\n\n**A**:\nhello\n";
+        let document = name_name_parser::parser::parse(source);
+        let playback = Playback::from_document(&document);
+        let config = Config::default();
+
+        let mut current = None;
+        sync_bgm(&mut current, &playback, &config, None);
+
+        assert_eq!(current.as_deref(), Some("amehure.ogg"));
+    }
+
+    #[test]
+    fn sync_bgm_no_op_when_target_unchanged() {
+        let document = name_name_parser::parser::parse(
+            "---\nengine: name-name\n---\n\n## 1-1: start\n\n**A**:\nhello\n",
+        );
+        let playback = Playback::from_document(&document);
+        let config = Config::default();
+
+        // 既に current == target(None) の状態で呼んでも current は変化しない（自明だが、
+        // 「値が変化した時だけ再生を試みる」という契約をコードで固定しておく）。
+        let mut current = None;
+        sync_bgm(&mut current, &playback, &config, None);
+        assert_eq!(current, None);
+    }
+
+    #[test]
+    fn play_new_se_cues_updates_cursor_once_per_item_without_audio_device() {
+        let source = "---\nengine: name-name\n---\n\n## 1-1: start\n\n[SE: chime.wav]\n\n**A**:\nhello\n\n**B**:\nworld\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let config = Config::default();
+
+        let mut last_cursor = None;
+        play_new_se_cues(&mut last_cursor, &playback, &config, None);
+        assert_eq!(
+            last_cursor,
+            Some(0),
+            "最初のitemへの到達でcursorが記録される"
+        );
+
+        // 同じitemに居続ける限り、何度呼んでもcursorは変わらない（＝再トリガーしない）。
+        play_new_se_cues(&mut last_cursor, &playback, &config, None);
+        assert_eq!(last_cursor, Some(0));
+
+        playback.advance();
+        play_new_se_cues(&mut last_cursor, &playback, &config, None);
+        assert_eq!(
+            last_cursor,
+            Some(1),
+            "次のitemへ進んだのでcursorが更新されるはず"
+        );
     }
 
     // ---- フルキャンバス画像表示モードのスクロール配線（#530）----
@@ -1955,7 +2157,14 @@ mod tests {
         let mut playback = Playback::from_document(&document);
         let (mut next_action, _remaining) = action_queue(vec![Action::Quit]);
 
-        run_screens(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        run_screens(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         // スプラッシュがスキップされていれば、この唯一のQuitはevent_loopへ渡り
         // "0/0" の位置表示が出るはず。実際にはスプラッシュ(画像モード)がまず表示され、
@@ -2135,7 +2344,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.position(),
@@ -2177,7 +2393,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(playback.position(), 1);
         assert_eq!(
@@ -2234,7 +2457,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         let text = buffer_text(&terminal);
         assert!(text.contains('a'), "1文字目は表示されているはず: {text:?}");
@@ -2272,7 +2502,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         let text = buffer_text(&terminal);
         assert!(text.contains('a'));
@@ -2325,7 +2562,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         let text = buffer_text(&terminal);
         assert!(
@@ -2396,7 +2640,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert!(
             !buffer_has_bg_color(terminal.backend().buffer(), fixture_to),
@@ -2432,7 +2683,14 @@ mod tests {
             Action::Quit,
         ]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.position(),
@@ -2501,7 +2759,14 @@ mod tests {
             Action::Quit,
         ]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert!(
             playback.current_choice().is_some(),
@@ -2542,7 +2807,13 @@ mod tests {
             }
         };
 
-        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
         assert!(result.is_err(), "テスト用の意図的な停止のはず");
 
         let text = buffer_text_wide_aware(&terminal);
@@ -2577,7 +2848,13 @@ mod tests {
             }
         };
 
-        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
         assert!(result.is_err(), "テスト用の意図的な停止のはず");
 
         let text = buffer_text_wide_aware(&terminal);
@@ -2605,7 +2882,14 @@ mod tests {
         let (mut next_action, remaining) =
             action_queue(vec![Action::ToggleBacklog, Action::Quit, Action::Quit]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             *remaining.borrow(),
@@ -2646,7 +2930,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.position(),
@@ -2689,7 +2980,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.position(),
@@ -2728,7 +3026,14 @@ mod tests {
             Action::Quit,
         ]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert!(
             playback.current_choice().is_some(),
@@ -2761,7 +3066,14 @@ mod tests {
             Action::Quit,
         ]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(playback.position(), 2);
         assert_eq!(
@@ -2824,7 +3136,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert!(
             playback.current_choice().is_some(),
@@ -2869,7 +3188,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(playback.position(), 2);
         assert_eq!(
@@ -2902,7 +3228,14 @@ mod tests {
             Action::Quit,
         ]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.position(),
@@ -2941,7 +3274,13 @@ mod tests {
             }
         };
 
-        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
         assert!(result.is_err());
 
         let text = buffer_text(&terminal);
@@ -3029,7 +3368,13 @@ mod tests {
             }
         };
 
-        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
         assert!(result.is_err());
 
         let text = buffer_text_wide_aware(&terminal);
@@ -3064,7 +3409,13 @@ mod tests {
             }
         };
 
-        let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
         assert!(result.is_err());
 
         let text = buffer_text_wide_aware(&terminal);
@@ -3109,7 +3460,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.position(),
@@ -3163,7 +3521,14 @@ mod tests {
         .unwrap();
         let mut next_action = passive_next_action(Duration::from_secs(2));
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.current_line().expect("line").speaker.as_deref(),
@@ -3215,7 +3580,14 @@ mod tests {
         let (mut next_action, _remaining) =
             action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.current_line().expect("line").speaker.as_deref(),
@@ -3260,7 +3632,14 @@ mod tests {
         .unwrap();
         let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert!(
             buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
@@ -3303,7 +3682,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert!(
             buffer_text(&terminal).contains(reveal::PAGE_INDICATOR_SYMBOL),
@@ -3345,7 +3731,13 @@ mod tests {
             // 実際のキー入力の代わりに、呼ばれるたびにQuitを返すフェイクの入力源。
             // バグが再発した場合、このクロージャは一度も呼ばれずevent_loopが無限ループする。
             let mut next_action = move || -> anyhow::Result<Action> { Ok(Action::Quit) };
-            let result = event_loop(&mut terminal, &config, &mut playback, &mut next_action);
+            let result = event_loop(
+                &mut terminal,
+                &config,
+                &mut playback,
+                &mut next_action,
+                None,
+            );
             let _ = tx.send(result.is_ok());
         });
 
@@ -3391,7 +3783,14 @@ mod tests {
             }
         };
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.current_line().expect("line").speaker.as_deref(),
@@ -3419,7 +3818,14 @@ mod tests {
         .unwrap();
         let mut next_action = passive_next_action(Duration::from_secs(3));
 
-        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             playback.current_line().expect("line").speaker.as_deref(),
