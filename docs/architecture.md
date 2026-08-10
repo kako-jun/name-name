@@ -65,6 +65,8 @@ Worker はパースしない。GitHub から Markdown を取得してそのま�
 
 `tui/` の選択肢分岐（`Playback`, #482）はシーン境界を越えてフラットに読み進む設計で、GUI版と異なり jump 先シーンを読み終えても終劇にならない。原稿を書く側は、選択肢の分岐先シーンをドキュメント末尾に置くか、必ず次の `Choice` で明示的に閉じること — さもないとドキュメント順で後続の別シーンの内容がそのまま漏れて表示されてしまう（設計の詳細は `tui/src/playback.rs` 冒頭のdocコメント参照）。この割り切りは単一ファイル前提だったため、複数の `.md` を一括マージする `multi_doc`（#496）以降は例外を設けている: `Playback::from_merged_document` で構築すると各 item に由来ファイルの id が刻まれ、暗黙の `advance()` はファイル境界（＝マージ対象ファイルの境目）を越えず、そこに到達すると `is_at_end()` になる。選択肢ジャンプ（`select_current_choice`）はこの制限の対象外で、別ファイルのシーンへ明示的に飛ぶのは従来どおり成功する。
 
+`tui/` の `[待機: Nms]`（#497）はGUI版と異なり汎用実装ではなく、`Event::EventImage` の直後に `Event::Wait { ms }` が続く場合だけを `Playback::build` が走査時にパターン検出し、独立した画像コマ item（`PlaybackItem::Image`）と自動送りの締切（`main.rs::event_loop` の `wait_deadline`）を生成する狭いスコープの実装（GUI版 `NovelRenderer` の `Wait{ms}` + `waitingForWait` はどの文脈の `Wait` でも汎用的に待機する）。`events.get(event_index + 1)` で直後の1イベントしか見ないため、`[イベント絵:][SE:][待機:]` のように間に他のイベントを挟むと不一致になり自動送りは発火しない。それ以外の文脈にある `Wait` は従来どおり無視される（TUI版はそもそも `Wait` 全般を実装しておらず、この隣接パターンだけを新規サポートした）。設計の詳細は `tui/src/playback.rs` 冒頭のdocコメント参照。原稿を書く側の注意点は `docs/spec/markdown-v0.1.md` の「イベント絵」節参照。
+
 ## データフロー
 
 ### 編集時
@@ -190,12 +192,16 @@ Choice によるプレイヤー操作介入は無い。ただし `[待機: Nms]`
 `content/scripts/` は `listScripts()` で全列挙され `allScenes`/confinement グラフに乗ってしまい、
 `?scene=` 直リンクや原稿 typo で到達可能になる事故ルートになるため、意図的に外している。
 
-終劇の判定箇所は 2 つ:
+終劇の判定箇所は 3 つ:
 **選んだ jump 先**が圏外なら `jumpToScene`（choice 確定後）が終劇する。さらに **全 option の
 jump 先が圏外の `[選択]` に到達した場合**は、選択肢を描画せず `processDirective` の Choice 分岐で
 先回りして終劇する（#398。全 option 圏外の choice はクリックするまで `jumpToScene` に届かず、
 `storyEnded` の postMessage が発火しないため既読化されなかった。`markCurrentSceneRead` を済ませて
-から終劇し、選択肢を出さずに完読を親へ通知する）。`?scene=` が hub 自身の sceneId を指した場合は
+から終劇し、選択肢を出さずに完読を親へ通知する）。加えて **`[選択]` を持たないまま `advance()` が
+resolvedEvents を最後まで消化した場合**は、confinement とは無関係に、`onEndCallback`
+（VideoExporter 専用）が未登録であれば `endStory()` を呼ぶ（#470。記述が尽きたシーンが無反応で
+固まって見える不具合の修正。`onEndCallback` 登録時＝動画書き出し中はそちらに完全委譲し
+`endStory()` の演出は重ねない）。`?scene=` が hub 自身の sceneId を指した場合は
 `findConfinedSceneIds` が null を返し、confinement を組まず無制限フローにフォールバックする
 （hub → 各お題への通常 choice 遷移を壊さないため）。`storyEnded` の設計上の位置づけ
 （ADR 0002 の「演出の中間状態を持たない」規律との関係）は
@@ -378,7 +384,7 @@ interface NovelGameState {
 | `getSnapshot()`                                         | 現在の状態をスナップショットとして取得                                                                                                           |
 | `seekTo(historyIndex)`                                  | 履歴の指定位置にジャンプ                                                                                                                         |
 | `applyState(state)`                                     | スナップショットから画面を復元                                                                                                                   |
-| `playScript(steps)`                                     | 操作列（`advance`/`choice`/`wait`）を決定論的にリプレイ（#220 Phase 1、デバッグ/テスト用。再生中 msPerChar=0、完了・例外時に復元、再入は throw） |
+| `playScript(steps)`                                     | 操作列（`advance`/`choice`/`wait`）を決定論的にリプレイ（#220 Phase 1、デバッグ/テスト用。再生中 msPerChar=0、完了・例外時に復元、再入は throw）。destroy 後ガード（#515）: `wait` ステップの `await` 中に `destroy()` されて `initialized=false` になった場合、wait 明け直後にそれを検知し、残りの step（後続の `advance`/`choice` 含む）を一切実行せず `playScript` を終了する（msPerChar 復元等の finally 後始末は通常どおり走る） |
 | `startFrom({sceneId, flags?, eventIndex?, textIndex?})` | 任意シーン+フラグ状態から開始（#220 Phase 2、デバッグ/テスト用。history リセット、flags 置換、不正 sceneId は完全 no-op）                        |
 | `setConfinedSceneIds(ids \| null)`                       | confinement（在圏）一覧を設定する（#386）。null（既定）なら制限なし。設定すると `jumpToScene` はこの集合外への遷移を通常のシーン遷移にせず `endStory()`（終劇）にする。呼び出し元は `PlayerScreen`（`?scene=` ディープリンク単独埋め込み時のみ） |
 | `setOnStoryEndedChange(cb)`                              | 終劇状態の変化コールバックを登録する（#386）。`NovelPlayer` が "to be continued..." の DOM 表示に使う                                              |

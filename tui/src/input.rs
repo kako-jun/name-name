@@ -1,5 +1,8 @@
 //! キー入力の解釈。Enter/Space で次の会話行へ進み（選択肢表示中は確定になる、#482）、
-//! ↑/↓ で選択肢のカーソルを動かし、q/Esc で終了する。
+//! ↑/↓ で選択肢のカーソルを動かし（グリッド表示では行移動、#508）、←/→ で選択肢の
+//! グリッド表示中のみカーソルを列移動し（非グリッドでは no-op、#508）、a/A でオートモード
+//! （#498）、s/S でスキップモード（#499）、b/B でバックログ（#500）、c/C で設定画面
+//! （#503）をそれぞれトグルし、q/Esc で終了する。
 
 use std::time::Duration;
 
@@ -19,16 +22,24 @@ pub enum Action {
     /// GUI版 `handlePointerClick` がバックログ表示中のタップを「進める」ではなく
     /// 「閉じる」として吸収するのと同じ）。
     Advance,
-    /// 選択肢のカーソルを1つ上へ動かす。選択肢を表示していないときは no-op（#482）。
-    /// オーバーレイが開いているときは `main.rs::event_loop` が文脈依存で再解釈する
-    /// （#500: バックログ表示中はスクロール上／#503: 設定画面表示中はテキスト速度を
-    /// 上げる方向へ調整）。
+    /// 選択肢のカーソルを1つ上の行へ動かす。選択肢を表示していないときは no-op（#482）。
+    /// グリッド表示（#508）では同じ列の1つ上の行へ、非グリッドでは1つ前の要素へ動く
+    /// （`Playback::move_choice_cursor_up` 参照）。オーバーレイが開いているときは
+    /// `main.rs::event_loop` が文脈依存で再解釈する（#500: バックログ表示中はスクロール上／
+    /// #503: 設定画面表示中はテキスト速度を上げる方向へ調整）。
     MoveUp,
-    /// 選択肢のカーソルを1つ下へ動かす。選択肢を表示していないときは no-op（#482）。
-    /// オーバーレイが開いているときは `main.rs::event_loop` が文脈依存で再解釈する
-    /// （#500: バックログ表示中はスクロール下／#503: 設定画面表示中はテキスト速度を
-    /// 下げる方向へ調整）。
+    /// 選択肢のカーソルを1つ下の行へ動かす。選択肢を表示していないときは no-op（#482）。
+    /// グリッド表示（#508）では同じ列の1つ下の行へ、非グリッドでは1つ次の要素へ動く
+    /// （`Playback::move_choice_cursor_down` 参照）。オーバーレイが開いているときは
+    /// `main.rs::event_loop` が文脈依存で再解釈する（#500: バックログ表示中はスクロール下／
+    /// #503: 設定画面表示中はテキスト速度を下げる方向へ調整）。
     MoveDown,
+    /// 選択肢のカーソルを同じ行内で1つ左へ動かす（#508）。選択肢を表示していない、
+    /// または非グリッド（列数1以下）表示中は no-op（`Playback::move_choice_cursor_left`）。
+    MoveLeft,
+    /// 選択肢のカーソルを同じ行内で1つ右へ動かす（#508）。選択肢を表示していない、
+    /// または非グリッド（列数1以下）表示中は no-op（`Playback::move_choice_cursor_right`）。
+    MoveRight,
     /// オートモード（自動ページ送り）の ON/OFF を切り替える（#498、GUI版 `setAutoMode`
     /// 相当）。選択肢表示中でも受け付ける（GUI版のボタンも常時操作可能）。
     ToggleAuto,
@@ -81,6 +92,8 @@ fn action_for_event(event: CrosstermEvent) -> Action {
             KeyCode::Enter | KeyCode::Char(' ') => Action::Advance,
             KeyCode::Up => Action::MoveUp,
             KeyCode::Down => Action::MoveDown,
+            KeyCode::Left => Action::MoveLeft,
+            KeyCode::Right => Action::MoveRight,
             KeyCode::Char('a') | KeyCode::Char('A') => Action::ToggleAuto,
             KeyCode::Char('s') | KeyCode::Char('S') => Action::ToggleSkip,
             KeyCode::Char('b') | KeyCode::Char('B') => Action::ToggleBacklog,
@@ -123,6 +136,18 @@ mod tests {
     fn down_arrow_press_returns_move_down() {
         let action = action_for_event(key_event(KeyCode::Down, KeyEventKind::Press));
         assert_eq!(action, Action::MoveDown);
+    }
+
+    #[test]
+    fn left_arrow_press_returns_move_left() {
+        let action = action_for_event(key_event(KeyCode::Left, KeyEventKind::Press));
+        assert_eq!(action, Action::MoveLeft);
+    }
+
+    #[test]
+    fn right_arrow_press_returns_move_right() {
+        let action = action_for_event(key_event(KeyCode::Right, KeyEventKind::Press));
+        assert_eq!(action, Action::MoveRight);
     }
 
     #[test]
