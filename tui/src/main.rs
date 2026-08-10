@@ -210,7 +210,8 @@ where
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
                 target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
-            Action::None => {}
+            // スプラッシュ画面には左右移動の対象となる複数列選択肢が無いため、無視する(#482、#508)。
+            Action::MoveLeft | Action::MoveRight | Action::None => {}
         }
     }
 }
@@ -363,8 +364,11 @@ where
                 }
             }
             // 選択肢を表示していないとき（`Playback::current_choice` が `None`）は no-op（#482）。
+            // MoveLeft/MoveRight は非グリッド（列数1以下）表示中も同様に no-op（#508）。
             Action::MoveUp => playback.move_choice_cursor_up(),
             Action::MoveDown => playback.move_choice_cursor_down(),
+            Action::MoveLeft => playback.move_choice_cursor_left(),
+            Action::MoveRight => playback.move_choice_cursor_right(),
             Action::Quit => break,
             Action::None => {}
         }
@@ -1243,6 +1247,48 @@ mod tests {
             terminal.backend().buffer().cell((0, 0)).unwrap().bg,
             Color::Rgb(expected_red, 0, 0),
             "最下端まで進めた後に↑を1回押したら、表示はただちに1行ぶん上へ戻り始めるはず"
+        );
+    }
+
+    #[test]
+    fn show_splash_moveleft_and_moveright_do_not_change_scroll_offset() {
+        // スプラッシュ画面には左右移動の対象となる複数列選択肢が無いため、
+        // MoveLeft/MoveRight はNoneと同様に無視されるはず（#482、#508）。
+        // スクロール可能な画像でMoveDownによりオフセットを進めた後、MoveLeft/MoveRightを
+        // 連打しても描画結果がMoveDownのみの場合と変わらないことを確認する。
+        let fixture_path = per_row_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 0;
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut baseline_action, _r1) =
+            action_queue(vec![Action::MoveDown, Action::MoveDown, Action::Advance]);
+        show_splash(&mut baseline_terminal, &config, &mut baseline_action).unwrap();
+        let baseline_text = buffer_text(&baseline_terminal);
+
+        let mut moved_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut moved_action, _r2) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveLeft,
+            Action::MoveRight,
+            Action::MoveLeft,
+            Action::Advance,
+        ]);
+        show_splash(&mut moved_terminal, &config, &mut moved_action).unwrap();
+        let moved_text = buffer_text(&moved_terminal);
+
+        assert_eq!(
+            baseline_text, moved_text,
+            "MoveLeft/MoveRightを挟んでもスクロールオフセットは変化してはいけない"
         );
     }
 

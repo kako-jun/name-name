@@ -220,21 +220,21 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// クロスフェード状態（[`ImageFadeState`]、`None` は event_image を一切扱わない呼び出し元
 /// 向けのフォールバック）、`image_cache` はそのデコード結果キャッシュ（#481）。
 ///
-/// `choice` が `Some((options, cursor))`（選択肢表示中、#482）のときは、右側テキスト領域
-/// （`split_columns` が返すテキスト領域、#480の50/50分割＋#488のスペーサーはそのまま）に
-/// 選択肢一覧を描画し、通常の相手/自分2ウィンドウ（`draw_text_windows`）は描かない。選択肢
-/// には特定の話者が無いため、相手/自分の上下分割という概念自体が意味を持たない
-/// （`line`/`choice` は同時に `Some` にならない — `Playback::current_line`/`current_choice`
-/// が排他的なため。呼び出し側の `main.rs` はこの排他性を意識せず、両方をそのまま渡すだけで
-/// よい）。選択肢表示中も左側のイベント絵/プレースホルダ（`image_fade`）はそのまま描画され
-/// 続ける — 左カラムは右カラム（テキスト/選択肢の切替）とは独立しているため、選択肢表示は
-/// 画像側のフェードやサイズに影響しない。
+/// `choice` が `Some((options, cursor, columns))`（選択肢表示中、#482。`columns` はグリッド
+/// 配置の列数、#508）のときは、右側テキスト領域（`split_columns` が返すテキスト領域、#480の
+/// 50/50分割＋#488のスペーサーはそのまま）に選択肢一覧を描画し、通常の相手/自分2ウィンドウ
+/// （`draw_text_windows`）は描かない。選択肢には特定の話者が無いため、相手/自分の上下分割
+/// という概念自体が意味を持たない（`line`/`choice` は同時に `Some` にならない —
+/// `Playback::current_line`/`current_choice` が排他的なため。呼び出し側の `main.rs` は
+/// この排他性を意識せず、両方をそのまま渡すだけでよい）。選択肢表示中も左側のイベント絵/
+/// プレースホルダ（`image_fade`）はそのまま描画され続ける — 左カラムは右カラム（テキスト/
+/// 選択肢の切替）とは独立しているため、選択肢表示は画像側のフェードやサイズに影響しない。
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     config: &Config,
     line: Option<&DisplayLine>,
-    choice: Option<(&[ChoiceOption], usize)>,
+    choice: Option<(&[ChoiceOption], usize, Option<u32>)>,
     position: usize,
     total: usize,
     is_at_end: bool,
@@ -270,7 +270,9 @@ pub fn draw(
     });
     draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
     match choice {
-        Some((options, cursor)) => draw_choice_list(frame, text_area, options, cursor),
+        Some((options, cursor, columns)) => {
+            draw_choice_list(frame, text_area, options, cursor, columns)
+        }
         None => draw_text_windows(
             frame,
             text_area,
@@ -290,31 +292,112 @@ const CHOICE_CURSOR_SYMBOL: &str = "▶ ";
 /// カーソル記号と同じ表示幅を保つための、非カーソル行の左詰めパディング。
 const CHOICE_CURSOR_PADDING: &str = "  ";
 
-/// 右側テキスト領域全体に選択肢を縦一列に描画する（#482）。相手/自分の2ウィンドウ分割
-/// （`draw_text_windows`）は使わない — 選択肢に話者は無いため。カーソル行は反転表示
-/// （`Modifier::REVERSED`）+ 先頭の [`CHOICE_CURSOR_SYMBOL`] で示す。左側（画像プレースホルダ列）の
-/// イベント絵/プレースホルダは選択肢表示中も独立して描画され続けるため、ここでは一切触れない。
-fn draw_choice_list(frame: &mut Frame, area: Rect, options: &[ChoiceOption], cursor: usize) {
-    let lines: Vec<Line> = options
-        .iter()
-        .enumerate()
-        .map(|(i, option)| {
-            let is_selected = i == cursor;
-            let prefix = if is_selected {
-                CHOICE_CURSOR_SYMBOL
-            } else {
-                CHOICE_CURSOR_PADDING
+/// 右側テキスト領域全体に選択肢を描画する。相手/自分の2ウィンドウ分割（`draw_text_windows`）
+/// は使わない — 選択肢に話者は無いため。カーソル行は反転表示（`Modifier::REVERSED`）+
+/// 先頭の [`CHOICE_CURSOR_SYMBOL`] で示す。左側（画像プレースホルダ列）のイベント絵/
+/// プレースホルダは選択肢表示中も独立して描画され続けるため、ここでは一切触れない。
+///
+/// `columns` が `None` または `1` 以下（`Event::Choice.columns` 未指定/不正値、#508）なら
+/// 従来どおりの縦一列描画（#482、非破壊）。`2` 以上なら [`draw_choice_grid`] にグリッド
+/// 描画を委譲する。
+/// 選択肢1件分のカーソル記号と強調スタイルを決める（#508 セルフレビュー: `draw_choice_list`
+/// と `draw_choice_grid` で同一ロジックが重複していたため共通化）。
+fn choice_cursor_prefix_and_style(is_selected: bool) -> (&'static str, Style) {
+    if is_selected {
+        (
+            CHOICE_CURSOR_SYMBOL,
+            Style::default().add_modifier(Modifier::REVERSED),
+        )
+    } else {
+        (CHOICE_CURSOR_PADDING, Style::default())
+    }
+}
+
+fn draw_choice_list(
+    frame: &mut Frame,
+    area: Rect,
+    options: &[ChoiceOption],
+    cursor: usize,
+    columns: Option<u32>,
+) {
+    let columns = columns.unwrap_or(1).max(1);
+    if columns <= 1 {
+        let lines: Vec<Line> = options
+            .iter()
+            .enumerate()
+            .map(|(i, option)| {
+                let (prefix, style) = choice_cursor_prefix_and_style(i == cursor);
+                Line::styled(format!("{prefix}{}", option.text), style)
+            })
+            .collect();
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        render_wrapped_paragraph(frame, area, paragraph);
+        return;
+    }
+    draw_choice_grid(frame, area, options, cursor, columns as usize);
+}
+
+/// 選択肢を `columns` 列のグリッドとして描画する（#508、`draw_choice_list` から
+/// `columns >= 2` のときのみ呼ばれる）。行方向は `Layout::Vertical`、各行内の列方向は
+/// `Layout::Horizontal` をネストして組む — `i % columns` 列目・`i / columns` 行目に配置する
+/// GUI版 `novelLayout.ts` の `computeChoiceGridLayout` と同じ規則（行優先で敷き詰める）。
+///
+/// 縦一列描画（`Wrap` 付き `Paragraph`）と異なり、各セルは折り返し無しの1行表示にする —
+/// TUIはセル/グリフ単位の離散描画のため、ボタン状の固定幅グリッドセルに複数行の折り返しを
+/// 持ち込むと行の高さ計算（`Constraint::Length(1)`）が崩れる。長いテキストは `Paragraph`
+/// の既定動作でそのまま右側が切り詰められる（縦一列描画が `Wrap` するのとは異なる、
+/// 固定幅ボタンという性質上の意図的な簡略化）。`Wrap` を使わないため、縦一列描画側が
+/// 依存している [`render_wrapped_paragraph`] の極小幅ガード（ratatui の `Wrap` 折り返し
+/// panicバグ対策）はここでは不要。
+///
+/// `area` の高さが総行数に満たない場合は、縦一列描画（`Wrap` 無しでは元々スクロール機構が
+/// 存在しない、`choice_list_with_many_options_does_not_panic_when_overflowing_area_height`
+/// 参照）と同様にそのまま見切れる — グリッド化に伴う新規の退行ではない。
+///
+/// `columns` は選択肢数（`total`）を超えないようここでもクランプする（バグ修正、#508）。
+/// 呼び出し元（`Playback::playback_item_from_event`）は既に選択肢数へクランプ済みの値しか
+/// 積まないはずだが、この関数は `pub(crate)` でテストからも直接呼ばれうるため、実際に
+/// ハングを起こす箇所（このすぐ下の `col_areas` の `Vec<Constraint>` 生成 —
+/// `columns` 個の要素を持つベクタを ratatui の `Layout::split`＝cassowary線形制約
+/// ソルバーに渡す）そのものにも多重にクランプを入れておく。実測: クランプ無しで
+/// `columns=2_000_000` を渡すと2分以上応答が返らずSIGKILLが必要だった。`columns >= total`
+/// のときクランプしても `rows = total.div_ceil(columns)` は常に `1` のままなので、
+/// 見た目（行数・各行の並び）はクランプの有無で変わらない — 純粋に性能上の安全弁。
+fn draw_choice_grid(
+    frame: &mut Frame,
+    area: Rect,
+    options: &[ChoiceOption],
+    cursor: usize,
+    columns: usize,
+) {
+    let total = options.len();
+    if total == 0 || columns == 0 {
+        return;
+    }
+    let columns = columns.min(total);
+    let rows = total.div_ceil(columns);
+    let row_areas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![Constraint::Length(1); rows])
+        .split(area);
+
+    for row in 0..rows {
+        let col_areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Ratio(1, columns as u32); columns])
+            .split(row_areas[row]);
+        for (col, col_area) in col_areas.iter().enumerate() {
+            let index = row * columns + col;
+            // 総数が列数で割り切れない場合、最終行の余った列には何も描画しない
+            // （例: 7要素・3列なら最終行は index 6 の1セルだけ埋まる）。
+            let Some(option) = options.get(index) else {
+                continue;
             };
-            let style = if is_selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-            Line::styled(format!("{prefix}{}", option.text), style)
-        })
-        .collect();
-    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    render_wrapped_paragraph(frame, area, paragraph);
+            let (prefix, style) = choice_cursor_prefix_and_style(index == cursor);
+            let paragraph = Paragraph::new(Line::styled(format!("{prefix}{}", option.text), style));
+            frame.render_widget(paragraph, *col_area);
+        }
+    }
 }
 
 /// 左側: イベント絵（`image` が `Some` のとき、quadrant block グリッドとして描画）、または
@@ -2936,7 +3019,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 0)),
+                    Some((&options, 0, None)),
                     1,
                     1,
                     false,
@@ -2972,7 +3055,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 1)),
+                    Some((&options, 1, None)),
                     1,
                     1,
                     false,
@@ -3027,7 +3110,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 0)),
+                    Some((&options, 0, None)),
                     1,
                     1,
                     false,
@@ -3061,7 +3144,7 @@ mod tests {
                         f,
                         &config,
                         None,
-                        Some((&options, 0)),
+                        Some((&options, 0, None)),
                         1,
                         1,
                         false,
@@ -3093,7 +3176,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 0)),
+                    Some((&options, 0, None)),
                     1,
                     1,
                     false,
@@ -3126,7 +3209,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 0)),
+                    Some((&options, 0, None)),
                     1,
                     1,
                     false,
@@ -3166,6 +3249,184 @@ mod tests {
             rows_with_a >= 2,
             "十分に長い全角文字列なので複数行に折り返されるはず（実際は{rows_with_a}行）"
         );
+    }
+
+    // ---- #508: 選択肢グリッド描画（`draw_choice_grid`/`draw_choice_list`分岐）のテスト ----
+
+    #[test]
+    fn draw_choice_grid_does_not_panic_at_extremely_narrow_width_with_many_columns() {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&format!("o{i}"), "x"))
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(1, 3)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_choice_grid(f, area, &options, 0, 10);
+            })
+            .unwrap_or_else(|e| panic!("極端に狭い幅×多列(10)でpanicした: {e}"));
+    }
+
+    // ---- #508 バグ修正の回帰テスト: columns の上限クランプが無いとハングする ----
+
+    #[test]
+    fn draw_choice_grid_completes_quickly_when_columns_vastly_exceeds_option_count() {
+        // レビューで実際にハングを再現した条件そのもの: 選択肢はわずか2件なのに
+        // columns=2_000_000（`[選択: 列=200000]` のような巨大値、または実際に確認された
+        // 2_000_000）が渡ってくるケース。クランプ無しだと `col_areas` の
+        // `Vec<Constraint>; columns` 生成 → ratatui `Layout::split`（cassowary線形制約
+        // ソルバー）が2分以上応答を返さずSIGKILLが必要だった。修正後は内部で `total`（2）
+        // までクランプされるため、他の（現実的な列数の）draw_choice_gridテストと同程度の
+        // 時間で完了するはず。「常識的な範囲での完了」を秒単位のタイムアウトで直接検証する
+        // （実際にハングするコードをそのままテストに残さないための実行時間アサーション）。
+        let options = vec![choice_option("A", "x"), choice_option("B", "y")];
+        let area = Rect::new(0, 0, 40, 3);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+        let start = std::time::Instant::now();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 2_000_000);
+            })
+            .unwrap_or_else(|e| panic!("巨大なcolumnsでpanicした: {e}"));
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "columns=2,000,000 でも選択肢数(2)にクランプされ高速に完了するはず（実測: {elapsed:?}）。\
+             2秒を超えるならクランプの退行（#508バグの再発）を疑う。"
+        );
+    }
+
+    #[test]
+    fn draw_choice_grid_ragged_last_row_leaves_missing_cells_blank_without_panic() {
+        // 8件・columns=3。行優先配置で row0=[0,1,2] row1=[3,4,5] row2=[6,7]
+        // （col2欠の端数行）になる。
+        let options: Vec<ChoiceOption> = (0..8)
+            .map(|i| choice_option(&format!("O{i}"), "x"))
+            .collect();
+        let area = Rect::new(0, 0, 30, 3);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 3);
+            })
+            .unwrap_or_else(|e| panic!("端数行のあるグリッドでpanicした: {e}"));
+
+        // draw_choice_grid内部と同じLayout計算でrow2・col2のRectを再現し、
+        // そこに何も描画されず空白のままであることを確認する（欠けたセルは単に
+        // スキップされるだけでpanicはしない、という実装の意図を直接検証する）。
+        let buffer = terminal.backend().buffer();
+        let row_areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(1); 3])
+            .split(area);
+        let col_areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Ratio(1, 3); 3])
+            .split(row_areas[2]);
+        let missing_cell = col_areas[2];
+        for y in missing_cell.y..missing_cell.y + missing_cell.height {
+            for x in missing_cell.x..missing_cell.x + missing_cell.width {
+                let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                assert_eq!(
+                    symbol, " ",
+                    "欠けたセル(row2,col2)は描画されず空白のままのはず (x={x},y={y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_choice_grid_selected_cursor_cell_uses_reversed_style() {
+        // 6件・columns=3ちょうど（端数無し、2行×3列）。カーソルはindex4("E")。
+        let letters = ["A", "B", "C", "D", "E", "F"];
+        let options: Vec<ChoiceOption> = letters.iter().map(|l| choice_option(l, "x")).collect();
+        let area = Rect::new(0, 0, 30, 2);
+        let cursor = 4;
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, cursor, 3);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let find_cell = |needle: char| -> (u16, u16) {
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    if buffer.cell((x, y)).expect("in bounds").symbol() == needle.to_string() {
+                        return (x, y);
+                    }
+                }
+            }
+            panic!("option {needle:?} should render somewhere, buffer was: {buffer:?}");
+        };
+        for (i, letter) in letters.iter().enumerate() {
+            let ch = letter.chars().next().unwrap();
+            let (x, y) = find_cell(ch);
+            let reversed = buffer
+                .cell((x, y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::REVERSED);
+            if i == cursor {
+                assert!(
+                    reversed,
+                    "カーソル位置(index {i}, {letter})は反転表示されるはず"
+                );
+            } else {
+                assert!(
+                    !reversed,
+                    "非カーソル位置(index {i}, {letter})は反転表示されないはず"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_choice_list_dispatches_to_grid_only_when_columns_at_least_2() {
+        // A/Bが同じ行(y)に描画されるかどうかで、グリッド委譲(columns>=2)か
+        // 従来の縦一列描画(columns None/0/1)かを見分ける。
+        let options = vec![
+            choice_option("A", "x"),
+            choice_option("B", "x"),
+            choice_option("C", "x"),
+            choice_option("D", "x"),
+        ];
+        let area = Rect::new(0, 0, 20, 4);
+        for columns in [None, Some(0), Some(1), Some(2)] {
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw_choice_list(f, area, &options, 0, columns);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let find_y = |needle: char| -> u16 {
+                for y in 0..area.height {
+                    for x in 0..area.width {
+                        if buffer.cell((x, y)).expect("in bounds").symbol() == needle.to_string() {
+                            return y;
+                        }
+                    }
+                }
+                panic!("option {needle:?} should render somewhere");
+            };
+            let a_y = find_y('A');
+            let b_y = find_y('B');
+            let is_grid = a_y == b_y;
+            match columns {
+                Some(c) if c >= 2 => assert!(
+                    is_grid,
+                    "columns={columns:?}: draw_choice_gridへ委譲されA/Bが同じ行に並ぶはず"
+                ),
+                _ => assert!(
+                    !is_grid,
+                    "columns={columns:?}: 非グリッドなのでA/Bは別々の行のはず"
+                ),
+            }
+        }
     }
 
     // -- D. page_indicator_area 単体テスト（#487） --
@@ -3932,7 +4193,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = f.area();
-                draw_choice_list(f, area, &[], 0);
+                draw_choice_list(f, area, &[], 0, None);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
