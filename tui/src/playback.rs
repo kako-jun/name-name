@@ -179,13 +179,16 @@ enum PlaybackItem {
 
 /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
 ///
-/// `Playback::scene_order` / `scene_index_by_id` の下ごしらえ（#509 Phase B 予定分の準備、
-/// 今回のスコープでは構築するだけで誰からも参照されない）。フラグに依存しない構造的な情報
-/// のみを保持する — `scene_id`/`file_id`（由来ファイル id、`item_file_ids` と同じ意味）に
-/// 加え、そのシーンの生イベント列を丸ごと複製して持つ。将来、選択肢ジャンプ時にシーン単位で
-/// フラグ評価（`flags::resolve_events`）を行う際の入力になる想定。
-#[allow(dead_code)]
+/// `Playback::scene_order` / `scene_index_by_id` が保持する（#509 Phase B）。フラグに
+/// 依存しない構造的な情報のみを保持する — `scene_id`/`file_id`（由来ファイル id、
+/// `item_file_ids` と同じ意味）に加え、そのシーンの生イベント列を丸ごと複製して持つ。
+/// `advance()`/`select_current_choice()` が、プレイヤーが実際にそのシーンへ到達した
+/// 時点で `events` を `build_scene_items` にそのまま渡し、Flag/Condition をその場の
+/// フラグ状態でリアルタイムに評価させる（`Playback` 構造体の doc コメント参照）。
 struct SceneRef {
+    /// `scene_index_by_id` の構築時にキーとして使うだけで、構築後は読み出されない
+    /// （デバッグ時の可読性のために保持している）。
+    #[allow(dead_code)]
     scene_id: String,
     file_id: usize,
     events: Vec<Event>,
