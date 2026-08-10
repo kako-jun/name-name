@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Assets, Texture } from 'pixi.js'
 import { computeDynamicRenderResolution, getIndicatorImageUrls } from '../game/novelLayout'
+import { INACTIVITY_MS } from '../game/SeekBar'
 import type { NovelGameState } from '../game/GameState'
 
 // NovelRenderer を完全スタブ化（PixiJS 構築・init を無効化）。
@@ -46,6 +47,10 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setOnSeekActiveChange = vi.fn()
     setOnStoryEndedChange = vi.fn()
     setConfinedSceneIds = vi.fn()
+    // #467: letterbox/pillarbox の黒帯タップ用公開API。NovelPlayer 側の
+    // handleOutsideCanvasPointerDown が rendererRef.current?.handleOutsideCanvasTap() を叩く配線を
+    // スパイで検証するために必要（実処理は NovelRenderer.outsideCanvasTap.test.ts が担保）。
+    handleOutsideCanvasTap = vi.fn()
     // #460 再発修正: マルチMD構成での restoreSnapshot 遅延解決の前提（setMissingSceneResolver が
     // restoreSnapshot より前に呼ばれていること）を検証するために必要（P11）。
     setMissingSceneResolver = vi.fn()
@@ -2080,5 +2085,418 @@ describe('NovelPlayer インジケータ画像先読み (#413)', () => {
     await flushAsync()
 
     expect(load).toHaveBeenCalledTimes(8)
+  })
+})
+
+// --- #467: letterbox/pillarbox の黒帯（canvas 外）タップで advance させる ---
+//
+// fluidRootRef（このコンポーネントのルート div、bg-black）に onPointerDown を張り、
+// `e.target === e.currentTarget`（黒帯自身への直接タップ）のときだけ
+// renderer.handleOutsideCanvasTap() を呼ぶ。canvas 相当の子要素・ボタン類へのタップは
+// バブリングで来ても target が子要素のままなので弾かれる（二重発火防止）。
+// 実処理（advance相当の前進・各種ガード）は NovelRenderer.outsideCanvasTap.test.ts が担保するので、
+// ここでは NovelPlayer 側の「どのタップで呼ぶ/呼ばないか」の配線だけを縛る。
+describe('NovelPlayer 黒帯タップで advance (#467)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+  // fluidRootRef 自身（黒帯部分を含むルート div）。className は NovelPlayer.tsx 内で一意
+  // （"...bg-black"。トースト等は "bg-black/70" という別トークンなので衝突しない）。
+  const fluidRoot = () => document.querySelector('.bg-black') as HTMLElement
+  // canvas を内接させる containerRef の div（黒帯の内側＝canvas 相当の子要素）。
+  const canvasBox = () => document.querySelector('.overflow-hidden') as HTMLElement
+
+  it('5: fluidRootRef 自身への pointerdown（target===currentTarget）で handleOutsideCanvasTap が1回呼ばれる', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+
+    fireEvent.pointerDown(fluidRoot())
+
+    expect(lastRenderer().handleOutsideCanvasTap).toHaveBeenCalledTimes(1)
+  })
+
+  it('6: canvas相当の子要素への pointerdown（バブリング、target≠currentTarget）では呼ばれない', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+
+    fireEvent.pointerDown(canvasBox())
+
+    expect(lastRenderer().handleOutsideCanvasTap).not.toHaveBeenCalled()
+  })
+
+  it('7: 右上フルスクリーンボタン・右下⚙ボタンへの pointerdown では呼ばれない', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={true} debugEnabled={true} />)
+    await flushAsync()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: /フルスクリーン/ }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: '設定を開く' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: /オートモードを/ }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: /スキップモードを/ }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: /デバッグ情報を/ }))
+
+    expect(lastRenderer().handleOutsideCanvasTap).not.toHaveBeenCalled()
+  })
+
+  it('8: unmount後（rendererRef.current が null 化した後）に黒帯タップ相当の操作をしても例外を投げない', async () => {
+    // rendererRef.current は mount 中は常に非 null（renderer 生成 effect が同期的に代入する）ため、
+    // 「マウント済みDOMが残っているのに rendererRef.current だけ null」という状態は通常の
+    // レンダーサイクルでは外部から再現できない。unmount 後の cleanup（rendererRef.current = null）
+    // が最も近い到達可能な状態であり、かつ NovelPlayer.tsx 側のガードは
+    // `rendererRef.current?.handleOutsideCanvasTap()`（optional chaining）そのものなので、
+    // unmount 後に検出済みの黒帯 DOM ノードへ改めて pointerdown を投げても例外にならないことを
+    // もって安全策の回帰とする（NovelPlayer.test.tsx の NP-5 と同種の割り切り）。
+    const { unmount } = render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const root = fluidRoot()
+
+    unmount()
+
+    expect(() => fireEvent.pointerDown(root)).not.toThrow()
+  })
+})
+
+// --- #468: フルスクリーン最大化トグル (RTL、Fullscreen API はモック) ---
+//
+// jsdom は Fullscreen API を実装していない（Element.prototype.requestFullscreen /
+// document.exitFullscreen / document.fullscreenElement が存在しない）。NovelPlayer 側は
+// 「対応していれば動く」「無ければ何もしない」の両方を担保する設計のため、テストごとに
+// これらを個別にインストールし、afterEach で確実に削除して他テストへ波及させない
+// （jsdom 既定＝非対応の状態に戻す）。
+describe('NovelPlayer フルスクリーン最大化トグル (#468, Fullscreen API mock)', () => {
+  const fullscreenButton = () => screen.getByRole('button', { name: /フルスクリーン/ })
+
+  /**
+   * Fullscreen API を実ブラウザに近い挙動でモックする。
+   * requestFullscreen()/exitFullscreen() は Promise を返し、resolve 時に
+   * document.fullscreenElement を更新してから 'fullscreenchange' を発火する
+   * （実ブラウザの「成功後に fullscreenchange が飛ぶ」順序を模す）。
+   */
+  function installFullscreenMock() {
+    let current: Element | null = null
+    const setCurrent = (el: Element | null) => {
+      current = el
+    }
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => current,
+    })
+    const requestFullscreen = vi.fn(function (this: Element) {
+      return Promise.resolve().then(() => {
+        // `this` は呼び出し元（`el.requestFullscreen()` の el、実際には fluidRootRef.current）。
+        // 変数へ代入すると @typescript-eslint/no-this-alias に触れるため、関数呼び出しの引数として渡す。
+        setCurrent(this)
+        document.dispatchEvent(new Event('fullscreenchange'))
+      })
+    })
+    Object.defineProperty(Element.prototype, 'requestFullscreen', {
+      configurable: true,
+      writable: true,
+      value: requestFullscreen,
+    })
+    const exitFullscreen = vi.fn(() => {
+      return Promise.resolve().then(() => {
+        current = null
+        document.dispatchEvent(new Event('fullscreenchange'))
+      })
+    })
+    Object.defineProperty(document, 'exitFullscreen', {
+      configurable: true,
+      writable: true,
+      value: exitFullscreen,
+    })
+    return {
+      requestFullscreen,
+      exitFullscreen,
+      setCurrent,
+    }
+  }
+
+  afterEach(() => {
+    delete (Element.prototype as { requestFullscreen?: unknown }).requestFullscreen
+    delete (document as { exitFullscreen?: unknown }).exitFullscreen
+    delete (document as { fullscreenElement?: unknown }).fullscreenElement
+  })
+
+  /** Fullscreen Promise の resolve/reject は微小タスク経由なので複数 tick flush する。 */
+  async function flushMicrotasks() {
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('9: 初期状態は isFullscreen=false（aria-pressed=false）、aria-label は「フルスクリーンで表示する」', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(btn).toHaveAttribute('aria-label', 'フルスクリーンで表示する')
+  })
+
+  it('10: ボタンクリックで requestFullscreen() が呼ばれ、fullscreenchange 発火後に isFullscreen=true・aria-label が切り替わる', async () => {
+    const { requestFullscreen } = installFullscreenMock()
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+
+    await act(async () => {
+      btn.click()
+    })
+    await flushMicrotasks()
+
+    expect(requestFullscreen).toHaveBeenCalledTimes(1)
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+    expect(btn).toHaveAttribute('aria-label', 'フルスクリーンを解除する')
+  })
+
+  it('11: フルスクリーン中にクリックで exitFullscreen() が呼ばれ、fullscreenchange 発火後に false へ戻る', async () => {
+    const { exitFullscreen } = installFullscreenMock()
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+
+    await act(async () => {
+      btn.click() // enter
+    })
+    await flushMicrotasks()
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => {
+      btn.click() // exit
+    })
+    await flushMicrotasks()
+
+    expect(exitFullscreen).toHaveBeenCalledTimes(1)
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(btn).toHaveAttribute('aria-label', 'フルスクリーンで表示する')
+  })
+
+  it('12: requestFullscreen() が reject する Promise を返す場合、isFullscreen は false のまま・unhandled rejection にならない', async () => {
+    const { requestFullscreen } = installFullscreenMock()
+    requestFullscreen.mockImplementation(() => Promise.reject(new Error('denied')))
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+
+    // catch されず伝播すれば vitest が unhandled rejection として検出しテストが落ちる。
+    await act(async () => {
+      btn.click()
+    })
+    await flushMicrotasks()
+
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('13: requestFullscreen が同期的に例外を投げても try/catch で握りつぶされコンポーネントは壊れない', async () => {
+    const { requestFullscreen } = installFullscreenMock()
+    requestFullscreen.mockImplementation(() => {
+      throw new Error('blocked by permissions policy')
+    })
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+
+    expect(() => {
+      act(() => {
+        btn.click()
+      })
+    }).not.toThrow()
+
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    // コンポーネントが壊れていないこと（同ボタンが引き続き存在・操作可能）の確認。
+    expect(fullscreenButton()).toBeInTheDocument()
+  })
+
+  it('14: el.requestFullscreen が undefined（非対応ブラウザ）のとき、クリックしても例外が出ない', async () => {
+    // このテストだけは installFullscreenMock() を呼ばない。jsdom は Fullscreen API を実装しないため、
+    // Element.prototype.requestFullscreen は既定で undefined＝実ブラウザの非対応ケースと同型。
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+
+    expect(() => {
+      act(() => {
+        btn.click()
+      })
+    }).not.toThrow()
+
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('15: document.fullscreenElement が自分の fluidRootRef ではない別要素のとき、isFullscreen は false のまま（=== 厳密比較）', async () => {
+    const { setCurrent } = installFullscreenMock()
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+
+    // fluidRootRef 以外の要素（document.body）が fullscreenElement になったケースを模す
+    // （別の UI が独自にフルスクリーン化した等）。
+    setCurrent(document.body)
+    act(() => {
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+
+    expect(fullscreenButton().getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('16: コンポーネント unmount 時に fullscreenchange リスナーが removeEventListener される（unmount後 dispatch でエラーが出ない）', async () => {
+    installFullscreenMock()
+    const removeSpy = vi.spyOn(document, 'removeEventListener')
+    const { unmount } = render(<NovelPlayer events={[]} />)
+    await flushAsync()
+
+    unmount()
+
+    expect(removeSpy).toHaveBeenCalledWith('fullscreenchange', expect.any(Function))
+    expect(() => {
+      document.dispatchEvent(new Event('fullscreenchange'))
+    }).not.toThrow()
+  })
+
+  it('17: document.fullscreenElement が別要素のときにボタンをクリックすると、他要素の exitFullscreen を呼ばず自分の要素へ requestFullscreen を試みる（=== 厳密比較の分岐）', async () => {
+    const { requestFullscreen, exitFullscreen, setCurrent } = installFullscreenMock()
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+
+    // fluidRootRef 以外の要素（document.body）が既にフルスクリーン中の状態を模す
+    // （ホストページの別ウィジェット等が独自にフルスクリーン化しているケース）。
+    setCurrent(document.body)
+    act(() => {
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    const btn = fullscreenButton()
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => {
+      btn.click()
+    })
+    await flushMicrotasks()
+
+    // truthy チェックのみだと document.fullscreenElement（=document.body）を「自分がフルスクリーン中」
+    // と誤認し、他要素の exitFullscreen() を呼んでしまう（意図と逆の副作用）。ここでは呼ばれないこと、
+    // 代わりに自分の要素へ requestFullscreen() が試みられることを確認する。
+    expect(exitFullscreen).not.toHaveBeenCalled()
+    expect(requestFullscreen).toHaveBeenCalledTimes(1)
+    // モック実装は resolve 時に this（呼び出し元＝fluidRootRef.current）を新しい fullscreenElement に
+    // するため、自分がフルスクリーンになったこと（aria-pressed=true）まで確認できる。
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  // --- #468 セルフレビュー指摘: 状態遷移ロジック（余韻タイマー・data-dir導出）のテストが
+  // 不足していたため追加。参考: SeekBar.test.ts B-6/B-7（同じ INACTIVITY_MS 境界パターン）。
+  // フルスクリーンAPI自体の遷移（enter/exit）は 9〜17 で担保済みなので、ここでは
+  // fsToggleActive（nn-fs-toggle--active クラス）と data-dir の導出だけを縛る。
+
+  it('18: pointerdownで即座にnn-fs-toggle--active（濃い表示）が付く', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+    expect(btn.className).not.toContain('nn-fs-toggle--active')
+
+    act(() => {
+      fireEvent.pointerDown(btn)
+    })
+
+    expect(btn.className).toContain('nn-fs-toggle--active')
+  })
+
+  it('19: focusでも同様にnn-fs-toggle--active（濃い表示）が付く', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+    expect(btn.className).not.toContain('nn-fs-toggle--active')
+
+    act(() => {
+      fireEvent.focus(btn)
+    })
+
+    expect(btn.className).toContain('nn-fs-toggle--active')
+  })
+
+  it('20: activate後 INACTIVITY_MS-1 の経過ではまだactiveのまま（境界未満）', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<NovelPlayer events={[]} />)
+      await flushAsync()
+      const btn = fullscreenButton()
+
+      act(() => {
+        fireEvent.pointerDown(btn)
+      })
+      act(() => {
+        vi.advanceTimersByTime(INACTIVITY_MS - 1)
+      })
+
+      expect(btn.className).toContain('nn-fs-toggle--active')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('21: activate後 INACTIVITY_MS ちょうどの経過で自動的にinactive（薄い表示）へ戻る', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<NovelPlayer events={[]} />)
+      await flushAsync()
+      const btn = fullscreenButton()
+
+      act(() => {
+        fireEvent.pointerDown(btn)
+      })
+      act(() => {
+        vi.advanceTimersByTime(INACTIVITY_MS)
+      })
+
+      expect(btn.className).not.toContain('nn-fs-toggle--active')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('22: isFullscreen=false のとき data-dir="expand"', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+
+    expect(btn.getAttribute('data-dir')).toBe('expand')
+  })
+
+  it('23: isFullscreen=true のとき data-dir="collapse"', async () => {
+    installFullscreenMock()
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const btn = fullscreenButton()
+
+    await act(async () => {
+      btn.click()
+    })
+    await flushMicrotasks()
+
+    expect(btn.getAttribute('data-dir')).toBe('collapse')
+  })
+
+  it('24: unmount時に余韻タイマーがクリアされる（unmount後にタイマー期限が来てもconsole.errorが出ない・回帰）', async () => {
+    vi.useFakeTimers()
+    try {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { unmount } = render(<NovelPlayer events={[]} />)
+      await flushAsync()
+      const btn = fullscreenButton()
+
+      act(() => {
+        fireEvent.pointerDown(btn)
+      })
+
+      unmount()
+
+      // クリアされていなければ、unmount 後の setFsToggleActive(false) が
+      // 「unmounted component への state 更新」として console.error（React 警告）を出す。
+      expect(() => {
+        act(() => {
+          vi.advanceTimersByTime(INACTIVITY_MS)
+        })
+      }).not.toThrow()
+      expect(errSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

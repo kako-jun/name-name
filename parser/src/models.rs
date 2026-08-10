@@ -503,6 +503,11 @@ pub enum Event {
     WaitDisplayComplete,
     Choice {
         options: Vec<ChoiceOption>,
+        /// グリッド配置の列数 (#508)。`[選択: 列=N]` で指定。
+        /// 未指定 or 1 は従来どおりの縦一列表示（非破壊）。2 以上で `i % columns` 列目・
+        /// `i / columns` 行目にボタンを並べるグリッドレイアウトになる（ChoiceOverlay 側の解釈）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        columns: Option<u32>,
     },
     Flag {
         name: String,

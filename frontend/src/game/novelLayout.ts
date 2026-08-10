@@ -267,6 +267,107 @@ export function splitTextRegionForDualWindow(text: LayoutRect): DualWindowTextRe
   }
 }
 
+/** `computeChoiceGridLayout` が返す 1 選択肢分の列・行・中心 X (#508)。 */
+export interface ChoiceGridButtonPosition {
+  /** 0-based 列インデックス（非グリッド時は常に 0）。 */
+  col: number
+  /** 0-based 行インデックス（非グリッド時は常に選択肢の index と同じ）。 */
+  row: number
+  /**
+   * ボタン中心 X（px）。`isGrid=true` のときは列全体を area 内で中央寄せした実際の中心 X、
+   * `isGrid=false` のときは `area.x + area.width / 2`（従来の縦一列と同じ、全ボタン共通）。
+   */
+  x: number
+}
+
+/** `computeChoiceGridLayout` の戻り値 (#508)。 */
+export interface ChoiceGridLayout {
+  /** 正規化済みの列数（`Math.max(1, Math.floor(columns ?? 1))`。1 以上の整数）。 */
+  columns: number
+  /** `columns > 1` のときだけ true。false は従来どおりの縦一列（非グリッド）。 */
+  isGrid: boolean
+  /** 行数。グリッド時は `Math.ceil(count / columns)`、非グリッド時は `count` と同じ。 */
+  rows: number
+  /**
+   * グリッド時のボタン幅（利用可能幅ちょうどに `columns` 列を敷き詰めた1ボタン幅を
+   * `buttonWidthMax` で上限クランプした値）。非グリッド時は `buttonWidthMax` をそのまま返すが、
+   * 呼び出し側が split_layout 領域向けの別クランプ（`CHOICE_REGION_MIN_BUTTON_WIDTH` 等）を
+   * 適用する場合はこの値を使わず自前で計算してよい（ChoiceOverlay.show がそうしている）。
+   */
+  buttonWidth: number
+  /** 選択肢 index（0-based）順の列・行・中心 X。 */
+  positions: ChoiceGridButtonPosition[]
+}
+
+/**
+ * `[選択: 列=N]`（#508）のグリッド配置ジオメトリ（列・行の割付、ボタン幅の fitWidth 計算、
+ * 列全体を area 内で中央寄せする開始 X）を算出する純粋関数。
+ *
+ * 元は `ChoiceOverlay.show()` 内に直書きされていたロジック。`ChoiceOverlay` は PixiJS の
+ * Container/Graphics/Text を組み立てる責務に専念し、幾何計算はここに集約する
+ * （dev-doctrine 規約4: レンダラ本体に計算ロジックを直書きしない）。
+ *
+ * 引数:
+ *  - `columns`: 脚本 `[選択: 列=N]` の N（未指定/null/undefined は 1 扱い＝非グリッド）。
+ *  - `count`: 選択肢の総数。
+ *  - `area`: レイアウト領域（`ChoiceOverlay` では split_layout region または画面全体）。
+ *  - `buttonWidthMax`: ボタン幅の上限（`ChoiceOverlay.BUTTON_WIDTH`）。
+ *  - `columnGap`: 列間ギャップ（`ChoiceOverlay.GRID_COLUMN_GAP`）。
+ *  - `horizontalMargin`: area 端からの安全マージン（`ChoiceOverlay.GRID_HORIZONTAL_MARGIN`）。
+ *
+ * 非グリッド時（`columns` が未指定/1 以下）は `isGrid=false` を返し、`buttonWidth` は
+ * `buttonWidthMax` のまま・`positions` は全て `col=0`, `row=index`, `x=area.x + area.width/2`
+ * になる（従来の縦一列と完全に同じ結果。ChoiceOverlay 側の split_layout 用ボタン幅クランプは
+ * 呼び出し側が別途適用する）。
+ *
+ * グリッド時（`columns > 1`）:
+ *  - `fitWidth` = 利用可能幅（`area.width - horizontalMargin * 2`）ちょうどに `columns` 列を
+ *    敷き詰めたときの1ボタン幅。`buttonWidth = Math.min(buttonWidthMax, fitWidth)`
+ *    （下限クランプはしない。#508 実バグ: 下限を先に適用すると列数が多いケースではみ出していた）。
+ *  - 列全体の幅 `columns * buttonWidth + (columns - 1) * columnGap` を area 内で中央寄せした
+ *    開始 X から、`col * (buttonWidth + columnGap)` ずつ右にずらした位置がボタン中心 X。
+ *  - `col = index % columns`, `row = Math.floor(index / columns)`（左上から行優先で敷き詰め、
+ *    余った選択肢は最終行に左詰め）。
+ *
+ * Y 座標（行の縦位置）はスクロール可否や `BUTTON_HEIGHT`/`BUTTON_GAP` など呼び出し側の
+ * 事情と絡むため、ここでは `row` のみ返し、Y の実値計算は呼び出し側に委ねる。
+ * Math.random など非決定要素は使わない決定論的写像。
+ */
+export function computeChoiceGridLayout(
+  columns: number | null | undefined,
+  count: number,
+  area: LayoutRect,
+  buttonWidthMax: number,
+  columnGap: number,
+  horizontalMargin: number
+): ChoiceGridLayout {
+  const gridColumns = Math.max(1, Math.floor(columns ?? 1))
+  const isGrid = gridColumns > 1
+  const rows = isGrid ? Math.ceil(count / gridColumns) : count
+
+  let buttonWidth = buttonWidthMax
+  if (isGrid) {
+    const availableWidth = area.width - horizontalMargin * 2
+    const gapTotal = (gridColumns - 1) * columnGap
+    const fitWidth = Math.max(1, Math.floor((availableWidth - gapTotal) / gridColumns))
+    buttonWidth = Math.min(buttonWidthMax, fitWidth)
+  }
+
+  const gridRowWidth = gridColumns * buttonWidth + (gridColumns - 1) * columnGap
+  const gridStartX = area.x + (area.width - gridRowWidth) / 2
+
+  const positions: ChoiceGridButtonPosition[] = Array.from({ length: count }, (_, i) => {
+    const col = isGrid ? i % gridColumns : 0
+    const row = isGrid ? Math.floor(i / gridColumns) : i
+    const x = isGrid
+      ? gridStartX + col * (buttonWidth + columnGap) + buttonWidth / 2
+      : area.x + area.width / 2
+    return { col, row, x }
+  })
+
+  return { columns: gridColumns, isGrid, rows, buttonWidth, positions }
+}
+
 /**
  * CSS カラー文字列（"#1a4a7a" / "#222" / "1a4a7a"）を Pixi の数値カラーに変換する純粋関数 (#270 / #273)。
  *

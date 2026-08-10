@@ -5,6 +5,7 @@ import {
   MAX_RENDER_BACKBUFFER_DIMENSION_PX,
   computeSplitLayoutRegions,
   splitTextRegionForDualWindow,
+  computeChoiceGridLayout,
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
@@ -331,6 +332,196 @@ describe('splitTextRegionForDualWindow (#444)', () => {
     const result = splitTextRegionForDualWindow(text)
     expect(result.opponent).toEqual({ x: 450, y: 0, width: 450, height: 225 })
     expect(result.self).toEqual({ x: 450, y: 225, width: 450, height: 225 })
+  })
+})
+
+// =====================================================================================
+// #508: computeChoiceGridLayout（[選択: 列=N] のグリッド配置ジオメトリ純粋関数）。
+// PR #518 セルフレビュー should-3 対応: ChoiceOverlay.show() から抽出した純粋関数を
+// PixiJS 抜きで直接検証する。ChoiceOverlay.test.ts の統合テスト（実際に Container が
+// 生成されること）は残しつつ、幾何そのものの単体テストをここに追加する。
+// ChoiceOverlay.ts の実運用値: BUTTON_WIDTH=480, GRID_COLUMN_GAP=16, GRID_HORIZONTAL_MARGIN=24。
+// =====================================================================================
+describe('computeChoiceGridLayout (#508)', () => {
+  const BUTTON_WIDTH = 480
+  const GRID_COLUMN_GAP = 16
+  const GRID_HORIZONTAL_MARGIN = 24
+  const FULL_AREA = { x: 0, y: 0, width: 800, height: 450 }
+
+  it('columns 未指定 (undefined) は非グリッド: isGrid=false・columns=1・全ボタン中心 x が area 中央で同一', () => {
+    const layout = computeChoiceGridLayout(
+      undefined,
+      3,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    expect(layout.isGrid).toBe(false)
+    expect(layout.columns).toBe(1)
+    expect(layout.rows).toBe(3)
+    expect(layout.buttonWidth).toBe(BUTTON_WIDTH)
+    expect(layout.positions).toEqual([
+      { col: 0, row: 0, x: 400 },
+      { col: 0, row: 1, x: 400 },
+      { col: 0, row: 2, x: 400 },
+    ])
+  })
+
+  it('columns=null は undefined と同一結果になる', () => {
+    const withNull = computeChoiceGridLayout(
+      null,
+      3,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    const withUndefined = computeChoiceGridLayout(
+      undefined,
+      3,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    expect(withNull).toEqual(withUndefined)
+  })
+
+  it('columns=1 は明示指定でも undefined と同一結果（非破壊）', () => {
+    const withColumns = computeChoiceGridLayout(
+      1,
+      3,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    const withoutColumns = computeChoiceGridLayout(
+      undefined,
+      3,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    expect(withColumns).toEqual(withoutColumns)
+  })
+
+  it('columns=0 や負値は 1 にフォールバックされ非グリッドになる', () => {
+    for (const columns of [0, -1, -5]) {
+      const layout = computeChoiceGridLayout(
+        columns,
+        3,
+        FULL_AREA,
+        BUTTON_WIDTH,
+        GRID_COLUMN_GAP,
+        GRID_HORIZONTAL_MARGIN
+      )
+      expect(layout.isGrid).toBe(false)
+      expect(layout.columns).toBe(1)
+    }
+  })
+
+  it('columns=5・count=10 は 5列×2行: rows=2、行内は昇順の x、行間で同じ列は同じ x', () => {
+    const layout = computeChoiceGridLayout(
+      5,
+      10,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    expect(layout.isGrid).toBe(true)
+    expect(layout.rows).toBe(2)
+    expect(layout.positions).toHaveLength(10)
+
+    const row0 = layout.positions.slice(0, 5)
+    const row1 = layout.positions.slice(5, 10)
+    expect(row0.map((p) => p.row)).toEqual([0, 0, 0, 0, 0])
+    expect(row1.map((p) => p.row)).toEqual([1, 1, 1, 1, 1])
+    expect(row0.map((p) => p.col)).toEqual([0, 1, 2, 3, 4])
+    expect(row1.map((p) => p.col)).toEqual([0, 1, 2, 3, 4])
+    // 同じ列は行が変わっても同じ x。
+    expect(row1.map((p) => p.x)).toEqual(row0.map((p) => p.x))
+    // 昇順（左から右へ列が並ぶ）。
+    const row0Xs = row0.map((p) => p.x)
+    expect([...row0Xs].sort((a, b) => a - b)).toEqual(row0Xs)
+    expect(new Set(row0Xs).size).toBe(5)
+  })
+
+  it('列数が増えるとボタン幅が非グリッド(1列)より狭くなる（画面幅に収める）', () => {
+    const single = computeChoiceGridLayout(
+      1,
+      1,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    const grid = computeChoiceGridLayout(
+      5,
+      10,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    expect(grid.buttonWidth).toBeLessThan(single.buttonWidth)
+  })
+
+  // #508 実バグ修正の回帰固定: ボタン幅の下限クランプ(100px)を先に適用すると、列数が多い
+  // ケースで `columns * buttonWidth + gap` が利用可能幅を超えてはみ出していた。下限クランプを
+  // 撤廃し fitWidth をそのまま使うことで、常にグリッド全体が area 幅に収まる。
+  it.each([
+    [5, 10, FULL_AREA],
+    [8, 10, FULL_AREA],
+    [10, 10, FULL_AREA],
+    [5, 50, FULL_AREA],
+    [5, 10, { x: 400, y: 0, width: 400, height: 450 }], // split_layout想定の狭い領域
+    [5, 10, { x: 0, y: 0, width: 375, height: 667 }], // 狭い画面幅（375px相当）
+  ])('columns=%i, count=%i, area=%o はグリッド全体が area 幅内に収まる', (columns, count, area) => {
+    const layout = computeChoiceGridLayout(
+      columns,
+      count,
+      area,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    for (const pos of layout.positions) {
+      expect(pos.x - layout.buttonWidth / 2).toBeGreaterThanOrEqual(area.x)
+      expect(pos.x + layout.buttonWidth / 2).toBeLessThanOrEqual(area.x + area.width)
+    }
+  })
+
+  it('選択肢数が列数より少ない場合（3個・列=5）は1行のみで3個とも異なる x（余った列は生成しない＝positions.length===count）', () => {
+    const layout = computeChoiceGridLayout(
+      5,
+      3,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    expect(layout.positions).toHaveLength(3)
+    expect(new Set(layout.positions.map((p) => p.row)).size).toBe(1)
+    expect(new Set(layout.positions.map((p) => p.x)).size).toBe(3)
+  })
+
+  it('選択肢数が列数で割り切れない場合（7個・列=5）は2行になり、2行目は2個だけ左詰め（1行目の1・2列目と同じx）', () => {
+    const layout = computeChoiceGridLayout(
+      5,
+      7,
+      FULL_AREA,
+      BUTTON_WIDTH,
+      GRID_COLUMN_GAP,
+      GRID_HORIZONTAL_MARGIN
+    )
+    expect(layout.positions).toHaveLength(7)
+    const row0 = layout.positions.slice(0, 5)
+    const row1 = layout.positions.slice(5, 7)
+    expect(row1.map((p) => p.x)).toEqual(row0.slice(0, 2).map((p) => p.x))
   })
 })
 

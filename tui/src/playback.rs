@@ -1,35 +1,87 @@
 //! パース済み `Document` を、TUI で逐次表示するための再生位置に変換する。
 //!
 //! 会話文（Dialog / Narration）の逐次表示に加え、選択肢分岐（`Event::Choice`）にも対応する
-//! （#482）。フラグ管理・セーブ/ロードは引き続き対象外（`parser::models::Event` にそれらの
-//! 型があっても扱わない）。背景・立ち絵演出などその他のイベントは、今回も画面表示を変えない
-//! ため読み飛ばす（左側は常にプレースホルダ表示のみ）。`Event::EventImage`/`EventImageExit`
-//! だけは例外で、各 `DisplayLine` に `event_image`（その時点で表示されているべきイベント絵の
-//! 相対パス）として反映する（#481）。左側は `event_image` が `None` のときのみ従来どおり
-//! プレースホルダ表示になる。`Event::Choice` はこの状態に影響しない（Choice イベントを
-//! 挟んでも、直前までの `event_image` はそのまま後続の `DisplayLine` に引き継がれる）。
-//! `Event::Bgm`/`Event::Se` も同様に状態として追跡する（画面表示は変えないが #502 で
-//! 「読み飛ばし」対象から外れた）。詳細は [`Playback`] 構造体の `item_bgm`/`item_se`
-//! フィールドの doc comment 参照。
+//! （#482）。フラグ管理・条件分岐（`Event::Flag`/`Event::Condition`）にも対応する（#509、
+//! 詳細は後述）。セーブ/ロードは引き続き対象外（#501、別Issue）。背景・立ち絵演出などその他の
+//! イベントは、今回も画面表示を変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。
+//! `Event::EventImage`/`EventImageExit` だけは例外で、各 `DisplayLine` に `event_image`
+//! （その時点で表示されているべきイベント絵の相対パス）として反映する（#481）。左側は
+//! `event_image` が `None` のときのみ従来どおりプレースホルダ表示になる。`Event::Choice` は
+//! この状態に影響しない（Choice イベントを挟んでも、直前までの `event_image` はそのまま
+//! 後続の `DisplayLine` に引き継がれる）。`Event::Bgm`/`Event::Se` も同様に状態として追跡する
+//! （画面表示は変えないが #502 で「読み飛ばし」対象から外れた）。詳細は [`Playback`] 構造体の
+//! `item_bgm`/`item_se` フィールドの doc comment 参照。
+//!
+//! ## イベント絵の時間差自動連続表示 (#497)
+//!
+//! `Event::Wait { ms }` はパーサーで構文解析済みだが、以前は TUI ランタイムが完全に無視して
+//! いた。`[イベント絵: A][待機: 200][イベント絵: B]` のように `EventImage` の直後に `Wait` が
+//! 続く並びだけを検出し、その場面を独立した `PlaybackItem::Image` として `items` に反映する
+//! （`Playback::build` 参照）。話者・本文は直前の会話行のものをそのまま引き継ぎ、
+//! `event_image` だけが新しい画像に切り替わる — GUI版 `NovelRenderer` の `Wait` 処理が会話
+//! テキストに触れず、イベント絵レイヤーだけを更新するのと同じ見え方にするため。この item に
+//! 位置している間は [`Playback::pending_wait_ms`] が `Some(ms)` を返し、`main.rs::event_loop`
+//! がプレイヤーの入力を待たずに `ms` 経過後へ自動的に進める。`Wait` を伴わない単発の
+//! `EventImage`（既存スクリプトの大半）は従来どおり item を増やさない — 無条件に item 化すると
+//! 「画像だけのクリック待ちの1手」が新たに増えてしまう回帰になるため。
+//!
+//! ### 暗転で終わる自動連続表示 (#475)
+//!
+//! `Event::Blackout`（#512）は本来、既存の Line/Choice/Image item に「表示中は暗転しているか」
+//! のフラグ（`item_blackout`）を後付けするだけで、暗転自体を運ぶ item を単独では作らない。この
+//! ため `[イベント絵:A][待機:200][イベント絵:B][待機:200][暗転]` のように、`[暗転]` の後に
+//! 表示すべき会話行が一つも続かない原稿（route10 最終回の「目を閉じて暗転して終わる」演出が
+//! これに当たる）では、上記の EventImage+Wait 自動送りの連鎖が「暗転を表示する item」へ着地
+//! できず、暗転が画面に一度も出ないまま再生が終わってしまう。これを防ぐため、EventImage+Wait
+//! のパターン検出をさらに一段拡張し、`Wait` の直後が `Event::Blackout` の場合は、暗転状態を
+//! 焼き付けた追加の `PlaybackItem::Image` を生成する（`Playback::build` 参照）。この item は
+//! さらなる自動送りを持たない（`item_wait_ms` は `None`）— 「閉じきった最後のコマで暗転へ
+//! 移る」で連鎖は完結し、暗転後に別の item へ自動で進む理由が無いため。オン/オフどちらの
+//! `Event::Blackout` にも同じ経路で対応するが、実際にこの拡張を要求した route10 最終回の
+//! ユースケースはオン（暗転して終わる）のみ。
+//!
+//! ### `Event::SceneTransition` とイベント絵クリアの GUI 版整合 (#524)
+//!
+//! GUI版 `NovelRenderer.processDirective` の `Event::SceneTransition` 分岐は
+//! `this.setBlackout(false)` に加えて `this.eventImageLayer.remove()` も呼び、暗転解除と
+//! イベント絵クリアの両方を行う。TUI版は #512 で `current_blackout = false` のみ実装しており
+//! `current_event_image` をクリアしていなかった（GUI版との差異）。#524 でこれを解消し、
+//! `Event::SceneTransition` は `current_blackout` と `current_event_image` の両方をリセット
+//! する。加えて、上記の Wait+Blackout 自動送り拡張（#475）と同様の非対称性が
+//! `Event::SceneTransition` にもあった — `[イベント絵][待機][場面転換]` で終わる原稿では
+//! `Wait` 直後の検出パターンに `SceneTransition` が含まれておらず、場面転換後の状態
+//! （暗転解除・イベント絵クリア）を焼き付けた item が生成されなかった。#524 でこの検出も
+//! `Event::Blackout` と同じ経路に拡張し、`Wait` の直後が `Event::SceneTransition` の場合も
+//! 追加の `PlaybackItem::Image` を生成する（`Playback::build` 参照）。
+//!
+//! **既知の制約2**（セルフレビュー対応、実データ未検証。実害が判明したら要対応）:
+//! `[イベント絵][待機][暗転][場面転換]` のように `Wait` の直後で `Blackout` と
+//! `SceneTransition` が連続する原稿では、検出は `Blackout` を優先し（`if let
+//! Some(Blackout) ... else if SceneTransition` の順）、`Blackout` が見つかった時点で
+//! 打ち切る。後続の `SceneTransition` は通常の match アーム（state 更新のみ、item は
+//! 生成しない）に落ちるため、この並びが原稿の末尾ならターミナル item は暗転状態の
+//! ままで、`SceneTransition` が本来行うはずの暗転解除・イベント絵クリアは画面に
+//! 一度も反映されない（GUI版 `processDirective` は逐次実行のため両方とも確実に
+//! 反映される点で TUI 版と異なる）。既知の制約1と同様、この並びを含む原稿は現状
+//! Gymnasia 側に存在しないため実害は未確認。
 //!
 //! ## 選択肢分岐の設計 (#482)
 //!
 //! `Document` の chapters → scenes → events を一直線にフラット化する既存のシンプルな
-//! モデル（#471 MVP、以前は `Event::Choice` を他の非表示イベントと同様に読み飛ばしていた）は
-//! そのまま維持する。Choice イベントも `items`（旧 `lines`）の1要素（[`PlaybackItem::Choice`]）
-//! として保持するようにしただけで、フラット化そのものは変えていない。加えて、各シーンの
-//! 先頭 item のインデックスを `scene_start`（シーンID → `items` インデックス）として記録して
-//! おく。選択肢が確定すると、`items` 内の現在位置を選ばれた `jump` 先シーンの `scene_start`
-//! へ再配置するだけで遷移を実現する（[`Playback::select_current_choice`]）。
+//! モデル（#471 MVP、以前は `Event::Choice` を他の非表示イベントと同様に読み飛ばしていた）
+//! だったが、#509 でシーン単位の動的追記モデルに置き換えた（詳細は次節）。Choice イベントは
+//! `items`（旧 `lines`）の1要素（[`PlaybackItem::Choice`]）として保持する。選択肢が確定すると
+//! `jump` 先シーンの内容をその時点の `flags` で新たに構築し、`items` の末尾に追記して遷移する
+//! （[`Playback::select_current_choice`]）。
 //!
 //! GUI版 `NovelRenderer.jumpToScene`（`frontend/src/game/NovelRenderer.ts`）も `jump` 先を
 //! シーンIDで解決する点は同じだが、GUI版は選ばれたシーンの `events` だけを新しい再生ストリーム
 //! として張り直す（そのシーンの events を使い切ると `onEndCallback` で終劇になる、＝シーン境界を
-//! 越えて自動的に後続シーンへ読み進めることはない）。対して TUI版は既存のフラット化済み1本の
-//! `items` の中で現在位置を移動するだけなので、jump 先シーンの内容を読み終えると（GUI版のように
-//! 終劇にはならず）ドキュメント順で後続の items へそのまま読み進める、という設計上の違いがある。
-//! GUI版ほど厳密なシーン分離ではないが、既存の線形モデルをそのまま流用でき実装コストが小さいため
-//! この簡略化を採用した（Issue #482 の実装方針で明示的に許容されている割り切り）。
+//! 越えて自動的に後続シーンへ読み進めることはない）。対して TUI版は jump 先シーンの内容を
+//! 読み終えると（GUI版のように終劇にはならず）ドキュメント順で後続シーンの内容までそのまま
+//! 追記して読み進める、という設計上の違いがある（[`Playback::advance`] 参照）。GUI版ほど厳密な
+//! シーン分離ではないが、既存の線形モデルをそのまま流用でき実装コストが小さいためこの簡略化を
+//! 採用した（Issue #482 の実装方針で明示的に許容されている割り切り）。
 //!
 //! ### ファイル境界の例外 (#496)
 //!
@@ -40,11 +92,38 @@
 //! リークが起きる。[`Playback::from_merged_document`] はこれを防ぐため、`items` にファイル
 //! 境界の情報（`item_file_ids`）を追加で持たせ、暗黙の `advance()` だけをファイル境界で
 //! 止める（選択肢ジャンプは対象外）。詳細は [`Playback`] 構造体の doc コメント参照。
+//!
+//! ## フラグ管理・条件分岐の遅延評価 (#509)
+//!
+//! `Event::Flag`/`Event::Condition` は、GUI版 `GameState`/`resolveEvents`
+//! （`frontend/src/game/GameState.ts`）と同じ「実際にプレイヤーが辿った経路・その時点の
+//! フラグ状態で評価する」遅延評価モデルで対応する。「フラグを立てろという命令は、その行に
+//! 実際にたどり着いて実行されるまで効果を持たない」という順序を守る必要があるため、
+//! ドキュメント全体を起動時に一括構築する方式（旧 #482 MVP のフラット化モデル）とは
+//! 原理的に相容れない — 同じドキュメント上の位置でも、そこに至った経路（どの分岐を通ったか）
+//! によってフラグ状態、ひいては `Event::Condition` の展開結果が変わりうるため、共有の静的
+//! 配列に事前に焼き付けることができない。
+//!
+//! これを解決するため、`items` を「起動時に `Document` 全体を事前構築する」方式から
+//! 「プレイヤーが実際に訪れたシーンだけ、訪れた順にその場で追記していく」方式に変更した。
+//! [`Playback::build`] は最初のシーンだけを構築し、[`Playback::advance`]（ドキュメント順の
+//! 自動継続）と [`Playback::select_current_choice`]（選択肢ジャンプ）は、次に必要になった
+//! シーンをその時点の `flags`（[`GameFlags`]）で新たに構築して `items` に追記する。
+//! `total()`/`is_at_end()` 等、全体像や先読みが必要な read-only メソッドは、実プレイ状態
+//! （`self.flags`/`self.items`）を変更しない使い捨ての状態で試し計算する。
+//!
+//! `Event::Flag`/`Event::Condition` 自体は [`build_scene_items`] が、シーン内のイベント列を
+//! 逐次 walk する中でリアルタイムに処理する（GUI版のように一括変換の純粋関数を都度呼び直す
+//! のではなく、逐次 walk のループに直接組み込む設計）。`Event::Flag` に遭遇したら即座に
+//! `flags.set()` で副作用を適用し、`Event::Condition` に遭遇したら `flags.check()` で判定して
+//! 真なら内部 events を同じ関数に再帰的に渡す。これにより、同一シーン内で「Flag のすぐ後の
+//! Condition」が正しく反応する（GUI版 `reResolveEvents` と同じ効果を1本のループで実現する）。
 
 use std::collections::HashMap;
 
-use name_name_parser::models::{BgmAction, ChoiceOption, Document, Event};
+use name_name_parser::models::{BgmAction, BlackoutAction, ChoiceOption, Document, Event};
 
+use crate::flags::GameFlags;
 use crate::sentence;
 
 /// 画面に表示する1行分の内容（話者名 + 本文 + その時点のイベント絵）。
@@ -121,13 +200,47 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
 
 /// 再生列（`Playback::items`）の1要素。Dialog/Narration は `Line`、Choice は `Choice` になる。
 /// それ以外のイベント（背景・SE・BGM 等）は要素を生成しない（[`playback_item_from_event`]）。
+///
+/// `Choice` の第2要素は `Event::Choice.columns`（グリッド配置の列数、#508）を基に
+/// [`playback_item_from_event`] が選択肢数へクランプ済みの値。`None`/`Some(0)`/`Some(1)` は
+/// いずれも従来どおりの縦一列表示を意味し、実際に「グリッドとして扱うか」の正規化（0や1を
+/// どう1列と見なすか）は消費側（[`Playback::current_choice`]・カーソル移動系メソッド・
+/// `ui::draw_choice_list`）が都度行う。上限側の正規化（選択肢数を超える列数の切り詰め）は
+/// [`playback_item_from_event`] がここへ積む前に済ませてある（バグ修正、同関数の
+/// doc コメント参照）。
+///
+/// `Image` は #497 で追加した、テキストを伴わない「画像コマ」専用の item。`Event::EventImage`
+/// の直後に `Event::Wait { ms }` が続く場合だけ生成される（`Playback::build` のスキャン参照）。
+/// 話者・本文はその時点まで表示されていた直前の会話行の値をそのまま引き継ぐ（GUI版
+/// `NovelRenderer` の Wait 処理が会話テキストには触れず、イベント絵レイヤーだけを更新するのと
+/// 同じ見え方にするため）。`event_image` だけがこの item 用に新しく差し替わる。この item に
+/// 到達している間は `Playback::pending_wait_ms` が `Some` を返し、`main.rs::event_loop` が
+/// プレイヤーの入力を待たずに一定時間後へ自動的に進める。
 #[derive(Debug, Clone, PartialEq)]
 enum PlaybackItem {
     Line(DisplayLine),
-    Choice(Vec<ChoiceOption>),
+    Image(DisplayLine),
+    Choice(Vec<ChoiceOption>, Option<u32>),
 }
 
-/// `Event` を再生列の1要素に変換する。Choice は選択肢一覧をそのまま保持する
+/// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
+///
+/// `Playback::scene_order` / `scene_index_by_id` が保持する（#509 Phase B）。フラグに
+/// 依存しない構造的な情報のみを保持する — `scene_id`/`file_id`（由来ファイル id、
+/// `item_file_ids` と同じ意味）に加え、そのシーンの生イベント列を丸ごと複製して持つ。
+/// `advance()`/`select_current_choice()` が、プレイヤーが実際にそのシーンへ到達した
+/// 時点で `events` を `build_scene_items` にそのまま渡し、Flag/Condition をその場の
+/// フラグ状態でリアルタイムに評価させる（`Playback` 構造体の doc コメント参照）。
+struct SceneRef {
+    /// `scene_index_by_id` の構築時にキーとして使うだけで、構築後は読み出されない
+    /// （デバッグ時の可読性のために保持している）。
+    #[allow(dead_code)]
+    scene_id: String,
+    file_id: usize,
+    events: Vec<Event>,
+}
+
+/// `Event` を再生列の1要素に変換する。Choice は選択肢一覧とグリッド列数をそのまま保持する
 /// `PlaybackItem::Choice` に、Dialog/Narration は [`display_line_from_event`] 経由で
 /// `PlaybackItem::Line` になる。それ以外（背景・SE・BGM 等）は `None`（読み飛ばす）。
 ///
@@ -137,10 +250,25 @@ enum PlaybackItem {
 /// `advance` も Choice 表示中は拒否するため、プレイヤーの入力を一切受け付けない詰み状態に
 /// なる。これは以前の「Choice を丸ごと無視していた」挙動と同じ扱いに揃えることで回避する
 /// （バグ修正、実装方針は Issue #482 コメント参照）。
+///
+/// `columns` は選択肢数（`options.len()`）を超えないようクランプする（バグ修正、#508）。
+/// parser の `parse_choice_columns` は `u32 >= 1` ならどんな巨大な値も受理し上限
+/// バリデーションを持たない。`[選択: 列=200000]` のような原稿（タイプミスや意図的な巨大値）が
+/// そのまま通ると、`ui::draw_choice_grid` が `columns` 個の `Constraint` を生成して
+/// ratatui の `Layout::split`（cassowary線形制約ソルバー）に渡すことになり、実機で2分以上
+/// 応答が返らずSIGKILLが必要になる実害のあるハングを引き起こす（レビューで実測）。選択肢の
+/// 実数より多い列数を作る正当な理由は無い（列が余るだけ）ため、ここでクランプするのが唯一の
+/// 発生源であり、以降 `current_choice()`・`effective_columns()`・`move_choice_cursor_down`/
+/// `right`（いずれも `items` から直接 `columns` を読む）が呼び出し箇所を問わず自動的に妥当な
+/// 値だけを見るようになる。`ui::draw_choice_grid` 側にも同種のクランプを多重に入れてある
+/// （呼び出し元を問わない多重防御。実害のあるハングだったため）。
 fn playback_item_from_event(event: &Event) -> Option<PlaybackItem> {
     match event {
-        Event::Choice { options } if options.is_empty() => None,
-        Event::Choice { options } => Some(PlaybackItem::Choice(options.clone())),
+        Event::Choice { options, .. } if options.is_empty() => None,
+        Event::Choice { options, columns } => {
+            let clamped = columns.map(|c| c.min(options.len() as u32));
+            Some(PlaybackItem::Choice(options.clone(), clamped))
+        }
         _ => display_line_from_event(event).map(PlaybackItem::Line),
     }
 }
@@ -166,6 +294,20 @@ pub struct Playback {
     /// 常に「同じファイル」判定になり実質無効化される）。`from_merged_document` だけが
     /// 複数の異なる id を持ちうる。
     item_file_ids: Vec<usize>,
+    /// `items[i]` に紐づく自動送りの待機時間（ミリ秒、#497）。`items` と同じ長さを常に保つ。
+    /// `Event::EventImage` の直後に `Event::Wait { ms }` が続いたときだけ、その画像コマ
+    /// （[`PlaybackItem::Image`]）に対応する要素が `Some(ms)` になる。それ以外の item（通常の
+    /// `Line`/`Choice`、および `Wait` を伴わない `EventImage`）は全て `None`
+    /// （[`Playback::pending_wait_ms`] 参照）。
+    item_wait_ms: Vec<Option<u32>>,
+    /// `items[i]` の表示時点で暗転しているべきか（`Event::Blackout`、#512）。`items` と同じ
+    /// 長さを常に保つ（`item_file_ids` と同じ並行 Vec のパターン）。GUI版 `NovelRenderer` が
+    /// `blackoutOverlay.visible` を `[暗転]`/`[暗転解除]` の直後から次に切り替わるまで
+    /// 宣言的に保持し続ける（＝現在暗転中かどうかだけを見る state、`setBlackout` 参照）のを、
+    /// TUI では「その item が生成された時点の暗転状態を焼き付けて持ち回る」形で再現する。
+    /// `Event::Choice` item も対象に含む（暗転中に選択肢が出る原稿は今回のスコープ外だが、
+    /// 状態追跡自体は他の非表示イベントと同じ走査ループの中で行うため、除外する理由がない）。
+    item_blackout: Vec<bool>,
     /// `items[i]` の表示時点で再生されているべき BGM のパス（`Event::Bgm`、#502）。`items` と
     /// 同じ長さを常に保つ（`item_file_ids` と同じ並行 Vec のパターン）。GUI版
     /// `AudioManager.currentBgmUrl`（`NovelRenderer.currentBgmPath`）が「現在再生されている
@@ -178,16 +320,20 @@ pub struct Playback {
     /// （複数の SE が連続していても取りこぼさない、通常は0〜1件）。BGM と異なり GUI版
     /// `playSe` に持続する state は無い（ワンショット）ため、`item_bgm` のような「現在位置を
     /// 問い合わせるだけの宣言的 state」ではなく、`event_loop` 側が「この item への新規到達」
-    /// （[`Playback::cursor`] の変化）を検出したときに一度だけ消費するトリガとして扱う想定。
+    /// （[`Playback::item_index`] の変化）を検出したときに一度だけ消費するトリガとして扱う想定。
     /// ドキュメント末尾以降に出現した SE（後続 item が存在しない）は、どの item にも属せない
     /// ため再生対象にならない（既知の制約、影響は軽微）。
     item_se: Vec<Vec<String>>,
     index: usize,
-    /// シーンID → そのシーンに属する最初の item の `items` 内インデックス。選択肢確定時の
-    /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
-    /// 1つも持たない場合（背景切り替えのみ等）は、そのシーンの位置＝まだ何も push していない
-    /// 時点の `items.len()`（＝後続シーンの先頭 item のインデックス、もしくは最後尾）を指す。
-    scene_start: HashMap<String, usize>,
+    /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
+    /// `from_document`/`from_merged_document` で埋まる。`advance`/`select_current_choice` が
+    /// 次に構築すべきシーンを引くのに使う（#509 Phase B、モジュール冒頭のドキュメント参照）。
+    /// `from_lines` 経由の構築では空のまま。
+    scene_order: Vec<SceneRef>,
+    /// シーンID → `scene_order` 内のインデックス。`select_current_choice` が `jump` 先の
+    /// 解決に使う（#509 Phase B、ジャンプ先解決手段）。`from_lines`
+    /// 経由の構築では空のまま。
+    scene_index_by_id: HashMap<String, usize>,
     /// 現在 Choice を表示中のときのカーソル位置（0始まり）。Line item にいる間は無視される。
     /// 新しい Choice item へ移動するたびに `set_index` が 0 へリセットする。
     choice_cursor: usize,
@@ -208,6 +354,315 @@ pub struct Playback {
     /// ときだけ、現在位置の Line item から `speaker`/`event_image` を引き継ぎつつ
     /// `text` を `sentence_pages[sentence_index]` の1要素に差し替えた形で保持する。
     current_display: Option<DisplayLine>,
+    /// シーンを跨いで引き継ぐランニング状態（#509 Phase B）。`build_scene_items` を
+    /// シーン単位で遅延呼び出しするため、`build` 完了後もこの状態を `Playback` 自身が
+    /// 保持し続ける必要がある（以前は `build` のローカル変数で使い捨てだった）。
+    scan_state: SceneScanState,
+    /// 直近に item を生成した（＝ `build_scene_items` を最後に呼んだ）シーンの
+    /// `scene_order` 内インデックス。`advance`/`select_current_choice` が次に
+    /// どのシーンから遅延ビルドを再開すべきかの起点になる。
+    current_scene_idx: usize,
+    /// フラグ管理（#509）。`Event::Flag`/`Event::Condition` を `build_scene_items` が
+    /// 逐次walk中にリアルタイムに評価・更新するための状態。
+    flags: GameFlags,
+    /// [`Playback::total`] の結果キャッシュ（世代番号, 値）。`total()` はドキュメント全体を
+    /// 独立に再スキャンする重い処理だが、結果は `self.flags` が変化しない限り変わらない
+    /// （セルフレビュー対応、#509）。`main.rs::event_loop` が `REDRAW`＝30msごとに無条件で
+    /// `total()` を呼ぶため、フラグが変わっていないフレームでは再スキャンを省略する。
+    /// `total()` は `&self` のままキャッシュを更新したいため `Cell` で内部可変性を持たせる
+    /// （`RefCell` ではなく `Cell` で十分 — 中身が `Copy` な `(u64, usize)` のため）。
+    total_cache: std::cell::Cell<Option<(u64, usize)>>,
+}
+
+/// `build_scene_items` がシーンを跨いで引き継ぐランニング状態のまとめ役（#509 Phase A）。
+/// 個別の引数として渡すと `clippy::too_many_arguments` に抵触するため1つにまとめてある
+/// （挙動には影響しない、純粋な引数の持ち方の整理）。
+#[derive(Clone)]
+struct SceneScanState {
+    current_event_image: Option<String>,
+    current_speaker: Option<String>,
+    current_text: Vec<String>,
+    current_blackout: bool,
+    /// 現在再生されているべき BGM のパス（`Event::Bgm`、#502）。`current_event_image`/
+    /// `current_blackout` と同じ「シーン・チャプター境界をまたいで引き継ぐ宣言的 state」
+    /// パターン（`Playback` 構造体の `item_bgm` doc comment参照）。
+    current_bgm: Option<String>,
+    /// 直前の item から現在位置までの間に出現した `[SE:]` の出現順一覧（#502）。次に item が
+    /// push されるタイミングで `item_se` へ焼き付けられ、その場で空に戻る
+    /// （`Playback` 構造体の `item_se` doc comment参照）。
+    pending_se: Vec<String>,
+}
+
+/// 1シーン分の生イベント列を処理し、items系のVecへ積む。`Playback::build` から各シーンごとに
+/// 呼ばれる、シーンを跨いで引き継ぐランニング状態（`current_event_image` 等、`state` にまとめて
+/// ある）は呼び出し側が保持し、可変参照として受け渡す（#509 Phase A、後でシーン単位に動的
+/// 呼び出しできるようにするための下ごしらえ。ロジックは `Playback::build` から一切変更せず
+/// 丸ごと移動しただけ）。
+///
+/// `flags`（#509 のフラグ管理）を `state`（`SceneScanState`）にまとめず独立の引数のまま
+/// 追加したため合計8引数になり `clippy::too_many_arguments`（既定閾値7）に抵触する
+/// （#502 の `item_bgm`/`item_se` 追加で現在は10引数）。`SceneScanState` は元々
+/// 「シーンを跨いで引き継ぐランニング状態」専用の入れ物として導入された経緯があり、
+/// 性質の異なる `GameFlags` をそこに押し込むのは筋が悪いため、ここでは構造変更を避けて
+/// `allow` で抑止するに留める。
+/// Wait 直後の Blackout/SceneTransition 検出（#475/#524）が共通で行う、「その時点の
+/// `state`（呼び出し側で望む終端状態へ更新済み）を1つの画像コマ item として焼き付けて
+/// 4本の並行 Vec へ積む」処理をまとめたもの（セルフレビュー対応、重複除去）。この item は
+/// さらなる自動送りを持たない（`item_wait_ms` は常に `None`）— 「閉じきった最後のコマで
+/// 状態が切り替わる」で連鎖は完結し、この item から別の item へ自動で進む理由が無いため。
+/// BGM/SE の並行 Vec が増えたことで8引数になり `clippy::too_many_arguments`
+/// （既定閾値7）に抵触する（#502）。`build_scene_items` と同じ理由で `allow` に留める。
+#[allow(clippy::too_many_arguments)]
+fn push_wait_chain_terminal_item(
+    state: &mut SceneScanState,
+    file_id: usize,
+    items: &mut Vec<PlaybackItem>,
+    item_file_ids: &mut Vec<usize>,
+    item_wait_ms: &mut Vec<Option<u32>>,
+    item_blackout: &mut Vec<bool>,
+    item_bgm: &mut Vec<Option<String>>,
+    item_se: &mut Vec<Vec<String>>,
+) {
+    items.push(PlaybackItem::Image(DisplayLine {
+        speaker: state.current_speaker.clone(),
+        text: state.current_text.clone(),
+        event_image: state.current_event_image.clone(),
+    }));
+    item_file_ids.push(file_id);
+    item_wait_ms.push(None);
+    item_blackout.push(state.current_blackout);
+    // BGM/SE も他の並行 Vec と同じくこの合成 item に焼き付ける（#502）。この item を
+    // 経由しても pending な SE を取りこぼさないよう、他の push サイトと同じく
+    // `mem::take` で消費する。
+    item_bgm.push(state.current_bgm.clone());
+    item_se.push(std::mem::take(&mut state.pending_se));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_scene_items(
+    events: &[Event],
+    file_id: usize,
+    state: &mut SceneScanState,
+    flags: &mut GameFlags,
+    items: &mut Vec<PlaybackItem>,
+    item_file_ids: &mut Vec<usize>,
+    item_wait_ms: &mut Vec<Option<u32>>,
+    item_blackout: &mut Vec<bool>,
+    item_bgm: &mut Vec<Option<String>>,
+    item_se: &mut Vec<Vec<String>>,
+) {
+    let mut event_index = 0;
+    while event_index < events.len() {
+        let event = &events[event_index];
+        match event {
+            // `path` の `..` は `back`（表示位置）と `fade_ms`（イベント個別の
+            // フェード時間上書き）を意図的に捨てている。`fade_ms` は TUI 側では
+            // 常に `config.event_image.crossfade_ms`（グローバル値、`main.rs` の
+            // `event_loop` 参照）しか使わない簡略化（MVPスコープ、#481）。GUI版の
+            // ようなイベント単位のフェード時間上書きは今回の対象外。
+            Event::EventImage { path, .. } => {
+                state.current_event_image = Some(path.clone());
+                // 直後が `Event::Wait { ms }` の場合だけ、画像コマ+待機の自動送り
+                // item を作る（#497、Issue #475 が求める4コマ自動再生の受け皿）。
+                // それ以外（次が Dialog/EventImage/EventImageExit 等）は従来どおり
+                // `state.current_event_image` を更新するだけに留め、item は作らない —
+                // ここで無条件に item 化すると、`[イベント絵:X]` の直後に台詞が
+                // 続くだけの既存スクリプトにまで「クリック待ちの画像だけの1手」が
+                // 増えてしまう（wait_ms 無しの item は自動で進まないため）回帰になる。
+                //
+                // `events.get(event_index + 1)` は「直後」の1イベントしか見ない
+                // ため、`[イベント絵:A][SE:...][待機:200]` のように間に BGM/SE 等の
+                // 非表示イベントを挟むとこのパターンに一致せず、自動送りが黙って
+                // 無効化される（`Event::Wait` は下の `_` 分岐で通常どおり処理され、
+                // 孤立した待機として扱われる）。スクリプト側でこの隣接性を守る必要が
+                // ある（要ドキュメント化、セルフレビューshould対応）。
+                if let Some(Event::Wait { ms }) = events.get(event_index + 1) {
+                    items.push(PlaybackItem::Image(DisplayLine {
+                        speaker: state.current_speaker.clone(),
+                        text: state.current_text.clone(),
+                        event_image: state.current_event_image.clone(),
+                    }));
+                    item_file_ids.push(file_id);
+                    item_wait_ms.push(Some(*ms));
+                    // #512 統合前は無かった並行 Vec。ここへの push 漏れは
+                    // `item_blackout` を `items` より1件短くし、以降の全 item の
+                    // `is_blackout()` 判定を静かにズラす（#475 実装時に発見した
+                    // マージ由来のバグ、要修正）。
+                    item_blackout.push(state.current_blackout);
+                    // BGM/SE も他の並行 Vec と同じくこの画像コマ item に焼き付ける（#502）。
+                    item_bgm.push(state.current_bgm.clone());
+                    item_se.push(std::mem::take(&mut state.pending_se));
+
+                    // `Event::Wait` のさらに直後が `Event::Blackout` の場合、
+                    // 暗転状態（オン/オフいずれも）を表示する独立した item を追加で
+                    // 生成する（Issue #475）。#512 の `Event::Blackout` 処理
+                    // （このmatchの少し下の腕）は、既存の Line/Choice/Image item に
+                    // 「表示中は暗転しているか」のフラグを後付けするだけで、暗転
+                    // 自体を運ぶ item を単独では作らない。そのため
+                    // `[イベント絵:C][待機:200][暗転]` のように、暗転の後に表示
+                    // すべき会話行が続かない原稿では、自動送りの連鎖が「暗転を表示
+                    // する item」へ着地できず、暗転が画面に一度も出ないまま終わって
+                    // しまう（Issue #475 の現状分析）。
+                    //
+                    // EventImage+Wait の2件消費に、Blackout も続く場合だけ+1する。
+                    //
+                    // 既知の制約1（Issue #475でスコープ外と判定済み、対応しない）:
+                    // `events` はここでは `&scene.events`（シーンスコープ）のみを
+                    // 見ているため、`[イベント絵][待機]` がシーン末尾・`[暗転]` が
+                    // 次シーン先頭、という原稿ではこのパターンに一致せず検出漏れに
+                    // なる（シーン境界をまたいだ Wait+Blackout 連鎖は検出できない）。
+                    // Wait+Blackout の連鎖は同一シーン内に収める必要がある。
+                    // シーン構造（`##` 見出し区切り）上、この演出を追記する箇所は
+                    // 単一シーンに収まる設計になっていると推測されるが、現時点で
+                    // Gymnasia 側に「目を閉じて暗転して終わる」シーケンス
+                    // （`[暗転]` タグ）自体を含む原稿がまだ一件も存在しないため
+                    // （画像素材が未制作で暫定対応中、Issue本文参照）、実データでの
+                    // 検証はできていない。実データが追加された時点で再検証が必要。
+                    //
+                    // #524 で解消: `[イベント絵][待機][場面転換]` で終わる原稿も、
+                    // `Event::Blackout` と同じ経路で「場面転換後の状態を焼き付けた
+                    // item」を生成する。GUI版 `Event::SceneTransition` 分岐
+                    // （`setBlackout(false)` + `eventImageLayer.remove()`）に倣い、
+                    // `state.current_blackout=false` かつ `state.current_event_image=None` に
+                    // リセットした上で item を積む — Blackout の「On」と同じ役割だが、
+                    // 運ぶ状態は暗転そのものではなくイベント絵クリア後の状態である点が
+                    // 異なる。この分岐で `Event::SceneTransition` 自体を消費するため、
+                    // 下の match 腕（`Event::SceneTransition => { .. }`）はここでは
+                    // 実行されない（`Event::Blackout` を消費するときと同じ扱い）。
+                    //
+                    // 既知の制約2（モジュール冒頭doc参照）: 下の分岐は `if let
+                    // Some(Blackout) ... else if SceneTransition` の順で判定するため
+                    // Blackout を優先する。`Wait` の直後に Blackout と SceneTransition が
+                    // 両方続く原稿（`[イベント絵][待機][暗転][場面転換]`）では、Blackout側
+                    // で打ち切られ後続の SceneTransition は item を生成しない state 更新
+                    // のみになる。
+                    let mut consumed = 2;
+                    if let Some(Event::Blackout { action }) = events.get(event_index + 2) {
+                        state.current_blackout = matches!(action, BlackoutAction::On);
+                        push_wait_chain_terminal_item(
+                            state,
+                            file_id,
+                            items,
+                            item_file_ids,
+                            item_wait_ms,
+                            item_blackout,
+                            item_bgm,
+                            item_se,
+                        );
+                        consumed = 3;
+                    } else if matches!(events.get(event_index + 2), Some(Event::SceneTransition)) {
+                        state.current_blackout = false;
+                        state.current_event_image = None;
+                        push_wait_chain_terminal_item(
+                            state,
+                            file_id,
+                            items,
+                            item_file_ids,
+                            item_wait_ms,
+                            item_blackout,
+                            item_bgm,
+                            item_se,
+                        );
+                        consumed = 3;
+                    }
+                    event_index += consumed;
+                    continue;
+                }
+            }
+            Event::EventImageExit { .. } => {
+                state.current_event_image = None;
+            }
+            // GUI版 `setBlackout` 相当（#512）。オン/オフの2状態を単純に上書きする
+            // だけの宣言的 state で、`state.current_event_image` と同じ「直近の値を次の
+            // item に焼き付ける」走査パターンに乗せる。
+            Event::Blackout { action } => {
+                state.current_blackout = matches!(action, BlackoutAction::On);
+            }
+            // GUI版 `NovelRenderer.processDirective` の `Event::SceneTransition` 相当
+            // （`this.setBlackout(false)` + `this.eventImageLayer.remove()`、#512/#524）。
+            // spec（markdown-v0.1.md）は `[場面転換]` を「背景クリア + 暗転解除」と
+            // 定義しており、`[暗転]` でオンにした暗転を明示的にオフへ戻すのに加え、
+            // GUI版はイベント絵レイヤーも明示的にクリアする（作者が
+            // `[イベント絵終了]` を書き忘れても場面転換で必ずイベント絵が消える
+            // 防御的挙動、#351）。TUI 側もこれに合わせ `state.current_event_image` を
+            // `None` に戻す（#524、旧実装は `state.current_blackout` のみリセットしており
+            // GUI版との差異だった）。背景クリア相当の永続 state（`clearBackground` /
+            // `videoLayer.remove` / `retreatNovelScrim`）は TUI 側が持たないため、
+            // このスコープでは暗転解除・イベント絵クリアのみ実装する。
+            Event::SceneTransition => {
+                state.current_blackout = false;
+                state.current_event_image = None;
+            }
+            // GUI版 `NovelRenderer` の `'Bgm' in event` 分岐（`audioManager.playBgm`/
+            // `stopBgm`）と同じ意味論（#502）。`action === 'Play' && path` の両方が
+            // 揃わない限り「停止」扱いになる GUI版の挙動をそのまま再現する
+            // （`action: Play` でも `path: None` なら停止 — 通常の原稿では起こらない
+            // 組み合わせだが、フォールバックとして GUI版に揃える）。`fade_ms` は
+            // `Event::EventImage` の `fade_ms` と同じ理由で意図的に捨てる（TUIは
+            // フェード無しの即時切り替え、MVPスコープ）。
+            Event::Bgm { path, action, .. } => {
+                state.current_bgm = match (action, path) {
+                    (BgmAction::Play, Some(p)) => Some(p.clone()),
+                    _ => None,
+                };
+            }
+            // GUI版 `playSe` はワンショット再生で持続 state を持たないため、
+            // `current_event_image`/`current_bgm` のような「直近の値」ではなく
+            // 「次に生成される item に紐づけて後で一度だけ再生するトリガ」として
+            // 貯めておく（`item_se` の doc comment 参照、#502）。`fade_ms` は BGM と
+            // 同じ理由で捨てる。
+            Event::Se { path, .. } => {
+                state.pending_se.push(path.clone());
+            }
+            Event::Flag { name, value } => {
+                flags.set(name.clone(), value.clone());
+            }
+            Event::Condition {
+                flag,
+                events: inner,
+            } => {
+                if flags.check(flag) {
+                    build_scene_items(
+                        inner,
+                        file_id,
+                        state,
+                        flags,
+                        items,
+                        item_file_ids,
+                        item_wait_ms,
+                        item_blackout,
+                        item_bgm,
+                        item_se,
+                    );
+                }
+                // false の場合は何もしない（inner を一切処理しない＝副作用もitem生成も無い）
+            }
+            _ => {
+                if let Some(item) = playback_item_from_event(event) {
+                    let item = match item {
+                        PlaybackItem::Line(mut line) => {
+                            line.event_image = state.current_event_image.clone();
+                            state.current_speaker = line.speaker.clone();
+                            state.current_text = line.text.clone();
+                            PlaybackItem::Line(line)
+                        }
+                        choice @ PlaybackItem::Choice(_, _) => choice,
+                        // `playback_item_from_event` は Dialog/Narration/Choice
+                        // からしか item を作らないため Image は返さない
+                        // （Image は上の EventImage+Wait 分岐でのみ生成される）。
+                        image @ PlaybackItem::Image(_) => image,
+                    };
+                    items.push(item);
+                    item_file_ids.push(file_id);
+                    item_wait_ms.push(None);
+                    item_blackout.push(state.current_blackout);
+                    item_bgm.push(state.current_bgm.clone());
+                    item_se.push(std::mem::take(&mut state.pending_se));
+                }
+            }
+        }
+        event_index += 1;
+    }
 }
 
 impl Playback {
@@ -257,86 +712,78 @@ impl Playback {
         }
         let mut items = Vec::new();
         let mut item_file_ids = Vec::new();
+        let mut item_wait_ms = Vec::new();
+        let mut item_blackout = Vec::new();
         let mut item_bgm = Vec::new();
         let mut item_se: Vec<Vec<String>> = Vec::new();
-        let mut scene_start = HashMap::new();
-        let mut current_event_image: Option<String> = None;
-        let mut current_bgm: Option<String> = None;
-        let mut pending_se: Vec<String> = Vec::new();
+        let mut scene_order: Vec<SceneRef> = Vec::new();
+        let mut scene_index_by_id = HashMap::new();
+        // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
+        // `Event::Wait` が続いたときに生成する画像コマ item（`PlaybackItem::Image`）へ
+        // そのまま引き継ぐ — Wait 中は会話テキストを変えず画像だけが切り替わる、という
+        // GUI版 `NovelRenderer` の Wait 処理と同じ見え方にするため。まだ一度も会話行が
+        // 無ければ「話者なし・本文なし」が初期値になる。
+        let mut scan_state = SceneScanState {
+            current_event_image: None,
+            current_speaker: None,
+            current_text: Vec::new(),
+            current_blackout: false,
+            current_bgm: None,
+            pending_se: Vec::new(),
+        };
+        let mut flags = GameFlags::new();
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
             let file_id = chapter_file_ids
                 .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
                 .unwrap_or(0);
             for scene in &chapter.scenes {
-                // このシーンの最初の item になる（はずの）位置を、events を処理する前に記録する。
                 // 重複シーンIDは最初の出現を優先する（GUI版 `allScenes.find` が最初の一致を
                 // 返すのと同じ規約）。
-                scene_start.entry(scene.id.clone()).or_insert(items.len());
-                for event in &scene.events {
-                    match event {
-                        // `path` の `..` は `back`（表示位置）と `fade_ms`（イベント個別の
-                        // フェード時間上書き）を意図的に捨てている。`fade_ms` は TUI 側では
-                        // 常に `config.event_image.crossfade_ms`（グローバル値、`main.rs` の
-                        // `event_loop` 参照）しか使わない簡略化（MVPスコープ、#481）。GUI版の
-                        // ようなイベント単位のフェード時間上書きは今回の対象外。
-                        Event::EventImage { path, .. } => {
-                            current_event_image = Some(path.clone());
-                        }
-                        Event::EventImageExit { .. } => {
-                            current_event_image = None;
-                        }
-                        // GUI版 `NovelRenderer` の `'Bgm' in event` 分岐（`audioManager.playBgm`/
-                        // `stopBgm`）と同じ意味論（#502）。`action === 'Play' && path` の両方が
-                        // 揃わない限り「停止」扱いになる GUI版の挙動をそのまま再現する
-                        // （`action: Play` でも `path: None` なら停止 — 通常の原稿では起こらない
-                        // 組み合わせだが、フォールバックとして GUI版に揃える）。`fade_ms` は
-                        // `Event::EventImage` の `fade_ms` と同じ理由で意図的に捨てる（TUIは
-                        // フェード無しの即時切り替え、MVPスコープ）。
-                        Event::Bgm { path, action, .. } => {
-                            current_bgm = match (action, path) {
-                                (BgmAction::Play, Some(p)) => Some(p.clone()),
-                                _ => None,
-                            };
-                        }
-                        // GUI版 `playSe` はワンショット再生で持続 state を持たないため、
-                        // `current_event_image`/`current_bgm` のような「直近の値」ではなく
-                        // 「次に生成される item に紐づけて後で一度だけ再生するトリガ」として
-                        // 貯めておく（`item_se` の doc comment 参照、#502）。`fade_ms` は BGM と
-                        // 同じ理由で捨てる。
-                        Event::Se { path, .. } => {
-                            pending_se.push(path.clone());
-                        }
-                        _ => {
-                            if let Some(item) = playback_item_from_event(event) {
-                                let item = match item {
-                                    PlaybackItem::Line(mut line) => {
-                                        line.event_image = current_event_image.clone();
-                                        PlaybackItem::Line(line)
-                                    }
-                                    choice @ PlaybackItem::Choice(_) => choice,
-                                };
-                                items.push(item);
-                                item_file_ids.push(file_id);
-                                item_bgm.push(current_bgm.clone());
-                                item_se.push(std::mem::take(&mut pending_se));
-                            }
-                        }
-                    }
-                }
+                scene_index_by_id
+                    .entry(scene.id.clone())
+                    .or_insert_with(|| {
+                        scene_order.push(SceneRef {
+                            scene_id: scene.id.clone(),
+                            file_id,
+                            events: scene.events.clone(),
+                        });
+                        scene_order.len() - 1
+                    });
             }
+        }
+        if let Some(first_scene) = scene_order.first() {
+            build_scene_items(
+                &first_scene.events,
+                first_scene.file_id,
+                &mut scan_state,
+                &mut flags,
+                &mut items,
+                &mut item_file_ids,
+                &mut item_wait_ms,
+                &mut item_blackout,
+                &mut item_bgm,
+                &mut item_se,
+            );
         }
         Self {
             items,
             item_file_ids,
+            item_wait_ms,
+            item_blackout,
             item_bgm,
             item_se,
             index: 0,
-            scene_start,
+            scene_order,
+            scene_index_by_id,
             choice_cursor: 0,
             sentence_per_page: false,
             sentence_pages: Vec::new(),
             sentence_index: 0,
             current_display: None,
+            scan_state,
+            current_scene_idx: 0,
+            flags,
+            total_cache: std::cell::Cell::new(None),
         }
     }
 
@@ -397,8 +844,13 @@ impl Playback {
 
     /// 現在位置の item に到達した際に一度だけ再生すべき SE のパス一覧（`Event::Se`、#502）。
     /// `items` が空、または現在位置が末尾を過ぎている場合は空スライス。呼び出し側
-    /// （`event_loop`）は [`Playback::cursor`] の変化（＝この item への新規到達）を検出した
-    /// ときだけ、この一覧を消費して1回だけ再生する想定（`item_se` の doc comment 参照）。
+    /// （`event_loop`）は [`Playback::item_index`] の変化（＝この item への新規到達）を検出
+    /// したときだけ、この一覧を消費して1回だけ再生する想定（`item_se` の doc comment 参照）。
+    /// `item_index()` は `PlaybackItem::Image`（#497）へのクロスフェード判定が使っているのと
+    /// 同じ「生の items インデックス」で、専用の `cursor()` を別途持たずそのまま流用できる —
+    /// [`Playback::position`]（Line item のみを数える会話行番号）と異なり Choice item への
+    /// 遷移でも変化する一方、`sentence_per_page` による同一 Line item 内の文送りでは変化しない
+    /// （同じ item に紐づく SE を文送りのたびに再トリガーしない、という意図した挙動でもある）。
     pub fn current_se_cues(&self) -> &[String] {
         self.item_se
             .get(self.index)
@@ -406,21 +858,20 @@ impl Playback {
             .unwrap_or(&[])
     }
 
-    /// 内部カーソル（`items` 内の生インデックス）。SE のワンショット再生を `event_loop` 側で
-    /// 「新しい item に到達した瞬間」として検出するための識別子として公開する（#502）。
-    /// [`Playback::position`]（Line item のみを数える会話行番号）と異なり、Choice item への
-    /// 遷移でも変化する。一方、`sentence_per_page` による同一 Line item 内の文送りでは
-    /// 変化しない（`self.index` 自体は動かないため）— 同じ item に紐づく SE を文送りのたびに
-    /// 再トリガーしない、という意図した挙動でもある。値そのものに意味的な使い道は無く、
-    /// 前フレームとの比較にのみ使う想定。
-    pub fn cursor(&self) -> usize {
-        self.index
-    }
-
     /// 現在位置の会話行。現在位置が Choice item、会話行が1件もない、または末尾を過ぎている
     /// 場合は `None`。`sentence_per_page` が有効なときは、Line item の全文ではなく現在の
     /// 文単位ページ（`current_display`）だけを返す (#486)。
+    ///
+    /// 現在位置が画像コマ item（[`PlaybackItem::Image`]、#497）の場合は、`sentence_per_page`
+    /// の設定に関わらずその item が持つ `DisplayLine`（直前の会話行から引き継いだ話者・本文 +
+    /// 新しい `event_image`）をそのまま返す。画像コマは文単位改頁の対象外
+    /// （`sync_sentence_pages` が `Line` にしかマッチしないため `current_display` は
+    /// 積まれない）なので、ここで先に特別扱いしないと `sentence_per_page` 有効時に
+    /// 誤って `None` を返してしまう。
     pub fn current_line(&self) -> Option<&DisplayLine> {
+        if let Some(PlaybackItem::Image(line)) = self.items.get(self.index) {
+            return Some(line);
+        }
         if self.sentence_per_page {
             return self.current_display.as_ref();
         }
@@ -430,13 +881,59 @@ impl Playback {
         }
     }
 
-    /// 現在位置が選択肢なら `(選択肢一覧, カーソル位置)` を返す。会話行の途中や末尾越えでは
-    /// `None`。
-    pub fn current_choice(&self) -> Option<(&[ChoiceOption], usize)> {
+    /// 現在位置の item が暗転中に表示されるべきか（`Event::Blackout`、#512）。
+    /// `items` が空、または現在位置が末尾を過ぎている場合は暗転していない扱い（`false`）。
+    /// GUI版 `blackoutOverlay.visible` に相当する、現在位置だけを見る宣言的な問い合わせ。
+    pub fn is_blackout(&self) -> bool {
+        self.item_blackout.get(self.index).copied().unwrap_or(false)
+    }
+
+    /// 現在位置が選択肢なら `(選択肢一覧, カーソル位置, グリッド列数)` を返す。会話行の途中や
+    /// 末尾越えでは `None`。3番目の要素は `Event::Choice.columns`（#508）をそのまま渡す —
+    /// `None`/`Some(0)`/`Some(1)` はいずれも従来どおりの縦一列表示を意味し、その正規化は
+    /// 呼び出し側（`ui::draw_choice_list` 等）が行う。
+    pub fn current_choice(&self) -> Option<(&[ChoiceOption], usize, Option<u32>)> {
         match self.items.get(self.index) {
-            Some(PlaybackItem::Choice(options)) => Some((options.as_slice(), self.choice_cursor)),
+            Some(PlaybackItem::Choice(options, columns)) => {
+                Some((options.as_slice(), self.choice_cursor, *columns))
+            }
             _ => None,
         }
+    }
+
+    /// 現在Choice表示中なら、正規化済みの有効列数（`None`/`0`/`1` はいずれも「非グリッド
+    /// 1列」として `1` に丸める）を返す。上限側（選択肢数を超える列数）は `items` に積む
+    /// 時点（[`playback_item_from_event`]）で既にクランプ済みのため、ここでは行わない。
+    /// Choice表示中でなければ `None`（#508、カーソル移動系メソッド共通のヘルパー）。
+    fn effective_columns(&self) -> Option<usize> {
+        match self.items.get(self.index) {
+            Some(PlaybackItem::Choice(_, columns)) => Some(columns.unwrap_or(1).max(1) as usize),
+            _ => None,
+        }
+    }
+
+    /// 現在位置に紐づく自動送りの待機時間（ミリ秒、#497）。`Some` を返すのは、`items` 構築時に
+    /// `Event::EventImage` の直後に `Event::Wait { ms }` が続いていたことで生成された画像コマ
+    /// item（[`PlaybackItem::Image`]）に位置しているときだけ。`main.rs::event_loop` はこれが
+    /// `Some(ms)` の間、プレイヤーの入力（キー押下）を待たずに `ms` 経過後へ自動的に進める
+    /// （GUI版 `NovelRenderer` の `Wait { ms }` + `waitingForWait` に相当、Issue #475 が求める
+    /// イベント絵の複数コマ自動再生を実現する）。
+    pub fn pending_wait_ms(&self) -> Option<u32> {
+        self.item_wait_ms.get(self.index).copied().flatten()
+    }
+
+    /// `items` 内の生の現在位置（0始まり）。`position()`（会話行のみを数える1始まりのカウント）
+    /// とは異なり、画像コマ item（[`PlaybackItem::Image`]、#497）も1件として数える。
+    /// `main.rs::event_loop` が「実際に別の item へ移動したか」（＝新しい event_image への
+    /// クロスフェードを開始すべきか）を判定するのに使う — 画像コマへの遷移は `position()` の
+    /// 値を変えない（Line item ではないため）ので、`position()` の変化だけを見ていると
+    /// 画像コマへの遷移を検知し損ねる。SE のワンショット再生（#502）も同じ signal で
+    /// 「新しい item に到達した瞬間」を検出する（[`Playback::current_se_cues`] のdoc
+    /// comment参照）— Choice item への遷移でも変化する一方、`sentence_per_page` による
+    /// 同一 Line item 内の文送りでは変化しないため、同じ item に紐づく SE を文送りのたびに
+    /// 再トリガーしない、という意図した挙動にもなる。
+    pub(crate) fn item_index(&self) -> usize {
+        self.index
     }
 
     /// 次の item へ進む。現在位置が選択肢（選択待ち）の場合は、[`Playback::select_current_choice`]
@@ -453,7 +950,7 @@ impl Playback {
     /// 存在していても、暗黙の前進では別ファイルの内容へ進めない。ファイルをまたぐ遷移は
     /// [`Playback::select_current_choice`] による明示的な選択肢ジャンプでのみ許可される。
     pub fn advance(&mut self) -> bool {
-        if matches!(self.items.get(self.index), Some(PlaybackItem::Choice(_))) {
+        if matches!(self.items.get(self.index), Some(PlaybackItem::Choice(_, _))) {
             return false;
         }
         if self.sentence_per_page && self.sentence_index + 1 < self.sentence_pages.len() {
@@ -468,66 +965,250 @@ impl Playback {
                 return false;
             }
             self.set_index(self.index + 1);
-            true
-        } else {
-            false
+            return true;
         }
-    }
-
-    /// 選択肢表示中のみ有効。カーソルを1つ上へ動かす（先頭で頭打ち、末尾へのラップはしない）。
-    /// 選択肢を表示していないときの呼び出しは no-op。
-    pub fn move_choice_cursor_up(&mut self) {
-        if matches!(self.items.get(self.index), Some(PlaybackItem::Choice(_))) {
-            self.choice_cursor = self.choice_cursor.saturating_sub(1);
-        }
-    }
-
-    /// 選択肢表示中のみ有効。カーソルを1つ下へ動かす（末尾で頭打ち、先頭へのラップはしない）。
-    /// 選択肢を表示していないときの呼び出しは no-op。
-    pub fn move_choice_cursor_down(&mut self) {
-        if let Some(PlaybackItem::Choice(options)) = self.items.get(self.index) {
-            if self.choice_cursor + 1 < options.len() {
-                self.choice_cursor += 1;
+        loop {
+            let next_scene_idx = self.current_scene_idx + 1;
+            let Some(next_scene) = self.scene_order.get(next_scene_idx) else {
+                return false;
+            };
+            let current_file_id = self.scene_order[self.current_scene_idx].file_id;
+            if next_scene.file_id != current_file_id {
+                return false;
             }
+            let start = self.items.len();
+            let file_id = next_scene.file_id;
+            build_scene_items(
+                &next_scene.events,
+                file_id,
+                &mut self.scan_state,
+                &mut self.flags,
+                &mut self.items,
+                &mut self.item_file_ids,
+                &mut self.item_wait_ms,
+                &mut self.item_blackout,
+                &mut self.item_bgm,
+                &mut self.item_se,
+            );
+            self.current_scene_idx = next_scene_idx;
+            if self.items.len() > start {
+                self.set_index(start);
+                return true;
+            }
+            // このシーンはitemを1件も生成しなかった。さらに次のシーンへ。
+        }
+    }
+
+    /// 選択肢表示中のみ有効。カーソルを1つ上の行へ動かす（先頭行で頭打ち、末尾行への
+    /// ラップはしない）。選択肢を表示していないときの呼び出しは no-op。
+    ///
+    /// グリッド表示（列数 >= 2、#508の`[選択: 列=N]`）では「1つ上の行の同じ列」へ移動する。
+    /// 非グリッド（列数1）では従来どおり「1つ前の要素」に一致する — 列数1のときは
+    /// 行=要素index・列=常に0になるため、特別扱いせず同じ計算式で両方を扱える。
+    pub fn move_choice_cursor_up(&mut self) {
+        let Some(columns) = self.effective_columns() else {
+            return;
+        };
+        if self.choice_cursor >= columns {
+            self.choice_cursor -= columns;
+        }
+        // else: 先頭行なので頭打ち（従来の非グリッド時と同じ「先頭で頭打ち」規約を踏襲）。
+    }
+
+    /// 選択肢表示中のみ有効。カーソルを1つ下の行へ動かす（末尾行で頭打ち、先頭行への
+    /// ラップはしない）。選択肢を表示していないときの呼び出しは no-op。
+    ///
+    /// グリッド表示では「1つ下の行の同じ列」へ移動する。ただし総数が列数で割り切れず
+    /// 最終行が途中までしか埋まっていない場合（例: 7要素・3列なら最終行は index 6 の
+    /// 1要素だけ）、移動先の列に要素が存在しないことがある。この場合はテキストエディタの
+    /// カーソル移動が短い行の末尾に寄せるのと同じ発想で、その行の最後の要素へ寄せる
+    /// （設計判断: 「存在しない列へは移動できず何もしない」より「近い有効な位置へ寄る」
+    /// 方が、短い最終行にある選択肢へも上下キーだけで到達できて自然だと判断した。GUI版は
+    /// キーボード操作を持たないため参考にできる先例が無く、これはTUI独自の判断）。
+    /// 非グリッド（列数1）では従来どおり「1つ次の要素」に一致する。
+    pub fn move_choice_cursor_down(&mut self) {
+        let Some(columns) = self.effective_columns() else {
+            return;
+        };
+        let Some(PlaybackItem::Choice(options, _)) = self.items.get(self.index) else {
+            return;
+        };
+        let total = options.len();
+        let row = self.choice_cursor / columns;
+        let rows = total.div_ceil(columns);
+        if row + 1 >= rows {
+            return; // 最終行なので頭打ち
+        }
+        let col = self.choice_cursor % columns;
+        let target_row = row + 1;
+        self.choice_cursor = (target_row * columns + col).min(total - 1);
+    }
+
+    /// 選択肢表示中かつグリッド表示（列数 >= 2、#508）のときのみ意味を持つ。カーソルを
+    /// 同じ行内で1つ左へ動かす（行の先頭列で頭打ち、前の行の末尾へのラップはしない —
+    /// 上下カーソルの「頭打ち・ラップしない」規約をそのまま左右にも適用した設計判断）。
+    /// 非グリッド（列数1）では常に no-op（列が1つしかないため左右移動という概念自体が
+    /// 無い）。選択肢を表示していないときの呼び出しも no-op。
+    pub fn move_choice_cursor_left(&mut self) {
+        let Some(columns) = self.effective_columns() else {
+            return;
+        };
+        if columns <= 1 {
+            return;
+        }
+        if !self.choice_cursor.is_multiple_of(columns) {
+            self.choice_cursor -= 1;
+        }
+    }
+
+    /// [`Playback::move_choice_cursor_left`] の右版。行の最終列、または（最終行が途中
+    /// までしか埋まっていない場合の）その行に存在する最後の要素で頭打ちになる。
+    pub fn move_choice_cursor_right(&mut self) {
+        let Some(columns) = self.effective_columns() else {
+            return;
+        };
+        if columns <= 1 {
+            return;
+        }
+        let Some(PlaybackItem::Choice(options, _)) = self.items.get(self.index) else {
+            return;
+        };
+        let col = self.choice_cursor % columns;
+        if col + 1 < columns && self.choice_cursor + 1 < options.len() {
+            self.choice_cursor += 1;
         }
     }
 
     /// 現在カーソルが指している選択肢を確定し、その `jump` 先シーンへ遷移する。
     ///
     /// 選択肢を表示していない場合、カーソルが範囲外の場合（本来起こり得ないが防御的に）、
-    /// または `jump` 先のシーンIDが `scene_start` に見つからない場合（原稿の記述ミスで
+    /// または `jump` 先のシーンIDが `scene_index_by_id` に見つからない場合（原稿の記述ミスで
     /// 存在しないシーンIDを指している等）は、位置を変えずに `false` を返す。GUI版
     /// `NovelRenderer.jumpToScene` の「シーンが見つからなければ何もせず console.warn するだけ」
     /// という fail-soft 方針と同じだが、TUI は alternate screen 中で標準出力を使えないため
     /// 警告そのものは出さない（呼び出し側が `false` を見て何もしない、という形で吸収する）。
     pub fn select_current_choice(&mut self) -> bool {
-        let Some(PlaybackItem::Choice(options)) = self.items.get(self.index) else {
+        let Some(PlaybackItem::Choice(options, _columns)) = self.items.get(self.index) else {
             return false;
         };
         let Some(option) = options.get(self.choice_cursor) else {
             return false;
         };
-        let Some(&target) = self.scene_start.get(&option.jump) else {
+        let Some(&target_scene_idx) = self.scene_index_by_id.get(&option.jump) else {
             return false;
         };
-        self.set_index(target);
-        true
+        let mut scene_idx = target_scene_idx;
+        loop {
+            let scene = &self.scene_order[scene_idx];
+            let file_id = scene.file_id;
+            let start = self.items.len();
+            build_scene_items(
+                &scene.events,
+                file_id,
+                &mut self.scan_state,
+                &mut self.flags,
+                &mut self.items,
+                &mut self.item_file_ids,
+                &mut self.item_wait_ms,
+                &mut self.item_blackout,
+                &mut self.item_bgm,
+                &mut self.item_se,
+            );
+            self.current_scene_idx = scene_idx;
+            if self.items.len() > start {
+                self.set_index(start);
+                return true;
+            }
+            // ジャンプ先シーンがitem 0件。ファイル境界を越えない範囲で次のシーンへ
+            // フォールスルーする（`advance()` のゼロ件シーン読み飛ばしループと同じ規約、
+            // モジュール冒頭のドキュメント参照）。
+            let next_scene_idx = scene_idx + 1;
+            let Some(next_scene) = self.scene_order.get(next_scene_idx) else {
+                // ドキュメント末尾。旧実装と同じく `items.len()`（範囲外）を指す位置に
+                // 置く — `position()` は `take` で安全に全Line数を返し、`is_at_end()` は
+                // `has_more_scenes_with_items()` 経由でこれを「実質末尾」として扱う
+                // （`position_after_jumping_into_zero_item_last_scene_does_not_panic` /
+                // `is_at_end_true_when_jump_lands_on_out_of_bounds_index_of_zero_item_scene`
+                // の期待値どおり）。
+                self.set_index(start);
+                return true;
+            };
+            if next_scene.file_id != file_id {
+                self.set_index(start);
+                return true;
+            }
+            scene_idx = next_scene_idx;
+        }
     }
 
-    /// 会話行の総数（Choice item は含まない）。
+    /// 会話行の総数（Choice item・画像コマ item は含まない、#497）。画像コマ
+    /// （[`PlaybackItem::Image`]）は元の会話行の話者・本文を引き継いだ表示上の中間状態に
+    /// すぎず、それ自体は新しい会話行ではないため数えない。
+    ///
+    /// UI（進捗バー等）向けに「ドキュメント全体の会話行総数」を返す必要があるため、
+    /// プレイヤーが実際に訪れた範囲だけを保持する `self.items`（#509 で遅延構築に変更）は
+    /// 使わない。`self.scene_order`（ドキュメント順の全シーンの生イベント一覧）を、実際の
+    /// 再生状態（`self.scan_state` / `self.items`）に一切触れない使い捨ての状態で独立に
+    /// 全件スキャンして数える（`has_more_scenes_with_items` が使っている「使い捨て
+    /// scan_state + 使い捨て Vec で `build_scene_items` を試し呼びする」パターンと同じ）。
+    ///
+    /// `main.rs::event_loop` は `REDRAW`＝30ms間隔で（キー入力の有無に関わらず）毎フレーム
+    /// この関数を呼ぶが、結果は `self.flags` が変化しない限り変わらない。全件スキャンは
+    /// シーン数に比例した Vec 確保を伴う軽くない処理のため、`self.total_cache` に
+    /// `(self.flags.generation(), 直近の結果)` を保持し、世代番号が変わっていなければ
+    /// 再スキャンを省略する（セルフレビュー対応、#509）。
     pub fn total(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|item| matches!(item, PlaybackItem::Line(_)))
-            .count()
+        let current_generation = self.flags.generation();
+        if let Some((cached_generation, cached_total)) = self.total_cache.get() {
+            if cached_generation == current_generation {
+                return cached_total;
+            }
+        }
+        let mut scan_state = SceneScanState {
+            current_event_image: None,
+            current_speaker: None,
+            current_text: Vec::new(),
+            current_blackout: false,
+            current_bgm: None,
+            pending_se: Vec::new(),
+        };
+        let mut flags = self.flags.clone();
+        let mut count = 0;
+        for scene in &self.scene_order {
+            let mut items = Vec::new();
+            let mut item_file_ids = Vec::new();
+            let mut item_wait_ms = Vec::new();
+            let mut item_blackout = Vec::new();
+            let mut item_bgm = Vec::new();
+            let mut item_se = Vec::new();
+            build_scene_items(
+                &scene.events,
+                scene.file_id,
+                &mut scan_state,
+                &mut flags,
+                &mut items,
+                &mut item_file_ids,
+                &mut item_wait_ms,
+                &mut item_blackout,
+                &mut item_bgm,
+                &mut item_se,
+            );
+            count += items
+                .iter()
+                .filter(|item| matches!(item, PlaybackItem::Line(_)))
+                .count();
+        }
+        self.total_cache.set(Some((current_generation, count)));
+        count
     }
 
-    /// 現在位置が何行目か（1始まり、Choice item は含まない）。現在位置が Choice の場合は、
-    /// そこに至るまでに表示済みの会話行数を返す（例: 3行しゃべった直後に選択肢が出ている
-    /// 状態なら3を返す）。
+    /// 現在位置が何行目か（1始まり、Choice item・画像コマ item は含まない、#497）。現在位置が
+    /// Choice の場合は、そこに至るまでに表示済みの会話行数を返す（例: 3行しゃべった直後に
+    /// 選択肢が出ている状態なら3を返す）。画像コマ自動再生の途中（`pending_wait_ms` が
+    /// `Some`）でも、直前に表示済みだった会話行数のまま変化しない。
     pub fn position(&self) -> usize {
         // `self.items[..=self.index]` だと `index == items.len()`（ジャンプ先シーンが
-        // イベント0件かつドキュメント末尾のとき `scene_start` がこの値を取り得る、
+        // イベント0件かつドキュメント末尾のとき `set_index` がこの値を取り得る、
         // `select_current_choice` 参照）のとき範囲外アクセスで panic する。`take` は
         // `index` が範囲外でも自動的に全要素で打ち切られるため安全（「ドキュメント末尾を
         // 超えた位置」＝「全会話行を読み終えた」なので、全 Line 数を返すのは意味的にも
@@ -560,32 +1241,90 @@ impl Playback {
             return false;
         }
         if self.items.is_empty() || self.index + 1 >= self.items.len() {
-            return true;
+            return !self.has_more_scenes_with_items();
         }
         self.item_file_ids[self.index + 1] != self.item_file_ids[self.index]
+    }
+
+    /// `self` を変更せず、`current_scene_idx` より後にまだ表示可能な item が存在するかを
+    /// 判定する。`scan_state` を複製した使い捨ての状態に対して `build_scene_items` を試し
+    /// 呼びし、実際に追記が必要になるまで `self` 本体を変更しないための読み取り専用
+    /// ルックアヘッド（#509 Phase B、`is_at_end` の遅延ビルド対応）。
+    fn has_more_scenes_with_items(&self) -> bool {
+        let mut scan_state = self.scan_state.clone();
+        let mut flags = self.flags.clone();
+        let mut scene_idx = self.current_scene_idx;
+        loop {
+            let next_scene_idx = scene_idx + 1;
+            let Some(next_scene) = self.scene_order.get(next_scene_idx) else {
+                return false;
+            };
+            if next_scene.file_id != self.scene_order[scene_idx].file_id {
+                return false;
+            }
+            let mut items = Vec::new();
+            let mut item_file_ids = Vec::new();
+            let mut item_wait_ms = Vec::new();
+            let mut item_blackout = Vec::new();
+            let mut item_bgm = Vec::new();
+            let mut item_se = Vec::new();
+            build_scene_items(
+                &next_scene.events,
+                next_scene.file_id,
+                &mut scan_state,
+                &mut flags,
+                &mut items,
+                &mut item_file_ids,
+                &mut item_wait_ms,
+                &mut item_blackout,
+                &mut item_bgm,
+                &mut item_se,
+            );
+            if !items.is_empty() {
+                return true;
+            }
+            scene_idx = next_scene_idx;
+        }
     }
 
     /// テスト専用: 会話行リストから直接 `Playback` を組み立てる。`main.rs` の
     /// `on_advance` テストなどで、`Document`（20個のフィールドを埋める必要がある）経由の
     /// 冗長なフィクスチャ構築を避けるために使う（#472）。選択肢を含む状態遷移のテストは
-    /// `Document` 経由（`from_document`、`scene_start` の構築が必要なため）で行う。
+    /// `Document` 経由（`from_document`、`scene_order`/`scene_index_by_id` の構築が
+    /// 必要なため）で行う。
     #[cfg(test)]
     pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
         let item_file_ids = vec![0; lines.len()];
+        let item_wait_ms = vec![None; lines.len()];
+        let item_blackout = vec![false; lines.len()];
         let item_bgm = vec![None; lines.len()];
         let item_se = vec![Vec::new(); lines.len()];
         Self {
             items: lines.into_iter().map(PlaybackItem::Line).collect(),
             item_file_ids,
+            item_wait_ms,
+            item_blackout,
             item_bgm,
             item_se,
             index: 0,
-            scene_start: HashMap::new(),
+            scene_order: Vec::new(),
+            scene_index_by_id: HashMap::new(),
             choice_cursor: 0,
             sentence_per_page: false,
             sentence_pages: Vec::new(),
             sentence_index: 0,
             current_display: None,
+            scan_state: SceneScanState {
+                current_event_image: None,
+                current_speaker: None,
+                current_text: Vec::new(),
+                current_blackout: false,
+                current_bgm: None,
+                pending_se: Vec::new(),
+            },
+            current_scene_idx: 0,
+            flags: GameFlags::new(),
+            total_cache: std::cell::Cell::new(None),
         }
     }
 }
@@ -593,7 +1332,7 @@ impl Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use name_name_parser::models::{BgmAction, Chapter, ChoiceOption, Scene, SceneView};
+    use name_name_parser::models::{BgmAction, Chapter, ChoiceOption, FlagValue, Scene, SceneView};
     use std::collections::HashMap;
 
     #[test]
@@ -783,6 +1522,7 @@ mod tests {
                     text: "yes".to_string(),
                     jump: "1-2".to_string(),
                 }],
+                columns: None,
             },
             dialog(Some("カコ"), vec!["こんにちは"]),
         ]);
@@ -791,7 +1531,7 @@ mod tests {
         assert_eq!(pb.total(), 1);
         // 再生位置としては Choice が最初の item になるため、いきなり選択肢が現れる。
         assert_eq!(pb.current_line(), None);
-        let (options, cursor) = pb.current_choice().expect("choice should be current");
+        let (options, cursor, _columns) = pb.current_choice().expect("choice should be current");
         assert_eq!(options.len(), 1);
         assert_eq!(options[0].text, "yes");
         assert_eq!(cursor, 0);
@@ -946,6 +1686,23 @@ mod tests {
                     jump: jump.to_string(),
                 })
                 .collect(),
+            columns: None,
+        }
+    }
+
+    /// `[フラグ: name=value]` 相当の `Event::Flag`（#509）。
+    fn flag_event(name: &str, value: bool) -> Event {
+        Event::Flag {
+            name: name.to_string(),
+            value: FlagValue::Bool(value),
+        }
+    }
+
+    /// `[条件: flag]...[/条件]` 相当の `Event::Condition`（#509）。
+    fn condition_event(flag: &str, events: Vec<Event>) -> Event {
+        Event::Condition {
+            flag: flag.to_string(),
+            events,
         }
     }
 
@@ -968,7 +1725,7 @@ mod tests {
     }
 
     #[test]
-    fn select_current_choice_jumps_to_target_scene_start() {
+    fn select_current_choice_jumps_to_target_scene() {
         let doc = two_scene_doc_with_choice();
         let mut pb = Playback::from_document(&doc);
         assert!(pb.advance(), "台詞から Choice へ進めるはず");
@@ -1145,7 +1902,10 @@ mod tests {
         // Choice表示中は拒否するため、入力を一切受け付けない詰み状態になっていた（バグ2）。
         let doc = doc_single_scene(vec![
             dialog(Some("A"), vec!["どうする？"]),
-            Event::Choice { options: vec![] },
+            Event::Choice {
+                options: vec![],
+                columns: None,
+            },
             dialog(Some("B"), vec!["次のセリフ"]),
         ]);
         let mut pb = Playback::from_document(&doc);
@@ -1344,6 +2104,7 @@ mod tests {
                                 text: "yes".to_string(),
                                 jump: "1-2".to_string(),
                             }],
+                            columns: None,
                         },
                     ],
                 ),
@@ -1592,7 +2353,7 @@ mod tests {
     fn sentence_per_page_last_sentence_advances_into_following_choice() {
         // 複数文の Line item の直後に Choice item が続く文書で、Line 最後の文から advance
         // した結果が Choice へ前進することを確認する（Line→Choice への前進遷移。既存テスト
-        // `select_current_choice_jumps_to_target_scene_start` 等は Choice→scene jump の
+        // `select_current_choice_jumps_to_target_scene` 等は Choice→scene jump の
         // 後方向のみカバーしている）。
         let doc = doc_single_scene(vec![
             dialog(Some("A"), vec!["1文目。2文目。"]),
@@ -1797,6 +2558,2143 @@ mod tests {
         );
     }
 
+    // ---- #508: 選択肢グリッド化（columns >= 2）のカーソル移動テスト ----
+    //
+    // 行優先の配置規則: `col = index % columns`, `row = index / columns`。端数行
+    // （最終行のみ、選択肢数が列数の倍数でない場合）は行優先埋めのため必ず最終行にのみ
+    // 発生する（実装の設計）。以下のテストは主に8選択肢・columns=3のフィクスチャ
+    // （`ragged_grid_playback`、row0=[0,1,2] row1=[3,4,5] row2=[6,7]、col2欠の端数行）を使う。
+
+    /// #508用フィクスチャヘルパー。`count`件・`columns`列で、選択肢の `jump` は全て
+    /// `target` に統一する（カーソル移動系のテストでは jump 先の中身は重要でないため、
+    /// カーソル位置の確認だけに集中できるよう簡略化している）。
+    fn choice_grid(count: usize, columns: Option<u32>, target: &str) -> Event {
+        Event::Choice {
+            options: (0..count)
+                .map(|i| ChoiceOption {
+                    text: format!("opt{i}"),
+                    jump: target.to_string(),
+                })
+                .collect(),
+            columns,
+        }
+    }
+
+    /// #508の主要フィクスチャ: 8選択肢・columns=3。行優先配置で
+    /// row0=[0,1,2] row1=[3,4,5] row2=[6,7]（col2欠の端数行）になる。
+    fn ragged_grid_playback() -> Playback {
+        let doc = doc_single_scene(vec![choice_grid(8, Some(3), "x")]);
+        Playback::from_document(&doc)
+    }
+
+    #[test]
+    fn move_choice_cursor_up_down_treat_columns_none_same_as_some_1() {
+        let doc_none = doc_single_scene(vec![choice_grid(3, None, "x")]);
+        let doc_some1 = doc_single_scene(vec![choice_grid(3, Some(1), "x")]);
+        let mut pb_none = Playback::from_document(&doc_none);
+        let mut pb_some1 = Playback::from_document(&doc_some1);
+
+        pb_none.move_choice_cursor_down();
+        pb_some1.move_choice_cursor_down();
+        assert_eq!(
+            pb_none.current_choice().unwrap().1,
+            pb_some1.current_choice().unwrap().1,
+            "columns=None と columns=Some(1) はdown後も同じカーソル位置のはず"
+        );
+
+        pb_none.move_choice_cursor_down();
+        pb_some1.move_choice_cursor_down();
+        assert_eq!(
+            pb_none.current_choice().unwrap().1,
+            2,
+            "末尾(index 2)まで進むはず"
+        );
+        assert_eq!(pb_some1.current_choice().unwrap().1, 2);
+
+        pb_none.move_choice_cursor_up();
+        pb_some1.move_choice_cursor_up();
+        assert_eq!(
+            pb_none.current_choice().unwrap().1,
+            1,
+            "up後も両者一致するはず"
+        );
+        assert_eq!(pb_some1.current_choice().unwrap().1, 1);
+    }
+
+    #[test]
+    fn move_choice_cursor_up_down_treat_columns_some_0_same_as_some_1() {
+        let doc_some0 = doc_single_scene(vec![choice_grid(3, Some(0), "x")]);
+        let doc_some1 = doc_single_scene(vec![choice_grid(3, Some(1), "x")]);
+        let mut pb_some0 = Playback::from_document(&doc_some0);
+        let mut pb_some1 = Playback::from_document(&doc_some1);
+
+        pb_some0.move_choice_cursor_down();
+        pb_some1.move_choice_cursor_down();
+        assert_eq!(
+            pb_some0.current_choice().unwrap().1,
+            pb_some1.current_choice().unwrap().1,
+            "columns=Some(0) と columns=Some(1) はdown後も同じカーソル位置のはず"
+        );
+
+        pb_some0.move_choice_cursor_down();
+        pb_some1.move_choice_cursor_down();
+        assert_eq!(pb_some0.current_choice().unwrap().1, 2);
+        assert_eq!(pb_some1.current_choice().unwrap().1, 2);
+
+        pb_some0.move_choice_cursor_up();
+        pb_some1.move_choice_cursor_up();
+        assert_eq!(pb_some0.current_choice().unwrap().1, 1);
+        assert_eq!(pb_some1.current_choice().unwrap().1, 1);
+    }
+
+    #[test]
+    fn move_choice_cursor_down_from_ragged_row_gap_snaps_to_last_existing_item_in_row() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_right(); // idx0 -> idx1
+        pb.move_choice_cursor_right(); // idx1 -> idx2 (row0, col2)
+        pb.move_choice_cursor_down(); // row0 col2 -> row1 col2 = idx5
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            5,
+            "前提: row1のcol2(idx5)にいるはず"
+        );
+
+        pb.move_choice_cursor_down(); // row2のcol2は存在しない(端数行)
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "row2にcol2が存在しないため、row2の最後の実在アイテム(idx7)へスナップするはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_right_at_ragged_last_row_stops_at_last_existing_item_not_grid_edge() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_down();
+        pb.move_choice_cursor_down(); // idx2 -> idx5 -> スナップして idx7
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "前提: idx7(row2,col1、端数行の実在最後)にいるはず"
+        );
+
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "列的にはまだ余裕(col1<columns-1=2)があるが、総数(8件)の終端が理由でno-opのはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_right_at_full_row_stops_at_grid_column_edge() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "前提: idx2(row0,col2、列は3列あるので列端)にいるはず"
+        );
+
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "総数の終端(8件)ではなく、グリッドの列端(columns=3)が理由でno-opのはず \
+             （前のテストとは頭打ちの理由が異なる対比）"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_down_at_last_row_is_noop_even_from_ragged_position() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_down();
+        pb.move_choice_cursor_down(); // idx0 -> idx3 -> idx6
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            6,
+            "前提: idx6(row2,col0)にいるはず"
+        );
+        pb.move_choice_cursor_down();
+        assert_eq!(pb.current_choice().unwrap().1, 6, "最終行なのでno-op");
+
+        pb.move_choice_cursor_right(); // idx6 -> idx7
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "前提: idx7(row2,col1)にいるはず"
+        );
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "端数行の実在位置からでも最終行はno-opのはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_up_at_first_row_is_noop_for_all_columns() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_up();
+        assert_eq!(pb.current_choice().unwrap().1, 0, "col0でno-op");
+
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_up();
+        assert_eq!(pb.current_choice().unwrap().1, 1, "col1でもno-op");
+
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_up();
+        assert_eq!(pb.current_choice().unwrap().1, 2, "col2でもno-op");
+    }
+
+    #[test]
+    fn move_choice_cursor_left_at_row_start_is_noop() {
+        let mut pb = ragged_grid_playback();
+        pb.move_choice_cursor_left();
+        assert_eq!(pb.current_choice().unwrap().1, 0, "row0のcol0でno-op");
+
+        pb.move_choice_cursor_down();
+        pb.move_choice_cursor_left();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            3,
+            "row1のcol0でも前の行(row0)へまたいでleftしないはず"
+        );
+
+        pb.move_choice_cursor_down();
+        pb.move_choice_cursor_left();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            6,
+            "row2のcol0でも同様に行をまたがないはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_left_right_are_noop_when_columns_is_none_or_1() {
+        for columns in [None, Some(1)] {
+            let doc = doc_single_scene(vec![choice_grid(3, columns, "x")]);
+            let mut pb = Playback::from_document(&doc);
+            pb.move_choice_cursor_down(); // 非グリッドでは「1つ次の要素」= idx1
+            assert_eq!(pb.current_choice().unwrap().1, 1);
+
+            pb.move_choice_cursor_right();
+            assert_eq!(
+                pb.current_choice().unwrap().1,
+                1,
+                "columns={columns:?}: 非グリッドではrightはno-opのはず"
+            );
+
+            pb.move_choice_cursor_left();
+            assert_eq!(
+                pb.current_choice().unwrap().1,
+                1,
+                "columns={columns:?}: 非グリッドではleftもno-opのはず"
+            );
+        }
+    }
+
+    #[test]
+    fn move_choice_cursor_left_right_are_noop_when_choice_not_displayed() {
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["会話中"])]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.current_line().is_some(), "前提: Line表示中のはず");
+
+        // panicしないことが主目的。表示内容も変わらないことを合わせて確認する。
+        pb.move_choice_cursor_left();
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("A"),
+            "Choice以外の表示中はleft/rightで状態が変わらないはず"
+        );
+        assert_eq!(pb.current_choice(), None);
+    }
+
+    #[test]
+    fn move_choice_cursor_grid_columns_equal_option_count_forms_single_row() {
+        let doc = doc_single_scene(vec![choice_grid(8, Some(8), "x")]);
+        let mut pb = Playback::from_document(&doc);
+
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            0,
+            "1行のみのグリッドなのでdownは即頭打ちのはず"
+        );
+
+        for _ in 0..7 {
+            pb.move_choice_cursor_right();
+        }
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "rightだけで最終列まで到達できるはず"
+        );
+
+        pb.move_choice_cursor_right();
+        assert_eq!(pb.current_choice().unwrap().1, 7, "列端でno-opのはず");
+
+        pb.move_choice_cursor_up();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            7,
+            "1行のみのグリッドなのでupも即頭打ちのはず"
+        );
+    }
+
+    #[test]
+    fn move_choice_cursor_grid_columns_greater_than_option_count_forms_single_ragged_row() {
+        let doc = doc_single_scene(vec![choice_grid(3, Some(5), "x")]);
+        let mut pb = Playback::from_document(&doc);
+
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "前提: 実在最後(idx2)にいるはず"
+        );
+
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "列数(5)にはまだ余裕があるが、実在アイテム終端(3件)が理由でno-opのはず"
+        );
+
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "1行のみのグリッドなのでdownもno-opのはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_resets_cursor_to_zero_even_when_jumping_between_different_grid_column_counts(
+    ) {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![choice_grid(8, Some(5), "1-2")]),
+                scene("1-2", vec![choice_grid(3, Some(2), "1-2")]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        pb.move_choice_cursor_right();
+        pb.move_choice_cursor_right();
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            2,
+            "前提: jump前にカーソルを非0位置に動かしておく"
+        );
+
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+        let (options, cursor, columns) = pb.current_choice().expect("jump先もChoiceのはず");
+        assert_eq!(options.len(), 3);
+        assert_eq!(columns, Some(2), "jump先は別のcolumns値を持つ選択肢のはず");
+        assert_eq!(
+            cursor, 0,
+            "jump元のcolumns(5)とjump先のcolumns(2)が異なっていても、cursorは0から始まるはず"
+        );
+    }
+
+    #[test]
+    fn consecutive_grid_and_non_grid_choices_do_not_leak_cursor_state() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![choice_grid(6, Some(3), "1-2")]),
+                scene("1-2", vec![choice(vec![("A", "x"), ("B", "y")])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        pb.move_choice_cursor_down(); // idx0(row0,col0) -> idx3(row1,col0)
+        assert_ne!(
+            pb.current_choice().unwrap().1,
+            0,
+            "前提: グリッド選択肢でカーソルを非0位置に動かしておく"
+        );
+
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+        let (options, cursor, columns) = pb.current_choice().expect("jump先もChoiceのはず");
+        assert_eq!(options.len(), 2);
+        assert_eq!(columns, None, "jump先は非グリッドの選択肢のはず");
+        assert_eq!(
+            cursor, 0,
+            "前のグリッド選択肢の非0カーソルが、後続の非グリッド選択肢に漏れてはいけない"
+        );
+    }
+
+    // ---- #508 バグ修正の回帰テスト: columns の上限クランプ ----
+
+    #[test]
+    fn choice_columns_vastly_exceeding_option_count_is_clamped_to_option_count() {
+        // レビューで実際にハングを再現した原稿そのもの相当: `[選択: 列=200000]` だが
+        // 選択肢は2件しかない。parser の `parse_choice_columns` は `u32 >= 1` ならどんな
+        // 巨大な値も受理し上限バリデーションを持たないため、`Playback` 構築時
+        // （`playback_item_from_event`）でクランプしていないと、この生の巨大値が
+        // `ui::draw_choice_grid` までそのまま届いてハングする。実際に markdown を
+        // `parser::parse` した `Document` を経由させ、パイプライン全体でクランプが
+        // 効いていることを確認する。
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n[選択: 列=200000]\n- \
+                       進む→1-2\n- 戻る→1-2\n[/選択]\n\n## 1-2: 次\n\n**B**:\n次のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let pb = Playback::from_document(&document);
+
+        let (options, _cursor, columns) = pb.current_choice().expect("Choiceが最初の item のはず");
+        assert_eq!(options.len(), 2);
+        assert_eq!(
+            columns,
+            Some(2),
+            "列=200000 は選択肢数(2)へクランプされるはず（クランプ無しだとui::draw_choice_grid \
+             がハングする実害バグ、#508）"
+        );
+    }
+
+    #[test]
+    fn choice_columns_within_option_count_is_left_unchanged() {
+        // クランプは「選択肢数を超える」場合のみに効き、妥当な範囲の列数（<= 選択肢数）は
+        // 従来どおりそのまま通ることの確認（過剰なクランプで #508 の元機能を壊していないか）。
+        let doc = doc_single_scene(vec![choice_grid(8, Some(3), "x")]);
+        let pb = Playback::from_document(&doc);
+        let (_options, _cursor, columns) = pb.current_choice().expect("Choiceのはず");
+        assert_eq!(
+            columns,
+            Some(3),
+            "選択肢数(8)以下の列数(3)はクランプされないはず"
+        );
+    }
+
+    // ---- #497: イベント絵の時間差自動連続表示（画像コマ item の構築・状態遷移） ----
+    //
+    // テストケース一覧のデシジョンテーブル1（`Playback::build` の EventImage/Wait走査）・
+    // テーブル2のうち Playback 単体で検証できる部分（item_index/pending_wait_ms/advance の
+    // 状態遷移）をここでカバーする。event_loop 側のタイマー駆動・入力スタベーション回帰は
+    // main.rs 側のテストで検証する。
+
+    fn wait(ms: u32) -> Event {
+        Event::Wait { ms }
+    }
+
+    #[test]
+    fn build_event_image_immediately_followed_by_wait_creates_image_item_with_wait_ms() {
+        // デシジョンテーブル1#1: EventImage直後がWait、直前に会話行あり、Wait後は末尾。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["こんにちは"]),
+            event_image("a.webp"),
+            wait(200),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "会話行から画像コマitemへ進めるはず");
+
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        let line = pb
+            .current_line()
+            .expect("画像コマitemもcurrent_lineを持つはず");
+        assert_eq!(
+            line.speaker.as_deref(),
+            Some("A"),
+            "話者は直前の会話行を引き継ぐ"
+        );
+        assert_eq!(line.text, vec!["こんにちは".to_string()]);
+        assert_eq!(line.event_image.as_deref(), Some("a.webp"));
+    }
+
+    #[test]
+    fn build_event_image_without_following_wait_does_not_create_image_item() {
+        // デシジョンテーブル1#6（回帰）: 直後がWaitでない既存スクリプトの大半はitem化しない。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            dialog(Some("A"), vec!["hello"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.total(), 1, "画像コマitemは増えず会話行1件のみのはず");
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.speaker.as_deref(), Some("A"));
+        assert_eq!(
+            line.event_image.as_deref(),
+            Some("a.webp"),
+            "event_imageは従来どおりLine itemに反映されるはず"
+        );
+        assert_eq!(pb.pending_wait_ms(), None);
+    }
+
+    #[test]
+    fn build_event_image_as_last_event_in_scene_without_wait_does_not_panic_or_create_item() {
+        // デシジョンテーブル1#7: EventImageがシーン末尾で次要素が無い（events.get(+1)がNone）。
+        // panicせず、item化もされないことを確認する。
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["hi"]), event_image("a.webp")]);
+        let pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.total(), 1, "末尾のEventImage単体はitem化されないはず");
+        assert!(pb.is_at_end());
+    }
+
+    #[test]
+    fn build_consecutive_event_image_wait_pairs_create_multiple_image_items_in_order() {
+        // デシジョンテーブル1#3: EventImage+Waitの連鎖が複数連続する。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["look"]),
+            event_image("a.webp"),
+            wait(100),
+            event_image("b.webp"),
+            wait(200),
+            event_image("c.webp"),
+            wait(300),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance());
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("a.webp")
+        );
+
+        assert!(pb.advance());
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("b.webp")
+        );
+
+        assert!(pb.advance());
+        assert_eq!(pb.pending_wait_ms(), Some(300));
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("c.webp")
+        );
+        assert!(pb.is_at_end(), "3組目のWait後は末尾のはず");
+    }
+
+    #[test]
+    fn build_event_image_wait_followed_by_dialog_resumes_normal_line_with_carried_event_image() {
+        // デシジョンテーブル1#2: Wait後にDialogが続く場合、通常のLine itemへ復帰し、
+        // event_imageはそのまま引き継がれる。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["intro"]),
+            event_image("a.webp"),
+            wait(100),
+            dialog(Some("B"), vec!["next line"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "画像コマitemへ");
+        assert!(pb.advance(), "通常のLine itemへ復帰");
+
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "通常のLine itemに戻ったのでwait_msは無いはず"
+        );
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert_eq!(line.text, vec!["next line".to_string()]);
+        assert_eq!(
+            line.event_image.as_deref(),
+            Some("a.webp"),
+            "event_imageは画像コマを経ても引き継がれ続けるはず"
+        );
+    }
+
+    #[test]
+    fn build_event_image_wait_before_any_dialog_has_none_speaker_and_empty_text() {
+        // デシジョンテーブル1#8: 冒頭がいきなりEventImage+Wait（会話行が一度も無い）。
+        let doc = doc_single_scene(vec![event_image("a.webp"), wait(50)]);
+        let pb = Playback::from_document(&doc);
+
+        let line = pb.current_line().expect("先頭itemが画像コマ自身になるはず");
+        assert_eq!(line.speaker, None);
+        assert_eq!(line.text, Vec::<String>::new());
+        assert_eq!(line.event_image.as_deref(), Some("a.webp"));
+    }
+
+    #[test]
+    fn build_orphan_wait_without_preceding_event_image_is_ignored() {
+        // デシジョンテーブル1#10: 先行するEventImageが無い孤立したWaitは従来どおり無視される
+        // （Waitはdisplay_line_from_event/playback_item_from_eventのどちらもNoneを返す）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            wait(100),
+            dialog(Some("B"), vec!["there"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.total(), 2, "孤立Waitはitem数に影響しないはず");
+        assert_eq!(pb.pending_wait_ms(), None);
+        assert!(pb.advance());
+        assert_eq!(pb.current_line().unwrap().speaker.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn build_event_image_followed_by_wait_display_complete_does_not_create_image_item() {
+        // デシジョンテーブル1#9: 直後が`Event::Wait{ms}`ではなく別variantの
+        // `Event::WaitDisplayComplete`（`[待機: 表示完了]`）だと、パターン不一致で
+        // 画像コマitemは作られない（型取り違え検出）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            Event::WaitDisplayComplete,
+            dialog(Some("B"), vec!["there"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.total(),
+            2,
+            "WaitDisplayCompleteはEventImageの直後でも画像コマitemを作らないはず"
+        );
+        assert!(pb.advance());
+        let line = pb.current_line().unwrap();
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert_eq!(
+            line.event_image.as_deref(),
+            Some("a.webp"),
+            "event_image自体は通常どおり引き継がれる"
+        );
+        assert_eq!(pb.pending_wait_ms(), None);
+    }
+
+    #[test]
+    fn build_event_image_wait_zero_ms_creates_image_item_with_wait_ms_zero_not_none() {
+        // 境界値: ms=0でもSome(0)が保持され、Noneに丸められないこと。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            wait(0),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance());
+        assert_eq!(
+            pb.pending_wait_ms(),
+            Some(0),
+            "Some(0)とNoneは区別されなければならない"
+        );
+    }
+
+    #[test]
+    fn pending_wait_ms_is_none_for_ordinary_line_and_choice_items() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            choice(vec![("go", "1-1")]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.pending_wait_ms(), None, "Line item上ではNoneのはず");
+        pb.advance();
+        assert_eq!(pb.pending_wait_ms(), None, "Choice item上でもNoneのはず");
+    }
+
+    #[test]
+    fn pending_wait_ms_toggles_some_and_none_across_advance() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            wait(150),
+            dialog(Some("B"), vec!["bye"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.pending_wait_ms(), None, "会話行Aの時点ではNone");
+        pb.advance();
+        assert_eq!(pb.pending_wait_ms(), Some(150), "画像コマ到達でSome");
+        pb.advance();
+        assert_eq!(pb.pending_wait_ms(), None, "会話行Bに復帰してNoneへ戻る");
+    }
+
+    #[test]
+    fn item_index_counts_image_items_while_position_does_not() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            wait(100),
+            dialog(Some("B"), vec!["bye"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.item_index(), 0);
+        assert_eq!(pb.position(), 1);
+
+        pb.advance(); // 画像コマitemへ
+        assert_eq!(pb.item_index(), 1, "item_indexは画像コマも1件として数える");
+        assert_eq!(
+            pb.position(),
+            1,
+            "positionは画像コマを数えないので直前のままのはず"
+        );
+
+        pb.advance(); // 会話行Bへ
+        assert_eq!(pb.item_index(), 2);
+        assert_eq!(pb.position(), 2);
+    }
+
+    #[test]
+    fn current_line_on_image_item_ignores_sentence_per_page_setting() {
+        // sentence_per_page有効時でも、画像コマitemは文単位分割の対象外で、直前会話行の
+        // 全文をそのままDisplayLineとして返す（current_lineの特別扱いが無いと、
+        // current_display(Line専用)を参照して誤ってNoneを返してしまう）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1文目。2文目。"]),
+            event_image("a.webp"),
+            wait(100),
+        ]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+
+        assert!(pb.advance(), "1文目→2文目のページ送り（同一Line item内）");
+        assert!(pb.advance(), "2文目→画像コマitemへ");
+
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+        let line = pb
+            .current_line()
+            .expect("画像コマitemはsentence_per_page有効でもcurrent_lineを持つはず");
+        assert_eq!(
+            line.text,
+            vec!["1文目。2文目。".to_string()],
+            "話者・本文は直前会話行の全文をそのまま引き継ぐ（文単位分割はしない）"
+        );
+        assert_eq!(line.event_image.as_deref(), Some("a.webp"));
+    }
+
+    #[test]
+    fn total_and_position_exclude_image_items_when_interposed_between_lines() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1"]),
+            event_image("a.webp"),
+            wait(50),
+            event_image("b.webp"),
+            wait(50),
+            dialog(Some("B"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.total(),
+            2,
+            "画像コマが2件挟まっていても会話行総数は2のまま"
+        );
+        pb.advance(); // 画像コマ1
+        pb.advance(); // 画像コマ2
+        pb.advance(); // 会話行B
+        assert_eq!(
+            pb.position(),
+            2,
+            "画像コマを2件経由してもpositionは会話行の数だけ進むはず"
+        );
+    }
+
+    #[test]
+    fn advance_with_sentence_per_page_pages_through_multi_sentence_line_before_reaching_image_item()
+    {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1文目。2文目。"]),
+            event_image("a.webp"),
+            wait(100),
+        ]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+
+        assert_eq!(pb.item_index(), 0);
+        assert!(pb.advance(), "1文目から2文目へのページ送り");
+        assert_eq!(
+            pb.item_index(),
+            0,
+            "同一Line item内のページ送りなのでitem_indexは変わらない"
+        );
+
+        assert!(pb.advance(), "2文目を読み終えて画像コマitemへ進む");
+        assert_eq!(pb.item_index(), 1);
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+    }
+
+    #[test]
+    fn advance_from_terminal_image_item_returns_false_and_pending_wait_ms_still_some() {
+        // 末尾境界: 末尾の画像コマからはこれ以上進めず、advance()はfalseを返す。
+        // no-opのadvance後もpending_wait_msは変化しない（main.rs側のno-op判定が
+        // この不変を前提にしている）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            wait(0),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance(); // 末尾の画像コマitemへ
+        assert!(pb.is_at_end());
+        assert_eq!(pb.pending_wait_ms(), Some(0));
+
+        assert!(!pb.advance(), "末尾の画像コマからはこれ以上進めない");
+        assert_eq!(
+            pb.pending_wait_ms(),
+            Some(0),
+            "no-opのadvance後もwait_msは変化しないはず"
+        );
+    }
+
+    /// spec（markdown-v0.1.md）は `[場面転換]` を「背景クリア + 暗転解除」と定義しており、
+    /// GUI版 `NovelRenderer.processDirective` は `Event::SceneTransition` で明示的に
+    /// `setBlackout(false)` を呼ぶ。`[暗転]` → (台詞) → `[場面転換]` → 台詞、という原稿で
+    /// 最後の台詞の時点では暗転が解除されているべき（#512 仕様漏れの回帰テスト）。
+    #[test]
+    fn scene_transition_resets_blackout_per_spec() {
+        let doc = doc_single_scene(vec![
+            Event::Blackout {
+                action: BlackoutAction::On,
+            },
+            dialog(Some("A"), vec!["暗転中の台詞"]),
+            Event::SceneTransition,
+            dialog(Some("B"), vec!["場面転換後の台詞"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.is_blackout(), "[暗転]直後の台詞はまだ暗転中のはず");
+
+        assert!(pb.advance(), "場面転換後の台詞へ進めるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(
+            !pb.is_blackout(),
+            "[場面転換]は spec 上「暗転解除」を伴うため、直後の台詞では暗転していないはず"
+        );
+    }
+
+    // ---- #512 追補: Event::Blackout の残りの観点（テスト観点整理で洗い出した分） ----
+
+    fn blackout_on() -> Event {
+        Event::Blackout {
+            action: BlackoutAction::On,
+        }
+    }
+
+    fn blackout_off() -> Event {
+        Event::Blackout {
+            action: BlackoutAction::Off,
+        }
+    }
+
+    #[test]
+    fn lines_before_any_blackout_are_not_blacked_out() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1"]),
+            dialog(Some("B"), vec!["2"]),
+            dialog(Some("C"), vec!["3"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(
+            !pb.is_blackout(),
+            "一度も[暗転]が出ない原稿ではis_blackout()は常にfalseのはず"
+        );
+        assert!(pb.advance());
+        assert!(!pb.is_blackout());
+        assert!(pb.advance());
+        assert!(!pb.is_blackout());
+    }
+
+    #[test]
+    fn dialog_after_blackout_on_is_blacked_out() {
+        let doc = doc_single_scene(vec![blackout_on(), dialog(Some("A"), vec!["暗転中"])]);
+        let pb = Playback::from_document(&doc);
+        assert!(
+            pb.is_blackout(),
+            "[暗転]直後の台詞はis_blackout()==trueのはず"
+        );
+    }
+
+    #[test]
+    fn dialog_after_blackout_off_is_not_blacked_out() {
+        let doc = doc_single_scene(vec![
+            blackout_on(),
+            dialog(Some("A"), vec!["暗転中"]),
+            blackout_off(),
+            dialog(Some("B"), vec!["解除後"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.is_blackout(), "1件目の台詞はまだ[暗転解除]前のはず");
+        assert!(pb.advance());
+        assert!(!pb.is_blackout(), "[暗転解除]後の台詞はfalseに戻るはず");
+    }
+
+    #[test]
+    fn blackout_on_called_twice_in_a_row_is_idempotent() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["前"]),
+            blackout_on(),
+            blackout_on(),
+            dialog(Some("B"), vec!["暗転中"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(!pb.is_blackout(), "1件目の台詞はまだ暗転前のはず");
+        assert!(pb.advance());
+        assert!(
+            pb.is_blackout(),
+            "[暗転]を連続で2回出してもtrueのまま変化しないはず"
+        );
+    }
+
+    #[test]
+    fn blackout_off_without_prior_on_is_idempotent_noop() {
+        let doc = doc_single_scene(vec![blackout_off(), dialog(Some("A"), vec!["普通の台詞"])]);
+        let pb = Playback::from_document(&doc);
+        assert!(
+            !pb.is_blackout(),
+            "暗転していない状態への[暗転解除]はfalseのままのはず"
+        );
+    }
+
+    #[test]
+    fn blackout_state_persists_across_scene_and_chapter_boundaries() {
+        // `event_image_state_persists_across_scene_and_chapter_boundaries` の暗転版。
+        // ch2は[場面転換]を挟まないため、ch1で[暗転]した状態がそのまま持続するはず
+        // （scene_transition_resets_blackout_per_spec の「[場面転換]で解除される」ケースとの
+        // 対比 — 明示的な解除が無ければ境界を越えても解除されない）。
+        let ch1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![blackout_on(), dialog(Some("A"), vec!["ch1"])],
+            )],
+        );
+        let ch2 = chapter(2, vec![scene("2-1", vec![dialog(Some("B"), vec!["ch2"])])]);
+        let doc = document_with_chapters(vec![ch1, ch2]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "ch1の台詞からch2の台詞へ進めるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(
+            pb.is_blackout(),
+            "[場面転換]を挟まない限り、暗転状態はチャプター境界をまたいでも持続するはず"
+        );
+    }
+
+    #[test]
+    fn choice_event_does_not_affect_blackout_state() {
+        // `choice_event_does_not_affect_event_image_state` の暗転版。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![blackout_on(), choice(vec![("yes", "1-2")])]),
+                scene("1-2", vec![dialog(Some("A"), vec!["後"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
+
+        assert!(
+            pb.select_current_choice(),
+            "有効な jump 先なので成功するはず"
+        );
+        assert!(
+            pb.is_blackout(),
+            "Choiceを挟んでも暗転状態はリセットされず、jump先のLineに引き継がれるはず"
+        );
+    }
+
+    #[test]
+    fn is_blackout_true_while_choice_is_current_item() {
+        let doc = doc_single_scene(vec![blackout_on(), choice(vec![("yes", "1-1")])]);
+        let pb = Playback::from_document(&doc);
+        assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
+        assert!(
+            pb.is_blackout(),
+            "暗転中にChoice itemが現在位置にあるときもtrueを返すはず"
+        );
+    }
+
+    #[test]
+    fn is_blackout_false_at_document_start_with_zero_items() {
+        let doc = doc_single_scene(vec![]);
+        let pb = Playback::from_document(&doc);
+        assert!(!pb.is_blackout(), "itemsが空のときはfalseのはず");
+    }
+
+    #[test]
+    fn is_blackout_false_when_index_past_end() {
+        // "1-1": [暗転]+台詞+Choice("1-2"へjump)、"1-2": イベント0件かつ最終シーン。
+        // select_current_choice で index が items.len()（範囲外）になる
+        // （既存回帰テスト `position_after_jumping_into_zero_item_last_scene_does_not_panic`
+        // と同じ構図の暗転版）。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        blackout_on(),
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "1-2")]),
+                    ],
+                ),
+                scene("1-2", vec![]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "台詞→Choiceへ進めるはず");
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+        assert!(pb.is_at_end(), "0件シーンへのjumpは末尾扱いのはず");
+
+        assert!(
+            !pb.is_blackout(),
+            "indexが範囲外のときはpanicせずfalseを返すはず（直前が[暗転]中でも）"
+        );
+    }
+
+    #[test]
+    fn blackout_jump_target_uses_document_order_baked_state_not_dynamic() {
+        // "1-1": [暗転]→台詞A（baked=true）→Choice("1-2"へ)
+        // "1-2": [暗転解除]→台詞B（baked=false）→Choice("1-1"へ戻る)
+        //
+        // "1-2"（暗転off状態）から"1-1"へ戻ると、実行時の直前状態（off）が引き継がれるのでは
+        // なく、ドキュメントを最初から線形走査した時点でその item に焼き付けられた値
+        // （"1-1"の台詞Aはon）がそのまま復元されることを確認する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        blackout_on(),
+                        dialog(Some("A"), vec!["暗転中の台詞"]),
+                        choice(vec![("進む", "1-2")]),
+                    ],
+                ),
+                scene(
+                    "1-2",
+                    vec![
+                        blackout_off(),
+                        dialog(Some("B"), vec!["解除後の台詞"]),
+                        choice(vec![("戻る", "1-1")]),
+                    ],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.is_blackout(), "1-1の台詞Aは暗転中のはず");
+        assert!(pb.advance(), "台詞A→Choiceへ進めるはず");
+        assert!(pb.select_current_choice(), "1-2へjumpできるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(!pb.is_blackout(), "1-2の台詞Bは暗転解除後のはず");
+
+        assert!(pb.advance(), "台詞B→Choiceへ進めるはず");
+        assert!(pb.select_current_choice(), "1-1へ戻るjumpができるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("A"),
+            "1-1のscene_startである台詞Aへ戻るはず"
+        );
+        assert!(
+            pb.is_blackout(),
+            "戻る直前(1-2)は暗転offだったが、jump先の状態はそこから引き継がれるのではなく、\
+             ドキュメント走査時にそのitem自身に焼き付けられた値(on)であるはず"
+        );
+    }
+
+    #[test]
+    fn later_blackout_off_after_on_within_same_scene_toggles_mid_scene() {
+        let doc = doc_single_scene(vec![
+            blackout_on(),
+            dialog(Some("A"), vec!["1回目の暗転中"]),
+            blackout_off(),
+            dialog(Some("B"), vec!["解除後"]),
+            blackout_on(),
+            dialog(Some("C"), vec!["2回目の暗転中"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.is_blackout(), "1回目の[暗転]直後はtrue");
+        assert!(pb.advance());
+        assert!(!pb.is_blackout(), "[暗転解除]直後はfalse");
+        assert!(pb.advance());
+        assert!(pb.is_blackout(), "2回目の[暗転]直後は再びtrue");
+    }
+
+    #[test]
+    fn blackout_from_lines_constructor_defaults_to_false() {
+        let mut pb = Playback::from_lines(vec![
+            dline(Some("A"), vec!["1"]),
+            dline(Some("B"), vec!["2"]),
+        ]);
+        assert!(
+            !pb.is_blackout(),
+            "from_lines経由のPlaybackはitem_blackoutが全件falseのはず"
+        );
+        assert!(pb.advance());
+        assert!(!pb.is_blackout());
+    }
+
+    // ---- #475: 暗転で終わるイベント絵の自動連続表示（Wait直後のBlackoutを検出する拡張）----
+
+    #[test]
+    fn build_event_image_wait_followed_by_blackout_creates_terminal_blackout_item() {
+        // Issue #475 の核心ケース: `[イベント絵:C][待機:200][暗転]` の後に会話行が一つも
+        // 続かない（シーン末尾）。旧実装（#497単体）ではWaitの後に来るBlackoutを孤立イベント
+        // として素通りさせるだけで、暗転を運ぶitemが生成されず、自動送りが着地する先が
+        // 無いまま終わっていた。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["目を閉じていく"]),
+            event_image("eyes_closing_3.webp"),
+            wait(200),
+            blackout_on(),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(!pb.is_blackout(), "会話行の時点ではまだ暗転していない");
+        assert!(pb.advance(), "会話行から画像コマitemへ進めるはず");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert!(!pb.is_blackout(), "画像コマ表示中はまだ暗転前のはず");
+
+        assert!(
+            pb.advance(),
+            "待機経過後、暗転を運ぶ独立itemへ進めるはず（Issue #475本体）"
+        );
+        assert!(
+            pb.is_blackout(),
+            "着地したitemはis_blackout()==trueを返すはず"
+        );
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "暗転item自体はさらなる自動送りを持たないはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "暗転itemがドキュメント最後のitemなので終端扱いのはず"
+        );
+        let line = pb
+            .current_line()
+            .expect("暗転itemも直前会話行を引き継いだDisplayLineを持つはず");
+        assert_eq!(line.speaker.as_deref(), Some("A"));
+        assert_eq!(
+            line.event_image.as_deref(),
+            Some("eyes_closing_3.webp"),
+            "event_imageは直前の画像コマから引き継がれるはず"
+        );
+    }
+
+    #[test]
+    fn full_four_frame_chain_auto_advances_to_blackout_in_one_click_sequence() {
+        // Issue #475 が明示的に挙げる原稿形: `[イベント絵:A][待機][イベント絵:B][待機]
+        // [イベント絵:C][待機][暗転]`。3コマ分のWait連鎖をadvance()で辿った末に暗転へ
+        // 着地することを確認する（4コマ目=暗転そのもの、という設計）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["目を開けている"]),
+            event_image("eyes_1.webp"),
+            wait(200),
+            event_image("eyes_2.webp"),
+            wait(200),
+            event_image("eyes_3.webp"),
+            wait(200),
+            blackout_on(),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 1コマ目");
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("eyes_1.webp")
+        );
+        assert!(pb.advance(), "1コマ目 -> 2コマ目");
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("eyes_2.webp")
+        );
+        assert!(pb.advance(), "2コマ目 -> 3コマ目");
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("eyes_3.webp")
+        );
+        assert!(!pb.is_blackout());
+
+        assert!(pb.advance(), "3コマ目 -> 暗転itemへ");
+        assert!(pb.is_blackout(), "連鎖の最後に暗転へ到達するはず");
+        assert!(pb.is_at_end());
+    }
+
+    #[test]
+    fn event_image_wait_blackout_pattern_consumes_exactly_three_events() {
+        // Blackout検出により消費イベント数が2→3に変わるぶん、直後に続くはずの
+        // 別イベントを誤って飲み込んでいないか（境界の1個ずれ）を確認する。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            wait(100),
+            blackout_on(),
+            dialog(Some("B"), vec!["暗転後も台詞は続く"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem（前に会話行が無い）なので、advance無しで
+        // 最初から画像コマitemに位置している。
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+        assert!(!pb.is_blackout(), "画像コマ表示中はまだ暗転前のはず");
+
+        assert!(pb.advance(), "画像コマ -> 暗転item");
+        assert!(pb.is_blackout());
+        assert!(
+            !pb.is_at_end(),
+            "暗転itemの後にまだ台詞が残っているので終端ではないはず"
+        );
+
+        assert!(
+            pb.advance(),
+            "暗転item -> 次の台詞へ（3イベント消費の直後）"
+        );
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert!(
+            pb.is_blackout(),
+            "[暗転解除]が無い限り、後続の台詞も暗転状態を引き継ぐはず"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_followed_by_blackout_off_also_creates_terminal_item() {
+        // Issue #475 のスコープはBlackout::Onのみだが、実装はBlackoutのaction種別を
+        // 区別せず同じ経路を通るため、Offも自然にカバーされる（無理に両対応する必要は
+        // 無いが、実装が対応できているならそれでよいという方針の確認）。
+        let doc = doc_single_scene(vec![
+            blackout_on(),
+            dialog(Some("A"), vec!["暗転中"]),
+            event_image("a.webp"),
+            wait(50),
+            blackout_off(),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.is_blackout());
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert!(pb.is_blackout(), "画像コマ表示中はまだ暗転解除前のはず");
+
+        assert!(pb.advance(), "画像コマ -> 暗転解除itemへ");
+        assert!(
+            !pb.is_blackout(),
+            "[暗転解除]を運ぶitemに着地したのでfalseになるはず"
+        );
+        assert!(pb.is_at_end());
+    }
+
+    #[test]
+    fn item_blackout_stays_aligned_with_items_across_event_image_wait_chain() {
+        // マージ由来のバグ回帰ガード: EventImage+Waitの高速パスがitem_blackoutへのpushを
+        // 欠いていると、以降の全itemのis_blackout()判定がインデックス1個分ズレて誤った
+        // 値を返すようになる（#512統合時に見落とされていた、#475実装時に発見）。
+        // 画像コマitemを複数回経由した後も、暗転状態と直後の通常会話行の暗転状態の両方が
+        // 正しく読めることを確認する。
+        let doc = doc_single_scene(vec![
+            blackout_on(),
+            dialog(Some("A"), vec!["1"]),
+            event_image("a.webp"),
+            wait(10),
+            event_image("b.webp"),
+            wait(10),
+            dialog(Some("B"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.is_blackout(), "台詞Aの時点で暗転中");
+        assert!(pb.advance(), "台詞A -> 画像コマ1");
+        assert!(
+            pb.is_blackout(),
+            "画像コマ1もitem_blackoutのpush漏れなくtrueを読めるはず"
+        );
+        assert!(pb.advance(), "画像コマ1 -> 画像コマ2");
+        assert!(pb.is_blackout(), "画像コマ2もtrueのはず");
+        assert!(pb.advance(), "画像コマ2 -> 台詞B");
+        let line = pb.current_line().expect("line");
+        assert_eq!(
+            line.speaker.as_deref(),
+            Some("B"),
+            "item_blackoutのズレが無ければ台詞Bに正しく着地するはず"
+        );
+        assert!(
+            pb.is_blackout(),
+            "台詞Bもindexズレが無ければ引き続き暗転中と読めるはず"
+        );
+        assert!(pb.is_at_end());
+    }
+
+    // ---- #475 追加分: Blackout誤検出の否定側・隣接パターンの明示的固定 ----
+
+    #[test]
+    fn build_event_image_wait_followed_by_choice_consumes_only_two_events_not_three() {
+        // Wait直後がBlackoutではなくChoiceの場合、誤って3消費（Blackout用の分岐）に
+        // ならず、従来どおり2消費のままChoiceが独立したPlaybackItem::Choiceとして
+        // 生成されることを確認する（Blackout誤検出の否定側）。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            wait(100),
+            choice(vec![("進む", "dummy-target")]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem（前に会話行が無い）。
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+        assert!(!pb.is_blackout());
+
+        assert!(
+            pb.advance(),
+            "画像コマ -> Choice item（2消費のまま、3消費でChoiceを飲み込まない）"
+        );
+        assert!(
+            pb.current_choice().is_some(),
+            "Choiceが暗転itemに化けず通常のChoiceとして現在位置になっているはず"
+        );
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "Choice itemは自動送りを持たないはず"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "Blackoutと誤検出されていなければ暗転状態はfalseのままのはず"
+        );
+    }
+
+    #[test]
+    fn build_event_image_wait_followed_by_narration_resumes_narration_line() {
+        // Wait直後がDialogではなくNarrationの場合も、同じ「_」分岐の経路で正しく
+        // PlaybackItem::Lineが生成されることを明示的に固定する回帰ガード。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["まもなく静かになる"]),
+            event_image("a.webp"),
+            wait(50),
+            narration(vec!["静かな場面だった。"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(pb.pending_wait_ms(), Some(50));
+
+        assert!(pb.advance(), "画像コマ -> ナレーションitemへ");
+        let line = pb.current_line().expect("ナレーション行があるはず");
+        assert_eq!(line.speaker, None, "Narrationなのでspeakerは常にNoneのはず");
+        assert_eq!(line.text, vec!["静かな場面だった。".to_string()]);
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "通常のLine itemは自動送りを持たないはず"
+        );
+        assert!(!pb.is_blackout());
+    }
+
+    #[test]
+    fn build_event_image_wait_zero_ms_followed_by_blackout_still_creates_terminal_item() {
+        // `[イベント絵][待機:0][暗転]`（ms=0とBlackout検出の組み合わせ）でも、Wait自体は
+        // Some(0)として存在するため検出は素通りせず、3消費・暗転itemが正しく生成される
+        // ことを確認する（Some(0)をNone扱いしてしまう実装だと壊れる境界）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["ゼロ待機のまま暗転"]),
+            event_image("a.webp"),
+            wait(0),
+            blackout_on(),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(
+            pb.pending_wait_ms(),
+            Some(0),
+            "ms=0でもSome(0)として保持されるはず"
+        );
+        assert!(!pb.is_blackout());
+
+        assert!(
+            pb.advance(),
+            "画像コマ -> 暗転itemへ（ms=0でも3消費されるはず）"
+        );
+        assert!(pb.is_blackout(), "暗転itemに正しく着地しているはず");
+        assert_eq!(pb.pending_wait_ms(), None);
+        assert!(pb.is_at_end());
+    }
+
+    #[test]
+    fn build_event_image_wait_blackout_before_any_dialog_has_none_speaker_and_empty_text() {
+        // 会話行が一度も無い状態で`[イベント絵][待機][暗転]`が来た場合、current_speaker/
+        // current_textの初期値（None/空Vec）がそのまま暗転itemへ焼き付けられ、
+        // speaker=None・text=空Vecになることを明示的に確認する。
+        let doc = doc_single_scene(vec![event_image("a.webp"), wait(10), blackout_on()]);
+        let mut pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem。
+        let first = pb.current_line().expect("画像コマのline");
+        assert_eq!(first.speaker, None, "会話行が無いのでspeakerはNoneのはず");
+        assert_eq!(
+            first.text,
+            Vec::<String>::new(),
+            "会話行が無いのでtextは空Vecのはず"
+        );
+
+        assert!(pb.advance(), "画像コマ -> 暗転itemへ");
+        assert!(pb.is_blackout());
+        let line = pb.current_line().expect("暗転itemのline");
+        assert_eq!(
+            line.speaker, None,
+            "暗転itemも会話行未経験のままspeaker=Noneを引き継ぐはず"
+        );
+        assert_eq!(
+            line.text,
+            Vec::<String>::new(),
+            "暗転itemも会話行未経験のままtext=空Vecを引き継ぐはず"
+        );
+    }
+
+    #[test]
+    fn build_event_image_wait_blackout_then_wait_again_does_not_chain_further_automatically() {
+        // `[イベント絵][待機][暗転][待機][イベント絵]`（暗転後にさらにWait連鎖が続く
+        // ネストケース）。暗転itemは連鎖の終端であるという設計（モジュール冒頭docの
+        // 「暗転item自体はさらなる自動送りを持たない」）どおり、2つ目のWaitは孤立Waitとして
+        // 無視され（Dialog/Narrationではないためitem化されない）、後続のEventImageも
+        // 単独のEventImage（直後にWaitが無い）なのでitem化されず、暗転itemの後には
+        // 何のitemも増えないことを確認する。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            wait(10),
+            blackout_on(),
+            wait(20),
+            event_image("b.webp"),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.pending_wait_ms(), Some(10), "1つ目の画像コマitem");
+
+        assert!(pb.advance(), "画像コマ -> 暗転itemへ");
+        assert!(pb.is_blackout());
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "暗転item自体はさらなる自動送りを持たないはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "暗転後の[待機][イベント絵]は新たな連鎖を作らず、暗転itemが最後のitemのままのはず"
+        );
+
+        assert!(
+            !pb.advance(),
+            "終端の暗転itemからはこれ以上進めないはず（後続のEventImageへ自動で乗らない）"
+        );
+        assert!(
+            pb.is_blackout(),
+            "advance失敗後も暗転itemに留まっているはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_resolves_correctly_when_blackout_item_is_only_item_in_target_scene() {
+        // 選択肢確定によるシーンジャンプが、暗転itemが挟まる/暗転itemのみで構成される
+        // シーン（このシーンのitemsは「画像コマ item」+「暗転item」の2件だけで、
+        // 通常のLine itemを1件も持たない）でも、scene_startの解決とitem_blackoutの
+        // インデックス整合が崩れないことを確認する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["目を閉じる？"]),
+                        choice(vec![("はい", "1-2")]),
+                    ],
+                ),
+                scene(
+                    "1-2",
+                    vec![event_image("eyes_closed.webp"), wait(30), blackout_on()],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> Choiceへ");
+        assert!(pb.current_choice().is_some());
+
+        assert!(
+            pb.select_current_choice(),
+            "1-2への jump は成功するはず（1-2はitemを2件持つので有効なscene_start）"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "jump直後は画像コマitemなのでまだ暗転前のはず"
+        );
+        assert_eq!(pb.pending_wait_ms(), Some(30));
+        let line = pb.current_line().expect("画像コマのline");
+        assert_eq!(line.event_image.as_deref(), Some("eyes_closed.webp"));
+
+        assert!(
+            pb.advance(),
+            "画像コマ -> 暗転item（1-2シーン内で唯一の後続item）へ"
+        );
+        assert!(
+            pb.is_blackout(),
+            "jump先シーン内の暗転itemへ正しく着地しているはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "暗転itemがドキュメント最後のitemなので終端扱いのはず"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_then_blackout_across_scene_boundary_is_not_detected() {
+        // 既知の制約1（モジュール冒頭doc・#475コメント参照）を固定するテスト。
+        // `[イベント絵][待機]` がシーンA末尾、`[暗転]` がシーンB先頭という原稿では、
+        // Wait+Blackoutパターンの探索が `events.get(event_index + 1/+2)`
+        // （`&scene.events` というシーンスコープのみ）しか見ないため、シーンBの
+        // `[暗転]` を検出できず、暗転を運ぶ独立itemが生成されない（検出漏れ）。
+        // 同一シーン内に収まるケースを固定した
+        // `build_event_image_wait_followed_by_blackout_creates_terminal_blackout_item`
+        // との対比で、シーン境界をまたぐと非対応になるという仕様上の制約を
+        // コードレベルでも担保する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["目を閉じていく"]),
+                        event_image("eyes_closing_3.webp"),
+                        wait(200),
+                    ],
+                ),
+                scene("1-2", vec![blackout_on()]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert!(!pb.is_blackout(), "画像コマ表示中はまだ暗転前のはず");
+
+        // シーンBの[暗転]が検出漏れになるため、画像コマitemがそのままドキュメント
+        // 最後のitemになってしまう（同一シーン内パターンなら、ここからさらに暗転item
+        // へ進めるはずだった）。
+        assert!(
+            pb.is_at_end(),
+            "シーン境界をまたいだBlackoutは検出されず画像コマitemが終端になる（既知の制約1）"
+        );
+        assert!(
+            !pb.advance(),
+            "検出漏れにより暗転item自体が存在せず進めない"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "暗転itemが生成されないため、シーンBのBlackout::OnがcurrentBlackoutを\
+             trueにしてもis_blackout()はfalseのまま反映されない"
+        );
+    }
+
+    // ---- #524: Event::SceneTransition のイベント絵クリア（GUI版eventImageLayer.remove()整合）----
+
+    /// `scene_transition_resets_blackout_per_spec` の event_image 版。既存テストは
+    /// `is_blackout()` のみを検証しており、`[イベント絵][B台詞][場面転換][C台詞]` という
+    /// 原稿で `[場面転換]` 後の `C` の `event_image` がクリアされることは未検証だった
+    /// （#524 の回帰テスト）。
+    #[test]
+    fn scene_transition_clears_event_image_per_spec() {
+        let doc = doc_single_scene(vec![
+            event_image("bg_a.webp"),
+            dialog(Some("B"), vec!["場面転換前の台詞"]),
+            Event::SceneTransition,
+            dialog(Some("C"), vec!["場面転換後の台詞"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("bg_a.webp"),
+            "[場面転換]前の台詞はまだイベント絵を引き継いでいるはず"
+        );
+
+        assert!(pb.advance(), "場面転換後の台詞へ進めるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("C")
+        );
+        assert_eq!(
+            pb.current_line().expect("line").event_image,
+            None,
+            "[場面転換]はGUI版のeventImageLayer.remove()相当でイベント絵もクリアするはず（#524）"
+        );
+    }
+
+    // ---- #524: Wait直後のSceneTransition検出（#475 Blackout版と対になる拡張）----
+
+    #[test]
+    fn build_event_image_wait_followed_by_scene_transition_creates_terminal_item() {
+        // `build_event_image_wait_followed_by_blackout_creates_terminal_blackout_item` の
+        // Event::SceneTransition版（#524）。`[イベント絵][待機][場面転換]` で終わる原稿でも、
+        // 場面転換後の状態（暗転解除＋イベント絵クリア）を焼き付けたitemが生成されるはず
+        // （旧実装ではBlackoutとは非対称にitemが生成されなかった）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["目を閉じていく"]),
+            event_image("eyes_closing_3.webp"),
+            wait(200),
+            Event::SceneTransition,
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(!pb.is_blackout(), "会話行の時点ではまだ暗転していない");
+        assert!(pb.advance(), "会話行から画像コマitemへ進めるはず");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("eyes_closing_3.webp")
+        );
+
+        assert!(
+            pb.advance(),
+            "待機経過後、場面転換後の状態を運ぶ独立itemへ進めるはず（Issue #524本体）"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "着地したitemはis_blackout()==falseのはず（Blackout版と違い暗転は運ばない）"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").event_image,
+            None,
+            "終端itemはeventImageLayer.remove()相当でevent_imageがクリアされているはず"
+        );
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "場面転換item自体はさらなる自動送りを持たないはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "場面転換itemがドキュメント最後のitemなので終端扱いのはず"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_scene_transition_pattern_consumes_exactly_three_events() {
+        // `event_image_wait_blackout_pattern_consumes_exactly_three_events` の
+        // Event::SceneTransition版（#524）。SceneTransition検出により消費イベント数が
+        // 2→3に変わるぶん、直後に続くはずの別イベントを誤って飲み込んでいないか
+        // （境界の1個ずれ）を確認する。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            wait(100),
+            Event::SceneTransition,
+            dialog(Some("B"), vec!["場面転換後も台詞は続く"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem（前に会話行が無い）なので、advance無しで
+        // 最初から画像コマitemに位置している。
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+
+        assert!(pb.advance(), "画像コマ -> 場面転換後の状態を運ぶitemへ");
+        assert!(!pb.is_blackout());
+        assert_eq!(pb.current_line().expect("line").event_image, None);
+        assert!(
+            !pb.is_at_end(),
+            "場面転換itemの後にまだ台詞が残っているので終端ではないはず"
+        );
+
+        assert!(
+            pb.advance(),
+            "場面転換item -> 次の台詞へ（3イベント消費の直後）"
+        );
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert_eq!(
+            line.event_image, None,
+            "[場面転換]で解除された状態を後続の台詞も引き継ぐはず"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_then_scene_transition_across_scene_boundary_is_not_detected() {
+        // `event_image_wait_then_blackout_across_scene_boundary_is_not_detected` の
+        // Event::SceneTransition版（#524）。既知の制約1（`events` がシーンスコープのみを
+        // 見る）はBlackoutだけでなくSceneTransitionにも同様に効く —
+        // `[イベント絵][待機]` がシーンA末尾、`[場面転換]` がシーンB先頭という原稿では
+        // このパターンに一致せず検出漏れになる。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["目を閉じていく"]),
+                        event_image("eyes_closing_3.webp"),
+                        wait(200),
+                    ],
+                ),
+                scene("1-2", vec![Event::SceneTransition]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+
+        // シーンBの[場面転換]が検出漏れになるため、画像コマitemがそのままドキュメント
+        // 最後のitemになってしまう（同一シーン内パターンなら、ここからさらに場面転換後
+        // itemへ進めるはずだった）。
+        assert!(
+            pb.is_at_end(),
+            "シーン境界をまたいだSceneTransitionは検出されず画像コマitemが終端になる（既知の制約1）"
+        );
+        assert!(
+            !pb.advance(),
+            "検出漏れにより場面転換を運ぶitem自体が存在せず進めない"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("eyes_closing_3.webp"),
+            "場面転換itemが生成されないため、シーンBのSceneTransitionがcurrent_event_imageを\
+             Noneにしてもevent_imageはクリア前の値のまま反映されない"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_blackout_scene_transition_chain_only_creates_blackout_item() {
+        // `[イベント絵][待機][暗転][場面転換]` という4連続パターン（既知の制約2、
+        // モジュール冒頭doc・#524コメント参照。#524で明示的に固定する現状の実装挙動）。
+        // Wait直後の検出は `if let Some(Blackout) ... else if matches!(SceneTransition)`
+        // の順で判定するためBlackoutが優先され、Blackoutが見つかった時点でconsumed=3として
+        // 打ち切る。後続のSceneTransitionはこの特別処理の対象にならず、通常のmatchアーム
+        // （`Event::SceneTransition => {..}`）でstateだけが更新されitemは生成されない。
+        // 結果として暗転itemだけが生成され、SceneTransitionの効果（暗転解除・イベント絵
+        // クリア）はどのitemにも反映されない。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["目を閉じていく"]),
+            event_image("eyes_closing_3.webp"),
+            wait(200),
+            blackout_on(),
+            Event::SceneTransition,
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert!(!pb.is_blackout(), "画像コマ表示中はまだ暗転前のはず");
+
+        assert!(
+            pb.advance(),
+            "画像コマ -> 暗転item（Blackoutが優先されSceneTransitionは検出対象にならない）"
+        );
+        assert!(
+            pb.is_blackout(),
+            "検出されたのはBlackoutのため、着地したitemはis_blackout()==trueのはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("line").event_image.as_deref(),
+            Some("eyes_closing_3.webp"),
+            "Blackout経路はcurrent_event_imageをクリアしないため引き継がれるはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "後続のSceneTransitionはstateを更新するだけでitemを生成しないため、\
+             暗転itemがドキュメント最後のitemになるはず"
+        );
+        assert!(
+            !pb.advance(),
+            "SceneTransitionからitemが生成されないため、これ以上は進めない"
+        );
+    }
+
+    // ---- #509: Event::Flag / Event::Condition のリアルタイム評価テスト ----
+
+    #[test]
+    fn condition_reflects_flag_set_earlier_in_the_same_scene_but_not_when_flag_comes_after() {
+        // フラグが先・条件が後: 同一シーン内で即座に反映され、条件内の台詞が最初のitemになる。
+        let doc = doc_single_scene(vec![
+            flag_event("x", true),
+            condition_event("x", vec![dialog(Some("カコ"), vec!["表示されるはず"])]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        let line = pb
+            .current_line()
+            .expect("フラグ成立後の条件内台詞が最初のitemのはず");
+        assert_eq!(line.speaker.as_deref(), Some("カコ"));
+        assert_eq!(line.text, vec!["表示されるはず".to_string()]);
+
+        // 条件が先・フラグが後: まだフラグが立っていない時点で評価されるため表示されない。
+        let doc_reversed = doc_single_scene(vec![
+            condition_event("y", vec![dialog(Some("カコ"), vec!["表示されないはず"])]),
+            flag_event("y", true),
+        ]);
+        let pb_reversed = Playback::from_document(&doc_reversed);
+        assert_eq!(
+            pb_reversed.current_line(),
+            None,
+            "条件評価時点ではyが未設定なので条件内の台詞は一切itemにならないはず"
+        );
+        assert!(pb_reversed.is_at_end(), "後続イベントが無いので末尾のはず");
+    }
+
+    #[test]
+    fn condition_reflects_flag_set_in_an_earlier_scene_after_crossing_scene_boundary() {
+        // シーン "1-1" でフラグを立て、選択肢を介さずドキュメント順で "1-2" へ advance() した際に
+        // "1-2" 内の条件付き台詞が反映されることを確認する（#509）。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        flag_event("seen", true),
+                        dialog(Some("A"), vec!["最初のシーン"]),
+                    ],
+                ),
+                scene(
+                    "1-2",
+                    vec![condition_event(
+                        "seen",
+                        vec![dialog(Some("B"), vec!["Aを見た後"])],
+                    )],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.current_line().expect("1-1の台詞").speaker.as_deref(),
+            Some("A")
+        );
+
+        assert!(pb.advance(), "シーン境界を越えて1-2へ進めるはず");
+        let line = pb
+            .current_line()
+            .expect("1-2の条件付き台詞がseen=true成立で表示されるはず");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert_eq!(line.text, vec!["Aを見た後".to_string()]);
+    }
+
+    #[test]
+    fn condition_result_depends_on_actual_path_taken_not_document_position() {
+        // ハブ → ルートA（seen_aを立てる）→ ハブへ戻る → ルートB、という経路をたどると
+        // ルートB内の `[条件: seen_a]` が表示される。同じドキュメント上の位置でも、
+        // ハブから最初からルートBへ直接進んだ場合（ルートAを未経由）は表示されない —
+        // これが #509 の核心（経路依存の評価）。
+        fn hub_doc() -> Document {
+            let ch1 = chapter(
+                1,
+                vec![
+                    scene(
+                        "hub",
+                        vec![
+                            dialog(Some("Hub"), vec!["ハブ"]),
+                            choice(vec![("Aへ", "route-a"), ("Bへ", "route-b")]),
+                        ],
+                    ),
+                    scene(
+                        "route-a",
+                        vec![
+                            dialog(Some("A"), vec!["ルートA"]),
+                            flag_event("seen_a", true),
+                            choice(vec![("ハブへ戻る", "hub")]),
+                        ],
+                    ),
+                    scene(
+                        "route-b",
+                        vec![
+                            condition_event(
+                                "seen_a",
+                                vec![dialog(Some("B2"), vec!["Aを見た後のB"])],
+                            ),
+                            dialog(Some("B"), vec!["ルートB"]),
+                        ],
+                    ),
+                ],
+            );
+            document_with_chapters(vec![ch1])
+        }
+
+        // 経路1: ハブ → A → ハブ → B（Aを経由してからBへ）。
+        let doc = hub_doc();
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "ハブの台詞 -> Choiceへ");
+        assert!(
+            pb.select_current_choice(),
+            "カーソル0（Aへ）でroute-aへjumpできるはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("route-aの台詞").speaker.as_deref(),
+            Some("A")
+        );
+        assert!(
+            pb.advance(),
+            "route-aの台詞 -> フラグ設定を経てChoiceへ進めるはず"
+        );
+        assert!(
+            pb.select_current_choice(),
+            "「ハブへ戻る」でhubへjumpできるはず"
+        );
+        assert_eq!(
+            pb.current_line()
+                .expect("再訪したhubの台詞")
+                .speaker
+                .as_deref(),
+            Some("Hub")
+        );
+        assert!(pb.advance(), "再訪hubの台詞 -> Choiceへ");
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice().expect("choice").1,
+            1,
+            "カーソルはBへ（index 1）動いているはず"
+        );
+        assert!(
+            pb.select_current_choice(),
+            "Bへ選択してroute-bへjumpできるはず"
+        );
+        let line = pb
+            .current_line()
+            .expect("route-aを経由済みなのでseen_a成立、条件内の台詞が表示されるはず");
+        assert_eq!(line.speaker.as_deref(), Some("B2"));
+        assert_eq!(line.text, vec!["Aを見た後のB".to_string()]);
+
+        // 経路2: ハブから直接B（Aを未経由）。同じドキュメント位置でも結果が変わる。
+        let doc_direct = hub_doc();
+        let mut pb_direct = Playback::from_document(&doc_direct);
+        assert!(pb_direct.advance(), "ハブの台詞 -> Choiceへ");
+        pb_direct.move_choice_cursor_down();
+        assert_eq!(pb_direct.current_choice().expect("choice").1, 1);
+        assert!(
+            pb_direct.select_current_choice(),
+            "Bへ選択してroute-bへjumpできるはず"
+        );
+        let line_direct = pb_direct
+            .current_line()
+            .expect("route-bの最初の台詞（Aを未経由なので条件内はスキップされるはず）");
+        assert_eq!(
+            line_direct.speaker.as_deref(),
+            Some("B"),
+            "seen_a未成立なので条件内のB2は生成されず、通常のBが最初のitemになるはず"
+        );
+        assert_eq!(line_direct.text, vec!["ルートB".to_string()]);
+    }
+
+    #[test]
+    fn total_call_does_not_mutate_playback_state() {
+        // セルフレビュー対応（#509）: total() は独立の使い捨て状態で試し計算するだけで、
+        // 実プレイの現在位置・flags・items を変えてはならない。キャッシュ導入後も
+        // この不変条件が壊れていないことを確認する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["最初のシーン"]),
+                        flag_event("unlocked", true),
+                    ],
+                ),
+                scene(
+                    "1-2",
+                    vec![condition_event(
+                        "unlocked",
+                        vec![dialog(Some("B"), vec!["解禁後だけ見える"])],
+                    )],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let pb = Playback::from_document(&doc);
+
+        let line_before = pb.current_line().cloned();
+        let position_before = pb.position();
+        let is_at_end_before = pb.is_at_end();
+        let generation_before = pb.flags.generation();
+        let items_len_before = pb.items.len();
+
+        // 複数回呼ぶ（キャッシュ経路も含めて）。
+        let total_first_call = pb.total();
+        let total_second_call = pb.total();
+        assert_eq!(
+            total_first_call, total_second_call,
+            "同じflags状態での複数回呼び出しは同じ値を返すはず（キャッシュ有無に関わらず）"
+        );
+
+        assert_eq!(
+            pb.current_line().cloned(),
+            line_before,
+            "total()の呼び出しが実プレイ位置のcurrent_lineを変えてはならない"
+        );
+        assert_eq!(
+            pb.position(),
+            position_before,
+            "total()の呼び出しがposition()を変えてはならない"
+        );
+        assert_eq!(
+            pb.is_at_end(),
+            is_at_end_before,
+            "total()の呼び出しがis_at_end()を変えてはならない"
+        );
+        assert_eq!(
+            pb.flags.generation(),
+            generation_before,
+            "total()は使い捨てのflags.clone()で試し計算するだけで、実プレイのflags状態を\
+             変えてはならない"
+        );
+        assert_eq!(
+            pb.items.len(),
+            items_len_before,
+            "total()の呼び出しが実プレイのitemsを追記してはならない（遅延ビルドは\
+             advance()/select_current_choice()経由でのみ起こる）"
+        );
+    }
+
+    #[test]
+    fn total_reflects_real_play_flags_and_cache_invalidates_when_flags_change() {
+        // セルフレビュー対応（#509）: total()のキャッシュは self.flags.generation() を
+        // キーにしているため、実プレイでflagsが変化すれば再計算され、古い値を使い回さない
+        // ことを確認する。
+        //
+        // シーン宣言順は route-b → route-a（total()の全件スキャンは`scene_order`の
+        // 登録順=このドキュメント宣言順で行われる）。route-bの`[条件: seen_a]`は
+        // ドキュメント順ではroute-aのフラグ設定より*前*に出現するため、total()の
+        // スキャンが自前で辿るだけでは（route-a未到達の時点で）まだ成立していない。
+        // しかし実プレイでroute-aへ進みseen_aを実際に立てた後は、total()の起点
+        // （self.flags.clone()）がseen_a=trueを持つため、route-bの条件付き行も
+        // カウントに含まれるようになる——「同じドキュメント位置でも実プレイの経路次第で
+        // 結果が変わる」という#509の核心が、total()の起点にも及ぶことの検証。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "route-b",
+                    vec![
+                        dialog(Some("Intro"), vec!["導入"]),
+                        condition_event("seen_a", vec![dialog(Some("B2"), vec!["Aを見た後"])]),
+                    ],
+                ),
+                scene(
+                    "route-a",
+                    vec![
+                        dialog(Some("A"), vec!["ルートA"]),
+                        flag_event("seen_a", true),
+                    ],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        let total_before = pb.total();
+        assert_eq!(
+            total_before, 2,
+            "total()自身のスキャンではroute-b条件評価時点でseen_aがまだ未設定のため、\
+             Intro + Aの2行のはず（B2は含まれない）"
+        );
+
+        let generation_before = pb.flags.generation();
+        assert!(
+            pb.advance(),
+            "Intro -> シーン境界を越えてroute-aのAへ進めるはず"
+        );
+        assert_ne!(
+            pb.flags.generation(),
+            generation_before,
+            "advance()でroute-aのEvent::Flagが実行されたので世代番号が進むはず"
+        );
+
+        let total_after = pb.total();
+        assert_eq!(
+            total_after, 3,
+            "実プレイでseen_aが立った後は、total()の起点(self.flags.clone())が\
+             seen_a=trueを持つため、route-bのB2もカウントに含まれ3行になるはず\
+             （古いキャッシュ値2を誤って使い回していないことの確認）"
+        );
+    }
+
+    #[test]
+    fn condition_treats_string_and_number_flag_values_as_truthy_when_present_via_playback() {
+        // セルフレビュー対応（#509）: `GameFlags::check`のString/Number分岐
+        // （flags.rs側の単体テストでは検証済み）が、`build_scene_items`/`Playback`を
+        // 通した実際のCondition評価でも同じセマンティクスで機能することを統合的に確認する。
+        let doc = doc_single_scene(vec![
+            Event::Flag {
+                name: "route".to_string(),
+                value: FlagValue::String("A".to_string()),
+            },
+            condition_event(
+                "route",
+                vec![dialog(Some("B"), vec!["文字列フラグでも表示されるはず"])],
+            ),
+            Event::Flag {
+                name: "count".to_string(),
+                value: FlagValue::Number(0.0),
+            },
+            condition_event(
+                "count",
+                vec![dialog(
+                    Some("C"),
+                    vec!["数値0でも存在すればtrueなので表示されるはず"],
+                )],
+            ),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        let line = pb
+            .current_line()
+            .expect("文字列フラグの条件内台詞が最初のitemのはず");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+
+        assert!(pb.advance(), "B -> 数値フラグの条件内台詞へ進めるはず");
+        let line = pb
+            .current_line()
+            .expect("Number(0.0)も存在すればtrueなので条件内台詞が表示されるはず");
+        assert_eq!(line.speaker.as_deref(), Some("C"));
+
+        assert!(pb.is_at_end(), "後続イベントが無いので末尾のはず");
+    }
+
+    #[test]
+    fn flag_in_zero_item_scene_still_applies_when_auto_skip_passes_through_it() {
+        // セルフレビュー対応（#509）: `advance()`の「itemを1件も生成しなかったシーンは
+        // 読み飛ばす」ループ（本関数内の"このシーンはitemを1件も生成しなかった。さらに
+        // 次のシーンへ。"コメント参照）を通過するシーンが`Event::Flag`しか持たない場合でも、
+        // その副作用（flags.set）が読み飛ばされずに適用されることを確認する。#509以前は
+        // Flag/Conditionを一切処理していなかったため、この相互作用は今回のPRで初めて
+        // 意味を持つようになった組み合わせ。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![dialog(Some("A"), vec!["最初のシーン"])]),
+                // 表示可能なitemを1件も持たない、Event::Flagのみのシーン。
+                scene("1-2", vec![flag_event("mid", true)]),
+                scene(
+                    "1-3",
+                    vec![condition_event(
+                        "mid",
+                        vec![dialog(Some("B"), vec!["1-2のflagが効いているはず"])],
+                    )],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.current_line().expect("1-1の台詞").speaker.as_deref(),
+            Some("A")
+        );
+
+        assert!(
+            pb.advance(),
+            "1-1 -> item0件の1-2を読み飛ばして1-3の条件付き台詞まで進めるはず"
+        );
+        let line = pb
+            .current_line()
+            .expect("1-2のflag副作用が適用され1-3の条件が成立しているはず");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+    }
     // ---- #502: BGM (Event::Bgm) / SE (Event::Se) の追跡 ----
 
     fn bgm_play(path: &str) -> Event {
@@ -1919,15 +4817,7 @@ mod tests {
             vec![
                 scene(
                     "1-1",
-                    vec![
-                        bgm_play("amehure.ogg"),
-                        Event::Choice {
-                            options: vec![ChoiceOption {
-                                text: "yes".to_string(),
-                                jump: "1-2".to_string(),
-                            }],
-                        },
-                    ],
+                    vec![bgm_play("amehure.ogg"), choice(vec![("yes", "1-2")])],
                 ),
                 scene("1-2", vec![dialog(Some("A"), vec!["後"])]),
             ],
@@ -2007,11 +4897,11 @@ mod tests {
             dialog(Some("B"), vec!["2"]),
         ]);
         let mut pb = Playback::from_document(&doc);
-        let before = pb.cursor();
+        let before = pb.item_index();
         pb.advance();
         assert_ne!(
             before,
-            pb.cursor(),
+            pb.item_index(),
             "次のitemへ進んだのでcursorは変化するはず"
         );
     }
@@ -2023,9 +4913,13 @@ mod tests {
         // 再トリガーしない、意図した挙動）。
         let doc = doc_single_scene(vec![dialog(Some("A"), vec!["最初の文。次の文。"])]);
         let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
-        let before = pb.cursor();
+        let before = pb.item_index();
         assert!(pb.advance(), "同じLine item内の次の文へ進めるはず");
-        assert_eq!(before, pb.cursor(), "文送りだけではcursorは変化しないはず");
+        assert_eq!(
+            before,
+            pb.item_index(),
+            "文送りだけではcursorは変化しないはず"
+        );
     }
 
     // ---- #502 追補: テスト設計担当のデシジョンテーブルに基づく追加ケース ----
@@ -2075,7 +4969,7 @@ mod tests {
     #[test]
     fn choice_item_carries_se_attached_immediately_before_it() {
         // デシジョンテーブル2 #2: Choice直前に[SE:x]があるケース(Choiceにitem_seが
-        // 付く)で、cursor()ベースのSE検出が正しく反応する(current_se_cues()が
+        // 付く)で、item_index()ベースのSE検出が正しく反応する(current_se_cues()が
         // Choice item自体でも値を返す)ことを確認する。
         let doc = doc_single_scene(vec![se("select.wav"), choice(vec![("進む", "1-1")])]);
         let pb = Playback::from_document(&doc);
@@ -2090,15 +4984,15 @@ mod tests {
     #[test]
     fn moving_choice_cursor_does_not_change_playback_cursor() {
         // デシジョンテーブル2 #3: Choice表示中のmove_choice_cursor_up/downは
-        // self.index(cursor())を変えないため、SEが再発火しないことを確認する。
+        // self.index(item_index())を変えないため、SEが再発火しないことを確認する。
         let doc = doc_single_scene(vec![se("select.wav"), choice(vec![("A", "x"), ("B", "y")])]);
         let mut pb = Playback::from_document(&doc);
-        let before = pb.cursor();
+        let before = pb.item_index();
         pb.move_choice_cursor_down();
         assert_eq!(
             before,
-            pb.cursor(),
-            "カーソル移動だけではcursor()は変化しないはず(SE再発火防止)"
+            pb.item_index(),
+            "カーソル移動だけではitem_index()は変化しないはず(SE再発火防止)"
         );
         assert_eq!(pb.current_se_cues(), &["select.wav".to_string()]);
     }
@@ -2134,7 +5028,7 @@ mod tests {
         // cursor位置に対する純粋な参照であり、「一度発火したら二度と発火しない」ような
         // 消費済みフラグは持たない設計のため、同じitemへ再訪すれば同じSEが再び
         // current_se_cues()から観測される。これはバグではなく意図的な挙動である
-        // (event_loop側がcursor()の変化を検出するたびに毎回消費する設計、#502)。
+        // (event_loop側がitem_index()の変化を検出するたびに毎回消費する設計、#502)。
         let ch1 = chapter(
             1,
             vec![
@@ -2225,7 +5119,7 @@ mod tests {
         // 観点9: Choice確定ジャンプで遷移した際、遷移元Choice item自体のSEが
         // 再発火しない(cursorが変わるのは遷移後のみ)ことを確認する。遷移元Choiceが
         // 持っていたSEはジャンプ後には現れず(target itemが別のSEを持つため)、
-        // cursor()も遷移元とは異なる値に変化していることを確認する。
+        // item_index()も遷移元とは異なる値に変化していることを確認する。
         let ch1 = chapter(
             1,
             vec![
@@ -2239,14 +5133,14 @@ mod tests {
         let doc = document_with_chapters(vec![ch1]);
         let mut pb = Playback::from_document(&doc);
         assert_eq!(pb.current_se_cues(), &["open-menu.wav".to_string()]);
-        let source_cursor = pb.cursor();
+        let source_cursor = pb.item_index();
 
         assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
 
         assert_ne!(
             source_cursor,
-            pb.cursor(),
-            "ジャンプ後はcursor()が変化しているはず(遷移元Choiceへの再到達ではない)"
+            pb.item_index(),
+            "ジャンプ後はitem_index()が変化しているはず(遷移元Choiceへの再到達ではない)"
         );
         assert!(
             pb.current_se_cues().is_empty(),

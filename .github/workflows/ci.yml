@@ -36,7 +36,7 @@ jobs:
       # ワークスペース化 (#471) 以降はリポ直下から workspace 全体を対象に実行する)。
       - run: cargo fmt --all --check
 
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
       - run: cargo test --workspace
 

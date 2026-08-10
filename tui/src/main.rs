@@ -1,6 +1,7 @@
 mod audio;
 mod cli;
 mod config;
+mod flags;
 mod image_fade;
 mod image_render;
 mod input;
@@ -154,6 +155,30 @@ where
 
 /// スプラッシュ画面を描画し、キー入力を1件待つ。`Action::Advance` で `Ok(true)`
 /// （本編へ進む）、`Action::Quit` で `Ok(false)`（そのまま終了）を返す。
+///
+/// `image_cache` はフルキャンバス画像表示モード（`config.splash.logo_image` が `Some` の
+/// 場合、#530）専用のローカル状態。`event_loop` 側の `ImageCache` とは別インスタンス
+/// （スプラッシュはイベント絵と同時に表示されないため共有する必要が無く、シグネチャ変更の
+/// 影響範囲を最小化する）。
+///
+/// スクロール（`Action::MoveUp`/`Action::MoveDown`）は目標位置（`target_scroll_offset`）を
+/// 即座に更新するだけで、実際に描画する表示位置（`display_scroll_offset`）は
+/// `config.splash.scroll_ease_ms` の所要時間をかけて ease-out で追従する
+/// （kako-jun追加要望「スクロールはeaseにしたい」。`image_fade::ImageFadeState` の
+/// `from`/`to`/`started_at`/`duration` パターンを踏襲 — キー入力のたびに現在の表示位置を
+/// 新しいアニメーションの起点 `scroll_anim_start_offset` として引き継ぎ、開始時刻
+/// `scroll_anim_start` をリセットする点も `ImageFadeState::transition_to` と同じ設計）。
+/// 進行度・補間の計算自体は [`image_render::compute_scroll_ease_progress`]/
+/// [`image_render::compute_eased_scroll_offset`]（ターミナル/時刻I/Oに触れない純粋関数）に
+/// 委譲する。テキストモード（`logo_image` が `None`）ではどちらも参照されない
+/// （`ui::draw_splash` 参照。以前はカーソル移動を選択肢が無いという理由で無視していたが
+/// （#482）、フルキャンバス画像表示モードのスクロールに転用した、#530）。
+///
+/// アニメーション中も継続的に再描画されるのは、`next_action`（本番では
+/// `input::poll_action(REDRAW)`、`run` 参照）がキー入力の有無に関わらず [`REDRAW`] 間隔で
+/// `Action::None` を返してループを回し続けるため（`event_loop` のタイプライター演出・
+/// ページ送りインジケータ点滅と同じ既存の定期再描画の仕組みをそのまま利用するだけで、
+/// ここでの変更は不要）。
 fn show_splash<B>(
     terminal: &mut Terminal<B>,
     config: &Config,
@@ -163,14 +188,43 @@ where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    let mut image_cache = image_render::ImageCache::new();
+    let mut target_scroll_offset: u16 = 0;
+    let mut scroll_anim_start_offset: u16 = 0;
+    let mut scroll_anim_start = Instant::now();
     loop {
-        terminal.draw(|frame| ui::draw_splash(frame, config))?;
+        let now = Instant::now();
+        let elapsed_ms = now.saturating_duration_since(scroll_anim_start).as_millis() as u64;
+        let progress =
+            image_render::compute_scroll_ease_progress(elapsed_ms, config.splash.scroll_ease_ms);
+        let display_scroll_offset = image_render::compute_eased_scroll_offset(
+            scroll_anim_start_offset,
+            target_scroll_offset,
+            progress,
+        );
+        terminal.draw(|frame| {
+            ui::draw_splash(frame, config, &mut image_cache, display_scroll_offset)
+        })?;
 
         match next_action()? {
             Action::Advance => return Ok(true),
             Action::Quit => return Ok(false),
-            // スプラッシュ画面には選択肢が無いため、カーソル移動は無視する（#482）。
-            Action::MoveUp | Action::MoveDown | Action::None => {}
+            Action::MoveUp => {
+                // 現在の表示位置（アニメーション途中点も含む）を新しいアニメーションの
+                // 起点として引き継ぐことで、連打してもジャンプせず滑らかに追従し続ける。
+                scroll_anim_start_offset = display_scroll_offset;
+                scroll_anim_start = now;
+                let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
+                target_scroll_offset = target_scroll_offset.saturating_sub(1).min(max_offset);
+            }
+            Action::MoveDown => {
+                scroll_anim_start_offset = display_scroll_offset;
+                scroll_anim_start = now;
+                let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
+                target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
+            }
+            // スプラッシュ画面には左右移動の対象となる複数列選択肢が無いため、無視する(#482、#508)。
+            Action::MoveLeft | Action::MoveRight | Action::None => {}
         }
     }
 }
@@ -247,6 +301,18 @@ where
     let mut last_se_cursor: Option<usize> = None;
     play_new_se_cues(&mut last_se_cursor, playback, config, audio.as_deref_mut());
 
+    // 画像コマ自動送り（#497）の締切。現在位置が画像コマ item（`playback.pending_wait_ms()`
+    // が `Some(ms)`、`Event::EventImage` 直後に `Event::Wait { ms }` が続いていたときだけ
+    // 生成される、`playback::PlaybackItem::Image` 参照）にいる間だけ `Some` になり、
+    // ループ本体はこれを過ぎたらプレイヤーの入力を待たずに自動的に `Action::Advance` 相当を
+    // 発生させる（GUI版 `NovelRenderer` の `Wait { ms }` + `setTimeout` + `waitingForWait` に
+    // 相当）。`Action` 経由にしない（`input::Action` はキー入力の解釈に特化した設計を維持する、
+    // Issue #497 の実装方針）ため、`Action` enum にはタイマー起因の variant を増やさず、
+    // ここで直接 `Action::Advance` を合成してから既存の `on_advance` 分岐へ流し込む。
+    let mut wait_deadline = playback
+        .pending_wait_ms()
+        .map(|ms| Instant::now() + Duration::from_millis(u64::from(ms)));
+
     loop {
         let now = Instant::now();
         // インジケータを表示すべきか（reveal完了 かつ 選択肢非表示 かつ 会話行あり）。
@@ -281,12 +347,41 @@ where
                 now,
                 Some(&image_fade),
                 &mut image_cache,
+                playback.is_blackout(),
             )
         })?;
 
-        match next_action()? {
+        // 画像コマ自動送り（#497）: 締切を過ぎていれば、キー入力を待たずに `Action::Advance`
+        // を合成する。まだ過ぎていなければ従来どおり `next_action()` で入力を待つ（プレイヤーが
+        // 締切前に手動で Enter/Space を押して早送りすることも引き続きできる）。
+        // 締切超過により `Action::Advance` を合成したかどうかを覚えておく（#497 バグ修正）。
+        // この後 `on_advance` を呼んでも item が進まなかった（items 末尾で advance 相当が
+        // no-op に終わった）場合、下の締切引き直しをそのまま行うと `ms` が0（または実測上0と
+        // みなせる極小値）のとき新しい締切が「作った瞬間に既に過ぎている」ものになり、次周回の
+        // 「経過済み」判定が恒久的に真になり続けて `next_action()`（実キー入力を読む唯一の
+        // 経路）が二度と呼ばれなくなる — raw mode + alternate screen 中はこれが「アプリが
+        // 固まった」ように見え、プレイヤーが q キー等で終了できなくなる（テスト設計フェーズで
+        // 発見）。`deadline_triggered` と、行動前後の `item_index()` の変化を照合して、この
+        // 「進行不可能なのに締切だけが経過し続ける」組み合わせのときだけ締切をクリアし、通常の
+        // `next_action()` によるキー入力待ちにフォールバックする。
+        //
+        // `deadline_triggered` が真の間は `next_action()`（`REDRAW` = 30ms のポーリング間隔で
+        // 入力を待つ経路）を経由せずに直接 `Action::Advance` を合成するため、この分岐だけを
+        // 通り続ける限りループ本体はスリープしない。`[待機:0][イベント絵:B][待機:0]...` の
+        // ように ms=0 の画像コマ item が連続すると、締切は毎回「作った瞬間に既に過ぎている」
+        // ため `deadline_triggered` が常に真になり、その連鎖の間だけ CPU をビジーループで
+        // 回し続ける。バグではなく許容している設計上のトレードオフ（ms=0 は「即座に進める」
+        // という利用者の意図そのものであり、そこに人為的なウェイトを挟む理由が無いため）。
+        let deadline_triggered = matches!(wait_deadline, Some(deadline) if now >= deadline);
+        let action = if deadline_triggered {
+            Action::Advance
+        } else {
+            next_action()?
+        };
+        let item_index_before_action = playback.item_index();
+
+        match action {
             Action::Advance => {
-                let prev_position = playback.position();
                 // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
                 // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
                 on_advance(playback, &mut current_reveal, config, Instant::now());
@@ -302,12 +397,18 @@ where
                     audio.as_deref_mut(),
                 );
                 play_new_se_cues(&mut last_se_cursor, playback, config, audio.as_deref_mut());
-                // 会話行が実際に進んだ（＝スキップ操作でも選択肢の確定待ちでもなく、次の
-                // Line item へ移動した）ときだけ event_image の変化を見てクロスフェードを
+                // `position()`（会話行のみを数える）ではなく `item_index()`（生の `items`
+                // インデックス）で「実際に別の item へ移動したか」を判定する（#497）。画像コマ
+                // item（`PlaybackItem::Image`）への遷移は会話行ではないため `position()` を
+                // 変えないが、event_image は変わっているのでクロスフェードは起こす必要がある
+                // — `position()` のままだと画像コマへの遷移を取りこぼす。
+                //
+                // item が実際に進んだ（＝スキップ操作でも選択肢の確定待ちでもなく、次の
+                // item へ移動した）ときだけ event_image の変化を見てクロスフェードを
                 // 開始する。skip_lines 経路（on_advance がタイプライター表示を全文表示へ
                 // 早送りしただけ）や、無効な jump 先を選んで選択肢表示のまま no-op に終わった
-                // 場合は position が変わらないため、ここには到達しない。
-                if playback.position() != prev_position {
+                // 場合は item_index が変わらないため、ここには到達しない。
+                if playback.item_index() != item_index_before_action {
                     // 会話行が実際に切り替わった瞬間。GUI版 `NovelRenderer` が新しい行/ページが
                     // 始まるたびに明示的に `setIndicatorVisible(false)` を呼んでからタイプ
                     // ライターを開始しているのと同じ「行が変わったら一旦強制的に隠す」ステップを
@@ -326,7 +427,8 @@ where
                     // `indicator_blink_started_at` はフレーム間の `show_page_indicator` の値の
                     // 差分しか見ておらず「会話行そのものが切り替わったか」を知らないため、
                     // これはあの関数だけでは検出できない。ここで使っている
-                    // `playback.position() != prev_position`（＝本当に新しい行へ進んだ）は
+                    // `playback.item_index() != item_index_before_action`（＝本当に新しい item へ進んだ、
+                    // #497 で画像コマ item も拾えるよう `position()` から乗り換え）は
                     // 既に上の image_fade トリガーが使っているのと同じ signal であり、これを
                     // 使って `indicator_was_shown` を強制的に `false` にリセットしてから
                     // 次フレームの `should_show_page_indicator`/`indicator_blink_started_at` に
@@ -351,26 +453,78 @@ where
                 }
             }
             // 選択肢を表示していないとき（`Playback::current_choice` が `None`）は no-op（#482）。
+            // MoveLeft/MoveRight は非グリッド（列数1以下）表示中も同様に no-op（#508）。
             Action::MoveUp => playback.move_choice_cursor_up(),
             Action::MoveDown => playback.move_choice_cursor_down(),
+            Action::MoveLeft => playback.move_choice_cursor_left(),
+            Action::MoveRight => playback.move_choice_cursor_right(),
             Action::Quit => break,
             Action::None => {}
         }
+
+        // 画像コマ自動送り（#497）: 今回のアクション処理後の現在位置に応じて締切を引き直す。
+        //
+        // `wait_deadline` は「新しい item へ実際に移った、その瞬間にだけ」`Instant::now()` を
+        // 基準として1回だけ設定するものであって、まだ経過していない待機中の反復のたびに
+        // 基準時刻を引き直してよいものではない（テスト実装フェーズで発見された重大バグ、
+        // #497）。旧実装は `deadline_advance_was_noop` が false である限り
+        // （＝items末尾でのno-opでない限り）毎周回 `Instant::now() + ms` で上書きしていたため、
+        // `ms > 0` のケースでは締切が「今から ms ミリ秒後」へ無限に後退し続け、ループの
+        // オーバーヘッド以上の時間が経過しない限り `now >= deadline` が真にならず、
+        // 自動送りが事実上まったく発火しなかった（`ms=0` のケースだけは、ループに入る前の
+        // 初期セット分で最初のチェックで即座に trigger するため、たまたまこの再計算に
+        // 到達せず踏まなかった）。
+        //
+        // 正しくは `item_index()` の変化（＝本当に別の item へ進んだか）だけを見て分岐する:
+        let item_changed = playback.item_index() != item_index_before_action;
+        if deadline_triggered && !item_changed {
+            // 締切超過により `Action::Advance` を合成したが、items 末尾などで進行できず
+            // no-op に終わった場合。そのまま `pending_wait_ms()` から締切を引き直すと、
+            // 同じ Image item に留まったまま新しい締切をまた作ってしまい、`ms` が実質0と
+            // みなせる値のときは「作った瞬間に既に過ぎている」締切になって、次周回以降
+            // ずっと `next_action()`（実キー入力を読む唯一の経路）を経由せず即座に締切超過
+            // と判定され続けてしまう（f7e16c1 で修正済みの入力スタベーション対策）。
+            // この組み合わせのときだけ締切を `None` にクリアし、通常の `next_action()` に
+            // よるキー入力待ちにフォールバックする。
+            wait_deadline = None;
+        } else if item_changed {
+            // 新しい item へ実際に移った（タイマー起因の自動 Advance／手動キー入力による
+            // Advance のどちらでも）。その新 item の `pending_wait_ms()` に応じて、この
+            // 瞬間の `Instant::now()` を基準に締切を1回だけセットし直す。
+            wait_deadline = playback
+                .pending_wait_ms()
+                .map(|ms| Instant::now() + Duration::from_millis(u64::from(ms)));
+        }
+        // else: 締切未経過かつ item も変わっていない通常の待機中の反復。既存の
+        // `wait_deadline` をそのまま保持し、絶対に再計算しない（これが今回のバグ修正の核心）。
     }
     Ok(())
 }
 
-/// 現在位置の会話行から新しい `RevealState::Animating` を組み立てる。現在位置が選択肢
+/// 現在位置の会話行から新しい reveal を組み立てる。現在位置が選択肢
 /// （`Playback::current_choice`）や、そもそも表示すべき item が無い場合は `None` — 選択肢の
 /// 文言はタイプライター演出の対象外（GUI版の選択肢オーバーレイに演出が無いのと同じ扱い、#482）。
+///
+/// `playback.pending_wait_ms()` が `Some`（＝画像コマ自動送り item、#497）の間は、通常の
+/// `RevealState::Animating`（タイプライターで少しずつ表示）ではなく即座に全文表示済みの
+/// `RevealState::Done` を返す。画像コマは話者・本文を直前の会話行からそのまま引き継いでいる
+/// だけ（`playback::Playback::build` 参照）なので、ここでもう一度同じ文をタイプライターで
+/// 再生し直すと、指定した `Wait { ms }` の間ずっと文字が少しずつ出続けるだけの見た目になり、
+/// `ms` 経過後の自動送りが「まだ全文表示し終えていない」ために足止めされうる
+/// （`on_advance` は reveal 未完了だと `advance()` を呼ばず全文表示へのスキップに専念するため、
+/// 自動送りの締切と実際に進むタイミングが `char_interval_ms` 分だけずれてしまう）。
 fn build_reveal_for_current(
     playback: &Playback,
     config: &Config,
     now: Instant,
 ) -> Option<reveal::RevealState> {
-    playback
-        .current_line()
-        .map(|line| reveal::RevealState::Animating(reveal::build_reveal(config, line, now)))
+    let line = playback.current_line()?;
+    if playback.pending_wait_ms().is_some() {
+        return Some(reveal::RevealState::Done(reveal::skip_lines(config, line)));
+    }
+    Some(reveal::RevealState::Animating(reveal::build_reveal(
+        config, line, now,
+    )))
 }
 
 /// `Action::Advance` 受信時の意思決定（デシジョンテーブル、#472。選択肢分岐対応で #482 拡張）。
@@ -448,14 +602,16 @@ fn sync_bgm(
     }
 }
 
-/// [`Playback::cursor`] が前回チェック時から変化していたら（＝新しい item に到達した瞬間）、
-/// その item に紐づく `current_se_cues()` を出現順にすべて一度だけ再生する（#502）。
+/// [`Playback::item_index`] が前回チェック時から変化していたら（＝新しい item に到達した
+/// 瞬間）、その item に紐づく `current_se_cues()` を出現順にすべて一度だけ再生する（#502）。
 /// SE は BGM と異なり持続する state を持たないワンショットのため、`sync_bgm` のような
 /// 「値そのもの」の比較ではなく「カーソルが動いたかどうか」のエッジ検出になる —
 /// 同じ item に居続ける限り（`sentence_per_page` の文送り等）何度呼んでも再生しない。
-/// `last_cursor` を `Option<usize>` にしているのは、起動直後の初回呼び出し（実カーソル値は
-/// 常に有効な `usize`）を「前回と異なる」として確実に一致させ、原稿冒頭の `[SE:]` も
-/// 取りこぼさないため。
+/// `item_index()` は image_fade のクロスフェード判定（#497）が使っているのと同じ「生の
+/// items インデックス」で、SE の新規到達検出にもそのまま転用できる（専用の `cursor()` を
+/// 別途持たない）。`last_cursor` を `Option<usize>` にしているのは、起動直後の初回呼び出し
+/// （実インデックス値は常に有効な `usize`）を「前回と異なる」として確実に一致させ、原稿冒頭の
+/// `[SE:]` も取りこぼさないため。
 ///
 /// パス解決に失敗した個別の SE（`config.resolve_sound_path` が `None`）は黙って読み飛ばし、
 /// 残りの SE の再生は継続する（1件の記述ミスで他の SE まで巻き込んで無音にしない）。
@@ -466,7 +622,7 @@ fn play_new_se_cues(
     config: &Config,
     audio: Option<&mut audio::AudioPlayer>,
 ) {
-    let cursor = playback.cursor();
+    let cursor = playback.item_index();
     if *last_cursor == Some(cursor) {
         return;
     }
@@ -1194,6 +1350,317 @@ mod tests {
         );
     }
 
+    // ---- フルキャンバス画像表示モードのスクロール配線（#530）----
+
+    /// `splash.logo_image`/`event_image.assets_dir` を実在するWebPフィクスチャへ向けた
+    /// `Config` を作る（`splash_config` のテキストモード版に対応する画像モード版）。
+    fn image_splash_config(fixture_path: &std::path::Path) -> Config {
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        config.splash.logo_image = Some(std::path::PathBuf::from(
+            fixture_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        ));
+        config
+    }
+
+    /// 縦168px・上から4行だけ赤(255,0,0)、残りは青(0,0,255)の正方形WebPフィクスチャ。
+    /// contain-fit(比1.0)でスクロールが必要になり、かつグリッド行0(赤)と行1以降(青)が
+    /// はっきり色分けされるため、「スクロールオフセットが0のままか、進んだか」を
+    /// セルの背景色だけで判別できる（`show_splash_movedown_does_not_instantly_jump_to_target_scroll_offset`
+    /// 用）。
+    fn banded_scroll_fixture() -> std::path::PathBuf {
+        let size: u32 = 168;
+        let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+        for y in 0..size {
+            let color: [u8; 4] = if y < 4 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            };
+            for _x in 0..size {
+                rgba.extend_from_slice(&color);
+            }
+        }
+        crate::image_render::write_test_webp_fixture(&rgba, size, size)
+    }
+
+    /// 84x84 の正方形画像を、2px ごとの横帯で段階的に赤みを変えたフィクスチャ。
+    /// 全幅表示（84列）では総42行になり、各表示行が一意な赤背景を持つため、
+    /// 「最下端から1つ戻ったか」を先頭セルの背景色だけで判別できる。
+    fn per_row_scroll_fixture() -> std::path::PathBuf {
+        let size: u32 = 84;
+        let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+        for y in 0..size {
+            let band = (y / 2) as u8;
+            let red = band.saturating_mul(5);
+            for _x in 0..size {
+                rgba.extend_from_slice(&[red, 0, 0, 255]);
+            }
+        }
+        crate::image_render::write_test_webp_fixture(&rgba, size, size)
+    }
+
+    #[test]
+    fn show_splash_text_mode_movedown_does_not_change_rendered_output() {
+        // デシジョンテーブル: テキストモードはMoveUp/Downでtarget_scroll_offsetこそ内部で
+        // 更新されるが、draw_splash自体がテキストモードでは scroll_offset を一切参照しない
+        // ため、見た目は変化しないはず。
+        let config = splash_config();
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut baseline_action, _r1) = action_queue(vec![Action::Advance]);
+        show_splash(&mut baseline_terminal, &config, &mut baseline_action).unwrap();
+        let baseline_text = buffer_text(&baseline_terminal);
+
+        let mut moved_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut moved_action, _r2) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::Advance,
+        ]);
+        show_splash(&mut moved_terminal, &config, &mut moved_action).unwrap();
+        let moved_text = buffer_text(&moved_terminal);
+
+        assert_eq!(
+            baseline_text, moved_text,
+            "テキストモードはMoveDown連打しても描画結果が変わってはいけない"
+        );
+    }
+
+    #[test]
+    fn show_splash_image_mode_non_scrolling_movedown_does_not_change_rendered_output() {
+        // デシジョンテーブル: 画像モードでもスクロール不要な画像なら、MoveDownで
+        // target_scroll_offset 自体が max_offset=0 にクランプされるため、見た目は
+        // 変化しないはず。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((200, 80, 80), 4, 1), 4, 1);
+        let config = image_splash_config(&fixture_path);
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut baseline_action, _r1) = action_queue(vec![Action::Advance]);
+        show_splash(&mut baseline_terminal, &config, &mut baseline_action).unwrap();
+        let baseline_text = buffer_text(&baseline_terminal);
+
+        let mut moved_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut moved_action, _r2) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::Advance,
+        ]);
+        show_splash(&mut moved_terminal, &config, &mut moved_action).unwrap();
+        let moved_text = buffer_text(&moved_terminal);
+
+        assert_eq!(
+            baseline_text, moved_text,
+            "非スクロール画像ではMoveDown連打しても描画結果が変わってはいけない"
+        );
+    }
+
+    #[test]
+    fn show_splash_movedown_does_not_instantly_jump_to_target_scroll_offset() {
+        // テスト設計エージェントの申し送り事項3: show_splash は Instant::now() を直接
+        // 呼んでおり時刻注入できないため、厳密なタイミング検証はできない。ここでは
+        // scroll_ease_ms を十分大きく(60秒)取ることで、テスト実行にかかる実時間(通常
+        // 数ミリ秒)ではease進行度がほぼ0のままになる前提を使い、「MoveDown直後に
+        // target_scroll_offsetへ瞬時ジャンプしない」という方向性だけを検証する
+        // （元の観点57-60を1本に統合、テスト設計エージェントの緩和指示に従う）。
+        let fixture_path = banded_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 60_000;
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::Advance,
+        ]);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+        assert!(advanced);
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer.cell((0, 0)).unwrap().bg,
+            Color::Rgb(255, 0, 0),
+            "5回MoveDownした直後でもeaseが進む前は先頭行(赤)のままのはず。\
+             青(グリッド行1以降の色)になっていたら瞬時ジャンプしている"
+        );
+    }
+
+    #[test]
+    fn show_splash_moveup_after_reaching_bottom_starts_moving_up_again() {
+        let fixture_path = per_row_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 0;
+
+        let mut actions = vec![Action::MoveDown; 50];
+        actions.push(Action::MoveUp);
+        actions.push(Action::Advance);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) = action_queue(actions);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+        assert!(advanced);
+
+        let total_rows =
+            crate::image_render::compute_full_width_rows(84, 84, ui::REQUIRED_TOTAL_WIDTH);
+        let visible_rows = ui::REQUIRED_TOTAL_HEIGHT - 1;
+        let expected_offset = total_rows.saturating_sub(visible_rows).saturating_sub(1);
+        let expected_red = (expected_offset as u8).saturating_mul(5);
+        assert_eq!(
+            terminal.backend().buffer().cell((0, 0)).unwrap().bg,
+            Color::Rgb(expected_red, 0, 0),
+            "最下端まで進めた後に↑を1回押したら、表示はただちに1行ぶん上へ戻り始めるはず"
+        );
+    }
+
+    #[test]
+    fn show_splash_moveleft_and_moveright_do_not_change_scroll_offset() {
+        // スプラッシュ画面には左右移動の対象となる複数列選択肢が無いため、
+        // MoveLeft/MoveRight はNoneと同様に無視されるはず（#482、#508）。
+        // スクロール可能な画像でMoveDownによりオフセットを進めた後、MoveLeft/MoveRightを
+        // 連打しても描画結果がMoveDownのみの場合と変わらないことを確認する。
+        let fixture_path = per_row_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 0;
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut baseline_action, _r1) =
+            action_queue(vec![Action::MoveDown, Action::MoveDown, Action::Advance]);
+        show_splash(&mut baseline_terminal, &config, &mut baseline_action).unwrap();
+        let baseline_text = buffer_text(&baseline_terminal);
+
+        let mut moved_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut moved_action, _r2) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveLeft,
+            Action::MoveRight,
+            Action::MoveLeft,
+            Action::Advance,
+        ]);
+        show_splash(&mut moved_terminal, &config, &mut moved_action).unwrap();
+        let moved_text = buffer_text(&moved_terminal);
+
+        assert_eq!(
+            baseline_text, moved_text,
+            "MoveLeft/MoveRightを挟んでもスクロールオフセットは変化してはいけない"
+        );
+    }
+
+    #[test]
+    fn show_splash_advance_interrupts_image_mode_scrolling_and_returns_true_immediately() {
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 1, 1), 1, 1);
+        let config = image_splash_config(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, remaining) =
+            action_queue(vec![Action::MoveDown, Action::MoveDown, Action::Advance]);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+
+        assert!(
+            advanced,
+            "画像モードのスクロール操作の途中でもAdvanceは即座にOk(true)で返るはず"
+        );
+        assert_eq!(
+            *remaining.borrow(),
+            0,
+            "MoveDown x2 + Advance の3件をすべて消費してから返っているはず"
+        );
+    }
+
+    #[test]
+    fn run_screens_shows_splash_when_logo_image_is_set_without_lines() {
+        // #530: logo_image のみが設定されていて lines が空でも should_show_splash() は
+        // true になる(Config::should_show_splashのテストで確認済み)ため、run_screensは
+        // スプラッシュをスキップしてはいけない。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 4, 1), 4, 1);
+        let config = image_splash_config(&fixture_path);
+        assert!(
+            config.should_show_splash(),
+            "logo_imageのみ設定でもshould_show_splashはtrueのはず"
+        );
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let document = name_name_parser::parser::parse("");
+        let mut playback = Playback::from_document(&document);
+        let (mut next_action, _remaining) = action_queue(vec![Action::Quit]);
+
+        run_screens(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        // スプラッシュがスキップされていれば、この唯一のQuitはevent_loopへ渡り
+        // "0/0" の位置表示が出るはず。実際にはスプラッシュ(画像モード)がまず表示され、
+        // そこでQuitされて終わる(本編のevent_loopへは進まない)ことを確認する。
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Enter"),
+            "スプラッシュ(画像モード)のヒントが表示されているはず, buffer was: {text}"
+        );
+        assert!(
+            !text.contains("0/0"),
+            "event_loopの位置表示は出ていない(本編へ進んでいない)はず, buffer was: {text}"
+        );
+    }
+
     // ---- #482: on_advance の選択肢分岐（Choice/jump）配線テスト ----
     //
     // `Playback::from_lines` は会話行専用のテスト用コンストラクタで Choice を作れないため、
@@ -1320,5 +1787,359 @@ mod tests {
             "2回目の呼び出しはBからCへの1行送りだけのはず（2回連続jumpしない）"
         );
         assert_eq!(playback.position(), 2, "1回のadvanceにつき1行だけ進むはず");
+    }
+
+    // ---- #497: イベント絵の時間差自動連続表示（event_loop のタイマー駆動・回帰） ----
+    //
+    // `Playback::from_lines` は画像コマ item（`PlaybackItem::Image`）を作れないため、
+    // ここでは実際の Markdown を `parser::parse` した `Document` 経由で `Playback` を作る
+    // （`choice_branch_source` と同じ理由）。
+
+    /// 画像コマ自動送り(#497)のタイマー系テスト用: 手動入力を一切行わず（常に`Action::None`）
+    /// 実時間経過だけで自動advanceが起こるのを待つ。`timeout`を超えても終わらない場合は
+    /// バグ（締切機構が壊れて自動送りが起きない）とみなし`Action::Quit`を返してループを
+    /// 強制終了する安全弁——こうしておかないとバグ混入時にテストプロセスごとハングする。
+    fn passive_next_action(timeout: Duration) -> impl FnMut() -> anyhow::Result<Action> {
+        let start = Instant::now();
+        move || -> anyhow::Result<Action> {
+            if start.elapsed() > timeout {
+                return Ok(Action::Quit);
+            }
+            Ok(Action::None)
+        }
+    }
+
+    #[test]
+    fn event_loop_auto_advances_past_image_item_after_wait_ms_elapses_without_key_input() {
+        // テーブル2#1〜3の統合確認: 手動入力を一切送らなくても、[待機:ms]経過後は
+        // event_loopが自分でAction::Advance相当を合成して次のitemへ進む。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\nhello\n\n[イベント絵: a.webp]\n[待機: 20]\n\n**B**:\nnext\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        // 画像コマitemへは決定的な手動advanceで進めておき、本テストの主眼である
+        // 「その後の自動送り」だけを検証する。
+        playback.advance();
+        assert_eq!(playback.pending_wait_ms(), Some(20));
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let mut next_action = passive_next_action(Duration::from_secs(2));
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_line().expect("line").speaker.as_deref(),
+            Some("B"),
+            "手動入力(Advance)を一度も送っていないのに、[待機:20]の経過で自動的にBへ\
+             進んでいるはず（テーブル2#1〜3）。2秒のタイムアウトに達した場合は\
+             この自動送りが機能していない"
+        );
+    }
+
+    #[test]
+    fn event_loop_image_item_reveal_is_done_immediately_even_with_slow_typewriter_config() {
+        // build_reveal_for_current は pending_wait_ms が Some の間、slow_config
+        // （char_interval_ms=1000）でもタイプライターを経由せず即座に RevealState::Done を
+        // 返すはず。もしここが Animating のままだと、[待機:ms]の経過後に advance しようと
+        // しても on_advance が「reveal未完了」と判定してタイプライタースキップに専念して
+        // しまい、自動送りが char_interval_ms 分だけ遅延する（main.rs のコメント参照）。
+        let config = slow_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\nhello there this text is long\n\n[イベント絵: a.webp]\n[待機: 30]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        playback.advance(); // 画像コマitemへ
+        assert_eq!(playback.pending_wait_ms(), Some(30));
+
+        let now = Instant::now();
+        let reveal = build_reveal_for_current(&playback, &config, now)
+            .expect("画像コマitemもrevealを持つはず");
+
+        assert!(
+            reveal.is_done(now),
+            "画像コマitemのrevealは生成直後から完了済み(Done)であるべき（slow_configでも）"
+        );
+    }
+
+    #[test]
+    fn event_loop_manual_advance_before_wait_deadline_skips_immediately() {
+        // テーブル2#4: 締切前でも手動Advanceが来ればタイマーを待たず即座に進む。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\nhello\n\n[イベント絵: a.webp]\n[待機: 60000]\n\n**B**:\nnext\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        // 60秒待機を指定しているが、手動でAdvance x2 (A→画像コマ、画像コマ→B) を
+        // 送るのでタイマーが発火するより先にBへ到達しなければならない。
+        let (mut next_action, _remaining) =
+            action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_line().expect("line").speaker.as_deref(),
+            Some("B"),
+            "60秒待機を指定していても、手動Advanceがタイマーより先に効いて即座に \
+             進むはず"
+        );
+    }
+
+    #[test]
+    fn event_loop_crossing_into_image_item_triggers_crossfade_via_item_index_not_position() {
+        // 核心回帰ガード: 既存の
+        // `event_loop_advance_crossing_into_new_event_image_switches_placeholder_to_that_image`
+        // (#481)と同じ形の検証を、画像コマitem(#497)に対して行う。画像コマへの遷移は
+        // position()を変えない(Line itemではないため)ので、event_loop内でitem_index()
+        // 経由の判定に乗り換えていないとクロスフェードを取りこぼす。
+        // [待機:]は非常に大きい値にして、自動送りタイマーが本テストの短い実行時間中に
+        // 割り込まないようにする（本テストの主眼はクロスフェード判定であってタイマーでは
+        // ない）。
+        let fixture_color = (200u8, 20u8, 40u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_color, 2, 2), 2, 2);
+        let mut config = instant_config();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        config.event_image.crossfade_ms = 0;
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let source = format!(
+            "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\nhello\n\n[イベント絵: {relative}]\n[待機: 999999]\n"
+        );
+        let document = name_name_parser::parser::parse(&source);
+        let mut playback = Playback::from_document(&document);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
+            "position()を変えない画像コマitemへの遷移でも、item_index()の変化を見て \
+             クロスフェードが開始されるはず"
+        );
+    }
+
+    #[test]
+    fn event_loop_indicator_resets_when_crossing_into_image_item() {
+        // #495 の indicator 位相リセット配線（`playback.item_index() != item_index_before_action`）
+        // が画像コマ item（#497）への遷移でも機能することを確認する。もし実装が
+        // `position()`のままだったら（画像コマはposition不変のため）ここでリセットが
+        // 起こらず、直前の残り点滅位相（非表示区間）をそのまま引き継いでしまう
+        // （`event_loop_instant_complete_reveal_shows_indicator_immediately_after_advancing_past_a_blink_off_phase`
+        // と同じ手法）。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\nhello\n\n[イベント絵: a.webp]\n[待機: 999999]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            if call_count == 1 {
+                // 会話行Aの最初の描画（indicator_started_atが記録された直後）から、
+                // 1周期経過後の非表示区間（奇数区間）へ確実に入るまで実時間で待つ。
+                std::thread::sleep(std::time::Duration::from_millis(
+                    reveal::PAGE_INDICATOR_BLINK_PERIOD_MS + 200,
+                ));
+                Ok(Action::Advance)
+            } else {
+                Ok(Action::Quit)
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            buffer_text(&terminal).contains(reveal::PAGE_INDICATOR_SYMBOL),
+            "画像コマitemへ切り替わった直後のフレームは、直前の残り点滅位相（非表示区間）を \
+             引き継がず、必ず表示区間(ON)から点滅が始まっているべき"
+        );
+    }
+
+    #[test]
+    fn event_loop_terminal_image_item_with_wait_ms_zero_does_not_starve_input_forever() {
+        // 最重要回帰テスト: 修正コミットf7e16c1で直したバグ。wait_ms=0かつ画像コマが
+        // items末尾(advanceできない)の組み合わせだと、修正前は`wait_deadline`が永久に
+        // 引き直され続け、next_action()(実際にはキー入力を読む唯一の経路)が二度と
+        // 呼ばれず入力が完全に固まった。event_loopを別スレッドで実行し、有限時間内に
+        // Quitアクションが読まれてループを抜けられることをタイムアウト付きで確認する。
+        // バグが再発してもテストプロセス自体をハングさせないよう、joinはせず
+        // channelのrecv_timeoutで待つ。
+        let source =
+            "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\nhello\n\n[イベント絵: a.webp]\n[待機: 0]\n";
+
+        // 事前確認: 末尾の画像コマ(wait_ms=0)に位置していることを確認する。
+        let document = name_name_parser::parser::parse(source);
+        let mut check_playback = Playback::from_document(&document);
+        check_playback.advance();
+        assert!(check_playback.is_at_end());
+        assert_eq!(check_playback.pending_wait_ms(), Some(0));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let config = instant_config();
+            let document = name_name_parser::parser::parse(source);
+            let mut playback = Playback::from_document(&document);
+            playback.advance();
+            let mut terminal = Terminal::new(TestBackend::new(
+                ui::REQUIRED_TOTAL_WIDTH,
+                ui::REQUIRED_TOTAL_HEIGHT,
+            ))
+            .unwrap();
+            // 実際のキー入力の代わりに、呼ばれるたびにQuitを返すフェイクの入力源。
+            // バグが再発した場合、このクロージャは一度も呼ばれずevent_loopが無限ループする。
+            let mut next_action = move || -> anyhow::Result<Action> { Ok(Action::Quit) };
+            let result = event_loop(
+                &mut terminal,
+                &config,
+                &mut playback,
+                &mut next_action,
+                None,
+            );
+            let _ = tx.send(result.is_ok());
+        });
+
+        let finished = rx.recv_timeout(Duration::from_secs(5));
+        assert!(
+            finished.is_ok(),
+            "wait_ms=0かつ末尾の画像コマでnext_action()が二度と呼ばれず入力が固まった \
+             (修正コミットf7e16c1が直したバグの再発)"
+        );
+        assert!(finished.unwrap(), "event_loopがエラーで終了した");
+    }
+
+    #[test]
+    fn event_loop_wait_deadline_boundary_now_equal_to_deadline_is_treated_as_elapsed() {
+        // テーブル2#2/#3: `now >= deadline`（等号を含む）で経過扱いにする実装であることを、
+        // 「ちょうどwait_ms分だけ眠ってから1回だけnext_action()を呼ぶ」形で確認する。
+        // next_actionの呼び出しを2回（1回目sleep後にNone、2回目はQuit）に制限しても
+        // 自動advanceが成立することで、境界を跨いですぐに検出できている（＝過ぎるまで
+        // 余分な周回を要しない）ことを確認する。
+        let config = instant_config();
+        let wait_ms = 20u64;
+        let source = format!(
+            "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\nhello\n\n[イベント絵: a.webp]\n[待機: {wait_ms}]\n\n**B**:\nnext\n"
+        );
+        let document = name_name_parser::parser::parse(&source);
+        let mut playback = Playback::from_document(&document);
+        playback.advance(); // 画像コマitemへ
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            if call_count == 1 {
+                std::thread::sleep(Duration::from_millis(wait_ms));
+                Ok(Action::None)
+            } else {
+                Ok(Action::Quit)
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_line().expect("line").speaker.as_deref(),
+            Some("B"),
+            "wait_ms経過ちょうどのタイミングで経過扱い(>=)になり自動advanceして \
+             いるはず。next_actionは2回しか呼んでいない(1回目sleep後にNone、2回目は \
+             Quit)ため、境界を跨いですぐに検出できていることを保証する"
+        );
+    }
+
+    #[test]
+    fn event_loop_auto_advances_through_chain_of_three_event_images_without_manual_advance() {
+        // テーブル1#3のランタイム統合版: 3連続のEventImage+Waitを、手動Advanceを一度も
+        // 送らずに最後まで自動で通過できるはず。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\nhello\n\n[イベント絵: a.webp]\n[待機: 10]\n[イベント絵: b.webp]\n[待機: 10]\n[イベント絵: c.webp]\n[待機: 10]\n\n**B**:\ndone\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        playback.advance(); // 最初の画像コマ(a.webp)へ
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let mut next_action = passive_next_action(Duration::from_secs(3));
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_line().expect("line").speaker.as_deref(),
+            Some("B"),
+            "手動Advanceを一度も送らずに3連続の画像コマ(a→b→c)を経てBまで自動で \
+             進んでいるはず"
+        );
     }
 }

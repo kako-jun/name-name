@@ -40,7 +40,10 @@ use ratatui::Frame;
 
 use crate::config::{Config, PlaceholderStyle};
 use crate::image_fade::ImageFadeState;
-use crate::image_render::{ImageCache, RenderedImage};
+use crate::image_render::{
+    clamp_scroll_offset, compute_full_width_rows, rgba_to_quadrant_grid_window, DecodedImage,
+    ImageCache, RenderedImage,
+};
 use crate::playback::DisplayLine;
 use crate::reveal;
 
@@ -151,7 +154,7 @@ fn draw_too_small_message(frame: &mut Frame, actual: Rect) {
     );
     let paragraph = Paragraph::new(message).alignment(Alignment::Center);
     // 縦方向中央寄せ: 1行想定のメッセージを実際の高さの中央付近の行に置く。
-    // `draw_splash` と違い折り返し高さを事前計算しない分単純化しているが、それで十分
+    // `draw_splash_text` と違い折り返し高さを事前計算しない分単純化しているが、それで十分
     // （Issueのスコープ外の凝った表現は避ける）。高さ0の極小端末では描画領域自体を
     // 0にしてpanicを避ける。
     let height = if actual.height == 0 { 0 } else { 1 };
@@ -204,9 +207,11 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// （reveal 完了後にのみ表示する。[`reveal::blink_visible`] にそのまま渡す。色はウィンドウ
 /// （自分側/相手側）ごとに `draw_text_windows` が決める、#495）。呼び出し側（`main.rs` の
 /// `event_loop`）が [`reveal::indicator_blink_started_at`] で毎フレーム更新した値を渡す —
-/// reveal が非表示→表示に切り替わった瞬間（＝reveal完了の瞬間）に加え、`playback.position()`
-/// が変化した（＝実際に新しい会話行へ進んだ）瞬間も `event_loop` 側が明示的に
-/// 非表示→表示の遷移として扱われるよう仕込んでいる（`char_interval_ms=0 &&
+/// reveal が非表示→表示に切り替わった瞬間（＝reveal完了の瞬間）に加え、`playback.item_index()`
+/// が変化した（＝実際に新しい item へ進んだ。会話行だけを数える `position()` だと画像コマ
+/// item への遷移を取りこぼすため、#497 で `item_index()` に乗り換え済み）瞬間も
+/// `event_loop` 側が明示的に非表示→表示の遷移として扱われるよう仕込んでいる
+/// （`char_interval_ms=0 &&
 /// fade_duration_ms=0` では新しい行の reveal が生成された瞬間に既に完了しているため、
 /// reveal 自体の遷移だけでは検出できない。[`reveal::indicator_blink_started_at`] のdoc
 /// comment参照、セルフレビュー must対応、#495 追加修正2）。この関数自身は基準時刻を
@@ -217,21 +222,30 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// クロスフェード状態（[`ImageFadeState`]、`None` は event_image を一切扱わない呼び出し元
 /// 向けのフォールバック）、`image_cache` はそのデコード結果キャッシュ（#481）。
 ///
-/// `choice` が `Some((options, cursor))`（選択肢表示中、#482）のときは、右側テキスト領域
-/// （`split_columns` が返すテキスト領域、#480の50/50分割＋#488のスペーサーはそのまま）に
-/// 選択肢一覧を描画し、通常の相手/自分2ウィンドウ（`draw_text_windows`）は描かない。選択肢
-/// には特定の話者が無いため、相手/自分の上下分割という概念自体が意味を持たない
-/// （`line`/`choice` は同時に `Some` にならない — `Playback::current_line`/`current_choice`
-/// が排他的なため。呼び出し側の `main.rs` はこの排他性を意識せず、両方をそのまま渡すだけで
-/// よい）。選択肢表示中も左側のイベント絵/プレースホルダ（`image_fade`）はそのまま描画され
-/// 続ける — 左カラムは右カラム（テキスト/選択肢の切替）とは独立しているため、選択肢表示は
-/// 画像側のフェードやサイズに影響しない。
+/// `choice` が `Some((options, cursor, columns))`（選択肢表示中、#482。`columns` はグリッド
+/// 配置の列数、#508）のときは、右側テキスト領域（`split_columns` が返すテキスト領域、#480の
+/// 50/50分割＋#488のスペーサーはそのまま）に選択肢一覧を描画し、通常の相手/自分2ウィンドウ
+/// （`draw_text_windows`）は描かない。選択肢には特定の話者が無いため、相手/自分の上下分割
+/// という概念自体が意味を持たない（`line`/`choice` は同時に `Some` にならない —
+/// `Playback::current_line`/`current_choice` が排他的なため。呼び出し側の `main.rs` は
+/// この排他性を意識せず、両方をそのまま渡すだけでよい）。選択肢表示中も左側のイベント絵/
+/// プレースホルダ（`image_fade`）はそのまま描画され続ける — 左カラムは右カラム（テキスト/
+/// 選択肢の切替）とは独立しているため、選択肢表示は画像側のフェードやサイズに影響しない。
+///
+/// `blackout`（`Playback::is_blackout`、#512）が `true` のときは、左側の画像プレースホルダ/
+/// イベント絵の代わりに黒一色を敷く。GUI版 `NovelRenderer` の `blackoutOverlay` が
+/// 背景・立ち絵・イベント絵レイヤーより前面・ダイアログボックスより背面に位置する
+/// （＝暗転中もテキストは黒地の上にそのまま読める）のに倣い、右側のテキスト/選択肢
+/// （`draw_text_windows`/`draw_choice_list`）は暗転の影響を受けず通常どおり描画する。
+/// `image_fade` のスナップショット計算自体は暗転中も継続する（クロスフェードの内部時刻を
+/// 止めない）が、その結果は使わず捨てる — 暗転解除後にイベント絵が変な位置から再開しない
+/// ようにするため。
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     config: &Config,
     line: Option<&DisplayLine>,
-    choice: Option<(&[ChoiceOption], usize)>,
+    choice: Option<(&[ChoiceOption], usize, Option<u32>)>,
     position: usize,
     total: usize,
     is_at_end: bool,
@@ -240,6 +254,7 @@ pub fn draw(
     now: Instant,
     image_fade: Option<&ImageFadeState>,
     image_cache: &mut ImageCache,
+    blackout: bool,
 ) {
     let actual = frame.area();
     if !fits_required_size(actual) {
@@ -265,9 +280,15 @@ pub fn draw(
             now,
         )
     });
-    draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
+    if blackout {
+        draw_blackout(frame, placeholder_area);
+    } else {
+        draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
+    }
     match choice {
-        Some((options, cursor)) => draw_choice_list(frame, text_area, options, cursor),
+        Some((options, cursor, columns)) => {
+            draw_choice_list(frame, text_area, options, cursor, columns)
+        }
         None => draw_text_windows(
             frame,
             text_area,
@@ -287,31 +308,112 @@ const CHOICE_CURSOR_SYMBOL: &str = "▶ ";
 /// カーソル記号と同じ表示幅を保つための、非カーソル行の左詰めパディング。
 const CHOICE_CURSOR_PADDING: &str = "  ";
 
-/// 右側テキスト領域全体に選択肢を縦一列に描画する（#482）。相手/自分の2ウィンドウ分割
-/// （`draw_text_windows`）は使わない — 選択肢に話者は無いため。カーソル行は反転表示
-/// （`Modifier::REVERSED`）+ 先頭の [`CHOICE_CURSOR_SYMBOL`] で示す。左側（画像プレースホルダ列）の
-/// イベント絵/プレースホルダは選択肢表示中も独立して描画され続けるため、ここでは一切触れない。
-fn draw_choice_list(frame: &mut Frame, area: Rect, options: &[ChoiceOption], cursor: usize) {
-    let lines: Vec<Line> = options
-        .iter()
-        .enumerate()
-        .map(|(i, option)| {
-            let is_selected = i == cursor;
-            let prefix = if is_selected {
-                CHOICE_CURSOR_SYMBOL
-            } else {
-                CHOICE_CURSOR_PADDING
+/// 右側テキスト領域全体に選択肢を描画する。相手/自分の2ウィンドウ分割（`draw_text_windows`）
+/// は使わない — 選択肢に話者は無いため。カーソル行は反転表示（`Modifier::REVERSED`）+
+/// 先頭の [`CHOICE_CURSOR_SYMBOL`] で示す。左側（画像プレースホルダ列）のイベント絵/
+/// プレースホルダは選択肢表示中も独立して描画され続けるため、ここでは一切触れない。
+///
+/// `columns` が `None` または `1` 以下（`Event::Choice.columns` 未指定/不正値、#508）なら
+/// 従来どおりの縦一列描画（#482、非破壊）。`2` 以上なら [`draw_choice_grid`] にグリッド
+/// 描画を委譲する。
+/// 選択肢1件分のカーソル記号と強調スタイルを決める（#508 セルフレビュー: `draw_choice_list`
+/// と `draw_choice_grid` で同一ロジックが重複していたため共通化）。
+fn choice_cursor_prefix_and_style(is_selected: bool) -> (&'static str, Style) {
+    if is_selected {
+        (
+            CHOICE_CURSOR_SYMBOL,
+            Style::default().add_modifier(Modifier::REVERSED),
+        )
+    } else {
+        (CHOICE_CURSOR_PADDING, Style::default())
+    }
+}
+
+fn draw_choice_list(
+    frame: &mut Frame,
+    area: Rect,
+    options: &[ChoiceOption],
+    cursor: usize,
+    columns: Option<u32>,
+) {
+    let columns = columns.unwrap_or(1).max(1);
+    if columns <= 1 {
+        let lines: Vec<Line> = options
+            .iter()
+            .enumerate()
+            .map(|(i, option)| {
+                let (prefix, style) = choice_cursor_prefix_and_style(i == cursor);
+                Line::styled(format!("{prefix}{}", option.text), style)
+            })
+            .collect();
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        render_wrapped_paragraph(frame, area, paragraph);
+        return;
+    }
+    draw_choice_grid(frame, area, options, cursor, columns as usize);
+}
+
+/// 選択肢を `columns` 列のグリッドとして描画する（#508、`draw_choice_list` から
+/// `columns >= 2` のときのみ呼ばれる）。行方向は `Layout::Vertical`、各行内の列方向は
+/// `Layout::Horizontal` をネストして組む — `i % columns` 列目・`i / columns` 行目に配置する
+/// GUI版 `novelLayout.ts` の `computeChoiceGridLayout` と同じ規則（行優先で敷き詰める）。
+///
+/// 縦一列描画（`Wrap` 付き `Paragraph`）と異なり、各セルは折り返し無しの1行表示にする —
+/// TUIはセル/グリフ単位の離散描画のため、ボタン状の固定幅グリッドセルに複数行の折り返しを
+/// 持ち込むと行の高さ計算（`Constraint::Length(1)`）が崩れる。長いテキストは `Paragraph`
+/// の既定動作でそのまま右側が切り詰められる（縦一列描画が `Wrap` するのとは異なる、
+/// 固定幅ボタンという性質上の意図的な簡略化）。`Wrap` を使わないため、縦一列描画側が
+/// 依存している [`render_wrapped_paragraph`] の極小幅ガード（ratatui の `Wrap` 折り返し
+/// panicバグ対策）はここでは不要。
+///
+/// `area` の高さが総行数に満たない場合は、縦一列描画（`Wrap` 無しでは元々スクロール機構が
+/// 存在しない、`choice_list_with_many_options_does_not_panic_when_overflowing_area_height`
+/// 参照）と同様にそのまま見切れる — グリッド化に伴う新規の退行ではない。
+///
+/// `columns` は選択肢数（`total`）を超えないようここでもクランプする（バグ修正、#508）。
+/// 呼び出し元（`Playback::playback_item_from_event`）は既に選択肢数へクランプ済みの値しか
+/// 積まないはずだが、この関数は `pub(crate)` でテストからも直接呼ばれうるため、実際に
+/// ハングを起こす箇所（このすぐ下の `col_areas` の `Vec<Constraint>` 生成 —
+/// `columns` 個の要素を持つベクタを ratatui の `Layout::split`＝cassowary線形制約
+/// ソルバーに渡す）そのものにも多重にクランプを入れておく。実測: クランプ無しで
+/// `columns=2_000_000` を渡すと2分以上応答が返らずSIGKILLが必要だった。`columns >= total`
+/// のときクランプしても `rows = total.div_ceil(columns)` は常に `1` のままなので、
+/// 見た目（行数・各行の並び）はクランプの有無で変わらない — 純粋に性能上の安全弁。
+fn draw_choice_grid(
+    frame: &mut Frame,
+    area: Rect,
+    options: &[ChoiceOption],
+    cursor: usize,
+    columns: usize,
+) {
+    let total = options.len();
+    if total == 0 || columns == 0 {
+        return;
+    }
+    let columns = columns.min(total);
+    let rows = total.div_ceil(columns);
+    let row_areas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![Constraint::Length(1); rows])
+        .split(area);
+
+    for row in 0..rows {
+        let col_areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Ratio(1, columns as u32); columns])
+            .split(row_areas[row]);
+        for (col, col_area) in col_areas.iter().enumerate() {
+            let index = row * columns + col;
+            // 総数が列数で割り切れない場合、最終行の余った列には何も描画しない
+            // （例: 7要素・3列なら最終行は index 6 の1セルだけ埋まる）。
+            let Some(option) = options.get(index) else {
+                continue;
             };
-            let style = if is_selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-            Line::styled(format!("{prefix}{}", option.text), style)
-        })
-        .collect();
-    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    render_wrapped_paragraph(frame, area, paragraph);
+            let (prefix, style) = choice_cursor_prefix_and_style(index == cursor);
+            let paragraph = Paragraph::new(Line::styled(format!("{prefix}{}", option.text), style));
+            frame.render_widget(paragraph, *col_area);
+        }
+    }
 }
 
 /// 左側: イベント絵（`image` が `Some` のとき、quadrant block グリッドとして描画）、または
@@ -331,6 +433,16 @@ fn draw_placeholder(frame: &mut Frame, area: Rect, config: &Config, image: Optio
 
     let paragraph = Paragraph::new(label).alignment(Alignment::Center);
     frame.render_widget(paragraph, area);
+}
+
+/// 暗転中（`Playback::is_blackout`、#512）に画像プレースホルダの代わりに描く、黒一色の塗り
+/// つぶし。`Block` に文字は乗せず背景色のみ黒にする — GUI版 `blackoutOverlay`（`fill(0x000000)`
+/// のみで文字を持たない全画面 `Graphics`）と同じ「黒で覆うだけ」の見た目。ラベルや罫線を
+/// 出さない（`draw_too_small_message` 等と違い、暗転は演出そのものが目的なので追加の文言は
+/// 不要）。
+fn draw_blackout(frame: &mut Frame, area: Rect) {
+    let block = Block::default().style(Style::default().bg(Color::Black));
+    frame.render_widget(block, area);
 }
 
 /// quadrant block 変換済みのセル格子（[`RenderedImage`]）を、セルごとに fg/bg 付き `Span` の
@@ -360,10 +472,116 @@ fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
     frame.render_widget(paragraph, area);
 }
 
-/// スプラッシュ画面: `config.splash.lines` に設定されたロゴ行を画面中央に表示する。
-/// ロゴの内容はゲームごとに異なるため、このエンジン側は「中央寄せして表示する」
+/// スプラッシュ画面: `config.splash.logo_image` が設定されていればフルキャンバス画像表示
+/// （[`draw_fullscreen_image`]、#530）、そうでなければ従来どおり `config.splash.lines` の
+/// ロゴ行を画面中央に表示するテキストモード（[`draw_splash_text`]）を描く。画像のロードに
+/// 失敗した場合（`ImageCache::get_or_load` が `None`）もテキストモードへフォールバックする
+/// — `splash.lines` が空でも既存のテキストモードどおり「空行 + 開始ヒント」だけは描く。
+/// ロゴの内容（ASCII アート本体・画像ファイル）はゲームごとに異なるため、このエンジン側は
+/// 表示方法だけを担い、内容そのものは持たない（`Config::splash` 参照）。
+///
+/// `scroll_offset` はフルキャンバス画像表示モードでのみ意味を持つ（呼び出し側 `main.rs` の
+/// `show_splash` が `Action::MoveUp`/`Action::MoveDown` から配線する）。テキストモードでは
+/// 無視される。
+pub fn draw_splash(
+    frame: &mut Frame,
+    config: &Config,
+    image_cache: &mut ImageCache,
+    scroll_offset: u16,
+) {
+    if let Some(path) = config.resolve_splash_logo_path() {
+        if let Some(decoded) = image_cache.get_or_load(&path) {
+            draw_fullscreen_image(frame, &decoded, scroll_offset);
+            return;
+        }
+    }
+    draw_splash_text(frame, config);
+}
+
+/// スプラッシュ画像モードの最大スクロール量（最下端オフセット）を返す。
+/// `show_splash` が target_scroll_offset 自体を入力時にクランプするための補助関数。
+/// ロゴ画像が無い／読めない場合はテキストモード相当として 0 を返す。
+pub(crate) fn splash_max_scroll_offset(config: &Config, image_cache: &mut ImageCache) -> u16 {
+    let Some(path) = config.resolve_splash_logo_path() else {
+        return 0;
+    };
+    let Some(decoded) = image_cache.get_or_load(&path) else {
+        return 0;
+    };
+    let total_rows = compute_full_width_rows(decoded.width, decoded.height, REQUIRED_TOTAL_WIDTH);
+    clamp_scroll_offset(u16::MAX, total_rows, REQUIRED_MAIN_CONTENT_ROWS)
+}
+
+/// フルキャンバス画像表示（#530）。テキストウィンドウ・スプラッシュの罫線を畳み、画像を
+/// アスペクト比を保ったままキャンバス全幅（[`REQUIRED_TOTAL_WIDTH`]）へ contain-fit する
+/// （クロップは行わない）。必要総行数は `image_render::compute_full_width_rows` で
+/// **全幅前提の式から直接**求め、高さが表示可能行数を超える場合は追加の縮小をせず、
+/// `scroll_offset`（呼び出し側が `Action::MoveUp`/`Action::MoveDown` から配線する、
+/// `main.rs::show_splash` 参照）に応じて縦方向の可視範囲だけを
+/// [`rgba_to_quadrant_grid_window`] で生成して描画する（スクロール）。
+///
+/// 端末サイズが [`fits_required_size`] を満たさない場合は [`draw_too_small_message`] へ
+/// フォールバックする — 固定サイズのキャンバス幅（84列）を前提に contain 計算するため、
+/// 通常のゲームUI描画（[`draw`]）と同じ最小サイズ制約を課す。GUI版 dual-window と同じく
+/// 罫線・タイトルは描かない（将来イベント絵演出からも呼べる汎用の表示として、装飾を
+/// 持たせない）。
+fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset: u16) {
+    let actual = frame.area();
+    if !fits_required_size(actual) {
+        draw_too_small_message(frame, actual);
+        return;
+    }
+    let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+    let canvas = compute_centered_canvas(actual, required);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(canvas);
+    let image_area = rows[0];
+    let hint_area = rows[1];
+
+    let fitted_cols = image_area.width;
+    let fitted_rows = compute_full_width_rows(image.width, image.height, fitted_cols);
+    if fitted_cols == 0 || fitted_rows == 0 {
+        return;
+    }
+
+    let scrollable = fitted_rows > image_area.height;
+    let offset = clamp_scroll_offset(scroll_offset, fitted_rows, image_area.height);
+    let visible_rows = image_area.height.min(fitted_rows);
+    let visible = rgba_to_quadrant_grid_window(
+        &image.rgba,
+        image.width,
+        image.height,
+        fitted_cols,
+        fitted_rows,
+        offset,
+        visible_rows,
+    );
+    let draw_area = Rect {
+        x: image_area.x,
+        y: image_area.y,
+        width: fitted_cols,
+        height: visible.rows,
+    };
+    draw_image_grid(frame, draw_area, &visible);
+
+    let hint = if scrollable {
+        "Enter / Space で開始　↑/↓ でスクロール"
+    } else {
+        "Enter / Space で開始"
+    };
+    let hint_paragraph = Paragraph::new(hint)
+        .alignment(Alignment::Center)
+        .style(Style::default().add_modifier(Modifier::DIM));
+    frame.render_widget(hint_paragraph, hint_area);
+}
+
+/// スプラッシュ画面（テキストモード）: `config.splash.lines` に設定されたロゴ行を画面中央に
+/// 表示する。ロゴの内容はゲームごとに異なるため、このエンジン側は「中央寄せして表示する」
 /// という汎用的な描画だけを担い、内容そのものは持たない（`Config::splash` 参照）。
-pub fn draw_splash(frame: &mut Frame, config: &Config) {
+fn draw_splash_text(frame: &mut Frame, config: &Config) {
     let area = frame.area();
     let block = Block::default()
         .borders(Borders::ALL)
@@ -731,6 +949,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -785,6 +1004,7 @@ mod tests {
                         now,
                         Some(&image_fade),
                         &mut image_cache,
+                        false,
                     )
                 })
                 .unwrap();
@@ -817,6 +1037,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -839,6 +1060,362 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- #512: draw() の blackout パラメータ（画像プレースホルダの黒塗り） ----
+
+    /// `render()`（既存ヘルパー、blackout は常に false 固定）の blackout 可変版。
+    /// blackout の有無によるテキスト側/画像側の描画差分を比較する目的で使う。
+    fn render_with_blackout(
+        config: &Config,
+        line: Option<&DisplayLine>,
+        blackout: bool,
+        width: u16,
+        height: u16,
+    ) -> Buffer {
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    config,
+                    line,
+                    None,
+                    1,
+                    1,
+                    false,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    blackout,
+                )
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn draw_blackout_true_fills_placeholder_area_with_black_only() {
+        let config = Config::default();
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        let buffer = render_with_blackout(&config, None, true, CANVAS_W, CANVAS_H);
+        for y in 0..placeholder_area.height {
+            for x in 0..placeholder_area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert_eq!(
+                    cell.bg,
+                    Color::Black,
+                    "cell ({x},{y}) should be filled black while blackout is active"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_blackout_true_does_not_alter_text_area_cells() {
+        let config = Config::default();
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["暗転中でも読めるはずの台詞".to_string()],
+            event_image: None,
+        };
+        let normal = render_with_blackout(&config, Some(&line), false, CANVAS_W, CANVAS_H);
+        let blacked = render_with_blackout(&config, Some(&line), true, CANVAS_W, CANVAS_H);
+
+        let (_placeholder, _gap, text_area) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        for y in text_area.y..(text_area.y + text_area.height) {
+            for x in text_area.x..(text_area.x + text_area.width) {
+                let normal_cell = normal.cell((x, y)).expect("in bounds");
+                let blacked_cell = blacked.cell((x, y)).expect("in bounds");
+                assert_eq!(
+                    normal_cell.symbol(),
+                    blacked_cell.symbol(),
+                    "cell ({x},{y}) text content should be unaffected by blackout"
+                );
+                assert_eq!(
+                    normal_cell.fg, blacked_cell.fg,
+                    "cell ({x},{y}) fg should be unaffected by blackout"
+                );
+                assert_eq!(
+                    normal_cell.bg, blacked_cell.bg,
+                    "cell ({x},{y}) bg should be unaffected by blackout"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_blackout_true_with_choice_renders_both_black_placeholder_and_choice_list() {
+        let config = Config::default();
+        let options = vec![choice_option("はい", "a"), choice_option("いいえ", "b")];
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0, None)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        for y in 0..placeholder_area.height {
+            for x in 0..placeholder_area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert_eq!(
+                    cell.bg,
+                    Color::Black,
+                    "cell ({x},{y}) should stay black even while a choice list is showing"
+                );
+            }
+        }
+        let text = buffer_text(buffer);
+        assert!(text.contains("はい"), "buffer was: {text}");
+        assert!(text.contains("いいえ"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_blackout_suppresses_image_fade_rendering_even_when_resolved() {
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        let fixture_path =
+            diagonal_pattern_webp_fixture(placeholder_area.width, placeholder_area.height);
+        let (config, relative) = config_and_relative_path_for(&fixture_path);
+        let image_fade = ImageFadeState::settled(Some(relative));
+
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for y in 0..placeholder_area.height {
+            for x in 0..placeholder_area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert_ne!(
+                    cell.symbol(),
+                    "▞",
+                    "cell ({x},{y}) should not show the resolved event image glyph while blackout is active"
+                );
+                assert_eq!(
+                    cell.bg,
+                    Color::Black,
+                    "cell ({x},{y}) should be black instead of the resolved event image"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_blackout_false_after_true_restores_placeholder_or_image() {
+        let mut config = Config::default();
+        config.placeholder.style = PlaceholderStyle::Label;
+        config.placeholder.label = "[画像]".to_string();
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+        let blacked_text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !blacked_text.contains("[画像]"),
+            "buffer was: {blacked_text}"
+        );
+
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    false,
+                )
+            })
+            .unwrap();
+        let restored_text = buffer_text(terminal.backend().buffer());
+        assert!(
+            restored_text.contains("[画像]"),
+            "blackout=false に戻ったら通常のプレースホルダに復帰するはず, buffer was: {restored_text}"
+        );
+
+        // 黒塗りが残っていないかは、全角グリフの継続セル（`buffer_text` のコメント参照:
+        // 直前のグラフェムを表示するために予約された空セルで、どのウィジェットからも
+        // 書き込まれない）を除いて判定する。継続セルは Paragraph が「[画像]」ラベルを
+        // 描画する際に一切タッチしないため、before/after のどちらのフレームでも触られず
+        // 前フレームの値をそのまま持ち越す ratatui 側の既知の挙動であり、暗転解除の
+        // 検証対象ではない。
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        let buffer = terminal.backend().buffer();
+        let mut has_black_cell = false;
+        for y in placeholder_area.y..(placeholder_area.y + placeholder_area.height) {
+            let mut x = placeholder_area.x;
+            let x_end = placeholder_area.x + placeholder_area.width;
+            while x < x_end {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                if cell.bg == Color::Black {
+                    has_black_cell = true;
+                }
+                x += cell.symbol().cell_width().max(1);
+            }
+        }
+        assert!(
+            !has_black_cell,
+            "blackout=false のフレームでは黒塗りが残ってはいけない"
+        );
+    }
+
+    #[test]
+    fn draw_blackout_at_minimum_fits_required_size_does_not_panic() {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+
+        // ちょうど最小サイズでも実際に通常UI(黒塗り)側の分岐に入っていることを確認する
+        // （too-small分岐へ誤って落ちていないことの裏付け）。
+        let (placeholder_area, _gap, _text) = split_columns(Rect::new(
+            0,
+            0,
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT - 1,
+        ));
+        let buffer = terminal.backend().buffer();
+        let cell = buffer
+            .cell((placeholder_area.x, placeholder_area.y))
+            .expect("in bounds");
+        assert_eq!(cell.bg, Color::Black);
+    }
+
+    #[test]
+    fn draw_blackout_below_fits_required_size_shows_too_small_message_not_black_screen() {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH - 1,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+        let area = buffer.area();
+        let has_black_cell = (0..area.height).any(|y| {
+            (0..area.width).any(|x| buffer.cell((x, y)).expect("in bounds").bg == Color::Black)
+        });
+        assert!(
+            !has_black_cell,
+            "端末が要求サイズ未満のときは黒塗り(暗転)を描画してはいけない"
+        );
     }
 
     #[test]
@@ -868,6 +1445,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -902,6 +1480,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -934,6 +1513,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -966,6 +1546,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -998,6 +1579,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1036,6 +1618,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1074,6 +1657,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1119,6 +1703,7 @@ mod tests {
                     now,
                     None,
                     &mut typing_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1156,6 +1741,7 @@ mod tests {
                     now,
                     None,
                     &mut done_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1215,6 +1801,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1256,6 +1843,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1322,6 +1910,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1333,7 +1922,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田田田".to_string(), "回回回".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("田田田"), "buffer was: {text}");
         assert!(text.contains("回回回"), "buffer was: {text}");
@@ -1345,7 +1937,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Enter"), "buffer was: {text}");
     }
@@ -1359,7 +1954,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("テストゲーム"), "buffer was: {text}");
     }
@@ -1370,7 +1968,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田田田田田田田田田田".to_string(); 20];
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
     }
 
     #[test]
@@ -1380,7 +1981,10 @@ mod tests {
         config.splash.lines = vec!["田".to_string()];
         config.splash.color = "not-a-real-color".to_string();
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("田"), "buffer was: {text}");
     }
@@ -1394,7 +1998,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Enter"), "buffer was: {text}");
     }
@@ -1408,7 +2015,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
     }
 
     #[test]
@@ -1417,9 +2027,217 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["AB田C".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("AB田C"), "buffer was: {text}");
+    }
+
+    // ---- フルキャンバス画像表示モード（#530）----
+
+    #[test]
+    fn draw_fullscreen_image_wide_image_with_enough_space_shows_hint_without_scroll_indicator() {
+        // 横長画像(比4.0)はキャンバス全幅へcontain-fitしても表示可能行数に収まるため、
+        // スクロール不要になり、ヒントは「Enter / Space で開始」だけになる。
+        let image = DecodedImage {
+            width: 4,
+            height: 1,
+            rgba: solid_rgba((200, 80, 80), 4, 1),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Enter / Space で開始"), "buffer was: {text}");
+        assert!(
+            !text.contains('↑') && !text.contains('↓'),
+            "スクロール不要な画像では↑/↓ヒントを出してはいけない, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_tall_image_needing_scroll_shows_scroll_hint() {
+        // 正方形画像(比1.0)は端末セルの非正方形補正込みでcontain-fitすると表示可能行数
+        // (image_area.height)を超えるため、スクロールヒント(↑/↓)が追加される。
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: solid_rgba((80, 80, 200), 1, 1),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains('↑') && text.contains('↓'),
+            "スクロール要の画像では↑/↓ヒントを出すはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_scroll_offset_far_beyond_content_clamps_without_panicking() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: solid_rgba((10, 20, 30), 1, 1),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, u16::MAX))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("Enter"),
+            "末尾でクランプされた状態でもヒントは描画されるはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_terminal_too_small_shows_too_small_message_not_text_fallback() {
+        // #530 デシジョンテーブル: 画面が小さすぎる場合、画像モード自身のtoo-smallガードが
+        // 効き、draw_splash_textのテキストモードへは一切フォールバックしない。
+        let image = DecodedImage {
+            width: 4,
+            height: 1,
+            rgba: solid_rgba((10, 20, 30), 4, 1),
+        };
+        // 幅だけを不足させる（高さはREQUIRED_TOTAL_HEIGHTちょうど）。極小(5x5)だと
+        // メッセージ自体が描画領域に収まりきらず切り詰められてしまうため、
+        // `draw_too_small_message_content_survives_at_moderately_narrow_width` と同じ
+        // 「狭いがゼロではない」中間幅を使う。
+        let moderately_narrow_width = REQUIRED_TOTAL_WIDTH / 2;
+        let mut terminal =
+            Terminal::new(TestBackend::new(moderately_narrow_width, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_fullscreen_image_zero_sized_decoded_image_does_not_panic() {
+        // compute_full_width_rows(0, 0, ..) は 0 を返し、draw_fullscreen_image は
+        // fitted_cols/rowsが0のとき早期returnする(グリッド構築・描画をどちらもしない)。
+        let image = DecodedImage {
+            width: 0,
+            height: 0,
+            rgba: vec![],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+    }
+
+    #[test]
+    fn draw_fullscreen_image_extremely_tall_image_uses_full_width_and_scrolls() {
+        // 極端な縦長画像でも高さ優先の縮小へ切り替えず、全幅を使って縦スクロールする。
+        let color = (10u8, 20u8, 30u8);
+        let image = DecodedImage {
+            width: 1,
+            height: 50,
+            rgba: solid_rgba(color, 1, 50),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let image_color = Color::Rgb(color.0, color.1, color.2);
+        assert_eq!(
+            buffer.cell((0, 0)).unwrap().bg,
+            image_color,
+            "極端な縦長画像でも画像はキャンバス左端から全幅で始まるはず"
+        );
+        assert_eq!(
+            buffer.cell((CANVAS_W - 1, 0)).unwrap().bg,
+            image_color,
+            "極端な縦長画像でも画像はキャンバス右端まで全幅で使うはず"
+        );
+        assert!(
+            buffer_text(buffer).contains("↑/↓ でスクロール"),
+            "極端な縦長画像では縦スクロールヒントを表示するはず"
+        );
+    }
+
+    /// `splash.logo_image`/`event_image.assets_dir` を実在するWebPフィクスチャへ向けた
+    /// `Config` を作る（`draw_splash` がフルキャンバス画像表示モードへ実際に分岐する
+    /// テスト用。`config_and_relative_path_for` を土台に、スプラッシュ用フィールドを
+    /// 追加で設定する）。
+    fn splash_config_with_logo_image(fixture_path: &std::path::Path) -> Config {
+        let (mut config, relative) = config_and_relative_path_for(fixture_path);
+        config.splash.enabled = true;
+        config.splash.logo_image = Some(std::path::PathBuf::from(relative));
+        config
+    }
+
+    #[test]
+    fn draw_splash_logo_image_load_failure_falls_back_to_text_mode() {
+        // ファイルが存在しないパスを指す logo_image を設定する（実際にはロードに失敗する）。
+        // #530: 画像ロード失敗時はテキストモード（`splash.lines`）へフォールバックする。
+        let mut config = Config::default();
+        config.event_image.assets_dir = std::path::PathBuf::from("tui/tests/fixtures");
+        config.splash.enabled = true;
+        config.splash.logo_image = Some(std::path::PathBuf::from("does-not-exist.webp"));
+        config.splash.lines = vec!["田".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("田"),
+            "ロード失敗時はテキストモードのロゴ行が描画されるはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_splash_logo_image_load_failure_with_empty_lines_does_not_panic() {
+        let mut config = Config::default();
+        config.event_image.assets_dir = std::path::PathBuf::from("tui/tests/fixtures");
+        config.splash.enabled = true;
+        config.splash.logo_image = Some(std::path::PathBuf::from("does-not-exist.webp"));
+        config.splash.lines = vec![];
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("Enter / Space で開始"),
+            "lines が空でも開始ヒントはテキストモードへフォールバックして表示するはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_splash_valid_logo_image_renders_fullscreen_image_mode_not_text() {
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((200, 80, 80), 4, 1), 4, 1);
+        let mut config = splash_config_with_logo_image(&fixture_path);
+        config.game_name = "テストゲーム".to_string();
+        config.splash.lines = vec!["田".to_string()]; // logo_image優先で無視されるはず
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !text.contains("田"),
+            "logo_imageが有効な場合はテキストモードのlinesを描画しないはず, buffer was: {text}"
+        );
+        assert!(
+            !text.contains("テストゲーム"),
+            "フルキャンバス画像表示はテキストモードの罫線タイトルを描かないはず, buffer was: {text}"
+        );
+        assert!(text.contains("Enter / Space で開始"), "buffer was: {text}");
     }
 
     // ---- #480: 画面分割(50/50・プレイヤー/相手ウィンドウ分離・枠なし)のテスト ----
@@ -1481,6 +2299,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2211,6 +3030,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2260,6 +3080,7 @@ mod tests {
                     now,
                     None,
                     &mut typing_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2294,6 +3115,7 @@ mod tests {
                     now,
                     None,
                     &mut done_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2413,6 +3235,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2600,7 +3423,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 0)),
+                    Some((&options, 0, None)),
                     1,
                     1,
                     false,
@@ -2609,6 +3432,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2636,7 +3460,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 1)),
+                    Some((&options, 1, None)),
                     1,
                     1,
                     false,
@@ -2645,6 +3469,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2691,7 +3516,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 0)),
+                    Some((&options, 0, None)),
                     1,
                     1,
                     false,
@@ -2700,6 +3525,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2725,7 +3551,7 @@ mod tests {
                         f,
                         &config,
                         None,
-                        Some((&options, 0)),
+                        Some((&options, 0, None)),
                         1,
                         1,
                         false,
@@ -2734,6 +3560,7 @@ mod tests {
                         now,
                         None,
                         &mut image_cache,
+                        false,
                     )
                 })
                 .unwrap_or_else(|e| panic!("W={w}で描画がpanicした: {e}"));
@@ -2757,7 +3584,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 0)),
+                    Some((&options, 0, None)),
                     1,
                     1,
                     false,
@@ -2766,6 +3593,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2790,7 +3618,7 @@ mod tests {
                     f,
                     &config,
                     None,
-                    Some((&options, 0)),
+                    Some((&options, 0, None)),
                     1,
                     1,
                     false,
@@ -2799,6 +3627,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2830,6 +3659,184 @@ mod tests {
             rows_with_a >= 2,
             "十分に長い全角文字列なので複数行に折り返されるはず（実際は{rows_with_a}行）"
         );
+    }
+
+    // ---- #508: 選択肢グリッド描画（`draw_choice_grid`/`draw_choice_list`分岐）のテスト ----
+
+    #[test]
+    fn draw_choice_grid_does_not_panic_at_extremely_narrow_width_with_many_columns() {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&format!("o{i}"), "x"))
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(1, 3)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_choice_grid(f, area, &options, 0, 10);
+            })
+            .unwrap_or_else(|e| panic!("極端に狭い幅×多列(10)でpanicした: {e}"));
+    }
+
+    // ---- #508 バグ修正の回帰テスト: columns の上限クランプが無いとハングする ----
+
+    #[test]
+    fn draw_choice_grid_completes_quickly_when_columns_vastly_exceeds_option_count() {
+        // レビューで実際にハングを再現した条件そのもの: 選択肢はわずか2件なのに
+        // columns=2_000_000（`[選択: 列=200000]` のような巨大値、または実際に確認された
+        // 2_000_000）が渡ってくるケース。クランプ無しだと `col_areas` の
+        // `Vec<Constraint>; columns` 生成 → ratatui `Layout::split`（cassowary線形制約
+        // ソルバー）が2分以上応答を返さずSIGKILLが必要だった。修正後は内部で `total`（2）
+        // までクランプされるため、他の（現実的な列数の）draw_choice_gridテストと同程度の
+        // 時間で完了するはず。「常識的な範囲での完了」を秒単位のタイムアウトで直接検証する
+        // （実際にハングするコードをそのままテストに残さないための実行時間アサーション）。
+        let options = vec![choice_option("A", "x"), choice_option("B", "y")];
+        let area = Rect::new(0, 0, 40, 3);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+        let start = std::time::Instant::now();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 2_000_000);
+            })
+            .unwrap_or_else(|e| panic!("巨大なcolumnsでpanicした: {e}"));
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "columns=2,000,000 でも選択肢数(2)にクランプされ高速に完了するはず（実測: {elapsed:?}）。\
+             2秒を超えるならクランプの退行（#508バグの再発）を疑う。"
+        );
+    }
+
+    #[test]
+    fn draw_choice_grid_ragged_last_row_leaves_missing_cells_blank_without_panic() {
+        // 8件・columns=3。行優先配置で row0=[0,1,2] row1=[3,4,5] row2=[6,7]
+        // （col2欠の端数行）になる。
+        let options: Vec<ChoiceOption> = (0..8)
+            .map(|i| choice_option(&format!("O{i}"), "x"))
+            .collect();
+        let area = Rect::new(0, 0, 30, 3);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 3);
+            })
+            .unwrap_or_else(|e| panic!("端数行のあるグリッドでpanicした: {e}"));
+
+        // draw_choice_grid内部と同じLayout計算でrow2・col2のRectを再現し、
+        // そこに何も描画されず空白のままであることを確認する（欠けたセルは単に
+        // スキップされるだけでpanicはしない、という実装の意図を直接検証する）。
+        let buffer = terminal.backend().buffer();
+        let row_areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(1); 3])
+            .split(area);
+        let col_areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Ratio(1, 3); 3])
+            .split(row_areas[2]);
+        let missing_cell = col_areas[2];
+        for y in missing_cell.y..missing_cell.y + missing_cell.height {
+            for x in missing_cell.x..missing_cell.x + missing_cell.width {
+                let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                assert_eq!(
+                    symbol, " ",
+                    "欠けたセル(row2,col2)は描画されず空白のままのはず (x={x},y={y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_choice_grid_selected_cursor_cell_uses_reversed_style() {
+        // 6件・columns=3ちょうど（端数無し、2行×3列）。カーソルはindex4("E")。
+        let letters = ["A", "B", "C", "D", "E", "F"];
+        let options: Vec<ChoiceOption> = letters.iter().map(|l| choice_option(l, "x")).collect();
+        let area = Rect::new(0, 0, 30, 2);
+        let cursor = 4;
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, cursor, 3);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let find_cell = |needle: char| -> (u16, u16) {
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    if buffer.cell((x, y)).expect("in bounds").symbol() == needle.to_string() {
+                        return (x, y);
+                    }
+                }
+            }
+            panic!("option {needle:?} should render somewhere, buffer was: {buffer:?}");
+        };
+        for (i, letter) in letters.iter().enumerate() {
+            let ch = letter.chars().next().unwrap();
+            let (x, y) = find_cell(ch);
+            let reversed = buffer
+                .cell((x, y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::REVERSED);
+            if i == cursor {
+                assert!(
+                    reversed,
+                    "カーソル位置(index {i}, {letter})は反転表示されるはず"
+                );
+            } else {
+                assert!(
+                    !reversed,
+                    "非カーソル位置(index {i}, {letter})は反転表示されないはず"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_choice_list_dispatches_to_grid_only_when_columns_at_least_2() {
+        // A/Bが同じ行(y)に描画されるかどうかで、グリッド委譲(columns>=2)か
+        // 従来の縦一列描画(columns None/0/1)かを見分ける。
+        let options = vec![
+            choice_option("A", "x"),
+            choice_option("B", "x"),
+            choice_option("C", "x"),
+            choice_option("D", "x"),
+        ];
+        let area = Rect::new(0, 0, 20, 4);
+        for columns in [None, Some(0), Some(1), Some(2)] {
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw_choice_list(f, area, &options, 0, columns);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let find_y = |needle: char| -> u16 {
+                for y in 0..area.height {
+                    for x in 0..area.width {
+                        if buffer.cell((x, y)).expect("in bounds").symbol() == needle.to_string() {
+                            return y;
+                        }
+                    }
+                }
+                panic!("option {needle:?} should render somewhere");
+            };
+            let a_y = find_y('A');
+            let b_y = find_y('B');
+            let is_grid = a_y == b_y;
+            match columns {
+                Some(c) if c >= 2 => assert!(
+                    is_grid,
+                    "columns={columns:?}: draw_choice_gridへ委譲されA/Bが同じ行に並ぶはず"
+                ),
+                _ => assert!(
+                    !is_grid,
+                    "columns={columns:?}: 非グリッドなのでA/Bは別々の行のはず"
+                ),
+            }
+        }
     }
 
     // -- D. page_indicator_area 単体テスト（#487） --
@@ -3345,6 +4352,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3383,6 +4391,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3418,6 +4427,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3467,6 +4477,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3519,6 +4530,7 @@ mod tests {
                     not_done_at,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3548,6 +4560,7 @@ mod tests {
                     done_at,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3596,7 +4609,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = f.area();
-                draw_choice_list(f, area, &[], 0);
+                draw_choice_list(f, area, &[], 0, None);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
