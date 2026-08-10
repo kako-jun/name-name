@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod flags;
 mod image_fade;
 mod image_render;
 mod input;

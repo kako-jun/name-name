@@ -20,9 +20,10 @@
 //! [`load_merged_document`] は `entry_script_path` が指すファイルを常にマージ順の先頭に置く
 //! ことで実現する（`Playback::from_document` は `Document::chapters` を先頭から順に走査して
 //! 再生位置0を決めるため、chapters の並び順を制御するだけで済み、`Playback` 側の変更は不要）。
-//! ジャンプ解決（`Playback::select_current_choice`）は `scene_start`（シーンID→位置の
-//! `HashMap`）がマージ後の `Document` 全体を対象に構築されるため、マージ順に関わらず
-//! 全ファイル横断で機能する。
+//! ジャンプ解決（`Playback::select_current_choice`）は `scene_index_by_id`（シーンID→
+//! `scene_order` 内インデックスの `HashMap`、#509 でシーン単位の遅延ビルドモデルに合わせて
+//! `scene_start` から置き換え済み）がマージ後の `Document` 全体を対象に構築されるため、
+//! マージ順に関わらず全ファイル横断で機能する。
 //!
 //! ## シーンID重複時の扱い
 //!
@@ -36,13 +37,13 @@
 //!
 //! ### 残存リスク: 負けた重複シーンは線形 advance で依然到達しうる（#496 追加スコープ）
 //!
-//! 上記の「先勝ち」は `scene_start`（シーンID→再生位置）の解決規約であり、負けた
-//! （後から出現した）重複シーンの `events` を `chapters` から取り除くわけではない
-//! （`merge_files` は `eprintln!` で警告するだけで `chapters` はそのまま連結する）。
-//! `playback::Playback::from_merged_document` が追加したファイル境界チェック
-//! （`item_file_ids`）はファイル単位の粒度でしか機能しないため、負けた重複シーンが
+//! 上記の「先勝ち」は `scene_index_by_id`（シーンID→`scene_order` 内インデックス）の
+//! 解決規約であり、負けた（後から出現した）重複シーンの `events` を `chapters` から
+//! 取り除くわけではない（`merge_files` は `eprintln!` で警告するだけで `chapters` は
+//! そのまま連結する）。`playback::Playback::from_merged_document` が追加したファイル境界
+//! チェック（`item_file_ids`）はファイル単位の粒度でしか機能しないため、負けた重複シーンが
 //! 同一ファイル内の到達可能な別シーンの直後に位置していれば、選択肢ジャンプでは到達不能
-//! （`scene_start` は勝者のみを指す）でも、通常の線形 `advance()` では依然その内容へ
+//! （`scene_index_by_id` は勝者のみを指す）でも、通常の線形 `advance()` では依然その内容へ
 //! たどり着ける。単一ファイル運用時代（#482）はシーンIDの重複が同一ファイル内の記述ミスに
 //! 限られ、複数ファイルをまたいだ偶発的なID衝突はそもそも起こり得なかった。複数 `.md` を
 //! 一括マージする本モジュール（#496）以降、この経路が新たに現実的なリスクになっている。
