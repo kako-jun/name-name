@@ -41,7 +41,7 @@
 
 use std::collections::HashMap;
 
-use name_name_parser::models::{ChoiceOption, Document, Event};
+use name_name_parser::models::{BgmAction, ChoiceOption, Document, Event};
 
 use crate::sentence;
 
@@ -164,6 +164,22 @@ pub struct Playback {
     /// 常に「同じファイル」判定になり実質無効化される）。`from_merged_document` だけが
     /// 複数の異なる id を持ちうる。
     item_file_ids: Vec<usize>,
+    /// `items[i]` の表示時点で再生されているべき BGM のパス（`Event::Bgm`、#502）。`items` と
+    /// 同じ長さを常に保つ（`item_file_ids` と同じ並行 Vec のパターン）。GUI版
+    /// `AudioManager.currentBgmUrl`（`NovelRenderer.currentBgmPath`）が「現在再生されている
+    /// べき BGM パス」を宣言的に持ち続けるのを、TUI では「その item が生成された時点の値を
+    /// 焼き付けて持ち回る」形で再現する。`Event::Choice` item も対象に含める（除外する理由が
+    /// ない）。
+    item_bgm: Vec<Option<String>>,
+    /// `items[i]` に到達した瞬間に一度だけ再生すべき SE のパス一覧（`Event::Se`、#502）。
+    /// 直前の item から現在の item までの間に出現した `[SE:]` を出現順にすべて含む
+    /// （複数の SE が連続していても取りこぼさない、通常は0〜1件）。BGM と異なり GUI版
+    /// `playSe` に持続する state は無い（ワンショット）ため、`item_bgm` のような「現在位置を
+    /// 問い合わせるだけの宣言的 state」ではなく、`event_loop` 側が「この item への新規到達」
+    /// （[`Playback::cursor`] の変化）を検出したときに一度だけ消費するトリガとして扱う想定。
+    /// ドキュメント末尾以降に出現した SE（後続 item が存在しない）は、どの item にも属せない
+    /// ため再生対象にならない（既知の制約、影響は軽微）。
+    item_se: Vec<Vec<String>>,
     index: usize,
     /// シーンID → そのシーンに属する最初の item の `items` 内インデックス。選択肢確定時の
     /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
@@ -239,8 +255,12 @@ impl Playback {
         }
         let mut items = Vec::new();
         let mut item_file_ids = Vec::new();
+        let mut item_bgm = Vec::new();
+        let mut item_se: Vec<Vec<String>> = Vec::new();
         let mut scene_start = HashMap::new();
         let mut current_event_image: Option<String> = None;
+        let mut current_bgm: Option<String> = None;
+        let mut pending_se: Vec<String> = Vec::new();
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
             let file_id = chapter_file_ids
                 .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
@@ -263,6 +283,27 @@ impl Playback {
                         Event::EventImageExit { .. } => {
                             current_event_image = None;
                         }
+                        // GUI版 `NovelRenderer` の `'Bgm' in event` 分岐（`audioManager.playBgm`/
+                        // `stopBgm`）と同じ意味論（#502）。`action === 'Play' && path` の両方が
+                        // 揃わない限り「停止」扱いになる GUI版の挙動をそのまま再現する
+                        // （`action: Play` でも `path: None` なら停止 — 通常の原稿では起こらない
+                        // 組み合わせだが、フォールバックとして GUI版に揃える）。`fade_ms` は
+                        // `Event::EventImage` の `fade_ms` と同じ理由で意図的に捨てる（TUIは
+                        // フェード無しの即時切り替え、MVPスコープ）。
+                        Event::Bgm { path, action, .. } => {
+                            current_bgm = match (action, path) {
+                                (BgmAction::Play, Some(p)) => Some(p.clone()),
+                                _ => None,
+                            };
+                        }
+                        // GUI版 `playSe` はワンショット再生で持続 state を持たないため、
+                        // `current_event_image`/`current_bgm` のような「直近の値」ではなく
+                        // 「次に生成される item に紐づけて後で一度だけ再生するトリガ」として
+                        // 貯めておく（`item_se` の doc comment 参照、#502）。`fade_ms` は BGM と
+                        // 同じ理由で捨てる。
+                        Event::Se { path, .. } => {
+                            pending_se.push(path.clone());
+                        }
                         _ => {
                             if let Some(item) = playback_item_from_event(event) {
                                 let item = match item {
@@ -274,6 +315,8 @@ impl Playback {
                                 };
                                 items.push(item);
                                 item_file_ids.push(file_id);
+                                item_bgm.push(current_bgm.clone());
+                                item_se.push(std::mem::take(&mut pending_se));
                             }
                         }
                     }
@@ -283,6 +326,8 @@ impl Playback {
         Self {
             items,
             item_file_ids,
+            item_bgm,
+            item_se,
             index: 0,
             scene_start,
             choice_cursor: 0,
@@ -337,6 +382,37 @@ impl Playback {
         self.index = index;
         self.choice_cursor = 0;
         self.sync_sentence_pages();
+    }
+
+    /// 現在位置の item に紐づく BGM 状態（`Event::Bgm`、#502）。GUI版
+    /// `AudioManager.currentBgmUrl` と同じ「現在再生されているべき BGM パス」を表す宣言的
+    /// state。`items` が空、または現在位置が末尾を過ぎている場合は `None`（＝BGM無し）。
+    /// `event_loop` 側はフレームごとにこの値を前フレームの値と比較し、変化していれば
+    /// 再生中の BGM を切り替える（`item_bgm` の doc comment 参照）。
+    pub fn current_bgm(&self) -> Option<&str> {
+        self.item_bgm.get(self.index).and_then(|b| b.as_deref())
+    }
+
+    /// 現在位置の item に到達した際に一度だけ再生すべき SE のパス一覧（`Event::Se`、#502）。
+    /// `items` が空、または現在位置が末尾を過ぎている場合は空スライス。呼び出し側
+    /// （`event_loop`）は [`Playback::cursor`] の変化（＝この item への新規到達）を検出した
+    /// ときだけ、この一覧を消費して1回だけ再生する想定（`item_se` の doc comment 参照）。
+    pub fn current_se_cues(&self) -> &[String] {
+        self.item_se
+            .get(self.index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// 内部カーソル（`items` 内の生インデックス）。SE のワンショット再生を `event_loop` 側で
+    /// 「新しい item に到達した瞬間」として検出するための識別子として公開する（#502）。
+    /// [`Playback::position`]（Line item のみを数える会話行番号）と異なり、Choice item への
+    /// 遷移でも変化する。一方、`sentence_per_page` による同一 Line item 内の文送りでは
+    /// 変化しない（`self.index` 自体は動かないため）— 同じ item に紐づく SE を文送りのたびに
+    /// 再トリガーしない、という意図した挙動でもある。値そのものに意味的な使い道は無く、
+    /// 前フレームとの比較にのみ使う想定。
+    pub fn cursor(&self) -> usize {
+        self.index
     }
 
     /// 現在位置の会話行。現在位置が Choice item、会話行が1件もない、または末尾を過ぎている
@@ -494,9 +570,13 @@ impl Playback {
     #[cfg(test)]
     pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
         let item_file_ids = vec![0; lines.len()];
+        let item_bgm = vec![None; lines.len()];
+        let item_se = vec![Vec::new(); lines.len()];
         Self {
             items: lines.into_iter().map(PlaybackItem::Line).collect(),
             item_file_ids,
+            item_bgm,
+            item_se,
             index: 0,
             scene_start: HashMap::new(),
             choice_cursor: 0,
@@ -1711,5 +1791,225 @@ mod tests {
             pb.current_line().expect("line").speaker.as_deref(),
             Some("B")
         );
+    }
+
+    // ---- #502: BGM (Event::Bgm) / SE (Event::Se) の追跡 ----
+
+    fn bgm_play(path: &str) -> Event {
+        Event::Bgm {
+            path: Some(path.to_string()),
+            action: BgmAction::Play,
+            fade_ms: None,
+        }
+    }
+
+    fn bgm_stop() -> Event {
+        Event::Bgm {
+            path: None,
+            action: BgmAction::Stop,
+            fade_ms: None,
+        }
+    }
+
+    fn se(path: &str) -> Event {
+        Event::Se {
+            path: path.to_string(),
+            fade_ms: None,
+        }
+    }
+
+    #[test]
+    fn lines_before_any_bgm_have_none() {
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["前"])]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), None);
+    }
+
+    #[test]
+    fn dialog_after_bgm_play_carries_its_path() {
+        let doc = doc_single_scene(vec![bgm_play("amehure.ogg"), dialog(Some("A"), vec!["後"])]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("amehure.ogg"));
+    }
+
+    #[test]
+    fn bgm_stop_clears_current_bgm_for_subsequent_lines() {
+        let doc = doc_single_scene(vec![
+            bgm_play("amehure.ogg"),
+            dialog(Some("A"), vec!["再生中"]),
+            bgm_stop(),
+            dialog(Some("A"), vec!["停止後"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("amehure.ogg"));
+        pb.advance();
+        assert_eq!(pb.current_bgm(), None);
+    }
+
+    #[test]
+    fn later_bgm_play_replaces_the_previous_one() {
+        let doc = doc_single_scene(vec![
+            bgm_play("a.ogg"),
+            dialog(Some("A"), vec!["1"]),
+            bgm_play("b.ogg"),
+            dialog(Some("A"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        pb.advance();
+        assert_eq!(pb.current_bgm(), Some("b.ogg"));
+    }
+
+    #[test]
+    fn bgm_play_without_path_is_treated_as_stop_like_gui() {
+        // GUI版 `event.Bgm.action === 'Play' && event.Bgm.path` の両方が揃わない限り
+        // else（停止）分岐に落ちるのと同じ意味論（通常の原稿では起こらない組み合わせだが、
+        // フォールバックとして揃える）。
+        let doc = doc_single_scene(vec![
+            Event::Bgm {
+                path: None,
+                action: BgmAction::Play,
+                fade_ms: None,
+            },
+            dialog(Some("A"), vec!["後"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), None);
+    }
+
+    #[test]
+    fn bgm_state_persists_across_scene_and_chapter_boundaries() {
+        let ch1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![bgm_play("amehure.ogg"), dialog(Some("A"), vec!["ch1"])],
+            )],
+        );
+        let ch2 = chapter(2, vec![scene("2-1", vec![dialog(Some("B"), vec!["ch2"])])]);
+        let doc = document_with_chapters(vec![ch1, ch2]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance();
+        assert_eq!(
+            pb.current_bgm(),
+            Some("amehure.ogg"),
+            "BGM状態はチャプター境界をまたいでも引き継がれる"
+        );
+    }
+
+    #[test]
+    fn choice_event_does_not_affect_bgm_state() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        bgm_play("amehure.ogg"),
+                        Event::Choice {
+                            options: vec![ChoiceOption {
+                                text: "yes".to_string(),
+                                jump: "1-2".to_string(),
+                            }],
+                        },
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["後"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_bgm(),
+            Some("amehure.ogg"),
+            "Choice item自体もBGM状態を持つ"
+        );
+        assert!(pb.select_current_choice());
+        assert_eq!(
+            pb.current_bgm(),
+            Some("amehure.ogg"),
+            "Choiceを挟んでもBGM状態は変わらない"
+        );
+    }
+
+    #[test]
+    fn lines_before_any_se_have_empty_cues() {
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["前"])]);
+        let pb = Playback::from_document(&doc);
+        assert!(pb.current_se_cues().is_empty());
+    }
+
+    #[test]
+    fn dialog_after_se_carries_its_path_as_a_one_shot_cue() {
+        let doc = doc_single_scene(vec![se("chime.wav"), dialog(Some("A"), vec!["後"])]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_se_cues(), &["chime.wav".to_string()]);
+    }
+
+    #[test]
+    fn next_line_does_not_repeat_the_previous_lines_se_cue() {
+        let doc = doc_single_scene(vec![
+            se("chime.wav"),
+            dialog(Some("A"), vec!["1"]),
+            dialog(Some("A"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_se_cues(), &["chime.wav".to_string()]);
+        pb.advance();
+        assert!(
+            pb.current_se_cues().is_empty(),
+            "SEは到達時の1itemだけに紐づき後続itemへ引き継がれない（BGMとの意味論の違い）"
+        );
+    }
+
+    #[test]
+    fn multiple_consecutive_se_before_one_line_accumulate_in_order() {
+        let doc = doc_single_scene(vec![
+            se("a.wav"),
+            se("b.wav"),
+            dialog(Some("A"), vec!["後"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_se_cues(),
+            &["a.wav".to_string(), "b.wav".to_string()]
+        );
+    }
+
+    #[test]
+    fn trailing_se_with_no_following_item_is_dropped() {
+        // ドキュメント末尾の直前にSEがあっても、後続itemが無いためどのitemにも紐づかず
+        // 再生対象にならない（既知の制約、item_seのdoc comment参照）。
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["最後の台詞"]), se("chime.wav")]);
+        let pb = Playback::from_document(&doc);
+        assert!(pb.current_se_cues().is_empty());
+    }
+
+    #[test]
+    fn cursor_changes_when_advancing_to_the_next_item() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1"]),
+            dialog(Some("B"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        let before = pb.cursor();
+        pb.advance();
+        assert_ne!(
+            before,
+            pb.cursor(),
+            "次のitemへ進んだのでcursorは変化するはず"
+        );
+    }
+
+    #[test]
+    fn cursor_stays_the_same_across_sentence_pages_within_one_line() {
+        // sentence_per_page有効時、同一Line item内の文送りはitemsの位置(self.index)を
+        // 動かさないため、cursorは変化しない（＝同じitemに紐づくSEを文送りのたびに
+        // 再トリガーしない、意図した挙動）。
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["最初の文。次の文。"])]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        let before = pb.cursor();
+        assert!(pb.advance(), "同じLine item内の次の文へ進めるはず");
+        assert_eq!(before, pb.cursor(), "文送りだけではcursorは変化しないはず");
     }
 }
