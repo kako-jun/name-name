@@ -362,6 +362,15 @@ where
     // （`close_overlay` 参照、セルフレビュー must対応）。`overlay == Overlay::None` の間は
     // 参照されないため初期値は任意。
     let mut overlay_opened_at = Instant::now();
+    // `Overlay::Settings` 表示中に `restart_reveal_for_speed_change` が `current_reveal` を
+    // 作り直した実時刻（#503）。作り直された `current_reveal` のアンカーは既に「オーバーレイ
+    // 内のその時点」を起点にしているため、`close_overlay` は `overlay_opened_at` からではなく
+    // この時刻から閉じるまでの経過だけを差し引く必要がある（セルフレビュー再指摘対応 —
+    // `overlay_opened_at` からの全期間を差し引くと、開いてから速度変更までの分だけ余計に
+    // アンカーを未来へ押し出してしまい、閉じた直後にタイプライターが一時的に凍結する）。
+    // `image_fade` は速度変更で作り直されないため、この補正の対象外（常に
+    // `overlay_opened_at` 基準のまま）。オーバーレイを開くたびに `None` へリセットする。
+    let mut reveal_rebuilt_at: Option<Instant> = None;
 
     loop {
         let now = Instant::now();
@@ -399,6 +408,7 @@ where
                         &mut current_reveal,
                         &mut image_fade,
                         overlay_opened_at,
+                        reveal_rebuilt_at,
                         Instant::now(),
                     );
                 }
@@ -409,6 +419,7 @@ where
                         &mut current_reveal,
                         &mut image_fade,
                         overlay_opened_at,
+                        reveal_rebuilt_at,
                         Instant::now(),
                     );
                 }
@@ -424,6 +435,7 @@ where
                         &mut current_reveal,
                         &mut image_fade,
                         overlay_opened_at,
+                        reveal_rebuilt_at,
                         Instant::now(),
                     );
                 }
@@ -454,7 +466,19 @@ where
                         .char_interval_ms
                         .saturating_sub(TEXT_SPEED_STEP_MS);
                     config.typewriter.char_interval_ms = next_ms;
-                    restart_reveal_for_speed_change(playback, &mut current_reveal, &config, now);
+                    // `now`（ループ先頭・直前の `next_action()` 呼び出し前の値）ではなく、
+                    // ここで取り直した実時刻を使う（セルフレビュー再指摘対応。`close_overlay`
+                    // の doc comment が警告する「呼び出し直前に取り直す」原則と同じ理由 —
+                    // `next_action()` はブロッキング/スリープを含みうるため、古い `now` では
+                    // アンカーが過去へずれる）。
+                    let restart_now = Instant::now();
+                    restart_reveal_for_speed_change(
+                        playback,
+                        &mut current_reveal,
+                        &config,
+                        restart_now,
+                    );
+                    reveal_rebuilt_at = Some(restart_now);
                 }
                 Action::MoveDown if overlay == Overlay::Settings => {
                     let next_ms = config
@@ -463,7 +487,14 @@ where
                         .saturating_add(TEXT_SPEED_STEP_MS)
                         .min(TEXT_SPEED_MAX_MS);
                     config.typewriter.char_interval_ms = next_ms;
-                    restart_reveal_for_speed_change(playback, &mut current_reveal, &config, now);
+                    let restart_now = Instant::now();
+                    restart_reveal_for_speed_change(
+                        playback,
+                        &mut current_reveal,
+                        &config,
+                        restart_now,
+                    );
+                    reveal_rebuilt_at = Some(restart_now);
                 }
                 // 上記のどれにも当てはまらない入力（他方のオーバーレイ用トグルキー・
                 // オート/スキップトグル等）はオーバーレイ表示中は無視する。
@@ -719,11 +750,16 @@ where
                 // 変数へ書き戻す」パターン）。
                 overlay = Overlay::Backlog;
                 backlog_scroll = u16::MAX;
-                overlay_opened_at = now;
+                // ループ先頭の `now` ではなく取り直した実時刻を使う（`close_overlay` が
+                // 「呼び出し直前に取り直す」ことを要求するのと同じ理由 — この分岐に来る前の
+                // `next_action()` がブロッキングしうるため、セルフレビュー再指摘対応）。
+                overlay_opened_at = Instant::now();
+                reveal_rebuilt_at = None;
             }
             Action::ToggleSettings => {
                 overlay = Overlay::Settings;
-                overlay_opened_at = now;
+                overlay_opened_at = Instant::now();
+                reveal_rebuilt_at = None;
             }
             Action::Quit => break,
             Action::None => {}
@@ -764,21 +800,33 @@ where
 /// ループ先頭の古い `now` を使うと `overlay_opened_at` からの経過時間を過小評価し、
 /// このアンカー補正自体が骨抜きになる（実装時に一度この誤りを踏んだ — オーバーレイの
 /// 実時間経過が結局漏れ込む退行を作ってしまい、下の回帰テストで検出した）。
+///
+/// `reveal_rebuilt_at` は `Overlay::Settings` 表示中に速度変更で `current_reveal` が
+/// 作り直された実時刻（#503、`restart_reveal_for_speed_change` 呼び出し側が記録する）。
+/// `Some` のときは `current_reveal` のアンカー補正だけこの時刻を基準にする —
+/// 作り直された `current_reveal` は既に「オーバーレイ内のその時点」を起点にしているため、
+/// `overlay_opened_at`（オーバーレイを開いた瞬間）から丸ごと差し引くと、開いてから
+/// 速度変更までの分だけ余計にアンカーを未来へ押し出してしまい、閉じた直後にタイプライターが
+/// 一時的に凍結する退行になる（セルフレビュー再指摘対応）。`image_fade` は速度変更で
+/// 作り直されないため、常に `overlay_opened_at` 基準のまま。
 fn close_overlay(
     overlay: &mut Overlay,
     auto_deadline: &mut Option<Instant>,
     current_reveal: &mut Option<reveal::RevealState>,
     image_fade: &mut image_fade::ImageFadeState,
     overlay_opened_at: Instant,
+    reveal_rebuilt_at: Option<Instant>,
     now: Instant,
 ) {
     *overlay = Overlay::None;
     *auto_deadline = None;
-    let overlay_duration = now.saturating_duration_since(overlay_opened_at);
+    let reveal_base = reveal_rebuilt_at.unwrap_or(overlay_opened_at);
+    let reveal_duration = now.saturating_duration_since(reveal_base);
     if let Some(reveal) = current_reveal.as_mut() {
-        reveal.shift_anchor_forward(overlay_duration);
+        reveal.shift_anchor_forward(reveal_duration);
     }
-    image_fade.shift_anchor_forward(overlay_duration);
+    let image_duration = now.saturating_duration_since(overlay_opened_at);
+    image_fade.shift_anchor_forward(image_duration);
 }
 
 /// 現在位置の会話行から新しい `RevealState::Animating` を組み立てる。現在位置が選択肢
@@ -807,6 +855,15 @@ fn build_reveal_for_current(
 /// 即時性を実現する — 既に見えていた文字も含めて最初から出し直す分だけ、GUI版の
 /// 「そこから先だけ加速/減速する」動きとは厳密には一致しないが、体感できるほどの差では
 /// ない（1行の平均文字数・調整幅を考えれば、再タイプにかかる時間は高々数百ms）。
+/// 「即座に」は内部状態の話であり、`Overlay::Settings` 表示中はゲーム画面自体が
+/// `ui::draw_settings` に差し替わっているためユーザーからは見えない — オーバーレイを
+/// 閉じた瞬間に初めて反映後の見た目が現れる（意図した仕様。設定画面の裏でゲーム画面を
+/// 透過プレビューする機能は範囲外、セルフレビュー再指摘で確認）。
+///
+/// `now` は呼び出し側がループ先頭で計算した古い値をそのまま渡してはならず、この関数を
+/// 呼ぶ直前に改めて `Instant::now()` を取り直したものを渡す必要がある（`close_overlay` と
+/// 同じ理由・同じ原則。呼び出し側は `reveal_rebuilt_at` にこの時刻を記録し、
+/// `close_overlay` のアンカー補正の基準に使う、セルフレビュー再指摘対応）。
 fn restart_reveal_for_speed_change(
     playback: &Playback,
     current_reveal: &mut Option<reveal::RevealState>,
@@ -1368,26 +1425,20 @@ mod tests {
         );
     }
 
-    /// レンダリング済みバッファを1本の文字列に変換する（`ui.rs` のテストヘルパーと
-    /// 同じ目的だが、全角文字の cell_width までは main.rs のテストでは問わないため
-    /// 単純に symbol を連結するだけの簡略版で足りる）。
+    /// レンダリング済みバッファを1本の文字列に変換する（`ui.rs` のテストヘルパーと同じ目的）。
+    /// ASCII中心の既存テストで使う薄いラッパー。実体は [`buffer_text_wide_aware`] —
+    /// ASCII文字はどれも `cell_width() == 1` なので、全角対応版の走査ロジックは
+    /// ASCII専用の単純な連結と完全に同じ結果を返す（セルフレビュー nit対応:
+    /// 同じ走査ロジックが2箇所に重複していたのを一本化）。
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
-        let buffer = terminal.backend().buffer();
-        let area = buffer.area();
-        let mut out = String::new();
-        for y in 0..area.height {
-            for x in 0..area.width {
-                out.push_str(buffer.cell((x, y)).expect("in bounds").symbol());
-            }
-        }
-        out
+        buffer_text_wide_aware(terminal)
     }
 
     /// [`buffer_text`] の全角対応版。全角文字の次のセルは直前のグラフェムの表示のために
     /// 予約された継続セルであり、単純に連結すると全角文字どうしの間に余分な文字が
     /// 混入してCJK文字列の内容比較が壊れる（`ui.rs` の `buffer_text` と同じ理由、参照）。
-    /// 既存の [`buffer_text`] はASCII中心の既存テストでは支障が無いためそのまま残し、
-    /// CJK文字列そのものを検証する新規テストのためにここだけ全角対応版を用意する。
+    /// CJK文字列そのものを検証するテストも `buffer_text` のASCII専用テストも、どちらも
+    /// この実装を共有する（上記 [`buffer_text`] 参照）。
     fn buffer_text_wide_aware(terminal: &Terminal<TestBackend>) -> String {
         let buffer = terminal.backend().buffer();
         let area = buffer.area();
@@ -2082,6 +2133,60 @@ mod tests {
         assert!(
             !text.contains("ab"),
             "設定画面を開いていた実時間が漏れ込み、2文字目まで表示されてしまっている: {text:?}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_speed_change_mid_overlay_does_not_freeze_typewriter_after_close() {
+        // セルフレビュー再指摘の回帰ガード: 設定画面表示中に速度変更(#503)すると
+        // `restart_reveal_for_speed_change` が `current_reveal` を新しいアンカーで作り
+        // 直す。ここで「設定画面を開いてから速度変更キーを押すまで」の待ち時間が長いと、
+        // `close_overlay` が誤って `overlay_opened_at`（開いた瞬間）からの全期間を差し
+        // 引いてしまい、アンカーが実際の close 時刻より未来へ押し出されて、閉じた直後
+        // タイプライターが一時的に凍結する退行があった（正しくは、作り直された瞬間
+        // `reveal_rebuilt_at` からの経過だけを差し引くべき）。
+        let config = slow_config(); // char_interval_ms = 1000
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "abcdefghij")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings), // 設定画面を開く
+                2 => {
+                    // 開いてからしばらく考えてから速度を変える、という自然な操作フロー。
+                    std::thread::sleep(Duration::from_millis(800));
+                    // char_interval_ms: 1000 -> saturating_add(5).min(200) = 200
+                    Ok(Action::MoveDown)
+                }
+                3 => {
+                    std::thread::sleep(Duration::from_millis(700));
+                    Ok(Action::ToggleSettings) // 閉じる
+                }
+                4 => {
+                    // 閉じた後、十分な実時間を与える。バグがあれば速度変更前の待ち時間
+                    // (800ms)ぶんアンカーが未来へ押し出されたままなので、この程度では
+                    // まだ動き出さない。
+                    std::thread::sleep(Duration::from_millis(900));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains('d'),
+            "設定画面を閉じてから900ms経過(200ms/字なら4文字分)しているのに \
+             タイプライターが凍結していて4文字目まで進んでいない(#503セルフレビュー \
+             再指摘の回帰): {text:?}"
         );
     }
 
