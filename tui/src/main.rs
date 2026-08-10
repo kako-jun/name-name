@@ -11,6 +11,7 @@ mod reveal;
 mod sentence;
 mod ui;
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -22,14 +23,44 @@ use ratatui::crossterm::terminal::{
 use ratatui::Terminal;
 
 use cli::Cli;
-use config::Config;
+use config::{Config, TEXT_SPEED_MAX_MS, TEXT_SPEED_STEP_MS};
 use input::Action;
-use playback::Playback;
+use playback::{DisplayLine, Playback};
 
 /// 描画の再チェック間隔。タイプライター演出（`jiwa::RevealHandle`）はフレームごとの
 /// `snapshot` で動くため、キー入力が無くてもこの間隔で再描画してアニメーションを進める
 /// （kako-jun/type-globe の `quiz.rs` の `REDRAW` と同じ値）。
 const REDRAW: Duration = Duration::from_millis(30);
+
+/// バックログ画面（#500）で ↑/↓ 1回あたりスクロールする行数。GUI版
+/// `BacklogOverlay.handleKeyScroll` の `LINE_HEIGHT * 3`（1回で3行ぶん動く）と同じ
+/// 「数行まとめて動く」感覚をセル単位で踏襲する。
+const BACKLOG_SCROLL_STEP: u16 = 3;
+
+/// ゲーム画面より前面に描画するフルスクリーンオーバーレイ。開いている間、`event_loop` は
+/// 会話の進行（オート/スキップモードのタイマー判定・`Action::Advance` 等）を一切実行せず
+/// 完全に凍結する — バックログ（#500 Issue本文「バックログを閉じると元のゲーム画面に戻る
+/// (ゲーム進行状態は変化しない、閲覧専用)」という明示要件）・設定画面（#503、値を調整して
+/// いる最中に裏で会話が進むのは直感に反するため、バックログと同じ扱いにする）共通の方針。
+///
+/// **ただし reveal のタイプライター時間経過（`current_reveal`）とイベント絵クロスフェード
+/// （`image_fade`）は、この「凍結」の対象外だった（セルフレビュー must対応）**。
+/// どちらも `Instant` アンカーからの経過時間で見た目を計算する設計のため、オーバーレイが
+/// 開いている間に更新・描画を止めても、アンカー自体は現実の時計と共に進み続ける。閉じた
+/// 瞬間に初めて経過時間が読まれるため、開いていた実時間がそのままタイプライター表示の
+/// 進行やクロスフェードの進行に漏れ込んでしまう（レビュアー実機再現: `char_interval_ms=1000`
+/// で表示途中にバックログを開き実時間1.5秒待ってから閉じると、閉じた直後に1〜2文字余分に
+/// 表示される）。`event_loop` は閉じる際に `close_overlay` を呼び、開いていた実時間ぶん
+/// 両者のアンカーを前進させることでこの漏れを補正する（`close_overlay` のdoc comment参照）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overlay {
+    /// 通常のゲーム画面。
+    None,
+    /// バックログ（既読ログ）閲覧画面（#500）。
+    Backlog,
+    /// テキスト速度設定画面（#503）。
+    Settings,
+}
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse(std::env::args());
@@ -224,7 +255,15 @@ where
                 target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
             // スプラッシュ画面には左右移動の対象となる複数列選択肢が無いため、無視する(#482、#508)。
-            Action::MoveLeft | Action::MoveRight | Action::None => {}
+            // オート/スキップモードもバックログ/設定画面も無いため、各種トグルも合わせて
+            // 無視する（#498 / #499 / #500 / #503）。
+            Action::MoveLeft
+            | Action::MoveRight
+            | Action::ToggleAuto
+            | Action::ToggleSkip
+            | Action::ToggleBacklog
+            | Action::ToggleSettings
+            | Action::None => {}
         }
     }
 }
@@ -250,8 +289,16 @@ where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    // テキスト速度をプレイ中に変更できるようにするため（#503）、以後この関数内では
+    // 呼び出し元から借りた `&Config` ではなく、この関数がオーナーシップを持つ可変コピーを
+    // 使う。イベント絵/配色/スプラッシュ等 typewriter 以外の設定値をプレイ中に書き換える
+    // 手段は無いため実質的に不変のままだが、`config.typewriter.char_interval_ms` だけは
+    // 下の `Overlay::Settings` 分岐（`Action::MoveUp`/`Action::MoveDown` の文脈依存の再利用）
+    // が書き換える。
+    let mut config = config.clone();
+
     let mut current_reveal: Option<reveal::RevealState> =
-        build_reveal_for_current(playback, config, Instant::now());
+        build_reveal_for_current(playback, &config, Instant::now());
     // ページ送りインジケータの点滅基準時刻。1秒周期の完全on/off点滅自体は話者・テキストに
     // 依存しないグローバルな明滅（`reveal::blink_visible`、#495）だが、基準時刻は固定ではなく
     // 毎フレーム `reveal::indicator_blink_started_at` で更新する（#495 追加修正）。
@@ -295,11 +342,11 @@ where
     sync_bgm(
         &mut current_bgm_path,
         playback,
-        config,
+        &config,
         audio.as_deref_mut(),
     );
     let mut last_se_cursor: Option<usize> = None;
-    play_new_se_cues(&mut last_se_cursor, playback, config, audio.as_deref_mut());
+    play_new_se_cues(&mut last_se_cursor, playback, &config, audio.as_deref_mut());
 
     // 画像コマ自動送り（#497）の締切。現在位置が画像コマ item（`playback.pending_wait_ms()`
     // が `Some(ms)`、`Event::EventImage` 直後に `Event::Wait { ms }` が続いていたときだけ
@@ -313,8 +360,245 @@ where
         .pending_wait_ms()
         .map(|ms| Instant::now() + Duration::from_millis(u64::from(ms)));
 
+    // オートモード（#498、GUI版 `NovelRenderer.autoMode`/`scheduleAutoAdvance` 相当）の
+    // 状態。`auto_deadline` は「現在行の reveal が完了してから `config.auto_wait_ms` 後」の
+    // 締切で、これを過ぎたらプレイヤーの入力を待たずに `Action::Advance` を合成する
+    // （#497 の `wait_deadline` と同じ「`Action` 経由にせず直接合成する」設計）。
+    let mut auto_mode = false;
+    let mut auto_deadline: Option<Instant> = None;
+
+    // スキップモード（#499、GUI版 `NovelRenderer.setSkipMode`/`scheduleSkipStep` 相当）の
+    // 状態。GUI版はセーブファイルの永続化された既読進捗（`readProgress`）を使うが、TUI
+    // 側にはまだそのような永続化の仕組みが無いため、今回はランタイム中だけのメモリ上の
+    // 既読集合（`read_positions`）で最小実装する (#499 Issue本文の「永続化はスコープ外」
+    // 指示どおり)。
+    //
+    // キーは `playback.position()`（会話行のみを数える生の値）ではなく
+    // `playback.stable_item_key()` が返す `(scene_order 内インデックス, シーン内構築順
+    // インデックス)` を使う（#509 統合バグ修正）。#509 で `Playback` の `items` が
+    // 「訪れたシーンをその都度末尾に追記する」遅延構築モデルに変わったため、
+    // `select_current_choice`（選択肢ジャンプ）は既に訪れたことのあるシーンへ戻る場合でも
+    // 既存の `items` を再利用せず常に新規追記する。そのため生の `position()`/`item_index()`
+    // は同じシーンの同じ箇所に再訪しても毎回別の値になり、位置の生値をそのままキーにすると
+    // 「一度読んだ行を選択肢でジャンプして戻り、スキップで再度素通りする」という #499 が
+    // 検証済みだったシナリオで既読が一切認識されずスキップが即座に自己解除してしまう
+    // （マージ時に発覚した回帰）。`stable_item_key` の doc comment（`playback.rs`）が示す
+    // 既知の制約（フラグ状態が変わった状態での再訪）はこのスコープの対象外。
+    let mut skip_mode = false;
+    let mut read_positions: HashSet<(usize, usize)> = HashSet::new();
+
+    // バックログ（#500）: これまで実際に表示し終えた会話行（話者名込み）の履歴。
+    // `Action::Advance` 処理内、行を実際に離れた瞬間（`on_advance` が `true` を返した
+    // とき）にその行を積む — `read_positions`（既読判定、位置の集合）とは別に、表示内容
+    // そのもの（`DisplayLine`）を時系列順に保持する。`sentence_per_page` が有効なときは
+    // 文単位ページごとに1エントリになる（GUI版 `NovelRenderer` がページを離れる時だけ
+    // backlog に記録するのと同じ粒度、`advanceOrSkipTypewriter` 参照）。
+    let mut backlog: Vec<DisplayLine> = Vec::new();
+    // バックログのスクロール位置（行数）。`ui::draw_backlog` が実際のコンテンツ量に合わせて
+    // クランプした値を返すので、ここへ書き戻す（`indicator_started_at` と同じ「関数が
+    // 計算した値をループ変数へ書き戻す」パターン）。`Overlay::Backlog` を開いた直後は
+    // `u16::MAX` をセットして「末尾（最新）にクランプ」させる。
+    let mut backlog_scroll: u16 = 0;
+
+    // 現在開いているオーバーレイ画面（#500 / #503）。既定は `Overlay::None`（通常のゲーム画面）。
+    let mut overlay = Overlay::None;
+    // `overlay` を `Overlay::None` 以外にした瞬間の実時刻。オーバーレイを閉じる際、
+    // ここからの経過時間ぶん `current_reveal`/`image_fade` のアンカーを前進させる
+    // （`close_overlay` 参照、セルフレビュー must対応）。`overlay == Overlay::None` の間は
+    // 参照されないため初期値は任意。
+    let mut overlay_opened_at = Instant::now();
+    // `Overlay::Settings` 表示中に `restart_reveal_for_speed_change` が `current_reveal` を
+    // 作り直した実時刻（#503）。作り直された `current_reveal` のアンカーは既に「オーバーレイ
+    // 内のその時点」を起点にしているため、`close_overlay` は `overlay_opened_at` からではなく
+    // この時刻から閉じるまでの経過だけを差し引く必要がある（セルフレビュー再指摘対応 —
+    // `overlay_opened_at` からの全期間を差し引くと、開いてから速度変更までの分だけ余計に
+    // アンカーを未来へ押し出してしまい、閉じた直後にタイプライターが一時的に凍結する）。
+    // `image_fade` は速度変更で作り直されないため、この補正の対象外（常に
+    // `overlay_opened_at` 基準のまま）。オーバーレイを開くたびに `None` へリセットする。
+    let mut reveal_rebuilt_at: Option<Instant> = None;
+
     loop {
         let now = Instant::now();
+
+        // オーバーレイ（バックログ/設定画面）表示中は、通常のゲームロジック（オート/スキップ
+        // モードの締切判定・reveal のタイプライター経過・`Action::Advance` 等）を一切実行
+        // せず、ここで完結させて次の周回へ進む（#500 / #503）。こうすることで「開いている間は
+        // 会話が一切進まない」ことが構造的に保証される — 通常フローの奥深くに `if overlay ==
+        // Overlay::None` の条件分岐を無数に挟むより、入り口1箇所で早期分岐する方が
+        // 見落としのリスクが低い。
+        if overlay != Overlay::None {
+            terminal.draw(|frame| match overlay {
+                Overlay::Backlog => {
+                    backlog_scroll = ui::draw_backlog(frame, &config, &backlog, backlog_scroll);
+                }
+                Overlay::Settings => {
+                    ui::draw_settings(frame, config.typewriter.char_interval_ms);
+                }
+                Overlay::None => unreachable!("overlay != Overlay::None はこの分岐の前提"),
+            })?;
+
+            match next_action()? {
+                // バックログ/設定画面を開いたのと同じキーで閉じる（GUI版 `BacklogOverlay` の
+                // 「ESC / B / クリックで閉じる」の「B」に相当、#500）。
+                Action::ToggleBacklog if overlay == Overlay::Backlog => {
+                    // 復帰直後にオートモードの締切超過で即座に自動送りしてしまわないよう
+                    // （オーバーレイを開いていた間に締切だけが過去へ流れ去っている）、
+                    // 締切を破棄して次の周回で「reveal完了から改めて `auto_wait_ms` 待つ」
+                    // 状態に戻す（安全策）。加えて、オーバーレイ中に経過した実時間を
+                    // タイプライター表示/イベント絵クロスフェードのアンカーから除外する
+                    // （`close_overlay` 参照、セルフレビュー must対応）。
+                    close_overlay(
+                        &mut overlay,
+                        &mut auto_deadline,
+                        &mut current_reveal,
+                        &mut image_fade,
+                        overlay_opened_at,
+                        reveal_rebuilt_at,
+                        Instant::now(),
+                    );
+                }
+                Action::ToggleSettings if overlay == Overlay::Settings => {
+                    close_overlay(
+                        &mut overlay,
+                        &mut auto_deadline,
+                        &mut current_reveal,
+                        &mut image_fade,
+                        overlay_opened_at,
+                        reveal_rebuilt_at,
+                        Instant::now(),
+                    );
+                }
+                // Enter/Space（GUI版 `handlePointerClick` がバックログ表示中のタップを
+                // 「進める」ではなく「閉じる」として吸収するのと同じ、#500）、および
+                // Quit（q/Esc、GUI版 `handleKeyDown` の「Escape: 開いているオーバーレイを
+                // 閉じる」と同じ優先順位）は、オーバーレイが開いている間はアプリ終了ではなく
+                // 「オーバーレイを閉じる」を意味する。
+                Action::Advance | Action::Quit => {
+                    close_overlay(
+                        &mut overlay,
+                        &mut auto_deadline,
+                        &mut current_reveal,
+                        &mut image_fade,
+                        overlay_opened_at,
+                        reveal_rebuilt_at,
+                        Instant::now(),
+                    );
+                }
+                // バックログ表示中の ↑/↓ はスクロール（#500）。`Action::MoveUp`/
+                // `Action::MoveDown` は「選択肢が無いときは no-op」というのが本来の意味だが
+                // （`input.rs` の doc comment参照）、選択肢が存在し得ないオーバーレイ画面の
+                // 文脈では別の意味へ読み替える — `Action::Advance` が選択肢確定へ読み替わる
+                // のと同じ、既存の「Action の文脈依存の再解釈」パターンを踏襲する。
+                Action::MoveUp if overlay == Overlay::Backlog => {
+                    backlog_scroll = backlog_scroll.saturating_sub(BACKLOG_SCROLL_STEP);
+                }
+                Action::MoveDown if overlay == Overlay::Backlog => {
+                    backlog_scroll = backlog_scroll.saturating_add(BACKLOG_SCROLL_STEP);
+                }
+                // 設定画面表示中の ↑/↓ はテキスト速度の調整（#503）。GUI版
+                // `SettingsOverlay.tsx` の msPerChar スライダー（step=5）と同じ刻み幅。
+                // ↑ = 数値を減らす = 速く、↓ = 数値を増やす = 遅く（GUI版スライダーの
+                // 左/右と同じ向き。ratatui のカーソル上/下という空間的な向きとは対応しない
+                // 一方的な割り当てだが、他に基準となる向きが無いため choice cursor の
+                // Up=前身/Down=後退という「上へ行くほど数値が減る」既存の感覚に合わせる）。
+                Action::MoveUp if overlay == Overlay::Settings => {
+                    // `TEXT_SPEED_MIN_MS` は0固定（clippyの`unnecessary_min_or_max`が
+                    // 指摘する通り、u64の`saturating_sub`は既にそれ未満に落ちない）。
+                    // 将来 `TEXT_SPEED_MIN_MS` を0より大きい値へ変える場合はここで改めて
+                    // `.max(TEXT_SPEED_MIN_MS)` を足す必要がある。
+                    let next_ms = config
+                        .typewriter
+                        .char_interval_ms
+                        .saturating_sub(TEXT_SPEED_STEP_MS);
+                    config.typewriter.char_interval_ms = next_ms;
+                    // `now`（ループ先頭・直前の `next_action()` 呼び出し前の値）ではなく、
+                    // ここで取り直した実時刻を使う（セルフレビュー再指摘対応。`close_overlay`
+                    // の doc comment が警告する「呼び出し直前に取り直す」原則と同じ理由 —
+                    // `next_action()` はブロッキング/スリープを含みうるため、古い `now` では
+                    // アンカーが過去へずれる）。
+                    let restart_now = Instant::now();
+                    restart_reveal_for_speed_change(
+                        playback,
+                        &mut current_reveal,
+                        &config,
+                        restart_now,
+                    );
+                    reveal_rebuilt_at = Some(restart_now);
+                }
+                Action::MoveDown if overlay == Overlay::Settings => {
+                    let next_ms = config
+                        .typewriter
+                        .char_interval_ms
+                        .saturating_add(TEXT_SPEED_STEP_MS)
+                        .min(TEXT_SPEED_MAX_MS);
+                    config.typewriter.char_interval_ms = next_ms;
+                    let restart_now = Instant::now();
+                    restart_reveal_for_speed_change(
+                        playback,
+                        &mut current_reveal,
+                        &config,
+                        restart_now,
+                    );
+                    reveal_rebuilt_at = Some(restart_now);
+                }
+                // 上記のどれにも当てはまらない入力（他方のオーバーレイ用トグルキー・
+                // オート/スキップトグル等）はオーバーレイ表示中は無視する。
+                _ => {}
+            }
+            continue;
+        }
+
+        // スキップモード（#499）: この周回で即座に advance すべきか（`skip_triggered`、下記）
+        // を判定する。適格でなくなっていれば（選択肢到達・進める先が無い・未読到達）、
+        // ここで `skip_mode` 自体を降ろす（GUI版 `processDirective` の Choice 到達時
+        // `setSkipMode(false)` 等と同じ「その場で即座に解除する」挙動、#140）。
+        if skip_mode
+            && (playback.current_choice().is_some()
+                || playback.current_line().is_none()
+                || playback.is_at_end())
+        {
+            skip_mode = false;
+        }
+        // 既読 → この周回でキー入力を待たずに即座に advance する（GUI版 `scheduleSkipStep`
+        // の `setTimeout(…, 0)` 相当、「実質ウェイト無しで回し続ける」設計）。未読ならスキップ
+        // 終了（現在行は表示したまま待機、GUI版 #140 と同じ）——これは上のブロックが
+        // 拾わないので、ここで改めて判定する。`position()` の生値ではなく
+        // `stable_item_key()`（シーンを跨いで安定なキー、#509統合バグ修正）で既読集合と
+        // 照合する — `stable_item_key` が `None`（範囲外）を返すことは通常起こらないが、
+        // 防御的に `is_some_and` で「キーが取れず判定できない」場合は未読扱いにする。
+        let skip_triggered = skip_mode
+            && playback
+                .stable_item_key(playback.item_index())
+                .is_some_and(|key| read_positions.contains(&key));
+        if skip_mode && !skip_triggered {
+            skip_mode = false;
+        }
+
+        // オートモード（#498）: 締切を毎フレーム引き直すのではなく、「reveal完了 かつ
+        // 選択肢待ちでない かつ スクリプト末尾でない」条件を満たした最初のフレームでだけ
+        // 締切を1回セットする（#497 で踏んだ「毎周回上書きすると締切が無限に後退し続けて
+        // 発火しない」バグを踏まないため、`auto_deadline.is_none()` のときだけ書き込む）。
+        // 条件を外れたら（reveal未完了へ戻る＝新しい行へ進んだ、選択肢が出た、末尾に
+        // 達した、等）締切を破棄する。GUI版が choice/wait 待機中・スクリプト末尾で
+        // `scheduleAutoAdvance` を発火させないのと同じガード（`waitingForWait` 相当は
+        // TUI にまだ無いため対象外）。
+        if auto_mode {
+            let reveal_done = current_reveal
+                .as_ref()
+                .map(|r| r.is_done(now))
+                .unwrap_or(true);
+            let eligible =
+                reveal_done && playback.current_choice().is_none() && !playback.is_at_end();
+            if eligible {
+                if auto_deadline.is_none() {
+                    auto_deadline = Some(now + Duration::from_millis(config.auto_wait_ms));
+                }
+            } else {
+                auto_deadline = None;
+            }
+        } else {
+            auto_deadline = None;
+        }
         // インジケータを表示すべきか（reveal完了 かつ 選択肢非表示 かつ 会話行あり）。
         // `ui::draw_text_windows` が実際の描画可否を判定するのと同じ条件式を
         // `reveal::should_show_page_indicator` に集約して共有する（セルフレビュー should
@@ -336,7 +620,7 @@ where
         terminal.draw(|frame| {
             ui::draw(
                 frame,
-                config,
+                &config,
                 playback.current_line(),
                 playback.current_choice(),
                 playback.position(),
@@ -351,6 +635,23 @@ where
             )
         })?;
 
+        // オートモード（#498）: 締切を過ぎていれば、キー入力を待たずに `Action::Advance` を
+        // 合成する（#497 の `deadline_triggered` と同じパターン）。`auto_triggered` は
+        // 下の `Action::Advance` 分岐で「これは自動送りか、プレイヤーの手動操作か」を
+        // 区別するために使う — 手動操作でのみオートモードを解除する（GUI版
+        // `handleAdvance`/`handleKeyDown` が `setAutoMode(false)` するのと同じだが、自動送り
+        // 自身がその直後に自分自身を解除してしまっては永久に1行しか進めなくなる）。
+        let auto_triggered = matches!(auto_deadline, Some(deadline) if now >= deadline);
+        if auto_triggered {
+            // 締切を消費したら即座に `None` へ戻す。ここでクリアしないと、次のループ先頭の
+            // オートモード判定ブロックは「`auto_deadline` が既に `Some`」と見て新しい締切への
+            // 上書きをスキップし（#497 で踏んだ「毎周回上書きすると発火しなくなる」バグを
+            // 避けるための意図的なガード）、advance 後の新しい行にも同じ過去の締切が
+            // 残り続けてしまう。結果、advance するたびに即座にまた `now >= deadline` が
+            // 真になり、`auto_wait_ms` の待機を1回も置かずに残り全行を一瞬で読み終える
+            // カスケード事故になる（tmux実機確認で発見）。
+            auto_deadline = None;
+        }
         // 画像コマ自動送り（#497）: 締切を過ぎていれば、キー入力を待たずに `Action::Advance`
         // を合成する。まだ過ぎていなければ従来どおり `next_action()` で入力を待つ（プレイヤーが
         // 締切前に手動で Enter/Space を押して早送りすることも引き続きできる）。
@@ -363,7 +664,7 @@ where
         // 固まった」ように見え、プレイヤーが q キー等で終了できなくなる（テスト設計フェーズで
         // 発見）。`deadline_triggered` と、行動前後の `item_index()` の変化を照合して、この
         // 「進行不可能なのに締切だけが経過し続ける」組み合わせのときだけ締切をクリアし、通常の
-        // `next_action()` によるキー入力待ちにフォールバックする。
+        // `next_action()` によるキー入力待ちにフォールバックする（下の締切引き直しブロック参照）。
         //
         // `deadline_triggered` が真の間は `next_action()`（`REDRAW` = 30ms のポーリング間隔で
         // 入力を待つ経路）を経由せずに直接 `Action::Advance` を合成するため、この分岐だけを
@@ -373,7 +674,16 @@ where
         // 回し続ける。バグではなく許容している設計上のトレードオフ（ms=0 は「即座に進める」
         // という利用者の意図そのものであり、そこに人為的なウェイトを挟む理由が無いため）。
         let deadline_triggered = matches!(wait_deadline, Some(deadline) if now >= deadline);
-        let action = if deadline_triggered {
+        // 自動送り（オート／スキップ／画像コマ自動送りのいずれか）による合成 Advance かどうか。
+        // 手動操作でのみオート/スキップモード自体を解除するために使う（GUI版
+        // `handleAdvance`/`handleKeyDown` が `setAutoMode(false)`/`setSkipMode(false)` する
+        // のと同じだが、自動送り自身がその直後に自分自身を解除してしまっては永久に1行しか
+        // 進めなくなる）。画像コマ自動送り（`deadline_triggered`）はオート/スキップモードとは
+        // 独立したメカニズム（原稿の `[待機:N]` 指定に由来）のため、これ単独でオート/スキップを
+        // 解除することはない — 下の `Action::Advance` 分岐の `!synthetic_advance` ガードが
+        // 3種の合成 Advance をまとめて「手動操作ではない」として扱う。
+        let synthetic_advance = auto_triggered || skip_triggered || deadline_triggered;
+        let action = if synthetic_advance {
             Action::Advance
         } else {
             next_action()?
@@ -382,9 +692,38 @@ where
 
         match action {
             Action::Advance => {
+                if !synthetic_advance {
+                    // 手動操作（Enter/Space）でオート/スキップモードをキャンセルする
+                    // （#498/#499、GUI版 `handleAdvance`/`handleKeyDown` の「手動操作で
+                    // auto/skip を OFF にする」挙動を踏襲）。画像コマ自動送り
+                    // （`deadline_triggered`）は `synthetic_advance` に含まれるため、
+                    // Wait連鎖の自動進行でもここには来ない。
+                    auto_mode = false;
+                    auto_deadline = None;
+                    skip_mode = false;
+                }
+                let prev_position = playback.position();
+                // #499/#509統合: 既読マーク（`read_positions`）に積むキーは `prev_position`
+                // ではなく `stable_item_key(prev_item_index)`（シーンを跨いで安定なキー、
+                // `read_positions` 宣言側のコメント参照）を使う。`prev_item_index` は
+                // on_advance で状態を動かす前の生インデックスをここで捕まえておく必要がある
+                // — after 側で取り直すと既に次の item を指してしまうため。
+                let prev_item_index = playback.item_index();
+                // #499: 既読マーク判定用に、on_advance で状態を動かす前の「選択肢表示中か」を
+                // 覚えておく。`playback.position()` は Choice item をカウントしないため、
+                // 「最後の会話行 → 直後の Choice」という遷移では `position()` の値が変わらず
+                // （#497 が `item_index()` を導入した理由と同種の制約）、`prev_position` だけの
+                // 比較では「本当に別の item へ移動したか」を取りこぼす。`current_choice()` の
+                // 有無の変化も合わせて見ることでこの遷移も拾う。
+                let was_choice_before = playback.current_choice().is_some();
+                // #500: バックログに積む候補（話者名込みの表示内容）を、状態を動かす前に
+                // 保存しておく。選択肢表示中は `current_line()` が `None` を返すため、この時点
+                // で自然と候補なしになる — 選択肢自体はバックログの対象外という方針
+                // （GUI版 #140 も text イベントだけを backlog の対象にしている）。
+                let prev_line_for_backlog = playback.current_line().cloned();
                 // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
                 // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
-                on_advance(playback, &mut current_reveal, config, Instant::now());
+                let advanced = on_advance(playback, &mut current_reveal, &config, Instant::now());
                 // BGM/SE の同期は `position()`（Line item のみを数える）ではなく、内部で
                 // それぞれ「宣言的な値の変化」「生カーソルの変化」を見て判定するため、Choice
                 // item への遷移（position() は変化しない）でも正しく反応する（#502）。
@@ -393,10 +732,40 @@ where
                 sync_bgm(
                     &mut current_bgm_path,
                     playback,
-                    config,
+                    &config,
                     audio.as_deref_mut(),
                 );
-                play_new_se_cues(&mut last_se_cursor, playback, config, audio.as_deref_mut());
+                play_new_se_cues(&mut last_se_cursor, playback, &config, audio.as_deref_mut());
+                // #500: 実際に行/文単位ページが1つ先へ進んだとき（`on_advance` が `true` を
+                // 返したとき、デシジョンテーブルのケース4）だけ、離れる直前の表示内容を
+                // バックログへ積む。選択肢確定（ケース1）・タイプライターのスキップのみ
+                // （ケース3、まだ同じ行にとどまる）・末尾での no-op（ケース5）ではいずれも
+                // `advanced` が偽になり、GUI版 `NovelRenderer.advanceOrSkipTypewriter` が
+                // 「ページを離れる時だけ backlog に記録する」のと同じ粒度になる。本文が空
+                // （改ページ専用の空行）のエントリは記録しない（GUI版 `BacklogOverlay.addEntry`
+                // の「空行は記録しない」を踏襲）。
+                if advanced {
+                    if let Some(entry) = prev_line_for_backlog {
+                        if !entry.text.iter().all(|line| line.is_empty()) {
+                            backlog.push(entry);
+                        }
+                    }
+                }
+                // #499: 会話行から実際に離脱した（＝別の item へ移動した）瞬間、離脱前の行を
+                // 既読としてマークする（`read_positions`、離脱ベースの既読判定 — 上の
+                // `skip_mode` 初期化コメント参照）。選択肢から離脱した場合（`was_choice_before`）
+                // はマーク対象外 — 選択肢自体は会話行ではなく、GUI版も text イベントだけを
+                // 対象にしている（#140）。「離脱したか」の判定自体は `position()` の単発の
+                // before/after比較で十分（同じ1回の on_advance 呼び出し内の変化を見るだけ
+                // なので、#509 の遅延シーン追記が引き起こす「同じ内容が別 index になる」
+                // 問題の影響を受けない）。実際に集合へ積むキーだけを安定キーに差し替える。
+                let position_changed = playback.position() != prev_position
+                    || playback.current_choice().is_some() != was_choice_before;
+                if position_changed && !was_choice_before {
+                    if let Some(key) = playback.stable_item_key(prev_item_index) {
+                        read_positions.insert(key);
+                    }
+                }
                 // `position()`（会話行のみを数える）ではなく `item_index()`（生の `items`
                 // インデックス）で「実際に別の item へ移動したか」を判定する（#497）。画像コマ
                 // item（`PlaybackItem::Image`）への遷移は会話行ではないため `position()` を
@@ -458,6 +827,54 @@ where
             Action::MoveDown => playback.move_choice_cursor_down(),
             Action::MoveLeft => playback.move_choice_cursor_left(),
             Action::MoveRight => playback.move_choice_cursor_right(),
+            Action::ToggleAuto => {
+                // #498: トグルするだけで締切自体はここでは張らない。次ループ先頭の
+                // オートモード判定ブロックが、この後の `auto_mode`/reveal 状態から
+                // 改めて「eligibleか」を評価して締切を1回セットし直す（ON にした瞬間に
+                // 現在行がタイプ中でも表示完了済みでも、その状態に応じて正しく拾える）。
+                auto_mode = !auto_mode;
+                auto_deadline = None;
+                if auto_mode {
+                    // オートとスキップは排他（GUI版 `setSkipMode(true)` が `setAutoMode(false)`
+                    // する方向の排他を #140 から踏襲）。GUI版は逆方向（オートON時にスキップを
+                    // 切る）までは明示していないが、TUI は「同時に有効な締切は高々1つ」という
+                    // 単純なタイマー設計のため、両モードが同時に走る未定義状態を避けるべく
+                    // 対称に扱う。
+                    skip_mode = false;
+                }
+            }
+            Action::ToggleSkip => {
+                // #499: 同じ理由でスキップ側もトグルだけに留め、次ループ先頭の既読判定
+                // ブロックに「eligibleか」の再評価を委ねる。ON にした瞬間に現在行が未読なら
+                // その判定ブロックが即座に `skip_mode` を `false` に戻す（GUI版 #140 と同じ
+                // 「未読到達で即座に解除」挙動）。
+                skip_mode = !skip_mode;
+                if skip_mode {
+                    // スキップON時はオートを解除する（GUI版 `setSkipMode(true)` の
+                    // `this.setAutoMode(false)` をそのまま踏襲、#140）。
+                    auto_mode = false;
+                    auto_deadline = None;
+                }
+            }
+            Action::ToggleBacklog => {
+                // #500: 開いた瞬間は最新（末尾）を表示させたいが、実際の折り返し後の行数は
+                // `ui::draw_backlog` が描画時に初めて分かる。`u16::MAX` を渡しておくと
+                // `draw_backlog` がその場で「末尾にクランプ」した値を返すので、次フレーム
+                // 以降はその値を使う（`indicator_started_at` と同じ「関数の戻り値をループ
+                // 変数へ書き戻す」パターン）。
+                overlay = Overlay::Backlog;
+                backlog_scroll = u16::MAX;
+                // ループ先頭の `now` ではなく取り直した実時刻を使う（`close_overlay` が
+                // 「呼び出し直前に取り直す」ことを要求するのと同じ理由 — この分岐に来る前の
+                // `next_action()` がブロッキングしうるため、セルフレビュー再指摘対応）。
+                overlay_opened_at = Instant::now();
+                reveal_rebuilt_at = None;
+            }
+            Action::ToggleSettings => {
+                overlay = Overlay::Settings;
+                overlay_opened_at = Instant::now();
+                reveal_rebuilt_at = None;
+            }
             Action::Quit => break,
             Action::None => {}
         }
@@ -501,6 +918,67 @@ where
     Ok(())
 }
 
+/// オーバーレイ（バックログ/設定画面）を閉じる際の後始末（#500 / #503）。
+///
+/// `Overlay` のdoc comment（本ファイル冒頭）は「オーバーレイ表示中はゲーム進行を完全に
+/// 凍結する」と書いているが、これは実際には「`event_loop` がオーバーレイ表示中
+/// `current_reveal`/`image_fade` を一切更新・描画しない」という意味に留まる。
+/// `current_reveal`（`jiwa::RevealHandle` ベース）と `image_fade` はどちらも `Instant`
+/// アンカーからの経過時間で見た目を計算するため、アンカー自体はオーバーレイが開いている
+/// 間も現実の時計と共に進み続ける。オーバーレイを閉じずに何もしなければ実害は無いが
+/// （次に描画/参照されるまで誰も経過時間を読まない）、閉じた瞬間に初めて経過時間が
+/// 読まれるため、オーバーレイを開いていた実時間がそのままタイプライター表示の進行や
+/// クロスフェードの進行に漏れ込んでしまう（セルフレビュー must対応: レビュアー実機再現
+/// `char_interval_ms=1000` で表示途中にバックログを開き実時間1.5秒待ってから閉じると、
+/// 閉じた直後に1〜2文字余分に表示される）。
+///
+/// これを防ぐため、閉じる際にオーバーレイが開いていた実時間（`overlay_opened_at` から
+/// `now` までの経過）ぶん、`current_reveal`/`image_fade` 双方のアンカーを前進させる
+/// （[`reveal::RevealState::shift_anchor_forward`]/`image_fade::ImageFadeState::shift_anchor_forward`）。
+/// これにより以後の経過時間計算からオーバーレイ中の実時間経過が差し引かれ、閉じた直後の
+/// 見た目はオーバーレイを開く直前と完全に一致する。
+///
+/// オートモードの締切（`auto_deadline`）破棄は既存の安全策（オーバーレイが開いていた間に
+/// 締切だけが過去へ流れ去っているのを防ぐ）で、上記のアンカー補正とは別の理由による処理
+/// だが、「オーバーレイを閉じる」という同じ操作の一部としてここにまとめる。
+///
+/// `now` は呼び出し側が `event_loop` のループ先頭で一度だけ計算した値をそのまま渡しては
+/// ならず、この関数を呼ぶ直前（`next_action()` がオーバーレイを閉じる `Action` を返した
+/// 「後」）に改めて `Instant::now()` を取り直したものを渡す必要がある。`next_action()`
+/// 自体がブロッキング/スリープを含みうる（本番の `input::poll_action` は最大 `REDRAW` だけ
+/// だが、テストの合成 `next_action` はもっと長く `thread::sleep` することがある）ため、
+/// ループ先頭の古い `now` を使うと `overlay_opened_at` からの経過時間を過小評価し、
+/// このアンカー補正自体が骨抜きになる（実装時に一度この誤りを踏んだ — オーバーレイの
+/// 実時間経過が結局漏れ込む退行を作ってしまい、下の回帰テストで検出した）。
+///
+/// `reveal_rebuilt_at` は `Overlay::Settings` 表示中に速度変更で `current_reveal` が
+/// 作り直された実時刻（#503、`restart_reveal_for_speed_change` 呼び出し側が記録する）。
+/// `Some` のときは `current_reveal` のアンカー補正だけこの時刻を基準にする —
+/// 作り直された `current_reveal` は既に「オーバーレイ内のその時点」を起点にしているため、
+/// `overlay_opened_at`（オーバーレイを開いた瞬間）から丸ごと差し引くと、開いてから
+/// 速度変更までの分だけ余計にアンカーを未来へ押し出してしまい、閉じた直後にタイプライターが
+/// 一時的に凍結する退行になる（セルフレビュー再指摘対応）。`image_fade` は速度変更で
+/// 作り直されないため、常に `overlay_opened_at` 基準のまま。
+fn close_overlay(
+    overlay: &mut Overlay,
+    auto_deadline: &mut Option<Instant>,
+    current_reveal: &mut Option<reveal::RevealState>,
+    image_fade: &mut image_fade::ImageFadeState,
+    overlay_opened_at: Instant,
+    reveal_rebuilt_at: Option<Instant>,
+    now: Instant,
+) {
+    *overlay = Overlay::None;
+    *auto_deadline = None;
+    let reveal_base = reveal_rebuilt_at.unwrap_or(overlay_opened_at);
+    let reveal_duration = now.saturating_duration_since(reveal_base);
+    if let Some(reveal) = current_reveal.as_mut() {
+        reveal.shift_anchor_forward(reveal_duration);
+    }
+    let image_duration = now.saturating_duration_since(overlay_opened_at);
+    image_fade.shift_anchor_forward(image_duration);
+}
+
 /// 現在位置の会話行から新しい reveal を組み立てる。現在位置が選択肢
 /// （`Playback::current_choice`）や、そもそも表示すべき item が無い場合は `None` — 選択肢の
 /// 文言はタイプライター演出の対象外（GUI版の選択肢オーバーレイに演出が無いのと同じ扱い、#482）。
@@ -527,6 +1005,40 @@ fn build_reveal_for_current(
     )))
 }
 
+/// テキスト速度の変更（#503、`Overlay::Settings`）を「見た目に即座に反映する」ための処理。
+/// 現在タイプ中（`current_reveal` が `Animating` かつ未完了）の行があれば、新しい速度で
+/// タイプライターを最初から組み立て直す。既に表示完了済み（`RevealState::Done`、または
+/// `Animating` で既に `is_done`）の行は触らない — 残りの文字が無い行を無意味に再度タイプ
+/// させ直すのは不自然なため。
+///
+/// GUI版 `typewriter.ts::tickTypewriter` は `msPerChar` を毎フレーム読み直すため、速度変更は
+/// 「そこから先の文字だけ」新速度になる。対して `jiwa::RevealHandle`（TUI側の実装）は構築時に
+/// 速度を固定する設計で、既に見えている文字の表示時刻を保ったまま速度だけ差し替えるAPIを
+/// 持たない。そのため、ここでは「タイプ中の行を新速度で最初から表示し直す」ことで同等の
+/// 即時性を実現する — 既に見えていた文字も含めて最初から出し直す分だけ、GUI版の
+/// 「そこから先だけ加速/減速する」動きとは厳密には一致しないが、体感できるほどの差では
+/// ない（1行の平均文字数・調整幅を考えれば、再タイプにかかる時間は高々数百ms）。
+/// 「即座に」は内部状態の話であり、`Overlay::Settings` 表示中はゲーム画面自体が
+/// `ui::draw_settings` に差し替わっているためユーザーからは見えない — オーバーレイを
+/// 閉じた瞬間に初めて反映後の見た目が現れる（意図した仕様。設定画面の裏でゲーム画面を
+/// 透過プレビューする機能は範囲外、セルフレビュー再指摘で確認）。
+///
+/// `now` は呼び出し側がループ先頭で計算した古い値をそのまま渡してはならず、この関数を
+/// 呼ぶ直前に改めて `Instant::now()` を取り直したものを渡す必要がある（`close_overlay` と
+/// 同じ理由・同じ原則。呼び出し側は `reveal_rebuilt_at` にこの時刻を記録し、
+/// `close_overlay` のアンカー補正の基準に使う、セルフレビュー再指摘対応）。
+fn restart_reveal_for_speed_change(
+    playback: &Playback,
+    current_reveal: &mut Option<reveal::RevealState>,
+    config: &Config,
+    now: Instant,
+) {
+    let still_typing = current_reveal.as_ref().is_some_and(|r| !r.is_done(now));
+    if still_typing {
+        *current_reveal = build_reveal_for_current(playback, config, now);
+    }
+}
+
 /// `Action::Advance` 受信時の意思決定（デシジョンテーブル、#472。選択肢分岐対応で #482 拡張）。
 /// `Terminal<CrosstermBackend<Stdout>>` という具体型に結合していた `event_loop` から、
 /// `playback` / `current_reveal` / `config` / `now` だけを引数に取る純粋関数として切り出し、
@@ -544,17 +1056,24 @@ fn build_reveal_for_current(
 /// 指す選択肢を確定する」に変わる（`input::Action::Advance` のドキュメント参照）。選択肢の
 /// 文言はタイプライター演出の対象外なので、reveal の完了/未完了を問わず常に即座に確定を試みる
 /// （#3/#4 のような reveal_done 分岐が不要）。
+///
+/// 戻り値は「実際に会話行/文単位ページが1つ先へ進んだか」（デシジョンテーブルのケース4での
+/// み `true`）。呼び出し側 `event_loop` はこれを使ってバックログ（#500）に「離れる直前の
+/// 表示内容」を積むタイミングを判定する — 選択肢確定（ケース1）・タイプライターの
+/// スキップのみでまだ同じ行にとどまる（ケース3）・末尾での no-op（ケース5）はいずれも
+/// `false` を返す。既存の呼び出し元（テスト含む）は戻り値を無視しても動作に影響しない
+/// （`bool` は `#[must_use]` ではないため、無視しても警告は出ない）。
 fn on_advance(
     playback: &mut Playback,
     current_reveal: &mut Option<reveal::RevealState>,
     config: &Config,
     now: Instant,
-) {
+) -> bool {
     if playback.current_choice().is_some() {
         if playback.select_current_choice() {
             *current_reveal = build_reveal_for_current(playback, config, now);
         }
-        return;
+        return false;
     }
 
     if let Some(line) = playback.current_line() {
@@ -568,10 +1087,13 @@ fn on_advance(
             // 進めない」挙動（カノソ方式）。`skip_lines` は `RevealHandle` の時間計算を
             // 経由しない（#472 セルフレビュー対応）。
             *current_reveal = Some(reveal::RevealState::Done(reveal::skip_lines(config, line)));
+            return false;
         } else if playback.advance() {
             *current_reveal = build_reveal_for_current(playback, config, now);
+            return true;
         }
     }
+    false
 }
 
 /// `playback.current_bgm()`（宣言的 state、#502）を実際の再生状態へ同期する。
@@ -640,6 +1162,7 @@ mod tests {
     use super::*;
     use crate::playback::DisplayLine;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::CellWidth;
     use ratatui::style::Color;
     use std::cell::RefCell;
 
@@ -1154,16 +1677,30 @@ mod tests {
         );
     }
 
-    /// レンダリング済みバッファを1本の文字列に変換する（`ui.rs` のテストヘルパーと
-    /// 同じ目的だが、全角文字の cell_width までは main.rs のテストでは問わないため
-    /// 単純に symbol を連結するだけの簡略版で足りる）。
+    /// レンダリング済みバッファを1本の文字列に変換する（`ui.rs` のテストヘルパーと同じ目的）。
+    /// ASCII中心の既存テストで使う薄いラッパー。実体は [`buffer_text_wide_aware`] —
+    /// ASCII文字はどれも `cell_width() == 1` なので、全角対応版の走査ロジックは
+    /// ASCII専用の単純な連結と完全に同じ結果を返す（セルフレビュー nit対応:
+    /// 同じ走査ロジックが2箇所に重複していたのを一本化）。
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
+        buffer_text_wide_aware(terminal)
+    }
+
+    /// [`buffer_text`] の全角対応版。全角文字の次のセルは直前のグラフェムの表示のために
+    /// 予約された継続セルであり、単純に連結すると全角文字どうしの間に余分な文字が
+    /// 混入してCJK文字列の内容比較が壊れる（`ui.rs` の `buffer_text` と同じ理由、参照）。
+    /// CJK文字列そのものを検証するテストも `buffer_text` のASCII専用テストも、どちらも
+    /// この実装を共有する（上記 [`buffer_text`] 参照）。
+    fn buffer_text_wide_aware(terminal: &Terminal<TestBackend>) -> String {
         let buffer = terminal.backend().buffer();
         let area = buffer.area();
         let mut out = String::new();
         for y in 0..area.height {
-            for x in 0..area.width {
-                out.push_str(buffer.cell((x, y)).expect("in bounds").symbol());
+            let mut x = 0u16;
+            while x < area.width {
+                let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                out.push_str(symbol);
+                x += symbol.cell_width().max(1);
             }
         }
         out
@@ -1787,6 +2324,1179 @@ mod tests {
             "2回目の呼び出しはBからCへの1行送りだけのはず（2回連続jumpしない）"
         );
         assert_eq!(playback.position(), 2, "1回のadvanceにつき1行だけ進むはず");
+    }
+
+    // ---- テスト観点整理担当の指摘に基づく追加テスト（#497/#498型再発確認・状態遷移の
+    // 排他制御・境界値・null/空文字・正常系）。既存カバレッジと重複する範囲は避け、
+    // #498/#499/#500/#503（オート/スキップ/バックログ/設定オーバーレイ）のevent_loop
+    // レベルのテストがこれまで一件も存在しなかった領域に絞る。 ----
+
+    #[test]
+    fn event_loop_closing_backlog_overlay_resets_auto_deadline_preventing_stale_cascade() {
+        // #497/#498型の再発確認: バックログを開いている間にauto_wait_ms(締切)を実時間で
+        // 過ぎ去らせてから閉じても、閉じた直後の1フレームで過ぎ去った締切により
+        // 即座にauto advanceが起きてはいけない(`auto_deadline = None`リセットの回帰ガード)。
+        let mut config = instant_config();
+        config.auto_wait_ms = 200;
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto),
+                2 => Ok(Action::ToggleBacklog), // オーバーレイを開く
+                3 => {
+                    // auto_wait_ms(200ms)より十分長く待ち、開いている間に張られた締切を
+                    // 確実に過去のものにする。
+                    std::thread::sleep(Duration::from_millis(400));
+                    Ok(Action::ToggleBacklog) // 閉じる
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.position(),
+            1,
+            "オーバーレイを閉じた直後に過ぎ去ったauto_deadlineでカスケード的に \
+             自動送りされてはいけない(#497/#498型再発防止)"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn event_loop_closing_settings_overlay_also_resets_auto_deadline() {
+        // 上のテストの設定画面(#503)版。バックログと同じ`auto_deadline = None`リセットの
+        // コード経路が設定画面を閉じたときにも適用されることの回帰ガード。
+        let mut config = instant_config();
+        config.auto_wait_ms = 200;
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto),
+                2 => Ok(Action::ToggleSettings),
+                3 => {
+                    std::thread::sleep(Duration::from_millis(400));
+                    Ok(Action::ToggleSettings)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(playback.position(), 1);
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A")
+        );
+    }
+
+    // ---- #500/#503 セルフレビュー must対応: オーバーレイの実時間経過がタイプライター表示/
+    // クロスフェードへ漏れ込まないことの回帰ガード ----
+    //
+    // `event_loop_closing_backlog_overlay_resets_auto_deadline_preventing_stale_cascade`
+    // 等の上のテスト群は `instant_config()`（char_interval_ms=0、生成と同時に完了扱い）を
+    // 使っているため、そもそも「タイプ中」の状態が存在せず、このバグを検出できない
+    // （レビュアー指摘）。ここでは `slow_config()`（char_interval_ms=1000）を使い、
+    // オーバーレイを開いた瞬間には1文字目しか見えていない状態を作ってから、
+    // オーバーレイを開いたまま実時間で1文字ぶんの間隔（1000ms）近くを待って閉じ、
+    // 閉じた直後の描画結果（`TestBackend` バッファ）に2文字目以降が漏れ出ていないことを
+    // 実際に表示された文字で確認する。
+
+    #[test]
+    fn event_loop_closing_backlog_overlay_does_not_leak_overlay_duration_into_typewriter() {
+        // 修正前の実装では、オーバーレイを開いていた実時間がそのまま `current_reveal`
+        // （`jiwa::RevealHandle` ベース）の経過時間計算に漏れ込み、閉じた直後に
+        // オーバーレイを開く前には見えていなかった文字が一気に表示されてしまっていた
+        // （レビュアー実機再現: char_interval_ms=1000で表示途中にバックログを開き実時間
+        // 1.5秒程度待ってから閉じると1〜2文字余分に表示される）。この回帰ガードはその
+        // 再現条件をほぼそのまま踏襲する。
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "abcdefghij")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                // 1回目のフレームはまだ何もキー入力していない状態で描画されている
+                // （＝reveal開始直後、"a"のみ可視）。ここで即座にバックログを開く。
+                1 => Ok(Action::ToggleBacklog),
+                2 => {
+                    // char_interval_ms(1000ms)を1境界ぶん超える実時間を、オーバーレイを
+                    // 開いたまま経過させる。修正前ならこの間に2文字目("b")が
+                    // 見えてしまうはずの長さ（800ms程度では1000msの境界を跨がず
+                    // 修正の有無に関わらず1文字のままになってしまうため、意図的に
+                    // 1000msを超える値にしている）。
+                    std::thread::sleep(Duration::from_millis(1200));
+                    Ok(Action::ToggleBacklog) // 閉じる
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains('a'), "1文字目は表示されているはず: {text:?}");
+        assert!(
+            !text.contains("ab"),
+            "オーバーレイを開いていた実時間(1200ms)が漏れ込み、2文字目まで表示されて \
+             しまっている(#500/#503セルフレビューmust再発防止): {text:?}"
+        );
+    }
+
+    #[test]
+    fn event_loop_closing_settings_overlay_does_not_leak_overlay_duration_into_typewriter() {
+        // 上のテストの設定画面(#503)版。バックログと同じ `close_overlay` 経路が
+        // 設定画面を閉じたときにも適用されることの回帰ガード。
+        let config = slow_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "abcdefghij")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => {
+                    // 上のバックログ版と同じ理由でchar_interval_ms(1000ms)の境界を
+                    // 超える長さにしている。
+                    std::thread::sleep(Duration::from_millis(1200));
+                    Ok(Action::ToggleSettings)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains('a'));
+        assert!(
+            !text.contains("ab"),
+            "設定画面を開いていた実時間が漏れ込み、2文字目まで表示されてしまっている: {text:?}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_speed_change_mid_overlay_does_not_freeze_typewriter_after_close() {
+        // セルフレビュー再指摘の回帰ガード: 設定画面表示中に速度変更(#503)すると
+        // `restart_reveal_for_speed_change` が `current_reveal` を新しいアンカーで作り
+        // 直す。ここで「設定画面を開いてから速度変更キーを押すまで」の待ち時間が長いと、
+        // `close_overlay` が誤って `overlay_opened_at`（開いた瞬間）からの全期間を差し
+        // 引いてしまい、アンカーが実際の close 時刻より未来へ押し出されて、閉じた直後
+        // タイプライターが一時的に凍結する退行があった（正しくは、作り直された瞬間
+        // `reveal_rebuilt_at` からの経過だけを差し引くべき）。
+        let config = slow_config(); // char_interval_ms = 1000
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "abcdefghij")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings), // 設定画面を開く
+                2 => {
+                    // 開いてからしばらく考えてから速度を変える、という自然な操作フロー。
+                    std::thread::sleep(Duration::from_millis(800));
+                    // char_interval_ms: 1000 -> saturating_add(5).min(200) = 200
+                    Ok(Action::MoveDown)
+                }
+                3 => {
+                    std::thread::sleep(Duration::from_millis(700));
+                    Ok(Action::ToggleSettings) // 閉じる
+                }
+                4 => {
+                    // 閉じた後、十分な実時間を与える。バグがあれば速度変更前の待ち時間
+                    // (800ms)ぶんアンカーが未来へ押し出されたままなので、この程度では
+                    // まだ動き出さない。
+                    std::thread::sleep(Duration::from_millis(900));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains('d'),
+            "設定画面を閉じてから900ms経過(200ms/字なら4文字分)しているのに \
+             タイプライターが凍結していて4文字目まで進んでいない(#503セルフレビュー \
+             再指摘の回帰): {text:?}"
+        );
+    }
+
+    #[test]
+    fn event_loop_closing_backlog_overlay_does_not_leak_overlay_duration_into_image_crossfade() {
+        // `image_fade`（イベント絵クロスフェード）も `current_reveal` と同じ `Instant`
+        // アンカー方式のため、同じ漏れ込みバグを抱えていないか確認する回帰ガード
+        // （セルフレビュー指摘: reveal と同じ方針で調査・修正すること）。
+        // crossfade_ms(300ms) をオーバーレイの実時間経過(500ms)より短くしておくことで、
+        // 「開いていた実時間がそのままフェード進行に加算される(バグ)」場合は
+        // t=500/300>1.0でクランプされ`to`の色そのものになり、「補正されている(修正後)」
+        // 場合はt≈0(オーバーバーヘッド分のみ)で`from`寄りの色のままになる、という
+        // 二値的で検出しやすい差にする。
+        let fixture_from = (10u8, 200u8, 10u8);
+        let fixture_to = (200u8, 10u8, 10u8);
+        let fixture_from_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_from, 2, 2), 2, 2);
+        let fixture_to_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_to, 2, 2), 2, 2);
+        let mut config = instant_config();
+        config.event_image.assets_dir = fixture_from_path.parent().unwrap().to_path_buf();
+        config.event_image.crossfade_ms = 300;
+        let relative_from = fixture_from_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let relative_to = fixture_to_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut playback = Playback::from_lines(vec![
+            dline_with_image(Some("A"), "one", Some(relative_from)),
+            dline_with_image(Some("B"), "two", Some(relative_to)),
+        ]);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                // 1行目→2行目へ進み、フェードを開始させる。
+                1 => Ok(Action::Advance),
+                // フェード開始直後にバックログを開く。
+                2 => Ok(Action::ToggleBacklog),
+                3 => {
+                    // crossfade_ms(300ms)より長い実時間をオーバーレイ表示中に経過させる。
+                    // 修正前ならこの分がそのままフェード進行に加算され、t>=1.0となって
+                    // 完了(`to`の色そのもの)扱いになってしまう。
+                    std::thread::sleep(Duration::from_millis(500));
+                    Ok(Action::ToggleBacklog)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            !buffer_has_bg_color(terminal.backend().buffer(), fixture_to),
+            "オーバーレイを開いていた実時間(500ms)がクロスフェード(300ms)の進行に \
+             漏れ込み、本来ごくわずかしか進んでいないはずのフェードが完了して \
+             見えてしまっている(#500/#503セルフレビューmust再発防止)"
+        );
+    }
+
+    #[test]
+    fn event_loop_overlay_polling_does_not_mark_current_line_as_read() {
+        // #499型の再発確認: バックログ表示中もREDRAWポーリング（`Action::None`）は続くが、
+        // 「見ているだけ」で現在行がread_positionsへ新規追加されてはいけない
+        // （既読集合はAction::Advanceで実際に離脱した瞬間にのみ更新される設計）。
+        // オーバーレイを閉じた直後にスキップをONにして、まだ一度も離脱していない
+        // 1行目が即座に飛ばされない（＝スキップが即座に解除される）ことで間接的に確認する。
+        let config = instant_config();
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::ToggleBacklog,
+            Action::None,
+            Action::None,
+            Action::None,
+            Action::ToggleBacklog,
+            Action::ToggleSkip,
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.position(),
+            1,
+            "バックログを見ていただけの1行目がREDRAWポーリングで既読扱いになり、\
+             閉じた直後のスキップONで2行目へ自動的に飛ばされてはいけない"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn sentence_per_page_skip_after_revisiting_a_fully_read_line_fast_forwards_through_to_the_choice(
+    ) {
+        // 【#499 実装バグ調査の結論、テスト実装担当の指摘を検証した結果】
+        //
+        // 当初「read_positionsがLine item単位（`playback.position()`）でしか既読を記録しない
+        // 一方バックログは文単位でエントリを積むため、複数文を持つLine itemを再訪して1文目で
+        // 止まっている状態からスキップすると、今回まだ見ていない2文目以降を確認なしに
+        // 飛ばしてしまうのではないか」という懸念でこのテストは red のまま残されていた。
+        //
+        // 検証のため実際に `read_positions` を `(position, sentence_index)` の複合キーへ
+        // 変更し文単位の既読判定を実装したところ、この具体的なシナリオでは**挙動が一切
+        // 変わらなかった**（生成コードのdiffを戻してもこのテストのpanicメッセージは
+        // byte-exactに同一）。理由: このエンジンの `Playback::advance` は同一 Line item 内の
+        // 文を必ず 0→1→…→末尾の順に一度も飛ばさず辿る設計であり、「item全体が既読」という
+        // 粗い印（旧実装）が立つのは、必ずその item の**全ての文を実際に辿り終えた後**
+        // （item境界を越える最後の advance が成功した瞬間）だけ。つまり粗いitem単位の印は
+        // 「その中の全文を個別に辿り終えている」ことの必要十分条件であり、文単位に分解しても
+        // 判定結果は変わらない（ある文だけ未読のままitem全体が既読になる中間状態が原理的に
+        // 作れない）。
+        //
+        // さらに、この feature の仕様上の参照実装である GUI版
+        // （`frontend/src/game/NovelRenderer.ts` の `readProgress`/`markRead`、Issue #499 本文が
+        // 明記）も、`computeDisplayIndex`（イベント単位、文単位ページindexを含まない）だけを
+        // 既読キーにしており、GUI版そのものが文単位の細分をしていない——今回のシナリオの
+        // ような「一度最後まで読んだ行をジャンプで再訪し、スキップで再度通過する」動きは、
+        // 単一文の行に対してはこのすぐ下の
+        // `event_loop_skip_through_read_line_stops_exactly_at_choice_without_auto_confirming`
+        // が既に「選択肢まで一気に通過する」ことを正として検証済みであり、文単位ページを
+        // 使っていても結論は変わらないのが一貫した挙動。
+        //
+        // 以上により、これは実装バグではなく「一度最後まで読み終えた内容を再訪してスキップ
+        // すれば、選択肢まで一気に通過する」という正しいスキップ挙動だったと判断し、
+        // アサーションを実際の（かつ意図した）結果に合わせて修正する。「未読テキストに
+        // 到達したら止まる」という本質的な仕様は、他のテスト
+        // （`event_loop_overlay_polling_does_not_mark_current_line_as_read` 等）で別途保証済み。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n\
+                       最初の文。二番目の文。\n\n[選択]\n- 戻る→1-1\n[/選択]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document).with_sentence_per_page(true);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, remaining) = action_queue(vec![
+            Action::Advance,    // 1文目 -> 2文目
+            Action::Advance,    // 2文目 -> 選択肢へ離脱（読了マーク）
+            Action::Advance,    // 選択肢確定「戻る」-> 1-1 の1文目へジャンプし直す
+            Action::ToggleSkip, // 再訪した1文目（既読）からスキップON
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            playback.current_choice().is_some(),
+            "既読の行を再訪してスキップを機能させれば、1文目・2文目とも既読のため \
+             選択肢まで一気に通過するはず。実際: current_line={:?}, at_choice={}",
+            playback.current_line(),
+            playback.current_choice().is_some()
+        );
+        assert_eq!(
+            *remaining.borrow(),
+            0,
+            "スキップが実際に機能していれば、追加のAdvance無しで選択肢まで到達するはず"
+        );
+    }
+
+    #[test]
+    fn event_loop_backlog_overlay_ignores_auto_skip_settings_toggle_keys() {
+        // #500: バックログ表示中に a/s/c（オート/スキップ/設定トグル）を送っても、
+        // overlayを含む状態が変化してはいけない。a/s/cを送った直後もoverlayが
+        // Backlogのまま（Settingsへ変化していない）ことを描画内容で確認する。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleBacklog),
+                2 => Ok(Action::ToggleAuto),
+                3 => Ok(Action::ToggleSkip),
+                4 => Ok(Action::ToggleSettings),
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err(), "テスト用の意図的な停止のはず");
+
+        let text = buffer_text_wide_aware(&terminal);
+        assert!(
+            text.contains("BACKLOG"),
+            "a/s/cキーでオーバーレイがBacklog以外へ変化してはいけない, buffer was: {text}"
+        );
+        assert!(!text.contains("設定"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn event_loop_settings_overlay_ignores_auto_skip_backlog_toggle_keys() {
+        // #503: 設定画面表示中に a/s/b（オート/スキップ/バックログトグル）を送っても、
+        // overlayを含む状態が変化してはいけない。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::ToggleAuto),
+                3 => Ok(Action::ToggleSkip),
+                4 => Ok(Action::ToggleBacklog),
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err(), "テスト用の意図的な停止のはず");
+
+        let text = buffer_text_wide_aware(&terminal);
+        assert!(
+            text.contains("設定"),
+            "a/s/bキーでオーバーレイがSettings以外へ変化してはいけない, buffer was: {text}"
+        );
+        assert!(!text.contains("BACKLOG"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn event_loop_quit_while_overlay_open_only_closes_overlay_second_quit_terminates_app() {
+        // #500/#503: オーバーレイ表示中のq/Escはアプリ終了ではなくオーバーレイを閉じる
+        // だけ。もう一度q/Escを押して初めて本当に終了する（2段階操作）。
+        // `remaining`が0（3件すべて消費）まで進むことで、1回目のQuitで早期終了して
+        // いないことを確認する（もし早期終了していれば2件しか消費されず1が残る）。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, remaining) =
+            action_queue(vec![Action::ToggleBacklog, Action::Quit, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            *remaining.borrow(),
+            0,
+            "1回目のQuitはオーバーレイを閉じるだけで終了してはいけない \
+             (2回目のQuitまで消費されるはず)"
+        );
+    }
+
+    #[test]
+    fn event_loop_enabling_skip_while_auto_active_turns_off_auto_preventing_stale_auto_advance() {
+        // #498/#499: オートON中にスキップをONにすると、オートは排他的にOFFになる。
+        // OFFになっていなければ、auto_wait_ms経過後に（スキップの既読判定とは無関係に）
+        // 自動送りが発火して2行目へ進んでしまうはず。
+        let mut config = instant_config();
+        config.auto_wait_ms = 50;
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto),
+                2 => Ok(Action::ToggleSkip),
+                3 => {
+                    // 元のauto_wait_ms(50ms)よりはるかに長く待つ。オートが排他的にOFFに
+                    // なっていなければ、ここでauto_deadline発火が観測できるはず。
+                    std::thread::sleep(Duration::from_millis(200));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.position(),
+            1,
+            "スキップON操作でオートが排他的にOFFになるはず。OFFになっていなければ \
+             auto_wait_ms経過後に自動送りが発火し2行目へ進んでしまう"
+        );
+    }
+
+    #[test]
+    fn event_loop_enabling_auto_while_skip_active_turns_off_skip_and_auto_still_fires() {
+        // #498/#499: 逆方向（スキップON中にオートをONにする）でも排他が成り立つことを
+        // 確認する。スキップが残っていると誤動作しうるが、正しく排他が効いていれば
+        // オートだけがauto_wait_ms後に1行分だけ正常に発火する。
+        let mut config = instant_config();
+        config.auto_wait_ms = 50;
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "one"),
+            dline(Some("B"), "two"),
+            dline(Some("C"), "three"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSkip),
+                2 => Ok(Action::ToggleAuto),
+                3 => {
+                    std::thread::sleep(Duration::from_millis(200));
+                    Ok(Action::None)
+                }
+                4 => Ok(Action::None),
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.position(),
+            2,
+            "スキップ->オートの排他遷移後、オートがちょうど1回だけ発火してBへ進むはず"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn event_loop_skip_through_read_line_stops_exactly_at_choice_without_auto_confirming() {
+        // #499/#482: 既読の会話行をスキップで通過した先が選択肢の場合、選択肢に到達した
+        // 時点で自動的にスキップが解除され、選択肢を勝手に確定したりはしない
+        // （GUI版 #140の「選択肢到達で setSkipMode(false)」と同じ）。同時に、既読内容を
+        // 実際に自動送りできている（スキップが機能している）ことも確認する。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n\
+                       最初のセリフ\n\n[選択]\n- 進む→1-2\n- 戻る→1-1\n[/選択]\n\n\
+                       ## 1-2: 次\n\n**B**:\n次のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, remaining) = action_queue(vec![
+            Action::Advance,    // A読了 -> 選択肢へ離脱（read_positionsにAを記録）
+            Action::MoveDown,   // カーソルを「戻る」へ
+            Action::Advance,    // 「戻る」確定 -> 1-1のAへジャンプし直す
+            Action::ToggleSkip, // 既読のAからスキップ開始
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            playback.current_choice().is_some(),
+            "既読行のスキップは選択肢に到達した時点で止まり、自動確定してはいけない"
+        );
+        assert_eq!(
+            *remaining.borrow(),
+            0,
+            "スキップが実際に機能していれば、追加のAdvance無しで選択肢まで到達するはず"
+        );
+    }
+
+    #[test]
+    fn event_loop_skip_stops_at_true_script_end_without_error() {
+        // #499: スキップ中にスクリプト末尾（is_at_end）に到達すると自動的にスキップが
+        // 解除される。最終行は「離脱」できないため原理的にread_positionsへ記録され得ず、
+        // 誤ってそこへ進もうとしてエラー/パニックしないことも合わせて確認する。
+        let config = instant_config();
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::Advance,    // A読了 -> B（最終行）へ
+            Action::ToggleSkip, // 末尾Bでスキップを試みる
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(playback.position(), 2);
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
+        assert!(playback.is_at_end());
+    }
+
+    // ---- #498: オートモードの選択肢到達/スクリプト末尾での非発火（should対応） ----
+    //
+    // スキップモードには上の
+    // `event_loop_skip_through_read_line_stops_exactly_at_choice_without_auto_confirming`/
+    // `event_loop_skip_stops_at_true_script_end_without_error` という対のテストがあるが、
+    // オートモードには同種のテストが無かった（セルフレビュー指摘）。オートモードは
+    // `event_loop` の `eligible = reveal_done && current_choice().is_none() && !is_at_end`
+    // というガードで選択肢到達/末尾到達の両方をカバーしているはずだが、この2つのテストで
+    // 実際にその通り動くことを確認する。
+
+    #[test]
+    fn event_loop_auto_mode_does_not_auto_confirm_when_a_choice_is_reached() {
+        // オートモード中に自動送りで選択肢へ到達しても、選択肢を勝手に確定したりはしない
+        // （`eligible` が `current_choice().is_none()` を要求するため、選択肢到達時点で
+        // `auto_deadline` が再設定されなくなる）。手動 `Action::Advance` で選択肢へ進むと
+        // その操作自体がオートモードを解除してしまう（「手動操作でauto/skipをキャンセル
+        // する」既存挙動）ため、ここでは意図的にオートの自動送り自体で選択肢まで
+        // 到達させ、手動操作を一切使わない。
+        let mut config = instant_config();
+        config.auto_wait_ms = 30;
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n\
+                       最初のセリフ\n\n[選択]\n- 進む→1-2\n- 戻る→1-1\n[/選択]\n\n\
+                       ## 1-2: 次\n\n**B**:\n次のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto), // Aの行でオートON（reveal即完了）
+                2 => {
+                    // auto_wait_ms(30ms)を超えて待ち、オート自身の自動送りでAから
+                    // 選択肢へ進ませる（この待機の間にnext_action経由でなく
+                    // ループ側が合成Advanceを発火させる）。
+                    std::thread::sleep(Duration::from_millis(120));
+                    Ok(Action::None)
+                }
+                3 => {
+                    // 選択肢に到達した後、さらに待っても自動確定されないことを
+                    // 確認するための追加待機。
+                    std::thread::sleep(Duration::from_millis(120));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            playback.current_choice().is_some(),
+            "オートモードは選択肢到達時点で発火が止まり、自動確定してはいけない"
+        );
+    }
+
+    #[test]
+    fn event_loop_auto_mode_stops_firing_at_true_script_end_without_error() {
+        // オートモードがスクリプト末尾（is_at_end）に到達すると、`eligible` の
+        // `!is_at_end` 条件により以後 `auto_deadline` が再設定されなくなる。
+        // 末尾到達後にさらに待っても、位置が異常に進んだりエラー/パニックになったり
+        // しないことを確認する。
+        let mut config = instant_config();
+        config.auto_wait_ms = 30;
+        let mut playback =
+            Playback::from_lines(vec![dline(Some("A"), "one"), dline(Some("B"), "two")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto), // Aの行でオートON
+                2 => {
+                    // auto_wait_ms(30ms)を超えて待ち、A(最終行の1つ手前)からB(末尾)への
+                    // 自動送りを起こす。
+                    std::thread::sleep(Duration::from_millis(120));
+                    Ok(Action::None)
+                }
+                3 => {
+                    // B(末尾)到達後、さらに待っても追加の発火が起きないことを確認する
+                    // ための追加待機。
+                    std::thread::sleep(Duration::from_millis(120));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(playback.position(), 2);
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
+        assert!(playback.is_at_end());
+    }
+
+    #[test]
+    fn event_loop_skip_stops_at_first_unread_line_keeping_it_displayed_not_skipped() {
+        // #499: スキップ中に未読行に到達すると、その場でスキップが解除され現在行が
+        // （次へ飛ばされず）表示維持される。既読済みのAを通過した直後の未読Bで確認する
+        // （末尾ではない＝上のテストの「末尾到達」条件とは別の、純粋な「未読」条件を狙う）。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "one"),
+            dline(Some("B"), "two"),
+            dline(Some("C"), "three"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::Advance,    // A読了 -> B（未読）へ
+            Action::ToggleSkip, // 未読のBでスキップを試みる
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.position(),
+            2,
+            "未読行に到達した時点でスキップが解除され、Cへ飛ばされてはいけない"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn event_loop_backlog_gains_entry_only_after_leaving_a_line_not_while_still_displaying_it() {
+        // #500: バックログには「実際に離脱した」行だけが積まれる。まだ表示中（離脱前）の
+        // 行は積まれないことを、Aから離脱した直後にバックログを開いて中身を確認する
+        // ことで検証する（Advance直後の意図的な停止で中間状態を覗く）。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "first line"),
+            dline(Some("B"), "second line"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::Advance), // A -> B へ離脱、Aがバックログへ積まれるはず
+                2 => Ok(Action::ToggleBacklog), // 中身を確認するために開く
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("first line"),
+            "離脱済みのAはバックログに積まれているはず, buffer was: {text}"
+        );
+        assert!(
+            !text.contains("second line"),
+            "まだ表示中(離脱前)のBはバックログに積まれてはいけない, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn restart_reveal_for_speed_change_rebuilds_still_typing_reveal_with_new_speed() {
+        // #503: タイプライター表示中に速度変更すると、現在のrevealが新速度で
+        // 再構築される（見た目に即座に反映される）。
+        let slow = slow_config();
+        let playback = Playback::from_lines(vec![dline(Some("A"), "hello there")]);
+        let t0 = Instant::now();
+        let mut current_reveal = Some(animating(&slow, playback.current_line().expect("line"), t0));
+        assert!(
+            !current_reveal.as_ref().unwrap().is_done(t0),
+            "slow_config前提の確認: まだタイプ中のはず"
+        );
+
+        let instant = instant_config();
+        restart_reveal_for_speed_change(&playback, &mut current_reveal, &instant, t0);
+
+        assert!(
+            current_reveal.as_ref().unwrap().is_done(t0),
+            "タイプ中の行は新速度(瞬間表示)で再構築され、即座に完了しているはず"
+        );
+    }
+
+    #[test]
+    fn restart_reveal_for_speed_change_leaves_already_done_reveal_untouched() {
+        // #503: 表示完了済みの行は速度変更の対象外——再構築されていたら、新しい
+        // slow設定の下では「今」構築し直された分だけ未完了に戻ってしまうはず。
+        let instant = instant_config();
+        let playback = Playback::from_lines(vec![dline(Some("A"), "hello there")]);
+        let t0 = Instant::now();
+        let mut current_reveal = Some(animating(
+            &instant,
+            playback.current_line().expect("line"),
+            t0,
+        ));
+        assert!(
+            current_reveal.as_ref().unwrap().is_done(t0),
+            "instant_config前提の確認: 既に表示完了済みのはず"
+        );
+
+        let slow_new = slow_config();
+        let t1 = t0 + Duration::from_millis(1);
+        restart_reveal_for_speed_change(&playback, &mut current_reveal, &slow_new, t1);
+
+        assert!(
+            current_reveal.as_ref().unwrap().is_done(t1),
+            "既に表示完了済みの行はspeed change対象外のはず(再構築されていたら新しい \
+             slow設定の下でまだ未完了になっているはず)"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_char_interval_lower_bound_clamps_to_zero_and_stays() {
+        // #503: char_interval_msが5の状態で↑（MoveUp/減少）を押すと0になる（下限到達）。
+        // 0からさらに押しても0のまま（saturating_subの下限保持）。
+        let mut config = instant_config();
+        config.typewriter.char_interval_ms = 5;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveUp), // 5 -> 0
+                3 => Ok(Action::MoveUp), // 0 -> 0（下限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text_wide_aware(&terminal);
+        assert!(
+            text.contains("瞬間表示"),
+            "2回目の↑後も0(瞬間表示)のままのはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_char_interval_upper_bound_clamps_to_200_and_stays() {
+        // #503: char_interval_msが195の状態で↓（MoveDown/増加）を押すと200になる
+        // （上限到達）。200からさらに押しても200のまま（205にはならない、
+        // `.min(TEXT_SPEED_MAX_MS)`）。
+        let mut config = instant_config();
+        config.typewriter.char_interval_ms = 195;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveDown), // 195 -> 200
+                3 => Ok(Action::MoveDown), // 200 -> 200（205にならず上限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text_wide_aware(&terminal);
+        assert!(
+            text.contains("遅い (200ms)"),
+            "2回目の↓後も200msのままのはず(205等になっていないか), buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn toggle_auto_on_advances_after_wait_then_toggle_off_stops_further_auto_advance() {
+        // #498: aキーでオートON/OFFが正しく切り替わる。ONで待機後に自動送りが実際に
+        // 発火し、OFFにした後は同じだけ待っても発火しないことを確認する。
+        let mut config = instant_config();
+        config.auto_wait_ms = 50;
+        let mut playback = Playback::from_lines(vec![
+            dline(Some("A"), "one"),
+            dline(Some("B"), "two"),
+            dline(Some("C"), "three"),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleAuto), // ON
+                2 => {
+                    std::thread::sleep(Duration::from_millis(150));
+                    Ok(Action::None)
+                }
+                3 => Ok(Action::ToggleAuto), // OFF（B到達直後のはず）
+                4 => {
+                    std::thread::sleep(Duration::from_millis(150));
+                    Ok(Action::None)
+                }
+                _ => Ok(Action::Quit),
+            }
+        };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.position(),
+            2,
+            "ON後の待機で1回だけ自動送りが発火し(A->B)、OFF後は再度待ってもCへは \
+             進まないはず"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("B")
+        );
     }
 
     // ---- #497: イベント絵の時間差自動連続表示（event_loop のタイマー駆動・回帰） ----
