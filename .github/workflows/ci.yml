@@ -17,6 +17,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # rodio/cpal の Linux バックエンドが ALSA を使うため、alsa-sys のビルドに
+      # libasound2-dev (alsa.pc) が必要。無いと pkg-config が alsa を見つけられず失敗する (#502)
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+
       - uses: actions/cache@v4
         with:
           path: |
