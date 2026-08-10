@@ -1036,7 +1036,7 @@ impl Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use name_name_parser::models::{BgmAction, Chapter, ChoiceOption, Scene, SceneView};
+    use name_name_parser::models::{BgmAction, Chapter, ChoiceOption, FlagValue, Scene, SceneView};
     use std::collections::HashMap;
 
     #[test]
@@ -1387,6 +1387,22 @@ mod tests {
                     jump: jump.to_string(),
                 })
                 .collect(),
+        }
+    }
+
+    /// `[フラグ: name=value]` 相当の `Event::Flag`（#509）。
+    fn flag_event(name: &str, value: bool) -> Event {
+        Event::Flag {
+            name: name.to_string(),
+            value: FlagValue::Bool(value),
+        }
+    }
+
+    /// `[条件: flag]...[/条件]` 相当の `Event::Condition`（#509）。
+    fn condition_event(flag: &str, events: Vec<Event>) -> Event {
+        Event::Condition {
+            flag: flag.to_string(),
+            events,
         }
     }
 
@@ -3601,5 +3617,179 @@ mod tests {
             !pb.advance(),
             "SceneTransitionからitemが生成されないため、これ以上は進めない"
         );
+    }
+
+    // ---- #509: Event::Flag / Event::Condition のリアルタイム評価テスト ----
+
+    #[test]
+    fn condition_reflects_flag_set_earlier_in_the_same_scene_but_not_when_flag_comes_after() {
+        // フラグが先・条件が後: 同一シーン内で即座に反映され、条件内の台詞が最初のitemになる。
+        let doc = doc_single_scene(vec![
+            flag_event("x", true),
+            condition_event("x", vec![dialog(Some("カコ"), vec!["表示されるはず"])]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        let line = pb
+            .current_line()
+            .expect("フラグ成立後の条件内台詞が最初のitemのはず");
+        assert_eq!(line.speaker.as_deref(), Some("カコ"));
+        assert_eq!(line.text, vec!["表示されるはず".to_string()]);
+
+        // 条件が先・フラグが後: まだフラグが立っていない時点で評価されるため表示されない。
+        let doc_reversed = doc_single_scene(vec![
+            condition_event("y", vec![dialog(Some("カコ"), vec!["表示されないはず"])]),
+            flag_event("y", true),
+        ]);
+        let pb_reversed = Playback::from_document(&doc_reversed);
+        assert_eq!(
+            pb_reversed.current_line(),
+            None,
+            "条件評価時点ではyが未設定なので条件内の台詞は一切itemにならないはず"
+        );
+        assert!(pb_reversed.is_at_end(), "後続イベントが無いので末尾のはず");
+    }
+
+    #[test]
+    fn condition_reflects_flag_set_in_an_earlier_scene_after_crossing_scene_boundary() {
+        // シーン "1-1" でフラグを立て、選択肢を介さずドキュメント順で "1-2" へ advance() した際に
+        // "1-2" 内の条件付き台詞が反映されることを確認する（#509）。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        flag_event("seen", true),
+                        dialog(Some("A"), vec!["最初のシーン"]),
+                    ],
+                ),
+                scene(
+                    "1-2",
+                    vec![condition_event(
+                        "seen",
+                        vec![dialog(Some("B"), vec!["Aを見た後"])],
+                    )],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.current_line().expect("1-1の台詞").speaker.as_deref(),
+            Some("A")
+        );
+
+        assert!(pb.advance(), "シーン境界を越えて1-2へ進めるはず");
+        let line = pb
+            .current_line()
+            .expect("1-2の条件付き台詞がseen=true成立で表示されるはず");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert_eq!(line.text, vec!["Aを見た後".to_string()]);
+    }
+
+    #[test]
+    fn condition_result_depends_on_actual_path_taken_not_document_position() {
+        // ハブ → ルートA（seen_aを立てる）→ ハブへ戻る → ルートB、という経路をたどると
+        // ルートB内の `[条件: seen_a]` が表示される。同じドキュメント上の位置でも、
+        // ハブから最初からルートBへ直接進んだ場合（ルートAを未経由）は表示されない —
+        // これが #509 の核心（経路依存の評価）。
+        fn hub_doc() -> Document {
+            let ch1 = chapter(
+                1,
+                vec![
+                    scene(
+                        "hub",
+                        vec![
+                            dialog(Some("Hub"), vec!["ハブ"]),
+                            choice(vec![("Aへ", "route-a"), ("Bへ", "route-b")]),
+                        ],
+                    ),
+                    scene(
+                        "route-a",
+                        vec![
+                            dialog(Some("A"), vec!["ルートA"]),
+                            flag_event("seen_a", true),
+                            choice(vec![("ハブへ戻る", "hub")]),
+                        ],
+                    ),
+                    scene(
+                        "route-b",
+                        vec![
+                            condition_event(
+                                "seen_a",
+                                vec![dialog(Some("B2"), vec!["Aを見た後のB"])],
+                            ),
+                            dialog(Some("B"), vec!["ルートB"]),
+                        ],
+                    ),
+                ],
+            );
+            document_with_chapters(vec![ch1])
+        }
+
+        // 経路1: ハブ → A → ハブ → B（Aを経由してからBへ）。
+        let doc = hub_doc();
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "ハブの台詞 -> Choiceへ");
+        assert!(
+            pb.select_current_choice(),
+            "カーソル0（Aへ）でroute-aへjumpできるはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("route-aの台詞").speaker.as_deref(),
+            Some("A")
+        );
+        assert!(
+            pb.advance(),
+            "route-aの台詞 -> フラグ設定を経てChoiceへ進めるはず"
+        );
+        assert!(
+            pb.select_current_choice(),
+            "「ハブへ戻る」でhubへjumpできるはず"
+        );
+        assert_eq!(
+            pb.current_line()
+                .expect("再訪したhubの台詞")
+                .speaker
+                .as_deref(),
+            Some("Hub")
+        );
+        assert!(pb.advance(), "再訪hubの台詞 -> Choiceへ");
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice().expect("choice").1,
+            1,
+            "カーソルはBへ（index 1）動いているはず"
+        );
+        assert!(
+            pb.select_current_choice(),
+            "Bへ選択してroute-bへjumpできるはず"
+        );
+        let line = pb
+            .current_line()
+            .expect("route-aを経由済みなのでseen_a成立、条件内の台詞が表示されるはず");
+        assert_eq!(line.speaker.as_deref(), Some("B2"));
+        assert_eq!(line.text, vec!["Aを見た後のB".to_string()]);
+
+        // 経路2: ハブから直接B（Aを未経由）。同じドキュメント位置でも結果が変わる。
+        let doc_direct = hub_doc();
+        let mut pb_direct = Playback::from_document(&doc_direct);
+        assert!(pb_direct.advance(), "ハブの台詞 -> Choiceへ");
+        pb_direct.move_choice_cursor_down();
+        assert_eq!(pb_direct.current_choice().expect("choice").1, 1);
+        assert!(
+            pb_direct.select_current_choice(),
+            "Bへ選択してroute-bへjumpできるはず"
+        );
+        let line_direct = pb_direct
+            .current_line()
+            .expect("route-bの最初の台詞（Aを未経由なので条件内はスキップされるはず）");
+        assert_eq!(
+            line_direct.speaker.as_deref(),
+            Some("B"),
+            "seen_a未成立なので条件内のB2は生成されず、通常のBが最初のitemになるはず"
+        );
+        assert_eq!(line_direct.text, vec!["ルートB".to_string()]);
     }
 }
