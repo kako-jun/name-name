@@ -8,7 +8,7 @@
 //   - データ取得失敗時にエラーメッセージが表示される
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 // #284: NovelRenderer.jumpToScene が使う実シーン解決プリミティブ。
 // PlayerScreen が連結した scenes に対してクロスファイルのジャンプが解決することを、
 // 実装で実際に使われるこの純粋関数で確認する（Pixi/NovelRenderer は jsdom で init 不可）。
@@ -1040,6 +1040,9 @@ describe('PlayerScreen', () => {
     skip_enabled?: boolean | null
     debug_enabled?: boolean | null
     speaker_nudge?: boolean | null
+    // standalone 再生時のプレイヤーヘッダ出し方 (#519)。normalizeHeaderMode の入力そのままを
+    // 渡せるよう string | null | undefined を許容する（不正値・未指定のフォールバック検証用）。
+    header?: string | null
   }) {
     listProjectsMock.mockResolvedValue([
       { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
@@ -1400,6 +1403,193 @@ describe('PlayerScreen', () => {
         // 影響しないことの担保。
         expect(lastNovelPlayerProps().initialSceneId).toBeNull()
         expect(screen.getByRole('button', { name: '新規開始' })).toBeInTheDocument()
+      })
+    })
+  })
+
+  // --- #519: frontmatter `header:` による standalone 再生時のプレイヤーヘッダ抑制 ---
+  //
+  // isEmbedded()（#392）とは独立の軸。normalizeHeaderMode(doc.header) が
+  // 'hidden'/'collapsed' はそのまま透過・それ以外（未指定/不正値）は 'visible' に
+  // フォールバックし、描画ゲートは `!embedded && headerMode==='visible'`（フルヘッダ）/
+  // `!embedded && headerMode==='collapsed'`（ハンドル＋オーバーレイ）/ それ以外は非表示。
+  // embedded===true は headerMode に関係なく常に非表示（両ブロックとも `!embedded` を含む）。
+  // renderWithFrontmatter（#310/#382 で定義済み）を再利用し、doc.header に直接値を注入する。
+  describe('PlayerScreen header: hidden/collapsed による standalone ヘッダ抑制 (#519)', () => {
+    it('1: standalone×header:"visible" は戻るボタンとtitle h1を持つ<header>(banner)が描画される', async () => {
+      await renderWithFrontmatter({ header: 'visible' })
+      const banner = screen.getByRole('banner')
+      expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe('友達 1930')
+      expect(screen.getByLabelText('プロジェクト一覧に戻る')).toBeInTheDocument()
+    })
+
+    it('2: standalone×header:"hidden" はbanner・戻るボタン・折りたたみハンドルのいずれも存在しない', async () => {
+      await renderWithFrontmatter({ header: 'hidden' })
+      expect(screen.queryByRole('banner')).toBeNull()
+      expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
+      expect(screen.queryByLabelText('ヘッダーを表示')).toBeNull()
+      expect(screen.queryByLabelText('ヘッダーを閉じる')).toBeNull()
+    })
+
+    it('3: standalone×header:"collapsed" 初期状態は折りたたみハンドルのみ存在し、banner/戻るボタンは存在しない', async () => {
+      await renderWithFrontmatter({ header: 'collapsed' })
+      expect(screen.getByLabelText('ヘッダーを表示')).toBeInTheDocument()
+      expect(screen.queryByRole('banner')).toBeNull()
+      expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
+    })
+
+    it('4: standalone×header未指定はケース1と同じ結果になる（後方互換）', async () => {
+      await renderWithFrontmatter({})
+      const banner = screen.getByRole('banner')
+      expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe('友達 1930')
+      expect(screen.getByLabelText('プロジェクト一覧に戻る')).toBeInTheDocument()
+    })
+
+    it('5: embedded×header:"visible" は非表示（embedded優先の直接確認）', async () => {
+      isEmbeddedMock.mockReturnValue(true)
+      await renderWithFrontmatter({ header: 'visible' })
+      expect(screen.queryByRole('banner')).toBeNull()
+      expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
+    })
+
+    it('6: embedded×header:"hidden" は非表示', async () => {
+      isEmbeddedMock.mockReturnValue(true)
+      await renderWithFrontmatter({ header: 'hidden' })
+      expect(screen.queryByRole('banner')).toBeNull()
+      expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
+    })
+
+    it('7【最重要】: embedded×header:"collapsed" は折りたたみハンドルも含め何も描画されない（collapsed 機構自体が embedded で無効化される）', async () => {
+      isEmbeddedMock.mockReturnValue(true)
+      await renderWithFrontmatter({ header: 'collapsed' })
+      expect(screen.queryByRole('banner')).toBeNull()
+      expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
+      expect(screen.queryByLabelText('ヘッダーを表示')).toBeNull()
+      expect(screen.queryByLabelText('ヘッダーを閉じる')).toBeNull()
+    })
+
+    it('8: header:""（空文字）はvisibleフォールバックし、console.warn/errorが呼ばれない', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await renderWithFrontmatter({ header: '' })
+      expect(screen.getByRole('banner')).toBeInTheDocument()
+      expect(warnSpy).not.toHaveBeenCalled()
+      expect(errorSpy).not.toHaveBeenCalled()
+    })
+
+    it('9: header:"Hidden"（大文字混じり）はvisibleフォールバックする', async () => {
+      await renderWithFrontmatter({ header: 'Hidden' })
+      expect(screen.getByRole('banner')).toBeInTheDocument()
+    })
+
+    it('10: header:"foo"（未知の文字列）はvisibleフォールバックする', async () => {
+      await renderWithFrontmatter({ header: 'foo' })
+      expect(screen.getByRole('banner')).toBeInTheDocument()
+    })
+
+    it('11: header:null はvisibleフォールバックし、TypeErrorが発生しない', async () => {
+      // normalizeHeaderMode(null) が例外を投げれば render 自体が失敗してこのテストが落ちる。
+      await renderWithFrontmatter({ header: null })
+      expect(screen.getByRole('banner')).toBeInTheDocument()
+    })
+
+    // --- collapsed ハンドルの展開/自動折りたたみ操作 (#519) ---
+    //
+    // ハンドルの 3 秒自動折りたたみタイマー（window.setTimeout）を検証するため vi.useFakeTimers()
+    // を使う。ただし renderWithFrontmatter 内の初期ロード待ち（await waitFor）は
+    // @testing-library/dom が vitest の fake timers を検知できず（jest 専用の検知ロジックのため）
+    // 内部ポーリングが進まず固まる。そのため各テストでは「初期ロードは real timers のまま waitFor
+    // で待ち切り、ハンドル操作の直前で vi.useFakeTimers() に切り替える」順序にする
+    // （3 秒タイマー自体は切り替え後に張られる setTimeout なので fake timers の対象になる）。
+    describe('PlayerScreen header:"collapsed" ハンドルの展開/自動折りたたみ (#519)', () => {
+      afterEach(() => {
+        vi.useRealTimers()
+      })
+
+      it('12: collapsed初期状態でハンドルをタップするとheaderExpanded=true相当になりheaderが表示される', async () => {
+        await renderWithFrontmatter({ header: 'collapsed' })
+        vi.useFakeTimers()
+        fireEvent.click(screen.getByLabelText('ヘッダーを表示'))
+        expect(screen.getByRole('banner')).toBeInTheDocument()
+        expect(screen.getByLabelText('ヘッダーを閉じる')).toBeInTheDocument()
+      })
+
+      it('13: 展開後、3秒経過すると自動的に折りたたまれる', async () => {
+        await renderWithFrontmatter({ header: 'collapsed' })
+        vi.useFakeTimers()
+        fireEvent.click(screen.getByLabelText('ヘッダーを表示'))
+        expect(screen.getByRole('banner')).toBeInTheDocument()
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(3000)
+        })
+
+        expect(screen.queryByRole('banner')).toBeNull()
+        expect(screen.getByLabelText('ヘッダーを表示')).toBeInTheDocument()
+      })
+
+      it('14: 展開後、3秒未満でハンドルを再タップすると即座に折りたたまれる（タイマー満了を待たない）', async () => {
+        await renderWithFrontmatter({ header: 'collapsed' })
+        vi.useFakeTimers()
+        fireEvent.click(screen.getByLabelText('ヘッダーを表示'))
+        expect(screen.getByRole('banner')).toBeInTheDocument()
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000)
+        })
+        // 3秒未満なのでまだ自動折りたたみされていない
+        expect(screen.getByRole('banner')).toBeInTheDocument()
+
+        // 再タップで即座に折りたたむ（残り2秒のタイマー満了を待たない）
+        fireEvent.click(screen.getByLabelText('ヘッダーを閉じる'))
+        expect(screen.queryByRole('banner')).toBeNull()
+        expect(screen.getByLabelText('ヘッダーを表示')).toBeInTheDocument()
+      })
+
+      it('15: 展開中にunmountされるとclearTimeoutが呼ばれ、unmount後に状態更新のエラーが出ない', async () => {
+        listProjectsMock.mockResolvedValue([
+          { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
+        ])
+        getContentsMock.mockResolvedValue({
+          path: 'script.md',
+          sha: 'sha1',
+          content: '# chapter',
+        })
+        parseMarkdownMock.mockResolvedValue({
+          engine: 'name-name',
+          header: 'collapsed',
+          chapters: [
+            {
+              id: 'c1',
+              title: 'chapter',
+              default_bgm: null,
+              scenes: [{ id: 's1', title: 'scene', events: [] }],
+            },
+          ],
+        })
+
+        const { unmount } = render(
+          <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
+        )
+        await waitFor(() => {
+          expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+        })
+        vi.useFakeTimers()
+        fireEvent.click(screen.getByLabelText('ヘッダーを表示'))
+        expect(screen.getByRole('banner')).toBeInTheDocument()
+
+        // ここから先だけを対象に検証する（初期ロード由来の無関係な warning を巻き込まない）。
+        const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+        unmount()
+        expect(clearTimeoutSpy).toHaveBeenCalled()
+
+        // unmount 後に本来のタイマー満了時刻を過ぎても、状態更新エラーが出ないこと。
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(3000)
+        })
+        expect(errorSpy).not.toHaveBeenCalled()
       })
     })
   })

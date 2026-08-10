@@ -7827,3 +7827,118 @@ fn pagebreak_absent_is_unchanged() {
     let doc2 = parser::parse(&emitter::emit(&doc));
     assert_eq!(doc, doc2, "--- 無しの round-trip は不変");
 }
+
+// --- #519: header (standalone 再生時のプレイヤーヘッダ出し方) ---
+//
+// dialog_style / choice_style と同じ流儀: parser は visible/hidden/collapsed をバリデーション
+// せず生文字列で透過し、未知値・空文字は None のまま（フォールバック解釈は runtime 側）。
+
+#[test]
+fn test_document_header_round_trip_visible() {
+    // header: visible の parse → emit → parse で値が保持されること (#519)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+header: visible
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc1 = parser::parse(input);
+    assert_eq!(doc1.header.as_deref(), Some("visible"));
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc1.header, doc2.header);
+    assert_eq!(doc2.header.as_deref(), Some("visible"));
+}
+
+#[test]
+fn test_document_header_round_trip_hidden() {
+    // header: hidden の parse → emit → parse で値が保持されること (#519)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+header: hidden
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc1 = parser::parse(input);
+    assert_eq!(doc1.header.as_deref(), Some("hidden"));
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc1.header, doc2.header);
+    assert_eq!(doc2.header.as_deref(), Some("hidden"));
+}
+
+#[test]
+fn test_document_header_round_trip_collapsed() {
+    // header: collapsed の parse → emit → parse で値が保持されること (#519)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+header: collapsed
+---
+
+## 1-1: シーン
+
+ナレーションです。
+"#;
+    let doc1 = parser::parse(input);
+    assert_eq!(doc1.header.as_deref(), Some("collapsed"));
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc1.header, doc2.header);
+    assert_eq!(doc2.header.as_deref(), Some("collapsed"));
+}
+
+#[test]
+fn test_document_header_absent_omits_key_on_emit() {
+    // header: 未指定の入力を parse → emit すると、出力 markdown に header: 行自体が
+    // 現れないこと (#519)。choice_style/dialog_style と同じく None は明示行を作らない。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.header, None, "header 未指定は None として parse される");
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("header:"),
+        "header が None なら emit 出力に header: 行が現れないこと: {emitted}"
+    );
+}
+
+#[test]
+fn test_document_header_empty_string_parses_to_none() {
+    // header: ""（空文字）を parse すると Document.header が None になること (#519)
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+header: ""
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.header, None,
+        "header が空文字なら None として parse される"
+    );
+}
