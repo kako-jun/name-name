@@ -317,6 +317,84 @@ fn compute_cover_crop(
     }
 }
 
+/// アスペクト比を保ったまま `max_cols` x `max_rows`（文字セル数）の枠へ収まる最大サイズを
+/// 計算する（contain-fit、#530）。[`compute_cover_crop`] の cover-fit（枠を覆うようクロップ
+/// する）とは逆に、画像全体がクロップ無しで見えるよう縮小する。文字セルは正方形ではない
+/// （[`TERMINAL_CELL_ASPECT_RATIO`]）ため、視覚上のアスペクト比を保つよう補正して計算する
+/// （具体的な補正式は [`rgba_to_quadrant_grid`] が cover-fit 側で使っているのと同じ
+/// `TERMINAL_CELL_ASPECT_RATIO` 換算）。
+///
+/// アルゴリズムは通常の `object-fit: contain` と同じ2段階判定: まず `max_cols` いっぱいに
+/// 幅を使ったときの高さを求め、それが `max_rows` に収まればそれを採用（幅優先）。収まらない
+/// 場合は逆に `max_rows` いっぱいに高さを使ったときの幅を採用する（高さ優先）。
+///
+/// フルキャンバス画像表示（`ui::draw_fullscreen_image`、#530）は「常にキャンバス全幅を使い、
+/// 高さは表示可能行数を超えたらスクロールする」という非対称な要件を持つため、呼び出し側は
+/// `max_rows` に実質無制限に近い大きな値
+/// （[`crate::ui::FULLSCREEN_IMAGE_UNBOUNDED_ROWS`]）を渡すことで、常に幅優先の枝（＝
+/// `fitted_cols == max_cols`）になるようにする。この関数自体は `max_rows` を対称に扱う
+/// 汎用の2軸 contain-fit のままにしておくことで、テストが両方の分岐（幅優先/高さ優先）を
+/// 独立に検証できる。
+///
+/// `image_w`/`image_h`/`max_cols`/`max_rows` のいずれかが0の場合は `(0, 0)` を返す
+/// （panicしない）。戻り値は常に `1 <= fitted_cols <= max_cols` かつ
+/// `1 <= fitted_rows <= max_rows` を満たす（`max_cols`/`max_rows` がいずれも0でない限り）。
+pub fn compute_contain_fit(image_w: u32, image_h: u32, max_cols: u16, max_rows: u16) -> (u16, u16) {
+    if image_w == 0 || image_h == 0 || max_cols == 0 || max_rows == 0 {
+        return (0, 0);
+    }
+    let ar = TERMINAL_CELL_ASPECT_RATIO;
+    // 「視覚上の」幅/高さ単位（セル比の非正方形を吸収した座標系）。セル幅は ar 単位、
+    // セル高さは1単位とみなすと、cols x rows セルの視覚サイズは (cols*ar, rows) になる。
+    let box_visual_w = f64::from(max_cols) * ar;
+    let box_visual_h = f64::from(max_rows);
+    let img_ratio = f64::from(image_w) / f64::from(image_h);
+
+    let width_constrained_h = box_visual_w / img_ratio;
+    let (visual_w, visual_h) = if width_constrained_h <= box_visual_h {
+        // 幅優先: 枠の幅をフルに使っても高さが収まる。
+        (box_visual_w, width_constrained_h)
+    } else {
+        // 高さ優先: 幅優先だと高さがはみ出すため、枠の高さをフルに使う側へ切り替える。
+        (box_visual_h * img_ratio, box_visual_h)
+    };
+
+    let fitted_cols = ((visual_w / ar).round() as i64).clamp(1, i64::from(max_cols)) as u16;
+    let fitted_rows = (visual_h.round() as i64).clamp(1, i64::from(max_rows)) as u16;
+    (fitted_cols, fitted_rows)
+}
+
+/// スクロールオフセットを `[0, content_rows.saturating_sub(visible_rows)]` へクランプする
+/// 純粋関数（フルキャンバス画像表示の縦スクロール用、#530）。`content_rows <= visible_rows`
+/// （そもそもスクロールが不要）のときは `max_offset` が0になるため、常に0を返す。
+pub fn clamp_scroll_offset(offset: u16, content_rows: u16, visible_rows: u16) -> u16 {
+    let max_offset = content_rows.saturating_sub(visible_rows);
+    offset.min(max_offset)
+}
+
+/// [`RenderedImage`] の縦方向の一部（`offset` 行目から最大 `count` 行）だけを切り出す
+/// （フルキャンバス画像表示のスクロール可視範囲抽出用、#530）。`offset` が `grid.rows` 以上の
+/// 場合は0行の空グリッドを返し、`offset + count` が `grid.rows` を超える場合は末尾で
+/// 切り詰める（`clamp_scroll_offset` で事前にクランプされている前提だが、この関数自体も
+/// 範囲外アクセスで panic しないよう独立して防御する）。
+pub fn slice_rendered_image_rows(grid: &RenderedImage, offset: u16, count: u16) -> RenderedImage {
+    let start = offset.min(grid.rows);
+    let end = start.saturating_add(count).min(grid.rows);
+    let rows = end - start;
+    let start_idx = start as usize * grid.cols as usize;
+    let end_idx = end as usize * grid.cols as usize;
+    let cells = grid
+        .cells
+        .get(start_idx..end_idx)
+        .map(|slice| slice.to_vec())
+        .unwrap_or_default();
+    RenderedImage {
+        cols: grid.cols,
+        rows,
+        cells,
+    }
+}
+
 /// `pixels`（`img_w` x 高さ相当の RGBA straight alpha、行優先）から
 /// `(crop_x, crop_y, crop_w, crop_h)` の矩形を切り出した新しい RGBA バイト列を返す
 /// （行優先、`crop_w * crop_h * 4` バイト）。呼び出し元（[`compute_cover_crop`]）が返す矩形は
