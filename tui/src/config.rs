@@ -431,6 +431,41 @@ mod tests {
     }
 
     #[test]
+    fn resolve_sound_path_joins_japanese_filename_correctly() {
+        // 観点10: `[BGM: 扉の音.ogg]` のような日本語ファイル名パスも他の相対パスと
+        // 同様にassets_dirと結合される。traversalガードはPath::components()の各要素が
+        // Normalかどうかを見るだけなので、マルチバイト文字(日本語)が混ざっていても
+        // 問題なく動作するはず。
+        let config = Config {
+            sound: SoundConfig {
+                assets_dir: PathBuf::from("assets/sounds"),
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            config.resolve_sound_path("扉の音.ogg"),
+            Some(PathBuf::from("assets/sounds/扉の音.ogg"))
+        );
+    }
+
+    #[test]
+    fn resolve_sound_path_empty_string_returns_assets_dir_itself() {
+        // 観点11(境界値): 空文字列を渡すとPath::components()が空(全要素がNormalという
+        // 条件をvacuous trueで満たす)ためis_safeがtrueになり、assets_dir自体を指す
+        // Someが返る。
+        let config = Config {
+            sound: SoundConfig {
+                assets_dir: PathBuf::from("assets/sounds"),
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            config.resolve_sound_path(""),
+            Some(PathBuf::from("assets/sounds"))
+        );
+    }
+
+    #[test]
     fn from_toml_str_sentence_per_page_true_at_top_level() {
         // 既存フィールド（game_name 等）と同じ階層（サブテーブルなし）で読める（#486）。
         let toml = "sentence_per_page = true\n";

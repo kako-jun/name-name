@@ -1822,6 +1822,17 @@ mod tests {
         }
     }
 
+    fn bgm_stop_with_path(path: &str) -> Event {
+        // 通常の原稿では起こらない組み合わせ（Stopなのにpathが付いている）だが、
+        // GUI版と同じ「actionがStopなら無条件で停止」という意味論を固定するために使う
+        // （デシジョンテーブル1' #3）。
+        Event::Bgm {
+            path: Some(path.to_string()),
+            action: BgmAction::Stop,
+            fade_ms: None,
+        }
+    }
+
     #[test]
     fn lines_before_any_bgm_have_none() {
         let doc = doc_single_scene(vec![dialog(Some("A"), vec!["前"])]);
@@ -2015,5 +2026,231 @@ mod tests {
         let before = pb.cursor();
         assert!(pb.advance(), "同じLine item内の次の文へ進めるはず");
         assert_eq!(before, pb.cursor(), "文送りだけではcursorは変化しないはず");
+    }
+
+    // ---- #502 追補: テスト設計担当のデシジョンテーブルに基づく追加ケース ----
+
+    #[test]
+    fn consecutive_same_bgm_path_keeps_state_unchanged() {
+        // デシジョンテーブル1 #3: 同一BGMパスが連続する場合([BGM:a][Dialog][BGM:a])、
+        // current_bgm()は変化せずSome(a)のままであることを確認する。値としては同じだが
+        // 「無条件で状態は保持される」ことの確認であり、実際に再生を再スタートしないかは
+        // audio.rs層の話なのでここでは扱わない。
+        let doc = doc_single_scene(vec![
+            bgm_play("a.ogg"),
+            dialog(Some("A"), vec!["1"]),
+            bgm_play("a.ogg"),
+            dialog(Some("A"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        pb.advance();
+        assert_eq!(
+            pb.current_bgm(),
+            Some("a.ogg"),
+            "同一パスの再Play後もcurrent_bgm()はSome(a.ogg)のまま"
+        );
+    }
+
+    #[test]
+    fn bgm_stop_with_path_present_still_clears_current_bgm() {
+        // デシジョンテーブル1' #3: Event::Bgm{action: Stop, path: Some(p)}
+        // (pathがあってもStopが優先)でcurrent_bgm()がNoneになることを確認する。
+        let doc = doc_single_scene(vec![
+            bgm_play("a.ogg"),
+            dialog(Some("A"), vec!["再生中"]),
+            bgm_stop_with_path("a.ogg"),
+            dialog(Some("A"), vec!["停止後"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        pb.advance();
+        assert_eq!(
+            pb.current_bgm(),
+            None,
+            "pathが付いていてもactionがStopなら停止扱いになるはず"
+        );
+    }
+
+    #[test]
+    fn choice_item_carries_se_attached_immediately_before_it() {
+        // デシジョンテーブル2 #2: Choice直前に[SE:x]があるケース(Choiceにitem_seが
+        // 付く)で、cursor()ベースのSE検出が正しく反応する(current_se_cues()が
+        // Choice item自体でも値を返す)ことを確認する。
+        let doc = doc_single_scene(vec![se("select.wav"), choice(vec![("進む", "1-1")])]);
+        let pb = Playback::from_document(&doc);
+        assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
+        assert_eq!(
+            pb.current_se_cues(),
+            &["select.wav".to_string()],
+            "Choice item自体もSEを保持する"
+        );
+    }
+
+    #[test]
+    fn moving_choice_cursor_does_not_change_playback_cursor() {
+        // デシジョンテーブル2 #3: Choice表示中のmove_choice_cursor_up/downは
+        // self.index(cursor())を変えないため、SEが再発火しないことを確認する。
+        let doc = doc_single_scene(vec![se("select.wav"), choice(vec![("A", "x"), ("B", "y")])]);
+        let mut pb = Playback::from_document(&doc);
+        let before = pb.cursor();
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            before,
+            pb.cursor(),
+            "カーソル移動だけではcursor()は変化しないはず(SE再発火防止)"
+        );
+        assert_eq!(pb.current_se_cues(), &["select.wav".to_string()]);
+    }
+
+    #[test]
+    fn select_current_choice_success_exposes_jump_targets_own_se() {
+        // デシジョンテーブル2 #4: select_current_choice成功でjump先のitemが持つ
+        // item_seが正しく参照できることを確認する(jump先itemに[SE:]を仕込む)。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![choice(vec![("進む", "1-2")])]),
+                scene(
+                    "1-2",
+                    vec![se("arrival.wav"), dialog(Some("A"), vec!["到着"])],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+        assert_eq!(
+            pb.current_se_cues(),
+            &["arrival.wav".to_string()],
+            "jump先itemのSEが正しく参照できるはず"
+        );
+    }
+
+    #[test]
+    fn backward_jump_to_already_visited_scene_refires_its_se_by_design() {
+        // デシジョンテーブル2 #7: 後方jump(既訪問シーンへ戻る選択肢)で、そのitemのSEが
+        // 「再発火する」ことを仕様として明示的に固定する。item_se/current_se_cues()は
+        // cursor位置に対する純粋な参照であり、「一度発火したら二度と発火しない」ような
+        // 消費済みフラグは持たない設計のため、同じitemへ再訪すれば同じSEが再び
+        // current_se_cues()から観測される。これはバグではなく意図的な挙動である
+        // (event_loop側がcursor()の変化を検出するたびに毎回消費する設計、#502)。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![se("bgm-room.wav"), dialog(Some("A"), vec!["最初のシーン"])],
+                ),
+                scene(
+                    "1-2",
+                    vec![
+                        dialog(Some("B"), vec!["2番目のシーン"]),
+                        choice(vec![("戻る", "1-1")]),
+                    ],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_se_cues(),
+            &["bgm-room.wav".to_string()],
+            "最初の訪問時にSEが記録されているはず"
+        );
+        pb.advance(); // "1-1"の台詞 → "1-2"の台詞
+        pb.advance(); // "1-2"の台詞 → Choice
+        assert!(
+            pb.select_current_choice(),
+            "既訪問シーンへの戻りjumpも成功するはず"
+        );
+        assert_eq!(
+            pb.current_se_cues(),
+            &["bgm-room.wav".to_string()],
+            "既訪問シーンへ戻っても同じSEが再びcurrent_se_cues()に現れる(仕様、バグではない)"
+        );
+    }
+
+    #[test]
+    fn multiple_se_are_all_recorded_regardless_of_path_validity() {
+        // 観点7: 複数SEのうち1件のパスが(config層のresolve_sound_pathでは弾かれる
+        // ような値)であっても、Playback層はパスの妥当性を検証しないため、全てのSEが
+        // item_se/current_se_cues()に記録されることを確認する(パス解決自体はconfig層の
+        // 話であり、ここでは「複数SEが全て記録される」ことのみ確認する)。
+        let doc = doc_single_scene(vec![
+            se("valid.wav"),
+            se("../escape.wav"), // resolve_sound_pathなら弾かれるパスだがPlayback層は関知しない
+            dialog(Some("A"), vec!["後"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_se_cues(),
+            &["valid.wav".to_string(), "../escape.wav".to_string()],
+            "パスの妥当性に関わらず両方のSEが記録される"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_failure_leaves_bgm_and_se_state_unchanged() {
+        // 観点8: select_current_choice失敗時(無効jump)にcurrent_bgm()/
+        // current_se_cues()相当が変化しないことを確認する。
+        let doc = doc_single_scene(vec![
+            bgm_play("room.ogg"),
+            se("warn.wav"),
+            choice(vec![("存在しない先へ", "does-not-exist")]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_bgm(), Some("room.ogg"));
+        assert_eq!(pb.current_se_cues(), &["warn.wav".to_string()]);
+
+        assert!(
+            !pb.select_current_choice(),
+            "存在しないシーンIDへのjumpは失敗するはず"
+        );
+
+        assert_eq!(
+            pb.current_bgm(),
+            Some("room.ogg"),
+            "jump失敗後もBGM状態は変わらないはず"
+        );
+        assert_eq!(
+            pb.current_se_cues(),
+            &["warn.wav".to_string()],
+            "jump失敗後もSE状態は変わらないはず"
+        );
+    }
+
+    #[test]
+    fn confirming_choice_jump_moves_cursor_away_from_source_choice_se() {
+        // 観点9: Choice確定ジャンプで遷移した際、遷移元Choice item自体のSEが
+        // 再発火しない(cursorが変わるのは遷移後のみ)ことを確認する。遷移元Choiceが
+        // 持っていたSEはジャンプ後には現れず(target itemが別のSEを持つため)、
+        // cursor()も遷移元とは異なる値に変化していることを確認する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![se("open-menu.wav"), choice(vec![("進む", "1-2")])],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["次のシーン"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_se_cues(), &["open-menu.wav".to_string()]);
+        let source_cursor = pb.cursor();
+
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+
+        assert_ne!(
+            source_cursor,
+            pb.cursor(),
+            "ジャンプ後はcursor()が変化しているはず(遷移元Choiceへの再到達ではない)"
+        );
+        assert!(
+            pb.current_se_cues().is_empty(),
+            "遷移元Choice自体のSEは遷移後には現れない(target itemは別のSEを持つため)"
+        );
     }
 }
