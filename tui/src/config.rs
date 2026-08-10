@@ -637,4 +637,131 @@ mod tests {
         let result = Config::from_toml_str(toml);
         assert!(result.is_err());
     }
+
+    // ---- フルキャンバス画像表示モード（#530）----
+
+    #[test]
+    fn splash_config_default_logo_image_is_none() {
+        assert_eq!(SplashConfig::default().logo_image, None);
+    }
+
+    #[test]
+    fn splash_config_default_scroll_ease_ms_is_300() {
+        assert_eq!(SplashConfig::default().scroll_ease_ms, 300);
+    }
+
+    #[test]
+    fn should_show_splash_true_when_logo_image_set_even_if_lines_empty() {
+        let config = Config {
+            splash: SplashConfig {
+                enabled: true,
+                lines: vec![],
+                logo_image: Some(PathBuf::from("logo.webp")),
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(config.should_show_splash());
+    }
+
+    #[test]
+    fn should_show_splash_true_when_both_logo_image_and_lines_present() {
+        let config = Config {
+            splash: SplashConfig {
+                enabled: true,
+                lines: vec!["田".to_string()],
+                logo_image: Some(PathBuf::from("logo.webp")),
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(config.should_show_splash());
+    }
+
+    #[test]
+    fn should_show_splash_false_when_disabled_even_with_logo_image_set() {
+        let config = Config {
+            splash: SplashConfig {
+                enabled: false,
+                logo_image: Some(PathBuf::from("logo.webp")),
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(!config.should_show_splash());
+    }
+
+    #[test]
+    fn resolve_splash_logo_path_none_when_logo_image_not_set() {
+        let config = Config {
+            splash: SplashConfig {
+                logo_image: None,
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert_eq!(config.resolve_splash_logo_path(), None);
+    }
+
+    #[test]
+    fn resolve_splash_logo_path_joins_assets_dir_and_relative_path() {
+        let config = Config {
+            event_image: EventImageConfig {
+                assets_dir: PathBuf::from("assets/images"),
+                ..EventImageConfig::default()
+            },
+            splash: SplashConfig {
+                logo_image: Some(PathBuf::from("props/logo.webp")),
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            config.resolve_splash_logo_path(),
+            Some(PathBuf::from("assets/images/props/logo.webp"))
+        );
+    }
+
+    #[test]
+    fn resolve_splash_logo_path_rejects_parent_dir_traversal() {
+        let config = Config {
+            event_image: EventImageConfig {
+                assets_dir: PathBuf::from("assets/images"),
+                ..EventImageConfig::default()
+            },
+            splash: SplashConfig {
+                logo_image: Some(PathBuf::from("../../secret.webp")),
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert_eq!(config.resolve_splash_logo_path(), None);
+    }
+
+    #[test]
+    fn resolve_splash_logo_path_rejects_absolute_path() {
+        let config = Config {
+            event_image: EventImageConfig {
+                assets_dir: PathBuf::from("assets/images"),
+                ..EventImageConfig::default()
+            },
+            splash: SplashConfig {
+                logo_image: Some(PathBuf::from("/etc/passwd")),
+                ..SplashConfig::default()
+            },
+            ..Config::default()
+        };
+        assert_eq!(config.resolve_splash_logo_path(), None);
+    }
+
+    #[test]
+    fn from_toml_str_partial_splash_logo_image_override_keeps_rest_default() {
+        let toml = "[splash]\nlogo_image = \"x.webp\"\nscroll_ease_ms = 100\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert_eq!(config.splash.logo_image, Some(PathBuf::from("x.webp")));
+        assert_eq!(config.splash.scroll_ease_ms, 100);
+        assert_eq!(config.splash.enabled, SplashConfig::default().enabled);
+        assert_eq!(config.splash.lines, SplashConfig::default().lines);
+        assert_eq!(config.splash.color, SplashConfig::default().color);
+    }
 }

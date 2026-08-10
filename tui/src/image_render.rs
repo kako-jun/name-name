@@ -1158,4 +1158,284 @@ mod tests {
         assert_eq!(grid.cells.len(), 6);
         assert!(grid.cells.iter().all(|c| *c == BLANK_CELL));
     }
+
+    // ---- contain-fit（フルキャンバス画像表示、#530）----
+
+    #[test]
+    fn compute_contain_fit_zero_image_width_returns_zero() {
+        assert_eq!(compute_contain_fit(0, 100, 10, 10), (0, 0));
+    }
+
+    #[test]
+    fn compute_contain_fit_zero_image_height_returns_zero() {
+        assert_eq!(compute_contain_fit(100, 0, 10, 10), (0, 0));
+    }
+
+    #[test]
+    fn compute_contain_fit_zero_max_cols_returns_zero() {
+        assert_eq!(compute_contain_fit(100, 100, 0, 10), (0, 0));
+    }
+
+    #[test]
+    fn compute_contain_fit_zero_max_rows_returns_zero() {
+        assert_eq!(compute_contain_fit(100, 100, 10, 0), (0, 0));
+    }
+
+    #[test]
+    fn compute_contain_fit_aspect_exactly_matches_box_fills_both_dimensions() {
+        // image_w=200,image_h=100(比2.0) を max_cols=20,max_rows=5 の枠へ contain-fit。
+        // 実効ボックス比(20*0.5 / 5 = 2.0)と画像比が完全一致するため、幅優先枝
+        // （`<=`の等号側）が採られ、両方いっぱいに埋まる。
+        assert_eq!(compute_contain_fit(200, 100, 20, 5), (20, 5));
+    }
+
+    #[test]
+    fn compute_contain_fit_slightly_wider_than_box_takes_width_branch_with_shorter_rows() {
+        // 比2.5(実効ボックス比2.0よりわずかに横長寄り)は幅優先枝に入り、
+        // fitted_cols は max_cols いっぱいまで使うが fitted_rows は max_rows未満になる。
+        let (cols, rows) = compute_contain_fit(250, 100, 20, 5);
+        assert_eq!(
+            cols, 20,
+            "幅優先枝なのでfitted_colsはmax_colsいっぱいになるはず"
+        );
+        assert!(
+            rows < 5,
+            "横長寄りなのでfitted_rowsはmax_rows未満のはず: rows={rows}"
+        );
+    }
+
+    #[test]
+    fn compute_contain_fit_slightly_taller_than_box_takes_height_branch_with_narrower_cols() {
+        // 比1.0(実効ボックス比2.0より縦長寄り)は高さ優先枝に入り、
+        // fitted_rows は max_rows いっぱいまで使うが fitted_cols は max_cols未満になる。
+        let (cols, rows) = compute_contain_fit(100, 100, 20, 5);
+        assert_eq!(
+            rows, 5,
+            "高さ優先枝なのでfitted_rowsはmax_rowsいっぱいになるはず"
+        );
+        assert!(
+            cols < 20,
+            "縦長寄りなのでfitted_colsはmax_cols未満のはず: cols={cols}"
+        );
+    }
+
+    #[test]
+    fn compute_contain_fit_1x1_box_and_1x1_image_returns_1x1() {
+        assert_eq!(compute_contain_fit(1, 1, 1, 1), (1, 1));
+    }
+
+    #[test]
+    fn compute_contain_fit_extremely_wide_image_into_small_box_keeps_at_least_one_row() {
+        let (cols, rows) = compute_contain_fit(10000, 1, 5, 5);
+        assert!(rows >= 1, "fitted_rowsは最低1になるはず: rows={rows}");
+        assert_eq!(cols, 5);
+    }
+
+    #[test]
+    fn compute_contain_fit_extremely_tall_image_into_small_box_keeps_at_least_one_col() {
+        let (cols, rows) = compute_contain_fit(1, 10000, 5, 5);
+        assert!(cols >= 1, "fitted_colsは最低1になるはず: cols={cols}");
+        assert_eq!(rows, 5);
+    }
+
+    #[test]
+    fn compute_contain_fit_result_always_within_box_bounds() {
+        // 不変条件テスト: image/boxのどんな組み合わせでも(0を除く)、fitted_cols/rows は
+        // 必ず [1, max_cols]/[1, max_rows] の範囲に収まる。
+        let image_sizes: [(u32, u32); 6] =
+            [(1, 1), (3, 7), (7, 3), (128, 128), (1920, 1080), (1, 10000)];
+        let box_sizes: [(u16, u16); 5] = [(1, 1), (10, 5), (5, 10), (84, 20), (2000, 1)];
+        for &(image_w, image_h) in &image_sizes {
+            for &(max_cols, max_rows) in &box_sizes {
+                let (cols, rows) = compute_contain_fit(image_w, image_h, max_cols, max_rows);
+                assert!(
+                    (1..=max_cols).contains(&cols),
+                    "image={image_w}x{image_h} box={max_cols}x{max_rows}: fitted_cols={cols} が範囲外"
+                );
+                assert!(
+                    (1..=max_rows).contains(&rows),
+                    "image={image_w}x{image_h} box={max_cols}x{max_rows}: fitted_rows={rows} が範囲外"
+                );
+            }
+        }
+    }
+
+    // ---- スクロールオフセットのクランプ（#530）----
+
+    #[test]
+    fn clamp_scroll_offset_below_max_offset_is_unchanged() {
+        // content_rows=10, visible_rows=4 → max_offset=6。境界の1つ内側(5)は変化しない。
+        assert_eq!(clamp_scroll_offset(5, 10, 4), 5);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_exactly_at_max_offset_is_unchanged() {
+        assert_eq!(clamp_scroll_offset(6, 10, 4), 6);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_above_max_offset_is_clamped_down() {
+        assert_eq!(clamp_scroll_offset(9, 10, 4), 6);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_content_equals_visible_is_always_zero() {
+        assert_eq!(clamp_scroll_offset(3, 5, 5), 0);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_content_shorter_than_visible_is_always_zero_without_underflow() {
+        // saturating_sub のおかげで content_rows < visible_rows でも panic せず0になる。
+        assert_eq!(clamp_scroll_offset(2, 3, 10), 0);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_zero_visible_rows_clamps_to_content_rows_not_zero() {
+        // visible_rows=0 のときは max_offset=content_rows自身になるため、
+        // 大きなoffsetはcontent_rowsにクランプされるだけで0にはならない。
+        assert_eq!(clamp_scroll_offset(100, 7, 0), 7);
+    }
+
+    // ---- 可視範囲の切り出し（#530）----
+
+    fn row_marked_grid(cols: u16, rows: u16) -> RenderedImage {
+        let mut cells = Vec::with_capacity(cols as usize * rows as usize);
+        for y in 0..rows {
+            for _x in 0..cols {
+                cells.push(QuadrantCell {
+                    glyph: ' ',
+                    fg: (y as u8, 0, 0),
+                    bg: (y as u8, 0, 0),
+                });
+            }
+        }
+        RenderedImage { cols, rows, cells }
+    }
+
+    #[test]
+    fn slice_rendered_image_rows_offset_within_bounds_extracts_requested_rows() {
+        let grid = row_marked_grid(2, 5);
+        let sliced = slice_rendered_image_rows(&grid, 1, 2);
+        assert_eq!(sliced.rows, 2);
+        assert_eq!(sliced.cells[0].fg, (1, 0, 0));
+        assert_eq!(sliced.cells[2].fg, (2, 0, 0));
+    }
+
+    #[test]
+    fn slice_rendered_image_rows_offset_equals_grid_rows_is_empty() {
+        let grid = row_marked_grid(2, 5);
+        let sliced = slice_rendered_image_rows(&grid, 5, 2);
+        assert_eq!(sliced.rows, 0);
+        assert!(sliced.cells.is_empty());
+    }
+
+    #[test]
+    fn slice_rendered_image_rows_offset_beyond_grid_rows_is_empty_without_panicking() {
+        let grid = row_marked_grid(2, 5);
+        let sliced = slice_rendered_image_rows(&grid, 10, 2);
+        assert_eq!(sliced.rows, 0);
+        assert!(sliced.cells.is_empty());
+    }
+
+    #[test]
+    fn slice_rendered_image_rows_zero_count_is_empty() {
+        let grid = row_marked_grid(2, 5);
+        let sliced = slice_rendered_image_rows(&grid, 0, 0);
+        assert_eq!(sliced.rows, 0);
+        assert!(sliced.cells.is_empty());
+    }
+
+    #[test]
+    fn slice_rendered_image_rows_count_beyond_remaining_rows_is_truncated() {
+        let grid = row_marked_grid(2, 5);
+        let sliced = slice_rendered_image_rows(&grid, 3, 10);
+        assert_eq!(
+            sliced.rows, 2,
+            "grid.rows(5) - offset(3) = 2行に切り詰められるはず"
+        );
+    }
+
+    #[test]
+    fn slice_rendered_image_rows_full_range_matches_original_grid() {
+        let grid = row_marked_grid(3, 4);
+        let sliced = slice_rendered_image_rows(&grid, 0, 4);
+        assert_eq!(sliced, grid);
+    }
+
+    // ---- スクロールease進行度（#530）----
+
+    #[test]
+    fn compute_scroll_ease_progress_zero_elapsed_is_zero() {
+        assert_eq!(compute_scroll_ease_progress(0, 1000), 0.0);
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_elapsed_equals_duration_is_one() {
+        assert_eq!(compute_scroll_ease_progress(1000, 1000), 1.0);
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_one_ms_before_duration_is_less_than_one() {
+        let progress = compute_scroll_ease_progress(999, 1000);
+        assert!(progress < 1.0, "progress={progress} は1.0未満のはず");
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_elapsed_past_duration_is_clamped_to_one() {
+        assert_eq!(compute_scroll_ease_progress(1001, 1000), 1.0);
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_zero_duration_is_always_one() {
+        assert_eq!(compute_scroll_ease_progress(0, 0), 1.0);
+        assert_eq!(compute_scroll_ease_progress(500, 0), 1.0);
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_midpoint_uses_ease_out_curve_not_linear() {
+        // t=0.5 → 1-(1-0.5)^2 = 0.75。線形補間(0.5)ではないことを確認する。
+        let progress = compute_scroll_ease_progress(500, 1000);
+        assert!(
+            (progress - 0.75).abs() < 1e-6,
+            "progress={progress} は0.75に近いはず(線形なら0.5になってしまう)"
+        );
+    }
+
+    // ---- スクロールeaseの補間オフセット（#530）----
+
+    #[test]
+    fn compute_eased_scroll_offset_progress_zero_returns_start_offset() {
+        assert_eq!(compute_eased_scroll_offset(5, 20, 0.0), 5);
+    }
+
+    #[test]
+    fn compute_eased_scroll_offset_progress_one_returns_target_offset() {
+        assert_eq!(compute_eased_scroll_offset(5, 20, 1.0), 20);
+    }
+
+    #[test]
+    fn compute_eased_scroll_offset_upward_scroll_moves_monotonically_toward_target() {
+        // start(20) > target(5) の上スクロール方向でも、progressが進むほど単調に
+        // targetへ近づく(値が減っていく)ことを確認する。
+        let early = compute_eased_scroll_offset(20, 5, 0.3);
+        let late = compute_eased_scroll_offset(20, 5, 0.7);
+        assert!(
+            early > late,
+            "progressが進むほどtargetに近づく(値が減る)はず: early={early} late={late}"
+        );
+    }
+
+    #[test]
+    fn compute_eased_scroll_offset_half_progress_rounds_away_from_zero() {
+        // start=0,target=1,progress=0.5 → interpolated=0.5。Rustのf32::roundは0.5から
+        // 離れる方向(この場合は1)に丸めるため、1になることを検証する。
+        assert_eq!(compute_eased_scroll_offset(0, 1, 0.5), 1);
+    }
+
+    #[test]
+    fn compute_eased_scroll_offset_start_equals_target_is_constant_regardless_of_progress() {
+        for progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert_eq!(compute_eased_scroll_offset(7, 7, progress), 7);
+        }
+    }
 }
