@@ -370,21 +370,22 @@ where
     // スキップモード（#499、GUI版 `NovelRenderer.setSkipMode`/`scheduleSkipStep` 相当）の
     // 状態。GUI版はセーブファイルの永続化された既読進捗（`readProgress`）を使うが、TUI
     // 側にはまだそのような永続化の仕組みが無いため、今回はランタイム中だけのメモリ上の
-    // 既読集合（`read_positions`、`Playback::position()` の値をキーにする）で最小実装する
-    // (#499 Issue本文の「永続化はスコープ外」指示どおり)。
+    // 既読集合（`read_positions`）で最小実装する (#499 Issue本文の「永続化はスコープ外」
+    // 指示どおり)。
     //
-    // `read_positions` は「その行を**離脱した**ことがある」位置の集合であり、「その行を
-    // 表示したことがある」位置の集合ではない — マークは会話行から実際に advance で
-    // 離れた瞬間（下の `Action::Advance` 処理内）にだけ行う。「到達した瞬間に無条件で
-    // マークする」実装を最初に試したところ、REDRAW ポーリング（30msごとの再描画）が
-    // キー入力の有無に関わらず走り続けるため、プレイヤーがまだ一度も見ていない初見の行
-    // でも到達から30ms後には自分自身の描画によって「既読」扱いになってしまい、その後で
-    // スキップをONにすると初見の行を素通りしてしまう事故が tmux 実機確認で発覚した
-    // （GUI版は render() 呼び出し内で「チェック→マーク」を1行の遷移につき1回だけ
-    // アトミックに行うため、同じ問題が起きない）。離脱時マークならこの問題を構造的に
-    // 避けられる — 何フレーム見ていたかに関わらず、実際に次へ進むまでは既読集合に入らない。
+    // キーは `playback.position()`（会話行のみを数える生の値）ではなく
+    // `playback.stable_item_key()` が返す `(scene_order 内インデックス, シーン内構築順
+    // インデックス)` を使う（#509 統合バグ修正）。#509 で `Playback` の `items` が
+    // 「訪れたシーンをその都度末尾に追記する」遅延構築モデルに変わったため、
+    // `select_current_choice`（選択肢ジャンプ）は既に訪れたことのあるシーンへ戻る場合でも
+    // 既存の `items` を再利用せず常に新規追記する。そのため生の `position()`/`item_index()`
+    // は同じシーンの同じ箇所に再訪しても毎回別の値になり、位置の生値をそのままキーにすると
+    // 「一度読んだ行を選択肢でジャンプして戻り、スキップで再度素通りする」という #499 が
+    // 検証済みだったシナリオで既読が一切認識されずスキップが即座に自己解除してしまう
+    // （マージ時に発覚した回帰）。`stable_item_key` の doc comment（`playback.rs`）が示す
+    // 既知の制約（フラグ状態が変わった状態での再訪）はこのスコープの対象外。
     let mut skip_mode = false;
-    let mut read_positions: HashSet<usize> = HashSet::new();
+    let mut read_positions: HashSet<(usize, usize)> = HashSet::new();
 
     // バックログ（#500）: これまで実際に表示し終えた会話行（話者名込み）の履歴。
     // `Action::Advance` 処理内、行を実際に離れた瞬間（`on_advance` が `true` を返した
@@ -561,8 +562,14 @@ where
         // 既読 → この周回でキー入力を待たずに即座に advance する（GUI版 `scheduleSkipStep`
         // の `setTimeout(…, 0)` 相当、「実質ウェイト無しで回し続ける」設計）。未読ならスキップ
         // 終了（現在行は表示したまま待機、GUI版 #140 と同じ）——これは上のブロックが
-        // 拾わないので、ここで改めて判定する。
-        let skip_triggered = skip_mode && read_positions.contains(&playback.position());
+        // 拾わないので、ここで改めて判定する。`position()` の生値ではなく
+        // `stable_item_key()`（シーンを跨いで安定なキー、#509統合バグ修正）で既読集合と
+        // 照合する — `stable_item_key` が `None`（範囲外）を返すことは通常起こらないが、
+        // 防御的に `is_some_and` で「キーが取れず判定できない」場合は未読扱いにする。
+        let skip_triggered = skip_mode
+            && playback
+                .stable_item_key(playback.item_index())
+                .is_some_and(|key| read_positions.contains(&key));
         if skip_mode && !skip_triggered {
             skip_mode = false;
         }
@@ -696,6 +703,12 @@ where
                     skip_mode = false;
                 }
                 let prev_position = playback.position();
+                // #499/#509統合: 既読マーク（`read_positions`）に積むキーは `prev_position`
+                // ではなく `stable_item_key(prev_item_index)`（シーンを跨いで安定なキー、
+                // `read_positions` 宣言側のコメント参照）を使う。`prev_item_index` は
+                // on_advance で状態を動かす前の生インデックスをここで捕まえておく必要がある
+                // — after 側で取り直すと既に次の item を指してしまうため。
+                let prev_item_index = playback.item_index();
                 // #499: 既読マーク判定用に、on_advance で状態を動かす前の「選択肢表示中か」を
                 // 覚えておく。`playback.position()` は Choice item をカウントしないため、
                 // 「最後の会話行 → 直後の Choice」という遷移では `position()` の値が変わらず
@@ -742,11 +755,16 @@ where
                 // 既読としてマークする（`read_positions`、離脱ベースの既読判定 — 上の
                 // `skip_mode` 初期化コメント参照）。選択肢から離脱した場合（`was_choice_before`）
                 // はマーク対象外 — 選択肢自体は会話行ではなく、GUI版も text イベントだけを
-                // 対象にしている（#140）。
+                // 対象にしている（#140）。「離脱したか」の判定自体は `position()` の単発の
+                // before/after比較で十分（同じ1回の on_advance 呼び出し内の変化を見るだけ
+                // なので、#509 の遅延シーン追記が引き起こす「同じ内容が別 index になる」
+                // 問題の影響を受けない）。実際に集合へ積むキーだけを安定キーに差し替える。
                 let position_changed = playback.position() != prev_position
                     || playback.current_choice().is_some() != was_choice_before;
                 if position_changed && !was_choice_before {
-                    read_positions.insert(prev_position);
+                    if let Some(key) = playback.stable_item_key(prev_item_index) {
+                        read_positions.insert(key);
+                    }
                 }
                 // `position()`（会話行のみを数える）ではなく `item_index()`（生の `items`
                 // インデックス）で「実際に別の item へ移動したか」を判定する（#497）。画像コマ

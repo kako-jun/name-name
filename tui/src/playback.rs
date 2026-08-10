@@ -324,6 +324,11 @@ pub struct Playback {
     /// ドキュメント末尾以降に出現した SE（後続 item が存在しない）は、どの item にも属せない
     /// ため再生対象にならない（既知の制約、影響は軽微）。
     item_se: Vec<Vec<String>>,
+    /// `items[i]` の、シーンを跨いで安定な識別子（`(scene_order 内インデックス, その
+    /// シーン内での構築順インデックス)`、#499/#509統合）。`items` と同じ長さを常に保つ
+    /// （`item_file_ids` と同じ並行 Vec のパターン）。詳細・既知の制約は
+    /// [`Playback::stable_item_key`] の doc comment参照。
+    item_scene_key: Vec<(usize, usize)>,
     index: usize,
     /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
     /// `from_document`/`from_merged_document` で埋まる。`advance`/`select_current_choice` が
@@ -436,6 +441,27 @@ fn push_wait_chain_terminal_item(
     // `mem::take` で消費する。
     item_bgm.push(state.current_bgm.clone());
     item_se.push(std::mem::take(&mut state.pending_se));
+}
+
+/// `build_scene_items` の1回の呼び出し（内部の `Event::Condition` 再帰も含む）が
+/// `items` に追加した範囲 `[start..items.len())` の各 item へ、`(scene_idx, シーン内での
+/// 構築順インデックス)` の安定キーを割り当てて `item_scene_key` へ積む
+/// （[`Playback::stable_item_key`] の doc comment参照、#499/#509統合）。
+///
+/// `build_scene_items` 自体（および `push_wait_chain_terminal_item`）のシグネチャは
+/// 変更していない — 呼び出し側（`Playback::build`/`advance`/`select_current_choice`）が
+/// 既に把握している「このシーンの構築がどこから始まったか」（`start`）から事後的に
+/// 範囲を割り出すだけなので、`Event::Condition` の再帰呼び出しを含む全ての push サイトを
+/// 個別に変更する必要がない。
+fn append_stable_item_keys(
+    item_scene_key: &mut Vec<(usize, usize)>,
+    scene_idx: usize,
+    start: usize,
+    end: usize,
+) {
+    for absolute_index in start..end {
+        item_scene_key.push((scene_idx, absolute_index - start));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -751,7 +777,9 @@ impl Playback {
                     });
             }
         }
+        let mut item_scene_key = Vec::new();
         if let Some(first_scene) = scene_order.first() {
+            let start = items.len();
             build_scene_items(
                 &first_scene.events,
                 first_scene.file_id,
@@ -764,6 +792,7 @@ impl Playback {
                 &mut item_bgm,
                 &mut item_se,
             );
+            append_stable_item_keys(&mut item_scene_key, 0, start, items.len());
         }
         Self {
             items,
@@ -772,6 +801,7 @@ impl Playback {
             item_blackout,
             item_bgm,
             item_se,
+            item_scene_key,
             index: 0,
             scene_order,
             scene_index_by_id,
@@ -936,6 +966,40 @@ impl Playback {
         self.index
     }
 
+    /// `item_index()` が指しうる生インデックス `item_index` を、シーンを跨いで安定な
+    /// 識別子（`(scene_order 内インデックス, そのシーン内での構築順インデックス)`）に
+    /// 変換する。`item_index` が範囲外（`items.len()` 以上）なら `None`。
+    ///
+    /// #509 で `items` が「プレイヤーが実際に訪れたシーンだけを訪れた順にその場で末尾へ
+    /// 追記する」遅延構築モデルに変わった（モジュール冒頭のドキュメント参照）。
+    /// `select_current_choice`/`advance` は、既に訪れたことのあるシーンへ戻る場合でも
+    /// 既存の `items` を再利用せず、常に `build_scene_items` でそのシーンを新規に構築して
+    /// `items` 末尾へ追記する — そのため生の `item_index()`（や `position()`）は、同じ
+    /// シーンの同じ箇所に再訪しても毎回異なる値になる。#499 スキップモードの
+    /// `read_positions`（`main.rs::event_loop`）は「以前ここを読んだか」を素朴な位置比較
+    /// （`position()` の値をそのまま集合のキーにする）で判定していたため、#509 の遅延構築
+    /// モデルと統合した際にこの前提が崩れ、既読判定が機能しなくなっていた（バグ、再訪→
+    /// スキップのシナリオで発覚）。
+    ///
+    /// このメソッドはその代わりに使う安定キーを返す。同じシーンへ同じフラグ状態
+    /// （`self.flags`）で再訪した場合、`build_scene_items` は毎回同じイベント列を同じ順序で
+    /// 処理するため、シーン内の同じ相対位置に生成される item は毎回同じキーになる —
+    /// 呼び出し側（`main.rs`）はこちらを集合のキーにすることで「本当に同じ箇所へ戻って
+    /// きたか」を正しく判定できる。
+    ///
+    /// **既知の制約**（対応不要、実害が判明したら要再検討、#526 の既知の制約1/2と同種の
+    /// 割り切り）: 同一シーンをフラグ状態が異なる状態で再訪した場合（`Event::Condition` の
+    /// 展開結果が変わり、シーン内で実際に生成される item 数自体が訪問ごとに変動する場合）、
+    /// 「シーン内で何番目に生成されたか」というローカルインデックスの対応がズレうる —
+    /// 例えば1回目の訪問では `Event::Condition` が偽で3個の item しか生成されなかった
+    /// 箇所が、フラグが変わった2回目の訪問では真になり5個生成される、といったケースでは、
+    /// 同じ相対インデックスが指す論理的な内容が訪問ごとに異なりうる。今回のスコープ
+    /// （単純な再訪→スキップ、フラグを変えずに同じシーンへ戻るシナリオ）はこの制約の
+    /// 対象外。
+    pub(crate) fn stable_item_key(&self, item_index: usize) -> Option<(usize, usize)> {
+        self.item_scene_key.get(item_index).copied()
+    }
+
     /// 次の item へ進む。現在位置が選択肢（選択待ち）の場合は、[`Playback::select_current_choice`]
     /// で確定する必要があるため進めず `false` を返す。既に末尾にいた場合も `false`。
     ///
@@ -989,6 +1053,12 @@ impl Playback {
                 &mut self.item_blackout,
                 &mut self.item_bgm,
                 &mut self.item_se,
+            );
+            append_stable_item_keys(
+                &mut self.item_scene_key,
+                next_scene_idx,
+                start,
+                self.items.len(),
             );
             self.current_scene_idx = next_scene_idx;
             if self.items.len() > start {
@@ -1114,6 +1184,7 @@ impl Playback {
                 &mut self.item_bgm,
                 &mut self.item_se,
             );
+            append_stable_item_keys(&mut self.item_scene_key, scene_idx, start, self.items.len());
             self.current_scene_idx = scene_idx;
             if self.items.len() > start {
                 self.set_index(start);
@@ -1299,6 +1370,11 @@ impl Playback {
         let item_blackout = vec![false; lines.len()];
         let item_bgm = vec![None; lines.len()];
         let item_se = vec![Vec::new(); lines.len()];
+        // `from_lines` にはシーン構造が無く、`select_current_choice`/`advance` の遅延
+        // シーン追記も発生しない（`scene_order` が常に空、doc comment参照）ため、各行を
+        // それぞれ独立した「シーン0番の、その行自身のindex番目」として扱えば十分安定する
+        // （`stable_item_key` の doc comment参照）。
+        let item_scene_key = (0..lines.len()).map(|i| (0, i)).collect();
         Self {
             items: lines.into_iter().map(PlaybackItem::Line).collect(),
             item_file_ids,
@@ -1306,6 +1382,7 @@ impl Playback {
             item_blackout,
             item_bgm,
             item_se,
+            item_scene_key,
             index: 0,
             scene_order: Vec::new(),
             scene_index_by_id: HashMap::new(),
