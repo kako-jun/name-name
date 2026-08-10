@@ -655,6 +655,7 @@ pub fn parse(input: &str) -> Document {
         // Directive: [...]
         if trimmed.starts_with('[')
             && !trimmed.starts_with("[選択]")
+            && !trimmed.starts_with("[選択:")
             && !trimmed.starts_with("[/選択]")
             && !trimmed.starts_with("[条件:")
             && !trimmed.starts_with("[/条件]")
@@ -701,8 +702,9 @@ pub fn parse(input: &str) -> Document {
             continue;
         }
 
-        // Choice block: [選択] ... [/選択]
-        if trimmed == "[選択]" {
+        // Choice block: [選択] ... [/選択]（#508: `[選択: 列=N]` でグリッド列数を指定可能）
+        if trimmed == "[選択]" || trimmed.starts_with("[選択:") {
+            let columns = parse_choice_columns(trimmed);
             pos += 1;
             let mut options: Vec<ChoiceOption> = Vec::new();
             while pos < len && lines[pos].trim() != "[/選択]" {
@@ -719,7 +721,7 @@ pub fn parse(input: &str) -> Document {
             if pos < len {
                 pos += 1; // skip [/選択]
             }
-            current_events.push(Event::Choice { options });
+            current_events.push(Event::Choice { options, columns });
             continue;
         }
 
@@ -2260,6 +2262,20 @@ fn parse_npc_header(s: &str) -> Option<ParsedNpcHeader> {
         expressions,
         scene,
     })
+}
+
+/// `[選択: 列=N]` の `列=N` を取り出す (#508)。
+/// `[選択]`（`列=` なし）や不正値（非数値、0 以下）は None を返し、
+/// 呼び出し側は従来どおりの縦一列表示にフォールバックする。
+fn parse_choice_columns(trimmed: &str) -> Option<u32> {
+    let inner = trimmed.strip_prefix("[選択:")?.strip_suffix(']')?.trim();
+    // 複数の `列=` 指定（例: `[選択: 列=5, 列=3]`）は最初の1件のみ採用する。
+    inner
+        .split(',')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix("列="))
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|&n| n >= 1)
 }
 
 /// Parse player start line: "@x,y 向き=..." → Some(PlayerStartData)

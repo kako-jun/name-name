@@ -630,3 +630,280 @@ describe('ChoiceOverlay setSplitLayoutRegion (#442 self-review should-5)', () =>
     expect(() => overlay.setSplitLayoutRegion(LANDSCAPE_REGION)).not.toThrow()
   })
 })
+
+// #508: [選択: 列=N] によるグリッド配置。columns 未指定 or 1 は既存の縦一列と
+// 完全に同じ結果になる（非破壊）ことと、2 以上で `i % columns` 列目・`i / columns` 行目に
+// 並ぶことを検証する。Gymnasia の想定ユースケースである 10択・5列×2行を中心に見る。
+describe('ChoiceOverlay グリッド配置 (#508)', () => {
+  it('columns 未指定は従来の縦一列と同じ x（screenWidth/2 で全ボタン共通）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+    for (const button of overlay.children) {
+      expect(button.x).toBe(400)
+    }
+    overlay.hide()
+  })
+
+  it('columns=1 は明示指定でも縦一列と同じ結果（非破壊）', () => {
+    const withColumns = new ChoiceOverlay(800, 450)
+    withColumns.show(choices(3), vi.fn(), null, undefined, 1)
+    const withColumnsX = withColumns.children.map((c) => c.x)
+    const withColumnsY = withColumns.children.map((c) => c.y)
+    const withColumnsWidth = withColumns.children[0].pivot.x * 2
+    withColumns.hide()
+
+    const withoutColumns = new ChoiceOverlay(800, 450)
+    withoutColumns.show(choices(3), vi.fn())
+    const withoutColumnsX = withoutColumns.children.map((c) => c.x)
+    const withoutColumnsY = withoutColumns.children.map((c) => c.y)
+    const withoutColumnsWidth = withoutColumns.children[0].pivot.x * 2
+    withoutColumns.hide()
+
+    expect(withColumnsX).toEqual(withoutColumnsX)
+    expect(withColumnsY).toEqual(withoutColumnsY)
+    expect(withColumnsWidth).toBe(withoutColumnsWidth)
+  })
+
+  it('columns=5・10択は 5列×2行に並び、1行目と2行目で y が変わり列ごとに x が変わる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+
+    const buttons = overlay.children
+    expect(buttons.length).toBe(10)
+
+    // 1行目 (index 0-4) は同じ y、2行目 (index 5-9) はそれより下の同じ y。
+    const row0Ys = buttons.slice(0, 5).map((b) => b.y)
+    const row1Ys = buttons.slice(5, 10).map((b) => b.y)
+    expect(new Set(row0Ys).size).toBe(1)
+    expect(new Set(row1Ys).size).toBe(1)
+    expect(row1Ys[0]).toBeGreaterThan(row0Ys[0])
+
+    // 列ごとに x が変わり、5列分で一意な x が5つ、行が変わっても同じ列なら同じ x。
+    const row0Xs = buttons.slice(0, 5).map((b) => b.x)
+    const row1Xs = buttons.slice(5, 10).map((b) => b.x)
+    expect(new Set(row0Xs).size).toBe(5)
+    expect(row0Xs).toEqual(row1Xs)
+    // 昇順（左から右へ列が並ぶ）
+    expect([...row0Xs].sort((a, b) => a - b)).toEqual(row0Xs)
+
+    overlay.hide()
+  })
+
+  it('列数が増えるとボタン幅が縦一列より狭くなる（画面幅に収める）', () => {
+    const single = new ChoiceOverlay(800, 450)
+    single.show(choices(1), vi.fn())
+    const singleWidth = single.children[0].pivot.x * 2
+    single.hide()
+
+    const grid = new ChoiceOverlay(800, 450)
+    grid.show(choices(10), vi.fn(), null, undefined, 5)
+    const gridWidth = grid.children[0].pivot.x * 2
+    grid.hide()
+
+    expect(gridWidth).toBeLessThan(singleWidth)
+  })
+
+  it('グリッドの全ボタンが画面幅内に収まる（はみ出さない）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+    for (const button of overlay.children) {
+      expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(0)
+      expect(button.x + button.pivot.x).toBeLessThanOrEqual(800)
+    }
+    overlay.hide()
+  })
+
+  it('columns=0 や負値は 1 にフォールバックし縦一列になる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn(), null, undefined, 0)
+    for (const button of overlay.children) {
+      expect(button.x).toBe(400)
+    }
+    overlay.hide()
+  })
+
+  it('列数指定 + 選択肢過多でも縦スクロール可能（#339 のスクロール可能リスト化とグリッドが共存する）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    // 50 択 5列 = 10行分の高さは画面(450px)に収まらずスクロール可能になる。
+    overlay.show(choices(50), vi.fn(), null, undefined, 5)
+    const hitArea = overlay.hitArea as Rectangle | null
+    expect(hitArea).not.toBeNull()
+    const content = scrollableContent(overlay)
+    expect(content.children.length).toBe(50)
+    overlay.hide()
+  })
+
+  // #508 実バグ修正: ボタン幅の下限クランプ (100px) を先に適用すると、列数が多い/
+  // split_layout でテキスト領域が狭いケースで `列数 * 幅 + ガター` が利用可能幅を
+  // 超えてはみ出していた（テスト観点整理フェーズで発見）。下限クランプを撤廃し、
+  // 常にグリッド全体が利用可能幅に収まることを保証する。
+  it('列8・10択（800px画面）でもグリッド全体が画面幅に収まる（旧: 下限100pxクランプではみ出していた）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 8)
+    for (const button of overlay.children) {
+      expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(0)
+      expect(button.x + button.pivot.x).toBeLessThanOrEqual(800)
+    }
+    overlay.hide()
+  })
+
+  it('列10・10択（800px画面）でもグリッド全体が画面幅に収まる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 10)
+    for (const button of overlay.children) {
+      expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(0)
+      expect(button.x + button.pivot.x).toBeLessThanOrEqual(800)
+    }
+    overlay.hide()
+  })
+
+  it('split_layout有効・列5・10択（テキスト領域約400px）でもグリッド全体が領域幅に収まる（Gymnasia想定シナリオ）', () => {
+    const region = computeSplitLayoutRegions(800, 450).text
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setSplitLayoutRegion(region)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+    for (const button of overlay.children) {
+      expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(region.x)
+      expect(button.x + button.pivot.x).toBeLessThanOrEqual(region.x + region.width)
+    }
+    overlay.hide()
+  })
+})
+
+// #508 テスト観点整理フェーズで「要追加」と判定された境界値・null/undefined等価性・状態遷移・
+// i18n・レスポンシブの穴埋め。基本ケース・はみ出し修正自体は上の describe で既にカバー済みなので、
+// ここでは「列数と選択肢数の関係」「show/hide のライフサイクルで内部状態が残留しないか」
+// 「null と undefined が同一視されるか」など、まだ見ていなかった軸を狙う。
+describe('ChoiceOverlay グリッド配置 境界値・状態遷移 (#508 テスト観点整理フェーズ追加分)', () => {
+  it('選択肢数が列数より少ない場合（3個・列=5）は1行に3個だけ並び、余った列スロット分のボタンは生成されない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn(), null, undefined, 5)
+
+    const buttons = overlay.children
+    // 余った 2 列分の空ボタンが生成されていないこと（ボタン数 === 選択肢数）
+    expect(buttons.length).toBe(3)
+    // 1行のみなので全ボタンが同じ y
+    expect(new Set(buttons.map((b) => b.y)).size).toBe(1)
+    // 3個とも異なる x（3列分埋まる）
+    expect(new Set(buttons.map((b) => b.x)).size).toBe(3)
+
+    overlay.hide()
+  })
+
+  it('選択肢数が列数で割り切れない場合（7個・列=5）は2行になり、2行目は2個だけ左詰めで空白ボタンは生成されない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(7), vi.fn(), null, undefined, 5)
+
+    const buttons = overlay.children
+    // 5+2=7 のみ。3列分の空白パディングボタンは生成されない。
+    expect(buttons.length).toBe(7)
+
+    const row0 = buttons.slice(0, 5)
+    const row1 = buttons.slice(5, 7)
+    expect(new Set(row0.map((b) => b.y)).size).toBe(1)
+    expect(new Set(row1.map((b) => b.y)).size).toBe(1)
+    expect(row1[0].y).toBeGreaterThan(row0[0].y)
+
+    // 左詰め: 2行目の1・2列目のxは1行目の1・2列目と同じ（右側の空いた3列分は生成されず、
+    // 中央寄せなどでずれてもいない）。
+    expect(row1.map((b) => b.x)).toEqual(row0.slice(0, 2).map((b) => b.x))
+
+    overlay.hide()
+  })
+
+  it('columns に null を明示的に渡した場合と undefined を渡した場合で同一結果になる', () => {
+    const withNull = new ChoiceOverlay(800, 450)
+    withNull.show(choices(3), vi.fn(), null, undefined, null)
+    const nullX = withNull.children.map((c) => c.x)
+    const nullY = withNull.children.map((c) => c.y)
+    const nullWidth = withNull.children[0].pivot.x * 2
+    withNull.hide()
+
+    const withUndefined = new ChoiceOverlay(800, 450)
+    withUndefined.show(choices(3), vi.fn(), null, undefined, undefined)
+    const undefinedX = withUndefined.children.map((c) => c.x)
+    const undefinedY = withUndefined.children.map((c) => c.y)
+    const undefinedWidth = withUndefined.children[0].pivot.x * 2
+    withUndefined.hide()
+
+    expect(nullX).toEqual(undefinedX)
+    expect(nullY).toEqual(undefinedY)
+    expect(nullWidth).toBe(undefinedWidth)
+  })
+
+  it('列数が異なる複数の [選択] ブロックが hide()→show() を挟んで連続しても互いに影響しない（通常フロー）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+    const gridWidth = overlay.children[0].pivot.x * 2
+    const gridX0 = overlay.children[0].x
+    overlay.hide()
+
+    overlay.show(choices(3), vi.fn(), null, undefined, 1)
+    const singleWidth = overlay.children[0].pivot.x * 2
+    // 縦一列の幅はグリッドのクランプ幅を引きずらず、より広い（残留破損なし）。
+    expect(singleWidth).toBeGreaterThan(gridWidth)
+    for (const button of overlay.children) {
+      expect(button.x).toBe(400) // screenWidth / 2 の従来ジオメトリ
+    }
+    overlay.hide()
+
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+    // 再度同じ列数グリッドに戻すと元と同じ幅・x に戻る。
+    expect(overlay.children[0].pivot.x * 2).toBe(gridWidth)
+    expect(overlay.children[0].x).toBe(gridX0)
+
+    overlay.hide()
+  })
+
+  it('hide() を挟まず列数違いで show() を連続呼び出しても、直前の gridColumns 等の内部状態が残留しない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+    const gridWidth = overlay.children[0].pivot.x * 2
+    expect(overlay.children.length).toBe(10)
+
+    // hide() を呼ばずに列数1（縦一列）へ直接切り替える。
+    overlay.show(choices(3), vi.fn(), null, undefined, 1)
+    const singleWidth = overlay.children[0].pivot.x * 2
+    expect(singleWidth).toBeGreaterThan(gridWidth) // 前回のグリッド幅クランプが残っていない
+    expect(overlay.children.length).toBe(3) // 前回の10ボタン分が残留していない
+    for (const button of overlay.children) {
+      expect(button.x).toBe(400)
+    }
+
+    overlay.hide()
+  })
+
+  it('10文字以上の長い日本語選択肢テキストを列5の狭いグリッドで表示してもクラッシュせず、テキストは処理される', () => {
+    const longChoices = Array.from({ length: 5 }, (_, i) => ({
+      text: `とても長い選択肢のテキストです${i + 1}`, // 16文字前後
+      jump: `next-${i + 1}`,
+    }))
+    const overlay = new ChoiceOverlay(800, 450)
+
+    expect(() => overlay.show(longChoices, vi.fn(), null, undefined, 5)).not.toThrow()
+
+    const buttons = overlay.children
+    expect(buttons.length).toBe(5)
+    for (const button of buttons) {
+      const label = button.children.find((child) => child instanceof PixiText) as
+        | PixiText
+        | undefined
+      expect(label).toBeDefined()
+      expect(label!.text.length).toBeGreaterThan(10)
+    }
+
+    overlay.hide()
+  })
+
+  it('狭い画面幅（375px相当）で列5グリッドを表示してもボタン幅が自動的に縮み、はみ出さない', () => {
+    const overlay = new ChoiceOverlay(375, 667)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+
+    for (const button of overlay.children) {
+      expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(0)
+      expect(button.x + button.pivot.x).toBeLessThanOrEqual(375)
+    }
+
+    overlay.hide()
+  })
+})

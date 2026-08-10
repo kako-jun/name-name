@@ -334,12 +334,13 @@ title: "テスト"
     let events = &doc.chapters[0].scenes[0].events;
     assert_eq!(events.len(), 1);
     match &events[0] {
-        Event::Choice { options } => {
+        Event::Choice { options, columns } => {
             assert_eq!(options.len(), 2);
             assert_eq!(options[0].text, "信じる");
             assert_eq!(options[0].jump, "1-3");
             assert_eq!(options[1].text, "信じない");
             assert_eq!(options[1].jump, "1-4");
+            assert_eq!(*columns, None);
         }
         other => panic!("Expected Choice, got {other:?}"),
     }
@@ -348,6 +349,76 @@ title: "テスト"
     let emitted = emitter::emit(&doc);
     let doc2 = parser::parse(&emitted);
     assert_eq!(doc, doc2);
+}
+
+/// `[選択: 列=N]` でグリッド列数を指定できる (#508)。
+/// `列=` 未指定時は None のまま（既存の縦一列表示、上の test_choice で確認済み）。
+#[test]
+fn test_choice_grid_columns() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: グリッド選択テスト
+
+[選択: 列=5]
+- A → a
+- B → b
+- C → c
+- D → d
+- E → e
+- F → f
+- G → g
+- H → h
+- I → i
+- J → j
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::Choice { options, columns } => {
+            assert_eq!(options.len(), 10);
+            assert_eq!(*columns, Some(5));
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+
+    // Roundtrip: 列数指定も emit → parse で保持される。
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[選択: 列=5]"));
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+/// `[選択: 列=5, 列=3]` のように `列=` が複数指定された場合、
+/// 最初の1件（列=5）のみが採用される (#508)。
+#[test]
+fn test_choice_grid_columns_duplicate_takes_first() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 重複列数テスト
+
+[選択: 列=5, 列=3]
+- A → a
+- B → b
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    match &events[0] {
+        Event::Choice { columns, .. } => {
+            assert_eq!(*columns, Some(5));
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
 }
 
 #[test]

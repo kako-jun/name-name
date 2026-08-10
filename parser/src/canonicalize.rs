@@ -86,7 +86,7 @@ pub fn canonicalize_events(events: &mut [Event]) {
                 }
             }
             // 選択肢の各ボタン本文（画面に出る本文的テキスト・#340）。
-            Event::Choice { options } => {
+            Event::Choice { options, .. } => {
                 for option in options.iter_mut() {
                     option.text = canonicalize_body_line(&option.text);
                 }
@@ -260,7 +260,7 @@ mod tests {
                     }
                     Event::TitleShow { text, .. } => title_text = Some(text.clone()),
                     Event::Label { text, .. } => label_text = Some(text.clone()),
-                    Event::Choice { options } => {
+                    Event::Choice { options, .. } => {
                         for o in options {
                             choice_texts.push(o.text.clone());
                         }

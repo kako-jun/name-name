@@ -3445,7 +3445,8 @@ export class NovelRenderer {
           this.jumpToScene(jump)
         },
         this.choiceStyle,
-        this.readSceneProgress
+        this.readSceneProgress,
+        event.Choice.columns
       )
       return
     }
