@@ -15,6 +15,11 @@ use name_name_parser::models::FlagValue;
 #[derive(Debug, Clone, Default)]
 pub struct GameFlags {
     values: HashMap<String, FlagValue>,
+    /// `set()` が呼ばれるたびに単調増加するカウンタ。値そのものの比較（`HashMap` の
+    /// `PartialEq` は要素順序に依存しないため本来は使えるが、意図をより明確にするため）
+    /// ではなく、この世代番号の比較で「フラグ状態が前回から変わったか」を安価に判定できる
+    /// ようにする。`Playback::total()` のキャッシュ無効化に使う（セルフレビュー対応、#509）。
+    generation: u64,
 }
 
 impl GameFlags {
@@ -25,6 +30,13 @@ impl GameFlags {
     /// フラグを設定する（`[フラグ: name = value]` の実行時に呼ばれる想定）。
     pub fn set(&mut self, name: impl Into<String>, value: FlagValue) {
         self.values.insert(name.into(), value);
+        self.generation += 1;
+    }
+
+    /// 現在の世代番号。`set()` が呼ばれるたびに増える。同じ値であれば `set()` は一度も
+    /// 呼ばれていない（＝フラグ状態が変わっていない）ことの安価な証明として使える。
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// フラグの真偽を判定する。GUI版 `checkFlag` と同じセマンティクス:

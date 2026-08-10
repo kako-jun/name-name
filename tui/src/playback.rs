@@ -274,21 +274,13 @@ pub struct Playback {
     /// 状態追跡自体は他の非表示イベントと同じ走査ループの中で行うため、除外する理由がない）。
     item_blackout: Vec<bool>,
     index: usize,
-    /// シーンID → そのシーンに属する最初の item の `items` 内インデックス。選択肢確定時の
-    /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
-    /// 1つも持たない場合（背景切り替えのみ等）は、そのシーンの位置＝まだ何も push していない
-    /// 時点の `items.len()`（＝後続シーンの先頭 item のインデックス、もしくは最後尾）を指す。
-    /// #509 Phase B で `select_current_choice` が `scene_index_by_id`/`scene_order` 経由の
-    /// 遅延ビルド解決に切り替わったため、現在はどこからも参照されない（削除はスコープ外）。
-    #[allow(dead_code)]
-    scene_start: HashMap<String, usize>,
     /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
     /// `from_document`/`from_merged_document` で埋まる。`advance`/`select_current_choice` が
     /// 次に構築すべきシーンを引くのに使う（#509 Phase B、モジュール冒頭のドキュメント参照）。
     /// `from_lines` 経由の構築では空のまま。
     scene_order: Vec<SceneRef>,
     /// シーンID → `scene_order` 内のインデックス。`select_current_choice` が `jump` 先の
-    /// 解決に使う（#509 Phase B、`scene_start` に代わるジャンプ先解決手段）。`from_lines`
+    /// 解決に使う（#509 Phase B、ジャンプ先解決手段）。`from_lines`
     /// 経由の構築では空のまま。
     scene_index_by_id: HashMap<String, usize>,
     /// 現在 Choice を表示中のときのカーソル位置（0始まり）。Line item にいる間は無視される。
@@ -322,6 +314,13 @@ pub struct Playback {
     /// フラグ管理（#509）。`Event::Flag`/`Event::Condition` を `build_scene_items` が
     /// 逐次walk中にリアルタイムに評価・更新するための状態。
     flags: GameFlags,
+    /// [`Playback::total`] の結果キャッシュ（世代番号, 値）。`total()` はドキュメント全体を
+    /// 独立に再スキャンする重い処理だが、結果は `self.flags` が変化しない限り変わらない
+    /// （セルフレビュー対応、#509）。`main.rs::event_loop` が `REDRAW`＝30msごとに無条件で
+    /// `total()` を呼ぶため、フラグが変わっていないフレームでは再スキャンを省略する。
+    /// `total()` は `&self` のままキャッシュを更新したいため `Cell` で内部可変性を持たせる
+    /// （`RefCell` ではなく `Cell` で十分 — 中身が `Copy` な `(u64, usize)` のため）。
+    total_cache: std::cell::Cell<Option<(u64, usize)>>,
 }
 
 /// `build_scene_items` がシーンを跨いで引き継ぐランニング状態のまとめ役（#509 Phase A）。
@@ -585,7 +584,6 @@ impl Playback {
         let mut item_file_ids = Vec::new();
         let mut item_wait_ms = Vec::new();
         let mut item_blackout = Vec::new();
-        let mut scene_start = HashMap::new();
         let mut scene_order: Vec<SceneRef> = Vec::new();
         let mut scene_index_by_id = HashMap::new();
         // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
@@ -605,10 +603,8 @@ impl Playback {
                 .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
                 .unwrap_or(0);
             for scene in &chapter.scenes {
-                // このシーンの最初の item になる（はずの）位置を、events を処理する前に記録する。
                 // 重複シーンIDは最初の出現を優先する（GUI版 `allScenes.find` が最初の一致を
                 // 返すのと同じ規約）。
-                scene_start.entry(scene.id.clone()).or_insert(items.len());
                 scene_index_by_id
                     .entry(scene.id.clone())
                     .or_insert_with(|| {
@@ -639,7 +635,6 @@ impl Playback {
             item_wait_ms,
             item_blackout,
             index: 0,
-            scene_start,
             scene_order,
             scene_index_by_id,
             choice_cursor: 0,
@@ -650,6 +645,7 @@ impl Playback {
             scan_state,
             current_scene_idx: 0,
             flags,
+            total_cache: std::cell::Cell::new(None),
         }
     }
 
@@ -799,10 +795,9 @@ impl Playback {
                 return false;
             }
             let start = self.items.len();
-            let events = next_scene.events.clone();
             let file_id = next_scene.file_id;
             build_scene_items(
-                &events,
+                &next_scene.events,
                 file_id,
                 &mut self.scan_state,
                 &mut self.flags,
@@ -841,7 +836,7 @@ impl Playback {
     /// 現在カーソルが指している選択肢を確定し、その `jump` 先シーンへ遷移する。
     ///
     /// 選択肢を表示していない場合、カーソルが範囲外の場合（本来起こり得ないが防御的に）、
-    /// または `jump` 先のシーンIDが `scene_start` に見つからない場合（原稿の記述ミスで
+    /// または `jump` 先のシーンIDが `scene_index_by_id` に見つからない場合（原稿の記述ミスで
     /// 存在しないシーンIDを指している等）は、位置を変えずに `false` を返す。GUI版
     /// `NovelRenderer.jumpToScene` の「シーンが見つからなければ何もせず console.warn するだけ」
     /// という fail-soft 方針と同じだが、TUI は alternate screen 中で標準出力を使えないため
@@ -859,11 +854,10 @@ impl Playback {
         let mut scene_idx = target_scene_idx;
         loop {
             let scene = &self.scene_order[scene_idx];
-            let events = scene.events.clone();
             let file_id = scene.file_id;
             let start = self.items.len();
             build_scene_items(
-                &events,
+                &scene.events,
                 file_id,
                 &mut self.scan_state,
                 &mut self.flags,
@@ -909,7 +903,19 @@ impl Playback {
     /// 再生状態（`self.scan_state` / `self.items`）に一切触れない使い捨ての状態で独立に
     /// 全件スキャンして数える（`has_more_scenes_with_items` が使っている「使い捨て
     /// scan_state + 使い捨て Vec で `build_scene_items` を試し呼びする」パターンと同じ）。
+    ///
+    /// `main.rs::event_loop` は `REDRAW`＝30ms間隔で（キー入力の有無に関わらず）毎フレーム
+    /// この関数を呼ぶが、結果は `self.flags` が変化しない限り変わらない。全件スキャンは
+    /// シーン数に比例した Vec 確保を伴う軽くない処理のため、`self.total_cache` に
+    /// `(self.flags.generation(), 直近の結果)` を保持し、世代番号が変わっていなければ
+    /// 再スキャンを省略する（セルフレビュー対応、#509）。
     pub fn total(&self) -> usize {
+        let current_generation = self.flags.generation();
+        if let Some((cached_generation, cached_total)) = self.total_cache.get() {
+            if cached_generation == current_generation {
+                return cached_total;
+            }
+        }
         let mut scan_state = SceneScanState {
             current_event_image: None,
             current_speaker: None,
@@ -938,6 +944,7 @@ impl Playback {
                 .filter(|item| matches!(item, PlaybackItem::Line(_)))
                 .count();
         }
+        self.total_cache.set(Some((current_generation, count)));
         count
     }
 
@@ -947,7 +954,7 @@ impl Playback {
     /// `Some`）でも、直前に表示済みだった会話行数のまま変化しない。
     pub fn position(&self) -> usize {
         // `self.items[..=self.index]` だと `index == items.len()`（ジャンプ先シーンが
-        // イベント0件かつドキュメント末尾のとき `scene_start` がこの値を取り得る、
+        // イベント0件かつドキュメント末尾のとき `set_index` がこの値を取り得る、
         // `select_current_choice` 参照）のとき範囲外アクセスで panic する。`take` は
         // `index` が範囲外でも自動的に全要素で打ち切られるため安全（「ドキュメント末尾を
         // 超えた位置」＝「全会話行を読み終えた」なので、全 Line 数を返すのは意味的にも
@@ -1025,7 +1032,8 @@ impl Playback {
     /// テスト専用: 会話行リストから直接 `Playback` を組み立てる。`main.rs` の
     /// `on_advance` テストなどで、`Document`（20個のフィールドを埋める必要がある）経由の
     /// 冗長なフィクスチャ構築を避けるために使う（#472）。選択肢を含む状態遷移のテストは
-    /// `Document` 経由（`from_document`、`scene_start` の構築が必要なため）で行う。
+    /// `Document` 経由（`from_document`、`scene_order`/`scene_index_by_id` の構築が
+    /// 必要なため）で行う。
     #[cfg(test)]
     pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
         let item_file_ids = vec![0; lines.len()];
@@ -1037,7 +1045,6 @@ impl Playback {
             item_wait_ms,
             item_blackout,
             index: 0,
-            scene_start: HashMap::new(),
             scene_order: Vec::new(),
             scene_index_by_id: HashMap::new(),
             choice_cursor: 0,
@@ -1053,6 +1060,7 @@ impl Playback {
             },
             current_scene_idx: 0,
             flags: GameFlags::new(),
+            total_cache: std::cell::Cell::new(None),
         }
     }
 }
@@ -1449,7 +1457,7 @@ mod tests {
     }
 
     #[test]
-    fn select_current_choice_jumps_to_target_scene_start() {
+    fn select_current_choice_jumps_to_target_scene() {
         let doc = two_scene_doc_with_choice();
         let mut pb = Playback::from_document(&doc);
         assert!(pb.advance(), "台詞から Choice へ進めるはず");
@@ -2073,7 +2081,7 @@ mod tests {
     fn sentence_per_page_last_sentence_advances_into_following_choice() {
         // 複数文の Line item の直後に Choice item が続く文書で、Line 最後の文から advance
         // した結果が Choice へ前進することを確認する（Line→Choice への前進遷移。既存テスト
-        // `select_current_choice_jumps_to_target_scene_start` 等は Choice→scene jump の
+        // `select_current_choice_jumps_to_target_scene` 等は Choice→scene jump の
         // 後方向のみカバーしている）。
         let doc = doc_single_scene(vec![
             dialog(Some("A"), vec!["1文目。2文目。"]),
@@ -3815,5 +3823,221 @@ mod tests {
             "seen_a未成立なので条件内のB2は生成されず、通常のBが最初のitemになるはず"
         );
         assert_eq!(line_direct.text, vec!["ルートB".to_string()]);
+    }
+
+    #[test]
+    fn total_call_does_not_mutate_playback_state() {
+        // セルフレビュー対応（#509）: total() は独立の使い捨て状態で試し計算するだけで、
+        // 実プレイの現在位置・flags・items を変えてはならない。キャッシュ導入後も
+        // この不変条件が壊れていないことを確認する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["最初のシーン"]),
+                        flag_event("unlocked", true),
+                    ],
+                ),
+                scene(
+                    "1-2",
+                    vec![condition_event(
+                        "unlocked",
+                        vec![dialog(Some("B"), vec!["解禁後だけ見える"])],
+                    )],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        let line_before = pb.current_line().cloned();
+        let position_before = pb.position();
+        let is_at_end_before = pb.is_at_end();
+        let generation_before = pb.flags.generation();
+        let items_len_before = pb.items.len();
+
+        // 複数回呼ぶ（キャッシュ経路も含めて）。
+        let total_first_call = pb.total();
+        let total_second_call = pb.total();
+        assert_eq!(
+            total_first_call, total_second_call,
+            "同じflags状態での複数回呼び出しは同じ値を返すはず（キャッシュ有無に関わらず）"
+        );
+
+        assert_eq!(
+            pb.current_line().cloned(),
+            line_before,
+            "total()の呼び出しが実プレイ位置のcurrent_lineを変えてはならない"
+        );
+        assert_eq!(
+            pb.position(),
+            position_before,
+            "total()の呼び出しがposition()を変えてはならない"
+        );
+        assert_eq!(
+            pb.is_at_end(),
+            is_at_end_before,
+            "total()の呼び出しがis_at_end()を変えてはならない"
+        );
+        assert_eq!(
+            pb.flags.generation(),
+            generation_before,
+            "total()は使い捨てのflags.clone()で試し計算するだけで、実プレイのflags状態を\
+             変えてはならない"
+        );
+        assert_eq!(
+            pb.items.len(),
+            items_len_before,
+            "total()の呼び出しが実プレイのitemsを追記してはならない（遅延ビルドは\
+             advance()/select_current_choice()経由でのみ起こる）"
+        );
+    }
+
+    #[test]
+    fn total_reflects_real_play_flags_and_cache_invalidates_when_flags_change() {
+        // セルフレビュー対応（#509）: total()のキャッシュは self.flags.generation() を
+        // キーにしているため、実プレイでflagsが変化すれば再計算され、古い値を使い回さない
+        // ことを確認する。
+        //
+        // シーン宣言順は route-b → route-a（total()の全件スキャンは`scene_order`の
+        // 登録順=このドキュメント宣言順で行われる）。route-bの`[条件: seen_a]`は
+        // ドキュメント順ではroute-aのフラグ設定より*前*に出現するため、total()の
+        // スキャンが自前で辿るだけでは（route-a未到達の時点で）まだ成立していない。
+        // しかし実プレイでroute-aへ進みseen_aを実際に立てた後は、total()の起点
+        // （self.flags.clone()）がseen_a=trueを持つため、route-bの条件付き行も
+        // カウントに含まれるようになる——「同じドキュメント位置でも実プレイの経路次第で
+        // 結果が変わる」という#509の核心が、total()の起点にも及ぶことの検証。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "route-b",
+                    vec![
+                        dialog(Some("Intro"), vec!["導入"]),
+                        condition_event("seen_a", vec![dialog(Some("B2"), vec!["Aを見た後"])]),
+                    ],
+                ),
+                scene(
+                    "route-a",
+                    vec![
+                        dialog(Some("A"), vec!["ルートA"]),
+                        flag_event("seen_a", true),
+                    ],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        let total_before = pb.total();
+        assert_eq!(
+            total_before, 2,
+            "total()自身のスキャンではroute-b条件評価時点でseen_aがまだ未設定のため、\
+             Intro + Aの2行のはず（B2は含まれない）"
+        );
+
+        let generation_before = pb.flags.generation();
+        assert!(
+            pb.advance(),
+            "Intro -> シーン境界を越えてroute-aのAへ進めるはず"
+        );
+        assert_ne!(
+            pb.flags.generation(),
+            generation_before,
+            "advance()でroute-aのEvent::Flagが実行されたので世代番号が進むはず"
+        );
+
+        let total_after = pb.total();
+        assert_eq!(
+            total_after, 3,
+            "実プレイでseen_aが立った後は、total()の起点(self.flags.clone())が\
+             seen_a=trueを持つため、route-bのB2もカウントに含まれ3行になるはず\
+             （古いキャッシュ値2を誤って使い回していないことの確認）"
+        );
+    }
+
+    #[test]
+    fn condition_treats_string_and_number_flag_values_as_truthy_when_present_via_playback() {
+        // セルフレビュー対応（#509）: `GameFlags::check`のString/Number分岐
+        // （flags.rs側の単体テストでは検証済み）が、`build_scene_items`/`Playback`を
+        // 通した実際のCondition評価でも同じセマンティクスで機能することを統合的に確認する。
+        let doc = doc_single_scene(vec![
+            Event::Flag {
+                name: "route".to_string(),
+                value: FlagValue::String("A".to_string()),
+            },
+            condition_event(
+                "route",
+                vec![dialog(Some("B"), vec!["文字列フラグでも表示されるはず"])],
+            ),
+            Event::Flag {
+                name: "count".to_string(),
+                value: FlagValue::Number(0.0),
+            },
+            condition_event(
+                "count",
+                vec![dialog(
+                    Some("C"),
+                    vec!["数値0でも存在すればtrueなので表示されるはず"],
+                )],
+            ),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        let line = pb
+            .current_line()
+            .expect("文字列フラグの条件内台詞が最初のitemのはず");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+
+        assert!(pb.advance(), "B -> 数値フラグの条件内台詞へ進めるはず");
+        let line = pb
+            .current_line()
+            .expect("Number(0.0)も存在すればtrueなので条件内台詞が表示されるはず");
+        assert_eq!(line.speaker.as_deref(), Some("C"));
+
+        assert!(pb.is_at_end(), "後続イベントが無いので末尾のはず");
+    }
+
+    #[test]
+    fn flag_in_zero_item_scene_still_applies_when_auto_skip_passes_through_it() {
+        // セルフレビュー対応（#509）: `advance()`の「itemを1件も生成しなかったシーンは
+        // 読み飛ばす」ループ（本関数内の"このシーンはitemを1件も生成しなかった。さらに
+        // 次のシーンへ。"コメント参照）を通過するシーンが`Event::Flag`しか持たない場合でも、
+        // その副作用（flags.set）が読み飛ばされずに適用されることを確認する。#509以前は
+        // Flag/Conditionを一切処理していなかったため、この相互作用は今回のPRで初めて
+        // 意味を持つようになった組み合わせ。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![dialog(Some("A"), vec!["最初のシーン"])]),
+                // 表示可能なitemを1件も持たない、Event::Flagのみのシーン。
+                scene("1-2", vec![flag_event("mid", true)]),
+                scene(
+                    "1-3",
+                    vec![condition_event(
+                        "mid",
+                        vec![dialog(Some("B"), vec!["1-2のflagが効いているはず"])],
+                    )],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.current_line().expect("1-1の台詞").speaker.as_deref(),
+            Some("A")
+        );
+
+        assert!(
+            pb.advance(),
+            "1-1 -> item0件の1-2を読み飛ばして1-3の条件付き台詞まで進めるはず"
+        );
+        let line = pb
+            .current_line()
+            .expect("1-2のflag副作用が適用され1-3の条件が成立しているはず");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
     }
 }
