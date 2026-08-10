@@ -395,6 +395,37 @@ pub fn slice_rendered_image_rows(grid: &RenderedImage, offset: u16, count: u16) 
     }
 }
 
+/// フルキャンバス画像表示のスクロールを目標位置へなめらかに追従させる ease-out
+/// アニメーションの進行度（kako-jun追加要望、#530）。`image_fade::ImageFadeState::progress`
+/// と同じ「経過時間 / 所要時間」ベースの設計だが、`Instant`/`Duration` には触れず
+/// ミリ秒の `u64` だけを受け取る純粋関数にしている（`image_render.rs` はターミナル/時刻の
+/// I/O に触れない決定論的計算だけを置く場所という既存の分離方針、`compute_cover_crop` 等と
+/// 同じ）。
+///
+/// 線形の `t = elapsed_ms / duration_ms`（0.0〜1.0にクランプ）に対し、
+/// ease-out カーブ `1 - (1-t)^2` を適用する — 開始直後は速く、目標に近づくほど減速して
+/// 収束する（kako-jun「なめらかにしたい」要望に沿う、線形より自然な体感）。
+/// `duration_ms == 0` は常に `1.0`（即時ジャンプ、アニメーション無効）を返す
+/// （`ImageFadeState::progress` の `duration.is_zero()` 早期returnと同じ扱い）。
+pub fn compute_scroll_ease_progress(elapsed_ms: u64, duration_ms: u64) -> f32 {
+    if duration_ms == 0 {
+        return 1.0;
+    }
+    let t = (elapsed_ms as f32 / duration_ms as f32).clamp(0.0, 1.0);
+    1.0 - (1.0 - t) * (1.0 - t)
+}
+
+/// [`compute_scroll_ease_progress`] が返す進行度を使い、`start_offset` から `target_offset`
+/// へ補間した「今フレームで表示すべきスクロールオフセット」を計算する純粋関数
+/// （#530追加要望）。スクロールは文字セル単位（整数行）でしか描画できないため、線形補間の
+/// 結果を最も近い整数行へ丸める（四捨五入）— 結果として1行ずつではあるが、瞬時ジャンプでは
+/// なく `duration_ms` に渡って段階的に進む見た目になる。
+pub fn compute_eased_scroll_offset(start_offset: u16, target_offset: u16, progress: f32) -> u16 {
+    let interpolated =
+        f32::from(start_offset) + (f32::from(target_offset) - f32::from(start_offset)) * progress;
+    interpolated.round().clamp(0.0, f32::from(u16::MAX)) as u16
+}
+
 /// `pixels`（`img_w` x 高さ相当の RGBA straight alpha、行優先）から
 /// `(crop_x, crop_y, crop_w, crop_h)` の矩形を切り出した新しい RGBA バイト列を返す
 /// （行優先、`crop_w * crop_h * 4` バイト）。呼び出し元（[`compute_cover_crop`]）が返す矩形は
