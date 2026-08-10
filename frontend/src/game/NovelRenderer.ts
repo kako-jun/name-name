@@ -1029,6 +1029,10 @@ export class NovelRenderer {
     this.pendingMissingScenes.add(sceneId)
     try {
       const scenes = await this.missingSceneResolver(sceneId)
+      // #463: resolveMissingSceneAndRestore の S1 (#460) と同型のリスク。await 中に renderer
+      // が destroy() されると this.initialized が false になり、destroy 後は startScene が
+      // 破棄済みの this.app.stage を触るため、初期化チェック無しで先に進むと例外を投げうる。
+      if (!this.initialized) return
       if (!scenes) return
       this.setJumpSceneIndex(scenes)
       const scene = findSceneById(this.allScenes, sceneId)
