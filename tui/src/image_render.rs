@@ -317,6 +317,63 @@ fn compute_cover_crop(
     }
 }
 
+/// フルキャンバス画像表示（`ui::draw_fullscreen_image`、#530）専用: 画像全体をクロップ無しで
+/// **全幅**（`target_cols` セル）へ合わせたとき、必要になる総行数を返す。
+///
+/// 通常の contain-fit（幅・高さ双方に上限を持つ）と違い「高さ上限」を仮置きしないため、
+/// 極端な縦長画像でも高さ優先枝へ落ちず、常に全幅表示の仕様をそのまま計算できる。
+/// ただし呼び出し側が保持するスクロールオフセットは `u16` 行単位なので、戻り値も
+/// `u16::MAX` へ飽和させる（オーバーフロー回避と、不合理に大きい行数のまま上位層へ
+/// 流さないための安全策）。
+pub fn compute_full_width_rows(image_w: u32, image_h: u32, target_cols: u16) -> u16 {
+    if image_w == 0 || image_h == 0 || target_cols == 0 {
+        return 0;
+    }
+    let visual_w = f64::from(target_cols) * TERMINAL_CELL_ASPECT_RATIO;
+    let img_ratio = f64::from(image_w) / f64::from(image_h);
+    let rows = (visual_w / img_ratio).round();
+    rows.clamp(1.0, f64::from(u16::MAX)) as u16
+}
+
+/// スクロールオフセットを `[0, content_rows.saturating_sub(visible_rows)]` へクランプする
+/// 純粋関数（フルキャンバス画像表示の縦スクロール用、#530）。`content_rows <= visible_rows`
+/// （そもそもスクロールが不要）のときは `max_offset` が0になるため、常に0を返す。
+pub fn clamp_scroll_offset(offset: u16, content_rows: u16, visible_rows: u16) -> u16 {
+    let max_offset = content_rows.saturating_sub(visible_rows);
+    offset.min(max_offset)
+}
+
+/// フルキャンバス画像表示のスクロールを目標位置へなめらかに追従させる ease-out
+/// アニメーションの進行度（kako-jun追加要望、#530）。`image_fade::ImageFadeState::progress`
+/// と同じ「経過時間 / 所要時間」ベースの設計だが、`Instant`/`Duration` には触れず
+/// ミリ秒の `u64` だけを受け取る純粋関数にしている（`image_render.rs` はターミナル/時刻の
+/// I/O に触れない決定論的計算だけを置く場所という既存の分離方針、`compute_cover_crop` 等と
+/// 同じ）。
+///
+/// 線形の `t = elapsed_ms / duration_ms`（0.0〜1.0にクランプ）に対し、
+/// ease-out カーブ `1 - (1-t)^2` を適用する — 開始直後は速く、目標に近づくほど減速して
+/// 収束する（kako-jun「なめらかにしたい」要望に沿う、線形より自然な体感）。
+/// `duration_ms == 0` は常に `1.0`（即時ジャンプ、アニメーション無効）を返す
+/// （`ImageFadeState::progress` の `duration.is_zero()` 早期returnと同じ扱い）。
+pub fn compute_scroll_ease_progress(elapsed_ms: u64, duration_ms: u64) -> f32 {
+    if duration_ms == 0 {
+        return 1.0;
+    }
+    let t = (elapsed_ms as f32 / duration_ms as f32).clamp(0.0, 1.0);
+    1.0 - (1.0 - t) * (1.0 - t)
+}
+
+/// [`compute_scroll_ease_progress`] が返す進行度を使い、`start_offset` から `target_offset`
+/// へ補間した「今フレームで表示すべきスクロールオフセット」を計算する純粋関数
+/// （#530追加要望）。スクロールは文字セル単位（整数行）でしか描画できないため、線形補間の
+/// 結果を最も近い整数行へ丸める（四捨五入）— 結果として1行ずつではあるが、瞬時ジャンプでは
+/// なく `duration_ms` に渡って段階的に進む見た目になる。
+pub fn compute_eased_scroll_offset(start_offset: u16, target_offset: u16, progress: f32) -> u16 {
+    let interpolated =
+        f32::from(start_offset) + (f32::from(target_offset) - f32::from(start_offset)) * progress;
+    interpolated.round().clamp(0.0, f32::from(u16::MAX)) as u16
+}
+
 /// `pixels`（`img_w` x 高さ相当の RGBA straight alpha、行優先）から
 /// `(crop_x, crop_y, crop_w, crop_h)` の矩形を切り出した新しい RGBA バイト列を返す
 /// （行優先、`crop_w * crop_h * 4` バイト）。呼び出し元（[`compute_cover_crop`]）が返す矩形は
@@ -346,29 +403,51 @@ fn crop_rgba(
     out
 }
 
+fn rgba_buffer_has_expected_len(pixels: &[u8], img_w: u32, img_h: u32) -> bool {
+    let Some(expected_len) = (img_w as usize)
+        .checked_mul(img_h as usize)
+        .and_then(|pixel_count| pixel_count.checked_mul(4))
+    else {
+        return false;
+    };
+    pixels.len() >= expected_len
+}
+
 /// 元画像（`pixels`: RGBA straight alpha、`img_w` x `img_h`）を、ボックス平均で
 /// `target_w` x `target_h` のサブピクセルグリッドへダウンサンプルする。
 /// `pixels.len() < img_w * img_h * 4` 等の不正な入力では空の `Vec` を返す（panicしない）。
-fn downsample_box(
+fn downsample_box_window(
     pixels: &[u8],
     img_w: u32,
     img_h: u32,
     target_w: u32,
     target_h: u32,
+    target_y_start: u32,
+    target_y_count: u32,
 ) -> Vec<(u8, u8, u8, u8)> {
-    if img_w == 0 || img_h == 0 || target_w == 0 || target_h == 0 {
+    if img_w == 0
+        || img_h == 0
+        || target_w == 0
+        || target_h == 0
+        || target_y_count == 0
+        || target_y_start >= target_h
+    {
         return Vec::new();
     }
-    if pixels.len() < (img_w as usize) * (img_h as usize) * 4 {
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
         return Vec::new();
     }
-    let mut out = Vec::with_capacity((target_w * target_h) as usize);
-    for ty in 0..target_h {
-        let y0 = ty * img_h / target_h;
-        let y1 = (((ty + 1) * img_h) / target_h).clamp(y0 + 1, img_h);
+    let target_y_end = target_y_start.saturating_add(target_y_count).min(target_h);
+    let actual_target_h = target_y_end - target_y_start;
+    let mut out = Vec::with_capacity((target_w * actual_target_h) as usize);
+    for ty in target_y_start..target_y_end {
+        let y0 = ((u64::from(ty) * u64::from(img_h)) / u64::from(target_h)) as u32;
+        let y1 = ((((u64::from(ty) + 1) * u64::from(img_h)) / u64::from(target_h)) as u32)
+            .clamp(y0 + 1, img_h);
         for tx in 0..target_w {
-            let x0 = tx * img_w / target_w;
-            let x1 = (((tx + 1) * img_w) / target_w).clamp(x0 + 1, img_w);
+            let x0 = ((u64::from(tx) * u64::from(img_w)) / u64::from(target_w)) as u32;
+            let x1 = ((((u64::from(tx) + 1) * u64::from(img_w)) / u64::from(target_w)) as u32)
+                .clamp(x0 + 1, img_w);
             let mut sum = (0u32, 0u32, 0u32, 0u32, 0u32); // r,g,b,a,count
             for y in y0..y1 {
                 for x in x0..x1 {
@@ -392,6 +471,20 @@ fn downsample_box(
     out
 }
 
+/// 元画像全体をターゲット全体（`target_w` x `target_h`）へダウンサンプルすると仮定したとき、
+/// 縦方向に `target_y_start..target_y_start+target_y_count` の行だけを計算する薄いラッパ。
+/// 全行ぶんの `Vec` を先に確保せず可視範囲だけを作るため、巨大なスクロール画像でも
+/// 行数に比例したメモリを確保しない（#530 セルフレビュー対応）。
+fn downsample_box(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    target_w: u32,
+    target_h: u32,
+) -> Vec<(u8, u8, u8, u8)> {
+    downsample_box_window(pixels, img_w, img_h, target_w, target_h, 0, target_h)
+}
+
 /// 元画像（RGBA、`img_w` x `img_h`）を `cols` x `rows` 文字セルの quadrant block グリッドへ
 /// 変換する（`docs/visual/reference/20260722-nearsighted-pixel-redraw/tui-plan.md` の設計に
 /// 従う）。セル数が 0、画像サイズが 0、または `pixels` が画像サイズに対して短すぎる場合は
@@ -412,7 +505,7 @@ pub fn rgba_to_quadrant_grid(
     if cols == 0 || rows == 0 || img_w == 0 || img_h == 0 {
         return blank_grid(cols, rows);
     }
-    if pixels.len() < img_w as usize * img_h as usize * 4 {
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
         return blank_grid(cols, rows);
     }
     let sub_w = u32::from(cols) * 2;
@@ -450,6 +543,68 @@ pub fn rgba_to_quadrant_grid(
         }
     }
     RenderedImage { cols, rows, cells }
+}
+
+/// 元画像全体をクロップ無しで `cols` セル幅へ拡大・縮小し、総行数 `total_rows` のうち
+/// `offset` 行目から最大 `rows` 行だけを quadrant block グリッドへ変換する。
+/// フルキャンバス画像表示のスクロール可視範囲専用で、全行ぶんのグリッドを先に確保しない。
+pub fn rgba_to_quadrant_grid_window(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    cols: u16,
+    total_rows: u16,
+    offset: u16,
+    rows: u16,
+) -> RenderedImage {
+    let visible_rows = total_rows.saturating_sub(offset).min(rows);
+    if cols == 0 || total_rows == 0 || visible_rows == 0 || img_w == 0 || img_h == 0 {
+        return blank_grid(cols, visible_rows);
+    }
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
+        return blank_grid(cols, visible_rows);
+    }
+
+    let sub_w = u32::from(cols) * 2;
+    let total_sub_h = u32::from(total_rows) * 2;
+    let sub_offset = u32::from(offset) * 2;
+    let sub_rows = u32::from(visible_rows) * 2;
+    let sub = downsample_box_window(
+        pixels,
+        img_w,
+        img_h,
+        sub_w,
+        total_sub_h,
+        sub_offset,
+        sub_rows,
+    );
+    if sub.is_empty() {
+        return blank_grid(cols, visible_rows);
+    }
+
+    let mut cells = Vec::with_capacity(cols as usize * visible_rows as usize);
+    for cy in 0..visible_rows {
+        for cx in 0..cols {
+            let sub_x = u32::from(cx) * 2;
+            let sub_y = u32::from(cy) * 2;
+            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
+            let ul = get(sub_x, sub_y);
+            let ur = get(sub_x + 1, sub_y);
+            let ll = get(sub_x, sub_y + 1);
+            let lr = get(sub_x + 1, sub_y + 1);
+            cells.push(quadrant_cell_from_subpixels([
+                composite_over_black(ul.0, ul.1, ul.2, ul.3),
+                composite_over_black(ur.0, ur.1, ur.2, ur.3),
+                composite_over_black(ll.0, ll.1, ll.2, ll.3),
+                composite_over_black(lr.0, lr.1, lr.2, lr.3),
+            ]));
+        }
+    }
+    RenderedImage {
+        cols,
+        rows: visible_rows,
+        cells,
+    }
 }
 
 #[cfg(test)]
@@ -986,6 +1141,20 @@ mod tests {
     }
 
     #[test]
+    fn rgba_to_quadrant_grid_window_uses_only_requested_visible_rows() {
+        let pixels = vec![255, 0, 0, 255];
+        let grid = rgba_to_quadrant_grid_window(&pixels, 1, 1, 40, u16::MAX, u16::MAX - 20, 20);
+        assert_eq!(grid.rows, 20);
+        assert_eq!(grid.cells.len(), 40 * 20);
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_rejects_overflowing_source_size_without_panicking() {
+        let grid = rgba_to_quadrant_grid_window(&[], u32::MAX, u32::MAX, 40, 20, 0, 20);
+        assert_eq!(grid, blank_grid(40, 20));
+    }
+
+    #[test]
     fn downsample_box_uniform_image_averages_to_same_color() {
         // 4x4 の単色画像を 2x2 にダウンサンプルすると、全セルが同じ色になる。
         let mut pixels = Vec::new();
@@ -1048,5 +1217,138 @@ mod tests {
         let grid = blank_grid(3, 2);
         assert_eq!(grid.cells.len(), 6);
         assert!(grid.cells.iter().all(|c| *c == BLANK_CELL));
+    }
+
+    // ---- フルキャンバス画像表示の必要行数（#530）----
+
+    #[test]
+    fn compute_full_width_rows_zero_dimensions_return_zero() {
+        assert_eq!(compute_full_width_rows(0, 100, 40), 0);
+        assert_eq!(compute_full_width_rows(100, 0, 40), 0);
+        assert_eq!(compute_full_width_rows(100, 100, 0), 0);
+    }
+
+    #[test]
+    fn compute_full_width_rows_keeps_width_for_extremely_tall_images() {
+        // 高さ上限を含むcontain-fitなら幅を縮める画像でも、フル幅表示の必要行数を返す。
+        assert_eq!(compute_full_width_rows(1, 50, 40), 1000);
+    }
+
+    #[test]
+    fn compute_full_width_rows_saturates_without_overflowing_for_extreme_aspect_ratio() {
+        assert_eq!(compute_full_width_rows(1, u32::MAX, 40), u16::MAX);
+    }
+
+    // ---- スクロールオフセットのクランプ（#530）----
+
+    #[test]
+    fn clamp_scroll_offset_below_max_offset_is_unchanged() {
+        // content_rows=10, visible_rows=4 → max_offset=6。境界の1つ内側(5)は変化しない。
+        assert_eq!(clamp_scroll_offset(5, 10, 4), 5);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_exactly_at_max_offset_is_unchanged() {
+        assert_eq!(clamp_scroll_offset(6, 10, 4), 6);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_above_max_offset_is_clamped_down() {
+        assert_eq!(clamp_scroll_offset(9, 10, 4), 6);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_content_equals_visible_is_always_zero() {
+        assert_eq!(clamp_scroll_offset(3, 5, 5), 0);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_content_shorter_than_visible_is_always_zero_without_underflow() {
+        // saturating_sub のおかげで content_rows < visible_rows でも panic せず0になる。
+        assert_eq!(clamp_scroll_offset(2, 3, 10), 0);
+    }
+
+    #[test]
+    fn clamp_scroll_offset_zero_visible_rows_clamps_to_content_rows_not_zero() {
+        // visible_rows=0 のときは max_offset=content_rows自身になるため、
+        // 大きなoffsetはcontent_rowsにクランプされるだけで0にはならない。
+        assert_eq!(clamp_scroll_offset(100, 7, 0), 7);
+    }
+
+    // ---- スクロールease進行度（#530）----
+
+    #[test]
+    fn compute_scroll_ease_progress_zero_elapsed_is_zero() {
+        assert_eq!(compute_scroll_ease_progress(0, 1000), 0.0);
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_elapsed_equals_duration_is_one() {
+        assert_eq!(compute_scroll_ease_progress(1000, 1000), 1.0);
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_one_ms_before_duration_is_less_than_one() {
+        let progress = compute_scroll_ease_progress(999, 1000);
+        assert!(progress < 1.0, "progress={progress} は1.0未満のはず");
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_elapsed_past_duration_is_clamped_to_one() {
+        assert_eq!(compute_scroll_ease_progress(1001, 1000), 1.0);
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_zero_duration_is_always_one() {
+        assert_eq!(compute_scroll_ease_progress(0, 0), 1.0);
+        assert_eq!(compute_scroll_ease_progress(500, 0), 1.0);
+    }
+
+    #[test]
+    fn compute_scroll_ease_progress_midpoint_uses_ease_out_curve_not_linear() {
+        // t=0.5 → 1-(1-0.5)^2 = 0.75。線形補間(0.5)ではないことを確認する。
+        let progress = compute_scroll_ease_progress(500, 1000);
+        assert!(
+            (progress - 0.75).abs() < 1e-6,
+            "progress={progress} は0.75に近いはず(線形なら0.5になってしまう)"
+        );
+    }
+
+    // ---- スクロールeaseの補間オフセット（#530）----
+
+    #[test]
+    fn compute_eased_scroll_offset_progress_zero_returns_start_offset() {
+        assert_eq!(compute_eased_scroll_offset(5, 20, 0.0), 5);
+    }
+
+    #[test]
+    fn compute_eased_scroll_offset_progress_one_returns_target_offset() {
+        assert_eq!(compute_eased_scroll_offset(5, 20, 1.0), 20);
+    }
+
+    #[test]
+    fn compute_eased_scroll_offset_upward_scroll_moves_monotonically_toward_target() {
+        // start(20) > target(5) の上スクロール方向でも、progressが進むほど単調に
+        // targetへ近づく(値が減っていく)ことを確認する。
+        let early = compute_eased_scroll_offset(20, 5, 0.3);
+        let late = compute_eased_scroll_offset(20, 5, 0.7);
+        assert!(
+            early > late,
+            "progressが進むほどtargetに近づく(値が減る)はず: early={early} late={late}"
+        );
+    }
+
+    #[test]
+    fn compute_eased_scroll_offset_half_progress_rounds_away_from_zero() {
+        // start=0,target=1,progress=0.5 → interpolated=0.5。Rustのf32::roundは0.5から
+        // 離れる方向(この場合は1)に丸めるため、1になることを検証する。
+        assert_eq!(compute_eased_scroll_offset(0, 1, 0.5), 1);
+    }
+
+    #[test]
+    fn compute_eased_scroll_offset_start_equals_target_is_constant_regardless_of_progress() {
+        for progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert_eq!(compute_eased_scroll_offset(7, 7, progress), 7);
+        }
     }
 }

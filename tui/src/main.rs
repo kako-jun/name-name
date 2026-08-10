@@ -142,6 +142,30 @@ where
 
 /// スプラッシュ画面を描画し、キー入力を1件待つ。`Action::Advance` で `Ok(true)`
 /// （本編へ進む）、`Action::Quit` で `Ok(false)`（そのまま終了）を返す。
+///
+/// `image_cache` はフルキャンバス画像表示モード（`config.splash.logo_image` が `Some` の
+/// 場合、#530）専用のローカル状態。`event_loop` 側の `ImageCache` とは別インスタンス
+/// （スプラッシュはイベント絵と同時に表示されないため共有する必要が無く、シグネチャ変更の
+/// 影響範囲を最小化する）。
+///
+/// スクロール（`Action::MoveUp`/`Action::MoveDown`）は目標位置（`target_scroll_offset`）を
+/// 即座に更新するだけで、実際に描画する表示位置（`display_scroll_offset`）は
+/// `config.splash.scroll_ease_ms` の所要時間をかけて ease-out で追従する
+/// （kako-jun追加要望「スクロールはeaseにしたい」。`image_fade::ImageFadeState` の
+/// `from`/`to`/`started_at`/`duration` パターンを踏襲 — キー入力のたびに現在の表示位置を
+/// 新しいアニメーションの起点 `scroll_anim_start_offset` として引き継ぎ、開始時刻
+/// `scroll_anim_start` をリセットする点も `ImageFadeState::transition_to` と同じ設計）。
+/// 進行度・補間の計算自体は [`image_render::compute_scroll_ease_progress`]/
+/// [`image_render::compute_eased_scroll_offset`]（ターミナル/時刻I/Oに触れない純粋関数）に
+/// 委譲する。テキストモード（`logo_image` が `None`）ではどちらも参照されない
+/// （`ui::draw_splash` 参照。以前はカーソル移動を選択肢が無いという理由で無視していたが
+/// （#482）、フルキャンバス画像表示モードのスクロールに転用した、#530）。
+///
+/// アニメーション中も継続的に再描画されるのは、`next_action`（本番では
+/// `input::poll_action(REDRAW)`、`run` 参照）がキー入力の有無に関わらず [`REDRAW`] 間隔で
+/// `Action::None` を返してループを回し続けるため（`event_loop` のタイプライター演出・
+/// ページ送りインジケータ点滅と同じ既存の定期再描画の仕組みをそのまま利用するだけで、
+/// ここでの変更は不要）。
 fn show_splash<B>(
     terminal: &mut Terminal<B>,
     config: &Config,
@@ -151,14 +175,43 @@ where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    let mut image_cache = image_render::ImageCache::new();
+    let mut target_scroll_offset: u16 = 0;
+    let mut scroll_anim_start_offset: u16 = 0;
+    let mut scroll_anim_start = Instant::now();
     loop {
-        terminal.draw(|frame| ui::draw_splash(frame, config))?;
+        let now = Instant::now();
+        let elapsed_ms = now.saturating_duration_since(scroll_anim_start).as_millis() as u64;
+        let progress =
+            image_render::compute_scroll_ease_progress(elapsed_ms, config.splash.scroll_ease_ms);
+        let display_scroll_offset = image_render::compute_eased_scroll_offset(
+            scroll_anim_start_offset,
+            target_scroll_offset,
+            progress,
+        );
+        terminal.draw(|frame| {
+            ui::draw_splash(frame, config, &mut image_cache, display_scroll_offset)
+        })?;
 
         match next_action()? {
             Action::Advance => return Ok(true),
             Action::Quit => return Ok(false),
-            // スプラッシュ画面には選択肢が無いため、カーソル移動は無視する（#482）。
-            Action::MoveUp | Action::MoveDown | Action::None => {}
+            Action::MoveUp => {
+                // 現在の表示位置（アニメーション途中点も含む）を新しいアニメーションの
+                // 起点として引き継ぐことで、連打してもジャンプせず滑らかに追従し続ける。
+                scroll_anim_start_offset = display_scroll_offset;
+                scroll_anim_start = now;
+                let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
+                target_scroll_offset = target_scroll_offset.saturating_sub(1).min(max_offset);
+            }
+            Action::MoveDown => {
+                scroll_anim_start_offset = display_scroll_offset;
+                scroll_anim_start = now;
+                let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
+                target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
+            }
+            // スプラッシュ画面には左右移動の対象となる複数列選択肢が無いため、無視する(#482、#508)。
+            Action::MoveLeft | Action::MoveRight | Action::None => {}
         }
     }
 }
@@ -359,8 +412,11 @@ where
                 }
             }
             // 選択肢を表示していないとき（`Playback::current_choice` が `None`）は no-op（#482）。
+            // MoveLeft/MoveRight は非グリッド（列数1以下）表示中も同様に no-op（#508）。
             Action::MoveUp => playback.move_choice_cursor_up(),
             Action::MoveDown => playback.move_choice_cursor_down(),
+            Action::MoveLeft => playback.move_choice_cursor_left(),
+            Action::MoveRight => playback.move_choice_cursor_right(),
             Action::Quit => break,
             Action::None => {}
         }
@@ -1090,6 +1146,310 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(!text.contains("Enter"), "buffer was: {text}");
         assert!(text.contains("0/0"), "buffer was: {text}");
+    }
+
+    // ---- フルキャンバス画像表示モードのスクロール配線（#530）----
+
+    /// `splash.logo_image`/`event_image.assets_dir` を実在するWebPフィクスチャへ向けた
+    /// `Config` を作る（`splash_config` のテキストモード版に対応する画像モード版）。
+    fn image_splash_config(fixture_path: &std::path::Path) -> Config {
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        config.splash.logo_image = Some(std::path::PathBuf::from(
+            fixture_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        ));
+        config
+    }
+
+    /// 縦168px・上から4行だけ赤(255,0,0)、残りは青(0,0,255)の正方形WebPフィクスチャ。
+    /// contain-fit(比1.0)でスクロールが必要になり、かつグリッド行0(赤)と行1以降(青)が
+    /// はっきり色分けされるため、「スクロールオフセットが0のままか、進んだか」を
+    /// セルの背景色だけで判別できる（`show_splash_movedown_does_not_instantly_jump_to_target_scroll_offset`
+    /// 用）。
+    fn banded_scroll_fixture() -> std::path::PathBuf {
+        let size: u32 = 168;
+        let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+        for y in 0..size {
+            let color: [u8; 4] = if y < 4 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            };
+            for _x in 0..size {
+                rgba.extend_from_slice(&color);
+            }
+        }
+        crate::image_render::write_test_webp_fixture(&rgba, size, size)
+    }
+
+    /// 84x84 の正方形画像を、2px ごとの横帯で段階的に赤みを変えたフィクスチャ。
+    /// 全幅表示（84列）では総42行になり、各表示行が一意な赤背景を持つため、
+    /// 「最下端から1つ戻ったか」を先頭セルの背景色だけで判別できる。
+    fn per_row_scroll_fixture() -> std::path::PathBuf {
+        let size: u32 = 84;
+        let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+        for y in 0..size {
+            let band = (y / 2) as u8;
+            let red = band.saturating_mul(5);
+            for _x in 0..size {
+                rgba.extend_from_slice(&[red, 0, 0, 255]);
+            }
+        }
+        crate::image_render::write_test_webp_fixture(&rgba, size, size)
+    }
+
+    #[test]
+    fn show_splash_text_mode_movedown_does_not_change_rendered_output() {
+        // デシジョンテーブル: テキストモードはMoveUp/Downでtarget_scroll_offsetこそ内部で
+        // 更新されるが、draw_splash自体がテキストモードでは scroll_offset を一切参照しない
+        // ため、見た目は変化しないはず。
+        let config = splash_config();
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut baseline_action, _r1) = action_queue(vec![Action::Advance]);
+        show_splash(&mut baseline_terminal, &config, &mut baseline_action).unwrap();
+        let baseline_text = buffer_text(&baseline_terminal);
+
+        let mut moved_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut moved_action, _r2) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::Advance,
+        ]);
+        show_splash(&mut moved_terminal, &config, &mut moved_action).unwrap();
+        let moved_text = buffer_text(&moved_terminal);
+
+        assert_eq!(
+            baseline_text, moved_text,
+            "テキストモードはMoveDown連打しても描画結果が変わってはいけない"
+        );
+    }
+
+    #[test]
+    fn show_splash_image_mode_non_scrolling_movedown_does_not_change_rendered_output() {
+        // デシジョンテーブル: 画像モードでもスクロール不要な画像なら、MoveDownで
+        // target_scroll_offset 自体が max_offset=0 にクランプされるため、見た目は
+        // 変化しないはず。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((200, 80, 80), 4, 1), 4, 1);
+        let config = image_splash_config(&fixture_path);
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut baseline_action, _r1) = action_queue(vec![Action::Advance]);
+        show_splash(&mut baseline_terminal, &config, &mut baseline_action).unwrap();
+        let baseline_text = buffer_text(&baseline_terminal);
+
+        let mut moved_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut moved_action, _r2) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::Advance,
+        ]);
+        show_splash(&mut moved_terminal, &config, &mut moved_action).unwrap();
+        let moved_text = buffer_text(&moved_terminal);
+
+        assert_eq!(
+            baseline_text, moved_text,
+            "非スクロール画像ではMoveDown連打しても描画結果が変わってはいけない"
+        );
+    }
+
+    #[test]
+    fn show_splash_movedown_does_not_instantly_jump_to_target_scroll_offset() {
+        // テスト設計エージェントの申し送り事項3: show_splash は Instant::now() を直接
+        // 呼んでおり時刻注入できないため、厳密なタイミング検証はできない。ここでは
+        // scroll_ease_ms を十分大きく(60秒)取ることで、テスト実行にかかる実時間(通常
+        // 数ミリ秒)ではease進行度がほぼ0のままになる前提を使い、「MoveDown直後に
+        // target_scroll_offsetへ瞬時ジャンプしない」という方向性だけを検証する
+        // （元の観点57-60を1本に統合、テスト設計エージェントの緩和指示に従う）。
+        let fixture_path = banded_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 60_000;
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::Advance,
+        ]);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+        assert!(advanced);
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer.cell((0, 0)).unwrap().bg,
+            Color::Rgb(255, 0, 0),
+            "5回MoveDownした直後でもeaseが進む前は先頭行(赤)のままのはず。\
+             青(グリッド行1以降の色)になっていたら瞬時ジャンプしている"
+        );
+    }
+
+    #[test]
+    fn show_splash_moveup_after_reaching_bottom_starts_moving_up_again() {
+        let fixture_path = per_row_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 0;
+
+        let mut actions = vec![Action::MoveDown; 50];
+        actions.push(Action::MoveUp);
+        actions.push(Action::Advance);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) = action_queue(actions);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+        assert!(advanced);
+
+        let total_rows =
+            crate::image_render::compute_full_width_rows(84, 84, ui::REQUIRED_TOTAL_WIDTH);
+        let visible_rows = ui::REQUIRED_TOTAL_HEIGHT - 1;
+        let expected_offset = total_rows.saturating_sub(visible_rows).saturating_sub(1);
+        let expected_red = (expected_offset as u8).saturating_mul(5);
+        assert_eq!(
+            terminal.backend().buffer().cell((0, 0)).unwrap().bg,
+            Color::Rgb(expected_red, 0, 0),
+            "最下端まで進めた後に↑を1回押したら、表示はただちに1行ぶん上へ戻り始めるはず"
+        );
+    }
+
+    #[test]
+    fn show_splash_moveleft_and_moveright_do_not_change_scroll_offset() {
+        // スプラッシュ画面には左右移動の対象となる複数列選択肢が無いため、
+        // MoveLeft/MoveRight はNoneと同様に無視されるはず（#482、#508）。
+        // スクロール可能な画像でMoveDownによりオフセットを進めた後、MoveLeft/MoveRightを
+        // 連打しても描画結果がMoveDownのみの場合と変わらないことを確認する。
+        let fixture_path = per_row_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 0;
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut baseline_action, _r1) =
+            action_queue(vec![Action::MoveDown, Action::MoveDown, Action::Advance]);
+        show_splash(&mut baseline_terminal, &config, &mut baseline_action).unwrap();
+        let baseline_text = buffer_text(&baseline_terminal);
+
+        let mut moved_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut moved_action, _r2) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveLeft,
+            Action::MoveRight,
+            Action::MoveLeft,
+            Action::Advance,
+        ]);
+        show_splash(&mut moved_terminal, &config, &mut moved_action).unwrap();
+        let moved_text = buffer_text(&moved_terminal);
+
+        assert_eq!(
+            baseline_text, moved_text,
+            "MoveLeft/MoveRightを挟んでもスクロールオフセットは変化してはいけない"
+        );
+    }
+
+    #[test]
+    fn show_splash_advance_interrupts_image_mode_scrolling_and_returns_true_immediately() {
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 1, 1), 1, 1);
+        let config = image_splash_config(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, remaining) =
+            action_queue(vec![Action::MoveDown, Action::MoveDown, Action::Advance]);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+
+        assert!(
+            advanced,
+            "画像モードのスクロール操作の途中でもAdvanceは即座にOk(true)で返るはず"
+        );
+        assert_eq!(
+            *remaining.borrow(),
+            0,
+            "MoveDown x2 + Advance の3件をすべて消費してから返っているはず"
+        );
+    }
+
+    #[test]
+    fn run_screens_shows_splash_when_logo_image_is_set_without_lines() {
+        // #530: logo_image のみが設定されていて lines が空でも should_show_splash() は
+        // true になる(Config::should_show_splashのテストで確認済み)ため、run_screensは
+        // スプラッシュをスキップしてはいけない。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 4, 1), 4, 1);
+        let config = image_splash_config(&fixture_path);
+        assert!(
+            config.should_show_splash(),
+            "logo_imageのみ設定でもshould_show_splashはtrueのはず"
+        );
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let document = name_name_parser::parser::parse("");
+        let mut playback = Playback::from_document(&document);
+        let (mut next_action, _remaining) = action_queue(vec![Action::Quit]);
+
+        run_screens(&mut terminal, &config, &mut playback, &mut next_action).unwrap();
+
+        // スプラッシュがスキップされていれば、この唯一のQuitはevent_loopへ渡り
+        // "0/0" の位置表示が出るはず。実際にはスプラッシュ(画像モード)がまず表示され、
+        // そこでQuitされて終わる(本編のevent_loopへは進まない)ことを確認する。
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Enter"),
+            "スプラッシュ(画像モード)のヒントが表示されているはず, buffer was: {text}"
+        );
+        assert!(
+            !text.contains("0/0"),
+            "event_loopの位置表示は出ていない(本編へ進んでいない)はず, buffer was: {text}"
+        );
     }
 
     // ---- #482: on_advance の選択肢分岐（Choice/jump）配線テスト ----

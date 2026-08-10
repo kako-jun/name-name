@@ -222,3 +222,52 @@ button {
   cursor: not-allowed;
   box-shadow: none;
 }
+
+/* -----------------------------------------------------------------------------
+ * フルスクリーン最大化トグル (#468, NovelPlayer)
+ *
+ * せおはやみ (theo-hayami) の ReaderFrame.astro / global.css (.th-reader__fs-toggle)
+ * と同一の視覚デザイン（kako-jun 直接指示）。44x44 の透明なタップ領域の右上隅に
+ * 20x20 の塗り三角を置き、data-dir（"expand"/"collapse"）で向きを切り替える。
+ * 適用範囲: NovelPlayer のゲーム画面のみ（.theme-desk とは独立、Player/Runtime は
+ * DESIGN.md のトークン適用対象外のためこのボタン専用に色値を直書きする）。
+ * ---------------------------------------------------------------------------*/
+.nn-fs-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  z-index: 10;
+  opacity: 0.2;
+  transition: opacity 0.4s ease;
+}
+.nn-fs-toggle:hover,
+.nn-fs-toggle:focus-visible,
+.nn-fs-toggle:active,
+.nn-fs-toggle.nn-fs-toggle--active {
+  opacity: 1;
+}
+.nn-fs-toggle__triangle {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  background: #b8934f;
+  /* expand: 直角の頂点＝右上隅。斜辺=左上↘右下 */
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+  pointer-events: none;
+}
+.nn-fs-toggle[data-dir='collapse'] .nn-fs-toggle__triangle {
+  /* collapse: 直角の頂点＝左下隅。斜辺は同じ↘ */
+  clip-path: polygon(0 100%, 0 0, 100% 100%);
+}
+.nn-fs-toggle:hover .nn-fs-toggle__triangle,
+.nn-fs-toggle:focus-visible .nn-fs-toggle__triangle {
+  background: #e6c47e;
+}
