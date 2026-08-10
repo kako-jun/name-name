@@ -36,6 +36,7 @@ pub fn parse(input: &str) -> Document {
     let mut split_layout: Option<bool> = None;
     let mut sentence_per_page: Option<bool> = None;
     let mut pixel_art: Option<bool> = None;
+    let mut header: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -179,6 +180,14 @@ pub fn parse(input: &str) -> Document {
                 // テクスチャの拡大縮小フィルタを nearest-neighbor にするか (#466)。`true` / `false` のみ
                 // 受ける（parse_bool_kv）。空・不正値は None のまま（runtime 既定 false ＝従来どおり linear）。
                 pixel_art = parse_bool_kv(&unquote(val.trim()));
+            } else if let Some(val) = line.strip_prefix("header:") {
+                // standalone 再生時のプレイヤーヘッダ出し方 (#519)。`visible`/`hidden`/`collapsed` の
+                // 3択想定だが、値は parser ではバリデーションせず生文字列で透過する（dialog_style /
+                // choice_style と同じ流儀。runtime 側で未知値・空文字は visible にフォールバックする）。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    header = Some(v);
+                }
             }
             pos += 1;
         }
@@ -935,6 +944,7 @@ pub fn parse(input: &str) -> Document {
         split_layout,
         sentence_per_page,
         pixel_art,
+        header,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

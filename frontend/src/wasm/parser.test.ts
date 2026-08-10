@@ -425,6 +425,59 @@ describe('parseMarkdown + normalizeDocument: pixel_art が normalize を生き�
   })
 })
 
+describe('parseMarkdown + normalizeDocument: header が normalize を生き残る (#519)', () => {
+  // このリポで繰り返し起きている事故パターン（#310/#378/#436/#440/#442/#466＝新しい frontmatter
+  // フィールドが Rust parser か normalizeDocument のどちらかで黙って消える）の frontend 側生存確認。
+  // normalizeDocument の列挙に header を書き忘れると WASM が parse した値が
+  // PlayerScreen.normalizeHeaderMode に届かず、standalone ヘッダ抑制（hidden/collapsed）が
+  // 効かなくなる。実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）を通し、Rust parse →
+  // JS normalize（nullIfEmpty）を生き残ることを、モック越しでなく縛る。
+  function docWith(headerLine: string): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      headerLine,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('V1: header: collapsed → doc.header === "collapsed"（値が normalize を生き残る）', async () => {
+    const doc = await parseMarkdown(docWith('header: collapsed'))
+    expect(doc.header).toBe('collapsed')
+  })
+
+  it('V2: header: hidden → doc.header === "hidden"', async () => {
+    const doc = await parseMarkdown(docWith('header: hidden'))
+    expect(doc.header).toBe('hidden')
+  })
+
+  it('V3: header 省略 → doc.header === null（未指定は runtime 既定 visible にフォールバック）', async () => {
+    const minimal = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(minimal)
+    expect(doc.header).toBeNull()
+  })
+})
+
 describe('parseMarkdown: aspect_ratio: auto が実 parse を通して保持される (#442)', () => {
   // fluid モード（NovelPlayer の pickFluidAspectRatio 分岐）の判定元。既存 3 値（16:9/4:3/9:16）と
   // 対等に、Rust parser → normalizeDocument（`aspect_ratio: doc.aspect_ratio` は素通し）を通しても
