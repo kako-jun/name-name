@@ -10,6 +10,19 @@
 //! （Choice イベントを挟んでも、直前までの `event_image` はそのまま後続の `DisplayLine` に
 //! 引き継がれる）。
 //!
+//! ## イベント絵の時間差自動連続表示 (#497)
+//!
+//! `Event::Wait { ms }` はパーサーで構文解析済みだが、以前は TUI ランタイムが完全に無視して
+//! いた。`[イベント絵: A][待機: 200][イベント絵: B]` のように `EventImage` の直後に `Wait` が
+//! 続く並びだけを検出し、その場面を独立した `PlaybackItem::Image` として `items` に反映する
+//! （`Playback::build` 参照）。話者・本文は直前の会話行のものをそのまま引き継ぎ、
+//! `event_image` だけが新しい画像に切り替わる — GUI版 `NovelRenderer` の `Wait` 処理が会話
+//! テキストに触れず、イベント絵レイヤーだけを更新するのと同じ見え方にするため。この item に
+//! 位置している間は [`Playback::pending_wait_ms`] が `Some(ms)` を返し、`main.rs::event_loop`
+//! がプレイヤーの入力を待たずに `ms` 経過後へ自動的に進める。`Wait` を伴わない単発の
+//! `EventImage`（既存スクリプトの大半）は従来どおり item を増やさない — 無条件に item 化すると
+//! 「画像だけのクリック待ちの1手」が新たに増えてしまう回帰になるため。
+//!
 //! ## 選択肢分岐の設計 (#482)
 //!
 //! `Document` の chapters → scenes → events を一直線にフラット化する既存のシンプルな
@@ -127,9 +140,18 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
 /// `ui::draw_choice_list`）が都度行う。上限側の正規化（選択肢数を超える列数の切り詰め）は
 /// [`playback_item_from_event`] がここへ積む前に済ませてある（バグ修正、同関数の
 /// doc コメント参照）。
+///
+/// `Image` は #497 で追加した、テキストを伴わない「画像コマ」専用の item。`Event::EventImage`
+/// の直後に `Event::Wait { ms }` が続く場合だけ生成される（`Playback::build` のスキャン参照）。
+/// 話者・本文はその時点まで表示されていた直前の会話行の値をそのまま引き継ぐ（GUI版
+/// `NovelRenderer` の Wait 処理が会話テキストには触れず、イベント絵レイヤーだけを更新するのと
+/// 同じ見え方にするため）。`event_image` だけがこの item 用に新しく差し替わる。この item に
+/// 到達している間は `Playback::pending_wait_ms` が `Some` を返し、`main.rs::event_loop` が
+/// プレイヤーの入力を待たずに一定時間後へ自動的に進める。
 #[derive(Debug, Clone, PartialEq)]
 enum PlaybackItem {
     Line(DisplayLine),
+    Image(DisplayLine),
     Choice(Vec<ChoiceOption>, Option<u32>),
 }
 
@@ -187,6 +209,12 @@ pub struct Playback {
     /// 常に「同じファイル」判定になり実質無効化される）。`from_merged_document` だけが
     /// 複数の異なる id を持ちうる。
     item_file_ids: Vec<usize>,
+    /// `items[i]` に紐づく自動送りの待機時間（ミリ秒、#497）。`items` と同じ長さを常に保つ。
+    /// `Event::EventImage` の直後に `Event::Wait { ms }` が続いたときだけ、その画像コマ
+    /// （[`PlaybackItem::Image`]）に対応する要素が `Some(ms)` になる。それ以外の item（通常の
+    /// `Line`/`Choice`、および `Wait` を伴わない `EventImage`）は全て `None`
+    /// （[`Playback::pending_wait_ms`] 参照）。
+    item_wait_ms: Vec<Option<u32>>,
     index: usize,
     /// シーンID → そのシーンに属する最初の item の `items` 内インデックス。選択肢確定時の
     /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
@@ -262,8 +290,16 @@ impl Playback {
         }
         let mut items = Vec::new();
         let mut item_file_ids = Vec::new();
+        let mut item_wait_ms = Vec::new();
         let mut scene_start = HashMap::new();
         let mut current_event_image: Option<String> = None;
+        // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
+        // `Event::Wait` が続いたときに生成する画像コマ item（`PlaybackItem::Image`）へ
+        // そのまま引き継ぐ — Wait 中は会話テキストを変えず画像だけが切り替わる、という
+        // GUI版 `NovelRenderer` の Wait 処理と同じ見え方にするため。まだ一度も会話行が
+        // 無ければ「話者なし・本文なし」が初期値になる。
+        let mut current_speaker: Option<String> = None;
+        let mut current_text: Vec<String> = Vec::new();
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
             let file_id = chapter_file_ids
                 .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
@@ -273,7 +309,10 @@ impl Playback {
                 // 重複シーンIDは最初の出現を優先する（GUI版 `allScenes.find` が最初の一致を
                 // 返すのと同じ規約）。
                 scene_start.entry(scene.id.clone()).or_insert(items.len());
-                for event in &scene.events {
+                let events = &scene.events;
+                let mut event_index = 0;
+                while event_index < events.len() {
+                    let event = &events[event_index];
                     match event {
                         // `path` の `..` は `back`（表示位置）と `fade_ms`（イベント個別の
                         // フェード時間上書き）を意図的に捨てている。`fade_ms` は TUI 側では
@@ -282,6 +321,32 @@ impl Playback {
                         // ようなイベント単位のフェード時間上書きは今回の対象外。
                         Event::EventImage { path, .. } => {
                             current_event_image = Some(path.clone());
+                            // 直後が `Event::Wait { ms }` の場合だけ、画像コマ+待機の自動送り
+                            // item を作る（#497、Issue #475 が求める4コマ自動再生の受け皿）。
+                            // それ以外（次が Dialog/EventImage/EventImageExit 等）は従来どおり
+                            // `current_event_image` を更新するだけに留め、item は作らない —
+                            // ここで無条件に item 化すると、`[イベント絵:X]` の直後に台詞が
+                            // 続くだけの既存スクリプトにまで「クリック待ちの画像だけの1手」が
+                            // 増えてしまう（wait_ms 無しの item は自動で進まないため）回帰になる。
+                            //
+                            // `events.get(event_index + 1)` は「直後」の1イベントしか見ない
+                            // ため、`[イベント絵:A][SE:...][待機:200]` のように間に BGM/SE 等の
+                            // 非表示イベントを挟むとこのパターンに一致せず、自動送りが黙って
+                            // 無効化される（`Event::Wait` は下の `_` 分岐で通常どおり処理され、
+                            // 孤立した待機として扱われる）。スクリプト側でこの隣接性を守る必要が
+                            // ある（要ドキュメント化、セルフレビュー should対応）。
+                            if let Some(Event::Wait { ms }) = events.get(event_index + 1) {
+                                items.push(PlaybackItem::Image(DisplayLine {
+                                    speaker: current_speaker.clone(),
+                                    text: current_text.clone(),
+                                    event_image: current_event_image.clone(),
+                                }));
+                                item_file_ids.push(file_id);
+                                item_wait_ms.push(Some(*ms));
+                                // EventImage と Wait の2件をまとめて消費する。
+                                event_index += 2;
+                                continue;
+                            }
                         }
                         Event::EventImageExit { .. } => {
                             current_event_image = None;
@@ -291,21 +356,30 @@ impl Playback {
                                 let item = match item {
                                     PlaybackItem::Line(mut line) => {
                                         line.event_image = current_event_image.clone();
+                                        current_speaker = line.speaker.clone();
+                                        current_text = line.text.clone();
                                         PlaybackItem::Line(line)
                                     }
                                     choice @ PlaybackItem::Choice(_, _) => choice,
+                                    // `playback_item_from_event` は Dialog/Narration/Choice
+                                    // からしか item を作らないため Image は返さない
+                                    // （Image は上の EventImage+Wait 分岐でのみ生成される）。
+                                    image @ PlaybackItem::Image(_) => image,
                                 };
                                 items.push(item);
                                 item_file_ids.push(file_id);
+                                item_wait_ms.push(None);
                             }
                         }
                     }
+                    event_index += 1;
                 }
             }
         }
         Self {
             items,
             item_file_ids,
+            item_wait_ms,
             index: 0,
             scene_start,
             choice_cursor: 0,
@@ -365,7 +439,17 @@ impl Playback {
     /// 現在位置の会話行。現在位置が Choice item、会話行が1件もない、または末尾を過ぎている
     /// 場合は `None`。`sentence_per_page` が有効なときは、Line item の全文ではなく現在の
     /// 文単位ページ（`current_display`）だけを返す (#486)。
+    ///
+    /// 現在位置が画像コマ item（[`PlaybackItem::Image`]、#497）の場合は、`sentence_per_page`
+    /// の設定に関わらずその item が持つ `DisplayLine`（直前の会話行から引き継いだ話者・本文 +
+    /// 新しい `event_image`）をそのまま返す。画像コマは文単位改頁の対象外
+    /// （`sync_sentence_pages` が `Line` にしかマッチしないため `current_display` は
+    /// 積まれない）なので、ここで先に特別扱いしないと `sentence_per_page` 有効時に
+    /// 誤って `None` を返してしまう。
     pub fn current_line(&self) -> Option<&DisplayLine> {
+        if let Some(PlaybackItem::Image(line)) = self.items.get(self.index) {
+            return Some(line);
+        }
         if self.sentence_per_page {
             return self.current_display.as_ref();
         }
@@ -397,6 +481,26 @@ impl Playback {
             Some(PlaybackItem::Choice(_, columns)) => Some(columns.unwrap_or(1).max(1) as usize),
             _ => None,
         }
+    }
+
+    /// 現在位置に紐づく自動送りの待機時間（ミリ秒、#497）。`Some` を返すのは、`items` 構築時に
+    /// `Event::EventImage` の直後に `Event::Wait { ms }` が続いていたことで生成された画像コマ
+    /// item（[`PlaybackItem::Image`]）に位置しているときだけ。`main.rs::event_loop` はこれが
+    /// `Some(ms)` の間、プレイヤーの入力（キー押下）を待たずに `ms` 経過後へ自動的に進める
+    /// （GUI版 `NovelRenderer` の `Wait { ms }` + `waitingForWait` に相当、Issue #475 が求める
+    /// イベント絵の複数コマ自動再生を実現する）。
+    pub fn pending_wait_ms(&self) -> Option<u32> {
+        self.item_wait_ms.get(self.index).copied().flatten()
+    }
+
+    /// `items` 内の生の現在位置（0始まり）。`position()`（会話行のみを数える1始まりのカウント）
+    /// とは異なり、画像コマ item（[`PlaybackItem::Image`]、#497）も1件として数える。
+    /// `main.rs::event_loop` が「実際に別の item へ移動したか」（＝新しい event_image への
+    /// クロスフェードを開始すべきか）を判定するのに使う — 画像コマへの遷移は `position()` の
+    /// 値を変えない（Line item ではないため）ので、`position()` の変化だけを見ていると
+    /// 画像コマへの遷移を検知し損ねる。
+    pub(crate) fn item_index(&self) -> usize {
+        self.index
     }
 
     /// 次の item へ進む。現在位置が選択肢（選択待ち）の場合は、[`Playback::select_current_choice`]
@@ -536,7 +640,9 @@ impl Playback {
         true
     }
 
-    /// 会話行の総数（Choice item は含まない）。
+    /// 会話行の総数（Choice item・画像コマ item は含まない、#497）。画像コマ
+    /// （[`PlaybackItem::Image`]）は元の会話行の話者・本文を引き継いだ表示上の中間状態に
+    /// すぎず、それ自体は新しい会話行ではないため数えない。
     pub fn total(&self) -> usize {
         self.items
             .iter()
@@ -544,9 +650,10 @@ impl Playback {
             .count()
     }
 
-    /// 現在位置が何行目か（1始まり、Choice item は含まない）。現在位置が Choice の場合は、
-    /// そこに至るまでに表示済みの会話行数を返す（例: 3行しゃべった直後に選択肢が出ている
-    /// 状態なら3を返す）。
+    /// 現在位置が何行目か（1始まり、Choice item・画像コマ item は含まない、#497）。現在位置が
+    /// Choice の場合は、そこに至るまでに表示済みの会話行数を返す（例: 3行しゃべった直後に
+    /// 選択肢が出ている状態なら3を返す）。画像コマ自動再生の途中（`pending_wait_ms` が
+    /// `Some`）でも、直前に表示済みだった会話行数のまま変化しない。
     pub fn position(&self) -> usize {
         // `self.items[..=self.index]` だと `index == items.len()`（ジャンプ先シーンが
         // イベント0件かつドキュメント末尾のとき `scene_start` がこの値を取り得る、
@@ -594,9 +701,11 @@ impl Playback {
     #[cfg(test)]
     pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
         let item_file_ids = vec![0; lines.len()];
+        let item_wait_ms = vec![None; lines.len()];
         Self {
             items: lines.into_iter().map(PlaybackItem::Line).collect(),
             item_file_ids,
+            item_wait_ms,
             index: 0,
             scene_start: HashMap::new(),
             choice_cursor: 0,
@@ -2232,6 +2341,370 @@ mod tests {
             columns,
             Some(3),
             "選択肢数(8)以下の列数(3)はクランプされないはず"
+        );
+    }
+
+    // ---- #497: イベント絵の時間差自動連続表示（画像コマ item の構築・状態遷移） ----
+    //
+    // テストケース一覧のデシジョンテーブル1（`Playback::build` の EventImage/Wait走査）・
+    // テーブル2のうち Playback 単体で検証できる部分（item_index/pending_wait_ms/advance の
+    // 状態遷移）をここでカバーする。event_loop 側のタイマー駆動・入力スタベーション回帰は
+    // main.rs 側のテストで検証する。
+
+    fn wait(ms: u32) -> Event {
+        Event::Wait { ms }
+    }
+
+    #[test]
+    fn build_event_image_immediately_followed_by_wait_creates_image_item_with_wait_ms() {
+        // デシジョンテーブル1#1: EventImage直後がWait、直前に会話行あり、Wait後は末尾。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["こんにちは"]),
+            event_image("a.webp"),
+            wait(200),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "会話行から画像コマitemへ進めるはず");
+
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        let line = pb
+            .current_line()
+            .expect("画像コマitemもcurrent_lineを持つはず");
+        assert_eq!(
+            line.speaker.as_deref(),
+            Some("A"),
+            "話者は直前の会話行を引き継ぐ"
+        );
+        assert_eq!(line.text, vec!["こんにちは".to_string()]);
+        assert_eq!(line.event_image.as_deref(), Some("a.webp"));
+    }
+
+    #[test]
+    fn build_event_image_without_following_wait_does_not_create_image_item() {
+        // デシジョンテーブル1#6（回帰）: 直後がWaitでない既存スクリプトの大半はitem化しない。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            dialog(Some("A"), vec!["hello"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.total(), 1, "画像コマitemは増えず会話行1件のみのはず");
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.speaker.as_deref(), Some("A"));
+        assert_eq!(
+            line.event_image.as_deref(),
+            Some("a.webp"),
+            "event_imageは従来どおりLine itemに反映されるはず"
+        );
+        assert_eq!(pb.pending_wait_ms(), None);
+    }
+
+    #[test]
+    fn build_event_image_as_last_event_in_scene_without_wait_does_not_panic_or_create_item() {
+        // デシジョンテーブル1#7: EventImageがシーン末尾で次要素が無い（events.get(+1)がNone）。
+        // panicせず、item化もされないことを確認する。
+        let doc = doc_single_scene(vec![dialog(Some("A"), vec!["hi"]), event_image("a.webp")]);
+        let pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.total(), 1, "末尾のEventImage単体はitem化されないはず");
+        assert!(pb.is_at_end());
+    }
+
+    #[test]
+    fn build_consecutive_event_image_wait_pairs_create_multiple_image_items_in_order() {
+        // デシジョンテーブル1#3: EventImage+Waitの連鎖が複数連続する。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["look"]),
+            event_image("a.webp"),
+            wait(100),
+            event_image("b.webp"),
+            wait(200),
+            event_image("c.webp"),
+            wait(300),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance());
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("a.webp")
+        );
+
+        assert!(pb.advance());
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("b.webp")
+        );
+
+        assert!(pb.advance());
+        assert_eq!(pb.pending_wait_ms(), Some(300));
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("c.webp")
+        );
+        assert!(pb.is_at_end(), "3組目のWait後は末尾のはず");
+    }
+
+    #[test]
+    fn build_event_image_wait_followed_by_dialog_resumes_normal_line_with_carried_event_image() {
+        // デシジョンテーブル1#2: Wait後にDialogが続く場合、通常のLine itemへ復帰し、
+        // event_imageはそのまま引き継がれる。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["intro"]),
+            event_image("a.webp"),
+            wait(100),
+            dialog(Some("B"), vec!["next line"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "画像コマitemへ");
+        assert!(pb.advance(), "通常のLine itemへ復帰");
+
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "通常のLine itemに戻ったのでwait_msは無いはず"
+        );
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert_eq!(line.text, vec!["next line".to_string()]);
+        assert_eq!(
+            line.event_image.as_deref(),
+            Some("a.webp"),
+            "event_imageは画像コマを経ても引き継がれ続けるはず"
+        );
+    }
+
+    #[test]
+    fn build_event_image_wait_before_any_dialog_has_none_speaker_and_empty_text() {
+        // デシジョンテーブル1#8: 冒頭がいきなりEventImage+Wait（会話行が一度も無い）。
+        let doc = doc_single_scene(vec![event_image("a.webp"), wait(50)]);
+        let pb = Playback::from_document(&doc);
+
+        let line = pb.current_line().expect("先頭itemが画像コマ自身になるはず");
+        assert_eq!(line.speaker, None);
+        assert_eq!(line.text, Vec::<String>::new());
+        assert_eq!(line.event_image.as_deref(), Some("a.webp"));
+    }
+
+    #[test]
+    fn build_orphan_wait_without_preceding_event_image_is_ignored() {
+        // デシジョンテーブル1#10: 先行するEventImageが無い孤立したWaitは従来どおり無視される
+        // （Waitはdisplay_line_from_event/playback_item_from_eventのどちらもNoneを返す）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            wait(100),
+            dialog(Some("B"), vec!["there"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.total(), 2, "孤立Waitはitem数に影響しないはず");
+        assert_eq!(pb.pending_wait_ms(), None);
+        assert!(pb.advance());
+        assert_eq!(pb.current_line().unwrap().speaker.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn build_event_image_followed_by_wait_display_complete_does_not_create_image_item() {
+        // デシジョンテーブル1#9: 直後が`Event::Wait{ms}`ではなく別variantの
+        // `Event::WaitDisplayComplete`（`[待機: 表示完了]`）だと、パターン不一致で
+        // 画像コマitemは作られない（型取り違え検出）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            Event::WaitDisplayComplete,
+            dialog(Some("B"), vec!["there"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.total(),
+            2,
+            "WaitDisplayCompleteはEventImageの直後でも画像コマitemを作らないはず"
+        );
+        assert!(pb.advance());
+        let line = pb.current_line().unwrap();
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert_eq!(
+            line.event_image.as_deref(),
+            Some("a.webp"),
+            "event_image自体は通常どおり引き継がれる"
+        );
+        assert_eq!(pb.pending_wait_ms(), None);
+    }
+
+    #[test]
+    fn build_event_image_wait_zero_ms_creates_image_item_with_wait_ms_zero_not_none() {
+        // 境界値: ms=0でもSome(0)が保持され、Noneに丸められないこと。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            wait(0),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance());
+        assert_eq!(
+            pb.pending_wait_ms(),
+            Some(0),
+            "Some(0)とNoneは区別されなければならない"
+        );
+    }
+
+    #[test]
+    fn pending_wait_ms_is_none_for_ordinary_line_and_choice_items() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            choice(vec![("go", "1-1")]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.pending_wait_ms(), None, "Line item上ではNoneのはず");
+        pb.advance();
+        assert_eq!(pb.pending_wait_ms(), None, "Choice item上でもNoneのはず");
+    }
+
+    #[test]
+    fn pending_wait_ms_toggles_some_and_none_across_advance() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            wait(150),
+            dialog(Some("B"), vec!["bye"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.pending_wait_ms(), None, "会話行Aの時点ではNone");
+        pb.advance();
+        assert_eq!(pb.pending_wait_ms(), Some(150), "画像コマ到達でSome");
+        pb.advance();
+        assert_eq!(pb.pending_wait_ms(), None, "会話行Bに復帰してNoneへ戻る");
+    }
+
+    #[test]
+    fn item_index_counts_image_items_while_position_does_not() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            wait(100),
+            dialog(Some("B"), vec!["bye"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(pb.item_index(), 0);
+        assert_eq!(pb.position(), 1);
+
+        pb.advance(); // 画像コマitemへ
+        assert_eq!(pb.item_index(), 1, "item_indexは画像コマも1件として数える");
+        assert_eq!(
+            pb.position(),
+            1,
+            "positionは画像コマを数えないので直前のままのはず"
+        );
+
+        pb.advance(); // 会話行Bへ
+        assert_eq!(pb.item_index(), 2);
+        assert_eq!(pb.position(), 2);
+    }
+
+    #[test]
+    fn current_line_on_image_item_ignores_sentence_per_page_setting() {
+        // sentence_per_page有効時でも、画像コマitemは文単位分割の対象外で、直前会話行の
+        // 全文をそのままDisplayLineとして返す（current_lineの特別扱いが無いと、
+        // current_display(Line専用)を参照して誤ってNoneを返してしまう）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1文目。2文目。"]),
+            event_image("a.webp"),
+            wait(100),
+        ]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+
+        assert!(pb.advance(), "1文目→2文目のページ送り（同一Line item内）");
+        assert!(pb.advance(), "2文目→画像コマitemへ");
+
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+        let line = pb
+            .current_line()
+            .expect("画像コマitemはsentence_per_page有効でもcurrent_lineを持つはず");
+        assert_eq!(
+            line.text,
+            vec!["1文目。2文目。".to_string()],
+            "話者・本文は直前会話行の全文をそのまま引き継ぐ（文単位分割はしない）"
+        );
+        assert_eq!(line.event_image.as_deref(), Some("a.webp"));
+    }
+
+    #[test]
+    fn total_and_position_exclude_image_items_when_interposed_between_lines() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1"]),
+            event_image("a.webp"),
+            wait(50),
+            event_image("b.webp"),
+            wait(50),
+            dialog(Some("B"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.total(),
+            2,
+            "画像コマが2件挟まっていても会話行総数は2のまま"
+        );
+        pb.advance(); // 画像コマ1
+        pb.advance(); // 画像コマ2
+        pb.advance(); // 会話行B
+        assert_eq!(
+            pb.position(),
+            2,
+            "画像コマを2件経由してもpositionは会話行の数だけ進むはず"
+        );
+    }
+
+    #[test]
+    fn advance_with_sentence_per_page_pages_through_multi_sentence_line_before_reaching_image_item()
+    {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1文目。2文目。"]),
+            event_image("a.webp"),
+            wait(100),
+        ]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+
+        assert_eq!(pb.item_index(), 0);
+        assert!(pb.advance(), "1文目から2文目へのページ送り");
+        assert_eq!(
+            pb.item_index(),
+            0,
+            "同一Line item内のページ送りなのでitem_indexは変わらない"
+        );
+
+        assert!(pb.advance(), "2文目を読み終えて画像コマitemへ進む");
+        assert_eq!(pb.item_index(), 1);
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+    }
+
+    #[test]
+    fn advance_from_terminal_image_item_returns_false_and_pending_wait_ms_still_some() {
+        // 末尾境界: 末尾の画像コマからはこれ以上進めず、advance()はfalseを返す。
+        // no-opのadvance後もpending_wait_msは変化しない（main.rs側のno-op判定が
+        // この不変を前提にしている）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["hi"]),
+            event_image("a.webp"),
+            wait(0),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance(); // 末尾の画像コマitemへ
+        assert!(pb.is_at_end());
+        assert_eq!(pb.pending_wait_ms(), Some(0));
+
+        assert!(!pb.advance(), "末尾の画像コマからはこれ以上進めない");
+        assert_eq!(
+            pb.pending_wait_ms(),
+            Some(0),
+            "no-opのadvance後もwait_msは変化しないはず"
         );
     }
 }

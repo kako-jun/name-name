@@ -65,6 +65,8 @@ Worker はパースしない。GitHub から Markdown を取得してそのま�
 
 `tui/` の選択肢分岐（`Playback`, #482）はシーン境界を越えてフラットに読み進む設計で、GUI版と異なり jump 先シーンを読み終えても終劇にならない。原稿を書く側は、選択肢の分岐先シーンをドキュメント末尾に置くか、必ず次の `Choice` で明示的に閉じること — さもないとドキュメント順で後続の別シーンの内容がそのまま漏れて表示されてしまう（設計の詳細は `tui/src/playback.rs` 冒頭のdocコメント参照）。この割り切りは単一ファイル前提だったため、複数の `.md` を一括マージする `multi_doc`（#496）以降は例外を設けている: `Playback::from_merged_document` で構築すると各 item に由来ファイルの id が刻まれ、暗黙の `advance()` はファイル境界（＝マージ対象ファイルの境目）を越えず、そこに到達すると `is_at_end()` になる。選択肢ジャンプ（`select_current_choice`）はこの制限の対象外で、別ファイルのシーンへ明示的に飛ぶのは従来どおり成功する。
 
+`tui/` の `[待機: Nms]`（#497）はGUI版と異なり汎用実装ではなく、`Event::EventImage` の直後に `Event::Wait { ms }` が続く場合だけを `Playback::build` が走査時にパターン検出し、独立した画像コマ item（`PlaybackItem::Image`）と自動送りの締切（`main.rs::event_loop` の `wait_deadline`）を生成する狭いスコープの実装（GUI版 `NovelRenderer` の `Wait{ms}` + `waitingForWait` はどの文脈の `Wait` でも汎用的に待機する）。`events.get(event_index + 1)` で直後の1イベントしか見ないため、`[イベント絵:][SE:][待機:]` のように間に他のイベントを挟むと不一致になり自動送りは発火しない。それ以外の文脈にある `Wait` は従来どおり無視される（TUI版はそもそも `Wait` 全般を実装しておらず、この隣接パターンだけを新規サポートした）。設計の詳細は `tui/src/playback.rs` 冒頭のdocコメント参照。原稿を書く側の注意点は `docs/spec/markdown-v0.1.md` の「イベント絵」節参照。
+
 ## データフロー
 
 ### 編集時

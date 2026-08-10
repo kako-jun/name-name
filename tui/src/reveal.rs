@@ -183,11 +183,13 @@ pub fn should_show_page_indicator(
 /// `true→true` のまま一度も `false` を経由せず、この関数の「非表示→表示遷移」判定が
 /// 発火しない。この関数はフレーム間の `show_page_indicator` の値の差分しか見ておらず、
 /// 「会話行そのものが切り替わったか」を知らないため、これは原理的にこの関数だけでは
-/// 検出できない。呼び出し側（`main.rs` の `event_loop`）が `playback.position()` の変化
-/// （＝実際に新しい行へ進んだ）を検知して `was_shown` を強制的に `false` にリセットして
-/// から次フレームでこの関数を呼ぶことで、GUI版 `NovelRenderer` が新しい行/ページが始まる
-/// たびに明示的に `setIndicatorVisible(false)` を呼んでからタイプライターを開始するのと
-/// 同じ「行が変わったら一旦強制的に隠す」保証を得ている。
+/// 検出できない。呼び出し側（`main.rs` の `event_loop`）が `playback.item_index()` の変化
+/// （＝実際に新しい item へ進んだ。会話行だけを数える `position()` だと画像コマ item への
+/// 遷移を取りこぼすため、#497 で `item_index()` に乗り換え済み）を検知して `was_shown` を
+/// 強制的に `false` にリセットしてから次フレームでこの関数を呼ぶことで、GUI版
+/// `NovelRenderer` が新しい行/ページが始まるたびに明示的に `setIndicatorVisible(false)` を
+/// 呼んでからタイプライターを開始するのと同じ「行が変わったら一旦強制的に隠す」保証を
+/// 得ている。
 pub fn indicator_blink_started_at(
     was_shown: bool,
     show_page_indicator: bool,
