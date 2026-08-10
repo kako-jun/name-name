@@ -91,18 +91,27 @@ impl Default for TypewriterConfig {
 
 /// 起動直後に表示するスプラッシュ画面の設定。
 ///
-/// `enabled` が `false`（既定）または `lines` が空の場合はスプラッシュを表示せず、
-/// 従来通りいきなり本編から始まる（後方互換）。ロゴの内容（ASCII アート本体）は
-/// ゲームごとに異なるため、`tui` 本体には一切埋め込まず、この設定を通じて外部化する。
+/// `enabled` が `false`（既定）または（`logo_image` が `None` かつ `lines` が空）の場合は
+/// スプラッシュを表示せず、従来通りいきなり本編から始まる（後方互換）。ロゴの内容
+/// （ASCII アート本体・画像ファイル）はゲームごとに異なるため、`tui` 本体には一切
+/// 埋め込まず、この設定を通じて外部化する。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct SplashConfig {
     /// スプラッシュ画面を表示するかどうか。
     pub enabled: bool,
-    /// 画面中央に表示するロゴの行。1要素が1行に対応する。
+    /// 画面中央に表示するロゴの行。1要素が1行に対応する。`logo_image` が `Some` の場合は
+    /// 無視され、フルキャンバス画像表示モード（#530）が優先される。
     pub lines: Vec<String>,
     /// ロゴ行の文字色名（`ratatui::style::Color` の `FromStr` が解釈できる名前）。
+    /// `logo_image` モードでは使わない（テキスト行が無いため）。
     pub color: String,
+    /// スプラッシュをテキスト行の代わりに画像で表示する場合のファイルパス（#530）。
+    /// `event_image.assets_dir` を基点とする相対パスとして解決される
+    /// （[`Config::resolve_splash_logo_path`]、`DisplayLine::event_image` と同じ解決規則）。
+    /// `None`（既定）なら従来どおり `lines` のテキストモードにフォールバックする
+    /// （TOML未指定時・画像ロード失敗時のどちらも）。
+    pub logo_image: Option<PathBuf>,
 }
 
 impl Default for SplashConfig {
@@ -111,6 +120,7 @@ impl Default for SplashConfig {
             enabled: false,
             lines: Vec::new(),
             color: "white".to_string(),
+            logo_image: None,
         }
     }
 }
@@ -212,9 +222,10 @@ impl Config {
         self.player_speakers.iter().any(|s| s == speaker)
     }
 
-    /// スプラッシュ画面を表示すべきか（`enabled` かつロゴ行が1行以上ある場合）。
+    /// スプラッシュ画面を表示すべきか（`enabled` かつ、画像ロゴ（`logo_image`）が
+    /// 設定されているかロゴ行が1行以上ある場合、#530）。
     pub fn should_show_splash(&self) -> bool {
-        self.splash.enabled && !self.splash.lines.is_empty()
+        self.splash.enabled && (self.splash.logo_image.is_some() || !self.splash.lines.is_empty())
     }
 
     /// 話者（Dialog の character）から適用すべき文字色名を返す。
@@ -243,6 +254,16 @@ impl Config {
             return None;
         }
         Some(self.event_image.assets_dir.join(relative))
+    }
+
+    /// `splash.logo_image`（`Some` の場合）を実ファイルパスへ解決する（#530）。
+    /// `event_image.assets_dir` を基点にする点・親ディレクトリ参照/絶対パスを拒む点は
+    /// [`Config::resolve_image_path`] と同じ（内部でそのまま再利用する）。`logo_image` が
+    /// `None`、または安全でないパスの場合は `None` を返す — 呼び出し側（`ui::draw_splash`）
+    /// はテキストモード（`splash.lines`）へフォールバックする。
+    pub fn resolve_splash_logo_path(&self) -> Option<PathBuf> {
+        let logo_image = self.splash.logo_image.as_ref()?;
+        self.resolve_image_path(&logo_image.to_string_lossy())
     }
 }
 
