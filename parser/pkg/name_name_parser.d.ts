@@ -338,6 +338,18 @@ export interface Document {
      * frontmatter `pixel_art:` から流す。
      */
     pixel_art?: boolean;
+    /**
+     * standalone 再生（埋め込みでない `/play/...` 直接オープン）時のプレイヤーヘッダ（戻る＋タイトル）
+     * の出し方 (#519)。`\"visible\"`（既定・後方互換＝ヘッダを出す）/ `\"hidden\"`（完全非表示。戻る手段が
+     * 無くなる想定なので原稿作者の判断に委ねる）/ `\"collapsed\"`（折りたたみ。普段は隠れているが
+     * タップ等の操作で一時的に展開できる）の3択。iframe 埋め込み判定（`isEmbedded()`、#392）とは
+     * **独立の軸**——埋め込み時は本設定に関係なく従来どおりヘッダを出さない。standalone でも
+     * 戻られたくない作品（せおはやみ等の delivery ショーケースを埋め込み以外の経路で見せる場合）向け。
+     * 値は parser でバリデーションせず生文字列で透過する（`dialog_style` / `choice_style` と同じ流儀）。
+     * 未知値・空文字は None 扱いとし、runtime 側で `\"visible\"` にフォールバックする（後方互換）。
+     * frontmatter `header:` から流す。
+     */
+    header?: string;
     chapters: Chapter[];
 }
 

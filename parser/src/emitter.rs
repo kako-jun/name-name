@@ -116,6 +116,11 @@ pub fn emit(doc: &Document) -> String {
         if let Some(v) = doc.pixel_art {
             out.push_str(&format!("pixel_art: {v}\n"));
         }
+        // Emit header only when present (#519)。dialog_style と同じく文字列 enum で
+        // 「Some のときだけ出す」流儀（明示指定をそのまま保持）。
+        if let Some(ref h) = doc.header {
+            out.push_str(&format!("header: \"{h}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1293,6 +1298,7 @@ mod tests {
             split_layout: None,
             sentence_per_page: None,
             pixel_art: None,
+            header: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1545,6 +1551,7 @@ mod tests {
             split_layout: None,
             sentence_per_page: None,
             pixel_art: None,
+            header: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),
