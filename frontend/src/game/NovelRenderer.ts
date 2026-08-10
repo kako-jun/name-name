@@ -996,6 +996,11 @@ export class NovelRenderer {
           `[name-name] confinement: sceneId "${sceneId}" は allScenes にも存在しません。終劇として扱いますが、原稿の typo の可能性があります（意図した圏外遷移なら無視してください）。`
         )
       }
+      // ここは onEndCallback の有無を見ずに常に endStory() を呼ぶ（#386 由来）。advance() の
+      // 自然消化パス（#470）は onEndCallback 登録時に完全委譲し endStory() を呼ばないのと非対称だが、
+      // confinedSceneIds（PlayerScreen の `?scene=` 埋め込み限定）と onEndCallback（EditorScreen の
+      // VideoExporter 限定）が同時に有効になる画面配線が現状存在しないため到達不可能で実害はない。
+      // 将来この2つが同一画面で両立する機能が来たら、この非対称性を再点検すること。
       this.endStory()
       return
     }
@@ -2638,7 +2643,17 @@ export class NovelRenderer {
       this.dialogBox.setDialog(null, '')
       this.dialogBox.setIndicatorVisible(false)
       this.updateCounter()
-      this.onEndCallback?.()
+      if (this.onEndCallback) {
+        // VideoExporter 等、onEnd/setOnEnd で専用の終了処理が登録されている場合はそちらに
+        // 完全に委譲する（endStory() の演出フェード・"to be continued..." 表示を重ねない）。
+        this.onEndCallback()
+      } else {
+        // [選択] を持たないまま記述が尽きたケース (#470)。confinement 経由の正規終劇
+        // （choice が圏外シーンへジャンプ→ jumpToScene 内で endStory()）とは発生源が違うが、
+        // 「無反応で固まる」を避けるため同じ終劇処理（"to be continued..." 表示・BGM 停止・
+        // 背景/立ち絵フェード）を流用する。endStory() 自身が二重発火ガードを持つ。
+        this.endStory()
+      }
       return
     }
 
@@ -2647,6 +2662,16 @@ export class NovelRenderer {
     // 立ち絵 →（同時/直後に）テキスト の順序保証 (#293)。立ち絵 sprite を同期生成してから
     // スナップショットを記録（afterShow）し、render を順序保証して呼ぶ。
     this.showCharacterThenRender(() => this.pushSnapshot())
+  }
+
+  /**
+   * letterbox/pillarbox の黒帯（canvas の外側）タップ用の公開 API (#467)。
+   * canvas 自身に張っている `pointerdown` リスナー（`handleAdvance`）と全く同じ処理を、
+   * canvas の外側（NovelPlayer 側の `fluidRootRef` の黒帯部分）からも起動できるようにする。
+   * 黒帯には canvas が無いため canvas 自身のリスナーは発火しない — その代替経路。
+   */
+  handleOutsideCanvasTap(): void {
+    this.handleAdvance()
   }
 
   /**
