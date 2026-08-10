@@ -112,6 +112,12 @@ pub struct SplashConfig {
     /// `None`（既定）なら従来どおり `lines` のテキストモードにフォールバックする
     /// （TOML未指定時・画像ロード失敗時のどちらも）。
     pub logo_image: Option<PathBuf>,
+    /// フルキャンバス画像表示モードのスクロール（`Action::MoveUp`/`MoveDown`）を
+    /// 目標位置へなめらかに追従させる ease-out アニメーションの所要時間（ミリ秒、
+    /// kako-jun追加要望）。`event_image.crossfade_ms`（[`EventImageConfig::crossfade_ms`]）と
+    /// 同じ「設定ファイルで所要時間msを指定できる」方式。0 にするとアニメーション無しの
+    /// 即時ジャンプになる（[`crate::image_render::compute_scroll_ease_progress`] 参照）。
+    pub scroll_ease_ms: u64,
 }
 
 impl Default for SplashConfig {
@@ -121,6 +127,7 @@ impl Default for SplashConfig {
             lines: Vec::new(),
             color: "white".to_string(),
             logo_image: None,
+            scroll_ease_ms: 300,
         }
     }
 }
