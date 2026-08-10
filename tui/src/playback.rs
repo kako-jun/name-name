@@ -23,6 +23,21 @@
 //! `EventImage`（既存スクリプトの大半）は従来どおり item を増やさない — 無条件に item 化すると
 //! 「画像だけのクリック待ちの1手」が新たに増えてしまう回帰になるため。
 //!
+//! ### 暗転で終わる自動連続表示 (#475)
+//!
+//! `Event::Blackout`（#512）は本来、既存の Line/Choice/Image item に「表示中は暗転しているか」
+//! のフラグ（`item_blackout`）を後付けするだけで、暗転自体を運ぶ item を単独では作らない。この
+//! ため `[イベント絵:A][待機:200][イベント絵:B][待機:200][暗転]` のように、`[暗転]` の後に
+//! 表示すべき会話行が一つも続かない原稿（route10 最終回の「目を閉じて暗転して終わる」演出が
+//! これに当たる）では、上記の EventImage+Wait 自動送りの連鎖が「暗転を表示する item」へ着地
+//! できず、暗転が画面に一度も出ないまま再生が終わってしまう。これを防ぐため、EventImage+Wait
+//! のパターン検出をさらに一段拡張し、`Wait` の直後が `Event::Blackout` の場合は、暗転状態を
+//! 焼き付けた追加の `PlaybackItem::Image` を生成する（`Playback::build` 参照）。この item は
+//! さらなる自動送りを持たない（`item_wait_ms` は `None`）— 「閉じきった最後のコマで暗転へ
+//! 移る」で連鎖は完結し、暗転後に別の item へ自動で進む理由が無いため。オン/オフどちらの
+//! `Event::Blackout` にも同じ経路で対応するが、実際にこの拡張を要求した route10 最終回の
+//! ユースケースはオン（暗転して終わる）のみ。
+//!
 //! ## 選択肢分岐の設計 (#482)
 //!
 //! `Document` の chapters → scenes → events を一直線にフラット化する既存のシンプルな
@@ -54,7 +69,7 @@
 
 use std::collections::HashMap;
 
-use name_name_parser::models::{ChoiceOption, Document, Event};
+use name_name_parser::models::{BlackoutAction, ChoiceOption, Document, Event};
 
 use crate::sentence;
 
@@ -215,6 +230,14 @@ pub struct Playback {
     /// `Line`/`Choice`、および `Wait` を伴わない `EventImage`）は全て `None`
     /// （[`Playback::pending_wait_ms`] 参照）。
     item_wait_ms: Vec<Option<u32>>,
+    /// `items[i]` の表示時点で暗転しているべきか（`Event::Blackout`、#512）。`items` と同じ
+    /// 長さを常に保つ（`item_file_ids` と同じ並行 Vec のパターン）。GUI版 `NovelRenderer` が
+    /// `blackoutOverlay.visible` を `[暗転]`/`[暗転解除]` の直後から次に切り替わるまで
+    /// 宣言的に保持し続ける（＝現在暗転中かどうかだけを見る state、`setBlackout` 参照）のを、
+    /// TUI では「その item が生成された時点の暗転状態を焼き付けて持ち回る」形で再現する。
+    /// `Event::Choice` item も対象に含む（暗転中に選択肢が出る原稿は今回のスコープ外だが、
+    /// 状態追跡自体は他の非表示イベントと同じ走査ループの中で行うため、除外する理由がない）。
+    item_blackout: Vec<bool>,
     index: usize,
     /// シーンID → そのシーンに属する最初の item の `items` 内インデックス。選択肢確定時の
     /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
@@ -291,6 +314,7 @@ impl Playback {
         let mut items = Vec::new();
         let mut item_file_ids = Vec::new();
         let mut item_wait_ms = Vec::new();
+        let mut item_blackout = Vec::new();
         let mut scene_start = HashMap::new();
         let mut current_event_image: Option<String> = None;
         // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
@@ -300,6 +324,7 @@ impl Playback {
         // 無ければ「話者なし・本文なし」が初期値になる。
         let mut current_speaker: Option<String> = None;
         let mut current_text: Vec<String> = Vec::new();
+        let mut current_blackout = false;
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
             let file_id = chapter_file_ids
                 .map(|ids| ids.get(chapter_index).copied().unwrap_or(chapter_index))
@@ -343,13 +368,82 @@ impl Playback {
                                 }));
                                 item_file_ids.push(file_id);
                                 item_wait_ms.push(Some(*ms));
-                                // EventImage と Wait の2件をまとめて消費する。
-                                event_index += 2;
+                                // #512 統合前は無かった並行 Vec。ここへの push 漏れは
+                                // `item_blackout` を `items` より1件短くし、以降の全 item の
+                                // `is_blackout()` 判定を静かにズラす（#475 実装時に発見した
+                                // マージ由来のバグ、要修正）。
+                                item_blackout.push(current_blackout);
+
+                                // `Event::Wait` のさらに直後が `Event::Blackout` の場合、
+                                // 暗転状態（オン/オフいずれも）を表示する独立した item を追加で
+                                // 生成する（Issue #475）。#512 の `Event::Blackout` 処理
+                                // （このmatchの少し下の腕）は、既存の Line/Choice/Image item に
+                                // 「表示中は暗転しているか」のフラグを後付けするだけで、暗転
+                                // 自体を運ぶ item を単独では作らない。そのため
+                                // `[イベント絵:C][待機:200][暗転]` のように、暗転の後に表示
+                                // すべき会話行が続かない原稿では、自動送りの連鎖が「暗転を表示
+                                // する item」へ着地できず、暗転が画面に一度も出ないまま終わって
+                                // しまう（Issue #475 の現状分析）。
+                                //
+                                // EventImage+Wait の2件消費に、Blackout も続く場合だけ+1する。
+                                //
+                                // 既知の制約1（Issue #475でスコープ外と判定済み、対応しない）:
+                                // `events` はここでは `&scene.events`（シーンスコープ）のみを
+                                // 見ているため、`[イベント絵][待機]` がシーン末尾・`[暗転]` が
+                                // 次シーン先頭、という原稿ではこのパターンに一致せず検出漏れに
+                                // なる（シーン境界をまたいだ Wait+Blackout 連鎖は検出できない）。
+                                // Wait+Blackout の連鎖は同一シーン内に収める必要がある。
+                                // シーン構造（`##` 見出し区切り）上、この演出を追記する箇所は
+                                // 単一シーンに収まる設計になっていると推測されるが、現時点で
+                                // Gymnasia 側に「目を閉じて暗転して終わる」シーケンス
+                                // （`[暗転]` タグ）自体を含む原稿がまだ一件も存在しないため
+                                // （画像素材が未制作で暫定対応中、Issue本文参照）、実データでの
+                                // 検証はできていない。実データが追加された時点で再検証が必要。
+                                //
+                                // 既知の制約2（同、対応しない）: `[イベント絵][待機][場面転換]`
+                                // で終わる原稿は、`Event::SceneTransition` がこの検出パターンに
+                                // 含まれていないため、`Event::Blackout` とは非対称に「暗転解除
+                                // 相当の item」が生成されない（`SceneTransition` 自体は下の match
+                                // 腕で `current_blackout` を更新するが、Wait 直後の検出はしない）。
+                                let mut consumed = 2;
+                                if let Some(Event::Blackout { action }) =
+                                    events.get(event_index + 2)
+                                {
+                                    current_blackout = matches!(action, BlackoutAction::On);
+                                    items.push(PlaybackItem::Image(DisplayLine {
+                                        speaker: current_speaker.clone(),
+                                        text: current_text.clone(),
+                                        event_image: current_event_image.clone(),
+                                    }));
+                                    item_file_ids.push(file_id);
+                                    // 暗転item自体はさらなる自動送りを持たない —
+                                    // 「閉じきった最後のコマで暗転へ移る」で連鎖は完結し、
+                                    // 暗転後にまた別のitemへ自動で進む必要は無い（#475スコープ）。
+                                    item_wait_ms.push(None);
+                                    item_blackout.push(current_blackout);
+                                    consumed = 3;
+                                }
+                                event_index += consumed;
                                 continue;
                             }
                         }
                         Event::EventImageExit { .. } => {
                             current_event_image = None;
+                        }
+                        // GUI版 `setBlackout` 相当（#512）。オン/オフの2状態を単純に上書きする
+                        // だけの宣言的 state で、`current_event_image` と同じ「直近の値を次の
+                        // item に焼き付ける」走査パターンに乗せる。
+                        Event::Blackout { action } => {
+                            current_blackout = matches!(action, BlackoutAction::On);
+                        }
+                        // GUI版 `NovelRenderer.processDirective` の `Event::SceneTransition` 相当
+                        // （`this.setBlackout(false)`、#512）。spec（markdown-v0.1.md）は
+                        // `[場面転換]` を「背景クリア + 暗転解除」と定義しており、`[暗転]` で
+                        // オンにした暗転を明示的にオフへ戻す。背景クリア相当の永続 state を
+                        // TUI 側は持たない（`current_event_image`/`current_blackout` 以外に
+                        // クリア対象がない）ため、このスコープでは暗転解除のみ実装する。
+                        Event::SceneTransition => {
+                            current_blackout = false;
                         }
                         _ => {
                             if let Some(item) = playback_item_from_event(event) {
@@ -369,6 +463,7 @@ impl Playback {
                                 items.push(item);
                                 item_file_ids.push(file_id);
                                 item_wait_ms.push(None);
+                                item_blackout.push(current_blackout);
                             }
                         }
                     }
@@ -380,6 +475,7 @@ impl Playback {
             items,
             item_file_ids,
             item_wait_ms,
+            item_blackout,
             index: 0,
             scene_start,
             choice_cursor: 0,
@@ -457,6 +553,13 @@ impl Playback {
             Some(PlaybackItem::Line(line)) => Some(line),
             _ => None,
         }
+    }
+
+    /// 現在位置の item が暗転中に表示されるべきか（`Event::Blackout`、#512）。
+    /// `items` が空、または現在位置が末尾を過ぎている場合は暗転していない扱い（`false`）。
+    /// GUI版 `blackoutOverlay.visible` に相当する、現在位置だけを見る宣言的な問い合わせ。
+    pub fn is_blackout(&self) -> bool {
+        self.item_blackout.get(self.index).copied().unwrap_or(false)
     }
 
     /// 現在位置が選択肢なら `(選択肢一覧, カーソル位置, グリッド列数)` を返す。会話行の途中や
@@ -702,10 +805,12 @@ impl Playback {
     pub(crate) fn from_lines(lines: Vec<DisplayLine>) -> Self {
         let item_file_ids = vec![0; lines.len()];
         let item_wait_ms = vec![None; lines.len()];
+        let item_blackout = vec![false; lines.len()];
         Self {
             items: lines.into_iter().map(PlaybackItem::Line).collect(),
             item_file_ids,
             item_wait_ms,
+            item_blackout,
             index: 0,
             scene_start: HashMap::new(),
             choice_cursor: 0,
@@ -2705,6 +2810,762 @@ mod tests {
             pb.pending_wait_ms(),
             Some(0),
             "no-opのadvance後もwait_msは変化しないはず"
+        );
+    }
+
+    /// spec（markdown-v0.1.md）は `[場面転換]` を「背景クリア + 暗転解除」と定義しており、
+    /// GUI版 `NovelRenderer.processDirective` は `Event::SceneTransition` で明示的に
+    /// `setBlackout(false)` を呼ぶ。`[暗転]` → (台詞) → `[場面転換]` → 台詞、という原稿で
+    /// 最後の台詞の時点では暗転が解除されているべき（#512 仕様漏れの回帰テスト）。
+    #[test]
+    fn scene_transition_resets_blackout_per_spec() {
+        let doc = doc_single_scene(vec![
+            Event::Blackout {
+                action: BlackoutAction::On,
+            },
+            dialog(Some("A"), vec!["暗転中の台詞"]),
+            Event::SceneTransition,
+            dialog(Some("B"), vec!["場面転換後の台詞"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.is_blackout(), "[暗転]直後の台詞はまだ暗転中のはず");
+
+        assert!(pb.advance(), "場面転換後の台詞へ進めるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(
+            !pb.is_blackout(),
+            "[場面転換]は spec 上「暗転解除」を伴うため、直後の台詞では暗転していないはず"
+        );
+    }
+
+    // ---- #512 追補: Event::Blackout の残りの観点（テスト観点整理で洗い出した分） ----
+
+    fn blackout_on() -> Event {
+        Event::Blackout {
+            action: BlackoutAction::On,
+        }
+    }
+
+    fn blackout_off() -> Event {
+        Event::Blackout {
+            action: BlackoutAction::Off,
+        }
+    }
+
+    #[test]
+    fn lines_before_any_blackout_are_not_blacked_out() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["1"]),
+            dialog(Some("B"), vec!["2"]),
+            dialog(Some("C"), vec!["3"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(
+            !pb.is_blackout(),
+            "一度も[暗転]が出ない原稿ではis_blackout()は常にfalseのはず"
+        );
+        assert!(pb.advance());
+        assert!(!pb.is_blackout());
+        assert!(pb.advance());
+        assert!(!pb.is_blackout());
+    }
+
+    #[test]
+    fn dialog_after_blackout_on_is_blacked_out() {
+        let doc = doc_single_scene(vec![blackout_on(), dialog(Some("A"), vec!["暗転中"])]);
+        let pb = Playback::from_document(&doc);
+        assert!(
+            pb.is_blackout(),
+            "[暗転]直後の台詞はis_blackout()==trueのはず"
+        );
+    }
+
+    #[test]
+    fn dialog_after_blackout_off_is_not_blacked_out() {
+        let doc = doc_single_scene(vec![
+            blackout_on(),
+            dialog(Some("A"), vec!["暗転中"]),
+            blackout_off(),
+            dialog(Some("B"), vec!["解除後"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.is_blackout(), "1件目の台詞はまだ[暗転解除]前のはず");
+        assert!(pb.advance());
+        assert!(!pb.is_blackout(), "[暗転解除]後の台詞はfalseに戻るはず");
+    }
+
+    #[test]
+    fn blackout_on_called_twice_in_a_row_is_idempotent() {
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["前"]),
+            blackout_on(),
+            blackout_on(),
+            dialog(Some("B"), vec!["暗転中"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(!pb.is_blackout(), "1件目の台詞はまだ暗転前のはず");
+        assert!(pb.advance());
+        assert!(
+            pb.is_blackout(),
+            "[暗転]を連続で2回出してもtrueのまま変化しないはず"
+        );
+    }
+
+    #[test]
+    fn blackout_off_without_prior_on_is_idempotent_noop() {
+        let doc = doc_single_scene(vec![blackout_off(), dialog(Some("A"), vec!["普通の台詞"])]);
+        let pb = Playback::from_document(&doc);
+        assert!(
+            !pb.is_blackout(),
+            "暗転していない状態への[暗転解除]はfalseのままのはず"
+        );
+    }
+
+    #[test]
+    fn blackout_state_persists_across_scene_and_chapter_boundaries() {
+        // `event_image_state_persists_across_scene_and_chapter_boundaries` の暗転版。
+        // ch2は[場面転換]を挟まないため、ch1で[暗転]した状態がそのまま持続するはず
+        // （scene_transition_resets_blackout_per_spec の「[場面転換]で解除される」ケースとの
+        // 対比 — 明示的な解除が無ければ境界を越えても解除されない）。
+        let ch1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![blackout_on(), dialog(Some("A"), vec!["ch1"])],
+            )],
+        );
+        let ch2 = chapter(2, vec![scene("2-1", vec![dialog(Some("B"), vec!["ch2"])])]);
+        let doc = document_with_chapters(vec![ch1, ch2]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "ch1の台詞からch2の台詞へ進めるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(
+            pb.is_blackout(),
+            "[場面転換]を挟まない限り、暗転状態はチャプター境界をまたいでも持続するはず"
+        );
+    }
+
+    #[test]
+    fn choice_event_does_not_affect_blackout_state() {
+        // `choice_event_does_not_affect_event_image_state` の暗転版。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![blackout_on(), choice(vec![("yes", "1-2")])]),
+                scene("1-2", vec![dialog(Some("A"), vec!["後"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
+
+        assert!(
+            pb.select_current_choice(),
+            "有効な jump 先なので成功するはず"
+        );
+        assert!(
+            pb.is_blackout(),
+            "Choiceを挟んでも暗転状態はリセットされず、jump先のLineに引き継がれるはず"
+        );
+    }
+
+    #[test]
+    fn is_blackout_true_while_choice_is_current_item() {
+        let doc = doc_single_scene(vec![blackout_on(), choice(vec![("yes", "1-1")])]);
+        let pb = Playback::from_document(&doc);
+        assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
+        assert!(
+            pb.is_blackout(),
+            "暗転中にChoice itemが現在位置にあるときもtrueを返すはず"
+        );
+    }
+
+    #[test]
+    fn is_blackout_false_at_document_start_with_zero_items() {
+        let doc = doc_single_scene(vec![]);
+        let pb = Playback::from_document(&doc);
+        assert!(!pb.is_blackout(), "itemsが空のときはfalseのはず");
+    }
+
+    #[test]
+    fn is_blackout_false_when_index_past_end() {
+        // "1-1": [暗転]+台詞+Choice("1-2"へjump)、"1-2": イベント0件かつ最終シーン。
+        // select_current_choice で index が items.len()（範囲外）になる
+        // （既存回帰テスト `position_after_jumping_into_zero_item_last_scene_does_not_panic`
+        // と同じ構図の暗転版）。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        blackout_on(),
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "1-2")]),
+                    ],
+                ),
+                scene("1-2", vec![]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "台詞→Choiceへ進めるはず");
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+        assert!(pb.is_at_end(), "0件シーンへのjumpは末尾扱いのはず");
+
+        assert!(
+            !pb.is_blackout(),
+            "indexが範囲外のときはpanicせずfalseを返すはず（直前が[暗転]中でも）"
+        );
+    }
+
+    #[test]
+    fn blackout_jump_target_uses_document_order_baked_state_not_dynamic() {
+        // "1-1": [暗転]→台詞A（baked=true）→Choice("1-2"へ)
+        // "1-2": [暗転解除]→台詞B（baked=false）→Choice("1-1"へ戻る)
+        //
+        // "1-2"（暗転off状態）から"1-1"へ戻ると、実行時の直前状態（off）が引き継がれるのでは
+        // なく、ドキュメントを最初から線形走査した時点でその item に焼き付けられた値
+        // （"1-1"の台詞Aはon）がそのまま復元されることを確認する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        blackout_on(),
+                        dialog(Some("A"), vec!["暗転中の台詞"]),
+                        choice(vec![("進む", "1-2")]),
+                    ],
+                ),
+                scene(
+                    "1-2",
+                    vec![
+                        blackout_off(),
+                        dialog(Some("B"), vec!["解除後の台詞"]),
+                        choice(vec![("戻る", "1-1")]),
+                    ],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.is_blackout(), "1-1の台詞Aは暗転中のはず");
+        assert!(pb.advance(), "台詞A→Choiceへ進めるはず");
+        assert!(pb.select_current_choice(), "1-2へjumpできるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("B")
+        );
+        assert!(!pb.is_blackout(), "1-2の台詞Bは暗転解除後のはず");
+
+        assert!(pb.advance(), "台詞B→Choiceへ進めるはず");
+        assert!(pb.select_current_choice(), "1-1へ戻るjumpができるはず");
+        assert_eq!(
+            pb.current_line().expect("line").speaker.as_deref(),
+            Some("A"),
+            "1-1のscene_startである台詞Aへ戻るはず"
+        );
+        assert!(
+            pb.is_blackout(),
+            "戻る直前(1-2)は暗転offだったが、jump先の状態はそこから引き継がれるのではなく、\
+             ドキュメント走査時にそのitem自身に焼き付けられた値(on)であるはず"
+        );
+    }
+
+    #[test]
+    fn later_blackout_off_after_on_within_same_scene_toggles_mid_scene() {
+        let doc = doc_single_scene(vec![
+            blackout_on(),
+            dialog(Some("A"), vec!["1回目の暗転中"]),
+            blackout_off(),
+            dialog(Some("B"), vec!["解除後"]),
+            blackout_on(),
+            dialog(Some("C"), vec!["2回目の暗転中"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.is_blackout(), "1回目の[暗転]直後はtrue");
+        assert!(pb.advance());
+        assert!(!pb.is_blackout(), "[暗転解除]直後はfalse");
+        assert!(pb.advance());
+        assert!(pb.is_blackout(), "2回目の[暗転]直後は再びtrue");
+    }
+
+    #[test]
+    fn blackout_from_lines_constructor_defaults_to_false() {
+        let mut pb = Playback::from_lines(vec![
+            dline(Some("A"), vec!["1"]),
+            dline(Some("B"), vec!["2"]),
+        ]);
+        assert!(
+            !pb.is_blackout(),
+            "from_lines経由のPlaybackはitem_blackoutが全件falseのはず"
+        );
+        assert!(pb.advance());
+        assert!(!pb.is_blackout());
+    }
+
+    // ---- #475: 暗転で終わるイベント絵の自動連続表示（Wait直後のBlackoutを検出する拡張）----
+
+    #[test]
+    fn build_event_image_wait_followed_by_blackout_creates_terminal_blackout_item() {
+        // Issue #475 の核心ケース: `[イベント絵:C][待機:200][暗転]` の後に会話行が一つも
+        // 続かない（シーン末尾）。旧実装（#497単体）ではWaitの後に来るBlackoutを孤立イベント
+        // として素通りさせるだけで、暗転を運ぶitemが生成されず、自動送りが着地する先が
+        // 無いまま終わっていた。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["目を閉じていく"]),
+            event_image("eyes_closing_3.webp"),
+            wait(200),
+            blackout_on(),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(!pb.is_blackout(), "会話行の時点ではまだ暗転していない");
+        assert!(pb.advance(), "会話行から画像コマitemへ進めるはず");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert!(!pb.is_blackout(), "画像コマ表示中はまだ暗転前のはず");
+
+        assert!(
+            pb.advance(),
+            "待機経過後、暗転を運ぶ独立itemへ進めるはず（Issue #475本体）"
+        );
+        assert!(
+            pb.is_blackout(),
+            "着地したitemはis_blackout()==trueを返すはず"
+        );
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "暗転item自体はさらなる自動送りを持たないはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "暗転itemがドキュメント最後のitemなので終端扱いのはず"
+        );
+        let line = pb
+            .current_line()
+            .expect("暗転itemも直前会話行を引き継いだDisplayLineを持つはず");
+        assert_eq!(line.speaker.as_deref(), Some("A"));
+        assert_eq!(
+            line.event_image.as_deref(),
+            Some("eyes_closing_3.webp"),
+            "event_imageは直前の画像コマから引き継がれるはず"
+        );
+    }
+
+    #[test]
+    fn full_four_frame_chain_auto_advances_to_blackout_in_one_click_sequence() {
+        // Issue #475 が明示的に挙げる原稿形: `[イベント絵:A][待機][イベント絵:B][待機]
+        // [イベント絵:C][待機][暗転]`。3コマ分のWait連鎖をadvance()で辿った末に暗転へ
+        // 着地することを確認する（4コマ目=暗転そのもの、という設計）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["目を開けている"]),
+            event_image("eyes_1.webp"),
+            wait(200),
+            event_image("eyes_2.webp"),
+            wait(200),
+            event_image("eyes_3.webp"),
+            wait(200),
+            blackout_on(),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 1コマ目");
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("eyes_1.webp")
+        );
+        assert!(pb.advance(), "1コマ目 -> 2コマ目");
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("eyes_2.webp")
+        );
+        assert!(pb.advance(), "2コマ目 -> 3コマ目");
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("eyes_3.webp")
+        );
+        assert!(!pb.is_blackout());
+
+        assert!(pb.advance(), "3コマ目 -> 暗転itemへ");
+        assert!(pb.is_blackout(), "連鎖の最後に暗転へ到達するはず");
+        assert!(pb.is_at_end());
+    }
+
+    #[test]
+    fn event_image_wait_blackout_pattern_consumes_exactly_three_events() {
+        // Blackout検出により消費イベント数が2→3に変わるぶん、直後に続くはずの
+        // 別イベントを誤って飲み込んでいないか（境界の1個ずれ）を確認する。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            wait(100),
+            blackout_on(),
+            dialog(Some("B"), vec!["暗転後も台詞は続く"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem（前に会話行が無い）なので、advance無しで
+        // 最初から画像コマitemに位置している。
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+        assert!(!pb.is_blackout(), "画像コマ表示中はまだ暗転前のはず");
+
+        assert!(pb.advance(), "画像コマ -> 暗転item");
+        assert!(pb.is_blackout());
+        assert!(
+            !pb.is_at_end(),
+            "暗転itemの後にまだ台詞が残っているので終端ではないはず"
+        );
+
+        assert!(
+            pb.advance(),
+            "暗転item -> 次の台詞へ（3イベント消費の直後）"
+        );
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.speaker.as_deref(), Some("B"));
+        assert!(
+            pb.is_blackout(),
+            "[暗転解除]が無い限り、後続の台詞も暗転状態を引き継ぐはず"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_followed_by_blackout_off_also_creates_terminal_item() {
+        // Issue #475 のスコープはBlackout::Onのみだが、実装はBlackoutのaction種別を
+        // 区別せず同じ経路を通るため、Offも自然にカバーされる（無理に両対応する必要は
+        // 無いが、実装が対応できているならそれでよいという方針の確認）。
+        let doc = doc_single_scene(vec![
+            blackout_on(),
+            dialog(Some("A"), vec!["暗転中"]),
+            event_image("a.webp"),
+            wait(50),
+            blackout_off(),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.is_blackout());
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert!(pb.is_blackout(), "画像コマ表示中はまだ暗転解除前のはず");
+
+        assert!(pb.advance(), "画像コマ -> 暗転解除itemへ");
+        assert!(
+            !pb.is_blackout(),
+            "[暗転解除]を運ぶitemに着地したのでfalseになるはず"
+        );
+        assert!(pb.is_at_end());
+    }
+
+    #[test]
+    fn item_blackout_stays_aligned_with_items_across_event_image_wait_chain() {
+        // マージ由来のバグ回帰ガード: EventImage+Waitの高速パスがitem_blackoutへのpushを
+        // 欠いていると、以降の全itemのis_blackout()判定がインデックス1個分ズレて誤った
+        // 値を返すようになる（#512統合時に見落とされていた、#475実装時に発見）。
+        // 画像コマitemを複数回経由した後も、暗転状態と直後の通常会話行の暗転状態の両方が
+        // 正しく読めることを確認する。
+        let doc = doc_single_scene(vec![
+            blackout_on(),
+            dialog(Some("A"), vec!["1"]),
+            event_image("a.webp"),
+            wait(10),
+            event_image("b.webp"),
+            wait(10),
+            dialog(Some("B"), vec!["2"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.is_blackout(), "台詞Aの時点で暗転中");
+        assert!(pb.advance(), "台詞A -> 画像コマ1");
+        assert!(
+            pb.is_blackout(),
+            "画像コマ1もitem_blackoutのpush漏れなくtrueを読めるはず"
+        );
+        assert!(pb.advance(), "画像コマ1 -> 画像コマ2");
+        assert!(pb.is_blackout(), "画像コマ2もtrueのはず");
+        assert!(pb.advance(), "画像コマ2 -> 台詞B");
+        let line = pb.current_line().expect("line");
+        assert_eq!(
+            line.speaker.as_deref(),
+            Some("B"),
+            "item_blackoutのズレが無ければ台詞Bに正しく着地するはず"
+        );
+        assert!(
+            pb.is_blackout(),
+            "台詞Bもindexズレが無ければ引き続き暗転中と読めるはず"
+        );
+        assert!(pb.is_at_end());
+    }
+
+    // ---- #475 追加分: Blackout誤検出の否定側・隣接パターンの明示的固定 ----
+
+    #[test]
+    fn build_event_image_wait_followed_by_choice_consumes_only_two_events_not_three() {
+        // Wait直後がBlackoutではなくChoiceの場合、誤って3消費（Blackout用の分岐）に
+        // ならず、従来どおり2消費のままChoiceが独立したPlaybackItem::Choiceとして
+        // 生成されることを確認する（Blackout誤検出の否定側）。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            wait(100),
+            choice(vec![("進む", "dummy-target")]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem（前に会話行が無い）。
+        assert_eq!(pb.pending_wait_ms(), Some(100));
+        assert!(!pb.is_blackout());
+
+        assert!(
+            pb.advance(),
+            "画像コマ -> Choice item（2消費のまま、3消費でChoiceを飲み込まない）"
+        );
+        assert!(
+            pb.current_choice().is_some(),
+            "Choiceが暗転itemに化けず通常のChoiceとして現在位置になっているはず"
+        );
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "Choice itemは自動送りを持たないはず"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "Blackoutと誤検出されていなければ暗転状態はfalseのままのはず"
+        );
+    }
+
+    #[test]
+    fn build_event_image_wait_followed_by_narration_resumes_narration_line() {
+        // Wait直後がDialogではなくNarrationの場合も、同じ「_」分岐の経路で正しく
+        // PlaybackItem::Lineが生成されることを明示的に固定する回帰ガード。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["まもなく静かになる"]),
+            event_image("a.webp"),
+            wait(50),
+            narration(vec!["静かな場面だった。"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(pb.pending_wait_ms(), Some(50));
+
+        assert!(pb.advance(), "画像コマ -> ナレーションitemへ");
+        let line = pb.current_line().expect("ナレーション行があるはず");
+        assert_eq!(line.speaker, None, "Narrationなのでspeakerは常にNoneのはず");
+        assert_eq!(line.text, vec!["静かな場面だった。".to_string()]);
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "通常のLine itemは自動送りを持たないはず"
+        );
+        assert!(!pb.is_blackout());
+    }
+
+    #[test]
+    fn build_event_image_wait_zero_ms_followed_by_blackout_still_creates_terminal_item() {
+        // `[イベント絵][待機:0][暗転]`（ms=0とBlackout検出の組み合わせ）でも、Wait自体は
+        // Some(0)として存在するため検出は素通りせず、3消費・暗転itemが正しく生成される
+        // ことを確認する（Some(0)をNone扱いしてしまう実装だと壊れる境界）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["ゼロ待機のまま暗転"]),
+            event_image("a.webp"),
+            wait(0),
+            blackout_on(),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(
+            pb.pending_wait_ms(),
+            Some(0),
+            "ms=0でもSome(0)として保持されるはず"
+        );
+        assert!(!pb.is_blackout());
+
+        assert!(
+            pb.advance(),
+            "画像コマ -> 暗転itemへ（ms=0でも3消費されるはず）"
+        );
+        assert!(pb.is_blackout(), "暗転itemに正しく着地しているはず");
+        assert_eq!(pb.pending_wait_ms(), None);
+        assert!(pb.is_at_end());
+    }
+
+    #[test]
+    fn build_event_image_wait_blackout_before_any_dialog_has_none_speaker_and_empty_text() {
+        // 会話行が一度も無い状態で`[イベント絵][待機][暗転]`が来た場合、current_speaker/
+        // current_textの初期値（None/空Vec）がそのまま暗転itemへ焼き付けられ、
+        // speaker=None・text=空Vecになることを明示的に確認する。
+        let doc = doc_single_scene(vec![event_image("a.webp"), wait(10), blackout_on()]);
+        let mut pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem。
+        let first = pb.current_line().expect("画像コマのline");
+        assert_eq!(first.speaker, None, "会話行が無いのでspeakerはNoneのはず");
+        assert_eq!(
+            first.text,
+            Vec::<String>::new(),
+            "会話行が無いのでtextは空Vecのはず"
+        );
+
+        assert!(pb.advance(), "画像コマ -> 暗転itemへ");
+        assert!(pb.is_blackout());
+        let line = pb.current_line().expect("暗転itemのline");
+        assert_eq!(
+            line.speaker, None,
+            "暗転itemも会話行未経験のままspeaker=Noneを引き継ぐはず"
+        );
+        assert_eq!(
+            line.text,
+            Vec::<String>::new(),
+            "暗転itemも会話行未経験のままtext=空Vecを引き継ぐはず"
+        );
+    }
+
+    #[test]
+    fn build_event_image_wait_blackout_then_wait_again_does_not_chain_further_automatically() {
+        // `[イベント絵][待機][暗転][待機][イベント絵]`（暗転後にさらにWait連鎖が続く
+        // ネストケース）。暗転itemは連鎖の終端であるという設計（モジュール冒頭docの
+        // 「暗転item自体はさらなる自動送りを持たない」）どおり、2つ目のWaitは孤立Waitとして
+        // 無視され（Dialog/Narrationではないためitem化されない）、後続のEventImageも
+        // 単独のEventImage（直後にWaitが無い）なのでitem化されず、暗転itemの後には
+        // 何のitemも増えないことを確認する。
+        let doc = doc_single_scene(vec![
+            event_image("a.webp"),
+            wait(10),
+            blackout_on(),
+            wait(20),
+            event_image("b.webp"),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.pending_wait_ms(), Some(10), "1つ目の画像コマitem");
+
+        assert!(pb.advance(), "画像コマ -> 暗転itemへ");
+        assert!(pb.is_blackout());
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "暗転item自体はさらなる自動送りを持たないはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "暗転後の[待機][イベント絵]は新たな連鎖を作らず、暗転itemが最後のitemのままのはず"
+        );
+
+        assert!(
+            !pb.advance(),
+            "終端の暗転itemからはこれ以上進めないはず（後続のEventImageへ自動で乗らない）"
+        );
+        assert!(
+            pb.is_blackout(),
+            "advance失敗後も暗転itemに留まっているはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_resolves_correctly_when_blackout_item_is_only_item_in_target_scene() {
+        // 選択肢確定によるシーンジャンプが、暗転itemが挟まる/暗転itemのみで構成される
+        // シーン（このシーンのitemsは「画像コマ item」+「暗転item」の2件だけで、
+        // 通常のLine itemを1件も持たない）でも、scene_startの解決とitem_blackoutの
+        // インデックス整合が崩れないことを確認する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["目を閉じる？"]),
+                        choice(vec![("はい", "1-2")]),
+                    ],
+                ),
+                scene(
+                    "1-2",
+                    vec![event_image("eyes_closed.webp"), wait(30), blackout_on()],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> Choiceへ");
+        assert!(pb.current_choice().is_some());
+
+        assert!(
+            pb.select_current_choice(),
+            "1-2への jump は成功するはず（1-2はitemを2件持つので有効なscene_start）"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "jump直後は画像コマitemなのでまだ暗転前のはず"
+        );
+        assert_eq!(pb.pending_wait_ms(), Some(30));
+        let line = pb.current_line().expect("画像コマのline");
+        assert_eq!(line.event_image.as_deref(), Some("eyes_closed.webp"));
+
+        assert!(
+            pb.advance(),
+            "画像コマ -> 暗転item（1-2シーン内で唯一の後続item）へ"
+        );
+        assert!(
+            pb.is_blackout(),
+            "jump先シーン内の暗転itemへ正しく着地しているはず"
+        );
+        assert!(
+            pb.is_at_end(),
+            "暗転itemがドキュメント最後のitemなので終端扱いのはず"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_then_blackout_across_scene_boundary_is_not_detected() {
+        // 既知の制約1（モジュール冒頭doc・#475コメント参照）を固定するテスト。
+        // `[イベント絵][待機]` がシーンA末尾、`[暗転]` がシーンB先頭という原稿では、
+        // Wait+Blackoutパターンの探索が `events.get(event_index + 1/+2)`
+        // （`&scene.events` というシーンスコープのみ）しか見ないため、シーンBの
+        // `[暗転]` を検出できず、暗転を運ぶ独立itemが生成されない（検出漏れ）。
+        // 同一シーン内に収まるケースを固定した
+        // `build_event_image_wait_followed_by_blackout_creates_terminal_blackout_item`
+        // との対比で、シーン境界をまたぐと非対応になるという仕様上の制約を
+        // コードレベルでも担保する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["目を閉じていく"]),
+                        event_image("eyes_closing_3.webp"),
+                        wait(200),
+                    ],
+                ),
+                scene("1-2", vec![blackout_on()]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.advance(), "台詞 -> 画像コマitemへ");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert!(!pb.is_blackout(), "画像コマ表示中はまだ暗転前のはず");
+
+        // シーンBの[暗転]が検出漏れになるため、画像コマitemがそのままドキュメント
+        // 最後のitemになってしまう（同一シーン内パターンなら、ここからさらに暗転item
+        // へ進めるはずだった）。
+        assert!(
+            pb.is_at_end(),
+            "シーン境界をまたいだBlackoutは検出されず画像コマitemが終端になる（既知の制約1）"
+        );
+        assert!(
+            !pb.advance(),
+            "検出漏れにより暗転item自体が存在せず進めない"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "暗転itemが生成されないため、シーンBのBlackout::OnがcurrentBlackoutを\
+             trueにしてもis_blackout()はfalseのまま反映されない"
         );
     }
 }

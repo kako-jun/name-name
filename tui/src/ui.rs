@@ -231,6 +231,15 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// この排他性を意識せず、両方をそのまま渡すだけでよい）。選択肢表示中も左側のイベント絵/
 /// プレースホルダ（`image_fade`）はそのまま描画され続ける — 左カラムは右カラム（テキスト/
 /// 選択肢の切替）とは独立しているため、選択肢表示は画像側のフェードやサイズに影響しない。
+///
+/// `blackout`（`Playback::is_blackout`、#512）が `true` のときは、左側の画像プレースホルダ/
+/// イベント絵の代わりに黒一色を敷く。GUI版 `NovelRenderer` の `blackoutOverlay` が
+/// 背景・立ち絵・イベント絵レイヤーより前面・ダイアログボックスより背面に位置する
+/// （＝暗転中もテキストは黒地の上にそのまま読める）のに倣い、右側のテキスト/選択肢
+/// （`draw_text_windows`/`draw_choice_list`）は暗転の影響を受けず通常どおり描画する。
+/// `image_fade` のスナップショット計算自体は暗転中も継続する（クロスフェードの内部時刻を
+/// 止めない）が、その結果は使わず捨てる — 暗転解除後にイベント絵が変な位置から再開しない
+/// ようにするため。
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -245,6 +254,7 @@ pub fn draw(
     now: Instant,
     image_fade: Option<&ImageFadeState>,
     image_cache: &mut ImageCache,
+    blackout: bool,
 ) {
     let actual = frame.area();
     if !fits_required_size(actual) {
@@ -270,7 +280,11 @@ pub fn draw(
             now,
         )
     });
-    draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
+    if blackout {
+        draw_blackout(frame, placeholder_area);
+    } else {
+        draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
+    }
     match choice {
         Some((options, cursor, columns)) => {
             draw_choice_list(frame, text_area, options, cursor, columns)
@@ -419,6 +433,16 @@ fn draw_placeholder(frame: &mut Frame, area: Rect, config: &Config, image: Optio
 
     let paragraph = Paragraph::new(label).alignment(Alignment::Center);
     frame.render_widget(paragraph, area);
+}
+
+/// 暗転中（`Playback::is_blackout`、#512）に画像プレースホルダの代わりに描く、黒一色の塗り
+/// つぶし。`Block` に文字は乗せず背景色のみ黒にする — GUI版 `blackoutOverlay`（`fill(0x000000)`
+/// のみで文字を持たない全画面 `Graphics`）と同じ「黒で覆うだけ」の見た目。ラベルや罫線を
+/// 出さない（`draw_too_small_message` 等と違い、暗転は演出そのものが目的なので追加の文言は
+/// 不要）。
+fn draw_blackout(frame: &mut Frame, area: Rect) {
+    let block = Block::default().style(Style::default().bg(Color::Black));
+    frame.render_widget(block, area);
 }
 
 /// quadrant block 変換済みのセル格子（[`RenderedImage`]）を、セルごとに fg/bg 付き `Span` の
@@ -925,6 +949,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -979,6 +1004,7 @@ mod tests {
                         now,
                         Some(&image_fade),
                         &mut image_cache,
+                        false,
                     )
                 })
                 .unwrap();
@@ -1011,6 +1037,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1033,6 +1060,362 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- #512: draw() の blackout パラメータ（画像プレースホルダの黒塗り） ----
+
+    /// `render()`（既存ヘルパー、blackout は常に false 固定）の blackout 可変版。
+    /// blackout の有無によるテキスト側/画像側の描画差分を比較する目的で使う。
+    fn render_with_blackout(
+        config: &Config,
+        line: Option<&DisplayLine>,
+        blackout: bool,
+        width: u16,
+        height: u16,
+    ) -> Buffer {
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    config,
+                    line,
+                    None,
+                    1,
+                    1,
+                    false,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    blackout,
+                )
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn draw_blackout_true_fills_placeholder_area_with_black_only() {
+        let config = Config::default();
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        let buffer = render_with_blackout(&config, None, true, CANVAS_W, CANVAS_H);
+        for y in 0..placeholder_area.height {
+            for x in 0..placeholder_area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert_eq!(
+                    cell.bg,
+                    Color::Black,
+                    "cell ({x},{y}) should be filled black while blackout is active"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_blackout_true_does_not_alter_text_area_cells() {
+        let config = Config::default();
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["暗転中でも読めるはずの台詞".to_string()],
+            event_image: None,
+        };
+        let normal = render_with_blackout(&config, Some(&line), false, CANVAS_W, CANVAS_H);
+        let blacked = render_with_blackout(&config, Some(&line), true, CANVAS_W, CANVAS_H);
+
+        let (_placeholder, _gap, text_area) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        for y in text_area.y..(text_area.y + text_area.height) {
+            for x in text_area.x..(text_area.x + text_area.width) {
+                let normal_cell = normal.cell((x, y)).expect("in bounds");
+                let blacked_cell = blacked.cell((x, y)).expect("in bounds");
+                assert_eq!(
+                    normal_cell.symbol(),
+                    blacked_cell.symbol(),
+                    "cell ({x},{y}) text content should be unaffected by blackout"
+                );
+                assert_eq!(
+                    normal_cell.fg, blacked_cell.fg,
+                    "cell ({x},{y}) fg should be unaffected by blackout"
+                );
+                assert_eq!(
+                    normal_cell.bg, blacked_cell.bg,
+                    "cell ({x},{y}) bg should be unaffected by blackout"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_blackout_true_with_choice_renders_both_black_placeholder_and_choice_list() {
+        let config = Config::default();
+        let options = vec![choice_option("はい", "a"), choice_option("いいえ", "b")];
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0, None)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        for y in 0..placeholder_area.height {
+            for x in 0..placeholder_area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert_eq!(
+                    cell.bg,
+                    Color::Black,
+                    "cell ({x},{y}) should stay black even while a choice list is showing"
+                );
+            }
+        }
+        let text = buffer_text(buffer);
+        assert!(text.contains("はい"), "buffer was: {text}");
+        assert!(text.contains("いいえ"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_blackout_suppresses_image_fade_rendering_even_when_resolved() {
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        let fixture_path =
+            diagonal_pattern_webp_fixture(placeholder_area.width, placeholder_area.height);
+        let (config, relative) = config_and_relative_path_for(&fixture_path);
+        let image_fade = ImageFadeState::settled(Some(relative));
+
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for y in 0..placeholder_area.height {
+            for x in 0..placeholder_area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert_ne!(
+                    cell.symbol(),
+                    "▞",
+                    "cell ({x},{y}) should not show the resolved event image glyph while blackout is active"
+                );
+                assert_eq!(
+                    cell.bg,
+                    Color::Black,
+                    "cell ({x},{y}) should be black instead of the resolved event image"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_blackout_false_after_true_restores_placeholder_or_image() {
+        let mut config = Config::default();
+        config.placeholder.style = PlaceholderStyle::Label;
+        config.placeholder.label = "[画像]".to_string();
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+        let blacked_text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !blacked_text.contains("[画像]"),
+            "buffer was: {blacked_text}"
+        );
+
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    false,
+                )
+            })
+            .unwrap();
+        let restored_text = buffer_text(terminal.backend().buffer());
+        assert!(
+            restored_text.contains("[画像]"),
+            "blackout=false に戻ったら通常のプレースホルダに復帰するはず, buffer was: {restored_text}"
+        );
+
+        // 黒塗りが残っていないかは、全角グリフの継続セル（`buffer_text` のコメント参照:
+        // 直前のグラフェムを表示するために予約された空セルで、どのウィジェットからも
+        // 書き込まれない）を除いて判定する。継続セルは Paragraph が「[画像]」ラベルを
+        // 描画する際に一切タッチしないため、before/after のどちらのフレームでも触られず
+        // 前フレームの値をそのまま持ち越す ratatui 側の既知の挙動であり、暗転解除の
+        // 検証対象ではない。
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        let buffer = terminal.backend().buffer();
+        let mut has_black_cell = false;
+        for y in placeholder_area.y..(placeholder_area.y + placeholder_area.height) {
+            let mut x = placeholder_area.x;
+            let x_end = placeholder_area.x + placeholder_area.width;
+            while x < x_end {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                if cell.bg == Color::Black {
+                    has_black_cell = true;
+                }
+                x += cell.symbol().cell_width().max(1);
+            }
+        }
+        assert!(
+            !has_black_cell,
+            "blackout=false のフレームでは黒塗りが残ってはいけない"
+        );
+    }
+
+    #[test]
+    fn draw_blackout_at_minimum_fits_required_size_does_not_panic() {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+
+        // ちょうど最小サイズでも実際に通常UI(黒塗り)側の分岐に入っていることを確認する
+        // （too-small分岐へ誤って落ちていないことの裏付け）。
+        let (placeholder_area, _gap, _text) = split_columns(Rect::new(
+            0,
+            0,
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT - 1,
+        ));
+        let buffer = terminal.backend().buffer();
+        let cell = buffer
+            .cell((placeholder_area.x, placeholder_area.y))
+            .expect("in bounds");
+        assert_eq!(cell.bg, Color::Black);
+    }
+
+    #[test]
+    fn draw_blackout_below_fits_required_size_shows_too_small_message_not_black_screen() {
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH - 1,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    true,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+        let area = buffer.area();
+        let has_black_cell = (0..area.height).any(|y| {
+            (0..area.width).any(|x| buffer.cell((x, y)).expect("in bounds").bg == Color::Black)
+        });
+        assert!(
+            !has_black_cell,
+            "端末が要求サイズ未満のときは黒塗り(暗転)を描画してはいけない"
+        );
     }
 
     #[test]
@@ -1062,6 +1445,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1096,6 +1480,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1128,6 +1513,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1160,6 +1546,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1192,6 +1579,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1230,6 +1618,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1268,6 +1657,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1313,6 +1703,7 @@ mod tests {
                     now,
                     None,
                     &mut typing_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1350,6 +1741,7 @@ mod tests {
                     now,
                     None,
                     &mut done_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1409,6 +1801,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1450,6 +1843,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1516,6 +1910,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -1904,6 +2299,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2634,6 +3030,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2683,6 +3080,7 @@ mod tests {
                     now,
                     None,
                     &mut typing_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2717,6 +3115,7 @@ mod tests {
                     now,
                     None,
                     &mut done_image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -2836,6 +3235,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3032,6 +3432,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3068,6 +3469,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3123,6 +3525,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3157,6 +3560,7 @@ mod tests {
                         now,
                         None,
                         &mut image_cache,
+                        false,
                     )
                 })
                 .unwrap_or_else(|e| panic!("W={w}で描画がpanicした: {e}"));
@@ -3189,6 +3593,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3222,6 +3627,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3946,6 +4352,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -3984,6 +4391,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -4019,6 +4427,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -4068,6 +4477,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -4120,6 +4530,7 @@ mod tests {
                     not_done_at,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
@@ -4149,6 +4560,7 @@ mod tests {
                     done_at,
                     None,
                     &mut image_cache,
+                    false,
                 )
             })
             .unwrap();
