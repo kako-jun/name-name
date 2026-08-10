@@ -85,6 +85,7 @@ use std::collections::HashMap;
 
 use name_name_parser::models::{BlackoutAction, ChoiceOption, Document, Event};
 
+use crate::flags::GameFlags;
 use crate::sentence;
 
 /// 画面に表示する1行分の内容（話者名 + 本文 + その時点のイベント絵）。
@@ -248,6 +249,9 @@ pub struct Playback {
     /// jump 先解決に使う（[`Playback::select_current_choice`]）。あるシーンが表示可能な item を
     /// 1つも持たない場合（背景切り替えのみ等）は、そのシーンの位置＝まだ何も push していない
     /// 時点の `items.len()`（＝後続シーンの先頭 item のインデックス、もしくは最後尾）を指す。
+    /// #509 Phase B で `select_current_choice` が `scene_index_by_id`/`scene_order` 経由の
+    /// 遅延ビルド解決に切り替わったため、現在はどこからも参照されない（削除はスコープ外）。
+    #[allow(dead_code)]
     scene_start: HashMap<String, usize>,
     /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報（#509 Phase A
     /// 予定分の下ごしらえ）。`from_document`/`from_merged_document` で埋まる。今回のスコープ
@@ -280,11 +284,24 @@ pub struct Playback {
     /// ときだけ、現在位置の Line item から `speaker`/`event_image` を引き継ぎつつ
     /// `text` を `sentence_pages[sentence_index]` の1要素に差し替えた形で保持する。
     current_display: Option<DisplayLine>,
+    /// シーンを跨いで引き継ぐランニング状態（#509 Phase B）。`build_scene_items` を
+    /// シーン単位で遅延呼び出しするため、`build` 完了後もこの状態を `Playback` 自身が
+    /// 保持し続ける必要がある（以前は `build` のローカル変数で使い捨てだった）。
+    scan_state: SceneScanState,
+    /// 直近に item を生成した（＝ `build_scene_items` を最後に呼んだ）シーンの
+    /// `scene_order` 内インデックス。`advance`/`select_current_choice` が次に
+    /// どのシーンから遅延ビルドを再開すべきかの起点になる。
+    current_scene_idx: usize,
+    /// フラグ管理（#509 Phase B 予定分の下ごしらえ）。今回のスコープではまだ誰からも
+    /// 参照されない。
+    #[allow(dead_code)]
+    flags: GameFlags,
 }
 
 /// `build_scene_items` がシーンを跨いで引き継ぐランニング状態のまとめ役（#509 Phase A）。
 /// 個別の引数として渡すと `clippy::too_many_arguments` に抵触するため1つにまとめてある
 /// （挙動には影響しない、純粋な引数の持ち方の整理）。
+#[derive(Clone)]
 struct SceneScanState {
     current_event_image: Option<String>,
     current_speaker: Option<String>,
@@ -546,16 +563,18 @@ impl Playback {
                         });
                         scene_order.len() - 1
                     });
-                build_scene_items(
-                    &scene.events,
-                    file_id,
-                    &mut scan_state,
-                    &mut items,
-                    &mut item_file_ids,
-                    &mut item_wait_ms,
-                    &mut item_blackout,
-                );
             }
+        }
+        if let Some(first_scene) = scene_order.first() {
+            build_scene_items(
+                &first_scene.events,
+                first_scene.file_id,
+                &mut scan_state,
+                &mut items,
+                &mut item_file_ids,
+                &mut item_wait_ms,
+                &mut item_blackout,
+            );
         }
         Self {
             items,
@@ -571,6 +590,9 @@ impl Playback {
             sentence_pages: Vec::new(),
             sentence_index: 0,
             current_display: None,
+            scan_state,
+            current_scene_idx: 0,
+            flags: GameFlags::new(),
         }
     }
 
@@ -708,9 +730,35 @@ impl Playback {
                 return false;
             }
             self.set_index(self.index + 1);
-            true
-        } else {
-            false
+            return true;
+        }
+        loop {
+            let next_scene_idx = self.current_scene_idx + 1;
+            let Some(next_scene) = self.scene_order.get(next_scene_idx) else {
+                return false;
+            };
+            let current_file_id = self.scene_order[self.current_scene_idx].file_id;
+            if next_scene.file_id != current_file_id {
+                return false;
+            }
+            let start = self.items.len();
+            let events = next_scene.events.clone();
+            let file_id = next_scene.file_id;
+            build_scene_items(
+                &events,
+                file_id,
+                &mut self.scan_state,
+                &mut self.items,
+                &mut self.item_file_ids,
+                &mut self.item_wait_ms,
+                &mut self.item_blackout,
+            );
+            self.current_scene_idx = next_scene_idx;
+            if self.items.len() > start {
+                self.set_index(start);
+                return true;
+            }
+            // このシーンはitemを1件も生成しなかった。さらに次のシーンへ。
         }
     }
 
@@ -747,21 +795,89 @@ impl Playback {
         let Some(option) = options.get(self.choice_cursor) else {
             return false;
         };
-        let Some(&target) = self.scene_start.get(&option.jump) else {
+        let Some(&target_scene_idx) = self.scene_index_by_id.get(&option.jump) else {
             return false;
         };
-        self.set_index(target);
-        true
+        let mut scene_idx = target_scene_idx;
+        loop {
+            let scene = &self.scene_order[scene_idx];
+            let events = scene.events.clone();
+            let file_id = scene.file_id;
+            let start = self.items.len();
+            build_scene_items(
+                &events,
+                file_id,
+                &mut self.scan_state,
+                &mut self.items,
+                &mut self.item_file_ids,
+                &mut self.item_wait_ms,
+                &mut self.item_blackout,
+            );
+            self.current_scene_idx = scene_idx;
+            if self.items.len() > start {
+                self.set_index(start);
+                return true;
+            }
+            // ジャンプ先シーンがitem 0件。ファイル境界を越えない範囲で次のシーンへ
+            // フォールスルーする（`advance()` のゼロ件シーン読み飛ばしループと同じ規約、
+            // モジュール冒頭のドキュメント参照）。
+            let next_scene_idx = scene_idx + 1;
+            let Some(next_scene) = self.scene_order.get(next_scene_idx) else {
+                // ドキュメント末尾。旧実装と同じく `items.len()`（範囲外）を指す位置に
+                // 置く — `position()` は `take` で安全に全Line数を返し、`is_at_end()` は
+                // `has_more_scenes_with_items()` 経由でこれを「実質末尾」として扱う
+                // （`position_after_jumping_into_zero_item_last_scene_does_not_panic` /
+                // `is_at_end_true_when_jump_lands_on_out_of_bounds_index_of_zero_item_scene`
+                // の期待値どおり）。
+                self.set_index(start);
+                return true;
+            };
+            if next_scene.file_id != file_id {
+                self.set_index(start);
+                return true;
+            }
+            scene_idx = next_scene_idx;
+        }
     }
 
     /// 会話行の総数（Choice item・画像コマ item は含まない、#497）。画像コマ
     /// （[`PlaybackItem::Image`]）は元の会話行の話者・本文を引き継いだ表示上の中間状態に
     /// すぎず、それ自体は新しい会話行ではないため数えない。
+    ///
+    /// UI（進捗バー等）向けに「ドキュメント全体の会話行総数」を返す必要があるため、
+    /// プレイヤーが実際に訪れた範囲だけを保持する `self.items`（#509 で遅延構築に変更）は
+    /// 使わない。`self.scene_order`（ドキュメント順の全シーンの生イベント一覧）を、実際の
+    /// 再生状態（`self.scan_state` / `self.items`）に一切触れない使い捨ての状態で独立に
+    /// 全件スキャンして数える（`has_more_scenes_with_items` が使っている「使い捨て
+    /// scan_state + 使い捨て Vec で `build_scene_items` を試し呼びする」パターンと同じ）。
     pub fn total(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|item| matches!(item, PlaybackItem::Line(_)))
-            .count()
+        let mut scan_state = SceneScanState {
+            current_event_image: None,
+            current_speaker: None,
+            current_text: Vec::new(),
+            current_blackout: false,
+        };
+        let mut count = 0;
+        for scene in &self.scene_order {
+            let mut items = Vec::new();
+            let mut item_file_ids = Vec::new();
+            let mut item_wait_ms = Vec::new();
+            let mut item_blackout = Vec::new();
+            build_scene_items(
+                &scene.events,
+                scene.file_id,
+                &mut scan_state,
+                &mut items,
+                &mut item_file_ids,
+                &mut item_wait_ms,
+                &mut item_blackout,
+            );
+            count += items
+                .iter()
+                .filter(|item| matches!(item, PlaybackItem::Line(_)))
+                .count();
+        }
+        count
     }
 
     /// 現在位置が何行目か（1始まり、Choice item・画像コマ item は含まない、#497）。現在位置が
@@ -803,9 +919,44 @@ impl Playback {
             return false;
         }
         if self.items.is_empty() || self.index + 1 >= self.items.len() {
-            return true;
+            return !self.has_more_scenes_with_items();
         }
         self.item_file_ids[self.index + 1] != self.item_file_ids[self.index]
+    }
+
+    /// `self` を変更せず、`current_scene_idx` より後にまだ表示可能な item が存在するかを
+    /// 判定する。`scan_state` を複製した使い捨ての状態に対して `build_scene_items` を試し
+    /// 呼びし、実際に追記が必要になるまで `self` 本体を変更しないための読み取り専用
+    /// ルックアヘッド（#509 Phase B、`is_at_end` の遅延ビルド対応）。
+    fn has_more_scenes_with_items(&self) -> bool {
+        let mut scan_state = self.scan_state.clone();
+        let mut scene_idx = self.current_scene_idx;
+        loop {
+            let next_scene_idx = scene_idx + 1;
+            let Some(next_scene) = self.scene_order.get(next_scene_idx) else {
+                return false;
+            };
+            if next_scene.file_id != self.scene_order[scene_idx].file_id {
+                return false;
+            }
+            let mut items = Vec::new();
+            let mut item_file_ids = Vec::new();
+            let mut item_wait_ms = Vec::new();
+            let mut item_blackout = Vec::new();
+            build_scene_items(
+                &next_scene.events,
+                next_scene.file_id,
+                &mut scan_state,
+                &mut items,
+                &mut item_file_ids,
+                &mut item_wait_ms,
+                &mut item_blackout,
+            );
+            if !items.is_empty() {
+                return true;
+            }
+            scene_idx = next_scene_idx;
+        }
     }
 
     /// テスト専用: 会話行リストから直接 `Playback` を組み立てる。`main.rs` の
@@ -831,6 +982,14 @@ impl Playback {
             sentence_pages: Vec::new(),
             sentence_index: 0,
             current_display: None,
+            scan_state: SceneScanState {
+                current_event_image: None,
+                current_speaker: None,
+                current_text: Vec::new(),
+                current_blackout: false,
+            },
+            current_scene_idx: 0,
+            flags: GameFlags::new(),
         }
     }
 }
