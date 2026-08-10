@@ -40,6 +40,20 @@ function basename(path: string): string {
   return i >= 0 ? path.slice(i + 1) : path
 }
 
+/** standalone 再生時のプレイヤーヘッダの出し方 (#519)。iframe 埋め込み判定（isEmbedded()）とは
+ *  独立の軸で、`!embedded` のときだけ意味を持つ（embedded は本設定に関係なく常にヘッダ非表示）。 */
+type HeaderMode = 'visible' | 'hidden' | 'collapsed'
+
+/**
+ * frontmatter `header:` の生文字列を HeaderMode に正規化する (#519)。
+ * `dialog_style` と同じ後方互換パターン: parser は値をバリデーションせず透過するため、
+ * 不正値・未指定（null/undefined）はここで `visible`（既定・従来どおりヘッダを出す）に倒す。
+ */
+function normalizeHeaderMode(value: string | null | undefined): HeaderMode {
+  if (value === 'hidden' || value === 'collapsed') return value
+  return 'visible'
+}
+
 interface PlayerScreenProps {
   projectName: string
   apiBaseUrl: string
@@ -611,11 +625,45 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   // 「つづきから」ボタンの有効判定: 既読データが存在するか (#141)
   const [hasSaveData, setHasSaveData] = useState(() => hasAnyReadProgress(projectName))
 
+  // standalone 再生時のプレイヤーヘッダ出し方 (#519)。isEmbedded() とは独立の軸で、
+  // embedded のときは headerMode に関係なく従来どおり非表示（下の JSX で `!embedded &&` を維持）。
+  const headerMode = normalizeHeaderMode(doc?.header)
+  // `collapsed` (#519) のときだけ使う、折りたたみハンドルの展開状態。
+  const [headerExpanded, setHeaderExpanded] = useState(false)
+  // collapsed ヘッダを展開したら、放置で自動的に折りたたむ（「普段は隠れている」を維持するため）。
+  // タップで再度閉じることもできる（下のハンドル onClick）。
+  useEffect(() => {
+    if (headerMode !== 'collapsed' || !headerExpanded) return
+    const timer = window.setTimeout(() => setHeaderExpanded(false), 3000)
+    return () => window.clearTimeout(timer)
+  }, [headerMode, headerExpanded])
+
+  const headerContent = (
+    <div className="px-6 py-2 flex items-center gap-3">
+      <button
+        onClick={onBack}
+        aria-label="プロジェクト一覧に戻る"
+        className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
+          playerDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
+        }`}
+        title="プロジェクト一覧に戻る"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+        </svg>
+      </button>
+      <h1 className={`text-lg font-semibold ${playerDark ? 'text-white' : 'text-gray-900'}`}>
+        {title}
+      </h1>
+    </div>
+  )
+
   return (
     <div
       // #394: プレイヤーの見た目デフォルトは黒。dark 時はキャンバスの背景色 (0x000000) に
       // 一致する bg-black にして、ロード画面（黒）→キャンバス（黒）を継ぎ目なく繋ぐ。
-      className={`flex flex-col overflow-hidden ${playerDark ? 'dark bg-black' : 'bg-white'}`}
+      // relative (#519): collapsed ヘッダのハンドル/オーバーレイの絶対配置の基準にする。
+      className={`relative flex flex-col overflow-hidden ${playerDark ? 'dark bg-black' : 'bg-white'}`}
       style={{ height: viewportHeight, minHeight: viewportHeight }}
     >
       {/* プレイヤーヘッダ（戻る＋タイトル）(#392):
@@ -629,36 +677,70 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           （#388 の TitleOverlay ゲートは deep-link 意図で startSceneId のまま。こちらは
           埋め込み文脈判定で isEmbedded()。関心が別なのでゲートも別。）
           ヘッダを外しても外枠は flex-col、<main> が flex-1 で全高を埋める（viewportHeight は
-          visual viewport 全高で header 高さ前提を持たない）。 */}
-      {!embedded && (
+          visual viewport 全高で header 高さ前提を持たない）。
+
+          #519: 上記の isEmbedded() 抑制とは独立に、frontmatter `header:` で standalone 再生でも
+          ヘッダを抑制できる。`visible`（既定・後方互換）はここで従来どおりのヘッダを描画し、
+          `hidden`/`collapsed` は下の別ブロックに委ねる（`hidden` は何も描画しない、`collapsed` は
+          折りたたみハンドル＋タップ展開のオーバーレイヘッダ）。
+          `!loading &&`（#519 セルフレビュー should）: headerMode は `normalizeHeaderMode(doc?.header)`
+          で doc 未取得（初期値 null）の間は既定の 'visible' を返すため、これが無いと
+          `hidden`/`collapsed` 設定時も doc 取得完了までの一瞬だけ従来のフルヘッダーが表示されて
+          しまう（FOUC）。`hidden` を選ぶ動機（外部に name-name だと気づかせない・戻れなくする）
+          と矛盾するため、loading 中は headerMode を問わずヘッダーを一切出さない。
+          `doc !== null` ではなく `!loading` にしているのは、doc 取得失敗時（error 表示）でも
+          エントリ MD ロード中と違って `!loading` は true になり、`visible`（既定）ならヘッダー
+          の「戻る」導線を維持できるため（<main> のエラー表示自体には戻るボタンが無い）。 */}
+      {!loading && !embedded && headerMode === 'visible' && (
         <header
           // #394: ヘッダも playerDark に合わせる。ルート背景が黒（dark 既定）なのに
           // ヘッダだけ light 配色だと食い違うため、プレイヤーテーマに一致させる。
           className={`border-b ${playerDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'}`}
         >
-          <div className="px-6 py-2 flex items-center gap-3">
-            <button
-              onClick={onBack}
-              aria-label="プロジェクト一覧に戻る"
-              className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
-                playerDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
-              }`}
-              title="プロジェクト一覧に戻る"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 19l-7-7 7-7"
-                />
-              </svg>
-            </button>
-            <h1 className={`text-lg font-semibold ${playerDark ? 'text-white' : 'text-gray-900'}`}>
-              {title}
-            </h1>
-          </div>
+          {headerContent}
         </header>
+      )}
+
+      {/* #519: header: "collapsed" — 普段はヘッダを隠し、画面上部中央の小さなハンドルをタップすると
+          一時的にヘッダ（戻る＋タイトル）が現れる。レイアウトを押し下げない absolute オーバーレイに
+          して <main> の高さは変えない（visible のときと違い、展開中も他要素とサイズが食い違わない）。
+          3秒放置で自動的に折りたたむ（普段は隠れている状態を維持）。再タップでも閉じられる。 */}
+      {!loading && !embedded && headerMode === 'collapsed' && (
+        <>
+          <button
+            onClick={() => setHeaderExpanded((v) => !v)}
+            aria-label={headerExpanded ? 'ヘッダーを閉じる' : 'ヘッダーを表示'}
+            aria-expanded={headerExpanded}
+            className={`absolute top-0 left-1/2 -translate-x-1/2 z-20 w-12 h-4 flex items-center justify-center rounded-b-md transition-colors ${
+              playerDark
+                ? 'bg-gray-900/70 text-gray-400 hover:bg-gray-800'
+                : 'bg-blue-50/80 text-gray-500 hover:bg-blue-100'
+            }`}
+          >
+            <svg
+              className={`w-3 h-3 transition-transform ${headerExpanded ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 9l-7 7-7-7"
+              />
+            </svg>
+          </button>
+          {headerExpanded && (
+            <header
+              className={`absolute top-0 left-0 right-0 z-10 border-b ${
+                playerDark ? 'border-gray-700 bg-gray-900' : 'border-blue-200 bg-blue-50'
+              }`}
+            >
+              {headerContent}
+            </header>
+          )}
+        </>
       )}
 
       <main className="flex-1 overflow-hidden relative">

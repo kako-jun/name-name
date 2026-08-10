@@ -1455,6 +1455,7 @@ mod tests {
         Document {
             engine: "test".to_string(),
             aspect_ratio: "16:9".to_string(),
+            header: None,
             choice_style: None,
             font_family: None,
             font_size: None,

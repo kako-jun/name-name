@@ -43,7 +43,7 @@ async function ensureInit(): Promise<void> {
  * 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。
  *
  * 適用範囲: ランタイム側で「指定なし」と「明示的に空文字を指定」を区別する必要がない
- * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`)。
+ * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`)。
  * 必須テキスト系（`character`, `text`, `path`）には適用しない — それらは空文字も意味のある値。
  */
 function nullIfEmpty(s: string | null | undefined): string | null {
@@ -293,6 +293,9 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // （未指定は下流で既定 false ＝従来どおり linear）。ここを忘れると Rust 側は正しくパースされて
     // いるのに wasm 経由で undefined になり、テストは緑のまま本番だけ壊れる（#310/#378 と同じ事故パターン）。
     pixel_art: doc.pixel_art ?? null,
+    // standalone 再生時のプレイヤーヘッダ出し方 (#519)。dialog_style と同じく空文字は null に倒す
+    // （未指定は runtime 既定 "visible" にフォールバック）。
+    header: nullIfEmpty(doc.header),
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,
