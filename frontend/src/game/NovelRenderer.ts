@@ -2693,6 +2693,11 @@ export class NovelRenderer {
    * 残る場合がある（デバッグ用途のため許容）。
    *
    * 同時実行は非対応。実行中（wait 待機中など）の再呼び出しは throw する。
+   *
+   * destroy 後ガード (#515): `wait` ステップの `await` 中に destroy() が呼ばれると
+   * `this.initialized` が false になる。#460/#462/#463 と同型のパターンとして、wait 明け
+   * 直後に必ずチェックし、破棄済みなら以降の step（advance/choice 含む）を処理せず終了する
+   * （finally は try/finally により通常どおり実行され、isReplaying/msPerChar は後始末される）。
    */
   async playScript(steps: Step[]): Promise<void> {
     if (this.isReplaying) throw new Error('playScript is already running')
@@ -2717,6 +2722,8 @@ export class NovelRenderer {
             break
           case 'wait':
             await new Promise<void>((resolve) => this.time.setTimeout(resolve, step.ms))
+            // wait 待機中に destroy() され得る (#515)。破棄済みなら以降の step には進まない。
+            if (!this.initialized) return
             break
         }
       }

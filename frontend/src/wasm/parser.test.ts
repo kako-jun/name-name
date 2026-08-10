@@ -1026,3 +1026,213 @@ describe('parseMarkdown RpgEvent 内会話の正準化スコープ end-to-end (#
     expect(npc && 'Npc' in npc && npc.Npc.name).toBe('村人--A')
   })
 })
+
+describe('parseMarkdown + normalizeEvents: RpgMap の encounter_rate/encounter_groups が normalize を生き残る (#517)', () => {
+  // #172 で追加された encounter_rate/encounter_groups が normalizeEvents の RpgMap ブランチの
+  // フィールド列挙リビルドから漏れ、常に undefined に潰れていた回帰テスト（#308/#310/#407/#508 に
+  // 続く同型バグの5件目）。RpgMap ブランチを spread 方式に倒した修正が正しく効いていることを、
+  // 実 parseMarkdown（WASM 同梱）経由で確認する。
+  const markdownWithEncounter = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## m: マップ',
+    '',
+    '[マップ 3x3 タイル=32]',
+    'GGG',
+    'GGG',
+    'GGG',
+    '[/マップ]',
+    '[エンカウント率: 1/16]',
+    '[エンカウント群: slime, ghost]',
+    '',
+  ].join('\n')
+
+  const markdownWithoutEncounter = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## m: マップ',
+    '',
+    '[マップ 3x3 タイル=32]',
+    'GGG',
+    'GGG',
+    'GGG',
+    '[/マップ]',
+    '',
+  ].join('\n')
+
+  const findRpgMap = (doc: Awaited<ReturnType<typeof parseMarkdown>>) => {
+    const events = doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
+    const rpgMap = events.find((e) => typeof e === 'object' && 'RpgMap' in e)
+    if (!rpgMap || typeof rpgMap !== 'object' || !('RpgMap' in rpgMap)) {
+      throw new Error('RpgMap not found')
+    }
+    return rpgMap.RpgMap
+  }
+
+  it('encounter_rate/encounter_groups が normalize 後も保持される', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownWithEncounter))
+    expect(map.encounter_rate).toBe(16)
+    expect(map.encounter_groups).toEqual(['slime', 'ghost'])
+  })
+
+  it('同じ RpgMap の既存フィールド（width/height/tiles）も引き続き保持される（spread化の非回帰）', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownWithEncounter))
+    expect(map.width).toBe(3)
+    expect(map.height).toBe(3)
+    expect(map.tiles.length).toBe(3)
+  })
+
+  it('未指定時は encounter_rate/encounter_groups が null に正規化される（undefined ではない）', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownWithoutEncounter))
+    expect(map.encounter_rate).toBeNull()
+    expect(map.encounter_groups).toBeNull()
+  })
+})
+
+describe('parseMarkdown + normalizeEvents: RpgMap encounter デシジョンテーブル未カバー行 (#517 P1/P3/P4/P5/P6/P7/P9)', () => {
+  // 上の describe（#517 本体）は「両方指定」「両方未指定」の2行しか押さえていない。
+  // ここでは spread 化した RpgMap ブランチのデシジョンテーブルで空いていた行
+  // （rate のみ0/rateのみ正値/両方非trivialな組み合わせ/日本語ID/既存フィールド回帰/console出力）
+  // を実 parseMarkdown（WASM 同梱）経由で埋める。
+
+  const findRpgMap = (doc: Awaited<ReturnType<typeof parseMarkdown>>) => {
+    const events = doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
+    const rpgMap = events.find((e) => typeof e === 'object' && 'RpgMap' in e)
+    if (!rpgMap || typeof rpgMap !== 'object' || !('RpgMap' in rpgMap)) {
+      throw new Error('RpgMap not found')
+    }
+    return rpgMap.RpgMap
+  }
+
+  const mapMarkdown = (extraLines: string[]) =>
+    [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## m: マップ',
+      '',
+      '[マップ 3x3 タイル=32]',
+      'GGG',
+      'GGG',
+      'GGG',
+      '[/マップ]',
+      ...extraLines,
+      '',
+    ].join('\n')
+
+  const markdownRateZeroOnly = mapMarkdown(['[エンカウント率: 0]'])
+  const markdownRatePositiveOnly = mapMarkdown(['[エンカウント率: 8]'])
+  const markdownRateZeroWithGroups = mapMarkdown(['[エンカウント率: 0]', '[エンカウント群: slime]'])
+  const markdownJapaneseGroups = mapMarkdown([
+    '[エンカウント率: 4]',
+    '[エンカウント群: スライム, ghost]',
+  ])
+  const markdownNoEncounterNoHeights = mapMarkdown([])
+  const markdownWithHeights = mapMarkdown([
+    '[壁高さ]',
+    '1 2 1',
+    '1 1 1',
+    '1 2 1',
+    '[/壁高さ]',
+    '[床高さ]',
+    '0 0 0',
+    '0 0.25 0',
+    '0 0 0',
+    '[/床高さ]',
+    '[天井高さ]',
+    '1 1 1',
+    '1 2 1',
+    '1 1 1',
+    '[/天井高さ]',
+  ])
+
+  it('P1: encounter_rate: 0のみ設定（groups未設定）時、rateは0のまま保持されnullに潰れない', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownRateZeroOnly))
+    expect(map.encounter_rate).toBe(0)
+    expect(map.encounter_groups).toBeNull()
+  })
+
+  it('P4: encounter_rateに正値のみ設定（groups未設定）時、rateは保持されgroupsはnullになる', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownRatePositiveOnly))
+    expect(map.encounter_rate).toBe(8)
+    expect(map.encounter_groups).toBeNull()
+  })
+
+  it('P3: encounter_rate:0 と encounter_groups が同時設定時、両方とも入力値のまま保持される（rate=0はgroups存在と両立し欠落しない）', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownRateZeroWithGroups))
+    expect(map.encounter_rate).toBe(0)
+    expect(map.encounter_groups).toEqual(['slime'])
+  })
+
+  it('P7: encounter_groupsに日本語monster_idが混在しても文字化けせず保持される', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownJapaneseGroups))
+    expect(map.encounter_groups).toEqual(['スライム', 'ghost'])
+  })
+
+  it('P5: wall_heights/floor_heights/ceiling_heightsが指定時は配列のまま保持される（spread化の非回帰）', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownWithHeights))
+    expect(map.wall_heights).toEqual([
+      [1, 2, 1],
+      [1, 1, 1],
+      [1, 2, 1],
+    ])
+    expect(map.floor_heights).toEqual([
+      [0, 0, 0],
+      [0, 0.25, 0],
+      [0, 0, 0],
+    ])
+    expect(map.ceiling_heights).toEqual([
+      [1, 1, 1],
+      [1, 2, 1],
+      [1, 1, 1],
+    ])
+  })
+
+  it('P5: wall_heights/floor_heights/ceiling_heights未指定時はnullに正規化される（spread化の非回帰）', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownNoEncounterNoHeights))
+    expect(map.wall_heights).toBeNull()
+    expect(map.floor_heights).toBeNull()
+    expect(map.ceiling_heights).toBeNull()
+  })
+
+  it('P6: RpgMapの必須フィールド（width/height/tile_size/tiles）がspread後も型・値とも変化しない（tile_sizeを明示チェック）', async () => {
+    const map = findRpgMap(await parseMarkdown(markdownWithHeights))
+    expect(map.width).toBe(3)
+    expect(map.height).toBe(3)
+    expect(map.tile_size).toBe(32)
+    expect(map.tiles).toEqual([
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, 0, 0],
+    ])
+  })
+
+  it('P9: 上記いずれの正規なケースでもnormalizeEvents実行中にconsole.warn/errorが出ない', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await parseMarkdown(markdownRateZeroOnly)
+    await parseMarkdown(markdownRatePositiveOnly)
+    await parseMarkdown(markdownRateZeroWithGroups)
+    await parseMarkdown(markdownJapaneseGroups)
+    await parseMarkdown(markdownWithHeights)
+    await parseMarkdown(markdownNoEncounterNoHeights)
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+})

@@ -73,7 +73,7 @@ BGM / SE のフェード途中、タイプライターアニメーション中�
 
 クリック操作列を配列として受け取り、決定論的に状態を進める API。
 タイプライターをスキップ（msPerChar=0）して高速実行する。
-実装: `NovelRenderer.playScript`、`Step` 型は `GameState.ts`。再入ガード（実行中の再呼び出しは throw）+ 完了・例外時の msPerChar 復元（try/finally）。`wait` ステップを追加（将来の非同期イベント待機用）。vitest 17 ケース。
+実装: `NovelRenderer.playScript`、`Step` 型は `GameState.ts`。再入ガード（実行中の再呼び出しは throw）+ 完了・例外時の msPerChar 復元（try/finally）。`wait` ステップを追加（将来の非同期イベント待機用）。vitest 26 ケース（#515 destroy 後ガードの未カバー行 N1/N2/N3/N4/N7 の5件を含む）。
 
 ```typescript
 type Step =

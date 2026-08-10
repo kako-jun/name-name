@@ -384,7 +384,7 @@ interface NovelGameState {
 | `getSnapshot()`                                         | 現在の状態をスナップショットとして取得                                                                                                           |
 | `seekTo(historyIndex)`                                  | 履歴の指定位置にジャンプ                                                                                                                         |
 | `applyState(state)`                                     | スナップショットから画面を復元                                                                                                                   |
-| `playScript(steps)`                                     | 操作列（`advance`/`choice`/`wait`）を決定論的にリプレイ（#220 Phase 1、デバッグ/テスト用。再生中 msPerChar=0、完了・例外時に復元、再入は throw） |
+| `playScript(steps)`                                     | 操作列（`advance`/`choice`/`wait`）を決定論的にリプレイ（#220 Phase 1、デバッグ/テスト用。再生中 msPerChar=0、完了・例外時に復元、再入は throw）。destroy 後ガード（#515）: `wait` ステップの `await` 中に `destroy()` されて `initialized=false` になった場合、wait 明け直後にそれを検知し、残りの step（後続の `advance`/`choice` 含む）を一切実行せず `playScript` を終了する（msPerChar 復元等の finally 後始末は通常どおり走る） |
 | `startFrom({sceneId, flags?, eventIndex?, textIndex?})` | 任意シーン+フラグ状態から開始（#220 Phase 2、デバッグ/テスト用。history リセット、flags 置換、不正 sceneId は完全 no-op）                        |
 | `setConfinedSceneIds(ids \| null)`                       | confinement（在圏）一覧を設定する（#386）。null（既定）なら制限なし。設定すると `jumpToScene` はこの集合外への遷移を通常のシーン遷移にせず `endStory()`（終劇）にする。呼び出し元は `PlayerScreen`（`?scene=` ディープリンク単独埋め込み時のみ） |
 | `setOnStoryEndedChange(cb)`                              | 終劇状態の変化コールバックを登録する（#386）。`NovelPlayer` が "to be continued..." の DOM 表示に使う                                              |
