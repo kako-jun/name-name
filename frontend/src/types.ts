@@ -287,7 +287,11 @@ export type Event =
    * ロード/フェード/移動が落ち着くまで待つ unit variant。
    */
   | 'WaitDisplayComplete'
-  | { Choice: { options: ChoiceOption[] } }
+  /**
+   * グリッド配置の列数 (#508)。`[選択: 列=N]` で指定。未指定 or 1 は従来の縦一列表示。
+   * 2 以上で ChoiceOverlay が `i % columns` 列目・`i / columns` 行目にボタンを並べる。
+   */
+  | { Choice: { options: ChoiceOption[]; columns?: number | null } }
   | { Flag: { name: string; value: FlagValue } }
   | { Condition: { flag: string; events: Event[] } }
   | { ExpressionChange: { character: string; expression: string } }

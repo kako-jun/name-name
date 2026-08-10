@@ -470,11 +470,15 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 out.push_str("[待機: 表示完了]\n");
                 prev_was_dialog_or_text = false;
             }
-            Event::Choice { options } => {
+            Event::Choice { options, columns } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str("[選択]\n");
+                // 列数指定 (#508) があるときだけ `[選択: 列=N]`、無指定時は従来どおり `[選択]`。
+                match columns {
+                    Some(n) => out.push_str(&format!("[選択: 列={}]\n", n)),
+                    None => out.push_str("[選択]\n"),
+                }
                 for opt in options {
                     out.push_str(&format!("- {} → {}\n", opt.text, opt.jump));
                 }

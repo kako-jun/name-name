@@ -73,7 +73,7 @@ BGM / SE のフェード途中、タイプライターアニメーション中�
 
 クリック操作列を配列として受け取り、決定論的に状態を進める API。
 タイプライターをスキップ（msPerChar=0）して高速実行する。
-実装: `NovelRenderer.playScript`、`Step` 型は `GameState.ts`。再入ガード（実行中の再呼び出しは throw）+ 完了・例外時の msPerChar 復元（try/finally）。`wait` ステップを追加（将来の非同期イベント待機用）。vitest 17 ケース。
+実装: `NovelRenderer.playScript`、`Step` 型は `GameState.ts`。再入ガード（実行中の再呼び出しは throw）+ 完了・例外時の msPerChar 復元（try/finally）。`wait` ステップを追加（将来の非同期イベント待機用）。vitest 26 ケース（#515 destroy 後ガードの未カバー行 N1/N2/N3/N4/N7 の5件を含む）。
 
 ```typescript
 type Step =
@@ -138,15 +138,19 @@ Phase 3 の `debug_scene` は開発環境限定のデバッグ起点だった。
 （theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の HTML リンクで行う設計）。
 `PlayerScreen` が対象ファイル自身の sceneId 一覧（entry doc/hub 自身は除く）を
 `NovelRenderer.setConfinedSceneIds` に渡す。圏外への遷移を検知すると通常のシーン遷移をせず
-`endStory()` を呼ぶ。終劇の判定箇所は 2 つある: **選んだ jump 先**が圏外なら `jumpToScene`
+`endStory()` を呼ぶ。終劇の判定箇所は 3 つある: **選んだ jump 先**が圏外なら `jumpToScene`
 （choice 確定後）が終劇する。加えて **全 option の jump 先が圏外の `[選択]` に到達した場合**は、
 選択肢を描画せず `processDirective` の Choice 分岐で先回りして終劇する（#398）。後者が無いと、
 全 option 圏外の choice は「クリックするまで」`jumpToScene` に届かず、`storyEnded` の
 postMessage（#395/#397）が発火しないため埋め込み側で既読化されなかった。既読化
 （`markCurrentSceneRead`）を済ませてから終劇するので、選択肢を出さずに完読を通知できる。
+さらに **`[選択]` を持たないまま `advance()` が resolvedEvents を最後まで消化した場合**は、
+confinement とは無関係に、`onEndCallback`（VideoExporter 専用）が未登録であれば `endStory()` を
+呼ぶ（#470。記述が尽きたシーンが無反応で固まって見える不具合の修正。`onEndCallback` 登録時＝
+動画書き出し中はそちらに完全委譲する）。
 `?scene=` が hub 自身の sceneId を指した場合は confinement を組まず無制限フローにフォールバック
-する（`confinedSceneIds === null` では両判定とも短絡しない。hub → 各お題への通常 choice 遷移を
-壊さないため）。
+する（`confinedSceneIds === null` では confinement 判定の 2 つとも短絡しない。hub → 各お題への
+通常 choice 遷移を壊さないため）。
 
 `endStory()` は `NovelGameState.storyEnded` という**宣言的フラグ**を true にする。この設計は
 本 ADR の核心（演出の中間状態を持たない・完全にシリアライズ可能）にそのまま従う: 背景・立ち絵の
@@ -187,7 +191,7 @@ intermission.md`。プロジェクト opt-in）の有無で分岐するように
 ## 関連
 
 - `GameState.ts`: `NovelGameState` 定義
-- `NovelRenderer.ts`: `applyState`、`startFrom`（`eventIndex=0` は `startScene` の fresh-start 経路、#399）、`restoreToScene`（startFrom の途中局面指定 / `loadFromSaveData` 共通コア）、`seekTo`、`advance`、`jumpToScene`、`processDirective`（Choice 短絡での終劇、#398）、`setConfinedSceneIds`、`endStory`
+- `NovelRenderer.ts`: `applyState`、`startFrom`（`eventIndex=0` は `startScene` の fresh-start 経路、#399）、`restoreToScene`（startFrom の途中局面指定 / `loadFromSaveData` 共通コア）、`seekTo`、`advance`（選択肢なし消化時の終劇、#470）、`jumpToScene`、`processDirective`（Choice 短絡での終劇、#398）、`setConfinedSceneIds`、`endStory`
 - `frontend/src/game/sceneQuery.ts` / `frontend/src/game/sceneConfinement.ts`: `?scene=` パーサ・confinement 判定（#386）
 - `docs/architecture.md`: 「状態管理: NovelGameState」セクション、「production 向けシーン直接ディープリンク `?scene=`」セクション
 - `docs/guide/debugger.md`: `debug_scene`（DEV 専用）の使い方ガイド
@@ -196,3 +200,4 @@ intermission.md`。プロジェクト opt-in）の有無で分岐するように
 - Issue #386: `?scene=` ディープリンク + confinement + 終劇（`storyEnded`）
 - Issue #398: 全 option 圏外の `[選択]` は描画せず `processDirective` の Choice 分岐で先回りして終劇する
 - Issue #399: 埋め込み開始（`?scene=`, `eventIndex=0`）を fresh-start 経路に乗せ、冒頭ディレクティブ実行＋立ち絵表示を通す
+- Issue #470: 選択肢なしでシーンの記述が尽きたとき `advance()` が `endStory()` を呼び明示的な終劇表示を出す

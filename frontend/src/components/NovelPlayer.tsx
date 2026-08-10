@@ -6,10 +6,12 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { Assets } from 'pixi.js'
 import { Event, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
+import { INACTIVITY_MS } from '../game/SeekBar'
 import { type NovelGameState } from '../game/GameState'
 import { parseDebugQuery } from '../game/debugQuery'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
@@ -289,6 +291,28 @@ function NovelPlayer({
   // 既定は畳んだ状態（#301 の collapsed 既定 true を引き継ぐ＝open 既定 false）。
   // 状態は localStorage（旧 DebugOverlay と同じキー意味）に best-effort で永続化する。
   const [debugOpen, setDebugOpen] = useState<boolean>(() => readDebugOpen())
+
+  // フルスクリーン最大化トグル (#468)。per-game opt-in ではなくエンジン標準機能として
+  // 全ゲーム共通で提供する。対象要素は fluidRootRef（letterbox 込みのゲーム画面全体。
+  // PlayerScreen のヘッダ等は含まない＝「ゲーム画面自体」の最大化）。
+  // 実際に画面がフルスクリーンかどうかは document.fullscreenElement が正で、ここは
+  // その追従用ミラー（ボタンのアイコン/aria-pressed 表示にだけ使う）。
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  // フルスクリーントグルの「タップ後の余韻」表示 (#468)。せおはやみ (theo-hayami)
+  // ReaderFrame.astro の nudgeActive と同じパターン: pointerdown/focus のたびに濃い表示
+  // (opacity 1) にし、INACTIVITY_MS（SeekBar と同じ 2.8 秒）操作が無ければ薄い表示
+  // (opacity .2) に戻す。hover/focus-visible 中は CSS 側で常時濃くなる（この state は
+  // 「操作の余韻」専用で、hover 自体はここに乗せない）。
+  const [fsToggleActive, setFsToggleActive] = useState(false)
+  const fsToggleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const nudgeFsToggleActive = useCallback(() => {
+    setFsToggleActive(true)
+    if (fsToggleTimerRef.current) clearTimeout(fsToggleTimerRef.current)
+    fsToggleTimerRef.current = setTimeout(() => {
+      setFsToggleActive(false)
+      fsToggleTimerRef.current = null
+    }, INACTIVITY_MS)
+  }, [])
 
   // fluid aspect ratio (#442): frontmatter `aspect_ratio: auto` のときは固定比率にロックせず、
   // ルート要素（w-full h-full＝実ビューポート追従）の実測サイズの向きから '16:9'/'9:16' を
@@ -802,6 +826,54 @@ function NovelPlayer({
     return () => window.removeEventListener('keydown', handleKey)
   }, [])
 
+  // フルスクリーン状態の追従 (#468)。ブラウザの Esc キー・OS 側操作等、ボタン以外の経路で
+  // フルスクリーンが解除/開始されるケースもあるため、document の 'fullscreenchange' を正として
+  // 都度ミラーする（自前 state を先行させない）。
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === fluidRootRef.current)
+    }
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  }, [])
+
+  // フルスクリーン最大化トグルの押下ハンドラ (#468)。対象は fluidRootRef（ゲーム画面自体）。
+  // 非対応ブラウザ（requestFullscreen が無い）・拒否（Promise reject）・iframe 埋め込みで
+  // Permissions Policy によりブロックされる場合（同期 throw のことがある）のいずれも例外を
+  // 握りつぶし、通常表示のまま何も起きない（完了条件: 非対応/拒否時のフォールバック）。
+  //
+  // 分岐条件は `document.fullscreenElement === el`（自分自身がフルスクリーン中か）で判定する。
+  // 上の isFullscreen state と同じ厳密比較にすることで、ホストページの別ウィジェット等
+  // 「別要素が既にフルスクリーン中」のケースを「自分がフルスクリーン中」と誤認しない。
+  // 誤認すると、ボタンの見た目は「フルスクリーンにする」なのに実際には他要素の
+  // exitFullscreen() を呼んでしまい、意図と逆の副作用（他要素のフルスクリーン解除）が起きる。
+  const handleFullscreenToggle = useCallback(() => {
+    const el = fluidRootRef.current
+    if (!el) return
+    try {
+      if (document.fullscreenElement === el) {
+        const result = document.exitFullscreen()
+        result?.catch(() => {})
+      } else if (el.requestFullscreen) {
+        const result = el.requestFullscreen()
+        result?.catch(() => {})
+      }
+    } catch {
+      // 非対応/拒否は握りつぶす（フォールバックは「何もしない」＝通常表示のまま）
+    }
+  }, [])
+
+  // letterbox/pillarbox の黒帯（canvas 外）タップで進行する (#467)。fluidRootRef 直下の
+  // 黒帯部分（canvas を内接させる containerRef の外側）には canvas 自身の pointerdown
+  // リスナーが届かないため、fluidRootRef 側にも同じ「進める」処理を持たせる。
+  // `e.target === e.currentTarget` で「fluidRootRef 自身への直接タップ」だけに絞り込む
+  // （canvas・ボタン等の子要素タップはそれぞれ自前のリスナーで処理済みなので、ここで拾うと
+  // 二重発火する。バブリングで来た子要素タップは target が子要素のままなので弾かれる）。
+  const handleOutsideCanvasPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return
+    rendererRef.current?.handleOutsideCanvasTap()
+  }, [])
+
   // クイックセーブ/ロード 通知 toast を表示するヘルパー (#142)
   const showToast = useCallback((message: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
@@ -833,6 +905,13 @@ function NovelPlayer({
   useEffect(() => {
     return () => {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    }
+  }, [])
+
+  // unmount 時にフルスクリーントグルの余韻タイマーをクリア (#468)
+  useEffect(() => {
+    return () => {
+      if (fsToggleTimerRef.current) clearTimeout(fsToggleTimerRef.current)
     }
   }, [])
 
@@ -942,6 +1021,9 @@ function NovelPlayer({
       ref={fluidRootRef}
       className="relative w-full h-full flex items-center justify-center bg-black"
       style={{ containerType: 'size' }}
+      // letterbox/pillarbox の黒帯タップで進行する (#467)。canvas 自身の pointerdown
+      // リスナーが届かない黒帯部分（このコンポーネント直下・canvas の外側）だけを拾う。
+      onPointerDown={handleOutsideCanvasPointerDown}
     >
       {/* デバッグ HUD パネル (#310): D ボタンの展開状態に追従。debug_enabled(/play) or
           editor のときだけ出す。閉じている/無効のときは何も描かない（D ボタンが唯一の入口）。 */}
@@ -961,6 +1043,30 @@ function NovelPlayer({
         className="overflow-hidden [&>canvas]:block [&>canvas]:w-full [&>canvas]:h-full"
         style={gameBoxStyle}
       />
+      {/* フルスクリーン最大化トグル (#468)。エンジン標準機能として全ゲーム共通で右上隅に置く
+          （右下の ⚙→A→S→D 列とは別位置）。押すたびに fluidRootRef 全体（ゲーム画面自体。
+          PlayerScreen のヘッダ等は含まない）をブラウザのフルスクリーン表示に出し入れする。
+          デザインはせおはやみ (theo-hayami) の ReaderFrame.astro / global.css
+          (.th-reader__fs-toggle) と同一にする（kako-jun 直接指示）: 44x44 の透明なタップ領域の
+          右上隅に 20x20 の塗り三角を clip-path で置き、三角の向き（対角線の位置は同じ、塗りつぶす
+          側が変わる）で expand(埋め込み表示中→押すと広げる)/collapse(最大化中→押すと戻す) を示す。
+          常時は薄く(opacity .2、CSS 側 .nn-fs-toggle)、hover/focus-visible/タップ直後
+          (INACTIVITY_MS=2800、SeekBar と同じ余韻。fsToggleActive で表現)は濃く(opacity 1)なる。
+          色は theo-hayami と同じ --color-th-gold 系の値をこのボタン専用にそのまま使う（Player/
+          Runtime は DESIGN.md のトークン適用対象外）。 */}
+      <button
+        type="button"
+        onClick={handleFullscreenToggle}
+        onPointerDown={nudgeFsToggleActive}
+        onFocus={nudgeFsToggleActive}
+        aria-label={isFullscreen ? 'フルスクリーンを解除する' : 'フルスクリーンで表示する'}
+        aria-pressed={isFullscreen}
+        title="フルスクリーン"
+        data-dir={isFullscreen ? 'collapse' : 'expand'}
+        className={`nn-fs-toggle${fsToggleActive ? ' nn-fs-toggle--active' : ''}`}
+      >
+        <span className="nn-fs-toggle__triangle" aria-hidden="true" />
+      </button>
       {/* 操作ボタン列 (#310): クリッカー/ダイアログ送り/シークバーと干渉しない右下隅に集約。
           右端から ⚙→A→S→D の順に並べ、消えるボタンがあっても詰めて隙間を作らない。
           #350: スライダ操作中(seekActive)はこの行ごと opacity でフェード退避し、pointer-events も
