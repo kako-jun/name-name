@@ -265,6 +265,7 @@ where
                 now,
                 Some(&image_fade),
                 &mut image_cache,
+                playback.is_blackout(),
             )
         })?;
 
