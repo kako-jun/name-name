@@ -142,6 +142,15 @@ where
 
 /// スプラッシュ画面を描画し、キー入力を1件待つ。`Action::Advance` で `Ok(true)`
 /// （本編へ進む）、`Action::Quit` で `Ok(false)`（そのまま終了）を返す。
+///
+/// `image_cache`/`scroll_offset` はフルキャンバス画像表示モード（`config.splash.logo_image`
+/// が `Some` の場合、#530）専用のローカル状態。`image_cache` はロゴ画像のデコード結果を
+/// 保持し（`event_loop` 側の `ImageCache` とは別インスタンス — スプラッシュはイベント絵と
+/// 同時に表示されないため共有する必要が無く、シグネチャ変更の影響範囲を最小化する）、
+/// `scroll_offset` は `Action::MoveUp`/`Action::MoveDown` で増減するスクロール位置。
+/// テキストモード（`logo_image` が `None`）ではどちらも参照されない（`ui::draw_splash`
+/// 参照）。以前はカーソル移動を選択肢が無いという理由で無視していたが（#482）、
+/// フルキャンバス画像表示モードのスクロールに転用する（#530）。
 fn show_splash<B>(
     terminal: &mut Terminal<B>,
     config: &Config,
@@ -151,14 +160,20 @@ where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    let mut image_cache = image_render::ImageCache::new();
+    let mut scroll_offset: u16 = 0;
     loop {
-        terminal.draw(|frame| ui::draw_splash(frame, config))?;
+        terminal.draw(|frame| ui::draw_splash(frame, config, &mut image_cache, scroll_offset))?;
 
         match next_action()? {
             Action::Advance => return Ok(true),
             Action::Quit => return Ok(false),
-            // スプラッシュ画面には選択肢が無いため、カーソル移動は無視する（#482）。
-            Action::MoveUp | Action::MoveDown | Action::None => {}
+            // テキストモード（`logo_image` が `None`）では `ui::draw_splash` が
+            // `draw_fullscreen_image`（`scroll_offset` を参照する側）を一切呼ばないため、
+            // ここでオフセットを動かしても見た目は変わらない（実質no-op、#530）。
+            Action::MoveUp => scroll_offset = scroll_offset.saturating_sub(1),
+            Action::MoveDown => scroll_offset = scroll_offset.saturating_add(1),
+            Action::None => {}
         }
     }
 }
