@@ -300,6 +300,19 @@ const CHOICE_CURSOR_PADDING: &str = "  ";
 /// `columns` が `None` または `1` 以下（`Event::Choice.columns` 未指定/不正値、#508）なら
 /// 従来どおりの縦一列描画（#482、非破壊）。`2` 以上なら [`draw_choice_grid`] にグリッド
 /// 描画を委譲する。
+/// 選択肢1件分のカーソル記号と強調スタイルを決める（#508 セルフレビュー: `draw_choice_list`
+/// と `draw_choice_grid` で同一ロジックが重複していたため共通化）。
+fn choice_cursor_prefix_and_style(is_selected: bool) -> (&'static str, Style) {
+    if is_selected {
+        (
+            CHOICE_CURSOR_SYMBOL,
+            Style::default().add_modifier(Modifier::REVERSED),
+        )
+    } else {
+        (CHOICE_CURSOR_PADDING, Style::default())
+    }
+}
+
 fn draw_choice_list(
     frame: &mut Frame,
     area: Rect,
@@ -313,17 +326,7 @@ fn draw_choice_list(
             .iter()
             .enumerate()
             .map(|(i, option)| {
-                let is_selected = i == cursor;
-                let prefix = if is_selected {
-                    CHOICE_CURSOR_SYMBOL
-                } else {
-                    CHOICE_CURSOR_PADDING
-                };
-                let style = if is_selected {
-                    Style::default().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                };
+                let (prefix, style) = choice_cursor_prefix_and_style(i == cursor);
                 Line::styled(format!("{prefix}{}", option.text), style)
             })
             .collect();
@@ -337,7 +340,7 @@ fn draw_choice_list(
 /// 選択肢を `columns` 列のグリッドとして描画する（#508、`draw_choice_list` から
 /// `columns >= 2` のときのみ呼ばれる）。行方向は `Layout::Vertical`、各行内の列方向は
 /// `Layout::Horizontal` をネストして組む — `i % columns` 列目・`i / columns` 行目に配置する
-/// GUI版 `novelLayout.ts` の `resolveChoiceGridLayout` と同じ規則（行優先で敷き詰める）。
+/// GUI版 `novelLayout.ts` の `computeChoiceGridLayout` と同じ規則（行優先で敷き詰める）。
 ///
 /// 縦一列描画（`Wrap` 付き `Paragraph`）と異なり、各セルは折り返し無しの1行表示にする —
 /// TUIはセル/グリフ単位の離散描画のため、ボタン状の固定幅グリッドセルに複数行の折り返しを
@@ -390,17 +393,7 @@ fn draw_choice_grid(
             let Some(option) = options.get(index) else {
                 continue;
             };
-            let is_selected = index == cursor;
-            let prefix = if is_selected {
-                CHOICE_CURSOR_SYMBOL
-            } else {
-                CHOICE_CURSOR_PADDING
-            };
-            let style = if is_selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
+            let (prefix, style) = choice_cursor_prefix_and_style(index == cursor);
             let paragraph = Paragraph::new(Line::styled(format!("{prefix}{}", option.text), style));
             frame.render_widget(paragraph, *col_area);
         }
