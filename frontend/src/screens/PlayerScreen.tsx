@@ -682,8 +682,16 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           #519: 上記の isEmbedded() 抑制とは独立に、frontmatter `header:` で standalone 再生でも
           ヘッダを抑制できる。`visible`（既定・後方互換）はここで従来どおりのヘッダを描画し、
           `hidden`/`collapsed` は下の別ブロックに委ねる（`hidden` は何も描画しない、`collapsed` は
-          折りたたみハンドル＋タップ展開のオーバーレイヘッダ）。 */}
-      {!embedded && headerMode === 'visible' && (
+          折りたたみハンドル＋タップ展開のオーバーレイヘッダ）。
+          `!loading &&`（#519 セルフレビュー should）: headerMode は `normalizeHeaderMode(doc?.header)`
+          で doc 未取得（初期値 null）の間は既定の 'visible' を返すため、これが無いと
+          `hidden`/`collapsed` 設定時も doc 取得完了までの一瞬だけ従来のフルヘッダーが表示されて
+          しまう（FOUC）。`hidden` を選ぶ動機（外部に name-name だと気づかせない・戻れなくする）
+          と矛盾するため、loading 中は headerMode を問わずヘッダーを一切出さない。
+          `doc !== null` ではなく `!loading` にしているのは、doc 取得失敗時（error 表示）でも
+          エントリ MD ロード中と違って `!loading` は true になり、`visible`（既定）ならヘッダー
+          の「戻る」導線を維持できるため（<main> のエラー表示自体には戻るボタンが無い）。 */}
+      {!loading && !embedded && headerMode === 'visible' && (
         <header
           // #394: ヘッダも playerDark に合わせる。ルート背景が黒（dark 既定）なのに
           // ヘッダだけ light 配色だと食い違うため、プレイヤーテーマに一致させる。
@@ -697,7 +705,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           一時的にヘッダ（戻る＋タイトル）が現れる。レイアウトを押し下げない absolute オーバーレイに
           して <main> の高さは変えない（visible のときと違い、展開中も他要素とサイズが食い違わない）。
           3秒放置で自動的に折りたたむ（普段は隠れている状態を維持）。再タップでも閉じられる。 */}
-      {!embedded && headerMode === 'collapsed' && (
+      {!loading && !embedded && headerMode === 'collapsed' && (
         <>
           <button
             onClick={() => setHeaderExpanded((v) => !v)}

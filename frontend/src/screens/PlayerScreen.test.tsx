@@ -1411,9 +1411,13 @@ describe('PlayerScreen', () => {
   //
   // isEmbedded()（#392）とは独立の軸。normalizeHeaderMode(doc.header) が
   // 'hidden'/'collapsed' はそのまま透過・それ以外（未指定/不正値）は 'visible' に
-  // フォールバックし、描画ゲートは `!embedded && headerMode==='visible'`（フルヘッダ）/
-  // `!embedded && headerMode==='collapsed'`（ハンドル＋オーバーレイ）/ それ以外は非表示。
+  // フォールバックし、描画ゲートは `!loading && !embedded && headerMode==='visible'`（フルヘッダ）/
+  // `!loading && !embedded && headerMode==='collapsed'`（ハンドル＋オーバーレイ）/ それ以外は非表示。
   // embedded===true は headerMode に関係なく常に非表示（両ブロックとも `!embedded` を含む）。
+  // `!loading`（#519 セルフレビュー should, ケース12/13）: doc は初期値 null のため取得完了前は
+  // normalizeHeaderMode(undefined) が既定 'visible' を返す。これが無いと header: "hidden"/
+  // "collapsed" 設定時も取得完了までの一瞬フルヘッダーが見えてしまう（FOUC）ため、loading 中は
+  // headerMode を問わず何も出さない。
   // renderWithFrontmatter（#310/#382 で定義済み）を再利用し、doc.header に直接値を注入する。
   describe('PlayerScreen header: hidden/collapsed による standalone ヘッダ抑制 (#519)', () => {
     it('1: standalone×header:"visible" は戻るボタンとtitle h1を持つ<header>(banner)が描画される', async () => {
@@ -1493,6 +1497,98 @@ describe('PlayerScreen', () => {
       expect(screen.getByRole('banner')).toBeInTheDocument()
     })
 
+    // --- FOUC防止（#519 セルフレビュー should）---
+    //
+    // headerMode = normalizeHeaderMode(doc?.header) は doc の初期値が null のため、entry MD の
+    // 取得完了（loading=false）までの間は既定の 'visible' を返す。`!loading &&` ゲートが無いと、
+    // header: "hidden"/"collapsed" を設定していても doc 取得完了までの一瞬だけ従来のフルヘッダー
+    // （banner）が表示されてしまう（`hidden` を選ぶ動機＝外部に name-name だと気づかせない、と
+    // 直接矛盾する）。api.getContents を deferred にして loading 中の状態を固定し、その間は
+    // headerMode を問わず何も出ないこと・ロード完了後は従来どおり出ることを確認する。
+    it('12: doc取得中（loading）はheader:"hidden"設定時と同様、既定headerMode="visible"でもヘッダーが一切表示されない', async () => {
+      const content = deferred<{ path: string; sha: string; content: string }>()
+      listProjectsMock.mockResolvedValue([
+        { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
+      ])
+      getContentsMock.mockReturnValue(content.promise)
+      parseMarkdownMock.mockResolvedValue({
+        engine: 'name-name',
+        // header 未指定＝既定 'visible'。loading 中に既に 'visible' 相当が漏れ出ないことを見る。
+        chapters: [
+          {
+            id: 'c1',
+            title: 'chapter',
+            default_bgm: null,
+            scenes: [{ id: 's1', title: 'scene', events: [] }],
+          },
+        ],
+      })
+
+      render(
+        <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('読み込み中...')).toBeInTheDocument()
+      })
+      expect(screen.queryByRole('banner')).toBeNull()
+      expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
+      expect(screen.queryByLabelText('ヘッダーを表示')).toBeNull()
+      expect(screen.queryByLabelText('ヘッダーを閉じる')).toBeNull()
+
+      await act(async () => {
+        content.resolve({ path: 'script.md', sha: 'sha1', content: '# chapter' })
+      })
+
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+      // ロード完了後は headerMode="visible"（既定）どおりヘッダーが出る＝影響が無いことの確認。
+      expect(screen.getByRole('banner')).toBeInTheDocument()
+    })
+
+    it('13: doc取得中（loading）はheader:"collapsed"設定時も折りたたみハンドルすら表示されない', async () => {
+      const content = deferred<{ path: string; sha: string; content: string }>()
+      listProjectsMock.mockResolvedValue([
+        { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
+      ])
+      getContentsMock.mockReturnValue(content.promise)
+      parseMarkdownMock.mockResolvedValue({
+        engine: 'name-name',
+        header: 'collapsed',
+        chapters: [
+          {
+            id: 'c1',
+            title: 'chapter',
+            default_bgm: null,
+            scenes: [{ id: 's1', title: 'scene', events: [] }],
+          },
+        ],
+      })
+
+      render(
+        <PlayerScreen projectName="friday-1930" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('読み込み中...')).toBeInTheDocument()
+      })
+      // collapsed の折りたたみハンドル自体も loading 中は出ない（普段は隠れている、を loading 中も守る）
+      expect(screen.queryByLabelText('ヘッダーを表示')).toBeNull()
+      expect(screen.queryByRole('banner')).toBeNull()
+
+      await act(async () => {
+        content.resolve({ path: 'script.md', sha: 'sha1', content: '# chapter' })
+      })
+
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+      // ロード完了後は headerMode="collapsed" どおりハンドルが出る。
+      expect(screen.getByLabelText('ヘッダーを表示')).toBeInTheDocument()
+      expect(screen.queryByRole('banner')).toBeNull()
+    })
+
     // --- collapsed ハンドルの展開/自動折りたたみ操作 (#519) ---
     //
     // ハンドルの 3 秒自動折りたたみタイマー（window.setTimeout）を検証するため vi.useFakeTimers()
@@ -1506,7 +1602,7 @@ describe('PlayerScreen', () => {
         vi.useRealTimers()
       })
 
-      it('12: collapsed初期状態でハンドルをタップするとheaderExpanded=true相当になりheaderが表示される', async () => {
+      it('14: collapsed初期状態でハンドルをタップするとheaderExpanded=true相当になりheaderが表示される', async () => {
         await renderWithFrontmatter({ header: 'collapsed' })
         vi.useFakeTimers()
         fireEvent.click(screen.getByLabelText('ヘッダーを表示'))
@@ -1514,7 +1610,7 @@ describe('PlayerScreen', () => {
         expect(screen.getByLabelText('ヘッダーを閉じる')).toBeInTheDocument()
       })
 
-      it('13: 展開後、3秒経過すると自動的に折りたたまれる', async () => {
+      it('15: 展開後、3秒経過すると自動的に折りたたまれる', async () => {
         await renderWithFrontmatter({ header: 'collapsed' })
         vi.useFakeTimers()
         fireEvent.click(screen.getByLabelText('ヘッダーを表示'))
@@ -1528,7 +1624,7 @@ describe('PlayerScreen', () => {
         expect(screen.getByLabelText('ヘッダーを表示')).toBeInTheDocument()
       })
 
-      it('14: 展開後、3秒未満でハンドルを再タップすると即座に折りたたまれる（タイマー満了を待たない）', async () => {
+      it('16: 展開後、3秒未満でハンドルを再タップすると即座に折りたたまれる（タイマー満了を待たない）', async () => {
         await renderWithFrontmatter({ header: 'collapsed' })
         vi.useFakeTimers()
         fireEvent.click(screen.getByLabelText('ヘッダーを表示'))
@@ -1546,7 +1642,7 @@ describe('PlayerScreen', () => {
         expect(screen.getByLabelText('ヘッダーを表示')).toBeInTheDocument()
       })
 
-      it('15: 展開中にunmountされるとclearTimeoutが呼ばれ、unmount後に状態更新のエラーが出ない', async () => {
+      it('17: 展開中にunmountされるとclearTimeoutが呼ばれ、unmount後に状態更新のエラーが出ない', async () => {
         listProjectsMock.mockResolvedValue([
           { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
         ])
