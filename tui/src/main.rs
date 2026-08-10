@@ -1251,6 +1251,48 @@ mod tests {
     }
 
     #[test]
+    fn show_splash_moveleft_and_moveright_do_not_change_scroll_offset() {
+        // スプラッシュ画面には左右移動の対象となる複数列選択肢が無いため、
+        // MoveLeft/MoveRight はNoneと同様に無視されるはず（#482、#508）。
+        // スクロール可能な画像でMoveDownによりオフセットを進めた後、MoveLeft/MoveRightを
+        // 連打しても描画結果がMoveDownのみの場合と変わらないことを確認する。
+        let fixture_path = per_row_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 0;
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut baseline_action, _r1) =
+            action_queue(vec![Action::MoveDown, Action::MoveDown, Action::Advance]);
+        show_splash(&mut baseline_terminal, &config, &mut baseline_action).unwrap();
+        let baseline_text = buffer_text(&baseline_terminal);
+
+        let mut moved_terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut moved_action, _r2) = action_queue(vec![
+            Action::MoveDown,
+            Action::MoveDown,
+            Action::MoveLeft,
+            Action::MoveRight,
+            Action::MoveLeft,
+            Action::Advance,
+        ]);
+        show_splash(&mut moved_terminal, &config, &mut moved_action).unwrap();
+        let moved_text = buffer_text(&moved_terminal);
+
+        assert_eq!(
+            baseline_text, moved_text,
+            "MoveLeft/MoveRightを挟んでもスクロールオフセットは変化してはいけない"
+        );
+    }
+
+    #[test]
     fn show_splash_advance_interrupts_image_mode_scrolling_and_returns_true_immediately() {
         let fixture_path =
             crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 1, 1), 1, 1);
