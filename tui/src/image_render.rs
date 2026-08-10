@@ -328,17 +328,13 @@ fn compute_cover_crop(
 /// 幅を使ったときの高さを求め、それが `max_rows` に収まればそれを採用（幅優先）。収まらない
 /// 場合は逆に `max_rows` いっぱいに高さを使ったときの幅を採用する（高さ優先）。
 ///
-/// フルキャンバス画像表示（`ui::draw_fullscreen_image`、#530）は「常にキャンバス全幅を使い、
-/// 高さは表示可能行数を超えたらスクロールする」という非対称な要件を持つため、呼び出し側は
-/// `max_rows` に実質無制限に近い大きな値
-/// （[`crate::ui::FULLSCREEN_IMAGE_UNBOUNDED_ROWS`]）を渡すことで、常に幅優先の枝（＝
-/// `fitted_cols == max_cols`）になるようにする。この関数自体は `max_rows` を対称に扱う
-/// 汎用の2軸 contain-fit のままにしておくことで、テストが両方の分岐（幅優先/高さ優先）を
-/// 独立に検証できる。
+/// フルキャンバス画像表示（`ui::draw_fullscreen_image`、#530）は高さ上限を持たない全幅表示
+/// へ専用計算を使うため、この関数は汎用2軸 contain-fit のテスト用ヘルパーとして残す。
 ///
 /// `image_w`/`image_h`/`max_cols`/`max_rows` のいずれかが0の場合は `(0, 0)` を返す
 /// （panicしない）。戻り値は常に `1 <= fitted_cols <= max_cols` かつ
 /// `1 <= fitted_rows <= max_rows` を満たす（`max_cols`/`max_rows` がいずれも0でない限り）。
+#[cfg(test)]
 pub fn compute_contain_fit(image_w: u32, image_h: u32, max_cols: u16, max_rows: u16) -> (u16, u16) {
     if image_w == 0 || image_h == 0 || max_cols == 0 || max_rows == 0 {
         return (0, 0);
@@ -364,6 +360,24 @@ pub fn compute_contain_fit(image_w: u32, image_h: u32, max_cols: u16, max_rows: 
     (fitted_cols, fitted_rows)
 }
 
+/// フルキャンバス画像表示（`ui::draw_fullscreen_image`、#530）専用: 画像全体をクロップ無しで
+/// **全幅**（`target_cols` セル）へ合わせたとき、必要になる総行数を返す。
+///
+/// `compute_contain_fit(..., max_rows=十分大きい値)` と違い「高さ上限」を仮置きしないため、
+/// 極端な縦長画像でも高さ優先枝へ落ちず、常に全幅表示の仕様をそのまま計算できる。
+/// ただし呼び出し側が保持するスクロールオフセットは `u16` 行単位なので、戻り値も
+/// `u16::MAX` へ飽和させる（オーバーフロー回避と、不合理に大きい行数のまま上位層へ
+/// 流さないための安全策）。
+pub fn compute_full_width_rows(image_w: u32, image_h: u32, target_cols: u16) -> u16 {
+    if image_w == 0 || image_h == 0 || target_cols == 0 {
+        return 0;
+    }
+    let visual_w = f64::from(target_cols) * TERMINAL_CELL_ASPECT_RATIO;
+    let img_ratio = f64::from(image_w) / f64::from(image_h);
+    let rows = (visual_w / img_ratio).round();
+    rows.clamp(1.0, f64::from(u16::MAX)) as u16
+}
+
 /// スクロールオフセットを `[0, content_rows.saturating_sub(visible_rows)]` へクランプする
 /// 純粋関数（フルキャンバス画像表示の縦スクロール用、#530）。`content_rows <= visible_rows`
 /// （そもそもスクロールが不要）のときは `max_offset` が0になるため、常に0を返す。
@@ -377,6 +391,7 @@ pub fn clamp_scroll_offset(offset: u16, content_rows: u16, visible_rows: u16) ->
 /// 場合は0行の空グリッドを返し、`offset + count` が `grid.rows` を超える場合は末尾で
 /// 切り詰める（`clamp_scroll_offset` で事前にクランプされている前提だが、この関数自体も
 /// 範囲外アクセスで panic しないよう独立して防御する）。
+#[cfg(test)]
 pub fn slice_rendered_image_rows(grid: &RenderedImage, offset: u16, count: u16) -> RenderedImage {
     let start = offset.min(grid.rows);
     let end = start.saturating_add(count).min(grid.rows);
@@ -455,29 +470,51 @@ fn crop_rgba(
     out
 }
 
+fn rgba_buffer_has_expected_len(pixels: &[u8], img_w: u32, img_h: u32) -> bool {
+    let Some(expected_len) = (img_w as usize)
+        .checked_mul(img_h as usize)
+        .and_then(|pixel_count| pixel_count.checked_mul(4))
+    else {
+        return false;
+    };
+    pixels.len() >= expected_len
+}
+
 /// 元画像（`pixels`: RGBA straight alpha、`img_w` x `img_h`）を、ボックス平均で
 /// `target_w` x `target_h` のサブピクセルグリッドへダウンサンプルする。
 /// `pixels.len() < img_w * img_h * 4` 等の不正な入力では空の `Vec` を返す（panicしない）。
-fn downsample_box(
+fn downsample_box_window(
     pixels: &[u8],
     img_w: u32,
     img_h: u32,
     target_w: u32,
     target_h: u32,
+    target_y_start: u32,
+    target_y_count: u32,
 ) -> Vec<(u8, u8, u8, u8)> {
-    if img_w == 0 || img_h == 0 || target_w == 0 || target_h == 0 {
+    if img_w == 0
+        || img_h == 0
+        || target_w == 0
+        || target_h == 0
+        || target_y_count == 0
+        || target_y_start >= target_h
+    {
         return Vec::new();
     }
-    if pixels.len() < (img_w as usize) * (img_h as usize) * 4 {
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
         return Vec::new();
     }
-    let mut out = Vec::with_capacity((target_w * target_h) as usize);
-    for ty in 0..target_h {
-        let y0 = ty * img_h / target_h;
-        let y1 = (((ty + 1) * img_h) / target_h).clamp(y0 + 1, img_h);
+    let target_y_end = target_y_start.saturating_add(target_y_count).min(target_h);
+    let actual_target_h = target_y_end - target_y_start;
+    let mut out = Vec::with_capacity((target_w * actual_target_h) as usize);
+    for ty in target_y_start..target_y_end {
+        let y0 = ((u64::from(ty) * u64::from(img_h)) / u64::from(target_h)) as u32;
+        let y1 = ((((u64::from(ty) + 1) * u64::from(img_h)) / u64::from(target_h)) as u32)
+            .clamp(y0 + 1, img_h);
         for tx in 0..target_w {
-            let x0 = tx * img_w / target_w;
-            let x1 = (((tx + 1) * img_w) / target_w).clamp(x0 + 1, img_w);
+            let x0 = ((u64::from(tx) * u64::from(img_w)) / u64::from(target_w)) as u32;
+            let x1 = ((((u64::from(tx) + 1) * u64::from(img_w)) / u64::from(target_w)) as u32)
+                .clamp(x0 + 1, img_w);
             let mut sum = (0u32, 0u32, 0u32, 0u32, 0u32); // r,g,b,a,count
             for y in y0..y1 {
                 for x in x0..x1 {
@@ -501,6 +538,20 @@ fn downsample_box(
     out
 }
 
+/// 元画像全体をターゲット全体（`target_w` x `target_h`）へダウンサンプルすると仮定したとき、
+/// 縦方向に `target_y_start..target_y_start+target_y_count` の行だけを計算する薄いラッパ。
+/// 全行ぶんの `Vec` を先に確保せず可視範囲だけを作るため、巨大なスクロール画像でも
+/// 行数に比例したメモリを確保しない（#530 セルフレビュー対応）。
+fn downsample_box(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    target_w: u32,
+    target_h: u32,
+) -> Vec<(u8, u8, u8, u8)> {
+    downsample_box_window(pixels, img_w, img_h, target_w, target_h, 0, target_h)
+}
+
 /// 元画像（RGBA、`img_w` x `img_h`）を `cols` x `rows` 文字セルの quadrant block グリッドへ
 /// 変換する（`docs/visual/reference/20260722-nearsighted-pixel-redraw/tui-plan.md` の設計に
 /// 従う）。セル数が 0、画像サイズが 0、または `pixels` が画像サイズに対して短すぎる場合は
@@ -521,7 +572,7 @@ pub fn rgba_to_quadrant_grid(
     if cols == 0 || rows == 0 || img_w == 0 || img_h == 0 {
         return blank_grid(cols, rows);
     }
-    if pixels.len() < img_w as usize * img_h as usize * 4 {
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
         return blank_grid(cols, rows);
     }
     let sub_w = u32::from(cols) * 2;
@@ -559,6 +610,68 @@ pub fn rgba_to_quadrant_grid(
         }
     }
     RenderedImage { cols, rows, cells }
+}
+
+/// 元画像全体をクロップ無しで `cols` セル幅へ拡大・縮小し、総行数 `total_rows` のうち
+/// `offset` 行目から最大 `rows` 行だけを quadrant block グリッドへ変換する。
+/// フルキャンバス画像表示のスクロール可視範囲専用で、全行ぶんのグリッドを先に確保しない。
+pub fn rgba_to_quadrant_grid_window(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    cols: u16,
+    total_rows: u16,
+    offset: u16,
+    rows: u16,
+) -> RenderedImage {
+    let visible_rows = total_rows.saturating_sub(offset).min(rows);
+    if cols == 0 || total_rows == 0 || visible_rows == 0 || img_w == 0 || img_h == 0 {
+        return blank_grid(cols, visible_rows);
+    }
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
+        return blank_grid(cols, visible_rows);
+    }
+
+    let sub_w = u32::from(cols) * 2;
+    let total_sub_h = u32::from(total_rows) * 2;
+    let sub_offset = u32::from(offset) * 2;
+    let sub_rows = u32::from(visible_rows) * 2;
+    let sub = downsample_box_window(
+        pixels,
+        img_w,
+        img_h,
+        sub_w,
+        total_sub_h,
+        sub_offset,
+        sub_rows,
+    );
+    if sub.is_empty() {
+        return blank_grid(cols, visible_rows);
+    }
+
+    let mut cells = Vec::with_capacity(cols as usize * visible_rows as usize);
+    for cy in 0..visible_rows {
+        for cx in 0..cols {
+            let sub_x = u32::from(cx) * 2;
+            let sub_y = u32::from(cy) * 2;
+            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
+            let ul = get(sub_x, sub_y);
+            let ur = get(sub_x + 1, sub_y);
+            let ll = get(sub_x, sub_y + 1);
+            let lr = get(sub_x + 1, sub_y + 1);
+            cells.push(quadrant_cell_from_subpixels([
+                composite_over_black(ul.0, ul.1, ul.2, ul.3),
+                composite_over_black(ur.0, ur.1, ur.2, ur.3),
+                composite_over_black(ll.0, ll.1, ll.2, ll.3),
+                composite_over_black(lr.0, lr.1, lr.2, lr.3),
+            ]));
+        }
+    }
+    RenderedImage {
+        cols,
+        rows: visible_rows,
+        cells,
+    }
 }
 
 #[cfg(test)]
@@ -1095,6 +1208,20 @@ mod tests {
     }
 
     #[test]
+    fn rgba_to_quadrant_grid_window_uses_only_requested_visible_rows() {
+        let pixels = vec![255, 0, 0, 255];
+        let grid = rgba_to_quadrant_grid_window(&pixels, 1, 1, 40, u16::MAX, u16::MAX - 20, 20);
+        assert_eq!(grid.rows, 20);
+        assert_eq!(grid.cells.len(), 40 * 20);
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_rejects_overflowing_source_size_without_panicking() {
+        let grid = rgba_to_quadrant_grid_window(&[], u32::MAX, u32::MAX, 40, 20, 0, 20);
+        assert_eq!(grid, blank_grid(40, 20));
+    }
+
+    #[test]
     fn downsample_box_uniform_image_averages_to_same_color() {
         // 4x4 の単色画像を 2x2 にダウンサンプルすると、全セルが同じ色になる。
         let mut pixels = Vec::new();
@@ -1236,6 +1363,24 @@ mod tests {
         let (cols, rows) = compute_contain_fit(1, 10000, 5, 5);
         assert!(cols >= 1, "fitted_colsは最低1になるはず: cols={cols}");
         assert_eq!(rows, 5);
+    }
+
+    #[test]
+    fn compute_full_width_rows_zero_dimensions_return_zero() {
+        assert_eq!(compute_full_width_rows(0, 100, 40), 0);
+        assert_eq!(compute_full_width_rows(100, 0, 40), 0);
+        assert_eq!(compute_full_width_rows(100, 100, 0), 0);
+    }
+
+    #[test]
+    fn compute_full_width_rows_keeps_width_for_extremely_tall_images() {
+        // 高さ上限を含むcontain-fitなら幅を縮める画像でも、フル幅表示の必要行数を返す。
+        assert_eq!(compute_full_width_rows(1, 50, 40), 1000);
+    }
+
+    #[test]
+    fn compute_full_width_rows_saturates_without_overflowing_for_extreme_aspect_ratio() {
+        assert_eq!(compute_full_width_rows(1, u32::MAX, 40), u16::MAX);
     }
 
     #[test]

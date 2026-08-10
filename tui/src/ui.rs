@@ -41,7 +41,7 @@ use ratatui::Frame;
 use crate::config::{Config, PlaceholderStyle};
 use crate::image_fade::ImageFadeState;
 use crate::image_render::{
-    self, clamp_scroll_offset, compute_contain_fit, slice_rendered_image_rows, DecodedImage,
+    clamp_scroll_offset, compute_full_width_rows, rgba_to_quadrant_grid_window, DecodedImage,
     ImageCache, RenderedImage,
 };
 use crate::playback::DisplayLine;
@@ -363,23 +363,12 @@ fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
     frame.render_widget(paragraph, area);
 }
 
-/// `compute_contain_fit` に「高さは実質無制限」を伝えるための番兵値（#530）。
-/// フルキャンバス画像表示は仕様上「常にキャンバス全幅（[`REQUIRED_TOTAL_WIDTH`]）を使い、
-/// 高さがはみ出したら追加の縮小をせず縦スクロールする」という幅優先の非対称な挙動を持つ
-/// （`draw_fullscreen_image` 参照）。`compute_contain_fit` 自体は対称な2軸 contain-fit の
-/// 汎用純粋関数として実装されているため、呼び出し側であるここが `max_rows` に
-/// 「実運用のどんなイベント絵アスペクト比でも高さ優先の枝へは切り替わらない」ぶん
-/// 十分大きい値を渡すことで幅優先を強制する。`u16::MAX` を使わないのは、
-/// `rgba_to_quadrant_grid` が `cols * rows` 分の `Vec` を確保するため、極端なアスペクト比の
-/// 画像（例: 1px x 10000px）を渡された場合に無駄に巨大な確保をしないための保険
-/// （実際の gymnasia ロゴ・想定されるイベント絵のアスペクト比では遠く及ばない余裕値）。
-const FULLSCREEN_IMAGE_UNBOUNDED_ROWS: u16 = 2000;
-
 /// スプラッシュ画面: `config.splash.logo_image` が設定されていればフルキャンバス画像表示
 /// （[`draw_fullscreen_image`]、#530）、そうでなければ従来どおり `config.splash.lines` の
 /// ロゴ行を画面中央に表示するテキストモード（[`draw_splash_text`]）を描く。画像のロードに
 /// 失敗した場合（`ImageCache::get_or_load` が `None`）もテキストモードへフォールバックする
-/// — ロゴの内容（ASCII アート本体・画像ファイル）はゲームごとに異なるため、このエンジン側は
+/// — `splash.lines` が空でも既存のテキストモードどおり「空行 + 開始ヒント」だけは描く。
+/// ロゴの内容（ASCII アート本体・画像ファイル）はゲームごとに異なるため、このエンジン側は
 /// 表示方法だけを担い、内容そのものは持たない（`Config::splash` 参照）。
 ///
 /// `scroll_offset` はフルキャンバス画像表示モードでのみ意味を持つ（呼び出し側 `main.rs` の
@@ -400,12 +389,27 @@ pub fn draw_splash(
     draw_splash_text(frame, config);
 }
 
+/// スプラッシュ画像モードの最大スクロール量（最下端オフセット）を返す。
+/// `show_splash` が target_scroll_offset 自体を入力時にクランプするための補助関数。
+/// ロゴ画像が無い／読めない場合はテキストモード相当として 0 を返す。
+pub(crate) fn splash_max_scroll_offset(config: &Config, image_cache: &mut ImageCache) -> u16 {
+    let Some(path) = config.resolve_splash_logo_path() else {
+        return 0;
+    };
+    let Some(decoded) = image_cache.get_or_load(&path) else {
+        return 0;
+    };
+    let total_rows = compute_full_width_rows(decoded.width, decoded.height, REQUIRED_TOTAL_WIDTH);
+    clamp_scroll_offset(u16::MAX, total_rows, REQUIRED_MAIN_CONTENT_ROWS)
+}
+
 /// フルキャンバス画像表示（#530）。テキストウィンドウ・スプラッシュの罫線を畳み、画像を
 /// アスペクト比を保ったままキャンバス全幅（[`REQUIRED_TOTAL_WIDTH`]）へ contain-fit する
-/// （[`compute_contain_fit`]、cover-fit のクロップは行わない）。高さが表示可能行数を
-/// 超える場合は追加の縮小をせず、`scroll_offset`（呼び出し側が `Action::MoveUp`/
-/// `Action::MoveDown` から配線する、`main.rs::show_splash` 参照）に応じて縦方向の可視範囲
-/// だけを [`slice_rendered_image_rows`] で切り出して描画する（スクロール）。
+/// （クロップは行わない）。必要総行数は `image_render::compute_full_width_rows` で
+/// **全幅前提の式から直接**求め、高さが表示可能行数を超える場合は追加の縮小をせず、
+/// `scroll_offset`（呼び出し側が `Action::MoveUp`/`Action::MoveDown` から配線する、
+/// `main.rs::show_splash` 参照）に応じて縦方向の可視範囲だけを
+/// [`rgba_to_quadrant_grid_window`] で生成して描画する（スクロール）。
 ///
 /// 端末サイズが [`fits_required_size`] を満たさない場合は [`draw_too_small_message`] へ
 /// フォールバックする — 固定サイズのキャンバス幅（84列）を前提に contain 計算するため、
@@ -428,36 +432,28 @@ fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset:
     let image_area = rows[0];
     let hint_area = rows[1];
 
-    let (fitted_cols, fitted_rows) = compute_contain_fit(
-        image.width,
-        image.height,
-        image_area.width,
-        FULLSCREEN_IMAGE_UNBOUNDED_ROWS,
-    );
+    let fitted_cols = image_area.width;
+    let fitted_rows = compute_full_width_rows(image.width, image.height, fitted_cols);
     if fitted_cols == 0 || fitted_rows == 0 {
         return;
     }
 
-    let full_grid = image_render::rgba_to_quadrant_grid(
+    let scrollable = fitted_rows > image_area.height;
+    let offset = clamp_scroll_offset(scroll_offset, fitted_rows, image_area.height);
+    let visible_rows = image_area.height.min(fitted_rows);
+    let visible = rgba_to_quadrant_grid_window(
         &image.rgba,
         image.width,
         image.height,
         fitted_cols,
         fitted_rows,
+        offset,
+        visible_rows,
     );
-
-    let scrollable = fitted_rows > image_area.height;
-    let offset = clamp_scroll_offset(scroll_offset, fitted_rows, image_area.height);
-    let visible_rows = image_area.height.min(fitted_rows);
-    let visible = slice_rendered_image_rows(&full_grid, offset, visible_rows);
-
-    // fitted_cols は image_area.width（キャンバス全幅）より小さいことがある（縦長画像で
-    // 高さ優先の枝に入った場合）。その場合は左右中央寄せする。
-    let x_offset = (image_area.width.saturating_sub(fitted_cols)) / 2;
     let draw_area = Rect {
-        x: image_area.x + x_offset,
+        x: image_area.x,
         y: image_area.y,
-        width: fitted_cols.min(image_area.width),
+        width: fitted_cols,
         height: visible.rows,
     };
     draw_image_grid(frame, draw_area, &visible);
@@ -1657,9 +1653,8 @@ mod tests {
     }
 
     #[test]
-    fn draw_fullscreen_image_narrower_than_canvas_centers_horizontally() {
-        // 縦長画像(比0.02)はcontain-fitの高さ優先枝に入り、fitted_colsがimage_area.width
-        // 未満になる。その場合は左右中央寄せされ、左右の余白セルには画像色が塗られない。
+    fn draw_fullscreen_image_extremely_tall_image_uses_full_width_and_scrolls() {
+        // 極端な縦長画像でも高さ優先の縮小へ切り替えず、全幅を使って縦スクロールする。
         let color = (10u8, 20u8, 30u8);
         let image = DecodedImage {
             width: 1,
@@ -1674,18 +1669,17 @@ mod tests {
         let image_color = Color::Rgb(color.0, color.1, color.2);
         assert_eq!(
             buffer.cell((0, 0)).unwrap().bg,
-            Color::Reset,
-            "中央寄せされた画像の左側余白セルは画像色で塗られていないはず"
-        );
-        assert_eq!(
-            buffer.cell((2, 0)).unwrap().bg,
             image_color,
-            "中央寄せされた画像本体は左端から少しオフセットした位置にあるはず"
+            "極端な縦長画像でも画像はキャンバス左端から全幅で始まるはず"
         );
         assert_eq!(
             buffer.cell((CANVAS_W - 1, 0)).unwrap().bg,
-            Color::Reset,
-            "中央寄せされた画像の右側余白セルは画像色で塗られていないはず"
+            image_color,
+            "極端な縦長画像でも画像はキャンバス右端まで全幅で使うはず"
+        );
+        assert!(
+            buffer_text(buffer).contains("↑/↓ でスクロール"),
+            "極端な縦長画像では縦スクロールヒントを表示するはず"
         );
     }
 
@@ -1733,6 +1727,11 @@ mod tests {
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
             .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("Enter / Space で開始"),
+            "lines が空でも開始ヒントはテキストモードへフォールバックして表示するはず, buffer was: {text}"
+        );
     }
 
     #[test]

@@ -201,12 +201,14 @@ where
                 // 起点として引き継ぐことで、連打してもジャンプせず滑らかに追従し続ける。
                 scroll_anim_start_offset = display_scroll_offset;
                 scroll_anim_start = now;
-                target_scroll_offset = target_scroll_offset.saturating_sub(1);
+                let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
+                target_scroll_offset = target_scroll_offset.saturating_sub(1).min(max_offset);
             }
             Action::MoveDown => {
                 scroll_anim_start_offset = display_scroll_offset;
                 scroll_anim_start = now;
-                target_scroll_offset = target_scroll_offset.saturating_add(1);
+                let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
+                target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
             Action::None => {}
         }
@@ -1084,6 +1086,22 @@ mod tests {
         crate::image_render::write_test_webp_fixture(&rgba, size, size)
     }
 
+    /// 84x84 の正方形画像を、2px ごとの横帯で段階的に赤みを変えたフィクスチャ。
+    /// 全幅表示（84列）では総42行になり、各表示行が一意な赤背景を持つため、
+    /// 「最下端から1つ戻ったか」を先頭セルの背景色だけで判別できる。
+    fn per_row_scroll_fixture() -> std::path::PathBuf {
+        let size: u32 = 84;
+        let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+        for y in 0..size {
+            let band = (y / 2) as u8;
+            let red = band.saturating_mul(5);
+            for _x in 0..size {
+                rgba.extend_from_slice(&[red, 0, 0, 255]);
+            }
+        }
+        crate::image_render::write_test_webp_fixture(&rgba, size, size)
+    }
+
     #[test]
     fn show_splash_text_mode_movedown_does_not_change_rendered_output() {
         // デシジョンテーブル: テキストモードはMoveUp/Downでtarget_scroll_offsetこそ内部で
@@ -1123,9 +1141,8 @@ mod tests {
     #[test]
     fn show_splash_image_mode_non_scrolling_movedown_does_not_change_rendered_output() {
         // デシジョンテーブル: 画像モードでもスクロール不要な画像なら、MoveDownで
-        // target_scroll_offsetがクランプ無しに増えていっても(申し送り事項1)、
-        // draw_fullscreen_image側のclamp_scroll_offsetでmax_offset=0にクランプされる
-        // ため見た目は変化しないはず。
+        // target_scroll_offset 自体が max_offset=0 にクランプされるため、見た目は
+        // 変化しないはず。
         let fixture_path =
             crate::image_render::write_test_webp_fixture(&solid_rgba((200, 80, 80), 4, 1), 4, 1);
         let config = image_splash_config(&fixture_path);
@@ -1194,6 +1211,38 @@ mod tests {
             Color::Rgb(255, 0, 0),
             "5回MoveDownした直後でもeaseが進む前は先頭行(赤)のままのはず。\
              青(グリッド行1以降の色)になっていたら瞬時ジャンプしている"
+        );
+    }
+
+    #[test]
+    fn show_splash_moveup_after_reaching_bottom_starts_moving_up_again() {
+        let fixture_path = per_row_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 0;
+
+        let mut actions = vec![Action::MoveDown; 50];
+        actions.push(Action::MoveUp);
+        actions.push(Action::Advance);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) = action_queue(actions);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+        assert!(advanced);
+
+        let total_rows =
+            crate::image_render::compute_full_width_rows(84, 84, ui::REQUIRED_TOTAL_WIDTH);
+        let visible_rows = ui::REQUIRED_TOTAL_HEIGHT - 1;
+        let expected_offset = total_rows.saturating_sub(visible_rows).saturating_sub(1);
+        let expected_red = (expected_offset as u8).saturating_mul(5);
+        assert_eq!(
+            terminal.backend().buffer().cell((0, 0)).unwrap().bg,
+            Color::Rgb(expected_red, 0, 0),
+            "最下端まで進めた後に↑を1回押したら、表示はただちに1行ぶん上へ戻り始めるはず"
         );
     }
 
