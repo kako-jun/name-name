@@ -40,7 +40,10 @@ use ratatui::Frame;
 
 use crate::config::{Config, PlaceholderStyle};
 use crate::image_fade::ImageFadeState;
-use crate::image_render::{ImageCache, RenderedImage};
+use crate::image_render::{
+    clamp_scroll_offset, compute_full_width_rows, rgba_to_quadrant_grid_window, DecodedImage,
+    ImageCache, RenderedImage,
+};
 use crate::playback::DisplayLine;
 use crate::reveal;
 
@@ -151,7 +154,7 @@ fn draw_too_small_message(frame: &mut Frame, actual: Rect) {
     );
     let paragraph = Paragraph::new(message).alignment(Alignment::Center);
     // 縦方向中央寄せ: 1行想定のメッセージを実際の高さの中央付近の行に置く。
-    // `draw_splash` と違い折り返し高さを事前計算しない分単純化しているが、それで十分
+    // `draw_splash_text` と違い折り返し高さを事前計算しない分単純化しているが、それで十分
     // （Issueのスコープ外の凝った表現は避ける）。高さ0の極小端末では描画領域自体を
     // 0にしてpanicを避ける。
     let height = if actual.height == 0 { 0 } else { 1 };
@@ -360,10 +363,116 @@ fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
     frame.render_widget(paragraph, area);
 }
 
-/// スプラッシュ画面: `config.splash.lines` に設定されたロゴ行を画面中央に表示する。
-/// ロゴの内容はゲームごとに異なるため、このエンジン側は「中央寄せして表示する」
+/// スプラッシュ画面: `config.splash.logo_image` が設定されていればフルキャンバス画像表示
+/// （[`draw_fullscreen_image`]、#530）、そうでなければ従来どおり `config.splash.lines` の
+/// ロゴ行を画面中央に表示するテキストモード（[`draw_splash_text`]）を描く。画像のロードに
+/// 失敗した場合（`ImageCache::get_or_load` が `None`）もテキストモードへフォールバックする
+/// — `splash.lines` が空でも既存のテキストモードどおり「空行 + 開始ヒント」だけは描く。
+/// ロゴの内容（ASCII アート本体・画像ファイル）はゲームごとに異なるため、このエンジン側は
+/// 表示方法だけを担い、内容そのものは持たない（`Config::splash` 参照）。
+///
+/// `scroll_offset` はフルキャンバス画像表示モードでのみ意味を持つ（呼び出し側 `main.rs` の
+/// `show_splash` が `Action::MoveUp`/`Action::MoveDown` から配線する）。テキストモードでは
+/// 無視される。
+pub fn draw_splash(
+    frame: &mut Frame,
+    config: &Config,
+    image_cache: &mut ImageCache,
+    scroll_offset: u16,
+) {
+    if let Some(path) = config.resolve_splash_logo_path() {
+        if let Some(decoded) = image_cache.get_or_load(&path) {
+            draw_fullscreen_image(frame, &decoded, scroll_offset);
+            return;
+        }
+    }
+    draw_splash_text(frame, config);
+}
+
+/// スプラッシュ画像モードの最大スクロール量（最下端オフセット）を返す。
+/// `show_splash` が target_scroll_offset 自体を入力時にクランプするための補助関数。
+/// ロゴ画像が無い／読めない場合はテキストモード相当として 0 を返す。
+pub(crate) fn splash_max_scroll_offset(config: &Config, image_cache: &mut ImageCache) -> u16 {
+    let Some(path) = config.resolve_splash_logo_path() else {
+        return 0;
+    };
+    let Some(decoded) = image_cache.get_or_load(&path) else {
+        return 0;
+    };
+    let total_rows = compute_full_width_rows(decoded.width, decoded.height, REQUIRED_TOTAL_WIDTH);
+    clamp_scroll_offset(u16::MAX, total_rows, REQUIRED_MAIN_CONTENT_ROWS)
+}
+
+/// フルキャンバス画像表示（#530）。テキストウィンドウ・スプラッシュの罫線を畳み、画像を
+/// アスペクト比を保ったままキャンバス全幅（[`REQUIRED_TOTAL_WIDTH`]）へ contain-fit する
+/// （クロップは行わない）。必要総行数は `image_render::compute_full_width_rows` で
+/// **全幅前提の式から直接**求め、高さが表示可能行数を超える場合は追加の縮小をせず、
+/// `scroll_offset`（呼び出し側が `Action::MoveUp`/`Action::MoveDown` から配線する、
+/// `main.rs::show_splash` 参照）に応じて縦方向の可視範囲だけを
+/// [`rgba_to_quadrant_grid_window`] で生成して描画する（スクロール）。
+///
+/// 端末サイズが [`fits_required_size`] を満たさない場合は [`draw_too_small_message`] へ
+/// フォールバックする — 固定サイズのキャンバス幅（84列）を前提に contain 計算するため、
+/// 通常のゲームUI描画（[`draw`]）と同じ最小サイズ制約を課す。GUI版 dual-window と同じく
+/// 罫線・タイトルは描かない（将来イベント絵演出からも呼べる汎用の表示として、装飾を
+/// 持たせない）。
+fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset: u16) {
+    let actual = frame.area();
+    if !fits_required_size(actual) {
+        draw_too_small_message(frame, actual);
+        return;
+    }
+    let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+    let canvas = compute_centered_canvas(actual, required);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(canvas);
+    let image_area = rows[0];
+    let hint_area = rows[1];
+
+    let fitted_cols = image_area.width;
+    let fitted_rows = compute_full_width_rows(image.width, image.height, fitted_cols);
+    if fitted_cols == 0 || fitted_rows == 0 {
+        return;
+    }
+
+    let scrollable = fitted_rows > image_area.height;
+    let offset = clamp_scroll_offset(scroll_offset, fitted_rows, image_area.height);
+    let visible_rows = image_area.height.min(fitted_rows);
+    let visible = rgba_to_quadrant_grid_window(
+        &image.rgba,
+        image.width,
+        image.height,
+        fitted_cols,
+        fitted_rows,
+        offset,
+        visible_rows,
+    );
+    let draw_area = Rect {
+        x: image_area.x,
+        y: image_area.y,
+        width: fitted_cols,
+        height: visible.rows,
+    };
+    draw_image_grid(frame, draw_area, &visible);
+
+    let hint = if scrollable {
+        "Enter / Space で開始　↑/↓ でスクロール"
+    } else {
+        "Enter / Space で開始"
+    };
+    let hint_paragraph = Paragraph::new(hint)
+        .alignment(Alignment::Center)
+        .style(Style::default().add_modifier(Modifier::DIM));
+    frame.render_widget(hint_paragraph, hint_area);
+}
+
+/// スプラッシュ画面（テキストモード）: `config.splash.lines` に設定されたロゴ行を画面中央に
+/// 表示する。ロゴの内容はゲームごとに異なるため、このエンジン側は「中央寄せして表示する」
 /// という汎用的な描画だけを担い、内容そのものは持たない（`Config::splash` 参照）。
-pub fn draw_splash(frame: &mut Frame, config: &Config) {
+fn draw_splash_text(frame: &mut Frame, config: &Config) {
     let area = frame.area();
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1333,7 +1442,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田田田".to_string(), "回回回".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("田田田"), "buffer was: {text}");
         assert!(text.contains("回回回"), "buffer was: {text}");
@@ -1345,7 +1457,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Enter"), "buffer was: {text}");
     }
@@ -1357,7 +1472,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("テストゲーム"), "buffer was: {text}");
     }
@@ -1368,7 +1486,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田田田田田田田田田田".to_string(); 20];
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
     }
 
     #[test]
@@ -1378,7 +1499,10 @@ mod tests {
         config.splash.lines = vec!["田".to_string()];
         config.splash.color = "not-a-real-color".to_string();
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("田"), "buffer was: {text}");
     }
@@ -1392,7 +1516,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Enter"), "buffer was: {text}");
     }
@@ -1406,7 +1533,10 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
     }
 
     #[test]
@@ -1415,9 +1545,217 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["AB田C".to_string()];
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal.draw(|f| draw_splash(f, &config)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("AB田C"), "buffer was: {text}");
+    }
+
+    // ---- フルキャンバス画像表示モード（#530）----
+
+    #[test]
+    fn draw_fullscreen_image_wide_image_with_enough_space_shows_hint_without_scroll_indicator() {
+        // 横長画像(比4.0)はキャンバス全幅へcontain-fitしても表示可能行数に収まるため、
+        // スクロール不要になり、ヒントは「Enter / Space で開始」だけになる。
+        let image = DecodedImage {
+            width: 4,
+            height: 1,
+            rgba: solid_rgba((200, 80, 80), 4, 1),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Enter / Space で開始"), "buffer was: {text}");
+        assert!(
+            !text.contains('↑') && !text.contains('↓'),
+            "スクロール不要な画像では↑/↓ヒントを出してはいけない, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_tall_image_needing_scroll_shows_scroll_hint() {
+        // 正方形画像(比1.0)は端末セルの非正方形補正込みでcontain-fitすると表示可能行数
+        // (image_area.height)を超えるため、スクロールヒント(↑/↓)が追加される。
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: solid_rgba((80, 80, 200), 1, 1),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains('↑') && text.contains('↓'),
+            "スクロール要の画像では↑/↓ヒントを出すはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_scroll_offset_far_beyond_content_clamps_without_panicking() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: solid_rgba((10, 20, 30), 1, 1),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, u16::MAX))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("Enter"),
+            "末尾でクランプされた状態でもヒントは描画されるはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_terminal_too_small_shows_too_small_message_not_text_fallback() {
+        // #530 デシジョンテーブル: 画面が小さすぎる場合、画像モード自身のtoo-smallガードが
+        // 効き、draw_splash_textのテキストモードへは一切フォールバックしない。
+        let image = DecodedImage {
+            width: 4,
+            height: 1,
+            rgba: solid_rgba((10, 20, 30), 4, 1),
+        };
+        // 幅だけを不足させる（高さはREQUIRED_TOTAL_HEIGHTちょうど）。極小(5x5)だと
+        // メッセージ自体が描画領域に収まりきらず切り詰められてしまうため、
+        // `draw_too_small_message_content_survives_at_moderately_narrow_width` と同じ
+        // 「狭いがゼロではない」中間幅を使う。
+        let moderately_narrow_width = REQUIRED_TOTAL_WIDTH / 2;
+        let mut terminal =
+            Terminal::new(TestBackend::new(moderately_narrow_width, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_fullscreen_image_zero_sized_decoded_image_does_not_panic() {
+        // compute_full_width_rows(0, 0, ..) は 0 を返し、draw_fullscreen_image は
+        // fitted_cols/rowsが0のとき早期returnする(グリッド構築・描画をどちらもしない)。
+        let image = DecodedImage {
+            width: 0,
+            height: 0,
+            rgba: vec![],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+    }
+
+    #[test]
+    fn draw_fullscreen_image_extremely_tall_image_uses_full_width_and_scrolls() {
+        // 極端な縦長画像でも高さ優先の縮小へ切り替えず、全幅を使って縦スクロールする。
+        let color = (10u8, 20u8, 30u8);
+        let image = DecodedImage {
+            width: 1,
+            height: 50,
+            rgba: solid_rgba(color, 1, 50),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let image_color = Color::Rgb(color.0, color.1, color.2);
+        assert_eq!(
+            buffer.cell((0, 0)).unwrap().bg,
+            image_color,
+            "極端な縦長画像でも画像はキャンバス左端から全幅で始まるはず"
+        );
+        assert_eq!(
+            buffer.cell((CANVAS_W - 1, 0)).unwrap().bg,
+            image_color,
+            "極端な縦長画像でも画像はキャンバス右端まで全幅で使うはず"
+        );
+        assert!(
+            buffer_text(buffer).contains("↑/↓ でスクロール"),
+            "極端な縦長画像では縦スクロールヒントを表示するはず"
+        );
+    }
+
+    /// `splash.logo_image`/`event_image.assets_dir` を実在するWebPフィクスチャへ向けた
+    /// `Config` を作る（`draw_splash` がフルキャンバス画像表示モードへ実際に分岐する
+    /// テスト用。`config_and_relative_path_for` を土台に、スプラッシュ用フィールドを
+    /// 追加で設定する）。
+    fn splash_config_with_logo_image(fixture_path: &std::path::Path) -> Config {
+        let (mut config, relative) = config_and_relative_path_for(fixture_path);
+        config.splash.enabled = true;
+        config.splash.logo_image = Some(std::path::PathBuf::from(relative));
+        config
+    }
+
+    #[test]
+    fn draw_splash_logo_image_load_failure_falls_back_to_text_mode() {
+        // ファイルが存在しないパスを指す logo_image を設定する（実際にはロードに失敗する）。
+        // #530: 画像ロード失敗時はテキストモード（`splash.lines`）へフォールバックする。
+        let mut config = Config::default();
+        config.event_image.assets_dir = std::path::PathBuf::from("tui/tests/fixtures");
+        config.splash.enabled = true;
+        config.splash.logo_image = Some(std::path::PathBuf::from("does-not-exist.webp"));
+        config.splash.lines = vec!["田".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("田"),
+            "ロード失敗時はテキストモードのロゴ行が描画されるはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_splash_logo_image_load_failure_with_empty_lines_does_not_panic() {
+        let mut config = Config::default();
+        config.event_image.assets_dir = std::path::PathBuf::from("tui/tests/fixtures");
+        config.splash.enabled = true;
+        config.splash.logo_image = Some(std::path::PathBuf::from("does-not-exist.webp"));
+        config.splash.lines = vec![];
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("Enter / Space で開始"),
+            "lines が空でも開始ヒントはテキストモードへフォールバックして表示するはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_splash_valid_logo_image_renders_fullscreen_image_mode_not_text() {
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((200, 80, 80), 4, 1), 4, 1);
+        let mut config = splash_config_with_logo_image(&fixture_path);
+        config.game_name = "テストゲーム".to_string();
+        config.splash.lines = vec!["田".to_string()]; // logo_image優先で無視されるはず
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !text.contains("田"),
+            "logo_imageが有効な場合はテキストモードのlinesを描画しないはず, buffer was: {text}"
+        );
+        assert!(
+            !text.contains("テストゲーム"),
+            "フルキャンバス画像表示はテキストモードの罫線タイトルを描かないはず, buffer was: {text}"
+        );
+        assert!(text.contains("Enter / Space で開始"), "buffer was: {text}");
     }
 
     // ---- #480: 画面分割(50/50・プレイヤー/相手ウィンドウ分離・枠なし)のテスト ----
