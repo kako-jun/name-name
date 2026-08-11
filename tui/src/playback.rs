@@ -127,7 +127,7 @@ use crate::flags::GameFlags;
 use crate::sentence;
 
 /// 画面に表示する1行分の内容（話者名 + 本文 + その時点のイベント絵）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DisplayLine {
     /// 話者名。`Narration` イベントの場合は `None`。
     pub speaker: Option<String>,
@@ -221,6 +221,38 @@ enum PlaybackItem {
     Line(DisplayLine),
     Image(DisplayLine),
     Choice(Vec<ChoiceOption>, Option<u32>),
+}
+
+/// `PlaybackItem` の中身から軽量なコンテンツハッシュを算出する。
+///
+/// [`Playback::stable_item_key`] が返す安定キーに、同メソッドの doc comment が挙げていた
+/// 「既知の制約」（シーンの中身自体がフラグ状態に依存して変わる場合、`(scene_idx,
+/// local_index)` だけでは異なる内容の item を同一視してしまう）を解消するために付加する
+/// 第3要素として使う。`(scene_idx, local_index)` が同じでも中身（話者・本文・イベント絵・
+/// 選択肢）が異なれば別のハッシュ値になるため、呼び出し側（`main.rs` の `read_positions`）は
+/// 3つ組全体を比較することで「本当に同じ内容を読んだか」まで判定できる。
+///
+/// `DisplayLine`（`Line`/`Image` 両方が内部で持つ型）は `#[derive(Hash)]` 済みのため
+/// そのままハッシュに流し込むだけでよい。`Choice` は `ChoiceOption` が `Hash` を実装して
+/// いないため、`text`/`jump` を個別にハッシュへ流し込む。
+fn content_signature(item: &PlaybackItem) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    match item {
+        PlaybackItem::Line(line) | PlaybackItem::Image(line) => {
+            line.hash(&mut hasher);
+        }
+        PlaybackItem::Choice(options, columns) => {
+            for option in options {
+                option.text.hash(&mut hasher);
+                option.jump.hash(&mut hasher);
+            }
+            columns.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
@@ -967,8 +999,9 @@ impl Playback {
     }
 
     /// `item_index()` が指しうる生インデックス `item_index` を、シーンを跨いで安定な
-    /// 識別子（`(scene_order 内インデックス, そのシーン内での構築順インデックス)`）に
-    /// 変換する。`item_index` が範囲外（`items.len()` 以上）なら `None`。
+    /// 識別子（`(scene_order 内インデックス, そのシーン内での構築順インデックス,
+    /// コンテンツハッシュ)`）に変換する。`item_index` が範囲外（`items.len()` 以上）なら
+    /// `None`。
     ///
     /// #509 で `items` が「プレイヤーが実際に訪れたシーンだけを訪れた順にその場で末尾へ
     /// 追記する」遅延構築モデルに変わった（モジュール冒頭のドキュメント参照）。
@@ -987,17 +1020,21 @@ impl Playback {
     /// 呼び出し側（`main.rs`）はこちらを集合のキーにすることで「本当に同じ箇所へ戻って
     /// きたか」を正しく判定できる。
     ///
-    /// **既知の制約**（対応不要、実害が判明したら要再検討、#526 の既知の制約1/2と同種の
-    /// 割り切り）: 同一シーンをフラグ状態が異なる状態で再訪した場合（`Event::Condition` の
-    /// 展開結果が変わり、シーン内で実際に生成される item 数自体が訪問ごとに変動する場合）、
-    /// 「シーン内で何番目に生成されたか」というローカルインデックスの対応がズレうる —
-    /// 例えば1回目の訪問では `Event::Condition` が偽で3個の item しか生成されなかった
-    /// 箇所が、フラグが変わった2回目の訪問では真になり5個生成される、といったケースでは、
-    /// 同じ相対インデックスが指す論理的な内容が訪問ごとに異なりうる。今回のスコープ
-    /// （単純な再訪→スキップ、フラグを変えずに同じシーンへ戻るシナリオ）はこの制約の
-    /// 対象外。
-    pub(crate) fn stable_item_key(&self, item_index: usize) -> Option<(usize, usize)> {
-        self.item_scene_key.get(item_index).copied()
+    /// 第3要素は [`content_signature`] が item の中身（話者・本文・イベント絵、または
+    /// 選択肢のテキスト・ジャンプ先・列数）から算出するコンテンツハッシュ（#533）。
+    /// `(scene_idx, local_index)` の2つ組だけでは、シーンの中身自体がフラグ状態に
+    /// 依存して変わる場合（`Event::Condition` で条件分岐する行を含むシーンを、1回目と
+    /// 2回目で異なるフラグ状態で訪れた場合）に取り違えが起きうる — シーン内で構築される
+    /// item 数自体は毎回同じでも、`Condition` の分岐によって「ローカルindex Nの item」が
+    /// 指す内容（話者・本文・選択肢）が訪問ごとに異なりうるため（実例:
+    /// `gymnasia/docs/scripts/drafts/interludes.md` の `hub_gate` シーン、9個の
+    /// `milestone_*_pending` Condition ブロックが排他的に1個ずつ真になる）。コンテンツ
+    /// ハッシュを3つ目のキー要素として加えることで、`(scene_idx, local_index)` が
+    /// 一致していても中身が異なれば別キー扱いになり、この取り違えを解消する。
+    pub(crate) fn stable_item_key(&self, item_index: usize) -> Option<(usize, usize, u64)> {
+        let (scene_idx, local_index) = self.item_scene_key.get(item_index).copied()?;
+        let item = self.items.get(item_index)?;
+        Some((scene_idx, local_index, content_signature(item)))
     }
 
     /// 次の item へ進む。現在位置が選択肢（選択待ち）の場合は、[`Playback::select_current_choice`]
