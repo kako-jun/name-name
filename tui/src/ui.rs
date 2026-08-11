@@ -39,7 +39,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::config::{Config, PlaceholderStyle};
+use crate::config::{Config, PlaceholderStyle, VolumeConfig};
 use crate::image_fade::ImageFadeState;
 use crate::image_render::{
     clamp_scroll_offset, compute_full_width_rows, rgba_to_quadrant_grid_window, DecodedImage,
@@ -778,16 +778,79 @@ fn format_speed_label(ms: u64) -> String {
     }
 }
 
-/// テキスト速度設定画面（#503、GUI版 `frontend/src/game/settings.ts`/
-/// `SettingsOverlay.tsx` の msPerChar スライダー相当）。音量調整は対象外 — #502
-/// （ボイス/BGM/SE再生の実装要否）がkako-jun判断待ちで未決着のため、意図的にスコープ外に
-/// している（Issue #503 本文参照）。
+/// 設定画面（#503）でフォーカス中の行。`Action::MoveLeft`/`Action::MoveRight` の文脈依存の
+/// 再利用（`main.rs::event_loop` の `Overlay::Settings` 分岐）でラップアラウンドしながら
+/// 切り替わる。フォーカス行に応じて `Action::MoveUp`/`Action::MoveDown` が調整する値
+/// （テキスト速度 or 音量）が変わる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsField {
+    #[default]
+    TextSpeed,
+    BgmVolume,
+    SeVolume,
+    VoiceVolume,
+}
+
+impl SettingsField {
+    /// 次の行へラップアラウンドしながら進む（`Action::MoveRight`）。
+    pub fn next(self) -> Self {
+        match self {
+            SettingsField::TextSpeed => SettingsField::BgmVolume,
+            SettingsField::BgmVolume => SettingsField::SeVolume,
+            SettingsField::SeVolume => SettingsField::VoiceVolume,
+            SettingsField::VoiceVolume => SettingsField::TextSpeed,
+        }
+    }
+
+    /// 前の行へラップアラウンドしながら戻る（`Action::MoveLeft`）。
+    pub fn prev(self) -> Self {
+        match self {
+            SettingsField::TextSpeed => SettingsField::VoiceVolume,
+            SettingsField::BgmVolume => SettingsField::TextSpeed,
+            SettingsField::SeVolume => SettingsField::BgmVolume,
+            SettingsField::VoiceVolume => SettingsField::SeVolume,
+        }
+    }
+}
+
+/// フォーカス中の行の先頭に付ける印。`format_settings_line` が使う（#503）。
+const FOCUS_MARKER: &str = "> ";
+const NO_FOCUS_MARKER: &str = "  ";
+
+/// 設定画面の1行を組み立てる。`focused` なら [`FOCUS_MARKER`] を付けて `Modifier::BOLD` で
+/// 強調し、それ以外は [`NO_FOCUS_MARKER`] で幅を揃えるだけにする（#503）。
+fn format_settings_line(text: String, focused: bool) -> Line<'static> {
+    let marker = if focused {
+        FOCUS_MARKER
+    } else {
+        NO_FOCUS_MARKER
+    };
+    let style = if focused {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    Line::styled(format!("{marker}{text}"), style)
+}
+
+/// テキスト速度・BGM/SE/ボイス音量設定画面（#503、GUI版 `frontend/src/game/settings.ts`/
+/// `SettingsOverlay.tsx` 相当）。
 ///
-/// 閲覧専用の [`draw_backlog`] と異なり、この画面は Up/Down
-/// （[`crate::input::Action::MoveUp`]/[`crate::input::Action::MoveDown`] の文脈依存の再利用、
-/// 選択肢カーソル移動と同じ設計）で `char_interval_ms` を書き換える — 実際の値変更は
-/// 呼び出し側 `main.rs` の `Overlay::Settings` 分岐が行い、この関数は現在値を表示するだけ。
-pub fn draw_settings(frame: &mut Frame, char_interval_ms: u64) {
+/// 閲覧専用の [`draw_backlog`] と異なり、この画面は `Action::MoveLeft`/`Action::MoveRight`
+/// で [`SettingsField`]（フォーカス行）を切り替え、`Action::MoveUp`/`Action::MoveDown`
+/// （選択肢カーソル移動の文脈依存の再利用と同じ設計）でフォーカス中の値を書き換える —
+/// 実際の値変更は呼び出し側 `main.rs` の `Overlay::Settings` 分岐が行い、この関数は
+/// 現在値・現在のフォーカスを表示するだけ。
+///
+/// BGM/SE音量は実際に音声バックエンドへ反映されるが、ボイス音量は値を保持するだけの
+/// 「(将来用)」の受け皿——`config::VolumeConfig` のdoc comment参照。ラベルにもその旨を
+/// 明記し、GUI版 `SettingsOverlay.tsx` の「ボイス音量 (将来用)」表記と揃える。
+pub fn draw_settings(
+    frame: &mut Frame,
+    char_interval_ms: u64,
+    volume: &VolumeConfig,
+    focus: SettingsField,
+) {
     let actual = frame.area();
     if !fits_required_size(actual) {
         draw_too_small_message(frame, actual);
@@ -804,18 +867,28 @@ pub fn draw_settings(frame: &mut Frame, char_interval_ms: u64) {
         return;
     }
 
-    let label = format_speed_label(char_interval_ms);
+    let speed_label = format_speed_label(char_interval_ms);
     let lines = vec![
         Line::raw(""),
-        Line::raw(format!("テキスト表示速度: {label}")),
-        Line::raw(""),
-        Line::styled(
-            "↑ で速く / ↓ で遅く (0〜200ms, 5ms刻み)",
-            Style::default().add_modifier(Modifier::DIM),
+        format_settings_line(
+            format!("テキスト表示速度: {speed_label}"),
+            focus == SettingsField::TextSpeed,
+        ),
+        format_settings_line(
+            format!("BGM音量: {}%", volume.bgm_percent),
+            focus == SettingsField::BgmVolume,
+        ),
+        format_settings_line(
+            format!("SE音量: {}%", volume.se_percent),
+            focus == SettingsField::SeVolume,
+        ),
+        format_settings_line(
+            format!("ボイス音量 (将来用): {}%", volume.voice_percent),
+            focus == SettingsField::VoiceVolume,
         ),
         Line::raw(""),
         Line::styled(
-            "Enter・C・Esc で閉じる",
+            "←→ 項目切替 / ↑↓ 調整 / Enter・C・Esc で閉じる",
             Style::default().add_modifier(Modifier::DIM),
         ),
     ];
@@ -5070,9 +5143,10 @@ mod tests {
     #[test]
     fn draw_settings_renders_current_speed_label() {
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
         terminal
             .draw(|f| {
-                draw_settings(f, 30);
+                draw_settings(f, 30, &volume, SettingsField::TextSpeed);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
@@ -5082,11 +5156,56 @@ mod tests {
     #[test]
     fn draw_settings_extremely_small_terminal_does_not_panic() {
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
+        let volume = VolumeConfig::default();
         terminal
             .draw(|f| {
-                draw_settings(f, 30);
+                draw_settings(f, 30, &volume, SettingsField::TextSpeed);
             })
             .unwrap();
+    }
+
+    #[test]
+    fn draw_settings_renders_volume_percentages() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig {
+            bgm_percent: 65,
+            se_percent: 85,
+            voice_percent: 40,
+        };
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, &volume, SettingsField::BgmVolume);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("BGM音量: 65%"), "buffer was: {text}");
+        assert!(text.contains("SE音量: 85%"), "buffer was: {text}");
+        assert!(
+            text.contains("ボイス音量 (将来用): 40%"),
+            "buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn settings_field_next_wraps_around_from_voice_volume_to_text_speed() {
+        assert_eq!(SettingsField::VoiceVolume.next(), SettingsField::TextSpeed);
+    }
+
+    #[test]
+    fn settings_field_prev_wraps_around_from_text_speed_to_voice_volume() {
+        assert_eq!(SettingsField::TextSpeed.prev(), SettingsField::VoiceVolume);
+    }
+
+    #[test]
+    fn settings_field_next_then_prev_returns_to_original() {
+        for field in [
+            SettingsField::TextSpeed,
+            SettingsField::BgmVolume,
+            SettingsField::SeVolume,
+            SettingsField::VoiceVolume,
+        ] {
+            assert_eq!(field.next().prev(), field);
+        }
     }
 
     // ---- テスト観点整理担当の指摘に基づく追加テスト（境界値・null/空文字）。既存の

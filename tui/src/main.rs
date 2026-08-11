@@ -23,9 +23,13 @@ use ratatui::crossterm::terminal::{
 use ratatui::Terminal;
 
 use cli::Cli;
-use config::{Config, TEXT_SPEED_MAX_MS, TEXT_SPEED_STEP_MS};
+use config::{
+    decrement_volume_percent, increment_volume_percent, percent_to_volume_scale, Config,
+    TEXT_SPEED_MAX_MS, TEXT_SPEED_STEP_MS,
+};
 use input::Action;
 use playback::{DisplayLine, Playback};
+use ui::SettingsField;
 
 /// 描画の再チェック間隔。タイプライター演出（`jiwa::RevealHandle`）はフレームごとの
 /// `snapshot` で動くため、キー入力が無くてもこの間隔で再描画してアニメーションを進める
@@ -404,6 +408,12 @@ where
     // `u16::MAX` をセットして「末尾（最新）にクランプ」させる。
     let mut backlog_scroll: u16 = 0;
 
+    // 設定画面（`Overlay::Settings`）内でフォーカスしている行（#503）。`Action::MoveLeft`/
+    // `Action::MoveRight` で `SettingsField::prev`/`next` により切り替える。`Overlay::Settings`
+    // を開くたびに `SettingsField::default()`（`TextSpeed`）へ戻す（`backlog_scroll` を
+    // 開くたびに `u16::MAX` へ戻すのと同じ「オーバーレイごとに初期状態から始める」パターン）。
+    let mut settings_focus = SettingsField::default();
+
     // 現在開いているオーバーレイ画面（#500 / #503）。既定は `Overlay::None`（通常のゲーム画面）。
     let mut overlay = Overlay::None;
     // `overlay` を `Overlay::None` 以外にした瞬間の実時刻。オーバーレイを閉じる際、
@@ -436,7 +446,12 @@ where
                     backlog_scroll = ui::draw_backlog(frame, &config, &backlog, backlog_scroll);
                 }
                 Overlay::Settings => {
-                    ui::draw_settings(frame, config.typewriter.char_interval_ms);
+                    ui::draw_settings(
+                        frame,
+                        config.typewriter.char_interval_ms,
+                        &config.volume,
+                        settings_focus,
+                    );
                 }
                 Overlay::None => unreachable!("overlay != Overlay::None はこの分岐の前提"),
             })?;
@@ -499,52 +514,106 @@ where
                 Action::MoveDown if overlay == Overlay::Backlog => {
                     backlog_scroll = backlog_scroll.saturating_add(BACKLOG_SCROLL_STEP);
                 }
-                // 設定画面表示中の ↑/↓ はテキスト速度の調整（#503）。GUI版
-                // `SettingsOverlay.tsx` の msPerChar スライダー（step=5）と同じ刻み幅。
-                // ↑ = 数値を減らす = 速く、↓ = 数値を増やす = 遅く（GUI版スライダーの
+                // 設定画面表示中の ←/→ はフォーカス行の切り替え（#503）。
+                // `SettingsField::prev`/`next` がラップアラウンドを担う。
+                Action::MoveLeft if overlay == Overlay::Settings => {
+                    settings_focus = settings_focus.prev();
+                }
+                Action::MoveRight if overlay == Overlay::Settings => {
+                    settings_focus = settings_focus.next();
+                }
+                // 設定画面表示中の ↑/↓ はフォーカス行に応じて意味が変わる（#503）。
+                // `TextSpeed` 行ではテキスト速度、`BgmVolume`/`SeVolume`/`VoiceVolume` 行では
+                // 対応する音量を調整する。GUI版 `SettingsOverlay.tsx` の各スライダー
+                // （step=5）と同じ刻み幅。↑ = 数値を減らす、↓ = 数値を増やす（GUI版スライダーの
                 // 左/右と同じ向き。ratatui のカーソル上/下という空間的な向きとは対応しない
                 // 一方的な割り当てだが、他に基準となる向きが無いため choice cursor の
-                // Up=前身/Down=後退という「上へ行くほど数値が減る」既存の感覚に合わせる）。
-                Action::MoveUp if overlay == Overlay::Settings => {
-                    // `TEXT_SPEED_MIN_MS` は0固定（clippyの`unnecessary_min_or_max`が
-                    // 指摘する通り、u64の`saturating_sub`は既にそれ未満に落ちない）。
-                    // 将来 `TEXT_SPEED_MIN_MS` を0より大きい値へ変える場合はここで改めて
-                    // `.max(TEXT_SPEED_MIN_MS)` を足す必要がある。
-                    let next_ms = config
-                        .typewriter
-                        .char_interval_ms
-                        .saturating_sub(TEXT_SPEED_STEP_MS);
-                    config.typewriter.char_interval_ms = next_ms;
-                    // `now`（ループ先頭・直前の `next_action()` 呼び出し前の値）ではなく、
-                    // ここで取り直した実時刻を使う（セルフレビュー再指摘対応。`close_overlay`
-                    // の doc comment が警告する「呼び出し直前に取り直す」原則と同じ理由 —
-                    // `next_action()` はブロッキング/スリープを含みうるため、古い `now` では
-                    // アンカーが過去へずれる）。
-                    let restart_now = Instant::now();
-                    restart_reveal_for_speed_change(
-                        playback,
-                        &mut current_reveal,
-                        &config,
-                        restart_now,
-                    );
-                    reveal_rebuilt_at = Some(restart_now);
-                }
-                Action::MoveDown if overlay == Overlay::Settings => {
-                    let next_ms = config
-                        .typewriter
-                        .char_interval_ms
-                        .saturating_add(TEXT_SPEED_STEP_MS)
-                        .min(TEXT_SPEED_MAX_MS);
-                    config.typewriter.char_interval_ms = next_ms;
-                    let restart_now = Instant::now();
-                    restart_reveal_for_speed_change(
-                        playback,
-                        &mut current_reveal,
-                        &config,
-                        restart_now,
-                    );
-                    reveal_rebuilt_at = Some(restart_now);
-                }
+                // Up=前進/Down=後退という「上へ行くほど数値が減る」既存の感覚に合わせる）。
+                Action::MoveUp if overlay == Overlay::Settings => match settings_focus {
+                    SettingsField::TextSpeed => {
+                        // `TEXT_SPEED_MIN_MS` は0固定（clippyの`unnecessary_min_or_max`が
+                        // 指摘する通り、u64の`saturating_sub`は既にそれ未満に落ちない）。
+                        // 将来 `TEXT_SPEED_MIN_MS` を0より大きい値へ変える場合はここで改めて
+                        // `.max(TEXT_SPEED_MIN_MS)` を足す必要がある。
+                        let next_ms = config
+                            .typewriter
+                            .char_interval_ms
+                            .saturating_sub(TEXT_SPEED_STEP_MS);
+                        config.typewriter.char_interval_ms = next_ms;
+                        // `now`（ループ先頭・直前の `next_action()` 呼び出し前の値）ではなく、
+                        // ここで取り直した実時刻を使う（セルフレビュー再指摘対応。
+                        // `close_overlay` の doc comment が警告する「呼び出し直前に取り直す」
+                        // 原則と同じ理由 — `next_action()` はブロッキング/スリープを含み
+                        // うるため、古い `now` ではアンカーが過去へずれる）。
+                        let restart_now = Instant::now();
+                        restart_reveal_for_speed_change(
+                            playback,
+                            &mut current_reveal,
+                            &config,
+                            restart_now,
+                        );
+                        reveal_rebuilt_at = Some(restart_now);
+                    }
+                    SettingsField::BgmVolume => {
+                        config.volume.bgm_percent =
+                            decrement_volume_percent(config.volume.bgm_percent);
+                        if let Some(player) = audio.as_deref_mut() {
+                            player
+                                .set_bgm_volume(percent_to_volume_scale(config.volume.bgm_percent));
+                        }
+                    }
+                    SettingsField::SeVolume => {
+                        config.volume.se_percent =
+                            decrement_volume_percent(config.volume.se_percent);
+                        if let Some(player) = audio.as_deref_mut() {
+                            player.set_se_volume(percent_to_volume_scale(config.volume.se_percent));
+                        }
+                    }
+                    // ボイス音量は値を保持するだけで、音声バックエンドへは反映されない
+                    // （`VolumeConfig::voice_percent` のdoc comment参照、将来ボイス再生を
+                    // 実装するまでの割り切り）。
+                    SettingsField::VoiceVolume => {
+                        config.volume.voice_percent =
+                            decrement_volume_percent(config.volume.voice_percent);
+                    }
+                },
+                Action::MoveDown if overlay == Overlay::Settings => match settings_focus {
+                    SettingsField::TextSpeed => {
+                        let next_ms = config
+                            .typewriter
+                            .char_interval_ms
+                            .saturating_add(TEXT_SPEED_STEP_MS)
+                            .min(TEXT_SPEED_MAX_MS);
+                        config.typewriter.char_interval_ms = next_ms;
+                        let restart_now = Instant::now();
+                        restart_reveal_for_speed_change(
+                            playback,
+                            &mut current_reveal,
+                            &config,
+                            restart_now,
+                        );
+                        reveal_rebuilt_at = Some(restart_now);
+                    }
+                    SettingsField::BgmVolume => {
+                        config.volume.bgm_percent =
+                            increment_volume_percent(config.volume.bgm_percent);
+                        if let Some(player) = audio.as_deref_mut() {
+                            player
+                                .set_bgm_volume(percent_to_volume_scale(config.volume.bgm_percent));
+                        }
+                    }
+                    SettingsField::SeVolume => {
+                        config.volume.se_percent =
+                            increment_volume_percent(config.volume.se_percent);
+                        if let Some(player) = audio.as_deref_mut() {
+                            player.set_se_volume(percent_to_volume_scale(config.volume.se_percent));
+                        }
+                    }
+                    SettingsField::VoiceVolume => {
+                        config.volume.voice_percent =
+                            increment_volume_percent(config.volume.voice_percent);
+                    }
+                },
                 // 上記のどれにも当てはまらない入力（他方のオーバーレイ用トグルキー・
                 // オート/スキップトグル等）はオーバーレイ表示中は無視する。
                 _ => {}
@@ -876,6 +945,7 @@ where
             }
             Action::ToggleSettings => {
                 overlay = Overlay::Settings;
+                settings_focus = SettingsField::default();
                 overlay_opened_at = Instant::now();
                 reveal_rebuilt_at = None;
             }
@@ -2599,6 +2669,101 @@ mod tests {
             "設定画面を閉じてから900ms経過(200ms/字なら4文字分)しているのに \
              タイプライターが凍結していて4文字目まで進んでいない(#503セルフレビュー \
              再指摘の回帰): {text:?}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_move_right_focuses_bgm_volume_and_move_down_increments_it() {
+        // 音量調整UI(#503)の配線確認: ←→でBGM音量行へフォーカスを移し、↓で
+        // VOLUME_STEP_PERCENT(5)ぶん増加することを、実際にdraw_settingsが描画する
+        // テキストで確認する(内部のconfigは event_loop がオーナーシップを持つ可変
+        // コピーのため、呼び出し元からは直接参照できない)。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "テスト")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings), // 開く(フォーカスはTextSpeed)
+                2 => Ok(Action::MoveRight),      // フォーカスをBgmVolumeへ
+                3 => Ok(Action::MoveDown),       // bgm_percent: 70 -> 75
+                // 意図的な停止(既存の`event_loop_backlog_overlay_ignores_...`と同じ
+                // パターン)。`Action::Quit`は overlay 表示中は「閉じる」に読み替わって
+                // しまい、後続の周回で通常画面が再描画されてから初めてループを抜けるため、
+                // 直後の(BgmVolume=75%が反映された)描画をそのまま検証対象にできない。
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None, // audio: Noneでもpanicしないことも併せて確認する
+        );
+        assert!(result.is_err(), "テスト用の意図的な停止のはず");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("75%"),
+            "BGM音量がVOLUME_STEP_PERCENT(5)ぶん増加(70->75)して表示されているはず: {text:?}"
+        );
+        assert!(
+            text.contains("> BGM音量"),
+            "フォーカスマーカーがBGM音量行に付いているはず: {text:?}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_reopening_resets_focus_to_text_speed() {
+        // 設定画面を閉じて再度開くと、前回のフォーカス位置(BgmVolume)を引きずらず
+        // 既定のTextSpeedへ戻ることを確認する(#503、backlog_scrollを開くたびに
+        // u16::MAXへ戻すのと同じ「オーバーレイごとに初期状態から始める」パターン)。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "テスト")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings), // 開く
+                2 => Ok(Action::MoveRight),      // フォーカスをBgmVolumeへ
+                3 => Ok(Action::ToggleSettings), // 閉じる
+                4 => Ok(Action::ToggleSettings), // 再度開く
+                // 意図的な停止(上のテストと同じ理由)。
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err(), "テスト用の意図的な停止のはず");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("> テキスト表示速度"),
+            "再度開いた時点でフォーカスがTextSpeedへリセットされているはず: {text:?}"
+        );
+        assert!(
+            !text.contains("> BGM音量"),
+            "前回閉じた時点のBgmVolumeフォーカスを引きずっていないはず: {text:?}"
         );
     }
 
