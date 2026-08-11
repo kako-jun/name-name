@@ -41,37 +41,6 @@ const REDRAW: Duration = Duration::from_millis(30);
 /// 「数行まとめて動く」感覚をセル単位で踏襲する。
 const BACKLOG_SCROLL_STEP: u16 = 3;
 
-/// BGM/SE音量の反映先を抽象化する薄いトレイト（#537）。`audio::AudioPlayer` の
-/// `set_bgm_volume`/`set_se_volume` をそのまま委譲するだけだが、`sync_startup_volume` を
-/// このトレイト経由のジェネリック関数にしておくことで、テストが実オーディオデバイス無しでも
-/// 「正しいメソッドが正しい値で呼ばれたか」を検証できる（CI環境には実デバイスが無く
-/// `AudioPlayer::try_new()` は常に `None` を返すため、`AudioPlayer` を直接使うテストは
-/// 常にno-op分岐に落ちて何も検証しないまま"パス"し続けてしまう——#537のバグ自体が
-/// この構造の死角で生き延びていた）。
-trait VolumeSink {
-    fn set_bgm_volume(&mut self, volume: f32);
-    fn set_se_volume(&mut self, volume: f32);
-}
-
-impl VolumeSink for audio::AudioPlayer {
-    fn set_bgm_volume(&mut self, volume: f32) {
-        audio::AudioPlayer::set_bgm_volume(self, volume);
-    }
-    fn set_se_volume(&mut self, volume: f32) {
-        audio::AudioPlayer::set_se_volume(self, volume);
-    }
-}
-
-/// 起動直後、`config.volume` の値を音声プレイヤーへ同期する（#537）。`run()` から
-/// `AudioPlayer::try_new()` 直後に呼ばれる想定。`audio` が `None`（音声デバイス無し）なら
-/// 何もしない。`VolumeSink` 経由のジェネリック関数にしているのは `VolumeSink` トレイトの
-/// doc comment参照——実デバイス非依存でテストできるようにするため。
-fn sync_startup_volume(audio: Option<&mut impl VolumeSink>, volume: &config::VolumeConfig) {
-    let Some(player) = audio else { return };
-    player.set_bgm_volume(percent_to_volume_scale(volume.bgm_percent));
-    player.set_se_volume(percent_to_volume_scale(volume.se_percent));
-}
-
 /// ゲーム画面より前面に描画するフルスクリーンオーバーレイ。開いている間、`event_loop` は
 /// 会話の進行（オート/スキップモードのタイマー判定・`Action::Advance` 等）を一切実行せず
 /// 完全に凍結する — バックログ（#500 Issue本文「バックログを閉じると元のゲーム画面に戻る
@@ -164,24 +133,18 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // 音声出力デバイスを初期化する（#502）。SSH経由・headless環境等でデバイスが無い場合は
-    // `None` になるが、これはエラーではない — `event_loop` はその場合 BGM/SE の状態追跡だけ
-    // 行い実際の再生呼び出しをスキップして進行を続ける（`audio::AudioPlayer::try_new`
-    // のdoc comment参照）。
-    let mut audio_player = audio::AudioPlayer::try_new();
-
-    // `try_new` はBGM/SE音量を暫定値 1.0（100%）で初期化する（`audio::AudioPlayer`の
-    // フィールドdoc comment参照）。設定画面を一度も開かずに最初のBGM/SEが鳴った場合でも
-    // `config.volume`（既定値・`tui-config.toml`のカスタム値いずれも）が反映されるよう、
-    // ここで明示的に同期する。GUI版 `NovelPlayer.tsx` がinit完了直後に`applySettings`を
-    // 呼ぶのと同じ役割（#537、実処理は`sync_startup_volume`に切り出し済み——doc comment参照）。
+    // 音声出力デバイスを初期化すると同時に `config.volume` を反映する（#502／起動時同期は#537）。
+    // SSH経由・headless環境等でデバイスが無い場合は `None` になるが、これはエラーではない —
+    // `event_loop` はその場合 BGM/SE の状態追跡だけ行い実際の再生呼び出しをスキップして進行を
+    // 続ける（`audio::AudioPlayer::try_new` のdoc comment参照）。
     //
-    // `sync_startup_volume` 本体は `VolumeSink` 経由でユニットテスト済みだが、この呼び出し行
-    // 自体は `run()` が raw mode/alternate screen 等の端末副作用を持ちテスト不能なため、
-    // 呼び出し漏れ（#537本体のバグと同種）が起きてもテストでは検知できない——コードレビューが
-    // 唯一の防波堤になる。今後 `run()` に同様の「起動時に一度だけ呼ぶ同期処理」を追加する際は、
-    // この構造的制約を踏まえ、レビュー時に呼び出し箇所が実在するかを明示的に確認すること。
-    sync_startup_volume(audio_player.as_mut(), &config.volume);
+    // `try_new` が `&config.volume` を必須引数として要求するため、「音量を渡さずに
+    // `AudioPlayer` を生成する」経路自体が存在しない——生成と起動時同期を分離した2段階の
+    // 設計（`try_new()` → 別行で `sync_startup_volume(...)`）だった当初は、後者の呼び出しを
+    // 削除しても `cargo test` が気づけないという構造的な穴があった（`audio::AudioPlayer::try_new`
+    // のdoc comment参照）。GUI版 `NovelPlayer.tsx` がinit完了直後に `applySettings` を呼ぶのと
+    // 同じ役割を、ここでは1回の生成呼び出しに統合している。
+    let mut audio_player = audio::AudioPlayer::try_new(&config.volume);
 
     // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ
     // （`reveal::blink_visible` による1秒周期の完全on/off点滅、#495）は
@@ -2005,85 +1968,15 @@ mod tests {
         );
     }
 
-    // ---- #537: 起動時音量同期（`sync_startup_volume`）----
+    // ---- #537: 起動時音量同期 ----
     //
-    // CI環境には実オーディオデバイスが無く `AudioPlayer::try_new()` は常に `None` を返すため、
-    // `AudioPlayer` を直接使うテストは「実際にBGM/SE音量が反映されたか」を検証できない
-    // （常にno-op分岐に落ちて"パス"し続ける——#537のバグ自体がこの死角で生き延びていた）。
-    // `VolumeSink` トレイト経由のフェイクで、実デバイス非依存・決定論的に検証する。
-
-    /// `VolumeSink` のフェイク実装。`set_bgm_volume`/`set_se_volume` が呼ばれた値を
-    /// そのまま記録するだけで、実オーディオ出力は一切行わない。
-    #[derive(Debug, Default)]
-    struct FakeVolumeSink {
-        bgm_volume: f32,
-        se_volume: f32,
-    }
-
-    impl VolumeSink for FakeVolumeSink {
-        fn set_bgm_volume(&mut self, volume: f32) {
-            self.bgm_volume = volume;
-        }
-        fn set_se_volume(&mut self, volume: f32) {
-            self.se_volume = volume;
-        }
-    }
-
-    #[test]
-    fn startup_volume_sync_applies_default_config_to_audio_player() {
-        // #537再発防止の主テスト: デフォルトconfig(bgm=70%/se=80%)で起動すると、
-        // AudioPlayer相当(VolumeSink)へ0.70/0.80が反映される。
-        let volume = config::VolumeConfig::default();
-        let mut sink = FakeVolumeSink::default();
-
-        sync_startup_volume(Some(&mut sink), &volume);
-
-        assert_eq!(
-            sink.bgm_volume, 0.70,
-            "bgm_percent(70)が0.70として反映されるはず"
-        );
-        assert_eq!(
-            sink.se_volume, 0.80,
-            "se_percent(80)が0.80として反映されるはず"
-        );
-    }
-
-    #[test]
-    fn startup_volume_sync_applies_boundary_zero_and_max_to_audio_player() {
-        // 境界値: 下限0%/上限100%が両方向で正しく変換・反映されることを、
-        // bgm/seを入れ替えたクロスの2パターンで確認する。
-        let mut low_bgm_high_se = FakeVolumeSink::default();
-        sync_startup_volume(
-            Some(&mut low_bgm_high_se),
-            &config::VolumeConfig {
-                bgm_percent: 0,
-                se_percent: 100,
-                voice_percent: 80,
-            },
-        );
-        assert_eq!(low_bgm_high_se.bgm_volume, 0.0);
-        assert_eq!(low_bgm_high_se.se_volume, 1.0);
-
-        let mut high_bgm_low_se = FakeVolumeSink::default();
-        sync_startup_volume(
-            Some(&mut high_bgm_low_se),
-            &config::VolumeConfig {
-                bgm_percent: 100,
-                se_percent: 0,
-                voice_percent: 80,
-            },
-        );
-        assert_eq!(high_bgm_low_se.bgm_volume, 1.0);
-        assert_eq!(high_bgm_low_se.se_volume, 0.0);
-    }
-
-    #[test]
-    fn startup_volume_sync_is_noop_when_audio_device_unavailable() {
-        // `audio_player`がNone(音声デバイス無し環境)の場合はpanicせず、
-        // 何も反映せずに戻ることだけを確認する。
-        let volume = config::VolumeConfig::default();
-        sync_startup_volume(None::<&mut FakeVolumeSink>, &volume);
-    }
+    // 以前ここには `sync_startup_volume`（`run()` が `AudioPlayer::try_new()` の直後に
+    // 別行で呼ぶ設計）を実デバイス非依存・決定論的に検証するテストがあったが、#537の
+    // セルフレビュー指摘（生成と同期の呼び出しが分離されており、後者の呼び出しを削除しても
+    // `cargo test` が気づけない）を受けて構造そのものを変更した。生成と音量同期は
+    // `audio::AudioPlayer::try_new(&config.volume)` という単一の呼び出しに統合済みで、
+    // 対応する回帰テストは `audio::tests`（`initial_volumes_maps_default_config_to_bgm_and_se_scale`
+    // 等）に移動している——`audio::AudioPlayer::try_new` のdoc comment参照。
 
     // ---- フルキャンバス画像表示モードのスクロール配線（#530）----
 
