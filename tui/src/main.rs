@@ -1819,16 +1819,14 @@ mod tests {
         steps: Vec<(Duration, Action)>,
     ) -> impl FnMut() -> anyhow::Result<Action> {
         let mut iter = steps.into_iter();
-        move || {
-            match iter.next() {
-                Some((sleep_before, action)) => {
-                    if !sleep_before.is_zero() {
-                        std::thread::sleep(sleep_before);
-                    }
-                    Ok(action)
+        move || match iter.next() {
+            Some((sleep_before, action)) => {
+                if !sleep_before.is_zero() {
+                    std::thread::sleep(sleep_before);
                 }
-                None => Ok(Action::Quit),
+                Ok(action)
             }
+            None => Ok(Action::Quit),
         }
     }
 
