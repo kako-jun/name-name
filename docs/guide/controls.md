@@ -11,6 +11,7 @@ TUI版は `tui-config.toml` の `[splash]` で起動画面を設定できます�
 - `splash.logo_image`: `event_image.assets_dir` を基準にしたロゴ画像の相対パス。設定すると、画像をキャンバス全幅に contain 表示し、画面に収まらない縦方向は ↑ / ↓ でスクロールします。
 - `splash.scroll_ease_ms`: ↑ / ↓ のスクロールアニメーション時間（ミリ秒）。`0` にすると即時移動します。
 - ↑ / ↓: 画像ロゴを1行ずつ上下にスクロールします。最上端・最下端を越えて移動することはありません。
+- `logo_image` が正常に読み込めた場合は `splash.lines` は無視されます。
 - `logo_image` の読み込みに失敗した場合は `splash.lines` のテキスト表示へフォールバックします。`lines` が空でも、空行と「Enter / Space で開始」の開始ヒントは表示されます。
 
 ## ノベルプレイヤー
