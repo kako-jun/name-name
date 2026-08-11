@@ -1,10 +1,13 @@
-//! rodio ベースの BGM/SE 再生（#502）。
+//! rodio ベースの BGM/SE 再生（#502）。BGM/SE の音量制御は #503 で実装済み。
 //!
 //! GUI版 `AudioManager`（`frontend/src/game/AudioManager.ts`）が Web Audio API の
 //! `AudioContext`/`GainNode` グラフで実現している機能のうち、TUI で必要な最小限
-//! （BGM のループ再生・切り替え・停止、SE のワンショット複数同時再生）だけを rodio の
-//! `OutputStream`/`Sink` で再現する。GUI版にある音量制御・フェード・動画ミックス・
-//! キャプチャ配線は対象外（MVPスコープ、#502 の実装方針コメント参照）。
+//! （BGM のループ再生・切り替え・停止、SE のワンショット複数同時再生、BGM/SE の音量制御）
+//! だけを rodio の `OutputStream`/`Sink` で再現する。GUI版にあるフェード・動画ミックス・
+//! キャプチャ配線は対象外（MVPスコープ、#502 の実装方針コメント参照）。ボイス音量の
+//! バックエンド反映も対象外——GUI版 `voiceVolume`（「#144 ボイス用、現在は保存だけ」）と
+//! 同じ割り切りで、TUI側にもボイス再生コード自体が存在しないため
+//! （`config::VolumeConfig` のdoc comment参照）。
 //!
 //! ## フェード無し（即時切り替え）
 //!
@@ -34,6 +37,13 @@ pub struct AudioPlayer {
     stream_handle: OutputStreamHandle,
     /// 現在ループ再生中の BGM の `Sink`。`None` は無音状態。
     bgm_sink: Option<Sink>,
+    /// BGM の音量（0.0〜1.0）。`try_new` 直後は暫定値の `1.0` だが、`main.rs` が起動処理内で
+    /// `Config` の初期値（`config.volume.bgm_percent`）を使って `set_bgm_volume` を呼び直す
+    /// ため、実際に音が鳴り始める時点では常に設定値が反映されている（#503）。
+    bgm_volume: f32,
+    /// SE の音量（0.0〜1.0）。`bgm_volume` と同じく `try_new` 直後は暫定値、`main.rs` が
+    /// 起動時に `set_se_volume` で上書きする（#503）。
+    se_volume: f32,
 }
 
 impl AudioPlayer {
@@ -46,7 +56,26 @@ impl AudioPlayer {
             _stream: stream,
             stream_handle,
             bgm_sink: None,
+            bgm_volume: 1.0,
+            se_volume: 1.0,
         })
+    }
+
+    /// BGM の音量を変更する（0.0〜1.0、#503）。値を保持するだけでなく、現在ループ再生中の
+    /// BGM（`bgm_sink` が `Some`）があれば `Sink::set_volume` で即座に反映する — GUI版
+    /// `AudioManager` の音量スライダーが再生中のBGMへリアルタイムに効くのと同じ体験。
+    pub fn set_bgm_volume(&mut self, volume: f32) {
+        self.bgm_volume = volume;
+        if let Some(sink) = &self.bgm_sink {
+            sink.set_volume(volume);
+        }
+    }
+
+    /// SE の音量を変更する（0.0〜1.0、#503）。SE は `play_se` 呼び出しのたびに新規 `Sink` を
+    /// 作って即座に `detach()` する fire-and-forget 設計のため、再生中のSEへ遡って反映する
+    /// 手段が無い——値を保持し、次回以降の `play_se` 呼び出しから適用される。
+    pub fn set_se_volume(&mut self, volume: f32) {
+        self.se_volume = volume;
     }
 
     /// `path` の BGM をループ再生に切り替える。既に再生中の BGM があれば即座に停止する
@@ -61,6 +90,7 @@ impl AudioPlayer {
         let Ok(sink) = Sink::try_new(&self.stream_handle) else {
             return;
         };
+        sink.set_volume(self.bgm_volume);
         sink.append(source.repeat_infinite());
         self.bgm_sink = Some(sink);
     }
@@ -83,6 +113,7 @@ impl AudioPlayer {
         let Ok(sink) = Sink::try_new(&self.stream_handle) else {
             return;
         };
+        sink.set_volume(self.se_volume);
         sink.append(source);
         sink.detach();
     }
