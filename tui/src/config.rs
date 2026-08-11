@@ -167,6 +167,35 @@ impl Default for EventImageConfig {
 pub const TEXT_SPEED_MAX_MS: u64 = 200;
 pub const TEXT_SPEED_STEP_MS: u64 = 5;
 
+/// 音量調整UI（#503）がプレイ中に選べる音量(%)の上限・刻み幅。下限は明示定数を持たない
+/// （`TEXT_SPEED_MAX_MS`と同じ理由 — `u32`の`saturating_sub`が自然に0で止まるため、
+/// `VOLUME_MIN_PERCENT: u32 = 0`を定義すると常にno-opになりclippy
+/// `unnecessary_min_or_max`に指摘される）。
+pub const VOLUME_MAX_PERCENT: u32 = 100;
+pub const VOLUME_STEP_PERCENT: u32 = 5;
+
+/// `percent`を`VOLUME_STEP_PERCENT`刻みで1段階増やし、`VOLUME_MAX_PERCENT`にclampする
+/// 純粋関数（#503）。レンダラ本体（`main.rs`）に計算ロジックを直書きしないための切り出し
+/// （dev-doctrineハウスルール3）。
+pub fn increment_volume_percent(percent: u32) -> u32 {
+    percent
+        .saturating_add(VOLUME_STEP_PERCENT)
+        .min(VOLUME_MAX_PERCENT)
+}
+
+/// `percent`を`VOLUME_STEP_PERCENT`刻みで1段階減らす純粋関数（#503）。下限0はu32の
+/// `saturating_sub`が自然に持つため、明示的なclampは不要（`TEXT_SPEED_MAX_MS`のdoc comment
+/// 参照）。
+pub fn decrement_volume_percent(percent: u32) -> u32 {
+    percent.saturating_sub(VOLUME_STEP_PERCENT)
+}
+
+/// パーセント表記(0..=100)の音量を、rodio の `Sink::set_volume`/`AudioPlayer` が扱う
+/// 0.0〜1.0スケールへ変換する純粋関数（#503）。
+pub fn percent_to_volume_scale(percent: u32) -> f32 {
+    percent as f32 / 100.0
+}
+
 /// 音声アセット（BGM/SE共通）関連の設定（#502）。GUI版 `resolveAssetUrl(base, 'sounds', path)`
 /// （`frontend/src/game/novelLayout.ts`）が BGM/SE/voice を種別で分けず単一の `sounds/`
 /// ディレクトリから解決するのに倣い、TUI側も `bgm_assets_dir`/`se_assets_dir` のように
@@ -185,6 +214,35 @@ impl Default for SoundConfig {
     fn default() -> Self {
         Self {
             assets_dir: PathBuf::from("assets/sounds"),
+        }
+    }
+}
+
+/// BGM/SE/ボイスの音量設定（#503）。GUI版 `DEFAULT_SETTINGS`（`frontend/src/game/settings.ts`、
+/// bgmVolume 0.7 / seVolume 0.8 / voiceVolume 0.8）と同値をパーセント表記(0..=100、
+/// `VOLUME_STEP_PERCENT`刻み)で持つ。
+///
+/// BGM/SE音量は実際に rodio へ即時反映される（`main.rs::event_loop` の `Overlay::Settings`
+/// 分岐が `audio::AudioPlayer::set_bgm_volume`/`set_se_volume` を呼ぶ）。一方ボイス音量は
+/// GUI版 `voiceVolume`（「#144 ボイス用、現在は保存だけ」）と同じ割り切りで、値を保持する
+/// だけの受け皿——TUI側にはそもそもボイス再生コード自体が存在しない（`voice_path` は
+/// parserのEventフィールドとして残るのみ、#502実装時点の既存の割り切り）ため、音声
+/// バックエンドへの反映は無い。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct VolumeConfig {
+    pub bgm_percent: u32,
+    pub se_percent: u32,
+    /// 将来ボイス再生を実装するまでは値を保持するだけで、音声バックエンドへは反映されない。
+    pub voice_percent: u32,
+}
+
+impl Default for VolumeConfig {
+    fn default() -> Self {
+        Self {
+            bgm_percent: 70,
+            se_percent: 80,
+            voice_percent: 80,
         }
     }
 }
@@ -212,6 +270,8 @@ pub struct Config {
     pub event_image: EventImageConfig,
     /// BGM/SE アセットの基点ディレクトリ（#502）。
     pub sound: SoundConfig,
+    /// BGM/SE/ボイスの音量（#503）。
+    pub volume: VolumeConfig,
     /// adv 表示を文単位（`splitIntoSentences` 相当）で改頁するか（#486）。既定 `false` は
     /// 従来どおり markdown 行単位の一括表示（非破壊）。GUI版 frontmatter `sentence_per_page:`
     /// とは別軸 — TUI は原稿の per-game frontmatter を読まず、`tui-config.toml` 側のこの
@@ -237,6 +297,7 @@ impl Default for Config {
             typewriter: TypewriterConfig::default(),
             event_image: EventImageConfig::default(),
             sound: SoundConfig::default(),
+            volume: VolumeConfig::default(),
             sentence_per_page: false,
             auto_wait_ms: 2500,
         }
@@ -370,6 +431,9 @@ mod tests {
         );
         assert_eq!(config.event_image.crossfade_ms, 700);
         assert_eq!(config.sound.assets_dir, PathBuf::from("assets/sounds"));
+        assert_eq!(config.volume.bgm_percent, 70);
+        assert_eq!(config.volume.se_percent, 80);
+        assert_eq!(config.volume.voice_percent, 80);
         assert!(!config.sentence_per_page);
         assert_eq!(config.auto_wait_ms, 2500);
     }
@@ -534,6 +598,36 @@ mod tests {
     fn from_toml_str_sentence_per_page_absent_defaults_to_false() {
         let config = Config::from_toml_str("").expect("empty toml should parse");
         assert!(!config.sentence_per_page);
+    }
+
+    #[test]
+    fn from_toml_str_partial_volume_override_keeps_rest_default() {
+        let toml = "[volume]\nbgm_percent = 50\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert_eq!(config.volume.bgm_percent, 50);
+        assert_eq!(
+            config.volume.se_percent,
+            Config::default().volume.se_percent
+        );
+    }
+
+    #[test]
+    fn increment_volume_percent_clamps_at_max() {
+        assert_eq!(increment_volume_percent(100), 100);
+        assert_eq!(increment_volume_percent(98), 100);
+    }
+
+    #[test]
+    fn decrement_volume_percent_saturates_at_zero() {
+        assert_eq!(decrement_volume_percent(0), 0);
+        assert_eq!(decrement_volume_percent(3), 0);
+    }
+
+    #[test]
+    fn percent_to_volume_scale_converts_to_0_1_range() {
+        assert_eq!(percent_to_volume_scale(70), 0.7);
+        assert_eq!(percent_to_volume_scale(0), 0.0);
+        assert_eq!(percent_to_volume_scale(100), 1.0);
     }
 
     #[test]
