@@ -545,6 +545,14 @@ fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset:
     let fitted_cols = image_area.width;
     let fitted_rows = compute_full_width_rows(image.width, image.height, fitted_cols);
     if fitted_cols == 0 || fitted_rows == 0 {
+        // 画像を描画できない場合でも、テキストモードのフォールバックと対称になるよう
+        // 「Enter / Space で開始」ヒントだけは出す。`fits_required_size`チェックを通過して
+        // いる以上、固定幅の`REQUIRED_TOTAL_WIDTH`から導かれる`fitted_cols`が実際に0になる
+        // ことは現状のコード上ほぼ到達不能（#538）。
+        let hint_paragraph = Paragraph::new("Enter / Space で開始")
+            .alignment(Alignment::Center)
+            .style(Style::default().add_modifier(Modifier::DIM));
+        frame.render_widget(hint_paragraph, hint_area);
         return;
     }
 
@@ -2420,6 +2428,48 @@ mod tests {
         terminal
             .draw(|f| draw_fullscreen_image(f, &image, 0))
             .unwrap();
+    }
+
+    #[test]
+    fn draw_fullscreen_image_zero_sized_decoded_image_still_shows_start_hint() {
+        // バグ修正2（#538）: fitted_cols>0/fitted_rows==0（image.width/heightが0）の
+        // 早期return経路でも、テキストモードのフォールバックと対称になるよう
+        // 「Enter / Space で開始」ヒントだけは描画されるはず。
+        let image = DecodedImage {
+            width: 0,
+            height: 0,
+            rgba: vec![],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("Enter / Space で開始"),
+            "fitted_rows==0の早期return経路でも開始ヒントは表示されるはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_zero_sized_decoded_image_does_not_show_scroll_hint() {
+        // バグ修正2（#538）: fitted_rows==0の早期return経路では`scrollable`判定
+        // （`fitted_rows > image_area.height`）自体が実行されないため、通常の画像描画
+        // 経路が出す「↑/↓ でスクロール」ヒントは含まれないはず。
+        let image = DecodedImage {
+            width: 0,
+            height: 0,
+            rgba: vec![],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !text.contains("↑/↓ でスクロール"),
+            "fitted_rows==0の早期return経路ではスクロールヒントを含まないはず, buffer was: {text}"
+        );
     }
 
     #[test]
