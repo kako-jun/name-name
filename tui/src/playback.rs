@@ -246,6 +246,10 @@ enum PlaybackItem {
 /// `DisplayLine`（`Line`/`Image` 両方が内部で持つ型）は `#[derive(Hash)]` 済みのため
 /// そのままハッシュに流し込むだけでよい。`Choice` は `ChoiceOption` が `Hash` を実装して
 /// いないため、`text`/`jump` を個別にハッシュへ流し込む。
+///
+/// 「中身が異なれば別のハッシュ値になる」は、64bit `DefaultHasher` の衝突耐性に依存した
+/// 近似的な保証であり、理論上は異なる内容が同じハッシュ値になる可能性がゼロではない
+/// （が、1セッション内で再生される item 数という実用スケールでは無視できる、#539）。
 fn content_signature(item: &PlaybackItem) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -381,6 +385,12 @@ pub struct Playback {
     /// （`item_file_ids` と同じ並行 Vec のパターン）。詳細・既知の制約は
     /// [`Playback::stable_item_key`] の doc comment参照。
     item_scene_key: Vec<(usize, usize)>,
+    /// `items[i]` の [`content_signature`] をあらかじめ計算してキャッシュしたもの
+    /// （`item_scene_key` と同じ並行 Vec のパターン、#539）。`stable_item_key` が呼ばれる
+    /// たびに毎回再計算していた（`main.rs` では同一 item に対し最低2回、既読判定と
+    /// 既読マークの両方で呼ばれる）のを避ける — `append_stable_item_keys` が
+    /// `item_scene_key` を積むのと同じタイミング（item構築直後の1回きり）で一緒に計算する。
+    item_content_hash: Vec<u64>,
     index: usize,
     /// ドキュメント順（chapters→scenes の順）に並んだ、各シーンの参照情報。
     /// `from_document`/`from_merged_document` で埋まる。`advance`/`select_current_choice` が
@@ -498,7 +508,9 @@ fn push_wait_chain_terminal_item(
 /// `build_scene_items` の1回の呼び出し（内部の `Event::Condition` 再帰も含む）が
 /// `items` に追加した範囲 `[start..items.len())` の各 item へ、`(scene_idx, シーン内での
 /// 構築順インデックス)` の安定キーを割り当てて `item_scene_key` へ積む
-/// （[`Playback::stable_item_key`] の doc comment参照、#499/#509統合）。
+/// （[`Playback::stable_item_key`] の doc comment参照、#499/#509統合）。同じ範囲の各 item の
+/// [`content_signature`] も同時に計算して `item_content_hash` へ積む（#539、`stable_item_key`
+/// が呼ばれるたびの再計算を避けるキャッシュ）。
 ///
 /// `build_scene_items` 自体（および `push_wait_chain_terminal_item`）のシグネチャは
 /// 変更していない — 呼び出し側（`Playback::build`/`advance`/`select_current_choice`）が
@@ -506,13 +518,16 @@ fn push_wait_chain_terminal_item(
 /// 範囲を割り出すだけなので、`Event::Condition` の再帰呼び出しを含む全ての push サイトを
 /// 個別に変更する必要がない。
 fn append_stable_item_keys(
+    items: &[PlaybackItem],
     item_scene_key: &mut Vec<(usize, usize)>,
+    item_content_hash: &mut Vec<u64>,
     scene_idx: usize,
     start: usize,
     end: usize,
 ) {
-    for absolute_index in start..end {
-        item_scene_key.push((scene_idx, absolute_index - start));
+    for (local_index, item) in items[start..end].iter().enumerate() {
+        item_scene_key.push((scene_idx, local_index));
+        item_content_hash.push(content_signature(item));
     }
 }
 
@@ -830,6 +845,7 @@ impl Playback {
             }
         }
         let mut item_scene_key = Vec::new();
+        let mut item_content_hash = Vec::new();
         if let Some(first_scene) = scene_order.first() {
             let start = items.len();
             build_scene_items(
@@ -844,7 +860,14 @@ impl Playback {
                 &mut item_bgm,
                 &mut item_se,
             );
-            append_stable_item_keys(&mut item_scene_key, 0, start, items.len());
+            append_stable_item_keys(
+                &items,
+                &mut item_scene_key,
+                &mut item_content_hash,
+                0,
+                start,
+                items.len(),
+            );
         }
         Self {
             items,
@@ -854,6 +877,7 @@ impl Playback {
             item_bgm,
             item_se,
             item_scene_key,
+            item_content_hash,
             index: 0,
             scene_order,
             scene_index_by_id,
@@ -1051,10 +1075,22 @@ impl Playback {
     /// `milestone_*_pending` Condition ブロックが排他的に1個ずつ真になる）。コンテンツ
     /// ハッシュを3つ目のキー要素として加えることで、`(scene_idx, local_index)` が
     /// 一致していても中身が異なれば別キー扱いになり、この取り違えを解消する。
+    ///
+    /// 元Issue #533は、シーン内で構築される item 数自体が訪問ごとにずれるケース
+    /// （`Condition` ブロックの分岐先で件数の異なるイベント列が展開される場合）も
+    /// 懸念として挙げていた。この場合も「ローカルindex Nの item」が指す内容自体が
+    /// 訪問ごとに変わる点は上記の件数不変ケースと同じであり、コンテンツハッシュが
+    /// そのまま副次的にカバーする（#539で検証、
+    /// `stable_item_key_content_hash_differs_when_flag_dependent_scene_item_count_itself_shifts_across_revisits`
+    /// テスト参照）。ただし「絶対に取り違えが起きない」わけではなく、[`content_signature`]
+    /// の doc comment が挙げる64bit `DefaultHasher` の衝突（理論上ゼロではないが実用
+    /// スケールでは無視できる）が起きない限り、という限定付きの保証である。
     pub(crate) fn stable_item_key(&self, item_index: usize) -> Option<(usize, usize, u64)> {
         let (scene_idx, local_index) = self.item_scene_key.get(item_index).copied()?;
-        let item = self.items.get(item_index)?;
-        Some((scene_idx, local_index, content_signature(item)))
+        // `content_signature` を都度呼ばず、`append_stable_item_keys` が item 構築直後の
+        // 1回だけ計算してキャッシュした値を読む（#539、nit対応）。
+        let content_hash = self.item_content_hash.get(item_index).copied()?;
+        Some((scene_idx, local_index, content_hash))
     }
 
     /// 次の item へ進む。現在位置が選択肢（選択待ち）の場合は、[`Playback::select_current_choice`]
@@ -1112,7 +1148,9 @@ impl Playback {
                 &mut self.item_se,
             );
             append_stable_item_keys(
+                &self.items,
                 &mut self.item_scene_key,
+                &mut self.item_content_hash,
                 next_scene_idx,
                 start,
                 self.items.len(),
@@ -1259,7 +1297,14 @@ impl Playback {
                 &mut self.item_bgm,
                 &mut self.item_se,
             );
-            append_stable_item_keys(&mut self.item_scene_key, scene_idx, start, self.items.len());
+            append_stable_item_keys(
+                &self.items,
+                &mut self.item_scene_key,
+                &mut self.item_content_hash,
+                scene_idx,
+                start,
+                self.items.len(),
+            );
             self.current_scene_idx = scene_idx;
             if self.items.len() > start {
                 self.set_index(start);
@@ -1450,14 +1495,17 @@ impl Playback {
         // それぞれ独立した「シーン0番の、その行自身のindex番目」として扱えば十分安定する
         // （`stable_item_key` の doc comment参照）。
         let item_scene_key = (0..lines.len()).map(|i| (0, i)).collect();
+        let items: Vec<PlaybackItem> = lines.into_iter().map(PlaybackItem::Line).collect();
+        let item_content_hash = items.iter().map(content_signature).collect();
         Self {
-            items: lines.into_iter().map(PlaybackItem::Line).collect(),
+            items,
             item_file_ids,
             item_wait_ms,
             item_blackout,
             item_bgm,
             item_se,
             item_scene_key,
+            item_content_hash,
             index: 0,
             scene_order: Vec::new(),
             scene_index_by_id: HashMap::new(),
@@ -5554,6 +5602,120 @@ mod tests {
         assert_eq!(
             first_key, second_key,
             "フラグを変えずに同一シーンへ戻った場合は3つ組が完全一致し続けるはず(退行防止)"
+        );
+    }
+
+    /// `hub_revisit_doc` と同じ route1/hub/route2 の3シーン構成だが、hubシーン内の
+    /// `Condition` 分岐先イベント数自体を1回目と2回目で変える（1件 vs 2件）。
+    /// 元Issue #533が挙げていた「シーン内で構築される要素の並び・件数自体がずれる」
+    /// ケースを再現する（#539）。
+    fn hub_revisit_item_count_shift_doc() -> Document {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "route1",
+                    vec![
+                        flag_event("milestone_a_pending", true),
+                        flag_event("milestone_b_pending", false),
+                        choice(vec![("hubへ", "hub")]),
+                    ],
+                ),
+                scene(
+                    "hub",
+                    vec![
+                        condition_event(
+                            "milestone_a_pending",
+                            vec![dialog(Some("施設"), vec!["Aの手紙"])],
+                        ),
+                        condition_event(
+                            "milestone_b_pending",
+                            vec![
+                                dialog(Some("施設"), vec!["Bの手紙1"]),
+                                dialog(Some("施設"), vec!["Bの手紙2"]),
+                            ],
+                        ),
+                        choice(vec![("次のルートへ", "route2")]),
+                    ],
+                ),
+                scene(
+                    "route2",
+                    vec![
+                        flag_event("milestone_a_pending", false),
+                        flag_event("milestone_b_pending", true),
+                        choice(vec![("hubへ", "hub")]),
+                    ],
+                ),
+            ],
+        );
+        document_with_chapters(vec![ch1])
+    }
+
+    #[test]
+    fn stable_item_key_content_hash_differs_when_flag_dependent_scene_item_count_itself_shifts_across_revisits(
+    ) {
+        // 元Issue #533「残っている限界」節が挙げていた、シーン内で構築されるitem数自体が
+        // 訪問ごとにずれるケース（#539で追加した検証）。1回目訪問はhub内item数が2件
+        // (Aの手紙+Choice)、2回目訪問は3件(Bの手紙1+Bの手紙2+Choice)に変わる —
+        // どちらの訪問でも local_index=0 の item を比較する。
+        let doc = hub_revisit_item_count_shift_doc();
+        let mut pb = Playback::from_document(&doc);
+
+        // route1 → hub (1回目訪問): milestone_a_pendingのみ真。
+        assert!(
+            pb.select_current_choice(),
+            "route1からhubへジャンプできるはず"
+        );
+        let first_key = pb
+            .stable_item_key(pb.item_index())
+            .expect("hub 1回目訪問のitemはキーを持つはず");
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["Aの手紙".to_string()],
+            "1回目訪問の最初のitem(local_index=0)はAの手紙のはず"
+        );
+
+        // hub → route2 → hub (2回目訪問): milestone_b_pendingへ反転済み。
+        assert!(pb.advance(), "Aの手紙からChoiceへ進めるはず");
+        assert!(
+            pb.select_current_choice(),
+            "hubからroute2へジャンプできるはず"
+        );
+        assert!(
+            pb.select_current_choice(),
+            "route2から再度hubへジャンプできるはず"
+        );
+        let second_key = pb
+            .stable_item_key(pb.item_index())
+            .expect("hub 2回目訪問のitemはキーを持つはず");
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["Bの手紙1".to_string()],
+            "2回目訪問の最初のitem(local_index=0)はBの手紙1のはず\
+             (シーン内item数自体が2件→3件に変化している)"
+        );
+
+        assert_eq!(
+            (first_key.0, first_key.1),
+            (second_key.0, second_key.1),
+            "(scene_idx, local_index)自体は1回目・2回目ともlocal_index=0で一致する\
+             (シーン内item数がずれても最初のitemのlocal_indexそのものは変わらない、\
+             これが#533の取り違えの原因)"
+        );
+        assert_ne!(
+            first_key, second_key,
+            "item数自体がずれて同じlocal_index=0が別の内容(Aの手紙→Bの手紙1)を指す\
+             ようになっても、コンテンツハッシュを含む3つ組全体は一致してはいけない\
+             (#539: #533の件数ずれ懸念もこのfixで副次的にカバーされることの検証)"
+        );
+
+        // 念のため、2回目訪問のhubシーンが実際にitem数の増えた3件構成になっている
+        // ことも確認する(Bの手紙1の次にBの手紙2が続く)。
+        assert!(pb.advance(), "Bの手紙1からBの手紙2へ進めるはず");
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["Bの手紙2".to_string()],
+            "2回目訪問はitemが1件増えているため、Bの手紙1の次はBの手紙2が続くはず"
         );
     }
 
