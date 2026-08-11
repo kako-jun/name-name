@@ -507,7 +507,14 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
 - **音声出力デバイス無し環境への配慮**: `AudioPlayer::try_new()`（`OutputStream::
   try_default()` に失敗すると `None`）・ファイル未検出/デコード失敗のいずれも、エラーに
   せず音声再生だけを無効化して進行を続ける（SSH経由・headless環境等を想定）。
-- 音量制御・動画ミックス・エクスポート用キャプチャ配線（以下の各節）は対象外。
+- **BGM/SE音量制御（#503/#536/#537）**: 設定画面（`Overlay::Settings`）から BGM/SE 音量を
+  5%刻みで調整でき、`AudioPlayer::set_bgm_volume`/`set_se_volume` に即時反映される。加えて
+  起動直後（設定画面を一度も開いていない状態）でも `config.volume.bgm_percent`/`se_percent`
+  （`tui-config.toml` の `[volume]`）が `main.rs` の `run()` 内 `sync_startup_volume` で
+  `AudioPlayer` 生成直後に同期される（#537、以前は起動時同期が漏れており暫定ゲイン1.0の
+  まま最初のBGM/SEが鳴るバグがあった）。ボイス音量（`voice_percent`）は値の保持のみで
+  バックエンド未反映（TUIにボイス再生コード自体が無いため、`config::VolumeConfig` の
+  doc comment参照）。動画ミックス・エクスポート用キャプチャ配線は対象外。
 
 ### BGM
 
