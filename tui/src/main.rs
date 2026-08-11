@@ -209,7 +209,9 @@ where
 /// （kako-jun追加要望「スクロールはeaseにしたい」。`image_fade::ImageFadeState` の
 /// `from`/`to`/`started_at`/`duration` パターンを踏襲 — キー入力のたびに現在の表示位置を
 /// 新しいアニメーションの起点 `scroll_anim_start_offset` として引き継ぎ、開始時刻
-/// `scroll_anim_start` をリセットする点も `ImageFadeState::transition_to` と同じ設計）。
+/// `scroll_anim_start` をその場で取り直した `Instant::now()` にリセットする点も
+/// （ループ先頭で取得した `now` は `next_action()?` のブロッキング待ち分だけ古くなるため
+/// 使わない）`ImageFadeState::transition_to` と同じ設計）。
 /// 進行度・補間の計算自体は [`image_render::compute_scroll_ease_progress`]/
 /// [`image_render::compute_eased_scroll_offset`]（ターミナル/時刻I/Oに触れない純粋関数）に
 /// 委譲する。テキストモード（`logo_image` が `None`）ではどちらも参照されない
@@ -254,14 +256,19 @@ where
             Action::MoveUp => {
                 // 現在の表示位置（アニメーション途中点も含む）を新しいアニメーションの
                 // 起点として引き継ぐことで、連打してもジャンプせず滑らかに追従し続ける。
+                // 開始時刻はここで取り直す（ループ先頭の`now`は`next_action()?`の
+                // ブロッキング待ち分だけ古くなっているため、`event_loop`の
+                // `image_fade.transition_to`呼び出しと同じ設計に合わせる）。
                 scroll_anim_start_offset = display_scroll_offset;
-                scroll_anim_start = now;
+                scroll_anim_start = Instant::now();
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
+                // MoveDown側で既にmax_offsetにクランプ済みのため理論上ここでの`.min`は
+                // 到達不能だが、MoveDown側との対称性のために残している。
                 target_scroll_offset = target_scroll_offset.saturating_sub(1).min(max_offset);
             }
             Action::MoveDown => {
                 scroll_anim_start_offset = display_scroll_offset;
-                scroll_anim_start = now;
+                scroll_anim_start = Instant::now();
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
                 target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
@@ -1809,6 +1816,27 @@ mod tests {
         (closure, remaining_handle)
     }
 
+    /// [`action_queue`] のブロッキング待ち版。各ステップは `(この呼び出しを返す前に
+    /// 眠る時間, 返すAction)` のペアで、実機の `input::poll_action` が次のキー入力まで
+    /// ブロックする時間を意図的に模す（`show_splash` はループ先頭で `Instant::now()` を
+    /// 取ってから `next_action()?` を呼ぶため、この待ちの間だけ先頭の `now` が古くなる —
+    /// バグ修正1（#538、`scroll_anim_start` の取り直し）の退行検出用）。
+    /// 列を使い切った後は `Action::Quit` を返し続ける（`action_queue` と同じ安全策）。
+    fn scripted_next_action(
+        steps: Vec<(Duration, Action)>,
+    ) -> impl FnMut() -> anyhow::Result<Action> {
+        let mut iter = steps.into_iter();
+        move || match iter.next() {
+            Some((sleep_before, action)) => {
+                if !sleep_before.is_zero() {
+                    std::thread::sleep(sleep_before);
+                }
+                Ok(action)
+            }
+            None => Ok(Action::Quit),
+        }
+    }
+
     fn splash_config() -> Config {
         Config {
             splash: crate::config::SplashConfig {
@@ -2142,6 +2170,93 @@ mod tests {
             Color::Rgb(255, 0, 0),
             "5回MoveDownした直後でもeaseが進む前は先頭行(赤)のままのはず。\
              青(グリッド行1以降の色)になっていたら瞬時ジャンプしている"
+        );
+    }
+
+    #[test]
+    fn show_splash_movedown_stale_next_action_call_does_not_cause_early_progress() {
+        // バグ修正1（#538）の退行検出。上の
+        // `show_splash_movedown_does_not_instantly_jump_to_target_scroll_offset`（60秒という
+        // 巨大な scroll_ease_ms を使う手法）はこの退行を検出できない —
+        // `action_queue`（フェイク）は即座に返るため、修正前後で`scroll_anim_start`に差が
+        // 生まれない。ここでは `next_action` がブロッキング入力待ちで実際に時間を要する
+        // ケースを [`scripted_next_action`] で再現する。
+        //
+        // scroll_ease_ms=400（ease-outカーブで progress=0.5 になるのは t≈0.293、
+        // 400ms*0.293≈117ms）に対し、MoveDownを返す直前に150ms眠ることで「ループ先頭で
+        // `now` を取ってから、実際にMoveDownが届くまでに150ms経過した」状況を作る。
+        //
+        // 修正後（正しい実装）: MoveDown処理直後に`Instant::now()`を取り直すため、次フレーム
+        // の`elapsed_ms`はほぼ0 → progress≈0 → 表示オフセットはまだ帯0のまま。
+        // もし退行してループ先頭の古い`now`を使ってしまうと: 次フレームの
+        // `elapsed_ms≈150ms`（閾値117msを超える）→ 表示オフセットが早くも帯1へ
+        // ラウンドされてしまう。150ms(sleep) vs 117ms(閾値)でマージンを広く取っているため、
+        // CI環境のジッタで誤検出する可能性は低い。
+        let fixture_path = per_row_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 400;
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let mut next_action = scripted_next_action(vec![
+            (Duration::from_millis(150), Action::MoveDown),
+            (Duration::ZERO, Action::Advance),
+        ]);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+        assert!(advanced);
+
+        assert_eq!(
+            terminal.backend().buffer().cell((0, 0)).unwrap().bg,
+            Color::Rgb(0, 0, 0),
+            "MoveDownが届くまでに150ms経過していても、アニメーション起点が\
+             `Instant::now()`で取り直されていれば次フレームのeaseはほぼ0進行のはず\
+             （帯0=赤0のまま）。古い`now`を使い回す退行が起きると帯1(赤5)へ早期遷移する"
+        );
+    }
+
+    #[test]
+    fn show_splash_moveup_stale_next_action_call_does_not_cause_early_progress() {
+        // 上の `show_splash_movedown_stale_next_action_call_does_not_cause_early_progress`
+        // のMoveUp版（対称性のため）。MoveUpは`saturating_sub`のため0からは動けないので、
+        // 事前に別のMoveDownでオフセットを1まで進めてからMoveUpで戻す形にする。
+        //
+        // ステップ:
+        // 1. MoveDown（即時）でtarget_scroll_offsetを1にする。
+        // 2. 500ms眠ってからAction::Noneを返す（scroll_ease_ms=400なので、この間に
+        //    ease-outアニメーションが確実に完了し、表示オフセットが帯1へ完全に収束する）。
+        // 3. 150ms眠ってからMoveUpを返す（バグ修正1の退行検出用の待ち。上のMoveDown版と
+        //    同じ150ms vs 閾値117msのマージン）。
+        // 4. 即座にAdvanceを返す。
+        let fixture_path = per_row_scroll_fixture();
+        let mut config = image_splash_config(&fixture_path);
+        config.splash.scroll_ease_ms = 400;
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let mut next_action = scripted_next_action(vec![
+            (Duration::ZERO, Action::MoveDown),
+            (Duration::from_millis(500), Action::None),
+            (Duration::from_millis(150), Action::MoveUp),
+            (Duration::ZERO, Action::Advance),
+        ]);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+        assert!(advanced);
+
+        assert_eq!(
+            terminal.backend().buffer().cell((0, 0)).unwrap().bg,
+            Color::Rgb(5, 0, 0),
+            "MoveUpが届くまでに150ms経過していても、アニメーション起点が\
+             `Instant::now()`で取り直されていれば次フレームのeaseはほぼ0進行のはずなので、\
+             表示は直前まで収束していた帯1(赤5)のまま。古い`now`を使い回す退行が起きると\
+             帯0(赤0)へ早期に戻ってしまう"
         );
     }
 
@@ -2983,6 +3098,78 @@ mod tests {
             *remaining.borrow(),
             0,
             "スキップが実際に機能していれば、追加のAdvance無しで選択肢まで到達するはず"
+        );
+    }
+
+    #[test]
+    fn event_loop_skip_stops_at_unread_line_after_revisiting_hub_scene_with_shifted_item_count() {
+        // #539 (元#533): event_loopレベルの統合テスト。playback.rs側の単体テスト
+        // (`stable_item_key_content_hash_differs_when_flag_dependent_scene_item_count_itself_shifts_across_revisits`)
+        // は`stable_item_key`の戻り値だけを検証していたが、実際に`event_loop`を通して
+        // 「スキップ中に内容の変わったhubシーンへ再訪した際、`skip_triggered`が正しく
+        // 偽になりスキップが止まるか」を確認する統合テストがなかった（セルフレビュー指摘）。
+        //
+        // route1でmilestone_a_pending=trueにしてhubへ→hub内は「Aの手紙」1件だけを読んで
+        // 選択肢へ離脱（既読マーク）→route2でフラグを反転→hubへ再訪すると、今度は
+        // Condition分岐先のitem数自体が1件→2件に増え「Bの手紙1」「Bの手紙2」が表示される。
+        // 2回目訪問直後（＝Bの手紙1が現在行の状態）でスキップONにしても、Bの手紙1は
+        // 一度も読んでいない新規内容のため、選択肢まで一気に飛ばされず即座に止まるはず。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n\
+                       ## 1-1: route1\n\n\
+                       [フラグ: milestone_a_pending=true]\n\
+                       [フラグ: milestone_b_pending=false]\n\n\
+                       [選択]\n- hubへ→1-2\n[/選択]\n\n\
+                       ## 1-2: hub\n\n\
+                       [条件: milestone_a_pending]\n\
+                       **施設**:\nAの手紙\n\n\
+                       [/条件]\n\
+                       [条件: milestone_b_pending]\n\
+                       **施設**:\nBの手紙1\n\n\
+                       **施設**:\nBの手紙2\n\n\
+                       [/条件]\n\
+                       [選択]\n- 次のルートへ→1-3\n[/選択]\n\n\
+                       ## 1-3: route2\n\n\
+                       [フラグ: milestone_a_pending=false]\n\
+                       [フラグ: milestone_b_pending=true]\n\n\
+                       [選択]\n- hubへ→1-2\n[/選択]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::Advance,    // route1のChoice「hubへ」確定 -> hub(1回目訪問)、Aの手紙
+            Action::Advance,    // Aの手紙 -> Choice「次のルートへ」へ離脱（既読マーク）
+            Action::Advance,    // 「次のルートへ」確定 -> route2、Choice「hubへ」
+            Action::Advance,    // 「hubへ」確定 -> hub(2回目訪問)、Bの手紙1（未読の新規item）
+            Action::ToggleSkip, // 2回目訪問直後、未読のBの手紙1からスキップを試みる
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_line().unwrap().text,
+            vec!["Bの手紙1".to_string()],
+            "item数がずれて(1件→2件)local_index=0の内容がAの手紙からBの手紙1に変わった \
+             2回目訪問では、Bの手紙1は一度も読んでいないためスキップが即座に選択肢まで \
+             飛ばさず、そこで止まるはず(skip_triggeredがコンテンツハッシュの不一致により \
+             正しく偽になる、#539/#533)"
+        );
+        assert!(
+            playback.current_choice().is_none(),
+            "スキップが誤って選択肢まで進んでしまってはいけない"
         );
     }
 
