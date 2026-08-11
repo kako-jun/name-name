@@ -18,7 +18,12 @@
 
 import { Assets, Container, Sprite, Texture } from 'pixi.js'
 import { EventImageState } from './GameState'
-import { computeCoverFit, type LayoutRect } from './novelLayout'
+import {
+  clampFullscreenImageScrollY,
+  computeCoverFit,
+  computeFullscreenImageFit,
+  type LayoutRect,
+} from './novelLayout'
 import { computeFadeAlpha } from './screenEffects'
 import { TimeController, defaultTimeController } from './TimeController'
 
@@ -104,6 +109,21 @@ export class EventImageLayer extends Container {
    *  frontmatter `pixel_art:` から `setPixelArt` 経由で反映される（Gymnasia の 128x128 ドット絵向け）。 */
   private pixelArt = false
 
+  /** フルキャンバス画像表示モード (#530)。frontmatter `fullscreen_image: true` から
+   *  `setFullscreenMode` 経由で反映される。true の間は `splitLayoutRegion` を無視し、
+   *  `computeFullscreenImageFit` でキャンバス全幅 contain 表示（クロップなし）にする。
+   *  `splitLayoutRegion` と同時に true になることは想定していない（互いに排他的なレイアウト
+   *  モード、呼び出し元 `NovelRenderer` が両立させない）。 */
+  private fullscreenMode = false
+  /** フルキャンバス画像表示モードの縦スクロールオフセット (#530、px、0以上)。
+   *  `handleWheel` が `clampFullscreenImageScrollY` でクランプしながら更新する。
+   *  `show()` の度に 0 へ戻す（新しい画像を表示するたびにスクロール位置をリセットする、
+   *  `BacklogOverlay` を開き直すたびに末尾へ戻すのと対称的な「表示し直したら初期状態」方針）。 */
+  private scrollOffsetY = 0
+  /** 直近の `show()` で `computeFullscreenImageFit` が算出した最大スクロールオフセット (#530)。
+   *  `scrollable=false`（画像がキャンバス高さに収まる）なら常に0。 */
+  private maxScrollY = 0
+
   constructor(
     screenWidth: number,
     screenHeight: number,
@@ -142,6 +162,40 @@ export class EventImageLayer extends Container {
   /** 現在の split_layout イベント絵領域 (#464)。null = 従来どおり全画面。テスト・配線検証用。 */
   getSplitLayoutRegion(): LayoutRect | null {
     return this.splitLayoutRegion
+  }
+
+  /**
+   * フルキャンバス画像表示モード (#530) を設定・解除する。frontmatter `fullscreen_image:`
+   * の値を渡す想定（`setSplitLayoutRegion` と対の役割）。有効/無効の切り替え時、以後の
+   * スクロール操作が新しい状態を正しく前提にできるよう `scrollOffsetY`/`maxScrollY` を
+   * 0 へ戻す（表示中の sprite の位置・サイズはここでは触らない。次の `show()` 呼び出しで
+   * 新モードに応じたフィットが反映される、`setSplitLayoutRegion` と同じ流儀）。
+   */
+  setFullscreenMode(enabled: boolean): void {
+    this.fullscreenMode = enabled
+    this.scrollOffsetY = 0
+    this.maxScrollY = 0
+  }
+
+  /** 現在フルキャンバス画像表示モードか (#530)。テスト・配線検証用。 */
+  isFullscreenMode(): boolean {
+    return this.fullscreenMode
+  }
+
+  /**
+   * フルキャンバス画像表示モード (#530) 中のマウスホイール縦スクロール。
+   * `BacklogOverlay.handleWheel` と同じ手触り（`deltaY * 0.5`）に揃える。フルキャンバス
+   * モードでない、画像の高さがキャンバスに収まっている（`maxScrollY <= 0`）、
+   * または表示中の sprite が無い場合は no-op（呼び出し元 `NovelRenderer.handleWheel` は
+   * この場合に備えて他のスクロール対象へフォールスルーしてよい）。
+   */
+  handleWheel(deltaY: number): void {
+    if (!this.fullscreenMode || this.maxScrollY <= 0 || !this.sprite) return
+    this.scrollOffsetY = clampFullscreenImageScrollY(
+      this.scrollOffsetY + deltaY * 0.5,
+      this.maxScrollY
+    )
+    this.sprite.y = -this.scrollOffsetY
   }
 
   /**
@@ -186,6 +240,10 @@ export class EventImageLayer extends Container {
     this.fadeAnimation = null
     this.current = { path, back }
     this.loadFailed = false
+    // フルキャンバス画像表示モード (#530) 中に新しい画像へ差し替わったら、スクロール位置を
+    // 先頭へ戻す（前の画像のスクロール量を引きずらない）。
+    this.scrollOffsetY = 0
+    this.maxScrollY = 0
 
     if (!this.assetBaseUrl) return
 
@@ -204,19 +262,33 @@ export class EventImageLayer extends Container {
         texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
 
         const sprite = new Sprite(texture)
-        // region 未設定（従来どおり全画面）の場合は原点起点・画面サイズの矩形で代用する
-        // （x/y=0 なので下の加算は実質 no-op になる）。
-        const region = this.splitLayoutRegion ?? {
-          x: 0,
-          y: 0,
-          width: this.screenWidth,
-          height: this.screenHeight,
+        if (this.fullscreenMode) {
+          // フルキャンバス画像表示モード (#530): splitLayoutRegion は無視し、常にキャンバス
+          // 全幅で contain（クロップなし）。高さがキャンバスを超える場合は追加の縮小をせず、
+          // 縦スクロール（`handleWheel` 参照）で見せる。
+          const fit = computeFullscreenImageFit(
+            texture.width,
+            texture.height,
+            this.screenWidth,
+            this.screenHeight
+          )
+          Object.assign(sprite, { width: fit.width, height: fit.height, x: fit.x, y: 0 })
+          this.maxScrollY = fit.maxScrollY
+        } else {
+          // region 未設定（従来どおり全画面）の場合は原点起点・画面サイズの矩形で代用する
+          // （x/y=0 なので下の加算は実質 no-op になる）。
+          const region = this.splitLayoutRegion ?? {
+            x: 0,
+            y: 0,
+            width: this.screenWidth,
+            height: this.screenHeight,
+          }
+          // computeCoverFit は常に原点 (0, 0) 基準の矩形を返すため、region のオフセット分を
+          // 後から足す（CharacterLayer とは異なり、EventImageLayer は Container 全体の
+          // scale/position ではなく sprite 個別の x/y/width/height で領域に収める）。
+          const fit = computeCoverFit(texture.width, texture.height, region.width, region.height)
+          Object.assign(sprite, { ...fit, x: fit.x + region.x, y: fit.y + region.y })
         }
-        // computeCoverFit は常に原点 (0, 0) 基準の矩形を返すため、region のオフセット分を
-        // 後から足す（CharacterLayer とは異なり、EventImageLayer は Container 全体の
-        // scale/position ではなく sprite 個別の x/y/width/height で領域に収める）。
-        const fit = computeCoverFit(texture.width, texture.height, region.width, region.height)
-        Object.assign(sprite, { ...fit, x: fit.x + region.x, y: fit.y + region.y })
         this.sprite = sprite
         this.currentTexture = texture
         this.addChild(sprite)

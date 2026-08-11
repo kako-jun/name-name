@@ -296,6 +296,10 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // standalone 再生時のプレイヤーヘッダ出し方 (#519)。dialog_style と同じく空文字は null に倒す
     // （未指定は runtime 既定 "visible" にフォールバック）。
     header: nullIfEmpty(doc.header),
+    // フルキャンバス画像表示モード (#530)。boolean なので ?? null（未指定は下流で既定 false ＝従来どおり
+    // テキストウィンドウを隠さない）。ここを忘れると Rust 側は正しくパースされているのに wasm 経由で
+    // undefined になり、テストは緑のまま本番だけ壊れる（#310/#378/#448/#466 と同じ事故パターン）。
+    fullscreen_image: doc.fullscreen_image ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

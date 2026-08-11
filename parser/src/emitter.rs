@@ -121,6 +121,10 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ref h) = doc.header {
             out.push_str(&format!("header: \"{h}\"\n"));
         }
+        // Emit fullscreen_image only when present (#530)。skip_enabled / debug_enabled と同じ流儀。
+        if let Some(v) = doc.fullscreen_image {
+            out.push_str(&format!("fullscreen_image: {v}\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1299,6 +1303,7 @@ mod tests {
             sentence_per_page: None,
             pixel_art: None,
             header: None,
+            fullscreen_image: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1552,6 +1557,7 @@ mod tests {
             sentence_per_page: None,
             pixel_art: None,
             header: None,
+            fullscreen_image: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

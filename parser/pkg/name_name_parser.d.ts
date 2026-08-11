@@ -350,6 +350,17 @@ export interface Document {
      * frontmatter `header:` から流す。
      */
     header?: string;
+    /**
+     * フルキャンバス画像表示モード (#530)。`true` = テキストウィンドウ（DialogBox/ChoiceOverlay）を
+     * 完全に隠し、イベント絵をアスペクト比を保ったままキャンバス全幅で contain 表示する
+     * （cover-fit のクロップはしない）。画像の高さが画面の表示可能高さを超える場合は追加の縮小を
+     * せず縦スクロールで見せる（`split_layout` の左右/上下 50/50 固定・`EventImage.back = Hide`
+     * の背景/立ち絵のみ隠す、とは別軸のレイアウトモード）。TUI版の `logo_image` スプラッシュ
+     * （`tui/src/config.rs` `SplashConfig`）と同じ用途を GUI 側で担う。
+     * 未指定・`false` は従来どおり（後方互換）。`\"true\"` / `\"false\"` のみ受け、それ以外
+     * （空・非真偽値）は None（既定 false）にフォールバック。frontmatter `fullscreen_image:` から流す。
+     */
+    fullscreen_image?: boolean;
     chapters: Chapter[];
 }
 

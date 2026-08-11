@@ -574,6 +574,14 @@ export interface EventDocument {
    *  従来どおりヘッダを出さない。null/undefined・未知値は `"visible"` にフォールバック
    *  （`dialog_style` と同じ後方互換パターン）。frontmatter `header:` から流す。 */
   header?: string | null
+  /** フルキャンバス画像表示モード (#530)。`true` = テキストウィンドウ（DialogBox/ChoiceOverlay）を
+   *  完全に隠し、イベント絵をアスペクト比を保ったままキャンバス全幅で contain 表示する
+   *  （cover-fit のクロップはしない）。画像の高さが表示可能高さを超える場合は追加の縮小をせず
+   *  縦スクロールで見せる。`split_layout`（左右/上下 50/50 固定）や `EventImage.back = Hide`
+   *  （背景/立ち絵のみ隠す）とは別軸のレイアウトモード。TUI版の `logo_image` スプラッシュと
+   *  同じ用途を GUI 側で担う（起動時スプラッシュ・将来のエピローグ演出向け）。
+   *  null/undefined・false は従来どおり（後方互換）。frontmatter `fullscreen_image:` から流す。 */
+  fullscreen_image?: boolean | null
   chapters: EventChapter[]
 }
 

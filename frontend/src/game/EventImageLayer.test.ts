@@ -1014,3 +1014,145 @@ describe('EventImageLayer setSplitLayoutRegion / getSplitLayoutRegion と show()
     expect(internals(layer).sprite).toBeNull()
   })
 })
+
+// =====================================================================================
+// #530: フルキャンバス画像表示モード（setFullscreenMode/isFullscreenMode/handleWheel）。
+//
+// split_layout（region ベース、cover-fit でクロップする）とは別軸で、常にキャンバス全幅
+// （SCREEN_W/SCREEN_H 基準）を使い、アスペクト比を保ったまま contain（クロップなし）で
+// 表示する。高さが画面を超える場合は縦スクロール（マウスホイール、handleWheel）で見せる。
+// =====================================================================================
+describe('EventImageLayer setFullscreenMode / handleWheel (#530)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const REGION: LayoutRect = { x: 50, y: 20, width: 400, height: 450 }
+
+  it('isFullscreenMode() は初期状態で false', () => {
+    const layer = makeLayer(virtualTime())
+    expect(layer.isFullscreenMode()).toBe(false)
+  })
+
+  it('setFullscreenMode(true) → isFullscreenMode() が true になる round-trip', () => {
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    expect(layer.isFullscreenMode()).toBe(true)
+    layer.setFullscreenMode(false)
+    expect(layer.isFullscreenMode()).toBe(false)
+  })
+
+  it('fullscreenMode=false（既定）で show(): splitLayoutRegion を設定していても無視され、従来どおり region 基準の cover-fit になる（リグレッションガード）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 450) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION)
+    // setFullscreenMode を一度も呼んでいない = 既定 false。
+    layer.show('story/x.webp')
+    await flushPromises()
+
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(REGION.x)
+    expect(sprite.y).toBe(REGION.y)
+  })
+
+  it('fullscreenMode=true・横長画像（キャンバス高さに収まる）: キャンバス全幅で contain、x=0・y=0、縦スクロール不要', async () => {
+    // Gymnasiaロゴ相当の横長画像（256x48, aspect 5.33:1）。SCREEN_W/SCREEN_H=800x450基準では
+    // 幅800にフィットさせても高さ150程度で画面(450)に収まる → スクロール不要。
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(256, 48) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    layer.show('brand/logo.webp')
+    await flushPromises()
+
+    const sprite = internals(layer).sprite!
+    expect(sprite.x).toBe(0)
+    expect(sprite.y).toBe(0)
+    expect(sprite.width).toBe(SCREEN_W)
+    expect(sprite.height).toBeCloseTo((48 / 256) * SCREEN_W)
+    expect(sprite.height).toBeLessThanOrEqual(SCREEN_H)
+  })
+
+  it('fullscreenMode=true・splitLayoutRegion が同時に設定されていても、region は無視されキャンバス全幅基準になる', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(256, 48) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setSplitLayoutRegion(REGION) // 400x450、通常なら幅400基準になるはず
+    layer.setFullscreenMode(true)
+    layer.show('brand/logo.webp')
+    await flushPromises()
+
+    const sprite = internals(layer).sprite!
+    expect(sprite.width).toBe(SCREEN_W) // REGION.width(400)ではなくSCREEN_W(800)基準
+    expect(sprite.x).toBe(0) // REGION.x(50)ではなく0
+  })
+
+  it('fullscreenMode=true・縦長画像（キャンバス高さを超える）: 高さがキャンバスを超えたまま追加の縮小をせず、handleWheel で縦スクロールできる', async () => {
+    // 縦長画像（幅800基準にすると高さがSCREEN_H(450)を超える比率）。
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 900) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    layer.show('story/tall.webp')
+    await flushPromises()
+
+    const sprite = internals(layer).sprite!
+    const expectedHeight = (900 / 400) * SCREEN_W // = 1800、追加の縮小はしない
+    expect(sprite.height).toBeCloseTo(expectedHeight)
+    expect(sprite.height).toBeGreaterThan(SCREEN_H)
+    expect(sprite.y).toBe(0) // スクロール前は先頭
+
+    layer.handleWheel(200) // 下方向へスクロール
+    expect(sprite.y).toBeLessThan(0) // 画像を上へ動かして下側を見せる
+
+    const maxScrollY = expectedHeight - SCREEN_H
+    layer.handleWheel(100000) // 大きくスクロールしても下端でクランプされる
+    expect(sprite.y).toBeCloseTo(-maxScrollY)
+
+    layer.handleWheel(-100000) // 上方向へ大きく戻しても0未満にはならない
+    // clampFullscreenImageScrollY(0) → sprite.y = -0（`toBe`はObject.isで-0と0を区別するため
+    // toBeCloseToを使う。数値としては0と等価で挙動上の問題ではない）。
+    expect(sprite.y).toBeCloseTo(0)
+  })
+
+  it('fullscreenMode=true・画像がキャンバス高さに収まる場合、handleWheel を呼んでも sprite.y は動かない（scrollable=falseならno-op）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(256, 48) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    layer.show('brand/logo.webp')
+    await flushPromises()
+
+    const sprite = internals(layer).sprite!
+    layer.handleWheel(500)
+    expect(sprite.y).toBe(0)
+  })
+
+  it('fullscreenMode=false のとき handleWheel を呼んでも何も起きない（sprite.y はcover-fitのyのまま）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 900) as never)
+    const layer = makeLayer(virtualTime())
+    layer.show('story/tall.webp')
+    await flushPromises()
+
+    const sprite = internals(layer).sprite!
+    const yBefore = sprite.y
+    layer.handleWheel(500)
+    expect(sprite.y).toBe(yBefore)
+  })
+
+  it('新しい show() を呼ぶとスクロール位置がリセットされる（前の画像のスクロール量を引きずらない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 900) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    layer.show('story/tall-1.webp')
+    await flushPromises()
+    layer.handleWheel(500)
+    expect(internals(layer).sprite!.y).toBeLessThan(0)
+
+    layer.show('story/tall-2.webp')
+    await flushPromises()
+    expect(internals(layer).sprite!.y).toBe(0)
+  })
+
+  it('handleWheel は sprite が無い（show() 未呼び出し・ロード未解決）間は何もせず例外を投げない', () => {
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    expect(() => layer.handleWheel(500)).not.toThrow()
+  })
+})
