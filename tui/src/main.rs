@@ -202,7 +202,9 @@ where
 /// （kako-jun追加要望「スクロールはeaseにしたい」。`image_fade::ImageFadeState` の
 /// `from`/`to`/`started_at`/`duration` パターンを踏襲 — キー入力のたびに現在の表示位置を
 /// 新しいアニメーションの起点 `scroll_anim_start_offset` として引き継ぎ、開始時刻
-/// `scroll_anim_start` をリセットする点も `ImageFadeState::transition_to` と同じ設計）。
+/// `scroll_anim_start` をその場で取り直した `Instant::now()` にリセットする点も
+/// （ループ先頭で取得した `now` は `next_action()?` のブロッキング待ち分だけ古くなるため
+/// 使わない）`ImageFadeState::transition_to` と同じ設計）。
 /// 進行度・補間の計算自体は [`image_render::compute_scroll_ease_progress`]/
 /// [`image_render::compute_eased_scroll_offset`]（ターミナル/時刻I/Oに触れない純粋関数）に
 /// 委譲する。テキストモード（`logo_image` が `None`）ではどちらも参照されない
@@ -247,14 +249,19 @@ where
             Action::MoveUp => {
                 // 現在の表示位置（アニメーション途中点も含む）を新しいアニメーションの
                 // 起点として引き継ぐことで、連打してもジャンプせず滑らかに追従し続ける。
+                // 開始時刻はここで取り直す（ループ先頭の`now`は`next_action()?`の
+                // ブロッキング待ち分だけ古くなっているため、`event_loop`の
+                // `image_fade.transition_to`呼び出しと同じ設計に合わせる）。
                 scroll_anim_start_offset = display_scroll_offset;
-                scroll_anim_start = now;
+                scroll_anim_start = Instant::now();
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
+                // MoveDown側で既にmax_offsetにクランプ済みのため理論上ここでの`.min`は
+                // 到達不能だが、MoveDown側との対称性のために残している。
                 target_scroll_offset = target_scroll_offset.saturating_sub(1).min(max_offset);
             }
             Action::MoveDown => {
                 scroll_anim_start_offset = display_scroll_offset;
-                scroll_anim_start = now;
+                scroll_anim_start = Instant::now();
                 let max_offset = ui::splash_max_scroll_offset(config, &mut image_cache);
                 target_scroll_offset = target_scroll_offset.saturating_add(1).min(max_offset);
             }
