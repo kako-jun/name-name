@@ -5199,6 +5199,72 @@ mod tests {
         );
     }
 
+    // ---- #537: draw_settingsのフォーカス項目別レンジ・刻み幅ヒント ----
+
+    #[test]
+    fn draw_settings_text_speed_focus_shows_ms_range_hint() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, &volume, SettingsField::TextSpeed);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("(0〜200ms, 5ms刻み)"),
+            "TextSpeedフォーカス時はms単位のレンジヒントが出るはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_settings_bgm_volume_focus_shows_percent_range_hint() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, &volume, SettingsField::BgmVolume);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("(0〜100%, 5%刻み)"),
+            "BgmVolumeフォーカス時は%単位のレンジヒントが出るはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_settings_se_volume_focus_shows_percent_range_hint() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, &volume, SettingsField::SeVolume);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("(0〜100%, 5%刻み)"),
+            "SeVolumeフォーカス時は%単位のレンジヒントが出るはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_settings_voice_volume_focus_shows_percent_range_hint() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, &volume, SettingsField::VoiceVolume);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("(0〜100%, 5%刻み)"),
+            "VoiceVolumeフォーカス時は%単位のレンジヒントが出るはず, buffer was: {text}"
+        );
+    }
+
     #[test]
     fn settings_field_next_wraps_around_from_voice_volume_to_text_speed() {
         assert_eq!(SettingsField::VoiceVolume.next(), SettingsField::TextSpeed);
