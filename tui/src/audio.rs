@@ -29,6 +29,8 @@ use std::path::Path;
 
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 
+use crate::config::{self, percent_to_volume_scale};
+
 /// BGM/SE の再生を担うプレイヤー。`OutputStream` はドロップされるとデバイスが閉じるため、
 /// 生存期間中ずっと保持し続ける必要がある（rodio の制約、`_stream` の命名は未使用警告除けと
 /// 保持目的を兼ねる標準的なパターン）。
@@ -37,28 +39,53 @@ pub struct AudioPlayer {
     stream_handle: OutputStreamHandle,
     /// 現在ループ再生中の BGM の `Sink`。`None` は無音状態。
     bgm_sink: Option<Sink>,
-    /// BGM の音量（0.0〜1.0）。`try_new` 直後は暫定値の `1.0` だが、`main.rs` が起動処理内で
-    /// `Config` の初期値（`config.volume.bgm_percent`）を使って `set_bgm_volume` を呼び直す
-    /// ため、実際に音が鳴り始める時点では常に設定値が反映されている（#503）。
+    /// BGM の音量（0.0〜1.0）。`try_new` の引数 `volume` から `initial_volumes` 経由で
+    /// 生成直後に必ず反映される（フィールドdoc・`try_new`のdoc comment参照）。
     bgm_volume: f32,
-    /// SE の音量（0.0〜1.0）。`bgm_volume` と同じく `try_new` 直後は暫定値、`main.rs` が
-    /// 起動時に `set_se_volume` で上書きする（#503）。
+    /// SE の音量（0.0〜1.0）。`bgm_volume` と同じく `try_new` の引数から生成直後に反映される。
     se_volume: f32,
 }
 
 impl AudioPlayer {
-    /// 音声出力デバイスを初期化する。デバイスが無い・初期化に失敗した環境（SSH経由・headless等）
+    /// 音声出力デバイスを初期化し、`volume` の値を生成と同時に反映した状態で返す
+    /// （#502／起動時同期は#537）。デバイスが無い・初期化に失敗した環境（SSH経由・headless等）
     /// では `None` を返す — 呼び出し側はこれをエラーとして扱わず、音声再生機能全体を
     /// 無効化して続行すること（#502 実装方針）。
-    pub fn try_new() -> Option<Self> {
+    ///
+    /// **生成と音量同期を1つの関数に統合しているのは意図的（#537セルフレビュー指摘への対応）**。
+    /// 以前は `try_new()`（引数無し、暫定値 1.0 で生成）→ `main.rs::run()` が別途
+    /// `sync_startup_volume(...)` を呼ぶ、という2段階の設計だった。しかし `run()` は
+    /// raw mode/alternate screen 等の端末副作用を持ちテスト不能なため、後者の呼び出し行を
+    /// 削除しても `cargo test` は気づけない——実際、削除してテストを回しても640件全てパスする
+    /// ことを確認した上でこの設計に変更した。`try_new` の唯一の公開シグネチャが
+    /// `&config::VolumeConfig` を要求する形にすることで、「音量を渡さずに `AudioPlayer` を
+    /// 生成する」という経路自体をコンパイラが許さない（呼び出し漏れというバグのクラスが
+    /// 構造的に起こり得ない）。内部の値計算は `initial_volumes`（ハードウェア非依存の純粋関数）
+    /// に切り出してあり、これは実デバイスが無いCI環境でも直接テストできる
+    /// （`initial_volumes` 呼び出しを削ってフィールドをハードコードし直すような回帰が起きた
+    /// 場合、`volume` 引数が未使用になり `cargo clippy -- -D warnings` がCIで検知する）。
+    pub fn try_new(volume: &config::VolumeConfig) -> Option<Self> {
         let (stream, stream_handle) = OutputStream::try_default().ok()?;
+        let (bgm_volume, se_volume) = Self::initial_volumes(volume);
         Some(Self {
             _stream: stream,
             stream_handle,
             bgm_sink: None,
-            bgm_volume: 1.0,
-            se_volume: 1.0,
+            bgm_volume,
+            se_volume,
         })
+    }
+
+    /// `volume` から初期BGM/SE音量（0.0〜1.0）を計算する（#537）。`try_new` が唯一の
+    /// 呼び出し元で、戻り値をそのまま構造体リテラルの `bgm_volume`/`se_volume` フィールドに
+    /// 埋め込む。`OutputStream`（実オーディオデバイス）に依存しない純粋関数なので、
+    /// 実デバイスが無いCI環境でも `initial_volumes_maps_bgm_and_se_percent_independently`
+    /// 等のテストで直接検証できる（`try_new` のdoc comment参照）。
+    fn initial_volumes(volume: &config::VolumeConfig) -> (f32, f32) {
+        (
+            percent_to_volume_scale(volume.bgm_percent),
+            percent_to_volume_scale(volume.se_percent),
+        )
     }
 
     /// BGM の音量を変更する（0.0〜1.0、#503）。値を保持するだけでなく、現在ループ再生中の
@@ -124,4 +151,46 @@ impl AudioPlayer {
 fn decode_file(path: &Path) -> Option<Decoder<BufReader<File>>> {
     let file = File::open(path).ok()?;
     Decoder::new(BufReader::new(file)).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::VolumeConfig;
+
+    // ---- #537: 起動時音量同期（`AudioPlayer::try_new` / `initial_volumes`）----
+    //
+    // CI環境には実オーディオデバイスが無く `OutputStream::try_default()` は常に失敗するため、
+    // 実際に `AudioPlayer::try_new` を呼んで `Some` を得るテストは書けない（`try_new` の
+    // doc comment参照）。かわりに、`try_new` が唯一呼ぶ純粋関数 `initial_volumes` を直接
+    // 検証する。`try_new` は `initial_volumes` の戻り値をそのまま構造体リテラルの
+    // `bgm_volume`/`se_volume` フィールドへ埋め込むだけなので、この関数さえ正しければ
+    // 生成される `AudioPlayer` の初期音量も正しい。
+
+    #[test]
+    fn initial_volumes_maps_default_config_to_bgm_and_se_scale() {
+        // デフォルトconfig(bgm=70%/se=80%)から0.70/0.80が計算されることを確認する
+        // （#537再発防止の主テスト）。
+        let volume = VolumeConfig::default();
+        assert_eq!(AudioPlayer::initial_volumes(&volume), (0.70, 0.80));
+    }
+
+    #[test]
+    fn initial_volumes_maps_boundary_zero_and_max_without_swapping_bgm_and_se() {
+        // 境界値: 下限0%/上限100%が両方向で正しく変換され、bgm/seが入れ替わらないことを
+        // クロスの2パターンで確認する。
+        let low_bgm_high_se = VolumeConfig {
+            bgm_percent: 0,
+            se_percent: 100,
+            voice_percent: 80,
+        };
+        assert_eq!(AudioPlayer::initial_volumes(&low_bgm_high_se), (0.0, 1.0));
+
+        let high_bgm_low_se = VolumeConfig {
+            bgm_percent: 100,
+            se_percent: 0,
+            voice_percent: 80,
+        };
+        assert_eq!(AudioPlayer::initial_volumes(&high_bgm_low_se), (1.0, 0.0));
+    }
 }

@@ -133,11 +133,18 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // 音声出力デバイスを初期化する（#502）。SSH経由・headless環境等でデバイスが無い場合は
-    // `None` になるが、これはエラーではない — `event_loop` はその場合 BGM/SE の状態追跡だけ
-    // 行い実際の再生呼び出しをスキップして進行を続ける（`audio::AudioPlayer::try_new`
-    // のdoc comment参照）。
-    let mut audio_player = audio::AudioPlayer::try_new();
+    // 音声出力デバイスを初期化すると同時に `config.volume` を反映する（#502／起動時同期は#537）。
+    // SSH経由・headless環境等でデバイスが無い場合は `None` になるが、これはエラーではない —
+    // `event_loop` はその場合 BGM/SE の状態追跡だけ行い実際の再生呼び出しをスキップして進行を
+    // 続ける（`audio::AudioPlayer::try_new` のdoc comment参照）。
+    //
+    // `try_new` が `&config.volume` を必須引数として要求するため、「音量を渡さずに
+    // `AudioPlayer` を生成する」経路自体が存在しない——生成と起動時同期を分離した2段階の
+    // 設計（`try_new()` → 別行で `sync_startup_volume(...)`）だった当初は、後者の呼び出しを
+    // 削除しても `cargo test` が気づけないという構造的な穴があった（`audio::AudioPlayer::try_new`
+    // のdoc comment参照）。GUI版 `NovelPlayer.tsx` がinit完了直後に `applySettings` を呼ぶのと
+    // 同じ役割を、ここでは1回の生成呼び出しに統合している。
+    let mut audio_player = audio::AudioPlayer::try_new(&config.volume);
 
     // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ
     // （`reveal::blink_visible` による1秒周期の完全on/off点滅、#495）は
@@ -1989,6 +1996,16 @@ mod tests {
         );
     }
 
+    // ---- #537: 起動時音量同期 ----
+    //
+    // 以前ここには `sync_startup_volume`（`run()` が `AudioPlayer::try_new()` の直後に
+    // 別行で呼ぶ設計）を実デバイス非依存・決定論的に検証するテストがあったが、#537の
+    // セルフレビュー指摘（生成と同期の呼び出しが分離されており、後者の呼び出しを削除しても
+    // `cargo test` が気づけない）を受けて構造そのものを変更した。生成と音量同期は
+    // `audio::AudioPlayer::try_new(&config.volume)` という単一の呼び出しに統合済みで、
+    // 対応する回帰テストは `audio::tests`（`initial_volumes_maps_default_config_to_bgm_and_se_scale`
+    // 等）に移動している——`audio::AudioPlayer::try_new` のdoc comment参照。
+
     // ---- フルキャンバス画像表示モードのスクロール配線（#530）----
 
     /// `splash.logo_image`/`event_image.assets_dir` を実在するWebPフィクスチャへ向けた
@@ -3796,6 +3813,323 @@ mod tests {
         assert!(
             text.contains("遅い (200ms)"),
             "2回目の↓後も200msのままのはず(205等になっていないか), buffer was: {text}"
+        );
+    }
+
+    // ---- #537: event_loop経由のBGM/SE/ボイス音量の境界値クランプ ----
+    //
+    // `event_loop_settings_char_interval_{lower,upper}_bound_clamps_...`と同じ「境界の
+    // 1つ外側から2回操作し、2回目も境界のまま」という3手構成をBGM/SE/Voiceへ横展開する。
+
+    #[test]
+    fn event_loop_settings_bgm_volume_lower_bound_clamps_to_zero_and_stays() {
+        // bgm_percentが5の状態で↑（MoveUp/減少）を押すと0になる（下限到達）。
+        // 0からさらに押しても0のまま（saturating_subの下限保持）。
+        let mut config = instant_config();
+        config.volume.bgm_percent = 5;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // フォーカスをBgmVolumeへ
+                3 => Ok(Action::MoveUp),    // 5 -> 0
+                4 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("BGM音量: 0%"),
+            "2回目の↑後も0%のままのはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_bgm_volume_upper_bound_clamps_to_100_and_stays() {
+        // bgm_percentが95の状態で↓（MoveDown/増加）を押すと100になる（上限到達）。
+        // 100からさらに押しても100のまま（105にはならない、`.min(VOLUME_MAX_PERCENT)`）。
+        let mut config = instant_config();
+        config.volume.bgm_percent = 95;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // フォーカスをBgmVolumeへ
+                3 => Ok(Action::MoveDown),  // 95 -> 100
+                4 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("BGM音量: 100%"),
+            "2回目の↓後も100%のままのはず(105等になっていないか), buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_se_volume_lower_bound_clamps_to_zero_and_stays() {
+        // se_percentが5の状態で↑を押すと0になる（下限到達）。0からさらに押しても0のまま。
+        let mut config = instant_config();
+        config.volume.se_percent = 5;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // BgmVolumeへ
+                3 => Ok(Action::MoveRight), // SeVolumeへ
+                4 => Ok(Action::MoveUp),    // 5 -> 0
+                5 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("SE音量: 0%"),
+            "2回目の↑後も0%のままのはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_se_volume_upper_bound_clamps_to_100_and_stays() {
+        // se_percentが95の状態で↓を押すと100になる（上限到達）。100からさらに押しても100のまま。
+        let mut config = instant_config();
+        config.volume.se_percent = 95;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // BgmVolumeへ
+                3 => Ok(Action::MoveRight), // SeVolumeへ
+                4 => Ok(Action::MoveDown),  // 95 -> 100
+                5 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("SE音量: 100%"),
+            "2回目の↓後も100%のままのはず(105等になっていないか), buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_voice_volume_lower_bound_clamps_to_zero_and_stays() {
+        // voice_percentが5の状態で↑を押すと0になる（下限到達）。0からさらに押しても0のまま。
+        // ボイス音量は音声バックエンドへの反映は無い割り切り（`VolumeConfig::voice_percent`の
+        // doc comment参照）だが、表示上のクランプ挙動自体はBGM/SEと同じであるべき。
+        let mut config = instant_config();
+        config.volume.voice_percent = 5;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // BgmVolumeへ
+                3 => Ok(Action::MoveRight), // SeVolumeへ
+                4 => Ok(Action::MoveRight), // VoiceVolumeへ
+                5 => Ok(Action::MoveUp),    // 5 -> 0
+                6 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("ボイス音量 (将来用): 0%"),
+            "2回目の↑後も0%のままのはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_voice_volume_upper_bound_clamps_to_100_and_stays() {
+        // voice_percentが95の状態で↓を押すと100になる（上限到達）。100からさらに押しても
+        // 100のまま。
+        let mut config = instant_config();
+        config.volume.voice_percent = 95;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // BgmVolumeへ
+                3 => Ok(Action::MoveRight), // SeVolumeへ
+                4 => Ok(Action::MoveRight), // VoiceVolumeへ
+                5 => Ok(Action::MoveDown),  // 95 -> 100
+                6 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("ボイス音量 (将来用): 100%"),
+            "2回目の↓後も100%のままのはず(105等になっていないか), buffer was: {text}"
+        );
+    }
+
+    // ---- #537: Backlogオーバーレイ表示中のMoveLeft/MoveRight無視 ----
+
+    #[test]
+    fn event_loop_backlog_overlay_ignores_move_left_and_move_right() {
+        // #537: `Action::MoveLeft`/`MoveRight`は`overlay == Overlay::Settings`ガード付きの
+        // 分岐にしかマッチせず、Backlog表示中は末尾の`_ => {}`に落ちて完全に無視される
+        // はず。バックログのスクロール位置（非公開のstate）に対する副作用が無いことを、
+        // 「MoveLeft/MoveRightを挟まない場合」と「挟む場合」で最終描画バッファが
+        // 完全一致することを比較して確認する（挟んだ方だけが何か変化していれば、
+        // 本来無視されるべきキーが状態を動かしてしまっている）。
+        let make_playback = || {
+            Playback::from_lines(vec![
+                dline(Some("A"), "first line"),
+                dline(Some("B"), "second line"),
+            ])
+        };
+        let run = |actions: Vec<Action>| -> String {
+            let config = instant_config();
+            let mut playback = make_playback();
+            let mut terminal = Terminal::new(TestBackend::new(
+                ui::REQUIRED_TOTAL_WIDTH,
+                ui::REQUIRED_TOTAL_HEIGHT,
+            ))
+            .unwrap();
+
+            let mut call_count = 0usize;
+            let mut next_action = move || -> anyhow::Result<Action> {
+                let action = actions.get(call_count).cloned();
+                call_count += 1;
+                match action {
+                    Some(action) => Ok(action),
+                    None => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+                }
+            };
+
+            let result = event_loop(
+                &mut terminal,
+                &config,
+                &mut playback,
+                &mut next_action,
+                None,
+            );
+            assert!(result.is_err(), "テスト用の意図的な停止のはず");
+            buffer_text(&terminal)
+        };
+
+        let without_left_right = run(vec![Action::Advance, Action::ToggleBacklog]);
+        let with_left_right = run(vec![
+            Action::Advance,
+            Action::ToggleBacklog,
+            Action::MoveLeft,
+            Action::MoveRight,
+        ]);
+
+        assert_eq!(
+            without_left_right, with_left_right,
+            "MoveLeft/MoveRightを挟んでも挟まなくても、Backlog表示中の描画結果は \
+             完全一致するはず(無視されているならば)"
         );
     }
 

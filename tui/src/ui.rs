@@ -39,7 +39,10 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::config::{Config, PlaceholderStyle, VolumeConfig};
+use crate::config::{
+    Config, PlaceholderStyle, VolumeConfig, TEXT_SPEED_MAX_MS, TEXT_SPEED_STEP_MS,
+    VOLUME_MAX_PERCENT, VOLUME_STEP_PERCENT,
+};
 use crate::image_fade::ImageFadeState;
 use crate::image_render::{
     clamp_scroll_offset, compute_full_width_rows, rgba_to_quadrant_grid_window, DecodedImage,
@@ -876,6 +879,16 @@ pub fn draw_settings(
     }
 
     let speed_label = format_speed_label(char_interval_ms);
+    // フォーカス中の項目に応じて調整可能なレンジ・刻み幅をヒントに出す（#537）。全項目分を
+    // 常時表示すると横幅・視認性の両方で冗長になるため、フォーカス行1つぶんだけに絞る。
+    let range_hint = match focus {
+        SettingsField::TextSpeed => {
+            format!("(0〜{TEXT_SPEED_MAX_MS}ms, {TEXT_SPEED_STEP_MS}ms刻み)")
+        }
+        SettingsField::BgmVolume | SettingsField::SeVolume | SettingsField::VoiceVolume => {
+            format!("(0〜{VOLUME_MAX_PERCENT}%, {VOLUME_STEP_PERCENT}%刻み)")
+        }
+    };
     let lines = vec![
         Line::raw(""),
         format_settings_line(
@@ -896,7 +909,7 @@ pub fn draw_settings(
         ),
         Line::raw(""),
         Line::styled(
-            "←→ 項目切替 / ↑↓ 調整 / Enter・C・Esc で閉じる",
+            format!("←→ 項目切替 / ↑↓ 調整 {range_hint} / Enter・C・Esc で閉じる"),
             Style::default().add_modifier(Modifier::DIM),
         ),
     ];
@@ -5233,6 +5246,72 @@ mod tests {
         assert!(
             text.contains("ボイス音量 (将来用): 40%"),
             "buffer was: {text}"
+        );
+    }
+
+    // ---- #537: draw_settingsのフォーカス項目別レンジ・刻み幅ヒント ----
+
+    #[test]
+    fn draw_settings_text_speed_focus_shows_ms_range_hint() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, &volume, SettingsField::TextSpeed);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("(0〜200ms, 5ms刻み)"),
+            "TextSpeedフォーカス時はms単位のレンジヒントが出るはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_settings_bgm_volume_focus_shows_percent_range_hint() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, &volume, SettingsField::BgmVolume);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("(0〜100%, 5%刻み)"),
+            "BgmVolumeフォーカス時は%単位のレンジヒントが出るはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_settings_se_volume_focus_shows_percent_range_hint() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, &volume, SettingsField::SeVolume);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("(0〜100%, 5%刻み)"),
+            "SeVolumeフォーカス時は%単位のレンジヒントが出るはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_settings_voice_volume_focus_shows_percent_range_hint() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, &volume, SettingsField::VoiceVolume);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("(0〜100%, 5%刻み)"),
+            "VoiceVolumeフォーカス時は%単位のレンジヒントが出るはず, buffer was: {text}"
         );
     }
 

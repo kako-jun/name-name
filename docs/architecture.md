@@ -504,10 +504,19 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
 
 - **フェード無し**: `fade_ms` は解析時点で読み捨てる（#512 暗転の「TUIはフェード無しの
   瞬時切替」という判断基準を踏襲）。BGM 切り替え・停止は常に即時。
-- **音声出力デバイス無し環境への配慮**: `AudioPlayer::try_new()`（`OutputStream::
+- **音声出力デバイス無し環境への配慮**: `AudioPlayer::try_new(...)`（`OutputStream::
   try_default()` に失敗すると `None`）・ファイル未検出/デコード失敗のいずれも、エラーに
   せず音声再生だけを無効化して進行を続ける（SSH経由・headless環境等を想定）。
-- 音量制御・動画ミックス・エクスポート用キャプチャ配線（以下の各節）は対象外。
+- **BGM/SE音量制御（#503/#536/#537）**: 設定画面（`Overlay::Settings`）から BGM/SE 音量を
+  5%刻みで調整でき、`AudioPlayer::set_bgm_volume`/`set_se_volume` に即時反映される。加えて
+  起動時（設定画面を一度も開いていない状態）の音量も `config.volume.bgm_percent`/`se_percent`
+  （`tui-config.toml` の `[volume]`）から必ず反映される——`AudioPlayer::try_new` が
+  `&config::VolumeConfig` を必須引数として要求し、生成と同時に音量を計算してフィールドへ
+  埋め込む設計（#537、以前は生成後に別関数で同期する2段階設計で、その呼び出しを削除しても
+  テストが気づけない構造的な穴があった。`try_new` のdoc comment参照）。ボイス音量
+  （`voice_percent`）は値の保持のみでバックエンド未反映（TUIにボイス再生コード自体が
+  無いため、`config::VolumeConfig` の doc comment参照）。動画ミックス・エクスポート用
+  キャプチャ配線は対象外。
 
 ### BGM
 
