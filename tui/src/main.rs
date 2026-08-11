@@ -3125,10 +3125,10 @@ mod tests {
         .unwrap();
 
         let (mut next_action, _remaining) = action_queue(vec![
-            Action::Advance, // route1のChoice「hubへ」確定 -> hub(1回目訪問)、Aの手紙
-            Action::Advance, // Aの手紙 -> Choice「次のルートへ」へ離脱（既読マーク）
-            Action::Advance, // 「次のルートへ」確定 -> route2、Choice「hubへ」
-            Action::Advance, // 「hubへ」確定 -> hub(2回目訪問)、Bの手紙1（未読の新規item）
+            Action::Advance,    // route1のChoice「hubへ」確定 -> hub(1回目訪問)、Aの手紙
+            Action::Advance,    // Aの手紙 -> Choice「次のルートへ」へ離脱（既読マーク）
+            Action::Advance,    // 「次のルートへ」確定 -> route2、Choice「hubへ」
+            Action::Advance,    // 「hubへ」確定 -> hub(2回目訪問)、Bの手紙1（未読の新規item）
             Action::ToggleSkip, // 2回目訪問直後、未読のBの手紙1からスキップを試みる
             Action::Quit,
         ]);
