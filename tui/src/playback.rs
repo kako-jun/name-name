@@ -5262,4 +5262,242 @@ mod tests {
             "遷移元Choice自体のSEは遷移後には現れない(target itemは別のSEを持つため)"
         );
     }
+
+    // ---- #533: stable_item_key へのコンテンツハッシュ追加(フラグ依存シーン再訪の取り違え防止) ----
+
+    #[test]
+    fn content_signature_is_stable_for_identical_line_items() {
+        let line = DisplayLine {
+            speaker: Some("カコ".to_string()),
+            text: vec!["やあ".to_string()],
+            event_image: None,
+        };
+        let a = PlaybackItem::Line(line.clone());
+        let b = PlaybackItem::Line(line);
+        assert_eq!(
+            content_signature(&a),
+            content_signature(&b),
+            "同一内容のLine itemは同じハッシュになるはず"
+        );
+    }
+
+    #[test]
+    fn content_signature_differs_when_text_differs() {
+        let a = PlaybackItem::Line(DisplayLine {
+            speaker: Some("カコ".to_string()),
+            text: vec!["やあ".to_string()],
+            event_image: None,
+        });
+        let b = PlaybackItem::Line(DisplayLine {
+            speaker: Some("カコ".to_string()),
+            text: vec!["さようなら".to_string()],
+            event_image: None,
+        });
+        assert_ne!(
+            content_signature(&a),
+            content_signature(&b),
+            "本文が異なればハッシュも異なるはず"
+        );
+    }
+
+    #[test]
+    fn content_signature_differs_when_event_image_differs() {
+        let a = PlaybackItem::Line(DisplayLine {
+            speaker: None,
+            text: vec!["同じ本文".to_string()],
+            event_image: Some("a.webp".to_string()),
+        });
+        let b = PlaybackItem::Line(DisplayLine {
+            speaker: None,
+            text: vec!["同じ本文".to_string()],
+            event_image: Some("b.webp".to_string()),
+        });
+        assert_ne!(
+            content_signature(&a),
+            content_signature(&b),
+            "本文が同じでもevent_imageが異なればハッシュも異なるはず"
+        );
+    }
+
+    #[test]
+    fn content_signature_is_stable_for_identical_choice_items() {
+        let options = vec![
+            ChoiceOption {
+                text: "進む".to_string(),
+                jump: "1-2".to_string(),
+            },
+            ChoiceOption {
+                text: "戻る".to_string(),
+                jump: "1-1".to_string(),
+            },
+        ];
+        let a = PlaybackItem::Choice(options.clone(), Some(2));
+        let b = PlaybackItem::Choice(options, Some(2));
+        assert_eq!(
+            content_signature(&a),
+            content_signature(&b),
+            "同一内容のChoice itemは同じハッシュになるはず"
+        );
+    }
+
+    #[test]
+    fn content_signature_differs_when_choice_jump_target_differs() {
+        let a = PlaybackItem::Choice(
+            vec![ChoiceOption {
+                text: "進む".to_string(),
+                jump: "1-2".to_string(),
+            }],
+            None,
+        );
+        let b = PlaybackItem::Choice(
+            vec![ChoiceOption {
+                text: "進む".to_string(),
+                jump: "1-3".to_string(),
+            }],
+            None,
+        );
+        assert_ne!(
+            content_signature(&a),
+            content_signature(&b),
+            "選択肢のテキストが同じでもjump先が異なればハッシュも異なるはず"
+        );
+    }
+
+    /// 2つの排他的フラグ(`milestone_a_pending`/`milestone_b_pending`)で内容が変わる
+    /// "hub" シーンに、異なるルート("route1"→"route2")から2回ジャンプする構成
+    /// (Gymnasia実データの`hub_gate`パターンを模す)。
+    fn hub_revisit_doc() -> Document {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "route1",
+                    vec![
+                        flag_event("milestone_a_pending", true),
+                        flag_event("milestone_b_pending", false),
+                        choice(vec![("hubへ", "hub")]),
+                    ],
+                ),
+                scene(
+                    "hub",
+                    vec![
+                        condition_event(
+                            "milestone_a_pending",
+                            vec![dialog(Some("施設"), vec!["Aの定期報告"])],
+                        ),
+                        condition_event(
+                            "milestone_b_pending",
+                            vec![dialog(Some("施設"), vec!["Bの定期報告"])],
+                        ),
+                        choice(vec![("次のルートへ", "route2")]),
+                    ],
+                ),
+                scene(
+                    "route2",
+                    vec![
+                        flag_event("milestone_a_pending", false),
+                        flag_event("milestone_b_pending", true),
+                        choice(vec![("hubへ", "hub")]),
+                    ],
+                ),
+            ],
+        );
+        document_with_chapters(vec![ch1])
+    }
+
+    #[test]
+    fn stable_item_key_content_hash_differs_when_flag_dependent_scene_content_changes_across_revisits(
+    ) {
+        let doc = hub_revisit_doc();
+        let mut pb = Playback::from_document(&doc);
+
+        // route1 → hub (1回目訪問): milestone_a_pending=true のまま。
+        assert!(
+            pb.select_current_choice(),
+            "route1からhubへジャンプできるはず"
+        );
+        let first_key = pb
+            .stable_item_key(pb.item_index())
+            .expect("hub 1回目訪問のitemはキーを持つはず");
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["Aの定期報告".to_string()],
+            "1回目はmilestone_a_pendingが立っているのでAの定期報告が最初のitemのはず"
+        );
+
+        // hub → route2 → hub (2回目訪問): milestone_b_pendingへ反転済み。
+        assert!(pb.advance(), "hub台詞からChoiceへ進めるはず");
+        assert!(
+            pb.select_current_choice(),
+            "hubからroute2へジャンプできるはず"
+        );
+        assert!(
+            pb.select_current_choice(),
+            "route2から再度hubへジャンプできるはず"
+        );
+        let second_key = pb
+            .stable_item_key(pb.item_index())
+            .expect("hub 2回目訪問のitemはキーを持つはず");
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["Bの定期報告".to_string()],
+            "2回目はmilestone_b_pendingが立っているのでBの定期報告が最初のitemのはず"
+        );
+
+        assert_eq!(
+            (first_key.0, first_key.1),
+            (second_key.0, second_key.1),
+            "(scene_idx, local_index)自体は1回目・2回目とも同じ組み合わせのはず(#533の前提バグ)"
+        );
+        assert_ne!(
+            first_key, second_key,
+            "内容が異なる(Aの定期報告 vs Bの定期報告)ので、コンテンツハッシュを含む3つ組全体は一致してはいけない(#533)"
+        );
+    }
+
+    #[test]
+    fn stable_item_key_is_identical_when_revisiting_same_scene_with_unchanged_flags() {
+        // 退行防止: フラグを一切使わず同一シーンへ戻る通常のスキップ判定ケースでは、
+        // コンテンツハッシュを含む3つ組が完全に一致し続けるはず(#533導入前と同じ挙動)。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["繰り返し表示される台詞"]),
+                        choice(vec![("進む", "1-2"), ("戻る", "1-1")]),
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("B"), vec!["別シーン"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        // 1回目訪問時の台詞itemのキーを、Choiceへ進む前に(local_index=0の状態で)捕捉する。
+        let first_key = pb
+            .stable_item_key(pb.item_index())
+            .expect("1回目訪問の台詞itemはキーを持つはず");
+
+        // 選択肢「戻る」で同じシーン("1-1")を、フラグ状態を変えずに再訪する。
+        assert!(pb.advance(), "台詞からChoiceへ進めるはず");
+        pb.move_choice_cursor_down();
+        assert!(
+            pb.select_current_choice(),
+            "戻る選択で自シーンへ再ジャンプできるはず"
+        );
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["繰り返し表示される台詞".to_string()],
+            "再訪後も1-1の台詞から始まるはず"
+        );
+        let second_key = pb
+            .stable_item_key(pb.item_index())
+            .expect("2回目訪問のitemはキーを持つはず");
+
+        assert_eq!(
+            first_key, second_key,
+            "フラグを変えずに同一シーンへ戻った場合は3つ組が完全一致し続けるはず(退行防止)"
+        );
+    }
 }
