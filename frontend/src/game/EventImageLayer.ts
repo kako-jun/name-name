@@ -30,11 +30,11 @@ import { TimeController, defaultTimeController } from './TimeController'
 /**
  * フルキャンバス画像表示モード (#530) の縦スクロールヒント文言（#547 must1）。
  * TUI版 `tui/src/ui.rs::draw_fullscreen_image` の `scrollable` 時ヒント
- * （"Enter / Space で開始　↑/↓ でスクロール"）と対になる、GUI側の同等表示。GUIには
+ * （"Enter / Space で開始 ↑/↓ でスクロール"）と対になる、GUI側の同等表示。GUIには
  * 「Enter / Space で開始」に相当するスプラッシュ専用の文言が無い（このモードは
  * script.md 中のあらゆるイベント絵に効く汎用機構のため）ので、スクロール可否のみを示す。
  */
-const SCROLL_HINT_LABEL = '↓ スクロールできます'
+const SCROLL_HINT_LABEL = '↑↓ スクロールできます'
 
 export interface EventImageShowOptions {
   /** 背面（背景・立ち絵）扱い。未指定は 'Hide'（既定） */
@@ -230,16 +230,19 @@ export class EventImageLayer extends Container {
    * フルキャンバス画像表示モード (#530) 中のマウスホイール縦スクロール。
    * `BacklogOverlay.handleWheel` と同じ手触り（`deltaY * 0.5`）に揃える。フルキャンバス
    * モードでない、画像の高さがキャンバスに収まっている（`maxScrollY <= 0`）、
-   * または表示中の sprite が無い場合は no-op（呼び出し元 `NovelRenderer.handleWheel` は
-   * この場合に備えて他のスクロール対象へフォールスルーしてよい）。
+   * または表示中の sprite が無い場合は no-op で `false` を返す（呼び出し元
+   * `NovelRenderer.handleWheel` はこの場合に備えて他のスクロール対象へフォールスルーしてよい）。
+   * 戻り値は `ChoiceOverlay.handleWheel` と同じく「イベントを実際に消費したか」（#547 should-C）。
+   * 呼び出し元はこれが true のときのみ `e.preventDefault()` を呼ぶ。
    */
-  handleWheel(deltaY: number): void {
-    if (!this.fullscreenMode || this.maxScrollY <= 0 || !this.sprite) return
+  handleWheel(deltaY: number): boolean {
+    if (!this.fullscreenMode || this.maxScrollY <= 0 || !this.sprite) return false
     this.scrollOffsetY = clampFullscreenImageScrollY(
       this.scrollOffsetY + deltaY * 0.5,
       this.maxScrollY
     )
     this.sprite.y = -this.scrollOffsetY
+    return true
   }
 
   /**

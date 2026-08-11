@@ -6412,7 +6412,10 @@ fn test_document_fullscreen_image_empty_is_none() {
     // FI4: 空 `fullscreen_image:`（値なし）・空引用 `""` はどちらも None
     //   （parse_bool_kv が trim 後の空文字を弾く。pixel_art / sentence_per_page と同じ向き）。
     let doc_empty = parser::parse(&fullscreen_image_doc(""));
-    assert_eq!(doc_empty.fullscreen_image, None, "空 fullscreen_image: は None");
+    assert_eq!(
+        doc_empty.fullscreen_image, None,
+        "空 fullscreen_image: は None"
+    );
 
     let doc_empty_quote = parser::parse(&fullscreen_image_doc(" \"\""));
     assert_eq!(

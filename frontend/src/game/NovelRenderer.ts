@@ -3116,7 +3116,11 @@ export class NovelRenderer {
     // フルキャンバス画像表示モード (#530)。画像がキャンバス高さに収まっている場合や
     // モードが無効な場合は EventImageLayer.handleWheel 側が no-op になるので、常に呼んで
     // 問題ない（`waitingForChoice`/`backlogOverlay` と違い、ここでは事前ガードを重複させない）。
-    this.eventImageLayer.handleWheel(e.deltaY)
+    // `choiceOverlay` と同じく戻り値（実際に消費したか）を見て、消費した場合のみ
+    // preventDefault する（#547 should-C）。
+    if (this.eventImageLayer.handleWheel(e.deltaY)) {
+      e.preventDefault()
+    }
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
