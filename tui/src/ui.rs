@@ -2431,6 +2431,48 @@ mod tests {
     }
 
     #[test]
+    fn draw_fullscreen_image_zero_sized_decoded_image_still_shows_start_hint() {
+        // バグ修正2（#538）: fitted_cols>0/fitted_rows==0（image.width/heightが0）の
+        // 早期return経路でも、テキストモードのフォールバックと対称になるよう
+        // 「Enter / Space で開始」ヒントだけは描画されるはず。
+        let image = DecodedImage {
+            width: 0,
+            height: 0,
+            rgba: vec![],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("Enter / Space で開始"),
+            "fitted_rows==0の早期return経路でも開始ヒントは表示されるはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_zero_sized_decoded_image_does_not_show_scroll_hint() {
+        // バグ修正2（#538）: fitted_rows==0の早期return経路では`scrollable`判定
+        // （`fitted_rows > image_area.height`）自体が実行されないため、通常の画像描画
+        // 経路が出す「↑/↓ でスクロール」ヒントは含まれないはず。
+        let image = DecodedImage {
+            width: 0,
+            height: 0,
+            rgba: vec![],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            !text.contains("↑/↓ でスクロール"),
+            "fitted_rows==0の早期return経路ではスクロールヒントを含まないはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
     fn draw_fullscreen_image_extremely_tall_image_uses_full_width_and_scrolls() {
         // 極端な縦長画像でも高さ優先の縮小へ切り替えず、全幅を使って縦スクロールする。
         let color = (10u8, 20u8, 30u8);
