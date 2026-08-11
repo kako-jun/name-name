@@ -5254,4 +5254,120 @@ mod tests {
             "遷移元Choice自体のSEは遷移後には現れない(target itemは別のSEを持つため)"
         );
     }
+
+    // ---- #528: select_current_choiceのファイル境界越えジャンプでの状態リセット ----
+
+    #[test]
+    fn select_current_choice_resets_running_state_when_jumping_across_file_boundary() {
+        // route1(file 0)末尾でBGM再生中・イベント絵表示中・暗転中のまま、Choiceで
+        // 別ファイルのhub(file 1)へジャンプする。route1のChoiceの直後(itemを消費する前)に
+        // 置いたSEは、後続itemが無いためpending_seとしてscan_stateに残留したまま
+        // ファイル境界を越える(#528のバグ再現条件そのもの)。
+        let route1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![
+                    Event::Bgm {
+                        path: Some("a.ogg".to_string()),
+                        action: BgmAction::Play,
+                        fade_ms: None,
+                    },
+                    event_image("route1/scene.webp"),
+                    Event::Blackout {
+                        action: name_name_parser::models::BlackoutAction::On,
+                    },
+                    dialog(Some("A"), vec!["ルート1: 最後の台詞"]),
+                    choice(vec![("hubへ", "hub")]),
+                    se("orphan.wav"),
+                ],
+            )],
+        );
+        let hub = chapter(
+            2,
+            vec![scene("hub", vec![dialog(Some("施設"), vec!["定期報告"])])],
+        );
+        let doc = document_with_chapters(vec![route1, hub]);
+        let chapter_file_ids = vec![0, 1];
+
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+        assert!(pb.advance(), "台詞からChoiceへ進めるはず");
+        assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
+        // ジャンプ前の時点でBGM/イベント絵/暗転/pending_seが全て残留していることを確認
+        // (このあとのジャンプでリセットされることを対比させるため)。
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        assert!(pb.is_blackout());
+
+        assert!(
+            pb.select_current_choice(),
+            "別ファイルのhubへのjumpは成功するはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").text,
+            vec!["定期報告".to_string()]
+        );
+
+        assert_eq!(
+            pb.current_bgm(),
+            None,
+            "ファイル境界を越えたのでroute1のBGMはリセットされ、hub側で新規指定が無い限りNoneのはず(#528)"
+        );
+        assert_eq!(
+            pb.current_line().unwrap().event_image,
+            None,
+            "ファイル境界を越えたのでroute1のイベント絵はリセットされるはず(#528)"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "ファイル境界を越えたのでroute1の暗転状態はリセットされるはず(#528)"
+        );
+        assert!(
+            pb.current_se_cues().is_empty(),
+            "ファイル境界を越えたのでroute1末尾のpending_se(orphan.wav)は引き継がれないはず(#528)"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_preserves_running_state_when_jumping_within_same_file() {
+        // 同一ファイル内のジャンプでは、#528のリセットは発火せず、BGMがそのまま
+        // 引き継がれる(同一ルート内でシーンを跨いでBGMが継続する、既存の意図した挙動)。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        Event::Bgm {
+                            path: Some("a.ogg".to_string()),
+                            action: BgmAction::Play,
+                            fade_ms: None,
+                        },
+                        dialog(Some("A"), vec!["中間の台詞"]),
+                        choice(vec![("同ファイル内ジャンプ", "1-2")]),
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("B"), vec!["次のシーン"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let chapter_file_ids = vec![0];
+
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+        assert!(pb.advance(), "台詞からChoiceへ進めるはず");
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+
+        assert!(
+            pb.select_current_choice(),
+            "同一ファイル内のjumpは成功するはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").text,
+            vec!["次のシーン".to_string()]
+        );
+        assert_eq!(
+            pb.current_bgm(),
+            Some("a.ogg"),
+            "同一ファイル内のジャンプでは#528のリセットは発火せず、BGMは引き継がれ続けるはず"
+        );
+    }
 }
