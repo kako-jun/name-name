@@ -2970,6 +2970,78 @@ mod tests {
     }
 
     #[test]
+    fn event_loop_skip_stops_at_unread_line_after_revisiting_hub_scene_with_shifted_item_count() {
+        // #539 (元#533): event_loopレベルの統合テスト。playback.rs側の単体テスト
+        // (`stable_item_key_content_hash_differs_when_flag_dependent_scene_item_count_itself_shifts_across_revisits`)
+        // は`stable_item_key`の戻り値だけを検証していたが、実際に`event_loop`を通して
+        // 「スキップ中に内容の変わったhubシーンへ再訪した際、`skip_triggered`が正しく
+        // 偽になりスキップが止まるか」を確認する統合テストがなかった（セルフレビュー指摘）。
+        //
+        // route1でmilestone_a_pending=trueにしてhubへ→hub内は「Aの手紙」1件だけを読んで
+        // 選択肢へ離脱（既読マーク）→route2でフラグを反転→hubへ再訪すると、今度は
+        // Condition分岐先のitem数自体が1件→2件に増え「Bの手紙1」「Bの手紙2」が表示される。
+        // 2回目訪問直後（＝Bの手紙1が現在行の状態）でスキップONにしても、Bの手紙1は
+        // 一度も読んでいない新規内容のため、選択肢まで一気に飛ばされず即座に止まるはず。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n\
+                       ## 1-1: route1\n\n\
+                       [フラグ: milestone_a_pending=true]\n\
+                       [フラグ: milestone_b_pending=false]\n\n\
+                       [選択]\n- hubへ→1-2\n[/選択]\n\n\
+                       ## 1-2: hub\n\n\
+                       [条件: milestone_a_pending]\n\
+                       **施設**:\nAの手紙\n\n\
+                       [/条件]\n\
+                       [条件: milestone_b_pending]\n\
+                       **施設**:\nBの手紙1\n\n\
+                       **施設**:\nBの手紙2\n\n\
+                       [/条件]\n\
+                       [選択]\n- 次のルートへ→1-3\n[/選択]\n\n\
+                       ## 1-3: route2\n\n\
+                       [フラグ: milestone_a_pending=false]\n\
+                       [フラグ: milestone_b_pending=true]\n\n\
+                       [選択]\n- hubへ→1-2\n[/選択]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::Advance, // route1のChoice「hubへ」確定 -> hub(1回目訪問)、Aの手紙
+            Action::Advance, // Aの手紙 -> Choice「次のルートへ」へ離脱（既読マーク）
+            Action::Advance, // 「次のルートへ」確定 -> route2、Choice「hubへ」
+            Action::Advance, // 「hubへ」確定 -> hub(2回目訪問)、Bの手紙1（未読の新規item）
+            Action::ToggleSkip, // 2回目訪問直後、未読のBの手紙1からスキップを試みる
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_line().unwrap().text,
+            vec!["Bの手紙1".to_string()],
+            "item数がずれて(1件→2件)local_index=0の内容がAの手紙からBの手紙1に変わった \
+             2回目訪問では、Bの手紙1は一度も読んでいないためスキップが即座に選択肢まで \
+             飛ばさず、そこで止まるはず(skip_triggeredがコンテンツハッシュの不一致により \
+             正しく偽になる、#539/#533)"
+        );
+        assert!(
+            playback.current_choice().is_none(),
+            "スキップが誤って選択肢まで進んでしまってはいけない"
+        );
+    }
+
+    #[test]
     fn event_loop_backlog_overlay_ignores_auto_skip_settings_toggle_keys() {
         // #500: バックログ表示中に a/s/c（オート/スキップ/設定トグル）を送っても、
         // overlayを含む状態が変化してはいけない。a/s/cを送った直後もoverlayが
