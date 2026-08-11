@@ -175,6 +175,12 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     // `config.volume`（既定値・`tui-config.toml`のカスタム値いずれも）が反映されるよう、
     // ここで明示的に同期する。GUI版 `NovelPlayer.tsx` がinit完了直後に`applySettings`を
     // 呼ぶのと同じ役割（#537、実処理は`sync_startup_volume`に切り出し済み——doc comment参照）。
+    //
+    // `sync_startup_volume` 本体は `VolumeSink` 経由でユニットテスト済みだが、この呼び出し行
+    // 自体は `run()` が raw mode/alternate screen 等の端末副作用を持ちテスト不能なため、
+    // 呼び出し漏れ（#537本体のバグと同種）が起きてもテストでは検知できない——コードレビューが
+    // 唯一の防波堤になる。今後 `run()` に同様の「起動時に一度だけ呼ぶ同期処理」を追加する際は、
+    // この構造的制約を踏まえ、レビュー時に呼び出し箇所が実在するかを明示的に確認すること。
     sync_startup_volume(audio_player.as_mut(), &config.volume);
 
     // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ
