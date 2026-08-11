@@ -37,12 +37,14 @@ pub struct AudioPlayer {
     stream_handle: OutputStreamHandle,
     /// 現在ループ再生中の BGM の `Sink`。`None` は無音状態。
     bgm_sink: Option<Sink>,
-    /// BGM の音量（0.0〜1.0）。`try_new` 直後は暫定値の `1.0` だが、`main.rs` が起動処理内で
-    /// `Config` の初期値（`config.volume.bgm_percent`）を使って `set_bgm_volume` を呼び直す
-    /// ため、実際に音が鳴り始める時点では常に設定値が反映されている（#503）。
+    /// BGM の音量（0.0〜1.0）。`try_new` 直後は暫定値の `1.0` だが、`main.rs` の `run()` 関数が
+    /// `try_new()` 呼び出し直後に `Config` の初期値（`config.volume.bgm_percent`）を
+    /// `config::percent_to_volume_scale` で変換して `set_bgm_volume` を呼び直すため、実際に
+    /// 音が鳴り始める時点では常に設定値が反映されている（#503実装時はこの起動時同期が漏れて
+    /// おり、#537で追加した）。
     bgm_volume: f32,
-    /// SE の音量（0.0〜1.0）。`bgm_volume` と同じく `try_new` 直後は暫定値、`main.rs` が
-    /// 起動時に `set_se_volume` で上書きする（#503）。
+    /// SE の音量（0.0〜1.0）。`bgm_volume` と同じく `try_new` 直後は暫定値、`main.rs` の
+    /// `run()` 関数が起動時に `set_se_volume` で上書きする（#503／起動時同期は#537）。
     se_volume: f32,
 }
 

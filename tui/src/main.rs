@@ -139,6 +139,16 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
     // のdoc comment参照）。
     let mut audio_player = audio::AudioPlayer::try_new();
 
+    // `try_new` はBGM/SE音量を暫定値 1.0（100%）で初期化する（`audio::AudioPlayer`の
+    // フィールドdoc comment参照）。設定画面を一度も開かずに最初のBGM/SEが鳴った場合でも
+    // `config.volume`（既定値・`tui-config.toml`のカスタム値いずれも）が反映されるよう、
+    // ここで明示的に同期する。GUI版 `NovelPlayer.tsx` がinit完了直後に`applySettings`を
+    // 呼ぶのと同じ役割（#537）。
+    if let Some(player) = audio_player.as_mut() {
+        player.set_bgm_volume(percent_to_volume_scale(config.volume.bgm_percent));
+        player.set_se_volume(percent_to_volume_scale(config.volume.se_percent));
+    }
+
     // タイプライター演出（`jiwa::RevealHandle`）とページ送りインジケータ
     // （`reveal::blink_visible` による1秒周期の完全on/off点滅、#495）は
     // どちらも時間経過だけで見た目が変わるため、キー入力の有無に関わらず `REDRAW` 間隔で
