@@ -1550,6 +1550,7 @@ mod tests {
             auto_play: None,
             seekbar_color: None,
             split_layout: None,
+            fullscreen_image: None,
             sentence_per_page: None,
             pixel_art: None,
             chapters,
