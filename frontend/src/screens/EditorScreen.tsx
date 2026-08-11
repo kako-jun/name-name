@@ -765,6 +765,8 @@ function EditorScreen({
                 // 画面比率に応じた画像/テキストの左右・上下分割配置 (#442)。doc 由来・既定オフ。
                 // split_layout: true の作品だけ編集プレビューでも領域分割で表示する。
                 splitLayout={doc?.split_layout ?? null}
+                // フルキャンバス画像表示モード (#530)。doc 由来・既定オフ。
+                fullscreenImage={doc?.fullscreen_image ?? null}
                 // 文単位の厳密改頁 (#448)。doc 由来・既定オフ。sentence_per_page: true の作品だけ
                 // 編集プレビューでも adv/novel 双方が 1 ページ=1 文で表示される。
                 sentencePerPage={doc?.sentence_per_page ?? null}

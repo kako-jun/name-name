@@ -821,6 +821,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
               speakerNudge={doc?.speaker_nudge ?? null}
               autoPlay={doc?.auto_play ?? null}
               splitLayout={doc?.split_layout ?? null}
+              fullscreenImage={doc?.fullscreen_image ?? null}
               sentencePerPage={doc?.sentence_per_page ?? null}
               pixelArt={doc?.pixel_art ?? null}
               debugInfo={loadDebugInfo}

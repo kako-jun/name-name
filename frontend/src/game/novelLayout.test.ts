@@ -29,6 +29,8 @@ import {
   wrappedPrefixLength,
   computeNovelIndicatorPlacement,
   clampFadeMs,
+  computeFullscreenImageFit,
+  clampFullscreenImageScrollY,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -172,6 +174,99 @@ describe('computeCoverFit', () => {
     expect(fit.width).toBe(4000)
     expect(fit.x).toBe((1920 - 4000) / 2) // 左右均等（負値）
     expect(fit.y).toBe(0)
+  })
+})
+
+// =====================================================================================
+// #530/#547 should5: computeFullscreenImageFit / clampFullscreenImageScrollY の直接ユニット
+// テスト。兄弟関数 computeCoverFit と違い、横幅いっぱいに固定して contain する（クロップしない）
+// 純粋計算。従来 EventImageLayer.test.ts 経由の間接テストしか無く、独立レビューで規約逸脱
+// として指摘された（#547 should5）。
+// =====================================================================================
+describe('computeFullscreenImageFit (#530)', () => {
+  it('横長画像（キャンバス高さに収まる）: 横幅いっぱいで scale・scrollable=false・maxScrollY=0', () => {
+    // Gymnasia ロゴ相当（256x48, aspect 5.33:1）を 800x450 キャンバスへ。
+    const fit = computeFullscreenImageFit(256, 48, 800, 450)
+    expect(fit.width).toBe(800)
+    expect(fit.height).toBeCloseTo((48 / 256) * 800)
+    expect(fit.height).toBeLessThanOrEqual(450)
+    expect(fit.x).toBe(0)
+    expect(fit.scrollable).toBe(false)
+    expect(fit.maxScrollY).toBe(0)
+  })
+
+  it('縦長画像（キャンバス高さを超える）: 追加の縮小をせず scrollable=true・maxScrollY=height-canvasHeight', () => {
+    const fit = computeFullscreenImageFit(400, 900, 800, 450)
+    const expectedHeight = (900 / 400) * 800 // = 1800
+    expect(fit.width).toBe(800)
+    expect(fit.height).toBeCloseTo(expectedHeight)
+    expect(fit.x).toBe(0)
+    expect(fit.scrollable).toBe(true)
+    expect(fit.maxScrollY).toBeCloseTo(expectedHeight - 450)
+  })
+
+  it('高さがキャンバスにちょうど一致: scrollable=false（height > canvasHeight の厳密な不等号）', () => {
+    // textureWidth=800, textureHeight=450 と canvasWidth=800, canvasHeight=450 → scale=1, height=450=canvasHeight
+    const fit = computeFullscreenImageFit(800, 450, 800, 450)
+    expect(fit.height).toBe(450)
+    expect(fit.scrollable).toBe(false)
+    expect(fit.maxScrollY).toBe(0)
+  })
+
+  it('x は常に 0（横方向は常にぴったり収まるため中央寄せ不要）', () => {
+    expect(computeFullscreenImageFit(100, 50, 800, 450).x).toBe(0)
+    expect(computeFullscreenImageFit(1000, 3000, 800, 450).x).toBe(0)
+  })
+
+  it('textureWidth<=0 または canvasWidth<=0: 0除算を避けて scale=0（height=0、scrollable=false）。width は仕様どおり常に canvasWidth をそのまま返す（負値含む）', () => {
+    // FullscreenImageFit.width の契約（interface JSDoc）は「常に canvasWidth と一致する」で、
+    // scale の有効/無効に関わらない。0除算ガードが効くのは height（textureHeight * scale）と
+    // それに連鎖する scrollable/maxScrollY のみ。
+    for (const [tw, th, cw, ch, expectedWidth] of [
+      [0, 100, 800, 450, 800],
+      [-100, 100, 800, 450, 800],
+      [100, 100, 0, 450, 0],
+      [100, 100, -800, 450, -800],
+    ] as const) {
+      const fit = computeFullscreenImageFit(tw, th, cw, ch)
+      expect(fit.width).toBe(expectedWidth)
+      expect(fit.height).toBe(0)
+      expect(fit.scrollable).toBe(false)
+      expect(fit.maxScrollY).toBe(0)
+    }
+  })
+
+  it('canvasHeight<=0: maxScrollY は height（textureHeightがある限り常に正）に等しくなり scrollable=true', () => {
+    // scale = canvasWidth/textureWidth は正常に計算されるが、canvasHeight<=0 なので
+    // height - canvasHeight は必ず正（0除算はしない。0除算ガードは textureWidth/canvasWidth のみ）。
+    const fit = computeFullscreenImageFit(400, 200, 800, 0)
+    expect(fit.height).toBeCloseTo(400) // (200/400)*800
+    expect(fit.scrollable).toBe(true)
+    expect(fit.maxScrollY).toBeCloseTo(400)
+  })
+})
+
+describe('clampFullscreenImageScrollY (#530)', () => {
+  it('範囲内の値はそのまま返す', () => {
+    expect(clampFullscreenImageScrollY(50, 100)).toBe(50)
+    expect(clampFullscreenImageScrollY(0, 100)).toBe(0)
+    expect(clampFullscreenImageScrollY(100, 100)).toBe(100)
+  })
+
+  it('負のオフセットは 0 にクランプする', () => {
+    expect(clampFullscreenImageScrollY(-50, 100)).toBe(0)
+    expect(clampFullscreenImageScrollY(-1e9, 100)).toBe(0)
+  })
+
+  it('maxScrollY を超えるオフセットは maxScrollY にクランプする', () => {
+    expect(clampFullscreenImageScrollY(150, 100)).toBe(100)
+    expect(clampFullscreenImageScrollY(1e9, 100)).toBe(100)
+  })
+
+  it('maxScrollY<=0（スクロール不要）のときは常に 0', () => {
+    expect(clampFullscreenImageScrollY(50, 0)).toBe(0)
+    expect(clampFullscreenImageScrollY(-50, 0)).toBe(0)
+    expect(clampFullscreenImageScrollY(50, -10)).toBe(0)
   })
 })
 

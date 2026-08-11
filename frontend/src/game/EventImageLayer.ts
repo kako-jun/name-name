@@ -16,11 +16,25 @@
  * フェードは表示アルファの時間補間（フェードイン/アウト）のみを扱う。
  */
 
-import { Assets, Container, Sprite, Texture } from 'pixi.js'
+import { Assets, Container, Sprite, Text, TextStyle, Texture } from 'pixi.js'
 import { EventImageState } from './GameState'
-import { computeCoverFit, type LayoutRect } from './novelLayout'
+import {
+  clampFullscreenImageScrollY,
+  computeCoverFit,
+  computeFullscreenImageFit,
+  type LayoutRect,
+} from './novelLayout'
 import { computeFadeAlpha } from './screenEffects'
 import { TimeController, defaultTimeController } from './TimeController'
+
+/**
+ * フルキャンバス画像表示モード (#530) の縦スクロールヒント文言（#547 must1）。
+ * TUI版 `tui/src/ui.rs::draw_fullscreen_image` の `scrollable` 時ヒント
+ * （"Enter / Space で開始 ↑/↓ でスクロール"）と対になる、GUI側の同等表示。GUIには
+ * 「Enter / Space で開始」に相当するスプラッシュ専用の文言が無い（このモードは
+ * script.md 中のあらゆるイベント絵に効く汎用機構のため）ので、スクロール可否のみを示す。
+ */
+const SCROLL_HINT_LABEL = '↑↓ スクロールできます'
 
 export interface EventImageShowOptions {
   /** 背面（背景・立ち絵）扱い。未指定は 'Hide'（既定） */
@@ -104,6 +118,32 @@ export class EventImageLayer extends Container {
    *  frontmatter `pixel_art:` から `setPixelArt` 経由で反映される（Gymnasia の 128x128 ドット絵向け）。 */
   private pixelArt = false
 
+  /** フルキャンバス画像表示モード (#530)。frontmatter `fullscreen_image: true` から
+   *  `setFullscreenMode` 経由で反映される。true の間は `splitLayoutRegion` を無視し、
+   *  `computeFullscreenImageFit` でキャンバス全幅 contain 表示（クロップなし）にする。
+   *  `splitLayoutRegion` と同時に true になることは想定していない（互いに排他的なレイアウト
+   *  モード、呼び出し元 `NovelRenderer` が両立させない）。 */
+  private fullscreenMode = false
+  /** フルキャンバス画像表示モードの縦スクロールオフセット (#530、px、0以上)。
+   *  `handleWheel` が `clampFullscreenImageScrollY` でクランプしながら更新する。
+   *  `show()` の度に 0 へ戻す（新しい画像を表示するたびにスクロール位置をリセットする、
+   *  `BacklogOverlay` を開き直すたびに末尾へ戻すのと対称的な「表示し直したら初期状態」方針）。 */
+  private scrollOffsetY = 0
+  /** 直近の `show()` で `computeFullscreenImageFit` が算出した最大スクロールオフセット (#530)。
+   *  `scrollable=false`（画像がキャンバス高さに収まる）なら常に0。 */
+  private maxScrollY = 0
+
+  /**
+   * フルキャンバス画像表示モード (#530) 中、`computeFullscreenImageFit().scrollable` が
+   * true のときだけ表示する小さなヒントテキスト (#547 must1)。
+   * `DialogBox.indicatorGlyph` と同じ流儀で常に生成しておき `visible` だけを切り替える。
+   * ゲームごとの `setFontFamily`/`setFontSize`（本文フォント）とは独立の、固定スタイルの
+   * 汎用エンジンUIヒント（TUI版のヒント行がゲーム本文と無関係な端末フォントで描かれるのと
+   * 同じ位置づけ）。位置は画面下端中央に固定（`screenWidth`/`screenHeight` は construct 時
+   * 固定のため、コンストラクタで一度だけ計算すればよい）。
+   */
+  private readonly scrollHintText: Text
+
   constructor(
     screenWidth: number,
     screenHeight: number,
@@ -113,6 +153,19 @@ export class EventImageLayer extends Container {
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
     this.time = time
+    this.scrollHintText = new Text({
+      text: SCROLL_HINT_LABEL,
+      style: new TextStyle({
+        fontFamily: "'Noto Sans JP', sans-serif",
+        fontSize: 22,
+        fill: 0xffffff,
+      }),
+    })
+    this.scrollHintText.anchor.set(0.5, 1)
+    this.scrollHintText.position.set(this.screenWidth / 2, this.screenHeight - 16)
+    this.scrollHintText.alpha = 0.75
+    this.scrollHintText.visible = false
+    this.addChild(this.scrollHintText)
   }
 
   /**
@@ -142,6 +195,54 @@ export class EventImageLayer extends Container {
   /** 現在の split_layout イベント絵領域 (#464)。null = 従来どおり全画面。テスト・配線検証用。 */
   getSplitLayoutRegion(): LayoutRect | null {
     return this.splitLayoutRegion
+  }
+
+  /**
+   * フルキャンバス画像表示モード (#530) を設定・解除する。frontmatter `fullscreen_image:`
+   * の値を渡す想定（`setSplitLayoutRegion` と対の役割）。有効/無効の切り替え時、以後の
+   * スクロール操作が新しい状態を正しく前提にできるよう `scrollOffsetY`/`maxScrollY` を
+   * 0 へ戻す（表示中の sprite の位置・サイズはここでは触らない。次の `show()` 呼び出しで
+   * 新モードに応じたフィットが反映される、`setSplitLayoutRegion` と同じ流儀）。
+   */
+  setFullscreenMode(enabled: boolean): void {
+    this.fullscreenMode = enabled
+    this.scrollOffsetY = 0
+    this.maxScrollY = 0
+    // モード切替時点でスクロールヒントも隠す（次の show() が新モードに応じて再計算する、
+    // #547 must1）。
+    this.scrollHintText.visible = false
+  }
+
+  /** 現在フルキャンバス画像表示モードか (#530)。テスト・配線検証用。 */
+  isFullscreenMode(): boolean {
+    return this.fullscreenMode
+  }
+
+  /**
+   * フルキャンバス画像表示モード (#530) のスクロールヒントが現在表示中か (#547 must1)。
+   * テスト・配線検証用。
+   */
+  isScrollHintVisible(): boolean {
+    return this.scrollHintText.visible
+  }
+
+  /**
+   * フルキャンバス画像表示モード (#530) 中のマウスホイール縦スクロール。
+   * `BacklogOverlay.handleWheel` と同じ手触り（`deltaY * 0.5`）に揃える。フルキャンバス
+   * モードでない、画像の高さがキャンバスに収まっている（`maxScrollY <= 0`）、
+   * または表示中の sprite が無い場合は no-op で `false` を返す（呼び出し元
+   * `NovelRenderer.handleWheel` はこの場合に備えて他のスクロール対象へフォールスルーしてよい）。
+   * 戻り値は `ChoiceOverlay.handleWheel` と同じく「イベントを実際に消費したか」（#547 should-C）。
+   * 呼び出し元はこれが true のときのみ `e.preventDefault()` を呼ぶ。
+   */
+  handleWheel(deltaY: number): boolean {
+    if (!this.fullscreenMode || this.maxScrollY <= 0 || !this.sprite) return false
+    this.scrollOffsetY = clampFullscreenImageScrollY(
+      this.scrollOffsetY + deltaY * 0.5,
+      this.maxScrollY
+    )
+    this.sprite.y = -this.scrollOffsetY
+    return true
   }
 
   /**
@@ -186,6 +287,13 @@ export class EventImageLayer extends Container {
     this.fadeAnimation = null
     this.current = { path, back }
     this.loadFailed = false
+    // フルキャンバス画像表示モード (#530) 中に新しい画像へ差し替わったら、スクロール位置を
+    // 先頭へ戻す（前の画像のスクロール量を引きずらない）。
+    this.scrollOffsetY = 0
+    this.maxScrollY = 0
+    // 新しい画像のロード完了までヒントは一旦隠す（#547 must1）。ロード完了後、fullscreenMode
+    // かつ scrollable なら .then() 内で再度表示する。
+    this.scrollHintText.visible = false
 
     if (!this.assetBaseUrl) return
 
@@ -204,22 +312,44 @@ export class EventImageLayer extends Container {
         texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
 
         const sprite = new Sprite(texture)
-        // region 未設定（従来どおり全画面）の場合は原点起点・画面サイズの矩形で代用する
-        // （x/y=0 なので下の加算は実質 no-op になる）。
-        const region = this.splitLayoutRegion ?? {
-          x: 0,
-          y: 0,
-          width: this.screenWidth,
-          height: this.screenHeight,
+        if (this.fullscreenMode) {
+          // フルキャンバス画像表示モード (#530): splitLayoutRegion は無視し、常にキャンバス
+          // 全幅で contain（クロップなし）。高さがキャンバスを超える場合は追加の縮小をせず、
+          // 縦スクロール（`handleWheel` 参照）で見せる。
+          const fit = computeFullscreenImageFit(
+            texture.width,
+            texture.height,
+            this.screenWidth,
+            this.screenHeight
+          )
+          Object.assign(sprite, { width: fit.width, height: fit.height, x: fit.x, y: 0 })
+          this.maxScrollY = fit.maxScrollY
+          // #547 must1: `computeFullscreenImageFit` が返す `scrollable` を消費し、TUI版の
+          // 「↑/↓ でスクロール」ヒントに相当する表示をGUI側にも出す。
+          this.scrollHintText.visible = fit.scrollable
+        } else {
+          // region 未設定（従来どおり全画面）の場合は原点起点・画面サイズの矩形で代用する
+          // （x/y=0 なので下の加算は実質 no-op になる）。
+          const region = this.splitLayoutRegion ?? {
+            x: 0,
+            y: 0,
+            width: this.screenWidth,
+            height: this.screenHeight,
+          }
+          // computeCoverFit は常に原点 (0, 0) 基準の矩形を返すため、region のオフセット分を
+          // 後から足す（CharacterLayer とは異なり、EventImageLayer は Container 全体の
+          // scale/position ではなく sprite 個別の x/y/width/height で領域に収める）。
+          const fit = computeCoverFit(texture.width, texture.height, region.width, region.height)
+          Object.assign(sprite, { ...fit, x: fit.x + region.x, y: fit.y + region.y })
         }
-        // computeCoverFit は常に原点 (0, 0) 基準の矩形を返すため、region のオフセット分を
-        // 後から足す（CharacterLayer とは異なり、EventImageLayer は Container 全体の
-        // scale/position ではなく sprite 個別の x/y/width/height で領域に収める）。
-        const fit = computeCoverFit(texture.width, texture.height, region.width, region.height)
-        Object.assign(sprite, { ...fit, x: fit.x + region.x, y: fit.y + region.y })
         this.sprite = sprite
         this.currentTexture = texture
         this.addChild(sprite)
+        // ヒントは sprite より前面に出す必要がある。scrollHintText はコンストラクタで
+        // 一度だけ addChild 済みだが、以後の show() が sprite を末尾に addChild するたびに
+        // z順で埋もれてしまうため、既存の子を再 addChild すると末尾（最前面）へ移動する
+        // PixiJS の挙動を利用して毎回前面へ戻す（#547 must1）。
+        this.addChild(this.scrollHintText)
 
         if (fadeMs > 0) {
           // フェード開始は必ずここ（テクスチャロード確定後）で行う。
@@ -262,6 +392,8 @@ export class EventImageLayer extends Container {
     // ロード中だった読み込みは無効化する（後から解決しても捨てられる）。
     this.loadToken++
     this.pendingLoadToken = null
+    // イベント絵が消える（フェードアウト含む）ので、スクロールヒントも即座に隠す (#547 must1)。
+    this.scrollHintText.visible = false
 
     if (!this.sprite) {
       this.fadeAnimation = null

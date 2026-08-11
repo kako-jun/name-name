@@ -390,6 +390,12 @@ export class NovelRenderer {
    *  再マウントする設計のため、renderer 自身は resize ハンドラを持たない）。 */
   private splitLayout: boolean = false
 
+  /** フルキャンバス画像表示モード (#530)。frontmatter `fullscreen_image:` の値。既定
+   *  false＝従来どおり。true の間、イベント絵表示中は DialogBox/ChoiceOverlay を隠し、
+   *  イベント絵をキャンバス全幅 contain（+縦スクロール）で表示する。`splitLayout` とは
+   *  排他的なレイアウトモード（両方 true になる想定のscript.mdは無い、#530 スコープ外）。 */
+  private fullscreenImage: boolean = false
+
   /** 文単位の厳密改頁 (#448)。frontmatter `sentence_per_page:` の値。既定 false＝従来どおり
    *  （novel は行数キャップで複数文が1ページに同居しうる／adv は markdown 行単位でページが決まる）。
    *  dialog_style（adv/novel）とは独立の軸で、両者と併用できる。true のとき、adv/novel どちらでも
@@ -1670,6 +1676,20 @@ export class NovelRenderer {
   setSplitLayout(enabled: boolean | null | undefined): void {
     this.splitLayout = enabled === true
     this.applySplitLayout()
+  }
+
+  /**
+   * フルキャンバス画像表示モードを設定する (#530)。
+   * frontmatter `fullscreen_image:` の値を渡す。null/undefined/false は従来どおり
+   * （既定・後方互換）。true のとき `EventImageLayer` にキャンバス全幅 contain 表示への
+   * 切り替えを伝える（実際の表示反映は次の `[イベント絵:]` の `show()` 呼び出し時点、
+   * `setSplitLayoutRegion` と同じ流儀）。DialogBox/ChoiceOverlay の非表示化はイベント絵
+   * 表示中（`processEvent` の `EventImage` 分岐）でのみ行う — このメソッド自体は状態を
+   * 切り替えるだけで、まだ何も画面には反映しない。
+   */
+  setFullscreenImageMode(enabled: boolean | null | undefined): void {
+    this.fullscreenImage = enabled === true
+    this.eventImageLayer.setFullscreenMode(this.fullscreenImage)
   }
 
   /**
@@ -3091,6 +3111,15 @@ export class NovelRenderer {
     if (this.backlogOverlay.visible) {
       e.preventDefault()
       this.backlogOverlay.handleWheel(e.deltaY)
+      return
+    }
+    // フルキャンバス画像表示モード (#530)。画像がキャンバス高さに収まっている場合や
+    // モードが無効な場合は EventImageLayer.handleWheel 側が no-op になるので、常に呼んで
+    // 問題ない（`waitingForChoice`/`backlogOverlay` と違い、ここでは事前ガードを重複させない）。
+    // `choiceOverlay` と同じく戻り値（実際に消費したか）を見て、消費した場合のみ
+    // preventDefault する（#547 should-C）。
+    if (this.eventImageLayer.handleWheel(e.deltaY)) {
+      e.preventDefault()
     }
   }
 
@@ -3403,6 +3432,14 @@ export class NovelRenderer {
           onVisibilityChange: () => this.applyEventImageVisibility(),
         })
         this.applyEventImageVisibility()
+        // フルキャンバス画像表示モード (#530): テキストウィンドウ/選択肢を隠す。次の
+        // Dialog/Narration（`dialogBox.setDialog`/`show()` 経由）や選択肢表示
+        // （`choiceOverlay.show()`）が呼ばれれば通常どおり再表示される（DialogBox.hide()
+        // は既存の「本文が空のとき自動で隠す」内部ロジックと同じ可逆トグル、DialogBox.ts参照）。
+        if (this.fullscreenImage) {
+          this.dialogBox.hide()
+          this.choiceOverlay.hide()
+        }
       }
       return
     }

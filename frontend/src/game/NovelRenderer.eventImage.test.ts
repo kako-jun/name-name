@@ -587,3 +587,82 @@ describe('NovelRenderer split_layout (#442) と eventImageLayer の領域配線 
     expect(sprite!.height).toBe(fit.height)
   })
 })
+
+// =====================================================================================
+// #530: フルキャンバス画像表示モード（setFullscreenImageMode）と、イベント絵表示中の
+// DialogBox/ChoiceOverlay 非表示化・EventImageLayer への配線の検証。
+// EventImageLayer 自体の contain-fit 計算・スクロールは EventImageLayer.test.ts でカバー済みの
+// ため、ここでは NovelRenderer 側の配線（setFullscreenMode の伝播・hide() 呼び出し・
+// 無効時の後方互換）に絞る。
+// =====================================================================================
+describe('NovelRenderer フルキャンバス画像表示モード (#530)', () => {
+  interface FullscreenTestInternals {
+    eventImageLayer: { isFullscreenMode(): boolean; handleWheel(deltaY: number): void }
+    dialogBox: { isShowing: boolean; hide(): void }
+    choiceOverlay: { hide(): void }
+  }
+  function fsInternals(r: NovelRenderer): FullscreenTestInternals {
+    return r as unknown as FullscreenTestInternals
+  }
+
+  beforeEach(() => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(Texture.WHITE as never)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('setFullscreenImageMode(true) → eventImageLayer.isFullscreenMode() が true になり配線される', () => {
+    const r = makeRenderer([scene('a', [narration('x')])])
+    r.setFullscreenImageMode(true)
+    expect(fsInternals(r).eventImageLayer.isFullscreenMode()).toBe(true)
+  })
+
+  it('setFullscreenImageMode(false)（既定）では eventImageLayer.isFullscreenMode() が false のまま', () => {
+    const r = makeRenderer([scene('a', [narration('x')])])
+    r.setFullscreenImageMode(false)
+    expect(fsInternals(r).eventImageLayer.isFullscreenMode()).toBe(false)
+  })
+
+  it('setFullscreenImageMode(true) 済みで [イベント絵:] を処理すると、dialogBox.hide()/choiceOverlay.hide() が呼ばれる', async () => {
+    const r = makeRenderer([
+      scene('a', [narration('x'), eventImage('story/x.webp'), narration('y')]),
+    ])
+    r.setFullscreenImageMode(true)
+    const dialogHideSpy = vi.spyOn(fsInternals(r).dialogBox, 'hide')
+    const choiceHideSpy = vi.spyOn(fsInternals(r).choiceOverlay, 'hide')
+
+    r.startFrom({ sceneId: 'a' })
+    await r.playScript([{ type: 'advance' }])
+
+    expect(dialogHideSpy).toHaveBeenCalled()
+    expect(choiceHideSpy).toHaveBeenCalled()
+  })
+
+  it('setFullscreenImageMode(false)（既定）のまま [イベント絵:] を処理しても、dialogBox.hide() は呼ばれない', async () => {
+    // choiceOverlay.hide() はイベント処理の他の経路でも既に呼ばれる既存の挙動（このテストの
+    // 対象外）なので、#530 のコードパスが実際に効いているかは dialogBox.hide() だけで見る。
+    const r = makeRenderer([
+      scene('a', [narration('x'), eventImage('story/x.webp'), narration('y')]),
+    ])
+    const dialogHideSpy = vi.spyOn(fsInternals(r).dialogBox, 'hide')
+
+    r.startFrom({ sceneId: 'a' })
+    await r.playScript([{ type: 'advance' }])
+
+    expect(dialogHideSpy).not.toHaveBeenCalled()
+  })
+
+  it('private handleWheel は eventImageLayer.handleWheel へ委譲する（backlogOverlay/choiceOverlay と同じ配線パターン）', () => {
+    const r = makeRenderer([scene('a', [narration('x')])])
+    r.setFullscreenImageMode(true)
+    const wheelSpy = vi.spyOn(fsInternals(r).eventImageLayer, 'handleWheel')
+
+    // `handleWheel` は private かつ WheelEvent 引数の `deltaY` しか使わないため、
+    // 既存の internals キャスト流儀で最小限のモックイベントを渡す。
+    const handleWheel = (r as unknown as { handleWheel(e: { deltaY: number }): void }).handleWheel
+    handleWheel({ deltaY: 100 })
+
+    expect(wheelSpy).toHaveBeenCalledWith(100)
+  })
+})

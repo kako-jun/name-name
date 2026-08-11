@@ -267,6 +267,77 @@ export function splitTextRegionForDualWindow(text: LayoutRect): DualWindowTextRe
   }
 }
 
+/** `computeFullscreenImageFit` の結果（#530）。 */
+export interface FullscreenImageFit {
+  /** sprite.width に設定する表示幅（px）。常に canvasWidth と一致する（横幅いっぱい）。 */
+  width: number
+  /** sprite.height に設定する表示高さ（px）。アスペクト比維持のため canvasHeight を超えうる。 */
+  height: number
+  /** sprite.x に設定する左上 X（px）。常に 0（横方向は常にぴったり収まるため中央寄せ不要）。 */
+  x: number
+  /**
+   * canvasHeight に対して縦スクロールが必要か（`height > canvasHeight`）。
+   * true のとき、呼び出し側はスクロールヒントを出し、`clampFullscreenImageScrollY` で
+   * クランプした offsetY を `y` に適用してよい（`0`〜`-maxScrollY` の範囲）。
+   */
+  scrollable: boolean
+  /**
+   * 縦スクロールの最大オフセット（px、0 以上）。`scrollable=false` のときは常に 0。
+   * `height - canvasHeight` を 0 未満にならないようクランプした値。
+   */
+  maxScrollY: number
+}
+
+/**
+ * frontmatter `fullscreen_image: true`（#530）用の、テキストウィンドウ非表示・contain・
+ * 縦スクロール対応の画像フィットを算出する純粋関数。
+ *
+ * `computeCoverFit`（画面いっぱいに覆う代わりに長辺をクロップする）とは異なり、こちらは
+ * 「クロップしない」ことを優先する。仕様（Issue #530）どおり常に横幅を canvasWidth に
+ * 一致させてから高さをアスペクト比維持で決める（`scale = canvasWidth / textureWidth` 固定、
+ * `computeCoverFit` の `Math.max(scaleX, scaleY)` のような縦横比較はしない）。結果として
+ * 画像は必ず横幅いっぱいに contain され、縦長画像で高さが canvasHeight を超える場合は
+ * 追加の縮小をせず（＝横幅を保ったまま）呼び出し側が縦スクロールで見せる。
+ *
+ * 横長画像（例: Gymnasia ロゴ 256x48, aspect 5.33:1）は通常 `height <= canvasHeight` となり
+ * `scrollable=false`。縦長・極端に長い画像は `scrollable=true` になる。
+ *
+ * `textureWidth`/`canvasWidth` が 0 以下の場合は 0 除算を避けて `scale=0` にフォールバックし、
+ * `height`（＝`textureHeight * scale`）を 0 にする（`computeCoverFit` は呼び出し側の texture
+ * ロード完了後にのみ呼ばれる前提でガードしていないのと同じ流儀だが、こちらは scrollable 判定の
+ * 分母事故を避けるため明示的に 0 ガードする）。`width` はこのガードの対象外で、`FullscreenImageFit.width`
+ * の契約どおり常に `canvasWidth` をそのまま返す（`canvasWidth` 自体が 0 以下ならその値がそのまま出る）
+ * （novelLayout.test.ts の `computeFullscreenImageFit` 退化入力テスト参照）。
+ */
+export function computeFullscreenImageFit(
+  textureWidth: number,
+  textureHeight: number,
+  canvasWidth: number,
+  canvasHeight: number
+): FullscreenImageFit {
+  const scale = textureWidth > 0 && canvasWidth > 0 ? canvasWidth / textureWidth : 0
+  const width = canvasWidth
+  const height = textureHeight * scale
+  const maxScrollY = Math.max(0, height - canvasHeight)
+  return {
+    width,
+    height,
+    x: 0,
+    scrollable: maxScrollY > 0,
+    maxScrollY,
+  }
+}
+
+/**
+ * `computeFullscreenImageFit` の `maxScrollY` へスクロールオフセットをクランプする純粋関数 (#530)。
+ * 負のオフセット（上端を超える）・`maxScrollY` を超えるオフセット（下端を超える）の両方を
+ * `[0, maxScrollY]` に収める。`maxScrollY <= 0`（スクロール不要）のときは常に 0 を返す。
+ */
+export function clampFullscreenImageScrollY(offsetY: number, maxScrollY: number): number {
+  if (maxScrollY <= 0) return 0
+  return Math.min(Math.max(offsetY, 0), maxScrollY)
+}
+
 /** `computeChoiceGridLayout` が返す 1 選択肢分の列・行・中心 X (#508)。 */
 export interface ChoiceGridButtonPosition {
   /** 0-based 列インデックス（非グリッド時は常に 0）。 */
