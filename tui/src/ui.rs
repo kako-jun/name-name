@@ -545,6 +545,14 @@ fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset:
     let fitted_cols = image_area.width;
     let fitted_rows = compute_full_width_rows(image.width, image.height, fitted_cols);
     if fitted_cols == 0 || fitted_rows == 0 {
+        // 画像を描画できない場合でも、テキストモードのフォールバックと対称になるよう
+        // 「Enter / Space で開始」ヒントだけは出す。`fits_required_size`チェックを通過して
+        // いる以上、固定幅の`REQUIRED_TOTAL_WIDTH`から導かれる`fitted_cols`が実際に0になる
+        // ことは現状のコード上ほぼ到達不能（#538）。
+        let hint_paragraph = Paragraph::new("Enter / Space で開始")
+            .alignment(Alignment::Center)
+            .style(Style::default().add_modifier(Modifier::DIM));
+        frame.render_widget(hint_paragraph, hint_area);
         return;
     }
 
