@@ -6336,6 +6336,221 @@ title: "テスト"
     assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
 }
 
+// --- #530/#547: fullscreen_image（フルキャンバス画像表示モード） ---
+//
+// frontmatter `fullscreen_image:` を Option<bool> で透過する。pixel_art / sentence_per_page /
+// split_layout と同型で `parse_bool_kv` を共有し、`true`/`false`（大文字小文字無視）のみ受理、
+// 空・不正値・coerce 系（yes/1/on）は None（runtime 既定: false=従来どおりテキストウィンドウを
+// 隠さない）にフォールバックする。#547 must2: このリポで繰り返し起きている事故パターン
+// （#310/#378/#436/#440/#442/#448/#466＝新フィールドが parser か normalizeDocument のどちらかで
+// 黙って消える）の parser 側生存確認。`fullscreen_image` は #530 の初回実装時にこのクラスの
+// 専用テストが一本も追加されておらず、独立レビュー（#547）で規約逸脱として指摘された。
+
+/// `fullscreen_image: <value>` だけを frontmatter に持つ最小ドキュメントを組み立てる。
+fn fullscreen_image_doc(value: &str) -> String {
+    format!("---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\nfullscreen_image:{value}\n---\n\n## 1-1: シーン\n\nナレ。\n")
+}
+
+#[test]
+fn test_document_fullscreen_image_parses_true_false() {
+    // FI1: `true` → Some(true) / `false` → Some(false)（厳格な真偽の素直な往復）。
+    let doc_true = parser::parse(&fullscreen_image_doc(" true"));
+    assert_eq!(
+        doc_true.fullscreen_image,
+        Some(true),
+        "fullscreen_image: true は Some(true)"
+    );
+
+    let doc_false = parser::parse(&fullscreen_image_doc(" false"));
+    assert_eq!(
+        doc_false.fullscreen_image,
+        Some(false),
+        "fullscreen_image: false は Some(false)"
+    );
+}
+
+#[test]
+fn test_document_fullscreen_image_is_case_insensitive() {
+    // FI2: `TRUE` / `False` → 大文字小文字を無視して Some に倒す（parse_bool_kv の to_ascii_lowercase）。
+    let doc_upper = parser::parse(&fullscreen_image_doc(" TRUE"));
+    assert_eq!(
+        doc_upper.fullscreen_image,
+        Some(true),
+        "fullscreen_image: TRUE は大文字無視で Some(true)"
+    );
+
+    let doc_mixed = parser::parse(&fullscreen_image_doc(" False"));
+    assert_eq!(
+        doc_mixed.fullscreen_image,
+        Some(false),
+        "fullscreen_image: False は大文字小文字無視で Some(false)"
+    );
+}
+
+#[test]
+fn test_document_fullscreen_image_unspecified_is_none() {
+    // FI3: frontmatter にキーが無ければ None（runtime 既定 false にフォールバック）。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(
+        doc.fullscreen_image, None,
+        "fullscreen_image 未指定は None（既定 false にフォールバック）"
+    );
+}
+
+#[test]
+fn test_document_fullscreen_image_empty_is_none() {
+    // FI4: 空 `fullscreen_image:`（値なし）・空引用 `""` はどちらも None
+    //   （parse_bool_kv が trim 後の空文字を弾く。pixel_art / sentence_per_page と同じ向き）。
+    let doc_empty = parser::parse(&fullscreen_image_doc(""));
+    assert_eq!(doc_empty.fullscreen_image, None, "空 fullscreen_image: は None");
+
+    let doc_empty_quote = parser::parse(&fullscreen_image_doc(" \"\""));
+    assert_eq!(
+        doc_empty_quote.fullscreen_image, None,
+        "fullscreen_image: \"\" は unquote 後に空文字となり None"
+    );
+}
+
+#[test]
+fn test_document_fullscreen_image_does_not_coerce_truthy_values() {
+    // FI5（重要）: `yes` / `1` / `on` は coerce せず None に倒す（厳格＝true/false 以外は無効）。
+    for truthy in ["yes", "1", "on"] {
+        let doc = parser::parse(&fullscreen_image_doc(&format!(" {truthy}")));
+        assert_eq!(
+            doc.fullscreen_image, None,
+            "fullscreen_image: {truthy} は coerce されず None（厳格）"
+        );
+    }
+}
+
+#[test]
+fn test_document_fullscreen_image_garbage_is_none() {
+    // FI6: 完全に無関係なゴミ文字列も None（parse 失敗を握りつぶす）。
+    let doc = parser::parse(&fullscreen_image_doc(" maybe-later"));
+    assert_eq!(
+        doc.fullscreen_image, None,
+        "fullscreen_image: maybe-later（garbage）は None"
+    );
+}
+
+#[test]
+fn test_fullscreen_image_false_round_trips() {
+    // FI7: fullscreen_image: false → emit に `fullscreen_image: false` を含み、再 parse で Some(false)。
+    //   falsy（false）でも Some なら emit から消えないこと（skip_serializing は None だけ）を縛る。
+    let doc = parser::parse(&fullscreen_image_doc(" false"));
+    assert_eq!(doc.fullscreen_image, Some(false));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("fullscreen_image: false"),
+        "emit に `fullscreen_image: false` が含まれること（false を落とさない）: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.fullscreen_image,
+        Some(false),
+        "round-trip で fullscreen_image: false が保持される"
+    );
+}
+
+#[test]
+fn test_fullscreen_image_true_round_trips() {
+    // FI8: fullscreen_image: true → emit に `fullscreen_image: true` を含み、再 parse で Some(true)。
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+fullscreen_image: true
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.fullscreen_image, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("fullscreen_image: true"),
+        "emit に `fullscreen_image: true` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.fullscreen_image,
+        Some(true),
+        "round-trip で fullscreen_image: true が保持される"
+    );
+}
+
+#[test]
+fn test_fullscreen_image_none_omits_emit_line() {
+    // FI9: None なら emit に `fullscreen_image:` 行が出ない（skip_serializing_if = Option::is_none）。
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(doc.fullscreen_image, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("fullscreen_image:"),
+        "fullscreen_image が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_fullscreen_image_round_trip_with_other_per_game_frontmatter() {
+    // FI10: fullscreen_image を他の per-game frontmatter（split_layout / sentence_per_page /
+    //   pixel_art 等）と同時に true で指定し、parse → emit → parse で全フィールドが独立して
+    //   正しく保持されること。
+    let input = r#"---
+engine: name-name
+aspect_ratio: "9:16"
+dialog_style: "adv"
+split_layout: true
+sentence_per_page: true
+pixel_art: true
+fullscreen_image: true
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+ナレ。
+"#;
+    let doc = parser::parse(input);
+    assert_eq!(doc.fullscreen_image, Some(true));
+    assert_eq!(doc.pixel_art, Some(true));
+    assert_eq!(doc.split_layout, Some(true));
+    assert_eq!(doc.sentence_per_page, Some(true));
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+
+    assert_eq!(
+        doc2.fullscreen_image,
+        Some(true),
+        "fullscreen_image が round-trip で保持される"
+    );
+    assert_eq!(doc2.pixel_art, Some(true));
+    assert_eq!(doc2.split_layout, Some(true));
+    assert_eq!(doc2.sentence_per_page, Some(true));
+    assert_eq!(doc, doc2, "全 frontmatter 共存の round-trip が安定する");
+}
+
 // --- #442: aspect_ratio に "auto"（fluid モード）を追加受理する ---
 //
 // 既存 3 値（16:9/4:3/9:16）と対等に受理し、大文字 "AUTO" や不正値は従来どおり既定 "16:9" へ

@@ -302,9 +302,12 @@ export interface FullscreenImageFit {
  * 横長画像（例: Gymnasia ロゴ 256x48, aspect 5.33:1）は通常 `height <= canvasHeight` となり
  * `scrollable=false`。縦長・極端に長い画像は `scrollable=true` になる。
  *
- * `textureWidth`/`canvasWidth` が 0 以下の場合は 0 除算を避けて `scale=0`（幅・高さ 0）を返す
- * （`computeCoverFit` は呼び出し側の texture ロード完了後にのみ呼ばれる前提でガードしていない
- * のと同じ流儀だが、こちらは scrollable 判定の分母事故を避けるため明示的に 0 ガードする）。
+ * `textureWidth`/`canvasWidth` が 0 以下の場合は 0 除算を避けて `scale=0` にフォールバックし、
+ * `height`（＝`textureHeight * scale`）を 0 にする（`computeCoverFit` は呼び出し側の texture
+ * ロード完了後にのみ呼ばれる前提でガードしていないのと同じ流儀だが、こちらは scrollable 判定の
+ * 分母事故を避けるため明示的に 0 ガードする）。`width` はこのガードの対象外で、`FullscreenImageFit.width`
+ * の契約どおり常に `canvasWidth` をそのまま返す（`canvasWidth` 自体が 0 以下ならその値がそのまま出る）
+ * （novelLayout.test.ts の `computeFullscreenImageFit` 退化入力テスト参照）。
  */
 export function computeFullscreenImageFit(
   textureWidth: number,

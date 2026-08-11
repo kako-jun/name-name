@@ -1156,3 +1156,86 @@ describe('EventImageLayer setFullscreenMode / handleWheel (#530)', () => {
     expect(() => layer.handleWheel(500)).not.toThrow()
   })
 })
+
+// #547 must1: computeFullscreenImageFit の scrollable を消費するスクロールヒント表示
+// （TUI版 draw_fullscreen_image の「↑/↓ でスクロール」ヒントに相当）。
+describe('EventImageLayer スクロールヒント (isScrollHintVisible) (#547 must1)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('初期状態では非表示', () => {
+    const layer = makeLayer(virtualTime())
+    expect(layer.isScrollHintVisible()).toBe(false)
+  })
+
+  it('fullscreenMode=true・縦長画像（スクロール必要）: show() 完了後にヒントが表示される', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 900) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    layer.show('story/tall.webp')
+    await flushPromises()
+
+    expect(layer.isScrollHintVisible()).toBe(true)
+  })
+
+  it('fullscreenMode=true・横長画像（キャンバス高さに収まる）: ヒントは表示されない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(256, 48) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    layer.show('brand/logo.webp')
+    await flushPromises()
+
+    expect(layer.isScrollHintVisible()).toBe(false)
+  })
+
+  it('fullscreenMode=false: 縦長画像でもヒントは表示されない（cover-fit にはスクロール概念が無い）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 900) as never)
+    const layer = makeLayer(virtualTime())
+    layer.show('story/tall.webp')
+    await flushPromises()
+
+    expect(layer.isScrollHintVisible()).toBe(false)
+  })
+
+  it('remove() を呼ぶと即座にヒントが消える', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 900) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    layer.show('story/tall.webp')
+    await flushPromises()
+    expect(layer.isScrollHintVisible()).toBe(true)
+
+    layer.remove()
+    expect(layer.isScrollHintVisible()).toBe(false)
+  })
+
+  it('setFullscreenMode(false) で切り替えると即座にヒントが消える', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 900) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    layer.show('story/tall.webp')
+    await flushPromises()
+    expect(layer.isScrollHintVisible()).toBe(true)
+
+    layer.setFullscreenMode(false)
+    expect(layer.isScrollHintVisible()).toBe(false)
+  })
+
+  it('新しい show() を呼ぶと、ロード完了までヒントが一旦隠れ、その後は新しい画像の scrollable で再判定される', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(400, 900) as never)
+    const layer = makeLayer(virtualTime())
+    layer.setFullscreenMode(true)
+    layer.show('story/tall-1.webp')
+    await flushPromises()
+    expect(layer.isScrollHintVisible()).toBe(true)
+
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTextureSized(256, 48) as never)
+    layer.show('brand/logo.webp')
+    // ロード完了前は隠れている。
+    expect(layer.isScrollHintVisible()).toBe(false)
+    await flushPromises()
+    // 横長画像はスクロール不要なので表示されないまま。
+    expect(layer.isScrollHintVisible()).toBe(false)
+  })
+})

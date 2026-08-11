@@ -425,6 +425,60 @@ describe('parseMarkdown + normalizeDocument: pixel_art が normalize を生き�
   })
 })
 
+describe('parseMarkdown + normalizeDocument: fullscreen_image が normalize を生き残る (#530/#547)', () => {
+  // このリポで繰り返し起きている事故パターン（#310/#378/#436/#440/#442/#466＝新しい frontmatter
+  // フィールドが Rust parser か normalizeDocument のどちらかで黙って消える）の frontend 側生存確認。
+  // normalizeDocument の列挙に fullscreen_image を書き忘れると WASM が parse した値が /play runtime
+  // （NovelRenderer.setFullscreenImageMode）に届かず、フルキャンバス画像表示モードが効かなくなる。
+  // #547 must2: #530 の初回実装時にこのクラスのテストが一本も追加されておらず、独立レビューで
+  // 規約逸脱として指摘された。実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）を通し、値が
+  // normalize を生き残ることを縛る。
+  function docWith(fullscreenImageLine: string): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      fullscreenImageLine,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('FI1: fullscreen_image: true → doc.fullscreen_image === true', async () => {
+    const doc = await parseMarkdown(docWith('fullscreen_image: true'))
+    expect(doc.fullscreen_image).toBe(true)
+  })
+
+  it('FI2: fullscreen_image: false → doc.fullscreen_image === false（値が normalize を生き残る・false が null に潰れない）', async () => {
+    const doc = await parseMarkdown(docWith('fullscreen_image: false'))
+    expect(doc.fullscreen_image).toBe(false)
+  })
+
+  it('FI3: fullscreen_image 省略 → doc.fullscreen_image === null（未指定は下流で既定 false＝従来どおり）', async () => {
+    const minimal = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(minimal)
+    expect(doc.fullscreen_image).toBeNull()
+  })
+})
+
 describe('parseMarkdown + normalizeDocument: header が normalize を生き残る (#519)', () => {
   // このリポで繰り返し起きている事故パターン（#310/#378/#436/#440/#442/#466＝新しい frontmatter
   // フィールドが Rust parser か normalizeDocument のどちらかで黙って消える）の frontend 側生存確認。

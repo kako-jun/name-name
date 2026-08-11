@@ -577,9 +577,18 @@ export interface EventDocument {
   /** フルキャンバス画像表示モード (#530)。`true` = テキストウィンドウ（DialogBox/ChoiceOverlay）を
    *  完全に隠し、イベント絵をアスペクト比を保ったままキャンバス全幅で contain 表示する
    *  （cover-fit のクロップはしない）。画像の高さが表示可能高さを超える場合は追加の縮小をせず
-   *  縦スクロールで見せる。`split_layout`（左右/上下 50/50 固定）や `EventImage.back = Hide`
-   *  （背景/立ち絵のみ隠す）とは別軸のレイアウトモード。TUI版の `logo_image` スプラッシュと
-   *  同じ用途を GUI 側で担う（起動時スプラッシュ・将来のエピローグ演出向け）。
+   *  縦スクロールで見せる（スクロール可能なときは画面下端に小さなヒントを表示する、#547 must1）。
+   *  `split_layout`（左右/上下 50/50 固定）や `EventImage.back = Hide`（背景/立ち絵のみ隠す）
+   *  とは別軸のレイアウトモード。
+   *
+   *  **TUI版との関係に注意（#547 should3）**: TUI版にも `fullscreen_image` という語が出てくる
+   *  機構（`Config.splash.logo_image` 由来のスプラッシュ画面専用描画、`tui/src/ui.rs`）がある
+   *  が、これは script.md frontmatter 由来のこのフィールドとは疎結合の別物で「対になる実装」
+   *  ではない。TUI 側はこのフィールド（共有 parser クレートの `Document.fullscreen_image`）を
+   *  一切参照しない（TUI にとっては死んだフィールド）。このフィールドは GUI 側だけが読み、
+   *  document 単位で script.md 中のあらゆる `[イベント絵:]` に効く（起動時スプラッシュに
+   *  限らない）。
+   *
    *  null/undefined・false は従来どおり（後方互換）。frontmatter `fullscreen_image:` から流す。 */
   fullscreen_image?: boolean | null
   chapters: EventChapter[]
