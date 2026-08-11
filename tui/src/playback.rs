@@ -241,10 +241,19 @@ fn content_signature(item: &PlaybackItem) -> u64 {
 
     let mut hasher = DefaultHasher::new();
     match item {
-        PlaybackItem::Line(line) | PlaybackItem::Image(line) => {
+        // variant判別用の1バイトを先頭に混ぜる。中身の `DisplayLine` が偶然同一でも
+        // `Line`/`Image` は別のitem種別として扱うため、variantを区別しないと
+        // ハッシュが衝突してしまう（セルフレビュー指摘、#533）。
+        PlaybackItem::Line(line) => {
+            hasher.write_u8(0);
+            line.hash(&mut hasher);
+        }
+        PlaybackItem::Image(line) => {
+            hasher.write_u8(1);
             line.hash(&mut hasher);
         }
         PlaybackItem::Choice(options, columns) => {
+            hasher.write_u8(2);
             for option in options {
                 option.text.hash(&mut hasher);
                 option.jump.hash(&mut hasher);
@@ -5316,6 +5325,24 @@ mod tests {
             content_signature(&a),
             content_signature(&b),
             "本文が同じでもevent_imageが異なればハッシュも異なるはず"
+        );
+    }
+
+    #[test]
+    fn content_signature_differs_between_line_and_image_variants_with_identical_payload() {
+        // セルフレビュー指摘(#533 PR #534 should): 中身のDisplayLineが偶然同一でも、
+        // Line/Imageはitem種別が異なるためハッシュも異なるべき。
+        let line = DisplayLine {
+            speaker: Some("カコ".to_string()),
+            text: vec!["同じ中身".to_string()],
+            event_image: None,
+        };
+        let a = PlaybackItem::Line(line.clone());
+        let b = PlaybackItem::Image(line);
+        assert_ne!(
+            content_signature(&a),
+            content_signature(&b),
+            "DisplayLineの中身が同一でもLine/Imageのvariantが異なればハッシュも異なるはず"
         );
     }
 
