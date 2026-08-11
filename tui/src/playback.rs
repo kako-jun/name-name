@@ -93,6 +93,17 @@
 //! 境界の情報（`item_file_ids`）を追加で持たせ、暗黙の `advance()` だけをファイル境界で
 //! 止める（選択肢ジャンプは対象外）。詳細は [`Playback`] 構造体の doc コメント参照。
 //!
+//! #496 が保護するのは「暗黙の前進」のみで、選択肢ジャンプ（[`Playback::select_current_choice`]）
+//! による明示的なファイル境界越えは意図的に許可対象のままだが、ジャンプ元とジャンプ先が
+//! 異なるファイル由来のとき、シーンを跨いで引き継ぐランニング状態（`SceneScanState` の
+//! `current_bgm`/`current_event_image`/`current_blackout`/`pending_se`）には #496 と同種の
+//! 保護が及んでいなかった（#528）。route1（file 0）の末尾が `[BGM: a.ogg]` 再生中のまま
+//! route2（file 1）へジャンプすると、無関係な BGM やイベント絵が route2 冒頭まで
+//! そのまま引き継がれてしまう実害があった（Gymnasia実データで確認）。#528 で
+//! `select_current_choice` に、ジャンプ元とジャンプ先の `file_id` が異なる場合だけ上記4
+//! フィールドをリセットしてから遷移先シーンを構築する処理を追加した。`current_speaker`/
+//! `current_text`（Wait+EventImage自動連続表示専用フィールド）は対象外（#528のスコープ外）。
+//!
 //! ## フラグ管理・条件分岐の遅延評価 (#509)
 //!
 //! `Event::Flag`/`Event::Condition` は、GUI版 `GameState`/`resolveEvents`
@@ -1167,6 +1178,24 @@ impl Playback {
         let Some(&target_scene_idx) = self.scene_index_by_id.get(&option.jump) else {
             return false;
         };
+        // ジャンプ元とジャンプ先が異なるファイル由来の場合、シーンを跨いで引き継ぐ
+        // ランニング状態（BGM/イベント絵/暗転/pending SE）をリセットする（#528）。
+        // `advance()` は `item_file_ids` を見てファイル境界をまたぐ暗黙の前進を拒否する
+        // （#496）が、選択肢ジャンプ（本メソッド）は元々ファイル境界の対象外として設計
+        // されており（モジュール冒頭ドキュメント参照）、この種の保護を持っていなかった。
+        // その結果、例えば route1（file 0）の末尾で `[BGM: a.ogg]` が再生中のまま
+        // route2（file 1）へジャンプすると、無関係な a.ogg が route2 冒頭までそのまま
+        // 引き継がれてしまう（Issue #528、Gymnasia実データで実害を確認）。
+        // `current_speaker`/`current_text`（Wait+EventImage自動連続表示専用フィールド）は
+        // このリセットの対象外（#528のスコープ外、意図的に触らない）。
+        if self.scene_order[self.current_scene_idx].file_id
+            != self.scene_order[target_scene_idx].file_id
+        {
+            self.scan_state.current_bgm = None;
+            self.scan_state.current_event_image = None;
+            self.scan_state.current_blackout = false;
+            self.scan_state.pending_se.clear();
+        }
         let mut scene_idx = target_scene_idx;
         loop {
             let scene = &self.scene_order[scene_idx];
