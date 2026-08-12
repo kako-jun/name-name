@@ -7,6 +7,7 @@ import PlayerScreen from './screens/PlayerScreen'
 import JumpTopScreen from './screens/JumpTopScreen'
 import { get, set } from './utils/storage'
 import { defaultApiBaseUrl } from './api/client'
+import { useFavicon } from './utils/useFavicon'
 
 /**
  * 各ゲーム専用サブドメインからの直接アクセスを許可するための判定。
@@ -229,6 +230,10 @@ function JumpTopScreenWrapper({
     document.title = 'Name × Name'
   }, [])
 
+  // プロジェクト一覧は「特定ゲームの文脈にいない」画面 (#552)。favicon を
+  // デフォルト（無指定）に戻す。
+  useFavicon(null)
+
   return (
     <JumpTopScreen
       apiBaseUrl={apiBaseUrl}
@@ -306,6 +311,10 @@ function EditorScreenWrapper({
     document.title = `${projectName} - Name × Name`
   }, [projectName])
 
+  // エディタも「特定ゲームの文脈にいない」画面扱い（プレイ中ではない）。
+  // favicon をデフォルトに戻す (#552)。
+  useFavicon(null)
+
   const handleBack = () => {
     navigate('/')
   }
@@ -350,6 +359,9 @@ function AssetsScreenWrapper({
     document.title = `アセット管理 - ${projectName} - Name × Name`
   }, [projectName])
 
+  // アセット管理も「特定ゲームの文脈にいない」画面扱い。favicon をデフォルトに戻す (#552)。
+  useFavicon(null)
+
   const handleBack = () => {
     navigate(`/edit/${projectName}`)
   }
@@ -375,6 +387,15 @@ function PlayerScreenWrapper({ apiBaseUrl }: { apiBaseUrl: string }) {
       document.title = `${projectName} - Name × Name`
     }
   }, [projectName])
+
+  // favicon はゲームごとに assets/images/favicon.png を試す（title.png と
+  // 同じ assets/raw 経路。PlayerScreen.tsx の assetBaseUrl 組み立てと同じ
+  // 形。未配置のプロジェクトは useFavicon 内の 404 判定でデフォルトのまま
+  // となる）(#552)。
+  const faviconUrl = projectName
+    ? `${apiBaseUrl}/api/projects/${projectName}/assets/raw/images/favicon.png`
+    : null
+  useFavicon(faviconUrl)
 
   if (!projectName) {
     navigate('/')
