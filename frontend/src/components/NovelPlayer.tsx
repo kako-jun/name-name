@@ -663,6 +663,12 @@ function NovelPlayer({
         // 既存の startFrom(#220) をそのまま呼ぶだけで、renderer 側に新規ロジックは持ち込まない。
         // 不正/未解決 sceneId は startFrom 内で no-op（現行どおりエントリ再生にフォールバック）。
         renderer.startFrom({ sceneId: initialSceneId })
+      } else if (renderer.hasQuickSave()) {
+        // 起動時の自動クイックロード (#578): pendingSnapshot（fluid 再マウント引き継ぎ）も
+        // initialSceneId（?scene= 等の明示的 deep-link）も無い通常起動時に、直前のシーン
+        // 切り替えで自動保存されたクイックセーブがあれば復元する。quickLoad() が false
+        // （データ不整合等）を返した場合は何もせず、既存のエントリ再生にフォールバックする。
+        renderer.quickLoad()
       }
 
       // URL クエリによるデバッグ起点指定 (#220 Phase 3)。
