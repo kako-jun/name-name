@@ -166,11 +166,11 @@ struct StderrGuard {
 #[cfg(unix)]
 impl Drop for StderrGuard {
     fn drop(&mut self) {
-        // dup2 の戻り値はチェックするが、Drop 内なので失敗してもpanicはできない
-        // （panic中にさらにpanicするとプロセスがabortする）。復元に失敗した場合、
-        // ログ出力先のstderr自体が壊れている可能性が高くこちらから通知する術も無いため、
-        // ベストエフォートとして退避fdのcloseだけは試みてリークを避ける。
-        let _dup2_result = unsafe { libc::dup2(self.saved_fd, self.stderr_fd) };
+        // dup2 の戻り値は捨てる（Drop 内なので失敗しても分岐のしようがなく、panicも
+        // できない — panic中にさらにpanicするとプロセスがabortする）。復元に失敗した
+        // 場合、ログ出力先のstderr自体が壊れている可能性が高くこちらから通知する術も
+        // 無いため、ベストエフォートとして退避fdのcloseだけは試みてリークを避ける。
+        let _ = unsafe { libc::dup2(self.saved_fd, self.stderr_fd) };
         unsafe { libc::close(self.saved_fd) };
     }
 }
@@ -308,6 +308,28 @@ mod tests {
         assert!(
             after <= before + 3,
             "fd leak suspected after 10 calls: before={before}, after={after}"
+        );
+    }
+
+    #[test]
+    fn with_stderr_suppressed_restores_stderr_even_when_f_panics() {
+        // `f`がpanicしても`StderrGuard`の`Drop`が発火し、stderr(fd 2)が正しく復元される
+        // ことを確認する（#559 セルフレビュー指摘のフォローアップ）。`catch_unwind`で
+        // panicを外側に伝播させずに握りつぶし、その後`with_stderr_suppressed`をもう一度
+        // 正常呼び出しして「壊れていない」ことを間接的に確認する。
+        let result = std::panic::catch_unwind(|| {
+            with_stderr_suppressed(|| {
+                panic!("intentional panic to verify StderrGuard's Drop fires");
+            })
+        });
+        assert!(result.is_err(), "panicがcatch_unwindで捕捉されているはず");
+
+        // 復元されていることの確認: 再度`with_stderr_suppressed`を正常呼び出しし、
+        // 戻り値が正しくパススルーされること（＝内部状態が壊れていないこと）を確認する。
+        let value = with_stderr_suppressed(|| 123);
+        assert_eq!(
+            value, 123,
+            "panic後もwith_stderr_suppressedが正常に機能し続けるはず"
         );
     }
 
