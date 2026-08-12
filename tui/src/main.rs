@@ -796,6 +796,22 @@ where
                 // on_advance で状態を動かす前の生インデックスをここで捕まえておく必要がある
                 // — after 側で取り直すと既に次の item を指してしまうため。
                 let prev_item_index = playback.item_index();
+                // #558フォローアップ: `stable_item_key` の呼び出し自体も on_advance の
+                // 「前」でここで済ませておく必要がある。`item_scene_key`/`item_content_hash`
+                // は `advance()` 内部でシーンを新規構築するたびに末尾へ追記される
+                // （`Playback::stable_item_key` の doc comment 参照）ため、空シーン
+                // （items 0件、on_advance の C1 分岐で `advance()` が呼ばれるケース、#558）
+                // では `prev_item_index=0` が「advance前は範囲外（items自体が空）」だった
+                // ものが、advance後は新規構築された次シーンの最初の item 自身を指して
+                // しまう。after側で `stable_item_key` を呼び直すと、この「advance前は
+                // 存在しなかったはずのキー」が誤って解決されてしまい、まだ一度も表示して
+                // いない次シーンの最初の行が既読マークされる事故になる（実機テスト作成中に
+                // 発覚、再現テスト
+                // `event_loop_empty_first_scene_landing_line_is_not_falsely_marked_as_read`）。
+                // on_advance 実行前のこの時点で呼んでおけば、空シーンでは
+                // `item_scene_key`/`item_content_hash` がまだ空（またはより短い）ため
+                // 自然に `None` になり、後述の既読マーク処理も自動的にスキップされる。
+                let prev_stable_key = playback.stable_item_key(prev_item_index);
                 // #499: 既読マーク判定用に、on_advance で状態を動かす前の「選択肢表示中か」を
                 // 覚えておく。`playback.position()` は Choice item をカウントしないため、
                 // 「最後の会話行 → 直後の Choice」という遷移では `position()` の値が変わらず
@@ -845,11 +861,14 @@ where
                 // 対象にしている（#140）。「離脱したか」の判定自体は `position()` の単発の
                 // before/after比較で十分（同じ1回の on_advance 呼び出し内の変化を見るだけ
                 // なので、#509 の遅延シーン追記が引き起こす「同じ内容が別 index になる」
-                // 問題の影響を受けない）。実際に集合へ積むキーだけを安定キーに差し替える。
+                // 問題の影響を受けない）。実際に集合へ積むキーだけを安定キーに差し替える
+                // — #558フォローアップにより、そのキー自体も on_advance 実行前に
+                // 捕まえた `prev_stable_key` を使う（on_advance 後に取り直さない、上の
+                // `prev_stable_key` 宣言側コメント参照）。
                 let position_changed = playback.position() != prev_position
                     || playback.current_choice().is_some() != was_choice_before;
                 if position_changed && !was_choice_before {
-                    if let Some(key) = playback.stable_item_key(prev_item_index) {
+                    if let Some(key) = prev_stable_key {
                         read_positions.insert(key);
                     }
                 }
@@ -3357,6 +3376,52 @@ mod tests {
         assert!(
             playback.current_choice().is_none(),
             "スキップが誤って選択肢まで進んでしまってはいけない"
+        );
+    }
+
+    #[test]
+    fn event_loop_empty_first_scene_landing_line_is_not_falsely_marked_as_read() {
+        // #558のフォローアップ: on_advanceが表示コンテンツの無いシーン（items 0件、
+        // 例game_init）から次シーンの新規itemへ一気に進めるようになったことで、
+        // 「advance前のprev_item_index=0」がadvance後に新規構築された次シーンの
+        // 最初のitem自身を指してしまい、まだ一度も表示していない行が誤って
+        // read_positionsに既読マークされる副作用が発生した（実機テスト作成中に発覚）。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n\
+                       **A**:\nおかえりなさい\n\n**B**:\n次の話\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::Advance,    // items 0件の1-1 -> 1-2の1行目(A)へ一気に進む（#558新分岐）
+            Action::ToggleSkip, // 着地直後、まだ未読のはずのAでスキップを試みる
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.position(),
+            1,
+            "空シーンから合流した直後のhub1行目が誤ってread_positionsに既読マークされ、\
+             スキップで2行目(B)まで飛ばされてはいけない"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A")
         );
     }
 
