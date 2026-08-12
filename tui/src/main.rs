@@ -1581,9 +1581,15 @@ mod tests {
     #[test]
     fn skip_leading_empty_scenes_is_noop_when_first_item_is_choice() {
         // 決定表パターン2: current_line()がNone・current_choice()がSomeのケース。
-        // 先頭シーンの最初のitemが直接Choiceの構成では、既にguard条件
-        // `current_choice().is_none() && current_line().is_none()` を満たさないため
-        // advance()を呼ばないはず（選択肢のjump先へ勝手に進んでしまってはいけない）。
+        // 先頭シーンの最初のitemが直接Choiceの構成でも、skip_leading_empty_scenesは
+        // 選択肢のjump先へ勝手に進んでしまってはいけない、という仕様の記録。
+        //
+        // ただしミューテーション検証済み: `current_choice().is_none() && current_line().is_none()`
+        // からcurrent_choice()側の項を丸ごと削っても（advance()を無条件で呼んでも）このテストは
+        // 通ってしまう。`Playback::advance()`自身が「items[index]がChoiceなら即false」という
+        // 内部ガードを持つため、外側のcurrent_choice()チェックが無くてもこのケースでは実害が出ない。
+        // つまりこのテスト単体ではskip_leading_empty_scenes側のcurrent_choice()条件の検出力は無い
+        // （テスト観点整理エージェント指摘）。
         let source =
             "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n[選択]\n- 進む→1-2\n[/選択]\n\n\
                        ## 1-2: 次\n\n**B**:\n次のセリフ\n";
