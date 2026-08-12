@@ -153,6 +153,28 @@ fn decode_file(path: &Path) -> Option<Decoder<BufReader<File>>> {
     Decoder::new(BufReader::new(file)).ok()
 }
 
+/// `with_stderr_suppressed` がリダイレクト成功後に保持する RAII ガード。`f` が正常終了しても
+/// panic しても、スタックアンワインド中に `Drop::drop` が必ず呼ばれるため、手続き的な
+/// cleanup（dup2 での復元 → 退避fdのclose）と違って「`f` の途中で抜ける」経路を取りこぼさない
+/// （#559 セルフレビュー指摘）。
+#[cfg(unix)]
+struct StderrGuard {
+    stderr_fd: std::os::unix::io::RawFd,
+    saved_fd: std::os::unix::io::RawFd,
+}
+
+#[cfg(unix)]
+impl Drop for StderrGuard {
+    fn drop(&mut self) {
+        // dup2 の戻り値はチェックするが、Drop 内なので失敗してもpanicはできない
+        // （panic中にさらにpanicするとプロセスがabortする）。復元に失敗した場合、
+        // ログ出力先のstderr自体が壊れている可能性が高くこちらから通知する術も無いため、
+        // ベストエフォートとして退避fdのcloseだけは試みてリークを避ける。
+        let _dup2_result = unsafe { libc::dup2(self.saved_fd, self.stderr_fd) };
+        unsafe { libc::close(self.saved_fd) };
+    }
+}
+
 /// `f` 実行中だけプロセスの stderr（fd 2）を `/dev/null` へ一時的にリダイレクトする。
 ///
 /// ALSA/JACK 等の C ライブラリは、デバイスが無い・接続できない環境で `snd_config_get_card`
@@ -178,13 +200,20 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
         unsafe { libc::close(saved_fd) };
         return f();
     };
-    unsafe { libc::dup2(devnull.as_raw_fd(), stderr_fd) };
-    let result = f();
-    unsafe {
-        libc::dup2(saved_fd, stderr_fd);
-        libc::close(saved_fd);
+    let dup2_result = unsafe { libc::dup2(devnull.as_raw_fd(), stderr_fd) };
+    if dup2_result < 0 {
+        // リダイレクト自体に失敗した場合、退避したsaved_fdを閉じてそのままfを実行する
+        // （抑制されないだけで、このヘルパー導入前と同じ挙動に劣化するだけなので実害は小さい）。
+        unsafe { libc::close(saved_fd) };
+        return f();
     }
-    result
+    // ここから先は必ず _guard の Drop で復元される。f 内でのpanicを含め、途中で抜ける
+    // 経路が増えても取りこぼさない（手続き的cleanupだった旧実装からのRAII化）。
+    let _guard = StderrGuard {
+        stderr_fd,
+        saved_fd,
+    };
+    f()
 }
 
 #[cfg(not(unix))]
@@ -291,11 +320,9 @@ mod tests {
         // としてはこのテストが唯一、#559回帰テストとして最も実利がある）。戻り値が
         // Some/Noneどちらであってもpanicしないことだけを見る（値はあえてアサートしない）。
         //
-        // 既知の設計上の懸念（実装修正は別タスクの担当）: `with_stderr_suppressed`は
-        // Dropガードを持たない手続き的cleanupのため、`f`がpanicすると2つ目の`dup2`
-        // （stderr復元）が実行されずfd2が`/dev/null`を指したまま残ってしまう。現状唯一の
-        // 呼び出し元`OutputStream::try_default()`はResultを返すだけでpanicしないため今は
-        // 顕在化しないが、将来別の呼び出しを追加する際はDropガード化を検討すべき。
+        // `with_stderr_suppressed`は`StderrGuard`によるRAII cleanupのため、`f`がpanicしても
+        // スタックアンワインド中に`Drop`が呼ばれてstderrは復元される（#559セルフレビュー
+        // 指摘対応。以前は手続き的cleanupで復元漏れの懸念があった）。
         let volume = VolumeConfig::default();
         let _ = AudioPlayer::try_new(&volume);
     }
