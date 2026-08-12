@@ -1043,6 +1043,9 @@ describe('PlayerScreen', () => {
     // standalone 再生時のプレイヤーヘッダ出し方 (#519)。normalizeHeaderMode の入力そのままを
     // 渡せるよう string | null | undefined を許容する（不正値・未指定のフォールバック検証用）。
     header?: string | null
+    // ドット絵プロジェクトか (#553)。TitleOverlay のタイトル画像に image-rendering: pixelated
+    // が伝播することの検証用。
+    pixel_art?: boolean | null
   }) {
     listProjectsMock.mockResolvedValue([
       { name: 'friday-1930', title: '友達 1930', repo: 'kako-jun/friday-1930' },
@@ -1089,6 +1092,31 @@ describe('PlayerScreen', () => {
     const props = lastNovelPlayerProps()
     expect(props.skipEnabled).toBeNull()
     expect(props.debugEnabled).toBeNull()
+  })
+
+  // --- #553: doc.pixel_art を TitleOverlay のタイトル画像に反映する ---
+  //
+  // NovelPlayer/RPGPlayer と違い TitleOverlay はこのテストファイルでモックしていない実体
+  // なので、DOM に描画された <img> の style（image-rendering）を直接検証する。
+  // EventImageLayer/CharacterLayer の setPixelArt（#466）と同じ frontmatter 由来の値。
+
+  it('#553: doc.pixel_art が true のとき、TitleOverlay のタイトル画像に image-rendering: pixelated が付く', async () => {
+    await renderWithFrontmatter({ pixel_art: true })
+    const img = document.querySelector('img') as HTMLImageElement
+    expect(img).not.toBeNull()
+    expect(img.style.imageRendering).toBe('pixelated')
+  })
+
+  it('#553: doc.pixel_art が false/未指定のとき、TitleOverlay のタイトル画像に image-rendering は付かない（従来どおり補間あり）', async () => {
+    await renderWithFrontmatter({ pixel_art: false })
+    const imgFalse = document.querySelector('img') as HTMLImageElement
+    expect(imgFalse).not.toBeNull()
+    expect(imgFalse.style.imageRendering).toBe('')
+
+    await renderWithFrontmatter({})
+    const imgUnset = document.querySelector('img') as HTMLImageElement
+    expect(imgUnset).not.toBeNull()
+    expect(imgUnset.style.imageRendering).toBe('')
   })
 
   // --- #382: speaker_nudge を NovelPlayer に転送する ---
