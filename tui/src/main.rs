@@ -1430,6 +1430,184 @@ mod tests {
         assert!(current_reveal.is_none());
     }
 
+    // ---- #558: current_choice()もcurrent_line()もNoneのケース（items 0件のシーン、
+    // 例: フラグ設定だけのgame_init）からの on_advance ----
+    //
+    // Playback::from_lines はシーン構造を持たない（scene_order が常に空）ため、この分岐
+    // （シーンを跨いだ暗黙のスキップ）を再現できない。実際の Markdown を parser::parse
+    // した Document 経由で Playback を構築する必要がある（choice_branch_source 系のテストと
+    // 同じ理由）。
+
+    #[test]
+    fn on_advance_empty_first_scene_advances_to_next_scene_line() {
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n**A**:\nおかえりなさい\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        // 前提: 1-1 はフラグ設定イベントだけで items を1件も持たないため、Choice も
+        // Line も現在位置に無い。
+        assert!(playback.current_choice().is_none());
+        assert!(playback.current_line().is_none());
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(
+            advanced,
+            "items 0件のシーンで足止めされず、items を持つ次シーンまで進めるはず"
+        );
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("hubの台詞")
+                .speaker
+                .as_deref(),
+            Some("A")
+        );
+        assert!(
+            current_reveal.is_some(),
+            "到達した新しい会話行のrevealが組み立てられているはず"
+        );
+    }
+
+    #[test]
+    fn on_advance_empty_first_scene_landing_on_choice_keeps_reveal_none() {
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n\
+                       [選択]\n- 進む→1-2\n[/選択]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(advanced);
+        assert!(
+            playback.current_choice().is_some(),
+            "items 0件のシーンの次に直接Choiceが来る構成でも、そこまで進めるはず"
+        );
+        assert!(
+            current_reveal.is_none(),
+            "選択肢に着地した場合はrevealを持たないはず（build_reveal_for_currentは \
+             current_line()がNoneならNoneを返す）"
+        );
+    }
+
+    #[test]
+    fn on_advance_skips_multiple_consecutive_empty_scenes_in_one_call() {
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: A = true]\n\n## 1-2: 中継\n\n[フラグ: B = true]\n\n\
+                       ## 1-3: ハブ\n\n**A**:\nおかえりなさい\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(
+            advanced,
+            "空シーンが2連続していても、on_advance 1回でitemsを持つシーンまで到達するはず \
+             （Playback::advance の内部スキップループが1呼び出しで完結する）"
+        );
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("hubの台詞")
+                .speaker
+                .as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn on_advance_does_not_cross_file_boundary_from_empty_first_scene() {
+        // #496 のファイル境界チェックは、items 0件のシーンからの新しい暗黙スキップ
+        // （#558）でも引き続き尊重されるはず（false-positive前進の回帰ガード）。
+        let config = instant_config();
+        let source0 = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n[フラグ: 探索済み = true]\n";
+        let source1 = "---\nengine: name-name\n---\n\n## 2-1: ハブ\n\n**A**:\nおかえりなさい\n";
+        let mut doc0 = name_name_parser::parser::parse(source0);
+        let doc1 = name_name_parser::parser::parse(source1);
+        let chapter_file_ids: Vec<usize> = std::iter::repeat_n(0, doc0.chapters.len())
+            .chain(std::iter::repeat_n(1, doc1.chapters.len()))
+            .collect();
+        doc0.chapters.extend(doc1.chapters);
+        let document = doc0;
+        let mut playback = Playback::from_merged_document(&document, &chapter_file_ids);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        assert!(playback.current_choice().is_none());
+        assert!(playback.current_line().is_none());
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(
+            !advanced,
+            "items 0件のシーンの次がファイル境界を跨ぐ場合は進んではいけない"
+        );
+        assert!(playback.current_choice().is_none());
+        assert!(
+            playback.current_line().is_none(),
+            "file1のhubへ誤って進んでしまってはいけない"
+        );
+        assert!(current_reveal.is_none());
+    }
+
+    #[test]
+    fn on_advance_true_end_of_document_is_safe_noop_not_panic() {
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n[フラグ: 探索済み = true]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        for _ in 0..3 {
+            let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+            assert!(
+                !advanced,
+                "後続シーンが無いドキュメント末尾では常にno-opのはず（panicしない）"
+            );
+        }
+        assert!(current_reveal.is_none());
+    }
+
+    #[test]
+    fn on_advance_empty_first_scene_advances_with_sentence_per_page_enabled() {
+        // Gymnasia実バグ（tui-config.toml の sentence_per_page=true）の発生条件そのもの。
+        // current_line() が current_display 経由になっても C1 分岐が機能することを確認する。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n**A**:\nおかえりなさい\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document).with_sentence_per_page(true);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        assert!(playback.current_line().is_none());
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(advanced);
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("hubの台詞（current_display経由）")
+                .speaker
+                .as_deref(),
+            Some("A")
+        );
+        assert!(current_reveal.is_some());
+    }
+
     #[test]
     fn on_advance_full_lifecycle_across_two_lines() {
         let config = slow_config();
