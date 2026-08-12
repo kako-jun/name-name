@@ -4552,8 +4552,8 @@ mod tests {
 
     #[test]
     fn page_indicator_self_and_opponent_use_different_default_colors() {
-        // GUI版の白(self)/水色相当(opponent)という「2つの窓が別の固定色を持つ」性質そのものを、
-        // デフォルト設定（colors.player="white"/colors.opponent="cyan"）で確認する。
+        // GUI版の白(self)/水色(opponent, #9ad4e8)という「2つの窓が別の固定色を持つ」性質そのものを、
+        // デフォルト設定（colors.player="white"/colors.opponent="#9ad4e8"）で確認する。
         let config = Config::default();
 
         let self_line = dialog_line(Some("主格"), vec!["hello"]);
@@ -4587,8 +4587,10 @@ mod tests {
             .cell((opponent_indicator_cell.x, opponent_indicator_cell.y))
             .expect("in bounds");
 
+        let expected_opponent_color =
+            Color::from_str(&config.colors.opponent).expect("default opponent color must parse");
         assert_eq!(self_cell.fg, Color::White);
-        assert_eq!(opponent_cell.fg, Color::Cyan);
+        assert_eq!(opponent_cell.fg, expected_opponent_color);
         assert_ne!(
             self_cell.fg, opponent_cell.fg,
             "self/opponent windows must use distinct fixed colors, matching GUI's dual-window design"

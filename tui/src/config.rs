@@ -42,6 +42,9 @@ impl Default for PlaceholderConfig {
 
 /// ダイアログテキストの文字色設定（色名は `ratatui::style::Color` の
 /// `FromStr` 実装が解釈できる名前を想定。例: "white", "cyan", "gray"）。
+/// `ratatui::style::Color::from_str` は `"#RRGGBB"` 形式の16進カラーコードも
+/// 直接解釈できるため、名前付き色にない任意のRGB値（例: GUI版と厳密一致させたい
+/// 色）を指定する場合はこの形式を使う。既存の名前付き色指定との後方互換は保たれる。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct ColorConfig {
@@ -57,7 +60,11 @@ impl Default for ColorConfig {
     fn default() -> Self {
         Self {
             player: "white".to_string(),
-            opponent: "cyan".to_string(),
+            // GUI版 NovelRenderer.OPPONENT_TEXT_COLOR(0x9ad4e8)と厳密一致させるため、
+            // 名前付きANSI色("cyan")ではなく16進カラーコードで指定する（#572）。
+            // 名前付き色はターミナルエミュレータのパレット定義に依存し、環境によって
+            // 青寄りに見えるため使わない。
+            opponent: "#9ad4e8".to_string(),
             narration: "gray".to_string(),
         }
     }
@@ -417,7 +424,7 @@ mod tests {
         assert_eq!(config.placeholder.style, PlaceholderStyle::Label);
         assert_eq!(config.placeholder.label, "[画像]");
         assert_eq!(config.colors.player, "white");
-        assert_eq!(config.colors.opponent, "cyan");
+        assert_eq!(config.colors.opponent, "#9ad4e8");
         assert_eq!(config.colors.narration, "gray");
         assert!(!config.splash.enabled);
         assert!(config.splash.lines.is_empty());
