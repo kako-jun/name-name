@@ -966,13 +966,14 @@ describe('ChoiceOverlay グリッド配置 境界値・状態遷移 (#508 テス
 
 // #562: pixel スタイルのフレーム描画方式（roundRect vs poly）を Graphics.prototype への spy で
 // 直接検証する。ChoiceOverlay.ts の private 定数（BUTTON_WIDTH=480, BUTTON_HEIGHT=52,
-// SHADOW_OFFSET=4, PIXEL_NOTCH_SIZE=6）はテスト側にミラーして持つ（このファイルの他の describe
+// SHADOW_OFFSET=4, PIXEL_NOTCH_SIZE=16（#566 で 6→16 に変更、太い borderWidth に飲まれないよう
+// 余裕を持たせた値））はテスト側にミラーして持つ（このファイルの他の describe
 // でも `tapY = 220 - 24 - 26` 等、同様に内部定数値をハードコードして検証する慣習に合わせる）。
 describe('ChoiceOverlay pixel フレーム描画 (#562)', () => {
   const BUTTON_WIDTH = 480
   const BUTTON_HEIGHT = 52
   const SHADOW_OFFSET = 4
-  const PIXEL_NOTCH_SIZE = 6
+  const PIXEL_NOTCH_SIZE = 16
 
   it('style="default"（rounded）で show() すると roundRect が呼ばれ、poly は一度も呼ばれない', () => {
     const roundRectSpy = vi.spyOn(Graphics.prototype, 'roundRect')
@@ -1216,13 +1217,18 @@ describe('ChoiceOverlay pixel 統合フロー (#562)', () => {
   })
 })
 
-// #562 現状記録（修正を要求するテストではない）: pixel スタイルは PIXEL_NOTCH_SIZE(6px)*2=12px
+// #562 現状記録（修正を要求するテストではない）: pixel スタイルは PIXEL_NOTCH_SIZE(16px)*2=32px
 // 未満のボタン幅になる極端な設定（狭い画面 × 多列グリッド）で、buildPixelNotchPoints が
 // 自己交差ポリゴンを返す設計上の未対応領域を持つ。これは既知の未対応領域であり、修正は
 // 本 issue (#562) のスコープ外。将来 pixel スタイル × 極端な多列グリッドを実際に使うことに
 // なったら、drawFrame 側で notch を
 // `Math.min(PIXEL_NOTCH_SIZE, layoutButtonWidth / 2, BUTTON_HEIGHT / 2)` のようにクランプする
 // 対応を検討する。ここでは現状の挙動をテストとして記録するだけに留める。
+// (#566: PIXEL_NOTCH_SIZE を 6→16 に変更したのに伴い、危険域の閾値も 12px→32px に更新。
+// この極端シナリオ（200px 画面×列20）は依然として危険域に入るため、テストの結論は変わらない。
+// なお Gymnasia の実使用パターン（`[選択: 列=5]`、split_layout 時の実効テキスト領域 450x450）
+// では、グリッド時のボタン幅は約67px、非グリッド時は約402px となり、どちらも 32px を十分に
+// 上回るため危険域には入らない。)
 describe('ChoiceOverlay pixel×極端に狭いグリッド (#562 現状記録・修正スコープ外)', () => {
   it('狭い画面(200px)×style="pixel"×列20(多列グリッド)で show() を呼んでも例外は投げない（クラッシュしないことの最低保証）', () => {
     const overlay = new ChoiceOverlay(200, 400)
@@ -1230,7 +1236,7 @@ describe('ChoiceOverlay pixel×極端に狭いグリッド (#562 現状記録・
     overlay.hide()
   })
 
-  it('現状記録: 上記シナリオで実際の layoutButtonWidth は PIXEL_NOTCH_SIZE*2=12px を下回り、buildPixelNotchPoints が自己交差ポリゴンを返す状態に実際に到達する', () => {
+  it('現状記録: 上記シナリオで実際の layoutButtonWidth は PIXEL_NOTCH_SIZE*2=32px を下回り、buildPixelNotchPoints が自己交差ポリゴンを返す状態に実際に到達する', () => {
     const polySpy = vi.spyOn(Graphics.prototype, 'poly')
     const overlay = new ChoiceOverlay(200, 400)
     overlay.show(choices(20), vi.fn(), 'pixel', undefined, 20)
@@ -1239,7 +1245,7 @@ describe('ChoiceOverlay pixel×極端に狭いグリッド (#562 現状記録・
     const points = polySpy.mock.calls[0][0] as number[]
     // width = x1 - x0（buildPixelNotchPoints の点順で x0=points[0], x1=points[16]）
     const width = points[16] - points[0]
-    expect(width).toBeLessThan(12) // PIXEL_NOTCH_SIZE(6) * 2
+    expect(width).toBeLessThan(32) // PIXEL_NOTCH_SIZE(16) * 2
 
     // 上辺の始点(points[8]=x0+notch)が終点(points[10]=x1-notch)より右＝自己交差に実際に到達
     const topStartX = points[8]
