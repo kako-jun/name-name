@@ -1391,6 +1391,25 @@ impl Playback {
     /// も呼ばない）。単一ファイル構成（`from_document`/`from_lines`）は全シーンが同じ合成
     /// ファイルid `0` を持つため、この絞り込みは実質無効化され従来と同じ結果になる。
     ///
+    /// ### なぜ `item_file_ids[self.index]` ではなく `scene_order[current_scene_idx].file_id` か
+    ///
+    /// Issue #565 本文は「`item_file_ids[self.index]`（現在itemのfile_id）」を現在ファイル
+    /// 判定の基準として指示していたが、実装ではあえて `scene_order[current_scene_idx].file_id`
+    /// （現在シーンのfile_id）を採用している。これは意図的な設計判断で、理由は
+    /// `select_current_choice` が選択肢ジャンプを0件シーンかつ最終シーンへ着地させたとき
+    /// `self.index` を `self.items.len()`（範囲外）に設定し得ること。この状態で
+    /// `item_file_ids[self.index]` ベースの実装を書くと、`item_file_ids.get(self.index)` 相当の
+    /// 添字アクセスが範囲外で `None` になり、`current_file_id` が特定できず全シーンが
+    /// スキップされて `total()` が誤って `0` を返す回帰（ゲーム終了直前に分母が唐突に0へ
+    /// 落ちる）を招く。一方 `scene_order` は構築後不変で、かつ `current_scene_idx` は
+    /// （`self.index` と異なり）このジャンプ処理でも常に有効な範囲内のインデックスしか
+    /// 指さない（ジャンプ先シーン自体は必ず `scene_order` に実在するため）。したがって
+    /// `current_scene_idx` ベースなら同じOOB状態でも正しく実際の会話行数を返せる
+    /// （回帰テスト
+    /// `total_after_jumping_into_zero_item_last_scene_does_not_return_zero_or_panic` 参照）。
+    /// **この理由により、Issue本文の記述に合わせて `item_file_ids` ベースへ「揃える」修正は
+    /// しないこと** — 上記の回帰を再発させる。
+    ///
     /// `current_scene_idx` が指すシーンが存在しない場合（`from_lines` のように
     /// `scene_order` が常に空の構成）は現在ファイルを特定できないため、スキャン対象の
     /// シーンが1つも無い＝ `0` を返す（`from_lines` は元々このケースを想定したテスト専用
@@ -4815,6 +4834,44 @@ mod tests {
     }
 
     #[test]
+    fn total_after_jumping_into_zero_item_last_scene_does_not_return_zero_or_panic() {
+        // should1で追記したtotal()のdoc comment「なぜitem_file_ids[self.index]ではなく
+        // scene_order[current_scene_idx].file_idか」の直接の回帰テスト。fixtureは
+        // `position_after_jumping_into_zero_item_last_scene_does_not_panic` と同じ
+        // （"1-1": 台詞 + Choice("1-2"へjump)、"1-2": イベント0件かつ最終シーン）。
+        // select_current_choiceでself.indexがitems.len()（範囲外）になった状態でも、
+        // current_scene_idxは常に有効な範囲内のインデックス（scene_order上の"1-2"）を
+        // 指し続けるため、total()はpanicせず実際の会話行数(1)を返せるはず。もし
+        // item_file_ids[self.index]ベースだったら、この範囲外アクセスでcurrent_file_idが
+        // Noneになり、全シーンがスキップされてtotal()が誤って0を返してしまう。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "1-2")]),
+                    ],
+                ),
+                scene("1-2", vec![]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        pb.advance(); // 台詞 → Choice
+        assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
+
+        // ここで panic しないことを確認する。
+        let total = pb.total();
+        assert_eq!(
+            total, 1,
+            "ジャンプ先が0件シーンでself.indexがOOBになっても、実際の会話行数(1)を\
+             返すはず（0ではない）"
+        );
+    }
+
+    #[test]
     fn total_reflects_real_play_flags_and_cache_invalidates_when_flags_change() {
         // セルフレビュー対応（#509）: total()のキャッシュは self.flags.generation() を
         // キーにしているため、実プレイでflagsが変化すれば再計算され、古い値を使い回さない
@@ -4878,7 +4935,17 @@ mod tests {
     }
 
     // ---- #565: total()のスコープを「ドキュメント全体」から「現在ファイル単位」に変更
-    // ---- したことの回帰テスト（デシジョンテーブルはIssue #565参照）
+    // ---- したことの回帰テスト
+    //
+    // 以下はtotal_cacheの有効性デシジョンテーブル（generation一致×file_id一致の2×2。
+    // 以降の各テストのコメントが「行N」で参照する）:
+    //   行1: generation不一致 × file_id不一致 → 再スキャン
+    //   行2: generation一致   × file_id一致   → キャッシュヒット
+    //   行3: generation一致   × file_id不一致 → 再スキャン（最重要ケース。#565の直接の
+    //        再発防止対象。旧実装はgenerationしかキャッシュキーに見ておらず、この行だけ
+    //        誤ってキャッシュヒットしてしまい、選択肢で別ファイルへジャンプした直後に
+    //        古い値を返す事故が起きていた）
+    //   行4: generation不一致 × file_id一致   → 再スキャン
 
     #[test]
     fn from_merged_document_total_counts_only_current_file_scenes() {
