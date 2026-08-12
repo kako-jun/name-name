@@ -139,6 +139,22 @@ function buildSceneIndex(
   return scenes
 }
 
+/**
+ * #556: `routeNN/NN-slug.md` 命名規則（Gymnasia等）の候補パス suffix を返す。
+ * sceneId が `r{route番号}-{slug}` 形式（例: `r09-01-eyes-in-the-dark`）のときだけ
+ * `route{route番号}/{slug}.md`（例: `route09/01-eyes-in-the-dark.md`）を返す。
+ *
+ * basename だけでは判定できない: Gymnasia は `02-life.md` のような同名 slug が
+ * 複数 route（route01/02/05/06）に存在するため、フォルダ名込みの suffix 一致で
+ * route を区別する必要がある。
+ */
+function inferRouteSlugPathSuffix(sceneId: string): string | null {
+  const match = sceneId.match(/^r(\d+)-(.+)$/)
+  if (!match) return null
+  const [, routeNumber, slug] = match
+  return `route${routeNumber}/${slug}.md`
+}
+
 function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] {
   const basenames = new Set<string>([`${sceneId}.md`])
   const parts = sceneId.split('-')
@@ -147,7 +163,10 @@ function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] 
     const theme = parts.slice(1).join('-')
     basenames.add(`${theme}__${resident}.md`)
   }
-  return paths.filter((path) => basenames.has(basename(path)))
+  const routeSuffix = inferRouteSlugPathSuffix(sceneId)
+  return paths.filter(
+    (path) => basenames.has(basename(path)) || (routeSuffix !== null && path.endsWith(routeSuffix))
+  )
 }
 
 /**
