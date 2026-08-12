@@ -6,10 +6,15 @@
 // PixiJS や実 API 呼び出しに依存するため、PlayerScreen.test.tsx 等と同様に軽い擬似
 // コンポーネントへ差し替える。
 //
+// useFavicon は fetch での事前存在確認をやめ、<link> の href を直接設定して
+// onerror で存在確認する方式に変更した（PR #555 セルフレビュー、二重フェッチ回避）。
+// 404 相当のケースは fetch モックではなく、生成された <link> 要素に対して
+// 直接 'error' イベントを発火させて検証する。
+//
 // 検証ポイント:
 //   - プロジェクト一覧 (JumpTopScreen) 表示時は favicon が既定（無指定）
-//   - /play/:projectName 表示時、favicon.png が存在すれば <link rel="icon"> を設定する
-//   - favicon.png が存在しない(404)場合は既定のまま
+//   - /play/:projectName 表示時、<link rel="icon"> の href を favicon.png に設定する
+//   - favicon.png の読み込みに失敗する(404相当)と既定のまま
 //   - プレイ画面から戻ると favicon が既定に戻る
 //   - /edit/:projectName (EditorScreen) / /edit/:projectName/assets (AssetsScreen)
 //     表示時は favicon が既定のまま
@@ -90,8 +95,7 @@ describe('App favicon 切替 (#552)', () => {
     expect(getFaviconHref()).toBeNull()
   })
 
-  it('プロジェクトをプレイすると favicon.png が存在すれば <link rel="icon"> を設定する', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response)
+  it('プロジェクトをプレイすると <link rel="icon"> の href を favicon.png に設定する', async () => {
     render(<App />)
 
     fireEvent.click(screen.getByText('play'))
@@ -104,21 +108,20 @@ describe('App favicon 切替 (#552)', () => {
     )
   })
 
-  it('favicon.png が存在しない(404)場合は既定のまま', async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue({ ok: false, status: 404 } as Response)
+  it('favicon.png の読み込みに失敗する(404相当)と既定のまま', async () => {
     render(<App />)
 
     fireEvent.click(screen.getByText('play'))
     expect(await screen.findByTestId('player-screen')).toBeInTheDocument()
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+    expect(link).not.toBeNull()
+    link!.dispatchEvent(new Event('error'))
+
     expect(getFaviconHref()).toBeNull()
   })
 
   it('プレイ画面から戻ると favicon が既定に戻る', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response)
     render(<App />)
 
     fireEvent.click(screen.getByText('play'))
