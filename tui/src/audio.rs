@@ -65,7 +65,7 @@ impl AudioPlayer {
     /// （`initial_volumes` 呼び出しを削ってフィールドをハードコードし直すような回帰が起きた
     /// 場合、`volume` 引数が未使用になり `cargo clippy -- -D warnings` がCIで検知する）。
     pub fn try_new(volume: &config::VolumeConfig) -> Option<Self> {
-        let (stream, stream_handle) = OutputStream::try_default().ok()?;
+        let (stream, stream_handle) = with_stderr_suppressed(OutputStream::try_default).ok()?;
         let (bgm_volume, se_volume) = Self::initial_volumes(volume);
         Some(Self {
             _stream: stream,
@@ -151,6 +151,45 @@ impl AudioPlayer {
 fn decode_file(path: &Path) -> Option<Decoder<BufReader<File>>> {
     let file = File::open(path).ok()?;
     Decoder::new(BufReader::new(file)).ok()
+}
+
+/// `f` 実行中だけプロセスの stderr（fd 2）を `/dev/null` へ一時的にリダイレクトする。
+///
+/// ALSA/JACK 等の C ライブラリは、デバイスが無い・接続できない環境で `snd_config_get_card`
+/// や `cannot connect ... to system:playback_1` のようなログを直接 stderr へ書き込む。これは
+/// Rust の `Result` を経由しない出力経路のため、`OutputStream::try_default()` 側の `.ok()` では
+/// 抑制できない。TUI は stdout を raw mode の alternate screen として使っているが stderr は
+/// 素通しで同一端末に出力されるため、両者が衝突して画面が乱れる（#559）。
+///
+/// リダイレクト対象は `f` の実行中だけに限定し、それ以外のログ出力（アプリ自体の panic
+/// メッセージ等）を巻き込まないようスコープを絞る。Unix限定。非Unix環境ではこの問題自体が
+/// 起きない（cpal は Windows で WASAPI バックエンドを使う）ため、素通しで `f` を実行する。
+#[cfg(unix)]
+fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
+    use std::os::unix::io::AsRawFd;
+
+    let stderr_fd = std::io::stderr().as_raw_fd();
+    // 元の fd を dup で退避しておき、リダイレクト解除時に dup2 で復元する。
+    let saved_fd = unsafe { libc::dup(stderr_fd) };
+    if saved_fd < 0 {
+        return f();
+    }
+    let Ok(devnull) = std::fs::OpenOptions::new().write(true).open("/dev/null") else {
+        unsafe { libc::close(saved_fd) };
+        return f();
+    };
+    unsafe { libc::dup2(devnull.as_raw_fd(), stderr_fd) };
+    let result = f();
+    unsafe {
+        libc::dup2(saved_fd, stderr_fd);
+        libc::close(saved_fd);
+    }
+    result
+}
+
+#[cfg(not(unix))]
+fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
+    f()
 }
 
 #[cfg(test)]
