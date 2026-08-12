@@ -1287,6 +1287,81 @@ describe('PlayerScreen', () => {
       expect(warnSpy).not.toHaveBeenCalled()
       expect(errorSpy).not.toHaveBeenCalled()
     })
+
+    it('routeサフィックスの単純endsWith一致だとディレクトリ境界を無視して誤マッチする（subroute02/notroute02のようなフォルダ名の decoy がfetchされないこと。#556 self-review S1）', async () => {
+      const BOUNDARY_PROJECT_NAME = 'gymnasia-route-boundary-fixture'
+      // route02 を末尾に含むが別フォルダである decoy（subroute02, notroute02）を並べる。
+      // 単純な `path.endsWith(routeSuffix)` だとこれらも 'route02/02-life.md' 扱いで
+      // 誤マッチしてしまう（ディレクトリ境界を認識しないため）。
+      const BOUNDARY_SCENE_ID_BY_PATH: Record<string, string> = {
+        'script.md': 'entry-hub',
+        'route02/02-life.md': 'r02-02-life',
+        'subroute02/02-life.md': 'decoy-subroute',
+        'notroute02/02-life.md': 'decoy-notroute',
+      }
+
+      listProjectsMock.mockResolvedValue([
+        { name: BOUNDARY_PROJECT_NAME, title: 't', repo: 'kako-jun/gymnasia' },
+      ])
+      listScriptsMock.mockResolvedValue(
+        Object.keys(BOUNDARY_SCENE_ID_BY_PATH).map((path, i) => ({
+          path,
+          sha: `b${i}`,
+          size: 1,
+          title: null,
+          hidden: false,
+        }))
+      )
+      getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+        path,
+        sha: 'x',
+        content: path,
+      }))
+      parseMarkdownMock.mockImplementation(async (md: string) => ({
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [{ id: BOUNDARY_SCENE_ID_BY_PATH[md], title: md, view: 'TopDown', events: [] }],
+          },
+        ],
+      }))
+
+      render(
+        <PlayerScreen
+          projectName={BOUNDARY_PROJECT_NAME}
+          apiBaseUrl="http://api.test"
+          onBack={() => {}}
+        />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+      getContentsMock.mockClear()
+
+      const scenes = await resolveMissingScene('r02-02-life')
+
+      expect(getContentsMock).toHaveBeenCalledTimes(1)
+      expect(getContentsMock).toHaveBeenCalledWith(
+        BOUNDARY_PROJECT_NAME,
+        'route02/02-life.md',
+        'main'
+      )
+      expect(getContentsMock).not.toHaveBeenCalledWith(
+        BOUNDARY_PROJECT_NAME,
+        'subroute02/02-life.md',
+        'main'
+      )
+      expect(getContentsMock).not.toHaveBeenCalledWith(
+        BOUNDARY_PROJECT_NAME,
+        'notroute02/02-life.md',
+        'main'
+      )
+      expect(findSceneById(scenes ?? [], 'r02-02-life')).toBeDefined()
+    })
   })
 
   it('404 以外のデータ取得失敗はエラーメッセージを表示する', async () => {
