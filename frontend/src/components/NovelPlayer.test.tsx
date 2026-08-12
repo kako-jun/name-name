@@ -888,6 +888,25 @@ describe('NovelPlayer 終劇ロゴ表示 (#404)', () => {
     act(() => cb(true))
     expect(logoImg()).toBeNull()
   })
+
+  // #553: TitleOverlay と同じ pixelArt → image-rendering: pixelated パターンをこのロゴ img にも適用する。
+  it('L7: pixelArt={true} のとき、ロゴ img に image-rendering: pixelated が付く', async () => {
+    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} pixelArt={true} />)
+    await flushAsync()
+    act(() => capturedStoryEndedCb()(true))
+    const img = logoImg()
+    expect(img).not.toBeNull()
+    expect(img!.style.imageRendering).toBe('pixelated')
+  })
+
+  it('L8: pixelArt が false/未指定のとき、ロゴ img に image-rendering は付かない（従来どおり補間あり）', async () => {
+    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} pixelArt={false} />)
+    await flushAsync()
+    act(() => capturedStoryEndedCb()(true))
+    const imgFalse = logoImg()
+    expect(imgFalse).not.toBeNull()
+    expect(imgFalse!.style.imageRendering).toBe('')
+  })
 })
 
 // #404 フェーズ2: intermission.md 専用シーンの renderer 配線 + usedIntermissionScene の

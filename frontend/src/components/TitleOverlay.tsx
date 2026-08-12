@@ -27,6 +27,11 @@ interface TitleOverlayProps {
   /** タイトル画面の暗さ。true で #111827（gray-900）、false で #1e1b4b（indigo-950）。
    *  App の darkMode ではなくプレイヤーテーマ（playerDark）を渡す想定（#394）。 */
   dark?: boolean
+  /** ドット絵プロジェクトか（frontmatter `pixel_art:` から流す, #553）。true のときタイトル画像に
+   *  `image-rendering: pixelated` を適用し、ブラウザの既定補間（bilinear 等）による滲みを防ぐ。
+   *  EventImageLayer/CharacterLayer の setPixelArt（#466）と同じ狙いを <img> 側で再現する。
+   *  既定 null/undefined/false は従来どおり補間あり（後方互換）。 */
+  pixelArt?: boolean | null
 }
 
 function TitleOverlay({
@@ -38,6 +43,7 @@ function TitleOverlay({
   onOpenSettings,
   onBack,
   dark = false,
+  pixelArt = false,
 }: TitleOverlayProps) {
   const [imageLoaded, setImageLoaded] = useState(false)
   const [imageFailed, setImageFailed] = useState(false)
@@ -60,6 +66,7 @@ function TitleOverlay({
             className={`max-w-xs max-h-40 object-contain transition-opacity duration-300 ${
               imageLoaded ? 'opacity-100' : 'opacity-0'
             }`}
+            style={pixelArt ? { imageRendering: 'pixelated' } : undefined}
           />
         )}
         {/* 画像がない・失敗・読み込み前はテキストを表示 */}

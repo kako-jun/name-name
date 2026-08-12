@@ -850,6 +850,11 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                 // トグルにより色が動く不整合になり、docs の「プレイヤーの見た目は ?theme
                 // （既定 dark）だけで決まる」に反する。ヘッダ bg-gray-900 とも整合する。
                 dark={playerDark}
+                // #553: title.png（assets/images/title.png）もイベント絵/立ち絵と同じ pixel_art
+                // 規約に従わせる。doc は TitleOverlay マウント時点（!loading かつ他分岐に該当しない
+                // = doc ロード済み）で確定しているため、NovelPlayer の pixelArt（#466）と同じ
+                // `doc?.pixel_art ?? null` パターンをそのまま踏襲する。
+                pixelArt={doc?.pixel_art ?? null}
                 onNewGame={() => {
                   // 新規開始: 既読データをクリアして最初から
                   clearReadProgress(projectName)

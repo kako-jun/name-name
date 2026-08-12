@@ -563,7 +563,9 @@ export interface EventDocument {
   /** テクスチャの拡大縮小フィルタを nearest-neighbor（ドット絵向け）にするか (#466)。
    *  `true` = イベント絵・立ち絵（EventImageLayer / CharacterLayer が読み込む全テクスチャ）を
    *  `texture.source.scaleMode = 'nearest'` で拡大表示し、ブロック状のドットを保つ
-   *  （Gymnasia の 128x128 ドット絵イベント絵向け）。
+   *  （Gymnasia の 128x128 ドット絵イベント絵向け）。タイトル画面・終劇オーバーレイの
+   *  title.png（TitleOverlay / NovelPlayer が DOM `<img>` で表示する分、#553）にも同じ狙いで
+   *  `image-rendering: pixelated` を適用する（PixiJS の scaleMode とは別経路の CSS 側実装）。
    *  null/undefined・false は従来どおり `'linear'`（滑らか、theo-hayami 等の塗り絵向け・後方互換）。
    *  frontmatter `pixel_art:` から流す。 */
   pixel_art?: boolean | null
