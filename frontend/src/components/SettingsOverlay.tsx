@@ -44,7 +44,7 @@ function SliderRow({ label, value, min, max, step, unit, onChange, format }: Sli
 /**
  * 設定オーバーレイ (Issue #138)
  *
- * テキスト速度 / BGM 音量 / SE 音量 / Voice 音量 / オート wait time。
+ * テキスト速度 / オート wait time / BGM 音量 / SE 音量 / Voice 音量。
  * ESC で閉じる、デフォルトに戻すボタン付き。
  */
 export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsOverlayProps) {
@@ -99,6 +99,16 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
           />
 
           <SliderRow
+            label="オート進行ウェイト"
+            value={settings.autoWaitMs}
+            min={500}
+            max={8000}
+            step={100}
+            onChange={(v) => update({ autoWaitMs: v })}
+            format={(v) => `${(v / 1000).toFixed(1)}秒`}
+          />
+
+          <SliderRow
             label="BGM 音量"
             value={settings.bgmVolume}
             min={0}
@@ -126,16 +136,6 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
             step={0.05}
             onChange={(v) => update({ voiceVolume: v })}
             format={(v) => `${Math.round(v * 100)}%`}
-          />
-
-          <SliderRow
-            label="オート進行ウェイト"
-            value={settings.autoWaitMs}
-            min={500}
-            max={8000}
-            step={100}
-            onChange={(v) => update({ autoWaitMs: v })}
-            format={(v) => `${(v / 1000).toFixed(1)}秒`}
           />
         </div>
 
