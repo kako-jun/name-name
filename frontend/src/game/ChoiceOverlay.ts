@@ -69,8 +69,12 @@ const GRID_HORIZONTAL_MARGIN = 24
  * 2 段の階段（{@link buildPixelNotchPoints} 参照）で、1 段あたり半分 (NOTCH/2) ずつ食い込む。
  * CHOICE_REGION_MIN_BUTTON_WIDTH (160px) / BUTTON_HEIGHT (52px) のどちらよりも十分小さく、
  * 最小幅の領域でも隣接する角のノッチ同士が重ならない値を選んでいる。
+ *
+ * #566: 旧値 6px（1段=half=3px）は pixel テーマの borderWidth（4px）より細く、太いストローク
+ * が短い階段セグメントを覆い隠して角が丸く見えてしまっていた（実機確認で発覚）。
+ * 16px（1段=half=8px）に拡大し、borderWidth の 2 倍の余裕を持たせて階段が視認できるようにする。
  */
-const PIXEL_NOTCH_SIZE = 6
+const PIXEL_NOTCH_SIZE = 16
 
 export type ChoiceStyleName = 'default' | 'soft' | 'monochrome' | 'pixel'
 
