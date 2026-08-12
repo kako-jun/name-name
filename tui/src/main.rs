@@ -2891,8 +2891,13 @@ mod tests {
         // jump先シーンの先頭itemがまたChoiceであるケース（連続分岐）。build_reveal_for_current
         // は current_line() が None（＝現在Choice）のとき None を返すため、jump直後も
         // current_reveal は None のまま維持されるはず。
+        //
+        // "1-2" はあえて選択肢を2件（さらに進む/戻る）にしている。1件だけだと#574の
+        // 「純粋な中継シーン（本文無し・Choice1件だけ）自動継続」の対象になり、
+        // この本テストが検証したい「jump直後に別のChoiceで止まる」状況を再現できず
+        // 直接"1-3"まで進んでしまう（このテストの意図とは無関係な#574の挙動と衝突する）。
         let config = instant_config();
-        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n[選択]\n- 進む→1-2\n[/選択]\n\n## 1-2: 次\n\n[選択]\n- さらに進む→1-3\n[/選択]\n\n## 1-3: 最後\n\n**C**:\n最後のセリフ\n";
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n[選択]\n- 進む→1-2\n[/選択]\n\n## 1-2: 次\n\n[選択]\n- さらに進む→1-3\n- 戻る→1-1\n[/選択]\n\n## 1-3: 最後\n\n**C**:\n最後のセリフ\n";
         let document = name_name_parser::parser::parse(source);
         let mut playback = Playback::from_document(&document);
         let now = Instant::now();
@@ -3536,6 +3541,11 @@ mod tests {
         // Condition分岐先のitem数自体が1件→2件に増え「Bの手紙1」「Bの手紙2」が表示される。
         // 2回目訪問直後（＝Bの手紙1が現在行の状態）でスキップONにしても、Bの手紙1は
         // 一度も読んでいない新規内容のため、選択肢まで一気に飛ばされず即座に止まるはず。
+        //
+        // route2（Flag設定のみ・Choiceが1件だけ）は#574の「純粋な中継シーン自動継続」の
+        // 対象のため、「次のルートへ」確定の1回のAdvanceでroute2を経由してhub(2回目訪問)の
+        // Bの手紙1まで一気に到達する（#574以前はroute2でいったん止まり、route2の
+        // 「hubへ」を確定するAdvanceがもう1回必要だった）。
         let config = instant_config();
         let source = "---\nengine: name-name\n---\n\n\
                        ## 1-1: route1\n\n\
@@ -3564,10 +3574,11 @@ mod tests {
         .unwrap();
 
         let (mut next_action, _remaining) = action_queue(vec![
-            Action::Advance,    // route1のChoice「hubへ」確定 -> hub(1回目訪問)、Aの手紙
-            Action::Advance,    // Aの手紙 -> Choice「次のルートへ」へ離脱（既読マーク）
-            Action::Advance,    // 「次のルートへ」確定 -> route2、Choice「hubへ」
-            Action::Advance,    // 「hubへ」確定 -> hub(2回目訪問)、Bの手紙1（未読の新規item）
+            Action::Advance, // route1のChoice「hubへ」確定 -> hub(1回目訪問)、Aの手紙
+            Action::Advance, // Aの手紙 -> Choice「次のルートへ」へ離脱（既読マーク）
+            // 「次のルートへ」確定 -> route2(#574の純粋な中継シーン)を自動通過 ->
+            // hub(2回目訪問)、Bの手紙1（未読の新規item）
+            Action::Advance,
             Action::ToggleSkip, // 2回目訪問直後、未読のBの手紙1からスキップを試みる
             Action::Quit,
         ]);

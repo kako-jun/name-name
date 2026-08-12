@@ -1315,6 +1315,17 @@ impl Playback {
             self.scan_state.current_speaker = None;
             self.scan_state.current_text = Vec::new();
         }
+        // 中継シーン（本文・イベント絵を一切含まず、確認用の選択肢が1つだけの
+        // シーン）を自動で通過し続ける際の上限回数（#574）。原稿ミスで中継シーン同士が
+        // 循環参照（互いにジャンプし合う）していた場合、下のループはスタックを使わず
+        // ただ`scene_idx`を書き換えて回るだけなので理論上無限ループになり得る。0件シーンの
+        // フォールスルー（このすぐ下、既存ループ）は`scene_idx + 1`で単調増加するため
+        // `scene_order`の長さで自然に止まるが、中継シーンの自動継続は選択肢の`jump`先へ
+        // 任意方向へ飛べるため同じ保証がない。プレイヤーがハングしたりクラッシュしたり
+        // しないよう、定数の上限に達したら「現在の着地点で停止する」（＝直前と同じに見える
+        // 中継画面がもう一度出るだけで、以後は通常どおりプレイヤーの入力を待つ）。
+        const RELAY_HOP_LIMIT: usize = 100;
+        let mut relay_hops = 0usize;
         let mut scene_idx = target_scene_idx;
         loop {
             let scene = &self.scene_order[scene_idx];
@@ -1342,6 +1353,76 @@ impl Playback {
             );
             self.current_scene_idx = scene_idx;
             if self.items.len() > start {
+                // 中継シーンの自動継続（#574）
+                //
+                // 症状: Gymnasiaの`hub_gate`→`hub_gate_advance_1`のように、フラグ設定
+                // だけを行い本文・イベント絵を持たず「続ける」選択肢1つだけで次のシーンへ
+                // つなぐ「中継専用」シーンにジャンプすると、この時点までの実装では
+                // `items.len() > start`（items 1件＝Choice）が真になるため即座に画面を
+                // 表示して停止していた。しかしその1件が直前の画面と見た目上まったく同じ
+                // （地の文なし・選択肢「続ける」1つだけ）だと、プレイヤーには「続ける」を
+                // 押しても何も起きていないように見え、実際には2回押して初めて次の実内容
+                // シーンへ辿り着く（＝二度押し UX）。
+                //
+                // 判定基準（厳密）: このシーンが積んだ items 範囲（`self.items[start..]`）
+                // が「正確に1件」かつ、その1件が `PlaybackItem::Choice` で
+                // `options.len() == 1`の場合だけを「純粋な中継シーン」とみなす。
+                // Line/Imageが1件でも混ざっていれば対象外（＝地の文やイベント絵のある
+                // 「見せ場のある単一選択肢画面」は誤って飛ばさない）。選択肢が2件以上でも
+                // 対象外（＝プレイヤーに分岐の意思決定をさせる画面は必ず止める）。
+                //
+                // この判定を満たす場合のみ、その唯一の選択肢を自動選択したのと同じ効果
+                // （＝このシーンで積んだ items を巻き戻し、選択肢の`jump`先シーンから
+                // ループを継続）を、プレイヤーへの追加入力要求なしに行う。実内容のある
+                // シーン、または選択肢が0件/2件以上のシーンに着地するまで繰り返す。
+                let relay_jump: Option<String> = match &self.items[start..] {
+                    [PlaybackItem::Choice(options, _columns)] if options.len() == 1 => {
+                        Some(options[0].jump.clone())
+                    }
+                    _ => None,
+                };
+                if let Some(jump_id) = relay_jump {
+                    if relay_hops < RELAY_HOP_LIMIT {
+                        if let Some(&relay_target_idx) = self.scene_index_by_id.get(&jump_id) {
+                            // このシーンが積んだ唯一の item（中継専用の「続ける」選択肢）は
+                            // プレイヤーには見せず、次のシーンの内容に差し替える。各 item
+                            // 並行 Vec は `items` と同じ長さを保つ不変条件があるため、
+                            // 全て揃えて `start` まで巻き戻す。
+                            self.items.truncate(start);
+                            self.item_file_ids.truncate(start);
+                            self.item_wait_ms.truncate(start);
+                            self.item_blackout.truncate(start);
+                            self.item_bgm.truncate(start);
+                            self.item_se.truncate(start);
+                            self.item_scene_key.truncate(start);
+                            self.item_content_hash.truncate(start);
+
+                            // ここから先の遷移は、プレイヤーが手動で選択肢を選んで
+                            // ジャンプしたのと意味的に同じ操作（本メソッド冒頭の
+                            // ファイル境界越えリセットの対象と同種）。中継シーンが
+                            // 別ファイルへ`jump`するケースは稀だが、あり得る場合に
+                            // BGM等のリークガード（#528/#540）を免除する理由がないため
+                            // 同じリセットを適用する。
+                            if file_id != self.scene_order[relay_target_idx].file_id {
+                                self.scan_state.current_bgm = None;
+                                self.scan_state.current_event_image = None;
+                                self.scan_state.current_blackout = false;
+                                self.scan_state.pending_se.clear();
+                                self.scan_state.current_speaker = None;
+                                self.scan_state.current_text = Vec::new();
+                            }
+
+                            relay_hops += 1;
+                            scene_idx = relay_target_idx;
+                            continue;
+                        }
+                        // jump先のシーンIDが見つからない（原稿ミス）。他の異常系と同様
+                        // クラッシュさせず、中継シーンをそのまま表示して停止する
+                        // （下の通常return処理へフォールスルー）。
+                    }
+                    // 循環参照等でRELAY_HOP_LIMITに達した。無限ループを避けるため、
+                    // これ以上は自動継続せず現在の着地点で停止する。
+                }
                 self.set_index(start);
                 return true;
             }
@@ -2046,6 +2127,144 @@ mod tests {
         assert!(
             pb.current_choice().is_some(),
             "失敗時は選択肢表示のまま変わらないはず"
+        );
+    }
+
+    /// #574 の再現原稿の縮約版: `hub_gate`（台詞→Choice、`hub_gate_advance_1`へjump）
+    /// → `hub_gate_advance_1`（Flagのみ・Choice「続ける」1件だけの純粋な中継シーン、
+    /// `hub`へjump）→ `hub`（実内容のある台詞）。
+    fn hub_gate_relay_doc() -> Document {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "hub_gate",
+                    vec![
+                        dialog(Some("A"), vec!["定期報告"]),
+                        choice(vec![("続ける", "hub_gate_advance_1")]),
+                    ],
+                ),
+                scene(
+                    "hub_gate_advance_1",
+                    vec![
+                        flag_event("milestone_1_pending", false),
+                        choice(vec![("続ける", "hub")]),
+                    ],
+                ),
+                scene("hub", vec![dialog(Some("B"), vec!["hubに戻った"])]),
+            ],
+        );
+        document_with_chapters(vec![ch1])
+    }
+
+    #[test]
+    fn select_current_choice_auto_continues_through_pure_relay_scene() {
+        // #574: 中継シーン（本文無し・Choiceが1件だけ）に着地したとき、プレイヤーに
+        // 追加の「続ける」入力を要求せず、自動的にその先の実内容シーンまで進むはず。
+        let doc = hub_gate_relay_doc();
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "台詞から Choice へ進めるはず");
+
+        assert!(
+            pb.select_current_choice(),
+            "有効な jump 先なので成功するはず"
+        );
+
+        assert_eq!(
+            pb.current_line()
+                .expect("中継シーンを自動通過した先の台詞")
+                .speaker
+                .as_deref(),
+            Some("B"),
+            "中継シーン(hub_gate_advance_1)で止まらず、その先のhubまで自動で進むはず"
+        );
+        assert_eq!(
+            pb.current_choice(),
+            None,
+            "着地先は実内容の台詞であり、中継シーンのChoiceが見えてはいけない"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_does_not_skip_single_choice_scene_with_dialog() {
+        // 判定基準の厳密さの確認: 選択肢が1件だけでも、そのシーンに地の文（Line）が
+        // 伴う場合は「純粋な中継シーン」ではないため自動継続してはいけない
+        // （見せ場のある単一選択肢画面を誤ってスキップしない）。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "start",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "confirm")]),
+                    ],
+                ),
+                scene(
+                    "confirm",
+                    vec![
+                        dialog(Some("A"), vec!["本当にいいんだな？"]),
+                        choice(vec![("続ける", "hub")]),
+                    ],
+                ),
+                scene("hub", vec![dialog(Some("B"), vec!["hub"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(
+            pb.current_line()
+                .expect("confirmシーンの台詞")
+                .speaker
+                .as_deref(),
+            Some("A"),
+            "本文を持つconfirmシーンで止まるはず（自動継続しない）"
+        );
+        assert!(
+            pb.current_choice().is_none(),
+            "confirmシーンはまだ台詞表示中でChoiceは未表示のはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_stops_when_relay_target_choice_has_multiple_options() {
+        // 判定基準の厳密さの確認: 着地先が本文無しでも、選択肢が2件以上あれば
+        // プレイヤーに分岐の意思決定をさせる画面のため自動継続してはいけない。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "start",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "relay")]),
+                    ],
+                ),
+                scene(
+                    "relay",
+                    vec![
+                        flag_event("seen_relay", true),
+                        choice(vec![("Aへ", "a"), ("Bへ", "b")]),
+                    ],
+                ),
+                scene("a", vec![dialog(Some("A"), vec!["A"])]),
+                scene("b", vec![dialog(Some("B"), vec!["B"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(
+            pb.current_choice().map(|(options, _, _)| options.len()),
+            Some(2),
+            "選択肢2件のrelayシーンで止まり、プレイヤーの選択を待つはず"
         );
     }
 
@@ -5910,15 +6129,15 @@ mod tests {
             "1回目はmilestone_a_pendingが立っているのでAの定期報告が最初のitemのはず"
         );
 
-        // hub → route2 → hub (2回目訪問): milestone_b_pendingへ反転済み。
+        // hub → route2 → hub (2回目訪問): milestone_b_pendingへ反転済み。route2は
+        // Flag設定のみ・Choiceが1件だけの純粋な中継シーンのため、#574の中継シーン
+        // 自動継続により、この1回の select_current_choice 呼び出しだけでroute2を
+        // 経由してhubまで一気に進む（#574以前はroute2でいったん止まり、
+        // select_current_choiceをもう一度呼ぶ必要があった）。
         assert!(pb.advance(), "hub台詞からChoiceへ進めるはず");
         assert!(
             pb.select_current_choice(),
-            "hubからroute2へジャンプできるはず"
-        );
-        assert!(
-            pb.select_current_choice(),
-            "route2から再度hubへジャンプできるはず"
+            "hubからroute2を自動通過してhubへジャンプできるはず"
         );
         let second_key = pb
             .stable_item_key(pb.item_index())
@@ -6056,15 +6275,15 @@ mod tests {
             "1回目訪問の最初のitem(local_index=0)はAの手紙のはず"
         );
 
-        // hub → route2 → hub (2回目訪問): milestone_b_pendingへ反転済み。
+        // hub → route2 → hub (2回目訪問): milestone_b_pendingへ反転済み。route2は
+        // Flag設定のみ・Choiceが1件だけの純粋な中継シーンのため、#574の中継シーン
+        // 自動継続により、この1回の select_current_choice 呼び出しだけでroute2を
+        // 経由してhubまで一気に進む（#574以前はroute2でいったん止まり、
+        // select_current_choiceをもう一度呼ぶ必要があった）。
         assert!(pb.advance(), "Aの手紙からChoiceへ進めるはず");
         assert!(
             pb.select_current_choice(),
-            "hubからroute2へジャンプできるはず"
-        );
-        assert!(
-            pb.select_current_choice(),
-            "route2から再度hubへジャンプできるはず"
+            "hubからroute2を自動通過してhubへジャンプできるはず"
         );
         let second_key = pb
             .stable_item_key(pb.item_index())
