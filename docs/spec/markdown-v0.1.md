@@ -28,7 +28,7 @@ choice_style: "default"
 | `hidden` | boolean | No | `true` の場合エディタで非表示（デフォルト: `false`） |
 | `default_bgm` | string | No | 章全体のデフォルトBGMファイルパス |
 | `aspect_ratio` | string | No | 画面比率。`"16:9"` / `"4:3"` / `"9:16"` から選択（デフォルト: `"16:9"`）。論理解像度は 16:9=800×450、4:3=800×600、9:16=450×800 |
-| `choice_style` | string | No | 選択肢ボタンのスタイル名。`"default"` / `"soft"` / `"monochrome"`（省略時は `"default"`、不明値も `"default"` にフォールバック）。詳細は [選択肢のスタイル](#選択肢のスタイル) を参照 (#146) |
+| `choice_style` | string | No | 選択肢ボタンのスタイル名。`"default"` / `"soft"` / `"monochrome"` / `"pixel"`（省略時は `"default"`、不明値も `"default"` にフォールバック）。詳細は [選択肢のスタイル](#選択肢のスタイル) を参照 (#146) |
 | `font_family` | string | No | per-game デフォルトのテキストフォント（CSS の `font-family` 文字列）。例: `"Klee One, cursive"`。省略時は runtime 既定 `'Noto Sans JP', sans-serif`。詳細は [フォント切替](#フォント切替) を参照 (#147) |
 | `font_size` | number | No | per-game デフォルトの本文フォントサイズ（px）。例: `26`（9:16 ノベル向け）。省略時は runtime 既定 `40`。引用符なしの数値で書く（`font_size: 26`）。詳細は [フォントサイズ](#フォントサイズ) を参照 (#283) |
 | `dialog_style` | string | No | 会話の描画スタイル。`"adv"`（下部 ADV 箱）/ `"novel"`（全画面ノベル）の対等 2 択。「正規デフォルト」は持たず作品ごとに明示するが、未指定・不明値は `adv` 描画にフォールバックする（壊さないため）。詳細は [会話の描画スタイル](#会話の描画スタイル) を参照 (#283) |
@@ -535,13 +535,14 @@ TUI版は上限側の防御も持つ: `列=N` が選択肢の総数を超える�
 
 ### 選択肢のスタイル
 
-frontmatter の `choice_style` で per-game に切替可能 (#146)。runtime（ChoiceOverlay）が以下の 3 種を持つ:
+frontmatter の `choice_style` で per-game に切替可能 (#146)。runtime（ChoiceOverlay）が以下の 4 種を持つ:
 
 | `choice_style` | 概要 | 想定用途 |
 |---|---|---|
 | `default` | 濃紺 + 淡水色枠、Noto Sans JP Bold、角丸 8px | 標準。動画用途で違和感なく使える落ち着き |
 | `soft` | パステルピンク + 太枠、角丸 24px、文字大きめ | 子供向け／柔らかい雰囲気のゲーム |
 | `monochrome` | 黒地白枠白文字、Noto Serif JP、角なし | シリアス／ホラー／レトロ |
+| `pixel` | 黒地白枠+暖色ホバー、monospace、角なし+ノッチ付きドット風フレーム | ピクセルアート系ゲーム（Gymnasia等）。青系色は使わない設計 |
 
 未指定 or 未知の値は `default` にフォールバックする。すべてのスタイルでホバー時に 1.05 倍スケール拡大、影レイヤ（半透明矩形）、確定時 / ホバー時に Web Audio で生成した tone を SE 系統で鳴らす（SE 音量設定と同期）。pixi-filters への依存は持たない。
 
