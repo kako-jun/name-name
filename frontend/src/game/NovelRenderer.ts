@@ -1782,10 +1782,11 @@ export class NovelRenderer {
    * 2窓モード (#444) で話者が自分側（protagonist）か相手側かを判定する。
    * 既存の protagonist 一致判定（`resolveNovelRoleXRatio`/`resolveBodyTextColor` の
    * `speaker === this.protagonist` と同じ考え方）を流用する。話者不明（ナレーション等）は
-   * 相手側（上窓）に倒す — 「自分」を名乗るのは明示的に protagonist と一致したときだけ。
+   * 自分側（下窓・白）に倒す（#549）— 相手側（上窓・水色）になるのは、protagonist と異なる
+   * 明示的な話者名（住人等）のときだけ。
    */
   private resolveDualWindowIsSelf(speaker: string | null): boolean {
-    return speaker !== null && speaker === this.protagonist
+    return speaker === null || speaker === this.protagonist
   }
 
   /**
@@ -1968,8 +1969,8 @@ export class NovelRenderer {
   /**
    * 現在の話者から本文色を決定論的に導出する (#305 / #444)。
    *  - 2窓モード（#444: split_layout + protagonist 指定）→ dialog_style（novel/adv）に関わらず
-   *    常にこちらを優先。自分（protagonist 一致）＝白（`RESIDENT_TEXT_COLOR`）、
-   *    相手（それ以外・話者不明含む）＝水色（`OPPONENT_TEXT_COLOR`）。
+   *    常にこちらを優先。自分（protagonist 一致・話者不明含む）＝白（`RESIDENT_TEXT_COLOR`）、
+   *    相手（protagonist と異なる明示的な話者のみ）＝水色（`OPPONENT_TEXT_COLOR`、#549）。
    *  - adv / protagonist 未指定 / 話者不明 → 住人色（純白）。色差しない（後方互換）。
    *  - novel かつ話者が protagonist と一致 → 主人公本文色（既定 #FFF0D8）。
    *  - それ以外（novel の住人）→ 住人色（純白）。

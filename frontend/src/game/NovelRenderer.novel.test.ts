@@ -1105,7 +1105,7 @@ describe('NovelRenderer 主人公本文色 (#305)', () => {
 //
 // #305（novel 限定・主人公=暖アイボリー/住人=白）とは別軸。2窓モードは split_layout: true +
 // protagonist: 指定時に dialog_style（novel/adv）を問わず常に優先し、自分=白（RESIDENT_TEXT_COLOR
-// を流用）・相手=水色（OPPONENT_TEXT_COLOR）に解決する。話者不明は相手側（水色）に倒す。
+// を流用）・相手=水色（OPPONENT_TEXT_COLOR）に解決する。話者不明は自分側（白）に倒す（#549）。
 interface DualWindowRendererInternals {
   isDualWindowMode(): boolean
   dialogBox: {
@@ -1131,11 +1131,11 @@ describe('NovelRenderer 2窓モード本文色解決 (#444)', () => {
     expect(internals(r).resolveBodyTextColor('ひな')).toBe(OPPONENT_COLOR)
   })
 
-  it('NR-3: 同条件で話者不明（null）は相手側に倒して水色に解決する', () => {
+  it('NR-3: 同条件で話者不明（null）は自分側に倒して白に解決する', () => {
     const r = new NovelRenderer()
     r.setProtagonist('せお')
     r.setSplitLayout(true)
-    expect(internals(r).resolveBodyTextColor(null)).toBe(OPPONENT_COLOR)
+    expect(internals(r).resolveBodyTextColor(null)).toBe(WHITE)
   })
 
   it('NR-5: 非破壊 — protagonist 未指定では split_layout:true でも2窓不成立、resolveBodyTextColor は #442 既存の白のまま', () => {
