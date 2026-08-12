@@ -1548,11 +1548,19 @@ mod tests {
     }
 
     #[test]
-    fn skip_leading_empty_scenes_is_noop_when_first_scene_already_has_content() {
+    fn skip_leading_empty_scenes_does_not_skip_line_when_first_scene_has_multiple_lines() {
         // 先頭シーンが最初からLineを持つ通常構成では、余計に1つ進めてしまわないはず
         // （「current_choice/current_lineが両方Noneのときだけ」というon_advanceのC1分岐と
         // 同じガード）。
-        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n**A**:\nこんにちは\n";
+        //
+        // 旧フィクスチャ（先頭シーンにLine1件だけ・後続シーン無し）は、ガード条件
+        // `current_choice().is_none() && current_line().is_none()` を丸ごと削除して常に
+        // `advance()` を呼ぶ変異を入れても、`advance()` 自身が「次item無し・次シーン無し」で
+        // 何もせず終わるため検出できなかった（テスト観点整理エージェント指摘、ミューテーション
+        // 生存＝実質検出力ゼロ）。先頭シーンに2行(A→B)を用意し、ガードが無いと本当にBまで
+        // 進んでしまう構成にすることで検出力を持たせる。
+        let source =
+            "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n**A**:\nこんにちは\n\n**B**:\nやあ\n";
         let document = name_name_parser::parser::parse(source);
         let mut playback = Playback::from_document(&document);
 
@@ -1561,10 +1569,136 @@ mod tests {
         assert_eq!(
             playback
                 .current_line()
-                .expect("起動シーンの台詞")
+                .expect("起動シーンの1行目")
                 .speaker
                 .as_deref(),
-            Some("A")
+            Some("A"),
+            "先頭シーンに複数行ある場合でも1行目のまま留まるはず（2行目Bへ進んでは \
+             いけない）"
+        );
+    }
+
+    #[test]
+    fn skip_leading_empty_scenes_is_noop_when_first_item_is_choice() {
+        // 決定表パターン2: current_line()がNone・current_choice()がSomeのケース。
+        // 先頭シーンの最初のitemが直接Choiceの構成では、既にguard条件
+        // `current_choice().is_none() && current_line().is_none()` を満たさないため
+        // advance()を呼ばないはず（選択肢のjump先へ勝手に進んでしまってはいけない）。
+        let source =
+            "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n[選択]\n- 進む→1-2\n[/選択]\n\n\
+                       ## 1-2: 次\n\n**B**:\n次のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+
+        assert!(playback.current_choice().is_some());
+        assert!(playback.current_line().is_none());
+
+        skip_leading_empty_scenes(&mut playback);
+
+        assert_eq!(
+            playback
+                .current_choice()
+                .expect("skip_leading_empty_scenes後も選択肢のまま")
+                .0
+                .first()
+                .expect("選択肢が1件")
+                .text,
+            "進む",
+            "選択肢の内容が変化してはいけない（jump先へ進んでしまっていないことの確認）"
+        );
+        assert!(
+            playback.current_line().is_none(),
+            "jump先(1-2)の会話行へ進んでしまってはいけない"
+        );
+    }
+
+    #[test]
+    fn skip_leading_empty_scenes_true_end_after_consecutive_empty_scenes_is_safe_noop() {
+        // 決定表パターン3c（境界値）: 空シーンが複数連続し、その後に後続シーンが無い
+        // （ドキュメントがそこで終わる）場合。`advance()`の内部スキップループが末尾まで
+        // 走り切っても行き先が無く、no-opでpanicもしないはず
+        // （`on_advance_true_end_of_document_is_safe_noop_not_panic`のskip_leading_empty_scenes版）。
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n[フラグ: A = true]\n\n\
+                       ## 1-2: 中継\n\n[フラグ: B = true]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+
+        assert!(playback.current_choice().is_none());
+        assert!(playback.current_line().is_none());
+
+        skip_leading_empty_scenes(&mut playback);
+
+        assert!(
+            playback.current_choice().is_none(),
+            "後続シーンが無い末尾ではno-opのはず（panicしない）"
+        );
+        assert!(
+            playback.current_line().is_none(),
+            "後続シーンが無い末尾ではno-opのはず（panicしない）"
+        );
+    }
+
+    #[test]
+    fn skip_leading_empty_scenes_via_merged_document_advances_within_same_file() {
+        // `from_merged_document`経由でも`from_document`と同じくガード・前進が効くことの
+        // 回帰ガード（`main()`は通常起動時に`multi_doc::load_merged_document`＋
+        // `Playback::from_merged_document`を使う経路を通る、`main()`のdoc comment参照）。
+        // 単一の`parse()`呼び出しから得た`Document`は先頭シーンも次シーンも同じ1個の
+        // Chapter（＝同じfile id）に属するため、これは「同一ファイル内前進」のケースになる。
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n[フラグ: 探索済み = true]\n\n\
+                       ## 1-2: ハブ\n\n**A**:\nおかえりなさい\n";
+        let document = name_name_parser::parser::parse(source);
+        let chapter_file_ids: Vec<usize> = vec![0; document.chapters.len()];
+        let mut playback = Playback::from_merged_document(&document, &chapter_file_ids);
+
+        assert!(playback.current_choice().is_none());
+        assert!(playback.current_line().is_none());
+
+        skip_leading_empty_scenes(&mut playback);
+
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("hubの台詞")
+                .speaker
+                .as_deref(),
+            Some("A"),
+            "from_merged_document経路でも同一ファイル内なら前進するはず"
+        );
+    }
+
+    #[test]
+    fn skip_leading_empty_scenes_via_merged_document_does_not_cross_file_boundary() {
+        // 境界値: `from_merged_document`で、先頭シーン（file 0, 空）の次シーンがfile 1
+        // （別ファイル）の場合。`on_advance_does_not_cross_file_boundary_from_empty_first_scene`
+        // と同じフィクスチャパターン（doc0/doc1を別々にparseしてから連結する = 別ファイル扱い）。
+        // ファイル境界チェックは`advance()`内部の仕組みなので、`skip_leading_empty_scenes`は
+        // 前進せず、呼び出し前と同じ「(会話行がありません)」を一瞬表示する状態
+        // （current_line()/current_choice()が両方None）が保たれなければいけない。
+        let source0 = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n[フラグ: 探索済み = true]\n";
+        let source1 = "---\nengine: name-name\n---\n\n## 2-1: ハブ\n\n**A**:\nおかえりなさい\n";
+        let mut doc0 = name_name_parser::parser::parse(source0);
+        let doc1 = name_name_parser::parser::parse(source1);
+        let chapter_file_ids: Vec<usize> = std::iter::repeat_n(0, doc0.chapters.len())
+            .chain(std::iter::repeat_n(1, doc1.chapters.len()))
+            .collect();
+        doc0.chapters.extend(doc1.chapters);
+        let document = doc0;
+        let mut playback = Playback::from_merged_document(&document, &chapter_file_ids);
+
+        assert!(playback.current_choice().is_none());
+        assert!(playback.current_line().is_none());
+
+        skip_leading_empty_scenes(&mut playback);
+
+        assert!(
+            playback.current_choice().is_none(),
+            "file1のhubへ誤って進んでしまってはいけない"
+        );
+        assert!(
+            playback.current_line().is_none(),
+            "file1のhubへ誤って進んでしまってはいけない \
+             （呼び出し前と同じ「(会話行がありません)」状態が保たれるはず）"
         );
     }
 
@@ -4868,6 +5002,61 @@ mod tests {
             Some("B"),
             "手動Advanceを一度も送らずに3連続の画像コマ(a→b→c)を経てBまで自動で \
              進んでいるはず"
+        );
+    }
+
+    #[test]
+    fn event_loop_first_frame_after_skip_leading_empty_scenes_does_not_show_placeholder() {
+        // #564統合テスト: `main()`と同じ順序（`Playback`構築 → `skip_leading_empty_scenes`
+        // 呼び出し → `event_loop`）をここで再現し、`event_loop`が実際に描画する最初の
+        // フレーム（`terminal.draw`は`next_action()`より先に実行される、ループ本体参照）が
+        // 既に「(会話行がありません)」プレースホルダーを表示していないことを確認する。
+        //
+        // `skip_leading_empty_scenes`単体のテスト（`Playback`の位置だけを見るテスト群）は
+        // 「位置が進んでいるか」までしか検証できず、それが実際に最初の描画へ反映されるか
+        // （`draw_text_windows`のフォールバック分岐を経由しないか）はカバーしない。この
+        // テストは`event_loop`本体を`TestBackend`で実際に1フレーム描画させることで、
+        // 「main()のセットアップ末尾でのみ呼ぶ想定」というdoc commentの前提（=起動直後・
+        // 最初のキー入力前の1フレームを直接カバーする）を実描画で裏取りする。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n**A**:\nおかえりなさい\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document).with_sentence_per_page(false);
+        skip_leading_empty_scenes(&mut playback);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        // `event_loop`は`terminal.draw`を`next_action()`より先に実行するため、最初の呼び出しで
+        // `Action::Quit`を返すだけで「起動直後・最初のキー入力前」のフレームがそのまま
+        // `terminal`のバッファに残る。
+        let mut next_action = move || -> anyhow::Result<Action> { Ok(Action::Quit) };
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(
+            !text.contains("会話行がありません"),
+            "skip_leading_empty_scenesを経ているので、起動直後の最初のフレームで \
+             プレースホルダーが見えてはいけない: {text:?}"
+        );
+        // このTUIはゲーム画面に話者名テキストを表示しない設計（`ui::draw_text_windows`は
+        // `line.text`のみを描画し、話者は色分け/自分側・相手側判定にのみ使う、実描画で確認
+        // 済み）。そのため「話者名が写っている」ではなく、hubシーンの実際の会話文が写って
+        // いることをもって「先頭の会話行を指した状態で描画されている」ことの確認とする。
+        assert!(
+            text.contains("おかえりなさい"),
+            "hubシーンの会話行が実際に描画されているはず: {text:?}"
         );
     }
 }
