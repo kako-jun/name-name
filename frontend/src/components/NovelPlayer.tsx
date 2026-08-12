@@ -1183,13 +1183,16 @@ function NovelPlayer({
               (`${assetBaseUrl}/images/title.png`) を流用する。TitleOverlay の imageFailed と
               同様 onError で読み込み失敗を検知するが、こちらはテキストへのフォールバックは
               せず、ロゴが無ければ単に出さない（Issue 方針。confinement 元が不明な場合に
-              誤ったテキストを出さないため）。 */}
+              誤ったテキストを出さないため）。pixelArt (#553) も TitleOverlay と同じ
+              `image-rendering: pixelated` 適用パターンを流用し、pixel_art プロジェクトで
+              このロゴが滲まないようにする。 */}
           {assetBaseUrl && !storyEndedLogoFailed && (
             <img
               src={`${assetBaseUrl}/images/title.png`}
               alt=""
               onError={() => setStoryEndedLogoFailed(true)}
               className="absolute top-3 left-3 max-w-[20%] max-h-16 object-contain select-none"
+              style={pixelArt ? { imageRendering: 'pixelated' } : undefined}
             />
           )}
           <p
