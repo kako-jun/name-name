@@ -226,6 +226,24 @@ mod tests {
     use super::*;
     use crate::config::VolumeConfig;
 
+    /// `with_stderr_suppressed`を呼ぶテスト同士を直列化するためのロック。fd 2はプロセス
+    /// 全体で共有されるグローバル状態であり、`cargo test`はデフォルトで並行実行される
+    /// ため、ロック無しでは「自テストの復元直後に、たまたま同時実行中の別テストが
+    /// 開始した一時リダイレクトを観測してしまう」誤検知が実測で発生した（フルスイート
+    /// 実行で10回に1回程度、`with_stderr_suppressed_restores_original_target_even_when_f_panics`
+    /// が原因不明のまま落ちる）。fd 2を直接触るテストは全てこのロックを取得してから
+    /// `with_stderr_suppressed`を呼ぶことで、同時に1テストだけがfd 2を操作する状態を保証する。
+    static STDERR_FD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// ロックを取得する。他テストがロック保持中にpanicしても（`catch_unwind`で握り
+    /// つぶさない限り）毒化(poisoned)しうるため、`PoisonError::into_inner`で握りつぶし、
+    /// 1テストの失敗が無関係な後続テストまで巻き込んで失敗させないようにする。
+    fn lock_stderr_fd_for_test() -> std::sync::MutexGuard<'static, ()> {
+        STDERR_FD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     // ---- #537: 起動時音量同期（`AudioPlayer::try_new` / `initial_volumes`）----
     //
     // CI環境には実オーディオデバイスが無く `OutputStream::try_default()` は常に失敗するため、
@@ -273,8 +291,9 @@ mod tests {
     fn with_stderr_suppressed_returns_closure_value() {
         // 戻り値がクロージャの結果のまま透過することを確認する（正常系）。クロージャは
         // 即座に値を返すだけでI/Oしないため実行は一瞬で終わる。本テストは実際に
-        // プロセスのfd2をdup/dup2/closeするので、他テストが同時にstderrへ書き込んで
-        // いた場合そのメッセージが理論上一瞬だけ失われうるが、実行が一瞬なので許容する。
+        // プロセスのfd2をdup/dup2/closeするので、他テストと直列化するロックを取る
+        // （`STDERR_FD_TEST_LOCK`のdoc comment参照）。
+        let _lock = lock_stderr_fd_for_test();
         assert_eq!(with_stderr_suppressed(|| 42), 42);
     }
 
@@ -282,6 +301,7 @@ mod tests {
     fn with_stderr_suppressed_preserves_non_trivial_return_types() {
         // ジェネリック`T`のパススルーが`i32`のような単純型に限らないことを、タプルと
         // `Option`（Some/None両方）という異なる形の型で確認する（同値分割）。
+        let _lock = lock_stderr_fd_for_test();
         assert_eq!(with_stderr_suppressed(|| (1, "a")), (1, "a"));
         assert_eq!(with_stderr_suppressed(|| Some(7)), Some(7));
         assert_eq!(with_stderr_suppressed(|| None::<i32>), None);
@@ -294,11 +314,12 @@ mod tests {
         // dup(退避)→dup2(devnullへ差し替え)→f()→dup2(復元)→close(退避fdを閉じる)という
         // 一連の操作で、fdを1つもリークしないことを確認する（リソースリーク・正常系）。
         //
-        // `cargo test`はデフォルトで並行実行されるため、他テストのファイルI/O等でfd数が
+        // 他テストとのfd 2直列化ロックを取ってもなお、他テストのファイルI/O等でfd数が
         // テスト実行中に多少変動しうる（フレーキー要因）。1回だけの前後差分ではノイズと
         // 本物のリークを区別しづらいため、10回連続呼び出しで増分を増幅させ、「1回あたり
         // 1個ずつ確実に漏れ続けた場合の増分(10)」よりも十分小さいことだけを確認する
         // （厳密な差分0を要求しない、ノイズ耐性のある比較方法）。
+        let _lock = lock_stderr_fd_for_test();
         let fd_count = || std::fs::read_dir("/proc/self/fd").unwrap().count();
         let before = fd_count();
         for _ in 0..10 {
@@ -311,25 +332,34 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
-    fn with_stderr_suppressed_restores_stderr_even_when_f_panics() {
-        // `f`がpanicしても`StderrGuard`の`Drop`が発火し、stderr(fd 2)が正しく復元される
-        // ことを確認する（#559 セルフレビュー指摘のフォローアップ）。`catch_unwind`で
-        // panicを外側に伝播させずに握りつぶし、その後`with_stderr_suppressed`をもう一度
-        // 正常呼び出しして「壊れていない」ことを間接的に確認する。
-        let result = std::panic::catch_unwind(|| {
-            with_stderr_suppressed(|| {
-                panic!("intentional panic to verify StderrGuard's Drop fires");
-            })
-        });
+    fn with_stderr_suppressed_restores_original_target_even_when_f_panics() {
+        // `f`がpanicしても`StderrGuard`の`Drop`が発火し、stderr(fd 2)が実際に元の
+        // ターゲットへ復元されることを確認する（#559 再レビュー指摘対応）。
+        //
+        // 以前の実装は「復元後にもう一度`with_stderr_suppressed`を正常呼び出しして
+        // 戻り値が返ること」しか見ておらず、`with_stderr_suppressed`は毎回呼び出し
+        // 時点のfd 2を基準に動くため、前回の呼び出しで復元が漏れていても後続呼び出しは
+        // 無関係に成功してしまい実質何も検証できていなかった（`StderrGuard::drop`内の
+        // 復元用`dup2`を無効化してもテストが通り続けることで実証済み）。
+        //
+        // `with_stderr_suppressed_does_not_leak_fds_on_success`と同じ方針で、
+        // `/proc/self/fd/2`のシンボリックリンク先（fd 2が指す実体）をpanic前後で
+        // 直接比較する。Linux(procfs)限定。この比較は「今fd 2が指している実体」という
+        // 瞬間値を見るため、fd数の増分で判定する上のリークテストよりも他スレッドの
+        // 一時リダイレクトに敏感で、ロック（`STDERR_FD_TEST_LOCK`）無しでは実際に
+        // 誤検知した（フルスイート実行で10回に1回程度）。
+        let _lock = lock_stderr_fd_for_test();
+        let before = std::fs::read_link("/proc/self/fd/2").unwrap();
+        let result =
+            std::panic::catch_unwind(|| with_stderr_suppressed(|| panic!("intentional panic")));
         assert!(result.is_err(), "panicがcatch_unwindで捕捉されているはず");
 
-        // 復元されていることの確認: 再度`with_stderr_suppressed`を正常呼び出しし、
-        // 戻り値が正しくパススルーされること（＝内部状態が壊れていないこと）を確認する。
-        let value = with_stderr_suppressed(|| 123);
+        let after = std::fs::read_link("/proc/self/fd/2").unwrap();
         assert_eq!(
-            value, 123,
-            "panic後もwith_stderr_suppressedが正常に機能し続けるはず"
+            after, before,
+            "panic後もstderr(fd 2)は元のターゲットへ復元されているはず"
         );
     }
 
@@ -345,6 +375,11 @@ mod tests {
         // `with_stderr_suppressed`は`StderrGuard`によるRAII cleanupのため、`f`がpanicしても
         // スタックアンワインド中に`Drop`が呼ばれてstderrは復元される（#559セルフレビュー
         // 指摘対応。以前は手続き的cleanupで復元漏れの懸念があった）。
+        //
+        // このテスト自身はfd 2の状態を厳密比較しないが、内部で`with_stderr_suppressed`が
+        // fd 2を一時的に動かすため、他テストとのfd 2直列化ロックを取る
+        // （`STDERR_FD_TEST_LOCK`のdoc comment参照）。
+        let _lock = lock_stderr_fd_for_test();
         let volume = VolumeConfig::default();
         let _ = AudioPlayer::try_new(&volume);
     }
