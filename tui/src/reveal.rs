@@ -649,6 +649,19 @@ mod tests {
     }
 
     #[test]
+    fn opts_for_line_default_opponent_color_matches_gui_hex_exactly() {
+        // config.colors.opponent の既定値 "#9ad4e8" が opts_for_line を経由して
+        // typewriter のフェード色（fade_to）にそのまま伝播することを固定する
+        // （#572 の主眼: GUI版 NovelRenderer.OPPONENT_TEXT_COLOR(0x9ad4e8) との厳密一致。
+        // セルフレビュー should 指摘）。
+        let config = Config::default();
+        // player_speakers のデフォルトは ["主格"] なので "相手" は opponent 色になる。
+        let opts = opts_for_line(&config, Some("相手"));
+        // #9ad4e8 = R:154(0x9a), G:212(0xd4), B:232(0xe8)。
+        assert_eq!(opts.fade_to, Rgb(154, 212, 232));
+    }
+
+    #[test]
     fn color_to_rgb_covers_all_named_variants() {
         assert_eq!(color_to_rgb(Color::Black), Rgb(0, 0, 0));
         assert_eq!(color_to_rgb(Color::Red), Rgb(205, 49, 49));

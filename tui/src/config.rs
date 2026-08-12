@@ -41,10 +41,10 @@ impl Default for PlaceholderConfig {
 }
 
 /// ダイアログテキストの文字色設定（色名は `ratatui::style::Color` の
-/// `FromStr` 実装が解釈できる名前を想定。例: "white", "cyan", "gray"。
+/// `FromStr` 実装が解釈できる名前を想定。例: "white", "cyan", "gray"）。
 /// `ratatui::style::Color::from_str` は `"#RRGGBB"` 形式の16進カラーコードも
 /// 直接解釈できるため、名前付き色にない任意のRGB値（例: GUI版と厳密一致させたい
-/// 色）を指定する場合はこの形式を使う。既存の名前付き色指定との後方互換は保たれる）。
+/// 色）を指定する場合はこの形式を使う。既存の名前付き色指定との後方互換は保たれる。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct ColorConfig {
