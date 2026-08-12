@@ -106,8 +106,35 @@ fn main() -> anyhow::Result<()> {
         }
     };
     let mut playback = playback.with_sentence_per_page(config.sentence_per_page);
+    skip_leading_empty_scenes(&mut playback);
 
     run(&config, &mut playback)
+}
+
+/// #564: `Playback` 構築完了直後の時点で、先頭シーンが Line/Choice/Image を1つも
+/// 持たない（フラグ設定イベントだけの `game_init` 等）場合、`current_choice()` も
+/// `current_line()` も両方 `None` のまま最初の描画フレームを迎えてしまい、
+/// 「(会話行がありません)」が一瞬見える（kako-jun実機テストで発見）。
+///
+/// `on_advance`（#558）の C1 分岐（現在位置に Line/Choice どちらも無ければ
+/// `advance()` を試みる）と同じ理屈だが、あちらはキー入力（`Action::Advance`）が
+/// 一度入ってから初めて呼ばれるため、起動直後・最初のキー入力前の1フレームは
+/// カバーできない。ここで `main()` のセットアップ末尾・`run()` 呼び出し直前に
+/// 同じ判定を1回だけ行っておくことで、最初の描画フレームが既に先頭の会話行/選択肢を
+/// 指した状態になる。
+///
+/// `advance()` は内部にスキップループを持つため（`Playback::advance` 参照）、
+/// 空シーンが複数連続していても1回の呼び出しで次に item を持つシーンまで到達する
+/// （呼び出しは1回で足りる）。`current_reveal` はまだ構築されていない
+/// （`event_loop` の冒頭でこの後の状態を見て初めて作られる）ため、ここでは
+/// `Playback` の位置を進めるだけで良い。
+///
+/// **起動時セットアップでのみ呼ぶ想定** — `event_loop` 内の通常フローには
+/// `on_advance` の C1 分岐が既にあるため、ここで二重に呼ぶ必要はない。
+fn skip_leading_empty_scenes(playback: &mut Playback) {
+    if playback.current_choice().is_none() && playback.current_line().is_none() {
+        playback.advance();
+    }
 }
 
 /// 端末を alternate screen + raw mode に切り替えて再生ループを回す。
@@ -1492,6 +1519,52 @@ mod tests {
         assert!(
             current_reveal.is_some(),
             "到達した新しい会話行のrevealが組み立てられているはず"
+        );
+    }
+
+    #[test]
+    fn skip_leading_empty_scenes_advances_past_empty_first_scene() {
+        // #564: 起動直後、まだAction::Advanceが一度も来ていない時点でも、items 0件の
+        // 先頭シーン（フラグ設定イベントだけのgame_init相当）はスキップされ、最初の
+        // 描画フレームが既に次シーンの会話行を指しているはず。
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n**A**:\nおかえりなさい\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+
+        assert!(playback.current_choice().is_none());
+        assert!(playback.current_line().is_none());
+
+        skip_leading_empty_scenes(&mut playback);
+
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("hubの台詞")
+                .speaker
+                .as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn skip_leading_empty_scenes_is_noop_when_first_scene_already_has_content() {
+        // 先頭シーンが最初からLineを持つ通常構成では、余計に1つ進めてしまわないはず
+        // （「current_choice/current_lineが両方Noneのときだけ」というon_advanceのC1分岐と
+        // 同じガード）。
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n**A**:\nこんにちは\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+
+        skip_leading_empty_scenes(&mut playback);
+
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("起動シーンの台詞")
+                .speaker
+                .as_deref(),
+            Some("A")
         );
     }
 
