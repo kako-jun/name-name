@@ -1180,6 +1180,15 @@ fn on_advance(
             *current_reveal = build_reveal_for_current(playback, config, now);
             return true;
         }
+    } else if playback.advance() {
+        // #558: current_choice()もcurrent_line()もNoneのケース（現在シーンが
+        // Line/Choice/Imageを1つも持たない、例: フラグ設定イベントだけの
+        // game_init）。Playback::advance()は内部にスキップループを持ち、
+        // 呼びさえすれば次にitemを持つシーンまで自動的に進む
+        // （playback.rs 参照）。ここで呼ばなければ、両方Noneの間ずっと
+        // on_advanceが何もしない＝キー入力が効かないまま進行不能になる。
+        *current_reveal = build_reveal_for_current(playback, config, now);
+        return true;
     }
     false
 }
