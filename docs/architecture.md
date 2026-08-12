@@ -122,7 +122,11 @@ basename が `script.md`** のもの（無ければ先頭）を選ぶ。
 #314 以降、`/play` の初期ロードでは全 .md を fetch/parse しない。初期表示は entry MD だけを読み、
 選択肢などで未ロード scene へジャンプした時点で `NovelRenderer` の missing scene resolver が
 必要な MD を追加取得する。まず `sceneId.md` と theo-hayami 形式の `theme__resident.md`
-（例: `makiya-netami` → `netami__makiya.md`）を候補にし、見つからなければ未ロード MD を順に探す。
+（例: `makiya-netami` → `netami__makiya.md`）、Gymnasia 形式の `routeNN/NN-slug.md`（#556。
+`sceneId` が `r{route番号}-{slug}` 形式のとき `route{route番号}/{slug}.md` を候補にする。例:
+`r09-01-eyes-in-the-dark` → `route09/01-eyes-in-the-dark.md`。basename だけでなくフォルダ名込みで
+一致させるのは、`02-life.md` のような同名 slug が複数 route（route01/02/05/06）に存在するため）を
+候補にし、見つからなければ未ロード MD を順に探す。
 読み込み済み doc と in-flight 読み込みはセッション中 `Map` で共有し、同一セッション内の再遷移で
 再 fetch / 再 parse しない。
 
