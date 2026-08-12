@@ -4877,6 +4877,257 @@ mod tests {
         );
     }
 
+    // ---- #565: total()のスコープを「ドキュメント全体」から「現在ファイル単位」に変更
+    // ---- したことの回帰テスト（デシジョンテーブルはIssue #565参照）
+
+    #[test]
+    fn from_merged_document_total_counts_only_current_file_scenes() {
+        // #565: total()はドキュメント全体ではなく現在ファイルの会話行だけを数えるべき。
+        // file0(route1相当)に3行、file1(route2相当)に5行を配置し、構築直後
+        // （current_scene_idxはfile0内）ではfile0の3行だけが返るはず（8ではない）。
+        let route1 = route_chapter(1, "1-1", vec!["file0-1", "file0-2", "file0-3"]);
+        let route2 = route_chapter(
+            2,
+            "2-1",
+            vec!["file1-1", "file1-2", "file1-3", "file1-4", "file1-5"],
+        );
+        let doc = document_with_chapters(vec![route1, route2]);
+        let chapter_file_ids = vec![0, 1];
+
+        let pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+        assert_eq!(
+            pb.total(),
+            3,
+            "現在シーンはfile0内なのでfile0の3行だけが分母になるはず\
+             （file1の5行を合算した8ではない）"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_cross_file_jump_invalidates_total_cache_without_flag_change() {
+        // #565の直接的な再発防止テスト。以前のtotal_cacheはgeneration（flagsの世代番号）
+        // だけをキーにしておりfile_idを見ていなかった。選択肢で別ファイルへジャンプしても
+        // flag設定イベントが無ければgenerationは変化しないため、file_idをキーに含めない
+        // 実装ではここでキャッシュヒットしてしまい、file0時点の古い値を返す事故が
+        // 起きていた（デシジョンテーブル行3）。
+        let route1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![
+                    dialog(Some("A"), vec!["file0の唯一の台詞"]),
+                    choice(vec![("file1へ", "2-1")]),
+                ],
+            )],
+        );
+        let route2 = route_chapter(2, "2-1", vec!["file1-1", "file1-2", "file1-3", "file1-4"]);
+        let doc = document_with_chapters(vec![route1, route2]);
+        let chapter_file_ids = vec![0, 1];
+
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+
+        // ジャンプ前にtotal()を複数回呼びキャッシュをプライムする。
+        let total_before_first = pb.total();
+        let total_before_second = pb.total();
+        assert_eq!(
+            total_before_first, 1,
+            "file0は台詞1件だけのはず（直後のChoiceはカウント対象外）"
+        );
+        assert_eq!(
+            total_before_first, total_before_second,
+            "キャッシュヒットでも値は変わらないはず"
+        );
+        let generation_before = pb.flags.generation();
+
+        assert!(
+            pb.advance(),
+            "台詞 -> Choiceへは同一ファイル内の前進なので進めるはず"
+        );
+        assert!(
+            pb.select_current_choice(),
+            "file1(2-1)への明示的なjumpは成功するはず（選択肢によるクロスファイル\
+             遷移はファイル境界チェックの対象外）"
+        );
+        assert_eq!(
+            pb.flags.generation(),
+            generation_before,
+            "この選択肢にはflag設定イベントが無いので世代番号は変化しないはず\
+             （generationだけをキャッシュキーにしていた旧実装では、この後のtotal()が\
+             誤ってキャッシュヒットしてfile0時点の古い値1を返してしまっていた）"
+        );
+
+        assert_eq!(
+            pb.total(),
+            4,
+            "generationが不変でもfile_idがfile0からfile1に変わったので再スキャンされ、\
+             file1の4行が返るはず（file0時点の古いキャッシュ値1ではない）"
+        );
+    }
+
+    #[test]
+    fn from_document_total_matches_pre_565_behavior_for_single_file() {
+        // 非退行確認: from_document（単一ファイル、全itemが合成file id 0）では、
+        // #565のスコープ絞り込みが実質無効化され、絞り込み導入前と同じ
+        // 「ドキュメント全体の会話行総数」がそのまま返るはず。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![dialog(Some("A"), vec!["a1"]), dialog(Some("A"), vec!["a2"])],
+                ),
+                scene("1-2", vec![dialog(Some("B"), vec!["b1"])]),
+            ],
+        );
+        let ch2 = chapter(
+            2,
+            vec![scene(
+                "2-1",
+                vec![
+                    dialog(Some("C"), vec!["c1"]),
+                    dialog(Some("C"), vec!["c2"]),
+                    dialog(Some("C"), vec!["c3"]),
+                ],
+            )],
+        );
+        let doc = document_with_chapters(vec![ch1, ch2]);
+        let pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.total(),
+            6,
+            "単一ファイル構成(from_document)では全シーンが同じ合成file id 0を持つため、\
+             #565のスコープ絞り込みは実質無効化され、従来どおりドキュメント全体の\
+             会話行総数(2+1+3=6)が返るはず"
+        );
+    }
+
+    #[test]
+    fn total_on_from_lines_returns_zero_without_panic() {
+        // 境界値: from_lines()はscene_orderを持たない（常に空、from_lines自身のdoc comment
+        // 参照）ため、current_scene_idxが指すシーンを特定できない。total()はこのケースで
+        // panicせず0を返すはず（スキャン対象のシーンが1つも無い扱い）。
+        let pb = Playback::from_lines(vec![
+            dline(Some("A"), vec!["1行目"]),
+            dline(Some("B"), vec!["2行目"]),
+        ]);
+        assert_eq!(
+            pb.total(),
+            0,
+            "scene_orderが空で現在ファイルを特定できないため0が返るはず（panicしない）"
+        );
+    }
+
+    #[test]
+    fn from_document_with_zero_chapters_total_returns_zero() {
+        // 境界値: chaptersが0件のドキュメントではscene_orderも空になるため、
+        // total()は0を返すはず。
+        let doc = document_with_chapters(vec![]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.total(), 0);
+    }
+
+    #[test]
+    fn total_cache_hit_returns_same_value_when_nothing_changes_in_multi_file_doc() {
+        // デシジョンテーブル行2の複数ファイル版: generation・file_idともに不変な連続
+        // 呼び出しはキャッシュヒットし、実プレイ状態（flags/position/items）を変えずに
+        // 同じ値を返すはず。
+        let route1 = route_chapter(1, "1-1", vec!["file0-1", "file0-2"]);
+        let route2 = route_chapter(2, "2-1", vec!["file1-1"]);
+        let doc = document_with_chapters(vec![route1, route2]);
+        let chapter_file_ids = vec![0, 1];
+        let pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+
+        let generation_before = pb.flags.generation();
+        let position_before = pb.position();
+        let items_len_before = pb.items.len();
+
+        let total_first = pb.total();
+        let total_second = pb.total();
+
+        assert_eq!(total_first, 2, "現在シーンはfile0内なのでfile0の2行のはず");
+        assert_eq!(
+            total_first, total_second,
+            "何も変化していない連続呼び出しは同じ値を返すはず"
+        );
+        assert_eq!(
+            pb.flags.generation(),
+            generation_before,
+            "total()の呼び出しがflagsのgenerationを変えてはならない"
+        );
+        assert_eq!(
+            pb.position(),
+            position_before,
+            "total()の呼び出しが実プレイのposition()を変えてはならない"
+        );
+        assert_eq!(
+            pb.items.len(),
+            items_len_before,
+            "total()の呼び出しが実プレイのitemsを追記してはならない"
+        );
+    }
+
+    #[test]
+    fn total_cache_invalidates_when_flag_changes_within_same_file_in_multi_file_doc() {
+        // デシジョンテーブル行4（同一ファイル内でflagが変化）の複数ファイル版。
+        // scene構成・期待値はtotal_reflects_real_play_flags_and_cache_invalidates_when_flags_change
+        // と同じ（route-bのcondition評価がroute-aのflag設定より先にscanされる、という
+        // total()の独立スキャンの性質を利用）で、file1(route2相当)を追加している点だけが
+        // 異なる。file_idは不変のままgenerationだけが変化してもキャッシュが正しく
+        // 無効化されること、かつfile1の行が誤って合算されないこと（多重の絞り込み）を
+        // 同時に確認する。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "route-b",
+                    vec![
+                        dialog(Some("Intro"), vec!["導入"]),
+                        condition_event("seen_a", vec![dialog(Some("B2"), vec!["Aを見た後"])]),
+                    ],
+                ),
+                scene(
+                    "route-a",
+                    vec![
+                        dialog(Some("A"), vec!["ルートA"]),
+                        flag_event("seen_a", true),
+                    ],
+                ),
+            ],
+        );
+        let route2 = route_chapter(2, "2-1", vec!["file1-1"]);
+        let doc = document_with_chapters(vec![ch1, route2]);
+        let chapter_file_ids = vec![0, 1];
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+
+        let total_before = pb.total();
+        assert_eq!(
+            total_before, 2,
+            "route-b条件評価時点ではseen_aが未設定なのでIntro + Aの2行のはず\
+             （B2は含まれず、file1の行も合算されない）"
+        );
+
+        let generation_before = pb.flags.generation();
+        assert!(
+            pb.advance(),
+            "Intro -> シーン境界を越えてroute-aのAへ進めるはず（同一ファイル内なので\
+             file境界チェックには引っかからない）"
+        );
+        assert_ne!(
+            pb.flags.generation(),
+            generation_before,
+            "advance()でroute-aのEvent::Flagが実行されたので世代番号が進むはず"
+        );
+
+        let total_after = pb.total();
+        assert_eq!(
+            total_after, 3,
+            "seen_aが立った後はB2もカウントに含まれ3行になるはず（file_idはfile0の\
+             ままなので世代番号の変化だけでキャッシュが再スキャンされたことの確認、\
+             file1の1行は依然として合算されない）"
+        );
+    }
+
     #[test]
     fn condition_treats_string_and_number_flag_values_as_truthy_when_present_via_playback() {
         // セルフレビュー対応（#509）: `GameFlags::check`のString/Number分岐
