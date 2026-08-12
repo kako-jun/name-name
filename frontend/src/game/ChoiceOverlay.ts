@@ -8,8 +8,7 @@
  *   - default:    現行ベースの濃紺＋淡い水色枠。動画用途で違和感なく使える落ち着き
  *   - soft:       パステルピンクの子供向け。柔らかい角丸＋太字
  *   - monochrome: 黒地白枠白文字のシリアス系。Noto Serif JP
- *   - pixel:      黒地＋白/暖色枠のドット絵系 (#562)。角丸なし＋4隅が階段状に切り欠かれた
- *                 「ノッチ付きフレーム」で、レトロなピクセルアートのウィンドウ枠を表現する
+ *   - pixel:      黒地＋白/暖色枠のドット絵系 (#562)。角丸なしの単純な直角矩形 (#569)
  *
  * pixi-filters への依存は避けるため、影は半透明黒の矩形を背面に重ねて表現する。
  */
@@ -64,18 +63,6 @@ const GRID_HORIZONTAL_MARGIN = 24
  * 仕様の約束と矛盾するため採らず、下限クランプ自体を撤廃して fitWidth をそのまま使う
  * （列数が多いほどボタンは細くなるが、必ず利用可能幅に収まる）。
  */
-/**
- * pixel スタイル (#562) のノッチ付きフレームで、各角を切り欠くサイズ (px)。
- * 2 段の階段（{@link buildPixelNotchPoints} 参照）で、1 段あたり半分 (NOTCH/2) ずつ食い込む。
- * CHOICE_REGION_MIN_BUTTON_WIDTH (160px) / BUTTON_HEIGHT (52px) のどちらよりも十分小さく、
- * 最小幅の領域でも隣接する角のノッチ同士が重ならない値を選んでいる。
- *
- * #566: 旧値 6px（1段=half=3px）は pixel テーマの borderWidth（4px）より細く、太いストローク
- * が短い階段セグメントを覆い隠して角が丸く見えてしまっていた（実機確認で発覚）。
- * 16px（1段=half=8px）に拡大し、borderWidth の 2 倍の余裕を持たせて階段が視認できるようにする。
- */
-const PIXEL_NOTCH_SIZE = 16
-
 export type ChoiceStyleName = 'default' | 'soft' | 'monochrome' | 'pixel'
 
 interface ChoiceTheme {
@@ -96,13 +83,6 @@ interface ChoiceTheme {
   radius: number
   shadowColor: number
   shadowAlpha: number
-  /**
-   * ボタン枠の描画方式 (#562)。
-   * - 'rounded':  従来どおり roundRect + stroke（radius=0 でも角は直角の滑らかなベクター矩形）
-   * - 'notched':  4隅を階段状に切り欠いたピクセルアート風フレーム（{@link buildPixelNotchPoints}）
-   * 名前ベースの分岐（`style === 'pixel'` 等）を避け、テーマ側の明示フィールドで切り替える。
-   */
-  frameStyle: 'rounded' | 'notched'
 }
 
 interface ChoiceVisual {
@@ -130,7 +110,6 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     radius: 8,
     shadowColor: 0x000000,
     shadowAlpha: 0.45,
-    frameStyle: 'rounded',
   },
   // 子供向けバリエーション。パステルピンクで丸み強め＋太字
   soft: {
@@ -151,7 +130,6 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     radius: 24,
     shadowColor: 0xff8fa3,
     shadowAlpha: 0.35,
-    frameStyle: 'rounded',
   },
   // モノクロ＝シリアス系。明朝で可読性を上げる
   monochrome: {
@@ -172,12 +150,13 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     radius: 0,
     shadowColor: 0xffffff,
     shadowAlpha: 0.15,
-    frameStyle: 'rounded',
   },
   // ドット絵系 (#562)。Gymnasia 向け: 青は端末/遠隔AIの識別色として予約されているため使わない。
   // 黒地＋白枠を基本に、ホバーはろうそくの灯りを思わせる薄黄〜橙のアクセントを付ける。
   // フォントはこのプレイヤー側で DotGothic16 を読み込んでいる箇所が無いため monospace にフォールバック
   // （docs/design 側の決定は 'DotGothic16, monospace'。読み込み箇所ができたら揃える）。
+  // #569: ノッチ付きフレームを撤去し角丸なしの単純な直角矩形に変更。影も不要なため shadowAlpha=0。
+  // borderWidth も default/monochrome と同じ 2 に揃える（追加要望）。
   pixel: {
     fillNormal: 0x000000,
     fillHover: 0x241800,
@@ -187,7 +166,7 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     borderHover: 0xffd280,
     borderRead: 0x888888,
     borderReadHover: 0xd9a86c,
-    borderWidth: 4,
+    borderWidth: 2,
     textColor: 0xffffff,
     textReadColor: 0xc9c2b0,
     fontFamily: 'monospace',
@@ -195,87 +174,8 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fontSize: 20,
     radius: 0,
     shadowColor: 0xffd280,
-    shadowAlpha: 0.25,
-    frameStyle: 'notched',
+    shadowAlpha: 0,
   },
-}
-
-/**
- * pixel スタイル (#562) の「段差ノッチ入り矩形」の輪郭点を組み立てる純粋関数。
- *
- * 4隅を直線の斜めカットではなく、2段の階段（水平・垂直線のみ）で切り欠く。斜め線は
- * ベクター描画のアンチエイリアスでグレーの滲みが出てしまいドット感を壊すため、意図的に
- * 軸に沿った線分だけで構成している（レトロなJRPGのメッセージウィンドウ枠を参照）。
- *
- * @param offsetX 矩形左上のX座標（呼び出し側の描画開始位置。影レイヤは SHADOW_OFFSET 分ずらす）
- * @param offsetY 矩形左上のY座標
- * @param width   矩形の幅
- * @param height  矩形の高さ
- * @param notch   角の切り欠きサイズ (px)。2段の階段はそれぞれ notch/2 ずつ食い込む
- * @returns `Graphics.poly()` にそのまま渡せるフラットな [x0, y0, x1, y1, ...] 配列
- */
-export function buildPixelNotchPoints(
-  offsetX: number,
-  offsetY: number,
-  width: number,
-  height: number,
-  notch: number
-): number[] {
-  const half = notch / 2
-  const x0 = offsetX
-  const y0 = offsetY
-  const x1 = offsetX + width
-  const y1 = offsetY + height
-  return [
-    // 左上コーナー（下から右へ2段階段）
-    x0,
-    y0 + notch,
-    x0 + half,
-    y0 + notch,
-    x0 + half,
-    y0 + half,
-    x0 + notch,
-    y0 + half,
-    x0 + notch,
-    y0,
-    // 上辺
-    x1 - notch,
-    y0,
-    // 右上コーナー
-    x1 - half,
-    y0,
-    x1 - half,
-    y0 + half,
-    x1,
-    y0 + half,
-    x1,
-    y0 + notch,
-    // 右辺
-    x1,
-    y1 - notch,
-    // 右下コーナー
-    x1,
-    y1 - half,
-    x1 - half,
-    y1 - half,
-    x1 - half,
-    y1,
-    x1 - notch,
-    y1,
-    // 下辺
-    x0 + notch,
-    y1,
-    // 左下コーナー
-    x0 + half,
-    y1,
-    x0 + half,
-    y1 - half,
-    x0,
-    y1 - half,
-    x0,
-    y1 - notch,
-    // 左辺は呼び出し側 (drawFrame) が g.poly(points, true) の close=true で先頭点へ戻す
-  ]
 }
 
 /**
@@ -668,31 +568,12 @@ export class ChoiceOverlay extends Container {
   }
 
   /**
-   * ボタン（または影）の輪郭パスを `g` に積む (#562)。fill()/stroke() は呼び出し側の責務。
-   * `theme.frameStyle` で分岐: 'rounded' は従来の roundRect、'notched' は pixel スタイルの
-   * ノッチ付きフレーム（{@link buildPixelNotchPoints}）。offsetX/offsetY は影レイヤの
-   * SHADOW_OFFSET ずらしと、通常ボタンの (0, 0) 起点の両方に対応するための引数。
+   * ボタン（または影）の輪郭パスを `g` に積む。fill()/stroke() は呼び出し側の責務。
+   * offsetX/offsetY は影レイヤの SHADOW_OFFSET ずらしと、通常ボタンの (0, 0) 起点の
+   * 両方に対応するための引数。pixel テーマは radius=0 のため、これで単純な直角矩形になる (#569)。
    */
   private drawFrame(g: Graphics, theme: ChoiceTheme, offsetX: number, offsetY: number): void {
-    if (theme.frameStyle === 'notched') {
-      // Graphics.poly() の第2引数(close)は ShapePath 内部で Polygon.closePath に代入されるが、
-      // pixi.js のストローク描画（buildContextBatches の addShapePathToGeometryData）は
-      // `shape.closePath ?? true` で undefined を true にフォールバックするため、
-      // 省略時と明示時とで実際の描画結果に差は出ない。ここでは pixi.js 自身の内部実装
-      // （regularPoly/star/roundPoly 等）にならい、意図を明示するため true を明示的に渡す。
-      g.poly(
-        buildPixelNotchPoints(
-          offsetX,
-          offsetY,
-          this.layoutButtonWidth,
-          BUTTON_HEIGHT,
-          PIXEL_NOTCH_SIZE
-        ),
-        true
-      )
-    } else {
-      g.roundRect(offsetX, offsetY, this.layoutButtonWidth, BUTTON_HEIGHT, theme.radius)
-    }
+    g.roundRect(offsetX, offsetY, this.layoutButtonWidth, BUTTON_HEIGHT, theme.radius)
   }
 
   private drawButton(
