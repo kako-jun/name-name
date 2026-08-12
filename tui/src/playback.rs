@@ -2269,6 +2269,483 @@ mod tests {
     }
 
     #[test]
+    fn select_current_choice_auto_continues_through_chained_relay_scenes() {
+        // #574: 中継シーンが2連続で連なっていても(A中継→B中継→実内容)、1回の呼び出しで
+        // 実内容シーンまで到達するはず(単発の中継だけでなく連鎖にも対応することの確認)。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "start",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "relay_a")]),
+                    ],
+                ),
+                scene(
+                    "relay_a",
+                    vec![
+                        flag_event("seen_relay_a", true),
+                        choice(vec![("続ける", "relay_b")]),
+                    ],
+                ),
+                scene(
+                    "relay_b",
+                    vec![
+                        flag_event("seen_relay_b", true),
+                        choice(vec![("続ける", "hub")]),
+                    ],
+                ),
+                scene("hub", vec![dialog(Some("B"), vec!["hubに戻った"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(
+            pb.current_line()
+                .expect("2段の中継を自動通過した先の台詞")
+                .speaker
+                .as_deref(),
+            Some("B"),
+            "中継シーンが2連続でも1回の呼び出しで実内容(hub)まで到達するはず"
+        );
+        assert_eq!(pb.current_choice(), None);
+    }
+
+    #[test]
+    fn select_current_choice_falls_through_zero_item_scene_unaffected_by_relay_logic() {
+        // 境界値回帰: Line/Imageなし・選択肢も0件(Flagのみ)のシーンは、今回追加した
+        // 中継自動継続ロジックの対象外(items.len() > startにすら入らない)であり、
+        // 既存の0件フォールスルー(scene_idx+1へ進む)がそのまま機能し続けるはず。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "start",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "flagonly")]),
+                    ],
+                ),
+                scene("flagonly", vec![flag_event("only_flag", true)]),
+                scene("real", vec![dialog(Some("B"), vec!["実内容"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(
+            pb.current_line()
+                .expect("フォールスルー先の台詞")
+                .speaker
+                .as_deref(),
+            Some("B"),
+            "0件シーン(Flagのみ)は中継ロジックに触れず、既存のフォールスルーでrealまで進むはず"
+        );
+    }
+
+    /// `count`個の純粋な中継シーン(`{prefix}_0`..`{prefix}_{count-1}`)を連鎖させ、最後の
+    /// シーンの選択肢は`final_target`へjumpする。#574のRELAY_HOP_LIMIT境界値テスト群で
+    /// 使う(100個・101個規模の原稿を手書きする代わりに機械的に生成する)。
+    fn relay_chain_scenes(prefix: &str, count: usize, final_target: &str) -> Vec<Scene> {
+        (0..count)
+            .map(|i| {
+                let id = format!("{prefix}_{i}");
+                let next = if i + 1 < count {
+                    format!("{prefix}_{}", i + 1)
+                } else {
+                    final_target.to_string()
+                };
+                scene(
+                    &id,
+                    vec![
+                        flag_event(&format!("seen_{id}"), true),
+                        choice(vec![("続ける", &next)]),
+                    ],
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn select_current_choice_completes_chain_of_exactly_hop_limit_relay_scenes() {
+        // RELAY_HOP_LIMIT境界値(=100): ちょうど100個の中継シーンを連鎖させても、
+        // 1回のselect_current_choice呼び出しだけで実内容シーンまで完走するはず。
+        let mut scenes = vec![scene(
+            "start",
+            vec![
+                dialog(Some("A"), vec!["どうする？"]),
+                choice(vec![("進む", "relay_0")]),
+            ],
+        )];
+        scenes.extend(relay_chain_scenes("relay", 100, "hub"));
+        scenes.push(scene("hub", vec![dialog(Some("B"), vec!["hubに戻った"])]));
+        let doc = document_with_chapters(vec![chapter(1, scenes)]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(
+            pb.current_line()
+                .expect("100連鎖の先の台詞")
+                .speaker
+                .as_deref(),
+            Some("B"),
+            "ちょうど100個の中継シーンは1回の呼び出しで完走するはず(境界=100)"
+        );
+        assert_eq!(pb.current_choice(), None);
+    }
+
+    #[test]
+    fn select_current_choice_stops_one_hop_past_relay_hop_limit() {
+        // RELAY_HOP_LIMIT境界値(+1=101): 101個目の中継シーンでは自動継続が打ち切られ、
+        // そのシーン自身のChoiceが表示されて止まるはず。もう一度呼べば残りが進む。
+        let mut scenes = vec![scene(
+            "start",
+            vec![
+                dialog(Some("A"), vec!["どうする？"]),
+                choice(vec![("進む", "relay_0")]),
+            ],
+        )];
+        scenes.extend(relay_chain_scenes("relay", 101, "hub"));
+        scenes.push(scene("hub", vec![dialog(Some("B"), vec!["hubに戻った"])]));
+        let doc = document_with_chapters(vec![chapter(1, scenes)]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+
+        assert!(pb.select_current_choice(), "最初のjump自体は成功するはず");
+
+        let (options, _, _) = pb
+            .current_choice()
+            .expect("101番目の中継シーン(relay_100)自身のChoiceで停止するはず");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].text, "続ける");
+
+        assert!(
+            pb.select_current_choice(),
+            "もう一度呼べば残りのhopが進み、hubまで到達するはず"
+        );
+        assert_eq!(
+            pb.current_line()
+                .expect("2回目の呼び出しで到達した台詞")
+                .speaker
+                .as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn select_current_choice_stops_at_relay_hop_limit_on_self_referential_cycle() {
+        // 自己参照1ホップ中継(自分自身にjumpし続ける原稿ミス)が延々循環せず、
+        // RELAY_HOP_LIMITでクラッシュせず停止することの確認。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "start",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "loop_self")]),
+                    ],
+                ),
+                scene(
+                    "loop_self",
+                    vec![
+                        flag_event("looped", true),
+                        choice(vec![("続ける", "loop_self")]),
+                    ],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+
+        assert!(
+            pb.select_current_choice(),
+            "最初のjump自体は成功するはず(無限ループせずRELAY_HOP_LIMITで打ち切って戻ってくる)"
+        );
+
+        let (options, _, _) = pb
+            .current_choice()
+            .expect("自己参照中継はRELAY_HOP_LIMITで打ち切られ自身のChoiceで停止するはず");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].jump, "loop_self");
+    }
+
+    #[test]
+    fn select_current_choice_stops_when_relay_target_scene_id_is_missing() {
+        // 異常系: 中継シーンの唯一の選択肢がさらにjumpする先のIDが原稿ミスで
+        // 存在しない場合、この呼び出し自体は成功(true)を返す(最初のjumpは成功して
+        // いるため)が、中継シーン自身のChoice(1件)がそのまま表示されて停止するはず。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "start",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "relay")]),
+                    ],
+                ),
+                scene(
+                    "relay",
+                    vec![
+                        flag_event("seen_relay", true),
+                        choice(vec![("続ける", "does-not-exist")]),
+                    ],
+                ),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+
+        assert!(
+            pb.select_current_choice(),
+            "最初のjump(start→relay)自体は成功しているのでtrueを返すはず"
+        );
+
+        let (options, _, _) = pb
+            .current_choice()
+            .expect("relayシーン自身のChoiceで停止するはず(jump先のscene idが存在しないため)");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].text, "続ける");
+    }
+
+    #[test]
+    fn select_current_choice_relay_across_file_boundary_resets_bgm_and_event_image() {
+        // #574の中継自動継続が別ファイルへjumpする場合も、#528/#540のリークガード
+        // (BGM/イベント絵/暗転/pending_se/話者・本文のリセット)が適用されるはず。
+        // "start"→"relay"は同一ファイル内(ここではリセットは発火しない)、
+        // "relay"の唯一の選択肢が別ファイルの"hub"へjumpする箇所で発火することを確認する。
+        let route1 = chapter(
+            1,
+            vec![
+                scene(
+                    "start",
+                    vec![
+                        Event::Bgm {
+                            path: Some("a.ogg".to_string()),
+                            action: BgmAction::Play,
+                            fade_ms: None,
+                        },
+                        event_image("route1/scene.webp"),
+                        Event::Blackout {
+                            action: name_name_parser::models::BlackoutAction::On,
+                        },
+                        dialog(Some("A"), vec!["ルート1: 最後の台詞"]),
+                        choice(vec![("進む", "relay")]),
+                    ],
+                ),
+                scene(
+                    "relay",
+                    vec![
+                        flag_event("seen_relay", true),
+                        choice(vec![("続ける", "hub")]),
+                        se("orphan.wav"),
+                    ],
+                ),
+            ],
+        );
+        let hub = chapter(
+            2,
+            vec![scene("hub", vec![dialog(Some("施設"), vec!["定期報告"])])],
+        );
+        let doc = document_with_chapters(vec![route1, hub]);
+        let chapter_file_ids = vec![0, 1];
+
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+        assert!(pb.advance());
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        assert!(pb.is_blackout());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").text,
+            vec!["定期報告".to_string()]
+        );
+        assert_eq!(
+            pb.current_bgm(),
+            None,
+            "中継シーンがファイル境界を越えてjumpしたのでBGMはリセットされるはず\
+             (#528の保護が中継hopにも適用される)"
+        );
+        assert!(
+            !pb.is_blackout(),
+            "中継シーンがファイル境界を越えてjumpしたので暗転状態はリセットされるはず"
+        );
+        assert_eq!(
+            pb.current_line().unwrap().event_image,
+            None,
+            "中継シーンがファイル境界を越えてjumpしたのでイベント絵はリセットされるはず"
+        );
+        assert!(
+            pb.current_se_cues().is_empty(),
+            "中継シーンがファイル境界を越えてjumpしたのでpending_se(orphan.wav)は\
+             引き継がれないはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_relay_preserves_bgm_across_hops_within_same_file() {
+        // 同一file内の中継連鎖では、#528/#540のリセットは発火せず、BGM/イベント絵/
+        // 暗転が意図的に持ち越されるはず(中継先へのファイル境界を越えないジャンプは
+        // 通常のシーン間ジャンプと同じ「引き継ぐ」規約であることの確認)。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "start",
+                    vec![
+                        Event::Bgm {
+                            path: Some("a.ogg".to_string()),
+                            action: BgmAction::Play,
+                            fade_ms: None,
+                        },
+                        event_image("route1/mid.webp"),
+                        Event::Blackout {
+                            action: name_name_parser::models::BlackoutAction::On,
+                        },
+                        dialog(Some("A"), vec!["中間の台詞"]),
+                        choice(vec![("進む", "relay")]),
+                    ],
+                ),
+                scene(
+                    "relay",
+                    vec![
+                        flag_event("seen_relay", true),
+                        choice(vec![("続ける", "hub")]),
+                    ],
+                ),
+                scene("hub", vec![dialog(Some("B"), vec!["hubに戻った"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let chapter_file_ids = vec![0];
+
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+        assert!(pb.advance());
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        assert!(pb.is_blackout());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").text,
+            vec!["hubに戻った".to_string()]
+        );
+        assert_eq!(
+            pb.current_bgm(),
+            Some("a.ogg"),
+            "同一ファイル内の中継hopではBGMがリセットされず引き継がれるはず"
+        );
+        assert!(
+            pb.is_blackout(),
+            "同一ファイル内の中継hopでは暗転状態もリセットされず引き継がれるはず"
+        );
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("route1/mid.webp"),
+            "同一ファイル内の中継hopではイベント絵もリセットされず引き継がれるはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_after_relay_auto_continue_is_idempotent_when_landed_on_real_content() {
+        // 冪等性: 自動継続後に実内容シーンへ着地した状態でもう一度select_current_choice()
+        // を呼んでも、現在位置は選択肢ではなく台詞(Line)なので何も起きずfalseを返すはず。
+        let doc = hub_gate_relay_doc();
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert!(pb.select_current_choice());
+        let line_before = pb.current_line().expect("hubの台詞").clone();
+
+        assert!(
+            !pb.select_current_choice(),
+            "着地先が実内容(台詞)のとき、再度呼んでもfalseを返すはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("状態が変わっていないはず"),
+            &line_before,
+            "2回目の呼び出しで状態が変化してはいけない"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_relay_truncate_keeps_all_parallel_vecs_length_equal() {
+        // 並行vec整合性: 中継シーンをまたいだ後もitems/item_file_ids/item_wait_ms/
+        // item_blackout/item_bgm/item_se/item_scene_key/item_content_hashが
+        // 常に同じ長さを保っているはず(truncate/pushの操作が全vecで揃っていることの
+        // 明示的なアサーション)。
+        let doc = hub_gate_relay_doc();
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert!(pb.select_current_choice());
+
+        let len = pb.items.len();
+        assert_eq!(pb.item_file_ids.len(), len);
+        assert_eq!(pb.item_wait_ms.len(), len);
+        assert_eq!(pb.item_blackout.len(), len);
+        assert_eq!(pb.item_bgm.len(), len);
+        assert_eq!(pb.item_se.len(), len);
+        assert_eq!(pb.item_scene_key.len(), len);
+        assert_eq!(pb.item_content_hash.len(), len);
+    }
+
+    #[test]
+    fn select_current_choice_relay_lands_on_zero_item_scene_then_falls_through() {
+        // 相互作用: 中継の唯一の選択肢のjump先が「0件シーン(Flagのみ)」だった場合、
+        // 中継ループを正しく抜けて既存の0件フォールスルー(scene_idx+1方向)に乗り換え、
+        // 最終的に正しい実内容シーンまで到達するはず。
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "start",
+                    vec![
+                        dialog(Some("A"), vec!["どうする？"]),
+                        choice(vec![("進む", "relay")]),
+                    ],
+                ),
+                scene(
+                    "relay",
+                    vec![
+                        flag_event("seen_relay", true),
+                        choice(vec![("続ける", "empty")]),
+                    ],
+                ),
+                scene("empty", vec![]),
+                scene("real", vec![dialog(Some("B"), vec!["実内容"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(
+            pb.current_line()
+                .expect("フォールスルー先の台詞")
+                .speaker
+                .as_deref(),
+            Some("B"),
+            "中継の着地先が0件シーンでも、既存のフォールスルーに正しく乗り換えてrealまで進むはず"
+        );
+        assert_eq!(pb.current_choice(), None);
+    }
+
+    #[test]
     fn move_choice_cursor_clamps_at_both_ends_without_wrapping() {
         let ch1 = chapter(
             1,
