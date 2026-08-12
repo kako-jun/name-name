@@ -2212,9 +2212,15 @@ export class NovelRenderer {
   /**
    * 既読永続化キーを設定する (#140)。
    * 設定するとスキップモードが有効になり、既読進捗を localStorage から読み込む。
+   *
+   * SaveManager のセーブキー名前空間も同じ docKey に切り替える (#578)。saveLoadOverlay は
+   * コンストラクタで this.saveManager への参照を保持したまま渡されているため、ここでは
+   * インスタンスを差し替えず（差し替えると saveLoadOverlay 側が古い docKey のままの
+   * インスタンスを握り続けてしまう）、SaveManager.setDocKey() で内部の docKey だけ更新する。
    */
   setDocKey(docKey: string): void {
     this.docKey = docKey
+    this.saveManager.setDocKey(docKey)
     this.reloadReadProgress()
   }
 

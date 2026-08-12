@@ -4,6 +4,11 @@
  * localStorage を使い、複数スロット（3つ）のセーブデータを管理する。
  * JSON エクスポート/インポートによるブラウザ間の持ち運びにも対応。
  * クイックセーブ（#142）は専用キーで通常スロットとは独立して保存する。
+ *
+ * キーは docKey（プロジェクト名）で名前空間化する（#578）。`/play/:projectName` で
+ * 複数プロジェクトが同一オリジンを共有するため、docKey が無いと別ゲームのセーブを
+ * 上書きしてしまう。旧グローバルキーからのマイグレーションは行わない（個人開発の
+ * 私的プロジェクトのため、既存セーブが消えても許容範囲）。
  */
 
 import { FlagValue } from '../types'
@@ -11,8 +16,8 @@ import { BackgroundFade, EventImageState, VideoState } from './GameState'
 
 const SLOT_COUNT = 3
 const STORAGE_PREFIX = 'name-name-save-'
-/** クイックセーブ専用ストレージキー (#142) */
-const QUICK_SAVE_KEY = 'name-name-save-quick'
+/** クイックセーブ専用ストレージキーのサフィックス (#142) */
+const QUICK_SAVE_SUFFIX = 'quick'
 
 export interface SaveSlotData {
   slot: number
@@ -63,12 +68,40 @@ export interface SaveSlotData {
 
 export class SaveManager {
   /**
+   * セーブキーの名前空間 (#578)。`/play/:projectName` で複数プロジェクトが同一オリジンを
+   * 共有するため、docKey ごとにキーを分離しないとあるゲームのセーブが別ゲームを上書きする。
+   * NovelRenderer はフィールド初期化子で docKey 未確定のまま生成するため、コンストラクタ引数は
+   * 省略可能（既定は空文字列）にし、`setDocKey()` で後から確定させられるようにする。
+   */
+  private docKey: string
+
+  constructor(docKey = '') {
+    this.docKey = docKey
+  }
+
+  /**
+   * セーブの名前空間となる docKey を設定する。
+   * NovelRenderer.setDocKey() からプロジェクト確定時に呼ばれる。
+   */
+  setDocKey(docKey: string): void {
+    this.docKey = docKey
+  }
+
+  private slotKey(slot: number): string {
+    return `${STORAGE_PREFIX}${this.docKey}-${slot}`
+  }
+
+  private quickKey(): string {
+    return `${STORAGE_PREFIX}${this.docKey}-${QUICK_SAVE_SUFFIX}`
+  }
+
+  /**
    * 指定スロットにセーブデータを保存する
    */
   save(slot: number, data: SaveSlotData): void {
     if (slot < 0 || slot >= SLOT_COUNT) return
     const json = JSON.stringify(data)
-    localStorage.setItem(`${STORAGE_PREFIX}${slot}`, json)
+    localStorage.setItem(this.slotKey(slot), json)
   }
 
   /**
@@ -76,7 +109,7 @@ export class SaveManager {
    */
   load(slot: number): SaveSlotData | null {
     if (slot < 0 || slot >= SLOT_COUNT) return null
-    const json = localStorage.getItem(`${STORAGE_PREFIX}${slot}`)
+    const json = localStorage.getItem(this.slotKey(slot))
     if (!json) return null
     try {
       return JSON.parse(json) as SaveSlotData
@@ -101,7 +134,7 @@ export class SaveManager {
    */
   deleteSlot(slot: number): void {
     if (slot < 0 || slot >= SLOT_COUNT) return
-    localStorage.removeItem(`${STORAGE_PREFIX}${slot}`)
+    localStorage.removeItem(this.slotKey(slot))
   }
 
   /**
@@ -154,7 +187,7 @@ export class SaveManager {
    */
   quickSave(data: SaveSlotData): void {
     try {
-      localStorage.setItem(QUICK_SAVE_KEY, JSON.stringify(data))
+      localStorage.setItem(this.quickKey(), JSON.stringify(data))
     } catch {
       // quota exceeded 等は無視
     }
@@ -166,7 +199,7 @@ export class SaveManager {
    */
   quickLoad(): SaveSlotData | null {
     try {
-      const json = localStorage.getItem(QUICK_SAVE_KEY)
+      const json = localStorage.getItem(this.quickKey())
       if (!json) return null
       return JSON.parse(json) as SaveSlotData
     } catch {
@@ -179,7 +212,7 @@ export class SaveManager {
    */
   hasQuickSave(): boolean {
     try {
-      return localStorage.getItem(QUICK_SAVE_KEY) !== null
+      return localStorage.getItem(this.quickKey()) !== null
     } catch {
       return false
     }
@@ -190,7 +223,7 @@ export class SaveManager {
    */
   deleteQuickSave(): void {
     try {
-      localStorage.removeItem(QUICK_SAVE_KEY)
+      localStorage.removeItem(this.quickKey())
     } catch {
       // ignore
     }

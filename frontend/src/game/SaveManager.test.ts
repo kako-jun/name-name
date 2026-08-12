@@ -24,7 +24,7 @@ describe('SaveManager - クイックセーブ', () => {
   let manager: SaveManager
 
   beforeEach(() => {
-    manager = new SaveManager()
+    manager = new SaveManager('test-game')
     manager.deleteQuickSave()
   })
 
@@ -68,7 +68,7 @@ describe('SaveManager - 背景端フェード (#250)', () => {
   let manager: SaveManager
 
   beforeEach(() => {
-    manager = new SaveManager()
+    manager = new SaveManager('test-game')
     localStorage.clear()
   })
 
@@ -98,7 +98,7 @@ describe('SaveManager - 背景端フェード (#250)', () => {
       savedAt: new Date().toISOString(),
       sceneName: 'シーン1',
     }
-    localStorage.setItem('name-name-save-0', JSON.stringify(legacy))
+    localStorage.setItem('name-name-save-test-game-0', JSON.stringify(legacy))
     const loaded = manager.load(0)
     expect(loaded).not.toBeNull()
     expect(loaded?.sceneId).toBe('scene-1')
@@ -121,7 +121,7 @@ describe('SaveManager - 動画入力レイヤ (#252)', () => {
   let manager: SaveManager
 
   beforeEach(() => {
-    manager = new SaveManager()
+    manager = new SaveManager('test-game')
     localStorage.clear()
   })
 
@@ -167,7 +167,7 @@ describe('SaveManager - 動画入力レイヤ (#252)', () => {
       savedAt: new Date().toISOString(),
       sceneName: 'シーン1',
     }
-    localStorage.setItem('name-name-save-0', JSON.stringify(legacy))
+    localStorage.setItem('name-name-save-test-game-0', JSON.stringify(legacy))
     const loaded = manager.load(0)
     expect(loaded).not.toBeNull()
     expect(loaded?.sceneId).toBe('scene-1')
