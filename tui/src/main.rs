@@ -840,10 +840,11 @@ where
                 );
                 play_new_se_cues(&mut last_se_cursor, playback, &config, audio.as_deref_mut());
                 // #500: 実際に行/文単位ページが1つ先へ進んだとき（`on_advance` が `true` を
-                // 返したとき、デシジョンテーブルのケース4）だけ、離れる直前の表示内容を
-                // バックログへ積む。選択肢確定（ケース1）・タイプライターのスキップのみ
-                // （ケース3、まだ同じ行にとどまる）・末尾での no-op（ケース5）ではいずれも
-                // `advanced` が偽になり、GUI版 `NovelRenderer.advanceOrSkipTypewriter` が
+                // 返したとき、デシジョンテーブルのケース2a（#558）・ケース4）だけ、離れる
+                // 直前の表示内容をバックログへ積む。選択肢確定（ケース1）・タイプライターの
+                // スキップのみ（ケース3、まだ同じ行にとどまる）・末尾での no-op
+                // （ケース2b・ケース5）ではいずれも `advanced` が偽になり、GUI版
+                // `NovelRenderer.advanceOrSkipTypewriter` が
                 // 「ページを離れる時だけ backlog に記録する」のと同じ粒度になる。本文が空
                 // （改ページ専用の空行）のエントリは記録しない（GUI版 `BacklogOverlay.addEntry`
                 // の「空行は記録しない」を踏襲）。
@@ -1154,7 +1155,8 @@ fn restart_reveal_for_speed_change(
 /// | # | 現在位置 | reveal状態 | 次 | 動作 |
 /// |---|---|---|---|---|
 /// | 1 | 選択肢 | ― | ― | `select_current_choice` で確定を試みる。成功時のみ新しい位置の reveal を組み立て直す（失敗時＝無効な jump 先は選択肢表示のまま no-op） |
-/// | 2 | 無し | ― | ― | 何もしない |
+/// | 2a | 無し | ― | advance成功（次itemに到達） | `advance()` を試みる（#558）。成功時は次item の reveal を組み立て直し、`true` を返す — 現在シーンが Line/Choice/Image を1つも持たない場合（例: フラグ設定イベントだけの `game_init`）に、`advance()` 内部のスキップループが次にitemを持つシーンまで自動的に進める |
+/// | 2b | 無し | ― | advance失敗（真の末尾/ファイル境界） | 従来通り no-op（`false` を返す、`current_reveal` は不変） |
 /// | 3 | 会話行 | 未完了 | 存在する/最終行 | `skip_lines` で即全文表示、`advance()` は呼ばない |
 /// | 4 | 会話行 | 完了 | 存在する | `advance()` → 次item の reveal（`build_reveal_for_current`。Line なら Animating、Choice なら None） |
 /// | 5 | 会話行 | 完了 | 最終行 | `advance()` が `false` を返し no-op（`current_reveal` は不変） |
@@ -1164,12 +1166,13 @@ fn restart_reveal_for_speed_change(
 /// 文言はタイプライター演出の対象外なので、reveal の完了/未完了を問わず常に即座に確定を試みる
 /// （#3/#4 のような reveal_done 分岐が不要）。
 ///
-/// 戻り値は「実際に会話行/文単位ページが1つ先へ進んだか」（デシジョンテーブルのケース4での
-/// み `true`）。呼び出し側 `event_loop` はこれを使ってバックログ（#500）に「離れる直前の
-/// 表示内容」を積むタイミングを判定する — 選択肢確定（ケース1）・タイプライターの
-/// スキップのみでまだ同じ行にとどまる（ケース3）・末尾での no-op（ケース5）はいずれも
-/// `false` を返す。既存の呼び出し元（テスト含む）は戻り値を無視しても動作に影響しない
-/// （`bool` は `#[must_use]` ではないため、無視しても警告は出ない）。
+/// 戻り値は「実際に会話行/文単位ページが1つ先へ進んだか」（デシジョンテーブルのケース2a
+/// （#558）・ケース4でのみ `true`）。呼び出し側 `event_loop` はこれを使ってバックログ
+/// （#500）に「離れる直前の表示内容」を積むタイミングを判定する — 選択肢確定（ケース1）・
+/// タイプライターのスキップのみでまだ同じ行にとどまる（ケース3）・末尾での no-op
+/// （ケース2b・ケース5）はいずれも `false` を返す。既存の呼び出し元（テスト含む）は
+/// 戻り値を無視しても動作に影響しない（`bool` は `#[must_use]` ではないため、無視しても
+/// 警告は出ない）。
 fn on_advance(
     playback: &mut Playback,
     current_reveal: &mut Option<reveal::RevealState>,
