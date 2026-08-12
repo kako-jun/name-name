@@ -441,13 +441,17 @@ pub struct Playback {
     /// フラグ管理（#509）。`Event::Flag`/`Event::Condition` を `build_scene_items` が
     /// 逐次walk中にリアルタイムに評価・更新するための状態。
     flags: GameFlags,
-    /// [`Playback::total`] の結果キャッシュ（世代番号, 値）。`total()` はドキュメント全体を
-    /// 独立に再スキャンする重い処理だが、結果は `self.flags` が変化しない限り変わらない
-    /// （セルフレビュー対応、#509）。`main.rs::event_loop` が `REDRAW`＝30msごとに無条件で
-    /// `total()` を呼ぶため、フラグが変わっていないフレームでは再スキャンを省略する。
-    /// `total()` は `&self` のままキャッシュを更新したいため `Cell` で内部可変性を持たせる
-    /// （`RefCell` ではなく `Cell` で十分 — 中身が `Copy` な `(u64, usize)` のため）。
-    total_cache: std::cell::Cell<Option<(u64, usize)>>,
+    /// [`Playback::total`] の結果キャッシュ（世代番号, 対象ファイルid, 値）。`total()` は
+    /// 現在のファイルに属するシーンだけを独立に再スキャンする重い処理だが、結果は
+    /// `self.flags` と現在のファイルが変化しない限り変わらない（セルフレビュー対応、#509。
+    /// スコープを「現在ファイル単位」に変更、#565）。`main.rs::event_loop` が `REDRAW`＝
+    /// 30msごとに無条件で `total()` を呼ぶため、フラグ・ファイルのどちらも変わっていない
+    /// フレームでは再スキャンを省略する。ファイルidをキャッシュキーに含めるのは、選択肢で
+    /// 別ファイルへジャンプした直後にフラグ世代が変わらないまま分母だけ変わるケースを
+    /// 取りこぼさないため（#565）。`total()` は `&self` のままキャッシュを更新したいため
+    /// `Cell` で内部可変性を持たせる（`RefCell` ではなく `Cell` で十分 — 中身が `Copy` な
+    /// `(u64, Option<usize>, usize)` のため）。
+    total_cache: std::cell::Cell<Option<(u64, Option<usize>, usize)>>,
 }
 
 /// `build_scene_items` がシーンを跨いで引き継ぐランニング状態のまとめ役（#509 Phase A）。
@@ -1363,26 +1367,49 @@ impl Playback {
         }
     }
 
-    /// 会話行の総数（Choice item・画像コマ item は含まない、#497）。画像コマ
-    /// （[`PlaybackItem::Image`]）は元の会話行の話者・本文を引き継いだ表示上の中間状態に
-    /// すぎず、それ自体は新しい会話行ではないため数えない。
+    /// 現在のファイルに属する会話行の総数（Choice item・画像コマ item は含まない、#497）。
+    /// 画像コマ（[`PlaybackItem::Image`]）は元の会話行の話者・本文を引き継いだ表示上の
+    /// 中間状態にすぎず、それ自体は新しい会話行ではないため数えない。
     ///
-    /// UI（進捗バー等）向けに「ドキュメント全体の会話行総数」を返す必要があるため、
+    /// UI（進捗バー等）向けに「現在プレイ中のファイルの会話行総数」を返す必要があるため、
     /// プレイヤーが実際に訪れた範囲だけを保持する `self.items`（#509 で遅延構築に変更）は
     /// 使わない。`self.scene_order`（ドキュメント順の全シーンの生イベント一覧）を、実際の
     /// 再生状態（`self.scan_state` / `self.items`）に一切触れない使い捨ての状態で独立に
-    /// 全件スキャンして数える（`has_more_scenes_with_items` が使っている「使い捨て
-    /// scan_state + 使い捨て Vec で `build_scene_items` を試し呼びする」パターンと同じ）。
+    /// スキャンして数える（`has_more_scenes_with_items` が使っている「使い捨て scan_state
+    /// + 使い捨て Vec で `build_scene_items` を試し呼びする」パターンと同じ）。
+    ///
+    /// ## スコープ: ドキュメント全体ではなく現在ファイル単位（#565）
+    ///
+    /// 以前はこの関数が `self.scene_order` を無条件に全件スキャンし「ドキュメント全体の
+    /// 会話行総数」を返していたが、Gymnasiaのようにhubから複数の独立したルートファイル
+    /// （route01〜route10等）へ分岐する構成（`from_merged_document`）では、選択していない
+    /// ルートの会話数まで合算されてしまい実測2696のような巨大な数字になり、プレイヤーが
+    /// 実際にそのルートで読む行数とかけ離れた意味の無い分母になる問題があった。GUI版
+    /// （`NovelRenderer` の `resolvedEvents`）が現在シーン単位で分母をリセットしているのに
+    /// 揃え、`current_scene_idx` が指す現在シーンの `file_id` と同じファイルに属するシーン
+    /// だけをスキャン対象にする（一致しないシーンは丸ごとスキップし、`build_scene_items`
+    /// も呼ばない）。単一ファイル構成（`from_document`/`from_lines`）は全シーンが同じ合成
+    /// ファイルid `0` を持つため、この絞り込みは実質無効化され従来と同じ結果になる。
+    ///
+    /// `current_scene_idx` が指すシーンが存在しない場合（`from_lines` のように
+    /// `scene_order` が常に空の構成）は現在ファイルを特定できないため、スキャン対象の
+    /// シーンが1つも無い＝ `0` を返す（`from_lines` は元々このケースを想定したテスト専用
+    /// コンストラクタで、`total()` を呼ぶ既存テストは無い）。
     ///
     /// `main.rs::event_loop` は `REDRAW`＝30ms間隔で（キー入力の有無に関わらず）毎フレーム
-    /// この関数を呼ぶが、結果は `self.flags` が変化しない限り変わらない。全件スキャンは
-    /// シーン数に比例した Vec 確保を伴う軽くない処理のため、`self.total_cache` に
-    /// `(self.flags.generation(), 直近の結果)` を保持し、世代番号が変わっていなければ
-    /// 再スキャンを省略する（セルフレビュー対応、#509）。
+    /// この関数を呼ぶが、結果は `self.flags` と現在のファイルが変化しない限り変わらない。
+    /// スキャンはシーン数に比例した Vec 確保を伴う軽くない処理のため、`self.total_cache` に
+    /// `(self.flags.generation(), 現在のfile_id, 直近の結果)` を保持し、どちらも変わって
+    /// いなければ再スキャンを省略する（セルフレビュー対応、#509。ファイルidをキーに追加、
+    /// #565）。
     pub fn total(&self) -> usize {
         let current_generation = self.flags.generation();
-        if let Some((cached_generation, cached_total)) = self.total_cache.get() {
-            if cached_generation == current_generation {
+        let current_file_id = self
+            .scene_order
+            .get(self.current_scene_idx)
+            .map(|scene| scene.file_id);
+        if let Some((cached_generation, cached_file_id, cached_total)) = self.total_cache.get() {
+            if cached_generation == current_generation && cached_file_id == current_file_id {
                 return cached_total;
             }
         }
@@ -1397,6 +1424,9 @@ impl Playback {
         let mut flags = self.flags.clone();
         let mut count = 0;
         for scene in &self.scene_order {
+            if Some(scene.file_id) != current_file_id {
+                continue;
+            }
             let mut items = Vec::new();
             let mut item_file_ids = Vec::new();
             let mut item_wait_ms = Vec::new();
@@ -1420,7 +1450,8 @@ impl Playback {
                 .filter(|item| matches!(item, PlaybackItem::Line(_)))
                 .count();
         }
-        self.total_cache.set(Some((current_generation, count)));
+        self.total_cache
+            .set(Some((current_generation, current_file_id, count)));
         count
     }
 
