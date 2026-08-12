@@ -1138,6 +1138,13 @@ describe('NovelRenderer 2窓モード本文色解決 (#444)', () => {
     expect(internals(r).resolveBodyTextColor(null)).toBe(WHITE)
   })
 
+  it('NR-16: 空文字話者は null と異なり相手側に倒して水色に解決する', () => {
+    const r = new NovelRenderer()
+    r.setProtagonist('せお')
+    r.setSplitLayout(true)
+    expect(internals(r).resolveBodyTextColor('')).toBe(OPPONENT_COLOR)
+  })
+
   it('NR-5: 非破壊 — protagonist 未指定では split_layout:true でも2窓不成立、resolveBodyTextColor は #442 既存の白のまま', () => {
     const r = new NovelRenderer()
     r.setSplitLayout(true)
@@ -1233,6 +1240,30 @@ describe('NovelRenderer render() 経路の2窓モード話者ロール配線 (#4
 
     h.advance()
     expect(spy.mock.calls.map((c) => c[0])).toEqual(['self', 'opponent', 'self'])
+  })
+
+  it('NR-18: 話者 A(protagonist)→null(ナレーション)→B(住人) で setDualWindowActiveRole が self→self→opponent の順に呼ばれる', () => {
+    const r = new NovelRenderer()
+    r.setProtagonist('せお')
+    r.setSplitLayout(true)
+    const h = renderWiringInternals(r)
+    h.initialized = true
+    const spy = vi.spyOn(h.dialogBox, 'setDualWindowActiveRole')
+
+    r.setScenes([
+      scene('s', [
+        dialogNoPortrait('せお', '質問。'),
+        narration('地の文。'),
+        dialogNoPortrait('ひな', '回答。'),
+      ]),
+    ])
+    expect(spy.mock.calls.map((c) => c[0])).toEqual(['self'])
+
+    h.advance()
+    expect(spy.mock.calls.map((c) => c[0])).toEqual(['self', 'self'])
+
+    h.advance()
+    expect(spy.mock.calls.map((c) => c[0])).toEqual(['self', 'self', 'opponent'])
   })
 })
 
