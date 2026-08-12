@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
-import { Text as PixiText, Rectangle } from 'pixi.js'
-import { ChoiceOverlay, resolveChoiceVisual, resolveStyle } from './ChoiceOverlay'
+import { Graphics, Text as PixiText, Rectangle } from 'pixi.js'
+import {
+  ChoiceOverlay,
+  buildPixelNotchPoints,
+  resolveChoiceVisual,
+  resolveStyle,
+} from './ChoiceOverlay'
 import { computeSplitLayoutRegions } from './novelLayout'
 import type { FederatedPointerEvent } from 'pixi.js'
 
@@ -69,6 +74,34 @@ describe('resolveStyle', () => {
     const t = resolveStyle('monochrome')
     expect(t.radius).toBe(0)
     expect(t.fontFamily).toContain('Noto Serif JP')
+  })
+
+  // #562: pixel はノッチ付きフレーム (frameStyle: 'notched') を持つ新スタイル。
+  // 未知値ではなく正規のスタイル名なので警告は出ない。
+  it('"pixel" は frameStyle: notched のテーマを返し、console.warn を呼ばない', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = resolveStyle('pixel')
+    expect(t.frameStyle).toBe('notched')
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  // #562: monochrome テストと同型のフィールド確認パターン。
+  it('"pixel" は pixel テーマ（radius=0・borderWidth=4・monospace）', () => {
+    const t = resolveStyle('pixel')
+    expect(t.radius).toBe(0)
+    expect(t.borderWidth).toBe(4)
+    expect(t.fontFamily).toBe('monospace')
+  })
+
+  // #562: 4テーマすべての frameStyle を一括確認する位相回帰テスト。pixel だけが notched。
+  it.each([
+    ['default', 'rounded'],
+    ['soft', 'rounded'],
+    ['monochrome', 'rounded'],
+    ['pixel', 'notched'],
+  ] as const)('"%s" テーマの frameStyle は "%s"', (name, expected) => {
+    expect(resolveStyle(name).frameStyle).toBe(expected)
   })
 
   it('未知値は default にフォールバックし、警告を出す', () => {
@@ -196,6 +229,29 @@ describe('ChoiceOverlay rendering', () => {
       border: theme.borderReadHover,
       text: theme.textReadColor,
     })
+  })
+
+  // #562 issue本文の明示的な配色制約: 青は端末/遠隔AIの識別色として予約されているため
+  // pixel スタイルでは使わない。hover border は暖色(0xffd280)であり、pixel テーマの
+  // border 系フィールドはどれも青チャンネルが支配的な「青系」色にならないことを直接検証する。
+  it('resolveChoiceVisual: pixel テーマの hover border は暖色(0xffd280)で、border系フィールドに青系色を一切含まない', () => {
+    const theme = resolveStyle('pixel')
+    const visual = resolveChoiceVisual(theme, false, true)
+    expect(visual.border).toBe(0xffd280)
+
+    const borderFields = [
+      theme.borderNormal,
+      theme.borderHover,
+      theme.borderRead,
+      theme.borderReadHover,
+    ]
+    for (const color of borderFields) {
+      const r = (color >> 16) & 0xff
+      const g = (color >> 8) & 0xff
+      const b = color & 0xff
+      // 「青系」= 青チャンネルが赤・緑より支配的な色。暖色/白/グレーはいずれも該当しない。
+      expect(b).toBeLessThanOrEqual(Math.max(r, g))
+    }
   })
 })
 
@@ -905,5 +961,292 @@ describe('ChoiceOverlay グリッド配置 境界値・状態遷移 (#508 テス
     }
 
     overlay.hide()
+  })
+})
+
+// #562: pixel スタイルのフレーム描画方式（roundRect vs poly）を Graphics.prototype への spy で
+// 直接検証する。ChoiceOverlay.ts の private 定数（BUTTON_WIDTH=480, BUTTON_HEIGHT=52,
+// SHADOW_OFFSET=4, PIXEL_NOTCH_SIZE=6）はテスト側にミラーして持つ（このファイルの他の describe
+// でも `tapY = 220 - 24 - 26` 等、同様に内部定数値をハードコードして検証する慣習に合わせる）。
+describe('ChoiceOverlay pixel フレーム描画 (#562)', () => {
+  const BUTTON_WIDTH = 480
+  const BUTTON_HEIGHT = 52
+  const SHADOW_OFFSET = 4
+  const PIXEL_NOTCH_SIZE = 6
+
+  it('style="default"（rounded）で show() すると roundRect が呼ばれ、poly は一度も呼ばれない', () => {
+    const roundRectSpy = vi.spyOn(Graphics.prototype, 'roundRect')
+    const polySpy = vi.spyOn(Graphics.prototype, 'poly')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn(), 'default')
+
+    expect(roundRectSpy).toHaveBeenCalled()
+    expect(polySpy).not.toHaveBeenCalled()
+
+    overlay.hide()
+    roundRectSpy.mockRestore()
+    polySpy.mockRestore()
+  })
+
+  it('style="pixel"（notched）で show() すると poly が呼ばれ、roundRect は一度も呼ばれない', () => {
+    const roundRectSpy = vi.spyOn(Graphics.prototype, 'roundRect')
+    const polySpy = vi.spyOn(Graphics.prototype, 'poly')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn(), 'pixel')
+
+    expect(polySpy).toHaveBeenCalled()
+    expect(roundRectSpy).not.toHaveBeenCalled()
+
+    overlay.hide()
+    roundRectSpy.mockRestore()
+    polySpy.mockRestore()
+  })
+
+  // g.poly() の第2引数(close)は省略しても pixi.js のストローク描画では
+  // `shape.closePath ?? true` により true にフォールバックされ、明示時と描画結果に差はない
+  // （実バグではない）。ここでは pixi.js 自身の内部実装（regularPoly/star/roundPoly 等）に
+  // ならった「意図を明示するため true を渡す」規約が守られているかを、複数ボタン・複数 poly
+  // 呼び出し（bg・shadow 双方）について厳密等価で確認する
+  // （コードスタイルの一貫性担保が目的で、機能的な差異の検証ではない）。
+  it('【引数明示規約】style="pixel" の全 poly 呼び出しで close(第2引数)が明示的に true(undefinedではない)', () => {
+    const polySpy = vi.spyOn(Graphics.prototype, 'poly')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn(), 'pixel')
+
+    expect(polySpy.mock.calls.length).toBeGreaterThan(0)
+    for (const call of polySpy.mock.calls) {
+      expect(call[1]).toBe(true)
+    }
+
+    overlay.hide()
+    polySpy.mockRestore()
+  })
+
+  it('style="pixel" の show() では poly が2回以上呼ばれ、(0,0)起点(bg)と SHADOW_OFFSET(4,4)起点(shadow)の両方が含まれる', () => {
+    const polySpy = vi.spyOn(Graphics.prototype, 'poly')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn(), 'pixel')
+
+    expect(polySpy.mock.calls.length).toBeGreaterThanOrEqual(2)
+    const calledPointArrays = polySpy.mock.calls.map(([points]) => points)
+    const expectedBgPoints = buildPixelNotchPoints(
+      0,
+      0,
+      BUTTON_WIDTH,
+      BUTTON_HEIGHT,
+      PIXEL_NOTCH_SIZE
+    )
+    const expectedShadowPoints = buildPixelNotchPoints(
+      SHADOW_OFFSET,
+      SHADOW_OFFSET,
+      BUTTON_WIDTH,
+      BUTTON_HEIGHT,
+      PIXEL_NOTCH_SIZE
+    )
+    expect(calledPointArrays).toContainEqual(expectedBgPoints)
+    expect(calledPointArrays).toContainEqual(expectedShadowPoints)
+
+    overlay.hide()
+    polySpy.mockRestore()
+  })
+
+  // hover 再描画パス（pointerover → bg.clear() → 再 drawButton）でも close=true 明示の
+  // 規約が保たれていることの確認（機能的な差異の検証ではない）。shadow は再描画されないため、
+  // クリア後の poly 呼び出しは bg の1回のみ。
+  it('pointerover(hover)で style="pixel" のボタンにホバーすると、bg.clear() 後に再度 poly が close=true 付きで呼ばれる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn(), 'pixel')
+
+    const polySpy = vi.spyOn(Graphics.prototype, 'poly')
+    const button = overlay.children[0]
+    button.emit('pointerover', pointerEvent(400, 225))
+
+    expect(polySpy.mock.calls.length).toBe(1)
+    const [points, close] = polySpy.mock.calls[0] as [number[], boolean | undefined]
+    expect(close).toBe(true)
+    expect(points).toEqual(
+      buildPixelNotchPoints(0, 0, BUTTON_WIDTH, BUTTON_HEIGHT, PIXEL_NOTCH_SIZE)
+    )
+
+    overlay.hide()
+    polySpy.mockRestore()
+  })
+
+  // pixel テーマは暖色(ろうそくの灯り)の影を使う。default の黒影と異なることも合わせて確認する。
+  it('style="pixel" の影レイヤの fill は theme.shadowColor（暖色 0xffd280）で、default の黒影とは異なる', () => {
+    const fillSpy = vi.spyOn(Graphics.prototype, 'fill')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn(), 'pixel')
+    const theme = resolveStyle('pixel')
+
+    const shadowFillCall = fillSpy.mock.calls.find(
+      (args) => typeof args[0] === 'object' && args[0] !== null && 'color' in args[0]
+    )
+    expect(shadowFillCall).toBeDefined()
+    expect(shadowFillCall![0]).toEqual({ color: theme.shadowColor, alpha: theme.shadowAlpha })
+    expect(theme.shadowColor).toBe(0xffd280)
+
+    const defaultTheme = resolveStyle('default')
+    expect(theme.shadowColor).not.toBe(defaultTheme.shadowColor)
+
+    overlay.hide()
+    fillSpy.mockRestore()
+  })
+})
+
+// #562: buildPixelNotchPoints は ChoiceOverlay から export された純粋関数。境界値・位相・
+// 平行移動を drawFrame 等を経由せず直接単体テストする。notch=10 は暗算しやすい値として選ぶ。
+describe('buildPixelNotchPoints (#562)', () => {
+  const NOTCH = 10
+
+  // 上辺は points[8]=x0+notch（始点）, points[10]=x1-notch（終点）。
+  // width < 2*notch だと終点が始点より左に来て自己交差する。
+  describe('width の境界値（height は十分広い固定値 100 を使う）', () => {
+    it(`width = 2*notch-1 (=${2 * NOTCH - 1}) は上辺の始点xが終点xより大きくなる（自己交差）`, () => {
+      const points = buildPixelNotchPoints(0, 0, 2 * NOTCH - 1, 100, NOTCH)
+      const topStartX = points[8]
+      const topEndX = points[10]
+      expect(topStartX).toBeGreaterThan(topEndX)
+    })
+
+    it(`width = 2*notch (=${2 * NOTCH}) は上辺の長さが0の縮退ケースで例外を投げない`, () => {
+      expect(() => buildPixelNotchPoints(0, 0, 2 * NOTCH, 100, NOTCH)).not.toThrow()
+      const points = buildPixelNotchPoints(0, 0, 2 * NOTCH, 100, NOTCH)
+      const topStartX = points[8]
+      const topEndX = points[10]
+      expect(topStartX).toBe(topEndX)
+    })
+
+    it(`width = 2*notch+1 (=${2 * NOTCH + 1}) は上辺の長さが正で通常の非交差ポリゴンになる`, () => {
+      const points = buildPixelNotchPoints(0, 0, 2 * NOTCH + 1, 100, NOTCH)
+      const topStartX = points[8]
+      const topEndX = points[10]
+      expect(topEndX).toBeGreaterThan(topStartX)
+    })
+  })
+
+  // 右辺は points[19]=y0+notch（始点）, points[21]=y1-notch（終点）。width と対称の境界。
+  describe('height の境界値（width は十分広い固定値 100 を使う）', () => {
+    it(`height = 2*notch-1 (=${2 * NOTCH - 1}) は右辺の始点yが終点yより大きくなる（自己交差）`, () => {
+      const points = buildPixelNotchPoints(0, 0, 100, 2 * NOTCH - 1, NOTCH)
+      const rightStartY = points[19]
+      const rightEndY = points[21]
+      expect(rightStartY).toBeGreaterThan(rightEndY)
+    })
+
+    it(`height = 2*notch (=${2 * NOTCH}) は右辺の長さが0の縮退ケースで例外を投げない`, () => {
+      expect(() => buildPixelNotchPoints(0, 0, 100, 2 * NOTCH, NOTCH)).not.toThrow()
+      const points = buildPixelNotchPoints(0, 0, 100, 2 * NOTCH, NOTCH)
+      const rightStartY = points[19]
+      const rightEndY = points[21]
+      expect(rightStartY).toBe(rightEndY)
+    })
+
+    it(`height = 2*notch+1 (=${2 * NOTCH + 1}) は右辺の長さが正で通常の非交差ポリゴンになる`, () => {
+      const points = buildPixelNotchPoints(0, 0, 100, 2 * NOTCH + 1, NOTCH)
+      const rightStartY = points[19]
+      const rightEndY = points[21]
+      expect(rightEndY).toBeGreaterThan(rightStartY)
+    })
+  })
+
+  // 形状の位相回帰: 引数の組み合わせによらず、常に20点(40要素のフラット配列)を返す。
+  it.each([
+    [0, 0, 100, 50, 10],
+    [5, 5, 480, 52, 6],
+    [4, 4, 1, 52, 6],
+    [0, 0, 1000, 1000, 1],
+    [-10, -10, 50, 50, 6],
+  ])(
+    '常に20点(40要素)を返す (offsetX=%d, offsetY=%d, width=%d, height=%d, notch=%d)',
+    (offsetX, offsetY, width, height, notch) => {
+      const points = buildPixelNotchPoints(offsetX, offsetY, width, height, notch)
+      expect(points.length).toBe(40)
+    }
+  )
+
+  // 影レイヤの位置ズレ回帰: offsetX/offsetY が0以外のとき、全点が単純に平行移動しているだけで
+  // 形状(相対座標)自体は変わらないことを確認する。
+  it('offsetX/offsetY が0以外のとき、全点が単純に平行移動している（影レイヤの位置ズレ回帰）', () => {
+    const base = buildPixelNotchPoints(0, 0, 480, 52, 6)
+    const shifted = buildPixelNotchPoints(4, 4, 480, 52, 6)
+
+    expect(shifted.length).toBe(base.length)
+    for (let i = 0; i < base.length; i += 2) {
+      expect(shifted[i]).toBe(base[i] + 4) // x 座標
+      expect(shifted[i + 1]).toBe(base[i + 1] + 4) // y 座標
+    }
+  })
+})
+
+// #562: show() の統合的なふるまい確認。フレーム描画方式(rounded/notched)以外のロジック
+// （ボタン数・座標計算・ライフサイクル）は pixel でも default と非破壊で共通であることを見る。
+describe('ChoiceOverlay pixel 統合フロー (#562)', () => {
+  it('show(choices, onSelect, "pixel") は例外を投げずボタンを生成し、ボタン数・座標計算が default と同じロジックで求まる', () => {
+    const pixelOverlay = new ChoiceOverlay(800, 450)
+    expect(() => pixelOverlay.show(choices(3), vi.fn(), 'pixel')).not.toThrow()
+    expect(pixelOverlay.children.length).toBe(3)
+    const pixelPositions = pixelOverlay.children.map((c) => ({ x: c.x, y: c.y }))
+    pixelOverlay.hide()
+
+    const defaultOverlay = new ChoiceOverlay(800, 450)
+    defaultOverlay.show(choices(3), vi.fn(), 'default')
+    const defaultPositions = defaultOverlay.children.map((c) => ({ x: c.x, y: c.y }))
+    defaultOverlay.hide()
+
+    expect(pixelPositions).toEqual(defaultPositions)
+  })
+
+  it('style="pixel" の show()→hover→hide() の一連のフローで console.warn/console.error が一切出ない', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const overlay = new ChoiceOverlay(800, 450)
+
+    overlay.show(choices(3), vi.fn(), 'pixel')
+    const button = overlay.children[0]
+    button.emit('pointerover', pointerEvent(400, 225))
+    button.emit('pointerout', pointerEvent(400, 225))
+    overlay.hide()
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+})
+
+// #562 現状記録（修正を要求するテストではない）: pixel スタイルは PIXEL_NOTCH_SIZE(6px)*2=12px
+// 未満のボタン幅になる極端な設定（狭い画面 × 多列グリッド）で、buildPixelNotchPoints が
+// 自己交差ポリゴンを返す設計上の未対応領域を持つ。これは既知の未対応領域であり、修正は
+// 本 issue (#562) のスコープ外。将来 pixel スタイル × 極端な多列グリッドを実際に使うことに
+// なったら、drawFrame 側で notch を
+// `Math.min(PIXEL_NOTCH_SIZE, layoutButtonWidth / 2, BUTTON_HEIGHT / 2)` のようにクランプする
+// 対応を検討する。ここでは現状の挙動をテストとして記録するだけに留める。
+describe('ChoiceOverlay pixel×極端に狭いグリッド (#562 現状記録・修正スコープ外)', () => {
+  it('狭い画面(200px)×style="pixel"×列20(多列グリッド)で show() を呼んでも例外は投げない（クラッシュしないことの最低保証）', () => {
+    const overlay = new ChoiceOverlay(200, 400)
+    expect(() => overlay.show(choices(20), vi.fn(), 'pixel', undefined, 20)).not.toThrow()
+    overlay.hide()
+  })
+
+  it('現状記録: 上記シナリオで実際の layoutButtonWidth は PIXEL_NOTCH_SIZE*2=12px を下回り、buildPixelNotchPoints が自己交差ポリゴンを返す状態に実際に到達する', () => {
+    const polySpy = vi.spyOn(Graphics.prototype, 'poly')
+    const overlay = new ChoiceOverlay(200, 400)
+    overlay.show(choices(20), vi.fn(), 'pixel', undefined, 20)
+
+    expect(polySpy.mock.calls.length).toBeGreaterThan(0)
+    const points = polySpy.mock.calls[0][0] as number[]
+    // width = x1 - x0（buildPixelNotchPoints の点順で x0=points[0], x1=points[16]）
+    const width = points[16] - points[0]
+    expect(width).toBeLessThan(12) // PIXEL_NOTCH_SIZE(6) * 2
+
+    // 上辺の始点(points[8]=x0+notch)が終点(points[10]=x1-notch)より右＝自己交差に実際に到達
+    const topStartX = points[8]
+    const topEndX = points[10]
+    expect(topStartX).toBeGreaterThan(topEndX)
+
+    overlay.hide()
+    polySpy.mockRestore()
   })
 })
