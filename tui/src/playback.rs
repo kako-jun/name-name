@@ -1403,7 +1403,9 @@ impl Playback {
                             // 別ファイルへ`jump`するケースは稀だが、あり得る場合に
                             // BGM等のリークガード（#528/#540）を免除する理由がないため
                             // 同じリセットを適用する。
-                            if file_id != self.scene_order[relay_target_idx].file_id {
+                            if self.scene_order[self.current_scene_idx].file_id
+                                != self.scene_order[relay_target_idx].file_id
+                            {
                                 self.scan_state.current_bgm = None;
                                 self.scan_state.current_event_image = None;
                                 self.scan_state.current_blackout = false;
