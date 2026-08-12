@@ -5,29 +5,29 @@
  *
  * - localStorage 'name-name:settings' に JSON 保存
  * - 欠落キーは DEFAULT_SETTINGS で補完（前方互換）
- * - 範囲外は clamp（msPerChar 0..500、各音量 0..1、autoWaitMs 500..10000）
+ * - 範囲外は clamp（msPerChar 0..500、autoWaitMs 500..10000、各音量 0..1）
  * - localStorage 未対応 / 例外時は in-memory フォールバック
  */
 
 export interface Settings {
   /** 1 文字あたり ms。0 = 瞬間表示。UI レンジは 0..200 だが clamp 上限は 500 */
   msPerChar: number
+  /** 1000..8000 想定（#139 オート用、保存だけ）。clamp は 500..10000 */
+  autoWaitMs: number
   /** 0..1 */
   bgmVolume: number
   /** 0..1 */
   seVolume: number
   /** 0..1（#144 ボイス用、現在は保存だけ） */
   voiceVolume: number
-  /** 1000..8000 想定（#139 オート用、保存だけ）。clamp は 500..10000 */
-  autoWaitMs: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   msPerChar: 30,
+  autoWaitMs: 2500,
   bgmVolume: 0.7,
   seVolume: 0.8,
   voiceVolume: 0.8,
-  autoWaitMs: 2500,
 }
 
 const STORAGE_KEY = 'name-name:settings'
@@ -47,16 +47,16 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 /**
  * 設定値を許容範囲に clamp する。
  * - msPerChar: 0..500
- * - bgmVolume / seVolume / voiceVolume: 0..1
  * - autoWaitMs: 500..10000
+ * - bgmVolume / seVolume / voiceVolume: 0..1
  */
 export function clampSettings(s: Settings): Settings {
   return {
     msPerChar: clampNumber(s.msPerChar, 0, 500, DEFAULT_SETTINGS.msPerChar),
+    autoWaitMs: clampNumber(s.autoWaitMs, 500, 10000, DEFAULT_SETTINGS.autoWaitMs),
     bgmVolume: clampNumber(s.bgmVolume, 0, 1, DEFAULT_SETTINGS.bgmVolume),
     seVolume: clampNumber(s.seVolume, 0, 1, DEFAULT_SETTINGS.seVolume),
     voiceVolume: clampNumber(s.voiceVolume, 0, 1, DEFAULT_SETTINGS.voiceVolume),
-    autoWaitMs: clampNumber(s.autoWaitMs, 500, 10000, DEFAULT_SETTINGS.autoWaitMs),
   }
 }
 
