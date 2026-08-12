@@ -346,20 +346,89 @@ mod tests {
         //
         // `with_stderr_suppressed_does_not_leak_fds_on_success`と同じ方針で、
         // `/proc/self/fd/2`のシンボリックリンク先（fd 2が指す実体）をpanic前後で
-        // 直接比較する。Linux(procfs)限定。この比較は「今fd 2が指している実体」という
-        // 瞬間値を見るため、fd数の増分で判定する上のリークテストよりも他スレッドの
-        // 一時リダイレクトに敏感で、ロック（`STDERR_FD_TEST_LOCK`）無しでは実際に
-        // 誤検知した（フルスイート実行で10回に1回程度）。
+        // 直接比較する。Linux(procfs)限定。
+        //
+        // #559再レビュー(must指摘): 素の`/proc/self/fd/2`を基準点にすると、libtestの
+        // デフォルト(アルファベット順)実行順で本テストより先に走る他のfd2テスト
+        // （`try_new_does_not_panic_regardless_of_audio_device_availability`等）が
+        // 復元に失敗していた場合、`before`を読む時点で既にfd 2が`/dev/null`を指した
+        // まま汚染されている。この場合`after`（本テストが新たに開く`/dev/null`）と
+        // パス文字列が一致してしまい、復元が壊れていても`assert_eq!`が誤って通る
+        // 偽陽性が実測で確認された（`STDERR_FD_TEST_LOCK`は同時実行の競合を防ぐだけで、
+        // 順次実行されるテスト間のfd 2状態の引き継ぎ＝汚染は防げない）。
+        //
+        // 対策として、`with_stderr_suppressed`を呼ぶ前に自前の一意な一時ファイルへ
+        // fd 2をリダイレクトしてから`before`を取る。`with_stderr_suppressed`内部が
+        // 使う`/dev/null`とは別のパスを基準点にすることで、他テストによる汚染の
+        // 有無に関わらず判定が成立する。
+        use std::os::unix::io::AsRawFd;
+
+        // マーカーファイルへのリダイレクトと本物のstderrの退避fdを、このテスト自身の
+        // 後始末としてRAIIで復元する。以降のどのassert（セットアップ不変条件チェック
+        // 含む）がpanicしても、スタックアンワインド中にDropが必ず発火し、本物のstderr
+        // への復元とマーカーファイルの削除を取りこぼさない（本体の`StderrGuard`と
+        // 同じ設計方針）。
+        struct RestoreRealStderrOnDrop {
+            stderr_fd: std::os::unix::io::RawFd,
+            saved_real_stderr: std::os::unix::io::RawFd,
+            marker_path: std::path::PathBuf,
+        }
+        impl Drop for RestoreRealStderrOnDrop {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::dup2(self.saved_real_stderr, self.stderr_fd);
+                    libc::close(self.saved_real_stderr);
+                }
+                let _ = std::fs::remove_file(&self.marker_path);
+            }
+        }
+
         let _lock = lock_stderr_fd_for_test();
+
+        let marker_path = std::env::temp_dir().join(format!(
+            "name-name-tui-stderr-test-marker-{}",
+            std::process::id()
+        ));
+        let marker_file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&marker_path)
+            .expect("failed to create test marker file");
+
+        let stderr_fd = std::io::stderr().as_raw_fd();
+        // テスト終了後に本物のstderrへ戻すため、現状（他テストの復元後であれば
+        // 本来の端末/パイプ）を退避しておく。
+        let saved_real_stderr = unsafe { libc::dup(stderr_fd) };
+        assert!(saved_real_stderr >= 0, "failed to dup original stderr fd");
+        let dup2_to_marker = unsafe { libc::dup2(marker_file.as_raw_fd(), stderr_fd) };
+        assert!(
+            dup2_to_marker >= 0,
+            "failed to redirect stderr to marker file"
+        );
+        let _restore_guard = RestoreRealStderrOnDrop {
+            stderr_fd,
+            saved_real_stderr,
+            marker_path: marker_path.clone(),
+        };
+
         let before = std::fs::read_link("/proc/self/fd/2").unwrap();
+        assert_eq!(
+            before, marker_path,
+            "test setup invariant: fd 2 should point at our marker file before the call \
+             (if this fails, the setup itself — not the code under test — is broken)"
+        );
+
         let result =
             std::panic::catch_unwind(|| with_stderr_suppressed(|| panic!("intentional panic")));
         assert!(result.is_err(), "panicがcatch_unwindで捕捉されているはず");
 
         let after = std::fs::read_link("/proc/self/fd/2").unwrap();
+
         assert_eq!(
-            after, before,
-            "panic後もstderr(fd 2)は元のターゲットへ復元されているはず"
+            after, marker_path,
+            "panic後もstderr(fd 2)はテスト用マーカーファイルへ復元されているはず\
+             （/dev/nullを指したままなら復元漏れ）"
         );
     }
 
