@@ -515,6 +515,10 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
 - **音声出力デバイス無し環境への配慮**: `AudioPlayer::try_new(...)`（`OutputStream::
   try_default()` に失敗すると `None`）・ファイル未検出/デコード失敗のいずれも、エラーに
   せず音声再生だけを無効化して進行を続ける（SSH経由・headless環境等を想定）。
+- **ALSA/JACKログの抑制（#559）**: デバイス無し環境では ALSA/JACK が C レベルで直接 stderr
+  にエラーログを書き込み、raw mode の alternate screen 画面と衝突して乱れる。
+  `with_stderr_suppressed`（`tui/src/audio.rs`）が `try_default()` 呼び出し中だけ fd 2 を
+  `/dev/null` へリダイレクトして抑制する。
 - **BGM/SE音量制御（#503/#536/#537）**: 設定画面（`Overlay::Settings`）から BGM/SE 音量を
   5%刻みで調整でき、`AudioPlayer::set_bgm_volume`/`set_se_volume` に即時反映される。加えて
   起動時（設定画面を一度も開いていない状態）の音量も `config.volume.bgm_percent`/`se_percent`
