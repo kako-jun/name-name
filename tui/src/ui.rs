@@ -308,8 +308,26 @@ pub fn draw(
 
 /// 選択肢のカーソル行に付ける記号。`reveal::PAGE_INDICATOR_SYMBOL` と同じ方針
 /// （記号・強調スタイルはハードコードし、Config化しない）。
-const CHOICE_CURSOR_SYMBOL: &str = "▶ ";
+///
+/// 区切りに半角スペース（U+0020）ではなく非改行スペース（NBSP、U+00A0）を使うのは
+/// 意図的（#576 バグ修正）。`draw_choice_list` は選択肢テキストを `Paragraph::wrap`
+/// （ratatui-widgets の `WordWrapper`）で折り返しており、`WordWrapper::process_input`
+/// は「非空白文字→空白文字」の遷移で単語確定＝行フラッシュを行う。半角スペースだと
+/// `▶`（非空白）→半角スペース（空白）の並びでこの確定が発火し、`▶` だけが独立した
+/// 1行としてフラッシュされ、後続の選択肢本文（空白を含まない1つの巨大word）が次の
+/// 物理行に落ちてカーソル記号と本文がずれる。NBSP は Unicode の一般カテゴリでは他の
+/// 空白文字と同じく `Zs`（空白）であり `char::is_whitespace` も `true` を返すが、
+/// `WordWrapper::process_input` が判定に使う `StyledGrapheme::is_whitespace`
+/// （ratatui-core `text/grapheme.rs`）が `symbol != NBSP` で NBSP だけを名指しで
+/// 空白扱いから除外する実装上の特例になっているため、単語の区切りとして扱われない。
+/// この特例のおかげで `▶`+NBSP+本文が1つの巨大wordとして結合され、通常の長い
+/// 選択肢テキストと同じ折り返しフローに合流する。セル幅は半角スペースと同じ1セルなので見た目・レイアウト
+/// 計算（[`CHOICE_CURSOR_PADDING`] との幅比較含む）に影響しない。
+const CHOICE_CURSOR_SYMBOL: &str = "▶\u{a0}";
 /// カーソル記号と同じ表示幅を保つための、非カーソル行の左詰めパディング。
+/// [`CHOICE_CURSOR_SYMBOL`]（`▶` 1セル + NBSP 1セル = 計2セル、`CellWidth`/
+/// `unicode-width` 基準。`▶` U+25B6 は East Asian Width が Neutral のため半角扱い）
+/// と同じ2セル幅になるよう半角スペース2文字にしている。
 const CHOICE_CURSOR_PADDING: &str = "  ";
 
 /// 右側テキスト領域全体に選択肢を描画する。相手/自分の2ウィンドウ分割（`draw_text_windows`）
@@ -4012,6 +4030,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn choice_list_wrapped_cursor_symbol_stays_on_same_row_as_option_text() {
+        // #576 回帰テスト: 選択肢テキストが折り返される長さのとき、カーソル記号(▶)が
+        // 本文とは別の行に単独表示され本文が1行下にずれるバグの回帰ガード。修正前は
+        // CHOICE_CURSOR_SYMBOL の半角スペースが ratatui-widgets の WordWrapper の
+        // 単語確定点になり、`▶` だけが独立した1行としてフラッシュされていた
+        // （NBSP化で `▶`+区切り+本文が1つのwordとして結合され、この回帰は起きないはず）。
+        let config = Config::default();
+        let long_text = "あ".repeat(60);
+        let options = vec![choice_option(&long_text, "x")];
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0, None)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    false,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area();
+        let cursor_row = (0..area.height)
+            .find(|&y| {
+                (0..area.width).any(|x| buffer.cell((x, y)).expect("in bounds").symbol() == "▶")
+            })
+            .expect("カーソル記号▶がどこかの行に描画されているはず");
+        let cursor_row_has_text = (0..area.width)
+            .any(|x| buffer.cell((x, cursor_row)).expect("in bounds").symbol() == "あ");
+        assert!(
+            cursor_row_has_text,
+            "カーソル記号▶と選択肢本文の先頭は同じ行(y={cursor_row})に描画されるはず（#576: \
+             別行に単独表示されると本文全体が1行下にずれる）"
+        );
+    }
+
     // ---- #508: 選択肢グリッド描画（`draw_choice_grid`/`draw_choice_list`分岐）のテスト ----
 
     #[test]
@@ -4187,7 +4254,267 @@ mod tests {
                     "columns={columns:?}: 非グリッドなのでA/Bは別々の行のはず"
                 ),
             }
+            // #576 セルフレビュー: グリッド/リスト両モードで、カーソル(index0='A')の位置に
+            // 記号▶が実際に描画されていることそのものを検証する（同じ行に来るかどうかの
+            // モード判定だけでは、▶自体が欠落・別位置に化けていても検出できないため）。
+            let cursor_y = (0..area.height)
+                .find(|&y| {
+                    (0..area.width).any(|x| buffer.cell((x, y)).expect("in bounds").symbol() == "▶")
+                })
+                .unwrap_or_else(|| {
+                    panic!("columns={columns:?}: カーソル記号▶がどこにも描画されていない")
+                });
+            assert_eq!(
+                cursor_y, a_y,
+                "columns={columns:?}: カーソル記号▶はカーソル選択肢('A')と同じ行にあるはず"
+            );
         }
+    }
+
+    // ---- #576 追加: CHOICE_CURSOR_SYMBOL NBSP化のテスト観点(境界値・混在ケース) ----
+
+    #[test]
+    fn choice_list_wrapped_option_reaches_wrap_boundary_exactly_stays_single_line() {
+        // デシジョンテーブルの3点セット（境界-1・境界・境界+1）のうち境界-1と境界の2点。
+        // 境界+1は `choice_list_wrapped_option_one_char_past_boundary_wraps_with_cursor_glued`
+        // で別途検証する。Rect幅=10セル固定、prefix(CHOICE_CURSOR_SYMBOL)の実測セル幅を
+        // 引いたコンテンツ予算ちょうど・予算-1のどちらでも、折り返しが起きず単一行のまま
+        // 収まることを確認する。
+        let area_width = 10u16;
+        let prefix_width = CHOICE_CURSOR_SYMBOL.cell_width();
+        // 設計案の数値をそのまま信じず、実装のprefix幅を検算してから固定する
+        // （▶ 1セル + NBSP 1セル = 2セルのはず、CHOICE_CURSOR_PADDINGのdocコメント参照）。
+        assert_eq!(
+            prefix_width, 2,
+            "境界値テストはprefix幅2セルを前提に文字数を決めている。\
+             CHOICE_CURSOR_SYMBOLの実際の幅が変わったらこのテストの数値も見直しが必要"
+        );
+        let content_budget = area_width - prefix_width;
+        for content_len in [content_budget - 1, content_budget] {
+            let text = "x".repeat(content_len as usize);
+            let options = vec![choice_option(&text, "j")];
+            let area = Rect::new(0, 0, area_width, 4);
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|f| draw_choice_list(f, area, &options, 0, None))
+                .unwrap_or_else(|e| panic!("content_len={content_len}でpanicした: {e}"));
+            let buffer = terminal.backend().buffer();
+            let rows_with_content: Vec<u16> = (0..area.height)
+                .filter(|&y| {
+                    (0..area.width).any(|x| {
+                        let symbol = buffer.cell((x, y)).expect("in bounds").symbol();
+                        symbol == "▶" || symbol == "x"
+                    })
+                })
+                .collect();
+            assert_eq!(
+                rows_with_content.len(),
+                1,
+                "content_len={content_len}(予算={content_budget})では折り返しが発生せず単一行に\
+                 収まるはず（実際に使われた行: {rows_with_content:?}）"
+            );
+        }
+    }
+
+    #[test]
+    fn choice_list_wrapped_option_one_char_past_boundary_wraps_with_cursor_glued() {
+        // デシジョンテーブルの3点セットの境界+1。予算をちょうど1文字はみ出すと折り返しが
+        // 発生し、`▶`+NBSP+先頭のコンテンツ予算ぶんの文字が1行目に、はみ出した残り1文字が
+        // 2行目に来ることを確認する（#576のNBSP化修正がまさに守っている挙動）。
+        let area_width = 10u16;
+        let prefix_width = CHOICE_CURSOR_SYMBOL.cell_width();
+        let content_budget = area_width - prefix_width;
+        let content_len = content_budget + 1;
+        let text = "x".repeat(content_len as usize);
+        let options = vec![choice_option(&text, "j")];
+        let area = Rect::new(0, 0, area_width, 4);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| draw_choice_list(f, area, &options, 0, None))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let count_x_in_row = |y: u16| -> usize {
+            (0..area.width)
+                .filter(|&x| buffer.cell((x, y)).expect("in bounds").symbol() == "x")
+                .count()
+        };
+        let has_cursor_in_row = |y: u16| -> bool {
+            (0..area.width).any(|x| buffer.cell((x, y)).expect("in bounds").symbol() == "▶")
+        };
+        let cursor_row = (0..area.height)
+            .find(|&y| has_cursor_in_row(y))
+            .expect("カーソル記号▶がどこかの行にあるはず");
+        assert_eq!(
+            count_x_in_row(cursor_row),
+            content_budget as usize,
+            "1行目はカーソル記号に予算ぶんの文字が続いて1行に収まるはず"
+        );
+        let next_row = cursor_row + 1;
+        assert!(
+            !has_cursor_in_row(next_row),
+            "2行目にカーソル記号が単独で来てはいけない（#576の元バグそのもの）"
+        );
+        assert_eq!(
+            count_x_in_row(next_row),
+            1,
+            "はみ出した残り1文字は2行目に来るはず"
+        );
+    }
+
+    #[test]
+    fn render_wrapped_paragraph_skips_drawing_below_min_safe_width_even_with_long_wrapping_choice_text(
+    ) {
+        // MIN_SAFE_TEXT_WRAP_WIDTH(3)の境界-1(幅2セル)。ratatuiのWrap panicバグ
+        // （render_wrapped_paragraphのdocコメント参照）を踏む危険な幅では、選択肢テキストが
+        // 長く折り返しを要求してもpanicせず、単純に描画自体をスキップすることを確認する。
+        let area = Rect::new(0, 0, MIN_SAFE_TEXT_WRAP_WIDTH - 1, 6);
+        let long_text = "あ".repeat(20);
+        let options = vec![choice_option(&long_text, "j")];
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| draw_choice_list(f, area, &options, 0, None))
+            .unwrap_or_else(|e| panic!("MIN_SAFE_TEXT_WRAP_WIDTH-1でpanicした: {e}"));
+        let text = buffer_text(terminal.backend().buffer());
+        assert_eq!(
+            text.trim(),
+            "",
+            "幅がMIN_SAFE_TEXT_WRAP_WIDTH未満のときは描画自体をスキップするはず、buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn choice_list_long_wrapping_text_does_not_panic_and_keeps_cursor_glued_at_min_safe_wrap_width()
+    {
+        // MIN_SAFE_TEXT_WRAP_WIDTH(3)ちょうどの境界。この幅では描画がスキップされず(Dの
+        // ケースと対照)、かつratatuiのWrap panicバグも踏まないことを確認する。長い選択肢
+        // テキストが1文字ずつ折り返される極端な幅でも、`▶`が単独行化せず先頭文字と同じ行に
+        // 来ることを確認する（#576の回帰ガードをこの境界幅でも取る）。
+        let area = Rect::new(0, 0, MIN_SAFE_TEXT_WRAP_WIDTH, 10);
+        let text = "abcdefghij".to_string();
+        let options = vec![choice_option(&text, "j")];
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| draw_choice_list(f, area, &options, 0, None))
+            .unwrap_or_else(|e| panic!("MIN_SAFE_TEXT_WRAP_WIDTHでpanicした: {e}"));
+        let buffer = terminal.backend().buffer();
+        let cursor_row = (0..area.height)
+            .find(|&y| {
+                (0..area.width).any(|x| buffer.cell((x, y)).expect("in bounds").symbol() == "▶")
+            })
+            .expect("カーソル記号▶がどこかの行にあるはず");
+        let cursor_row_has_first_char = (0..area.width)
+            .any(|x| buffer.cell((x, cursor_row)).expect("in bounds").symbol() == "a");
+        assert!(
+            cursor_row_has_first_char,
+            "極小幅でもカーソル記号と本文の先頭文字は同じ行(y={cursor_row})に描画されるはず"
+        );
+    }
+
+    #[test]
+    fn choice_list_non_cursor_wrapped_option_continuation_rows_are_not_reversed_and_neighboring_cursor_option_unaffected(
+    ) {
+        // デシジョンテーブルのセル4: カーソルは短い選択肢(index0)にあり、隣の選択肢
+        // (index1)は長くて折り返す・かつカーソルではない、という組み合わせ。折り返した
+        // 非カーソル選択肢の継続行にREVERSEDスタイルが漏れ伝播しないこと、かつ短い
+        // カーソル選択肢側の表示がそれに引きずられないことを確認する。
+        let area = Rect::new(0, 0, 20, 12);
+        let long_text = "あ".repeat(40);
+        let options = vec![choice_option("A", "x"), choice_option(&long_text, "y")];
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| draw_choice_list(f, area, &options, 0, None))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let mut a_found = false;
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                match cell.symbol() {
+                    "A" => {
+                        a_found = true;
+                        assert!(
+                            cell.modifier.contains(Modifier::REVERSED),
+                            "カーソル位置の短い選択肢Aは反転表示されるはず"
+                        );
+                    }
+                    "あ" => {
+                        assert!(
+                            !cell.modifier.contains(Modifier::REVERSED),
+                            "非カーソルの折り返し選択肢の継続行にREVERSEDが漏れてはいけない \
+                             (x={x},y={y})"
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(a_found, "カーソル選択肢Aがどこかに描画されているはず");
+    }
+
+    #[test]
+    fn choice_list_empty_option_text_renders_cursor_symbol_alone_without_panic() {
+        // 選択肢テキストが空文字列でも、CHOICE_CURSOR_SYMBOL単体の描画でpanicしないことを
+        // 確認する（本文が無いのでNBSP以降に結合する文字が無い極端なケース）。
+        let options = vec![choice_option("", "j")];
+        let area = Rect::new(0, 0, 20, 4);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| draw_choice_list(f, area, &options, 0, None))
+            .unwrap_or_else(|e| panic!("空選択肢テキストでpanicした: {e}"));
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains('▶'),
+            "空選択肢テキストでもカーソル記号▶は描画されるはず、buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn choice_cursor_symbol_and_padding_have_equal_cell_width() {
+        // CHOICE_CURSOR_PADDINGはCHOICE_CURSOR_SYMBOLと同じ表示幅を保つためのパディングで
+        // ある、という構造的不変条件そのものを検証する。片方だけを変更してもう片方を
+        // 更新し忘れると、カーソル行と非カーソル行で本文の開始列がずれる。
+        assert_eq!(
+            CHOICE_CURSOR_SYMBOL.cell_width(),
+            CHOICE_CURSOR_PADDING.cell_width(),
+            "CHOICE_CURSOR_SYMBOLとCHOICE_CURSOR_PADDINGは常に同じセル幅であるべき"
+        );
+    }
+
+    #[test]
+    fn cell_width_treats_nbsp_as_single_cell() {
+        // NBSP(U+00A0)のcell_width()が1であることを固定する。CHOICE_CURSOR_SYMBOLの幅計算
+        // （▶1セル+NBSP1セル=計2セル、CHOICE_CURSOR_PADDINGとの整合）はこの前提に依存
+        // している。ただしこれは`unicode-width`ベースの論理的なセル幅の保証であり、実端末・
+        // 実フォントでNBSPが実際に半角1文字ぶんの幅でグリフ描画される（あるいは見た目上
+        // 何らかの空白として表示される）ことまでは保証しない。
+        assert_eq!("\u{a0}".cell_width(), 1);
+    }
+
+    #[test]
+    fn choice_list_mixed_width_option_text_with_emoji_wraps_without_panic() {
+        // 半角(ASCII)+全角(かな)+絵文字が混在するテキストで折り返しが発生してもpanicせず、
+        // カーソル記号が本文冒頭と同じ行に来ることを確認する。
+        let unit = "abcあいう😀";
+        let text = unit.repeat(6);
+        let options = vec![choice_option(&text, "j")];
+        let area = Rect::new(0, 0, 16, 12);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| draw_choice_list(f, area, &options, 0, None))
+            .unwrap_or_else(|e| panic!("半角+全角+絵文字混在テキストでpanicした: {e}"));
+        let buffer = terminal.backend().buffer();
+        let cursor_row = (0..area.height)
+            .find(|&y| {
+                (0..area.width).any(|x| buffer.cell((x, y)).expect("in bounds").symbol() == "▶")
+            })
+            .expect("カーソル記号▶がどこかの行にあるはず");
+        let cursor_row_has_first_char = (0..area.width)
+            .any(|x| buffer.cell((x, cursor_row)).expect("in bounds").symbol() == "a");
+        assert!(
+            cursor_row_has_first_char,
+            "混在テキストでもカーソル記号と本文冒頭は同じ行(y={cursor_row})に描画されるはず"
+        );
     }
 
     // -- D. page_indicator_area 単体テスト（#487） --
