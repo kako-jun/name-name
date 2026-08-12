@@ -94,7 +94,7 @@ interface NovelPlayerProps {
   assetBaseUrl?: string
   /** 画面比率。"16:9" / "4:3" / "9:16"。デフォルト "16:9" (#136) */
   aspectRatio?: AspectRatio | string
-  /** 選択肢スタイル名 `default` / `soft` / `monochrome` (#146)。
+  /** 選択肢スタイル名 `default` / `soft` / `monochrome` (#146) / `pixel` (#562)。
    *  frontmatter `choice_style:` から流す。null/undefined で default 扱い */
   choiceStyle?: string | null
   /** per-game デフォルトフォント (#147)。CSS の font-family 文字列。

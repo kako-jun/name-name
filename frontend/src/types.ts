@@ -458,7 +458,7 @@ export interface EventDocument {
    *  "auto" (#442) は固定比率にロックせず、実ビューポートの向き（横長/縦長）に runtime 側
    *  （NovelPlayer）が都度 '16:9'/'9:16' を選び直す fluid モード。既存作品は対象外・非破壊。 */
   aspect_ratio?: string
-  /** 選択肢スタイル名。`default` / `soft` / `monochrome` (#146)。
+  /** 選択肢スタイル名。`default` / `soft` / `monochrome` (#146) / `pixel` (#562)。
    *  null/undefined のときは runtime で `default` 扱い。 */
   choice_style?: string | null
   /** per-game デフォルトフォント (#147)。CSS の font-family 文字列。

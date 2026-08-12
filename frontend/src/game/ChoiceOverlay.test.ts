@@ -1002,11 +1002,13 @@ describe('ChoiceOverlay pixel フレーム描画 (#562)', () => {
     polySpy.mockRestore()
   })
 
-  // 最重要回帰: g.poly() の第2引数(close)省略時、Polygon.closePath は undefined で
-  // 上書きされコンストラクタの既定 true が効かない（今回発見・修正した実バグ）。
-  // 複数ボタン・複数 poly 呼び出し（bg・shadow 双方）のすべてで close=true が明示されることを
-  // 厳密等価で確認する。
-  it('【最重要回帰】style="pixel" の全 poly 呼び出しで close(第2引数)が明示的に true(undefinedではない)', () => {
+  // g.poly() の第2引数(close)は省略しても pixi.js のストローク描画では
+  // `shape.closePath ?? true` により true にフォールバックされ、明示時と描画結果に差はない
+  // （実バグではない）。ここでは pixi.js 自身の内部実装（regularPoly/star/roundPoly 等）に
+  // ならった「意図を明示するため true を渡す」規約が守られているかを、複数ボタン・複数 poly
+  // 呼び出し（bg・shadow 双方）について厳密等価で確認する
+  // （コードスタイルの一貫性担保が目的で、機能的な差異の検証ではない）。
+  it('【引数明示規約】style="pixel" の全 poly 呼び出しで close(第2引数)が明示的に true(undefinedではない)', () => {
     const polySpy = vi.spyOn(Graphics.prototype, 'poly')
     const overlay = new ChoiceOverlay(800, 450)
     overlay.show(choices(3), vi.fn(), 'pixel')
@@ -1048,8 +1050,9 @@ describe('ChoiceOverlay pixel フレーム描画 (#562)', () => {
     polySpy.mockRestore()
   })
 
-  // hover 再描画パス（pointerover → bg.clear() → 再 drawButton）でも close 省略バグが
-  // 再発しないことの確認。shadow は再描画されないため、クリア後の poly 呼び出しは bg の1回のみ。
+  // hover 再描画パス（pointerover → bg.clear() → 再 drawButton）でも close=true 明示の
+  // 規約が保たれていることの確認（機能的な差異の検証ではない）。shadow は再描画されないため、
+  // クリア後の poly 呼び出しは bg の1回のみ。
   it('pointerover(hover)で style="pixel" のボタンにホバーすると、bg.clear() 後に再度 poly が close=true 付きで呼ばれる', () => {
     const overlay = new ChoiceOverlay(800, 450)
     overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn(), 'pixel')

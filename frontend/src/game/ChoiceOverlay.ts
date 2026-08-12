@@ -671,10 +671,11 @@ export class ChoiceOverlay extends Container {
    */
   private drawFrame(g: Graphics, theme: ChoiceTheme, offsetX: number, offsetY: number): void {
     if (theme.frameStyle === 'notched') {
-      // Graphics.poly() は Polygon.closePath を第2引数でそのまま上書きする（省略時は
-      // undefined＝false 扱いになり、Polygon 側のデフォルト true は効かない）。
-      // 省略すると最後の点から先頭点へ戻る左辺の1辺が stroke で描かれず枠が欠ける
-      // ため、明示的に true を渡して閉パスにする。
+      // Graphics.poly() の第2引数(close)は ShapePath 内部で Polygon.closePath に代入されるが、
+      // pixi.js のストローク描画（buildContextBatches の addShapePathToGeometryData）は
+      // `shape.closePath ?? true` で undefined を true にフォールバックするため、
+      // 省略時と明示時とで実際の描画結果に差は出ない。ここでは pixi.js 自身の内部実装
+      // （regularPoly/star/roundPoly 等）にならい、意図を明示するため true を明示的に渡す。
       g.poly(
         buildPixelNotchPoints(
           offsetX,
