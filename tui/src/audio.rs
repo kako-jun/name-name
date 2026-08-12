@@ -232,4 +232,71 @@ mod tests {
         };
         assert_eq!(AudioPlayer::initial_volumes(&high_bgm_low_se), (1.0, 0.0));
     }
+
+    // ---- #559: stderr抑制ヘルパー（`with_stderr_suppressed`）----
+    //
+    // ALSA/JACK 由来のCレベルstderr出力を `OutputStream::try_default()` 呼び出し中だけ
+    // 抑制するヘルパー（`with_stderr_suppressed` のdoc comment参照）。ここでは
+    // クロージャの戻り値パススルー・fdリーク無し・実際の `AudioPlayer::try_new` 経路の
+    // 3点を検証する。
+
+    #[test]
+    fn with_stderr_suppressed_returns_closure_value() {
+        // 戻り値がクロージャの結果のまま透過することを確認する（正常系）。クロージャは
+        // 即座に値を返すだけでI/Oしないため実行は一瞬で終わる。本テストは実際に
+        // プロセスのfd2をdup/dup2/closeするので、他テストが同時にstderrへ書き込んで
+        // いた場合そのメッセージが理論上一瞬だけ失われうるが、実行が一瞬なので許容する。
+        assert_eq!(with_stderr_suppressed(|| 42), 42);
+    }
+
+    #[test]
+    fn with_stderr_suppressed_preserves_non_trivial_return_types() {
+        // ジェネリック`T`のパススルーが`i32`のような単純型に限らないことを、タプルと
+        // `Option`（Some/None両方）という異なる形の型で確認する（同値分割）。
+        assert_eq!(with_stderr_suppressed(|| (1, "a")), (1, "a"));
+        assert_eq!(with_stderr_suppressed(|| Some(7)), Some(7));
+        assert_eq!(with_stderr_suppressed(|| None::<i32>), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn with_stderr_suppressed_does_not_leak_fds_on_success() {
+        // `/proc/self/fd` はLinux(procfs)限定の機構。`with_stderr_suppressed`内部の
+        // dup(退避)→dup2(devnullへ差し替え)→f()→dup2(復元)→close(退避fdを閉じる)という
+        // 一連の操作で、fdを1つもリークしないことを確認する（リソースリーク・正常系）。
+        //
+        // `cargo test`はデフォルトで並行実行されるため、他テストのファイルI/O等でfd数が
+        // テスト実行中に多少変動しうる（フレーキー要因）。1回だけの前後差分ではノイズと
+        // 本物のリークを区別しづらいため、10回連続呼び出しで増分を増幅させ、「1回あたり
+        // 1個ずつ確実に漏れ続けた場合の増分(10)」よりも十分小さいことだけを確認する
+        // （厳密な差分0を要求しない、ノイズ耐性のある比較方法）。
+        let fd_count = || std::fs::read_dir("/proc/self/fd").unwrap().count();
+        let before = fd_count();
+        for _ in 0..10 {
+            with_stderr_suppressed(|| {});
+        }
+        let after = fd_count();
+        assert!(
+            after <= before + 3,
+            "fd leak suspected after 10 calls: before={before}, after={after}"
+        );
+    }
+
+    #[test]
+    fn try_new_does_not_panic_regardless_of_audio_device_availability() {
+        // 本節冒頭（#537）の通りCIには実オーディオデバイスが無いため`Some`が返ることは
+        // 期待できないが、`try_new`自体を実際に呼び出すことで`with_stderr_suppressed`の
+        // 「dup成功→devnullへのopen成功→f()実行→復元」という実経路を、
+        // `OutputStream::try_default()`の実失敗込みで通す（状態遷移／実環境カバレッジ
+        // としてはこのテストが唯一、#559回帰テストとして最も実利がある）。戻り値が
+        // Some/Noneどちらであってもpanicしないことだけを見る（値はあえてアサートしない）。
+        //
+        // 既知の設計上の懸念（実装修正は別タスクの担当）: `with_stderr_suppressed`は
+        // Dropガードを持たない手続き的cleanupのため、`f`がpanicすると2つ目の`dup2`
+        // （stderr復元）が実行されずfd2が`/dev/null`を指したまま残ってしまう。現状唯一の
+        // 呼び出し元`OutputStream::try_default()`はResultを返すだけでpanicしないため今は
+        // 顕在化しないが、将来別の呼び出しを追加する際はDropガード化を検討すべき。
+        let volume = VolumeConfig::default();
+        let _ = AudioPlayer::try_new(&volume);
+    }
 }
