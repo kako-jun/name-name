@@ -308,8 +308,23 @@ pub fn draw(
 
 /// 選択肢のカーソル行に付ける記号。`reveal::PAGE_INDICATOR_SYMBOL` と同じ方針
 /// （記号・強調スタイルはハードコードし、Config化しない）。
-const CHOICE_CURSOR_SYMBOL: &str = "▶ ";
+///
+/// 区切りに半角スペース（U+0020）ではなく非改行スペース（NBSP、U+00A0）を使うのは
+/// 意図的（#576 バグ修正）。`draw_choice_list` は選択肢テキストを `Paragraph::wrap`
+/// （ratatui-widgets の `WordWrapper`）で折り返しており、`WordWrapper::process_input`
+/// は「非空白文字→空白文字」の遷移で単語確定＝行フラッシュを行う。半角スペースだと
+/// `▶`（非空白）→半角スペース（空白）の並びでこの確定が発火し、`▶` だけが独立した
+/// 1行としてフラッシュされ、後続の選択肢本文（空白を含まない1つの巨大word）が次の
+/// 物理行に落ちてカーソル記号と本文がずれる。NBSP は Unicode の一般カテゴリが `Zs`
+/// （空白）ではなく、ratatui の折り返し実装も単語の区切りとして扱わないため、
+/// `▶`+NBSP+本文が1つの巨大wordとして結合され、通常の長い選択肢テキストと同じ
+/// 折り返しフローに合流する。セル幅は半角スペースと同じ1セルなので見た目・レイアウト
+/// 計算（[`CHOICE_CURSOR_PADDING`] との幅比較含む）に影響しない。
+const CHOICE_CURSOR_SYMBOL: &str = "▶\u{a0}";
 /// カーソル記号と同じ表示幅を保つための、非カーソル行の左詰めパディング。
+/// [`CHOICE_CURSOR_SYMBOL`]（`▶` 1セル + NBSP 1セル = 計2セル、`CellWidth`/
+/// `unicode-width` 基準。`▶` U+25B6 は East Asian Width が Neutral のため半角扱い）
+/// と同じ2セル幅になるよう半角スペース2文字にしている。
 const CHOICE_CURSOR_PADDING: &str = "  ";
 
 /// 右側テキスト領域全体に選択肢を描画する。相手/自分の2ウィンドウ分割（`draw_text_windows`）
@@ -4009,6 +4024,55 @@ mod tests {
         assert!(
             rows_with_a >= 2,
             "十分に長い全角文字列なので複数行に折り返されるはず（実際は{rows_with_a}行）"
+        );
+    }
+
+    #[test]
+    fn choice_list_wrapped_cursor_symbol_stays_on_same_row_as_option_text() {
+        // #576 回帰テスト: 選択肢テキストが折り返される長さのとき、カーソル記号(▶)が
+        // 本文とは別の行に単独表示され本文が1行下にずれるバグの回帰ガード。修正前は
+        // CHOICE_CURSOR_SYMBOL の半角スペースが ratatui-widgets の WordWrapper の
+        // 単語確定点になり、`▶` だけが独立した1行としてフラッシュされていた
+        // （NBSP化で `▶`+区切り+本文が1つのwordとして結合され、この回帰は起きないはず）。
+        let config = Config::default();
+        let long_text = "あ".repeat(60);
+        let options = vec![choice_option(&long_text, "x")];
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0, None)),
+                    1,
+                    1,
+                    false,
+                    None,
+                    now,
+                    now,
+                    None,
+                    &mut image_cache,
+                    false,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area();
+        let cursor_row = (0..area.height)
+            .find(|&y| {
+                (0..area.width).any(|x| buffer.cell((x, y)).expect("in bounds").symbol() == "▶")
+            })
+            .expect("カーソル記号▶がどこかの行に描画されているはず");
+        let cursor_row_has_text = (0..area.width)
+            .any(|x| buffer.cell((x, cursor_row)).expect("in bounds").symbol() == "あ");
+        assert!(
+            cursor_row_has_text,
+            "カーソル記号▶と選択肢本文の先頭は同じ行(y={cursor_row})に描画されるはず（#576: \
+             別行に単独表示されると本文全体が1行下にずれる）"
         );
     }
 
