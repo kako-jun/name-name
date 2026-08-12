@@ -986,7 +986,7 @@ describe('ChoiceOverlay pixel フレーム描画 (#569)', () => {
 
 // #569: show() の統合的なふるまい確認。フレーム描画方式以外のロジック
 // （ボタン数・座標計算・ライフサイクル）は pixel でも default と非破壊で共通であることを見る。
-describe('ChoiceOverlay pixel 統合フロー (#562)', () => {
+describe('ChoiceOverlay pixel 統合フロー (#569)', () => {
   it('show(choices, onSelect, "pixel") は例外を投げずボタンを生成し、ボタン数・座標計算が default と同じロジックで求まる', () => {
     const pixelOverlay = new ChoiceOverlay(800, 450)
     expect(() => pixelOverlay.show(choices(3), vi.fn(), 'pixel')).not.toThrow()
