@@ -8,7 +8,7 @@
  *
  * DOM 操作のみを担う純粋関数。存在確認（onerror 判定）は呼び出し側
  * （useFavicon.ts）の責務とし、ここでは行わない。設定/再利用した
- * `<link>` 要素を返すのは、呼び出し側がそこに onerror/onload を
+ * `<link>` 要素を返すのは、呼び出し側がそこに onerror を
  * アタッチできるようにするため（url が null で削除しただけのときは null）。
  */
 export function setFavicon(url: string | null): HTMLLinkElement | null {
