@@ -796,6 +796,22 @@ where
                 // on_advance で状態を動かす前の生インデックスをここで捕まえておく必要がある
                 // — after 側で取り直すと既に次の item を指してしまうため。
                 let prev_item_index = playback.item_index();
+                // #558フォローアップ: `stable_item_key` の呼び出し自体も on_advance の
+                // 「前」でここで済ませておく必要がある。`item_scene_key`/`item_content_hash`
+                // は `advance()` 内部でシーンを新規構築するたびに末尾へ追記される
+                // （`Playback::stable_item_key` の doc comment 参照）ため、空シーン
+                // （items 0件、on_advance の C1 分岐で `advance()` が呼ばれるケース、#558）
+                // では `prev_item_index=0` が「advance前は範囲外（items自体が空）」だった
+                // ものが、advance後は新規構築された次シーンの最初の item 自身を指して
+                // しまう。after側で `stable_item_key` を呼び直すと、この「advance前は
+                // 存在しなかったはずのキー」が誤って解決されてしまい、まだ一度も表示して
+                // いない次シーンの最初の行が既読マークされる事故になる（実機テスト作成中に
+                // 発覚、再現テスト
+                // `event_loop_empty_first_scene_landing_line_is_not_falsely_marked_as_read`）。
+                // on_advance 実行前のこの時点で呼んでおけば、空シーンでは
+                // `item_scene_key`/`item_content_hash` がまだ空（またはより短い）ため
+                // 自然に `None` になり、後述の既読マーク処理も自動的にスキップされる。
+                let prev_stable_key = playback.stable_item_key(prev_item_index);
                 // #499: 既読マーク判定用に、on_advance で状態を動かす前の「選択肢表示中か」を
                 // 覚えておく。`playback.position()` は Choice item をカウントしないため、
                 // 「最後の会話行 → 直後の Choice」という遷移では `position()` の値が変わらず
@@ -824,10 +840,11 @@ where
                 );
                 play_new_se_cues(&mut last_se_cursor, playback, &config, audio.as_deref_mut());
                 // #500: 実際に行/文単位ページが1つ先へ進んだとき（`on_advance` が `true` を
-                // 返したとき、デシジョンテーブルのケース4）だけ、離れる直前の表示内容を
-                // バックログへ積む。選択肢確定（ケース1）・タイプライターのスキップのみ
-                // （ケース3、まだ同じ行にとどまる）・末尾での no-op（ケース5）ではいずれも
-                // `advanced` が偽になり、GUI版 `NovelRenderer.advanceOrSkipTypewriter` が
+                // 返したとき、デシジョンテーブルのケース2a（#558）・ケース4）だけ、離れる
+                // 直前の表示内容をバックログへ積む。選択肢確定（ケース1）・タイプライターの
+                // スキップのみ（ケース3、まだ同じ行にとどまる）・末尾での no-op
+                // （ケース2b・ケース5）ではいずれも `advanced` が偽になり、GUI版
+                // `NovelRenderer.advanceOrSkipTypewriter` が
                 // 「ページを離れる時だけ backlog に記録する」のと同じ粒度になる。本文が空
                 // （改ページ専用の空行）のエントリは記録しない（GUI版 `BacklogOverlay.addEntry`
                 // の「空行は記録しない」を踏襲）。
@@ -845,11 +862,14 @@ where
                 // 対象にしている（#140）。「離脱したか」の判定自体は `position()` の単発の
                 // before/after比較で十分（同じ1回の on_advance 呼び出し内の変化を見るだけ
                 // なので、#509 の遅延シーン追記が引き起こす「同じ内容が別 index になる」
-                // 問題の影響を受けない）。実際に集合へ積むキーだけを安定キーに差し替える。
+                // 問題の影響を受けない）。実際に集合へ積むキーだけを安定キーに差し替える
+                // — #558フォローアップにより、そのキー自体も on_advance 実行前に
+                // 捕まえた `prev_stable_key` を使う（on_advance 後に取り直さない、上の
+                // `prev_stable_key` 宣言側コメント参照）。
                 let position_changed = playback.position() != prev_position
                     || playback.current_choice().is_some() != was_choice_before;
                 if position_changed && !was_choice_before {
-                    if let Some(key) = playback.stable_item_key(prev_item_index) {
+                    if let Some(key) = prev_stable_key {
                         read_positions.insert(key);
                     }
                 }
@@ -1135,7 +1155,8 @@ fn restart_reveal_for_speed_change(
 /// | # | 現在位置 | reveal状態 | 次 | 動作 |
 /// |---|---|---|---|---|
 /// | 1 | 選択肢 | ― | ― | `select_current_choice` で確定を試みる。成功時のみ新しい位置の reveal を組み立て直す（失敗時＝無効な jump 先は選択肢表示のまま no-op） |
-/// | 2 | 無し | ― | ― | 何もしない |
+/// | 2a | 無し | ― | advance成功（次itemに到達） | `advance()` を試みる（#558）。成功時は次item の reveal を組み立て直し、`true` を返す — 現在シーンが Line/Choice/Image を1つも持たない場合（例: フラグ設定イベントだけの `game_init`）に、`advance()` 内部のスキップループが次にitemを持つシーンまで自動的に進める |
+/// | 2b | 無し | ― | advance失敗（真の末尾/ファイル境界） | 従来通り no-op（`false` を返す、`current_reveal` は不変） |
 /// | 3 | 会話行 | 未完了 | 存在する/最終行 | `skip_lines` で即全文表示、`advance()` は呼ばない |
 /// | 4 | 会話行 | 完了 | 存在する | `advance()` → 次item の reveal（`build_reveal_for_current`。Line なら Animating、Choice なら None） |
 /// | 5 | 会話行 | 完了 | 最終行 | `advance()` が `false` を返し no-op（`current_reveal` は不変） |
@@ -1145,12 +1166,13 @@ fn restart_reveal_for_speed_change(
 /// 文言はタイプライター演出の対象外なので、reveal の完了/未完了を問わず常に即座に確定を試みる
 /// （#3/#4 のような reveal_done 分岐が不要）。
 ///
-/// 戻り値は「実際に会話行/文単位ページが1つ先へ進んだか」（デシジョンテーブルのケース4での
-/// み `true`）。呼び出し側 `event_loop` はこれを使ってバックログ（#500）に「離れる直前の
-/// 表示内容」を積むタイミングを判定する — 選択肢確定（ケース1）・タイプライターの
-/// スキップのみでまだ同じ行にとどまる（ケース3）・末尾での no-op（ケース5）はいずれも
-/// `false` を返す。既存の呼び出し元（テスト含む）は戻り値を無視しても動作に影響しない
-/// （`bool` は `#[must_use]` ではないため、無視しても警告は出ない）。
+/// 戻り値は「実際に会話行/文単位ページが1つ先へ進んだか」（デシジョンテーブルのケース2a
+/// （#558）・ケース4でのみ `true`）。呼び出し側 `event_loop` はこれを使ってバックログ
+/// （#500）に「離れる直前の表示内容」を積むタイミングを判定する — 選択肢確定（ケース1）・
+/// タイプライターのスキップのみでまだ同じ行にとどまる（ケース3）・末尾での no-op
+/// （ケース2b・ケース5）はいずれも `false` を返す。既存の呼び出し元（テスト含む）は
+/// 戻り値を無視しても動作に影響しない（`bool` は `#[must_use]` ではないため、無視しても
+/// 警告は出ない）。
 fn on_advance(
     playback: &mut Playback,
     current_reveal: &mut Option<reveal::RevealState>,
@@ -1180,6 +1202,15 @@ fn on_advance(
             *current_reveal = build_reveal_for_current(playback, config, now);
             return true;
         }
+    } else if playback.advance() {
+        // #558: current_choice()もcurrent_line()もNoneのケース（現在シーンが
+        // Line/Choice/Imageを1つも持たない、例: フラグ設定イベントだけの
+        // game_init）。Playback::advance()は内部にスキップループを持ち、
+        // 呼びさえすれば次にitemを持つシーンまで自動的に進む
+        // （playback.rs 参照）。ここで呼ばなければ、両方Noneの間ずっと
+        // on_advanceが何もしない＝キー入力が効かないまま進行不能になる。
+        *current_reveal = build_reveal_for_current(playback, config, now);
+        return true;
     }
     false
 }
@@ -1419,6 +1450,184 @@ mod tests {
 
         assert_eq!(playback.position(), 0);
         assert!(current_reveal.is_none());
+    }
+
+    // ---- #558: current_choice()もcurrent_line()もNoneのケース（items 0件のシーン、
+    // 例: フラグ設定だけのgame_init）からの on_advance ----
+    //
+    // Playback::from_lines はシーン構造を持たない（scene_order が常に空）ため、この分岐
+    // （シーンを跨いだ暗黙のスキップ）を再現できない。実際の Markdown を parser::parse
+    // した Document 経由で Playback を構築する必要がある（choice_branch_source 系のテストと
+    // 同じ理由）。
+
+    #[test]
+    fn on_advance_empty_first_scene_advances_to_next_scene_line() {
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n**A**:\nおかえりなさい\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        // 前提: 1-1 はフラグ設定イベントだけで items を1件も持たないため、Choice も
+        // Line も現在位置に無い。
+        assert!(playback.current_choice().is_none());
+        assert!(playback.current_line().is_none());
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(
+            advanced,
+            "items 0件のシーンで足止めされず、items を持つ次シーンまで進めるはず"
+        );
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("hubの台詞")
+                .speaker
+                .as_deref(),
+            Some("A")
+        );
+        assert!(
+            current_reveal.is_some(),
+            "到達した新しい会話行のrevealが組み立てられているはず"
+        );
+    }
+
+    #[test]
+    fn on_advance_empty_first_scene_landing_on_choice_keeps_reveal_none() {
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n\
+                       [選択]\n- 進む→1-2\n[/選択]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(advanced);
+        assert!(
+            playback.current_choice().is_some(),
+            "items 0件のシーンの次に直接Choiceが来る構成でも、そこまで進めるはず"
+        );
+        assert!(
+            current_reveal.is_none(),
+            "選択肢に着地した場合はrevealを持たないはず（build_reveal_for_currentは \
+             current_line()がNoneならNoneを返す）"
+        );
+    }
+
+    #[test]
+    fn on_advance_skips_multiple_consecutive_empty_scenes_in_one_call() {
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: A = true]\n\n## 1-2: 中継\n\n[フラグ: B = true]\n\n\
+                       ## 1-3: ハブ\n\n**A**:\nおかえりなさい\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(
+            advanced,
+            "空シーンが2連続していても、on_advance 1回でitemsを持つシーンまで到達するはず \
+             （Playback::advance の内部スキップループが1呼び出しで完結する）"
+        );
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("hubの台詞")
+                .speaker
+                .as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn on_advance_does_not_cross_file_boundary_from_empty_first_scene() {
+        // #496 のファイル境界チェックは、items 0件のシーンからの新しい暗黙スキップ
+        // （#558）でも引き続き尊重されるはず（false-positive前進の回帰ガード）。
+        let config = instant_config();
+        let source0 = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n[フラグ: 探索済み = true]\n";
+        let source1 = "---\nengine: name-name\n---\n\n## 2-1: ハブ\n\n**A**:\nおかえりなさい\n";
+        let mut doc0 = name_name_parser::parser::parse(source0);
+        let doc1 = name_name_parser::parser::parse(source1);
+        let chapter_file_ids: Vec<usize> = std::iter::repeat_n(0, doc0.chapters.len())
+            .chain(std::iter::repeat_n(1, doc1.chapters.len()))
+            .collect();
+        doc0.chapters.extend(doc1.chapters);
+        let document = doc0;
+        let mut playback = Playback::from_merged_document(&document, &chapter_file_ids);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        assert!(playback.current_choice().is_none());
+        assert!(playback.current_line().is_none());
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(
+            !advanced,
+            "items 0件のシーンの次がファイル境界を跨ぐ場合は進んではいけない"
+        );
+        assert!(playback.current_choice().is_none());
+        assert!(
+            playback.current_line().is_none(),
+            "file1のhubへ誤って進んでしまってはいけない"
+        );
+        assert!(current_reveal.is_none());
+    }
+
+    #[test]
+    fn on_advance_true_end_of_document_is_safe_noop_not_panic() {
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n[フラグ: 探索済み = true]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        for _ in 0..3 {
+            let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+            assert!(
+                !advanced,
+                "後続シーンが無いドキュメント末尾では常にno-opのはず（panicしない）"
+            );
+        }
+        assert!(current_reveal.is_none());
+    }
+
+    #[test]
+    fn on_advance_empty_first_scene_advances_with_sentence_per_page_enabled() {
+        // Gymnasia実バグ（tui-config.toml の sentence_per_page=true）の発生条件そのもの。
+        // current_line() が current_display 経由になっても C1 分岐が機能することを確認する。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n**A**:\nおかえりなさい\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document).with_sentence_per_page(true);
+        let now = Instant::now();
+        let mut current_reveal: Option<reveal::RevealState> = None;
+
+        assert!(playback.current_line().is_none());
+
+        let advanced = on_advance(&mut playback, &mut current_reveal, &config, now);
+
+        assert!(advanced);
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("hubの台詞（current_display経由）")
+                .speaker
+                .as_deref(),
+            Some("A")
+        );
+        assert!(current_reveal.is_some());
     }
 
     #[test]
@@ -3170,6 +3379,52 @@ mod tests {
         assert!(
             playback.current_choice().is_none(),
             "スキップが誤って選択肢まで進んでしまってはいけない"
+        );
+    }
+
+    #[test]
+    fn event_loop_empty_first_scene_landing_line_is_not_falsely_marked_as_read() {
+        // #558のフォローアップ: on_advanceが表示コンテンツの無いシーン（items 0件、
+        // 例game_init）から次シーンの新規itemへ一気に進めるようになったことで、
+        // 「advance前のprev_item_index=0」がadvance後に新規構築された次シーンの
+        // 最初のitem自身を指してしまい、まだ一度も表示していない行が誤って
+        // read_positionsに既読マークされる副作用が発生した（実機テスト作成中に発覚）。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起動\n\n\
+                       [フラグ: 探索済み = true]\n\n## 1-2: ハブ\n\n\
+                       **A**:\nおかえりなさい\n\n**B**:\n次の話\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let (mut next_action, _remaining) = action_queue(vec![
+            Action::Advance,    // items 0件の1-1 -> 1-2の1行目(A)へ一気に進む（#558新分岐）
+            Action::ToggleSkip, // 着地直後、まだ未読のはずのAでスキップを試みる
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.position(),
+            1,
+            "空シーンから合流した直後のhub1行目が誤ってread_positionsに既読マークされ、\
+             スキップで2行目(B)まで飛ばされてはいけない"
+        );
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A")
         );
     }
 

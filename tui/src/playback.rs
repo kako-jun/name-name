@@ -1094,6 +1094,17 @@ impl Playback {
     /// テスト参照）。ただし「絶対に取り違えが起きない」わけではなく、[`content_signature`]
     /// の doc comment が挙げる64bit `DefaultHasher` の衝突（理論上ゼロではないが実用
     /// スケールでは無視できる）が起きない限り、という限定付きの保証である。
+    ///
+    /// **呼び出し規約（#558フォローアップ）**: `item_scene_key`/`item_content_hash` は
+    /// `advance()`/`select_current_choice()` などシーン構築系メソッドの呼び出し中に、
+    /// そのシーンの item 群を新規構築するたびに末尾へ追記される（append-only）。そのため、
+    /// ある時点の状態を表す `stable_item_key` の値を「before値」として使いたい場合は、
+    /// その状態を動かすメソッド呼び出しより**前**に計算しておく必要がある。呼び出し後に
+    /// 同じ `item_index` で呼び直すと、その間に新しく構築された item のキーを誤って
+    /// 指してしまう可能性がある（`item_index` が呼び出し前は範囲外だった場合に特に顕著 —
+    /// 呼び出し後は新規構築されたシーンの item を指すようになり、`None` ではなく誤った
+    /// `Some` が返る）。`main.rs::event_loop` が `on_advance` 実行前に
+    /// `prev_stable_key` を計算しているのはこの規約に従うため。
     pub(crate) fn stable_item_key(&self, item_index: usize) -> Option<(usize, usize, u64)> {
         let (scene_idx, local_index) = self.item_scene_key.get(item_index).copied()?;
         // `content_signature` を都度呼ばず、`append_stable_item_keys` が item 構築直後の
