@@ -1780,10 +1780,11 @@ export class NovelRenderer {
 
   /**
    * 2窓モード (#444) で話者が自分側（protagonist）か相手側かを判定する。
-   * 既存の protagonist 一致判定（`resolveNovelRoleXRatio`/`resolveBodyTextColor` の
-   * `speaker === this.protagonist` と同じ考え方）を流用する。話者不明（ナレーション等）は
-   * 自分側（下窓・白）に倒す（#549）— 相手側（上窓・水色）になるのは、protagonist と異なる
-   * 明示的な話者名（住人等）のときだけ。
+   * 話者不明（ナレーション等・null）も自分側（下窓・白）に倒す独自分岐を持つ（#549）。
+   * `resolveNovelRoleXRatio`/`resolveBodyTextColor` の非2窓分岐は null/空文字を事前ガードして
+   * `undefined`/住人色を返すのみで `speaker === this.protagonist` の比較へ進まないため、
+   * ここでの判定はそれらと同じ考え方ではない。相手側（上窓・水色）になるのは、protagonist と
+   * 異なる明示的な話者名（住人等）のときだけ。
    */
   private resolveDualWindowIsSelf(speaker: string | null): boolean {
     return speaker === null || speaker === this.protagonist
