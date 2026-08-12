@@ -998,6 +998,297 @@ describe('PlayerScreen', () => {
     expect(findSceneById(loadedScenes ?? [], 'makiya-netami')).toBeDefined()
   })
 
+  // #556: `routeNN/NN-slug.md` 命名規則（Gymnasia等）の候補パス解決。
+  //
+  // 検証の要点（旧実装でも brute-force フォールバックで最終的には解決していたため、
+  // 「解決される」だけでは偽陰性になる）:
+  //   - 正しい候補パスが**最初の試行で直接** fetch されること（getContents 呼び出し
+  //     回数・呼び出し引数まで assert する）
+  //   - 同名 basename を持つ他 route のファイルが誤って fetch されないこと
+  //     （route01/02/05/06 の 02-life.md 衝突ケースが最重要）
+  describe('PlayerScreen inferScriptPathsForSceneId: routeNN/NN-slug.md 命名規則の候補解決 (#556)', () => {
+    const ROUTE_PROJECT_NAME = 'gymnasia-route-fixture'
+
+    // sceneId → 実ファイルの対応表。02-life.md は route01/02/05/06 の 4 route に同名で
+    // 存在する（Gymnasia 実データの同名 basename 衝突ケースを再現）。route9/x.md は
+    // route 番号が 1 桁のケース、free/netami__makiya.md は route 形式(`r\d+-slug`)に
+    // 一致しない theo-hayami パターンの decoy（デシジョンテーブル行5 用）。
+    const SCENE_ID_BY_PATH: Record<string, string> = {
+      'script.md': 'entry-hub',
+      'route01/02-life.md': 'r01-02-life',
+      'route02/02-life.md': 'r02-02-life',
+      'route05/02-life.md': 'r05-02-life',
+      'route06/02-life.md': 'r06-02-life',
+      'route09/01-eyes-in-the-dark.md': 'r09-01-eyes-in-the-dark',
+      'route9/x.md': 'r9-x',
+      'free/netami__makiya.md': 'makiya-netami',
+    }
+
+    function mockRouteProject() {
+      listProjectsMock.mockResolvedValue([
+        { name: ROUTE_PROJECT_NAME, title: 'ルート検証', repo: 'kako-jun/gymnasia' },
+      ])
+      listScriptsMock.mockResolvedValue(
+        Object.keys(SCENE_ID_BY_PATH).map((path, i) => ({
+          path,
+          sha: `s${i}`,
+          size: 1,
+          title: null,
+          hidden: false,
+        }))
+      )
+      getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+        path,
+        sha: 'x',
+        content: path,
+      }))
+      parseMarkdownMock.mockImplementation(async (md: string) => ({
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [{ id: SCENE_ID_BY_PATH[md], title: md, view: 'TopDown', events: [] }],
+          },
+        ],
+      }))
+    }
+
+    /** ルート構成をレンダーして NovelPlayer マウントまで待ち、初期ロード（entry 取得）分の
+     *  getContents 呼び出し履歴をクリアする。以降 resolveMissingScene() 経由の呼び出しだけを
+     *  対象にアサーションできるようにする。 */
+    async function renderRouteProject() {
+      mockRouteProject()
+      render(
+        <PlayerScreen
+          projectName={ROUTE_PROJECT_NAME}
+          apiBaseUrl="http://api.test"
+          onBack={() => {}}
+        />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+      getContentsMock.mockClear()
+    }
+
+    it('r09-01-eyes-in-the-dark は route09/01-eyes-in-the-dark.md に一発で解決される（呼び出し回数1・スラッグ内の複数ハイフンも正しく分割）', async () => {
+      await renderRouteProject()
+
+      const scenes = await resolveMissingScene('r09-01-eyes-in-the-dark')
+
+      expect(getContentsMock).toHaveBeenCalledTimes(1)
+      expect(getContentsMock).toHaveBeenCalledWith(
+        ROUTE_PROJECT_NAME,
+        'route09/01-eyes-in-the-dark.md',
+        'main'
+      )
+      expect(findSceneById(scenes ?? [], 'r09-01-eyes-in-the-dark')).toBeDefined()
+    })
+
+    it('r02-02-life は route02/02-life.md にのみ解決され、同名basenameを持つ他routeの02-life.mdはfetchされない（同名basename排他）', async () => {
+      await renderRouteProject()
+
+      const scenes = await resolveMissingScene('r02-02-life')
+
+      expect(getContentsMock).toHaveBeenCalledTimes(1)
+      expect(getContentsMock).toHaveBeenCalledWith(ROUTE_PROJECT_NAME, 'route02/02-life.md', 'main')
+      expect(getContentsMock).not.toHaveBeenCalledWith(
+        ROUTE_PROJECT_NAME,
+        'route01/02-life.md',
+        'main'
+      )
+      expect(getContentsMock).not.toHaveBeenCalledWith(
+        ROUTE_PROJECT_NAME,
+        'route05/02-life.md',
+        'main'
+      )
+      expect(getContentsMock).not.toHaveBeenCalledWith(
+        ROUTE_PROJECT_NAME,
+        'route06/02-life.md',
+        'main'
+      )
+      expect(findSceneById(scenes ?? [], 'r02-02-life')).toBeDefined()
+    })
+
+    it('route形式(r\\d+-slug)に一致しないsceneIdはroute候補を増やさずbasenameパターンのみで解決される（デシジョンテーブル行5）', async () => {
+      await renderRouteProject()
+
+      const scenes = await resolveMissingScene('makiya-netami')
+
+      expect(getContentsMock).toHaveBeenCalledTimes(1)
+      expect(getContentsMock).toHaveBeenCalledWith(
+        ROUTE_PROJECT_NAME,
+        'free/netami__makiya.md',
+        'main'
+      )
+      // route 候補が誤って混ざっていないこと（decoy の 02-life.md 群が fetch されない）
+      expect(getContentsMock).not.toHaveBeenCalledWith(
+        ROUTE_PROJECT_NAME,
+        'route02/02-life.md',
+        'main'
+      )
+      expect(findSceneById(scenes ?? [], 'makiya-netami')).toBeDefined()
+    })
+
+    it('slugが空（r09-）のときは正規表現マッチ失敗としてroute候補を生成せずbasenameのみのbrute-forceフォールバックになる（境界値）', async () => {
+      await renderRouteProject()
+
+      const scenes = await resolveMissingScene('r09-')
+
+      // route 候補が1つも成立しないため、未ロードの全 path (7件) を順に brute-force する
+      expect(getContentsMock).toHaveBeenCalledTimes(7)
+      expect(scenes).toBeNull()
+    })
+
+    it('route番号が1桁（r9-x）でもゼロ埋めせず正しくroute9/x.mdにマッチする（境界値）', async () => {
+      await renderRouteProject()
+
+      const scenes = await resolveMissingScene('r9-x')
+
+      expect(getContentsMock).toHaveBeenCalledTimes(1)
+      expect(getContentsMock).toHaveBeenCalledWith(ROUTE_PROJECT_NAME, 'route9/x.md', 'main')
+      // ゼロ埋めして route09 と誤混同していないこと
+      expect(getContentsMock).not.toHaveBeenCalledWith(
+        ROUTE_PROJECT_NAME,
+        'route09/01-eyes-in-the-dark.md',
+        'main'
+      )
+      expect(findSceneById(scenes ?? [], 'r9-x')).toBeDefined()
+    })
+
+    it('route候補のgetContentsが404で失敗しても、次の候補（basename一致）に継続して解決する（catch→continueの回帰確認）', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { ApiError } = await import('../api/client')
+      const FALLBACK_PROJECT_NAME = 'gymnasia-route-fallback-fixture'
+
+      listProjectsMock.mockResolvedValue([
+        { name: FALLBACK_PROJECT_NAME, title: 't', repo: 'kako-jun/gymnasia' },
+      ])
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        // route 候補（route02/somefile.md）は 404 する想定。実体は basename 一致の
+        // somefile__r02.md 側にある（route 推測が外れても basename 救済で解決できることを示す）。
+        { path: 'route02/somefile.md', sha: 's1', size: 1, title: null, hidden: false },
+        { path: 'somefile__r02.md', sha: 's2', size: 1, title: null, hidden: false },
+      ])
+      getContentsMock.mockImplementation(async (_name: string, path: string) => {
+        if (path === 'route02/somefile.md') {
+          throw new ApiError(404, { error: 'not found' }, 'Not Found')
+        }
+        return { path, sha: 'x', content: path }
+      })
+      parseMarkdownMock.mockImplementation(async (md: string) => ({
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [
+              {
+                id: md === 'script.md' ? 'entry-hub' : 'r02-somefile',
+                title: md,
+                view: 'TopDown',
+                events: [],
+              },
+            ],
+          },
+        ],
+      }))
+
+      render(
+        <PlayerScreen
+          projectName={FALLBACK_PROJECT_NAME}
+          apiBaseUrl="http://api.test"
+          onBack={() => {}}
+        />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+      getContentsMock.mockClear()
+
+      const scenes = await resolveMissingScene('r02-somefile')
+
+      expect(getContentsMock).toHaveBeenCalledWith(
+        FALLBACK_PROJECT_NAME,
+        'route02/somefile.md',
+        'main'
+      )
+      expect(getContentsMock).toHaveBeenCalledWith(
+        FALLBACK_PROJECT_NAME,
+        'somefile__r02.md',
+        'main'
+      )
+      expect(findSceneById(scenes ?? [], 'r02-somefile')).toBeDefined()
+    })
+
+    it('sceneIdが空文字でもクラッシュせず解決失敗(null)を返す', async () => {
+      await renderRouteProject()
+
+      const scenes = await resolveMissingScene('')
+
+      expect(scenes).toBeNull()
+    })
+
+    it('listScripts不能フォールバック時（sortedPaths=[]）にresolveMissingSceneを呼んでもクラッシュせずnullを返す（paths配列が空の境界値）', async () => {
+      listProjectsMock.mockResolvedValue([
+        { name: 'gymnasia-single-fixture', title: 'single', repo: 'kako-jun/gymnasia' },
+      ])
+      listScriptsMock.mockRejectedValue(new Error('listScripts unavailable'))
+      getContentsMock.mockResolvedValue({
+        path: 'script.md',
+        sha: 'sha-entry',
+        content: 'script.md',
+      })
+      parseMarkdownMock.mockResolvedValue({
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [{ id: 'only-scene', title: 'only', view: 'TopDown', events: [] }],
+          },
+        ],
+      })
+
+      render(
+        <PlayerScreen
+          projectName="gymnasia-single-fixture"
+          apiBaseUrl="http://api.test"
+          onBack={() => {}}
+        />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+      getContentsMock.mockClear()
+
+      const scenes = await resolveMissingScene('unreachable-scene')
+
+      expect(scenes).toBeNull()
+      // sortedPaths が空のため候補探索・brute-force フォールバックとも発火しない
+      expect(getContentsMock).not.toHaveBeenCalled()
+    })
+
+    it('route候補による解決が成功したケースで、予期しないconsole.warn/errorが発生しない', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await renderRouteProject()
+
+      await resolveMissingScene('r09-01-eyes-in-the-dark')
+
+      expect(warnSpy).not.toHaveBeenCalled()
+      expect(errorSpy).not.toHaveBeenCalled()
+    })
+  })
+
   it('404 以外のデータ取得失敗はエラーメッセージを表示する', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
