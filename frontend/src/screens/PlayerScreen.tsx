@@ -139,6 +139,39 @@ function buildSceneIndex(
   return scenes
 }
 
+/**
+ * #556: `routeNN/NN-slug.md` 命名規則（Gymnasia等）の候補パス suffix を返す。
+ * sceneId が `r{route番号}-{slug}` 形式（例: `r09-01-eyes-in-the-dark`）のときだけ
+ * `route{route番号}/{slug}.md`（例: `route09/01-eyes-in-the-dark.md`）を返す。
+ *
+ * basename だけでは判定できない: Gymnasia は `02-life.md` のような同名 slug が
+ * 複数 route（route01/02/05/06）に存在するため、フォルダ名込みの suffix 一致で
+ * route を区別する必要がある。
+ *
+ * この suffix はそのまま `path.endsWith(suffix)` で比較してはいけない:
+ * `/` を挟まない文字列末尾一致だと `subroute02/02-life.md` のようなフォルダ名の
+ * 部分一致まで拾ってしまう（ディレクトリ境界を認識しないため）。呼び出し側
+ * （matchesRouteSuffix）で `/` 区切りの境界チェックを併用する。
+ */
+function inferRouteSlugPathSuffix(sceneId: string): string | null {
+  const match = sceneId.match(/^r(\d+)-(.+)$/)
+  if (!match) return null
+  const [, routeNumber, slug] = match
+  // sceneId 側の route 番号の桁表記（ゼロ埋め有無等）はフォルダ名の桁表記と
+  // 一致している前提。ズレていてもクラッシュはせず、suffix 一致に失敗して
+  // 呼び出し側の basename ベースの brute-force フォールバックに落ちるだけ。
+  return `route${routeNumber}/${slug}.md`
+}
+
+/**
+ * `routeSuffix` が `path` の末尾にディレクトリ境界を伴って一致するかを判定する。
+ * 単純な `path.endsWith(routeSuffix)` は `subroute02/02-life.md` のような
+ * フォルダ名末尾一致を誤検出するため、`/` 区切り（または完全一致）を必須にする。
+ */
+function matchesRouteSuffix(path: string, routeSuffix: string | null): boolean {
+  return routeSuffix !== null && (path === routeSuffix || path.endsWith('/' + routeSuffix))
+}
+
 function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] {
   const basenames = new Set<string>([`${sceneId}.md`])
   const parts = sceneId.split('-')
@@ -147,7 +180,10 @@ function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] 
     const theme = parts.slice(1).join('-')
     basenames.add(`${theme}__${resident}.md`)
   }
-  return paths.filter((path) => basenames.has(basename(path)))
+  const routeSuffix = inferRouteSlugPathSuffix(sceneId)
+  return paths.filter(
+    (path) => basenames.has(basename(path)) || matchesRouteSuffix(path, routeSuffix)
+  )
 }
 
 /**
