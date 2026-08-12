@@ -55,6 +55,8 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     // restoreSnapshot より前に呼ばれていること）を検証するために必要（P11）。
     setMissingSceneResolver = vi.fn()
     setDocKey = vi.fn()
+    // #578: シーン切り替えごとの自動クイックセーブ配線用。
+    setOnSceneChange = vi.fn()
     setChoiceStyle = vi.fn()
     setFontFamily = vi.fn()
     setFontSize = vi.fn()

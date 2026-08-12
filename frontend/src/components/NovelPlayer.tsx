@@ -556,6 +556,17 @@ function NovelPlayer({
       if (docKey) {
         renderer.setDocKey(docKey)
       }
+      // シーン切り替えごとの自動クイックセーブ (#578)。milestone 進行・複数ルートを持つ作品
+      // （Gymnasia 等）では、フラグ（GameState.flags）が手動セーブ（3スロットメニュー / F5）
+      // をしない限りブラウザを閉じる・リロードするたびに消える。既読は readProgress.ts で
+      // 自動永続化済みだが、フラグは別系統で未対応だったための埋め合わせ。
+      // setOnSceneChange は単一コールバックスロット（EditorScreen の VideoExporter 専用に
+      // 現状使われているのみ）。PlayerScreen/NovelPlayer 経路では他に使用者がいないため競合しない。
+      // 保存可否のガード（選択肢/Wait 待機中・終劇後は保存しない）は quickSave() 側にそのまま
+      // 委ねる（安全弁は緩めない）。
+      renderer.setOnSceneChange(() => {
+        renderer.quickSave()
+      })
       // 選択肢スタイル (#146)
       renderer.setChoiceStyle(choiceStyle ?? null)
       // per-game フォント (#147)
