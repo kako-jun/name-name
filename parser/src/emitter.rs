@@ -508,7 +508,14 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     None => out.push_str("[選択]\n"),
                 }
                 for opt in options {
-                    out.push_str(&format!("- {} → {}\n", opt.text, opt.jump));
+                    // 条件付きロック (#591)。`condition` が `Some` のときだけ末尾に
+                    // `[条件: flag]` を付ける（無指定時は従来どおり非破壊）。
+                    match &opt.condition {
+                        Some(flag) => {
+                            out.push_str(&format!("- {} → {} [条件: {flag}]\n", opt.text, opt.jump))
+                        }
+                        None => out.push_str(&format!("- {} → {}\n", opt.text, opt.jump)),
+                    }
                 }
                 out.push_str("[/選択]\n");
                 prev_was_dialog_or_text = false;

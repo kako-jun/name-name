@@ -351,6 +351,47 @@ title: "テスト"
     assert_eq!(doc, doc2);
 }
 
+/// 選択肢オプションに任意で `[条件: flag]` を付けて条件付きロックを表現できる (#591)。
+/// `[条件: flag]` を付けないオプションは従来どおり `condition: None`。
+#[test]
+fn test_choice_with_condition() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 条件付き選択テスト
+
+[選択]
+- 異邦 → r02-01-last-rites [条件: route01_cleared]
+- いつもの道 → r02-01-normal
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::Choice { options, columns } => {
+            assert_eq!(options.len(), 2);
+            assert_eq!(options[0].text, "異邦");
+            assert_eq!(options[0].jump, "r02-01-last-rites");
+            assert_eq!(options[0].condition.as_deref(), Some("route01_cleared"));
+            assert_eq!(options[1].text, "いつもの道");
+            assert_eq!(options[1].jump, "r02-01-normal");
+            assert_eq!(options[1].condition, None);
+            assert_eq!(*columns, None);
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+
+    // Roundtrip: 条件付きロックも emit → parse で保持される。
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[条件: route01_cleared]"));
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
 /// `[選択: 列=N]` でグリッド列数を指定できる (#508)。
 /// `列=` 未指定時は None のまま（既存の縦一列表示、上の test_choice で確認済み）。
 #[test]
