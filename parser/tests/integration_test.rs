@@ -392,6 +392,112 @@ title: "テスト"
     assert_eq!(doc, doc2);
 }
 
+/// #591 テスト観点整理フェーズ 中優先8: i18n。flag名に日本語+空白混在（内部に半角スペースを
+/// 含む日本語フラグ名）を指定しても、外側の trim だけが効いて内部の空白は保持されたまま
+/// parse→emit→parseの往復で一致することを確認する。
+#[test]
+fn test_choice_with_condition_flag_name_containing_japanese_and_internal_space_roundtrips() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 条件flag名i18nテスト
+
+[選択]
+- 進む → next [条件: ルート01 クリア済み]
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Choice { options, .. } => {
+            assert_eq!(
+                options[0].condition.as_deref(),
+                Some("ルート01 クリア済み"),
+                "日本語+内部空白混在のflag名がそのまま(内部空白を保ったまま)保持されるはず"
+            );
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc, doc2,
+        "parse→emit→parseで日本語+内部空白混在flag名が往復一致するはず"
+    );
+}
+
+/// #591 テスト観点整理フェーズ 低優先11（異常系・現状挙動の固定）: `[条件: ]`
+/// （コロン直後が空白のみ）は `condition == Some("")` としてパースされる。空文字列を
+/// 「条件なし」(`None`) と区別せず保持する現状の実装挙動をそのまま固定する回帰テスト
+/// （後述のstrip_prefix/strip_suffix/trimの組み合わせにより自然に導かれる挙動であり、
+/// 意図して設計されたものではないため仕様確定はしない）。
+#[test]
+fn test_choice_with_condition_empty_flag_name_parses_as_some_empty_string() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 条件空文字テスト
+
+[選択]
+- 進む → next [条件: ]
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Choice { options, .. } => {
+            assert_eq!(
+                options[0].condition.as_deref(),
+                Some(""),
+                "[条件: ]（空白のみ）はcondition==Some(\"\")としてパースされる現状の挙動"
+            );
+            assert_eq!(options[0].jump, "next");
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+}
+
+/// #591 テスト観点整理フェーズ 低優先12（異常系・現状挙動の固定、仕様確定ではない）:
+/// `[条件: flag`（閉じ`]`が無い）は、現状実装どおり `condition == None` へサイレントに
+/// フォールバックする。これは仕様として確定したものではなく、現状のパーサ実装の挙動を
+/// 記録するテストである。閉じ括弧欠落を検知してエラーにすべきという判断もあり得るが、
+/// 本Issue（#591）のスコープ外として現状維持とする。
+#[test]
+fn test_choice_with_condition_missing_closing_bracket_silently_falls_back_to_none() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 条件閉じ括弧欠落テスト
+
+[選択]
+- 進む → next [条件: flag
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Choice { options, .. } => {
+            assert_eq!(
+                options[0].condition, None,
+                "閉じ括弧が無い[条件:]はサイレントにNoneへフォールバックする現状の挙動 \
+                 （仕様確定ではない、本Issueのスコープ外として現状維持）"
+            );
+            assert_eq!(
+                options[0].jump, "next",
+                "閉じ括弧欠落の[条件:...]テキスト自体はjumpに混入せず切り捨てられるはず"
+            );
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+}
+
 /// `[選択: 列=N]` でグリッド列数を指定できる (#508)。
 /// `列=` 未指定時は None のまま（既存の縦一列表示、上の test_choice で確認済み）。
 #[test]

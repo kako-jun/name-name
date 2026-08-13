@@ -673,6 +673,61 @@ mod tests {
         );
     }
 
+    /// 3シーン構成: "1-1"（台詞→Flagで`set_flag`をtrueにする→2オプションのChoice、
+    /// 一方は`set_flag`条件でロック解除済み、もう一方は未設定の`unset_flag`条件で
+    /// ロックされたまま） → "1-2"/"1-3"（着地先、中身は使わない）。
+    fn conditional_choice_source() -> &'static str {
+        "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n\
+         [フラグ: set_flag=true]\n\
+         [選択]\n- 解除済み → 1-2 [条件: set_flag]\n- ロックされたまま → 1-3 [条件: unset_flag]\n[/選択]\n\n\
+         ## 1-2: 通常\n\n**B**:\n通常ルート\n\n\
+         ## 1-3: 特別\n\n**C**:\n特別ルート\n"
+    }
+
+    /// #591 テスト観点整理フェーズ 高優先3: ロック中の選択肢が表示された状態で
+    /// quicksave → restore し、復元後に `Playback::current_choice_locked()` が保存前と
+    /// 同じ配列を返すことを確認する。
+    ///
+    /// この自動クイックセーブはシーン単位の復元（`restore_playback` doc comment参照、
+    /// シーンの先頭＝最初のテキストイベントまでしか復元しない）のため、保存前に選択肢へ
+    /// 到達していたのと同じ回数だけ、復元後も明示的に `advance()` してChoiceへ再度到達する
+    /// 必要がある——`restore_playback_applies_flags_and_jumps_to_saved_scene` 等の既存テストと
+    /// 同じ制約に従う。
+    #[test]
+    fn save_quick_then_restore_preserves_current_choice_locked_state_across_round_trip() {
+        let path = temp_path("choice-locked-round-trip");
+        let _guard = TempFile(path.clone());
+        let document = name_name_parser::parser::parse(conditional_choice_source());
+
+        let mut playback = Playback::from_document(&document);
+        assert!(playback.advance(), "台詞からChoiceへ進めるはず");
+        let locked_before = playback.current_choice_locked();
+        assert_eq!(
+            locked_before,
+            vec![false, true],
+            "set_flag設定済み・unset_flag未設定という前提が崩れていたら\
+             このテストは無意味なため先に確認しておく"
+        );
+
+        save_quick(&path, &playback, &HashSet::new());
+
+        let mut restored_playback = Playback::from_document(&document);
+        assert!(restore_playback(&mut restored_playback, &path));
+        // restore_playback はシーンの先頭（台詞）まで戻すだけなので、Choiceへ再度到達するには
+        // 保存前と同じ回数（1回）advance()する必要がある。
+        assert!(
+            restored_playback.advance(),
+            "復元後も台詞からChoiceへ進めるはず"
+        );
+
+        assert_eq!(
+            restored_playback.current_choice_locked(),
+            locked_before,
+            "復元後のcurrent_choice_locked()は保存前と同じ配列を返すはず \
+             (set_flag/unset_flagのフラグ状態が正しく往復していれば一致するはず)"
+        );
+    }
+
     /// #579 i18n: 日本語のフラグ名・文字列値も破損せずセーブ/ロード往復できることを
     /// 確認する。`save_quick`は実ファイルへUTF-8のまま書き出す(serde_jsonは既定で
     /// 非ASCIIを`\uXXXX`へエスケープしない)ため、生ファイルの中身にも日本語がそのまま

@@ -4316,6 +4316,78 @@ mod tests {
         }
     }
 
+    // #591 テスト観点整理フェーズ 最優先2: grid×lock整合性。過去の事故パターン
+    // （グリッドの行×列マッピングとインデックス対応がずれる不具合）が locked 配列でも
+    // 再発していないかを狙い撃ちする。10択・columns=5・locked を市松(交互)パターンで渡し、
+    // 各セルのDIMスタイル・🔒サフィックスがlocked配列と同じインデックスの選択肢に
+    // 対応することを、行×列から独立に再計算したセル領域内で直接確認する（frontendの
+    // ChoiceOverlay grid×lock整合性テストと対をなす）。
+    #[test]
+    fn draw_choice_grid_mixed_locked_pattern_maps_dim_and_lock_marker_to_correct_index_not_shifted()
+    {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&i.to_string(), "x"))
+            .collect();
+        // 偶数indexはロックなし、奇数indexはロック中（市松パターンで隣接セルとの取り違えも検出できる）。
+        let locked: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
+        let area = Rect::new(0, 0, 60, 2);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 5, &locked);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // draw_choice_grid内部と同じLayout計算でrow/colのRectを独立に再現する
+        // （draw_choice_grid_ragged_last_row_leaves_missing_cells_blank_without_panic と同じ手法）。
+        let row_areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(1); 2])
+            .split(area);
+
+        for i in 0..10usize {
+            let row = i / 5;
+            let col = i % 5;
+            let col_areas = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![Constraint::Ratio(1, 5); 5])
+                .split(row_areas[row]);
+            let cell_area = col_areas[col];
+
+            let digit = i.to_string();
+            let (digit_x, digit_y) = (cell_area.x..cell_area.x + cell_area.width)
+                .zip(std::iter::repeat(cell_area.y))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!("index {i} (\"{digit}\") should render inside its own grid cell, buffer was: {buffer:?}")
+                });
+
+            let expected_locked = locked[i];
+            let dim = buffer
+                .cell((digit_x, digit_y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::DIM);
+            assert_eq!(
+                dim, expected_locked,
+                "index {i} の DIM 状態が locked[{i}]={expected_locked} と一致しない \
+                 （行×列マッピングとlocked配列のインデックスずれの検出用）"
+            );
+
+            // 🔒はそのセル領域内(同じ行、自セルのx範囲内)だけを見る。行全体を見ると
+            // 隣接セル(同じ行の別index)の🔒を誤って拾う恐れがあるため、独立に計算した
+            // cell_area の範囲だけに限定してスキャンする。
+            let has_lock_marker = (cell_area.x..cell_area.x + cell_area.width)
+                .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🔒");
+            assert_eq!(
+                has_lock_marker, expected_locked,
+                "index {i} の🔒表示の有無が locked[{i}]={expected_locked} と一致しない \
+                 （自セル範囲内だけを見ても対応がずれていないかの確認）"
+            );
+        }
+    }
+
     #[test]
     fn draw_choice_list_dispatches_to_grid_only_when_columns_at_least_2() {
         // A/Bが同じ行(y)に描画されるかどうかで、グリッド委譲(columns>=2)か

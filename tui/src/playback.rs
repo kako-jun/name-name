@@ -2529,6 +2529,157 @@ mod tests {
         );
     }
 
+    // #591 テスト観点整理フェーズ 中優先6: 二重送信ガード。ロック中の選択肢に対して
+    // select_current_choice() を複数回連続で呼んでも false を返し続け、内部のカーソル/
+    // シーン位置が変化しないことを確認する（1回だけの拒否は既存の
+    // select_current_choice_on_locked_option_is_noop がカバー済みだが、連打耐性は未検証だった）。
+    #[test]
+    fn select_current_choice_on_locked_option_repeated_calls_stay_noop_without_state_drift() {
+        let doc = choice_with_conditions_doc();
+        let mut pb = Playback::from_document(&doc);
+        pb.move_choice_cursor_down(); // カーソルをロック中のindex 1へ
+        let cursor_before = pb.current_choice().unwrap().1;
+        let scene_before = pb.current_scene_id().to_string();
+
+        for attempt in 0..5 {
+            assert!(
+                !pb.select_current_choice(),
+                "ロック中の選択肢は何度確定を試みてもfalseを返し続けるはず(attempt={attempt})"
+            );
+        }
+
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            cursor_before,
+            "連打してもカーソル位置が変化しないはず"
+        );
+        assert_eq!(
+            pb.current_scene_id(),
+            scene_before,
+            "連打してもシーンが変化しないはず"
+        );
+    }
+
+    // #591 テスト観点整理フェーズ 中優先7: カーソル移動。move_choice_cursor_* は locked を
+    // 見ない設計（select_current_choice側で確定だけを拒否する）ため、カーソルはロック中の
+    // 選択肢へも普通に移動できる（スキップされない）はず。リスト（列1）モードでの直接確認。
+    #[test]
+    fn move_choice_cursor_down_can_land_on_locked_option_in_list_mode_without_being_skipped() {
+        let doc = choice_with_conditions_doc(); // index 0: 無条件, index 1: ロック中
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_choice().unwrap().1, 0, "初期カーソルはindex 0のはず");
+
+        pb.move_choice_cursor_down();
+
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            1,
+            "ロック中のindex 1へスキップされず正常に移動できるはず"
+        );
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![false, true],
+            "カーソルが乗った時点でindex 1はロック中のままのはず"
+        );
+    }
+
+    // 同じ観点(#591 中優先7)のグリッド（列2以上）モード版。
+    #[test]
+    fn move_choice_cursor_right_can_land_on_locked_option_in_grid_mode_without_being_skipped() {
+        let ch1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![Event::Choice {
+                    options: vec![
+                        ChoiceOption {
+                            text: "無条件".to_string(),
+                            jump: "1-2".to_string(),
+                            condition: None,
+                        },
+                        ChoiceOption {
+                            text: "ロック中".to_string(),
+                            jump: "1-3".to_string(),
+                            condition: Some("route01_cleared".to_string()),
+                        },
+                    ],
+                    columns: Some(2),
+                }],
+            )],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_choice().unwrap().1, 0, "初期カーソルはindex 0のはず");
+
+        pb.move_choice_cursor_right();
+
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            1,
+            "グリッドでも右移動でロック中のindex 1へスキップされず移動できるはず"
+        );
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![false, true],
+            "カーソルが乗った時点でindex 1はロック中のままのはず"
+        );
+    }
+
+    // #591 テスト観点整理フェーズ 高優先4: 中継シーン自動継続の除外。中継シーン（本文無し・
+    // 選択肢1件だけ）に着地しても、その唯一の選択肢がロック中（flag未定義/false）なら
+    // 自動継続（relay_jump、#574）せず、通常のChoiceとして停止表示されることを確認する。
+    // 既存の select_current_choice_auto_continues_through_pure_relay_scene /
+    // select_current_choice_does_not_skip_single_choice_scene_with_dialog はどちらもロック
+    // なしのケースのみを検証しており、ロック中の中継シーンを対象にしたテストは無かった。
+    #[test]
+    fn select_current_choice_does_not_auto_continue_relay_scene_when_single_choice_is_locked() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "hub_gate",
+                    vec![
+                        dialog(Some("A"), vec!["定期報告"]),
+                        choice(vec![("続ける", "hub_gate_advance_1")]),
+                    ],
+                ),
+                scene(
+                    "hub_gate_advance_1",
+                    vec![choice_with_conditions(vec![(
+                        "続ける",
+                        "hub",
+                        Some("route01_cleared"),
+                    )])],
+                ),
+                scene("hub", vec![dialog(Some("B"), vec!["hubに戻った"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance(), "台詞から Choice へ進めるはず");
+
+        assert!(
+            pb.select_current_choice(),
+            "hub_gate から hub_gate_advance_1 への jump 自体は成功するはず"
+        );
+
+        assert_eq!(
+            pb.current_scene_id(),
+            "hub_gate_advance_1",
+            "唯一の選択肢がロック中なら自動継続せず、このシーンで停止するはず \
+             （通常のChoiceとして表示され、hubまで飛ばされない）"
+        );
+        assert!(
+            pb.current_choice().is_some(),
+            "停止時はChoiceとして表示されているはず（自動継続なら current_choice() は None のはず）"
+        );
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![true],
+            "唯一の選択肢はroute01_cleared未設定でロックされたままのはず"
+        );
+    }
+
     /// #579 で切り出した [`Playback::jump_to_scene_id`] の最小動作確認（網羅的な検証は
     /// `select_current_choice_*` 系の既存テスト群がジャンプ本体を通して既にカバーして
     /// いる — この関数はその本体をそのまま呼ぶだけの薄いラッパー）。
