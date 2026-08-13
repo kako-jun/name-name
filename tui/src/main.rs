@@ -1,3 +1,4 @@
+mod ambient_effects;
 mod audio;
 mod cli;
 mod config;
@@ -419,6 +420,10 @@ where
         playback
             .current_line()
             .and_then(|line| line.event_image.clone()),
+        playback
+            .current_line()
+            .map(|line| line.event_image_effects)
+            .unwrap_or_default(),
     );
 
     // BGM（宣言的 state）/ SE（ワンショットトリガ）の再生状態（#502）。`current_bgm_path`/
@@ -1009,6 +1014,10 @@ where
                     let target = playback
                         .current_line()
                         .and_then(|line| line.event_image.clone());
+                    let target_effects = playback
+                        .current_line()
+                        .map(|line| line.event_image_effects)
+                        .unwrap_or_default();
                     if image_fade.current_target() != target.as_deref() {
                         // `config.event_image.crossfade_ms`（グローバル値）を常に使う。
                         // `Event::EventImage`/`EventImageExit` が持つイベント個別の `fade_ms`
@@ -1016,6 +1025,7 @@ where
                         // 読み捨てている（MVPスコープの簡略化、#481）。
                         image_fade = image_fade.transition_to(
                             target,
+                            target_effects,
                             Duration::from_millis(config.event_image.crossfade_ms),
                             Instant::now(),
                         );
@@ -1398,6 +1408,7 @@ mod tests {
             speaker: speaker.map(|s| s.to_string()),
             text: vec![text.to_string()],
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         }
     }
 
@@ -1411,6 +1422,7 @@ mod tests {
             speaker: speaker.map(|s| s.to_string()),
             text: vec![text.to_string()],
             event_image,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         }
     }
 

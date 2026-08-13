@@ -7495,6 +7495,7 @@ fn test_event_image_path_only_defaults_to_hide_and_no_fade() {
             path: "story/act1/x.webp".to_string(),
             back: EventImageBack::Hide,
             fade_ms: None,
+            effects: AmbientEffects::default(),
         }
     );
 }
@@ -7510,6 +7511,7 @@ fn test_event_image_full_kv() {
             path: "story/act2/y.webp".to_string(),
             back: EventImageBack::Keep,
             fade_ms: Some(1400),
+            effects: AmbientEffects::default(),
         }
     );
 }
@@ -7602,6 +7604,7 @@ fn test_event_image_roundtrip_normalized_order() {
             path: "story/x.webp".to_string(),
             back: EventImageBack::Keep,
             fade_ms: Some(1400),
+            effects: AmbientEffects::default(),
         }
     );
 }
@@ -7658,6 +7661,7 @@ fn test_event_image_unknown_key_and_malformed_kv_are_skipped() {
             path: "x.webp".to_string(),
             back: EventImageBack::Keep,
             fade_ms: None,
+            effects: AmbientEffects::default(),
         }
     );
 }
@@ -7672,6 +7676,243 @@ fn test_event_image_exit_does_not_collide_with_event_image_prefix() {
     assert_eq!(
         event_with_fade,
         Event::EventImageExit { fade_ms: Some(300) }
+    );
+}
+
+// ============================================================================
+// #582 イベント絵アンビエント演出フラグ (ゆらぎ/ビネット/グロー/ろうそく) のパーサー / エミッターテスト
+// ============================================================================
+
+#[test]
+fn test_event_image_ambient_effects_all_four_flags_true() {
+    // 観点1: 4フラグ全部 true が正しくパースされる
+    let event = parse_single_event_image(
+        "[イベント絵: x.webp, ゆらぎ=true, ビネット=true, グロー=true, ろうそく=true]",
+    );
+    match event {
+        Event::EventImage { effects, .. } => {
+            assert_eq!(
+                effects,
+                AmbientEffects {
+                    wobble: true,
+                    vignette: true,
+                    glow: true,
+                    candle: true,
+                }
+            );
+        }
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_ambient_effects_flags_are_independent() {
+    // 観点2: 4フラグを1つずつ単独 true にしたとき、他3つは既定 false のまま
+    // （フラグの独立性。1つの kv パーサ内で相互に影響しないことをロックする）。
+    let wobble_only = parse_single_event_image("[イベント絵: x.webp, ゆらぎ=true]");
+    match wobble_only {
+        Event::EventImage { effects, .. } => assert_eq!(
+            effects,
+            AmbientEffects {
+                wobble: true,
+                ..AmbientEffects::default()
+            }
+        ),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+
+    let vignette_only = parse_single_event_image("[イベント絵: x.webp, ビネット=true]");
+    match vignette_only {
+        Event::EventImage { effects, .. } => assert_eq!(
+            effects,
+            AmbientEffects {
+                vignette: true,
+                ..AmbientEffects::default()
+            }
+        ),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+
+    let glow_only = parse_single_event_image("[イベント絵: x.webp, グロー=true]");
+    match glow_only {
+        Event::EventImage { effects, .. } => assert_eq!(
+            effects,
+            AmbientEffects {
+                glow: true,
+                ..AmbientEffects::default()
+            }
+        ),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+
+    let candle_only = parse_single_event_image("[イベント絵: x.webp, ろうそく=true]");
+    match candle_only {
+        Event::EventImage { effects, .. } => assert_eq!(
+            effects,
+            AmbientEffects {
+                candle: true,
+                ..AmbientEffects::default()
+            }
+        ),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_ambient_effects_english_alias_equals_japanese() {
+    // 観点3: 英語キー (wobble/vignette/glow/candle) が日本語キーと同じ結果になる
+    let en = parse_single_event_image(
+        "[イベント絵: x.webp, wobble=true, vignette=true, glow=true, candle=true]",
+    );
+    let ja = parse_single_event_image(
+        "[イベント絵: x.webp, ゆらぎ=true, ビネット=true, グロー=true, ろうそく=true]",
+    );
+    assert_eq!(en, ja);
+}
+
+#[test]
+fn test_event_image_ambient_effects_value_case_insensitive() {
+    // 観点4: 値の大文字小文字は無視される（TRUE/False も true/false と同じ解釈）
+    let event = parse_single_event_image("[イベント絵: x.webp, ゆらぎ=TRUE, ビネット=False]");
+    match event {
+        Event::EventImage { effects, .. } => assert_eq!(
+            effects,
+            AmbientEffects {
+                wobble: true,
+                vignette: false,
+                ..AmbientEffects::default()
+            }
+        ),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_ambient_effects_key_name_is_case_sensitive_unknown_key_skipped() {
+    // 観点5: `WOBBLE=true`（キー名の大文字化）は未知キーとして silent skip され、
+    // wobble は既定 false のまま（キー名は大文字小文字を区別するという設計の明示ロック）。
+    let event = parse_single_event_image("[イベント絵: x.webp, WOBBLE=true]");
+    match event {
+        Event::EventImage { effects, .. } => {
+            assert_eq!(effects, AmbientEffects::default());
+        }
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_ambient_effects_invalid_value_is_skipped() {
+    // 観点6: `ゆらぎ=1`（無効値、true/false 以外）は silent skip され、
+    // wobble は既定 false のまま変化しない。
+    let event = parse_single_event_image("[イベント絵: x.webp, ゆらぎ=1]");
+    match event {
+        Event::EventImage { effects, .. } => {
+            assert_eq!(effects, AmbientEffects::default());
+        }
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_ambient_effects_duplicate_key_invalid_second_does_not_overwrite() {
+    // 観点7: `ゆらぎ=true, ゆらぎ=maybe`（同キー2回目が無効値）→ 無効値は上書きせず、
+    // wobble は最初に設定された true のまま維持される。
+    let event = parse_single_event_image("[イベント絵: x.webp, ゆらぎ=true, ゆらぎ=maybe]");
+    match event {
+        Event::EventImage { effects, .. } => {
+            assert!(effects.wobble, "無効な2回目の値で上書きされてはいけない");
+        }
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_ambient_effects_duplicate_key_last_valid_wins() {
+    // 観点8: `ゆらぎ=true, ゆらぎ=false`（同キー重複、両方有効値）→ 最後の値が勝ち false になる。
+    let event = parse_single_event_image("[イベント絵: x.webp, ゆらぎ=true, ゆらぎ=false]");
+    match event {
+        Event::EventImage { effects, .. } => {
+            assert!(!effects.wobble, "同キー重複時は最後の有効値が勝つ");
+        }
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_ambient_effects_mixed_with_existing_kv_out_of_order() {
+    // 観点9: `[イベント絵: a.webp, ろうそく=true, 背面=keep, ゆらぎ=true, フェード=500]`
+    // のように既存 kv（背面/フェード）と演出 kv が順不同で混在しても全部正しくパースされる。
+    let event = parse_single_event_image(
+        "[イベント絵: a.webp, ろうそく=true, 背面=keep, ゆらぎ=true, フェード=500]",
+    );
+    assert_eq!(
+        event,
+        Event::EventImage {
+            path: "a.webp".to_string(),
+            back: EventImageBack::Keep,
+            fade_ms: Some(500),
+            effects: AmbientEffects {
+                wobble: true,
+                candle: true,
+                ..AmbientEffects::default()
+            },
+        }
+    );
+}
+
+#[test]
+fn test_event_image_ambient_effects_emit_roundtrip_normalized_order_all_true() {
+    // 観点10: 全フラグ true で emit した文字列が正規化された順序
+    // (ゆらぎ→ビネット→グロー→ろうそく) で出力され、再パースで元の構造体と一致する (round-trip 安定性)。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵: x.webp, candle=true, wobble=true, glow=true, vignette=true]\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains(
+            "[イベント絵: x.webp, ゆらぎ=true, ビネット=true, グロー=true, ろうそく=true]\n"
+        ),
+        "emit 結果:\n{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2, "round-trip で元の構造体と一致する");
+}
+
+#[test]
+fn test_event_image_ambient_effects_emit_omits_all_false_default() {
+    // 観点11: 全フラグ false（既定）は emit 結果に演出 kv が一切出力されない。
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵: x.webp]\n",
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("[イベント絵: x.webp]\n"),
+        "kv なしで emit されるべき:\n{emitted}"
+    );
+    for kv in ["ゆらぎ", "ビネット", "グロー", "ろうそく"] {
+        assert!(
+            !emitted.contains(kv),
+            "既定値(全false)では演出 kv が出力されてはいけない ({kv}):\n{emitted}"
+        );
+    }
+}
+
+#[test]
+fn test_event_image_ambient_effects_emit_partial_flags_only_present_ones() {
+    // 観点12: `wobble=true, glow=true` のみ有効な場合、出力にその2つだけが現れ他は出力されない。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵: x.webp, wobble=true, glow=true]\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("[イベント絵: x.webp, ゆらぎ=true, グロー=true]\n"),
+        "emit 結果:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("ビネット"),
+        "vignette=false は出力されない:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("ろうそく"),
+        "candle=false は出力されない:\n{emitted}"
     );
 }
 

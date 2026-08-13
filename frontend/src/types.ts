@@ -13,6 +13,23 @@ export type BlackoutAction = 'On' | 'Off'
 /** イベント絵の背面（背景・立ち絵）扱い (#351)。既定は 'Hide' */
 export type EventImageBack = 'Hide' | 'Keep'
 
+/**
+ * イベント絵のアンビエント演出フラグ (#582)。Gymnasia の「暗闇+オレンジ色のろうそく光+
+ * ゆらぎ+ビネット」ルックを画像単位でオンにする。既定は全て false（画面全体への一律適用
+ * ではなく画像ごとの明示オプトイン）。GUI（PixiJS フィルタチェーン）・TUI（RGBA ピクセル
+ * 変換）の両ランタイムが同じ4フラグを解釈する。parser/src/models.rs::AmbientEffects と同形。
+ */
+export interface AmbientEffects {
+  /** ゆらぎ。pixi.js core DisplacementFilter で画面全体に常時微妙な歪みをかける */
+  wobble: boolean
+  /** ビネット。周辺部の光量を落とす */
+  vignette: boolean
+  /** グロー/ブルーム。自身を blur して overlay 合成し、べた塗りをグラデーションに見せる（#316） */
+  glow: boolean
+  /** ろうそく光の数コマ揺れ。光量・影・グローを数コマ単位でゆらす */
+  candle: boolean
+}
+
 export interface ChoiceOption {
   text: string
   jump: string
@@ -224,6 +241,9 @@ export type Event =
         back?: EventImageBack
         /** 表示フェードイン時間 ms。未指定/null は `event_image_fade_ms` または runtime 既定 700ms */
         fade_ms?: number | null
+        /** #582 アンビエント演出フラグ。wasm は #[serde(default)] のため型上は optional だが、
+         *  実際の parse_markdown() 出力では常に全フィールドが入る（parser.ts で正規化）。 */
+        effects?: AmbientEffects
       }
     }
   | {

@@ -14,9 +14,40 @@
  *
  * 背景/動画の端フェードマスク（edgeFadeMask）は「画面ぴったり」の性質上不要（対象外）。
  * フェードは表示アルファの時間補間（フェードイン/アウト）のみを扱う。
+ *
+ * アンビエント演出 (#582): `[イベント絵: path, ゆらぎ=true, ビネット=true, グロー=true,
+ * ろうそく=true]` で画像単位にオンにする、Gymnasia の「暗闇+オレンジ色のろうそく光+ゆらぎ+
+ * ビネット」ルック向けフィルタチェーン。`sprite`/`glowSprite` を包む `imageGroup` に
+ * ゆらぎ（`DisplacementFilter`, pixi.js core）・ビネット（自前 `VignetteFilter`）を掛け、
+ * グローは同一テクスチャの複製 sprite を `pixi-filters` の `KawaseBlurFilter` で blur し
+ * `blendMode: 'overlay'` で 45% 程度重ねる技法（#316 で確定した「自身を blur して overlay
+ * 合成」）。ろうそく揺れは `sprite.tint`/`glowSprite.alpha` を数コマ単位で揺らす。
+ * アニメーション位相（ゆらぎ・ろうそく揺れ）は settled state を持たず、`fadeAnimation` と
+ * 同じ Ticker（`this.time.setInterval`）駆動の一時状態としてこのクラスだけが保持する
+ * （ADR-0002 / dev-doctrine 規律1）。
  */
 
-import { Assets, Container, Sprite, Text, TextStyle, Texture } from 'pixi.js'
+import {
+  Assets,
+  Container,
+  DisplacementFilter,
+  Sprite,
+  Text,
+  TextStyle,
+  Texture,
+  type Filter,
+} from 'pixi.js'
+import { KawaseBlurFilter } from 'pixi-filters'
+// 'overlay' はアドバンスドブレンドモード。副作用 import で拡張登録する（KawaseBlurFilter で
+// blur したグロー sprite の blendMode='overlay' を実際に描画するために必須、#582）。
+import 'pixi.js/advanced-blend-modes'
+import { VignetteFilter } from './VignetteFilter'
+import {
+  buildDisplacementNoiseCanvas,
+  computeCandleFlicker,
+  computeWobbleOffset,
+} from './ambientEffects'
+import type { AmbientEffects } from '../types'
 import { EventImageState } from './GameState'
 import {
   clampFullscreenImageScrollY,
@@ -26,6 +57,21 @@ import {
 } from './novelLayout'
 import { computeFadeAlpha } from './screenEffects'
 import { TimeController, defaultTimeController } from './TimeController'
+
+/** effects 全フラグ false（無演出）の既定値。`AmbientEffects | undefined` の正規化に使う。 */
+const NO_AMBIENT_EFFECTS: AmbientEffects = {
+  wobble: false,
+  vignette: false,
+  glow: false,
+  candle: false,
+}
+
+/** グロー sprite（自身を blur して overlay 合成）の基準 alpha。#316 の「45%dissolve程度」を踏襲。 */
+const GLOW_BASE_ALPHA = 0.45
+/** グロー sprite の blur 強度。#316 の「blur 20」を踏襲（KawaseBlurFilter.strength）。 */
+const GLOW_BLUR_STRENGTH = 20
+/** ゆらぎ (DisplacementFilter) のスケール。「微妙な歪み」に留める moderate 値。 */
+const WOBBLE_DISPLACEMENT_SCALE = 22
 
 /**
  * フルキャンバス画像表示モード (#530) の縦スクロールヒント文言（#547 must1）。
@@ -41,6 +87,8 @@ export interface EventImageShowOptions {
   back?: 'Hide' | 'Keep' | null
   /** 表示フェードイン時間 (ms)。呼び出し元が個別指定または per-game 既定を渡す。0 以下は即時表示 */
   fadeMs?: number | null
+  /** アンビエント演出フラグ (#582)。未指定/null は全 false（無演出、既存挙動のまま）。 */
+  effects?: AmbientEffects | null
   /**
    * ロード成否に関わらず一度だけ発火する（CharacterLayer の #293 `onReady` と同じ流儀）。
    * 呼び出し元（NovelRenderer）はこれを機に `applyEventImageVisibility()` を再計算する。
@@ -93,7 +141,36 @@ export class EventImageLayer extends Container {
    * 現在の「設定済み」状態（スナップショット用）。フェードの中間経過ではなく、常に
    * settled な目標値を指す（ADR-0002）。show()/remove() を呼んだ瞬間にここが更新される。
    */
-  private current: { path: string; back: 'Hide' | 'Keep' } | null = null
+  private current: { path: string; back: 'Hide' | 'Keep'; effects: AmbientEffects } | null = null
+
+  /**
+   * アンビエント演出 (#582) 用の wrapper container。`sprite`/`glowSprite` をここへ入れ、
+   * ゆらぎ（displacement）・ビネットのフィルタはこのコンテナ単位で掛ける（scrollHintText には
+   * 掛からない）。空でも常に `this` の子として存在する（show() のたびに作り直さない）。
+   */
+  private readonly imageGroup: Container
+  /** グロー演出 (#582) 用、`sprite` と同一テクスチャの複製 sprite。blur + overlay 合成で使う。 */
+  private glowSprite: Sprite | null = null
+  /**
+   * ゆらぎ演出 (#582) 用の変位マップ sprite。`DisplacementFilter` が `worldTransform` を参照する
+   * ため、レンダーツリー内（`this` の子）に常駐させる（`renderable=false` はフィルタ側が自動設定）。
+   * ノイズ canvas 生成に失敗する環境（jsdom 等、#582 参照）では `null` のまま — ゆらぎ指定時も
+   * 静かに no-op になる（クラッシュしない）。
+   */
+  private displacementSprite: Sprite | null = null
+  private displacementFilter: DisplacementFilter | null = null
+  /** ビネットフィルタ (#582)。ステートレスなので show() をまたいで使い回す。 */
+  private readonly vignetteFilter: VignetteFilter
+  /** 現在表示中のイベント絵に適用中の演出フラグ（`current.effects` と同じ値のキャッシュ）。 */
+  private currentEffects: AmbientEffects = NO_AMBIENT_EFFECTS
+  /** ゆらぎ・ろうそく揺れ（時間経過で変化する演出）の毎フレーム再計算タイマー。 */
+  private ambientTimer: number | null = null
+  /** `computeWobbleOffset`/`computeCandleFlicker` の経過時間の基準時刻。show() のたびにリセットする。 */
+  private ambientStartMs = 0
+  /** 変位 sprite の静止位置（ゆらぎはこの周りをオフセットする）。setSplitLayoutRegion 等の影響を
+   *  受けないよう画面中央に固定する（変位マップの意味論上、厳密な位置合わせは不要）。 */
+  private readonly wobbleBaseX: number
+  private readonly wobbleBaseY: number
 
   /** show() の非同期ロード用トークン。remove() / 再入との race 回避に使う */
   private loadToken = 0
@@ -153,6 +230,34 @@ export class EventImageLayer extends Container {
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
     this.time = time
+
+    // アンビエント演出 (#582)。imageGroup は sprite/glowSprite を入れる wrapper で、
+    // ゆらぎ・ビネットのフィルタはここに掛ける（scrollHintText は含めない）。
+    this.imageGroup = new Container()
+    this.addChild(this.imageGroup)
+
+    this.wobbleBaseX = this.screenWidth / 2
+    this.wobbleBaseY = this.screenHeight / 2
+    // 変位マップ (#582)。jsdom 等 canvas 2D が使えない環境では null のまま
+    // （buildDisplacementNoiseCanvas の doc comment 参照。ゆらぎ指定時も静かに no-op）。
+    const noiseCanvas = buildDisplacementNoiseCanvas()
+    if (noiseCanvas) {
+      this.displacementSprite = new Sprite(Texture.from(noiseCanvas))
+      this.displacementSprite.anchor.set(0.5)
+      this.displacementSprite.position.set(this.wobbleBaseX, this.wobbleBaseY)
+      // renderable=false は DisplacementFilter のコンストラクタが自動設定するが、
+      // フィルタが未使用の間（ゆらぎ未指定の画像を表示中）もこの sprite 自体は常駐するため、
+      // 二重の安全策として明示しておく（万一 renderable のまま残る変更が pixi.js 側に入っても
+      // 見えない位置＝中央に置いてあるので実害は無いが、意図を明確にする）。
+      this.displacementSprite.renderable = false
+      this.addChild(this.displacementSprite)
+      this.displacementFilter = new DisplacementFilter({
+        sprite: this.displacementSprite,
+        scale: { x: WOBBLE_DISPLACEMENT_SCALE, y: WOBBLE_DISPLACEMENT_SCALE },
+      })
+    }
+    this.vignetteFilter = new VignetteFilter()
+
     this.scrollHintText = new Text({
       text: SCROLL_HINT_LABEL,
       style: new TextStyle({
@@ -242,6 +347,8 @@ export class EventImageLayer extends Container {
       this.maxScrollY
     )
     this.sprite.y = -this.scrollOffsetY
+    // グロー sprite (#582) は main sprite の複製表示なので、スクロールにも追従させる。
+    if (this.glowSprite) this.glowSprite.y = this.sprite.y
     return true
   }
 
@@ -279,13 +386,15 @@ export class EventImageLayer extends Container {
   show(path: string, opts: EventImageShowOptions = {}): void {
     const back: 'Hide' | 'Keep' = opts.back === 'Keep' ? 'Keep' : 'Hide'
     const fadeMs = typeof opts.fadeMs === 'number' && opts.fadeMs > 0 ? opts.fadeMs : 0
+    const effects: AmbientEffects = opts.effects ?? NO_AMBIENT_EFFECTS
     const onSettled = opts.onSettled
     const onVisibilityChange = opts.onVisibilityChange
 
     this.destroySprite()
     this.stopFadeTimer()
     this.fadeAnimation = null
-    this.current = { path, back }
+    this.current = { path, back, effects }
+    this.currentEffects = effects
     this.loadFailed = false
     // フルキャンバス画像表示モード (#530) 中に新しい画像へ差し替わったら、スクロール位置を
     // 先頭へ戻す（前の画像のスクロール量を引きずらない）。
@@ -344,12 +453,53 @@ export class EventImageLayer extends Container {
         }
         this.sprite = sprite
         this.currentTexture = texture
-        this.addChild(sprite)
+        // #582: sprite は imageGroup の子にする（ゆらぎ/ビネットのフィルタは imageGroup 単位）。
+        this.imageGroup.addChild(sprite)
+
+        // グロー演出 (#582): 同一テクスチャの複製 sprite を KawaseBlurFilter で blur し、
+        // blendMode='overlay' + 45%程度の alpha で重ねる（#316 で確定した技法）。暖色 tint は
+        // 使わない（背景まで色被りするため NG、#316 で検証済み）。
+        if (effects.glow) {
+          const glow = new Sprite(texture)
+          Object.assign(glow, {
+            width: sprite.width,
+            height: sprite.height,
+            x: sprite.x,
+            y: sprite.y,
+          })
+          glow.blendMode = 'overlay'
+          glow.alpha = GLOW_BASE_ALPHA
+          // 既知の設計上の割り切り（修正しない、#582 スコープ外）: glowSprite.alpha は
+          // updateFadeFrame() のフェード補間の対象外。ここで固定値 GLOW_BASE_ALPHA を設定した
+          // 後は、candle=true の場合のみ updateAmbientFrame() が sprite.tint と同じ経路で
+          // 毎フレーム上書きする。そのため glow=true かつ candle=false の画像では、フェードイン中
+          // （本体の sprite.alpha がまだ 0 に近い間）もグローの overlay 合成（alpha 0.45）だけ
+          // 最初から効いて見える。詳細は updateFadeFrame() のコメントも参照。
+          glow.filters = [
+            new KawaseBlurFilter({ strength: GLOW_BLUR_STRENGTH, quality: 3, clamp: true }),
+          ]
+          this.imageGroup.addChild(glow)
+          this.glowSprite = glow
+        }
+
+        // ゆらぎ・ビネット (#582): imageGroup 単位のフィルタチェーン。displacementFilter は
+        // ノイズ canvas が使えない環境（jsdom 等）では null のまま＝ゆらぎ指定時も静かに no-op。
+        const activeFilters: Filter[] = []
+        if (effects.wobble && this.displacementFilter) activeFilters.push(this.displacementFilter)
+        if (effects.vignette) activeFilters.push(this.vignetteFilter)
+        this.imageGroup.filters = activeFilters.length > 0 ? activeFilters : null
+
         // ヒントは sprite より前面に出す必要がある。scrollHintText はコンストラクタで
-        // 一度だけ addChild 済みだが、以後の show() が sprite を末尾に addChild するたびに
+        // 一度だけ addChild 済みだが、以後の show() が imageGroup へ addChild するたびに
         // z順で埋もれてしまうため、既存の子を再 addChild すると末尾（最前面）へ移動する
         // PixiJS の挙動を利用して毎回前面へ戻す（#547 must1）。
         this.addChild(this.scrollHintText)
+
+        // 時間経過で変化する演出（ゆらぎ・ろうそく揺れ）の再計算タイマー (#582)。
+        if (effects.wobble || effects.candle) {
+          this.ambientStartMs = this.time.now()
+          this.ensureAmbientTimer()
+        }
 
         if (fadeMs > 0) {
           // フェード開始は必ずここ（テクスチャロード確定後）で行う。
@@ -437,6 +587,10 @@ export class EventImageLayer extends Container {
     }
     const elapsed = this.time.now() - f.startMs
     const { alpha, done } = computeFadeAlpha(elapsed, f.fromAlpha, f.toAlpha, f.durationMs)
+    // sprite.alpha のみを補間する。glowSprite.alpha はここでは更新しない（意図的、#582 スコープ外）
+    // — glow=true かつ candle=false の画像では、フェード中もグローの overlay 合成だけ最初から
+    // 効いて見える既知の割り切り。詳細は glow sprite 生成箇所（GLOW_BASE_ALPHA を設定している行）の
+    // コメント参照。
     this.sprite.alpha = alpha
     if (done) {
       const onComplete = f.onComplete
@@ -449,7 +603,58 @@ export class EventImageLayer extends Container {
     }
   }
 
+  /**
+   * 時間経過で変化するアンビエント演出（ゆらぎ・ろうそく揺れ、#582）の毎フレーム再計算タイマーを
+   * 開始する。`fadeTimer` と同じ 16ms 間隔（`ensureFadeTimer` 参照）。既に動いていれば no-op。
+   */
+  private ensureAmbientTimer(): void {
+    if (this.ambientTimer != null) return
+    this.ambientTimer = this.time.setInterval(() => this.updateAmbientFrame(), 16)
+  }
+
+  private stopAmbientTimer(): void {
+    if (this.ambientTimer == null) return
+    this.time.clearInterval(this.ambientTimer)
+    this.ambientTimer = null
+  }
+
+  /**
+   * ゆらぎ（displacementSprite のオフセット）・ろうそく揺れ（sprite.tint / glowSprite.alpha）を
+   * 現在時刻から再計算する (#582)。計算自体は `ambientEffects.ts` の純粋関数に委ねる
+   * （このメソッドは「いつ計算するか」と「結果をどこへ反映するか」だけを持つ、`updateFadeFrame`
+   * と同じ役割分担）。
+   */
+  private updateAmbientFrame(): void {
+    if (!this.sprite) {
+      this.stopAmbientTimer()
+      return
+    }
+    const elapsed = this.time.now() - this.ambientStartMs
+    if (this.currentEffects.wobble && this.displacementSprite) {
+      const { x, y } = computeWobbleOffset(elapsed)
+      this.displacementSprite.x = this.wobbleBaseX + x
+      this.displacementSprite.y = this.wobbleBaseY + y
+    }
+    if (this.currentEffects.candle) {
+      const factor = computeCandleFlicker(elapsed)
+      const v = Math.max(0, Math.min(255, Math.round(factor * 255)))
+      this.sprite.tint = (v << 16) | (v << 8) | v
+      if (this.glowSprite) {
+        this.glowSprite.alpha = GLOW_BASE_ALPHA * factor
+      }
+    }
+  }
+
   private destroySprite(): void {
+    // アンビエント演出 (#582) の後始末。sprite の有無に関わらず常に行う（防御的・冪等）。
+    this.stopAmbientTimer()
+    if (this.glowSprite) {
+      this.glowSprite.removeFromParent()
+      this.glowSprite.destroy()
+      this.glowSprite = null
+    }
+    this.imageGroup.filters = null
+
     if (!this.sprite) return
     this.sprite.removeFromParent()
     // texture は PixiJS の Assets キャッシュが保有するので破棄しない
@@ -467,11 +672,18 @@ export class EventImageLayer extends Container {
 
   /**
    * 現在の設定状態を返す（スナップショット用）。なければ null。
-   * フェード中でも settled な目標値（path/back）を返す（ADR-0002）。
+   * フェード中でも settled な目標値（path/back/effects）を返す（ADR-0002）。
+   *
+   * `effects` は全フラグ false（無演出）のときキー自体を省略する（#582）。`EventImageState.effects`
+   * は optional で「undefined = 無演出」の規約（フィールド doc 参照）— vitest `toEqual` は
+   * undefined プロパティを無視するため、演出未指定の既存テスト・旧セーブ（`{path, back}` のみ）
+   * との等価性を壊さない。
    */
   getState(): EventImageState | null {
     if (!this.current) return null
-    return { path: this.current.path, back: this.current.back }
+    const { path, back, effects } = this.current
+    const hasEffects = effects.wobble || effects.vignette || effects.glow || effects.candle
+    return hasEffects ? { path, back, effects } : { path, back }
   }
 
   /**
@@ -484,7 +696,11 @@ export class EventImageLayer extends Container {
       this.remove()
       return
     }
-    this.show(state.path, { back: state.back, onSettled: opts.onSettled })
+    this.show(state.path, {
+      back: state.back,
+      effects: state.effects,
+      onSettled: opts.onSettled,
+    })
   }
 
   /**

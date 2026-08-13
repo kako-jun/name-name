@@ -38,6 +38,8 @@ interface EventImageLayerInternals {
     destroyed?: boolean
     // texture.source.scaleMode 観測用（#466 pixel_art）。
     texture?: { source?: { scaleMode?: string } }
+    // ろうそく揺れ観測用（#582）。
+    tint?: number
   } | null
   fadeAnimation: {
     startMs: number
@@ -50,6 +52,11 @@ interface EventImageLayerInternals {
   current: { path: string; back: 'Hide' | 'Keep' } | null
   loadToken: number
   pendingLoadToken: number | null
+  // アンビエント演出 (#582) 観測用。
+  imageGroup: { filters: unknown[] | null }
+  glowSprite: { alpha: number; blendMode?: string; destroyed?: boolean } | null
+  ambientTimer: number | null
+  vignetteFilter: unknown
 }
 function internals(layer: EventImageLayer): EventImageLayerInternals {
   return layer as unknown as EventImageLayerInternals
@@ -1237,5 +1244,178 @@ describe('EventImageLayer スクロールヒント (isScrollHintVisible) (#547 m
     await flushPromises()
     // 横長画像はスクロール不要なので表示されないまま。
     expect(layer.isScrollHintVisible()).toBe(false)
+  })
+})
+
+describe('EventImageLayer アンビエント演出 (#582)', () => {
+  // jsdom（`canvas` npm パッケージ未導入環境）では buildDisplacementNoiseCanvas が null を返すため
+  // （ambientEffects.test.ts 参照）、コンストラクタで displacementFilter は常に null のまま。
+  // そのため wobble=true でも imageGroup.filters にはビネットフィルタだけが入る
+  // （ゆらぎは「静かに no-op」になる、EventImageLayer.ts の doc comment どおり）。
+
+  it('全フラグ true で show() すると imageGroup.filters にビネットが入り、glowSprite の blendMode/alpha が設定される', async () => {
+    mockAssetsLoadResolved()
+    const layer = makeLayer(virtualTime())
+    layer.show('story/x.webp', {
+      effects: { wobble: true, vignette: true, glow: true, candle: true },
+    })
+    await flushPromises()
+
+    const ll = internals(layer)
+    expect(ll.imageGroup.filters).not.toBeNull()
+    // jsdom は canvas 2D 未実装のため displacementFilter は常に null（ambientEffects.test.ts の
+    // buildDisplacementNoiseCanvas テスト参照）。ゆらぎ指定時も静かに no-op になるため、
+    // ここではビネットフィルタだけが imageGroup.filters に入ることを確認する。
+    expect(ll.imageGroup.filters).toEqual([ll.vignetteFilter])
+
+    expect(ll.glowSprite).not.toBeNull()
+    expect(ll.glowSprite!.blendMode).toBe('overlay')
+    expect(ll.glowSprite!.alpha).toBeCloseTo(0.45)
+  })
+
+  it('ゆらぎ単体指定時、jsdomでクラッシュせず console.error/warn も呼ばれない', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+
+    expect(() =>
+      layer.show('story/x.webp', {
+        effects: { wobble: true, vignette: false, glow: false, candle: false },
+      })
+    ).not.toThrow()
+    await flushPromises()
+    // ambientTimer (wobble/candle 起動) を実際に1回発火させても例外・警告が出ないこと。
+    time.tick(16)
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+
+  it('グロー単体(wobble/candleともfalse)の場合 ambientTimer は起動しない(glow/vignetteは時間非依存の演出)', async () => {
+    mockAssetsLoadResolved()
+    const layer = makeLayer(virtualTime())
+    layer.show('story/x.webp', {
+      effects: { wobble: false, vignette: false, glow: true, candle: false },
+    })
+    await flushPromises()
+
+    expect(internals(layer).ambientTimer).toBeNull()
+  })
+
+  it('ろうそく揺れ有効時、time.tick() で sprite.tint が時間経過とともに変化する', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/x.webp', {
+      effects: { wobble: false, vignette: false, glow: false, candle: true },
+    })
+    await flushPromises()
+
+    const initialTint = internals(layer).sprite!.tint
+    expect(initialTint).toBe(0xffffff) // 未着色の既定値
+
+    time.tick(16) // ambientTimer (16ms間隔) を1回発火させる
+    const afterFirstTick = internals(layer).sprite!.tint
+    expect(afterFirstTick).not.toBe(initialTint)
+
+    time.tick(200) // 別のろうそく step へ進める
+    const afterMoreTicks = internals(layer).sprite!.tint
+    expect(afterMoreTicks).not.toBe(afterFirstTick)
+  })
+
+  it('ろうそく+グロー同時指定時、glowSprite.alpha も candle の flicker 係数で連動して変化する', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/x.webp', {
+      effects: { wobble: false, vignette: false, glow: true, candle: true },
+    })
+    await flushPromises()
+
+    const baseAlpha = internals(layer).glowSprite!.alpha
+    expect(baseAlpha).toBeCloseTo(0.45) // tick 前は GLOW_BASE_ALPHA そのまま
+
+    time.tick(16)
+    const afterTick = internals(layer).glowSprite!.alpha
+    expect(afterTick).not.toBeCloseTo(baseAlpha, 5)
+    // GLOW_BASE_ALPHA(0.45) * flicker係数([0.86, 1.0]) の範囲に収まる。
+    expect(afterTick).toBeGreaterThanOrEqual(0.45 * 0.86 - 0.001)
+    expect(afterTick).toBeLessThanOrEqual(0.45 * 1.0 + 0.001)
+  })
+
+  it('状態遷移(最重要): 演出ありの画像表示中に演出なしの新しい画像へ show() すると、旧filters/旧glowSprite/旧ambientTimerが確実にクリアされ新画像に演出が一切残らない', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp', {
+      effects: { wobble: false, vignette: true, glow: true, candle: true },
+    })
+    await flushPromises()
+    const ll = internals(layer)
+    expect(ll.imageGroup.filters).not.toBeNull()
+    expect(ll.glowSprite).not.toBeNull()
+    expect(ll.ambientTimer).not.toBeNull()
+
+    // 新しい show() は effects を省略 = 全 false（無演出）。
+    layer.show('story/b.webp')
+    await flushPromises()
+
+    expect(ll.imageGroup.filters).toBeNull()
+    expect(ll.glowSprite).toBeNull()
+    expect(ll.ambientTimer).toBeNull()
+  })
+
+  it('remove() 時、wobble/candle 有効な画像でも ambientTimer がリークしない (time.getPendingTimerCount()===0)', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/x.webp', {
+      effects: { wobble: true, vignette: false, glow: false, candle: true },
+    })
+    await flushPromises()
+    expect(internals(layer).ambientTimer).not.toBeNull()
+
+    layer.remove()
+    expect(internals(layer).ambientTimer).toBeNull()
+    expect(time.getPendingTimerCount()).toBe(0)
+  })
+
+  it('getState(): 全フラグ false のとき effects キー自体が省略され、いずれか true のとき含まれる', () => {
+    const noEffectsLayer = makeLayer(virtualTime())
+    noEffectsLayer.show('x.webp')
+    const noEffectsState = noEffectsLayer.getState()
+    expect(noEffectsState).toEqual({ path: 'x.webp', back: 'Hide' })
+    expect(Object.prototype.hasOwnProperty.call(noEffectsState, 'effects')).toBe(false)
+
+    const withEffectsLayer = makeLayer(virtualTime())
+    withEffectsLayer.show('y.webp', {
+      effects: { wobble: true, vignette: false, glow: false, candle: false },
+    })
+    expect(withEffectsLayer.getState()).toEqual({
+      path: 'y.webp',
+      back: 'Hide',
+      effects: { wobble: true, vignette: false, glow: false, candle: false },
+    })
+  })
+
+  it('restore(): 旧形式セーブ({path,back}のみ、effectsキーなし)を復元すると effects は全false相当になる', async () => {
+    mockAssetsLoadResolved()
+    const layer = makeLayer(virtualTime())
+    // 旧セーブフォーマット。effects キー自体が存在しない (#582 導入前のセーブデータを模す)。
+    const legacyState: EventImageState = { path: 'story/x.webp', back: 'Keep' }
+    layer.restore(legacyState)
+    await flushPromises()
+
+    // show() の `opts.effects ?? NO_AMBIENT_EFFECTS` で全 false にフォールバックするので、
+    // 時間非依存/依存いずれの演出も一切発火しない。
+    const ll = internals(layer)
+    expect(ll.ambientTimer).toBeNull()
+    expect(ll.imageGroup.filters).toBeNull()
+    expect(ll.glowSprite).toBeNull()
   })
 })

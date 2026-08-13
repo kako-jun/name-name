@@ -6,16 +6,21 @@
 use std::time::{Duration, Instant};
 
 use jiwa::{lerp_rgb, Rgb};
+use name_name_parser::models::AmbientEffects;
 
+use crate::ambient_effects::{apply_ambient_effects, elapsed_ms_since_epoch};
 use crate::config::Config;
 use crate::image_render::{self, ImageCache, QuadrantCell, RenderedImage};
 
 /// 現在のイベント絵切り替え状態。`from`/`to` はいずれも Markdown 原稿中の相対パス
 /// （`config.event_image.assets_dir` からの相対、`DisplayLine::event_image` と同じ形）。
-/// `None` は「イベント絵なし」を表す。
+/// `None` は「イベント絵なし」を表す。`from_effects`/`to_effects`（#582）はそれぞれの画像に
+/// 指定されたアンビエント演出フラグ（`path` が `None` のときは無視される）。
 pub struct ImageFadeState {
     from: Option<String>,
     to: Option<String>,
+    from_effects: AmbientEffects,
+    to_effects: AmbientEffects,
     started_at: Instant,
     duration: Duration,
 }
@@ -23,10 +28,12 @@ pub struct ImageFadeState {
 impl ImageFadeState {
     /// トランジション無しの初期状態（`path` が既に定常表示され続けている体で開始する。
     /// `duration` を問わず [`Self::progress`] は常に `1.0` を返す）。
-    pub fn settled(path: Option<String>) -> Self {
+    pub fn settled(path: Option<String>, effects: AmbientEffects) -> Self {
         Self {
             from: path.clone(),
             to: path,
+            from_effects: effects,
+            to_effects: effects,
             started_at: Instant::now(),
             duration: Duration::ZERO,
         }
@@ -45,10 +52,18 @@ impl ImageFadeState {
     /// 打ち切られたように見えることがあるが、短時間での連続切り替えは稀なケースとして
     /// 許容する（実際の再生では会話行の切り替えがフェード時間より速く連続することは
     /// タイプライター演出があるため通常起きない）。
-    pub fn transition_to(&self, next: Option<String>, duration: Duration, now: Instant) -> Self {
+    pub fn transition_to(
+        &self,
+        next: Option<String>,
+        next_effects: AmbientEffects,
+        duration: Duration,
+        now: Instant,
+    ) -> Self {
         Self {
             from: self.to.clone(),
             to: next,
+            from_effects: self.to_effects,
+            to_effects: next_effects,
             started_at: now,
             duration,
         }
@@ -90,21 +105,31 @@ impl ImageFadeState {
         if self.from.is_none() && self.to.is_none() {
             return None;
         }
+        let elapsed_ms = elapsed_ms_since_epoch(now);
         let t = self.progress(now);
         if t >= 1.0 {
             return Some(match &self.to {
-                Some(path) => resolve_grid(cache, config, path, cols, rows),
+                Some(path) => {
+                    resolve_grid(cache, config, path, self.to_effects, elapsed_ms, cols, rows)
+                }
                 None => image_render::blank_grid(cols, rows),
             });
         }
-        let from_grid = self
-            .from
-            .as_deref()
-            .map(|path| resolve_grid(cache, config, path, cols, rows));
+        let from_grid = self.from.as_deref().map(|path| {
+            resolve_grid(
+                cache,
+                config,
+                path,
+                self.from_effects,
+                elapsed_ms,
+                cols,
+                rows,
+            )
+        });
         let to_grid = self
             .to
             .as_deref()
-            .map(|path| resolve_grid(cache, config, path, cols, rows));
+            .map(|path| resolve_grid(cache, config, path, self.to_effects, elapsed_ms, cols, rows));
         Some(blend(from_grid.as_ref(), to_grid.as_ref(), cols, rows, t))
     }
 }
@@ -113,10 +138,21 @@ impl ImageFadeState {
 /// 場合（`..`/絶対パス等の不正な相対パス、ファイル不在、壊れたファイル等）は
 /// [`image_render::blank_grid`] にフォールバックし、1枚の画像の問題で再生全体を
 /// クラッシュさせない。
+///
+/// アンビエント演出 (#582): `effects` が何か1つでも有効なら `apply_ambient_effects` で
+/// quadrant 変換前の RGBA バッファへピクセル変換を適用する。`elapsed_ms` はゆらぎ・
+/// ろうそく揺れの時間経過アニメーション用（呼び出し側 `snapshot` が毎回渡す最新値、
+/// このモジュール自体は「いつ」を知らない）。4フラグ全部 false の場合は
+/// `apply_ambient_effects` を呼ばずデコード済み RGBA バッファをそのまま
+/// `rgba_to_quadrant_grid` へ渡す（演出なし画像で毎フレーム無駄な `pixels.to_vec()` clone が
+/// 発生していた回帰の修正、レビュー nit-4 対応）。
+#[allow(clippy::too_many_arguments)]
 fn resolve_grid(
     cache: &mut ImageCache,
     config: &Config,
     relative_path: &str,
+    effects: AmbientEffects,
+    elapsed_ms: u64,
     cols: u16,
     rows: u16,
 ) -> RenderedImage {
@@ -124,13 +160,25 @@ fn resolve_grid(
         return image_render::blank_grid(cols, rows);
     };
     match cache.get_or_load(&full_path) {
-        Some(decoded) => image_render::rgba_to_quadrant_grid(
-            &decoded.rgba,
-            decoded.width,
-            decoded.height,
-            cols,
-            rows,
-        ),
+        Some(decoded) => {
+            if !effects.wobble && !effects.vignette && !effects.glow && !effects.candle {
+                return image_render::rgba_to_quadrant_grid(
+                    &decoded.rgba,
+                    decoded.width,
+                    decoded.height,
+                    cols,
+                    rows,
+                );
+            }
+            let pixels = apply_ambient_effects(
+                &decoded.rgba,
+                decoded.width,
+                decoded.height,
+                effects,
+                elapsed_ms,
+            );
+            image_render::rgba_to_quadrant_grid(&pixels, decoded.width, decoded.height, cols, rows)
+        }
         None => image_render::blank_grid(cols, rows),
     }
 }
@@ -222,6 +270,8 @@ mod tests {
         let state = ImageFadeState {
             from: None,
             to: Some(relative),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
             started_at,
             duration: Duration::from_millis(1000),
         };
@@ -266,6 +316,8 @@ mod tests {
         let state = ImageFadeState {
             from: Some(relative),
             to: None,
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
             started_at,
             duration: Duration::from_millis(1000),
         };
@@ -308,14 +360,20 @@ mod tests {
         let mid_flight = ImageFadeState {
             from: Some("a.webp".to_string()),
             to: Some("b.webp".to_string()),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
             started_at: now0,
             duration: Duration::from_millis(1000),
         };
         let mid = now0 + Duration::from_millis(500);
         assert_eq!(mid_flight.progress(mid), 0.5, "前提: まだ遷移の途中である");
 
-        let next =
-            mid_flight.transition_to(Some("c.webp".to_string()), Duration::from_millis(1000), mid);
+        let next = mid_flight.transition_to(
+            Some("c.webp".to_string()),
+            AmbientEffects::default(),
+            Duration::from_millis(1000),
+            mid,
+        );
         assert_eq!(
             next.from.as_deref(),
             Some("b.webp"),
@@ -326,7 +384,8 @@ mod tests {
 
     #[test]
     fn settled_progress_is_always_one() {
-        let state = ImageFadeState::settled(Some("props/x.webp".to_string()));
+        let state =
+            ImageFadeState::settled(Some("props/x.webp".to_string()), AmbientEffects::default());
         let now = Instant::now();
         assert_eq!(state.progress(now), 1.0);
         assert_eq!(
@@ -338,18 +397,24 @@ mod tests {
 
     #[test]
     fn settled_current_target_matches_input() {
-        let state = ImageFadeState::settled(Some("props/x.webp".to_string()));
+        let state =
+            ImageFadeState::settled(Some("props/x.webp".to_string()), AmbientEffects::default());
         assert_eq!(state.current_target(), Some("props/x.webp"));
-        let none_state = ImageFadeState::settled(None);
+        let none_state = ImageFadeState::settled(None, AmbientEffects::default());
         assert_eq!(none_state.current_target(), None);
     }
 
     #[test]
     fn transition_to_carries_previous_target_as_new_from() {
-        let settled = ImageFadeState::settled(Some("a.webp".to_string()));
+        let settled =
+            ImageFadeState::settled(Some("a.webp".to_string()), AmbientEffects::default());
         let now = Instant::now();
-        let next =
-            settled.transition_to(Some("b.webp".to_string()), Duration::from_millis(100), now);
+        let next = settled.transition_to(
+            Some("b.webp".to_string()),
+            AmbientEffects::default(),
+            Duration::from_millis(100),
+            now,
+        );
         assert_eq!(next.from.as_deref(), Some("a.webp"));
         assert_eq!(next.to.as_deref(), Some("b.webp"));
         assert_eq!(next.current_target(), Some("b.webp"));
@@ -360,6 +425,8 @@ mod tests {
         let state = ImageFadeState {
             from: None,
             to: Some("a.webp".to_string()),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
             started_at: Instant::now(),
             duration: Duration::from_millis(100),
         };
@@ -377,7 +444,7 @@ mod tests {
 
     #[test]
     fn snapshot_both_none_returns_none() {
-        let state = ImageFadeState::settled(None);
+        let state = ImageFadeState::settled(None, AmbientEffects::default());
         let mut cache = ImageCache::new();
         let config = Config::default();
         assert!(state
@@ -387,7 +454,10 @@ mod tests {
 
     #[test]
     fn snapshot_unresolvable_path_falls_back_to_blank_grid_without_panicking() {
-        let state = ImageFadeState::settled(Some("does-not-exist.webp".to_string()));
+        let state = ImageFadeState::settled(
+            Some("does-not-exist.webp".to_string()),
+            AmbientEffects::default(),
+        );
         let mut cache = ImageCache::new();
         let config = Config::default();
         let grid = state
@@ -512,6 +582,118 @@ mod tests {
             blended.cells[0].fg,
             (0, 0, 0),
             "to無しは黒(BLANK_CELL)へフェードアウトする"
+        );
+    }
+
+    #[test]
+    fn resolve_grid_wires_effects_into_apply_ambient_effects() {
+        // `resolve_grid` が `effects` を実際に `apply_ambient_effects` へ渡していることを、
+        // 同一画像で effects あり/なしの grid 出力が異なることで検証する（配線の断線を検知する
+        // 唯一の防波堤。effects を握りつぶして常にデフォルトへ差し替えるリグレッションが起きても、
+        // 他のテストは通ってしまう）。glow は elapsed_ms に依存しない純粋な変換なので、
+        // タイミングに関わる不確実性なしに決定論的に差を検証できる。
+        let fixture_color = (180u8, 120u8, 60u8);
+        let (config, relative) = config_and_relative_path_for_solid_fixture(fixture_color);
+        let mut cache = ImageCache::new();
+
+        let no_effects = resolve_grid(
+            &mut cache,
+            &config,
+            &relative,
+            AmbientEffects::default(),
+            0,
+            1,
+            1,
+        );
+        let glow_effects = AmbientEffects {
+            glow: true,
+            ..AmbientEffects::default()
+        };
+        let with_effects = resolve_grid(&mut cache, &config, &relative, glow_effects, 0, 1, 1);
+
+        assert_ne!(
+            no_effects.cells[0].bg, with_effects.cells[0].bg,
+            "effects が実際に apply_ambient_effects へ渡っていれば glow の overlay合成で色が変わるはず"
+        );
+    }
+
+    #[test]
+    fn settled_snapshot_reflects_effects() {
+        // `ImageFadeState::settled(path, effects)` で構築した状態の `snapshot()` 結果が
+        // 実際に effects を反映していることを確認する。
+        let fixture_color = (180u8, 120u8, 60u8);
+        let (config, relative) = config_and_relative_path_for_solid_fixture(fixture_color);
+        let mut cache = ImageCache::new();
+
+        let plain = ImageFadeState::settled(Some(relative.clone()), AmbientEffects::default());
+        let glow = ImageFadeState::settled(
+            Some(relative),
+            AmbientEffects {
+                glow: true,
+                ..AmbientEffects::default()
+            },
+        );
+        let now = Instant::now();
+        let plain_grid = plain
+            .snapshot(&mut cache, &config, 1, 1, now)
+            .expect("to=Someならグリッドが返る");
+        let glow_grid = glow
+            .snapshot(&mut cache, &config, 1, 1, now)
+            .expect("to=Someならグリッドが返る");
+
+        assert_ne!(
+            plain_grid.cells[0].bg, glow_grid.cells[0].bg,
+            "effects=glowのsettled状態はsnapshotにも反映されるはず"
+        );
+    }
+
+    #[test]
+    fn transition_to_applies_independent_effects_to_from_and_to_images() {
+        // `transition_to` で新旧effectsが独立管理されることを確認する: フェード開始直後(t≈0)は
+        // 旧画像(from)に旧effects(なし)が、フェード完了間際(t≈1)は新画像(to)に新effects(glow)が
+        // それぞれ適用されていること。
+        let color_a = (180u8, 120u8, 60u8);
+        let color_b = (40u8, 200u8, 90u8);
+        let (config, relative_a) = config_and_relative_path_for_solid_fixture(color_a);
+        // write_test_webp_fixture は std::env::temp_dir() に一意なファイル名で書き出すため、
+        // config(= relative_a の親ディレクトリ)をそのまま使い回して2本目も解決できる。
+        let fixture_path_b =
+            image_render::write_test_webp_fixture(&solid_rgba(color_b, 2, 2), 2, 2);
+        let relative_b = fixture_path_b
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let settled = ImageFadeState::settled(Some(relative_a), AmbientEffects::default());
+        let now0 = Instant::now();
+        let glow_effects = AmbientEffects {
+            glow: true,
+            ..AmbientEffects::default()
+        };
+        let transitioning = settled.transition_to(
+            Some(relative_b),
+            glow_effects,
+            Duration::from_millis(1000),
+            now0,
+        );
+
+        let mut cache = ImageCache::new();
+
+        let at_start = transitioning
+            .snapshot(&mut cache, &config, 1, 1, now0)
+            .expect("グリッドが返る");
+        assert_eq!(
+            at_start.cells[0].bg, color_a,
+            "t=0はfrom(A)そのまま。fromには旧effects(なし)が適用されているはず"
+        );
+
+        let near_end = transitioning
+            .snapshot(&mut cache, &config, 1, 1, now0 + Duration::from_millis(999))
+            .expect("グリッドが返る");
+        assert_ne!(
+            near_end.cells[0].bg, color_b,
+            "t≈1はto(B)にglowが適用されているはずなので、無加工のcolor_bとは異なる"
         );
     }
 }

@@ -5,7 +5,7 @@
  * NovelRenderer.setEvents() でリセットされない。
  */
 
-import { Event, FlagValue } from '../types'
+import { AmbientEffects, Event, FlagValue } from '../types'
 import { safeAssign } from './ownProperty'
 
 /**
@@ -61,6 +61,15 @@ export interface EventImageState {
   path: string
   /** 背面（背景・立ち絵）扱い。'Hide' = 隠す（既定）/ 'Keep' = 裏で維持する */
   back: 'Hide' | 'Keep'
+  /**
+   * アンビエント演出フラグ (#582)。`back` と同じく settled state（`[イベント絵:]` の作者指定を
+   * そのまま保持する宣言的な値。アニメーション位相自体は含まない・ADR-0002）。
+   * `undefined` = 全フラグ false（無演出）。既存のセーブ/スナップショット比較（`toEqual`）を
+   * 壊さないよう、`EventImageLayer.getState()` は全フラグ false のときこのキー自体を省略する
+   * （vitest `toEqual` は undefined プロパティを無視するため、旧フォーマットの `{path, back}` と
+   * 引き続き等価になる）。
+   */
+  effects?: AmbientEffects
 }
 
 /**
