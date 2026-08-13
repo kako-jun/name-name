@@ -2747,6 +2747,24 @@ mod tests {
     }
 
     #[test]
+    fn logo_fits_natively_native_cols_exactly_at_width_boundary_is_true() {
+        // 境界値の欠落補強（#588）: native_cols（image_w.div_ceil(2)）が
+        // REQUIRED_TOTAL_WIDTH ちょうどになる幅（=REQUIRED_TOTAL_WIDTH*2px）は、
+        // 「収まらない」側ではなく「収まる」側の境界（<=判定）に含まれるはず。
+        let image_w = u32::from(REQUIRED_TOTAL_WIDTH) * 2;
+        assert!(logo_fits_natively(image_w, 2));
+    }
+
+    #[test]
+    fn logo_fits_natively_native_rows_exactly_at_height_boundary_is_true() {
+        // 上の cols 版と対になる rows 版: native_rows（image_h.div_ceil(2)）が
+        // REQUIRED_MAIN_CONTENT_ROWS ちょうどになる高さ（=REQUIRED_MAIN_CONTENT_ROWS*2px）も
+        // 「収まる」側の境界に含まれるはず。
+        let image_h = u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2;
+        assert!(logo_fits_natively(2, image_h));
+    }
+
+    #[test]
     fn draw_splash_small_logo_image_uses_native_mode_and_does_not_fill_full_canvas_width() {
         // #588の核心の1つ: ネイティブ表示は画面全幅へ引き伸ばさない。8x2という小さい単色
         // 画像（cols=4, rows=1）をCANVAS_W(130)幅のキャンバスに表示すると、キャンバス
@@ -2789,6 +2807,133 @@ mod tests {
         assert!(
             text.contains("↑/↓ でスクロール"),
             "本編領域に収まらない画像はスケール表示にフォールバックし、スクロールヒントが出るはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_splash_native_mode_logo_below_required_size_shows_too_small_message_not_native_draw() {
+        // #588の自己申告ギャップの本丸: draw_splash_logo_native 内でガードしている
+        // fits_required_size の分岐自体がこれまで無検証だった。native表示に収まる
+        // ロゴ（214x46px、logo_fits_natively の参照サイズ）を設定した状態で、幅だけ
+        // 1セル不足する端末（REQUIRED_TOTAL_WIDTH-1 x REQUIRED_TOTAL_HEIGHT）に
+        // draw_splash を呼ぶと、(a) draw_too_small_message の文言が出て、
+        // (b) ネイティブ描画側の開始ヒントは出ず、(c) ロゴ色のセルが一切描画されない
+        // （native描画そのものに到達していない）ことを確認する。
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 214, 46), 214, 46);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH - 1,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+        assert!(
+            !text.contains("Enter / Space で開始"),
+            "サイズ不足時はネイティブ描画側の開始ヒントを出してはいけない, buffer was: {text}"
+        );
+        let logo_color = Color::Rgb(color.0, color.1, color.2);
+        let area = buffer.area();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                assert_ne!(
+                    buffer.cell((x, y)).unwrap().bg,
+                    logo_color,
+                    "サイズ不足時はロゴピクセルが一切描画されないはず (x={x}, y={y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_splash_reference_214x46_logo_renders_end_to_end_without_panic_and_uses_native_mode() {
+        // Issue #588 が前提とする基準サイズ214x46pxのロゴを、フルパイプライン(draw_splash)で
+        // 実際に CANVAS_W x CANVAS_H 端末に通す。(a) panicしない (b) フルスクリーン画像
+        // モード側のスクロールヒントが出ない（native側に入った証拠） (c) 画像領域の
+        // 一部セルがロゴ色になっている、の3点を確認する。
+        let color = (10u8, 200u8, 30u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 214, 46), 214, 46);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        assert!(
+            !text.contains('↑') && !text.contains('↓'),
+            "native表示モードではフルスクリーン画像モードのスクロールヒントを出してはいけない, buffer was: {text}"
+        );
+        let logo_color = Color::Rgb(color.0, color.1, color.2);
+        let area = buffer.area();
+        let has_logo_color = (0..area.height)
+            .any(|y| (0..area.width).any(|x| buffer.cell((x, y)).unwrap().bg == logo_color));
+        assert!(has_logo_color, "画像領域の一部セルがロゴ色になっているはず");
+    }
+
+    #[test]
+    fn draw_splash_native_mode_logo_extremely_small_terminal_does_not_panic() {
+        // 既存の draw_splash_extremely_small_terminal_does_not_panic はロゴ未設定
+        // （テキストモードへフォールバックする経路）のみをカバーしていた。ここでは
+        // native表示に収まる小さいロゴ（4x1px相当のnativeサイズ）を設定した状態で、
+        // 0x0/1x1という極小端末でもpanicしないことを確認する（#588、
+        // logo_fits_natively==true分岐からfits_required_sizeガードに至る経路）。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 4, 1), 4, 1);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut image_cache = ImageCache::new();
+        for (w, h) in [(0u16, 0u16), (1, 1)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal
+                .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn draw_splash_native_mode_logo_larger_terminal_still_centers_without_growing() {
+        // #588: ネイティブ表示は端末が要求サイズより大きくてもロゴを拡大しない。
+        // 単色画像は quadrant_cell_from_subpixels により全セルが glyph=空白・
+        // bg=ロゴ色になる（doc コメント参照）ため、8x2px（native cols=4, rows=1）の
+        // 単色ロゴなら、ロゴ色を持つセル数はちょうど4になるはず。端末を
+        // CANVAS_W/CANVAS_Hより大きくしてもこのセル数が変わらないこと、かつ
+        // 左上(0,0)には来ない（中央寄せされている）ことを確認する。
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 8, 2), 8, 2);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let extra_w = 6u16;
+        let extra_h = 4u16;
+        let mut terminal =
+            Terminal::new(TestBackend::new(CANVAS_W + extra_w, CANVAS_H + extra_h)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let logo_color = Color::Rgb(color.0, color.1, color.2);
+        let area = buffer.area();
+        assert_ne!(
+            buffer.cell((0, 0)).unwrap().bg,
+            logo_color,
+            "端末が大きくてもロゴは左上(0,0)まで拡大されないはず"
+        );
+        let logo_cell_count = (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| buffer.cell((x, y)).unwrap().bg == logo_color)
+            .count();
+        assert_eq!(
+            logo_cell_count, 4,
+            "native_cols(4)*native_rows(1)を超えて拡大されてはいけない"
         );
     }
 
@@ -2991,6 +3136,14 @@ mod tests {
     }
 
     #[test]
+    fn fits_required_size_one_cell_wider_and_taller_is_true() {
+        // 上の2件（幅のみ+1／高さのみ+1）は個別の軸しか動かしていなかった。
+        // 幅・高さ双方を同時に+1したケースでも true になることを明示する。
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH + 1, REQUIRED_TOTAL_HEIGHT + 1);
+        assert!(fits_required_size(actual));
+    }
+
+    #[test]
     fn compute_centered_canvas_actual_equals_required_has_zero_offset() {
         let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
         let canvas = compute_centered_canvas(required, required);
@@ -3131,6 +3284,24 @@ mod tests {
     }
 
     #[test]
+    fn draw_too_small_message_content_survives_when_both_width_and_height_deficient() {
+        // 上の`draw_too_small_message_content_survives_at_moderately_narrow_width`は
+        // 幅のみ不足（高さはREQUIRED_TOTAL_HEIGHTちょうど）でしか本文を検証していなかった。
+        // 幅・高さ双方が1セルずつ不足するケース（129x32）でも本文が省略されずに
+        // 描画されることを確認する。
+        let config = Config::default();
+        let buffer = render(
+            &config,
+            None,
+            None,
+            REQUIRED_TOTAL_WIDTH - 1,
+            REQUIRED_TOTAL_HEIGHT - 1,
+        );
+        let text = buffer_text(&buffer);
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+    }
+
+    #[test]
     fn draw_larger_than_required_terminal_offsets_content_by_centering_margin() {
         // 実端末がCANVAS_W/CANVAS_Hより大きい場合、UI全体がcompute_centered_canvasの
         // オフセット分だけ右下にずれて描画されることを、テキスト列の開始位置で確認する
@@ -3192,6 +3363,67 @@ mod tests {
         assert_eq!(
             y, expected_y,
             "text row should shift down by the centering margin"
+        );
+    }
+
+    #[test]
+    fn draw_then_draw_again_with_different_terminal_size_does_not_leak_stale_layout() {
+        // #588: draw() の全出力は毎フレームの引数（特に frame.area()）だけから決まるべきで、
+        // 前フレームのレイアウト（センタリングオフセット等）を引きずってはいけない。
+        // CANVAS_W x CANVAS_H（ジャストサイズ、オフセット0）→ それより大きいサイズ
+        // （オフセットが乗る）→ 再び CANVAS_W x CANVAS_H と連続で draw() し、最後のフレームで
+        // テキスト列の開始x座標がオフセット0の位置（canvas_text_column_x_start()）に
+        // 戻っていることを確認する。
+        let config = Config::default();
+        let line = dialog_line(Some("A"), vec!["Y"]);
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+
+        let sizes = [
+            (CANVAS_W, CANVAS_H),
+            (CANVAS_W + 20, CANVAS_H + 7),
+            (CANVAS_W, CANVAS_H),
+        ];
+        for (w, h) in sizes {
+            terminal.backend_mut().resize(w, h);
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &config,
+                        Some(&line),
+                        None,
+                        1,
+                        1,
+                        false,
+                        None,
+                        now,
+                        now,
+                        None,
+                        &mut image_cache,
+                        false,
+                    )
+                })
+                .unwrap();
+        }
+
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area();
+        let mut leftmost_y_x = None;
+        'outer: for y in 0..area.height {
+            for x in 0..area.width {
+                if buffer.cell((x, y)).expect("in bounds").symbol() == "Y" {
+                    leftmost_y_x = Some(x);
+                    break 'outer;
+                }
+            }
+        }
+        let x = leftmost_y_x.expect("text should render somewhere");
+        assert_eq!(
+            x,
+            canvas_text_column_x_start(),
+            "サイズを行き来した後ジャストサイズに戻れば、前フレームのオフセットを引きずらずセンタリングオフセットは0に戻るはず"
         );
     }
 
@@ -5506,7 +5738,7 @@ mod tests {
 
     #[test]
     fn fixed_canvas_image_pane_width_matches_required_image_cols() {
-        // REQUIRED_TEXT_COLS = REQUIRED_IMAGE_COLS + 2 という一見不思議な式（定数の
+        // REQUIRED_TEXT_COLS == REQUIRED_IMAGE_COLS（#588で1:1に統一。定数の
         // doc コメント参照）が、実際に split_columns 経由で画像ペインを
         // REQUIRED_IMAGE_COLS ちょうどの幅にすることを検算する。ここがズレると
         // 正方形画像のクロップ0保証（`fixed_canvas_square_image_crops_nothing_at_required_image_pane_size`）
