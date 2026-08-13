@@ -1140,6 +1140,17 @@ impl Playback {
         }
     }
 
+    /// `option.cleared`（#594）の真偽を現在のフラグ状態で判定する。`cleared` が `None`
+    /// （従来どおり指定なし）なら常に `false`（消灯しない）。`Some(flag)` なら
+    /// `self.flags.check(flag)`（`is_option_locked` の否定と違い、真のときに消灯 = そのまま
+    /// 真偽判定）——`[条件:]` と同じ真偽判定規則を使うが、ロックとは意味が逆（真で消灯）。
+    fn is_option_cleared(&self, option: &ChoiceOption) -> bool {
+        match &option.cleared {
+            None => false,
+            Some(flag) => self.flags.check(flag),
+        }
+    }
+
     /// 現在Choice表示中の各選択肢について、ロック状態（#591）を判定した配列を返す。
     /// `current_choice()` が返す `options` と同じ長さ・同じ並びになる。Choice表示中で
     /// なければ空 Vec。`ui::draw` へそのまま渡し、`draw_choice_list`/`draw_choice_grid` が
@@ -1148,6 +1159,21 @@ impl Playback {
         match self.items.get(self.index) {
             Some(PlaybackItem::Choice(options, _)) => {
                 options.iter().map(|o| self.is_option_locked(o)).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// 現在Choice表示中の各選択肢について、消灯(クリア済み)状態（#594）を判定した配列を
+    /// 返す。`current_choice_locked()` と並行するメソッドで、`current_choice()` が返す
+    /// `options` と同じ長さ・同じ並びになる。Choice表示中でなければ空 Vec。`ui::draw` へ
+    /// そのまま渡し、`draw_choice_list`/`draw_choice_grid` が消灯中の選択肢をロックとは
+    /// 別の見た目（DIM + 🌑 マーク）で描画するために使う。ロックと違い選択自体は
+    /// `select_current_choice` で拒否しない。
+    pub fn current_choice_cleared(&self) -> Vec<bool> {
+        match self.items.get(self.index) {
+            Some(PlaybackItem::Choice(options, _)) => {
+                options.iter().map(|o| self.is_option_cleared(o)).collect()
             }
             _ => Vec::new(),
         }
@@ -2177,6 +2203,7 @@ mod tests {
                     text: "yes".to_string(),
                     jump: "1-2".to_string(),
                     condition: None,
+                    cleared: None,
                 }],
                 columns: None,
             },
@@ -2341,6 +2368,7 @@ mod tests {
                     text: text.to_string(),
                     jump: jump.to_string(),
                     condition: None,
+                    cleared: None,
                 })
                 .collect(),
             columns: None,
@@ -2357,6 +2385,7 @@ mod tests {
                     text: text.to_string(),
                     jump: jump.to_string(),
                     condition: condition.map(|s| s.to_string()),
+                    cleared: None,
                 })
                 .collect(),
             columns: None,
@@ -2600,11 +2629,13 @@ mod tests {
                             text: "無条件".to_string(),
                             jump: "1-2".to_string(),
                             condition: None,
+                            cleared: None,
                         },
                         ChoiceOption {
                             text: "ロック中".to_string(),
                             jump: "1-3".to_string(),
                             condition: Some("route01_cleared".to_string()),
+                            cleared: None,
                         },
                     ],
                     columns: Some(2),
@@ -3808,6 +3839,7 @@ mod tests {
                                 text: "yes".to_string(),
                                 jump: "1-2".to_string(),
                                 condition: None,
+                                cleared: None,
                             }],
                             columns: None,
                         },
@@ -4283,6 +4315,7 @@ mod tests {
                     text: format!("opt{i}"),
                     jump: target.to_string(),
                     condition: None,
+                    cleared: None,
                 })
                 .collect(),
             columns,
@@ -7255,11 +7288,13 @@ mod tests {
                 text: "進む".to_string(),
                 jump: "1-2".to_string(),
                 condition: None,
+                cleared: None,
             },
             ChoiceOption {
                 text: "戻る".to_string(),
                 jump: "1-1".to_string(),
                 condition: None,
+                cleared: None,
             },
         ];
         let a = PlaybackItem::Choice(options.clone(), Some(2));
@@ -7278,6 +7313,7 @@ mod tests {
                 text: "進む".to_string(),
                 jump: "1-2".to_string(),
                 condition: None,
+                cleared: None,
             }],
             None,
         );
@@ -7286,6 +7322,7 @@ mod tests {
                 text: "進む".to_string(),
                 jump: "1-3".to_string(),
                 condition: None,
+                cleared: None,
             }],
             None,
         );
@@ -7305,6 +7342,7 @@ mod tests {
                 text: "進む".to_string(),
                 jump: "1-2".to_string(),
                 condition: None,
+                cleared: None,
             }],
             None,
         );
@@ -7313,6 +7351,7 @@ mod tests {
                 text: "進む".to_string(),
                 jump: "1-2".to_string(),
                 condition: Some("route01_cleared".to_string()),
+                cleared: None,
             }],
             None,
         );
