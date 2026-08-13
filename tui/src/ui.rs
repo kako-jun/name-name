@@ -4908,6 +4908,158 @@ mod tests {
         }
     }
 
+    // #594 テスト観点整理フェーズ 最優先1: grid×cleared整合性。#591 の
+    // draw_choice_grid_mixed_locked_pattern_maps_dim_and_lock_marker_to_correct_index_not_shifted
+    // を cleared 版に踏襲する。10択・columns=5・cleared を市松(交互)パターンで渡し、
+    // 各セルのDIMスタイル・🌑サフィックスがcleared配列と同じインデックスの選択肢に
+    // 対応することを、行×列から独立に再計算したセル領域内で直接確認する（frontendの
+    // ChoiceOverlay grid×cleared整合性テストと対をなす）。
+    #[test]
+    fn draw_choice_grid_mixed_cleared_pattern_maps_dim_and_moon_marker_to_correct_index_not_shifted()
+    {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&i.to_string(), "x"))
+            .collect();
+        // 偶数indexは消灯なし、奇数indexは消灯中（市松パターンで隣接セルとの取り違えも検出できる）。
+        let cleared: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
+        let area = Rect::new(0, 0, 60, 2);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 5, &[], &cleared);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // draw_choice_grid内部と同じLayout計算でrow/colのRectを独立に再現する
+        // （draw_choice_grid_ragged_last_row_leaves_missing_cells_blank_without_panic と同じ手法）。
+        let row_areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(1); 2])
+            .split(area);
+
+        for (i, &expected_cleared) in cleared.iter().enumerate() {
+            let row = i / 5;
+            let col = i % 5;
+            let col_areas = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![Constraint::Ratio(1, 5); 5])
+                .split(row_areas[row]);
+            let cell_area = col_areas[col];
+
+            let digit = i.to_string();
+            let (digit_x, digit_y) = (cell_area.x..cell_area.x + cell_area.width)
+                .zip(std::iter::repeat(cell_area.y))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!("index {i} (\"{digit}\") should render inside its own grid cell, buffer was: {buffer:?}")
+                });
+
+            let dim = buffer
+                .cell((digit_x, digit_y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::DIM);
+            assert_eq!(
+                dim, expected_cleared,
+                "index {i} の DIM 状態が cleared[{i}]={expected_cleared} と一致しない \
+                 （行×列マッピングとcleared配列のインデックスずれの検出用）"
+            );
+
+            // 🌑はそのセル領域内(同じ行、自セルのx範囲内)だけを見る。行全体を見ると
+            // 隣接セル(同じ行の別index)の🌑を誤って拾う恐れがあるため、独立に計算した
+            // cell_area の範囲だけに限定してスキャンする。
+            let has_moon_marker = (cell_area.x..cell_area.x + cell_area.width)
+                .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🌑");
+            assert_eq!(
+                has_moon_marker, expected_cleared,
+                "index {i} の🌑表示の有無が cleared[{i}]={expected_cleared} と一致しない \
+                 （自セル範囲内だけを見ても対応がずれていないかの確認）"
+            );
+        }
+    }
+
+    // #594 テスト観点整理フェーズ 最優先2: locked×cleared優先順位。locked と cleared が
+    // 同じindexで重なるケースを含む混在パターンで、🔒のみ表示され🌑が漏れないこと
+    // （choice_cursor_prefix_and_style/draw_choice_grid のsuffix決定ロジックが
+    // `if is_locked { LOCK } else if is_cleared { MOON }` の順で分岐している設計どおり）、
+    // DIMは(locked||cleared)の単純ORであり二重付与されないことをセル単位で確認する。
+    #[test]
+    fn draw_choice_grid_locked_and_cleared_mixed_pattern_locked_wins_marker_and_no_moon_leaks() {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&i.to_string(), "x"))
+            .collect();
+        // locked: index 0,3,6,9 / cleared: index 1,3,5,7,9。
+        // index 3・9は locked かつ cleared が同時に真の重複ケース——lockedが勝ち🔒のみ、
+        // 🌑は漏れないことを確認する。
+        let locked: Vec<bool> = (0..10).map(|i| i % 3 == 0).collect();
+        let cleared: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
+        let area = Rect::new(0, 0, 60, 2);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 5, &locked, &cleared);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let row_areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(1); 2])
+            .split(area);
+
+        for i in 0..10 {
+            let row = i / 5;
+            let col = i % 5;
+            let col_areas = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![Constraint::Ratio(1, 5); 5])
+                .split(row_areas[row]);
+            let cell_area = col_areas[col];
+
+            let is_locked = locked[i];
+            let is_cleared = cleared[i];
+            let expected_dim = is_locked || is_cleared;
+
+            let digit = i.to_string();
+            let (digit_x, digit_y) = (cell_area.x..cell_area.x + cell_area.width)
+                .zip(std::iter::repeat(cell_area.y))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!("index {i} (\"{digit}\") should render inside its own grid cell, buffer was: {buffer:?}")
+                });
+
+            let dim = buffer
+                .cell((digit_x, digit_y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::DIM);
+            assert_eq!(
+                dim, expected_dim,
+                "index {i} のDIM状態は (locked||cleared)={expected_dim} と一致するはず \
+                 （locked/clearedの二重付与ではなく単純ORのため、重複時も非重複時と同じDIM一段のはず）"
+            );
+
+            let has_lock_marker = (cell_area.x..cell_area.x + cell_area.width)
+                .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🔒");
+            let has_moon_marker = (cell_area.x..cell_area.x + cell_area.width)
+                .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🌑");
+
+            assert_eq!(
+                has_lock_marker, is_locked,
+                "index {i} の🔒表示の有無が locked[{i}]={is_locked} と一致しない"
+            );
+            // locked優先: locked=trueのセルは(clearedが同時に真でも)🌑を出さない。
+            // locked=falseのセルはclearedの値どおりに🌑が出る。
+            let expected_moon = is_cleared && !is_locked;
+            assert_eq!(
+                has_moon_marker, expected_moon,
+                "index {i} の🌑表示の有無が期待(cleared={is_cleared}・locked={is_locked}→\
+                 lockedが勝ちmoonは出ないはず)と一致しない（🌑漏れの検出）"
+            );
+        }
+    }
+
     #[test]
     fn draw_choice_list_dispatches_to_grid_only_when_columns_at_least_2() {
         // A/Bが同じ行(y)に描画されるかどうかで、グリッド委譲(columns>=2)か

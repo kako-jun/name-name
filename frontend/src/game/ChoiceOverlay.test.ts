@@ -244,6 +244,66 @@ describe('ChoiceOverlay rendering', () => {
     overlay.hide()
   })
 
+  // #594: 消灯(クリア済み)視覚状態。ロックとの決定的な差異は、見た目は変わるがクリックは
+  // 通常どおり受け付ける(eventMode='static'のまま)点。
+  it('消灯中の選択肢は消灯専用配色で描かれ、eventMode=static のままクリックを受け付ける', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const theme = resolveStyle('default')
+    const onSelect = vi.fn()
+    overlay.show(
+      [
+        { text: '通常', jump: 'normal' },
+        { text: '消灯済み', jump: 'cleared-jump' },
+      ],
+      onSelect,
+      'default',
+      undefined,
+      undefined,
+      undefined,
+      [false, true]
+    )
+
+    const normalButton = overlay.children[0]
+    const clearedButton = overlay.children[1]
+    const normalLabel = normalButton?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+    const clearedLabel = clearedButton?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+
+    expect(normalLabel?.style.fill).toBe(theme.textColor)
+    expect(clearedLabel?.style.fill).toBe(theme.textClearedColor)
+    // ロックと違い、GUI版はテキストにマークを付けない（色数が豊富なため配色だけで区別する設計）。
+    expect(clearedLabel?.text).toBe('消灯済み')
+
+    expect(normalButton.eventMode).toBe('static')
+    expect(clearedButton.eventMode).toBe('static')
+
+    // クリックできる（ロックと違い選択は拒否されない）。
+    clearedButton.emit('pointerdown', pointerEvent(400, 225))
+    clearedButton.emit('pointerup', pointerEvent(400, 225))
+    expect(onSelect).toHaveBeenCalledOnce()
+    expect(onSelect).toHaveBeenCalledWith('cleared-jump')
+
+    overlay.hide()
+  })
+
+  it('cleared 未指定時は全オプションが従来どおり通常配色（非破壊）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const theme = resolveStyle('default')
+    overlay.show([{ text: '選ぶ', jump: 'next' }], vi.fn())
+
+    const button = overlay.children[0]
+    const label = button?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+    expect(label?.style.fill).toBe(theme.textColor)
+    expect(button.eventMode).toBe('static')
+
+    overlay.hide()
+  })
+
   it('resolveChoiceVisual は既読/未読と hover で fill/border/text を切り替える', () => {
     const theme = resolveStyle('default')
 
@@ -285,6 +345,43 @@ describe('ChoiceOverlay rendering', () => {
       fill: theme.fillNormal,
       border: theme.borderNormal,
       text: theme.textColor,
+    })
+  })
+
+  // #594: cleared は alreadyRead/hover より優先される専用の見た目になる（locked と同じ構造）。
+  it('resolveChoiceVisual: cleared=true は alreadyRead/hover に関わらず消灯専用配色を返す', () => {
+    const theme = resolveStyle('default')
+    const expected = {
+      fill: theme.fillCleared,
+      border: theme.borderCleared,
+      text: theme.textClearedColor,
+    }
+    expect(resolveChoiceVisual(theme, false, false, false, true)).toEqual(expected)
+    expect(resolveChoiceVisual(theme, true, false, false, true)).toEqual(expected)
+    expect(resolveChoiceVisual(theme, true, true, false, true)).toEqual(expected)
+    expect(resolveChoiceVisual(theme, false, true, false, true)).toEqual(expected)
+    // cleared=false（既定値省略）は従来どおり。
+    expect(resolveChoiceVisual(theme, false, false)).toEqual({
+      fill: theme.fillNormal,
+      border: theme.borderNormal,
+      text: theme.textColor,
+    })
+  })
+
+  // #594: locked と cleared が同時に真のときは locked が優先される（resolveChoiceVisual の
+  // if(locked)...if(cleared)... の判定順どおり）。
+  it('resolveChoiceVisual: locked=true かつ cleared=true のときは locked が優先される', () => {
+    const theme = resolveStyle('default')
+    const result = resolveChoiceVisual(theme, false, false, true, true)
+    expect(result).toEqual({
+      fill: theme.fillLocked,
+      border: theme.borderLocked,
+      text: theme.textLockedColor,
+    })
+    expect(result).not.toEqual({
+      fill: theme.fillCleared,
+      border: theme.borderCleared,
+      text: theme.textClearedColor,
     })
   })
 
@@ -1077,6 +1174,93 @@ describe('ChoiceOverlay グリッド×ロック整合性 (#591 テスト観点�
     expect(onSelect).not.toHaveBeenCalled()
 
     overlay.hide()
+  })
+})
+
+// #594 テスト観点整理フェーズ 最優先3/4: grid×cleared整合性・locked×cleared優先順位。
+// #591 の「ChoiceOverlay グリッド×ロック整合性」describe を cleared 版に踏襲する。
+// fill/border は Graphics.prototype.fill / .stroke をスパイして検証する——
+// drawButton() が影(shadow)には g.fill({color, alpha}) というオブジェクト引数、
+// ボタン本体には g.fill(number) という数値引数を渡す実装（#569 pixel テストの
+// shadowFillCall フィルタと同じ判別法）を利用し、number型のfill呼び出しだけを
+// ボタン本体の描画としてボタン順に対応させる。stroke はボタン本体でしか呼ばれないため
+// フィルタ不要。
+describe('ChoiceOverlay グリッド×消灯整合性・ロック優先順位 (#594 テスト観点整理フェーズ 最優先3/4)', () => {
+  it('columns=5・10択でclearedが交互パターンのとき、各ボタンのfill/border/eventModeがインデックス通りに対応する', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const theme = resolveStyle('default')
+    const fillSpy = vi.spyOn(Graphics.prototype, 'fill')
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    // 偶数indexは消灯なし、奇数indexは消灯中（市松パターンで隣接セルとの取り違えも検出できる）。
+    const cleared = Array.from({ length: 10 }, (_, i) => i % 2 === 1)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5, undefined, cleared)
+
+    const buttons = overlay.children
+    expect(buttons.length).toBe(10)
+    const buttonFillCalls = fillSpy.mock.calls.filter((args) => typeof args[0] === 'number')
+    expect(buttonFillCalls.length).toBe(10)
+    expect(strokeSpy.mock.calls.length).toBe(10)
+
+    buttons.forEach((button, i) => {
+      const expectedCleared = cleared[i]
+      const fillColor = buttonFillCalls[i]?.[0]
+      const strokeArg = strokeSpy.mock.calls[i]?.[0] as { color: number; width: number }
+      expect(fillColor, `index ${i}: fillがcleared[${i}]=${expectedCleared}と対応していない`).toBe(
+        expectedCleared ? theme.fillCleared : theme.fillNormal
+      )
+      expect(
+        strokeArg?.color,
+        `index ${i}: borderがcleared[${i}]=${expectedCleared}と対応していない`
+      ).toBe(expectedCleared ? theme.borderCleared : theme.borderNormal)
+      expect(
+        button.eventMode,
+        `index ${i}: eventModeはcleared中でも static のまま(選択可能)のはず`
+      ).toBe('static')
+    })
+
+    overlay.hide()
+    fillSpy.mockRestore()
+    strokeSpy.mockRestore()
+  })
+
+  it('locked と cleared が同じ index に重なるとき、そのボタンは locked の配色・eventMode になる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const theme = resolveStyle('default')
+    const fillSpy = vi.spyOn(Graphics.prototype, 'fill')
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    // index0: 通常 / index1: lockedのみ / index2: clearedのみ / index3: 両方重複(lockedが勝つはず)
+    const locked = [false, true, false, true]
+    const cleared = [false, false, true, true]
+    overlay.show(choices(4), vi.fn(), null, undefined, undefined, locked, cleared)
+
+    const buttons = overlay.children
+    const buttonFillCalls = fillSpy.mock.calls.filter((args) => typeof args[0] === 'number')
+    const buttonStrokeCalls = strokeSpy.mock.calls
+
+    const expectButton = (
+      i: number,
+      fill: number,
+      border: number,
+      eventMode: string,
+      label: string
+    ) => {
+      expect(buttonFillCalls[i]?.[0], `index ${i} (${label}): fill`).toBe(fill)
+      expect(
+        (buttonStrokeCalls[i]?.[0] as { color: number })?.color,
+        `index ${i} (${label}): border`
+      ).toBe(border)
+      expect(buttons[i]?.eventMode, `index ${i} (${label}): eventMode`).toBe(eventMode)
+    }
+
+    expectButton(0, theme.fillNormal, theme.borderNormal, 'static', '通常')
+    expectButton(1, theme.fillLocked, theme.borderLocked, 'none', 'lockedのみ')
+    expectButton(2, theme.fillCleared, theme.borderCleared, 'static', 'clearedのみ')
+    // locked と cleared が重複するとき、lockedの配色・eventModeが勝つ(clearedの配色が漏れない)。
+    expectButton(3, theme.fillLocked, theme.borderLocked, 'none', 'locked×cleared重複')
+
+    overlay.hide()
+    fillSpy.mockRestore()
+    strokeSpy.mockRestore()
   })
 })
 

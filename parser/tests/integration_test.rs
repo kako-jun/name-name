@@ -498,6 +498,196 @@ title: "テスト"
     }
 }
 
+// ---- #594: 選択肢オプションの「消灯(クリア済み)」視覚状態のテスト ----
+
+/// 選択肢オプションに任意で `[消灯: flag]` を付けて消灯(クリア済み)視覚状態を表現できる
+/// (#594)。`[消灯: flag]` を付けないオプションは従来どおり `cleared: None`。
+#[test]
+fn test_choice_with_cleared() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 消灯選択テスト
+
+[選択]
+- 異邦 → r02-01-last-rites [消灯: route01_cleared]
+- いつもの道 → r02-01-normal
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Event::Choice { options, columns } => {
+            assert_eq!(options.len(), 2);
+            assert_eq!(options[0].text, "異邦");
+            assert_eq!(options[0].jump, "r02-01-last-rites");
+            assert_eq!(options[0].cleared.as_deref(), Some("route01_cleared"));
+            assert_eq!(options[0].condition, None);
+            assert_eq!(options[1].text, "いつもの道");
+            assert_eq!(options[1].jump, "r02-01-normal");
+            assert_eq!(options[1].cleared, None);
+            assert_eq!(*columns, None);
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+
+    // Roundtrip: 消灯視覚状態も emit → parse で保持される。
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[消灯: route01_cleared]"));
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+/// `[条件: a]` と `[消灯: b]` が両方付いた選択肢オプション (#594)。emit と同じ並び
+/// （`[条件:]` → `[消灯:]`）で書いた場合に両方が独立してパースされることを確認する。
+#[test]
+fn test_choice_with_condition_and_cleared_both_present_condition_first() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 条件+消灯併記テスト
+
+[選択]
+- 異邦 → r02-01-last-rites [条件: route01_cleared] [消灯: route02_cleared]
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Choice { options, .. } => {
+            assert_eq!(options[0].condition.as_deref(), Some("route01_cleared"));
+            assert_eq!(options[0].cleared.as_deref(), Some("route02_cleared"));
+            assert_eq!(options[0].jump, "r02-01-last-rites");
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+/// #594 テスト観点整理フェーズ 中優先13: `[条件:]`/`[消灯:]` の併記順は逆順
+/// （`[消灯:]` → `[条件:]`）でも同じ結果になる（parser側は順序を問わない設計、
+/// parser.rs の `cond_pos`/`cleared_pos` 併用コメント参照）。
+#[test]
+fn test_choice_with_condition_and_cleared_both_present_cleared_first() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 消灯+条件併記テスト(逆順)
+
+[選択]
+- 異邦 → r02-01-last-rites [消灯: route02_cleared] [条件: route01_cleared]
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Choice { options, .. } => {
+            assert_eq!(
+                options[0].condition.as_deref(),
+                Some("route01_cleared"),
+                "併記順が逆でもconditionは正しく抽出されるはず"
+            );
+            assert_eq!(
+                options[0].cleared.as_deref(),
+                Some("route02_cleared"),
+                "併記順が逆でもclearedは正しく抽出されるはず"
+            );
+            assert_eq!(
+                options[0].jump, "r02-01-last-rites",
+                "jumpは[条件:]/[消灯:]どちらが先でも正しく切り出されるはず"
+            );
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+
+    // 逆順で書いてもemitは正順([条件:]→[消灯:])に正規化される(emitter.rsのコメント参照)
+    // ため、emit→parseの往復ではdocそのものは一致する。
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2);
+}
+
+/// #594 テスト観点整理フェーズ 低優先15（異常系・現状挙動の固定、仕様確定ではない）:
+/// `[消灯: ]`（コロン直後が空白のみ）は `cleared == Some("")` としてパースされる。
+/// #591 の `test_choice_with_condition_empty_flag_name_parses_as_some_empty_string` と対になる
+/// `[消灯:]` 版。空文字列を「消灯なし」(`None`) と区別せず保持する現状の実装挙動をそのまま
+/// 固定する回帰テスト（意図して設計されたものではないため仕様確定はしない）。
+#[test]
+fn test_choice_with_cleared_empty_flag_name_parses_as_some_empty_string() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 消灯空文字テスト
+
+[選択]
+- 進む → next [消灯: ]
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Choice { options, .. } => {
+            assert_eq!(
+                options[0].cleared.as_deref(),
+                Some(""),
+                "[消灯: ]（空白のみ）はcleared==Some(\"\")としてパースされる現状の挙動"
+            );
+            assert_eq!(options[0].jump, "next");
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+}
+
+/// #594 テスト観点整理フェーズ 低優先16（異常系・現状挙動の固定、仕様確定ではない）:
+/// `[消灯: flag`（閉じ`]`が無い）は、現状実装どおり `cleared == None` へサイレントに
+/// フォールバックする。#591 の
+/// `test_choice_with_condition_missing_closing_bracket_silently_falls_back_to_none` と対になる
+/// `[消灯:]` 版。閉じ括弧欠落を検知してエラーにすべきという判断もあり得るが、本Issue（#594）の
+/// スコープ外として現状維持とする。
+#[test]
+fn test_choice_with_cleared_missing_closing_bracket_silently_falls_back_to_none() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: 消灯閉じ括弧欠落テスト
+
+[選択]
+- 進む → next [消灯: flag
+[/選択]
+"#;
+    let doc = parser::parse(input);
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Choice { options, .. } => {
+            assert_eq!(
+                options[0].cleared, None,
+                "閉じ括弧が無い[消灯:]はサイレントにNoneへフォールバックする現状の挙動 \
+                 （仕様確定ではない、本Issueのスコープ外として現状維持）"
+            );
+            assert_eq!(
+                options[0].jump, "next",
+                "閉じ括弧欠落の[消灯:...]テキスト自体はjumpに混入せず切り捨てられるはず"
+            );
+        }
+        other => panic!("Expected Choice, got {other:?}"),
+    }
+}
+
 /// `[選択: 列=N]` でグリッド列数を指定できる (#508)。
 /// `列=` 未指定時は None のまま（既存の縦一列表示、上の test_choice で確認済み）。
 #[test]

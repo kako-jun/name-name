@@ -2392,6 +2392,24 @@ mod tests {
         }
     }
 
+    /// `choice` の消灯(クリア済み)版（#594）。`(text, jump, cleared)` の3つ組で、
+    /// `cleared` が `Some(flag)` なら `flag` が真になったとき消灯(視覚状態のみ、選択は拒否しない)
+    /// になる選択肢を作る。
+    fn choice_with_cleared(options: Vec<(&str, &str, Option<&str>)>) -> Event {
+        Event::Choice {
+            options: options
+                .into_iter()
+                .map(|(text, jump, cleared)| ChoiceOption {
+                    text: text.to_string(),
+                    jump: jump.to_string(),
+                    condition: None,
+                    cleared: cleared.map(|s| s.to_string()),
+                })
+                .collect(),
+            columns: None,
+        }
+    }
+
     /// `[フラグ: name=value]` 相当の `Event::Flag`（#509）。
     fn flag_event(name: &str, value: bool) -> Event {
         Event::Flag {
@@ -3538,6 +3556,178 @@ mod tests {
             "Choice表示中の advance は select_current_choice を使うべきなので false"
         );
         assert!(pb.current_choice().is_some(), "位置が変わっていないはず");
+    }
+
+    // ---- #594: 選択肢オプションの「消灯(クリア済み)」視覚状態のテスト ----
+
+    /// #594 テスト観点整理フェーズ 中優先14: `current_choice_cleared()` が
+    /// `option.cleared` とフラグ状態の組み合わせ（未指定/設定済みフラグ/未設定フラグ）を
+    /// 正しく反映することを確認する。`current_choice_locked_reflects_flag_state`（#591）と
+    /// 対になるが、真偽の向きが逆（`cleared` は flag が真のとき true）である点に注意。
+    #[test]
+    fn current_choice_cleared_reflects_flag_state() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        flag_event("route01_cleared", true),
+                        choice_with_cleared(vec![
+                            ("消灯指定なし", "1-2", None),
+                            ("route01_clearedが設定済みなら消灯", "1-3", Some("route01_cleared")),
+                            ("未設定flagを指すなら消灯しない", "1-4", Some("route99_never_set")),
+                        ]),
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["a"])]),
+                scene("1-3", vec![dialog(Some("B"), vec!["b"])]),
+                scene("1-4", vec![dialog(Some("C"), vec!["c"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_choice_cleared(),
+            vec![false, true, false],
+            "clearedはSome(flag)かつcheck(flag)==trueのときだけtrue。\
+             Noneは常にfalse、設定済みflagを指すものはtrue、未設定flagを指すものはfalseのはず"
+        );
+    }
+
+    /// #594 テスト観点整理フェーズ 高優先8: cleared=trueの選択肢を選んでも、ロックとは違い
+    /// 正常にjumpできることを確認する（`select_current_choice` は `option.cleared` を見ない
+    /// 設計、`is_option_locked` だけをチェックする点が locked との決定的な違い）。
+    #[test]
+    fn select_current_choice_on_cleared_option_still_works() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        flag_event("route01_cleared", true),
+                        choice_with_cleared(vec![(
+                            "消灯済みでも選べる",
+                            "1-2",
+                            Some("route01_cleared"),
+                        )]),
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["消灯済みルートへ到達"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_choice_cleared(),
+            vec![true],
+            "flag設定済みならclearedはtrueのはず"
+        );
+        assert!(
+            pb.select_current_choice(),
+            "cleared=trueでもlockedではないため選択は拒否されず成功するはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").speaker.as_deref(),
+            Some("A")
+        );
+    }
+
+    /// #594 テスト観点整理フェーズ 高優先9: locked=true かつ cleared=true が同じ選択肢に
+    /// 同時に立っているとき、cleared の「選択可能」規則が locked の「選択拒否」規則を
+    /// 上書きしないことを確認する（locked が優先されるのは見た目だけでなく選択可否も同じ、
+    /// `select_current_choice` が `is_option_locked` だけをチェックする実装どおり）。
+    #[test]
+    fn select_current_choice_on_locked_and_cleared_option_is_noop() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        flag_event("route02_cleared", true),
+                        Event::Choice {
+                            options: vec![ChoiceOption {
+                                text: "ロック済みかつ消灯済み".to_string(),
+                                jump: "1-2".to_string(),
+                                // route01_cleared は未設定 → locked = true
+                                condition: Some("route01_cleared".to_string()),
+                                // route02_cleared は設定済み → cleared = true
+                                cleared: Some("route02_cleared".to_string()),
+                            }],
+                            columns: None,
+                        },
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["到達不能ルート"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![true],
+            "route01_clearedが未設定なのでlockedはtrueのはず"
+        );
+        assert_eq!(
+            pb.current_choice_cleared(),
+            vec![true],
+            "route02_clearedが設定済みなのでclearedもtrueのはず(locked&cleared同時真)"
+        );
+
+        assert!(
+            !pb.select_current_choice(),
+            "locked=true&cleared=true同時のとき、clearedの選択可能規則がlockedを上書きせず \
+             確定は拒否されるはず"
+        );
+        assert!(
+            pb.current_choice().is_some(),
+            "拒否された場合は選択肢表示のまま変わらないはず"
+        );
+    }
+
+    /// #594 テスト観点整理フェーズ 低優先17: 状態遷移の安定性。flagが既にtrueの状態で
+    /// `current_choice_cleared()` を何度呼んでも同じ結果を返し続け、カーソル移動を挟んでも
+    /// ドリフトしないことを確認する（`select_current_choice_on_locked_option_repeated_calls_...`
+    /// #591の二重送信ガードと対になる、読み取り専用メソッドの安定性版）。
+    #[test]
+    fn current_choice_cleared_stays_true_after_flag_already_true_no_state_drift() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        flag_event("route01_cleared", true),
+                        choice_with_cleared(vec![
+                            ("消灯済み選択肢A", "1-2", Some("route01_cleared")),
+                            ("消灯済み選択肢B", "1-3", Some("route01_cleared")),
+                        ]),
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["a"])]),
+                scene("1-3", vec![dialog(Some("B"), vec!["b"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc);
+
+        for attempt in 0..5 {
+            assert_eq!(
+                pb.current_choice_cleared(),
+                vec![true, true],
+                "flag=trueである限り、何度呼んでもclearedはtrueのままのはず(attempt={attempt})"
+            );
+        }
+
+        pb.move_choice_cursor_down();
+        assert_eq!(
+            pb.current_choice_cleared(),
+            vec![true, true],
+            "カーソル移動後もcleared状態はドリフトしないはず"
+        );
     }
 
     // ---- バグ修正の回帰テスト（実装バグ2件） ----
