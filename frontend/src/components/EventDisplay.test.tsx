@@ -63,6 +63,33 @@ describe('EventDisplay', () => {
     ).toContain('フェード 200ms')
   })
 
+  it('renders EventImage with back/fade badges and no effects badge when all flags false', () => {
+    const { container } = renderEvent({
+      EventImage: {
+        path: 'event/room.webp',
+        back: 'Keep',
+        fade_ms: 1400,
+        effects: { wobble: false, vignette: false, glow: false, candle: false },
+      },
+    })
+    expect(container.textContent).toContain('event/room.webp')
+    expect(container.textContent).toContain('背面=keep')
+    expect(container.textContent).toContain('フェード=1400ms')
+    expect(container.textContent).not.toContain('演出=')
+  })
+
+  it('renders EventImage effects badge listing only the enabled ambient flags (#582)', () => {
+    const { container } = renderEvent({
+      EventImage: {
+        path: 'event/candlelit.webp',
+        effects: { wobble: true, vignette: false, glow: true, candle: false },
+      },
+    })
+    expect(container.textContent).toContain('演出=ゆらぎ,グロー')
+    expect(container.textContent).not.toContain('ビネット')
+    expect(container.textContent).not.toContain('ろうそく')
+  })
+
   it('renders Blackout / Exit / Wait / ExpressionChange', () => {
     expect(renderEvent({ Blackout: { action: 'On' } }).container.textContent).toContain('暗転')
     expect(renderEvent({ Exit: { character: '長老' } }).container.textContent).toContain('長老')

@@ -70,6 +70,17 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     const parts: string[] = []
     if (ei.back === 'Keep') parts.push('背面=keep')
     if (ei.fade_ms != null) parts.push(`フェード=${ei.fade_ms}ms`)
+    // #582 アンビエント演出フラグ。有効なものだけ列挙する（エディタで生 Markdown を
+    // 見るまで演出が付いているか分からない問題の解消、レビュー should-3 対応）。
+    const eff = ei.effects
+    if (eff) {
+      const effectLabels: string[] = []
+      if (eff.wobble) effectLabels.push('ゆらぎ')
+      if (eff.vignette) effectLabels.push('ビネット')
+      if (eff.glow) effectLabels.push('グロー')
+      if (eff.candle) effectLabels.push('ろうそく')
+      if (effectLabels.length > 0) parts.push(`演出=${effectLabels.join(',')}`)
+    }
     return (
       <div className={`text-xs italic ml-2 ${meta}`}>
         イベント絵: {ei.path}
