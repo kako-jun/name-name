@@ -469,6 +469,12 @@ export class EventImageLayer extends Container {
           })
           glow.blendMode = 'overlay'
           glow.alpha = GLOW_BASE_ALPHA
+          // 既知の設計上の割り切り（修正しない、#582 スコープ外）: glowSprite.alpha は
+          // updateFadeFrame() のフェード補間の対象外。ここで固定値 GLOW_BASE_ALPHA を設定した
+          // 後は、candle=true の場合のみ updateAmbientFrame() が sprite.tint と同じ経路で
+          // 毎フレーム上書きする。そのため glow=true かつ candle=false の画像では、フェードイン中
+          // （本体の sprite.alpha がまだ 0 に近い間）もグローの overlay 合成（alpha 0.45）だけ
+          // 最初から効いて見える。詳細は updateFadeFrame() のコメントも参照。
           glow.filters = [
             new KawaseBlurFilter({ strength: GLOW_BLUR_STRENGTH, quality: 3, clamp: true }),
           ]
@@ -581,6 +587,10 @@ export class EventImageLayer extends Container {
     }
     const elapsed = this.time.now() - f.startMs
     const { alpha, done } = computeFadeAlpha(elapsed, f.fromAlpha, f.toAlpha, f.durationMs)
+    // sprite.alpha のみを補間する。glowSprite.alpha はここでは更新しない（意図的、#582 スコープ外）
+    // — glow=true かつ candle=false の画像では、フェード中もグローの overlay 合成だけ最初から
+    // 効いて見える既知の割り切り。詳細は glow sprite 生成箇所（GLOW_BASE_ALPHA を設定している行）の
+    // コメント参照。
     this.sprite.alpha = alpha
     if (done) {
       const onComplete = f.onComplete
