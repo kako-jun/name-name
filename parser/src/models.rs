@@ -117,6 +117,12 @@ pub struct AmbientEffects {
 pub struct ChoiceOption {
     pub text: String,
     pub jump: String,
+    /// 条件付きロック (#591)。`- text → jump [条件: flag]` の `flag` をそのまま保持する。
+    /// `None` = 常に選択可能（既存動作）。`Some(flag)` は、`flag` が未定義または `false`
+    /// の間は表示はされるが選択できない「ロック」状態になる（既存の `[条件:]` ブロックと
+    /// 同じ真偽判定規則。フロント/TUI どちらもこのフィールドだけを見て判定する）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
