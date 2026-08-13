@@ -8,6 +8,7 @@ import {
   computeChoiceGridLayout,
   parseHexColor,
   parseColorToNumber,
+  numberToHexColor,
   resolveAssetUrl,
   resolveCharacterImageUrls,
   getIndicatorImageUrls,
@@ -966,6 +967,61 @@ describe('parseColorToNumber (#273 移設・novelLayout 直 import)', () => {
 
   it('P2: undefined は fallback を返す（「指定なし」のハンドリング）', () => {
     expect(parseColorToNumber(undefined, 0x123456)).toBe(0x123456)
+  })
+})
+
+// ===== #601: numberToHexColor（parseColorToNumber の逆方向変換）=====
+//
+// SettingsOverlay のスライダー accentColor に SeekBar と同じ Pixi 数値カラーを流し込むために
+// 追加されたヘルパー。正常系・境界値（0/0xffffff）・ゼロパディング・クランプ（範囲外/NaN）・
+// 非整数・parseColorToNumber との round-trip を縛る。
+describe('numberToHexColor (#601)', () => {
+  it('TC-N1: SeekBar既定色 0xa8dadc は "#a8dadc" に変換される', () => {
+    expect(numberToHexColor(0xa8dadc)).toBe('#a8dadc')
+  })
+
+  it('TC-N2: 下限 0x000000 は "#000000" になる', () => {
+    expect(numberToHexColor(0x000000)).toBe('#000000')
+  })
+
+  it('TC-N3: 上限 0xffffff は "#ffffff" になる', () => {
+    expect(numberToHexColor(0xffffff)).toBe('#ffffff')
+  })
+
+  it('TC-N4: 0x0000ff はゼロパディングされ "#0000ff" になる（先頭ゼロが欠落しない）', () => {
+    expect(numberToHexColor(0x0000ff)).toBe('#0000ff')
+  })
+
+  it('TC-N5: 最小の非ゼロ値 1 は "#000001" になる（6桁ゼロパディング境界）', () => {
+    expect(numberToHexColor(1)).toBe('#000001')
+  })
+
+  it('TC-N6: 下限外の負数 -1 は "#000000" にクランプされる', () => {
+    expect(numberToHexColor(-1)).toBe('#000000')
+  })
+
+  it('TC-N7: 上限外の 0x1000000 は "#ffffff" にクランプされる', () => {
+    expect(numberToHexColor(0x1000000)).toBe('#ffffff')
+  })
+
+  it('TC-N8: NaN は "#000000" に倒れる（NaN 防御）', () => {
+    expect(numberToHexColor(NaN)).toBe('#000000')
+  })
+
+  it('TC-N9: 非整数は Math.floor で整数化されてから変換される', () => {
+    expect(numberToHexColor(0xa8dadc + 0.9)).toBe('#a8dadc')
+  })
+
+  it('TC-N10: parseColorToNumber(numberToHexColor(x)) が x に戻る（round-trip）', () => {
+    expect(parseColorToNumber(numberToHexColor(0xa8dadc), 0)).toBe(0xa8dadc)
+  })
+
+  it('TC-N11: numberToHexColor(parseColorToNumber(x)) が x に戻る（任意色の round-trip）', () => {
+    expect(numberToHexColor(parseColorToNumber('#b8934f', 0))).toBe('#b8934f')
+  })
+
+  it('TC-N12: parseColorToNumber は # なし入力も受理し、往復後は # 付きに正規化される', () => {
+    expect(numberToHexColor(parseColorToNumber('b8934f', 0))).toBe('#b8934f')
   })
 })
 

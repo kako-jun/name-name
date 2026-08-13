@@ -25,9 +25,15 @@ const LABELS_IN_ORDER = [
   'ボイス音量 (将来用)',
 ]
 
-function renderOverlay(onChange = vi.fn()) {
+function renderOverlay(onChange = vi.fn(), seekbarColor?: string | null) {
   const utils = render(
-    <SettingsOverlay open={true} onClose={vi.fn()} settings={TEST_SETTINGS} onChange={onChange} />
+    <SettingsOverlay
+      open={true}
+      onClose={vi.fn()}
+      settings={TEST_SETTINGS}
+      onChange={onChange}
+      seekbarColor={seekbarColor}
+    />
   )
   return { ...utils, onChange }
 }
@@ -141,5 +147,98 @@ describe('SettingsOverlay 並び順・結線 (#548)', () => {
 
     expect(errorSpy).not.toHaveBeenCalled()
     expect(warnSpy).not.toHaveBeenCalled()
+  })
+})
+
+// SeekBar.DEFAULT_BAR_FILL_COLOR(0xa8dadc) を numberToHexColor した既定フォールバック値。
+// SettingsOverlay 側の実装詳細と結合しすぎないよう、ここでは期待値の hex 文字列として直書きする。
+const SEEKBAR_FALLBACK_HEX = '#a8dadc'
+
+describe('SettingsOverlay スライダー色 seekbar_color 連動 (#601)', () => {
+  it('TC-S1: seekbarColor指定時、5つのスライダー全てのaccentColorがその値になる', () => {
+    const { container } = renderOverlay(vi.fn(), '#b8934f')
+    const inputs = getSliderLabels(container).map(sliderInput)
+    expect(inputs).toHaveLength(5)
+    inputs.forEach((input) => {
+      expect(input.style.accentColor).toBe('#b8934f')
+    })
+  })
+
+  it('TC-S2: seekbarColor未指定時、全スライダーがSeekBar既定色にフォールバックする', () => {
+    const { container } = renderOverlay(vi.fn(), undefined)
+    const inputs = getSliderLabels(container).map(sliderInput)
+    inputs.forEach((input) => {
+      expect(input.style.accentColor).toBe(SEEKBAR_FALLBACK_HEX)
+    })
+  })
+
+  it('TC-S3: seekbarColorがnullの時もSeekBar既定色にフォールバックする', () => {
+    const { container } = renderOverlay(vi.fn(), null)
+    const inputs = getSliderLabels(container).map(sliderInput)
+    inputs.forEach((input) => {
+      expect(input.style.accentColor).toBe(SEEKBAR_FALLBACK_HEX)
+    })
+  })
+
+  it('TC-S4: seekbarColorが空文字の時もSeekBar既定色にフォールバックする', () => {
+    const { container } = renderOverlay(vi.fn(), '')
+    const inputs = getSliderLabels(container).map(sliderInput)
+    inputs.forEach((input) => {
+      expect(input.style.accentColor).toBe(SEEKBAR_FALLBACK_HEX)
+    })
+  })
+
+  it('TC-S5: seekbarColorが不正形式の時はSeekBar既定色にフォールバックし、console.error/warnも呼ばれない', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const { container } = renderOverlay(vi.fn(), 'not-a-color')
+    const inputs = getSliderLabels(container).map(sliderInput)
+    inputs.forEach((input) => {
+      expect(input.style.accentColor).toBe(SEEKBAR_FALLBACK_HEX)
+    })
+    expect(errorSpy).not.toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('TC-S6: seekbarColorをrerenderで変更すると、5スライダー全てのaccentColorが追従して更新される', () => {
+    const { container, rerender } = render(
+      <SettingsOverlay
+        open={true}
+        onClose={vi.fn()}
+        settings={TEST_SETTINGS}
+        onChange={vi.fn()}
+        seekbarColor="#ff0000"
+      />
+    )
+    getSliderLabels(container)
+      .map(sliderInput)
+      .forEach((input) => {
+        expect(input.style.accentColor).toBe('#ff0000')
+      })
+
+    rerender(
+      <SettingsOverlay
+        open={true}
+        onClose={vi.fn()}
+        settings={TEST_SETTINGS}
+        onChange={vi.fn()}
+        seekbarColor="#00ff00"
+      />
+    )
+    getSliderLabels(container)
+      .map(sliderInput)
+      .forEach((input) => {
+        expect(input.style.accentColor).toBe('#00ff00')
+      })
+  })
+
+  it('TC-S7: seekbarColor指定時、5スライダーのaccentColorは全て同一値になる（個別ズレなし）', () => {
+    const { container } = renderOverlay(vi.fn(), '#123456')
+    const accentColors = getSliderLabels(container)
+      .map(sliderInput)
+      .map((input) => input.style.accentColor)
+    expect(accentColors).toHaveLength(5)
+    expect(new Set(accentColors).size).toBe(1)
   })
 })
