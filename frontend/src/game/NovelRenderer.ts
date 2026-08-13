@@ -3524,6 +3524,12 @@ export class NovelRenderer {
       const locked = event.Choice.options.map((option) =>
         option.condition ? !this.gameState.checkFlag(option.condition) : false
       )
+      // 消灯(クリア済み)視覚状態 (#594)。`option.cleared` が未定義なら常に false（消灯しない、
+      // 既存動作）。指定されていれば `checkFlag` で判定する（`locked` と違い真がそのまま
+      // 消灯——真偽判定自体は `[条件:]` と同じ規則）。ロックとは独立配列で持つ。
+      const cleared = event.Choice.options.map((option) =>
+        option.cleared ? this.gameState.checkFlag(option.cleared) : false
+      )
       this.choiceOverlay.show(
         event.Choice.options,
         (jump: string) => {
@@ -3540,7 +3546,8 @@ export class NovelRenderer {
         this.choiceStyle,
         this.readSceneProgress,
         event.Choice.columns,
-        locked
+        locked,
+        cleared
       )
       return
     }

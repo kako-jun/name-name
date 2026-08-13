@@ -40,6 +40,12 @@ export interface ChoiceOption {
    *  真になるまでロック（表示はされるが選択不可）になる。真偽判定は checkFlag と同じ規則。
    *  parser/pkg の生成型（Tsify）に合わせて `string | undefined`（`null` は使わない）。 */
   condition?: string
+  /** 消灯(クリア済み)視覚状態 (#594)。`condition`（ロック）とは独立したフィールドで、
+   *  同じオプションに両方指定できる。未定義 = 消灯しない（既存動作）。指定時は、その
+   *  フラグ名が真になると選択は可能なまま見た目だけ暗くなる。真偽判定は checkFlag と
+   *  同じ規則。ロック中はロックの見た目が優先される（両方真になる想定は通常運用では
+   *  無いが、防御的にロックを優先する）。 */
+  cleared?: string
 }
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number }

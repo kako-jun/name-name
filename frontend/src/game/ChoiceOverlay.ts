@@ -76,15 +76,25 @@ interface ChoiceTheme {
    * hover バリエーションは持たない。
    */
   fillLocked: number
+  /**
+   * 消灯(クリア済み)視覚状態 (#594) の配色。`fillLocked` と並行するが意味が異なる——
+   * こちらはクリック可能なまま見た目だけ暗くする（ろうそくの火が消えた後の状態）ため、
+   * ロックほど強く沈めない中間的な暗さにする。ロックと同じくホバーバリエーションは
+   * 持たない（クリック可能ではあるが、既読/未読同様ホバーで明るく戻さず一貫して暗いまま
+   * にすることで「クリア済み」であることを常に視認できるようにする）。
+   */
+  fillCleared: number
   borderNormal: number
   borderHover: number
   borderRead: number
   borderReadHover: number
   borderLocked: number
+  borderCleared: number
   borderWidth: number
   textColor: number
   textReadColor: number
   textLockedColor: number
+  textClearedColor: number
   fontFamily: string
   fontWeight: 'normal' | 'bold'
   fontSize: number
@@ -108,15 +118,19 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     // ロック中 (#591): read よりさらに暗く沈ませ、「まだ選べない」を read（既読/未読）とは
     // 別の見た目で示す。ホバー変化は無い（クリック自体を受け付けないため）。
     fillLocked: 0x121218,
+    // 消灯中 (#594): normal と locked の中間の暗さ——選択は可能だがロックほど強く沈めない。
+    fillCleared: 0x161623,
     borderNormal: 0xa8dadc,
     borderHover: 0xf1faee,
     borderRead: 0x9aa4b2,
     borderReadHover: 0xd1d5db,
     borderLocked: 0x555566,
+    borderCleared: 0x7e98a1,
     borderWidth: 2,
     textColor: 0xf1faee,
     textReadColor: 0xcbd5e1,
     textLockedColor: 0x6b7280,
+    textClearedColor: 0xaeb6b7,
     fontFamily: "'Noto Sans JP', sans-serif",
     fontWeight: 'bold',
     fontSize: 20,
@@ -131,15 +145,18 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillRead: 0xe8e1f0,
     fillReadHover: 0xded5ec,
     fillLocked: 0xd8d3dc,
+    fillCleared: 0xecdce4,
     borderNormal: 0xffb3c1,
     borderHover: 0xff8fa3,
     borderRead: 0xb8a8ca,
     borderReadHover: 0x9d8bb8,
     borderLocked: 0xb0a8b8,
+    borderCleared: 0xd8aebc,
     borderWidth: 3,
     textColor: 0x5d2952,
     textReadColor: 0x5d536b,
     textLockedColor: 0x8b8394,
+    textClearedColor: 0x745673,
     fontFamily: "'Noto Sans JP', sans-serif",
     fontWeight: 'bold',
     fontSize: 22,
@@ -154,15 +171,18 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillRead: 0x2a2a2a,
     fillReadHover: 0x3a3a3a,
     fillLocked: 0x0a0a0a,
+    fillCleared: 0x050505,
     borderNormal: 0xffffff,
     borderHover: 0xffffff,
     borderRead: 0x888888,
     borderReadHover: 0xbbbbbb,
     borderLocked: 0x555555,
+    borderCleared: 0xaaaaaa,
     borderWidth: 2,
     textColor: 0xffffff,
     textReadColor: 0xbdbdbd,
     textLockedColor: 0x666666,
+    textClearedColor: 0xb2b2b2,
     fontFamily: "'Noto Serif JP', serif",
     fontWeight: 'normal',
     fontSize: 20,
@@ -182,15 +202,18 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillRead: 0x1a1a1a,
     fillReadHover: 0x2a2416,
     fillLocked: 0x0d0d0d,
+    fillCleared: 0x060606,
     borderNormal: 0xffffff,
     borderHover: 0xffd280,
     borderRead: 0x888888,
     borderReadHover: 0xd9a86c,
     borderLocked: 0x4a4a4a,
+    borderCleared: 0xa4a4a4,
     borderWidth: 2,
     textColor: 0xffffff,
     textReadColor: 0xc9c2b0,
     textLockedColor: 0x5a5a5a,
+    textClearedColor: 0xacacac,
     fontFamily: 'monospace',
     fontWeight: 'bold',
     fontSize: 20,
@@ -228,21 +251,33 @@ export function resolveStyle(name?: string | null): ChoiceTheme {
 }
 
 /**
- * ボタン1件の配色を決める。`locked`（#591、条件付きロック）は `alreadyRead`（既読/未読の
- * 色分け）より優先する——ロック中はホバーが発生しない（`eventMode: 'none'`）ため hover
- * 引数も無視する。両方 false のときだけ従来どおり alreadyRead/hover で分岐する（非破壊）。
+ * ボタン1件の配色を決める。優先順位は `locked`（#591、条件付きロック） > `cleared`
+ * （#594、消灯=クリア済み視覚状態） > `alreadyRead`（既読/未読の色分け） > 通常。
+ * 通常運用では `locked` と `cleared` が同時に真になることは無い想定だが、防御的に
+ * `locked` を優先する。ロック中・消灯中はどちらもホバーで色を変えない
+ * （ロックはクリック自体を受け付けない `eventMode: 'none'` のため、消灯はクリック可能
+ * だが「クリア済み」であることを常に一貫した見た目で示すため）ので hover 引数を無視する。
+ * すべて false のときだけ従来どおり alreadyRead/hover で分岐する（非破壊）。
  */
 export function resolveChoiceVisual(
   theme: ChoiceTheme,
   alreadyRead: boolean,
   hover: boolean,
-  locked = false
+  locked = false,
+  cleared = false
 ): ChoiceVisual {
   if (locked) {
     return {
       fill: theme.fillLocked,
       border: theme.borderLocked,
       text: theme.textLockedColor,
+    }
+  }
+  if (cleared) {
+    return {
+      fill: theme.fillCleared,
+      border: theme.borderCleared,
+      text: theme.textClearedColor,
     }
   }
   if (alreadyRead) {
@@ -365,6 +400,12 @@ export class ChoiceOverlay extends Container {
    *                作って渡す）。`true` の位置のボタンは非活性の見た目になり、クリック/
    *                ホバーを一切受け付けない。未指定 or 短ければ、残りは false（ロックなし、
    *                非破壊）として扱う。
+   * @param cleared 消灯(クリア済み)視覚状態 (#594)。`options` と同じ長さ・同じ並びの真偽配列
+   *                （`NovelRenderer` が `option.cleared` と `gameState.checkFlag` から
+   *                作って渡す）。`true` の位置のボタンは専用の暗い配色になるが、`locked` と
+   *                異なりクリック/ホバーは通常どおり受け付ける（選択可能）。`locked` が
+   *                同時に `true` の位置ではロックの見た目が優先される。未指定 or 短ければ、
+   *                残りは false（消灯なし、非破壊）として扱う。
    */
   show(
     options: ChoiceOption[],
@@ -372,7 +413,8 @@ export class ChoiceOverlay extends Container {
     style?: string | null,
     readJumps?: ReadonlySet<string>,
     columns?: number | null,
-    locked?: readonly boolean[]
+    locked?: readonly boolean[],
+    cleared?: readonly boolean[]
   ): void {
     if (options.length === 0) return
     this.onSelect = onSelect
@@ -458,7 +500,9 @@ export class ChoiceOverlay extends Container {
       const alreadyRead = readJumps?.has(option.jump) ?? false
       // 条件付きロック (#591)。locked が未指定/短ければ false（ロックなし、非破壊）。
       const isLocked = locked?.[i] ?? false
-      const normalVisual = resolveChoiceVisual(theme, alreadyRead, false, isLocked)
+      // 消灯(クリア済み)視覚状態 (#594)。cleared が未指定/短ければ false（消灯なし、非破壊）。
+      const isCleared = cleared?.[i] ?? false
+      const normalVisual = resolveChoiceVisual(theme, alreadyRead, false, isLocked, isCleared)
       const textStyle = new TextStyle({
         fontFamily: theme.fontFamily,
         fontSize: theme.fontSize,
@@ -512,7 +556,7 @@ export class ChoiceOverlay extends Container {
         : startY + row * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
 
       buttonContainer.on('pointerover', () => {
-        const hoverVisual = resolveChoiceVisual(theme, alreadyRead, true, isLocked)
+        const hoverVisual = resolveChoiceVisual(theme, alreadyRead, true, isLocked, isCleared)
         bg.clear()
         this.drawButton(bg, theme, hoverVisual.fill, hoverVisual.border)
         buttonContainer.scale.set(HOVER_SCALE)
