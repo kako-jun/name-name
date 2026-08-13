@@ -403,6 +403,8 @@ interface NovelGameState {
 
 **TUI版**: GUI版の「PixiJSフィルタで画面をぼかす」とは異なるアプローチで、quadrant block 変換（#481）の前段でダウンサンプル解像度そのものを粗くする。`tui/src/pixelate_transition.rs` の `compute_divisor`/`is_coarsen_phase` が進行度 `t`（0.0〜1.0）から粗さの分母（`PIXELATE_TRANSITION_MAX_DIVISOR`=8 を上限、コルセン中は1→8、リファイン中は8→1）を計算する純粋関数。`tui/src/image_render.rs` の `rgba_to_quadrant_grid_pixelated` が `nearest_upscale`（意図的にブロック状に拡大する、ボックス平均の逆操作）と組み合わせてこの粗さを実現し、`coarse_divisor<=1` では既存の `rgba_to_quadrant_grid` と出力が一致する（遷移完了時に見た目の不連続が起きない根拠）。`tui/src/image_fade.rs` の `ImageFadeState` は新規フィールド `to_transition` を持ち、`Pixelate` のときは通常の `blend()`（αクロスフェード）ではなく専用の `pixelate_snapshot()` を通る — `blend` のように `from`/`to` を同時合成するのではなく、常にどちらか一方（コルセン中は `from`、リファイン中は `to`）だけを粗さを変えながら描画する。
 
+**TUI版の所要時間 (ms) の決定は Fade/Pixelate で非対称（意図的な仕様）**: `main.rs::event_loop` は `resolve_event_image_transition_duration_ms()` で遷移所要時間を決める。通常の Fade 遷移は常に `config.event_image.crossfade_ms`（グローバル値）を使い、`[イベント絵: ..., フェード=N]` によるイベント個別の `event_image_fade_ms` 指定は意図的に読み捨てる（MVPスコープの簡略化、#481、非回帰）。一方ピクセレート遷移 (#583) だけは Issue の要件どおり per-event の `フェード=N` を「遷移全体の所要時間」として尊重し、未指定なら同じ `crossfade_ms` を既定値として使う。GUI版にはこの区別自体が無い — `NovelRenderer` は `ei.fade_ms ?? this.eventImageFadeMs`（個別指定優先・未指定時は frontmatter `event_image_fade_ms` 既定値にフォールバック）を Fade/Pixelate どちらの `show()` 呼び出しにも同じロジックで渡す。
+
 **既知の非対称性（意図的な仕様統一はされていない）**: 表示中と同じパスへ `遷移=pixelate` で再指定した場合、GUI版は `show()` がパスの同一性を見ず「表示中の絵の有無」（`this.sprite` の有無）だけで判定するため、実際にコルセン→自己スワップ→リファインを再生する。一方 TUI版は `main.rs::event_loop` の `image_fade.current_target() != target` というパス一致ガード（連続する同一パスへの無駄な再フェードトリガーを防ぐための既存ガード、#583 以前から存在）に引っかかり、`transition_to()` 自体が呼ばれず何も起きない（no-op）。これは実装上の差異であり、原稿を書く側は「同じ画像に対する `遷移=pixelate` の連続指定」でGUI/TUIの見た目が食い違いうることに注意する必要がある。
 
 ### 主要API
