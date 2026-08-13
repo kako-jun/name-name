@@ -54,7 +54,7 @@ pub enum BlackoutAction {
 }
 
 /// イベント絵の背面（背景・立ち絵）扱い (#351)。既定は `Hide`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
 #[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum EventImageBack {
