@@ -9,8 +9,12 @@ interface SettingsOverlayProps {
   settings: Settings
   onChange: (s: Settings) => void
   /** SeekBar（シナリオスライダ）と揃える設定ポップアップ内スライダーの色 (#601)。
-   *  frontmatter `seekbar_color:` から流す。null/undefined/不正値は SeekBar の既定色
-   *  `DEFAULT_BAR_FILL_COLOR`（水色）にフォールバックし、未設定プロジェクトの見た目を変えない。 */
+   *  Novel モードでは frontmatter `seekbar_color:` から流す。null/undefined/不正値は
+   *  SeekBar の既定色 `DEFAULT_BAR_FILL_COLOR`（水色）にフォールバックし、未設定プロジェクトの
+   *  見た目を変えない。RPGPlayer は SeekBar / seekbar_color の概念を持たないため、この
+   *  フォールバック（水色）ではなく #601 以前からの固定色（`RPGPlayer.tsx` の
+   *  `RPG_SETTINGS_SLIDER_COLOR`）を明示的にここへ渡して自分の見た目を非回帰に保つ
+   *  （#601 セルフレビュー must対応）。 */
   seekbarColor?: string | null
 }
 
