@@ -39,7 +39,9 @@ const GLOW_OPACITY: f32 = 0.45;
 /// GUI版の `KawaseBlurFilter` の `strength: 20`（スクリーン全体基準）とは尺度が異なる
 /// （TUI 側は主に 128x128 程度の小さい画像を想定した控えめな値、#582 MVP スコープ）。
 const GLOW_BLUR_RADIUS: i32 = 2;
-/// ビネットの減光強度（0=無効、1=縁が真っ黒）。GUI版 `VignetteFilter` の既定 `intensity` と同じ。
+/// ビネットの減光強度（0=無効、1=縁が真っ黒）。GUI版 `VignetteFilter`（`frontend/src/game/
+/// VignetteFilter.ts`）の既定 `intensity`（0.55）に近い値だが、完全一致ではない
+/// （TUI 側は quadrant block の粗い解像度向けに独自に調整した値、#582）。
 const VIGNETTE_INTENSITY: f32 = 0.6;
 
 /// 4効果すべてを `elapsed_ms` 時点の見た目で RGBA バッファへ適用した新しいバッファを返す。
