@@ -439,6 +439,44 @@ export function computeChoiceGridLayout(
   return { columns: gridColumns, isGrid, rows, buttonWidth, positions }
 }
 
+/** `computeChoiceIconLayout` の戻り値 (#598)。ボタン中心を基準にした縦位置 (px)。 */
+export interface ChoiceIconLayout {
+  /** アイコン sprite の中心 Y（`hasIcon=false` のときは未使用の値、呼び出し側は描画しない）。 */
+  iconY: number
+  /** ラベル Text の中心 Y。`hasIcon=false` のときは従来どおりボタン中心（非破壊）。 */
+  textY: number
+}
+
+/**
+ * 選択肢ボタン内で、既読(完了)アイコン (#598, `assets/images/read-icon.png`) とラベルテキストの
+ * 縦位置を算出する純粋関数。アイコンをテキストの上に置き、2つを合わせた塊をボタン中心を軸に
+ * 上下対称に配置する（`iconY`/`textY` はどちらもボタン中心からアイコン/テキストそれぞれの
+ * half-extent 分だけ離れた対称位置）。
+ *
+ * `hasIcon=false`（未読み込み/取得失敗/cleared ではない/locked 優先などで今回アイコンを
+ * 描画しない）のときは、`iconY`/`textY` とも `buttonHeight / 2` を返す——#591 以来の
+ * 「ラベルをボタン中心に一点センタリング」という既存レイアウトと完全に同じ結果になる
+ * （非破壊）。
+ *
+ * `buttonHeight` は呼び出し側 (`ChoiceOverlay`) がアイコン表示時用に嵩上げした値
+ * （`layoutButtonHeight`）を渡す想定——アイコン＋テキストがボタン枠内に収まるかどうかの
+ * 判断・調整は呼び出し側の責務で、この関数は与えられた `buttonHeight` の中で対称配置する
+ * だけの幾何計算に専念する。
+ */
+export function computeChoiceIconLayout(
+  buttonHeight: number,
+  hasIcon: boolean,
+  iconSize: number,
+  iconTextGap: number
+): ChoiceIconLayout {
+  const center = buttonHeight / 2
+  if (!hasIcon) {
+    return { iconY: center, textY: center }
+  }
+  const offset = (iconSize + iconTextGap) / 2
+  return { iconY: center - offset, textY: center + offset }
+}
+
 /**
  * CSS カラー文字列（"#1a4a7a" / "#222" / "1a4a7a"）を Pixi の数値カラーに変換する純粋関数 (#270 / #273)。
  *

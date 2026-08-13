@@ -249,9 +249,9 @@ describe('ChoiceOverlay rendering', () => {
 
     expect(unlockedLabel?.style.fill).toBe(theme.textColor)
     expect(lockedLabel?.style.fill).toBe(theme.textLockedColor)
-    // 視覚的に判別できるよう🔒マークがテキストに付く。
-    expect(lockedLabel?.text).toContain('🔒')
-    expect(unlockedLabel?.text).not.toContain('🔒')
+    // #598: ロック中はダイム配色のみで表す。テキストへのアイコン/マーク付与はしない。
+    expect(lockedLabel?.text).toBe('選べない')
+    expect(unlockedLabel?.text).toBe('選べる')
 
     expect(unlockedButton.eventMode).toBe('static')
     expect(lockedButton.eventMode).toBe('none')
@@ -1150,10 +1150,12 @@ describe('ChoiceOverlay グリッド配置 境界値・状態遷移 (#508 テス
 
 // #591 テスト観点整理フェーズ 最優先1: grid×lock整合性。過去の事故パターン（グリッドの
 // 行×列マッピングとインデックス対応がずれる不具合）が locked 配列でも再発していないかを
-// 狙い撃ちする。10択・columns=5・locked を交互パターンで渡し、各ボタンの eventMode・🔒表示・
-// ラベル本文の3つすべてが locked 配列と同じインデックスの選択肢に対応することを確認する。
+// 狙い撃ちする。10択・columns=5・locked を交互パターンで渡し、各ボタンの eventMode・
+// ラベル本文の2つすべてが locked 配列と同じインデックスの選択肢に対応することを確認する。
+// #598: ロック中のテキストへのマーク付与（旧🔒）は撤去したため、ラベル本文はロック有無に
+// 関わらず選択肢テキストそのものと一致する。
 describe('ChoiceOverlay グリッド×ロック整合性 (#591 テスト観点整理フェーズ 最優先1)', () => {
-  it('columns=5・10択でlockedが交互パターンのとき、各ボタンのeventMode/🔒表示/ラベルがインデックス通りに対応する（ずれを検出）', () => {
+  it('columns=5・10択でlockedが交互パターンのとき、各ボタンのeventMode/ラベルがインデックス通りに対応する（ずれを検出）', () => {
     const overlay = new ChoiceOverlay(800, 450)
     // 偶数indexはロックなし、奇数indexはロック中（市松パターンで隣接セルとの取り違えも検出できる）。
     const locked = Array.from({ length: 10 }, (_, i) => i % 2 === 1)
@@ -1171,13 +1173,9 @@ describe('ChoiceOverlay グリッド×ロック整合性 (#591 テスト観点�
         button.eventMode,
         `index ${i}: eventMode が locked[${i}]=${expectedLocked} と対応していない`
       ).toBe(expectedLocked ? 'none' : 'static')
-      expect(
-        label?.text.includes('🔒'),
-        `index ${i}: 🔒表示の有無が locked[${i}]=${expectedLocked} と対応していない`
-      ).toBe(expectedLocked)
       // ラベル本文自体もそのインデックスの選択肢と一致しているはず（行×列ずれで
       // 別インデックスの選択肢のロック状態を見てしまっていないかの取り違え検出）。
-      expect(label?.text.startsWith(`選択肢${i + 1}`)).toBe(true)
+      expect(label?.text).toBe(`選択肢${i + 1}`)
     })
 
     overlay.hide()

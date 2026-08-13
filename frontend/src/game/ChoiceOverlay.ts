@@ -13,17 +13,42 @@
  * pixi-filters への依存は避けるため、影は半透明黒の矩形を背面に重ねて表現する。
  */
 
-import { Container, Graphics, Rectangle, Text as PixiText, TextStyle, Ticker } from 'pixi.js'
+import {
+  Assets,
+  Container,
+  Graphics,
+  Rectangle,
+  Sprite,
+  Text as PixiText,
+  TextStyle,
+  Ticker,
+} from 'pixi.js'
 import { ChoiceOption } from '../types'
 import type { AudioManager } from './AudioManager'
 import { hasOwn } from './ownProperty'
-import type { DestroyOptions, FederatedPointerEvent } from 'pixi.js'
-import { computeChoiceGridLayout } from './novelLayout'
+import type { DestroyOptions, FederatedPointerEvent, Texture } from 'pixi.js'
+import { computeChoiceGridLayout, computeChoiceIconLayout, resolveAssetUrl } from './novelLayout'
 import type { LayoutRect } from './novelLayout'
 
 const BUTTON_WIDTH = 480
 const BUTTON_HEIGHT = 52
 const BUTTON_GAP = 16
+/**
+ * 既読(完了)アイコン (#598) の一辺サイズ (px)。`assets/images/read-icon.png` をこのサイズで
+ * 描画する。アイコン固有の設定（位置・複数アイコン等）はスコープ外 (#598 追記2) のため、
+ * サイズも固定値のみを持つ。
+ */
+const READ_ICON_SIZE = 18
+/** アイコンとラベルテキストの縦ギャップ (px)。`computeChoiceIconLayout` に渡す。 */
+const READ_ICON_TEXT_GAP = 8
+/**
+ * アイコンを表示する回だけ使うボタン高さ (px)。通常の BUTTON_HEIGHT (52) だとアイコン+テキストの
+ * 2段組みがボタン枠に収まらないため、実際にアイコンが1つでも描画される show() 呼び出しでだけ
+ * `layoutButtonHeight` をこちらへ切り替える（`layoutButtonWidth` が region 指定時だけ
+ * BUTTON_WIDTH から切り替わるのと同じ「必要な回だけ調整する」流儀）。read-icon.png 未配置の
+ * プロジェクトや cleared 選択肢が無い回は BUTTON_HEIGHT のまま——見た目は一切変わらない。
+ */
+const BUTTON_HEIGHT_WITH_ICON = 68
 const HOVER_SCALE = 1.05
 const SHADOW_OFFSET = 4
 const SHOW_FADE_MS = 240
@@ -340,6 +365,25 @@ export class ChoiceOverlay extends Container {
    * `show()` が region 幅に収まるようクランプし直す（`drawButton` 等はこの値を参照する）。
    */
   private layoutButtonWidth = BUTTON_WIDTH
+  /**
+   * 実際に描画するボタン高さ (px) (#598)。既読(完了)アイコンを表示する回だけ
+   * `BUTTON_HEIGHT_WITH_ICON` へ切り替える（`layoutButtonWidth` と対の、必要な回だけ
+   * 調整する流儀）。`show()` の冒頭で毎回確定し直す。
+   */
+  private layoutButtonHeight = BUTTON_HEIGHT
+  /**
+   * 既読(完了)アイコン (#598, `assets/images/read-icon.png`) 取得用のベース URL。
+   * `NovelRenderer.setAssetBaseUrl` から他レイヤ（DialogBox/VideoLayer/EventImageLayer）と
+   * 同じタイミングで `setAssetBaseUrl()` 経由で伝播される。
+   */
+  private assetBaseUrl = ''
+  /**
+   * 先読み済みの既読アイコン Texture。未取得（ロード中/未実行）or 取得失敗（404等）の間は
+   * null のままで、cleared 選択肢は従来どおり配色のみで描画される（フォールバック、非破壊）。
+   */
+  private readIconTexture: Texture | null = null
+  /** `setAssetBaseUrl` のたびに増分し、古い `Assets.load().then()` 解決を無効化するトークン。 */
+  private readIconLoadToken = 0
 
   constructor(
     private screenWidth: number,
@@ -355,6 +399,37 @@ export class ChoiceOverlay extends Container {
    */
   setAudioManager(audio: AudioManager | null): void {
     this.audioManager = audio
+  }
+
+  /**
+   * 既読(完了)アイコン (#598) 取得用のベース URL を設定する。
+   * `NovelRenderer.setAssetBaseUrl` から `DialogBox.setIndicatorAssetBaseUrl` /
+   * `VideoLayer.setAssetBaseUrl` / `EventImageLayer.setAssetBaseUrl` と同じタイミングで
+   * 伝播される想定。`assets/images/read-icon.png` を `Assets.load()`（EventImageLayer と
+   * 同じパターン）で先読みし、成功すれば `readIconTexture` に保持する。
+   *
+   * プロジェクトに `read-icon.png` が無い（404）/ 読み込みに失敗した場合は catch で
+   * 握りつぶし、`readIconTexture` は null のまま——`show()` は cleared 選択肢を
+   * 従来どおり配色のみで描画する（#598 最終方針のフォールバック）。
+   *
+   * url が変わっていなければ何もしない（同一プロジェクト内の再呼び出しで再フェッチしない）。
+   */
+  setAssetBaseUrl(url: string): void {
+    if (this.assetBaseUrl === url) return
+    this.assetBaseUrl = url
+    this.readIconTexture = null
+    const token = ++this.readIconLoadToken
+    if (!url) return
+    const iconUrl = resolveAssetUrl(url, 'images', 'read-icon.png')
+    Assets.load(iconUrl)
+      .then((texture: Texture) => {
+        // setAssetBaseUrl が後から再度呼ばれていれば、この読み込みは無効（古い世代）。
+        if (token !== this.readIconLoadToken) return
+        this.readIconTexture = texture
+      })
+      .catch(() => {
+        // 404 等はフォールバック対象（doc comment 参照）。ここでは何もしない。
+      })
   }
 
   /**
@@ -420,7 +495,9 @@ export class ChoiceOverlay extends Container {
    *                作って渡す）。`true` の位置のボタンは専用の暗い配色になるが、`locked` と
    *                異なりクリック/ホバーは通常どおり受け付ける（選択可能）。`locked` が
    *                同時に `true` の位置ではロックの見た目が優先される。未指定 or 短ければ、
-   *                残りは false（完了なし、非破壊）として扱う。
+   *                残りは false（完了なし、非破壊）として扱う。`locked` でない位置では、
+   *                `setAssetBaseUrl()` で既読(完了)アイコン (#598) の先読みに成功していれば
+   *                テキストの上にアイコンを表示する（未取得/失敗時は配色のみのフォールバック）。
    */
   show(
     options: ChoiceOption[],
@@ -482,8 +559,21 @@ export class ChoiceOverlay extends Container {
         : BUTTON_WIDTH
     }
 
-    const totalHeight = rows * BUTTON_HEIGHT + (rows - 1) * BUTTON_GAP
-    const maxViewportHeight = Math.max(BUTTON_HEIGHT, areaHeight - VIEWPORT_VERTICAL_MARGIN * 2)
+    // 既読(完了)アイコン (#598)。setAssetBaseUrl() で先読み済みの read-icon.png があり、かつ
+    // 今回の選択肢に1つでも「表示対象」（cleared かつ locked ではない——locked は #591 以来
+    // 配色のみで一切アイコンを付けない）があれば、アイコン用に嵩上げしたボタン高さを使う。
+    // アイコンが一切描画されない回（read-icon.png 未配置・cleared 選択肢が無い等）は
+    // BUTTON_HEIGHT のまま——見た目は一切変わらない（layoutButtonWidth と同じ流儀）。
+    const willShowReadIcon =
+      this.readIconTexture !== null &&
+      options.some((_, i) => (cleared?.[i] ?? false) && !(locked?.[i] ?? false))
+    this.layoutButtonHeight = willShowReadIcon ? BUTTON_HEIGHT_WITH_ICON : BUTTON_HEIGHT
+
+    const totalHeight = rows * this.layoutButtonHeight + (rows - 1) * BUTTON_GAP
+    const maxViewportHeight = Math.max(
+      this.layoutButtonHeight,
+      areaHeight - VIEWPORT_VERTICAL_MARGIN * 2
+    )
     const viewportHeight = Math.min(totalHeight, maxViewportHeight)
     this.maxScroll = Math.max(0, totalHeight - viewportHeight)
     const scrollable = this.maxScroll > 0
@@ -534,7 +624,7 @@ export class ChoiceOverlay extends Container {
       buttonContainer.alpha = 0
 
       // pivot を中央に置いて scale 拡大時にボタン中心が動かないようにする
-      buttonContainer.pivot.set(this.layoutButtonWidth / 2, BUTTON_HEIGHT / 2)
+      buttonContainer.pivot.set(this.layoutButtonWidth / 2, this.layoutButtonHeight / 2)
 
       // 影レイヤ（pixi-filters 依存回避のため半透明矩形で代用）
       const shadow = new Graphics()
@@ -546,16 +636,38 @@ export class ChoiceOverlay extends Container {
       this.drawButton(bg, theme, normalVisual.fill, normalVisual.border)
       buttonContainer.addChild(bg)
 
-      // ロック中は既読/未読とは別の見た目（配色）に加え、TUI版と揃えた🔒マークを
-      // テキスト末尾に付けて「選べない理由」を視覚的に明示する（#591）。
+      // ロック中はダイム配色 (fillLocked/borderLocked/textLockedColor) と
+      // eventMode: 'none' のみで「選べない」を表す（#598 最終方針: ロック中にアイコンは
+      // 一切付けない。旧🔒絵文字連結は撤去）。
+      //
+      // 既読(完了)アイコン (#598)。cleared かつ locked ではない（locked が優先、#594と同じ
+      // 優先順位）かつアイコンの先読みに成功している場合だけ、テキストの上にアイコンを描く。
+      const showReadIcon = isCleared && !isLocked && this.readIconTexture !== null
+      const iconLayout = computeChoiceIconLayout(
+        this.layoutButtonHeight,
+        showReadIcon,
+        READ_ICON_SIZE,
+        READ_ICON_TEXT_GAP
+      )
+
+      if (showReadIcon && this.readIconTexture) {
+        const icon = new Sprite(this.readIconTexture)
+        icon.width = READ_ICON_SIZE
+        icon.height = READ_ICON_SIZE
+        icon.anchor.set(0.5, 0.5)
+        icon.x = this.layoutButtonWidth / 2
+        icon.y = iconLayout.iconY
+        buttonContainer.addChild(icon)
+      }
+
       const label = new PixiText({
-        text: isLocked ? `${option.text} 🔒` : option.text,
+        text: option.text,
         style: textStyle,
         resolution: this.renderResolution,
         roundPixels: true,
       })
       label.x = this.layoutButtonWidth / 2
-      label.y = BUTTON_HEIGHT / 2
+      label.y = iconLayout.textY
       label.anchor.set(0.5, 0.5)
       buttonContainer.addChild(label)
 
@@ -567,8 +679,8 @@ export class ChoiceOverlay extends Container {
       // pivot を中央に動かしたため、ボタン中心を所定位置（region 指定時はその中心）に置く
       buttonContainer.x = buttonCenterX
       buttonContainer.y = scrollable
-        ? row * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
-        : startY + row * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
+        ? row * (this.layoutButtonHeight + BUTTON_GAP) + this.layoutButtonHeight / 2
+        : startY + row * (this.layoutButtonHeight + BUTTON_GAP) + this.layoutButtonHeight / 2
 
       buttonContainer.on('pointerover', () => {
         const hoverVisual = resolveChoiceVisual(theme, alreadyRead, true, isLocked, isCleared)
@@ -684,7 +796,7 @@ export class ChoiceOverlay extends Container {
    * 両方に対応するための引数。pixel テーマは radius=0 のため、これで単純な直角矩形になる (#569)。
    */
   private drawFrame(g: Graphics, theme: ChoiceTheme, offsetX: number, offsetY: number): void {
-    g.roundRect(offsetX, offsetY, this.layoutButtonWidth, BUTTON_HEIGHT, theme.radius)
+    g.roundRect(offsetX, offsetY, this.layoutButtonWidth, this.layoutButtonHeight, theme.radius)
   }
 
   private drawButton(
