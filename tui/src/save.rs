@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::Cli;
 use crate::flags::GameFlags;
-use crate::playback::Playback;
+use crate::playback::{Playback, SceneContinuation};
 
 /// config ファイルと衝突しない自動クイックセーブファイル名。
 const QUICKSAVE_FILE_NAME: &str = ".name-name-tui-quicksave.json";
@@ -44,6 +44,22 @@ struct QuickSaveData {
     /// 読んでも既読なしとして扱えるよう既定値を許容する。
     #[serde(default)]
     read_positions: Vec<(usize, usize, u64)>,
+    /// 保存時点の BGM のパス（`Playback::current_bgm`、#579 セルフレビュー must対応）。
+    /// 着地シーンより手前で宣言され着地シーン自身では再宣言されない「継承しているだけ」の
+    /// 状態は、`jump_to_scene_id` で直接ジャンプするだけでは復元できない（実際にプレイヤーが
+    /// 辿った中間シーンを再生しないため）——モジュール冒頭ドキュメント参照。旧バージョンの
+    /// セーブファイル（このフィールドが無い状態で保存されたもの）を読んでも BGM 無しとして
+    /// 扱えるよう既定値を許容する。
+    #[serde(default)]
+    current_bgm: Option<String>,
+    /// 保存時点のイベント絵のパス（`Playback::current_event_image`）。`current_bgm` と同じ
+    /// 理由・同じ後方互換方針。
+    #[serde(default)]
+    current_event_image: Option<String>,
+    /// 保存時点の暗転状態（`Playback::is_blackout`）。`current_bgm` と同じ理由・同じ後方
+    /// 互換方針（旧セーブファイルは暗転なし=`false`として扱う）。
+    #[serde(default)]
+    current_blackout: bool,
 }
 
 /// `cli.config_path` から自動クイックセーブファイルの保存先を決める。
@@ -73,6 +89,9 @@ pub fn save_quick(path: &Path, playback: &Playback, read_positions: &HashSet<(us
         scene_id: playback.current_scene_id().to_string(),
         flags: playback.flags().clone(),
         read_positions: read_positions.iter().copied().collect(),
+        current_bgm: playback.current_bgm().map(str::to_string),
+        current_event_image: playback.current_event_image().map(str::to_string),
+        current_blackout: playback.is_blackout(),
     };
     let Ok(json) = serde_json::to_string(&data) else {
         return;
@@ -107,7 +126,20 @@ pub fn restore_playback(playback: &mut Playback, path: &Path) -> bool {
         return false;
     }
     playback.set_flags(data.flags);
-    playback.jump_to_scene_id(&data.scene_id)
+    // #579 セルフレビュー must対応: 単純な `jump_to_scene_id` は実際にプレイヤーが辿った
+    // 中間シーンを再生しないため、着地シーンより手前で宣言され着地シーン自身では再宣言
+    // されない「継承しているだけ」の状態（BGM/イベント絵/暗転）が復元時にサイレントに
+    // 失われる。保存しておいた3値を `SceneContinuation` として明示的に渡すことで、
+    // ジャンプ先シーンの item 構築時にこれらが正しく焼き付くようにする
+    // （`Playback::jump_to_scene_id_with_continuation` doc comment参照）。
+    playback.jump_to_scene_id_with_continuation(
+        &data.scene_id,
+        SceneContinuation {
+            bgm: data.current_bgm,
+            event_image: data.current_event_image,
+            blackout: data.current_blackout,
+        },
+    )
 }
 
 /// 起動時、`event_loop` の `read_positions` 初期値として呼ぶ。`path` が `None`
@@ -217,6 +249,9 @@ mod tests {
             scene_id: "route1-scene3".to_string(),
             flags: playback_flags,
             read_positions: vec![(0, 1, 42), (2, 0, 7)],
+            current_bgm: Some("chapter2.ogg".to_string()),
+            current_event_image: Some("mid.webp".to_string()),
+            current_blackout: true,
         };
         let json = serde_json::to_string(&data).unwrap();
         std::fs::write(&path, json).unwrap();
@@ -225,6 +260,9 @@ mod tests {
         assert_eq!(loaded.scene_id, "route1-scene3");
         assert!(loaded.flags.check("seen_intro"));
         assert_eq!(loaded.read_positions, vec![(0, 1, 42), (2, 0, 7)]);
+        assert_eq!(loaded.current_bgm, Some("chapter2.ogg".to_string()));
+        assert_eq!(loaded.current_event_image, Some("mid.webp".to_string()));
+        assert!(loaded.current_blackout);
     }
 
     #[test]
@@ -261,6 +299,9 @@ mod tests {
             scene_id: "s".to_string(),
             flags: GameFlags::new(),
             read_positions: vec![(1, 2, 3)],
+            current_bgm: None,
+            current_event_image: None,
+            current_blackout: false,
         };
         std::fs::write(&path, serde_json::to_string(&data).unwrap()).unwrap();
 
@@ -275,6 +316,75 @@ mod tests {
     fn two_scene_source() -> &'static str {
         "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n\
          [選択]\n- 進む→1-2\n[/選択]\n\n## 1-2: 次\n\n**B**:\n次のセリフ\n"
+    }
+
+    /// 3シーン構成（"1-1" → Choice → "1-2"（BGM/イベント絵/暗転を宣言） → Choice →
+    /// "1-3"（無宣言、"1-2"からの継承のみ））の原稿（#579 セルフレビュー must対応）。
+    /// レビュアーが検証した再現方法と同じ形——`current_bgm`/`current_event_image`/
+    /// `is_blackout` のいずれも "1-3" 自身は再宣言せず、"1-2" から継承しているだけの
+    /// 状態を、自動クイックロードが正しく復元できるかを検証するための原稿。
+    fn three_scene_source_with_continuation_state() -> &'static str {
+        "---\nengine: name-name\n---\n\n\
+         ## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n\
+         [選択]\n- 進む→1-2\n[/選択]\n\n\
+         ## 1-2: 中間\n\n[BGM: chapter2.ogg]\n[イベント絵: mid.webp]\n[暗転]\n\n\
+         **B**:\n中間のセリフ\n\n\
+         [選択]\n- 進む→1-3\n[/選択]\n\n\
+         ## 1-3: 終着\n\n**C**:\n宣言なしセリフ\n"
+    }
+
+    /// #579 セルフレビュー must対応の再現テスト。レビュアーが検証した再現方法
+    /// （モジュール冒頭ドキュメント参照）をそのまま実行する: 実際に "1-1"→"1-2"
+    /// （BGM/イベント絵/暗転を宣言）→"1-3"（無宣言）とプレイし、その状態を
+    /// `save_quick` で保存、別の新規 `Playback` へ `restore_playback` で復元して、
+    /// `current_bgm`/`current_event_image`/`is_blackout` の3値がいずれも
+    /// サイレントに失われず正しく引き継がれることを確認する。
+    #[test]
+    fn save_quick_then_restore_carries_bgm_event_image_and_blackout_inherited_from_earlier_scene() {
+        let path = temp_path("continuation-round-trip");
+        let _guard = TempFile(path.clone());
+        let document =
+            name_name_parser::parser::parse(three_scene_source_with_continuation_state());
+
+        let mut playback = Playback::from_document(&document);
+        assert!(playback.jump_to_scene_id("1-2"));
+        // "1-2"到達時点で実際にBGM/イベント絵/暗転が効いていることを前提として確認
+        // （この前提が崩れていたら再現テストとして無意味なため）。
+        assert_eq!(playback.current_bgm(), Some("chapter2.ogg"));
+        assert_eq!(playback.current_event_image(), Some("mid.webp"));
+        assert!(playback.is_blackout());
+
+        assert!(playback.jump_to_scene_id("1-3"));
+        // 実際にプレイして辿り着いた場合は"1-2"からの継承がそのまま効いているはず
+        // （このPlaybackは"1-1"から生きたまま進んでいるため、レビュアー指摘の
+        // 「サイレントに失われる」対象はこの後の保存→復元の方）。
+        assert_eq!(playback.current_bgm(), Some("chapter2.ogg"));
+        assert_eq!(playback.current_event_image(), Some("mid.webp"));
+        assert!(playback.is_blackout());
+
+        save_quick(&path, &playback, &HashSet::new());
+
+        let mut restored_playback = Playback::from_document(&document);
+        assert!(restore_playback(&mut restored_playback, &path));
+
+        assert_eq!(restored_playback.current_scene_id(), "1-3");
+        assert_eq!(
+            restored_playback.current_bgm(),
+            Some("chapter2.ogg"),
+            "\"1-3\"自身は[BGM:]を再宣言していないため、修正前は復元後にNoneへ\
+             サイレントに失われていたはず"
+        );
+        assert_eq!(
+            restored_playback.current_event_image(),
+            Some("mid.webp"),
+            "\"1-3\"自身は[イベント絵:]を再宣言していないため、修正前は復元後にNoneへ\
+             サイレントに失われていたはず"
+        );
+        assert!(
+            restored_playback.is_blackout(),
+            "\"1-3\"自身は[暗転解除]を宣言していないため、修正前は復元後にfalseへ\
+             サイレントに失われていたはず"
+        );
     }
 
     #[test]
@@ -292,6 +402,9 @@ mod tests {
             scene_id: "1-2".to_string(),
             flags,
             read_positions: vec![],
+            current_bgm: None,
+            current_event_image: None,
+            current_blackout: false,
         };
         std::fs::write(&path, serde_json::to_string(&data).unwrap()).unwrap();
 
@@ -330,6 +443,9 @@ mod tests {
             scene_id: "does-not-exist".to_string(),
             flags,
             read_positions: vec![],
+            current_bgm: None,
+            current_event_image: None,
+            current_blackout: false,
         };
         std::fs::write(&path, serde_json::to_string(&data).unwrap()).unwrap();
 
@@ -537,6 +653,9 @@ mod tests {
             scene_id: "1-2".to_string(),
             flags,
             read_positions: vec![],
+            current_bgm: None,
+            current_event_image: None,
+            current_blackout: false,
         };
         std::fs::write(&path, serde_json::to_string(&data).unwrap()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
