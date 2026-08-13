@@ -499,7 +499,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 }
                 // 列数指定 (#508) があるときだけ `[選択: 列=N]`、無指定時は従来どおり `[選択]`。
                 match columns {
-                    Some(n) => out.push_str(&format!("[選択: 列={}]\n", n)),
+                    Some(n) => out.push_str(&format!("[選択: 列={n}]\n")),
                     None => out.push_str("[選択]\n"),
                 }
                 for opt in options {
