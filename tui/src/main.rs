@@ -8,6 +8,7 @@ mod input;
 mod multi_doc;
 mod playback;
 mod reveal;
+mod save;
 mod sentence;
 mod ui;
 
