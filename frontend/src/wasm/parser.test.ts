@@ -118,6 +118,62 @@ describe('parseMarkdown + normalizeDocument: character exit fade survives normal
   })
 })
 
+describe('parseMarkdown + normalizeDocument: EventImage effects が normalize を生き残る (#582)', () => {
+  // #351 EventImage の back/fade_ms 同様、#582 で追加された effects (ゆらぎ/ビネット/グロー/
+  // ろうそく) も normalizeEvents の EventImage 分岐を書き忘れると WASM が parse した値が
+  // 黙って落ちる（#310/#378 と同じ事故パターン、#440 の教訓）。pixel_art/split_layout と同じ
+  // 流儀で、実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）を通し、event 単位の effects が
+  // normalize を生き残ることを縛る。この種のテストが本ブランチに1件もなかった
+  // （#378型事故を明示的に防ぐ場所はここ）。
+  it('[イベント絵: path, ゆらぎ=true, ビネット=true, グロー=true, ろうそく=true] の全フラグが doc.effects に反映される', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント絵: story/x.webp, ゆらぎ=true, ビネット=true, グロー=true, ろうそく=true]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      EventImage: {
+        path: 'story/x.webp',
+        back: 'Hide',
+        fade_ms: null,
+        effects: { wobble: true, vignette: true, glow: true, candle: true },
+      },
+    })
+  })
+
+  it('演出kv省略時、effects は全 false 相当に正規化される', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント絵: story/x.webp]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      EventImage: {
+        path: 'story/x.webp',
+        back: 'Hide',
+        fade_ms: null,
+        effects: { wobble: false, vignette: false, glow: false, candle: false },
+      },
+    })
+  })
+})
+
 describe('parseMarkdown + normalizeDocument: speaker_nudge が normalize を生き残る (#382)', () => {
   // #378 の「wasm がキーを黙って捨てる」回帰防止線。normalizeDocument の列挙に speaker_nudge を
   // 書き忘れると WASM が parse した値が /play runtime（NovelRenderer.setSpeakerNudge）に届かず、

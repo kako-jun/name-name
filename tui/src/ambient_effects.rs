@@ -388,4 +388,154 @@ mod tests {
             assert_eq!(chunk[3], 200);
         }
     }
+
+    #[test]
+    fn candle_flicker_step_boundary_at_119_120_121ms() {
+        // ろうそく揺れは `elapsed_ms / CANDLE_STEP_MS(120)` の切り捨てで step を決める。
+        // 境界-1/境界/境界+1 の3点(119/120/121ms)で、119→120(step 0→1)で出力が変化し、
+        // 120→121(どちらも step=1)は変化しないことを明示ロックする。
+        let pixels = solid_rgba((180, 120, 60, 255), 4, 4);
+        let effects = AmbientEffects {
+            candle: true,
+            ..AmbientEffects::default()
+        };
+        let out_119 = apply_ambient_effects(&pixels, 4, 4, effects, 119);
+        let out_120 = apply_ambient_effects(&pixels, 4, 4, effects, 120);
+        let out_121 = apply_ambient_effects(&pixels, 4, 4, effects, 121);
+        assert_ne!(
+            out_119, out_120,
+            "119ms(step=0)→120ms(step=1)でstepが変わり出力が変化するはず"
+        );
+        assert_eq!(
+            out_120, out_121,
+            "120ms→121msは同じstep=1のため出力は変化しないはず"
+        );
+    }
+
+    #[test]
+    fn vignette_dark_crush_threshold_69_70_71_boundary() {
+        // apply_vignette の暗部沈み込み分岐 `v < 70.0` の境界を、`<` と `<=` の取り違えを
+        // 狙い撃って直接ロックする。21x21画像の中心ピクセル(10,10)は dist=0 → factor=1.0
+        // なので入力値がそのまま v になり、境界-1/境界/境界+1(69/70/71)を正確に制御できる。
+        let effects = AmbientEffects {
+            vignette: true,
+            ..AmbientEffects::default()
+        };
+        let center_idx = ((10 * 21 + 10) * 4) as usize;
+
+        let pixels_69 = solid_rgba((69, 69, 69, 255), 21, 21);
+        let out_69 = apply_ambient_effects(&pixels_69, 21, 21, effects, 0);
+        assert_eq!(
+            out_69[center_idx], 56,
+            "69 < 70 → crushされる: (69*0.82).trunc() = 56"
+        );
+
+        let pixels_70 = solid_rgba((70, 70, 70, 255), 21, 21);
+        let out_70 = apply_ambient_effects(&pixels_70, 21, 21, effects, 0);
+        assert_eq!(
+            out_70[center_idx], 70,
+            "70は境界そのもの。`< 70.0` ではないのでcrushされない(`<=`との取り違えを検知)"
+        );
+
+        let pixels_71 = solid_rgba((71, 71, 71, 255), 21, 21);
+        let out_71 = apply_ambient_effects(&pixels_71, 21, 21, effects, 0);
+        assert_eq!(out_71[center_idx], 71, "71 >= 70 → crushされない");
+    }
+
+    #[test]
+    fn wobble_shifts_pixels_on_non_uniform_diagonal_pattern() {
+        // 既存の `wobble_does_not_change_buffer_length_or_alpha` は単色画像を使っており、
+        // apply_wobble が恒等関数(何もしない実装)に壊れても検知できない死角があった。
+        // 列ごとに値が変わるグラデーション画像を使い、実際に行ごとの水平方向の再サンプリングが
+        // 起きていることを直接検証する。
+        let img_w = 32u32;
+        let img_h = 8u32;
+        let mut pixels = vec![0u8; (img_w * img_h * 4) as usize];
+        for y in 0..img_h {
+            for x in 0..img_w {
+                let idx = ((y * img_w + x) * 4) as usize;
+                let v = (x * 8) as u8;
+                pixels[idx] = v;
+                pixels[idx + 1] = v;
+                pixels[idx + 2] = v;
+                pixels[idx + 3] = 255;
+            }
+        }
+        let effects = AmbientEffects {
+            wobble: true,
+            ..AmbientEffects::default()
+        };
+        let out = apply_ambient_effects(&pixels, img_w, img_h, effects, 700);
+
+        let row_differs = (0..img_h as usize).any(|y| {
+            let start = y * img_w as usize * 4;
+            let end = start + img_w as usize * 4;
+            out[start..end] != pixels[start..end]
+        });
+        assert!(
+            row_differs,
+            "少なくとも1行は実際に水平シフトして元画像と異なるはず(恒等関数だと全行一致してしまう)"
+        );
+    }
+
+    #[test]
+    fn glow_actually_changes_pixel_values_from_input() {
+        // 既存の `glow_on_flat_uniform_color_stays_uniform` は「一様性の維持」だけを見ており、
+        // 恒等関数でも通ってしまう死角があった。ここでは明確なエッジ(左右で色が違う)を持つ
+        // 画像を使い、glow適用後に実際に入力から値が変化していることを明示的にアサートする。
+        let mut pixels = vec![0u8; (8 * 8 * 4) as usize];
+        for y in 0..8u32 {
+            for x in 0..8u32 {
+                let idx = ((y * 8 + x) * 4) as usize;
+                let v = if x < 4 { 20u8 } else { 220u8 };
+                pixels[idx] = v;
+                pixels[idx + 1] = v;
+                pixels[idx + 2] = v;
+                pixels[idx + 3] = 255;
+            }
+        }
+        let effects = AmbientEffects {
+            glow: true,
+            ..AmbientEffects::default()
+        };
+        let out = apply_ambient_effects(&pixels, 8, 8, effects, 0);
+        assert_ne!(
+            out, pixels,
+            "エッジ付近はぼかし+overlay合成で実際に値が変化するはず"
+        );
+    }
+
+    #[test]
+    fn combined_effect_flags_preserve_buffer_length_without_panicking() {
+        // 4フラグのうち2〜3個を有効にした代表的な組み合わせ(glow+candle, wobble+vignette,
+        // wobble+vignette+glow)で、通常サイズ画像でも長さ不変・panicしないことを確認する
+        // (単体テストは各フラグ単独が中心で、組み合わせ経路の検証が抜けていた)。
+        let pixels = solid_rgba((120, 90, 60, 255), 64, 64);
+        let combos = [
+            AmbientEffects {
+                glow: true,
+                candle: true,
+                ..AmbientEffects::default()
+            },
+            AmbientEffects {
+                wobble: true,
+                vignette: true,
+                ..AmbientEffects::default()
+            },
+            AmbientEffects {
+                wobble: true,
+                vignette: true,
+                glow: true,
+                ..AmbientEffects::default()
+            },
+        ];
+        for effects in combos {
+            let out = apply_ambient_effects(&pixels, 64, 64, effects, 4200);
+            assert_eq!(
+                out.len(),
+                pixels.len(),
+                "combo {effects:?} で長さが変わってはいけない"
+            );
+        }
+    }
 }

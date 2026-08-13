@@ -572,4 +572,116 @@ mod tests {
             "to無しは黒(BLANK_CELL)へフェードアウトする"
         );
     }
+
+    #[test]
+    fn resolve_grid_wires_effects_into_apply_ambient_effects() {
+        // `resolve_grid` が `effects` を実際に `apply_ambient_effects` へ渡していることを、
+        // 同一画像で effects あり/なしの grid 出力が異なることで検証する（配線の断線を検知する
+        // 唯一の防波堤。effects を握りつぶして常にデフォルトへ差し替えるリグレッションが起きても、
+        // 他のテストは通ってしまう）。glow は elapsed_ms に依存しない純粋な変換なので、
+        // タイミングに関わる不確実性なしに決定論的に差を検証できる。
+        let fixture_color = (180u8, 120u8, 60u8);
+        let (config, relative) = config_and_relative_path_for_solid_fixture(fixture_color);
+        let mut cache = ImageCache::new();
+
+        let no_effects = resolve_grid(
+            &mut cache,
+            &config,
+            &relative,
+            AmbientEffects::default(),
+            0,
+            1,
+            1,
+        );
+        let glow_effects = AmbientEffects {
+            glow: true,
+            ..AmbientEffects::default()
+        };
+        let with_effects = resolve_grid(&mut cache, &config, &relative, glow_effects, 0, 1, 1);
+
+        assert_ne!(
+            no_effects.cells[0].bg, with_effects.cells[0].bg,
+            "effects が実際に apply_ambient_effects へ渡っていれば glow の overlay合成で色が変わるはず"
+        );
+    }
+
+    #[test]
+    fn settled_snapshot_reflects_effects() {
+        // `ImageFadeState::settled(path, effects)` で構築した状態の `snapshot()` 結果が
+        // 実際に effects を反映していることを確認する。
+        let fixture_color = (180u8, 120u8, 60u8);
+        let (config, relative) = config_and_relative_path_for_solid_fixture(fixture_color);
+        let mut cache = ImageCache::new();
+
+        let plain = ImageFadeState::settled(Some(relative.clone()), AmbientEffects::default());
+        let glow = ImageFadeState::settled(
+            Some(relative),
+            AmbientEffects {
+                glow: true,
+                ..AmbientEffects::default()
+            },
+        );
+        let now = Instant::now();
+        let plain_grid = plain
+            .snapshot(&mut cache, &config, 1, 1, now)
+            .expect("to=Someならグリッドが返る");
+        let glow_grid = glow
+            .snapshot(&mut cache, &config, 1, 1, now)
+            .expect("to=Someならグリッドが返る");
+
+        assert_ne!(
+            plain_grid.cells[0].bg, glow_grid.cells[0].bg,
+            "effects=glowのsettled状態はsnapshotにも反映されるはず"
+        );
+    }
+
+    #[test]
+    fn transition_to_applies_independent_effects_to_from_and_to_images() {
+        // `transition_to` で新旧effectsが独立管理されることを確認する: フェード開始直後(t≈0)は
+        // 旧画像(from)に旧effects(なし)が、フェード完了間際(t≈1)は新画像(to)に新effects(glow)が
+        // それぞれ適用されていること。
+        let color_a = (180u8, 120u8, 60u8);
+        let color_b = (40u8, 200u8, 90u8);
+        let (config, relative_a) = config_and_relative_path_for_solid_fixture(color_a);
+        // write_test_webp_fixture は std::env::temp_dir() に一意なファイル名で書き出すため、
+        // config(= relative_a の親ディレクトリ)をそのまま使い回して2本目も解決できる。
+        let fixture_path_b =
+            image_render::write_test_webp_fixture(&solid_rgba(color_b, 2, 2), 2, 2);
+        let relative_b = fixture_path_b
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let settled = ImageFadeState::settled(Some(relative_a), AmbientEffects::default());
+        let now0 = Instant::now();
+        let glow_effects = AmbientEffects {
+            glow: true,
+            ..AmbientEffects::default()
+        };
+        let transitioning = settled.transition_to(
+            Some(relative_b),
+            glow_effects,
+            Duration::from_millis(1000),
+            now0,
+        );
+
+        let mut cache = ImageCache::new();
+
+        let at_start = transitioning
+            .snapshot(&mut cache, &config, 1, 1, now0)
+            .expect("グリッドが返る");
+        assert_eq!(
+            at_start.cells[0].bg, color_a,
+            "t=0はfrom(A)そのまま。fromには旧effects(なし)が適用されているはず"
+        );
+
+        let near_end = transitioning
+            .snapshot(&mut cache, &config, 1, 1, now0 + Duration::from_millis(999))
+            .expect("グリッドが返る");
+        assert_ne!(
+            near_end.cells[0].bg, color_b,
+            "t≈1はto(B)にglowが適用されているはずなので、無加工のcolor_bとは異なる"
+        );
+    }
 }
