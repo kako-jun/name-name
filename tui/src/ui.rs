@@ -60,12 +60,13 @@ use crate::reveal;
 const IMAGE_TEXT_GAP_WIDTH: u16 = 2;
 
 /// 固定キャンバスの本編領域（画像ペイン・テキストペイン共通の高さ、ステータス行を除く）の
-/// セル数（#494）。この値そのものに強い根拠は無く（`IMAGE_TEXT_GAP_WIDTH`と同種の実機調整
-/// 前提の初期値）、[`REQUIRED_IMAGE_COLS`] の導出元になる点が重要 — 詳細は下記を参照。
-const REQUIRED_MAIN_CONTENT_ROWS: u16 = 20;
+/// セル数（#588でも32のまま踏襲。#494当時の20から#588で32へ拡大した — kako-jun指定の
+/// `130列×33行`固定キャンバス／画像ペイン`64列×32行`の直接の根拠値）、
+/// [`REQUIRED_IMAGE_COLS`] の導出元になる点が重要 — 詳細は下記を参照。
+const REQUIRED_MAIN_CONTENT_ROWS: u16 = 32;
 
 /// 画像ペインに必要な幅（セル数）。正方形画像（gymnasiaの128x128マスター想定）を
-/// クロップ無しで表示するための式（#494）。
+/// クロップ無しで表示するための式（#494、#588でも維持）。
 ///
 /// quadrant block の2x2サブピクセルグリッドは `sub_w = image_cols*2`,
 /// `sub_h = image_rows*2` であり、`image_render::rgba_to_quadrant_grid` は
@@ -81,20 +82,25 @@ const REQUIRED_MAIN_CONTENT_ROWS: u16 = 20;
 /// rows は両辺で約分されて消えるため自由に選べる。将来 `TERMINAL_CELL_ASPECT_RATIO` を
 /// 調整する場合は、この `*2` の式も合わせて見直す必要がある）。実際にクロップ0になることは
 /// `tests::fixed_canvas_square_image_crops_nothing_at_required_image_pane_size` で検算する。
+/// `REQUIRED_MAIN_CONTENT_ROWS = 32` のとき `64`（Issue #588 が指定する画像ペイン幅と一致）。
 const REQUIRED_IMAGE_COLS: u16 = REQUIRED_MAIN_CONTENT_ROWS * 2;
 
-/// テキストペインに必要な幅（セル数、#494）。日本語の折返しに十分な幅であることに加え、
-/// `REQUIRED_IMAGE_COLS + 2` という一見不思議な値には理由がある: `split_columns` は
-/// `Constraint::Percentage(50)/Length(GAP)/Percentage(50)` を使っており、ratatui の
-/// cassowary ソルバーは `Length` を優先的に満たした残り幅を2分割する際、幅が十分広い
-/// steady state では前者（画像側）を「半分-1」・後者（テキスト側）を「半分+1」に割り当てる
-/// （`split_columns` のdoc コメント、`split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state`
-/// で実測済みの挙動）。画像ペインの実際のレンダリング幅を[`REQUIRED_IMAGE_COLS`]ちょうどに
-/// するには、`(REQUIRED_IMAGE_COLS + REQUIRED_TEXT_COLS)/2 - 1 == REQUIRED_IMAGE_COLS`を
-/// 満たす必要があり、これを解くと `REQUIRED_TEXT_COLS = REQUIRED_IMAGE_COLS + 2` になる
-/// （実際に画像ペイン幅が過不足なく一致することは
-/// `tests::fixed_canvas_image_pane_width_matches_required_image_cols` で検算する）。
-const REQUIRED_TEXT_COLS: u16 = REQUIRED_IMAGE_COLS + 2;
+/// テキストペインに必要な幅（セル数）。#588で画像:テキストの横比率を厳密に`1:1`にする要求が
+/// 明文化されたため、[`REQUIRED_IMAGE_COLS`] とそのまま同じ値を使う。
+///
+/// #494当時は `REQUIRED_IMAGE_COLS + 2` という補正値だった —
+/// `split_columns` が `Constraint::Percentage(50)/Length(GAP)/Percentage(50)` を使っており、
+/// ratatui のレイアウトソルバーは3つの制約が同時に指定された領域の幅を超過するとき
+/// （`Percentage(50)`2つの理想値の合計 + `Length(GAP)` は area 幅ちょうどより
+/// `IMAGE_TEXT_GAP_WIDTH` だけ超過する）、先に宣言された制約（画像側）だけを不足分だけ
+/// 縮めて帳尻を合わせる実装だったため、幅が十分広い steady state では画像側が恒常的に
+/// テキスト側より2セル少なくなる非対称性があった。この非対称性は総幅にかかわらず常に
+/// ちょうど2セルの固定オフセットであり（`REQUIRED_TOTAL_WIDTH` をいくつに選んでも解消しない）、
+/// #588 の「画像:テキスト=1:1」要求を満たせないため、`split_columns` 自体を
+/// `Constraint::Length` ベースの絶対値指定へ変更した（#588セルフレビュー相当の判断）。
+/// 固定キャンバス（`draw`が渡す領域の幅は常にちょうど[`REQUIRED_TOTAL_WIDTH`]）を前提にする限り
+/// `Length` 3つの合計は area 幅と過不足なく一致するため、丸めの非対称性そのものが発生しない。
+const REQUIRED_TEXT_COLS: u16 = REQUIRED_IMAGE_COLS;
 
 /// 固定キャンバス全体の必要幅（画像 + スペーサー + テキスト、#494）。`pub(crate)`:
 /// `main.rs` の統合テストが `TestBackend` のサイズをハードコードせずここから導出するために
@@ -173,24 +179,37 @@ fn draw_too_small_message(frame: &mut Frame, actual: Rect) {
 }
 
 /// 画面上段を「画像プレースホルダ」「スペーサー」「テキスト」の横3分割にする純粋関数
-/// （#488）。`Layout::split` の呼び出しをここへ切り出すことで、テスト側は実際のレイアウト
-/// 計算結果をそのまま期待値として使える（手計算した固定値をテストに直書きしない）。
-/// スペーサー領域（戻り値の2番目）には何も描画しない — ratatui は `Terminal::draw` のたびに
-/// バッファを既定セル（空白）へリセットするため、明示的に描くコードが無くてもそこは単なる
-/// 空白の余白として見える。画像/テキストは基本 `Constraint::Percentage(50)` ずつだが、
-/// スペーサーの `Constraint::Length` を優先的に満たす ratatui のレイアウト解決の都合上、
-/// 両者は均等に縮む/伸びるわけではない。どちらが有利になるかは単一方向のバイアスではなく
-/// 端末幅（W）によって非単調に変わる（W=3〜4のような狭い幅域では画像側が、W=7以降の
-/// 実用的な幅域ではテキスト側が恒常的に有利になり、その差は最大2セルにとどまる —
-/// steady state）。#480 が「対称性を要求しない分割」としていたのと同じ理由でここでも
-/// 問題ない。具体的な境界・数値は下記テスト群を参照。
+/// （#488、#588で絶対値指定へ変更）。`Layout::split` の呼び出しをここへ切り出すことで、
+/// テスト側は実際のレイアウト計算結果をそのまま期待値として使える（手計算した固定値を
+/// テストに直書きしない）。スペーサー領域（戻り値の2番目）には何も描画しない — ratatui は
+/// `Terminal::draw` のたびにバッファを既定セル（空白）へリセットするため、明示的に描く
+/// コードが無くてもそこは単なる空白の余白として見える。
+///
+/// 画像/テキストは [`REQUIRED_IMAGE_COLS`]/[`REQUIRED_TEXT_COLS`]（#588時点でどちらも同値）を
+/// `Constraint::Length` で直接指定する — #494〜#587では `Constraint::Percentage(50)` ずつ
+/// だったが、ratatui のレイアウトソルバーは3制約の理想値合計が area 幅を超過するとき
+/// 先に宣言された制約（画像側）だけを不足分だけ縮める実装で、幅が十分広い steady state では
+/// テキスト側が画像側より常に2セル多くなる非対称性があった（[`REQUIRED_TEXT_COLS`] の
+/// doc コメント参照）。#588 が「画像:テキスト=1:1」を明示的に要求したため、`draw` が渡す
+/// 領域の幅は常にちょうど[`REQUIRED_TOTAL_WIDTH`]（`Length`3つの合計と過不足なく一致）という
+/// 固定キャンバスの前提に乗り、絶対値指定へ切り替えて非対称性そのものを無くした。
+/// `draw` から渡ってくる幅がちょうど[`REQUIRED_TOTAL_WIDTH`]のとき、画像/テキストは
+/// 常にそれぞれ[`REQUIRED_IMAGE_COLS`]/[`REQUIRED_TEXT_COLS`]ちょうどになる
+/// （`tests::fixed_canvas_image_pane_width_matches_required_image_cols` で検算）。
+///
+/// `area` の幅が3つの `Length` 合計に満たない場合（`draw` 経由では
+/// [`fits_required_size`] のガードにより到達しないが、この関数自体は防御的に panic しない）、
+/// ratatui のソルバーは不足分を各制約から比例的に切り詰める。この場合の具体的な配分は
+/// `split_columns_areas_are_contiguous_and_never_exceed_input_width` が個別の幅ではなく
+/// 「隙間なく連続する」「入力幅を超えない」という構造的な不変条件だけを検証する
+/// （個別の丸め値そのものへは依存しない）。
 fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(50),
+            Constraint::Length(REQUIRED_IMAGE_COLS),
             Constraint::Length(IMAGE_TEXT_GAP_WIDTH),
-            Constraint::Percentage(50),
+            Constraint::Length(REQUIRED_TEXT_COLS),
         ])
         .split(area);
     (columns[0], columns[1], columns[2])
@@ -3730,46 +3749,63 @@ mod tests {
     }
 
     #[test]
-    fn split_columns_at_area_exactly_gap_width_leaves_zero_width_image_and_text() {
-        // W=IMAGE_TEXT_GAP_WIDTH ちょうどでは、gapのConstraint::Lengthだけが満たされ
-        // 画像/テキストのConstraint::Percentage(50)には残余が無い。
+    fn split_columns_at_area_exactly_gap_width_squeezes_gap_to_zero() {
+        // #588: split_columnsをConstraint::Length(REQUIRED_IMAGE_COLS/GAP/REQUIRED_TEXT_COLS)
+        // ベースへ変更した後の実測値。W=IMAGE_TEXT_GAP_WIDTH(2)では3つのLengthがどれも
+        // 満たせない極端な不足状態になり、ratatuiのレイアウトソルバーはgap(2番目に宣言した
+        // 制約)を真っ先に0まで切り詰め、img/textへ1セルずつ均等に配る（cargo testで実測・
+        // 確認済み、#494当時のPercentage版とは配分の傾向が異なる — 現在のsplit_columnsは
+        // 常にちょうどREQUIRED_TOTAL_WIDTHの領域でしか呼ばれない前提のため、この極端な不足時の
+        // 配分自体に強い意味は無く、panicしないことと合計が入力幅を超えないことが本質。
+        // 具体的な配分は `split_columns_areas_are_contiguous_and_never_exceed_input_width` の
+        // 構造的な不変条件でも別途カバーしている）。
         let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH, 10));
-        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
-        assert_eq!(img.width, 0);
-        assert_eq!(text.width, 0);
-    }
-
-    #[test]
-    fn split_columns_at_area_one_cell_over_gap_width_gives_extra_cell_to_image_not_text() {
-        // W=IMAGE_TEXT_GAP_WIDTH+1 になって初めて1セルの余剰が生まれるが、それはtextでは
-        // なくimg側（先頭のConstraint::Percentage）に付く。これはW=3〜4という狭い幅域限定で
-        // img側が優先される現象（#480由来の既存丸め規約の再現）を固定する回帰テストであり、
-        // `split_columns` 全体の一般的な傾向ではない — W=9以降のsteady stateでは逆にtext側が
-        // 恒常的に有利になる
-        // （`split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state`
-        // 参照）。
-        let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH + 1, 10));
-        assert_eq!(img.width, 1, "剰余の1セルはimg側に付くはず");
-        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
-        assert_eq!(text.width, 0);
-    }
-
-    #[test]
-    fn split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state() {
-        // W=9以降は img/text の差が最大2セルにとどまりつつtext側が恒常的に有利になる
-        // steady stateに入る（W=3〜4の狭い幅域だけがimg優先になる例外区間で、それは上記
-        // `split_columns_at_area_one_cell_over_gap_width_gives_extra_cell_to_image_not_text`
-        // が固定している）。このsteady state自体を検知するテストが無かったため追加する
-        // （W=20はimg=8/gap=2/text=10で差がちょうど2になる実測値、cargo testで確認済み）。
-        let (img, gap, text) = split_columns(Rect::new(0, 0, 20, 10));
-        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(img.width, 1);
         assert_eq!(
-            text.width,
-            img.width + 2,
-            "steady stateではtext側がimg側より2セル多いはず: img={}, text={}",
-            img.width,
-            text.width
+            gap.width, 0,
+            "極端な不足時はgapが真っ先に0へ切り詰められる（実測値）"
         );
+        assert_eq!(text.width, 1);
+    }
+
+    #[test]
+    fn split_columns_at_area_one_cell_over_gap_width_splits_evenly() {
+        // #588: W=IMAGE_TEXT_GAP_WIDTH+1(3)では、上のW=2のケースからgapが1セルだけ回復し、
+        // img/gap/textが1セルずつのちょうど均等割りになる（cargo testで実測・確認済み）。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH + 1, 10));
+        assert_eq!(img.width, 1);
+        assert_eq!(gap.width, 1);
+        assert_eq!(text.width, 1);
+    }
+
+    #[test]
+    fn split_columns_below_required_total_width_gives_text_most_of_the_shortfall() {
+        // #588: split_columnsがConstraint::Lengthベースになったことで、
+        // REQUIRED_TOTAL_WIDTH未満の領域（draw()経由では fits_required_size のガードにより
+        // 到達しないが、この関数自体は防御的に入力を受け付ける）ではimg/gapが小さな値に
+        // 張り付き、textが残りをほぼ全て吸収する非対称な配分になる（W=20はimg=2/gap=2/text=16、
+        // cargo testで実測・確認済み。#494当時のPercentage版の「差は最大2セル」という
+        // steady stateの性質はもう成り立たない）。この配分自体は draw() の実運用では
+        // 到達しない領域の実装詳細だが、ratatuiのレイアウトソルバーの挙動が将来変わったときに
+        // 気づけるよう固定しておく。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, 20, 10));
+        assert_eq!(img.width, 2);
+        assert_eq!(gap.width, 2);
+        assert_eq!(text.width, 16);
+    }
+
+    #[test]
+    fn split_columns_at_required_total_width_gives_exact_1to1_split() {
+        // #588の核心: draw()が実際に渡す唯一の幅（REQUIRED_TOTAL_WIDTH）では、
+        // Length3つの合計がarea幅とちょうど一致するため過不足なく満たされ、
+        // 画像:テキストが要求どおり厳密に1:1（REQUIRED_IMAGE_COLS == REQUIRED_TEXT_COLS）になる
+        // （`fixed_canvas_image_pane_width_matches_required_image_cols` と同じ性質を
+        // `split_columns` 単体でも固定する）。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, 10));
+        assert_eq!(img.width, REQUIRED_IMAGE_COLS);
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(text.width, REQUIRED_TEXT_COLS);
+        assert_eq!(img.width, text.width, "画像:テキストは厳密に1:1のはず");
     }
 
     #[test]
