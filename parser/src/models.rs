@@ -123,11 +123,12 @@ pub struct ChoiceOption {
     /// 同じ真偽判定規則。フロント/TUI どちらもこのフィールドだけを見て判定する）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
-    /// 消灯(クリア済み)視覚状態 (#594)。`- text → jump [消灯: flag]` の `flag` をそのまま
-    /// 保持する。`condition`（ロック）とは独立したフィールドで、同じ行に併記できる
-    /// （例: `- 異邦 → r02-01-last-rites [条件: route01_cleared] [消灯: route02_cleared]`）。
-    /// `None` = 消灯しない（既存動作）。`Some(flag)` は `flag` が真のとき選択は可能なまま
-    /// 見た目だけ暗くする「消灯」状態になる（`condition` と同じ真偽判定規則）。
+    /// 完了(クリア済み)視覚状態 (#594、#596でキーワードを`完了`に改名)。
+    /// `- text → jump [完了: flag]` の `flag` をそのまま保持する。`condition`（ロック）
+    /// とは独立したフィールドで、同じ行に併記できる
+    /// （例: `- 異邦 → r02-01-last-rites [条件: route01_cleared] [完了: route02_cleared]`）。
+    /// `None` = 完了しない（既存動作）。`Some(flag)` は `flag` が真のとき選択は可能なまま
+    /// 見た目だけ暗くする「完了」状態になる（`condition` と同じ真偽判定規則）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleared: Option<String>,
 }

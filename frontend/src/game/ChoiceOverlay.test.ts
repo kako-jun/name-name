@@ -121,11 +121,11 @@ describe('resolveStyle', () => {
   )
 })
 
-// #594 再発防止: locked（押せない）と cleared（消灯＝押せる）の明暗関係が
+// #594 再発防止: locked（押せない）と cleared（完了＝押せる）の明暗関係が
 // luma(0.299R+0.587G+0.114B) で逆転していないかを4テーマ全てで機械的に検証する。
 // 「押せない」より「押せる」の方が暗く見えるのは常に誤り（soft テーマの fill/border/text
 // 全てで一度逆転していた実バグの再発を検出する）。
-describe('ChoiceOverlay ロック/消灯 luma 順序 (#594 回帰テスト)', () => {
+describe('ChoiceOverlay ロック/完了 luma 順序 (#594 回帰テスト)', () => {
   function luma(color: number): number {
     const r = (color >> 16) & 0xff
     const g = (color >> 8) & 0xff
@@ -274,16 +274,16 @@ describe('ChoiceOverlay rendering', () => {
     overlay.hide()
   })
 
-  // #594: 消灯(クリア済み)視覚状態。ロックとの決定的な差異は、見た目は変わるがクリックは
-  // 通常どおり受け付ける(eventMode='static'のまま)点。
-  it('消灯中の選択肢は消灯専用配色で描かれ、eventMode=static のままクリックを受け付ける', () => {
+  // #594: 完了(クリア済み)視覚状態（#596でキーワード改名）。ロックとの決定的な差異は、
+  // 見た目は変わるがクリックは通常どおり受け付ける(eventMode='static'のまま)点。
+  it('完了中の選択肢は完了専用配色で描かれ、eventMode=static のままクリックを受け付ける', () => {
     const overlay = new ChoiceOverlay(800, 450)
     const theme = resolveStyle('default')
     const onSelect = vi.fn()
     overlay.show(
       [
         { text: '通常', jump: 'normal' },
-        { text: '消灯済み', jump: 'cleared-jump' },
+        { text: '完了済み', jump: 'cleared-jump' },
       ],
       onSelect,
       'default',
@@ -305,7 +305,7 @@ describe('ChoiceOverlay rendering', () => {
     expect(normalLabel?.style.fill).toBe(theme.textColor)
     expect(clearedLabel?.style.fill).toBe(theme.textClearedColor)
     // ロックと違い、GUI版はテキストにマークを付けない（色数が豊富なため配色だけで区別する設計）。
-    expect(clearedLabel?.text).toBe('消灯済み')
+    expect(clearedLabel?.text).toBe('完了済み')
 
     expect(normalButton.eventMode).toBe('static')
     expect(clearedButton.eventMode).toBe('static')
@@ -379,7 +379,7 @@ describe('ChoiceOverlay rendering', () => {
   })
 
   // #594: cleared は alreadyRead/hover より優先される専用の見た目になる（locked と同じ構造）。
-  it('resolveChoiceVisual: cleared=true は alreadyRead/hover に関わらず消灯専用配色を返す', () => {
+  it('resolveChoiceVisual: cleared=true は alreadyRead/hover に関わらず完了専用配色を返す', () => {
     const theme = resolveStyle('default')
     const expected = {
       fill: theme.fillCleared,
@@ -1215,13 +1215,13 @@ describe('ChoiceOverlay グリッド×ロック整合性 (#591 テスト観点�
 // shadowFillCall フィルタと同じ判別法）を利用し、number型のfill呼び出しだけを
 // ボタン本体の描画としてボタン順に対応させる。stroke はボタン本体でしか呼ばれないため
 // フィルタ不要。
-describe('ChoiceOverlay グリッド×消灯整合性・ロック優先順位 (#594 テスト観点整理フェーズ 最優先3/4)', () => {
+describe('ChoiceOverlay グリッド×完了整合性・ロック優先順位 (#594 テスト観点整理フェーズ 最優先3/4)', () => {
   it('columns=5・10択でclearedが交互パターンのとき、各ボタンのfill/border/eventModeがインデックス通りに対応する', () => {
     const overlay = new ChoiceOverlay(800, 450)
     const theme = resolveStyle('default')
     const fillSpy = vi.spyOn(Graphics.prototype, 'fill')
     const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
-    // 偶数indexは消灯なし、奇数indexは消灯中（市松パターンで隣接セルとの取り違えも検出できる）。
+    // 偶数indexは未完了、奇数indexは完了中（市松パターンで隣接セルとの取り違えも検出できる）。
     const cleared = Array.from({ length: 10 }, (_, i) => i % 2 === 1)
     overlay.show(choices(10), vi.fn(), null, undefined, 5, undefined, cleared)
 

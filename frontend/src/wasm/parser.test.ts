@@ -880,12 +880,12 @@ describe('parseMarkdown + normalizeEvents: 選択肢の条件付きロック (#5
   })
 })
 
-// #594: 選択肢オプションの消灯(クリア済み)視覚状態（`- text → jump [消灯: flag]`）が
-// normalizeEvents（frontend/src/wasm/parser.ts）を生き残ることを実 parse 経路で縛る。
-// `[条件:]`（#591）と同じ spread ベースの normalizeEvents を通るため理屈上は列挙漏れの罠は
-// 起きにくいはずだが、wasm 再ビルド漏れ（`cargo test` だけでは本番 wasm に反映されない罠）を
-// 検知するため必ず parseMarkdown() を通す。
-describe('parseMarkdown + normalizeEvents: 選択肢の消灯(クリア済み)視覚状態 (#594)', () => {
+// #594: 選択肢オプションの完了(クリア済み)視覚状態（`- text → jump [完了: flag]`、
+// #596でキーワード改名）が normalizeEvents（frontend/src/wasm/parser.ts）を生き残ることを
+// 実 parse 経路で縛る。`[条件:]`（#591）と同じ spread ベースの normalizeEvents を通るため
+// 理屈上は列挙漏れの罠は起きにくいはずだが、wasm 再ビルド漏れ（`cargo test` だけでは本番
+// wasm に反映されない罠）を検知するため必ず parseMarkdown() を通す。
+describe('parseMarkdown + normalizeEvents: 選択肢の完了(クリア済み)視覚状態 (#594)', () => {
   const findChoice = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
     doc.chapters
       .flatMap((c) => c.scenes.flatMap((s) => s.events))
@@ -897,7 +897,7 @@ describe('parseMarkdown + normalizeEvents: 選択肢の消灯(クリア済み)�
         }
       | undefined
 
-  it('[消灯: flag] 付きオプションは cleared を保持し、無指定オプションは undefined のまま', async () => {
+  it('[完了: flag] 付きオプションは cleared を保持し、無指定オプションは undefined のまま', async () => {
     const markdown = [
       '---',
       'engine: name-name',
@@ -908,7 +908,7 @@ describe('parseMarkdown + normalizeEvents: 選択肢の消灯(クリア済み)�
       '## s1: シーン',
       '',
       '[選択]',
-      '- 近視 → r01-01-terminal-light [消灯: route01_cleared]',
+      '- 近視 → r01-01-terminal-light [完了: route01_cleared]',
       '- いつもの道 → r02-01-normal',
       '[/選択]',
       '',
@@ -921,7 +921,7 @@ describe('parseMarkdown + normalizeEvents: 選択肢の消灯(クリア済み)�
     ])
   })
 
-  it('[条件:] と [消灯:] は同じ行に併記でき、順序に関わらず両方保持される', async () => {
+  it('[条件:] と [完了:] は同じ行に併記でき、順序に関わらず両方保持される', async () => {
     const markdown = [
       '---',
       'engine: name-name',
@@ -932,8 +932,8 @@ describe('parseMarkdown + normalizeEvents: 選択肢の消灯(クリア済み)�
       '## s1: シーン',
       '',
       '[選択]',
-      '- 異邦 → r02-01-last-rites [条件: route01_cleared] [消灯: route02_cleared]',
-      '- 逆順 → r03-01 [消灯: route03_cleared] [条件: route02_cleared]',
+      '- 異邦 → r02-01-last-rites [条件: route01_cleared] [完了: route02_cleared]',
+      '- 逆順 → r03-01 [完了: route03_cleared] [条件: route02_cleared]',
       '[/選択]',
       '',
     ].join('\n')
