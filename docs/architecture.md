@@ -278,7 +278,7 @@ Rust で実装。wasm-bindgen + tsify-next で TypeScript 型を自動生成す�
 - `WaitDisplayComplete` — 表示完了待機。`[待機: 表示完了]` で、その時点の背景ロード/フェードと立ち絵ロード/フェード/移動が完了するまで待つ
 - `Flag` — フラグ設定（name, value）
 - `Condition` — 条件分岐（flag, events: Event[]）
-- `Choice` — 選択肢（options: ChoiceOption[]。各 `ChoiceOption` は `text`/`jump` に加え任意の `condition?: string` を持つ。`- text → jump [条件: flag]` 構文で個別ロックを付けられる、#591。さらに任意の `cleared?: string` も持ち、`[完了: flag]` 構文でクリア済み視覚状態（選択可能なまま暗い配色）を付けられる、#594（#596でキーワードを`完了`に改名）。両構文は同じ行に併記可能。詳細は `docs/spec/markdown-v0.1.md` の「選択肢の条件付きロック」「選択肢の完了（クリア済み）視覚状態」参照）
+- `Choice` — 選択肢（options: ChoiceOption[]。各 `ChoiceOption` は `text`/`jump` に加え任意の `condition?: string` を持つ。`- text → jump [条件: flag]` 構文で個別ロックを付けられる、#591。さらに任意の `cleared?: string` も持ち、`[完了: flag]` 構文でクリア済み視覚状態（選択可能なまま暗い配色）を付けられる、#594（#596でキーワードを`完了`に改名）。両構文は同じ行に併記可能。詳細は `docs/spec/markdown-v0.1.md` の「選択肢の条件付きロック」「選択肢の完了（クリア済み）視覚状態」参照）。GUI版のロック中選択肢はダイム配色のみで表す（旧🔒絵文字連結は#598で撤去、TUI版は現状維持で🔒マークを保持）。完了扱いの選択肢は、`ChoiceOverlay.setAssetBaseUrl()`（`NovelRenderer.setAssetBaseUrl` から他レイヤと同じタイミングで伝播）でプロジェクト任意アセット `assets/images/read-icon.png` を `Assets.load()` 先読みし（favicon.png と同じ `assets/raw/{path}` 取得規約、成功していればテキストの上にアイコンを表示する（未配置/取得失敗時は配色のみのフォールバック、#598）。アイコン表示時は `ChoiceOverlay.layoutButtonHeight` がアイコン+テキストの2段組みが収まる高さへ切り替わる（アイコンが一切描画されない回は通常の `BUTTON_HEIGHT` のまま非破壊）。アイコン/テキストの縦位置は純粋関数 `computeChoiceIconLayout`（`novelLayout.ts`）が算出する
 - `RpgMap` — RPG マップ（width, height, tile_size, tiles: u8[][]）
 - `PlayerStart` — プレイヤー初期位置（x, y, direction）
 - `Npc` — NPC 配置（id, name, x, y, color, message: string[], sprite?: string, frames?: u32, direction?: Direction）
