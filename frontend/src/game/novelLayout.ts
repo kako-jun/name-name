@@ -439,6 +439,71 @@ export function computeChoiceGridLayout(
   return { columns: gridColumns, isGrid, rows, buttonWidth, positions }
 }
 
+/** `computeChoiceIconLayout` の戻り値 (#598)。ボタン中心を基準にした縦位置 (px)。 */
+export interface ChoiceIconLayout {
+  /** アイコン sprite の中心 Y（`hasIcon=false` のときは未使用の値、呼び出し側は描画しない）。 */
+  iconY: number
+  /** ラベル Text の中心 Y。`hasIcon=false` のときは従来どおりボタン中心（非破壊）。 */
+  textY: number
+}
+
+/**
+ * 選択肢ボタン内で、アイコン（既読=完了 `assets/images/read-icon.webp` / 未読
+ * `assets/images/unread-icon.webp`、#598）とラベルテキストの縦位置を算出する純粋関数。
+ * どちらのアイコンも同じサイズ・同じレイアウトを使うため、呼び出し側が選んだテクスチャの
+ * 種類はこの関数の関知するところではない（`hasIcon` は「今回アイコンを描画するか」だけを表す）。
+ * アイコンをテキストの上に置き、2つを合わせた塊をボタン中心を軸に概算的に上下対称へ配置する
+ * （`iconY`/`textY` はどちらもボタン中心から `iconSize` の half-extent 分だけ離れた位置。
+ * テキスト側も同じ offset を使う近似であり、実際のテキスト高さは見ていない——fontSize は
+ * 20-22px、`iconSize`（`ICON_SIZE`）は 18px のため数 px 程度の誤差があり、真の光学的対称
+ * ではない）。
+ *
+ * `hasIcon=false`（未読み込み/取得失敗/locked などで今回アイコンを描画しない）のときは、
+ * `iconY`/`textY` とも `buttonHeight / 2` を返す——#591 以来の「ラベルをボタン中心に
+ * 一点センタリング」という既存レイアウトと完全に同じ結果になる（非破壊）。
+ *
+ * `buttonHeight` は呼び出し側 (`ChoiceOverlay`) がアイコン表示時用に嵩上げした値
+ * （`layoutButtonHeight`）を渡す想定——アイコン＋テキストがボタン枠内に収まるかどうかの
+ * 判断・調整は呼び出し側の責務で、この関数は与えられた `buttonHeight` の中で対称配置する
+ * だけの幾何計算に専念する。
+ */
+export function computeChoiceIconLayout(
+  buttonHeight: number,
+  hasIcon: boolean,
+  iconSize: number,
+  iconTextGap: number
+): ChoiceIconLayout {
+  const center = buttonHeight / 2
+  if (!hasIcon) {
+    return { iconY: center, textY: center }
+  }
+  const offset = (iconSize + iconTextGap) / 2
+  return { iconY: center - offset, textY: center + offset }
+}
+
+/** `resolveChoiceIconKind` の戻り値 (#598 追記3)。表示すべきアイコンの種類、または非表示。 */
+export type ChoiceIconKind = 'read' | 'unread' | 'none'
+
+/**
+ * 選択肢ボタン1件に表示すべきアイコンの種類を判定する純粋関数 (#598 追記3)。
+ *
+ * 「ロック」と「既読/完了」は独立した2軸の状態であり（追記3で訂正済み。ロック＝読むことすら
+ * できない、既読/完了＝読めるようになった後に読んだかどうか）、判定はこの2軸だけで決まる。
+ * 配色の優先順位（`resolveChoiceVisual`: locked > cleared > alreadyRead > 通常）とは
+ * 別軸の判定であり、`alreadyRead` はここでは一切参照しない：
+ *
+ * - `locked` → `'none'`（ロック中はアイコンを一切付けない。配色のみで表す、変更なし）
+ * - `!locked && cleared` → `'read'`（既読/完了。`read-icon.webp`）
+ * - `!locked && !cleared` → `'unread'`（未読。`alreadyRead` の真偽に関わらず `unread-icon.webp`）
+ *
+ * 実際に描画するかどうか（対応するテクスチャの先読みに成功しているか）は呼び出し側
+ * （`ChoiceOverlay`）の責務。この関数は「本来どちらを見せるべきか」という論理だけを返す。
+ */
+export function resolveChoiceIconKind(locked: boolean, cleared: boolean): ChoiceIconKind {
+  if (locked) return 'none'
+  return cleared ? 'read' : 'unread'
+}
+
 /**
  * CSS カラー文字列（"#1a4a7a" / "#222" / "1a4a7a"）を Pixi の数値カラーに変換する純粋関数 (#270 / #273)。
  *
