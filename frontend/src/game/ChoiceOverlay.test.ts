@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Graphics, Sprite, Text as PixiText, Rectangle, Texture } from 'pixi.js'
 import { ChoiceOverlay, resolveChoiceVisual, resolveStyle } from './ChoiceOverlay'
-import { computeSplitLayoutRegions } from './novelLayout'
+import { computeSplitLayoutRegions, resolveChoiceIconKind } from './novelLayout'
 import type { FederatedPointerEvent } from 'pixi.js'
 
 // アイコン(#598)テスト用の共通ヘルパー。EventImageLayer.test.ts と同じ流儀
@@ -1973,6 +1973,59 @@ describe('ChoiceOverlay ロックとアイコンの軸独立性 (#604)', () => {
     // アイコンは cleared=true なので read-icon（locked とは無関係、resolveChoiceIconKind の
     // 仕様どおり）。
     const icon = findIconSprite(button)
+    expect(icon).toBeDefined()
+    expect(icon?.texture).toBe(internals(overlay).readIconTexture)
+
+    overlay.hide()
+  })
+
+  it('locked=true, cleared=falseでunread-icon.webpが404の行はアイコン非表示になるが、それはtexture欠如が理由でありlocked起因ではない（#604: 判定過程の回帰固定）', async () => {
+    // 表示結果（アイコンなし）だけを見ると #598 時点の「locked→'none'」実装と区別が
+    // つかない。しかしこのテストは unreadIconTexture が null（404）であることも同時に
+    // 確認することで、非表示の理由が「resolveChoiceIconKind が 'none' を返したから」では
+    // なく「テクスチャの先読みに失敗したから」であることを固定する。将来
+    // resolveChoiceIconKind に locked を誤って再導入しても、この行だけでは検出できない
+    // （どちらの実装でも結果は非表示）ため、readIconTexture 側の同種テストと対で見る。
+    mockAssetsLoadRoutedByUrl({ '/assets/images/unread-icon.webp': 'reject' })
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+    expect(internals(overlay).unreadIconTexture).toBeNull() // texture欠如を明示的に確認
+
+    overlay.show(
+      [{ text: 'ロック済み・未読', jump: 'l', condition: 'flag' }],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [true],
+      [false]
+    )
+    // resolveChoiceIconKind(false) 自体は 'unread' を返す（locked起因の'none'ではない）。
+    expect(resolveChoiceIconKind(false)).toBe('unread')
+    // だが対応する unreadIconTexture が null なので、実際の描画は非表示になる
+    // （ChoiceOverlay.show 内の `showIcon = iconTexture !== null` 判定による）。
+    expect(findIconSprite(overlay.children[0])).toBeUndefined()
+
+    overlay.hide()
+  })
+
+  it('locked引数を渡さない(undefined)呼び出しでもclearedだけでアイコン種別が決まる（locked?.[i] ?? falseのデフォルト経路が新シグネチャでも生きている）', async () => {
+    mockAssetsLoadResolved()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [{ text: 'ロック未指定・完了済み', jump: 'x' }],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      undefined, // locked を丸ごと省略
+      [true]
+    )
+    const icon = findIconSprite(overlay.children[0])
     expect(icon).toBeDefined()
     expect(icon?.texture).toBe(internals(overlay).readIconTexture)
 
