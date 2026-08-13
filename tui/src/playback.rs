@@ -297,9 +297,8 @@ fn content_signature(item: &PlaybackItem) -> u64 {
 /// 時点で `events` を `build_scene_items` にそのまま渡し、Flag/Condition をその場の
 /// フラグ状態でリアルタイムに評価させる（`Playback` 構造体の doc コメント参照）。
 struct SceneRef {
-    /// `scene_index_by_id` の構築時にキーとして使うだけで、構築後は読み出されない
-    /// （デバッグ時の可読性のために保持している）。
-    #[allow(dead_code)]
+    /// `scene_index_by_id` の構築時にキーとして使うほか、[`Playback::current_scene_id`]
+    /// が自動クイックセーブ（#579）向けに現在シーンのシーンIDを読み出すのにも使う。
     scene_id: String,
     file_id: usize,
     events: Vec<Event>,
@@ -1053,6 +1052,37 @@ impl Playback {
     /// 再トリガーしない、という意図した挙動にもなる。
     pub(crate) fn item_index(&self) -> usize {
         self.index
+    }
+
+    /// 現在のシーンの `scene_order` 内インデックス。`advance()`/`select_current_choice()`
+    /// (`jump_to_scene_idx()`) が新しいシーンの item を構築するたびに更新される
+    /// （構造体の `current_scene_idx` フィールド doc comment参照）ため、この値の前後比較で
+    /// 「シーンが実際に切り替わったか」を検出できる。`main.rs::event_loop` が自動
+    /// クイックセーブ（#579）のトリガー判定に使う — `read_positions` が使っている
+    /// `stable_item_key` の「呼び出し前後で比較する」パターンと同じ手法。
+    pub(crate) fn current_scene_idx(&self) -> usize {
+        self.current_scene_idx
+    }
+
+    /// 現在のシーンのシーンID。自動クイックセーブ（#579、`main.rs::save`）がシリアライズ
+    /// 対象として読み、[`Playback::jump_to_scene_id`] にそのまま渡せば同じシーンへ復帰できる。
+    pub(crate) fn current_scene_id(&self) -> &str {
+        &self.scene_order[self.current_scene_idx].scene_id
+    }
+
+    /// 現在のフラグ状態への参照。自動クイックセーブ（#579、`main.rs::save`）がシリアライズ
+    /// 対象として読む。
+    pub(crate) fn flags(&self) -> &GameFlags {
+        &self.flags
+    }
+
+    /// フラグ状態を丸ごと差し替える。自動クイックロード（#579、`main.rs::save::restore_playback`）
+    /// が、構築直後の `Playback` へ保存済みフラグを上書きするために使う。呼び出し後に
+    /// [`Playback::jump_to_scene_id`] で保存済みシーンへジャンプするまでは、既に構築済みの
+    /// 先頭シーンの item 群（構築時点のデフォルトフラグで作られたもの）は更新されないまま
+    /// 残る — `restore_playback` はこの2つを必ずセットで呼ぶ。
+    pub(crate) fn set_flags(&mut self, flags: GameFlags) {
+        self.flags = flags;
     }
 
     /// `item_index()` が指しうる生インデックス `item_index` を、シーンを跨いで安定な

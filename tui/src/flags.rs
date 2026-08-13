@@ -8,11 +8,17 @@
 use std::collections::HashMap;
 
 use name_name_parser::models::FlagValue;
+use serde::{Deserialize, Serialize};
 
 /// プレイ経路上で立てたフラグの集合。
 ///
-/// GUI版 `GameState.flags: Map<string, FlagValue>` に対応する。
-#[derive(Debug, Clone, Default)]
+/// GUI版 `GameState.flags: Map<string, FlagValue>` に対応する。`Serialize`/`Deserialize`
+/// は自動クイックセーブ/ロード（#579、`main.rs::save`）がこの構造体ごとJSONへ
+/// 書き出し・読み戻すために導出する。`generation` も一緒にシリアライズされるが、
+/// ロード直後の値（保存時点の世代番号）をそのまま復元するだけで意味的な問題はない
+/// （`total_cache` は `Playback::build` の時点で常に `None` へリセットされるため、
+/// 世代番号が飛んでも古いキャッシュを誤って有効とみなすことはない）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GameFlags {
     values: HashMap<String, FlagValue>,
     /// `set()` が呼ばれるたびに単調増加するカウンタ。値そのものの比較（`HashMap` の
