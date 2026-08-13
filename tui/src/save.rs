@@ -115,13 +115,16 @@ pub fn restore_playback(playback: &mut Playback, path: &Path) -> bool {
 /// 主に `Config::quicksave_path` が未設定なテスト用の `Config` から呼ばれた場合)
 /// または読み込み失敗時は空集合（既読なしの通常起動と同じ）を返す。
 ///
-/// [`restore_playback`] とは別に呼ぶ設計（ファイルを2回読むことになるが、起動時
-/// 1回きりの小さな JSON ファイルであり無視できるコスト）。`main()` が `Playback` 構築
-/// 直後に行う `restore_playback` の時点ではまだ `event_loop` の `read_positions`
-/// （`event_loop` 関数のローカル変数）が存在しないため、両者を1回の呼び出しに
-/// まとめるには `event_loop` の外へ `read_positions` を持ち出す関数シグネチャ変更が
-/// 必要になり、既存の大量のテスト（`event_loop` を直接呼ぶもの）の呼び出し箇所すべてに
-/// 影響する。呼び出し場所を分けることでその変更を避けた。
+/// [`restore_playback`] とは別の関数呼び出しのまま残している（ファイルを2回読むことに
+/// なるが、起動時1回きりの小さな JSON ファイルであり無視できるコスト）。ただし
+/// 呼び出しそのものは無条件ではない——`event_loop` は `restore_playback` の戻り値
+/// （`main()` から `playback_restored: bool` 引数として渡ってくる、#579 追加修正）が
+/// `true` の時だけこの関数を呼ぶ。`restore_playback` が `false`（保存済みscene_idが
+/// 現在の原稿に存在しない等）を返した場合、`playback` は構築直後の初期状態のまま
+/// 止まる設計（`has_scene_id` によるアトミック性）のため、`read_positions` だけ独立に
+/// 復元すると「`playback` は初期状態なのに `read_positions` だけ古い値が残る」という
+/// 非対称な不整合が生じる。`event_loop` 側がその判定を持つ設計にした理由は
+/// `main.rs::event_loop` の `read_positions` 初期化コメント参照。
 pub fn restore_read_positions(path: Option<&Path>) -> HashSet<(usize, usize, u64)> {
     let Some(path) = path else {
         return HashSet::new();

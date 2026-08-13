@@ -115,14 +115,21 @@ fn main() -> anyhow::Result<()> {
     // 保存済みのシーンへ復元できた場合、それが「本来の先頭シーン」の扱いに優先する
     // （`skip_leading_empty_scenes` は保存データが無い/復元失敗時の通常起動でのみ
     // 意味を持てばよく、復元後の着地シーンを巻き戻して壊してはならない）。
-    // 復元の成否（`bool`）はここでは無視する — 失敗時は構築直後のまま通常起動に
-    // 自然にフォールバックする（`save::restore_playback` の fail-soft 方針）。
+    // 復元の成否（`bool`）は `playback_restored` として `run`/`run_screens`/`event_loop`
+    // まで運ぶ（#579 追加修正）——`restore_playback` が `false`（保存済みscene_idが
+    // 現在の原稿の `scene_index_by_id` に無い等）の場合、`playback` はflags未適用・
+    // 先頭シーンの初期状態のまま止まる（`Playback::has_scene_id` のガードによる
+    // アトミック性）。この状態で `event_loop` 側の `read_positions` だけ古い保存データを
+    // 復元してしまうと、「playbackは初期状態なのにread_positionsだけ別原稿を指した値が
+    // 残る」という非対称な不整合が起きるため、`playback_restored` が `true` の時だけ
+    // `event_loop` に `read_positions` を復元させる。
+    let mut playback_restored = false;
     if let Some(path) = &config.quicksave_path {
-        save::restore_playback(&mut playback, path);
+        playback_restored = save::restore_playback(&mut playback, path);
     }
     skip_leading_empty_scenes(&mut playback);
 
-    run(&config, &mut playback)
+    run(&config, &mut playback, playback_restored)
 }
 
 /// #564: `Playback` 構築完了直後の時点で、先頭シーンが Line/Choice/Image を1つも
@@ -156,7 +163,10 @@ fn skip_leading_empty_scenes(playback: &mut Playback) {
 /// ratatui/crossterm 内部などで予期しない panic が起きた場合も、デフォルトの
 /// panic フックが呼ばれる前に端末状態を復元し、raw mode + alternate screen の
 /// まま固まってユーザーが `reset` を打つ羽目になるのを防ぐ。
-fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
+///
+/// `playback_restored`は`main()`の`save::restore_playback`呼び出しの成否をそのまま
+/// `run_screens`/`event_loop`へ運ぶだけの値（#579 追加修正、詳細は`main()`のコメント参照）。
+fn run(config: &Config, playback: &mut Playback, playback_restored: bool) -> anyhow::Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
@@ -199,6 +209,7 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
         playback,
         &mut || input::poll_action(REDRAW),
         audio_player.as_mut(),
+        playback_restored,
     );
 
     disable_raw_mode()?;
@@ -215,12 +226,16 @@ fn run(config: &Config, playback: &mut Playback) -> anyhow::Result<()> {
 /// `input::poll_action`（実端末を短いタイムアウト付きで読む）をそのまま渡すだけで従来通り
 /// 動くが、テストからは固定の `Action` 列を返すクロージャを渡すことで、`TestBackend` +
 /// 合成キー入力で状態遷移をユニットテストできる。
+///
+/// `playback_restored`は`event_loop`へそのまま渡すだけ（#579 追加修正、`main()`の
+/// コメント参照）。スプラッシュ画面自体は保存/復元と無関係なため参照しない。
 fn run_screens<B>(
     terminal: &mut Terminal<B>,
     config: &Config,
     playback: &mut Playback,
     next_action: &mut impl FnMut() -> anyhow::Result<Action>,
     audio: Option<&mut audio::AudioPlayer>,
+    playback_restored: bool,
 ) -> anyhow::Result<()>
 where
     B: Backend,
@@ -233,7 +248,14 @@ where
             return Ok(());
         }
     }
-    event_loop(terminal, config, playback, next_action, audio)
+    event_loop(
+        terminal,
+        config,
+        playback,
+        next_action,
+        audio,
+        playback_restored,
+    )
 }
 
 /// スプラッシュ画面を描画し、キー入力を1件待つ。`Action::Advance` で `Ok(true)`
@@ -337,12 +359,19 @@ where
 /// `Terminal<CrosstermBackend<Stdout>>` という具体型への結合は、`show_splash`/`run_screens`
 /// と同じ `Backend` ジェネリック化・
 /// `next_action` 注入パターンで解消済み（#478 のリファクタをそのまま踏襲）。
+///
+/// `playback_restored`は、呼び出し元（`main()`）が`save::restore_playback`を呼んだ結果
+/// （保存済みscene_idが現在の原稿に実在し、実際に`playback`へ復元できたか）をそのまま
+/// 受け取る（#579 追加修正）。`false`（保存データ無し／復元失敗）の場合は`read_positions`の
+/// 復元も行わない — `playback`が初期状態のままなのに`read_positions`だけ古い（場合によっては
+/// 別原稿を指す）値が残る非対称な不整合を防ぐため（下の`read_positions`初期化コメント参照）。
 fn event_loop<B>(
     terminal: &mut Terminal<B>,
     config: &Config,
     playback: &mut Playback,
     next_action: &mut impl FnMut() -> anyhow::Result<Action>,
     mut audio: Option<&mut audio::AudioPlayer>,
+    playback_restored: bool,
 ) -> anyhow::Result<()>
 where
     B: Backend,
@@ -435,6 +464,16 @@ where
     // （`config.quicksave_path` が `None` — 主に `Config::default()` を直接使うテスト —
     // なら従来どおり空集合から始まる）。
     //
+    // ただし復元は `playback_restored`（引数、`save::restore_playback` の戻り値）が
+    // `true` の時に限る（#579 追加修正）。`restore_playback` は保存済みscene_idが現在の
+    // 原稿の `scene_index_by_id` に存在しない場合（原稿変更等）、flagsも位置も一切変更せず
+    // `false` を返すアトミックな設計になっている——この場合 `playback` は構築直後の初期状態
+    // （先頭シーン・flags未適用）のまま止まる。ここで `playback_restored` を見ずに
+    // `read_positions` だけ独立に復元すると、「`playback` は初期状態なのに
+    // `read_positions` だけ古い（場合によっては別原稿を指す）値が残る」という非対称な
+    // 不整合が生じる（kako-jun指摘、Issue #579 フォローアップ）。`playback_restored` が
+    // `false` の場合は空集合のまま起動し、`playback` の初期状態と揃える。
+    //
     // キーは `playback.position()`（会話行のみを数える生の値）ではなく
     // `playback.stable_item_key()` が返す `(scene_order 内インデックス, シーン内構築順
     // インデックス, コンテンツハッシュ)` を使う（#509 統合バグ修正・#533 コンテンツ
@@ -451,8 +490,11 @@ where
     // 要素としてコンテンツハッシュを追加した（`stable_item_key` の doc comment、
     // `playback.rs` 参照）。
     let mut skip_mode = false;
-    let mut read_positions: HashSet<(usize, usize, u64)> =
-        save::restore_read_positions(config.quicksave_path.as_deref());
+    let mut read_positions: HashSet<(usize, usize, u64)> = if playback_restored {
+        save::restore_read_positions(config.quicksave_path.as_deref())
+    } else {
+        HashSet::new()
+    };
 
     // バックログ（#500）: これまで実際に表示し終えた会話行（話者名込み）の履歴。
     // `Action::Advance` 処理内、行を実際に離れた瞬間（`on_advance` が `true` を返した
@@ -2044,6 +2086,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -2095,6 +2138,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -2141,6 +2185,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -2210,6 +2255,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -2382,6 +2428,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -2848,6 +2895,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -2959,6 +3007,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -2967,6 +3016,93 @@ mod tests {
         assert!(
             saved.contains("\"1-2\""),
             "保存データに着地先シーンID(1-2)が含まれるはず, saved was: {saved}"
+        );
+
+        let _ = std::fs::remove_file(&quicksave_path);
+    }
+
+    /// #579 フォローアップ: `restore_playback` が失敗した場合（原稿変更等で保存済み
+    /// scene_idが現在の`scene_index_by_id`に存在しなくなったケース）、`read_positions`も
+    /// 復元されず空集合のまま起動することを検証する。`playback`（先頭シーンのまま初期状態）
+    /// と`read_positions`（空集合）を揃えるのがこの修正の目的——`playback_restored`を見ずに
+    /// `read_positions`だけ独立に復元していた旧実装では、この場合でも保存済みの既読集合が
+    /// そのまま適用され、「playbackは初期状態なのにread_positionsだけ古い値が残る」という
+    /// 非対称な不整合が起きていた（`main()`の`playback_restored`コメント参照）。
+    ///
+    /// `save::restore_playback`単体の「stale scene_idではflags/位置とも変更されない」保証は
+    /// `save.rs::tests::restore_playback_does_not_touch_flags_when_saved_scene_id_is_stale`が
+    /// 既にカバーしているので、ここでは`event_loop`まで通した`read_positions`側の配線を見る。
+    #[test]
+    fn event_loop_does_not_restore_read_positions_when_restore_playback_fails_on_stale_scene_id() {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-event-loop-stale-scene-read-positions-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+
+        let mut config = instant_config();
+        config.quicksave_path = Some(quicksave_path.clone());
+
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let mut playback = Playback::from_document(&document);
+        let real_scene_id = playback.current_scene_id().to_string();
+        assert_eq!(real_scene_id, "1-1");
+        let key0 = playback
+            .stable_item_key(playback.item_index())
+            .expect("先頭item（会話行A）の安定キーが取れるはず");
+
+        // 「前回セッションでAを読了済みだった」を模した既読集合込みでいったん実在する
+        // scene_id（"1-1"）で保存し、その後scene_idの文字列だけを存在しないIDへ置換する
+        // ことで「原稿変更で保存済みシーンが消えた」ケースを再現する
+        // （`read_positions`フィールドはこの置換の影響を受けず残る）。
+        save::save_quick(&quicksave_path, &playback, &HashSet::from([key0]));
+        let written = std::fs::read_to_string(&quicksave_path).unwrap();
+        let tampered = written.replace(&format!("\"{real_scene_id}\""), "\"does-not-exist\"");
+        assert_ne!(
+            tampered, written,
+            "scene_idの文字列置換がテストの前提どおり発生しているはず"
+        );
+        std::fs::write(&quicksave_path, &tampered).unwrap();
+
+        let playback_restored = save::restore_playback(&mut playback, &quicksave_path);
+        assert!(
+            !playback_restored,
+            "存在しないscene_idなので復元は失敗するはず"
+        );
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-1",
+            "restore_playback失敗時はplaybackが構築直後のまま変わらないはず"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        // スキップを試みる。修正前のように`read_positions`が`playback_restored`を無視して
+        // 独立に復元されていたら、先頭item（A、上で保存したkey0）が既読扱いされ即座に
+        // スキップが発動しBまで飛ばされてしまう。修正後は`playback_restored=false`なので
+        // `read_positions`は空集合のままAは未読と判定され、その場でスキップが解除されて
+        // Aが表示され続けるはず。
+        let (mut next_action, _remaining) = action_queue(vec![Action::ToggleSkip, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            playback_restored,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A"),
+            "read_positionsが(バグにより)復元されていればAが既読扱いされスキップでBへ \
+             飛ばされてしまうはず。修正後は空集合のままAが未読判定されその場に留まる"
         );
 
         let _ = std::fs::remove_file(&quicksave_path);
@@ -3087,6 +3223,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3136,6 +3273,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3200,6 +3338,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3245,6 +3384,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3305,6 +3445,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3352,6 +3493,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None, // audio: Noneでもpanicしないことも併せて確認する
+            false,
         );
         assert!(result.is_err(), "テスト用の意図的な停止のはず");
 
@@ -3398,6 +3540,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err(), "テスト用の意図的な停止のはず");
 
@@ -3478,6 +3621,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3521,6 +3665,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3597,6 +3742,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3675,6 +3821,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3723,6 +3870,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3769,6 +3917,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err(), "テスト用の意図的な停止のはず");
 
@@ -3810,6 +3959,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err(), "テスト用の意図的な停止のはず");
 
@@ -3844,6 +3994,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3892,6 +4043,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3942,6 +4094,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -3988,6 +4141,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -4028,6 +4182,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -4098,6 +4253,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -4150,6 +4306,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -4190,6 +4347,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -4236,6 +4394,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err());
 
@@ -4330,6 +4489,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err());
 
@@ -4371,6 +4531,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err());
 
@@ -4417,6 +4578,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err());
 
@@ -4458,6 +4620,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err());
 
@@ -4499,6 +4662,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err());
 
@@ -4540,6 +4704,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err());
 
@@ -4584,6 +4749,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err());
 
@@ -4627,6 +4793,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         );
         assert!(result.is_err());
 
@@ -4678,6 +4845,7 @@ mod tests {
                 &mut playback,
                 &mut next_action,
                 None,
+                false,
             );
             assert!(result.is_err(), "テスト用の意図的な停止のはず");
             buffer_text(&terminal)
@@ -4739,6 +4907,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -4800,6 +4969,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -4859,6 +5029,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -4911,6 +5082,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -4961,6 +5133,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -5010,6 +5183,7 @@ mod tests {
                 &mut playback,
                 &mut next_action,
                 None,
+                false,
             );
             let _ = tx.send(result.is_ok());
         });
@@ -5062,6 +5236,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -5097,6 +5272,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
@@ -5144,6 +5320,7 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
+            false,
         )
         .unwrap();
 
