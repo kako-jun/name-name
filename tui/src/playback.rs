@@ -278,7 +278,8 @@ enum PlaybackItem {
 ///
 /// `DisplayLine`（`Line`/`Image` 両方が内部で持つ型）は `#[derive(Hash)]` 済みのため
 /// そのままハッシュに流し込むだけでよい。`Choice` は `ChoiceOption` が `Hash` を実装して
-/// いないため、`text`/`jump` を個別にハッシュへ流し込む。
+/// いないため、`text`/`jump`/`condition`（#591、ロック判定に使う flag 名）を個別に
+/// ハッシュへ流し込む。
 ///
 /// 「中身が異なれば別のハッシュ値になる」は、64bit `DefaultHasher` の衝突耐性に依存した
 /// 近似的な保証であり、理論上は異なる内容が同じハッシュ値になる可能性がゼロではない
@@ -305,6 +306,9 @@ fn content_signature(item: &PlaybackItem) -> u64 {
             for option in options {
                 option.text.hash(&mut hasher);
                 option.jump.hash(&mut hasher);
+                // #591: condition（ロック判定に使う flag 名）も中身の一部としてハッシュに
+                // 混ぜる。text/jump が同じでも condition の有無・値が異なれば別内容として扱う。
+                option.condition.hash(&mut hasher);
             }
             columns.hash(&mut hasher);
         }
@@ -1125,6 +1129,30 @@ impl Playback {
         }
     }
 
+    /// `option.condition`（#591）の真偽を現在のフラグ状態で判定する。`condition` が
+    /// `None`（従来どおり条件なし）なら常に `false`（ロックしない）。`Some(flag)` なら
+    /// `!self.flags.check(flag)`（未定義/false ならロック）——GUI版 `checkFlag`・
+    /// `GameFlags::check` と同じ真偽判定規則。
+    fn is_option_locked(&self, option: &ChoiceOption) -> bool {
+        match &option.condition {
+            None => false,
+            Some(flag) => !self.flags.check(flag),
+        }
+    }
+
+    /// 現在Choice表示中の各選択肢について、ロック状態（#591）を判定した配列を返す。
+    /// `current_choice()` が返す `options` と同じ長さ・同じ並びになる。Choice表示中で
+    /// なければ空 Vec。`ui::draw` へそのまま渡し、`draw_choice_list`/`draw_choice_grid` が
+    /// ロック中の選択肢を非活性の見た目（DIM + 🔒 マーク）で描画するために使う。
+    pub fn current_choice_locked(&self) -> Vec<bool> {
+        match self.items.get(self.index) {
+            Some(PlaybackItem::Choice(options, _)) => {
+                options.iter().map(|o| self.is_option_locked(o)).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// 現在Choice表示中なら、正規化済みの有効列数（`None`/`0`/`1` はいずれも「非グリッド
     /// 1列」として `1` に丸める）を返す。上限側（選択肢数を超える列数）は `items` に積む
     /// 時点（[`playback_item_from_event`]）で既にクランプ済みのため、ここでは行わない。
@@ -1423,6 +1451,13 @@ impl Playback {
     /// `NovelRenderer.jumpToScene` の「シーンが見つからなければ何もせず console.warn するだけ」
     /// という fail-soft 方針と同じだが、TUI は alternate screen 中で標準出力を使えないため
     /// 警告そのものは出さない（呼び出し側が `false` を見て何もしない、という形で吸収する）。
+    ///
+    /// カーソルが指す選択肢がロック中（#591、`option.condition` が未定義/false のフラグを
+    /// 指している）の場合も、同じ fail-soft 方針で `false` を返して位置を変えない——
+    /// カーソル自体はロック中の選択肢の上に乗れる（`move_choice_cursor_*` は locked を
+    /// 見ない）が、確定だけがここで拒否される。GUI版 `ChoiceOverlay` が locked ボタンの
+    /// `eventMode` を `'none'` にしてクリック自体を無効化するのと、「選べない」という
+    /// 結果は揃う。
     pub fn select_current_choice(&mut self) -> bool {
         let Some(PlaybackItem::Choice(options, _columns)) = self.items.get(self.index) else {
             return false;
@@ -1430,6 +1465,9 @@ impl Playback {
         let Some(option) = options.get(self.choice_cursor) else {
             return false;
         };
+        if self.is_option_locked(option) {
+            return false;
+        }
         // `option`（`self.items` を借用中）を握ったまま `self.jump_to_scene_id(&mut self...)`
         // を呼ぶと可変借用と衝突するため、先に `jump` 先IDだけ複製して借用を切る。
         let jump = option.jump.clone();
@@ -1594,8 +1632,15 @@ impl Playback {
                 // （＝このシーンで積んだ items を巻き戻し、選択肢の`jump`先シーンから
                 // ループを継続）を、プレイヤーへの追加入力要求なしに行う。実内容のある
                 // シーン、または選択肢が0件/2件以上のシーンに着地するまで繰り返す。
+                // #591: 唯一の選択肢が `[条件: flag]` でロック中（flag未定義/false）の
+                // 場合は自動継続の対象から除外する。中継シーンの自動継続は「実質的に
+                // 意思決定の余地がない」ことが前提のため、ロック中の選択肢を黙って
+                // 自動選択すると条件付きロックの意味が失われる——通常のChoiceとして
+                // 表示・停止させ、`select_current_choice`側のロック判定に委ねる。
                 let relay_jump: Option<String> = match &self.items[start..] {
-                    [PlaybackItem::Choice(options, _columns)] if options.len() == 1 => {
+                    [PlaybackItem::Choice(options, _columns)]
+                        if options.len() == 1 && !self.is_option_locked(&options[0]) =>
+                    {
                         Some(options[0].jump.clone())
                     }
                     _ => None,
@@ -2131,6 +2176,7 @@ mod tests {
                 options: vec![ChoiceOption {
                     text: "yes".to_string(),
                     jump: "1-2".to_string(),
+                    condition: None,
                 }],
                 columns: None,
             },
@@ -2294,6 +2340,23 @@ mod tests {
                 .map(|(text, jump)| ChoiceOption {
                     text: text.to_string(),
                     jump: jump.to_string(),
+                    condition: None,
+                })
+                .collect(),
+            columns: None,
+        }
+    }
+
+    /// `choice` の条件付き版（#591）。`(text, jump, condition)` の3つ組で、
+    /// `condition` が `Some(flag)` なら `flag` が真になるまでロックされる選択肢を作る。
+    fn choice_with_conditions(options: Vec<(&str, &str, Option<&str>)>) -> Event {
+        Event::Choice {
+            options: options
+                .into_iter()
+                .map(|(text, jump, condition)| ChoiceOption {
+                    text: text.to_string(),
+                    jump: jump.to_string(),
+                    condition: condition.map(|s| s.to_string()),
                 })
                 .collect(),
             columns: None,
@@ -2373,6 +2436,96 @@ mod tests {
         assert!(
             pb.current_choice().is_some(),
             "失敗時は選択肢表示のまま変わらないはず"
+        );
+    }
+
+    // ---- #591: 選択肢オプションの条件付きロックのテスト ----
+
+    fn choice_with_conditions_doc() -> Document {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![choice_with_conditions(vec![
+                        ("誰でも選べる", "1-2", None),
+                        ("route01_cleared が必要", "1-3", Some("route01_cleared")),
+                    ])],
+                ),
+                scene("1-2", vec![dialog(Some("A"), vec!["自由ルート"])]),
+                scene("1-3", vec![dialog(Some("B"), vec!["条件クリア後ルート"])]),
+            ],
+        );
+        document_with_chapters(vec![ch1])
+    }
+
+    #[test]
+    fn current_choice_locked_reflects_flag_state() {
+        let doc = choice_with_conditions_doc();
+        let pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![false, true],
+            "flag未設定なら condition ありのオプションだけロックされるはず"
+        );
+    }
+
+    #[test]
+    fn current_choice_locked_becomes_false_after_flag_set_true() {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![
+                        flag_event("route01_cleared", true),
+                        choice_with_conditions(vec![(
+                            "route01_cleared が必要",
+                            "1-2",
+                            Some("route01_cleared"),
+                        )]),
+                    ],
+                ),
+                scene("1-2", vec![dialog(Some("B"), vec!["解放後ルート"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![false],
+            "flagがtrueならロックされないはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_on_locked_option_is_noop() {
+        let doc = choice_with_conditions_doc();
+        let mut pb = Playback::from_document(&doc);
+        pb.move_choice_cursor_down(); // カーソルをロック中のindex 1へ
+        assert_eq!(pb.current_choice().unwrap().1, 1);
+
+        assert!(
+            !pb.select_current_choice(),
+            "ロック中の選択肢は確定できないはず（fail-soft、既存の無効jumpと同じ扱い）"
+        );
+        assert!(
+            pb.current_choice().is_some(),
+            "ロックされた選択を試みても選択肢表示のまま変わらないはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_on_unlocked_option_still_works() {
+        let doc = choice_with_conditions_doc();
+        let mut pb = Playback::from_document(&doc);
+        assert!(
+            pb.select_current_choice(),
+            "条件なしのオプション(index 0)は従来どおり選べるはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").speaker.as_deref(),
+            Some("A")
         );
     }
 
@@ -3495,6 +3648,7 @@ mod tests {
                             options: vec![ChoiceOption {
                                 text: "yes".to_string(),
                                 jump: "1-2".to_string(),
+                                condition: None,
                             }],
                             columns: None,
                         },
@@ -3969,6 +4123,7 @@ mod tests {
                 .map(|i| ChoiceOption {
                     text: format!("opt{i}"),
                     jump: target.to_string(),
+                    condition: None,
                 })
                 .collect(),
             columns,
@@ -6940,10 +7095,12 @@ mod tests {
             ChoiceOption {
                 text: "進む".to_string(),
                 jump: "1-2".to_string(),
+                condition: None,
             },
             ChoiceOption {
                 text: "戻る".to_string(),
                 jump: "1-1".to_string(),
+                condition: None,
             },
         ];
         let a = PlaybackItem::Choice(options.clone(), Some(2));
@@ -6961,6 +7118,7 @@ mod tests {
             vec![ChoiceOption {
                 text: "進む".to_string(),
                 jump: "1-2".to_string(),
+                condition: None,
             }],
             None,
         );
@@ -6968,6 +7126,7 @@ mod tests {
             vec![ChoiceOption {
                 text: "進む".to_string(),
                 jump: "1-3".to_string(),
+                condition: None,
             }],
             None,
         );
@@ -6975,6 +7134,33 @@ mod tests {
             content_signature(&a),
             content_signature(&b),
             "選択肢のテキストが同じでもjump先が異なればハッシュも異なるはず"
+        );
+    }
+
+    #[test]
+    fn content_signature_differs_when_choice_condition_differs() {
+        // #591: condition だけが異なる場合もハッシュが変わることを確認する
+        // （ロック状態の有無はコンテンツの一部として扱う）。
+        let a = PlaybackItem::Choice(
+            vec![ChoiceOption {
+                text: "進む".to_string(),
+                jump: "1-2".to_string(),
+                condition: None,
+            }],
+            None,
+        );
+        let b = PlaybackItem::Choice(
+            vec![ChoiceOption {
+                text: "進む".to_string(),
+                jump: "1-2".to_string(),
+                condition: Some("route01_cleared".to_string()),
+            }],
+            None,
+        );
+        assert_ne!(
+            content_signature(&a),
+            content_signature(&b),
+            "選択肢のtext/jumpが同じでもconditionが異なればハッシュも異なるはず"
         );
     }
 
