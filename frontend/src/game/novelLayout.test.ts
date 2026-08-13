@@ -1008,6 +1008,17 @@ describe('numberToHexColor (#601)', () => {
     expect(numberToHexColor(NaN)).toBe('#000000')
   })
 
+  // #601 セルフレビュー nit2: NaN ガードを Number.isNaN に明示化した際、Infinity/-Infinity が
+  // NaN と誤って同じ扱いにならないこと（Math.min/Math.max のクランプにそのまま乗って
+  // 上限/下限に自然に丸まること）を機械的に固定する。
+  it('TC-N8-2: Infinity は上限クランプで "#ffffff" になる（NaN ではないため NaN ガードに巻き込まれない）', () => {
+    expect(numberToHexColor(Infinity)).toBe('#ffffff')
+  })
+
+  it('TC-N8-3: -Infinity は下限クランプで "#000000" になる（NaN ではないため NaN ガードに巻き込まれない）', () => {
+    expect(numberToHexColor(-Infinity)).toBe('#000000')
+  })
+
   it('TC-N9: 非整数は Math.floor で整数化されてから変換される', () => {
     expect(numberToHexColor(0xa8dadc + 0.9)).toBe('#a8dadc')
   })

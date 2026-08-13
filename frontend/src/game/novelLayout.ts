@@ -480,9 +480,16 @@ export function parseColorToNumber(color: string | undefined, fallback: number):
  * `parseColorToNumber` の逆方向。`SeekBar.DEFAULT_BAR_FILL_COLOR` のような数値定数を
  * `<input type="range">` の `accentColor`（CSS 文字列）にそのまま使うために用意した。
  * 0 未満・不正値は素直に `#000000` へクランプする（呼び出し側は定数を渡す想定で異常系は薄い）。
+ *
+ * NaN 防御 (#601 セルフレビュー nit1): NaN は `Number.isNaN` で明示的に検出して 0 に倒す
+ * （`Math.floor(NaN)` は NaN のままで、後続の `Math.min`/`Math.max` も NaN を素通しするため、
+ * ガードなしでは `"#NaN"` のような壊れた文字列になる）。`Infinity`/`-Infinity` は NaN ではない
+ * ので Math.floor→Math.min/Math.max のクランプにそのまま乗せてよく、自然に上限 `0xffffff`
+ * （Infinity）・下限 `0`（-Infinity）へ丸まる（novelLayout.test.ts 参照）。
  */
 export function numberToHexColor(color: number): string {
-  const clamped = Math.max(0, Math.min(0xffffff, Math.floor(color) || 0))
+  const safeColor = Number.isNaN(color) ? 0 : Math.floor(color)
+  const clamped = Math.max(0, Math.min(0xffffff, safeColor))
   return `#${clamped.toString(16).padStart(6, '0')}`
 }
 
