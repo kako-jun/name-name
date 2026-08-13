@@ -65,6 +65,22 @@ pub enum EventImageBack {
     Keep,
 }
 
+/// イベント絵の遷移モード (#583)。既定は `Fade`（既存の透明度フェード、非回帰）。
+/// `Pixelate`: 表示中の絵のドットを段階的に荒くしてから次の絵に切り替え、また段階的に
+/// 細かく戻す。狙いは、一度粗いドットを見せることで切り替わった後の絵が相対的に細かく
+/// 見える錯覚を作ること。所要時間は新規パラメータを追加せず既存の `fade_ms` を「遷移全体の
+/// 所要時間」として流用する（GUI/TUI 共通、下記 `EventImage::transition` 参照）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum EventImageTransition {
+    /// 既存の透明度フェード（非回帰）。
+    #[default]
+    Fade,
+    /// ドットが段階的に荒くなる→切り替わる→段階的に細かく戻る。
+    Pixelate,
+}
+
 /// イベント絵のアンビエント演出フラグ (#582)。Gymnasia の「暗闇+オレンジ色のろうそく光+
 /// ゆらぎ+ビネット」ルックを画像単位でオンにするための宣言的フラグ集合。既定は全て `false`
 /// （既存脚本は非回帰・#582 適用方式: 画面全体への一律適用ではなく画像ごとの明示オプトイン）。
@@ -433,14 +449,23 @@ pub enum Event {
     /// Markdown 構文: `[イベント絵: story/act2/spino-empty-seat.webp, 背面=hide, フェード=1400]`。
     /// キーは日本語 `背面` / 英語 alias `back`（値は英語トークン固定 `hide`/`keep`、大小無視、
     /// 未知値は既定 `Hide` に倒す）。`フェード` / `fade` は表示フェードイン時間 (ms)。
+    ///
+    /// `transition` (#583, 既定 `Fade`): `[イベント絵: path, 遷移=pixelate, フェード=800]` で
+    /// `Pixelate` 遷移（ドットが段階的に荒くなる→切り替わる→段階的に細かく戻る）を選べる。
+    /// 所要時間は新規パラメータを追加せず、上記の `fade_ms` を「遷移全体の所要時間」として
+    /// 流用する（`fade_ms` 未指定時は runtime 側の event_image_fade_ms 既定に委ねるのも同じ）。
     EventImage {
         path: String,
         #[serde(default)]
         back: EventImageBack,
         /// 個別の表示フェードイン時間 (ms)。`None` は runtime 側の event_image_fade_ms 既定に委ねる。
-        /// `Some(0)` は即時表示。
+        /// `Some(0)` は即時表示。`transition` が `Pixelate` の場合は遷移全体の所要時間として
+        /// 再解釈される（GUI/TUI レンダラ側の裁量で荒く→切替→細かく戻るへ配分する）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fade_ms: Option<u32>,
+        /// 遷移モード (#583)。既定 `Fade`（既存の透明度フェード、非回帰）。
+        #[serde(default)]
+        transition: EventImageTransition,
         /// アンビエント演出フラグ (#582)。既定は全て false（既存脚本は非回帰）。
         /// `back` と同じく skip_serializing_if は付けない（wasm 経由で常に値が入る前提を保つ、
         /// #351 の back フィールドと同じ round-trip 方針）。emit 時の kv 省略判定

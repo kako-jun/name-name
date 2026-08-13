@@ -7495,6 +7495,7 @@ fn test_event_image_path_only_defaults_to_hide_and_no_fade() {
             path: "story/act1/x.webp".to_string(),
             back: EventImageBack::Hide,
             fade_ms: None,
+            transition: EventImageTransition::Fade,
             effects: AmbientEffects::default(),
         }
     );
@@ -7511,6 +7512,7 @@ fn test_event_image_full_kv() {
             path: "story/act2/y.webp".to_string(),
             back: EventImageBack::Keep,
             fade_ms: Some(1400),
+            transition: EventImageTransition::Fade,
             effects: AmbientEffects::default(),
         }
     );
@@ -7604,6 +7606,7 @@ fn test_event_image_roundtrip_normalized_order() {
             path: "story/x.webp".to_string(),
             back: EventImageBack::Keep,
             fade_ms: Some(1400),
+            transition: EventImageTransition::Fade,
             effects: AmbientEffects::default(),
         }
     );
@@ -7661,6 +7664,7 @@ fn test_event_image_unknown_key_and_malformed_kv_are_skipped() {
             path: "x.webp".to_string(),
             back: EventImageBack::Keep,
             fade_ms: None,
+            transition: EventImageTransition::Fade,
             effects: AmbientEffects::default(),
         }
     );
@@ -7851,6 +7855,7 @@ fn test_event_image_ambient_effects_mixed_with_existing_kv_out_of_order() {
             path: "a.webp".to_string(),
             back: EventImageBack::Keep,
             fade_ms: Some(500),
+            transition: EventImageTransition::Fade,
             effects: AmbientEffects {
                 wobble: true,
                 candle: true,
