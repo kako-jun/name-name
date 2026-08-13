@@ -2056,6 +2056,7 @@ mod tests {
             character_fade_ms: None,
             background_fade_ms: None,
             event_image_fade_ms: None,
+            event_image_transition: EventImageTransition::default(),
             background_color: None,
             skip_enabled: None,
             debug_enabled: None,

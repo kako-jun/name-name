@@ -76,6 +76,11 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ms) = doc.event_image_fade_ms {
             out.push_str(&format!("event_image_fade_ms: {ms}\n"));
         }
+        // Emit event_image_transition only when non-default (#599)。back/transition の kv 省略と
+        // 同じ流儀（既定 Fade は後方互換の暗黙値なので出さない、pixelate のときだけ明示する）。
+        if doc.event_image_transition == EventImageTransition::Pixelate {
+            out.push_str("event_image_transition: \"pixelate\"\n");
+        }
         // Emit background_color only when present (#409)。下地ベタの既定色。#rrggbb 前提だが
         // font_family と同じく double-quote で包んで round-trip を安定させる（`"` は除去）。
         if let Some(ref color) = doc.background_color {
@@ -148,7 +153,7 @@ pub fn emit(doc: &Document) -> String {
             ));
             out.push('\n');
 
-            emit_events(&mut out, &scene.events);
+            emit_events(&mut out, &scene.events, doc.event_image_transition);
         }
     }
 
@@ -157,7 +162,11 @@ pub fn emit(doc: &Document) -> String {
     trimmed + "\n"
 }
 
-fn emit_events(out: &mut String, events: &[Event]) {
+/// `default_transition` は frontmatter `event_image_transition`（#599）の実効デフォルト。
+/// `Event::EventImage.transition` がこれと一致する場合は `遷移=` kv を省略する（round-trip 安定。
+/// 既定 Fade のプロジェクトでは従来どおり `遷移=pixelate` のときだけ出力し、既定 Pixelate の
+/// プロジェクトでは逆に `遷移=fade` のときだけ出力する）。
+fn emit_events(out: &mut String, events: &[Event], default_transition: EventImageTransition) {
     let mut prev_was_dialog_or_text = false;
 
     for (i, event) in events.iter().enumerate() {
@@ -341,16 +350,23 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                // #351/#582/#583 kv を 背面→遷移→演出(ゆらぎ/ビネット/グロー/ろうそく)→フェード の
-                // 順、日本語キーで正規化出力する（Some/非既定のものだけ。round-trip 安定。
-                // back=Hide・transition=Fade・effects 全 false は既定値なので省略する
-                // ＝brightness=1.0 と同じ流儀）。
+                // #351/#582/#583/#599 kv を 背面→遷移→演出(ゆらぎ/ビネット/グロー/ろうそく)→フェード
+                // の順、日本語キーで正規化出力する（Some/非既定のものだけ。round-trip 安定。
+                // back=Hide・effects 全 false は既定値なので省略する＝brightness=1.0 と同じ流儀）。
+                // 遷移 (#599): タグの実効値が frontmatter デフォルト（default_transition）と
+                // 一致する場合だけ省略する。既定 Fade のプロジェクトでは従来どおり
+                // `遷移=pixelate` のときだけ出力し、既定 Pixelate のプロジェクトでは逆に
+                // `遷移=fade` のときだけ出力する（明示指定を保った round-trip）。
                 let mut kv = String::new();
                 if *back == EventImageBack::Keep {
                     kv.push_str(", 背面=keep");
                 }
-                if *transition == EventImageTransition::Pixelate {
-                    kv.push_str(", 遷移=pixelate");
+                if *transition != default_transition {
+                    let token = match transition {
+                        EventImageTransition::Fade => "fade",
+                        EventImageTransition::Pixelate => "pixelate",
+                    };
+                    kv.push_str(&format!(", 遷移={token}"));
                 }
                 if effects.wobble {
                     kv.push_str(", ゆらぎ=true");
@@ -545,7 +561,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     out.push('\n');
                 }
                 out.push_str(&format!("[条件: {flag}]\n"));
-                emit_events(out, inner);
+                emit_events(out, inner, default_transition);
                 out.push_str("[/条件]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -1324,6 +1340,7 @@ mod tests {
             character_fade_ms: None,
             background_fade_ms: None,
             event_image_fade_ms: None,
+            event_image_transition: EventImageTransition::default(),
             background_color: None,
             skip_enabled: None,
             debug_enabled: None,
@@ -1578,6 +1595,7 @@ mod tests {
             character_fade_ms: None,
             background_fade_ms: None,
             event_image_fade_ms: None,
+            event_image_transition: EventImageTransition::default(),
             background_color: None,
             skip_enabled: None,
             debug_enabled: None,
