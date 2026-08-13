@@ -602,6 +602,12 @@ fn draw_splash_logo_native(frame: &mut Frame, canvas: Rect, image: &DecodedImage
 /// スプラッシュ画像モードの最大スクロール量（最下端オフセット）を返す。
 /// `show_splash` が target_scroll_offset 自体を入力時にクランプするための補助関数。
 /// ロゴ画像が無い／読めない場合はテキストモード相当として 0 を返す。
+///
+/// [`logo_fits_natively`] が `true` の場合（[`draw_splash`] が [`draw_splash_logo_native`] で
+/// スクロールを無視するネイティブ表示を行う場合）も 0 を返す（#588）。この分岐が無いと、
+/// native表示中でも下記 `compute_full_width_rows`（全幅contain-fit前提の式）による架空の
+/// 最大値が計算され、`main.rs::show_splash` の `Action::MoveUp`/`MoveDown` が画面に何も
+/// 影響しない `target_scroll_offset` の内部状態だけを変化させ続けてしまう。
 pub(crate) fn splash_max_scroll_offset(config: &Config, image_cache: &mut ImageCache) -> u16 {
     let Some(path) = config.resolve_splash_logo_path() else {
         return 0;
@@ -609,6 +615,9 @@ pub(crate) fn splash_max_scroll_offset(config: &Config, image_cache: &mut ImageC
     let Some(decoded) = image_cache.get_or_load(&path) else {
         return 0;
     };
+    if logo_fits_natively(decoded.width, decoded.height) {
+        return 0;
+    }
     let total_rows = compute_full_width_rows(decoded.width, decoded.height, REQUIRED_TOTAL_WIDTH);
     clamp_scroll_offset(u16::MAX, total_rows, REQUIRED_MAIN_CONTENT_ROWS)
 }
@@ -2878,6 +2887,29 @@ mod tests {
         let has_logo_color = (0..area.height)
             .any(|y| (0..area.width).any(|x| buffer.cell((x, y)).unwrap().bg == logo_color));
         assert!(has_logo_color, "画像領域の一部セルがロゴ色になっているはず");
+    }
+
+    #[test]
+    fn splash_max_scroll_offset_native_mode_logo_returns_zero() {
+        // レビュー指摘対応（#588）: `draw_splash_logo_native`（native表示）は
+        // scroll_offset を完全に無視するが、`splash_max_scroll_offset` はこれまで
+        // `logo_fits_natively` を認識せず、常に全幅contain-fit前提の `compute_full_width_rows`
+        // で最大スクロール量を計算していた。native表示に収まる基準サイズ214x46pxロゴでは、
+        // この最大値は画面に何も影響しない架空の値になってしまう
+        // （`main.rs::show_splash` の Action::MoveUp/MoveDown が空回りする）。
+        // native表示中はスクロール不要なので 0 を返すべき、という契約を固定する。
+        let fixture_path = crate::image_render::write_test_webp_fixture(
+            &solid_rgba((10, 20, 30), 214, 46),
+            214,
+            46,
+        );
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut image_cache = ImageCache::new();
+        assert_eq!(
+            splash_max_scroll_offset(&config, &mut image_cache),
+            0,
+            "native表示に収まるロゴではスクロール不要のため最大オフセットは0のはず"
+        );
     }
 
     #[test]
