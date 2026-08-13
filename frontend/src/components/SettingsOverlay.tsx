@@ -1,11 +1,17 @@
 import { useEffect } from 'react'
 import { DEFAULT_SETTINGS, type Settings } from '../game/settings'
+import { parseColorToNumber, numberToHexColor } from '../game/novelLayout'
+import { DEFAULT_BAR_FILL_COLOR } from '../game/SeekBar'
 
 interface SettingsOverlayProps {
   open: boolean
   onClose: () => void
   settings: Settings
   onChange: (s: Settings) => void
+  /** SeekBar（シナリオスライダ）と揃える設定ポップアップ内スライダーの色 (#601)。
+   *  frontmatter `seekbar_color:` から流す。null/undefined/不正値は SeekBar の既定色
+   *  `DEFAULT_BAR_FILL_COLOR`（水色）にフォールバックし、未設定プロジェクトの見た目を変えない。 */
+  seekbarColor?: string | null
 }
 
 interface SliderRowProps {
@@ -18,9 +24,21 @@ interface SliderRowProps {
   onChange: (v: number) => void
   /** 数値表示の整形 */
   format?: (v: number) => string
+  /** accent-color に使う CSS カラー文字列（例: "#a8dadc"）。 */
+  accentColor: string
 }
 
-function SliderRow({ label, value, min, max, step, unit, onChange, format }: SliderRowProps) {
+function SliderRow({
+  label,
+  value,
+  min,
+  max,
+  step,
+  unit,
+  onChange,
+  format,
+  accentColor,
+}: SliderRowProps) {
   const display = format ? format(value) : `${value}${unit ?? ''}`
   return (
     <label className="flex flex-col gap-1 text-sm">
@@ -35,7 +53,8 @@ function SliderRow({ label, value, min, max, step, unit, onChange, format }: Sli
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-cyan-300"
+        className="w-full"
+        style={{ accentColor }}
       />
     </label>
   )
@@ -47,7 +66,13 @@ function SliderRow({ label, value, min, max, step, unit, onChange, format }: Sli
  * テキスト速度 / オート wait time / BGM 音量 / SE 音量 / Voice 音量。
  * ESC で閉じる、デフォルトに戻すボタン付き。
  */
-export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsOverlayProps) {
+export function SettingsOverlay({
+  open,
+  onClose,
+  settings,
+  onChange,
+  seekbarColor,
+}: SettingsOverlayProps) {
   // ESC で閉じる
   useEffect(() => {
     if (!open) return
@@ -64,6 +89,13 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
   if (!open) return null
 
   const update = (patch: Partial<Settings>) => onChange({ ...settings, ...patch })
+
+  // スライダーの accent-color。SeekBar と揃える (#601)。未設定/不正値は SeekBar の既定色
+  // DEFAULT_BAR_FILL_COLOR（水色）にフォールバックし、seekbar_color 未指定プロジェクトの
+  // 見た目を変えない（非回帰）。
+  const sliderAccentColor = numberToHexColor(
+    parseColorToNumber(seekbarColor ?? undefined, DEFAULT_BAR_FILL_COLOR)
+  )
 
   return (
     <div
@@ -96,6 +128,7 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
                     ? `遅い (${v}ms)`
                     : `${v}ms/字`
             }
+            accentColor={sliderAccentColor}
           />
 
           <SliderRow
@@ -106,6 +139,7 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
             step={100}
             onChange={(v) => update({ autoWaitMs: v })}
             format={(v) => `${(v / 1000).toFixed(1)}秒`}
+            accentColor={sliderAccentColor}
           />
 
           <SliderRow
@@ -116,6 +150,7 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
             step={0.05}
             onChange={(v) => update({ bgmVolume: v })}
             format={(v) => `${Math.round(v * 100)}%`}
+            accentColor={sliderAccentColor}
           />
 
           <SliderRow
@@ -126,6 +161,7 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
             step={0.05}
             onChange={(v) => update({ seVolume: v })}
             format={(v) => `${Math.round(v * 100)}%`}
+            accentColor={sliderAccentColor}
           />
 
           <SliderRow
@@ -136,6 +172,7 @@ export function SettingsOverlay({ open, onClose, settings, onChange }: SettingsO
             step={0.05}
             onChange={(v) => update({ voiceVolume: v })}
             format={(v) => `${Math.round(v * 100)}%`}
+            accentColor={sliderAccentColor}
           />
         </div>
 
