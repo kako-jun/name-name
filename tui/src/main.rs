@@ -7,6 +7,7 @@ mod image_fade;
 mod image_render;
 mod input;
 mod multi_doc;
+mod pixelate_transition;
 mod playback;
 mod reveal;
 mod save;
@@ -1018,15 +1019,35 @@ where
                         .current_line()
                         .map(|line| line.event_image_effects)
                         .unwrap_or_default();
+                    let target_transition = playback
+                        .current_line()
+                        .map(|line| line.event_image_transition)
+                        .unwrap_or_default();
+                    let target_fade_ms = playback
+                        .current_line()
+                        .and_then(|line| line.event_image_fade_ms);
                     if image_fade.current_target() != target.as_deref() {
-                        // `config.event_image.crossfade_ms`（グローバル値）を常に使う。
-                        // `Event::EventImage`/`EventImageExit` が持つイベント個別の `fade_ms`
-                        // 上書きは `playback.rs` の `Playback::from_document` で意図的に
-                        // 読み捨てている（MVPスコープの簡略化、#481）。
+                        // 通常の Fade 遷移は引き続き `config.event_image.crossfade_ms`
+                        // （グローバル値）を常に使う。`Event::EventImage`/`EventImageExit` が持つ
+                        // イベント個別の `fade_ms` 上書きは意図的に読み捨てている（MVPスコープの
+                        // 簡略化、#481、非回帰）。ピクセレート遷移 (#583) だけは Issue の要件どおり
+                        // per-event `fade_ms` を「遷移全体の所要時間」として尊重し、未指定なら
+                        // 同じ crossfade_ms を既定値として使う。
+                        let duration_ms = match target_transition {
+                            name_name_parser::models::EventImageTransition::Pixelate => {
+                                target_fade_ms
+                                    .map(u64::from)
+                                    .unwrap_or(config.event_image.crossfade_ms)
+                            }
+                            name_name_parser::models::EventImageTransition::Fade => {
+                                config.event_image.crossfade_ms
+                            }
+                        };
                         image_fade = image_fade.transition_to(
                             target,
                             target_effects,
-                            Duration::from_millis(config.event_image.crossfade_ms),
+                            target_transition,
+                            Duration::from_millis(duration_ms),
                             Instant::now(),
                         );
                     }
@@ -1409,6 +1430,8 @@ mod tests {
             text: vec![text.to_string()],
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         }
     }
 
@@ -1423,6 +1446,8 @@ mod tests {
             text: vec![text.to_string()],
             event_image,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         }
     }
 

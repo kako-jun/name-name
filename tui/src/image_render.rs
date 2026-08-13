@@ -545,6 +545,100 @@ pub fn rgba_to_quadrant_grid(
     RenderedImage { cols, rows, cells }
 }
 
+/// `src`（`src_w` x `src_h` のサブピクセルグリッド）を最近傍で `dst_w` x `dst_h` へ拡大する
+/// (#583 ピクセレート遷移)。ボックス平均（[`downsample_box`]）とは逆方向の操作で、意図的に
+/// 「大きな均一ブロック」を作ることがここでの目的のため、補間はしない。
+/// `src`/`src_w`/`src_h` のいずれかが不正（空・0）なら空の `Vec` を返す（panicしない）。
+fn nearest_upscale(
+    src: &[(u8, u8, u8, u8)],
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+) -> Vec<(u8, u8, u8, u8)> {
+    if src.is_empty() || src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity((dst_w * dst_h) as usize);
+    for dy in 0..dst_h {
+        let sy = ((u64::from(dy) * u64::from(src_h)) / u64::from(dst_h)).min(u64::from(src_h - 1))
+            as u32;
+        for dx in 0..dst_w {
+            let sx = ((u64::from(dx) * u64::from(src_w)) / u64::from(dst_w))
+                .min(u64::from(src_w - 1)) as u32;
+            out.push(src[(sy * src_w + sx) as usize]);
+        }
+    }
+    out
+}
+
+/// [`rgba_to_quadrant_grid`] のピクセレート遷移 (#583) 版。クロップ・アスペクト比補正は
+/// 同じだが、`sub_w` x `sub_h` へ直接ダウンサンプルする代わりに、まず意図的に粗い解像度
+/// （`sub_w / coarse_divisor` x `sub_h / coarse_divisor`）へダウンサンプルしてから
+/// [`nearest_upscale`] で `sub_w` x `sub_h` へ最近傍拡大する。これにより「同じ絵の中に大きな
+/// 均一ブロックが並ぶ」ドット荒れの見た目を quadrant block 変換の前段で作る（Issue #583 本文の
+/// 設計）。
+///
+/// `coarse_divisor <= 1` は通常表示と完全に同じ経路（[`downsample_box`] を `sub_w` x `sub_h`
+/// へ直接呼ぶ）を通るため、[`rgba_to_quadrant_grid`] と出力が一致する（呼び出し側
+/// `image_fade::ImageFadeState::pixelate_snapshot` が遷移完了時に divisor=1 で呼んでも
+/// 見た目の不連続が起きないことの根拠、`pixelate_transition::compute_divisor` の doc comment
+/// 参照）。
+pub fn rgba_to_quadrant_grid_pixelated(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    cols: u16,
+    rows: u16,
+    coarse_divisor: u32,
+) -> RenderedImage {
+    if cols == 0 || rows == 0 || img_w == 0 || img_h == 0 {
+        return blank_grid(cols, rows);
+    }
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
+        return blank_grid(cols, rows);
+    }
+    let sub_w = u32::from(cols) * 2;
+    let sub_h = u32::from(rows) * 2;
+
+    let effective_target_h = effective_target_height(sub_h);
+    let (crop_x, crop_y, crop_w, crop_h) =
+        compute_cover_crop(img_w, img_h, sub_w, effective_target_h);
+    let cropped = crop_rgba(pixels, img_w, crop_x, crop_y, crop_w, crop_h);
+
+    let sub = if coarse_divisor <= 1 {
+        downsample_box(&cropped, crop_w, crop_h, sub_w, sub_h)
+    } else {
+        let coarse_w = (sub_w / coarse_divisor).max(1);
+        let coarse_h = (sub_h / coarse_divisor).max(1);
+        let coarse = downsample_box(&cropped, crop_w, crop_h, coarse_w, coarse_h);
+        nearest_upscale(&coarse, coarse_w, coarse_h, sub_w, sub_h)
+    };
+    if sub.is_empty() {
+        return blank_grid(cols, rows);
+    }
+
+    let mut cells = Vec::with_capacity(cols as usize * rows as usize);
+    for cy in 0..rows {
+        for cx in 0..cols {
+            let sub_x = u32::from(cx) * 2;
+            let sub_y = u32::from(cy) * 2;
+            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
+            let ul = get(sub_x, sub_y);
+            let ur = get(sub_x + 1, sub_y);
+            let ll = get(sub_x, sub_y + 1);
+            let lr = get(sub_x + 1, sub_y + 1);
+            cells.push(quadrant_cell_from_subpixels([
+                composite_over_black(ul.0, ul.1, ul.2, ul.3),
+                composite_over_black(ur.0, ur.1, ur.2, ur.3),
+                composite_over_black(ll.0, ll.1, ll.2, ll.3),
+                composite_over_black(lr.0, lr.1, lr.2, lr.3),
+            ]));
+        }
+    }
+    RenderedImage { cols, rows, cells }
+}
+
 /// 元画像全体をクロップ無しで `cols` セル幅へ拡大・縮小し、総行数 `total_rows` のうち
 /// `offset` 行目から最大 `rows` 行だけを quadrant block グリッドへ変換する。
 /// フルキャンバス画像表示のスクロール可視範囲専用で、全行ぶんのグリッドを先に確保しない。

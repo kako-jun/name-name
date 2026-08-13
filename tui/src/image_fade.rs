@@ -6,21 +6,32 @@
 use std::time::{Duration, Instant};
 
 use jiwa::{lerp_rgb, Rgb};
-use name_name_parser::models::AmbientEffects;
+use name_name_parser::models::{AmbientEffects, EventImageTransition};
 
 use crate::ambient_effects::{apply_ambient_effects, elapsed_ms_since_epoch};
 use crate::config::Config;
 use crate::image_render::{self, ImageCache, QuadrantCell, RenderedImage};
+use crate::pixelate_transition::{
+    compute_divisor, is_coarsen_phase, PIXELATE_TRANSITION_MAX_DIVISOR,
+    PIXELATE_TRANSITION_SWAP_RATIO,
+};
 
 /// 現在のイベント絵切り替え状態。`from`/`to` はいずれも Markdown 原稿中の相対パス
 /// （`config.event_image.assets_dir` からの相対、`DisplayLine::event_image` と同じ形）。
 /// `None` は「イベント絵なし」を表す。`from_effects`/`to_effects`（#582）はそれぞれの画像に
 /// 指定されたアンビエント演出フラグ（`path` が `None` のときは無視される）。
+///
+/// `to_transition`（#583）は「今進行中のこの遷移」がどちらのモードで描かれるかを決める
+/// （`from` 側に対応する `from_transition` は持たない — 遷移の見た目はモード1つで決まり、
+/// 旧画像がどんなモードで登場したかとは無関係）。[`Self::settled`] 経由で作った状態では
+/// `duration` が常にゼロで [`Self::progress`] が常に `1.0` を返すため、値そのものは
+/// 参照されない（意味を持つのは [`Self::transition_to`] で新しい遷移を開始した直後から）。
 pub struct ImageFadeState {
     from: Option<String>,
     to: Option<String>,
     from_effects: AmbientEffects,
     to_effects: AmbientEffects,
+    to_transition: EventImageTransition,
     started_at: Instant,
     duration: Duration,
 }
@@ -34,6 +45,8 @@ impl ImageFadeState {
             to: path,
             from_effects: effects,
             to_effects: effects,
+            // 常に progress()==1.0 なので参照されない（struct doc comment 参照）。
+            to_transition: EventImageTransition::default(),
             started_at: Instant::now(),
             duration: Duration::ZERO,
         }
@@ -56,6 +69,7 @@ impl ImageFadeState {
         &self,
         next: Option<String>,
         next_effects: AmbientEffects,
+        next_transition: EventImageTransition,
         duration: Duration,
         now: Instant,
     ) -> Self {
@@ -64,6 +78,7 @@ impl ImageFadeState {
             to: next,
             from_effects: self.to_effects,
             to_effects: next_effects,
+            to_transition: next_transition,
             started_at: now,
             duration,
         }
@@ -109,12 +124,26 @@ impl ImageFadeState {
         let t = self.progress(now);
         if t >= 1.0 {
             return Some(match &self.to {
-                Some(path) => {
-                    resolve_grid(cache, config, path, self.to_effects, elapsed_ms, cols, rows)
-                }
+                Some(path) => resolve_grid(
+                    cache,
+                    config,
+                    path,
+                    self.to_effects,
+                    elapsed_ms,
+                    cols,
+                    rows,
+                    1,
+                ),
                 None => image_render::blank_grid(cols, rows),
             });
         }
+
+        // ピクセレート遷移 (#583): アルファクロスフェード（blend）ではなく、コルセン→スワップ→
+        // リファインの専用経路を通る（`pixelate_snapshot` 参照）。
+        if self.to_transition == EventImageTransition::Pixelate {
+            return Some(self.pixelate_snapshot(cache, config, elapsed_ms, cols, rows, t));
+        }
+
         let from_grid = self.from.as_deref().map(|path| {
             resolve_grid(
                 cache,
@@ -124,13 +153,75 @@ impl ImageFadeState {
                 elapsed_ms,
                 cols,
                 rows,
+                1,
             )
         });
-        let to_grid = self
-            .to
-            .as_deref()
-            .map(|path| resolve_grid(cache, config, path, self.to_effects, elapsed_ms, cols, rows));
+        let to_grid = self.to.as_deref().map(|path| {
+            resolve_grid(
+                cache,
+                config,
+                path,
+                self.to_effects,
+                elapsed_ms,
+                cols,
+                rows,
+                1,
+            )
+        });
         Some(blend(from_grid.as_ref(), to_grid.as_ref(), cols, rows, t))
+    }
+
+    /// ピクセレート遷移 (#583) 中の `now` 時点のグリッドを返す。`t < swap_ratio` は `from`
+    /// （表示中だった旧画像）をコルセン中として、`t >= swap_ratio` は `to`（新画像）を
+    /// リファイン中として描画する — `blend` のように2枚を同時に合成するのではなく、常に
+    /// どちらか一方だけを「粗さ」を変えながら描画する（Issue #583 本文の設計、GUI版
+    /// `EventImageLayer.performPixelateSwap` と対称: スワップの瞬間に表示対象が切り替わる）。
+    /// 対象パスが `None`（例: `from` が無い状態からの初回表示）の場合は
+    /// [`image_render::blank_grid`] にフォールバックする（`blend` の missing-side 扱いと同じ
+    /// 「黒扱い」の考え方）。
+    fn pixelate_snapshot(
+        &self,
+        cache: &mut ImageCache,
+        config: &Config,
+        elapsed_ms: u64,
+        cols: u16,
+        rows: u16,
+        t: f32,
+    ) -> RenderedImage {
+        let divisor = compute_divisor(
+            t,
+            PIXELATE_TRANSITION_SWAP_RATIO,
+            PIXELATE_TRANSITION_MAX_DIVISOR,
+        );
+        if is_coarsen_phase(t, PIXELATE_TRANSITION_SWAP_RATIO) {
+            match self.from.as_deref() {
+                Some(path) => resolve_grid(
+                    cache,
+                    config,
+                    path,
+                    self.from_effects,
+                    elapsed_ms,
+                    cols,
+                    rows,
+                    divisor,
+                ),
+                None => image_render::blank_grid(cols, rows),
+            }
+        } else {
+            match self.to.as_deref() {
+                Some(path) => resolve_grid(
+                    cache,
+                    config,
+                    path,
+                    self.to_effects,
+                    elapsed_ms,
+                    cols,
+                    rows,
+                    divisor,
+                ),
+                None => image_render::blank_grid(cols, rows),
+            }
+        }
     }
 }
 
@@ -146,6 +237,10 @@ impl ImageFadeState {
 /// `apply_ambient_effects` を呼ばずデコード済み RGBA バッファをそのまま
 /// `rgba_to_quadrant_grid` へ渡す（演出なし画像で毎フレーム無駄な `pixels.to_vec()` clone が
 /// 発生していた回帰の修正、レビュー nit-4 対応）。
+///
+/// `coarse_divisor`（#583）は `1` なら通常の [`image_render::rgba_to_quadrant_grid`]（アンビエント
+/// 演出のみ・粗さなし）、`2` 以上なら [`image_render::rgba_to_quadrant_grid_pixelated`]
+/// （ピクセレート遷移中の粗い表示）を呼び分ける。
 #[allow(clippy::too_many_arguments)]
 fn resolve_grid(
     cache: &mut ImageCache,
@@ -155,29 +250,38 @@ fn resolve_grid(
     elapsed_ms: u64,
     cols: u16,
     rows: u16,
+    coarse_divisor: u32,
 ) -> RenderedImage {
     let Some(full_path) = config.resolve_image_path(relative_path) else {
         return image_render::blank_grid(cols, rows);
     };
     match cache.get_or_load(&full_path) {
         Some(decoded) => {
-            if !effects.wobble && !effects.vignette && !effects.glow && !effects.candle {
-                return image_render::rgba_to_quadrant_grid(
+            let pixels = if !effects.wobble && !effects.vignette && !effects.glow && !effects.candle
+            {
+                None
+            } else {
+                Some(apply_ambient_effects(
                     &decoded.rgba,
+                    decoded.width,
+                    decoded.height,
+                    effects,
+                    elapsed_ms,
+                ))
+            };
+            let rgba = pixels.as_deref().unwrap_or(&decoded.rgba);
+            if coarse_divisor <= 1 {
+                image_render::rgba_to_quadrant_grid(rgba, decoded.width, decoded.height, cols, rows)
+            } else {
+                image_render::rgba_to_quadrant_grid_pixelated(
+                    rgba,
                     decoded.width,
                     decoded.height,
                     cols,
                     rows,
-                );
+                    coarse_divisor,
+                )
             }
-            let pixels = apply_ambient_effects(
-                &decoded.rgba,
-                decoded.width,
-                decoded.height,
-                effects,
-                elapsed_ms,
-            );
-            image_render::rgba_to_quadrant_grid(&pixels, decoded.width, decoded.height, cols, rows)
         }
         None => image_render::blank_grid(cols, rows),
     }
@@ -272,6 +376,7 @@ mod tests {
             to: Some(relative),
             from_effects: AmbientEffects::default(),
             to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::default(),
             started_at,
             duration: Duration::from_millis(1000),
         };
@@ -318,6 +423,7 @@ mod tests {
             to: None,
             from_effects: AmbientEffects::default(),
             to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::default(),
             started_at,
             duration: Duration::from_millis(1000),
         };
@@ -362,6 +468,7 @@ mod tests {
             to: Some("b.webp".to_string()),
             from_effects: AmbientEffects::default(),
             to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::default(),
             started_at: now0,
             duration: Duration::from_millis(1000),
         };
@@ -371,6 +478,7 @@ mod tests {
         let next = mid_flight.transition_to(
             Some("c.webp".to_string()),
             AmbientEffects::default(),
+            EventImageTransition::default(),
             Duration::from_millis(1000),
             mid,
         );
@@ -412,6 +520,7 @@ mod tests {
         let next = settled.transition_to(
             Some("b.webp".to_string()),
             AmbientEffects::default(),
+            EventImageTransition::default(),
             Duration::from_millis(100),
             now,
         );
@@ -427,6 +536,7 @@ mod tests {
             to: Some("a.webp".to_string()),
             from_effects: AmbientEffects::default(),
             to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::default(),
             started_at: Instant::now(),
             duration: Duration::from_millis(100),
         };
@@ -604,12 +714,13 @@ mod tests {
             0,
             1,
             1,
+            1,
         );
         let glow_effects = AmbientEffects {
             glow: true,
             ..AmbientEffects::default()
         };
-        let with_effects = resolve_grid(&mut cache, &config, &relative, glow_effects, 0, 1, 1);
+        let with_effects = resolve_grid(&mut cache, &config, &relative, glow_effects, 0, 1, 1, 1);
 
         assert_ne!(
             no_effects.cells[0].bg, with_effects.cells[0].bg,
@@ -674,6 +785,7 @@ mod tests {
         let transitioning = settled.transition_to(
             Some(relative_b),
             glow_effects,
+            EventImageTransition::default(),
             Duration::from_millis(1000),
             now0,
         );

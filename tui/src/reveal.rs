@@ -334,6 +334,8 @@ mod tests {
             text: text.into_iter().map(|s| s.to_string()).collect(),
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         }
     }
 
