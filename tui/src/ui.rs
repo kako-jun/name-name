@@ -45,8 +45,8 @@ use crate::config::{
 };
 use crate::image_fade::ImageFadeState;
 use crate::image_render::{
-    clamp_scroll_offset, compute_full_width_rows, rgba_to_quadrant_grid_window, DecodedImage,
-    ImageCache, RenderedImage,
+    clamp_scroll_offset, compute_full_width_rows, rgba_to_quadrant_grid_native,
+    rgba_to_quadrant_grid_window, DecodedImage, ImageCache, RenderedImage,
 };
 use crate::playback::DisplayLine;
 use crate::reveal;
@@ -513,17 +513,24 @@ fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
     frame.render_widget(paragraph, area);
 }
 
-/// スプラッシュ画面: `config.splash.logo_image` が設定されていればフルキャンバス画像表示
-/// （[`draw_fullscreen_image`]、#530）、そうでなければ従来どおり `config.splash.lines` の
-/// ロゴ行を画面中央に表示するテキストモード（[`draw_splash_text`]）を描く。画像のロードに
-/// 失敗した場合（`ImageCache::get_or_load` が `None`）もテキストモードへフォールバックする
-/// — `splash.lines` が空でも既存のテキストモードどおり「空行 + 開始ヒント」だけは描く。
-/// ロゴの内容（ASCII アート本体・画像ファイル）はゲームごとに異なるため、このエンジン側は
-/// 表示方法だけを担い、内容そのものは持たない（`Config::splash` 参照）。
+/// スプラッシュ画面: `config.splash.logo_image` が設定されていればロゴ画像を表示し、
+/// そうでなければ従来どおり `config.splash.lines` のロゴ行を画面中央に表示するテキストモード
+/// （[`draw_splash_text`]）を描く。画像のロードに失敗した場合（`ImageCache::get_or_load` が
+/// `None`）もテキストモードへフォールバックする — `splash.lines` が空でも既存のテキスト
+/// モードどおり「空行 + 開始ヒント」だけは描く。ロゴの内容（ASCII アート本体・画像ファイル）
+/// はゲームごとに異なるため、このエンジン側は表示方法だけを担い、内容そのものは持たない
+/// （`Config::splash` 参照）。
 ///
-/// `scroll_offset` はフルキャンバス画像表示モードでのみ意味を持つ（呼び出し側 `main.rs` の
-/// `show_splash` が `Action::MoveUp`/`Action::MoveDown` から配線する）。テキストモードでは
-/// 無視される。
+/// ロゴ画像モードは2通りに分岐する（#588）: [`logo_fits_natively`] が `true`（Issue #588が
+/// 前提とする214x46pxロゴを含む、固定キャンバスの本編領域に収まるサイズ）のときは
+/// [`draw_splash_logo_native`] で補間・拡大縮小・クロップ無しのネイティブ解像度表示を行う。
+/// それより大きい画像（想定外の巨大ロゴ）では、既存の [`draw_fullscreen_image`]（#530、
+/// contain-fit + スクロール）へフォールバックする — ネイティブ表示だとキャンバスから
+/// はみ出て一部が見えなくなるため、大きい画像には縮小表示の方が実用的という判断。
+///
+/// `scroll_offset` はフルキャンバス画像表示モード（フォールバック時）でのみ意味を持つ
+/// （呼び出し側 `main.rs` の `show_splash` が `Action::MoveUp`/`Action::MoveDown` から配線する）。
+/// ネイティブ表示モード・テキストモードでは無視される。
 pub fn draw_splash(
     frame: &mut Frame,
     config: &Config,
@@ -532,11 +539,64 @@ pub fn draw_splash(
 ) {
     if let Some(path) = config.resolve_splash_logo_path() {
         if let Some(decoded) = image_cache.get_or_load(&path) {
-            draw_fullscreen_image(frame, &decoded, scroll_offset);
+            if logo_fits_natively(decoded.width, decoded.height) {
+                let actual = frame.area();
+                if !fits_required_size(actual) {
+                    draw_too_small_message(frame, actual);
+                    return;
+                }
+                let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+                let canvas = compute_centered_canvas(actual, required);
+                draw_splash_logo_native(frame, canvas, &decoded);
+            } else {
+                draw_fullscreen_image(frame, &decoded, scroll_offset);
+            }
             return;
         }
     }
     draw_splash_text(frame, config);
+}
+
+/// スプラッシュロゴをネイティブ解像度（補間・拡大縮小なし）で固定キャンバス内に上下左右
+/// 中央表示できるかどうかを判定する純粋関数（#588）。ロゴのセル換算ネイティブサイズ
+/// （幅=`ceil(px幅/2)`、高さ=`ceil(px高さ/2)`、[`image_render::rgba_to_quadrant_grid_native`]
+/// と同じ式）が、固定キャンバスの本編領域（[`REQUIRED_TOTAL_WIDTH`] x
+/// [`REQUIRED_MAIN_CONTENT_ROWS`]、最下段の開始ヒント行を除く）に収まる場合だけ `true` を
+/// 返す。収まらない大きな画像（Issue #588が前提とする214x46pxロゴでは発生しない想定外
+/// ケース）では `false` を返し、呼び出し側（[`draw_splash`]）が既存の
+/// [`draw_fullscreen_image`]（全幅contain-fit + スクロール）へフォールバックする。
+fn logo_fits_natively(image_w: u32, image_h: u32) -> bool {
+    let native_cols = image_w.div_ceil(2);
+    let native_rows = image_h.div_ceil(2);
+    native_cols <= u32::from(REQUIRED_TOTAL_WIDTH)
+        && native_rows <= u32::from(REQUIRED_MAIN_CONTENT_ROWS)
+}
+
+/// スプラッシュロゴをネイティブ解像度のまま固定キャンバス内で上下左右中央に表示する
+/// （#588、[`logo_fits_natively`] が `true` の場合のみ [`draw_splash`] から呼ばれる）。
+/// [`image_render::rgba_to_quadrant_grid_native`] で拡大縮小・クロップ無しのグリッドを作り、
+/// [`compute_centered_canvas`] を再利用してそのグリッドを画像領域（最下段の開始ヒント行を
+/// 除く）内で中央配置する — `compute_centered_canvas` は本来「端末内で固定キャンバスを
+/// 中央配置する」ために作られた関数だが、「ある矩形の中に別の矩形を中央配置する」という
+/// 責務自体は完全に汎用的なため、ネストして再利用できる。最下段には
+/// [`draw_fullscreen_image`] と同じ開始ヒントを表示し、見た目の一貫性を保つ。
+fn draw_splash_logo_native(frame: &mut Frame, canvas: Rect, image: &DecodedImage) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(canvas);
+    let image_area = rows[0];
+    let hint_area = rows[1];
+
+    let grid = rgba_to_quadrant_grid_native(&image.rgba, image.width, image.height);
+    let logo_rect = Rect::new(0, 0, grid.cols, grid.rows);
+    let placed = compute_centered_canvas(image_area, logo_rect);
+    draw_image_grid(frame, placed, &grid);
+
+    let hint_paragraph = Paragraph::new("Enter / Space で開始")
+        .alignment(Alignment::Center)
+        .style(Style::default().add_modifier(Modifier::DIM));
+    frame.render_widget(hint_paragraph, hint_area);
 }
 
 /// スプラッシュ画像モードの最大スクロール量（最下端オフセット）を返す。
@@ -553,19 +613,19 @@ pub(crate) fn splash_max_scroll_offset(config: &Config, image_cache: &mut ImageC
     clamp_scroll_offset(u16::MAX, total_rows, REQUIRED_MAIN_CONTENT_ROWS)
 }
 
-/// フルキャンバス画像表示（#530）。テキストウィンドウ・スプラッシュの罫線を畳み、画像を
-/// アスペクト比を保ったままキャンバス全幅（[`REQUIRED_TOTAL_WIDTH`]）へ contain-fit する
-/// （クロップは行わない）。必要総行数は `image_render::compute_full_width_rows` で
-/// **全幅前提の式から直接**求め、高さが表示可能行数を超える場合は追加の縮小をせず、
-/// `scroll_offset`（呼び出し側が `Action::MoveUp`/`Action::MoveDown` から配線する、
-/// `main.rs::show_splash` 参照）に応じて縦方向の可視範囲だけを
-/// [`rgba_to_quadrant_grid_window`] で生成して描画する（スクロール）。
+/// フルキャンバス画像表示（#530。#588以降は [`logo_fits_natively`] が `false` を返す
+/// 大きな画像専用のフォールバック経路 — [`draw_splash`] 参照）。テキストウィンドウ・
+/// スプラッシュの罫線を畳み、画像をアスペクト比を保ったままキャンバス全幅
+/// （[`REQUIRED_TOTAL_WIDTH`]）へ contain-fit する（クロップは行わない）。必要総行数は
+/// `image_render::compute_full_width_rows` で**全幅前提の式から直接**求め、高さが表示可能
+/// 行数を超える場合は追加の縮小をせず、`scroll_offset`（呼び出し側が
+/// `Action::MoveUp`/`Action::MoveDown` から配線する、`main.rs::show_splash` 参照）に応じて
+/// 縦方向の可視範囲だけを [`rgba_to_quadrant_grid_window`] で生成して描画する（スクロール）。
 ///
 /// 端末サイズが [`fits_required_size`] を満たさない場合は [`draw_too_small_message`] へ
-/// フォールバックする — 固定サイズのキャンバス幅（84列）を前提に contain 計算するため、
-/// 通常のゲームUI描画（[`draw`]）と同じ最小サイズ制約を課す。GUI版 dual-window と同じく
-/// 罫線・タイトルは描かない（将来イベント絵演出からも呼べる汎用の表示として、装飾を
-/// 持たせない）。
+/// フォールバックする — 固定サイズのキャンバス幅（[`REQUIRED_TOTAL_WIDTH`]）を前提に
+/// contain 計算するため、通常のゲームUI描画（[`draw`]）と同じ最小サイズ制約を課す。
+/// GUI版 dual-window と同じく罫線・タイトルは描かない。
 fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset: u16) {
     let actual = frame.area();
     if !fits_required_size(actual) {
@@ -2638,7 +2698,14 @@ mod tests {
     }
 
     #[test]
-    fn draw_splash_valid_logo_image_renders_fullscreen_image_mode_not_text() {
+    fn draw_splash_valid_logo_image_does_not_render_text_mode_fallback() {
+        // #588: 4x1というごく小さい画像は logo_fits_natively により
+        // draw_splash_logo_native 経由になる（かつてはこのサイズでも常に
+        // draw_fullscreen_image を通っていたが、#588でネイティブ表示が分岐した）。
+        // ここでは「画像モードが選ばれ、テキストモードのフォールバックが一切描画されない」
+        // という、両モードに共通する契約だけを確認する（各モード固有の描画内容は
+        // 下記 `draw_splash_small_logo_image_uses_native_mode_and_does_not_fill_full_canvas_width`/
+        // `draw_splash_oversized_logo_image_falls_back_to_fullscreen_scaled_mode` が担当する）。
         let fixture_path =
             crate::image_render::write_test_webp_fixture(&solid_rgba((200, 80, 80), 4, 1), 4, 1);
         let mut config = splash_config_with_logo_image(&fixture_path);
@@ -2656,9 +2723,73 @@ mod tests {
         );
         assert!(
             !text.contains("テストゲーム"),
-            "フルキャンバス画像表示はテキストモードの罫線タイトルを描かないはず, buffer was: {text}"
+            "画像表示モードはテキストモードの罫線タイトルを描かないはず, buffer was: {text}"
         );
         assert!(text.contains("Enter / Space で開始"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn logo_fits_natively_214x46_reference_logo_size_fits() {
+        // Issue #588が前提とする横長ロゴ214x46px（cols=107, rows=23）は、固定キャンバスの
+        // 本編領域（REQUIRED_TOTAL_WIDTH x REQUIRED_MAIN_CONTENT_ROWS = 130x32）に
+        // 収まるはず。
+        assert!(logo_fits_natively(214, 46));
+    }
+
+    #[test]
+    fn logo_fits_natively_oversized_image_does_not_fit() {
+        // ネイティブ表示だとキャンバス本編領域をはみ出す大きさの画像は false になり、
+        // draw_splash がスケール表示側（draw_fullscreen_image）へフォールバックする。
+        let oversized_w = u32::from(REQUIRED_TOTAL_WIDTH) * 2 + 1;
+        assert!(!logo_fits_natively(oversized_w, 46));
+        let oversized_h = u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2 + 1;
+        assert!(!logo_fits_natively(214, oversized_h));
+    }
+
+    #[test]
+    fn draw_splash_small_logo_image_uses_native_mode_and_does_not_fill_full_canvas_width() {
+        // #588の核心の1つ: ネイティブ表示は画面全幅へ引き伸ばさない。8x2という小さい単色
+        // 画像（cols=4, rows=1）をCANVAS_W(130)幅のキャンバスに表示すると、キャンバス
+        // 左端(x=0)は中央配置により空白のままのはず — 引き伸ばしていたら全幅を覆ってしまう。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((255, 0, 0), 8, 2), 8, 2);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let top_left_bg = buffer.cell((0, 0)).unwrap().bg;
+        assert_ne!(
+            top_left_bg,
+            Color::Rgb(255, 0, 0),
+            "ネイティブ表示は中央配置のはずで、キャンバス左端(0,0)まで赤で埋まってはいけない"
+        );
+    }
+
+    #[test]
+    fn draw_splash_oversized_logo_image_falls_back_to_fullscreen_scaled_mode() {
+        // #588: 本編領域に収まらない大きな画像（ここでは縦長で高さが本編行数を超える画像）は
+        // draw_fullscreen_image（全幅contain-fit）側へフォールバックし、そちら固有の
+        // スクロールヒントが表示されるはず。
+        let oversized_h = (u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2 + 10) * 2; // rows超過を確実にする
+        let fixture_path = crate::image_render::write_test_webp_fixture(
+            &solid_rgba((255, 0, 0), 4, oversized_h),
+            4,
+            oversized_h,
+        );
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("↑/↓ でスクロール"),
+            "本編領域に収まらない画像はスケール表示にフォールバックし、スクロールヒントが出るはず, buffer was: {text}"
+        );
     }
 
     // ---- #480: 画面分割(50/50・プレイヤー/相手ウィンドウ分離・枠なし)のテスト ----

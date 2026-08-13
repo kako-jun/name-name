@@ -701,6 +701,57 @@ pub fn rgba_to_quadrant_grid_window(
     }
 }
 
+/// 画像を一切ダウンサンプル・クロップ・アスペクト補正せず、ネイティブ解像度のまま
+/// quadrant block グリッドへ変換する（#588、スプラッシュロゴ専用）。
+///
+/// [`rgba_to_quadrant_grid`] は cover-fit のためのクロップと
+/// [`TERMINAL_CELL_ASPECT_RATIO`] によるアスペクト補正を経由するため、ターゲットの
+/// `cols`/`rows` を画像のネイティブサイズに正確に一致させても実際には（セルが正方形でない
+/// 前提の補正により）クロップやスケールが発生してしまう。この関数はその補正を一切経由せず、
+/// 画像のピクセルを直接 `1セル = 2x2ピクセル` として読み取るため、拡大・縮小・クロップは
+/// 一切発生しない（kako-jun要望「ロゴを補間・拡大縮小せずに表示する」、Issue #588）。
+///
+/// `cols = ceil(img_w/2)`, `rows = ceil(img_h/2)`。画像の幅/高さが奇数の場合、最終列/行の
+/// 右端/下端1サブピクセルは画像範囲外になり透明黒として扱う（Issue #588が前提とする
+/// ロゴサイズ 214x46px は偶数のためこのケースは発生しない）。
+pub fn rgba_to_quadrant_grid_native(pixels: &[u8], img_w: u32, img_h: u32) -> RenderedImage {
+    if img_w == 0 || img_h == 0 {
+        return blank_grid(0, 0);
+    }
+    let cols = img_w.div_ceil(2).min(u32::from(u16::MAX)) as u16;
+    let rows = img_h.div_ceil(2).min(u32::from(u16::MAX)) as u16;
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
+        return blank_grid(cols, rows);
+    }
+
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) {
+        if x >= img_w || y >= img_h {
+            return (0, 0, 0, 0);
+        }
+        let i = ((y * img_w + x) * 4) as usize;
+        (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3])
+    };
+
+    let mut cells = Vec::with_capacity(cols as usize * rows as usize);
+    for cy in 0..rows {
+        for cx in 0..cols {
+            let sub_x = u32::from(cx) * 2;
+            let sub_y = u32::from(cy) * 2;
+            let ul = get(sub_x, sub_y);
+            let ur = get(sub_x + 1, sub_y);
+            let ll = get(sub_x, sub_y + 1);
+            let lr = get(sub_x + 1, sub_y + 1);
+            cells.push(quadrant_cell_from_subpixels([
+                composite_over_black(ul.0, ul.1, ul.2, ul.3),
+                composite_over_black(ur.0, ur.1, ur.2, ur.3),
+                composite_over_black(ll.0, ll.1, ll.2, ll.3),
+                composite_over_black(lr.0, lr.1, lr.2, lr.3),
+            ]));
+        }
+    }
+    RenderedImage { cols, rows, cells }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1246,6 +1297,71 @@ mod tests {
     fn rgba_to_quadrant_grid_window_rejects_overflowing_source_size_without_panicking() {
         let grid = rgba_to_quadrant_grid_window(&[], u32::MAX, u32::MAX, 40, 20, 0, 20);
         assert_eq!(grid, blank_grid(40, 20));
+    }
+
+    // ---- #588: rgba_to_quadrant_grid_native（スプラッシュロゴのネイティブ表示）----
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_dimensions_match_ceil_half_of_image_size() {
+        // Issue #588 が前提とする横長ロゴ 214x46px なら cols=107, rows=23 になるはず。
+        let pixels = vec![0u8; 214 * 46 * 4];
+        let grid = rgba_to_quadrant_grid_native(&pixels, 214, 46);
+        assert_eq!(grid.cols, 107);
+        assert_eq!(grid.rows, 23);
+        assert_eq!(grid.cells.len(), 107 * 23);
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_even_size_reproduces_exact_pixel_colors_without_blending() {
+        // 4x2 の画像を左半分赤・右半分青の市松にし、ネイティブ変換後も各セルが該当する
+        // 2x2ピクセルの色をそのまま反映していること（他の色との混色が起きていないこと）を
+        // 確認する。cover-fit/downsample_boxを経由しないため、この4象限はどの色とも
+        // 平均化されずそのまま残るはず。
+        #[rustfmt::skip]
+        let pixels: Vec<u8> = vec![
+            255, 0, 0, 255,   255, 0, 0, 255,   0, 0, 255, 255,   0, 0, 255, 255,
+            255, 0, 0, 255,   255, 0, 0, 255,   0, 0, 255, 255,   0, 0, 255, 255,
+        ];
+        let grid = rgba_to_quadrant_grid_native(&pixels, 4, 2);
+        assert_eq!(grid.cols, 2);
+        assert_eq!(grid.rows, 1);
+        assert_eq!(grid.cells[0].bg, (255, 0, 0), "左セルは赤一色のはず");
+        assert_eq!(grid.cells[1].bg, (0, 0, 255), "右セルは青一色のはず");
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_zero_sized_image_returns_empty_grid_without_panicking() {
+        let grid = rgba_to_quadrant_grid_native(&[], 0, 0);
+        assert_eq!(grid.cols, 0);
+        assert_eq!(grid.rows, 0);
+        assert!(grid.cells.is_empty());
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_pixels_shorter_than_declared_size_returns_blank_grid_without_panicking(
+    ) {
+        let pixels = vec![255u8; 4]; // 1画素分しかないのに 4x4 を主張する不正な入力
+        let grid = rgba_to_quadrant_grid_native(&pixels, 4, 4);
+        assert_eq!(grid.cols, 2);
+        assert_eq!(grid.rows, 2);
+        assert!(
+            grid.cells.iter().all(|c| *c == BLANK_CELL),
+            "不正な長さのpixelsに対してはblank_gridを返すべき（panicしない）"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_odd_size_out_of_range_subpixel_is_treated_as_transparent_black()
+    {
+        // 3x1（奇数幅）: cols=ceil(3/2)=2 となり、最終セルの右側サブピクセルは画像範囲外
+        // (x=3)になる。範囲外は透明黒として扱われ、範囲内の1ピクセルだけが残る
+        // （Issue #588前提のロゴサイズ214x46は偶数のため実際には踏まないケースだが、
+        // 防御的にpanicしないことを確認する）。
+        let pixels: Vec<u8> = vec![10, 20, 30, 255];
+        let grid = rgba_to_quadrant_grid_native(&pixels, 3, 1);
+        assert_eq!(grid.cols, 2);
+        assert_eq!(grid.rows, 1);
+        assert_eq!(grid.cells.len(), 2);
     }
 
     #[test]
