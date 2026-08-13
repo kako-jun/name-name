@@ -70,11 +70,15 @@ enum Overlay {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse(std::env::args());
 
-    let config = match &cli.config_path {
+    let mut config = match &cli.config_path {
         Some(path) => Config::load(path)
             .with_context(|| format!("config読み込みに失敗しました: {}", path.display()))?,
         None => Config::default(),
     };
+    // #579: 自動クイックセーブ/ロードの保存先は `--config` の指定有無だけから決まる
+    // 「実行時だけ決まる値」（`Config::quicksave_path` のdoc comment参照）。TOMLでは
+    // 設定できないため、config読み込み後にここで差し込む。
+    config.quicksave_path = Some(save::quicksave_path(&cli));
 
     // `--script` は単一ファイルを直接指定する動作確認用の経路（`cli.rs` の doc comment
     // 参照）。この場合は script_dir 配下の一括マージをせず、従来どおりそのファイル単体を
@@ -107,6 +111,15 @@ fn main() -> anyhow::Result<()> {
         }
     };
     let mut playback = playback.with_sentence_per_page(config.sentence_per_page);
+    // #579: 自動クイックロード。`skip_leading_empty_scenes` より前に差し込む —
+    // 保存済みのシーンへ復元できた場合、それが「本来の先頭シーン」の扱いに優先する
+    // （`skip_leading_empty_scenes` は保存データが無い/復元失敗時の通常起動でのみ
+    // 意味を持てばよく、復元後の着地シーンを巻き戻して壊してはならない）。
+    // 復元の成否（`bool`）はここでは無視する — 失敗時は構築直後のまま通常起動に
+    // 自然にフォールバックする（`save::restore_playback` の fail-soft 方針）。
+    if let Some(path) = &config.quicksave_path {
+        save::restore_playback(&mut playback, path);
+    }
     skip_leading_empty_scenes(&mut playback);
 
     run(&config, &mut playback)
@@ -414,10 +427,13 @@ where
     let mut auto_deadline: Option<Instant> = None;
 
     // スキップモード（#499、GUI版 `NovelRenderer.setSkipMode`/`scheduleSkipStep` 相当）の
-    // 状態。GUI版はセーブファイルの永続化された既読進捗（`readProgress`）を使うが、TUI
-    // 側にはまだそのような永続化の仕組みが無いため、今回はランタイム中だけのメモリ上の
-    // 既読集合（`read_positions`）で最小実装する (#499 Issue本文の「永続化はスコープ外」
-    // 指示どおり)。
+    // 状態。GUI版はセーブファイルの永続化された既読進捗（`readProgress`）を使う。TUI側は
+    // 当初ランタイム中だけのメモリ上の既読集合として実装していた（#499 Issue本文の
+    // 「永続化はスコープ外」指示どおり）が、#579 の自動クイックセーブ/ロードで
+    // `read_positions` 自体もセーブデータへ含めることになったため、起動時は
+    // `save::restore_read_positions` で前回セッションの既読集合を復元する
+    // （`config.quicksave_path` が `None` — 主に `Config::default()` を直接使うテスト —
+    // なら従来どおり空集合から始まる）。
     //
     // キーは `playback.position()`（会話行のみを数える生の値）ではなく
     // `playback.stable_item_key()` が返す `(scene_order 内インデックス, シーン内構築順
@@ -435,7 +451,8 @@ where
     // 要素としてコンテンツハッシュを追加した（`stable_item_key` の doc comment、
     // `playback.rs` 参照）。
     let mut skip_mode = false;
-    let mut read_positions: HashSet<(usize, usize, u64)> = HashSet::new();
+    let mut read_positions: HashSet<(usize, usize, u64)> =
+        save::restore_read_positions(config.quicksave_path.as_deref());
 
     // バックログ（#500）: これまで実際に表示し終えた会話行（話者名込み）の履歴。
     // `Action::Advance` 処理内、行を実際に離れた瞬間（`on_advance` が `true` を返した
@@ -840,6 +857,13 @@ where
                 // `item_scene_key`/`item_content_hash` がまだ空（またはより短い）ため
                 // 自然に `None` になり、後述の既読マーク処理も自動的にスキップされる。
                 let prev_stable_key = playback.stable_item_key(prev_item_index);
+                // #579: 自動クイックセーブのトリガー判定用に、on_advance で状態を動かす
+                // 前の現在シーンを覚えておく。`prev_stable_key` と同じ「呼び出し前後で
+                // 比較する」パターン — `playback.current_scene_idx()` は
+                // `advance()`/`select_current_choice()` が新しいシーンの item を構築する
+                // たびに更新される値なので、この前後比較で「シーンが実際に切り替わったか」
+                // を検出できる（`Playback::current_scene_idx` のdoc comment参照）。
+                let prev_scene_idx = playback.current_scene_idx();
                 // #499: 既読マーク判定用に、on_advance で状態を動かす前の「選択肢表示中か」を
                 // 覚えておく。`playback.position()` は Choice item をカウントしないため、
                 // 「最後の会話行 → 直後の Choice」という遷移では `position()` の値が変わらず
@@ -953,6 +977,20 @@ where
                             Duration::from_millis(config.event_image.crossfade_ms),
                             Instant::now(),
                         );
+                    }
+                }
+                // #579: シーンが実際に切り替わったら自動クイックセーブする。GUI版
+                // `NovelPlayer.setOnSceneChange`（#578）の TUI 版対応 — GUI版が
+                // シーン切り替えごとに `quickSave()` するのと同じタイミングを、
+                // `prev_scene_idx`（本アーム冒頭で捕まえた値）との前後比較で検出する。
+                // このブロックより前で更新済みの `read_positions`（直前で離脱した行の
+                // 既読マーク、上の判定ブロック参照）を含めて保存する。書き込み失敗は
+                // 握りつぶし、シーン進行を止めない（`save::save_quick` の fail-soft
+                // 方針、GUI版 `quickSave` と同じ）。`config.quicksave_path` が `None`
+                // （`Config::default()` を直接使うテストの大半）なら何もしない。
+                if playback.current_scene_idx() != prev_scene_idx {
+                    if let Some(path) = &config.quicksave_path {
+                        save::save_quick(path, playback, &read_positions);
                     }
                 }
             }
@@ -2885,6 +2923,53 @@ mod tests {
             "無効なjump先では選択肢表示のまま変わらないはず"
         );
         assert!(current_reveal.is_none());
+    }
+
+    /// #579 の配線（`event_loop` 内、`Action::Advance` アーム末尾の自動クイックセーブ
+    /// 判定）そのものを確認する最小テスト。`save::save_quick`/`Playback::jump_to_scene_id`
+    /// 自体の網羅的な検証はそれぞれ `save.rs`/`playback.rs` にあるので、ここでは
+    /// 「シーンが実際に切り替わったら `config.quicksave_path` へファイルが書かれるか」
+    /// という結線だけを見る。
+    #[test]
+    fn event_loop_autosaves_quicksave_file_when_scene_changes_and_path_is_configured() {
+        let mut config = instant_config();
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-event-loop-autosave-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+        config.quicksave_path = Some(quicksave_path.clone());
+
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        // 1回目のAdvance: 最初のセリフ→Choice（同じシーン"1-1"内、シーンは切り替わらない）。
+        // 2回目のAdvance: Choiceを確定→"1-2"へjump（シーンが切り替わる、ここで自動セーブ）。
+        let (mut next_action, _remaining) =
+            action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+        )
+        .unwrap();
+
+        let saved = std::fs::read_to_string(&quicksave_path)
+            .expect("シーン切り替えでクイックセーブファイルが書き込まれているはず");
+        assert!(
+            saved.contains("\"1-2\""),
+            "保存データに着地先シーンID(1-2)が含まれるはず, saved was: {saved}"
+        );
+
+        let _ = std::fs::remove_file(&quicksave_path);
     }
 
     #[test]

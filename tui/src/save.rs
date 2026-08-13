@@ -83,19 +83,29 @@ pub fn save_quick(path: &Path, playback: &Playback, read_positions: &HashSet<(us
 /// 起動時、`Playback` 構築直後（`skip_leading_empty_scenes` より前）に呼ぶ。`path` に
 /// 保存済みのクイックセーブがあれば、そのフラグ・シーン位置を `playback` へ復元する。
 ///
-/// フラグを [`Playback::set_flags`] で上書きしてから [`Playback::jump_to_scene_id`] で
-/// ジャンプする順序を守る — ジャンプ先シーンの item 構築（`build_scene_items`）は
-/// その時点の `self.flags` を見て `Event::Condition` を評価するため、フラグを先に
-/// 復元しておかないとジャンプ先の内容（ひいては `stable_item_key` のコンテンツハッシュ）
-/// が保存時点と食い違う。
+/// 保存済みシーンIDが現在の原稿に実在すると [`Playback::has_scene_id`] で確認できてから
+/// 初めて [`Playback::set_flags`] でフラグを上書きし、続けて [`Playback::jump_to_scene_id`]
+/// でジャンプする。この順序（存在確認 → フラグ上書き → ジャンプ）には2つの理由がある:
+///
+/// 1. フラグを**先に**復元する必要がある — ジャンプ先シーンの item 構築
+///    （`build_scene_items`）はその時点の `self.flags` を見て `Event::Condition` を
+///    評価するため、フラグを先に復元しておかないとジャンプ先の内容（ひいては
+///    `stable_item_key` のコンテンツハッシュ）が保存時点と食い違う。
+/// 2. だが `set_flags` は無条件に成功する（＝一度呼ぶとロールバックしない）ため、
+///    シーンIDが存在しないと分かった**後**に呼ぶと「フラグだけ復元されて位置は
+///    構築直後のまま」という中途半端な状態が残ってしまう。先に `has_scene_id` で
+///    存在確認しておけば、それ以降の `jump_to_scene_id` は同じ `scene_index_by_id`
+///    を見る以上ここで失敗しない。
 ///
 /// ファイルが無い・壊れている・保存済みシーンIDが現在の原稿に見つからない、のいずれの
-/// 場合も何もせず `false` を返す（構築直後のまま、通常起動にフォールバックする —
-/// `jump_to_scene_id` の fail-soft 方針をそのまま踏襲）。
+/// 場合も何もせず `false` を返す（構築直後のまま、通常起動にフォールバックする）。
 pub fn restore_playback(playback: &mut Playback, path: &Path) -> bool {
     let Some(data) = load(path) else {
         return false;
     };
+    if !playback.has_scene_id(&data.scene_id) {
+        return false;
+    }
     playback.set_flags(data.flags);
     playback.jump_to_scene_id(&data.scene_id)
 }
@@ -253,5 +263,91 @@ mod tests {
 
         let restored = restore_read_positions(Some(&path));
         assert_eq!(restored, HashSet::from([(1, 2, 3)]));
+    }
+
+    /// 2シーン構成（"1-1" → Choice → "1-2"）の原稿。`restore_playback` の
+    /// 「フラグ上書き→ジャンプ」を実際の `Playback`/`Document` を通して検証する
+    /// （`QuickSaveData` の往復だけを見ている `save_quick_then_load_round_trips_*` とは
+    /// 別に、`Playback::has_scene_id`/`jump_to_scene_id` との結線そのものを確認する）。
+    fn two_scene_source() -> &'static str {
+        "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n\
+         [選択]\n- 進む→1-2\n[/選択]\n\n## 1-2: 次\n\n**B**:\n次のセリフ\n"
+    }
+
+    #[test]
+    fn restore_playback_applies_flags_and_jumps_to_saved_scene() {
+        let path = temp_path("restore-playback");
+        let _guard = TempFile(path.clone());
+        let document = name_name_parser::parser::parse(two_scene_source());
+
+        let mut flags = GameFlags::new();
+        flags.set(
+            "visited_1_2",
+            name_name_parser::models::FlagValue::Bool(true),
+        );
+        let data = QuickSaveData {
+            scene_id: "1-2".to_string(),
+            flags,
+            read_positions: vec![],
+        };
+        std::fs::write(&path, serde_json::to_string(&data).unwrap()).unwrap();
+
+        let mut playback = Playback::from_document(&document);
+        assert_eq!(playback.current_scene_id(), "1-1");
+
+        assert!(restore_playback(&mut playback, &path));
+
+        assert_eq!(playback.current_scene_id(), "1-2");
+        assert!(playback.flags().check("visited_1_2"));
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("復元後の会話行")
+                .speaker
+                .as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn restore_playback_does_not_touch_flags_when_saved_scene_id_is_stale() {
+        // 原稿が変わって保存済みシーンIDが消えたケース（`has_scene_id` ガードの本体）。
+        let path = temp_path("restore-playback-stale-scene");
+        let _guard = TempFile(path.clone());
+        let document = name_name_parser::parser::parse(
+            "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n**A**:\n最初のセリフ\n",
+        );
+
+        let mut flags = GameFlags::new();
+        flags.set(
+            "should_not_apply",
+            name_name_parser::models::FlagValue::Bool(true),
+        );
+        let data = QuickSaveData {
+            scene_id: "does-not-exist".to_string(),
+            flags,
+            read_positions: vec![],
+        };
+        std::fs::write(&path, serde_json::to_string(&data).unwrap()).unwrap();
+
+        let mut playback = Playback::from_document(&document);
+
+        assert!(!restore_playback(&mut playback, &path));
+
+        assert!(
+            !playback.flags().check("should_not_apply"),
+            "存在しないシーンIDなら復元全体を諦め、flagsも上書きされないはず（中途半端な適用の防止）"
+        );
+        assert_eq!(playback.current_scene_id(), "1-1");
+    }
+
+    #[test]
+    fn restore_playback_returns_false_when_file_missing() {
+        let path = temp_path("restore-playback-missing");
+        let document = name_name_parser::parser::parse(two_scene_source());
+        let mut playback = Playback::from_document(&document);
+
+        assert!(!restore_playback(&mut playback, &path));
+        assert_eq!(playback.current_scene_id(), "1-1");
     }
 }

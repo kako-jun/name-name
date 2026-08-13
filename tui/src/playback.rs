@@ -1087,6 +1087,17 @@ impl Playback {
         self.flags = flags;
     }
 
+    /// `scene_id` が現在の原稿に実在するか。[`Playback::jump_to_scene_id`] を実際に
+    /// 呼ばずに判定だけしたい場合に使う。自動クイックロード（#579、
+    /// `main.rs::save::restore_playback`）が、[`Playback::set_flags`] でフラグを
+    /// 上書きする**前**にこれで存在確認し、存在しないシーンID（原稿が変わって保存済み
+    /// シーンが消えた等）なら `set_flags` 自体を呼ばずに復元全体を諦める —
+    /// 「フラグだけ復元されて位置は復元されない」中途半端な状態を避けるための
+    /// ガード（`set_flags` の doc comment参照）。
+    pub(crate) fn has_scene_id(&self, scene_id: &str) -> bool {
+        self.scene_index_by_id.contains_key(scene_id)
+    }
+
     /// `item_index()` が指しうる生インデックス `item_index` を、シーンを跨いで安定な
     /// 識別子（`(scene_order 内インデックス, そのシーン内での構築順インデックス,
     /// コンテンツハッシュ)`）に変換する。`item_index` が範囲外（`items.len()` 以上）なら
