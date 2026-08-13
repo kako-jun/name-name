@@ -474,6 +474,25 @@ export function parseColorToNumber(color: string | undefined, fallback: number):
   return n
 }
 
+/**
+ * Pixi の数値カラー（`0xa8dadc` 等）を CSS カラー文字列（`#a8dadc`）に変換する純粋関数 (#601)。
+ *
+ * `parseColorToNumber` の逆方向。`SeekBar.DEFAULT_BAR_FILL_COLOR` のような数値定数を
+ * `<input type="range">` の `accentColor`（CSS 文字列）にそのまま使うために用意した。
+ * 0 未満・不正値は素直に `#000000` へクランプする（呼び出し側は定数を渡す想定で異常系は薄い）。
+ *
+ * NaN 防御 (#601 セルフレビュー nit1): NaN は `Number.isNaN` で明示的に検出して 0 に倒す
+ * （`Math.floor(NaN)` は NaN のままで、後続の `Math.min`/`Math.max` も NaN を素通しするため、
+ * ガードなしでは `"#NaN"` のような壊れた文字列になる）。`Infinity`/`-Infinity` は NaN ではない
+ * ので Math.floor→Math.min/Math.max のクランプにそのまま乗せてよく、自然に上限 `0xffffff`
+ * （Infinity）・下限 `0`（-Infinity）へ丸まる（novelLayout.test.ts 参照）。
+ */
+export function numberToHexColor(color: number): string {
+  const safeColor = Number.isNaN(color) ? 0 : Math.floor(color)
+  const clamped = Math.max(0, Math.min(0xffffff, safeColor))
+  return `#${clamped.toString(16).padStart(6, '0')}`
+}
+
 /** 2D レイアウト位置の比率（screenWidth/Height に掛ける）。 */
 export interface LayoutPosition {
   /** 横位置の比率（sprite 中心 x = screenWidth * xRatio）。 */

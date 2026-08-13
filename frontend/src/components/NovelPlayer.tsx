@@ -1254,6 +1254,7 @@ function NovelPlayer({
         onClose={() => setSettingsOpen(false)}
         settings={settings}
         onChange={setSettings}
+        seekbarColor={seekbarColor}
       />
       {/* クイックセーブ/ロード通知 toast (#142) */}
       {toast !== null && (
