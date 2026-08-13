@@ -76,15 +76,25 @@ interface ChoiceTheme {
    * hover バリエーションは持たない。
    */
   fillLocked: number
+  /**
+   * 消灯(クリア済み)視覚状態 (#594) の配色。`fillLocked` と並行するが意味が異なる——
+   * こちらはクリック可能なまま見た目だけ暗くする（ろうそくの火が消えた後の状態）ため、
+   * ロックほど強く沈めない中間的な暗さにする。ロックと同じくホバーバリエーションは
+   * 持たない（クリック可能ではあるが、既読/未読同様ホバーで明るく戻さず一貫して暗いまま
+   * にすることで「クリア済み」であることを常に視認できるようにする）。
+   */
+  fillCleared: number
   borderNormal: number
   borderHover: number
   borderRead: number
   borderReadHover: number
   borderLocked: number
+  borderCleared: number
   borderWidth: number
   textColor: number
   textReadColor: number
   textLockedColor: number
+  textClearedColor: number
   fontFamily: string
   fontWeight: 'normal' | 'bold'
   fontSize: number
@@ -108,15 +118,21 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     // ロック中 (#591): read よりさらに暗く沈ませ、「まだ選べない」を read（既読/未読）とは
     // 別の見た目で示す。ホバー変化は無い（クリック自体を受け付けないため）。
     fillLocked: 0x121218,
+    // 消灯中 (#594、should対応): lockedの寒色(青黒)とは対照的に、火が消えた直後の
+    // ろうそくを思わせる暖色寄りの暗い焦茶にして、暗さの近さに頼らず色相でも判別できるようにする。
+    fillCleared: 0x241f16,
     borderNormal: 0xa8dadc,
     borderHover: 0xf1faee,
     borderRead: 0x9aa4b2,
     borderReadHover: 0xd1d5db,
     borderLocked: 0x555566,
+    // 消灯枠 (#594、should対応): 寒色のborderLockedと分かれるよう、燻んだ真鍮色(暖色)に寄せる。
+    borderCleared: 0xa88f6e,
     borderWidth: 2,
     textColor: 0xf1faee,
     textReadColor: 0xcbd5e1,
     textLockedColor: 0x6b7280,
+    textClearedColor: 0xb8a890,
     fontFamily: "'Noto Sans JP', sans-serif",
     fontWeight: 'bold',
     fontSize: 20,
@@ -131,15 +147,25 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillRead: 0xe8e1f0,
     fillReadHover: 0xded5ec,
     fillLocked: 0xd8d3dc,
+    // 消灯中 (#594、should対応・luma逆転修正): lockedの寒色寄りラベンダーグレー(luma 213.5)
+    // から離した暖色ベージュピンクにしつつ、locked より明確に明るくする(luma 225.0、diff +11.5)。
+    // 「押せない」より「押せる」が暗く見えていた逆転を、色相分離を保ったまま解消する。
+    fillCleared: 0xf2ddc9,
     borderNormal: 0xffb3c1,
     borderHover: 0xff8fa3,
     borderRead: 0xb8a8ca,
     borderReadHover: 0x9d8bb8,
     borderLocked: 0xb0a8b8,
+    // 消灯枠 (#594、should対応・luma逆転修正): borderLocked(luma 172.2)の寒色グレーから
+    // 離れたテラコッタ寄りを保ちつつ、locked より明るくする(luma 184.1、diff +11.9)。
+    borderCleared: 0xdbae91,
     borderWidth: 3,
     textColor: 0x5d2952,
     textReadColor: 0x5d536b,
     textLockedColor: 0x8b8394,
+    // 消灯文字 (#594、should対応・luma逆転修正): 文字色は視認性に直結するため特に重要。
+    // textLocked(luma 135.3)の暖褐色トーンを保ちつつ明確に明るくする(luma 150.7、diff +15.4)。
+    textClearedColor: 0xb08f7c,
     fontFamily: "'Noto Sans JP', sans-serif",
     fontWeight: 'bold',
     fontSize: 22,
@@ -154,15 +180,21 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillRead: 0x2a2a2a,
     fillReadHover: 0x3a3a3a,
     fillLocked: 0x0a0a0a,
+    // 消灯中 (#594、should対応): 元々 locked より暗い値になっており「押せない」より暗いのは
+    // 逆転していた。lockedより明るく、かつわずかに暖色を混ぜた炭色にして色相でも区別する
+    // （モノクロ系のシリアストーンは保ちつつ、純粋なグレーではなくする）。
+    fillCleared: 0x1a1512,
     borderNormal: 0xffffff,
     borderHover: 0xffffff,
     borderRead: 0x888888,
     borderReadHover: 0xbbbbbb,
     borderLocked: 0x555555,
+    borderCleared: 0xb8a99a,
     borderWidth: 2,
     textColor: 0xffffff,
     textReadColor: 0xbdbdbd,
     textLockedColor: 0x666666,
+    textClearedColor: 0xb8ac9c,
     fontFamily: "'Noto Serif JP', serif",
     fontWeight: 'normal',
     fontSize: 20,
@@ -182,15 +214,21 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillRead: 0x1a1a1a,
     fillReadHover: 0x2a2416,
     fillLocked: 0x0d0d0d,
+    // 消灯中 (#594、should対応): 元々 locked より暗い値になっており「押せない」より暗いのは
+    // 逆転していた。lockedより明るく、ホバーのろうそく色(0xffd280)を大きく暗く落とした
+    // 燃え殻色にして、他themeと揃えて暖色側で区別する。
+    fillCleared: 0x1f150a,
     borderNormal: 0xffffff,
     borderHover: 0xffd280,
     borderRead: 0x888888,
     borderReadHover: 0xd9a86c,
     borderLocked: 0x4a4a4a,
+    borderCleared: 0xb89868,
     borderWidth: 2,
     textColor: 0xffffff,
     textReadColor: 0xc9c2b0,
     textLockedColor: 0x5a5a5a,
+    textClearedColor: 0xbfa980,
     fontFamily: 'monospace',
     fontWeight: 'bold',
     fontSize: 20,
@@ -228,21 +266,33 @@ export function resolveStyle(name?: string | null): ChoiceTheme {
 }
 
 /**
- * ボタン1件の配色を決める。`locked`（#591、条件付きロック）は `alreadyRead`（既読/未読の
- * 色分け）より優先する——ロック中はホバーが発生しない（`eventMode: 'none'`）ため hover
- * 引数も無視する。両方 false のときだけ従来どおり alreadyRead/hover で分岐する（非破壊）。
+ * ボタン1件の配色を決める。優先順位は `locked`（#591、条件付きロック） > `cleared`
+ * （#594、消灯=クリア済み視覚状態） > `alreadyRead`（既読/未読の色分け） > 通常。
+ * 通常運用では `locked` と `cleared` が同時に真になることは無い想定だが、防御的に
+ * `locked` を優先する。ロック中・消灯中はどちらもホバーで色を変えない
+ * （ロックはクリック自体を受け付けない `eventMode: 'none'` のため、消灯はクリック可能
+ * だが「クリア済み」であることを常に一貫した見た目で示すため）ので hover 引数を無視する。
+ * すべて false のときだけ従来どおり alreadyRead/hover で分岐する（非破壊）。
  */
 export function resolveChoiceVisual(
   theme: ChoiceTheme,
   alreadyRead: boolean,
   hover: boolean,
-  locked = false
+  locked = false,
+  cleared = false
 ): ChoiceVisual {
   if (locked) {
     return {
       fill: theme.fillLocked,
       border: theme.borderLocked,
       text: theme.textLockedColor,
+    }
+  }
+  if (cleared) {
+    return {
+      fill: theme.fillCleared,
+      border: theme.borderCleared,
+      text: theme.textClearedColor,
     }
   }
   if (alreadyRead) {
@@ -365,6 +415,12 @@ export class ChoiceOverlay extends Container {
    *                作って渡す）。`true` の位置のボタンは非活性の見た目になり、クリック/
    *                ホバーを一切受け付けない。未指定 or 短ければ、残りは false（ロックなし、
    *                非破壊）として扱う。
+   * @param cleared 消灯(クリア済み)視覚状態 (#594)。`options` と同じ長さ・同じ並びの真偽配列
+   *                （`NovelRenderer` が `option.cleared` と `gameState.checkFlag` から
+   *                作って渡す）。`true` の位置のボタンは専用の暗い配色になるが、`locked` と
+   *                異なりクリック/ホバーは通常どおり受け付ける（選択可能）。`locked` が
+   *                同時に `true` の位置ではロックの見た目が優先される。未指定 or 短ければ、
+   *                残りは false（消灯なし、非破壊）として扱う。
    */
   show(
     options: ChoiceOption[],
@@ -372,7 +428,8 @@ export class ChoiceOverlay extends Container {
     style?: string | null,
     readJumps?: ReadonlySet<string>,
     columns?: number | null,
-    locked?: readonly boolean[]
+    locked?: readonly boolean[],
+    cleared?: readonly boolean[]
   ): void {
     if (options.length === 0) return
     this.onSelect = onSelect
@@ -458,7 +515,9 @@ export class ChoiceOverlay extends Container {
       const alreadyRead = readJumps?.has(option.jump) ?? false
       // 条件付きロック (#591)。locked が未指定/短ければ false（ロックなし、非破壊）。
       const isLocked = locked?.[i] ?? false
-      const normalVisual = resolveChoiceVisual(theme, alreadyRead, false, isLocked)
+      // 消灯(クリア済み)視覚状態 (#594)。cleared が未指定/短ければ false（消灯なし、非破壊）。
+      const isCleared = cleared?.[i] ?? false
+      const normalVisual = resolveChoiceVisual(theme, alreadyRead, false, isLocked, isCleared)
       const textStyle = new TextStyle({
         fontFamily: theme.fontFamily,
         fontSize: theme.fontSize,
@@ -512,7 +571,7 @@ export class ChoiceOverlay extends Container {
         : startY + row * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
 
       buttonContainer.on('pointerover', () => {
-        const hoverVisual = resolveChoiceVisual(theme, alreadyRead, true, isLocked)
+        const hoverVisual = resolveChoiceVisual(theme, alreadyRead, true, isLocked, isCleared)
         bg.clear()
         this.drawButton(bg, theme, hoverVisual.fill, hoverVisual.border)
         buttonContainer.scale.set(HOVER_SCALE)

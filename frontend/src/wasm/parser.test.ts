@@ -880,6 +880,82 @@ describe('parseMarkdown + normalizeEvents: 選択肢の条件付きロック (#5
   })
 })
 
+// #594: 選択肢オプションの消灯(クリア済み)視覚状態（`- text → jump [消灯: flag]`）が
+// normalizeEvents（frontend/src/wasm/parser.ts）を生き残ることを実 parse 経路で縛る。
+// `[条件:]`（#591）と同じ spread ベースの normalizeEvents を通るため理屈上は列挙漏れの罠は
+// 起きにくいはずだが、wasm 再ビルド漏れ（`cargo test` だけでは本番 wasm に反映されない罠）を
+// 検知するため必ず parseMarkdown() を通す。
+describe('parseMarkdown + normalizeEvents: 選択肢の消灯(クリア済み)視覚状態 (#594)', () => {
+  const findChoice = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters
+      .flatMap((c) => c.scenes.flatMap((s) => s.events))
+      .find((e) => typeof e === 'object' && 'Choice' in e) as
+      | {
+          Choice: {
+            options: { text: string; jump: string; condition?: string; cleared?: string }[]
+          }
+        }
+      | undefined
+
+  it('[消灯: flag] 付きオプションは cleared を保持し、無指定オプションは undefined のまま', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: シーン',
+      '',
+      '[選択]',
+      '- 近視 → r01-01-terminal-light [消灯: route01_cleared]',
+      '- いつもの道 → r02-01-normal',
+      '[/選択]',
+      '',
+    ].join('\n')
+
+    const choice = findChoice(await parseMarkdown(markdown))
+    expect(choice?.Choice.options).toEqual([
+      { text: '近視', jump: 'r01-01-terminal-light', cleared: 'route01_cleared' },
+      { text: 'いつもの道', jump: 'r02-01-normal' },
+    ])
+  })
+
+  it('[条件:] と [消灯:] は同じ行に併記でき、順序に関わらず両方保持される', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: シーン',
+      '',
+      '[選択]',
+      '- 異邦 → r02-01-last-rites [条件: route01_cleared] [消灯: route02_cleared]',
+      '- 逆順 → r03-01 [消灯: route03_cleared] [条件: route02_cleared]',
+      '[/選択]',
+      '',
+    ].join('\n')
+
+    const choice = findChoice(await parseMarkdown(markdown))
+    expect(choice?.Choice.options).toEqual([
+      {
+        text: '異邦',
+        jump: 'r02-01-last-rites',
+        condition: 'route01_cleared',
+        cleared: 'route02_cleared',
+      },
+      {
+        text: '逆順',
+        jump: 'r03-01',
+        condition: 'route02_cleared',
+        cleared: 'route03_cleared',
+      },
+    ])
+  })
+})
+
 // #508 テスト観点整理フェーズで「要追加」と判定された異常系・境界値・round-trip の穴埋め。
 // TS 側（parseMarkdown 経由）の観点。Rust 側の parse_choice_columns 自体は
 // parser/tests/integration_test.rs（test_choice_grid_columns）で既にカバー済みなので、

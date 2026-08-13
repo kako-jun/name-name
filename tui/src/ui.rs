@@ -274,6 +274,12 @@ pub fn draw(
     // 同じ長さ・同じ並びを期待する（`main.rs` が `Playback::current_choice_locked()`
     // から作って渡す）。`choice` が `None` のときは無視される。
     choice_locked: &[bool],
+    // 各選択肢が消灯(クリア済み)状態か（`option.cleared` が真のフラグを指している、#594）。
+    // `choice_locked` と並行する独立配列——`choice` が `Some` のときだけ意味を持ち、
+    // `choice.0`/`choice_locked` と同じ長さ・同じ並びを期待する（`main.rs` が
+    // `Playback::current_choice_cleared()` から作って渡す）。ロックとは異なり選択は拒否
+    // しない（見た目だけが変わる）。ロックと消灯が同時に真のときはロックの見た目を優先する。
+    choice_cleared: &[bool],
     position: usize,
     total: usize,
     is_at_end: bool,
@@ -314,9 +320,15 @@ pub fn draw(
         draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
     }
     match choice {
-        Some((options, cursor, columns)) => {
-            draw_choice_list(frame, text_area, options, cursor, columns, choice_locked)
-        }
+        Some((options, cursor, columns)) => draw_choice_list(
+            frame,
+            text_area,
+            options,
+            cursor,
+            columns,
+            choice_locked,
+            choice_cleared,
+        ),
         None => draw_text_windows(
             frame,
             text_area,
@@ -369,13 +381,22 @@ const CHOICE_CURSOR_PADDING: &str = "  ";
 /// どうかに関わらず `Modifier::DIM` を重ねる — カーソルはロック中の選択肢の上にも普通に
 /// 乗れる（`select_current_choice` 側で確定だけを拒否する fail-soft 方針、既存の「無効な
 /// jump 先」時の挙動と同じ）ため、選択中の DIM 表示は「ここにいるが選べない」を示す。
-fn choice_cursor_prefix_and_style(is_selected: bool, locked: bool) -> (&'static str, Style) {
+///
+/// `cleared`（#594、`option.cleared` が真のフラグを指している）も同様に `Modifier::DIM` を
+/// 重ねる——TUI は色数が乏しいため、ロックと同じ「暗くする」表現を流用する。区別は
+/// [`CHOICE_LOCKED_SUFFIX`]/[`CHOICE_CLEARED_SUFFIX`] の記号差で付ける。`locked` と `cleared`
+/// が両方真のときは `locked` を優先する（通常運用では同時に真にならない想定だが防御的に）。
+fn choice_cursor_prefix_and_style(
+    is_selected: bool,
+    locked: bool,
+    cleared: bool,
+) -> (&'static str, Style) {
     let mut style = if is_selected {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
         Style::default()
     };
-    if locked {
+    if locked || cleared {
         style = style.add_modifier(Modifier::DIM);
     }
     if is_selected {
@@ -391,6 +412,12 @@ fn choice_cursor_prefix_and_style(is_selected: bool, locked: bool) -> (&'static 
 /// 同じにする。
 const CHOICE_LOCKED_SUFFIX: &str = " 🔒";
 
+/// 消灯(クリア済み)状態の選択肢テキストに付ける視覚的な目印（#594）。ロックの🔒とは
+/// 別の記号にする——ろうそくの火が消えた後の「暗闇」を表す新月（🌑）を採用する。
+/// ロックと違い選択は拒否しない（`select_current_choice` は `option.cleared` を見ない）ため、
+/// この記号は「選べないから見た目が変わる」のではなく「クリア済みで見た目が変わる」ことを示す。
+const CHOICE_CLEARED_SUFFIX: &str = " 🌑";
+
 fn draw_choice_list(
     frame: &mut Frame,
     area: Rect,
@@ -398,6 +425,7 @@ fn draw_choice_list(
     cursor: usize,
     columns: Option<u32>,
     locked: &[bool],
+    cleared: &[bool],
 ) {
     let columns = columns.unwrap_or(1).max(1);
     if columns <= 1 {
@@ -406,8 +434,16 @@ fn draw_choice_list(
             .enumerate()
             .map(|(i, option)| {
                 let is_locked = locked.get(i).copied().unwrap_or(false);
-                let (prefix, style) = choice_cursor_prefix_and_style(i == cursor, is_locked);
-                let suffix = if is_locked { CHOICE_LOCKED_SUFFIX } else { "" };
+                let is_cleared = cleared.get(i).copied().unwrap_or(false);
+                let (prefix, style) =
+                    choice_cursor_prefix_and_style(i == cursor, is_locked, is_cleared);
+                let suffix = if is_locked {
+                    CHOICE_LOCKED_SUFFIX
+                } else if is_cleared {
+                    CHOICE_CLEARED_SUFFIX
+                } else {
+                    ""
+                };
                 Line::styled(format!("{prefix}{}{suffix}", option.text), style)
             })
             .collect();
@@ -415,7 +451,15 @@ fn draw_choice_list(
         render_wrapped_paragraph(frame, area, paragraph);
         return;
     }
-    draw_choice_grid(frame, area, options, cursor, columns as usize, locked);
+    draw_choice_grid(
+        frame,
+        area,
+        options,
+        cursor,
+        columns as usize,
+        locked,
+        cleared,
+    );
 }
 
 /// 選択肢を `columns` 列のグリッドとして描画する（#508、`draw_choice_list` から
@@ -451,6 +495,7 @@ fn draw_choice_grid(
     cursor: usize,
     columns: usize,
     locked: &[bool],
+    cleared: &[bool],
 ) {
     let total = options.len();
     if total == 0 || columns == 0 {
@@ -476,8 +521,16 @@ fn draw_choice_grid(
                 continue;
             };
             let is_locked = locked.get(index).copied().unwrap_or(false);
-            let (prefix, style) = choice_cursor_prefix_and_style(index == cursor, is_locked);
-            let suffix = if is_locked { CHOICE_LOCKED_SUFFIX } else { "" };
+            let is_cleared = cleared.get(index).copied().unwrap_or(false);
+            let (prefix, style) =
+                choice_cursor_prefix_and_style(index == cursor, is_locked, is_cleared);
+            let suffix = if is_locked {
+                CHOICE_LOCKED_SUFFIX
+            } else if is_cleared {
+                CHOICE_CLEARED_SUFFIX
+            } else {
+                ""
+            };
             let paragraph = Paragraph::new(Line::styled(
                 format!("{prefix}{}{suffix}", option.text),
                 style,
@@ -1390,6 +1443,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    &[],
                     0,
                     0,
                     true,
@@ -1449,6 +1503,7 @@ mod tests {
                         None,
                         None,
                         &[],
+                        &[],
                         0,
                         0,
                         true,
@@ -1485,6 +1540,7 @@ mod tests {
                     &config,
                     None,
                     None,
+                    &[],
                     &[],
                     0,
                     0,
@@ -1540,6 +1596,7 @@ mod tests {
                     config,
                     line,
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -1626,6 +1683,7 @@ mod tests {
                     None,
                     Some((&options, 0, None)),
                     &[],
+                    &[],
                     1,
                     1,
                     false,
@@ -1680,6 +1738,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    &[],
                     0,
                     0,
                     true,
@@ -1728,6 +1787,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    &[],
                     0,
                     0,
                     true,
@@ -1753,6 +1813,7 @@ mod tests {
                     &config,
                     None,
                     None,
+                    &[],
                     &[],
                     0,
                     0,
@@ -1817,6 +1878,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    &[],
                     0,
                     0,
                     true,
@@ -1863,6 +1925,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    &[],
                     0,
                     0,
                     true,
@@ -1908,6 +1971,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    &[],
                     0,
                     0,
                     true,
@@ -1944,6 +2008,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    &[],
                     0,
                     0,
                     true,
@@ -1977,6 +2042,7 @@ mod tests {
                     &config,
                     None,
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -2012,6 +2078,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    &[],
                     1,
                     2,
                     false,
@@ -2045,6 +2112,7 @@ mod tests {
                     &config,
                     None,
                     None,
+                    &[],
                     &[],
                     0,
                     0,
@@ -2089,6 +2157,7 @@ mod tests {
                     Some(&line),
                     None,
                     &[],
+                    &[],
                     1,
                     1,
                     true,
@@ -2131,6 +2200,7 @@ mod tests {
                     &config,
                     Some(&line),
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -2182,6 +2252,7 @@ mod tests {
                     Some(&line),
                     None,
                     &[],
+                    &[],
                     1,
                     1,
                     true,
@@ -2220,6 +2291,7 @@ mod tests {
                     &done_config,
                     Some(&line),
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -2285,6 +2357,7 @@ mod tests {
                     Some(&line),
                     None,
                     &[],
+                    &[],
                     1,
                     1,
                     true,
@@ -2330,6 +2403,7 @@ mod tests {
                     &config,
                     Some(&line),
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -2401,6 +2475,7 @@ mod tests {
                     &config,
                     Some(&line),
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -3076,6 +3151,7 @@ mod tests {
                     line,
                     None,
                     &[],
+                    &[],
                     1,
                     1,
                     false,
@@ -3479,6 +3555,7 @@ mod tests {
                         &config,
                         Some(&line),
                         None,
+                        &[],
                         &[],
                         1,
                         1,
@@ -3896,6 +3973,7 @@ mod tests {
                     Some(&line),
                     None,
                     &[],
+                    &[],
                     1,
                     1,
                     false,
@@ -3947,6 +4025,7 @@ mod tests {
                     Some(&line),
                     None,
                     &[],
+                    &[],
                     1,
                     1,
                     false,
@@ -3982,6 +4061,7 @@ mod tests {
                     &done_config,
                     Some(&line),
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -4106,6 +4186,7 @@ mod tests {
                     &config,
                     Some(&line),
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -4297,6 +4378,7 @@ mod tests {
             text: text.to_string(),
             jump: jump.to_string(),
             condition: None,
+            cleared: None,
         }
     }
 
@@ -4322,6 +4404,7 @@ mod tests {
                     &config,
                     None,
                     Some((&options, 0, None)),
+                    &[],
                     &[],
                     1,
                     1,
@@ -4360,6 +4443,7 @@ mod tests {
                     &config,
                     None,
                     Some((&options, 1, None)),
+                    &[],
                     &[],
                     1,
                     1,
@@ -4418,6 +4502,7 @@ mod tests {
                     None,
                     Some((&options, 0, None)),
                     &[],
+                    &[],
                     1,
                     1,
                     false,
@@ -4454,6 +4539,7 @@ mod tests {
                         None,
                         Some((&options, 0, None)),
                         &[],
+                        &[],
                         1,
                         1,
                         false,
@@ -4487,6 +4573,7 @@ mod tests {
                     &config,
                     None,
                     Some((&options, 0, None)),
+                    &[],
                     &[],
                     1,
                     1,
@@ -4522,6 +4609,7 @@ mod tests {
                     &config,
                     None,
                     Some((&options, 0, None)),
+                    &[],
                     &[],
                     1,
                     1,
@@ -4586,6 +4674,7 @@ mod tests {
                     None,
                     Some((&options, 0, None)),
                     &[],
+                    &[],
                     1,
                     1,
                     false,
@@ -4626,7 +4715,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = f.area();
-                draw_choice_grid(f, area, &options, 0, 10, &[]);
+                draw_choice_grid(f, area, &options, 0, 10, &[], &[]);
             })
             .unwrap_or_else(|e| panic!("極端に狭い幅×多列(10)でpanicした: {e}"));
     }
@@ -4650,7 +4739,7 @@ mod tests {
         let start = std::time::Instant::now();
         terminal
             .draw(|f| {
-                draw_choice_grid(f, area, &options, 0, 2_000_000, &[]);
+                draw_choice_grid(f, area, &options, 0, 2_000_000, &[], &[]);
             })
             .unwrap_or_else(|e| panic!("巨大なcolumnsでpanicした: {e}"));
         let elapsed = start.elapsed();
@@ -4673,7 +4762,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
             .draw(|f| {
-                draw_choice_grid(f, area, &options, 0, 3, &[]);
+                draw_choice_grid(f, area, &options, 0, 3, &[], &[]);
             })
             .unwrap_or_else(|e| panic!("端数行のあるグリッドでpanicした: {e}"));
 
@@ -4711,7 +4800,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
             .draw(|f| {
-                draw_choice_grid(f, area, &options, cursor, 3, &[]);
+                draw_choice_grid(f, area, &options, cursor, 3, &[], &[]);
             })
             .unwrap();
 
@@ -4766,7 +4855,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
             .draw(|f| {
-                draw_choice_grid(f, area, &options, 0, 5, &locked);
+                draw_choice_grid(f, area, &options, 0, 5, &locked, &[]);
             })
             .unwrap();
 
@@ -4819,6 +4908,158 @@ mod tests {
         }
     }
 
+    // #594 テスト観点整理フェーズ 最優先1: grid×cleared整合性。#591 の
+    // draw_choice_grid_mixed_locked_pattern_maps_dim_and_lock_marker_to_correct_index_not_shifted
+    // を cleared 版に踏襲する。10択・columns=5・cleared を市松(交互)パターンで渡し、
+    // 各セルのDIMスタイル・🌑サフィックスがcleared配列と同じインデックスの選択肢に
+    // 対応することを、行×列から独立に再計算したセル領域内で直接確認する（frontendの
+    // ChoiceOverlay grid×cleared整合性テストと対をなす）。
+    #[test]
+    fn draw_choice_grid_mixed_cleared_pattern_maps_dim_and_moon_marker_to_correct_index_not_shifted(
+    ) {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&i.to_string(), "x"))
+            .collect();
+        // 偶数indexは消灯なし、奇数indexは消灯中（市松パターンで隣接セルとの取り違えも検出できる）。
+        let cleared: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
+        let area = Rect::new(0, 0, 60, 2);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 5, &[], &cleared);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // draw_choice_grid内部と同じLayout計算でrow/colのRectを独立に再現する
+        // （draw_choice_grid_ragged_last_row_leaves_missing_cells_blank_without_panic と同じ手法）。
+        let row_areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(1); 2])
+            .split(area);
+
+        for (i, &expected_cleared) in cleared.iter().enumerate() {
+            let row = i / 5;
+            let col = i % 5;
+            let col_areas = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![Constraint::Ratio(1, 5); 5])
+                .split(row_areas[row]);
+            let cell_area = col_areas[col];
+
+            let digit = i.to_string();
+            let (digit_x, digit_y) = (cell_area.x..cell_area.x + cell_area.width)
+                .zip(std::iter::repeat(cell_area.y))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!("index {i} (\"{digit}\") should render inside its own grid cell, buffer was: {buffer:?}")
+                });
+
+            let dim = buffer
+                .cell((digit_x, digit_y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::DIM);
+            assert_eq!(
+                dim, expected_cleared,
+                "index {i} の DIM 状態が cleared[{i}]={expected_cleared} と一致しない \
+                 （行×列マッピングとcleared配列のインデックスずれの検出用）"
+            );
+
+            // 🌑はそのセル領域内(同じ行、自セルのx範囲内)だけを見る。行全体を見ると
+            // 隣接セル(同じ行の別index)の🌑を誤って拾う恐れがあるため、独立に計算した
+            // cell_area の範囲だけに限定してスキャンする。
+            let has_moon_marker = (cell_area.x..cell_area.x + cell_area.width)
+                .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🌑");
+            assert_eq!(
+                has_moon_marker, expected_cleared,
+                "index {i} の🌑表示の有無が cleared[{i}]={expected_cleared} と一致しない \
+                 （自セル範囲内だけを見ても対応がずれていないかの確認）"
+            );
+        }
+    }
+
+    // #594 テスト観点整理フェーズ 最優先2: locked×cleared優先順位。locked と cleared が
+    // 同じindexで重なるケースを含む混在パターンで、🔒のみ表示され🌑が漏れないこと
+    // （choice_cursor_prefix_and_style/draw_choice_grid のsuffix決定ロジックが
+    // `if is_locked { LOCK } else if is_cleared { MOON }` の順で分岐している設計どおり）、
+    // DIMは(locked||cleared)の単純ORであり二重付与されないことをセル単位で確認する。
+    #[test]
+    fn draw_choice_grid_locked_and_cleared_mixed_pattern_locked_wins_marker_and_no_moon_leaks() {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&i.to_string(), "x"))
+            .collect();
+        // locked: index 0,3,6,9 / cleared: index 1,3,5,7,9。
+        // index 3・9は locked かつ cleared が同時に真の重複ケース——lockedが勝ち🔒のみ、
+        // 🌑は漏れないことを確認する。
+        let locked: Vec<bool> = (0..10).map(|i| i % 3 == 0).collect();
+        let cleared: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
+        let area = Rect::new(0, 0, 60, 2);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_grid(f, area, &options, 0, 5, &locked, &cleared);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let row_areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(1); 2])
+            .split(area);
+
+        for i in 0..10 {
+            let row = i / 5;
+            let col = i % 5;
+            let col_areas = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![Constraint::Ratio(1, 5); 5])
+                .split(row_areas[row]);
+            let cell_area = col_areas[col];
+
+            let is_locked = locked[i];
+            let is_cleared = cleared[i];
+            let expected_dim = is_locked || is_cleared;
+
+            let digit = i.to_string();
+            let (digit_x, digit_y) = (cell_area.x..cell_area.x + cell_area.width)
+                .zip(std::iter::repeat(cell_area.y))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!("index {i} (\"{digit}\") should render inside its own grid cell, buffer was: {buffer:?}")
+                });
+
+            let dim = buffer
+                .cell((digit_x, digit_y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::DIM);
+            assert_eq!(
+                dim, expected_dim,
+                "index {i} のDIM状態は (locked||cleared)={expected_dim} と一致するはず \
+                 （locked/clearedの二重付与ではなく単純ORのため、重複時も非重複時と同じDIM一段のはず）"
+            );
+
+            let has_lock_marker = (cell_area.x..cell_area.x + cell_area.width)
+                .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🔒");
+            let has_moon_marker = (cell_area.x..cell_area.x + cell_area.width)
+                .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🌑");
+
+            assert_eq!(
+                has_lock_marker, is_locked,
+                "index {i} の🔒表示の有無が locked[{i}]={is_locked} と一致しない"
+            );
+            // locked優先: locked=trueのセルは(clearedが同時に真でも)🌑を出さない。
+            // locked=falseのセルはclearedの値どおりに🌑が出る。
+            let expected_moon = is_cleared && !is_locked;
+            assert_eq!(
+                has_moon_marker, expected_moon,
+                "index {i} の🌑表示の有無が期待(cleared={is_cleared}・locked={is_locked}→\
+                 lockedが勝ちmoonは出ないはず)と一致しない（🌑漏れの検出）"
+            );
+        }
+    }
+
     #[test]
     fn draw_choice_list_dispatches_to_grid_only_when_columns_at_least_2() {
         // A/Bが同じ行(y)に描画されるかどうかで、グリッド委譲(columns>=2)か
@@ -4834,7 +5075,7 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
             terminal
                 .draw(|f| {
-                    draw_choice_list(f, area, &options, 0, columns, &[]);
+                    draw_choice_list(f, area, &options, 0, columns, &[], &[]);
                 })
                 .unwrap();
             let buffer = terminal.backend().buffer();
@@ -4903,7 +5144,7 @@ mod tests {
             let area = Rect::new(0, 0, area_width, 4);
             let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
             terminal
-                .draw(|f| draw_choice_list(f, area, &options, 0, None, &[]))
+                .draw(|f| draw_choice_list(f, area, &options, 0, None, &[], &[]))
                 .unwrap_or_else(|e| panic!("content_len={content_len}でpanicした: {e}"));
             let buffer = terminal.backend().buffer();
             let rows_with_content: Vec<u16> = (0..area.height)
@@ -4937,7 +5178,7 @@ mod tests {
         let area = Rect::new(0, 0, area_width, 4);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
-            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[]))
+            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[], &[]))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let count_x_in_row = |y: u16| -> usize {
@@ -4979,7 +5220,7 @@ mod tests {
         let options = vec![choice_option(&long_text, "j")];
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
-            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[]))
+            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[], &[]))
             .unwrap_or_else(|e| panic!("MIN_SAFE_TEXT_WRAP_WIDTH-1でpanicした: {e}"));
         let text = buffer_text(terminal.backend().buffer());
         assert_eq!(
@@ -5001,7 +5242,7 @@ mod tests {
         let options = vec![choice_option(&text, "j")];
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
-            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[]))
+            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[], &[]))
             .unwrap_or_else(|e| panic!("MIN_SAFE_TEXT_WRAP_WIDTHでpanicした: {e}"));
         let buffer = terminal.backend().buffer();
         let cursor_row = (0..area.height)
@@ -5029,7 +5270,7 @@ mod tests {
         let options = vec![choice_option("A", "x"), choice_option(&long_text, "y")];
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
-            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[]))
+            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[], &[]))
             .unwrap();
         let buffer = terminal.backend().buffer();
 
@@ -5067,7 +5308,7 @@ mod tests {
         let area = Rect::new(0, 0, 20, 4);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
-            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[]))
+            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[], &[]))
             .unwrap_or_else(|e| panic!("空選択肢テキストでpanicした: {e}"));
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -5108,7 +5349,7 @@ mod tests {
         let area = Rect::new(0, 0, 16, 12);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
-            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[]))
+            .draw(|f| draw_choice_list(f, area, &options, 0, None, &[], &[]))
             .unwrap_or_else(|e| panic!("半角+全角+絵文字混在テキストでpanicした: {e}"));
         let buffer = terminal.backend().buffer();
         let cursor_row = (0..area.height)
@@ -5632,6 +5873,7 @@ mod tests {
                     Some(&line),
                     None,
                     &[],
+                    &[],
                     1,
                     1,
                     false,
@@ -5672,6 +5914,7 @@ mod tests {
                     Some(&line),
                     None,
                     &[],
+                    &[],
                     1,
                     1,
                     false,
@@ -5708,6 +5951,7 @@ mod tests {
                     &config,
                     Some(&line),
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -5759,6 +6003,7 @@ mod tests {
                     &config,
                     Some(&line),
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -5814,6 +6059,7 @@ mod tests {
                     Some(&line),
                     None,
                     &[],
+                    &[],
                     1,
                     1,
                     true,
@@ -5844,6 +6090,7 @@ mod tests {
                     &config,
                     Some(&line),
                     None,
+                    &[],
                     &[],
                     1,
                     1,
@@ -5902,7 +6149,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = f.area();
-                draw_choice_list(f, area, &[], 0, None, &[]);
+                draw_choice_list(f, area, &[], 0, None, &[], &[]);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
