@@ -8489,6 +8489,28 @@ fn test_event_image_transition_default_propagates_into_condition_block() {
 }
 
 #[test]
+fn test_event_image_transition_default_propagates_into_nested_condition_blocks() {
+    // 観点B-6続き（nit 対応・#600 セルフレビュー）: `[条件:]` が2段ネストしていても
+    // parse_events_only の再帰呼び出しがそれぞれ同じ default_transition を引き継ぐため、
+    // 最内側の `[イベント絵:]`（遷移未指定）まで frontmatter デフォルトが伝播し続けることを確認する。
+    let body =
+        "[条件: route01_cleared]\n[条件: route02_cleared]\n[イベント絵: x.webp]\n[/条件]\n[/条件]";
+    let doc = parser::parse(&event_image_transition_default_doc(Some("pixelate"), body));
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Condition { events, .. } => match &events[0] {
+            Event::Condition { events, .. } => match &events[0] {
+                Event::EventImage { transition, .. } => {
+                    assert_eq!(*transition, EventImageTransition::Pixelate)
+                }
+                other => panic!("EventImage を期待したが {other:?}"),
+            },
+            other => panic!("内側 Condition を期待したが {other:?}"),
+        },
+        other => panic!("外側 Condition を期待したが {other:?}"),
+    }
+}
+
+#[test]
 fn test_event_image_transition_default_frontmatter_fade_omitted_on_emit() {
     // 観点B-7: Document.event_image_transition が既定 Fade のときは frontmatter に
     // event_image_transition: 行を出さない（後方互換の暗黙値、他の per-game 設定と同じ流儀）。

@@ -1077,6 +1077,43 @@ describe('NovelPlayer SeekBar 色 seekbar_color 配線 (#440)', () => {
   })
 })
 
+// #599: doc.event_image_transition → renderer.setEventImageTransitionDefault 配線。
+// setSeekBarColor（#440）/setDefaultBackgroundColor（#409）と対称の per-game 設定で、
+// init（初回イベント絵表示より前）と eventImageTransitionDefault 変化時の専用 useEffect の
+// 双方で呼ばれる。null/undefined は `?? null` で「renderer 側の既定 'Fade' 相当」に倒す（後方互換）。
+describe('NovelPlayer イベント絵遷移デフォルト event_image_transition 配線 (#599)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  it('eventImageTransitionDefault="Pixelate" を渡すと init 時に renderer.setEventImageTransitionDefault が呼ばれる', async () => {
+    render(<NovelPlayer events={[]} eventImageTransitionDefault="Pixelate" />)
+    await flushAsync()
+    expect(lastRenderer().setEventImageTransitionDefault).toHaveBeenCalledWith('Pixelate')
+  })
+
+  it('eventImageTransitionDefault 未指定なら null で呼ぶ（既定 Fade＝後方互換）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(lastRenderer().setEventImageTransitionDefault).toHaveBeenCalledWith(null)
+  })
+
+  it('eventImageTransitionDefault={null} でも null で呼ぶ（明示 null＝既定 Fade）', async () => {
+    render(<NovelPlayer events={[]} eventImageTransitionDefault={null} />)
+    await flushAsync()
+    expect(lastRenderer().setEventImageTransitionDefault).toHaveBeenCalledWith(null)
+  })
+
+  it('eventImageTransitionDefault を "Fade"→"Pixelate" に変更すると setEventImageTransitionDefault が再コールされる（useEffect 状態遷移）', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} eventImageTransitionDefault="Fade" />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.setEventImageTransitionDefault).toHaveBeenCalledWith('Fade')
+
+    rerender(<NovelPlayer events={[]} eventImageTransitionDefault="Pixelate" />)
+    await flushAsync()
+    expect(r.setEventImageTransitionDefault).toHaveBeenCalledWith('Pixelate')
+  })
+})
+
 // --- #442: splitLayout prop を renderer.setSplitLayout に転送する ---
 //
 // NovelPlayer は init 時（setEvents/setScenes より前）と、splitLayout 変化時の専用 useEffect の
