@@ -5,8 +5,10 @@ import { __internal, PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION } from './scriptConte
 // キャッシュ済み EventDocument（parseMarkdown/normalizeEvents を経ずに直接復元される経路）の
 // スキーマを上げ、旧ドキュメント（素の `--`/`…`）を別キーに孤立させて再パースを強制した。
 // parse 出力（正規形）が変わるたびに bump する: 1→2（Dialog/Narration/Choice/TitleShow/Label）→
-// 3（RpgEvent 内会話も正準化・#340 完全形）。この隔離機構（schema バージョンをキーに織り込む）を、
-// IndexedDB 非依存の純粋なキー導出関数（__internal.buildDocumentKey）だけで恒久的に固定する。
+// 3（RpgEvent 内会話も正準化・#340 完全形）→ 4（#607: エントリ以外のドキュメントへ
+// event_image_transition の実効値を parse 前に注入するようになった）。この隔離機構（schema
+// バージョンをキーに織り込む）を、IndexedDB 非依存の純粋なキー導出関数（__internal.buildDocumentKey）
+// だけで恒久的に固定する。
 describe('scriptContentCache ドキュメントキーの schema バージョン隔離 (#340)', () => {
   const keyParts = { projectName: 'demo', ref: 'main', path: 'chapter1.md', sha: 'abc123' }
 
@@ -18,12 +20,12 @@ describe('scriptContentCache ドキュメントキーの schema バージョン�
     expect(v1).not.toBe(current)
   })
 
-  // G1-b: 現行スキーマは 3 で、キーに `schema:3` を織り込む。旧 1 は別枠 `schema:1` に隔離される。
+  // G1-b: 現行スキーマは 4 で、キーに `schema:4` を織り込む。旧 1 は別枠 `schema:1` に隔離される。
   //       正準化拡張のたびに bump する機構そのものを固定する（据え置くと旧素値が復活する）。
-  it('G1: 現行ドキュメントキーは schema:3 を含み、旧 schema:1 とは別枠に隔離される', () => {
-    expect(PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION).toBe(3)
+  it('G1: 現行ドキュメントキーは schema:4 を含み、旧 schema:1 とは別枠に隔離される', () => {
+    expect(PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION).toBe(4)
     const current = __internal.buildDocumentKey(keyParts, PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION)
-    expect(current).toContain('schema:3')
+    expect(current).toContain('schema:4')
     expect(__internal.buildDocumentKey(keyParts, 1)).toContain('schema:1')
   })
 })

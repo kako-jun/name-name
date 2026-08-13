@@ -663,6 +663,162 @@ describe('PlayerScreen', () => {
     expect(getContentsMock).not.toHaveBeenCalled()
   })
 
+  describe('#607: event_image_transition のマルチファイル継承（サブMD自身が宣言していない場合、エントリの実効値をparse前に注入する）', () => {
+    const entryMarkdown =
+      '---\nengine: name-name\nevent_image_transition: "pixelate"\n---\n\n## entry-hub: hub\n'
+
+    it('サブMDが event_image_transition を宣言していなければ、エントリの実効値(pixelate)が注入されてparseされる', async () => {
+      listProjectsMock.mockResolvedValue([
+        { name: 'gymnasia-like', title: 'g', repo: 'kako-jun/gymnasia-like' },
+      ])
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'route07/01.md', sha: 's1', size: 1, title: null, hidden: false },
+      ])
+      const subMarkdown = '---\nengine: name-name\n---\n\n## far-scene: far\n'
+      getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+        path,
+        sha: 'x',
+        content: path === 'script.md' ? entryMarkdown : subMarkdown,
+      }))
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        const isEntry = md.includes('## entry-hub')
+        return {
+          engine: 'name-name',
+          // normalizeDocument（実運用）は常に具体値を埋めるので、モックでもそれに揃える。
+          event_image_transition: isEntry ? 'Pixelate' : 'Fade',
+          chapters: [
+            {
+              number: 1,
+              title: 'c',
+              hidden: false,
+              default_bgm: null,
+              scenes: isEntry
+                ? [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }]
+                : [{ id: 'far-scene', title: 'far', view: 'TopDown', events: [] }],
+            },
+          ],
+        }
+      })
+
+      render(
+        <PlayerScreen projectName="gymnasia-like" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+
+      await resolveMissingScene('far-scene')
+
+      const subCallArg = parseMarkdownMock.mock.calls
+        .map((c) => c[0] as string)
+        .find((md) => md.includes('## far-scene'))
+      expect(subCallArg).toBeDefined()
+      expect(subCallArg).toContain('event_image_transition: "pixelate"')
+    })
+
+    it('サブMDが自身で event_image_transition を宣言していれば、エントリの実効値で上書き注入しない', async () => {
+      listProjectsMock.mockResolvedValue([
+        { name: 'gymnasia-like', title: 'g', repo: 'kako-jun/gymnasia-like' },
+      ])
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'route07/01.md', sha: 's1', size: 1, title: null, hidden: false },
+      ])
+      const subMarkdown =
+        '---\nengine: name-name\nevent_image_transition: "fade"\n---\n\n## far-scene: far\n'
+      getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+        path,
+        sha: 'x',
+        content: path === 'script.md' ? entryMarkdown : subMarkdown,
+      }))
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        const isEntry = md.includes('## entry-hub')
+        return {
+          engine: 'name-name',
+          event_image_transition: isEntry ? 'Pixelate' : 'Fade',
+          chapters: [
+            {
+              number: 1,
+              title: 'c',
+              hidden: false,
+              default_bgm: null,
+              scenes: isEntry
+                ? [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }]
+                : [{ id: 'far-scene', title: 'far', view: 'TopDown', events: [] }],
+            },
+          ],
+        }
+      })
+
+      render(
+        <PlayerScreen projectName="gymnasia-like" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+
+      await resolveMissingScene('far-scene')
+
+      const subCallArg = parseMarkdownMock.mock.calls
+        .map((c) => c[0] as string)
+        .find((md) => md.includes('## far-scene'))
+      expect(subCallArg).toBeDefined()
+      // 元の宣言（fade）のまま。二重注入・上書きが起きていない。
+      expect(subCallArg).toBe(subMarkdown)
+      expect(subCallArg?.match(/event_image_transition/g)?.length).toBe(1)
+    })
+
+    it('エントリの実効値が既定(fade)のときはサブMDへ注入しない(no-op)', async () => {
+      listProjectsMock.mockResolvedValue([
+        { name: 'plain-project', title: 'p', repo: 'kako-jun/plain-project' },
+      ])
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'route07/01.md', sha: 's1', size: 1, title: null, hidden: false },
+      ])
+      const plainEntryMarkdown = '---\nengine: name-name\n---\n\n## entry-hub: hub\n'
+      const subMarkdown = '---\nengine: name-name\n---\n\n## far-scene: far\n'
+      getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+        path,
+        sha: 'x',
+        content: path === 'script.md' ? plainEntryMarkdown : subMarkdown,
+      }))
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        const isEntry = md.includes('## entry-hub')
+        return {
+          engine: 'name-name',
+          event_image_transition: 'Fade',
+          chapters: [
+            {
+              number: 1,
+              title: 'c',
+              hidden: false,
+              default_bgm: null,
+              scenes: isEntry
+                ? [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }]
+                : [{ id: 'far-scene', title: 'far', view: 'TopDown', events: [] }],
+            },
+          ],
+        }
+      })
+
+      render(
+        <PlayerScreen projectName="plain-project" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+
+      await resolveMissingScene('far-scene')
+
+      const subCallArg = parseMarkdownMock.mock.calls
+        .map((c) => c[0] as string)
+        .find((md) => md.includes('## far-scene'))
+      expect(subCallArg).toBe(subMarkdown)
+    })
+  })
+
   it('#284: listScripts が失敗したら単一 script.md 再生にフォールバックする', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     listProjectsMock.mockResolvedValue([

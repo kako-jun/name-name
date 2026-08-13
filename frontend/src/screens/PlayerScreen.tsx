@@ -217,6 +217,43 @@ function findConfinedSceneIds(
   return null
 }
 
+/** frontmatter ブロック（先頭 `---` 〜次の `---`）の中身だけを取り出す。無ければ null。 */
+function extractFrontmatterBody(markdown: string): string | null {
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+  return match ? match[1] : null
+}
+
+/**
+ * kako-jun/name-name#607: `event_image_transition`（#599/#600）はRustパーサが
+ * **そのドキュメント自身の**frontmatterだけを見て `遷移=` 未指定タグのデフォルトを解決し、
+ * 解決済みの具体値を `Event.EventImage.transition` に焼き込む（`Option` ではない）。
+ * Gymnasia のような「エントリ script.md にだけ frontmatter を書き、サブMD（route配下・interludes等）
+ * は frontmatter を持たず `[シーン:]` ジャンプで個別に parse される」構成では、サブMD側の
+ * `遷移=` 未指定タグが常にRust側のローカル既定 `Fade` に焼き込まれてしまい、エントリの
+ * `event_image_transition: "pixelate"` が一切伝播しない（他の per-game 設定 — `event_image_fade_ms`
+ * 等 — は directive 側のフィールドを `Option` のまま保持し、GUI/TUI側がエントリdoc由来の値を
+ * render時に `?? this.eventImageFadeMs` で適用するため、同じ問題を踏まない）。
+ *
+ * Rust/wasm を変更せずに直すため、**エントリ以外のドキュメントを parse する直前**に、
+ * そのドキューメント自身が `event_image_transition:` を宣言していない場合に限り、
+ * エントリの実効値（`inherited`）をfrontmatterへ注入してからパースする。ドキュメント自身が
+ * 明示的に宣言していれば尊重して何もしない（tag の明示指定が frontmatter デフォルトより
+ * 優先されるのと同じ「ローカル指定が勝つ」規約）。`inherited` が `'Fade'`（既定と同じ）なら
+ * 注入する意味が無いので no-op。frontmatter ブロックが無い（壊れた/空の）markdown も no-op
+ * （そのまま渡してパーサ側の既存のエラーハンドリングに委ねる）。
+ */
+function withInheritedEventImageTransition(
+  markdown: string,
+  inherited: EventDocument['event_image_transition'] | null | undefined
+): string {
+  if (inherited !== 'Pixelate') return markdown
+  const body = extractFrontmatterBody(markdown)
+  if (body === null) return markdown
+  if (/^event_image_transition\s*:/m.test(body)) return markdown // ローカル宣言を尊重
+  const insertAt = markdown.indexOf(body)
+  return `${markdown.slice(0, insertAt)}event_image_transition: "pixelate"\n${markdown.slice(insertAt)}`
+}
+
 function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   const viewportHeight = useVisualViewportHeight()
   // iframe 埋め込み表示か (#392)。マウント中は不変なので state 化せずレンダー時に一度評価する。
@@ -322,8 +359,21 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           }
         }
 
+        // kako-jun/name-name#607: エントリ以外のドキュメントは、自身が `event_image_transition:`
+        // を宣言していない限りエントリの実効値を継承させる（withInheritedEventImageTransition
+        // 参照）。エントリ自身（path === entryPathRef.current）は対象外
+        // （自分自身の frontmatter が既にその値そのものなので注入不要、かつロード中で
+        // まだ loadedDocsRef に無い可能性がある）。
+        const inheritedTransition =
+          path === entryPathRef.current
+            ? null
+            : (loadedDocsRef.current.get(entryPathRef.current ?? '')?.event_image_transition ??
+              null)
+
         try {
-          const parsed = await parseMarkdown(markdown)
+          const parsed = await parseMarkdown(
+            withInheritedEventImageTransition(markdown, inheritedTransition)
+          )
           loadedDocsRef.current.set(path, parsed)
           if (cacheKey) void putCachedParsedScriptDocument(cacheKey, parsed)
           return parsed
@@ -345,7 +395,9 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
               freshMarkdown
             )
           }
-          const parsed = await parseMarkdown(freshMarkdown)
+          const parsed = await parseMarkdown(
+            withInheritedEventImageTransition(freshMarkdown, inheritedTransition)
+          )
           loadedDocsRef.current.set(path, parsed)
           if (cacheKey) void putCachedParsedScriptDocument(cacheKey, parsed)
           return parsed
