@@ -11,7 +11,11 @@ const PATH_INDEX = 'byPathKey'
 // schema を上げて旧キャッシュを別キーに孤立させ再パースを強制する。
 // 履歴: 1→2 = Dialog/Narration/Choice/TitleShow/Label の正準化導入。
 //       2→3 = RpgEvent（[イベント]）内会話（EventCommand の Dialog/Narration）の正準化を追加（#340 完全形）。
-export const PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION = 3
+//       3→4 = kako-jun/name-name#607: エントリ以外のドキュメントへ `event_image_transition`
+//       の実効値を parse 前に注入するようになった（PlayerScreen.withInheritedEventImageTransition）。
+//       旧キャッシュはこの注入が無いまま parse された（サブMDの `遷移=` 未指定タグが常に `Fade` の
+//       ままの）誤った EventDocument を保持しているため孤立させる。
+export const PARSED_SCRIPT_DOCUMENT_SCHEMA_VERSION = 4
 
 export interface ScriptContentCacheKey {
   projectName: string
