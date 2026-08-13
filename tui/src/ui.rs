@@ -45,8 +45,8 @@ use crate::config::{
 };
 use crate::image_fade::ImageFadeState;
 use crate::image_render::{
-    clamp_scroll_offset, compute_full_width_rows, rgba_to_quadrant_grid_window, DecodedImage,
-    ImageCache, RenderedImage,
+    clamp_scroll_offset, compute_full_width_rows, rgba_to_quadrant_grid_native,
+    rgba_to_quadrant_grid_window, DecodedImage, ImageCache, RenderedImage,
 };
 use crate::playback::DisplayLine;
 use crate::reveal;
@@ -60,12 +60,13 @@ use crate::reveal;
 const IMAGE_TEXT_GAP_WIDTH: u16 = 2;
 
 /// 固定キャンバスの本編領域（画像ペイン・テキストペイン共通の高さ、ステータス行を除く）の
-/// セル数（#494）。この値そのものに強い根拠は無く（`IMAGE_TEXT_GAP_WIDTH`と同種の実機調整
-/// 前提の初期値）、[`REQUIRED_IMAGE_COLS`] の導出元になる点が重要 — 詳細は下記を参照。
-const REQUIRED_MAIN_CONTENT_ROWS: u16 = 20;
+/// セル数（#588でも32のまま踏襲。#494当時の20から#588で32へ拡大した — kako-jun指定の
+/// `130列×33行`固定キャンバス／画像ペイン`64列×32行`の直接の根拠値）、
+/// [`REQUIRED_IMAGE_COLS`] の導出元になる点が重要 — 詳細は下記を参照。
+const REQUIRED_MAIN_CONTENT_ROWS: u16 = 32;
 
 /// 画像ペインに必要な幅（セル数）。正方形画像（gymnasiaの128x128マスター想定）を
-/// クロップ無しで表示するための式（#494）。
+/// クロップ無しで表示するための式（#494、#588でも維持）。
 ///
 /// quadrant block の2x2サブピクセルグリッドは `sub_w = image_cols*2`,
 /// `sub_h = image_rows*2` であり、`image_render::rgba_to_quadrant_grid` は
@@ -81,20 +82,25 @@ const REQUIRED_MAIN_CONTENT_ROWS: u16 = 20;
 /// rows は両辺で約分されて消えるため自由に選べる。将来 `TERMINAL_CELL_ASPECT_RATIO` を
 /// 調整する場合は、この `*2` の式も合わせて見直す必要がある）。実際にクロップ0になることは
 /// `tests::fixed_canvas_square_image_crops_nothing_at_required_image_pane_size` で検算する。
+/// `REQUIRED_MAIN_CONTENT_ROWS = 32` のとき `64`（Issue #588 が指定する画像ペイン幅と一致）。
 const REQUIRED_IMAGE_COLS: u16 = REQUIRED_MAIN_CONTENT_ROWS * 2;
 
-/// テキストペインに必要な幅（セル数、#494）。日本語の折返しに十分な幅であることに加え、
-/// `REQUIRED_IMAGE_COLS + 2` という一見不思議な値には理由がある: `split_columns` は
-/// `Constraint::Percentage(50)/Length(GAP)/Percentage(50)` を使っており、ratatui の
-/// cassowary ソルバーは `Length` を優先的に満たした残り幅を2分割する際、幅が十分広い
-/// steady state では前者（画像側）を「半分-1」・後者（テキスト側）を「半分+1」に割り当てる
-/// （`split_columns` のdoc コメント、`split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state`
-/// で実測済みの挙動）。画像ペインの実際のレンダリング幅を[`REQUIRED_IMAGE_COLS`]ちょうどに
-/// するには、`(REQUIRED_IMAGE_COLS + REQUIRED_TEXT_COLS)/2 - 1 == REQUIRED_IMAGE_COLS`を
-/// 満たす必要があり、これを解くと `REQUIRED_TEXT_COLS = REQUIRED_IMAGE_COLS + 2` になる
-/// （実際に画像ペイン幅が過不足なく一致することは
-/// `tests::fixed_canvas_image_pane_width_matches_required_image_cols` で検算する）。
-const REQUIRED_TEXT_COLS: u16 = REQUIRED_IMAGE_COLS + 2;
+/// テキストペインに必要な幅（セル数）。#588で画像:テキストの横比率を厳密に`1:1`にする要求が
+/// 明文化されたため、[`REQUIRED_IMAGE_COLS`] とそのまま同じ値を使う。
+///
+/// #494当時は `REQUIRED_IMAGE_COLS + 2` という補正値だった —
+/// `split_columns` が `Constraint::Percentage(50)/Length(GAP)/Percentage(50)` を使っており、
+/// ratatui のレイアウトソルバーは3つの制約が同時に指定された領域の幅を超過するとき
+/// （`Percentage(50)`2つの理想値の合計 + `Length(GAP)` は area 幅ちょうどより
+/// `IMAGE_TEXT_GAP_WIDTH` だけ超過する）、先に宣言された制約（画像側）だけを不足分だけ
+/// 縮めて帳尻を合わせる実装だったため、幅が十分広い steady state では画像側が恒常的に
+/// テキスト側より2セル少なくなる非対称性があった。この非対称性は総幅にかかわらず常に
+/// ちょうど2セルの固定オフセットであり（`REQUIRED_TOTAL_WIDTH` をいくつに選んでも解消しない）、
+/// #588 の「画像:テキスト=1:1」要求を満たせないため、`split_columns` 自体を
+/// `Constraint::Length` ベースの絶対値指定へ変更した（#588セルフレビュー相当の判断）。
+/// 固定キャンバス（`draw`が渡す領域の幅は常にちょうど[`REQUIRED_TOTAL_WIDTH`]）を前提にする限り
+/// `Length` 3つの合計は area 幅と過不足なく一致するため、丸めの非対称性そのものが発生しない。
+const REQUIRED_TEXT_COLS: u16 = REQUIRED_IMAGE_COLS;
 
 /// 固定キャンバス全体の必要幅（画像 + スペーサー + テキスト、#494）。`pub(crate)`:
 /// `main.rs` の統合テストが `TestBackend` のサイズをハードコードせずここから導出するために
@@ -173,24 +179,37 @@ fn draw_too_small_message(frame: &mut Frame, actual: Rect) {
 }
 
 /// 画面上段を「画像プレースホルダ」「スペーサー」「テキスト」の横3分割にする純粋関数
-/// （#488）。`Layout::split` の呼び出しをここへ切り出すことで、テスト側は実際のレイアウト
-/// 計算結果をそのまま期待値として使える（手計算した固定値をテストに直書きしない）。
-/// スペーサー領域（戻り値の2番目）には何も描画しない — ratatui は `Terminal::draw` のたびに
-/// バッファを既定セル（空白）へリセットするため、明示的に描くコードが無くてもそこは単なる
-/// 空白の余白として見える。画像/テキストは基本 `Constraint::Percentage(50)` ずつだが、
-/// スペーサーの `Constraint::Length` を優先的に満たす ratatui のレイアウト解決の都合上、
-/// 両者は均等に縮む/伸びるわけではない。どちらが有利になるかは単一方向のバイアスではなく
-/// 端末幅（W）によって非単調に変わる（W=3〜4のような狭い幅域では画像側が、W=7以降の
-/// 実用的な幅域ではテキスト側が恒常的に有利になり、その差は最大2セルにとどまる —
-/// steady state）。#480 が「対称性を要求しない分割」としていたのと同じ理由でここでも
-/// 問題ない。具体的な境界・数値は下記テスト群を参照。
+/// （#488、#588で絶対値指定へ変更）。`Layout::split` の呼び出しをここへ切り出すことで、
+/// テスト側は実際のレイアウト計算結果をそのまま期待値として使える（手計算した固定値を
+/// テストに直書きしない）。スペーサー領域（戻り値の2番目）には何も描画しない — ratatui は
+/// `Terminal::draw` のたびにバッファを既定セル（空白）へリセットするため、明示的に描く
+/// コードが無くてもそこは単なる空白の余白として見える。
+///
+/// 画像/テキストは [`REQUIRED_IMAGE_COLS`]/[`REQUIRED_TEXT_COLS`]（#588時点でどちらも同値）を
+/// `Constraint::Length` で直接指定する — #494〜#587では `Constraint::Percentage(50)` ずつ
+/// だったが、ratatui のレイアウトソルバーは3制約の理想値合計が area 幅を超過するとき
+/// 先に宣言された制約（画像側）だけを不足分だけ縮める実装で、幅が十分広い steady state では
+/// テキスト側が画像側より常に2セル多くなる非対称性があった（[`REQUIRED_TEXT_COLS`] の
+/// doc コメント参照）。#588 が「画像:テキスト=1:1」を明示的に要求したため、`draw` が渡す
+/// 領域の幅は常にちょうど[`REQUIRED_TOTAL_WIDTH`]（`Length`3つの合計と過不足なく一致）という
+/// 固定キャンバスの前提に乗り、絶対値指定へ切り替えて非対称性そのものを無くした。
+/// `draw` から渡ってくる幅がちょうど[`REQUIRED_TOTAL_WIDTH`]のとき、画像/テキストは
+/// 常にそれぞれ[`REQUIRED_IMAGE_COLS`]/[`REQUIRED_TEXT_COLS`]ちょうどになる
+/// （`tests::fixed_canvas_image_pane_width_matches_required_image_cols` で検算）。
+///
+/// `area` の幅が3つの `Length` 合計に満たない場合（`draw` 経由では
+/// [`fits_required_size`] のガードにより到達しないが、この関数自体は防御的に panic しない）、
+/// ratatui のソルバーは不足分を各制約から比例的に切り詰める。この場合の具体的な配分は
+/// `split_columns_areas_are_contiguous_and_never_exceed_input_width` が個別の幅ではなく
+/// 「隙間なく連続する」「入力幅を超えない」という構造的な不変条件だけを検証する
+/// （個別の丸め値そのものへは依存しない）。
 fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(50),
+            Constraint::Length(REQUIRED_IMAGE_COLS),
             Constraint::Length(IMAGE_TEXT_GAP_WIDTH),
-            Constraint::Percentage(50),
+            Constraint::Length(REQUIRED_TEXT_COLS),
         ])
         .split(area);
     (columns[0], columns[1], columns[2])
@@ -524,17 +543,24 @@ fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
     frame.render_widget(paragraph, area);
 }
 
-/// スプラッシュ画面: `config.splash.logo_image` が設定されていればフルキャンバス画像表示
-/// （[`draw_fullscreen_image`]、#530）、そうでなければ従来どおり `config.splash.lines` の
-/// ロゴ行を画面中央に表示するテキストモード（[`draw_splash_text`]）を描く。画像のロードに
-/// 失敗した場合（`ImageCache::get_or_load` が `None`）もテキストモードへフォールバックする
-/// — `splash.lines` が空でも既存のテキストモードどおり「空行 + 開始ヒント」だけは描く。
-/// ロゴの内容（ASCII アート本体・画像ファイル）はゲームごとに異なるため、このエンジン側は
-/// 表示方法だけを担い、内容そのものは持たない（`Config::splash` 参照）。
+/// スプラッシュ画面: `config.splash.logo_image` が設定されていればロゴ画像を表示し、
+/// そうでなければ従来どおり `config.splash.lines` のロゴ行を画面中央に表示するテキストモード
+/// （[`draw_splash_text`]）を描く。画像のロードに失敗した場合（`ImageCache::get_or_load` が
+/// `None`）もテキストモードへフォールバックする — `splash.lines` が空でも既存のテキスト
+/// モードどおり「空行 + 開始ヒント」だけは描く。ロゴの内容（ASCII アート本体・画像ファイル）
+/// はゲームごとに異なるため、このエンジン側は表示方法だけを担い、内容そのものは持たない
+/// （`Config::splash` 参照）。
 ///
-/// `scroll_offset` はフルキャンバス画像表示モードでのみ意味を持つ（呼び出し側 `main.rs` の
-/// `show_splash` が `Action::MoveUp`/`Action::MoveDown` から配線する）。テキストモードでは
-/// 無視される。
+/// ロゴ画像モードは2通りに分岐する（#588）: [`logo_fits_natively`] が `true`（Issue #588が
+/// 前提とする214x46pxロゴを含む、固定キャンバスの本編領域に収まるサイズ）のときは
+/// [`draw_splash_logo_native`] で補間・拡大縮小・クロップ無しのネイティブ解像度表示を行う。
+/// それより大きい画像（想定外の巨大ロゴ）では、既存の [`draw_fullscreen_image`]（#530、
+/// contain-fit + スクロール）へフォールバックする — ネイティブ表示だとキャンバスから
+/// はみ出て一部が見えなくなるため、大きい画像には縮小表示の方が実用的という判断。
+///
+/// `scroll_offset` はフルキャンバス画像表示モード（フォールバック時）でのみ意味を持つ
+/// （呼び出し側 `main.rs` の `show_splash` が `Action::MoveUp`/`Action::MoveDown` から配線する）。
+/// ネイティブ表示モード・テキストモードでは無視される。
 pub fn draw_splash(
     frame: &mut Frame,
     config: &Config,
@@ -543,16 +569,75 @@ pub fn draw_splash(
 ) {
     if let Some(path) = config.resolve_splash_logo_path() {
         if let Some(decoded) = image_cache.get_or_load(&path) {
-            draw_fullscreen_image(frame, &decoded, scroll_offset);
+            if logo_fits_natively(decoded.width, decoded.height) {
+                let actual = frame.area();
+                if !fits_required_size(actual) {
+                    draw_too_small_message(frame, actual);
+                    return;
+                }
+                let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
+                let canvas = compute_centered_canvas(actual, required);
+                draw_splash_logo_native(frame, canvas, &decoded);
+            } else {
+                draw_fullscreen_image(frame, &decoded, scroll_offset);
+            }
             return;
         }
     }
     draw_splash_text(frame, config);
 }
 
+/// スプラッシュロゴをネイティブ解像度（補間・拡大縮小なし）で固定キャンバス内に上下左右
+/// 中央表示できるかどうかを判定する純粋関数（#588）。ロゴのセル換算ネイティブサイズ
+/// （幅=`ceil(px幅/2)`、高さ=`ceil(px高さ/2)`、[`image_render::rgba_to_quadrant_grid_native`]
+/// と同じ式）が、固定キャンバスの本編領域（[`REQUIRED_TOTAL_WIDTH`] x
+/// [`REQUIRED_MAIN_CONTENT_ROWS`]、最下段の開始ヒント行を除く）に収まる場合だけ `true` を
+/// 返す。収まらない大きな画像（Issue #588が前提とする214x46pxロゴでは発生しない想定外
+/// ケース）では `false` を返し、呼び出し側（[`draw_splash`]）が既存の
+/// [`draw_fullscreen_image`]（全幅contain-fit + スクロール）へフォールバックする。
+fn logo_fits_natively(image_w: u32, image_h: u32) -> bool {
+    let native_cols = image_w.div_ceil(2);
+    let native_rows = image_h.div_ceil(2);
+    native_cols <= u32::from(REQUIRED_TOTAL_WIDTH)
+        && native_rows <= u32::from(REQUIRED_MAIN_CONTENT_ROWS)
+}
+
+/// スプラッシュロゴをネイティブ解像度のまま固定キャンバス内で上下左右中央に表示する
+/// （#588、[`logo_fits_natively`] が `true` の場合のみ [`draw_splash`] から呼ばれる）。
+/// [`image_render::rgba_to_quadrant_grid_native`] で拡大縮小・クロップ無しのグリッドを作り、
+/// [`compute_centered_canvas`] を再利用してそのグリッドを画像領域（最下段の開始ヒント行を
+/// 除く）内で中央配置する — `compute_centered_canvas` は本来「端末内で固定キャンバスを
+/// 中央配置する」ために作られた関数だが、「ある矩形の中に別の矩形を中央配置する」という
+/// 責務自体は完全に汎用的なため、ネストして再利用できる。最下段には
+/// [`draw_fullscreen_image`] と同じ開始ヒントを表示し、見た目の一貫性を保つ。
+fn draw_splash_logo_native(frame: &mut Frame, canvas: Rect, image: &DecodedImage) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(canvas);
+    let image_area = rows[0];
+    let hint_area = rows[1];
+
+    let grid = rgba_to_quadrant_grid_native(&image.rgba, image.width, image.height);
+    let logo_rect = Rect::new(0, 0, grid.cols, grid.rows);
+    let placed = compute_centered_canvas(image_area, logo_rect);
+    draw_image_grid(frame, placed, &grid);
+
+    let hint_paragraph = Paragraph::new("Enter / Space で開始")
+        .alignment(Alignment::Center)
+        .style(Style::default().add_modifier(Modifier::DIM));
+    frame.render_widget(hint_paragraph, hint_area);
+}
+
 /// スプラッシュ画像モードの最大スクロール量（最下端オフセット）を返す。
 /// `show_splash` が target_scroll_offset 自体を入力時にクランプするための補助関数。
 /// ロゴ画像が無い／読めない場合はテキストモード相当として 0 を返す。
+///
+/// [`logo_fits_natively`] が `true` の場合（[`draw_splash`] が [`draw_splash_logo_native`] で
+/// スクロールを無視するネイティブ表示を行う場合）も 0 を返す（#588）。この分岐が無いと、
+/// native表示中でも下記 `compute_full_width_rows`（全幅contain-fit前提の式）による架空の
+/// 最大値が計算され、`main.rs::show_splash` の `Action::MoveUp`/`MoveDown` が画面に何も
+/// 影響しない `target_scroll_offset` の内部状態だけを変化させ続けてしまう。
 pub(crate) fn splash_max_scroll_offset(config: &Config, image_cache: &mut ImageCache) -> u16 {
     let Some(path) = config.resolve_splash_logo_path() else {
         return 0;
@@ -560,23 +645,26 @@ pub(crate) fn splash_max_scroll_offset(config: &Config, image_cache: &mut ImageC
     let Some(decoded) = image_cache.get_or_load(&path) else {
         return 0;
     };
+    if logo_fits_natively(decoded.width, decoded.height) {
+        return 0;
+    }
     let total_rows = compute_full_width_rows(decoded.width, decoded.height, REQUIRED_TOTAL_WIDTH);
     clamp_scroll_offset(u16::MAX, total_rows, REQUIRED_MAIN_CONTENT_ROWS)
 }
 
-/// フルキャンバス画像表示（#530）。テキストウィンドウ・スプラッシュの罫線を畳み、画像を
-/// アスペクト比を保ったままキャンバス全幅（[`REQUIRED_TOTAL_WIDTH`]）へ contain-fit する
-/// （クロップは行わない）。必要総行数は `image_render::compute_full_width_rows` で
-/// **全幅前提の式から直接**求め、高さが表示可能行数を超える場合は追加の縮小をせず、
-/// `scroll_offset`（呼び出し側が `Action::MoveUp`/`Action::MoveDown` から配線する、
-/// `main.rs::show_splash` 参照）に応じて縦方向の可視範囲だけを
-/// [`rgba_to_quadrant_grid_window`] で生成して描画する（スクロール）。
+/// フルキャンバス画像表示（#530。#588以降は [`logo_fits_natively`] が `false` を返す
+/// 大きな画像専用のフォールバック経路 — [`draw_splash`] 参照）。テキストウィンドウ・
+/// スプラッシュの罫線を畳み、画像をアスペクト比を保ったままキャンバス全幅
+/// （[`REQUIRED_TOTAL_WIDTH`]）へ contain-fit する（クロップは行わない）。必要総行数は
+/// `image_render::compute_full_width_rows` で**全幅前提の式から直接**求め、高さが表示可能
+/// 行数を超える場合は追加の縮小をせず、`scroll_offset`（呼び出し側が
+/// `Action::MoveUp`/`Action::MoveDown` から配線する、`main.rs::show_splash` 参照）に応じて
+/// 縦方向の可視範囲だけを [`rgba_to_quadrant_grid_window`] で生成して描画する（スクロール）。
 ///
 /// 端末サイズが [`fits_required_size`] を満たさない場合は [`draw_too_small_message`] へ
-/// フォールバックする — 固定サイズのキャンバス幅（84列）を前提に contain 計算するため、
-/// 通常のゲームUI描画（[`draw`]）と同じ最小サイズ制約を課す。GUI版 dual-window と同じく
-/// 罫線・タイトルは描かない（将来イベント絵演出からも呼べる汎用の表示として、装飾を
-/// 持たせない）。
+/// フォールバックする — 固定サイズのキャンバス幅（[`REQUIRED_TOTAL_WIDTH`]）を前提に
+/// contain 計算するため、通常のゲームUI描画（[`draw`]）と同じ最小サイズ制約を課す。
+/// GUI版 dual-window と同じく罫線・タイトルは描かない。
 fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset: u16) {
     let actual = frame.area();
     if !fits_required_size(actual) {
@@ -2671,7 +2759,14 @@ mod tests {
     }
 
     #[test]
-    fn draw_splash_valid_logo_image_renders_fullscreen_image_mode_not_text() {
+    fn draw_splash_valid_logo_image_does_not_render_text_mode_fallback() {
+        // #588: 4x1というごく小さい画像は logo_fits_natively により
+        // draw_splash_logo_native 経由になる（かつてはこのサイズでも常に
+        // draw_fullscreen_image を通っていたが、#588でネイティブ表示が分岐した）。
+        // ここでは「画像モードが選ばれ、テキストモードのフォールバックが一切描画されない」
+        // という、両モードに共通する契約だけを確認する（各モード固有の描画内容は
+        // 下記 `draw_splash_small_logo_image_uses_native_mode_and_does_not_fill_full_canvas_width`/
+        // `draw_splash_oversized_logo_image_falls_back_to_fullscreen_scaled_mode` が担当する）。
         let fixture_path =
             crate::image_render::write_test_webp_fixture(&solid_rgba((200, 80, 80), 4, 1), 4, 1);
         let mut config = splash_config_with_logo_image(&fixture_path);
@@ -2689,9 +2784,241 @@ mod tests {
         );
         assert!(
             !text.contains("テストゲーム"),
-            "フルキャンバス画像表示はテキストモードの罫線タイトルを描かないはず, buffer was: {text}"
+            "画像表示モードはテキストモードの罫線タイトルを描かないはず, buffer was: {text}"
         );
         assert!(text.contains("Enter / Space で開始"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn logo_fits_natively_214x46_reference_logo_size_fits() {
+        // Issue #588が前提とする横長ロゴ214x46px（cols=107, rows=23）は、固定キャンバスの
+        // 本編領域（REQUIRED_TOTAL_WIDTH x REQUIRED_MAIN_CONTENT_ROWS = 130x32）に
+        // 収まるはず。
+        assert!(logo_fits_natively(214, 46));
+    }
+
+    #[test]
+    fn logo_fits_natively_oversized_image_does_not_fit() {
+        // ネイティブ表示だとキャンバス本編領域をはみ出す大きさの画像は false になり、
+        // draw_splash がスケール表示側（draw_fullscreen_image）へフォールバックする。
+        let oversized_w = u32::from(REQUIRED_TOTAL_WIDTH) * 2 + 1;
+        assert!(!logo_fits_natively(oversized_w, 46));
+        let oversized_h = u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2 + 1;
+        assert!(!logo_fits_natively(214, oversized_h));
+    }
+
+    #[test]
+    fn logo_fits_natively_native_cols_exactly_at_width_boundary_is_true() {
+        // 境界値の欠落補強（#588）: native_cols（image_w.div_ceil(2)）が
+        // REQUIRED_TOTAL_WIDTH ちょうどになる幅（=REQUIRED_TOTAL_WIDTH*2px）は、
+        // 「収まらない」側ではなく「収まる」側の境界（<=判定）に含まれるはず。
+        let image_w = u32::from(REQUIRED_TOTAL_WIDTH) * 2;
+        assert!(logo_fits_natively(image_w, 2));
+    }
+
+    #[test]
+    fn logo_fits_natively_native_rows_exactly_at_height_boundary_is_true() {
+        // 上の cols 版と対になる rows 版: native_rows（image_h.div_ceil(2)）が
+        // REQUIRED_MAIN_CONTENT_ROWS ちょうどになる高さ（=REQUIRED_MAIN_CONTENT_ROWS*2px）も
+        // 「収まる」側の境界に含まれるはず。
+        let image_h = u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2;
+        assert!(logo_fits_natively(2, image_h));
+    }
+
+    #[test]
+    fn draw_splash_small_logo_image_uses_native_mode_and_does_not_fill_full_canvas_width() {
+        // #588の核心の1つ: ネイティブ表示は画面全幅へ引き伸ばさない。8x2という小さい単色
+        // 画像（cols=4, rows=1）をCANVAS_W(130)幅のキャンバスに表示すると、キャンバス
+        // 左端(x=0)は中央配置により空白のままのはず — 引き伸ばしていたら全幅を覆ってしまう。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((255, 0, 0), 8, 2), 8, 2);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let top_left_bg = buffer.cell((0, 0)).unwrap().bg;
+        assert_ne!(
+            top_left_bg,
+            Color::Rgb(255, 0, 0),
+            "ネイティブ表示は中央配置のはずで、キャンバス左端(0,0)まで赤で埋まってはいけない"
+        );
+    }
+
+    #[test]
+    fn draw_splash_oversized_logo_image_falls_back_to_fullscreen_scaled_mode() {
+        // #588: 本編領域に収まらない大きな画像（ここでは縦長で高さが本編行数を超える画像）は
+        // draw_fullscreen_image（全幅contain-fit）側へフォールバックし、そちら固有の
+        // スクロールヒントが表示されるはず。
+        let oversized_h = (u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2 + 10) * 2; // rows超過を確実にする
+        let fixture_path = crate::image_render::write_test_webp_fixture(
+            &solid_rgba((255, 0, 0), 4, oversized_h),
+            4,
+            oversized_h,
+        );
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("↑/↓ でスクロール"),
+            "本編領域に収まらない画像はスケール表示にフォールバックし、スクロールヒントが出るはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_splash_native_mode_logo_below_required_size_shows_too_small_message_not_native_draw() {
+        // #588の自己申告ギャップの本丸: draw_splash_logo_native 内でガードしている
+        // fits_required_size の分岐自体がこれまで無検証だった。native表示に収まる
+        // ロゴ（214x46px、logo_fits_natively の参照サイズ）を設定した状態で、幅だけ
+        // 1セル不足する端末（REQUIRED_TOTAL_WIDTH-1 x REQUIRED_TOTAL_HEIGHT）に
+        // draw_splash を呼ぶと、(a) draw_too_small_message の文言が出て、
+        // (b) ネイティブ描画側の開始ヒントは出ず、(c) ロゴ色のセルが一切描画されない
+        // （native描画そのものに到達していない）ことを確認する。
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 214, 46), 214, 46);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH - 1,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+        assert!(
+            !text.contains("Enter / Space で開始"),
+            "サイズ不足時はネイティブ描画側の開始ヒントを出してはいけない, buffer was: {text}"
+        );
+        let logo_color = Color::Rgb(color.0, color.1, color.2);
+        let area = buffer.area();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                assert_ne!(
+                    buffer.cell((x, y)).unwrap().bg,
+                    logo_color,
+                    "サイズ不足時はロゴピクセルが一切描画されないはず (x={x}, y={y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn draw_splash_reference_214x46_logo_renders_end_to_end_without_panic_and_uses_native_mode() {
+        // Issue #588 が前提とする基準サイズ214x46pxのロゴを、フルパイプライン(draw_splash)で
+        // 実際に CANVAS_W x CANVAS_H 端末に通す。(a) panicしない (b) フルスクリーン画像
+        // モード側のスクロールヒントが出ない（native側に入った証拠） (c) 画像領域の
+        // 一部セルがロゴ色になっている、の3点を確認する。
+        let color = (10u8, 200u8, 30u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 214, 46), 214, 46);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        assert!(
+            !text.contains('↑') && !text.contains('↓'),
+            "native表示モードではフルスクリーン画像モードのスクロールヒントを出してはいけない, buffer was: {text}"
+        );
+        let logo_color = Color::Rgb(color.0, color.1, color.2);
+        let area = buffer.area();
+        let has_logo_color = (0..area.height)
+            .any(|y| (0..area.width).any(|x| buffer.cell((x, y)).unwrap().bg == logo_color));
+        assert!(has_logo_color, "画像領域の一部セルがロゴ色になっているはず");
+    }
+
+    #[test]
+    fn splash_max_scroll_offset_native_mode_logo_returns_zero() {
+        // レビュー指摘対応（#588）: `draw_splash_logo_native`（native表示）は
+        // scroll_offset を完全に無視するが、`splash_max_scroll_offset` はこれまで
+        // `logo_fits_natively` を認識せず、常に全幅contain-fit前提の `compute_full_width_rows`
+        // で最大スクロール量を計算していた。native表示に収まる基準サイズ214x46pxロゴでは、
+        // この最大値は画面に何も影響しない架空の値になってしまう
+        // （`main.rs::show_splash` の Action::MoveUp/MoveDown が空回りする）。
+        // native表示中はスクロール不要なので 0 を返すべき、という契約を固定する。
+        let fixture_path = crate::image_render::write_test_webp_fixture(
+            &solid_rgba((10, 20, 30), 214, 46),
+            214,
+            46,
+        );
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut image_cache = ImageCache::new();
+        assert_eq!(
+            splash_max_scroll_offset(&config, &mut image_cache),
+            0,
+            "native表示に収まるロゴではスクロール不要のため最大オフセットは0のはず"
+        );
+    }
+
+    #[test]
+    fn draw_splash_native_mode_logo_extremely_small_terminal_does_not_panic() {
+        // 既存の draw_splash_extremely_small_terminal_does_not_panic はロゴ未設定
+        // （テキストモードへフォールバックする経路）のみをカバーしていた。ここでは
+        // native表示に収まる小さいロゴ（4x1px相当のnativeサイズ）を設定した状態で、
+        // 0x0/1x1という極小端末でもpanicしないことを確認する（#588、
+        // logo_fits_natively==true分岐からfits_required_sizeガードに至る経路）。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 4, 1), 4, 1);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut image_cache = ImageCache::new();
+        for (w, h) in [(0u16, 0u16), (1, 1)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal
+                .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn draw_splash_native_mode_logo_larger_terminal_still_centers_without_growing() {
+        // #588: ネイティブ表示は端末が要求サイズより大きくてもロゴを拡大しない。
+        // 単色画像は quadrant_cell_from_subpixels により全セルが glyph=空白・
+        // bg=ロゴ色になる（doc コメント参照）ため、8x2px（native cols=4, rows=1）の
+        // 単色ロゴなら、ロゴ色を持つセル数はちょうど4になるはず。端末を
+        // CANVAS_W/CANVAS_Hより大きくしてもこのセル数が変わらないこと、かつ
+        // 左上(0,0)には来ない（中央寄せされている）ことを確認する。
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 8, 2), 8, 2);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let extra_w = 6u16;
+        let extra_h = 4u16;
+        let mut terminal =
+            Terminal::new(TestBackend::new(CANVAS_W + extra_w, CANVAS_H + extra_h)).unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let logo_color = Color::Rgb(color.0, color.1, color.2);
+        let area = buffer.area();
+        assert_ne!(
+            buffer.cell((0, 0)).unwrap().bg,
+            logo_color,
+            "端末が大きくてもロゴは左上(0,0)まで拡大されないはず"
+        );
+        let logo_cell_count = (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| buffer.cell((x, y)).unwrap().bg == logo_color)
+            .count();
+        assert_eq!(
+            logo_cell_count, 4,
+            "native_cols(4)*native_rows(1)を超えて拡大されてはいけない"
+        );
     }
 
     // ---- #480: 画面分割(50/50・プレイヤー/相手ウィンドウ分離・枠なし)のテスト ----
@@ -2894,6 +3221,14 @@ mod tests {
     }
 
     #[test]
+    fn fits_required_size_one_cell_wider_and_taller_is_true() {
+        // 上の2件（幅のみ+1／高さのみ+1）は個別の軸しか動かしていなかった。
+        // 幅・高さ双方を同時に+1したケースでも true になることを明示する。
+        let actual = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH + 1, REQUIRED_TOTAL_HEIGHT + 1);
+        assert!(fits_required_size(actual));
+    }
+
+    #[test]
     fn compute_centered_canvas_actual_equals_required_has_zero_offset() {
         let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
         let canvas = compute_centered_canvas(required, required);
@@ -3034,6 +3369,24 @@ mod tests {
     }
 
     #[test]
+    fn draw_too_small_message_content_survives_when_both_width_and_height_deficient() {
+        // 上の`draw_too_small_message_content_survives_at_moderately_narrow_width`は
+        // 幅のみ不足（高さはREQUIRED_TOTAL_HEIGHTちょうど）でしか本文を検証していなかった。
+        // 幅・高さ双方が1セルずつ不足するケース（129x32）でも本文が省略されずに
+        // 描画されることを確認する。
+        let config = Config::default();
+        let buffer = render(
+            &config,
+            None,
+            None,
+            REQUIRED_TOTAL_WIDTH - 1,
+            REQUIRED_TOTAL_HEIGHT - 1,
+        );
+        let text = buffer_text(&buffer);
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+    }
+
+    #[test]
     fn draw_larger_than_required_terminal_offsets_content_by_centering_margin() {
         // 実端末がCANVAS_W/CANVAS_Hより大きい場合、UI全体がcompute_centered_canvasの
         // オフセット分だけ右下にずれて描画されることを、テキスト列の開始位置で確認する
@@ -3095,6 +3448,68 @@ mod tests {
         assert_eq!(
             y, expected_y,
             "text row should shift down by the centering margin"
+        );
+    }
+
+    #[test]
+    fn draw_then_draw_again_with_different_terminal_size_does_not_leak_stale_layout() {
+        // #588: draw() の全出力は毎フレームの引数（特に frame.area()）だけから決まるべきで、
+        // 前フレームのレイアウト（センタリングオフセット等）を引きずってはいけない。
+        // CANVAS_W x CANVAS_H（ジャストサイズ、オフセット0）→ それより大きいサイズ
+        // （オフセットが乗る）→ 再び CANVAS_W x CANVAS_H と連続で draw() し、最後のフレームで
+        // テキスト列の開始x座標がオフセット0の位置（canvas_text_column_x_start()）に
+        // 戻っていることを確認する。
+        let config = Config::default();
+        let line = dialog_line(Some("A"), vec!["Y"]);
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+
+        let sizes = [
+            (CANVAS_W, CANVAS_H),
+            (CANVAS_W + 20, CANVAS_H + 7),
+            (CANVAS_W, CANVAS_H),
+        ];
+        for (w, h) in sizes {
+            terminal.backend_mut().resize(w, h);
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &config,
+                        Some(&line),
+                        None,
+                        &[],
+                        1,
+                        1,
+                        false,
+                        None,
+                        now,
+                        now,
+                        None,
+                        &mut image_cache,
+                        false,
+                    )
+                })
+                .unwrap();
+        }
+
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area();
+        let mut leftmost_y_x = None;
+        'outer: for y in 0..area.height {
+            for x in 0..area.width {
+                if buffer.cell((x, y)).expect("in bounds").symbol() == "Y" {
+                    leftmost_y_x = Some(x);
+                    break 'outer;
+                }
+            }
+        }
+        let x = leftmost_y_x.expect("text should render somewhere");
+        assert_eq!(
+            x,
+            canvas_text_column_x_start(),
+            "サイズを行き来した後ジャストサイズに戻れば、前フレームのオフセットを引きずらずセンタリングオフセットは0に戻るはず"
         );
     }
 
@@ -3787,46 +4202,63 @@ mod tests {
     }
 
     #[test]
-    fn split_columns_at_area_exactly_gap_width_leaves_zero_width_image_and_text() {
-        // W=IMAGE_TEXT_GAP_WIDTH ちょうどでは、gapのConstraint::Lengthだけが満たされ
-        // 画像/テキストのConstraint::Percentage(50)には残余が無い。
+    fn split_columns_at_area_exactly_gap_width_squeezes_gap_to_zero() {
+        // #588: split_columnsをConstraint::Length(REQUIRED_IMAGE_COLS/GAP/REQUIRED_TEXT_COLS)
+        // ベースへ変更した後の実測値。W=IMAGE_TEXT_GAP_WIDTH(2)では3つのLengthがどれも
+        // 満たせない極端な不足状態になり、ratatuiのレイアウトソルバーはgap(2番目に宣言した
+        // 制約)を真っ先に0まで切り詰め、img/textへ1セルずつ均等に配る（cargo testで実測・
+        // 確認済み、#494当時のPercentage版とは配分の傾向が異なる — 現在のsplit_columnsは
+        // 常にちょうどREQUIRED_TOTAL_WIDTHの領域でしか呼ばれない前提のため、この極端な不足時の
+        // 配分自体に強い意味は無く、panicしないことと合計が入力幅を超えないことが本質。
+        // 具体的な配分は `split_columns_areas_are_contiguous_and_never_exceed_input_width` の
+        // 構造的な不変条件でも別途カバーしている）。
         let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH, 10));
-        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
-        assert_eq!(img.width, 0);
-        assert_eq!(text.width, 0);
-    }
-
-    #[test]
-    fn split_columns_at_area_one_cell_over_gap_width_gives_extra_cell_to_image_not_text() {
-        // W=IMAGE_TEXT_GAP_WIDTH+1 になって初めて1セルの余剰が生まれるが、それはtextでは
-        // なくimg側（先頭のConstraint::Percentage）に付く。これはW=3〜4という狭い幅域限定で
-        // img側が優先される現象（#480由来の既存丸め規約の再現）を固定する回帰テストであり、
-        // `split_columns` 全体の一般的な傾向ではない — W=9以降のsteady stateでは逆にtext側が
-        // 恒常的に有利になる
-        // （`split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state`
-        // 参照）。
-        let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH + 1, 10));
-        assert_eq!(img.width, 1, "剰余の1セルはimg側に付くはず");
-        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
-        assert_eq!(text.width, 0);
-    }
-
-    #[test]
-    fn split_columns_at_wide_area_gives_text_two_more_cells_than_image_steady_state() {
-        // W=9以降は img/text の差が最大2セルにとどまりつつtext側が恒常的に有利になる
-        // steady stateに入る（W=3〜4の狭い幅域だけがimg優先になる例外区間で、それは上記
-        // `split_columns_at_area_one_cell_over_gap_width_gives_extra_cell_to_image_not_text`
-        // が固定している）。このsteady state自体を検知するテストが無かったため追加する
-        // （W=20はimg=8/gap=2/text=10で差がちょうど2になる実測値、cargo testで確認済み）。
-        let (img, gap, text) = split_columns(Rect::new(0, 0, 20, 10));
-        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(img.width, 1);
         assert_eq!(
-            text.width,
-            img.width + 2,
-            "steady stateではtext側がimg側より2セル多いはず: img={}, text={}",
-            img.width,
-            text.width
+            gap.width, 0,
+            "極端な不足時はgapが真っ先に0へ切り詰められる（実測値）"
         );
+        assert_eq!(text.width, 1);
+    }
+
+    #[test]
+    fn split_columns_at_area_one_cell_over_gap_width_splits_evenly() {
+        // #588: W=IMAGE_TEXT_GAP_WIDTH+1(3)では、上のW=2のケースからgapが1セルだけ回復し、
+        // img/gap/textが1セルずつのちょうど均等割りになる（cargo testで実測・確認済み）。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, IMAGE_TEXT_GAP_WIDTH + 1, 10));
+        assert_eq!(img.width, 1);
+        assert_eq!(gap.width, 1);
+        assert_eq!(text.width, 1);
+    }
+
+    #[test]
+    fn split_columns_below_required_total_width_gives_text_most_of_the_shortfall() {
+        // #588: split_columnsがConstraint::Lengthベースになったことで、
+        // REQUIRED_TOTAL_WIDTH未満の領域（draw()経由では fits_required_size のガードにより
+        // 到達しないが、この関数自体は防御的に入力を受け付ける）ではimg/gapが小さな値に
+        // 張り付き、textが残りをほぼ全て吸収する非対称な配分になる（W=20はimg=2/gap=2/text=16、
+        // cargo testで実測・確認済み。#494当時のPercentage版の「差は最大2セル」という
+        // steady stateの性質はもう成り立たない）。この配分自体は draw() の実運用では
+        // 到達しない領域の実装詳細だが、ratatuiのレイアウトソルバーの挙動が将来変わったときに
+        // 気づけるよう固定しておく。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, 20, 10));
+        assert_eq!(img.width, 2);
+        assert_eq!(gap.width, 2);
+        assert_eq!(text.width, 16);
+    }
+
+    #[test]
+    fn split_columns_at_required_total_width_gives_exact_1to1_split() {
+        // #588の核心: draw()が実際に渡す唯一の幅（REQUIRED_TOTAL_WIDTH）では、
+        // Length3つの合計がarea幅とちょうど一致するため過不足なく満たされ、
+        // 画像:テキストが要求どおり厳密に1:1（REQUIRED_IMAGE_COLS == REQUIRED_TEXT_COLS）になる
+        // （`fixed_canvas_image_pane_width_matches_required_image_cols` と同じ性質を
+        // `split_columns` 単体でも固定する）。
+        let (img, gap, text) = split_columns(Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, 10));
+        assert_eq!(img.width, REQUIRED_IMAGE_COLS);
+        assert_eq!(gap.width, IMAGE_TEXT_GAP_WIDTH);
+        assert_eq!(text.width, REQUIRED_TEXT_COLS);
+        assert_eq!(img.width, text.width, "画像:テキストは厳密に1:1のはず");
     }
 
     #[test]
@@ -5481,7 +5913,7 @@ mod tests {
 
     #[test]
     fn fixed_canvas_image_pane_width_matches_required_image_cols() {
-        // REQUIRED_TEXT_COLS = REQUIRED_IMAGE_COLS + 2 という一見不思議な式（定数の
+        // REQUIRED_TEXT_COLS == REQUIRED_IMAGE_COLS（#588で1:1に統一。定数の
         // doc コメント参照）が、実際に split_columns 経由で画像ペインを
         // REQUIRED_IMAGE_COLS ちょうどの幅にすることを検算する。ここがズレると
         // 正方形画像のクロップ0保証（`fixed_canvas_square_image_crops_nothing_at_required_image_pane_size`）

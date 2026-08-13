@@ -2650,11 +2650,15 @@ mod tests {
         crate::image_render::write_test_webp_fixture(&rgba, size, size)
     }
 
-    /// 84x84 の正方形画像を、2px ごとの横帯で段階的に赤みを変えたフィクスチャ。
-    /// 全幅表示（84列）では総42行になり、各表示行が一意な赤背景を持つため、
+    /// `REQUIRED_TOTAL_WIDTH`四方の正方形画像を、2px ごとの横帯で段階的に赤みを変えた
+    /// フィクスチャ。正方形画像を全幅（`REQUIRED_TOTAL_WIDTH`列）contain-fit表示すると
+    /// `compute_full_width_rows` は総行数 `REQUIRED_TOTAL_WIDTH/2` を返し、そのsubpixel高さ
+    /// （総行数*2）がちょうど画像の縦幅 `REQUIRED_TOTAL_WIDTH` に一致する（サイズを
+    /// `REQUIRED_TOTAL_WIDTH` 自体から動的に導出しているため、この一致は定数値を問わず常に
+    /// 成り立つ）。これにより縦方向の拡大縮小が発生せず、各表示行が一意な赤背景を持つため、
     /// 「最下端から1つ戻ったか」を先頭セルの背景色だけで判別できる。
     fn per_row_scroll_fixture() -> std::path::PathBuf {
-        let size: u32 = 84;
+        let size: u32 = u32::from(ui::REQUIRED_TOTAL_WIDTH);
         let mut rgba = Vec::with_capacity((size * size * 4) as usize);
         for y in 0..size {
             let band = (y / 2) as u8;
@@ -2885,8 +2889,12 @@ mod tests {
         let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
         assert!(advanced);
 
-        let total_rows =
-            crate::image_render::compute_full_width_rows(84, 84, ui::REQUIRED_TOTAL_WIDTH);
+        let fixture_size = u32::from(ui::REQUIRED_TOTAL_WIDTH);
+        let total_rows = crate::image_render::compute_full_width_rows(
+            fixture_size,
+            fixture_size,
+            ui::REQUIRED_TOTAL_WIDTH,
+        );
         let visible_rows = ui::REQUIRED_TOTAL_HEIGHT - 1;
         let expected_offset = total_rows.saturating_sub(visible_rows).saturating_sub(1);
         let expected_red = (expected_offset as u8).saturating_mul(5);
