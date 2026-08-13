@@ -4474,8 +4474,21 @@ export class NovelRenderer {
    * いた場合に findSceneById が不発になり、常にフラグのみ復元＋warn のフォールバックへ
    * 縮退して意図したシーン位置に戻れない。restoreSnapshot と同じく missingSceneResolver
    * 経由の非同期再解決を挟んでから復元する。
+   *
+   * #578 セルフレビュー must 対応: ensureContext() をここで呼ぶ。当初は「同一 renderer
+   * インスタンス上でユーザー操作を経て既に ensureContext 済み」という前提で不要と判断していたが、
+   * 本 Issue で追加した起動時自動 quickLoad（NovelPlayer のマウント effect から
+   * `renderer.hasQuickSave()` が true の場合に同期呼び出しされる）はユーザー操作より前に
+   * quickLoad() → loadFromSaveData() が走る。ensureContext() を呼ばないと AudioManager.ctx が
+   * null のままで、この後 applyState 経由の playBgm() が `if (!this.ctx) return` で無音のまま
+   * 早期 return し、以後ユーザーが操作しても currentBgmUrl 未設定のため再試行されない
+   * （復元先シーンの BGM が次のシーン遷移までサイレントになる回帰）。restoreSnapshot（#460）と
+   * 同じ対処であり、ensureContext() はべき等なので通常の openLoadMenu 経由（既に
+   * ensureContext 済み）で重複呼び出しになっても副作用はない。
    */
   private loadFromSaveData(data: SaveSlotData): void {
+    this.audioManager.ensureContext()
+
     if (!data.sceneId) {
       // sceneId が無い空セーブはフラグだけ復元して終了（restoreToScene を通さない）
       this.gameState.fromJSON(data.flags)
@@ -4513,12 +4526,10 @@ export class NovelRenderer {
    * pendingMissingScenes も共有し、同一 sceneId の解決が jumpToScene/restoreSnapshot 側と
    * 重複しないようにする。
    *
-   * resolveMissingSceneAndRestore と意図的に重複させている点: AudioContext の
-   * ensureContext() は呼ばない。loadFromSaveData は同一 renderer インスタンス上で
-   * quickLoad()/openLoadMenu() から呼ばれ、通常はユーザー操作（handleAdvance 等）を
-   * 経て既に ensureContext 済みのため不要（restoreSnapshot は新規 renderer に対して
-   * 一度だけ呼ばれる別経路のため必要だった）。両者を無理に共通化して意味を歪めるより、
-   * 多少の重複を許容する。
+   * AudioContext の ensureContext() はここでは呼ばない: 呼び出し元の loadFromSaveData() が
+   * この非同期メソッドへ委譲する前（await の前）に既に ensureContext() 済みのため、この
+   * メソッド内で改めて呼ぶ必要はない（#578 セルフレビュー must 対応、詳細は
+   * loadFromSaveData の doc コメント参照）。
    *
    * 解決できてもシーンが見つからない/resolver が失敗した場合は、loadFromSaveData と同じ
    * 「フラグだけ復元して warn」のフォールバックに落ちる。
