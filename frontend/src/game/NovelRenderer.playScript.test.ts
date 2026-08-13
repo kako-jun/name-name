@@ -144,6 +144,140 @@ describe('NovelRenderer.playScript (#220)', () => {
     expect(loadReadSceneProgress(docKey).has('cell')).toBe(true)
   })
 
+  // #591: 選択肢オプションの条件付きロック。option.condition が未定義/false のフラグを
+  // 指しているときだけロックし、choiceOverlay.show へ options と同じ長さ・並びの真偽配列
+  // （6番目の引数）として渡す。
+  it('#591: condition 付きオプションは flag 未設定なら locked=true で show へ渡される', () => {
+    // 先頭に narration を置く: setScenes 内の processUntilNextTextEvent はテキストイベント
+    // で止まるため、choiceOverlay.show をモックしてから明示 advance() で Choice へ進める
+    // （#366 の既存テストと同じパターン。narration 無しだと構築中に本物の show が先に
+    // 呼ばれてしまい、後からのモック差し替えで見えなくなる）。
+    const r = makeRenderer([
+      scene('cell', [
+        narration('body'),
+        {
+          Choice: {
+            options: [
+              { text: '誰でも選べる', jump: 'hub' },
+              { text: 'route01_cleared が必要', jump: 'route01', condition: 'route01_cleared' },
+            ],
+          },
+        } as Event,
+      ]),
+      scene('hub', [narration('hub')]),
+      scene('route01', [narration('route01')]),
+    ])
+    internals(r).choiceOverlay.show = vi.fn()
+
+    internals(r).advance()
+
+    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    expect(call?.[5]).toEqual([false, true])
+  })
+
+  it('#591: Flag イベントで route01_cleared=true を立てた後は locked=false になる', () => {
+    const r = makeRenderer([
+      scene('cell', [
+        narration('body'),
+        { Flag: { name: 'route01_cleared', value: { Bool: true } } } as Event,
+        {
+          Choice: {
+            options: [
+              { text: 'route01_cleared が必要', jump: 'route01', condition: 'route01_cleared' },
+            ],
+          },
+        } as Event,
+      ]),
+      scene('route01', [narration('route01')]),
+    ])
+    internals(r).choiceOverlay.show = vi.fn()
+
+    // narration → Flag（フラグ設定、非表示イベント） → Choice まで processUntilNextTextEvent
+    // が一気に処理するため、advance() は1回だけでよい。
+    internals(r).advance()
+
+    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    expect(call?.[5]).toEqual([false])
+  })
+
+  // #591 テスト観点整理フェーズ 低優先9: 状態遷移/再訪。同じChoiceイベントを持つsceneに
+  // 1回目はflag未設定で突入(ロック)し、flag設定後に再度同じsceneへjumpして2回目のshow()
+  // 呼び出しでlockedが更新されていることを確認する（show()は毎回その時点のflag状態から
+  // lockedを計算し直す、キャッシュされた古い値を使い回さないことの確認）。
+  it('#591 再訪: 1回目はflag未設定で突入しロック、flag設定後に再訪すると2回目のshow()呼び出しでlockedがfalseに更新される', () => {
+    const r = makeRenderer([
+      scene('gate', [
+        narration('gate body'),
+        {
+          Choice: {
+            options: [{ text: '報酬へ', jump: 'reward', condition: 'flag_a' }],
+          },
+        } as Event,
+      ]),
+      scene('unlock', [
+        narration('unlock body'),
+        { Flag: { name: 'flag_a', value: { Bool: true } } } as Event,
+        { Choice: { options: [{ text: 'gateへ戻る', jump: 'gate' }] } } as Event,
+      ]),
+      scene('reward', [narration('reward')]),
+    ])
+    internals(r).choiceOverlay.show = vi.fn()
+
+    internals(r).advance() // gate: narration → Choice
+    const firstCall = internals(r).choiceOverlay.show.mock.calls[0]
+    // 1回目はflag_a未設定でロックされているはず
+    expect(firstCall?.[5]).toEqual([true])
+
+    r.jumpToScene('unlock') // unlock: narrationで停止（まだFlag/Choiceは未処理）
+    internals(r).advance() // unlock: Flag(flag_a=true)を通過してChoiceへ（無条件、gateへ戻す）
+    r.jumpToScene('gate') // gateへ再訪（narrationで停止、まだChoiceは未処理）
+    internals(r).advance() // gate: Choiceへ再度到達（2回目のshow呼び出し）
+
+    const calls = internals(r).choiceOverlay.show.mock.calls
+    const secondGateCall = calls[calls.length - 1]
+    // 2回目はflag_a設定済みでロック解除されているはず（show()が毎回flag状態から再計算する）
+    expect(secondGateCall?.[5]).toEqual([false])
+  })
+
+  // #591 テスト観点整理フェーズ 低優先10: 組み合わせ。同一flagを参照する2つのoptionが
+  // 同時にロック/解除されることを確認する（1つのoptionだけ更新漏れが起きていないか）。
+  it('#591 組み合わせ: 同一flagを参照する2つのoptionは同時にロックされ、flag設定後は同時に解除される', () => {
+    const rBothLocked = makeRenderer([
+      scene('branch', [
+        narration('body'),
+        {
+          Choice: {
+            options: [
+              { text: 'ルートA', jump: 'a', condition: 'shared_flag' },
+              { text: 'ルートB', jump: 'b', condition: 'shared_flag' },
+            ],
+          },
+        } as Event,
+      ]),
+    ])
+    internals(rBothLocked).choiceOverlay.show = vi.fn()
+    internals(rBothLocked).advance()
+    expect(internals(rBothLocked).choiceOverlay.show.mock.calls[0]?.[5]).toEqual([true, true])
+
+    const rBothUnlocked = makeRenderer([
+      scene('branch', [
+        narration('body'),
+        { Flag: { name: 'shared_flag', value: { Bool: true } } } as Event,
+        {
+          Choice: {
+            options: [
+              { text: 'ルートA', jump: 'a', condition: 'shared_flag' },
+              { text: 'ルートB', jump: 'b', condition: 'shared_flag' },
+            ],
+          },
+        } as Event,
+      ]),
+    ])
+    internals(rBothUnlocked).choiceOverlay.show = vi.fn()
+    internals(rBothUnlocked).advance()
+    expect(internals(rBothUnlocked).choiceOverlay.show.mock.calls[0]?.[5]).toEqual([false, false])
+  })
+
   it('#366: Choice が無い scene はスクリプト末尾到達時に既読になる', () => {
     const docKey = 'novel-renderer-read-completion-test'
     const r = makeRenderer([scene('ending', [narration('body')])])

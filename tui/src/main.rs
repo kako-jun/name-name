@@ -822,12 +822,17 @@ where
             now,
         );
         indicator_was_shown = show_page_indicator;
+        // #591: 選択肢のロック状態（`option.condition` が未定義/false のフラグを指している）
+        // は current_choice() とは別配列で持つ（current_choice() の戻り値は Playback を
+        // borrow したままの &[ChoiceOption] のため、ロック判定用に別途 owned な Vec を作る）。
+        let choice_locked = playback.current_choice_locked();
         terminal.draw(|frame| {
             ui::draw(
                 frame,
                 &config,
                 playback.current_line(),
                 playback.current_choice(),
+                &choice_locked,
                 playback.position(),
                 playback.total(),
                 playback.is_at_end(),

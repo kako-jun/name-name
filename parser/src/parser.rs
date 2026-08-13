@@ -726,8 +726,28 @@ pub fn parse(input: &str) -> Document {
                 if let Some(rest) = opt_line.strip_prefix("- ") {
                     if let Some(arrow_pos) = rest.find('→') {
                         let text = rest[..arrow_pos].trim().to_string();
-                        let jump = rest[arrow_pos + '→'.len_utf8()..].trim().to_string();
-                        options.push(ChoiceOption { text, jump });
+                        let after_arrow = rest[arrow_pos + '→'.len_utf8()..].trim();
+                        // jump の後ろに任意で `[条件: flag]` を付けられる (#591)。
+                        // 例: `- 異邦 → r02-01-last-rites [条件: route01_cleared]`
+                        // flag の真偽判定は既存の `[条件:]` ブロックと同じ規則
+                        // （GameFlags::check / checkFlag 参照: 未定義/false ならロック）。
+                        let (jump, condition) = match after_arrow.find("[条件:") {
+                            Some(cond_pos) => {
+                                let jump = after_arrow[..cond_pos].trim().to_string();
+                                let cond_str = after_arrow[cond_pos..].trim();
+                                let flag = cond_str
+                                    .strip_prefix("[条件:")
+                                    .and_then(|s| s.strip_suffix(']'))
+                                    .map(|s| s.trim().to_string());
+                                (jump, flag)
+                            }
+                            None => (after_arrow.to_string(), None),
+                        };
+                        options.push(ChoiceOption {
+                            text,
+                            jump,
+                            condition,
+                        });
                     }
                 }
                 pos += 1;

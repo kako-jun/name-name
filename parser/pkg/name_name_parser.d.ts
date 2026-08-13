@@ -191,6 +191,13 @@ export interface Chapter {
 export interface ChoiceOption {
     text: string;
     jump: string;
+    /**
+     * 条件付きロック (#591)。`- text → jump [条件: flag]` の `flag` をそのまま保持する。
+     * `None` = 常に選択可能（既存動作）。`Some(flag)` は、`flag` が未定義または `false`
+     * の間は表示はされるが選択できない「ロック」状態になる（既存の `[条件:]` ブロックと
+     * 同じ真偽判定規則。フロント/TUI どちらもこのフィールドだけを見て判定する）。
+     */
+    condition?: string;
 }
 
 export interface Document {
@@ -532,8 +539,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly emit_markdown: (a: any) => [number, number, number, number];
+    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

@@ -36,6 +36,10 @@ export interface AmbientEffects {
 export interface ChoiceOption {
   text: string
   jump: string
+  /** 条件付きロック (#591)。未定義 = 常に選択可能（既存動作）。指定時は、そのフラグ名が
+   *  真になるまでロック（表示はされるが選択不可）になる。真偽判定は checkFlag と同じ規則。
+   *  parser/pkg の生成型（Tsify）に合わせて `string | undefined`（`null` は使わない）。 */
+  condition?: string
 }
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number }

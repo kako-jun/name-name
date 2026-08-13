@@ -278,7 +278,7 @@ Rust で実装。wasm-bindgen + tsify-next で TypeScript 型を自動生成す�
 - `WaitDisplayComplete` — 表示完了待機。`[待機: 表示完了]` で、その時点の背景ロード/フェードと立ち絵ロード/フェード/移動が完了するまで待つ
 - `Flag` — フラグ設定（name, value）
 - `Condition` — 条件分岐（flag, events: Event[]）
-- `Choice` — 選択肢（options: ChoiceOption[]）
+- `Choice` — 選択肢（options: ChoiceOption[]。各 `ChoiceOption` は `text`/`jump` に加え任意の `condition?: string` を持つ。`- text → jump [条件: flag]` 構文で個別ロックを付けられる、#591。詳細は `docs/spec/markdown-v0.1.md` の「選択肢の条件付きロック」参照）
 - `RpgMap` — RPG マップ（width, height, tile_size, tiles: u8[][]）
 - `PlayerStart` — プレイヤー初期位置（x, y, direction）
 - `Npc` — NPC 配置（id, name, x, y, color, message: string[], sprite?: string, frames?: u32, direction?: Direction）

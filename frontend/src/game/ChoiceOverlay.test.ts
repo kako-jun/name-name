@@ -191,6 +191,59 @@ describe('ChoiceOverlay rendering', () => {
     overlay.hide()
   })
 
+  // #591: 条件付きロック。alreadyRead（既読/未読）とは別配色になり、クリックを受け付けない。
+  it('ロック中の選択肢はロック専用配色で描かれ、eventMode=none でクリックを受け付けない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const theme = resolveStyle('default')
+    const onSelect = vi.fn()
+    overlay.show(
+      [
+        { text: '選べる', jump: 'unlocked' },
+        { text: '選べない', jump: 'locked', condition: 'route01_cleared' },
+      ],
+      onSelect,
+      'default',
+      undefined,
+      undefined,
+      [false, true]
+    )
+
+    const unlockedButton = overlay.children[0]
+    const lockedButton = overlay.children[1]
+    const unlockedLabel = unlockedButton?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+    const lockedLabel = lockedButton?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+
+    expect(unlockedLabel?.style.fill).toBe(theme.textColor)
+    expect(lockedLabel?.style.fill).toBe(theme.textLockedColor)
+    // 視覚的に判別できるよう🔒マークがテキストに付く。
+    expect(lockedLabel?.text).toContain('🔒')
+    expect(unlockedLabel?.text).not.toContain('🔒')
+
+    expect(unlockedButton.eventMode).toBe('static')
+    expect(lockedButton.eventMode).toBe('none')
+
+    // クリックしても選択できない（tap-guard を満たす移動量でも onSelect は呼ばれない）。
+    lockedButton.emit('pointerdown', pointerEvent(400, 225))
+    lockedButton.emit('pointerup', pointerEvent(400, 225))
+    expect(onSelect).not.toHaveBeenCalled()
+
+    overlay.hide()
+  })
+
+  it('locked 未指定時は全オプションが従来どおり選択可能（非破壊）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選ぶ', jump: 'next', condition: 'never_set' }], vi.fn())
+
+    const button = overlay.children[0]
+    expect(button.eventMode).toBe('static')
+
+    overlay.hide()
+  })
+
   it('resolveChoiceVisual は既読/未読と hover で fill/border/text を切り替える', () => {
     const theme = resolveStyle('default')
 
@@ -213,6 +266,25 @@ describe('ChoiceOverlay rendering', () => {
       fill: theme.fillReadHover,
       border: theme.borderReadHover,
       text: theme.textReadColor,
+    })
+  })
+
+  // #591: locked は alreadyRead/hover より優先される専用の見た目になる。
+  it('resolveChoiceVisual: locked=true は alreadyRead/hover に関わらずロック専用配色を返す', () => {
+    const theme = resolveStyle('default')
+    const expected = {
+      fill: theme.fillLocked,
+      border: theme.borderLocked,
+      text: theme.textLockedColor,
+    }
+    expect(resolveChoiceVisual(theme, false, false, true)).toEqual(expected)
+    expect(resolveChoiceVisual(theme, true, false, true)).toEqual(expected)
+    expect(resolveChoiceVisual(theme, true, true, true)).toEqual(expected)
+    // locked=false（既定値省略）は従来どおり。
+    expect(resolveChoiceVisual(theme, false, false)).toEqual({
+      fill: theme.fillNormal,
+      border: theme.borderNormal,
+      text: theme.textColor,
     })
   })
 
@@ -944,6 +1016,65 @@ describe('ChoiceOverlay グリッド配置 境界値・状態遷移 (#508 テス
       expect(button.x - button.pivot.x).toBeGreaterThanOrEqual(0)
       expect(button.x + button.pivot.x).toBeLessThanOrEqual(375)
     }
+
+    overlay.hide()
+  })
+})
+
+// #591 テスト観点整理フェーズ 最優先1: grid×lock整合性。過去の事故パターン（グリッドの
+// 行×列マッピングとインデックス対応がずれる不具合）が locked 配列でも再発していないかを
+// 狙い撃ちする。10択・columns=5・locked を交互パターンで渡し、各ボタンの eventMode・🔒表示・
+// ラベル本文の3つすべてが locked 配列と同じインデックスの選択肢に対応することを確認する。
+describe('ChoiceOverlay グリッド×ロック整合性 (#591 テスト観点整理フェーズ 最優先1)', () => {
+  it('columns=5・10択でlockedが交互パターンのとき、各ボタンのeventMode/🔒表示/ラベルがインデックス通りに対応する（ずれを検出）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    // 偶数indexはロックなし、奇数indexはロック中（市松パターンで隣接セルとの取り違えも検出できる）。
+    const locked = Array.from({ length: 10 }, (_, i) => i % 2 === 1)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5, locked)
+
+    const buttons = overlay.children
+    expect(buttons.length).toBe(10)
+
+    buttons.forEach((button, i) => {
+      const label = button.children.find((child) => child instanceof PixiText) as
+        | PixiText
+        | undefined
+      const expectedLocked = locked[i]
+      expect(
+        button.eventMode,
+        `index ${i}: eventMode が locked[${i}]=${expectedLocked} と対応していない`
+      ).toBe(expectedLocked ? 'none' : 'static')
+      expect(
+        label?.text.includes('🔒'),
+        `index ${i}: 🔒表示の有無が locked[${i}]=${expectedLocked} と対応していない`
+      ).toBe(expectedLocked)
+      // ラベル本文自体もそのインデックスの選択肢と一致しているはず（行×列ずれで
+      // 別インデックスの選択肢のロック状態を見てしまっていないかの取り違え検出）。
+      expect(label?.text.startsWith(`選択肢${i + 1}`)).toBe(true)
+    })
+
+    overlay.hide()
+  })
+
+  it('二重送信ガード: ロック中ボタンへpointerdown/pointerupを複数回連打してもonSelectは一度も呼ばれない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const onSelect = vi.fn()
+    overlay.show(
+      [{ text: '選べない', jump: 'locked', condition: 'flag' }],
+      onSelect,
+      'default',
+      undefined,
+      undefined,
+      [true]
+    )
+
+    const button = overlay.children[0]
+    for (let i = 0; i < 5; i++) {
+      button.emit('pointerdown', pointerEvent(400, 225, i))
+      button.emit('pointerup', pointerEvent(400, 225, i))
+    }
+
+    expect(onSelect).not.toHaveBeenCalled()
 
     overlay.hide()
   })

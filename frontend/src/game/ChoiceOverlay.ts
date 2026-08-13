@@ -70,13 +70,21 @@ interface ChoiceTheme {
   fillHover: number
   fillRead: number
   fillReadHover: number
+  /**
+   * 条件付きロック (#591) の配色。`alreadyRead`（既読/未読の色分け）とは別の見た目にする
+   * ため専用フィールドを持つ——ロックはホバー無し（クリック自体を受け付けない）なので
+   * hover バリエーションは持たない。
+   */
+  fillLocked: number
   borderNormal: number
   borderHover: number
   borderRead: number
   borderReadHover: number
+  borderLocked: number
   borderWidth: number
   textColor: number
   textReadColor: number
+  textLockedColor: number
   fontFamily: string
   fontWeight: 'normal' | 'bold'
   fontSize: number
@@ -97,13 +105,18 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillHover: 0x16213e,
     fillRead: 0x2f3542,
     fillReadHover: 0x3d4658,
+    // ロック中 (#591): read よりさらに暗く沈ませ、「まだ選べない」を read（既読/未読）とは
+    // 別の見た目で示す。ホバー変化は無い（クリック自体を受け付けないため）。
+    fillLocked: 0x121218,
     borderNormal: 0xa8dadc,
     borderHover: 0xf1faee,
     borderRead: 0x9aa4b2,
     borderReadHover: 0xd1d5db,
+    borderLocked: 0x555566,
     borderWidth: 2,
     textColor: 0xf1faee,
     textReadColor: 0xcbd5e1,
+    textLockedColor: 0x6b7280,
     fontFamily: "'Noto Sans JP', sans-serif",
     fontWeight: 'bold',
     fontSize: 20,
@@ -117,13 +130,16 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillHover: 0xffd1dc,
     fillRead: 0xe8e1f0,
     fillReadHover: 0xded5ec,
+    fillLocked: 0xd8d3dc,
     borderNormal: 0xffb3c1,
     borderHover: 0xff8fa3,
     borderRead: 0xb8a8ca,
     borderReadHover: 0x9d8bb8,
+    borderLocked: 0xb0a8b8,
     borderWidth: 3,
     textColor: 0x5d2952,
     textReadColor: 0x5d536b,
+    textLockedColor: 0x8b8394,
     fontFamily: "'Noto Sans JP', sans-serif",
     fontWeight: 'bold',
     fontSize: 22,
@@ -137,13 +153,16 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillHover: 0x222222,
     fillRead: 0x2a2a2a,
     fillReadHover: 0x3a3a3a,
+    fillLocked: 0x0a0a0a,
     borderNormal: 0xffffff,
     borderHover: 0xffffff,
     borderRead: 0x888888,
     borderReadHover: 0xbbbbbb,
+    borderLocked: 0x555555,
     borderWidth: 2,
     textColor: 0xffffff,
     textReadColor: 0xbdbdbd,
+    textLockedColor: 0x666666,
     fontFamily: "'Noto Serif JP', serif",
     fontWeight: 'normal',
     fontSize: 20,
@@ -162,13 +181,16 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillHover: 0x241800,
     fillRead: 0x1a1a1a,
     fillReadHover: 0x2a2416,
+    fillLocked: 0x0d0d0d,
     borderNormal: 0xffffff,
     borderHover: 0xffd280,
     borderRead: 0x888888,
     borderReadHover: 0xd9a86c,
+    borderLocked: 0x4a4a4a,
     borderWidth: 2,
     textColor: 0xffffff,
     textReadColor: 0xc9c2b0,
+    textLockedColor: 0x5a5a5a,
     fontFamily: 'monospace',
     fontWeight: 'bold',
     fontSize: 20,
@@ -205,11 +227,24 @@ export function resolveStyle(name?: string | null): ChoiceTheme {
   return STYLE_THEMES.default
 }
 
+/**
+ * ボタン1件の配色を決める。`locked`（#591、条件付きロック）は `alreadyRead`（既読/未読の
+ * 色分け）より優先する——ロック中はホバーが発生しない（`eventMode: 'none'`）ため hover
+ * 引数も無視する。両方 false のときだけ従来どおり alreadyRead/hover で分岐する（非破壊）。
+ */
 export function resolveChoiceVisual(
   theme: ChoiceTheme,
   alreadyRead: boolean,
-  hover: boolean
+  hover: boolean,
+  locked = false
 ): ChoiceVisual {
+  if (locked) {
+    return {
+      fill: theme.fillLocked,
+      border: theme.borderLocked,
+      text: theme.textLockedColor,
+    }
+  }
   if (alreadyRead) {
     return {
       fill: hover ? theme.fillReadHover : theme.fillRead,
@@ -325,13 +360,19 @@ export class ChoiceOverlay extends Container {
    * @param columns グリッド配置の列数 (#508)。`[選択: 列=N]` の N。未指定 or 1 以下は
    *                従来どおりの縦一列表示（完全に非破壊）。2 以上でボタンを
    *                `i % columns` 列目・`i / columns` 行目に並べるグリッドになる。
+   * @param locked  条件付きロック (#591)。`options` と同じ長さ・同じ並びの真偽配列
+   *                （`NovelRenderer` が `option.condition` と `gameState.checkFlag` から
+   *                作って渡す）。`true` の位置のボタンは非活性の見た目になり、クリック/
+   *                ホバーを一切受け付けない。未指定 or 短ければ、残りは false（ロックなし、
+   *                非破壊）として扱う。
    */
   show(
     options: ChoiceOption[],
     onSelect: (jump: string) => void,
     style?: string | null,
     readJumps?: ReadonlySet<string>,
-    columns?: number | null
+    columns?: number | null,
+    locked?: readonly boolean[]
   ): void {
     if (options.length === 0) return
     this.onSelect = onSelect
@@ -415,7 +456,9 @@ export class ChoiceOverlay extends Container {
 
     options.forEach((option, i) => {
       const alreadyRead = readJumps?.has(option.jump) ?? false
-      const normalVisual = resolveChoiceVisual(theme, alreadyRead, false)
+      // 条件付きロック (#591)。locked が未指定/短ければ false（ロックなし、非破壊）。
+      const isLocked = locked?.[i] ?? false
+      const normalVisual = resolveChoiceVisual(theme, alreadyRead, false, isLocked)
       const textStyle = new TextStyle({
         fontFamily: theme.fontFamily,
         fontSize: theme.fontSize,
@@ -423,8 +466,12 @@ export class ChoiceOverlay extends Container {
         fontWeight: theme.fontWeight,
       })
       const buttonContainer = new Container()
-      buttonContainer.eventMode = 'static'
-      buttonContainer.cursor = 'pointer'
+      // ロック中はクリック/ホバーを一切受け付けない（`eventMode: 'none'` はヒットテスト
+      // 自体から除外される——PixiJS v8 の仕様どおり、下の pointerover/pointerdown 等の
+      // リスナーは登録されるが発火し得ない）。カーソルも 'pointer' に変えず選択可能に
+      // 見せない。
+      buttonContainer.eventMode = isLocked ? 'none' : 'static'
+      buttonContainer.cursor = isLocked ? 'default' : 'pointer'
       buttonContainer.alpha = 0
 
       // pivot を中央に置いて scale 拡大時にボタン中心が動かないようにする
@@ -440,8 +487,10 @@ export class ChoiceOverlay extends Container {
       this.drawButton(bg, theme, normalVisual.fill, normalVisual.border)
       buttonContainer.addChild(bg)
 
+      // ロック中は既読/未読とは別の見た目（配色）に加え、TUI版と揃えた🔒マークを
+      // テキスト末尾に付けて「選べない理由」を視覚的に明示する（#591）。
       const label = new PixiText({
-        text: option.text,
+        text: isLocked ? `${option.text} 🔒` : option.text,
         style: textStyle,
         resolution: this.renderResolution,
         roundPixels: true,
@@ -463,7 +512,7 @@ export class ChoiceOverlay extends Container {
         : startY + row * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_HEIGHT / 2
 
       buttonContainer.on('pointerover', () => {
-        const hoverVisual = resolveChoiceVisual(theme, alreadyRead, true)
+        const hoverVisual = resolveChoiceVisual(theme, alreadyRead, true, isLocked)
         bg.clear()
         this.drawButton(bg, theme, hoverVisual.fill, hoverVisual.border)
         buttonContainer.scale.set(HOVER_SCALE)
@@ -484,6 +533,9 @@ export class ChoiceOverlay extends Container {
       })
 
       const selectChoice = (e: FederatedPointerEvent) => {
+        // 多重防御 (#591): eventMode='none' で通常は発火し得ないが、`draw_choice_grid` の
+        // columns クランプと同じ思想で呼び出し経路に依らず確定を拒否する。
+        if (isLocked) return
         e.stopPropagation()
         this.audioManager?.ensureContext()
         this.audioManager?.playSelectTone()

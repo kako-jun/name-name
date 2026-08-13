@@ -842,6 +842,44 @@ describe('parseMarkdown + normalizeEvents: Choice.columns が normalize を生�
   })
 })
 
+// #591: 選択肢オプションの条件付きロック（`- text → jump [条件: flag]`）が
+// normalizeEvents（frontend/src/wasm/parser.ts）を生き残ることを実 parse 経路で縛る。
+// normalizeEvents の Choice ブランチは `options.map((option) => ({ ...option, text: ... }))`
+// と spread しているため、新フィールドの列挙漏れ（#308/#310/#407/#508 と同種の罠）は
+// 起きにくいはずだが、setter 直呼びは検知できない偽陰性になるため必ず parseMarkdown() を通す。
+describe('parseMarkdown + normalizeEvents: 選択肢の条件付きロック (#591)', () => {
+  const findChoice = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters
+      .flatMap((c) => c.scenes.flatMap((s) => s.events))
+      .find((e) => typeof e === 'object' && 'Choice' in e) as
+      | { Choice: { options: { text: string; jump: string; condition?: string }[] } }
+      | undefined
+
+  it('[条件: flag] 付きオプションは condition を保持し、無指定オプションは undefined のまま', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: シーン',
+      '',
+      '[選択]',
+      '- 異邦 → r02-01-last-rites [条件: route01_cleared]',
+      '- いつもの道 → r02-01-normal',
+      '[/選択]',
+      '',
+    ].join('\n')
+
+    const choice = findChoice(await parseMarkdown(markdown))
+    expect(choice?.Choice.options).toEqual([
+      { text: '異邦', jump: 'r02-01-last-rites', condition: 'route01_cleared' },
+      { text: 'いつもの道', jump: 'r02-01-normal' },
+    ])
+  })
+})
+
 // #508 テスト観点整理フェーズで「要追加」と判定された異常系・境界値・round-trip の穴埋め。
 // TS 側（parseMarkdown 経由）の観点。Rust 側の parse_choice_columns 自体は
 // parser/tests/integration_test.rs（test_choice_grid_columns）で既にカバー済みなので、

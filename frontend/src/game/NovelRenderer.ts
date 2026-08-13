@@ -3518,6 +3518,12 @@ export class NovelRenderer {
       // 複数埋め込みで他インスタンスが読んだ scene を、選択肢表示直前に反映する (#366)。
       this.reloadReadProgress()
       this.waitingForChoice = true
+      // 条件付きロック (#591)。`option.condition` が未定義なら常に false（ロックしない、
+      // 既存動作）。指定されていれば `checkFlag` で判定する（未定義/false ならロック）。
+      // `resolveEvents` の Condition 判定・GameFlags.check（TUI版）と同じ真偽規則。
+      const locked = event.Choice.options.map((option) =>
+        option.condition ? !this.gameState.checkFlag(option.condition) : false
+      )
       this.choiceOverlay.show(
         event.Choice.options,
         (jump: string) => {
@@ -3533,7 +3539,8 @@ export class NovelRenderer {
         },
         this.choiceStyle,
         this.readSceneProgress,
-        event.Choice.columns
+        event.Choice.columns,
+        locked
       )
       return
     }
