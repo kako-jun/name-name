@@ -605,9 +605,7 @@ export class ChoiceOverlay extends Container {
     // BUTTON_HEIGHT のまま——見た目は一切変わらない（layoutButtonWidth と同じ流儀）。
     const willShowIcon = options.some((_, i) => {
       const kind = resolveChoiceIconKind(cleared?.[i] ?? false)
-      if (kind === 'read') return this.readIconTexture !== null
-      if (kind === 'unread') return this.unreadIconTexture !== null
-      return false
+      return kind === 'read' ? this.readIconTexture !== null : this.unreadIconTexture !== null
     })
     this.layoutButtonHeight = willShowIcon ? BUTTON_HEIGHT_WITH_ICON : BUTTON_HEIGHT
 
@@ -688,12 +686,7 @@ export class ChoiceOverlay extends Container {
       // ロック中・既読なら read-icon が出る。配色のみ isLocked で別途ダイムする）。対応する
       // テクスチャの先読みに成功している場合だけ、テキストの上にアイコンを描く。
       const iconKind = resolveChoiceIconKind(isCleared)
-      const iconTexture =
-        iconKind === 'read'
-          ? this.readIconTexture
-          : iconKind === 'unread'
-            ? this.unreadIconTexture
-            : null
+      const iconTexture = iconKind === 'read' ? this.readIconTexture : this.unreadIconTexture
       const showIcon = iconTexture !== null
       const iconLayout = computeChoiceIconLayout(
         this.layoutButtonHeight,

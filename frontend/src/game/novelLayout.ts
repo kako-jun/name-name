@@ -481,8 +481,12 @@ export function computeChoiceIconLayout(
   return { iconY: center - offset, textY: center + offset }
 }
 
-/** `resolveChoiceIconKind` の戻り値 (#598 追記3 / #604)。表示すべきアイコンの種類。 */
-export type ChoiceIconKind = 'read' | 'unread' | 'none'
+/** `resolveChoiceIconKind` の戻り値 (#598 追記3 / #604)。表示すべきアイコンの種類。
+ * `'none'` は #604 で `locked` 引数が削除されたのに伴い、`resolveChoiceIconKind` が
+ * 返し得なくなったため削除した（cleared の真偽だけで 'read'/'unread' のどちらかに必ず
+ * 定まる）。この型を使うのは `resolveChoiceIconKind` の戻り値だけで、他に 'none' 相当の
+ * 状態を表す用途は無い。 */
+export type ChoiceIconKind = 'read' | 'unread'
 
 /**
  * 選択肢ボタン1件に表示すべきアイコンの種類を判定する純粋関数 (#598 追記3 / #604 訂正)。
