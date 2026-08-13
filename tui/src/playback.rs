@@ -1813,6 +1813,7 @@ mod tests {
             path: path.to_string(),
             back: name_name_parser::models::EventImageBack::default(),
             fade_ms: None,
+            effects: name_name_parser::models::AmbientEffects::default(),
         }
     }
 

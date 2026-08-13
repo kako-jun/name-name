@@ -65,6 +65,36 @@ pub enum EventImageBack {
     Keep,
 }
 
+/// イベント絵のアンビエント演出フラグ (#582)。Gymnasia の「暗闇+オレンジ色のろうそく光+
+/// ゆらぎ+ビネット」ルックを画像単位でオンにするための宣言的フラグ集合。既定は全て `false`
+/// （既存脚本は非回帰・#582 適用方式: 画面全体への一律適用ではなく画像ごとの明示オプトイン）。
+///
+/// GUI（PixiJS フィルタチェーン）・TUI（`tui::ambient_effects` の RGBA ピクセル変換）の
+/// 両ランタイムが同じ4フラグを解釈する。アニメーション位相（ゆらぎ・ろうそく揺れの時間変化）
+/// はこの構造体には持たせない — それは settled state ではなく描画側の一時状態
+/// （ADR-0002 / dev-doctrine 規律1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct AmbientEffects {
+    /// ゆらぎ。画面（このイベント絵）全体に常時微妙な歪みをかける
+    /// （GUI: pixi.js core `DisplacementFilter`。TUI: 行単位の sine 波オフセットで近似）。
+    #[serde(default)]
+    pub wobble: bool,
+    /// ビネット。周辺部の光量を落とす（TUI は暗部沈み込みも合わせて表現する）。
+    #[serde(default)]
+    pub vignette: bool,
+    /// グロー/ブルーム。自身を blur して overlay 合成し、べた塗りの平坦な領域を
+    /// グラデーションに見せて高解像度に見せる（#316 で確定した moderate 強度の技法。
+    /// 明るい点を光らせる用途ではない。暖色 tint は使わない = 背景への色被りを避ける）。
+    #[serde(default)]
+    pub glow: bool,
+    /// ろうそく光の数コマ揺れ。光量・影・グローを常に数コマ単位でゆらす
+    /// （画像素材に焼き込まず表示時エフェクトとして実装する）。
+    #[serde(default)]
+    pub candle: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
 #[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
@@ -411,6 +441,12 @@ pub enum Event {
         /// `Some(0)` は即時表示。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fade_ms: Option<u32>,
+        /// アンビエント演出フラグ (#582)。既定は全て false（既存脚本は非回帰）。
+        /// `back` と同じく skip_serializing_if は付けない（wasm 経由で常に値が入る前提を保つ、
+        /// #351 の back フィールドと同じ round-trip 方針）。emit 時の kv 省略判定
+        /// （フラグごとに false なら出力しない）は emitter 側で個別に判定する。
+        #[serde(default)]
+        effects: AmbientEffects,
     },
     /// イベント絵レイヤーをクリアする (#351)。Markdown 構文:
     /// `[イベント絵終了]` / `[イベント絵終了: フェード=700]`。

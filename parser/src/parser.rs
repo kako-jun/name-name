@@ -1392,11 +1392,18 @@ fn parse_video_directive(content: &str) -> Event {
     }
 }
 
-/// `[イベント絵: path]` / `[イベント絵: path, 背面=keep, フェード=1400]` の本体を分解する (#351)。
+/// `[イベント絵: path]` / `[イベント絵: path, 背面=keep, フェード=1400]` /
+/// `[イベント絵: path, ゆらぎ=true, ビネット=true, グロー=true, ろうそく=true]` (#582) の
+/// 本体を分解する (#351)。
 /// `parse_background_directive` / `parse_video_directive` と同じく最初の `,` で path / kv を分離する。
 /// キーは日本語 `背面` / 英語 alias `back`（値は英語トークン固定 `hide`/`keep`、大小無視、未知値は
 /// 既定 `Hide` に倒す）。フェードは BGM/SE と同じく `parse_fade_kv` を再利用する（単一のフェード値
 /// のみ持つため、背景/動画の複数端フェードとは異なり専用の kv パーサを持たせる必要がない）。
+///
+/// #582 アンビエント演出フラグ（`ゆらぎ`/`wobble`、`ビネット`/`vignette`、`グロー`/`glow`、
+/// `ろうそく`/`candle`）は、`フェード上/下/左/右` のように効果ごとに独立した bool kv
+/// （`parse_bool_kv` で `true`/`false` を受理、`ループ=true`/`ミュート=false` と同じ書式）。
+/// 個別に指定可能な要件（Issue #582）を満たすため単一の `演出=on` 集約キーにはしていない。
 /// 未知のキーは silent skip する（後方互換重視）。
 fn parse_event_image_directive(content: &str) -> Event {
     let (path_part, kv_part) = match content.split_once(',') {
@@ -1407,6 +1414,7 @@ fn parse_event_image_directive(content: &str) -> Event {
 
     let mut back = EventImageBack::Hide;
     let mut fade_ms: Option<u32> = None;
+    let mut effects = AmbientEffects::default();
 
     if let Some(kv) = kv_part {
         for raw in kv.split(',') {
@@ -1419,11 +1427,36 @@ fn parse_event_image_directive(content: &str) -> Event {
                 continue;
             }
             if let Some((k, v)) = pair.split_once('=') {
-                if matches!(k.trim(), "背面" | "back") {
+                let key = k.trim();
+                if matches!(key, "背面" | "back") {
                     back = match v.trim().to_ascii_lowercase().as_str() {
                         "keep" => EventImageBack::Keep,
                         _ => EventImageBack::Hide,
                     };
+                    continue;
+                }
+                if matches!(key, "ゆらぎ" | "wobble") {
+                    if let Some(b) = parse_bool_kv(v) {
+                        effects.wobble = b;
+                    }
+                    continue;
+                }
+                if matches!(key, "ビネット" | "vignette") {
+                    if let Some(b) = parse_bool_kv(v) {
+                        effects.vignette = b;
+                    }
+                    continue;
+                }
+                if matches!(key, "グロー" | "glow") {
+                    if let Some(b) = parse_bool_kv(v) {
+                        effects.glow = b;
+                    }
+                    continue;
+                }
+                if matches!(key, "ろうそく" | "candle") {
+                    if let Some(b) = parse_bool_kv(v) {
+                        effects.candle = b;
+                    }
                 }
             }
         }
@@ -1433,6 +1466,7 @@ fn parse_event_image_directive(content: &str) -> Event {
         path,
         back,
         fade_ms,
+        effects,
     }
 }
 

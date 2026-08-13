@@ -335,15 +335,29 @@ fn emit_events(out: &mut String, events: &[Event]) {
                 path,
                 back,
                 fade_ms,
+                effects,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                // #351 kv を 背面→フェード の順、日本語キーで正規化出力する（Some/非既定のものだけ。
-                // round-trip 安定。back=Hide は既定値なので省略する＝brightness=1.0 と同じ流儀）。
+                // #351/#582 kv を 背面→演出(ゆらぎ/ビネット/グロー/ろうそく)→フェード の順、
+                // 日本語キーで正規化出力する（Some/非既定のものだけ。round-trip 安定。
+                // back=Hide・effects 全 false は既定値なので省略する＝brightness=1.0 と同じ流儀）。
                 let mut kv = String::new();
                 if *back == EventImageBack::Keep {
                     kv.push_str(", 背面=keep");
+                }
+                if effects.wobble {
+                    kv.push_str(", ゆらぎ=true");
+                }
+                if effects.vignette {
+                    kv.push_str(", ビネット=true");
+                }
+                if effects.glow {
+                    kv.push_str(", グロー=true");
+                }
+                if effects.candle {
+                    kv.push_str(", ろうそく=true");
                 }
                 if let Some(ms) = fade_ms {
                     kv.push_str(&format!(", フェード={ms}"));
