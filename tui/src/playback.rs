@@ -2,7 +2,9 @@
 //!
 //! 会話文（Dialog / Narration）の逐次表示に加え、選択肢分岐（`Event::Choice`）にも対応する
 //! （#482）。フラグ管理・条件分岐（`Event::Flag`/`Event::Condition`）にも対応する（#509、
-//! 詳細は後述）。セーブ/ロードは引き続き対象外（#501、別Issue）。背景・立ち絵演出などその他の
+//! 詳細は後述）。複数スロットのメニュー式セーブ/ロードは対象外（#501時点の判断を継続）だが、
+//! シーン切り替えごとの自動クイックセーブ・起動時の自動クイックロードは対応する
+//! （#579、`main.rs::save` および [`Playback::jump_to_scene_id`] 参照）。背景・立ち絵演出などその他の
 //! イベントは、今回も画面表示を変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。
 //! `Event::EventImage`/`EventImageExit` だけは例外で、各 `DisplayLine` に `event_image`
 //! （その時点で表示されているべきイベント絵の相対パス）として反映する（#481）。左側は
@@ -1313,9 +1315,32 @@ impl Playback {
         let Some(option) = options.get(self.choice_cursor) else {
             return false;
         };
-        let Some(&target_scene_idx) = self.scene_index_by_id.get(&option.jump) else {
+        // `option`（`self.items` を借用中）を握ったまま `self.jump_to_scene_id(&mut self...)`
+        // を呼ぶと可変借用と衝突するため、先に `jump` 先IDだけ複製して借用を切る。
+        let jump = option.jump.clone();
+        self.jump_to_scene_id(&jump)
+    }
+
+    /// `scene_id` へ明示的にジャンプする。[`Playback::select_current_choice`] のジャンプ
+    /// 本体（ファイル境界越えリセット・中継シーン自動継続・0件シーンのフォールスルーを
+    /// 含む）を、選択肢の確定操作から切り離して再利用可能にしたもの（#579）。自動
+    /// クイックロード（起動時、構築直後に保存済みシーンへ復元する。`main.rs::save`
+    /// 参照）が、選択肢を経由せず直接このジャンプ本体を呼ぶために追加した。
+    ///
+    /// `scene_id` が `scene_index_by_id` に見つからない場合は位置を変えずに `false` を
+    /// 返す（`select_current_choice` と同じ fail-soft 方針。原稿の記述ミスに加えて、
+    /// 自動クイックロードでは「原稿が変わってセーブ済みシーンIDが消えた」ケースもここに
+    /// 含まれる）。
+    pub fn jump_to_scene_id(&mut self, scene_id: &str) -> bool {
+        let Some(&target_scene_idx) = self.scene_index_by_id.get(scene_id) else {
             return false;
         };
+        self.jump_to_scene_idx(target_scene_idx)
+    }
+
+    /// [`Playback::jump_to_scene_id`] の本体（解決済みの `scene_order` インデックス版、
+    /// #579 で `select_current_choice` から切り出した）。
+    fn jump_to_scene_idx(&mut self, target_scene_idx: usize) -> bool {
         // ジャンプ元とジャンプ先が異なるファイル由来の場合、シーンを跨いで引き継ぐ
         // ランニング状態（BGM/イベント絵/暗転/pending SE/話者・本文）をリセットする
         // （#528、#540で`current_speaker`/`current_text`を追加）。
@@ -2159,6 +2184,54 @@ mod tests {
         assert!(
             pb.current_choice().is_some(),
             "失敗時は選択肢表示のまま変わらないはず"
+        );
+    }
+
+    /// #579 で切り出した [`Playback::jump_to_scene_id`] の最小動作確認（網羅的な検証は
+    /// `select_current_choice_*` 系の既存テスト群がジャンプ本体を通して既にカバーして
+    /// いる — この関数はその本体をそのまま呼ぶだけの薄いラッパー）。
+    #[test]
+    fn jump_to_scene_id_moves_to_target_scene_without_going_through_a_choice() {
+        let doc = two_scene_doc_with_choice();
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_scene_id(), "1-1");
+
+        assert!(
+            pb.jump_to_scene_id("1-2"),
+            "選択肢を経由せず直接シーンIDでジャンプできるはず"
+        );
+
+        assert_eq!(pb.current_scene_id(), "1-2");
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").speaker.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn jump_to_scene_id_with_unknown_id_is_noop_and_returns_false() {
+        let doc = two_scene_doc_with_choice();
+        let mut pb = Playback::from_document(&doc);
+        let scene_before = pb.current_scene_id().to_string();
+
+        assert!(!pb.jump_to_scene_id("does-not-exist"));
+
+        assert_eq!(pb.current_scene_id(), scene_before, "位置は変わらないはず");
+    }
+
+    #[test]
+    fn set_flags_overwrites_flags_read_back_via_flags_accessor() {
+        let doc = two_scene_doc_with_choice();
+        let mut pb = Playback::from_document(&doc);
+        assert!(!pb.flags().check("restored"), "構築直後は未設定のはず");
+
+        let mut restored = GameFlags::new();
+        restored.set("restored", FlagValue::Bool(true));
+        pb.set_flags(restored);
+
+        assert!(
+            pb.flags().check("restored"),
+            "set_flags で差し替えたフラグが読めるはず"
         );
     }
 
