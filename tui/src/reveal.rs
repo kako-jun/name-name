@@ -333,6 +333,7 @@ mod tests {
             speaker: speaker.map(|s| s.to_string()),
             text: text.into_iter().map(|s| s.to_string()).collect(),
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         }
     }
 

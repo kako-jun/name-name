@@ -73,7 +73,7 @@ pub enum EventImageBack {
 /// 両ランタイムが同じ4フラグを解釈する。アニメーション位相（ゆらぎ・ろうそく揺れの時間変化）
 /// はこの構造体には持たせない — それは settled state ではなく描画側の一時状態
 /// （ADR-0002 / dev-doctrine 規律1）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
 #[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct AmbientEffects {

@@ -141,7 +141,9 @@
 
 use std::collections::HashMap;
 
-use name_name_parser::models::{BgmAction, BlackoutAction, ChoiceOption, Document, Event};
+use name_name_parser::models::{
+    AmbientEffects, BgmAction, BlackoutAction, ChoiceOption, Document, Event,
+};
 
 use crate::flags::GameFlags;
 use crate::sentence;
@@ -159,6 +161,11 @@ pub struct DisplayLine {
     /// クリアされていれば（または一度も出ていなければ）`None`。`Event::Choice` 等その他の
     /// イベント種別はこの値に影響しない（#482 スコープの Choice を含め今回も対象外）。
     pub event_image: Option<String>,
+    /// `event_image` に対応するアンビエント演出フラグ (#582)。`event_image` が `None` のときは
+    /// 意味を持たない（既定値のまま）。既存の `event_image: Option<String>` 型は変えず並行の
+    /// フィールドとして追加した — 型を `Option<(String, AmbientEffects)>` 等に変えると
+    /// 既存の大量の `.as_deref()` 比較テストを壊すため（back-compat 優先、#582）。
+    pub event_image_effects: AmbientEffects,
 }
 
 /// ルビ記法（`｜` / `《...》`）を除去し、ベーステキストのみを残す。
@@ -208,11 +215,13 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
             speaker: character.clone(),
             text: text.iter().map(|line| strip_ruby_markup(line)).collect(),
             event_image: None,
+            event_image_effects: AmbientEffects::default(),
         }),
         Event::Narration { text, .. } => Some(DisplayLine {
             speaker: None,
             text: text.iter().map(|line| strip_ruby_markup(line)).collect(),
             event_image: None,
+            event_image_effects: AmbientEffects::default(),
         }),
         _ => None,
     }
@@ -460,6 +469,10 @@ pub struct Playback {
 #[derive(Clone)]
 struct SceneScanState {
     current_event_image: Option<String>,
+    /// `current_event_image` に対応するアンビエント演出フラグ (#582)。`current_event_image`
+    /// が `Some` になるのと同時に更新し、`None` に戻すのと同時にリセットする
+    /// （常に「今のイベント絵の演出設定」を指す並行フィールド）。
+    current_event_image_effects: AmbientEffects,
     current_speaker: Option<String>,
     current_text: Vec<String>,
     current_blackout: bool,
@@ -507,6 +520,7 @@ fn push_wait_chain_terminal_item(
         speaker: state.current_speaker.clone(),
         text: state.current_text.clone(),
         event_image: state.current_event_image.clone(),
+        event_image_effects: state.current_event_image_effects,
     }));
     item_file_ids.push(file_id);
     item_wait_ms.push(None);
@@ -565,9 +579,11 @@ fn build_scene_items(
             // フェード時間上書き）を意図的に捨てている。`fade_ms` は TUI 側では
             // 常に `config.event_image.crossfade_ms`（グローバル値、`main.rs` の
             // `event_loop` 参照）しか使わない簡略化（MVPスコープ、#481）。GUI版の
-            // ようなイベント単位のフェード時間上書きは今回の対象外。
-            Event::EventImage { path, .. } => {
+            // ようなイベント単位のフェード時間上書きは今回の対象外。`effects`
+            // （アンビエント演出フラグ、#582）は back/fade_ms と異なり TUI 側でも解釈する。
+            Event::EventImage { path, effects, .. } => {
                 state.current_event_image = Some(path.clone());
+                state.current_event_image_effects = *effects;
                 // 直後が `Event::Wait { ms }` の場合だけ、画像コマ+待機の自動送り
                 // item を作る（#497、Issue #475 が求める4コマ自動再生の受け皿）。
                 // それ以外（次が Dialog/EventImage/EventImageExit 等）は従来どおり
@@ -587,6 +603,7 @@ fn build_scene_items(
                         speaker: state.current_speaker.clone(),
                         text: state.current_text.clone(),
                         event_image: state.current_event_image.clone(),
+                        event_image_effects: state.current_event_image_effects,
                     }));
                     item_file_ids.push(file_id);
                     item_wait_ms.push(Some(*ms));
@@ -659,6 +676,7 @@ fn build_scene_items(
                     } else if matches!(events.get(event_index + 2), Some(Event::SceneTransition)) {
                         state.current_blackout = false;
                         state.current_event_image = None;
+                        state.current_event_image_effects = AmbientEffects::default();
                         push_wait_chain_terminal_item(
                             state,
                             file_id,
@@ -677,6 +695,7 @@ fn build_scene_items(
             }
             Event::EventImageExit { .. } => {
                 state.current_event_image = None;
+                state.current_event_image_effects = AmbientEffects::default();
             }
             // GUI版 `setBlackout` 相当（#512）。オン/オフの2状態を単純に上書きする
             // だけの宣言的 state で、`state.current_event_image` と同じ「直近の値を次の
@@ -698,6 +717,7 @@ fn build_scene_items(
             Event::SceneTransition => {
                 state.current_blackout = false;
                 state.current_event_image = None;
+                state.current_event_image_effects = AmbientEffects::default();
             }
             // GUI版 `NovelRenderer` の `'Bgm' in event` 分岐（`audioManager.playBgm`/
             // `stopBgm`）と同じ意味論（#502）。`action === 'Play' && path` の両方が
@@ -748,6 +768,7 @@ fn build_scene_items(
                     let item = match item {
                         PlaybackItem::Line(mut line) => {
                             line.event_image = state.current_event_image.clone();
+                            line.event_image_effects = state.current_event_image_effects;
                             state.current_speaker = line.speaker.clone();
                             state.current_text = line.text.clone();
                             PlaybackItem::Line(line)
@@ -831,6 +852,7 @@ impl Playback {
         // 無ければ「話者なし・本文なし」が初期値になる。
         let mut scan_state = SceneScanState {
             current_event_image: None,
+            current_event_image_effects: AmbientEffects::default(),
             current_speaker: None,
             current_text: Vec::new(),
             current_blackout: false,
@@ -937,6 +959,7 @@ impl Playback {
             speaker: line.speaker.clone(),
             text: vec![pages[0].clone()],
             event_image: line.event_image.clone(),
+            event_image_effects: line.event_image_effects,
         });
         self.sentence_pages = pages;
     }
@@ -1310,6 +1333,7 @@ impl Playback {
         {
             self.scan_state.current_bgm = None;
             self.scan_state.current_event_image = None;
+            self.scan_state.current_event_image_effects = AmbientEffects::default();
             self.scan_state.current_blackout = false;
             self.scan_state.pending_se.clear();
             self.scan_state.current_speaker = None;
@@ -1408,6 +1432,8 @@ impl Playback {
                             {
                                 self.scan_state.current_bgm = None;
                                 self.scan_state.current_event_image = None;
+                                self.scan_state.current_event_image_effects =
+                                    AmbientEffects::default();
                                 self.scan_state.current_blackout = false;
                                 self.scan_state.pending_se.clear();
                                 self.scan_state.current_speaker = None;
@@ -1517,6 +1543,7 @@ impl Playback {
         }
         let mut scan_state = SceneScanState {
             current_event_image: None,
+            current_event_image_effects: AmbientEffects::default(),
             current_speaker: None,
             current_text: Vec::new(),
             current_blackout: false,
@@ -1680,6 +1707,7 @@ impl Playback {
             current_display: None,
             scan_state: SceneScanState {
                 current_event_image: None,
+                current_event_image_effects: AmbientEffects::default(),
                 current_speaker: None,
                 current_text: Vec::new(),
                 current_blackout: false,
@@ -3115,6 +3143,7 @@ mod tests {
             speaker: speaker.map(|s| s.to_string()),
             text: text.into_iter().map(|s| s.to_string()).collect(),
             event_image: None,
+            event_image_effects: AmbientEffects::default(),
         }
     }
 
@@ -6437,6 +6466,7 @@ mod tests {
             speaker: Some("カコ".to_string()),
             text: vec!["やあ".to_string()],
             event_image: None,
+            event_image_effects: AmbientEffects::default(),
         };
         let a = PlaybackItem::Line(line.clone());
         let b = PlaybackItem::Line(line);
@@ -6453,11 +6483,13 @@ mod tests {
             speaker: Some("カコ".to_string()),
             text: vec!["やあ".to_string()],
             event_image: None,
+            event_image_effects: AmbientEffects::default(),
         });
         let b = PlaybackItem::Line(DisplayLine {
             speaker: Some("カコ".to_string()),
             text: vec!["さようなら".to_string()],
             event_image: None,
+            event_image_effects: AmbientEffects::default(),
         });
         assert_ne!(
             content_signature(&a),
@@ -6472,11 +6504,13 @@ mod tests {
             speaker: None,
             text: vec!["同じ本文".to_string()],
             event_image: Some("a.webp".to_string()),
+            event_image_effects: AmbientEffects::default(),
         });
         let b = PlaybackItem::Line(DisplayLine {
             speaker: None,
             text: vec!["同じ本文".to_string()],
             event_image: Some("b.webp".to_string()),
+            event_image_effects: AmbientEffects::default(),
         });
         assert_ne!(
             content_signature(&a),
@@ -6493,6 +6527,7 @@ mod tests {
             speaker: Some("カコ".to_string()),
             text: vec!["同じ中身".to_string()],
             event_image: None,
+            event_image_effects: AmbientEffects::default(),
         };
         let a = PlaybackItem::Line(line.clone());
         let b = PlaybackItem::Image(line);

@@ -1256,7 +1256,10 @@ mod tests {
             diagonal_pattern_webp_fixture(placeholder_area.width, placeholder_area.height);
         let (mut config, relative) = config_and_relative_path_for(&fixture_path);
         config.placeholder.label = "[画像]".to_string();
-        let image_fade = ImageFadeState::settled(Some(relative));
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
 
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let now = Instant::now();
@@ -1310,7 +1313,10 @@ mod tests {
         // という回帰ガードとしての価値はそのまま残る。
         let fixture_path = diagonal_pattern_webp_fixture(1, 1);
         let (config, relative) = config_and_relative_path_for(&fixture_path);
-        let image_fade = ImageFadeState::settled(Some(relative));
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
 
         for (w, h) in [(1u16, 1u16), (2, 1), (1, 2), (2, 2), (1, 3)] {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -1344,7 +1350,10 @@ mod tests {
         let fixture_path =
             crate::image_render::write_test_webp_fixture(&solid_rgba(color, 1, 1), 1, 1);
         let (config, relative) = config_and_relative_path_for(&fixture_path);
-        let image_fade = ImageFadeState::settled(Some(relative));
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
 
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let now = Instant::now();
@@ -1450,6 +1459,7 @@ mod tests {
             speaker: Some("A".to_string()),
             text: vec!["暗転中でも読めるはずの台詞".to_string()],
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         };
         let normal = render_with_blackout(&config, Some(&line), false, CANVAS_W, CANVAS_H);
         let blacked = render_with_blackout(&config, Some(&line), true, CANVAS_W, CANVAS_H);
@@ -1529,7 +1539,10 @@ mod tests {
         let fixture_path =
             diagonal_pattern_webp_fixture(placeholder_area.width, placeholder_area.height);
         let (config, relative) = config_and_relative_path_for(&fixture_path);
-        let image_fade = ImageFadeState::settled(Some(relative));
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
 
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let now = Instant::now();
@@ -1922,6 +1935,7 @@ mod tests {
             speaker: Some("A".to_string()),
             text: vec!["hi".to_string()],
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         };
         let now = Instant::now();
         // #494以降、W=1x H=3 は fits_required_size を満たさず draw_too_small_message 側の
@@ -1960,6 +1974,7 @@ mod tests {
             speaker: Some("A".to_string()),
             text: vec!["hello".to_string()],
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
@@ -2000,6 +2015,7 @@ mod tests {
             speaker: Some("A".to_string()),
             text: vec!["hello".to_string()],
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         };
         let now = Instant::now();
 
@@ -2104,6 +2120,7 @@ mod tests {
             speaker: Some("A".to_string()),
             text: vec![],
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
@@ -2150,6 +2167,7 @@ mod tests {
             speaker: Some("A".to_string()),
             text: vec!["first line".to_string(), "second line".to_string()],
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
@@ -2217,6 +2235,7 @@ mod tests {
             speaker: Some("A".to_string()),
             text: vec!["hi".to_string()],
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
@@ -2636,6 +2655,7 @@ mod tests {
             speaker: speaker.map(|s| s.to_string()),
             text: text.into_iter().map(|s| s.to_string()).collect(),
             event_image: None,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
         }
     }
 
@@ -3582,7 +3602,10 @@ mod tests {
         let fixture_path =
             crate::image_render::write_test_webp_fixture(&solid_rgba((10, 20, 30), 2, 2), 2, 2);
         let (config, relative) = config_and_relative_path_for(&fixture_path);
-        let image_fade = ImageFadeState::settled(Some(relative));
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
 
         let line = dialog_line(Some("A"), vec!["Y"]); // "A" は player_speakers 非該当=opponent(上)
         let now = Instant::now();
