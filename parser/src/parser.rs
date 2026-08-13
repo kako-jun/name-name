@@ -727,26 +727,28 @@ pub fn parse(input: &str) -> Document {
                     if let Some(arrow_pos) = rest.find('→') {
                         let text = rest[..arrow_pos].trim().to_string();
                         let after_arrow = rest[arrow_pos + '→'.len_utf8()..].trim();
-                        // jump の後ろに任意で `[条件: flag]` を付けられる (#591)。
-                        // 例: `- 異邦 → r02-01-last-rites [条件: route01_cleared]`
-                        // flag の真偽判定は既存の `[条件:]` ブロックと同じ規則
-                        // （GameFlags::check / checkFlag 参照: 未定義/false ならロック）。
-                        let (jump, condition) = match after_arrow.find("[条件:") {
-                            Some(cond_pos) => {
-                                let jump = after_arrow[..cond_pos].trim().to_string();
-                                let cond_str = after_arrow[cond_pos..].trim();
-                                let flag = cond_str
-                                    .strip_prefix("[条件:")
-                                    .and_then(|s| s.strip_suffix(']'))
-                                    .map(|s| s.trim().to_string());
-                                (jump, flag)
-                            }
-                            None => (after_arrow.to_string(), None),
+                        // jump の後ろに任意で `[条件: flag]`（#591、ロック）と `[消灯: flag]`
+                        // （#594、消灯=クリア済み視覚状態）を付けられる。両方併記可能で
+                        // 順序は問わない（例: `- 異邦 → jump [条件: a] [消灯: b]` /
+                        // `[消灯: b] [条件: a]` のどちらも同じ結果になる）。
+                        // flag の真偽判定はどちらも既存の `[条件:]` ブロックと同じ規則
+                        // （GameFlags::check / checkFlag 参照: 未定義/false なら偽）。
+                        let cond_pos = after_arrow.find("[条件:");
+                        let cleared_pos = after_arrow.find("[消灯:");
+                        let jump_end = match (cond_pos, cleared_pos) {
+                            (Some(a), Some(b)) => a.min(b),
+                            (Some(a), None) => a,
+                            (None, Some(b)) => b,
+                            (None, None) => after_arrow.len(),
                         };
+                        let jump = after_arrow[..jump_end].trim().to_string();
+                        let condition = extract_bracket_flag(after_arrow, "[条件:");
+                        let cleared = extract_bracket_flag(after_arrow, "[消灯:");
                         options.push(ChoiceOption {
                             text,
                             jump,
                             condition,
+                            cleared,
                         });
                     }
                 }
@@ -2360,6 +2362,18 @@ fn parse_choice_columns(trimmed: &str) -> Option<u32> {
         .find_map(|part| part.strip_prefix("列="))
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|&n| n >= 1)
+}
+
+/// 選択肢オプション行の末尾から `marker`（`"[条件:"` または `"[消灯:"`、#591/#594）の
+/// 値を取り出す。`marker` が存在しなければ `None`。存在すれば、`marker` の直後から
+/// 最初の `]` までを trim した文字列を返す（対応する `]` が無い不正な記述は None）。
+/// `[条件: flag] [消灯: flag]` のように複数のマーカーが同じ行に併記されていても、
+/// それぞれ独立に呼び出すことで順序に関わらず両方を取り出せる。
+fn extract_bracket_flag(s: &str, marker: &str) -> Option<String> {
+    let start = s.find(marker)?;
+    let after = &s[start + marker.len()..];
+    let end = after.find(']')?;
+    Some(after[..end].trim().to_string())
 }
 
 /// Parse player start line: "@x,y 向き=..." → Some(PlayerStartData)
