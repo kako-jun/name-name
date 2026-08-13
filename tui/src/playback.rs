@@ -1141,9 +1141,9 @@ impl Playback {
     }
 
     /// `option.cleared`（#594）の真偽を現在のフラグ状態で判定する。`cleared` が `None`
-    /// （従来どおり指定なし）なら常に `false`（消灯しない）。`Some(flag)` なら
-    /// `self.flags.check(flag)`（`is_option_locked` の否定と違い、真のときに消灯 = そのまま
-    /// 真偽判定）——`[条件:]` と同じ真偽判定規則を使うが、ロックとは意味が逆（真で消灯）。
+    /// （従来どおり指定なし）なら常に `false`（完了しない）。`Some(flag)` なら
+    /// `self.flags.check(flag)`（`is_option_locked` の否定と違い、真のときに完了扱い = そのまま
+    /// 真偽判定）——`[条件:]` と同じ真偽判定規則を使うが、ロックとは意味が逆（真で完了扱い）。
     fn is_option_cleared(&self, option: &ChoiceOption) -> bool {
         match &option.cleared {
             None => false,
@@ -1164,12 +1164,12 @@ impl Playback {
         }
     }
 
-    /// 現在Choice表示中の各選択肢について、消灯(クリア済み)状態（#594）を判定した配列を
-    /// 返す。`current_choice_locked()` と並行するメソッドで、`current_choice()` が返す
-    /// `options` と同じ長さ・同じ並びになる。Choice表示中でなければ空 Vec。`ui::draw` へ
-    /// そのまま渡し、`draw_choice_list`/`draw_choice_grid` が消灯中の選択肢をロックとは
-    /// 別の見た目（DIM + 🌑 マーク）で描画するために使う。ロックと違い選択自体は
-    /// `select_current_choice` で拒否しない。
+    /// 現在Choice表示中の各選択肢について、完了(クリア済み)状態（#594、#596でキーワード
+    /// 改名）を判定した配列を返す。`current_choice_locked()` と並行するメソッドで、
+    /// `current_choice()` が返す `options` と同じ長さ・同じ並びになる。Choice表示中で
+    /// なければ空 Vec。`ui::draw` へそのまま渡し、`draw_choice_list`/`draw_choice_grid` が
+    /// 完了中の選択肢をロックとは別の見た目（DIM + 🌑 マーク）で描画するために使う。
+    /// ロックと違い選択自体は `select_current_choice` で拒否しない。
     pub fn current_choice_cleared(&self) -> Vec<bool> {
         match self.items.get(self.index) {
             Some(PlaybackItem::Choice(options, _)) => {
@@ -2392,9 +2392,9 @@ mod tests {
         }
     }
 
-    /// `choice` の消灯(クリア済み)版（#594）。`(text, jump, cleared)` の3つ組で、
-    /// `cleared` が `Some(flag)` なら `flag` が真になったとき消灯(視覚状態のみ、選択は拒否しない)
-    /// になる選択肢を作る。
+    /// `choice` の完了(クリア済み)版（#594、#596でキーワード改名）。`(text, jump, cleared)`
+    /// の3つ組で、`cleared` が `Some(flag)` なら `flag` が真になったとき完了扱い
+    /// (視覚状態のみ、選択は拒否しない)になる選択肢を作る。
     fn choice_with_cleared(options: Vec<(&str, &str, Option<&str>)>) -> Event {
         Event::Choice {
             options: options
@@ -3558,7 +3558,7 @@ mod tests {
         assert!(pb.current_choice().is_some(), "位置が変わっていないはず");
     }
 
-    // ---- #594: 選択肢オプションの「消灯(クリア済み)」視覚状態のテスト ----
+    // ---- #594: 選択肢オプションの「完了(クリア済み)」視覚状態のテスト（#596でキーワード改名） ----
 
     /// #594 テスト観点整理フェーズ 中優先14: `current_choice_cleared()` が
     /// `option.cleared` とフラグ状態の組み合わせ（未指定/設定済みフラグ/未設定フラグ）を
@@ -3574,14 +3574,14 @@ mod tests {
                     vec![
                         flag_event("route01_cleared", true),
                         choice_with_cleared(vec![
-                            ("消灯指定なし", "1-2", None),
+                            ("完了指定なし", "1-2", None),
                             (
-                                "route01_clearedが設定済みなら消灯",
+                                "route01_clearedが設定済みなら完了",
                                 "1-3",
                                 Some("route01_cleared"),
                             ),
                             (
-                                "未設定flagを指すなら消灯しない",
+                                "未設定flagを指すなら完了しない",
                                 "1-4",
                                 Some("route99_never_set"),
                             ),
@@ -3616,13 +3616,13 @@ mod tests {
                     vec![
                         flag_event("route01_cleared", true),
                         choice_with_cleared(vec![(
-                            "消灯済みでも選べる",
+                            "完了済みでも選べる",
                             "1-2",
                             Some("route01_cleared"),
                         )]),
                     ],
                 ),
-                scene("1-2", vec![dialog(Some("A"), vec!["消灯済みルートへ到達"])]),
+                scene("1-2", vec![dialog(Some("A"), vec!["完了済みルートへ到達"])]),
             ],
         );
         let doc = document_with_chapters(vec![ch1]);
@@ -3657,7 +3657,7 @@ mod tests {
                         flag_event("route02_cleared", true),
                         Event::Choice {
                             options: vec![ChoiceOption {
-                                text: "ロック済みかつ消灯済み".to_string(),
+                                text: "ロック済みかつ完了済み".to_string(),
                                 jump: "1-2".to_string(),
                                 // route01_cleared は未設定 → locked = true
                                 condition: Some("route01_cleared".to_string()),
@@ -3710,8 +3710,8 @@ mod tests {
                     vec![
                         flag_event("route01_cleared", true),
                         choice_with_cleared(vec![
-                            ("消灯済み選択肢A", "1-2", Some("route01_cleared")),
-                            ("消灯済み選択肢B", "1-3", Some("route01_cleared")),
+                            ("完了済み選択肢A", "1-2", Some("route01_cleared")),
+                            ("完了済み選択肢B", "1-3", Some("route01_cleared")),
                         ]),
                     ],
                 ),

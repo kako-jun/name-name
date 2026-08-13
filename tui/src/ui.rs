@@ -274,11 +274,12 @@ pub fn draw(
     // 同じ長さ・同じ並びを期待する（`main.rs` が `Playback::current_choice_locked()`
     // から作って渡す）。`choice` が `None` のときは無視される。
     choice_locked: &[bool],
-    // 各選択肢が消灯(クリア済み)状態か（`option.cleared` が真のフラグを指している、#594）。
-    // `choice_locked` と並行する独立配列——`choice` が `Some` のときだけ意味を持ち、
-    // `choice.0`/`choice_locked` と同じ長さ・同じ並びを期待する（`main.rs` が
-    // `Playback::current_choice_cleared()` から作って渡す）。ロックとは異なり選択は拒否
-    // しない（見た目だけが変わる）。ロックと消灯が同時に真のときはロックの見た目を優先する。
+    // 各選択肢が完了(クリア済み)状態か（`option.cleared` が真のフラグを指している、#594、
+    // #596でキーワード改名）。`choice_locked` と並行する独立配列——`choice` が `Some` の
+    // ときだけ意味を持ち、`choice.0`/`choice_locked` と同じ長さ・同じ並びを期待する
+    // （`main.rs` が `Playback::current_choice_cleared()` から作って渡す）。ロックとは
+    // 異なり選択は拒否しない（見た目だけが変わる）。ロックと完了が同時に真のときはロックの
+    // 見た目を優先する。
     choice_cleared: &[bool],
     position: usize,
     total: usize,
@@ -412,8 +413,8 @@ fn choice_cursor_prefix_and_style(
 /// 同じにする。
 const CHOICE_LOCKED_SUFFIX: &str = " 🔒";
 
-/// 消灯(クリア済み)状態の選択肢テキストに付ける視覚的な目印（#594）。ロックの🔒とは
-/// 別の記号にする——ろうそくの火が消えた後の「暗闇」を表す新月（🌑）を採用する。
+/// 完了(クリア済み)状態の選択肢テキストに付ける視覚的な目印（#594、#596でキーワード改名）。
+/// ロックの🔒とは別の記号にする——ろうそくの火が消えた後の「暗闇」を表す新月（🌑）を採用する。
 /// ロックと違い選択は拒否しない（`select_current_choice` は `option.cleared` を見ない）ため、
 /// この記号は「選べないから見た目が変わる」のではなく「クリア済みで見た目が変わる」ことを示す。
 const CHOICE_CLEARED_SUFFIX: &str = " 🌑";
@@ -4920,7 +4921,7 @@ mod tests {
         let options: Vec<ChoiceOption> = (0..10)
             .map(|i| choice_option(&i.to_string(), "x"))
             .collect();
-        // 偶数indexは消灯なし、奇数indexは消灯中（市松パターンで隣接セルとの取り違えも検出できる）。
+        // 偶数indexは未完了、奇数indexは完了中（市松パターンで隣接セルとの取り違えも検出できる）。
         let cleared: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
         let area = Rect::new(0, 0, 60, 2);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();

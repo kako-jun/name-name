@@ -508,9 +508,9 @@ fn emit_events(out: &mut String, events: &[Event]) {
                     None => out.push_str("[選択]\n"),
                 }
                 for opt in options {
-                    // 条件付きロック (#591) と消灯(クリア済み)視覚状態 (#594)。それぞれ
-                    // `Some` のときだけ末尾に `[条件: flag]`/`[消灯: flag]` を付ける
-                    // （無指定時は従来どおり非破壊）。両方指定時は `[条件:]` → `[消灯:]`
+                    // 条件付きロック (#591) と完了(クリア済み)視覚状態 (#594、#596でキーワード
+                    // 改名)。それぞれ `Some` のときだけ末尾に `[条件: flag]`/`[完了: flag]` を
+                    // 付ける（無指定時は従来どおり非破壊）。両方指定時は `[条件:]` → `[完了:]`
                     // の順で併記する（parser 側は順序を問わず両方読めるが、emit は
                     // docs/spec の例と揃えて一意な順序にする）。
                     let mut suffix = String::new();
@@ -518,7 +518,7 @@ fn emit_events(out: &mut String, events: &[Event]) {
                         suffix.push_str(&format!(" [条件: {flag}]"));
                     }
                     if let Some(flag) = &opt.cleared {
-                        suffix.push_str(&format!(" [消灯: {flag}]"));
+                        suffix.push_str(&format!(" [完了: {flag}]"));
                     }
                     out.push_str(&format!("- {} → {}{suffix}\n", opt.text, opt.jump));
                 }

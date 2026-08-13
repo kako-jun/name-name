@@ -826,7 +826,7 @@ where
         // は current_choice() とは別配列で持つ（current_choice() の戻り値は Playback を
         // borrow したままの &[ChoiceOption] のため、ロック判定用に別途 owned な Vec を作る）。
         let choice_locked = playback.current_choice_locked();
-        // #594: 選択肢の消灯(クリア済み)状態も同じ理由で別配列に持つ。ロックとは独立
+        // #594: 選択肢の完了(クリア済み)状態も同じ理由で別配列に持つ（#596でキーワード改名）。ロックとは独立
         // （`option.cleared` を見る）で、選択自体は拒否しない見た目専用のフラグ。
         let choice_cleared = playback.current_choice_cleared();
         terminal.draw(|frame| {
