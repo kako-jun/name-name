@@ -3108,6 +3108,174 @@ mod tests {
         let _ = std::fs::remove_file(&quicksave_path);
     }
 
+    /// #579 回帰: 自動クイックセーブは「シーンが実際に切り替わったか」
+    /// （`playback.current_scene_idx()` の前後比較）だけをトリガーにしているため、
+    /// 同一シーン内で会話行を何行進めてもセーブファイルは一切書き換わらないはず。
+    /// 同じ `Playback`/セーブ先ファイルを使って `event_loop` を2回連続で呼び、1回目
+    /// （シーン切り替えを含む）が終わった直後のファイル内容と、2回目（同一シーン内の
+    /// 追加Advanceのみ）が終わった後のファイル内容を比較する——書き込みが2回とも
+    /// 実際に発生していれば `read_positions` の中身が変わり得るため、同一プロセス内で
+    /// `HashSet` の反復順序が異なる別々のテスト実行同士を比較するより、この「同じ
+    /// ファイルへの2回目の書き込みが物理的に起きていないこと」を直接見る方が
+    /// 反復順序起因の偽陽性が無く確実（1回しか書かれていなければ内容は必ずbit-exactに
+    /// 一致する）。
+    #[test]
+    fn event_loop_does_not_rewrite_quicksave_file_on_additional_advance_within_same_scene() {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-event-loop-no-rewrite-same-scene-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+        let mut config = instant_config();
+        config.quicksave_path = Some(quicksave_path.clone());
+
+        let source = "---\nengine: name-name\n---\n\n\
+                       ## 1-1: multi\n\n\
+                       **A**:\n1文目\n\n\
+                       **A**:\n2文目\n\n\
+                       [選択]\n- 進む→1-2\n[/選択]\n\n\
+                       ## 1-2: landing\n\n\
+                       **B**:\n最終1\n\n\
+                       **B**:\n最終2\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        // 1回目: 1-1の2行を読み進めてChoiceを確定 -> 1-2へjump（シーン切り替え、
+        // ここで自動セーブが1回発生する）。
+        let (mut next_action_landing, _r1) = action_queue(vec![
+            Action::Advance,
+            Action::Advance,
+            Action::Advance,
+            Action::Quit,
+        ]);
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action_landing,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-2",
+            "テストの前提: 1回目の終了時点で1-2へ着地しているはず"
+        );
+        let after_landing = std::fs::read_to_string(&quicksave_path)
+            .expect("シーン切り替え直後にクイックセーブファイルが書かれているはず");
+
+        // 2回目: 同じplaybackを継続し、1-2内でもう1行進める（最終1->最終2）。
+        // シーンは変わらないため、ここではセーブが再発生しないはず。
+        let (mut next_action_same_scene, _r2) = action_queue(vec![Action::Advance, Action::Quit]);
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action_same_scene,
+            None,
+            false,
+        )
+        .unwrap();
+
+        let after_extra_advance = std::fs::read_to_string(&quicksave_path)
+            .expect("ファイルは（1回目の書き込みのまま）残っているはず");
+
+        assert_eq!(
+            after_landing, after_extra_advance,
+            "シーンが変わらない追加Advanceでセーブファイルの中身が変わってしまっている \
+             (再セーブされた疑い), after_landing={after_landing}, \
+             after_extra_advance={after_extra_advance}"
+        );
+
+        let _ = std::fs::remove_file(&quicksave_path);
+    }
+
+    /// #579 + #574 統合: 中継シーン連鎖（本文無し・Choice1件だけのシーンが2連続）を
+    /// 1回の `Action::Advance` で自動通過した場合、自動クイックセーブに保存される
+    /// `scene_id` が中継先（"1-2"/"1-3"）ではなく最終的な着地シーン（"1-4"）である
+    /// ことを確認する。`event_loop` のセーブトリガー判定は `Action::Advance` 処理の
+    /// 前後で1回だけ`playback.current_scene_idx()`を比較する構造（本テストファイルの
+    /// `event_loop_autosaves_quicksave_file_when_scene_changes_and_path_is_configured`
+    /// 参照）のため、途中の中継シーンで書き込みが起きることは構造上あり得ない——
+    /// ここでは「その1回の書き込みが指す先が正しく最終着地シーンか」を確認する。
+    #[test]
+    fn event_loop_autosaves_final_landing_scene_id_not_relay_scene_after_chained_relay_advance() {
+        let mut config = instant_config();
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-event-loop-relay-chain-autosave-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+        config.quicksave_path = Some(quicksave_path.clone());
+
+        let source = "---\nengine: name-name\n---\n\n\
+                       ## 1-1: start\n\n\
+                       **A**:\nどうする？\n\n\
+                       [選択]\n- 進む→1-2\n[/選択]\n\n\
+                       ## 1-2: relay_a\n\n\
+                       [フラグ: seen_relay_a=true]\n\n\
+                       [選択]\n- 続ける→1-3\n[/選択]\n\n\
+                       ## 1-3: relay_b\n\n\
+                       [フラグ: seen_relay_b=true]\n\n\
+                       [選択]\n- 続ける→1-4\n[/選択]\n\n\
+                       ## 1-4: landing\n\n\
+                       **B**:\n最終セリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        // 1回目のAdvance: "どうする？" -> Choice（同じシーン"1-1"内）。
+        // 2回目のAdvance: Choice確定 -> 1-2(relay_a)→1-3(relay_b)→1-4(landing)を
+        // #574の中継自動継続で1回で通過し、"1-4"の台詞で止まる。
+        let (mut next_action, _remaining) =
+            action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-4",
+            "テストの前提: 中継を2連鎖通過して最終着地シーンにいるはず"
+        );
+
+        let saved = std::fs::read_to_string(&quicksave_path)
+            .expect("シーン切り替えでクイックセーブファイルが書き込まれているはず");
+        assert!(
+            saved.contains("\"scene_id\":\"1-4\""),
+            "保存されるscene_idは中継先ではなく最終着地シーン(1-4)のはず, saved was: {saved}"
+        );
+        assert!(
+            !saved.contains("\"scene_id\":\"1-2\"") && !saved.contains("\"scene_id\":\"1-3\""),
+            "中継シーン自体のIDが保存されてはいけない, saved was: {saved}"
+        );
+        assert!(
+            saved.contains("seen_relay_a") && saved.contains("seen_relay_b"),
+            "中継シーンを2つとも実際に通過した(フラグが両方立った)ことの確認, saved was: {saved}"
+        );
+
+        let _ = std::fs::remove_file(&quicksave_path);
+    }
+
     #[test]
     fn choice_immediately_followed_by_another_choice_keeps_reveal_none_after_jump() {
         // jump先シーンの先頭itemがまたChoiceであるケース（連続分岐）。build_reveal_for_current

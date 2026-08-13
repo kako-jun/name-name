@@ -353,4 +353,245 @@ mod tests {
         assert!(!restore_playback(&mut playback, &path));
         assert_eq!(playback.current_scene_id(), "1-1");
     }
+
+    /// #579: 「保存先」ドキュメントコメントの `quicksave_path` 同値クラス補完。
+    /// `--config` に絶対パスを渡した場合も相対パスと同じロジック（`parent()`のディレクトリ
+    /// 配下）になることを確認する（相対パスは
+    /// `quicksave_path_uses_config_dir_when_config_path_given` が既にカバー済み）。
+    #[test]
+    fn quicksave_path_uses_config_dir_for_absolute_config_path() {
+        let cli = Cli::parse(vec![
+            "name-name-tui".to_string(),
+            "--config".to_string(),
+            "/opt/games/gymnasia/tui-config.toml".to_string(),
+        ]);
+        assert_eq!(
+            quicksave_path(&cli),
+            PathBuf::from("/opt/games/gymnasia/.name-name-tui-quicksave.json")
+        );
+    }
+
+    /// #579 の状態遷移テーブル行C相当（正常系）の統合ラウンドトリップ。
+    /// `save_quick_then_load_round_trips_scene_id_flags_and_read_positions`は
+    /// `QuickSaveData`単体の往復（`Playback`を経由しない）、
+    /// `restore_playback_applies_flags_and_jumps_to_saved_scene`は`restore_playback`単体
+    /// （`read_positions`を見ない）と、それぞれ検証範囲が分かれていた。ここでは実際の
+    /// `Playback`から`save_quick`で書き出し、`restore_playback`+`restore_read_positions`
+    /// （`main.rs::event_loop`が起動時に実際に呼ぶのと同じ2関数）で読み戻すところまでを
+    /// 1本のテストとして通し、scene_id・flags・read_positionsの3点すべてが実ファイル
+    /// I/O経由で一致することを確認する。
+    #[test]
+    fn save_quick_then_restore_round_trips_scene_id_flags_and_read_positions_via_real_playback() {
+        let path = temp_path("full-round-trip");
+        let _guard = TempFile(path.clone());
+        let document = name_name_parser::parser::parse(two_scene_source());
+
+        let mut playback = Playback::from_document(&document);
+        let mut flags = GameFlags::new();
+        flags.set(
+            "visited_1_2",
+            name_name_parser::models::FlagValue::Bool(true),
+        );
+        playback.set_flags(flags);
+        assert!(playback.jump_to_scene_id("1-2"));
+
+        let read_positions: HashSet<(usize, usize, u64)> = HashSet::from([(0, 0, 1), (0, 1, 2)]);
+        save_quick(&path, &playback, &read_positions);
+
+        let mut restored_playback = Playback::from_document(&document);
+        let playback_restored = restore_playback(&mut restored_playback, &path);
+        // `main.rs::event_loop`と同じ「playback_restoredがtrueの時だけread_positionsも
+        // 復元する」ガードをここでも踏襲する（デシジョンテーブル行D対策の配線をそのまま
+        // なぞる）。
+        let restored_read_positions = if playback_restored {
+            restore_read_positions(Some(&path))
+        } else {
+            HashSet::new()
+        };
+
+        assert!(
+            playback_restored,
+            "保存直後の正常なファイルは復元に成功するはず"
+        );
+        assert_eq!(restored_playback.current_scene_id(), "1-2");
+        assert!(restored_playback.flags().check("visited_1_2"));
+        assert_eq!(restored_read_positions, read_positions);
+    }
+
+    /// #579 fail-soft: 書き込み先ディレクトリに書き込み権限が無い場合でも`save_quick`が
+    /// パニックしないことを確認する（unix権限、`std::fs::set_permissions`で再現）。
+    /// macOSのローカル開発機（非root実行）を前提とする——rootで実行するとディレクトリの
+    /// 書き込み禁止が effectively 無視されるため、このテストの前提が崩れる。
+    #[test]
+    fn save_quick_does_not_panic_when_target_directory_is_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "name-name-tui-save-readonly-dir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+
+        struct ReadonlyDirGuard(PathBuf);
+        impl Drop for ReadonlyDirGuard {
+            fn drop(&mut self) {
+                // remove_dir_allの前に書き込み権限を戻さないと自分自身の削除にも失敗する。
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = ReadonlyDirGuard(dir.clone());
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let path = dir.join("quicksave.json");
+
+        let document = name_name_parser::parser::parse(two_scene_source());
+        let playback = Playback::from_document(&document);
+
+        // パニックしないこと自体がこのテストの主張。
+        save_quick(&path, &playback, &HashSet::new());
+
+        assert!(
+            !path.exists(),
+            "書き込み権限が無いディレクトリでは実際にファイルは作られないはず \
+             (fail-softで握りつぶされた結果の確認)"
+        );
+    }
+
+    /// #579 fail-soft: `flags`にNaN/Infinityを含めても`save_quick`がパニックしないことを
+    /// 確認する。
+    ///
+    /// 発見（このテスト作成時に実測）: serde_jsonのf64シリアライズは、テスト観点設計時に
+    /// 想定されていた「NaN/Infinityは`to_string`が`Err`を返す」ではなく、JSON仕様上
+    /// 表現できないNaN/Infinityを黙って`null`として書き出す
+    /// （`serde_json::ser::Serializer::serialize_f64`の既定実装、`Err`にはならない）。
+    /// そのため`save_quick`内の`serde_json::to_string`が失敗して書き込みスキップ、という
+    /// 経路には实際には入らない——書き込みは（`null`を含む形で）成功する。ただし
+    /// 「パニックしない」というfail-softの目的そのものは変わらず達成されており、副作用と
+    /// して書き込まれた`null`はf64として妥当でないため、次回の`load`（デシリアライズ）が
+    /// 失敗し`None`にフォールバックする（下のアサーションで確認）——結果として
+    /// fail-softの連鎖は「書き込み時」ではなく「次回読み込み時」に成立する。
+    #[test]
+    fn save_quick_with_nan_or_infinite_flag_value_does_not_panic() {
+        let path = temp_path("nan-flag-value");
+        let _guard = TempFile(path.clone());
+
+        let document = name_name_parser::parser::parse(two_scene_source());
+        let mut playback = Playback::from_document(&document);
+        let mut flags = GameFlags::new();
+        flags.set(
+            "nan_flag",
+            name_name_parser::models::FlagValue::Number(f64::NAN),
+        );
+        flags.set(
+            "inf_flag",
+            name_name_parser::models::FlagValue::Number(f64::INFINITY),
+        );
+        playback.set_flags(flags);
+
+        // パニックしないこと自体がこのテストの主張。
+        save_quick(&path, &playback, &HashSet::new());
+
+        assert!(
+            path.exists(),
+            "NaN/Infinityはto_stringのErrにはならずnullとして書き込まれる \
+             (このテストで実測した実際の挙動、doc comment参照)"
+        );
+        assert!(
+            load(&path).is_none(),
+            "書き込まれたnullはf64としてデシリアライズできないため、\
+             次回の読み込み側がfail-softでNoneに落ちるはず"
+        );
+    }
+
+    /// #579 fail-soft: セーブファイル自体は存在するが読み取り権限が無い場合、`load`が
+    /// `None`を返し`restore_playback`が`false`で正常にフォールバックすることを確認する
+    /// （`save_quick`側の書き込み権限テストと対の、読み込み側の権限テスト）。macOSの
+    /// ローカル開発機（非root実行）を前提とする。
+    #[test]
+    fn restore_playback_returns_false_when_file_is_not_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = temp_path("restore-playback-unreadable");
+        let document = name_name_parser::parser::parse(two_scene_source());
+
+        struct PermissionRestoringGuard(PathBuf);
+        impl Drop for PermissionRestoringGuard {
+            fn drop(&mut self) {
+                // remove_fileの前に読み取り権限を戻す(TempFileのDropより先に効かせる必要は
+                // ないが、権限0のまま消せないOS/権限モデルもあるため念のため戻しておく)。
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o644));
+            }
+        }
+        let _perm_guard = PermissionRestoringGuard(path.clone());
+        let _guard = TempFile(path.clone());
+
+        let mut flags = GameFlags::new();
+        flags.set(
+            "visited_1_2",
+            name_name_parser::models::FlagValue::Bool(true),
+        );
+        let data = QuickSaveData {
+            scene_id: "1-2".to_string(),
+            flags,
+            read_positions: vec![],
+        };
+        std::fs::write(&path, serde_json::to_string(&data).unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let mut playback = Playback::from_document(&document);
+
+        assert!(
+            !restore_playback(&mut playback, &path),
+            "読み取り権限が無いファイルはload()が失敗しNoneを返しfalseへフォールバックするはず"
+        );
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-1",
+            "復元失敗時はplaybackが構築直後のまま変わらないはず"
+        );
+    }
+
+    /// #579 i18n: 日本語のフラグ名・文字列値も破損せずセーブ/ロード往復できることを
+    /// 確認する。`save_quick`は実ファイルへUTF-8のまま書き出す(serde_jsonは既定で
+    /// 非ASCIIを`\uXXXX`へエスケープしない)ため、生ファイルの中身にも日本語がそのまま
+    /// 残ることをあわせて確認する。
+    #[test]
+    fn save_quick_then_restore_playback_round_trips_japanese_flag_name_and_string_value() {
+        let path = temp_path("i18n-flags");
+        let _guard = TempFile(path.clone());
+        let document = name_name_parser::parser::parse(two_scene_source());
+
+        let mut playback = Playback::from_document(&document);
+        let mut flags = GameFlags::new();
+        flags.set(
+            "読了フラグ",
+            name_name_parser::models::FlagValue::String("見た".to_string()),
+        );
+        playback.set_flags(flags);
+        assert!(playback.jump_to_scene_id("1-2"));
+
+        save_quick(&path, &playback, &HashSet::new());
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("読了フラグ") && raw.contains("見た"),
+            "serde_jsonは既定でUTF-8をそのまま書き出す(\\uXXXXへエスケープしない)ため、\
+             保存ファイルに日本語がそのまま残るはず, raw was: {raw}"
+        );
+
+        let mut restored_playback = Playback::from_document(&document);
+        assert!(restore_playback(&mut restored_playback, &path));
+        assert!(
+            restored_playback.flags().check("読了フラグ"),
+            "日本語フラグ名でも復元後にcheck()で読めるはず"
+        );
+        assert!(
+            format!("{:?}", restored_playback.flags()).contains("見た"),
+            "文字列値の中身(見た)もそのまま復元されているはず \
+             (check()は存在確認のみのため、Debug表示で内容そのものを確認する)"
+        );
+    }
 }
