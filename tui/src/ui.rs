@@ -4346,7 +4346,7 @@ mod tests {
             .constraints(vec![Constraint::Length(1); 2])
             .split(area);
 
-        for i in 0..10usize {
+        for (i, &expected_locked) in locked.iter().enumerate() {
             let row = i / 5;
             let col = i % 5;
             let col_areas = Layout::default()
@@ -4363,7 +4363,6 @@ mod tests {
                     panic!("index {i} (\"{digit}\") should render inside its own grid cell, buffer was: {buffer:?}")
                 });
 
-            let expected_locked = locked[i];
             let dim = buffer
                 .cell((digit_x, digit_y))
                 .expect("in bounds")

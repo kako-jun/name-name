@@ -2567,7 +2567,11 @@ mod tests {
     fn move_choice_cursor_down_can_land_on_locked_option_in_list_mode_without_being_skipped() {
         let doc = choice_with_conditions_doc(); // index 0: 無条件, index 1: ロック中
         let mut pb = Playback::from_document(&doc);
-        assert_eq!(pb.current_choice().unwrap().1, 0, "初期カーソルはindex 0のはず");
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            0,
+            "初期カーソルはindex 0のはず"
+        );
 
         pb.move_choice_cursor_down();
 
@@ -2609,7 +2613,11 @@ mod tests {
         );
         let doc = document_with_chapters(vec![ch1]);
         let mut pb = Playback::from_document(&doc);
-        assert_eq!(pb.current_choice().unwrap().1, 0, "初期カーソルはindex 0のはず");
+        assert_eq!(
+            pb.current_choice().unwrap().1,
+            0,
+            "初期カーソルはindex 0のはず"
+        );
 
         pb.move_choice_cursor_right();
 
