@@ -4915,8 +4915,8 @@ mod tests {
     // 対応することを、行×列から独立に再計算したセル領域内で直接確認する（frontendの
     // ChoiceOverlay grid×cleared整合性テストと対をなす）。
     #[test]
-    fn draw_choice_grid_mixed_cleared_pattern_maps_dim_and_moon_marker_to_correct_index_not_shifted()
-    {
+    fn draw_choice_grid_mixed_cleared_pattern_maps_dim_and_moon_marker_to_correct_index_not_shifted(
+    ) {
         let options: Vec<ChoiceOption> = (0..10)
             .map(|i| choice_option(&i.to_string(), "x"))
             .collect();

@@ -3575,8 +3575,16 @@ mod tests {
                         flag_event("route01_cleared", true),
                         choice_with_cleared(vec![
                             ("消灯指定なし", "1-2", None),
-                            ("route01_clearedが設定済みなら消灯", "1-3", Some("route01_cleared")),
-                            ("未設定flagを指すなら消灯しない", "1-4", Some("route99_never_set")),
+                            (
+                                "route01_clearedが設定済みなら消灯",
+                                "1-3",
+                                Some("route01_cleared"),
+                            ),
+                            (
+                                "未設定flagを指すなら消灯しない",
+                                "1-4",
+                                Some("route99_never_set"),
+                            ),
                         ]),
                     ],
                 ),
