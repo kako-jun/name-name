@@ -142,7 +142,10 @@ impl ImageFadeState {
 /// アンビエント演出 (#582): `effects` が何か1つでも有効なら `apply_ambient_effects` で
 /// quadrant 変換前の RGBA バッファへピクセル変換を適用する。`elapsed_ms` はゆらぎ・
 /// ろうそく揺れの時間経過アニメーション用（呼び出し側 `snapshot` が毎回渡す最新値、
-/// このモジュール自体は「いつ」を知らない）。
+/// このモジュール自体は「いつ」を知らない）。4フラグ全部 false の場合は
+/// `apply_ambient_effects` を呼ばずデコード済み RGBA バッファをそのまま
+/// `rgba_to_quadrant_grid` へ渡す（演出なし画像で毎フレーム無駄な `pixels.to_vec()` clone が
+/// 発生していた回帰の修正、レビュー nit-4 対応）。
 #[allow(clippy::too_many_arguments)]
 fn resolve_grid(
     cache: &mut ImageCache,
@@ -158,6 +161,15 @@ fn resolve_grid(
     };
     match cache.get_or_load(&full_path) {
         Some(decoded) => {
+            if !effects.wobble && !effects.vignette && !effects.glow && !effects.candle {
+                return image_render::rgba_to_quadrant_grid(
+                    &decoded.rgba,
+                    decoded.width,
+                    decoded.height,
+                    cols,
+                    rows,
+                );
+            }
             let pixels = apply_ambient_effects(
                 &decoded.rgba,
                 decoded.width,
