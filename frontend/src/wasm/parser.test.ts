@@ -144,6 +144,7 @@ describe('parseMarkdown + normalizeDocument: EventImage effects „Åå normalize „Ç
         path: 'story/x.webp',
         back: 'Hide',
         fade_ms: null,
+        transition: 'Fade',
         effects: { wobble: true, vignette: true, glow: true, candle: true },
       },
     })
@@ -168,6 +169,7 @@ describe('parseMarkdown + normalizeDocument: EventImage effects „Åå normalize „Ç
         path: 'story/x.webp',
         back: 'Hide',
         fade_ms: null,
+        transition: 'Fade',
         effects: { wobble: false, vignette: false, glow: false, candle: false },
       },
     })
