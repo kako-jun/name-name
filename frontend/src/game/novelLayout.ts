@@ -448,15 +448,17 @@ export interface ChoiceIconLayout {
 }
 
 /**
- * 選択肢ボタン内で、既読(完了)アイコン (#598, `assets/images/read-icon.png`) とラベルテキストの
- * 縦位置を算出する純粋関数。アイコンをテキストの上に置き、2つを合わせた塊をボタン中心を軸に
- * 上下対称に配置する（`iconY`/`textY` はどちらもボタン中心からアイコン/テキストそれぞれの
- * half-extent 分だけ離れた対称位置）。
+ * 選択肢ボタン内で、アイコン（既読=完了 `assets/images/read-icon.webp` / 未読
+ * `assets/images/unread-icon.webp`、#598）とラベルテキストの縦位置を算出する純粋関数。
+ * どちらのアイコンも同じサイズ・同じレイアウトを使うため、呼び出し側が選んだテクスチャの
+ * 種類はこの関数の関知するところではない（`hasIcon` は「今回アイコンを描画するか」だけを表す）。
+ * アイコンをテキストの上に置き、2つを合わせた塊をボタン中心を軸に上下対称に配置する
+ * （`iconY`/`textY` はどちらもボタン中心からアイコン/テキストそれぞれの half-extent 分だけ
+ * 離れた対称位置）。
  *
- * `hasIcon=false`（未読み込み/取得失敗/cleared ではない/locked 優先などで今回アイコンを
- * 描画しない）のときは、`iconY`/`textY` とも `buttonHeight / 2` を返す——#591 以来の
- * 「ラベルをボタン中心に一点センタリング」という既存レイアウトと完全に同じ結果になる
- * （非破壊）。
+ * `hasIcon=false`（未読み込み/取得失敗/locked などで今回アイコンを描画しない）のときは、
+ * `iconY`/`textY` とも `buttonHeight / 2` を返す——#591 以来の「ラベルをボタン中心に
+ * 一点センタリング」という既存レイアウトと完全に同じ結果になる（非破壊）。
  *
  * `buttonHeight` は呼び出し側 (`ChoiceOverlay`) がアイコン表示時用に嵩上げした値
  * （`layoutButtonHeight`）を渡す想定——アイコン＋テキストがボタン枠内に収まるかどうかの
@@ -475,6 +477,29 @@ export function computeChoiceIconLayout(
   }
   const offset = (iconSize + iconTextGap) / 2
   return { iconY: center - offset, textY: center + offset }
+}
+
+/** `resolveChoiceIconKind` の戻り値 (#598 追記3)。表示すべきアイコンの種類、または非表示。 */
+export type ChoiceIconKind = 'read' | 'unread' | 'none'
+
+/**
+ * 選択肢ボタン1件に表示すべきアイコンの種類を判定する純粋関数 (#598 追記3)。
+ *
+ * 「ロック」と「既読/完了」は独立した2軸の状態であり（追記3で訂正済み。ロック＝読むことすら
+ * できない、既読/完了＝読めるようになった後に読んだかどうか）、判定はこの2軸だけで決まる。
+ * 配色の優先順位（`resolveChoiceVisual`: locked > cleared > alreadyRead > 通常）とは
+ * 別軸の判定であり、`alreadyRead` はここでは一切参照しない：
+ *
+ * - `locked` → `'none'`（ロック中はアイコンを一切付けない。配色のみで表す、変更なし）
+ * - `!locked && cleared` → `'read'`（既読/完了。`read-icon.webp`）
+ * - `!locked && !cleared` → `'unread'`（未読。`alreadyRead` の真偽に関わらず `unread-icon.webp`）
+ *
+ * 実際に描画するかどうか（対応するテクスチャの先読みに成功しているか）は呼び出し側
+ * （`ChoiceOverlay`）の責務。この関数は「本来どちらを見せるべきか」という論理だけを返す。
+ */
+export function resolveChoiceIconKind(locked: boolean, cleared: boolean): ChoiceIconKind {
+  if (locked) return 'none'
+  return cleared ? 'read' : 'unread'
 }
 
 /**

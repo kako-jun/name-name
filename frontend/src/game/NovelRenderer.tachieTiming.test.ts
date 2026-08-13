@@ -109,10 +109,10 @@ function configureNovelRenderer(r: NovelRenderer, assetBaseUrl = '/assets'): voi
 function isNovelIndicatorAsset(url: unknown): boolean {
   if (typeof url !== 'string') return false
   if (/\/images\/ui\/(?:text-next|page-turn)-[1-4]\.webp$/.test(url)) return true
-  // #598: 選択肢オーバーレイの既読(完了)アイコン先読み（ChoiceOverlay.setAssetBaseUrl）も
-  // setAssetBaseUrl() のたびに一度だけ呼ばれる、立ち絵テクスチャ計測とは無関係の
+  // #598 追記3: 選択肢オーバーレイの既読/未読アイコン先読み（ChoiceOverlay.setAssetBaseUrl）も
+  // setAssetBaseUrl() のたびに一度ずつ呼ばれる、立ち絵テクスチャ計測とは無関係の
   // エンジンUIアセット。他のインジケータ画像と同じく除外・即時解決させる。
-  return /\/images\/read-icon\.png$/.test(url)
+  return /\/images\/(?:read|unread)-icon\.webp$/.test(url)
 }
 
 function expectCharacterLoadCalls(loadSpy: { mock: { calls: unknown[][] } }, count: number): void {

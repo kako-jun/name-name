@@ -1579,8 +1579,8 @@ export class NovelRenderer {
     this.videoLayer.setAssetBaseUrl(url)
     // イベント絵レイヤーも同じベース URL で相対パスを URL 化するため伝播する (#351)
     this.eventImageLayer.setAssetBaseUrl(url)
-    // 選択肢オーバーレイも既読(完了)アイコン (#598, assets/images/read-icon.png) の
-    // 先読みに同じベース URL を使う。
+    // 選択肢オーバーレイも既読/未読アイコン (#598 追記3, assets/images/read-icon.webp /
+    // assets/images/unread-icon.webp) の先読みに同じベース URL を使う。
     this.choiceOverlay.setAssetBaseUrl(url)
   }
 

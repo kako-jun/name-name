@@ -27,26 +27,33 @@ import { ChoiceOption } from '../types'
 import type { AudioManager } from './AudioManager'
 import { hasOwn } from './ownProperty'
 import type { DestroyOptions, FederatedPointerEvent, Texture } from 'pixi.js'
-import { computeChoiceGridLayout, computeChoiceIconLayout, resolveAssetUrl } from './novelLayout'
+import {
+  computeChoiceGridLayout,
+  computeChoiceIconLayout,
+  resolveAssetUrl,
+  resolveChoiceIconKind,
+} from './novelLayout'
 import type { LayoutRect } from './novelLayout'
 
 const BUTTON_WIDTH = 480
 const BUTTON_HEIGHT = 52
 const BUTTON_GAP = 16
 /**
- * 既読(完了)アイコン (#598) の一辺サイズ (px)。`assets/images/read-icon.png` をこのサイズで
- * 描画する。アイコン固有の設定（位置・複数アイコン等）はスコープ外 (#598 追記2) のため、
+ * 選択肢アイコン (#598 追記3: 既読=完了 `assets/images/read-icon.webp` / 未読
+ * `assets/images/unread-icon.webp`) の一辺サイズ (px)。どちらも同じサイズで描画する。
+ * アイコン固有の設定（位置・複数アイコン等）はスコープ外 (#598 追記2) のため、
  * サイズも固定値のみを持つ。
  */
-const READ_ICON_SIZE = 18
+const ICON_SIZE = 18
 /** アイコンとラベルテキストの縦ギャップ (px)。`computeChoiceIconLayout` に渡す。 */
-const READ_ICON_TEXT_GAP = 8
+const ICON_TEXT_GAP = 8
 /**
  * アイコンを表示する回だけ使うボタン高さ (px)。通常の BUTTON_HEIGHT (52) だとアイコン+テキストの
- * 2段組みがボタン枠に収まらないため、実際にアイコンが1つでも描画される show() 呼び出しでだけ
- * `layoutButtonHeight` をこちらへ切り替える（`layoutButtonWidth` が region 指定時だけ
- * BUTTON_WIDTH から切り替わるのと同じ「必要な回だけ調整する」流儀）。read-icon.png 未配置の
- * プロジェクトや cleared 選択肢が無い回は BUTTON_HEIGHT のまま——見た目は一切変わらない。
+ * 2段組みがボタン枠に収まらないため、実際にアイコン（既読=read-icon / 未読=unread-icon の
+ * どちらか）が1つでも描画される show() 呼び出しでだけ `layoutButtonHeight` をこちらへ切り替える
+ * （`layoutButtonWidth` が region 指定時だけ BUTTON_WIDTH から切り替わるのと同じ「必要な回だけ
+ * 調整する」流儀）。read-icon.webp/unread-icon.webp が両方とも未配置のプロジェクトや、
+ * その回に描画対象の行が無ければ BUTTON_HEIGHT のまま——見た目は一切変わらない。
  */
 const BUTTON_HEIGHT_WITH_ICON = 68
 const HOVER_SCALE = 1.05
@@ -372,18 +379,28 @@ export class ChoiceOverlay extends Container {
    */
   private layoutButtonHeight = BUTTON_HEIGHT
   /**
-   * 既読(完了)アイコン (#598, `assets/images/read-icon.png`) 取得用のベース URL。
-   * `NovelRenderer.setAssetBaseUrl` から他レイヤ（DialogBox/VideoLayer/EventImageLayer）と
-   * 同じタイミングで `setAssetBaseUrl()` 経由で伝播される。
+   * 選択肢アイコン (#598 追記3: `assets/images/read-icon.webp` / `assets/images/unread-icon.webp`)
+   * 取得用のベース URL。`NovelRenderer.setAssetBaseUrl` から他レイヤ
+   * （DialogBox/VideoLayer/EventImageLayer）と同じタイミングで `setAssetBaseUrl()` 経由で
+   * 伝播される。
    */
   private assetBaseUrl = ''
   /**
-   * 先読み済みの既読アイコン Texture。未取得（ロード中/未実行）or 取得失敗（404等）の間は
-   * null のままで、cleared 選択肢は従来どおり配色のみで描画される（フォールバック、非破壊）。
+   * 先読み済みの既読(完了)アイコン Texture (`read-icon.webp`)。未取得（ロード中/未実行）or
+   * 取得失敗（404等）の間は null のままで、対象の選択肢は従来どおり配色のみで描画される
+   * （フォールバック、非破壊）。
    */
   private readIconTexture: Texture | null = null
-  /** `setAssetBaseUrl` のたびに増分し、古い `Assets.load().then()` 解決を無効化するトークン。 */
-  private readIconLoadToken = 0
+  /**
+   * 先読み済みの未読アイコン Texture (`unread-icon.webp`, #598 追記3)。読み込み方針は
+   * `readIconTexture` と同じ（未取得/失敗時は null のままフォールバック）。
+   */
+  private unreadIconTexture: Texture | null = null
+  /**
+   * `setAssetBaseUrl` のたびに増分し、古い `Assets.load().then()` 解決を無効化するトークン。
+   * read-icon/unread-icon の両方の読み込みで共有する。
+   */
+  private iconLoadToken = 0
 
   constructor(
     private screenWidth: number,
@@ -402,15 +419,18 @@ export class ChoiceOverlay extends Container {
   }
 
   /**
-   * 既読(完了)アイコン (#598) 取得用のベース URL を設定する。
+   * 選択肢アイコン (#598 追記3) 取得用のベース URL を設定する。
    * `NovelRenderer.setAssetBaseUrl` から `DialogBox.setIndicatorAssetBaseUrl` /
    * `VideoLayer.setAssetBaseUrl` / `EventImageLayer.setAssetBaseUrl` と同じタイミングで
-   * 伝播される想定。`assets/images/read-icon.png` を `Assets.load()`（EventImageLayer と
-   * 同じパターン）で先読みし、成功すれば `readIconTexture` に保持する。
+   * 伝播される想定。`assets/images/read-icon.webp`（既読/完了）と
+   * `assets/images/unread-icon.webp`（未読）を `Assets.load()`（EventImageLayer と同じ
+   * パターン）でそれぞれ独立に先読みし、成功すれば `readIconTexture`/`unreadIconTexture` に
+   * 保持する。
    *
-   * プロジェクトに `read-icon.png` が無い（404）/ 読み込みに失敗した場合は catch で
-   * 握りつぶし、`readIconTexture` は null のまま——`show()` は cleared 選択肢を
-   * 従来どおり配色のみで描画する（#598 最終方針のフォールバック）。
+   * プロジェクトにどちらかの画像が無い（404）/ 読み込みに失敗した場合は catch で
+   * 握りつぶし、対応する Texture フィールドは null のまま——`show()` はそちら側の
+   * 表示対象の選択肢を従来どおり配色のみで描画する（#598 最終方針のフォールバック、
+   * read/unread それぞれ独立に判定される）。
    *
    * url が変わっていなければ何もしない（同一プロジェクト内の再呼び出しで再フェッチしない）。
    */
@@ -418,14 +438,24 @@ export class ChoiceOverlay extends Container {
     if (this.assetBaseUrl === url) return
     this.assetBaseUrl = url
     this.readIconTexture = null
-    const token = ++this.readIconLoadToken
+    this.unreadIconTexture = null
+    const token = ++this.iconLoadToken
     if (!url) return
-    const iconUrl = resolveAssetUrl(url, 'images', 'read-icon.png')
-    Assets.load(iconUrl)
+    const readIconUrl = resolveAssetUrl(url, 'images', 'read-icon.webp')
+    Assets.load(readIconUrl)
       .then((texture: Texture) => {
         // setAssetBaseUrl が後から再度呼ばれていれば、この読み込みは無効（古い世代）。
-        if (token !== this.readIconLoadToken) return
+        if (token !== this.iconLoadToken) return
         this.readIconTexture = texture
+      })
+      .catch(() => {
+        // 404 等はフォールバック対象（doc comment 参照）。ここでは何もしない。
+      })
+    const unreadIconUrl = resolveAssetUrl(url, 'images', 'unread-icon.webp')
+    Assets.load(unreadIconUrl)
+      .then((texture: Texture) => {
+        if (token !== this.iconLoadToken) return
+        this.unreadIconTexture = texture
       })
       .catch(() => {
         // 404 等はフォールバック対象（doc comment 参照）。ここでは何もしない。
@@ -495,9 +525,15 @@ export class ChoiceOverlay extends Container {
    *                作って渡す）。`true` の位置のボタンは専用の暗い配色になるが、`locked` と
    *                異なりクリック/ホバーは通常どおり受け付ける（選択可能）。`locked` が
    *                同時に `true` の位置ではロックの見た目が優先される。未指定 or 短ければ、
-   *                残りは false（完了なし、非破壊）として扱う。`locked` でない位置では、
-   *                `setAssetBaseUrl()` で既読(完了)アイコン (#598) の先読みに成功していれば
-   *                テキストの上にアイコンを表示する（未取得/失敗時は配色のみのフォールバック）。
+   *                残りは false（完了なし、非破壊）として扱う。
+   *
+   *                アイコン (#598 追記3) は「ロック」「既読/完了」という独立した2軸で決まり、
+   *                配色の優先順位（locked > cleared > alreadyRead）とは別軸で判定する
+   *                （`resolveChoiceIconKind`、`alreadyRead` は無関係）: `locked` の位置は
+   *                アイコンなし。`!locked && cleared` の位置は `setAssetBaseUrl()` で
+   *                `read-icon.webp` の先読みに成功していればテキストの上に表示する。
+   *                `!locked && !cleared` の位置は `unread-icon.webp` の先読みに成功していれば
+   *                同様に表示する（いずれも未取得/失敗時は配色のみのフォールバック）。
    */
   show(
     options: ChoiceOption[],
@@ -559,15 +595,21 @@ export class ChoiceOverlay extends Container {
         : BUTTON_WIDTH
     }
 
-    // 既読(完了)アイコン (#598)。setAssetBaseUrl() で先読み済みの read-icon.png があり、かつ
-    // 今回の選択肢に1つでも「表示対象」（cleared かつ locked ではない——locked は #591 以来
-    // 配色のみで一切アイコンを付けない）があれば、アイコン用に嵩上げしたボタン高さを使う。
-    // アイコンが一切描画されない回（read-icon.png 未配置・cleared 選択肢が無い等）は
+    // 選択肢アイコン (#598 追記3)。行ごとに resolveChoiceIconKind で「本来どちらのアイコンを
+    // 見せるべきか」（locked→none / !locked&&cleared→read / !locked&&!cleared→unread）を求め、
+    // 対応するテクスチャが setAssetBaseUrl() で先読み済みなら「実際に表示する」行として数える。
+    // 1行でも表示対象があれば、アイコン用に嵩上げしたボタン高さを使う。
+    // 旧実装は `cleared[i] && !locked[i]`（read-icon 表示行）だけを見ていたが、ここでは
+    // unread-icon 表示行（`!locked[i]`）も対象になるよう一般化する。
+    // アイコンが一切描画されない回（read-icon.webp/unread-icon.webp が両方とも未配置等）は
     // BUTTON_HEIGHT のまま——見た目は一切変わらない（layoutButtonWidth と同じ流儀）。
-    const willShowReadIcon =
-      this.readIconTexture !== null &&
-      options.some((_, i) => (cleared?.[i] ?? false) && !(locked?.[i] ?? false))
-    this.layoutButtonHeight = willShowReadIcon ? BUTTON_HEIGHT_WITH_ICON : BUTTON_HEIGHT
+    const willShowIcon = options.some((_, i) => {
+      const kind = resolveChoiceIconKind(locked?.[i] ?? false, cleared?.[i] ?? false)
+      if (kind === 'read') return this.readIconTexture !== null
+      if (kind === 'unread') return this.unreadIconTexture !== null
+      return false
+    })
+    this.layoutButtonHeight = willShowIcon ? BUTTON_HEIGHT_WITH_ICON : BUTTON_HEIGHT
 
     const totalHeight = rows * this.layoutButtonHeight + (rows - 1) * BUTTON_GAP
     const maxViewportHeight = Math.max(
@@ -640,20 +682,30 @@ export class ChoiceOverlay extends Container {
       // eventMode: 'none' のみで「選べない」を表す（#598 最終方針: ロック中にアイコンは
       // 一切付けない。旧🔒絵文字連結は撤去）。
       //
-      // 既読(完了)アイコン (#598)。cleared かつ locked ではない（locked が優先、#594と同じ
-      // 優先順位）かつアイコンの先読みに成功している場合だけ、テキストの上にアイコンを描く。
-      const showReadIcon = isCleared && !isLocked && this.readIconTexture !== null
+      // 選択肢アイコン (#598 追記3)。「ロック」「既読/完了」は独立した2軸で、アイコンの
+      // 出し分けはこの2軸だけで決まる（resolveChoiceIconKind、alreadyRead は無関係）。
+      // locked → アイコンなし。!locked && cleared → read-icon。!locked && !cleared →
+      // unread-icon（alreadyRead の真偽に関わらず）。対応するテクスチャの先読みに
+      // 成功している場合だけ、テキストの上にアイコンを描く。
+      const iconKind = resolveChoiceIconKind(isLocked, isCleared)
+      const iconTexture =
+        iconKind === 'read'
+          ? this.readIconTexture
+          : iconKind === 'unread'
+            ? this.unreadIconTexture
+            : null
+      const showIcon = iconTexture !== null
       const iconLayout = computeChoiceIconLayout(
         this.layoutButtonHeight,
-        showReadIcon,
-        READ_ICON_SIZE,
-        READ_ICON_TEXT_GAP
+        showIcon,
+        ICON_SIZE,
+        ICON_TEXT_GAP
       )
 
-      if (showReadIcon && this.readIconTexture) {
-        const icon = new Sprite(this.readIconTexture)
-        icon.width = READ_ICON_SIZE
-        icon.height = READ_ICON_SIZE
+      if (showIcon && iconTexture) {
+        const icon = new Sprite(iconTexture)
+        icon.width = ICON_SIZE
+        icon.height = ICON_SIZE
         icon.anchor.set(0.5, 0.5)
         icon.x = this.layoutButtonWidth / 2
         icon.y = iconLayout.iconY
