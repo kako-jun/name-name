@@ -527,13 +527,13 @@ export class ChoiceOverlay extends Container {
    *                同時に `true` の位置ではロックの見た目が優先される。未指定 or 短ければ、
    *                残りは false（完了なし、非破壊）として扱う。
    *
-   *                アイコン (#598 追記3) は「ロック」「既読/完了」という独立した2軸で決まり、
-   *                配色の優先順位（locked > cleared > alreadyRead）とは別軸で判定する
-   *                （`resolveChoiceIconKind`、`alreadyRead` は無関係）: `locked` の位置は
-   *                アイコンなし。`!locked && cleared` の位置は `setAssetBaseUrl()` で
-   *                `read-icon.webp` の先読みに成功していればテキストの上に表示する。
-   *                `!locked && !cleared` の位置は `unread-icon.webp` の先読みに成功していれば
-   *                同様に表示する（いずれも未取得/失敗時は配色のみのフォールバック）。
+   *                アイコン (#598 追記3 / #604 訂正) は `cleared` のみで決まり、`locked` は
+   *                一切影響しない（配色の優先順位 locked > cleared > alreadyRead とは別軸で
+   *                判定する。`resolveChoiceIconKind`、`alreadyRead` は無関係）: `cleared` の
+   *                位置は `setAssetBaseUrl()` で `read-icon.webp` の先読みに成功していれば
+   *                テキストの上に表示する。`!cleared` の位置は `unread-icon.webp` の先読みに
+   *                成功していれば同様に表示する（いずれも未取得/失敗時は配色のみのフォール
+   *                バック）。ロック中でも `cleared` の値に応じてどちらかのアイコンが出る。
    */
   show(
     options: ChoiceOption[],
@@ -595,19 +595,17 @@ export class ChoiceOverlay extends Container {
         : BUTTON_WIDTH
     }
 
-    // 選択肢アイコン (#598 追記3)。行ごとに resolveChoiceIconKind で「本来どちらのアイコンを
-    // 見せるべきか」（locked→none / !locked&&cleared→read / !locked&&!cleared→unread）を求め、
+    // 選択肢アイコン (#598 追記3 / #604 訂正)。行ごとに resolveChoiceIconKind で「本来どちらの
+    // アイコンを見せるべきか」（cleared→read / !cleared→unread。locked は無関係）を求め、
     // 対応するテクスチャが setAssetBaseUrl() で先読み済みなら「実際に表示する」行として数える。
     // 1行でも表示対象があれば、アイコン用に嵩上げしたボタン高さを使う。
-    // 旧実装は `cleared[i] && !locked[i]`（read-icon 表示行）だけを見ていたが、ここでは
-    // unread-icon 表示行（`!locked[i]`）も対象になるよう一般化する。
+    // ロック中の行もアイコン表示対象になる（#604: ロックは「読むことすらできない」だけで
+    // 「未読でない」わけではない。ロック中の選択肢も当然未読/既読どちらかのアイコンを持つ）。
     // アイコンが一切描画されない回（read-icon.webp/unread-icon.webp が両方とも未配置等）は
     // BUTTON_HEIGHT のまま——見た目は一切変わらない（layoutButtonWidth と同じ流儀）。
     const willShowIcon = options.some((_, i) => {
-      const kind = resolveChoiceIconKind(locked?.[i] ?? false, cleared?.[i] ?? false)
-      if (kind === 'read') return this.readIconTexture !== null
-      if (kind === 'unread') return this.unreadIconTexture !== null
-      return false
+      const kind = resolveChoiceIconKind(cleared?.[i] ?? false)
+      return kind === 'read' ? this.readIconTexture !== null : this.unreadIconTexture !== null
     })
     this.layoutButtonHeight = willShowIcon ? BUTTON_HEIGHT_WITH_ICON : BUTTON_HEIGHT
 
@@ -679,21 +677,16 @@ export class ChoiceOverlay extends Container {
       buttonContainer.addChild(bg)
 
       // ロック中はダイム配色 (fillLocked/borderLocked/textLockedColor) と
-      // eventMode: 'none' のみで「選べない」を表す（#598 最終方針: ロック中にアイコンは
-      // 一切付けない。旧🔒絵文字連結は撤去）。
+      // eventMode: 'none' のみで「選べない」を表す（旧🔒絵文字連結は撤去）。
       //
-      // 選択肢アイコン (#598 追記3)。「ロック」「既読/完了」は独立した2軸で、アイコンの
-      // 出し分けはこの2軸だけで決まる（resolveChoiceIconKind、alreadyRead は無関係）。
-      // locked → アイコンなし。!locked && cleared → read-icon。!locked && !cleared →
-      // unread-icon（alreadyRead の真偽に関わらず）。対応するテクスチャの先読みに
-      // 成功している場合だけ、テキストの上にアイコンを描く。
-      const iconKind = resolveChoiceIconKind(isLocked, isCleared)
-      const iconTexture =
-        iconKind === 'read'
-          ? this.readIconTexture
-          : iconKind === 'unread'
-            ? this.unreadIconTexture
-            : null
+      // 選択肢アイコン (#598 追記3 / #604 訂正)。「ロック」「既読/完了」は独立した2軸だが、
+      // アイコンの出し分けは cleared のみで決まる（resolveChoiceIconKind、alreadyRead は
+      // 無関係）。cleared → read-icon。!cleared → unread-icon（alreadyRead の真偽に関わらず）。
+      // ロック中かどうかはアイコン種別に一切影響しない（#604: ロック中・未読なら unread-icon、
+      // ロック中・既読なら read-icon が出る。配色のみ isLocked で別途ダイムする）。対応する
+      // テクスチャの先読みに成功している場合だけ、テキストの上にアイコンを描く。
+      const iconKind = resolveChoiceIconKind(isCleared)
+      const iconTexture = iconKind === 'read' ? this.readIconTexture : this.unreadIconTexture
       const showIcon = iconTexture !== null
       const iconLayout = computeChoiceIconLayout(
         this.layoutButtonHeight,

@@ -623,23 +623,15 @@ describe('computeChoiceGridLayout (#508)', () => {
   })
 })
 
-// #598 追記3: resolveChoiceIconKind（ロック/既読/未読アイコン種別判定の純粋関数）。
-// デシジョンテーブル1（4通り全て）を1テスト1行で機械的に固定する。
-describe('resolveChoiceIconKind (#598 追記3)', () => {
-  it('locked=false, cleared=false は unread', () => {
-    expect(resolveChoiceIconKind(false, false)).toBe('unread')
+// #598 追記3 / #604 訂正: resolveChoiceIconKind（既読/未読アイコン種別判定の純粋関数）。
+// #604: locked は判定に一切関与しないため引数から削除された。cleared のみの2通りを固定する。
+describe('resolveChoiceIconKind (#598 追記3 / #604)', () => {
+  it('cleared=false は unread', () => {
+    expect(resolveChoiceIconKind(false)).toBe('unread')
   })
 
-  it('locked=false, cleared=true は read', () => {
-    expect(resolveChoiceIconKind(false, true)).toBe('read')
-  })
-
-  it('locked=true, cleared=false は none', () => {
-    expect(resolveChoiceIconKind(true, false)).toBe('none')
-  })
-
-  it('locked=true, cleared=true でもロックが優先されnoneになる（配色側resolveChoiceVisualの優先順位と食い違わない）', () => {
-    expect(resolveChoiceIconKind(true, true)).toBe('none')
+  it('cleared=true は read', () => {
+    expect(resolveChoiceIconKind(true)).toBe('read')
   })
 })
 
