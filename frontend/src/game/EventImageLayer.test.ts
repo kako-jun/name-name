@@ -1737,6 +1737,24 @@ describe('EventImageLayer ピクセレート遷移 (#583)', () => {
     expect(onVisibilityChange).toHaveBeenCalledTimes(1)
   })
 
+  it('assetBaseUrl 未設定時はPixelate指定でも pixelateState/pixelateTimer を作らず hasPendingVisualTransition() は false（Fade経路の姉妹テスト）', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    const layer = new EventImageLayer(SCREEN_W, SCREEN_H, virtualTime())
+    // setAssetBaseUrl を呼ばない。show() 経由でも this.sprite が無いためこのままでは
+    // Fade経路にフォールバックしてしまうので、まず内部的に sprite を直接生やしてから
+    // Pixelate遷移を起動する（このテストの関心は「assetBaseUrl 未設定時のガード位置」であり
+    // 「sprite の有無によるフォールバック分岐」ではないため）。
+    internals(layer).sprite = { alpha: 1 } as never
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+
+    expect(loadSpy).not.toHaveBeenCalled()
+    expect(internals(layer).pixelateState).toBeNull()
+    expect(internals(layer).pixelateTimer).toBeNull()
+    expect(layer.getState()).toEqual({ path: 'story/b.webp', back: 'Hide' })
+    expect(layer.hasPendingVisualTransition()).toBe(false)
+  })
+
   it(
     '表示中と同じパスへ遷移=pixelateで再指定すると、GUIは実際にコルセン→自己スワップ→' +
       'リファインを再生する（既知の非対称性: TUI版は current_target() != target という' +

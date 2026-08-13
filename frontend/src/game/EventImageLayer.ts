@@ -787,6 +787,12 @@ export class EventImageLayer extends Container {
     this.maxScrollY = 0
     this.scrollHintText.visible = false
 
+    // Fade 経路（show() 566行目）と同じ位置関係: assetBaseUrl 未設定ならここで打ち切る。
+    // タイマー/pixelateState の設定より前に置かないと、Assets.load() が発火しないまま
+    // pendingTexture が永遠に埋まらず、phase='holding' で pixelateTimer が無限に回り続け
+    // hasPendingVisualTransition() が永久に true を返す事故になる（セルフレビュー指摘）。
+    if (!this.assetBaseUrl) return
+
     if (!this.pixelateFilter) this.pixelateFilter = new PixelateFilter(1)
     this.pixelateFilter.size = 1
 
@@ -806,8 +812,6 @@ export class EventImageLayer extends Container {
     }
     this.applyImageGroupFilters()
     this.pixelateTimer = this.time.setInterval(() => this.updatePixelateFrame(), 16)
-
-    if (!this.assetBaseUrl) return
 
     const url = this.buildImageUrl(path)
     const token = ++this.loadToken
