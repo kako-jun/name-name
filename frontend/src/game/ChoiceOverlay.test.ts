@@ -191,6 +191,59 @@ describe('ChoiceOverlay rendering', () => {
     overlay.hide()
   })
 
+  // #591: 条件付きロック。alreadyRead（既読/未読）とは別配色になり、クリックを受け付けない。
+  it('ロック中の選択肢はロック専用配色で描かれ、eventMode=none でクリックを受け付けない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const theme = resolveStyle('default')
+    const onSelect = vi.fn()
+    overlay.show(
+      [
+        { text: '選べる', jump: 'unlocked' },
+        { text: '選べない', jump: 'locked', condition: 'route01_cleared' },
+      ],
+      onSelect,
+      'default',
+      undefined,
+      undefined,
+      [false, true]
+    )
+
+    const unlockedButton = overlay.children[0]
+    const lockedButton = overlay.children[1]
+    const unlockedLabel = unlockedButton?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+    const lockedLabel = lockedButton?.children.find((child) => child instanceof PixiText) as
+      | PixiText
+      | undefined
+
+    expect(unlockedLabel?.style.fill).toBe(theme.textColor)
+    expect(lockedLabel?.style.fill).toBe(theme.textLockedColor)
+    // 視覚的に判別できるよう🔒マークがテキストに付く。
+    expect(lockedLabel?.text).toContain('🔒')
+    expect(unlockedLabel?.text).not.toContain('🔒')
+
+    expect(unlockedButton.eventMode).toBe('static')
+    expect(lockedButton.eventMode).toBe('none')
+
+    // クリックしても選択できない（tap-guard を満たす移動量でも onSelect は呼ばれない）。
+    lockedButton.emit('pointerdown', pointerEvent(400, 225))
+    lockedButton.emit('pointerup', pointerEvent(400, 225))
+    expect(onSelect).not.toHaveBeenCalled()
+
+    overlay.hide()
+  })
+
+  it('locked 未指定時は全オプションが従来どおり選択可能（非破壊）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選ぶ', jump: 'next', condition: 'never_set' }], vi.fn())
+
+    const button = overlay.children[0]
+    expect(button.eventMode).toBe('static')
+
+    overlay.hide()
+  })
+
   it('resolveChoiceVisual は既読/未読と hover で fill/border/text を切り替える', () => {
     const theme = resolveStyle('default')
 
@@ -213,6 +266,25 @@ describe('ChoiceOverlay rendering', () => {
       fill: theme.fillReadHover,
       border: theme.borderReadHover,
       text: theme.textReadColor,
+    })
+  })
+
+  // #591: locked は alreadyRead/hover より優先される専用の見た目になる。
+  it('resolveChoiceVisual: locked=true は alreadyRead/hover に関わらずロック専用配色を返す', () => {
+    const theme = resolveStyle('default')
+    const expected = {
+      fill: theme.fillLocked,
+      border: theme.borderLocked,
+      text: theme.textLockedColor,
+    }
+    expect(resolveChoiceVisual(theme, false, false, true)).toEqual(expected)
+    expect(resolveChoiceVisual(theme, true, false, true)).toEqual(expected)
+    expect(resolveChoiceVisual(theme, true, true, true)).toEqual(expected)
+    // locked=false（既定値省略）は従来どおり。
+    expect(resolveChoiceVisual(theme, false, false)).toEqual({
+      fill: theme.fillNormal,
+      border: theme.borderNormal,
+      text: theme.textColor,
     })
   })
 

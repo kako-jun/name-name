@@ -144,6 +144,62 @@ describe('NovelRenderer.playScript (#220)', () => {
     expect(loadReadSceneProgress(docKey).has('cell')).toBe(true)
   })
 
+  // #591: 選択肢オプションの条件付きロック。option.condition が未定義/false のフラグを
+  // 指しているときだけロックし、choiceOverlay.show へ options と同じ長さ・並びの真偽配列
+  // （6番目の引数）として渡す。
+  it('#591: condition 付きオプションは flag 未設定なら locked=true で show へ渡される', () => {
+    // 先頭に narration を置く: setScenes 内の processUntilNextTextEvent はテキストイベント
+    // で止まるため、choiceOverlay.show をモックしてから明示 advance() で Choice へ進める
+    // （#366 の既存テストと同じパターン。narration 無しだと構築中に本物の show が先に
+    // 呼ばれてしまい、後からのモック差し替えで見えなくなる）。
+    const r = makeRenderer([
+      scene('cell', [
+        narration('body'),
+        {
+          Choice: {
+            options: [
+              { text: '誰でも選べる', jump: 'hub' },
+              { text: 'route01_cleared が必要', jump: 'route01', condition: 'route01_cleared' },
+            ],
+          },
+        } as Event,
+      ]),
+      scene('hub', [narration('hub')]),
+      scene('route01', [narration('route01')]),
+    ])
+    internals(r).choiceOverlay.show = vi.fn()
+
+    internals(r).advance()
+
+    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    expect(call?.[5]).toEqual([false, true])
+  })
+
+  it('#591: Flag イベントで route01_cleared=true を立てた後は locked=false になる', () => {
+    const r = makeRenderer([
+      scene('cell', [
+        narration('body'),
+        { Flag: { name: 'route01_cleared', value: { Bool: true } } } as Event,
+        {
+          Choice: {
+            options: [
+              { text: 'route01_cleared が必要', jump: 'route01', condition: 'route01_cleared' },
+            ],
+          },
+        } as Event,
+      ]),
+      scene('route01', [narration('route01')]),
+    ])
+    internals(r).choiceOverlay.show = vi.fn()
+
+    // narration → Flag（フラグ設定、非表示イベント） → Choice まで processUntilNextTextEvent
+    // が一気に処理するため、advance() は1回だけでよい。
+    internals(r).advance()
+
+    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    expect(call?.[5]).toEqual([false])
+  })
+
   it('#366: Choice が無い scene はスクリプト末尾到達時に既読になる', () => {
     const docKey = 'novel-renderer-read-completion-test'
     const r = makeRenderer([scene('ending', [narration('body')])])
