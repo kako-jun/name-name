@@ -121,6 +121,36 @@ describe('resolveStyle', () => {
   )
 })
 
+// #594 再発防止: locked（押せない）と cleared（消灯＝押せる）の明暗関係が
+// luma(0.299R+0.587G+0.114B) で逆転していないかを4テーマ全てで機械的に検証する。
+// 「押せない」より「押せる」の方が暗く見えるのは常に誤り（soft テーマの fill/border/text
+// 全てで一度逆転していた実バグの再発を検出する）。
+describe('ChoiceOverlay ロック/消灯 luma 順序 (#594 回帰テスト)', () => {
+  function luma(color: number): number {
+    const r = (color >> 16) & 0xff
+    const g = (color >> 8) & 0xff
+    const b = color & 0xff
+    return 0.299 * r + 0.587 * g + 0.114 * b
+  }
+
+  const styleNames = ['default', 'soft', 'monochrome', 'pixel'] as const
+
+  it.each(styleNames)('%s テーマ: fillCleared は fillLocked より明るい', (name) => {
+    const t = resolveStyle(name)
+    expect(luma(t.fillCleared)).toBeGreaterThan(luma(t.fillLocked))
+  })
+
+  it.each(styleNames)('%s テーマ: borderCleared は borderLocked より明るい', (name) => {
+    const t = resolveStyle(name)
+    expect(luma(t.borderCleared)).toBeGreaterThan(luma(t.borderLocked))
+  })
+
+  it.each(styleNames)('%s テーマ: textClearedColor は textLockedColor より明るい', (name) => {
+    const t = resolveStyle(name)
+    expect(luma(t.textClearedColor)).toBeGreaterThan(luma(t.textLockedColor))
+  })
+})
+
 describe('ChoiceOverlay rendering', () => {
   it('show は一瞬表示ではなくボタン alpha 0 から fade-in を開始する', () => {
     const overlay = new ChoiceOverlay(800, 450)

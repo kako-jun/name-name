@@ -147,21 +147,25 @@ const STYLE_THEMES: Record<ChoiceStyleName, ChoiceTheme> = {
     fillRead: 0xe8e1f0,
     fillReadHover: 0xded5ec,
     fillLocked: 0xd8d3dc,
-    // 消灯中 (#594、should対応): lockedの寒色寄りラベンダーグレーから離し、
-    // くすんだ暖色ベージュピンクにして「押せる」ことを色相でも区別する。
-    fillCleared: 0xe6cfc0,
+    // 消灯中 (#594、should対応・luma逆転修正): lockedの寒色寄りラベンダーグレー(luma 213.5)
+    // から離した暖色ベージュピンクにしつつ、locked より明確に明るくする(luma 225.0、diff +11.5)。
+    // 「押せない」より「押せる」が暗く見えていた逆転を、色相分離を保ったまま解消する。
+    fillCleared: 0xf2ddc9,
     borderNormal: 0xffb3c1,
     borderHover: 0xff8fa3,
     borderRead: 0xb8a8ca,
     borderReadHover: 0x9d8bb8,
     borderLocked: 0xb0a8b8,
-    // 消灯枠 (#594、should対応): borderLockedの寒色グレーから離れたテラコッタ寄りに寄せる。
-    borderCleared: 0xc99a7e,
+    // 消灯枠 (#594、should対応・luma逆転修正): borderLocked(luma 172.2)の寒色グレーから
+    // 離れたテラコッタ寄りを保ちつつ、locked より明るくする(luma 184.1、diff +11.9)。
+    borderCleared: 0xdbae91,
     borderWidth: 3,
     textColor: 0x5d2952,
     textReadColor: 0x5d536b,
     textLockedColor: 0x8b8394,
-    textClearedColor: 0x8a6152,
+    // 消灯文字 (#594、should対応・luma逆転修正): 文字色は視認性に直結するため特に重要。
+    // textLocked(luma 135.3)の暖褐色トーンを保ちつつ明確に明るくする(luma 150.7、diff +15.4)。
+    textClearedColor: 0xb08f7c,
     fontFamily: "'Noto Sans JP', sans-serif",
     fontWeight: 'bold',
     fontSize: 22,
