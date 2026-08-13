@@ -34,8 +34,34 @@ interface RPGPlayerProps {
  * `seekbarColor` として明示的に渡す方式を採用する。SettingsOverlay の呼び出し元ごとに
  * 「seekbar_color 概念を持たないモードは自分の既定色を明示する」責務を寄せることで、
  * RPGPlayer の見た目は #601 の変更前後で完全に不変になる（非回帰）。
+ *
+ * 【再レビュー修正 (2026-08-14)】初回対応でこの定数に入れた `#67e8f9` は Tailwind v3 時代の
+ * hex 値を検証なしに転記したもので誤りだった。このプロジェクトは Tailwind v4 で、
+ * `accent-cyan-300` は v4 のカラートークン `--color-cyan-300: oklch(86.5% 0.127 207.078)` に
+ * コンパイルされる（v3 の `#67e8f9` とは異なる色）。
+ *
+ * 実測方法: (1) `@tailwindcss/postcss` を postcss 経由でこのプロジェクトの `src/index.css`
+ * ＋ `class="accent-cyan-300"` を持つ HTML に対して実際にコンパイルし、出力 CSS で
+ * `.accent-cyan-300 { accent-color: var(--color-cyan-300); }` と
+ * `--color-cyan-300: oklch(86.5% 0.127 207.078);` を確認。
+ * (2) 実 Chromium（Playwright, headless）でその HTML を開き、
+ * `getComputedStyle(el).accentColor` が `accent-cyan-300` クラス適用時と
+ * `accentColor: 'oklch(86.5% 0.127 207.078)'` インライン指定時とでビット単位で完全一致
+ * （`"oklch(0.865 0.127 207.078)"`）することを確認。
+ * (3) oklch → sRGB 8bit 変換（canvas 2D `getImageData` で実描画→readback、ブラウザの
+ * 実際の色変換ロジックを使用）でも検証し、`rgb(83, 234, 253)` = `#53eafd` に量子化されることを
+ * 確認（旧 `#67e8f9` = `rgb(103, 232, 249)` とは異なる値であることも実測で確認済み）。
+ *
+ * 値の選定: oklch 文字列そのもの（量子化誤差なし）を使いたいところだが、この定数は
+ * `SettingsOverlay` の `seekbarColor` prop 経由で `parseColorToNumber`/`numberToHexColor`
+ * （`novelLayout.ts`）を通る。この関数は純 hex（`#rrggbb`/`#rgb`）以外を全て
+ * `DEFAULT_BAR_FILL_COLOR` にフォールバックする実装のため、oklch 文字列を渡すと
+ * サイレントに無視されて水色にフォールバックしてしまう（実際に oklch 文字列で
+ * `RPGPlayer.test.tsx` を実行し、期待色でなく `#a8dadc`（フォールバック色）が
+ * 返ることを確認して発覚）。そのためこの制約下で実現可能な最良の非回帰値として、
+ * 上記 (3) で実測した sRGB 8bit 量子化値 `#53eafd` を採用する。
  */
-const RPG_SETTINGS_SLIDER_COLOR = '#67e8f9'
+const RPG_SETTINGS_SLIDER_COLOR = '#53eafd'
 
 function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
