@@ -1,8 +1,80 @@
-import { describe, it, expect, vi } from 'vitest'
-import { Graphics, Text as PixiText, Rectangle } from 'pixi.js'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { Assets, Graphics, Sprite, Text as PixiText, Rectangle, Texture } from 'pixi.js'
 import { ChoiceOverlay, resolveChoiceVisual, resolveStyle } from './ChoiceOverlay'
 import { computeSplitLayoutRegions } from './novelLayout'
 import type { FederatedPointerEvent } from 'pixi.js'
+
+// アイコン(#598)テスト用の共通ヘルパー。EventImageLayer.test.ts と同じ流儀
+// （Assets.load をモックし、実 setTimeout(0) でマクロタスクを1回まわして then/catch を解決させる）。
+const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+// 実 pixi.js の `new Sprite(texture)` は渡された値が `instanceof Texture` でないと
+// テクスチャとして受理せず Texture.EMPTY に差し替えてしまう（options 分割代入で texture
+// プロパティを探すため）。そのため素の `{}` キャストではなく実 `Texture` インスタンスを
+// 使い、テクスチャの identity 比較（icon.texture === readIconTexture 等）が成立するようにする。
+function mockTexture(): Texture {
+  return new Texture()
+}
+
+/** Assets.load を常に成功させ、常に新しい mockTexture() を返すモックに差し替える。 */
+function mockAssetsLoadResolved(): void {
+  vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+}
+
+/**
+ * URL ごとに個別の結果（成功時に返すテクスチャ、または 'reject'）を出し分けるモック。
+ * outcomes に無い URL は既定で mockTexture() 成功として扱う。
+ */
+function mockAssetsLoadRoutedByUrl(outcomes: Record<string, Texture | 'reject'>): void {
+  vi.spyOn(Assets, 'load').mockImplementation((url: unknown) => {
+    const outcome = outcomes[String(url)]
+    if (outcome === 'reject') return Promise.reject(new Error('404')) as never
+    if (outcome) return Promise.resolve(outcome) as never
+    return Promise.resolve(mockTexture()) as never
+  })
+}
+
+/**
+ * Assets.load の resolve/reject を呼び出し側が任意タイミングで手動発火できるモック
+ * （EventImageLayer.test.ts の race-guard テストと同じ流儀）。stale token 検証用。
+ */
+function mockAssetsLoadManual(): Record<
+  string,
+  { resolve: (t: Texture) => void; reject: (e: unknown) => void }
+> {
+  const resolvers: Record<string, { resolve: (t: Texture) => void; reject: (e: unknown) => void }> =
+    {}
+  vi.spyOn(Assets, 'load').mockImplementation(
+    (url: unknown) =>
+      new Promise((resolve, reject) => {
+        resolvers[String(url)] = { resolve, reject }
+      }) as never
+  )
+  return resolvers
+}
+
+/** private readIconTexture/unreadIconTexture を読むための internals ビュー。 */
+interface ChoiceOverlayInternals {
+  readIconTexture: Texture | null
+  unreadIconTexture: Texture | null
+}
+function internals(overlay: ChoiceOverlay): ChoiceOverlayInternals {
+  return overlay as unknown as ChoiceOverlayInternals
+}
+
+/** ボタン Container 直下から選択肢アイコンの Sprite を探す（無ければ undefined）。 */
+function findIconSprite(button: { children: unknown[] }): Sprite | undefined {
+  return button.children.find((child) => child instanceof Sprite) as Sprite | undefined
+}
+
+/** ボタン Container 直下からラベル Text を探す。 */
+function findLabel(button: { children: unknown[] }): PixiText | undefined {
+  return button.children.find((child) => child instanceof PixiText) as PixiText | undefined
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 function pointerEvent(x: number, y: number, pointerId = 1): FederatedPointerEvent {
   return {
@@ -1361,5 +1433,601 @@ describe('ChoiceOverlay pixel 統合フロー (#569)', () => {
 
     warnSpy.mockRestore()
     errorSpy.mockRestore()
+  })
+})
+
+// #598 追記3: 選択肢アイコン（既読=read-icon.webp / 未読=unread-icon.webp）の setAssetBaseUrl 基本ロード。
+// EventImageLayer.test.ts と同じ Assets.load モック流儀を踏襲する。
+describe('ChoiceOverlay setAssetBaseUrl 基本ロード (#598)', () => {
+  it('url未設定のままshow()しても例外を投げず、アイコンなし・BUTTON_HEIGHT(52)のままフォールバックする', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    expect(() =>
+      overlay.show(
+        [{ text: '選ぶ', jump: 'next' }],
+        vi.fn(),
+        null,
+        undefined,
+        undefined,
+        [false],
+        [true]
+      )
+    ).not.toThrow()
+
+    const button = overlay.children[0]
+    expect(findIconSprite(button)).toBeUndefined()
+    expect(button.pivot.y).toBe(26) // BUTTON_HEIGHT / 2
+
+    overlay.hide()
+  })
+
+  it('setAssetBaseUrl直後（Assets.loadのPromise未解決）にshow()するとアイコンなし・BUTTON_HEIGHTのまま', () => {
+    vi.spyOn(Assets, 'load').mockImplementation(() => new Promise(() => {}) as never)
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+
+    overlay.show(
+      [{ text: '選ぶ', jump: 'next' }],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false],
+      [true]
+    )
+    const button = overlay.children[0]
+    expect(findIconSprite(button)).toBeUndefined()
+    expect(button.pivot.y).toBe(26)
+
+    overlay.hide()
+  })
+
+  it('Assets.load成功後（flushPromises）にshow()するとread/unread両テクスチャが反映されそれぞれ描画される', async () => {
+    mockAssetsLoadResolved()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [
+        { text: '未読', jump: 'unread' },
+        { text: '既読', jump: 'read' },
+      ],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false, false],
+      [false, true]
+    )
+    const buttons = overlay.children
+    expect(findIconSprite(buttons[0])).toBeDefined()
+    expect(findIconSprite(buttons[1])).toBeDefined()
+
+    overlay.hide()
+  })
+
+  it('setAssetBaseUrl("")は即座にreadIconTexture/unreadIconTextureをnullへリセットし、Assets.loadを呼ばない', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+    expect(internals(overlay).readIconTexture).not.toBeNull()
+    expect(internals(overlay).unreadIconTexture).not.toBeNull()
+
+    loadSpy.mockClear()
+    overlay.setAssetBaseUrl('')
+
+    expect(internals(overlay).readIconTexture).toBeNull()
+    expect(internals(overlay).unreadIconTexture).toBeNull()
+    expect(loadSpy).not.toHaveBeenCalled()
+  })
+
+  it('同一urlでsetAssetBaseUrlを連続呼び出しすると2回目はAssets.loadを呼ばない（早期return）', () => {
+    const loadSpy = vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const overlay = new ChoiceOverlay(800, 450)
+
+    overlay.setAssetBaseUrl('/assets')
+    expect(loadSpy).toHaveBeenCalledTimes(2) // read-icon + unread-icon
+
+    loadSpy.mockClear()
+    overlay.setAssetBaseUrl('/assets')
+    expect(loadSpy).not.toHaveBeenCalled()
+  })
+})
+
+// #598: read/unread はそれぞれ独立に Assets.load される。片方だけ 404 でも、もう片方の
+// 表示・console 静粛性に影響しないことを検証する（デシジョンテーブル2の異常系）。
+describe('ChoiceOverlay read/unreadアイコンの独立フォールバック (#598)', () => {
+  it('read-icon.webpだけ404のとき、unread-iconは正常表示されread側だけ配色のみのフォールバックになる', async () => {
+    mockAssetsLoadRoutedByUrl({ '/assets/images/read-icon.webp': 'reject' })
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [
+        { text: '既読', jump: 'r' },
+        { text: '未読', jump: 'u' },
+      ],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false, false],
+      [true, false]
+    )
+    const buttons = overlay.children
+    expect(findIconSprite(buttons[0])).toBeUndefined() // read は 404 でフォールバック
+    expect(findIconSprite(buttons[1])).toBeDefined() // unread は正常表示
+
+    overlay.hide()
+  })
+
+  it('unread-icon.webpだけ404のとき、read-iconは正常表示されunread側だけ配色のみのフォールバックになる', async () => {
+    mockAssetsLoadRoutedByUrl({ '/assets/images/unread-icon.webp': 'reject' })
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [
+        { text: '既読', jump: 'r' },
+        { text: '未読', jump: 'u' },
+      ],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false, false],
+      [true, false]
+    )
+    const buttons = overlay.children
+    expect(findIconSprite(buttons[0])).toBeDefined() // read は正常表示
+    expect(findIconSprite(buttons[1])).toBeUndefined() // unread は 404 でフォールバック
+
+    overlay.hide()
+  })
+
+  it('read/unread両方404のとき、両方フォールバックしshow()は例外を投げない', async () => {
+    mockAssetsLoadRoutedByUrl({
+      '/assets/images/read-icon.webp': 'reject',
+      '/assets/images/unread-icon.webp': 'reject',
+    })
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    expect(() =>
+      overlay.show(
+        [
+          { text: '既読', jump: 'r' },
+          { text: '未読', jump: 'u' },
+        ],
+        vi.fn(),
+        null,
+        undefined,
+        undefined,
+        [false, false],
+        [true, false]
+      )
+    ).not.toThrow()
+    const buttons = overlay.children
+    expect(findIconSprite(buttons[0])).toBeUndefined()
+    expect(findIconSprite(buttons[1])).toBeUndefined()
+
+    overlay.hide()
+  })
+
+  it('read/unreadのAssets.loadが両方成功すると、各行が対応するテクスチャのアイコンをそれぞれ独立して描画する', async () => {
+    const readTex = mockTexture()
+    const unreadTex = mockTexture()
+    mockAssetsLoadRoutedByUrl({
+      '/assets/images/read-icon.webp': readTex,
+      '/assets/images/unread-icon.webp': unreadTex,
+    })
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [
+        { text: '既読', jump: 'r' },
+        { text: '未読', jump: 'u' },
+      ],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false, false],
+      [true, false]
+    )
+    const readIcon = findIconSprite(overlay.children[0])
+    const unreadIcon = findIconSprite(overlay.children[1])
+    expect(readIcon?.texture).toBe(readTex)
+    expect(unreadIcon?.texture).toBe(unreadTex)
+
+    overlay.hide()
+  })
+})
+
+// #598: console 汚染防止。404 はフォールバック対象として catch で握りつぶす仕様なので、
+// warn/error を一切出さないことを直接確認する（EventImageLayer 等の画像ロード失敗時とは
+// 異なり、選択肢アイコンは「無ければ配色のみ」で完全に無音の設計）。
+describe('ChoiceOverlay アイコンロード失敗時のconsole静粛性 (#598)', () => {
+  it('read/unread両方404でもconsole.error/console.warnは呼ばれない', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockAssetsLoadRoutedByUrl({
+      '/assets/images/read-icon.webp': 'reject',
+      '/assets/images/unread-icon.webp': 'reject',
+    })
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [{ text: '選ぶ', jump: 'n' }],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false],
+      [false]
+    )
+    await flushPromises()
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+
+    overlay.hide()
+  })
+})
+
+// #598: race / stale token。setAssetBaseUrl が連続で呼ばれたとき、古い世代の Assets.load 解決が
+// 後から届いても現在のテクスチャフィールドを上書きしない（EventImageLayer.test.ts の
+// loadToken race-guard テストと同じ流儀。ChoiceOverlay は read/unread 2本の Promise を
+// 1つの iconLoadToken で共有するため、両方について stale ignore を確認する）。
+describe('ChoiceOverlay アイコンrace/staleトークン (#598)', () => {
+  it('setAssetBaseUrl(url1)→即座にurl2に切替後、url1のread-icon Promiseが後から解決してもreadIconTextureは上書きされない', async () => {
+    const resolvers = mockAssetsLoadManual()
+    const overlay = new ChoiceOverlay(800, 450)
+
+    overlay.setAssetBaseUrl('/url1')
+    overlay.setAssetBaseUrl('/url2')
+
+    resolvers['/url1/images/read-icon.webp'].resolve(mockTexture())
+    await flushPromises()
+
+    expect(internals(overlay).readIconTexture).toBeNull()
+  })
+
+  it('同条件でunread側も同様にstale ignoreされる', async () => {
+    const resolvers = mockAssetsLoadManual()
+    const overlay = new ChoiceOverlay(800, 450)
+
+    overlay.setAssetBaseUrl('/url1')
+    overlay.setAssetBaseUrl('/url2')
+
+    resolvers['/url1/images/unread-icon.webp'].resolve(mockTexture())
+    await flushPromises()
+
+    expect(internals(overlay).unreadIconTexture).toBeNull()
+  })
+
+  it('url1のunread-iconだけ先に解決済み→setAssetBaseUrl(url2)を呼ぶと同期的にunreadIconTextureがnullへリセットされる', async () => {
+    const resolvers = mockAssetsLoadManual()
+    const overlay = new ChoiceOverlay(800, 450)
+
+    overlay.setAssetBaseUrl('/url1')
+    const tex1 = mockTexture()
+    resolvers['/url1/images/unread-icon.webp'].resolve(tex1)
+    await flushPromises()
+    expect(internals(overlay).unreadIconTexture).toBe(tex1)
+
+    overlay.setAssetBaseUrl('/url2')
+    // Assets.load の resolve を待たず、setAssetBaseUrl 呼び出し自体で同期的にリセットされる。
+    expect(internals(overlay).unreadIconTexture).toBeNull()
+  })
+
+  it('read/unreadの2つのAssets.load()が異なるタイミングで解決しても互いのtextureフィールドを誤って上書きしない', async () => {
+    const resolvers = mockAssetsLoadManual()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+
+    const readTex = mockTexture()
+    resolvers['/assets/images/read-icon.webp'].resolve(readTex)
+    await flushPromises()
+    expect(internals(overlay).readIconTexture).toBe(readTex)
+    expect(internals(overlay).unreadIconTexture).toBeNull()
+
+    const unreadTex = mockTexture()
+    resolvers['/assets/images/unread-icon.webp'].resolve(unreadTex)
+    await flushPromises()
+    expect(internals(overlay).readIconTexture).toBe(readTex) // read側は変化しない
+    expect(internals(overlay).unreadIconTexture).toBe(unreadTex)
+  })
+})
+
+// #598: 未実行→実行→ロード完了の3段階を1テストで連続検証する状態遷移テスト。
+describe('ChoiceOverlay アイコン状態遷移 (#598)', () => {
+  it('未実行→実行→ロード完了の3段階で、アイコン無し→無し→有りと連続的に変化する', async () => {
+    const resolvers = mockAssetsLoadManual()
+    const overlay = new ChoiceOverlay(800, 450)
+    const showUnreadChoice = () =>
+      overlay.show(
+        [{ text: '未読選択肢', jump: 'u' }],
+        vi.fn(),
+        null,
+        undefined,
+        undefined,
+        [false],
+        [false]
+      )
+
+    // 段階1: setAssetBaseUrl 未実行。
+    showUnreadChoice()
+    expect(findIconSprite(overlay.children[0])).toBeUndefined()
+    overlay.hide()
+
+    // 段階2: setAssetBaseUrl 実行直後（Assets.load の Promise 未解決）。
+    overlay.setAssetBaseUrl('/assets')
+    showUnreadChoice()
+    expect(findIconSprite(overlay.children[0])).toBeUndefined()
+    overlay.hide()
+
+    // 段階3: ロード完了後。
+    resolvers['/assets/images/unread-icon.webp'].resolve(mockTexture())
+    await flushPromises()
+    showUnreadChoice()
+    expect(findIconSprite(overlay.children[0])).toBeDefined()
+    overlay.hide()
+  })
+})
+
+// #598 重点: ボタン高さ波及。1行でもアイコンが実際に描画されれば、その回の show() 全体が
+// BUTTON_HEIGHT_WITH_ICON(68) に嵩上げされ、アイコン非表示の他の行も textY=34（68/2）に
+// 揃う。旧実装のような「一部の行だけ26のまま取り残される」事故の再発を検出する。
+describe('ChoiceOverlay ボタン高さ波及 (#598 重点)', () => {
+  it('read種別のアイコンが1行でも表示されれば、アイコン無しの他の行(locked)もBUTTON_HEIGHT_WITH_ICON(68)を使いtextYが34になる', async () => {
+    mockAssetsLoadResolved()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [
+        { text: '既読', jump: 'r' },
+        { text: 'ロック', jump: 'l', condition: 'flag' },
+      ],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false, true],
+      [true, false]
+    )
+    const buttons = overlay.children
+    expect(findIconSprite(buttons[0])).toBeDefined() // read 表示行
+
+    const lockedLabel = findLabel(buttons[1])
+    expect(buttons[1].pivot.y).toBe(34) // BUTTON_HEIGHT_WITH_ICON / 2
+    expect(lockedLabel?.y).toBe(34) // 26 のまま取り残されない
+
+    overlay.hide()
+  })
+
+  it('unread種別のアイコンが1行でも表示されれば、アイコン無しの他の行(locked)もBUTTON_HEIGHT_WITH_ICON(68)を使いtextYが34になる', async () => {
+    mockAssetsLoadResolved()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [
+        { text: '未読', jump: 'u' },
+        { text: 'ロック', jump: 'l', condition: 'flag' },
+      ],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false, true],
+      [false, false]
+    )
+    const buttons = overlay.children
+    expect(findIconSprite(buttons[0])).toBeDefined() // unread 表示行
+
+    const lockedLabel = findLabel(buttons[1])
+    expect(buttons[1].pivot.y).toBe(34)
+    expect(lockedLabel?.y).toBe(34)
+
+    overlay.hide()
+  })
+
+  it('全行がロック中またはテクスチャ未ロードでアイコン非表示のとき、layoutButtonHeightはBUTTON_HEIGHT(52)のまま、全ラベルyが26', () => {
+    // setAssetBaseUrl 未実行 = テクスチャ未ロード。
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(
+      [
+        { text: 'A', jump: 'a' },
+        { text: 'B', jump: 'b' },
+      ],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false, false],
+      [true, false]
+    )
+    const buttons = overlay.children
+    for (const button of buttons) {
+      expect(button.pivot.y).toBe(26)
+      expect(findLabel(button)?.y).toBe(26)
+    }
+
+    overlay.hide()
+  })
+
+  it('混在ケース（option0=read表示, option1=locked, option2=unreadフォールバック=404）で、option1・option2のtextYも34になる', async () => {
+    mockAssetsLoadRoutedByUrl({ '/assets/images/unread-icon.webp': 'reject' })
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [
+        { text: 'read表示', jump: 'r' },
+        { text: 'locked', jump: 'l', condition: 'flag' },
+        { text: 'unreadフォールバック', jump: 'u' },
+      ],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false, true, false],
+      [true, false, false]
+    )
+    const buttons = overlay.children
+    expect(findIconSprite(buttons[0])).toBeDefined() // option0: read は正常表示
+    expect(findIconSprite(buttons[2])).toBeUndefined() // option2: unread は 404 フォールバック
+
+    for (const button of buttons) {
+      expect(button.pivot.y).toBe(34)
+    }
+    expect(findLabel(buttons[1])?.y).toBe(34)
+    expect(findLabel(buttons[2])?.y).toBe(34)
+
+    overlay.hide()
+  })
+})
+
+// #598 重点: 優先順位混線防止。resolveChoiceIconKind（アイコン種別）と resolveChoiceVisual
+// （配色）は別軸の判定だが、どちらも「locked が最優先」という同じ結論に収束するはず。
+// テクスチャが読み込み済みでも locked ならアイコンが一切出ないこと（デシジョンテーブル2 #16）
+// を直接確認する。
+describe('ChoiceOverlay アイコン優先順位混線防止 (#598 重点)', () => {
+  it('locked=trueの行はread/unread両方のテクスチャがロード済みでもアイコンが一切描画されない（デシジョンテーブル2 #16）', async () => {
+    mockAssetsLoadResolved()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+    expect(internals(overlay).readIconTexture).not.toBeNull()
+    expect(internals(overlay).unreadIconTexture).not.toBeNull()
+
+    overlay.show(
+      [{ text: 'ロック済み', jump: 'l', condition: 'flag' }],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [true],
+      [true]
+    )
+    expect(findIconSprite(overlay.children[0])).toBeUndefined()
+
+    overlay.hide()
+  })
+
+  it('locked=true, cleared=trueが同時に真の行は、配色もアイコンもlockedが優先され食い違わない', () => {
+    const theme = resolveStyle('default')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(
+      [{ text: 'ロック済み完了', jump: 'lc', condition: 'flag' }],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [true],
+      [true]
+    )
+    const button = overlay.children[0]
+    const label = findLabel(button)
+    // 配色は locked 優先（cleared 色ではない、resolveChoiceVisual と同じ判定順）。
+    expect(label?.style.fill).toBe(theme.textLockedColor)
+    // アイコンも none（resolveChoiceIconKind と食い違わない）。
+    expect(findIconSprite(button)).toBeUndefined()
+
+    overlay.hide()
+  })
+})
+
+// #598: alreadyRead（既読/未読の色分け）とアイコンの軸独立性。アイコンは locked/cleared の
+// 2軸だけで決まり、alreadyRead は一切参照しない（resolveChoiceIconKind の doc comment どおり）。
+describe('ChoiceOverlay alreadyReadとアイコンの軸独立性 (#598)', () => {
+  it('alreadyRead=trueでもcleared=false・locked=falseならunread-iconが表示される（alreadyReadは無関係）', async () => {
+    mockAssetsLoadResolved()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [{ text: '既読jumpだが未完了', jump: 'read-scene' }],
+      vi.fn(),
+      'default',
+      new Set(['read-scene']),
+      undefined,
+      [false],
+      [false]
+    )
+    const icon = findIconSprite(overlay.children[0])
+    expect(icon).toBeDefined()
+    expect(icon?.texture).toBe(internals(overlay).unreadIconTexture)
+
+    overlay.hide()
+  })
+
+  it('alreadyRead=falseでもcleared=true・locked=falseならread-iconが表示される（alreadyReadは無関係）', async () => {
+    mockAssetsLoadResolved()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [{ text: '未読jumpだが完了', jump: 'new-scene' }],
+      vi.fn(),
+      'default',
+      undefined,
+      undefined,
+      [false],
+      [true]
+    )
+    const icon = findIconSprite(overlay.children[0])
+    expect(icon).toBeDefined()
+    expect(icon?.texture).toBe(internals(overlay).readIconTexture)
+
+    overlay.hide()
+  })
+
+  it('alreadyReadをtrue/falseで振ってもアイコン表示結果が変化しない（軸独立の直接証明）', async () => {
+    mockAssetsLoadResolved()
+
+    const makeOverlayAndShow = async (readJumps: ReadonlySet<string> | undefined) => {
+      const overlay = new ChoiceOverlay(800, 450)
+      overlay.setAssetBaseUrl('/assets')
+      await flushPromises()
+      overlay.show(
+        [{ text: '選択肢', jump: 'x' }],
+        vi.fn(),
+        'default',
+        readJumps,
+        undefined,
+        [false],
+        [false]
+      )
+      return overlay
+    }
+
+    const withAlreadyRead = await makeOverlayAndShow(new Set(['x']))
+    const iconWith = findIconSprite(withAlreadyRead.children[0])
+    withAlreadyRead.hide()
+
+    const withoutAlreadyRead = await makeOverlayAndShow(undefined)
+    const iconWithout = findIconSprite(withoutAlreadyRead.children[0])
+    withoutAlreadyRead.hide()
+
+    expect(iconWith).toBeDefined()
+    expect(iconWithout).toBeDefined()
+    // 両方とも unread-icon（cleared=false）で、alreadyRead の真偽で変わらない。
+    expect(iconWith?.texture).toBe(iconWithout?.texture)
   })
 })

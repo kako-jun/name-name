@@ -6,6 +6,8 @@ import {
   computeSplitLayoutRegions,
   splitTextRegionForDualWindow,
   computeChoiceGridLayout,
+  resolveChoiceIconKind,
+  computeChoiceIconLayout,
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
@@ -617,6 +619,67 @@ describe('computeChoiceGridLayout (#508)', () => {
     const row0 = layout.positions.slice(0, 5)
     const row1 = layout.positions.slice(5, 7)
     expect(row1.map((p) => p.x)).toEqual(row0.slice(0, 2).map((p) => p.x))
+  })
+})
+
+// #598 追記3: resolveChoiceIconKind（ロック/既読/未読アイコン種別判定の純粋関数）。
+// デシジョンテーブル1（4通り全て）を1テスト1行で機械的に固定する。
+describe('resolveChoiceIconKind (#598 追記3)', () => {
+  it('locked=false, cleared=false は unread', () => {
+    expect(resolveChoiceIconKind(false, false)).toBe('unread')
+  })
+
+  it('locked=false, cleared=true は read', () => {
+    expect(resolveChoiceIconKind(false, true)).toBe('read')
+  })
+
+  it('locked=true, cleared=false は none', () => {
+    expect(resolveChoiceIconKind(true, false)).toBe('none')
+  })
+
+  it('locked=true, cleared=true でもロックが優先されnoneになる（配色側resolveChoiceVisualの優先順位と食い違わない）', () => {
+    expect(resolveChoiceIconKind(true, true)).toBe('none')
+  })
+})
+
+// #598: computeChoiceIconLayout（アイコン＋ラベルの縦位置対称配置）。
+// ChoiceOverlay.ts の実運用値: ICON_SIZE=18, ICON_TEXT_GAP=8, BUTTON_HEIGHT_WITH_ICON=68。
+describe('computeChoiceIconLayout (#598)', () => {
+  const ICON_SIZE = 18
+  const ICON_TEXT_GAP = 8
+  const BUTTON_HEIGHT_WITH_ICON = 68
+  const BUTTON_HEIGHT = 52
+
+  it('hasIcon=falseのときiconY===textY===buttonHeight/2（#591以来の一点センタリングと非破壊で一致）', () => {
+    const layout = computeChoiceIconLayout(BUTTON_HEIGHT, false, ICON_SIZE, ICON_TEXT_GAP)
+    expect(layout.iconY).toBe(BUTTON_HEIGHT / 2)
+    expect(layout.textY).toBe(BUTTON_HEIGHT / 2)
+    expect(layout.iconY).toBe(layout.textY)
+  })
+
+  it('hasIcon=trueのとき実定数(68/18/8)でiconY=21・textY=47の具体値になる', () => {
+    const layout = computeChoiceIconLayout(BUTTON_HEIGHT_WITH_ICON, true, ICON_SIZE, ICON_TEXT_GAP)
+    expect(layout.iconY).toBe(21)
+    expect(layout.textY).toBe(47)
+  })
+
+  it('hasIconのtrue/false切り替わりで同じbuttonHeightでもiconY/textYの関係が変化する（境界確認）', () => {
+    const withoutIcon = computeChoiceIconLayout(
+      BUTTON_HEIGHT_WITH_ICON,
+      false,
+      ICON_SIZE,
+      ICON_TEXT_GAP
+    )
+    const withIcon = computeChoiceIconLayout(
+      BUTTON_HEIGHT_WITH_ICON,
+      true,
+      ICON_SIZE,
+      ICON_TEXT_GAP
+    )
+    expect(withoutIcon.iconY).toBe(withoutIcon.textY)
+    expect(withIcon.iconY).not.toBe(withIcon.textY)
+    expect(withIcon.iconY).toBeLessThan(withoutIcon.iconY)
+    expect(withIcon.textY).toBeGreaterThan(withoutIcon.textY)
   })
 })
 
