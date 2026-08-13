@@ -1788,7 +1788,7 @@ describe('ChoiceOverlay アイコン状態遷移 (#598)', () => {
 // BUTTON_HEIGHT_WITH_ICON(68) に嵩上げされ、アイコン非表示の他の行も textY=34（68/2）に
 // 揃う。旧実装のような「一部の行だけ26のまま取り残される」事故の再発を検出する。
 describe('ChoiceOverlay ボタン高さ波及 (#598 重点)', () => {
-  it('read種別のアイコンが1行でも表示されれば、アイコン無しの他の行(locked)もBUTTON_HEIGHT_WITH_ICON(68)を使いtextYが34になる', async () => {
+  it('read種別のアイコンが表示されるとき、ロック中の行もunread-iconを表示し両方ともBUTTON_HEIGHT_WITH_ICON(68)を使う（#604: ロックはアイコンに影響しない）', async () => {
     mockAssetsLoadResolved()
     const overlay = new ChoiceOverlay(800, 450)
     overlay.setAssetBaseUrl('/assets')
@@ -1807,16 +1807,25 @@ describe('ChoiceOverlay ボタン高さ波及 (#598 重点)', () => {
       [true, false]
     )
     const buttons = overlay.children
-    expect(findIconSprite(buttons[0])).toBeDefined() // read 表示行
+    const readIcon = findIconSprite(buttons[0])
+    expect(readIcon).toBeDefined() // read 表示行
+    expect(readIcon?.texture).toBe(internals(overlay).readIconTexture)
+
+    // ロック中(cleared=false)の行も unread-icon を表示する（#604）。
+    const lockedIcon = findIconSprite(buttons[1])
+    expect(lockedIcon).toBeDefined()
+    expect(lockedIcon?.texture).toBe(internals(overlay).unreadIconTexture)
 
     const lockedLabel = findLabel(buttons[1])
     expect(buttons[1].pivot.y).toBe(34) // BUTTON_HEIGHT_WITH_ICON / 2
-    expect(lockedLabel?.y).toBe(34) // 26 のまま取り残されない
+    // ロック中の行自身もアイコンを表示するため、textY はアイコン分オフセットした 47
+    // （center(34) + offset(13)）になる。26 に取り残されないことも同時に確認する。
+    expect(lockedLabel?.y).toBe(47)
 
     overlay.hide()
   })
 
-  it('unread種別のアイコンが1行でも表示されれば、アイコン無しの他の行(locked)もBUTTON_HEIGHT_WITH_ICON(68)を使いtextYが34になる', async () => {
+  it('unread種別のアイコンが表示されるとき、ロック中(既読)の行もread-iconを表示し両方ともBUTTON_HEIGHT_WITH_ICON(68)を使う（#604: ロックはアイコンに影響しない）', async () => {
     mockAssetsLoadResolved()
     const overlay = new ChoiceOverlay(800, 450)
     overlay.setAssetBaseUrl('/assets')
@@ -1825,26 +1834,34 @@ describe('ChoiceOverlay ボタン高さ波及 (#598 重点)', () => {
     overlay.show(
       [
         { text: '未読', jump: 'u' },
-        { text: 'ロック', jump: 'l', condition: 'flag' },
+        { text: 'ロック済み完了', jump: 'l', condition: 'flag' },
       ],
       vi.fn(),
       null,
       undefined,
       undefined,
       [false, true],
-      [false, false]
+      [false, true]
     )
     const buttons = overlay.children
-    expect(findIconSprite(buttons[0])).toBeDefined() // unread 表示行
+    const unreadIcon = findIconSprite(buttons[0])
+    expect(unreadIcon).toBeDefined() // unread 表示行
+    expect(unreadIcon?.texture).toBe(internals(overlay).unreadIconTexture)
+
+    // ロック中でも cleared=true なら read-icon を表示する（#604: 稀だがフラグは直交）。
+    const lockedIcon = findIconSprite(buttons[1])
+    expect(lockedIcon).toBeDefined()
+    expect(lockedIcon?.texture).toBe(internals(overlay).readIconTexture)
 
     const lockedLabel = findLabel(buttons[1])
     expect(buttons[1].pivot.y).toBe(34)
-    expect(lockedLabel?.y).toBe(34)
+    // ロック中の行自身も read-icon を表示するため textY は 47（center(34) + offset(13)）。
+    expect(lockedLabel?.y).toBe(47)
 
     overlay.hide()
   })
 
-  it('全行がロック中またはテクスチャ未ロードでアイコン非表示のとき、layoutButtonHeightはBUTTON_HEIGHT(52)のまま、全ラベルyが26', () => {
+  it('テクスチャ未ロードで全行アイコン非表示のとき、layoutButtonHeightはBUTTON_HEIGHT(52)のまま、全ラベルyが26', () => {
     // setAssetBaseUrl 未実行 = テクスチャ未ロード。
     const overlay = new ChoiceOverlay(800, 450)
     overlay.show(
@@ -1868,7 +1885,7 @@ describe('ChoiceOverlay ボタン高さ波及 (#598 重点)', () => {
     overlay.hide()
   })
 
-  it('混在ケース（option0=read表示, option1=locked, option2=unreadフォールバック=404）で、option1・option2のtextYも34になる', async () => {
+  it('混在ケース（option0=read表示, option1=locked+unreadだが404フォールバック, option2=unreadフォールバック=404）で、option1・option2のtextYも34になる', async () => {
     mockAssetsLoadRoutedByUrl({ '/assets/images/unread-icon.webp': 'reject' })
     const overlay = new ChoiceOverlay(800, 450)
     overlay.setAssetBaseUrl('/assets')
@@ -1889,6 +1906,9 @@ describe('ChoiceOverlay ボタン高さ波及 (#598 重点)', () => {
     )
     const buttons = overlay.children
     expect(findIconSprite(buttons[0])).toBeDefined() // option0: read は正常表示
+    // option1: locked でも本来 unread-icon 対象（#604）だが、unread-icon.webp 自体が
+    // 404 のためフォールバックで非表示になる（ロックが理由ではない）。
+    expect(findIconSprite(buttons[1])).toBeUndefined()
     expect(findIconSprite(buttons[2])).toBeUndefined() // option2: unread は 404 フォールバック
 
     for (const button of buttons) {
@@ -1901,12 +1921,12 @@ describe('ChoiceOverlay ボタン高さ波及 (#598 重点)', () => {
   })
 })
 
-// #598 重点: 優先順位混線防止。resolveChoiceIconKind（アイコン種別）と resolveChoiceVisual
-// （配色）は別軸の判定だが、どちらも「locked が最優先」という同じ結論に収束するはず。
-// テクスチャが読み込み済みでも locked ならアイコンが一切出ないこと（デシジョンテーブル2 #16）
-// を直接確認する。
-describe('ChoiceOverlay アイコン優先順位混線防止 (#598 重点)', () => {
-  it('locked=trueの行はread/unread両方のテクスチャがロード済みでもアイコンが一切描画されない（デシジョンテーブル2 #16）', async () => {
+// #604 訂正: resolveChoiceIconKind（アイコン種別）と resolveChoiceVisual（配色）は別軸の判定で、
+// locked は配色にのみ影響しアイコンには一切影響しない（#598 時点の「どちらも locked が
+// 最優先」という想定は誤りだった。ロックは「読むことすらできない」だけで「未読でない」わけ
+// ではないため、locked=true でも cleared の値に応じたアイコンが出る）。
+describe('ChoiceOverlay ロックとアイコンの軸独立性 (#604)', () => {
+  it('locked=true, cleared=falseの行はread/unread両方のテクスチャがロード済みならunread-iconが描画される（ロックはアイコンに影響しない）', async () => {
     mockAssetsLoadResolved()
     const overlay = new ChoiceOverlay(800, 450)
     overlay.setAssetBaseUrl('/assets')
@@ -1921,16 +1941,22 @@ describe('ChoiceOverlay アイコン優先順位混線防止 (#598 重点)', () 
       undefined,
       undefined,
       [true],
-      [true]
+      [false]
     )
-    expect(findIconSprite(overlay.children[0])).toBeUndefined()
+    const icon = findIconSprite(overlay.children[0])
+    expect(icon).toBeDefined()
+    expect(icon?.texture).toBe(internals(overlay).unreadIconTexture)
 
     overlay.hide()
   })
 
-  it('locked=true, cleared=trueが同時に真の行は、配色もアイコンもlockedが優先され食い違わない', () => {
+  it('locked=true, cleared=trueが同時に真の行は、配色はlocked優先だがアイコンはclearedに従いread-iconが出る（フラグは直交）', async () => {
+    mockAssetsLoadResolved()
     const theme = resolveStyle('default')
     const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
     overlay.show(
       [{ text: 'ロック済み完了', jump: 'lc', condition: 'flag' }],
       vi.fn(),
@@ -1942,17 +1968,21 @@ describe('ChoiceOverlay アイコン優先順位混線防止 (#598 重点)', () 
     )
     const button = overlay.children[0]
     const label = findLabel(button)
-    // 配色は locked 優先（cleared 色ではない、resolveChoiceVisual と同じ判定順）。
+    // 配色は locked 優先（cleared 色ではない、resolveChoiceVisual と同じ判定順、変更なし）。
     expect(label?.style.fill).toBe(theme.textLockedColor)
-    // アイコンも none（resolveChoiceIconKind と食い違わない）。
-    expect(findIconSprite(button)).toBeUndefined()
+    // アイコンは cleared=true なので read-icon（locked とは無関係、resolveChoiceIconKind の
+    // 仕様どおり）。
+    const icon = findIconSprite(button)
+    expect(icon).toBeDefined()
+    expect(icon?.texture).toBe(internals(overlay).readIconTexture)
 
     overlay.hide()
   })
 })
 
-// #598: alreadyRead（既読/未読の色分け）とアイコンの軸独立性。アイコンは locked/cleared の
-// 2軸だけで決まり、alreadyRead は一切参照しない（resolveChoiceIconKind の doc comment どおり）。
+// #598 / #604: alreadyRead（既読/未読の色分け）とアイコンの軸独立性。アイコンは cleared
+// だけで決まり（#604: locked は無関係）、alreadyRead も一切参照しない（resolveChoiceIconKind
+// の doc comment どおり）。
 describe('ChoiceOverlay alreadyReadとアイコンの軸独立性 (#598)', () => {
   it('alreadyRead=trueでもcleared=false・locked=falseならunread-iconが表示される（alreadyReadは無関係）', async () => {
     mockAssetsLoadResolved()

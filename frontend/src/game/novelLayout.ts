@@ -458,7 +458,7 @@ export interface ChoiceIconLayout {
  * 20-22px、`iconSize`（`ICON_SIZE`）は 18px のため数 px 程度の誤差があり、真の光学的対称
  * ではない）。
  *
- * `hasIcon=false`（未読み込み/取得失敗/locked などで今回アイコンを描画しない）のときは、
+ * `hasIcon=false`（対応するテクスチャの未読み込み/取得失敗などで今回アイコンを描画しない）のときは、
  * `iconY`/`textY` とも `buttonHeight / 2` を返す——#591 以来の「ラベルをボタン中心に
  * 一点センタリング」という既存レイアウトと完全に同じ結果になる（非破壊）。
  *
@@ -481,26 +481,27 @@ export function computeChoiceIconLayout(
   return { iconY: center - offset, textY: center + offset }
 }
 
-/** `resolveChoiceIconKind` の戻り値 (#598 追記3)。表示すべきアイコンの種類、または非表示。 */
+/** `resolveChoiceIconKind` の戻り値 (#598 追記3 / #604)。表示すべきアイコンの種類。 */
 export type ChoiceIconKind = 'read' | 'unread' | 'none'
 
 /**
- * 選択肢ボタン1件に表示すべきアイコンの種類を判定する純粋関数 (#598 追記3)。
+ * 選択肢ボタン1件に表示すべきアイコンの種類を判定する純粋関数 (#598 追記3 / #604 訂正)。
  *
- * 「ロック」と「既読/完了」は独立した2軸の状態であり（追記3で訂正済み。ロック＝読むことすら
- * できない、既読/完了＝読めるようになった後に読んだかどうか）、判定はこの2軸だけで決まる。
- * 配色の優先順位（`resolveChoiceVisual`: locked > cleared > alreadyRead > 通常）とは
- * 別軸の判定であり、`alreadyRead` はここでは一切参照しない：
+ * 「ロック」と「既読/完了」は独立した2軸の状態である（ロック＝読むことすらできない、
+ * 既読/完了＝読めるようになった後に読んだかどうか）。#604 で判明した誤り：ロックは
+ * 「読むことすらできない」だけであって「未読でない」わけではない。ロック中の選択肢も
+ * 当然「未読」ではあるので、`locked` はアイコン種別の判定に一切関与しない。
+ * `cleared` のみで決まる（配色側の `resolveChoiceVisual` の locked > cleared > alreadyRead
+ * > 通常という優先順位とは別軸の判定であり、`alreadyRead` もここでは一切参照しない）：
  *
- * - `locked` → `'none'`（ロック中はアイコンを一切付けない。配色のみで表す、変更なし）
- * - `!locked && cleared` → `'read'`（既読/完了。`read-icon.webp`）
- * - `!locked && !cleared` → `'unread'`（未読。`alreadyRead` の真偽に関わらず `unread-icon.webp`）
+ * - `cleared === true` → `'read'`（既読/完了。`read-icon.webp`。ロック中でも同じ）
+ * - `cleared === false` → `'unread'`（未読。`alreadyRead` の真偽に関わらず `unread-icon.webp`。ロック中でも同じ）
  *
+ * ロックの見た目（暗い配色・クリック不可）は `resolveChoiceVisual` 側で別途表現する。
  * 実際に描画するかどうか（対応するテクスチャの先読みに成功しているか）は呼び出し側
  * （`ChoiceOverlay`）の責務。この関数は「本来どちらを見せるべきか」という論理だけを返す。
  */
-export function resolveChoiceIconKind(locked: boolean, cleared: boolean): ChoiceIconKind {
-  if (locked) return 'none'
+export function resolveChoiceIconKind(cleared: boolean): ChoiceIconKind {
   return cleared ? 'read' : 'unread'
 }
 
