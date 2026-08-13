@@ -43,7 +43,7 @@ import { BacklogOverlay } from './BacklogOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { isSceneIdConfined } from './sceneConfinement'
-import { Event, EventScene } from '../types'
+import { Event, EventImageTransition, EventScene } from '../types'
 import { ASPECT_RATIOS, type AspectRatio, DEFAULT_ASPECT_RATIO } from './constants'
 import {
   isRead,
@@ -417,6 +417,12 @@ export class NovelRenderer {
    *  個別ディレクティブの `フェード=` がある場合はそちらが優先され、未指定時だけ使う。
    *  初期値は 700ms。立ち絵/背景と同じ [0, 5000] クランプを使う。 */
   private eventImageFadeMs: number = EVENT_IMAGE_FADE_MS
+
+  /** イベント絵の遷移モードのプロジェクト単位デフォルト (#599)。frontmatter `event_image_transition:`
+   *  の値。parser がタグ解析時点で `遷移=` 未指定分を既にこの値へ解決済み（`Event.EventImage.transition`
+   *  は常に解決済みの値を持つ）なので、通常はここまで未解決の `undefined` は来ない。念のための
+   *  二重防御としてのみ使う（`ei.transition ?? this.eventImageTransitionDefault` 参照）。 */
+  private eventImageTransitionDefault: EventImageTransition = 'Fade'
 
   /**
    * intermission.md 専用シーン (#404)。`assets/scripts/intermission.md` から取得・parse された
@@ -1894,6 +1900,11 @@ export class NovelRenderer {
       BACKGROUND_FADE_MS_MIN,
       BACKGROUND_FADE_MS_MAX
     )
+  }
+
+  /** frontmatter `event_image_transition:`（#599）を受け取る。不正値・未指定は既定 `'Fade'`。 */
+  setEventImageTransitionDefault(value: EventImageTransition | null | undefined): void {
+    this.eventImageTransitionDefault = value === 'Pixelate' ? 'Pixelate' : 'Fade'
   }
 
   /**
@@ -3436,9 +3447,12 @@ export class NovelRenderer {
         this.eventImageLayer.show(ei.path, {
           back: ei.back,
           fadeMs: ei.fade_ms ?? this.eventImageFadeMs,
-          // 遷移モード (#583)。parser.ts の normalizeEvents が undefined を 'Fade' に正規化済みだが、
-          // 念のため ?? で二重に防御する。
-          transition: ei.transition ?? 'Fade',
+          // 遷移モード (#583)。parser（Rust）が `遷移=` 未指定タグを frontmatter
+          // `event_image_transition`（#599）の実効デフォルトへ解決済みで、
+          // wasm/parser.ts の normalizeEvents が undefined をそのデフォルトに正規化済みだが、
+          // 念のため ?? で三重に防御する（`this.eventImageTransitionDefault` は
+          // setEventImageTransitionDefault で受けた同じ doc デフォルト）。
+          transition: ei.transition ?? this.eventImageTransitionDefault,
           // アンビエント演出 (#582)。parser.ts の normalizeEvents が undefined を全 false に
           // 正規化済みだが、念のため ?? で二重に防御する。
           effects: ei.effects ?? undefined,
