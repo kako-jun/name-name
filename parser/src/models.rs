@@ -65,7 +65,11 @@ pub enum EventImageBack {
     Keep,
 }
 
-/// イベント絵の遷移モード (#583)。既定は `Fade`（既存の透明度フェード、非回帰）。
+/// イベント絵の遷移モード (#583)。この型自体の Rust 既定は `Fade`（既存の透明度フェード、非回帰）
+/// だが、`[イベント絵:]` タグの実効デフォルト（`遷移=` 未指定時にどちらへ倒れるか）は
+/// `Document::event_image_transition`（frontmatter `event_image_transition:`、#599）が
+/// プロジェクト単位で上書きできる。タグ側で `遷移=fade`/`遷移=pixelate` を明示すれば、
+/// そちらが常に frontmatter デフォルトより優先される。
 /// `Pixelate`: 表示中の絵のドットを段階的に荒くしてから次の絵に切り替え、また段階的に
 /// 細かく戻す。狙いは、一度粗いドットを見せることで切り替わった後の絵が相対的に細かく
 /// 見える錯覚を作ること。所要時間は新規パラメータを追加せず既存の `fade_ms` を「遷移全体の
@@ -477,7 +481,10 @@ pub enum Event {
         /// 再解釈される（GUI/TUI レンダラ側の裁量で荒く→切替→細かく戻るへ配分する）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fade_ms: Option<u32>,
-        /// 遷移モード (#583)。既定 `Fade`（既存の透明度フェード、非回帰）。
+        /// 遷移モード (#583)。タグに `遷移=` が明示されなかった場合、parser がここで
+        /// `Document::event_image_transition`（frontmatter デフォルト、既定 `Fade`、#599）を
+        /// 解決済みの値として焼き込む。GUI/TUI はこのフィールドをそのまま読めばよく、
+        /// 自前でデフォルト解決をやり直す必要はない。
         #[serde(default)]
         transition: EventImageTransition,
         /// アンビエント演出フラグ (#582)。既定は全て false（既存脚本は非回帰）。
@@ -1079,6 +1086,17 @@ pub struct Document {
     /// 空・非数値は None 扱い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_image_fade_ms: Option<u32>,
+    /// イベント絵の遷移モード (#583) のプロジェクト単位デフォルト (#599)。
+    /// `[イベント絵: path, 遷移=...]` の `遷移`/`transition` が明示されていないタグは、
+    /// ハードコードされた `Fade` ではなくこの値をデフォルトとして使う（タグ側の明示指定は
+    /// 引き続きこのデフォルトより優先する = `dialog_style`/`header` と同じ「タグ最優先」原則）。
+    /// frontmatter `event_image_transition:` から流す。値は英語トークン固定 `"fade"`/`"pixelate"`
+    /// （大小無視）で、不正値・未指定は既定 `Fade` にフォールバックする（`header`/`normalizeHeaderMode`
+    /// と同じ後方互換パターン）。既存作品（本キー未指定）は `遷移` 未指定タグが従来どおり `Fade` に
+    /// 解決されるため非回帰。Gymnasia のような `遷移=pixelate` 多用作品はこのキーを
+    /// `"pixelate"` にすることで個別タグ付けを不要にできる。
+    #[serde(default)]
+    pub event_image_transition: EventImageTransition,
     /// 下地ベタ（ステージ最背面の全面塗り＝`bgGraphics`）の既定色（`#rrggbb`）(#409)。
     /// frontmatter `background_color:` から流す per-game 設定で、最初の背景絵がこの色から
     /// `background_fade_ms` でフェードインする（未指定なら黒 `#000000`）。シーン単位の

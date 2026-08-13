@@ -555,6 +555,14 @@ export interface EventDocument {
    *  個別の `フェード=` が無い `[イベント絵:]` / `[イベント絵終了]` に使う。
    *  null/undefined のときは runtime 既定 700ms。frontmatter `event_image_fade_ms:` から流す。 */
   event_image_fade_ms?: number | null
+  /** イベント絵の遷移モードのプロジェクト単位デフォルト (#599)。`[イベント絵: path, 遷移=...]` の
+   *  `遷移`/`transition` kv が明示されていないタグは、ハードコードされた `'Fade'` ではなく
+   *  この値をデフォルトとして使う（parser がタグ解析時に解決済みなので、各 `Event.EventImage.transition`
+   *  には常にこのデフォルトが反映済みの値が入っている＝GUI/TUI 側で改めて解決し直す必要はない）。
+   *  タグ側の明示指定は常にこのデフォルトより優先される。不正値・未指定は既定 `'Fade'`。
+   *  frontmatter `event_image_transition:` から流す。Gymnasia のような `遷移=pixelate` 多用作品は
+   *  このキーを `"pixelate"` にすることで個別タグ付けを不要にできる。 */
+  event_image_transition?: EventImageTransition
   /** 下地ベタ（ステージ最背面 `bgGraphics`）の既定色 (#409)。`#rrggbb`。
    *  最初の背景絵がこの色から `background_fade_ms` でフェードインする（未指定＝黒 `#000000`）。
    *  シーン単位の `[背景色:]`（#273）の上書きとは別スロットで、上書きが無いときの戻り先＝地色。

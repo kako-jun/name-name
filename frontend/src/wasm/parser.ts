@@ -1,5 +1,5 @@
 import init, { parse_markdown, emit_markdown } from '../../../parser/pkg/name_name_parser.js'
-import type { EventDocument, Event } from '../types'
+import type { EventDocument, Event, EventImageTransition } from '../types'
 import { canonicalizeBodyText } from '../game/textCanonical'
 
 // WASM 本体を JS バンドルに base64 で埋め込んで fetch なしで読み込む。
@@ -51,7 +51,13 @@ function nullIfEmpty(s: string | null | undefined): string | null {
   return s.length === 0 ? null : s
 }
 
-function normalizeEvents(events: Event[]): Event[] {
+/**
+ * `defaultTransition` は frontmatter `event_image_transition:`（#599）を正規化済みの値。
+ * `Event.EventImage.transition` が undefined（実運用では起きない防御的ケース）のときの
+ * フォールバック先に使う。Rust parser は `遷移=` 未指定タグを既にこの値へ解決済みなので、
+ * 通常は各イベントの `transition` が常にこの値と整合している。
+ */
+function normalizeEvents(events: Event[], defaultTransition: EventImageTransition): Event[] {
   return events.map((event) => {
     if (typeof event === 'string') return event
     if ('Dialog' in event) {
@@ -195,14 +201,15 @@ function normalizeEvents(events: Event[]): Event[] {
       // effects (#582) も同じく #[serde(default)] の struct のため型上 optional だが常に値が
       // 入る想定。undefined を全 false（AmbientEffects の Rust 側既定）に倒す。
       // transition (#583) も同じく #[serde(default)] の enum のため型上 optional だが常に値が
-      // 入る想定。undefined を既定値 'Fade' に倒す。
+      // 入る想定（Rust parser が `遷移=` 未指定タグを frontmatter `event_image_transition`
+      // デフォルト、#599、へ解決済みで焼き込む）。undefined は念のため `defaultTransition` に倒す。
       const ei = event.EventImage
       return {
         EventImage: {
           path: ei.path,
           back: ei.back ?? 'Hide',
           fade_ms: ei.fade_ms ?? null,
-          transition: ei.transition ?? 'Fade',
+          transition: ei.transition ?? defaultTransition,
           effects: ei.effects ?? { wobble: false, vignette: false, glow: false, candle: false },
         },
       }
@@ -218,7 +225,7 @@ function normalizeEvents(events: Event[]): Event[] {
       return {
         Condition: {
           flag: event.Condition.flag,
-          events: normalizeEvents(event.Condition.events),
+          events: normalizeEvents(event.Condition.events, defaultTransition),
         },
       }
     }
@@ -245,6 +252,10 @@ function normalizeEvents(events: Event[]): Event[] {
 }
 
 function normalizeDocument(doc: EventDocument): EventDocument {
+  // イベント絵の遷移モードのプロジェクト単位デフォルト (#599)。EventImage.transition の
+  // undefined フォールバック（normalizeEvents 内）で使う。不正値・未指定は既定 'Fade'。
+  const defaultTransition: EventImageTransition =
+    doc.event_image_transition === 'Pixelate' ? 'Pixelate' : 'Fade'
   return {
     engine: doc.engine,
     aspect_ratio: doc.aspect_ratio,
@@ -277,6 +288,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     background_fade_ms: doc.background_fade_ms ?? null,
     // イベント絵の表示・退場フェード時間。個別 `フェード=` が無いイベント絵で使う。
     event_image_fade_ms: doc.event_image_fade_ms ?? null,
+    // イベント絵の遷移モードのプロジェクト単位デフォルト (#599)。上で計算した defaultTransition と同じ値。
+    event_image_transition: defaultTransition,
     // 下地ベタ（bgGraphics）の既定色 (#409)。文字列なので ?? null（未指定は runtime 既定の黒）。
     background_color: doc.background_color ?? null,
     // スキップ/デバッグの per-game 出し分け (#310)。boolean なので ?? null（未指定は下流で既定: skip=true / debug=false）。
@@ -311,7 +324,7 @@ function normalizeDocument(doc: EventDocument): EventDocument {
       default_bgm: chapter.default_bgm ?? null,
       scenes: chapter.scenes.map((scene) => ({
         ...scene,
-        events: normalizeEvents(scene.events),
+        events: normalizeEvents(scene.events, defaultTransition),
       })),
     })),
   }

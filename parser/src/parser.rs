@@ -27,6 +27,7 @@ pub fn parse(input: &str) -> Document {
     let mut character_fade_ms: Option<u32> = None;
     let mut background_fade_ms: Option<u32> = None;
     let mut event_image_fade_ms: Option<u32> = None;
+    let mut event_image_transition = EventImageTransition::Fade;
     let mut background_color: Option<String> = None;
     let mut skip_enabled: Option<bool> = None;
     let mut debug_enabled: Option<bool> = None;
@@ -138,6 +139,12 @@ pub fn parse(input: &str) -> Document {
                 // イベント絵の表示・退場フェード時間（ms）。character/background と同じ流儀・u32。
                 // 個別ディレクティブの `フェード=` が優先し、未指定時に runtime がこの値を使う。
                 event_image_fade_ms = unquote(val.trim()).parse::<u32>().ok();
+            } else if let Some(val) = line.strip_prefix("event_image_transition:") {
+                // イベント絵の遷移モードのプロジェクト単位デフォルト (#599)。`[イベント絵:]` タグに
+                // `遷移=` が明示されていない場合に使われる。値は `遷移`/`transition` kv と同じ
+                // 英語トークン固定 `fade`/`pixelate`（大小無視）、不正値・未指定は既定 `Fade` に
+                // フォールバックする（normalize_event_image_transition を tag 解析と共有）。
+                event_image_transition = normalize_event_image_transition(&unquote(val.trim()));
             } else if let Some(val) = line.strip_prefix("background_color:") {
                 // 下地ベタ（bgGraphics）の既定色 (#409)。font_family と同じ流儀で文字列を生透過。
                 // 空なら None のまま（runtime で既定の黒にフォールバック）。色解決は runtime 側。
@@ -705,7 +712,7 @@ pub fn parse(input: &str) -> Document {
                 pos += 1;
                 continue;
             }
-            if let Some(event) = parse_directive(trimmed) {
+            if let Some(event) = parse_directive(trimmed, event_image_transition) {
                 // [ボイス:] / [フォント:] の後に非テキストディレクティブが挟まった場合は
                 // pending を破棄する（誤ったイベントへの注入を防ぐ #144 / #147）
                 pending_voice_path = None;
@@ -787,7 +794,7 @@ pub fn parse(input: &str) -> Document {
                 }
                 // Recursively parse inner content
                 let inner_text = inner_lines.join("\n");
-                let inner_events = parse_events_only(&inner_text);
+                let inner_events = parse_events_only(&inner_text, event_image_transition);
                 current_events.push(Event::Condition {
                     flag,
                     events: inner_events,
@@ -962,6 +969,7 @@ pub fn parse(input: &str) -> Document {
         character_fade_ms,
         background_fade_ms,
         event_image_fade_ms,
+        event_image_transition,
         background_color,
         skip_enabled,
         debug_enabled,
@@ -984,10 +992,20 @@ pub fn parse(input: &str) -> Document {
 }
 
 /// Parse just the events from a string (used for nested condition blocks)
-fn parse_events_only(input: &str) -> Vec<Event> {
+///
+/// `default_transition` は呼び出し元（外側の `parse()`）が解決済みの frontmatter
+/// `event_image_transition`（#599）。`[条件:]` ブロックの中身は独立の fake document として
+/// 再帰的に `parse()` するため、内側の `[イベント絵:]`（`遷移=` 未指定）にも外側と同じ
+/// デフォルトが効くよう fake frontmatter に埋め込んで伝播する（省略すると内側だけ `Fade` に
+/// 逆戻りしてしまう）。
+fn parse_events_only(input: &str, default_transition: EventImageTransition) -> Vec<Event> {
     // Wrap in a fake document so we can reuse parsing logic
+    let transition_line = match default_transition {
+        EventImageTransition::Pixelate => "event_image_transition: \"pixelate\"\n",
+        EventImageTransition::Fade => "",
+    };
     let fake = format!(
-        "---\nengine: name-name\nchapter: 1\ntitle: \"tmp\"\n---\n\n## tmp-1: tmp\n\n{input}"
+        "---\nengine: name-name\nchapter: 1\ntitle: \"tmp\"\n{transition_line}---\n\n## tmp-1: tmp\n\n{input}"
     );
     let doc = parse(&fake);
     if let Some(chapter) = doc.chapters.first() {
@@ -998,7 +1016,9 @@ fn parse_events_only(input: &str) -> Vec<Event> {
     Vec::new()
 }
 
-fn parse_directive(line: &str) -> Option<Event> {
+/// `default_transition` は frontmatter `event_image_transition`（#599）の解決済みデフォルト。
+/// `[イベント絵:]` の `遷移=` 未指定タグにだけ影響し、他の directive は無視する。
+fn parse_directive(line: &str, default_transition: EventImageTransition) -> Option<Event> {
     let content = line.strip_prefix('[')?.strip_suffix(']')?;
 
     // [背景色: #f5f0e8] — 単色の地色 (#273)。
@@ -1029,7 +1049,7 @@ fn parse_directive(line: &str) -> Option<Event> {
         return Some(parse_event_image_exit_directive(rest));
     }
     if let Some(rest) = content.strip_prefix("イベント絵:") {
-        return Some(parse_event_image_directive(rest));
+        return Some(parse_event_image_directive(rest, default_transition));
     }
     // [BGM停止] / [BGM停止: 2000] / [BGM停止: フェード=2000] (#145)
     if content == "BGM停止" {
@@ -1414,6 +1434,17 @@ fn parse_video_directive(content: &str) -> Event {
     }
 }
 
+/// `遷移`/`transition` の値文字列を `EventImageTransition` に正規化する (#583/#599)。
+/// タグの kv（`遷移=pixelate`）と frontmatter（`event_image_transition: "pixelate"`）の
+/// 両方から共有される純粋関数。値は英語トークン固定 `fade`/`pixelate`（大小無視）、
+/// それ以外（未知値・空文字）は既定 `Fade` に倒す。
+fn normalize_event_image_transition(value: &str) -> EventImageTransition {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "pixelate" => EventImageTransition::Pixelate,
+        _ => EventImageTransition::Fade,
+    }
+}
+
 /// `[イベント絵: path]` / `[イベント絵: path, 背面=keep, フェード=1400]` /
 /// `[イベント絵: path, ゆらぎ=true, ビネット=true, グロー=true, ろうそく=true]` (#582) /
 /// `[イベント絵: path, 遷移=pixelate, フェード=800]` (#583) の本体を分解する (#351)。
@@ -1431,8 +1462,10 @@ fn parse_video_directive(content: &str) -> Event {
 /// #583 遷移モード（`遷移`/`transition`、値は英語トークン固定 `fade`/`pixelate`、大小無視、
 /// 未知値は既定 `Fade` に倒す）は `背面` と全く同じ流儀の単一キー kv。所要時間は新規パラメータを
 /// 追加せず既存の `フェード`/`fade` を「遷移全体の所要時間」として再利用する（`fade_ms` フィールド
-/// をそのまま使う）。
-fn parse_event_image_directive(content: &str) -> Event {
+/// をそのまま使う）。`遷移=`/`transition=` が明示されていない場合は `default_transition`
+/// （呼び出し元が渡す frontmatter `event_image_transition` の解決済み値、#599）を採用する —
+/// タグ側の明示指定は常にこのデフォルトより優先される。
+fn parse_event_image_directive(content: &str, default_transition: EventImageTransition) -> Event {
     let (path_part, kv_part) = match content.split_once(',') {
         Some((p, rest)) => (p, Some(rest)),
         None => (content, None),
@@ -1441,7 +1474,7 @@ fn parse_event_image_directive(content: &str) -> Event {
 
     let mut back = EventImageBack::Hide;
     let mut fade_ms: Option<u32> = None;
-    let mut transition = EventImageTransition::Fade;
+    let mut transition = default_transition;
     let mut effects = AmbientEffects::default();
 
     if let Some(kv) = kv_part {
@@ -1464,10 +1497,7 @@ fn parse_event_image_directive(content: &str) -> Event {
                     continue;
                 }
                 if matches!(key, "遷移" | "transition") {
-                    transition = match v.trim().to_ascii_lowercase().as_str() {
-                        "pixelate" => EventImageTransition::Pixelate,
-                        _ => EventImageTransition::Fade,
-                    };
+                    transition = normalize_event_image_transition(v);
                     continue;
                 }
                 if matches!(key, "ゆらぎ" | "wobble") {
@@ -2979,7 +3009,8 @@ title: "テスト"
         // 話者タグ (#294) と同じく末尾の `フィット` トークンを fit=true として読む。
         // emit は `[登場: 名前 (表情, 位置, フィット)]` に戻し、往復で安定する（#401）。
         let input = "[登場: せお (theo/akarame, 左, フィット)]\n";
-        let event = parse_directive(input.trim()).expect("登場 directive should parse");
+        let event = parse_directive(input.trim(), EventImageTransition::Fade)
+            .expect("登場 directive should parse");
         assert_eq!(
             event,
             Event::Enter {
@@ -3010,7 +3041,7 @@ title: "テスト"
         // 名前のみ（括弧なし）→ 名前だけの Enter（expression/position=None）。
         // engine 側で expression/position が無いため立ち絵は出ない（silent skip）。
         assert_eq!(
-            parse_directive("[登場: せお]"),
+            parse_directive("[登場: せお]", EventImageTransition::Fade),
             Some(Event::Enter {
                 character: "せお".to_string(),
                 expression: None,
@@ -3020,11 +3051,11 @@ title: "テスト"
         );
 
         // 空（名前なし）→ None（Event を emit しない）。
-        assert_eq!(parse_directive("[登場:]"), None);
+        assert_eq!(parse_directive("[登場:]", EventImageTransition::Fade), None);
 
         // 位置省略（expression のみ）→ expression=Some, position=None。
         assert_eq!(
-            parse_directive("[登場: せお (theo/normal)]"),
+            parse_directive("[登場: せお (theo/normal)]", EventImageTransition::Fade),
             Some(Event::Enter {
                 character: "せお".to_string(),
                 expression: Some("theo/normal".to_string()),
@@ -3036,7 +3067,7 @@ title: "テスト"
         // 閉じ括弧なし（修正1）→ 属性を無視して名前のみ（expression/position=None）。
         // 話者タグと同じく「両括弧が揃う時だけ属性を読む」に揃えた結果。
         assert_eq!(
-            parse_directive("[登場: せお (theo]"),
+            parse_directive("[登場: せお (theo]", EventImageTransition::Fade),
             Some(Event::Enter {
                 character: "せお".to_string(),
                 expression: None,
@@ -3047,7 +3078,7 @@ title: "テスト"
 
         // 開き括弧の直後が空・閉じ括弧なし → 同上（旧実装は expression=Some("") にしていた）。
         assert_eq!(
-            parse_directive("[登場: せお (]"),
+            parse_directive("[登場: せお (]", EventImageTransition::Fade),
             Some(Event::Enter {
                 character: "せお".to_string(),
                 expression: None,

@@ -9,7 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { Assets } from 'pixi.js'
-import { Event, EventScene } from '../types'
+import { Event, EventImageTransition, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 import { INACTIVITY_MS } from '../game/SeekBar'
 import { type NovelGameState } from '../game/GameState'
@@ -132,6 +132,10 @@ interface NovelPlayerProps {
   /** イベント絵の表示・退場フェード時間 (ms)。frontmatter `event_image_fade_ms:` から流す。
    *  個別 `フェード=` が無い `[イベント絵:]` / `[イベント絵終了]` に効く。 */
   eventImageFadeMs?: number | null
+  /** イベント絵の遷移モードのプロジェクト単位デフォルト (#599)。frontmatter `event_image_transition:`
+   *  から流す。`遷移=` 未指定タグの解決先（parser 側で既に解決済みの値が来るが、`NovelRenderer`
+   *  側の防御的フォールバックにも同じ値を渡す）。null/undefined/不正値は既定 `'Fade'`。 */
+  eventImageTransitionDefault?: EventImageTransition | null
   /** 下地ベタ（ステージ最背面 bgGraphics）の既定色 (#409)。frontmatter `background_color:` から流す。
    *  最初の背景絵がこの色から `background_fade_ms` でフェードインする。null/undefined で黒（後方互換）。 */
   backgroundColor?: string | null
@@ -225,6 +229,7 @@ function NovelPlayer({
   characterFadeMs,
   backgroundFadeMs,
   eventImageFadeMs,
+  eventImageTransitionDefault,
   backgroundColor,
   seekbarColor,
   intermissionEvents,
@@ -624,6 +629,8 @@ function NovelPlayer({
       renderer.setBackgroundFadeMs(backgroundFadeMs ?? null)
       // イベント絵フェード時間。個別 `フェード=` が無いイベント絵の表示・退場に使う。
       renderer.setEventImageFadeMs(eventImageFadeMs ?? null)
+      // イベント絵の遷移モードのプロジェクト単位デフォルト (#599)。`遷移=` 未指定タグの解決先。
+      renderer.setEventImageTransitionDefault(eventImageTransitionDefault ?? null)
       // 下地ベタの既定色 (#409)。初回背景表示より前に設定し、最初の背景絵がこの地色から
       // フェードインするようにする（未指定なら黒で非回帰）。setBackgroundFadeMs と対称の per-game 設定。
       renderer.setDefaultBackgroundColor(backgroundColor ?? null)
@@ -834,6 +841,10 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setEventImageFadeMs(eventImageFadeMs ?? null)
   }, [eventImageFadeMs])
+
+  useEffect(() => {
+    rendererRef.current?.setEventImageTransitionDefault(eventImageTransitionDefault ?? null)
+  }, [eventImageTransitionDefault])
 
   // backgroundColor（下地ベタの既定色）が変化したときに renderer に反映 (#409)
   useEffect(() => {

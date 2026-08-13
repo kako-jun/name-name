@@ -4148,6 +4148,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         character_fade_ms: None,
         background_fade_ms: None,
         event_image_fade_ms: None,
+        event_image_transition: EventImageTransition::default(),
         background_color: None,
         skip_enabled: None,
         debug_enabled: None,
@@ -8388,6 +8389,178 @@ fn test_event_image_transition_emit_omission_boundary_explicit_fade_vs_pixelate_
         emitted_fade, emitted_omitted,
         "遷移=fade の明示指定と省略は同じ emit 結果になる"
     );
+}
+
+// ============================================================================
+// #599 イベント絵の遷移方式のプロジェクト単位デフォルト (`event_image_transition:`)
+// ============================================================================
+
+/// `event_image_transition:` frontmatter 行（`None` は行自体を省略）と、本文 1 行を
+/// 組み合わせた最小ドキュメントを組み立てるヘルパ。
+fn event_image_transition_default_doc(frontmatter_value: Option<&str>, body: &str) -> String {
+    let frontmatter_line = match frontmatter_value {
+        Some(v) => format!("event_image_transition: \"{v}\"\n"),
+        None => String::new(),
+    };
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n{frontmatter_line}---\n\n## 1-1: t\n\n{body}\n"
+    )
+}
+
+#[test]
+fn test_event_image_transition_default_unspecified_frontmatter_is_fade() {
+    // 観点B-1: event_image_transition: 未指定 → Document.event_image_transition は既定 Fade
+    // （既存作品は非回帰。#583 単体テストの test_event_image_transition_omitted_defaults_to_fade
+    // はタグ側だけを見ているので、Document 側のデフォルト値自体をここで確認する）。
+    let doc = parser::parse(&event_image_transition_default_doc(
+        None,
+        "[イベント絵: x.webp]",
+    ));
+    assert_eq!(doc.event_image_transition, EventImageTransition::Fade);
+}
+
+#[test]
+fn test_event_image_transition_default_frontmatter_pixelate_applies_to_omitted_tag() {
+    // 観点B-2: event_image_transition: "pixelate" のとき、遷移未指定タグはハードコード
+    // Fade ではなく、このプロジェクトデフォルトへ解決される。
+    let doc = parser::parse(&event_image_transition_default_doc(
+        Some("pixelate"),
+        "[イベント絵: x.webp]",
+    ));
+    assert_eq!(doc.event_image_transition, EventImageTransition::Pixelate);
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::EventImage { transition, .. } => {
+            assert_eq!(*transition, EventImageTransition::Pixelate)
+        }
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_transition_default_frontmatter_invalid_value_falls_back_to_fade() {
+    // 観点B-3: 不正値（未知トークン）は既定 Fade にフォールバックする
+    // （header/dialog_style と同じ後方互換パターン）。
+    let doc = parser::parse(&event_image_transition_default_doc(
+        Some("zoom"),
+        "[イベント絵: x.webp]",
+    ));
+    assert_eq!(doc.event_image_transition, EventImageTransition::Fade);
+}
+
+#[test]
+fn test_event_image_transition_default_frontmatter_case_insensitive() {
+    // 観点B-4: frontmatter 値も大小無視（タグ側の `遷移=PIXELATE` と同じ規則）。
+    let doc = parser::parse(&event_image_transition_default_doc(
+        Some("PIXELATE"),
+        "[イベント絵: x.webp]",
+    ));
+    assert_eq!(doc.event_image_transition, EventImageTransition::Pixelate);
+}
+
+#[test]
+fn test_event_image_transition_tag_explicit_overrides_frontmatter_pixelate_default() {
+    // 観点B-5: frontmatter デフォルトが pixelate でも、タグ側で明示 `遷移=fade` すれば
+    // そちらが優先される（「タグ最優先」原則、header/dialog_style と同じ）。
+    let doc = parser::parse(&event_image_transition_default_doc(
+        Some("pixelate"),
+        "[イベント絵: x.webp, 遷移=fade]",
+    ));
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::EventImage { transition, .. } => assert_eq!(*transition, EventImageTransition::Fade),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_transition_default_propagates_into_condition_block() {
+    // 観点B-6: `[条件:]` ブロック内部（parse_events_only の再帰パース経路）にも
+    // frontmatter デフォルトが伝播する（内側だけ Fade に逆戻りしない）。
+    let body = "[条件: route01_cleared]\n[イベント絵: x.webp]\n[/条件]";
+    let doc = parser::parse(&event_image_transition_default_doc(Some("pixelate"), body));
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Condition { events, .. } => match &events[0] {
+            Event::EventImage { transition, .. } => {
+                assert_eq!(*transition, EventImageTransition::Pixelate)
+            }
+            other => panic!("EventImage を期待したが {other:?}"),
+        },
+        other => panic!("Condition を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_transition_default_propagates_into_nested_condition_blocks() {
+    // 観点B-6続き（nit 対応・#600 セルフレビュー）: `[条件:]` が2段ネストしていても
+    // parse_events_only の再帰呼び出しがそれぞれ同じ default_transition を引き継ぐため、
+    // 最内側の `[イベント絵:]`（遷移未指定）まで frontmatter デフォルトが伝播し続けることを確認する。
+    let body =
+        "[条件: route01_cleared]\n[条件: route02_cleared]\n[イベント絵: x.webp]\n[/条件]\n[/条件]";
+    let doc = parser::parse(&event_image_transition_default_doc(Some("pixelate"), body));
+    match &doc.chapters[0].scenes[0].events[0] {
+        Event::Condition { events, .. } => match &events[0] {
+            Event::Condition { events, .. } => match &events[0] {
+                Event::EventImage { transition, .. } => {
+                    assert_eq!(*transition, EventImageTransition::Pixelate)
+                }
+                other => panic!("EventImage を期待したが {other:?}"),
+            },
+            other => panic!("内側 Condition を期待したが {other:?}"),
+        },
+        other => panic!("外側 Condition を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_transition_default_frontmatter_fade_omitted_on_emit() {
+    // 観点B-7: Document.event_image_transition が既定 Fade のときは frontmatter に
+    // event_image_transition: 行を出さない（後方互換の暗黙値、他の per-game 設定と同じ流儀）。
+    let doc = parser::parse(&event_image_transition_default_doc(
+        None,
+        "[イベント絵: x.webp]",
+    ));
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("event_image_transition"),
+        "emit 結果:\n{emitted}"
+    );
+}
+
+#[test]
+fn test_event_image_transition_emit_omission_reverses_with_frontmatter_pixelate_default() {
+    // 観点B-8: frontmatter デフォルトが pixelate のとき、emit の省略判定が逆転する——
+    // 実効値が pixelate（デフォルトと一致）のタグは `遷移=` を省略し、実効値が fade
+    // （デフォルトと不一致）のタグだけ明示 `遷移=fade` を出力する。
+    let body = "[イベント絵: a.webp]\n[イベント絵: b.webp, 遷移=fade]\n[イベント絵: c.webp, 遷移=pixelate]";
+    let doc = parser::parse(&event_image_transition_default_doc(Some("pixelate"), body));
+    let emitted = emitter::emit(&doc);
+
+    assert!(
+        emitted.contains("event_image_transition: \"pixelate\""),
+        "frontmatter に event_image_transition: \"pixelate\" が出力される: {emitted}"
+    );
+    assert!(
+        emitted.contains("[イベント絵: a.webp]\n"),
+        "デフォルトと一致する暗黙 pixelate は 遷移= を省略する: {emitted}"
+    );
+    assert!(
+        emitted.contains("[イベント絵: b.webp, 遷移=fade]\n"),
+        "デフォルトと異なる明示 fade は emit で明示出力される: {emitted}"
+    );
+    assert!(
+        emitted.contains("[イベント絵: c.webp]\n"),
+        "デフォルトと一致する明示 pixelate も 遷移= を省略する（明示/暗黙で emit 結果が正規化される）: {emitted}"
+    );
+}
+
+#[test]
+fn test_event_image_transition_frontmatter_pixelate_round_trip() {
+    // 観点B-9: frontmatter event_image_transition: "pixelate" ＋ 遷移未指定/明示混在タグの
+    // full round-trip（parse → emit → reparse で構造体が一致する）。
+    let body = "[イベント絵: a.webp]\n[イベント絵: b.webp, 遷移=fade, フェード=500]";
+    let doc = parser::parse(&event_image_transition_default_doc(Some("pixelate"), body));
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2, "round-trip で元の構造体と一致する");
 }
 
 #[test]
