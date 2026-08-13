@@ -2052,6 +2052,18 @@ mod tests {
         Event::EventImageExit { fade_ms: None }
     }
 
+    /// `遷移=pixelate` を指定した `Event::EventImage` を作る (#583)。`fade_ms` は
+    /// `Pixelate` のときに「遷移全体の所要時間」として使われるフィールド。
+    fn event_image_pixelate(path: &str, fade_ms: Option<u32>) -> Event {
+        Event::EventImage {
+            path: path.to_string(),
+            back: name_name_parser::models::EventImageBack::default(),
+            fade_ms,
+            transition: name_name_parser::models::EventImageTransition::Pixelate,
+            effects: name_name_parser::models::AmbientEffects::default(),
+        }
+    }
+
     /// 単一チャプター・単一シーンに `events` を並べた `Document` を作る。
     fn doc_single_scene(events: Vec<Event>) -> Document {
         document_with_chapters(vec![chapter(1, vec![scene("1-1", events)])])
@@ -7419,5 +7431,160 @@ mod tests {
             "同一ファイル内のジャンプではpending_se(orphan.wav)も引き継がれ、jump先の\
              最初のitemで再生されるはず(#540)"
         );
+    }
+
+    // ============================================================================
+    // #583 イベント絵ピクセレート遷移の `transition`/`fade_ms` リセット・伝播テスト
+    // ============================================================================
+
+    #[test]
+    fn scene_transition_clears_event_image_transition_and_fade_ms_per_spec() {
+        // 観点E-1: `scene_transition_clears_event_image_per_spec`(#524)のtransition/fade_ms版。
+        // [場面転換]はGUI版のeventImageLayer.remove()相当でpathと同様、遷移モード・フェード
+        // 時間も既定値へリセットするはず(#583)。
+        let doc = doc_single_scene(vec![
+            event_image_pixelate("bg_a.webp", Some(900)),
+            dialog(Some("B"), vec!["場面転換前の台詞"]),
+            Event::SceneTransition,
+            dialog(Some("C"), vec!["場面転換後の台詞"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        let before = pb.current_line().expect("line");
+        assert_eq!(
+            before.event_image_transition,
+            EventImageTransition::Pixelate
+        );
+        assert_eq!(before.event_image_fade_ms, Some(900));
+
+        assert!(pb.advance(), "場面転換後の台詞へ進めるはず");
+        let after = pb.current_line().expect("line");
+        assert_eq!(after.speaker.as_deref(), Some("C"));
+        assert_eq!(
+            after.event_image_transition,
+            EventImageTransition::Fade,
+            "[場面転換]は遷移モードも既定Fadeへリセットするはず(#583)"
+        );
+        assert_eq!(
+            after.event_image_fade_ms, None,
+            "[場面転換]はfade_msもNoneへリセットするはず(#583)"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_resets_event_image_transition_and_fade_ms_across_file_boundary() {
+        // 観点E-2: `select_current_choice_resets_running_state_when_jumping_across_file_boundary`
+        // (#528)のtransition/fade_ms版。route1(file 0)でPixelate遷移中のままファイル境界を
+        // 越えてhub(file 1)へジャンプすると、transition/fade_msも既定値へリセットされるはず
+        // (#583)。
+        let route1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![
+                    event_image_pixelate("route1/scene.webp", Some(1200)),
+                    dialog(Some("A"), vec!["ルート1: 最後の台詞"]),
+                    choice(vec![("hubへ", "hub")]),
+                ],
+            )],
+        );
+        let hub = chapter(
+            2,
+            vec![scene("hub", vec![dialog(Some("施設"), vec!["定期報告"])])],
+        );
+        let doc = document_with_chapters(vec![route1, hub]);
+        let chapter_file_ids = vec![0, 1];
+
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+        // ジャンプ前: route1の台詞はPixelate遷移状態を引き継いでいる（対比のため確認）。
+        assert_eq!(
+            pb.current_line().unwrap().event_image_transition,
+            EventImageTransition::Pixelate,
+            "前提: ジャンプ前はPixelate遷移が残留しているはず"
+        );
+        assert_eq!(pb.current_line().unwrap().event_image_fade_ms, Some(1200));
+
+        assert!(pb.advance(), "台詞からChoiceへ進めるはず");
+        assert!(
+            pb.select_current_choice(),
+            "別ファイルのhubへのjumpは成功するはず"
+        );
+        let line = pb.current_line().expect("jump先の台詞");
+        assert_eq!(
+            line.event_image_transition,
+            EventImageTransition::Fade,
+            "ファイル境界を越えたのでtransitionは既定Fadeへリセットされるはず(#583)"
+        );
+        assert_eq!(
+            line.event_image_fade_ms, None,
+            "ファイル境界を越えたのでfade_msもNoneへリセットされるはず(#583)"
+        );
+    }
+
+    #[test]
+    fn event_image_exit_clears_transition_and_fade_ms_for_subsequent_lines() {
+        // 観点E-3: `event_image_exit_clears_path_for_subsequent_lines` のtransition/fade_ms版。
+        // [イベント絵終了]はpathと同様、遷移モード・フェード時間も既定値へリセットするはず
+        // (#583)。
+        let doc = doc_single_scene(vec![
+            event_image_pixelate("props/candle.webp", Some(600)),
+            dialog(Some("A"), vec!["表示中"]),
+            event_image_exit(),
+            dialog(Some("A"), vec!["退場後"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        let before = pb.current_line().expect("line");
+        assert_eq!(
+            before.event_image_transition,
+            EventImageTransition::Pixelate
+        );
+        assert_eq!(before.event_image_fade_ms, Some(600));
+
+        pb.advance();
+        let after = pb.current_line().expect("line");
+        assert_eq!(after.event_image, None);
+        assert_eq!(
+            after.event_image_transition,
+            EventImageTransition::Fade,
+            "[イベント絵終了]は遷移モードも既定Fadeへリセットするはず(#583)"
+        );
+        assert_eq!(
+            after.event_image_fade_ms, None,
+            "[イベント絵終了]はfade_msもNoneへリセットするはず(#583)"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_chain_propagates_transition_and_fade_ms_to_image_item() {
+        // 観点E-4: `[イベント絵:][待機:N]`自動連続表示チェーン(#497)で生成されるImage item
+        // のDisplayLineにも、遷移モード(transition)とfade_ms(#583)が正しく焼き付けられる
+        // ことを確認する。
+        let doc = doc_single_scene(vec![event_image_pixelate("a.webp", Some(750)), wait(200)]);
+        let pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem（前に会話行が無い）なので、advance無しで
+        // 最初から画像コマitemに位置している
+        // （event_image_wait_blackout_pattern_consumes_exactly_three_eventsと同じ前提）。
+        let line = pb.current_line().expect("画像コマitemのDisplayLine");
+        assert_eq!(line.event_image.as_deref(), Some("a.webp"));
+        assert_eq!(line.event_image_transition, EventImageTransition::Pixelate);
+        assert_eq!(line.event_image_fade_ms, Some(750));
+    }
+
+    #[test]
+    fn event_image_pixelate_fade_ms_wired_into_display_line_for_normal_dialog_line() {
+        // 観点E-5: main.rs::event_loopのmatch分岐（transitionに応じてduration_msを選ぶ）の
+        // 直接ユニットテスト化は難しいため、その入力元であるplayback.rs側で
+        // DisplayLine.event_image_transition/event_image_fade_msが正しい値を持つことを、
+        // 自動連続表示チェーンではない通常のEventImage+会話行経路で確認する
+        // （E-4は[待機:]チェーン版、こちらは素の会話行版）。
+        let doc = doc_single_scene(vec![
+            event_image_pixelate("story/x.webp", Some(800)),
+            dialog(Some("A"), vec!["通常の会話行"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.event_image.as_deref(), Some("story/x.webp"));
+        assert_eq!(line.event_image_transition, EventImageTransition::Pixelate);
+        assert_eq!(line.event_image_fade_ms, Some(800));
     }
 }

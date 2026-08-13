@@ -115,4 +115,43 @@ mod tests {
         assert!(!is_coarsen_phase(0.5, 0.5));
         assert!(!is_coarsen_phase(0.9, 0.5));
     }
+
+    #[test]
+    fn compute_divisor_swap_ratio_zero_is_always_refine() {
+        // 観点C-1: swap_ratio=0.0 は「コルセン区間の幅が0」＝t=0直後から常にリファイン側
+        // (`t < ratio` は t>=0 の限り常に偽)。t=0でもリファインのphase_t計算式
+        // ((t-0)/(1-0))=0 となり max を返す（リファイン開始点＝最も粗い状態から始まる）。
+        assert_eq!(compute_divisor(0.0, 0.0, 8), 8);
+        assert_eq!(compute_divisor(0.5, 0.0, 8), 5); // 8-0.5*7=4.5→round→5
+        assert_eq!(compute_divisor(1.0, 0.0, 8), 1);
+    }
+
+    #[test]
+    fn compute_divisor_swap_ratio_one_is_always_coarsen() {
+        // 観点C-1: swap_ratio=1.0 は「リファイン区間の幅が0」＝t=1未満は常にコルセン側
+        // (`t < ratio` は t<1.0 の限り常に真)。
+        assert_eq!(compute_divisor(0.0, 1.0, 8), 1);
+        assert_eq!(compute_divisor(0.5, 1.0, 8), 5); // 1+0.5*7=4.5→round→5
+                                                     // t=1.0はコルセン条件 `t < ratio`(1.0 < 1.0)が偽になりリファイン側に落ちるが、
+                                                     // リファイン残り幅が(1.0-1.0).max(EPSILON)による極小値のため即座に max 相当になる。
+        assert_eq!(compute_divisor(1.0, 1.0, 8), 8);
+    }
+
+    #[test]
+    fn is_coarsen_phase_boundary_just_below_at_and_above_swap_ratio() {
+        // 観点C-2: t=0.499/0.5/0.501 の3点で is_coarsen_phase の境界を確認する
+        // （swap_ratio=0.5固定、`t < ratio` の厳密な不等号を直接縛る）。
+        assert!(
+            is_coarsen_phase(0.499, 0.5),
+            "境界-1(0.499)はコルセン側のはず"
+        );
+        assert!(
+            !is_coarsen_phase(0.5, 0.5),
+            "境界ちょうど(0.5)は厳密な `<` によりリファイン側のはず"
+        );
+        assert!(
+            !is_coarsen_phase(0.501, 0.5),
+            "境界+1(0.501)はリファイン側のはず"
+        );
+    }
 }

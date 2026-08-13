@@ -15,6 +15,7 @@ import { Assets, Texture } from 'pixi.js'
 import { EventImageLayer } from './EventImageLayer'
 import { TimeController } from './TimeController'
 import { computeCoverFit, type LayoutRect } from './novelLayout'
+import { PIXELATE_TRANSITION_MAX_SIZE } from './pixelateTransition'
 import type { EventImageState } from './GameState'
 
 const SCREEN_W = 800
@@ -57,6 +58,16 @@ interface EventImageLayerInternals {
   glowSprite: { alpha: number; blendMode?: string; destroyed?: boolean } | null
   ambientTimer: number | null
   vignetteFilter: unknown
+  // ピクセレート遷移 (#583) 観測用。
+  pixelateFilter: { sizeX: number } | null
+  pixelateTimer: number | null
+  pixelateState: {
+    path: string
+    durationMs: number
+    swapAtMs: number
+    phase: 'coarsen' | 'holding' | 'refine'
+    refineStartMs: number
+  } | null
 }
 function internals(layer: EventImageLayer): EventImageLayerInternals {
   return layer as unknown as EventImageLayerInternals
@@ -1418,4 +1429,345 @@ describe('EventImageLayer アンビエント演出 (#582)', () => {
     expect(ll.imageGroup.filters).toBeNull()
     expect(ll.glowSprite).toBeNull()
   })
+})
+
+describe('EventImageLayer ピクセレート遷移 (#583)', () => {
+  // swapAtMs が 16ms(pixelateTimer の tick 間隔)の倍数になるよう fadeMs=320 を基本値に使う
+  // （swapAtMs=160、remaining=160）。境界テストで tick の累計値が swapAtMs と厳密に一致する
+  // ようにするための選択（16の倍数でないと丸めで境界がぼやける）。
+
+  it('基本のコルセン→スワップ→リファインが一連の流れとして進行する', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+    expect(internals(layer).sprite).not.toBeNull()
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    const ll = internals(layer)
+    expect(ll.pixelateState).not.toBeNull()
+    expect(ll.pixelateState!.phase).toBe('coarsen')
+    expect(ll.pixelateFilter!.sizeX).toBe(1)
+
+    await flushPromises() // bのロード完了(pendingTexture確保、まだコルセン中)
+
+    time.tick(80) // swapAtMs(160)の半分まで進める
+    expect(ll.pixelateFilter!.sizeX).toBeGreaterThan(1)
+    expect(ll.pixelateFilter!.sizeX).toBeLessThan(PIXELATE_TRANSITION_MAX_SIZE)
+
+    time.tick(80) // 累計160ms = swapAtMsちょうど: スワップ
+    expect(ll.pixelateState!.phase).toBe('refine')
+    expect(layer.getState()?.path).toBe('story/b.webp')
+
+    time.tick(170) // リファイン完了(remaining=160)
+    expect(ll.pixelateState).toBeNull()
+    expect(ll.pixelateFilter!.sizeX).toBe(1)
+    expect(layer.hasPendingVisualTransition()).toBe(false)
+  })
+
+  it('スワップタイミングの境界(swapAtMs-1/swapAtMs/swapAtMs+1)で from→to が正確に切り替わる', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    await flushPromises() // bのロードを先に完了させておく(holdingへ回らないようにする)
+
+    const ll = internals(layer)
+    time.tick(159)
+    expect(ll.pixelateState!.phase).toBe('coarsen')
+
+    time.tick(1) // 累計160ms = swapAtMsちょうど
+    expect(ll.pixelateState!.phase).toBe('refine')
+    expect(layer.getState()?.path).toBe('story/b.webp')
+
+    time.tick(1) // 累計161ms
+    expect(ll.pixelateState!.phase).toBe('refine')
+  })
+
+  it('spriteが無い場合(初回表示等)はPixelate指定でもFade経路(即時/フェード表示)にフォールバックする', async () => {
+    mockAssetsLoadResolved()
+    const layer = makeLayer(virtualTime())
+    // 初回show()なのでthis.spriteはまだ無い。
+    layer.show('story/a.webp', { transition: 'Pixelate', fadeMs: 500 })
+    expect(internals(layer).pixelateState).toBeNull()
+
+    await flushPromises()
+    expect(internals(layer).sprite).not.toBeNull()
+    expect(internals(layer).fadeAnimation).toMatchObject({
+      durationMs: 500,
+      fromAlpha: 0,
+      toAlpha: 1,
+    })
+  })
+
+  it('fadeMs<=0はPixelate指定でもFade経路(即時表示)にフォールバックする', async () => {
+    mockAssetsLoadResolved()
+    const layer = makeLayer(virtualTime())
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 0 })
+    expect(internals(layer).pixelateState).toBeNull()
+
+    await flushPromises()
+    expect(internals(layer).sprite!.alpha).toBe(1)
+    expect(internals(layer).fadeAnimation).toBeNull()
+  })
+
+  it('ロードがコルセン完了より先に終わる場合、holdingフェーズを経ずに即座にスワップする', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    await flushPromises() // bのロードを先に完了させておく
+
+    const ll = internals(layer)
+    time.tick(159)
+    expect(ll.pixelateState!.phase).toBe('coarsen')
+
+    time.tick(1) // swapAtMsちょうど: ロード済みなのでholdingを経由せず即座にrefineへ
+    expect(ll.pixelateState!.phase).toBe('refine')
+  })
+
+  it('ロードがコルセン完了より後に終わる場合、holdingフェーズで最大粗さのまま待機してからスワップする', async () => {
+    mockAssetsLoadResolved() // 最初のaは即座にロード
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    // bのロードだけは手動で解決を制御する。
+    let resolveB: ((t: Texture) => void) | null = null
+    vi.spyOn(Assets, 'load').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveB = resolve
+        }) as never
+    )
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 }) // swapAtMs=160
+
+    const ll = internals(layer)
+    time.tick(160) // コルセン完了。bのロードはまだ終わっていない。
+    expect(ll.pixelateState!.phase).toBe('holding')
+    expect(ll.pixelateFilter!.sizeX).toBe(PIXELATE_TRANSITION_MAX_SIZE)
+    // settled state(getState())はロード成否に関わらず即座にbを指すが、見た目(sprite)は
+    // まだ旧画像aのまま(スワップ未実施)。
+    expect(layer.getState()?.path).toBe('story/b.webp')
+
+    expect(resolveB).not.toBeNull()
+    resolveB!(mockTexture())
+    await flushPromises()
+    expect(ll.pixelateState!.phase).toBe('refine')
+  })
+
+  it('pixelate進行中に別のpixelate遷移が割り込むと、直前の遷移は打ち切られ新しい遷移が最初からやり直される', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    await flushPromises()
+    time.tick(100) // コルセン進行中(まだswapAtMs=160未満)
+
+    const ll = internals(layer)
+    expect(ll.pixelateState!.path).toBe('story/b.webp')
+    expect(ll.pixelateFilter!.sizeX).toBeGreaterThan(1)
+
+    // 別画像へのpixelate遷移で割り込む。
+    layer.show('story/c.webp', { transition: 'Pixelate', fadeMs: 320 })
+    expect(ll.pixelateState!.path).toBe('story/c.webp')
+    expect(ll.pixelateState!.phase).toBe('coarsen')
+    expect(ll.pixelateFilter!.sizeX).toBe(1) // 新しい遷移はsize=1からやり直し
+  })
+
+  it('pixelate進行中にFadeへの通常show()が割り込むと、pixelateTimerがリークせず打ち切られる', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    await flushPromises()
+    time.tick(100)
+    expect(internals(layer).pixelateState).not.toBeNull()
+
+    // 表示中の絵の有無に関わらず、通常(Fade)のshow()で割り込む。
+    layer.show('story/c.webp', { fadeMs: 400 })
+    expect(internals(layer).pixelateState).toBeNull()
+
+    await flushPromises()
+    time.tick(500) // フェード完了まで進める
+    expect(time.getPendingTimerCount()).toBe(0)
+  })
+
+  it('pixelate進行中にremove()すると遷移が打ち切られ、タイマーもリークしない', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    await flushPromises()
+    time.tick(100)
+    expect(internals(layer).pixelateState).not.toBeNull()
+
+    layer.remove()
+    expect(internals(layer).pixelateState).toBeNull()
+    expect(layer.getState()).toBeNull()
+    expect(time.getPendingTimerCount()).toBe(0)
+  })
+
+  it('pixelate遷移中のテクスチャロード失敗時は遷移を打ち切り、旧画像の表示を維持する', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    const err = new Error('load failed')
+    vi.spyOn(Assets, 'load').mockRejectedValue(err)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    expect(internals(layer).pixelateState).not.toBeNull() // 開始直後はまだ進行中
+
+    await flushPromises()
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(internals(layer).pixelateState).toBeNull() // ロード失敗でcancelPixelateTransitionされる
+    expect(layer.getState()?.path).toBe('story/b.webp') // settled stateはload成否に関わらずb
+    // cancelPixelateTransitionはsprite自体には触れないため、旧画像(a)のspriteが残り続ける
+    // （見た目の維持、フォールバック）。
+    expect(internals(layer).sprite).not.toBeNull()
+
+    warnSpy.mockRestore()
+  })
+
+  it('pixelate遷移前後でタイマーがリークせず、ambientTimerが二重に残らない', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    const candleEffects = { wobble: false, vignette: false, glow: false, candle: true }
+    layer.show('story/a.webp', { effects: candleEffects })
+    await flushPromises()
+    expect(time.getPendingTimerCount()).toBe(1) // ambientTimerのみ
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320, effects: candleEffects })
+    await flushPromises()
+    expect(time.getPendingTimerCount()).toBe(2) // 旧ambientTimer + pixelateTimer
+
+    time.tick(160) // スワップ: 旧ambientTimerは破棄され新しいambientTimerが立つ(正味変化なし)
+    expect(time.getPendingTimerCount()).toBe(2) // 新ambientTimer + pixelateTimer
+
+    time.tick(161) // リファイン完了(remaining=160)
+    expect(time.getPendingTimerCount()).toBe(1) // pixelateTimerは停止、ambientTimerだけ残る
+  })
+
+  it('pixelate遷移中もglow演出(glowSprite)が新画像に正しく設定される', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    layer.show('story/b.webp', {
+      transition: 'Pixelate',
+      fadeMs: 320,
+      effects: { wobble: false, vignette: false, glow: true, candle: false },
+    })
+    await flushPromises()
+    const ll = internals(layer)
+    expect(ll.glowSprite).toBeNull() // スワップ前はまだglowSprite無し(旧画像aはglow無指定)
+
+    time.tick(160) // スワップ
+    expect(ll.glowSprite).not.toBeNull()
+    expect(ll.glowSprite!.blendMode).toBe('overlay')
+  })
+
+  it('pixelate遷移中もshouldHideBackLayer()はスプライトが存在する限りtrueを維持する(back=Hide既定)', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+    expect(layer.shouldHideBackLayer()).toBe(true)
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    await flushPromises()
+    // pixelate遷移はコルセン中も常にalpha=1で旧画像を表示し続けるため、Fade経路のような
+    // 「フェードイン完了まで背面を隠さない」制御は不要(doc comment参照)。
+    expect(layer.shouldHideBackLayer()).toBe(true)
+
+    time.tick(160) // スワップ
+    expect(layer.shouldHideBackLayer()).toBe(true)
+
+    time.tick(161) // リファイン完了
+    expect(layer.shouldHideBackLayer()).toBe(true)
+  })
+
+  it('onVisibilityChangeはスワップの瞬間に一度だけ発火する(コルセン開始時ではない)', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+
+    const onVisibilityChange = vi.fn()
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320, onVisibilityChange })
+    await flushPromises()
+    expect(onVisibilityChange).not.toHaveBeenCalled()
+
+    time.tick(159)
+    expect(onVisibilityChange).not.toHaveBeenCalled()
+
+    time.tick(1) // swapAtMsちょうど: スワップ発火
+    expect(onVisibilityChange).toHaveBeenCalledTimes(1)
+
+    time.tick(161) // リファイン完了後も再度は呼ばれない
+    expect(onVisibilityChange).toHaveBeenCalledTimes(1)
+  })
+
+  it(
+    '表示中と同じパスへ遷移=pixelateで再指定すると、GUIは実際にコルセン→自己スワップ→' +
+      'リファインを再生する（既知の非対称性: TUI版は current_target() != target という' +
+      'パス一致ガードでno-opになり何も起きない。docs/architecture.md' +
+      '「イベント絵ピクセレート遷移 (#583)」の既知の非対称性の節を参照。GUI/TUIで意図的な' +
+      '仕様統一はされていない）',
+    async () => {
+      mockAssetsLoadResolved()
+      const time = virtualTime()
+      const layer = makeLayer(time)
+      layer.show('story/a.webp')
+      await flushPromises()
+      const firstSprite = internals(layer).sprite
+
+      // 同一パス('story/a.webp')へPixelate遷移で再指定する。GUIはパスの同一性を見ず
+      // 「表示中の絵の有無」(this.sprite の有無)だけで判定するため、実際にコルセンが
+      // 開始される。
+      layer.show('story/a.webp', { transition: 'Pixelate', fadeMs: 320 })
+      expect(internals(layer).pixelateState).not.toBeNull()
+      expect(internals(layer).pixelateState!.path).toBe('story/a.webp')
+
+      await flushPromises()
+      time.tick(160) // スワップ
+      expect(internals(layer).pixelateState!.phase).toBe('refine')
+      // スワップにより旧spriteは破棄され、同じpathの新しいspriteインスタンスに
+      // 差し替わる(見た目上は同じ画像だが、コルセン→スワップ→リファインの演出は
+      // 実際に再生される)。
+      expect(internals(layer).sprite).not.toBe(firstSprite)
+
+      time.tick(161)
+      expect(internals(layer).pixelateState).toBeNull() // リファイン完了で遷移終了
+    }
+  )
 })

@@ -7921,6 +7921,138 @@ fn test_event_image_ambient_effects_emit_partial_flags_only_present_ones() {
     );
 }
 
+// ============================================================================
+// #583 イベント絵のピクセレート遷移 (`遷移`/`transition`) のパーサー / エミッターテスト
+// ============================================================================
+
+#[test]
+fn test_event_image_transition_pixelate_parses() {
+    // 観点A-1: 遷移=pixelate が正しく EventImageTransition::Pixelate にパースされる
+    let event = parse_single_event_image("[イベント絵: x.webp, 遷移=pixelate]");
+    match event {
+        Event::EventImage { transition, .. } => {
+            assert_eq!(transition, EventImageTransition::Pixelate)
+        }
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_transition_omitted_defaults_to_fade() {
+    // 観点A-2: 遷移未指定 → 既定 Fade
+    let event = parse_single_event_image("[イベント絵: x.webp]");
+    match event {
+        Event::EventImage { transition, .. } => assert_eq!(transition, EventImageTransition::Fade),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_transition_unknown_value_falls_back_to_fade() {
+    // 観点A-3: 未知の遷移値は既定 Fade に倒れる（enum 慣例: 未知→既定、背面と同じ流儀）
+    let event = parse_single_event_image("[イベント絵: x.webp, 遷移=zoom]");
+    match event {
+        Event::EventImage { transition, .. } => assert_eq!(transition, EventImageTransition::Fade),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_transition_value_case_insensitive() {
+    // 観点A-4: 値は大小無視（PIXELATE も pixelate として解釈される）
+    let event = parse_single_event_image("[イベント絵: x.webp, 遷移=PIXELATE]");
+    match event {
+        Event::EventImage { transition, .. } => {
+            assert_eq!(transition, EventImageTransition::Pixelate)
+        }
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_transition_key_name_is_case_sensitive_unknown_key_skipped() {
+    // 観点A-5: `TRANSITION=pixelate`（キー名の大文字化）は未知キーとして silent skip され、
+    // transition は既定 Fade のまま（#582 の `WOBBLE=` と同じキー名大小区別ロック）。
+    let event = parse_single_event_image("[イベント絵: x.webp, TRANSITION=pixelate]");
+    match event {
+        Event::EventImage { transition, .. } => assert_eq!(transition, EventImageTransition::Fade),
+        other => panic!("EventImage を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_event_image_transition_combines_with_ambient_effects_and_back_and_fade() {
+    // 観点A-6: 背面/演出(#582)/フェードと順不同で混在しても全て正しくパースされる
+    let event = parse_single_event_image(
+        "[イベント絵: a.webp, ろうそく=true, 遷移=pixelate, 背面=keep, ゆらぎ=true, フェード=500]",
+    );
+    assert_eq!(
+        event,
+        Event::EventImage {
+            path: "a.webp".to_string(),
+            back: EventImageBack::Keep,
+            fade_ms: Some(500),
+            transition: EventImageTransition::Pixelate,
+            effects: AmbientEffects {
+                wobble: true,
+                candle: true,
+                ..AmbientEffects::default()
+            },
+        }
+    );
+}
+
+#[test]
+fn test_event_image_transition_pixelate_roundtrip() {
+    // 観点A-7: 遷移=pixelate の emit → 再parse round-trip
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: イベント絵テスト\n\n[イベント絵: x.webp, 遷移=pixelate, フェード=800]\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("[イベント絵: x.webp, 遷移=pixelate, フェード=800]\n"),
+        "emit 結果:\n{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc, doc2, "round-trip で元の構造体と一致する");
+}
+
+#[test]
+fn test_event_image_transition_emit_omission_boundary_explicit_fade_vs_pixelate_vs_omitted() {
+    // 観点A-8: 遷移の emit 省略判定の境界。既定値 `fade` を明示指定した場合は省略され、
+    // `pixelate` は明示出力され、そもそも省略した場合も同じく省略される（明示fade指定と
+    // 省略が同じ emit 結果に正規化されることまで確認する）。
+    let explicit_fade = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: t\n\n[イベント絵: x.webp, 遷移=fade]\n",
+    );
+    let explicit_pixelate = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: t\n\n[イベント絵: x.webp, 遷移=pixelate]\n",
+    );
+    let omitted = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: t\n\n[イベント絵: x.webp]\n",
+    );
+
+    let emitted_fade = emitter::emit(&explicit_fade);
+    let emitted_pixelate = emitter::emit(&explicit_pixelate);
+    let emitted_omitted = emitter::emit(&omitted);
+
+    assert!(
+        !emitted_fade.contains("遷移="),
+        "明示的な 遷移=fade（既定値）は emit で省略される: {emitted_fade}"
+    );
+    assert!(
+        emitted_pixelate.contains("遷移=pixelate"),
+        "遷移=pixelate は emit で明示出力される: {emitted_pixelate}"
+    );
+    assert!(
+        !emitted_omitted.contains("遷移="),
+        "遷移省略時も emit で 遷移= は出力されない: {emitted_omitted}"
+    );
+    assert_eq!(
+        emitted_fade, emitted_omitted,
+        "遷移=fade の明示指定と省略は同じ emit 結果になる"
+    );
+}
+
 #[test]
 fn test_character_exit_with_fade_roundtrip() {
     // 退場ごとのフェード指定。未指定時は従来どおり runtime の character_fade_ms を使う。
