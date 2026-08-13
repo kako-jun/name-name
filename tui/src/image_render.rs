@@ -545,6 +545,100 @@ pub fn rgba_to_quadrant_grid(
     RenderedImage { cols, rows, cells }
 }
 
+/// `src`（`src_w` x `src_h` のサブピクセルグリッド）を最近傍で `dst_w` x `dst_h` へ拡大する
+/// (#583 ピクセレート遷移)。ボックス平均（[`downsample_box`]）とは逆方向の操作で、意図的に
+/// 「大きな均一ブロック」を作ることがここでの目的のため、補間はしない。
+/// `src`/`src_w`/`src_h` のいずれかが不正（空・0）なら空の `Vec` を返す（panicしない）。
+fn nearest_upscale(
+    src: &[(u8, u8, u8, u8)],
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+) -> Vec<(u8, u8, u8, u8)> {
+    if src.is_empty() || src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity((dst_w * dst_h) as usize);
+    for dy in 0..dst_h {
+        let sy = ((u64::from(dy) * u64::from(src_h)) / u64::from(dst_h)).min(u64::from(src_h - 1))
+            as u32;
+        for dx in 0..dst_w {
+            let sx = ((u64::from(dx) * u64::from(src_w)) / u64::from(dst_w))
+                .min(u64::from(src_w - 1)) as u32;
+            out.push(src[(sy * src_w + sx) as usize]);
+        }
+    }
+    out
+}
+
+/// [`rgba_to_quadrant_grid`] のピクセレート遷移 (#583) 版。クロップ・アスペクト比補正は
+/// 同じだが、`sub_w` x `sub_h` へ直接ダウンサンプルする代わりに、まず意図的に粗い解像度
+/// （`sub_w / coarse_divisor` x `sub_h / coarse_divisor`）へダウンサンプルしてから
+/// [`nearest_upscale`] で `sub_w` x `sub_h` へ最近傍拡大する。これにより「同じ絵の中に大きな
+/// 均一ブロックが並ぶ」ドット荒れの見た目を quadrant block 変換の前段で作る（Issue #583 本文の
+/// 設計）。
+///
+/// `coarse_divisor <= 1` は通常表示と完全に同じ経路（[`downsample_box`] を `sub_w` x `sub_h`
+/// へ直接呼ぶ）を通るため、[`rgba_to_quadrant_grid`] と出力が一致する（呼び出し側
+/// `image_fade::ImageFadeState::pixelate_snapshot` が遷移完了時に divisor=1 で呼んでも
+/// 見た目の不連続が起きないことの根拠、`pixelate_transition::compute_divisor` の doc comment
+/// 参照）。
+pub fn rgba_to_quadrant_grid_pixelated(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    cols: u16,
+    rows: u16,
+    coarse_divisor: u32,
+) -> RenderedImage {
+    if cols == 0 || rows == 0 || img_w == 0 || img_h == 0 {
+        return blank_grid(cols, rows);
+    }
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
+        return blank_grid(cols, rows);
+    }
+    let sub_w = u32::from(cols) * 2;
+    let sub_h = u32::from(rows) * 2;
+
+    let effective_target_h = effective_target_height(sub_h);
+    let (crop_x, crop_y, crop_w, crop_h) =
+        compute_cover_crop(img_w, img_h, sub_w, effective_target_h);
+    let cropped = crop_rgba(pixels, img_w, crop_x, crop_y, crop_w, crop_h);
+
+    let sub = if coarse_divisor <= 1 {
+        downsample_box(&cropped, crop_w, crop_h, sub_w, sub_h)
+    } else {
+        let coarse_w = (sub_w / coarse_divisor).max(1);
+        let coarse_h = (sub_h / coarse_divisor).max(1);
+        let coarse = downsample_box(&cropped, crop_w, crop_h, coarse_w, coarse_h);
+        nearest_upscale(&coarse, coarse_w, coarse_h, sub_w, sub_h)
+    };
+    if sub.is_empty() {
+        return blank_grid(cols, rows);
+    }
+
+    let mut cells = Vec::with_capacity(cols as usize * rows as usize);
+    for cy in 0..rows {
+        for cx in 0..cols {
+            let sub_x = u32::from(cx) * 2;
+            let sub_y = u32::from(cy) * 2;
+            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
+            let ul = get(sub_x, sub_y);
+            let ur = get(sub_x + 1, sub_y);
+            let ll = get(sub_x, sub_y + 1);
+            let lr = get(sub_x + 1, sub_y + 1);
+            cells.push(quadrant_cell_from_subpixels([
+                composite_over_black(ul.0, ul.1, ul.2, ul.3),
+                composite_over_black(ur.0, ur.1, ur.2, ur.3),
+                composite_over_black(ll.0, ll.1, ll.2, ll.3),
+                composite_over_black(lr.0, lr.1, lr.2, lr.3),
+            ]));
+        }
+    }
+    RenderedImage { cols, rows, cells }
+}
+
 /// 元画像全体をクロップ無しで `cols` セル幅へ拡大・縮小し、総行数 `total_rows` のうち
 /// `offset` 行目から最大 `rows` 行だけを quadrant block グリッドへ変換する。
 /// フルキャンバス画像表示のスクロール可視範囲専用で、全行ぶんのグリッドを先に確保しない。
@@ -1350,5 +1444,191 @@ mod tests {
         for progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
             assert_eq!(compute_eased_scroll_offset(7, 7, progress), 7);
         }
+    }
+
+    // ---- ピクセレート遷移 (#583): nearest_upscale / rgba_to_quadrant_grid_pixelated ----
+
+    #[test]
+    fn nearest_upscale_divisor_boundary_1_2_8_produces_expected_block_counts() {
+        // 観点B-1: divisor 1/2/8 の3点。ここでは nearest_upscale そのものへの直接入力として
+        // src(2x2) を dst(8x8) へ拡大したときの「1つのsrcピクセルが何dstピクセルに写るか」を
+        // 確認する（実際の呼び出し元 rgba_to_quadrant_grid_pixelated 内では
+        // coarse_w = sub_w/divisor で src 側の解像度自体が変わるが、この関数単体は
+        // 「src→dstへの拡大」だけを担うため、srcサイズは固定してdstサイズ側で block 化の
+        // 度合いを確認する）。
+        let src: Vec<(u8, u8, u8, u8)> = vec![
+            (255, 0, 0, 255),
+            (0, 255, 0, 255),
+            (0, 0, 255, 255),
+            (255, 255, 0, 255),
+        ];
+        // divisor=1相当: src(2x2)→dst(2x2) はそのまま1:1。
+        let dst1 = nearest_upscale(&src, 2, 2, 2, 2);
+        assert_eq!(dst1, src, "1:1拡大は入力そのまま");
+
+        // divisor=2相当: src(2x2)→dst(4x4)。各srcピクセルが2x2ブロックに拡大される。
+        let dst2 = nearest_upscale(&src, 2, 2, 4, 4);
+        assert_eq!(dst2.len(), 16);
+        assert_eq!(dst2[0], (255, 0, 0, 255), "左上ブロック(0,0)は赤");
+        assert_eq!(dst2[1], (255, 0, 0, 255), "左上ブロック(1,0)も赤(2x2化)");
+        assert_eq!(dst2[4], (255, 0, 0, 255), "左上ブロック(0,1)も赤(2x2化)");
+        assert_eq!(dst2[2], (0, 255, 0, 255), "右上ブロック(2,0)は緑");
+
+        // divisor=8相当: src(2x2)→dst(16x16)。各srcピクセルが8x8ブロックに拡大される。
+        let dst8 = nearest_upscale(&src, 2, 2, 16, 16);
+        assert_eq!(dst8.len(), 256);
+        assert_eq!(dst8[0], (255, 0, 0, 255));
+        assert_eq!(dst8[7], (255, 0, 0, 255), "左上ブロックは幅8まで赤が続く");
+        assert_eq!(
+            dst8[8],
+            (0, 255, 0, 255),
+            "8番目から右上ブロック(緑)に切り替わる"
+        );
+    }
+
+    #[test]
+    fn nearest_upscale_zero_or_empty_input_returns_empty_without_panicking() {
+        // 観点B-2: 空/ゼロサイズ入力でpanicしない
+        assert!(
+            nearest_upscale(&[], 2, 2, 4, 4).is_empty(),
+            "空srcは空を返す"
+        );
+        let src = vec![(1u8, 2u8, 3u8, 255u8)];
+        assert!(
+            nearest_upscale(&src, 0, 1, 4, 4).is_empty(),
+            "src_w=0は空を返す"
+        );
+        assert!(
+            nearest_upscale(&src, 1, 0, 4, 4).is_empty(),
+            "src_h=0は空を返す"
+        );
+        assert!(
+            nearest_upscale(&src, 1, 1, 0, 4).is_empty(),
+            "dst_w=0は空を返す"
+        );
+        assert!(
+            nearest_upscale(&src, 1, 1, 4, 0).is_empty(),
+            "dst_h=0は空を返す"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_pixelated_divisor_one_matches_plain_grid() {
+        // 観点B-3: coarse_divisor<=1 は既存 rgba_to_quadrant_grid と出力が一致するはず
+        // （doc comment に明記された契約。遷移完了時に見た目の不連続が起きないことの根拠）。
+        // 単色ではなく4象限に色分けした画像で、単純平均に潰れていないことまで確認する。
+        let img_w = 8u32;
+        let img_h = 8u32;
+        let mut pixels = vec![0u8; (img_w * img_h * 4) as usize];
+        for y in 0..img_h {
+            for x in 0..img_w {
+                let color = if x < 4 && y < 4 {
+                    [255u8, 0, 0, 255]
+                } else if x >= 4 && y < 4 {
+                    [0u8, 255, 0, 255]
+                } else if x < 4 {
+                    [0u8, 0, 255, 255]
+                } else {
+                    [255u8, 255, 0, 255]
+                };
+                let i = ((y * img_w + x) * 4) as usize;
+                pixels[i..i + 4].copy_from_slice(&color);
+            }
+        }
+        let plain = rgba_to_quadrant_grid(&pixels, img_w, img_h, 2, 2);
+        let pixelated_divisor_1 = rgba_to_quadrant_grid_pixelated(&pixels, img_w, img_h, 2, 2, 1);
+        let pixelated_divisor_0 = rgba_to_quadrant_grid_pixelated(&pixels, img_w, img_h, 2, 2, 0);
+        assert_eq!(
+            plain, pixelated_divisor_1,
+            "coarse_divisor=1はrgba_to_quadrant_gridと一致するはず"
+        );
+        assert_eq!(
+            plain, pixelated_divisor_0,
+            "coarse_divisor=0もmax(1)で1扱いになりrgba_to_quadrant_gridと一致するはず"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_pixelated_zero_dimensions_returns_blank_grid_without_panicking() {
+        // 観点B-5: cols/rows/img_w/img_h=0でblank_gridを返す
+        // （rgba_to_quadrant_grid_zero_cols_or_rows_.../_zero_size_image_... と対称の契約確認）。
+        let pixels = vec![255u8; 2 * 2 * 4];
+        assert_eq!(
+            rgba_to_quadrant_grid_pixelated(&pixels, 2, 2, 0, 5, 4),
+            blank_grid(0, 5),
+            "cols=0はblank_grid"
+        );
+        assert_eq!(
+            rgba_to_quadrant_grid_pixelated(&pixels, 2, 2, 5, 0, 4),
+            blank_grid(5, 0),
+            "rows=0はblank_grid"
+        );
+        assert_eq!(
+            rgba_to_quadrant_grid_pixelated(&[], 0, 0, 3, 3, 4),
+            blank_grid(3, 3),
+            "img_w/img_h=0はblank_grid"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_pixelated_pixels_shorter_than_declared_size_returns_blank_grid_without_panicking(
+    ) {
+        // 観点B-6: 不正バッファ長（1画素分しかないのに4x4を主張）でblank_gridを返す
+        // （rgba_to_quadrant_grid_pixels_shorter_than_declared_size_... と対称の契約確認）。
+        let short = vec![255u8; 4];
+        assert_eq!(
+            rgba_to_quadrant_grid_pixelated(&short, 4, 4, 2, 2, 4),
+            blank_grid(2, 2),
+            "不正な長さのpixelsはblank_grid"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_pixelated_higher_divisor_is_coarser_monotonically() {
+        // 観点B-4: divisorを上げるほど粗くなる単調性。4象限に色分けした画像で、divisorが
+        // 大きいほど「元画像全体の平均色」に近づく（＝4色それぞれの局所的な違いが失われ、
+        // 隣接ブロック間の色差が縮む）ことを、セル間の色距離の単調減少で確認する。
+        let img_w = 16u32;
+        let img_h = 16u32;
+        let mut pixels = vec![0u8; (img_w * img_h * 4) as usize];
+        for y in 0..img_h {
+            for x in 0..img_w {
+                let color = if x < 8 && y < 8 {
+                    [255u8, 0, 0, 255]
+                } else if x >= 8 && y < 8 {
+                    [0u8, 255, 0, 255]
+                } else if x < 8 {
+                    [0u8, 0, 255, 255]
+                } else {
+                    [255u8, 255, 0, 255]
+                };
+                let i = ((y * img_w + x) * 4) as usize;
+                pixels[i..i + 4].copy_from_slice(&color);
+            }
+        }
+        // 1x1セル(2x2サブピクセル)で見ると、4象限の色がサブピクセルにそのまま反映される。
+        // divisorが大きくなるほど、この1セル内の4サブピクセル間の色差が縮み（全体平均へ
+        // 近づき）、最終的に bg と fg の距離が単調に縮小するはず。
+        fn color_dist(a: (u8, u8, u8), b: (u8, u8, u8)) -> i64 {
+            let dr = a.0 as i64 - b.0 as i64;
+            let dg = a.1 as i64 - b.1 as i64;
+            let db = a.2 as i64 - b.2 as i64;
+            dr * dr + dg * dg + db * db
+        }
+        let mut prev_dist = i64::MAX;
+        for divisor in [1u32, 2, 4, 8] {
+            let grid = rgba_to_quadrant_grid_pixelated(&pixels, img_w, img_h, 1, 1, divisor);
+            let dist = color_dist(grid.cells[0].fg, grid.cells[0].bg);
+            assert!(
+                dist <= prev_dist,
+                "divisor={divisor}: fg/bg色距離({dist})はdivisor増加とともに単調非増加のはず(前回{prev_dist})"
+            );
+            prev_dist = dist;
+        }
+        // 最大divisorでは単色画像相当まで潰れ、色距離がほぼ0になっているはず。
+        assert!(
+            prev_dist < 100,
+            "最大divisorでは全体平均に十分近づき色距離が小さくなるはず: {prev_dist}"
+        );
     }
 }

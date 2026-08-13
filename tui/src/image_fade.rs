@@ -6,21 +6,32 @@
 use std::time::{Duration, Instant};
 
 use jiwa::{lerp_rgb, Rgb};
-use name_name_parser::models::AmbientEffects;
+use name_name_parser::models::{AmbientEffects, EventImageTransition};
 
 use crate::ambient_effects::{apply_ambient_effects, elapsed_ms_since_epoch};
 use crate::config::Config;
 use crate::image_render::{self, ImageCache, QuadrantCell, RenderedImage};
+use crate::pixelate_transition::{
+    compute_divisor, is_coarsen_phase, PIXELATE_TRANSITION_MAX_DIVISOR,
+    PIXELATE_TRANSITION_SWAP_RATIO,
+};
 
 /// 現在のイベント絵切り替え状態。`from`/`to` はいずれも Markdown 原稿中の相対パス
 /// （`config.event_image.assets_dir` からの相対、`DisplayLine::event_image` と同じ形）。
 /// `None` は「イベント絵なし」を表す。`from_effects`/`to_effects`（#582）はそれぞれの画像に
 /// 指定されたアンビエント演出フラグ（`path` が `None` のときは無視される）。
+///
+/// `to_transition`（#583）は「今進行中のこの遷移」がどちらのモードで描かれるかを決める
+/// （`from` 側に対応する `from_transition` は持たない — 遷移の見た目はモード1つで決まり、
+/// 旧画像がどんなモードで登場したかとは無関係）。[`Self::settled`] 経由で作った状態では
+/// `duration` が常にゼロで [`Self::progress`] が常に `1.0` を返すため、値そのものは
+/// 参照されない（意味を持つのは [`Self::transition_to`] で新しい遷移を開始した直後から）。
 pub struct ImageFadeState {
     from: Option<String>,
     to: Option<String>,
     from_effects: AmbientEffects,
     to_effects: AmbientEffects,
+    to_transition: EventImageTransition,
     started_at: Instant,
     duration: Duration,
 }
@@ -34,6 +45,8 @@ impl ImageFadeState {
             to: path,
             from_effects: effects,
             to_effects: effects,
+            // 常に progress()==1.0 なので参照されない（struct doc comment 参照）。
+            to_transition: EventImageTransition::default(),
             started_at: Instant::now(),
             duration: Duration::ZERO,
         }
@@ -56,6 +69,7 @@ impl ImageFadeState {
         &self,
         next: Option<String>,
         next_effects: AmbientEffects,
+        next_transition: EventImageTransition,
         duration: Duration,
         now: Instant,
     ) -> Self {
@@ -64,6 +78,7 @@ impl ImageFadeState {
             to: next,
             from_effects: self.to_effects,
             to_effects: next_effects,
+            to_transition: next_transition,
             started_at: now,
             duration,
         }
@@ -109,12 +124,26 @@ impl ImageFadeState {
         let t = self.progress(now);
         if t >= 1.0 {
             return Some(match &self.to {
-                Some(path) => {
-                    resolve_grid(cache, config, path, self.to_effects, elapsed_ms, cols, rows)
-                }
+                Some(path) => resolve_grid(
+                    cache,
+                    config,
+                    path,
+                    self.to_effects,
+                    elapsed_ms,
+                    cols,
+                    rows,
+                    1,
+                ),
                 None => image_render::blank_grid(cols, rows),
             });
         }
+
+        // ピクセレート遷移 (#583): アルファクロスフェード（blend）ではなく、コルセン→スワップ→
+        // リファインの専用経路を通る（`pixelate_snapshot` 参照）。
+        if self.to_transition == EventImageTransition::Pixelate {
+            return Some(self.pixelate_snapshot(cache, config, elapsed_ms, cols, rows, t));
+        }
+
         let from_grid = self.from.as_deref().map(|path| {
             resolve_grid(
                 cache,
@@ -124,13 +153,75 @@ impl ImageFadeState {
                 elapsed_ms,
                 cols,
                 rows,
+                1,
             )
         });
-        let to_grid = self
-            .to
-            .as_deref()
-            .map(|path| resolve_grid(cache, config, path, self.to_effects, elapsed_ms, cols, rows));
+        let to_grid = self.to.as_deref().map(|path| {
+            resolve_grid(
+                cache,
+                config,
+                path,
+                self.to_effects,
+                elapsed_ms,
+                cols,
+                rows,
+                1,
+            )
+        });
         Some(blend(from_grid.as_ref(), to_grid.as_ref(), cols, rows, t))
+    }
+
+    /// ピクセレート遷移 (#583) 中の `now` 時点のグリッドを返す。`t < swap_ratio` は `from`
+    /// （表示中だった旧画像）をコルセン中として、`t >= swap_ratio` は `to`（新画像）を
+    /// リファイン中として描画する — `blend` のように2枚を同時に合成するのではなく、常に
+    /// どちらか一方だけを「粗さ」を変えながら描画する（Issue #583 本文の設計、GUI版
+    /// `EventImageLayer.performPixelateSwap` と対称: スワップの瞬間に表示対象が切り替わる）。
+    /// 対象パスが `None`（例: `from` が無い状態からの初回表示）の場合は
+    /// [`image_render::blank_grid`] にフォールバックする（`blend` の missing-side 扱いと同じ
+    /// 「黒扱い」の考え方）。
+    fn pixelate_snapshot(
+        &self,
+        cache: &mut ImageCache,
+        config: &Config,
+        elapsed_ms: u64,
+        cols: u16,
+        rows: u16,
+        t: f32,
+    ) -> RenderedImage {
+        let divisor = compute_divisor(
+            t,
+            PIXELATE_TRANSITION_SWAP_RATIO,
+            PIXELATE_TRANSITION_MAX_DIVISOR,
+        );
+        if is_coarsen_phase(t, PIXELATE_TRANSITION_SWAP_RATIO) {
+            match self.from.as_deref() {
+                Some(path) => resolve_grid(
+                    cache,
+                    config,
+                    path,
+                    self.from_effects,
+                    elapsed_ms,
+                    cols,
+                    rows,
+                    divisor,
+                ),
+                None => image_render::blank_grid(cols, rows),
+            }
+        } else {
+            match self.to.as_deref() {
+                Some(path) => resolve_grid(
+                    cache,
+                    config,
+                    path,
+                    self.to_effects,
+                    elapsed_ms,
+                    cols,
+                    rows,
+                    divisor,
+                ),
+                None => image_render::blank_grid(cols, rows),
+            }
+        }
     }
 }
 
@@ -146,6 +237,10 @@ impl ImageFadeState {
 /// `apply_ambient_effects` を呼ばずデコード済み RGBA バッファをそのまま
 /// `rgba_to_quadrant_grid` へ渡す（演出なし画像で毎フレーム無駄な `pixels.to_vec()` clone が
 /// 発生していた回帰の修正、レビュー nit-4 対応）。
+///
+/// `coarse_divisor`（#583）は `1` なら通常の [`image_render::rgba_to_quadrant_grid`]（アンビエント
+/// 演出のみ・粗さなし）、`2` 以上なら [`image_render::rgba_to_quadrant_grid_pixelated`]
+/// （ピクセレート遷移中の粗い表示）を呼び分ける。
 #[allow(clippy::too_many_arguments)]
 fn resolve_grid(
     cache: &mut ImageCache,
@@ -155,29 +250,38 @@ fn resolve_grid(
     elapsed_ms: u64,
     cols: u16,
     rows: u16,
+    coarse_divisor: u32,
 ) -> RenderedImage {
     let Some(full_path) = config.resolve_image_path(relative_path) else {
         return image_render::blank_grid(cols, rows);
     };
     match cache.get_or_load(&full_path) {
         Some(decoded) => {
-            if !effects.wobble && !effects.vignette && !effects.glow && !effects.candle {
-                return image_render::rgba_to_quadrant_grid(
+            let pixels = if !effects.wobble && !effects.vignette && !effects.glow && !effects.candle
+            {
+                None
+            } else {
+                Some(apply_ambient_effects(
                     &decoded.rgba,
+                    decoded.width,
+                    decoded.height,
+                    effects,
+                    elapsed_ms,
+                ))
+            };
+            let rgba = pixels.as_deref().unwrap_or(&decoded.rgba);
+            if coarse_divisor <= 1 {
+                image_render::rgba_to_quadrant_grid(rgba, decoded.width, decoded.height, cols, rows)
+            } else {
+                image_render::rgba_to_quadrant_grid_pixelated(
+                    rgba,
                     decoded.width,
                     decoded.height,
                     cols,
                     rows,
-                );
+                    coarse_divisor,
+                )
             }
-            let pixels = apply_ambient_effects(
-                &decoded.rgba,
-                decoded.width,
-                decoded.height,
-                effects,
-                elapsed_ms,
-            );
-            image_render::rgba_to_quadrant_grid(&pixels, decoded.width, decoded.height, cols, rows)
         }
         None => image_render::blank_grid(cols, rows),
     }
@@ -272,6 +376,7 @@ mod tests {
             to: Some(relative),
             from_effects: AmbientEffects::default(),
             to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::default(),
             started_at,
             duration: Duration::from_millis(1000),
         };
@@ -318,6 +423,7 @@ mod tests {
             to: None,
             from_effects: AmbientEffects::default(),
             to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::default(),
             started_at,
             duration: Duration::from_millis(1000),
         };
@@ -362,6 +468,7 @@ mod tests {
             to: Some("b.webp".to_string()),
             from_effects: AmbientEffects::default(),
             to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::default(),
             started_at: now0,
             duration: Duration::from_millis(1000),
         };
@@ -371,6 +478,7 @@ mod tests {
         let next = mid_flight.transition_to(
             Some("c.webp".to_string()),
             AmbientEffects::default(),
+            EventImageTransition::default(),
             Duration::from_millis(1000),
             mid,
         );
@@ -412,6 +520,7 @@ mod tests {
         let next = settled.transition_to(
             Some("b.webp".to_string()),
             AmbientEffects::default(),
+            EventImageTransition::default(),
             Duration::from_millis(100),
             now,
         );
@@ -427,6 +536,7 @@ mod tests {
             to: Some("a.webp".to_string()),
             from_effects: AmbientEffects::default(),
             to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::default(),
             started_at: Instant::now(),
             duration: Duration::from_millis(100),
         };
@@ -604,12 +714,13 @@ mod tests {
             0,
             1,
             1,
+            1,
         );
         let glow_effects = AmbientEffects {
             glow: true,
             ..AmbientEffects::default()
         };
-        let with_effects = resolve_grid(&mut cache, &config, &relative, glow_effects, 0, 1, 1);
+        let with_effects = resolve_grid(&mut cache, &config, &relative, glow_effects, 0, 1, 1, 1);
 
         assert_ne!(
             no_effects.cells[0].bg, with_effects.cells[0].bg,
@@ -674,6 +785,7 @@ mod tests {
         let transitioning = settled.transition_to(
             Some(relative_b),
             glow_effects,
+            EventImageTransition::default(),
             Duration::from_millis(1000),
             now0,
         );
@@ -694,6 +806,466 @@ mod tests {
         assert_ne!(
             near_end.cells[0].bg, color_b,
             "t≈1はto(B)にglowが適用されているはずなので、無加工のcolor_bとは異なる"
+        );
+    }
+
+    // ============================================================================
+    // #583 ピクセレート遷移 (`pixelate_snapshot` / `ImageFadeState::to_transition`) のテスト
+    // ============================================================================
+
+    /// 4象限（左上/右上/左下/右下）に異なる色を敷いた4x4 RGBAフィクスチャを書き出す。
+    /// 単色フィクスチャでは粗さ(divisor)を変えても平均色が変わらず区別できないため、
+    /// divisorによる出力差を検出したいテスト（D-6/D-9）専用のヘルパー。
+    fn config_and_relative_path_for_quadrant_fixture(
+        colors: [(u8, u8, u8); 4],
+    ) -> (Config, String) {
+        let mut pixels = vec![0u8; 4 * 4 * 4];
+        for y in 0..4u32 {
+            for x in 0..4u32 {
+                let qx = usize::from(x >= 2);
+                let qy = usize::from(y >= 2);
+                let color = colors[qy * 2 + qx];
+                let i = ((y * 4 + x) * 4) as usize;
+                pixels[i] = color.0;
+                pixels[i + 1] = color.1;
+                pixels[i + 2] = color.2;
+                pixels[i + 3] = 255;
+            }
+        }
+        let fixture_path = image_render::write_test_webp_fixture(&pixels, 4, 4);
+        let mut config = Config::default();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        (config, relative)
+    }
+
+    #[test]
+    fn pixelate_snapshot_coarsen_phase_returns_from_image() {
+        // 観点D-1: t < swap_ratio(0.5) のコルセンフェーズでは from(旧画像)の色が返る
+        // （単色フィクスチャなので粗さ(divisor)に関わらず色そのものは不変、from/toどちらが
+        // 選ばれるかだけを検出できる）。
+        let color_from = (200u8, 40u8, 210u8);
+        let color_to = (10u8, 220u8, 30u8);
+        let (config, relative_from) = config_and_relative_path_for_solid_fixture(color_from);
+        let fixture_to = image_render::write_test_webp_fixture(&solid_rgba(color_to, 2, 2), 2, 2);
+        let relative_to = fixture_to
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let started_at = Instant::now();
+        let state = ImageFadeState {
+            from: Some(relative_from),
+            to: Some(relative_to),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let mut cache = ImageCache::new();
+        let grid = state
+            .snapshot(
+                &mut cache,
+                &config,
+                1,
+                1,
+                started_at + Duration::from_millis(100),
+            )
+            .expect("グリッドが返る");
+        assert_eq!(
+            grid.cells[0].bg, color_from,
+            "コルセン中(t=0.1)は from(旧画像)の色が返るはず"
+        );
+    }
+
+    #[test]
+    fn pixelate_snapshot_refine_phase_returns_to_image() {
+        // 観点D-2: t >= swap_ratio(0.5) のリファインフェーズでは to(新画像)の色が返る。
+        let color_from = (200u8, 40u8, 210u8);
+        let color_to = (10u8, 220u8, 30u8);
+        let (config, relative_from) = config_and_relative_path_for_solid_fixture(color_from);
+        let fixture_to = image_render::write_test_webp_fixture(&solid_rgba(color_to, 2, 2), 2, 2);
+        let relative_to = fixture_to
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let started_at = Instant::now();
+        let state = ImageFadeState {
+            from: Some(relative_from),
+            to: Some(relative_to),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let mut cache = ImageCache::new();
+        let grid = state
+            .snapshot(
+                &mut cache,
+                &config,
+                1,
+                1,
+                started_at + Duration::from_millis(900),
+            )
+            .expect("グリッドが返る");
+        assert_eq!(
+            grid.cells[0].bg, color_to,
+            "リファイン中(t=0.9)は to(新画像)の色が返るはず"
+        );
+    }
+
+    #[test]
+    fn pixelate_snapshot_swap_boundary_switches_from_to_to() {
+        // 観点D-3: swap_ratio境界（t=0.5、duration=1000msなので500ms）前後の3点
+        // (499ms/500ms/501ms)で from→to の切り替わりを確認する。
+        let color_from = (200u8, 40u8, 210u8);
+        let color_to = (10u8, 220u8, 30u8);
+        let (config, relative_from) = config_and_relative_path_for_solid_fixture(color_from);
+        let fixture_to = image_render::write_test_webp_fixture(&solid_rgba(color_to, 2, 2), 2, 2);
+        let relative_to = fixture_to
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let started_at = Instant::now();
+        let state = ImageFadeState {
+            from: Some(relative_from),
+            to: Some(relative_to),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let mut cache = ImageCache::new();
+
+        let before = state
+            .snapshot(
+                &mut cache,
+                &config,
+                1,
+                1,
+                started_at + Duration::from_millis(499),
+            )
+            .expect("グリッドが返る");
+        assert_eq!(before.cells[0].bg, color_from, "境界-1(499ms)はまだfrom");
+
+        let at = state
+            .snapshot(
+                &mut cache,
+                &config,
+                1,
+                1,
+                started_at + Duration::from_millis(500),
+            )
+            .expect("グリッドが返る");
+        assert_eq!(at.cells[0].bg, color_to, "境界ちょうど(500ms)は既にto");
+
+        let after = state
+            .snapshot(
+                &mut cache,
+                &config,
+                1,
+                1,
+                started_at + Duration::from_millis(501),
+            )
+            .expect("グリッドが返る");
+        assert_eq!(after.cells[0].bg, color_to, "境界+1(501ms)もto");
+    }
+
+    #[test]
+    fn pixelate_snapshot_coarsen_phase_from_none_returns_blank_grid() {
+        // 観点D-4: コルセン中、fromがNoneならblank_gridになる
+        // （from=Noneからの遷移＝初回表示にPixelateを指定するような想定外入力への防御）。
+        let color_to = (10u8, 220u8, 30u8);
+        let fixture_to = image_render::write_test_webp_fixture(&solid_rgba(color_to, 2, 2), 2, 2);
+        let relative_to = fixture_to
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let mut config = Config::default();
+        config.event_image.assets_dir = fixture_to.parent().unwrap().to_path_buf();
+
+        let started_at = Instant::now();
+        let state = ImageFadeState {
+            from: None,
+            to: Some(relative_to),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let mut cache = ImageCache::new();
+        let grid = state
+            .snapshot(
+                &mut cache,
+                &config,
+                2,
+                2,
+                started_at + Duration::from_millis(100),
+            )
+            .expect("to=Someなのでsnapshot自体はSomeを返す");
+        assert!(
+            grid.cells.iter().all(|c| *c == image_render::BLANK_CELL),
+            "from=Noneのコルセン中はblank_grid相当のはず"
+        );
+    }
+
+    #[test]
+    fn pixelate_snapshot_refine_phase_to_none_returns_blank_grid() {
+        // 観点D-5: リファイン中、toがNoneならblank_gridになる。
+        let color_from = (200u8, 40u8, 210u8);
+        let (config, relative_from) = config_and_relative_path_for_solid_fixture(color_from);
+
+        let started_at = Instant::now();
+        let state = ImageFadeState {
+            from: Some(relative_from),
+            to: None,
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let mut cache = ImageCache::new();
+        let grid = state
+            .snapshot(
+                &mut cache,
+                &config,
+                2,
+                2,
+                started_at + Duration::from_millis(900),
+            )
+            .expect("from=Someなのでsnapshot自体はSomeを返す");
+        assert!(
+            grid.cells.iter().all(|c| *c == image_render::BLANK_CELL),
+            "to=Noneのリファイン中はblank_grid相当のはず"
+        );
+    }
+
+    #[test]
+    fn pixelate_snapshot_zero_duration_always_uses_divisor_one() {
+        // 観点D-6: duration=ZERO は `progress()==1.0` の早期returnに常に入るため、
+        // to_transition=Pixelateであってもcoarse_divisorは常に1(粗さなし)で描画される
+        // （4象限フィクスチャでdivisor1と8の出力差が出ることを前提にした回帰確認）。
+        let quadrant_colors = [
+            (255u8, 0u8, 0u8),
+            (0u8, 255u8, 0u8),
+            (0u8, 0u8, 255u8),
+            (255u8, 255u8, 0u8),
+        ];
+        let (config, relative) = config_and_relative_path_for_quadrant_fixture(quadrant_colors);
+        let mut cache = ImageCache::new();
+
+        let divisor1 = resolve_grid(
+            &mut cache,
+            &config,
+            &relative,
+            AmbientEffects::default(),
+            0,
+            1,
+            1,
+            1,
+        );
+        let divisor8 = resolve_grid(
+            &mut cache,
+            &config,
+            &relative,
+            AmbientEffects::default(),
+            0,
+            1,
+            1,
+            8,
+        );
+        assert_ne!(
+            divisor1, divisor8,
+            "テスト前提: このフィクスチャはdivisor1と8で明確に異なる結果を生むはず"
+        );
+
+        let state = ImageFadeState {
+            from: None,
+            to: Some(relative),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at: Instant::now(),
+            duration: Duration::ZERO,
+        };
+        let grid = state
+            .snapshot(&mut cache, &config, 1, 1, Instant::now())
+            .expect("to=Someならグリッドが返る");
+        assert_eq!(
+            grid.cells[0], divisor1.cells[0],
+            "duration=ZEROはprogress=1.0の早期returnに入り常にdivisor=1で描画されるはず"
+        );
+    }
+
+    #[test]
+    fn pixelate_snapshot_coarsen_phase_applies_from_effects() {
+        // 観点D-7: コルセン中もアンビエント演出(#582)がfrom_effects経由でresolve_gridへ
+        // 正しく配線されていることを確認する
+        // （`resolve_grid_wires_effects_into_apply_ambient_effects` のPixelate版）。
+        let fixture_color = (180u8, 120u8, 60u8);
+        let (config, relative_a) = config_and_relative_path_for_solid_fixture(fixture_color);
+        let fixture_b =
+            image_render::write_test_webp_fixture(&solid_rgba((10, 10, 10), 2, 2), 2, 2);
+        let relative_b = fixture_b
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let started_at = Instant::now();
+        let no_effects_state = ImageFadeState {
+            from: Some(relative_a.clone()),
+            to: Some(relative_b.clone()),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let glow_state = ImageFadeState {
+            from: Some(relative_a),
+            to: Some(relative_b),
+            from_effects: AmbientEffects {
+                glow: true,
+                ..AmbientEffects::default()
+            },
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let mut cache = ImageCache::new();
+        let no_effects_grid = no_effects_state
+            .snapshot(
+                &mut cache,
+                &config,
+                1,
+                1,
+                started_at + Duration::from_millis(100),
+            )
+            .expect("グリッドが返る");
+        let glow_grid = glow_state
+            .snapshot(
+                &mut cache,
+                &config,
+                1,
+                1,
+                started_at + Duration::from_millis(100),
+            )
+            .expect("グリッドが返る");
+        assert_ne!(
+            no_effects_grid.cells[0].bg, glow_grid.cells[0].bg,
+            "コルセン中のfrom_effects(glow)がpixelate_snapshotへ実際に反映されているはず"
+        );
+    }
+
+    #[test]
+    fn transition_to_mid_flight_pixelate_uses_previous_to_path_not_interrupted_state() {
+        // 観点D-8: `transition_to_mid_flight_uses_previous_to_path_not_interrupted_blend_color`
+        // のPixelate版。to_transition=Pixelateでも同じ「本当に進行中の状態から割り込まれると
+        // 直前の遷移のtoパスがそのまま新しいfromになる」契約が成り立つことを確認する
+        // （transition_to自体はモードで分岐しないが、Pixelate専用の状態遷移として明示的に
+        // ロックする）。
+        let now0 = Instant::now();
+        let mid_flight = ImageFadeState {
+            from: Some("a.webp".to_string()),
+            to: Some("b.webp".to_string()),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at: now0,
+            duration: Duration::from_millis(1000),
+        };
+        let mid = now0 + Duration::from_millis(500);
+        assert_eq!(mid_flight.progress(mid), 0.5, "前提: まだ遷移の途中である");
+
+        let next = mid_flight.transition_to(
+            Some("c.webp".to_string()),
+            AmbientEffects::default(),
+            EventImageTransition::Pixelate,
+            Duration::from_millis(1000),
+            mid,
+        );
+        assert_eq!(
+            next.from.as_deref(),
+            Some("b.webp"),
+            "新しいfromは中断時点のブレンド色ではなく、直前の遷移のtoパス(b)そのもの"
+        );
+        assert_eq!(next.to.as_deref(), Some("c.webp"));
+        assert_eq!(next.to_transition, EventImageTransition::Pixelate);
+    }
+
+    #[test]
+    fn snapshot_fade_transition_never_applies_pixelate_coarsening_regression() {
+        // 観点D-9: Fade遷移(既定)の描画パス(blend)は、pixelate_snapshotとは独立したコード経路
+        // であり、coarse_divisorは常に1(粗さなし)でresolve_gridを呼ぶ。将来のリファクタで
+        // 誤ってt由来のdivisorをFade経路にも渡してしまう回帰が起きたら、この4象限フィクスチャ
+        // (divisor1と8で明確に異なる結果になる)で検知できる。
+        let quadrant_colors = [
+            (255u8, 0u8, 0u8),
+            (0u8, 255u8, 0u8),
+            (0u8, 0u8, 255u8),
+            (255u8, 255u8, 0u8),
+        ];
+        let (config, relative) = config_and_relative_path_for_quadrant_fixture(quadrant_colors);
+        let mut cache = ImageCache::new();
+
+        let divisor1 = resolve_grid(
+            &mut cache,
+            &config,
+            &relative,
+            AmbientEffects::default(),
+            0,
+            1,
+            1,
+            1,
+        );
+        let divisor8 = resolve_grid(
+            &mut cache,
+            &config,
+            &relative,
+            AmbientEffects::default(),
+            0,
+            1,
+            1,
+            8,
+        );
+        assert_ne!(
+            divisor1, divisor8,
+            "テスト前提: このフィクスチャはdivisor1と8で明確に異なる結果を生むはず"
+        );
+
+        let now0 = Instant::now();
+        let state = ImageFadeState {
+            from: Some(relative),
+            to: None,
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Fade,
+            started_at: now0,
+            duration: Duration::from_millis(1000),
+        };
+        let grid = state
+            .snapshot(&mut cache, &config, 1, 1, now0)
+            .expect("from=Someならグリッドが返る");
+        assert_eq!(
+            grid.cells[0], divisor1.cells[0],
+            "Fade経路(blend)は常にcoarse_divisor=1でresolve_gridを呼ぶはず(t=0でfrom側が支配的)"
         );
     }
 }

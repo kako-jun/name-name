@@ -12,6 +12,9 @@ export type BgmAction = 'Play' | 'Stop'
 export type BlackoutAction = 'On' | 'Off'
 /** イベント絵の背面（背景・立ち絵）扱い (#351)。既定は 'Hide' */
 export type EventImageBack = 'Hide' | 'Keep'
+/** イベント絵の遷移モード (#583)。既定は 'Fade'（既存の透明度フェード、非回帰）。
+ *  'Pixelate' はドットが段階的に荒くなる→切り替わる→段階的に細かく戻る。 */
+export type EventImageTransition = 'Fade' | 'Pixelate'
 
 /**
  * イベント絵のアンビエント演出フラグ (#582)。Gymnasia の「暗闇+オレンジ色のろうそく光+
@@ -239,8 +242,12 @@ export type Event =
         /** #351 背面（背景・立ち絵）扱い。wasm は #[serde(default)] のため型上は optional だが、
          *  実際の parse_markdown() 出力では常に 'Hide'/'Keep' のどちらかが入る（parser.ts で正規化）。 */
         back?: EventImageBack
-        /** 表示フェードイン時間 ms。未指定/null は `event_image_fade_ms` または runtime 既定 700ms */
+        /** 表示フェードイン時間 ms。未指定/null は `event_image_fade_ms` または runtime 既定 700ms。
+         *  `transition` が 'Pixelate' の場合は遷移全体（コルセン+リファイン）の所要時間として使う。 */
         fade_ms?: number | null
+        /** #583 遷移モード。wasm は #[serde(default)] のため型上は optional だが、実際の
+         *  parse_markdown() 出力では常に 'Fade'/'Pixelate' のどちらかが入る（parser.ts で正規化）。 */
+        transition?: EventImageTransition
         /** #582 アンビエント演出フラグ。wasm は #[serde(default)] のため型上は optional だが、
          *  実際の parse_markdown() 出力では常に全フィールドが入る（parser.ts で正規化）。 */
         effects?: AmbientEffects

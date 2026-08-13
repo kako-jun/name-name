@@ -144,7 +144,7 @@
 use std::collections::HashMap;
 
 use name_name_parser::models::{
-    AmbientEffects, BgmAction, BlackoutAction, ChoiceOption, Document, Event,
+    AmbientEffects, BgmAction, BlackoutAction, ChoiceOption, Document, Event, EventImageTransition,
 };
 
 use crate::flags::GameFlags;
@@ -168,6 +168,15 @@ pub struct DisplayLine {
     /// フィールドとして追加した — 型を `Option<(String, AmbientEffects)>` 等に変えると
     /// 既存の大量の `.as_deref()` 比較テストを壊すため（back-compat 優先、#582）。
     pub event_image_effects: AmbientEffects,
+    /// `event_image` の遷移モード (#583)。`event_image_effects` と同じ並行フィールドパターン。
+    /// `event_image` が `None` のときは意味を持たない（既定値のまま）。
+    pub event_image_transition: EventImageTransition,
+    /// `event_image_transition` が `Pixelate` のときに「遷移全体の所要時間」として使う
+    /// per-event フェード時間上書き (#583)。`None` は `config.event_image.crossfade_ms`
+    /// （既定値）に委ねる。既存の `back`/`fade_ms`（#481 では意図的に捨てていた）とは異なり、
+    /// Pixelate 遷移だけは Issue #583 の要件どおり尊重する（`main.rs::event_loop` 参照）。
+    /// `Fade` 遷移では引き続き参照されない（`config.event_image.crossfade_ms` 固定、非回帰）。
+    pub event_image_fade_ms: Option<u32>,
 }
 
 /// ルビ記法（`｜` / `《...》`）を除去し、ベーステキストのみを残す。
@@ -218,12 +227,16 @@ fn display_line_from_event(event: &Event) -> Option<DisplayLine> {
             text: text.iter().map(|line| strip_ruby_markup(line)).collect(),
             event_image: None,
             event_image_effects: AmbientEffects::default(),
+            event_image_transition: EventImageTransition::default(),
+            event_image_fade_ms: None,
         }),
         Event::Narration { text, .. } => Some(DisplayLine {
             speaker: None,
             text: text.iter().map(|line| strip_ruby_markup(line)).collect(),
             event_image: None,
             event_image_effects: AmbientEffects::default(),
+            event_image_transition: EventImageTransition::default(),
+            event_image_fade_ms: None,
         }),
         _ => None,
     }
@@ -474,6 +487,12 @@ struct SceneScanState {
     /// が `Some` になるのと同時に更新し、`None` に戻すのと同時にリセットする
     /// （常に「今のイベント絵の演出設定」を指す並行フィールド）。
     current_event_image_effects: AmbientEffects,
+    /// `current_event_image` の遷移モード (#583)。`current_event_image_effects` と同じ並行
+    /// フィールドパターン。
+    current_event_image_transition: EventImageTransition,
+    /// `current_event_image_transition` が `Pixelate` のときの per-event フェード時間上書き
+    /// (#583)。`DisplayLine::event_image_fade_ms` の doc comment参照。
+    current_event_image_fade_ms: Option<u32>,
     current_speaker: Option<String>,
     current_text: Vec<String>,
     current_blackout: bool,
@@ -544,6 +563,8 @@ fn push_wait_chain_terminal_item(
         text: state.current_text.clone(),
         event_image: state.current_event_image.clone(),
         event_image_effects: state.current_event_image_effects,
+        event_image_transition: state.current_event_image_transition,
+        event_image_fade_ms: state.current_event_image_fade_ms,
     }));
     item_file_ids.push(file_id);
     item_wait_ms.push(None);
@@ -598,15 +619,23 @@ fn build_scene_items(
     while event_index < events.len() {
         let event = &events[event_index];
         match event {
-            // `path` の `..` は `back`（表示位置）と `fade_ms`（イベント個別の
-            // フェード時間上書き）を意図的に捨てている。`fade_ms` は TUI 側では
-            // 常に `config.event_image.crossfade_ms`（グローバル値、`main.rs` の
-            // `event_loop` 参照）しか使わない簡略化（MVPスコープ、#481）。GUI版の
-            // ようなイベント単位のフェード時間上書きは今回の対象外。`effects`
-            // （アンビエント演出フラグ、#582）は back/fade_ms と異なり TUI 側でも解釈する。
-            Event::EventImage { path, effects, .. } => {
+            // `path` の `..` は `back`（表示位置）を意図的に捨てている。`effects`
+            // （アンビエント演出フラグ、#582）・`transition`/`fade_ms`（遷移モード、#583）は
+            // back と異なり TUI 側でも解釈する。`fade_ms` は `transition` が `Pixelate`
+            // のときだけ「遷移全体の所要時間」として `main.rs::event_loop` が参照する
+            // （`Fade` 遷移は引き続き `config.event_image.crossfade_ms` 固定、MVPスコープ
+            // #481 の簡略化を維持・非回帰）。
+            Event::EventImage {
+                path,
+                effects,
+                transition,
+                fade_ms,
+                ..
+            } => {
                 state.current_event_image = Some(path.clone());
                 state.current_event_image_effects = *effects;
+                state.current_event_image_transition = *transition;
+                state.current_event_image_fade_ms = *fade_ms;
                 // 直後が `Event::Wait { ms }` の場合だけ、画像コマ+待機の自動送り
                 // item を作る（#497、Issue #475 が求める4コマ自動再生の受け皿）。
                 // それ以外（次が Dialog/EventImage/EventImageExit 等）は従来どおり
@@ -627,6 +656,8 @@ fn build_scene_items(
                         text: state.current_text.clone(),
                         event_image: state.current_event_image.clone(),
                         event_image_effects: state.current_event_image_effects,
+                        event_image_transition: state.current_event_image_transition,
+                        event_image_fade_ms: state.current_event_image_fade_ms,
                     }));
                     item_file_ids.push(file_id);
                     item_wait_ms.push(Some(*ms));
@@ -700,6 +731,8 @@ fn build_scene_items(
                         state.current_blackout = false;
                         state.current_event_image = None;
                         state.current_event_image_effects = AmbientEffects::default();
+                        state.current_event_image_transition = EventImageTransition::default();
+                        state.current_event_image_fade_ms = None;
                         push_wait_chain_terminal_item(
                             state,
                             file_id,
@@ -719,6 +752,8 @@ fn build_scene_items(
             Event::EventImageExit { .. } => {
                 state.current_event_image = None;
                 state.current_event_image_effects = AmbientEffects::default();
+                state.current_event_image_transition = EventImageTransition::default();
+                state.current_event_image_fade_ms = None;
             }
             // GUI版 `setBlackout` 相当（#512）。オン/オフの2状態を単純に上書きする
             // だけの宣言的 state で、`state.current_event_image` と同じ「直近の値を次の
@@ -741,6 +776,8 @@ fn build_scene_items(
                 state.current_blackout = false;
                 state.current_event_image = None;
                 state.current_event_image_effects = AmbientEffects::default();
+                state.current_event_image_transition = EventImageTransition::default();
+                state.current_event_image_fade_ms = None;
             }
             // GUI版 `NovelRenderer` の `'Bgm' in event` 分岐（`audioManager.playBgm`/
             // `stopBgm`）と同じ意味論（#502）。`action === 'Play' && path` の両方が
@@ -792,6 +829,8 @@ fn build_scene_items(
                         PlaybackItem::Line(mut line) => {
                             line.event_image = state.current_event_image.clone();
                             line.event_image_effects = state.current_event_image_effects;
+                            line.event_image_transition = state.current_event_image_transition;
+                            line.event_image_fade_ms = state.current_event_image_fade_ms;
                             state.current_speaker = line.speaker.clone();
                             state.current_text = line.text.clone();
                             PlaybackItem::Line(line)
@@ -876,6 +915,8 @@ impl Playback {
         let mut scan_state = SceneScanState {
             current_event_image: None,
             current_event_image_effects: AmbientEffects::default(),
+            current_event_image_transition: EventImageTransition::default(),
+            current_event_image_fade_ms: None,
             current_speaker: None,
             current_text: Vec::new(),
             current_blackout: false,
@@ -983,6 +1024,8 @@ impl Playback {
             text: vec![pages[0].clone()],
             event_image: line.event_image.clone(),
             event_image_effects: line.event_image_effects,
+            event_image_transition: line.event_image_transition,
+            event_image_fade_ms: line.event_image_fade_ms,
         });
         self.sentence_pages = pages;
     }
@@ -1476,6 +1519,8 @@ impl Playback {
             self.scan_state.current_bgm = None;
             self.scan_state.current_event_image = None;
             self.scan_state.current_event_image_effects = AmbientEffects::default();
+            self.scan_state.current_event_image_transition = EventImageTransition::default();
+            self.scan_state.current_event_image_fade_ms = None;
             self.scan_state.current_blackout = false;
             self.scan_state.pending_se.clear();
             self.scan_state.current_speaker = None;
@@ -1584,6 +1629,9 @@ impl Playback {
                                 self.scan_state.current_event_image = None;
                                 self.scan_state.current_event_image_effects =
                                     AmbientEffects::default();
+                                self.scan_state.current_event_image_transition =
+                                    EventImageTransition::default();
+                                self.scan_state.current_event_image_fade_ms = None;
                                 self.scan_state.current_blackout = false;
                                 self.scan_state.pending_se.clear();
                                 self.scan_state.current_speaker = None;
@@ -1694,6 +1742,8 @@ impl Playback {
         let mut scan_state = SceneScanState {
             current_event_image: None,
             current_event_image_effects: AmbientEffects::default(),
+            current_event_image_transition: EventImageTransition::default(),
+            current_event_image_fade_ms: None,
             current_speaker: None,
             current_text: Vec::new(),
             current_blackout: false,
@@ -1858,6 +1908,8 @@ impl Playback {
             scan_state: SceneScanState {
                 current_event_image: None,
                 current_event_image_effects: AmbientEffects::default(),
+                current_event_image_transition: EventImageTransition::default(),
+                current_event_image_fade_ms: None,
                 current_speaker: None,
                 current_text: Vec::new(),
                 current_blackout: false,
@@ -1991,12 +2043,25 @@ mod tests {
             path: path.to_string(),
             back: name_name_parser::models::EventImageBack::default(),
             fade_ms: None,
+            transition: name_name_parser::models::EventImageTransition::default(),
             effects: name_name_parser::models::AmbientEffects::default(),
         }
     }
 
     fn event_image_exit() -> Event {
         Event::EventImageExit { fade_ms: None }
+    }
+
+    /// `遷移=pixelate` を指定した `Event::EventImage` を作る (#583)。`fade_ms` は
+    /// `Pixelate` のときに「遷移全体の所要時間」として使われるフィールド。
+    fn event_image_pixelate(path: &str, fade_ms: Option<u32>) -> Event {
+        Event::EventImage {
+            path: path.to_string(),
+            back: name_name_parser::models::EventImageBack::default(),
+            fade_ms,
+            transition: name_name_parser::models::EventImageTransition::Pixelate,
+            effects: name_name_parser::models::AmbientEffects::default(),
+        }
     }
 
     /// 単一チャプター・単一シーンに `events` を並べた `Document` を作る。
@@ -3461,6 +3526,8 @@ mod tests {
             text: text.into_iter().map(|s| s.to_string()).collect(),
             event_image: None,
             event_image_effects: AmbientEffects::default(),
+            event_image_transition: EventImageTransition::default(),
+            event_image_fade_ms: None,
         }
     }
 
@@ -6784,6 +6851,8 @@ mod tests {
             text: vec!["やあ".to_string()],
             event_image: None,
             event_image_effects: AmbientEffects::default(),
+            event_image_transition: EventImageTransition::default(),
+            event_image_fade_ms: None,
         };
         let a = PlaybackItem::Line(line.clone());
         let b = PlaybackItem::Line(line);
@@ -6801,12 +6870,16 @@ mod tests {
             text: vec!["やあ".to_string()],
             event_image: None,
             event_image_effects: AmbientEffects::default(),
+            event_image_transition: EventImageTransition::default(),
+            event_image_fade_ms: None,
         });
         let b = PlaybackItem::Line(DisplayLine {
             speaker: Some("カコ".to_string()),
             text: vec!["さようなら".to_string()],
             event_image: None,
             event_image_effects: AmbientEffects::default(),
+            event_image_transition: EventImageTransition::default(),
+            event_image_fade_ms: None,
         });
         assert_ne!(
             content_signature(&a),
@@ -6822,12 +6895,16 @@ mod tests {
             text: vec!["同じ本文".to_string()],
             event_image: Some("a.webp".to_string()),
             event_image_effects: AmbientEffects::default(),
+            event_image_transition: EventImageTransition::default(),
+            event_image_fade_ms: None,
         });
         let b = PlaybackItem::Line(DisplayLine {
             speaker: None,
             text: vec!["同じ本文".to_string()],
             event_image: Some("b.webp".to_string()),
             event_image_effects: AmbientEffects::default(),
+            event_image_transition: EventImageTransition::default(),
+            event_image_fade_ms: None,
         });
         assert_ne!(
             content_signature(&a),
@@ -6845,6 +6922,8 @@ mod tests {
             text: vec!["同じ中身".to_string()],
             event_image: None,
             event_image_effects: AmbientEffects::default(),
+            event_image_transition: EventImageTransition::default(),
+            event_image_fade_ms: None,
         };
         let a = PlaybackItem::Line(line.clone());
         let b = PlaybackItem::Image(line);
@@ -7352,5 +7431,160 @@ mod tests {
             "同一ファイル内のジャンプではpending_se(orphan.wav)も引き継がれ、jump先の\
              最初のitemで再生されるはず(#540)"
         );
+    }
+
+    // ============================================================================
+    // #583 イベント絵ピクセレート遷移の `transition`/`fade_ms` リセット・伝播テスト
+    // ============================================================================
+
+    #[test]
+    fn scene_transition_clears_event_image_transition_and_fade_ms_per_spec() {
+        // 観点E-1: `scene_transition_clears_event_image_per_spec`(#524)のtransition/fade_ms版。
+        // [場面転換]はGUI版のeventImageLayer.remove()相当でpathと同様、遷移モード・フェード
+        // 時間も既定値へリセットするはず(#583)。
+        let doc = doc_single_scene(vec![
+            event_image_pixelate("bg_a.webp", Some(900)),
+            dialog(Some("B"), vec!["場面転換前の台詞"]),
+            Event::SceneTransition,
+            dialog(Some("C"), vec!["場面転換後の台詞"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        let before = pb.current_line().expect("line");
+        assert_eq!(
+            before.event_image_transition,
+            EventImageTransition::Pixelate
+        );
+        assert_eq!(before.event_image_fade_ms, Some(900));
+
+        assert!(pb.advance(), "場面転換後の台詞へ進めるはず");
+        let after = pb.current_line().expect("line");
+        assert_eq!(after.speaker.as_deref(), Some("C"));
+        assert_eq!(
+            after.event_image_transition,
+            EventImageTransition::Fade,
+            "[場面転換]は遷移モードも既定Fadeへリセットするはず(#583)"
+        );
+        assert_eq!(
+            after.event_image_fade_ms, None,
+            "[場面転換]はfade_msもNoneへリセットするはず(#583)"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_resets_event_image_transition_and_fade_ms_across_file_boundary() {
+        // 観点E-2: `select_current_choice_resets_running_state_when_jumping_across_file_boundary`
+        // (#528)のtransition/fade_ms版。route1(file 0)でPixelate遷移中のままファイル境界を
+        // 越えてhub(file 1)へジャンプすると、transition/fade_msも既定値へリセットされるはず
+        // (#583)。
+        let route1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![
+                    event_image_pixelate("route1/scene.webp", Some(1200)),
+                    dialog(Some("A"), vec!["ルート1: 最後の台詞"]),
+                    choice(vec![("hubへ", "hub")]),
+                ],
+            )],
+        );
+        let hub = chapter(
+            2,
+            vec![scene("hub", vec![dialog(Some("施設"), vec!["定期報告"])])],
+        );
+        let doc = document_with_chapters(vec![route1, hub]);
+        let chapter_file_ids = vec![0, 1];
+
+        let mut pb = Playback::from_merged_document(&doc, &chapter_file_ids);
+        // ジャンプ前: route1の台詞はPixelate遷移状態を引き継いでいる（対比のため確認）。
+        assert_eq!(
+            pb.current_line().unwrap().event_image_transition,
+            EventImageTransition::Pixelate,
+            "前提: ジャンプ前はPixelate遷移が残留しているはず"
+        );
+        assert_eq!(pb.current_line().unwrap().event_image_fade_ms, Some(1200));
+
+        assert!(pb.advance(), "台詞からChoiceへ進めるはず");
+        assert!(
+            pb.select_current_choice(),
+            "別ファイルのhubへのjumpは成功するはず"
+        );
+        let line = pb.current_line().expect("jump先の台詞");
+        assert_eq!(
+            line.event_image_transition,
+            EventImageTransition::Fade,
+            "ファイル境界を越えたのでtransitionは既定Fadeへリセットされるはず(#583)"
+        );
+        assert_eq!(
+            line.event_image_fade_ms, None,
+            "ファイル境界を越えたのでfade_msもNoneへリセットされるはず(#583)"
+        );
+    }
+
+    #[test]
+    fn event_image_exit_clears_transition_and_fade_ms_for_subsequent_lines() {
+        // 観点E-3: `event_image_exit_clears_path_for_subsequent_lines` のtransition/fade_ms版。
+        // [イベント絵終了]はpathと同様、遷移モード・フェード時間も既定値へリセットするはず
+        // (#583)。
+        let doc = doc_single_scene(vec![
+            event_image_pixelate("props/candle.webp", Some(600)),
+            dialog(Some("A"), vec!["表示中"]),
+            event_image_exit(),
+            dialog(Some("A"), vec!["退場後"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        let before = pb.current_line().expect("line");
+        assert_eq!(
+            before.event_image_transition,
+            EventImageTransition::Pixelate
+        );
+        assert_eq!(before.event_image_fade_ms, Some(600));
+
+        pb.advance();
+        let after = pb.current_line().expect("line");
+        assert_eq!(after.event_image, None);
+        assert_eq!(
+            after.event_image_transition,
+            EventImageTransition::Fade,
+            "[イベント絵終了]は遷移モードも既定Fadeへリセットするはず(#583)"
+        );
+        assert_eq!(
+            after.event_image_fade_ms, None,
+            "[イベント絵終了]はfade_msもNoneへリセットするはず(#583)"
+        );
+    }
+
+    #[test]
+    fn event_image_wait_chain_propagates_transition_and_fade_ms_to_image_item() {
+        // 観点E-4: `[イベント絵:][待機:N]`自動連続表示チェーン(#497)で生成されるImage item
+        // のDisplayLineにも、遷移モード(transition)とfade_ms(#583)が正しく焼き付けられる
+        // ことを確認する。
+        let doc = doc_single_scene(vec![event_image_pixelate("a.webp", Some(750)), wait(200)]);
+        let pb = Playback::from_document(&doc);
+        // ドキュメント先頭が既に画像コマitem（前に会話行が無い）なので、advance無しで
+        // 最初から画像コマitemに位置している
+        // （event_image_wait_blackout_pattern_consumes_exactly_three_eventsと同じ前提）。
+        let line = pb.current_line().expect("画像コマitemのDisplayLine");
+        assert_eq!(line.event_image.as_deref(), Some("a.webp"));
+        assert_eq!(line.event_image_transition, EventImageTransition::Pixelate);
+        assert_eq!(line.event_image_fade_ms, Some(750));
+    }
+
+    #[test]
+    fn event_image_pixelate_fade_ms_wired_into_display_line_for_normal_dialog_line() {
+        // 観点E-5: main.rs::event_loopのmatch分岐（transitionに応じてduration_msを選ぶ）の
+        // 直接ユニットテスト化は難しいため、その入力元であるplayback.rs側で
+        // DisplayLine.event_image_transition/event_image_fade_msが正しい値を持つことを、
+        // 自動連続表示チェーンではない通常のEventImage+会話行経路で確認する
+        // （E-4は[待機:]チェーン版、こちらは素の会話行版）。
+        let doc = doc_single_scene(vec![
+            event_image_pixelate("story/x.webp", Some(800)),
+            dialog(Some("A"), vec!["通常の会話行"]),
+        ]);
+        let pb = Playback::from_document(&doc);
+        let line = pb.current_line().expect("line");
+        assert_eq!(line.event_image.as_deref(), Some("story/x.webp"));
+        assert_eq!(line.event_image_transition, EventImageTransition::Pixelate);
+        assert_eq!(line.event_image_fade_ms, Some(800));
     }
 }

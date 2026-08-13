@@ -1460,6 +1460,8 @@ mod tests {
             text: vec!["暗転中でも読めるはずの台詞".to_string()],
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         };
         let normal = render_with_blackout(&config, Some(&line), false, CANVAS_W, CANVAS_H);
         let blacked = render_with_blackout(&config, Some(&line), true, CANVAS_W, CANVAS_H);
@@ -1936,6 +1938,8 @@ mod tests {
             text: vec!["hi".to_string()],
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         };
         let now = Instant::now();
         // #494以降、W=1x H=3 は fits_required_size を満たさず draw_too_small_message 側の
@@ -1975,6 +1979,8 @@ mod tests {
             text: vec!["hello".to_string()],
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Animating(reveal::build_reveal(&config, &line, now));
@@ -2016,6 +2022,8 @@ mod tests {
             text: vec!["hello".to_string()],
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         };
         let now = Instant::now();
 
@@ -2121,6 +2129,8 @@ mod tests {
             text: vec![],
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
@@ -2168,6 +2178,8 @@ mod tests {
             text: vec!["first line".to_string(), "second line".to_string()],
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
@@ -2236,6 +2248,8 @@ mod tests {
             text: vec!["hi".to_string()],
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         };
         let now = Instant::now();
         let reveal = reveal::RevealState::Done(reveal::skip_lines(&config, &line));
@@ -2656,6 +2670,8 @@ mod tests {
             text: text.into_iter().map(|s| s.to_string()).collect(),
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         }
     }
 

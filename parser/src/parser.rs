@@ -1393,8 +1393,8 @@ fn parse_video_directive(content: &str) -> Event {
 }
 
 /// `[イベント絵: path]` / `[イベント絵: path, 背面=keep, フェード=1400]` /
-/// `[イベント絵: path, ゆらぎ=true, ビネット=true, グロー=true, ろうそく=true]` (#582) の
-/// 本体を分解する (#351)。
+/// `[イベント絵: path, ゆらぎ=true, ビネット=true, グロー=true, ろうそく=true]` (#582) /
+/// `[イベント絵: path, 遷移=pixelate, フェード=800]` (#583) の本体を分解する (#351)。
 /// `parse_background_directive` / `parse_video_directive` と同じく最初の `,` で path / kv を分離する。
 /// キーは日本語 `背面` / 英語 alias `back`（値は英語トークン固定 `hide`/`keep`、大小無視、未知値は
 /// 既定 `Hide` に倒す）。フェードは BGM/SE と同じく `parse_fade_kv` を再利用する（単一のフェード値
@@ -1405,6 +1405,11 @@ fn parse_video_directive(content: &str) -> Event {
 /// （`parse_bool_kv` で `true`/`false` を受理、`ループ=true`/`ミュート=false` と同じ書式）。
 /// 個別に指定可能な要件（Issue #582）を満たすため単一の `演出=on` 集約キーにはしていない。
 /// 未知のキーは silent skip する（後方互換重視）。
+///
+/// #583 遷移モード（`遷移`/`transition`、値は英語トークン固定 `fade`/`pixelate`、大小無視、
+/// 未知値は既定 `Fade` に倒す）は `背面` と全く同じ流儀の単一キー kv。所要時間は新規パラメータを
+/// 追加せず既存の `フェード`/`fade` を「遷移全体の所要時間」として再利用する（`fade_ms` フィールド
+/// をそのまま使う）。
 fn parse_event_image_directive(content: &str) -> Event {
     let (path_part, kv_part) = match content.split_once(',') {
         Some((p, rest)) => (p, Some(rest)),
@@ -1414,6 +1419,7 @@ fn parse_event_image_directive(content: &str) -> Event {
 
     let mut back = EventImageBack::Hide;
     let mut fade_ms: Option<u32> = None;
+    let mut transition = EventImageTransition::Fade;
     let mut effects = AmbientEffects::default();
 
     if let Some(kv) = kv_part {
@@ -1432,6 +1438,13 @@ fn parse_event_image_directive(content: &str) -> Event {
                     back = match v.trim().to_ascii_lowercase().as_str() {
                         "keep" => EventImageBack::Keep,
                         _ => EventImageBack::Hide,
+                    };
+                    continue;
+                }
+                if matches!(key, "遷移" | "transition") {
+                    transition = match v.trim().to_ascii_lowercase().as_str() {
+                        "pixelate" => EventImageTransition::Pixelate,
+                        _ => EventImageTransition::Fade,
                     };
                     continue;
                 }
@@ -1466,6 +1479,7 @@ fn parse_event_image_directive(content: &str) -> Event {
         path,
         back,
         fade_ms,
+        transition,
         effects,
     }
 }

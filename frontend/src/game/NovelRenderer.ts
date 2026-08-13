@@ -3436,6 +3436,9 @@ export class NovelRenderer {
         this.eventImageLayer.show(ei.path, {
           back: ei.back,
           fadeMs: ei.fade_ms ?? this.eventImageFadeMs,
+          // 遷移モード (#583)。parser.ts の normalizeEvents が undefined を 'Fade' に正規化済みだが、
+          // 念のため ?? で二重に防御する。
+          transition: ei.transition ?? 'Fade',
           // アンビエント演出 (#582)。parser.ts の normalizeEvents が undefined を全 false に
           // 正規化済みだが、念のため ?? で二重に防御する。
           effects: ei.effects ?? undefined,

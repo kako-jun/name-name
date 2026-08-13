@@ -7,6 +7,7 @@ mod image_fade;
 mod image_render;
 mod input;
 mod multi_doc;
+mod pixelate_transition;
 mod playback;
 mod reveal;
 mod save;
@@ -347,6 +348,31 @@ where
             | Action::ToggleSettings
             | Action::None => {}
         }
+    }
+}
+
+/// イベント絵の遷移（Fade/Pixelate、#583）で使うクロスフェード所要時間 (ms) を決定する
+/// (dev-doctrine 規約3: `event_loop` 本体に計算ロジックを直書きせず純粋関数に切り出す)。
+///
+/// 通常の Fade 遷移は常に `crossfade_ms`（グローバル設定）を使う。`Event::EventImage`/
+/// `EventImageExit` が持つイベント個別の `フェード=N`（`event_image_fade_ms`）指定は
+/// 意図的に読み捨てている（MVPスコープの簡略化、#481、非回帰）。ピクセレート遷移
+/// (#583) だけは Issue の要件どおり per-event `フェード=N` を「遷移全体の所要時間」
+/// として尊重し、未指定なら同じ `crossfade_ms` を既定値として使う。
+///
+/// この Fade/Pixelate 間の非対称は意図的な仕様であり、バグではない
+/// (`docs/architecture.md` 「イベント絵ピクセレート遷移 (#583)」/
+/// `docs/spec/markdown-v0.1.md` の `フェード` 節を参照)。
+fn resolve_event_image_transition_duration_ms(
+    transition: name_name_parser::models::EventImageTransition,
+    target_fade_ms: Option<u32>,
+    crossfade_ms: u64,
+) -> u64 {
+    match transition {
+        name_name_parser::models::EventImageTransition::Pixelate => {
+            target_fade_ms.map(u64::from).unwrap_or(crossfade_ms)
+        }
+        name_name_parser::models::EventImageTransition::Fade => crossfade_ms,
     }
 }
 
@@ -1018,15 +1044,26 @@ where
                         .current_line()
                         .map(|line| line.event_image_effects)
                         .unwrap_or_default();
+                    let target_transition = playback
+                        .current_line()
+                        .map(|line| line.event_image_transition)
+                        .unwrap_or_default();
+                    let target_fade_ms = playback
+                        .current_line()
+                        .and_then(|line| line.event_image_fade_ms);
                     if image_fade.current_target() != target.as_deref() {
-                        // `config.event_image.crossfade_ms`（グローバル値）を常に使う。
-                        // `Event::EventImage`/`EventImageExit` が持つイベント個別の `fade_ms`
-                        // 上書きは `playback.rs` の `Playback::from_document` で意図的に
-                        // 読み捨てている（MVPスコープの簡略化、#481）。
+                        // Fade/Pixelate 間の crossfade_ms vs per-event `フェード=N` の非対称は
+                        // `resolve_event_image_transition_duration_ms` のdoc comment参照。
+                        let duration_ms = resolve_event_image_transition_duration_ms(
+                            target_transition,
+                            target_fade_ms,
+                            config.event_image.crossfade_ms,
+                        );
                         image_fade = image_fade.transition_to(
                             target,
                             target_effects,
-                            Duration::from_millis(config.event_image.crossfade_ms),
+                            target_transition,
+                            Duration::from_millis(duration_ms),
                             Instant::now(),
                         );
                     }
@@ -1409,6 +1446,8 @@ mod tests {
             text: vec![text.to_string()],
             event_image: None,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         }
     }
 
@@ -1423,6 +1462,8 @@ mod tests {
             text: vec![text.to_string()],
             event_image,
             event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
         }
     }
 
@@ -1466,6 +1507,45 @@ mod tests {
         now: Instant,
     ) -> reveal::RevealState {
         reveal::RevealState::Animating(reveal::build_reveal(config, dline, now))
+    }
+
+    // resolve_event_image_transition_duration_ms（Fade/Pixelate間のcrossfade_ms vs
+    // per-event `フェード=N` 尊重の非対称、#583 should S-2）の3分岐。
+    // event_loop 内の match をそのまま切り出した純粋関数のため、event_loop 全体の
+    // TestBackend 統合テストを組まずにここで直接ロックできる。
+
+    #[test]
+    fn resolve_event_image_transition_duration_ms_pixelate_with_explicit_fade_ms_uses_it() {
+        // Pixelate + フェード=N明示 → N採用（crossfade_msは無視）。
+        let duration = resolve_event_image_transition_duration_ms(
+            name_name_parser::models::EventImageTransition::Pixelate,
+            Some(900),
+            700,
+        );
+        assert_eq!(duration, 900);
+    }
+
+    #[test]
+    fn resolve_event_image_transition_duration_ms_pixelate_without_fade_ms_falls_back_to_crossfade_ms(
+    ) {
+        // Pixelate + フェード省略 → crossfade_msに委譲。
+        let duration = resolve_event_image_transition_duration_ms(
+            name_name_parser::models::EventImageTransition::Pixelate,
+            None,
+            700,
+        );
+        assert_eq!(duration, 700);
+    }
+
+    #[test]
+    fn resolve_event_image_transition_duration_ms_fade_ignores_explicit_fade_ms() {
+        // Fade + フェード=N明示 → crossfade_ms固定（Nは無視、#481由来の既存の意図的簡略化）。
+        let duration = resolve_event_image_transition_duration_ms(
+            name_name_parser::models::EventImageTransition::Fade,
+            Some(900),
+            700,
+        );
+        assert_eq!(duration, 700);
     }
 
     #[test]

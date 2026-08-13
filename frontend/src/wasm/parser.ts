@@ -194,12 +194,15 @@ function normalizeEvents(events: Event[]): Event[] {
       // 正規化として undefined を既定値 'Hide' に倒す。fade_ms は Option<u32> なので null に倒す。
       // effects (#582) も同じく #[serde(default)] の struct のため型上 optional だが常に値が
       // 入る想定。undefined を全 false（AmbientEffects の Rust 側既定）に倒す。
+      // transition (#583) も同じく #[serde(default)] の enum のため型上 optional だが常に値が
+      // 入る想定。undefined を既定値 'Fade' に倒す。
       const ei = event.EventImage
       return {
         EventImage: {
           path: ei.path,
           back: ei.back ?? 'Hide',
           fade_ms: ei.fade_ms ?? null,
+          transition: ei.transition ?? 'Fade',
           effects: ei.effects ?? { wobble: false, vignette: false, glow: false, candle: false },
         },
       }

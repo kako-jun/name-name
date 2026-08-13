@@ -144,6 +144,7 @@ describe('parseMarkdown + normalizeDocument: EventImage effects が normalize �
         path: 'story/x.webp',
         back: 'Hide',
         fade_ms: null,
+        transition: 'Fade',
         effects: { wobble: true, vignette: true, glow: true, candle: true },
       },
     })
@@ -168,9 +169,88 @@ describe('parseMarkdown + normalizeDocument: EventImage effects が normalize �
         path: 'story/x.webp',
         back: 'Hide',
         fade_ms: null,
+        transition: 'Fade',
         effects: { wobble: false, vignette: false, glow: false, candle: false },
       },
     })
+  })
+})
+
+describe('parseMarkdown + normalizeDocument: EventImage transition が normalize を生き残る (#583)', () => {
+  // #582 effects と同じ事故パターン（#310/#378）の回帰防止線。normalizeEvents の EventImage
+  // 分岐に transition の列挙を書き忘れると、WASM が parse した値（Pixelate）が黙って落ちる
+  // （もしくは既定 Fade に化ける）。実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）を通し、
+  // 遷移=pixelate が normalize を生き残ることを縛る（H-1）。
+
+  it('[イベント絵: path, 遷移=pixelate, フェード=800] の transition が doc に "Pixelate" として反映される (#378型事故防止)', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント絵: story/x.webp, 遷移=pixelate, フェード=800]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      EventImage: {
+        path: 'story/x.webp',
+        back: 'Hide',
+        fade_ms: 800,
+        transition: 'Pixelate',
+        effects: { wobble: false, vignette: false, glow: false, candle: false },
+      },
+    })
+  })
+
+  it('遷移省略時、transition は既定 "Fade" に正規化される', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント絵: story/x.webp]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      EventImage: {
+        path: 'story/x.webp',
+        back: 'Hide',
+        fade_ms: null,
+        transition: 'Fade',
+        effects: { wobble: false, vignette: false, glow: false, candle: false },
+      },
+    })
+  })
+
+  it('parseMarkdown → emitMarkdown の round-trip で 遷移=pixelate が保持される (H-2)', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント絵: story/x.webp, 遷移=pixelate, フェード=800]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[イベント絵: story/x.webp, 遷移=pixelate, フェード=800]')
+
+    const doc2 = await parseMarkdown(emitted)
+    expect(doc2.chapters[0].scenes[0].events[0]).toEqual(doc.chapters[0].scenes[0].events[0])
   })
 })
 
