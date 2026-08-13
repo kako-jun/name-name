@@ -3479,6 +3479,7 @@ mod tests {
                         &config,
                         Some(&line),
                         None,
+                        &[],
                         1,
                         1,
                         false,
