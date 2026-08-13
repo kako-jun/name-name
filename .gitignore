@@ -16,6 +16,11 @@ lerna-debug.log*
 # Rust
 target/
 
+# kako-jun/name-name#579: TUI版の自動クイックセーブファイル。ローカルでのテスト実行中に
+# 生成され、このリポジトリ内で `--config`/`tui-config.toml` と同じディレクトリに書かれる
+# ことがあるため、ここで無条件に無視する（`docs/guide/controls.md` 参照）。
+.name-name-tui-quicksave.json
+
 # Backend has its own .gitignore
 __pycache__/
 *.py[cod]

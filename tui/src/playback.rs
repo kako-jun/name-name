@@ -2,7 +2,9 @@
 //!
 //! 会話文（Dialog / Narration）の逐次表示に加え、選択肢分岐（`Event::Choice`）にも対応する
 //! （#482）。フラグ管理・条件分岐（`Event::Flag`/`Event::Condition`）にも対応する（#509、
-//! 詳細は後述）。セーブ/ロードは引き続き対象外（#501、別Issue）。背景・立ち絵演出などその他の
+//! 詳細は後述）。複数スロットのメニュー式セーブ/ロードは対象外（#501時点の判断を継続）だが、
+//! シーン切り替えごとの自動クイックセーブ・起動時の自動クイックロードは対応する
+//! （#579、`main.rs::save` および [`Playback::jump_to_scene_id`] 参照）。背景・立ち絵演出などその他の
 //! イベントは、今回も画面表示を変えないため読み飛ばす（左側は常にプレースホルダ表示のみ）。
 //! `Event::EventImage`/`EventImageExit` だけは例外で、各 `DisplayLine` に `event_image`
 //! （その時点で表示されているべきイベント絵の相対パス）として反映する（#481）。左側は
@@ -297,9 +299,8 @@ fn content_signature(item: &PlaybackItem) -> u64 {
 /// 時点で `events` を `build_scene_items` にそのまま渡し、Flag/Condition をその場の
 /// フラグ状態でリアルタイムに評価させる（`Playback` 構造体の doc コメント参照）。
 struct SceneRef {
-    /// `scene_index_by_id` の構築時にキーとして使うだけで、構築後は読み出されない
-    /// （デバッグ時の可読性のために保持している）。
-    #[allow(dead_code)]
+    /// `scene_index_by_id` の構築時にキーとして使うほか、[`Playback::current_scene_id`]
+    /// が自動クイックセーブ（#579）向けに現在シーンのシーンIDを読み出すのにも使う。
     scene_id: String,
     file_id: usize,
     events: Vec<Event>,
@@ -471,6 +472,28 @@ struct SceneScanState {
     /// push されるタイミングで `item_se` へ焼き付けられ、その場で空に戻る
     /// （`Playback` 構造体の `item_se` doc comment参照）。
     pending_se: Vec<String>,
+}
+
+/// 自動クイックロード専用（#579 セルフレビュー must対応）。セーブ時点で保持していた
+/// 「シーンを跨いで引き継ぐ宣言的 state」のうち、着地シーン自身では再宣言されず直前の
+/// シーンから継承されているだけの3値（BGM/イベント絵/暗転）をロード時に明示指定する
+/// ための入れ物。GUI版 `SaveSlotData` の `currentBgmPath`/`eventImage`/`isBlackout` に
+/// 相当する。
+///
+/// `current_speaker`/`current_text`/`pending_se` は対象外——`pending_se` は次の item
+/// push時に必ず空へ戻るため、プレイヤーが実際に立ち止まっている「現在位置」では常に空
+/// （保存すべき値が無い）。`current_speaker`/`current_text` は「シーン先頭が会話行を
+/// 経ずに直接 `[イベント絵:][待機:Nms]` で始まる」場合の画像コマ合成専用フィールド
+/// （#540）で、GUI版 `SaveSlotData` にも対応物が無い局所的な補助状態のため、この自動
+/// クイックセーブのスコープには含めない。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SceneContinuation {
+    /// 保存時点で再生されていた BGM のパス（[`Playback::current_bgm`] 参照）。
+    pub bgm: Option<String>,
+    /// 保存時点で表示されていたイベント絵のパス（[`Playback::current_event_image`] 参照）。
+    pub event_image: Option<String>,
+    /// 保存時点で暗転していたか（[`Playback::is_blackout`] 参照）。
+    pub blackout: bool,
 }
 
 /// 1シーン分の生イベント列を処理し、items系のVecへ積む。`Playback::build` から各シーンごとに
@@ -1007,6 +1030,22 @@ impl Playback {
         self.item_blackout.get(self.index).copied().unwrap_or(false)
     }
 
+    /// 現在位置で表示されているべきイベント絵のパス（`Event::EventImage`、#481/#579）。
+    /// `current_bgm`/`is_blackout` と同じ「現在位置だけを見る宣言的な問い合わせ」だが、
+    /// この2つと違って `item_bgm`/`item_blackout` のような Choice item まで含めた専用の
+    /// 並行 Vec は持たない——`event_image` は元々 [`DisplayLine`]（`Line`/`Image` item）に
+    /// 焼き付ける形で表現されているため（`current_line` 参照）。現在位置が Line/Image
+    /// item ならその値をそのまま返す。Choice item・末尾越え・`items` が空の場合は
+    /// `current_line` が `None` を返すため、代わりに `scan_state.current_event_image`
+    /// （直近の宣言値）にフォールバックする——Choice 自体はこの状態に影響しない
+    /// （`Playback::from_document` doc comment参照）ため、この2つの値は実用上一致する。
+    pub fn current_event_image(&self) -> Option<&str> {
+        if let Some(line) = self.current_line() {
+            return line.event_image.as_deref();
+        }
+        self.scan_state.current_event_image.as_deref()
+    }
+
     /// 現在位置が選択肢なら `(選択肢一覧, カーソル位置, グリッド列数)` を返す。会話行の途中や
     /// 末尾越えでは `None`。3番目の要素は `Event::Choice.columns`（#508）をそのまま渡す —
     /// `None`/`Some(0)`/`Some(1)` はいずれも従来どおりの縦一列表示を意味し、その正規化は
@@ -1053,6 +1092,48 @@ impl Playback {
     /// 再トリガーしない、という意図した挙動にもなる。
     pub(crate) fn item_index(&self) -> usize {
         self.index
+    }
+
+    /// 現在のシーンの `scene_order` 内インデックス。`advance()`/`select_current_choice()`
+    /// (`jump_to_scene_idx()`) が新しいシーンの item を構築するたびに更新される
+    /// （構造体の `current_scene_idx` フィールド doc comment参照）ため、この値の前後比較で
+    /// 「シーンが実際に切り替わったか」を検出できる。`main.rs::event_loop` が自動
+    /// クイックセーブ（#579）のトリガー判定に使う — `read_positions` が使っている
+    /// `stable_item_key` の「呼び出し前後で比較する」パターンと同じ手法。
+    pub(crate) fn current_scene_idx(&self) -> usize {
+        self.current_scene_idx
+    }
+
+    /// 現在のシーンのシーンID。自動クイックセーブ（#579、`main.rs::save`）がシリアライズ
+    /// 対象として読み、[`Playback::jump_to_scene_id`] にそのまま渡せば同じシーンへ復帰できる。
+    pub(crate) fn current_scene_id(&self) -> &str {
+        &self.scene_order[self.current_scene_idx].scene_id
+    }
+
+    /// 現在のフラグ状態への参照。自動クイックセーブ（#579、`main.rs::save`）がシリアライズ
+    /// 対象として読む。
+    pub(crate) fn flags(&self) -> &GameFlags {
+        &self.flags
+    }
+
+    /// フラグ状態を丸ごと差し替える。自動クイックロード（#579、`main.rs::save::restore_playback`）
+    /// が、構築直後の `Playback` へ保存済みフラグを上書きするために使う。呼び出し後に
+    /// [`Playback::jump_to_scene_id`] で保存済みシーンへジャンプするまでは、既に構築済みの
+    /// 先頭シーンの item 群（構築時点のデフォルトフラグで作られたもの）は更新されないまま
+    /// 残る — `restore_playback` はこの2つを必ずセットで呼ぶ。
+    pub(crate) fn set_flags(&mut self, flags: GameFlags) {
+        self.flags = flags;
+    }
+
+    /// `scene_id` が現在の原稿に実在するか。[`Playback::jump_to_scene_id`] を実際に
+    /// 呼ばずに判定だけしたい場合に使う。自動クイックロード（#579、
+    /// `main.rs::save::restore_playback`）が、[`Playback::set_flags`] でフラグを
+    /// 上書きする**前**にこれで存在確認し、存在しないシーンID（原稿が変わって保存済み
+    /// シーンが消えた等）なら `set_flags` 自体を呼ばずに復元全体を諦める —
+    /// 「フラグだけ復元されて位置は復元されない」中途半端な状態を避けるための
+    /// ガード（`set_flags` の doc comment参照）。
+    pub(crate) fn has_scene_id(&self, scene_id: &str) -> bool {
+        self.scene_index_by_id.contains_key(scene_id)
     }
 
     /// `item_index()` が指しうる生インデックス `item_index` を、シーンを跨いで安定な
@@ -1283,9 +1364,70 @@ impl Playback {
         let Some(option) = options.get(self.choice_cursor) else {
             return false;
         };
-        let Some(&target_scene_idx) = self.scene_index_by_id.get(&option.jump) else {
+        // `option`（`self.items` を借用中）を握ったまま `self.jump_to_scene_id(&mut self...)`
+        // を呼ぶと可変借用と衝突するため、先に `jump` 先IDだけ複製して借用を切る。
+        let jump = option.jump.clone();
+        self.jump_to_scene_id(&jump)
+    }
+
+    /// `scene_id` へ明示的にジャンプする。[`Playback::select_current_choice`] のジャンプ
+    /// 本体（ファイル境界越えリセット・中継シーン自動継続・0件シーンのフォールスルーを
+    /// 含む）を、選択肢の確定操作から切り離して再利用可能にしたもの（#579）。自動
+    /// クイックロード（起動時、構築直後に保存済みシーンへ復元する。`main.rs::save`
+    /// 参照）が、選択肢を経由せず直接このジャンプ本体を呼ぶために追加した。
+    ///
+    /// `scene_id` が `scene_index_by_id` に見つからない場合は位置を変えずに `false` を
+    /// 返す（`select_current_choice` と同じ fail-soft 方針。原稿の記述ミスに加えて、
+    /// 自動クイックロードでは「原稿が変わってセーブ済みシーンIDが消えた」ケースもここに
+    /// 含まれる）。
+    pub fn jump_to_scene_id(&mut self, scene_id: &str) -> bool {
+        let Some(&target_scene_idx) = self.scene_index_by_id.get(scene_id) else {
             return false;
         };
+        self.jump_to_scene_idx(target_scene_idx, None)
+    }
+
+    /// [`Playback::jump_to_scene_id`] の、着地シーンより手前で宣言され着地シーン自身では
+    /// 再宣言されない継続状態（BGM/イベント絵/暗転）を明示指定できる版（#579 セルフレビュー
+    /// must対応）。自動クイックロード専用——`restore_playback`（`save.rs`）が、保存時点の
+    /// `SceneContinuation` を渡してこのメソッドを呼ぶ。
+    ///
+    /// `jump_to_scene_id` との違いは、渡した `continuation` を「ファイル境界をまたぐ場合の
+    /// 自動リセット」（#528、下の `jump_to_scene_idx` 冒頭参照）より**後**に適用する点——
+    /// 通常のジャンプ（選択肢確定）は「無関係な直前ファイルからの意図しないリーク防止」が
+    /// 目的でリセットを優先するが、自動クイックロードは逆に「セーブ時点の状態を寸分違わず
+    /// 再現する」ことが目的なので、ファイル境界の有無に関わらず必ずこの値で確定させる
+    /// 必要がある（保存されたシーンがジャンプ元と別ファイルでも、ロードは常に成功する
+    /// べき——`Playback::from_document` 直後の初期ファイルと保存先ファイルが異なる
+    /// マルチルート原稿で特に重要）。
+    ///
+    /// `continuation` を渡すタイミングも重要——`scan_state` へ書き戻すだけでは足りない。
+    /// `current_bgm`/`is_blackout`/`current_event_image` はいずれも「item 生成時点で
+    /// 焼き付けられた値」（`item_bgm`/`item_blackout`、および `current_event_image` の
+    /// `current_line` 経由の参照）を読むため、`build_scene_items` を呼ぶ**前**に
+    /// `scan_state` へ反映しておかないと、着地シーンの item 群がジャンプ前の（本来
+    /// 存在しないはずの）初期値のまま焼き付いてしまい、ロード直後に `current_bgm()` 等を
+    /// 呼んでも復元されない（セルフレビュー指摘の再現方法そのもの）。
+    pub fn jump_to_scene_id_with_continuation(
+        &mut self,
+        scene_id: &str,
+        continuation: SceneContinuation,
+    ) -> bool {
+        let Some(&target_scene_idx) = self.scene_index_by_id.get(scene_id) else {
+            return false;
+        };
+        self.jump_to_scene_idx(target_scene_idx, Some(continuation))
+    }
+
+    /// [`Playback::jump_to_scene_id`] の本体（解決済みの `scene_order` インデックス版、
+    /// #579 で `select_current_choice` から切り出した）。`continuation` が `Some` の場合、
+    /// 下のファイル境界リセットより後にその値で `scan_state` の該当3フィールドを上書き
+    /// する（[`Playback::jump_to_scene_id_with_continuation`] doc comment参照、#579）。
+    fn jump_to_scene_idx(
+        &mut self,
+        target_scene_idx: usize,
+        continuation: Option<SceneContinuation>,
+    ) -> bool {
         // ジャンプ元とジャンプ先が異なるファイル由来の場合、シーンを跨いで引き継ぐ
         // ランニング状態（BGM/イベント絵/暗転/pending SE/話者・本文）をリセットする
         // （#528、#540で`current_speaker`/`current_text`を追加）。
@@ -1314,6 +1456,14 @@ impl Playback {
             self.scan_state.pending_se.clear();
             self.scan_state.current_speaker = None;
             self.scan_state.current_text = Vec::new();
+        }
+        // 自動クイックロード（#579）: 上のファイル境界リセットより後に適用することで、
+        // ファイル境界の有無に関わらず必ずこの値で確定させる（`jump_to_scene_id_with_
+        // continuation` doc comment参照）。
+        if let Some(continuation) = continuation {
+            self.scan_state.current_bgm = continuation.bgm;
+            self.scan_state.current_event_image = continuation.event_image;
+            self.scan_state.current_blackout = continuation.blackout;
         }
         // 中継シーン（本文・イベント絵を一切含まず、確認用の選択肢が1つだけの
         // シーン）を自動で通過し続ける際の上限回数（#574）。原稿ミスで中継シーン同士が
@@ -2129,6 +2279,173 @@ mod tests {
         assert!(
             pb.current_choice().is_some(),
             "失敗時は選択肢表示のまま変わらないはず"
+        );
+    }
+
+    /// #579 で切り出した [`Playback::jump_to_scene_id`] の最小動作確認（網羅的な検証は
+    /// `select_current_choice_*` 系の既存テスト群がジャンプ本体を通して既にカバーして
+    /// いる — この関数はその本体をそのまま呼ぶだけの薄いラッパー）。
+    #[test]
+    fn jump_to_scene_id_moves_to_target_scene_without_going_through_a_choice() {
+        let doc = two_scene_doc_with_choice();
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_scene_id(), "1-1");
+
+        assert!(
+            pb.jump_to_scene_id("1-2"),
+            "選択肢を経由せず直接シーンIDでジャンプできるはず"
+        );
+
+        assert_eq!(pb.current_scene_id(), "1-2");
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").speaker.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn jump_to_scene_id_with_unknown_id_is_noop_and_returns_false() {
+        let doc = two_scene_doc_with_choice();
+        let mut pb = Playback::from_document(&doc);
+        let scene_before = pb.current_scene_id().to_string();
+
+        assert!(!pb.jump_to_scene_id("does-not-exist"));
+
+        assert_eq!(pb.current_scene_id(), scene_before, "位置は変わらないはず");
+    }
+
+    /// 3シーン構成: "1-1"（Choiceのみ）→ "1-2"（BGM/イベント絵/暗転を宣言）→
+    /// "1-3"（いずれも再宣言せず、"1-2"からの継承のみ）。#579 セルフレビュー must対応の
+    /// 再現原稿——`save.rs::tests::three_scene_source_with_continuation_state`（markdown
+    /// 版）の、`Event` を直接組み立てる `playback.rs` 流の対応物。
+    fn three_scene_doc_with_continuation_state() -> Document {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene("1-1", vec![choice(vec![("進む", "1-2")])]),
+                scene(
+                    "1-2",
+                    vec![
+                        bgm_play("chapter2.ogg"),
+                        event_image("mid.webp"),
+                        blackout_on(),
+                        dialog(Some("B"), vec!["中間のセリフ"]),
+                        choice(vec![("進む", "1-3")]),
+                    ],
+                ),
+                scene("1-3", vec![dialog(Some("C"), vec!["宣言なしセリフ"])]),
+            ],
+        );
+        document_with_chapters(vec![ch1])
+    }
+
+    /// #579 セルフレビュー must対応の再現テスト（レビュアーが検証した再現方法、
+    /// モジュール冒頭ドキュメント参照）: 生きたまま "1-1"→"1-2"→"1-3" と進んだ
+    /// `Playback` では継承が効いているのに対し、新規 `Playback` を "1-3" へ
+    /// `jump_to_scene_id` で直接ジャンプ（自動クイックロードの復元をシミュレート）すると
+    /// BGM/イベント絵/暗転がいずれもサイレントに失われることを固定する。
+    #[test]
+    fn jump_to_scene_id_directly_to_a_scene_that_only_inherits_continuation_state_loses_it() {
+        let doc = three_scene_doc_with_continuation_state();
+
+        let mut played = Playback::from_document(&doc);
+        assert!(played.jump_to_scene_id("1-2"));
+        assert!(played.jump_to_scene_id("1-3"));
+        assert_eq!(
+            played.current_bgm(),
+            Some("chapter2.ogg"),
+            "実際に1-2を経由して辿り着いた場合は継承されているはず"
+        );
+        assert_eq!(played.current_event_image(), Some("mid.webp"));
+        assert!(played.is_blackout());
+
+        let mut jumped = Playback::from_document(&doc);
+        assert!(jumped.jump_to_scene_id("1-3"));
+        assert_eq!(
+            jumped.current_bgm(),
+            None,
+            "1-3を経由せず直接ジャンプすると1-2で設定されたBGMが失われる（修正対象の回帰）"
+        );
+        assert_eq!(
+            jumped.current_event_image(),
+            None,
+            "同様にイベント絵も失われる"
+        );
+        assert!(!jumped.is_blackout(), "同様に暗転状態も失われる");
+    }
+
+    /// [`Playback::jump_to_scene_id_with_continuation`]（#579 セルフレビュー must対応）が、
+    /// 上のテストで固定した回帰を解消することを確認する——`SceneContinuation` で明示的に
+    /// 渡した3値が、着地シーンより手前を再生していなくても正しく反映される。
+    #[test]
+    fn jump_to_scene_id_with_continuation_restores_bgm_event_image_and_blackout() {
+        let doc = three_scene_doc_with_continuation_state();
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(pb.jump_to_scene_id_with_continuation(
+            "1-3",
+            SceneContinuation {
+                bgm: Some("chapter2.ogg".to_string()),
+                event_image: Some("mid.webp".to_string()),
+                blackout: true,
+            },
+        ));
+
+        assert_eq!(pb.current_scene_id(), "1-3");
+        assert_eq!(pb.current_bgm(), Some("chapter2.ogg"));
+        assert_eq!(pb.current_event_image(), Some("mid.webp"));
+        assert!(pb.is_blackout());
+        assert_eq!(
+            pb.current_line().expect("1-3の台詞").speaker.as_deref(),
+            Some("C"),
+            "継続状態の上書きが通常のジャンプ先解決自体には影響しないはず"
+        );
+    }
+
+    /// `jump_to_scene_id_with_continuation` に渡した継続状態は、ファイル境界越えの
+    /// 自動リセット（#528）より優先されるべき（`jump_to_scene_id_with_continuation`
+    /// doc comment参照）。単一ファイルの `Playback` では全item が同じ合成file id
+    /// （`0`）を持つためファイル境界リセットは常に不発だが、`SceneContinuation` 側の
+    /// 上書き自体が正しく効いていること（＝上のテストが偶然通っているのではないこと）を、
+    /// 継続状態を「何も無し」で明示指定した場合との対比で確認する。
+    #[test]
+    fn jump_to_scene_id_with_continuation_of_none_values_clears_continuation_state() {
+        let doc = three_scene_doc_with_continuation_state();
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.jump_to_scene_id("1-2"));
+        assert_eq!(pb.current_bgm(), Some("chapter2.ogg"));
+
+        assert!(pb.jump_to_scene_id_with_continuation(
+            "1-3",
+            SceneContinuation {
+                bgm: None,
+                event_image: None,
+                blackout: false,
+            },
+        ));
+
+        assert_eq!(
+            pb.current_bgm(),
+            None,
+            "明示的にNoneを渡した場合はscan_stateに残っていた値を上書きしてクリアするはず"
+        );
+        assert_eq!(pb.current_event_image(), None);
+        assert!(!pb.is_blackout());
+    }
+
+    #[test]
+    fn set_flags_overwrites_flags_read_back_via_flags_accessor() {
+        let doc = two_scene_doc_with_choice();
+        let mut pb = Playback::from_document(&doc);
+        assert!(!pb.flags().check("restored"), "構築直後は未設定のはず");
+
+        let mut restored = GameFlags::new();
+        restored.set("restored", FlagValue::Bool(true));
+        pb.set_flags(restored);
+
+        assert!(
+            pb.flags().check("restored"),
+            "set_flags で差し替えたフラグが読めるはず"
         );
     }
 

@@ -289,6 +289,14 @@ pub struct Config {
     /// 進むまでの待機時間 (ms)。GUI版 `NovelRenderer.autoWaitMs`/`settings.autoWaitMs` の
     /// 既定値（2500ms）と揃える。
     pub auto_wait_ms: u64,
+    /// 自動クイックセーブ/ロード（#579）の保存先ファイルパス。TOML では設定できない
+    /// （`#[serde(skip)]` — ゲーム作者が調整する値ではなく、`main()` が `--config` の
+    /// 指定有無から `save::quicksave_path` で導出し、実行直前にこのフィールドへ差し込む
+    /// 「実行時だけ決まる値」）。`event_loop` はこれが `None`（`Config::default()` を直接
+    /// 使うテストの大半を含む）なら自動セーブ/ロードを一切行わない —
+    /// 既存の大量のユニットテストが不用意にファイルへ書き込む事故を防ぐガードを兼ねる。
+    #[serde(skip)]
+    pub quicksave_path: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -307,6 +315,7 @@ impl Default for Config {
             volume: VolumeConfig::default(),
             sentence_per_page: false,
             auto_wait_ms: 2500,
+            quicksave_path: None,
         }
     }
 }

@@ -8,6 +8,9 @@ description = "TUI display client for name-name visual novel engine"
 name-name-parser = { path = "../parser" }
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
+# 自動クイックセーブ/ロード（#579）のセーブファイル形式。parser クレートは既に
+# 依存している（parser/Cargo.toml）が、tui クレート単体では未使用だったため追加する。
+serde_json = "1"
 toml = "1"
 anyhow = "1"
 jiwa = "0.3"
