@@ -556,6 +556,25 @@ function NovelPlayer({
       if (docKey) {
         renderer.setDocKey(docKey)
       }
+      // シーン切り替えごとの自動クイックセーブ (#578)。milestone 進行・複数ルートを持つ作品
+      // （Gymnasia 等）では、フラグ（GameState.flags）が手動セーブ（3スロットメニュー / F5）
+      // をしない限りブラウザを閉じる・リロードするたびに消える。既読は readProgress.ts で
+      // 自動永続化済みだが、フラグは別系統で未対応だったための埋め合わせ。
+      // setOnSceneChange は単一コールバックスロット（EditorScreen の VideoExporter 専用に
+      // 現状使われているのみ）。PlayerScreen/NovelPlayer 経路では他に使用者がいないため競合しない。
+      // 保存可否のガード（選択肢/Wait 待機中・終劇後は保存しない）は quickSave() 側にそのまま
+      // 委ねる（安全弁は緩めない）。
+      // docKey が無い場合（EditorScreen のプレビュー等）はこの自動配線自体をスキップする
+      // (#578 セルフレビュー指摘): SaveManager は setDocKey(docKey) が呼ばれないと共有の ''
+      // 名前空間を使い続けるため、docKey 無しで配線すると Editor で別プロジェクトの
+      // プレビューを開くたびに同じ '' 名前空間へ自動書き込みし合う「複数プロジェクトの
+      // セーブ衝突」を Editor 文脈で再現してしまう（本 Issue が Player 側で直そうとした
+      // 問題そのもの）。
+      if (docKey) {
+        renderer.setOnSceneChange(() => {
+          renderer.quickSave()
+        })
+      }
       // 選択肢スタイル (#146)
       renderer.setChoiceStyle(choiceStyle ?? null)
       // per-game フォント (#147)
@@ -651,7 +670,21 @@ function NovelPlayer({
         // PlayerScreen 側の責務（呼び出し時点で jumpSceneIndex に反映済みの前提）。ここでは
         // 既存の startFrom(#220) をそのまま呼ぶだけで、renderer 側に新規ロジックは持ち込まない。
         // 不正/未解決 sceneId は startFrom 内で no-op（現行どおりエントリ再生にフォールバック）。
+        // #578 テスト設計時に指摘・容認済みの副作用: docKey ありでこの分岐に入ると、startFrom
+        // 内部の同期 onSceneChangeCallback 発火（NovelRenderer 側）が即座に quickSave() を
+        // 走らせ、deep-link 起動の時点で直前セッションのクイックセーブを上書きする。deep-link
+        // は主に埋め込み/デバッグ用途（通しプレイの起点にしない）のため許容する。
         renderer.startFrom({ sceneId: initialSceneId })
+      } else if (docKey && renderer.hasQuickSave()) {
+        // 起動時の自動クイックロード (#578): pendingSnapshot（fluid 再マウント引き継ぎ）も
+        // initialSceneId（?scene= 等の明示的 deep-link）も無い通常起動時に、直前のシーン
+        // 切り替えで自動保存されたクイックセーブがあれば復元する。quickLoad() が false
+        // （データ不整合等）を返した場合は何もせず、既存のエントリ再生にフォールバックする。
+        // docKey が無い場合（EditorScreen のプレビュー等）はこの自動ロード自体をスキップする
+        // (#578 セルフレビュー指摘): 上の自動クイックセーブ配線と対称のガード。docKey 無しだと
+        // SaveManager が共有の '' 名前空間を読むため、Editor で別プロジェクトのプレビューを
+        // 開くたびに無関係なセーブへ自動ロードしてしまう。
+        renderer.quickLoad()
       }
 
       // URL クエリによるデバッグ起点指定 (#220 Phase 3)。

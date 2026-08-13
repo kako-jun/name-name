@@ -47,7 +47,18 @@ const boolFlag = (b: boolean): FlagValue => ({ Bool: b })
 function makeRenderer(scenes: EventScene[]): NovelRenderer {
   const r = new NovelRenderer()
   r.setScenes(scenes)
+  muteAudio(r)
   return r
+}
+
+/**
+ * ensureContext の jsdom 制約回避（NovelRenderer.seekAdvance.test.ts の muteAudio と同じパターン）。
+ * loadFromSaveData は #578 セルフレビュー must 対応で内部的に audioManager.ensureContext() を
+ * 呼ぶようになったため、jsdom に無い AudioContext コンストラクタ呼び出しを no-op spy に差し替える。
+ * ensureContext 呼び出し自体を検証する M1 相当のテストを除き、既定でミュートする。
+ */
+function muteAudio(r: NovelRenderer): void {
+  vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
 }
 
 /** loadFromSaveData 検証用の内部アクセサ（startFrom.test.ts と同じ） */
@@ -55,10 +66,39 @@ interface RendererInternals {
   history: unknown[]
   justSelectedChoice: boolean
   applyState(state: NovelGameState): void
+  initialized: boolean
+  waitingForChoice: boolean
+  waitingForWait: boolean
 }
 
 function internals(r: NovelRenderer): RendererInternals {
   return r as unknown as RendererInternals
+}
+
+/**
+ * `init()` 完了後の状態を模す (#578: loadFromSaveDataMissingScene の待機経路検証に必要)。
+ * NovelRenderer.restoreSnapshot.test.ts の markInitialized と同じ理由: この状態フラグの
+ * デフォルト値 false のままだと、missingSceneResolver 解決後の `!this.initialized` ガードが
+ * 常に早期returnし、正常系の再解決すらテストできなくなる。
+ */
+function markInitialized(r: NovelRenderer): void {
+  internals(r).initialized = true
+}
+
+/**
+ * 複数シーンを 1 本の Event[] に線形連結する（NovelRenderer.restoreSnapshot.test.ts と同形）。
+ * setScenes ではなく setEvents + setJumpSceneIndex の実運用に近い経路（マルチMD構成）を
+ * 再現するために使う。
+ */
+function flatten(scenes: EventScene[]): Event[] {
+  const events: Event[] = []
+  let first = true
+  for (const s of scenes) {
+    if (!first) events.push('SceneTransition')
+    first = false
+    events.push(...s.events)
+  }
+  return events
 }
 
 /**
@@ -420,5 +460,240 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     internals(r).applyState({ ...r.getSnapshot(), storyEnded: true })
 
     expect(r.quickSave()).toBe(false)
+  })
+
+  // ===== L. docKey 名前空間化 (#578) =====
+  //
+  // NovelRenderer 内部の SaveManager は `new SaveManager()`（既定 docKey ''）で構築される
+  // （setDocKey() は setDocKey() 呼び出し時にのみ内部 SaveManager の docKey を更新する）。
+  // ここでは setDocKey() を一度も呼ばない場合、既定の '' 名前空間へ書かれることを直接
+  // localStorage キーで確認する（SaveManager.test.ts の docKey 単体テストと対になる、
+  // NovelRenderer 経由の統合確認）。
+
+  it('8: setDocKey() 呼び出し前に quickSave() すると既定の "" 名前空間の localStorage キーに保存される', () => {
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'a' })
+
+    expect(r.quickSave()).toBe(true)
+
+    // SaveManager の quickKey() は `${PREFIX}${docKey}-quick`。docKey 既定は '' なので
+    // 'name-name-save--quick' というキーに書かれる。
+    expect(localStorage.getItem('name-name-save--quick')).not.toBeNull()
+  })
+
+  // ===== M. quickLoad の missingSceneResolver 再解決（loadFromSaveDataMissingScene）(#578) =====
+  //
+  // #460 の restoreSnapshot と同じ「hub(entry doc) + ルート別 md」問題が、起動時の自動 quickLoad
+  // （本 Issue の新機能）経由でも起きる。修正前は allScenes にまだ無い sceneId のクイックセーブを
+  // ロードすると常に「フラグのみの縮退復元 + warn」に落ちていた。修正後は missingSceneResolver が
+  // あれば restoreSnapshot と同じ非同期再解決パターンを踏んでから復元する。
+  // NovelRenderer.restoreSnapshot.test.ts の K1/K2 と同形の構成で loadFromSaveData 版を検証する。
+
+  it('9: hasQuickSave() が真の状態で quickLoad() を呼び、対象 sceneId が allScenes に存在する場合は正しく該当シーン位置へ復元される', () => {
+    seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1, textIndex: 0 }))
+    const r = makeRenderer(SCENES)
+    expect(r.hasQuickSave()).toBe(true)
+
+    expect(r.quickLoad()).toBe(true)
+
+    expect(r.getCurrentSceneId()).toBe('a')
+    expect(r.getSnapshot().eventIndex).toBe(1)
+  })
+
+  it('10: allScenes に無い sceneId でも missingSceneResolver 経由で非同期再解決され、正しいシーン位置へ復元される（マルチMD遅延ロード再現）', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const routeScene = scene('r01-01', [narration('route-line-a', 'route-line-b')])
+    const resolver = vi.fn(async () => [...entryScenes, routeScene])
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+
+    // 新規 renderer 直後は allScenes に route-scene がまだ無い（マルチMD遅延ロード前の状態）。
+    expect(r.getAllSceneIds()).toEqual(['entry-hub'])
+    seedQuickSave(craftSave({ sceneId: 'r01-01', eventIndex: 1, flags: { seen: boolFlag(true) } }))
+    expect(r.hasQuickSave()).toBe(true)
+
+    expect(r.quickLoad()).toBe(true)
+    // loadFromSaveDataMissingScene は fire-and-forget（quickLoad 自体は同期 true を返す）なので
+    // resolver の Promise 解決をマイクロタスクとして待つ（#460 K1 と同じ待ち方）。
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(resolver).toHaveBeenCalledWith('r01-01')
+    expect(r.getAllSceneIds()).toEqual(['entry-hub', 'r01-01'])
+    expect(r.getCurrentSceneId()).toBe('r01-01')
+    expect(r.getSnapshot().eventIndex).toBe(1)
+    expect(r.getSnapshot().flags).toEqual({ seen: boolFlag(true) })
+  })
+
+  it('11a: missingSceneResolver が無い場合、従来どおりフラグのみ復元され console.warn が呼ばれる', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // resolver 未設定（makeRenderer は setMissingSceneResolver を呼ばない）。
+    seedQuickSave(craftSave({ sceneId: 'ghost-no-resolver', flags: { restored: boolFlag(true) } }))
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'a' })
+    const sceneBefore = r.getCurrentSceneId()
+
+    expect(r.quickLoad()).toBe(true)
+
+    expect(r.getSnapshot().flags).toEqual({ restored: boolFlag(true) })
+    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('11b: missingSceneResolver が解決に失敗（null を返す）した場合、フラグのみ復元され console.warn が呼ばれる', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const resolver = vi.fn(async () => null)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+    r.startFrom({ sceneId: 'entry-hub' })
+    const sceneBefore = r.getCurrentSceneId()
+
+    seedQuickSave(craftSave({ sceneId: 'ghost-route', flags: { restored: boolFlag(true) } }))
+    expect(r.quickLoad()).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(resolver).toHaveBeenCalledWith('ghost-route')
+    expect(r.getSnapshot().flags).toEqual({ restored: boolFlag(true) })
+    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('11c: missingSceneResolver が例外を投げた場合でも、フラグのみ復元され console.warn が呼ばれる（例外を外に漏らさない）', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const resolver = vi.fn(async () => {
+      throw new Error('network error')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+
+    seedQuickSave(craftSave({ sceneId: 'ghost-route-2', flags: { y: boolFlag(true) } }))
+    expect(() => r.quickLoad()).not.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(r.getSnapshot().flags).toEqual({ y: boolFlag(true) })
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  // ===== N. 選択肢/Wait 待機中の quickSave/quickLoad ガード (#578) =====
+  //
+  // quickSave()/quickLoad() は waitingForChoice/waitingForWait 中は不整合を避けるため no-op で
+  // false を返す（既存実装。#578 のテスト設計時に明示的に固定するリクエストがあったため追加）。
+  // storyEnded 中の quickSave()=false は既存の 31 番が担保済みなのでここでは扱わない。
+
+  it('12a: waitingForChoice=true の間に quickLoad() を呼ぶと false を返し、状態を変更しない', () => {
+    seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1, flags: { later: boolFlag(true) } }))
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'b' })
+    const sceneBefore = r.getCurrentSceneId()
+    const flagsBefore = r.getSnapshot().flags
+    internals(r).waitingForChoice = true
+
+    expect(r.quickLoad()).toBe(false)
+
+    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+    expect(r.getSnapshot().flags).toEqual(flagsBefore)
+  })
+
+  it('12b: waitingForWait=true の間に quickLoad() を呼んでも false を返す（choice と同じガード）', () => {
+    seedQuickSave(craftSave({ sceneId: 'a' }))
+    const r = makeRenderer(SCENES)
+    internals(r).waitingForWait = true
+
+    expect(r.quickLoad()).toBe(false)
+  })
+
+  it('13a: waitingForChoice=true の間に quickSave() を呼ぶと false を返し、保存されない', () => {
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'a' })
+    internals(r).waitingForChoice = true
+
+    expect(r.quickSave()).toBe(false)
+    expect(r.hasQuickSave()).toBe(false)
+  })
+
+  it('13b: waitingForWait=true の間に quickSave() を呼ぶと false を返し、保存されない', () => {
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'a' })
+    internals(r).waitingForWait = true
+
+    expect(r.quickSave()).toBe(false)
+    expect(r.hasQuickSave()).toBe(false)
+  })
+
+  // ===== O. セルフレビュー修正 (#578 must): 起動時自動 quickLoad の AudioContext 初期化 =====
+  //
+  // NovelPlayer のマウント effect（ユーザー操作を伴わない）から docKey && hasQuickSave() の
+  // 場合に renderer.quickLoad() が同期呼び出しされる（本 Issue の新機能）。loadFromSaveData は
+  // これまで「同一 renderer 上でユーザー操作を経て既に ensureContext 済み」という前提で
+  // ensureContext() を呼んでいなかったが、起動時自動 quickLoad はその前提を満たさない。
+  // ensureContext() を呼ばないと AudioManager.ctx が null のままで、BGM 復元
+  // （applyState 内 playBgm）が無音のまま早期 return し続ける（restoreSnapshot #460 M1 と同種の穴）。
+  // loadFromSaveData（quickLoad の内部実装）が ensureContext() を呼ぶことを検証する。
+
+  it('M1: quickLoad() 呼び出し時に audioManager.ensureContext() が呼ばれる（正常系: シーンが即座に見つかる）', () => {
+    seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 0 }))
+    const r = makeRenderer(SCENES)
+    // makeRenderer 内の muteAudio() が既に ensureContext を no-op spy に差し替え済み
+    // （jsdom には AudioContext が無いため実装は呼べない）。ここではその spy の呼び出しを検証する。
+    const ensureContextMock = vi.mocked(r.getAudioManager().ensureContext)
+    ensureContextMock.mockClear()
+
+    expect(r.quickLoad()).toBe(true)
+
+    expect(ensureContextMock).toHaveBeenCalled()
+  })
+
+  it('M1: sceneId が見つからない場合（resolver 無し）でも ensureContext() は呼ばれる（early return より前に呼ぶ設計）', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    seedQuickSave(craftSave({ sceneId: 'ghost' }))
+    const r = makeRenderer(SCENES)
+    const ensureContextMock = vi.mocked(r.getAudioManager().ensureContext)
+    ensureContextMock.mockClear()
+
+    expect(r.quickLoad()).toBe(true)
+
+    expect(ensureContextMock).toHaveBeenCalled()
+  })
+
+  it('M1: missingSceneResolver 経由の非同期再解決パスでも、resolver 解決を待たず同期的に ensureContext() が呼ばれる（マルチMD遅延ロード再現）', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const routeScene = scene('r01-01', [narration('route-line')])
+    const resolver = vi.fn(async () => [...entryScenes, routeScene])
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+
+    const ensureContextMock = vi.mocked(r.getAudioManager().ensureContext)
+    ensureContextMock.mockClear()
+
+    seedQuickSave(craftSave({ sceneId: 'r01-01', eventIndex: 0 }))
+    expect(r.quickLoad()).toBe(true)
+
+    // resolver の Promise 解決（await）を待つ前、同期呼び出しの時点で既に呼ばれている
+    // ことを確認する（loadFromSaveData 冒頭で呼ぶ設計のため、非同期再解決の成否に依存しない）。
+    expect(ensureContextMock).toHaveBeenCalled()
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(r.getCurrentSceneId()).toBe('r01-01')
   })
 })

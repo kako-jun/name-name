@@ -55,6 +55,9 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     // restoreSnapshot より前に呼ばれていること）を検証するために必要（P11）。
     setMissingSceneResolver = vi.fn()
     setDocKey = vi.fn()
+    // #578: シーン切り替えごとの自動クイックセーブ配線・起動時の自動クイックロード判定用。
+    setOnSceneChange = vi.fn()
+    hasQuickSave = vi.fn().mockReturnValue(false)
     setChoiceStyle = vi.fn()
     setFontFamily = vi.fn()
     setFontSize = vi.fn()
@@ -1215,6 +1218,100 @@ describe('NovelPlayer 非fluid時はaspectRatio変更で再マウントしない
   })
 })
 
+// --- #578: シーン切り替えごとの自動クイックセーブ + 起動時の自動クイックロード ---
+//
+// デシジョンテーブル（起動時優先順位、docKey 設定済み前提。pendingSnapshot=fluid再マウント引き継ぎ）:
+//   1. pendingSnapshot 有                          → restoreSnapshot() のみ（他は評価されない）
+//   2. pendingSnapshot 無・initialSceneId 有        → startFrom() のみ（quickLoad は評価されない）
+//   3. pendingSnapshot 無・initialSceneId 無・hasQuickSave() 真 → quickLoad()
+//   4. pendingSnapshot 無・initialSceneId 無・hasQuickSave() 偽 → 何もしない（既定のエントリ再生）
+// 行1（pendingSnapshot 優先）は fluid 再マウントが前提のため、P-series と同じ
+// 「NovelPlayer fluidモードのResizeObserver駆動renderer再マウント」describe 内に置く（後述）。
+//
+// タイミングに関する注意: `new NovelRenderer(...)` は mount effect 内で render() 呼び出し中に
+// 同期的に構築される（renderer.init().then(...) の中身だけが microtask で遅延する）。そのため
+// `render(...)` 直後・`await flushAsync()` の前に `rendererInstances` から対象インスタンスを
+// 取得し、そこで `hasQuickSave` の戻り値を上書きしてから flushAsync() すれば、mount 内の
+// `renderer.hasQuickSave()` 呼び出しに反映される（P1 等が cleanup 側の getSnapshot を
+// 同様に上書きするのと対になるタイミング）。
+describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  it('16: pendingSnapshot 無・initialSceneId 無・hasQuickSave() 偽・docKey 有 → quickLoad は呼ばれず通常のエントリ再生のまま', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.hasQuickSave).toHaveBeenCalled()
+    expect(r.quickLoad).not.toHaveBeenCalled()
+    expect(r.startFrom).not.toHaveBeenCalled()
+  })
+
+  it('17: 同条件で hasQuickSave() が真 → quickLoad() が呼ばれる', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" />)
+    const r = rendererInstances[rendererInstances.length - 1]
+    r.hasQuickSave.mockReturnValue(true)
+    await flushAsync()
+
+    expect(r.quickLoad).toHaveBeenCalledTimes(1)
+    expect(r.startFrom).not.toHaveBeenCalled()
+  })
+
+  it('19: pendingSnapshot 無・initialSceneId 有の場合、hasQuickSave() の値に関わらず startFrom() のみが呼ばれる', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="scene-x" />)
+    const r = rendererInstances[rendererInstances.length - 1]
+    r.hasQuickSave.mockReturnValue(true)
+    await flushAsync()
+
+    expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+    expect(r.quickLoad).not.toHaveBeenCalled()
+  })
+
+  it('20: マウント時に renderer.setOnSceneChange が渡され、そのコールバックを呼ぶと renderer.quickSave() が実行される（docKey 有り）', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" />)
+    await flushAsync()
+    const r = lastRenderer()
+
+    expect(r.setOnSceneChange).toHaveBeenCalledTimes(1)
+    const cb = r.setOnSceneChange.mock.calls[0][0] as () => void
+    cb()
+
+    expect(r.quickSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('21 (最重要): docKey が異なる2つの NovelPlayer マウント（別プロジェクト相当）で、それぞれの setDocKey/自動クイックセーブ配線が独立し互いを呼ばない', async () => {
+    render(<NovelPlayer events={[]} docKey="project-a" />)
+    render(<NovelPlayer events={[]} docKey="project-b" />)
+    await flushAsync()
+
+    expect(rendererInstances.length).toBe(2)
+    const [rendererA, rendererB] = rendererInstances
+
+    expect(rendererA.setDocKey).toHaveBeenCalledWith('project-a')
+    expect(rendererB.setDocKey).toHaveBeenCalledWith('project-b')
+
+    // 各インスタンスのシーン変化コールバックは自分自身の quickSave しか呼ばない（相手を呼ばない）。
+    const cbA = rendererA.setOnSceneChange.mock.calls[0][0] as () => void
+    cbA()
+    expect(rendererA.quickSave).toHaveBeenCalledTimes(1)
+    expect(rendererB.quickSave).not.toHaveBeenCalled()
+
+    const cbB = rendererB.setOnSceneChange.mock.calls[0][0] as () => void
+    cbB()
+    expect(rendererB.quickSave).toHaveBeenCalledTimes(1)
+    expect(rendererA.quickSave).toHaveBeenCalledTimes(1) // A 側は変化しない
+  })
+
+  it('22: docKey 未指定でマウントした場合（EditorScreen相当）、renderer.setOnSceneChange が呼ばれず、起動時の hasQuickSave()/quickLoad チェーンも実行されない', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const r = lastRenderer()
+
+    expect(r.setOnSceneChange).not.toHaveBeenCalled()
+    expect(r.hasQuickSave).not.toHaveBeenCalled()
+    expect(r.quickLoad).not.toHaveBeenCalled()
+  })
+})
+
 // #442 self-review should-4: fluid（aspect_ratio: auto）モードの中核契約
 // ——ResizeObserver が向きカテゴリ変化を検知したら renderer を再マウントする——を
 // コンポーネントレベルで検証する。J1/J2（非fluid）は「再マウントしない」side しか見ておらず、
@@ -1566,6 +1663,28 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     const resolverCallOrder = second.setMissingSceneResolver.mock.invocationCallOrder[0]
     const restoreCallOrder = second.restoreSnapshot.mock.invocationCallOrder[0]
     expect(resolverCallOrder).toBeLessThan(restoreCallOrder)
+  })
+
+  // #578: 起動時優先順位デシジョンテーブルの行1（pendingSnapshot 優先）。fluid 再マウント経由で
+  // pendingSnapshot が渡る状況を作れるのはこの describe だけなので、P-series の直後に置く。
+  it('P12 (#578): pendingSnapshot 有の場合、hasQuickSave()/initialSceneId の値に関わらず restoreSnapshot のみが呼ばれ quickLoad()/startFrom() は呼ばれない', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" docKey="proj-a" initialSceneId="scene-x" />)
+    await flushAsync()
+    const first = rendererInstances[0]
+    const snapshot: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: 'scene-a', eventIndex: 2 }
+    first.getSnapshot.mockReturnValue(snapshot)
+
+    act(() => {
+      triggerResize(400, 800) // 横長 → 縦長でカテゴリが変わる → gen0 destroy → gen1 mount
+    })
+    const second = rendererInstances[rendererInstances.length - 1]
+    // hasQuickSave() が真でも pendingSnapshot 優先で無視されることを強く示すため true にしておく。
+    second.hasQuickSave.mockReturnValue(true)
+    await flushAsync()
+
+    expect(second.restoreSnapshot).toHaveBeenCalledWith(snapshot)
+    expect(second.quickLoad).not.toHaveBeenCalled()
+    expect(second.startFrom).not.toHaveBeenCalled()
   })
 })
 

@@ -2212,9 +2212,15 @@ export class NovelRenderer {
   /**
    * 既読永続化キーを設定する (#140)。
    * 設定するとスキップモードが有効になり、既読進捗を localStorage から読み込む。
+   *
+   * SaveManager のセーブキー名前空間も同じ docKey に切り替える (#578)。saveLoadOverlay は
+   * コンストラクタで this.saveManager への参照を保持したまま渡されているため、ここでは
+   * インスタンスを差し替えず（差し替えると saveLoadOverlay 側が古い docKey のままの
+   * インスタンスを握り続けてしまう）、SaveManager.setDocKey() で内部の docKey だけ更新する。
    */
   setDocKey(docKey: string): void {
     this.docKey = docKey
+    this.saveManager.setDocKey(docKey)
     this.reloadReadProgress()
   }
 
@@ -4461,8 +4467,28 @@ export class NovelRenderer {
 
   /**
    * セーブデータからゲーム状態を復元する（applyState ベースの宣言的復元）
+   *
+   * #578 再発修正: restoreSnapshot（#460）と同じ「hub(entry doc) + ルート別 md」問題が
+   * quickLoad() 経由でも起きる。起動直後の自動 quickLoad（本 Issue の新機能）は allScenes
+   * にまだ entry doc 分のシーンしか無い状態で呼ばれ得るため、ルート内シーンをセーブして
+   * いた場合に findSceneById が不発になり、常にフラグのみ復元＋warn のフォールバックへ
+   * 縮退して意図したシーン位置に戻れない。restoreSnapshot と同じく missingSceneResolver
+   * 経由の非同期再解決を挟んでから復元する。
+   *
+   * #578 セルフレビュー must 対応: ensureContext() をここで呼ぶ。当初は「同一 renderer
+   * インスタンス上でユーザー操作を経て既に ensureContext 済み」という前提で不要と判断していたが、
+   * 本 Issue で追加した起動時自動 quickLoad（NovelPlayer のマウント effect から
+   * `renderer.hasQuickSave()` が true の場合に同期呼び出しされる）はユーザー操作より前に
+   * quickLoad() → loadFromSaveData() が走る。ensureContext() を呼ばないと AudioManager.ctx が
+   * null のままで、この後 applyState 経由の playBgm() が `if (!this.ctx) return` で無音のまま
+   * 早期 return し、以後ユーザーが操作しても currentBgmUrl 未設定のため再試行されない
+   * （復元先シーンの BGM が次のシーン遷移までサイレントになる回帰）。restoreSnapshot（#460）と
+   * 同じ対処であり、ensureContext() はべき等なので通常の openLoadMenu 経由（既に
+   * ensureContext 済み）で重複呼び出しになっても副作用はない。
    */
   private loadFromSaveData(data: SaveSlotData): void {
+    this.audioManager.ensureContext()
+
     if (!data.sceneId) {
       // sceneId が無い空セーブはフラグだけ復元して終了（restoreToScene を通さない）
       this.gameState.fromJSON(data.flags)
@@ -4471,18 +4497,85 @@ export class NovelRenderer {
 
     // シーンを探す
     const scene = findSceneById(this.allScenes, data.sceneId)
-    if (!scene) {
-      // シーンが無い場合はフラグだけ復元（従来挙動を維持）
-      this.gameState.fromJSON(data.flags)
-      console.warn(`[name-name] セーブデータのシーンが見つからない: ${data.sceneId}`)
+    if (scene) {
+      // SaveSlotData → NovelGameState のフィールド対応・後方互換フォールバックは
+      // novelLayout.saveSlotToGameState に集約 (#260)。fade だけは PixiJS を間接参照する
+      // normalizeBackgroundFade をここで適用し、純粋関数には正規化済みの値を渡す。
+      const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
+      this.restoreToScene(scene, state)
       return
     }
 
-    // SaveSlotData → NovelGameState のフィールド対応・後方互換フォールバックは
-    // novelLayout.saveSlotToGameState に集約 (#260)。fade だけは PixiJS を間接参照する
-    // normalizeBackgroundFade をここで適用し、純粋関数には正規化済みの値を渡す。
-    const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
-    this.restoreToScene(scene, state)
+    // allScenes に無い＝マルチMD構成でまだ遅延ロードされていない可能性がある (#578)。
+    // missingSceneResolver があれば restoreSnapshot と同じ非同期解決パターンで再挑戦する。
+    if (this.missingSceneResolver) {
+      void this.loadFromSaveDataMissingScene(data)
+      return
+    }
+
+    // resolver が無い（単一ファイル構成等）場合のみ、従来どおりフラグだけ復元して warn する。
+    this.gameState.fromJSON(data.flags)
+    console.warn(`[name-name] セーブデータのシーンが見つからない: ${data.sceneId}`)
+  }
+
+  /**
+   * loadFromSaveData のシーン未発見フォールバック（マルチMD遅延ロード経由）(#578)。
+   *
+   * resolveMissingSceneAndRestore（#460）と全く同じ「missingSceneResolver で該当 md を
+   * 非同期取得 → setJumpSceneIndex で allScenes 更新 → 再探索」のパターンをなぞる。
+   * pendingMissingScenes も共有し、同一 sceneId の解決が jumpToScene/restoreSnapshot 側と
+   * 重複しないようにする。
+   *
+   * AudioContext の ensureContext() はここでは呼ばない: 呼び出し元の loadFromSaveData() が
+   * この非同期メソッドへ委譲する前（await の前）に既に ensureContext() 済みのため、この
+   * メソッド内で改めて呼ぶ必要はない（#578 セルフレビュー must 対応、詳細は
+   * loadFromSaveData の doc コメント参照）。
+   *
+   * 解決できてもシーンが見つからない/resolver が失敗した場合は、loadFromSaveData と同じ
+   * 「フラグだけ復元して warn」のフォールバックに落ちる。
+   */
+  private async loadFromSaveDataMissingScene(data: SaveSlotData): Promise<void> {
+    const sceneId = data.sceneId
+    if (!sceneId) return
+    if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) {
+      // resolveMissingSceneAndRestore の S2 と同じ配慮: 早期 return でも flags だけは
+      // 必ず反映する。pendingMissingScenes 側は同時実行中の解決に任せる正常系に近いため
+      // warn は出さない。
+      this.gameState.fromJSON(data.flags)
+      return
+    }
+    this.pendingMissingScenes.add(sceneId)
+    try {
+      const scenes = await this.missingSceneResolver(sceneId)
+      // await 中に renderer が destroy() され得る（resolveMissingSceneAndRestore の S1 と
+      // 同じ懸念）。destroy 後は applyState が this.app.stage を触るため、initialized
+      // チェック無しで先に進むと例外を投げうる。
+      if (!this.initialized) return
+      if (!scenes) {
+        this.gameState.fromJSON(data.flags)
+        console.warn(`[name-name] loadFromSaveData: シーンの追加読み込みに失敗しました: ${sceneId}`)
+        return
+      }
+      this.setJumpSceneIndex(scenes)
+      const scene = findSceneById(this.allScenes, sceneId)
+      if (!scene) {
+        this.gameState.fromJSON(data.flags)
+        console.warn(
+          `[name-name] loadFromSaveData: lazy load 後もシーンが見つかりません: ${sceneId}`
+        )
+        return
+      }
+      const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
+      this.restoreToScene(scene, state)
+    } catch (err) {
+      this.gameState.fromJSON(data.flags)
+      console.warn(
+        `[name-name] loadFromSaveData: シーンの追加読み込みに失敗しました: ${sceneId}`,
+        err
+      )
+    } finally {
+      this.pendingMissingScenes.delete(sceneId)
+    }
   }
 
   /**
