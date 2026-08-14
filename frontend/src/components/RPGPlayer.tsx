@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { FiSettings } from 'react-icons/fi'
 import { TopDownRenderer } from '../game/TopDownRenderer'
 import { RaycastRenderer } from '../game/RaycastRenderer'
 import { sampleRpgData } from '../game/sampleRpgData'
@@ -138,9 +139,9 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
         onClick={() => setSettingsOpen(true)}
         aria-label="設定を開く"
         title="設定 (Ctrl/Cmd + ,)"
-        className="absolute top-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white text-lg z-10"
+        className="absolute top-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white z-10"
       >
-        ⚙
+        <FiSettings className="w-5 h-5" />
       </button>
       <SettingsOverlay
         open={settingsOpen}
