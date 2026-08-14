@@ -1658,6 +1658,104 @@ describe('PlayerScreen', () => {
     expect(lastNovelPlayerProps().speakerNudge).toBeNull()
   })
 
+  // --- #620: 「つづきから」は renderer.hasQuickSave() の真偽で restart() 呼び出しを分岐する ---
+  //
+  // #578 の自動 quickLoad により、renderer はマウント時点で既にクイックセーブの最終位置
+  // まで復元済み。hasQuickSave()=true なら restart() を呼んではいけない（呼ぶと最初の
+  // シーンへ巻き戻り、復元済みの位置を握りつぶす）。タイトルを閉じるだけでよい。
+  // hasQuickSave()=false（#578 以前のレガシーセーブ等）は従来どおり startWithSkip を立てて
+  // restart() する。renderer 未定義でも optional chaining で安全に動くことも確認する。
+  // onNewGame（変更なし）が常に restart() を呼ぶことも非退行として併せて確認する。
+  describe('#620: 「つづきから」の hasQuickSave() 分岐', () => {
+    type MockRenderer = {
+      audioManager: { ensureContext: ReturnType<typeof vi.fn> }
+      restart: ReturnType<typeof vi.fn>
+      hasQuickSave: ReturnType<typeof vi.fn>
+      setDocKey: ReturnType<typeof vi.fn>
+    }
+
+    function installMockRenderer(hasQuickSave: boolean): MockRenderer {
+      const renderer: MockRenderer = {
+        audioManager: { ensureContext: vi.fn() },
+        restart: vi.fn(),
+        hasQuickSave: vi.fn().mockReturnValue(hasQuickSave),
+        setDocKey: vi.fn(),
+      }
+      ;(window as unknown as { __renderer?: MockRenderer }).__renderer = renderer
+      return renderer
+    }
+
+    // renderWithFrontmatter は常に projectName="friday-1930" で render する（docKey もこれ）。
+    // hasSaveData（つづきからボタンの活性/非活性）は PlayerScreen マウント時に
+    // hasAnyReadProgress(projectName) の localStorage 読み取りで一度だけ決まるため、
+    // render 前に既読データを仕込んでおく必要がある。
+    const READ_PROGRESS_KEY = 'name-name:read-progress:friday-1930'
+
+    afterEach(() => {
+      localStorage.removeItem(READ_PROGRESS_KEY)
+      delete (window as unknown as { __renderer?: unknown }).__renderer
+    })
+
+    it('hasQuickSave()=true なら restart() を呼ばずタイトルを閉じるだけ（quickLoad 済み位置を保つ）', async () => {
+      localStorage.setItem(READ_PROGRESS_KEY, JSON.stringify([1]))
+      const renderer = installMockRenderer(true)
+
+      await renderWithFrontmatter({})
+
+      const continueButton = screen.getByRole('button', { name: 'つづきから' })
+      expect(continueButton).toBeEnabled()
+      fireEvent.click(continueButton)
+
+      expect(renderer.audioManager.ensureContext).toHaveBeenCalledTimes(1)
+      expect(renderer.hasQuickSave).toHaveBeenCalledTimes(1)
+      expect(renderer.restart).not.toHaveBeenCalled()
+      // タイトルが閉じる（TitleOverlay 固有の「新規開始」ボタンが消える）
+      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      // 復元済み位置を保つため、既読スキップモードは立てない
+      expect(lastNovelPlayerProps().initialSkipMode).toBe(false)
+    })
+
+    it('hasQuickSave()=false なら従来どおり startWithSkip + restart() にフォールバックする', async () => {
+      localStorage.setItem(READ_PROGRESS_KEY, JSON.stringify([1]))
+      const renderer = installMockRenderer(false)
+
+      await renderWithFrontmatter({})
+
+      const continueButton = screen.getByRole('button', { name: 'つづきから' })
+      fireEvent.click(continueButton)
+
+      expect(renderer.hasQuickSave).toHaveBeenCalledTimes(1)
+      expect(renderer.restart).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      expect(lastNovelPlayerProps().initialSkipMode).toBe(true)
+    })
+
+    it('window.__renderer が未定義でも例外にならず、フォールバック分岐で安全にタイトルを閉じる（optional chaining）', async () => {
+      localStorage.setItem(READ_PROGRESS_KEY, JSON.stringify([1]))
+      // installMockRenderer を呼ばない = window.__renderer は未設定のまま
+
+      await renderWithFrontmatter({})
+
+      const continueButton = screen.getByRole('button', { name: 'つづきから' })
+      expect(() => fireEvent.click(continueButton)).not.toThrow()
+      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      expect(lastNovelPlayerProps().initialSkipMode).toBe(true)
+    })
+
+    it('onNewGame は今回の変更で非退行: 常に restart() を呼ぶ', async () => {
+      const renderer = installMockRenderer(true)
+
+      await renderWithFrontmatter({})
+
+      const newGameButton = screen.getByRole('button', { name: '新規開始' })
+      fireEvent.click(newGameButton)
+
+      expect(renderer.audioManager.ensureContext).toHaveBeenCalledTimes(1)
+      expect(renderer.restart).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+    })
+  })
+
   // --- #386: `?scene=<sceneId>` ディープリンク + confinement ---
   //
   // マルチ MD 構成（エントリ = hub、別 MD = 個別セル）で `?scene=` を解決し、
