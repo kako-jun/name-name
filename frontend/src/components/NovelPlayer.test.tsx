@@ -123,6 +123,10 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     playScript = vi.fn().mockResolvedValue(undefined)
     quickSave = vi.fn().mockReturnValue(false)
     quickLoad = vi.fn().mockReturnValue(false)
+    // #620: quickLoad() が false（同期的失敗）を返した際のフォールバック。未定義のままだと
+    // NovelPlayer 側の呼び出しが TypeError で Unhandled Rejection になり、テストが握りつぶした
+    // まま「緑」に見えてしまう（実際に発生していた不備）。
+    resumeAutoAdvanceIfPending = vi.fn()
     getDebugState = vi.fn().mockReturnValue({
       eventIndex: 0,
       eventCount: 1,
@@ -1443,6 +1447,46 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     expect(r.startFrom).not.toHaveBeenCalled()
   })
 
+  // #620: willAutoQuickLoad（pendingSnapshot 無・initialSceneId 無・docKey 有・hasQuickSave() 真）
+  // が成立する条件では、entry シーン冒頭の自動進行を quickLoad() 側に譲るため、setEvents/setScenes
+  // 自体に skipAutoAdvance: true を渡す契約になっている。渡し忘れる回帰（#620 の直接原因）を防ぐ。
+  it('23 (#620): willAutoQuickLoad が真の場合、setEvents が { skipAutoAdvance: true } で呼ばれる', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" />)
+    const r = rendererInstances[rendererInstances.length - 1]
+    r.hasQuickSave.mockReturnValue(true)
+    await flushAsync()
+
+    expect(r.setEvents).toHaveBeenCalledWith([], { skipAutoAdvance: true })
+  })
+
+  // #620: quickLoad() が実際にシーンを復元できた（true を返した）場合は、skipAutoAdvance で
+  // 保留していた自動進行は restoreToScene 側の後始末に任せるべきで、NovelPlayer 側の
+  // フォールバック resumeAutoAdvanceIfPending() を重ねて呼ぶ必要はない。
+  it('24 (#620): quickLoad() が true を返す場合、resumeAutoAdvanceIfPending() は呼ばれない', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" />)
+    const r = rendererInstances[rendererInstances.length - 1]
+    r.hasQuickSave.mockReturnValue(true)
+    r.quickLoad.mockReturnValue(true)
+    await flushAsync()
+
+    expect(r.quickLoad).toHaveBeenCalledTimes(1)
+    expect(r.resumeAutoAdvanceIfPending).not.toHaveBeenCalled()
+  })
+
+  // #620 の本題: quickLoad() が false（データ不整合等の同期的失敗）を返した場合、
+  // skipAutoAdvance でスキップしたまま放置される entry シーン冒頭の自動進行を
+  // resumeAutoAdvanceIfPending() で必ずフォールバック実行しないと画面が固まる。
+  it('25 (#620): quickLoad() が false を返す場合、resumeAutoAdvanceIfPending() が1回呼ばれる', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" />)
+    const r = rendererInstances[rendererInstances.length - 1]
+    r.hasQuickSave.mockReturnValue(true)
+    r.quickLoad.mockReturnValue(false)
+    await flushAsync()
+
+    expect(r.quickLoad).toHaveBeenCalledTimes(1)
+    expect(r.resumeAutoAdvanceIfPending).toHaveBeenCalledTimes(1)
+  })
+
   it('19: pendingSnapshot 無・initialSceneId 有の場合、hasQuickSave() の値に関わらず startFrom() のみが呼ばれる', async () => {
     render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="scene-x" />)
     const r = rendererInstances[rendererInstances.length - 1]
@@ -1451,6 +1495,9 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
 
     expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
     expect(r.quickLoad).not.toHaveBeenCalled()
+    // #620: initialSceneId が優先される場合は willAutoQuickLoad が成立しないため、
+    // setEvents は skipAutoAdvance: false（既定の自動進行あり）で呼ばれる。
+    expect(r.setEvents).toHaveBeenCalledWith([], { skipAutoAdvance: false })
   })
 
   it('20: マウント時に renderer.setOnSceneChange が渡され、そのコールバックを呼ぶと renderer.quickSave() が実行される（docKey 有り）', async () => {
@@ -1496,6 +1543,11 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     expect(r.setOnSceneChange).not.toHaveBeenCalled()
     expect(r.hasQuickSave).not.toHaveBeenCalled()
     expect(r.quickLoad).not.toHaveBeenCalled()
+    // #620: docKey が無いと willAutoQuickLoad は成立しない（!!docKey が偽で短絡）ため、
+    // setEvents は skipAutoAdvance: false で呼ばれ、resumeAutoAdvanceIfPending() も呼ばれない
+    // （quickLoad 自体が評価されないので後始末も不要）。
+    expect(r.setEvents).toHaveBeenCalledWith([], { skipAutoAdvance: false })
+    expect(r.resumeAutoAdvanceIfPending).not.toHaveBeenCalled()
   })
 })
 
@@ -1872,6 +1924,9 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     expect(second.restoreSnapshot).toHaveBeenCalledWith(snapshot)
     expect(second.quickLoad).not.toHaveBeenCalled()
     expect(second.startFrom).not.toHaveBeenCalled()
+    // #620: pendingSnapshot が優先される場合は willAutoQuickLoad が成立しないため、
+    // setEvents は skipAutoAdvance: false（既定の自動進行あり）で呼ばれる。
+    expect(second.setEvents).toHaveBeenCalledWith([], { skipAutoAdvance: false })
   })
 })
 
