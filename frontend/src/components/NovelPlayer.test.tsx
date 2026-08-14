@@ -1087,8 +1087,7 @@ describe('NovelPlayer 操作ボタン(A/S/D) ON色 seekbar_color 連動 (#605)',
   const SKIP_FALLBACK_HEX = '#00c950'
   const DEBUG_FALLBACK_HEX = '#00b8db'
   const autoBtn = () => screen.getByRole('button', { name: /オートモードを/ })
-  const actionColorOf = (btn: HTMLElement) =>
-    btn.style.getPropertyValue('--nn-action-btn-color')
+  const actionColorOf = (btn: HTMLElement) => btn.style.getPropertyValue('--nn-action-btn-color')
 
   it('TC-NP-1: seekbarColor 未指定なら auto/skip/debug 各ボタンがそれぞれの fallback 色になり、3値は互いに異なる（取り違え検出）', async () => {
     render(<NovelPlayer events={[]} debugEnabled={true} />)
