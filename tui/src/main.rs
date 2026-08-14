@@ -15,6 +15,7 @@ mod sentence;
 mod ui;
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -125,13 +126,41 @@ fn main() -> anyhow::Result<()> {
     // 復元してしまうと、「playbackは初期状態なのにread_positionsだけ別原稿を指した値が
     // 残る」という非対称な不整合が起きるため、`playback_restored` が `true` の時だけ
     // `event_loop` に `read_positions` を復元させる。
+    // #622: `--new-game` は既存のクイックセーブを無視して必ず script_dir の
+    // entry_script 先頭（hubの10択画面）から新規開始するためのフラグ。
+    // クイックセーブファイルは削除する方針（以後は通常起動でも「続きから」＝
+    // 今回の新規開始が自然に続きになる体験にするため）。ファイルが存在しなくても
+    // エラーにはしない。削除した場合は `restore_playback` の呼び出し自体を
+    // スキップし、`playback_restored` は `false` のままにする。
     let mut playback_restored = false;
     if let Some(path) = &config.quicksave_path {
-        playback_restored = save::restore_playback(&mut playback, path);
+        playback_restored = apply_new_game_or_restore(cli.new_game, &mut playback, path)?;
     }
     skip_leading_empty_scenes(&mut playback);
 
     run(&config, &mut playback, playback_restored)
+}
+
+/// #622: `--new-game`ならクイックセーブを削除してrestoreをスキップし、
+/// それ以外は従来通りrestore_playbackする。戻り値はplayback_restored。
+fn apply_new_game_or_restore(
+    new_game: bool,
+    playback: &mut Playback,
+    quicksave_path: &Path,
+) -> anyhow::Result<bool> {
+    if new_game {
+        if quicksave_path.exists() {
+            std::fs::remove_file(quicksave_path).with_context(|| {
+                format!(
+                    "クイックセーブファイルの削除に失敗しました: {}",
+                    quicksave_path.display()
+                )
+            })?;
+        }
+        Ok(false)
+    } else {
+        Ok(save::restore_playback(playback, quicksave_path))
+    }
 }
 
 /// #564: `Playback` 構築完了直後の時点で、先頭シーンが Line/Choice/Image を1つも
@@ -3151,6 +3180,315 @@ mod tests {
             "無効なjump先では選択肢表示のまま変わらないはず"
         );
         assert!(current_reveal.is_none());
+    }
+
+    /// #622 デシジョンテーブル行C: `--new-game`指定でもクイックセーブファイルが
+    /// 元から存在しない場合はエラーにならず、削除操作自体が完全にno-op（`false`を
+    /// 返すだけ）であることを確認する。
+    #[test]
+    fn apply_new_game_or_restore_with_new_game_and_no_quicksave_file_is_noop_and_returns_false() {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-apply-new-game-no-file-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+        assert!(!quicksave_path.exists());
+
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let mut playback = Playback::from_document(&document);
+
+        let result = apply_new_game_or_restore(true, &mut playback, &quicksave_path)
+            .expect("ファイルが元から無い場合はエラーにならないはず（#622 デシジョンテーブル行C）");
+
+        assert!(
+            !result,
+            "ファイルが無ければrestoreは行われないためfalseのはず"
+        );
+        assert!(
+            !quicksave_path.exists(),
+            "元から無いファイルの削除を試みてもエラーにならず、存在しないままのはず"
+        );
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-1",
+            "restoreが行われないのでplaybackは初期状態のままのはず"
+        );
+    }
+
+    /// #622 デシジョンテーブル行D（今回実装の核心）: `--new-game`指定時、正常な
+    /// クイックセーブファイルが存在してもその中身は使わず、ファイルごと削除して
+    /// `restore_playback`の呼び出し自体をスキップする。`playback`のシーンは
+    /// 構築直後（entry_script先頭）のまま変化しない。
+    #[test]
+    fn apply_new_game_or_restore_with_new_game_and_existing_quicksave_deletes_file_and_skips_restore(
+    ) {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-apply-new-game-existing-file-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let mut save_source_playback = Playback::from_document(&document);
+        assert!(save_source_playback.jump_to_scene_id("1-2"));
+        save::save_quick(&quicksave_path, &save_source_playback, &HashSet::new());
+        assert!(
+            quicksave_path.exists(),
+            "テスト前提: 正常なクイックセーブファイルが書かれているはず"
+        );
+
+        let mut playback = Playback::from_document(&document);
+        let result = apply_new_game_or_restore(true, &mut playback, &quicksave_path)
+            .expect("正常な削除はエラーにならないはず");
+
+        assert!(
+            !result,
+            "--new-gameではrestoreを行わないのでfalseのはず（#622 デシジョンテーブル行D）"
+        );
+        assert!(
+            !quicksave_path.exists(),
+            "--new-gameは既存のクイックセーブファイルを削除するはず"
+        );
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-1",
+            "restoreがスキップされたのでplaybackのシーンは構築直後のまま変化していないはず"
+        );
+    }
+
+    /// #622 デシジョンテーブル行F: scene_idが現原稿に存在しない壊れた（stale）
+    /// クイックセーブファイルであっても、`--new-game`は中身を検証せずファイルの
+    /// 存在だけを見てまるごと削除する（行Dと同じ削除ロジックであることの確認）。
+    #[test]
+    fn apply_new_game_or_restore_with_new_game_and_stale_scene_id_quicksave_still_deletes_file() {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-apply-new-game-stale-scene-id-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let save_source_playback = Playback::from_document(&document);
+        let real_scene_id = save_source_playback.current_scene_id().to_string();
+        assert_eq!(real_scene_id, "1-1");
+        save::save_quick(&quicksave_path, &save_source_playback, &HashSet::new());
+        let written = std::fs::read_to_string(&quicksave_path).unwrap();
+        let tampered = written.replace(&format!("\"{real_scene_id}\""), "\"does-not-exist\"");
+        assert_ne!(
+            tampered, written,
+            "scene_idの文字列置換がテストの前提どおり発生しているはず"
+        );
+        std::fs::write(&quicksave_path, &tampered).unwrap();
+
+        let mut playback = Playback::from_document(&document);
+        let result = apply_new_game_or_restore(true, &mut playback, &quicksave_path)
+            .expect("stale scene_idでも削除自体はエラーにならないはず");
+
+        assert!(!result);
+        assert!(
+            !quicksave_path.exists(),
+            "壊れた(stale scene_id)クイックセーブでも中身を検証せずファイルごと \
+             削除されるはず（#622 デシジョンテーブル行F）"
+        );
+    }
+
+    /// #622 非回帰: `--new-game`を指定しない場合は従来通り`save::restore_playback`を
+    /// 呼び、その戻り値がそのまま返る（デシジョンテーブル行A/Bの非回帰）。ファイルも
+    /// 削除されない。
+    #[test]
+    fn apply_new_game_or_restore_without_new_game_falls_back_to_existing_restore_playback_behavior()
+    {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-apply-new-game-fallback-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let mut save_source_playback = Playback::from_document(&document);
+        assert!(save_source_playback.jump_to_scene_id("1-2"));
+        save::save_quick(&quicksave_path, &save_source_playback, &HashSet::new());
+
+        let mut playback = Playback::from_document(&document);
+        let result = apply_new_game_or_restore(false, &mut playback, &quicksave_path)
+            .expect("正常な読み込みはエラーにならないはず");
+
+        assert!(
+            result,
+            "new_game=falseなら従来通りrestore_playbackの戻り値がそのまま返るはず"
+        );
+        assert!(
+            quicksave_path.exists(),
+            "new_game=falseではファイルを削除しないはず"
+        );
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-2",
+            "保存済みシーンへ復元されているはず"
+        );
+
+        let _ = std::fs::remove_file(&quicksave_path);
+    }
+
+    /// #622: `--new-game`指定でクイックセーブが削除され`playback_restored=false`と
+    /// なった場合、`event_loop`側の`read_positions`が空集合のまま初期化されることを
+    /// 確認する（#579事故パターン——「playbackは初期状態なのにread_positionsだけ
+    /// 保存済みの古い値が漏れ込む」——の回帰防止）。保存していたクイックセーブは
+    /// stale scene_idケースと違い**中身として完全に正常**（単体で`restore_playback`を
+    /// 呼べば成功する）にもかかわらず、`--new-game`が中身を見ずファイルごと削除する
+    /// ことで結果的に`playback_restored=false`になる点が
+    /// `event_loop_does_not_restore_read_positions_when_restore_playback_fails_on_stale_scene_id`
+    /// との違い（配線パターン自体は同じものを踏襲）。
+    #[test]
+    fn event_loop_read_positions_stay_empty_when_new_game_flag_forced_playback_restored_false() {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-event-loop-new-game-read-positions-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+
+        let mut config = instant_config();
+        config.quicksave_path = Some(quicksave_path.clone());
+
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let mut playback = Playback::from_document(&document);
+        let key0 = playback
+            .stable_item_key(playback.item_index())
+            .expect("先頭item（会話行A）の安定キーが取れるはず");
+
+        // 「前回セッションでAを読了済みだった」を模した既読集合込みで、現在の原稿に
+        // 実在するシーン("1-1")で正常に保存する。
+        save::save_quick(&quicksave_path, &playback, &HashSet::from([key0]));
+        assert!(
+            quicksave_path.exists(),
+            "テスト前提: 正常なクイックセーブファイルが書かれているはず"
+        );
+
+        let playback_restored = apply_new_game_or_restore(true, &mut playback, &quicksave_path)
+            .expect("正常な削除はエラーにならないはず");
+        assert!(
+            !playback_restored,
+            "--new-gameではrestoreを行わないのでfalseのはず"
+        );
+        assert!(
+            !quicksave_path.exists(),
+            "--new-gameでファイルが削除されているはず"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        // スキップを試みる。`read_positions`が`playback_restored`を無視して独立に
+        // 復元されていたら、先頭item（A、上で保存したkey0）が既読扱いされ即座に
+        // スキップが発動しBまで飛ばされてしまう。正しい配線では`playback_restored=false`
+        // なので`read_positions`は空集合のままAは未読と判定され、その場でスキップが
+        // 解除されてAが表示され続けるはず。
+        let (mut next_action, _remaining) = action_queue(vec![Action::ToggleSkip, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            playback_restored,
+        )
+        .unwrap();
+
+        assert_eq!(
+            playback.current_line().unwrap().speaker.as_deref(),
+            Some("A"),
+            "read_positionsが(バグにより)復元されていればAが既読扱いされスキップでBへ \
+             飛ばされてしまうはず。正しい配線では空集合のままAが未読判定されその場に留まる"
+        );
+    }
+
+    /// #622 権限系: クイックセーブファイルを含むディレクトリが書き込み不可（unix
+    /// 0o555）な場合、`std::fs::remove_file`はディレクトリの書き込み権限が無いため
+    /// 失敗する。この失敗を`save.rs`のfail-soft方針（`save_quick_does_not_panic_when_target_directory_is_read_only`
+    /// 参照）のように握りつぶすのではなく、`Err`として呼び出し元（`main()`）まで
+    /// 伝播させる設計であることを確認する——「新規開始の要求に対し黙って失敗するのは
+    /// 避けるべき」というIssue本文の意図をここで固定する。macOSのローカル開発機
+    /// （非root実行）を前提とする。
+    #[cfg(unix)]
+    #[test]
+    fn apply_new_game_or_restore_with_new_game_when_quicksave_dir_is_read_only_returns_err() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "name-name-tui-apply-new-game-readonly-dir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+
+        struct ReadonlyDirGuard(std::path::PathBuf);
+        impl Drop for ReadonlyDirGuard {
+            fn drop(&mut self) {
+                // remove_dir_allの前に書き込み権限を戻さないと自分自身の削除にも失敗する。
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = ReadonlyDirGuard(dir.clone());
+
+        let quicksave_path = dir.join("quicksave.json");
+        // ディレクトリがまだ書き込み可能なうちにファイルを作っておく
+        // （unlinkに必要なのはファイル自体ではなく親ディレクトリの書き込み権限）。
+        std::fs::write(&quicksave_path, "{}").unwrap();
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let mut playback = Playback::from_document(&document);
+
+        let result = apply_new_game_or_restore(true, &mut playback, &quicksave_path);
+
+        assert!(
+            result.is_err(),
+            "削除失敗時はfail-softにせずErrを伝播する設計。この設計判断をここで固定する"
+        );
+    }
+
+    /// #622 冪等性: `--new-game`を連続で実行しても（2回目はファイルが既に無い状態）
+    /// エラーにならず、常に`false`を返す。
+    #[test]
+    fn apply_new_game_or_restore_with_new_game_twice_in_a_row_is_idempotent() {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-apply-new-game-idempotent-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+
+        let document = name_name_parser::parser::parse(choice_branch_source());
+        let mut save_source_playback = Playback::from_document(&document);
+        assert!(save_source_playback.jump_to_scene_id("1-2"));
+        save::save_quick(&quicksave_path, &save_source_playback, &HashSet::new());
+        assert!(quicksave_path.exists());
+
+        let mut playback = Playback::from_document(&document);
+
+        let first = apply_new_game_or_restore(true, &mut playback, &quicksave_path)
+            .expect("1回目の削除はエラーにならないはず");
+        assert!(!first);
+        assert!(
+            !quicksave_path.exists(),
+            "1回目の呼び出しでファイルが削除されているはず"
+        );
+
+        let second = apply_new_game_or_restore(true, &mut playback, &quicksave_path)
+            .expect("2回目（ファイルが既に無い状態）でもエラーにならないはず（#622 冪等性）");
+        assert!(!second);
+        assert!(!quicksave_path.exists());
     }
 
     /// #579 の配線（`event_loop` 内、`Action::Advance` アーム末尾の自動クイックセーブ
