@@ -1488,20 +1488,31 @@ describe('EventImageLayer ピクセレート遷移 (#583)', () => {
     expect(ll.pixelateState!.phase).toBe('refine')
   })
 
-  it('spriteが無い場合(初回表示等)はPixelate指定でもFade経路(即時/フェード表示)にフォールバックする', async () => {
+  it('spriteが無い場合(初回表示等)でもPixelate指定+fadeMs>0ならピクセレート経路(黒ベタからコルセン→スワップ→リファイン)に入る(#612)', async () => {
     mockAssetsLoadResolved()
-    const layer = makeLayer(virtualTime())
+    const time = virtualTime()
+    const layer = makeLayer(time)
     // 初回show()なのでthis.spriteはまだ無い。
-    layer.show('story/a.webp', { transition: 'Pixelate', fadeMs: 500 })
-    expect(internals(layer).pixelateState).toBeNull()
+    layer.show('story/a.webp', { transition: 'Pixelate', fadeMs: 320 })
+    const ll = internals(layer)
+    expect(ll.sprite).toBeNull()
+    expect(ll.pixelateState).not.toBeNull()
+    expect(ll.pixelateState!.phase).toBe('coarsen')
+    expect(ll.pixelateFilter!.sizeX).toBe(1)
 
-    await flushPromises()
-    expect(internals(layer).sprite).not.toBeNull()
-    expect(internals(layer).fadeAnimation).toMatchObject({
-      durationMs: 500,
-      fromAlpha: 0,
-      toAlpha: 1,
-    })
+    await flushPromises() // aのロード完了(pendingTexture確保、まだコルセン中)
+    expect(ll.sprite).toBeNull()
+
+    time.tick(160) // swapAtMs(160)ちょうど: スワップ
+    expect(ll.sprite).not.toBeNull()
+    expect(ll.sprite!.alpha).toBe(1)
+    expect(ll.pixelateState!.phase).toBe('refine')
+    expect(layer.getState()?.path).toBe('story/a.webp')
+
+    time.tick(170) // リファイン完了(remaining=160)
+    expect(ll.pixelateState).toBeNull()
+    expect(ll.pixelateFilter!.sizeX).toBe(1)
+    expect(layer.hasPendingVisualTransition()).toBe(false)
   })
 
   it('fadeMs<=0はPixelate指定でもFade経路(即時表示)にフォールバックする', async () => {

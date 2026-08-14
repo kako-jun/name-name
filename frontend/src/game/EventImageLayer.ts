@@ -523,10 +523,12 @@ export class EventImageLayer extends Container {
    * `current`（settled state）は同期的に確定させるが、実際の sprite 生成・フェード開始は
    * テクスチャロード完了後（Assets.load().then() 内）まで遅延する（#427/#428 対策）。
    *
-   * ピクセレート遷移 (#583, `opts.transition === 'Pixelate'`) は表示中の絵があり、かつ所要時間
-   * （`fadeMs`）が正のときだけ `startPixelateTransition()` の専用経路を通す。表示中の絵が無い
-   * （初回表示等）場合や fadeMs<=0（即時指定）の場合は遷移するものが無い/瞬時表示が明示されて
-   * いるため、以下の Fade 経路（実質は即時表示）にフォールバックする。
+   * ピクセレート遷移 (#583, `opts.transition === 'Pixelate'`) は所要時間（`fadeMs`）が正のときだけ
+   * `startPixelateTransition()` の専用経路を通す。表示中の絵が無い（初回表示、`[イベント絵終了:]`
+   * 後の再表示等）場合も同じ経路に入る（#612）— `imageGroup` が空のままコルセンが始まるだけで、
+   * ステージは `background_color` のベタ塗りなので見た目は「黒ベタからのピクセレート遷移」になる。
+   * fadeMs<=0（即時指定）の場合のみ、遷移するものが無い/瞬時表示が明示されているため、以下の
+   * Fade 経路（実質は即時表示）にフォールバックする。
    */
   show(path: string, opts: EventImageShowOptions = {}): void {
     const back: 'Hide' | 'Keep' = opts.back === 'Keep' ? 'Keep' : 'Hide'
@@ -535,7 +537,7 @@ export class EventImageLayer extends Container {
     const onSettled = opts.onSettled
     const onVisibilityChange = opts.onVisibilityChange
 
-    if (opts.transition === 'Pixelate' && this.sprite && fadeMs > 0) {
+    if (opts.transition === 'Pixelate' && fadeMs > 0) {
       this.startPixelateTransition(path, {
         back,
         effects,
@@ -754,13 +756,15 @@ export class EventImageLayer extends Container {
   }
 
   /**
-   * ピクセレート遷移 (#583) を開始する。表示中の絵（`this.sprite`）はそのまま画面に残し、
+   * ピクセレート遷移 (#583) を開始する。表示中の絵（`this.sprite`）があればそのまま画面に残し、
    * `imageGroup` に `PixelateFilter` を掛けてコルセン（ドットを粗くする）を開始しながら、
-   * 並行して次の画像を読み込む。コルセンが完了した時点（`durationMs` の
-   * `PIXELATE_TRANSITION_SWAP_RATIO` 地点）でロードが終わっていれば即座にスワップし
-   * (`performPixelateSwap`)、終わっていなければロード完了まで最大サイズで保持してから
-   * スワップする（`holding` フェーズ）。スワップ後は新しい画像を残り時間でリファイン
-   * （細かく戻す）する。
+   * 並行して次の画像を読み込む。表示中の絵が無い場合（#612。初回表示、`[イベント絵終了:]` 後の
+   * 再表示等）は `imageGroup` が空のままコルセンが始まる — ステージは `background_color` の
+   * ベタ塗りなので見た目は変化せず「黒ベタからのピクセレート遷移」として成立する。
+   * コルセンが完了した時点（`durationMs` の `PIXELATE_TRANSITION_SWAP_RATIO` 地点）でロードが
+   * 終わっていれば即座にスワップし (`performPixelateSwap`)、終わっていなければロード完了まで
+   * 最大サイズで保持してからスワップする（`holding` フェーズ）。スワップ後は新しい画像を残り時間で
+   * リファイン（細かく戻す）する。
    *
    * `current`（settled state）は他の show() 経路と同じく同期的に確定させる（ADR-0002）。
    */
@@ -891,10 +895,13 @@ export class EventImageLayer extends Container {
    * ピクセレート自体が視覚的な遷移を担うため常に alpha=1 で出す）。以後 `updatePixelateFrame`
    * が 'refine' フェーズへ移行し、`PixelateFilter.size` を最大値→1 へ戻す。
    *
-   * `back=Hide` の可視性判定 (`shouldHideBackLayer`) はこの関数の呼び出し前後を通じて
-   * `this.fadeAnimation === null` かつ `this.sprite !== null` のままなので、Fade 経路の
-   * 「フェードイン完了まで背面を隠さない」制御は不要（ピクセレートは常時 alpha=1 で画面を
-   * 覆っているため）。スワップの瞬間に `onVisibilityChange`/`onSettled` を発火する。
+   * `back=Hide` の可視性判定 (`shouldHideBackLayer`) は、呼び出し後は常に `this.fadeAnimation
+   * === null` かつ `this.sprite !== null` になるので、Fade 経路の「フェードイン完了まで背面を
+   * 隠さない」制御は不要（ピクセレートは常時 alpha=1 で画面を覆っているため）。呼び出し前は
+   * 表示中の絵が無いケース（#612。コルセン開始時点）だと `this.sprite === null` のままだが、
+   * その間は `shouldHideBackLayer()` が `sprite === null` を理由に false を返す（Fade 経路の
+   * ロード中と同じ規約）ので背面が誤って隠れることはない。スワップの瞬間に
+   * `onVisibilityChange`/`onSettled` を発火する。
    */
   private performPixelateSwap(texture: Texture): void {
     const s = this.pixelateState
