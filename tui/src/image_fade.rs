@@ -176,9 +176,22 @@ impl ImageFadeState {
     /// リファイン中として描画する — `blend` のように2枚を同時に合成するのではなく、常に
     /// どちらか一方だけを「粗さ」を変えながら描画する（Issue #583 本文の設計、GUI版
     /// `EventImageLayer.performPixelateSwap` と対称: スワップの瞬間に表示対象が切り替わる）。
-    /// 対象パスが `None`（例: `from` が無い状態からの初回表示）の場合は
-    /// [`image_render::blank_grid`] にフォールバックする（`blend` の missing-side 扱いと同じ
-    /// 「黒扱い」の考え方）。
+    ///
+    /// 対象パスが `None` の場合は [`image_render::blank_grid`] を返す。これは想定外入力への
+    /// 防御ではなく、`from` が無い状態（シーン最初の `[イベント絵:]` 表示など）で普通に発生する
+    /// 正当な共通ケースの意図した挙動（`blend` の missing-side 扱いと同じ「黒扱い」の考え方）。
+    /// この場合、コルセンフェーズは「黒を粗くする」実質no-op（黒は divisor に関わらず黒のまま）
+    /// を経てスワップ境界で `to` に切り替わり、そこからリファインで細かく戻る——つまり見た目は
+    /// 「黒ベタからのピクセレート出現」になる（#613）。
+    ///
+    /// GUI版 (#612) はこれと非対称だった: `EventImageLayer.show()` が
+    /// `this.sprite && fadeMs > 0` というゲートを持ち、表示中スプライトが無いと Pixelate 分岐
+    /// 自体に入らず Fade（実質即時表示）へフォールバックするバグがあった。TUI 側の
+    /// [`Self::snapshot`] は `to_transition == Pixelate` の判定だけで `from` の有無を問わず
+    /// 常にこの関数を呼ぶため、同種のゲートはそもそも存在しない。つまり GUI 側は
+    /// 「スプライト無しでも Pixelate 分岐に入れる」ようゲートを外して直したのに対し、
+    /// TUI 側はこの `None` フォールバックが最初から同じ役割を正しく果たしていた
+    /// （#613 で変更が必要だったのは実装ではなく、このコメントとテスト名の位置づけだけ）。
     fn pixelate_snapshot(
         &self,
         cache: &mut ImageCache,
@@ -984,9 +997,10 @@ mod tests {
     }
 
     #[test]
-    fn pixelate_snapshot_coarsen_phase_from_none_returns_blank_grid() {
-        // 観点D-4: コルセン中、fromがNoneならblank_gridになる
-        // （from=Noneからの遷移＝初回表示にPixelateを指定するような想定外入力への防御）。
+    fn pixelate_snapshot_coarsen_phase_from_none_shows_solid_black_as_intended_reveal_start() {
+        // 観点D-4: コルセン中、fromがNoneならblank_gridになる。これは想定外入力への防御では
+        // なく、シーン最初の`[イベント絵:]`表示という正当な共通ケースで「黒ベタ→コルセン
+        // (no-op)→スワップ→リファイン」が意図通り描画されていることの確認（#613）。
         let color_to = (10u8, 220u8, 30u8);
         let fixture_to = image_render::write_test_webp_fixture(&solid_rgba(color_to, 2, 2), 2, 2);
         let relative_to = fixture_to
@@ -1052,6 +1066,93 @@ mod tests {
         assert!(
             grid.cells.iter().all(|c| *c == image_render::BLANK_CELL),
             "to=Noneのリファイン中はblank_grid相当のはず"
+        );
+    }
+
+    #[test]
+    fn pixelate_snapshot_from_none_full_transition_never_shows_placeholder_and_converges_to_to_image(
+    ) {
+        // 観点(#613): from=None → to=Some(path) のPixelate遷移をt=0からt=1.0まで複数サンプルし、
+        // (1) snapshot()が一度もNoneを返さないこと（プレースホルダに落ちないことの証明）、
+        // (2) コルセン中(t<0.5)はblank_grid相当(黒一色)であること、
+        // (3) スワップ境界(t=0.5)以降はto画像がresolve_gridと一致する形でdivisorが8→1へ
+        //     収束しながら描画されること、
+        // (4) t=1.0ではto画像がdivisor=1(粗さ無し)の完成形で描画されることを確認する。
+        let colors = [
+            (200u8, 40u8, 210u8),
+            (10u8, 220u8, 30u8),
+            (250u8, 250u8, 10u8),
+            (5u8, 5u8, 200u8),
+        ];
+        let (config, relative_to) = config_and_relative_path_for_quadrant_fixture(colors);
+
+        let started_at = Instant::now();
+        let state = ImageFadeState {
+            from: None,
+            to: Some(relative_to.clone()),
+            from_effects: AmbientEffects::default(),
+            to_effects: AmbientEffects::default(),
+            to_transition: EventImageTransition::Pixelate,
+            started_at,
+            duration: Duration::from_millis(1000),
+        };
+        let mut cache = ImageCache::new();
+        let mut reference_cache = ImageCache::new();
+
+        for ms in [0u64, 100, 250, 400, 499, 500, 501, 700, 999] {
+            let now = started_at + Duration::from_millis(ms);
+            let t = (ms as f32 / 1000.0).clamp(0.0, 1.0);
+            let grid = state
+                .snapshot(&mut cache, &config, 2, 2, now)
+                .expect("from=None && to=Someでもsnapshot()はNoneを返さないはず（プレースホルダに落ちない）");
+
+            if is_coarsen_phase(t, PIXELATE_TRANSITION_SWAP_RATIO) {
+                assert!(
+                    grid.cells.iter().all(|c| *c == image_render::BLANK_CELL),
+                    "t={t}(ms={ms})のコルセン中はblank_grid相当のはず"
+                );
+            } else {
+                let divisor = compute_divisor(
+                    t,
+                    PIXELATE_TRANSITION_SWAP_RATIO,
+                    PIXELATE_TRANSITION_MAX_DIVISOR,
+                );
+                let expected = resolve_grid(
+                    &mut reference_cache,
+                    &config,
+                    &relative_to,
+                    AmbientEffects::default(),
+                    elapsed_ms_since_epoch(now),
+                    2,
+                    2,
+                    divisor,
+                );
+                assert_eq!(
+                    grid.cells, expected.cells,
+                    "t={t}(ms={ms}, divisor={divisor})はresolve_grid(to, divisor)と一致するはず"
+                );
+            }
+        }
+
+        // t=1.0（duration経過後）は snapshot() の早期リターン経路（t>=1.0）を通り、
+        // divisor=1（粗さ無し）の完成形になるはず。
+        let final_now = started_at + Duration::from_millis(1000);
+        let final_grid = state
+            .snapshot(&mut cache, &config, 2, 2, final_now)
+            .expect("t=1.0でもtoがSomeなのでsnapshot()はSomeのはず");
+        let expected_final = resolve_grid(
+            &mut reference_cache,
+            &config,
+            &relative_to,
+            AmbientEffects::default(),
+            elapsed_ms_since_epoch(final_now),
+            2,
+            2,
+            1,
+        );
+        assert_eq!(
+            final_grid.cells, expected_final.cells,
+            "t=1.0はdivisor=1(粗さ無し)の完成形のはず"
         );
     }
 
