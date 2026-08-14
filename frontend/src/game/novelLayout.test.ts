@@ -11,6 +11,7 @@ import {
   parseHexColor,
   parseColorToNumber,
   numberToHexColor,
+  resolveActionButtonColor,
   resolveAssetUrl,
   resolveCharacterImageUrls,
   getIndicatorImageUrls,
@@ -34,6 +35,9 @@ import {
   clampFadeMs,
   computeFullscreenImageFit,
   clampFullscreenImageScrollY,
+  AUTO_BUTTON_FALLBACK_COLOR,
+  SKIP_BUTTON_FALLBACK_COLOR,
+  DEBUG_BUTTON_FALLBACK_COLOR,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -1088,6 +1092,124 @@ describe('numberToHexColor (#601)', () => {
 
   it('TC-N12: parseColorToNumber は # なし入力も受理し、往復後は # 付きに正規化される', () => {
     expect(numberToHexColor(parseColorToNumber('b8934f', 0))).toBe('#b8934f')
+  })
+})
+
+// ===== #605: resolveActionButtonColor（操作ボタン A/S/D の ON 時色決定）=====
+//
+// parseColorToNumber + numberToHexColor の合成。テスト設計のデシジョンテーブル
+// （seekbarColor 状態 × ボタン種別）を踏襲し、各ボタン固有の fallback へ正しく倒れること
+// （取り違えがないこと）と、有効な seekbarColor では 3 ボタンが同一値に収束することの
+// 両方を縛る。fallback は実装の実測値定数と同じ値を使う。
+describe('resolveActionButtonColor (#605)', () => {
+  // 実装の定数から導出（ハードコード重複禁止 #605 セルフレビュー指摘）。fallback 値が変われば
+  // このテストの期待値も自動で追従する。
+  const AUTO_FALLBACK = AUTO_BUTTON_FALLBACK_COLOR
+  const SKIP_FALLBACK = SKIP_BUTTON_FALLBACK_COLOR
+  const DEBUG_FALLBACK = DEBUG_BUTTON_FALLBACK_COLOR
+  const AUTO_FALLBACK_HEX = numberToHexColor(AUTO_BUTTON_FALLBACK_COLOR)
+  const SKIP_FALLBACK_HEX = numberToHexColor(SKIP_BUTTON_FALLBACK_COLOR)
+  const DEBUG_FALLBACK_HEX = numberToHexColor(DEBUG_BUTTON_FALLBACK_COLOR)
+
+  it('TC-RABC-1: undefined は3ボタンそれぞれ自分のfallbackになり、3値は互いに異なる（取り違え検出）', () => {
+    const auto = resolveActionButtonColor(undefined, AUTO_FALLBACK)
+    const skip = resolveActionButtonColor(undefined, SKIP_FALLBACK)
+    const debug = resolveActionButtonColor(undefined, DEBUG_FALLBACK)
+    expect(auto).toBe(AUTO_FALLBACK_HEX)
+    expect(skip).toBe(SKIP_FALLBACK_HEX)
+    expect(debug).toBe(DEBUG_FALLBACK_HEX)
+    expect(new Set([auto, skip, debug]).size).toBe(3)
+  })
+
+  it('TC-RABC-2: null は undefined と同じ結果になる（?? undefined coalescing の検証）', () => {
+    expect(resolveActionButtonColor(null, AUTO_FALLBACK)).toBe(
+      resolveActionButtonColor(undefined, AUTO_FALLBACK)
+    )
+    expect(resolveActionButtonColor(null, SKIP_FALLBACK)).toBe(SKIP_FALLBACK_HEX)
+  })
+
+  it('TC-RABC-3: 空文字は3ボタンともそれぞれのfallbackに倒れる', () => {
+    expect(resolveActionButtonColor('', AUTO_FALLBACK)).toBe(AUTO_FALLBACK_HEX)
+    expect(resolveActionButtonColor('', SKIP_FALLBACK)).toBe(SKIP_FALLBACK_HEX)
+    expect(resolveActionButtonColor('', DEBUG_FALLBACK)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-RABC-4: 空白のみは trim 後に空文字扱いでfallbackに倒れる', () => {
+    expect(resolveActionButtonColor('   ', AUTO_FALLBACK)).toBe(AUTO_FALLBACK_HEX)
+    expect(resolveActionButtonColor('   ', SKIP_FALLBACK)).toBe(SKIP_FALLBACK_HEX)
+    expect(resolveActionButtonColor('   ', DEBUG_FALLBACK)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-RABC-5: 5桁hex（6桁境界の-1）はfallbackに倒れる', () => {
+    expect(resolveActionButtonColor('1234a', AUTO_FALLBACK)).toBe(AUTO_FALLBACK_HEX)
+    expect(resolveActionButtonColor('1234a', SKIP_FALLBACK)).toBe(SKIP_FALLBACK_HEX)
+    expect(resolveActionButtonColor('1234a', DEBUG_FALLBACK)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-RABC-6: 6桁hex（境界）は有効値になり3ボタン共通の値へ収束する', () => {
+    const auto = resolveActionButtonColor('#1a4a7a', AUTO_FALLBACK)
+    const skip = resolveActionButtonColor('#1a4a7a', SKIP_FALLBACK)
+    const debug = resolveActionButtonColor('#1a4a7a', DEBUG_FALLBACK)
+    expect(auto).toBe('#1a4a7a')
+    expect(skip).toBe('#1a4a7a')
+    expect(debug).toBe('#1a4a7a')
+  })
+
+  it('TC-RABC-7: 7桁hex（6桁境界の+1）はfallbackに倒れる', () => {
+    expect(resolveActionButtonColor('1234abc', AUTO_FALLBACK)).toBe(AUTO_FALLBACK_HEX)
+    expect(resolveActionButtonColor('1234abc', SKIP_FALLBACK)).toBe(SKIP_FALLBACK_HEX)
+    expect(resolveActionButtonColor('1234abc', DEBUG_FALLBACK)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-RABC-8: 2桁（3桁展開境界の-1）はfallbackに倒れる', () => {
+    expect(resolveActionButtonColor('ab', AUTO_FALLBACK)).toBe(AUTO_FALLBACK_HEX)
+    expect(resolveActionButtonColor('ab', SKIP_FALLBACK)).toBe(SKIP_FALLBACK_HEX)
+    expect(resolveActionButtonColor('ab', DEBUG_FALLBACK)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-RABC-9: 3桁hex #abc（3桁展開境界）は #aabbcc に展開され3ボタン共通の値へ収束する', () => {
+    const auto = resolveActionButtonColor('#abc', AUTO_FALLBACK)
+    const skip = resolveActionButtonColor('#abc', SKIP_FALLBACK)
+    const debug = resolveActionButtonColor('#abc', DEBUG_FALLBACK)
+    expect(auto).toBe('#aabbcc')
+    expect(skip).toBe('#aabbcc')
+    expect(debug).toBe('#aabbcc')
+  })
+
+  it('TC-RABC-10: 4桁（3桁展開境界の+1）はfallbackに倒れる', () => {
+    expect(resolveActionButtonColor('abcd', AUTO_FALLBACK)).toBe(AUTO_FALLBACK_HEX)
+    expect(resolveActionButtonColor('abcd', SKIP_FALLBACK)).toBe(SKIP_FALLBACK_HEX)
+    expect(resolveActionButtonColor('abcd', DEBUG_FALLBACK)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-RABC-11: 大文字hex #ABCDEF は小文字 #abcdef に正規化される', () => {
+    expect(resolveActionButtonColor('#ABCDEF', AUTO_FALLBACK)).toBe('#abcdef')
+  })
+
+  it('TC-RABC-12: # なし6桁 b8934f は #b8934f として有効になる', () => {
+    expect(resolveActionButtonColor('b8934f', AUTO_FALLBACK)).toBe('#b8934f')
+  })
+
+  it('TC-RABC-13: 非16進文字を含む6桁 zzzzzz はfallbackに倒れる', () => {
+    expect(resolveActionButtonColor('zzzzzz', AUTO_FALLBACK)).toBe(AUTO_FALLBACK_HEX)
+    expect(resolveActionButtonColor('zzzzzz', SKIP_FALLBACK)).toBe(SKIP_FALLBACK_HEX)
+    expect(resolveActionButtonColor('zzzzzz', DEBUG_FALLBACK)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-RABC-14: 全角/絵文字混入は例外を投げずfallbackに倒れる', () => {
+    expect(() => resolveActionButtonColor('＃ｂ８９３４ｆ', AUTO_FALLBACK)).not.toThrow()
+    expect(resolveActionButtonColor('＃ｂ８９３４ｆ', AUTO_FALLBACK)).toBe(AUTO_FALLBACK_HEX)
+    expect(() => resolveActionButtonColor('🎨🎨🎨🎨🎨🎨', SKIP_FALLBACK)).not.toThrow()
+    expect(resolveActionButtonColor('🎨🎨🎨🎨🎨🎨', SKIP_FALLBACK)).toBe(SKIP_FALLBACK_HEX)
+  })
+
+  it('TC-RABC-15: 前後空白付き有効色は trim され、AUTO/SKIP/DEBUG いずれの fallback で呼んでも同一の値に収束する', () => {
+    const auto = resolveActionButtonColor(' #b8934f ', AUTO_FALLBACK)
+    const skip = resolveActionButtonColor(' #b8934f ', SKIP_FALLBACK)
+    const debug = resolveActionButtonColor(' #b8934f ', DEBUG_FALLBACK)
+    expect(auto).toBe('#b8934f')
+    expect(skip).toBe('#b8934f')
+    expect(debug).toBe('#b8934f')
   })
 })
 

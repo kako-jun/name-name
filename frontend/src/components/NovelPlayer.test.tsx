@@ -18,7 +18,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Assets, Texture } from 'pixi.js'
-import { computeDynamicRenderResolution, getIndicatorImageUrls } from '../game/novelLayout'
+import {
+  computeDynamicRenderResolution,
+  getIndicatorImageUrls,
+  numberToHexColor,
+  AUTO_BUTTON_FALLBACK_COLOR,
+  SKIP_BUTTON_FALLBACK_COLOR,
+  DEBUG_BUTTON_FALLBACK_COLOR,
+} from '../game/novelLayout'
 import { INACTIVITY_MS } from '../game/SeekBar'
 import type { NovelGameState } from '../game/GameState'
 
@@ -1074,6 +1081,148 @@ describe('NovelPlayer SeekBar 色 seekbar_color 配線 (#440)', () => {
     await flushAsync()
     const r = rendererInstances[rendererInstances.length - 1]
     expect(r.setSeekBarColor).toHaveBeenCalledWith(null)
+  })
+})
+
+// #605: 操作ボタン（A/S/D）の ON 時背景色を seekbar_color に連動させる配線。
+// 色決定ロジック自体（境界値等）は resolveActionButtonColor 単体で novelLayout.test.ts が縛るので、
+// ここでは「NovelPlayer が resolveActionButtonColor の結果を各ボタンの style CSS 変数
+// （--nn-action-btn-color）へ正しく配線しているか」「ON/OFF の表示条件ロジック（className の
+// 出し分け）と色ロジックが分離され、互いに副作用を及ぼさないか」を検証する。
+describe('NovelPlayer 操作ボタン(A/S/D) ON色 seekbar_color 連動 (#605)', () => {
+  // 実装の定数から導出（ハードコード重複禁止 #605 セルフレビュー指摘）。fallback 値が変われば
+  // このテストの期待値も自動で追従する。
+  const AUTO_FALLBACK_HEX = numberToHexColor(AUTO_BUTTON_FALLBACK_COLOR)
+  const SKIP_FALLBACK_HEX = numberToHexColor(SKIP_BUTTON_FALLBACK_COLOR)
+  const DEBUG_FALLBACK_HEX = numberToHexColor(DEBUG_BUTTON_FALLBACK_COLOR)
+  const autoBtn = () => screen.getByRole('button', { name: /オートモードを/ })
+  const actionColorOf = (btn: HTMLElement) => btn.style.getPropertyValue('--nn-action-btn-color')
+
+  it('TC-NP-1: seekbarColor 未指定なら auto/skip/debug 各ボタンがそれぞれの fallback 色になり、3値は互いに異なる（取り違え検出）', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    const auto = actionColorOf(autoBtn())
+    const skip = actionColorOf(skipButton()!)
+    const debug = actionColorOf(debugButton()!)
+    expect(auto).toBe(AUTO_FALLBACK_HEX)
+    expect(skip).toBe(SKIP_FALLBACK_HEX)
+    expect(debug).toBe(DEBUG_FALLBACK_HEX)
+    expect(new Set([auto, skip, debug]).size).toBe(3)
+  })
+
+  it('TC-NP-2: seekbarColor="#b8934f" なら auto/skip/debug の3ボタンとも同一の色に統一される', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} seekbarColor="#b8934f" />)
+    await flushAsync()
+    expect(actionColorOf(autoBtn())).toBe('#b8934f')
+    expect(actionColorOf(skipButton()!)).toBe('#b8934f')
+    expect(actionColorOf(debugButton()!)).toBe('#b8934f')
+  })
+
+  it('TC-NP-3: seekbarColor={null} なら各ボタン個別の fallback に戻る', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} seekbarColor={null} />)
+    await flushAsync()
+    expect(actionColorOf(autoBtn())).toBe(AUTO_FALLBACK_HEX)
+    expect(actionColorOf(skipButton()!)).toBe(SKIP_FALLBACK_HEX)
+    expect(actionColorOf(debugButton()!)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-NP-4: seekbarColor="" なら各ボタン個別の fallback に戻る', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} seekbarColor="" />)
+    await flushAsync()
+    expect(actionColorOf(autoBtn())).toBe(AUTO_FALLBACK_HEX)
+    expect(actionColorOf(skipButton()!)).toBe(SKIP_FALLBACK_HEX)
+    expect(actionColorOf(debugButton()!)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-NP-5: seekbarColor="not-a-color" なら各ボタン個別の fallback に戻り、console.error/warn は呼ばれない', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    render(<NovelPlayer events={[]} debugEnabled={true} seekbarColor="not-a-color" />)
+    await flushAsync()
+    expect(actionColorOf(autoBtn())).toBe(AUTO_FALLBACK_HEX)
+    expect(actionColorOf(skipButton()!)).toBe(SKIP_FALLBACK_HEX)
+    expect(actionColorOf(debugButton()!)).toBe(DEBUG_FALLBACK_HEX)
+    expect(errSpy).not.toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('TC-NP-6: auto/skip/debug いずれも OFF 時は className に bg-[var(--nn-action-btn-color)] を含まず bg-black/50 のままだが、style の --nn-action-btn-color 自体は OFF 時も設定されている', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} docKey="doc-x" />)
+    await flushAsync()
+    for (const btn of [autoBtn(), skipButton()!, debugButton()!]) {
+      expect(btn.className).not.toContain('bg-[var(--nn-action-btn-color)]')
+      expect(btn.className).toContain('bg-black/50')
+      expect(actionColorOf(btn)).not.toBe('')
+    }
+  })
+
+  it('TC-NP-7: auto/skip/debug いずれも ON 時は className に bg-[var(--nn-action-btn-color)]/80 と hover:bg-[var(--nn-action-btn-color)] を含む', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} docKey="doc-x" autoPlay={true} />)
+    await flushAsync()
+    // auto は autoPlay={true} で起動時から ON。
+    expect(autoBtn().className).toContain('bg-[var(--nn-action-btn-color)]/80')
+    expect(autoBtn().className).toContain('hover:bg-[var(--nn-action-btn-color)]')
+
+    // skip / debug はクリックで ON にする。
+    await act(async () => {
+      skipButton()!.click()
+    })
+    expect(skipButton()!.className).toContain('bg-[var(--nn-action-btn-color)]/80')
+    expect(skipButton()!.className).toContain('hover:bg-[var(--nn-action-btn-color)]')
+
+    await act(async () => {
+      debugButton()!.click()
+    })
+    expect(debugButton()!.className).toContain('bg-[var(--nn-action-btn-color)]/80')
+    expect(debugButton()!.className).toContain('hover:bg-[var(--nn-action-btn-color)]')
+  })
+
+  it('TC-NP-8: rerender で seekbarColor が undefined → "#1a4a7a" → null と変化すると、都度 --nn-action-btn-color が追従する', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    expect(actionColorOf(autoBtn())).toBe(AUTO_FALLBACK_HEX)
+
+    rerender(<NovelPlayer events={[]} debugEnabled={true} seekbarColor="#1a4a7a" />)
+    await flushAsync()
+    expect(actionColorOf(autoBtn())).toBe('#1a4a7a')
+    expect(actionColorOf(skipButton()!)).toBe('#1a4a7a')
+    expect(actionColorOf(debugButton()!)).toBe('#1a4a7a')
+
+    rerender(<NovelPlayer events={[]} debugEnabled={true} seekbarColor={null} />)
+    await flushAsync()
+    expect(actionColorOf(autoBtn())).toBe(AUTO_FALLBACK_HEX)
+    expect(actionColorOf(skipButton()!)).toBe(SKIP_FALLBACK_HEX)
+    expect(actionColorOf(debugButton()!)).toBe(DEBUG_FALLBACK_HEX)
+  })
+
+  it('TC-NP-9: seekbarColor が変化しても autoMode/skipMode/debugOpen の ON/OFF 状態（aria-label 等）は影響を受けない（色ロジックと表示条件ロジックの分離）', async () => {
+    const { rerender } = render(
+      <NovelPlayer events={[]} debugEnabled={true} docKey="doc-x" autoPlay={true} />
+    )
+    await flushAsync()
+    await act(async () => {
+      skipButton()!.click()
+    })
+    await act(async () => {
+      debugButton()!.click()
+    })
+    expect(autoBtn()).toHaveAttribute('aria-label', 'オートモードをオフにする')
+    expect(skipButton()!).toHaveAttribute('aria-label', 'スキップモードをオフにする')
+    expect(debugButton()!).toHaveAttribute('aria-pressed', 'true')
+
+    rerender(
+      <NovelPlayer
+        events={[]}
+        debugEnabled={true}
+        docKey="doc-x"
+        autoPlay={true}
+        seekbarColor="#1a4a7a"
+      />
+    )
+    await flushAsync()
+    expect(autoBtn()).toHaveAttribute('aria-label', 'オートモードをオフにする')
+    expect(skipButton()!).toHaveAttribute('aria-label', 'スキップモードをオフにする')
+    expect(debugButton()!).toHaveAttribute('aria-pressed', 'true')
   })
 })
 
