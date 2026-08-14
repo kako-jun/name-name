@@ -2604,10 +2604,17 @@ mod tests {
         )
         .unwrap();
 
-        // スプラッシュ用の「Enter / Space で開始」ヒントが一切描画されておらず、
-        // event_loop 側の描画（位置表示 "0/0"）だけが出ていることを確認する。
+        // #587以降、共通操作フッター（Enter/Space 次へ ... C 設定 ...）はsplashの有無に
+        // 関わらず常時表示されるため、「Enter」の非存在ではもう判定できない
+        // （splashが描かれる/描かれないに関わらず、通常プレイ画面`draw`側の
+        // `draw_status_line`経由で同じフッターが出る）。ここでは splash をスキップして
+        // event_loop 側の通常プレイ描画（共通フッター + 位置表示 "0/0"）が出ていることを
+        // 確認する。
         let text = buffer_text(&terminal);
-        assert!(!text.contains("Enter"), "buffer was: {text}");
+        assert!(
+            text.contains("C 設定"),
+            "共通操作フッターは通常プレイでも常時表示されるはず, buffer was: {text}"
+        );
         assert!(text.contains("0/0"), "buffer was: {text}");
     }
 
