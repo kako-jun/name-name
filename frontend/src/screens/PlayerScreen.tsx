@@ -971,23 +971,32 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                   renderer?.restart?.()
                 }}
                 onContinue={() => {
-                  // つづきから: スキップモードで未読位置まで高速進行
-                  setStartWithSkip(true)
-                  setTitleDismissed(true)
-                  // さらに scenario は TitleOverlay 表示中に既に最初の text event まで進行している
-                  // ため、AudioContext 起動後に setEvents で再リセットして最初から走らせる
-                  // (これをしないと冒頭の voice 付き Narration/Dialog が AudioContext null のまま
-                  // 発火済みで再生されない)。
+                  // つづきから (#620): #578 の自動クイックロードにより、renderer は
+                  // マウント時点で既に直前セッションの正確な最終位置まで quickLoad() 済み。
+                  // hasQuickSave() が真の場合は renderer.restart() を呼んではいけない
+                  // （最初のシーンへ巻き戻り、quickLoad 済みの位置を握りつぶしてしまう）。
+                  // startWithSkip も立てない（正しい位置から不要な既読スキップが再開し、
+                  // 未読内容を飛ばしかねないため）。タイトルを閉じるだけでよい。
+                  // hasQuickSave() が偽の場合（#578 以前のセーブデータ等、quickSave が
+                  // 存在しないレガシーケース）は、既存の「スキップモードで未読位置まで
+                  // 高速進行」（#140 readProgress ベース）にフォールバックする。
                   const renderer = (
                     window as {
                       __renderer?: {
                         audioManager?: { ensureContext?: () => void }
                         restart?: () => void
+                        hasQuickSave?: () => boolean
                       }
                     }
                   ).__renderer
                   renderer?.audioManager?.ensureContext?.()
-                  renderer?.restart?.()
+                  if (renderer?.hasQuickSave?.()) {
+                    setTitleDismissed(true)
+                  } else {
+                    setStartWithSkip(true)
+                    setTitleDismissed(true)
+                    renderer?.restart?.()
+                  }
                 }}
                 onOpenSettings={() => {
                   // TODO (#141): NovelPlayer の設定パネルを外部から開く ref を追加して
