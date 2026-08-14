@@ -18,7 +18,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Assets, Texture } from 'pixi.js'
-import { computeDynamicRenderResolution, getIndicatorImageUrls } from '../game/novelLayout'
+import {
+  computeDynamicRenderResolution,
+  getIndicatorImageUrls,
+  numberToHexColor,
+  AUTO_BUTTON_FALLBACK_COLOR,
+  SKIP_BUTTON_FALLBACK_COLOR,
+  DEBUG_BUTTON_FALLBACK_COLOR,
+} from '../game/novelLayout'
 import { INACTIVITY_MS } from '../game/SeekBar'
 import type { NovelGameState } from '../game/GameState'
 
@@ -1083,9 +1090,11 @@ describe('NovelPlayer SeekBar 色 seekbar_color 配線 (#440)', () => {
 // （--nn-action-btn-color）へ正しく配線しているか」「ON/OFF の表示条件ロジック（className の
 // 出し分け）と色ロジックが分離され、互いに副作用を及ぼさないか」を検証する。
 describe('NovelPlayer 操作ボタン(A/S/D) ON色 seekbar_color 連動 (#605)', () => {
-  const AUTO_FALLBACK_HEX = '#2b7fff'
-  const SKIP_FALLBACK_HEX = '#00c950'
-  const DEBUG_FALLBACK_HEX = '#00b8db'
+  // 実装の定数から導出（ハードコード重複禁止 #605 セルフレビュー指摘）。fallback 値が変われば
+  // このテストの期待値も自動で追従する。
+  const AUTO_FALLBACK_HEX = numberToHexColor(AUTO_BUTTON_FALLBACK_COLOR)
+  const SKIP_FALLBACK_HEX = numberToHexColor(SKIP_BUTTON_FALLBACK_COLOR)
+  const DEBUG_FALLBACK_HEX = numberToHexColor(DEBUG_BUTTON_FALLBACK_COLOR)
   const autoBtn = () => screen.getByRole('button', { name: /オートモードを/ })
   const actionColorOf = (btn: HTMLElement) => btn.style.getPropertyValue('--nn-action-btn-color')
 

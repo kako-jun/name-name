@@ -30,6 +30,9 @@ import {
   PLAYER_BUTTON_SLOT_GAP_PX,
   resolveActionButtonColor,
   resolveDevicePixelRatio,
+  AUTO_BUTTON_FALLBACK_COLOR,
+  SKIP_BUTTON_FALLBACK_COLOR,
+  DEBUG_BUTTON_FALLBACK_COLOR,
 } from '../game/novelLayout'
 import { buildStoryEndedMessage } from '../game/storyEndedMessage'
 import { isEmbedded } from '../utils/isEmbedded'
@@ -39,15 +42,6 @@ import { DebugOverlay } from './DebugOverlay'
 // デバッグ HUD の展開状態の永続化キー (#310)。既定は畳んだ状態（open=false）。
 // 旧 DebugOverlay (#301) の collapsed 既定 true（= 展開していない）と同じ意味を引き継ぐ。
 const LS_DEBUG_OPEN = 'nn.debugOverlay.open'
-
-// 操作ボタン（A/S/D）の ON 時色の fallback (#605)。seekbar_color 未設定プロジェクトでは
-// これまで通り Tailwind の bg-blue-500 / bg-green-500 / bg-cyan-500 相当の見た目にする。
-// このリポは Tailwind v4（oklch ベース）で、v3 の記憶値（#3b82f6 等）とは実際の RGB が異なる
-// （#601 の RPGPlayer 事故の再発防止）ため、実機 DevTools（getComputedStyle + canvas 2D
-// ラスタライズで oklch/oklab を実 sRGB へ変換）で実測した値をそのまま定数化している。
-const AUTO_BUTTON_FALLBACK_COLOR = 0x2b7fff // bg-blue-500 実測値
-const SKIP_BUTTON_FALLBACK_COLOR = 0x00c950 // bg-green-500 実測値
-const DEBUG_BUTTON_FALLBACK_COLOR = 0x00b8db // bg-cyan-500 実測値
 
 /** localStorage から「デバッグ HUD を開いているか」を安全に読む。例外/未保存は false（畳んだ状態）。 */
 function readDebugOpen(): boolean {

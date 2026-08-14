@@ -563,6 +563,21 @@ export function numberToHexColor(color: number): string {
   return `#${clamped.toString(16).padStart(6, '0')}`
 }
 
+// 操作ボタン（A/S/D）の ON 時色の fallback (#605)。seekbar_color 未設定プロジェクトでは
+// これまで通り Tailwind の bg-blue-500 / bg-green-500 / bg-cyan-500 相当の見た目にする。
+// このリポは Tailwind v4（oklch ベース）で、v3 の記憶値（#3b82f6 等）とは実際の RGB が異なる
+// （#601 の RPGPlayer 事故の再発防止）ため、実機 DevTools（getComputedStyle + canvas 2D
+// ラスタライズで oklch/oklab を実 sRGB へ変換）で実測した値をそのまま定数化している。
+//
+// NovelPlayer.tsx（利用側）ではなくこのゲームロジック層に置く理由: novelLayout.test.ts は
+// pure logic のテストで、コンポーネント（.tsx）を import させたくない（layer 逆転を避ける）。
+// テスト側の期待値もこの定数から導出させることで、fallback 値変更時にテストが自動追従する
+// （手書きハードコード重複の禁止。#605 セルフレビュー指摘）。NovelPlayer.tsx / 各テストは
+// いずれもここから直接 import する。
+export const AUTO_BUTTON_FALLBACK_COLOR = 0x2b7fff // bg-blue-500 実測値
+export const SKIP_BUTTON_FALLBACK_COLOR = 0x00c950 // bg-green-500 実測値
+export const DEBUG_BUTTON_FALLBACK_COLOR = 0x00b8db // bg-cyan-500 実測値
+
 /**
  * NovelPlayer の操作ボタン（オート/スキップ/デバッグ、A/S/D）の ON 時背景色を解決する純粋関数 (#605)。
  *
