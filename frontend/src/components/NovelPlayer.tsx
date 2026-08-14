@@ -1191,7 +1191,7 @@ function NovelPlayer({
           style={{ right: slotRight(slotOf('settings')) }}
           className="absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white"
         >
-          <FiSettings className="w-5 h-5" />
+          <FiSettings className="w-5 h-5" aria-hidden="true" />
         </button>
         {/* デバッグ HUD トグル「D」ボタン (#310): debug_enabled(/play) or editor のときだけ出す。
             押すと DebugOverlay パネルを展開・再押しで畳む（既定は畳んだ状態）。 */}

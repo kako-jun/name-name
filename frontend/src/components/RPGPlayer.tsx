@@ -141,7 +141,7 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
         title="設定 (Ctrl/Cmd + ,)"
         className="absolute top-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white z-10"
       >
-        <FiSettings className="w-5 h-5" />
+        <FiSettings className="w-5 h-5" aria-hidden="true" />
       </button>
       <SettingsOverlay
         open={settingsOpen}
