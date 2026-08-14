@@ -1604,9 +1604,11 @@ export class NovelRenderer {
    * （processUntilNextTextEvent → showCharacterThenRender）を後追いで実行する (#620)。
    *
    * `pendingAutoAdvance` が立っている（＝スキップ後まだ誰も自動進行していない）場合のみ実行し、
-   * 実行後は即座にフラグを倒す。quickLoad() 成功時は restoreToScene が呼ばれ、これは
-   * pendingAutoAdvance に触れないため呼んでも何もしない（quickLoad 失敗時のフォールバック専用）。
-   * 二重実行防止のため、既に実行済み/該当なしの場合は no-op。
+   * 実行後は即座にフラグを倒す。quickLoad() が実際にシーンを復元した場合は restoreToScene が
+   * 自ら pendingAutoAdvance を false にクリアするため、その後に呼んでも no-op（#620）。
+   * 逆に loadFromSaveData / loadFromSaveDataMissingScene が restoreToScene を通らず
+   * フラグだけの復元に縮退した場合（同期・非同期どちらの失敗パスも含む）は、各所が
+   * 自らここを呼んでフリーズを防ぐ。二重実行防止のため、既に実行済み/該当なしの場合は no-op。
    */
   resumeAutoAdvanceIfPending(): void {
     if (!this.pendingAutoAdvance) return
@@ -4511,6 +4513,14 @@ export class NovelRenderer {
    * @param state applyState に渡す完成済みの状態スナップショット
    */
   private restoreToScene(scene: EventScene, state: NovelGameState): void {
+    // #620: 実際にシーン復元が起きた＝resetAndStartEvents({ skipAutoAdvance: true }) で
+    // 立てた pendingAutoAdvance はもう不要（このシーン自体が復元済みの完成状態を
+    // applyState で受け取るため、スキップした自動進行を今さら再生する必要はない）。
+    // ここで確実にクリアしないと、quickLoad 成功後も pendingAutoAdvance が残留し、
+    // 万一どこかで resumeAutoAdvanceIfPending() が呼ばれた際に誤って二重の自動進行を
+    // 引き起こしうる（quickLoad() の boolean 戻り値に依存しない一貫した後始末）。
+    this.pendingAutoAdvance = false
+
     // フラグを設定（置換セマンティクス）。
     // resolveEvents が flags に依存するため、必ず resolveEvents より前に設定する。
     //
@@ -4579,6 +4589,11 @@ export class NovelRenderer {
     if (!data.sceneId) {
       // sceneId が無い空セーブはフラグだけ復元して終了（restoreToScene を通さない）
       this.gameState.fromJSON(data.flags)
+      // #620: restoreToScene を通らないため pendingAutoAdvance は自動でクリアされない。
+      // resetAndStartEvents({ skipAutoAdvance: true }) でスキップした自動進行を
+      // ここで代わりに再開させないと、イベントはセットされたが誰も進行させない
+      // フリーズ状態のまま固まる（quickLoad() の同期戻り値には現れない不整合）。
+      this.resumeAutoAdvanceIfPending()
       return
     }
 
@@ -4603,6 +4618,9 @@ export class NovelRenderer {
     // resolver が無い（単一ファイル構成等）場合のみ、従来どおりフラグだけ復元して warn する。
     this.gameState.fromJSON(data.flags)
     console.warn(`[name-name] セーブデータのシーンが見つからない: ${data.sceneId}`)
+    // #620: 上の空セーブ分岐と同じ理由で、restoreToScene を通らないパスは
+    // ここで明示的に resumeAutoAdvanceIfPending() を呼んでフリーズを防ぐ。
+    this.resumeAutoAdvanceIfPending()
   }
 
   /**
@@ -4641,6 +4659,10 @@ export class NovelRenderer {
       if (!scenes) {
         this.gameState.fromJSON(data.flags)
         console.warn(`[name-name] loadFromSaveData: シーンの追加読み込みに失敗しました: ${sceneId}`)
+        // #620: 非同期解決が失敗し restoreToScene に到達しなかった（ケースC）。
+        // skipAutoAdvance でスキップした自動進行をここで確定的に再開しないと
+        // フリーズしたままになる。
+        this.resumeAutoAdvanceIfPending()
         return
       }
       this.setJumpSceneIndex(scenes)
@@ -4650,6 +4672,8 @@ export class NovelRenderer {
         console.warn(
           `[name-name] loadFromSaveData: lazy load 後もシーンが見つかりません: ${sceneId}`
         )
+        // #620: 上と同じ理由。lazy load 後も見つからない失敗確定時点で再開する。
+        this.resumeAutoAdvanceIfPending()
         return
       }
       const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
@@ -4660,6 +4684,8 @@ export class NovelRenderer {
         `[name-name] loadFromSaveData: シーンの追加読み込みに失敗しました: ${sceneId}`,
         err
       )
+      // #620: resolver が reject した失敗確定時点でも同様に再開する。
+      this.resumeAutoAdvanceIfPending()
     } finally {
       this.pendingMissingScenes.delete(sceneId)
     }
