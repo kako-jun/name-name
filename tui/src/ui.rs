@@ -600,9 +600,9 @@ fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
 /// そうでなければ従来どおり `config.splash.lines` のロゴ行を画面中央に表示するテキストモード
 /// （[`draw_splash_text`]）を描く。画像のロードに失敗した場合（`ImageCache::get_or_load` が
 /// `None`）もテキストモードへフォールバックする — `splash.lines` が空でも既存のテキスト
-/// モードどおり「空行 + 開始ヒント」だけは描く。ロゴの内容（ASCII アート本体・画像ファイル）
-/// はゲームごとに異なるため、このエンジン側は表示方法だけを担い、内容そのものは持たない
-/// （`Config::splash` 参照）。
+/// モードどおり画面最下部の共通操作フッター（[`draw_operation_footer`]）だけは描く。
+/// ロゴの内容（ASCII アート本体・画像ファイル）はゲームごとに異なるため、このエンジン側は
+/// 表示方法だけを担い、内容そのものは持たない（`Config::splash` 参照）。
 ///
 /// ロゴ画像モードは2通りに分岐する（#588）: [`logo_fits_natively`] が `true`（Issue #588が
 /// 前提とする214x46pxロゴを含む、固定キャンバスの本編領域に収まるサイズ）のときは
@@ -658,11 +658,12 @@ fn logo_fits_natively(image_w: u32, image_h: u32) -> bool {
 /// スプラッシュロゴをネイティブ解像度のまま固定キャンバス内で上下左右中央に表示する
 /// （#588、[`logo_fits_natively`] が `true` の場合のみ [`draw_splash`] から呼ばれる）。
 /// [`image_render::rgba_to_quadrant_grid_native`] で拡大縮小・クロップ無しのグリッドを作り、
-/// [`compute_centered_canvas`] を再利用してそのグリッドを画像領域（最下段の開始ヒント行を
-/// 除く）内で中央配置する — `compute_centered_canvas` は本来「端末内で固定キャンバスを
+/// [`compute_centered_canvas`] を再利用してそのグリッドを画像領域（最下段の共通操作フッター
+/// 行を除く）内で中央配置する — `compute_centered_canvas` は本来「端末内で固定キャンバスを
 /// 中央配置する」ために作られた関数だが、「ある矩形の中に別の矩形を中央配置する」という
 /// 責務自体は完全に汎用的なため、ネストして再利用できる。最下段には
-/// [`draw_fullscreen_image`] と同じ開始ヒントを表示し、見た目の一貫性を保つ。
+/// [`draw_fullscreen_image`]・通常プレイ（[`draw`]）と同じ [`draw_operation_footer`] を表示し、
+/// 起動直後から見た目の一貫性を保つ（Issue #587）。
 fn draw_splash_logo_native(frame: &mut Frame, canvas: Rect, image: &DecodedImage) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -676,10 +677,7 @@ fn draw_splash_logo_native(frame: &mut Frame, canvas: Rect, image: &DecodedImage
     let placed = compute_centered_canvas(image_area, logo_rect);
     draw_image_grid(frame, placed, &grid);
 
-    let hint_paragraph = Paragraph::new("Enter / Space で開始")
-        .alignment(Alignment::Center)
-        .style(Style::default().add_modifier(Modifier::DIM));
-    frame.render_widget(hint_paragraph, hint_area);
+    draw_operation_footer(frame, hint_area, None);
 }
 
 /// スプラッシュ画像モードの最大スクロール量（最下端オフセット）を返す。
@@ -738,17 +736,13 @@ fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset:
     let fitted_rows = compute_full_width_rows(image.width, image.height, fitted_cols);
     if fitted_cols == 0 || fitted_rows == 0 {
         // 画像を描画できない場合でも、テキストモードのフォールバックと対称になるよう
-        // 「Enter / Space で開始」ヒントだけは出す。`fits_required_size`チェックを通過して
-        // いる以上、固定幅の`REQUIRED_TOTAL_WIDTH`から導かれる`fitted_cols`が実際に0になる
-        // ことは現状のコード上ほぼ到達不能（#538）。
-        let hint_paragraph = Paragraph::new("Enter / Space で開始")
-            .alignment(Alignment::Center)
-            .style(Style::default().add_modifier(Modifier::DIM));
-        frame.render_widget(hint_paragraph, hint_area);
+        // 共通操作フッターだけは出す。`fits_required_size`チェックを通過している以上、
+        // 固定幅の`REQUIRED_TOTAL_WIDTH`から導かれる`fitted_cols`が実際に0になることは
+        // 現状のコード上ほぼ到達不能（#538）。
+        draw_operation_footer(frame, hint_area, None);
         return;
     }
 
-    let scrollable = fitted_rows > image_area.height;
     let offset = clamp_scroll_offset(scroll_offset, fitted_rows, image_area.height);
     let visible_rows = image_area.height.min(fitted_rows);
     let visible = rgba_to_quadrant_grid_window(
@@ -768,20 +762,21 @@ fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset:
     };
     draw_image_grid(frame, draw_area, &visible);
 
-    let hint = if scrollable {
-        "Enter / Space で開始　↑/↓ でスクロール"
-    } else {
-        "Enter / Space で開始"
-    };
-    let hint_paragraph = Paragraph::new(hint)
-        .alignment(Alignment::Center)
-        .style(Style::default().add_modifier(Modifier::DIM));
-    frame.render_widget(hint_paragraph, hint_area);
+    // #587: スクロール可否による専用ヒント（「↑/↓ でスクロール」）は廃止した。共通操作
+    // フッター（[`OPERATION_HINT_TEXT`]）が既に `↑/↓ 選択` を含んでおり、画像スクロール時の
+    // ↑/↓ もこの表記でカバーされるため、二重表示を避けて常に同じフッターへ統一する。
+    draw_operation_footer(frame, hint_area, None);
 }
 
 /// スプラッシュ画面（テキストモード）: `config.splash.lines` に設定されたロゴ行を画面中央に
 /// 表示する。ロゴの内容はゲームごとに異なるため、このエンジン側は「中央寄せして表示する」
 /// という汎用的な描画だけを担い、内容そのものは持たない（`Config::splash` 参照）。
+///
+/// 罫線内側（`inner`）を [`Layout`] で `[Min(0), Length(1)]` に上下分割し、上段には
+/// `config.splash.lines` だけを中央寄せで描画する（従来のように末尾へ空行+開始ヒントを
+/// 埋め込まない）。下段は他3経路（[`draw_splash_logo_native`]/[`draw_fullscreen_image`]/
+/// 通常プレイの [`draw`]）と同じ [`draw_operation_footer`] を呼び、画面最下部に固定された
+/// 共通フッターとして表示する（Issue #587）。
 fn draw_splash_text(frame: &mut Frame, config: &Config) {
     let area = frame.area();
     let block = Block::default()
@@ -790,34 +785,38 @@ fn draw_splash_text(frame: &mut Frame, config: &Config) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(inner);
+    let lines_area = rows[0];
+    let footer_area = rows[1];
+
     let color = Color::from_str(&config.splash.color).unwrap_or(Color::White);
     let style = Style::default().fg(color);
 
-    let mut lines: Vec<Line> = config
+    let lines: Vec<Line> = config
         .splash
         .lines
         .iter()
         .map(|text_line| Line::styled(text_line.clone(), style))
         .collect();
-    lines.push(Line::raw(""));
-    lines.push(Line::styled(
-        "Enter / Space で開始",
-        Style::default().add_modifier(Modifier::DIM),
-    ));
 
     // 縦方向中央寄せ: ratatui の Paragraph は縦方向の中央寄せを持たないため、
     // ロゴ全体の高さから上マージンを計算して描画領域をずらす。
     let content_height = lines.len() as u16;
-    let top_margin = inner.height.saturating_sub(content_height) / 2;
+    let top_margin = lines_area.height.saturating_sub(content_height) / 2;
     let centered = Rect {
-        x: inner.x,
-        y: inner.y.saturating_add(top_margin),
-        width: inner.width,
-        height: inner.height.saturating_sub(top_margin),
+        x: lines_area.x,
+        y: lines_area.y.saturating_add(top_margin),
+        width: lines_area.width,
+        height: lines_area.height.saturating_sub(top_margin),
     };
 
     let paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
     frame.render_widget(paragraph, centered);
+
+    draw_operation_footer(frame, footer_area, None);
 }
 
 /// 1文字のセル幅（半角=1、全角=2 等）を、`ratatui`（`unicode-width` を推移的依存に持つ）の
@@ -1239,9 +1238,48 @@ fn render_wrapped_paragraph(frame: &mut Frame, area: Rect, paragraph: Paragraph<
     frame.render_widget(paragraph, area);
 }
 
-/// 画面最下段1行: ゲーム名 + 会話位置/総数（+ 終端マーカー）。枠の title として表示していた
-/// 情報を、枠なし化後もユーザーが状況を把握できるよう右寄せの単なる1行テキストとして残す
-/// （罫線・背景等の装飾は付けない）。
+/// 通常プレイ・スプラッシュを問わず、画面最下部の共通フッターへ常時表示する操作キー一覧の
+/// ヒント文言（Issue #587）。従来は起動直後のスプラッシュ画面にだけ「Enter / Space で開始」を
+/// 単独表示しており、設定 (`C`) やバックログ (`B`) の存在を初見で知る手段が無かった —
+/// この定数はそれらを含む主要操作を`Enter / Space` と同格で常時提示するために追加した。
+/// 項目の欠落は禁止（[`draw_operation_footer`] 参照）。
+const OPERATION_HINT_TEXT: &str =
+    "Enter/Space 次へ  ↑/↓ 選択  A オート  S スキップ  B バックログ  C 設定  Q/Esc 終了";
+
+/// 画面最下部1行の共通操作ヒントフッターを描画する（Issue #587）。[`OPERATION_HINT_TEXT`] を
+/// 左寄せ・DIM スタイルで表示し、`trailing` が `Some(status)` の場合は同じ行の右寄せで
+/// `status` を DIM スタイルで重ねて表示する（従来 `draw_status_line` が単独で持っていた
+/// 「ゲーム名 — position/total (END)」の表示はこの `trailing` 経由で引き継ぐ）。
+///
+/// `area` の幅は通常キャンバス幅（[`REQUIRED_TOTAL_WIDTH`]=130列固定）を前提にしており、
+/// ヒント文（約60〜70文字）と status 文字列は通常1行に収まる。収まりきらない場合でも
+/// [`OPERATION_HINT_TEXT`] の7項目は絶対に欠落させない方針のため、ヒント側には
+/// `OPERATION_HINT_TEXT` の実セル幅ぶんの領域を [`Layout`] で確保してから status を残りの
+/// 領域へ描画する（重ね描画で status がヒントの一部を上書きする事故を避ける）。極端に
+/// 狭い端末では、先にヒント側の幅を優先して確保するため status 側から先に切り詰められる。
+fn draw_operation_footer(frame: &mut Frame, area: Rect, trailing: Option<&str>) {
+    let hint_width = OPERATION_HINT_TEXT.cell_width().min(area.width);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(hint_width), Constraint::Min(0)])
+        .split(area);
+
+    let hint_paragraph = Paragraph::new(OPERATION_HINT_TEXT)
+        .style(Style::default().add_modifier(Modifier::DIM))
+        .alignment(Alignment::Left);
+    frame.render_widget(hint_paragraph, cols[0]);
+
+    if let Some(status) = trailing {
+        let status_paragraph = Paragraph::new(status)
+            .style(Style::default().add_modifier(Modifier::DIM))
+            .alignment(Alignment::Right);
+        frame.render_widget(status_paragraph, cols[1]);
+    }
+}
+
+/// 画面最下段1行: [`draw_operation_footer`] 経由で共通の操作ヒントを左寄せ表示しつつ、
+/// 右寄せで「ゲーム名 + 会話位置/総数（+ 終端マーカー）」を重ねて表示する（Issue #587で
+/// `draw_operation_footer` へ統合、旧実装は status 単体の右寄せ1行だけだった）。
 fn draw_status_line(
     frame: &mut Frame,
     area: Rect,
@@ -1255,10 +1293,7 @@ fn draw_status_line(
     } else {
         format!("{} — {position}/{total}", config.game_name)
     };
-    let paragraph = Paragraph::new(status)
-        .style(Style::default().add_modifier(Modifier::DIM))
-        .alignment(Alignment::Right);
-    frame.render_widget(paragraph, area);
+    draw_operation_footer(frame, area, Some(&status));
 }
 
 /// ページ送りインジケータ（▼）をウィンドウ右下から固定するセル数
