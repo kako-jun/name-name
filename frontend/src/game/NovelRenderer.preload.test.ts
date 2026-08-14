@@ -631,6 +631,15 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', '')])
   })
 
+  // B1b: B1（EventImage）の対称版。Image も同じ無ガード分岐（processUntilNextTextEvent 内の
+  //     EventImage/Image 共通の resolveAssetUrl(images, path) 経路）を通るため path='' でも
+  //     ガードなしで積まれる。実害は既に無いと確認済みだが、B1 とペアで固定してテストの対称性を保つ。
+  it("B1b: Image path=''(空文字)でもEventImage同様guardなしでURLが積まれる(B1のImage対称版・非回帰)", () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([scene('s', [narration('n'), renderOnlyImage('')])])
+    expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', '')])
+  })
+
   // B2: EventImage が resolvedEvents の末尾（分岐なしで配列が終わる）に来ても正常終了しエラーを投げない。
   it('B2: EventImageが配列末尾(分岐なしで終わる)に来ても正常終了しエラーを投げない(境界)', () => {
     const { r, bgSpy } = setup()
