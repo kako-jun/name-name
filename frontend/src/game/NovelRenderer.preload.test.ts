@@ -8,7 +8,8 @@
  * `Assets.backgroundLoad` に積んで温めておく（`preloadUpcomingAssets`）。
  *
  * ここで縛る仕様（テスト設計エージェントの観点 1〜18、および #414 追加の 19〜25）:
- *   - 収集対象は Dialog / ExpressionChange の立ち絵（webp+png の 2 候補）と Background の背景画像。
+ *   - 収集対象は Dialog / ExpressionChange の立ち絵（webp+png の 2 候補）、Background の背景画像、
+ *     EventImage のイベント絵、Image（単独画像 #274 renderOnly）（#621 で後者2つを追加）。
  *   - 走査は次の分岐（Choice / Condition）に当たるまで、または末尾まで。
  *   - 緩い上限: テキストイベント（getTextEvent 非 null = Dialog/Narration）を最大
  *     PRELOAD_MAX_TEXT_EVENTS 個で打ち切る（#417 で 8 → Infinity に変更済み。実質無効）。
@@ -58,6 +59,12 @@ function background(path: string): Event {
 }
 function expressionChange(character: string, expression: string): Event {
   return { ExpressionChange: { character, expression } }
+}
+function eventImage(path: string): Event {
+  return { EventImage: { path } }
+}
+function renderOnlyImage(path: string): Event {
+  return { Image: { path } }
 }
 function choice(jump = 's'): Event {
   return { Choice: { options: [{ text: 'go', jump }] } }
@@ -510,5 +517,22 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
       ...resolveCharacterImageUrls(BASE, 'same/e'),
       ...resolveCharacterImageUrls(BASE, 'other/e'),
     ])
+  })
+
+  // 26〜27 (#621): EventImage（イベント絵）/ Image（単独画像 #274 renderOnly）も
+  // preloadUpcomingAssets の先読み対象に加わった。URL 形は Background と同じ resolveAssetUrl(images)。
+  it('26: EventImage 1件で images パスのイベント絵 URL が1本積まれる (#621)', () => {
+    const { r, bgSpy } = setup()
+    // Background と同じく Narration をアンカーに置く（現在の eventIndex が指す先頭のテキスト
+    // イベントで processUntilNextTextEvent の走査が止まるため、以降の EventImage を「次に出る
+    // アセット」として preloadUpcomingAssets のスキャン範囲に入れる）。
+    r.setScenes([scene('s', [narration('n'), eventImage('event/still1.png')])])
+    expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', 'event/still1.png')])
+  })
+
+  it('27: 単独画像 [画像:] (Image, #274 renderOnly) 1件も images パスの URL が1本積まれる (#621)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([scene('s', [narration('n'), renderOnlyImage('avatar.png')])])
+    expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', 'avatar.png')])
   })
 })

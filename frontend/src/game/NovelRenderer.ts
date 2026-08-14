@@ -3260,9 +3260,9 @@ export class NovelRenderer {
    *   ※ `Condition` は `resolveEvents` で展開済みのため `resolvedEvents` には通常現れないが、
    *     仕様として境界扱いを明示しておく（防御的・非回帰）。
    * - 収集対象: `Dialog` / `ExpressionChange` の立ち絵（`resolveCharacterImageUrls`、
-   *   webp/png の複数候補）と `Background` の背景画像（`resolveAssetUrl`）。Video 等
-   *   `Assets.load` 経路でないものは対象外。単独画像 `[画像:]`（#274, renderOnly）も対象外＝
-   *   先読みは立ち絵・背景に限定する。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
+   *   webp/png の複数候補）、`Background` の背景画像、`EventImage` のイベント絵、
+   *   単独画像 `[画像:]`（#274, `Image`）（いずれも `resolveAssetUrl`）(#621)。Video 等
+   *   `Assets.load` 経路でないものは対象外。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
    *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。
    * - **緩い上限**: 分岐までが極端に長い場合に備え、先読みするテキストイベント
    *   （`getTextEvent` 非 null）を最大 {@link PRELOAD_MAX_TEXT_EVENTS} 個ぶんに抑える。
@@ -3340,6 +3340,15 @@ export class NovelRenderer {
         }
       } else if ('Background' in event) {
         urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Background.path))
+      } else if ('EventImage' in event) {
+        // イベント絵 (#351) の先読み (#621)。EventImageLayer.show() は表示の瞬間に初めて
+        // Assets.load するため、事前に温めておかないと切替時に初回コールドロード相当の
+        // 遅延が出る。URL 形は EventImageLayer.buildImageUrl と同じ resolveAssetUrl(images)。
+        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.EventImage.path))
+      } else if ('Image' in event) {
+        // 単独画像 `[画像:]` (#274, renderOnly) も先読み対象に含める (#621)。除外する理由が
+        // なく、症状報告のイベント絵切替遅延と同じ Assets.load 遅延ロードを踏むため。
+        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Image.path))
       }
     }
 
