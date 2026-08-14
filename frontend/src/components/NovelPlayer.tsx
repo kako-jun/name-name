@@ -28,6 +28,7 @@ import {
   getIndicatorImageUrls,
   PLAYER_BUTTON_RIGHT_MARGIN_PX,
   PLAYER_BUTTON_SLOT_GAP_PX,
+  resolveActionButtonColor,
   resolveDevicePixelRatio,
 } from '../game/novelLayout'
 import { buildStoryEndedMessage } from '../game/storyEndedMessage'
@@ -38,6 +39,15 @@ import { DebugOverlay } from './DebugOverlay'
 // デバッグ HUD の展開状態の永続化キー (#310)。既定は畳んだ状態（open=false）。
 // 旧 DebugOverlay (#301) の collapsed 既定 true（= 展開していない）と同じ意味を引き継ぐ。
 const LS_DEBUG_OPEN = 'nn.debugOverlay.open'
+
+// 操作ボタン（A/S/D）の ON 時色の fallback (#605)。seekbar_color 未設定プロジェクトでは
+// これまで通り Tailwind の bg-blue-500 / bg-green-500 / bg-cyan-500 相当の見た目にする。
+// このリポは Tailwind v4（oklch ベース）で、v3 の記憶値（#3b82f6 等）とは実際の RGB が異なる
+// （#601 の RPGPlayer 事故の再発防止）ため、実機 DevTools（getComputedStyle + canvas 2D
+// ラスタライズで oklch/oklab を実 sRGB へ変換）で実測した値をそのまま定数化している。
+const AUTO_BUTTON_FALLBACK_COLOR = 0x2b7fff // bg-blue-500 実測値
+const SKIP_BUTTON_FALLBACK_COLOR = 0x00c950 // bg-green-500 実測値
+const DEBUG_BUTTON_FALLBACK_COLOR = 0x00b8db // bg-cyan-500 実測値
 
 /** localStorage から「デバッグ HUD を開いているか」を安全に読む。例外/未保存は false（畳んだ状態）。 */
 function readDebugOpen(): boolean {
@@ -1050,6 +1060,13 @@ function NovelPlayer({
   // Skip(S) ボタンを描画するか (#310)。未指定/true で出す（既定・後方互換）、false で出さない。
   const showSkipButton = skipEnabled !== false
 
+  // 操作ボタン（A/S/D）の ON 時色を seekbar_color に連動させる (#605)。3 ボタン共通の色決定
+  // ロジックは novelLayout.ts の resolveActionButtonColor に集約し、ここでは fallback だけを
+  // ボタンごとに出し分ける（表示条件のロジックは変更しない、色決定だけ共通化する）。
+  const autoButtonColor = resolveActionButtonColor(seekbarColor, AUTO_BUTTON_FALLBACK_COLOR)
+  const skipButtonColor = resolveActionButtonColor(seekbarColor, SKIP_BUTTON_FALLBACK_COLOR)
+  const debugButtonColor = resolveActionButtonColor(seekbarColor, DEBUG_BUTTON_FALLBACK_COLOR)
+
   // 右下ボタン列のレイアウト (#310)。右端から ⚙→A→S→D の順に 44px 間隔で左へ並べる。
   // 条件付きで消える S / D があっても隙間が空かないよう、実際に出るボタンだけを右から
   // 詰めてスロット番号を採番し、`right = 12 + slot*44`(px) で位置を導出する（特例分岐を作らない）。
@@ -1157,10 +1174,19 @@ function NovelPlayer({
             disabled={!docKey || storyEnded}
             aria-label={skipMode ? 'スキップモードをオフにする' : 'スキップモードをオンにする'}
             title="スキップ（既読のみ）"
-            style={{ right: slotRight(slotOf('skip')) }}
+            // ON 時色を seekbar_color に連動させる (#605)。CSS 変数へ実色を渡し、Tailwind の
+            // arbitrary value + /80(hover:100%) 修飾子（color-mix ベース）に alpha を任せることで、
+            // seekbar_color 未設定時（fallback=green-500 実測値）は元の bg-green-500/80 と
+            // 見た目非回帰にしつつ、hover での完全不透明化も維持する。
+            style={
+              {
+                right: slotRight(slotOf('skip')),
+                '--nn-action-btn-color': skipButtonColor,
+              } as CSSProperties
+            }
             className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
               skipMode
-                ? 'bg-green-500/80 hover:bg-green-500 text-white'
+                ? 'bg-[var(--nn-action-btn-color)]/80 hover:bg-[var(--nn-action-btn-color)] text-white'
                 : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
             }`}
           >
@@ -1173,10 +1199,17 @@ function NovelPlayer({
           onClick={handleAutoToggle}
           aria-label={autoMode ? 'オートモードをオフにする' : 'オートモードをオンにする'}
           title="オートモード (A)"
-          style={{ right: slotRight(slotOf('auto')) }}
+          // ON 時色を seekbar_color に連動させる (#605)。skip ボタンと同じ CSS 変数 + Tailwind
+          // arbitrary value パターン（詳細はスキップボタン側のコメント参照）。
+          style={
+            {
+              right: slotRight(slotOf('auto')),
+              '--nn-action-btn-color': autoButtonColor,
+            } as CSSProperties
+          }
           className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
             autoMode
-              ? 'bg-blue-500/80 hover:bg-blue-500 text-white'
+              ? 'bg-[var(--nn-action-btn-color)]/80 hover:bg-[var(--nn-action-btn-color)] text-white'
               : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
           }`}
         >
@@ -1201,10 +1234,17 @@ function NovelPlayer({
             aria-label={debugOpen ? 'デバッグ情報を閉じる' : 'デバッグ情報を開く'}
             aria-pressed={debugOpen}
             title="デバッグ (D)"
-            style={{ right: slotRight(slotOf('debug')) }}
+            // ON 時色を seekbar_color に連動させる (#605)。skip ボタンと同じ CSS 変数 + Tailwind
+            // arbitrary value パターン（詳細はスキップボタン側のコメント参照）。
+            style={
+              {
+                right: slotRight(slotOf('debug')),
+                '--nn-action-btn-color': debugButtonColor,
+              } as CSSProperties
+            }
             className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
               debugOpen
-                ? 'bg-cyan-500/80 hover:bg-cyan-500 text-white'
+                ? 'bg-[var(--nn-action-btn-color)]/80 hover:bg-[var(--nn-action-btn-color)] text-white'
                 : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
             }`}
           >

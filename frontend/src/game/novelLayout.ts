@@ -563,6 +563,22 @@ export function numberToHexColor(color: number): string {
   return `#${clamped.toString(16).padStart(6, '0')}`
 }
 
+/**
+ * NovelPlayer の操作ボタン（オート/スキップ/デバッグ、A/S/D）の ON 時背景色を解決する純粋関数 (#605)。
+ *
+ * `parseColorToNumber` + `numberToHexColor` の合成。`seekbarColor` が未設定/不正値なら
+ * `fallback`（各ボタンの既存 Tailwind 固定色を実機 DevTools で実測した数値）にそのまま倒れ、
+ * seekbar_color 未設定プロジェクトの見た目を変えない（非回帰）。3 ボタンで色決定ロジックを
+ * 共通化するためのヘルパー（#601 の `SettingsOverlay.tsx` `sliderAccentColor` と同じパターン）。
+ * alpha（ON 時 80%/hover 100%）は呼び出し側の CSS が担当し、ここでは 6 桁 hex のみを返す。
+ */
+export function resolveActionButtonColor(
+  seekbarColor: string | null | undefined,
+  fallback: number
+): string {
+  return numberToHexColor(parseColorToNumber(seekbarColor ?? undefined, fallback))
+}
+
 /** 2D レイアウト位置の比率（screenWidth/Height に掛ける）。 */
 export interface LayoutPosition {
   /** 横位置の比率（sprite 中心 x = screenWidth * xRatio）。 */
