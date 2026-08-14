@@ -382,11 +382,14 @@ const CHOICE_CURSOR_PADDING: &str = "  ";
 /// どうかに関わらず `Modifier::DIM` を重ねる — カーソルはロック中の選択肢の上にも普通に
 /// 乗れる（`select_current_choice` 側で確定だけを拒否する fail-soft 方針、既存の「無効な
 /// jump 先」時の挙動と同じ）ため、選択中の DIM 表示は「ここにいるが選べない」を示す。
+/// ロックは配色（DIM）のみで表現し、記号は一切付けない（#598/#604 で確定した GUI 版の
+/// 設計をTUI版にも揃える、#609）。
 ///
 /// `cleared`（#594、`option.cleared` が真のフラグを指している）も同様に `Modifier::DIM` を
-/// 重ねる——TUI は色数が乏しいため、ロックと同じ「暗くする」表現を流用する。区別は
-/// [`CHOICE_LOCKED_SUFFIX`]/[`CHOICE_CLEARED_SUFFIX`] の記号差で付ける。`locked` と `cleared`
-/// が両方真のときは `locked` を優先する（通常運用では同時に真にならない想定だが防御的に）。
+/// 重ねる——TUI は色数が乏しいため、ロックと同じ「暗くする」表現を流用する。`cleared` の
+/// 記号（[`CHOICE_CLEARED_SUFFIX`]）は `locked` とは独立した軸で判定する——ロック中でも
+/// 完了済みなら🌑を表示する（`locked` はアイコン種別の判定に一切関与しない、#604 と同じ
+/// 設計）。
 fn choice_cursor_prefix_and_style(
     is_selected: bool,
     locked: bool,
@@ -407,16 +410,12 @@ fn choice_cursor_prefix_and_style(
     }
 }
 
-/// ロック中の選択肢テキストに付ける視覚的な目印（#591）。Web版 `ChoiceOverlay`
-/// （PixiJS、`fillLocked`/`borderLocked` の別配色）とは表現手段が異なる（TUI は色数が
-/// 乏しいため DIM + 記号を併用）が、「flag が未定義/false なら判別可能」という判定結果は
-/// 同じにする。
-const CHOICE_LOCKED_SUFFIX: &str = " 🔒";
-
 /// 完了(クリア済み)状態の選択肢テキストに付ける視覚的な目印（#594、#596でキーワード改名）。
-/// ロックの🔒とは別の記号にする——ろうそくの火が消えた後の「暗闇」を表す新月（🌑）を採用する。
-/// ロックと違い選択は拒否しない（`select_current_choice` は `option.cleared` を見ない）ため、
-/// この記号は「選べないから見た目が変わる」のではなく「クリア済みで見た目が変わる」ことを示す。
+/// ろうそくの火が消えた後の「暗闇」を表す新月（🌑）を採用する。ロックとは独立した軸で
+/// 判定する（`locked` の値に関わらず `cleared` だけで表示を決める、#609）ため、ロック中でも
+/// 完了済みなら表示される。ロックと違い選択は拒否しない（`select_current_choice` は
+/// `option.cleared` を見ない）ため、この記号は「選べないから見た目が変わる」のではなく
+/// 「クリア済みで見た目が変わる」ことを示す。
 const CHOICE_CLEARED_SUFFIX: &str = " 🌑";
 
 fn draw_choice_list(
@@ -438,9 +437,9 @@ fn draw_choice_list(
                 let is_cleared = cleared.get(i).copied().unwrap_or(false);
                 let (prefix, style) =
                     choice_cursor_prefix_and_style(i == cursor, is_locked, is_cleared);
-                let suffix = if is_locked {
-                    CHOICE_LOCKED_SUFFIX
-                } else if is_cleared {
+                // `is_locked` は上の DIM 判定にのみ使う。記号の出し分けは `is_cleared` だけで
+                // 決める（`locked` から完全に独立、#609）——ロック中でも完了済みなら🌑を出す。
+                let suffix = if is_cleared {
                     CHOICE_CLEARED_SUFFIX
                 } else {
                     ""
@@ -525,9 +524,9 @@ fn draw_choice_grid(
             let is_cleared = cleared.get(index).copied().unwrap_or(false);
             let (prefix, style) =
                 choice_cursor_prefix_and_style(index == cursor, is_locked, is_cleared);
-            let suffix = if is_locked {
-                CHOICE_LOCKED_SUFFIX
-            } else if is_cleared {
+            // `is_locked` は上の DIM 判定にのみ使う。記号の出し分けは `is_cleared` だけで
+            // 決める（`locked` から完全に独立、#609）——ロック中でも完了済みなら🌑を出す。
+            let suffix = if is_cleared {
                 CHOICE_CLEARED_SUFFIX
             } else {
                 ""
@@ -4841,12 +4840,12 @@ mod tests {
     // #591 テスト観点整理フェーズ 最優先2: grid×lock整合性。過去の事故パターン
     // （グリッドの行×列マッピングとインデックス対応がずれる不具合）が locked 配列でも
     // 再発していないかを狙い撃ちする。10択・columns=5・locked を市松(交互)パターンで渡し、
-    // 各セルのDIMスタイル・🔒サフィックスがlocked配列と同じインデックスの選択肢に
-    // 対応することを、行×列から独立に再計算したセル領域内で直接確認する（frontendの
-    // ChoiceOverlay grid×lock整合性テストと対をなす）。
+    // 各セルのDIMスタイルがlocked配列と同じインデックスの選択肢に対応することを、行×列から
+    // 独立に再計算したセル領域内で直接確認する（frontendの ChoiceOverlay grid×lock整合性
+    // テストと対をなす）。ロックは記号を持たない（#609でCHOICE_LOCKED_SUFFIX撤去）ため、
+    // ここではDIMのみを検証する。
     #[test]
-    fn draw_choice_grid_mixed_locked_pattern_maps_dim_and_lock_marker_to_correct_index_not_shifted()
-    {
+    fn draw_choice_grid_mixed_locked_pattern_maps_dim_to_correct_index_not_shifted() {
         let options: Vec<ChoiceOption> = (0..10)
             .map(|i| choice_option(&i.to_string(), "x"))
             .collect();
@@ -4895,22 +4894,11 @@ mod tests {
                 "index {i} の DIM 状態が locked[{i}]={expected_locked} と一致しない \
                  （行×列マッピングとlocked配列のインデックスずれの検出用）"
             );
-
-            // 🔒はそのセル領域内(同じ行、自セルのx範囲内)だけを見る。行全体を見ると
-            // 隣接セル(同じ行の別index)の🔒を誤って拾う恐れがあるため、独立に計算した
-            // cell_area の範囲だけに限定してスキャンする。
-            let has_lock_marker = (cell_area.x..cell_area.x + cell_area.width)
-                .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🔒");
-            assert_eq!(
-                has_lock_marker, expected_locked,
-                "index {i} の🔒表示の有無が locked[{i}]={expected_locked} と一致しない \
-                 （自セル範囲内だけを見ても対応がずれていないかの確認）"
-            );
         }
     }
 
     // #594 テスト観点整理フェーズ 最優先1: grid×cleared整合性。#591 の
-    // draw_choice_grid_mixed_locked_pattern_maps_dim_and_lock_marker_to_correct_index_not_shifted
+    // draw_choice_grid_mixed_locked_pattern_maps_dim_to_correct_index_not_shifted
     // を cleared 版に踏襲する。10択・columns=5・cleared を市松(交互)パターンで渡し、
     // 各セルのDIMスタイル・🌑サフィックスがcleared配列と同じインデックスの選択肢に
     // 対応することを、行×列から独立に再計算したセル領域内で直接確認する（frontendの
@@ -4980,19 +4968,21 @@ mod tests {
         }
     }
 
-    // #594 テスト観点整理フェーズ 最優先2: locked×cleared優先順位。locked と cleared が
-    // 同じindexで重なるケースを含む混在パターンで、🔒のみ表示され🌑が漏れないこと
-    // （choice_cursor_prefix_and_style/draw_choice_grid のsuffix決定ロジックが
-    // `if is_locked { LOCK } else if is_cleared { MOON }` の順で分岐している設計どおり）、
-    // DIMは(locked||cleared)の単純ORであり二重付与されないことをセル単位で確認する。
+    // #609 テスト観点整理: locked×cleared独立性。locked と cleared が同じindexで重なる
+    // ケースを含む混在パターンで、🌑の表示が locked の値に一切影響されず cleared だけで
+    // 決まること（GUI版 #604 で確立した「locked はアイコン種別の判定に一切関与しない」
+    // 設計と同じ）、DIMは(locked||cleared)の単純ORであり二重付与されないことをセル単位で
+    // 確認する。旧仕様（#591当時）は`if is_locked { LOCK } else if is_cleared { MOON }`という
+    // 排他分岐で、locked×cleared同時真のとき🌑が漏れる（🔒のみ表示される）バグを持っていた
+    // ——#609 はこの回帰を防ぐ。
     #[test]
-    fn draw_choice_grid_locked_and_cleared_mixed_pattern_locked_wins_marker_and_no_moon_leaks() {
+    fn draw_choice_grid_locked_and_cleared_mixed_pattern_moon_shows_regardless_of_lock() {
         let options: Vec<ChoiceOption> = (0..10)
             .map(|i| choice_option(&i.to_string(), "x"))
             .collect();
         // locked: index 0,3,6,9 / cleared: index 1,3,5,7,9。
-        // index 3・9は locked かつ cleared が同時に真の重複ケース——lockedが勝ち🔒のみ、
-        // 🌑は漏れないことを確認する。
+        // index 3・9は locked かつ cleared が同時に真の重複ケース——locked に関わらず
+        // cleared どおりに🌑が出ることを確認する（旧仕様のバグの回帰防止）。
         let locked: Vec<bool> = (0..10).map(|i| i % 3 == 0).collect();
         let cleared: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
         let area = Rect::new(0, 0, 60, 2);
@@ -5041,23 +5031,338 @@ mod tests {
                  （locked/clearedの二重付与ではなく単純ORのため、重複時も非重複時と同じDIM一段のはず）"
             );
 
-            let has_lock_marker = (cell_area.x..cell_area.x + cell_area.width)
-                .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🔒");
             let has_moon_marker = (cell_area.x..cell_area.x + cell_area.width)
                 .any(|x| buffer.cell((x, cell_area.y)).expect("in bounds").symbol() == "🌑");
 
+            // locked とは独立: locked の値に関わらず、cleared どおりに🌑が出る
+            // （lockedがcleared判定を乗っ取らない、#609）。
             assert_eq!(
-                has_lock_marker, is_locked,
-                "index {i} の🔒表示の有無が locked[{i}]={is_locked} と一致しない"
+                has_moon_marker, is_cleared,
+                "index {i} の🌑表示の有無が cleared[{i}]={is_cleared} と一致しない \
+                 （locked[{i}]={is_locked} に関わらず cleared だけで決まるはず）"
             );
-            // locked優先: locked=trueのセルは(clearedが同時に真でも)🌑を出さない。
-            // locked=falseのセルはclearedの値どおりに🌑が出る。
-            let expected_moon = is_cleared && !is_locked;
+        }
+    }
+
+    // ---- #609 テスト観点整理: draw_choice_list（縦一列描画）側のlocked/cleared独立軸 ----
+    // 上の3件（draw_choice_grid_mixed_locked_pattern_maps_dim_to_correct_index_not_shifted 等）
+    // はgrid版のみを対象にしており、list版（columns<=1、選択肢ごとに別々の行に描画）には
+    // 同種のテストが無かった（テスト設計エージェントによる指摘）。list版はgridのような
+    // 行×列のセル領域計算が不要で、選択肢ごとに1行ずつ描画されるだけなので、各indexの行(y)を
+    // 直接探して検証する。
+
+    // #609 テスト観点整理 優先度A: list×locked整合性。10択・locked市松パターンで、各行の
+    // DIM状態がlocked配列と同じインデックスの選択肢に対応することを確認する
+    // （grid版の対応テストのlist版）。
+    #[test]
+    fn draw_choice_list_mixed_locked_pattern_maps_dim_to_correct_index() {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&i.to_string(), "x"))
+            .collect();
+        // 偶数indexはロックなし、奇数indexはロック中（市松パターンで隣接行との取り違えも検出できる）。
+        let locked: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
+        let area = Rect::new(0, 0, 60, 10);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_list(f, area, &options, 0, None, &locked, &[]);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for (i, &expected_locked) in locked.iter().enumerate() {
+            let digit = i.to_string();
+            let (digit_x, digit_y) = (0..area.width)
+                .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "index {i} (\"{digit}\") should render somewhere, buffer was: {buffer:?}"
+                    )
+                });
+
+            let dim = buffer
+                .cell((digit_x, digit_y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::DIM);
             assert_eq!(
-                has_moon_marker, expected_moon,
-                "index {i} の🌑表示の有無が期待(cleared={is_cleared}・locked={is_locked}→\
-                 lockedが勝ちmoonは出ないはず)と一致しない（🌑漏れの検出）"
+                dim, expected_locked,
+                "index {i} の DIM 状態が locked[{i}]={expected_locked} と一致しない \
+                 （list版の行とlocked配列のインデックスずれの検出用）"
             );
+        }
+    }
+
+    // #609 テスト観点整理 優先度A: list×cleared整合性。10択・cleared市松パターンで、各行の
+    // DIM状態と🌑サフィックスがcleared配列と同じインデックスの選択肢に対応することを確認する
+    // （grid版の対応テストのlist版）。
+    #[test]
+    fn draw_choice_list_mixed_cleared_pattern_maps_dim_and_moon_to_correct_index() {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&i.to_string(), "x"))
+            .collect();
+        // 偶数indexは未完了、奇数indexは完了中（市松パターンで隣接行との取り違えも検出できる）。
+        let cleared: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
+        let area = Rect::new(0, 0, 60, 10);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_list(f, area, &options, 0, None, &[], &cleared);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for (i, &expected_cleared) in cleared.iter().enumerate() {
+            let digit = i.to_string();
+            let (digit_x, digit_y) = (0..area.width)
+                .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "index {i} (\"{digit}\") should render somewhere, buffer was: {buffer:?}"
+                    )
+                });
+
+            let dim = buffer
+                .cell((digit_x, digit_y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::DIM);
+            assert_eq!(
+                dim, expected_cleared,
+                "index {i} の DIM 状態が cleared[{i}]={expected_cleared} と一致しない \
+                 （list版の行とcleared配列のインデックスずれの検出用）"
+            );
+
+            // 🌑はdigitと同じ行(digit_y)だけを見る。全バッファを見ると別行の🌑を誤って
+            // 拾う恐れがあるため、自分の行に限定してスキャンする。
+            let has_moon_marker = (0..area.width)
+                .any(|x| buffer.cell((x, digit_y)).expect("in bounds").symbol() == "🌑");
+            assert_eq!(
+                has_moon_marker, expected_cleared,
+                "index {i} の🌑表示の有無が cleared[{i}]={expected_cleared} と一致しない \
+                 （自行範囲内だけを見ても対応がずれていないかの確認）"
+            );
+        }
+    }
+
+    // #609 テスト観点整理 優先度A（★最重要）: list×locked×cleared独立性。デシジョン
+    // テーブルの locked=true・cleared=true の重複ケースを含む混在パターンで、🌑の表示が
+    // locked の値に一切影響されず cleared だけで決まること（GUI版 #604 で確立した
+    // 「lockedはアイコン種別の判定に一切関与しない」設計と同じ、grid版の回帰ガードの
+    // list版）を確認する。lockedがclearedを握り潰すバグが再発しないことの回帰ガード。
+    #[test]
+    fn draw_choice_list_locked_and_cleared_mixed_pattern_moon_shows_regardless_of_lock() {
+        let options: Vec<ChoiceOption> = (0..10)
+            .map(|i| choice_option(&i.to_string(), "x"))
+            .collect();
+        // locked: index 0,3,6,9 / cleared: index 1,3,5,7,9（grid版の回帰テストと同じ組み合わせ）。
+        // index 3・9は locked かつ cleared が同時に真の重複ケース——locked に関わらず
+        // cleared どおりに🌑が出ることを確認する。
+        let locked: Vec<bool> = (0..10).map(|i| i % 3 == 0).collect();
+        let cleared: Vec<bool> = (0..10).map(|i| i % 2 == 1).collect();
+        let area = Rect::new(0, 0, 60, 10);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_list(f, area, &options, 0, None, &locked, &cleared);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for i in 0..10 {
+            let is_locked = locked[i];
+            let is_cleared = cleared[i];
+            let expected_dim = is_locked || is_cleared;
+
+            let digit = i.to_string();
+            let (digit_x, digit_y) = (0..area.width)
+                .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "index {i} (\"{digit}\") should render somewhere, buffer was: {buffer:?}"
+                    )
+                });
+
+            let dim = buffer
+                .cell((digit_x, digit_y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::DIM);
+            assert_eq!(
+                dim, expected_dim,
+                "index {i} のDIM状態は (locked||cleared)={expected_dim} と一致するはず \
+                 （locked/clearedの二重付与ではなく単純ORのため、重複時も非重複時と同じDIM一段のはず）"
+            );
+
+            let has_moon_marker = (0..area.width)
+                .any(|x| buffer.cell((x, digit_y)).expect("in bounds").symbol() == "🌑");
+
+            // locked とは独立: locked の値に関わらず、cleared どおりに🌑が出る
+            // （lockedがcleared判定を乗っ取らない、#609）。
+            assert_eq!(
+                has_moon_marker, is_cleared,
+                "index {i} の🌑表示の有無が cleared[{i}]={is_cleared} と一致しない \
+                 （locked[{i}]={is_locked} に関わらず cleared だけで決まるはず）"
+            );
+        }
+    }
+
+    // #609 テスト観点整理 優先度B: 正常系の回帰ガード。locked/clearedが全て偽のとき、
+    // DIM無し・🌑無しはもちろん、撤去済みの🔒記号が出力バッファのどこにも現れないことを
+    // 確認する（#609で🔒完全撤去したことの直接的な回帰検出）。
+    #[test]
+    fn draw_choice_list_no_lock_no_cleared_shows_no_dim_and_no_marker() {
+        let options: Vec<ChoiceOption> =
+            (0..5).map(|i| choice_option(&i.to_string(), "x")).collect();
+        let locked = vec![false; 5];
+        let cleared = vec![false; 5];
+        let area = Rect::new(0, 0, 60, 5);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_list(f, area, &options, 0, None, &locked, &cleared);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert!(
+                    !cell.modifier.contains(Modifier::DIM),
+                    "locked/cleared共に全て偽のとき、({x},{y})にDIMが付いてはいけない"
+                );
+                assert_ne!(
+                    cell.symbol(),
+                    "🌑",
+                    "locked/cleared共に全て偽のとき、({x},{y})に🌑が出てはいけない"
+                );
+                assert_ne!(
+                    cell.symbol(),
+                    "🔒",
+                    "🔒は#609で完全撤去済みのため、どのセルにも出てはいけない"
+                );
+            }
+        }
+    }
+
+    // #609 テスト観点整理 優先度B: locked配列がoptions数より短いとき、範囲外indexは
+    // `locked.get(i).copied().unwrap_or(false)` によりfalse扱いになりDIMが付かないことを
+    // 確認する。
+    #[test]
+    fn draw_choice_list_locked_array_shorter_than_options_defaults_to_false() {
+        let options: Vec<ChoiceOption> =
+            (0..5).map(|i| choice_option(&i.to_string(), "x")).collect();
+        // options 5件に対しlockedは2件だけ渡す。index0,1は明示的にロック、index2..4は
+        // 配列が無い＝unwrap_or(false)でfalse扱いになるはず。
+        let locked = vec![true, true];
+        let area = Rect::new(0, 0, 60, 5);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_list(f, area, &options, 0, None, &locked, &[]);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for i in 0..5 {
+            let expected_locked = i < locked.len() && locked[i];
+            let digit = i.to_string();
+            let (digit_x, digit_y) = (0..area.width)
+                .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "index {i} (\"{digit}\") should render somewhere, buffer was: {buffer:?}"
+                    )
+                });
+            let dim = buffer
+                .cell((digit_x, digit_y))
+                .expect("in bounds")
+                .modifier
+                .contains(Modifier::DIM);
+            assert_eq!(
+                dim,
+                expected_locked,
+                "index {i}: locked配列(長さ{})の範囲外はunwrap_or(false)でDIM無しのはず",
+                locked.len()
+            );
+        }
+    }
+
+    // #609 テスト観点整理 優先度B: cleared配列がoptions数より短いとき、範囲外indexは
+    // `cleared.get(i).copied().unwrap_or(false)` によりfalse扱いになり🌑が付かないことを
+    // 確認する（上のlocked版の対）。
+    #[test]
+    fn draw_choice_list_cleared_array_shorter_than_options_defaults_to_false() {
+        let options: Vec<ChoiceOption> =
+            (0..5).map(|i| choice_option(&i.to_string(), "x")).collect();
+        // options 5件に対しclearedは2件だけ渡す。index0,1は明示的に完了済み、index2..4は
+        // 配列が無い＝unwrap_or(false)でfalse扱いになるはず。
+        let cleared = vec![true, true];
+        let area = Rect::new(0, 0, 60, 5);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_list(f, area, &options, 0, None, &[], &cleared);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for i in 0..5 {
+            let expected_cleared = i < cleared.len() && cleared[i];
+            let digit = i.to_string();
+            let (_digit_x, digit_y) = (0..area.width)
+                .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+                .find(|&(x, y)| buffer.cell((x, y)).expect("in bounds").symbol() == digit)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "index {i} (\"{digit}\") should render somewhere, buffer was: {buffer:?}"
+                    )
+                });
+            let has_moon_marker = (0..area.width)
+                .any(|x| buffer.cell((x, digit_y)).expect("in bounds").symbol() == "🌑");
+            assert_eq!(
+                has_moon_marker,
+                expected_cleared,
+                "index {i}: cleared配列(長さ{})の範囲外はunwrap_or(false)で🌑無しのはず",
+                cleared.len()
+            );
+        }
+    }
+
+    // #609 テスト観点整理 優先度B: `&[]`, `&[]` を直接渡した場合にDIM/🌑が一切出ないことを
+    // 明示的に確認する。他のテストでは引数として頻繁に使われているが、この非存在自体を
+    // 直接アサートするテストが無かったため単独で用意する。
+    #[test]
+    fn draw_choice_list_both_locked_and_cleared_empty_slices_render_plain() {
+        let options: Vec<ChoiceOption> =
+            (0..5).map(|i| choice_option(&i.to_string(), "x")).collect();
+        let area = Rect::new(0, 0, 60, 5);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_choice_list(f, area, &options, 0, None, &[], &[]);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert!(
+                    !cell.modifier.contains(Modifier::DIM),
+                    "locked=&[], cleared=&[]のとき、({x},{y})にDIMが付いてはいけない"
+                );
+                assert_ne!(
+                    cell.symbol(),
+                    "🌑",
+                    "locked=&[], cleared=&[]のとき、({x},{y})に🌑が出てはいけない"
+                );
+            }
         }
     }
 

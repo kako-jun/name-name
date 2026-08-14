@@ -1154,7 +1154,7 @@ impl Playback {
     /// 現在Choice表示中の各選択肢について、ロック状態（#591）を判定した配列を返す。
     /// `current_choice()` が返す `options` と同じ長さ・同じ並びになる。Choice表示中で
     /// なければ空 Vec。`ui::draw` へそのまま渡し、`draw_choice_list`/`draw_choice_grid` が
-    /// ロック中の選択肢を非活性の見た目（DIM + 🔒 マーク）で描画するために使う。
+    /// ロック中の選択肢を非活性の見た目（DIM のみ、記号は付けない、#609）で描画するために使う。
     pub fn current_choice_locked(&self) -> Vec<bool> {
         match self.items.get(self.index) {
             Some(PlaybackItem::Choice(options, _)) => {
