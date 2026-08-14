@@ -107,8 +107,10 @@ export interface EventImageShowOptions {
    *  `transition` が 'Pixelate' の場合は遷移全体（コルセン+リファイン）の所要時間として使う。 */
   fadeMs?: number | null
   /** 遷移モード (#583)。未指定/null は 'Fade'（既存の透明度フェード、非回帰）。
-   *  'Pixelate' は表示中の絵が無い（初回表示等）場合、遷移するものが無いため 'Fade' 経路
-   *  （実質は fadeMs に応じた通常のフェードイン/即時表示）にフォールバックする。 */
+   *  'Pixelate' は fadeMs<=0（即時指定）の場合のみ、遷移するものが無いため 'Fade' 経路
+   *  （実質は即時表示）にフォールバックする。表示中の絵が無い（初回表示、
+   *  `[イベント絵終了:]` 後の再表示等）場合も fadeMs>0 なら通常どおりピクセレート経路に
+   *  入る（#612）。 */
   transition?: 'Fade' | 'Pixelate' | null
   /** アンビエント演出フラグ (#582)。未指定/null は全 false（無演出、既存挙動のまま）。 */
   effects?: AmbientEffects | null

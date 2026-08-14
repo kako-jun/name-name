@@ -1515,6 +1515,215 @@ describe('EventImageLayer ピクセレート遷移 (#583)', () => {
     expect(layer.hasPendingVisualTransition()).toBe(false)
   })
 
+  // #612: `this.sprite &&` 条件撤去により、表示中の絵が無い(sprite===null)状態からも
+  // Pixelate遷移経路(コルセン→スワップ→リファイン)に入るようになった。以下は
+  // その sprite===null 起点の各観点(T1〜T10)。
+
+  it('remove()完了後の再表示シーケンスでもピクセレート経路(黒ベタからコルセン→スワップ→b)になる(#612 T1)', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp')
+    await flushPromises()
+    expect(internals(layer).sprite).not.toBeNull()
+
+    // remove()（フェード指定なし=即時消去）で sprite=null を確定させる
+    // （Issue本文の `[イベント絵終了:]` 後の再表示を再現）。
+    layer.remove()
+    expect(internals(layer).sprite).toBeNull()
+    expect(layer.getState()).toBeNull()
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    const ll = internals(layer)
+    expect(ll.sprite).toBeNull()
+    expect(ll.pixelateState).not.toBeNull()
+    expect(ll.pixelateState!.phase).toBe('coarsen')
+
+    await flushPromises() // bのロード完了(まだコルセン中)
+    time.tick(160) // swapAtMsちょうど: スワップ
+    expect(ll.sprite).not.toBeNull()
+    expect(ll.pixelateState!.phase).toBe('refine')
+    expect(layer.getState()?.path).toBe('story/b.webp')
+  })
+
+  it('sprite無し状態でロード未解決のままコルセン完了時刻に達するとholdingフェーズでsprite===nullを維持し、ロード解決後にスワップしてrefineへ移る(#612 T2)', async () => {
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    // 初回show()なのでthis.spriteはまだ無い。ロードは手動で解決を制御する。
+    let resolveA: ((t: Texture) => void) | null = null
+    vi.spyOn(Assets, 'load').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveA = resolve
+        }) as never
+    )
+    layer.show('story/a.webp', { transition: 'Pixelate', fadeMs: 320 }) // swapAtMs=160
+
+    const ll = internals(layer)
+    time.tick(160) // コルセン完了。ロードはまだ終わっていない。
+    expect(ll.pixelateState!.phase).toBe('holding')
+    expect(ll.sprite).toBeNull()
+
+    expect(resolveA).not.toBeNull()
+    resolveA!(mockTexture())
+    await flushPromises()
+    expect(ll.pixelateState!.phase).toBe('refine')
+    expect(ll.sprite).not.toBeNull()
+  })
+
+  it('sprite無し状態からのピクセレート遷移中はshouldHideBackLayer()がfalseを維持し、スワップの瞬間にtrueへ切り替わる(#612 T3、back既定=Hide)', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/a.webp', { transition: 'Pixelate', fadeMs: 320 })
+    // コルセン開始直後: sprite===nullなので背面はまだ隠さない
+    // （Fade経路のロード中と同じ規約、doc comment参照）。
+    expect(layer.shouldHideBackLayer()).toBe(false)
+
+    await flushPromises()
+    time.tick(159)
+    expect(layer.shouldHideBackLayer()).toBe(false)
+
+    time.tick(1) // swapAtMsちょうど: スワップ
+    expect(layer.shouldHideBackLayer()).toBe(true)
+  })
+
+  it('sprite無し状態でコルセン中に別画像へのPixelate割り込みが入ると対象パスがcへ差し替わりcoarsenからやり直され、sprite依然null(#612 T4)', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    await flushPromises()
+    time.tick(100) // コルセン進行中(まだswapAtMs=160未満、sprite依然null)
+
+    const ll = internals(layer)
+    expect(ll.sprite).toBeNull()
+    expect(ll.pixelateState!.path).toBe('story/b.webp')
+    expect(ll.pixelateFilter!.sizeX).toBeGreaterThan(1)
+
+    // sprite無し状態のまま、別画像へのpixelate遷移で割り込む。
+    layer.show('story/c.webp', { transition: 'Pixelate', fadeMs: 320 })
+    expect(ll.sprite).toBeNull()
+    expect(ll.pixelateState!.path).toBe('story/c.webp')
+    expect(ll.pixelateState!.phase).toBe('coarsen')
+    expect(ll.pixelateFilter!.sizeX).toBe(1) // 新しい遷移はsize=1からやり直し
+  })
+
+  it('sprite無し状態でコルセン中にremove()が割り込むとpixelate stateがクリアされsprite===nullのまま・タイマーもリークしない(#612 T5)', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    await flushPromises()
+    time.tick(100) // コルセン進行中(sprite依然null)
+    expect(internals(layer).pixelateState).not.toBeNull()
+    expect(internals(layer).sprite).toBeNull()
+
+    layer.remove()
+    expect(internals(layer).pixelateState).toBeNull()
+    expect(internals(layer).sprite).toBeNull()
+    expect(layer.getState()).toBeNull()
+    expect(time.getPendingTimerCount()).toBe(0)
+  })
+
+  it('sprite無し状態でのテクスチャロード失敗はconsole.warn1回・pixelate stateクリア・sprite===null維持・settled pathはbのまま(#612 T6)', async () => {
+    const layer = makeLayer(virtualTime())
+    const err = new Error('load failed')
+    vi.spyOn(Assets, 'load').mockRejectedValue(err)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
+    expect(internals(layer).pixelateState).not.toBeNull() // 開始直後はまだ進行中
+    expect(internals(layer).sprite).toBeNull()
+
+    await flushPromises()
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(internals(layer).pixelateState).toBeNull() // ロード失敗でcancelPixelateTransitionされる
+    expect(internals(layer).sprite).toBeNull() // 覆う旧画像すら無いので sprite は null のまま
+    expect(layer.getState()?.path).toBe('story/b.webp') // settled stateはload成否に関わらずb
+
+    warnSpy.mockRestore()
+  })
+
+  it('sprite無し状態でのピクセレート遷移中、glowSpriteはスワップまで生成されずスワップ直後に新規生成される(#612 T7、事故パターン#582/#583)', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    layer.show('story/b.webp', {
+      transition: 'Pixelate',
+      fadeMs: 320,
+      effects: { wobble: false, vignette: false, glow: true, candle: false },
+    })
+    await flushPromises()
+    const ll = internals(layer)
+    expect(ll.sprite).toBeNull()
+    expect(ll.glowSprite).toBeNull() // コルセン中はまだglowSprite無し
+
+    time.tick(160) // スワップ
+    expect(ll.sprite).not.toBeNull()
+    expect(ll.glowSprite).not.toBeNull()
+    expect(ll.glowSprite!.blendMode).toBe('overlay')
+  })
+
+  it('sprite無し状態でのピクセレート遷移中、ambientTimer(candle)はスワップまで起動せずスワップ後に起動する(#612 T8、事故パターン#582/#583)', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = makeLayer(time)
+    const candleEffects = { wobble: false, vignette: false, glow: false, candle: true }
+    layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320, effects: candleEffects })
+    await flushPromises()
+    expect(internals(layer).ambientTimer).toBeNull() // コルセン中はpixelateTimerのみ
+    expect(time.getPendingTimerCount()).toBe(1)
+
+    time.tick(160) // スワップ
+    expect(internals(layer).ambientTimer).not.toBeNull()
+    expect(time.getPendingTimerCount()).toBe(2) // ambientTimer + pixelateTimer(refine中)
+  })
+
+  it('sprite無し状態でfadeMs=-1/0はFade経由の即時表示(pixelate state無し)、fadeMs=1はpixelate経由でcoarsenから開始する(#612 T9、境界値)', async () => {
+    mockAssetsLoadResolved()
+
+    const layerNeg = makeLayer(virtualTime())
+    expect(internals(layerNeg).sprite).toBeNull() // 事前条件: sprite無し
+    layerNeg.show('story/a.webp', { transition: 'Pixelate', fadeMs: -1 })
+    expect(internals(layerNeg).pixelateState).toBeNull()
+    await flushPromises()
+    expect(internals(layerNeg).sprite!.alpha).toBe(1)
+    expect(internals(layerNeg).fadeAnimation).toBeNull()
+
+    const layerZero = makeLayer(virtualTime())
+    expect(internals(layerZero).sprite).toBeNull()
+    layerZero.show('story/a.webp', { transition: 'Pixelate', fadeMs: 0 })
+    expect(internals(layerZero).pixelateState).toBeNull()
+    await flushPromises()
+    expect(internals(layerZero).sprite!.alpha).toBe(1)
+    expect(internals(layerZero).fadeAnimation).toBeNull()
+
+    const layerOne = makeLayer(virtualTime())
+    expect(internals(layerOne).sprite).toBeNull()
+    layerOne.show('story/a.webp', { transition: 'Pixelate', fadeMs: 1 })
+    expect(internals(layerOne).sprite).toBeNull() // まだコルセン中
+    expect(internals(layerOne).pixelateState).not.toBeNull()
+    expect(internals(layerOne).pixelateState!.phase).toBe('coarsen')
+  })
+
+  it('sprite無し状態でtransition:Fade/未指定はPixelate stateを一切作らない(#612 T10、非回帰)', async () => {
+    mockAssetsLoadResolved()
+    const layerFade = makeLayer(virtualTime())
+    expect(internals(layerFade).sprite).toBeNull()
+    layerFade.show('story/a.webp', { transition: 'Fade', fadeMs: 320 })
+    expect(internals(layerFade).pixelateState).toBeNull()
+    await flushPromises()
+    expect(internals(layerFade).fadeAnimation).not.toBeNull() // 通常のFade経路で進行中
+
+    const layerDefault = makeLayer(virtualTime())
+    expect(internals(layerDefault).sprite).toBeNull()
+    layerDefault.show('story/b.webp', { fadeMs: 320 }) // transition未指定
+    expect(internals(layerDefault).pixelateState).toBeNull()
+    await flushPromises()
+    expect(internals(layerDefault).fadeAnimation).not.toBeNull()
+  })
+
   it('fadeMs<=0はPixelate指定でもFade経路(即時表示)にフォールバックする', async () => {
     mockAssetsLoadResolved()
     const layer = makeLayer(virtualTime())
@@ -1751,10 +1960,11 @@ describe('EventImageLayer ピクセレート遷移 (#583)', () => {
   it('assetBaseUrl 未設定時はPixelate指定でも pixelateState/pixelateTimer を作らず hasPendingVisualTransition() は false（Fade経路の姉妹テスト）', async () => {
     const loadSpy = vi.spyOn(Assets, 'load')
     const layer = new EventImageLayer(SCREEN_W, SCREEN_H, virtualTime())
-    // setAssetBaseUrl を呼ばない。show() 経由でも this.sprite が無いためこのままでは
-    // Fade経路にフォールバックしてしまうので、まず内部的に sprite を直接生やしてから
-    // Pixelate遷移を起動する（このテストの関心は「assetBaseUrl 未設定時のガード位置」であり
-    // 「sprite の有無によるフォールバック分岐」ではないため）。
+    // setAssetBaseUrl を呼ばない。this.sprite への直接代入は #612 以前（Pixelate 分岐が
+    // `this.sprite &&` を条件に持ち、sprite 無しだと Fade 経路にフォールバックしていた頃）の
+    // 名残で、#612 後は sprite の有無が分岐に影響しないため本来は不要（このテストの関心は
+    // 「assetBaseUrl 未設定時のガード位置」のみで、sprite の有無によるフォールバック分岐とは
+    // 無関係）。害はないため残すが、意味は失われている。
     internals(layer).sprite = { alpha: 1 } as never
 
     layer.show('story/b.webp', { transition: 'Pixelate', fadeMs: 320 })
