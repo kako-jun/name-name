@@ -1476,6 +1476,22 @@ mod tests {
         }
     }
 
+    /// `dline_with_image` の遷移指定版（Pixelate遷移固定、#613の event_loop 統合テスト用）。
+    fn dline_with_image_pixelate(
+        speaker: Option<&str>,
+        text: &str,
+        event_image: Option<String>,
+    ) -> DisplayLine {
+        DisplayLine {
+            speaker: speaker.map(|s| s.to_string()),
+            text: vec![text.to_string()],
+            event_image,
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::Pixelate,
+            event_image_fade_ms: None,
+        }
+    }
+
     /// `w`x`h` px の単色 RGBA バイト列を作る（テストフィクスチャ用）。
     fn solid_rgba(color: (u8, u8, u8), w: u32, h: u32) -> Vec<u8> {
         let mut buf = Vec::with_capacity((w * h * 4) as usize);
@@ -2194,6 +2210,61 @@ mod tests {
         assert!(
             buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
             "advancing into a line with a new event_image should switch the fade target to it"
+        );
+    }
+
+    #[test]
+    fn event_loop_advance_crossing_into_new_event_image_with_pixelate_transition_from_none_displays_it(
+    ) {
+        // #613: 上のテスト（Fade遷移、#481由来）と同じ構造を、Pixelate遷移かつ「表示中の絵が
+        // 無い状態(from=None)からのイベント絵表示」で再現する回帰ガード——GUI版(#612)の
+        // バグが起きていたのと同じ入力パターン。GUI版は `EventImageLayer.show()` の
+        // `this.sprite && fadeMs > 0` ゲートにより、この入力（表示中スプライト無し）だと
+        // Pixelate分岐自体に入れずFade（実質即時表示）へフォールバックしていたが、TUI側の
+        // `ImageFadeState::snapshot` にそのようなゲートは無く、`to_transition==Pixelate`だけで
+        // 無条件にPixelate経路（`pixelate_snapshot`、from=Noneはblank_gridとして扱う設計、
+        // `image_fade.rs`のdocコメント参照）に入る。crossfade_ms=0にして、トランジション
+        // 開始直後の描画が実時間経過に依存せず即座に新ターゲットの色を表示するようにし、
+        // 決定的なアサーションにする。
+        let fixture_color = (33u8, 200u8, 210u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_color, 2, 2), 2, 2);
+        let mut config = instant_config();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        config.event_image.crossfade_ms = 0;
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut playback = Playback::from_lines(vec![
+            dline_with_image(Some("A"), "hello", None),
+            dline_with_image_pixelate(Some("B"), "world", Some(relative)),
+        ]);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert!(
+            buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
+            "advancing into a line with a new Pixelate-transition event_image from a from=None \
+             state should display the image, not get stuck on the placeholder (TUI counterpart \
+             of the #612 GUI fix)"
         );
     }
 

@@ -8170,4 +8170,64 @@ mod tests {
         assert_eq!(line.event_image_transition, EventImageTransition::Pixelate);
         assert_eq!(line.event_image_fade_ms, Some(800));
     }
+
+    #[test]
+    fn scene_first_pixelate_event_image_naturally_follows_dialog_lines_with_no_prior_image() {
+        // 観点(#613): gymnasiaの実スクリプト構造（route01/01-terminal-light.md 等）を模し、
+        // 会話行が複数続いた後にシーン最初の `[イベント絵: ..., 遷移=pixelate]` が来る場合、
+        // それ以前の会話行では event_image=None、`[イベント絵:]` の直後（`[待機:]` を挟まず
+        // 次の会話行に直接続くケース、原稿として最も一般的なパターン）に到達したitemでは
+        // event_image=Some/event_image_transition=Pixelateになることを確認する。
+        // これにより「from=None && to_transition=Pixelate」の組み合わせが、想定上の
+        // 特殊ケースではなく実際のシーン構造（会話行→初回イベント絵）から自然に発生する
+        // ことを固定する（image_fade::pixelate_snapshotのfrom=Noneケースの入力元）。
+        //
+        // 注: `Event::EventImage` は直後が `Event::Wait` の場合のみ独立したImage itemを
+        // 生成する（build_scene_items参照）。ここでは会話行が直後に続くため、image は
+        // 独立itemを作らず次の会話行itemに焼き付く——これが原稿上「会話行→イベント絵→
+        // 会話行」の最も一般的な形。
+        let doc = doc_single_scene(vec![
+            dialog(Some("カコ"), vec!["おはよう"]),
+            dialog(Some("カコ"), vec!["ここはどこだろう"]),
+            event_image_pixelate("route01/terminal_light.webp", Some(900)),
+            dialog(Some("カコ"), vec!["明かりがついた"]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.total(), 3, "画像itemは独立せず3件の会話行itemになるはず");
+
+        // シーン最初のitem: まだイベント絵は一度も指定されていない。
+        let first = pb.current_line().expect("1件目の会話行");
+        assert_eq!(first.speaker.as_deref(), Some("カコ"));
+        assert_eq!(first.text, vec!["おはよう".to_string()]);
+        assert_eq!(
+            first.event_image, None,
+            "シーン最初の会話行はまだイベント絵未指定のはず"
+        );
+
+        assert!(pb.advance(), "2件目の会話行へ進めるはず");
+        let second = pb.current_line().expect("2件目の会話行");
+        assert_eq!(second.text, vec!["ここはどこだろう".to_string()]);
+        assert_eq!(
+            second.event_image, None,
+            "イベント絵到達前はNoneのままのはず"
+        );
+
+        assert!(
+            pb.advance(),
+            "イベント絵が焼き付いた3件目の会話行へ進めるはず"
+        );
+        let third = pb.current_line().expect("イベント絵が焼き付いた会話行");
+        assert_eq!(third.text, vec!["明かりがついた".to_string()]);
+        assert_eq!(
+            third.event_image.as_deref(),
+            Some("route01/terminal_light.webp"),
+            "初回イベント絵がevent_image=None→Someへ切り替わって焼き付いているはず"
+        );
+        assert_eq!(
+            third.event_image_transition,
+            EventImageTransition::Pixelate,
+            "遷移モードがPixelateのはず"
+        );
+        assert_eq!(third.event_image_fade_ms, Some(900));
+    }
 }
