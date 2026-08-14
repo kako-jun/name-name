@@ -526,6 +526,15 @@ export class NovelRenderer {
   /** Wait イベント実行中フラグ */
   private waitingForWait = false
 
+  /**
+   * `resetAndStartEvents({ skipAutoAdvance: true })` で自動進行
+   * （processUntilNextTextEvent → showCharacterThenRender）をスキップした直後、
+   * まだそれを実行していない状態を示すフラグ (#620)。
+   * `resumeAutoAdvanceIfPending()` が真の間だけ後追い実行し、実行後は false に戻す
+   * （二重実行防止）。skipAutoAdvance を使わない通常経路では常に false のまま。
+   */
+  private pendingAutoAdvance = false
+
   /** playScript 実行中フラグ（再入ガード用 #220） */
   private isReplaying = false
 
@@ -912,7 +921,7 @@ export class NovelRenderer {
     }
   }
 
-  setEvents(events: Event[]): void {
+  setEvents(events: Event[], options?: { skipAutoAdvance?: boolean }): void {
     // PixiJS v8 の Assets.load で取得した Texture は Assets の内部キャッシュに残り続けるため、
     // キャッシュ済みURLを Assets.unload で解放してから textureCache をクリアする
     const urls = Array.from(this.textureCache.keys())
@@ -923,7 +932,7 @@ export class NovelRenderer {
     // イベント絵レイヤーのテクスチャも同じタイミングで解放する (#351 セルフレビュー指摘:
     // 背景と違い textureCache 相当の登録先が無く、GPU テクスチャが解放されずリークしていた)。
     this.eventImageLayer.disposeTextures()
-    this.resetAndStartEvents([...events])
+    this.resetAndStartEvents([...events], { skipAutoAdvance: options?.skipAutoAdvance })
   }
 
   /**
@@ -947,12 +956,12 @@ export class NovelRenderer {
    * 線形再生を維持したままジャンプ索引だけを差し替えたいときは
    * `setEvents(flattened)` ＋ `setJumpSceneIndex(scenes)` を使う。
    */
-  setScenes(scenes: EventScene[]): void {
+  setScenes(scenes: EventScene[], options?: { skipAutoAdvance?: boolean }): void {
     this.allScenes = scenes
     this.gameState.clear()
     if (scenes.length > 0) {
       this.currentSceneId = scenes[0].id
-      this.setEvents(scenes[0].events)
+      this.setEvents(scenes[0].events, options)
       this.onSceneChangeCallback?.(scenes[0].id)
     }
   }
@@ -1481,7 +1490,7 @@ export class NovelRenderer {
    */
   private resetAndStartEvents(
     events: Event[],
-    options?: { preserveBackgroundForTransition?: boolean }
+    options?: { preserveBackgroundForTransition?: boolean; skipAutoAdvance?: boolean }
   ): void {
     this.waitingForChoice = false
     this.waitingForWait = false
@@ -1567,11 +1576,42 @@ export class NovelRenderer {
     // （何もないところから登場する初回は「交代」ではない）。
     this.lastSpeaker = null
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+
+    // #620: 「続きから」の自動クイックロード直前に呼ばれる resetAndStartEvents は、
+    // 直後にどうせ restoreToScene（quickLoad の最終経路）が index/state を丸ごと
+    // 上書きするため、ここでの自動進行（entry シーン冒頭の演出・Wait 待機）は無駄なだけでなく
+    // waitingForWait を立てて quickLoad() 自体をガードで弾いてしまう（#620 の直接原因）。
+    // skipAutoAdvance が真の間は下記 2 行をスキップし、pendingAutoAdvance を立てて
+    // 「まだ自動進行していない」状態を記録する。quickLoad が成功すれば restoreToScene が
+    // waitingForWait 等を完全リセットするので、この保留は unresolved のまま消える
+    // （resumeAutoAdvanceIfPending は呼ばれない＝正しい）。quickLoad が失敗した場合だけ
+    // 呼び出し側（NovelPlayer）が resumeAutoAdvanceIfPending() でフォールバック実行する。
+    if (options?.skipAutoAdvance) {
+      this.pendingAutoAdvance = true
+      return
+    }
+    this.pendingAutoAdvance = false
     this.processUntilNextTextEvent()
 
     // 立ち絵 →（同時/直後に）テキスト の順序保証 (#293)。立ち絵 sprite を同期生成してから
     // 最初のテキストイベントのスナップショットを記録し（afterShow）、novel は立ち絵テクスチャの
     // 用意完了まで render を遅延、adv/skip は従来どおり同期描画する。
+    this.showCharacterThenRender(() => this.pushSnapshot())
+  }
+
+  /**
+   * `resetAndStartEvents({ skipAutoAdvance: true })` でスキップした自動進行
+   * （processUntilNextTextEvent → showCharacterThenRender）を後追いで実行する (#620)。
+   *
+   * `pendingAutoAdvance` が立っている（＝スキップ後まだ誰も自動進行していない）場合のみ実行し、
+   * 実行後は即座にフラグを倒す。quickLoad() 成功時は restoreToScene が呼ばれ、これは
+   * pendingAutoAdvance に触れないため呼んでも何もしない（quickLoad 失敗時のフォールバック専用）。
+   * 二重実行防止のため、既に実行済み/該当なしの場合は no-op。
+   */
+  resumeAutoAdvanceIfPending(): void {
+    if (!this.pendingAutoAdvance) return
+    this.pendingAutoAdvance = false
+    this.processUntilNextTextEvent()
     this.showCharacterThenRender(() => this.pushSnapshot())
   }
 

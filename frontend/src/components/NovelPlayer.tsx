@@ -659,15 +659,26 @@ function NovelPlayer({
       //   - それ以外: events を線形再生（多シーン自動進行を維持）。jumpSceneIndex が
       //     あればジャンプ解決索引だけを別建てで設定する（再生ストリームは置換しない）。
       // どちらの経路でも debug_scene/debug_script は allScenes が埋まった後に発火させる。
+      // 「続きから」自動クイックロード判定 (#620): setEvents/setScenes の直後に quickLoad() を
+      // 呼ぶ従来経路だと、entry シーン冒頭の自動進行（[待機: 表示完了] 等）が先に
+      // waitingForWait を立て、quickLoad() の入口ガードに弾かれて静かに失敗していた
+      // （後述 quickLoad 分岐のコメント参照）。ここで「この後どうせ quickLoad する」条件を
+      // 前もって判定し、真なら setEvents/setScenes 自体に skipAutoAdvance を渡して
+      // entry シーン冒頭の演出を経由させない。pendingSnapshot/initialSceneId が優先されるため
+      // 両方とも含めて判定する。pendingSnapshotRef.current はこの時点ではまだ消費前
+      // （下の分岐で読む値と同じ）。hasQuickSave() は setDocKey 済み（上の docKey ブロック）
+      // でないと正しい名前空間を見ないため、この判定はそれより後で行う。
+      const willAutoQuickLoad =
+        !pendingSnapshotRef.current && !initialSceneId && !!docKey && renderer.hasQuickSave()
       if (scenes && scenes.length > 0) {
-        renderer.setScenes(scenes)
+        renderer.setScenes(scenes, { skipAutoAdvance: willAutoQuickLoad })
       } else {
         // ジャンプ索引を先に設定してから線形再生を流す。
         // （startFrom/playScript が allScenes を必要とするため events より前に置く）
         if (jumpSceneIndex && jumpSceneIndex.length > 0) {
           renderer.setJumpSceneIndex(jumpSceneIndex)
         }
-        renderer.setEvents(events)
+        renderer.setEvents(events, { skipAutoAdvance: willAutoQuickLoad })
       }
       // fluid 再マウント (#460): 直前 renderer から引き継いだスナップショットがあれば
       // restoreSnapshot で読み進め位置（背景/立ち絵/BGM 込み）を復元する。setEvents/setScenes
@@ -687,16 +698,21 @@ function NovelPlayer({
         // 走らせ、deep-link 起動の時点で直前セッションのクイックセーブを上書きする。deep-link
         // は主に埋め込み/デバッグ用途（通しプレイの起点にしない）のため許容する。
         renderer.startFrom({ sceneId: initialSceneId })
-      } else if (docKey && renderer.hasQuickSave()) {
-        // 起動時の自動クイックロード (#578): pendingSnapshot（fluid 再マウント引き継ぎ）も
-        // initialSceneId（?scene= 等の明示的 deep-link）も無い通常起動時に、直前のシーン
-        // 切り替えで自動保存されたクイックセーブがあれば復元する。quickLoad() が false
-        // （データ不整合等）を返した場合は何もせず、既存のエントリ再生にフォールバックする。
-        // docKey が無い場合（EditorScreen のプレビュー等）はこの自動ロード自体をスキップする
-        // (#578 セルフレビュー指摘): 上の自動クイックセーブ配線と対称のガード。docKey 無しだと
-        // SaveManager が共有の '' 名前空間を読むため、Editor で別プロジェクトのプレビューを
-        // 開くたびに無関係なセーブへ自動ロードしてしまう。
-        renderer.quickLoad()
+      } else if (willAutoQuickLoad) {
+        // 起動時の自動クイックロード (#578, #620 再修正): pendingSnapshot（fluid 再マウント
+        // 引き継ぎ）も initialSceneId（?scene= 等の明示的 deep-link）も無い通常起動時に、
+        // 直前のシーン切り替えで自動保存されたクイックセーブがあれば復元する。
+        // 上で setEvents/setScenes に skipAutoAdvance: true を渡し済みなので、entry シーン
+        // 冒頭の自動進行はまだ実行されておらず waitingForWait 等は立っていない
+        // （= quickLoad() の入口ガードに弾かれない）。
+        const restored = renderer.quickLoad()
+        if (!restored) {
+          // quickLoad が false（データ不整合等）を返した場合のフォールバック (#620):
+          // skipAutoAdvance で保留したままの entry シーン冒頭の自動進行を、
+          // ここで後追い実行して既存のエントリ再生に確実にフォールバックする
+          // （呼ばないと「イベント列はセットされたが冒頭も進んでいない」白画面になる）。
+          renderer.resumeAutoAdvanceIfPending()
+        }
       }
 
       // URL クエリによるデバッグ起点指定 (#220 Phase 3)。
