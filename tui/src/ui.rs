@@ -600,9 +600,9 @@ fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
 /// そうでなければ従来どおり `config.splash.lines` のロゴ行を画面中央に表示するテキストモード
 /// （[`draw_splash_text`]）を描く。画像のロードに失敗した場合（`ImageCache::get_or_load` が
 /// `None`）もテキストモードへフォールバックする — `splash.lines` が空でも既存のテキスト
-/// モードどおり「空行 + 開始ヒント」だけは描く。ロゴの内容（ASCII アート本体・画像ファイル）
-/// はゲームごとに異なるため、このエンジン側は表示方法だけを担い、内容そのものは持たない
-/// （`Config::splash` 参照）。
+/// モードどおり画面最下部の共通操作フッター（[`draw_operation_footer`]）だけは描く。
+/// ロゴの内容（ASCII アート本体・画像ファイル）はゲームごとに異なるため、このエンジン側は
+/// 表示方法だけを担い、内容そのものは持たない（`Config::splash` 参照）。
 ///
 /// ロゴ画像モードは2通りに分岐する（#588）: [`logo_fits_natively`] が `true`（Issue #588が
 /// 前提とする214x46pxロゴを含む、固定キャンバスの本編領域に収まるサイズ）のときは
@@ -658,11 +658,12 @@ fn logo_fits_natively(image_w: u32, image_h: u32) -> bool {
 /// スプラッシュロゴをネイティブ解像度のまま固定キャンバス内で上下左右中央に表示する
 /// （#588、[`logo_fits_natively`] が `true` の場合のみ [`draw_splash`] から呼ばれる）。
 /// [`image_render::rgba_to_quadrant_grid_native`] で拡大縮小・クロップ無しのグリッドを作り、
-/// [`compute_centered_canvas`] を再利用してそのグリッドを画像領域（最下段の開始ヒント行を
-/// 除く）内で中央配置する — `compute_centered_canvas` は本来「端末内で固定キャンバスを
+/// [`compute_centered_canvas`] を再利用してそのグリッドを画像領域（最下段の共通操作フッター
+/// 行を除く）内で中央配置する — `compute_centered_canvas` は本来「端末内で固定キャンバスを
 /// 中央配置する」ために作られた関数だが、「ある矩形の中に別の矩形を中央配置する」という
 /// 責務自体は完全に汎用的なため、ネストして再利用できる。最下段には
-/// [`draw_fullscreen_image`] と同じ開始ヒントを表示し、見た目の一貫性を保つ。
+/// [`draw_fullscreen_image`]・通常プレイ（[`draw`]）と同じ [`draw_operation_footer`] を表示し、
+/// 起動直後から見た目の一貫性を保つ（Issue #587）。
 fn draw_splash_logo_native(frame: &mut Frame, canvas: Rect, image: &DecodedImage) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -676,10 +677,7 @@ fn draw_splash_logo_native(frame: &mut Frame, canvas: Rect, image: &DecodedImage
     let placed = compute_centered_canvas(image_area, logo_rect);
     draw_image_grid(frame, placed, &grid);
 
-    let hint_paragraph = Paragraph::new("Enter / Space で開始")
-        .alignment(Alignment::Center)
-        .style(Style::default().add_modifier(Modifier::DIM));
-    frame.render_widget(hint_paragraph, hint_area);
+    draw_operation_footer(frame, hint_area, None);
 }
 
 /// スプラッシュ画像モードの最大スクロール量（最下端オフセット）を返す。
@@ -738,17 +736,13 @@ fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset:
     let fitted_rows = compute_full_width_rows(image.width, image.height, fitted_cols);
     if fitted_cols == 0 || fitted_rows == 0 {
         // 画像を描画できない場合でも、テキストモードのフォールバックと対称になるよう
-        // 「Enter / Space で開始」ヒントだけは出す。`fits_required_size`チェックを通過して
-        // いる以上、固定幅の`REQUIRED_TOTAL_WIDTH`から導かれる`fitted_cols`が実際に0になる
-        // ことは現状のコード上ほぼ到達不能（#538）。
-        let hint_paragraph = Paragraph::new("Enter / Space で開始")
-            .alignment(Alignment::Center)
-            .style(Style::default().add_modifier(Modifier::DIM));
-        frame.render_widget(hint_paragraph, hint_area);
+        // 共通操作フッターだけは出す。`fits_required_size`チェックを通過している以上、
+        // 固定幅の`REQUIRED_TOTAL_WIDTH`から導かれる`fitted_cols`が実際に0になることは
+        // 現状のコード上ほぼ到達不能（#538）。
+        draw_operation_footer(frame, hint_area, None);
         return;
     }
 
-    let scrollable = fitted_rows > image_area.height;
     let offset = clamp_scroll_offset(scroll_offset, fitted_rows, image_area.height);
     let visible_rows = image_area.height.min(fitted_rows);
     let visible = rgba_to_quadrant_grid_window(
@@ -768,56 +762,73 @@ fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset:
     };
     draw_image_grid(frame, draw_area, &visible);
 
-    let hint = if scrollable {
-        "Enter / Space で開始　↑/↓ でスクロール"
-    } else {
-        "Enter / Space で開始"
-    };
-    let hint_paragraph = Paragraph::new(hint)
-        .alignment(Alignment::Center)
-        .style(Style::default().add_modifier(Modifier::DIM));
-    frame.render_widget(hint_paragraph, hint_area);
+    // #587: スクロール可否による専用ヒント（「↑/↓ でスクロール」）は廃止した。共通操作
+    // フッター（[`OPERATION_HINT_TEXT`]）が既に `↑/↓ 選択` を含んでおり、画像スクロール時の
+    // ↑/↓ もこの表記でカバーされるため、二重表示を避けて常に同じフッターへ統一する。
+    draw_operation_footer(frame, hint_area, None);
 }
 
 /// スプラッシュ画面（テキストモード）: `config.splash.lines` に設定されたロゴ行を画面中央に
 /// 表示する。ロゴの内容はゲームごとに異なるため、このエンジン側は「中央寄せして表示する」
 /// という汎用的な描画だけを担い、内容そのものは持たない（`Config::splash` 参照）。
+///
+/// 罫線内側（`inner`）を [`Layout`] で `[Min(0), Length(1)]` に上下分割し、上段には
+/// `config.splash.lines` だけを中央寄せで描画する（従来のように末尾へ空行+開始ヒントを
+/// 埋め込まない）。下段は他3経路（[`draw_splash_logo_native`]/[`draw_fullscreen_image`]/
+/// 通常プレイの [`draw`]）と同じ [`draw_operation_footer`] を呼び、画面最下部に固定された
+/// 共通フッターとして表示する（Issue #587）。
+///
+/// 端末サイズが [`fits_required_size`] を満たさない場合は [`draw_too_small_message`] へ
+/// フォールバックする — 他3経路（[`draw_splash_logo_native`] は呼び出し元の [`draw_splash`]
+/// で、[`draw_fullscreen_image`]・通常プレイの [`draw`] は自分自身で）が既に同じガードを
+/// 持っており、ここだけ欠けていると狭い端末で操作フッターごとロゴ表示が丸ごと欠落する
+/// （セルフレビューmust対応、#587）。ガードをこの関数自身の先頭に置くのは、将来
+/// [`draw_splash`] 以外から呼ばれても取りこぼさないようにするため（`draw_fullscreen_image`
+/// と同じ自己完結パターン）。
 fn draw_splash_text(frame: &mut Frame, config: &Config) {
     let area = frame.area();
+    if !fits_required_size(area) {
+        draw_too_small_message(frame, area);
+        return;
+    }
     let block = Block::default()
         .borders(Borders::ALL)
         .title(config.game_name.as_str());
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(inner);
+    let lines_area = rows[0];
+    let footer_area = rows[1];
+
     let color = Color::from_str(&config.splash.color).unwrap_or(Color::White);
     let style = Style::default().fg(color);
 
-    let mut lines: Vec<Line> = config
+    let lines: Vec<Line> = config
         .splash
         .lines
         .iter()
         .map(|text_line| Line::styled(text_line.clone(), style))
         .collect();
-    lines.push(Line::raw(""));
-    lines.push(Line::styled(
-        "Enter / Space で開始",
-        Style::default().add_modifier(Modifier::DIM),
-    ));
 
     // 縦方向中央寄せ: ratatui の Paragraph は縦方向の中央寄せを持たないため、
     // ロゴ全体の高さから上マージンを計算して描画領域をずらす。
     let content_height = lines.len() as u16;
-    let top_margin = inner.height.saturating_sub(content_height) / 2;
+    let top_margin = lines_area.height.saturating_sub(content_height) / 2;
     let centered = Rect {
-        x: inner.x,
-        y: inner.y.saturating_add(top_margin),
-        width: inner.width,
-        height: inner.height.saturating_sub(top_margin),
+        x: lines_area.x,
+        y: lines_area.y.saturating_add(top_margin),
+        width: lines_area.width,
+        height: lines_area.height.saturating_sub(top_margin),
     };
 
     let paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
     frame.render_widget(paragraph, centered);
+
+    draw_operation_footer(frame, footer_area, None);
 }
 
 /// 1文字のセル幅（半角=1、全角=2 等）を、`ratatui`（`unicode-width` を推移的依存に持つ）の
@@ -1239,9 +1250,48 @@ fn render_wrapped_paragraph(frame: &mut Frame, area: Rect, paragraph: Paragraph<
     frame.render_widget(paragraph, area);
 }
 
-/// 画面最下段1行: ゲーム名 + 会話位置/総数（+ 終端マーカー）。枠の title として表示していた
-/// 情報を、枠なし化後もユーザーが状況を把握できるよう右寄せの単なる1行テキストとして残す
-/// （罫線・背景等の装飾は付けない）。
+/// 通常プレイ・スプラッシュを問わず、画面最下部の共通フッターへ常時表示する操作キー一覧の
+/// ヒント文言（Issue #587）。従来は起動直後のスプラッシュ画面にだけ「Enter / Space で開始」を
+/// 単独表示しており、設定 (`C`) やバックログ (`B`) の存在を初見で知る手段が無かった —
+/// この定数はそれらを含む主要操作を`Enter / Space` と同格で常時提示するために追加した。
+/// 項目の欠落は禁止（[`draw_operation_footer`] 参照）。
+const OPERATION_HINT_TEXT: &str =
+    "Enter/Space 次へ  ↑/↓ 選択  A オート  S スキップ  B バックログ  C 設定  Q/Esc 終了";
+
+/// 画面最下部1行の共通操作ヒントフッターを描画する（Issue #587）。[`OPERATION_HINT_TEXT`] を
+/// 左寄せ・DIM スタイルで表示し、`trailing` が `Some(status)` の場合は同じ行の右寄せで
+/// `status` を DIM スタイルで重ねて表示する（従来 `draw_status_line` が単独で持っていた
+/// 「ゲーム名 — position/total (END)」の表示はこの `trailing` 経由で引き継ぐ）。
+///
+/// `area` の幅は通常キャンバス幅（[`REQUIRED_TOTAL_WIDTH`]=130列固定）を前提にしており、
+/// ヒント文（約60〜70文字）と status 文字列は通常1行に収まる。収まりきらない場合でも
+/// [`OPERATION_HINT_TEXT`] の7項目は絶対に欠落させない方針のため、ヒント側には
+/// `OPERATION_HINT_TEXT` の実セル幅ぶんの領域を [`Layout`] で確保してから status を残りの
+/// 領域へ描画する（重ね描画で status がヒントの一部を上書きする事故を避ける）。極端に
+/// 狭い端末では、先にヒント側の幅を優先して確保するため status 側から先に切り詰められる。
+fn draw_operation_footer(frame: &mut Frame, area: Rect, trailing: Option<&str>) {
+    let hint_width = OPERATION_HINT_TEXT.cell_width().min(area.width);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(hint_width), Constraint::Min(0)])
+        .split(area);
+
+    let hint_paragraph = Paragraph::new(OPERATION_HINT_TEXT)
+        .style(Style::default().add_modifier(Modifier::DIM))
+        .alignment(Alignment::Left);
+    frame.render_widget(hint_paragraph, cols[0]);
+
+    if let Some(status) = trailing {
+        let status_paragraph = Paragraph::new(status)
+            .style(Style::default().add_modifier(Modifier::DIM))
+            .alignment(Alignment::Right);
+        frame.render_widget(status_paragraph, cols[1]);
+    }
+}
+
+/// 画面最下段1行: [`draw_operation_footer`] 経由で共通の操作ヒントを左寄せ表示しつつ、
+/// 右寄せで「ゲーム名 + 会話位置/総数（+ 終端マーカー）」を重ねて表示する（Issue #587で
+/// `draw_operation_footer` へ統合、旧実装は status 単体の右寄せ1行だけだった）。
 fn draw_status_line(
     frame: &mut Frame,
     area: Rect,
@@ -1255,10 +1305,7 @@ fn draw_status_line(
     } else {
         format!("{} — {position}/{total}", config.game_name)
     };
-    let paragraph = Paragraph::new(status)
-        .style(Style::default().add_modifier(Modifier::DIM))
-        .alignment(Alignment::Right);
-    frame.render_widget(paragraph, area);
+    draw_operation_footer(frame, area, Some(&status));
 }
 
 /// ページ送りインジケータ（▼）をウィンドウ右下から固定するセル数
@@ -2496,7 +2543,11 @@ mod tests {
         let mut config = Config::default();
         config.splash.enabled = true;
         config.splash.lines = vec!["田田田".to_string(), "回回回".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2511,7 +2562,11 @@ mod tests {
         let mut config = Config::default();
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2528,7 +2583,11 @@ mod tests {
         };
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2555,7 +2614,11 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         config.splash.color = "not-a-real-color".to_string();
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2566,13 +2629,21 @@ mod tests {
 
     #[test]
     fn draw_splash_content_fits_exactly_shows_hint() {
-        // ロゴ1行 + 空行1行 + ヒント1行 = content_height 3。
-        // Borders::ALL は上下1セルずつ占有するため、area.height=5 のとき
-        // inner.height もちょうど3になり、余白ゼロで全行が収まる境界。
+        // セルフレビューmust対応（#587）で draw_splash_text にも fits_required_size ガードが
+        // 付いたため、この境界テストは到達可能な最小サイズ（REQUIRED_TOTAL_WIDTH x
+        // REQUIRED_TOTAL_HEIGHT）まで引き上げた。Borders::ALL が上下1セルずつ占有するため
+        // inner.height = REQUIRED_TOTAL_HEIGHT-2、さらに [Min(0), Length(1)] 分割で
+        // フッター1行を引いた lines_area.height = REQUIRED_TOTAL_HEIGHT-3。ロゴ行数を
+        // ちょうどそれに合わせ、余白ゼロで全行が収まる境界を再現する。
+        let content_height = REQUIRED_TOTAL_HEIGHT - 3;
         let mut config = Config::default();
         config.splash.enabled = true;
-        config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
+        config.splash.lines = vec!["田".to_string(); content_height as usize];
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2583,17 +2654,27 @@ mod tests {
 
     #[test]
     fn draw_splash_content_overflows_by_one_line_does_not_panic() {
-        // 上のテストから area.height を1減らし、inner.height が content_height より
-        // 1行分小さい状態（ヒント行が収まりきらない）を作る。ratatui の Paragraph は
-        // wrap 未指定でも収まらない行を静かに切り詰めるだけで panic しないことの確認。
+        // 上のテストからロゴ行数を1行増やし、lines_area.height より content_height が
+        // 1行分大きい状態（末尾行が収まりきらない）を、fits_required_size ガード通過に
+        // 必要な最小端末サイズの中で再現する（セルフレビューmust対応、#587）。ratatui の
+        // Paragraph は wrap 未指定でも収まらない行を静かに切り詰めるだけで panic しない
+        // ことの確認。フッター行は content の折り返し量に関係なく固定 Length(1) のため、
+        // オーバーフローしても表示され続けることも併せて確認する。
+        let content_height = REQUIRED_TOTAL_HEIGHT - 3 + 1;
         let mut config = Config::default();
         config.splash.enabled = true;
-        config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+        config.splash.lines = vec!["田".to_string(); content_height as usize];
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
             .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Enter"), "buffer was: {text}");
     }
 
     #[test]
@@ -2601,7 +2682,11 @@ mod tests {
         let mut config = Config::default();
         config.splash.enabled = true;
         config.splash.lines = vec!["AB田C".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2610,12 +2695,48 @@ mod tests {
         assert!(text.contains("AB田C"), "buffer was: {text}");
     }
 
+    #[test]
+    fn draw_splash_text_below_required_size_shows_too_small_message_not_footer() {
+        // セルフレビューmust対応（#587）: draw_splash_text 経路（ロゴ画像未設定/ロード失敗時）
+        // も他3経路（draw_splash_logo_native/draw_fullscreen_image/通常プレイのdraw）と同じ
+        // fits_required_size ガードを持つことを固定する。幅のみ1セル不足させ、通常の
+        // ゲームUI（操作フッター含む）が一切描画されず案内メッセージにフォールバックする
+        // ことを確認する（既存の draw_splash_extremely_small_terminal_does_not_panic は
+        // panicしないことしか見ておらずフッター欠落の有無を検証していなかった）。
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["田".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH - 1,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+        assert!(
+            !text.contains(OPERATION_HINT_TEXT),
+            "操作フッターが表示されてしまっている: {text}"
+        );
+        assert!(
+            !text.contains("田"),
+            "ロゴ行が表示されてしまっている: {text}"
+        );
+    }
+
     // ---- フルキャンバス画像表示モード（#530）----
 
     #[test]
-    fn draw_fullscreen_image_wide_image_with_enough_space_shows_hint_without_scroll_indicator() {
+    fn draw_fullscreen_image_wide_image_with_enough_space_shows_operation_footer_without_duplicate_scroll_hint(
+    ) {
         // 横長画像(比4.0)はキャンバス全幅へcontain-fitしても表示可能行数に収まるため、
-        // スクロール不要になり、ヒントは「Enter / Space で開始」だけになる。
+        // スクロール不要になる。#587以降は「Enter / Space で開始」のような専用文言では
+        // なく、常時表示の共通操作フッター（[`OPERATION_HINT_TEXT`]、`↑/↓ 選択`を含む）が
+        // 出るため、'↑'/'↓'の非存在はもう主張できない。ここではスクロール不要な場合でも
+        // 専用の「でスクロール」ヒントが二重に追加されないことだけを確認する。
         let image = DecodedImage {
             width: 4,
             height: 1,
@@ -2626,17 +2747,19 @@ mod tests {
             .draw(|f| draw_fullscreen_image(f, &image, 0))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Enter / Space で開始"), "buffer was: {text}");
+        assert!(text.contains("Enter/Space 次へ"), "buffer was: {text}");
         assert!(
-            !text.contains('↑') && !text.contains('↓'),
-            "スクロール不要な画像では↑/↓ヒントを出してはいけない, buffer was: {text}"
+            !text.contains("でスクロール"),
+            "スクロール不要な画像で専用スクロールヒントを二重表示してはいけない, buffer was: {text}"
         );
     }
 
     #[test]
-    fn draw_fullscreen_image_tall_image_needing_scroll_shows_scroll_hint() {
+    fn draw_fullscreen_image_tall_image_needing_scroll_shows_operation_footer() {
         // 正方形画像(比1.0)は端末セルの非正方形補正込みでcontain-fitすると表示可能行数
-        // (image_area.height)を超えるため、スクロールヒント(↑/↓)が追加される。
+        // (image_area.height)を超える。#587以降、スクロール要否に関わらず同じ共通操作
+        // フッター（`↑/↓ 選択`を含む）が出るため、ここではフッターが確実に描画されている
+        // ことだけを確認する（専用の「↑/↓ でスクロール」文言は廃止済み）。
         let image = DecodedImage {
             width: 1,
             height: 1,
@@ -2648,8 +2771,8 @@ mod tests {
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
-            text.contains('↑') && text.contains('↓'),
-            "スクロール要の画像では↑/↓ヒントを出すはず, buffer was: {text}"
+            text.contains("Enter/Space 次へ") && text.contains('↑') && text.contains('↓'),
+            "共通操作フッター（↑/↓ 選択を含む）は表示されるはず, buffer was: {text}"
         );
     }
 
@@ -2710,10 +2833,10 @@ mod tests {
     }
 
     #[test]
-    fn draw_fullscreen_image_zero_sized_decoded_image_still_shows_start_hint() {
+    fn draw_fullscreen_image_zero_sized_decoded_image_still_shows_operation_footer() {
         // バグ修正2（#538）: fitted_cols>0/fitted_rows==0（image.width/heightが0）の
         // 早期return経路でも、テキストモードのフォールバックと対称になるよう
-        // 「Enter / Space で開始」ヒントだけは描画されるはず。
+        // 共通操作フッター（[`OPERATION_HINT_TEXT`]、Issue #587）だけは描画されるはず。
         let image = DecodedImage {
             width: 0,
             height: 0,
@@ -2725,8 +2848,8 @@ mod tests {
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
-            text.contains("Enter / Space で開始"),
-            "fitted_rows==0の早期return経路でも開始ヒントは表示されるはず, buffer was: {text}"
+            text.contains("Enter/Space 次へ"),
+            "fitted_rows==0の早期return経路でも共通操作フッターは表示されるはず, buffer was: {text}"
         );
     }
 
@@ -2734,7 +2857,8 @@ mod tests {
     fn draw_fullscreen_image_zero_sized_decoded_image_does_not_show_scroll_hint() {
         // バグ修正2（#538）: fitted_rows==0の早期return経路では`scrollable`判定
         // （`fitted_rows > image_area.height`）自体が実行されないため、通常の画像描画
-        // 経路が出す「↑/↓ でスクロール」ヒントは含まれないはず。
+        // 経路が出す専用の「でスクロール」ヒント（#587で廃止済み・共通フッターに統一）は
+        // 元々含まれない。
         let image = DecodedImage {
             width: 0,
             height: 0,
@@ -2776,9 +2900,18 @@ mod tests {
             image_color,
             "極端な縦長画像でも画像はキャンバス右端まで全幅で使うはず"
         );
+        // #587でスクロール要否による専用ヒント（「↑/↓ でスクロール」）は廃止され、
+        // 常時同じ共通操作フッターへ統一された。ここでは (a) フッター自体が表示されて
+        // いること、(b) この画像が実際にスクロールを要する行数（表示可能行数=CANVAS_H-1を
+        // 超える）であることを、廃止されたヒント文言の代わりに直接計算で確認する。
         assert!(
-            buffer_text(buffer).contains("↑/↓ でスクロール"),
-            "極端な縦長画像では縦スクロールヒントを表示するはず"
+            buffer_text(buffer).contains("Enter/Space 次へ"),
+            "共通操作フッターは表示されるはず"
+        );
+        let fitted_rows = compute_full_width_rows(image.width, image.height, CANVAS_W);
+        assert!(
+            fitted_rows > CANVAS_H - 1,
+            "極端な縦長画像は表示可能行数(image_area.height)を超えて縦スクロールが必要になるはず"
         );
     }
 
@@ -2802,7 +2935,11 @@ mod tests {
         config.splash.enabled = true;
         config.splash.logo_image = Some(std::path::PathBuf::from("does-not-exist.webp"));
         config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2821,15 +2958,19 @@ mod tests {
         config.splash.enabled = true;
         config.splash.logo_image = Some(std::path::PathBuf::from("does-not-exist.webp"));
         config.splash.lines = vec![];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
-            text.contains("Enter / Space で開始"),
-            "lines が空でも開始ヒントはテキストモードへフォールバックして表示するはず, buffer was: {text}"
+            text.contains("Enter/Space 次へ"),
+            "lines が空でも共通操作フッターはテキストモードへフォールバックして表示するはず, buffer was: {text}"
         );
     }
 
@@ -2861,7 +3002,7 @@ mod tests {
             !text.contains("テストゲーム"),
             "画像表示モードはテキストモードの罫線タイトルを描かないはず, buffer was: {text}"
         );
-        assert!(text.contains("Enter / Space で開始"), "buffer was: {text}");
+        assert!(text.contains("Enter/Space 次へ"), "buffer was: {text}");
     }
 
     #[test]
@@ -2925,11 +3066,16 @@ mod tests {
     #[test]
     fn draw_splash_oversized_logo_image_falls_back_to_fullscreen_scaled_mode() {
         // #588: 本編領域に収まらない大きな画像（ここでは縦長で高さが本編行数を超える画像）は
-        // draw_fullscreen_image（全幅contain-fit）側へフォールバックし、そちら固有の
-        // スクロールヒントが表示されるはず。
+        // draw_fullscreen_image（全幅contain-fit）側へフォールバックする。#587で専用の
+        // 「↑/↓ でスクロール」ヒントは廃止され、常時同じ共通操作フッターに統一されたため、
+        // フォールバック経路に入った証拠は文言ではなく描画の signature（全幅contain-fit
+        // なら image_area の左右端まで画像色で埋まる。ネイティブ表示は中央配置のため
+        // 左右端まで埋まらない — `draw_splash_small_logo_image_uses_native_mode_and_does_not_fill_full_canvas_width`
+        // 参照）で確認する。
         let oversized_h = (u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2 + 10) * 2; // rows超過を確実にする
+        let color = (255u8, 0u8, 0u8);
         let fixture_path = crate::image_render::write_test_webp_fixture(
-            &solid_rgba((255, 0, 0), 4, oversized_h),
+            &solid_rgba(color, 4, oversized_h),
             4,
             oversized_h,
         );
@@ -2939,10 +3085,22 @@ mod tests {
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
             .unwrap();
-        let text = buffer_text(terminal.backend().buffer());
+        let buffer = terminal.backend().buffer();
+        let image_color = Color::Rgb(color.0, color.1, color.2);
+        assert_eq!(
+            buffer.cell((0, 0)).unwrap().bg,
+            image_color,
+            "全幅contain-fitのフォールバック描画は画像領域の左端まで埋まるはず"
+        );
+        assert_eq!(
+            buffer.cell((CANVAS_W - 1, 0)).unwrap().bg,
+            image_color,
+            "全幅contain-fitのフォールバック描画は画像領域の右端まで埋まるはず"
+        );
+        let text = buffer_text(buffer);
         assert!(
-            text.contains("↑/↓ でスクロール"),
-            "本編領域に収まらない画像はスケール表示にフォールバックし、スクロールヒントが出るはず, buffer was: {text}"
+            text.contains("Enter/Space 次へ"),
+            "フォールバック経路でも共通操作フッターは表示されるはず, buffer was: {text}"
         );
     }
 
@@ -2991,9 +3149,13 @@ mod tests {
     #[test]
     fn draw_splash_reference_214x46_logo_renders_end_to_end_without_panic_and_uses_native_mode() {
         // Issue #588 が前提とする基準サイズ214x46pxのロゴを、フルパイプライン(draw_splash)で
-        // 実際に CANVAS_W x CANVAS_H 端末に通す。(a) panicしない (b) フルスクリーン画像
-        // モード側のスクロールヒントが出ない（native側に入った証拠） (c) 画像領域の
-        // 一部セルがロゴ色になっている、の3点を確認する。
+        // 実際に CANVAS_W x CANVAS_H 端末に通す。(a) panicしない (b) フォールバック
+        // （draw_fullscreen_image、全幅contain-fit）ではなくnative側に入った証拠として
+        // 画像左端(0,0)がキャンバス左端まで埋まっていない（native表示は中央配置で107cols
+        // しか使わずcanvas幅130を余す。#587で「↑/↓ でスクロール」文言は廃止され共通操作
+        // フッター（`↑/↓ 選択`を含む）が常時出るため、'↑'/'↓'文字の非存在ではもう判定
+        // できない） (c) 画像領域の一部セルがロゴ色になっている、(d) 共通操作フッターが
+        // 表示されている、の4点を確認する。
         let color = (10u8, 200u8, 30u8);
         let fixture_path =
             crate::image_render::write_test_webp_fixture(&solid_rgba(color, 214, 46), 214, 46);
@@ -3004,16 +3166,21 @@ mod tests {
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let text = buffer_text(buffer);
-        assert!(
-            !text.contains('↑') && !text.contains('↓'),
-            "native表示モードではフルスクリーン画像モードのスクロールヒントを出してはいけない, buffer was: {text}"
-        );
         let logo_color = Color::Rgb(color.0, color.1, color.2);
+        assert_ne!(
+            buffer.cell((0, 0)).unwrap().bg,
+            logo_color,
+            "native表示は中央配置のはずで、キャンバス左端(0,0)まで画像色で埋まってはいけない（埋まっていればfallbackに入った証拠）"
+        );
         let area = buffer.area();
         let has_logo_color = (0..area.height)
             .any(|y| (0..area.width).any(|x| buffer.cell((x, y)).unwrap().bg == logo_color));
         assert!(has_logo_color, "画像領域の一部セルがロゴ色になっているはず");
+        let text = buffer_text(buffer);
+        assert!(
+            text.contains("Enter/Space 次へ"),
+            "native表示モードでも共通操作フッターは表示されるはず, buffer was: {text}"
+        );
     }
 
     #[test]
