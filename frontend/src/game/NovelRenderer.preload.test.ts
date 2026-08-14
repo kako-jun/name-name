@@ -63,8 +63,32 @@ function expressionChange(character: string, expression: string): Event {
 function eventImage(path: string): Event {
   return { EventImage: { path } }
 }
+/** EventImage の path 以外のフィールド（back/transition/fade_ms）も指定できる版。フィールド非依存性テスト用。 */
+function eventImageFull(
+  path: string,
+  opts: { back?: 'Hide' | 'Keep'; transition?: 'Fade' | 'Pixelate'; fade_ms?: number } = {}
+): Event {
+  return { EventImage: { path, ...opts } }
+}
+function eventImageExit(fade_ms?: number): Event {
+  return { EventImageExit: { fade_ms } }
+}
 function renderOnlyImage(path: string): Event {
   return { Image: { path } }
+}
+/** Image の path 以外のフィールド（shape/size/id/x/y/position）も指定できる版。フィールド非依存性テスト用。 */
+function renderOnlyImageFull(
+  path: string,
+  opts: {
+    position?: string
+    shape?: string
+    size?: number
+    id?: string
+    x?: number
+    y?: number
+  } = {}
+): Event {
+  return { Image: { path, ...opts } }
 }
 function choice(jump = 's'): Event {
   return { Choice: { options: [{ text: 'go', jump }] } }
@@ -534,5 +558,202 @@ describe('NovelRenderer 立ち絵・背景の先読み preloadUpcomingAssets (#3
     const { r, bgSpy } = setup()
     r.setScenes([scene('s', [narration('n'), renderOnlyImage('avatar.png')])])
     expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', 'avatar.png')])
+  })
+
+  // --- ここから #621 追加分（テスト設計エージェント観点 A/B/C/D/E） ---
+
+  // A1: EventImage の back='Keep'/'Hide' はいずれでも積まれるURL・件数が同じ（フィールド非依存性）。
+  it('A1: EventImage は back=Keep でも Hide でも積まれるURL・件数が同じ(フィールド非依存性)', () => {
+    // 同一renderer上でsetScenes()を2回呼ぶ（setEvents経由でpreloadedUrlsがclearされるため
+    // 各回は独立にスキャンされる）。同一spyを使い回すため呼び出し間でmockClear()する。
+    const { r, bgSpy } = setup()
+    r.setScenes([scene('s', [narration('n'), eventImageFull('event/x.png', { back: 'Keep' })])])
+    const keepUrls = preloadedUrls(bgSpy)
+
+    bgSpy.mockClear()
+    r.setScenes([scene('s2', [narration('n'), eventImageFull('event/x.png', { back: 'Hide' })])])
+    const hideUrls = preloadedUrls(bgSpy)
+
+    expect(keepUrls).toEqual(hideUrls)
+    expect(keepUrls).toEqual([resolveAssetUrl(BASE, 'images', 'event/x.png')])
+  })
+
+  // A2: EventImage の transition='Pixelate' + back/fade_ms 併記でもURLが変わらない（フィールド非依存性）。
+  it('A2: EventImage は transition=Pixelate + back/fade_ms 併記でもURLが変わらない(フィールド非依存性)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([scene('s', [narration('n'), eventImage('event/y.png')])])
+    const plainUrls = preloadedUrls(bgSpy)
+
+    bgSpy.mockClear()
+    r.setScenes([
+      scene('s2', [
+        narration('n'),
+        eventImageFull('event/y.png', { transition: 'Pixelate', back: 'Keep', fade_ms: 1234 }),
+      ]),
+    ])
+    const fullUrls = preloadedUrls(bgSpy)
+
+    expect(fullUrls).toEqual(plainUrls)
+    expect(fullUrls).toEqual([resolveAssetUrl(BASE, 'images', 'event/y.png')])
+  })
+
+  // A3: Image の shape(円形等) + size + id + x/y + position を全部指定してもURLは1本のみ・pathのみに依存する。
+  it('A3: Image は shape/size/id/x/y/position を全部指定してもURLはpathのみに依存し1本だけ積まれる(フィールド非依存性)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([scene('s', [narration('n'), renderOnlyImage('avatar.png')])])
+    const plainUrls = preloadedUrls(bgSpy)
+
+    bgSpy.mockClear()
+    r.setScenes([
+      scene('s2', [
+        narration('n'),
+        renderOnlyImageFull('avatar.png', {
+          shape: '円形',
+          size: 160,
+          id: 'avatar',
+          x: 0.5,
+          y: 0.3,
+          position: '上',
+        }),
+      ]),
+    ])
+    const fullUrls = preloadedUrls(bgSpy)
+
+    expect(fullUrls).toEqual(plainUrls)
+    expect(fullUrls).toEqual([resolveAssetUrl(BASE, 'images', 'avatar.png')])
+  })
+
+  // B1: EventImage の path=''（空文字）でも Background 同様 guard なしで積まれる（既存 Background 実装との
+  //     一貫性を固定・非回帰）。
+  it("B1: EventImage path=''(空文字)でもBackground同様guardなしでURLが積まれる(非回帰)", () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([scene('s', [narration('n'), eventImage('')])])
+    expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', '')])
+  })
+
+  // B2: EventImage が resolvedEvents の末尾（分岐なしで配列が終わる）に来ても正常終了しエラーを投げない。
+  it('B2: EventImageが配列末尾(分岐なしで終わる)に来ても正常終了しエラーを投げない(境界)', () => {
+    const { r, bgSpy } = setup()
+    expect(() => {
+      r.setScenes([scene('s', [narration('n'), eventImage('event/last.png')])])
+    }).not.toThrow()
+    expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', 'event/last.png')])
+  })
+
+  // B3: EventImage の直後に Choice が来ると、EventImageは積むがChoice以降は積まない（既存の同種テスト
+  //     test12 の EventImage 版）。
+  it('B3: EventImageの直後にChoiceが来るとEventImageは積むがChoice以降(Dialog)は積まない', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([
+      scene('s', [
+        narration('n'),
+        eventImage('event/before-choice.png'),
+        choice(),
+        dialog('c', 'after/choice', 't'),
+      ]),
+    ])
+    const urls = preloadedUrls(bgSpy)
+    expect(urls).toEqual([resolveAssetUrl(BASE, 'images', 'event/before-choice.png')])
+    for (const u of resolveCharacterImageUrls(BASE, 'after/choice')) expect(urls).not.toContain(u)
+  })
+
+  // C1: EventImageExit は非対象で1本も積まない（既存 test7 の拡張、EventImageExit単体シーンで
+  //     backgroundLoad未呼出を確認）。
+  it('C1: EventImageExitは非対象で1本も積まない(EventImageExit単体シーン)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([scene('s', [narration('n'), eventImageExit()])])
+    expect(bgSpy).not.toHaveBeenCalled()
+  })
+
+  // C2: EventImage → EventImageExit → 別pathのEventImage、という並びでも両方のEventImage pathが積まれる
+  //     （EventImageExitがscanを止めない裏取り）。
+  it('C2: EventImage→EventImageExit→別pathのEventImageの並びでも両方のEventImage pathが積まれる(EventImageExitがscanを止めない)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([
+      scene('s', [
+        narration('n'),
+        eventImage('event/first.png'),
+        eventImageExit(),
+        eventImage('event/second.png'),
+      ]),
+    ])
+    const urls = preloadedUrls(bgSpy)
+    expect(urls).toEqual(
+      reversedUrls([
+        resolveAssetUrl(BASE, 'images', 'event/first.png'),
+        resolveAssetUrl(BASE, 'images', 'event/second.png'),
+      ])
+    )
+  })
+
+  // D4: EventImageが同一path 2回連続 → scan内dedupでURL1本だけ（既存Dialog版D1と同型）。
+  it('D4: EventImageが同一path 2回連続してもscan内dedupでURLは1本だけ積まれる', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([
+      scene('s', [narration('n'), eventImage('event/dup.png'), eventImage('event/dup.png')]),
+    ])
+    expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', 'event/dup.png')])
+  })
+
+  // D5: D4と同一セットアップで2回目のpreloadUpcomingAssets()呼び出しは再送しない（cross-call dedup）。
+  it('D5: D4と同一セットアップで2回目のpreloadUpcomingAssets()呼び出しは再送しない(cross-call dedup)', () => {
+    const { r, h, bgSpy } = setup()
+    r.setScenes([
+      scene('s', [narration('n'), eventImage('event/dup.png'), eventImage('event/dup.png')]),
+    ])
+    expect(bgSpy).toHaveBeenCalledTimes(1)
+
+    bgSpy.mockClear()
+    h.preloadUpcomingAssets()
+    expect(bgSpy).not.toHaveBeenCalled()
+  })
+
+  // D6: Image が同一path 2回連続 → scan内dedupでURL1本だけ。
+  it('D6: Imageが同一path 2回連続してもscan内dedupでURLは1本だけ積まれる', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([
+      scene('s', [narration('n'), renderOnlyImage('avatar.png'), renderOnlyImage('avatar.png')]),
+    ])
+    expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', 'avatar.png')])
+  })
+
+  // D7（最重要）: EventImage(path='x.png') と Image(path='x.png') が同一シーン内に混在 → URLが
+  //     文字列として同一のためscan内dedupで1本に収束する（型を跨いだdedupの裏取り）。
+  it('D7: EventImage(path=x.png)とImage(path=x.png)が同一シーンに混在してもURLは文字列同一のため1本に収束する(型を跨いだdedup・最重要)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([
+      scene('s', [narration('n'), eventImage('shared/x.png'), renderOnlyImage('shared/x.png')]),
+    ])
+    expect(preloadedUrls(bgSpy)).toEqual([resolveAssetUrl(BASE, 'images', 'shared/x.png')])
+  })
+
+  // E1（最重要）: Dialog → EventImage → Background → Image が混在するシーンで、実消化順が
+  //     nearest-first（走査順どおり）になることを固定する。#414 の LIFO reverse がこの2分岐
+  //     （EventImage/Image）にも及んでいることを検知する（既存test19のEventImage/Image拡張版）。
+  it('E1: Dialog→EventImage→Background→Image混在シーンで実消化順がnearest-first(走査順どおり)になる(#621・#414回帰防止・最重要)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([
+      scene('s', [
+        dialog('a', 'aa/happy', 'x'),
+        eventImage('event/still1.png'),
+        background('bg/room.png'),
+        renderOnlyImage('avatar.png'),
+      ]),
+    ])
+    const consumeOrder = simulateLifoConsumeOrder(bgSpy.mock.calls.map((c) => c[0] as string[]))
+    expect(consumeOrder).toEqual([
+      ...resolveCharacterImageUrls(BASE, 'aa/happy'),
+      resolveAssetUrl(BASE, 'images', 'event/still1.png'),
+      resolveAssetUrl(BASE, 'images', 'bg/room.png'),
+      resolveAssetUrl(BASE, 'images', 'avatar.png'),
+    ])
+  })
+
+  // E2: EventImage単体（1URL）はreverse前後で消化順不変（境界値=1件）。
+  it('E2: EventImage単体(1URL)はreverse前後で消化順が不変(境界値=1件)', () => {
+    const { r, bgSpy } = setup()
+    r.setScenes([scene('s', [narration('n'), eventImage('event/only.png')])])
+    const consumeOrder = simulateLifoConsumeOrder(bgSpy.mock.calls.map((c) => c[0] as string[]))
+    expect(consumeOrder).toEqual([resolveAssetUrl(BASE, 'images', 'event/only.png')])
   })
 })
