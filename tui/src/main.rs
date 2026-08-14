@@ -125,9 +125,26 @@ fn main() -> anyhow::Result<()> {
     // 復元してしまうと、「playbackは初期状態なのにread_positionsだけ別原稿を指した値が
     // 残る」という非対称な不整合が起きるため、`playback_restored` が `true` の時だけ
     // `event_loop` に `read_positions` を復元させる。
+    // #622: `--new-game` は既存のクイックセーブを無視して必ず script_dir の
+    // entry_script 先頭（hubの10択画面）から新規開始するためのフラグ。
+    // クイックセーブファイルは削除する方針（以後は通常起動でも「続きから」＝
+    // 今回の新規開始が自然に続きになる体験にするため）。ファイルが存在しなくても
+    // エラーにはしない。削除した場合は `restore_playback` の呼び出し自体を
+    // スキップし、`playback_restored` は `false` のままにする。
     let mut playback_restored = false;
     if let Some(path) = &config.quicksave_path {
-        playback_restored = save::restore_playback(&mut playback, path);
+        if cli.new_game {
+            if path.exists() {
+                std::fs::remove_file(path).with_context(|| {
+                    format!(
+                        "クイックセーブファイルの削除に失敗しました: {}",
+                        path.display()
+                    )
+                })?;
+            }
+        } else {
+            playback_restored = save::restore_playback(&mut playback, path);
+        }
     }
     skip_leading_empty_scenes(&mut playback);
 
