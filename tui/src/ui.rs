@@ -777,8 +777,20 @@ fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset:
 /// 埋め込まない）。下段は他3経路（[`draw_splash_logo_native`]/[`draw_fullscreen_image`]/
 /// 通常プレイの [`draw`]）と同じ [`draw_operation_footer`] を呼び、画面最下部に固定された
 /// 共通フッターとして表示する（Issue #587）。
+///
+/// 端末サイズが [`fits_required_size`] を満たさない場合は [`draw_too_small_message`] へ
+/// フォールバックする — 他3経路（[`draw_splash_logo_native`] は呼び出し元の [`draw_splash`]
+/// で、[`draw_fullscreen_image`]・通常プレイの [`draw`] は自分自身で）が既に同じガードを
+/// 持っており、ここだけ欠けていると狭い端末で操作フッターごとロゴ表示が丸ごと欠落する
+/// （セルフレビューmust対応、#587）。ガードをこの関数自身の先頭に置くのは、将来
+/// [`draw_splash`] 以外から呼ばれても取りこぼさないようにするため（`draw_fullscreen_image`
+/// と同じ自己完結パターン）。
 fn draw_splash_text(frame: &mut Frame, config: &Config) {
     let area = frame.area();
+    if !fits_required_size(area) {
+        draw_too_small_message(frame, area);
+        return;
+    }
     let block = Block::default()
         .borders(Borders::ALL)
         .title(config.game_name.as_str());
@@ -2531,7 +2543,11 @@ mod tests {
         let mut config = Config::default();
         config.splash.enabled = true;
         config.splash.lines = vec!["田田田".to_string(), "回回回".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2546,7 +2562,11 @@ mod tests {
         let mut config = Config::default();
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2563,7 +2583,11 @@ mod tests {
         };
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2590,7 +2614,11 @@ mod tests {
         config.splash.enabled = true;
         config.splash.lines = vec!["田".to_string()];
         config.splash.color = "not-a-real-color".to_string();
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2601,13 +2629,21 @@ mod tests {
 
     #[test]
     fn draw_splash_content_fits_exactly_shows_hint() {
-        // ロゴ1行 + 空行1行 + ヒント1行 = content_height 3。
-        // Borders::ALL は上下1セルずつ占有するため、area.height=5 のとき
-        // inner.height もちょうど3になり、余白ゼロで全行が収まる境界。
+        // セルフレビューmust対応（#587）で draw_splash_text にも fits_required_size ガードが
+        // 付いたため、この境界テストは到達可能な最小サイズ（REQUIRED_TOTAL_WIDTH x
+        // REQUIRED_TOTAL_HEIGHT）まで引き上げた。Borders::ALL が上下1セルずつ占有するため
+        // inner.height = REQUIRED_TOTAL_HEIGHT-2、さらに [Min(0), Length(1)] 分割で
+        // フッター1行を引いた lines_area.height = REQUIRED_TOTAL_HEIGHT-3。ロゴ行数を
+        // ちょうどそれに合わせ、余白ゼロで全行が収まる境界を再現する。
+        let content_height = REQUIRED_TOTAL_HEIGHT - 3;
         let mut config = Config::default();
         config.splash.enabled = true;
-        config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
+        config.splash.lines = vec!["田".to_string(); content_height as usize];
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2618,17 +2654,27 @@ mod tests {
 
     #[test]
     fn draw_splash_content_overflows_by_one_line_does_not_panic() {
-        // 上のテストから area.height を1減らし、inner.height が content_height より
-        // 1行分小さい状態（ヒント行が収まりきらない）を作る。ratatui の Paragraph は
-        // wrap 未指定でも収まらない行を静かに切り詰めるだけで panic しないことの確認。
+        // 上のテストからロゴ行数を1行増やし、lines_area.height より content_height が
+        // 1行分大きい状態（末尾行が収まりきらない）を、fits_required_size ガード通過に
+        // 必要な最小端末サイズの中で再現する（セルフレビューmust対応、#587）。ratatui の
+        // Paragraph は wrap 未指定でも収まらない行を静かに切り詰めるだけで panic しない
+        // ことの確認。フッター行は content の折り返し量に関係なく固定 Length(1) のため、
+        // オーバーフローしても表示され続けることも併せて確認する。
+        let content_height = REQUIRED_TOTAL_HEIGHT - 3 + 1;
         let mut config = Config::default();
         config.splash.enabled = true;
-        config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+        config.splash.lines = vec!["田".to_string(); content_height as usize];
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
             .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Enter"), "buffer was: {text}");
     }
 
     #[test]
@@ -2636,13 +2682,49 @@ mod tests {
         let mut config = Config::default();
         config.splash.enabled = true;
         config.splash.lines = vec!["AB田C".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("AB田C"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn draw_splash_text_below_required_size_shows_too_small_message_not_footer() {
+        // セルフレビューmust対応（#587）: draw_splash_text 経路（ロゴ画像未設定/ロード失敗時）
+        // も他3経路（draw_splash_logo_native/draw_fullscreen_image/通常プレイのdraw）と同じ
+        // fits_required_size ガードを持つことを固定する。幅のみ1セル不足させ、通常の
+        // ゲームUI（操作フッター含む）が一切描画されず案内メッセージにフォールバックする
+        // ことを確認する（既存の draw_splash_extremely_small_terminal_does_not_panic は
+        // panicしないことしか見ておらずフッター欠落の有無を検証していなかった）。
+        let mut config = Config::default();
+        config.splash.enabled = true;
+        config.splash.lines = vec!["田".to_string()];
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH - 1,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("端末を広げてください"), "buffer was: {text}");
+        assert!(
+            !text.contains(OPERATION_HINT_TEXT),
+            "操作フッターが表示されてしまっている: {text}"
+        );
+        assert!(
+            !text.contains("田"),
+            "ロゴ行が表示されてしまっている: {text}"
+        );
     }
 
     // ---- フルキャンバス画像表示モード（#530）----
@@ -2853,7 +2935,11 @@ mod tests {
         config.splash.enabled = true;
         config.splash.logo_image = Some(std::path::PathBuf::from("does-not-exist.webp"));
         config.splash.lines = vec!["田".to_string()];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
@@ -2872,7 +2958,11 @@ mod tests {
         config.splash.enabled = true;
         config.splash.logo_image = Some(std::path::PathBuf::from("does-not-exist.webp"));
         config.splash.lines = vec![];
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            REQUIRED_TOTAL_WIDTH,
+            REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
             .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
