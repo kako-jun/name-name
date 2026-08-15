@@ -2285,6 +2285,305 @@ describe('CharacterLayer hasLoadedTexture (#628 フェーズ2b バグ修正)', (
   })
 })
 
+describe('CharacterLayer showImage 同id再表示時のテクスチャ再ロード (#646)', () => {
+  // Issue #646: showTitleScreen() マウント直後に assetBaseUrl が空のままレンダラーが
+  // rendererReady になるレースを踏むと、その回の showImage() が壊れた URL で失敗し、以後何度
+  // 呼び直してもテクスチャがロードされずロゴがフォールバック文字のまま固着していた。
+  // existing 分岐（同 id 再表示）に「テクスチャ未ロードなら再ロードを試みる」処理を追加した
+  // 修正の観点をここに集約する（テスト観点整理エージェントの決定表 A〜G, #646）。
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  interface Retry646StateLike {
+    sprite: { alpha: number; destroyed: boolean; texture: unknown }
+    fadeAnimation: { fromAlpha: number; toAlpha: number; destroyOnComplete: boolean } | null
+    imageLoadPending?: boolean
+    reviveGeneration?: number
+  }
+  function retry646Chars(layer: CharacterLayer): { characters: Map<string, Retry646StateLike> } {
+    return layer as unknown as { characters: Map<string, Retry646StateLike> }
+  }
+
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    source: { scaleMode: 'linear' },
+  })
+
+  // A-1: 本丸。初回失敗（assetBaseUrl:''）→ 同id再表示（assetBaseUrl解決済み）→ Assets.load が
+  // 新URLで再発行され成功 → onLoaded 発火・hasLoadedTexture が true になる。
+  it('初回ロード失敗後の同id再表示は Assets.load を再発行し、成功すれば onLoaded が発火し hasLoadedTexture が true になる', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('empty base url'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    const onLoaded = vi.fn()
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '', onLoaded })
+    await flushPromises()
+    expect(layer.hasLoadedTexture('logo')).toBe(false)
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+
+    loadSpy.mockResolvedValueOnce(fakeTexture(10, 10) as never)
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets', onLoaded })
+    await flushPromises()
+
+    expect(loadSpy).toHaveBeenCalledTimes(2)
+    expect(onLoaded).toHaveBeenCalledTimes(1)
+    expect(layer.hasLoadedTexture('logo')).toBe(true)
+    warnSpy.mockRestore()
+  })
+
+  // A-2: 再ロードURLは existing.assetBaseUrl（古い値）ではなく呼び出し時点の opts.assetBaseUrl
+  // （新しい値）で解決される。
+  it('再ロードは existing.assetBaseUrl ではなく呼び出し時点の opts.assetBaseUrl で URL 解決される', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '' })
+    await flushPromises()
+
+    loadSpy.mockResolvedValueOnce(fakeTexture(10, 10) as never)
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/new-base' })
+    await flushPromises()
+
+    // existing.assetBaseUrl（旧値 ''）ではなく、この呼び出しで渡した '/new-base' で解決される。
+    expect(loadSpy).toHaveBeenLastCalledWith('/new-base/images/title.png')
+    warnSpy.mockRestore()
+  })
+
+  // B-3: 再ロードも失敗（Assets.load が2回ともreject）→ onError が2回目も発火・hasLoadedTexture
+  // は false のまま・例外を投げない。
+  it('再ロードも失敗すると onError が2回目も発火し、hasLoadedTexture は false のまま・例外を投げない', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail1'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+    const onError = vi.fn()
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '', onError })
+    await flushPromises()
+    expect(onError).toHaveBeenCalledTimes(1)
+
+    loadSpy.mockRejectedValueOnce(new Error('fail2'))
+    expect(() =>
+      layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets', onError })
+    ).not.toThrow()
+    await flushPromises()
+
+    expect(onError).toHaveBeenCalledTimes(2)
+    expect(layer.hasLoadedTexture('logo')).toBe(false)
+    warnSpy.mockRestore()
+  })
+
+  // B-4: 再ロード失敗時の console.warn は「画像の再読み込みに失敗」文言で1回だけ出る
+  // （初回失敗時の「画像の読み込みに失敗」とは別文言であることも確認）。
+  it('再ロード失敗時の console.warn は「画像の再読み込みに失敗」文言で1回だけ出る（初回失敗の文言とは別）', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail1'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '' })
+    await flushPromises()
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy.mock.calls[0][0]).toContain('画像の読み込みに失敗')
+    expect(warnSpy.mock.calls[0][0]).not.toContain('再読み込み')
+
+    warnSpy.mockClear()
+    loadSpy.mockRejectedValueOnce(new Error('fail2'))
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy.mock.calls[0][0]).toContain('画像の再読み込みに失敗')
+    warnSpy.mockRestore()
+  })
+
+  // C-6: 新設。再ロード自体が in-flight 中（1回目の再ロードが未解決）にさらに同id再呼び出しをしても
+  // 3回目の Assets.load は発行されない。
+  it('再ロード自体が in-flight 中に同id再呼び出しをしても Assets.load は再発行されない', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '' })
+    await flushPromises()
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+
+    let resolveRetry!: (t: unknown) => void
+    const retryPending = new Promise((resolve) => {
+      resolveRetry = resolve
+    })
+    loadSpy.mockReturnValueOnce(retryPending as never)
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' }) // 2回目: 再ロード開始(未解決)
+    expect(loadSpy).toHaveBeenCalledTimes(2)
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' }) // 3回目呼び出し: in-flight中
+    expect(loadSpy).toHaveBeenCalledTimes(2) // 再発行されない
+
+    resolveRetry(fakeTexture(10, 10))
+    await flushPromises()
+    warnSpy.mockRestore()
+  })
+
+  // E-10: 再ロード成功後（hasLoadedTexture=true）の3回目の同id表示では再ロードが起きない
+  // （無限リトライ化しない）。
+  it('再ロード成功後の3回目の同id表示では再ロードが起きない（無限リトライ化しない）', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '' })
+    await flushPromises()
+
+    loadSpy.mockResolvedValueOnce(fakeTexture(10, 10) as never)
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    expect(loadSpy).toHaveBeenCalledTimes(2)
+    expect(layer.hasLoadedTexture('logo')).toBe(true)
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    expect(loadSpy).toHaveBeenCalledTimes(2) // 追加ロードなし
+    warnSpy.mockRestore()
+  })
+
+  // F-11: instant:true で再ロードを起動 → ロード結果を待たず即座に sprite.alpha=1 になる。
+  it('instant:true で再ロードを起動すると、ロード結果を待たず即座に sprite.alpha=1 になる', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '' })
+    await flushPromises()
+
+    let resolveRetry!: (t: unknown) => void
+    const retryPending = new Promise((resolve) => {
+      resolveRetry = resolve
+    })
+    loadSpy.mockReturnValueOnce(retryPending as never)
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets', instant: true })
+
+    const st = retry646Chars(layer).characters.get('logo')!
+    expect(st.sprite.alpha).toBe(1) // load 未解決でも即時 alpha=1
+
+    resolveRetry(fakeTexture(10, 10))
+    await flushPromises()
+    warnSpy.mockRestore()
+  })
+
+  // F-12: instant:true で起動した再ロードが失敗しても alpha=1 のまま・console.warn 1回・例外なし。
+  it('instant:true で起動した再ロードが失敗しても alpha=1 のまま・console.warn 1回・例外を投げない', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail1'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '' })
+    await flushPromises()
+    warnSpy.mockClear()
+
+    loadSpy.mockRejectedValueOnce(new Error('fail2'))
+    expect(() =>
+      layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets', instant: true })
+    ).not.toThrow()
+
+    const st = retry646Chars(layer).characters.get('logo')!
+    expect(st.sprite.alpha).toBe(1)
+    await flushPromises()
+
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(st.sprite.alpha).toBe(1)
+    warnSpy.mockRestore()
+  })
+
+  // G-13: 過去の事故パターン（#429 reviveGeneration）の再現。再ロード .then() 解決前に対象idを
+  // remove()（非instant、退場フェード予約）→ その後 show()（instant）で復活（reviveGeneration+1）
+  // → 再ロードが後から解決しても startEntranceFade が古い世代とみなされ no-op になり、
+  // フェード方向（instant復活で確定した alpha=1・fadeAnimation=null）を上書きしない。
+  it('再ロード解決前に remove()（非instant）で退場フェード予約→show()で復活(instant)すると、再ロード解決時のstartEntranceFadeが古い世代とみなされフェードを上書きしない', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '' })
+    await flushPromises()
+    expect(layer.hasLoadedTexture('avatar')).toBe(false)
+
+    let resolveRetry!: (t: unknown) => void
+    const retryPending = new Promise((resolve) => {
+      resolveRetry = resolve
+    })
+    loadSpy.mockReturnValueOnce(retryPending as never)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' }) // 再ロード開始(非instant)
+    expect(loadSpy).toHaveBeenCalledTimes(2)
+
+    layer.remove('avatar') // 非instant remove: 退場フェード予約 (destroyOnComplete:true)
+    const st = retry646Chars(layer).characters.get('avatar')!
+    expect(st.fadeAnimation?.destroyOnComplete).toBe(true)
+
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true }) // 復活(instant)
+    expect(loadSpy).toHaveBeenCalledTimes(2) // 復活時に新規retryは走らない(in-flight中のため)
+    expect(st.fadeAnimation).toBeNull() // instant復活: fadeAnimationはnullに戻る
+    expect(st.sprite.alpha).toBe(1)
+    const generationAfterRevive = st.reviveGeneration
+
+    resolveRetry(fakeTexture(10, 10)) // 古い世代の再ロードが後から解決する
+    await flushPromises()
+
+    // startEntranceFade は古い世代とみなされ no-op のまま: フェードが再開されず alpha/fadeAnimation
+    // は変化しない（上書きされていたら fromAlpha:0 の新しい入場フェードが張られてしまう）。
+    expect(st.fadeAnimation).toBeNull()
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.reviveGeneration).toBe(generationAfterRevive)
+    warnSpy.mockRestore()
+  })
+
+  // G-14: 再ロード .then() 未解決中に remove({instant:true}) で完全破棄 → sprite.destroyed ガード
+  // により解決時に何も起こらない（例外なし・復活しない）。
+  it('再ロード解決前に remove({instant:true})で完全破棄すると、sprite.destroyedガードにより解決時に何も起こらない', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '' })
+    await flushPromises()
+
+    let resolveRetry!: (t: unknown) => void
+    const retryPending = new Promise((resolve) => {
+      resolveRetry = resolve
+    })
+    loadSpy.mockReturnValueOnce(retryPending as never)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets' })
+    const st = retry646Chars(layer).characters.get('avatar')!
+
+    layer.remove('avatar', { instant: true }) // 即時破棄
+    expect(retry646Chars(layer).characters.has('avatar')).toBe(false)
+    expect(st.sprite.destroyed).toBe(true)
+
+    resolveRetry(fakeTexture(10, 10))
+    await expect(flushPromises()).resolves.toBeUndefined() // 例外を投げない
+
+    expect(retry646Chars(layer).characters.has('avatar')).toBe(false) // 復活しない
+    warnSpy.mockRestore()
+  })
+})
+
 describe('CharacterLayer pixel_art スケールモード（render-only showImage 経路, #466）', () => {
   // setPixelArt() で受け取った値を showImage の Assets.load().then() 内で
   // texture.source.scaleMode に反映する（nearest = ドット絵向け / linear = 従来の滑らか）。
