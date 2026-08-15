@@ -62,6 +62,16 @@ describe('SaveManager - クイックセーブ', () => {
     manager.save(0, data)
     expect(manager.quickLoad()).toBeNull()
   })
+
+  it('quickSave() 後に deleteQuickSave() を呼ぶと hasQuickSave() が false になる (#637)', () => {
+    manager.quickSave(makeSaveData())
+    expect(manager.hasQuickSave()).toBe(true)
+
+    manager.deleteQuickSave()
+
+    expect(manager.hasQuickSave()).toBe(false)
+    expect(manager.quickLoad()).toBeNull()
+  })
 })
 
 describe('SaveManager - 背景端フェード (#250)', () => {
@@ -262,5 +272,18 @@ describe('SaveManager - docKey 名前空間化 (#578)', () => {
     expect(() => manager.deleteSlot(-1)).not.toThrow()
     expect(() => manager.deleteSlot(3)).not.toThrow()
     expect(manager.listSlots()).toEqual([null, null, null])
+  })
+
+  it('8: docKey が異なる別インスタンスの deleteQuickSave() は他 docKey の quickSave に影響しない (#637)', () => {
+    const a = new SaveManager('project-a')
+    const b = new SaveManager('project-b')
+    a.quickSave({ ...makeSaveData(), sceneId: 'a-quick' })
+    b.quickSave({ ...makeSaveData(), sceneId: 'b-quick' })
+
+    a.deleteQuickSave()
+
+    expect(a.hasQuickSave()).toBe(false)
+    expect(b.hasQuickSave()).toBe(true)
+    expect(b.quickLoad()?.sceneId).toBe('b-quick')
   })
 })
