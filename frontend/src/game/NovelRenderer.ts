@@ -1743,6 +1743,17 @@ export class NovelRenderer {
         // 404 等: フォールバックテキストは表示したまま（初期状態がそのまま正）。何もしない。
       },
     })
+    // 実バグ修正 (#628 フェーズ2b): 上記 titleScreenOverlay.show() は呼ばれるたびに無条件で
+    // 新しい titleText（既定 visible: true）を作り直す。一方 showImage() は同 id 再表示時
+    // （`hideTitleScreen()` を経由せずロゴを破棄しないまま再度 showTitleScreen() が呼ばれた場合、
+    // 例: NovelPlayer の effect で title/hasSaveData が変わり再レンダーされたケース）は
+    // `existing` 分岐に入りテクスチャ差し替えを行わず、onLoaded も発火しない。そのため
+    // 「ロゴは既に表示済みなのにフォールバックテキストだけ再び見えてしまう」不整合が起きていた。
+    // showImage() は existing 分岐を同期的に処理するため、直後にロード済みかを確認すれば
+    // 判定できる（新規ロード中はまだ false のはずで、それは正しい——後で onLoaded が呼ばれる）。
+    if (this.characterLayer.hasLoadedTexture(NovelRenderer.TITLE_LOGO_IMAGE_ID)) {
+      this.titleScreenOverlay.hideFallbackText()
+    }
   }
 
   /**

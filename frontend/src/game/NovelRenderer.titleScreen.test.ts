@@ -213,6 +213,37 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     warnSpy.mockRestore()
   })
 
+  it('TC38: hideTitleScreen() を経由せず showTitleScreen() を2回連続で呼ぶと、ロゴが読み込み済みなら2回目も同期的に hideFallbackText() が呼ばれる（実バグ修正の回帰テスト、#628 フェーズ2b）', async () => {
+    // 実バグ: characterLayer.showImage() は同一 id 再表示時（existing 分岐）はテクスチャ差し替え
+    // を行わず onLoaded も発火しない。一方 titleScreenOverlay.show() は呼ばれるたびに無条件で
+    // 新しい titleText（既定 visible: true）を作るため、hideTitleScreen() を挟まない再呼び出し
+    // （NovelPlayer の effect で title/hasSaveData が変わり再レンダーされた場合等）で、ロゴが
+    // 既に表示済みなのにフォールバックテキストだけ再び見えてしまっていた。
+    const r = new NovelRenderer()
+    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+
+    r.showTitleScreen(makeTitleScreenOpts())
+    await flushPromises()
+    expect(hideFallbackSpy).toHaveBeenCalledTimes(1)
+
+    // hideTitleScreen() を挟まず再度呼ぶ。ロゴは既にロード済みのため characterLayer.showImage()
+    // は existing 分岐に入り onLoaded は発火しないが、showTitleScreen() 側の
+    // characterLayer.hasLoadedTexture() チェックが同期的に hideFallbackText() を呼ぶ。
+    r.showTitleScreen(makeTitleScreenOpts({ title: '2回目' }))
+    expect(hideFallbackSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('TC39: showTitleScreen() 初回呼び出し時、ロード完了前（flushPromises 前）は hasLoadedTexture が false のため hideFallbackText() は同期的には呼ばれない（新規ロード中の誤検知防止）', () => {
+    const r = new NovelRenderer()
+    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+
+    r.showTitleScreen(makeTitleScreenOpts())
+
+    // Assets.load() はまだ解決していない（await flushPromises() していない）ため、
+    // hasLoadedTexture() は false を返し hideFallbackText() は呼ばれていないはず。
+    expect(hideFallbackSpy).not.toHaveBeenCalled()
+  })
+
   it('TC36: titleScreenOverlay.visible===true の間、canvas native pointerdown 相当（handleOutsideCanvasTap）はゲーム進行処理を抑止する', () => {
     const r = new NovelRenderer()
     muteAudio(r)

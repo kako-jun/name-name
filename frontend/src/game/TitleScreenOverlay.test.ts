@@ -198,14 +198,21 @@ describe('TitleScreenOverlay.hideFallbackText() / hide()', () => {
 
 // TC22: テスト設計担当が発見した懸念の固定テスト。show() を2回連続で呼ぶと、1回目の
 // hideFallbackText() 済み状態から2回目の show() で titleText が新規に作り直され、
-// visible=true に戻ってしまう（=フォールバックテキストが理論上再出現する）。
-// このテストは「本体を直さず報告のみ」の対象——実装は変更していない。
+// visible=true に戻ってしまう（=このクラス単体では毎回フォールバックテキストが再出現する）。
+//
+// 実バグ修正 (#628 フェーズ2b): この「show() は毎回まっさらな titleText を作る」という
+// TitleScreenOverlay 自体の挙動は意図的な設計であり、直していない（このクラスはロゴの
+// ロード状態を知らない単純なビュー）。実際にフォールバックテキストが表示済みロゴの上に
+// 再出現していた実バグは、呼び出し側 `NovelRenderer.showTitleScreen()` が
+// `characterLayer.hasLoadedTexture()` でロード済みかを確認し、ロード済みなら
+// `titleScreenOverlay.hideFallbackText()` を再度呼ぶことで対処した
+// （回帰テスト: `NovelRenderer.titleScreen.test.ts` TC38）。
 describe('TitleScreenOverlay.show() 連続呼び出し (#628 テスト設計 TC22)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('TC22: 1回目 show()→hideFallbackText() 済みの状態から2回目の show() を呼ぶと、新しい titleText が visible=true で作られる（フォールバックテキスト再出現の固定・実装は直さない）', () => {
+  it('TC22: 1回目 show()→hideFallbackText() 済みの状態から2回目の show() を呼ぶと、新しい titleText が visible=true で作られる（このクラス単体の設計上の挙動——実際のバグは呼び出し側 NovelRenderer で修正済み、TC38参照）', () => {
     const overlay = new TitleScreenOverlay(800, 450)
 
     overlay.show(makeOpts({ title: '1回目' }))

@@ -2166,6 +2166,67 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
   })
 })
 
+describe('CharacterLayer hasLoadedTexture (#628 フェーズ2b バグ修正)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    source: { scaleMode: 'linear' },
+  })
+
+  it('未表示の id は false を返す', () => {
+    const layer = new CharacterLayer(800, 450)
+    expect(layer.hasLoadedTexture('nope')).toBe(false)
+  })
+
+  it('showImage() 直後、Assets.load() 解決前（未ロードのプレースホルダ texture）は false を返す', () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' })
+    expect(layer.hasLoadedTexture('logo')).toBe(false)
+  })
+
+  it('Assets.load() 解決後（texture ロード済み）は true を返す', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    expect(layer.hasLoadedTexture('logo')).toBe(true)
+  })
+
+  it('同一 id を再度 showImage() しても（existing 分岐）ロード済み状態は true のまま保たれる（実バグ修正の要）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    expect(layer.hasLoadedTexture('logo')).toBe(true)
+
+    // existing 分岐: テクスチャ差し替えなし・onLoaded も発火しないが、既存 texture は保持される。
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' })
+    expect(layer.hasLoadedTexture('logo')).toBe(true)
+  })
+
+  it('remove({ instant: true }) 後は false を返す', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(10, 10) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({ id: 'logo', path: 'title.png', assetBaseUrl: '/assets' })
+    await flushPromises()
+    expect(layer.hasLoadedTexture('logo')).toBe(true)
+
+    layer.remove('logo', { instant: true })
+    expect(layer.hasLoadedTexture('logo')).toBe(false)
+  })
+})
+
 describe('CharacterLayer pixel_art スケールモード（render-only showImage 経路, #466）', () => {
   // setPixelArt() で受け取った値を showImage の Assets.load().then() 内で
   // texture.source.scaleMode に反映する（nearest = ドット絵向け / linear = 従来の滑らか）。

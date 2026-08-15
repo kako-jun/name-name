@@ -2192,6 +2192,28 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 指定 id の sprite が既にテクスチャをロード済みか (#628 フェーズ2b バグ修正)。
+   *
+   * `showImage()` は同一 id 再表示時（`existing` 分岐）はテクスチャ差し替えを行わず
+   * `onLoaded`/`onError` コールバックも呼ばない仕様（フェーズ2aで意図的に決めた仕様）。
+   * そのため呼び出し側（`NovelRenderer.showTitleScreen`）は「新規ロード中で onLoaded 待ち」
+   * と「既にロード済みで再表示しただけ」を区別できず、後者でもフォールバック UI
+   * （`TitleScreenOverlay` のタイトルテキスト）を隠したままにできないバグがあった。
+   * 呼び出し側が `showImage()` 直後にこのメソッドで同期的にロード済みかを確認し、
+   * ロード済みなら自前でフォールバック非表示処理を行うことで対処する。
+   *
+   * ガードは `reapplyPixelArt` と同じ `texture === Texture.EMPTY` の identity チェックを使う
+   * （`new Sprite()` 直後のプレースホルダテクスチャは共有シングルトン `Texture.EMPTY` で、
+   * その `height` は 1 のため `height <= 0` だけでは判定できない）。
+   */
+  hasLoadedTexture(id: string): boolean {
+    const state = this.characters.get(id)
+    if (!state || state.sprite.destroyed) return false
+    const texture = state.sprite.texture
+    return !!texture && texture !== Texture.EMPTY && texture.height > 0
+  }
+
+  /**
    * グリフ Text の表示幅を測る。PixiJS のテキスト計測に依存する。
    *
    * canvas が無い環境（jsdom など計測不能・非有限値・0 幅）では fontSize ベースの
