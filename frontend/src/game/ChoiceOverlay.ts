@@ -11,6 +11,15 @@
  *   - pixel:      黒地＋白/暖色枠のドット絵系 (#562)。角丸なしの単純な直角矩形 (#569)
  *
  * pixi-filters への依存は避けるため、影は半透明黒の矩形を背面に重ねて表現する。
+ *
+ * キーボード操作 (#633 フェーズB): TitleScreenOverlay（#633 フェーズA）で確立した
+ * Tab/Shift+Tab・ArrowUp/ArrowDown でのフォーカス移動・Enter/Space での確定・独立レイヤーの
+ * `Graphics` 枠線による visible focus 表示というパターンを踏襲する。ChoiceOverlay 固有の事情
+ * （可変個数・`[選択: 列=N]` グリッド配置 #508・条件付きロック #591・#339 スクロール可能リスト）
+ * に合わせて拡張し、グリッド時は ArrowUp/ArrowDown が同じ列内、ArrowLeft/ArrowRight が同じ行内の
+ * 移動になる。ロック済み選択肢はフォーカス移動の対象から除外する（TitleScreenOverlay の disabled
+ * ボタン除外と同じ扱い）。フォーカスがビューポート外の行に移動したときはドラッグ/ホイールと同じ
+ * `scrollOffset` を使ってスクロールし追従する（`handleKeyDown()` 参照）。
  */
 
 import {
@@ -30,8 +39,13 @@ import type { DestroyOptions, FederatedPointerEvent, Texture } from 'pixi.js'
 import {
   computeChoiceGridLayout,
   computeChoiceIconLayout,
+  computeChoiceScrollIntoView,
+  computeColumnFocusIndices,
+  computeFlatFocusIndices,
+  computeRowFocusIndices,
   resolveAssetUrl,
   resolveChoiceIconKind,
+  stepFocusIndex,
 } from './novelLayout'
 import type { LayoutRect } from './novelLayout'
 
@@ -83,6 +97,11 @@ const GRID_COLUMN_GAP = BUTTON_GAP
  * ボタン幅を画面幅へ収める必要があるため、region の有無に関わらず適用する。
  */
 const GRID_HORIZONTAL_MARGIN = 24
+/** キーボードフォーカスの visible focus 表示 (#633)。TitleScreenOverlay と同じ配色・太さで、
+ *  マウス hover の bg 塗り替えとは独立した別レイヤーの枠線として描く。 */
+const COLOR_FOCUS_RING = 0xfacc15 // yellow-400
+const FOCUS_RING_WIDTH = 3
+const FOCUS_RING_INSET = 4
 /**
  * グリッドボタン幅は「利用可能幅に N 列（脚本 `[選択: 列=N]` の指定どおり）を必ず収める」
  * ことを最優先する（docs/spec/markdown-v0.1.md 参照: 「列数が増えるほどボタン幅は…自動的に
@@ -341,6 +360,21 @@ export function resolveChoiceVisual(
   }
 }
 
+/**
+ * キーボードフォーカス移動対象の選択肢ボタン1件分 (#633)。`locked` はナビゲーション対象から
+ * 除外する（TitleScreenOverlay の disabled ボタン除外と同じ扱い）。`row`/`col` は
+ * `computeChoiceGridLayout` の結果をそのまま持ち、グリッド配置時の ArrowUp/ArrowDown（同じ列内
+ * 移動）・ArrowLeft/ArrowRight（同じ行内移動）に使う（非グリッド時は col が常に 0、row が
+ * 選択肢の index と同じ = `computeChoiceGridLayout` の契約どおり）。
+ */
+interface FocusableChoiceEntry {
+  container: Container
+  focusRing: Graphics
+  locked: boolean
+  row: number
+  col: number
+}
+
 export class ChoiceOverlay extends Container {
   private onSelect: ((jump: string) => void) | null = null
   private onScrollableChange: ((scrollable: boolean) => void) | null = null
@@ -401,6 +435,18 @@ export class ChoiceOverlay extends Container {
    * read-icon/unread-icon の両方の読み込みで共有する。
    */
   private iconLoadToken = 0
+  /** キーボードフォーカス移動用の選択肢一覧（show() ごとに作り直す。#633）。 */
+  private choiceEntries: FocusableChoiceEntry[] = []
+  /** choiceEntries 内のフォーカス中インデックス。-1 はフォーカス対象なし（全ロック等の異常系）。 */
+  private focusedIndex = -1
+  /** ArrowUp/Down・ArrowLeft/Right の意味をグリッド (#508) 時だけ「列内/行内移動」に切り替える。 */
+  private choiceIsGrid = false
+  /** activateFocusedButton() が jump を引くための、show() 呼び出し時点の選択肢一覧 (#633)。 */
+  private currentOptions: ChoiceOption[] = []
+  /** フォーカス枠の角丸半径を現在のスタイルテーマに揃えるため保持する (#633)。 */
+  private currentTheme: ChoiceTheme = STYLE_THEMES.default
+  /** scrollFocusedIntoView (#633) が参照する、現在のビューポート高さ (px)。非スクロール時は未使用。 */
+  private viewportHeight = 0
 
   constructor(
     private screenWidth: number,
@@ -546,12 +592,15 @@ export class ChoiceOverlay extends Container {
   ): void {
     if (options.length === 0) return
     this.onSelect = onSelect
+    this.currentOptions = options
     this.stopFadeTicker()
     // 連続呼び出しで子オブジェクトが滞留しないよう明示 destroy する (#146 R1 S3)
     for (const child of this.removeChildren()) {
       child.destroy({ children: true })
     }
     this.lastHoverIdx = null
+    this.choiceEntries = []
+    this.focusedIndex = -1
     this.resetScrollState()
     // セーブデータからのロード直後など、最初のユーザー入力が選択肢クリックになる
     // ケースで AudioContext が未初期化のまま playSelectTone が無音になるのを防ぐ。
@@ -559,6 +608,7 @@ export class ChoiceOverlay extends Container {
     this.audioManager?.ensureContext()
 
     const theme = resolveStyle(style)
+    this.currentTheme = theme
 
     // split_layout (#442 self-review should-5): region 指定時はテキスト領域だけに収める。
     // 未指定（従来）は画面全体のまま非破壊（areaX/areaY=0, areaWidth/Height=画面全体)。
@@ -579,6 +629,7 @@ export class ChoiceOverlay extends Container {
       GRID_HORIZONTAL_MARGIN
     )
     const isGrid = gridLayout.isGrid
+    this.choiceIsGrid = isGrid
     const rows = gridLayout.rows
 
     // BUTTON_WIDTH (480px) は分割後のテキスト領域や多列グリッドでは広すぎることがあるため、
@@ -615,6 +666,7 @@ export class ChoiceOverlay extends Container {
       areaHeight - VIEWPORT_VERTICAL_MARGIN * 2
     )
     const viewportHeight = Math.min(totalHeight, maxViewportHeight)
+    this.viewportHeight = viewportHeight
     this.maxScroll = Math.max(0, totalHeight - viewportHeight)
     const scrollable = this.maxScroll > 0
     // touch-action の scroll-lock 通知 (#434)。詳細は setOnScrollableChange 参照。
@@ -719,7 +771,20 @@ export class ChoiceOverlay extends Container {
       // グリッド (#508) の列・行・中心 X は computeChoiceGridLayout の結果をそのまま使う。
       // 非グリッド (isGrid=false) では row は常に i になるため、下の y 式は
       // 従来の縦一列と完全に同じ結果になる。
-      const { row, x: buttonCenterX } = gridLayout.positions[i]
+      const { row, col, x: buttonCenterX } = gridLayout.positions[i]
+
+      // キーボード focus 表示専用の枠線レイヤー (#633)。label/icon より上に重ねるが外周の
+      // stroke のみでラベル文字は隠さない。マウス hover の bg 塗り替え（下記）とは完全に
+      // 独立した仕組みで、show() 直後は未描画（clear() 済み = 何も見えない）。
+      const focusRing = new Graphics()
+      buttonContainer.addChild(focusRing)
+      this.choiceEntries.push({
+        container: buttonContainer,
+        focusRing,
+        locked: isLocked,
+        row,
+        col,
+      })
 
       // pivot を中央に動かしたため、ボタン中心を所定位置（region 指定時はその中心）に置く
       buttonContainer.x = buttonCenterX
@@ -753,9 +818,7 @@ export class ChoiceOverlay extends Container {
         // columns クランプと同じ思想で呼び出し経路に依らず確定を拒否する。
         if (isLocked) return
         e.stopPropagation()
-        this.audioManager?.ensureContext()
-        this.audioManager?.playSelectTone()
-        this.onSelect?.(option.jump)
+        this.confirmChoice(option.jump)
       }
       buttonContainer.on('pointerdown', (e) => {
         this.pressPointerId = e.pointerId
@@ -806,9 +869,158 @@ export class ChoiceOverlay extends Container {
       this.applyScrollOffset()
     }
 
+    // 有効な最初の選択肢へフォーカスをリセットする（#633、TitleScreenOverlay と同じ流儀）。
+    // focusedIndex を一旦 -1 に固定してから setFocusedIndex() を呼ぶことで、choiceEntries が
+    // 総入れ替えされた（Graphics インスタンスが変わった）にもかかわらず「インデックス値が
+    // たまたま前回と同じだから」という理由で早期 return され新しい focusRing に描画し損ねる
+    // 事故を避ける。
+    this.focusedIndex = -1
+    const firstFocusableIndex = this.choiceEntries.findIndex((e) => !e.locked)
+    this.setFocusedIndex(firstFocusableIndex)
+
     this.visible = true
     this.alpha = 1
     this.startFadeIn()
+  }
+
+  /**
+   * ChoiceOverlay 表示中のキーボード操作 (#633)。呼び出し元（NovelRenderer.handleKeyDown）が
+   * `waitingForChoice` の間、window keydown を丸ごとここへ委譲する。戻り値 true = このキー入力を
+   * 処理済み（呼び出し元は他のゲーム内ショートカットを一切発火させない）。
+   *
+   * TitleScreenOverlay.handleKeyDown（#633 フェーズA）と同じ Tab/Enter/Space パターンを踏襲しつつ、
+   * ChoiceOverlay 固有の事情（可変個数・グリッド配置 #508・ロック #591）に合わせて拡張する:
+   *   - Tab/Shift+Tab: 全選択肢を通したフラットな順序でフォーカス移動（ロック済みはスキップ、循環）。
+   *   - ArrowUp/ArrowDown: 縦一列時は Tab と同じフラット移動。グリッド時は同じ列内だけを移動する。
+   *   - ArrowLeft/ArrowRight: グリッド時のみ同じ行内を移動する。縦一列時は意味が無いため false を
+   *     返し未処理のまま呼び出し元に委ねる（advance()/goBack() 側で waitingForChoice ガード済み
+   *     のため no-op になるだけで、誤発火はしない）。
+   *   - Enter/Space: フォーカス中の選択肢を確定する（ロック済みなら何もしない）。
+   */
+  handleKeyDown(key: string, shiftKey = false): boolean {
+    switch (key) {
+      case 'Tab':
+        this.moveFocus(shiftKey ? -1 : 1)
+        return true
+      case 'ArrowDown':
+        if (this.choiceIsGrid) {
+          this.moveFocusInColumn(1)
+        } else {
+          this.moveFocus(1)
+        }
+        return true
+      case 'ArrowUp':
+        if (this.choiceIsGrid) {
+          this.moveFocusInColumn(-1)
+        } else {
+          this.moveFocus(-1)
+        }
+        return true
+      case 'ArrowRight':
+        if (!this.choiceIsGrid) return false
+        this.moveFocusInRow(1)
+        return true
+      case 'ArrowLeft':
+        if (!this.choiceIsGrid) return false
+        this.moveFocusInRow(-1)
+        return true
+      case 'Enter':
+      case ' ':
+        this.activateFocusedButton()
+        return true
+      default:
+        return false
+    }
+  }
+
+  private activateFocusedButton(): void {
+    const entry = this.choiceEntries[this.focusedIndex]
+    const option = this.currentOptions[this.focusedIndex]
+    if (!entry || entry.locked || !option) return
+    this.confirmChoice(option.jump)
+  }
+
+  /**
+   * 確定処理（AudioContext resume・確定音・onSelect 呼び出し）の共通ヘルパ (#633 self-review
+   * S2)。キーボード確定（`activateFocusedButton`）とポインタ確定（`show()` 内 `selectChoice`）の
+   * 両方から呼ぶ——ロジックの重複を避けるため、ロック判定は呼び出し側がそれぞれの流儀
+   * （`entry.locked` / クロージャ内 `isLocked`）で先に行ってから呼ぶ契約とする。
+   */
+  private confirmChoice(jump: string): void {
+    this.audioManager?.ensureContext()
+    this.audioManager?.playSelectTone()
+    this.onSelect?.(jump)
+  }
+
+  /**
+   * ロック済みをスキップしつつ、末尾↔先頭で循環してフォーカスを1つ移動する（非グリッド/Tab共通）。
+   * indices 算出・循環計算そのものは `novelLayout.ts` の純粋関数に委ねる (dev-doctrine 規約4)。
+   */
+  private moveFocus(direction: 1 | -1): void {
+    const indices = computeFlatFocusIndices(this.choiceEntries)
+    const next = stepFocusIndex(indices, this.focusedIndex, direction)
+    if (next !== null) this.setFocusedIndex(next)
+  }
+
+  /** グリッド配置 (#508) 時、フォーカス中の選択肢と同じ列 (col) の中だけで上下に移動する。 */
+  private moveFocusInColumn(direction: 1 | -1): void {
+    const col = this.choiceEntries[this.focusedIndex]?.col ?? 0
+    const indices = computeColumnFocusIndices(this.choiceEntries, col)
+    const next = stepFocusIndex(indices, this.focusedIndex, direction)
+    if (next !== null) this.setFocusedIndex(next)
+  }
+
+  /** グリッド配置 (#508) 時、フォーカス中の選択肢と同じ行 (row) の中だけで左右に移動する。 */
+  private moveFocusInRow(direction: 1 | -1): void {
+    const row = this.choiceEntries[this.focusedIndex]?.row ?? 0
+    const indices = computeRowFocusIndices(this.choiceEntries, row)
+    const next = stepFocusIndex(indices, this.focusedIndex, direction)
+    if (next !== null) this.setFocusedIndex(next)
+  }
+
+  private setFocusedIndex(index: number): void {
+    if (index === this.focusedIndex) return
+    const prev = this.choiceEntries[this.focusedIndex]
+    if (prev) prev.focusRing.clear()
+    this.focusedIndex = index
+    const next = this.choiceEntries[this.focusedIndex]
+    if (next) {
+      this.drawFocusRing(next.focusRing)
+      this.scrollFocusedIntoView(next.row)
+    }
+  }
+
+  private drawFocusRing(g: Graphics): void {
+    g.clear()
+    g.roundRect(
+      -FOCUS_RING_INSET,
+      -FOCUS_RING_INSET,
+      this.layoutButtonWidth + FOCUS_RING_INSET * 2,
+      this.layoutButtonHeight + FOCUS_RING_INSET * 2,
+      this.currentTheme.radius + FOCUS_RING_INSET
+    )
+    g.stroke({ color: COLOR_FOCUS_RING, width: FOCUS_RING_WIDTH })
+  }
+
+  /**
+   * スクロール可能なリスト（#339）で、キーボードフォーカスが移動した選択肢の行がビューポート外に
+   * あれば、その行が見える位置まで `scrollOffset` を動かす（#633）。マウスドラッグ/ホイール
+   * （`scrollBy`）と同じ `scrollOffset`/`applyScrollOffset` を経由するため、以後のドラッグ操作とも
+   * 状態が整合する。
+   */
+  private scrollFocusedIntoView(row: number): void {
+    const next = computeChoiceScrollIntoView(
+      row,
+      this.layoutButtonHeight,
+      BUTTON_GAP,
+      this.scrollOffset,
+      this.viewportHeight,
+      this.maxScroll
+    )
+    if (next !== this.scrollOffset) {
+      this.scrollOffset = next
+      this.applyScrollOffset()
+    }
   }
 
   /**
@@ -825,6 +1037,9 @@ export class ChoiceOverlay extends Container {
     }
     this.onSelect = null
     this.lastHoverIdx = null
+    this.choiceEntries = []
+    this.focusedIndex = -1
+    this.currentOptions = []
     this.resetScrollState()
     // 非表示になった時点でスクロール可能状態ではなくなるので、無条件で scroll-lock を解除する (#434)。
     this.onScrollableChange?.(false)
@@ -937,6 +1152,7 @@ export class ChoiceOverlay extends Container {
     this.scrollOffset = 0
     this.maxScroll = 0
     this.viewportY = 0
+    this.viewportHeight = 0
     this.dragPointerId = null
     this.dragLastY = 0
     this.clearChoicePress()
