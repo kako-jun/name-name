@@ -2609,6 +2609,64 @@ mod tests {
     }
 
     #[test]
+    fn event_loop_advance_to_same_event_image_path_restarts_pixelate_transition() {
+        // event_loop_advance_to_same_event_image_path_does_not_restart_fade_timer の対
+        // (Pixelate版、#590セルフレビューshould対応): 「同一パスでも再トリガーする」仕様が
+        // should_start_image_fade_transition の純粋関数テストだけでなく、実際の呼び出し配線
+        // (parser→playback→event_loop→image_fade→render)を通しても機能していることの
+        // 統合ガード。crossfade_ms を60秒にして、最初の None→A 遷移がまだコルセンフェーズ
+        // (t≈0、from=Noneなのでpixelate_snapshotはblank_grid=黒を返す)の途中である状態を
+        // 作る。2回目のAdvance(A→A、同一パス)を発行し、再トリガーされていれば新しい遷移は
+        // from=A(直前のto)・to=Aで開始され、そのコルセンフェーズはfrom(=A)を描画する
+        // ——単色フィクスチャなので粗さ(divisor)に関わらず色そのものは不変(D-1と同じ理由)
+        // ——ためfixture_colorが見えるはず。再トリガーされず(退行)、最初の遷移がそのまま
+        // 引き継がれていた場合はfrom=Noneのコルセンフェーズ(黒)のままで、fixture_colorは
+        // 見えない。
+        let fixture_color = (10u8, 200u8, 60u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_color, 2, 2), 2, 2);
+        let mut config = instant_config();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        config.event_image.crossfade_ms = 60_000;
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut playback = Playback::from_lines(vec![
+            dline_with_image_pixelate(Some("A"), "one", None),
+            dline_with_image_pixelate(Some("B"), "two", Some(relative.clone())),
+            dline_with_image_pixelate(Some("C"), "three", Some(relative)),
+        ]);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) =
+            action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert!(
+            buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
+            "同一パスへの2回目のAdvanceでPixelate遷移が再トリガーされず、最初の遷移\
+             (from=None、コルセン中は黒)がそのまま引き継がれてしまっている\
+             (#590の同一パス再トリガーの退行)"
+        );
+    }
+
+    #[test]
     fn event_loop_skip_advance_on_incomplete_reveal_does_not_start_image_fade() {
         // タイプライタースキップ操作（reveal未完了時のAdvance）は position を進めない
         // （on_advance のデシジョンテーブル#2、上のテスト群で確認済み）。event_loop側は
