@@ -257,6 +257,61 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     expect(hideFallbackSpy).not.toHaveBeenCalled()
   })
 
+  it('#646 H-16（Issue完了条件・最重要）: assetBaseUrl空で失敗した初回showTitleScreen()後、assetBaseUrl解決後に再度showTitleScreen()を呼ぶと、最終的にhideFallbackText()が呼ばれる', async () => {
+    // Issue #646 の再現手順そのもの: NovelPlayer マウント時点で assetBaseUrl がまだ空のまま
+    // showTitleScreen() が呼ばれ、ロゴ読み込みが壊れたURLで失敗する。その後 setAssetBaseUrl() で
+    // 正しい値が解決してから hideTitleScreen() を挟まず showTitleScreen() を再度呼ぶと、
+    // characterLayer.showImage() の existing 分岐（#646 修正）が新しい assetBaseUrl で
+    // 再ロードを起動し、成功すれば onLoaded 経由で hideFallbackText() が呼ばれる。
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('empty base url'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = new NovelRenderer()
+    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+
+    // 1回目: assetBaseUrl が未解決（既定 ''）のまま showTitleScreen() → ロード失敗。
+    r.showTitleScreen(makeTitleScreenOpts())
+    await flushPromises()
+    expect(hideFallbackSpy).not.toHaveBeenCalled()
+
+    // assetBaseUrl が解決される（NovelPlayer の実際の再レンダーに相当）。
+    r.setAssetBaseUrl('/assets')
+    loadSpy.mockResolvedValueOnce({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
+
+    // 2回目: hideTitleScreen() を挟まず再度呼ぶ（existing 分岐に入り #646 の再ロードが起動する）。
+    r.showTitleScreen(makeTitleScreenOpts({ title: '2回目' }))
+    await flushPromises()
+
+    expect(hideFallbackSpy).toHaveBeenCalledTimes(1)
+    warnSpy.mockRestore()
+  })
+
+  it('#646 H-17: 上記H-16で再ロードも失敗した場合はhideFallbackText()が呼ばれないまま（フォールバック文字が残る、非回帰）', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('empty base url'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = new NovelRenderer()
+    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+
+    r.showTitleScreen(makeTitleScreenOpts())
+    await flushPromises()
+    expect(hideFallbackSpy).not.toHaveBeenCalled()
+
+    r.setAssetBaseUrl('/assets')
+    loadSpy.mockRejectedValueOnce(new Error('404 again'))
+
+    r.showTitleScreen(makeTitleScreenOpts({ title: '2回目' }))
+    await flushPromises()
+
+    // 再ロードも失敗: hideFallbackText() は一度も呼ばれない（フォールバック文字が残ったまま）。
+    expect(hideFallbackSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
   it('TC36: titleScreenOverlay.visible===true の間、canvas native pointerdown 相当（handleOutsideCanvasTap）はゲーム進行処理を抑止する', () => {
     const r = new NovelRenderer()
     muteAudio(r)
