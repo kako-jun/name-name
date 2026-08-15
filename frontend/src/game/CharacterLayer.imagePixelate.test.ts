@@ -25,15 +25,26 @@ interface PixelateStateLike {
   durationMs: number
 }
 interface CharacterStateLike {
-  sprite: { alpha: number }
+  sprite: { alpha: number; filters: unknown[] | null; texture?: unknown }
   pixelateState?: PixelateStateLike
+  pixelateFilter?: { sizeX: number } | null
   fadeAnimation: { fromAlpha: number; toAlpha: number } | null
+  maskGraphics?: unknown
 }
 interface CharacterLayerInternals {
   characters: Map<string, CharacterStateLike>
+  animTicker: { update: () => void } | null
+  elapsedMs: number
 }
 function internals(layer: CharacterLayer): CharacterLayerInternals {
   return layer as unknown as CharacterLayerInternals
+}
+
+/** ticker を決定論的に進める（CharacterLayer.test.ts と同じ流儀）。 */
+function advance(layer: CharacterLayer, ms: number): void {
+  const internal = internals(layer)
+  internal.elapsedMs += ms
+  internal.animTicker?.update()
 }
 
 function mockAssetsLoadResolved(): void {
@@ -181,6 +192,112 @@ describe('CharacterLayer.showImage() Pixelate 遷移 (#628 フェーズ2a)', () 
 
     expect(onLoaded).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('TC14: ticker駆動のフルサイクル（coarsen→swap→refine）で最終的にpixelateFilter.sizeが1に戻りsprite.filtersがクリアされる（should指摘1）', async () => {
+    mockAssetsLoadResolved()
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'img',
+      path: 'a.png',
+      assetBaseUrl: '/assets',
+      transition: 'Pixelate',
+      fadeMs: 320, // swapAtMs=160, remaining=160
+    })
+    const st = internals(layer).characters.get('img')!
+    expect(st.pixelateState?.phase).toBe('coarsen')
+
+    // テクスチャロード完了（コルセン進行中に先着させる）。
+    await flushPromises()
+    expect(st.pixelateState?.phase).toBe('coarsen')
+    expect(st.sprite.filters).toEqual([st.pixelateFilter])
+
+    // swapAtMs(160ms)へ到達 → スワップが起きて refine フェーズへ。
+    advance(layer, 160)
+    expect(st.pixelateState?.phase).toBe('refine')
+    expect(st.sprite.alpha).toBe(1)
+    expect(st.pixelateFilter?.sizeX).toBeGreaterThan(1)
+
+    // 残り 160ms を経過させてリファイン完了 → pixelateState が外れ、
+    // PixelateFilter.size が 1 に戻り、sprite.filters がクリアされる。
+    advance(layer, 160)
+    expect(st.pixelateState).toBeUndefined()
+    expect(st.pixelateFilter?.sizeX).toBe(1)
+    expect(st.sprite.filters).toBeNull()
+  })
+
+  it('TC15: circular:true + transition:"Pixelate" はスワップ後に円形マスクとPixelateFilterが同時に適用される（should指摘2）', async () => {
+    mockAssetsLoadResolved()
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'img',
+      path: 'a.png',
+      assetBaseUrl: '/assets',
+      shape: '円形',
+      transition: 'Pixelate',
+      fadeMs: 320,
+      size: 8, // mockAssetsLoadResolved の texture.width=10 よりは小さいが円形マスク半径計算に足りれば十分
+    })
+    await flushPromises()
+
+    // スワップ前（コルセン中）はまだテクスチャが無いためマスクも張られていない。
+    const st = internals(layer).characters.get('img')!
+    expect(st.maskGraphics).toBeUndefined()
+
+    // swapAtMs(160ms)到達でスワップ。applyImageTexture が円形マスクを張る。
+    advance(layer, 160)
+    expect(st.pixelateState?.phase).toBe('refine')
+    expect(st.maskGraphics).toBeDefined()
+    // マスクと PixelateFilter が同時に効いている（マスク計算は #628 で新規、Filter は既存の
+    // ピクセレート機構——両者が競合してどちらかが無効化されないことを確認する）。
+    expect(st.sprite.filters).toEqual([st.pixelateFilter])
+    expect(st.pixelateFilter?.sizeX).toBeGreaterThan(1)
+
+    // リファイン完了後もマスクは張られたまま（sprite破棄まで保持、クリアされるのは filters のみ）。
+    advance(layer, 160)
+    expect(st.pixelateState).toBeUndefined()
+    expect(st.maskGraphics).toBeDefined()
+    expect(st.sprite.filters).toBeNull()
+  })
+
+  it('question指摘: remove()（非instant）がpixelateState進行中に呼ばれても例外を投げず、退場フェードとピクセレートが並行して最終的に両方クリーンアップされる', async () => {
+    mockAssetsLoadResolved()
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'img',
+      path: 'a.png',
+      assetBaseUrl: '/assets',
+      transition: 'Pixelate',
+      fadeMs: 800, // swapAtMs=400
+    })
+    await flushPromises() // テクスチャロード完了（コルセン進行中に先着）
+
+    // `[画像: id=x, 遷移=pixelate]` 直後の即時削除を再現: pixelateState が 'coarsen' の間に
+    // remove()（既定 characterFadeMs=700ms の退場フェード）を呼ぶ。例外を投げないこと。
+    expect(() => layer.remove('img')).not.toThrow()
+    const st = internals(layer).characters.get('img')!
+    expect(st.fadeAnimation).not.toBeNull()
+    expect(st.pixelateState?.phase).toBe('coarsen')
+
+    // 退場フェード進行中（swapAtMs=400未満）: alpha はフェードに従って単調に減少する。
+    advance(layer, 350)
+    const midAlpha = internals(layer).characters.get('img')!.sprite.alpha
+    expect(midAlpha).toBeLessThan(1)
+    expect(midAlpha).toBeGreaterThan(0)
+
+    // swapAtMs(400ms)を跨ぐ: スワップが起きても fadeAnimation が張られている間は
+    // alpha=1 を強制しない（performImagePixelateSwap のガード、回帰確認）。
+    advance(layer, 50)
+    const st2 = internals(layer).characters.get('img')
+    expect(st2).toBeDefined()
+    expect(st2!.pixelateState?.phase).toBe('refine')
+    expect(st2!.sprite.alpha).toBeLessThan(1) // 1 へスナップバックしていない
+
+    // 退場フェード完了（characterFadeMs=700ms）まで進めると、pixelateState・fadeAnimation
+    // 両方の後始末（destroyCharacterState → clearImagePixelateState）が行われ、
+    // characters Map からも削除される（クラッシュ・リークなし）。
+    advance(layer, 400)
+    expect(internals(layer).characters.get('img')).toBeUndefined()
   })
 })
 

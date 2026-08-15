@@ -468,6 +468,12 @@ interface CharacterState {
    * 駆動は EventImageLayer 専用の `pixelateTimer`（setInterval）ではなく、CharacterLayer が
    * 既に持つ共通 ticker（`ensureTicker`、`elapsedMs` 基準）に相乗りする（animation/fadeAnimation/
    * poseNudge と同じ流儀）。undefined = 遷移なし/完了済み。
+   *
+   * `remove()`（非 instant）が並行して呼ばれると、この state が進行中のまま `fadeAnimation`
+   * （退場用, `destroyOnComplete: true`）も同時に張られうる（#628 セルフレビュー質問対応）。
+   * `destroyCharacterState` は sprite 破棄前に必ず `clearImagePixelateState` を呼ぶためクラッシュや
+   * リークは起きない。alpha は `performImagePixelateSwap` が `fadeAnimation` の有無を見て
+   * 上書きを避けるガードを持つ（同メソッドの JSDoc 参照）。
    */
   pixelateState?: ImagePixelateTransitionState
   /** ピクセレート遷移用フィルタ。id 毎にステートレスに使い回す（初回のピクセレート遷移まで
@@ -2038,12 +2044,21 @@ export class CharacterLayer extends Container {
    * （`EventImageLayer.performPixelateSwap` と対）。alpha フェードは行わない（常に alpha=1）。
    * 以後 `updateImagePixelateFrame` が 'refine' フェーズへ移行し `PixelateFilter.size` を
    * 最大値→1 へ戻す。
+   *
+   * `state.fadeAnimation` が既に張られている場合は alpha=1 を強制しない（#628 セルフレビュー
+   * 質問対応）。`[画像: id=x, 遷移=pixelate]` の直後に `remove()`（非 instant）が呼ばれると、
+   * `remove()` が張る退場 `fadeAnimation`（`destroyOnComplete: true`）とこの `pixelateState` が
+   * 並行して進行しうる。通常経路（新規表示のピクセレート遷移）は `fadeAnimation` を使わない設計
+   * のためここで alpha=1 にしても無害だが、この並行状態では ticker が毎フレーム
+   * fadeAnimation→pixelateState の順に処理するため、無条件に alpha=1 で上書きすると
+   * スワップの起きたフレームだけ退場フェードの進行が巻き戻って見える（1フレームのアルファ
+   * スナップ、実測確認済み）。`fadeAnimation` があるフレームはそちらに alpha 管理を譲る。
    */
   private performImagePixelateSwap(name: string, state: CharacterState, texture: Texture): void {
     const s = state.pixelateState
     if (!s) return
     this.applyImageTexture(name, state.sprite, texture, s.size, s.circular)
-    state.sprite.alpha = 1
+    if (!state.fadeAnimation) state.sprite.alpha = 1
     s.phase = 'refine'
     s.refineStartMs = this.elapsedMs
   }
