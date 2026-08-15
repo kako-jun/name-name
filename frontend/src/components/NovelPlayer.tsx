@@ -312,9 +312,6 @@ function NovelPlayer({
   const [autoMode, setAutoMode] = useState(autoPlay ?? false)
   // スキップモード ON/OFF (#140)
   const [skipMode, setSkipMode] = useState(false)
-  // クイックセーブ/ロード完了通知 toast (#142)
-  const [toast, setToast] = useState<string | null>(null)
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const debouncedSave = useMemo(() => makeDebouncedSaveSettings(300), [])
 
   // シナリオスライダ(SeekBar)操作中フラグ (#350)。renderer の onSeekActiveChange で同期し、
@@ -323,22 +320,10 @@ function NovelPlayer({
   const [seekActive, setSeekActive] = useState(false)
 
   // 終劇状態 (#386)。renderer の onStoryEndedChange で同期する（GameState 上の宣言的フラグ
-  // NovelGameState.storyEnded のミラー）。true の間だけ「to be continued...」を表示する。
+  // NovelGameState.storyEnded のミラー）。埋め込み時の postMessage 通知（#395）とデバッグ HUD 等の
+  // 一部 DOM ボタンの disabled 制御に使う。"to be continued..." の表示自体は PixiJS 側
+  // （NovelRenderer.syncEndingOverlayVisibility()）に内部化された (#630)。
   const [storyEnded, setStoryEnded] = useState(false)
-
-  // intermission.md 専用シーンが使われたか (#404)。storyEnded が true に立ち上がった瞬間の
-  // renderer.hasIntermissionScene() を1回だけスナップショットする（true の間ずっと再評価しない）。
-  // 理由: intermissionEvents prop は PlayerScreen の非同期取得結果で、endStory() 発火より後に
-  // 遅れて届く可能性がある。ライブに rendererRef.current?.hasIntermissionScene() を毎レンダー
-  // 参照すると、「DOM フォールバック表示済みの直後に intermission が届いて表示だけ消える」
-  // （PixiJS タブローは endStory() の時点で未設定だったため描かれない）事故になる。
-  // true 固定タイミングは onStoryEndedChangeCallback と同じ（#386 契約と同じ「1遷移1回」）。
-  const [usedIntermissionScene, setUsedIntermissionScene] = useState(false)
-
-  // 終劇表示中に左上へ出す埋め込み元プロジェクトロゴの読み込み失敗フラグ (#404)。
-  // TitleOverlay の imageFailed と同じ onError パターン。ロゴが無い/失敗したプロジェクトでは
-  // テキストへのフォールバックはせず、単に出さない（Issue 方針）。
-  const [storyEndedLogoFailed, setStoryEndedLogoFailed] = useState(false)
 
   // デバッグ HUD の展開状態 (#310)。右下ボタン列の「D」ボタンで開閉する。
   // 既定は畳んだ状態（#301 の collapsed 既定 true を引き継ぐ＝open 既定 false）。
@@ -575,7 +560,9 @@ function NovelPlayer({
       renderer.setOnSkipModeChange((on) => setSkipMode(on))
       // スライダ操作中（active）は下部丸ボタン行をフェード退避させる (#350)
       renderer.setOnSeekActiveChange((active) => setSeekActive(active))
-      // 終劇状態が変化したら "to be continued..." の表示を同期する (#386)。
+      // 終劇状態が変化したら React state を同期する (#386)。"to be continued..." の表示自体は
+      // PixiJS 側に内部化された (#630) ため、ここでは postMessage 通知とデバッグ HUD 等の一部
+      // DOM ボタンの disabled 制御用に state を保持するだけ。
       // さらに終劇（ended の true 立ち上がり）に達した瞬間、iframe 埋め込み時のみ
       // 親ウィンドウへ「このセルを読み終わった」を postMessage で通知する (#395)。
       // 埋め込み側（theo-hayami）は name-name の別オリジン既読 localStorage を読めないため、
@@ -592,9 +579,6 @@ function NovelPlayer({
       // ?scene=/project が変わる＝iframe 再読み込み＝再マウントなので stale にならない。
       renderer.setOnStoryEndedChange((ended) => {
         setStoryEnded(ended)
-        // #404: intermission.md 専用シーンが使われたかを ended の立ち上がり時点でスナップショット
-        // する（DOM "to be continued..." 表示との排他はこの値で判定する。上の宣言コメント参照）。
-        setUsedIntermissionScene(ended && renderer.hasIntermissionScene())
         if (ended && isEmbedded()) {
           const message = buildStoryEndedMessage(initialSceneId ?? null, docKey ?? '')
           window.parent.postMessage(message, '*')
@@ -817,13 +801,6 @@ function NovelPlayer({
     }
   }, [docKey])
 
-  // docKey が変化したら終劇ロゴの読み込み失敗フラグをリセットする (#404): 同じコンポーネント
-  // インスタンスが別プロジェクトに再利用された場合、前のプロジェクトでの読み込み失敗が
-  // 新プロジェクトのロゴ表示を誤って抑止しないようにする。
-  useEffect(() => {
-    setStoryEndedLogoFailed(false)
-  }, [docKey])
-
   // choiceStyle が変化したときに renderer に反映 (#146)
   useEffect(() => {
     rendererRef.current?.setChoiceStyle(choiceStyle ?? null)
@@ -1035,38 +1012,26 @@ function NovelPlayer({
     rendererRef.current?.handleOutsideCanvasTap()
   }, [])
 
-  // クイックセーブ/ロード 通知 toast を表示するヘルパー (#142)
-  const showToast = useCallback((message: string) => {
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
-    setToast(message)
-    toastTimerRef.current = setTimeout(() => {
-      setToast(null)
-      toastTimerRef.current = null
-    }, 2000)
-  }, [])
-
-  // F5: クイックセーブ / F8: クイックロード (#142)
+  // F5: クイックセーブ / F8: クイックロード (#142)。通知 toast の表示・タイマー管理は
+  // renderer.showToast() に内部化された (#630、PixiJS 版)。
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'F5') {
         e.preventDefault()
         const ok = rendererRef.current?.quickSave() ?? false
-        showToast(ok ? 'クイックセーブしました' : 'この場面ではセーブできません')
+        rendererRef.current?.showToast(
+          ok ? 'クイックセーブしました' : 'この場面ではセーブできません'
+        )
       } else if (e.key === 'F8') {
         e.preventDefault()
         const ok = rendererRef.current?.quickLoad() ?? false
-        showToast(ok ? 'クイックロードしました' : 'クイックセーブデータがありません')
+        rendererRef.current?.showToast(
+          ok ? 'クイックロードしました' : 'クイックセーブデータがありません'
+        )
       }
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [showToast])
-
-  // unmount 時に toast タイマーをクリア
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
-    }
   }, [])
 
   // unmount 時にフルスクリーントグルの余韻タイマーをクリア (#468)
@@ -1345,43 +1310,9 @@ function NovelPlayer({
           </button>
         )}
       </div>
-      {/* 終劇表示 (#386, #404): confinement 外への choice ジャンプで NovelRenderer.endStory() が
-          発火した後に出す "to be continued..." 表示。#404 で「文字が小さすぎる」不満を解消する
-          ため、右下の控えめな配置から画面中央寄せ・大きめの文字に変更した。話者名・選択肢UIとの
-          区別のため斜体は維持しつつ、視認性を上げるため text-white/60 → /80 に上げている。
-          背景/立ち絵のフェードアウト自体は NovelRenderer 側（PixiJS）が行い、これはその後に
-          重ねる DOM 側の文字。pointer-events-none: タップしても何も起きない（advance は
-          storyEnded で no-op のため二重の安全策だが、見た目のヒットテストにも参加させない）。
-          intermission.md 専用シーン (#404) が使われた場合はこの DOM 表示を出さない
-          （PixiJS 側のタブローに一本化し、二重表示を避ける。usedIntermissionScene 参照）。 */}
-      {storyEnded && !usedIntermissionScene && (
-        <div className="absolute inset-0 m-auto pointer-events-none" style={gameBoxStyle}>
-          {/* 埋め込み元プロジェクトのロゴ (#404): TitleOverlay と同じ title.png 規約
-              (`${assetBaseUrl}/images/title.png`) を流用する。TitleOverlay の imageFailed と
-              同様 onError で読み込み失敗を検知するが、こちらはテキストへのフォールバックは
-              せず、ロゴが無ければ単に出さない（Issue 方針。confinement 元が不明な場合に
-              誤ったテキストを出さないため）。pixelArt (#553) も TitleOverlay と同じ
-              `image-rendering: pixelated` 適用パターンを流用し、pixel_art プロジェクトで
-              このロゴが滲まないようにする。 */}
-          {assetBaseUrl && !storyEndedLogoFailed && (
-            <img
-              src={`${assetBaseUrl}/images/title.png`}
-              alt=""
-              onError={() => setStoryEndedLogoFailed(true)}
-              className="absolute top-3 left-3 max-w-[20%] max-h-16 object-contain select-none"
-              style={pixelArt ? { imageRendering: 'pixelated' } : undefined}
-            />
-          )}
-          <p
-            className="absolute inset-0 flex items-center justify-center text-center px-8 text-white/80 text-3xl italic select-none"
-            style={{
-              fontFamily: fontFamily || undefined,
-            }}
-          >
-            to be continued...
-          </p>
-        </div>
-      )}
+      {/* 終劇表示 (#386, #404) とクイックセーブ/ロード通知 toast (#142) は PixiJS 側
+          （NovelRenderer.syncEndingOverlayVisibility() / showToast()）に内部化された (#630)。
+          DOM 側にはもう対応する要素が無い。 */}
       <SettingsOverlay
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1389,16 +1320,6 @@ function NovelPlayer({
         onChange={setSettings}
         seekbarColor={seekbarColor}
       />
-      {/* クイックセーブ/ロード通知 toast (#142) */}
-      {toast !== null && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="absolute bottom-10 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-black/70 text-white text-sm font-medium pointer-events-none select-none"
-        >
-          {toast}
-        </div>
-      )}
     </div>
   )
 }
