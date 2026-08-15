@@ -2138,6 +2138,7 @@ interface ChoiceOverlayFocusInternals {
   scrollOffset: number
   maxScroll: number
   viewportHeight: number
+  keyboardNavActive: boolean
 }
 function focusInternals(overlay: ChoiceOverlay): ChoiceOverlayFocusInternals {
   return overlay as unknown as ChoiceOverlayFocusInternals
@@ -2646,6 +2647,181 @@ describe('ChoiceOverlay キーボード操作 show()再入・状態遷移 (#633)
 
     overlay.handleKeyDown('Enter')
     expect(onSelect).toHaveBeenCalledWith('next-2')
+
+    overlay.hide()
+  })
+})
+
+// #639 テスト観点整理フェーズ追加分: 黄色いフォーカスリングの visible focus 化
+// （keyboardNavActive）そのものを狙い撃つ回帰テスト。TC-C1/C1b/C1c で導入済みの
+// stroke スパイ・focusInternals（keyboardNavActive を含む）流儀をそのまま踏襲する。
+//
+// #591 の「ロック中ボタンへのマウスクリックは確定しない」は 1231〜1279 行目の
+// 「ChoiceOverlay グリッド×ロック整合性 (#591 テスト観点整理フェーズ 最優先1)」に
+// 既に「二重送信ガード」テストとして存在するため、ここでは重複させない。
+describe('ChoiceOverlay keyboardNavActive 追加回帰テスト (#639)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // 最重要（テスト設計担当の指摘）: リング描画ガード（keyboardNavActive）と
+  // スクロール追従ガード（scrollFocusedIntoView）が同じ if ブロックに入っていないことの
+  // 回帰テスト。show() 直後は必ず keyboardNavActive=false（マウス操作の体）だが、
+  // 初期フォーカスがビューポート外の行に立つ状況（先頭を複数ロックして下の行から開始）を
+  // 作り、それでも scrollOffset がその行まで追従することを確認する。もし
+  // scrollFocusedIntoView(next.row) が `if (this.keyboardNavActive) { ... }` の内側に
+  // 誤って移動されていたら、ここで scrollOffset が 0 のまま止まり検出できる。
+  it('TC-C32(最重要): keyboardNavActive=falseの初回show()でも、ビューポート外の初期フォーカス行までscrollOffsetが追従する(リング描画ガードとスクロール追従ガードの分離)', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    // 先頭5件をロックし、最初の非ロック(index5)から開始させる。
+    const locked = [true, true, true, true, true, false, false, false, false, false]
+    overlay.show(choices(10), vi.fn(), null, undefined, undefined, locked)
+
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+    expect(focusInternals(overlay).focusedIndex).toBe(5)
+    // row5: top=340, bottom=392。viewportHeight=172(TC-C23と同じoverlay(800,220)・10択の実測値)。
+    // bottom(392) が scrollOffset(0)+viewportHeight(172) を超えるため next=392-172=220 になる。
+    expect(focusInternals(overlay).scrollOffset).toBe(220)
+
+    overlay.hide()
+  })
+
+  it('TC-C33: マウスクリックで選択確定してもkeyboardNavActiveはfalseのまま(フォーカスリングの描画に影響しない)', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new ChoiceOverlay(800, 450)
+    const onSelect = vi.fn()
+    overlay.show(choices(3), onSelect)
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+    const entry0 = focusInternals(overlay).choiceEntries[0]
+    strokeSpy.mockClear()
+
+    const button = overlay.children[0]
+    button.emit('pointerdown', pointerEvent(400, 225))
+    button.emit('pointerup', pointerEvent(400, 225))
+
+    expect(onSelect).toHaveBeenCalledWith('next-1')
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+    expect(strokeSpy.mock.instances).not.toContain(entry0.focusRing)
+
+    overlay.hide()
+  })
+
+  it('TC-C34: グリッドでArrowRightを押すとkeyboardNavActiveがtrueになり、同一行内の移動先にリングが描画される', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new ChoiceOverlay(800, 450)
+    // columns=2, count=4: idx0(r0c0) idx1(r0c1) idx2(r1c0) idx3(r1c1)。
+    overlay.show(choices(4), vi.fn(), null, undefined, 2)
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+    const entry1 = focusInternals(overlay).choiceEntries[1]
+
+    overlay.handleKeyDown('ArrowRight')
+
+    expect(focusInternals(overlay).keyboardNavActive).toBe(true)
+    // ArrowRight は行内移動(moveFocusInRow)のため、同じ行(row0)内のidx1へ移動する。
+    expect(focusInternals(overlay).focusedIndex).toBe(1)
+    expect(strokeSpy.mock.instances).toContain(entry1.focusRing)
+
+    overlay.hide()
+  })
+
+  it('TC-C35: グリッドでもTabキーはflat順でリングを移動する(grid固有のmoveFocusInColumn/Rowとは異なる経路)', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    // columns=2, count=4: idx0(r0c0) idx1(r0c1) idx2(r1c0) idx3(r1c1)。
+    // 同じidx0からでもArrowDown(moveFocusInColumn)ならidx2(同一列)へ飛ぶが、
+    // Tab(moveFocus, flat)はグリッドを無視した通し順でidx1へ移動するはず。
+    const overlay2 = new ChoiceOverlay(800, 450)
+    overlay.show(choices(4), vi.fn(), null, undefined, 2)
+    overlay2.show(choices(4), vi.fn(), null, undefined, 2)
+
+    overlay.handleKeyDown('Tab')
+    overlay2.handleKeyDown('ArrowDown')
+
+    expect(focusInternals(overlay).focusedIndex).toBe(1)
+    expect(focusInternals(overlay2).focusedIndex).toBe(2)
+
+    overlay.hide()
+    overlay2.hide()
+  })
+
+  it('TC-C36: グリッドで移動先候補が自分のみ(next===null)でもArrowDownを押せばkeyboardNavActiveはtrueになり現在位置にリングが再描画される(TC-C18の状況拡張)', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new ChoiceOverlay(800, 450)
+    // columns=2, count=4: idx0(r0c0) idx1(r0c1) idx2(r1c0) idx3(r1c1)。idx2(col0)をロック。
+    overlay.show(choices(4), vi.fn(), null, undefined, 2, [false, false, true, false])
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+    const entry0 = focusInternals(overlay).choiceEntries[0]
+
+    overlay.handleKeyDown('ArrowDown')
+
+    // TC-C18と同じ前提: col0の移動先候補が自分(idx0)のみのためフォーカス位置自体は動かない。
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    expect(focusInternals(overlay).keyboardNavActive).toBe(true)
+    expect(strokeSpy.mock.instances).toContain(entry0.focusRing)
+
+    overlay.hide()
+  })
+
+  it('TC-C37: 非グリッド時のArrowLeft/Rightは未処理のままkeyboardNavActiveも変化しない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+
+    overlay.handleKeyDown('ArrowRight')
+    overlay.handleKeyDown('ArrowLeft')
+
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+
+    overlay.hide()
+  })
+
+  it('TC-C38: handleKeyDown("")および未知の文字列キーは例外を投げずfalseを返す', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+
+    expect(() => {
+      expect(overlay.handleKeyDown('')).toBe(false)
+      expect(overlay.handleKeyDown('PageDown')).toBe(false)
+    }).not.toThrow()
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+
+    overlay.hide()
+  })
+
+  // 実装コメント（ChoiceOverlay.ts の keyboardNavActive フィールド doc）で「一度 true に
+  // なったら hide()/show() を跨いでも false に戻さない」と明言されている、セッション継続
+  // 仕様の直接検証。専用テストが未追加だったため追加する。
+  it('TC-C39: 1回目の選択画面でTab操作しkeyboardNavActive=trueになった後、hide()→show()で次の選択肢を表示すると即座にindex0へリングが描画される(セッション継続仕様)', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+    overlay.handleKeyDown('Tab')
+    expect(focusInternals(overlay).keyboardNavActive).toBe(true)
+    overlay.hide()
+
+    strokeSpy.mockClear()
+    overlay.show(choices(2), vi.fn())
+
+    expect(focusInternals(overlay).keyboardNavActive).toBe(true)
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    const entry0 = focusInternals(overlay).choiceEntries[0]
+    expect(strokeSpy.mock.instances).toContain(entry0.focusRing)
+
+    overlay.hide()
+  })
+
+  // 任意(冪等性): activateKeyboardFocusVisible の早期return分岐（既にtrueなら何もしない）を
+  // stroke呼び出し回数で直接検証する。
+  it('TC-C40（任意）: Tabを2回連続で押しても、2回目はactivateKeyboardFocusVisibleの早期returnにより移動先のリング描画1回分しかstrokeが増えない', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+
+    overlay.handleKeyDown('Tab') // idx0→1。navActiveがfalse→trueになりidx0用に1回、idx1用に1回、計2回増える。
+    const callCountAfterFirstTab = strokeSpy.mock.calls.length
+
+    overlay.handleKeyDown('Tab') // idx1→2。navActiveは既にtrueのためactivate側は早期returnし、idx2用の1回だけ増える。
+
+    expect(strokeSpy.mock.calls.length).toBe(callCountAfterFirstTab + 1)
 
     overlay.hide()
   })
