@@ -1031,9 +1031,19 @@ export class NovelRenderer {
    * 再走させる用途。setEvents() は texture を Assets.unload するため、render と並行すると
    * Pixi が `Cannot read properties of null (reading 'alphaMode')` で落ちる。restart() は
    * texture を維持するため安全。
+   *
+   * #637: `setScenes()` と対称に `gameState.clear()` / `currentSceneId` のリセットを行う。
+   * 旧セーブ（GUI 起動時の #578 自動クイックロードが復元した flags/sceneId）を引きずったまま
+   * 「はじめから」しても、Condition 分岐が旧フラグのまま解決されて「つづきから」相当の内容に
+   * なってしまっていた（#637 本体の症状）。`currentSceneId` は `allScenes[0]`（= エントリ doc の
+   * 最初のシーン。`PlayerScreen.buildSceneIndex()` が常にエントリ doc のシーンを先頭に積む前提）
+   * に戻す。単純に null にはしない（seekbar・シーンタイトル解決を restart 直後から正しく機能
+   * させるため）。
    */
   restart(): void {
     if (this.rawEvents.length === 0) return
+    this.gameState.clear()
+    this.currentSceneId = this.allScenes.length > 0 ? this.allScenes[0].id : null
     this.resetAndStartEvents([...this.rawEvents])
   }
 
