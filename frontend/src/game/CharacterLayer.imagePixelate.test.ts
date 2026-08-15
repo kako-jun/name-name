@@ -299,6 +299,85 @@ describe('CharacterLayer.showImage() Pixelate 遷移 (#628 フェーズ2a)', () 
     advance(layer, 400)
     expect(internals(layer).characters.get('img')).toBeUndefined()
   })
+
+  // D-7 (#646): Pixelate 遷移が coarsen/holding 中（hasLoadedTexture=false かつ
+  // imageLoadPending=true）に同id再表示しても、#646 の Fade 経路再ロードが割り込まない
+  // ことの確認。imageLoadPending ガードにより Assets.load は元の pixelate 用1回のまま——
+  // その後 performImagePixelateSwap が正しく完了し texture が反映される。
+  it('D-7 (#646): Pixelate遷移coarsen中の同id再表示はFade経路の再ロードを割り込ませず、Assets.loadは元のpixelate用1回のまま、その後performImagePixelateSwapが正しく完了しtextureが反映される', async () => {
+    let resolvePixelateLoad!: (t: unknown) => void
+    const pixelatePending = new Promise((resolve) => {
+      resolvePixelateLoad = resolve
+    })
+    const loadSpy = vi.spyOn(Assets, 'load').mockReturnValueOnce(pixelatePending as never)
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({
+      id: 'img',
+      path: 'a.png',
+      assetBaseUrl: '/assets',
+      transition: 'Pixelate',
+      fadeMs: 800, // swapAtMs=400
+    })
+    const st = internals(layer).characters.get('img')!
+    expect(st.pixelateState?.phase).toBe('coarsen')
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+
+    // coarsen 中（hasLoadedTexture=false かつ imageLoadPending=true）に同id再表示。
+    layer.showImage({ id: 'img', path: 'a.png', assetBaseUrl: '/assets' })
+    // Fade 経路の再ロードが割り込まない: Assets.load は元の pixelate 用1回のまま。
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expect(st.pixelateState?.phase).toBe('coarsen')
+
+    // その後 pixelate の load が解決し、swapAtMs 到達で performImagePixelateSwap が正しく完了する。
+    resolvePixelateLoad({ width: 20, height: 20, source: { scaleMode: 'linear' } })
+    await flushPromises()
+    advance(layer, 400) // swapAtMs 到達
+    expect(st.pixelateState?.phase).toBe('refine')
+    expect(st.sprite.texture).toEqual({ width: 20, height: 20, source: { scaleMode: 'linear' } })
+  })
+
+  // D-8 (#646): Pixelate 遷移の初回 load が失敗（catch）すると imageLoadPending=false・
+  // hasLoadedTexture=false になる。この後の同id再表示の再ロードは transition:'Pixelate' を
+  // 渡しても常に Fade 経路で発行される（pixelate 再開はしない、existing 分岐は常に Fade 固定）。
+  it('D-8 (#646): Pixelate遷移の初回loadが失敗するとimageLoadPending=false・hasLoadedTexture=falseになり、同id再表示の再ロードは常にFade経路で発行される（pixelate再開はしない）', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load')
+    loadSpy.mockRejectedValueOnce(new Error('fail'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new CharacterLayer(800, 450)
+
+    layer.showImage({
+      id: 'img',
+      path: 'a.png',
+      assetBaseUrl: '/assets',
+      transition: 'Pixelate',
+      fadeMs: 800,
+    })
+    await flushPromises()
+    const st = internals(layer).characters.get('img')!
+    expect(st.pixelateState).toBeUndefined() // catch経路のclearImagePixelateStateで外れる
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+
+    // 同id再表示。transition:'Pixelate' を渡しても existing 分岐は常に Fade 経路で再ロードする。
+    loadSpy.mockResolvedValueOnce({
+      width: 10,
+      height: 10,
+      source: { scaleMode: 'linear' },
+    } as never)
+    layer.showImage({
+      id: 'img',
+      path: 'a.png',
+      assetBaseUrl: '/assets',
+      transition: 'Pixelate',
+      fadeMs: 800,
+    })
+    expect(loadSpy).toHaveBeenCalledTimes(2)
+    await flushPromises()
+
+    expect(st.pixelateState).toBeUndefined() // pixelate は再開しない
+    expect(st.sprite.filters).toBeNull() // pixelateFilter が張られていない（Fade経路で処理された証拠）
+    warnSpy.mockRestore()
+  })
 })
 
 // --- NovelRenderer 配線: `[画像: 遷移=pixelate, フェード=800]` → characterLayer.showImage ---
