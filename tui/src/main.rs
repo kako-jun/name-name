@@ -5652,6 +5652,101 @@ mod tests {
         );
     }
 
+    // ---- #644: event_loop経由のオート進行ウェイト（AutoWaitMs）の境界値クランプ ----
+    //
+    // config.rsの`increment_auto_wait_ms`/`decrement_auto_wait_ms`純粋関数のユニット
+    // テストだけでは、`Action::MoveUp`/`Action::MoveDown`が`settings_focus ==
+    // SettingsField::AutoWaitMs`のときに実際に`config.auto_wait_ms`を書き換える配線
+    // そのもの（incrementとdecrementの取り違え、他フィールドのtypo書き換え等）は検出
+    // できない。BGM/SE/Voice音量と同じ「境界の1つ外側から2回操作し、2回目も境界の
+    // まま」という3手構成で配線を固定化する。
+
+    #[test]
+    fn event_loop_settings_auto_wait_ms_lower_bound_clamps_to_500_and_stays() {
+        // auto_wait_msが1000（AUTO_WAIT_MIN_MSの1段階上）の状態で↑（MoveUp/減少）を
+        // 押すと500になる（下限到達）。500からさらに押しても500のまま
+        // （`decrement_auto_wait_ms`の`.max(AUTO_WAIT_MIN_MS)`による下限保持）。
+        let mut config = instant_config();
+        config.auto_wait_ms = 1000;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ
+                3 => Ok(Action::MoveUp),    // 1000 -> 500
+                4 => Ok(Action::MoveUp),    // 500 -> 500（下限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("オート進行ウェイト: 0.5秒"),
+            "2回目の↑後も0.5秒(500ms)のままのはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_auto_wait_ms_upper_bound_clamps_to_10000_and_stays() {
+        // auto_wait_msが9500（AUTO_WAIT_MAX_MSの1段階下）の状態で↓（MoveDown/増加）を
+        // 押すと10000になる（上限到達）。10000からさらに押しても10000のまま
+        // （`increment_auto_wait_ms`の`.min(AUTO_WAIT_MAX_MS)`による上限保持）。
+        let mut config = instant_config();
+        config.auto_wait_ms = 9500;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ
+                3 => Ok(Action::MoveDown),  // 9500 -> 10000
+                4 => Ok(Action::MoveDown),  // 10000 -> 10000（上限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("オート進行ウェイト: 10.0秒"),
+            "2回目の↓後も10.0秒(10000ms)のままのはず(10.5秒等になっていないか), buffer was: {text}"
+        );
+    }
+
     // ---- #537: event_loop経由のBGM/SE/ボイス音量の境界値クランプ ----
     //
     // `event_loop_settings_char_interval_{lower,upper}_bound_clamps_...`と同じ「境界の
