@@ -12,7 +12,7 @@
 export interface Settings {
   /** 1 文字あたり ms。0 = 瞬間表示。UI レンジは 0..200 だが clamp 上限は 500 */
   msPerChar: number
-  /** 1000..8000 想定（#139 オート用、保存だけ）。clamp は 500..10000 */
+  /** UI レンジは 500..10000（#644 で TUI 版と一致させた）。clamp も 500..10000 */
   autoWaitMs: number
   /** 0..1 */
   bgmVolume: number

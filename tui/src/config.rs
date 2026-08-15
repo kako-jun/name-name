@@ -197,6 +197,27 @@ pub fn decrement_volume_percent(percent: u32) -> u32 {
     percent.saturating_sub(VOLUME_STEP_PERCENT)
 }
 
+/// オート進行ウェイト調整UI（#644）がプレイ中に選べる `auto_wait_ms` の下限・上限・刻み幅。
+/// GUI版 `clampSettings`（`frontend/src/game/settings.ts`）の autoWaitMs 許容範囲
+/// （500..10000）と同じ値を採用し、TUI/GUI間でオート待機時間のレンジ感を揃える。
+/// `TEXT_SPEED_MAX_MS`/`VOLUME_MAX_PERCENT`と異なり下限が0でないため、
+/// `increment_auto_wait_ms`/`decrement_auto_wait_ms`の両方で明示的なclampが必要になる。
+pub const AUTO_WAIT_MIN_MS: u64 = 500;
+pub const AUTO_WAIT_MAX_MS: u64 = 10000;
+pub const AUTO_WAIT_STEP_MS: u64 = 500;
+
+/// `ms`を`AUTO_WAIT_STEP_MS`刻みで1段階増やし、`AUTO_WAIT_MAX_MS`にclampする純粋関数（#644）。
+pub fn increment_auto_wait_ms(ms: u64) -> u64 {
+    ms.saturating_add(AUTO_WAIT_STEP_MS).min(AUTO_WAIT_MAX_MS)
+}
+
+/// `ms`を`AUTO_WAIT_STEP_MS`刻みで1段階減らし、`AUTO_WAIT_MIN_MS`にclampする純粋関数（#644）。
+/// 下限0にsaturateするのではなく`AUTO_WAIT_MIN_MS`（500）を下回らないよう明示的にclampする点が
+/// `decrement_volume_percent`（下限0固定）との違い。
+pub fn decrement_auto_wait_ms(ms: u64) -> u64 {
+    ms.saturating_sub(AUTO_WAIT_STEP_MS).max(AUTO_WAIT_MIN_MS)
+}
+
 /// パーセント表記(0..=100)の音量を、rodio の `Sink::set_volume`/`AudioPlayer` が扱う
 /// 0.0〜1.0スケールへ変換する純粋関数（#503）。
 pub fn percent_to_volume_scale(percent: u32) -> f32 {
@@ -664,6 +685,51 @@ mod tests {
     fn decrement_volume_percent_saturates_at_zero() {
         assert_eq!(decrement_volume_percent(0), 0);
         assert_eq!(decrement_volume_percent(3), 0);
+    }
+
+    // ---- #644: AUTO_WAIT_STEP_MSで割り切れない半端値を含むclamp境界値 ----
+
+    #[test]
+    fn increment_auto_wait_ms_clamps_off_step_value_up_to_max() {
+        // STEP(500)刻みでは到達しない9999（境界-1）からでも上限にclampされる。
+        assert_eq!(increment_auto_wait_ms(9999), 10000);
+    }
+
+    #[test]
+    fn increment_auto_wait_ms_at_max_is_idempotent() {
+        // 既に上限ちょうどなら変化しない。
+        assert_eq!(increment_auto_wait_ms(10000), 10000);
+    }
+
+    #[test]
+    fn increment_auto_wait_ms_clamps_when_starting_above_max() {
+        // 上限を超えた入力（境界+1相当）でもclampの頑健性は保たれる。
+        assert_eq!(increment_auto_wait_ms(10500), 10000);
+    }
+
+    #[test]
+    fn decrement_auto_wait_ms_clamps_off_step_value_down_to_min() {
+        // STEP(500)刻みでは到達しない501（境界+1）からでも下限にclampされる。
+        assert_eq!(decrement_auto_wait_ms(501), 500);
+    }
+
+    #[test]
+    fn decrement_auto_wait_ms_at_min_is_idempotent() {
+        // 既に下限ちょうどなら変化しない。
+        assert_eq!(decrement_auto_wait_ms(500), 500);
+    }
+
+    #[test]
+    fn decrement_auto_wait_ms_clamps_when_saturated_to_zero() {
+        // u64のsaturating_subで0になった状態（境界-1相当）からでも下限にclampされる。
+        assert_eq!(decrement_auto_wait_ms(0), 500);
+    }
+
+    #[test]
+    fn increment_and_decrement_auto_wait_ms_step_by_500_in_normal_range() {
+        // clamp境界から離れた通常区間では、単純にSTEP(500)刻みで増減する。
+        assert_eq!(increment_auto_wait_ms(2500), 3000);
+        assert_eq!(decrement_auto_wait_ms(2500), 2000);
     }
 
     #[test]

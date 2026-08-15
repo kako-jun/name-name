@@ -28,8 +28,9 @@ use ratatui::Terminal;
 
 use cli::Cli;
 use config::{
-    decrement_volume_percent, increment_volume_percent, percent_to_volume_scale, Config,
-    TEXT_SPEED_MAX_MS, TEXT_SPEED_STEP_MS,
+    decrement_auto_wait_ms, decrement_volume_percent, increment_auto_wait_ms,
+    increment_volume_percent, percent_to_volume_scale, Config, TEXT_SPEED_MAX_MS,
+    TEXT_SPEED_STEP_MS,
 };
 use input::Action;
 use playback::{DisplayLine, Playback};
@@ -675,6 +676,7 @@ where
                     ui::draw_settings(
                         frame,
                         config.typewriter.char_interval_ms,
+                        config.auto_wait_ms,
                         &config.volume,
                         settings_focus,
                     );
@@ -780,6 +782,13 @@ where
                         );
                         reveal_rebuilt_at = Some(restart_now);
                     }
+                    // オート進行ウェイト（#644）。`config.auto_wait_ms` を直接書き換えるだけで、
+                    // `TextSpeed` のような reveal 再構築は不要 — この値はオートモードの締切
+                    // 計算（`auto_deadline`）で次に読まれるまで参照されないため、他の状態を
+                    // 即座に作り直す必要がない。
+                    SettingsField::AutoWaitMs => {
+                        config.auto_wait_ms = decrement_auto_wait_ms(config.auto_wait_ms);
+                    }
                     SettingsField::BgmVolume => {
                         config.volume.bgm_percent =
                             decrement_volume_percent(config.volume.bgm_percent);
@@ -819,6 +828,9 @@ where
                             restart_now,
                         );
                         reveal_rebuilt_at = Some(restart_now);
+                    }
+                    SettingsField::AutoWaitMs => {
+                        config.auto_wait_ms = increment_auto_wait_ms(config.auto_wait_ms);
                     }
                     SettingsField::BgmVolume => {
                         config.volume.bgm_percent =
@@ -4574,8 +4586,9 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings), // 開く(フォーカスはTextSpeed)
-                2 => Ok(Action::MoveRight),      // フォーカスをBgmVolumeへ
-                3 => Ok(Action::MoveDown),       // bgm_percent: 70 -> 75
+                2 => Ok(Action::MoveRight),      // フォーカスをAutoWaitMsへ(#644)
+                3 => Ok(Action::MoveRight),      // フォーカスをBgmVolumeへ
+                4 => Ok(Action::MoveDown),       // bgm_percent: 70 -> 75
                 // 意図的な停止(既存の`event_loop_backlog_overlay_ignores_...`と同じ
                 // パターン)。`Action::Quit`は overlay 表示中は「閉じる」に読み替わって
                 // しまい、後続の周回で通常画面が再描画されてから初めてループを抜けるため、
@@ -4607,7 +4620,7 @@ mod tests {
 
     #[test]
     fn event_loop_settings_reopening_resets_focus_to_text_speed() {
-        // 設定画面を閉じて再度開くと、前回のフォーカス位置(BgmVolume)を引きずらず
+        // 設定画面を閉じて再度開くと、前回のフォーカス位置(AutoWaitMs)を引きずらず
         // 既定のTextSpeedへ戻ることを確認する(#503、backlog_scrollを開くたびに
         // u16::MAXへ戻すのと同じ「オーバーレイごとに初期状態から始める」パターン)。
         let config = instant_config();
@@ -4623,7 +4636,7 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings), // 開く
-                2 => Ok(Action::MoveRight),      // フォーカスをBgmVolumeへ
+                2 => Ok(Action::MoveRight),      // フォーカスをAutoWaitMsへ(#644)
                 3 => Ok(Action::ToggleSettings), // 閉じる
                 4 => Ok(Action::ToggleSettings), // 再度開く
                 // 意図的な停止(上のテストと同じ理由)。
@@ -4647,8 +4660,8 @@ mod tests {
             "再度開いた時点でフォーカスがTextSpeedへリセットされているはず: {text:?}"
         );
         assert!(
-            !text.contains("> BGM音量"),
-            "前回閉じた時点のBgmVolumeフォーカスを引きずっていないはず: {text:?}"
+            !text.contains("> オート進行ウェイト"),
+            "前回閉じた時点のAutoWaitMsフォーカスを引きずっていないはず: {text:?}"
         );
     }
 
@@ -5639,6 +5652,101 @@ mod tests {
         );
     }
 
+    // ---- #644: event_loop経由のオート進行ウェイト（AutoWaitMs）の境界値クランプ ----
+    //
+    // config.rsの`increment_auto_wait_ms`/`decrement_auto_wait_ms`純粋関数のユニット
+    // テストだけでは、`Action::MoveUp`/`Action::MoveDown`が`settings_focus ==
+    // SettingsField::AutoWaitMs`のときに実際に`config.auto_wait_ms`を書き換える配線
+    // そのもの（incrementとdecrementの取り違え、他フィールドのtypo書き換え等）は検出
+    // できない。BGM/SE/Voice音量と同じ「境界の1つ外側から2回操作し、2回目も境界の
+    // まま」という3手構成で配線を固定化する。
+
+    #[test]
+    fn event_loop_settings_auto_wait_ms_lower_bound_clamps_to_500_and_stays() {
+        // auto_wait_msが1000（AUTO_WAIT_MIN_MSの1段階上）の状態で↑（MoveUp/減少）を
+        // 押すと500になる（下限到達）。500からさらに押しても500のまま
+        // （`decrement_auto_wait_ms`の`.max(AUTO_WAIT_MIN_MS)`による下限保持）。
+        let mut config = instant_config();
+        config.auto_wait_ms = 1000;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ
+                3 => Ok(Action::MoveUp),    // 1000 -> 500
+                4 => Ok(Action::MoveUp),    // 500 -> 500（下限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("オート進行ウェイト: 0.5秒"),
+            "2回目の↑後も0.5秒(500ms)のままのはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn event_loop_settings_auto_wait_ms_upper_bound_clamps_to_10000_and_stays() {
+        // auto_wait_msが9500（AUTO_WAIT_MAX_MSの1段階下）の状態で↓（MoveDown/増加）を
+        // 押すと10000になる（上限到達）。10000からさらに押しても10000のまま
+        // （`increment_auto_wait_ms`の`.min(AUTO_WAIT_MAX_MS)`による上限保持）。
+        let mut config = instant_config();
+        config.auto_wait_ms = 9500;
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ
+                3 => Ok(Action::MoveDown),  // 9500 -> 10000
+                4 => Ok(Action::MoveDown),  // 10000 -> 10000（上限のまま）
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        );
+        assert!(result.is_err());
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("オート進行ウェイト: 10.0秒"),
+            "2回目の↓後も10.0秒(10000ms)のままのはず(10.5秒等になっていないか), buffer was: {text}"
+        );
+    }
+
     // ---- #537: event_loop経由のBGM/SE/ボイス音量の境界値クランプ ----
     //
     // `event_loop_settings_char_interval_{lower,upper}_bound_clamps_...`と同じ「境界の
@@ -5662,9 +5770,10 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // フォーカスをBgmVolumeへ
-                3 => Ok(Action::MoveUp),    // 5 -> 0
-                4 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
+                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ(#644)
+                3 => Ok(Action::MoveRight), // フォーカスをBgmVolumeへ
+                4 => Ok(Action::MoveUp),    // 5 -> 0
+                5 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -5704,9 +5813,10 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // フォーカスをBgmVolumeへ
-                3 => Ok(Action::MoveDown),  // 95 -> 100
-                4 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
+                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ(#644)
+                3 => Ok(Action::MoveRight), // フォーカスをBgmVolumeへ
+                4 => Ok(Action::MoveDown),  // 95 -> 100
+                5 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -5745,10 +5855,11 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // BgmVolumeへ
-                3 => Ok(Action::MoveRight), // SeVolumeへ
-                4 => Ok(Action::MoveUp),    // 5 -> 0
-                5 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
+                2 => Ok(Action::MoveRight), // AutoWaitMsへ(#644)
+                3 => Ok(Action::MoveRight), // BgmVolumeへ
+                4 => Ok(Action::MoveRight), // SeVolumeへ
+                5 => Ok(Action::MoveUp),    // 5 -> 0
+                6 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -5787,10 +5898,11 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // BgmVolumeへ
-                3 => Ok(Action::MoveRight), // SeVolumeへ
-                4 => Ok(Action::MoveDown),  // 95 -> 100
-                5 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
+                2 => Ok(Action::MoveRight), // AutoWaitMsへ(#644)
+                3 => Ok(Action::MoveRight), // BgmVolumeへ
+                4 => Ok(Action::MoveRight), // SeVolumeへ
+                5 => Ok(Action::MoveDown),  // 95 -> 100
+                6 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -5831,11 +5943,12 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // BgmVolumeへ
-                3 => Ok(Action::MoveRight), // SeVolumeへ
-                4 => Ok(Action::MoveRight), // VoiceVolumeへ
-                5 => Ok(Action::MoveUp),    // 5 -> 0
-                6 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
+                2 => Ok(Action::MoveRight), // AutoWaitMsへ(#644)
+                3 => Ok(Action::MoveRight), // BgmVolumeへ
+                4 => Ok(Action::MoveRight), // SeVolumeへ
+                5 => Ok(Action::MoveRight), // VoiceVolumeへ
+                6 => Ok(Action::MoveUp),    // 5 -> 0
+                7 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -5875,11 +5988,12 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // BgmVolumeへ
-                3 => Ok(Action::MoveRight), // SeVolumeへ
-                4 => Ok(Action::MoveRight), // VoiceVolumeへ
-                5 => Ok(Action::MoveDown),  // 95 -> 100
-                6 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
+                2 => Ok(Action::MoveRight), // AutoWaitMsへ(#644)
+                3 => Ok(Action::MoveRight), // BgmVolumeへ
+                4 => Ok(Action::MoveRight), // SeVolumeへ
+                5 => Ok(Action::MoveRight), // VoiceVolumeへ
+                6 => Ok(Action::MoveDown),  // 95 -> 100
+                7 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };

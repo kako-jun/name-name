@@ -40,8 +40,8 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::config::{
-    Config, PlaceholderStyle, VolumeConfig, TEXT_SPEED_MAX_MS, TEXT_SPEED_STEP_MS,
-    VOLUME_MAX_PERCENT, VOLUME_STEP_PERCENT,
+    Config, PlaceholderStyle, VolumeConfig, AUTO_WAIT_MAX_MS, AUTO_WAIT_MIN_MS, AUTO_WAIT_STEP_MS,
+    TEXT_SPEED_MAX_MS, TEXT_SPEED_STEP_MS, VOLUME_MAX_PERCENT, VOLUME_STEP_PERCENT,
 };
 use crate::image_fade::ImageFadeState;
 use crate::image_render::{
@@ -1145,14 +1145,23 @@ fn format_speed_label(ms: u64) -> String {
     }
 }
 
+/// オート進行ウェイトの表示ラベル。GUI版 `SettingsOverlay.tsx` の autoWaitMs スライダーの
+/// `format` 関数（`${(v / 1000).toFixed(1)}秒`）と同じ文言をそのまま踏襲する（#644）。
+fn format_auto_wait_label(ms: u64) -> String {
+    format!("{:.1}秒", ms as f64 / 1000.0)
+}
+
 /// 設定画面（#503）でフォーカス中の行。`Action::MoveLeft`/`Action::MoveRight` の文脈依存の
 /// 再利用（`main.rs::event_loop` の `Overlay::Settings` 分岐）でラップアラウンドしながら
 /// 切り替わる。フォーカス行に応じて `Action::MoveUp`/`Action::MoveDown` が調整する値
-/// （テキスト速度 or 音量）が変わる。
+/// （テキスト速度 / オート進行ウェイト / 音量）が変わる。並び順は GUI版 `Settings`
+/// interface（`frontend/src/game/settings.ts`）の msPerChar→autoWaitMs→bgmVolume→
+/// seVolume→voiceVolume に合わせる（#644）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsField {
     #[default]
     TextSpeed,
+    AutoWaitMs,
     BgmVolume,
     SeVolume,
     VoiceVolume,
@@ -1162,7 +1171,8 @@ impl SettingsField {
     /// 次の行へラップアラウンドしながら進む（`Action::MoveRight`）。
     pub fn next(self) -> Self {
         match self {
-            SettingsField::TextSpeed => SettingsField::BgmVolume,
+            SettingsField::TextSpeed => SettingsField::AutoWaitMs,
+            SettingsField::AutoWaitMs => SettingsField::BgmVolume,
             SettingsField::BgmVolume => SettingsField::SeVolume,
             SettingsField::SeVolume => SettingsField::VoiceVolume,
             SettingsField::VoiceVolume => SettingsField::TextSpeed,
@@ -1173,7 +1183,8 @@ impl SettingsField {
     pub fn prev(self) -> Self {
         match self {
             SettingsField::TextSpeed => SettingsField::VoiceVolume,
-            SettingsField::BgmVolume => SettingsField::TextSpeed,
+            SettingsField::AutoWaitMs => SettingsField::TextSpeed,
+            SettingsField::BgmVolume => SettingsField::AutoWaitMs,
             SettingsField::SeVolume => SettingsField::BgmVolume,
             SettingsField::VoiceVolume => SettingsField::SeVolume,
         }
@@ -1215,6 +1226,7 @@ fn format_settings_line(text: String, focused: bool) -> Line<'static> {
 pub fn draw_settings(
     frame: &mut Frame,
     char_interval_ms: u64,
+    auto_wait_ms: u64,
     volume: &VolumeConfig,
     focus: SettingsField,
 ) {
@@ -1235,11 +1247,15 @@ pub fn draw_settings(
     }
 
     let speed_label = format_speed_label(char_interval_ms);
+    let auto_wait_label = format_auto_wait_label(auto_wait_ms);
     // フォーカス中の項目に応じて調整可能なレンジ・刻み幅をヒントに出す（#537）。全項目分を
     // 常時表示すると横幅・視認性の両方で冗長になるため、フォーカス行1つぶんだけに絞る。
     let range_hint = match focus {
         SettingsField::TextSpeed => {
             format!("(0〜{TEXT_SPEED_MAX_MS}ms, {TEXT_SPEED_STEP_MS}ms刻み)")
+        }
+        SettingsField::AutoWaitMs => {
+            format!("({AUTO_WAIT_MIN_MS}〜{AUTO_WAIT_MAX_MS}ms, {AUTO_WAIT_STEP_MS}ms刻み)")
         }
         SettingsField::BgmVolume | SettingsField::SeVolume | SettingsField::VoiceVolume => {
             format!("(0〜{VOLUME_MAX_PERCENT}%, {VOLUME_STEP_PERCENT}%刻み)")
@@ -1250,6 +1266,10 @@ pub fn draw_settings(
         format_settings_line(
             format!("テキスト表示速度: {speed_label}"),
             focus == SettingsField::TextSpeed,
+        ),
+        format_settings_line(
+            format!("オート進行ウェイト: {auto_wait_label}"),
+            focus == SettingsField::AutoWaitMs,
         ),
         format_settings_line(
             format!("BGM音量: {}%", volume.bgm_percent),
@@ -7713,11 +7733,34 @@ mod tests {
         let volume = VolumeConfig::default();
         terminal
             .draw(|f| {
-                draw_settings(f, 30, &volume, SettingsField::TextSpeed);
+                draw_settings(f, 30, 2500, &volume, SettingsField::TextSpeed);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("30ms/字"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn format_auto_wait_label_formats_seconds_with_one_decimal() {
+        assert_eq!(format_auto_wait_label(2500), "2.5秒");
+        assert_eq!(format_auto_wait_label(500), "0.5秒");
+        assert_eq!(format_auto_wait_label(10000), "10.0秒");
+    }
+
+    #[test]
+    fn draw_settings_renders_current_auto_wait_label() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, 3000, &volume, SettingsField::AutoWaitMs);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("オート進行ウェイト: 3.0秒"),
+            "buffer was: {text}"
+        );
     }
 
     #[test]
@@ -7726,7 +7769,7 @@ mod tests {
         let volume = VolumeConfig::default();
         terminal
             .draw(|f| {
-                draw_settings(f, 30, &volume, SettingsField::TextSpeed);
+                draw_settings(f, 30, 2500, &volume, SettingsField::TextSpeed);
             })
             .unwrap();
     }
@@ -7741,7 +7784,7 @@ mod tests {
         };
         terminal
             .draw(|f| {
-                draw_settings(f, 30, &volume, SettingsField::BgmVolume);
+                draw_settings(f, 30, 2500, &volume, SettingsField::BgmVolume);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
@@ -7761,7 +7804,7 @@ mod tests {
         let volume = VolumeConfig::default();
         terminal
             .draw(|f| {
-                draw_settings(f, 30, &volume, SettingsField::TextSpeed);
+                draw_settings(f, 30, 2500, &volume, SettingsField::TextSpeed);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
@@ -7771,13 +7814,31 @@ mod tests {
         );
     }
 
+    // ---- #644: draw_settingsのAutoWaitMsフォーカス時のレンジ・刻み幅ヒント ----
+
+    #[test]
+    fn draw_settings_auto_wait_ms_focus_shows_ms_range_hint() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, 2500, &volume, SettingsField::AutoWaitMs);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("(500〜10000ms, 500ms刻み)"),
+            "AutoWaitMsフォーカス時はms単位のレンジヒントが出るはず, buffer was: {text}"
+        );
+    }
+
     #[test]
     fn draw_settings_bgm_volume_focus_shows_percent_range_hint() {
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let volume = VolumeConfig::default();
         terminal
             .draw(|f| {
-                draw_settings(f, 30, &volume, SettingsField::BgmVolume);
+                draw_settings(f, 30, 2500, &volume, SettingsField::BgmVolume);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
@@ -7793,7 +7854,7 @@ mod tests {
         let volume = VolumeConfig::default();
         terminal
             .draw(|f| {
-                draw_settings(f, 30, &volume, SettingsField::SeVolume);
+                draw_settings(f, 30, 2500, &volume, SettingsField::SeVolume);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
@@ -7809,7 +7870,7 @@ mod tests {
         let volume = VolumeConfig::default();
         terminal
             .draw(|f| {
-                draw_settings(f, 30, &volume, SettingsField::VoiceVolume);
+                draw_settings(f, 30, 2500, &volume, SettingsField::VoiceVolume);
             })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
@@ -7825,6 +7886,11 @@ mod tests {
     }
 
     #[test]
+    fn settings_field_next_from_text_speed_goes_to_auto_wait_ms() {
+        assert_eq!(SettingsField::TextSpeed.next(), SettingsField::AutoWaitMs);
+    }
+
+    #[test]
     fn settings_field_prev_wraps_around_from_text_speed_to_voice_volume() {
         assert_eq!(SettingsField::TextSpeed.prev(), SettingsField::VoiceVolume);
     }
@@ -7833,12 +7899,34 @@ mod tests {
     fn settings_field_next_then_prev_returns_to_original() {
         for field in [
             SettingsField::TextSpeed,
+            SettingsField::AutoWaitMs,
             SettingsField::BgmVolume,
             SettingsField::SeVolume,
             SettingsField::VoiceVolume,
         ] {
             assert_eq!(field.next().prev(), field);
         }
+    }
+
+    #[test]
+    fn settings_field_next_from_auto_wait_ms_goes_to_bgm_volume() {
+        assert_eq!(SettingsField::AutoWaitMs.next(), SettingsField::BgmVolume);
+    }
+
+    #[test]
+    fn settings_field_prev_from_bgm_volume_goes_to_auto_wait_ms() {
+        assert_eq!(SettingsField::BgmVolume.prev(), SettingsField::AutoWaitMs);
+    }
+
+    #[test]
+    fn settings_field_next_applied_five_times_cycles_back_to_text_speed() {
+        // TextSpeed→AutoWaitMs→BgmVolume→SeVolume→VoiceVolume→TextSpeedの並び順自体を
+        // 固定する回帰ガード（next_then_prevの往復性テストとは別に、挿入位置の並びを守る）。
+        let mut field = SettingsField::TextSpeed;
+        for _ in 0..5 {
+            field = field.next();
+        }
+        assert_eq!(field, SettingsField::TextSpeed);
     }
 
     // ---- テスト観点整理担当の指摘に基づく追加テスト（境界値・null/空文字）。既存の
