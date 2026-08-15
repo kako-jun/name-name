@@ -394,6 +394,14 @@ export class NovelRenderer {
   private static readonly ENDING_LOGO_IMAGE_ID = '__ending_logo__'
   /** 旧 DOM 版 `max-w-[20%]`（終劇ロゴの表示幅）相当。 */
   private static readonly ENDING_LOGO_WIDTH_RATIO = 0.2
+  /**
+   * 旧 DOM 版 `max-h-16`（4rem=64px）相当（#630 セルフレビュー must M2）。`ENDING_LOGO_PADDING_PX`
+   * と同じ論理解像度（px）基準。幅比率と高さ上限の両方を満たす小さい方のスケールを
+   * `characterLayer.showImage()` の `maxHeight` オプション経由で採用させ、旧版の
+   * `object-contain` 2軸制約を再現する（1280×720系アセットで幅基準のみだと旧比2倍超に
+   * なり "to be continued..." と重なる崩れが実証されている）。
+   */
+  private static readonly ENDING_LOGO_MAX_HEIGHT_PX = 64
   /** 旧 DOM 版 `top-3 left-3`（0.75rem=12px）相当。終劇ロゴの左上余白。 */
   private static readonly ENDING_LOGO_PADDING_PX = 12
 
@@ -1830,8 +1838,12 @@ export class NovelRenderer {
    * ロゴは `characterLayer.showImage()`（#628 フェーズ2a のフェード機構）に委譲する。
    * `transition` は指定しない＝既定 Fade のまま（この用途にピクセレート演出は不要、Issue 方針）。
    * 呼び出しは常に `syncEndingOverlayVisibility()` 経由（このメソッド自体は判定を持たない）。
+   *
+   * @param instant `showImage()` に渡す即時表示フラグ (#630 セルフレビュー must M1)。goBack/seekTo/
+   *   セーブ復元（`applyState()` 経由）は true を渡し、フェード（既定 700ms）を発火させない。
+   *   通常の物語進行による storyEnded 遷移（`endStory()` 経由）は false（既定 Fade）のまま。
    */
-  private showEndingOverlay(): void {
+  private showEndingOverlay(instant = false): void {
     this.endingOverlay.setFontFamily(
       resolveFontFamily(null, this.gameDefaultFontFamily, NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY)
     )
@@ -1849,7 +1861,9 @@ export class NovelRenderer {
         x: centerX / this.screenWidth,
         y: centerY / this.screenHeight,
         size: logoSize,
+        maxHeight: NovelRenderer.ENDING_LOGO_MAX_HEIGHT_PX,
         assetBaseUrl: this.assetBaseUrl,
+        instant,
         onError: () => {
           // 404 等: 旧 DOM 版と同じくロゴは単に出さない（テキストへのフォールバックは無い）。
         },
@@ -1875,10 +1889,13 @@ export class NovelRenderer {
    * それぞれの変化直後に呼ぶことで、呼び出しタイミング自体が同じスナップショット効果を持つ
    * （`intermissionEvents` は `setIntermissionScene()` からしか変わらず、そちらはこのメソッドの
    * 呼び出し元では無いため、意図せず再評価されることはない）。
+   *
+   * @param instant `showEndingOverlay()` へそのまま渡す即時表示フラグ (#630 セルフレビュー must M1)。
+   *   既定 false（Fade）。goBack/seekTo/セーブ復元を扱う `applyState()` からの呼び出しだけ true を渡す。
    */
-  private syncEndingOverlayVisibility(): void {
+  private syncEndingOverlayVisibility(instant = false): void {
     if (this.storyEnded && !this.intermissionEvents) {
-      this.showEndingOverlay()
+      this.showEndingOverlay(instant)
     } else {
       this.hideEndingOverlay()
     }
@@ -3244,7 +3261,10 @@ export class NovelRenderer {
     // 旧 DOM 版は React state が再マウントを跨いで保持されることで表示を維持していたが、新
     // renderer インスタンスの endingOverlay は必ず非表示から始まるため、ここで明示的に同期しないと
     // 「fluid 再マウント直後は終劇表示が消える」regression になる）。
-    this.syncEndingOverlayVisibility()
+    // instant: true (#630 セルフレビュー must M1)。applyState() はすべて goBack/seekTo/セーブ復元
+    // 経由（このメソッド自体のコメント冒頭 #386 参照）なので、CharacterLayer 既定の Fade（700ms）を
+    // 発火させず即時反映する。通常の物語進行（endStory()）はこの経路を通らないため影響しない。
+    this.syncEndingOverlayVisibility(true)
 
     // 背景復元
     if (state.backgroundPath) {
