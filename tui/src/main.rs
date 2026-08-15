@@ -446,6 +446,30 @@ fn resolve_event_image_transition_duration_ms(
     }
 }
 
+/// event_image の Fade/Pixelate 遷移を実際に開始すべきかを判定する
+/// (dev-doctrine 規約3: `event_loop` 本体に判定ロジックを直書きせず純粋関数に切り出す)。
+///
+/// 通常は `current_target`（現在表示中のパス）と `target`（新しいパス）が一致する場合、
+/// 無駄な再フェードトリガーを防ぐため何もしない（#481由来の全遷移共通ガード）。ただし
+/// Pixelate 遷移だけは例外で、表示中のイベント絵と同じパスへ`遷移=pixelate`で再指定
+/// された場合でも実際にコルセン→自己スワップ→リファインを再生する。GUI版
+/// `EventImageLayer.show()` はパスの同一性を見ず「表示中の絵の有無」（`this.sprite`
+/// の有無）だけで判定するため常にこの経路を再生しており、TUI版もこれに揃える
+/// （#590、旧: `docs/architecture.md`「既知の非対称性」節。対称化した経緯として
+/// 同節に追記済み）。`target.is_some()` を併せて見ているのは、`target=None`
+/// （イベント絵が無い行）で `target_transition` がたまたま既定外の値を持つような
+/// 想定外入力でも、無からの無駄な再トリガーを起こさないための防御（`target=None`の
+/// ケースは通常のパス不一致条件で必要な分だけ既にカバーされている）。
+fn should_start_image_fade_transition(
+    current_target: Option<&str>,
+    target: Option<&str>,
+    target_transition: name_name_parser::models::EventImageTransition,
+) -> bool {
+    current_target != target
+        || (target_transition == name_name_parser::models::EventImageTransition::Pixelate
+            && target.is_some())
+}
+
 /// 描画 → 短いタイムアウト付きでキー入力を待つ → 再生状態更新、を1件終了
 /// (`Action::Quit`)まで繰り返す。
 ///
@@ -1131,9 +1155,15 @@ where
                     let target_fade_ms = playback
                         .current_line()
                         .and_then(|line| line.event_image_fade_ms);
-                    if image_fade.current_target() != target.as_deref() {
+                    if should_start_image_fade_transition(
+                        image_fade.current_target(),
+                        target.as_deref(),
+                        target_transition,
+                    ) {
                         // Fade/Pixelate 間の crossfade_ms vs per-event `フェード=N` の非対称は
                         // `resolve_event_image_transition_duration_ms` のdoc comment参照。
+                        // 同一パスへの再指定でも実際に再生すべきかの判定は
+                        // `should_start_image_fade_transition` のdoc comment参照（#590）。
                         let duration_ms = resolve_event_image_transition_duration_ms(
                             target_transition,
                             target_fade_ms,
@@ -1642,6 +1672,76 @@ mod tests {
             700,
         );
         assert_eq!(duration, 700);
+    }
+
+    // should_start_image_fade_transition（同一パス再指定時のGUI/TUI対称化、#590）の分岐。
+    // event_loop 内の if 条件をそのまま切り出した純粋関数のため、event_loop 全体の
+    // TestBackend 統合テストを組まずにここで直接ロックできる
+    // （上の resolve_event_image_transition_duration_ms 群と同じ切り出し方針）。
+
+    #[test]
+    fn should_start_image_fade_transition_path_changed_fade_starts() {
+        // パス不一致 + Fade → 従来どおり開始する。
+        assert!(should_start_image_fade_transition(
+            Some("a.webp"),
+            Some("b.webp"),
+            name_name_parser::models::EventImageTransition::Fade,
+        ));
+    }
+
+    #[test]
+    fn should_start_image_fade_transition_path_changed_pixelate_starts() {
+        // パス不一致 + Pixelate → 従来どおり開始する。
+        assert!(should_start_image_fade_transition(
+            Some("a.webp"),
+            Some("b.webp"),
+            name_name_parser::models::EventImageTransition::Pixelate,
+        ));
+    }
+
+    #[test]
+    fn should_start_image_fade_transition_same_path_fade_is_no_op() {
+        // 同一パス + Fade → #481由来のガードどおり無駄な再フェードを起こさない
+        // （event_loop_advance_to_same_event_image_path_does_not_restart_fade_timer の
+        // 統合テストが検証している回帰と同じ性質を、ここでは純粋関数レベルで直接ロックする）。
+        assert!(!should_start_image_fade_transition(
+            Some("a.webp"),
+            Some("a.webp"),
+            name_name_parser::models::EventImageTransition::Fade,
+        ));
+    }
+
+    #[test]
+    fn should_start_image_fade_transition_same_path_pixelate_restarts() {
+        // 同一パス + Pixelate → #590でGUIと対称化: パス一致でも再生する
+        // （GUI版 EventImageLayer.show() が「表示中の絵の有無」だけで判定するのと対称）。
+        assert!(should_start_image_fade_transition(
+            Some("a.webp"),
+            Some("a.webp"),
+            name_name_parser::models::EventImageTransition::Pixelate,
+        ));
+    }
+
+    #[test]
+    fn should_start_image_fade_transition_none_to_none_pixelate_is_no_op() {
+        // target=None（イベント絵の無い行）は、target_transitionがたまたまPixelateの
+        // 想定外入力でも無からの無駄な再トリガーを起こさない（target.is_some()ガード）。
+        assert!(!should_start_image_fade_transition(
+            None,
+            None,
+            name_name_parser::models::EventImageTransition::Pixelate,
+        ));
+    }
+
+    #[test]
+    fn should_start_image_fade_transition_some_to_none_pixelate_starts() {
+        // パス不一致（表示中の絵 → 絵の消滅）は Pixelate 指定でも通常のパス不一致条件で
+        // 開始する（target.is_some()ガードには引っかからない）。
+        assert!(should_start_image_fade_transition(
+            Some("a.webp"),
+            None,
+            name_name_parser::models::EventImageTransition::Pixelate,
+        ));
     }
 
     #[test]
@@ -2505,6 +2605,64 @@ mod tests {
             !buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
             "同一パスへの2回目のAdvanceでフェードが再トリガーされ、本来まだ進行中(60秒中の\
              数ms)のはずのフェードが完了して見えてしまっている(無駄な再トリガー、退行)"
+        );
+    }
+
+    #[test]
+    fn event_loop_advance_to_same_event_image_path_restarts_pixelate_transition() {
+        // event_loop_advance_to_same_event_image_path_does_not_restart_fade_timer の対
+        // (Pixelate版、#590セルフレビューshould対応): 「同一パスでも再トリガーする」仕様が
+        // should_start_image_fade_transition の純粋関数テストだけでなく、実際の呼び出し配線
+        // (parser→playback→event_loop→image_fade→render)を通しても機能していることの
+        // 統合ガード。crossfade_ms を60秒にして、最初の None→A 遷移がまだコルセンフェーズ
+        // (t≈0、from=Noneなのでpixelate_snapshotはblank_grid=黒を返す)の途中である状態を
+        // 作る。2回目のAdvance(A→A、同一パス)を発行し、再トリガーされていれば新しい遷移は
+        // from=A(直前のto)・to=Aで開始され、そのコルセンフェーズはfrom(=A)を描画する
+        // ——単色フィクスチャなので粗さ(divisor)に関わらず色そのものは不変(D-1と同じ理由)
+        // ——ためfixture_colorが見えるはず。再トリガーされず(退行)、最初の遷移がそのまま
+        // 引き継がれていた場合はfrom=Noneのコルセンフェーズ(黒)のままで、fixture_colorは
+        // 見えない。
+        let fixture_color = (10u8, 200u8, 60u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(fixture_color, 2, 2), 2, 2);
+        let mut config = instant_config();
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        config.event_image.crossfade_ms = 60_000;
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut playback = Playback::from_lines(vec![
+            dline_with_image_pixelate(Some("A"), "one", None),
+            dline_with_image_pixelate(Some("B"), "two", Some(relative.clone())),
+            dline_with_image_pixelate(Some("C"), "three", Some(relative)),
+        ]);
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) =
+            action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert!(
+            buffer_has_bg_color(terminal.backend().buffer(), fixture_color),
+            "同一パスへの2回目のAdvanceでPixelate遷移が再トリガーされず、最初の遷移\
+             (from=None、コルセン中は黒)がそのまま引き継がれてしまっている\
+             (#590の同一パス再トリガーの退行)"
         );
     }
 
