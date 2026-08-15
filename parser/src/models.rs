@@ -842,6 +842,16 @@ pub enum Event {
     /// アセットパスは背景画像と同じく `assetBaseUrl + '/images/' + path`。
     /// `[タイトル]` と同様 CharacterLayer に id（既定 "Image"）名で登録され、`[アニメ]` 等の
     /// 対象になれる。render-only で `NovelGameState.characters` には漏らさない（doctrine 規律3）。
+    ///
+    /// `transition` (#628): `[画像: path, 遷移=pixelate, フェード=800]` で `EventImage`
+    /// （#583）と同じ `Pixelate` 遷移（ドットが段階的に荒くなる→切り替わる→段階的に細かく戻る）
+    /// を選べる。`EventImage` の `transition` はフロントマター `Document::event_image_transition`
+    /// （#599）のデフォルト解決を parser 側で受けるが、`Image` はこの仕組みを共有しない —
+    /// `遷移=` 未指定時は常に `EventImageTransition::Fade` 固定にする。イベント絵用の
+    /// フロントマターデフォルトと汎用画像の遷移挙動が意図せず連動しないようにするための
+    /// 独立した設計判断。`フェード` / `fade` は表示フェードイン時間 (ms)、または
+    /// `transition` が `Pixelate` の場合は遷移全体の所要時間として再解釈される
+    /// （`EventImage.fade_ms` と同じ流儀）。
     Image {
         /// 画像の相対パス（`assets/images/` 起点）。
         path: String,
@@ -866,6 +876,16 @@ pub enum Event {
         /// 縦位置の比率 override (0..1 の float) (#275)。日本語/英語とも `y`。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         y: Option<f64>,
+        /// 遷移モード (#628)。`EventImage.transition` と同じ `EventImageTransition` 型を再利用する。
+        /// タグに `遷移=` が明示されなかった場合は常に `Fade`（frontmatter デフォルトは受けない、
+        /// 型 doc の設計判断を参照）。
+        #[serde(default)]
+        transition: EventImageTransition,
+        /// 個別の表示フェードイン時間 (ms)。`None` は GUI/TUI レンダラ側の既定に委ねる。
+        /// `Some(0)` は即時表示。`transition` が `Pixelate` の場合は遷移全体の所要時間として
+        /// 再解釈される（`EventImage.fade_ms` と同じ流儀）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade_ms: Option<u32>,
     },
     /// 文字ウィンドウ枠の ON/OFF を切り替える (#135)。
     ///

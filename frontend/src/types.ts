@@ -441,7 +441,11 @@ export type Event =
   | {
       /** 単独の画像 (#274)。`[画像: avatar.png, 位置=上, 円形, サイズ=160, id=avatar]`。
        *  立ち絵（show）に紐付かない単独画像を 2D 位置に出す。アセットパスは背景画像と同じく
-       *  `assetBaseUrl + '/images/' + path`。shape="円形" で円形マスク。render-only。 */
+       *  `assetBaseUrl + '/images/' + path`。shape="円形" で円形マスク。render-only。
+       *
+       *  `transition`/`fade_ms` (#628): EventImage (#583) と同じ `Pixelate` 遷移機構を持つ。
+       *  ただし `EventImage.transition` と異なり frontmatter デフォルト（`event_image_transition`,
+       *  #599）の解決は受けない — 未指定時は parser 側で常に 'Fade' が焼き込まれる。 */
       Image: {
         path: string
         position?: string
@@ -452,6 +456,14 @@ export type Event =
         x?: number
         /** 縦位置の比率 override (0..1) (#275)。 */
         y?: number
+        /** #628 遷移モード。wasm は #[serde(default)] のため型上は optional だが、実際の
+         *  parse_markdown() 出力では常に 'Fade'/'Pixelate' のどちらかが入る（parser.ts で正規化）。
+         *  frontmatter event_image_transition の影響は受けない（常に未指定時は 'Fade'）。 */
+        transition?: EventImageTransition
+        /** #628 表示フェードイン時間 ms。未指定/null は GUI/TUI レンダラ側の既定に委ねる。
+         *  `transition` が 'Pixelate' の場合は遷移全体の所要時間として使う
+         *  （EventImage.fade_ms と同じ流儀）。 */
+        fade_ms?: number | null
       }
     }
   | { DialogBorderless: { borderless: boolean } }
