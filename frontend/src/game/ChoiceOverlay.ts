@@ -20,6 +20,12 @@
  * 移動になる。ロック済み選択肢はフォーカス移動の対象から除外する（TitleScreenOverlay の disabled
  * ボタン除外と同じ扱い）。フォーカスがビューポート外の行に移動したときはドラッグ/ホイールと同じ
  * `scrollOffset` を使ってスクロールし追従する（`handleKeyDown()` 参照）。
+ *
+ * フォーカスリングの visible focus 化 (#639): `show()` 直後は黄色いフォーカスリングを描画しない
+ * （マウス/タップだけで進めるユーザーには見せない）。実際に Tab/矢印キーでフォーカス移動が
+ * 発生した瞬間（`keyboardNavActive`）に初めて有効化し、以後はキーボードユーザーとして扱う
+ * （ブラウザ標準の `:focus-visible` と同じ発想）。詳細は `keyboardNavActive` / `setFocusedIndex` /
+ * `activateKeyboardFocusVisible` 参照。
  */
 
 import {
@@ -447,6 +453,21 @@ export class ChoiceOverlay extends Container {
   private currentTheme: ChoiceTheme = STYLE_THEMES.default
   /** scrollFocusedIntoView (#633) が参照する、現在のビューポート高さ (px)。非スクロール時は未使用。 */
   private viewportHeight = 0
+  /**
+   * 黄色いフォーカスリングの visible focus 化 (#639)。マウス/タップ操作のみで選択肢を
+   * 進めているユーザーには一切リングを見せず、実際に矢印キー/Tab キーでフォーカス移動が
+   * 発生した瞬間に初めて true になる（`:focus-visible` と同じ発想）。一度 true になったら
+   * `hide()`/`show()` を跨いでも false に戻さない——一度キーボード操作したユーザーは
+   * 以後もキーボードユーザーとみなす。`setFocusedIndex()` はこのフラグを見て
+   * `drawFocusRing()` を呼ぶかどうかを切り替える。
+   *
+   * ブラウザネイティブの `:focus-visible` はフォーカスイベントごとにモダリティを再判定し、
+   * マウスクリックでフォーカスが移ればすぐ非表示に戻るが、ここでは意図的にそこまで追わない
+   * 簡略化にしている。選択肢を選ぶたびに毎回モダリティを再判定する実装コストは見合わず、
+   * 一度キーボードで操作した人はそのセッション中は概ねキーボードを使い続けるため、
+   * 「一度 true になったら維持」で十分実用に耐える。
+   */
+  private keyboardNavActive = false
 
   constructor(
     private screenWidth: number,
@@ -874,6 +895,10 @@ export class ChoiceOverlay extends Container {
     // 総入れ替えされた（Graphics インスタンスが変わった）にもかかわらず「インデックス値が
     // たまたま前回と同じだから」という理由で早期 return され新しい focusRing に描画し損ねる
     // 事故を避ける。
+    // #639: このリセット自体はキーボード操作ではないため、リング表示の可否は
+    // keyboardNavActive の現在値（過去にキーボード操作したセッションかどうか）に委ねる。
+    // ここで無条件に有効化はしない——それが「マウスだけで進めても常時黄色いリングが付く」
+    // 元バグの直接原因だった。
     this.focusedIndex = -1
     const firstFocusableIndex = this.choiceEntries.findIndex((e) => !e.locked)
     this.setFocusedIndex(firstFocusableIndex)
@@ -957,6 +982,7 @@ export class ChoiceOverlay extends Container {
    * indices 算出・循環計算そのものは `novelLayout.ts` の純粋関数に委ねる (dev-doctrine 規約4)。
    */
   private moveFocus(direction: 1 | -1): void {
+    this.activateKeyboardFocusVisible()
     const indices = computeFlatFocusIndices(this.choiceEntries)
     const next = stepFocusIndex(indices, this.focusedIndex, direction)
     if (next !== null) this.setFocusedIndex(next)
@@ -964,6 +990,7 @@ export class ChoiceOverlay extends Container {
 
   /** グリッド配置 (#508) 時、フォーカス中の選択肢と同じ列 (col) の中だけで上下に移動する。 */
   private moveFocusInColumn(direction: 1 | -1): void {
+    this.activateKeyboardFocusVisible()
     const col = this.choiceEntries[this.focusedIndex]?.col ?? 0
     const indices = computeColumnFocusIndices(this.choiceEntries, col)
     const next = stepFocusIndex(indices, this.focusedIndex, direction)
@@ -972,10 +999,29 @@ export class ChoiceOverlay extends Container {
 
   /** グリッド配置 (#508) 時、フォーカス中の選択肢と同じ行 (row) の中だけで左右に移動する。 */
   private moveFocusInRow(direction: 1 | -1): void {
+    this.activateKeyboardFocusVisible()
     const row = this.choiceEntries[this.focusedIndex]?.row ?? 0
     const indices = computeRowFocusIndices(this.choiceEntries, row)
     const next = stepFocusIndex(indices, this.focusedIndex, direction)
     if (next !== null) this.setFocusedIndex(next)
+  }
+
+  /**
+   * 矢印キー/Tab キーによるフォーカス移動が実際に発生した瞬間に、黄色いフォーカスリングの
+   * visible focus 化フラグ (`keyboardNavActive`) を一度だけ立てる (#639)。
+   *
+   * `moveFocus`/`moveFocusInColumn`/`moveFocusInRow` の冒頭で必ず呼ぶ。選択肢が1件しかない
+   * （または移動先候補が現在位置しかない）場合、`stepFocusIndex` は現在の index をそのまま
+   * 返すことがあり、その場合 `setFocusedIndex` は「index が変わらない」早期 return でリングを
+   * 描画しない。しかしユーザーは確かにキーボード操作した（＝キーボードユーザーである）ため、
+   * フラグが false→true に切り替わった瞬間だけ、現在フォーカス中のエントリを明示的に
+   * 再描画してこの取りこぼしを防ぐ。
+   */
+  private activateKeyboardFocusVisible(): void {
+    if (this.keyboardNavActive) return
+    this.keyboardNavActive = true
+    const current = this.choiceEntries[this.focusedIndex]
+    if (current) this.drawFocusRing(current.focusRing)
   }
 
   private setFocusedIndex(index: number): void {
@@ -985,7 +1031,11 @@ export class ChoiceOverlay extends Container {
     this.focusedIndex = index
     const next = this.choiceEntries[this.focusedIndex]
     if (next) {
-      this.drawFocusRing(next.focusRing)
+      // #639: マウス/タップ操作だけで進めているユーザーには一切見せない。過去にキーボード
+      // 操作（Tab/矢印）でフォーカス移動したことがある（= keyboardNavActive）場合だけ描画する。
+      if (this.keyboardNavActive) {
+        this.drawFocusRing(next.focusRing)
+      }
       this.scrollFocusedIntoView(next.row)
     }
   }

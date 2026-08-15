@@ -2445,6 +2445,31 @@ describe('PlayerScreen', () => {
     })
   })
 
+  // #639: :focus-visible の実ブラウザ挙動（マウスでは出ずキーボードでは出る）は jsdom で
+  // 再現できないが、クラス文字列が DOM に実際に載っていることは機械チェックできる。将来の
+  // リファクタでこのクラスが誤って落ちても検知できるよう固定する。
+  describe('PlayerScreen focus-visible クラス付与 (#639)', () => {
+    it('FV1: 戻るボタンに focus-visible: クラスが付与されている', async () => {
+      listProjectsMock.mockResolvedValue([])
+      getContentsMock.mockResolvedValue({
+        path: 'script.md',
+        sha: 'sha3',
+        content: '',
+      })
+      parseMarkdownMock.mockResolvedValue({ engine: 'name-name', chapters: [] })
+
+      render(<PlayerScreen projectName="x" apiBaseUrl="http://api.test" onBack={() => {}} />)
+
+      const backButton = await screen.findByLabelText('プロジェクト一覧に戻る')
+      expect(backButton.className).toContain('focus-visible:')
+    })
+
+    it('FV2: header:"collapsed" の折りたたみハンドルに focus-visible: クラスが付与されている', async () => {
+      await renderWithFrontmatter({ header: 'collapsed' })
+      expect(screen.getByLabelText('ヘッダーを表示').className).toContain('focus-visible:')
+    })
+  })
+
   // --- #394: プレイヤーの見た目テーマ（既定 dark・?theme=light で light）---
   //
   // App の darkMode（エディタ UI 用の isDark prop）ではなく `?theme=` で決まる。

@@ -368,6 +368,37 @@ describe('NovelPlayer ボタン出し分け', () => {
   })
 })
 
+// #639: :focus-visible 自体の実ブラウザ挙動（マウスでは出ずキーボードでは出る）は jsdom で
+// 再現できないが、クラス文字列が DOM に実際に載っていることは機械チェックできる。将来の
+// リファクタでこのクラスが誤って落ちても検知できるよう、対象ボタンごとに1テストで縛る。
+describe('NovelPlayer focus-visible クラス付与 (#639)', () => {
+  it('FV1: Skip(S) ボタンに focus-visible: クラスが付与されている', async () => {
+    render(<NovelPlayer events={[]} skipEnabled={true} />)
+    await flushAsync()
+    expect(skipButton()?.className).toContain('focus-visible:')
+  })
+
+  it('FV2: Auto(A) ボタンに focus-visible: クラスが付与されている', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(screen.queryByRole('button', { name: /オートモードを/ })?.className).toContain(
+      'focus-visible:'
+    )
+  })
+
+  it('FV3: 設定ボタンに focus-visible: クラスが付与されている', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(screen.getByRole('button', { name: '設定を開く' }).className).toContain('focus-visible:')
+  })
+
+  it('FV4: Debug(D) ボタンに focus-visible: クラスが付与されている', async () => {
+    render(<NovelPlayer events={[]} debugEnabled={true} />)
+    await flushAsync()
+    expect(debugButton()?.className).toContain('focus-visible:')
+  })
+})
+
 describe('NovelPlayer 右下スロット詰め（DT-SLOT）', () => {
   // ボタンの inline style.right を検証する。pixel の見た目は対象外（blink）。
   // 採番: 右端から settings(slot0=12px) → auto(slot1=56px) → skip → debug の順で 44px 間隔。

@@ -184,7 +184,7 @@ export function SettingsOverlay({
           <button
             type="button"
             onClick={() => onChange({ ...DEFAULT_SETTINGS })}
-            className="text-sm text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-gray-800"
+            className="text-sm text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900"
           >
             デフォルトに戻す
           </button>

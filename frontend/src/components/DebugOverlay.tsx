@@ -144,6 +144,7 @@ export function DebugOverlay({
         <button
           type="button"
           onClick={handleCopy}
+          className="focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
           style={{
             background: copied ? 'rgba(134, 239, 172, 0.18)' : 'rgba(103, 232, 249, 0.15)',
             color: copied ? '#86efac' : '#67e8f9',
@@ -162,6 +163,7 @@ export function DebugOverlay({
             onClick={() => onClose()}
             aria-label="デバッグパネルを閉じる"
             title="デバッグパネルを閉じる"
+            className="focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
             style={{
               background: 'rgba(103, 232, 249, 0.15)',
               color: '#67e8f9',
