@@ -24,7 +24,10 @@
  * Enter/Space でのフォーカス中ボタン実行、`Graphics` 枠線による visible focus 表示を持つ
  * （`handleKeyDown()` 参照）。`pointerover`/`pointerout` によるマウス hover 強調とは独立した
  * 別レイヤーの視覚表現とし、互いに干渉しない。
- * `ChoiceOverlay`（選択肢 UI, #146）のキーボード操作は別フェーズで対応する（#633 未対応）。
+ * `ChoiceOverlay`（選択肢 UI, #146）のキーボード操作は別フェーズ（#633 フェーズB）で対応済み。
+ * 本クラスと同じ Tab/矢印/Enter/Space パターンを踏襲しつつ、可変個数・グリッド配置 (#508)・
+ * ロック (#591)・#339 スクロール可能リストへの追従の分だけ拡張している（詳細は
+ * `ChoiceOverlay.handleKeyDown()` 参照）。
  */
 
 import { Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'

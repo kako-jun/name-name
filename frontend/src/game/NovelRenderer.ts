@@ -3521,6 +3521,21 @@ export class NovelRenderer {
       return
     }
 
+    // 選択肢表示中 (#633 フェーズB): キー入力は ChoiceOverlay 自身のキーボードフォーカス管理
+    // （Tab/Shift+Tab・矢印でのフォーカス移動、Enter/Space での確定）に委譲する。
+    // titleScreenOverlay.visible ガード（#633 フェーズA）と同じ「委譲して即 return」パターン。
+    // `choiceOverlay.visible` ではなく `waitingForChoice` を見るのは、`handleWheel`（3319行目
+    // 付近）が既に同じ状態変数で choiceOverlay への委譲有無を判定しており、判定軸を増やさない
+    // ため。ChoiceOverlay.handleKeyDown が false を返すキー（縦一列時の ArrowLeft/ArrowRight 等）
+    // でもここで return する — advance()/goBack() は自前で waitingForChoice ガードを持つため、
+    // switch 文へフォールスルーさせなくても no-op のまま変わらない（handleKeyDown 全体の早期
+    // return なので二重チェックにならない）。
+    if (this.waitingForChoice) {
+      const handled = this.choiceOverlay.handleKeyDown(e.key, e.shiftKey)
+      if (handled) e.preventDefault()
+      return
+    }
+
     // Escape: 開いているオーバーレイを閉じる
     if (e.key === 'Escape') {
       if (this.backlogOverlay.visible) {

@@ -1299,7 +1299,10 @@ describe('ChoiceOverlay グリッド×完了整合性・ロック優先順位 (#
     expect(buttons.length).toBe(10)
     const buttonFillCalls = fillSpy.mock.calls.filter((args) => typeof args[0] === 'number')
     expect(buttonFillCalls.length).toBe(10)
-    expect(strokeSpy.mock.calls.length).toBe(10)
+    // 10 ボタン本体分 + show() が末尾で最初の未ロック選択肢(index 0)へ自動フォーカスする際の
+    // visible focus 枠線 stroke 1回分 (#633)。以降の forEach 内アサーションは
+    // strokeSpy.mock.calls[0..9] だけを見るため、末尾に積まれるこの1回とは干渉しない。
+    expect(strokeSpy.mock.calls.length).toBe(11)
 
     buttons.forEach((button, i) => {
       const expectedCleared = cleared[i]
