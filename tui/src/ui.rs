@@ -7908,6 +7908,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn settings_field_next_from_auto_wait_ms_goes_to_bgm_volume() {
+        assert_eq!(SettingsField::AutoWaitMs.next(), SettingsField::BgmVolume);
+    }
+
+    #[test]
+    fn settings_field_prev_from_bgm_volume_goes_to_auto_wait_ms() {
+        assert_eq!(SettingsField::BgmVolume.prev(), SettingsField::AutoWaitMs);
+    }
+
+    #[test]
+    fn settings_field_next_applied_five_times_cycles_back_to_text_speed() {
+        // TextSpeed→AutoWaitMs→BgmVolume→SeVolume→VoiceVolume→TextSpeedの並び順自体を
+        // 固定する回帰ガード（next_then_prevの往復性テストとは別に、挿入位置の並びを守る）。
+        let mut field = SettingsField::TextSpeed;
+        for _ in 0..5 {
+            field = field.next();
+        }
+        assert_eq!(field, SettingsField::TextSpeed);
+    }
+
     // ---- テスト観点整理担当の指摘に基づく追加テスト（境界値・null/空文字）。既存の
     // `draw_backlog_scroll_beyond_content_clamps_to_max_scroll`（超過）と
     // `draw_backlog_scroll_within_bounds_is_unchanged`（範囲内）はカバー済みだが、

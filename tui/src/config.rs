@@ -687,6 +687,51 @@ mod tests {
         assert_eq!(decrement_volume_percent(3), 0);
     }
 
+    // ---- #644: AUTO_WAIT_STEP_MSで割り切れない半端値を含むclamp境界値 ----
+
+    #[test]
+    fn increment_auto_wait_ms_clamps_off_step_value_up_to_max() {
+        // STEP(500)刻みでは到達しない9999（境界-1）からでも上限にclampされる。
+        assert_eq!(increment_auto_wait_ms(9999), 10000);
+    }
+
+    #[test]
+    fn increment_auto_wait_ms_at_max_is_idempotent() {
+        // 既に上限ちょうどなら変化しない。
+        assert_eq!(increment_auto_wait_ms(10000), 10000);
+    }
+
+    #[test]
+    fn increment_auto_wait_ms_clamps_when_starting_above_max() {
+        // 上限を超えた入力（境界+1相当）でもclampの頑健性は保たれる。
+        assert_eq!(increment_auto_wait_ms(10500), 10000);
+    }
+
+    #[test]
+    fn decrement_auto_wait_ms_clamps_off_step_value_down_to_min() {
+        // STEP(500)刻みでは到達しない501（境界+1）からでも下限にclampされる。
+        assert_eq!(decrement_auto_wait_ms(501), 500);
+    }
+
+    #[test]
+    fn decrement_auto_wait_ms_at_min_is_idempotent() {
+        // 既に下限ちょうどなら変化しない。
+        assert_eq!(decrement_auto_wait_ms(500), 500);
+    }
+
+    #[test]
+    fn decrement_auto_wait_ms_clamps_when_saturated_to_zero() {
+        // u64のsaturating_subで0になった状態（境界-1相当）からでも下限にclampされる。
+        assert_eq!(decrement_auto_wait_ms(0), 500);
+    }
+
+    #[test]
+    fn increment_and_decrement_auto_wait_ms_step_by_500_in_normal_range() {
+        // clamp境界から離れた通常区間では、単純にSTEP(500)刻みで増減する。
+        assert_eq!(increment_auto_wait_ms(2500), 3000);
+        assert_eq!(decrement_auto_wait_ms(2500), 2000);
+    }
+
     #[test]
     fn percent_to_volume_scale_converts_to_0_1_range() {
         assert_eq!(percent_to_volume_scale(70), 0.7);
