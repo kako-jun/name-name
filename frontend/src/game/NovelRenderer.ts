@@ -1027,7 +1027,7 @@ export class NovelRenderer {
 
   /**
    * 同じ scenario を最初から再開する (texture cache は維持)。
-   * 動画モードの「新規開始」直後に AudioContext を起動してから冒頭の voice 付き event を
+   * 動画モードの「はじめから」直後に AudioContext を起動してから冒頭の voice 付き event を
    * 再走させる用途。setEvents() は texture を Assets.unload するため、render と並行すると
    * Pixi が `Cannot read properties of null (reading 'alphaMode')` で落ちる。restart() は
    * texture を維持するため安全。
@@ -1774,6 +1774,8 @@ export class NovelRenderer {
     onContinue: () => void
     onOpenSettings: () => void
     onBack: () => void
+    /** 「終了」ボタンを表示するか (#643)。TitleScreenShowOptions 参照。既定 true。 */
+    showExitButton?: boolean
   }): void {
     this.dialogBox.visible = false
     this.seekBar.setTitleScreenHidden(true)
@@ -1798,6 +1800,7 @@ export class NovelRenderer {
       onContinue: suppressAdvanceThenRun(opts.onContinue),
       onOpenSettings: suppressAdvanceThenRun(opts.onOpenSettings),
       onBack: suppressAdvanceThenRun(opts.onBack),
+      showExitButton: opts.showExitButton,
     })
     // ロゴ画像。読み込み成否は onLoaded/onError で TitleScreenOverlay に伝え、
     // フォールバックテキストの表示可否を切り替える（#628 フェーズ2b、CharacterLayer.showImage

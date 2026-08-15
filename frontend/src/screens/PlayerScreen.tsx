@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import NovelPlayer from '../components/NovelPlayer'
+import NovelPlayer, { type NovelPlayerHandle } from '../components/NovelPlayer'
 import RPGPlayer from '../components/RPGPlayer'
 import type { Event, EventDocument, EventScene } from '../types'
 import type { RPGProject } from '../types/rpg'
@@ -293,6 +293,9 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   const entryPathRef = useRef<string | null>(null)
   const loadedDocsRef = useRef<Map<string, EventDocument>>(new Map())
   const loadingDocsRef = useRef<Map<string, Promise<EventDocument | null>>>(new Map())
+  // タイトル画面の「設定」ボタン (#643): NovelPlayer が公開する命令的 API（openSettings）を
+  // 呼ぶための ref。ゲーム内 ⚙ ボタンと同じ設定パネルをタイトルを閉じずに開く。
+  const novelPlayerRef = useRef<NovelPlayerHandle>(null)
 
   // タイトル画面の表示状態 (#141)
   const [titleDismissed, setTitleDismissed] = useState(false)
@@ -868,6 +871,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           <RPGPlayer gameData={rpgProject} view={rpgProject.view} />
         ) : (
           <NovelPlayer
+            ref={novelPlayerRef}
             // タイトル画面 (#628 フェーズ2b): 旧 DOM `TitleOverlay.tsx`（<img>+<button> 4つ）を
             // PixiJS 実装（NovelRenderer.showTitleScreen/hideTitleScreen 経由の
             // TitleScreenOverlay）に置き換えたため、NovelPlayer への渡し方は「表示すべき状態」を
@@ -891,7 +895,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                     title,
                     hasSaveData,
                     onNewGame: () => {
-                      // 新規開始: 既読データをクリアして最初から
+                      // はじめから: 既読データをクリアして最初から
                       clearReadProgress(projectName)
                       setHasSaveData(false)
                       setStartWithSkip(false)
@@ -954,12 +958,24 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                       }
                     },
                     onOpenSettings: () => {
-                      // TODO (#141): NovelPlayer の設定パネルを外部から開く ref を追加して
-                      // タイトル画面の「設定」ボタンからダイレクトに設定を開けるようにする。
-                      // 現時点ではタイトルを閉じてゲーム内の設定ボタン（⚙）から開く。
-                      setTitleDismissed(true)
+                      // #643: タイトルは閉じず、ゲーム内 ⚙ ボタンと同じ設定パネル
+                      // （SettingsOverlay）を novelPlayerRef 経由で開く。SettingsOverlay は
+                      // `absolute inset-0 z-50` の DOM オーバーレイなのでタイトル画面の上に
+                      // 自然に重なり、閉じればタイトルへそのまま戻る。
+                      novelPlayerRef.current?.openSettings()
                     },
                     onBack,
+                    // #643: header: hidden プロジェクト（Gymnasia 等、name-name 自身の存在を
+                    // プレイヤーに見せたくない構成）では、タイトル画面から name-name トップへ
+                    // 戻る「終了」ボタン自体を出さない（ヘッダを隠す意図と矛盾するため）。
+                    // visible/collapsed（ヘッダ側に戻る導線がある/展開できる）では従来どおり表示。
+                    // セルフレビュー should（#647）: embedded（iframe 埋め込み、L762-771 の
+                    // ヘッダ抑制と同軸）も見る。embedded 時は headerMode に関係なく常にヘッダを
+                    // 出さない（theo-hayami 等の埋め込み文脈では name-name トップへの導線自体が
+                    // 無意味・没入破壊）ため、ヘッダ非表示と終了ボタンの条件を一致させないと、
+                    // embedded かつ headerMode が visible/collapsed のプロジェクトでヘッダは無い
+                    // のに終了ボタンだけ残り、押すと埋め込み文脈から離脱してしまう。
+                    showExitButton: headerMode !== 'hidden' && !embedded,
                   }
                 : null
             }

@@ -69,6 +69,7 @@ interface TitleScreenInternals {
       onContinue: () => void
       onOpenSettings: () => void
       onBack: () => void
+      showExitButton?: boolean
     }) => void
     handleKeyDown: (key: string, shiftKey?: boolean) => boolean
   }
@@ -356,6 +357,29 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
 
     expect(toggleSpy).toHaveBeenCalledTimes(1)
+  })
+
+  // #643 テスト観点整理 D群: showTitleScreen() が受け取った showExitButton をそのまま
+  // titleScreenOverlay.show() へ配線するだけであること（変換・既定値の押し付けをしないこと）。
+  // TitleScreenOverlay 自身の disabled/非描画の挙動は TitleScreenOverlay.test.ts の TC-C1〜C7 が担保する。
+  it('TC-D9: showTitleScreen({showExitButton:false}) を呼ぶと titleScreenOverlay.show() に showExitButton:false がそのまま渡る', () => {
+    const r = new NovelRenderer()
+    const showSpy = vi.spyOn(internals(r).titleScreenOverlay, 'show')
+
+    r.showTitleScreen(makeTitleScreenOpts({ showExitButton: false }))
+
+    expect(showSpy).toHaveBeenCalledTimes(1)
+    expect(showSpy.mock.calls[0][0].showExitButton).toBe(false)
+  })
+
+  it('TC-D10: showExitButton 未指定で showTitleScreen() を呼んでも titleScreenOverlay.show() に渡る showExitButton は undefined のまま（NovelRenderer 層で勝手に true/false へ変換していない）', () => {
+    const r = new NovelRenderer()
+    const showSpy = vi.spyOn(internals(r).titleScreenOverlay, 'show')
+
+    r.showTitleScreen(makeTitleScreenOpts())
+
+    expect(showSpy).toHaveBeenCalledTimes(1)
+    expect(showSpy.mock.calls[0][0].showExitButton).toBeUndefined()
   })
 })
 

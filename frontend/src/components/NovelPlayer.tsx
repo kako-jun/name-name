@@ -1,6 +1,8 @@
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -60,6 +62,17 @@ function writeDebugOpen(open: boolean): void {
   } catch {
     // SSR/未対応/プライベートモード等。永続化できなくても UI 状態は React state で動く。
   }
+}
+
+/**
+ * NovelPlayer が外部（PlayerScreen のタイトル画面ハンドラ等）に公開する命令的 API (#643)。
+ * タイトル画面の「設定」ボタンはゲーム内 ⚙ ボタンと同じ `settingsOpen` state を開くだけで、
+ * タイトル自体は閉じない（`SettingsOverlay` は `absolute inset-0 z-50` の DOM オーバーレイなので
+ * タイトル画面の上に自然に重なり、閉じればタイトルへ戻る）。
+ */
+export interface NovelPlayerHandle {
+  /** ゲーム内 ⚙ ボタンと同じ設定パネルを開く。 */
+  openSettings: () => void
 }
 
 interface NovelPlayerProps {
@@ -203,8 +216,8 @@ interface NovelPlayerProps {
    *  null/undefined でタイトル画面自体を出さない（deep-link 等、呼び出し側 PlayerScreen が
    *  `startSceneId === null && !titleDismissed` のときだけオブジェクトを渡す想定）。
    *  オブジェクト自体は呼び出し側で毎レンダー作り直されうる（コールバックのクロージャ含む）ため、
-   *  再表示の要否は `title`/`hasSaveData`/`dark`（と null 遷移）だけを見て判定し、コールバックの
-   *  参照同一性には依存しない（下記 useEffect 参照、無限ループ防止）。 */
+   *  再表示の要否は `title`/`hasSaveData`/`dark`/`showExitButton`（と null 遷移）だけを見て判定し、
+   *  コールバックの参照同一性には依存しない（下記 useEffect 参照、無限ループ防止）。 */
   titleScreen?: {
     title: string
     hasSaveData: boolean
@@ -212,6 +225,10 @@ interface NovelPlayerProps {
     onContinue: () => void
     onOpenSettings: () => void
     onBack: () => void
+    /** 「終了」ボタンを表示するか (#643)。frontmatter `header: hidden` のプロジェクトでは
+     *  PlayerScreen が false を渡し、name-name トップへ戻る導線自体をタイトル画面から消す。
+     *  null/undefined/true で従来どおり表示（後方互換）。 */
+    showExitButton?: boolean
   } | null
   /** タイトル画面の暗さ (#628 フェーズ2b)。旧 TitleOverlay.tsx の `dark` prop（プレイヤーテーマ
    *  playerDark）と同じ意味。true で #111827（gray-900）、false で #1e1b4b（indigo-950）。 */
@@ -231,49 +248,52 @@ interface NovelPlayerProps {
   onRendererReady?: (renderer: NovelRenderer | null) => void
 }
 
-function NovelPlayer({
-  events,
-  scenes,
-  jumpSceneIndex,
-  onResolveMissingScene,
-  initialSceneId,
-  confinedSceneIds,
-  assetBaseUrl,
-  aspectRatio: aspectRatioProp,
-  choiceStyle,
-  fontFamily,
-  fontSize,
-  dialogStyle,
-  protagonist,
-  characterYRatio,
-  characterHeightRatio,
-  characterHeightRatios,
-  characterScale,
-  characterFadeMs,
-  backgroundFadeMs,
-  eventImageFadeMs,
-  eventImageTransitionDefault,
-  backgroundColor,
-  seekbarColor,
-  intermissionEvents,
-  intermissionBackgroundFadeMs,
-  intermissionCharacterFadeMs,
-  intermissionEventImageFadeMs,
-  skipEnabled,
-  debugEnabled,
-  speakerNudge,
-  autoPlay,
-  splitLayout,
-  fullscreenImage,
-  sentencePerPage,
-  pixelArt,
-  titleScreen,
-  dark,
-  debugInfo,
-  docKey,
-  initialSkipMode = false,
-  onRendererReady,
-}: NovelPlayerProps) {
+const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function NovelPlayer(
+  {
+    events,
+    scenes,
+    jumpSceneIndex,
+    onResolveMissingScene,
+    initialSceneId,
+    confinedSceneIds,
+    assetBaseUrl,
+    aspectRatio: aspectRatioProp,
+    choiceStyle,
+    fontFamily,
+    fontSize,
+    dialogStyle,
+    protagonist,
+    characterYRatio,
+    characterHeightRatio,
+    characterHeightRatios,
+    characterScale,
+    characterFadeMs,
+    backgroundFadeMs,
+    eventImageFadeMs,
+    eventImageTransitionDefault,
+    backgroundColor,
+    seekbarColor,
+    intermissionEvents,
+    intermissionBackgroundFadeMs,
+    intermissionCharacterFadeMs,
+    intermissionEventImageFadeMs,
+    skipEnabled,
+    debugEnabled,
+    speakerNudge,
+    autoPlay,
+    splitLayout,
+    fullscreenImage,
+    sentencePerPage,
+    pixelArt,
+    titleScreen,
+    dark,
+    debugInfo,
+    docKey,
+    initialSkipMode = false,
+    onRendererReady,
+  }: NovelPlayerProps,
+  ref
+) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
   // タイトル画面 (#628 フェーズ2b): コールバックの最新版を保持する ref。呼び出し側
@@ -306,6 +326,12 @@ function NovelPlayer({
   // debounce で吸収する (review #155 should-2)
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // タイトル画面の「設定」ボタン (#643): PlayerScreen がゲーム内 ⚙ ボタンと同じ `settingsOpen`
+  // state を外部から開けるよう、命令的 API を ref 経由で公開する。タイトル自体は閉じない
+  // （NovelPlayerHandle の JSDoc 参照）。
+  useImperativeHandle(ref, () => ({
+    openSettings: () => setSettingsOpen(true),
+  }))
   // オートモード ON/OFF (#139)
   // 既定は OFF＝手送り (#436)。frontmatter `auto_play: true` で起動時から ON にできる
   // （llll-ll-media 等の動画用途）。起動後は UI のオートトグルで随時切り替える。
@@ -930,11 +956,19 @@ function NovelPlayer({
         onContinue: () => titleScreenRef.current?.onContinue(),
         onOpenSettings: () => titleScreenRef.current?.onOpenSettings(),
         onBack: () => titleScreenRef.current?.onBack(),
+        showExitButton: ts.showExitButton,
       })
     } else {
       renderer.hideTitleScreen()
     }
-  }, [titleScreenActive, titleScreen?.title, titleScreen?.hasSaveData, dark, rendererReady])
+  }, [
+    titleScreenActive,
+    titleScreen?.title,
+    titleScreen?.hasSaveData,
+    titleScreen?.showExitButton,
+    dark,
+    rendererReady,
+  ])
 
   // intermission.md 専用シーン (#404)。PlayerScreen の非同期取得（assets/raw 経由）は
   // マウント後に解決することが多いため、init effect（マウント時1回）だけでは反映できない。
@@ -1322,6 +1356,6 @@ function NovelPlayer({
       />
     </div>
   )
-}
+})
 
 export default NovelPlayer

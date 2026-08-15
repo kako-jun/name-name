@@ -158,7 +158,7 @@ export function hasAnyReadProgress(docKey: string): boolean {
 
 /**
  * 指定 docKey の既読データを全消去する。
- * タイトル画面の「新規開始」など、進捗リセット時に呼ぶ (#141)。
+ * タイトル画面の「はじめから」など、進捗リセット時に呼ぶ (#141)。
  */
 export function clearReadProgress(docKey: string): void {
   try {

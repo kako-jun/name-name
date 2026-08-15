@@ -16,6 +16,7 @@
 //   存在しないため対象外。ここでは「debugEnabled=true を渡せば D が出る」ことだけ DT2 で縛る。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createRef } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Assets, Texture } from 'pixi.js'
 import {
@@ -197,8 +198,12 @@ vi.mock('../game/NovelRenderer', () => ({
 
 // SettingsOverlay も SettingsOverlay 内の依存を避けるため軽量スタブにする
 //（NovelPlayer の操作ボタンの検証に SettingsOverlay の実装は不要）。
+// #643: `open` prop だけは反映する（forwardRef 化した NovelPlayer.openSettings() が
+// settingsOpen state を実際に開閉することを DOM 出現で確認するテスト用。open=false の間は
+// 従来どおり何も描画しないため、この変更で既存テストへの影響は無い）。
 vi.mock('./SettingsOverlay', () => ({
-  default: () => null,
+  default: (props: { open: boolean }) =>
+    props.open ? <div data-testid="settings-overlay-open" /> : null,
 }))
 
 // #395: iframe 埋め込み検知 isEmbedded() を stub する。本体ロジック（window.self!==window.top・
@@ -253,7 +258,7 @@ const { ResizeObserverMock, triggerResize, resetResizeObserverMock } = vi.hoiste
   }
 })
 
-import NovelPlayer from './NovelPlayer'
+import NovelPlayer, { type NovelPlayerHandle } from './NovelPlayer'
 
 const LS_DEBUG_OPEN = 'nn.debugOverlay.open'
 
@@ -2881,5 +2886,91 @@ describe('NovelPlayer タイトル画面 showTitleScreen/hideTitleScreen race条
     await flushAsync()
 
     expect(r.showTitleScreen).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #643 テスト観点整理 A群: NovelPlayer が forwardRef 化し openSettings() を公開したことの回帰テスト。
+// タイトル画面の「設定」ボタン（PlayerScreen 経由）が、ゲーム内 ⚙ ボタンと同じ settingsOpen state を
+// 開くだけでタイトル自体は閉じない設計であることを、SettingsOverlay の DOM 出現（open prop 反映済み
+// スタブ）と renderer.hideTitleScreen 未呼び出しの両面から縛る。
+describe('NovelPlayer ref API — forwardRef openSettings() (#643)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  it('TC-R1: ref.openSettings() を呼ぶと SettingsOverlay の表示状態が開く（DOM出現）', async () => {
+    const ref = createRef<NovelPlayerHandle>()
+    render(<NovelPlayer ref={ref} events={[]} />)
+    await flushAsync()
+    expect(screen.queryByTestId('settings-overlay-open')).toBeNull()
+
+    act(() => {
+      ref.current?.openSettings()
+    })
+
+    expect(screen.getByTestId('settings-overlay-open')).toBeInTheDocument()
+  })
+
+  it('TC-R2: openSettings() 呼び出し後も titleScreenActive（タイトルのPixi描画）が維持される（hideTitleScreen が呼ばれない）', async () => {
+    const ref = createRef<NovelPlayerHandle>()
+    render(
+      <NovelPlayer
+        ref={ref}
+        events={[]}
+        titleScreen={{
+          title: 'タイトル',
+          hasSaveData: false,
+          onNewGame: vi.fn(),
+          onContinue: vi.fn(),
+          onOpenSettings: vi.fn(),
+          onBack: vi.fn(),
+        }}
+      />
+    )
+    await flushAsync()
+    expect(lastRenderer().showTitleScreen).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      ref.current?.openSettings()
+    })
+
+    expect(lastRenderer().hideTitleScreen).not.toHaveBeenCalled()
+    // タイトル画面表示 effect 自体が再実行されたわけでもない（settingsOpen は依存配列に無い）。
+    expect(lastRenderer().showTitleScreen).toHaveBeenCalledTimes(1)
+  })
+
+  it('TC-R3: openSettings() を連続2回呼んでも例外なく完了する（冪等性）', async () => {
+    const ref = createRef<NovelPlayerHandle>()
+    render(<NovelPlayer ref={ref} events={[]} />)
+    await flushAsync()
+
+    expect(() => {
+      act(() => {
+        ref.current?.openSettings()
+        ref.current?.openSettings()
+      })
+    }).not.toThrow()
+    expect(screen.getByTestId('settings-overlay-open')).toBeInTheDocument()
+  })
+
+  it('TC-R4: titleScreen prop が null（deep-linkモード）の状態で ref.current?.openSettings() を呼んでも例外を投げない', async () => {
+    const ref = createRef<NovelPlayerHandle>()
+    render(<NovelPlayer ref={ref} events={[]} titleScreen={null} />)
+    await flushAsync()
+
+    expect(() => {
+      act(() => {
+        ref.current?.openSettings()
+      })
+    }).not.toThrow()
+    expect(screen.getByTestId('settings-overlay-open')).toBeInTheDocument()
+  })
+
+  it('TC-R5: forwardRef化後、ref を渡さない通常の render では console.error（ref に関する警告）が発生しない', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
   })
 })
