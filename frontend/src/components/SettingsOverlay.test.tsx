@@ -126,12 +126,12 @@ describe('SettingsOverlay 並び順・結線 (#548)', () => {
     expect(onChange).toHaveBeenCalledWith({ ...TEST_SETTINGS, voiceVolume: 0.5 })
   })
 
-  it('TC4: 「オート進行ウェイト」のmin/max/stepが移動後も維持されている(500/8000/100)', () => {
+  it('TC4: 「オート進行ウェイト」のmin/max/stepが移動後も維持されている(500/10000/500、TUI版と一致)', () => {
     const { container } = renderOverlay()
     const input = sliderInput(getSliderLabels(container)[1])
     expect(input.min).toBe('500')
-    expect(input.max).toBe('8000')
-    expect(input.step).toBe('100')
+    expect(input.max).toBe('10000')
+    expect(input.step).toBe('500')
   })
 
   it('TC5: レンダー・全スライダー操作を通してconsole.error/console.warnが一度も呼ばれない', () => {

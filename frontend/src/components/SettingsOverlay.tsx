@@ -139,8 +139,8 @@ export function SettingsOverlay({
             label="オート進行ウェイト"
             value={settings.autoWaitMs}
             min={500}
-            max={8000}
-            step={100}
+            max={10000}
+            step={500}
             onChange={(v) => update({ autoWaitMs: v })}
             format={(v) => `${(v / 1000).toFixed(1)}秒`}
             accentColor={sliderAccentColor}
