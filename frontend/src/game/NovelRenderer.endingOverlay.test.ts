@@ -126,6 +126,69 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
     expect(removeSpy).toHaveBeenCalledWith(ENDING_LOGO_IMAGE_ID, { instant: true })
   })
 
+  it('8 (M1): endStory() 経由の通常の物語進行では instant を渡さない（既定 Fade のまま、非回帰）', () => {
+    const r = makeConfinedRenderer()
+    r.setAssetBaseUrl('/asset-base')
+    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+
+    r.jumpToScene('out')
+
+    expect(showImageSpy).toHaveBeenCalledTimes(1)
+    const call = showImageSpy.mock.calls[0][0] as Record<string, unknown>
+    expect(call.instant).toBeFalsy()
+  })
+
+  it('9 (M1): restoreSnapshot（goBack/seekTo/セーブ復元と同じ applyState() 経路）で終劇状態を復元すると、ロゴは instant:true で表示される（フェード演出を発火させない）', () => {
+    const r = new NovelRenderer()
+    r.setAssetBaseUrl('/asset-base')
+    r.setScenes([scene('a', [narration('本文')])])
+    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+
+    const snapshot: NovelGameState = {
+      sceneId: 'a',
+      eventIndex: 0,
+      textIndex: 0,
+      sentenceIndex: 0,
+      flags: {},
+      backgroundPath: null,
+      backgroundColor: null,
+      backgroundFade: null,
+      backgroundBrightness: null,
+      video: null,
+      eventImage: null,
+      isBlackout: false,
+      characters: [],
+      currentBgmPath: null,
+      storyEnded: true,
+    }
+    r.restoreSnapshot(snapshot)
+
+    expect(showImageSpy).toHaveBeenCalledTimes(1)
+    const call = showImageSpy.mock.calls[0][0] as Record<string, unknown>
+    expect(call.instant).toBe(true)
+  })
+
+  it('10 (S4・NP-IM-5 相当): storyEnded true→false→true の再トグルで intermission 値が変わった際に再評価される（false 時点の値をスナップショットしたまま使い回さない）', () => {
+    const r = makeConfinedRenderer()
+
+    // 1回目の true: intermission 未設定なので表示される。
+    r.jumpToScene('out')
+    expect(internals(r).endingOverlay.visible).toBe(true)
+
+    // 通常のシーン遷移で false に戻す。
+    r.setConfinedSceneIds(null)
+    r.jumpToScene('entry')
+    expect(internals(r).endingOverlay.visible).toBe(false)
+
+    // false の間に intermission を設定する。
+    r.setIntermissionScene([narration('つづく')], {})
+
+    // 2回目の true: 新しい intermission 値で再評価され、表示されない（PixiJS タブローに一本化）。
+    r.setConfinedSceneIds(['entry'])
+    r.jumpToScene('out')
+    expect(internals(r).endingOverlay.visible).toBe(false)
+  })
+
   it('7 (M2 対): restoreSnapshot で storyEnded:true のスナップショットを新規 renderer に復元すると、onStoryEndedChangeCallback は発火しないが endingOverlay は表示される', () => {
     const r = new NovelRenderer()
     const cb = vi.fn()
