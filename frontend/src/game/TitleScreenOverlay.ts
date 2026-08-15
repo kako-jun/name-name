@@ -18,13 +18,13 @@
  *      `onLoaded`/`onError` コールバックで検知し、`hideFallbackText()` を呼んで隠す）
  *   3. 新規開始 / つづきから / 設定 / 終了 の 4 ボタン
  *
- * アクセシビリティは DOM 実装からの移行に伴い後退する。`aria-label` 等の意味論だけでなく、
- * キーボード操作経路そのものが失われる: 旧 `<button disabled>` が持っていた Tab フォーカス・
- * Enter/Space 操作・visible focus ring・native disabled semantics に対し、このクラスは
- * `pointerover`/`pointerout`/`pointertap`（マウス/タッチのみ）しか配線していない。
- * これは #628 Issue に明記された合意事項ではなく実装判断であり、`ChoiceOverlay`
- * （選択肢 UI, #146）が既に同じ制約を持つ既存パターンを踏襲したもの
- * （このクラスで新規に生まれた後退ではない）。
+ * アクセシビリティは DOM 実装からの移行に伴い一時後退した。`aria-label` 等の意味論は依然
+ * 失われたままだが、キーボード操作経路（#633 フェーズA）は本クラスで復元済み: Tab/Shift+Tab・
+ * ArrowUp/ArrowDown でのフォーカス移動（disabled ボタンはスキップ、末尾↔先頭で循環）、
+ * Enter/Space でのフォーカス中ボタン実行、`Graphics` 枠線による visible focus 表示を持つ
+ * （`handleKeyDown()` 参照）。`pointerover`/`pointerout` によるマウス hover 強調とは独立した
+ * 別レイヤーの視覚表現とし、互いに干渉しない。
+ * `ChoiceOverlay`（選択肢 UI, #146）のキーボード操作は別フェーズで対応する（#633 未対応）。
  */
 
 import { Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
@@ -62,6 +62,12 @@ const COLOR_TEXT_SECONDARY = 0xe5e7eb // gray-200
 const COLOR_BG_DARK = 0x111827 // gray-900
 const COLOR_BG_LIGHT = 0x1e1b4b // indigo-950
 
+/** キーボードフォーカスの visible focus 表示（#633）。マウス hover の hoverFill とは独立した
+ *  枠線描画で、「マウス hover とキーボード focus は別概念」であることを視覚的に区別する。 */
+const COLOR_FOCUS_RING = 0xfacc15 // yellow-400
+const FOCUS_RING_WIDTH = 3
+const FOCUS_RING_INSET = 4
+
 type ButtonVariant = 'primary' | 'secondary'
 
 interface ButtonSpec {
@@ -85,9 +91,22 @@ export interface TitleScreenShowOptions {
   onBack: () => void
 }
 
+/** キーボードフォーカス移動対象のボタン1件分。disabled ボタンはナビゲーション対象から除外する（#633）。 */
+interface FocusableButtonEntry {
+  container: Container
+  focusRing: Graphics
+  onClick: () => void
+  disabled: boolean
+}
+
 export class TitleScreenOverlay extends Container {
   private renderResolution = 1
   private titleText: PixiText | null = null
+  /** キーボードフォーカス移動用のボタン一覧（show() ごとに作り直す。#633）。 */
+  private buttonEntries: FocusableButtonEntry[] = []
+  /** buttonEntries 内のフォーカス中インデックス。-1 はフォーカス対象なし（enabled ボタン皆無の異常系）。 */
+  private focusedIndex = -1
+  private currentButtonWidth = 0
 
   constructor(
     private screenWidth: number,
@@ -112,6 +131,8 @@ export class TitleScreenOverlay extends Container {
       child.destroy({ children: true })
     }
     this.titleText = null
+    this.buttonEntries = []
+    this.focusedIndex = -1
 
     const dark = opts.dark ?? false
     const bg = new Graphics()
@@ -157,6 +178,7 @@ export class TitleScreenOverlay extends Container {
       BUTTON_MIN_WIDTH,
       Math.min(BUTTON_MAX_WIDTH, this.screenWidth * BUTTON_WIDTH_RATIO)
     )
+    this.currentButtonWidth = buttonWidth
     const totalButtonsHeight =
       buttonSpecs.length * BUTTON_HEIGHT + (buttonSpecs.length - 1) * BUTTON_GAP
     const areaTop = this.screenHeight * BUTTONS_AREA_TOP_RATIO
@@ -196,6 +218,12 @@ export class TitleScreenOverlay extends Container {
       label.y = BUTTON_HEIGHT / 2
       container.addChild(label)
 
+      // キーボード focus 表示専用の枠線レイヤー（#633）。label より上に重ねるが、外周の
+      // stroke のみでラベル文字は隠さない。マウス hover の hoverFill 切り替え（下記）とは
+      // 完全に独立した仕組みで、show() 直後は未描画（clear() 済み = 何も見えない）。
+      const focusRing = new Graphics()
+      container.addChild(focusRing)
+
       if (!spec.disabled) {
         container.on('pointerover', () => {
           bgGraphics.clear()
@@ -212,11 +240,92 @@ export class TitleScreenOverlay extends Container {
         })
       }
 
+      this.buttonEntries.push({
+        container,
+        focusRing,
+        onClick: spec.onClick,
+        disabled: spec.disabled,
+      })
+
       this.addChild(container)
     })
 
+    // 有効な最初のボタン（通常は0=新規開始）へフォーカスをリセットする（#633）。
+    // focusedIndex を一旦 -1 に固定してから setFocusedIndex() を呼ぶことで、buttonEntries が
+    // 総入れ替えされた（Graphics インスタンスが変わった）にもかかわらず「インデックス値が
+    // たまたま前回と同じだから」という理由で早期 return され新しい focusRing に描画し損ねる
+    // 事故を避ける。
+    this.focusedIndex = -1
+    const firstEnabledIndex = this.buttonEntries.findIndex((b) => !b.disabled)
+    this.setFocusedIndex(firstEnabledIndex)
+
     this.visible = true
     this.alpha = 1
+  }
+
+  /**
+   * TitleScreenOverlay 表示中のキーボード操作（#633）。呼び出し元（NovelRenderer.handleKeyDown）が
+   * titleScreenOverlay.visible === true の間、window keydown を丸ごとここへ委譲する。
+   * 戻り値 true = このキー入力を処理済み（呼び出し元はゲーム内ショートカットを一切発火させない）。
+   */
+  handleKeyDown(key: string, shiftKey = false): boolean {
+    switch (key) {
+      case 'Tab':
+        this.moveFocus(shiftKey ? -1 : 1)
+        return true
+      case 'ArrowDown':
+        this.moveFocus(1)
+        return true
+      case 'ArrowUp':
+        this.moveFocus(-1)
+        return true
+      case 'Enter':
+      case ' ':
+        this.activateFocusedButton()
+        return true
+      default:
+        return false
+    }
+  }
+
+  private activateFocusedButton(): void {
+    const entry = this.buttonEntries[this.focusedIndex]
+    if (entry && !entry.disabled) entry.onClick()
+  }
+
+  /** disabled ボタンをスキップしつつ、末尾↔先頭で循環してフォーカスを1つ移動する。 */
+  private moveFocus(direction: 1 | -1): void {
+    const enabledIndices = this.buttonEntries.reduce<number[]>((acc, entry, i) => {
+      if (!entry.disabled) acc.push(i)
+      return acc
+    }, [])
+    if (enabledIndices.length === 0) return
+
+    const currentPos = enabledIndices.indexOf(this.focusedIndex)
+    const basePos = currentPos === -1 ? 0 : currentPos
+    const nextPos = (basePos + direction + enabledIndices.length) % enabledIndices.length
+    this.setFocusedIndex(enabledIndices[nextPos])
+  }
+
+  private setFocusedIndex(index: number): void {
+    if (index === this.focusedIndex) return
+    const prev = this.buttonEntries[this.focusedIndex]
+    if (prev) prev.focusRing.clear()
+    this.focusedIndex = index
+    const next = this.buttonEntries[this.focusedIndex]
+    if (next) this.drawFocusRing(next.focusRing)
+  }
+
+  private drawFocusRing(g: Graphics): void {
+    g.clear()
+    g.roundRect(
+      -FOCUS_RING_INSET,
+      -FOCUS_RING_INSET,
+      this.currentButtonWidth + FOCUS_RING_INSET * 2,
+      BUTTON_HEIGHT + FOCUS_RING_INSET * 2,
+      BUTTON_RADIUS + FOCUS_RING_INSET
+    )
+    g.stroke({ color: COLOR_FOCUS_RING, width: FOCUS_RING_WIDTH })
   }
 
   /**
@@ -234,6 +343,8 @@ export class TitleScreenOverlay extends Container {
       child.destroy({ children: true })
     }
     this.titleText = null
+    this.buttonEntries = []
+    this.focusedIndex = -1
   }
 
   private drawButtonBackground(g: Graphics, width: number, fillColor: number): void {

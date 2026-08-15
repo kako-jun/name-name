@@ -3509,6 +3509,18 @@ export class NovelRenderer {
     }
     this.audioManager.ensureContext()
 
+    // タイトル画面表示中 (#633): キー入力は TitleScreenOverlay 自身のキーボードフォーカス管理
+    // （Tab/Shift+Tab・矢印でのフォーカス移動、Enter/Space での実行）に委譲する。ここで早期
+    // return することで、Enter/Space/矢印キー等が advanceOrSkipTypewriter()/
+    // backlogOverlay.toggle() 等のゲーム進行処理へ漏れるのを防ぐ（#628 でタイトル画面を
+    // PixiJS 描画へ移行した際、handleAdvance には同種のガードがあったが handleKeyDown には
+    // 無かったガード漏れの修正）。
+    if (this.titleScreenOverlay.visible) {
+      const handled = this.titleScreenOverlay.handleKeyDown(e.key, e.shiftKey)
+      if (handled) e.preventDefault()
+      return
+    }
+
     // Escape: 開いているオーバーレイを閉じる
     if (e.key === 'Escape') {
       if (this.backlogOverlay.visible) {

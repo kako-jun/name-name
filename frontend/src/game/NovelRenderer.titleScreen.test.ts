@@ -70,8 +70,11 @@ interface TitleScreenInternals {
       onOpenSettings: () => void
       onBack: () => void
     }) => void
+    handleKeyDown: (key: string, shiftKey?: boolean) => boolean
   }
   resolvedEvents: Event[]
+  handleKeyDown: (e: KeyboardEvent) => void
+  backlogOverlay: { visible: boolean; toggle: () => void }
 }
 function internals(r: NovelRenderer): TitleScreenInternals {
   return r as unknown as TitleScreenInternals
@@ -297,5 +300,52 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // #633 フェーズA: NovelRenderer.handleKeyDown() 冒頭に追加した titleScreenOverlay.visible
+  // ガードの回帰テスト。#628 でタイトル画面を PixiJS 描画へ移行した際、handleAdvance には
+  // 同種のガードがあったが handleKeyDown には無かった（TC36/TC37 が担保するのは
+  // handleAdvance 側のみ）。
+  it('TC40: titleScreenOverlay.visible===true の間、window keydown は titleScreenOverlay.handleKeyDown() に委譲され、戻り値 true なら preventDefault() が呼ばれる', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.showTitleScreen(makeTitleScreenOpts())
+    expect(internals(r).titleScreenOverlay.visible).toBe(true)
+
+    const delegateSpy = vi
+      .spyOn(internals(r).titleScreenOverlay, 'handleKeyDown')
+      .mockReturnValue(true)
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true })
+    const preventDefaultSpy = vi.spyOn(event, 'preventDefault')
+
+    internals(r).handleKeyDown(event)
+
+    expect(delegateSpy).toHaveBeenCalledWith('Tab', true)
+    expect(preventDefaultSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('TC41: titleScreenOverlay.visible===true の間、既存のゲーム内ショートカット（b キーの backlogOverlay.toggle 等）は一切発火しない', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.showTitleScreen(makeTitleScreenOpts())
+    const toggleSpy = vi.spyOn(internals(r).backlogOverlay, 'toggle')
+
+    // TitleScreenOverlay が処理しないキー（'b'）を押しても、backlogOverlay.toggle() 等の
+    // ゲーム内ショートカットには一切到達しない（titleScreenOverlay.visible ガードで即 return）。
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
+
+    expect(toggleSpy).not.toHaveBeenCalled()
+  })
+
+  it('TC42: titleScreenOverlay.visible===false の場合は従来どおり b キーで backlogOverlay.toggle() が呼ばれる（ガードがタイトル画面専用であることの対照確認）', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.showTitleScreen(makeTitleScreenOpts())
+    r.hideTitleScreen()
+    const toggleSpy = vi.spyOn(internals(r).backlogOverlay, 'toggle')
+
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
+
+    expect(toggleSpy).toHaveBeenCalledTimes(1)
   })
 })

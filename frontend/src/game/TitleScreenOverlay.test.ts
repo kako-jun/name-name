@@ -252,6 +252,124 @@ describe('TitleScreenOverlay.setRenderResolution()', () => {
   })
 })
 
+describe('TitleScreenOverlay.handleKeyDown() キーボードフォーカス (#633)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('show() 直後は新規開始（index 0）にフォーカスがある。Tab で つづきから→設定→終了→新規開始 と循環する', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onNewGame = vi.fn()
+    const onContinue = vi.fn()
+    const onOpenSettings = vi.fn()
+    const onBack = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: true, onNewGame, onContinue, onOpenSettings, onBack }))
+
+    // 初期フォーカス=新規開始(0) の状態で Enter → onNewGame が呼ばれる。
+    expect(overlay.handleKeyDown('Enter')).toBe(true)
+    expect(onNewGame).toHaveBeenCalledTimes(1)
+
+    expect(overlay.handleKeyDown('Tab')).toBe(true)
+    overlay.handleKeyDown(' ')
+    expect(onContinue).toHaveBeenCalledTimes(1)
+
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Enter')
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Enter')
+    expect(onBack).toHaveBeenCalledTimes(1)
+
+    // 4つ目の Tab で先頭（新規開始）へ循環する。
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Enter')
+    expect(onNewGame).toHaveBeenCalledTimes(2)
+  })
+
+  it('Shift+Tab で逆方向（末尾→先頭の循環含む）に移動する', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onBack = vi.fn()
+    const onNewGame = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: true, onBack, onNewGame }))
+
+    // 初期フォーカス=新規開始(0) から Shift+Tab で末尾（終了）へ循環する。
+    expect(overlay.handleKeyDown('Tab', true)).toBe(true)
+    overlay.handleKeyDown('Enter')
+    expect(onBack).toHaveBeenCalledTimes(1)
+
+    // もう一度 Shift+Tab で設定→もう一度で つづきから→もう一度で新規開始 に戻る。
+    overlay.handleKeyDown('Tab', true)
+    overlay.handleKeyDown('Tab', true)
+    overlay.handleKeyDown('Tab', true)
+    overlay.handleKeyDown('Enter')
+    expect(onNewGame).toHaveBeenCalledTimes(1)
+  })
+
+  it('ArrowDown/ArrowUp は Tab/Shift+Tab と同じ扱いでフォーカスを移動する', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onContinue = vi.fn()
+    const onNewGame = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: true, onContinue, onNewGame }))
+
+    expect(overlay.handleKeyDown('ArrowDown')).toBe(true)
+    overlay.handleKeyDown('Enter')
+    expect(onContinue).toHaveBeenCalledTimes(1)
+
+    expect(overlay.handleKeyDown('ArrowUp')).toBe(true)
+    overlay.handleKeyDown('Enter')
+    expect(onNewGame).toHaveBeenCalledTimes(1)
+  })
+
+  it('hasSaveData:false（つづきから disabled）の場合、Tab は つづきから をスキップして 新規開始→設定 と移動する', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onOpenSettings = vi.fn()
+    const onContinue = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: false, onOpenSettings, onContinue }))
+
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Enter')
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    expect(onContinue).not.toHaveBeenCalled()
+  })
+
+  it('disabled ボタン（つづきから）へは Shift+Tab で先頭から逆循環しても止まらない（終了→設定→新規開始の3つだけを巡回）', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onBack = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: false, onBack }))
+
+    // 新規開始(0) から Shift+Tab → 終了(3) （つづきから(1)・設定(2)を跨いで逆循環）。
+    overlay.handleKeyDown('Tab', true)
+    overlay.handleKeyDown('Enter')
+    expect(onBack).toHaveBeenCalledTimes(1)
+  })
+
+  it('Tab/ArrowDown/ArrowUp/Enter/Space 以外のキーは処理せず false を返す（ゲーム内ショートカットに委譲しない値=falseのみ返す）', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    overlay.show(makeOpts())
+
+    expect(overlay.handleKeyDown('s')).toBe(false)
+    expect(overlay.handleKeyDown('Escape')).toBe(false)
+    expect(overlay.handleKeyDown('ArrowLeft')).toBe(false)
+    expect(overlay.handleKeyDown('ArrowRight')).toBe(false)
+  })
+
+  it('show() を再度呼ぶとフォーカスが新規開始（index 0）にリセットされる', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onNewGame1 = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: true, onNewGame: onNewGame1 }))
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Tab') // フォーカス=設定(2)
+
+    const onNewGame2 = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: true, onNewGame: onNewGame2 }))
+    overlay.handleKeyDown('Enter')
+
+    expect(onNewGame2).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('TitleScreenOverlay ボタン幅クランプ', () => {
   it('TC24: 極端に大きい screenWidth でも buttonWidth が BUTTON_MAX_WIDTH でクランプされる', () => {
     const overlay = new TitleScreenOverlay(10000, 450)
