@@ -39,8 +39,13 @@ import type { DestroyOptions, FederatedPointerEvent, Texture } from 'pixi.js'
 import {
   computeChoiceGridLayout,
   computeChoiceIconLayout,
+  computeChoiceScrollIntoView,
+  computeColumnFocusIndices,
+  computeFlatFocusIndices,
+  computeRowFocusIndices,
   resolveAssetUrl,
   resolveChoiceIconKind,
+  stepFocusIndex,
 } from './novelLayout'
 import type { LayoutRect } from './novelLayout'
 
@@ -813,9 +818,7 @@ export class ChoiceOverlay extends Container {
         // columns クランプと同じ思想で呼び出し経路に依らず確定を拒否する。
         if (isLocked) return
         e.stopPropagation()
-        this.audioManager?.ensureContext()
-        this.audioManager?.playSelectTone()
-        this.onSelect?.(option.jump)
+        this.confirmChoice(option.jump)
       }
       buttonContainer.on('pointerdown', (e) => {
         this.pressPointerId = e.pointerId
@@ -934,52 +937,45 @@ export class ChoiceOverlay extends Container {
     const entry = this.choiceEntries[this.focusedIndex]
     const option = this.currentOptions[this.focusedIndex]
     if (!entry || entry.locked || !option) return
-    this.audioManager?.ensureContext()
-    this.audioManager?.playSelectTone()
-    this.onSelect?.(option.jump)
+    this.confirmChoice(option.jump)
   }
 
-  /** ロック済みをスキップしつつ、末尾↔先頭で循環してフォーカスを1つ移動する（非グリッド/Tab共通）。 */
+  /**
+   * 確定処理（AudioContext resume・確定音・onSelect 呼び出し）の共通ヘルパ (#633 self-review
+   * S2)。キーボード確定（`activateFocusedButton`）とポインタ確定（`show()` 内 `selectChoice`）の
+   * 両方から呼ぶ——ロジックの重複を避けるため、ロック判定は呼び出し側がそれぞれの流儀
+   * （`entry.locked` / クロージャ内 `isLocked`）で先に行ってから呼ぶ契約とする。
+   */
+  private confirmChoice(jump: string): void {
+    this.audioManager?.ensureContext()
+    this.audioManager?.playSelectTone()
+    this.onSelect?.(jump)
+  }
+
+  /**
+   * ロック済みをスキップしつつ、末尾↔先頭で循環してフォーカスを1つ移動する（非グリッド/Tab共通）。
+   * indices 算出・循環計算そのものは `novelLayout.ts` の純粋関数に委ねる (dev-doctrine 規約4)。
+   */
   private moveFocus(direction: 1 | -1): void {
-    const indices = this.choiceEntries.reduce<number[]>((acc, entry, i) => {
-      if (!entry.locked) acc.push(i)
-      return acc
-    }, [])
-    this.stepFocus(indices, direction)
+    const indices = computeFlatFocusIndices(this.choiceEntries)
+    const next = stepFocusIndex(indices, this.focusedIndex, direction)
+    if (next !== null) this.setFocusedIndex(next)
   }
 
   /** グリッド配置 (#508) 時、フォーカス中の選択肢と同じ列 (col) の中だけで上下に移動する。 */
   private moveFocusInColumn(direction: 1 | -1): void {
     const col = this.choiceEntries[this.focusedIndex]?.col ?? 0
-    const indices = this.choiceEntries
-      .map((entry, i) => ({ entry, i }))
-      .filter(({ entry }) => !entry.locked && entry.col === col)
-      .sort((a, b) => a.entry.row - b.entry.row)
-      .map(({ i }) => i)
-    this.stepFocus(indices, direction)
+    const indices = computeColumnFocusIndices(this.choiceEntries, col)
+    const next = stepFocusIndex(indices, this.focusedIndex, direction)
+    if (next !== null) this.setFocusedIndex(next)
   }
 
   /** グリッド配置 (#508) 時、フォーカス中の選択肢と同じ行 (row) の中だけで左右に移動する。 */
   private moveFocusInRow(direction: 1 | -1): void {
     const row = this.choiceEntries[this.focusedIndex]?.row ?? 0
-    const indices = this.choiceEntries
-      .map((entry, i) => ({ entry, i }))
-      .filter(({ entry }) => !entry.locked && entry.row === row)
-      .sort((a, b) => a.entry.col - b.entry.col)
-      .map(({ i }) => i)
-    this.stepFocus(indices, direction)
-  }
-
-  /**
-   * `indices`（すでにロック済み除外・目的の軸で整列済み）の中で、現在のフォーカス位置から
-   * 1つ循環移動する。moveFocus/moveFocusInColumn/moveFocusInRow の共通処理 (#633)。
-   */
-  private stepFocus(indices: number[], direction: 1 | -1): void {
-    if (indices.length === 0) return
-    const currentPos = indices.indexOf(this.focusedIndex)
-    const basePos = currentPos === -1 ? 0 : currentPos
-    const nextPos = (basePos + direction + indices.length) % indices.length
-    this.setFocusedIndex(indices[nextPos])
+    const indices = computeRowFocusIndices(this.choiceEntries, row)
+    const next = stepFocusIndex(indices, this.focusedIndex, direction)
+    if (next !== null) this.setFocusedIndex(next)
   }
 
   private setFocusedIndex(index: number): void {
@@ -1013,17 +1009,14 @@ export class ChoiceOverlay extends Container {
    * 状態が整合する。
    */
   private scrollFocusedIntoView(row: number): void {
-    if (this.maxScroll <= 0) return
-    const rowHeight = this.layoutButtonHeight + BUTTON_GAP
-    const top = row * rowHeight
-    const bottom = top + this.layoutButtonHeight
-    let next = this.scrollOffset
-    if (top < this.scrollOffset) {
-      next = top
-    } else if (bottom > this.scrollOffset + this.viewportHeight) {
-      next = bottom - this.viewportHeight
-    }
-    next = Math.max(0, Math.min(this.maxScroll, next))
+    const next = computeChoiceScrollIntoView(
+      row,
+      this.layoutButtonHeight,
+      BUTTON_GAP,
+      this.scrollOffset,
+      this.viewportHeight,
+      this.maxScroll
+    )
     if (next !== this.scrollOffset) {
       this.scrollOffset = next
       this.applyScrollOffset()

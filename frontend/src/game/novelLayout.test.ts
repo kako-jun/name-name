@@ -8,6 +8,11 @@ import {
   computeChoiceGridLayout,
   resolveChoiceIconKind,
   computeChoiceIconLayout,
+  computeFlatFocusIndices,
+  computeColumnFocusIndices,
+  computeRowFocusIndices,
+  stepFocusIndex,
+  computeChoiceScrollIntoView,
   parseHexColor,
   parseColorToNumber,
   numberToHexColor,
@@ -677,6 +682,156 @@ describe('computeChoiceIconLayout (#598)', () => {
     expect(withIcon.iconY).not.toBe(withIcon.textY)
     expect(withIcon.iconY).toBeLessThan(withoutIcon.iconY)
     expect(withIcon.textY).toBeGreaterThan(withoutIcon.textY)
+  })
+})
+
+// #633 self-review S1: ChoiceOverlay のキーボードフォーカス移動計算を切り出した純粋関数群。
+describe('computeFlatFocusIndices (#633)', () => {
+  it('ロックなしなら全 index をそのまま返す', () => {
+    const entries = [
+      { locked: false, row: 0, col: 0 },
+      { locked: false, row: 1, col: 0 },
+      { locked: false, row: 2, col: 0 },
+    ]
+    expect(computeFlatFocusIndices(entries)).toEqual([0, 1, 2])
+  })
+
+  it('ロック済みは除外する', () => {
+    const entries = [
+      { locked: false, row: 0, col: 0 },
+      { locked: true, row: 1, col: 0 },
+      { locked: false, row: 2, col: 0 },
+    ]
+    expect(computeFlatFocusIndices(entries)).toEqual([0, 2])
+  })
+
+  it('全ロックなら空配列', () => {
+    const entries = [
+      { locked: true, row: 0, col: 0 },
+      { locked: true, row: 1, col: 0 },
+    ]
+    expect(computeFlatFocusIndices(entries)).toEqual([])
+  })
+})
+
+describe('computeColumnFocusIndices (#633 グリッド)', () => {
+  it('指定列のロックなしを row 昇順で返す', () => {
+    // 2列グリッド: index 0,1 = row0 / 2,3 = row1 / 4,5 = row2 (col=index%2)
+    const entries = [
+      { locked: false, row: 0, col: 0 },
+      { locked: false, row: 0, col: 1 },
+      { locked: false, row: 1, col: 0 },
+      { locked: false, row: 1, col: 1 },
+      { locked: false, row: 2, col: 0 },
+      { locked: false, row: 2, col: 1 },
+    ]
+    expect(computeColumnFocusIndices(entries, 0)).toEqual([0, 2, 4])
+    expect(computeColumnFocusIndices(entries, 1)).toEqual([1, 3, 5])
+  })
+
+  it('列内のロック済みは除外する', () => {
+    const entries = [
+      { locked: false, row: 0, col: 0 },
+      { locked: true, row: 1, col: 0 },
+      { locked: false, row: 2, col: 0 },
+    ]
+    expect(computeColumnFocusIndices(entries, 0)).toEqual([0, 2])
+  })
+
+  it('該当列が無ければ空配列', () => {
+    const entries = [{ locked: false, row: 0, col: 0 }]
+    expect(computeColumnFocusIndices(entries, 5)).toEqual([])
+  })
+})
+
+describe('computeRowFocusIndices (#633 グリッド)', () => {
+  it('指定行のロックなしを col 昇順で返す', () => {
+    const entries = [
+      { locked: false, row: 0, col: 0 },
+      { locked: false, row: 0, col: 1 },
+      { locked: false, row: 0, col: 2 },
+      { locked: false, row: 1, col: 0 },
+    ]
+    expect(computeRowFocusIndices(entries, 0)).toEqual([0, 1, 2])
+    expect(computeRowFocusIndices(entries, 1)).toEqual([3])
+  })
+
+  it('行内のロック済みは除外する', () => {
+    const entries = [
+      { locked: false, row: 0, col: 0 },
+      { locked: true, row: 0, col: 1 },
+      { locked: false, row: 0, col: 2 },
+    ]
+    expect(computeRowFocusIndices(entries, 0)).toEqual([0, 2])
+  })
+})
+
+describe('stepFocusIndex (#633)', () => {
+  it('indices が空なら null', () => {
+    expect(stepFocusIndex([], 0, 1)).toBeNull()
+  })
+
+  it('末尾から+1で先頭へ循環する', () => {
+    expect(stepFocusIndex([0, 1, 2], 2, 1)).toBe(0)
+  })
+
+  it('先頭から-1で末尾へ循環する', () => {
+    expect(stepFocusIndex([0, 1, 2], 0, -1)).toBe(2)
+  })
+
+  it('通常移動は隣の index を返す', () => {
+    expect(stepFocusIndex([0, 1, 2], 0, 1)).toBe(1)
+    expect(stepFocusIndex([0, 1, 2], 1, -1)).toBe(0)
+  })
+
+  it('currentIndex が indices に含まれない（フォーカス対象なし等）ときは先頭寄りから移動する', () => {
+    // indices[0] を basePos=0 として扱う契約: +1 なら indices[1] へ
+    expect(stepFocusIndex([3, 5, 7], -1, 1)).toBe(5)
+    expect(stepFocusIndex([3, 5, 7], -1, -1)).toBe(7)
+  })
+
+  it('要素1件のときは常に同じ index を返す', () => {
+    expect(stepFocusIndex([4], 4, 1)).toBe(4)
+    expect(stepFocusIndex([4], 4, -1)).toBe(4)
+  })
+})
+
+describe('computeChoiceScrollIntoView (#633 #339スクロール併用)', () => {
+  const BUTTON_HEIGHT = 52
+  const BUTTON_GAP = 16
+
+  it('maxScroll<=0（スクロール不要）なら scrollOffset をそのまま返す', () => {
+    expect(computeChoiceScrollIntoView(0, BUTTON_HEIGHT, BUTTON_GAP, 10, 200, 0)).toBe(10)
+    expect(computeChoiceScrollIntoView(2, BUTTON_HEIGHT, BUTTON_GAP, 10, 200, -5)).toBe(10)
+  })
+
+  it('対象行がビューポート内に収まっていれば scrollOffset は変化しない', () => {
+    // row1 の top=68, bottom=120。viewport [0, 150) にすっぽり収まる。
+    const result = computeChoiceScrollIntoView(1, BUTTON_HEIGHT, BUTTON_GAP, 0, 150, 300)
+    expect(result).toBe(0)
+  })
+
+  it('対象行が上端より上（top < scrollOffset）なら top まで戻す', () => {
+    // row1 の top=68。scrollOffset=69 だと隠れているので68まで戻す。
+    const result = computeChoiceScrollIntoView(1, BUTTON_HEIGHT, BUTTON_GAP, 69, 150, 300)
+    expect(result).toBe(68)
+  })
+
+  it('境界値: top===scrollOffset ちょうどのときは変化しない', () => {
+    const result = computeChoiceScrollIntoView(1, BUTTON_HEIGHT, BUTTON_GAP, 68, 150, 300)
+    expect(result).toBe(68)
+  })
+
+  it('対象行が下端より下（bottom > scrollOffset+viewportHeight）なら bottom が見える位置まで進める', () => {
+    // row2 の top=136, bottom=188。viewport高さ100・scrollOffset=16だと下端(116)からはみ出す。
+    const result = computeChoiceScrollIntoView(2, BUTTON_HEIGHT, BUTTON_GAP, 16, 100, 300)
+    expect(result).toBe(88) // bottom(188) - viewportHeight(100)
+  })
+
+  it('結果は常に [0, maxScroll] にクランプされる', () => {
+    const result = computeChoiceScrollIntoView(0, BUTTON_HEIGHT, BUTTON_GAP, 0, 10, 30)
+    expect(result).toBeGreaterThanOrEqual(0)
+    expect(result).toBeLessThanOrEqual(30)
   })
 })
 

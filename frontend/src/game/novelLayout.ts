@@ -510,6 +510,106 @@ export function resolveChoiceIconKind(cleared: boolean): ChoiceIconKind {
 }
 
 /**
+ * `ChoiceOverlay` のキーボードフォーカス移動 (#633) が対象にする選択肢1件分の最小情報。
+ * `ChoiceOverlay.FocusableChoiceEntry` はこれに加えて `container`/`focusRing`（PixiJS
+ * オブジェクト）を持つが、フォーカス移動の計算自体はこの3フィールドだけで完結する
+ * （dev-doctrine 規約4: PixiJS/DOM/`this` に触れない）。
+ */
+export interface ChoiceFocusEntry {
+  /** true の選択肢はフォーカス移動の対象から除外する（#591 条件付きロック）。 */
+  locked: boolean
+  row: number
+  col: number
+}
+
+/**
+ * ロック済みを除外した、全選択肢を通したフラットな順序のフォーカス対象 index 一覧を返す
+ * 純粋関数 (#633)。Tab/Shift+Tab・非グリッド時の ArrowUp/ArrowDown が使う。
+ */
+export function computeFlatFocusIndices(entries: readonly ChoiceFocusEntry[]): number[] {
+  return entries.reduce<number[]>((acc, entry, i) => {
+    if (!entry.locked) acc.push(i)
+    return acc
+  }, [])
+}
+
+/**
+ * グリッド配置 (#508) 時、指定した列 (`col`) の中だけをフォーカス対象にする index 一覧を
+ * 行番号順に並べて返す純粋関数 (#633)。グリッド時の ArrowUp/ArrowDown が使う。
+ */
+export function computeColumnFocusIndices(
+  entries: readonly ChoiceFocusEntry[],
+  col: number
+): number[] {
+  return entries
+    .map((entry, i) => ({ entry, i }))
+    .filter(({ entry }) => !entry.locked && entry.col === col)
+    .sort((a, b) => a.entry.row - b.entry.row)
+    .map(({ i }) => i)
+}
+
+/**
+ * グリッド配置 (#508) 時、指定した行 (`row`) の中だけをフォーカス対象にする index 一覧を
+ * 列番号順に並べて返す純粋関数 (#633)。グリッド時の ArrowLeft/ArrowRight が使う。
+ */
+export function computeRowFocusIndices(
+  entries: readonly ChoiceFocusEntry[],
+  row: number
+): number[] {
+  return entries
+    .map((entry, i) => ({ entry, i }))
+    .filter(({ entry }) => !entry.locked && entry.row === row)
+    .sort((a, b) => a.entry.col - b.entry.col)
+    .map(({ i }) => i)
+}
+
+/**
+ * `indices`（すでにロック済み除外・目的の軸で整列済み）の中で、`currentIndex` から1つ
+ * 循環移動した先の index を返す純粋関数 (#633)。`ChoiceOverlay.moveFocus` /
+ * `moveFocusInColumn` / `moveFocusInRow` の共通処理。`currentIndex` が `indices` に
+ * 含まれない（フォーカス対象なし等）ときは `indices[0]` 側からの移動として扱う。
+ * `indices` が空のときは移動先が無いため `null` を返し、呼び出し側は何もしない。
+ */
+export function stepFocusIndex(
+  indices: readonly number[],
+  currentIndex: number,
+  direction: 1 | -1
+): number | null {
+  if (indices.length === 0) return null
+  const currentPos = indices.indexOf(currentIndex)
+  const basePos = currentPos === -1 ? 0 : currentPos
+  const nextPos = (basePos + direction + indices.length) % indices.length
+  return indices[nextPos]
+}
+
+/**
+ * スクロール可能な選択肢リスト（#339）で、キーボードフォーカスが移動した選択肢の行が
+ * ビューポート外にあれば、その行が見える位置までスクロールした後の `scrollOffset` を
+ * 返す純粋関数 (#633)。`maxScroll <= 0`（スクロール不要）のときは `scrollOffset` を
+ * そのまま返す（呼び出し側はこの場合 `applyScrollOffset` を呼ばずに済ませてよい）。
+ */
+export function computeChoiceScrollIntoView(
+  row: number,
+  buttonHeight: number,
+  rowGap: number,
+  scrollOffset: number,
+  viewportHeight: number,
+  maxScroll: number
+): number {
+  if (maxScroll <= 0) return scrollOffset
+  const rowHeight = buttonHeight + rowGap
+  const top = row * rowHeight
+  const bottom = top + buttonHeight
+  let next = scrollOffset
+  if (top < scrollOffset) {
+    next = top
+  } else if (bottom > scrollOffset + viewportHeight) {
+    next = bottom - viewportHeight
+  }
+  return Math.max(0, Math.min(maxScroll, next))
+}
+
+/**
  * CSS カラー文字列（"#1a4a7a" / "#222" / "1a4a7a"）を Pixi の数値カラーに変換する純粋関数 (#270 / #273)。
  *
  * 元は `underline.ts` にあったものを、色解決の純関数置き場であるこのモジュールへ集約した
