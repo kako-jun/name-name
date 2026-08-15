@@ -554,6 +554,8 @@ interface SaveSlotData {
 
 「新規開始」ボタン（`onNewGame`）は常に `renderer.restart()` を呼ぶ（クイックセーブの有無に関わらず最初から始める仕様のため、この分岐は不要）。
 
+**「はじめから」が旧セーブを引きずる不具合の修正（#637）**: `restart()` は元々 `rawEvents`/`eventIndex` 等のみをリセットし、`gameState`（フラグ）と `currentSceneId` には触れなかった。一方 GUI 起動時の自動クイックロード（#578、上記）はタイトル画面が表示される前に裏で `quickLoad()` を実行し、`gameState.flags` と `currentSceneId` を旧セーブの値で埋めてしまう。そのため「はじめから」を押しても Condition 分岐が旧フラグのまま解決され、「つづきから」相当の内容になっていた。`restart()` は `setScenes()` と対称に冒頭で `gameState.clear()` を呼び、`currentSceneId` を `allScenes[0]?.id ?? null`（エントリ doc の先頭シーン）にリセットするよう修正した。さらに `restart()` は `onSceneChangeCallback` を発火しないため自動クイックセーブが走らず、旧クイックセーブが残ったままリロードすると復活してしまう。これを防ぐため `NovelRenderer.clearQuickSave()`（`SaveManager.deleteQuickSave()` の薄いラッパー）を新設し、`onNewGame` から `restart()` と併せて明示的に呼ぶ。
+
 ## 音声システム
 
 Web Audio API を使用。
