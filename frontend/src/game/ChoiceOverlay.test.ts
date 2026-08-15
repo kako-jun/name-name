@@ -1300,10 +1300,10 @@ describe('ChoiceOverlay グリッド×完了整合性・ロック優先順位 (#
     expect(buttons.length).toBe(10)
     const buttonFillCalls = fillSpy.mock.calls.filter((args) => typeof args[0] === 'number')
     expect(buttonFillCalls.length).toBe(10)
-    // 10 ボタン本体分 + show() が末尾で最初の未ロック選択肢(index 0)へ自動フォーカスする際の
-    // visible focus 枠線 stroke 1回分 (#633)。以降の forEach 内アサーションは
-    // strokeSpy.mock.calls[0..9] だけを見るため、末尾に積まれるこの1回とは干渉しない。
-    expect(strokeSpy.mock.calls.length).toBe(11)
+    // 10 ボタン本体分のみ。show() は最初の未ロック選択肢(index 0)へ自動フォーカスするが、
+    // #639 focus-visible化により、キーボード操作前は visible focus 枠線の stroke を呼ばない
+    // （マウス/タップだけのユーザーには見せない）。
+    expect(strokeSpy.mock.calls.length).toBe(10)
 
     buttons.forEach((button, i) => {
       const expectedCleared = cleared[i]
@@ -2148,10 +2148,42 @@ describe('ChoiceOverlay キーボード操作 フラットフォーカス移動 
     vi.restoreAllMocks()
   })
 
-  it('TC-C1: 非グリッド・ロックなしでshow()直後、index 0にフォーカスがある（focusRing描画で確認）', () => {
+  it('TC-C1: 非グリッド・ロックなしでshow()直後、index 0にフォーカスがあるが黄色いリングはまだ描画されない（#639 focus-visible化: マウス/タップ操作だけのユーザーには見せない）', () => {
     const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
     const overlay = new ChoiceOverlay(800, 450)
     overlay.show(choices(3), vi.fn())
+
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    const entry0 = focusInternals(overlay).choiceEntries[0]
+    expect(strokeSpy.mock.instances).not.toContain(entry0.focusRing)
+
+    overlay.hide()
+  })
+
+  it('TC-C1b: Tabキーでフォーカス移動すると、その時点で初めて黄色いリングが描画される（#639 focus-visible化）', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+    const entry0 = focusInternals(overlay).choiceEntries[0]
+    const entry1 = focusInternals(overlay).choiceEntries[1]
+    // ボタン枠線 (drawButton) の stroke は show() だけで既に発生しているため、
+    // 「一切 stroke されない」ではなく focusRing だけを見て判定する。
+    expect(strokeSpy.mock.instances).not.toContain(entry0.focusRing)
+    expect(strokeSpy.mock.instances).not.toContain(entry1.focusRing)
+
+    overlay.handleKeyDown('Tab')
+
+    expect(strokeSpy.mock.instances).toContain(entry1.focusRing)
+
+    overlay.hide()
+  })
+
+  it('TC-C1c: 選択肢が1件のときArrowDownを押してもフォーカス位置は変わらないが、キーボード操作した事実でリングは描画される（#639 setFocusedIndexの早期returnを取りこぼさない）', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(1), vi.fn())
+
+    overlay.handleKeyDown('ArrowDown')
 
     expect(focusInternals(overlay).focusedIndex).toBe(0)
     const entry0 = focusInternals(overlay).choiceEntries[0]
