@@ -385,6 +385,188 @@ describe('TitleScreenOverlay.handleKeyDown() キーボードフォーカス (#63
   })
 })
 
+// #640 テスト観点整理: 黄色いフォーカスリングの visible focus 化（keyboardNavActive）そのものを
+// 狙い撃つ回帰テスト。ChoiceOverlay.test.ts の #639 keyboardNavActive 回帰テスト
+// （TC-C32〜C40）と同型のスタイル（focusInternals 経由で private フィールドへ直接到達し、
+// `Graphics.prototype.stroke` を spy してリング描画の有無を判定する）を踏襲する。
+interface FocusableButtonEntryLike {
+  container: { eventMode: string }
+  focusRing: Graphics
+  onClick: () => void
+  disabled: boolean
+}
+interface TitleScreenFocusInternals {
+  buttonEntries: FocusableButtonEntryLike[]
+  focusedIndex: number
+  keyboardNavActive: boolean
+  setFocusedIndex: (index: number) => void
+}
+function focusInternals(o: TitleScreenOverlay): TitleScreenFocusInternals {
+  return o as unknown as TitleScreenFocusInternals
+}
+
+describe('TitleScreenOverlay keyboardNavActive 回帰テスト (#640)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('TC-T2: show()直後はfocusedIndexが0（新規開始）だが黄色いフォーカスリングはまだ描画されない（マウス/タップ操作だけのユーザーには見せない）', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new TitleScreenOverlay(800, 450)
+
+    overlay.show(makeOpts({ hasSaveData: true }))
+
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    const entry0 = focusInternals(overlay).buttonEntries[0]
+    expect(strokeSpy.mock.instances).not.toContain(entry0.focusRing)
+  })
+
+  it('TC-T3: Tabキーを押すと初めてkeyboardNavActiveがfalse→trueになり、移動先ボタンのfocusRingにstrokeが描画される', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new TitleScreenOverlay(800, 450)
+    overlay.show(makeOpts({ hasSaveData: true }))
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+    const entry1 = focusInternals(overlay).buttonEntries[1]
+
+    overlay.handleKeyDown('Tab')
+
+    expect(focusInternals(overlay).keyboardNavActive).toBe(true)
+    expect(strokeSpy.mock.instances).toContain(entry1.focusRing)
+  })
+
+  it('TC-T4: ArrowDown/ArrowUpでもTabと同様にkeyboardNavActiveがtrueになり移動先にリングが描画される', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+
+    const overlayDown = new TitleScreenOverlay(800, 450)
+    overlayDown.show(makeOpts({ hasSaveData: true }))
+    const entry1 = focusInternals(overlayDown).buttonEntries[1] // つづきから
+    overlayDown.handleKeyDown('ArrowDown')
+    expect(focusInternals(overlayDown).keyboardNavActive).toBe(true)
+    expect(strokeSpy.mock.instances).toContain(entry1.focusRing)
+
+    const overlayUp = new TitleScreenOverlay(800, 450)
+    overlayUp.show(makeOpts({ hasSaveData: true }))
+    const entry3 = focusInternals(overlayUp).buttonEntries[3] // 終了（先頭からArrowUpで末尾へ循環）
+    overlayUp.handleKeyDown('ArrowUp')
+    expect(focusInternals(overlayUp).keyboardNavActive).toBe(true)
+    expect(strokeSpy.mock.instances).toContain(entry3.focusRing)
+  })
+
+  it('TC-T5: pointertapによるマウスクリック選択ではkeyboardNavActiveはfalseのまま、どのfocusRingにもstrokeが呼ばれない', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onNewGame = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: true, onNewGame }))
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+    strokeSpy.mockClear()
+
+    overlay.children[2].emit('pointertap', {} as never) // 新規開始ボタン
+
+    expect(onNewGame).toHaveBeenCalledTimes(1)
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+    const rings = focusInternals(overlay).buttonEntries.map((e) => e.focusRing)
+    expect(rings.some((ring) => strokeSpy.mock.instances.includes(ring))).toBe(false)
+  })
+
+  it('TC-T6(最重要): Tab操作でkeyboardNavActive=trueにした後、hide()→show()を呼んでも保持され、新しいbuttonEntriesの初期フォーカス(index0)に即座にリングが描画される', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new TitleScreenOverlay(800, 450)
+    overlay.show(makeOpts({ hasSaveData: true }))
+    overlay.handleKeyDown('Tab')
+    expect(focusInternals(overlay).keyboardNavActive).toBe(true)
+    overlay.hide()
+
+    strokeSpy.mockClear()
+    overlay.show(makeOpts({ hasSaveData: true }))
+
+    expect(focusInternals(overlay).keyboardNavActive).toBe(true)
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    const entry0 = focusInternals(overlay).buttonEntries[0]
+    expect(strokeSpy.mock.instances).toContain(entry0.focusRing)
+  })
+
+  it('TC-T7: Tabを2回連続で押しても2回目はactivateKeyboardFocusVisibleの早期returnで例外なく完了する（冪等性）', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new TitleScreenOverlay(800, 450)
+    overlay.show(makeOpts({ hasSaveData: true }))
+
+    expect(() => overlay.handleKeyDown('Tab')).not.toThrow()
+    const callCountAfterFirstTab = strokeSpy.mock.calls.length
+
+    expect(() => overlay.handleKeyDown('Tab')).not.toThrow()
+
+    // 2回目はkeyboardNavActiveが既にtrueのためactivateKeyboardFocusVisible側は早期returnし、
+    // 移動先1件分のリング描画（stroke1回）だけが増える。
+    expect(strokeSpy.mock.calls.length).toBe(callCountAfterFirstTab + 1)
+  })
+
+  it('TC-T8a: hasSaveData:false（enabled3個: 新規開始/設定/終了）でもTab操作によりリングが正しく描画される', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new TitleScreenOverlay(800, 450)
+    overlay.show(makeOpts({ hasSaveData: false }))
+    const entry2 = focusInternals(overlay).buttonEntries[2] // 設定（つづきからをスキップした次）
+
+    overlay.handleKeyDown('Tab')
+
+    expect(focusInternals(overlay).keyboardNavActive).toBe(true)
+    expect(focusInternals(overlay).focusedIndex).toBe(2)
+    expect(strokeSpy.mock.instances).toContain(entry2.focusRing)
+  })
+
+  it('TC-T8b: hasSaveData:true（enabled4個）でもTab操作によりリングが正しく描画される', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new TitleScreenOverlay(800, 450)
+    overlay.show(makeOpts({ hasSaveData: true }))
+    const entry1 = focusInternals(overlay).buttonEntries[1] // つづきから
+
+    overlay.handleKeyDown('Tab')
+
+    expect(focusInternals(overlay).keyboardNavActive).toBe(true)
+    expect(focusInternals(overlay).focusedIndex).toBe(1)
+    expect(strokeSpy.mock.instances).toContain(entry1.focusRing)
+  })
+
+  it("TC-T9: show()未呼び出し（buttonEntries空・focusedIndex=-1）状態でhandleKeyDown('Tab'/'ArrowDown'/'ArrowUp')を呼んでも例外・console.errorが出ない", () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const overlay = new TitleScreenOverlay(800, 450)
+
+    expect(() => {
+      overlay.handleKeyDown('Tab')
+      overlay.handleKeyDown('ArrowDown')
+      overlay.handleKeyDown('ArrowUp')
+    }).not.toThrow()
+
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('TC-T10: 未知のキー文字列や空文字を渡してもkeyboardNavActiveは変化しない（false→falseのまま）', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    overlay.show(makeOpts({ hasSaveData: true }))
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+
+    expect(overlay.handleKeyDown('')).toBe(false)
+    expect(overlay.handleKeyDown('PageDown')).toBe(false)
+    expect(overlay.handleKeyDown('Escape')).toBe(false)
+
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+  })
+
+  it('TC-T11: keyboardNavActive=falseのままsetFocusedIndex()を直接呼んでも、リングは描画されないがfocusedIndexは正しく前進する（リング描画ガードとフォーカス移動そのものが独立していることの明示。将来このifブロックに他の副作用が足された際の検知用の安全網）', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new TitleScreenOverlay(800, 450)
+    overlay.show(makeOpts({ hasSaveData: true }))
+    expect(focusInternals(overlay).keyboardNavActive).toBe(false)
+    const entry1 = focusInternals(overlay).buttonEntries[1]
+    strokeSpy.mockClear()
+
+    focusInternals(overlay).setFocusedIndex(1)
+
+    expect(focusInternals(overlay).focusedIndex).toBe(1)
+    expect(strokeSpy.mock.instances).not.toContain(entry1.focusRing)
+  })
+})
+
 describe('TitleScreenOverlay ボタン幅クランプ', () => {
   it('TC24: 極端に大きい screenWidth でも buttonWidth が BUTTON_MAX_WIDTH でクランプされる', () => {
     const overlay = new TitleScreenOverlay(10000, 450)
