@@ -4645,8 +4645,13 @@ export class NovelRenderer {
     if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) {
       // resolveMissingSceneAndRestore の S2 と同じ配慮: 早期 return でも flags だけは
       // 必ず反映する。pendingMissingScenes 側は同時実行中の解決に任せる正常系に近いため
-      // warn は出さない。
+      // warn は出さない。この経路も他の「フラグのみ復元して return」経路と同じく
+      // resumeAutoAdvanceIfPending() を呼ぶ（#620 セルフレビュー指摘）: pendingMissingScenes
+      // が示す「別経路の解決」が resumeAutoAdvanceIfPending() を呼ばないメソッド
+      // （jumpToScene 等）経由だった場合、ここで呼ばないと pendingAutoAdvance が誰にも
+      // 解消されずフリーズが残る。resumeAutoAdvanceIfPending() は冪等なので重複呼び出しも安全。
       this.gameState.fromJSON(data.flags)
+      this.resumeAutoAdvanceIfPending()
       return
     }
     this.pendingMissingScenes.add(sceneId)
