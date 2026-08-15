@@ -55,3 +55,13 @@ describe('RPGPlayer の設定ポップアップ スライダー色 (#601 セル�
     })
   })
 })
+
+// #639: :focus-visible の実ブラウザ挙動は jsdom で再現できないが、クラス文字列が DOM に
+// 実際に載っていることは機械チェックできる。将来のリファクタでこのクラスが誤って落ちても
+// 検知できるよう固定する。
+describe('RPGPlayer focus-visible クラス付与 (#639)', () => {
+  it('FV1: 設定ボタンに focus-visible: クラスが付与されている', () => {
+    render(<RPGPlayer />)
+    expect(screen.getByRole('button', { name: '設定を開く' }).className).toContain('focus-visible:')
+  })
+})
