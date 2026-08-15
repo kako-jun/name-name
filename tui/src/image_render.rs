@@ -253,6 +253,30 @@ fn average(sum: (u32, u32, u32, u32)) -> (u8, u8, u8) {
     ((sum.0 / n) as u8, (sum.1 / n) as u8, (sum.2 / n) as u8)
 }
 
+/// `(sub_x, sub_y)` を左上とする 2x2 ブロックを `get` で読み取り、黒背景へ合成してから
+/// [`quadrant_cell_from_subpixels`] へ渡す共通ヘルパー。`rgba_to_quadrant_grid` 系の
+/// 6つのバリアント（cover-fit グリッド／ネイティブ解像度／スクロール窓、それぞれの通常版・
+/// ピクセレート版）は、サブピクセルの読み取り元と境界チェックの有無（`get` の中身）・
+/// オフセット計算（`sub_x`/`sub_y` の求め方）がそれぞれ異なるため丸ごとの共通化はできないが、
+/// 「2x2ブロックを読んで黒合成し `quadrant_cell_from_subpixels` へ渡す」処理自体は
+/// 6箇所とも完全に同一だった（dev-doctrine 規律4、セルフレビュー指摘対応）。
+fn quadrant_cell_at(
+    get: impl Fn(u32, u32) -> (u8, u8, u8, u8),
+    sub_x: u32,
+    sub_y: u32,
+) -> QuadrantCell {
+    let ul = get(sub_x, sub_y);
+    let ur = get(sub_x + 1, sub_y);
+    let ll = get(sub_x, sub_y + 1);
+    let lr = get(sub_x + 1, sub_y + 1);
+    quadrant_cell_from_subpixels([
+        composite_over_black(ul.0, ul.1, ul.2, ul.3),
+        composite_over_black(ur.0, ur.1, ur.2, ur.3),
+        composite_over_black(ll.0, ll.1, ll.2, ll.3),
+        composite_over_black(lr.0, lr.1, lr.2, lr.3),
+    ])
+}
+
 /// ターミナルの1文字セルの実世界アスペクト比（幅 / 高さ）。文字セルは一般に正方形ではなく
 /// 縦長（幅の約2倍の高さ）と言われるが、実際の値はターミナルエミュレータ・フォント・
 /// フォントサイズに強く依存する近似値であり、実測に基づく確定値ではない（#489）。
@@ -524,22 +548,13 @@ pub fn rgba_to_quadrant_grid(
         return blank_grid(cols, rows);
     }
 
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
     let mut cells = Vec::with_capacity(cols as usize * rows as usize);
     for cy in 0..rows {
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = u32::from(cy) * 2;
-            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage { cols, rows, cells }
@@ -618,22 +633,13 @@ pub fn rgba_to_quadrant_grid_pixelated(
         return blank_grid(cols, rows);
     }
 
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
     let mut cells = Vec::with_capacity(cols as usize * rows as usize);
     for cy in 0..rows {
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = u32::from(cy) * 2;
-            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage { cols, rows, cells }
@@ -676,22 +682,13 @@ pub fn rgba_to_quadrant_grid_window(
         return blank_grid(cols, visible_rows);
     }
 
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
     let mut cells = Vec::with_capacity(cols as usize * visible_rows as usize);
     for cy in 0..visible_rows {
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = u32::from(cy) * 2;
-            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage {
@@ -737,19 +734,129 @@ pub fn rgba_to_quadrant_grid_native(pixels: &[u8], img_w: u32, img_h: u32) -> Re
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = u32::from(cy) * 2;
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage { cols, rows, cells }
+}
+
+/// [`rgba_to_quadrant_grid_native`] のピクセレート遷移 (#628、スプラッシュロゴ用) 版。
+/// [`rgba_to_quadrant_grid_pixelated`] が cover-fit グリッドに対してコルセン/リファインの
+/// 粗さを適用するのと同じ考え方を、クロップ・アスペクト補正を経由しないネイティブ解像度側に
+/// も適用する——元画像のピクセル空間 (`img_w` x `img_h`) をそのまま「粗い解像度
+/// (`img_w`/`img_h` を `coarse_divisor` で割った値) へダウンサンプル → 最近傍で
+/// `img_w` x `img_h` へ拡大」してから、[`rgba_to_quadrant_grid_native`] と同じ
+/// 「1セル=2x2ピクセル」の読み取りロジックへ渡す。
+///
+/// `coarse_divisor <= 1` は [`rgba_to_quadrant_grid_native`] を直接呼ぶのと完全に同じ出力
+/// （[`rgba_to_quadrant_grid_pixelated`] の doc comment と同じ「遷移完了時に見た目の
+/// 不連続が起きない」根拠）。
+pub fn rgba_to_quadrant_grid_native_pixelated(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    coarse_divisor: u32,
+) -> RenderedImage {
+    if coarse_divisor <= 1 {
+        return rgba_to_quadrant_grid_native(pixels, img_w, img_h);
+    }
+    if img_w == 0 || img_h == 0 {
+        return blank_grid(0, 0);
+    }
+    let cols = img_w.div_ceil(2).min(u32::from(u16::MAX)) as u16;
+    let rows = img_h.div_ceil(2).min(u32::from(u16::MAX)) as u16;
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
+        return blank_grid(cols, rows);
+    }
+
+    let coarse_w = (img_w / coarse_divisor).max(1);
+    let coarse_h = (img_h / coarse_divisor).max(1);
+    let coarse = downsample_box(pixels, img_w, img_h, coarse_w, coarse_h);
+    if coarse.is_empty() {
+        return blank_grid(cols, rows);
+    }
+    let upscaled = nearest_upscale(&coarse, coarse_w, coarse_h, img_w, img_h);
+    if upscaled.is_empty() {
+        return blank_grid(cols, rows);
+    }
+
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) {
+        if x >= img_w || y >= img_h {
+            return (0, 0, 0, 0);
+        }
+        upscaled[(y * img_w + x) as usize]
+    };
+
+    let mut cells = Vec::with_capacity(cols as usize * rows as usize);
+    for cy in 0..rows {
+        for cx in 0..cols {
+            let sub_x = u32::from(cx) * 2;
+            let sub_y = u32::from(cy) * 2;
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
+        }
+    }
+    RenderedImage { cols, rows, cells }
+}
+
+/// [`rgba_to_quadrant_grid_window`] のピクセレート遷移 (#628、スプラッシュの巨大ロゴ
+/// フォールバック用) 版。`coarse_divisor <= 1` は素通しで [`rgba_to_quadrant_grid_window`] と
+/// 完全に同じ出力（他のピクセレート版と同じ「遷移完了時の見た目の不連続なし」根拠）。
+///
+/// [`downsample_box_window`] のような「可視範囲だけを計算する」最適化は行わない——画像全体を
+/// 一旦コルセン解像度へ縮小してから最近傍で全体を拡大し、そこから可視範囲を読み取る。
+/// この経路はスプラッシュの巨大ロゴフォールバック（想定外ケース、Issue #588 doc comment 参照）
+/// でのみ使われ、遷移自体も数百ms〜1秒程度で終わるため、メモリ最適化より実装の単純さを
+/// 優先する判断（#628 実装判断）。
+#[allow(clippy::too_many_arguments)]
+pub fn rgba_to_quadrant_grid_window_pixelated(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    cols: u16,
+    total_rows: u16,
+    offset: u16,
+    rows: u16,
+    coarse_divisor: u32,
+) -> RenderedImage {
+    if coarse_divisor <= 1 {
+        return rgba_to_quadrant_grid_window(pixels, img_w, img_h, cols, total_rows, offset, rows);
+    }
+    let visible_rows = total_rows.saturating_sub(offset).min(rows);
+    if cols == 0 || total_rows == 0 || visible_rows == 0 || img_w == 0 || img_h == 0 {
+        return blank_grid(cols, visible_rows);
+    }
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
+        return blank_grid(cols, visible_rows);
+    }
+
+    let sub_w = u32::from(cols) * 2;
+    let total_sub_h = u32::from(total_rows) * 2;
+    let coarse_w = (sub_w / coarse_divisor).max(1);
+    let coarse_h = (total_sub_h / coarse_divisor).max(1);
+    let coarse = downsample_box(pixels, img_w, img_h, coarse_w, coarse_h);
+    if coarse.is_empty() {
+        return blank_grid(cols, visible_rows);
+    }
+    let sub = nearest_upscale(&coarse, coarse_w, coarse_h, sub_w, total_sub_h);
+    if sub.is_empty() {
+        return blank_grid(cols, visible_rows);
+    }
+
+    let sub_offset = u32::from(offset) * 2;
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
+    let mut cells = Vec::with_capacity(cols as usize * visible_rows as usize);
+    for cy in 0..visible_rows {
+        for cx in 0..cols {
+            let sub_x = u32::from(cx) * 2;
+            let sub_y = sub_offset + u32::from(cy) * 2;
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
+        }
+    }
+    RenderedImage {
+        cols,
+        rows: visible_rows,
+        cells,
+    }
 }
 
 #[cfg(test)]
@@ -1362,6 +1469,195 @@ mod tests {
         assert_eq!(grid.cols, 2);
         assert_eq!(grid.rows, 1);
         assert_eq!(grid.cells.len(), 2);
+    }
+
+    // ---- #628: rgba_to_quadrant_grid_native_pixelated（スプラッシュロゴのピクセレート遷移）----
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_pixelated_divisor_one_matches_plain_native_grid() {
+        // rgba_to_quadrant_grid_pixelated_divisor_one_matches_plain_grid と対称の契約確認
+        // （doc comment に明記: coarse_divisor<=1 は rgba_to_quadrant_grid_native と完全一致し、
+        // 遷移完了時に見た目の不連続が起きないことの根拠）。4象限に色分けした画像で、単純平均に
+        // 潰れていないことまで確認する。
+        #[rustfmt::skip]
+        let pixels: Vec<u8> = vec![
+            255, 0, 0, 255,   255, 0, 0, 255,   0, 0, 255, 255,   0, 0, 255, 255,
+            255, 0, 0, 255,   255, 0, 0, 255,   0, 0, 255, 255,   0, 0, 255, 255,
+        ];
+        let plain = rgba_to_quadrant_grid_native(&pixels, 4, 2);
+        let pixelated_divisor_1 = rgba_to_quadrant_grid_native_pixelated(&pixels, 4, 2, 1);
+        let pixelated_divisor_0 = rgba_to_quadrant_grid_native_pixelated(&pixels, 4, 2, 0);
+        assert_eq!(
+            plain, pixelated_divisor_1,
+            "coarse_divisor=1はrgba_to_quadrant_grid_nativeと一致するはず"
+        );
+        assert_eq!(
+            plain, pixelated_divisor_0,
+            "coarse_divisor=0もmax(1)で1扱いになりrgba_to_quadrant_grid_nativeと一致するはず"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_pixelated_zero_sized_image_returns_blank_grid_without_panicking(
+    ) {
+        // coarse_divisor<=1の早期returnを経由しない(>1)分岐で、img_w/img_h=0がblank_grid(0,0)を
+        // 返すことを確認する（rgba_to_quadrant_grid_native_zero_sized_image_...と対称）。
+        let grid = rgba_to_quadrant_grid_native_pixelated(&[], 0, 0, 4);
+        assert_eq!(grid, blank_grid(0, 0));
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_pixelated_pixels_shorter_than_declared_size_returns_blank_grid_without_panicking(
+    ) {
+        // rgba_to_quadrant_grid_native_pixels_shorter_than_declared_size_...と対称
+        // （coarse_divisor>1分岐でも不正な長さのpixelsに対してblank_gridを返す）。
+        let pixels = vec![255u8; 4]; // 1画素分しかないのに 4x4 を主張する不正な入力
+        let grid = rgba_to_quadrant_grid_native_pixelated(&pixels, 4, 4, 4);
+        assert_eq!(grid.cols, 2);
+        assert_eq!(grid.rows, 2);
+        assert!(
+            grid.cells.iter().all(|c| *c == BLANK_CELL),
+            "不正な長さのpixelsに対してはblank_gridを返すべき（panicしない）"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_pixelated_tiny_image_with_huge_divisor_clamps_coarse_dimensions_without_panicking(
+    ) {
+        // 1x1画像に対してcoarse_divisor=100を渡すと、coarse_w/coarse_hは
+        // (1/100).max(1)=1にクランプされる。ゼロ除算・空グリッドでのpanicが起きないことを
+        // 確認する回帰ガード。
+        let pixels: Vec<u8> = vec![200, 100, 50, 255];
+        let grid = rgba_to_quadrant_grid_native_pixelated(&pixels, 1, 1, 100);
+        assert_eq!(grid.cols, 1);
+        assert_eq!(grid.rows, 1);
+        assert_eq!(grid.cells.len(), 1);
+    }
+
+    // ---- #628: rgba_to_quadrant_grid_window_pixelated（スプラッシュ巨大ロゴフォールバック用）----
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_divisor_one_matches_plain_window_grid() {
+        // rgba_to_quadrant_grid_pixelated_divisor_one_matches_plain_grid と対称の契約確認。
+        let pixels = vec![255, 0, 0, 255];
+        let plain = rgba_to_quadrant_grid_window(&pixels, 1, 1, 4, 4, 0, 4);
+        let pixelated_divisor_1 =
+            rgba_to_quadrant_grid_window_pixelated(&pixels, 1, 1, 4, 4, 0, 4, 1);
+        let pixelated_divisor_0 =
+            rgba_to_quadrant_grid_window_pixelated(&pixels, 1, 1, 4, 4, 0, 4, 0);
+        assert_eq!(
+            plain, pixelated_divisor_1,
+            "coarse_divisor=1はrgba_to_quadrant_grid_windowと一致するはず"
+        );
+        assert_eq!(
+            plain, pixelated_divisor_0,
+            "coarse_divisor=0もmax(1)で1扱いになりrgba_to_quadrant_grid_windowと一致するはず"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_zero_dimensions_returns_blank_grid_without_panicking()
+    {
+        // coarse_divisor>1（早期returnで rgba_to_quadrant_grid_window へ委譲しない）経路での
+        // cols/total_rows/img_w/img_h=0の4パターンをテーブル駆動で確認する。
+        let pixels = vec![255u8; 4 * 4 * 4];
+        struct Case {
+            name: &'static str,
+            cols: u16,
+            total_rows: u16,
+            img_w: u32,
+            img_h: u32,
+        }
+        let cases = [
+            Case {
+                name: "cols=0",
+                cols: 0,
+                total_rows: 10,
+                img_w: 4,
+                img_h: 4,
+            },
+            Case {
+                name: "total_rows=0",
+                cols: 4,
+                total_rows: 0,
+                img_w: 4,
+                img_h: 4,
+            },
+            Case {
+                name: "img_w=0",
+                cols: 4,
+                total_rows: 10,
+                img_w: 0,
+                img_h: 4,
+            },
+            Case {
+                name: "img_h=0",
+                cols: 4,
+                total_rows: 10,
+                img_w: 4,
+                img_h: 0,
+            },
+        ];
+        for case in cases {
+            let grid = rgba_to_quadrant_grid_window_pixelated(
+                &pixels,
+                case.img_w,
+                case.img_h,
+                case.cols,
+                case.total_rows,
+                0,
+                5,
+                4,
+            );
+            let expected_visible_rows = case.total_rows.saturating_sub(0).min(5);
+            assert_eq!(
+                grid,
+                blank_grid(case.cols, expected_visible_rows),
+                "case {} はblank_gridを返すはず",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_offset_at_or_beyond_total_rows_returns_blank_grid_without_panicking(
+    ) {
+        // offset>=total_rowsは`total_rows.saturating_sub(offset)`が0になりvisible_rows=0の
+        // 境界。coarse_divisor>1の経路でもpanicせずblank_gridを返すことを確認する。
+        let pixels = vec![255u8; 4 * 4 * 4];
+        let grid = rgba_to_quadrant_grid_window_pixelated(&pixels, 4, 4, 4, 10, 10, 5, 4);
+        assert_eq!(grid, blank_grid(4, 0), "offset==total_rowsはvisible_rows=0");
+
+        let grid_over = rgba_to_quadrant_grid_window_pixelated(&pixels, 4, 4, 4, 10, 15, 5, 4);
+        assert_eq!(
+            grid_over,
+            blank_grid(4, 0),
+            "offset>total_rowsもsaturating_subでvisible_rows=0"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_requested_rows_exceeding_remaining_are_clamped() {
+        // rowsがtotal_rows.saturating_sub(offset)を超過指定された場合、visible_rowsは
+        // 残り行数へクランプされる（rgba_to_quadrant_grid_window_uses_only_requested_visible_rows
+        // と対称の契約確認、coarse_divisor>1の経路）。
+        let pixels = vec![255, 0, 0, 255];
+        let grid = rgba_to_quadrant_grid_window_pixelated(&pixels, 1, 1, 4, 10, 8, 100, 4);
+        assert_eq!(
+            grid.rows, 2,
+            "残り行数(10-8=2)へクランプされるはず(要求は100行)"
+        );
+        assert_eq!(grid.cells.len(), 4 * 2);
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_pixels_shorter_than_declared_size_returns_blank_grid_without_panicking(
+    ) {
+        // rgba_to_quadrant_grid_window_rejects_overflowing_source_size_without_panicking と
+        // 対称の契約確認（coarse_divisor>1の経路）。
+        let short = vec![255u8; 4]; // 1画素分しかないのに4x4を主張する不正な入力
+        let grid = rgba_to_quadrant_grid_window_pixelated(&short, 4, 4, 4, 10, 0, 5, 4);
+        assert_eq!(grid, blank_grid(4, 5));
     }
 
     #[test]

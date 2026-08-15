@@ -330,6 +330,17 @@ where
     let mut target_scroll_offset: u16 = 0;
     let mut scroll_anim_start_offset: u16 = 0;
     let mut scroll_anim_start = Instant::now();
+    // ロゴのピクセレート遷移（#628、黒ベタ→コルセン→スワップ→リファイン）。`event_loop` の
+    // `image_fade` と同じ設計 — `settled(None, ..)` で「まだ何も表示していない」状態から始め、
+    // ロゴパスが実際に解決できた最初のフレームで `transition_to` を1回だけ呼ぶ（下のループ
+    // 先頭、`image_fade.current_target().is_none()` ガード参照）。テキストモード
+    // （`splash.logo_image` が未設定）ではロゴパスが一度も解決できないため `settled(None, ..)`
+    // のまま — `ui::draw_splash` はこの場合そもそも `image_fade` を参照しない
+    // （`splash_pixelate_phase` 経由、`draw_splash` doc comment参照）ため無害。
+    let mut image_fade = image_fade::ImageFadeState::settled(
+        None,
+        name_name_parser::models::AmbientEffects::default(),
+    );
     loop {
         let now = Instant::now();
         let elapsed_ms = now.saturating_duration_since(scroll_anim_start).as_millis() as u64;
@@ -340,8 +351,38 @@ where
             target_scroll_offset,
             progress,
         );
+
+        // #628: ロゴパスがまだ解決できていなければ（初回、またはテキストモード）、
+        // 解決を試みてピクセレート遷移を開始する。一度 `Some` になれば
+        // `current_target().is_none()` が偽になり以後は再トリガーしない。
+        if image_fade.current_target().is_none() {
+            if let Some(path) = config.resolve_splash_logo_path() {
+                if image_cache.get_or_load(&path).is_some() {
+                    let target = config
+                        .splash
+                        .logo_image
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned());
+                    image_fade = image_fade.transition_to(
+                        target,
+                        name_name_parser::models::AmbientEffects::default(),
+                        name_name_parser::models::EventImageTransition::Pixelate,
+                        Duration::from_millis(config.event_image.crossfade_ms),
+                        now,
+                    );
+                }
+            }
+        }
+
         terminal.draw(|frame| {
-            ui::draw_splash(frame, config, &mut image_cache, display_scroll_offset)
+            ui::draw_splash(
+                frame,
+                config,
+                &mut image_cache,
+                display_scroll_offset,
+                Some(&image_fade),
+                now,
+            )
         })?;
 
         match next_action()? {
@@ -875,6 +916,7 @@ where
                 Some(&image_fade),
                 &mut image_cache,
                 playback.is_blackout(),
+                playback.current_item_is_image_only(),
             )
         })?;
 
@@ -2298,6 +2340,122 @@ mod tests {
     }
 
     #[test]
+    fn event_loop_fullscreen_image_config_switches_layout_across_image_then_dialog_then_choice_items(
+    ) {
+        // #628 end-to-end 配線確認: main.rs -> Playback -> ui::draw の配線が、実ドキュメントの
+        // item種別から`image_only_item`を正しく導出できているかのこれまで存在しなかった
+        // 統合テスト（ui.rs側の単体テストはimage_only_itemを手で渡すだけで、実ドキュメントの
+        // item遷移からの導出は検証していなかった）。config.fullscreen_image=trueの実ドキュメント
+        // （Image item → Dialog item → Choice item）をAction::Advanceで進め、各stepでバッファが
+        // 「全画面画像 → 左右分割テキスト → 左右分割選択肢」と正しく切り替わることを確認する。
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 4, 4), 4, 4);
+        let mut config = instant_config();
+        config.fullscreen_image = true;
+        config.event_image.assets_dir = fixture_path.parent().unwrap().to_path_buf();
+        let relative = fixture_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        // [待機: 999999]は本テストの実行時間よりはるかに長いため、自動送りタイマーが
+        // 先に発火することはない(手動Advanceだけで進める)。
+        let source = format!(
+            "---\nengine: name-name\n---\n\n## 1-1: 開始\n\n\
+             [イベント絵: {relative}]\n[待機: 999999]\n\n\
+             **B**:\nafter image\n\n\
+             [選択]\n- 進む→1-1\n[/選択]\n"
+        );
+        let document = name_name_parser::parser::parse(&source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        // step 1: 初期位置(Image item)のまま1フレーム描画 -> 全画面画像。
+        assert!(
+            playback.current_item_is_image_only(),
+            "テストの前提: ドキュメント先頭はImage itemのはず"
+        );
+        let (mut next_action1, _r1) = action_queue(vec![Action::Quit]);
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action1,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((ui::REQUIRED_TOTAL_WIDTH - 1, 0))
+                .unwrap()
+                .bg,
+            Color::Rgb(color.0, color.1, color.2),
+            "Image item配置直後は全画面画像のはず(右端=本来のtext_area側まで画像色)"
+        );
+
+        // step 2: Advance -> Dialog item(テキスト付き) -> 左右分割テキストへ戻る。
+        let (mut next_action2, _r2) = action_queue(vec![Action::Advance, Action::Quit]);
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action2,
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(
+            !playback.current_item_is_image_only(),
+            "テストの前提: この時点でDialog item上にいるはず"
+        );
+        let text_after_dialog = buffer_text(&terminal);
+        assert!(
+            text_after_dialog.contains("after image"),
+            "buffer was: {text_after_dialog}"
+        );
+        assert_ne!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((ui::REQUIRED_TOTAL_WIDTH - 1, 0))
+                .unwrap()
+                .bg,
+            Color::Rgb(color.0, color.1, color.2),
+            "Dialog itemでは左右分割に戻り右端(text_area側)は画像色で埋まらないはず"
+        );
+
+        // step 3: Advance -> Choice item -> 左右分割選択肢。
+        let (mut next_action3, _r3) = action_queue(vec![Action::Advance, Action::Quit]);
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action3,
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(
+            playback.current_choice().is_some(),
+            "テストの前提: この時点でChoice item上にいるはず"
+        );
+        let text_after_choice = buffer_text(&terminal);
+        assert!(
+            text_after_choice.contains("進む"),
+            "buffer was: {text_after_choice}"
+        );
+    }
+
+    #[test]
     fn event_loop_advance_to_same_event_image_path_does_not_restart_fade_timer() {
         // デシジョンテーブル#4（Some(A)→Some(A)、同一パスが連続する行）の回帰ガード:
         // 無駄な再フェードトリガーの防止。crossfade_ms をテスト実行時間よりはるかに
@@ -2611,6 +2769,85 @@ mod tests {
     }
 
     #[test]
+    fn show_splash_pixelate_transition_settles_after_many_none_actions_without_retriggering_anchor()
+    {
+        // #628 回帰ガード: `image_fade.current_target().is_none()` ガードが壊れて毎ループ
+        // `transition_to` が再トリガーされると、`started_at` が毎フレーム現在時刻へ
+        // リセットされ続けるため、どれだけ実時間(cumulative sleep)が経過しても進行度は
+        // 常に直近フレーム間隔ぶんしか進まず、永久にコルセン中(黒)のままになる。
+        // crossfade_ms を短く設定し、Noneアクションの間に実スリープを積み重ねて累積経過時間が
+        // durationを超えるようにし、最終フレームが実際にロゴ色まで収束していることを
+        // 確認する（native表示、214x46px参照サイズ）。
+        let color = (10u8, 200u8, 30u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 214, 46), 214, 46);
+        let mut config = image_splash_config(&fixture_path);
+        config.event_image.crossfade_ms = 40;
+
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let mut steps: Vec<(Duration, Action)> = (0..8)
+            .map(|_| (Duration::from_millis(8), Action::None))
+            .collect();
+        steps.push((Duration::ZERO, Action::Advance));
+        let mut next_action = scripted_next_action(steps);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+        assert!(advanced);
+
+        let buffer = terminal.backend().buffer();
+        let center = (
+            ui::REQUIRED_TOTAL_WIDTH / 2,
+            (ui::REQUIRED_TOTAL_HEIGHT - 1) / 2,
+        );
+        assert_eq!(
+            buffer.cell(center).unwrap().bg,
+            Color::Rgb(color.0, color.1, color.2),
+            "累積64ms(>duration 40ms)経過後の最終フレームはSettledに収束しロゴ色になるはず。\
+             もしtransition anchorが毎ループ再トリガーされていれば、直近フレーム間隔(8ms)分しか\
+             進行しないため永久に黒のままになるはず"
+        );
+    }
+
+    #[test]
+    fn show_splash_unresolvable_logo_path_falls_back_to_text_mode_across_many_none_actions() {
+        // #628: ロゴパスが一度も解決できない場合（存在しないファイルを指す等）、
+        // `image_fade.current_target().is_none()`ガードにより`transition_to`は一度も
+        // 呼ばれず`settled(None, ..)`のまま留まる（`show_splash`のdoc comment参照）。
+        // 何周ループしても`draw_splash`はテキストモード（`draw_splash_text`）へフォール
+        // バックし続けるはずで、テキストモードのロゴ行が表示され続けることを確認する。
+        let mut config = splash_config();
+        config.splash.logo_image = Some(std::path::PathBuf::from("does-not-exist-628.webp"));
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, remaining) = action_queue(vec![
+            Action::None,
+            Action::None,
+            Action::None,
+            Action::None,
+            Action::None,
+            Action::Advance,
+        ]);
+
+        let advanced = show_splash(&mut terminal, &config, &mut next_action).unwrap();
+
+        assert!(advanced);
+        assert_eq!(*remaining.borrow(), 0);
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("田"),
+            "ロゴパスが解決できない間はテキストモードのロゴ行が表示され続けるはず, \
+             buffer was: {text}"
+        );
+    }
+
+    #[test]
     fn run_screens_skips_splash_when_should_show_splash_is_false() {
         let config = Config::default(); // splash.enabled == false（既定）
         assert!(!config.should_show_splash());
@@ -2866,6 +3103,11 @@ mod tests {
         let fixture_path = banded_scroll_fixture();
         let mut config = image_splash_config(&fixture_path);
         config.splash.scroll_ease_ms = 60_000;
+        // #628: ロゴのピクセレート遷移(黒ベタ→コルセン→スワップ→リファイン)は
+        // `config.event_image.crossfade_ms`(既定700ms)ぶん実時間がかかる。このテストは
+        // スクロールオフセットの検証が目的でピクセレート演出とは無関係なため、0にして
+        // 即座に完成形(settled)で表示させる。
+        config.event_image.crossfade_ms = 0;
 
         let mut terminal = Terminal::new(TestBackend::new(
             ui::REQUIRED_TOTAL_WIDTH,
@@ -2985,6 +3227,10 @@ mod tests {
         let fixture_path = per_row_scroll_fixture();
         let mut config = image_splash_config(&fixture_path);
         config.splash.scroll_ease_ms = 0;
+        // #628: このテストもスクロールオフセットの検証が目的でピクセレート演出とは無関係
+        // （上の `show_splash_movedown_does_not_instantly_jump_to_target_scroll_offset` と
+        // 同じ理由）。
+        config.event_image.crossfade_ms = 0;
 
         let mut actions = vec![Action::MoveDown; 50];
         actions.push(Action::MoveUp);

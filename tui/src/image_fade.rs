@@ -86,12 +86,23 @@ impl ImageFadeState {
 
     /// `now` 時点の進行度（0.0=開始直後、1.0=完了）。`duration` がゼロなら常に `1.0`
     /// （[`Self::settled`] はこの経路で常に完了扱いになる）。
-    fn progress(&self, now: Instant) -> f32 {
+    ///
+    /// `pub(crate)`: 通常プレイの [`Self::snapshot`] が内部でこの値を使う以外に、
+    /// スプラッシュのピクセレート遷移（#628、`ui::splash_pixelate_phase`）も
+    /// `resolve_grid`（パス解決ベースの cover-fit 経路）を経由せず進行度だけをここから
+    /// 直接借りてネイティブ/contain-fit専用のグリッド化関数へ渡すため公開範囲を広げた。
+    pub(crate) fn progress(&self, now: Instant) -> f32 {
         if self.duration.is_zero() {
             return 1.0;
         }
         let elapsed = now.saturating_duration_since(self.started_at);
         (elapsed.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0)
+    }
+
+    /// 現在進行中（または直近に完了した）遷移のモード（[`EventImageTransition`]、#628）。
+    /// [`Self::progress`] と同じ理由で、スプラッシュのピクセレート遷移がここから直接借りる。
+    pub(crate) fn transition_mode(&self) -> EventImageTransition {
+        self.to_transition
     }
 
     /// オーバーレイ（バックログ/設定画面）が開いていた実時間（`by`）ぶん、クロスフェードの

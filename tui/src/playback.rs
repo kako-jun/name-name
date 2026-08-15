@@ -1200,6 +1200,23 @@ impl Playback {
         self.item_wait_ms.get(self.index).copied().flatten()
     }
 
+    /// 現在位置が「テキストを持たない画像コマ」item（[`PlaybackItem::Image`]）かどうか
+    /// （#628 `fullscreen_image` frontmatter 相当のTUI向け設定用）。
+    ///
+    /// `current_line()` は `Line`/`Image` の両方で同じ `DisplayLine` を返しこの区別を消して
+    /// しまう——`Image` item の `speaker`/`text` は直前の会話行から引き継いだ値であり空では
+    /// ないため（`push_wait_chain_terminal_item`/`build_scene_items` 参照）、`DisplayLine` の
+    /// フィールドだけでは「新しく表示すべき会話テキストが無い（＝イベント絵単体シーン）」を
+    /// 判定できない。この区別は `PlaybackItem` の variant にしか残っていないため、専用の
+    /// アクセサとして公開する。
+    ///
+    /// `pending_wait_ms().is_some()` だけでは代用できない — `push_wait_chain_terminal_item`
+    /// （暗転/シーン遷移直前の連鎖終端）が生成する `PlaybackItem::Image` は `item_wait_ms` に
+    /// 常に `None` を積むため、そちらも「テキストを持たない画像コマ」に含める必要がある。
+    pub fn current_item_is_image_only(&self) -> bool {
+        matches!(self.items.get(self.index), Some(PlaybackItem::Image(_)))
+    }
+
     /// `items` 内の生の現在位置（0始まり）。`position()`（会話行のみを数える1始まりのカウント）
     /// とは異なり、画像コマ item（[`PlaybackItem::Image`]、#497）も1件として数える。
     /// `main.rs::event_loop` が「実際に別の item へ移動したか」（＝新しい event_image への
@@ -5626,6 +5643,70 @@ mod tests {
             Some("eyes_closing_3.webp"),
             "event_imageは直前の画像コマから引き継がれるはず"
         );
+    }
+
+    #[test]
+    fn current_item_is_image_only_true_for_both_wait_having_and_terminal_image_items() {
+        // #628 `fullscreen_image` 向け: `current_item_is_image_only()` は
+        // `pending_wait_ms().is_some()`（Waitを持つ画像コマ）だけでなく、
+        // `push_wait_chain_terminal_item` が生成する暗転連鎖の終端item（wait_ms=None）も
+        // 「テキストを持たない画像コマ」として拾わなければならない
+        // （`pending_wait_ms().is_some()`だけでは代用できないことの回帰固定、doc comment参照）。
+        let doc = doc_single_scene(vec![
+            dialog(Some("A"), vec!["目を閉じていく"]),
+            event_image("eyes_closing_3.webp"),
+            wait(200),
+            blackout_on(),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(
+            !pb.current_item_is_image_only(),
+            "通常の会話行(Line item)はテキストを持つのでfalse"
+        );
+
+        assert!(pb.advance(), "会話行から画像コマitem(wait_ms=Some)へ");
+        assert_eq!(pb.pending_wait_ms(), Some(200));
+        assert!(
+            pb.current_item_is_image_only(),
+            "wait_msを持つ画像コマitemはtrueのはず"
+        );
+
+        assert!(pb.advance(), "暗転を運ぶ終端item(wait_ms=None)へ");
+        assert_eq!(
+            pb.pending_wait_ms(),
+            None,
+            "前提: 終端itemはwait_msを持たない"
+        );
+        assert!(
+            pb.current_item_is_image_only(),
+            "wait_ms=Noneの終端画像コマitemもtrueのはず(pending_wait_msだけでは検出できない)"
+        );
+    }
+
+    #[test]
+    fn current_item_is_image_only_false_for_line_item_carrying_event_image_and_for_choice_item() {
+        // `[イベント絵:X]`直後に台詞が続く（Waitを挟まない）通常のLine itemはevent_imageを
+        // 持っていてもテキストがあるのでfalse。Choice itemもfalse。
+        let doc = doc_single_scene(vec![
+            event_image("bg.webp"),
+            dialog(Some("A"), vec!["台詞"]),
+            choice(vec![("進む", "1-1")]),
+        ]);
+        let mut pb = Playback::from_document(&doc);
+
+        assert!(
+            !pb.current_item_is_image_only(),
+            "event_imageを伴うがテキストのあるLine itemはfalseのはず"
+        );
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("bg.webp"),
+            "前提: event_image自体はLine itemにも乗っている"
+        );
+
+        assert!(pb.advance(), "Choice itemへ");
+        assert!(!pb.current_item_is_image_only(), "Choice itemはfalseのはず");
     }
 
     #[test]

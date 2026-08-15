@@ -285,6 +285,16 @@ pub struct Config {
     /// フィールドで独立に制御する（`dialog_style` を TUI が常に adv 固定で運用しているのと
     /// 同じ「TUI は自前の Config で制御する」設計）。
     pub sentence_per_page: bool,
+    /// イベント絵単体シーン（会話テキストを伴わない画像コマ item、`Playback::
+    /// current_item_is_image_only`）の間、テキストウィンドウ/選択肢を隠して画像を全画面表示
+    /// するか（#628）。既定 `false` は従来どおり左右分割表示（非破壊）。GUI版 frontmatter
+    /// `fullscreen_image:`（`docs/spec/markdown-v0.1.md`、`NovelRenderer.ts` 3665-3672行目付近）
+    /// と同じ意味論だが、`sentence_per_page` と同じ「TUI は原稿の per-game frontmatter を
+    /// 読まず `tui-config.toml` 側の独立フィールドで制御する」設計を踏襲する——GUI版の
+    /// frontmatterパーサをTUI側で新たに読む経路は追加しない（`sentence_per_page` のdoc
+    /// comment参照）。可逆トグル: 次に会話テキスト/選択肢のある item に進めば自動的に
+    /// 通常の左右分割表示へ戻る（`ui::draw` 参照）。
+    pub fullscreen_image: bool,
     /// オートモード（#498）で、現在行のタイプライター表示が完了してから次行へ自動的に
     /// 進むまでの待機時間 (ms)。GUI版 `NovelRenderer.autoWaitMs`/`settings.autoWaitMs` の
     /// 既定値（2500ms）と揃える。
@@ -314,6 +324,7 @@ impl Default for Config {
             sound: SoundConfig::default(),
             volume: VolumeConfig::default(),
             sentence_per_page: false,
+            fullscreen_image: false,
             auto_wait_ms: 2500,
             quicksave_path: None,
         }
@@ -451,6 +462,7 @@ mod tests {
         assert_eq!(config.volume.se_percent, 80);
         assert_eq!(config.volume.voice_percent, 80);
         assert!(!config.sentence_per_page);
+        assert!(!config.fullscreen_image);
         assert_eq!(config.auto_wait_ms, 2500);
     }
 
@@ -614,6 +626,21 @@ mod tests {
     fn from_toml_str_sentence_per_page_absent_defaults_to_false() {
         let config = Config::from_toml_str("").expect("empty toml should parse");
         assert!(!config.sentence_per_page);
+    }
+
+    #[test]
+    fn from_toml_str_fullscreen_image_true_at_top_level() {
+        // sentence_per_page と同じ階層（サブテーブルなし）で読める（#628）。
+        let toml = "fullscreen_image = true\n";
+        let config = Config::from_toml_str(toml).expect("should parse");
+        assert!(config.fullscreen_image);
+        assert_eq!(config.game_name, Config::default().game_name);
+    }
+
+    #[test]
+    fn from_toml_str_fullscreen_image_absent_defaults_to_false() {
+        let config = Config::from_toml_str("").expect("empty toml should parse");
+        assert!(!config.fullscreen_image);
     }
 
     #[test]
