@@ -3466,6 +3466,99 @@ mod tests {
             )
     }
 
+    // ---- #628: splash_pixelate_phase 単体テスト（draw_splash を経由せず直接呼ぶ）----
+    //
+    // 以下の draw_splash 統合テスト群は既に coarsen/refine/settled の見た目を検証しているが、
+    // いずれも `draw_splash` のレンダリング経路越しの間接確認であり、`splash_pixelate_phase`
+    // 自体を直接呼んだテストはこれまで一度も存在しなかった（テスト設計エージェント指摘）。
+
+    #[test]
+    fn splash_pixelate_phase_none_image_fade_is_always_settled() {
+        // image_fade=None（呼び出し元がピクセレート演出を使わないテスト等）は常にSettled
+        // （draw_splashのdoc comment契約）。
+        assert!(matches!(
+            splash_pixelate_phase(None, Instant::now()),
+            SplashPixelatePhase::Settled
+        ));
+    }
+
+    #[test]
+    fn splash_pixelate_phase_non_pixelate_transition_mode_is_always_settled() {
+        // transition_mode()がPixelate以外（既定のFade）ならSettled固定
+        // （splash_pixelate_phase の `transition_mode() != Pixelate` 早期return を直接固定）。
+        let started = Instant::now();
+        let fade =
+            ImageFadeState::settled(None, name_name_parser::models::AmbientEffects::default())
+                .transition_to(
+                    Some("unused.webp".to_string()),
+                    name_name_parser::models::AmbientEffects::default(),
+                    name_name_parser::models::EventImageTransition::Fade,
+                    std::time::Duration::from_millis(1000),
+                    started,
+                );
+        assert!(matches!(
+            splash_pixelate_phase(Some(&fade), started + std::time::Duration::from_millis(100)),
+            SplashPixelatePhase::Settled
+        ));
+    }
+
+    #[test]
+    fn splash_pixelate_phase_at_exact_swap_ratio_boundary_is_refining_not_coarsening() {
+        // t==swap_ratio(0.5)ちょうどの境界: `pixelate_transition::is_coarsen_phase(0.5, 0.5)`は
+        // 厳密な`<`比較によりfalse（コルセン側ではない）を返すため、境界ちょうどは
+        // コルセンではなくリファイン側に転ぶ。この分岐をsplash_pixelate_phase単体で固定する
+        // （pixelate_transition::is_coarsen_phase_boundary_just_below_at_and_above_swap_ratio
+        // と同じ境界をここでも直接縛る）。
+        let duration_ms = 1000;
+        let started = Instant::now();
+        let fade = mid_flight_pixelate_fade(started, duration_ms);
+        let now = started + std::time::Duration::from_millis(duration_ms / 2);
+        match splash_pixelate_phase(Some(&fade), now) {
+            SplashPixelatePhase::Refining { divisor } => {
+                assert_eq!(
+                    divisor,
+                    crate::pixelate_transition::PIXELATE_TRANSITION_MAX_DIVISOR,
+                    "境界ちょうどはコルセン完了直後の値としてmax_divisorになるはず\
+                     （pixelate_transition::compute_divisor_at_swap_boundary_is_maxと同じ根拠）"
+                );
+            }
+            SplashPixelatePhase::Coarsening => {
+                panic!("t==swap_ratioちょうどはRefiningのはずだったがCoarseningになった")
+            }
+            SplashPixelatePhase::Settled => {
+                panic!("t==swap_ratioちょうどはRefiningのはずだったがSettledになった")
+            }
+        }
+    }
+
+    #[test]
+    fn splash_pixelate_phase_progress_at_or_beyond_one_is_settled() {
+        // t>=1.0（遷移完了ちょうど・超過の両方）はSettled。
+        let duration_ms = 500;
+        let started = Instant::now();
+        let fade = mid_flight_pixelate_fade(started, duration_ms);
+        assert!(
+            matches!(
+                splash_pixelate_phase(
+                    Some(&fade),
+                    started + std::time::Duration::from_millis(duration_ms)
+                ),
+                SplashPixelatePhase::Settled
+            ),
+            "tちょうど1.0(duration経過ちょうど)はSettledのはず"
+        );
+        assert!(
+            matches!(
+                splash_pixelate_phase(
+                    Some(&fade),
+                    started + std::time::Duration::from_millis(duration_ms + 500)
+                ),
+                SplashPixelatePhase::Settled
+            ),
+            "duration超過後もSettledのはず"
+        );
+    }
+
     #[test]
     fn draw_splash_fullscreen_mode_pixelate_coarsen_phase_shows_black_not_image_color() {
         // #628: コルセン中(t<0.5)はスプラッシュにも「直前の画像」が無い(from=None扱い)ため
