@@ -73,6 +73,13 @@ vi.mock('../game/scriptContentCache', () => ({
 //   クロスファイルのジャンプ索引を jumpSceneIndex=（全 MD の全シーン）で渡す。
 //   data-scene-* は jumpSceneIndex から読む（旧 scenes= 経路は使わない）。
 const novelPlayerProps = vi.fn()
+// タイトル画面 (#628 フェーズ2b): 旧 DOM `TitleOverlay.tsx` は PlayerScreen の兄弟要素として
+// 実体レンダーされていたが、`NovelRenderer.showTitleScreen`（PixiJS 描画、jsdom で検証不可）に
+// 置き換わったのに伴い NovelPlayer の `titleScreen` prop へ移動した。NovelPlayer 自体は元々
+// この mock で軽量スタブ化されている（PixiJS 依存のため）ため、`titleScreen` が非 null の間は
+// 旧 `TitleOverlay.tsx` と同じ testid/role/文言の DOM を最小限描画し、既存テストの「タイトルが
+// 出る/消える・ボタン押下で副作用が発火する」という検証意図をそのまま保つ（PixiJS 描画そのものの
+// 正しさは TitleScreenOverlay/NovelRenderer 側の別テストが担う）。
 vi.mock('../components/NovelPlayer', () => ({
   default: (props: {
     events: unknown
@@ -80,6 +87,15 @@ vi.mock('../components/NovelPlayer', () => ({
     jumpSceneIndex?: unknown
     onResolveMissingScene?: (sceneId: string) => Promise<EventScene[] | null>
     assetBaseUrl?: string
+    pixelArt?: boolean | null
+    titleScreen?: {
+      title: string
+      hasSaveData: boolean
+      onNewGame: () => void
+      onContinue: () => void
+      onOpenSettings: () => void
+      onBack: () => void
+    } | null
   }) => {
     novelPlayerProps(props)
     return (
@@ -93,7 +109,26 @@ vi.mock('../components/NovelPlayer', () => ({
             : ''
         }
         data-asset-base-url={props.assetBaseUrl ?? ''}
-      />
+      >
+        {props.titleScreen && (
+          <div data-testid="title-screen-stub">
+            <img
+              src="title.png"
+              alt={props.titleScreen.title}
+              style={props.pixelArt ? { imageRendering: 'pixelated' } : undefined}
+            />
+            <button onClick={props.titleScreen.onNewGame}>新規開始</button>
+            <button
+              onClick={props.titleScreen.onContinue}
+              disabled={!props.titleScreen.hasSaveData}
+            >
+              つづきから
+            </button>
+            <button onClick={props.titleScreen.onOpenSettings}>設定</button>
+            <button onClick={props.titleScreen.onBack}>終了</button>
+          </div>
+        )}
+      </div>
     )
   },
 }))
@@ -1565,8 +1600,9 @@ describe('PlayerScreen', () => {
     // standalone 再生時のプレイヤーヘッダ出し方 (#519)。normalizeHeaderMode の入力そのままを
     // 渡せるよう string | null | undefined を許容する（不正値・未指定のフォールバック検証用）。
     header?: string | null
-    // ドット絵プロジェクトか (#553)。TitleOverlay のタイトル画像に image-rendering: pixelated
-    // が伝播することの検証用。
+    // ドット絵プロジェクトか (#553)。タイトル画面（#628 フェーズ2b で PixiJS 化。ここでは
+    // NovelPlayer mock 内の title-screen-stub の <img>）に image-rendering: pixelated が
+    // 伝播することの検証用。
     pixel_art?: boolean | null
   }) {
     listProjectsMock.mockResolvedValue([
@@ -1616,20 +1652,23 @@ describe('PlayerScreen', () => {
     expect(props.debugEnabled).toBeNull()
   })
 
-  // --- #553: doc.pixel_art を TitleOverlay のタイトル画像に反映する ---
+  // --- #553: doc.pixel_art をタイトル画面のロゴ画像に反映する ---
   //
-  // NovelPlayer/RPGPlayer と違い TitleOverlay はこのテストファイルでモックしていない実体
-  // なので、DOM に描画された <img> の style（image-rendering）を直接検証する。
-  // EventImageLayer/CharacterLayer の setPixelArt（#466）と同じ frontmatter 由来の値。
+  // #628 フェーズ2b: 実装本体は DOM `<img>` から PixiJS（`NovelRenderer.showTitleScreen` →
+  // `characterLayer.showImage()`）に置き換わった（PixiJS の実描画は jsdom で検証不可）。
+  // ここでは PlayerScreen が pixelArt を NovelPlayer へ正しく転送していることを、
+  // NovelPlayer mock（title-screen-stub）が描画する <img> の style（image-rendering）
+  // 経由で間接的に確認する。EventImageLayer/CharacterLayer の setPixelArt（#466）と
+  // 同じ frontmatter 由来の値。
 
-  it('#553: doc.pixel_art が true のとき、TitleOverlay のタイトル画像に image-rendering: pixelated が付く', async () => {
+  it('#553: doc.pixel_art が true のとき、タイトル画面のロゴ画像に image-rendering: pixelated が付く', async () => {
     await renderWithFrontmatter({ pixel_art: true })
     const img = document.querySelector('img') as HTMLImageElement
     expect(img).not.toBeNull()
     expect(img.style.imageRendering).toBe('pixelated')
   })
 
-  it('#553: doc.pixel_art が false/未指定のとき、TitleOverlay のタイトル画像に image-rendering は付かない（従来どおり補間あり）', async () => {
+  it('#553: doc.pixel_art が false/未指定のとき、タイトル画面のロゴ画像に image-rendering は付かない（従来どおり補間あり）', async () => {
     await renderWithFrontmatter({ pixel_art: false })
     const imgFalse = document.querySelector('img') as HTMLImageElement
     expect(imgFalse).not.toBeNull()
@@ -1709,7 +1748,7 @@ describe('PlayerScreen', () => {
       expect(renderer.audioManager.ensureContext).toHaveBeenCalledTimes(1)
       expect(renderer.hasQuickSave).toHaveBeenCalledTimes(1)
       expect(renderer.restart).not.toHaveBeenCalled()
-      // タイトルが閉じる（TitleOverlay 固有の「新規開始」ボタンが消える）
+      // タイトルが閉じる（タイトル画面固有の「新規開始」ボタンが消える）
       expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
       // 復元済み位置を保つため、既読スキップモードは立てない
       expect(lastNovelPlayerProps().initialSkipMode).toBe(false)
@@ -1954,9 +1993,9 @@ describe('PlayerScreen', () => {
       expect(debugInfo).toContain('scene param: no-such-scene → not found (fallback to entry)')
     })
 
-    // #388: ディープリンク解決時は TitleOverlay を出さず該当シーンへ直行する。
-    // TitleOverlay の存在は「新規開始」ボタン（TitleOverlay 固有の文言）で判定する。
-    it('48【#388】: ?scene= 解決時（deep-link モード）は TitleOverlay（新規開始ボタン）を出さない', async () => {
+    // #388: ディープリンク解決時は タイトル画面を出さず該当シーンへ直行する。
+    // タイトル画面の存在は「新規開始」ボタン（タイトル画面固有の文言）で判定する。
+    it('48【#388】: ?scene= 解決時（deep-link モード）は タイトル画面（新規開始ボタン）を出さない', async () => {
       window.history.pushState({}, '', '?scene=cell-scene-1')
       await renderMultiDocProject()
       // 前提: deep-link が解決されている（initialSceneId 非 null）
@@ -1965,13 +2004,13 @@ describe('PlayerScreen', () => {
       expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
     })
 
-    it('49【#388】: ?scene= 未指定時（通常フロー）は従来どおり TitleOverlay（新規開始ボタン）を出す', async () => {
+    it('49【#388】: ?scene= 未指定時（通常フロー）は従来どおり タイトル画面（新規開始ボタン）を出す', async () => {
       await renderMultiDocProject()
       expect(lastNovelPlayerProps().initialSceneId).toBeNull()
       expect(screen.getByRole('button', { name: '新規開始' })).toBeInTheDocument()
     })
 
-    it('50【#388】: ?scene=<entry(hub)自身の sceneId> でも解決されれば deep-link モードとして TitleOverlay を出さない', async () => {
+    it('50【#388】: ?scene=<entry(hub)自身の sceneId> でも解決されれば deep-link モードとして タイトル画面を出さない', async () => {
       // hub 自身指定は confinedSceneIds=null（無制限）にフォールバックするが、
       // initialSceneId は解決される（#386 修正2）。deep-link モード判定は startSceneId 非 null なので
       // この場合もタイトルは出さない（startFrom(hub-scene) の位置を保つ）。
@@ -1988,7 +2027,7 @@ describe('PlayerScreen', () => {
     // isEmbedded は純粋関数なのでファイル先頭で vi.mock し、true/false を切り替えて分岐させる
     // （window.top 差し替えより堅牢）。既定は global beforeEach で false（standalone）に固定。
     // ヘッダの有無はユーザー可視要素で判定する:
-    //   - 戻るボタン: aria-label='プロジェクト一覧に戻る'（ヘッダ固有。TitleOverlay の
+    //   - 戻るボタン: aria-label='プロジェクト一覧に戻る'（ヘッダ固有。タイトル画面の
     //     終了ボタンは text '終了' で aria-label を持たないため衝突しない）
     //   - <header> 要素（暗黙 role=banner）内のタイトル h1
     // 埋め込み(true)で消え、standalone(false)で出ることを否定・肯定の両側で担保する。
@@ -2000,7 +2039,7 @@ describe('PlayerScreen', () => {
         // ヘッダ固有の戻るボタンが存在する
         expect(screen.queryByLabelText('プロジェクト一覧に戻る')).not.toBeNull()
         // <header>（banner）内にプロジェクトタイトルの h1 が出る（title.png は jsdom で
-        // 読み込まれないため TitleOverlay 側にも h1 は出るが、banner スコープ内の 1 本を見る）
+        // 読み込まれないため タイトル画面側にも h1 は出るが、banner スコープ内の 1 本を見る）
         const banner = screen.getByRole('banner')
         expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe(MULTI_DOC_TITLE)
       })
@@ -2040,14 +2079,14 @@ describe('PlayerScreen', () => {
         expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe(MULTI_DOC_TITLE)
       })
 
-      it('埋め込み判定は #388 の TitleOverlay ゲート（startSceneId）と直交する（埋め込みでヘッダは消えるが ?scene= 未指定なら TitleOverlay の新規開始は従来どおり出る）', async () => {
+      it('埋め込み判定は #388 の タイトル画面ゲート（startSceneId）と直交する（埋め込みでヘッダは消えるが ?scene= 未指定なら タイトル画面の新規開始は従来どおり出る）', async () => {
         isEmbeddedMock.mockReturnValue(true)
         await renderMultiDocProject()
         // ヘッダは isEmbedded()===true で消える
         expect(screen.queryByLabelText('プロジェクト一覧に戻る')).toBeNull()
         expect(screen.queryByRole('banner')).toBeNull()
-        // 一方 TitleOverlay は startSceneId===null（?scene= 未指定）なので従来どおり出る。
-        // ＝ヘッダ抑制ゲート（isEmbedded）が TitleOverlay 表示ゲート（startSceneId）に
+        // 一方 タイトル画面は startSceneId===null（?scene= 未指定）なので従来どおり出る。
+        // ＝ヘッダ抑制ゲート（isEmbedded）が タイトル画面表示ゲート（startSceneId）に
         // 影響しないことの担保。
         expect(lastNovelPlayerProps().initialSceneId).toBeNull()
         expect(screen.getByRole('button', { name: '新規開始' })).toBeInTheDocument()

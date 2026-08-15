@@ -87,6 +87,9 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setSeekBarColor = vi.fn()
     setIntermissionScene = vi.fn()
     hasIntermissionScene = vi.fn().mockReturnValue(false)
+    // #628 フェーズ2b: タイトル画面 (PixiJS 版 TitleScreenOverlay) の表示/非表示。
+    showTitleScreen = vi.fn()
+    hideTitleScreen = vi.fn()
     // #446: 実表示サイズに応じたレンダラ解像度追従。init().then() 内で無条件に1回呼ばれる
     // ため常に必要（isExporting は既定 false＝書き出し中でない扱いで自動追従を通す）。
     setRenderResolution = vi.fn()

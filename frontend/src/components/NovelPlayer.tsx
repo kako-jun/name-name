@@ -198,6 +198,24 @@ interface NovelPlayerProps {
    *  塗り絵向け）。true で立ち絵・イベント絵の拡大表示がブロック状のドットを保つ
    *  （Gymnasia の 128x128 ドット絵イベント絵向け）。 */
   pixelArt?: boolean | null
+  /** タイトル画面 (#628 フェーズ2b)。旧 DOM `TitleOverlay.tsx` を置き換える PixiJS 実装
+   *  （`NovelRenderer.showTitleScreen`/`hideTitleScreen`）への入力。非 null の間だけ表示する。
+   *  null/undefined でタイトル画面自体を出さない（deep-link 等、呼び出し側 PlayerScreen が
+   *  `startSceneId === null && !titleDismissed` のときだけオブジェクトを渡す想定）。
+   *  オブジェクト自体は呼び出し側で毎レンダー作り直されうる（コールバックのクロージャ含む）ため、
+   *  再表示の要否は `title`/`hasSaveData`/`dark`（と null 遷移）だけを見て判定し、コールバックの
+   *  参照同一性には依存しない（下記 useEffect 参照、無限ループ防止）。 */
+  titleScreen?: {
+    title: string
+    hasSaveData: boolean
+    onNewGame: () => void
+    onContinue: () => void
+    onOpenSettings: () => void
+    onBack: () => void
+  } | null
+  /** タイトル画面の暗さ (#628 フェーズ2b)。旧 TitleOverlay.tsx の `dark` prop（プレイヤーテーマ
+   *  playerDark）と同じ意味。true で #111827（gray-900）、false で #1e1b4b（indigo-950）。 */
+  dark?: boolean
   /** DebugOverlay に出す renderer 外の読み込み診断 (#321)。 */
   debugInfo?: string[]
   /** 既読永続化キー（省略時はスキップ機能を無効化）(#140) */
@@ -249,6 +267,8 @@ function NovelPlayer({
   fullscreenImage,
   sentencePerPage,
   pixelArt,
+  titleScreen,
+  dark,
   debugInfo,
   docKey,
   initialSkipMode = false,
@@ -256,6 +276,23 @@ function NovelPlayer({
 }: NovelPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
+  // タイトル画面 (#628 フェーズ2b): コールバックの最新版を保持する ref。呼び出し側
+  // （PlayerScreen）は毎レンダーで新しいクロージャを持つ `titleScreen` オブジェクトを渡しうる
+  // ため、この ref は effect の外（レンダー本体）で毎回代入するだけにし、下の show/hide effect の
+  // 依存配列には含めない（含めると毎レンダー showTitleScreen が再実行され、ボタン Graphics が
+  // 無駄に作り直され続ける・無限ループの温床になる）。
+  const titleScreenRef = useRef(titleScreen)
+  titleScreenRef.current = titleScreen
+  // タイトル画面 (#628 フェーズ2b): renderer が実際に init() 完了・assetBaseUrl 設定済みになったかの
+  // React state（`rendererReady`）。`rendererRef.current` は `new NovelRenderer()` 直後に同期で
+  // 代入されるため真偽値としては早期から truthy になるが、実体は `renderer.init(container).then()`
+  // が解決するまで assetBaseUrl 等が未設定の「半完成」状態。下の titleScreen 表示 effect が
+  // `rendererRef.current` の truthy だけを見て即座に `showTitleScreen()` を呼ぶと、
+  // `characterLayer.showImage()` が空の assetBaseUrl でロゴ画像を要求して失敗し、しかも
+  // `showImage` の同 id 再表示（`existing` 分岐）はテクスチャを再ロードしない仕様のため、
+  // 後から正しい assetBaseUrl で呼び直しても手遅れになる（実機検証で発覚した実バグ）。
+  // `rendererReady` を初期化完了の合図として使い、それより前の呼び出しをすべて抑止する。
+  const [rendererReady, setRendererReady] = useState(false)
   // fluid aspect ratio (#442) 用: ルート要素（常に w-full h-full）の実サイズを測る ref。
   // aspect_ratio: auto のときだけ ResizeObserver で監視する（非 auto では未使用）。
   const fluidRootRef = useRef<HTMLDivElement>(null)
@@ -729,10 +766,17 @@ function NovelPlayer({
         }
       }
       onRendererReady?.(renderer)
+      // タイトル画面 (#628 フェーズ2b): ここまで到達した時点で renderer は setAssetBaseUrl 済み
+      // ＝ characterLayer.showImage() がロゴ画像を正しい URL で読める状態になった。
+      // rendererReady を true にすることで、下の titleScreen 表示 effect（rendererReady を
+      // 依存配列に持つ）がこのタイミングで初めて showTitleScreen() を呼ぶ（詳細は
+      // rendererReady 宣言部の JSDoc 参照）。
+      setRendererReady(true)
     })
 
     return () => {
       destroyed = true
+      setRendererReady(false)
       onRendererReady?.(null)
       // fluid 再マウント (#460): 破棄前に現在位置のスナップショットを保持し、次の renderer
       // 初期化時に restoreSnapshot で引き継ぐ。getSnapshot() は init() 未完了でも安全に呼べる
@@ -876,6 +920,44 @@ function NovelPlayer({
   useEffect(() => {
     rendererRef.current?.setSeekBarColor(seekbarColor ?? null)
   }, [seekbarColor])
+
+  // タイトル画面 (#628 フェーズ2b): titleScreen が非 null になったら showTitleScreen、
+  // null に戻ったら hideTitleScreen（PlayerScreen 側は `startSceneId === null &&
+  // !titleDismissed` の間だけ非 null を渡す想定）。
+  //
+  // 依存配列は「非 null かどうか」「title」「hasSaveData」「dark」「rendererReady」だけに絞る。
+  // 呼び出し側（PlayerScreen）はコールバック（onNewGame 等）を含むオブジェクトを毎レンダー
+  // 新しいクロージャで作り直しうるため、titleScreen オブジェクト自体や個々のコールバックを
+  // 依存に含めると、PlayerScreen が再レンダーするたびに（無関係な state 変化も含め）この effect が
+  // 再実行され、showTitleScreen → TitleScreenOverlay のボタン Graphics 作り直しが無駄に走り続ける
+  // （最悪 render → effect → render の連鎖で無限ループの温床にもなる）。コールバック自体は
+  // titleScreenRef（レンダー本体で毎回同期しているだけの ref）経由で常に最新版を呼ぶ。
+  //
+  // rendererReady 未到達（renderer.init().then() 未解決＝assetBaseUrl 未設定）での早期呼び出しを
+  // 防ぐ（rendererReady 宣言部の JSDoc 参照。実機検証で発覚した実バグ: 早期呼び出しだと
+  // characterLayer.showImage() が空の assetBaseUrl でロゴをロードして失敗し、後から
+  // rendererReady 到達後に呼び直しても showImage の同 id 再表示（`existing` 分岐）が
+  // テクスチャを再ロードしないため手遅れになる）。
+  const titleScreenActive = titleScreen != null
+  useEffect(() => {
+    const renderer = rendererRef.current
+    if (!renderer || !rendererReady) return
+    if (titleScreenActive) {
+      const ts = titleScreenRef.current
+      if (!ts) return
+      renderer.showTitleScreen({
+        title: ts.title,
+        hasSaveData: ts.hasSaveData,
+        dark,
+        onNewGame: () => titleScreenRef.current?.onNewGame(),
+        onContinue: () => titleScreenRef.current?.onContinue(),
+        onOpenSettings: () => titleScreenRef.current?.onOpenSettings(),
+        onBack: () => titleScreenRef.current?.onBack(),
+      })
+    } else {
+      renderer.hideTitleScreen()
+    }
+  }, [titleScreenActive, titleScreen?.title, titleScreen?.hasSaveData, dark, rendererReady])
 
   // intermission.md 専用シーン (#404)。PlayerScreen の非同期取得（assets/raw 経由）は
   // マウント後に解決することが多いため、init effect（マウント時1回）だけでは反映できない。

@@ -1767,6 +1767,16 @@ export class CharacterLayer extends Container {
      *  0 以下を明示指定した場合は遷移するものが無いため即時表示にフォールバックする
      *  （EventImageLayer.show と同じ規約）。 */
     fadeMs?: number | null
+    /**
+     * テクスチャロード成功時に呼ばれるコールバック (#628 フェーズ2b)。
+     * TitleScreenOverlay がロゴ画像読み込み成功を検知してテキストフォールバックを隠すために追加。
+     * `usePixelate` 経路（'Pixelate' 遷移）では現状呼ばれない（`startImagePixelateTransition` 側は
+     * 未配線——タイトル画面は 'Fade'/既定経路のみ使うため、このスコープでは Fade 経路への配線で足りる）。
+     * 通常の new 表示（`existing` 分岐に入らない）のときだけ意味を持つ。
+     */
+    onLoaded?: () => void
+    /** テクスチャロード失敗時に呼ばれるコールバック (#628 フェーズ2b)。onLoaded と同じ制約。 */
+    onError?: () => void
   }): void {
     const NAME = opts.id ?? 'Image'
     // 位置: x/y 数値 override が position トークンより優先 (#275)。
@@ -1854,9 +1864,11 @@ export class CharacterLayer extends Container {
         // instant 復活（fadeAnimation が null に戻る経路）も expectedGeneration で検知する
         // （#429 2巡目 re-review、詳細は startEntranceFade の JSDoc 参照）。
         this.startEntranceFade(state, instant, expectedGeneration)
+        opts.onLoaded?.()
       })
       .catch((err) => {
         console.warn('[name-name] 画像の読み込みに失敗: ' + url, err)
+        opts.onError?.()
       })
   }
 

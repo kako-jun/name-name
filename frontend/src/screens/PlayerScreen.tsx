@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import NovelPlayer from '../components/NovelPlayer'
 import RPGPlayer from '../components/RPGPlayer'
-import TitleOverlay from '../components/TitleOverlay'
 import type { Event, EventDocument, EventScene } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { parseMarkdown } from '../wasm/parser'
@@ -865,149 +864,153 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           // ノベル+RPG の遷移制御は #108 本統合で扱う。
           <RPGPlayer gameData={rpgProject} view={rpgProject.view} />
         ) : (
-          <>
-            <NovelPlayer
-              // #284: 通常再生は events=（エントリ doc の線形ストリーム）で行い、
-              // 多シーンの自動進行（scene1→scene2→…）を維持する（M2 退行修正）。
-              // jumpSceneIndex= には全 MD の全シーンを渡し、NovelRenderer.allScenes を
-              // 全 MD 横断で埋めることでクロスファイルのシーンジャンプ（→ シーンID）・
-              // セーブ復元・debug startFrom を解決する（再生ストリームは置換しない）。
-              // ※ scenes= は使わない（setScenes は再生を scenes[0] だけに差し替えてしまう）。
-              events={novelEvents}
-              jumpSceneIndex={allScenes}
-              onResolveMissingScene={resolveMissingScene}
-              // #386: `?scene=<sceneId>` ディープリンク。事前解決できた場合のみ渡し、
-              // NovelPlayer マウント時に startFrom で該当シーンから開始する。
-              // null（未指定/未解決）なら渡さず、現行どおりエントリから開始する。
-              initialSceneId={startSceneId}
-              // #386: 対象 script ファイル自身の sceneId 一覧。hub 等その集合外への choice
-              // ジャンプは通常のシーン遷移ではなく終劇として扱われる（NovelPlayer 経由で
-              // NovelRenderer.setConfinedSceneIds に渡る）。null（未指定/未解決）は無制限。
-              confinedSceneIds={confinedSceneIds}
-              assetBaseUrl={assetBaseUrl}
-              aspectRatio={doc?.aspect_ratio}
-              choiceStyle={doc?.choice_style ?? null}
-              fontFamily={doc?.font_family ?? null}
-              fontSize={doc?.font_size ?? null}
-              dialogStyle={doc?.dialog_style ?? null}
-              protagonist={doc?.protagonist ?? null}
-              characterYRatio={doc?.character_y_ratio ?? null}
-              characterHeightRatio={doc?.character_height_ratio ?? null}
-              characterHeightRatios={doc?.character_height_ratios}
-              characterScale={doc?.character_scale ?? null}
-              characterFadeMs={doc?.character_fade_ms ?? null}
-              backgroundFadeMs={doc?.background_fade_ms ?? null}
-              eventImageFadeMs={doc?.event_image_fade_ms ?? null}
-              eventImageTransitionDefault={doc?.event_image_transition ?? null}
-              backgroundColor={doc?.background_color ?? null}
-              seekbarColor={doc?.seekbar_color ?? null}
-              intermissionEvents={intermissionScene?.events ?? null}
-              intermissionBackgroundFadeMs={intermissionScene?.backgroundFadeMs ?? null}
-              intermissionCharacterFadeMs={intermissionScene?.characterFadeMs ?? null}
-              intermissionEventImageFadeMs={intermissionScene?.eventImageFadeMs ?? null}
-              skipEnabled={doc?.skip_enabled ?? null}
-              debugEnabled={doc?.debug_enabled ?? null}
-              speakerNudge={doc?.speaker_nudge ?? null}
-              autoPlay={doc?.auto_play ?? null}
-              splitLayout={doc?.split_layout ?? null}
-              fullscreenImage={doc?.fullscreen_image ?? null}
-              sentencePerPage={doc?.sentence_per_page ?? null}
-              pixelArt={doc?.pixel_art ?? null}
-              debugInfo={loadDebugInfo}
-              docKey={projectName}
-              initialSkipMode={startWithSkip}
-            />
-            {/* タイトル画面オーバーレイ (#141): ゲーム開始前に表示。
-                #388: `?scene=` ディープリンク解決時（startSceneId 非 null＝deep-link モード）は
-                タイトルを一切出さず、NovelPlayer が startFrom(initialSceneId) で開始した該当シーンを
-                そのまま見せる。startSceneId はスクリプトロード後に非同期解決されるが、
-                setStartSceneId と setLoading(false) は同一の非同期継続内でバッチされるため、
-                loading=false になる最初のレンダー時点で startSceneId は確定済み。ここで
-                render gate として直接判定すれば effect 同期のような 1 フレームのタイトルちらつきが
-                出ない。deep-link モードでは TitleOverlay 自体を描かないので、onNewGame の副作用
-                （clearReadProgress / renderer.restart()）が発火することも構造的にあり得ず、
-                startFrom(initialSceneId) の開始位置が保たれる。
-                通常フロー（`?scene=` 無し＝startSceneId null）は従来どおりタイトルを出す（後方互換）。 */}
-            {startSceneId === null && !titleDismissed && (
-              <TitleOverlay
-                title={title}
-                titleImageUrl={`${assetBaseUrl}/images/title.png`}
-                hasSaveData={hasSaveData}
-                // #394: TitleOverlay もプレイヤーテーマ（playerDark）に揃える。他の chrome
-                // （ルート/ヘッダ/ローディング/エラー/未投入）が playerDark に移った中で、
-                // ここだけ App の darkMode トグルに追従すると、同一 URL でエディタ側
-                // トグルにより色が動く不整合になり、docs の「プレイヤーの見た目は ?theme
-                // （既定 dark）だけで決まる」に反する。ヘッダ bg-gray-900 とも整合する。
-                dark={playerDark}
-                // #553: title.png（assets/images/title.png）もイベント絵/立ち絵と同じ pixel_art
-                // 規約に従わせる。doc は TitleOverlay マウント時点（!loading かつ他分岐に該当しない
-                // = doc ロード済み）で確定しているため、NovelPlayer の pixelArt（#466）と同じ
-                // `doc?.pixel_art ?? null` パターンをそのまま踏襲する。
-                pixelArt={doc?.pixel_art ?? null}
-                onNewGame={() => {
-                  // 新規開始: 既読データをクリアして最初から
-                  clearReadProgress(projectName)
-                  setHasSaveData(false)
-                  setStartWithSkip(false)
-                  setTitleDismissed(true)
-                  // user gesture を使って AudioContext を起動する (#issue-pending)。
-                  // autoMode で進行する動画モードでは handleAdvance / handleKeyDown が呼ばれず
-                  // AudioContext が永久 null になるため、ここで明示的に起動する
-                  // さらに scenario は TitleOverlay 表示中に既に最初の text event まで進行している
-                  // ため、AudioContext 起動後に setEvents で再リセットして最初から走らせる
-                  // (これをしないと冒頭の voice 付き Narration/Dialog が AudioContext null のまま
-                  // 発火済みで再生されない)。
-                  const renderer = (
-                    window as {
-                      __renderer?: {
-                        audioManager?: { ensureContext?: () => void }
-                        setDocKey?: (docKey: string) => void
-                        restart?: () => void
+          <NovelPlayer
+            // タイトル画面 (#628 フェーズ2b): 旧 DOM `TitleOverlay.tsx`（<img>+<button> 4つ）を
+            // PixiJS 実装（NovelRenderer.showTitleScreen/hideTitleScreen 経由の
+            // TitleScreenOverlay）に置き換えたため、NovelPlayer への渡し方は「表示すべき状態」を
+            // 表す小さなオブジェクトに変わった（表示自体は NovelPlayer/NovelRenderer の責務）。
+            // #388: `?scene=` ディープリンク解決時（startSceneId 非 null＝deep-link モード）は
+            // タイトルを一切出さず、NovelPlayer が startFrom(initialSceneId) で開始した該当シーンを
+            // そのまま見せる。startSceneId はスクリプトロード後に非同期解決されるが、
+            // setStartSceneId と setLoading(false) は同一の非同期継続内でバッチされるため、
+            // loading=false になる最初のレンダー時点で startSceneId は確定済み。ここで
+            // render gate として直接判定すれば effect 同期のような 1 フレームのタイトルちらつきが
+            // 出ない。deep-link モードでは titleScreen 自体を渡さない（null）ので、onNewGame の
+            // 副作用（clearReadProgress / renderer.restart()）が発火することも構造的にあり得ず、
+            // startFrom(initialSceneId) の開始位置が保たれる。
+            // 通常フロー（`?scene=` 無し＝startSceneId null）は従来どおりタイトルを出す（後方互換）。
+            //
+            // onNewGame/onContinue/onOpenSettings/onBack の副作用ロジック自体は #141/#620 の
+            // 実装から一切変更していない（表示だけを PixiJS 化する、#628 フェーズ2b のスコープ）。
+            titleScreen={
+              startSceneId === null && !titleDismissed
+                ? {
+                    title,
+                    hasSaveData,
+                    onNewGame: () => {
+                      // 新規開始: 既読データをクリアして最初から
+                      clearReadProgress(projectName)
+                      setHasSaveData(false)
+                      setStartWithSkip(false)
+                      setTitleDismissed(true)
+                      // user gesture を使って AudioContext を起動する (#issue-pending)。
+                      // autoMode で進行する動画モードでは handleAdvance / handleKeyDown が呼ばれず
+                      // AudioContext が永久 null になるため、ここで明示的に起動する
+                      // さらに scenario は TitleOverlay 表示中に既に最初の text event まで進行している
+                      // ため、AudioContext 起動後に setEvents で再リセットして最初から走らせる
+                      // (これをしないと冒頭の voice 付き Narration/Dialog が AudioContext null のまま
+                      // 発火済みで再生されない)。
+                      const renderer = (
+                        window as {
+                          __renderer?: {
+                            audioManager?: { ensureContext?: () => void }
+                            setDocKey?: (docKey: string) => void
+                            restart?: () => void
+                          }
+                        }
+                      ).__renderer
+                      renderer?.setDocKey?.(projectName)
+                      renderer?.audioManager?.ensureContext?.()
+                      renderer?.restart?.()
+                    },
+                    onContinue: () => {
+                      // つづきから (#620): #578 の自動クイックロードにより、renderer は
+                      // マウント時点で既に直前セッションの正確な最終位置まで quickLoad() 済み。
+                      // hasQuickSave() が真の場合は renderer.restart() を呼んではいけない
+                      // （最初のシーンへ巻き戻り、quickLoad 済みの位置を握りつぶしてしまう）。
+                      // startWithSkip も立てない（正しい位置から不要な既読スキップが再開し、
+                      // 未読内容を飛ばしかねないため）。タイトルを閉じるだけでよい。
+                      // hasQuickSave() が偽の場合（#578 以前のセーブデータ等、quickSave が
+                      // 存在しないレガシーケース）は、既存の「スキップモードで未読位置まで
+                      // 高速進行」（#140 readProgress ベース）にフォールバックする。
+                      const renderer = (
+                        window as {
+                          __renderer?: {
+                            audioManager?: { ensureContext?: () => void }
+                            restart?: () => void
+                            hasQuickSave?: () => boolean
+                          }
+                        }
+                      ).__renderer
+                      renderer?.audioManager?.ensureContext?.()
+                      if (renderer?.hasQuickSave?.()) {
+                        setTitleDismissed(true)
+                      } else {
+                        setStartWithSkip(true)
+                        setTitleDismissed(true)
+                        renderer?.restart?.()
                       }
-                    }
-                  ).__renderer
-                  renderer?.setDocKey?.(projectName)
-                  renderer?.audioManager?.ensureContext?.()
-                  renderer?.restart?.()
-                }}
-                onContinue={() => {
-                  // つづきから (#620): #578 の自動クイックロードにより、renderer は
-                  // マウント時点で既に直前セッションの正確な最終位置まで quickLoad() 済み。
-                  // hasQuickSave() が真の場合は renderer.restart() を呼んではいけない
-                  // （最初のシーンへ巻き戻り、quickLoad 済みの位置を握りつぶしてしまう）。
-                  // startWithSkip も立てない（正しい位置から不要な既読スキップが再開し、
-                  // 未読内容を飛ばしかねないため）。タイトルを閉じるだけでよい。
-                  // hasQuickSave() が偽の場合（#578 以前のセーブデータ等、quickSave が
-                  // 存在しないレガシーケース）は、既存の「スキップモードで未読位置まで
-                  // 高速進行」（#140 readProgress ベース）にフォールバックする。
-                  const renderer = (
-                    window as {
-                      __renderer?: {
-                        audioManager?: { ensureContext?: () => void }
-                        restart?: () => void
-                        hasQuickSave?: () => boolean
-                      }
-                    }
-                  ).__renderer
-                  renderer?.audioManager?.ensureContext?.()
-                  if (renderer?.hasQuickSave?.()) {
-                    setTitleDismissed(true)
-                  } else {
-                    setStartWithSkip(true)
-                    setTitleDismissed(true)
-                    renderer?.restart?.()
+                    },
+                    onOpenSettings: () => {
+                      // TODO (#141): NovelPlayer の設定パネルを外部から開く ref を追加して
+                      // タイトル画面の「設定」ボタンからダイレクトに設定を開けるようにする。
+                      // 現時点ではタイトルを閉じてゲーム内の設定ボタン（⚙）から開く。
+                      setTitleDismissed(true)
+                    },
+                    onBack,
                   }
-                }}
-                onOpenSettings={() => {
-                  // TODO (#141): NovelPlayer の設定パネルを外部から開く ref を追加して
-                  // タイトル画面の「設定」ボタンからダイレクトに設定を開けるようにする。
-                  // 現時点ではタイトルを閉じてゲーム内の設定ボタン（⚙）から開く。
-                  setTitleDismissed(true)
-                }}
-                onBack={onBack}
-              />
-            )}
-          </>
+                : null
+            }
+            // #553: title.png（assets/images/title.png）もイベント絵/立ち絵と同じ pixel_art
+            // 規約に従わせる（従来どおり pixelArt prop で流す、NovelRenderer.showTitleScreen が
+            // characterLayer.showImage 経由でロードする際に characterLayer 側の pixelArt 設定
+            // （setPixelArt、下の pixelArt prop で反映済み）がそのまま効く）。
+            // #394: タイトル画面もプレイヤーテーマ（playerDark）に揃える。他の chrome
+            // （ルート/ヘッダ/ローディング/エラー/未投入）が playerDark に移った中で、
+            // ここだけ App の darkMode トグルに追従すると、同一 URL でエディタ側
+            // トグルにより色が動く不整合になり、docs の「プレイヤーの見た目は ?theme
+            // （既定 dark）だけで決まる」に反する。ヘッダ bg-gray-900 とも整合する。
+            dark={playerDark}
+            // #284: 通常再生は events=（エントリ doc の線形ストリーム）で行い、
+            // 多シーンの自動進行（scene1→scene2→…）を維持する（M2 退行修正）。
+            // jumpSceneIndex= には全 MD の全シーンを渡し、NovelRenderer.allScenes を
+            // 全 MD 横断で埋めることでクロスファイルのシーンジャンプ（→ シーンID）・
+            // セーブ復元・debug startFrom を解決する（再生ストリームは置換しない）。
+            // ※ scenes= は使わない（setScenes は再生を scenes[0] だけに差し替えてしまう）。
+            events={novelEvents}
+            jumpSceneIndex={allScenes}
+            onResolveMissingScene={resolveMissingScene}
+            // #386: `?scene=<sceneId>` ディープリンク。事前解決できた場合のみ渡し、
+            // NovelPlayer マウント時に startFrom で該当シーンから開始する。
+            // null（未指定/未解決）なら渡さず、現行どおりエントリから開始する。
+            initialSceneId={startSceneId}
+            // #386: 対象 script ファイル自身の sceneId 一覧。hub 等その集合外への choice
+            // ジャンプは通常のシーン遷移ではなく終劇として扱われる（NovelPlayer 経由で
+            // NovelRenderer.setConfinedSceneIds に渡る）。null（未指定/未解決）は無制限。
+            confinedSceneIds={confinedSceneIds}
+            assetBaseUrl={assetBaseUrl}
+            aspectRatio={doc?.aspect_ratio}
+            choiceStyle={doc?.choice_style ?? null}
+            fontFamily={doc?.font_family ?? null}
+            fontSize={doc?.font_size ?? null}
+            dialogStyle={doc?.dialog_style ?? null}
+            protagonist={doc?.protagonist ?? null}
+            characterYRatio={doc?.character_y_ratio ?? null}
+            characterHeightRatio={doc?.character_height_ratio ?? null}
+            characterHeightRatios={doc?.character_height_ratios}
+            characterScale={doc?.character_scale ?? null}
+            characterFadeMs={doc?.character_fade_ms ?? null}
+            backgroundFadeMs={doc?.background_fade_ms ?? null}
+            eventImageFadeMs={doc?.event_image_fade_ms ?? null}
+            eventImageTransitionDefault={doc?.event_image_transition ?? null}
+            backgroundColor={doc?.background_color ?? null}
+            seekbarColor={doc?.seekbar_color ?? null}
+            intermissionEvents={intermissionScene?.events ?? null}
+            intermissionBackgroundFadeMs={intermissionScene?.backgroundFadeMs ?? null}
+            intermissionCharacterFadeMs={intermissionScene?.characterFadeMs ?? null}
+            intermissionEventImageFadeMs={intermissionScene?.eventImageFadeMs ?? null}
+            skipEnabled={doc?.skip_enabled ?? null}
+            debugEnabled={doc?.debug_enabled ?? null}
+            speakerNudge={doc?.speaker_nudge ?? null}
+            autoPlay={doc?.auto_play ?? null}
+            splitLayout={doc?.split_layout ?? null}
+            fullscreenImage={doc?.fullscreen_image ?? null}
+            sentencePerPage={doc?.sentence_per_page ?? null}
+            pixelArt={doc?.pixel_art ?? null}
+            debugInfo={loadDebugInfo}
+            docKey={projectName}
+            initialSkipMode={startWithSkip}
+          />
         )}
       </main>
     </div>
