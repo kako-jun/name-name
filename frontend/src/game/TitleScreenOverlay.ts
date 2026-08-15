@@ -18,8 +18,13 @@
  *      `onLoaded`/`onError` コールバックで検知し、`hideFallbackText()` を呼んで隠す）
  *   3. 新規開始 / つづきから / 設定 / 終了 の 4 ボタン
  *
- * アクセシビリティ（`aria-label` 等）は DOM 実装からの移行に伴い失われる（PixiJS Canvas 化の
- * 既知のトレードオフとして許容。#628 Issue に明記）。
+ * アクセシビリティは DOM 実装からの移行に伴い後退する。`aria-label` 等の意味論だけでなく、
+ * キーボード操作経路そのものが失われる: 旧 `<button disabled>` が持っていた Tab フォーカス・
+ * Enter/Space 操作・visible focus ring・native disabled semantics に対し、このクラスは
+ * `pointerover`/`pointerout`/`pointertap`（マウス/タッチのみ）しか配線していない。
+ * これは #628 Issue に明記された合意事項ではなく実装判断であり、`ChoiceOverlay`
+ * （選択肢 UI, #146）が既に同じ制約を持つ既存パターンを踏襲したもの
+ * （このクラスで新規に生まれた後退ではない）。
  */
 
 import { Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
