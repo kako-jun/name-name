@@ -1242,7 +1242,7 @@ function NovelPlayer({
                 '--nn-action-btn-color': skipButtonColor,
               } as CSSProperties
             }
-            className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+            className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black/50 ${
               skipMode
                 ? 'bg-[var(--nn-action-btn-color)]/80 hover:bg-[var(--nn-action-btn-color)] text-white'
                 : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
@@ -1265,7 +1265,7 @@ function NovelPlayer({
               '--nn-action-btn-color': autoButtonColor,
             } as CSSProperties
           }
-          className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
+          className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black/50 ${
             autoMode
               ? 'bg-[var(--nn-action-btn-color)]/80 hover:bg-[var(--nn-action-btn-color)] text-white'
               : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'
@@ -1279,7 +1279,7 @@ function NovelPlayer({
           aria-label="設定を開く"
           title="設定 (Ctrl/Cmd + ,)"
           style={{ right: slotRight(slotOf('settings')) }}
-          className="absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white"
+          className="absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black/50"
         >
           <FiSettings className="w-5 h-5" aria-hidden="true" />
         </button>
@@ -1300,7 +1300,7 @@ function NovelPlayer({
                 '--nn-action-btn-color': debugButtonColor,
               } as CSSProperties
             }
-            className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors ${
+            className={`absolute bottom-3 w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black/50 ${
               debugOpen
                 ? 'bg-[var(--nn-action-btn-color)]/80 hover:bg-[var(--nn-action-btn-color)] text-white'
                 : 'bg-black/50 hover:bg-black/70 text-white/80 hover:text-white'

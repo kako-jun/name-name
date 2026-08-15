@@ -731,8 +731,10 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
       <button
         onClick={onBack}
         aria-label="プロジェクト一覧に戻る"
-        className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
-          playerDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
+        className={`w-8 h-8 flex items-center justify-center rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+          playerDark
+            ? 'text-gray-300 hover:bg-gray-800 focus-visible:ring-white/70 focus-visible:ring-offset-gray-900'
+            : 'text-gray-600 hover:bg-gray-100 focus-visible:ring-blue-500 focus-visible:ring-offset-blue-50'
         }`}
         title="プロジェクト一覧に戻る"
       >
@@ -799,10 +801,10 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             onClick={() => setHeaderExpanded((v) => !v)}
             aria-label={headerExpanded ? 'ヘッダーを閉じる' : 'ヘッダーを表示'}
             aria-expanded={headerExpanded}
-            className={`absolute top-0 left-1/2 -translate-x-1/2 z-20 w-12 h-4 flex items-center justify-center rounded-b-md transition-colors ${
+            className={`absolute top-0 left-1/2 -translate-x-1/2 z-20 w-12 h-4 flex items-center justify-center rounded-b-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
               playerDark
-                ? 'bg-gray-900/70 text-gray-400 hover:bg-gray-800'
-                : 'bg-blue-50/80 text-gray-500 hover:bg-blue-100'
+                ? 'bg-gray-900/70 text-gray-400 hover:bg-gray-800 focus-visible:ring-white/70 focus-visible:ring-offset-gray-900'
+                : 'bg-blue-50/80 text-gray-500 hover:bg-blue-100 focus-visible:ring-blue-500 focus-visible:ring-offset-blue-50'
             }`}
           >
             <svg

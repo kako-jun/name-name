@@ -139,7 +139,7 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
         onClick={() => setSettingsOpen(true)}
         aria-label="設定を開く"
         title="設定 (Ctrl/Cmd + ,)"
-        className="absolute top-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white z-10"
+        className="absolute top-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 text-white/80 hover:text-white z-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black/50"
       >
         <FiSettings className="w-5 h-5" aria-hidden="true" />
       </button>
