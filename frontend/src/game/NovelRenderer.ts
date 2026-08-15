@@ -41,6 +41,8 @@ import { TitleScreenOverlay, TITLE_LOGO_Y_RATIO } from './TitleScreenOverlay'
 import { SaveManager, SaveSlotData } from './SaveManager'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
+import { EndingOverlay } from './EndingOverlay'
+import { ToastOverlay } from './ToastOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { isSceneIdConfined } from './sceneConfinement'
@@ -333,7 +335,9 @@ export class NovelRenderer {
    * そのまま反映する（フェード演出は再生しない＝宣言的な瞬時反映）。
    */
   private storyEnded = false
-  /** storyEnded 変化を DOM 側（NovelPlayer）に伝える hook (#386)。"to be continued..." 表示用。 */
+  /** storyEnded 変化を DOM 側（NovelPlayer）に伝える hook (#386)。postMessage 通知・React state
+   *  同期（DOM ボタンの disabled 制御・デバッグ HUD 等）用。"to be continued..." 表示自体は
+   *  この callback とは独立に `endingOverlay`（PixiJS 内部描画、#630）が担う。 */
   private onStoryEndedChangeCallback: ((ended: boolean) => void) | null = null
   private assetBaseUrl: string = ''
   private textureCache: Map<string, Texture> = new Map()
@@ -379,6 +383,40 @@ export class NovelRenderer {
    * 影響を残さない。null（split_layout 未使用/解除中）ならそもそも何もしない。
    */
   private titleScreenSavedCharacterSplitRegion: LayoutRect | null = null
+
+  /**
+   * 終劇オーバーレイ (#630)。旧 DOM 版 `NovelPlayer.tsx` の "to be continued..." 表示の PixiJS 版。
+   * `storyEnded && !hasIntermissionScene()` の判定は `syncEndingOverlayVisibility()` が内部化して
+   * 行う（旧版の React 側 `usedIntermissionScene` スナップショットと同じ意味論。当該メソッドの
+   * JSDoc 参照）。ロゴ画像は自前で持たず `characterLayer.showImage()` に委譲する
+   * （`titleScreenOverlay`/`showTitleScreen()` と同じ流儀）。
+   */
+  private endingOverlay: EndingOverlay
+  /** 終劇ロゴ画像を `characterLayer` に保持させる際の予約 id（`TITLE_LOGO_IMAGE_ID` と同型）。 */
+  private static readonly ENDING_LOGO_IMAGE_ID = '__ending_logo__'
+  /** 旧 DOM 版 `max-w-[20%]`（終劇ロゴの表示幅）相当。 */
+  private static readonly ENDING_LOGO_WIDTH_RATIO = 0.2
+  /**
+   * 旧 DOM 版 `max-h-16`（4rem=64px）相当（#630 セルフレビュー must M2）。`ENDING_LOGO_PADDING_PX`
+   * と同じ論理解像度（px）基準。幅比率と高さ上限の両方を満たす小さい方のスケールを
+   * `characterLayer.showImage()` の `maxHeight` オプション経由で採用させ、旧版の
+   * `object-contain` 2軸制約を再現する（1280×720系アセットで幅基準のみだと旧比2倍超に
+   * なり "to be continued..." と重なる崩れが実証されている）。
+   */
+  private static readonly ENDING_LOGO_MAX_HEIGHT_PX = 64
+  /** 旧 DOM 版 `top-3 left-3`（0.75rem=12px）相当。終劇ロゴの左上余白。 */
+  private static readonly ENDING_LOGO_PADDING_PX = 12
+
+  /**
+   * クイックセーブ/ロード通知 toast オーバーレイ (#630)。旧 DOM 版 `NovelPlayer.tsx` の
+   * `role="status"` トースト表示の PixiJS 版。表示タイマー管理は `showToast()` が
+   * `this.time`（TimeController）経由で行う。
+   */
+  private toastOverlay: ToastOverlay
+  /** toast の自動消去タイマー。`showToast()` 呼び出し時に既存タイマーをクリアして再スタートする。 */
+  private toastTimer: number | null = null
+  /** 旧 DOM 版 `setTimeout(..., 2000)` 相当（toast 表示時間）。 */
+  private static readonly TOAST_DURATION_MS = 2000
 
   /** 選択肢スタイル名 (#146)。frontmatter `choice_style:` の値。null なら default 扱い */
   private choiceStyle: string | null = null
@@ -450,7 +488,8 @@ export class NovelRenderer {
   /**
    * intermission.md 専用シーン (#404)。`assets/scripts/intermission.md` から取得・parse された
    * イベント列。null（未設定/取得失敗/空）なら endStory() は従来どおりフェードのみで終わり、
-   * NovelPlayer 側の DOM "to be continued..." 表示にフォールバックする（完全オプトイン）。
+   * `endingOverlay`（PixiJS 内部描画、#630）の "to be continued..." 表示にフォールバックする
+   * （完全オプトイン）。
    * `setIntermissionScene` が設定する。GameState には持たない（storyEnded 同様、演出の中間状態
    * ではなく一度きりの見た目でしかないため、セーブ/シークの対象外 — doctrine 規律3）。
    */
@@ -713,6 +752,9 @@ export class NovelRenderer {
     this.choiceOverlay.setAudioManager(this.audioManager)
     // タイトル画面オーバーレイ (#628 フェーズ2b)
     this.titleScreenOverlay = new TitleScreenOverlay(this.screenWidth, this.screenHeight)
+    // 終劇オーバーレイ / toast オーバーレイ (#630)
+    this.endingOverlay = new EndingOverlay(this.screenWidth, this.screenHeight)
+    this.toastOverlay = new ToastOverlay(this.screenWidth, this.screenHeight)
     this.saveLoadOverlay = new SaveLoadOverlay(
       this.screenWidth,
       this.screenHeight,
@@ -746,6 +788,8 @@ export class NovelRenderer {
     this.appInitialized = true
     this.choiceOverlay.setRenderResolution(this.getRenderResolution())
     this.titleScreenOverlay.setRenderResolution(this.getRenderResolution())
+    this.endingOverlay.setRenderResolution(this.getRenderResolution())
+    this.toastOverlay.setRenderResolution(this.getRenderResolution())
 
     // Pixi が init() 内で設定した touch-action:'none' を上書きする (#434)。
     // 詳細な判断根拠は NOVEL_CANVAS_TOUCH_ACTION 定義部のコメント参照。init() 完了直後
@@ -876,6 +920,16 @@ export class NovelRenderer {
 
     // バックログオーバーレイ
     this.app.stage.addChild(this.backlogOverlay)
+
+    // 終劇オーバーレイ (#630)。z 順は全ゲーム画面要素（ダイアログ/選択肢/セーブロード/バックログ等）
+    // より確実に手前に来るよう、この時点で最上位に積む（#628 セルフレビューで z-order 見落としが
+    // 実機バグとして発覚した前例があるため、最上位への配置を明示する）。
+    this.app.stage.addChild(this.endingOverlay)
+
+    // toast オーバーレイ (#630)。終劇オーバーレイよりさらに手前——終劇後もセーブ不可メッセージ等の
+    // トーストは表示されうるため（F5/F8 は quickSave/quickLoad 側で storyEnded 中は失敗扱いになるが
+    // その失敗通知トースト自体は出る）、常にトーストが最前面に見えるようにする。
+    this.app.stage.addChild(this.toastOverlay)
 
     // クリック/タップで進行
     this.app.canvas.addEventListener('pointerdown', this.handleAdvance)
@@ -1080,6 +1134,7 @@ export class NovelRenderer {
     if (this.storyEnded) {
       this.storyEnded = false
       this.onStoryEndedChangeCallback?.(false)
+      this.syncEndingOverlayVisibility()
     }
     this.currentSceneId = sceneId
     this.resetAndStartEvents([...scene.events], { preserveBackgroundForTransition: true })
@@ -1208,6 +1263,11 @@ export class NovelRenderer {
 
     // #404: onStoryEndedChangeCallback の発火位置・タイミングは変更しない（postMessage 契約の正本）。
     this.onStoryEndedChangeCallback?.(true)
+    // 終劇オーバーレイ表示 (#630): intermission.md 専用シーンが使われた場合はこの表示を出さない
+    // （PixiJS のタブローに一本化し、二重表示を避ける）。判定は intermissionEvents の「この時点の」
+    // 値で行う（syncEndingOverlayVisibility の JSDoc 参照。旧版 DOM の usedIntermissionScene と同じ
+    // タイミングでスナップショットする）。
+    this.syncEndingOverlayVisibility()
 
     // intermission.md 専用シーン (#404): 消去フェードが終わった後にタブローを1回だけ描画して
     // 凍結する。通常のシーン遷移機構（resetAndStartEvents/jumpToScene）には一切乗せない —
@@ -1777,6 +1837,91 @@ export class NovelRenderer {
   }
 
   /**
+   * 終劇オーバーレイ ("to be continued..." + 埋め込み元ロゴ) を表示する (#630)。
+   * ロゴは `characterLayer.showImage()`（#628 フェーズ2a のフェード機構）に委譲する。
+   * `transition` は指定しない＝既定 Fade のまま（この用途にピクセレート演出は不要、Issue 方針）。
+   * 呼び出しは常に `syncEndingOverlayVisibility()` 経由（このメソッド自体は判定を持たない）。
+   *
+   * @param instant `showImage()` に渡す即時表示フラグ (#630 セルフレビュー must M1)。goBack/seekTo/
+   *   セーブ復元（`applyState()` 経由）は true を渡し、フェード（既定 700ms）を発火させない。
+   *   通常の物語進行による storyEnded 遷移（`endStory()` 経由）は false（既定 Fade）のまま。
+   */
+  private showEndingOverlay(instant = false): void {
+    this.endingOverlay.setFontFamily(
+      resolveFontFamily(null, this.gameDefaultFontFamily, NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY)
+    )
+    this.endingOverlay.show()
+    // 旧 DOM 版と同じく `assetBaseUrl` が無ければロゴ表示自体を試みない（404 ログを増やさない。
+    // `showTitleScreen()` は常に呼ぶ設計だが、あちらはフォールバックテキストを持つため無条件で
+    // 呼んでも実害が無い——終劇ロゴはフォールバックが無い仕様のため、ここでガードする）。
+    if (this.assetBaseUrl) {
+      const logoSize = this.screenWidth * NovelRenderer.ENDING_LOGO_WIDTH_RATIO
+      const centerX = NovelRenderer.ENDING_LOGO_PADDING_PX + logoSize / 2
+      const centerY = NovelRenderer.ENDING_LOGO_PADDING_PX + logoSize / 2
+      this.characterLayer.showImage({
+        id: NovelRenderer.ENDING_LOGO_IMAGE_ID,
+        path: 'title.png',
+        x: centerX / this.screenWidth,
+        y: centerY / this.screenHeight,
+        size: logoSize,
+        maxHeight: NovelRenderer.ENDING_LOGO_MAX_HEIGHT_PX,
+        assetBaseUrl: this.assetBaseUrl,
+        instant,
+        onError: () => {
+          // 404 等: 旧 DOM 版と同じくロゴは単に出さない（テキストへのフォールバックは無い）。
+        },
+      })
+    }
+  }
+
+  /** 終劇オーバーレイを非表示にする (#630)。ロゴは `hideTitleScreen()` と同じく即時破棄する。 */
+  private hideEndingOverlay(): void {
+    this.endingOverlay.hide()
+    this.characterLayer.remove(NovelRenderer.ENDING_LOGO_IMAGE_ID, { instant: true })
+  }
+
+  /**
+   * 終劇オーバーレイの表示/非表示を現在の状態から同期する (#630)。
+   *
+   * 旧 DOM 版 `NovelPlayer.tsx` の `storyEnded && !usedIntermissionScene` 判定を内部化したもの。
+   * `usedIntermissionScene` は旧版では「storyEnded が true に立ち上がった瞬間の
+   * `hasIntermissionScene()`」を React state にスナップショットし、以後 `intermissionEvents` が
+   * 変化してもライブ再評価しない設計だった（早すぎる fetch で intermission がまだ届いていない
+   * 場合に表示が消えてしまう事故を防ぐため）。このメソッドを `this.storyEnded`/
+   * `this.intermissionEvents` が変化する箇所（`endStory()`/`jumpToScene` の巻き戻し/`applyState()`）
+   * それぞれの変化直後に呼ぶことで、呼び出しタイミング自体が同じスナップショット効果を持つ
+   * （`intermissionEvents` は `setIntermissionScene()` からしか変わらず、そちらはこのメソッドの
+   * 呼び出し元では無いため、意図せず再評価されることはない）。
+   *
+   * @param instant `showEndingOverlay()` へそのまま渡す即時表示フラグ (#630 セルフレビュー must M1)。
+   *   既定 false（Fade）。goBack/seekTo/セーブ復元を扱う `applyState()` からの呼び出しだけ true を渡す。
+   */
+  private syncEndingOverlayVisibility(instant = false): void {
+    if (this.storyEnded && !this.intermissionEvents) {
+      this.showEndingOverlay(instant)
+    } else {
+      this.hideEndingOverlay()
+    }
+  }
+
+  /**
+   * クイックセーブ/ロード完了通知の toast を表示する (#630)。旧 DOM 版 `NovelPlayer.tsx` の
+   * `showToast` ヘルパーの PixiJS 版。2秒後に自動的に消える。連続呼び出し時は既存タイマーを
+   * クリアして再スタートする（旧版と同じ挙動）。
+   */
+  showToast(message: string): void {
+    if (this.toastTimer) {
+      this.time.clearTimeout(this.toastTimer)
+      this.toastTimer = null
+    }
+    this.toastOverlay.show(message)
+    this.toastTimer = this.time.setTimeout(() => {
+      this.toastTimer = null
+      this.toastOverlay.hide()
+    }, NovelRenderer.TOAST_DURATION_MS)
+  }
+
+  /**
    * 選択肢スタイルを設定する (#146)。
    * frontmatter `choice_style:` の値（`default` / `soft` / `monochrome` 等）を渡す。
    * null/undefined のときは default 扱い。
@@ -2101,8 +2246,8 @@ export class NovelRenderer {
    *
    * `events` は `assets/scripts/intermission.md` を parseMarkdown した EventDocument から
    * flatten した Event 列（呼び出し側 = PlayerScreen の責務）。null/undefined/空配列は
-   * 「未設定」として扱い、endStory() は従来どおりフェードのみで終わる（NovelPlayer の DOM
-   * "to be continued..." 表示にフォールバック。完全後方互換・オプトイン）。
+   * 「未設定」として扱い、endStory() は従来どおりフェードのみで終わる（`endingOverlay`
+   * （PixiJS 内部描画、#630）の "to be continued..." 表示にフォールバック。完全後方互換・オプトイン）。
    *
    * `options.backgroundFadeMs`/`characterFadeMs`/`eventImageFadeMs` は intermission.md 自身の frontmatter
    * `background_fade_ms:`/`character_fade_ms:`/`event_image_fade_ms:` の値。物語本編の同名 per-game 設定
@@ -2143,8 +2288,12 @@ export class NovelRenderer {
 
   /**
    * intermission.md 専用シーンが設定されているか (#404)。
-   * NovelPlayer が DOM 側 "to be continued..." 表示（フェーズ1）を出すかどうかの判定に使う
-   * （intermission シーン設定時は PixiJS 側のタブローに一本化し、二重表示を避ける）。
+   *
+   * #630 以降、この判定（`storyEnded && !hasIntermissionScene()`）は `syncEndingOverlayVisibility()`
+   * が `this.intermissionEvents` を直接参照する形に内部化されており、このメソッド自体は
+   * `NovelRenderer.intermission.test.ts` の同値分割テスト以外からは呼ばれていない。外部から
+   * `intermissionEvents` の設定有無を検査できる公開 API として残している（プロダクションコードの
+   * 呼び出し元は無い）。
    */
   hasIntermissionScene(): boolean {
     return this.intermissionEvents !== null
@@ -2481,8 +2630,10 @@ export class NovelRenderer {
     this.onSeekActiveChange = cb
   }
 
-  /** 終劇状態の変化コールバックを登録する (#386)。NovelPlayer が "to be continued..." の
-   *  DOM 表示に繋ぐ（setOnAutoModeChange 等と同じ配線パターン）。 */
+  /** 終劇状態の変化コールバックを登録する (#386)。NovelPlayer が postMessage 通知・React state
+   *  同期（DOM ボタンの disabled 制御・デバッグ HUD 等）に繋ぐ（setOnAutoModeChange 等と同じ
+   *  配線パターン）。"to be continued..." 表示自体は `endingOverlay`（PixiJS 内部描画、#630）が
+   *  この callback とは独立に担う。 */
   setOnStoryEndedChange(cb: ((ended: boolean) => void) | null): void {
     this.onStoryEndedChangeCallback = cb
   }
@@ -2536,6 +2687,10 @@ export class NovelRenderer {
       this.time.clearInterval(this.scrimRetreatTimer)
       this.scrimRetreatTimer = null
     }
+    if (this.toastTimer) {
+      this.time.clearTimeout(this.toastTimer)
+      this.toastTimer = null
+    }
     this.cancelNovelScrimVisibilityFade()
     // 動画レイヤを破棄（video 要素解放・AudioManager から detach・Sprite/Texture/mask 破棄）(#252)。
     // audioManager.destroy() より前に呼んで detach を確実に通す。
@@ -2549,6 +2704,8 @@ export class NovelRenderer {
     this.characterLayer.clear()
     this.choiceOverlay.hide()
     this.titleScreenOverlay.hide()
+    this.endingOverlay.hide()
+    this.toastOverlay.hide()
     this.saveLoadOverlay.hide()
     this.backlogOverlay.hide()
     this.dialogBox.dispose()
@@ -3093,7 +3250,7 @@ export class NovelRenderer {
     this.advSentencePagesCache = null
 
     // 終劇状態の復元 (#386)。goBack/seekTo/セーブ復元はすべて即時反映（フェード演出はしない）。
-    // DOM 側（NovelPlayer の "to be continued..." 表示）は callback で同期する。
+    // "to be continued..." 表示は callback とは独立に syncEndingOverlayVisibility() で同期する（#630）。
     // #460 セルフレビュー must M2: 値が実際に変化した時だけコールバックを発火する（変化なしなら
     // 発火しない）。goBack/seekTo/loadFromSaveData は同一 renderer インスタンス上で this.storyEnded
     // が真の直前状態を保持しているため、この比較は「本当に変わったか」を正しく判定できる
@@ -3107,6 +3264,16 @@ export class NovelRenderer {
     if (prevStoryEnded !== state.storyEnded) {
       this.onStoryEndedChangeCallback?.(state.storyEnded)
     }
+    // 終劇オーバーレイの表示同期 (#630) はコールバック発火の有無に関わらず毎回行う
+    // （callback 側は postMessage 重複防止のため変化時だけ発火するが、表示自体は fluid 再マウント
+    // で新規 renderer インスタンスが作られた際にも正しい storyEnded 値を反映する必要があるため。
+    // 旧 DOM 版は React state が再マウントを跨いで保持されることで表示を維持していたが、新
+    // renderer インスタンスの endingOverlay は必ず非表示から始まるため、ここで明示的に同期しないと
+    // 「fluid 再マウント直後は終劇表示が消える」regression になる）。
+    // instant: true (#630 セルフレビュー must M1)。applyState() はすべて goBack/seekTo/セーブ復元
+    // 経由（このメソッド自体のコメント冒頭 #386 参照）なので、CharacterLayer 既定の Fade（700ms）を
+    // 発火させず即時反映する。通常の物語進行（endStory()）はこの経路を通らないため影響しない。
+    this.syncEndingOverlayVisibility(true)
 
     // 背景復元
     if (state.backgroundPath) {
@@ -4922,8 +5089,11 @@ export class NovelRenderer {
     // 持つが、新規インスタンスの初期値 false のままだと「true で復元＝変化あり」と誤判定され、
     // fluid 再マウントのたびに終劇 postMessage（NovelPlayer 側）が再送されてしまう。ここで復元先の
     // 値を先に直接セットしておき、applyState の比較を「変化なし」にして二重発火を防ぐ。
-    // ("to be continued..." 表示自体は NovelPlayer 側の React state が再マウント effect を跨いで
-    // 保持されるため、ここでコールバックを発火させなくても表示は正しく維持される。)
+    // ("to be continued..." 表示自体は callback の発火有無とは独立に、applyState() 内の
+    // syncEndingOverlayVisibility() が毎回呼ばれることで同期される (#630)。新規 renderer インスタンスの
+    // `endingOverlay` は必ず非表示から始まる——旧 DOM 版のように React state が再マウントを跨いで
+    // 保持される仕組みは無い——ため、この明示的な同期が無いと表示が消える regression になる。
+    // 詳細は applyState() 内 syncEndingOverlayVisibility() 呼び出し箇所のコメント参照。)
     this.storyEnded = snapshot.storyEnded
 
     this.restoreToScene(scene, snapshot)

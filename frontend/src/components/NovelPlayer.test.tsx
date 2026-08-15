@@ -147,6 +147,10 @@ const {
     playScript = vi.fn().mockResolvedValue(undefined)
     quickSave = vi.fn().mockReturnValue(false)
     quickLoad = vi.fn().mockReturnValue(false)
+    // #630: F5/F8 のクイックセーブ/ロード通知 toast は PixiJS 側 (NovelRenderer.showToast) に
+    // 内部化された。NovelPlayer はこのメソッドを呼ぶだけなので、DOM 側では呼び出し配線のみを
+    // 検証する（表示自体は NovelRenderer.toast.test.ts が担保）。
+    showToast = vi.fn()
     // #620: quickLoad() が false（同期的失敗）を返した際のフォールバック。未定義のままだと
     // NovelPlayer 側の呼び出しが TypeError で Unhandled Rejection になり、テストが握りつぶした
     // まま「緑」に見えてしまう（実際に発生していた不備）。
@@ -672,9 +676,8 @@ describe('NovelPlayer speakerNudge の renderer 転送 (#382)', () => {
 // ことと、renderer.setOnStoryEndedChange 経由で届く終劇状態が "to be continued..." の
 // DOM 表示に反映されることを検証する。DEV 限定の debug_scene（#220）との優先順位
 // （initialSceneId → debug_scene の順に startFrom が呼ばれ、後勝ちで debug 側が効く）も含む。
-describe('NovelPlayer `?scene=` ディープリンク + confinement + 終劇表示 (#386)', () => {
+describe('NovelPlayer `?scene=` ディープリンク + confinement 配線 (#386)', () => {
   const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
-  const storyEndedText = () => screen.queryByText('to be continued...')
 
   it('G1: initialSceneId を渡すと mount 時に renderer.startFrom({ sceneId }) が1回だけ呼ばれる', async () => {
     render(<NovelPlayer events={[]} initialSceneId="scene-x" />)
@@ -708,37 +711,10 @@ describe('NovelPlayer `?scene=` ディープリンク + confinement + 終劇表�
     expect(lastRenderer().setConfinedSceneIds).toHaveBeenCalledWith(null)
   })
 
-  it('G6: mount 直後（onStoryEndedChange 未発火）は "to be continued..." が現れない', async () => {
-    render(<NovelPlayer events={[]} />)
-    await flushAsync()
-    expect(storyEndedText()).toBeNull()
-  })
-
-  it('G7: onStoryEndedChange(true) が発火した時だけ "to be continued..." が表示される', async () => {
-    render(<NovelPlayer events={[]} />)
-    await flushAsync()
-    const cb = lastRenderer().setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
-    act(() => cb(true))
-    expect(storyEndedText()).not.toBeNull()
-  })
-
-  it('G8: onStoryEndedChange(false) では "to be continued..." は現れない', async () => {
-    render(<NovelPlayer events={[]} />)
-    await flushAsync()
-    const cb = lastRenderer().setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
-    act(() => cb(false))
-    expect(storyEndedText()).toBeNull()
-  })
-
-  it('G9: onStoryEndedChange(true) の後に false で発火し直すと "to be continued..." が消える', async () => {
-    render(<NovelPlayer events={[]} />)
-    await flushAsync()
-    const cb = lastRenderer().setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
-    act(() => cb(true))
-    expect(storyEndedText()).not.toBeNull()
-    act(() => cb(false))
-    expect(storyEndedText()).toBeNull()
-  })
+  // G6-G9 (旧: "to be continued..." の DOM 表示が onStoryEndedChange(true/false) に追従することの
+  // 検証) は #630 で削除した。表示自体が PixiJS 側 (NovelRenderer.syncEndingOverlayVisibility()) に
+  // 内部化されたため、NovelPlayer 側にはもう検証対象の DOM が無い。表示ロジックの単体テストは
+  // NovelRenderer.endingOverlay.test.ts が担保する。
 
   it('G10: DEV モードで `?scene=` 由来の initialSceneId と `?debug_scene=` が同時指定された場合、debug_scene 側の startFrom が後勝ちする', async () => {
     window.history.pushState({}, '', '?debug_scene=dbg-scene')
@@ -844,123 +820,13 @@ describe('NovelPlayer 終劇→埋め込み親へ postMessage 通知 (#395)', ()
   })
 })
 
-// --- #404: 終劇表示中の埋め込み元プロジェクトロゴ ---
-//
-// storyEnded 中、左上に `${assetBaseUrl}/images/title.png` を表示する。TitleOverlay の
-// imageFailed と同じ onError 検知パターンだが、こちらはテキストへのフォールバックをしない
-// （ロゴが無ければ単に出さない）。表示条件は `assetBaseUrl && !storyEndedLogoFailed`、
-// storyEndedLogoFailed は onError で true になり、docKey 変化でだけ false にリセットされる。
-//
-// 非適用（書かない）: 権限/二重送信/race（該当ロジックなし）/ タイムゾーン・i18n（該当なし）/
-//   モバイル表示（jsdom にレイアウトエンジンがなく単体テスト不可。ライブ確認は別途）/
-//   console error ログ（TitleOverlay と同一パターンで既に許容されている慣習）。
-describe('NovelPlayer 終劇ロゴ表示 (#404)', () => {
-  const ASSET_BASE = '/asset-base'
-  const LOGO_SRC = `${ASSET_BASE}/images/title.png`
-  const capturedStoryEndedCb = (): ((ended: boolean) => void) => {
-    const r = rendererInstances[rendererInstances.length - 1]
-    return r.setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
-  }
-  // alt="" の img は role が potentially presentation 扱いになるため getByRole は使わず、
-  // src 属性で直接引く（テスト設計メモの推奨どおり）。
-  const logoImg = () => document.querySelector(`img[src="${LOGO_SRC}"]`) as HTMLImageElement | null
-  const storyEndedText = () => screen.queryByText('to be continued...')
+// #404: 終劇表示中の埋め込み元プロジェクトロゴ（assetBaseUrl 配線・pixelArt 反映・onError
+// フォールバック）は #630 で PixiJS 側 (NovelRenderer.showEndingOverlay() /
+// CharacterLayer.showImage()) に内部化された。DOM 側の `<img>` はもう存在しないため、旧
+// L1-L8（NovelPlayer 側の DOM 検証）は削除した。ロゴ表示の単体テストは
+// NovelRenderer.endingOverlay.test.ts が担保する。
 
-  it('L1: storyEnded=true かつ assetBaseUrl 指定時、ロゴ img が表示される', async () => {
-    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} />)
-    await flushAsync()
-    act(() => capturedStoryEndedCb()(true))
-    expect(logoImg()).not.toBeNull()
-  })
-
-  it('L2: storyEnded=true かつ assetBaseUrl 未指定時、ロゴ img は現れず "to be continued..." は表示される', async () => {
-    render(<NovelPlayer events={[]} />)
-    await flushAsync()
-    act(() => capturedStoryEndedCb()(true))
-    expect(logoImg()).toBeNull()
-    expect(storyEndedText()).not.toBeNull()
-  })
-
-  it('L3: img の onError 発火後、ロゴ img がDOMから消え、テキストへのフォールバックは無い（TitleOverlay と異なる仕様）', async () => {
-    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} />)
-    await flushAsync()
-    act(() => capturedStoryEndedCb()(true))
-    const img = logoImg()
-    expect(img).not.toBeNull()
-    act(() => {
-      fireEvent.error(img!)
-    })
-    expect(logoImg()).toBeNull()
-    // ロゴが消えた後も他の img（フォールバック画像）に差し替わっていない
-    expect(document.querySelectorAll('img').length).toBe(0)
-    // "to be continued..." テキストはロゴの成否と無関係に表示され続ける
-    expect(storyEndedText()).not.toBeNull()
-  })
-
-  it('L4: assetBaseUrl="" のとき、ロゴは表示されない（境界: 空文字も未設定扱い）', async () => {
-    render(<NovelPlayer events={[]} assetBaseUrl="" />)
-    await flushAsync()
-    act(() => capturedStoryEndedCb()(true))
-    expect(logoImg()).toBeNull()
-  })
-
-  it('L5: onError 発火後、docKey が変化すると再びロゴが表示される（別プロジェクト再利用の想定）', async () => {
-    const { rerender } = render(
-      <NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} docKey="doc-a" />
-    )
-    await flushAsync()
-    act(() => capturedStoryEndedCb()(true))
-    const img = logoImg()
-    expect(img).not.toBeNull()
-    act(() => {
-      fireEvent.error(img!)
-    })
-    expect(logoImg()).toBeNull()
-
-    rerender(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} docKey="doc-b" />)
-    await flushAsync()
-    expect(logoImg()).not.toBeNull()
-  })
-
-  it('L6: onError 発火後、docKey が同一値のまま storyEnded を false→true にしてもロゴは再表示されない（フラグが尾を引く）', async () => {
-    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} docKey="doc-a" />)
-    await flushAsync()
-    const cb = capturedStoryEndedCb()
-    act(() => cb(true))
-    const img = logoImg()
-    expect(img).not.toBeNull()
-    act(() => {
-      fireEvent.error(img!)
-    })
-    expect(logoImg()).toBeNull()
-
-    act(() => cb(false))
-    act(() => cb(true))
-    expect(logoImg()).toBeNull()
-  })
-
-  // #553: TitleOverlay と同じ pixelArt → image-rendering: pixelated パターンをこのロゴ img にも適用する。
-  it('L7: pixelArt={true} のとき、ロゴ img に image-rendering: pixelated が付く', async () => {
-    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} pixelArt={true} />)
-    await flushAsync()
-    act(() => capturedStoryEndedCb()(true))
-    const img = logoImg()
-    expect(img).not.toBeNull()
-    expect(img!.style.imageRendering).toBe('pixelated')
-  })
-
-  it('L8: pixelArt が false/未指定のとき、ロゴ img に image-rendering は付かない（従来どおり補間あり）', async () => {
-    render(<NovelPlayer events={[]} assetBaseUrl={ASSET_BASE} pixelArt={false} />)
-    await flushAsync()
-    act(() => capturedStoryEndedCb()(true))
-    const imgFalse = logoImg()
-    expect(imgFalse).not.toBeNull()
-    expect(imgFalse!.style.imageRendering).toBe('')
-  })
-})
-
-// #404 フェーズ2: intermission.md 専用シーンの renderer 配線 + usedIntermissionScene の
-// race 固定化（デシジョンテーブル行6/7の直接証明）。
+// #404 フェーズ2: intermission.md 専用シーンの renderer 配線。
 //
 // usedIntermissionScene は「storyEnded が true に立ち上がった瞬間の renderer.hasIntermissionScene()」
 // を1回だけスナップショットし、以後 intermissionEvents prop が変化してもライブ再評価しない設計
@@ -968,9 +834,6 @@ describe('NovelPlayer 終劇ロゴ表示 (#404)', () => {
 // 消えない＝「同時に消えるだけの空白画面」を避けるための意図的な仕様。session ノート参照）。
 describe('NovelPlayer intermission.md 専用シーン配線 (#404 フェーズ2)', () => {
   const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
-  const storyEndedText = () => screen.queryByText('to be continued...')
-  const captureCb = (): ((ended: boolean) => void) =>
-    lastRenderer().setOnStoryEndedChange.mock.calls[0][0] as (ended: boolean) => void
   const EV1 = [{ Narration: { text: ['つづく'] } }]
 
   it('NP-IM-1: マウント時に renderer.setIntermissionScene が intermissionEvents prop の初期値で呼ばれる', async () => {
@@ -1007,68 +870,11 @@ describe('NovelPlayer intermission.md 専用シーン配線 (#404 フェーズ2)
     })
   })
 
-  it('NP-IM-3 (race・最重要): storyEnded=true 発火時に hasIntermissionScene()=false だと、後から intermissionEvents が届いても usedIntermissionScene は false のまま固定される（デシジョンテーブル行7）', async () => {
-    const { rerender } = render(<NovelPlayer events={[]} intermissionEvents={null} />)
-    await flushAsync()
-    const r = lastRenderer()
-    r.hasIntermissionScene.mockReturnValue(false) // 早すぎる fetch: intermission はまだ未到着
-    act(() => captureCb()(true))
-    expect(storyEndedText()).not.toBeNull() // DOM フォールバックが表示される
-
-    // intermission が遅れて届く（PlayerScreen の非同期 fetch 解決）。
-    // hasIntermissionScene を true に切り替えても、usedIntermissionScene は再評価しない
-    // （storyEnded の再発火が無い限りスナップショットは更新されない）。
-    r.hasIntermissionScene.mockReturnValue(true)
-    rerender(<NovelPlayer events={[]} intermissionEvents={EV1} />)
-    await flushAsync()
-    expect(storyEndedText()).not.toBeNull() // 表示され続ける（消えない）
-  })
-
-  it('NP-IM-4 (対照系): intermissionEvents を先に非空にしてから hasIntermissionScene()=true で storyEnded 発火すると usedIntermissionScene=true で DOM 非表示になる', async () => {
-    render(<NovelPlayer events={[]} intermissionEvents={EV1} />)
-    await flushAsync()
-    const r = lastRenderer()
-    r.hasIntermissionScene.mockReturnValue(true)
-
-    act(() => captureCb()(true))
-
-    expect(storyEndedText()).toBeNull()
-  })
-
-  it('NP-IM-5: onStoryEndedChange(true)→(false)（goBack 相当）で usedIntermissionScene が false に戻る（再評価は次の true 発火時）', async () => {
-    render(<NovelPlayer events={[]} intermissionEvents={EV1} />)
-    await flushAsync()
-    const r = lastRenderer()
-    const cb = captureCb()
-
-    r.hasIntermissionScene.mockReturnValue(true)
-    act(() => cb(true))
-    expect(storyEndedText()).toBeNull() // usedIntermissionScene=true → DOM 非表示
-
-    act(() => cb(false)) // goBack 相当。ended=false なので usedIntermissionScene も false に戻る
-    expect(storyEndedText()).toBeNull() // storyEnded=false 自体で非表示（この時点では区別不可）
-
-    // usedIntermissionScene が「true に固定されたまま」ではなく実際に false へ戻っていることを、
-    // hasIntermissionScene を false に切り替えてから再度 true 発火して確認する
-    // （固定されたままなら hasIntermissionScene の変更を無視して非表示のままになるはず）。
-    r.hasIntermissionScene.mockReturnValue(false)
-    act(() => cb(true))
-    expect(storyEndedText()).not.toBeNull() // 新しい判定 (true && false) が効いて表示される
-  })
-
-  it('NP-IM-6 (二重表示防止): usedIntermissionScene=true のとき "to be continued..." のブロック自体が DOM ツリーに存在しない（ロゴ img も含む）', async () => {
-    render(<NovelPlayer events={[]} intermissionEvents={EV1} assetBaseUrl="/asset-base" />)
-    await flushAsync()
-    const r = lastRenderer()
-    r.hasIntermissionScene.mockReturnValue(true)
-
-    act(() => captureCb()(true))
-
-    expect(storyEndedText()).toBeNull()
-    // storyEnded && !usedIntermissionScene で丸ごと JSX ツリーから外れる（CSS 非表示ではない）ので、
-    // 同じブロック内にあるロゴ img も一緒に消えている。
-    expect(document.querySelector('img[src="/asset-base/images/title.png"]')).toBeNull()
-  })
+  // 旧 NP-IM-3〜6 (intermission が使われた場合に "to be continued..." の DOM 表示が二重表示防止で
+  // 消えること・race 条件でのスナップショット固定) は #630 で削除した。この判定
+  // (`storyEnded && !hasIntermissionScene()`) は NovelRenderer.syncEndingOverlayVisibility() に
+  // 内部化され、同じ「値が変化する瞬間にスナップショットする」設計で NovelRenderer.
+  // endingOverlay.test.ts が race 条件を含めて担保する。
 })
 
 // #409: doc.background_color → renderer.setDefaultBackgroundColor 配線。

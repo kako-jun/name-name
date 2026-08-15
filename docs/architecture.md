@@ -191,9 +191,14 @@ setIntermissionScene(events, {backgroundFadeMs, characterFadeMs, eventImageFadeM
 Choice によるプレイヤー操作介入は無い。ただし `[待機: Nms]`（数値指定）はタブロー専用のローカル・
 ステージングとしてサポートし、Label/Image の間に挟むことで段階的なフェード演出ができる（#424。
 黒くなった後テキストがじわっと出て、それからロゴがさらにじわっと出る、等）。**intermission.md
-未配置のプロジェクト**は、DOM 側（`NovelPlayer`）が
+未配置のプロジェクト**は、PixiJS 側（`NovelRenderer` の終劇オーバーレイ、#386/#404/#630）が
 中央に大きく "to be continued..." を表示し、`assetBaseUrl` の `title.png` があれば左上に埋め込み
-元プロジェクトのロゴを重ねる、従来の見た目にフォールバックする（フェーズ1・後方互換）。
+元プロジェクトのロゴを重ねる、従来の見た目にフォールバックする（フェーズ1・後方互換。表示実装は
+#630 で DOM `NovelPlayer.tsx` から PixiJS `NovelRenderer.showEndingOverlay()`
++ `characterLayer.showImage()` に置き換わった——`TitleScreenOverlay`/#628 フェーズ2b と同じ移行
+パターン。`intermission.md` 使用時にこの表示を出さない判定は、以前は `NovelPlayer` 側の React state
+（`usedIntermissionScene`、endStory() 発火時点の `hasIntermissionScene()` を1回だけスナップショット）
+が担っていたが、#630 で `NovelRenderer.syncEndingOverlayVisibility()` に内部化された）。
 `intermission.md` はあえて `content/scripts/` 配下ではなく `assets/` 配下に置く設計——
 `content/scripts/` は `listScripts()` で全列挙され `allScenes`/confinement グラフに乗ってしまい、
 `?scene=` 直リンクや原稿 typo で到達可能になる事故ルートになるため、意図的に外している。
@@ -397,7 +402,7 @@ interface NovelGameState {
 
 両者は起動時1回（1）と全イベント絵（2）という適用範囲も、ゲーム設定ファイル（1と2はどちらも `tui-config.toml` 由来だが別フィールド）という点も異なる独立した機構である点に注意。
 
-**テクスチャ拡大縮小フィルタ（pixel_art, #466）**: PixiJS は既定でテクスチャ拡大時に linear（滑らか）フィルタを掛けるため、Gymnasia の 128x128 ドット絵イベント絵を cover-fit で拡大表示するとブロック状のドットがぼける。frontmatter `pixel_art: true` で per-game に `'nearest'`（ドット感を保つ）へ切り替えられる（未指定/`false` は従来どおり `'linear'`＝theo-hayami 等の塗り絵作品は非回帰）。`NovelPlayer` → `NovelRenderer.setPixelArt(enabled)` → `CharacterLayer.setPixelArt()` / `EventImageLayer.setPixelArt()` の対称配線（`character_scale` 等と同じ流儀）で、値の所有権は各レイヤー側に置き renderer はフィールドを持たず素通しする。適用箇所はテクスチャロード完了後（`Assets.load().then()` 内）の `texture.source.scaleMode = pixelArt ? 'nearest' : 'linear'`（PixiJS v8 API）で、`CharacterLayer` は立ち絵（`loadTexture`）と render-only 単独画像（`showImage`、`[画像:]`）の両方に効く。**対象外**: `NovelRenderer` が内蔵する背景画像（`setBackground`/`showLoadedBackground`）は本設定の対象に含めていない。Gymnasia は `[背景:]` タグ自体を使わず全てイベント絵で構成する設計（#76）のため現状不要と判断した。将来ドット絵背景を使う作品が出た場合は同じパターン（`texture.source.scaleMode` の分岐）を `showLoadedBackground` に追加する形で拡張できる。`pixel_art` を後から変えても、`character_scale`（#378）と同じく表示中の sprite に即再適用される: `CharacterLayer.setPixelArt()` は `reapplyPixelArt()` で `this.characters` の全 sprite（立ち絵・render-only・クロスフェード中の旧 sprite 問わず、テクスチャロード済みのもの）の `scaleMode` をその場で書き換え、`EventImageLayer.setPixelArt()` は show() が保持する直近の `currentTexture` を同様に書き換える（scale 系のライブ再適用と異なりジオメトリを変えないため、アニメ中・fit 等の除外は不要）。editor で `pixel_art: true` を追記した瞬間に表示中の絵の見た目も揃う。**タイトル画面・終劇オーバーレイの title.png（#553、#628 フェーズ2b で経路変更）**: 起動時タイトル画面のロゴは #628 フェーズ2b で DOM `TitleOverlay.tsx` から PixiJS 実装（`NovelRenderer.showTitleScreen()` → `TitleScreenOverlay` + `characterLayer.showImage()`）に置き換わり、以後は上記の `scaleMode` 配線（`CharacterLayer.setPixelArt()`）にそのまま乗る——別経路の CSS 適用は不要になった。一方 `NovelPlayer` の終劇オーバーレイ（confinement 外脱出時に出す埋め込み元ロゴ、#404）は本 Issue のスコープ外で従来どおり PixiJS の外、DOM の素の `<img>` で `${assetBaseUrl}/images/title.png` を表示し、`pixelArt` prop が true のときだけ `style={{ imageRendering: 'pixelated' }}` を直接その `<img>` に適用する（PixiJS レイヤーを経由しない、CSS の `image-rendering` によるブラウザ側の補間抑制）。値の出どころは両者とも同じ `Document.pixel_art` で、PlayerScreen → `NovelPlayer` へ他の per-game 設定と同じ経路で流れる。
+**テクスチャ拡大縮小フィルタ（pixel_art, #466）**: PixiJS は既定でテクスチャ拡大時に linear（滑らか）フィルタを掛けるため、Gymnasia の 128x128 ドット絵イベント絵を cover-fit で拡大表示するとブロック状のドットがぼける。frontmatter `pixel_art: true` で per-game に `'nearest'`（ドット感を保つ）へ切り替えられる（未指定/`false` は従来どおり `'linear'`＝theo-hayami 等の塗り絵作品は非回帰）。`NovelPlayer` → `NovelRenderer.setPixelArt(enabled)` → `CharacterLayer.setPixelArt()` / `EventImageLayer.setPixelArt()` の対称配線（`character_scale` 等と同じ流儀）で、値の所有権は各レイヤー側に置き renderer はフィールドを持たず素通しする。適用箇所はテクスチャロード完了後（`Assets.load().then()` 内）の `texture.source.scaleMode = pixelArt ? 'nearest' : 'linear'`（PixiJS v8 API）で、`CharacterLayer` は立ち絵（`loadTexture`）と render-only 単独画像（`showImage`、`[画像:]`）の両方に効く。**対象外**: `NovelRenderer` が内蔵する背景画像（`setBackground`/`showLoadedBackground`）は本設定の対象に含めていない。Gymnasia は `[背景:]` タグ自体を使わず全てイベント絵で構成する設計（#76）のため現状不要と判断した。将来ドット絵背景を使う作品が出た場合は同じパターン（`texture.source.scaleMode` の分岐）を `showLoadedBackground` に追加する形で拡張できる。`pixel_art` を後から変えても、`character_scale`（#378）と同じく表示中の sprite に即再適用される: `CharacterLayer.setPixelArt()` は `reapplyPixelArt()` で `this.characters` の全 sprite（立ち絵・render-only・クロスフェード中の旧 sprite 問わず、テクスチャロード済みのもの）の `scaleMode` をその場で書き換え、`EventImageLayer.setPixelArt()` は show() が保持する直近の `currentTexture` を同様に書き換える（scale 系のライブ再適用と異なりジオメトリを変えないため、アニメ中・fit 等の除外は不要）。editor で `pixel_art: true` を追記した瞬間に表示中の絵の見た目も揃う。**タイトル画面・終劇オーバーレイの title.png（#553、#628 フェーズ2b／#630 で経路変更）**: 起動時タイトル画面のロゴは #628 フェーズ2b で DOM `TitleOverlay.tsx` から PixiJS 実装（`NovelRenderer.showTitleScreen()` → `TitleScreenOverlay` + `characterLayer.showImage()`）に置き換わり、以後は上記の `scaleMode` 配線（`CharacterLayer.setPixelArt()`）にそのまま乗る——別経路の CSS 適用は不要になった。終劇オーバーレイ（confinement 外脱出時に出す埋め込み元ロゴ、#404）も #630 で同じパターンに揃えた: DOM `NovelPlayer.tsx` の素の `<img>`（`pixelArt` prop が true のときだけ `style={{ imageRendering: 'pixelated' }}` を適用する CSS 経由の実装）を廃し、`NovelRenderer.showEndingOverlay()` → `characterLayer.showImage()` に置き換えたことで、こちらも `CharacterLayer.setPixelArt()` の `scaleMode` 配線にそのまま乗るようになった（別経路の CSS 適用は不要）。値の出どころはタイトル・終劇とも同じ `Document.pixel_art` で、PlayerScreen → `NovelPlayer` → `NovelRenderer.setPixelArt()` へ他の per-game 設定と同じ経路で流れる。
 
 ### イベント絵ピクセレート遷移 (#583)
 
@@ -439,9 +444,10 @@ interface NovelGameState {
 | `playScript(steps)`                                     | 操作列（`advance`/`choice`/`wait`）を決定論的にリプレイ（#220 Phase 1、デバッグ/テスト用。再生中 msPerChar=0、完了・例外時に復元、再入は throw）。destroy 後ガード（#515）: `wait` ステップの `await` 中に `destroy()` されて `initialized=false` になった場合、wait 明け直後にそれを検知し、残りの step（後続の `advance`/`choice` 含む）を一切実行せず `playScript` を終了する（msPerChar 復元等の finally 後始末は通常どおり走る） |
 | `startFrom({sceneId, flags?, eventIndex?, textIndex?})` | 任意シーン+フラグ状態から開始（#220 Phase 2、デバッグ/テスト用。history リセット、flags 置換、不正 sceneId は完全 no-op）                        |
 | `setConfinedSceneIds(ids \| null)`                       | confinement（在圏）一覧を設定する（#386）。null（既定）なら制限なし。設定すると `jumpToScene` はこの集合外への遷移を通常のシーン遷移にせず `endStory()`（終劇）にする。呼び出し元は `PlayerScreen`（`?scene=` ディープリンク単独埋め込み時のみ） |
-| `setOnStoryEndedChange(cb)`                              | 終劇状態の変化コールバックを登録する（#386）。`NovelPlayer` が "to be continued..." の DOM 表示に使う                                              |
-| `setIntermissionScene(events, {backgroundFadeMs?, characterFadeMs?, eventImageFadeMs?})` | intermission.md 専用シーンを設定する（#404）。`events` は `assets/scripts/intermission.md` を parse した Event 列。null/空配列は「未設定」として `endStory()` を従来どおりのフェード＋DOM表示にフォールバックさせる。fade 値は intermission.md 自身の frontmatter 由来で物語本編の設定とは独立 |
-| `hasIntermissionScene()`                                | intermission.md 専用シーンが設定済みかを返す（#404）。`NovelPlayer` が DOM "to be continued..." 表示と PixiJS タブローの排他判定に使う |
+| `setOnStoryEndedChange(cb)`                              | 終劇状態の変化コールバックを登録する（#386）。`NovelPlayer` は iframe 埋め込み時の postMessage 通知（#395）とデバッグ HUD 等の一部 DOM ボタンの disabled 制御に使う（"to be continued..." 表示自体は #630 で PixiJS 側に内部化され、このコールバックには依存しない） |
+| `setIntermissionScene(events, {backgroundFadeMs?, characterFadeMs?, eventImageFadeMs?})` | intermission.md 専用シーンを設定する（#404）。`events` は `assets/scripts/intermission.md` を parse した Event 列。null/空配列は「未設定」として `endStory()` を従来どおりのフェード＋終劇オーバーレイ表示にフォールバックさせる。fade 値は intermission.md 自身の frontmatter 由来で物語本編の設定とは独立 |
+| `hasIntermissionScene()`                                | intermission.md 専用シーンが設定済みかを返す（#404）。`syncEndingOverlayVisibility()`（#630）が終劇オーバーレイと PixiJS タブローの排他判定に内部で使う |
+| `showToast(message)`                                     | クイックセーブ/ロード完了通知の toast を表示する（#142、#630 で PixiJS 化）。`ToastOverlay` に描画を委譲し、2秒後の自動消去タイマー管理は renderer 側（`this.time`）が持つ。`NovelPlayer` の F5/F8 ハンドラから呼ばれる |
 
 ## レンダリングパイプライン
 

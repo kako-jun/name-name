@@ -1917,6 +1917,64 @@ describe('CharacterLayer showImage async load (Assets モック) (#274)', () => 
     expect(st.maskGraphics).toBeUndefined()
   })
 
+  // #630 セルフレビュー must M2: maxHeight（旧 DOM 版 max-h-16 相当の2軸制約）。
+  // size（幅上限）と maxHeight（高さ上限）の両方を満たす小さい方のスケールを採用する。
+  it('maxHeight が size（幅基準）より制約的なら高さ基準のスケールが採用される（1280x720 相当・#630 M2 実証事例）', async () => {
+    // 1280x720 系アセット（旧比2倍超で崩れが実証されている構図）。
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(1280, 720) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'logo',
+      path: 'title.png',
+      size: 160, // 幅比率 20% (800*0.2)
+      maxHeight: 64, // 旧 DOM 版 max-h-16
+      assetBaseUrl: '/assets',
+    })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('logo')!
+    // 幅基準だと scale=160/1280=0.125 → 高さ=90 で 64 を超過するため不採用。
+    // 高さ基準 scale=64/720 が採用される（幅は 1280*64/720≈113.8 に収まる＝両方満たす）。
+    const expectedScale = 64 / 720
+    expect(st.sprite.scale.x).toBeCloseTo(expectedScale, 5)
+    expect(st.sprite.scale.y).toBeCloseTo(expectedScale, 5)
+    // 自然サイズ 1280x720 に対する結果表示サイズが両方の上限を満たすことを確認する。
+    expect(720 * st.sprite.scale.y).toBeCloseTo(64, 5)
+    expect(1280 * st.sprite.scale.x).toBeLessThanOrEqual(160)
+  })
+
+  it('maxHeight が size（幅基準）より緩ければ従来どおり幅基準のスケールが採用される（非回帰）', async () => {
+    // 正方形に近いアセットは幅基準のほうが小さい scale になる想定。
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'logo',
+      path: 'title.png',
+      size: 160,
+      maxHeight: 1000, // 十分大きいので制約にならない
+      assetBaseUrl: '/assets',
+    })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('logo')!
+    expect(st.sprite.scale.x).toBeCloseTo(0.8, 5) // 160/200
+    expect(st.sprite.scale.y).toBeCloseTo(0.8, 5)
+  })
+
+  it('maxHeight のみ指定（size 未指定）でも高さ基準でスケールされる', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(1280, 720) as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.showImage({
+      id: 'logo',
+      path: 'title.png',
+      maxHeight: 64,
+      assetBaseUrl: '/assets',
+    })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('logo')!
+    const expectedScale = 64 / 720
+    expect(st.sprite.scale.x).toBeCloseTo(expectedScale, 5)
+    expect(st.sprite.scale.y).toBeCloseTo(expectedScale, 5)
+  })
+
   // 16: 退場(remove instant)で clearMask → sprite.mask=null・maskGraphics=undefined・mask.destroy 呼ばれる。
   it('remove(instant) は円形マスクを破棄する（sprite.mask=null・maskGraphics=undefined・destroy 済み）', async () => {
     vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(200, 100) as never)

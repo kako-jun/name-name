@@ -503,6 +503,8 @@ interface ImagePixelateTransitionState {
   pendingTexture: Texture | null
   /** スワップ時に `applyImageTexture` へ再現して渡す表示オプション（showImage opts より）。 */
   size?: number
+  /** スワップ時に `applyImageTexture` へ再現して渡す高さ上限（showImage opts `maxHeight` より）。 */
+  maxHeight?: number
   circular: boolean
 }
 
@@ -1758,6 +1760,12 @@ export class CharacterLayer extends Container {
     position?: string
     shape?: string
     size?: number
+    /**
+     * 表示高さの上限 (px、論理解像度基準) (#630 セルフレビュー must M2)。指定時は `size`（幅上限）
+     * と両方を満たす（アスペクト比を保ったまま両方に収まる）スケールを採用する。`object-contain`
+     * の2軸版に相当。未指定なら従来どおり `size` のみで決まる（非回帰）。
+     */
+    maxHeight?: number
     assetBaseUrl: string
     instant?: boolean
     /** 横位置 override (0..1) (#275)。position トークンより優先。 */
@@ -1853,6 +1861,7 @@ export class CharacterLayer extends Container {
       this.startImagePixelateTransition(NAME, state, url, {
         durationMs: pixelateDurationMs,
         size: opts.size,
+        maxHeight: opts.maxHeight,
         circular,
       })
       return
@@ -1861,7 +1870,7 @@ export class CharacterLayer extends Container {
     Assets.load(url)
       .then((texture) => {
         if (sprite.destroyed) return
-        this.applyImageTexture(NAME, sprite, texture, opts.size, circular)
+        this.applyImageTexture(NAME, sprite, texture, opts.size, circular, opts.maxHeight)
         // フェード開始は texture 反映後 (#427)。instant 時は sprite.alpha が既に 1 のままなので張らない。
         // id 再利用で別 state に置き換わるケースは showImage には実質無いため、show() の
         // textureReady ゲートのような state 一致チェックまでは不要と判断し、sprite.destroyed のみで足りるとした。
@@ -1889,18 +1898,30 @@ export class CharacterLayer extends Container {
     sprite: Sprite,
     texture: Texture,
     size: number | undefined,
-    circular: boolean
+    circular: boolean,
+    maxHeight?: number
   ): void {
     // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
     // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
     texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
     sprite.texture = texture
-    // 表示サイズ: size 指定時はその幅にアスペクト維持でスケール。未指定は自然サイズ。
+    // 表示サイズ: size（幅）/ maxHeight（高さ）の両方が指定されていれば両方を満たす小さい方の
+    // スケールを採用する（旧 DOM 版 `object-contain` の2軸制約 #630 セルフレビュー must M2）。
+    // 未指定は自然サイズ（非回帰）。
     let displayWidth = texture.width
+    let scale: number | undefined
     if (size !== undefined && texture.width > 0) {
-      const scale = size / texture.width
+      scale = size / texture.width
+    }
+    if (maxHeight !== undefined && texture.height > 0) {
+      const heightScale = maxHeight / texture.height
+      if (scale === undefined || heightScale < scale) {
+        scale = heightScale
+      }
+    }
+    if (scale !== undefined) {
       sprite.scale.set(scale, scale)
-      displayWidth = size
+      displayWidth = texture.width * scale
     } else {
       sprite.scale.set(1, 1)
     }
@@ -1954,7 +1975,7 @@ export class CharacterLayer extends Container {
     NAME: string,
     state: CharacterState,
     url: string,
-    opts: { durationMs: number; size?: number; circular: boolean }
+    opts: { durationMs: number; size?: number; maxHeight?: number; circular: boolean }
   ): void {
     if (!state.pixelateFilter) state.pixelateFilter = new PixelateFilter(1)
     state.pixelateFilter.size = 1
@@ -1969,6 +1990,7 @@ export class CharacterLayer extends Container {
       refineStartMs: 0,
       pendingTexture: null,
       size: opts.size,
+      maxHeight: opts.maxHeight,
       circular: opts.circular,
     }
     this.ensureTicker()
@@ -2057,7 +2079,7 @@ export class CharacterLayer extends Container {
   private performImagePixelateSwap(name: string, state: CharacterState, texture: Texture): void {
     const s = state.pixelateState
     if (!s) return
-    this.applyImageTexture(name, state.sprite, texture, s.size, s.circular)
+    this.applyImageTexture(name, state.sprite, texture, s.size, s.circular, s.maxHeight)
     if (!state.fadeAnimation) state.sprite.alpha = 1
     s.phase = 'refine'
     s.refineStartMs = this.elapsedMs
