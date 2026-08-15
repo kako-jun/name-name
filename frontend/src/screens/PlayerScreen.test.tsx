@@ -74,6 +74,17 @@ vi.mock('../game/scriptContentCache', () => ({
 //   クロスファイルのジャンプ索引を jumpSceneIndex=（全 MD の全シーン）で渡す。
 //   data-scene-* は jumpSceneIndex から読む（旧 scenes= 経路は使わない）。
 const novelPlayerProps = vi.fn()
+// #643: タイトル画面「設定」ボタン → NovelPlayer.openSettings()（ref経由）の配線確認用スパイ。
+// PlayerScreen 側の novelPlayerRef.current?.openSettings() 呼び出しをここで捕捉する
+// （実際の SettingsOverlay 開閉は PixiJS 依存で jsdom 検証不可、実体は NovelPlayer.test.tsx が担う）。
+const openSettingsMock = vi.fn()
+// #643: novelPlayerRef.current が null の異常系（下記 15番）を再現するための切替フラグ。
+// 既定 true（NovelPlayer が正常に ref を公開する）。false のときはモック側の
+// useImperativeHandle の factory が null を返し、novelPlayerRef.current が null のまま維持される。
+let novelPlayerRefAttached = true
+function setNovelPlayerRefAttached(attached: boolean): void {
+  novelPlayerRefAttached = attached
+}
 // タイトル画面 (#628 フェーズ2b): 旧 DOM `TitleOverlay.tsx` は PlayerScreen の兄弟要素として
 // 実体レンダーされていたが、`NovelRenderer.showTitleScreen`（PixiJS 描画、jsdom で検証不可）に
 // 置き換わったのに伴い NovelPlayer の `titleScreen` prop へ移動した。NovelPlayer 自体は元々
@@ -102,11 +113,19 @@ vi.mock('../components/NovelPlayer', () => ({
         onContinue: () => void
         onOpenSettings: () => void
         onBack: () => void
+        showExitButton?: boolean
       } | null
     },
     ref: Ref<{ openSettings: () => void }>
   ) {
-    useImperativeHandle(ref, () => ({ openSettings: () => {} }))
+    useImperativeHandle(
+      ref,
+      () =>
+        novelPlayerRefAttached
+          ? { openSettings: openSettingsMock }
+          : (null as unknown as { openSettings: () => void }),
+      []
+    )
     novelPlayerProps(props)
     return (
       <div
@@ -225,6 +244,8 @@ beforeEach(() => {
   putCachedScriptContentMock.mockResolvedValue(undefined)
   parseMarkdownMock.mockReset()
   novelPlayerProps.mockReset()
+  openSettingsMock.mockReset()
+  setNovelPlayerRefAttached(true)
   rpgPlayerProps.mockReset()
   isEmbeddedMock.mockReset()
   // 既定は standalone（非 iframe）。jsdom の本物 isEmbedded() も self===top で false を
@@ -2452,6 +2473,49 @@ describe('PlayerScreen', () => {
         })
         expect(errorSpy).not.toHaveBeenCalled()
       })
+    })
+  })
+
+  // #643 テスト観点整理 B群: headerMode → NovelPlayer.titleScreen.showExitButton の導出、および
+  // タイトル画面「設定」ボタンが setTitleDismissed(true) ではなく novelPlayerRef.current?.openSettings()
+  // を呼ぶよう置き換わったことの回帰確認。
+  describe('PlayerScreen showExitButton導出とNovelPlayer ref経由の設定ボタン配線 (#643)', () => {
+    it('11: headerMode:"visible" のとき titleScreen.showExitButton が true になる', async () => {
+      await renderWithFrontmatter({ header: 'visible' })
+      const titleScreen = lastNovelPlayerProps().titleScreen as { showExitButton?: boolean }
+      expect(titleScreen.showExitButton).toBe(true)
+    })
+
+    it('12: headerMode:"hidden" のとき titleScreen.showExitButton が false になる', async () => {
+      await renderWithFrontmatter({ header: 'hidden' })
+      const titleScreen = lastNovelPlayerProps().titleScreen as { showExitButton?: boolean }
+      expect(titleScreen.showExitButton).toBe(false)
+    })
+
+    it('13: header frontmatter 未指定（既定 headerMode="visible"）のとき titleScreen.showExitButton が true になる（後方互換の非回帰）', async () => {
+      await renderWithFrontmatter({})
+      const titleScreen = lastNovelPlayerProps().titleScreen as { showExitButton?: boolean }
+      expect(titleScreen.showExitButton).toBe(true)
+    })
+
+    it('14: 「設定」ボタン押下は novelPlayerRef.current.openSettings() を呼び、setTitleDismissed(true) には置き換わらない（タイトル画面が閉じない）配線に変わったことの回帰確認', async () => {
+      await renderWithFrontmatter({})
+      const settingsButton = screen.getByRole('button', { name: '設定' })
+
+      fireEvent.click(settingsButton)
+
+      expect(openSettingsMock).toHaveBeenCalledTimes(1)
+      // タイトルは閉じない＝タイトル画面固有の「はじめから」ボタンがまだ存在する。
+      expect(screen.getByRole('button', { name: 'はじめから' })).toBeInTheDocument()
+    })
+
+    it('15: novelPlayerRef.current が null の状態で「設定」ボタンを押しても例外にならない', async () => {
+      setNovelPlayerRefAttached(false)
+      await renderWithFrontmatter({})
+      const settingsButton = screen.getByRole('button', { name: '設定' })
+
+      expect(() => fireEvent.click(settingsButton)).not.toThrow()
+      expect(openSettingsMock).not.toHaveBeenCalled()
     })
   })
 
