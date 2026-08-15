@@ -37,6 +37,7 @@ import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { VideoLayer } from './VideoLayer'
 import { EventImageLayer } from './EventImageLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
+import { TitleScreenOverlay, TITLE_LOGO_Y_RATIO } from './TitleScreenOverlay'
 import { SaveManager, SaveSlotData } from './SaveManager'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
@@ -356,6 +357,28 @@ export class NovelRenderer {
 
   /** 選択肢オーバーレイ */
   private choiceOverlay: ChoiceOverlay
+
+  /**
+   * タイトル画面オーバーレイ (#628 フェーズ2b)。旧 DOM `TitleOverlay.tsx` の PixiJS 版。
+   * ロゴ画像は自前で持たず `characterLayer.showImage()` 経由で表示する（`showTitleScreen` 参照）。
+   */
+  private titleScreenOverlay: TitleScreenOverlay
+  /** タイトルロゴ画像を `characterLayer` に保持させる際の予約 id。脚本側の `[画像: id=...]`
+   *  と衝突しない専用名にし、`hideTitleScreen()` で確実に `remove()` して後始末する。 */
+  private static readonly TITLE_LOGO_IMAGE_ID = '__title_logo__'
+  /**
+   * split_layout (#442) プロジェクトで `showTitleScreen()` が一時的に解除する前の
+   * `characterLayer.getSplitLayoutRegion()` の退避値 (#628 フェーズ2b)。タイトル画面は
+   * ゲーム画面（split_layout の画像/テキスト分割）の外側にある全画面 UI のため、ロゴは画面
+   * 中央に出したい。しかし `characterLayer.setSplitLayoutRegion()` は Container 全体の
+   * scale/position を書き換える設計（`CharacterLayer.setSplitLayoutRegion` 参照）で、
+   * `showImage()` の x/y 比率はそのまま「領域内での比率」に射影されてしまう——結果、
+   * `[選択: x=0.5]` のつもりのロゴが split_layout のキャラ領域（画面半分）の中央に寄って
+   * 見えてしまう（実機検証で発覚。gymnasia で確認）。`showTitleScreen()` は分割を一時解除して
+   * 全画面座標系に戻し、`hideTitleScreen()` で退避値を復元してゲーム本編の split_layout 表示に
+   * 影響を残さない。null（split_layout 未使用/解除中）ならそもそも何もしない。
+   */
+  private titleScreenSavedCharacterSplitRegion: LayoutRect | null = null
 
   /** 選択肢スタイル名 (#146)。frontmatter `choice_style:` の値。null なら default 扱い */
   private choiceStyle: string | null = null
@@ -688,6 +711,8 @@ export class NovelRenderer {
     this.choiceOverlay = new ChoiceOverlay(this.screenWidth, this.screenHeight)
     // 選択肢の確定音／ホバー音を AudioManager で鳴らせるように注入 (#146)
     this.choiceOverlay.setAudioManager(this.audioManager)
+    // タイトル画面オーバーレイ (#628 フェーズ2b)
+    this.titleScreenOverlay = new TitleScreenOverlay(this.screenWidth, this.screenHeight)
     this.saveLoadOverlay = new SaveLoadOverlay(
       this.screenWidth,
       this.screenHeight,
@@ -720,6 +745,7 @@ export class NovelRenderer {
     })
     this.appInitialized = true
     this.choiceOverlay.setRenderResolution(this.getRenderResolution())
+    this.titleScreenOverlay.setRenderResolution(this.getRenderResolution())
 
     // Pixi が init() 内で設定した touch-action:'none' を上書きする (#434)。
     // 詳細な判断根拠は NOVEL_CANVAS_TOUCH_ACTION 定義部のコメント参照。init() 完了直後
@@ -739,6 +765,16 @@ export class NovelRenderer {
 
     // 動画入力レイヤー (#252)。背景の直後・立ち絵の下に配置（背景の上、キャラの下）。
     this.app.stage.addChild(this.videoLayer)
+
+    // タイトル画面オーバーレイ (#628 フェーズ2b)。ゲーム開始前に画面全体を覆う不透明背景＋
+    // ボタンを描く。z 順は背景/動画レイヤーより上・立ち絵レイヤーより下——タイトルロゴは
+    // `characterLayer.showImage()`（#628 フェーズ2a）に委譲するため、ロゴ Sprite が
+    // このオーバーレイの不透明背景より確実に上に来るよう立ち絵レイヤーの直前に置く。
+    // ダイアログボックス/シークバー等（立ち絵レイヤーより上の層）はタイトル表示中に見えて
+    // しまわないよう `showTitleScreen`/`hideTitleScreen` 側で個別に visible を切り替える
+    // （下記コメント・当該メソッド参照）。ボタンは非インタラクティブな立ち絵 Sprite（eventMode
+    // 未設定=既定で非インタラクティブ）に隠れてもヒットテストには影響しない。
+    this.app.stage.addChild(this.titleScreenOverlay)
 
     // 立ち絵レイヤー
     this.app.stage.addChild(this.characterLayer)
@@ -1429,6 +1465,7 @@ export class NovelRenderer {
     if (!(resolution > 0) || !Number.isFinite(resolution)) return
     this.app.renderer.resize(this.screenWidth, this.screenHeight, resolution)
     this.choiceOverlay.setRenderResolution(resolution)
+    this.titleScreenOverlay.setRenderResolution(resolution)
   }
 
   /**
@@ -1630,6 +1667,113 @@ export class NovelRenderer {
     // 選択肢オーバーレイも既読/未読アイコン (#598 追記3, assets/images/read-icon.webp /
     // assets/images/unread-icon.webp) の先読みに同じベース URL を使う。
     this.choiceOverlay.setAssetBaseUrl(url)
+  }
+
+  /**
+   * タイトル画面を表示する (#628 フェーズ2b)。旧 DOM `TitleOverlay.tsx` の PixiJS 版。
+   * ロゴ画像 (`${assetBaseUrl}/images/title.png`) は `characterLayer.showImage()`
+   * （#628 フェーズ2a のピクセレート遷移機構を持つ）に読み込みを委譲し、`TitleScreenOverlay`
+   * 自身は背景/フォールバックテキスト/ボタンだけを描く（表示の合成は本メソッドが仲介する）。
+   *
+   * ボタンのコールバックは `justSelectedChoice` フラグでラップする。ChoiceOverlay の選択と
+   * 同じ理由（#146）: canvas の native `pointerdown` リスナー（`handleAdvance`）が同一タップ
+   * ジェスチャで二重発火した場合に、タイトル操作直後の意図しない `advance()` を 1 回だけ
+   * 抑止する。
+   *
+   * z 順の制約 (#628 フェーズ2b): `titleScreenOverlay` は立ち絵レイヤーより下に置かれている
+   * （ロゴ Sprite が `characterLayer` 経由で描かれ、不透明背景より上に見える必要があるため）。
+   * その結果、立ち絵レイヤーより上の層（`eventImageLayer`/`dialogBox`/`seekBar`）はタイトル
+   * 背景で隠れない。旧 DOM 版は canvas 全体を不透明 div で覆っていたためこれらは完全に不可視
+   * だった——同じ見た目を再現するため、ここで明示的に非表示にし `hideTitleScreen()` で復元する
+   * （`waitingForChoice`/`storyEnded` 等の他状態がこれらを自発的に隠す既存経路とは独立。復元時に
+   * 無条件で true に戻すのは、タイトル表示前は常にゲーム未開始＝いずれも表示されているべき
+   * 状態だったため、非破壊）。
+   *
+   * 実機検証で発覚した実バグ (#628 フェーズ2b): エントリスクリプトは NovelPlayer マウント時点で
+   * 既に最初の text event まで自動進行済み（PlayerScreen 側コメント参照）——`[イベント絵:]`
+   * 等で `eventImageLayer` に何か表示されていた場合、これも立ち絵レイヤーと同じく
+   * titleScreenOverlay より上の z 順のため、タイトル背景を突き抜けて見えてしまう
+   * （gymnasia の実プロジェクトで実際に発生・確認: エントリ冒頭の `gymnasia_logo_square.webp`
+   * イベント絵がタイトル画面のロゴであるかのように透けて見えた）。
+   */
+  showTitleScreen(opts: {
+    title: string
+    hasSaveData: boolean
+    dark?: boolean
+    onNewGame: () => void
+    onContinue: () => void
+    onOpenSettings: () => void
+    onBack: () => void
+  }): void {
+    this.dialogBox.visible = false
+    this.seekBar.setTitleScreenHidden(true)
+    this.eventImageLayer.visible = false
+    // split_layout の一時解除（上記 titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
+    this.titleScreenSavedCharacterSplitRegion = this.characterLayer.getSplitLayoutRegion()
+    if (this.titleScreenSavedCharacterSplitRegion) {
+      this.characterLayer.setSplitLayoutRegion(null)
+    }
+    const suppressAdvanceThenRun = (fn: () => void) => () => {
+      this.justSelectedChoice = true
+      this.time.setTimeout(() => {
+        this.justSelectedChoice = false
+      }, 0)
+      fn()
+    }
+    this.titleScreenOverlay.show({
+      title: opts.title,
+      hasSaveData: opts.hasSaveData,
+      dark: opts.dark,
+      onNewGame: suppressAdvanceThenRun(opts.onNewGame),
+      onContinue: suppressAdvanceThenRun(opts.onContinue),
+      onOpenSettings: suppressAdvanceThenRun(opts.onOpenSettings),
+      onBack: suppressAdvanceThenRun(opts.onBack),
+    })
+    // ロゴ画像。読み込み成否は onLoaded/onError で TitleScreenOverlay に伝え、
+    // フォールバックテキストの表示可否を切り替える（#628 フェーズ2b、CharacterLayer.showImage
+    // 拡張分。'transition' は未指定＝既定 'Fade' のまま — タイトルはピクセレート遷移対象外）。
+    this.characterLayer.showImage({
+      id: NovelRenderer.TITLE_LOGO_IMAGE_ID,
+      path: 'title.png',
+      x: 0.5,
+      y: TITLE_LOGO_Y_RATIO,
+      assetBaseUrl: this.assetBaseUrl,
+      onLoaded: () => this.titleScreenOverlay.hideFallbackText(),
+      onError: () => {
+        // 404 等: フォールバックテキストは表示したまま（初期状態がそのまま正）。何もしない。
+      },
+    })
+    // 実バグ修正 (#628 フェーズ2b): 上記 titleScreenOverlay.show() は呼ばれるたびに無条件で
+    // 新しい titleText（既定 visible: true）を作り直す。一方 showImage() は同 id 再表示時
+    // （`hideTitleScreen()` を経由せずロゴを破棄しないまま再度 showTitleScreen() が呼ばれた場合、
+    // 例: NovelPlayer の effect で title/hasSaveData が変わり再レンダーされたケース）は
+    // `existing` 分岐に入りテクスチャ差し替えを行わず、onLoaded も発火しない。そのため
+    // 「ロゴは既に表示済みなのにフォールバックテキストだけ再び見えてしまう」不整合が起きていた。
+    // showImage() は existing 分岐を同期的に処理するため、直後にロード済みかを確認すれば
+    // 判定できる（新規ロード中はまだ false のはずで、それは正しい——後で onLoaded が呼ばれる）。
+    if (this.characterLayer.hasLoadedTexture(NovelRenderer.TITLE_LOGO_IMAGE_ID)) {
+      this.titleScreenOverlay.hideFallbackText()
+    }
+  }
+
+  /**
+   * タイトル画面を非表示にする (#628 フェーズ2b)。ロゴ画像は `characterLayer.remove()` で
+   * 即時破棄する——`showImage` は同 id 再表示時にテクスチャを差し替えない仕様
+   * （`existing` 分岐、位置更新のみ）のため、破棄せず残すと次回 `showTitleScreen()` が
+   * 新規ロード・フェードイン演出をやり直せなくなる。
+   */
+  hideTitleScreen(): void {
+    this.titleScreenOverlay.hide()
+    this.characterLayer.remove(NovelRenderer.TITLE_LOGO_IMAGE_ID, { instant: true })
+    // showTitleScreen() で隠した層を復元する（上記 JSDoc 参照）。
+    this.dialogBox.visible = true
+    this.seekBar.setTitleScreenHidden(false)
+    this.eventImageLayer.visible = true
+    // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
+    if (this.titleScreenSavedCharacterSplitRegion) {
+      this.characterLayer.setSplitLayoutRegion(this.titleScreenSavedCharacterSplitRegion)
+      this.titleScreenSavedCharacterSplitRegion = null
+    }
   }
 
   /**
@@ -2404,6 +2548,7 @@ export class NovelRenderer {
     this.audioManager.destroy()
     this.characterLayer.clear()
     this.choiceOverlay.hide()
+    this.titleScreenOverlay.hide()
     this.saveLoadOverlay.hide()
     this.backlogOverlay.hide()
     this.dialogBox.dispose()
@@ -3156,6 +3301,9 @@ export class NovelRenderer {
     // 丸ボタンを復帰させる（無操作タイマー満了を待たない） (#350)。inactive 時は no-op。
     this.seekBar.deactivate()
     this.audioManager.ensureContext()
+    // タイトル画面表示中 (#628 フェーズ2b) は canvas 全体を覆う UI なので、canvas への
+    // native pointerdown をゲーム進行として扱わない（backlogOverlay/saveLoadOverlay と同型）。
+    if (this.titleScreenOverlay.visible) return
     if (this.backlogOverlay.visible) {
       this.backlogOverlay.hide()
       return
@@ -3735,6 +3883,11 @@ export class NovelRenderer {
         y: im.y,
         assetBaseUrl: this.assetBaseUrl,
         instant: this.skipMode,
+        // 遷移モード・所要時間 (#628)。frontmatter event_image_transition には紐付けない
+        // 設計のためここでは im.transition をそのまま渡す（EventImage と違い defaultTransition
+        // フォールバックは適用しない、types.ts Image.transition の JSDoc 参照）。
+        transition: im.transition,
+        fadeMs: im.fade_ms,
       })
       return
     }

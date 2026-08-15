@@ -5,9 +5,18 @@
  */
 
 import { Assets, Container, Graphics, Sprite, Text, Texture, TextStyle, Ticker } from 'pixi.js'
-import type { Easing } from '../types'
+import { PixelateFilter } from 'pixi-filters'
+import type { Easing, EventImageTransition } from '../types'
 import { applyEasing, resolveDelta } from './easing'
 import { ensureFontLoaded } from './FontLoader'
+import {
+  computeCoarsenSize,
+  computeRefineSize,
+  computeSwapAtMs,
+  isCoarsenComplete,
+  isRefineComplete,
+  PIXELATE_TRANSITION_MAX_SIZE,
+} from './pixelateTransition'
 import { TimeController, defaultTimeController } from './TimeController'
 import {
   computeGlyphTransform,
@@ -451,6 +460,50 @@ interface CharacterState {
    * `reviveFromExitFade` / `startEntranceFade` の JSDoc 参照。
    */
   reviveGeneration?: number
+  /**
+   * `[画像:]` ピクセレート遷移 (#628) の進行状態。`EventImageLayer.PixelateTransitionState` (#583)
+   * と同じ意味論・同じ `pixelateTransition.ts` 純粋関数を使うが、CharacterLayer は複数 id
+   * （`characters` Map）を同時に扱えるため、グローバル単一状態ではなく id 毎に
+   * `CharacterState` へ持たせる（複数の `[画像:]` が同時に別 id で表示されうるため）。
+   * 駆動は EventImageLayer 専用の `pixelateTimer`（setInterval）ではなく、CharacterLayer が
+   * 既に持つ共通 ticker（`ensureTicker`、`elapsedMs` 基準）に相乗りする（animation/fadeAnimation/
+   * poseNudge と同じ流儀）。undefined = 遷移なし/完了済み。
+   *
+   * `remove()`（非 instant）が並行して呼ばれると、この state が進行中のまま `fadeAnimation`
+   * （退場用, `destroyOnComplete: true`）も同時に張られうる（#628 セルフレビュー質問対応）。
+   * `destroyCharacterState` は sprite 破棄前に必ず `clearImagePixelateState` を呼ぶためクラッシュや
+   * リークは起きない。alpha は `performImagePixelateSwap` が `fadeAnimation` の有無を見て
+   * 上書きを避けるガードを持つ（同メソッドの JSDoc 参照）。
+   */
+  pixelateState?: ImagePixelateTransitionState
+  /** ピクセレート遷移用フィルタ。id 毎にステートレスに使い回す（初回のピクセレート遷移まで
+   *  生成を遅延させる）。`sprite.filters` に直接掛ける（CharacterLayer には EventImageLayer の
+   *  `imageGroup` に相当する wrapper container が無いため）。 */
+  pixelateFilter?: PixelateFilter
+}
+
+/**
+ * `CharacterState.pixelateState` の構造。`EventImageLayer.PixelateTransitionState` (#583) と同じ
+ * フィールド意味論（`phase`: 'coarsen' はドットを 1→maxSize へ粗くしている最中、'holding' は
+ * コルセン完了だがロード未完了で最大サイズのまま待機中、'refine' はスワップ後 maxSize→1 へ
+ * 細かく戻している最中）。`startMs`/`refineStartMs` は CharacterLayer の ticker が使う
+ * `this.elapsedMs` 基準（`TimeController.now()` 基準の EventImageLayer とは異なる時計だが、
+ * 役割は同じ）。
+ */
+interface ImagePixelateTransitionState {
+  /** 遷移全体の所要時間 (ms)。`fade_ms` を再利用する（EventImage と同じ流儀）。 */
+  durationMs: number
+  /** コルセン→切替の境界時刻 (ms、startMs からの相対値)。 */
+  swapAtMs: number
+  startMs: number
+  phase: 'coarsen' | 'holding' | 'refine'
+  /** スワップが実際に起きた時刻（elapsedMs 基準）。'refine' フェーズの経過時間計測の基準。 */
+  refineStartMs: number
+  /** ロード完了済みだがまだスワップしていない場合の保留テクスチャ。 */
+  pendingTexture: Texture | null
+  /** スワップ時に `applyImageTexture` へ再現して渡す表示オプション（showImage opts より）。 */
+  size?: number
+  circular: boolean
 }
 
 interface FadeAnimation {
@@ -999,6 +1052,7 @@ export class CharacterLayer extends Container {
     this.clearTextEffect(state)
     this.clearUnderline(state)
     this.clearMask(state)
+    this.clearImagePixelateState(state)
     state.sprite.removeFromParent()
     state.sprite.destroy()
     if (state.label) {
@@ -1690,6 +1744,13 @@ export class CharacterLayer extends Container {
    * テクスチャは背景画像と同じく `resolveAssetUrl(base, 'images', path)` から load する。
    * `shape==='円形'/'circle'` のとき直径 = 表示サイズの円形マスクを sprite にかける。
    * 登場時は alpha 0 → 1 のフェードイン（label と同じ）。render-only。
+   *
+   * 遷移モード (#628, `opts.transition === 'Pixelate'`) は新規表示（同 id 再表示は対象外、
+   * `existing` 分岐参照）のときだけ `EventImageLayer` (#583) と同じコルセン→スワップ→リファイン
+   * 経路（`startImagePixelateTransition`）に入る。未指定/'Fade' のときの所要時間既定値は
+   * イベント絵 (#583) と違い `event_image_fade_ms` frontmatter には紐付けない設計
+   * （types.ts `Image.transition` の JSDoc 参照）ため、既に単独画像の入場フェード既定として
+   * 使っている `TITLE_CARD_FADE_MS` をそのまま流用する。
    */
   showImage(opts: {
     id?: string
@@ -1703,6 +1764,25 @@ export class CharacterLayer extends Container {
     x?: number
     /** 縦位置 override (0..1) (#275)。 */
     y?: number
+    /** 遷移モード (#628)。未指定/null は 'Fade'（既存の透明度フェードイン、非回帰）。
+     *  'Pixelate' は新規表示（同 id 再表示は対象外、下記 `existing` 分岐参照）のときだけ
+     *  `EventImageLayer` と同じコルセン→スワップ→リファイン経路に入る。 */
+    transition?: EventImageTransition | null
+    /** 遷移全体の所要時間 (ms)。'Pixelate' のときだけ使う（'Fade' は現状どおり
+     *  `TITLE_CARD_FADE_MS` 固定、非回帰）。未指定/null は `TITLE_CARD_FADE_MS` を既定にする。
+     *  0 以下を明示指定した場合は遷移するものが無いため即時表示にフォールバックする
+     *  （EventImageLayer.show と同じ規約）。 */
+    fadeMs?: number | null
+    /**
+     * テクスチャロード成功時に呼ばれるコールバック (#628 フェーズ2b)。
+     * TitleScreenOverlay がロゴ画像読み込み成功を検知してテキストフォールバックを隠すために追加。
+     * `usePixelate` 経路（'Pixelate' 遷移）では現状呼ばれない（`startImagePixelateTransition` 側は
+     * 未配線——タイトル画面は 'Fade'/既定経路のみ使うため、このスコープでは Fade 経路への配線で足りる）。
+     * 通常の new 表示（`existing` 分岐に入らない）のときだけ意味を持つ。
+     */
+    onLoaded?: () => void
+    /** テクスチャロード失敗時に呼ばれるコールバック (#628 フェーズ2b)。onLoaded と同じ制約。 */
+    onError?: () => void
   }): void {
     const NAME = opts.id ?? 'Image'
     // 位置: x/y 数値 override が position トークンより優先 (#275)。
@@ -1718,18 +1798,27 @@ export class CharacterLayer extends Container {
       // 再フェードイン（または instant なら即時表示）に切り替える (#429)。show() の「退場フェード中の
       // 再 show」分岐 (#177) と同じパターンなので reviveFromExitFade ヘルパーを使う（should-4）。
       this.reviveFromExitFade(existing, instant)
-      // 同 id 再表示は位置のみ更新する（テクスチャ差し替えは想定しないため最小挙動）。
+      // 同 id 再表示は位置のみ更新する（テクスチャ差し替えは想定しないため最小挙動。ピクセレート
+      // 遷移 (#628) も新規表示限定のため、ここでは開始しない — 既存挙動を変えない）。
       existing.sprite.x = x
       existing.sprite.y = y
       existing.position = opts.position ?? ''
       return
     }
 
+    // ピクセレート遷移 (#628) の所要時間を解決する。'Fade'（既定）は 0 を返し、以下の従来
+    // フェード経路に入る。'Pixelate' でも fadeMs<=0 を明示指定した場合は遷移するものが無いため
+    // 同じく 0（Fade/即時経路へフォールバック、EventImageLayer.show と同じ規約）。
+    const pixelateDurationMs = this.resolveImagePixelateDurationMs(opts.transition, opts.fadeMs)
+    const usePixelate = !instant && pixelateDurationMs > 0
+
     const sprite = new Sprite()
     sprite.anchor.set(0.5, 0.5)
     sprite.x = x
     sprite.y = y
-    sprite.alpha = instant ? 1 : 0
+    // ピクセレート経路は alpha フェードを使わない（視覚的な遷移はピクセレート自体が担う。
+    // EventImageLayer.performPixelateSwap と同じ割り切り）。常時 alpha=1 で出す。
+    sprite.alpha = usePixelate || instant ? 1 : 0
     this.addChild(sprite)
 
     const state: CharacterState = {
@@ -1746,6 +1835,7 @@ export class CharacterLayer extends Container {
       // ここで即座に fadeAnimation を張ると、load がフェード時間より遅い初回（コールドキャッシュ）で
       // texture が現れる前に alpha が 1 まで進み切り、フェードが見えず突然出てしまう
       // （#17 の立ち絵 show() と同じバグクラス）。instant 時はそもそも null のまま変更しない。
+      // ピクセレート経路 (#628) も fadeAnimation は使わない（pixelateState が代わりに進行を持つ）。
       fadeAnimation: null,
       textEffect: null,
       underline: null,
@@ -1758,40 +1848,20 @@ export class CharacterLayer extends Container {
 
     // 任意ファイル名パスの url 解決は背景画像と同じ resolveAssetUrl 経由（#274）。
     const url = resolveAssetUrl(opts.assetBaseUrl, 'images', opts.path)
+
+    if (usePixelate) {
+      this.startImagePixelateTransition(NAME, state, url, {
+        durationMs: pixelateDurationMs,
+        size: opts.size,
+        circular,
+      })
+      return
+    }
+
     Assets.load(url)
       .then((texture) => {
         if (sprite.destroyed) return
-        // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
-        // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
-        texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
-        sprite.texture = texture
-        // 表示サイズ: size 指定時はその幅にアスペクト維持でスケール。未指定は自然サイズ。
-        let displayWidth = texture.width
-        if (opts.size !== undefined && texture.width > 0) {
-          const scale = opts.size / texture.width
-          sprite.scale.set(scale, scale)
-          displayWidth = opts.size
-        } else {
-          sprite.scale.set(1, 1)
-        }
-        // 円形マスク: 直径 = 表示サイズ（幅）。anchor 0.5 なので中心は sprite 原点。
-        // mask はローカルではなくステージ座標で評価されるため、sprite と同じ位置・スケールに置く。
-        if (circular) {
-          const radius = displayWidth / 2
-          const mask = new Graphics()
-          mask.circle(0, 0, radius).fill(0xffffff)
-          // mask は scale 後の sprite に対してローカル座標で当てる。sprite.scale が効くよう
-          // mask を sprite の子にし、scale を打ち消す（mask の半径は表示 px で描いているため）。
-          mask.x = 0
-          mask.y = 0
-          if (sprite.scale.x !== 0) {
-            mask.scale.set(1 / sprite.scale.x, 1 / sprite.scale.y)
-          }
-          sprite.addChild(mask)
-          sprite.mask = mask
-          const st = this.characters.get(NAME)
-          if (st) st.maskGraphics = mask
-        }
+        this.applyImageTexture(NAME, sprite, texture, opts.size, circular)
         // フェード開始は texture 反映後 (#427)。instant 時は sprite.alpha が既に 1 のままなので張らない。
         // id 再利用で別 state に置き換わるケースは showImage には実質無いため、show() の
         // textureReady ゲートのような state 一致チェックまでは不要と判断し、sprite.destroyed のみで足りるとした。
@@ -1800,10 +1870,210 @@ export class CharacterLayer extends Container {
         // instant 復活（fadeAnimation が null に戻る経路）も expectedGeneration で検知する
         // （#429 2巡目 re-review、詳細は startEntranceFade の JSDoc 参照）。
         this.startEntranceFade(state, instant, expectedGeneration)
+        opts.onLoaded?.()
       })
       .catch((err) => {
         console.warn('[name-name] 画像の読み込みに失敗: ' + url, err)
+        opts.onError?.()
       })
+  }
+
+  /**
+   * `[画像:]` のテクスチャロード完了後の共通反映処理（scaleMode / サイズ / 円形マスク）。
+   * 通常の Fade 経路（`Assets.load().then()`）とピクセレート遷移のスワップ
+   * （`performImagePixelateSwap`）の両方から呼ぶ（規律4、元は showImage 内に直書きだった処理を
+   * 切り出した）。フェード/ピクセレートいずれの「いつ表示するか」の制御もここでは行わない。
+   */
+  private applyImageTexture(
+    NAME: string,
+    sprite: Sprite,
+    texture: Texture,
+    size: number | undefined,
+    circular: boolean
+  ): void {
+    // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
+    // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
+    texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
+    sprite.texture = texture
+    // 表示サイズ: size 指定時はその幅にアスペクト維持でスケール。未指定は自然サイズ。
+    let displayWidth = texture.width
+    if (size !== undefined && texture.width > 0) {
+      const scale = size / texture.width
+      sprite.scale.set(scale, scale)
+      displayWidth = size
+    } else {
+      sprite.scale.set(1, 1)
+    }
+    // 円形マスク: 直径 = 表示サイズ（幅）。anchor 0.5 なので中心は sprite 原点。
+    // mask はローカルではなくステージ座標で評価されるため、sprite と同じ位置・スケールに置く。
+    if (circular) {
+      const radius = displayWidth / 2
+      const mask = new Graphics()
+      mask.circle(0, 0, radius).fill(0xffffff)
+      // mask は scale 後の sprite に対してローカル座標で当てる。sprite.scale が効くよう
+      // mask を sprite の子にし、scale を打ち消す（mask の半径は表示 px で描いているため）。
+      mask.x = 0
+      mask.y = 0
+      if (sprite.scale.x !== 0) {
+        mask.scale.set(1 / sprite.scale.x, 1 / sprite.scale.y)
+      }
+      sprite.addChild(mask)
+      sprite.mask = mask
+      const st = this.characters.get(NAME)
+      if (st) st.maskGraphics = mask
+    }
+  }
+
+  /**
+   * `[画像:]` のピクセレート遷移 (#628) の全体所要時間を解決する。'Fade'（既定・null/undefined
+   * 含む）は 0 を返し、呼び出し側はそれを「ピクセレート経路に入らない」判定に使う。'Pixelate'
+   * 指定時、`fadeMs` 未指定/null は `TITLE_CARD_FADE_MS` を既定にする。`fadeMs<=0` を明示指定した
+   * 場合は遷移するものが無いため 0 を返す（呼び出し側は即時/Fade 経路にフォールバックする、
+   * `EventImageLayer.show` と同じ規約）。
+   */
+  private resolveImagePixelateDurationMs(
+    transition: EventImageTransition | null | undefined,
+    fadeMs: number | null | undefined
+  ): number {
+    if (transition !== 'Pixelate') return 0
+    if (fadeMs == null) return TITLE_CARD_FADE_MS
+    return fadeMs > 0 ? fadeMs : 0
+  }
+
+  /**
+   * `[画像:]` のピクセレート遷移 (#628) を開始する。`EventImageLayer.startPixelateTransition`
+   * (#583) と同じ流れ: `PixelateFilter` を sprite に掛けてコルセンしながら並行してテクスチャを
+   * ロードし、コルセン完了時点でロードが終わっていれば即スワップ、終わっていなければ
+   * `holding` フェーズで待つ。CharacterLayer は複数 id を同時に扱うため、専用タイマーではなく
+   * 共通 ticker（`ensureTicker`/`updateImagePixelateFrame`）に相乗りする。
+   *
+   * 呼び出し時点で sprite にはまだテクスチャが無い（新規表示限定、`showImage` 参照）ため、
+   * 見た目は「何も無い状態からのピクセレート遷移」になる（EventImageLayer #612 と同じ性質）。
+   */
+  private startImagePixelateTransition(
+    NAME: string,
+    state: CharacterState,
+    url: string,
+    opts: { durationMs: number; size?: number; circular: boolean }
+  ): void {
+    if (!state.pixelateFilter) state.pixelateFilter = new PixelateFilter(1)
+    state.pixelateFilter.size = 1
+    state.sprite.filters = [state.pixelateFilter]
+
+    const swapAtMs = computeSwapAtMs(opts.durationMs)
+    state.pixelateState = {
+      durationMs: opts.durationMs,
+      swapAtMs,
+      startMs: this.elapsedMs,
+      phase: 'coarsen',
+      refineStartMs: 0,
+      pendingTexture: null,
+      size: opts.size,
+      circular: opts.circular,
+    }
+    this.ensureTicker()
+
+    Assets.load(url)
+      .then((texture) => {
+        if (state.sprite.destroyed) return
+        // 別の show/remove に追い越されて id が再利用されていたら（characters から既に
+        // 外れている、または別 state に差し替わっている）無視する。
+        if (this.characters.get(NAME) !== state) return
+        const s = state.pixelateState
+        if (!s) return // 既に打ち切り済み（load 失敗の別経路 or remove）
+        if (s.phase === 'holding') {
+          // コルセンは既に完了していてロード待ちだった場合、ここで即スワップする。
+          this.performImagePixelateSwap(NAME, state, texture)
+        } else {
+          // まだコルセン中（ロードの方が速く終わった）。swapAtMs 到達を待つ。
+          s.pendingTexture = texture
+        }
+      })
+      .catch((err) => {
+        console.warn('[name-name] 画像の読み込みに失敗: ' + url, err)
+        if (this.characters.get(NAME) === state) {
+          this.clearImagePixelateState(state)
+        }
+      })
+  }
+
+  /**
+   * `updateImagePixelateFrame` の毎フレーム再計算。位相ごとの `PixelateFilter.size` 算出は
+   * `pixelateTransition.ts` の純粋関数に委ねる（`EventImageLayer.updatePixelateFrame` と同じ
+   * 役割分担）。呼び出し元（ticker）はこのメソッドの前に `state.pixelateFilter` の存在を
+   * 保証しない場合があるため、ここで防御的にガードする。
+   */
+  private updateImagePixelateFrame(
+    name: string,
+    state: CharacterState,
+    s: ImagePixelateTransitionState
+  ): void {
+    if (!state.pixelateFilter) return
+    const now = this.elapsedMs
+
+    if (s.phase === 'coarsen') {
+      const elapsed = now - s.startMs
+      state.pixelateFilter.size = computeCoarsenSize(elapsed, s.swapAtMs)
+      if (isCoarsenComplete(elapsed, s.swapAtMs)) {
+        state.pixelateFilter.size = PIXELATE_TRANSITION_MAX_SIZE
+        if (s.pendingTexture) {
+          this.performImagePixelateSwap(name, state, s.pendingTexture)
+        } else {
+          s.phase = 'holding'
+        }
+      }
+      return
+    }
+
+    if (s.phase === 'holding') {
+      // ロード完了待ち。size は最大のまま（Assets.load().then() 側が performImagePixelateSwap を呼ぶ）。
+      return
+    }
+
+    // phase === 'refine'
+    const elapsed = now - s.refineStartMs
+    const remaining = s.durationMs - s.swapAtMs
+    state.pixelateFilter.size = computeRefineSize(elapsed, remaining)
+    if (isRefineComplete(elapsed, remaining)) {
+      this.clearImagePixelateState(state)
+    }
+  }
+
+  /**
+   * コルセン完了かつロード完了のタイミングで、sprite を新しいテクスチャへ差し替える
+   * （`EventImageLayer.performPixelateSwap` と対）。alpha フェードは行わない（常に alpha=1）。
+   * 以後 `updateImagePixelateFrame` が 'refine' フェーズへ移行し `PixelateFilter.size` を
+   * 最大値→1 へ戻す。
+   *
+   * `state.fadeAnimation` が既に張られている場合は alpha=1 を強制しない（#628 セルフレビュー
+   * 質問対応）。`[画像: id=x, 遷移=pixelate]` の直後に `remove()`（非 instant）が呼ばれると、
+   * `remove()` が張る退場 `fadeAnimation`（`destroyOnComplete: true`）とこの `pixelateState` が
+   * 並行して進行しうる。通常経路（新規表示のピクセレート遷移）は `fadeAnimation` を使わない設計
+   * のためここで alpha=1 にしても無害だが、この並行状態では ticker が毎フレーム
+   * fadeAnimation→pixelateState の順に処理するため、無条件に alpha=1 で上書きすると
+   * スワップの起きたフレームだけ退場フェードの進行が巻き戻って見える（1フレームのアルファ
+   * スナップ、実測確認済み）。`fadeAnimation` があるフレームはそちらに alpha 管理を譲る。
+   */
+  private performImagePixelateSwap(name: string, state: CharacterState, texture: Texture): void {
+    const s = state.pixelateState
+    if (!s) return
+    this.applyImageTexture(name, state.sprite, texture, s.size, s.circular)
+    if (!state.fadeAnimation) state.sprite.alpha = 1
+    s.phase = 'refine'
+    s.refineStartMs = this.elapsedMs
+  }
+
+  /**
+   * `[画像:]` のピクセレート遷移 (#628) の状態を終える。リファイン完了・打ち切り（load 失敗・
+   * 退場破棄）いずれも同じ後始末（`pixelateState` を外し `PixelateFilter.size` を初期値へ戻し
+   * `sprite.filters` を外す）。`destroyCharacterState` から呼ばれる場合は sprite 破棄の**前**に
+   * 呼ぶこと（`sprite.destroyed` チェックで filters 操作をガードしている）。
+   */
+  private clearImagePixelateState(state: CharacterState): void {
+    if (!state.pixelateState) return
+    state.pixelateState = undefined
+    if (state.pixelateFilter) state.pixelateFilter.size = 1
+    if (!state.sprite.destroyed) state.sprite.filters = null
   }
 
   /**
@@ -1934,6 +2204,28 @@ export class CharacterLayer extends Container {
     const state = this.characters.get(character)
     if (!state) return null
     return { x: state.sprite.x, y: state.sprite.y }
+  }
+
+  /**
+   * 指定 id の sprite が既にテクスチャをロード済みか (#628 フェーズ2b バグ修正)。
+   *
+   * `showImage()` は同一 id 再表示時（`existing` 分岐）はテクスチャ差し替えを行わず
+   * `onLoaded`/`onError` コールバックも呼ばない仕様（フェーズ2aで意図的に決めた仕様）。
+   * そのため呼び出し側（`NovelRenderer.showTitleScreen`）は「新規ロード中で onLoaded 待ち」
+   * と「既にロード済みで再表示しただけ」を区別できず、後者でもフォールバック UI
+   * （`TitleScreenOverlay` のタイトルテキスト）を隠したままにできないバグがあった。
+   * 呼び出し側が `showImage()` 直後にこのメソッドで同期的にロード済みかを確認し、
+   * ロード済みなら自前でフォールバック非表示処理を行うことで対処する。
+   *
+   * ガードは `reapplyPixelArt` と同じ `texture === Texture.EMPTY` の identity チェックを使う
+   * （`new Sprite()` 直後のプレースホルダテクスチャは共有シングルトン `Texture.EMPTY` で、
+   * その `height` は 1 のため `height <= 0` だけでは判定できない）。
+   */
+  hasLoadedTexture(id: string): boolean {
+    const state = this.characters.get(id)
+    if (!state || state.sprite.destroyed) return false
+    const texture = state.sprite.texture
+    return !!texture && texture !== Texture.EMPTY && texture.height > 0
   }
 
   /**
@@ -2468,7 +2760,7 @@ export class CharacterLayer extends Container {
   /** 進行中アニメーション（transform / fade / textEffect / underline いずれか）を持つキャラがいるか */
   hasActiveAnimation(): boolean {
     for (const s of this.characters.values()) {
-      if (s.animation || s.fadeAnimation || s.poseNudge) return true
+      if (s.animation || s.fadeAnimation || s.poseNudge || s.pixelateState) return true
       if (s.textEffect && this.isTextEffectActive(s.textEffect)) return true
       if (s.underline && this.isUnderlineActive(s.underline)) return true
     }
@@ -2619,6 +2911,13 @@ export class CharacterLayer extends Container {
             // 完了 → 伸び切り（scale.x=1）に確定。
             this.settleUnderline(state)
           }
+        }
+
+        // `[画像:]` ピクセレート遷移 (#628) を毎フレーム純粋計算で駆動する。
+        const px = state.pixelateState
+        if (px) {
+          anyActive = true
+          this.updateImagePixelateFrame(name, state, px)
         }
 
         // 名前ラベルを sprite に追従させる（x のみ。y は loadTexture で画像高さに合わせて固定済み）

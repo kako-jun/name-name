@@ -1101,6 +1101,8 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 id,
                 x,
                 y,
+                transition,
+                fade_ms,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -1130,6 +1132,19 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(yv) = y {
                     out.push_str(&format!(", y={yv}"));
+                }
+                // 遷移 (#628)。`Image` はフロントマターデフォルトを受けないため、固定で
+                // `EventImageTransition::Fade` と一致する場合だけ省略する（EventImage の
+                // `default_transition` 比較とは異なる、models.rs の doc 参照）。
+                if *transition != EventImageTransition::Fade {
+                    let token = match transition {
+                        EventImageTransition::Fade => "fade",
+                        EventImageTransition::Pixelate => "pixelate",
+                    };
+                    out.push_str(&format!(", 遷移={token}"));
+                }
+                if let Some(ms) = fade_ms {
+                    out.push_str(&format!(", フェード={ms}"));
                 }
                 out.push_str("]\n");
                 prev_was_dialog_or_text = false;

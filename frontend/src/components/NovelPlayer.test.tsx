@@ -40,13 +40,34 @@ import type { NovelGameState } from '../game/GameState'
 // #413: setInitNeverResolves(true) を render() 前に呼ぶと、次に構築される MockRenderer の
 // init() が永久 pending の Promise を返す（NP-6: renderer.init() 未解決でもインジケータ画像の
 // 先読みが独立して発火することを検証するため）。既定は従来どおり即 resolve。
-const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() => {
+//
+// #628 フェーズ2b race条件回帰テスト用: setInitDeferred(true) を render() 前に呼ぶと、
+// 次に構築される MockRenderer の init() が「呼び出し側が任意タイミングで resolve できる」
+// Promise を返す（setInitNeverResolves の「永久に解決しない」とは異なり、明示的に
+// resolvePendingInit() を呼ぶまで pending のまま）。titleScreen 表示 effect が
+// rendererReady（=init().then() 解決後）を待ってから showTitleScreen() を呼ぶ設計
+// （バグ#2 race条件の回帰）を検証するために、init() の解決タイミングを精密に制御する。
+const {
+  rendererInstances,
+  MockRenderer,
+  setInitNeverResolves,
+  setInitDeferred,
+  resolvePendingInit,
+} = vi.hoisted(() => {
   const instances: MockRenderer[] = []
   let initNeverResolves = false
+  let initDeferred = false
+  let pendingInitResolvers: Array<() => void> = []
   class MockRenderer {
-    init = vi.fn(() =>
-      initNeverResolves ? new Promise<void>(() => {}) : Promise.resolve(undefined)
-    )
+    init = vi.fn(() => {
+      if (initNeverResolves) return new Promise<void>(() => {})
+      if (initDeferred) {
+        return new Promise<void>((resolve) => {
+          pendingInitResolvers.push(resolve)
+        })
+      }
+      return Promise.resolve(undefined)
+    })
     destroy = vi.fn()
     setAssetBaseUrl = vi.fn()
     setOnAutoModeChange = vi.fn()
@@ -87,6 +108,9 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     setSeekBarColor = vi.fn()
     setIntermissionScene = vi.fn()
     hasIntermissionScene = vi.fn().mockReturnValue(false)
+    // #628 フェーズ2b: タイトル画面 (PixiJS 版 TitleScreenOverlay) の表示/非表示。
+    showTitleScreen = vi.fn()
+    hideTitleScreen = vi.fn()
     // #446: 実表示サイズに応じたレンダラ解像度追従。init().then() 内で無条件に1回呼ばれる
     // ため常に必要（isExporting は既定 false＝書き出し中でない扱いで自動追従を通す）。
     setRenderResolution = vi.fn()
@@ -149,6 +173,15 @@ const { rendererInstances, MockRenderer, setInitNeverResolves } = vi.hoisted(() 
     MockRenderer,
     setInitNeverResolves: (v: boolean) => {
       initNeverResolves = v
+    },
+    setInitDeferred: (v: boolean) => {
+      initDeferred = v
+      if (!v) pendingInitResolvers = []
+    },
+    resolvePendingInit: () => {
+      const resolvers = pendingInitResolvers
+      pendingInitResolvers = []
+      resolvers.forEach((resolve) => resolve())
     },
   }
 })
@@ -243,6 +276,8 @@ beforeEach(() => {
   isEmbeddedMock.mockReturnValue(false)
   // #413: 既定は即 resolve。NP-6 だけ render() 前に true へ上書きする。
   setInitNeverResolves(false)
+  // #628: 既定は即 resolve。race条件回帰テスト（TC38-43）だけ render() 前に true へ上書きする。
+  setInitDeferred(false)
 })
 
 afterEach(() => {
@@ -2879,5 +2914,135 @@ describe('NovelPlayer フルスクリーン最大化トグル (#468, Fullscreen 
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// --- #628 フェーズ2b: タイトル画面 showTitleScreen/hideTitleScreen 呼び出しの race 条件回帰テスト ---
+//
+// 実機検証で発覚したバグ#2（rendererReady 宣言部の JSDoc・NovelPlayer.tsx 参照）: `titleScreen`
+// 表示 effect が `rendererRef.current` の truthy だけを見て `renderer.init().then(...)` の解決を
+// 待たずに `showTitleScreen()` を呼ぶと、`characterLayer.showImage()` が空の assetBaseUrl で
+// ロゴ画像を要求して失敗し、しかも `showImage` の同 id 再表示（`existing` 分岐）はテクスチャを
+// 再ロードしないため、後から正しい assetBaseUrl で呼び直しても手遅れになる。
+// 修正は `rendererReady`（init().then() 解決後に true になる React state）を待ってから
+// showTitleScreen()/hideTitleScreen() を呼ぶ設計。ここではその race 条件そのものを固定する。
+//
+// 駆動: setInitDeferred(true) で render() 前に MockRenderer.init() を「明示的に
+// resolvePendingInit() を呼ぶまで pending のまま」にし、init() 未解決の間の挙動と
+// 解決直後の挙動を分離して検証する（#413 の setInitNeverResolves と姉妹関係、あちらは
+// 「永久に解決しない」、こちらは「任意タイミングで解決できる」）。
+//
+// もう一段の懸念（NovelPlayer.tsx effect 本体のコメント参照）: `titleScreen` オブジェクト自体は
+// 呼び出し側（PlayerScreen）が毎レンダー新しいクロージャで作り直しうるため、effect の依存配列は
+// 「非 null かどうか」「title」「hasSaveData」「dark」「rendererReady」だけに絞ってあり、コールバック
+// の参照同一性の変化では再実行されない設計になっている（無限ループ防止）。TC43 がこれを直接縛る。
+describe('NovelPlayer タイトル画面 showTitleScreen/hideTitleScreen race条件・再実行ガード (#628 フェーズ2b)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  function makeTitleScreenProp(overrides?: {
+    title?: string
+    hasSaveData?: boolean
+    onNewGame?: () => void
+    onContinue?: () => void
+    onOpenSettings?: () => void
+    onBack?: () => void
+  }) {
+    return {
+      title: overrides?.title ?? 'タイトル',
+      hasSaveData: overrides?.hasSaveData ?? false,
+      onNewGame: overrides?.onNewGame ?? vi.fn(),
+      onContinue: overrides?.onContinue ?? vi.fn(),
+      onOpenSettings: overrides?.onOpenSettings ?? vi.fn(),
+      onBack: overrides?.onBack ?? vi.fn(),
+    }
+  }
+
+  it('TC38: renderer.init() が未解決の間は titleScreen prop を渡してマウントしても showTitleScreen は呼ばれない', async () => {
+    setInitDeferred(true)
+    render(<NovelPlayer events={[]} titleScreen={makeTitleScreenProp()} />)
+    await flushAsync()
+
+    expect(lastRenderer().showTitleScreen).not.toHaveBeenCalled()
+  })
+
+  it('TC39: TC38 の続き — init() の Promise を resolve すると showTitleScreen が初めて1回呼ばれる', async () => {
+    setInitDeferred(true)
+    render(<NovelPlayer events={[]} titleScreen={makeTitleScreenProp()} />)
+    await flushAsync()
+    expect(lastRenderer().showTitleScreen).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolvePendingInit()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(lastRenderer().showTitleScreen).toHaveBeenCalledTimes(1)
+  })
+
+  it('TC40: titleScreen prop が null のままマウント（deep-linkモード相当）— rendererReady到達後も showTitleScreen は呼ばれず hideTitleScreen のみ呼ばれる', async () => {
+    render(<NovelPlayer events={[]} titleScreen={null} />)
+    await flushAsync()
+
+    expect(lastRenderer().showTitleScreen).not.toHaveBeenCalled()
+    expect(lastRenderer().hideTitleScreen).toHaveBeenCalled()
+  })
+
+  it('TC41: マウント後に titleScreen prop を null へ変更すると hideTitleScreen が呼ばれる', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} titleScreen={makeTitleScreenProp()} />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.showTitleScreen).toHaveBeenCalledTimes(1)
+    expect(r.hideTitleScreen).not.toHaveBeenCalled()
+
+    rerender(<NovelPlayer events={[]} titleScreen={null} />)
+    await flushAsync()
+
+    expect(r.hideTitleScreen).toHaveBeenCalledTimes(1)
+  })
+
+  it('TC42: rendererReady到達後、titleScreen.title だけを変更した再レンダーで showTitleScreen が再度呼ばれる', async () => {
+    const { rerender } = render(
+      <NovelPlayer events={[]} titleScreen={makeTitleScreenProp({ title: 'A' })} />
+    )
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.showTitleScreen).toHaveBeenCalledTimes(1)
+
+    rerender(<NovelPlayer events={[]} titleScreen={makeTitleScreenProp({ title: 'B' })} />)
+    await flushAsync()
+
+    expect(r.showTitleScreen).toHaveBeenCalledTimes(2)
+  })
+
+  it('TC43: rendererReady到達後、onNewGame等コールバックの参照だけを変えた再レンダーでは showTitleScreen は再度呼ばれない（無限ループ防止の設計確認）', async () => {
+    const { rerender } = render(
+      <NovelPlayer
+        events={[]}
+        titleScreen={makeTitleScreenProp({ title: 'A', hasSaveData: false })}
+      />
+    )
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.showTitleScreen).toHaveBeenCalledTimes(1)
+
+    // title/hasSaveData/dark は不変のまま、コールバックの参照だけを新しくする
+    // （PlayerScreen が毎レンダー新しいクロージャで titleScreen オブジェクトを作り直す想定と同形）。
+    rerender(
+      <NovelPlayer
+        events={[]}
+        titleScreen={makeTitleScreenProp({
+          title: 'A',
+          hasSaveData: false,
+          onNewGame: vi.fn(),
+          onContinue: vi.fn(),
+          onOpenSettings: vi.fn(),
+          onBack: vi.fn(),
+        })}
+      />
+    )
+    await flushAsync()
+
+    expect(r.showTitleScreen).toHaveBeenCalledTimes(1)
   })
 })

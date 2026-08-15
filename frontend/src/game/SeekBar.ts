@@ -76,6 +76,14 @@ export class SeekBar extends Container {
    * true の間は非表示にし、暗転オーバーレイ（黒）の上に薄いスライダ線が残らないようにする。
    */
   private blackoutHidden = false
+  /**
+   * タイトル画面表示中の非表示フラグ (#628 フェーズ2b)。旧 DOM `TitleOverlay.tsx` は canvas
+   * 全体を不透明 div で覆っていたため SeekBar は完全に不可視だった。PixiJS 版
+   * `TitleScreenOverlay` は立ち絵レイヤーより下（ロゴ Sprite を上に見せるための z 順制約、
+   * `NovelRenderer.showTitleScreen` 参照）に置かれ SeekBar を z 順だけでは隠せないため、
+   * exportSuppressed/blackoutHidden と同じゲート方式で明示的に隠す。
+   */
+  private titleScreenHidden = false
   /** 無操作で inactive に戻すタイマー（TimeController 経由なので number）。 */
   private inactivityTimer: number | null = null
 
@@ -207,9 +215,19 @@ export class SeekBar extends Container {
     this.updateVisibility()
   }
 
-  /** exportSuppressed / blackoutHidden の両ゲートから表示可否を一元決定する (#350)。 */
+  /**
+   * タイトル画面表示中はスライダを隠す (#628 フェーズ2b)。表示可否は updateVisibility に一元化する。
+   */
+  setTitleScreenHidden(hidden: boolean): void {
+    if (this.titleScreenHidden === hidden) return
+    this.titleScreenHidden = hidden
+    if (hidden) this.deactivate()
+    this.updateVisibility()
+  }
+
+  /** exportSuppressed / blackoutHidden / titleScreenHidden の3ゲートから表示可否を一元決定する (#350, #628)。 */
   private updateVisibility(): void {
-    this.visible = !this.exportSuppressed && !this.blackoutHidden
+    this.visible = !this.exportSuppressed && !this.blackoutHidden && !this.titleScreenHidden
   }
 
   /**

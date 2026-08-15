@@ -2032,6 +2032,11 @@ fn parse_label_directive(content: &str) -> Option<Event> {
 /// `円形` / `circle` は値なしフラグ（`[画像: a.png, 円形]`）でも `形状=円形` でも書ける。
 /// 値なしの bare トークン `円形` / `circle` を shape="円形" として拾う。path 欠落（空文字）
 /// 時は directive を捨てる（画像は path 必須）。
+///
+/// `遷移`/`transition` (#628) は `EventImage`（#583）と同じ `normalize_event_image_transition`
+/// を再利用する。ただし `Image` はフロントマターデフォルトの解決を受けないため、未指定時は
+/// 常に `EventImageTransition::Fade` に倒す（models.rs の `Event::Image` doc 参照）。
+/// `フェード`/`fade` は BGM/SE/EventImage と同じ `parse_fade_kv` を再利用する。
 fn parse_image_directive(content: &str) -> Option<Event> {
     let mut path = String::new();
     let mut position: Option<String> = None;
@@ -2040,6 +2045,8 @@ fn parse_image_directive(content: &str) -> Option<Event> {
     let mut id: Option<String> = None;
     let mut x: Option<f64> = None;
     let mut y: Option<f64> = None;
+    let mut transition = EventImageTransition::Fade;
+    let mut fade_ms: Option<u32> = None;
 
     let mut first = true;
     for raw in content.split(',') {
@@ -2050,6 +2057,10 @@ fn parse_image_directive(content: &str) -> Option<Event> {
             continue;
         }
         if part.is_empty() {
+            continue;
+        }
+        if let Some(n) = parse_fade_kv(part, false) {
+            fade_ms = Some(n);
             continue;
         }
         match part.split_once('=') {
@@ -2077,6 +2088,10 @@ fn parse_image_directive(content: &str) -> Option<Event> {
                     // 位置 override (#275)。範囲外・非数値はフォールバック（None のまま）。
                     "x" => x = parse_ratio(value),
                     "y" => y = parse_ratio(value),
+                    // 遷移モード (#628)。未指定時は既定 Fade（frontmatter デフォルトは受けない）。
+                    "遷移" | "transition" => {
+                        transition = normalize_event_image_transition(value);
+                    }
                     _ => {} // 未知キーは silent skip
                 }
             }
@@ -2094,6 +2109,8 @@ fn parse_image_directive(content: &str) -> Option<Event> {
         id,
         x,
         y,
+        transition,
+        fade_ms,
     })
 }
 
@@ -4170,6 +4187,8 @@ title: "test"
                 id: Some("avatar".to_string()),
                 x: None,
                 y: None,
+                transition: EventImageTransition::Fade,
+                fade_ms: None,
             }
         );
     }
@@ -4200,6 +4219,8 @@ title: "test"
                 id: None,
                 x: None,
                 y: None,
+                transition: EventImageTransition::Fade,
+                fade_ms: None,
             }
         );
         // circle 英語フラグ。
@@ -4236,6 +4257,8 @@ title: "test"
                 id: None,
                 x: None,
                 y: None,
+                transition: EventImageTransition::Fade,
+                fade_ms: None,
             }
         );
         let d2 = parse(&emit(&d1));
@@ -4336,6 +4359,8 @@ title: "test"
                 id: None,
                 x: None,
                 y: None,
+                transition: EventImageTransition::Fade,
+                fade_ms: None,
             },
             "non-circle bare token must be skipped, Image still parses"
         );
@@ -4404,6 +4429,8 @@ title: "test"
                 id: None,
                 x: None,
                 y: None,
+                transition: EventImageTransition::Fade,
+                fade_ms: None,
             },
             "comma in image path is truncated at first comma (structural limit of split(','))"
         );
@@ -4547,6 +4574,88 @@ title: "test"
         }
         let d2 = parse(&emit(&d1));
         assert_eq!(d1, d2, "image x/y round-trip should be stable");
+    }
+
+    // #628: 画像の 遷移=/transition= と フェード= を解釈する。EventImage と同じヘルパーを
+    // 再利用するが、frontmatter デフォルトは共有しない（未指定は常に Fade）。
+    #[test]
+    fn image_transition_and_fade_parsed() {
+        let doc = parse(&label_doc(
+            "[画像: avatar.png, 遷移=pixelate, フェード=800]",
+        ));
+        assert_eq!(
+            doc.chapters[0].scenes[0].events[0],
+            Event::Image {
+                path: "avatar.png".to_string(),
+                position: None,
+                shape: None,
+                size: None,
+                id: None,
+                x: None,
+                y: None,
+                transition: EventImageTransition::Pixelate,
+                fade_ms: Some(800),
+            }
+        );
+
+        // 英語キー transition= も等価。
+        let doc_en = parse(&label_doc(
+            "[image: avatar.png, transition=pixelate, fade=800]",
+        ));
+        assert_eq!(
+            doc_en.chapters[0].scenes[0].events[0],
+            Event::Image {
+                path: "avatar.png".to_string(),
+                position: None,
+                shape: None,
+                size: None,
+                id: None,
+                x: None,
+                y: None,
+                transition: EventImageTransition::Pixelate,
+                fade_ms: Some(800),
+            }
+        );
+    }
+
+    // #628: `遷移=` 未指定時は常に既定 Fade（EventImage と違い frontmatter デフォルトは受けない）。
+    #[test]
+    fn image_transition_defaults_to_fade_without_frontmatter_influence() {
+        let doc = parse(
+            "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\nevent_image_transition: pixelate\n---\n\n## 1-1: t\n\n[画像: avatar.png]\n",
+        );
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Image { transition, .. } => {
+                assert_eq!(
+                    *transition,
+                    EventImageTransition::Fade,
+                    "Image transition must stay Fade even when frontmatter event_image_transition is pixelate"
+                );
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+    }
+
+    // #628: 遷移=pixelate / フェード= を伴う画像の round-trip 安定性。
+    #[test]
+    fn image_transition_roundtrip() {
+        use crate::emitter::emit;
+        let input = label_doc("[画像: avatar.png, 遷移=pixelate, フェード=800]");
+        let d1 = parse(&input);
+        let emitted = emit(&d1);
+        assert!(emitted.contains("遷移=pixelate"), "got: {emitted}");
+        assert!(emitted.contains("フェード=800"), "got: {emitted}");
+        let d2 = parse(&emitted);
+        assert_eq!(d1, d2, "image transition/fade round-trip should be stable");
+
+        // 既定 Fade の場合は 遷移= を省略する（round-trip 安定・kv 肥大防止）。
+        let fade_input = label_doc("[画像: avatar.png, フェード=300]");
+        let d3 = parse(&fade_input);
+        let emitted3 = emit(&d3);
+        assert!(!emitted3.contains("遷移="), "got: {emitted3}");
+        assert!(emitted3.contains("フェード=300"), "got: {emitted3}");
+        let d4 = parse(&emitted3);
+        assert_eq!(d3, d4, "default-transition image should round-trip");
     }
 
     // ED の 2 色インストール行が組める結合: プロンプト（灰・静止・左揃え・厳密配置）＋
