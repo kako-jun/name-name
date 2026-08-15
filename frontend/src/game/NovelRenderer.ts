@@ -4812,6 +4812,18 @@ export class NovelRenderer {
   }
 
   /**
+   * クイックセーブデータを消去する (#637)。
+   * 「はじめから」（`PlayerScreen.onNewGame`）等、直前のセッションのクイックセーブを完全に
+   * 無効化したい場面で使う。`restart()` はシーン切り替え検知（`onSceneChangeCallback`）を
+   * 経由しないため、旧クイックセーブが自動上書きされるとは限らない（entry シーンから一度も
+   * シーン遷移していない状態でリロードすると、旧クイックセーブがそのまま復元されてしまう）。
+   * 呼び出し側が明示的にこれを呼び、リロード時に旧セーブが復活しないことを保証する。
+   */
+  clearQuickSave(): void {
+    this.saveManager.deleteQuickSave()
+  }
+
+  /**
    * セーブメニューを表示する。
    * 終劇後 (#386) はメニュー自体を開かない。理由は quickSave() の doc コメント参照
    * （SaveSlotData は storyEnded を持たないため、終劇後のセーブは行き止まりの原因になる）。
