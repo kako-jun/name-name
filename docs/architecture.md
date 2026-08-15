@@ -588,6 +588,17 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
   （`voice_percent`）は値の保持のみでバックエンド未反映（TUIにボイス再生コード自体が
   無いため、`config::VolumeConfig` の doc comment参照）。動画ミックス・エクスポート用
   キャプチャ配線は対象外。
+- **オート進行ウェイト設定項目の追加（#644、GUI版とのパリティ）**: `SettingsField` enum
+  （`TextSpeed`/`BgmVolume`/`SeVolume`/`VoiceVolume` の4項目）に `AutoWaitMs` を
+  `TextSpeed` の直後（GUI版 `Settings` interface の並び順に対応）に追加し、5項目に
+  拡張した。オートモードの待機時間 `config.auto_wait_ms`（既定2500ms）を設定画面から
+  実行時に調整できる。範囲は 500..10000ms・500ms刻み（`AUTO_WAIT_MIN_MS`/
+  `AUTO_WAIT_MAX_MS`/`AUTO_WAIT_STEP_MS`、`tui/src/config.rs`）。以前は
+  `tui-config.toml` 起動時設定としてのみ存在し、設定画面からの調整手段が無かった
+  （GUI版 `SettingsOverlay.tsx` の「オート進行ウェイト」スライダーに相当する項目が
+  TUI側に欠けていた）。GUI版スライダーも本Issueで同じ範囲・刻み（500-10000ms・
+  500ms刻み）に統一した（元は500-8000ms・100ms刻みで、100ms刻みはTUIのキー操作には
+  細かすぎるとkako-junが判断し、GUI側をTUIに合わせた）。
 
 ### BGM
 
