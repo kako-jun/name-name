@@ -895,7 +895,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                     title,
                     hasSaveData,
                     onNewGame: () => {
-                      // 新規開始: 既読データをクリアして最初から
+                      // はじめから: 既読データをクリアして最初から
                       clearReadProgress(projectName)
                       setHasSaveData(false)
                       setStartWithSkip(false)

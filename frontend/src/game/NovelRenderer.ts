@@ -1027,7 +1027,7 @@ export class NovelRenderer {
 
   /**
    * 同じ scenario を最初から再開する (texture cache は維持)。
-   * 動画モードの「新規開始」直後に AudioContext を起動してから冒頭の voice 付き event を
+   * 動画モードの「はじめから」直後に AudioContext を起動してから冒頭の voice 付き event を
    * 再走させる用途。setEvents() は texture を Assets.unload するため、render と並行すると
    * Pixi が `Cannot read properties of null (reading 'alphaMode')` で落ちる。restart() は
    * texture を維持するため安全。

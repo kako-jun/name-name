@@ -127,7 +127,7 @@ vi.mock('../components/NovelPlayer', () => ({
               alt={props.titleScreen.title}
               style={props.pixelArt ? { imageRendering: 'pixelated' } : undefined}
             />
-            <button onClick={props.titleScreen.onNewGame}>新規開始</button>
+            <button onClick={props.titleScreen.onNewGame}>はじめから</button>
             <button
               onClick={props.titleScreen.onContinue}
               disabled={!props.titleScreen.hasSaveData}
@@ -1761,8 +1761,8 @@ describe('PlayerScreen', () => {
       expect(renderer.audioManager.ensureContext).toHaveBeenCalledTimes(1)
       expect(renderer.hasQuickSave).toHaveBeenCalledTimes(1)
       expect(renderer.restart).not.toHaveBeenCalled()
-      // タイトルが閉じる（タイトル画面固有の「新規開始」ボタンが消える）
-      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      // タイトルが閉じる（タイトル画面固有の「はじめから」ボタンが消える）
+      expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
       // 復元済み位置を保つため、既読スキップモードは立てない
       expect(lastNovelPlayerProps().initialSkipMode).toBe(false)
     })
@@ -1778,7 +1778,7 @@ describe('PlayerScreen', () => {
 
       expect(renderer.hasQuickSave).toHaveBeenCalledTimes(1)
       expect(renderer.restart).toHaveBeenCalledTimes(1)
-      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
       expect(lastNovelPlayerProps().initialSkipMode).toBe(true)
     })
 
@@ -1790,7 +1790,7 @@ describe('PlayerScreen', () => {
 
       const continueButton = screen.getByRole('button', { name: 'つづきから' })
       expect(() => fireEvent.click(continueButton)).not.toThrow()
-      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
       expect(lastNovelPlayerProps().initialSkipMode).toBe(true)
     })
 
@@ -1799,12 +1799,12 @@ describe('PlayerScreen', () => {
 
       await renderWithFrontmatter({})
 
-      const newGameButton = screen.getByRole('button', { name: '新規開始' })
+      const newGameButton = screen.getByRole('button', { name: 'はじめから' })
       fireEvent.click(newGameButton)
 
       expect(renderer.audioManager.ensureContext).toHaveBeenCalledTimes(1)
       expect(renderer.restart).toHaveBeenCalledTimes(1)
-      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
     })
 
     // --- #637: 「はじめから」は renderer.clearQuickSave() を呼び、旧クイックセーブを消去する ---
@@ -1818,7 +1818,7 @@ describe('PlayerScreen', () => {
 
         await renderWithFrontmatter({})
 
-        const newGameButton = screen.getByRole('button', { name: '新規開始' })
+        const newGameButton = screen.getByRole('button', { name: 'はじめから' })
         fireEvent.click(newGameButton)
 
         expect(renderer.clearQuickSave).toHaveBeenCalledTimes(1)
@@ -1829,7 +1829,7 @@ describe('PlayerScreen', () => {
 
         await renderWithFrontmatter({})
 
-        const newGameButton = screen.getByRole('button', { name: '新規開始' })
+        const newGameButton = screen.getByRole('button', { name: 'はじめから' })
         fireEvent.click(newGameButton)
 
         expect(renderer.clearQuickSave).toHaveBeenCalledTimes(1)
@@ -1848,10 +1848,10 @@ describe('PlayerScreen', () => {
 
         await renderWithFrontmatter({})
 
-        const newGameButton = screen.getByRole('button', { name: '新規開始' })
+        const newGameButton = screen.getByRole('button', { name: 'はじめから' })
         expect(() => fireEvent.click(newGameButton)).not.toThrow()
         expect(renderer.restart).toHaveBeenCalledTimes(1)
-        expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+        expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
       })
 
       it('13: onContinue のレガシーフォールバック（hasQuickSave()=false）では clearQuickSave() は呼ばれず、restart() 経由のフォールバックは従来どおり動く（非退行）', async () => {
@@ -2072,20 +2072,20 @@ describe('PlayerScreen', () => {
     })
 
     // #388: ディープリンク解決時は タイトル画面を出さず該当シーンへ直行する。
-    // タイトル画面の存在は「新規開始」ボタン（タイトル画面固有の文言）で判定する。
-    it('48【#388】: ?scene= 解決時（deep-link モード）は タイトル画面（新規開始ボタン）を出さない', async () => {
+    // タイトル画面の存在は「はじめから」ボタン（タイトル画面固有の文言）で判定する。
+    it('48【#388】: ?scene= 解決時（deep-link モード）は タイトル画面（はじめからボタン）を出さない', async () => {
       window.history.pushState({}, '', '?scene=cell-scene-1')
       await renderMultiDocProject()
       // 前提: deep-link が解決されている（initialSceneId 非 null）
       expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
       // タイトルは出ない＝startFrom(initialSceneId) の該当シーンをそのまま見せる
-      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
     })
 
-    it('49【#388】: ?scene= 未指定時（通常フロー）は従来どおり タイトル画面（新規開始ボタン）を出す', async () => {
+    it('49【#388】: ?scene= 未指定時（通常フロー）は従来どおり タイトル画面（はじめからボタン）を出す', async () => {
       await renderMultiDocProject()
       expect(lastNovelPlayerProps().initialSceneId).toBeNull()
-      expect(screen.getByRole('button', { name: '新規開始' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'はじめから' })).toBeInTheDocument()
     })
 
     it('50【#388】: ?scene=<entry(hub)自身の sceneId> でも解決されれば deep-link モードとして タイトル画面を出さない', async () => {
@@ -2095,7 +2095,7 @@ describe('PlayerScreen', () => {
       window.history.pushState({}, '', '?scene=hub-scene')
       await renderMultiDocProject()
       expect(lastNovelPlayerProps().initialSceneId).toBe('hub-scene')
-      expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
     })
 
     // --- #392: iframe 埋め込み表示時はプレイヤーヘッダ（戻る＋タイトル）を描画しない ---
@@ -2157,7 +2157,7 @@ describe('PlayerScreen', () => {
         expect(within(banner).getByRole('heading', { level: 1 }).textContent).toBe(MULTI_DOC_TITLE)
       })
 
-      it('埋め込み判定は #388 の タイトル画面ゲート（startSceneId）と直交する（埋め込みでヘッダは消えるが ?scene= 未指定なら タイトル画面の新規開始は従来どおり出る）', async () => {
+      it('埋め込み判定は #388 の タイトル画面ゲート（startSceneId）と直交する（埋め込みでヘッダは消えるが ?scene= 未指定なら タイトル画面のはじめからは従来どおり出る）', async () => {
         isEmbeddedMock.mockReturnValue(true)
         await renderMultiDocProject()
         // ヘッダは isEmbedded()===true で消える
@@ -2167,7 +2167,7 @@ describe('PlayerScreen', () => {
         // ＝ヘッダ抑制ゲート（isEmbedded）が タイトル画面表示ゲート（startSceneId）に
         // 影響しないことの担保。
         expect(lastNovelPlayerProps().initialSceneId).toBeNull()
-        expect(screen.getByRole('button', { name: '新規開始' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'はじめから' })).toBeInTheDocument()
       })
     })
   })

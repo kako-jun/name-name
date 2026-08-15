@@ -16,7 +16,7 @@
  *   2. ロゴ未読み込み/失敗時のフォールバックとして表示するタイトルテキスト
  *      （読み込み成否は `NovelRenderer` が `CharacterLayer.showImage()` の
  *      `onLoaded`/`onError` コールバックで検知し、`hideFallbackText()` を呼んで隠す）
- *   3. 新規開始 / つづきから / 設定 / 終了 の 4 ボタン
+ *   3. はじめから / つづきから / 設定 / 終了 の 4 ボタン
  *
  * アクセシビリティは DOM 実装からの移行に伴い一時後退した。`aria-label` 等の意味論は依然
  * 失われたままだが、キーボード操作経路（#633 フェーズA）は本クラスで復元済み: Tab/Shift+Tab・
@@ -190,7 +190,7 @@ export class TitleScreenOverlay extends Container {
     this.titleText = titleText
 
     const buttonSpecs: ButtonSpec[] = [
-      { label: '新規開始', onClick: opts.onNewGame, variant: 'primary', disabled: false },
+      { label: 'はじめから', onClick: opts.onNewGame, variant: 'primary', disabled: false },
       {
         label: 'つづきから',
         onClick: opts.onContinue,
@@ -285,7 +285,7 @@ export class TitleScreenOverlay extends Container {
       this.addChild(container)
     })
 
-    // 有効な最初のボタン（通常は0=新規開始）へフォーカスをリセットする（#633）。
+    // 有効な最初のボタン（通常は0=はじめから）へフォーカスをリセットする（#633）。
     // focusedIndex を一旦 -1 に固定してから setFocusedIndex() を呼ぶことで、buttonEntries が
     // 総入れ替えされた（Graphics インスタンスが変わった）にもかかわらず「インデックス値が
     // たまたま前回と同じだから」という理由で早期 return され新しい focusRing に描画し損ねる
@@ -351,7 +351,7 @@ export class TitleScreenOverlay extends Container {
    * 矢印キー/Tab キーによるフォーカス移動が実際に発生した瞬間に、黄色いフォーカスリングの
    * visible focus 化フラグ (`keyboardNavActive`) を一度だけ立てる (#640、ChoiceOverlay#639 と同型)。
    *
-   * `moveFocus` の冒頭で必ず呼ぶ。TitleScreenOverlay の常時有効なボタン（新規開始/設定/終了）は
+   * `moveFocus` の冒頭で必ず呼ぶ。TitleScreenOverlay の常時有効なボタン（はじめから/設定/終了）は
    * 3つ以上あるため、`moveFocus` が移動先を現在位置のまま返す（＝`setFocusedIndex` が
    * 早期 return してリング未描画になる）ケースは実際には起こらない想定だが、ChoiceOverlay と
    * 同じ堅牢性のため、フラグが false→true に切り替わった瞬間は現在フォーカス中のエントリを
