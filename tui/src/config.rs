@@ -197,6 +197,27 @@ pub fn decrement_volume_percent(percent: u32) -> u32 {
     percent.saturating_sub(VOLUME_STEP_PERCENT)
 }
 
+/// オート進行ウェイト調整UI（#644）がプレイ中に選べる `auto_wait_ms` の下限・上限・刻み幅。
+/// GUI版 `clampSettings`（`frontend/src/game/settings.ts`）の autoWaitMs 許容範囲
+/// （500..10000）と同じ値を採用し、TUI/GUI間でオート待機時間のレンジ感を揃える。
+/// `TEXT_SPEED_MAX_MS`/`VOLUME_MAX_PERCENT`と異なり下限が0でないため、
+/// `increment_auto_wait_ms`/`decrement_auto_wait_ms`の両方で明示的なclampが必要になる。
+pub const AUTO_WAIT_MIN_MS: u64 = 500;
+pub const AUTO_WAIT_MAX_MS: u64 = 10000;
+pub const AUTO_WAIT_STEP_MS: u64 = 500;
+
+/// `ms`を`AUTO_WAIT_STEP_MS`刻みで1段階増やし、`AUTO_WAIT_MAX_MS`にclampする純粋関数（#644）。
+pub fn increment_auto_wait_ms(ms: u64) -> u64 {
+    ms.saturating_add(AUTO_WAIT_STEP_MS).min(AUTO_WAIT_MAX_MS)
+}
+
+/// `ms`を`AUTO_WAIT_STEP_MS`刻みで1段階減らし、`AUTO_WAIT_MIN_MS`にclampする純粋関数（#644）。
+/// 下限0にsaturateするのではなく`AUTO_WAIT_MIN_MS`（500）を下回らないよう明示的にclampする点が
+/// `decrement_volume_percent`（下限0固定）との違い。
+pub fn decrement_auto_wait_ms(ms: u64) -> u64 {
+    ms.saturating_sub(AUTO_WAIT_STEP_MS).max(AUTO_WAIT_MIN_MS)
+}
+
 /// パーセント表記(0..=100)の音量を、rodio の `Sink::set_volume`/`AudioPlayer` が扱う
 /// 0.0〜1.0スケールへ変換する純粋関数（#503）。
 pub fn percent_to_volume_scale(percent: u32) -> f32 {
