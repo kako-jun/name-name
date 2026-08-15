@@ -522,6 +522,12 @@ interface SaveSlotData {
 - **真**（クイックセーブあり＝マウント時点で既に正確な位置まで復元済み）: `renderer.restart()` を呼ばずタイトルを閉じるだけにする。呼んでしまうと最初のシーンへ巻き戻り、復元済みの位置を握りつぶす（#620 で発見・修正したバグ）
 - **偽**（#578 以前のレガシーセーブ等、クイックセーブが存在しない）: 既存の「スキップモードで既読位置まで高速進行」（#140 `hasAnyReadProgress`/`readProgress` ベース）にフォールバックする
 
+**hub冒頭の自動進行スキップ（#620 再発修正）**: `NovelRenderer.setEvents()`/`setScenes()` は呼ばれると内部の `resetAndStartEvents()` が常に `processUntilNextTextEvent()` で最初のtext event（または `[待機:]` 等のディレクティブ）まで自動進行する。Gymnasia等、entry_script冒頭にイベント絵＋`[待機: 表示完了]`（ピクセレート遷移演出）を置く構成では、この自動進行が待機状態（`waitingForWait=true`）まで進んでしまい、その直後に呼ばれる `quickLoad()` の入口ガード（`if (this.waitingForChoice || this.waitingForWait) return false`）に引っかかって静かに失敗し、「つづきから」で保存位置に復元されずhub冒頭が表示され続けるバグが再発していた。
+
+修正として、`NovelPlayer` のマウントeffectは `setEvents`/`setScenes` を呼ぶ**前**に `willAutoQuickLoad`（`!pendingSnapshot && !initialSceneId && !!docKey && renderer.hasQuickSave()`）を判定し、真なら `{ skipAutoAdvance: true }` を渡して自動進行そのものを抑制する（`pendingAutoAdvance` フラグに保留状態を記録するだけ）。直後に呼ぶ `renderer.quickLoad()` はこの時点で `waitingForWait` がまだ `false` のためガードを通過し、`restoreToScene()` が実行されて `pendingAutoAdvance` を明示的にクリアする。
+
+`quickLoad()` の戻り値（boolean）は「実際にシーン復元（`restoreToScene`）が起きたか」を正確に表さない（`loadFromSaveData` はセーブデータの `sceneId` が空、またはシーンが見つからない場合に「フラグだけ復元」して `true` を返すことがある）ため、`resumeAutoAdvanceIfPending()`（保留中の自動進行を一度だけ実行する冪等なメソッド）を `loadFromSaveData`／`loadFromSaveDataMissingScene`（マルチMD構成の非同期遅延ロード解決、成功・失敗いずれの経路も）の「フラグのみ復元して終わる」全ての分岐で明示的に呼ぶ。これにより、`quickLoad()` が同期的に `true` を返しても実際にはシーン復元が起きなかったケースでも、スキップした自動進行が確実に再開され、ゲームが「イベントはセットされているが何も進行しない」フリーズ状態に陥らない。`NovelPlayer.tsx` 側の `if (!ok) resumeAutoAdvanceIfPending()` フォールバックは残しているが、`resumeAutoAdvanceIfPending()` 自体が冪等（`pendingAutoAdvance` を見て一度だけ実行）なため、`NovelRenderer` 内で既にクリア済みの場合は無害な no-op になる。
+
 「新規開始」ボタン（`onNewGame`）は常に `renderer.restart()` を呼ぶ（クイックセーブの有無に関わらず最初から始める仕様のため、この分岐は不要）。
 
 ## 音声システム
