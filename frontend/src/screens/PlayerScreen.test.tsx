@@ -2517,6 +2517,31 @@ describe('PlayerScreen', () => {
       expect(() => fireEvent.click(settingsButton)).not.toThrow()
       expect(openSettingsMock).not.toHaveBeenCalled()
     })
+
+    // セルフレビュー should（#647）: showExitButton は headerMode だけでなく embedded
+    // （isEmbedded()、L762-771 のヘッダ抑制と同軸）も見る必要がある。embedded===true では
+    // headerMode に関係なくヘッダ自体が出ない（theo-hayami 等の埋め込み文脈で name-name トップへ
+    // の導線は無意味・没入破壊）ため、ヘッダが無いのに終了ボタンだけ残る不整合を防ぐ。
+    it('16: embedded:true かつ headerMode:"visible" のとき titleScreen.showExitButton が false になる（embedded 時はヘッダ導線が無く、終了ボタンも出してはいけない）', async () => {
+      isEmbeddedMock.mockReturnValue(true)
+      await renderWithFrontmatter({ header: 'visible' })
+      const titleScreen = lastNovelPlayerProps().titleScreen as { showExitButton?: boolean }
+      expect(titleScreen.showExitButton).toBe(false)
+    })
+
+    it('17: embedded:true かつ headerMode:"collapsed" のとき titleScreen.showExitButton が false になる', async () => {
+      isEmbeddedMock.mockReturnValue(true)
+      await renderWithFrontmatter({ header: 'collapsed' })
+      const titleScreen = lastNovelPlayerProps().titleScreen as { showExitButton?: boolean }
+      expect(titleScreen.showExitButton).toBe(false)
+    })
+
+    it('18: embedded:false かつ headerMode:"visible" のとき titleScreen.showExitButton が true になる（standalone は従来どおり、embedded 追加が非 embedded 経路を退行させないことの確認）', async () => {
+      isEmbeddedMock.mockReturnValue(false)
+      await renderWithFrontmatter({ header: 'visible' })
+      const titleScreen = lastNovelPlayerProps().titleScreen as { showExitButton?: boolean }
+      expect(titleScreen.showExitButton).toBe(true)
+    })
   })
 
   // #639: :focus-visible の実ブラウザ挙動（マウスでは出ずキーボードでは出る）は jsdom で

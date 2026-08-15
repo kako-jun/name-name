@@ -969,7 +969,13 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                     // プレイヤーに見せたくない構成）では、タイトル画面から name-name トップへ
                     // 戻る「終了」ボタン自体を出さない（ヘッダを隠す意図と矛盾するため）。
                     // visible/collapsed（ヘッダ側に戻る導線がある/展開できる）では従来どおり表示。
-                    showExitButton: headerMode !== 'hidden',
+                    // セルフレビュー should（#647）: embedded（iframe 埋め込み、L762-771 の
+                    // ヘッダ抑制と同軸）も見る。embedded 時は headerMode に関係なく常にヘッダを
+                    // 出さない（theo-hayami 等の埋め込み文脈では name-name トップへの導線自体が
+                    // 無意味・没入破壊）ため、ヘッダ非表示と終了ボタンの条件を一致させないと、
+                    // embedded かつ headerMode が visible/collapsed のプロジェクトでヘッダは無い
+                    // のに終了ボタンだけ残り、押すと埋め込み文脈から離脱してしまう。
+                    showExitButton: headerMode !== 'hidden' && !embedded,
                   }
                 : null
             }
