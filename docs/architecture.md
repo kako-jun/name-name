@@ -556,6 +556,10 @@ interface SaveSlotData {
 
 **「はじめから」が旧セーブを引きずる不具合の修正（#637）**: `restart()` は元々 `rawEvents`/`eventIndex` 等のみをリセットし、`gameState`（フラグ）と `currentSceneId` には触れなかった。一方 GUI 起動時の自動クイックロード（#578、上記）はタイトル画面が表示される前に裏で `quickLoad()` を実行し、`gameState.flags` と `currentSceneId` を旧セーブの値で埋めてしまう。そのため「はじめから」を押しても Condition 分岐が旧フラグのまま解決され、「つづきから」相当の内容になっていた。`restart()` は `setScenes()` と対称に冒頭で `gameState.clear()` を呼び、`currentSceneId` を `allScenes[0]?.id ?? null`（エントリ doc の先頭シーン）にリセットするよう修正した。さらに `restart()` は `onSceneChangeCallback` を発火しないため自動クイックセーブが走らず、旧クイックセーブが残ったままリロードすると復活してしまう。これを防ぐため `NovelRenderer.clearQuickSave()`（`SaveManager.deleteQuickSave()` の薄いラッパー）を新設し、`onNewGame` から `restart()` と併せて明示的に呼ぶ。
 
+**「設定」ボタンが実際に設定パネルを開くようになった（#643）**: 元々 `onOpenSettings` は `setTitleDismissed(true)` を呼ぶだけの暫定実装（#141由来のTODO）で、押すと設定パネルを開かずにタイトルを閉じてゲームが始まってしまっていた。`NovelPlayer` を `forwardRef` 化し `NovelPlayerHandle`（`openSettings()`）を公開、`PlayerScreen` の `titleScreen.onOpenSettings` から `novelPlayerRef.current?.openSettings()` を呼ぶように変更した。タイトル画面（PixiJS `TitleScreenOverlay`）は閉じずに表示したまま、その上にDOM `SettingsOverlay` を重ねて開く。閉じるとタイトルへ戻る。
+
+**`header: hidden` プロジェクトではタイトル画面の「終了」ボタンを非表示にする（#643）**: 「終了」は `onBack`（ヘッダのバックボタンと共有のハンドラ）経由で name-name トップページへ戻る。`header: hidden`（`PlayerScreen.tsx` の `normalizeHeaderMode`）で name-name 自身のブランディングを隠しているプロジェクト（Gymnasia等）では、タイトル画面から name-name トップへ戻れてしまうのは設計として矛盾するため、`TitleScreenOverlay.show()` に `showExitButton?: boolean`（既定 `true`）を追加し、`false` のときは「終了」を `disabled` ではなく `buttonSpecs` から除外（非描画）する。`PlayerScreen` は `showExitButton: headerMode !== 'hidden'` を渡す。非表示時は #640 のキーボードフォーカス巡回（Tab/矢印）も残りのボタンだけを正しく循環する。
+
 ## 音声システム
 
 Web Audio API を使用。
