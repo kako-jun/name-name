@@ -3,6 +3,7 @@ import { Assets, Graphics, Sprite, Text as PixiText, Rectangle, Texture } from '
 import { ChoiceOverlay, resolveChoiceVisual, resolveStyle } from './ChoiceOverlay'
 import { computeSplitLayoutRegions, resolveChoiceIconKind } from './novelLayout'
 import type { FederatedPointerEvent } from 'pixi.js'
+import type { AudioManager } from './AudioManager'
 
 // アイコン(#598)テスト用の共通ヘルパー。EventImageLayer.test.ts と同じ流儀
 // （Assets.load をモックし、実 setTimeout(0) でマクロタスクを1回まわして then/catch を解決させる）。
@@ -2115,5 +2116,505 @@ describe('ChoiceOverlay alreadyReadとアイコンの軸独立性 (#598)', () =>
     expect(iconWithout).toBeDefined()
     // 両方とも unread-icon（cleared=false）で、alreadyRead の真偽で変わらない。
     expect(iconWith?.texture).toBe(iconWithout?.texture)
+  })
+})
+
+// #633 テスト観点整理: ChoiceOverlay のキーボード操作（Tab/Shift+Tab・矢印・Enter/Space・
+// scrollFocusedIntoView 併用・show() 再入時の状態リセット）。TitleScreenOverlay.test.ts と同じ
+// 流儀で private フィールド（choiceEntries/focusedIndex/choiceIsGrid/currentOptions/
+// scrollOffset/maxScroll/viewportHeight）に internals ビューで直接到達する。
+interface FocusableChoiceEntryLike {
+  container: { eventMode: string }
+  focusRing: Graphics
+  locked: boolean
+  row: number
+  col: number
+}
+interface ChoiceOverlayFocusInternals {
+  choiceEntries: FocusableChoiceEntryLike[]
+  focusedIndex: number
+  choiceIsGrid: boolean
+  currentOptions: { jump: string }[]
+  scrollOffset: number
+  maxScroll: number
+  viewportHeight: number
+}
+function focusInternals(overlay: ChoiceOverlay): ChoiceOverlayFocusInternals {
+  return overlay as unknown as ChoiceOverlayFocusInternals
+}
+
+describe('ChoiceOverlay キーボード操作 フラットフォーカス移動 (#633 非グリッド)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('TC-C1: 非グリッド・ロックなしでshow()直後、index 0にフォーカスがある（focusRing描画で確認）', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    const entry0 = focusInternals(overlay).choiceEntries[0]
+    expect(strokeSpy.mock.instances).toContain(entry0.focusRing)
+
+    overlay.hide()
+  })
+
+  it('TC-C2: 非グリッドでTabを選択肢数ぶん押すと先頭に循環する', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(4), vi.fn())
+
+    for (let i = 0; i < 4; i++) {
+      overlay.handleKeyDown('Tab')
+    }
+
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    overlay.hide()
+  })
+
+  it('TC-C3: 非グリッドでShift+Tabは末尾へ循環する', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(4), vi.fn())
+
+    overlay.handleKeyDown('Tab', true)
+
+    expect(focusInternals(overlay).focusedIndex).toBe(3)
+    overlay.hide()
+  })
+
+  it('TC-C4: 先頭ロック時、show()直後のフォーカスは2番目（最初の非ロック）に立つ', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn(), null, undefined, undefined, [true, false, false])
+
+    expect(focusInternals(overlay).focusedIndex).toBe(1)
+    overlay.hide()
+  })
+
+  it('TC-C5: 末尾ロック時、非ロック最後からTabで先頭へ循環し、ロック済み末尾はスキップされる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn(), null, undefined, undefined, [false, false, true])
+    // 初期フォーカス=index0。まず非ロック最後(index1)まで移動する。
+    overlay.handleKeyDown('Tab')
+    expect(focusInternals(overlay).focusedIndex).toBe(1)
+
+    overlay.handleKeyDown('Tab')
+
+    // ロック済みのindex2を跨いで先頭(index0)へ循環する。
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    overlay.hide()
+  })
+
+  it('TC-C6: 先頭+末尾ロック時、中間からTab連打で非ロックのみを巡回し、ロック2件には一度もフォーカスが止まらない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(4), vi.fn(), null, undefined, undefined, [true, false, false, true])
+    expect(focusInternals(overlay).focusedIndex).toBe(1)
+
+    const visited: number[] = []
+    for (let i = 0; i < 6; i++) {
+      overlay.handleKeyDown('Tab')
+      visited.push(focusInternals(overlay).focusedIndex)
+    }
+
+    expect(visited.every((idx) => idx === 1 || idx === 2)).toBe(true)
+    overlay.hide()
+  })
+
+  it('TC-C7: 全選択肢ロック時、show()直後focusedIndexは-1相当（focusRingがどのボタンにも描画されない）', () => {
+    const strokeSpy = vi.spyOn(Graphics.prototype, 'stroke')
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn(), null, undefined, undefined, [true, true, true])
+
+    expect(focusInternals(overlay).focusedIndex).toBe(-1)
+    const rings = focusInternals(overlay).choiceEntries.map((e) => e.focusRing)
+    expect(rings.some((ring) => strokeSpy.mock.instances.includes(ring))).toBe(false)
+
+    overlay.hide()
+  })
+
+  it('TC-C8: 全ロック時にEnter/Spaceを押してもonSelectは呼ばれず例外・console.errorも出ない', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const overlay = new ChoiceOverlay(800, 450)
+    const onSelect = vi.fn()
+    overlay.show(choices(2), onSelect, null, undefined, undefined, [true, true])
+
+    expect(() => {
+      overlay.handleKeyDown('Enter')
+      overlay.handleKeyDown(' ')
+    }).not.toThrow()
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+
+    overlay.hide()
+    errorSpy.mockRestore()
+  })
+
+  it('TC-C9: ロック済みのフォーカス中エントリでEnterがno-opであること（activateFocusedButtonのentry.lockedチェックの直接検証）', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const onSelect = vi.fn()
+    overlay.show(choices(2), onSelect, null, undefined, undefined, [false, true])
+    // 内部状態を直接操作し、ロック済みエントリ(index1)へフォーカスを強制する
+    // （activateFocusedButton の `entry.locked` チェック自体を狙い撃つための細工）。
+    focusInternals(overlay).focusedIndex = 1
+
+    overlay.handleKeyDown('Enter')
+
+    expect(onSelect).not.toHaveBeenCalled()
+    overlay.hide()
+  })
+})
+
+// #633 テスト観点整理: グリッド配置 (#508) 時の ArrowUp/Down（列内移動）・ArrowLeft/Right
+// （行内移動）。7択・列5（row0:5件・row1:2件のragged行）を主な題材にする。
+describe('ChoiceOverlay キーボード操作 グリッド軸移動 (#633 グリッド + ragged last row)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('TC-C10: 列5・7択で、col0のidx0からArrowDownでidx5へ、もう一度ArrowDownでidx0へ循環する', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(7), vi.fn(), null, undefined, 5)
+
+    overlay.handleKeyDown('ArrowDown')
+    expect(focusInternals(overlay).focusedIndex).toBe(5)
+
+    overlay.handleKeyDown('ArrowDown')
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+
+    overlay.hide()
+  })
+
+  it('TC-C11: 同グリッドで、row0のみに存在する列(col2, idx2)からArrowDown/ArrowUpを押しても位置が変化しない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(7), vi.fn(), null, undefined, 5)
+    focusInternals(overlay).focusedIndex = 2
+
+    overlay.handleKeyDown('ArrowDown')
+    expect(focusInternals(overlay).focusedIndex).toBe(2)
+
+    overlay.handleKeyDown('ArrowUp')
+    expect(focusInternals(overlay).focusedIndex).toBe(2)
+
+    overlay.hide()
+  })
+
+  it('TC-C12: row0（5件=列数一致）のidx4からArrowRightで先頭(idx0)へ循環し、row1側には一切遷移しない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(7), vi.fn(), null, undefined, 5)
+    focusInternals(overlay).focusedIndex = 4
+
+    overlay.handleKeyDown('ArrowRight')
+
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    overlay.hide()
+  })
+
+  it('TC-C13: row1（2件のragged行）のidx6からArrowRight/ArrowLeftでidx5と循環し、row0の余剰列(c2-c4)には遷移しない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(7), vi.fn(), null, undefined, 5)
+    focusInternals(overlay).focusedIndex = 6
+
+    overlay.handleKeyDown('ArrowRight')
+    expect(focusInternals(overlay).focusedIndex).toBe(5)
+
+    focusInternals(overlay).focusedIndex = 6
+    overlay.handleKeyDown('ArrowLeft')
+    expect(focusInternals(overlay).focusedIndex).toBe(5)
+
+    overlay.hide()
+  })
+
+  it('TC-C14: count=6・列5（最終行1件のみ=col0だけ）で、col0はArrowDownで通常どおり2件を巡回し、col1-4はArrowDown/Upどちらもno-op', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(6), vi.fn(), null, undefined, 5)
+
+    overlay.handleKeyDown('ArrowDown')
+    expect(focusInternals(overlay).focusedIndex).toBe(5)
+    overlay.handleKeyDown('ArrowDown')
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+
+    for (let col = 1; col <= 4; col++) {
+      focusInternals(overlay).focusedIndex = col
+      overlay.handleKeyDown('ArrowDown')
+      expect(focusInternals(overlay).focusedIndex).toBe(col)
+      overlay.handleKeyDown('ArrowUp')
+      expect(focusInternals(overlay).focusedIndex).toBe(col)
+    }
+
+    overlay.hide()
+  })
+
+  it('TC-C15: count=10・列5（ちょうど割り切れる=raggedでない）で、全列がArrowDown/Upで2件を正常に巡回する', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(10), vi.fn(), null, undefined, 5)
+
+    for (let col = 0; col < 5; col++) {
+      focusInternals(overlay).focusedIndex = col
+      overlay.handleKeyDown('ArrowDown')
+      expect(focusInternals(overlay).focusedIndex).toBe(col + 5)
+      overlay.handleKeyDown('ArrowUp')
+      expect(focusInternals(overlay).focusedIndex).toBe(col)
+    }
+
+    overlay.hide()
+  })
+
+  it('TC-C16: 非グリッド時、ArrowLeft/ArrowRightはhandleKeyDownがfalseを返し、フォーカス位置も変化しない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+
+    expect(overlay.handleKeyDown('ArrowRight')).toBe(false)
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+
+    expect(overlay.handleKeyDown('ArrowLeft')).toBe(false)
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+
+    overlay.hide()
+  })
+
+  it('TC-C17: グリッド時、ArrowUp/DownはchoiceIsGrid分岐で列内移動に切り替わり、非グリッド時のフラット移動にはならない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(6), vi.fn(), null, undefined, 3)
+    // columns=3, idx0(row0,col0)。フラット移動(Tab)ならArrowDownでもidx1へ動くはずだが、
+    // グリッド時のArrowDownは列内移動(moveFocusInColumn)でidx3(row1,col0)へ飛ぶ。
+    expect(focusInternals(overlay).choiceIsGrid).toBe(true)
+
+    overlay.handleKeyDown('ArrowDown')
+
+    expect(focusInternals(overlay).focusedIndex).toBe(3)
+    overlay.hide()
+  })
+
+  it('TC-C18: グリッドで下段(row1)の該当列がロックのとき、上段からArrowDownしても移動先候補が自分のみになりno-op', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    // columns=2, count=4: idx0(r0c0) idx1(r0c1) idx2(r1c0) idx3(r1c1)。idx2(col0)をロック。
+    overlay.show(choices(4), vi.fn(), null, undefined, 2, [false, false, true, false])
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+
+    overlay.handleKeyDown('ArrowDown')
+
+    expect(focusInternals(overlay).focusedIndex).toBe(0)
+    overlay.hide()
+  })
+})
+
+describe('ChoiceOverlay キーボード操作 フォーカス確定 (#633)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('TC-C19: フォーカス中の非ロック選択肢でEnterを押すとonSelect(option.jump)が正しいjump文字列で1回だけ呼ばれる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const onSelect = vi.fn()
+    overlay.show(choices(3), onSelect)
+    overlay.handleKeyDown('Tab') // フォーカス=index1
+
+    overlay.handleKeyDown('Enter')
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith('next-2')
+    overlay.hide()
+  })
+
+  it('TC-C20: フォーカス中の非ロック選択肢でSpaceでも同様に確定する', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const onSelect = vi.fn()
+    overlay.show(choices(3), onSelect)
+
+    overlay.handleKeyDown(' ')
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith('next-1')
+    overlay.hide()
+  })
+
+  it('TC-C21: Enterを押すとaudioManager.playSelectTone()が呼ばれる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const audioManager = {
+      ensureContext: vi.fn(),
+      playSelectTone: vi.fn(),
+      playHoverTone: vi.fn(),
+    }
+    overlay.setAudioManager(audioManager as unknown as AudioManager)
+    overlay.show(choices(1), vi.fn())
+
+    overlay.handleKeyDown('Enter')
+
+    expect(audioManager.playSelectTone).toHaveBeenCalledTimes(1)
+    overlay.hide()
+  })
+})
+
+// #633 テスト観点整理: scrollFocusedIntoView (#339 スクロール併用)。
+// row1のtop=68・rowHeight=68・viewportHeight=172・maxScroll=492（10択・overlay(800,220)の場合の
+// 実測値。BUTTON_HEIGHT=52・BUTTON_GAP=16・VIEWPORT_VERTICAL_MARGIN=24 から導かれる）。
+// 境界値（ちょうど等しい/1px超過）は自然なキー操作の連打では厳密に再現しづらいため、
+// テスト設計担当の指示どおり scrollOffset/maxScroll/focusedIndex を内部状態から直接細工する。
+describe('ChoiceOverlay キーボード操作 scrollFocusedIntoView (#633 #339スクロール併用)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('TC-C22: 非スクロール（maxScroll<=0）状態でフォーカス移動してもscrollOffsetは変化しない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+    expect(focusInternals(overlay).maxScroll).toBeLessThanOrEqual(0)
+
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Tab')
+
+    expect(focusInternals(overlay).scrollOffset).toBe(0)
+    overlay.hide()
+  })
+
+  it('TC-C23: フォーカス行のtopが現在のscrollOffsetより1px小さいときスクロールが発生しnext=topになる', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    overlay.show(choices(10), vi.fn())
+    // row1のtop=68。scrollOffsetを69に細工し「top(68) < scrollOffset(69)」の状態を作る。
+    focusInternals(overlay).scrollOffset = 69
+
+    overlay.handleKeyDown('Tab') // index0→1 (row1)
+
+    expect(focusInternals(overlay).scrollOffset).toBe(68)
+    overlay.hide()
+  })
+
+  it('TC-C24: フォーカス行のtopが現在のscrollOffsetとちょうど等しいときスクロールは発生しない', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    overlay.show(choices(10), vi.fn())
+    focusInternals(overlay).scrollOffset = 68 // row1のtopとちょうど同じ
+
+    overlay.handleKeyDown('Tab') // index0→1 (row1)
+
+    expect(focusInternals(overlay).scrollOffset).toBe(68) // 変化しない
+    overlay.hide()
+  })
+
+  it('TC-C25: フォーカス行のbottomがビューポート下端とちょうど等しいときスクロールは発生しない', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    overlay.show(choices(10), vi.fn())
+    // row2: top=136, bottom=188。viewportHeight=172。scrollOffset=16なら
+    // bottom(188) === scrollOffset(16) + viewportHeight(172) がちょうど成立する。
+    focusInternals(overlay).focusedIndex = 1
+    focusInternals(overlay).scrollOffset = 16
+
+    overlay.handleKeyDown('Tab') // index1→2 (row2)
+
+    expect(focusInternals(overlay).scrollOffset).toBe(16) // 変化しない
+    overlay.hide()
+  })
+
+  it('TC-C26: フォーカス行のbottomがビューポート下端より1px超過するときスクロールが発生しnext=bottom-viewportHeightになる', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    overlay.show(choices(10), vi.fn())
+    // row2: bottom=188。scrollOffset=15なら scrollOffset+viewportHeight=187、bottomが1px超過する。
+    focusInternals(overlay).focusedIndex = 1
+    focusInternals(overlay).scrollOffset = 15
+
+    overlay.handleKeyDown('Tab') // index1→2 (row2)
+
+    expect(focusInternals(overlay).scrollOffset).toBe(16) // 188 - 172
+    overlay.hide()
+  })
+
+  it('TC-C27: 最終行へフォーカスした結果算出されるnextがmaxScrollを超える場合、maxScrollにクランプされる', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    overlay.show(choices(10), vi.fn())
+    // 自然な計算では最終行のnextは常にmaxScrollちょうど（totalHeight-viewportHeight）になるため、
+    // クランプ分岐自体を踏ませるにはmaxScrollを人為的に小さく細工する必要がある。
+    focusInternals(overlay).maxScroll = 100
+    focusInternals(overlay).focusedIndex = 8
+
+    overlay.handleKeyDown('Tab') // index8→9 (最終行, row9)
+
+    expect(focusInternals(overlay).scrollOffset).toBe(100) // 492ではなくmaxScroll(100)にクランプ
+    overlay.hide()
+  })
+
+  it('TC-C28: グリッド×スクロール併用（列2・多数行）で、ArrowDownによる列内移動が行の実Y座標に基づいて正しくスクロールを追従する', () => {
+    const overlay = new ChoiceOverlay(800, 220)
+    overlay.show(choices(20), vi.fn(), null, undefined, 2)
+
+    overlay.handleKeyDown('ArrowDown') // idx0(row0,col0) → idx2(row1,col0)
+    overlay.handleKeyDown('ArrowDown') // → idx4(row2,col0)
+    overlay.handleKeyDown('ArrowDown') // → idx6(row3,col0)
+
+    expect(focusInternals(overlay).focusedIndex).toBe(6)
+    // row3: top=204, bottom=256。実rowに基づいて正しく追従していればscrollOffsetは84になる
+    // （誤ってフォーカス済みindex(6)をrow扱いした場合はtop=408相当になり検出できる）。
+    expect(focusInternals(overlay).scrollOffset).toBe(84)
+    overlay.hide()
+  })
+})
+
+describe('ChoiceOverlay キーボード操作 show()再入・状態遷移 (#633)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('TC-C29: 1回目show()でTabを数回押し中間にフォーカスがある状態から、columns/lockedが変化した2回目show()を呼ぶと、choiceEntriesが総入れ替えされフォーカスが新しい先頭の非ロック選択肢にリセットされる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show(choices(3), vi.fn())
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Tab')
+    expect(focusInternals(overlay).focusedIndex).toBe(2)
+    const firstFocusRing = focusInternals(overlay).choiceEntries[0].focusRing
+
+    const secondOnSelect = vi.fn()
+    overlay.show(
+      [
+        { text: 'X', jump: 'jump-x' },
+        { text: 'Y', jump: 'jump-y' },
+        { text: 'Z', jump: 'jump-z' },
+      ],
+      secondOnSelect,
+      null,
+      undefined,
+      undefined,
+      [true, false, false]
+    )
+
+    // choiceEntries は総入れ替えされ、Graphics インスタンスも新しくなる。
+    expect(focusInternals(overlay).choiceEntries[0].focusRing).not.toBe(firstFocusRing)
+    // フォーカスは新しい選択肢群の最初の非ロック(index1)にリセットされる。
+    expect(focusInternals(overlay).focusedIndex).toBe(1)
+
+    overlay.handleKeyDown('Enter')
+    expect(secondOnSelect).toHaveBeenCalledWith('jump-y')
+
+    overlay.hide()
+  })
+
+  it('TC-C30: hide()後にchoiceEntries=[]・focusedIndex=-1・currentOptions=[]にクリアされ、hide()直後にhandleKeyDownを呼んでも例外にならない', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const onSelect = vi.fn()
+    overlay.show(choices(3), onSelect)
+
+    overlay.hide()
+
+    expect(focusInternals(overlay).choiceEntries).toEqual([])
+    expect(focusInternals(overlay).focusedIndex).toBe(-1)
+    expect(focusInternals(overlay).currentOptions).toEqual([])
+    expect(() => {
+      overlay.handleKeyDown('Tab')
+      overlay.handleKeyDown('Enter')
+    }).not.toThrow()
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('TC-C31: locked配列がoptionsより短い場合、未指定インデックスはfalse扱い（ロックなし）でフォーカス移動対象に含まれる', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    const onSelect = vi.fn()
+    // locked は index0 だけ指定（true）。index1・index2は未指定=ロックなし扱い。
+    overlay.show(choices(3), onSelect, null, undefined, undefined, [true])
+
+    // 初期フォーカスはindex0がロックされているためindex1（最初の非ロック）に立つ。
+    expect(focusInternals(overlay).focusedIndex).toBe(1)
+    expect(overlay.children[1].eventMode).toBe('static')
+    expect(overlay.children[2].eventMode).toBe('static')
+
+    overlay.handleKeyDown('Enter')
+    expect(onSelect).toHaveBeenCalledWith('next-2')
+
+    overlay.hide()
   })
 })

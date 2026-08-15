@@ -355,6 +355,21 @@ describe('TitleScreenOverlay.handleKeyDown() キーボードフォーカス (#63
     expect(overlay.handleKeyDown('ArrowRight')).toBe(false)
   })
 
+  // #633 テスト観点整理: show() を一度も呼んでいない（focusedIndex が初期値 -1・buttonEntries
+  // が空配列のまま）状態で handleKeyDown('Enter') を呼んでも、activateFocusedButton() の
+  // `buttonEntries[this.focusedIndex]` が undefined を返すだけで例外にならないことを確認する
+  // （NovelRenderer 側が誤って show() 前に keydown を委譲してしまうような呼び出し順序ミスの
+  // 保険）。
+  it("TC-T1: focusedIndexが初期状態(-1)のままhandleKeyDown('Enter')を呼んでも例外・console.errorを出さない", () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const overlay = new TitleScreenOverlay(800, 450)
+
+    expect(() => overlay.handleKeyDown('Enter')).not.toThrow()
+
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
   it('show() を再度呼ぶとフォーカスが新規開始（index 0）にリセットされる', () => {
     const overlay = new TitleScreenOverlay(800, 450)
     const onNewGame1 = vi.fn()

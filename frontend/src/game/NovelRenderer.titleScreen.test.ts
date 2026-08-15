@@ -75,6 +75,15 @@ interface TitleScreenInternals {
   resolvedEvents: Event[]
   handleKeyDown: (e: KeyboardEvent) => void
   backlogOverlay: { visible: boolean; toggle: () => void }
+  // #633 フェーズB回帰用の追加フィールド。
+  waitingForChoice: boolean
+  choiceOverlay: {
+    handleKeyDown: (key: string, shiftKey?: boolean) => boolean
+    show: (...args: unknown[]) => void
+    hide: () => void
+  }
+  advance: () => void
+  saveLoadOverlay: { visible: boolean }
 }
 function internals(r: NovelRenderer): TitleScreenInternals {
   return r as unknown as TitleScreenInternals
@@ -347,5 +356,183 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
 
     expect(toggleSpy).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #633 フェーズB: ChoiceOverlay 側のキーボード操作を NovelRenderer.handleKeyDown が正しく
+// waitingForChoice ガードで委譲することの回帰テスト。TC40-42（titleScreenOverlay.visible ガード）
+// と同じ構造を waitingForChoice ガードに対して繰り返す（TC-N1〜N3）。TC-N4〜N7 は
+// choiceOverlay をモックせず実スクリプトで実際に選択肢を表示し、キー操作だけでシーン遷移が
+// 完了するところまで確認する E2E（テスト観点整理フェーズで最優先とされた「本命」テスト）。
+describe('NovelRenderer.handleKeyDown() waitingForChoiceガード (#633 フェーズB)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('TC-N1: waitingForChoice===trueのとき、window keydownはchoiceOverlay.handleKeyDown()に委譲され、戻り値trueならpreventDefault()が呼ばれる', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    internals(r).waitingForChoice = true
+    const delegateSpy = vi.spyOn(internals(r).choiceOverlay, 'handleKeyDown').mockReturnValue(true)
+    const event = new KeyboardEvent('keydown', { key: 'ArrowDown' })
+    const preventDefaultSpy = vi.spyOn(event, 'preventDefault')
+
+    internals(r).handleKeyDown(event)
+
+    expect(delegateSpy).toHaveBeenCalledWith('ArrowDown', false)
+    expect(preventDefaultSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('TC-N2: waitingForChoice===trueの間、bキー・sキー・lキーが一切発火しない（choiceOverlay.handleKeyDownがfalseを返すキーでも発火しないことを含む）', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    internals(r).waitingForChoice = true
+    // ChoiceOverlay 側が未処理（縦一列時のArrowLeft/Right等）で false を返しても、
+    // waitingForChoice ガード自体が早期 return するため後続のショートカット判定へ
+    // フォールスルーしないはず。
+    vi.spyOn(internals(r).choiceOverlay, 'handleKeyDown').mockReturnValue(false)
+    const toggleSpy = vi.spyOn(internals(r).backlogOverlay, 'toggle')
+
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 's' }))
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'l' }))
+
+    expect(toggleSpy).not.toHaveBeenCalled()
+    expect(internals(r).saveLoadOverlay.visible).toBe(false)
+  })
+
+  it('TC-N3: waitingForChoice===false（通常時）は従来どおりbキーでbacklogOverlay.toggleが呼ばれる', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    expect(internals(r).waitingForChoice).toBe(false)
+    const toggleSpy = vi.spyOn(internals(r).backlogOverlay, 'toggle')
+
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
+
+    expect(toggleSpy).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('NovelRenderer キーボード操作でのChoice確定 E2E (#633 フェーズB 本命)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // narration → Choice(2択) → 各ジャンプ先シーン(narrationのみ)。jumpToScene は同期的に
+  // 次のテキストイベントまで処理するため、Assets.load 等の非同期アセットを挟まない
+  // narration-only な題材にする（confinement.test.ts / startFrom.test.ts と同じ割り切り）。
+  const CHOICE_SCENES_2: EventScene[] = [
+    scene('start2', [
+      narration('本文'),
+      {
+        Choice: {
+          options: [
+            { text: '選択肢A', jump: 'sceneA2' },
+            { text: '選択肢B', jump: 'sceneB2' },
+          ],
+        },
+      } as Event,
+    ]),
+    scene('sceneA2', [narration('Aへ到達')]),
+    scene('sceneB2', [narration('Bへ到達')]),
+  ]
+
+  const CHOICE_SCENES_3: EventScene[] = [
+    scene('start3', [
+      narration('本文'),
+      {
+        Choice: {
+          options: [
+            { text: '選択肢A', jump: 'sceneA3' },
+            { text: '選択肢B', jump: 'sceneB3' },
+            { text: '選択肢C', jump: 'sceneC3' },
+          ],
+        },
+      } as Event,
+    ]),
+    scene('sceneA3', [narration('Aへ到達')]),
+    scene('sceneB3', [narration('Bへ到達')]),
+    scene('sceneC3', [narration('Cへ到達')]),
+  ]
+
+  // 全選択肢が未設定フラグを condition に持ち、ロックされたまま解除できないシーン。
+  const CHOICE_SCENES_ALL_LOCKED: EventScene[] = [
+    scene('gateLocked', [
+      narration('本文'),
+      {
+        Choice: {
+          options: [
+            { text: 'ロックA', jump: 'sceneLockedA', condition: 'never_set_flag' },
+            { text: 'ロックB', jump: 'sceneLockedB', condition: 'never_set_flag' },
+          ],
+        },
+      } as Event,
+    ]),
+    scene('sceneLockedA', [narration('A')]),
+    scene('sceneLockedB', [narration('B')]),
+  ]
+
+  it('TC-N4(本命): 実スクリプト（Choiceイベントを含む）でchoiceOverlayをモックせず実際に表示し、handleKeyDown(ArrowDown)→handleKeyDown(Enter)で想定のjump先シーンへ実際に遷移し、waitingForChoiceがfalseにリセットされる', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setScenes(CHOICE_SCENES_2)
+    internals(r).advance() // narration → Choice に到達。実choiceOverlay.show()が呼ばれる。
+    expect(internals(r).waitingForChoice).toBe(true)
+
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown' })) // index0→1
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
+
+    expect(r.getCurrentSceneId()).toBe('sceneB2')
+    expect(internals(r).waitingForChoice).toBe(false)
+  })
+
+  it('TC-N5: TC-N4と同じE2Eで、ArrowDown等でフォーカスを非先頭の選択肢に動かしてからEnterした場合、フォーカス中の選択肢のjumpが遷移先になる', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setScenes(CHOICE_SCENES_3)
+    internals(r).advance()
+    expect(internals(r).waitingForChoice).toBe(true)
+
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown' })) // index0→1
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown' })) // index1→2
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
+
+    // フォーカスが動いていなければ sceneA3（先頭）へ遷移してしまうはずだが、
+    // 実際にフォーカスした index2（選択肢C）の jump が遷移先になる。
+    expect(r.getCurrentSceneId()).toBe('sceneC3')
+  })
+
+  it('TC-N6: 全選択肢ロックのChoiceイベントで、ArrowDown→Enterしても遷移が起きず、waitingForChoiceがtrueのまま維持される', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setScenes(CHOICE_SCENES_ALL_LOCKED)
+    internals(r).advance()
+    expect(internals(r).waitingForChoice).toBe(true)
+    const startSceneId = r.getCurrentSceneId()
+
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown' }))
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
+
+    expect(r.getCurrentSceneId()).toBe(startSceneId)
+    expect(internals(r).waitingForChoice).toBe(true)
+  })
+
+  it('TC-N7: titleScreenOverlay.visibleとwaitingForChoiceが同時にtrueになることは通常ないが、両ガードの優先順位（TitleScreen判定が先）が意図通りであることを確認する', () => {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.showTitleScreen(makeTitleScreenOpts())
+    expect(internals(r).titleScreenOverlay.visible).toBe(true)
+    // 通常は起こらない状態（両方 true）を強制的に作り、handleKeyDown 冒頭のガード順を検証する。
+    internals(r).waitingForChoice = true
+
+    const titleDelegateSpy = vi
+      .spyOn(internals(r).titleScreenOverlay, 'handleKeyDown')
+      .mockReturnValue(true)
+    const choiceDelegateSpy = vi.spyOn(internals(r).choiceOverlay, 'handleKeyDown')
+
+    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
+
+    expect(titleDelegateSpy).toHaveBeenCalledWith('Enter', false)
+    expect(choiceDelegateSpy).not.toHaveBeenCalled()
   })
 })
