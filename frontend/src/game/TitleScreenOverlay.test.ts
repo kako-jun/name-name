@@ -586,3 +586,137 @@ describe('TitleScreenOverlay ボタン幅クランプ', () => {
     expect(newGameBtn.pivot.x).toBe(BUTTON_MIN_WIDTH / 2)
   })
 })
+
+// #643 テスト観点整理 C群: showExitButton（header: hidden プロジェクトで「終了」ボタン自体を
+// buttonSpecs から除外する新オプション）。disabled 化ではなく非描画であることと、それに伴う
+// キーボードフォーカス循環（Tab/Shift+Tab）の対象集合が正しく縮むことを縛る。
+describe('TitleScreenOverlay.show() showExitButton (#643)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('TC-C1: showExitButton:false で「終了」ボタンが子要素として一切存在しない（disabledではなく非描画）', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+
+    overlay.show(makeOpts({ hasSaveData: true, showExitButton: false }))
+
+    // children: [0]=bg, [1]=titleText, [2..4]=はじめから/つづきから/設定 の3ボタンのみ（計5件）。
+    expect(overlay.children.length).toBe(5)
+    expect(focusInternals(overlay).buttonEntries.length).toBe(3)
+  })
+
+  it('TC-C2: showExitButton:undefined（未指定）で従来どおり4ボタン（後方互換の既定値true）', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+
+    overlay.show(makeOpts({ hasSaveData: true, showExitButton: undefined }))
+
+    expect(overlay.children.length).toBe(6)
+    expect(focusInternals(overlay).buttonEntries.length).toBe(4)
+  })
+
+  it('TC-C3: showExitButton:true を明示指定した場合も4ボタンになる', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+
+    overlay.show(makeOpts({ hasSaveData: true, showExitButton: true }))
+
+    expect(overlay.children.length).toBe(6)
+    expect(focusInternals(overlay).buttonEntries.length).toBe(4)
+  })
+
+  it('TC-C4: showExitButton:false かつ hasSaveData:false のとき、Tabで「はじめから」と「設定」の2つだけを循環する', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onNewGame = vi.fn()
+    const onOpenSettings = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: false, showExitButton: false, onNewGame, onOpenSettings }))
+
+    // 初期フォーカス=はじめから(0)。Tabで設定へ。
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Enter')
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+
+    // もう一度Tabで先頭（はじめから）へ循環する＝2つだけの循環。
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Enter')
+    expect(onNewGame).toHaveBeenCalledTimes(1)
+  })
+
+  it('TC-C5: showExitButton:false かつ hasSaveData:true のとき、Tabで「はじめから→つづきから→設定」の3つを循環し「終了」に到達しない', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onNewGame = vi.fn()
+    const onContinue = vi.fn()
+    const onOpenSettings = vi.fn()
+    const onBack = vi.fn()
+    overlay.show(
+      makeOpts({
+        hasSaveData: true,
+        showExitButton: false,
+        onNewGame,
+        onContinue,
+        onOpenSettings,
+        onBack,
+      })
+    )
+
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Enter')
+    expect(onContinue).toHaveBeenCalledTimes(1)
+
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Enter')
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+
+    // 3回目のTabで先頭（はじめから）へ循環する＝終了は存在しないため経由しない。
+    overlay.handleKeyDown('Tab')
+    overlay.handleKeyDown('Enter')
+    expect(onNewGame).toHaveBeenCalledTimes(1)
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it('TC-C6: showExitButton:false の状態でShift+Tab（逆循環）が末尾（設定）→先頭（はじめから）で正しく折り返す（終了を挟まない）', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onOpenSettings = vi.fn()
+    const onNewGame = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: true, showExitButton: false, onOpenSettings, onNewGame }))
+
+    // 初期フォーカス=はじめから(0) から Shift+Tab で末尾（設定。終了が存在しないため設定が末尾）へ。
+    overlay.handleKeyDown('Tab', true)
+    overlay.handleKeyDown('Enter')
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+
+    // さらに2回 Shift+Tab（つづきから→はじめから）で先頭に戻る。
+    overlay.handleKeyDown('Tab', true)
+    overlay.handleKeyDown('Tab', true)
+    overlay.handleKeyDown('Enter')
+    expect(onNewGame).toHaveBeenCalledTimes(1)
+  })
+
+  it('TC-C7: showExitButton:false の状態でEnterによる決定操作は、フォーカスが「設定」にあるとき onOpenSettings を呼ぶが onBack は一度も呼ばれない', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+    const onOpenSettings = vi.fn()
+    const onBack = vi.fn()
+    overlay.show(makeOpts({ hasSaveData: true, showExitButton: false, onOpenSettings, onBack }))
+
+    overlay.handleKeyDown('Tab') // はじめから→つづきから
+    overlay.handleKeyDown('Tab') // つづきから→設定
+    overlay.handleKeyDown('Enter')
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    expect(onBack).not.toHaveBeenCalled()
+  })
+})
+
+// #643 テスト観点整理 E群: 「新規開始」→「はじめから」ラベル変更。既存テストは children の
+// index 参照のみでラベル文字列自体を確認していなかったため、PixiJS Text 描画内容を直接確認する。
+describe('TitleScreenOverlay.show() ボタンラベル文言 (#643)', () => {
+  it('TC-E8: 1番目のボタン（はじめから）の PixiJS Text 描画内容が「はじめから」である', () => {
+    const overlay = new TitleScreenOverlay(800, 450)
+
+    overlay.show(makeOpts())
+
+    const entry0Container = focusInternals(overlay).buttonEntries[0].container as unknown as {
+      children: { text: string }[]
+    }
+    // container.children: [0]=背景Graphics, [1]=ラベルPixiText, [2]=focusRing。
+    expect(entry0Container.children[1].text).toBe('はじめから')
+  })
+})
