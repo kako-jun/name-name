@@ -3735,6 +3735,11 @@ export class NovelRenderer {
         y: im.y,
         assetBaseUrl: this.assetBaseUrl,
         instant: this.skipMode,
+        // 遷移モード・所要時間 (#628)。frontmatter event_image_transition には紐付けない
+        // 設計のためここでは im.transition をそのまま渡す（EventImage と違い defaultTransition
+        // フォールバックは適用しない、types.ts Image.transition の JSDoc 参照）。
+        transition: im.transition,
+        fadeMs: im.fade_ms,
       })
       return
     }

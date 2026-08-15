@@ -214,6 +214,22 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
         },
       }
     }
+    if ('Image' in event) {
+      // 単独の画像 (#274)。transition/fade_ms (#628) は EventImage (#583) と異なり
+      // defaultTransition（frontmatter event_image_transition, #599）にフォールバックしない
+      // — types.ts `Image.transition` の JSDoc で明示された設計上の割り切り。Rust 側は
+      // #[serde(default)] のため型上 optional だが、未指定タグは常に 'Fade' へ解決済みで
+      // 焼き込まれる想定。他フィールド（path/position/shape/size/id/x/y）は素通り（spread）で
+      // 十分機能しているため（既存のとおり）、ここでは新フィールドの undefined 防御だけ行う。
+      const im = event.Image
+      return {
+        Image: {
+          ...im,
+          transition: im.transition ?? 'Fade',
+          fade_ms: im.fade_ms ?? null,
+        },
+      }
+    }
     if ('EventImageExit' in event) {
       return {
         EventImageExit: {

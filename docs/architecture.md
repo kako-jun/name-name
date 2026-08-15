@@ -409,6 +409,18 @@ interface NovelGameState {
 
 **既知の非対称性（意図的な仕様統一はされていない）**: 表示中と同じパスへ `遷移=pixelate` で再指定した場合、GUI版は `show()` がパスの同一性を見ず「表示中の絵の有無」（`this.sprite` の有無）だけで判定するため、実際にコルセン→自己スワップ→リファインを再生する。一方 TUI版は `main.rs::event_loop` の `image_fade.current_target() != target` というパス一致ガード（連続する同一パスへの無駄な再フェードトリガーを防ぐための既存ガード、#583 以前から存在）に引っかかり、`transition_to()` 自体が呼ばれず何も起きない（no-op）。これは実装上の差異であり、原稿を書く側は「同じ画像に対する `遷移=pixelate` の連続指定」でGUI/TUIの見た目が食い違いうることに注意する必要がある。
 
+### 単独画像 (`[画像:]`) のピクセレート遷移 (#628, GUI版のみ)
+
+`[画像: path, 遷移=pixelate, フェード=N]`（`showImage`/`CharacterLayer.ts`）は、上記イベント絵 (#583) と同じ `pixelateTransition.ts` 純粋関数・同じ `pixi-filters` `PixelateFilter` を使ってコルセン→スワップ→リファインを再生する。**イベント絵との構造的な違いは、CharacterLayer が単一スロットではなく id ごとに複数の `[画像:]`/立ち絵を同時に扱う点**: ピクセレートの進行状態（`pixelateState`）とフィルタ（`pixelateFilter`）は `EventImageLayer` のようにクラス単一のフィールドではなく、`CharacterState`（`characters` Map の各エントリ）に id 毎で持たせる。駆動も `EventImageLayer` 専用の `setInterval`（`pixelateTimer`）ではなく、`CharacterLayer` が立ち絵の transform/fade/pose-nudge/文字演出/下線で既に使っている単一の共通 ticker（`ensureTicker`、`elapsedMs` 基準）に相乗りする（`updateImagePixelateFrame` が毎フレーム呼ばれる）。フィルタは `EventImageLayer` の `imageGroup`（wrapper container）に相当する共有コンテナが無いため、対象 sprite（`state.sprite`）に直接 `sprite.filters = [pixelateFilter]` で掛ける。
+
+**新規表示限定**: `showImage()` の同 id 再表示（`existing` 分岐、テクスチャ差し替えを想定しない既存の最小挙動）はピクセレート遷移の対象外— 位置更新のみで従来どおり。ピクセレートは新規表示（`characters` に未登録の id）のときだけ `startImagePixelateTransition()` に入る。呼び出し時点で sprite にはまだテクスチャが無い（`showImage` はテクスチャロード前に sprite を作る設計）ため、見た目は「何も無い状態からのピクセレート遷移」になる（イベント絵の #612 と同じ性質— コルセン中は何も見えず、スワップの瞬間に画像が最大粗さで現れ、以後リファインで細かく戻る）。
+
+**フェード既定値は `event_image_fade_ms` に紐付けない（設計上の意図的な割り切り）**: イベント絵の `遷移=` はプロジェクト単位デフォルト（frontmatter `event_image_transition`、#599）を受けるが、`[画像:]` の `遷移=` は Rust parser 側で明示的にこの解決をスキップし、未指定時は常に `Fade` に固定される（`parser/src/models.rs` の `Image.transition` 参照）。同じ理由で GUI 側の所要時間既定値も `event_image_fade_ms` を流用せず、`CharacterLayer` が単独画像の入場フェードに既に使っている `TITLE_CARD_FADE_MS`（700ms）をそのまま `resolveImagePixelateDurationMs()` の既定値にする。`フェード=` 明示指定時はその値、`フェード=0` 以下を明示指定した場合は遷移するものが無いため通常の Fade/即時経路にフォールバックする（イベント絵版 `show()` と同じ規約）。
+
+**退場・打ち切りの後始末**: `clearImagePixelateState()` が `pixelateState` を外し `PixelateFilter.size` を初期値 1 に戻し `sprite.filters` を外す、単一の後始末ヘルパー（イベント絵版は完了/打ち切りで `completePixelateTransition`/`cancelPixelateTransition` に分かれているが、CharacterLayer は専用タイマーを持たず ticker 駆動のため区別不要）。リファイン完了・ロード失敗・`remove()`/`clear()` による破棄（`destroyCharacterState`）のいずれの経路でもこのヘルパーを通し、フィルタの状態を持ち越さない。`hasActiveAnimation()` は `pixelateState` の有無も判定に含め、ピクセレート進行中は共通 ticker を止めない。
+
+**parser.ts の防御的正規化 (#628)**: `Event.Image` の `transition`/`fade_ms` は wasm 側 `#[serde(default)]` のため型上 optional だが、`normalizeEvents()`（`frontend/src/wasm/parser.ts`）に `Image` 分岐を追加し `transition: im.transition ?? 'Fade'` / `fade_ms: im.fade_ms ?? null` に倒す（他の `Image` フィールド position/shape/size/id/x/y は元から素通り [catch-all `return event`] で機能していたため変更していない）。
+
 ### 主要API
 
 | API                                                     | 説明                                                                                                                                             |
