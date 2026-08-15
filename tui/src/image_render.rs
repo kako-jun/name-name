@@ -1501,6 +1501,195 @@ mod tests {
         assert_eq!(grid.cells.len(), 2);
     }
 
+    // ---- #628: rgba_to_quadrant_grid_native_pixelated（スプラッシュロゴのピクセレート遷移）----
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_pixelated_divisor_one_matches_plain_native_grid() {
+        // rgba_to_quadrant_grid_pixelated_divisor_one_matches_plain_grid と対称の契約確認
+        // （doc comment に明記: coarse_divisor<=1 は rgba_to_quadrant_grid_native と完全一致し、
+        // 遷移完了時に見た目の不連続が起きないことの根拠）。4象限に色分けした画像で、単純平均に
+        // 潰れていないことまで確認する。
+        #[rustfmt::skip]
+        let pixels: Vec<u8> = vec![
+            255, 0, 0, 255,   255, 0, 0, 255,   0, 0, 255, 255,   0, 0, 255, 255,
+            255, 0, 0, 255,   255, 0, 0, 255,   0, 0, 255, 255,   0, 0, 255, 255,
+        ];
+        let plain = rgba_to_quadrant_grid_native(&pixels, 4, 2);
+        let pixelated_divisor_1 = rgba_to_quadrant_grid_native_pixelated(&pixels, 4, 2, 1);
+        let pixelated_divisor_0 = rgba_to_quadrant_grid_native_pixelated(&pixels, 4, 2, 0);
+        assert_eq!(
+            plain, pixelated_divisor_1,
+            "coarse_divisor=1はrgba_to_quadrant_grid_nativeと一致するはず"
+        );
+        assert_eq!(
+            plain, pixelated_divisor_0,
+            "coarse_divisor=0もmax(1)で1扱いになりrgba_to_quadrant_grid_nativeと一致するはず"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_pixelated_zero_sized_image_returns_blank_grid_without_panicking(
+    ) {
+        // coarse_divisor<=1の早期returnを経由しない(>1)分岐で、img_w/img_h=0がblank_grid(0,0)を
+        // 返すことを確認する（rgba_to_quadrant_grid_native_zero_sized_image_...と対称）。
+        let grid = rgba_to_quadrant_grid_native_pixelated(&[], 0, 0, 4);
+        assert_eq!(grid, blank_grid(0, 0));
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_pixelated_pixels_shorter_than_declared_size_returns_blank_grid_without_panicking(
+    ) {
+        // rgba_to_quadrant_grid_native_pixels_shorter_than_declared_size_...と対称
+        // （coarse_divisor>1分岐でも不正な長さのpixelsに対してblank_gridを返す）。
+        let pixels = vec![255u8; 4]; // 1画素分しかないのに 4x4 を主張する不正な入力
+        let grid = rgba_to_quadrant_grid_native_pixelated(&pixels, 4, 4, 4);
+        assert_eq!(grid.cols, 2);
+        assert_eq!(grid.rows, 2);
+        assert!(
+            grid.cells.iter().all(|c| *c == BLANK_CELL),
+            "不正な長さのpixelsに対してはblank_gridを返すべき（panicしない）"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_native_pixelated_tiny_image_with_huge_divisor_clamps_coarse_dimensions_without_panicking(
+    ) {
+        // 1x1画像に対してcoarse_divisor=100を渡すと、coarse_w/coarse_hは
+        // (1/100).max(1)=1にクランプされる。ゼロ除算・空グリッドでのpanicが起きないことを
+        // 確認する回帰ガード。
+        let pixels: Vec<u8> = vec![200, 100, 50, 255];
+        let grid = rgba_to_quadrant_grid_native_pixelated(&pixels, 1, 1, 100);
+        assert_eq!(grid.cols, 1);
+        assert_eq!(grid.rows, 1);
+        assert_eq!(grid.cells.len(), 1);
+    }
+
+    // ---- #628: rgba_to_quadrant_grid_window_pixelated（スプラッシュ巨大ロゴフォールバック用）----
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_divisor_one_matches_plain_window_grid() {
+        // rgba_to_quadrant_grid_pixelated_divisor_one_matches_plain_grid と対称の契約確認。
+        let pixels = vec![255, 0, 0, 255];
+        let plain = rgba_to_quadrant_grid_window(&pixels, 1, 1, 4, 4, 0, 4);
+        let pixelated_divisor_1 =
+            rgba_to_quadrant_grid_window_pixelated(&pixels, 1, 1, 4, 4, 0, 4, 1);
+        let pixelated_divisor_0 =
+            rgba_to_quadrant_grid_window_pixelated(&pixels, 1, 1, 4, 4, 0, 4, 0);
+        assert_eq!(
+            plain, pixelated_divisor_1,
+            "coarse_divisor=1はrgba_to_quadrant_grid_windowと一致するはず"
+        );
+        assert_eq!(
+            plain, pixelated_divisor_0,
+            "coarse_divisor=0もmax(1)で1扱いになりrgba_to_quadrant_grid_windowと一致するはず"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_zero_dimensions_returns_blank_grid_without_panicking()
+    {
+        // coarse_divisor>1（早期returnで rgba_to_quadrant_grid_window へ委譲しない）経路での
+        // cols/total_rows/img_w/img_h=0の4パターンをテーブル駆動で確認する。
+        let pixels = vec![255u8; 4 * 4 * 4];
+        struct Case {
+            name: &'static str,
+            cols: u16,
+            total_rows: u16,
+            img_w: u32,
+            img_h: u32,
+        }
+        let cases = [
+            Case {
+                name: "cols=0",
+                cols: 0,
+                total_rows: 10,
+                img_w: 4,
+                img_h: 4,
+            },
+            Case {
+                name: "total_rows=0",
+                cols: 4,
+                total_rows: 0,
+                img_w: 4,
+                img_h: 4,
+            },
+            Case {
+                name: "img_w=0",
+                cols: 4,
+                total_rows: 10,
+                img_w: 0,
+                img_h: 4,
+            },
+            Case {
+                name: "img_h=0",
+                cols: 4,
+                total_rows: 10,
+                img_w: 4,
+                img_h: 0,
+            },
+        ];
+        for case in cases {
+            let grid = rgba_to_quadrant_grid_window_pixelated(
+                &pixels,
+                case.img_w,
+                case.img_h,
+                case.cols,
+                case.total_rows,
+                0,
+                5,
+                4,
+            );
+            let expected_visible_rows = case.total_rows.saturating_sub(0).min(5);
+            assert_eq!(
+                grid,
+                blank_grid(case.cols, expected_visible_rows),
+                "case {} はblank_gridを返すはず",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_offset_at_or_beyond_total_rows_returns_blank_grid_without_panicking(
+    ) {
+        // offset>=total_rowsは`total_rows.saturating_sub(offset)`が0になりvisible_rows=0の
+        // 境界。coarse_divisor>1の経路でもpanicせずblank_gridを返すことを確認する。
+        let pixels = vec![255u8; 4 * 4 * 4];
+        let grid = rgba_to_quadrant_grid_window_pixelated(&pixels, 4, 4, 4, 10, 10, 5, 4);
+        assert_eq!(grid, blank_grid(4, 0), "offset==total_rowsはvisible_rows=0");
+
+        let grid_over = rgba_to_quadrant_grid_window_pixelated(&pixels, 4, 4, 4, 10, 15, 5, 4);
+        assert_eq!(
+            grid_over,
+            blank_grid(4, 0),
+            "offset>total_rowsもsaturating_subでvisible_rows=0"
+        );
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_requested_rows_exceeding_remaining_are_clamped() {
+        // rowsがtotal_rows.saturating_sub(offset)を超過指定された場合、visible_rowsは
+        // 残り行数へクランプされる（rgba_to_quadrant_grid_window_uses_only_requested_visible_rows
+        // と対称の契約確認、coarse_divisor>1の経路）。
+        let pixels = vec![255, 0, 0, 255];
+        let grid = rgba_to_quadrant_grid_window_pixelated(&pixels, 1, 1, 4, 10, 8, 100, 4);
+        assert_eq!(
+            grid.rows, 2,
+            "残り行数(10-8=2)へクランプされるはず(要求は100行)"
+        );
+        assert_eq!(grid.cells.len(), 4 * 2);
+    }
+
+    #[test]
+    fn rgba_to_quadrant_grid_window_pixelated_pixels_shorter_than_declared_size_returns_blank_grid_without_panicking(
+    ) {
+        // rgba_to_quadrant_grid_window_rejects_overflowing_source_size_without_panicking と
+        // 対称の契約確認（coarse_divisor>1の経路）。
+        let short = vec![255u8; 4]; // 1画素分しかないのに4x4を主張する不正な入力
+        let grid = rgba_to_quadrant_grid_window_pixelated(&short, 4, 4, 4, 10, 0, 5, 4);
+        assert_eq!(grid, blank_grid(4, 5));
+    }
+
     #[test]
     fn downsample_box_uniform_image_averages_to_same_color() {
         // 4x4 の単色画像を 2x2 にダウンサンプルすると、全セルが同じ色になる。
