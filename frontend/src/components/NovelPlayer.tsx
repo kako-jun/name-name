@@ -92,7 +92,7 @@ interface NovelPlayerProps {
    * `initialSceneId` が属する script ファイル自身の sceneId 一覧を呼び出し側
    * （PlayerScreen）が渡す。渡された場合、その集合の外への choice ジャンプ
    * （hub や他ファイルへの「別の問いを聞く」等）は通常のシーン遷移にならず、
-   * 終劇（"to be continued..." 表示）になる（NovelRenderer.jumpToScene 参照）。
+   * 終劇（"to be continued..." 表示、PixiJS `endingOverlay` 側 #630）になる（NovelRenderer.jumpToScene 参照）。
    * null/undefined で制限なし（通常のハブ経由フロー、後方互換）。
    */
   confinedSceneIds?: string[] | null
@@ -150,8 +150,8 @@ interface NovelPlayerProps {
   /**
    * intermission.md 専用シーン (#404)。`assets/scripts/intermission.md` を取得・parse できた場合に
    * PlayerScreen が渡す flatten 済み Event 列。null/undefined/空配列は「未設定」＝endStory() は
-   * 従来どおりフェードのみで終わり、下記 DOM 側 "to be continued..." 表示（フェーズ1）にフォールバック
-   * する（完全後方互換・オプトイン）。
+   * 従来どおりフェードのみで終わり、PixiJS `endingOverlay` 側の "to be continued..." 表示（#630）に
+   * フォールバックする（完全後方互換・オプトイン）。
    */
   intermissionEvents?: Event[] | null
   /** intermission.md 自身の frontmatter `background_fade_ms:` の値 (#404)。物語本編の

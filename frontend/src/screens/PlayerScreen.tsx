@@ -673,8 +673,9 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
 
   // intermission.md 専用シーン (#404) の取得・parse。title.png（TitleOverlay）と同じ assets/raw
   // 経路・同じタイミング（assetBaseUrl 確定後）で試みる。配置していないプロジェクトは 404 を
-  // 受けて黙ってスキップする（フェーズ1の DOM "to be continued..." 表示にフォールバック。
-  // 完全後方互換・オプトイン。新規追加の worker 側 mimeMap 'md' エントリで text として取得できる）。
+  // 受けて黙ってスキップする（PixiJS `endingOverlay` の "to be continued..." 表示 (#630) に
+  // フォールバック。完全後方互換・オプトイン。新規追加の worker 側 mimeMap 'md' エントリで
+  // text として取得できる）。
   useEffect(() => {
     let cancelled = false
     setIntermissionScene(null)
@@ -694,10 +695,10 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           eventImageFadeMs: parsed.event_image_fade_ms ?? null,
         })
       } catch (err) {
-        // ネットワークエラー・parse 失敗のいずれも致命ではない。フェーズ1の DOM 表示に
+        // ネットワークエラー・parse 失敗のいずれも致命ではない。PixiJS `endingOverlay` の表示に
         // フォールバックするだけなので、warn に留めてゲーム自体は続行する。
         console.warn(
-          'PlayerScreen: intermission.md の取得/解析に失敗しました（"to be continued..." の DOM 表示にフォールバック）:',
+          'PlayerScreen: intermission.md の取得/解析に失敗しました（"to be continued..." の PixiJS 表示にフォールバック）:',
           err
         )
       }

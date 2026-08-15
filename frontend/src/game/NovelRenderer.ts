@@ -335,7 +335,9 @@ export class NovelRenderer {
    * そのまま反映する（フェード演出は再生しない＝宣言的な瞬時反映）。
    */
   private storyEnded = false
-  /** storyEnded 変化を DOM 側（NovelPlayer）に伝える hook (#386)。"to be continued..." 表示用。 */
+  /** storyEnded 変化を DOM 側（NovelPlayer）に伝える hook (#386)。postMessage 通知・React state
+   *  同期（DOM ボタンの disabled 制御・デバッグ HUD 等）用。"to be continued..." 表示自体は
+   *  この callback とは独立に `endingOverlay`（PixiJS 内部描画、#630）が担う。 */
   private onStoryEndedChangeCallback: ((ended: boolean) => void) | null = null
   private assetBaseUrl: string = ''
   private textureCache: Map<string, Texture> = new Map()
@@ -486,7 +488,8 @@ export class NovelRenderer {
   /**
    * intermission.md 専用シーン (#404)。`assets/scripts/intermission.md` から取得・parse された
    * イベント列。null（未設定/取得失敗/空）なら endStory() は従来どおりフェードのみで終わり、
-   * NovelPlayer 側の DOM "to be continued..." 表示にフォールバックする（完全オプトイン）。
+   * `endingOverlay`（PixiJS 内部描画、#630）の "to be continued..." 表示にフォールバックする
+   * （完全オプトイン）。
    * `setIntermissionScene` が設定する。GameState には持たない（storyEnded 同様、演出の中間状態
    * ではなく一度きりの見た目でしかないため、セーブ/シークの対象外 — doctrine 規律3）。
    */
@@ -2243,8 +2246,8 @@ export class NovelRenderer {
    *
    * `events` は `assets/scripts/intermission.md` を parseMarkdown した EventDocument から
    * flatten した Event 列（呼び出し側 = PlayerScreen の責務）。null/undefined/空配列は
-   * 「未設定」として扱い、endStory() は従来どおりフェードのみで終わる（NovelPlayer の DOM
-   * "to be continued..." 表示にフォールバック。完全後方互換・オプトイン）。
+   * 「未設定」として扱い、endStory() は従来どおりフェードのみで終わる（`endingOverlay`
+   * （PixiJS 内部描画、#630）の "to be continued..." 表示にフォールバック。完全後方互換・オプトイン）。
    *
    * `options.backgroundFadeMs`/`characterFadeMs`/`eventImageFadeMs` は intermission.md 自身の frontmatter
    * `background_fade_ms:`/`character_fade_ms:`/`event_image_fade_ms:` の値。物語本編の同名 per-game 設定
@@ -2285,8 +2288,12 @@ export class NovelRenderer {
 
   /**
    * intermission.md 専用シーンが設定されているか (#404)。
-   * NovelPlayer が DOM 側 "to be continued..." 表示（フェーズ1）を出すかどうかの判定に使う
-   * （intermission シーン設定時は PixiJS 側のタブローに一本化し、二重表示を避ける）。
+   *
+   * #630 以降、この判定（`storyEnded && !hasIntermissionScene()`）は `syncEndingOverlayVisibility()`
+   * が `this.intermissionEvents` を直接参照する形に内部化されており、このメソッド自体は
+   * `NovelRenderer.intermission.test.ts` の同値分割テスト以外からは呼ばれていない。外部から
+   * `intermissionEvents` の設定有無を検査できる公開 API として残している（プロダクションコードの
+   * 呼び出し元は無い）。
    */
   hasIntermissionScene(): boolean {
     return this.intermissionEvents !== null
@@ -2623,8 +2630,10 @@ export class NovelRenderer {
     this.onSeekActiveChange = cb
   }
 
-  /** 終劇状態の変化コールバックを登録する (#386)。NovelPlayer が "to be continued..." の
-   *  DOM 表示に繋ぐ（setOnAutoModeChange 等と同じ配線パターン）。 */
+  /** 終劇状態の変化コールバックを登録する (#386)。NovelPlayer が postMessage 通知・React state
+   *  同期（DOM ボタンの disabled 制御・デバッグ HUD 等）に繋ぐ（setOnAutoModeChange 等と同じ
+   *  配線パターン）。"to be continued..." 表示自体は `endingOverlay`（PixiJS 内部描画、#630）が
+   *  この callback とは独立に担う。 */
   setOnStoryEndedChange(cb: ((ended: boolean) => void) | null): void {
     this.onStoryEndedChangeCallback = cb
   }
@@ -5080,8 +5089,11 @@ export class NovelRenderer {
     // 持つが、新規インスタンスの初期値 false のままだと「true で復元＝変化あり」と誤判定され、
     // fluid 再マウントのたびに終劇 postMessage（NovelPlayer 側）が再送されてしまう。ここで復元先の
     // 値を先に直接セットしておき、applyState の比較を「変化なし」にして二重発火を防ぐ。
-    // ("to be continued..." 表示自体は NovelPlayer 側の React state が再マウント effect を跨いで
-    // 保持されるため、ここでコールバックを発火させなくても表示は正しく維持される。)
+    // ("to be continued..." 表示自体は callback の発火有無とは独立に、applyState() 内の
+    // syncEndingOverlayVisibility() が毎回呼ばれることで同期される (#630)。新規 renderer インスタンスの
+    // `endingOverlay` は必ず非表示から始まる——旧 DOM 版のように React state が再マウントを跨いで
+    // 保持される仕組みは無い——ため、この明示的な同期が無いと表示が消える regression になる。
+    // 詳細は applyState() 内 syncEndingOverlayVisibility() 呼び出し箇所のコメント参照。)
     this.storyEnded = snapshot.storyEnded
 
     this.restoreToScene(scene, snapshot)
