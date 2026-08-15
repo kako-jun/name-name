@@ -263,6 +263,14 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// `image_fade` のスナップショット計算自体は暗転中も継続する（クロスフェードの内部時刻を
 /// 止めない）が、その結果は使わず捨てる — 暗転解除後にイベント絵が変な位置から再開しない
 /// ようにするため。
+///
+/// `image_only_item`（#628、`Playback::current_item_is_image_only()` をそのまま渡す）が真、
+/// かつ `config.fullscreen_image` が真、かつ `choice.is_none()`（選択肢表示中は対象外）のとき、
+/// [`split_columns`] による画像/テキストの左右分割をやめ、`root[0]` 全体をイベント絵に使う
+/// 可逆トグル表示（GUI版 `fullscreen_image` frontmatter、`docs/spec/markdown-v0.1.md` 参照）。
+/// 次に会話テキスト/選択肢のある item に進めば（＝`image_only_item` が `false` に戻れば）
+/// 自動的に通常の左右分割表示へ戻る——状態を持たず毎フレーム `image_only_item` から判定する
+/// だけなので、明示的な「元に戻す」処理は不要。
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -290,6 +298,7 @@ pub fn draw(
     image_fade: Option<&ImageFadeState>,
     image_cache: &mut ImageCache,
     blackout: bool,
+    image_only_item: bool,
 ) {
     let actual = frame.area();
     if !fits_required_size(actual) {
@@ -304,43 +313,76 @@ pub fn draw(
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(canvas);
 
-    let (placeholder_area, _gap_area, text_area) = split_columns(root[0]);
+    let fullscreen_event_image = config.fullscreen_image && image_only_item && choice.is_none();
 
-    let rendered_image = image_fade.and_then(|state| {
-        state.snapshot(
+    if fullscreen_event_image {
+        draw_event_image_area(
+            frame,
+            root[0],
+            config,
+            image_fade,
             image_cache,
-            config,
-            placeholder_area.width,
-            placeholder_area.height,
             now,
-        )
-    });
-    if blackout {
-        draw_blackout(frame, placeholder_area);
+            blackout,
+        );
     } else {
-        draw_placeholder(frame, placeholder_area, config, rendered_image.as_ref());
-    }
-    match choice {
-        Some((options, cursor, columns)) => draw_choice_list(
+        let (placeholder_area, _gap_area, text_area) = split_columns(root[0]);
+        draw_event_image_area(
             frame,
-            text_area,
-            options,
-            cursor,
-            columns,
-            choice_locked,
-            choice_cleared,
-        ),
-        None => draw_text_windows(
-            frame,
-            text_area,
+            placeholder_area,
             config,
-            line,
-            reveal,
-            indicator_started_at,
+            image_fade,
+            image_cache,
             now,
-        ),
+            blackout,
+        );
+        match choice {
+            Some((options, cursor, columns)) => draw_choice_list(
+                frame,
+                text_area,
+                options,
+                cursor,
+                columns,
+                choice_locked,
+                choice_cleared,
+            ),
+            None => draw_text_windows(
+                frame,
+                text_area,
+                config,
+                line,
+                reveal,
+                indicator_started_at,
+                now,
+            ),
+        }
     }
     draw_status_line(frame, root[1], config, position, total, is_at_end);
+}
+
+/// `area` 全体にイベント絵（`image_fade` のクロスフェード/ピクセレート状態）または
+/// プレースホルダを描画する共通ヘルパー（#628）。`blackout` が真なら黒一色を優先する。
+/// 通常プレイの左カラム（[`draw`] の非フルスクリーン分岐）と `fullscreen_image` モード
+/// （[`draw`] の全画面分岐、選択肢/会話テキストを持たない画像コマ item専用）の両方から
+/// 呼ばれる——レイアウト計算（呼び出し側が `area` を決める）と「そのエリアに何を描くか」の
+/// 責務を分離する（無理に1つの`draw`本体へ両方のロジックを畳み込まない、Issue #628の実装
+/// 判断）。
+fn draw_event_image_area(
+    frame: &mut Frame,
+    area: Rect,
+    config: &Config,
+    image_fade: Option<&ImageFadeState>,
+    image_cache: &mut ImageCache,
+    now: Instant,
+    blackout: bool,
+) {
+    let rendered_image = image_fade
+        .and_then(|state| state.snapshot(image_cache, config, area.width, area.height, now));
+    if blackout {
+        draw_blackout(frame, area);
+    } else {
+        draw_placeholder(frame, area, config, rendered_image.as_ref());
+    }
 }
 
 /// 選択肢のカーソル行に付ける記号。`reveal::PAGE_INDICATOR_SYMBOL` と同じ方針
@@ -614,11 +656,30 @@ fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
 /// `scroll_offset` はフルキャンバス画像表示モード（フォールバック時）でのみ意味を持つ
 /// （呼び出し側 `main.rs` の `show_splash` が `Action::MoveUp`/`Action::MoveDown` から配線する）。
 /// ネイティブ表示モード・テキストモードでは無視される。
+///
+/// `image_fade`/`now`（#628）はロゴのピクセレート遷移（黒ベタ→コルセン→スワップ→リファイン）
+/// 状態。`main.rs::show_splash` が `ImageFadeState::settled(None, ..)` で開始し、ロゴパスが
+/// 解決できた最初のフレームで `transition_to(Some(logo), .., EventImageTransition::Pixelate,
+/// duration, now)` を呼んで遷移を開始する（通常プレイの `draw` が `image_fade` を受け取る
+/// パターンをそのまま踏襲）。`None`（呼び出し元がピクセレート演出を使わないテスト等）なら
+/// 常に通常表示（[`draw_splash_logo_native`]/[`draw_fullscreen_image`] 内の
+/// `splash_pixelate_phase` が [`SplashPixelatePhase::Settled`] を返す）。
+///
+/// 通常プレイの `image_fade::ImageFadeState::snapshot`（`resolve_grid` 経由でパス解決から
+/// やり直す cover-fit 前提の経路）はここでは使わない — スプラッシュのネイティブ/
+/// contain-fit+スクロール表示は別の解像度計算（[`rgba_to_quadrant_grid_native`]/
+/// [`rgba_to_quadrant_grid_window`]）を使うため、`image_fade` からは進行度・遷移モードだけを
+/// 借り（[`ImageFadeState::progress`]/[`ImageFadeState::transition_mode`]）、実際のグリッド化は
+/// [`splash_pixelate_phase`] が返す分母を使い分けた専用のピクセレート版関数
+/// （[`image_render::rgba_to_quadrant_grid_native_pixelated`]/
+/// [`image_render::rgba_to_quadrant_grid_window_pixelated`]）で行う。
 pub fn draw_splash(
     frame: &mut Frame,
     config: &Config,
     image_cache: &mut ImageCache,
     scroll_offset: u16,
+    image_fade: Option<&ImageFadeState>,
+    now: Instant,
 ) {
     if let Some(path) = config.resolve_splash_logo_path() {
         if let Some(decoded) = image_cache.get_or_load(&path) {
@@ -630,14 +691,56 @@ pub fn draw_splash(
                 }
                 let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
                 let canvas = compute_centered_canvas(actual, required);
-                draw_splash_logo_native(frame, canvas, &decoded);
+                draw_splash_logo_native(frame, canvas, &decoded, image_fade, now);
             } else {
-                draw_fullscreen_image(frame, &decoded, scroll_offset);
+                draw_fullscreen_image(frame, &decoded, scroll_offset, image_fade, now);
             }
             return;
         }
     }
     draw_splash_text(frame, config);
+}
+
+/// スプラッシュロゴのピクセレート遷移(#628)で「今このフレームで描くべき状態」を表す。
+/// [`splash_pixelate_phase`] が `image_fade`/`now` から導出する。
+enum SplashPixelatePhase {
+    /// コルセン中。スプラッシュロゴには「直前の画像」が無い（`from`は常に`None`扱い）ため、
+    /// `image_fade::ImageFadeState::pixelate_snapshot` の `from=None` ケースと同じく
+    /// 黒ベタ相当（[`image_render::blank_grid`]）を描く（no-op のコルセン）。
+    Coarsening,
+    /// リファイン中。`divisor` は [`crate::pixelate_transition::compute_divisor`] が返す
+    /// 分母（1に向かって収束する）。
+    Refining { divisor: u32 },
+    /// 遷移なし（`image_fade` が `None`／`Pixelate` 以外／既に完了）。通常表示。
+    Settled,
+}
+
+/// `image_fade`（#628）から [`SplashPixelatePhase`] を導出する純粋関数。
+fn splash_pixelate_phase(image_fade: Option<&ImageFadeState>, now: Instant) -> SplashPixelatePhase {
+    let Some(state) = image_fade else {
+        return SplashPixelatePhase::Settled;
+    };
+    if state.transition_mode() != name_name_parser::models::EventImageTransition::Pixelate {
+        return SplashPixelatePhase::Settled;
+    }
+    let t = state.progress(now);
+    if t >= 1.0 {
+        return SplashPixelatePhase::Settled;
+    }
+    if crate::pixelate_transition::is_coarsen_phase(
+        t,
+        crate::pixelate_transition::PIXELATE_TRANSITION_SWAP_RATIO,
+    ) {
+        SplashPixelatePhase::Coarsening
+    } else {
+        SplashPixelatePhase::Refining {
+            divisor: crate::pixelate_transition::compute_divisor(
+                t,
+                crate::pixelate_transition::PIXELATE_TRANSITION_SWAP_RATIO,
+                crate::pixelate_transition::PIXELATE_TRANSITION_MAX_DIVISOR,
+            ),
+        }
+    }
 }
 
 /// スプラッシュロゴをネイティブ解像度（補間・拡大縮小なし）で固定キャンバス内に上下左右
@@ -664,7 +767,13 @@ fn logo_fits_natively(image_w: u32, image_h: u32) -> bool {
 /// 責務自体は完全に汎用的なため、ネストして再利用できる。最下段には
 /// [`draw_fullscreen_image`]・通常プレイ（[`draw`]）と同じ [`draw_operation_footer`] を表示し、
 /// 起動直後から見た目の一貫性を保つ（Issue #587）。
-fn draw_splash_logo_native(frame: &mut Frame, canvas: Rect, image: &DecodedImage) {
+fn draw_splash_logo_native(
+    frame: &mut Frame,
+    canvas: Rect,
+    image: &DecodedImage,
+    image_fade: Option<&ImageFadeState>,
+    now: Instant,
+) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -672,7 +781,29 @@ fn draw_splash_logo_native(frame: &mut Frame, canvas: Rect, image: &DecodedImage
     let image_area = rows[0];
     let hint_area = rows[1];
 
-    let grid = rgba_to_quadrant_grid_native(&image.rgba, image.width, image.height);
+    // #628: ピクセレート遷移中はコルセン中=黒ベタ、リファイン中=段階的に細かく戻る
+    // ネイティブ解像度グリッドを描く。遷移が無い/完了していれば従来どおり
+    // `rgba_to_quadrant_grid_native` の完成形（このネイティブ表示は `crop`/`downsample_box` を
+    // 経由しないため、`rgba_to_quadrant_grid_native_pixelated` の `divisor<=1` 早期returnと
+    // 完全に一致する — 遷移完了直後の切り替わりに見た目の不連続は無い）。
+    let grid = match splash_pixelate_phase(image_fade, now) {
+        SplashPixelatePhase::Coarsening => {
+            let native_cols = image.width.div_ceil(2).min(u32::from(u16::MAX)) as u16;
+            let native_rows = image.height.div_ceil(2).min(u32::from(u16::MAX)) as u16;
+            crate::image_render::blank_grid(native_cols, native_rows)
+        }
+        SplashPixelatePhase::Refining { divisor } => {
+            crate::image_render::rgba_to_quadrant_grid_native_pixelated(
+                &image.rgba,
+                image.width,
+                image.height,
+                divisor,
+            )
+        }
+        SplashPixelatePhase::Settled => {
+            rgba_to_quadrant_grid_native(&image.rgba, image.width, image.height)
+        }
+    };
     let logo_rect = Rect::new(0, 0, grid.cols, grid.rows);
     let placed = compute_centered_canvas(image_area, logo_rect);
     draw_image_grid(frame, placed, &grid);
@@ -716,7 +847,13 @@ pub(crate) fn splash_max_scroll_offset(config: &Config, image_cache: &mut ImageC
 /// フォールバックする — 固定サイズのキャンバス幅（[`REQUIRED_TOTAL_WIDTH`]）を前提に
 /// contain 計算するため、通常のゲームUI描画（[`draw`]）と同じ最小サイズ制約を課す。
 /// GUI版 dual-window と同じく罫線・タイトルは描かない。
-fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset: u16) {
+fn draw_fullscreen_image(
+    frame: &mut Frame,
+    image: &DecodedImage,
+    scroll_offset: u16,
+    image_fade: Option<&ImageFadeState>,
+    now: Instant,
+) {
     let actual = frame.area();
     if !fits_required_size(actual) {
         draw_too_small_message(frame, actual);
@@ -745,15 +882,34 @@ fn draw_fullscreen_image(frame: &mut Frame, image: &DecodedImage, scroll_offset:
 
     let offset = clamp_scroll_offset(scroll_offset, fitted_rows, image_area.height);
     let visible_rows = image_area.height.min(fitted_rows);
-    let visible = rgba_to_quadrant_grid_window(
-        &image.rgba,
-        image.width,
-        image.height,
-        fitted_cols,
-        fitted_rows,
-        offset,
-        visible_rows,
-    );
+    // #628: ピクセレート遷移中はコルセン中=黒ベタ、リファイン中=段階的に細かく戻るcontain-fit
+    // グリッドを描く。遷移が無い/完了していれば従来どおり `rgba_to_quadrant_grid_window`。
+    let visible = match splash_pixelate_phase(image_fade, now) {
+        SplashPixelatePhase::Coarsening => {
+            crate::image_render::blank_grid(fitted_cols, visible_rows)
+        }
+        SplashPixelatePhase::Refining { divisor } => {
+            crate::image_render::rgba_to_quadrant_grid_window_pixelated(
+                &image.rgba,
+                image.width,
+                image.height,
+                fitted_cols,
+                fitted_rows,
+                offset,
+                visible_rows,
+                divisor,
+            )
+        }
+        SplashPixelatePhase::Settled => rgba_to_quadrant_grid_window(
+            &image.rgba,
+            image.width,
+            image.height,
+            fitted_cols,
+            fitted_rows,
+            offset,
+            visible_rows,
+        ),
+    };
     let draw_area = Rect {
         x: image_area.x,
         y: image_area.y,
@@ -1500,6 +1656,7 @@ mod tests {
                     Some(&image_fade),
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -1560,10 +1717,175 @@ mod tests {
                         Some(&image_fade),
                         &mut image_cache,
                         false,
+                        false,
                     )
                 })
                 .unwrap();
         }
+    }
+
+    // ---- #628: fullscreen_image（テキストを持たない画像コマitemの全画面表示、可逆トグル） ----
+
+    #[test]
+    fn draw_fullscreen_image_mode_hides_text_window_and_fills_full_canvas_width_with_image() {
+        // config.fullscreen_image=true かつ image_only_item=true かつ choice=None のとき、
+        // split_columns による左右分割をやめ root[0]全体をイベント絵に使う（GUI版
+        // `fullscreen_image` frontmatterの可逆トグルと同じ設計）。通常なら text_area の
+        // 先頭列になるはずの位置まで画像色が埋まっていること、かつ会話テキストが一切
+        // 描画されないことを確認する。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((255, 0, 0), 4, 4), 4, 4);
+        let (mut config, relative) = config_and_relative_path_for(&fixture_path);
+        config.fullscreen_image = true;
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
+        let line = dialog_line(Some("A"), vec!["この本文は表示されないはず"]);
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    &[],
+                    &[],
+                    1,
+                    1,
+                    false,
+                    None,
+                    now,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                    false,
+                    true, // image_only_item
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // 通常の左右分割なら text_area 側になるはずの右端セルまで画像色で埋まっているはず。
+        assert_eq!(
+            buffer.cell((CANVAS_W - 1, 0)).unwrap().bg,
+            Color::Rgb(255, 0, 0),
+            "fullscreen_imageモードは右端(本来のtext_area側)までイベント絵が埋めるはず"
+        );
+        let text = buffer_text(buffer);
+        assert!(
+            !text.contains("この本文は表示されないはず"),
+            "fullscreen_imageモードでは会話テキストが隠れるはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_mode_with_choice_present_falls_back_to_split_layout() {
+        // 選択肢表示中（choice.is_some()）は、たとえ config.fullscreen_image=true かつ
+        // image_only_item=true でも通常の左右分割へ戻る（Issue本文の「選択肢を完全に禁止
+        // するわけではない」設計、`draw`のdoc comment参照）。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((255, 0, 0), 4, 4), 4, 4);
+        let (mut config, relative) = config_and_relative_path_for(&fixture_path);
+        config.fullscreen_image = true;
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
+        let options = vec![name_name_parser::models::ChoiceOption {
+            text: "選択肢テキスト".to_string(),
+            jump: "1-1".to_string(),
+            condition: None,
+            cleared: None,
+        }];
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    Some((&options, 0, None)),
+                    &[false],
+                    &[false],
+                    1,
+                    1,
+                    false,
+                    None,
+                    now,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                    false,
+                    true, // image_only_item（本来は選択肢と同時にSomeにはならないが、防御的に確認）
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        assert!(
+            text.contains("選択肢テキスト"),
+            "選択肢表示中は通常の左右分割へ戻り選択肢が見えるはず, buffer was: {text}"
+        );
+        assert_ne!(
+            buffer.cell((CANVAS_W - 1, 0)).unwrap().bg,
+            Color::Rgb(255, 0, 0),
+            "選択肢表示中は右端まで画像で埋まらない(通常のtext_areaが復帰する)はず"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_config_disabled_ignores_image_only_item_and_uses_split_layout() {
+        // config.fullscreen_image=false（既定）なら、image_only_item=trueでも従来どおりの
+        // 左右分割のまま——既定値で非破壊であることの固定。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((255, 0, 0), 4, 4), 4, 4);
+        let (config, relative) = config_and_relative_path_for(&fixture_path);
+        assert!(!config.fullscreen_image, "前提: 既定はfalse");
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
+        let line = dialog_line(Some("A"), vec!["本文"]);
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    &[],
+                    &[],
+                    1,
+                    1,
+                    false,
+                    Some(&reveal::RevealState::Done(reveal::skip_lines(
+                        &config, &line,
+                    ))),
+                    now,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                    false,
+                    true, // image_only_item=true でも config が無効なので効果なし
+                )
+            })
+            .unwrap();
+
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("本文"),
+            "fullscreen_image=falseなら通常どおり会話テキストが見えるはず, buffer was: {text}"
+        );
     }
 
     #[test]
@@ -1597,6 +1919,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -1654,6 +1977,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     blackout,
+                    false,
                 )
             })
             .unwrap();
@@ -1740,6 +2064,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     true,
+                    false,
                 )
             })
             .unwrap();
@@ -1795,6 +2120,7 @@ mod tests {
                     Some(&image_fade),
                     &mut image_cache,
                     true,
+                    false,
                 )
             })
             .unwrap();
@@ -1844,6 +2170,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     true,
+                    false,
                 )
             })
             .unwrap();
@@ -1870,6 +2197,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -1935,6 +2263,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     true,
+                    false,
                 )
             })
             .unwrap();
@@ -1982,6 +2311,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     true,
+                    false,
                 )
             })
             .unwrap();
@@ -2028,6 +2358,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -2065,6 +2396,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -2099,6 +2431,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -2135,6 +2468,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -2169,6 +2503,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -2214,6 +2549,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -2257,6 +2593,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -2309,6 +2646,7 @@ mod tests {
                     None,
                     &mut typing_image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -2348,6 +2686,7 @@ mod tests {
                     now,
                     None,
                     &mut done_image_cache,
+                    false,
                     false,
                 )
             })
@@ -2414,6 +2753,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -2460,6 +2800,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -2533,6 +2874,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -2550,7 +2892,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("田田田"), "buffer was: {text}");
@@ -2569,7 +2911,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Enter"), "buffer was: {text}");
@@ -2590,7 +2932,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("テストゲーム"), "buffer was: {text}");
@@ -2604,7 +2946,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
     }
 
@@ -2621,7 +2963,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("田"), "buffer was: {text}");
@@ -2646,7 +2988,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Enter"), "buffer was: {text}");
@@ -2671,7 +3013,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Enter"), "buffer was: {text}");
@@ -2689,7 +3031,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("AB田C"), "buffer was: {text}");
@@ -2713,7 +3055,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("端末を広げてください"), "buffer was: {text}");
@@ -2744,7 +3086,7 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Enter/Space 次へ"), "buffer was: {text}");
@@ -2767,7 +3109,7 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -2785,7 +3127,7 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, u16::MAX))
+            .draw(|f| draw_fullscreen_image(f, &image, u16::MAX, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -2811,7 +3153,7 @@ mod tests {
         let mut terminal =
             Terminal::new(TestBackend::new(moderately_narrow_width, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("端末を広げてください"), "buffer was: {text}");
@@ -2828,7 +3170,7 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
             .unwrap();
     }
 
@@ -2844,7 +3186,7 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -2866,7 +3208,7 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -2886,7 +3228,7 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0))
+            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let image_color = Color::Rgb(color.0, color.1, color.2);
@@ -2942,7 +3284,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -2965,7 +3307,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -2991,7 +3333,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -3052,7 +3394,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let top_left_bg = buffer.cell((0, 0)).unwrap().bg;
@@ -3083,7 +3425,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let image_color = Color::Rgb(color.0, color.1, color.2);
@@ -3101,6 +3443,215 @@ mod tests {
         assert!(
             text.contains("Enter/Space 次へ"),
             "フォールバック経路でも共通操作フッターは表示されるはず, buffer was: {text}"
+        );
+    }
+
+    // ---- #628: スプラッシュロゴのピクセレート遷移 ----
+
+    /// スプラッシュロゴ用のピクセレート遷移中 `ImageFadeState` を組み立てる。`snapshot()`
+    /// （パス解決ベースのcover-fit経路）は使わないため `next` の値自体は実際には参照されない
+    /// （`ui::splash_pixelate_phase` は `progress()`/`transition_mode()` だけを見る、
+    /// `draw_splash` のdoc comment参照）——`transition_to`のシグネチャを満たすためのダミー値。
+    fn mid_flight_pixelate_fade(
+        started_at: std::time::Instant,
+        duration_ms: u64,
+    ) -> ImageFadeState {
+        ImageFadeState::settled(None, name_name_parser::models::AmbientEffects::default())
+            .transition_to(
+                Some("unused.webp".to_string()),
+                name_name_parser::models::AmbientEffects::default(),
+                name_name_parser::models::EventImageTransition::Pixelate,
+                std::time::Duration::from_millis(duration_ms),
+                started_at,
+            )
+    }
+
+    #[test]
+    fn draw_splash_fullscreen_mode_pixelate_coarsen_phase_shows_black_not_image_color() {
+        // #628: コルセン中(t<0.5)はスプラッシュにも「直前の画像」が無い(from=None扱い)ため
+        // 黒ベタになる。有効なロゴ画像が設定されていてもロゴ色が出てはいけない
+        // （`image_fade::ImageFadeState::pixelate_snapshot`のfrom=Noneケースと同じ発想）。
+        let oversized_h = (u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2 + 10) * 2;
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path = crate::image_render::write_test_webp_fixture(
+            &solid_rgba(color, 4, oversized_h),
+            4,
+            oversized_h,
+        );
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        let started = Instant::now();
+        let fade = mid_flight_pixelate_fade(started, 1000);
+        terminal
+            .draw(|f| {
+                draw_splash(
+                    f,
+                    &config,
+                    &mut image_cache,
+                    0,
+                    Some(&fade),
+                    started + std::time::Duration::from_millis(100),
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer.cell((0, 0)).unwrap().bg,
+            Color::Rgb(0, 0, 0),
+            "コルセン中(t=0.1)は黒ベタのはず"
+        );
+    }
+
+    #[test]
+    fn draw_splash_fullscreen_mode_pixelate_refine_phase_converges_to_image_color() {
+        // #628: リファイン終盤(t≈0.999)はdivisor=1に収束し、通常のcontain-fit表示
+        // （`draw_splash_oversized_logo_image_falls_back_to_fullscreen_scaled_mode`）と
+        // 一致する画像色になる。
+        let oversized_h = (u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2 + 10) * 2;
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path = crate::image_render::write_test_webp_fixture(
+            &solid_rgba(color, 4, oversized_h),
+            4,
+            oversized_h,
+        );
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        let started = Instant::now();
+        let fade = mid_flight_pixelate_fade(started, 1000);
+        terminal
+            .draw(|f| {
+                draw_splash(
+                    f,
+                    &config,
+                    &mut image_cache,
+                    0,
+                    Some(&fade),
+                    started + std::time::Duration::from_millis(999),
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let image_color = Color::Rgb(color.0, color.1, color.2);
+        assert_eq!(
+            buffer.cell((0, 0)).unwrap().bg,
+            image_color,
+            "リファイン終盤(t=0.999)はdivisor=1相当で画像色に収束するはず"
+        );
+        assert_eq!(
+            buffer.cell((CANVAS_W - 1, 0)).unwrap().bg,
+            image_color,
+            "全幅を覆うはず(通常のcontain-fit表示と同じ)"
+        );
+    }
+
+    #[test]
+    fn draw_splash_native_mode_pixelate_coarsen_phase_shows_black_not_logo_color() {
+        // 上のフルスクリーン版と対になる、ネイティブ表示モード（[`draw_splash_logo_native`]）
+        // 側の確認。ネイティブ表示は画像を中央配置するため、画像の中心セルで確認する
+        // （`draw_splash_small_logo_image_uses_native_mode_and_does_not_fill_full_canvas_width`
+        // と同じ理由で(0,0)は元々背景のままなので使えない）。
+        let color = (255u8, 0u8, 0u8);
+        // 214x46pxの単色画像（logo_fits_natively が真になる参照サイズ、#588）。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 214, 46), 214, 46);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        let started = Instant::now();
+        let fade = mid_flight_pixelate_fade(started, 1000);
+        terminal
+            .draw(|f| {
+                draw_splash(
+                    f,
+                    &config,
+                    &mut image_cache,
+                    0,
+                    Some(&fade),
+                    started + std::time::Duration::from_millis(100),
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // ネイティブ表示は cols=107, rows=23（214x46/2）で画像領域(高さ=CANVAS_H-1)の中央に
+        // 配置される。中心セルは確実に画像範囲内。
+        let center = (CANVAS_W / 2, (CANVAS_H - 1) / 2);
+        assert_eq!(
+            buffer.cell(center).unwrap().bg,
+            Color::Rgb(0, 0, 0),
+            "コルセン中(t=0.1)は黒ベタのはず"
+        );
+    }
+
+    #[test]
+    fn draw_splash_native_mode_pixelate_refine_phase_converges_to_logo_color() {
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 214, 46), 214, 46);
+        let config = splash_config_with_logo_image(&fixture_path);
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut image_cache = ImageCache::new();
+        let started = Instant::now();
+        let fade = mid_flight_pixelate_fade(started, 1000);
+        terminal
+            .draw(|f| {
+                draw_splash(
+                    f,
+                    &config,
+                    &mut image_cache,
+                    0,
+                    Some(&fade),
+                    started + std::time::Duration::from_millis(999),
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let center = (CANVAS_W / 2, (CANVAS_H - 1) / 2);
+        assert_eq!(
+            buffer.cell(center).unwrap().bg,
+            Color::Rgb(255, 0, 0),
+            "リファイン終盤(t=0.999)はdivisor=1相当でロゴ色に収束するはず"
+        );
+    }
+
+    #[test]
+    fn draw_splash_native_mode_settled_pixelate_transition_matches_no_fade_output() {
+        // 遷移完了後(t>=1.0)は通常の`draw_splash(.., None, ..)`と完全に同じ出力になるはず
+        // （`rgba_to_quadrant_grid_native_pixelated`のdivisor<=1早期returnの契約、
+        // `image_render`側のdoc comment参照）。
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba(color, 214, 46), 214, 46);
+        let config = splash_config_with_logo_image(&fixture_path);
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut baseline_cache = ImageCache::new();
+        baseline_terminal
+            .draw(|f| draw_splash(f, &config, &mut baseline_cache, 0, None, Instant::now()))
+            .unwrap();
+
+        let mut fade_terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut fade_cache = ImageCache::new();
+        let started = Instant::now();
+        let fade = mid_flight_pixelate_fade(started, 1000);
+        fade_terminal
+            .draw(|f| {
+                draw_splash(
+                    f,
+                    &config,
+                    &mut fade_cache,
+                    0,
+                    Some(&fade),
+                    started + std::time::Duration::from_millis(1000),
+                )
+            })
+            .unwrap();
+
+        assert_eq!(
+            buffer_text(baseline_terminal.backend().buffer()),
+            buffer_text(fade_terminal.backend().buffer()),
+            "遷移完了後(t=1.0)は通常表示と同じ出力になるはず"
         );
     }
 
@@ -3124,7 +3675,7 @@ mod tests {
         .unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text = buffer_text(buffer);
@@ -3163,7 +3714,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let logo_color = Color::Rgb(color.0, color.1, color.2);
@@ -3220,7 +3771,7 @@ mod tests {
         for (w, h) in [(0u16, 0u16), (1, 1)] {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             terminal
-                .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+                .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
                 .unwrap();
         }
     }
@@ -3243,7 +3794,7 @@ mod tests {
             Terminal::new(TestBackend::new(CANVAS_W + extra_w, CANVAS_H + extra_h)).unwrap();
         let mut image_cache = ImageCache::new();
         terminal
-            .draw(|f| draw_splash(f, &config, &mut image_cache, 0))
+            .draw(|f| draw_splash(f, &config, &mut image_cache, 0, None, Instant::now()))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let logo_color = Color::Rgb(color.0, color.1, color.2);
@@ -3327,6 +3878,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -3732,6 +4284,7 @@ mod tests {
                         now,
                         None,
                         &mut image_cache,
+                        false,
                         false,
                     )
                 })
@@ -4150,6 +4703,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -4202,6 +4756,7 @@ mod tests {
                     None,
                     &mut typing_image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -4238,6 +4793,7 @@ mod tests {
                     now,
                     None,
                     &mut done_image_cache,
+                    false,
                     false,
                 )
             })
@@ -4363,6 +4919,7 @@ mod tests {
                     now,
                     Some(&image_fade),
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -4582,6 +5139,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -4620,6 +5178,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -4679,6 +5238,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -4716,6 +5276,7 @@ mod tests {
                         None,
                         &mut image_cache,
                         false,
+                        false,
                     )
                 })
                 .unwrap_or_else(|e| panic!("W={w}で描画がpanicした: {e}"));
@@ -4750,6 +5311,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -4786,6 +5348,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -4850,6 +5413,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -6356,6 +6920,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -6397,6 +6962,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -6434,6 +7000,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -6486,6 +7053,7 @@ mod tests {
                     now,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })
@@ -6542,6 +7110,7 @@ mod tests {
                     None,
                     &mut image_cache,
                     false,
+                    false,
                 )
             })
             .unwrap();
@@ -6573,6 +7142,7 @@ mod tests {
                     done_at,
                     None,
                     &mut image_cache,
+                    false,
                     false,
                 )
             })

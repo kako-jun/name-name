@@ -330,6 +330,17 @@ where
     let mut target_scroll_offset: u16 = 0;
     let mut scroll_anim_start_offset: u16 = 0;
     let mut scroll_anim_start = Instant::now();
+    // ロゴのピクセレート遷移（#628、黒ベタ→コルセン→スワップ→リファイン）。`event_loop` の
+    // `image_fade` と同じ設計 — `settled(None, ..)` で「まだ何も表示していない」状態から始め、
+    // ロゴパスが実際に解決できた最初のフレームで `transition_to` を1回だけ呼ぶ（下のループ
+    // 先頭、`image_fade.current_target().is_none()` ガード参照）。テキストモード
+    // （`splash.logo_image` が未設定）ではロゴパスが一度も解決できないため `settled(None, ..)`
+    // のまま — `ui::draw_splash` はこの場合そもそも `image_fade` を参照しない
+    // （`splash_pixelate_phase` 経由、`draw_splash` doc comment参照）ため無害。
+    let mut image_fade = image_fade::ImageFadeState::settled(
+        None,
+        name_name_parser::models::AmbientEffects::default(),
+    );
     loop {
         let now = Instant::now();
         let elapsed_ms = now.saturating_duration_since(scroll_anim_start).as_millis() as u64;
@@ -340,8 +351,38 @@ where
             target_scroll_offset,
             progress,
         );
+
+        // #628: ロゴパスがまだ解決できていなければ（初回、またはテキストモード）、
+        // 解決を試みてピクセレート遷移を開始する。一度 `Some` になれば
+        // `current_target().is_none()` が偽になり以後は再トリガーしない。
+        if image_fade.current_target().is_none() {
+            if let Some(path) = config.resolve_splash_logo_path() {
+                if image_cache.get_or_load(&path).is_some() {
+                    let target = config
+                        .splash
+                        .logo_image
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned());
+                    image_fade = image_fade.transition_to(
+                        target,
+                        name_name_parser::models::AmbientEffects::default(),
+                        name_name_parser::models::EventImageTransition::Pixelate,
+                        Duration::from_millis(config.event_image.crossfade_ms),
+                        now,
+                    );
+                }
+            }
+        }
+
         terminal.draw(|frame| {
-            ui::draw_splash(frame, config, &mut image_cache, display_scroll_offset)
+            ui::draw_splash(
+                frame,
+                config,
+                &mut image_cache,
+                display_scroll_offset,
+                Some(&image_fade),
+                now,
+            )
         })?;
 
         match next_action()? {
@@ -875,6 +916,7 @@ where
                 Some(&image_fade),
                 &mut image_cache,
                 playback.is_blackout(),
+                playback.current_item_is_image_only(),
             )
         })?;
 
@@ -2866,6 +2908,11 @@ mod tests {
         let fixture_path = banded_scroll_fixture();
         let mut config = image_splash_config(&fixture_path);
         config.splash.scroll_ease_ms = 60_000;
+        // #628: ロゴのピクセレート遷移(黒ベタ→コルセン→スワップ→リファイン)は
+        // `config.event_image.crossfade_ms`(既定700ms)ぶん実時間がかかる。このテストは
+        // スクロールオフセットの検証が目的でピクセレート演出とは無関係なため、0にして
+        // 即座に完成形(settled)で表示させる。
+        config.event_image.crossfade_ms = 0;
 
         let mut terminal = Terminal::new(TestBackend::new(
             ui::REQUIRED_TOTAL_WIDTH,
@@ -2985,6 +3032,10 @@ mod tests {
         let fixture_path = per_row_scroll_fixture();
         let mut config = image_splash_config(&fixture_path);
         config.splash.scroll_ease_ms = 0;
+        // #628: このテストもスクロールオフセットの検証が目的でピクセレート演出とは無関係
+        // （上の `show_splash_movedown_does_not_instantly_jump_to_target_scroll_offset` と
+        // 同じ理由）。
+        config.event_image.crossfade_ms = 0;
 
         let mut actions = vec![Action::MoveDown; 50];
         actions.push(Action::MoveUp);

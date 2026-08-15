@@ -752,6 +752,143 @@ pub fn rgba_to_quadrant_grid_native(pixels: &[u8], img_w: u32, img_h: u32) -> Re
     RenderedImage { cols, rows, cells }
 }
 
+/// [`rgba_to_quadrant_grid_native`] のピクセレート遷移 (#628、スプラッシュロゴ用) 版。
+/// [`rgba_to_quadrant_grid_pixelated`] が cover-fit グリッドに対してコルセン/リファインの
+/// 粗さを適用するのと同じ考え方を、クロップ・アスペクト補正を経由しないネイティブ解像度側に
+/// も適用する——元画像のピクセル空間 (`img_w` x `img_h`) をそのまま「粗い解像度
+/// (`img_w`/`img_h` を `coarse_divisor` で割った値) へダウンサンプル → 最近傍で
+/// `img_w` x `img_h` へ拡大」してから、[`rgba_to_quadrant_grid_native`] と同じ
+/// 「1セル=2x2ピクセル」の読み取りロジックへ渡す。
+///
+/// `coarse_divisor <= 1` は [`rgba_to_quadrant_grid_native`] を直接呼ぶのと完全に同じ出力
+/// （[`rgba_to_quadrant_grid_pixelated`] の doc comment と同じ「遷移完了時に見た目の
+/// 不連続が起きない」根拠）。
+pub fn rgba_to_quadrant_grid_native_pixelated(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    coarse_divisor: u32,
+) -> RenderedImage {
+    if coarse_divisor <= 1 {
+        return rgba_to_quadrant_grid_native(pixels, img_w, img_h);
+    }
+    if img_w == 0 || img_h == 0 {
+        return blank_grid(0, 0);
+    }
+    let cols = img_w.div_ceil(2).min(u32::from(u16::MAX)) as u16;
+    let rows = img_h.div_ceil(2).min(u32::from(u16::MAX)) as u16;
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
+        return blank_grid(cols, rows);
+    }
+
+    let coarse_w = (img_w / coarse_divisor).max(1);
+    let coarse_h = (img_h / coarse_divisor).max(1);
+    let coarse = downsample_box(pixels, img_w, img_h, coarse_w, coarse_h);
+    if coarse.is_empty() {
+        return blank_grid(cols, rows);
+    }
+    let upscaled = nearest_upscale(&coarse, coarse_w, coarse_h, img_w, img_h);
+    if upscaled.is_empty() {
+        return blank_grid(cols, rows);
+    }
+
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) {
+        if x >= img_w || y >= img_h {
+            return (0, 0, 0, 0);
+        }
+        upscaled[(y * img_w + x) as usize]
+    };
+
+    let mut cells = Vec::with_capacity(cols as usize * rows as usize);
+    for cy in 0..rows {
+        for cx in 0..cols {
+            let sub_x = u32::from(cx) * 2;
+            let sub_y = u32::from(cy) * 2;
+            let ul = get(sub_x, sub_y);
+            let ur = get(sub_x + 1, sub_y);
+            let ll = get(sub_x, sub_y + 1);
+            let lr = get(sub_x + 1, sub_y + 1);
+            cells.push(quadrant_cell_from_subpixels([
+                composite_over_black(ul.0, ul.1, ul.2, ul.3),
+                composite_over_black(ur.0, ur.1, ur.2, ur.3),
+                composite_over_black(ll.0, ll.1, ll.2, ll.3),
+                composite_over_black(lr.0, lr.1, lr.2, lr.3),
+            ]));
+        }
+    }
+    RenderedImage { cols, rows, cells }
+}
+
+/// [`rgba_to_quadrant_grid_window`] のピクセレート遷移 (#628、スプラッシュの巨大ロゴ
+/// フォールバック用) 版。`coarse_divisor <= 1` は素通しで [`rgba_to_quadrant_grid_window`] と
+/// 完全に同じ出力（他のピクセレート版と同じ「遷移完了時の見た目の不連続なし」根拠）。
+///
+/// [`downsample_box_window`] のような「可視範囲だけを計算する」最適化は行わない——画像全体を
+/// 一旦コルセン解像度へ縮小してから最近傍で全体を拡大し、そこから可視範囲を読み取る。
+/// この経路はスプラッシュの巨大ロゴフォールバック（想定外ケース、Issue #588 doc comment 参照）
+/// でのみ使われ、遷移自体も数百ms〜1秒程度で終わるため、メモリ最適化より実装の単純さを
+/// 優先する判断（#628 実装判断）。
+#[allow(clippy::too_many_arguments)]
+pub fn rgba_to_quadrant_grid_window_pixelated(
+    pixels: &[u8],
+    img_w: u32,
+    img_h: u32,
+    cols: u16,
+    total_rows: u16,
+    offset: u16,
+    rows: u16,
+    coarse_divisor: u32,
+) -> RenderedImage {
+    if coarse_divisor <= 1 {
+        return rgba_to_quadrant_grid_window(pixels, img_w, img_h, cols, total_rows, offset, rows);
+    }
+    let visible_rows = total_rows.saturating_sub(offset).min(rows);
+    if cols == 0 || total_rows == 0 || visible_rows == 0 || img_w == 0 || img_h == 0 {
+        return blank_grid(cols, visible_rows);
+    }
+    if !rgba_buffer_has_expected_len(pixels, img_w, img_h) {
+        return blank_grid(cols, visible_rows);
+    }
+
+    let sub_w = u32::from(cols) * 2;
+    let total_sub_h = u32::from(total_rows) * 2;
+    let coarse_w = (sub_w / coarse_divisor).max(1);
+    let coarse_h = (total_sub_h / coarse_divisor).max(1);
+    let coarse = downsample_box(pixels, img_w, img_h, coarse_w, coarse_h);
+    if coarse.is_empty() {
+        return blank_grid(cols, visible_rows);
+    }
+    let sub = nearest_upscale(&coarse, coarse_w, coarse_h, sub_w, total_sub_h);
+    if sub.is_empty() {
+        return blank_grid(cols, visible_rows);
+    }
+
+    let sub_offset = u32::from(offset) * 2;
+    let mut cells = Vec::with_capacity(cols as usize * visible_rows as usize);
+    for cy in 0..visible_rows {
+        for cx in 0..cols {
+            let sub_x = u32::from(cx) * 2;
+            let sub_y = sub_offset + u32::from(cy) * 2;
+            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
+            let ul = get(sub_x, sub_y);
+            let ur = get(sub_x + 1, sub_y);
+            let ll = get(sub_x, sub_y + 1);
+            let lr = get(sub_x + 1, sub_y + 1);
+            cells.push(quadrant_cell_from_subpixels([
+                composite_over_black(ul.0, ul.1, ul.2, ul.3),
+                composite_over_black(ur.0, ur.1, ur.2, ur.3),
+                composite_over_black(ll.0, ll.1, ll.2, ll.3),
+                composite_over_black(lr.0, lr.1, lr.2, lr.3),
+            ]));
+        }
+    }
+    RenderedImage {
+        cols,
+        rows: visible_rows,
+        cells,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
