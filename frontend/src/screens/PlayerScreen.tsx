@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import NovelPlayer from '../components/NovelPlayer'
+import NovelPlayer, { type NovelPlayerHandle } from '../components/NovelPlayer'
 import RPGPlayer from '../components/RPGPlayer'
 import type { Event, EventDocument, EventScene } from '../types'
 import type { RPGProject } from '../types/rpg'
@@ -293,6 +293,9 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   const entryPathRef = useRef<string | null>(null)
   const loadedDocsRef = useRef<Map<string, EventDocument>>(new Map())
   const loadingDocsRef = useRef<Map<string, Promise<EventDocument | null>>>(new Map())
+  // タイトル画面の「設定」ボタン (#643): NovelPlayer が公開する命令的 API（openSettings）を
+  // 呼ぶための ref。ゲーム内 ⚙ ボタンと同じ設定パネルをタイトルを閉じずに開く。
+  const novelPlayerRef = useRef<NovelPlayerHandle>(null)
 
   // タイトル画面の表示状態 (#141)
   const [titleDismissed, setTitleDismissed] = useState(false)
@@ -868,6 +871,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           <RPGPlayer gameData={rpgProject} view={rpgProject.view} />
         ) : (
           <NovelPlayer
+            ref={novelPlayerRef}
             // タイトル画面 (#628 フェーズ2b): 旧 DOM `TitleOverlay.tsx`（<img>+<button> 4つ）を
             // PixiJS 実装（NovelRenderer.showTitleScreen/hideTitleScreen 経由の
             // TitleScreenOverlay）に置き換えたため、NovelPlayer への渡し方は「表示すべき状態」を
@@ -954,10 +958,11 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                       }
                     },
                     onOpenSettings: () => {
-                      // TODO (#141): NovelPlayer の設定パネルを外部から開く ref を追加して
-                      // タイトル画面の「設定」ボタンからダイレクトに設定を開けるようにする。
-                      // 現時点ではタイトルを閉じてゲーム内の設定ボタン（⚙）から開く。
-                      setTitleDismissed(true)
+                      // #643: タイトルは閉じず、ゲーム内 ⚙ ボタンと同じ設定パネル
+                      // （SettingsOverlay）を novelPlayerRef 経由で開く。SettingsOverlay は
+                      // `absolute inset-0 z-50` の DOM オーバーレイなのでタイトル画面の上に
+                      // 自然に重なり、閉じればタイトルへそのまま戻る。
+                      novelPlayerRef.current?.openSettings()
                     },
                     onBack,
                   }

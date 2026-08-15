@@ -1,6 +1,8 @@
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -60,6 +62,17 @@ function writeDebugOpen(open: boolean): void {
   } catch {
     // SSR/未対応/プライベートモード等。永続化できなくても UI 状態は React state で動く。
   }
+}
+
+/**
+ * NovelPlayer が外部（PlayerScreen のタイトル画面ハンドラ等）に公開する命令的 API (#643)。
+ * タイトル画面の「設定」ボタンはゲーム内 ⚙ ボタンと同じ `settingsOpen` state を開くだけで、
+ * タイトル自体は閉じない（`SettingsOverlay` は `absolute inset-0 z-50` の DOM オーバーレイなので
+ * タイトル画面の上に自然に重なり、閉じればタイトルへ戻る）。
+ */
+export interface NovelPlayerHandle {
+  /** ゲーム内 ⚙ ボタンと同じ設定パネルを開く。 */
+  openSettings: () => void
 }
 
 interface NovelPlayerProps {
@@ -231,49 +244,52 @@ interface NovelPlayerProps {
   onRendererReady?: (renderer: NovelRenderer | null) => void
 }
 
-function NovelPlayer({
-  events,
-  scenes,
-  jumpSceneIndex,
-  onResolveMissingScene,
-  initialSceneId,
-  confinedSceneIds,
-  assetBaseUrl,
-  aspectRatio: aspectRatioProp,
-  choiceStyle,
-  fontFamily,
-  fontSize,
-  dialogStyle,
-  protagonist,
-  characterYRatio,
-  characterHeightRatio,
-  characterHeightRatios,
-  characterScale,
-  characterFadeMs,
-  backgroundFadeMs,
-  eventImageFadeMs,
-  eventImageTransitionDefault,
-  backgroundColor,
-  seekbarColor,
-  intermissionEvents,
-  intermissionBackgroundFadeMs,
-  intermissionCharacterFadeMs,
-  intermissionEventImageFadeMs,
-  skipEnabled,
-  debugEnabled,
-  speakerNudge,
-  autoPlay,
-  splitLayout,
-  fullscreenImage,
-  sentencePerPage,
-  pixelArt,
-  titleScreen,
-  dark,
-  debugInfo,
-  docKey,
-  initialSkipMode = false,
-  onRendererReady,
-}: NovelPlayerProps) {
+const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function NovelPlayer(
+  {
+    events,
+    scenes,
+    jumpSceneIndex,
+    onResolveMissingScene,
+    initialSceneId,
+    confinedSceneIds,
+    assetBaseUrl,
+    aspectRatio: aspectRatioProp,
+    choiceStyle,
+    fontFamily,
+    fontSize,
+    dialogStyle,
+    protagonist,
+    characterYRatio,
+    characterHeightRatio,
+    characterHeightRatios,
+    characterScale,
+    characterFadeMs,
+    backgroundFadeMs,
+    eventImageFadeMs,
+    eventImageTransitionDefault,
+    backgroundColor,
+    seekbarColor,
+    intermissionEvents,
+    intermissionBackgroundFadeMs,
+    intermissionCharacterFadeMs,
+    intermissionEventImageFadeMs,
+    skipEnabled,
+    debugEnabled,
+    speakerNudge,
+    autoPlay,
+    splitLayout,
+    fullscreenImage,
+    sentencePerPage,
+    pixelArt,
+    titleScreen,
+    dark,
+    debugInfo,
+    docKey,
+    initialSkipMode = false,
+    onRendererReady,
+  }: NovelPlayerProps,
+  ref
+) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<NovelRenderer | null>(null)
   // タイトル画面 (#628 フェーズ2b): コールバックの最新版を保持する ref。呼び出し側
@@ -306,6 +322,12 @@ function NovelPlayer({
   // debounce で吸収する (review #155 should-2)
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // タイトル画面の「設定」ボタン (#643): PlayerScreen がゲーム内 ⚙ ボタンと同じ `settingsOpen`
+  // state を外部から開けるよう、命令的 API を ref 経由で公開する。タイトル自体は閉じない
+  // （NovelPlayerHandle の JSDoc 参照）。
+  useImperativeHandle(ref, () => ({
+    openSettings: () => setSettingsOpen(true),
+  }))
   // オートモード ON/OFF (#139)
   // 既定は OFF＝手送り (#436)。frontmatter `auto_play: true` で起動時から ON にできる
   // （llll-ll-media 等の動画用途）。起動後は UI のオートトグルで随時切り替える。
@@ -1322,6 +1344,6 @@ function NovelPlayer({
       />
     </div>
   )
-}
+})
 
 export default NovelPlayer

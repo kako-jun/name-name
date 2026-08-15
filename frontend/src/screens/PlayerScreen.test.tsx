@@ -8,6 +8,7 @@
 //   - データ取得失敗時にエラーメッセージが表示される
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { forwardRef, useImperativeHandle, type Ref } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 // #284: NovelRenderer.jumpToScene が使う実シーン解決プリミティブ。
 // PlayerScreen が連結した scenes に対してクロスファイルのジャンプが解決することを、
@@ -81,22 +82,31 @@ const novelPlayerProps = vi.fn()
 // 出る/消える・ボタン押下で副作用が発火する」という検証意図をそのまま保つ（PixiJS 描画そのものの
 // 正しさは TitleScreenOverlay/NovelRenderer 側の別テストが担う）。
 vi.mock('../components/NovelPlayer', () => ({
-  default: (props: {
-    events: unknown
-    scenes?: unknown
-    jumpSceneIndex?: unknown
-    onResolveMissingScene?: (sceneId: string) => Promise<EventScene[] | null>
-    assetBaseUrl?: string
-    pixelArt?: boolean | null
-    titleScreen?: {
-      title: string
-      hasSaveData: boolean
-      onNewGame: () => void
-      onContinue: () => void
-      onOpenSettings: () => void
-      onBack: () => void
-    } | null
-  }) => {
+  // #643: 実装が forwardRef 化され PlayerScreen から ref を受け取るようになったのに合わせ、
+  // モックも forwardRef 化する（ただの function component だと「refを渡せない」警告が出る）。
+  // openSettings() 自体は PixiJS 依存の実 SettingsOverlay 開閉を持たないこの軽量スタブでは
+  // 検証対象外（jsdom で verify 不可、実体は NovelPlayer.test.tsx が担う）だが、呼べても
+  // 無害な no-op として公開しておく。
+  default: forwardRef(function NovelPlayerMock(
+    props: {
+      events: unknown
+      scenes?: unknown
+      jumpSceneIndex?: unknown
+      onResolveMissingScene?: (sceneId: string) => Promise<EventScene[] | null>
+      assetBaseUrl?: string
+      pixelArt?: boolean | null
+      titleScreen?: {
+        title: string
+        hasSaveData: boolean
+        onNewGame: () => void
+        onContinue: () => void
+        onOpenSettings: () => void
+        onBack: () => void
+      } | null
+    },
+    ref: Ref<{ openSettings: () => void }>
+  ) {
+    useImperativeHandle(ref, () => ({ openSettings: () => {} }))
     novelPlayerProps(props)
     return (
       <div
@@ -130,7 +140,7 @@ vi.mock('../components/NovelPlayer', () => ({
         )}
       </div>
     )
-  },
+  }),
 }))
 
 const rpgPlayerProps = vi.fn()
