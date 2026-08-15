@@ -274,6 +274,9 @@ describe('SaveManager - docKey 名前空間化 (#578)', () => {
     expect(manager.listSlots()).toEqual([null, null, null])
   })
 
+  // #637 回帰テスト（NovelRenderer.newGameReset.test.ts と通し番号）観点8。b→a 方向の非干渉も
+  // 同一テスト内で検証しているため、別観点としての9は独立させていない
+  // （NovelRenderer.newGameReset.test.ts のファイル冒頭コメント参照）。
   it('8: docKey が異なる別インスタンスの deleteQuickSave() は他 docKey の quickSave に影響しない (#637)', () => {
     const a = new SaveManager('project-a')
     const b = new SaveManager('project-b')

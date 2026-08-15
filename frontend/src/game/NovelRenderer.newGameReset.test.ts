@@ -11,6 +11,13 @@
  * `NovelRenderer.confinement.test.ts` / `NovelRenderer.intermission.test.ts` と同じ最小構成
  * （`new NovelRenderer()` → `setScenes(...)`）で行い、PixiJS 実描画は対象外
  * （CLAUDE.md ルール7 の実機 golden path に委ねる）。
+ *
+ * 各 it() の先頭数字は #637 回帰テスト全体（本ファイル + `SaveManager.test.ts` +
+ * `PlayerScreen.test.tsx`）を通した観点番号 1〜15。本ファイルは 1-7・14-15 を持ち、
+ * 8 は `SaveManager.test.ts`（docKey 別インスタンス間の deleteQuickSave() 非干渉。
+ * 双方向の非干渉を1テストで検証しており、別観点として独立させなかったため 9 は
+ * 欠番のまま）、10-13 は `PlayerScreen.test.tsx`（onNewGame からの clearQuickSave() 呼び出し）
+ * に対応する。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'

@@ -1043,7 +1043,7 @@ export class NovelRenderer {
   restart(): void {
     if (this.rawEvents.length === 0) return
     this.gameState.clear()
-    this.currentSceneId = this.allScenes.length > 0 ? this.allScenes[0].id : null
+    this.currentSceneId = this.allScenes[0]?.id ?? null
     this.resetAndStartEvents([...this.rawEvents])
   }
 
