@@ -28,6 +28,12 @@
  * 本クラスと同じ Tab/矢印/Enter/Space パターンを踏襲しつつ、可変個数・グリッド配置 (#508)・
  * ロック (#591)・#339 スクロール可能リストへの追従の分だけ拡張している（詳細は
  * `ChoiceOverlay.handleKeyDown()` 参照）。
+ *
+ * フォーカスリングの visible focus 化 (#640、#639 と同型): `show()` 直後は黄色いフォーカス
+ * リングを描画しない（マウス/タップだけで進めるユーザーには見せない）。実際に Tab/矢印キーで
+ * フォーカス移動が発生した瞬間（`keyboardNavActive`）に初めて有効化し、以後はキーボード
+ * ユーザーとして扱う（ブラウザ標準の `:focus-visible` と同じ発想、ChoiceOverlay と同じ設計
+ * 意図）。詳細は `keyboardNavActive` / `setFocusedIndex` / `activateKeyboardFocusVisible` 参照。
  */
 
 import { Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
@@ -110,6 +116,15 @@ export class TitleScreenOverlay extends Container {
   /** buttonEntries 内のフォーカス中インデックス。-1 はフォーカス対象なし（enabled ボタン皆無の異常系）。 */
   private focusedIndex = -1
   private currentButtonWidth = 0
+  /**
+   * 黄色いフォーカスリングの visible focus 化 (#640、#639 の ChoiceOverlay と同型)。マウス/
+   * タップ操作のみでタイトル画面を進めているユーザーには一切リングを見せず、実際に矢印キー/
+   * Tab キーでフォーカス移動が発生した瞬間に初めて true になる（`:focus-visible` と同じ発想）。
+   * 一度 true になったら `hide()`/`show()` を跨いでも false に戻さない——一度キーボード操作
+   * したユーザーは以後もキーボードユーザーとみなす。`setFocusedIndex()` はこのフラグを見て
+   * `drawFocusRing()` を呼ぶかどうかを切り替える。
+   */
+  private keyboardNavActive = false
 
   constructor(
     private screenWidth: number,
@@ -258,6 +273,10 @@ export class TitleScreenOverlay extends Container {
     // 総入れ替えされた（Graphics インスタンスが変わった）にもかかわらず「インデックス値が
     // たまたま前回と同じだから」という理由で早期 return され新しい focusRing に描画し損ねる
     // 事故を避ける。
+    // #640: このリセット自体はキーボード操作ではないため、リング表示の可否は
+    // keyboardNavActive の現在値（過去にキーボード操作したセッションかどうか）に委ねる。
+    // ここで無条件に有効化はしない——それが「マウスだけで進めても常時黄色いリングが付く」
+    // 元バグの直接原因だった。
     this.focusedIndex = -1
     const firstEnabledIndex = this.buttonEntries.findIndex((b) => !b.disabled)
     this.setFocusedIndex(firstEnabledIndex)
@@ -298,6 +317,7 @@ export class TitleScreenOverlay extends Container {
 
   /** disabled ボタンをスキップしつつ、末尾↔先頭で循環してフォーカスを1つ移動する。 */
   private moveFocus(direction: 1 | -1): void {
+    this.activateKeyboardFocusVisible()
     const enabledIndices = this.buttonEntries.reduce<number[]>((acc, entry, i) => {
       if (!entry.disabled) acc.push(i)
       return acc
@@ -310,13 +330,32 @@ export class TitleScreenOverlay extends Container {
     this.setFocusedIndex(enabledIndices[nextPos])
   }
 
+  /**
+   * 矢印キー/Tab キーによるフォーカス移動が実際に発生した瞬間に、黄色いフォーカスリングの
+   * visible focus 化フラグ (`keyboardNavActive`) を一度だけ立てる (#640、ChoiceOverlay#639 と同型)。
+   *
+   * `moveFocus` の冒頭で必ず呼ぶ。TitleScreenOverlay の常時有効なボタン（新規開始/設定/終了）は
+   * 3つ以上あるため、`moveFocus` が移動先を現在位置のまま返す（＝`setFocusedIndex` が
+   * 早期 return してリング未描画になる）ケースは実際には起こらない想定だが、ChoiceOverlay と
+   * 同じ堅牢性のため、フラグが false→true に切り替わった瞬間は現在フォーカス中のエントリを
+   * 明示的に再描画しておく（将来ボタン構成が変わっても安全なコストの小さい防御）。
+   */
+  private activateKeyboardFocusVisible(): void {
+    if (this.keyboardNavActive) return
+    this.keyboardNavActive = true
+    const current = this.buttonEntries[this.focusedIndex]
+    if (current) this.drawFocusRing(current.focusRing)
+  }
+
   private setFocusedIndex(index: number): void {
     if (index === this.focusedIndex) return
     const prev = this.buttonEntries[this.focusedIndex]
     if (prev) prev.focusRing.clear()
     this.focusedIndex = index
     const next = this.buttonEntries[this.focusedIndex]
-    if (next) this.drawFocusRing(next.focusRing)
+    // #640: マウス/タップ操作だけで進めているユーザーには一切見せない。過去にキーボード
+    // 操作（Tab/矢印）でフォーカス移動したことがある（= keyboardNavActive）場合だけ描画する。
+    if (next && this.keyboardNavActive) this.drawFocusRing(next.focusRing)
   }
 
   private drawFocusRing(g: Graphics): void {
