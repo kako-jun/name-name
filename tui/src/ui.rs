@@ -1889,6 +1889,139 @@ mod tests {
     }
 
     #[test]
+    fn draw_fullscreen_image_mode_with_blackout_fills_entire_root_area_black_and_keeps_footer() {
+        // #628 x #512の組み合わせ確認: fullscreen_event_image=true(config.fullscreen_image &&
+        // image_only_item && choice.is_none()) かつ blackout=true のとき、通常の左右分割時は
+        // placeholder_area側だけが黒くなるのに対し、フルスクリーン時はroot[0]全体
+        // （本来のtext_area側を含む）が黒一色になり、右側にテキストが漏れないことを確認する
+        // （draw_event_image_areaがblackoutをroot[0]全体に対して適用する経路の回帰ガード）。
+        // 併せて、画面最下段の共通操作フッター（#587、非回帰要件）がblackout中も引き続き
+        // 表示されることを確認する。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((255, 0, 0), 4, 4), 4, 4);
+        let (mut config, relative) = config_and_relative_path_for(&fixture_path);
+        config.fullscreen_image = true;
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
+        let line = dialog_line(Some("A"), vec!["この本文は表示されないはず"]);
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    &[],
+                    &[],
+                    1,
+                    1,
+                    false,
+                    None,
+                    now,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                    true, // blackout
+                    true, // image_only_item
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for y in 0..(CANVAS_H - 1) {
+            for x in 0..CANVAS_W {
+                assert_eq!(
+                    buffer.cell((x, y)).unwrap().bg,
+                    Color::Black,
+                    "cell ({x},{y}) はfullscreen+blackout中は右側(本来のtext_area側)含め\
+                     全域が黒のはず"
+                );
+            }
+        }
+        let text = buffer_text(buffer);
+        assert!(
+            !text.contains("この本文は表示されないはず"),
+            "blackout中は会話テキストが見えないはず, buffer was: {text}"
+        );
+        assert!(
+            text.contains("Enter/Space 次へ"),
+            "#587の共通操作フッターはfullscreen+blackout中も表示され続けるはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_fullscreen_image_config_enabled_with_text_and_event_image_but_image_only_item_false_uses_split_layout(
+    ) {
+        // GUI版(#628 frontmatter)との意図的な差異の固定: GUI版はfullscreen_image設定時、
+        // イベント絵を伴う行であれば台詞の有無に関わらずフルスクリーン表示に倒す設計だが、
+        // TUI版は`image_only_item`(Playback::current_item_is_image_only()、テキストを一切
+        // 持たない画像コマitemだけがtrue)を厳密なゲートにしている（`draw`のdoc comment参照）。
+        // したがって、台詞付きの行がevent_imageを伴っていても、image_only_item=falseで
+        // ある限り左右分割のままになることを統合テストとして固定する。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((255, 0, 0), 4, 4), 4, 4);
+        let (mut config, relative) = config_and_relative_path_for(&fixture_path);
+        config.fullscreen_image = true;
+        let image_fade = ImageFadeState::settled(
+            Some(relative.clone()),
+            name_name_parser::models::AmbientEffects::default(),
+        );
+        let line = DisplayLine {
+            speaker: Some("A".to_string()),
+            text: vec!["台詞付きイベント絵".to_string()],
+            event_image: Some(relative),
+            event_image_effects: name_name_parser::models::AmbientEffects::default(),
+            event_image_transition: name_name_parser::models::EventImageTransition::default(),
+            event_image_fade_ms: None,
+        };
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    Some(&line),
+                    None,
+                    &[],
+                    &[],
+                    1,
+                    1,
+                    false,
+                    Some(&reveal::RevealState::Done(reveal::skip_lines(
+                        &config, &line,
+                    ))),
+                    now,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                    false,
+                    false, // image_only_item=false（テキストを持つLine item）
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        assert!(
+            text.contains("台詞付きイベント絵"),
+            "image_only_item=falseなら台詞は隠れず表示されるはず, buffer was: {text}"
+        );
+        assert_ne!(
+            buffer.cell((CANVAS_W - 1, 0)).unwrap().bg,
+            Color::Rgb(255, 0, 0),
+            "config.fullscreen_image=trueでもimage_only_item=falseなら右端(text_area側)は\
+             画像色で埋まらない(フルスクリーンに倒れない)はず"
+        );
+    }
+
+    #[test]
     fn draw_with_one_pixel_source_image_upsampled_to_larger_grid_gives_every_cell_that_color() {
         let color = (123u8, 45u8, 67u8);
         let fixture_path =
@@ -3636,6 +3769,52 @@ mod tests {
             buffer.cell((CANVAS_W - 1, 0)).unwrap().bg,
             image_color,
             "全幅を覆うはず(通常のcontain-fit表示と同じ)"
+        );
+    }
+
+    #[test]
+    fn draw_splash_fullscreen_mode_settled_pixelate_transition_matches_no_fade_output() {
+        // `draw_splash_native_mode_settled_pixelate_transition_matches_no_fade_output` の
+        // フォールバック側（`draw_fullscreen_image`/`rgba_to_quadrant_grid_window_pixelated`）
+        // 対。遷移完了後(t>=1.0)は通常の`draw_splash(.., None, ..)`と完全に同じ出力になる
+        // はず（`rgba_to_quadrant_grid_window_pixelated`のdivisor<=1早期returnの契約、
+        // `image_render`側のdoc comment参照）。
+        let oversized_h = (u32::from(REQUIRED_MAIN_CONTENT_ROWS) * 2 + 10) * 2;
+        let color = (255u8, 0u8, 0u8);
+        let fixture_path = crate::image_render::write_test_webp_fixture(
+            &solid_rgba(color, 4, oversized_h),
+            4,
+            oversized_h,
+        );
+        let config = splash_config_with_logo_image(&fixture_path);
+
+        let mut baseline_terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut baseline_cache = ImageCache::new();
+        baseline_terminal
+            .draw(|f| draw_splash(f, &config, &mut baseline_cache, 0, None, Instant::now()))
+            .unwrap();
+
+        let mut fade_terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let mut fade_cache = ImageCache::new();
+        let started = Instant::now();
+        let fade = mid_flight_pixelate_fade(started, 1000);
+        fade_terminal
+            .draw(|f| {
+                draw_splash(
+                    f,
+                    &config,
+                    &mut fade_cache,
+                    0,
+                    Some(&fade),
+                    started + std::time::Duration::from_millis(1000),
+                )
+            })
+            .unwrap();
+
+        assert_eq!(
+            buffer_text(baseline_terminal.backend().buffer()),
+            buffer_text(fade_terminal.backend().buffer()),
+            "遷移完了後(t=1.0)は通常表示と同じ出力になるはず"
         );
     }
 
