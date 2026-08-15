@@ -480,6 +480,21 @@ interface CharacterState {
    *  生成を遅延させる）。`sprite.filters` に直接掛ける（CharacterLayer には EventImageLayer の
    *  `imageGroup` に相当する wrapper container が無いため）。 */
   pixelateFilter?: PixelateFilter
+  /**
+   * `showImage()` のテクスチャロード（Fade 経路の `Assets.load` / ピクセレート経路の
+   * `startImagePixelateTransition` 内 `Assets.load`）が現在進行中か (#646)。
+   *
+   * ロード開始時に true、成功（Fade 経路は `applyImageTexture` 反映後、ピクセレート経路は
+   * `performImagePixelateSwap` 実行後）または失敗（`onError`/`catch`）で false に戻す。
+   *
+   * `showImage()` の `existing` 分岐（同 id 再表示）が「テクスチャ未ロード
+   * (`hasLoadedTexture` が false) なら再ロードを試みる」再試行判定に、この値も併せて見る
+   * ——true の間（＝正規のロードがまだ in-flight）は再試行をスキップし、二重 `Assets.load`
+   * 発行（既存の「load 未解決中の同 id 再呼び出しは再発行しない」挙動、CharacterLayer.test.ts
+   * 観点）や、ピクセレート遷移進行中に Fade 経路の再試行が横から texture を差し替えてしまう
+   * 事故を防ぐ。false（未着手/失敗済み）のときだけ再ロードする。
+   */
+  imageLoadPending?: boolean
 }
 
 /**
@@ -1747,6 +1762,11 @@ export class CharacterLayer extends Container {
    * `shape==='円形'/'circle'` のとき直径 = 表示サイズの円形マスクを sprite にかける。
    * 登場時は alpha 0 → 1 のフェードイン（label と同じ）。render-only。
    *
+   * 同 id 再表示（`existing` 分岐）は原則テクスチャ差し替えなしで位置のみ更新するが、前回の
+   * ロードが未成功（`hasLoadedTexture` が false = 失敗/未着手のまま）なら例外的にテクスチャの
+   * 再ロードを試みる (#646)。`assetBaseUrl` が呼び出し元で遅延解決するレースで一度ロード失敗すると
+   * 恒久的にフォールバックのまま固着するバグの修正——詳細は `existing` 分岐内コメント参照。
+   *
    * 遷移モード (#628, `opts.transition === 'Pixelate'`) は新規表示（同 id 再表示は対象外、
    * `existing` 分岐参照）のときだけ `EventImageLayer` (#583) と同じコルセン→スワップ→リファイン
    * 経路（`startImagePixelateTransition`）に入る。未指定/'Fade' のときの所要時間既定値は
@@ -1806,11 +1826,73 @@ export class CharacterLayer extends Container {
       // 再フェードイン（または instant なら即時表示）に切り替える (#429)。show() の「退場フェード中の
       // 再 show」分岐 (#177) と同じパターンなので reviveFromExitFade ヘルパーを使う（should-4）。
       this.reviveFromExitFade(existing, instant)
-      // 同 id 再表示は位置のみ更新する（テクスチャ差し替えは想定しないため最小挙動。ピクセレート
+      // 同 id 再表示は原則位置のみ更新する（テクスチャ差し替えは想定しない最小挙動。ピクセレート
       // 遷移 (#628) も新規表示限定のため、ここでは開始しない — 既存挙動を変えない）。
       existing.sprite.x = x
       existing.sprite.y = y
       existing.position = opts.position ?? ''
+
+      // テクスチャが未ロード（前回の Assets.load が失敗、または呼び出し時点の assetBaseUrl が
+      // 空で壊れた URL を要求して失敗済み）なら再ロードを試みる (#646)。
+      //
+      // 背景: `showTitleScreen()` は mount 直後に `assetBaseUrl` prop がまだ空のままレンダラーが
+      // `rendererReady` になるレースを踏むと、その回の `showImage()` 呼び出しが空文字列ベースの
+      // 壊れた URL で失敗する（onError 発火、フォールバック文字は表示したまま）。従来はここで
+      // 「同 id 再表示はテクスチャ差し替えなし」の最小挙動のため、以後何度 `showTitleScreen()` を
+      // 呼び直しても（＝何度リロードしても）再ロードが一切トリガーされず、ロゴが永久にフォール
+      // バック文字のまま固着していた。
+      //
+      // `imageLoadPending` を併せてガードする: 正規のロード（Fade / ピクセレート）が in-flight
+      // 中は再試行しない。理由は2つ——(1) `hasLoadedTexture` はピクセレート遷移中も coarsen/holding
+      // フェーズの間ずっと false のままなので、これだけで判定すると進行中のピクセレート遷移に
+      // Fade 経路の再ロードが横から割り込んで texture を差し替えてしまう。(2) load 未解決中に
+      // 同 id を再表示しただけのケース（CharacterLayer.test.ts の既存観点）で二重に
+      // `Assets.load` を発行しないため。
+      //
+      // 新規 sprite/state は作らず、`existing.sprite`/`existing` に対して新規表示パスと同じ
+      // `Assets.load` → `applyImageTexture` → `startEntranceFade` の流れに合流させる。呼び出し時点の
+      // 最新 `opts.assetBaseUrl`（`existing.assetBaseUrl` ではなく）で URL を解決し直す——`assetBaseUrl`
+      // が後から解決済みになっているからこそ再ロードする意味がある。
+      //
+      // ピクセレート遷移 (#628) はここでは開始しない（新規表示限定という既存方針を維持、上記コメント
+      // 参照）。常に Fade 経路と同じ処理で再ロードする。
+      if (!this.hasLoadedTexture(NAME) && !existing.imageLoadPending) {
+        existing.assetBaseUrl = opts.assetBaseUrl
+        existing.imageLoadPending = true
+        // instant 指定時は新規表示と同じくロード結果を待たず即座に可視化する
+        // （`startEntranceFade` は instant を no-op で無視するため、ここで明示的に揃える）。
+        if (instant) {
+          existing.sprite.alpha = 1
+        }
+        const retryUrl = resolveAssetUrl(opts.assetBaseUrl, 'images', opts.path)
+        // 再ロード開始時点の世代を捕捉する（`startEntranceFade` の JSDoc / expectedGeneration の
+        // 意図と同じ——再ロード中にさらに退場→復活が起きた場合、この古い `.then()` がフェードを
+        // 上書きしないようにする）。
+        const retryExpectedGeneration = existing.reviveGeneration ?? 0
+        Assets.load(retryUrl)
+          .then((texture) => {
+            existing.imageLoadPending = false
+            // 新規表示パス（#427 コメント参照）と同じく sprite.destroyed のみで十分。
+            // showImage は id 再利用時に state を差し替えないため、別 state に置き換わるケースは
+            // 実質無い。
+            if (existing.sprite.destroyed) return
+            this.applyImageTexture(
+              NAME,
+              existing.sprite,
+              texture,
+              opts.size,
+              circular,
+              opts.maxHeight
+            )
+            this.startEntranceFade(existing, instant, retryExpectedGeneration)
+            opts.onLoaded?.()
+          })
+          .catch((err) => {
+            existing.imageLoadPending = false
+            console.warn('[name-name] 画像の再読み込みに失敗: ' + retryUrl, err)
+            opts.onError?.()
+          })
+      }
       return
     }
 
@@ -1858,6 +1940,9 @@ export class CharacterLayer extends Container {
     const url = resolveAssetUrl(opts.assetBaseUrl, 'images', opts.path)
 
     if (usePixelate) {
+      // ロード in-flight フラグ (#646)。`performImagePixelateSwap`（成功）/ ピクセレート load の
+      // catch（失敗）で false に戻す。詳細は CharacterState.imageLoadPending の JSDoc 参照。
+      state.imageLoadPending = true
       this.startImagePixelateTransition(NAME, state, url, {
         durationMs: pixelateDurationMs,
         size: opts.size,
@@ -1867,8 +1952,12 @@ export class CharacterLayer extends Container {
       return
     }
 
+    // ロード in-flight フラグ (#646)。以下 .then/.catch で false に戻す。
+    // 詳細は CharacterState.imageLoadPending の JSDoc 参照。
+    state.imageLoadPending = true
     Assets.load(url)
       .then((texture) => {
+        state.imageLoadPending = false
         if (sprite.destroyed) return
         this.applyImageTexture(NAME, sprite, texture, opts.size, circular, opts.maxHeight)
         // フェード開始は texture 反映後 (#427)。instant 時は sprite.alpha が既に 1 のままなので張らない。
@@ -1882,6 +1971,7 @@ export class CharacterLayer extends Container {
         opts.onLoaded?.()
       })
       .catch((err) => {
+        state.imageLoadPending = false
         console.warn('[name-name] 画像の読み込みに失敗: ' + url, err)
         opts.onError?.()
       })
@@ -2012,6 +2102,7 @@ export class CharacterLayer extends Container {
         }
       })
       .catch((err) => {
+        state.imageLoadPending = false
         console.warn('[name-name] 画像の読み込みに失敗: ' + url, err)
         if (this.characters.get(NAME) === state) {
           this.clearImagePixelateState(state)
@@ -2079,6 +2170,7 @@ export class CharacterLayer extends Container {
   private performImagePixelateSwap(name: string, state: CharacterState, texture: Texture): void {
     const s = state.pixelateState
     if (!s) return
+    state.imageLoadPending = false
     this.applyImageTexture(name, state.sprite, texture, s.size, s.circular, s.maxHeight)
     if (!state.fadeAnimation) state.sprite.alpha = 1
     s.phase = 'refine'
