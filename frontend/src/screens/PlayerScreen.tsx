@@ -965,6 +965,11 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                       novelPlayerRef.current?.openSettings()
                     },
                     onBack,
+                    // #643: header: hidden プロジェクト（Gymnasia 等、name-name 自身の存在を
+                    // プレイヤーに見せたくない構成）では、タイトル画面から name-name トップへ
+                    // 戻る「終了」ボタン自体を出さない（ヘッダを隠す意図と矛盾するため）。
+                    // visible/collapsed（ヘッダ側に戻る導線がある/展開できる）では従来どおり表示。
+                    showExitButton: headerMode !== 'hidden',
                   }
                 : null
             }

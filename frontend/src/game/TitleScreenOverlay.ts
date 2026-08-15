@@ -98,6 +98,15 @@ export interface TitleScreenShowOptions {
   onContinue: () => void
   onOpenSettings: () => void
   onBack: () => void
+  /**
+   * 「終了」ボタン（name-name トップへ戻る）を表示するか (#643)。frontmatter `header: hidden`
+   * のプロジェクト（Gymnasia 等、name-name 自身の存在をプレイヤーに見せたくない構成）では、
+   * ヘッダ内の「戻る」導線と同じく、タイトル画面からも name-name トップへ戻れてしまうのは
+   * 設計として矛盾する。`disabled`（押せないが見える）ではなく、ボタン自体を buttonSpecs から
+   * 除外して非描画にする（キーボードフォーカス巡回 #640 からも自然に除外される）。
+   * 既定 true（後方互換。`header: visible`/`collapsed` は従来どおり表示）。
+   */
+  showExitButton?: boolean
 }
 
 /** キーボードフォーカス移動対象のボタン1件分。disabled ボタンはナビゲーション対象から除外する（#633）。 */
@@ -189,8 +198,16 @@ export class TitleScreenOverlay extends Container {
         disabled: !opts.hasSaveData,
       },
       { label: '設定', onClick: opts.onOpenSettings, variant: 'secondary', disabled: false },
-      { label: '終了', onClick: opts.onBack, variant: 'secondary', disabled: false },
     ]
+    // #643: header: hidden プロジェクトでは配列にそもそも含めない（非表示。disabled ではない）。
+    if (opts.showExitButton ?? true) {
+      buttonSpecs.push({
+        label: '終了',
+        onClick: opts.onBack,
+        variant: 'secondary',
+        disabled: false,
+      })
+    }
 
     const buttonWidth = Math.max(
       BUTTON_MIN_WIDTH,

@@ -216,8 +216,8 @@ interface NovelPlayerProps {
    *  null/undefined でタイトル画面自体を出さない（deep-link 等、呼び出し側 PlayerScreen が
    *  `startSceneId === null && !titleDismissed` のときだけオブジェクトを渡す想定）。
    *  オブジェクト自体は呼び出し側で毎レンダー作り直されうる（コールバックのクロージャ含む）ため、
-   *  再表示の要否は `title`/`hasSaveData`/`dark`（と null 遷移）だけを見て判定し、コールバックの
-   *  参照同一性には依存しない（下記 useEffect 参照、無限ループ防止）。 */
+   *  再表示の要否は `title`/`hasSaveData`/`dark`/`showExitButton`（と null 遷移）だけを見て判定し、
+   *  コールバックの参照同一性には依存しない（下記 useEffect 参照、無限ループ防止）。 */
   titleScreen?: {
     title: string
     hasSaveData: boolean
@@ -225,6 +225,10 @@ interface NovelPlayerProps {
     onContinue: () => void
     onOpenSettings: () => void
     onBack: () => void
+    /** 「終了」ボタンを表示するか (#643)。frontmatter `header: hidden` のプロジェクトでは
+     *  PlayerScreen が false を渡し、name-name トップへ戻る導線自体をタイトル画面から消す。
+     *  null/undefined/true で従来どおり表示（後方互換）。 */
+    showExitButton?: boolean
   } | null
   /** タイトル画面の暗さ (#628 フェーズ2b)。旧 TitleOverlay.tsx の `dark` prop（プレイヤーテーマ
    *  playerDark）と同じ意味。true で #111827（gray-900）、false で #1e1b4b（indigo-950）。 */
@@ -952,11 +956,19 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
         onContinue: () => titleScreenRef.current?.onContinue(),
         onOpenSettings: () => titleScreenRef.current?.onOpenSettings(),
         onBack: () => titleScreenRef.current?.onBack(),
+        showExitButton: ts.showExitButton,
       })
     } else {
       renderer.hideTitleScreen()
     }
-  }, [titleScreenActive, titleScreen?.title, titleScreen?.hasSaveData, dark, rendererReady])
+  }, [
+    titleScreenActive,
+    titleScreen?.title,
+    titleScreen?.hasSaveData,
+    titleScreen?.showExitButton,
+    dark,
+    rendererReady,
+  ])
 
   // intermission.md 専用シーン (#404)。PlayerScreen の非同期取得（assets/raw 経由）は
   // マウント後に解決することが多いため、init effect（マウント時1回）だけでは反映できない。
