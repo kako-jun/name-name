@@ -253,6 +253,30 @@ fn average(sum: (u32, u32, u32, u32)) -> (u8, u8, u8) {
     ((sum.0 / n) as u8, (sum.1 / n) as u8, (sum.2 / n) as u8)
 }
 
+/// `(sub_x, sub_y)` を左上とする 2x2 ブロックを `get` で読み取り、黒背景へ合成してから
+/// [`quadrant_cell_from_subpixels`] へ渡す共通ヘルパー。`rgba_to_quadrant_grid` 系の
+/// 6つのバリアント（cover-fit グリッド／ネイティブ解像度／スクロール窓、それぞれの通常版・
+/// ピクセレート版）は、サブピクセルの読み取り元と境界チェックの有無（`get` の中身）・
+/// オフセット計算（`sub_x`/`sub_y` の求め方）がそれぞれ異なるため丸ごとの共通化はできないが、
+/// 「2x2ブロックを読んで黒合成し `quadrant_cell_from_subpixels` へ渡す」処理自体は
+/// 6箇所とも完全に同一だった（dev-doctrine 規律4、セルフレビュー指摘対応）。
+fn quadrant_cell_at(
+    get: impl Fn(u32, u32) -> (u8, u8, u8, u8),
+    sub_x: u32,
+    sub_y: u32,
+) -> QuadrantCell {
+    let ul = get(sub_x, sub_y);
+    let ur = get(sub_x + 1, sub_y);
+    let ll = get(sub_x, sub_y + 1);
+    let lr = get(sub_x + 1, sub_y + 1);
+    quadrant_cell_from_subpixels([
+        composite_over_black(ul.0, ul.1, ul.2, ul.3),
+        composite_over_black(ur.0, ur.1, ur.2, ur.3),
+        composite_over_black(ll.0, ll.1, ll.2, ll.3),
+        composite_over_black(lr.0, lr.1, lr.2, lr.3),
+    ])
+}
+
 /// ターミナルの1文字セルの実世界アスペクト比（幅 / 高さ）。文字セルは一般に正方形ではなく
 /// 縦長（幅の約2倍の高さ）と言われるが、実際の値はターミナルエミュレータ・フォント・
 /// フォントサイズに強く依存する近似値であり、実測に基づく確定値ではない（#489）。
@@ -524,22 +548,13 @@ pub fn rgba_to_quadrant_grid(
         return blank_grid(cols, rows);
     }
 
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
     let mut cells = Vec::with_capacity(cols as usize * rows as usize);
     for cy in 0..rows {
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = u32::from(cy) * 2;
-            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage { cols, rows, cells }
@@ -618,22 +633,13 @@ pub fn rgba_to_quadrant_grid_pixelated(
         return blank_grid(cols, rows);
     }
 
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
     let mut cells = Vec::with_capacity(cols as usize * rows as usize);
     for cy in 0..rows {
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = u32::from(cy) * 2;
-            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage { cols, rows, cells }
@@ -676,22 +682,13 @@ pub fn rgba_to_quadrant_grid_window(
         return blank_grid(cols, visible_rows);
     }
 
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
     let mut cells = Vec::with_capacity(cols as usize * visible_rows as usize);
     for cy in 0..visible_rows {
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = u32::from(cy) * 2;
-            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage {
@@ -737,16 +734,7 @@ pub fn rgba_to_quadrant_grid_native(pixels: &[u8], img_w: u32, img_h: u32) -> Re
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = u32::from(cy) * 2;
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage { cols, rows, cells }
@@ -804,16 +792,7 @@ pub fn rgba_to_quadrant_grid_native_pixelated(
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = u32::from(cy) * 2;
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage { cols, rows, cells }
@@ -864,22 +843,13 @@ pub fn rgba_to_quadrant_grid_window_pixelated(
     }
 
     let sub_offset = u32::from(offset) * 2;
+    let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
     let mut cells = Vec::with_capacity(cols as usize * visible_rows as usize);
     for cy in 0..visible_rows {
         for cx in 0..cols {
             let sub_x = u32::from(cx) * 2;
             let sub_y = sub_offset + u32::from(cy) * 2;
-            let get = |x: u32, y: u32| -> (u8, u8, u8, u8) { sub[(y * sub_w + x) as usize] };
-            let ul = get(sub_x, sub_y);
-            let ur = get(sub_x + 1, sub_y);
-            let ll = get(sub_x, sub_y + 1);
-            let lr = get(sub_x + 1, sub_y + 1);
-            cells.push(quadrant_cell_from_subpixels([
-                composite_over_black(ul.0, ul.1, ul.2, ul.3),
-                composite_over_black(ur.0, ur.1, ur.2, ur.3),
-                composite_over_black(ll.0, ll.1, ll.2, ll.3),
-                composite_over_black(lr.0, lr.1, lr.2, lr.3),
-            ]));
+            cells.push(quadrant_cell_at(get, sub_x, sub_y));
         }
     }
     RenderedImage {
