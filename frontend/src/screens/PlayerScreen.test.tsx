@@ -1711,6 +1711,8 @@ describe('PlayerScreen', () => {
       restart: ReturnType<typeof vi.fn>
       hasQuickSave: ReturnType<typeof vi.fn>
       setDocKey: ReturnType<typeof vi.fn>
+      // #637: 「はじめから」が旧クイックセーブを明示的に消去するために呼ぶ。
+      clearQuickSave: ReturnType<typeof vi.fn>
     }
 
     function installMockRenderer(hasQuickSave: boolean): MockRenderer {
@@ -1719,6 +1721,7 @@ describe('PlayerScreen', () => {
         restart: vi.fn(),
         hasQuickSave: vi.fn().mockReturnValue(hasQuickSave),
         setDocKey: vi.fn(),
+        clearQuickSave: vi.fn(),
       }
       ;(window as unknown as { __renderer?: MockRenderer }).__renderer = renderer
       return renderer
@@ -1792,6 +1795,71 @@ describe('PlayerScreen', () => {
       expect(renderer.audioManager.ensureContext).toHaveBeenCalledTimes(1)
       expect(renderer.restart).toHaveBeenCalledTimes(1)
       expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+    })
+
+    // --- #637: 「はじめから」は renderer.clearQuickSave() を呼び、旧クイックセーブを消去する ---
+    //
+    // restart() 自体は onSceneChangeCallback を経由しないため、旧クイックセーブが自動上書きされる
+    // とは限らない（entry から一度もシーン遷移していない状態でリロードすると旧クイックセーブが
+    // そのまま復元されてしまう）。onNewGame から明示的に clearQuickSave() を呼ぶことを検証する。
+    describe('#637: 「はじめから」は renderer.clearQuickSave() を呼ぶ', () => {
+      it('10: 「はじめから」押下で renderer.clearQuickSave() が呼ばれる', async () => {
+        const renderer = installMockRenderer(true)
+
+        await renderWithFrontmatter({})
+
+        const newGameButton = screen.getByRole('button', { name: '新規開始' })
+        fireEvent.click(newGameButton)
+
+        expect(renderer.clearQuickSave).toHaveBeenCalledTimes(1)
+      })
+
+      it('11: 「はじめから」押下で clearQuickSave() と restart() が両方呼ばれる（呼び出し順は問わない・片方欠落の回帰防止）', async () => {
+        const renderer = installMockRenderer(true)
+
+        await renderWithFrontmatter({})
+
+        const newGameButton = screen.getByRole('button', { name: '新規開始' })
+        fireEvent.click(newGameButton)
+
+        expect(renderer.clearQuickSave).toHaveBeenCalledTimes(1)
+        expect(renderer.restart).toHaveBeenCalledTimes(1)
+      })
+
+      it('12: window.__renderer.clearQuickSave が未定義でも「はじめから」押下は例外を投げない（optional chaining境界）', async () => {
+        // clearQuickSave を持たない renderer を意図的に用意する（旧バージョンの __renderer 相当）。
+        const renderer = {
+          audioManager: { ensureContext: vi.fn() },
+          restart: vi.fn(),
+          hasQuickSave: vi.fn().mockReturnValue(true),
+          setDocKey: vi.fn(),
+        }
+        ;(window as unknown as { __renderer?: typeof renderer }).__renderer = renderer
+
+        await renderWithFrontmatter({})
+
+        const newGameButton = screen.getByRole('button', { name: '新規開始' })
+        expect(() => fireEvent.click(newGameButton)).not.toThrow()
+        expect(renderer.restart).toHaveBeenCalledTimes(1)
+        expect(screen.queryByRole('button', { name: '新規開始' })).toBeNull()
+      })
+
+      it('13: onContinue のレガシーフォールバック（hasQuickSave()=false）では clearQuickSave() は呼ばれず、restart() 経由のフォールバックは従来どおり動く（非退行）', async () => {
+        localStorage.setItem(READ_PROGRESS_KEY, JSON.stringify([1]))
+        const renderer = installMockRenderer(false)
+
+        await renderWithFrontmatter({})
+
+        const continueButton = screen.getByRole('button', { name: 'つづきから' })
+        fireEvent.click(continueButton)
+
+        // clearQuickSave() は onNewGame 専用。onContinue のレガシーフォールバックからは呼ばれない
+        // （restart() 自体が gameState/currentSceneId をリセットするようになっても、
+        // つづきからの skip 再生フローには影響しない）。
+        expect(renderer.clearQuickSave).not.toHaveBeenCalled()
+        expect(renderer.restart).toHaveBeenCalledTimes(1)
+        expect(lastNovelPlayerProps().initialSkipMode).toBe(true)
+      })
     })
   })
 

@@ -901,17 +901,26 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                       // ため、AudioContext 起動後に setEvents で再リセットして最初から走らせる
                       // (これをしないと冒頭の voice 付き Narration/Dialog が AudioContext null のまま
                       // 発火済みで再生されない)。
+                      // #637: 「はじめから」は gameState(flags)/currentSceneId を旧セーブから
+                      // 完全に切り離す必要がある。renderer.restart() 自体が gameState.clear() /
+                      // currentSceneId のリセットを行うようになった（#637）が、restart() は
+                      // シーン切り替え検知（onSceneChangeCallback）を経由しないため、旧
+                      // クイックセーブが自動上書きされるとは限らない。明示的に clearQuickSave()
+                      // を呼び、リロード時に旧セーブが復活しない（つづきから相当に戻らない）
+                      // ことを保証する。
                       const renderer = (
                         window as {
                           __renderer?: {
                             audioManager?: { ensureContext?: () => void }
                             setDocKey?: (docKey: string) => void
                             restart?: () => void
+                            clearQuickSave?: () => void
                           }
                         }
                       ).__renderer
                       renderer?.setDocKey?.(projectName)
                       renderer?.audioManager?.ensureContext?.()
+                      renderer?.clearQuickSave?.()
                       renderer?.restart?.()
                     },
                     onContinue: () => {
