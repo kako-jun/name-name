@@ -162,6 +162,16 @@ no-op で吸収する（位置を変えない、fail-soft）。
 `select_current_choice()`（選択確定）の両方に効くため、ロック中の選択肢も見た目・
 選択可否ともに解放される（Web 版 `NovelRenderer.setDebugUnlockAllChoices` と同じ設計）。
 
+> **例外（中継ゲートは `--unlock-all` の影響を受けない）**: 単一選択肢＋`[条件: flag]`の
+> シーンを意思決定不要な中継とみなして自動で素通りする機能（中継シーン自動継続、
+> `jump_to_scene_idx`、#574）は、条件未達の判定に `is_option_locked` ではなく専用の
+> `is_option_condition_unmet` ヘルパーを使う。`is_option_locked` は `--unlock-all`
+> 有効時に常に `false`（未達なし）を返すため、これで判定すると本来一度止めて表示す
+> べき条件付き未達ゲートまで誤って自動継続してしまう。そのため中継ゲートは
+> `--unlock-all` の有無に関わらず、条件未達なら必ず一度止まる。停止後に表示される
+> 選択肢自体は引き続き `is_option_locked` 経由で `--unlock-all` の効果を受け、見た目・
+> 選択可否ともに解放される（#652 セルフレビュー must 指摘対応）。
+
 ## 設計背景
 
 - `startFrom`（途中局面指定・`eventIndex>0`）とセーブ復元は、共通コア `restoreToScene(scene, state)` を経由して状態を宣言的に組み立てる（[#256](https://github.com/kako-jun/name-name/issues/256)）。復元ロジックは 1 本に集約されている。ただし `startFrom` の `eventIndex=0`（本番 `?scene=` 埋め込みの既定）だけは通常入場と同じ fresh-start 経路（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の話者の立ち絵を出す（[#399](https://github.com/kako-jun/name-name/issues/399)）。
