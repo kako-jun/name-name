@@ -479,6 +479,13 @@ pub struct Playback {
     /// `Cell` で内部可変性を持たせる（`RefCell` ではなく `Cell` で十分 — 中身が `Copy` な
     /// `(u64, Option<usize>, usize)` のため）。
     total_cache: std::cell::Cell<Option<(u64, Option<usize>, usize)>>,
+    /// デバッグ用の全選択肢ロック解除フラグ (#652)。`false`（既定）は従来どおり
+    /// `is_option_locked` が `option.condition` を判定する。`true` のときは
+    /// `option.condition` の有無に関わらず常に `false`（ロックしない）を返す——
+    /// `--unlock-all` CLI フラグ（`cli.rs`）専用で、GUI版 `?debug_unlock_all=1`
+    /// （`NovelRenderer.setDebugUnlockAllChoices`）と対称。`with_debug_unlock_all`
+    /// で構築直後に設定する想定（`with_sentence_per_page` と同じパターン）。
+    debug_unlock_all: bool,
 }
 
 /// `build_scene_items` がシーンを跨いで引き継ぐランニング状態のまとめ役（#509 Phase A）。
@@ -993,6 +1000,7 @@ impl Playback {
             current_scene_idx: 0,
             flags,
             total_cache: std::cell::Cell::new(None),
+            debug_unlock_all: false,
         }
     }
 
@@ -1004,6 +1012,16 @@ impl Playback {
     pub fn with_sentence_per_page(mut self, enabled: bool) -> Self {
         self.sentence_per_page = enabled;
         self.sync_sentence_pages();
+        self
+    }
+
+    /// デバッグ用の全選択肢ロック解除 (#652)。`Playback::from_document`/
+    /// [`Playback::from_lines`] 直後に連結して呼ぶ想定（`--unlock-all` CLI フラグを
+    /// `main.rs` からそのまま渡す）。`true` にすると `is_option_locked` が常に `false`
+    /// を返すようになり、`[条件:]` の有無に関わらず全ての選択肢が選択可能になる
+    /// （GUI版 `NovelRenderer.setDebugUnlockAllChoices` と対称）。
+    pub fn with_debug_unlock_all(mut self, enabled: bool) -> Self {
+        self.debug_unlock_all = enabled;
         self
     }
 
@@ -1133,7 +1151,34 @@ impl Playback {
     /// `None`（従来どおり条件なし）なら常に `false`（ロックしない）。`Some(flag)` なら
     /// `!self.flags.check(flag)`（未定義/false ならロック）——GUI版 `checkFlag`・
     /// `GameFlags::check` と同じ真偽判定規則。
+    ///
+    /// `self.debug_unlock_all`（#652、`--unlock-all` CLI フラグ）が `true` のときは
+    /// `option.condition` を見ずに常に `false` を返す（全選択肢を強制解放）。
+    ///
+    /// 中継シーン自動継続（`jump_to_scene_idx`、#574）の「意思決定不要か」判定には使わない
+    /// こと——`debug_unlock_all` はあくまで「表示済みの選択肢を選べるか」の解放であって、
+    /// 「条件付きゲートを表示せずに素通りしてよいか」とは別軸。素通り判定には
+    /// `is_option_condition_unmet` を使う（#652 セルフレビュー must 指摘対応）。
     fn is_option_locked(&self, option: &ChoiceOption) -> bool {
+        if self.debug_unlock_all {
+            return false;
+        }
+        self.is_option_condition_unmet(option)
+    }
+
+    /// `option.condition`（#591）の真偽を、`debug_unlock_all` を考慮せず現在のフラグ状態
+    /// だけで判定する。`condition` が `None` なら常に `false`（未条件）。`Some(flag)` なら
+    /// `!self.flags.check(flag)`（未定義/false なら未達）。
+    ///
+    /// 中継シーン自動継続（`jump_to_scene_idx`、#574）が「単一選択肢＋`[条件: flag]`の
+    /// ゲートを意思決定不要な中継として自動で素通りしてよいか」を判定するのに使う。
+    /// `is_option_locked` を使うと `debug_unlock_all` 有効時に常に `false`（未達なし）を
+    /// 返してしまい、本来なら一度止めて表示すべき条件付き未達ゲートまで誤って自動継続
+    /// してしまう（#652 セルフレビュー must 指摘）。素通り判定はフラグの真偽そのものだけを
+    /// 見て「未条件」または「条件済み達成」の場合のみ継続する。表示後の選択可否
+    /// （プレイヤーがゲートを選べるか）は引き続き `is_option_locked` 経由で
+    /// `debug_unlock_all` の効果を受ける。
+    fn is_option_condition_unmet(&self, option: &ChoiceOption) -> bool {
         match &option.condition {
             None => false,
             Some(flag) => !self.flags.check(flag),
@@ -1675,14 +1720,24 @@ impl Playback {
                 // （＝このシーンで積んだ items を巻き戻し、選択肢の`jump`先シーンから
                 // ループを継続）を、プレイヤーへの追加入力要求なしに行う。実内容のある
                 // シーン、または選択肢が0件/2件以上のシーンに着地するまで繰り返す。
-                // #591: 唯一の選択肢が `[条件: flag]` でロック中（flag未定義/false）の
+                // #591: 唯一の選択肢が `[条件: flag]` で条件未達（flag未定義/false）の
                 // 場合は自動継続の対象から除外する。中継シーンの自動継続は「実質的に
-                // 意思決定の余地がない」ことが前提のため、ロック中の選択肢を黙って
-                // 自動選択すると条件付きロックの意味が失われる——通常のChoiceとして
+                // 意思決定の余地がない」ことが前提のため、条件未達の選択肢を黙って
+                // 自動選択すると条件付きゲートの意味が失われる——通常のChoiceとして
                 // 表示・停止させ、`select_current_choice`側のロック判定に委ねる。
+                // #652 セルフレビュー must 指摘対応: ここは `is_option_locked` ではなく
+                // `is_option_condition_unmet` を使う。`is_option_locked` は
+                // `debug_unlock_all` 有効時に常に `false` を返すため、`--unlock-all` を
+                // 使っただけで本来止まるべき条件付き未達ゲートまで誤って自動継続して
+                // しまう（`--scene` 併用時に限らず、通常プレイの
+                // `select_current_choice()` 経由でも発生）。フラグの真偽そのものだけを
+                // 見ることで、「未条件」または「条件済み達成」の場合のみ引き続き自動
+                // 継続し、「条件付き未達成」の場合は必ず一度止めて選択肢を表示する
+                // （表示後の選択可否は `is_option_locked` 経由で `debug_unlock_all` の
+                // 効果を引き続き受けるため、デバッグ機能の目的は損なわれない）。
                 let relay_jump: Option<String> = match &self.items[start..] {
                     [PlaybackItem::Choice(options, _columns)]
-                        if options.len() == 1 && !self.is_option_locked(&options[0]) =>
+                        if options.len() == 1 && !self.is_option_condition_unmet(&options[0]) =>
                     {
                         Some(options[0].jump.clone())
                     }
@@ -2007,6 +2062,7 @@ impl Playback {
             current_scene_idx: 0,
             flags: GameFlags::new(),
             total_cache: std::cell::Cell::new(None),
+            debug_unlock_all: false,
         }
     }
 }
@@ -2580,6 +2636,48 @@ mod tests {
         );
     }
 
+    // ---- #652: デバッグ用の全選択肢ロック解除 (with_debug_unlock_all) のテスト ----
+
+    #[test]
+    fn current_choice_locked_all_false_when_debug_unlock_all_enabled() {
+        let doc = choice_with_conditions_doc();
+        let pb = Playback::from_document(&doc).with_debug_unlock_all(true);
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![false, false],
+            "with_debug_unlock_all(true) なら option.condition の有無に関わらず全解放されるはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_on_condition_locked_option_succeeds_when_debug_unlock_all_enabled() {
+        let doc = choice_with_conditions_doc();
+        let mut pb = Playback::from_document(&doc).with_debug_unlock_all(true);
+        pb.move_choice_cursor_down(); // カーソルを通常ならロック中のindex 1へ
+
+        assert!(
+            pb.select_current_choice(),
+            "debug_unlock_all 有効時は条件未達のオプションも確定できるはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").speaker.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn with_debug_unlock_all_false_keeps_default_locked_behavior() {
+        // #652 セルフレビュー観点: with_debug_unlock_all(false) を明示的に呼んでも
+        // 既存動作（未指定時と同じ）から変わらないことを固定する。
+        let doc = choice_with_conditions_doc();
+        let pb = Playback::from_document(&doc).with_debug_unlock_all(false);
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![false, true],
+            "with_debug_unlock_all(false) は従来どおりの condition 判定のはず"
+        );
+    }
+
     #[test]
     fn select_current_choice_on_unlocked_option_still_works() {
         let doc = choice_with_conditions_doc();
@@ -2752,6 +2850,66 @@ mod tests {
             pb.current_choice_locked(),
             vec![true],
             "唯一の選択肢はroute01_cleared未設定でロックされたままのはず"
+        );
+    }
+
+    // #652 セルフレビュー must 指摘対応: 上のテストと同じ「単一選択肢＋条件未達の中継
+    // ゲート」構成を、`with_debug_unlock_all(true)`（`--unlock-all` CLI フラグ）を有効に
+    // した状態で `select_current_choice()` 経由（`--scene` を使わない通常プレイ経路）で
+    // 通過したときの挙動を検証する。修正前は中継継続の判定に `is_option_locked` を
+    // 使っていたため、`debug_unlock_all` が有効なだけで条件未達のゲートまで誤って自動で
+    // 素通りしてしまっていた（`--scene` 指定時に限らず発生）。修正後は判定に
+    // `is_option_condition_unmet` を使うため、`debug_unlock_all` の有無に関わらず一度
+    // 必ず止まる。ただし停止後の表示では `is_option_locked` 経由で `debug_unlock_all` の
+    // 効果を受け、選択肢は解放されて見える（デバッグ機能としての目的は損なわれない）。
+    #[test]
+    fn select_current_choice_stops_at_relay_scene_with_unmet_condition_even_when_debug_unlock_all_enabled(
+    ) {
+        let ch1 = chapter(
+            1,
+            vec![
+                scene(
+                    "hub_gate",
+                    vec![
+                        dialog(Some("A"), vec!["定期報告"]),
+                        choice(vec![("続ける", "hub_gate_advance_1")]),
+                    ],
+                ),
+                scene(
+                    "hub_gate_advance_1",
+                    vec![choice_with_conditions(vec![(
+                        "続ける",
+                        "hub",
+                        Some("route01_cleared"),
+                    )])],
+                ),
+                scene("hub", vec![dialog(Some("B"), vec!["hubに戻った"])]),
+            ],
+        );
+        let doc = document_with_chapters(vec![ch1]);
+        let mut pb = Playback::from_document(&doc).with_debug_unlock_all(true);
+        assert!(pb.advance(), "台詞から Choice へ進めるはず");
+
+        assert!(
+            pb.select_current_choice(),
+            "hub_gate から hub_gate_advance_1 への jump 自体は成功するはず"
+        );
+
+        assert_eq!(
+            pb.current_scene_id(),
+            "hub_gate_advance_1",
+            "debug_unlock_all(true) でも、条件(route01_cleared)が未達なら中継自動継続の \
+             対象にならず、このシーンで停止するはず（hubまで誤って素通りしない）"
+        );
+        assert!(
+            pb.current_choice().is_some(),
+            "停止時はChoiceとして表示されているはず（自動継続なら current_choice() は None のはず）"
+        );
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![false],
+            "停止後の表示では debug_unlock_all(true) により選択肢は解放されて見えるはず \
+             （中継継続の素通り判定とは独立に is_option_locked 経由で効果を受ける）"
         );
     }
 

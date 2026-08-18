@@ -467,8 +467,9 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
       entryPathRef.current = null
       loadedDocsRef.current = new Map()
       loadingDocsRef.current = new Map()
-      // `?scene=<sceneId>` ディープリンク (#386)。production でも常時有効（DEV 限定の
-      // debug_scene とは別系統）。読み込み完了まで NovelPlayer はマウントされないため、
+      // `?scene=<sceneId>` ディープリンク (#386)。production でも常時有効（`?debug_scene=`
+      // も #652 で同じく本番ビルドで常時有効になったが、confinement の有無等の性質が
+      // 異なる別系統）。読み込み完了まで NovelPlayer はマウントされないため、
       // ここで一度読めば十分（マウント後のクエリ変化への追従は対象外）。
       const sceneParam = parseSceneQuery(window.location.search)
       try {

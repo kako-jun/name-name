@@ -329,6 +329,15 @@ export class NovelRenderer {
    */
   private confinedSceneIds: string[] | null = null
   /**
+   * デバッグ用の全選択肢ロック解除フラグ (#652)。false（既定）は従来どおり
+   * `option.condition` を `checkFlag` で判定する。true のときは `option.condition` の
+   * 有無に関わらず choice の `locked` 配列を全 false にする（全ルート強制解放）。
+   * `setDebugUnlockAllChoices` で設定する（呼び出し側は `NovelPlayer` が
+   * `?debug_unlock_all=1`（`debugQuery.ts` の `parseDebugUnlockAll`）から渡す）。
+   * TUI版 `Playback.debug_unlock_all`（`--unlock-all`）と対称。
+   */
+  private debugUnlockAllChoices = false
+  /**
    * 終劇状態 (#386)。GameState 上の宣言的フラグ（`NovelGameState.storyEnded`）と対になる
    * 実行時フィールド。true の間は `advance()` が no-op になり（choice/advance は反応しない）、
    * `jumpToScene` も再入しない。goBack/seekTo/セーブ復元は `applyState` 経由でこの値を
@@ -1095,6 +1104,15 @@ export class NovelRenderer {
    */
   setConfinedSceneIds(ids: string[] | null): void {
     this.confinedSceneIds = ids
+  }
+
+  /**
+   * デバッグ用の全選択肢ロック解除を設定する (#652)。true にすると、以降表示される
+   * choice の `locked` 配列が `option.condition` の有無に関わらず全 false になる
+   * （既存動作からの変更は無し＝false が既定）。
+   */
+  setDebugUnlockAllChoices(enabled: boolean): void {
+    this.debugUnlockAllChoices = enabled
   }
 
   /**
@@ -3944,9 +3962,13 @@ export class NovelRenderer {
       // 条件付きロック (#591)。`option.condition` が未定義なら常に false（ロックしない、
       // 既存動作）。指定されていれば `checkFlag` で判定する（未定義/false ならロック）。
       // `resolveEvents` の Condition 判定・GameFlags.check（TUI版）と同じ真偽規則。
-      const locked = event.Choice.options.map((option) =>
-        option.condition ? !this.gameState.checkFlag(option.condition) : false
-      )
+      // #652: `debugUnlockAllChoices` が true のときは `option.condition` を見ずに
+      // 全 false（全ルート強制解放。TUI版 `Playback.is_option_locked` と対称）。
+      const locked = this.debugUnlockAllChoices
+        ? event.Choice.options.map(() => false)
+        : event.Choice.options.map((option) =>
+            option.condition ? !this.gameState.checkFlag(option.condition) : false
+          )
       // 完了(クリア済み)視覚状態 (#594、#596でキーワード改名)。`option.cleared` が未定義
       // なら常に false（完了しない、既存動作）。指定されていれば `checkFlag` で判定する
       // （`locked` と違い真がそのまま完了——真偽判定自体は `[条件:]` と同じ規則）。
@@ -5245,10 +5267,12 @@ export class NovelRenderer {
     // startFrom は背景も立ち絵も出ず eventIndex=0 で止まっていた（#399 の症状）。restoreToScene
     // は save/load 復元専用（完成状態を持つ SaveSlotData を渡す loadFromSaveData）として残す。
     //
-    // eventIndex/textIndex/sentenceIndex が指定されるのは DEV の debug_scene（シーン途中からの
-    // 起動）だけ。fresh-start 経路は resetAndStartEvents が index を 0 にリセットしてしまうため
-    // 途中局面を再現できない。そのため index 指定がある場合だけ従来どおり restoreToScene の
-    // 宣言的復元にフォールバックする（production は常に 0 なのでこの分岐には入らない）。
+    // eventIndex/textIndex/sentenceIndex が指定されるのは `?debug_scene=`（シーン途中からの
+    // 起動、#652で本番ビルドでも常時有効）経由の呼び出しだけ。fresh-start 経路は
+    // resetAndStartEvents が index を 0 にリセットしてしまうため途中局面を再現できない。
+    // そのため index 指定がある場合だけ従来どおり restoreToScene の宣言的復元に
+    // フォールバックする（`?scene=` 由来の呼び出しは常に index 0 なのでこの分岐には
+    // 入らない）。
     if (eventIndex === 0 && textIndex === 0 && sentenceIndex === 0) {
       // フラグを先に確定させる（resetAndStartEvents 内の resolveEvents が this.gameState の
       // flags に依存するため）。fromJSON は置換セマンティクス（restoreToScene と同じ）。
@@ -5257,7 +5281,7 @@ export class NovelRenderer {
       return
     }
 
-    // DEV（debug_scene で index 指定あり）: 最小 NovelGameState を構築して共通コアで宣言的復元。
+    // `?debug_scene=`（index 指定あり）: 最小 NovelGameState を構築して共通コアで宣言的復元。
     const state: NovelGameState = {
       sceneId: opts.sceneId,
       eventIndex,

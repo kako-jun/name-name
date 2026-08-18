@@ -175,6 +175,113 @@ describe('NovelRenderer.playScript (#220)', () => {
     expect(call?.[5]).toEqual([false, true])
   })
 
+  // #652: デバッグ用の全選択肢ロック解除。setDebugUnlockAllChoices(true) 後は、
+  // flag 未設定で本来ロックされる condition 付きオプションも locked=false で show へ渡る。
+  it('#652: setDebugUnlockAllChoices(true) 後は flag 未設定でも condition 付きオプションが locked=false で show へ渡される', () => {
+    const r = makeRenderer([
+      scene('cell', [
+        narration('body'),
+        {
+          Choice: {
+            options: [
+              { text: '誰でも選べる', jump: 'hub' },
+              { text: 'route01_cleared が必要', jump: 'route01', condition: 'route01_cleared' },
+            ],
+          },
+        } as Event,
+      ]),
+      scene('hub', [narration('hub')]),
+      scene('route01', [narration('route01')]),
+    ])
+    internals(r).choiceOverlay.show = vi.fn()
+    r.setDebugUnlockAllChoices(true)
+
+    internals(r).advance()
+
+    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    expect(call?.[5]).toEqual([false, false])
+  })
+
+  // #652 実装エージェント報告の未カバー観点:「?debug_unlock_all=1 を、通常（非デバッグ）開始後に
+  // プレイ中に付与した場合の挙動」。setDebugUnlockAllChoices は NovelPlayer からは mount 時に
+  // 一度だけ呼ばれる想定だが、NovelRenderer 自身は構築時専用の設定ではなく、いつ呼ばれても
+  // 「以後の」Choice 計算（processDirective の Choice 分岐、locked 配列の都度再計算）に反映される
+  // ——#591 再訪テストと同じ「show() は毎回その時点の状態から計算し直す」性質の、flag ではなく
+  // debugUnlockAllChoices 版。
+  it('#652: 非デバッグで開始しプレイ中に setDebugUnlockAllChoices(true) を付与すると、以降の再訪で選択肢ロックが解除される（構築時専用の設定ではない）', () => {
+    const r = makeRenderer([
+      scene('gate', [
+        narration('gate body'),
+        {
+          Choice: {
+            options: [
+              { text: '誰でも選べる', jump: 'hub' },
+              { text: 'route01_cleared が必要', jump: 'route01', condition: 'route01_cleared' },
+            ],
+          },
+        } as Event,
+      ]),
+      scene('hub', [narration('hub')]),
+      scene('route01', [narration('route01')]),
+    ])
+    internals(r).choiceOverlay.show = vi.fn()
+
+    // 1回目: setDebugUnlockAllChoices を一度も呼んでいない（通常＝非デバッグ開始）状態で
+    // Choice へ到達 → 通常どおり route01_cleared 未設定分だけロックされる
+    internals(r).advance()
+    expect(internals(r).choiceOverlay.show.mock.calls[0]?.[5]).toEqual([false, true])
+
+    // プレイ中（Choice 表示済みの状態）で debug_unlock_all を後付けで付与する
+    r.setDebugUnlockAllChoices(true)
+
+    // 同じ Choice へ再訪（jumpToScene でシーン先頭の narration へ戻り、advance で再度 Choice へ）
+    r.jumpToScene('gate')
+    internals(r).advance()
+
+    const calls = internals(r).choiceOverlay.show.mock.calls
+    expect(calls[calls.length - 1]?.[5]).toEqual([false, false])
+  })
+
+  // #652 セルフレビュー must 指摘対応:「debug_unlock_all と debug_flags/debug_scene を
+  // 同一URLで組み合わせた場合の相互作用」。NovelPlayer.tsx の呼び出し順序は
+  // `renderer.setDebugUnlockAllChoices(...)`（debug_unlock_all）→ `renderer.startFrom(debug.scene)`
+  // （debug_scene）の順に修正済み（NovelPlayer.tsx 該当行のコメント参照）。setScenes/setEvents/
+  // restoreSnapshot/startFrom（`?scene=` 由来・`?debug_scene=` 由来の両方）/quickLoad/playScript
+  // はいずれも内部で同期的に render() し、その時点で選択肢の locked 状態が確定するため、
+  // debugUnlockAllChoices はこれらより必ず前に設定する。よって debug_scene の着地先が
+  // 「narration 等を経由せず Choice がシーン先頭の item」という構成でも、startFrom より前に
+  // debugUnlockAllChoices が true になっているため、起動直後の最初の show() 呼び出しから
+  // 既にロック解除された状態で表示される。
+  it('#652: `?debug_scene=`がChoiceへ直行するシーンの場合、NovelPlayerと同じ呼び出し順（setDebugUnlockAllChoices→startFrom）だと最初のshow()呼び出しから既にロック解除されている', () => {
+    const r = makeRenderer([
+      // 実運用の初期シーン相当（narration のみ）。dbg-scene を配列先頭に置くと、
+      // makeRenderer 内の setScenes 構築時点で（choiceOverlay.show をモックする前に）
+      // 本物の show が呼ばれてしまうため、別シーンを経由させて回避する
+      // （#591 の同種コメント参照）。
+      scene('boot', [narration('boot')]),
+      scene('dbg-scene', [
+        {
+          Choice: {
+            options: [
+              { text: '誰でも選べる', jump: 'hub' },
+              { text: 'route01_cleared が必要', jump: 'route01', condition: 'route01_cleared' },
+            ],
+          },
+        } as Event,
+      ]),
+      scene('hub', [narration('hub')]),
+      scene('route01', [narration('route01')]),
+    ])
+    internals(r).choiceOverlay.show = vi.fn()
+
+    // NovelPlayer.tsx と同じ順序（修正後）: debug_unlock_all が先、debug_scene の startFrom は後
+    r.setDebugUnlockAllChoices(true)
+    r.startFrom({ sceneId: 'dbg-scene' })
+
+    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    expect(call?.[5]).toEqual([false, false])
+  })
+
   it('#591: Flag イベントで route01_cleared=true を立てた後は locked=false になる', () => {
     const r = makeRenderer([
       scene('cell', [

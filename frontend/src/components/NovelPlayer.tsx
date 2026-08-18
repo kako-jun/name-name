@@ -16,7 +16,7 @@ import { Event, EventImageTransition, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 import { INACTIVITY_MS } from '../game/SeekBar'
 import { type NovelGameState } from '../game/GameState'
-import { parseDebugQuery } from '../game/debugQuery'
+import { parseDebugQuery, parseDebugUnlockAll } from '../game/debugQuery'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import {
   type AspectRatio,
@@ -580,6 +580,14 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       // `?scene=` ディープリンク単独埋め込みの confinement (#386)。setEvents/setJumpSceneIndex/
       // startFrom より前に設定し、以降のどの choice ジャンプも圏外判定の対象にする。
       renderer.setConfinedSceneIds(confinedSceneIds ?? null)
+      // #652: `?debug_unlock_all=1` は全ルート強制解放。debug_scene/debug_script の指定
+      // 有無に関わらず独立して評価する（通常のハブ経由フローでも、条件付き選択肢のロックを
+      // 全て解除したいデバッグ用途があるため）。setScenes/setEvents/restoreSnapshot/startFrom
+      // （`?scene=` 由来・`?debug_scene=` 由来の両方）/quickLoad/playScript は内部で同期的に
+      // render() し、その時点で選択肢の locked 状態が確定するため、着地シーンの先頭 item が
+      // Choice の場合に備えて、これらの描画系メソッドより必ず前に設定する（セルフレビュー
+      // must 指摘対応）。
+      renderer.setDebugUnlockAllChoices(parseDebugUnlockAll(window.location.search))
       // renderer が手動操作で autoMode を OFF にしたとき React state を同期 (#139)
       renderer.setOnAutoModeChange((on) => setAutoMode(on))
       // renderer が未読到達で skipMode を OFF にしたとき React state を同期 (#140)
@@ -763,17 +771,20 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       }
 
       // URL クエリによるデバッグ起点指定 (#220 Phase 3)。
-      // DEV ビルドでのみ有効。production ではこのブロックごと tree-shake される。
+      // #652: gymnasia のようなルート実機デバッグ（1ルートが複数ファイルに分割されており
+      // confinement 付き `?scene=`（#386）では対象ファイル外へ遷移できない構成）のため、
+      // 本番ビルドでも常時有効にした（以前の `import.meta.env.DEV` ガードは撤去。設計意図は
+      // kako-jun確定: 「知らなければ踏まない URL パラメータ」自体が十分な隠蔽であり、追加の
+      // 有効化条件・認証は設けない）。confinement（`confinedSceneIds`）は `?scene=` 単独埋め込み
+      // 専用の別経路で、ここには一切関与しない（常にconfinementなしで遷移する）。
       // debug_scene は sceneId 前提。scenes / jumpSceneIndex のどちらの索引でも解決する。
-      // initialSceneId(#386) より後に評価するため、dev では debug_scene が指定時に優先される
+      // initialSceneId(#386) より後に評価するため、debug_scene が指定時に優先される
       // （デバッグ目的の上書きを production 経路より優先させる）。
-      if (import.meta.env.DEV) {
-        const debug = parseDebugQuery(window.location.search)
-        if (debug && 'script' in debug) {
-          void renderer.playScript(debug.script)
-        } else if (debug && 'scene' in debug) {
-          renderer.startFrom(debug.scene)
-        }
+      const debug = parseDebugQuery(window.location.search)
+      if (debug && 'script' in debug) {
+        void renderer.playScript(debug.script)
+      } else if (debug && 'scene' in debug) {
+        renderer.startFrom(debug.scene)
       }
       onRendererReady?.(renderer)
       // タイトル画面 (#628 フェーズ2b): ここまで到達した時点で renderer は setAssetBaseUrl 済み

@@ -9,7 +9,7 @@
  * （不正トークンのスキップ）・index の NaN・null/空文字も網羅する。
  */
 import { describe, it, expect } from 'vitest'
-import { parseDebugQuery } from './debugQuery'
+import { parseDebugQuery, parseDebugUnlockAll } from './debugQuery'
 import type { FlagValue } from '../types'
 
 // flag 期待値ヘルパ（startFrom.test.ts と同じスタイル）
@@ -199,5 +199,34 @@ describe('parseDebugQuery (#220)', () => {
     expect(Object.getPrototypeOf(flags)).toBe(Object.prototype)
     expect(Object.prototype.hasOwnProperty.call(flags, '__proto__')).toBe(true)
     expect(flags['__proto__']).toEqual({ Number: 2 })
+  })
+})
+
+// ===== G. parseDebugUnlockAll (#652) =====
+
+describe('parseDebugUnlockAll (#652)', () => {
+  it('25: debug_unlock_all=1 → true', () => {
+    expect(parseDebugUnlockAll('?debug_unlock_all=1')).toBe(true)
+  })
+
+  it('26: 未指定 → false', () => {
+    expect(parseDebugUnlockAll('')).toBe(false)
+    expect(parseDebugUnlockAll('?other=1')).toBe(false)
+  })
+
+  it('27: debug_unlock_all=0 → false（有無ではなく値で判定）', () => {
+    expect(parseDebugUnlockAll('?debug_unlock_all=0')).toBe(false)
+  })
+
+  it('28: debug_unlock_all=true（文字列） → false（"1" 以外は厳密に false）', () => {
+    expect(parseDebugUnlockAll('?debug_unlock_all=true')).toBe(false)
+  })
+
+  it('29: debug_unlock_all=（空文字） → false', () => {
+    expect(parseDebugUnlockAll('?debug_unlock_all=')).toBe(false)
+  })
+
+  it('30: 他のdebugパラメータと併存できる', () => {
+    expect(parseDebugUnlockAll('?debug_scene=1-2&debug_unlock_all=1')).toBe(true)
   })
 })
