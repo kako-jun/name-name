@@ -26,6 +26,9 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 
 開発サーバー（`npm run dev`）に限らず、本番デプロイ先の URL にも以下のクエリを付けられる。
 
+`debug_scene`/`debug_script` を指定した起動はタイトル画面を出さず、指定した局面から直接開始する
+（`PlayerScreen.tsx` の `hasDebugStart` 判定、#656）。
+
 | クエリ | 意味 | 例 |
 |---|---|---|
 | `debug_scene` | 開始シーン ID（confinement なし。ファイル境界を無視して直接遷移） | `?debug_scene=1-2` |
