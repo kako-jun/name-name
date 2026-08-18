@@ -489,24 +489,33 @@ export function computeChoiceIconLayout(
 export type ChoiceIconKind = 'read' | 'unread'
 
 /**
- * 選択肢ボタン1件に表示すべきアイコンの種類を判定する純粋関数 (#598 追記3 / #604 訂正)。
+ * 選択肢ボタン1件に表示すべきアイコンの種類を判定する純粋関数
+ * (#598 追記3 / #604 訂正 / #658 再訂正)。
  *
  * 「ロック」と「既読/完了」は独立した2軸の状態である（ロック＝読むことすらできない、
  * 既読/完了＝読めるようになった後に読んだかどうか）。#604 で判明した誤り：ロックは
  * 「読むことすらできない」だけであって「未読でない」わけではない。ロック中の選択肢も
- * 当然「未読」ではあるので、`locked` はアイコン種別の判定に一切関与しない。
- * `cleared` のみで決まる（配色側の `resolveChoiceVisual` の locked > cleared > alreadyRead
- * > 通常という優先順位とは別軸の判定であり、`alreadyRead` もここでは一切参照しない）：
+ * 当然「未読」ではあるので、`locked` はアイコン種別の判定に一切関与しない（この結論は
+ * #658 でも変わらない）。
  *
- * - `cleared === true` → `'read'`（既読/完了。`read-icon.webp`。ロック中でも同じ）
- * - `cleared === false` → `'unread'`（未読。`alreadyRead` の真偽に関わらず `unread-icon.webp`。ロック中でも同じ）
+ * #658 再訂正: #604 時点では「`cleared`（`[完了: flag]`という脚本家が明示設定するフラグ）
+ * のみで決まり、`alreadyRead`（#366 の scene 単位の自動既読トラッキング、`resolveChoiceVisual`
+ * の背景色にも使われる）は一切参照しない」としていた。しかし Gymnasia route10 の実機確認で、
+ * 背景色は `alreadyRead` により正しく既読（灰色）を示しているのに、アイコンだけ未読のまま
+ * という食い違いが報告された——`[完了: flag]` を書いていない選択肢では `cleared` が常に
+ * false のままなので当然である。脚本家目線では別軸の状態でも、プレイヤー目線では
+ * どちらも「もう見た/読んだ」を意味する同じ体験のため、片方だけ反映されるとちぐはぐに見える。
+ * よって `cleared` と `alreadyRead` は OR で合成し、どちらかが真なら既読扱いにする:
+ *
+ * - `cleared === true || alreadyRead === true` → `'read'`（`read-icon.webp`。ロック中でも同じ）
+ * - どちらも `false` → `'unread'`（`unread-icon.webp`。ロック中でも同じ）
  *
  * ロックの見た目（暗い配色・クリック不可）は `resolveChoiceVisual` 側で別途表現する。
  * 実際に描画するかどうか（対応するテクスチャの先読みに成功しているか）は呼び出し側
  * （`ChoiceOverlay`）の責務。この関数は「本来どちらを見せるべきか」という論理だけを返す。
  */
-export function resolveChoiceIconKind(cleared: boolean): ChoiceIconKind {
-  return cleared ? 'read' : 'unread'
+export function resolveChoiceIconKind(cleared: boolean, alreadyRead: boolean): ChoiceIconKind {
+  return cleared || alreadyRead ? 'read' : 'unread'
 }
 
 /**

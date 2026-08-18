@@ -632,15 +632,26 @@ describe('computeChoiceGridLayout (#508)', () => {
   })
 })
 
-// #598 追記3 / #604 訂正: resolveChoiceIconKind（既読/未読アイコン種別判定の純粋関数）。
-// #604: locked は判定に一切関与しないため引数から削除された。cleared のみの2通りを固定する。
-describe('resolveChoiceIconKind (#598 追記3 / #604)', () => {
-  it('cleared=false は unread', () => {
-    expect(resolveChoiceIconKind(false)).toBe('unread')
+// #598 追記3 / #604 訂正 / #658 再訂正: resolveChoiceIconKind（既読/未読アイコン種別判定の
+// 純粋関数）。#604: locked は判定に一切関与しないため引数から削除された。
+// #658: alreadyRead（背景色の既読色分けにも使う #366 の自動既読トラッキング）が cleared と
+// OR で合流するよう訂正された（Gymnasia route10 実機確認で、背景色は既読なのにアイコンだけ
+// 未読のままという食い違いが報告されたため）。
+describe('resolveChoiceIconKind (#598 追記3 / #604 / #658)', () => {
+  it('cleared=false・alreadyRead=false は unread', () => {
+    expect(resolveChoiceIconKind(false, false)).toBe('unread')
   })
 
-  it('cleared=true は read', () => {
-    expect(resolveChoiceIconKind(true)).toBe('read')
+  it('cleared=true・alreadyRead=false は read', () => {
+    expect(resolveChoiceIconKind(true, false)).toBe('read')
+  })
+
+  it('cleared=false・alreadyRead=true は read（#658: alreadyRead 単独でも既読扱い）', () => {
+    expect(resolveChoiceIconKind(false, true)).toBe('read')
+  })
+
+  it('cleared=true・alreadyRead=true は read（両方真でも変わらず read）', () => {
+    expect(resolveChoiceIconKind(true, true)).toBe('read')
   })
 })
 
