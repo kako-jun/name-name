@@ -47,6 +47,7 @@ import {
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
 import type { EventScene } from '../types'
+import type { ChoiceIconLayout } from './novelLayout'
 
 describe('computeCoverFit', () => {
   // 注意: これは「抽出後の computeCoverFit と同一の直接計算式」であって、
@@ -693,6 +694,44 @@ describe('computeChoiceIconLayout (#598)', () => {
     expect(withIcon.iconY).not.toBe(withIcon.textY)
     expect(withIcon.iconY).toBeLessThan(withoutIcon.iconY)
     expect(withIcon.textY).toBeGreaterThan(withoutIcon.textY)
+  })
+
+  // #658後追い修正: textBlockHeight省略時はiconSizeを近似値として使う従来どおりの挙動
+  // （既存3テストが検証する具体値と完全一致・非破壊）だが、複数行折り返し時は呼び出し側が
+  // 実際のテキストブロック高さを渡すことで、行数が増えてもアイコンとテキストの間隔が
+  // ICON_TEXT_GAPちょうどに保たれ、重ならなくなる。
+  it('textBlockHeightを明示すると、行数が増えてもアイコン下端とテキスト上端の間隔がICON_TEXT_GAP(8)ちょうどに保たれる', () => {
+    const oneLineHeight = ICON_SIZE // 1行目はICON_SIZEを近似値として使う（省略時のデフォルトと同じ）
+    const twoLineHeight = ICON_SIZE + 24 // 2行目以降はCHOICE_TEXT_LINE_HEIGHT(24)ずつ加算
+    const buttonHeightOneLine = BUTTON_HEIGHT_WITH_ICON
+    const buttonHeightTwoLines = BUTTON_HEIGHT_WITH_ICON + 24 // ChoiceOverlay側と同じ嵩上げ
+
+    const oneLine = computeChoiceIconLayout(
+      buttonHeightOneLine,
+      true,
+      ICON_SIZE,
+      ICON_TEXT_GAP,
+      oneLineHeight
+    )
+    const twoLines = computeChoiceIconLayout(
+      buttonHeightTwoLines,
+      true,
+      ICON_SIZE,
+      ICON_TEXT_GAP,
+      twoLineHeight
+    )
+
+    // 1行目は既存の具体値(iconY=21, textY=47)と完全一致——非破壊。
+    expect(oneLine.iconY).toBe(21)
+    expect(oneLine.textY).toBe(47)
+
+    const gapFor = (layout: ChoiceIconLayout, textBlockHeight: number): number => {
+      const iconBottom = layout.iconY + ICON_SIZE / 2
+      const textTop = layout.textY - textBlockHeight / 2
+      return textTop - iconBottom
+    }
+    expect(gapFor(oneLine, oneLineHeight)).toBe(ICON_TEXT_GAP)
+    expect(gapFor(twoLines, twoLineHeight)).toBe(ICON_TEXT_GAP)
   })
 })
 

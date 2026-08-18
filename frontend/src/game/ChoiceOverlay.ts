@@ -802,11 +802,19 @@ export class ChoiceOverlay extends Container {
       const iconKind = resolveChoiceIconKind(isCleared, alreadyRead)
       const iconTexture = iconKind === 'read' ? this.readIconTexture : this.unreadIconTexture
       const showIcon = iconTexture !== null
+      // このオプション自身の折り返し行数からテキストブロック高さを求める（#658後追い修正）。
+      // layoutButtonHeight は show() 内の全オプション中の最大行数で嵩上げされているが、
+      // アイコンとテキストの間隔は各オプション「自身」の実際の行数で決めないと、複数行に
+      // 折り返したオプションでアイコンと1行目テキストが重なる。1行なら従来どおり ICON_SIZE
+      // を近似値として使う（非破壊）。
+      const optionLineCount = wrappedLinesByOption[i].length
+      const textBlockHeight = ICON_SIZE + Math.max(0, optionLineCount - 1) * CHOICE_TEXT_LINE_HEIGHT
       const iconLayout = computeChoiceIconLayout(
         this.layoutButtonHeight,
         showIcon,
         ICON_SIZE,
-        ICON_TEXT_GAP
+        ICON_TEXT_GAP,
+        textBlockHeight
       )
 
       if (showIcon && iconTexture) {

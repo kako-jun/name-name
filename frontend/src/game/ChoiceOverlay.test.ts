@@ -2947,4 +2947,49 @@ describe('ChoiceOverlay 選択肢テキストの折り返し (#658)', () => {
 
     overlay.hide()
   })
+
+  // #658後追い修正: アイコン表示（既読/未読）と複数行折り返しを同時に発生させたとき、
+  // computeChoiceIconLayout の固定オフセットがテキストブロックの伸長を考慮しておらず、
+  // アイコンと折り返し1行目が実際に重なる回帰があった。旧実装ではこの組み合わせを検証する
+  // テストが無かった（アイコン単体・折り返し単体のテストはあったが同時発生ケースが無かった）。
+  it('アイコン表示中に折り返しで2行以上になっても、アイコンとテキスト1行目は重ならない', async () => {
+    mockAssetsLoadResolved()
+    const canvas = mockFixedWidthCanvas()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    const longText = 'あ'.repeat(40)
+    overlay.show(
+      [{ text: longText, jump: 'x' }],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false],
+      [false]
+    )
+
+    const button = overlay.children[0]
+    const label = findLabel(button)
+    const icon = findIconSprite(button)
+    const lineCount = label?.text.split('\n').length ?? 1
+    // 前提: 実際に複数行へ折り返されている（そうでなければこのテストの意味が無い）。
+    expect(lineCount).toBeGreaterThan(1)
+    expect(icon).toBeDefined()
+
+    // アイコン下端 = icon.y + ICON_SIZE(18)/2。
+    const iconBottom = (icon?.y ?? 0) + 9
+    // ラベル上端 = label.y - テキストブロック高さ/2。テキストブロック高さは
+    // ICON_SIZE(18、1行目の近似) + (行数-1)*CHOICE_TEXT_LINE_HEIGHT(24) で
+    // computeChoiceIconLayout に渡している値と同じ式（ChoiceOverlay.ts 側の実装と対応）。
+    const textBlockHeight = 18 + (lineCount - 1) * 24
+    const labelTop = (label?.y ?? 0) - textBlockHeight / 2
+    // アイコン下端がラベル上端を超えない = 重ならない。間隔はICON_TEXT_GAP(8)ちょうどになる
+    // （行数に関わらず一定に保たれる、#658後追い修正の意図どおり）。
+    expect(labelTop - iconBottom).toBe(8)
+
+    overlay.hide()
+    canvas.restore()
+  })
 })
