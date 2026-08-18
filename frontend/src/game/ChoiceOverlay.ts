@@ -54,6 +54,7 @@ import {
   stepFocusIndex,
 } from './novelLayout'
 import type { LayoutRect } from './novelLayout'
+import { wordwrap } from './wordwrap'
 
 const BUTTON_WIDTH = 480
 const BUTTON_HEIGHT = 52
@@ -92,6 +93,19 @@ const TAP_MOVE_THRESHOLD_PX = 8
 const CHOICE_REGION_MARGIN_X = 24
 /** クランプ後のボタン幅の下限 (px)。極端に狭い領域でもラベルが読めなくなるほど潰さない。 */
 const CHOICE_REGION_MIN_BUTTON_WIDTH = 160
+/**
+ * 選択肢テキストの左右内側余白 (px) (#658)。`layoutButtonWidth` からこの分を差し引いた幅を
+ * `wordwrap()`（禁則ワードラップ、DialogBox.ts と同じユーティリティ）の折り返し幅として使う。
+ * 長いテキストがボタン枠から左右にはみ出す不具合の修正。
+ */
+const CHOICE_TEXT_PADDING_X = 16
+/**
+ * 折り返しで2行目以降が増えるたびに `layoutButtonHeight` へ加算する行送り (px) (#658)。
+ * `fontSize` はテーマごとに20〜22pxのため、行間を含めた実測より少し余裕を持たせた値。
+ * 全オプションが1行に収まる回は追加されず、従来の BUTTON_HEIGHT/BUTTON_HEIGHT_WITH_ICON の
+ * まま非破壊（`willShowIcon` と同じ「必要な回だけ調整する」流儀）。
+ */
+const CHOICE_TEXT_LINE_HEIGHT = 24
 /**
  * グリッド配置 (#508) の列間ギャップ (px)。行間は既存の BUTTON_GAP をそのまま流用し、
  * 列間だけ独立の定数として持つ（現状は同値だが、将来グリッド専用に調整できるよう分けておく）。
@@ -594,13 +608,17 @@ export class ChoiceOverlay extends Container {
    *                同時に `true` の位置ではロックの見た目が優先される。未指定 or 短ければ、
    *                残りは false（完了なし、非破壊）として扱う。
    *
-   *                アイコン (#598 追記3 / #604 訂正) は `cleared` のみで決まり、`locked` は
-   *                一切影響しない（配色の優先順位 locked > cleared > alreadyRead とは別軸で
-   *                判定する。`resolveChoiceIconKind`、`alreadyRead` は無関係）: `cleared` の
-   *                位置は `setAssetBaseUrl()` で `read-icon.webp` の先読みに成功していれば
-   *                テキストの上に表示する。`!cleared` の位置は `unread-icon.webp` の先読みに
+   *                アイコン (#598 追記3 / #604 訂正 / #658 再訂正) は `cleared || alreadyRead`
+   *                で決まり、`locked` は一切影響しない（配色の優先順位 locked > cleared >
+   *                alreadyRead とは別軸で判定する。`resolveChoiceIconKind` 参照）。#658:
+   *                背景色は `alreadyRead` で既読を示すのに `[完了: flag]` を書いていない
+   *                選択肢はアイコンだけ未読のままという食い違いが実機で報告されたため、
+   *                `alreadyRead` も既読扱いに合流させた（#604 時点の「`alreadyRead` は
+   *                無関係」という判定は訂正済み）。`cleared || alreadyRead` の位置は
+   *                `setAssetBaseUrl()` で `read-icon.webp` の先読みに成功していればテキストの
+   *                上に表示する。どちらも false の位置は `unread-icon.webp` の先読みに
    *                成功していれば同様に表示する（いずれも未取得/失敗時は配色のみのフォール
-   *                バック）。ロック中でも `cleared` の値に応じてどちらかのアイコンが出る。
+   *                バック）。ロック中でも同じ判定でどちらかのアイコンが出る。
    */
   show(
     options: ChoiceOption[],
@@ -667,19 +685,35 @@ export class ChoiceOverlay extends Container {
         : BUTTON_WIDTH
     }
 
-    // 選択肢アイコン (#598 追記3 / #604 訂正)。行ごとに resolveChoiceIconKind で「本来どちらの
-    // アイコンを見せるべきか」（cleared→read / !cleared→unread。locked は無関係）を求め、
-    // 対応するテクスチャが setAssetBaseUrl() で先読み済みなら「実際に表示する」行として数える。
-    // 1行でも表示対象があれば、アイコン用に嵩上げしたボタン高さを使う。
+    // 選択肢アイコン (#598 追記3 / #604 訂正 / #658 再訂正)。行ごとに resolveChoiceIconKind で
+    // 「本来どちらのアイコンを見せるべきか」（cleared||alreadyRead→read / それ以外→unread。
+    // locked は無関係）を求め、対応するテクスチャが setAssetBaseUrl() で先読み済みなら
+    // 「実際に表示する」行として数える。1行でも表示対象があれば、アイコン用に嵩上げした
+    // ボタン高さを使う。
     // ロック中の行もアイコン表示対象になる（#604: ロックは「読むことすらできない」だけで
     // 「未読でない」わけではない。ロック中の選択肢も当然未読/既読どちらかのアイコンを持つ）。
     // アイコンが一切描画されない回（read-icon.webp/unread-icon.webp が両方とも未配置等）は
     // BUTTON_HEIGHT のまま——見た目は一切変わらない（layoutButtonWidth と同じ流儀）。
-    const willShowIcon = options.some((_, i) => {
-      const kind = resolveChoiceIconKind(cleared?.[i] ?? false)
+    const willShowIcon = options.some((option, i) => {
+      const alreadyRead = readJumps?.has(option.jump) ?? false
+      const kind = resolveChoiceIconKind(cleared?.[i] ?? false, alreadyRead)
       return kind === 'read' ? this.readIconTexture !== null : this.unreadIconTexture !== null
     })
-    this.layoutButtonHeight = willShowIcon ? BUTTON_HEIGHT_WITH_ICON : BUTTON_HEIGHT
+    const baseButtonHeight = willShowIcon ? BUTTON_HEIGHT_WITH_ICON : BUTTON_HEIGHT
+
+    // 長い選択肢テキストがボタン幅から左右にはみ出す不具合の修正 (#658)。DialogBox.ts と
+    // 同じ禁則ワードラップ (`wordwrap.ts`) でボタン内側幅に収まるよう行ごとに折り返す。
+    // オプションによって折り返し後の行数が変わり得るため、この show() 呼び出し内の最大行数
+    // を求めて layoutButtonHeight に反映する（willShowIcon と同じ「必要な回だけ調整する」
+    // 流儀）。1行に収まる回（従来どおりの短い選択肢文言）は追加の高さが 0 になり、
+    // BUTTON_HEIGHT/BUTTON_HEIGHT_WITH_ICON のまま非破壊。
+    const textWrapWidth = Math.max(1, this.layoutButtonWidth - CHOICE_TEXT_PADDING_X * 2)
+    const textFont = `${theme.fontSize}px ${theme.fontFamily}`
+    const wrappedLinesByOption = options.map((option) =>
+      wordwrap(option.text, textWrapWidth, textFont)
+    )
+    const maxTextLines = Math.max(1, ...wrappedLinesByOption.map((lines) => lines.length))
+    this.layoutButtonHeight = baseButtonHeight + (maxTextLines - 1) * CHOICE_TEXT_LINE_HEIGHT
 
     const totalHeight = rows * this.layoutButtonHeight + (rows - 1) * BUTTON_GAP
     const maxViewportHeight = Math.max(
@@ -726,6 +760,10 @@ export class ChoiceOverlay extends Container {
         fontSize: theme.fontSize,
         fill: normalVisual.text,
         fontWeight: theme.fontWeight,
+        // 折り返し済みテキスト (#658) は wordwrap() が挿入した \n で複数行になり得るため、
+        // 行ごとに中央揃えする（PixiJS の anchor はブロック全体の中心指定のみで、
+        // align を指定しないと各行は左揃えのまま残る）。
+        align: 'center',
       })
       const buttonContainer = new Container()
       // ロック中はクリック/ホバーを一切受け付けない（`eventMode: 'none'` はヒットテスト
@@ -752,20 +790,31 @@ export class ChoiceOverlay extends Container {
       // ロック中はダイム配色 (fillLocked/borderLocked/textLockedColor) と
       // eventMode: 'none' のみで「選べない」を表す（旧🔒絵文字連結は撤去）。
       //
-      // 選択肢アイコン (#598 追記3 / #604 訂正)。「ロック」「既読/完了」は独立した2軸だが、
-      // アイコンの出し分けは cleared のみで決まる（resolveChoiceIconKind、alreadyRead は
-      // 無関係）。cleared → read-icon。!cleared → unread-icon（alreadyRead の真偽に関わらず）。
-      // ロック中かどうかはアイコン種別に一切影響しない（#604: ロック中・未読なら unread-icon、
-      // ロック中・既読なら read-icon が出る。配色のみ isLocked で別途ダイムする）。対応する
-      // テクスチャの先読みに成功している場合だけ、テキストの上にアイコンを描く。
-      const iconKind = resolveChoiceIconKind(isCleared)
+      // 選択肢アイコン (#598 追記3 / #604 訂正 / #658 再訂正)。「ロック」「既読/完了」は
+      // 独立した2軸だが、アイコンの出し分けは cleared || alreadyRead で決まる
+      // （resolveChoiceIconKind）。#658: 背景色は alreadyRead で既読を示すのに
+      // `[完了: flag]` 未設定の選択肢はアイコンだけ未読のままという食い違いが実機で
+      // 報告されたため、alreadyRead も合流させた（#604 時点の「alreadyRead は無関係」は
+      // 訂正済み）。ロック中かどうかはアイコン種別に一切影響しない（#604: ロック中・未読
+      // なら unread-icon、ロック中・既読なら read-icon が出る。配色のみ isLocked で別途
+      // ダイムする）。対応するテクスチャの先読みに成功している場合だけ、テキストの上に
+      // アイコンを描く。
+      const iconKind = resolveChoiceIconKind(isCleared, alreadyRead)
       const iconTexture = iconKind === 'read' ? this.readIconTexture : this.unreadIconTexture
       const showIcon = iconTexture !== null
+      // このオプション自身の折り返し行数からテキストブロック高さを求める（#658後追い修正）。
+      // layoutButtonHeight は show() 内の全オプション中の最大行数で嵩上げされているが、
+      // アイコンとテキストの間隔は各オプション「自身」の実際の行数で決めないと、複数行に
+      // 折り返したオプションでアイコンと1行目テキストが重なる。1行なら従来どおり ICON_SIZE
+      // を近似値として使う（非破壊）。
+      const optionLineCount = wrappedLinesByOption[i].length
+      const textBlockHeight = ICON_SIZE + Math.max(0, optionLineCount - 1) * CHOICE_TEXT_LINE_HEIGHT
       const iconLayout = computeChoiceIconLayout(
         this.layoutButtonHeight,
         showIcon,
         ICON_SIZE,
-        ICON_TEXT_GAP
+        ICON_TEXT_GAP,
+        textBlockHeight
       )
 
       if (showIcon && iconTexture) {
@@ -778,8 +827,14 @@ export class ChoiceOverlay extends Container {
         buttonContainer.addChild(icon)
       }
 
+      // 選択肢テキストのはみ出し修正 (#658)。wrappedLinesByOption[i] は show() 冒頭で
+      // 事前計算した禁則ワードラップ結果——DialogBox.ts と同じ wordwrap() ユーティリティを
+      // 使い、行を \n で連結する（PixiJS 側の TextStyle.wordWrap は使わない。CJK は
+      // 空白区切りが無いため breakWords 無指定では折り返されず、breakWords を足しても
+      // 禁則処理が無いため句読点が行頭に来得る——このプロジェクトの禁則ワードラップと
+      // 二重実装しないため、事前折り返し＋手動 \n 挿入で統一する）。
       const label = new PixiText({
-        text: option.text,
+        text: wrappedLinesByOption[i].join('\n'),
         style: textStyle,
         resolution: this.renderResolution,
         roundPixels: true,

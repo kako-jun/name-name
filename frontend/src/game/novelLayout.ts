@@ -452,11 +452,19 @@ export interface ChoiceIconLayout {
  * `assets/images/unread-icon.webp`、#598）とラベルテキストの縦位置を算出する純粋関数。
  * どちらのアイコンも同じサイズ・同じレイアウトを使うため、呼び出し側が選んだテクスチャの
  * 種類はこの関数の関知するところではない（`hasIcon` は「今回アイコンを描画するか」だけを表す）。
- * アイコンをテキストの上に置き、2つを合わせた塊をボタン中心を軸に概算的に上下対称へ配置する
- * （`iconY`/`textY` はどちらもボタン中心から `iconSize` の half-extent 分だけ離れた位置。
- * テキスト側も同じ offset を使う近似であり、実際のテキスト高さは見ていない——fontSize は
- * 20-22px、`iconSize`（`ICON_SIZE`）は 18px のため数 px 程度の誤差があり、真の光学的対称
- * ではない）。
+ * アイコンをテキストの上に、間に `iconTextGap` を挟んで積んだ「アイコン+テキストブロック」を
+ * ボタン中心を軸に上下対称へ配置する——ブロック全体の高さ (`iconSize + iconTextGap +
+ * textBlockHeight`) の上端を求め、そこからアイコン・テキストの各中心を積み上げて計算する
+ * ため、`textBlockHeight` がいくつでもアイコンとテキストの間隔は常に厳密に `iconTextGap`
+ * を保つ（#658後追い修正: 旧実装は `buttonHeight` から算出した中心を基準に固定オフセットで
+ * 対称配置するだけで `textBlockHeight` を考慮しておらず、テキストが折り返して複数行になると
+ * アイコンと1行目が実際に重なる回帰があった——本 Issue #658 の実機報告そのものの組み合わせ
+ * だったため #658 の中で修正した）。
+ *
+ * `textBlockHeight` 省略時は `iconSize` を近似値として使う（1行分のテキスト高さの近似、
+ * fontSize は 20-22px・`iconSize` は 18px のため数 px 程度の誤差はある——#598 時点からの
+ * 既存の近似で非破壊）。折り返しで複数行になる場合は、呼び出し側 (`ChoiceOverlay`) が
+ * 実際の行数から計算した高さを渡すことで、行数に関わらずアイコンとテキストの間隔を正しく保てる。
  *
  * `hasIcon=false`（対応するテクスチャの未読み込み/取得失敗などで今回アイコンを描画しない）のときは、
  * `iconY`/`textY` とも `buttonHeight / 2` を返す——#591 以来の「ラベルをボタン中心に
@@ -471,14 +479,19 @@ export function computeChoiceIconLayout(
   buttonHeight: number,
   hasIcon: boolean,
   iconSize: number,
-  iconTextGap: number
+  iconTextGap: number,
+  textBlockHeight: number = iconSize
 ): ChoiceIconLayout {
   const center = buttonHeight / 2
   if (!hasIcon) {
     return { iconY: center, textY: center }
   }
-  const offset = (iconSize + iconTextGap) / 2
-  return { iconY: center - offset, textY: center + offset }
+  const contentHeight = iconSize + iconTextGap + textBlockHeight
+  const top = center - contentHeight / 2
+  return {
+    iconY: top + iconSize / 2,
+    textY: top + iconSize + iconTextGap + textBlockHeight / 2,
+  }
 }
 
 /** `resolveChoiceIconKind` の戻り値 (#598 追記3 / #604)。表示すべきアイコンの種類。
@@ -489,24 +502,33 @@ export function computeChoiceIconLayout(
 export type ChoiceIconKind = 'read' | 'unread'
 
 /**
- * 選択肢ボタン1件に表示すべきアイコンの種類を判定する純粋関数 (#598 追記3 / #604 訂正)。
+ * 選択肢ボタン1件に表示すべきアイコンの種類を判定する純粋関数
+ * (#598 追記3 / #604 訂正 / #658 再訂正)。
  *
  * 「ロック」と「既読/完了」は独立した2軸の状態である（ロック＝読むことすらできない、
  * 既読/完了＝読めるようになった後に読んだかどうか）。#604 で判明した誤り：ロックは
  * 「読むことすらできない」だけであって「未読でない」わけではない。ロック中の選択肢も
- * 当然「未読」ではあるので、`locked` はアイコン種別の判定に一切関与しない。
- * `cleared` のみで決まる（配色側の `resolveChoiceVisual` の locked > cleared > alreadyRead
- * > 通常という優先順位とは別軸の判定であり、`alreadyRead` もここでは一切参照しない）：
+ * 当然「未読」ではあるので、`locked` はアイコン種別の判定に一切関与しない（この結論は
+ * #658 でも変わらない）。
  *
- * - `cleared === true` → `'read'`（既読/完了。`read-icon.webp`。ロック中でも同じ）
- * - `cleared === false` → `'unread'`（未読。`alreadyRead` の真偽に関わらず `unread-icon.webp`。ロック中でも同じ）
+ * #658 再訂正: #604 時点では「`cleared`（`[完了: flag]`という脚本家が明示設定するフラグ）
+ * のみで決まり、`alreadyRead`（#366 の scene 単位の自動既読トラッキング、`resolveChoiceVisual`
+ * の背景色にも使われる）は一切参照しない」としていた。しかし Gymnasia route10 の実機確認で、
+ * 背景色は `alreadyRead` により正しく既読（灰色）を示しているのに、アイコンだけ未読のまま
+ * という食い違いが報告された——`[完了: flag]` を書いていない選択肢では `cleared` が常に
+ * false のままなので当然である。脚本家目線では別軸の状態でも、プレイヤー目線では
+ * どちらも「もう見た/読んだ」を意味する同じ体験のため、片方だけ反映されるとちぐはぐに見える。
+ * よって `cleared` と `alreadyRead` は OR で合成し、どちらかが真なら既読扱いにする:
+ *
+ * - `cleared === true || alreadyRead === true` → `'read'`（`read-icon.webp`。ロック中でも同じ）
+ * - どちらも `false` → `'unread'`（`unread-icon.webp`。ロック中でも同じ）
  *
  * ロックの見た目（暗い配色・クリック不可）は `resolveChoiceVisual` 側で別途表現する。
  * 実際に描画するかどうか（対応するテクスチャの先読みに成功しているか）は呼び出し側
  * （`ChoiceOverlay`）の責務。この関数は「本来どちらを見せるべきか」という論理だけを返す。
  */
-export function resolveChoiceIconKind(cleared: boolean): ChoiceIconKind {
-  return cleared ? 'read' : 'unread'
+export function resolveChoiceIconKind(cleared: boolean, alreadyRead: boolean): ChoiceIconKind {
+  return cleared || alreadyRead ? 'read' : 'unread'
 }
 
 /**

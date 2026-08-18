@@ -3972,7 +3972,9 @@ export class NovelRenderer {
       // 完了(クリア済み)視覚状態 (#594、#596でキーワード改名)。`option.cleared` が未定義
       // なら常に false（完了しない、既存動作）。指定されていれば `checkFlag` で判定する
       // （`locked` と違い真がそのまま完了——真偽判定自体は `[条件:]` と同じ規則）。
-      // ロックとは独立配列で持つ。
+      // ロックとは独立配列で持つ。この `cleared` は既読アイコンの唯一の判定材料ではない——
+      // ChoiceOverlay.show() 内部で `readSceneProgress`（下で渡す既読 scene 集合）による
+      // `alreadyRead` と OR 合成される（#658、`resolveChoiceIconKind`）。
       const cleared = event.Choice.options.map((option) =>
         option.cleared ? this.gameState.checkFlag(option.cleared) : false
       )

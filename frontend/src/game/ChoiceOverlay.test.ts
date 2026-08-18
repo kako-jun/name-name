@@ -2005,8 +2005,8 @@ describe('ChoiceOverlay ロックとアイコンの軸独立性 (#604)', () => {
       [true],
       [false]
     )
-    // resolveChoiceIconKind(false) 自体は 'unread' を返す（locked起因の'none'ではない）。
-    expect(resolveChoiceIconKind(false)).toBe('unread')
+    // resolveChoiceIconKind(false, false) 自体は 'unread' を返す（locked起因の'none'ではない）。
+    expect(resolveChoiceIconKind(false, false)).toBe('unread')
     // だが対応する unreadIconTexture が null なので、実際の描画は非表示になる
     // （ChoiceOverlay.show 内の `showIcon = iconTexture !== null` 判定による）。
     expect(findIconSprite(overlay.children[0])).toBeUndefined()
@@ -2037,18 +2037,19 @@ describe('ChoiceOverlay ロックとアイコンの軸独立性 (#604)', () => {
   })
 })
 
-// #598 / #604: alreadyRead（既読/未読の色分け）とアイコンの軸独立性。アイコンは cleared
-// だけで決まり（#604: locked は無関係）、alreadyRead も一切参照しない（resolveChoiceIconKind
-// の doc comment どおり）。
-describe('ChoiceOverlay alreadyReadとアイコンの軸独立性 (#598)', () => {
-  it('alreadyRead=trueでもcleared=false・locked=falseならunread-iconが表示される（alreadyReadは無関係）', async () => {
+// #598 / #604 / #658: alreadyRead（背景色の既読/未読色分け、#366）とアイコンの関係。
+// #604 時点では「アイコンは cleared だけで決まり、alreadyRead は一切参照しない」だったが、
+// #658 の Gymnasia route10 実機確認で「背景色は既読（灰色）なのにアイコンだけ未読のまま」
+// という食い違いが報告され、cleared || alreadyRead の OR 合成に訂正された。
+describe('ChoiceOverlay alreadyReadとアイコンの連動 (#658)', () => {
+  it('alreadyRead=trueならcleared=false・locked=falseでもread-iconが表示される（#658: 背景色と同じ既読シグナルに揃う）', async () => {
     mockAssetsLoadResolved()
     const overlay = new ChoiceOverlay(800, 450)
     overlay.setAssetBaseUrl('/assets')
     await flushPromises()
 
     overlay.show(
-      [{ text: '既読jumpだが未完了', jump: 'read-scene' }],
+      [{ text: '既読jumpだが完了フラグ未設定', jump: 'read-scene' }],
       vi.fn(),
       'default',
       new Set(['read-scene']),
@@ -2058,12 +2059,12 @@ describe('ChoiceOverlay alreadyReadとアイコンの軸独立性 (#598)', () =>
     )
     const icon = findIconSprite(overlay.children[0])
     expect(icon).toBeDefined()
-    expect(icon?.texture).toBe(internals(overlay).unreadIconTexture)
+    expect(icon?.texture).toBe(internals(overlay).readIconTexture)
 
     overlay.hide()
   })
 
-  it('alreadyRead=falseでもcleared=true・locked=falseならread-iconが表示される（alreadyReadは無関係）', async () => {
+  it('alreadyRead=falseでもcleared=true・locked=falseならread-iconが表示される（従来どおり変化なし）', async () => {
     mockAssetsLoadResolved()
     const overlay = new ChoiceOverlay(800, 450)
     overlay.setAssetBaseUrl('/assets')
@@ -2085,8 +2086,38 @@ describe('ChoiceOverlay alreadyReadとアイコンの軸独立性 (#598)', () =>
     overlay.hide()
   })
 
-  it('alreadyReadをtrue/falseで振ってもアイコン表示結果が変化しない（軸独立の直接証明）', async () => {
+  it('cleared=false・alreadyRead=falseのときだけunread-iconが表示される（両方falseの唯一の未読経路）', async () => {
     mockAssetsLoadResolved()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    overlay.show(
+      [{ text: '未読jumpかつ未完了', jump: 'new-scene' }],
+      vi.fn(),
+      'default',
+      undefined,
+      undefined,
+      [false],
+      [false]
+    )
+    const icon = findIconSprite(overlay.children[0])
+    expect(icon).toBeDefined()
+    expect(icon?.texture).toBe(internals(overlay).unreadIconTexture)
+
+    overlay.hide()
+  })
+
+  it('alreadyReadをtrue/falseで振るとアイコン表示結果が変化する（#658: 軸独立の撤回を直接証明）', async () => {
+    // read/unread で別インスタンスのテクスチャを返すモックを使う（mockAssetsLoadResolved は
+    // 呼び出しに関わらず同一インスタンスを返すため、read/unreadの区別が texture identity
+    // 比較で検出できない）。
+    const readTex = mockTexture()
+    const unreadTex = mockTexture()
+    mockAssetsLoadRoutedByUrl({
+      '/assets/images/read-icon.webp': readTex,
+      '/assets/images/unread-icon.webp': unreadTex,
+    })
 
     const makeOverlayAndShow = async (readJumps: ReadonlySet<string> | undefined) => {
       const overlay = new ChoiceOverlay(800, 450)
@@ -2106,16 +2137,23 @@ describe('ChoiceOverlay alreadyReadとアイコンの軸独立性 (#598)', () =>
 
     const withAlreadyRead = await makeOverlayAndShow(new Set(['x']))
     const iconWith = findIconSprite(withAlreadyRead.children[0])
+    // hide() は子を destroy するため texture 参照が失われる。hide() の前に読み取っておく。
+    const textureWith = iconWith?.texture
+    const readIconTexture = internals(withAlreadyRead).readIconTexture
     withAlreadyRead.hide()
 
     const withoutAlreadyRead = await makeOverlayAndShow(undefined)
     const iconWithout = findIconSprite(withoutAlreadyRead.children[0])
+    const textureWithout = iconWithout?.texture
+    const unreadIconTexture = internals(withoutAlreadyRead).unreadIconTexture
     withoutAlreadyRead.hide()
 
     expect(iconWith).toBeDefined()
     expect(iconWithout).toBeDefined()
-    // 両方とも unread-icon（cleared=false）で、alreadyRead の真偽で変わらない。
-    expect(iconWith?.texture).toBe(iconWithout?.texture)
+    // alreadyRead=true側はread-icon、false側はunread-iconになり、テクスチャが異なる。
+    expect(textureWith).toBe(readIconTexture)
+    expect(textureWithout).toBe(unreadIconTexture)
+    expect(textureWith).not.toBe(textureWithout)
   })
 })
 
@@ -2824,5 +2862,134 @@ describe('ChoiceOverlay keyboardNavActive 追加回帰テスト (#639)', () => {
     expect(strokeSpy.mock.calls.length).toBe(callCountAfterFirstTab + 1)
 
     overlay.hide()
+  })
+})
+
+// #658: 選択肢テキストがボタン幅から左右にはみ出す不具合の修正。DialogBox.ts と同じ禁則
+// ワードラップ (wordwrap.ts) を使い、ボタン内側幅に収まるよう折り返す。wordwrap() は
+// Canvas measureText 経由のため、wordwrap.test.ts と同じ流儀で HTMLCanvasElement.getContext
+// を固定幅の mock に差し替えて検証する。
+//
+// 重要: wordwrap.ts はモジュールスコープで Canvas 2D context をキャッシュする
+// （`getContext()` が一度非 null を返すと以後使い回す）ため、ここで mock を注入すると
+// このテストファイル内で以後に実行される他の it() にも波及し得る。そのため、この
+// describe はファイル最後尾に置き「以後に実行されるテストが無い」ことで汚染を避ける
+// （wordwrap.test.ts のように vi.resetModules() で完全分離する手も検討したが、
+// ChoiceOverlay 経由だと pixi.js のクラス実体まで作り直され instanceof 系の既存ヘルパー
+// （findLabel 等）が壊れるため、位置での回避を採った）。
+describe('ChoiceOverlay 選択肢テキストの折り返し (#658)', () => {
+  /** 1文字 = 20px 固定の mock measureText。wordwrap.test.ts と同じ流儀。 */
+  function mockFixedWidthCanvas(): { restore: () => void } {
+    const mockCtx = {
+      font: '',
+      measureText: (s: string) => ({ width: s.length * 20 }),
+    } as unknown as CanvasRenderingContext2D
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation(((contextId: string) =>
+        contextId === '2d' ? mockCtx : null) as HTMLCanvasElement['getContext'])
+    return { restore: () => getContext.mockRestore() }
+  }
+
+  it('ボタン内側幅を超える長さのテキストは複数行に折り返される', () => {
+    const canvas = mockFixedWidthCanvas()
+    const overlay = new ChoiceOverlay(800, 450)
+    // BUTTON_WIDTH(480) - CHOICE_TEXT_PADDING_X*2(32) = 448px の折り返し幅。
+    // 1文字20px・スペース無しの日本語想定で40文字なら 800px 相当となり確実に複数行になる。
+    const longText = 'あ'.repeat(40)
+    overlay.show([{ text: longText, jump: 'x' }], vi.fn(), null)
+
+    const label = findLabel(overlay.children[0])
+    expect(label?.text).toContain('\n')
+    expect(label?.text.split('\n').length ?? 0).toBeGreaterThan(1)
+
+    overlay.hide()
+    canvas.restore()
+  })
+
+  it('折り返しで行数が増えた分だけlayoutButtonHeightが嵩上げされる(pivot.yで検証)', () => {
+    const canvas = mockFixedWidthCanvas()
+    const overlay = new ChoiceOverlay(800, 450)
+    const longText = 'あ'.repeat(40)
+    overlay.show([{ text: longText, jump: 'x' }], vi.fn(), null)
+
+    const label = findLabel(overlay.children[0])
+    const lineCount = label?.text.split('\n').length ?? 1
+    // BUTTON_HEIGHT(52)/2=26 が基準。折り返しが無ければ pivot.y は26のまま。
+    // 2行以上ならCHOICE_TEXT_LINE_HEIGHT(24)*(lineCount-1)ぶん高さが増え、pivot.yも増える。
+    expect(lineCount).toBeGreaterThan(1)
+    const expectedButtonHeight = 52 + (lineCount - 1) * 24
+    expect(overlay.children[0].pivot.y).toBe(expectedButtonHeight / 2)
+
+    overlay.hide()
+    canvas.restore()
+  })
+
+  it('ボタン内側幅に収まる短いテキストは折り返されず、layoutButtonHeightもBUTTON_HEIGHT(52)のまま', () => {
+    const canvas = mockFixedWidthCanvas()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '近視', jump: 'x' }], vi.fn(), null)
+
+    const label = findLabel(overlay.children[0])
+    expect(label?.text).toBe('近視')
+    expect(overlay.children[0].pivot.y).toBe(26) // BUTTON_HEIGHT(52) / 2、非破壊
+
+    overlay.hide()
+    canvas.restore()
+  })
+
+  it('折り返し済みラベルのTextStyleはalign: centerで各行を中央揃えする', () => {
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.show([{ text: '選択肢', jump: 'x' }], vi.fn(), null)
+
+    const label = findLabel(overlay.children[0])
+    expect(label?.style.align).toBe('center')
+
+    overlay.hide()
+  })
+
+  // #658後追い修正: アイコン表示（既読/未読）と複数行折り返しを同時に発生させたとき、
+  // computeChoiceIconLayout の固定オフセットがテキストブロックの伸長を考慮しておらず、
+  // アイコンと折り返し1行目が実際に重なる回帰があった。旧実装ではこの組み合わせを検証する
+  // テストが無かった（アイコン単体・折り返し単体のテストはあったが同時発生ケースが無かった）。
+  it('アイコン表示中に折り返しで2行以上になっても、アイコンとテキスト1行目は重ならない', async () => {
+    mockAssetsLoadResolved()
+    const canvas = mockFixedWidthCanvas()
+    const overlay = new ChoiceOverlay(800, 450)
+    overlay.setAssetBaseUrl('/assets')
+    await flushPromises()
+
+    const longText = 'あ'.repeat(40)
+    overlay.show(
+      [{ text: longText, jump: 'x' }],
+      vi.fn(),
+      null,
+      undefined,
+      undefined,
+      [false],
+      [false]
+    )
+
+    const button = overlay.children[0]
+    const label = findLabel(button)
+    const icon = findIconSprite(button)
+    const lineCount = label?.text.split('\n').length ?? 1
+    // 前提: 実際に複数行へ折り返されている（そうでなければこのテストの意味が無い）。
+    expect(lineCount).toBeGreaterThan(1)
+    expect(icon).toBeDefined()
+
+    // アイコン下端 = icon.y + ICON_SIZE(18)/2。
+    const iconBottom = (icon?.y ?? 0) + 9
+    // ラベル上端 = label.y - テキストブロック高さ/2。テキストブロック高さは
+    // ICON_SIZE(18、1行目の近似) + (行数-1)*CHOICE_TEXT_LINE_HEIGHT(24) で
+    // computeChoiceIconLayout に渡している値と同じ式（ChoiceOverlay.ts 側の実装と対応）。
+    const textBlockHeight = 18 + (lineCount - 1) * 24
+    const labelTop = (label?.y ?? 0) - textBlockHeight / 2
+    // アイコン下端がラベル上端を超えない = 重ならない。間隔はICON_TEXT_GAP(8)ちょうどになる
+    // （行数に関わらず一定に保たれる、#658後追い修正の意図どおり）。
+    expect(labelTop - iconBottom).toBe(8)
+
+    overlay.hide()
+    canvas.restore()
   })
 })
