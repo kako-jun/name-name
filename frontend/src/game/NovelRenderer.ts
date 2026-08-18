@@ -5267,10 +5267,12 @@ export class NovelRenderer {
     // startFrom は背景も立ち絵も出ず eventIndex=0 で止まっていた（#399 の症状）。restoreToScene
     // は save/load 復元専用（完成状態を持つ SaveSlotData を渡す loadFromSaveData）として残す。
     //
-    // eventIndex/textIndex/sentenceIndex が指定されるのは DEV の debug_scene（シーン途中からの
-    // 起動）だけ。fresh-start 経路は resetAndStartEvents が index を 0 にリセットしてしまうため
-    // 途中局面を再現できない。そのため index 指定がある場合だけ従来どおり restoreToScene の
-    // 宣言的復元にフォールバックする（production は常に 0 なのでこの分岐には入らない）。
+    // eventIndex/textIndex/sentenceIndex が指定されるのは `?debug_scene=`（シーン途中からの
+    // 起動、#652で本番ビルドでも常時有効）経由の呼び出しだけ。fresh-start 経路は
+    // resetAndStartEvents が index を 0 にリセットしてしまうため途中局面を再現できない。
+    // そのため index 指定がある場合だけ従来どおり restoreToScene の宣言的復元に
+    // フォールバックする（`?scene=` 由来の呼び出しは常に index 0 なのでこの分岐には
+    // 入らない）。
     if (eventIndex === 0 && textIndex === 0 && sentenceIndex === 0) {
       // フラグを先に確定させる（resetAndStartEvents 内の resolveEvents が this.gameState の
       // flags に依存するため）。fromJSON は置換セマンティクス（restoreToScene と同じ）。
@@ -5279,7 +5281,7 @@ export class NovelRenderer {
       return
     }
 
-    // DEV（debug_scene で index 指定あり）: 最小 NovelGameState を構築して共通コアで宣言的復元。
+    // `?debug_scene=`（index 指定あり）: 最小 NovelGameState を構築して共通コアで宣言的復元。
     const state: NovelGameState = {
       sceneId: opts.sceneId,
       eventIndex,

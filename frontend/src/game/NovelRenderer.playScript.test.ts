@@ -242,19 +242,17 @@ describe('NovelRenderer.playScript (#220)', () => {
     expect(calls[calls.length - 1]?.[5]).toEqual([false, false])
   })
 
-  // #652 実装エージェント報告の未カバー観点:「debug_unlock_all と debug_flags/debug_scene を
+  // #652 セルフレビュー must 指摘対応:「debug_unlock_all と debug_flags/debug_scene を
   // 同一URLで組み合わせた場合の相互作用」。NovelPlayer.tsx の呼び出し順序は
-  // `renderer.startFrom(debug.scene)`（debug_scene）→ `renderer.setDebugUnlockAllChoices(...)`
-  // （debug_unlock_all）の順（NovelPlayer.tsx 該当行のコメント参照）。debug_scene の着地先が
-  // 「narration 等を経由せず Choice がシーン先頭の item」という構成の場合、
-  // processUntilNextTextEvent は Choice に到達した時点で即座に processDirective を実行し
-  // choiceOverlay.show を呼ぶ（Choice は getTextEvent の対象外＝テキストイベントではないため
-  // ループを抜けずに処理される）。つまり startFrom 自体の中で Choice の locked 計算が完了して
-  // しまい、その直後に呼ばれる setDebugUnlockAllChoices(true) には間に合わない——
-  // `?debug_scene=X&debug_unlock_all=1` で X が「Choice 直行」シーンだと、起動直後の最初の
-  // 表示だけはロック状態のまま出る（同じ Choice への再訪以降は上のテストの通り解放される）。
-  // 現状のコード順序に起因する実際の挙動としてここに固定する。
-  it('#652: `?debug_scene=`がChoiceへ直行するシーンの場合、NovelPlayerと同じ呼び出し順（startFrom→setDebugUnlockAllChoices）だと最初のshow()呼び出しはまだロック状態のまま（起動直後の1回だけ間に合わない、既知の呼び出し順依存）', () => {
+  // `renderer.setDebugUnlockAllChoices(...)`（debug_unlock_all）→ `renderer.startFrom(debug.scene)`
+  // （debug_scene）の順に修正済み（NovelPlayer.tsx 該当行のコメント参照）。setScenes/setEvents/
+  // restoreSnapshot/startFrom（`?scene=` 由来・`?debug_scene=` 由来の両方）/quickLoad/playScript
+  // はいずれも内部で同期的に render() し、その時点で選択肢の locked 状態が確定するため、
+  // debugUnlockAllChoices はこれらより必ず前に設定する。よって debug_scene の着地先が
+  // 「narration 等を経由せず Choice がシーン先頭の item」という構成でも、startFrom より前に
+  // debugUnlockAllChoices が true になっているため、起動直後の最初の show() 呼び出しから
+  // 既にロック解除された状態で表示される。
+  it('#652: `?debug_scene=`がChoiceへ直行するシーンの場合、NovelPlayerと同じ呼び出し順（setDebugUnlockAllChoices→startFrom）だと最初のshow()呼び出しから既にロック解除されている', () => {
     const r = makeRenderer([
       // 実運用の初期シーン相当（narration のみ）。dbg-scene を配列先頭に置くと、
       // makeRenderer 内の setScenes 構築時点で（choiceOverlay.show をモックする前に）
@@ -276,12 +274,12 @@ describe('NovelRenderer.playScript (#220)', () => {
     ])
     internals(r).choiceOverlay.show = vi.fn()
 
-    // NovelPlayer.tsx と同じ順序: debug_scene の startFrom が先、debug_unlock_all は後
-    r.startFrom({ sceneId: 'dbg-scene' })
+    // NovelPlayer.tsx と同じ順序（修正後）: debug_unlock_all が先、debug_scene の startFrom は後
     r.setDebugUnlockAllChoices(true)
+    r.startFrom({ sceneId: 'dbg-scene' })
 
     const call = internals(r).choiceOverlay.show.mock.calls[0]
-    expect(call?.[5]).toEqual([false, true])
+    expect(call?.[5]).toEqual([false, false])
   })
 
   it('#591: Flag イベントで route01_cleared=true を立てた後は locked=false になる', () => {

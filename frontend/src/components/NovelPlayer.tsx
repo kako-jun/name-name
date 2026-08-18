@@ -580,6 +580,14 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       // `?scene=` ディープリンク単独埋め込みの confinement (#386)。setEvents/setJumpSceneIndex/
       // startFrom より前に設定し、以降のどの choice ジャンプも圏外判定の対象にする。
       renderer.setConfinedSceneIds(confinedSceneIds ?? null)
+      // #652: `?debug_unlock_all=1` は全ルート強制解放。debug_scene/debug_script の指定
+      // 有無に関わらず独立して評価する（通常のハブ経由フローでも、条件付き選択肢のロックを
+      // 全て解除したいデバッグ用途があるため）。setScenes/setEvents/restoreSnapshot/startFrom
+      // （`?scene=` 由来・`?debug_scene=` 由来の両方）/quickLoad/playScript は内部で同期的に
+      // render() し、その時点で選択肢の locked 状態が確定するため、着地シーンの先頭 item が
+      // Choice の場合に備えて、これらの描画系メソッドより必ず前に設定する（セルフレビュー
+      // must 指摘対応）。
+      renderer.setDebugUnlockAllChoices(parseDebugUnlockAll(window.location.search))
       // renderer が手動操作で autoMode を OFF にしたとき React state を同期 (#139)
       renderer.setOnAutoModeChange((on) => setAutoMode(on))
       // renderer が未読到達で skipMode を OFF にしたとき React state を同期 (#140)
@@ -778,10 +786,6 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       } else if (debug && 'scene' in debug) {
         renderer.startFrom(debug.scene)
       }
-      // #652: `?debug_unlock_all=1` は全ルート強制解放。debug_scene/debug_script の指定
-      // 有無に関わらず独立して評価する（通常のハブ経由フローでも、条件付き選択肢のロックを
-      // 全て解除したいデバッグ用途があるため）。
-      renderer.setDebugUnlockAllChoices(parseDebugUnlockAll(window.location.search))
       onRendererReady?.(renderer)
       // タイトル画面 (#628 フェーズ2b): ここまで到達した時点で renderer は setAssetBaseUrl 済み
       // ＝ characterLayer.showImage() がロゴ画像を正しい URL で読める状態になった。

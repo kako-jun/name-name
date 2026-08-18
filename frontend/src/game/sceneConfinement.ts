@@ -17,7 +17,8 @@
  *
  * @param sceneId 遷移先の sceneId
  * @param confinedSceneIds 在圏シーンID一覧。null なら「圏の制限なし」＝常に true
- *   （通常のハブ経由フロー・dev の debug_scene 等、production `?scene=` 以外はすべて null）
+ *   （通常のハブ経由フロー・`?debug_scene=`（#652で本番ビルドでも常時有効）等、
+ *   `?scene=` 単独埋め込み以外はすべて null）
  * @returns 圏内（遷移してよい）なら true、圏外（終劇にすべき）なら false
  */
 export function isSceneIdConfined(sceneId: string, confinedSceneIds: string[] | null): boolean {
