@@ -2191,6 +2191,66 @@ describe('PlayerScreen', () => {
         expect(screen.getByRole('button', { name: 'はじめから' })).toBeInTheDocument()
       })
     })
+
+    // --- #656: `?debug_scene=`（#652 のデバッグ起点）指定時もタイトル画面をスキップする ---
+    //
+    // 従来は `startSceneId`（`?scene=` 専用の #386 解決結果）だけを タイトル画面ゲートに
+    // 使っていたため、`?debug_scene=` 単独指定時にタイトル画面が誤って表示され、
+    // 「つづきから」（hasQuickSave()=false 時）/「はじめから」の renderer.restart() が
+    // NovelPlayer 側で既に startFrom 済みのデバッグ位置を握りつぶしていた（実機報告:
+    // つづきからが常に10択のハブから始まる／読書中に突然 to be continued になる）。
+    // `?debug_scene=` の値自体は NovelPlayer 側の mount effect が独自に
+    // parseDebugQuery→startFrom するため、PlayerScreen 側の initialSceneId/confinedSceneIds
+    // （`?scene=` 専用の confinement 付き解決ロジック）には一切混ぜていないことも合わせて確認する。
+    describe('PlayerScreen `?debug_scene=` はタイトル画面をスキップする (#656)', () => {
+      it('56: ?debug_scene=<sceneId> 単体でも タイトル画面（はじめからボタン）を出さない', async () => {
+        window.history.pushState({}, '', '?debug_scene=cell-scene-1')
+        await renderMultiDocProject()
+        expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
+      })
+
+      it('57: ?debug_scene=<sceneId>&debug_unlock_all=1 の組み合わせでも タイトル画面を出さない', async () => {
+        window.history.pushState({}, '', '?debug_scene=cell-scene-1&debug_unlock_all=1')
+        await renderMultiDocProject()
+        expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
+      })
+
+      it('58: 既読データ（つづきから相当のセーブ）が既にある状態で ?debug_scene= を指定しても タイトル画面を出さない（「つづきから」が debug 位置を握りつぶす経路が構造的に発生しない）', async () => {
+        // hasSaveData（「つづきから」活性判定）は hasAnyReadProgress(projectName) の
+        // localStorage 読み取りでマウント時に一度だけ決まる（#620 節と同じ流儀）。
+        // 実際の renderer.hasQuickSave()（PixiJS 内部状態）はこのテストではモック対象外だが、
+        // タイトル画面自体が render されない（titleScreen=null）ため、onContinue の
+        // restart() 分岐に到達し得ないことが本質的な確認ポイント。
+        localStorage.setItem('name-name:read-progress:theo-hayami', JSON.stringify([1]))
+        window.history.pushState({}, '', '?debug_scene=cell-scene-1')
+        await renderMultiDocProject()
+        expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
+        expect(screen.queryByRole('button', { name: 'つづきから' })).toBeNull()
+        localStorage.removeItem('name-name:read-progress:theo-hayami')
+      })
+
+      it('59: ?debug_scene=<sceneId> 指定時、initialSceneId/confinedSceneIds は null のまま（`?scene=` 用の confinement 解決ロジックと混線しない）', async () => {
+        // cell-scene-1 は実在する sceneId（?scene= なら解決される、test 40 参照）だが、
+        // debug_scene 経由ではこの値を startSceneId/confinedSceneIds の計算に一切混ぜない。
+        window.history.pushState({}, '', '?debug_scene=cell-scene-1')
+        await renderMultiDocProject()
+        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+      })
+
+      it('60: ?debug_scene= 未指定・?scene= 未指定の通常フローは従来どおり タイトル画面を出す（非回帰）', async () => {
+        await renderMultiDocProject()
+        expect(screen.getByRole('button', { name: 'はじめから' })).toBeInTheDocument()
+      })
+
+      it('61: ?scene=<cell sceneId> ディープリンク（confinement あり）は本修正後も従来どおり confinedSceneIds が解決される（?debug_scene= 側の変更が ?scene= の confinement 挙動を変えていないことの回帰確認）', async () => {
+        window.history.pushState({}, '', '?scene=cell-scene-1')
+        await renderMultiDocProject()
+        expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
+        expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+        expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
+      })
+    })
   })
 
   // --- #519: frontmatter `header:` による standalone 再生時のプレイヤーヘッダ抑制 ---

@@ -9,6 +9,7 @@ import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '..
 import { clearReadProgress, hasAnyReadProgress } from '../game/readProgress'
 import { parseSceneQuery } from '../game/sceneQuery'
 import { parseThemeQuery } from '../game/themeQuery'
+import { parseDebugQuery } from '../game/debugQuery'
 import { useVisualViewportHeight } from '../utils/useVisualViewportHeight'
 import { isEmbedded } from '../utils/isEmbedded'
 import {
@@ -262,6 +263,18 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   // 繋ぐ。theo-hayami のようなライトな埋め込み先だけが `?theme=light` を明示する。
   // isEmbedded() 同様マウント中は不変なのでレンダー時に一度評価する。
   const playerDark = parseThemeQuery(window.location.search) === 'dark'
+  // #656: `?debug_scene=`/`?debug_script=`（#652 のデバッグ起点。`?scene=` の confinement 付き
+  // 解決とは別経路で、NovelPlayer 側の mount effect が独自に `parseDebugQuery` → `startFrom`/
+  // `playScript` する）が指定されている場合もタイトル画面を出さない。従来は `startSceneId`
+  // （`?scene=` 専用・下記 #386）だけを見ていたため、`?debug_scene=` 単独指定時にタイトル画面が
+  // 誤って表示され、「つづきから」（hasQuickSave()=false 時）/「はじめから」の
+  // renderer.restart() が NovelPlayer 側で既に startFrom 済みのデバッグ位置を握りつぶしていた
+  // （#656 の実機報告: つづきからが常に10択のハブから始まる／読書中に突然 to be continued になる）。
+  // debug_scene/debug_script の値自体は startSceneId や confinedSceneIds の計算には一切混ぜない
+  // ——`?debug_scene=` は #652 の設計どおり confinement を持たない別経路のままにし、ここでは
+  // 「タイトル画面を出すか」の判定だけを分離して拡張する。isEmbedded()/playerDark と同じく
+  // マウント中は不変なのでレンダー時に一度評価する。
+  const hasDebugStart = parseDebugQuery(window.location.search) !== null
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
   // doc: エントリ MD のドキュメント。通常再生ストリーム（線形 events）の供給元であり、
   // かつ RPG 判定・aspect_ratio / choice_style / font_family 等の per-game 設定の
@@ -888,10 +901,15 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             // startFrom(initialSceneId) の開始位置が保たれる。
             // 通常フロー（`?scene=` 無し＝startSceneId null）は従来どおりタイトルを出す（後方互換）。
             //
+            // #656: `hasDebugStart`（`?debug_scene=`/`?debug_script=`）も同じ理由でタイトルを
+            // 出さないゲートに加える。こちらは startSceneId を経由しない別経路（NovelPlayer の
+            // mount effect が独自に startFrom/playScript する、上の hasDebugStart 宣言部参照）
+            // なので、startSceneId 自体（＝ confinedSceneIds の計算元）には一切影響させない。
+            //
             // onNewGame/onContinue/onOpenSettings/onBack の副作用ロジック自体は #141/#620 の
             // 実装から一切変更していない（表示だけを PixiJS 化する、#628 フェーズ2b のスコープ）。
             titleScreen={
-              startSceneId === null && !titleDismissed
+              startSceneId === null && !hasDebugStart && !titleDismissed
                 ? {
                     title,
                     hasSaveData,
