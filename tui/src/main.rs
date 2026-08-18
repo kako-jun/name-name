@@ -2129,12 +2129,13 @@ mod tests {
     /// "1-2b"/"1-3"（着地先、中身は使わない）。
     ///
     /// "1-2"を2オプション構成にしているのは、`jump_to_scene_idx`の中継シーン自動継続
-    /// （#574、`playback.rs`参照）が「唯一のoptionが`is_option_locked`でロックされていない」
-    /// 場合に自動で素通りしてしまうため——`--unlock-all`が有効だと1オプション構成では
-    /// `is_option_locked`が常にfalseを返し、選択肢を表示せず素通りしてしまって
-    /// `current_scene_id() == "1-2"`のアサーションが成立しなくなる（実際に発生を確認済み）。
-    /// 2オプションにすることで中継シーン判定の対象外にし、`--scene`の着地点そのものを
-    /// 安定して検証できるようにする。
+    /// （#574、`playback.rs`参照）が「選択肢が正確に1件」の場合のみ対象にする判定
+    /// （`options.len() == 1`）を持つため、その対象外にして`--scene`の着地点そのもの
+    /// （通常のChoice表示）を安定して検証できるようにするため。1オプション構成の
+    /// 中継ゲートに対する`--unlock-all`との相互作用（かつて`is_option_locked`を
+    /// 誤って中継判定に使っていたバグ、#652 セルフレビュー must 指摘で修正済み）は、
+    /// `main_level_cli_scene_and_unlock_all_stops_at_single_option_relay_gate_with_
+    /// unmet_condition_end_to_end`が別途専用フィクスチャで検証する。
     fn scene_jump_and_unlock_all_doc_source() -> &'static str {
         "---\nengine: name-name\n---\n\n\
          ## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n[選択]\n- 通常 → 1-2\n[/選択]\n\n\
@@ -2144,21 +2145,25 @@ mod tests {
          ## 1-3: 先\n\n**C**:\n先のセリフ\n"
     }
 
-    // #652 実装エージェント報告の未カバー観点の調査中に発見した実際の相互作用: `--scene`の
-    // 着地先シーンが「地の文もイベント絵も持たず、唯一の選択肢だけを持つ」中継専用シーン
-    // （#574の「中継シーンの自動継続」対象）の場合、`--unlock-all`が有効だと
-    // `is_option_locked`が常にfalseを返すため、その唯一の選択肢がロックされていないと
-    // 判定され、`jump_to_scene_id`自身がプレイヤーに見せず自動でその先へ通過してしまう
-    // （`playback.rs::jump_to_scene_idx`の中継シーン判定`!self.is_option_locked(&options[0])`
-    // 参照）。つまり「デバッグで狙った1オプションのゲートへ着地して選択肢を確認したい」
-    // という`--scene`+`--unlock-all`の典型的なユースケースの一部が、ゲートで止まらず
-    // その先まで素通りしてしまう——`main_level_cli_scene_and_unlock_all_jumps_and_
-    // unlocks_choice_end_to_end`（2オプション構成）とは対照的な挙動になる。現状の実装が
-    // 意図した挙動かは別途判断が必要なため、ここでは実際に起きる挙動をそのまま固定する
-    // （テスト作成時点でのバグ修正はスコープ外）。
+    // #652 セルフレビュー must 指摘対応: 以前は`--scene`の着地先シーンが「地の文も
+    // イベント絵も持たず、唯一の選択肢だけを持つ」中継専用シーン（#574の「中継シーンの
+    // 自動継続」対象）の場合、`--unlock-all`が有効だと中継継続の判定に`is_option_locked`
+    // を使っていたために常に`false`（ロックなし）を返し、その唯一の選択肢が「意思決定
+    // 不要」と誤判定され、`jump_to_scene_id`自身がプレイヤーに見せず自動でその先へ
+    // 通過してしまっていた（`playback.rs::jump_to_scene_idx`参照）。つまり「デバッグで
+    // 狙った1オプションのゲートへ着地して選択肢を確認したい」という`--scene`+
+    // `--unlock-all`の典型的なユースケースが、ゲートで止まらずその先まで素通りして
+    // しまっていた。
+    //
+    // 修正後は中継継続の判定を`is_option_condition_unmet`（フラグの真偽そのものだけを見る、
+    // `debug_unlock_all`を考慮しない判定）に切り替えたため、条件付き未達のゲートは
+    // `--unlock-all`の有無に関わらず必ず一度止まる。表示後の選択可否は引き続き
+    // `is_option_locked`経由で`debug_unlock_all`の効果を受けるため、「解放されたゲートを
+    // 見て選べる」というデバッグ機能の目的は損なわれない——このテストはその正しい挙動
+    // （意図したシーンで正しく止まり、かつ選択肢が解放されて見える）を固定する。
     #[test]
-    fn main_level_cli_scene_and_unlock_all_auto_skips_through_single_option_relay_gate_end_to_end()
-    {
+    fn main_level_cli_scene_and_unlock_all_stops_at_single_option_relay_gate_with_unmet_condition_end_to_end(
+    ) {
         let cli = cli_from(&["--scene", "1-2", "--unlock-all"]);
         let source = "---\nengine: name-name\n---\n\n\
              ## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n[選択]\n- 通常 → 1-2\n[/選択]\n\n\
@@ -2175,10 +2180,21 @@ mod tests {
 
         assert_eq!(
             playback.current_scene_id(),
-            "1-3",
-            "1オプションだけの中継ゲート(1-2)は、--unlock-allでロックが外れた結果 \
-             中継シーン自動継続(#574)の対象になり、1-2で止まらずその先(1-3)まで \
-             自動で通過してしまう（現状の実際の挙動）"
+            "1-2",
+            "1オプションだけの中継ゲート(1-2)は、条件(gate_flag)が未達のため \
+             --unlock-allの有無に関わらず中継シーン自動継続(#574)の対象にならず、 \
+             1-2で正しく止まるはず"
+        );
+        assert!(
+            playback.current_line().is_none(),
+            "1-1のAのセリフを経由していないはず（Choiceが1-2の先頭itemのまま）"
+        );
+        assert_eq!(
+            playback.current_choice_locked(),
+            vec![false],
+            "止まった後の表示では、--unlock-allによりgate_flag未設定でも選択肢は \
+             解放されて見えるはず（中継継続の素通り判定とは独立に、is_option_locked \
+             経由でdebug_unlock_allの効果を受ける）"
         );
     }
 
