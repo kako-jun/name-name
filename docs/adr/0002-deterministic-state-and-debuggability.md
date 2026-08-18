@@ -124,7 +124,7 @@ gymnasia のような「1 ルートが複数ファイルに分割されており
 避ける）。あわせて `?debug_unlock_all=1`（`parseDebugUnlockAll`）を新設し、`NovelRenderer` に
 `debugUnlockAllChoices` フラグを追加——true のとき choice の `[条件:]` ロック判定
 （`NovelRenderer.ts` の Choice 分岐、§下記）を全 bypass して全選択肢を選択可能にする（全ルート
-強制解放）。TUI 版にも対称の `--scene <sceneId>` / `--unlock-all` CLI フラグを追加し、
+強制解放）。TUI 版にも対称の `--debug-scene <sceneId>` / `--debug-unlock-all` CLI フラグを追加し、
 `Playback::jump_to_scene_id` / `Playback.debug_unlock_all`（`is_option_locked` の bypass）で
 同じ挙動を実現した（詳細: [Issue #652](https://github.com/kako-jun/name-name/issues/652)、
 [デバッグガイド](../guide/debugger.md)）。
@@ -214,4 +214,4 @@ intermission.md`。プロジェクト opt-in）の有無で分岐するように
 - Issue #398: 全 option 圏外の `[選択]` は描画せず `processDirective` の Choice 分岐で先回りして終劇する
 - Issue #399: 埋め込み開始（`?scene=`, `eventIndex=0`）を fresh-start 経路に乗せ、冒頭ディレクティブ実行＋立ち絵表示を通す
 - Issue #470: 選択肢なしでシーンの記述が尽きたとき `advance()` が `endStory()` を呼び明示的な終劇表示を出す
-- Issue #652: `debug_scene`/`debug_flags` を production ビルドでも常時有効化し、`?debug_unlock_all=1`（全選択肢ロック強制解放）と TUI版 `--scene`/`--unlock-all` を追加
+- Issue #652: `debug_scene`/`debug_flags` を production ビルドでも常時有効化し、`?debug_unlock_all=1`（全選択肢ロック強制解放）と TUI版 `--debug-scene`/`--debug-unlock-all` を追加

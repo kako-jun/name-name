@@ -116,7 +116,7 @@ fn main() -> anyhow::Result<()> {
     };
     let mut playback = playback
         .with_sentence_per_page(config.sentence_per_page)
-        // #652: デバッグ用シーンジャンプ機能。`--unlock-all` は選択肢の `[条件: flag]`
+        // #652: デバッグ用シーンジャンプ機能。`--debug-unlock-all` は選択肢の `[条件: flag]`
         // ロックを無視して全ての選択肢を選択可能にする（GUI版 `?debug_unlock_all=1` と対称）。
         .with_debug_unlock_all(cli.unlock_all);
     // #579: 自動クイックロード。`skip_leading_empty_scenes` より前に差し込む —
@@ -141,7 +141,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(path) = &config.quicksave_path {
         playback_restored = apply_new_game_or_restore(cli.new_game, &mut playback, path)?;
     }
-    // #652: `--scene <sceneId>` はデバッグ用シーンジャンプ。通常の解放条件・ファイル境界を
+    // #652: `--debug-scene <sceneId>` はデバッグ用シーンジャンプ。通常の解放条件・ファイル境界を
     // 無視して、指定した sceneId から直接開始する。`apply_new_game_or_restore` より後に
     // 置き、指定時は復元済みの位置を上書きする（明示的なデバッグ起点指定を優先する。
     // GUI版 `NovelPlayer` が `?debug_scene=` を initialSceneId/自動クイックロードより
@@ -2105,7 +2105,7 @@ mod tests {
         );
     }
 
-    // ===== #652: main()レベルの --scene / --unlock-all エンドツーエンド統合テスト =====
+    // ===== #652: main()レベルの --debug-scene / --debug-unlock-all エンドツーエンド統合テスト =====
     //
     // cli.rs（`Cli::parse`自体の引数解釈）・playback.rs（`with_debug_unlock_all`/
     // `jump_to_scene_id`の単体挙動）はそれぞれ既にテスト済みだが、`main()`が実際に行う配線
@@ -2130,9 +2130,9 @@ mod tests {
     ///
     /// "1-2"を2オプション構成にしているのは、`jump_to_scene_idx`の中継シーン自動継続
     /// （#574、`playback.rs`参照）が「選択肢が正確に1件」の場合のみ対象にする判定
-    /// （`options.len() == 1`）を持つため、その対象外にして`--scene`の着地点そのもの
+    /// （`options.len() == 1`）を持つため、その対象外にして`--debug-scene`の着地点そのもの
     /// （通常のChoice表示）を安定して検証できるようにするため。1オプション構成の
-    /// 中継ゲートに対する`--unlock-all`との相互作用（かつて`is_option_locked`を
+    /// 中継ゲートに対する`--debug-unlock-all`との相互作用（かつて`is_option_locked`を
     /// 誤って中継判定に使っていたバグ、#652 セルフレビュー must 指摘で修正済み）は、
     /// `main_level_cli_scene_and_unlock_all_stops_at_single_option_relay_gate_with_
     /// unmet_condition_end_to_end`が別途専用フィクスチャで検証する。
@@ -2145,26 +2145,26 @@ mod tests {
          ## 1-3: 先\n\n**C**:\n先のセリフ\n"
     }
 
-    // #652 セルフレビュー must 指摘対応: 以前は`--scene`の着地先シーンが「地の文も
+    // #652 セルフレビュー must 指摘対応: 以前は`--debug-scene`の着地先シーンが「地の文も
     // イベント絵も持たず、唯一の選択肢だけを持つ」中継専用シーン（#574の「中継シーンの
-    // 自動継続」対象）の場合、`--unlock-all`が有効だと中継継続の判定に`is_option_locked`
+    // 自動継続」対象）の場合、`--debug-unlock-all`が有効だと中継継続の判定に`is_option_locked`
     // を使っていたために常に`false`（ロックなし）を返し、その唯一の選択肢が「意思決定
     // 不要」と誤判定され、`jump_to_scene_id`自身がプレイヤーに見せず自動でその先へ
     // 通過してしまっていた（`playback.rs::jump_to_scene_idx`参照）。つまり「デバッグで
-    // 狙った1オプションのゲートへ着地して選択肢を確認したい」という`--scene`+
-    // `--unlock-all`の典型的なユースケースが、ゲートで止まらずその先まで素通りして
+    // 狙った1オプションのゲートへ着地して選択肢を確認したい」という`--debug-scene`+
+    // `--debug-unlock-all`の典型的なユースケースが、ゲートで止まらずその先まで素通りして
     // しまっていた。
     //
     // 修正後は中継継続の判定を`is_option_condition_unmet`（フラグの真偽そのものだけを見る、
     // `debug_unlock_all`を考慮しない判定）に切り替えたため、条件付き未達のゲートは
-    // `--unlock-all`の有無に関わらず必ず一度止まる。表示後の選択可否は引き続き
+    // `--debug-unlock-all`の有無に関わらず必ず一度止まる。表示後の選択可否は引き続き
     // `is_option_locked`経由で`debug_unlock_all`の効果を受けるため、「解放されたゲートを
     // 見て選べる」というデバッグ機能の目的は損なわれない——このテストはその正しい挙動
     // （意図したシーンで正しく止まり、かつ選択肢が解放されて見える）を固定する。
     #[test]
     fn main_level_cli_scene_and_unlock_all_stops_at_single_option_relay_gate_with_unmet_condition_end_to_end(
     ) {
-        let cli = cli_from(&["--scene", "1-2", "--unlock-all"]);
+        let cli = cli_from(&["--debug-scene", "1-2", "--debug-unlock-all"]);
         let source = "---\nengine: name-name\n---\n\n\
              ## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n[選択]\n- 通常 → 1-2\n[/選択]\n\n\
              ## 1-2: ゲート\n\n[選択]\n- 解除済み → 1-3 [条件: gate_flag]\n[/選択]\n\n\
@@ -2182,7 +2182,7 @@ mod tests {
             playback.current_scene_id(),
             "1-2",
             "1オプションだけの中継ゲート(1-2)は、条件(gate_flag)が未達のため \
-             --unlock-allの有無に関わらず中継シーン自動継続(#574)の対象にならず、 \
+             --debug-unlock-allの有無に関わらず中継シーン自動継続(#574)の対象にならず、 \
              1-2で正しく止まるはず"
         );
         assert!(
@@ -2192,7 +2192,7 @@ mod tests {
         assert_eq!(
             playback.current_choice_locked(),
             vec![false],
-            "止まった後の表示では、--unlock-allによりgate_flag未設定でも選択肢は \
+            "止まった後の表示では、--debug-unlock-allによりgate_flag未設定でも選択肢は \
              解放されて見えるはず（中継継続の素通り判定とは独立に、is_option_locked \
              経由でdebug_unlock_allの効果を受ける）"
         );
@@ -2200,11 +2200,11 @@ mod tests {
 
     #[test]
     fn main_level_cli_scene_and_unlock_all_jumps_and_unlocks_choice_end_to_end() {
-        // `--scene 1-2 --unlock-all` を実際に Cli::parse し、main() と同じ順序
+        // `--debug-scene 1-2 --debug-unlock-all` を実際に Cli::parse し、main() と同じ順序
         // （Playback::from_document → with_debug_unlock_all → jump_to_scene_id →
         // skip_leading_empty_scenes）で流し込む。1-1のAを経由せず直接1-2のゲートへ着地し、
         // gate_flagが一度も立っていないのに選択肢がロックされていないはず。
-        let cli = cli_from(&["--scene", "1-2", "--unlock-all"]);
+        let cli = cli_from(&["--debug-scene", "1-2", "--debug-unlock-all"]);
         let document = name_name_parser::parser::parse(scene_jump_and_unlock_all_doc_source());
         let mut playback = Playback::from_document(&document)
             .with_sentence_per_page(false)
@@ -2217,7 +2217,7 @@ mod tests {
         assert_eq!(
             playback.current_scene_id(),
             "1-2",
-            "--sceneで1-2へ直接着地するはず"
+            "--debug-sceneで1-2へ直接着地するはず"
         );
         assert!(
             playback.current_line().is_none(),
@@ -2226,15 +2226,15 @@ mod tests {
         assert_eq!(
             playback.current_choice_locked(),
             vec![false, false],
-            "--unlock-allでgate_flag未設定でも両オプションとも解放されるはず"
+            "--debug-unlock-allでgate_flag未設定でも両オプションとも解放されるはず"
         );
     }
 
     #[test]
     fn main_level_cli_scene_without_unlock_all_still_locks_choice_end_to_end() {
-        // `--scene`単独（`--unlock-all`無し）ではジャンプはするが、ロックは従来どおり
+        // `--debug-scene`単独（`--debug-unlock-all`無し）ではジャンプはするが、ロックは従来どおり
         // gate_flagの状態に従う——2機能が独立していることの確認。
-        let cli = cli_from(&["--scene", "1-2"]);
+        let cli = cli_from(&["--debug-scene", "1-2"]);
         assert!(!cli.unlock_all);
         let document = name_name_parser::parser::parse(scene_jump_and_unlock_all_doc_source());
         let mut playback = Playback::from_document(&document)
@@ -2249,15 +2249,15 @@ mod tests {
         assert_eq!(
             playback.current_choice_locked(),
             vec![false, true],
-            "--unlock-allを指定しなければgate_flag未設定の選択肢はロックされたままのはず"
+            "--debug-unlock-allを指定しなければgate_flag未設定の選択肢はロックされたままのはず"
         );
     }
 
     #[test]
     fn main_level_cli_unlock_all_without_scene_keeps_default_entry_scene_end_to_end() {
-        // `--unlock-all`単独（`--scene`無し）では起点は従来どおり先頭シーン("1-1")のまま——
+        // `--debug-unlock-all`単独（`--debug-scene`無し）では起点は従来どおり先頭シーン("1-1")のまま——
         // 2機能が独立していることの確認（上テストの逆方向）。
-        let cli = cli_from(&["--unlock-all"]);
+        let cli = cli_from(&["--debug-unlock-all"]);
         assert_eq!(cli.scene, None);
         let document = name_name_parser::parser::parse(scene_jump_and_unlock_all_doc_source());
         let mut playback = Playback::from_document(&document)
@@ -2271,7 +2271,7 @@ mod tests {
         assert_eq!(
             playback.current_scene_id(),
             "1-1",
-            "--sceneを指定しなければ先頭シーンから開始するはず"
+            "--debug-sceneを指定しなければ先頭シーンから開始するはず"
         );
         assert_eq!(
             playback
@@ -2280,7 +2280,7 @@ mod tests {
                 .speaker
                 .as_deref(),
             Some("A"),
-            "--unlock-allだけでは開始位置は変わらないはず"
+            "--debug-unlock-allだけでは開始位置は変わらないはず"
         );
     }
 
