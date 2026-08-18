@@ -787,6 +787,25 @@ describe('NovelPlayer `?scene=` ディープリンク + confinement 配線 (#386
     await flushAsync()
     expect(lastRenderer().setDebugUnlockAllChoices).toHaveBeenCalledWith(false)
   })
+
+  // #652 実装エージェント報告の未カバー観点:「debug_unlock_all と debug_flags/debug_scene を
+  // 同一URLで組み合わせた場合の相互作用」。G10（debug_scene 単独）・G11（debug_unlock_all 単独）
+  // はそれぞれ独立に検証済みだが、同一 URL に両方指定した場合に一方がもう一方の配線を
+  // 妨げないこと（両方呼ばれる・呼び出し順が崩れない）は未検証だった。
+  it('G13 (#652): `?debug_scene=`と`?debug_unlock_all=1`を同一URLで指定すると、両方が独立に配線される（startFromが後勝ちし、setDebugUnlockAllChoices(true)も呼ばれる）', async () => {
+    window.history.pushState({}, '', '?debug_scene=dbg-scene&debug_unlock_all=1')
+    try {
+      render(<NovelPlayer events={[]} initialSceneId="prod-scene" />)
+      await flushAsync()
+      const r = lastRenderer()
+      expect(r.startFrom).toHaveBeenNthCalledWith(1, { sceneId: 'prod-scene' })
+      expect(r.startFrom).toHaveBeenNthCalledWith(2, { sceneId: 'dbg-scene' })
+      expect(r.startFrom).toHaveBeenCalledTimes(2)
+      expect(r.setDebugUnlockAllChoices).toHaveBeenCalledWith(true)
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
 })
 
 // --- #395: 終劇到達時に埋め込み親へ完読を postMessage で通知する ---
