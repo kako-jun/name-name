@@ -479,6 +479,13 @@ pub struct Playback {
     /// `Cell` で内部可変性を持たせる（`RefCell` ではなく `Cell` で十分 — 中身が `Copy` な
     /// `(u64, Option<usize>, usize)` のため）。
     total_cache: std::cell::Cell<Option<(u64, Option<usize>, usize)>>,
+    /// デバッグ用の全選択肢ロック解除フラグ (#652)。`false`（既定）は従来どおり
+    /// `is_option_locked` が `option.condition` を判定する。`true` のときは
+    /// `option.condition` の有無に関わらず常に `false`（ロックしない）を返す——
+    /// `--unlock-all` CLI フラグ（`cli.rs`）専用で、GUI版 `?debug_unlock_all=1`
+    /// （`NovelRenderer.setDebugUnlockAllChoices`）と対称。`with_debug_unlock_all`
+    /// で構築直後に設定する想定（`with_sentence_per_page` と同じパターン）。
+    debug_unlock_all: bool,
 }
 
 /// `build_scene_items` がシーンを跨いで引き継ぐランニング状態のまとめ役（#509 Phase A）。
@@ -993,6 +1000,7 @@ impl Playback {
             current_scene_idx: 0,
             flags,
             total_cache: std::cell::Cell::new(None),
+            debug_unlock_all: false,
         }
     }
 
@@ -1004,6 +1012,16 @@ impl Playback {
     pub fn with_sentence_per_page(mut self, enabled: bool) -> Self {
         self.sentence_per_page = enabled;
         self.sync_sentence_pages();
+        self
+    }
+
+    /// デバッグ用の全選択肢ロック解除 (#652)。`Playback::from_document`/
+    /// [`Playback::from_lines`] 直後に連結して呼ぶ想定（`--unlock-all` CLI フラグを
+    /// `main.rs` からそのまま渡す）。`true` にすると `is_option_locked` が常に `false`
+    /// を返すようになり、`[条件:]` の有無に関わらず全ての選択肢が選択可能になる
+    /// （GUI版 `NovelRenderer.setDebugUnlockAllChoices` と対称）。
+    pub fn with_debug_unlock_all(mut self, enabled: bool) -> Self {
+        self.debug_unlock_all = enabled;
         self
     }
 
@@ -1133,7 +1151,13 @@ impl Playback {
     /// `None`（従来どおり条件なし）なら常に `false`（ロックしない）。`Some(flag)` なら
     /// `!self.flags.check(flag)`（未定義/false ならロック）——GUI版 `checkFlag`・
     /// `GameFlags::check` と同じ真偽判定規則。
+    ///
+    /// `self.debug_unlock_all`（#652、`--unlock-all` CLI フラグ）が `true` のときは
+    /// `option.condition` を見ずに常に `false` を返す（全選択肢を強制解放）。
     fn is_option_locked(&self, option: &ChoiceOption) -> bool {
+        if self.debug_unlock_all {
+            return false;
+        }
         match &option.condition {
             None => false,
             Some(flag) => !self.flags.check(flag),
@@ -2007,6 +2031,7 @@ impl Playback {
             current_scene_idx: 0,
             flags: GameFlags::new(),
             total_cache: std::cell::Cell::new(None),
+            debug_unlock_all: false,
         }
     }
 }
@@ -2577,6 +2602,48 @@ mod tests {
         assert!(
             pb.current_choice().is_some(),
             "ロックされた選択を試みても選択肢表示のまま変わらないはず"
+        );
+    }
+
+    // ---- #652: デバッグ用の全選択肢ロック解除 (with_debug_unlock_all) のテスト ----
+
+    #[test]
+    fn current_choice_locked_all_false_when_debug_unlock_all_enabled() {
+        let doc = choice_with_conditions_doc();
+        let pb = Playback::from_document(&doc).with_debug_unlock_all(true);
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![false, false],
+            "with_debug_unlock_all(true) なら option.condition の有無に関わらず全解放されるはず"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_on_condition_locked_option_succeeds_when_debug_unlock_all_enabled() {
+        let doc = choice_with_conditions_doc();
+        let mut pb = Playback::from_document(&doc).with_debug_unlock_all(true);
+        pb.move_choice_cursor_down(); // カーソルを通常ならロック中のindex 1へ
+
+        assert!(
+            pb.select_current_choice(),
+            "debug_unlock_all 有効時は条件未達のオプションも確定できるはず"
+        );
+        assert_eq!(
+            pb.current_line().expect("jump先の台詞").speaker.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn with_debug_unlock_all_false_keeps_default_locked_behavior() {
+        // #652 セルフレビュー観点: with_debug_unlock_all(false) を明示的に呼んでも
+        // 既存動作（未指定時と同じ）から変わらないことを固定する。
+        let doc = choice_with_conditions_doc();
+        let pb = Playback::from_document(&doc).with_debug_unlock_all(false);
+        assert_eq!(
+            pb.current_choice_locked(),
+            vec![false, true],
+            "with_debug_unlock_all(false) は従来どおりの condition 判定のはず"
         );
     }
 

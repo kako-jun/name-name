@@ -16,13 +16,22 @@ pub struct Cli {
     /// 必ず script_dir の entry_script 先頭（hubの10択画面）から新規開始する。
     /// `--config`/`--script` と異なり値を取らない単純なブールフラグ。
     pub new_game: bool,
+    /// `--scene <sceneId>` で指定された直接開始先の sceneId (#652)。デバッグ用シーンジャンプ。
+    /// 通常の解放条件・ファイル境界を無視して直接開始する。未指定なら `None`
+    /// （従来どおりの起動経路）。`main.rs` から `Playback::jump_to_scene_id` へ配線する。
+    /// GUI版 `?debug_scene=` と対称（`frontend/src/game/debugQuery.ts` 参照）。
+    pub scene: Option<String>,
+    /// `--unlock-all` が指定されたか（#652）。デバッグ用。選択肢の `[条件: flag]` ロックを
+    /// 無視して全ての選択肢を選択可能にする。`--new-game` と同じ値を取らない単純な
+    /// ブールフラグ。GUI版 `?debug_unlock_all=1` と対称（`NovelRenderer.setDebugUnlockAllChoices`）。
+    pub unlock_all: bool,
 }
 
 impl Cli {
-    /// `--config <path>` / `--script <path>` / `--new-game` を解釈する。未知の引数は無視する。
-    /// `--config`/`--script` は次のトークンを無条件に値として消費する
-    /// （それが `--script` のような別のフラグであっても）。`--new-game` は値を取らない
-    /// 単純なブールフラグ（次のトークンは消費しない）。
+    /// `--config <path>` / `--script <path>` / `--new-game` / `--scene <sceneId>` /
+    /// `--unlock-all` を解釈する。未知の引数は無視する。`--config`/`--script`/`--scene` は
+    /// 次のトークンを無条件に値として消費する（それが別のフラグであっても）。
+    /// `--new-game`/`--unlock-all` は値を取らない単純なブールフラグ（次のトークンは消費しない）。
     pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Self {
         let mut cli = Cli::default();
         let mut iter = args.into_iter();
@@ -32,6 +41,8 @@ impl Cli {
                 "--config" => cli.config_path = iter.next().map(PathBuf::from),
                 "--script" => cli.script_path = iter.next().map(PathBuf::from),
                 "--new-game" => cli.new_game = true,
+                "--scene" => cli.scene = iter.next(),
+                "--unlock-all" => cli.unlock_all = true,
                 _ => {}
             }
         }
@@ -144,5 +155,57 @@ mod tests {
         assert!(cli.new_game);
         assert_eq!(cli.config_path, Some(PathBuf::from("c.toml")));
         assert_eq!(cli.script_path, Some(PathBuf::from("s.md")));
+    }
+
+    // ===== #652: --scene / --unlock-all =====
+
+    #[test]
+    fn parse_without_scene_or_unlock_all_defaults_to_none_and_false() {
+        let cli = parse(&[]);
+        assert_eq!(cli.scene, None);
+        assert!(!cli.unlock_all);
+    }
+
+    #[test]
+    fn parse_scene_sets_scene() {
+        let cli = parse(&["--scene", "1-2"]);
+        assert_eq!(cli.scene, Some("1-2".to_string()));
+    }
+
+    #[test]
+    fn parse_scene_flag_without_trailing_value_is_none() {
+        let cli = parse(&["--scene"]);
+        assert_eq!(cli.scene, None);
+    }
+
+    #[test]
+    fn parse_unlock_all_flag_alone_sets_unlock_all_true() {
+        let cli = parse(&["--unlock-all"]);
+        assert!(cli.unlock_all);
+        assert_eq!(cli.scene, None);
+    }
+
+    #[test]
+    fn parse_unlock_all_flag_does_not_consume_following_token() {
+        let cli = parse(&["--unlock-all", "--scene", "1-2"]);
+        assert!(cli.unlock_all);
+        assert_eq!(cli.scene, Some("1-2".to_string()));
+    }
+
+    #[test]
+    fn parse_scene_and_unlock_all_combined_with_config_and_script_sets_all() {
+        let cli = parse(&[
+            "--config",
+            "c.toml",
+            "--script",
+            "s.md",
+            "--scene",
+            "1-2",
+            "--unlock-all",
+        ]);
+        assert_eq!(cli.config_path, Some(PathBuf::from("c.toml")));
+        assert_eq!(cli.script_path, Some(PathBuf::from("s.md")));
+        assert_eq!(cli.scene, Some("1-2".to_string()));
+        assert!(cli.unlock_all);
     }
 }

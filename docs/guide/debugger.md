@@ -137,6 +137,31 @@ interface StartFromOptions {
 }
 ```
 
+## TUI 版（`--scene` / `--unlock-all`）（#652）
+
+Web 版の `debug_scene`/`debug_unlock_all` と対称の CLI フラグを TUI 版にも用意している
+（[操作ガイド](./controls.md) の起動オプション一覧も参照）。
+
+| フラグ | 意味 | 例 |
+|---|---|---|
+| `--scene <sceneId>` | 開始シーン ID（confinement 概念自体が TUI に無いため常にファイル境界を無視して直接遷移） | `--scene 1-2` |
+| `--unlock-all` | 選択肢の `[条件: flag]` ロックを強制解放（値を取らないブールフラグ） | `--unlock-all` |
+
+```bash
+# シーン 1-2 から、全選択肢のロックを解除した状態で起動する
+cargo run -p name-name-tui -- --scene 1-2 --unlock-all
+```
+
+`--scene` は `--new-game`/クイックロード復元より後に評価され、指定時はそれらの開始位置を
+上書きする（Web 版が `debug_scene` を `initialSceneId`/自動クイックロードより後に評価して
+デバッグ指定を優先させるのと対称）。存在しない sceneId は `Playback::jump_to_scene_id` が
+no-op で吸収する（位置を変えない、fail-soft）。
+
+`--unlock-all` は `Playback::with_debug_unlock_all` で `Playback` 内部の
+`is_option_locked` を bypass する——`current_choice_locked()`（UI 描画）と
+`select_current_choice()`（選択確定）の両方に効くため、ロック中の選択肢も見た目・
+選択可否ともに解放される（Web 版 `NovelRenderer.setDebugUnlockAllChoices` と同じ設計）。
+
 ## 設計背景
 
 - `startFrom`（途中局面指定・`eventIndex>0`）とセーブ復元は、共通コア `restoreToScene(scene, state)` を経由して状態を宣言的に組み立てる（[#256](https://github.com/kako-jun/name-name/issues/256)）。復元ロジックは 1 本に集約されている。ただし `startFrom` の `eventIndex=0`（本番 `?scene=` 埋め込みの既定）だけは通常入場と同じ fresh-start 経路（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の話者の立ち絵を出す（[#399](https://github.com/kako-jun/name-name/issues/399)）。

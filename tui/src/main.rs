@@ -114,7 +114,11 @@ fn main() -> anyhow::Result<()> {
             Playback::from_merged_document(&merged.document, &merged.chapter_file_ids)
         }
     };
-    let mut playback = playback.with_sentence_per_page(config.sentence_per_page);
+    let mut playback = playback
+        .with_sentence_per_page(config.sentence_per_page)
+        // #652: デバッグ用シーンジャンプ機能。`--unlock-all` は選択肢の `[条件: flag]`
+        // ロックを無視して全ての選択肢を選択可能にする（GUI版 `?debug_unlock_all=1` と対称）。
+        .with_debug_unlock_all(cli.unlock_all);
     // #579: 自動クイックロード。`skip_leading_empty_scenes` より前に差し込む —
     // 保存済みのシーンへ復元できた場合、それが「本来の先頭シーン」の扱いに優先する
     // （`skip_leading_empty_scenes` は保存データが無い/復元失敗時の通常起動でのみ
@@ -136,6 +140,18 @@ fn main() -> anyhow::Result<()> {
     let mut playback_restored = false;
     if let Some(path) = &config.quicksave_path {
         playback_restored = apply_new_game_or_restore(cli.new_game, &mut playback, path)?;
+    }
+    // #652: `--scene <sceneId>` はデバッグ用シーンジャンプ。通常の解放条件・ファイル境界を
+    // 無視して、指定した sceneId から直接開始する。`apply_new_game_or_restore` より後に
+    // 置き、指定時は復元済みの位置を上書きする（明示的なデバッグ起点指定を優先する。
+    // GUI版 `NovelPlayer` が `?debug_scene=` を initialSceneId/自動クイックロードより
+    // 後に評価してデバッグ指定を優先させるのと対称）。存在しない sceneId は
+    // `jump_to_scene_id` が no-op で吸収する（位置を変えない、fail-soft）。
+    // `skip_leading_empty_scenes` より前に置くことで、ジャンプ先が Line/Choice を
+    // 持たない（flag 設定だけの）シーンでも #564 と同じ安全策で最初の表示可能な
+    // 位置まで自動的に進む。
+    if let Some(scene_id) = &cli.scene {
+        playback.jump_to_scene_id(scene_id);
     }
     skip_leading_empty_scenes(&mut playback);
 
