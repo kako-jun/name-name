@@ -5,26 +5,50 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 
 エディタ／プレイヤーの基本操作は [操作ガイド](./controls.md)・[エディタガイド](./editor.md) を参照。
 
-> **`?scene=` との違い**: このページで扱う `debug_scene` 系クエリは DEV ビルド限定のデバッグ起点。
-> production でも常時有効な特定シーンへの直接ディープリンクは `?scene=<sceneId>`（#386）で、
-> 別系統・別パーサ（`sceneQuery.ts`）。sceneId 単体のみ指定でき、対象ファイル自身に
-> confinement（在圏）されて hub 等の圏外へは「終劇」扱いになる。詳細は
-> [`docs/architecture.md`](../architecture.md) の「production 向けシーン直接ディープリンク
-> `?scene=`」セクションと [ADR 0002](../adr/0002-deterministic-state-and-debuggability.md) を参照。
+> **`?scene=` との違い**: このページで扱う `debug_scene` 系クエリは production ビルドでも常時
+> 有効なデバッグ起点（#652）。sceneId 単体のみ指定できる production 向けの特定シーン直接
+> ディープリンクは `?scene=<sceneId>`（#386）で、別系統・別パーサ（`sceneQuery.ts`）。
+> `?scene=` は対象ファイル自身に confinement（在圏）されて hub 等の圏外へは「終劇」扱いになるが、
+> `debug_scene` は confinement なしで任意のシーンへ遷移できる（1ルートが複数ファイルに分割された
+> 構成の実機デバッグ用）。詳細は [`docs/architecture.md`](../architecture.md) の「production 向け
+> シーン直接ディープリンク `?scene=`」セクションと
+> [ADR 0002](../adr/0002-deterministic-state-and-debuggability.md) を参照。
+>
+> **隠蔽についての設計方針（#652）**: `debug_scene` 系クエリは有効化条件・認証を持たない。
+> 「知らなければ踏まない URL パラメータ」自体が十分な隠蔽であるという kako-jun確定の判断による
+> （過剰な設計を避ける）。
 
-## URL クエリで起点を指定する（DEV ビルド限定）
+## URL クエリで起点を指定する（production ビルドでも常時有効）
 
-`import.meta.env.DEV` のときだけ有効。production ビルドでは配線ごと tree-shake され、URL を付けても何も起きない（`NovelPlayer.tsx`）。また `scenes` を渡す経路（`setScenes`）でのみ動く。
+`scenes` を渡す経路（`setScenes`）でのみ動く（`NovelPlayer.tsx`）。#652 以前は
+`import.meta.env.DEV` ガード付きで dev ビルド限定だったが、gymnasia のような1ルートが複数
+ファイルに分割された構成の実機デバッグのため production ビルドでも常時有効化した。
 
-開発サーバー（`npm run dev`）で、プレイヤー URL に以下のクエリを付ける。
+開発サーバー（`npm run dev`）に限らず、本番デプロイ先の URL にも以下のクエリを付けられる。
 
 | クエリ | 意味 | 例 |
 |---|---|---|
-| `debug_scene` | 開始シーン ID | `?debug_scene=1-2` |
+| `debug_scene` | 開始シーン ID（confinement なし。ファイル境界を無視して直接遷移） | `?debug_scene=1-2` |
 | `debug_flags` | 開始時に立てるフラグ（`key:val` をカンマ区切り） | `&debug_flags=saw_characters:true,gold:100` |
 | `debug_eventIndex` | 開始イベント index（省略時 0） | `&debug_eventIndex=3` |
 | `debug_textIndex` | 開始テキスト index（省略時 0） | `&debug_textIndex=2` |
 | `debug_script` | クリック操作列を自動再生（カンマ区切り） | `?debug_script=advance,advance,choice:2-1` |
+| `debug_unlock_all` | `1` で全選択肢の `[条件: flag]` ロックを強制解放（#652） | `?debug_unlock_all=1` |
+
+### 全ルート強制解放（`debug_unlock_all`）
+
+`?debug_unlock_all=1` を付けると、選択肢の `[条件: flag]` ロック判定（`NovelRenderer.ts` の
+Choice 分岐）が `option.condition` を一切見ずに全選択肢を選択可能にする。個別のフラグを
+`debug_flags=route01_cleared:true,route02_cleared:true,...` のように積んでも同じ効果を得られる
+ケースもあるが、どのフラグが必要かを事前に把握せずに全ルートを一括解放できるため、gymnasia の
+ような未知/大量のルートフラグを扱う実機デバッグではこちらの方が使い勝手が良い。
+`debug_scene`/`debug_flags`/`debug_script` とは独立して評価されるため、通常のハブ経由フロー
+（`debug_scene` を使わない起動）でも併用できる。
+
+```
+# ハブから通常起動しつつ、以降出会う全選択肢のロックを解除する
+http://localhost:5173/play/<id>?debug_unlock_all=1
+```
 
 ### フラグ値の型推論（`debug_flags`）
 

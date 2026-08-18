@@ -76,6 +76,8 @@ const {
     setOnSeekActiveChange = vi.fn()
     setOnStoryEndedChange = vi.fn()
     setConfinedSceneIds = vi.fn()
+    // #652: デバッグ用の全選択肢ロック解除。mount 時に常に呼ばれる（未指定時は false）。
+    setDebugUnlockAllChoices = vi.fn()
     // #467: letterbox/pillarbox の黒帯タップ用公開API。NovelPlayer 側の
     // handleOutsideCanvasPointerDown が rendererRef.current?.handleOutsideCanvasTap() を叩く配線を
     // スパイで検証するために必要（実処理は NovelRenderer.outsideCanvasTap.test.ts が担保）。
@@ -710,8 +712,9 @@ describe('NovelPlayer speakerNudge の renderer 転送 (#382)', () => {
 //
 // PlayerScreen が解決した initialSceneId / confinedSceneIds をそのまま renderer に配線する
 // ことと、renderer.setOnStoryEndedChange 経由で届く終劇状態が "to be continued..." の
-// DOM 表示に反映されることを検証する。DEV 限定の debug_scene（#220）との優先順位
-// （initialSceneId → debug_scene の順に startFrom が呼ばれ、後勝ちで debug 側が効く）も含む。
+// DOM 表示に反映されることを検証する。debug_scene（#220、#652で本番ビルドでも常時有効）との
+// 優先順位（initialSceneId → debug_scene の順に startFrom が呼ばれ、後勝ちで debug 側が効く）
+// も含む。
 describe('NovelPlayer `?scene=` ディープリンク + confinement 配線 (#386)', () => {
   const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
 
@@ -752,13 +755,13 @@ describe('NovelPlayer `?scene=` ディープリンク + confinement 配線 (#386
   // 内部化されたため、NovelPlayer 側にはもう検証対象の DOM が無い。表示ロジックの単体テストは
   // NovelRenderer.endingOverlay.test.ts が担保する。
 
-  it('G10: DEV モードで `?scene=` 由来の initialSceneId と `?debug_scene=` が同時指定された場合、debug_scene 側の startFrom が後勝ちする', async () => {
+  it('G10: `?scene=` 由来の initialSceneId と `?debug_scene=` が同時指定された場合、debug_scene 側の startFrom が後勝ちする（#652で本番ビルドでも有効）', async () => {
     window.history.pushState({}, '', '?debug_scene=dbg-scene')
     try {
       render(<NovelPlayer events={[]} initialSceneId="prod-scene" />)
       await flushAsync()
       const r = lastRenderer()
-      // initialSceneId(#386) が先に startFrom され、その後 DEV 限定の debug_scene(#220) が
+      // initialSceneId(#386) が先に startFrom され、その後 debug_scene(#220、#652) が
       // 上書きする（NovelPlayer 側のコメント通り、デバッグ目的の上書きを優先させる設計）。
       expect(r.startFrom).toHaveBeenNthCalledWith(1, { sceneId: 'prod-scene' })
       expect(r.startFrom).toHaveBeenNthCalledWith(2, { sceneId: 'dbg-scene' })
@@ -766,6 +769,23 @@ describe('NovelPlayer `?scene=` ディープリンク + confinement 配線 (#386
     } finally {
       window.history.pushState({}, '', '/')
     }
+  })
+
+  it('G11 (#652): `?debug_unlock_all=1` を指定すると mount 時に renderer.setDebugUnlockAllChoices(true) が呼ばれる', async () => {
+    window.history.pushState({}, '', '?debug_unlock_all=1')
+    try {
+      render(<NovelPlayer events={[]} />)
+      await flushAsync()
+      expect(lastRenderer().setDebugUnlockAllChoices).toHaveBeenCalledWith(true)
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+
+  it('G12 (#652): `?debug_unlock_all=` 未指定なら renderer.setDebugUnlockAllChoices(false) が呼ばれる（既定は解放しない）', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    expect(lastRenderer().setDebugUnlockAllChoices).toHaveBeenCalledWith(false)
   })
 })
 

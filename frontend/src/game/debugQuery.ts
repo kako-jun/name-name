@@ -1,14 +1,21 @@
 /**
- * URL クエリによるデバッグ起点指定のパーサ (#220 Phase 3)。
+ * URL クエリによるデバッグ起点指定のパーサ (#220 Phase 3、#652で本番ビルドでも有効化)。
  *
- * `import.meta.env.DEV` 時に NovelPlayer から呼ばれ、URL の query string を
- * playScript() / startFrom() の引数に変換する。副作用なし・DOM 非依存の純粋関数で、
- * テスト容易性のためにパースロジックをここに隔離する（レンダラ／component に直書きしない）。
+ * NovelPlayer から常時呼ばれ、URL の query string を playScript() / startFrom() の引数に
+ * 変換する。副作用なし・DOM 非依存の純粋関数で、テスト容易性のためにパースロジックを
+ * ここに隔離する（レンダラ／component に直書きしない）。
+ *
+ * #652: 以前は `import.meta.env.DEV` ガード付きで dev ビルド限定だったが、gymnasia の
+ * ような1ルートが複数ファイルに分割された構成の実機デバッグのため、本番ビルドでも
+ * 動作するようにした（`NovelPlayer.tsx` 側のガードを撤去。ここのパーサ自体は変更不要）。
+ * kako-jun確定の設計方針: 「知らなければ踏まない URL パラメータ」自体が十分な隠蔽であり、
+ * 追加の有効化条件・認証は不要（#652）。
  *
  * 仕様:
  * - `?debug_script=advance,advance,choice:1-1` → { script: Step[] }（優先）
  * - `?debug_scene=1-2&debug_flags=saw_characters:true` → { scene: StartFromOptions }
  * - どちらも無ければ null
+ * - `?debug_unlock_all=1` は上記とは独立（`parseDebugUnlockAll` 参照、#652）
  */
 
 import type { Step, StartFromOptions } from './GameState'
@@ -133,4 +140,26 @@ export function parseDebugQuery(search: string): DebugQueryResult {
   }
 
   return null
+}
+
+/**
+ * `?debug_unlock_all=1` の有無をパースする (#652)。
+ *
+ * デバッグ用の全選択肢ロック解除フラグ。`debug_scene`/`debug_script`/`debug_flags` とは
+ * 独立して評価される——`debug_flags` で個別に `xxx_cleared:true` を積めば同じ効果を得られる
+ * ケースもあるが、gymnasia のように未知/大量のルートフラグを扱う実機デバッグでは、
+ * どのフラグが必要かを事前に把握せずに全ルートを強制解放できる本パラメータの方が使い勝手が
+ * 良いため用意した。
+ *
+ * `parseThemeQuery`（`themeQuery.ts`）と同じ厳密一致方式——値が `'1'` のときだけ true。
+ * それ以外（未指定・`'0'`・空文字・他の値）はすべて false に倒す（`?debug_unlock_all=0` を
+ * URL に残したまま無効化したいケースを誤って有効化しないため、パラメータの有無だけでは
+ * 判定しない）。
+ *
+ * @param search `window.location.search`（先頭 `?` の有無どちらも可）
+ * @returns `debug_unlock_all=1` が指定されていれば true、それ以外は false
+ */
+export function parseDebugUnlockAll(search: string): boolean {
+  const params = new URLSearchParams(search)
+  return params.get('debug_unlock_all') === '1'
 }

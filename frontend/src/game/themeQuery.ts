@@ -8,9 +8,9 @@
  * theo-hayami のような **ライトな埋め込み先** だけが `?theme=light` を明示して白いロード
  * 画面を要求する。
  *
- * `debugQuery.ts` の debug 系（dev 専用・`import.meta.env.DEV` でのみ有効）とは別系統で、
- * production ビルドでも常時有効。App の darkMode（エディタ UI 用トグル）とも独立しており、
- * プレイヤーの見た目は本パラメータ（既定 dark）だけで決まる。
+ * `debugQuery.ts` の debug 系（#652で本番ビルドでも常時有効化済み）とは別系統。
+ * App の darkMode（エディタ UI 用トグル）とも独立しており、プレイヤーの見た目は本パラメータ
+ * （既定 dark）だけで決まる。
  *
  * 副作用なし・DOM 非依存の純粋関数。
  */

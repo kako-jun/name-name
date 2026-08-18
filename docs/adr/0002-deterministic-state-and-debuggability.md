@@ -117,21 +117,34 @@ renderer.startFrom({
 `import.meta.env.DEV` の場合のみ有効。本番では無視する。
 実装: 純粋パーサ `frontend/src/game/debugQuery.ts` の `parseDebugQuery(search)` が `{script}` / `{scene}` / `null` を返し、`NovelPlayer.tsx` が `setScenes` 後に DEV ガード付きで `playScript`/`startFrom` を呼ぶ。`debug_script` 優先。vitest 20 ケース。**これで #220 の全 Phase（1 playScript / 2 startFrom / 3 URL クエリ）が完了。**
 
+**追記（#652、2026-08-18）**: `import.meta.env.DEV` ガードを撤去し、本番ビルドでも常時有効化した。
+gymnasia のような「1 ルートが複数ファイルに分割されており、`?scene=`（#386）の confinement では
+対象ファイル外へ遷移できない」構成の実機デバッグのため。設計方針は kako-jun確定: 「知らなければ
+踏まない URL パラメータ」自体が十分な隠蔽であり、追加の有効化条件・認証は設けない（過剰設計を
+避ける）。あわせて `?debug_unlock_all=1`（`parseDebugUnlockAll`）を新設し、`NovelRenderer` に
+`debugUnlockAllChoices` フラグを追加——true のとき choice の `[条件:]` ロック判定
+（`NovelRenderer.ts` の Choice 分岐、§下記）を全 bypass して全選択肢を選択可能にする（全ルート
+強制解放）。TUI 版にも対称の `--scene <sceneId>` / `--unlock-all` CLI フラグを追加し、
+`Playback::jump_to_scene_id` / `Playback.debug_unlock_all`（`is_option_locked` の bypass）で
+同じ挙動を実現した（詳細: [Issue #652](https://github.com/kako-jun/name-name/issues/652)、
+[デバッグガイド](../guide/debugger.md)）。
+
 ### 5. `?scene=` ディープリンク + confinement（在圏）+ 終劇（`storyEnded`）（#386、production 対応）✅ 実装済み（2026-07-04）
 
-Phase 3 の `debug_scene` は開発環境限定のデバッグ起点だった。production でも常時有効な
-「特定シーンへの直接ディープリンク」は別系統として追加する。両者の違い:
+Phase 3 の `debug_scene` は開発環境限定のデバッグ起点だった（#652 で production 常時有効化、
+上記4節の追記を参照）。production でも常時有効な「特定シーンへの直接ディープリンク」は
+別系統として追加する。両者の違い:
 
-| | `debug_scene`（#220 Phase 3） | `?scene=`（#386） |
+| | `debug_scene`（#220 Phase 3、#652） | `?scene=`（#386） |
 | --- | --- | --- |
-| 有効ビルド | DEV のみ（`import.meta.env.DEV`。production は配線ごと tree-shake） | production 含め常時 |
+| 有効ビルド | production 含め常時（#652 以前は DEV のみ） | production 含め常時 |
 | 指定できる状態 | scene + flags + eventIndex + textIndex | scene（sceneId）のみ |
 | 用途 | バグ再現・デバッグ起点の共有 | 特定シーンの直接埋め込み（theo-hayami の会話劇セル1本を外部ページに埋め込む用途） |
 | パーサ | `debugQuery.ts` の `parseDebugQuery` | `sceneQuery.ts` の `parseSceneQuery` |
-| 遷移範囲 | 無制限（通常のハブ経由フローと同じ） | 対象ファイル自身に confinement（在圏）される |
+| 遷移範囲 | 無制限（confinement なし。通常のハブ経由フローと同じ） | 対象ファイル自身に confinement（在圏）される |
 
 `NovelPlayer` は両方を配線するが、`initialSceneId`（`?scene=` 由来）を `debug_scene` ブロックより
-前に評価するため、DEV で両方指定された場合は `debug_scene` が後勝ちで優先される（デバッグ目的の
+前に評価するため、両方指定された場合は `debug_scene` が後勝ちで優先される（デバッグ目的の
 上書きを production 経路より優先させる）。
 
 `?scene=` 単独埋め込みは対象ファイル外（hub・他ファイル）への choice ジャンプを許さない
@@ -194,10 +207,11 @@ intermission.md`。プロジェクト opt-in）の有無で分岐するように
 - `NovelRenderer.ts`: `applyState`、`startFrom`（`eventIndex=0` は `startScene` の fresh-start 経路、#399）、`restoreToScene`（startFrom の途中局面指定 / `loadFromSaveData` 共通コア）、`seekTo`、`advance`（選択肢なし消化時の終劇、#470）、`jumpToScene`、`processDirective`（Choice 短絡での終劇、#398）、`setConfinedSceneIds`、`endStory`
 - `frontend/src/game/sceneQuery.ts` / `frontend/src/game/sceneConfinement.ts`: `?scene=` パーサ・confinement 判定（#386）
 - `docs/architecture.md`: 「状態管理: NovelGameState」セクション、「production 向けシーン直接ディープリンク `?scene=`」セクション
-- `docs/guide/debugger.md`: `debug_scene`（DEV 専用）の使い方ガイド
+- `docs/guide/debugger.md`: `debug_scene`（#652で production 常時有効化）の使い方ガイド
 - Issue #220: `playScript` / `startFrom` 実装
 - Issue #256: `startFrom` / `loadFromSaveData` の状態復元コア共通化（`restoreToScene`）
 - Issue #386: `?scene=` ディープリンク + confinement + 終劇（`storyEnded`）
 - Issue #398: 全 option 圏外の `[選択]` は描画せず `processDirective` の Choice 分岐で先回りして終劇する
 - Issue #399: 埋め込み開始（`?scene=`, `eventIndex=0`）を fresh-start 経路に乗せ、冒頭ディレクティブ実行＋立ち絵表示を通す
 - Issue #470: 選択肢なしでシーンの記述が尽きたとき `advance()` が `endStory()` を呼び明示的な終劇表示を出す
+- Issue #652: `debug_scene`/`debug_flags` を production ビルドでも常時有効化し、`?debug_unlock_all=1`（全選択肢ロック強制解放）と TUI版 `--scene`/`--unlock-all` を追加

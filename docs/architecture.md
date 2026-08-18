@@ -151,22 +151,23 @@ basename が `script.md`** のもの（無ければ先頭）を選ぶ。
 #### production 向けシーン直接ディープリンク `?scene=`（#386）
 
 `?scene=<sceneId>` は production ビルドでも常時有効な、特定シーンへの直接埋め込み用の入口。
-`import.meta.env.DEV` 限定の `debug_scene`（[デバッグガイド](./guide/debugger.md) 参照。flags/
-eventIndex/textIndex も指定できるデバッグ起点）とは別系統で、こちらは sceneId 単体のみを受け取る
-最小限のパーサ（`frontend/src/game/sceneQuery.ts` の `parseSceneQuery`）。theo-hayami の
-「1 セル 1 URL＝1 遅延埋め込み」設計のための経路で、他 .md の会話劇セルを 1 本だけ外部ページに
-埋め込むときに使う。
+`debug_scene`（[デバッグガイド](./guide/debugger.md) 参照。flags/eventIndex/textIndex も指定
+できるデバッグ起点。#652で本番ビルドでも常時有効化済み）とは別系統で、こちらは sceneId 単体の
+みを受け取る最小限のパーサ（`frontend/src/game/sceneQuery.ts` の `parseSceneQuery`）。theo-hayami
+の「1 セル 1 URL＝1 遅延埋め込み」設計のための経路で、他 .md の会話劇セルを 1 本だけ外部ページに
+埋め込むときに使う。両者の決定的な違いは confinement（在圏、下記）の有無——`?scene=` は圏外への
+遷移を終劇として扱うが、`debug_scene` は confinement なしで任意のシーンへ遷移できる。
 
 `PlayerScreen` が `?scene=` を読み、対象 sceneId が属する script を（上記の missing scene
 resolver 経由で）事前解決・ロードしてから `NovelPlayer` に `initialSceneId` として渡す。
 `NovelPlayer` はマウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ
-（DEV 専用の `debug_scene` ブロックより前に評価するため、DEV で両方指定されると `debug_scene`
-側が後勝ちで優先される）。無効・未解決の sceneId は現行どおりエントリ（ハブ）から開始する。
+（`debug_scene` ブロックより前に評価するため、両方指定されると `debug_scene` 側が後勝ちで
+優先される）。無効・未解決の sceneId は現行どおりエントリ（ハブ）から開始する。
 `?scene=` の startFrom は `eventIndex=0`（シーン先頭）固定なので、**通常入場と同じ fresh-start
 経路**（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の
 話者の立ち絵を出してから最初のテキストで止まる（#399）。従来は宣言的復元の `restoreToScene` に
 乗せていたため、冒頭ディレクティブが実行されず背景も立ち絵も出ないまま `eventIndex=0` で
-止まっていた。DEV の `debug_scene` で `eventIndex>0` を指定した途中局面起動だけ `restoreToScene`
+止まっていた。`debug_scene` で `eventIndex>0` を指定した途中局面起動だけ `restoreToScene`
 にフォールバックする（詳細は [ADR 0002](./adr/0002-deterministic-state-and-debuggability.md) の §3）。
 
 **confinement（在圏）+ 終劇**: 単独埋め込みは対象 script ファイルの外（hub・他ファイル）へ
