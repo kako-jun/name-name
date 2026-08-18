@@ -137,39 +137,39 @@ interface StartFromOptions {
 }
 ```
 
-## TUI 版（`--scene` / `--unlock-all`）（#652）
+## TUI 版（`--debug-scene` / `--debug-unlock-all`）（#652）
 
 Web 版の `debug_scene`/`debug_unlock_all` と対称の CLI フラグを TUI 版にも用意している
 （[操作ガイド](./controls.md) の起動オプション一覧も参照）。
 
 | フラグ | 意味 | 例 |
 |---|---|---|
-| `--scene <sceneId>` | 開始シーン ID（confinement 概念自体が TUI に無いため常にファイル境界を無視して直接遷移） | `--scene 1-2` |
-| `--unlock-all` | 選択肢の `[条件: flag]` ロックを強制解放（値を取らないブールフラグ） | `--unlock-all` |
+| `--debug-scene <sceneId>` | 開始シーン ID（confinement 概念自体が TUI に無いため常にファイル境界を無視して直接遷移） | `--debug-scene 1-2` |
+| `--debug-unlock-all` | 選択肢の `[条件: flag]` ロックを強制解放（値を取らないブールフラグ） | `--debug-unlock-all` |
 
 ```bash
 # シーン 1-2 から、全選択肢のロックを解除した状態で起動する
-cargo run -p name-name-tui -- --scene 1-2 --unlock-all
+cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 ```
 
-`--scene` は `--new-game`/クイックロード復元より後に評価され、指定時はそれらの開始位置を
+`--debug-scene` は `--new-game`/クイックロード復元より後に評価され、指定時はそれらの開始位置を
 上書きする（Web 版が `debug_scene` を `initialSceneId`/自動クイックロードより後に評価して
 デバッグ指定を優先させるのと対称）。存在しない sceneId は `Playback::jump_to_scene_id` が
 no-op で吸収する（位置を変えない、fail-soft）。
 
-`--unlock-all` は `Playback::with_debug_unlock_all` で `Playback` 内部の
+`--debug-unlock-all` は `Playback::with_debug_unlock_all` で `Playback` 内部の
 `is_option_locked` を bypass する——`current_choice_locked()`（UI 描画）と
 `select_current_choice()`（選択確定）の両方に効くため、ロック中の選択肢も見た目・
 選択可否ともに解放される（Web 版 `NovelRenderer.setDebugUnlockAllChoices` と同じ設計）。
 
-> **例外（中継ゲートは `--unlock-all` の影響を受けない）**: 単一選択肢＋`[条件: flag]`の
+> **例外（中継ゲートは `--debug-unlock-all` の影響を受けない）**: 単一選択肢＋`[条件: flag]`の
 > シーンを意思決定不要な中継とみなして自動で素通りする機能（中継シーン自動継続、
 > `jump_to_scene_idx`、#574）は、条件未達の判定に `is_option_locked` ではなく専用の
-> `is_option_condition_unmet` ヘルパーを使う。`is_option_locked` は `--unlock-all`
+> `is_option_condition_unmet` ヘルパーを使う。`is_option_locked` は `--debug-unlock-all`
 > 有効時に常に `false`（未達なし）を返すため、これで判定すると本来一度止めて表示す
 > べき条件付き未達ゲートまで誤って自動継続してしまう。そのため中継ゲートは
-> `--unlock-all` の有無に関わらず、条件未達なら必ず一度止まる。停止後に表示される
-> 選択肢自体は引き続き `is_option_locked` 経由で `--unlock-all` の効果を受け、見た目・
+> `--debug-unlock-all` の有無に関わらず、条件未達なら必ず一度止まる。停止後に表示される
+> 選択肢自体は引き続き `is_option_locked` 経由で `--debug-unlock-all` の効果を受け、見た目・
 > 選択可否ともに解放される（#652 セルフレビュー must 指摘対応）。
 
 ## 設計背景

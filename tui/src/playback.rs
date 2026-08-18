@@ -482,7 +482,7 @@ pub struct Playback {
     /// デバッグ用の全選択肢ロック解除フラグ (#652)。`false`（既定）は従来どおり
     /// `is_option_locked` が `option.condition` を判定する。`true` のときは
     /// `option.condition` の有無に関わらず常に `false`（ロックしない）を返す——
-    /// `--unlock-all` CLI フラグ（`cli.rs`）専用で、GUI版 `?debug_unlock_all=1`
+    /// `--debug-unlock-all` CLI フラグ（`cli.rs`）専用で、GUI版 `?debug_unlock_all=1`
     /// （`NovelRenderer.setDebugUnlockAllChoices`）と対称。`with_debug_unlock_all`
     /// で構築直後に設定する想定（`with_sentence_per_page` と同じパターン）。
     debug_unlock_all: bool,
@@ -1016,7 +1016,7 @@ impl Playback {
     }
 
     /// デバッグ用の全選択肢ロック解除 (#652)。`Playback::from_document`/
-    /// [`Playback::from_lines`] 直後に連結して呼ぶ想定（`--unlock-all` CLI フラグを
+    /// [`Playback::from_lines`] 直後に連結して呼ぶ想定（`--debug-unlock-all` CLI フラグを
     /// `main.rs` からそのまま渡す）。`true` にすると `is_option_locked` が常に `false`
     /// を返すようになり、`[条件:]` の有無に関わらず全ての選択肢が選択可能になる
     /// （GUI版 `NovelRenderer.setDebugUnlockAllChoices` と対称）。
@@ -1152,7 +1152,7 @@ impl Playback {
     /// `!self.flags.check(flag)`（未定義/false ならロック）——GUI版 `checkFlag`・
     /// `GameFlags::check` と同じ真偽判定規則。
     ///
-    /// `self.debug_unlock_all`（#652、`--unlock-all` CLI フラグ）が `true` のときは
+    /// `self.debug_unlock_all`（#652、`--debug-unlock-all` CLI フラグ）が `true` のときは
     /// `option.condition` を見ずに常に `false` を返す（全選択肢を強制解放）。
     ///
     /// 中継シーン自動継続（`jump_to_scene_idx`、#574）の「意思決定不要か」判定には使わない
@@ -1727,9 +1727,9 @@ impl Playback {
                 // 表示・停止させ、`select_current_choice`側のロック判定に委ねる。
                 // #652 セルフレビュー must 指摘対応: ここは `is_option_locked` ではなく
                 // `is_option_condition_unmet` を使う。`is_option_locked` は
-                // `debug_unlock_all` 有効時に常に `false` を返すため、`--unlock-all` を
+                // `debug_unlock_all` 有効時に常に `false` を返すため、`--debug-unlock-all` を
                 // 使っただけで本来止まるべき条件付き未達ゲートまで誤って自動継続して
-                // しまう（`--scene` 併用時に限らず、通常プレイの
+                // しまう（`--debug-scene` 併用時に限らず、通常プレイの
                 // `select_current_choice()` 経由でも発生）。フラグの真偽そのものだけを
                 // 見ることで、「未条件」または「条件済み達成」の場合のみ引き続き自動
                 // 継続し、「条件付き未達成」の場合は必ず一度止めて選択肢を表示する
@@ -2854,11 +2854,11 @@ mod tests {
     }
 
     // #652 セルフレビュー must 指摘対応: 上のテストと同じ「単一選択肢＋条件未達の中継
-    // ゲート」構成を、`with_debug_unlock_all(true)`（`--unlock-all` CLI フラグ）を有効に
-    // した状態で `select_current_choice()` 経由（`--scene` を使わない通常プレイ経路）で
+    // ゲート」構成を、`with_debug_unlock_all(true)`（`--debug-unlock-all` CLI フラグ）を有効に
+    // した状態で `select_current_choice()` 経由（`--debug-scene` を使わない通常プレイ経路）で
     // 通過したときの挙動を検証する。修正前は中継継続の判定に `is_option_locked` を
     // 使っていたため、`debug_unlock_all` が有効なだけで条件未達のゲートまで誤って自動で
-    // 素通りしてしまっていた（`--scene` 指定時に限らず発生）。修正後は判定に
+    // 素通りしてしまっていた（`--debug-scene` 指定時に限らず発生）。修正後は判定に
     // `is_option_condition_unmet` を使うため、`debug_unlock_all` の有無に関わらず一度
     // 必ず止まる。ただし停止後の表示では `is_option_locked` 経由で `debug_unlock_all` の
     // 効果を受け、選択肢は解放されて見える（デバッグ機能としての目的は損なわれない）。

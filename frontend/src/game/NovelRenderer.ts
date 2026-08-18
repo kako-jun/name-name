@@ -334,7 +334,7 @@ export class NovelRenderer {
    * 有無に関わらず choice の `locked` 配列を全 false にする（全ルート強制解放）。
    * `setDebugUnlockAllChoices` で設定する（呼び出し側は `NovelPlayer` が
    * `?debug_unlock_all=1`（`debugQuery.ts` の `parseDebugUnlockAll`）から渡す）。
-   * TUI版 `Playback.debug_unlock_all`（`--unlock-all`）と対称。
+   * TUI版 `Playback.debug_unlock_all`（`--debug-unlock-all`）と対称。
    */
   private debugUnlockAllChoices = false
   /**
