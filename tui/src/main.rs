@@ -2105,6 +2105,210 @@ mod tests {
         );
     }
 
+    // ===== #652: main()レベルの --scene / --unlock-all エンドツーエンド統合テスト =====
+    //
+    // cli.rs（`Cli::parse`自体の引数解釈）・playback.rs（`with_debug_unlock_all`/
+    // `jump_to_scene_id`の単体挙動）はそれぞれ既にテスト済みだが、`main()`が実際に行う配線
+    // ——`Cli::parse(argv)`の結果を`Playback::with_debug_unlock_all`→`jump_to_scene_id`→
+    // `skip_leading_empty_scenes`の順に実際に流し込む一連の流れ——を、生の`Cli`引数から
+    // 通しで検証するテストが無かった（実装エージェント報告の未カバー観点）。`main()`本体は
+    // 生ターミナル操作を含み直接呼べないため、そのセットアップ部分だけを同じ順序で再現する
+    // （`event_loop_first_frame_after_skip_leading_empty_scenes_does_not_show_placeholder`と
+    // 同じ「mainと同じ順序をここで再現する」パターン）。
+
+    /// `Cli::parse`はargv[0]を読み捨てる実装のため、テストでは先頭にダミーの実行ファイルパスを
+    /// 補って渡す（cli.rs::tests::parseと同じパターン）。
+    fn cli_from(args: &[&str]) -> Cli {
+        let mut full = vec!["name-name-tui".to_string()];
+        full.extend(args.iter().map(|s| s.to_string()));
+        Cli::parse(full)
+    }
+
+    /// #652 main.rsレベル統合テスト用フィクスチャ: "1-1"（地の文→通常Choice1件、選択すると
+    /// "1-2"）→ "1-2"（Choiceのみが先頭item、2オプション: 無条件/`gate_flag`条件付き）→
+    /// "1-2b"/"1-3"（着地先、中身は使わない）。
+    ///
+    /// "1-2"を2オプション構成にしているのは、`jump_to_scene_idx`の中継シーン自動継続
+    /// （#574、`playback.rs`参照）が「唯一のoptionが`is_option_locked`でロックされていない」
+    /// 場合に自動で素通りしてしまうため——`--unlock-all`が有効だと1オプション構成では
+    /// `is_option_locked`が常にfalseを返し、選択肢を表示せず素通りしてしまって
+    /// `current_scene_id() == "1-2"`のアサーションが成立しなくなる（実際に発生を確認済み）。
+    /// 2オプションにすることで中継シーン判定の対象外にし、`--scene`の着地点そのものを
+    /// 安定して検証できるようにする。
+    fn scene_jump_and_unlock_all_doc_source() -> &'static str {
+        "---\nengine: name-name\n---\n\n\
+         ## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n[選択]\n- 通常 → 1-2\n[/選択]\n\n\
+         ## 1-2: ゲート\n\n\
+         [選択]\n- 誰でも選べる → 1-2b\n- 解除済み → 1-3 [条件: gate_flag]\n[/選択]\n\n\
+         ## 1-2b: 通常先\n\n**D**:\n通常セリフ\n\n\
+         ## 1-3: 先\n\n**C**:\n先のセリフ\n"
+    }
+
+    // #652 実装エージェント報告の未カバー観点の調査中に発見した実際の相互作用: `--scene`の
+    // 着地先シーンが「地の文もイベント絵も持たず、唯一の選択肢だけを持つ」中継専用シーン
+    // （#574の「中継シーンの自動継続」対象）の場合、`--unlock-all`が有効だと
+    // `is_option_locked`が常にfalseを返すため、その唯一の選択肢がロックされていないと
+    // 判定され、`jump_to_scene_id`自身がプレイヤーに見せず自動でその先へ通過してしまう
+    // （`playback.rs::jump_to_scene_idx`の中継シーン判定`!self.is_option_locked(&options[0])`
+    // 参照）。つまり「デバッグで狙った1オプションのゲートへ着地して選択肢を確認したい」
+    // という`--scene`+`--unlock-all`の典型的なユースケースの一部が、ゲートで止まらず
+    // その先まで素通りしてしまう——`main_level_cli_scene_and_unlock_all_jumps_and_
+    // unlocks_choice_end_to_end`（2オプション構成）とは対照的な挙動になる。現状の実装が
+    // 意図した挙動かは別途判断が必要なため、ここでは実際に起きる挙動をそのまま固定する
+    // （テスト作成時点でのバグ修正はスコープ外）。
+    #[test]
+    fn main_level_cli_scene_and_unlock_all_auto_skips_through_single_option_relay_gate_end_to_end()
+    {
+        let cli = cli_from(&["--scene", "1-2", "--unlock-all"]);
+        let source = "---\nengine: name-name\n---\n\n\
+             ## 1-1: 開始\n\n**A**:\n最初のセリフ\n\n[選択]\n- 通常 → 1-2\n[/選択]\n\n\
+             ## 1-2: ゲート\n\n[選択]\n- 解除済み → 1-3 [条件: gate_flag]\n[/選択]\n\n\
+             ## 1-3: 先\n\n**C**:\n先のセリフ\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document)
+            .with_sentence_per_page(false)
+            .with_debug_unlock_all(cli.unlock_all);
+        if let Some(scene_id) = &cli.scene {
+            playback.jump_to_scene_id(scene_id);
+        }
+        skip_leading_empty_scenes(&mut playback);
+
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-3",
+            "1オプションだけの中継ゲート(1-2)は、--unlock-allでロックが外れた結果 \
+             中継シーン自動継続(#574)の対象になり、1-2で止まらずその先(1-3)まで \
+             自動で通過してしまう（現状の実際の挙動）"
+        );
+    }
+
+    #[test]
+    fn main_level_cli_scene_and_unlock_all_jumps_and_unlocks_choice_end_to_end() {
+        // `--scene 1-2 --unlock-all` を実際に Cli::parse し、main() と同じ順序
+        // （Playback::from_document → with_debug_unlock_all → jump_to_scene_id →
+        // skip_leading_empty_scenes）で流し込む。1-1のAを経由せず直接1-2のゲートへ着地し、
+        // gate_flagが一度も立っていないのに選択肢がロックされていないはず。
+        let cli = cli_from(&["--scene", "1-2", "--unlock-all"]);
+        let document = name_name_parser::parser::parse(scene_jump_and_unlock_all_doc_source());
+        let mut playback = Playback::from_document(&document)
+            .with_sentence_per_page(false)
+            .with_debug_unlock_all(cli.unlock_all);
+        if let Some(scene_id) = &cli.scene {
+            playback.jump_to_scene_id(scene_id);
+        }
+        skip_leading_empty_scenes(&mut playback);
+
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-2",
+            "--sceneで1-2へ直接着地するはず"
+        );
+        assert!(
+            playback.current_line().is_none(),
+            "1-1のAのセリフを経由していないはず（Choiceが1-2の先頭itemのまま）"
+        );
+        assert_eq!(
+            playback.current_choice_locked(),
+            vec![false, false],
+            "--unlock-allでgate_flag未設定でも両オプションとも解放されるはず"
+        );
+    }
+
+    #[test]
+    fn main_level_cli_scene_without_unlock_all_still_locks_choice_end_to_end() {
+        // `--scene`単独（`--unlock-all`無し）ではジャンプはするが、ロックは従来どおり
+        // gate_flagの状態に従う——2機能が独立していることの確認。
+        let cli = cli_from(&["--scene", "1-2"]);
+        assert!(!cli.unlock_all);
+        let document = name_name_parser::parser::parse(scene_jump_and_unlock_all_doc_source());
+        let mut playback = Playback::from_document(&document)
+            .with_sentence_per_page(false)
+            .with_debug_unlock_all(cli.unlock_all);
+        if let Some(scene_id) = &cli.scene {
+            playback.jump_to_scene_id(scene_id);
+        }
+        skip_leading_empty_scenes(&mut playback);
+
+        assert_eq!(playback.current_scene_id(), "1-2");
+        assert_eq!(
+            playback.current_choice_locked(),
+            vec![false, true],
+            "--unlock-allを指定しなければgate_flag未設定の選択肢はロックされたままのはず"
+        );
+    }
+
+    #[test]
+    fn main_level_cli_unlock_all_without_scene_keeps_default_entry_scene_end_to_end() {
+        // `--unlock-all`単独（`--scene`無し）では起点は従来どおり先頭シーン("1-1")のまま——
+        // 2機能が独立していることの確認（上テストの逆方向）。
+        let cli = cli_from(&["--unlock-all"]);
+        assert_eq!(cli.scene, None);
+        let document = name_name_parser::parser::parse(scene_jump_and_unlock_all_doc_source());
+        let mut playback = Playback::from_document(&document)
+            .with_sentence_per_page(false)
+            .with_debug_unlock_all(cli.unlock_all);
+        if let Some(scene_id) = &cli.scene {
+            playback.jump_to_scene_id(scene_id);
+        }
+        skip_leading_empty_scenes(&mut playback);
+
+        assert_eq!(
+            playback.current_scene_id(),
+            "1-1",
+            "--sceneを指定しなければ先頭シーンから開始するはず"
+        );
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("1-1のAのセリフ")
+                .speaker
+                .as_deref(),
+            Some("A"),
+            "--unlock-allだけでは開始位置は変わらないはず"
+        );
+    }
+
+    #[test]
+    fn main_level_cli_no_flags_preserves_default_locked_behavior_end_to_end() {
+        // 両方無指定（既存の起動経路）では、1-1の通常Choice選択→1-2ゲートまで手動で進んだ後も
+        // gate_flag未設定の選択肢は従来どおりロックされる——#652導入前からの回帰が無いことの
+        // 固定（main()の配線コードそのものは常に通るため、cli.scene/cli.unlock_allが両方
+        // デフォルト値のときに何もしない＝既存動作を変えないことを確認する）。
+        let cli = cli_from(&[]);
+        assert_eq!(cli.scene, None);
+        assert!(!cli.unlock_all);
+        let document = name_name_parser::parser::parse(scene_jump_and_unlock_all_doc_source());
+        let mut playback = Playback::from_document(&document)
+            .with_sentence_per_page(false)
+            .with_debug_unlock_all(cli.unlock_all);
+        if let Some(scene_id) = &cli.scene {
+            playback.jump_to_scene_id(scene_id);
+        }
+        skip_leading_empty_scenes(&mut playback);
+
+        assert_eq!(playback.current_scene_id(), "1-1");
+        assert_eq!(
+            playback
+                .current_line()
+                .expect("1-1のAのセリフ")
+                .speaker
+                .as_deref(),
+            Some("A"),
+            "地の文（Aのセリフ）を経てからChoiceに至る構成のはず"
+        );
+        playback.advance(); // Aのセリフ → Choiceへ
+        assert!(
+            playback.select_current_choice(),
+            "1-1の通常選択肢（無条件）は選べるはず"
+        );
+        assert_eq!(playback.current_scene_id(), "1-2");
+        assert_eq!(
+            playback.current_choice_locked(),
+            vec![false, true],
+            "#652導入前と同じくgate_flag未設定なら条件付きオプションはロックされるはず"
+        );
+    }
+
     #[test]
     fn on_advance_empty_first_scene_landing_on_choice_keeps_reveal_none() {
         let config = instant_config();
