@@ -452,6 +452,28 @@ describe('EventImageLayer pixel_art スケールモード (#466)', () => {
       'linear'
     )
   })
+
+  it('E8: 表示中に currentTexture の source が破棄済み(null)になっていても setPixelArt() は例外を投げない（#646 セルフレビュー実機検証で発見。コールドロード＋低速回線での固着バグ）', async () => {
+    // pixi.js の Texture.destroy(true)（Assets.unload(url) の内部実装が呼ぶ）は
+    // Texture オブジェクト自体は non-null のまま source だけ null にする。Assets は
+    // URL 単位の共有キャッシュのため、この EventImageLayer がまだ currentTexture として
+    // 保持している画像を、NovelRenderer.setEvents()/destroy() 等の他所からの
+    // disposeTextures()（Assets.unload）が横から破棄しうる——disposeTextures() は
+    // Assets キャッシュを解放するだけで currentTexture/sprite までは関知しないため。
+    const texture = mockTexture()
+    vi.spyOn(Assets, 'load').mockResolvedValue(texture as never)
+    const layer = makeLayer(virtualTime())
+    layer.show('story/x.webp')
+    await flushPromises()
+    expect(internals(layer).sprite).not.toBeNull()
+
+    // Texture.destroy(true) 相当: source だけ null になり、texture 自体（currentTexture の
+    // 参照先）は生き残る。
+    ;(texture as unknown as { source: unknown }).source = null
+
+    expect(() => layer.setPixelArt(true)).not.toThrow()
+    expect(() => layer.setPixelArt(false)).not.toThrow()
+  })
 })
 
 describe('EventImageLayer back=Hide/Keep の値保持', () => {

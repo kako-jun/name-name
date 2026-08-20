@@ -423,10 +423,27 @@ export class EventImageLayer extends Container {
    * ロード済み（currentTexture が非 null＝Assets.load().then() 済み）ならそのまま scaleMode を
    * 書き換えるだけでよい。`this.sprite.texture` ではなく `currentTexture` を使う理由は同フィールドの
    * JSDoc 参照。
+   *
+   * `currentTexture` 自体は非 null でも `currentTexture.source` が null になっているケースを
+   * 追加でガードする（#646 セルフレビューの実機検証で発見。コールドロード＋低速回線で4/4回再現）。
+   * pixi.js の `Texture.destroy(true)`（`Assets.unload(url)` の内部実装 `loadTextures.unload` が
+   * 呼ぶ、`node_modules/pixi.js/lib/.../texture/Texture.mjs` 参照）は `this._source.destroy();
+   * this._source = null` のみを行い、`Texture` オブジェクト自体は破棄後も non-null のまま
+   * （`destroyed = true` になるだけ）残る。`Assets` はモジュール全体で共有される単一キャッシュ
+   * のため、`NovelRenderer.setEvents()`/`destroy()` が呼ぶ `eventImageLayer.disposeTextures()`
+   * （同一 URL を `Assets.unload` する）は、この EventImageLayer 自身がまだ `currentTexture` として
+   * 保持し続けている画像を横から破棄しうる（`disposeTextures()` は `Assets` キャッシュを解放する
+   * だけで `this.currentTexture`/`this.sprite` は関知しない、実装参照）。この状態で
+   * `setPixelArt()` が呼ばれると、`currentTexture` は非 null（真の Texture インスタンス）だが
+   * `currentTexture.source` は null という、旧ガード（`if (this.currentTexture)`）をすり抜ける
+   * 組み合わせで `Cannot set properties of null (setting 'scaleMode')` に落ちる。
+   * `NovelRenderer.restart()` の JSDoc にある「setEvents() は texture を Assets.unload するため、
+   * render と並行すると Pixi が `Cannot read properties of null (reading 'alphaMode')` で落ちる」
+   * という既知コメントと同系統のレース。
    */
   setPixelArt(enabled: boolean): void {
     this.pixelArt = enabled
-    if (this.currentTexture) {
+    if (this.currentTexture?.source) {
       this.currentTexture.source.scaleMode = enabled ? 'nearest' : 'linear'
     }
   }
@@ -581,7 +598,10 @@ export class EventImageLayer extends Container {
         this.loadedUrls.add(url)
         // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
         // nearest-neighbor に切り替え、cover-fit で拡大表示してもブロック状のドットを保つ。
-        texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
+        // `texture.source` の null ガードは setPixelArt() の JSDoc 参照（Assets は URL 単位で
+        // 共有キャッシュされるため、この then() が発火するまでの間に他所からの
+        // Assets.unload(url) で destroy 済みになっている可能性がゼロではない）。
+        if (texture.source) texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
 
         const sprite = new Sprite(texture)
         this.layoutSprite(sprite, texture)
@@ -913,7 +933,8 @@ export class EventImageLayer extends Container {
     // destroySprite() が関知しないフィールドなのでここでは影響を受けない。
     this.destroySprite()
 
-    texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
+    // `texture.source` の null ガードは setPixelArt() の JSDoc 参照。
+    if (texture.source) texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
     const sprite = new Sprite(texture)
     this.layoutSprite(sprite, texture)
     sprite.alpha = 1
