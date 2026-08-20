@@ -181,11 +181,10 @@ fn draw_too_small_message(frame: &mut Frame, actual: Rect) {
 /// 画面上段を「画像プレースホルダ」「スペーサー」「テキスト」の横3分割にする純粋関数
 /// （#488、#588で絶対値指定へ変更）。`Layout::split` の呼び出しをここへ切り出すことで、
 /// テスト側は実際のレイアウト計算結果をそのまま期待値として使える（手計算した固定値を
-/// テストに直書きしない）。スペーサー領域（戻り値の2番目）は [`draw`] が毎フレーム
-/// [`force_reset_area`] で明示的に空白・既定スタイルへ戻す（#650）。以前は
-/// 「未描画セルは ratatui が空として扱う」という前提に依存していたが、画像ペイン右端の
-/// 背景色だけを持つセルや terminal diff の都合で境界に黒い残骸が見えることがあり、
-/// 視覚上の余白を「暗黙の未描画」に任せるのは不十分だった。
+/// テストに直書きしない）。広幅画像→通常レイアウト遷移時の残骸クリア（#650追加修正）は
+/// 呼び出し側 `main.rs` が追跡した「前モードの実描画Rect」を
+/// [`draw_with_pending_clear`] へ1回だけ渡して処理する。steady state の通常レイアウトでは
+/// gap 領域は明示描画せず、そのまま untouched に保つ。
 ///
 /// 画像/テキストは [`REQUIRED_IMAGE_COLS`]/[`REQUIRED_TEXT_COLS`]（#588時点でどちらも同値）を
 /// `Constraint::Length` で直接指定する — #494〜#587では `Constraint::Percentage(50)` ずつ
@@ -220,10 +219,10 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
 /// `area` 全体を「空白 + reset style」に戻し、さらに各セルを
 /// [`CellDiffOption::AlwaysUpdate`] にして次回 flush で必ず端末へ再出力させる（#650）。
 ///
-/// 画像ペインは quadrant block の都合で「グリフは空白だが背景色だけが意味を持つセル」を多用する。
-/// そこにレイアウト境界の未描画セルが隣接すると、logical buffer 上では空でも実端末では前景/背景の
-/// 残骸が目立つことがあった。`root[0]` 全体を先に明示クリアしてから画像・テキスト・選択肢を重ねる
-/// ことで、「今回は何も置かない境界セル」も含め毎フレーム描画責務を明確にする。
+/// quadrant block 画像は「グリフは空白だが背景色だけが意味を持つセル」を多用するため、
+/// 広幅画像モードから通常レイアウトへ戻る瞬間は、前モードが実際に塗った Rect をこの関数で
+/// 1回だけ明示クリアする必要がある。通常レイアウト steady state では全面リセットも
+/// gap 列の毎フレーム clear も行わない。
 fn force_reset_area(frame: &mut Frame, area: Rect) {
     let buffer = frame.buffer_mut();
     for y in area.y..area.y.saturating_add(area.height) {
@@ -289,10 +288,11 @@ fn force_reset_area(frame: &mut Frame, area: Rect) {
 /// かつ `config.fullscreen_image` が真、かつ `choice.is_none()`（選択肢表示中は対象外）のとき、
 /// [`split_columns`] による画像/テキストの左右分割をやめ、`root[0]` 全体をイベント絵に使う
 /// 可逆トグル表示（GUI版 `fullscreen_image` frontmatter、`docs/spec/markdown-v0.1.md` 参照）。
-/// 次に会話テキスト/選択肢のある item に進めば（＝`image_only_item` が `false` に戻れば）
-/// 自動的に通常の左右分割表示へ戻る——状態を持たず毎フレーム `image_only_item` から判定する
-/// だけなので、明示的な「元に戻す」処理は不要。
+/// ただし ratatui のバッファは未描画セルを自動消去しないため、通常レイアウトへ戻る最初の
+/// 1フレームだけは呼び出し側 `main.rs` が「直前の広幅画像の実描画Rect」を
+/// [`draw_with_pending_clear`] へ渡して明示クリアする。
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn draw(
     frame: &mut Frame,
     config: &Config,
@@ -321,10 +321,51 @@ pub fn draw(
     blackout: bool,
     image_only_item: bool,
 ) {
+    let _ = draw_with_pending_clear(
+        frame,
+        config,
+        line,
+        choice,
+        choice_locked,
+        choice_cleared,
+        position,
+        total,
+        is_at_end,
+        reveal,
+        indicator_started_at,
+        now,
+        image_fade,
+        image_cache,
+        blackout,
+        image_only_item,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_with_pending_clear(
+    frame: &mut Frame,
+    config: &Config,
+    line: Option<&DisplayLine>,
+    choice: Option<(&[ChoiceOption], usize, Option<u32>)>,
+    choice_locked: &[bool],
+    choice_cleared: &[bool],
+    position: usize,
+    total: usize,
+    is_at_end: bool,
+    reveal: Option<&reveal::RevealState>,
+    indicator_started_at: Instant,
+    now: Instant,
+    image_fade: Option<&ImageFadeState>,
+    image_cache: &mut ImageCache,
+    blackout: bool,
+    image_only_item: bool,
+    pending_clear_rect: Option<Rect>,
+) -> Option<Rect> {
     let actual = frame.area();
     if !fits_required_size(actual) {
         draw_too_small_message(frame, actual);
-        return;
+        return None;
     }
     let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
     let canvas = compute_centered_canvas(actual, required);
@@ -333,7 +374,9 @@ pub fn draw(
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(canvas);
-    force_reset_area(frame, root[0]);
+    if let Some(clear_rect) = pending_clear_rect {
+        force_reset_area(frame, clear_rect);
+    }
 
     let fullscreen_event_image = config.fullscreen_image && image_only_item && choice.is_none();
 
@@ -347,6 +390,8 @@ pub fn draw(
             now,
             blackout,
         );
+        draw_status_line(frame, root[1], config, position, total, is_at_end);
+        return Some(root[0]);
     } else {
         let (placeholder_area, _gap_area, text_area) = split_columns(root[0]);
         draw_event_image_area(
@@ -380,6 +425,7 @@ pub fn draw(
         }
     }
     draw_status_line(frame, root[1], config, position, total, is_at_end);
+    None
 }
 
 /// `area` 全体にイベント絵（`image_fade` のクロスフェード/ピクセレート状態）または
@@ -693,6 +739,7 @@ fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
 /// [`splash_pixelate_phase`] が返す分母を使い分けた専用のピクセレート版関数
 /// （[`image_render::rgba_to_quadrant_grid_native_pixelated`]/
 /// [`image_render::rgba_to_quadrant_grid_window_pixelated`]）で行う。
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn draw_splash(
     frame: &mut Frame,
     config: &Config,
@@ -701,24 +748,44 @@ pub fn draw_splash(
     image_fade: Option<&ImageFadeState>,
     now: Instant,
 ) {
+    let _ = draw_splash_with_wide_image_rect(
+        frame,
+        config,
+        image_cache,
+        scroll_offset,
+        image_fade,
+        now,
+    );
+}
+
+pub(crate) fn draw_splash_with_wide_image_rect(
+    frame: &mut Frame,
+    config: &Config,
+    image_cache: &mut ImageCache,
+    scroll_offset: u16,
+    image_fade: Option<&ImageFadeState>,
+    now: Instant,
+) -> Option<Rect> {
     if let Some(path) = config.resolve_splash_logo_path() {
         if let Some(decoded) = image_cache.get_or_load(&path) {
             if logo_fits_natively(decoded.width, decoded.height) {
                 let actual = frame.area();
                 if !fits_required_size(actual) {
                     draw_too_small_message(frame, actual);
-                    return;
+                    return None;
                 }
                 let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
                 let canvas = compute_centered_canvas(actual, required);
-                draw_splash_logo_native(frame, canvas, &decoded, image_fade, now);
+                return Some(draw_splash_logo_native(
+                    frame, canvas, &decoded, image_fade, now,
+                ));
             } else {
-                draw_fullscreen_image(frame, &decoded, scroll_offset, image_fade, now);
+                return draw_fullscreen_image(frame, &decoded, scroll_offset, image_fade, now);
             }
-            return;
         }
     }
     draw_splash_text(frame, config);
+    None
 }
 
 /// スプラッシュロゴのピクセレート遷移(#628)で「今このフレームで描くべき状態」を表す。
@@ -793,7 +860,7 @@ fn draw_splash_logo_native(
     image: &DecodedImage,
     image_fade: Option<&ImageFadeState>,
     now: Instant,
-) {
+) -> Rect {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -829,6 +896,7 @@ fn draw_splash_logo_native(
     draw_image_grid(frame, placed, &grid);
 
     draw_operation_footer(frame, hint_area, None);
+    placed
 }
 
 /// スプラッシュ画像モードの最大スクロール量（最下端オフセット）を返す。
@@ -873,11 +941,11 @@ fn draw_fullscreen_image(
     scroll_offset: u16,
     image_fade: Option<&ImageFadeState>,
     now: Instant,
-) {
+) -> Option<Rect> {
     let actual = frame.area();
     if !fits_required_size(actual) {
         draw_too_small_message(frame, actual);
-        return;
+        return None;
     }
     let required = Rect::new(0, 0, REQUIRED_TOTAL_WIDTH, REQUIRED_TOTAL_HEIGHT);
     let canvas = compute_centered_canvas(actual, required);
@@ -897,7 +965,7 @@ fn draw_fullscreen_image(
         // 固定幅の`REQUIRED_TOTAL_WIDTH`から導かれる`fitted_cols`が実際に0になることは
         // 現状のコード上ほぼ到達不能（#538）。
         draw_operation_footer(frame, hint_area, None);
-        return;
+        return None;
     }
 
     let offset = clamp_scroll_offset(scroll_offset, fitted_rows, image_area.height);
@@ -942,6 +1010,7 @@ fn draw_fullscreen_image(
     // フッター（[`OPERATION_HINT_TEXT`]）が既に `↑/↓ 選択` を含んでおり、画像スクロール時の
     // ↑/↓ もこの表記でカバーされるため、二重表示を避けて常に同じフッターへ統一する。
     draw_operation_footer(frame, hint_area, None);
+    Some(draw_area)
 }
 
 /// スプラッシュ画面（テキストモード）: `config.splash.lines` に設定されたロゴ行を画面中央に
@@ -3319,7 +3388,9 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
+            .draw(|f| {
+                draw_fullscreen_image(f, &image, 0, None, Instant::now());
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Enter/Space 次へ"), "buffer was: {text}");
@@ -3342,7 +3413,9 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
+            .draw(|f| {
+                draw_fullscreen_image(f, &image, 0, None, Instant::now());
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -3360,7 +3433,9 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, u16::MAX, None, Instant::now()))
+            .draw(|f| {
+                draw_fullscreen_image(f, &image, u16::MAX, None, Instant::now());
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -3386,7 +3461,9 @@ mod tests {
         let mut terminal =
             Terminal::new(TestBackend::new(moderately_narrow_width, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
+            .draw(|f| {
+                draw_fullscreen_image(f, &image, 0, None, Instant::now());
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("端末を広げてください"), "buffer was: {text}");
@@ -3403,7 +3480,9 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
+            .draw(|f| {
+                draw_fullscreen_image(f, &image, 0, None, Instant::now());
+            })
             .unwrap();
     }
 
@@ -3419,7 +3498,9 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
+            .draw(|f| {
+                draw_fullscreen_image(f, &image, 0, None, Instant::now());
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -3441,7 +3522,9 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
+            .draw(|f| {
+                draw_fullscreen_image(f, &image, 0, None, Instant::now());
+            })
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(
@@ -3461,7 +3544,9 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
         terminal
-            .draw(|f| draw_fullscreen_image(f, &image, 0, None, Instant::now()))
+            .draw(|f| {
+                draw_fullscreen_image(f, &image, 0, None, Instant::now());
+            })
             .unwrap();
         let buffer = terminal.backend().buffer();
         let image_color = Color::Rgb(color.0, color.1, color.2);
@@ -5369,7 +5454,7 @@ mod tests {
     }
 
     #[test]
-    fn image_text_gap_column_is_explicitly_reset_and_forced_to_redraw() {
+    fn image_text_gap_column_is_left_untouched_in_steady_state() {
         let config = Config::default();
         let line = dialog_line(Some("A"), vec!["hello"]);
         let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
@@ -5383,8 +5468,8 @@ mod tests {
                 assert_eq!(cell.bg, Color::Reset);
                 assert_eq!(
                     cell.diff_option,
-                    CellDiffOption::AlwaysUpdate,
-                    "gap cell ({x},{y}) should be explicitly redrawn every frame"
+                    CellDiffOption::None,
+                    "steady state の gap cell ({x},{y}) は毎フレーム clear されず untouched のままのはず"
                 );
             }
         }
