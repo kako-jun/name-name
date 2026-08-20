@@ -197,7 +197,7 @@ export class TitleScreenOverlay extends Container {
         variant: 'primary',
         disabled: !opts.hasSaveData,
       },
-      { label: '設定', onClick: opts.onOpenSettings, variant: 'secondary', disabled: false },
+      { label: '設定', onClick: opts.onOpenSettings, variant: 'primary', disabled: false },
     ]
     // #643: header: hidden プロジェクトでは配列にそもそも含めない（非表示。disabled ではない）。
     if (opts.showExitButton ?? true) {

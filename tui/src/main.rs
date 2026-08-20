@@ -519,7 +519,7 @@ where
     // 呼び出し元から借りた `&Config` ではなく、この関数がオーナーシップを持つ可変コピーを
     // 使う。イベント絵/配色/スプラッシュ等 typewriter 以外の設定値をプレイ中に書き換える
     // 手段は無いため実質的に不変のままだが、`config.typewriter.char_interval_ms` だけは
-    // 下の `Overlay::Settings` 分岐（`Action::MoveUp`/`Action::MoveDown` の文脈依存の再利用）
+    // 下の `Overlay::Settings` 分岐（`Action::MoveLeft`/`Action::MoveRight` の文脈依存の再利用）
     // が書き換える。
     let mut config = config.clone();
 
@@ -651,8 +651,8 @@ where
     // `u16::MAX` をセットして「末尾（最新）にクランプ」させる。
     let mut backlog_scroll: u16 = 0;
 
-    // 設定画面（`Overlay::Settings`）内でフォーカスしている行（#503）。`Action::MoveLeft`/
-    // `Action::MoveRight` で `SettingsField::prev`/`next` により切り替える。`Overlay::Settings`
+    // 設定画面（`Overlay::Settings`）内でフォーカスしている行（#503）。`Action::MoveUp`/
+    // `Action::MoveDown` で `SettingsField::prev`/`next` により切り替える。`Overlay::Settings`
     // を開くたびに `SettingsField::default()`（`TextSpeed`）へ戻す（`backlog_scroll` を
     // 開くたびに `u16::MAX` へ戻すのと同じ「オーバーレイごとに初期状態から始める」パターン）。
     let mut settings_focus = SettingsField::default();
@@ -758,22 +758,20 @@ where
                 Action::MoveDown if overlay == Overlay::Backlog => {
                     backlog_scroll = backlog_scroll.saturating_add(BACKLOG_SCROLL_STEP);
                 }
-                // 設定画面表示中の ←/→ はフォーカス行の切り替え（#503）。
+                // 設定画面表示中の ↑/↓ はフォーカス行の切り替え（#503）。
                 // `SettingsField::prev`/`next` がラップアラウンドを担う。
-                Action::MoveLeft if overlay == Overlay::Settings => {
+                Action::MoveUp if overlay == Overlay::Settings => {
                     settings_focus = settings_focus.prev();
                 }
-                Action::MoveRight if overlay == Overlay::Settings => {
+                Action::MoveDown if overlay == Overlay::Settings => {
                     settings_focus = settings_focus.next();
                 }
-                // 設定画面表示中の ↑/↓ はフォーカス行に応じて意味が変わる（#503）。
+                // 設定画面表示中の ←/→ はフォーカス行に応じて意味が変わる（#503）。
                 // `TextSpeed` 行ではテキスト速度、`BgmVolume`/`SeVolume`/`VoiceVolume` 行では
                 // 対応する音量を調整する。GUI版 `SettingsOverlay.tsx` の各スライダー
-                // （step=5）と同じ刻み幅。↑ = 数値を減らす、↓ = 数値を増やす（GUI版スライダーの
-                // 左/右と同じ向き。ratatui のカーソル上/下という空間的な向きとは対応しない
-                // 一方的な割り当てだが、他に基準となる向きが無いため choice cursor の
-                // Up=前進/Down=後退という「上へ行くほど数値が減る」既存の感覚に合わせる）。
-                Action::MoveUp if overlay == Overlay::Settings => match settings_focus {
+                // （step=5）と同じ刻み幅。左 = 数値を減らす、右 = 数値を増やす（GUI版
+                // スライダーの左右と同じ向き）。
+                Action::MoveLeft if overlay == Overlay::Settings => match settings_focus {
                     SettingsField::TextSpeed => {
                         // `TEXT_SPEED_MIN_MS` は0固定（clippyの`unnecessary_min_or_max`が
                         // 指摘する通り、u64の`saturating_sub`は既にそれ未満に落ちない）。
@@ -828,7 +826,7 @@ where
                             decrement_volume_percent(config.volume.voice_percent);
                     }
                 },
-                Action::MoveDown if overlay == Overlay::Settings => match settings_focus {
+                Action::MoveRight if overlay == Overlay::Settings => match settings_focus {
                     SettingsField::TextSpeed => {
                         let next_ms = config
                             .typewriter
@@ -4767,7 +4765,7 @@ mod tests {
                     // 開いてからしばらく考えてから速度を変える、という自然な操作フロー。
                     std::thread::sleep(Duration::from_millis(800));
                     // char_interval_ms: 1000 -> saturating_add(5).min(200) = 200
-                    Ok(Action::MoveDown)
+                    Ok(Action::MoveRight)
                 }
                 3 => {
                     std::thread::sleep(Duration::from_millis(700));
@@ -4804,8 +4802,8 @@ mod tests {
     }
 
     #[test]
-    fn event_loop_settings_move_right_focuses_bgm_volume_and_move_down_increments_it() {
-        // 音量調整UI(#503)の配線確認: ←→でBGM音量行へフォーカスを移し、↓で
+    fn event_loop_settings_move_down_focuses_bgm_volume_and_move_right_increments_it() {
+        // 音量調整UI(#503)の配線確認: ↑/↓でBGM音量行へフォーカスを移し、→で
         // VOLUME_STEP_PERCENT(5)ぶん増加することを、実際にdraw_settingsが描画する
         // テキストで確認する(内部のconfigは event_loop がオーナーシップを持つ可変
         // コピーのため、呼び出し元からは直接参照できない)。
@@ -4822,9 +4820,9 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings), // 開く(フォーカスはTextSpeed)
-                2 => Ok(Action::MoveRight),      // フォーカスをAutoWaitMsへ(#644)
-                3 => Ok(Action::MoveRight),      // フォーカスをBgmVolumeへ
-                4 => Ok(Action::MoveDown),       // bgm_percent: 70 -> 75
+                2 => Ok(Action::MoveDown),       // フォーカスをAutoWaitMsへ(#644)
+                3 => Ok(Action::MoveDown),       // フォーカスをBgmVolumeへ
+                4 => Ok(Action::MoveRight),      // bgm_percent: 70 -> 75
                 // 意図的な停止(既存の`event_loop_backlog_overlay_ignores_...`と同じ
                 // パターン)。`Action::Quit`は overlay 表示中は「閉じる」に読み替わって
                 // しまい、後続の周回で通常画面が再描画されてから初めてループを抜けるため、
@@ -4855,6 +4853,50 @@ mod tests {
     }
 
     #[test]
+    fn event_loop_settings_move_up_wraps_focus_to_voice_volume_without_changing_text_speed() {
+        // #645 回帰ガード: デフォルトフォーカス(TextSpeed)で↑を押したとき、
+        // 旧挙動のようにテキスト速度を減らすのではなく、最終行(VoiceVolume)へ
+        // ラップアラウンドしてフォーカス移動するべき。
+        let config = instant_config();
+        let mut playback = Playback::from_lines(vec![dline(Some("A"), "テスト")]);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+
+        let mut call_count = 0u32;
+        let mut next_action = move || -> anyhow::Result<Action> {
+            call_count += 1;
+            match call_count {
+                1 => Ok(Action::ToggleSettings),
+                2 => Ok(Action::MoveUp),
+                _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
+            }
+        };
+
+        let result = event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        );
+        assert!(result.is_err(), "テスト用の意図的な停止のはず");
+
+        let text = buffer_text_wide_aware(&terminal);
+        assert!(
+            text.contains("> ボイス音量 (将来用)"),
+            "↑で最終行へフォーカスが移っているはず: {text:?}"
+        );
+        assert!(
+            text.contains("テキスト表示速度: 瞬間表示"),
+            "↑が値変更ではなくフォーカス移動なら、テキスト速度は instant_config の既定値(瞬間表示)のままのはず: {text:?}"
+        );
+    }
+
+    #[test]
     fn event_loop_settings_reopening_resets_focus_to_text_speed() {
         // 設定画面を閉じて再度開くと、前回のフォーカス位置(AutoWaitMs)を引きずらず
         // 既定のTextSpeedへ戻ることを確認する(#503、backlog_scrollを開くたびに
@@ -4872,7 +4914,7 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings), // 開く
-                2 => Ok(Action::MoveRight),      // フォーカスをAutoWaitMsへ(#644)
+                2 => Ok(Action::MoveDown),       // フォーカスをAutoWaitMsへ(#644)
                 3 => Ok(Action::ToggleSettings), // 閉じる
                 4 => Ok(Action::ToggleSettings), // 再度開く
                 // 意図的な停止(上のテストと同じ理由)。
@@ -5807,7 +5849,7 @@ mod tests {
 
     #[test]
     fn event_loop_settings_char_interval_lower_bound_clamps_to_zero_and_stays() {
-        // #503: char_interval_msが5の状態で↑（MoveUp/減少）を押すと0になる（下限到達）。
+        // #503/#645: char_interval_msが5の状態で←（MoveLeft/減少）を押すと0になる（下限到達）。
         // 0からさらに押しても0のまま（saturating_subの下限保持）。
         let mut config = instant_config();
         config.typewriter.char_interval_ms = 5;
@@ -5823,8 +5865,8 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveUp), // 5 -> 0
-                3 => Ok(Action::MoveUp), // 0 -> 0（下限のまま）
+                2 => Ok(Action::MoveLeft), // 5 -> 0
+                3 => Ok(Action::MoveLeft), // 0 -> 0（下限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -5842,13 +5884,13 @@ mod tests {
         let text = buffer_text_wide_aware(&terminal);
         assert!(
             text.contains("瞬間表示"),
-            "2回目の↑後も0(瞬間表示)のままのはず, buffer was: {text}"
+            "2回目の←後も0(瞬間表示)のままのはず, buffer was: {text}"
         );
     }
 
     #[test]
     fn event_loop_settings_char_interval_upper_bound_clamps_to_200_and_stays() {
-        // #503: char_interval_msが195の状態で↓（MoveDown/増加）を押すと200になる
+        // #503/#645: char_interval_msが195の状態で→（MoveRight/増加）を押すと200になる
         // （上限到達）。200からさらに押しても200のまま（205にはならない、
         // `.min(TEXT_SPEED_MAX_MS)`）。
         let mut config = instant_config();
@@ -5865,8 +5907,8 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveDown), // 195 -> 200
-                3 => Ok(Action::MoveDown), // 200 -> 200（205にならず上限のまま）
+                2 => Ok(Action::MoveRight), // 195 -> 200
+                3 => Ok(Action::MoveRight), // 200 -> 200（205にならず上限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -5884,14 +5926,14 @@ mod tests {
         let text = buffer_text_wide_aware(&terminal);
         assert!(
             text.contains("遅い (200ms)"),
-            "2回目の↓後も200msのままのはず(205等になっていないか), buffer was: {text}"
+            "2回目の→後も200msのままのはず(205等になっていないか), buffer was: {text}"
         );
     }
 
     // ---- #644: event_loop経由のオート進行ウェイト（AutoWaitMs）の境界値クランプ ----
     //
     // config.rsの`increment_auto_wait_ms`/`decrement_auto_wait_ms`純粋関数のユニット
-    // テストだけでは、`Action::MoveUp`/`Action::MoveDown`が`settings_focus ==
+    // テストだけでは、`Action::MoveLeft`/`Action::MoveRight`が`settings_focus ==
     // SettingsField::AutoWaitMs`のときに実際に`config.auto_wait_ms`を書き換える配線
     // そのもの（incrementとdecrementの取り違え、他フィールドのtypo書き換え等）は検出
     // できない。BGM/SE/Voice音量と同じ「境界の1つ外側から2回操作し、2回目も境界の
@@ -5899,7 +5941,7 @@ mod tests {
 
     #[test]
     fn event_loop_settings_auto_wait_ms_lower_bound_clamps_to_500_and_stays() {
-        // auto_wait_msが1000（AUTO_WAIT_MIN_MSの1段階上）の状態で↑（MoveUp/減少）を
+        // auto_wait_msが1000（AUTO_WAIT_MIN_MSの1段階上）の状態で←（MoveLeft/減少）を
         // 押すと500になる（下限到達）。500からさらに押しても500のまま
         // （`decrement_auto_wait_ms`の`.max(AUTO_WAIT_MIN_MS)`による下限保持）。
         let mut config = instant_config();
@@ -5916,9 +5958,9 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ
-                3 => Ok(Action::MoveUp),    // 1000 -> 500
-                4 => Ok(Action::MoveUp),    // 500 -> 500（下限のまま）
+                2 => Ok(Action::MoveDown), // フォーカスをAutoWaitMsへ
+                3 => Ok(Action::MoveLeft), // 1000 -> 500
+                4 => Ok(Action::MoveLeft), // 500 -> 500（下限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -5936,13 +5978,13 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(
             text.contains("オート進行ウェイト: 0.5秒"),
-            "2回目の↑後も0.5秒(500ms)のままのはず, buffer was: {text}"
+            "2回目の←後も0.5秒(500ms)のままのはず, buffer was: {text}"
         );
     }
 
     #[test]
     fn event_loop_settings_auto_wait_ms_upper_bound_clamps_to_10000_and_stays() {
-        // auto_wait_msが9500（AUTO_WAIT_MAX_MSの1段階下）の状態で↓（MoveDown/増加）を
+        // auto_wait_msが9500（AUTO_WAIT_MAX_MSの1段階下）の状態で→（MoveRight/増加）を
         // 押すと10000になる（上限到達）。10000からさらに押しても10000のまま
         // （`increment_auto_wait_ms`の`.min(AUTO_WAIT_MAX_MS)`による上限保持）。
         let mut config = instant_config();
@@ -5959,9 +6001,9 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ
-                3 => Ok(Action::MoveDown),  // 9500 -> 10000
-                4 => Ok(Action::MoveDown),  // 10000 -> 10000（上限のまま）
+                2 => Ok(Action::MoveDown),  // フォーカスをAutoWaitMsへ
+                3 => Ok(Action::MoveRight), // 9500 -> 10000
+                4 => Ok(Action::MoveRight), // 10000 -> 10000（上限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -5979,7 +6021,7 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(
             text.contains("オート進行ウェイト: 10.0秒"),
-            "2回目の↓後も10.0秒(10000ms)のままのはず(10.5秒等になっていないか), buffer was: {text}"
+            "2回目の→後も10.0秒(10000ms)のままのはず(10.5秒等になっていないか), buffer was: {text}"
         );
     }
 
@@ -5990,7 +6032,7 @@ mod tests {
 
     #[test]
     fn event_loop_settings_bgm_volume_lower_bound_clamps_to_zero_and_stays() {
-        // bgm_percentが5の状態で↑（MoveUp/減少）を押すと0になる（下限到達）。
+        // bgm_percentが5の状態で←（MoveLeft/減少）を押すと0になる（下限到達）。
         // 0からさらに押しても0のまま（saturating_subの下限保持）。
         let mut config = instant_config();
         config.volume.bgm_percent = 5;
@@ -6006,10 +6048,10 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ(#644)
-                3 => Ok(Action::MoveRight), // フォーカスをBgmVolumeへ
-                4 => Ok(Action::MoveUp),    // 5 -> 0
-                5 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
+                2 => Ok(Action::MoveDown), // フォーカスをAutoWaitMsへ(#644)
+                3 => Ok(Action::MoveDown), // フォーカスをBgmVolumeへ
+                4 => Ok(Action::MoveLeft), // 5 -> 0
+                5 => Ok(Action::MoveLeft), // 0 -> 0（下限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -6027,13 +6069,13 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(
             text.contains("BGM音量: 0%"),
-            "2回目の↑後も0%のままのはず, buffer was: {text}"
+            "2回目の←後も0%のままのはず, buffer was: {text}"
         );
     }
 
     #[test]
     fn event_loop_settings_bgm_volume_upper_bound_clamps_to_100_and_stays() {
-        // bgm_percentが95の状態で↓（MoveDown/増加）を押すと100になる（上限到達）。
+        // bgm_percentが95の状態で→（MoveRight/増加）を押すと100になる（上限到達）。
         // 100からさらに押しても100のまま（105にはならない、`.min(VOLUME_MAX_PERCENT)`）。
         let mut config = instant_config();
         config.volume.bgm_percent = 95;
@@ -6049,10 +6091,10 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // フォーカスをAutoWaitMsへ(#644)
-                3 => Ok(Action::MoveRight), // フォーカスをBgmVolumeへ
-                4 => Ok(Action::MoveDown),  // 95 -> 100
-                5 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
+                2 => Ok(Action::MoveDown), // フォーカスをAutoWaitMsへ(#644)
+                3 => Ok(Action::MoveDown), // フォーカスをBgmVolumeへ
+                4 => Ok(Action::MoveRight), // 95 -> 100
+                5 => Ok(Action::MoveRight), // 100 -> 100（上限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -6070,13 +6112,13 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(
             text.contains("BGM音量: 100%"),
-            "2回目の↓後も100%のままのはず(105等になっていないか), buffer was: {text}"
+            "2回目の→後も100%のままのはず(105等になっていないか), buffer was: {text}"
         );
     }
 
     #[test]
     fn event_loop_settings_se_volume_lower_bound_clamps_to_zero_and_stays() {
-        // se_percentが5の状態で↑を押すと0になる（下限到達）。0からさらに押しても0のまま。
+        // se_percentが5の状態で←を押すと0になる（下限到達）。0からさらに押しても0のまま。
         let mut config = instant_config();
         config.volume.se_percent = 5;
         let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
@@ -6091,11 +6133,11 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // AutoWaitMsへ(#644)
-                3 => Ok(Action::MoveRight), // BgmVolumeへ
-                4 => Ok(Action::MoveRight), // SeVolumeへ
-                5 => Ok(Action::MoveUp),    // 5 -> 0
-                6 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
+                2 => Ok(Action::MoveDown), // AutoWaitMsへ(#644)
+                3 => Ok(Action::MoveDown), // BgmVolumeへ
+                4 => Ok(Action::MoveDown), // SeVolumeへ
+                5 => Ok(Action::MoveLeft), // 5 -> 0
+                6 => Ok(Action::MoveLeft), // 0 -> 0（下限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -6113,13 +6155,13 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(
             text.contains("SE音量: 0%"),
-            "2回目の↑後も0%のままのはず, buffer was: {text}"
+            "2回目の←後も0%のままのはず, buffer was: {text}"
         );
     }
 
     #[test]
     fn event_loop_settings_se_volume_upper_bound_clamps_to_100_and_stays() {
-        // se_percentが95の状態で↓を押すと100になる（上限到達）。100からさらに押しても100のまま。
+        // se_percentが95の状態で→を押すと100になる（上限到達）。100からさらに押しても100のまま。
         let mut config = instant_config();
         config.volume.se_percent = 95;
         let mut playback = Playback::from_lines(vec![dline(Some("A"), "one")]);
@@ -6134,11 +6176,11 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // AutoWaitMsへ(#644)
-                3 => Ok(Action::MoveRight), // BgmVolumeへ
-                4 => Ok(Action::MoveRight), // SeVolumeへ
-                5 => Ok(Action::MoveDown),  // 95 -> 100
-                6 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
+                2 => Ok(Action::MoveDown),  // AutoWaitMsへ(#644)
+                3 => Ok(Action::MoveDown),  // BgmVolumeへ
+                4 => Ok(Action::MoveDown),  // SeVolumeへ
+                5 => Ok(Action::MoveRight), // 95 -> 100
+                6 => Ok(Action::MoveRight), // 100 -> 100（上限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -6156,13 +6198,13 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(
             text.contains("SE音量: 100%"),
-            "2回目の↓後も100%のままのはず(105等になっていないか), buffer was: {text}"
+            "2回目の→後も100%のままのはず(105等になっていないか), buffer was: {text}"
         );
     }
 
     #[test]
     fn event_loop_settings_voice_volume_lower_bound_clamps_to_zero_and_stays() {
-        // voice_percentが5の状態で↑を押すと0になる（下限到達）。0からさらに押しても0のまま。
+        // voice_percentが5の状態で←を押すと0になる（下限到達）。0からさらに押しても0のまま。
         // ボイス音量は音声バックエンドへの反映は無い割り切り（`VolumeConfig::voice_percent`の
         // doc comment参照）だが、表示上のクランプ挙動自体はBGM/SEと同じであるべき。
         let mut config = instant_config();
@@ -6179,12 +6221,12 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // AutoWaitMsへ(#644)
-                3 => Ok(Action::MoveRight), // BgmVolumeへ
-                4 => Ok(Action::MoveRight), // SeVolumeへ
-                5 => Ok(Action::MoveRight), // VoiceVolumeへ
-                6 => Ok(Action::MoveUp),    // 5 -> 0
-                7 => Ok(Action::MoveUp),    // 0 -> 0（下限のまま）
+                2 => Ok(Action::MoveDown), // AutoWaitMsへ(#644)
+                3 => Ok(Action::MoveDown), // BgmVolumeへ
+                4 => Ok(Action::MoveDown), // SeVolumeへ
+                5 => Ok(Action::MoveDown), // VoiceVolumeへ
+                6 => Ok(Action::MoveLeft), // 5 -> 0
+                7 => Ok(Action::MoveLeft), // 0 -> 0（下限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -6202,13 +6244,13 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(
             text.contains("ボイス音量 (将来用): 0%"),
-            "2回目の↑後も0%のままのはず, buffer was: {text}"
+            "2回目の←後も0%のままのはず, buffer was: {text}"
         );
     }
 
     #[test]
     fn event_loop_settings_voice_volume_upper_bound_clamps_to_100_and_stays() {
-        // voice_percentが95の状態で↓を押すと100になる（上限到達）。100からさらに押しても
+        // voice_percentが95の状態で→を押すと100になる（上限到達）。100からさらに押しても
         // 100のまま。
         let mut config = instant_config();
         config.volume.voice_percent = 95;
@@ -6224,12 +6266,12 @@ mod tests {
             call_count += 1;
             match call_count {
                 1 => Ok(Action::ToggleSettings),
-                2 => Ok(Action::MoveRight), // AutoWaitMsへ(#644)
-                3 => Ok(Action::MoveRight), // BgmVolumeへ
-                4 => Ok(Action::MoveRight), // SeVolumeへ
-                5 => Ok(Action::MoveRight), // VoiceVolumeへ
-                6 => Ok(Action::MoveDown),  // 95 -> 100
-                7 => Ok(Action::MoveDown),  // 100 -> 100（上限のまま）
+                2 => Ok(Action::MoveDown),  // AutoWaitMsへ(#644)
+                3 => Ok(Action::MoveDown),  // BgmVolumeへ
+                4 => Ok(Action::MoveDown),  // SeVolumeへ
+                5 => Ok(Action::MoveDown),  // VoiceVolumeへ
+                6 => Ok(Action::MoveRight), // 95 -> 100
+                7 => Ok(Action::MoveRight), // 100 -> 100（上限のまま）
                 _ => Err(anyhow::anyhow!("intentional stop for mid-loop inspection")),
             }
         };
@@ -6247,7 +6289,7 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(
             text.contains("ボイス音量 (将来用): 100%"),
-            "2回目の↓後も100%のままのはず(105等になっていないか), buffer was: {text}"
+            "2回目の→後も100%のままのはず(105等になっていないか), buffer was: {text}"
         );
     }
 
