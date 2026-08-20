@@ -289,20 +289,24 @@ where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    let mut initial_clear_rect = None;
     if config.should_show_splash() {
-        let advanced = show_splash(terminal, config, next_action)?;
+        let (advanced, splash_wide_rect) =
+            show_splash_with_wide_image_rect(terminal, config, next_action)?;
         if !advanced {
             // スプラッシュ画面で終了操作（q/Esc）された場合は本編に進まず終える。
             return Ok(());
         }
+        initial_clear_rect = splash_wide_rect;
     }
-    event_loop(
+    event_loop_with_initial_clear(
         terminal,
         config,
         playback,
         next_action,
         audio,
         playback_restored,
+        initial_clear_rect,
     )
 }
 
@@ -334,11 +338,24 @@ where
 /// `Action::None` を返してループを回し続けるため（`event_loop` のタイプライター演出・
 /// ページ送りインジケータ点滅と同じ既存の定期再描画の仕組みをそのまま利用するだけで、
 /// ここでの変更は不要）。
+#[cfg_attr(not(test), allow(dead_code))]
 fn show_splash<B>(
     terminal: &mut Terminal<B>,
     config: &Config,
     next_action: &mut impl FnMut() -> anyhow::Result<Action>,
 ) -> anyhow::Result<bool>
+where
+    B: Backend,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    show_splash_with_wide_image_rect(terminal, config, next_action).map(|(advanced, _)| advanced)
+}
+
+fn show_splash_with_wide_image_rect<B>(
+    terminal: &mut Terminal<B>,
+    config: &Config,
+    next_action: &mut impl FnMut() -> anyhow::Result<Action>,
+) -> anyhow::Result<(bool, Option<ratatui::layout::Rect>)>
 where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -358,6 +375,7 @@ where
         None,
         name_name_parser::models::AmbientEffects::default(),
     );
+    let mut last_wide_image_rect = None;
     loop {
         let now = Instant::now();
         let elapsed_ms = now.saturating_duration_since(scroll_anim_start).as_millis() as u64;
@@ -392,19 +410,19 @@ where
         }
 
         terminal.draw(|frame| {
-            ui::draw_splash(
+            last_wide_image_rect = ui::draw_splash_with_wide_image_rect(
                 frame,
                 config,
                 &mut image_cache,
                 display_scroll_offset,
                 Some(&image_fade),
                 now,
-            )
+            );
         })?;
 
         match next_action()? {
-            Action::Advance => return Ok(true),
-            Action::Quit => return Ok(false),
+            Action::Advance => return Ok((true, last_wide_image_rect)),
+            Action::Quit => return Ok((false, last_wide_image_rect)),
             Action::MoveUp => {
                 // 現在の表示位置（アニメーション途中点も含む）を新しいアニメーションの
                 // 起点として引き継ぐことで、連打してもジャンプせず滑らかに追従し続ける。
@@ -503,13 +521,38 @@ fn should_start_image_fade_transition(
 /// 受け取る（#579 追加修正）。`false`（保存データ無し／復元失敗）の場合は`read_positions`の
 /// 復元も行わない — `playback`が初期状態のままなのに`read_positions`だけ古い（場合によっては
 /// 別原稿を指す）値が残る非対称な不整合を防ぐため（下の`read_positions`初期化コメント参照）。
+#[cfg_attr(not(test), allow(dead_code))]
 fn event_loop<B>(
+    terminal: &mut Terminal<B>,
+    config: &Config,
+    playback: &mut Playback,
+    next_action: &mut impl FnMut() -> anyhow::Result<Action>,
+    audio: Option<&mut audio::AudioPlayer>,
+    playback_restored: bool,
+) -> anyhow::Result<()>
+where
+    B: Backend,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    event_loop_with_initial_clear(
+        terminal,
+        config,
+        playback,
+        next_action,
+        audio,
+        playback_restored,
+        None,
+    )
+}
+
+fn event_loop_with_initial_clear<B>(
     terminal: &mut Terminal<B>,
     config: &Config,
     playback: &mut Playback,
     next_action: &mut impl FnMut() -> anyhow::Result<Action>,
     mut audio: Option<&mut audio::AudioPlayer>,
     playback_restored: bool,
+    initial_clear_rect: Option<ratatui::layout::Rect>,
 ) -> anyhow::Result<()>
 where
     B: Backend,
@@ -596,6 +639,11 @@ where
     // （#497 の `wait_deadline` と同じ「`Action` 経由にせず直接合成する」設計）。
     let mut auto_mode = false;
     let mut auto_deadline: Option<Instant> = None;
+    // 広幅画像モード（splash のロゴ画像、fullscreen_image な event_image item）が実際に塗った
+    // Rect を追跡する。通常レイアウトへ戻る最初の1フレームだけこの Rect を clear し、以後は
+    // 通常描画に任せる。`pending_transition_clear_rect` は splash→本編の橋渡しにも使う。
+    let mut active_wide_image_rect: Option<ratatui::layout::Rect> = None;
+    let mut pending_transition_clear_rect = initial_clear_rect;
 
     // スキップモード（#499、GUI版 `NovelRenderer.setSkipMode`/`scheduleSkipStep` 相当）の
     // 状態。GUI版はセーブファイルの永続化された既読進捗（`readProgress`）を使う。TUI側は
@@ -949,8 +997,19 @@ where
         // #594: 選択肢の完了(クリア済み)状態も同じ理由で別配列に持つ（#596でキーワード改名）。ロックとは独立
         // （`option.cleared` を見る）で、選択自体は拒否しない見た目専用のフラグ。
         let choice_cleared = playback.current_choice_cleared();
+        let fullscreen_event_image = config.fullscreen_image
+            && playback.current_item_is_image_only()
+            && playback.current_choice().is_none();
+        let pending_clear_rect = if fullscreen_event_image {
+            pending_transition_clear_rect = None;
+            None
+        } else {
+            pending_transition_clear_rect
+                .take()
+                .or_else(|| active_wide_image_rect.take())
+        };
         terminal.draw(|frame| {
-            ui::draw(
+            active_wide_image_rect = ui::draw_with_pending_clear(
                 frame,
                 &config,
                 playback.current_line(),
@@ -967,7 +1026,8 @@ where
                 &mut image_cache,
                 playback.is_blackout(),
                 playback.current_item_is_image_only(),
-            )
+                pending_clear_rect,
+            );
         })?;
 
         // オートモード（#498）: 締切を過ぎていれば、キー入力を待たずに `Action::Advance` を
@@ -2778,6 +2838,20 @@ mod tests {
             Color::Rgb(color.0, color.1, color.2),
             "Dialog itemでは左右分割に戻り右端(text_area側)は画像色で埋まらないはず"
         );
+        assert_ne!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((
+                    ui::REQUIRED_TOTAL_WIDTH / 2,
+                    (ui::REQUIRED_TOTAL_HEIGHT - 1) / 2
+                ))
+                .unwrap()
+                .bg,
+            Color::Rgb(color.0, color.1, color.2),
+            "fullscreen event image 直後の通常フレームでは、gap セルも前モードの実描画Rectを\
+             1回 clear して既定セルへ戻るはず"
+        );
 
         // step 3: Advance -> Choice item -> 左右分割選択肢。
         let (mut next_action3, _r3) = action_queue(vec![Action::Advance, Action::Quit]);
@@ -3286,6 +3360,50 @@ mod tests {
             "共通操作フッターは通常プレイでも常時表示されるはず, buffer was: {text}"
         );
         assert!(text.contains("0/0"), "buffer was: {text}");
+    }
+
+    #[test]
+    fn run_screens_splash_logo_to_normal_frame_clears_previous_logo_rect_from_gap_cell() {
+        // #650 追加修正: splash のロゴ画像が通常レイアウトの image/gap 境界を横断していても、
+        // 本編初回フレームでその実描画Rectだけを1回 clear し、gapセルへ黒背景が残らないことを
+        // 確認する。
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((0, 0, 0), 214, 46), 214, 46);
+        let mut config = image_splash_config(&fixture_path);
+        config.typewriter.char_interval_ms = 0;
+        config.typewriter.fade_duration_ms = 0;
+        let document = name_name_parser::parser::parse(
+            "---\nengine: name-name\n---\n\n## 1-1: start\n\n**A**:\nhello\n",
+        );
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, _remaining) = action_queue(vec![Action::Advance, Action::Quit]);
+
+        run_screens(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        )
+        .unwrap();
+
+        let gap_probe = (
+            ui::REQUIRED_TOTAL_WIDTH / 2,
+            (ui::REQUIRED_TOTAL_HEIGHT - 1) / 2,
+        );
+        assert_ne!(
+            terminal.backend().buffer().cell(gap_probe).unwrap().bg,
+            Color::Black,
+            "splashロゴの黒背景が gap セルへ残ってはいけない"
+        );
+        let text = buffer_text(&terminal);
+        assert!(text.contains("hello"), "buffer was: {text}");
     }
 
     // ---- #502: sync_bgm / play_new_se_cues（音声出力デバイス無しでの状態追跡）----
