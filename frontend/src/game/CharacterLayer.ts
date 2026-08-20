@@ -2324,7 +2324,10 @@ export class CharacterLayer extends Container {
    * 指定 id の sprite が既にテクスチャをロード済みか (#628 フェーズ2b バグ修正)。
    *
    * `showImage()` は同一 id 再表示時（`existing` 分岐）はテクスチャ差し替えを行わず
-   * `onLoaded`/`onError` コールバックも呼ばない仕様（フェーズ2aで意図的に決めた仕様）。
+   * `onLoaded`/`onError` コールバックも呼ばない仕様（フェーズ2aで意図的に決めた仕様。
+   * ただしテクスチャが未ロード（`hasLoadedTexture()` が false）かつロード in-flight でない
+   * 場合は例外的に最新の `assetBaseUrl` で再ロードを試み、成功/失敗時はそれぞれ
+   * `onLoaded`/`onError` が発火する。#646）。
    * そのため呼び出し側（`NovelRenderer.showTitleScreen`）は「新規ロード中で onLoaded 待ち」
    * と「既にロード済みで再表示しただけ」を区別できず、後者でもフォールバック UI
    * （`TitleScreenOverlay` のタイトルテキスト）を隠したままにできないバグがあった。

@@ -1820,10 +1820,13 @@ export class NovelRenderer {
     // 新しい titleText（既定 visible: true）を作り直す。一方 showImage() は同 id 再表示時
     // （`hideTitleScreen()` を経由せずロゴを破棄しないまま再度 showTitleScreen() が呼ばれた場合、
     // 例: NovelPlayer の effect で title/hasSaveData が変わり再レンダーされたケース）は
-    // `existing` 分岐に入りテクスチャ差し替えを行わず、onLoaded も発火しない。そのため
-    // 「ロゴは既に表示済みなのにフォールバックテキストだけ再び見えてしまう」不整合が起きていた。
-    // showImage() は existing 分岐を同期的に処理するため、直後にロード済みかを確認すれば
-    // 判定できる（新規ロード中はまだ false のはずで、それは正しい——後で onLoaded が呼ばれる）。
+    // `existing` 分岐に入りテクスチャ差し替えを行わず、onLoaded も発火しない
+    // （ただしテクスチャが未ロード（`hasLoadedTexture()` が false）かつロード in-flight でない
+    // 場合は例外的に最新の `assetBaseUrl` で再ロードを試み、成功時は onLoaded が発火する。#646）。
+    // そのため「ロゴは既に表示済みなのにフォールバックテキストだけ再び見えてしまう」不整合が
+    // 起きていた。showImage() は existing 分岐を同期的に処理するため、直後にロード済みかを
+    // 確認すれば判定できる（新規ロード中はまだ false のはずで、それは正しい——後で onLoaded が
+    // 呼ばれる）。
     if (this.characterLayer.hasLoadedTexture(NovelRenderer.TITLE_LOGO_IMAGE_ID)) {
       this.titleScreenOverlay.hideFallbackText()
     }
@@ -1832,8 +1835,10 @@ export class NovelRenderer {
   /**
    * タイトル画面を非表示にする (#628 フェーズ2b)。ロゴ画像は `characterLayer.remove()` で
    * 即時破棄する——`showImage` は同 id 再表示時にテクスチャを差し替えない仕様
-   * （`existing` 分岐、位置更新のみ）のため、破棄せず残すと次回 `showTitleScreen()` が
-   * 新規ロード・フェードイン演出をやり直せなくなる。
+   * （`existing` 分岐、位置更新のみ。ただしテクスチャが未ロード（`hasLoadedTexture()` が false）
+   * かつロード in-flight でない場合は例外的に最新の `assetBaseUrl` で再ロードを試みる。#646）
+   * のため、破棄せず残すと次回 `showTitleScreen()` が新規ロード・フェードイン演出を
+   * やり直せなくなる。
    */
   hideTitleScreen(): void {
     this.titleScreenOverlay.hide()
