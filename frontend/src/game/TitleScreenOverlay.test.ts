@@ -18,6 +18,7 @@ import { TitleScreenOverlay, type TitleScreenShowOptions } from './TitleScreenOv
 
 // TitleScreenOverlay.ts の private 色定数（コメントに同じ意味の Tailwind 名を併記）。
 const COLOR_PRIMARY_FILL = 0x4f46e5 // indigo-600
+const COLOR_PRIMARY_FILL_HOVER = 0x6366f1 // indigo-500
 const COLOR_PRIMARY_FILL_DISABLED = 0x312e81 // indigo-900
 const COLOR_PRIMARY_TEXT_DISABLED = 0x818cf8 // indigo-400
 const COLOR_SECONDARY_FILL = 0x374151 // gray-700
@@ -113,6 +114,36 @@ describe('TitleScreenOverlay.show() ボタン disabled/enabled (つづきから)
     const continueButton = overlay.children[CONTINUE_BUTTON_CHILD_INDEX]
     expect(continueButton.eventMode).toBe('static')
     expect(numberFillCalls(fillSpy.mock.calls)[2]).toBe(COLOR_PRIMARY_FILL)
+  })
+
+  it('有効な「設定」ボタンは secondary 灰色ではなく primary の有効色で描画され、disabled な「つづきから」と見分けられる', () => {
+    const fillSpy = vi.spyOn(Graphics.prototype, 'fill')
+    const overlay = new TitleScreenOverlay(800, 450)
+
+    overlay.show(makeOpts({ hasSaveData: false }))
+
+    const fills = numberFillCalls(fillSpy.mock.calls)
+    // fills: [0]=bg, [1]=新規開始, [2]=つづきから(disabled), [3]=設定, [4]=終了
+    expect(fills[2]).toBe(COLOR_PRIMARY_FILL_DISABLED)
+    expect(fills[3]).toBe(COLOR_PRIMARY_FILL)
+    expect(fills[3]).not.toBe(COLOR_SECONDARY_FILL)
+  })
+
+  it('有効な「設定」ボタンの hover は primary hover 色になる', () => {
+    const fillSpy = vi.spyOn(Graphics.prototype, 'fill')
+    const overlay = new TitleScreenOverlay(800, 450)
+
+    overlay.show(makeOpts({ hasSaveData: true }))
+    fillSpy.mockClear()
+
+    const settingsButton = overlay.children[4]
+    settingsButton.emit('pointerover', {} as never)
+    const hoverFills = numberFillCalls(fillSpy.mock.calls)
+    expect(hoverFills[hoverFills.length - 1]).toBe(COLOR_PRIMARY_FILL_HOVER)
+
+    settingsButton.emit('pointerout', {} as never)
+    const pointerOutFills = numberFillCalls(fillSpy.mock.calls)
+    expect(pointerOutFills[pointerOutFills.length - 1]).toBe(COLOR_PRIMARY_FILL)
   })
 
   it('disabled 配色の文字色/secondary の配色定数が想定どおり（回帰用の定数確認）', () => {

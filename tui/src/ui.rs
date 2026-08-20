@@ -32,7 +32,7 @@ use std::str::FromStr;
 use std::time::Instant;
 
 use name_name_parser::models::ChoiceOption;
-use ratatui::buffer::CellWidth;
+use ratatui::buffer::{CellDiffOption, CellWidth};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -181,9 +181,11 @@ fn draw_too_small_message(frame: &mut Frame, actual: Rect) {
 /// 画面上段を「画像プレースホルダ」「スペーサー」「テキスト」の横3分割にする純粋関数
 /// （#488、#588で絶対値指定へ変更）。`Layout::split` の呼び出しをここへ切り出すことで、
 /// テスト側は実際のレイアウト計算結果をそのまま期待値として使える（手計算した固定値を
-/// テストに直書きしない）。スペーサー領域（戻り値の2番目）には何も描画しない — ratatui は
-/// `Terminal::draw` のたびにバッファを既定セル（空白）へリセットするため、明示的に描く
-/// コードが無くてもそこは単なる空白の余白として見える。
+/// テストに直書きしない）。スペーサー領域（戻り値の2番目）は [`draw`] が毎フレーム
+/// [`force_reset_area`] で明示的に空白・既定スタイルへ戻す（#650）。以前は
+/// 「未描画セルは ratatui が空として扱う」という前提に依存していたが、画像ペイン右端の
+/// 背景色だけを持つセルや terminal diff の都合で境界に黒い残骸が見えることがあり、
+/// 視覚上の余白を「暗黙の未描画」に任せるのは不十分だった。
 ///
 /// 画像/テキストは [`REQUIRED_IMAGE_COLS`]/[`REQUIRED_TEXT_COLS`]（#588時点でどちらも同値）を
 /// `Constraint::Length` で直接指定する — #494〜#587では `Constraint::Percentage(50)` ずつ
@@ -213,6 +215,25 @@ fn split_columns(area: Rect) -> (Rect, Rect, Rect) {
         ])
         .split(area);
     (columns[0], columns[1], columns[2])
+}
+
+/// `area` 全体を「空白 + reset style」に戻し、さらに各セルを
+/// [`CellDiffOption::AlwaysUpdate`] にして次回 flush で必ず端末へ再出力させる（#650）。
+///
+/// 画像ペインは quadrant block の都合で「グリフは空白だが背景色だけが意味を持つセル」を多用する。
+/// そこにレイアウト境界の未描画セルが隣接すると、logical buffer 上では空でも実端末では前景/背景の
+/// 残骸が目立つことがあった。`root[0]` 全体を先に明示クリアしてから画像・テキスト・選択肢を重ねる
+/// ことで、「今回は何も置かない境界セル」も含め毎フレーム描画責務を明確にする。
+fn force_reset_area(frame: &mut Frame, area: Rect) {
+    let buffer = frame.buffer_mut();
+    for y in area.y..area.y.saturating_add(area.height) {
+        for x in area.x..area.x.saturating_add(area.width) {
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                cell.reset();
+                cell.set_diff_option(CellDiffOption::AlwaysUpdate);
+            }
+        }
+    }
 }
 
 /// 実際の端末サイズ（`frame.area()`）が固定必要サイズに満たない場合は
@@ -312,6 +333,7 @@ pub fn draw(
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(canvas);
+    force_reset_area(frame, root[0]);
 
     let fullscreen_event_image = config.fullscreen_image && image_only_item && choice.is_none();
 
@@ -618,24 +640,22 @@ fn draw_blackout(frame: &mut Frame, area: Rect) {
 fn draw_image_grid(frame: &mut Frame, area: Rect, grid: &RenderedImage) {
     let rows = grid.rows.min(area.height);
     let cols = grid.cols.min(area.width);
-    let mut lines = Vec::with_capacity(rows as usize);
+    let buffer = frame.buffer_mut();
     for y in 0..rows {
-        let mut spans = Vec::with_capacity(cols as usize);
         for x in 0..cols {
             let idx = y as usize * grid.cols as usize + x as usize;
             if let Some(cell) = grid.cells.get(idx) {
                 let fg = Color::Rgb(cell.fg.0, cell.fg.1, cell.fg.2);
                 let bg = Color::Rgb(cell.bg.0, cell.bg.1, cell.bg.2);
-                spans.push(Span::styled(
-                    cell.glyph.to_string(),
-                    Style::default().fg(fg).bg(bg),
-                ));
+                if let Some(buf_cell) = buffer.cell_mut((area.x + x, area.y + y)) {
+                    buf_cell
+                        .set_char(cell.glyph)
+                        .set_style(Style::default().fg(fg).bg(bg))
+                        .set_diff_option(CellDiffOption::AlwaysUpdate);
+                }
             }
         }
-        lines.push(Line::from(spans));
     }
-    let paragraph = Paragraph::new(Text::from(lines));
-    frame.render_widget(paragraph, area);
 }
 
 /// スプラッシュ画面: `config.splash.logo_image` が設定されていればロゴ画像を表示し、
@@ -1151,9 +1171,9 @@ fn format_auto_wait_label(ms: u64) -> String {
     format!("{:.1}秒", ms as f64 / 1000.0)
 }
 
-/// 設定画面（#503）でフォーカス中の行。`Action::MoveLeft`/`Action::MoveRight` の文脈依存の
+/// 設定画面（#503）でフォーカス中の行。`Action::MoveUp`/`Action::MoveDown` の文脈依存の
 /// 再利用（`main.rs::event_loop` の `Overlay::Settings` 分岐）でラップアラウンドしながら
-/// 切り替わる。フォーカス行に応じて `Action::MoveUp`/`Action::MoveDown` が調整する値
+/// 切り替わる。フォーカス行に応じて `Action::MoveLeft`/`Action::MoveRight` が調整する値
 /// （テキスト速度 / オート進行ウェイト / 音量）が変わる。並び順は GUI版 `Settings`
 /// interface（`frontend/src/game/settings.ts`）の msPerChar→autoWaitMs→bgmVolume→
 /// seVolume→voiceVolume に合わせる（#644）。
@@ -1168,7 +1188,7 @@ pub enum SettingsField {
 }
 
 impl SettingsField {
-    /// 次の行へラップアラウンドしながら進む（`Action::MoveRight`）。
+    /// 次の行へラップアラウンドしながら進む（`Action::MoveDown`）。
     pub fn next(self) -> Self {
         match self {
             SettingsField::TextSpeed => SettingsField::AutoWaitMs,
@@ -1179,7 +1199,7 @@ impl SettingsField {
         }
     }
 
-    /// 前の行へラップアラウンドしながら戻る（`Action::MoveLeft`）。
+    /// 前の行へラップアラウンドしながら戻る（`Action::MoveUp`）。
     pub fn prev(self) -> Self {
         match self {
             SettingsField::TextSpeed => SettingsField::VoiceVolume,
@@ -1214,8 +1234,8 @@ fn format_settings_line(text: String, focused: bool) -> Line<'static> {
 /// テキスト速度・BGM/SE/ボイス音量設定画面（#503、GUI版 `frontend/src/game/settings.ts`/
 /// `SettingsOverlay.tsx` 相当）。
 ///
-/// 閲覧専用の [`draw_backlog`] と異なり、この画面は `Action::MoveLeft`/`Action::MoveRight`
-/// で [`SettingsField`]（フォーカス行）を切り替え、`Action::MoveUp`/`Action::MoveDown`
+/// 閲覧専用の [`draw_backlog`] と異なり、この画面は `Action::MoveUp`/`Action::MoveDown`
+/// で [`SettingsField`]（フォーカス行）を切り替え、`Action::MoveLeft`/`Action::MoveRight`
 /// （選択肢カーソル移動の文脈依存の再利用と同じ設計）でフォーカス中の値を書き換える —
 /// 実際の値変更は呼び出し側 `main.rs` の `Overlay::Settings` 分岐が行い、この関数は
 /// 現在値・現在のフォーカスを表示するだけ。
@@ -1285,7 +1305,7 @@ pub fn draw_settings(
         ),
         Line::raw(""),
         Line::styled(
-            format!("←→ 項目切替 / ↑↓ 調整 {range_hint} / Enter・C・Esc で閉じる"),
+            format!("↑↓ 項目切替 / ←→ 調整 {range_hint} / Enter・C・Esc で閉じる"),
             Style::default().add_modifier(Modifier::DIM),
         ),
     ];
@@ -1700,6 +1720,66 @@ mod tests {
             !text.contains("[画像]"),
             "should not fall back to the placeholder label, buffer was: {text}"
         );
+    }
+
+    #[test]
+    fn draw_with_solid_color_image_fade_paints_rightmost_placeholder_cells_too() {
+        // #650 回帰ガード: `draw_image_grid` はセル内容を Paragraph へ変換して描いているため、
+        // 右端が空白グリフ（glyph=' '、背景色だけが意味を持つ単色セル）でも末尾セルまで
+        // きちんと描かれている必要がある。ここが欠けると、画像ペイン右端に前フレームや
+        // 端末既定背景色の「黒い四角」が残る。
+        let (placeholder_area, _gap, _text) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        let fixture_path =
+            crate::image_render::write_test_webp_fixture(&solid_rgba((255, 0, 0), 4, 4), 4, 4);
+        let (config, relative) = config_and_relative_path_for(&fixture_path);
+        let image_fade = ImageFadeState::settled(
+            Some(relative),
+            name_name_parser::models::AmbientEffects::default(),
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let now = Instant::now();
+        let mut image_cache = ImageCache::new();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &config,
+                    None,
+                    None,
+                    &[],
+                    &[],
+                    0,
+                    0,
+                    true,
+                    None,
+                    now,
+                    now,
+                    Some(&image_fade),
+                    &mut image_cache,
+                    false,
+                    false,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for y in 0..placeholder_area.height {
+            let cell = buffer
+                .cell((placeholder_area.x + placeholder_area.width - 1, y))
+                .expect("in bounds");
+            assert_eq!(
+                cell.bg,
+                Color::Rgb(255, 0, 0),
+                "rightmost placeholder cell at row {y} should keep the solid image background"
+            );
+            assert_eq!(
+                cell.diff_option,
+                CellDiffOption::AlwaysUpdate,
+                "rightmost placeholder cell at row {y} should be forced to redraw every frame"
+            );
+        }
     }
 
     #[test]
@@ -5289,6 +5369,28 @@ mod tests {
     }
 
     #[test]
+    fn image_text_gap_column_is_explicitly_reset_and_forced_to_redraw() {
+        let config = Config::default();
+        let line = dialog_line(Some("A"), vec!["hello"]);
+        let buffer = render(&config, Some(&line), None, CANVAS_W, CANVAS_H);
+        let (placeholder_area, gap_area, _text_area) =
+            split_columns(Rect::new(0, 0, CANVAS_W, CANVAS_H - 1));
+        for y in 0..placeholder_area.height {
+            for x in gap_area.x..gap_area.x + gap_area.width {
+                let cell = buffer.cell((x, y)).expect("in bounds");
+                assert_eq!(cell.symbol(), " ");
+                assert_eq!(cell.fg, Color::Reset);
+                assert_eq!(cell.bg, Color::Reset);
+                assert_eq!(
+                    cell.diff_option,
+                    CellDiffOption::AlwaysUpdate,
+                    "gap cell ({x},{y}) should be explicitly redrawn every frame"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn split_columns_at_area_narrower_than_gap_returns_gap_shrunk_to_available_width() {
         // W=1 は IMAGE_TEXT_GAP_WIDTH(2) に満たないため、cassowary ソルバーは
         // Constraint::Length を area 幅いっぱいまで縮めて確保する（画像/テキストは0幅）。
@@ -7877,6 +7979,22 @@ mod tests {
         assert!(
             text.contains("(0〜100%, 5%刻み)"),
             "VoiceVolumeフォーカス時は%単位のレンジヒントが出るはず, buffer was: {text}"
+        );
+    }
+
+    #[test]
+    fn draw_settings_shows_swapped_axis_help_text() {
+        let mut terminal = Terminal::new(TestBackend::new(CANVAS_W, CANVAS_H)).unwrap();
+        let volume = VolumeConfig::default();
+        terminal
+            .draw(|f| {
+                draw_settings(f, 30, 2500, &volume, SettingsField::TextSpeed);
+            })
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("↑↓ 項目切替 / ←→ 調整"),
+            "設定画面のヘルプ文言も #645 の操作軸に追従しているはず, buffer was: {text}"
         );
     }
 
