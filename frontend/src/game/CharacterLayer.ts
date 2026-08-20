@@ -842,13 +842,18 @@ export class CharacterLayer extends Container {
    * `show()` 呼び出し後・`Assets.load()` 解決前の未ロード sprite をすり抜け、pixi.js アプリ全体で
    * 共有される `Texture.EMPTY.source.scaleMode` を書き換えてしまっていた。
    * `height <= 0` チェックも保険として残す（EMPTY 以外の非表示テクスチャを想定した既存の意図）。
+   *
+   * `texture.source` 自体が null なケース（#646 セルフレビューで発見。`EventImageLayer.setPixelArt`
+   * の JSDoc に詳細）も追加でガードする。pixi.js の `Texture.destroy(true)`（`Assets.unload(url)` が
+   * 呼ぶ）は `Texture` オブジェクト自体は non-null のまま `source` だけ null にするため、
+   * `texture === Texture.EMPTY` の identity チェックはこのケースを検出できない。
    */
   private reapplyPixelArt(): void {
     const mode = this.pixelArt ? 'nearest' : 'linear'
     for (const state of this.characters.values()) {
       if (state.sprite.destroyed) continue
       const texture = state.sprite.texture
-      if (!texture || texture === Texture.EMPTY || texture.height <= 0) continue
+      if (!texture || texture === Texture.EMPTY || texture.height <= 0 || !texture.source) continue
       texture.source.scaleMode = mode
     }
   }
@@ -1993,7 +1998,10 @@ export class CharacterLayer extends Container {
   ): void {
     // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
     // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
-    texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
+    // `texture.source` の null ガードは reapplyPixelArt() の JSDoc 参照（Assets は URL 単位で
+    // 共有キャッシュされるため、このロード完了コールバックが発火するまでの間に他所からの
+    // Assets.unload(url) で destroy 済みになっている可能性がゼロではない）。
+    if (texture.source) texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
     sprite.texture = texture
     // 表示サイズ: size（幅）/ maxHeight（高さ）の両方が指定されていれば両方を満たす小さい方の
     // スケールを採用する（旧 DOM 版 `object-contain` の2軸制約 #630 セルフレビュー must M2）。
@@ -3254,7 +3262,8 @@ export class CharacterLayer extends Container {
           if (sprite.destroyed) return false
           // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
           // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
-          texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
+          // `texture.source` の null ガードは reapplyPixelArt() の JSDoc 参照。
+          if (texture.source) texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
           // 立ち絵は既定で原寸（scale=1）。画面全体をブラウザ枠に合わせて縮める系統
           // （PixiJS canvas の wrapper スケール）が唯一の常時縮小であり、立ち絵を個別に
           // 自動 fit-down してはいけない。論理画面の上端・左右をはみ出してもよい。

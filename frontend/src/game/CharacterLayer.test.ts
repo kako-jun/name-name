@@ -291,6 +291,27 @@ describe('CharacterLayer pixel_art スケールモード（立ち絵 show 経路
       Texture.EMPTY.source.scaleMode = originalScaleMode
     }
   })
+
+  it('C5e: 表示中の sprite.texture の source が破棄済み(null)になっていても setPixelArt() は例外を投げない（#646 セルフレビュー実機検証で発見。EventImageLayer 側と同系統のバグ）', async () => {
+    // pixi.js の Texture.destroy(true)（Assets.unload(url) の内部実装が呼ぶ）は
+    // Texture オブジェクト自体は non-null のまま source だけ null にする。Assets は
+    // URL 単位の共有キャッシュのため、この CharacterLayer がまだ sprite.texture として
+    // 保持している画像を、他所からの Assets.unload（NovelRenderer.setEvents()/destroy() 等）
+    // が横から破棄しうる。`texture === Texture.EMPTY` の identity チェック（C5d）はこのケースを
+    // 検出できない（EMPTY とは別の、実際にロードされ破棄されたテクスチャのため）。
+    mockLoadResolves()
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.sprite.texture!.source!.scaleMode).toBe('linear')
+
+    // Texture.destroy(true) 相当: source だけ null になり、texture 自体は生き残る。
+    ;(state!.sprite.texture as unknown as { source: unknown }).source = null
+
+    expect(() => layer.setPixelArt(true)).not.toThrow()
+    expect(() => layer.setPixelArt(false)).not.toThrow()
+  })
 })
 
 describe('normalizePosition', () => {
