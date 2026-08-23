@@ -723,6 +723,12 @@ describe('PlayerScreen', () => {
     // 逆方向（別 MD → エントリ）も解決できる
     expect(findSceneById(loadedScenes ?? [], 'entry-hub')?.title).toBe('hub')
 
+    // #667: resolveMissingScene が返す値だけでなく、NovelPlayer へ渡す React state
+    // 側（jumpSceneIndex= props）にも同時に反映されていること。fluid remount 時は
+    // この props のスナップショットでレンダラーがゼロから再初期化されるため、ここが
+    // 古いままだと再マウント後に遅延ロード済みルートを見失う。
+    expect(findSceneById(lastJumpSceneIndex(), 'far-scene')).toBeDefined()
+
     getContentsMock.mockClear()
     const cachedScenes = await resolveMissingScene('far-scene')
     expect(cachedScenes).not.toBeNull()
