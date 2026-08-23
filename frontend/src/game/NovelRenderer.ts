@@ -298,8 +298,23 @@ export class NovelRenderer {
   private counterText: PixiText | null = null
   private displayEventCount = 0
 
-  /** Condition 展開前の元イベント配列（Flag 変更時の再展開に使用） */
+  /** Condition 展開前の元イベント配列（Flag 変更時の再展開に使用）。
+   *  quickLoad/restoreToScene が直前ルートの scene.events で上書きするため、
+   *  「今どのルートを再生中か」を表す可変フィールド（entryRawEvents とは別物）。 */
   private rawEvents: Event[] = []
+  /**
+   * エントリ文書本来の events のスナップショット (#662)。`setEvents()`（NovelPlayer が
+   * エントリ doc をセットする唯一の経路）でのみ更新し、quickLoad()/restoreToScene() 経由の
+   * `rawEvents` 上書き（ルート内シーンの events）では一切更新しない。
+   *
+   * 背景: マウント時の自動 quickLoad（#578/#620）は `restoreToScene()` を呼び、直前ルート
+   * （例: 近視ルート）の scene.events で `rawEvents` を上書きする。この状態で「はじめから」
+   * （`restart()`）が `rawEvents` を再生すると、シーンID はリセットされていても実際に再生
+   * される events は前ルートのままになってしまう（#662）。`restart()` は代わりにこの
+   * `entryRawEvents` を参照することで、quickLoad の有無に関係なく常にエントリ文書の
+   * 冒頭から再生する。
+   */
+  private entryRawEvents: Event[] = []
   /** Condition 展開済みのフラットなイベント配列 */
   private resolvedEvents: Event[] = []
   private eventIndex = 0
@@ -1031,6 +1046,11 @@ export class NovelRenderer {
     // イベント絵レイヤーのテクスチャも同じタイミングで解放する (#351 セルフレビュー指摘:
     // 背景と違い textureCache 相当の登録先が無く、GPU テクスチャが解放されずリークしていた)。
     this.eventImageLayer.disposeTextures()
+    // #662: setEvents() は「エントリ文書の events を(再)供給する」唯一の公開経路
+    // （NovelPlayer のマウント effect / events-prop 変化 effect から呼ばれる）。
+    // ここでスナップショットしておけば、この後 quickLoad/restoreToScene が rawEvents を
+    // 直前ルートの events で上書きしても、restart() は常にこのエントリ文書へ戻れる。
+    this.entryRawEvents = [...events]
     this.resetAndStartEvents([...events], { skipAutoAdvance: options?.skipAutoAdvance })
   }
 
@@ -1048,12 +1068,20 @@ export class NovelRenderer {
    * 最初のシーン。`PlayerScreen.buildSceneIndex()` が常にエントリ doc のシーンを先頭に積む前提）
    * に戻す。単純に null にはしない（seekbar・シーンタイトル解決を restart 直後から正しく機能
    * させるため）。
+   *
+   * #662: `rawEvents` ではなく `entryRawEvents` を再生する。マウント時の自動 quickLoad が
+   * `restoreToScene()` 経由で `rawEvents` を直前ルート（例: 近視ルート）の scene.events に
+   * 上書きしていた場合、`rawEvents` をそのまま再生すると `currentSceneId` だけリセットされて
+   * 実際の内容は前ルートのまま、という不整合再生になっていた（#662 本体の症状）。
+   * `entryRawEvents` は `setEvents()` でのみ更新されるため、quickLoad の有無に関わらず常に
+   * エントリ文書冒頭の events を指す。`resetAndStartEvents` が `this.rawEvents = events` を
+   * 行うため、この呼び出しで `rawEvents` 自体も entryRawEvents のコピーへ戻る。
    */
   restart(): void {
-    if (this.rawEvents.length === 0) return
+    if (this.entryRawEvents.length === 0) return
     this.gameState.clear()
     this.currentSceneId = this.allScenes[0]?.id ?? null
-    this.resetAndStartEvents([...this.rawEvents])
+    this.resetAndStartEvents([...this.entryRawEvents])
   }
 
   /**

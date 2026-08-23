@@ -165,9 +165,9 @@ describe('NovelRenderer #637 統合: 「はじめから」相当のフラグ/ク
 
   // 14: 本丸。旧セッションでフラグを立てたまま quickSave された状態から「はじめから」相当
   // （clearQuickSave() → restart()、PlayerScreen.onNewGame と同じ呼び出し順）を実行すると、
-  // 以後 quickLoad() は旧データを復元せず、Condition 分岐もフラグ無し側（base-content）で
-  // 解決されることを確認する。
-  it('14: milestone フラグを立てて route まで進行→はじめから相当実行後、quickLoad() は復元せず Condition は初期分岐（フラグ無し側）で解決される（本丸）', () => {
+  // 以後 quickLoad() は旧データを復元せず、フラグもクリアされ、events も entry シーン
+  // （entryRawEvents）まで巻き戻ることを確認する（#662 修正後の期待挙動）。
+  it('14: milestone フラグを立てて route まで進行→はじめから相当実行後、quickLoad() は復元せず events は entry シーンまで巻き戻る（本丸）', () => {
     const r = makeRenderer(SCENES)
     r.setDocKey('doc-637-14')
 
@@ -189,9 +189,10 @@ describe('NovelRenderer #637 統合: 「はじめから」相当のフラグ/ク
     expect(r.quickLoad()).toBe(false)
     // フラグもクリアされている
     expect(r.getSnapshot().flags).toEqual({})
-    // restart() が再展開した resolvedEvents（rawEvents=branch の内容）は、フラグが消えたことで
-    // Condition が初期分岐（フラグ無し側）に倒れ、'flagged-content' を含まない。
-    expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['base-content'])
+    // #662: restart() は rawEvents（branch まで進行した直前ルートの内容）ではなく
+    // entryRawEvents（setScenes() 時点の entry シーン）を再生する。branch の
+    // 'flagged-content'/'base-content' には戻らず、entry の 'start' になる。
+    expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])
   })
 
   // 15: #637 本体の症状そのものの再現テスト。一度もシーン遷移していない状態（entry のまま）でも
