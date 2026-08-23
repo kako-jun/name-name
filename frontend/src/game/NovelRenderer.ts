@@ -3285,6 +3285,25 @@ export class NovelRenderer {
     // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
     this.advSentencePagesCache = null
 
+    // fluid remount 対応 (#663): aspect_ratio:auto プロジェクトは画面幅リサイズで向きの
+    // カテゴリ境界を跨ぐと新しい gameWidth/gameHeight で renderer が再構築され、この
+    // applyState() で旧レイアウト幅のスナップショットが復元される。ページ折り返しは表示幅に
+    // 依存するため、同じイベントでも新レイアウトではページ数が変わり得る。render() 側の
+    // sentenceIndex クランプ（#283、上記コメント参照）は現ページの範囲外を防ぐが、textIndex
+    // 自体は検証なしでコピーされていた。textIndex が新しいページ数を超えたまま advance() に
+    // 渡ると「同ページに続きがある」「次ページがある」の両判定が偽になり次イベントへ素通り
+    // してしまい、最悪 #470 の終劇フォールバックに到達して ToBeContinued が早期表示される。
+    // 既存の sentenceIndex クランプと同種の防御として、ここで最後の有効ページへクランプし、
+    // 読んでいた位置になるべく近いページに留める。goBack/seekTo 等の通常復元では textIndex は
+    // 既に有効範囲内なので no-op（advance() 自体の挙動には影響しない）。
+    const restoredTextEvtForClamp = getTextEvent(this.resolvedEvents[this.eventIndex])
+    if (restoredTextEvtForClamp) {
+      const pageCount = this.currentPageCount(restoredTextEvtForClamp)
+      if (pageCount > 0 && this.textIndex >= pageCount) {
+        this.textIndex = pageCount - 1
+      }
+    }
+
     // 終劇状態の復元 (#386)。goBack/seekTo/セーブ復元はすべて即時反映（フェード演出はしない）。
     // "to be continued..." 表示は callback とは独立に syncEndingOverlayVisibility() で同期する（#630）。
     // #460 セルフレビュー must M2: 値が実際に変化した時だけコールバックを発火する（変化なしなら

@@ -120,7 +120,10 @@ function craftSnapshot(over: Partial<NovelGameState>): NovelGameState {
 }
 
 const SCENES: EventScene[] = [
-  scene('a', [narration('a1', 'a2', 'a3'), narration('a4')]),
+  // 2つ目の narration は adv（既定）で 2 行にしておく (#663)。restoreSnapshot は復元直後に
+  // textIndex を「そのイベントの再計算後のページ数」にクランプするようになったため、1 行しか
+  // 無いテキストへ textIndex: 1 を渡すテスト（R1/R10）は無条件に 0 へ丸められてしまう。
+  scene('a', [narration('a1', 'a2', 'a3'), narration('a4', 'a5')]),
   scene('b', [narration('b1')]),
 ]
 
