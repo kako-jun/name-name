@@ -285,6 +285,10 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   // NovelPlayer に jumpSceneIndex= で渡すと NovelRenderer.allScenes が埋まり、
   // 通常再生（events= の線形ストリーム）を変えないまま、クロスファイルのシーンジャンプ
   // （→ シーンID）・セーブ復元・debug startFrom がファイル横断で解決する。
+  // #667: 初回ロード後にプレイ中 resolveMissingScene() が遅延ロードした追加ルートも、
+  // ここ（React state）へ同時に反映する。fluid（aspect_ratio: auto）プロジェクトで
+  // NovelPlayer が再マウントされる際、渡す props はこの state のスナップショットに
+  // なるため、遅延ロード分を反映し忘れると新レンダラーが現在ルートを見失う。
   const [allScenes, setAllScenes] = useState<EventScene[]>([])
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -454,6 +458,17 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
         if (!loaded) continue
         const scenes = buildSceneIndex(entryPath, sortedPaths, loadedDocsRef.current)
         warnDuplicateSceneIds(scenes)
+        // #667: loadedDocsRef が新しい遅延ロード済みルートで更新された直後、React state
+        // 側の allScenes もここで同時に更新する。allScenes は NovelPlayer へ
+        // jumpSceneIndex= として渡され、aspect_ratio:auto（fluid）プロジェクトで
+        // 画面幅リサイズが向きカテゴリ境界を跨ぐと NovelPlayer が再マウントされ、
+        // その時点の props（＝この state）でゼロから初期化される新 NovelRenderer に
+        // 渡る。ここを更新し忘れると、再マウント後の新レンダラーは遅延ロード済みの
+        // 現在ルートを知らないまま起動し、findSceneById がシーンを見失う。
+        // buildSceneIndex は毎回 loadedDocsRef.current から全件再構築するため、
+        // 複数呼び出しが並行してもここで setAllScenes する値は常に非減少（ref は
+        // ロード済み doc を削除しないため、後から解決したものほど同等以上に完全）。
+        setAllScenes(scenes)
         const found = scenes.some((s) => s.id === sceneId)
         setLoadDebugInfo((prev) => [
           ...prev.filter((line) => !line.startsWith('lazy loaded docs:')),

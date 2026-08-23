@@ -723,10 +723,246 @@ describe('PlayerScreen', () => {
     // 逆方向（別 MD → エントリ）も解決できる
     expect(findSceneById(loadedScenes ?? [], 'entry-hub')?.title).toBe('hub')
 
+    // #667: resolveMissingScene が返す値だけでなく、NovelPlayer へ渡す React state
+    // 側（jumpSceneIndex= props）にも同時に反映されていること。fluid remount 時は
+    // この props のスナップショットでレンダラーがゼロから再初期化されるため、ここが
+    // 古いままだと再マウント後に遅延ロード済みルートを見失う。
+    expect(findSceneById(lastJumpSceneIndex(), 'far-scene')).toBeDefined()
+
     getContentsMock.mockClear()
     const cachedScenes = await resolveMissingScene('far-scene')
     expect(cachedScenes).not.toBeNull()
     expect(getContentsMock).not.toHaveBeenCalled()
+  })
+
+  describe('#667: fluid remount 時の allScenes staleness（resolveMissingScene の複数回・失敗系・並行呼び出し）', () => {
+    // entry(script.md) + routeA.md + routeB.md の3ファイル構成。#314 の2ファイル構成テストを
+    // 3ファイルに拡張し、「複数回の異なるファイルの lazy load が累積する」ことを検証する。
+    function mockThreeFileProject(): void {
+      listProjectsMock.mockResolvedValue([
+        { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+      ])
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'content/scripts/routeA.md', sha: 's1', size: 1, title: null, hidden: false },
+        { path: 'content/scripts/routeB.md', sha: 's2', size: 1, title: null, hidden: false },
+      ])
+      getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+        path,
+        sha: 'x',
+        content: path,
+      }))
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        const isEntry = md === 'script.md'
+        const isRouteA = md === 'content/scripts/routeA.md'
+        return {
+          engine: 'name-name',
+          chapters: [
+            {
+              number: 1,
+              title: 'c',
+              hidden: false,
+              default_bgm: null,
+              scenes: isEntry
+                ? [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }]
+                : isRouteA
+                  ? [{ id: 'sceneA', title: 'a', view: 'TopDown', events: [] }]
+                  : [{ id: 'sceneB', title: 'b', view: 'TopDown', events: [] }],
+            },
+          ],
+        }
+      })
+    }
+
+    it('複数回の異なるファイルの lazy load が累積して allScenes に反映される（先に解決した sceneA が後続の sceneB 解決で消えない）', async () => {
+      mockThreeFileProject()
+
+      render(
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+
+      await resolveMissingScene('sceneA')
+      const afterA = lastJumpSceneIndex()
+      expect(findSceneById(afterA, 'entry-hub')).toBeDefined()
+      expect(findSceneById(afterA, 'sceneA')).toBeDefined()
+
+      await resolveMissingScene('sceneB')
+      const afterB = lastJumpSceneIndex()
+      // 本題: sceneB を解決した後も、先に解決していた entry-hub / sceneA が
+      // 消えていない（3件とも揃っている＝非減少で累積する）こと。
+      expect(findSceneById(afterB, 'entry-hub')).toBeDefined()
+      expect(findSceneById(afterB, 'sceneA')).toBeDefined()
+      expect(findSceneById(afterB, 'sceneB')).toBeDefined()
+    })
+
+    it('lazy load 候補が全滅（全取得失敗）した場合、resolveMissingScene は null を返し allScenes は変化しない（setAllScenes が一度も呼ばれない）', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      listProjectsMock.mockResolvedValue([
+        { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+      ])
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'content/scripts/bad1.md', sha: 's1', size: 1, title: null, hidden: false },
+        { path: 'content/scripts/bad2.md', sha: 's2', size: 1, title: null, hidden: false },
+      ])
+      getContentsMock.mockImplementation(async (_name: string, path: string) => {
+        if (path !== 'script.md') {
+          throw new Error(`failed to fetch ${path}`)
+        }
+        return { path, sha: 'x', content: path }
+      })
+      parseMarkdownMock.mockImplementation(async () => ({
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }],
+          },
+        ],
+      }))
+
+      render(
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+
+      const callsBefore = novelPlayerProps.mock.calls.length
+      expect(lastJumpSceneIndex().map((s) => s.id)).toEqual(['entry-hub'])
+
+      const resolved = await resolveMissingScene('missing-scene')
+      expect(resolved).toBeNull()
+
+      // 失敗経路では setAllScenes が呼ばれない＝再レンダーで NovelPlayer に新しい
+      // props が渡されることも無い。allScenes の内容も初期状態のまま。
+      expect(novelPlayerProps.mock.calls.length).toBe(callsBefore)
+      expect(lastJumpSceneIndex().map((s) => s.id)).toEqual(['entry-hub'])
+    })
+
+    it('重複IDが無いファイルの lazy load では warning を出さず、重複IDが実際に生じた lazy load でだけ正しく発火する', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      listProjectsMock.mockResolvedValue([
+        { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+      ])
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'content/scripts/routeA.md', sha: 's1', size: 1, title: null, hidden: false },
+        { path: 'content/scripts/routeB.md', sha: 's2', size: 1, title: null, hidden: false },
+      ])
+      getContentsMock.mockImplementation(async (_name: string, path: string) => ({
+        path,
+        sha: 'x',
+        content: path,
+      }))
+      parseMarkdownMock.mockImplementation(async (md: string) => {
+        const isEntry = md === 'script.md'
+        const isRouteA = md === 'content/scripts/routeA.md'
+        return {
+          engine: 'name-name',
+          chapters: [
+            {
+              number: 1,
+              title: 'c',
+              hidden: false,
+              default_bgm: null,
+              // routeA は重複無し。routeB は entry と同じ id 'entry-hub' を持ち、
+              // routeB を lazy load した時点で初めて重複が生じる。
+              scenes: isEntry
+                ? [{ id: 'entry-hub', title: 'hub', view: 'TopDown', events: [] }]
+                : isRouteA
+                  ? [{ id: 'sceneA', title: 'a', view: 'TopDown', events: [] }]
+                  : [
+                      { id: 'sceneB', title: 'b', view: 'TopDown', events: [] },
+                      { id: 'entry-hub', title: 'dup-hub', view: 'TopDown', events: [] },
+                    ],
+            },
+          ],
+        }
+      })
+
+      render(
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+
+      await resolveMissingScene('sceneA')
+      expect(warnSpy).not.toHaveBeenCalled()
+
+      await resolveMissingScene('sceneB')
+      expect(warnSpy).toHaveBeenCalled()
+      const warned = warnSpy.mock.calls.some(
+        (call) => typeof call[0] === 'string' && call[0].includes('entry-hub')
+      )
+      expect(warned).toBe(true)
+    })
+
+    it('並行 resolveMissingScene 呼び出し（sceneA/sceneB を同時開始し、後発の sceneB を先に確定させる）でも allScenes が退行しない', async () => {
+      mockThreeFileProject()
+
+      const deferredA = deferred<{ path: string; sha: string; content: string }>()
+      const deferredB = deferred<{ path: string; sha: string; content: string }>()
+      getContentsMock.mockImplementation(async (_name: string, path: string) => {
+        if (path === 'script.md') return { path, sha: 'x', content: path }
+        if (path === 'content/scripts/routeA.md') return deferredA.promise
+        if (path === 'content/scripts/routeB.md') return deferredB.promise
+        throw new Error(`unexpected path ${path}`)
+      })
+
+      render(
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+
+      const resolver = lastNovelPlayerProps().onResolveMissingScene as (
+        id: string
+      ) => Promise<EventScene[] | null>
+
+      let resultA: EventScene[] | null = null
+      let resultB: EventScene[] | null = null
+      await act(async () => {
+        const pA = resolver('sceneA').then((r) => {
+          resultA = r
+        })
+        const pB = resolver('sceneB').then((r) => {
+          resultB = r
+        })
+        // sceneB 側（後発）の fetch を先に解決し、その後で sceneA 側（先発）を解決する。
+        // 「後から確定した方が state を巻き戻さない」ことを確認するため、あえて
+        // 呼び出し順とは逆に解決順を操作する。
+        deferredB.resolve({
+          path: 'content/scripts/routeB.md',
+          sha: 'x',
+          content: 'content/scripts/routeB.md',
+        })
+        await Promise.resolve()
+        await Promise.resolve()
+        deferredA.resolve({
+          path: 'content/scripts/routeA.md',
+          sha: 'x',
+          content: 'content/scripts/routeA.md',
+        })
+        await Promise.all([pA, pB])
+      })
+
+      expect(resultA).not.toBeNull()
+      expect(resultB).not.toBeNull()
+
+      const finalScenes = lastJumpSceneIndex()
+      expect(findSceneById(finalScenes, 'entry-hub')).toBeDefined()
+      expect(findSceneById(finalScenes, 'sceneA')).toBeDefined()
+      expect(findSceneById(finalScenes, 'sceneB')).toBeDefined()
+    })
   })
 
   describe('#607: event_image_transition のマルチファイル継承（サブMD自身が宣言していない場合、エントリの実効値をparse前に注入する）', () => {
@@ -982,6 +1218,14 @@ describe('PlayerScreen', () => {
     expect(loadedIds).not.toContain('scene-content/scripts/bad.md')
     // 全体としてエラー表示にはならない
     expect(screen.queryByRole('alert')).toBeNull()
+
+    // #667: resolveMissingScene の戻り値だけでなく、NovelPlayer へ渡す React state
+    // （jumpSceneIndex= props）も good.md 由来のシーンぶんだけ増分しており、
+    // 取得に失敗した bad.md 由来のシーンで汚染されていないこと。
+    const jumpIds = lastJumpSceneIndex().map((s) => s.id)
+    expect(jumpIds).toContain('scene-script.md')
+    expect(jumpIds).toContain('scene-content/scripts/good.md')
+    expect(jumpIds).not.toContain('scene-content/scripts/bad.md')
   })
 
   it('#284: シーン ID 重複時は先勝ち + warning を出す', async () => {

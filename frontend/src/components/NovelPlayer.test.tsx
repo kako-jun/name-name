@@ -29,6 +29,7 @@ import {
 } from '../game/novelLayout'
 import { INACTIVITY_MS } from '../game/SeekBar'
 import type { NovelGameState } from '../game/GameState'
+import type { Event, EventScene } from '../types'
 
 // NovelRenderer を完全スタブ化（PixiJS 構築・init を無効化）。
 // NovelPlayer は init().then(...) 内で多数の setter を呼ぶので、すべて no-op で受ける。
@@ -705,6 +706,55 @@ describe('NovelPlayer speakerNudge の renderer 転送 (#382)', () => {
     rerender(<NovelPlayer events={[]} speakerNudge={true} />)
     await flushAsync()
     expect(r.setSpeakerNudge).toHaveBeenCalledWith(true)
+  })
+})
+
+// #671 M1 回帰テスト: events/scenes 用の effect と jumpSceneIndex 用の effect を分離し、
+// jumpSceneIndex 単独の変化で setEvents（内部で resetAndStartEvents を呼び再生位置を
+// リセットする）が誤発火しないことを固定する。
+//
+// 背景: PlayerScreen.resolveMissingScene() は cross-file jumpToScene() のたびに
+// buildSceneIndex() が返す新しい配列参照を jumpSceneIndex= に渡す（events= 自体は変えない）。
+// 分離前は [events, scenes, jumpSceneIndex] 単一の useEffect だったため、jumpSceneIndex の
+// 参照が変わるだけで setEvents(events) が無条件に呼ばれ、プレイ中のシーンが entry doc 冒頭まで
+// 巻き戻る回帰があった（マルチMD構成の通常プレイで発生）。setJumpSceneIndex 自体は
+// `this.allScenes = scenes` の代入のみで副作用が無いため、こちらは呼ばれてよい。
+describe('NovelPlayer events/jumpSceneIndex 同期 effect の分離 (#671 M1)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+  const fixedEvents: Event[] = []
+  const sceneA: EventScene = { id: 'scene-a', title: 'Scene A', view: 'TopDown', events: [] }
+  const sceneB: EventScene = { id: 'scene-b', title: 'Scene B', view: 'TopDown', events: [] }
+
+  it('H1: jumpSceneIndex だけを新しい配列参照に差し替えても setEvents は再発火しない（events 参照は不変）', async () => {
+    const { rerender } = render(<NovelPlayer events={fixedEvents} jumpSceneIndex={[sceneA]} />)
+    await flushAsync()
+    const r = lastRenderer()
+    // mount 直後（init 内の直接呼び出し + 反映用 effect の初回発火分）をクリアし、
+    // 以降の差分だけを見る。
+    r.setEvents.mockClear()
+    r.setJumpSceneIndex.mockClear()
+
+    // buildSceneIndex() が毎回新しい配列を返す実挙動を模して、内容が変わっても events は
+    // 同一参照のまま jumpSceneIndex だけを新しい配列に差し替える。
+    rerender(<NovelPlayer events={fixedEvents} jumpSceneIndex={[sceneA, sceneB]} />)
+    await flushAsync()
+
+    expect(r.setJumpSceneIndex).toHaveBeenCalledWith([sceneA, sceneB])
+    expect(r.setEvents).not.toHaveBeenCalled()
+  })
+
+  it('H2: events 自体が変わった場合は従来どおり setEvents が呼ばれる（分離後も正当な用途は維持する対照ケース）', async () => {
+    const otherEvents: Event[] = []
+    const { rerender } = render(<NovelPlayer events={fixedEvents} jumpSceneIndex={[sceneA]} />)
+    await flushAsync()
+    const r = lastRenderer()
+    r.setEvents.mockClear()
+    r.setJumpSceneIndex.mockClear()
+
+    rerender(<NovelPlayer events={otherEvents} jumpSceneIndex={[sceneA]} />)
+    await flushAsync()
+
+    expect(r.setEvents).toHaveBeenCalledWith(otherEvents)
   })
 })
 
