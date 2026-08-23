@@ -330,7 +330,7 @@ mod tests {
             ..AmbientEffects::default()
         };
         let out = apply_ambient_effects(&pixels, 10, 10, effects, 0);
-        for chunk in out.chunks_exact(4) {
+        for chunk in out.as_chunks::<4>().0 {
             assert_eq!(chunk[3], 128);
         }
     }
@@ -348,7 +348,7 @@ mod tests {
         };
         let out = apply_ambient_effects(&pixels, 12, 12, effects, 0);
         let first: Vec<u8> = out[0..4].to_vec();
-        for chunk in out.chunks_exact(4) {
+        for chunk in out.as_chunks::<4>().0 {
             assert_eq!(chunk, first.as_slice());
         }
     }
@@ -386,7 +386,7 @@ mod tests {
         };
         let out = apply_ambient_effects(&pixels, 16, 8, effects, 12345);
         assert_eq!(out.len(), pixels.len());
-        for chunk in out.chunks_exact(4) {
+        for chunk in out.as_chunks::<4>().0 {
             assert_eq!(chunk[3], 200);
         }
     }
