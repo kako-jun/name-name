@@ -1467,6 +1467,147 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
   })
 })
 
+// #664: `?scene=`（initialSceneId）/ `debug_scene` / `debug_script` による deep-link・デバッグ
+// 起動は kako-jun が意図的に踏むセッションで、実プレイの進行として扱うべきではない。
+// これらのいずれかが有効な間は renderer.setOnSceneChange 自体を配線せず、startFrom/playScript
+// 内部の同期 onSceneChangeCallback 発火があっても quickSave() が自動発火しないことを縛る。
+//
+// 決定表（D=docKey truthy, S=initialSceneId truthy, Cs=debug_scene 有効値, Cp=debug_script が
+// 1件以上のStepを生成）: #4(D,S)/#5(D,Cs)/#6(D,Cp) は配線「無」、#9(D,Cp=空文字)/#10(D,Cs=空文字)
+// は判定がフォールスルーして配線「有」に戻る境界値（見落としやすい）。
+//
+// 非適用: 3スロットメニュー相当の手動セーブ UI は NovelPlayer.tsx / このテストファイル内には
+// 存在しない（該当 UI は NovelRenderer 側の SaveLoadOverlay(PixiJS) が持ち、renderer.quickSave()/
+// SaveManager を直接呼ぶ別コンポーネントの管轄）。ただし F5 キー押下によるクイックセーブは
+// NovelPlayer.tsx 自身の window keydown ハンドラ（#142）が担っており、本ガードとは別配線で
+// renderer.quickSave() を直接呼ぶため、664-9 でその非干渉を確認する。
+describe('NovelPlayer deep-link/デバッグ起動時の自動クイックセーブ配線抑制 (#664)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+
+  it('664-1: docKey + `?scene=`(initialSceneId) 指定 → setOnSceneChange は配線されず、startFrom は従来どおり呼ばれる（決定表#4）', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="scene-x" />)
+    await flushAsync()
+    const r = lastRenderer()
+
+    expect(r.setOnSceneChange).not.toHaveBeenCalled()
+    expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+  })
+
+  it('664-2: docKey + debug_scene 指定 → setOnSceneChange は配線されず、startFrom は debug_scene 由来で呼ばれる（決定表#5）', async () => {
+    window.history.pushState({}, '', '?debug_scene=dbg-scene')
+    try {
+      render(<NovelPlayer events={[]} docKey="proj-a" />)
+      await flushAsync()
+      const r = lastRenderer()
+
+      expect(r.setOnSceneChange).not.toHaveBeenCalled()
+      expect(r.startFrom).toHaveBeenCalledTimes(1)
+      expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'dbg-scene' })
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+
+  it('664-3: docKey + debug_script 指定 → setOnSceneChange は配線されず、renderer.playScript が期待する Steps で呼ばれる（決定表#6・playScript呼び出し自体を初固定）', async () => {
+    window.history.pushState({}, '', '?debug_script=advance,choice:1-1')
+    try {
+      render(<NovelPlayer events={[]} docKey="proj-a" />)
+      await flushAsync()
+      const r = lastRenderer()
+
+      expect(r.setOnSceneChange).not.toHaveBeenCalled()
+      expect(r.playScript).toHaveBeenCalledTimes(1)
+      expect(r.playScript).toHaveBeenCalledWith([
+        { type: 'advance' },
+        { type: 'choice', jump: '1-1' },
+      ])
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+
+  it('664-4: docKey + `debug_script=`（空文字・0ステップ）→ フォールスルーで hasDeepLinkOrDebugStart が偽になり setOnSceneChange は従来どおり配線される（決定表#9・境界値）', async () => {
+    window.history.pushState({}, '', '?debug_script=')
+    try {
+      render(<NovelPlayer events={[]} docKey="proj-a" />)
+      await flushAsync()
+      const r = lastRenderer()
+
+      expect(r.setOnSceneChange).toHaveBeenCalledTimes(1)
+      expect(r.playScript).not.toHaveBeenCalled()
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+
+  it('664-5: docKey + `debug_scene=`（空文字）→ 同様に setOnSceneChange は従来どおり配線される（決定表#10・境界値）', async () => {
+    window.history.pushState({}, '', '?debug_scene=')
+    try {
+      render(<NovelPlayer events={[]} docKey="proj-a" />)
+      await flushAsync()
+      const r = lastRenderer()
+
+      expect(r.setOnSceneChange).toHaveBeenCalledTimes(1)
+      expect(r.startFrom).not.toHaveBeenCalled()
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+
+  it('664-6: initialSceneId と debug_scene が同時指定でも setOnSceneChange は配線されず、startFrom は debug_scene 側が後勝ちする（G10 拡張）', async () => {
+    window.history.pushState({}, '', '?debug_scene=dbg-scene')
+    try {
+      render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="prod-scene" />)
+      await flushAsync()
+      const r = lastRenderer()
+
+      expect(r.setOnSceneChange).not.toHaveBeenCalled()
+      expect(r.startFrom).toHaveBeenNthCalledWith(1, { sceneId: 'prod-scene' })
+      expect(r.startFrom).toHaveBeenNthCalledWith(2, { sceneId: 'dbg-scene' })
+      expect(r.startFrom).toHaveBeenCalledTimes(2)
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+
+  it('664-7: docKey + debug_script が複数ステップ（advance/choice混在）でも setOnSceneChange の呼び出し回数は0のまま（部分的な抑制漏れがない）', async () => {
+    window.history.pushState({}, '', '?debug_script=advance,advance,choice:1-1')
+    try {
+      render(<NovelPlayer events={[]} docKey="proj-a" />)
+      await flushAsync()
+      const r = lastRenderer()
+
+      expect(r.setOnSceneChange).toHaveBeenCalledTimes(0)
+      expect(r.playScript).toHaveBeenCalledWith([
+        { type: 'advance' },
+        { type: 'advance' },
+        { type: 'choice', jump: '1-1' },
+      ])
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+
+  it('664-8: docKey + initialSceneId={null}（明示null）→ `!!null` は偽のため setOnSceneChange は従来どおり配線される（G3 視点の拡張）', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId={null} />)
+    await flushAsync()
+    const r = lastRenderer()
+
+    expect(r.setOnSceneChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('664-9: `?scene=` deep-link 起動中でも F5 キー押下は renderer.quickSave() を直接呼ぶ（自動配線ガードとは独立の手動セーブ経路・#142）', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="scene-x" />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.setOnSceneChange).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(window, { key: 'F5' })
+
+    expect(r.quickSave).toHaveBeenCalledTimes(1)
+  })
+})
+
 // #442 self-review should-4: fluid（aspect_ratio: auto）モードの中核契約
 // ——ResizeObserver が向きカテゴリ変化を検知したら renderer を再マウントする——を
 // コンポーネントレベルで検証する。J1/J2（非fluid）は「再マウントしない」side しか見ておらず、
