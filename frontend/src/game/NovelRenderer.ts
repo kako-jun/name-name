@@ -3296,11 +3296,19 @@ export class NovelRenderer {
     // 既存の sentenceIndex クランプと同種の防御として、ここで最後の有効ページへクランプし、
     // 読んでいた位置になるべく近いページに留める。goBack/seekTo 等の通常復元では textIndex は
     // 既に有効範囲内なので no-op（advance() 自体の挙動には影響しない）。
-    const restoredTextEvtForClamp = getTextEvent(this.resolvedEvents[this.eventIndex])
-    if (restoredTextEvtForClamp) {
-      const pageCount = this.currentPageCount(restoredTextEvtForClamp)
+    const clampTextEvt = getTextEvent(this.resolvedEvents[this.eventIndex])
+    if (clampTextEvt) {
+      const pageCount = this.currentPageCount(clampTextEvt)
       if (pageCount > 0 && this.textIndex >= pageCount) {
         this.textIndex = pageCount - 1
+        // セルフレビュー must S1 (#666): textIndex を新ページへクランプしても、直前に代入済みの
+        // this.sentenceIndex（旧ページの文 index）はそのまま残ってしまう。render() の #283
+        // クランプは表示用ローカル変数だけを補正し this.sentenceIndex 自体は直さないため、
+        // goBack()（this.sentenceIndex > 0 を見る）が旧ページの生値を見て「新ページの先頭文
+        // まで見た目上変化しない goBack を複数回叩かないと前ページへ戻れない」というファントム
+        // 動作を起こす。クランプが発火した＝ページが変わったので、新ページの先頭文（0）から
+        // 表示し直すのが安全側の挙動として妥当。
+        this.sentenceIndex = 0
       }
     }
 

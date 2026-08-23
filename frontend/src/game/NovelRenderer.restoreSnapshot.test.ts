@@ -692,6 +692,49 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(newR.getSnapshot().textIndex).toBe(oldTextIndex)
   })
 
+  it('T-F3: クランプ発火時に sentenceIndex も新ページ範囲にリセットされ goBack がファントムにならない（#666 セルフレビュー must S1）', () => {
+    // T-F2 と同じ fluid remount 経路（16:9→9:16、ページ数減少）で、旧ページの
+    // sentenceIndex（例: 3）がクランプ発火後も生き残っていないかを確認する。
+    expect(newPageCountWide).toBeLessThan(oldPageCountNarrow)
+
+    const oldTextIndex = oldPageCountNarrow - 1 // 旧レイアウト（16:9）での最終ページ
+    const oldR = new NovelRenderer({ aspectRatio: '16:9' })
+    muteAudio(oldR)
+    oldR.setDialogStyle('novel')
+    oldR.setScenes(FLUID_SCENES)
+    oldR.restoreSnapshot(
+      craftSnapshot({ sceneId: 'fluid', eventIndex: 0, textIndex: oldTextIndex, sentenceIndex: 3 })
+    )
+    const oldSnapshot = oldR.getSnapshot()
+    // 旧レイアウトでは textIndex が境界内 → クランプは発火せず sentenceIndex もそのまま残る
+    // （= render() の #283 クランプは表示用ローカル変数だけを補正するため、生値はここでは 3 のまま）。
+    expect(oldSnapshot.textIndex).toBe(oldTextIndex)
+    expect(oldSnapshot.sentenceIndex).toBe(3)
+
+    // fluid remount: 新しい aspectRatio の renderer インスタンスへ旧 snapshot をそのまま渡す
+    const newR = new NovelRenderer({ aspectRatio: '9:16' })
+    muteAudio(newR)
+    newR.setDialogStyle('novel')
+    newR.setScenes(FLUID_SCENES)
+    newR.restoreSnapshot(oldSnapshot)
+
+    const newSnapshot = newR.getSnapshot()
+    expect(newSnapshot.textIndex).toBe(newPageCountWide - 1) // T-F2 と同じクランプ結果
+    // S1 修正: textIndex クランプ発火時に sentenceIndex も新ページ先頭（0）へリセットされる
+    expect(newSnapshot.sentenceIndex).toBe(0)
+
+    // ファントム goBack 回帰: sentenceIndex が旧ページの生値（3）のまま残っていると、
+    // goBack() は「同ページ内をまだ 1 文戻れる」と誤認して textIndex を変えずに
+    // sentenceIndex だけ減らし、見た目が変化しない（ファントム）操作になる。
+    // 修正後は sentenceIndex===0 のためページ送り分岐に入り、1 回の goBack() で
+    // textIndex が確実に 1 つ前のページへ戻る。
+    const beforeTextIndex = newSnapshot.textIndex
+    expect(beforeTextIndex).toBeGreaterThan(0) // 前ページが存在する前提（本テスト成立条件）
+    newR.goBack()
+    const afterSnapshot = newR.getSnapshot()
+    expect(afterSnapshot.textIndex).toBe(beforeTextIndex - 1)
+  })
+
   // ===== N. #663 クランプの外側ガード（非適用ケースの回帰）=====
 
   it('T-Z1: pageCount===0（adv・text:[]）はクランプをスキップし例外を投げない', () => {
