@@ -578,4 +578,164 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(resolver).not.toHaveBeenCalled()
   })
+
+  // ===== M. #663 fluid remount textIndex クランプ =====
+  //
+  // fluid（`aspect_ratio: auto`）で画面幅が向きカテゴリを跨ぐと NovelPlayer は新しい
+  // gameWidth/gameHeight で NovelRenderer を作り直し、旧 renderer の getSnapshot() を
+  // restoreSnapshot() でそのまま渡す (#442)。novel かつ sentence_per_page:false（既定）は
+  // ページ折り返しがテキスト領域の高さに依存するため、新レイアウトでは同じイベントでも
+  // ページ数が変わり得る。applyState() は #663 で「復元直後の textIndex を現イベントの
+  // 再計算後ページ数へクランプする」防御を追加した。ここではその境界値と、fluid remount の
+  // 実バグ経路そのもの（novel で2 renderer 間の aspectRatio 差し替え）を検証する。
+
+  // B系: adv（既定・sentence_per_page:false）はページ数が textEvt.text.length に固定される
+  // （幅非依存）ため、renderer を作り直さず単一 renderer への restoreSnapshot だけで
+  // クランプの境界値（`>=` 取り違え検出）を検証できる。eventIndex:0 にダミーイベントを
+  // 挟み、eventIndex:1 の3行 adv イベントを対象にすることで「クランプは textIndex だけに
+  // 作用し eventIndex は無変更」も同時に確認する。
+  const B_SCENES: EventScene[] = [scene('clamp', [narration('pre'), narration('l1', 'l2', 'l3')])]
+
+  it('T-B1: textIndex===pageCount-1（境界内）はクランプされず値を保持する', () => {
+    const r = makeRenderer(B_SCENES)
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'clamp', eventIndex: 1, textIndex: 2 }))
+    const s = r.getSnapshot()
+    expect(s.textIndex).toBe(2)
+    expect(s.eventIndex).toBe(1)
+  })
+
+  it('T-B2: textIndex===pageCount（境界）は pageCount-1 にクランプされる（`>=`取り違え検出の本丸）', () => {
+    const r = makeRenderer(B_SCENES)
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'clamp', eventIndex: 1, textIndex: 3 }))
+    const s = r.getSnapshot()
+    expect(s.textIndex).toBe(2)
+    // クランプは textIndex だけに作用する（eventIndex は無変更・#461 との独立性）
+    expect(s.eventIndex).toBe(1)
+  })
+
+  it('T-B3: textIndex===pageCount+1（境界外）も同じく pageCount-1 にクランプされる', () => {
+    const r = makeRenderer(B_SCENES)
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'clamp', eventIndex: 1, textIndex: 4 }))
+    expect(r.getSnapshot().textIndex).toBe(2)
+  })
+
+  // F系: novel（sentence_per_page:false）は改頁がテキスト領域の高さに依存する。#663 の実バグ
+  // 経路（fluid remount で新 renderer インスタンスが作られる）を、aspectRatio が異なる
+  // 2つの renderer 間の restoreSnapshot で再現する（NovelRenderer.novel.test.ts の
+  // measureNovelCap() パターンを流用）。16:9（横長・テキスト領域が低い→cap 小）と
+  // 9:16（縦長・テキスト領域が高い→cap 大）の組み合わせで、同じ文数でもページ数が変わる
+  // ことを利用する。
+  function capFor(aspectRatio: '16:9' | '9:16'): number {
+    const probe = new NovelRenderer({ aspectRatio })
+    probe.setDialogStyle('novel')
+    return (
+      probe as unknown as { dialogBox: { novelMaxLinesPerPage(): number } }
+    ).dialogBox.novelMaxLinesPerPage()
+  }
+  const CAP_16_9 = capFor('16:9')
+  const CAP_9_16 = capFor('9:16')
+  // 16:9 の cap ちょうど3ページになる文数（NovelRenderer.novel.test.ts の
+  // sentencesForThreePages と同じ式）。9:16 はテキスト領域が縦に広く cap が大きいため、
+  // 同じ文数がより少ないページ数に収まる（各テストの前提を明示的に assert する）。
+  const FLUID_N = CAP_16_9 * 2 + 1
+  const FLUID_TEXT = Array.from({ length: FLUID_N }, (_, k) => `${k + 1}。`).join('')
+  const FLUID_SCENES: EventScene[] = [scene('fluid', [narration(FLUID_TEXT)])]
+  const oldPageCountNarrow = Math.ceil(FLUID_N / CAP_16_9) // 16:9 での改頁数（3 になるよう構成）
+  const newPageCountWide = Math.ceil(FLUID_N / CAP_9_16) // 9:16 での改頁数（cap 増でページ減）
+
+  it('T-F2: novel×fluid remount(16:9→9:16、ページ数減少)で旧textIndexが新pageCount以上になりクランプされる（#663実バグ経路の直接再現）', () => {
+    // 前提: 9:16 は cap が大きく、同じ文数でもページ数が減る（本テスト成立条件）
+    expect(newPageCountWide).toBeLessThan(oldPageCountNarrow)
+
+    const oldTextIndex = oldPageCountNarrow - 1 // 旧レイアウト（16:9）での最終ページ
+    const oldR = new NovelRenderer({ aspectRatio: '16:9' })
+    muteAudio(oldR)
+    oldR.setDialogStyle('novel')
+    oldR.setScenes(FLUID_SCENES)
+    oldR.restoreSnapshot(
+      craftSnapshot({ sceneId: 'fluid', eventIndex: 0, textIndex: oldTextIndex })
+    )
+    const oldSnapshot = oldR.getSnapshot()
+    expect(oldSnapshot.textIndex).toBe(oldTextIndex) // 旧レイアウトでは境界内（no-op）
+
+    // fluid remount: 新しい aspectRatio の renderer インスタンスへ旧 snapshot をそのまま渡す
+    const newR = new NovelRenderer({ aspectRatio: '9:16' })
+    muteAudio(newR)
+    newR.setDialogStyle('novel')
+    newR.setScenes(FLUID_SCENES)
+    newR.restoreSnapshot(oldSnapshot)
+
+    expect(newR.getSnapshot().textIndex).toBe(newPageCountWide - 1)
+  })
+
+  it('T-F1: novel×fluid remount(9:16→16:9、ページ数増加)は旧textIndexが新pageCount未満のままクランプされない（T-F2との対）', () => {
+    expect(newPageCountWide).toBeLessThan(oldPageCountNarrow)
+
+    const oldTextIndex = newPageCountWide - 1 // 9:16（少ないページ数）での最終ページ
+    const oldR = new NovelRenderer({ aspectRatio: '9:16' })
+    muteAudio(oldR)
+    oldR.setDialogStyle('novel')
+    oldR.setScenes(FLUID_SCENES)
+    oldR.restoreSnapshot(
+      craftSnapshot({ sceneId: 'fluid', eventIndex: 0, textIndex: oldTextIndex })
+    )
+    const oldSnapshot = oldR.getSnapshot()
+    expect(oldSnapshot.textIndex).toBe(oldTextIndex)
+
+    const newR = new NovelRenderer({ aspectRatio: '16:9' })
+    muteAudio(newR)
+    newR.setDialogStyle('novel')
+    newR.setScenes(FLUID_SCENES)
+    newR.restoreSnapshot(oldSnapshot)
+
+    // 新レイアウト(16:9)はページ数が増える方向なので旧 textIndex はそのまま有効範囲内 → no-op
+    expect(newR.getSnapshot().textIndex).toBe(oldTextIndex)
+  })
+
+  // ===== N. #663 クランプの外側ガード（非適用ケースの回帰）=====
+
+  it('T-Z1: pageCount===0（adv・text:[]）はクランプをスキップし例外を投げない', () => {
+    const r = makeRenderer([scene('z1', [narration()])]) // text: [] の adv イベント
+    expect(() =>
+      r.restoreSnapshot(craftSnapshot({ sceneId: 'z1', eventIndex: 0, textIndex: 0 }))
+    ).not.toThrow()
+    expect(r.getSnapshot().textIndex).toBe(0)
+  })
+
+  it('T-Z2: 非テキストイベント（BackgroundColor）は外側ガードにより textIndex が無変更', () => {
+    const r = makeRenderer([
+      scene('z2', [narration('l1'), { BackgroundColor: { color: '#000000' } }]),
+    ])
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'z2', eventIndex: 1, textIndex: 5 }))
+    expect(r.getSnapshot().textIndex).toBe(5)
+  })
+
+  it('T-Z3: eventIndex が resolvedEvents.length 以上でも例外を投げず textIndex は無変更', () => {
+    const r = makeRenderer([scene('z3', [narration('only')])])
+    expect(() =>
+      r.restoreSnapshot(craftSnapshot({ sceneId: 'z3', eventIndex: 99, textIndex: 5 }))
+    ).not.toThrow()
+    expect(r.getSnapshot().textIndex).toBe(5)
+  })
+
+  it('T-L1: クランプ発火（T-F2と同じ fluid remount 経路）でも console.warn/console.error は呼ばれない', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const oldR = new NovelRenderer({ aspectRatio: '16:9' })
+    muteAudio(oldR)
+    oldR.setDialogStyle('novel')
+    oldR.setScenes(FLUID_SCENES)
+    oldR.restoreSnapshot(
+      craftSnapshot({ sceneId: 'fluid', eventIndex: 0, textIndex: oldPageCountNarrow - 1 })
+    )
+    const newR = new NovelRenderer({ aspectRatio: '9:16' })
+    muteAudio(newR)
+    newR.setDialogStyle('novel')
+    newR.setScenes(FLUID_SCENES)
+    newR.restoreSnapshot(oldR.getSnapshot())
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
 })
