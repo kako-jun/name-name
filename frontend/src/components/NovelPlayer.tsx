@@ -621,6 +621,11 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       if (docKey) {
         renderer.setDocKey(docKey)
       }
+      // URL クエリによるデバッグ起点指定の事前判定 (#664)。実際の startFrom/playScript 発火は
+      // 下の「URL クエリによるデバッグ起点指定」ブロックで行うが、`?debug_scene=`/`?debug_script=`
+      // の有無自体は自動クイックセーブの抑制判定（すぐ下）でも必要なため、ここで一度だけ
+      // window.location.search をパースして両方で使い回す（重複パース回避）。
+      const debugQueryResult = parseDebugQuery(window.location.search)
       // シーン切り替えごとの自動クイックセーブ (#578)。milestone 進行・複数ルートを持つ作品
       // （Gymnasia 等）では、フラグ（GameState.flags）が手動セーブ（3スロットメニュー / F5）
       // をしない限りブラウザを閉じる・リロードするたびに消える。既読は readProgress.ts で
@@ -635,7 +640,14 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       // プレビューを開くたびに同じ '' 名前空間へ自動書き込みし合う「複数プロジェクトの
       // セーブ衝突」を Editor 文脈で再現してしまう（本 Issue が Player 側で直そうとした
       // 問題そのもの）。
-      if (docKey) {
+      // #664: `?scene=`（initialSceneId）/ `?debug_scene=` / `?debug_script=` による起動は
+      // kako-jun が意図的に踏む deep-link/デバッグセッションであり、実プレイの進行として
+      // 扱うべきではない。この判定が真の間は自動配線自体を行わない（＝この renderer
+      // インスタンスが生きている間、startFrom/playScript/choice ジャンプ起因のどのシーン
+      // 変更でも quickSave() は一切自動発火しない）。手動セーブ（3スロットメニュー / F5）は
+      // quickSave() を直接呼ぶ別経路なのでこのガードの影響を受けず、従来どおり機能する。
+      const hasDeepLinkOrDebugStart = !!initialSceneId || debugQueryResult !== null
+      if (docKey && !hasDeepLinkOrDebugStart) {
         renderer.setOnSceneChange(() => {
           renderer.quickSave()
         })
@@ -748,10 +760,11 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
         // PlayerScreen 側の責務（呼び出し時点で jumpSceneIndex に反映済みの前提）。ここでは
         // 既存の startFrom(#220) をそのまま呼ぶだけで、renderer 側に新規ロジックは持ち込まない。
         // 不正/未解決 sceneId は startFrom 内で no-op（現行どおりエントリ再生にフォールバック）。
-        // #578 テスト設計時に指摘・容認済みの副作用: docKey ありでこの分岐に入ると、startFrom
-        // 内部の同期 onSceneChangeCallback 発火（NovelRenderer 側）が即座に quickSave() を
-        // 走らせ、deep-link 起動の時点で直前セッションのクイックセーブを上書きする。deep-link
-        // は主に埋め込み/デバッグ用途（通しプレイの起点にしない）のため許容する。
+        // #664: この分岐に入るのは hasDeepLinkOrDebugStart が真（initialSceneId 有り）の場合に
+        // 限られるため、上で setOnSceneChange 自体が配線されていない。startFrom 内部で
+        // onSceneChangeCallback が同期発火しても null であり、quickSave() は走らない
+        // （直前セッションのクイックセーブを黙って上書きしていた #578 テスト設計時の既知の
+        // 副作用はここで解消済み）。
         renderer.startFrom({ sceneId: initialSceneId })
       } else if (willAutoQuickLoad) {
         // 起動時の自動クイックロード (#578, #620 再修正): pendingSnapshot（fluid 再マウント
@@ -780,11 +793,15 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       // debug_scene は sceneId 前提。scenes / jumpSceneIndex のどちらの索引でも解決する。
       // initialSceneId(#386) より後に評価するため、debug_scene が指定時に優先される
       // （デバッグ目的の上書きを production 経路より優先させる）。
-      const debug = parseDebugQuery(window.location.search)
-      if (debug && 'script' in debug) {
-        void renderer.playScript(debug.script)
-      } else if (debug && 'scene' in debug) {
-        renderer.startFrom(debug.scene)
+      // #664: パース結果は上の hasDeepLinkOrDebugStart 判定と同じ debugQueryResult を使い回す
+      // （window.location.search の再パースはしない）。debug_script/debug_scene のどちらでも
+      // 上で setOnSceneChange 自体が配線されていないため、この後の playScript（内部の choice
+      // ステップは jumpToScene 経由）/startFrom がどれだけシーンを切り替えても quickSave() は
+      // 自動発火しない。
+      if (debugQueryResult && 'script' in debugQueryResult) {
+        void renderer.playScript(debugQueryResult.script)
+      } else if (debugQueryResult && 'scene' in debugQueryResult) {
+        renderer.startFrom(debugQueryResult.scene)
       }
       onRendererReady?.(renderer)
       // タイトル画面 (#628 フェーズ2b): ここまで到達した時点で renderer は setAssetBaseUrl 済み
