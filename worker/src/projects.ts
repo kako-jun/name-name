@@ -8,7 +8,7 @@ import type { Env, Project } from "./types";
 
 export const PROJECTS: ReadonlyArray<Project> = [
   { name: "ogurasia", title: "おぐらじあ", repo: "kako-jun/ogurasia" },
-  { name: "attama", title: "あったま空っぽのほうが", repo: "kako-jun/attama" },
+  { name: "attama", title: "あったま空っぽの邦画", repo: "kako-jun/attama" },
   { name: "skirts-colour", title: "宇宙の果てわ、なに色か？", repo: "kako-jun/skirts-colour" },
   { name: "friday-1930", title: "Friday 19:30", repo: "kako-jun/friday-1930" },
   { name: "gymnasia", title: "Gymnasia", repo: "kako-jun/gymnasia", scriptsDir: "docs/scripts/drafts" },
