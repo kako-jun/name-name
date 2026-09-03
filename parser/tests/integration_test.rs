@@ -3445,6 +3445,330 @@ fn test_se_multi_file_omitted_count_and_gap_default_to_none() {
 }
 
 #[test]
+fn test_se_count_zero_parses_to_some_zero() {
+    // 選択数=0 は Some(0) として parse される（K=0=無音はランタイム側の責務、#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav, 選択数=0]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: Some(0),
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_count_exceeding_pool_size_not_clamped_by_parser() {
+    // 選択数がpool超過（N=3にK=10）でも、パーサー段階ではclampせずそのまま保持する
+    // （clampはランタイム責務、#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav,c.wav, 選択数=10]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec![
+                "a.wav".to_string(),
+                "b.wav".to_string(),
+                "c.wav".to_string()
+            ],
+            fade_ms: None,
+            count: Some(10),
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_gap_min_greater_than_max_not_swapped_by_parser() {
+    // 間隔=200-50（min>max）はパーサー段階ではswapせずそのまま保持する
+    // （正規化はランタイム責務、#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav, 間隔=200-50]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: None,
+            gap_min_ms: Some(200),
+            gap_max_ms: Some(50),
+        }
+    );
+}
+
+#[test]
+fn test_se_gap_min_equals_max_parses_as_is() {
+    // 間隔=100-100（min=max）はそのままparseされる（#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav, 間隔=100-100]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: None,
+            gap_min_ms: Some(100),
+            gap_max_ms: Some(100),
+        }
+    );
+}
+
+#[test]
+fn test_se_gap_without_hyphen_falls_back_to_none() {
+    // 間隔=100（ハイフン無し、不正形式）はNoneにfallbackする（#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav, 間隔=100]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_gap_non_numeric_falls_back_to_none() {
+    // 間隔=abc-xyz（非数値）はNoneにfallbackする（#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav, 間隔=abc-xyz]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_count_non_numeric_falls_back_to_none() {
+    // 選択数=abc（非数値）はNoneにfallbackする（#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav, 選択数=abc]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_unknown_kv_key_ignored_and_not_mixed_into_paths() {
+    // 未知のkvキー（音量=50）は無視され、pathsにも混入しない（#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav, 音量=50]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_kv_only_with_no_paths_falls_back_to_single_empty_path() {
+    // [SE: 選択数=1] のようにkvのみでパス0件の記述ミスは、
+    // 空文字列1件へフォールバックする（paths が空配列にならない防御、#672）
+    let input = "## s: テスト\n\n[SE: 選択数=1]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["".to_string()],
+            fade_ms: None,
+            count: Some(1),
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_english_alias_round_trips_through_emit() {
+    // count=/gap= 英語aliasで書いたSEも、emit → parse で内容が保持される（#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav,c.wav, count=1, gap=100-300]\n";
+    let doc1 = parser::parse(input);
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc1, doc2,
+        "count=/gap= 英語aliasのSEもemit→parseで保持される (#672): {emitted}"
+    );
+}
+
+#[test]
+fn test_se_gap_min_greater_than_max_round_trips_without_normalization() {
+    // 間隔min>max（200-50）がparse段階ではswapされずそのまま保持されることを、
+    // emit → parse でも維持されることまで確認する（#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav, 間隔=200-50]\n";
+    let doc1 = parser::parse(input);
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc1, doc2,
+        "間隔min>maxはemit→parseでもswapされず保持される (#672): {emitted}"
+    );
+    let events = &doc2.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: None,
+            gap_min_ms: Some(200),
+            gap_max_ms: Some(50),
+        }
+    );
+}
+
+#[test]
+fn test_se_count_exceeding_pool_size_round_trips_without_clamp() {
+    // 選択数>N（pool超過）がparse段階ではclampされずそのまま保持されることを、
+    // emit → parse でも維持されることまで確認する（#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav,c.wav, 選択数=10]\n";
+    let doc1 = parser::parse(input);
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc1, doc2,
+        "選択数のpool超過はemit→parseでもclampされず保持される (#672): {emitted}"
+    );
+    let events = &doc2.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec![
+                "a.wav".to_string(),
+                "b.wav".to_string(),
+                "c.wav".to_string()
+            ],
+            fade_ms: None,
+            count: Some(10),
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_multi_path_with_fade_count_and_gap_round_trips() {
+    // 複数path+フェード+選択数+間隔を全部同時指定した記述がemit→parseで保持される（#672）
+    let input = "## s: テスト\n\n\
+        [SE: cloth-lift-v1.wav,cloth-lift-v2.wav,cloth-shift-small-v1.wav, フェード=150, 選択数=2, 間隔=50-200]\n";
+    let doc1 = parser::parse(input);
+    let events = &doc1.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec![
+                "cloth-lift-v1.wav".to_string(),
+                "cloth-lift-v2.wav".to_string(),
+                "cloth-shift-small-v1.wav".to_string(),
+            ],
+            fade_ms: Some(150),
+            count: Some(2),
+            gap_min_ms: Some(50),
+            gap_max_ms: Some(200),
+        }
+    );
+
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc1, doc2,
+        "フェード+選択数+間隔の全同時指定がemit→parseで保持される (#672): {emitted}"
+    );
+}
+
+#[test]
+fn test_se_single_path_with_count_exceeding_one_not_clamped() {
+    // 単一path+選択数=2（記述ミス相当）でも、パーサー段階ではclampしない（#672）
+    let input = "## s: テスト\n\n[SE: a.wav, 選択数=2]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string()],
+            fade_ms: None,
+            count: Some(2),
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_multi_file_with_japanese_filenames_parses() {
+    // 日本語ファイル名を含む複数候補もそのままparseされる（#672）
+    let input = "## s: テスト\n\n[SE: 布擦れ1.wav,布擦れ2.wav,衣擦れ.wav, 選択数=2]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec![
+                "布擦れ1.wav".to_string(),
+                "布擦れ2.wav".to_string(),
+                "衣擦れ.wav".to_string(),
+            ],
+            fade_ms: None,
+            count: Some(2),
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_empty_token_between_commas_not_mixed_into_paths() {
+    // [SE: a.wav,,b.wav] のように空トークンが混入しても、空要素がpathsに混入しない（#672）
+    let input = "## s: テスト\n\n[SE: a.wav,,b.wav]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
 fn test_audio_fade_round_trip() {
     // emit → parse で fade_ms が保持される (#145)
     let input = r#"---

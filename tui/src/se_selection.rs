@@ -103,6 +103,25 @@ mod tests {
     }
 
     #[test]
+    fn select_and_shuffle_count_one_returns_single_element() {
+        // count=Some(1) で要素数1を返す（既存テストには K=1 単体ケースの明示が無かった）
+        let paths = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut rng = StepRng::new(0, 1);
+        let selected = select_and_shuffle_se_files(&paths, Some(1), &mut rng);
+        assert_eq!(selected.len(), 1);
+        assert!(paths.contains(&selected[0]));
+    }
+
+    #[test]
+    fn select_and_shuffle_single_element_pool_with_count_exceeding_pool_does_not_panic() {
+        // N=1 の pool で count>N を渡してもパニックせず clamp されて1件返る
+        let paths = vec!["only".to_string()];
+        let mut rng = StepRng::new(0, 1);
+        let selected = select_and_shuffle_se_files(&paths, Some(5), &mut rng);
+        assert_eq!(selected, vec!["only".to_string()]);
+    }
+
+    #[test]
     fn select_and_shuffle_count_zero_returns_empty() {
         let paths = vec!["a".to_string(), "b".to_string()];
         let mut rng = StepRng::new(0, 1);

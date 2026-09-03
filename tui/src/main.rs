@@ -3500,6 +3500,58 @@ mod tests {
         );
     }
 
+    // ---- #672: select_and_resolve_se_paths（音声出力デバイス不要、純粋な選択+パス解決）----
+    //
+    // `select_and_resolve_se_paths` 自体は `AudioPlayer` を要求しない private 関数のため、
+    // `play_new_se_cues`（`audio: Option<&mut AudioPlayer>` 経由でしか呼べず、CI には
+    // 実オーディオデバイスが無いため `Some` を得られない、`audio.rs` の #537 節doc comment
+    // 参照）を介さず直接テストできる。
+
+    #[test]
+    fn select_and_resolve_se_paths_skips_individually_unresolvable_candidates() {
+        // 複数候補のうち一部が resolve_sound_path で弾かれても（パストラバーサル等の記述ミス
+        // 相当）、残りは解決される（#672、play_new_se_cues のdoc comment参照:
+        // 1件の記述ミスで他の SE まで巻き込んで無音にしない）。
+        let cue = playback::SeCue {
+            paths: vec![
+                "a.wav".to_string(),
+                "../evil.wav".to_string(),
+                "b.wav".to_string(),
+            ],
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
+        };
+        let config = Config::default();
+
+        let resolved = select_and_resolve_se_paths(&cue, &config);
+
+        assert_eq!(
+            resolved.len(),
+            2,
+            "不正パス1件だけ弾かれ、残り2件は解決されるはず: {resolved:?}"
+        );
+        assert!(resolved.contains(&config.resolve_sound_path("a.wav").unwrap()));
+        assert!(resolved.contains(&config.resolve_sound_path("b.wav").unwrap()));
+    }
+
+    #[test]
+    fn select_and_resolve_se_paths_count_zero_returns_empty_vec() {
+        // count=Some(0) のとき空Vecを返す（#672、play_new_se_cues 側はこれを「SE無し」として
+        // continue する契約、main.rs::play_new_se_cues のdoc comment参照）。
+        let cue = playback::SeCue {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            count: Some(0),
+            gap_min_ms: None,
+            gap_max_ms: None,
+        };
+        let config = Config::default();
+
+        let resolved = select_and_resolve_se_paths(&cue, &config);
+
+        assert!(resolved.is_empty());
+    }
+
     // ---- #537: 起動時音量同期 ----
     //
     // 以前ここには `sync_startup_volume`（`run()` が `AudioPlayer::try_new()` の直後に

@@ -769,7 +769,11 @@ export class NovelRenderer {
       screenHeight: this.screenHeight,
       borderless: this.defaultDialogBorderless,
     })
-    this.audioManager = new AudioManager()
+    // this.time を共有注入する (#672 フォローアップ)。playSeSequence の gap 待機を
+    // NovelRenderer の他タイマーと同じ TimeController 管理下に置き、cancelSeSequence() で
+    // シーン遷移・終劇・状態復元・dispose 時にキャンセルできるようにする
+    // （AudioManager コンストラクタのdoc comment参照）。
+    this.audioManager = new AudioManager(this.time)
     // 動画入力レイヤ (#252)。音声ミックスのため audioManager を注入する。
     this.videoLayer = new VideoLayer(this.screenWidth, this.screenHeight, this.audioManager)
     this.choiceOverlay = new ChoiceOverlay(this.screenWidth, this.screenHeight)
@@ -1294,6 +1298,10 @@ export class NovelRenderer {
     // 止める手段がない）。見た目のフェードと揃えて背景フェード時間（#407）でフェードアウトする。
     this.audioManager.stopBgm(eraseBackgroundFadeMs)
     this.currentBgmPath = null
+    // SE シーケンス（#672）も同じ理由でキャンセルする。終劇後は [SE:] イベントも二度と
+    // 来ないため、ここで止めないと gap 待機中の残り再生が "to be continued..." 画面の裏で
+    // 鳴り続ける（BGM と同じ M2 由来の理屈、AudioManager.cancelSeSequence のdoc comment参照）。
+    this.audioManager.cancelSeSequence()
 
     // 宣言的な終端状態を即座に確定する（背景/色地/動画/立ち絵はすべて「なし」）。
     // 見た目のフェードはこの下で別途アニメさせるが、GameState としては最初からこの値。
@@ -1681,6 +1689,10 @@ export class NovelRenderer {
     }
     this.choiceOverlay.hide()
     this.audioManager.stopBgm(0)
+    // SE シーケンス（#672）の gap 待機タイマーをキャンセルする。新しいシーンへ遷移した後も
+    // 前シーンで発火した [SE: 複数候補] の残りが setTimeout 越しにバックグラウンド再生され
+    // 続けないようにする（他タイマーと同じ規律、AudioManager.cancelSeSequence のdoc comment参照）。
+    this.audioManager.cancelSeSequence()
     if (options?.preserveBackgroundForTransition) {
       this.bgLoadToken++
       this.pendingBackgroundLoadToken = null
@@ -3294,6 +3306,10 @@ export class NovelRenderer {
       this.effectOverlay.alpha = 0
       this.effectOverlay.visible = false
     }
+    // SE シーケンス（#672）の gap 待機タイマーも画面効果と同じくリセットする。goBack/seekTo/
+    // セーブロードで別の時点へ飛ぶ以上、飛ぶ前の [SE: 複数候補] の残りを鳴らし続けるのは
+    // 画面効果の残留と同じ種類の事故（AudioManager.cancelSeSequence のdoc comment参照）。
+    this.audioManager.cancelSeSequence()
     // novel スクリム退避途中（#283）は演出中間状態なので復元では持たない。リセットして
     // 「退避していない」前提に倒す。render() が現在ページのスクリム可視性を再設定する。
     this.resetNovelScrimState()
