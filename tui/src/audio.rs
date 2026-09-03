@@ -25,7 +25,9 @@
 
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 
@@ -143,6 +145,49 @@ impl AudioPlayer {
         sink.set_volume(self.se_volume);
         sink.append(source);
         sink.detach();
+    }
+
+    /// 既に選択・シャッフル済みの SE パス一覧を、ランダム間隔を挟みながら順に再生する (#672)。
+    ///
+    /// `[SE: p1,p2,..., 選択数=K, 間隔=min-max]` の実際の再生を担う。選択・シャッフル自体は
+    /// 呼び出し元（`main.rs::select_and_resolve_se_paths`）が既に済ませている前提——ここは
+    /// 「渡された順に、合間だけランダムに空けて鳴らす」ことだけに責務を絞る（GUI版
+    /// `AudioManager.playSeSequence` 相当、doctrine 規律4「単一責務」）。
+    ///
+    /// gap の待機はメインスレッド（TUIのキー入力ループ）をブロックしないよう、別スレッドで
+    /// 行う——各再生は `play_se` と同じ fire-and-forget（`Sink::detach`）で、gap が短ければ
+    /// 複数の SE が重なって鳴る（衣擦れ等の自然な重なりを狙った意図的な挙動、GUI版と同じ）。
+    /// 1件のみ（K=1）の場合は間隔を挟む相手がいないため、スレッドを起こさず即時再生する。
+    pub fn play_se_sequence(&self, paths: Vec<PathBuf>, gap_range_ms: (u32, u32)) {
+        if paths.is_empty() {
+            return;
+        }
+        if paths.len() == 1 {
+            self.play_se(&paths[0]);
+            return;
+        }
+        let stream_handle = self.stream_handle.clone();
+        let se_volume = self.se_volume;
+        thread::spawn(move || {
+            let mut rng = rand::thread_rng();
+            for (i, path) in paths.iter().enumerate() {
+                if let Some(source) = decode_file(path) {
+                    if let Ok(sink) = Sink::try_new(&stream_handle) {
+                        sink.set_volume(se_volume);
+                        sink.append(source);
+                        sink.detach();
+                    }
+                }
+                if i + 1 < paths.len() {
+                    let gap = crate::se_selection::random_gap_ms(
+                        gap_range_ms.0,
+                        gap_range_ms.1,
+                        &mut rng,
+                    );
+                    thread::sleep(Duration::from_millis(gap as u64));
+                }
+            }
+        });
     }
 }
 

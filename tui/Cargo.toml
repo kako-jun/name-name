@@ -24,3 +24,5 @@ rodio = { version = "0.19", default-features = false, features = ["wav", "vorbis
 # ALSA/JACK が C レベルで直接 stderr へ書くログを、OutputStream::try_default() 呼び出し中だけ
 # dup2 で /dev/null へ一時リダイレクトして抑制するために使う（#559）。
 libc = "0.2"
+# SE 複数候補プールのランダム抽出+シャッフル+ランダム間隔再生に使う (#672)。
+rand = "0.8"

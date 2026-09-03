@@ -605,6 +605,13 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
   （`voice_percent`）は値の保持のみでバックエンド未反映（TUIにボイス再生コード自体が
   無いため、`config::VolumeConfig` の doc comment参照）。動画ミックス・エクスポート用
   キャプチャ配線は対象外。
+- **SE複数候補プールのランダム抽出+シャッフル+ランダム間隔再生（#672）**: `Event::Se` の
+  `paths`（複数件）/`count`/`gap_min_ms`/`gap_max_ms` は `Playback::item_se`（`SeCue`、選択・
+  シャッフル前の生の記述）にそのまま保持され、実際のランダム抽出は `main.rs::
+  select_and_resolve_se_paths` が再生トリガのたびに新規計算する（`tui/src/se_selection.rs`
+  の純粋関数、GameStateに選択結果を焼き込まない）。`AudioPlayer::play_se_sequence` が
+  gapの待機を別スレッドで行うため、TUIのキー入力ループはブロックされない（各再生は
+  `play_se` と同じ fire-and-forget）。
 - **オート進行ウェイト設定項目の追加（#644、GUI版とのパリティ）**: `SettingsField` enum
   （`TextSpeed`/`BgmVolume`/`SeVolume`/`VoiceVolume` の4項目）に `AutoWaitMs` を
   `TextSpeed` の直後（GUI版 `Settings` interface の並び順に対応）に追加し、5項目に
