@@ -1305,6 +1305,13 @@ fn parse_audio_path_and_fade(content: &str) -> (String, Option<u32>) {
 /// パス候補が1件も無い（例: `[SE: 選択数=1]` のように kv だけが書かれた記述ミス）場合は
 /// 空文字列1件にフォールバックする — `paths` が空配列にならないことを保証する
 /// （ランタイム側が `paths[0]` 等を無条件に読める前提を壊さない防御、通常の原稿では発生しない）。
+/// この空文字列はそのままランタイムの実パス解決（GUI版 `resolveAssetUrl`、TUI版
+/// `Config::resolve_sound_path`）まで伝播し、実ファイルが見つからない通常のパスと同じ
+/// 「ファイル未検出」扱い（GUI: `fetch` 失敗で console.warn + 再生スキップ、TUI:
+/// `resolve_sound_path("")` は空相対パスをそのまま `assets_dir` と結合するため解決自体は
+/// 成功するが、`assets_dir`（ディレクトリ）を音声としてデコードすることになり
+/// `decode_file` が `None` を返し再生スキップ）に落ちる — 新規の分岐やエラー処理を
+/// ランタイム側に追加する必要は無い。
 fn parse_se_directive(content: &str) -> Event {
     let mut paths: Vec<String> = Vec::new();
     let mut fade_ms: Option<u32> = None;

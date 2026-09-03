@@ -119,10 +119,13 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
       event.Se.gap_min_ms != null && event.Se.gap_max_ms != null
         ? ` 間隔=${event.Se.gap_min_ms}-${event.Se.gap_max_ms}`
         : ''
+    // pool でないときは常に空文字列（count/gap は本来 pool 時のみ意味を持つ値、セルフレビューnit対応:
+    // JSX 側で `pool && ...` と boolean/文字列を混在させず、ここで先に確定させて意図を明確にする）。
+    const poolInfo = pool ? `${count}${gap}` : ''
     return (
       <div className={`text-xs italic ml-2 ${meta}`}>
         SE: {event.Se.paths.join(', ')}
-        {pool && `${count}${gap}`}
+        {poolInfo}
         {fade}
       </div>
     )

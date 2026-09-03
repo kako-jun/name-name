@@ -273,7 +273,7 @@ Rust で実装。wasm-bindgen + tsify-next で TypeScript 型を自動生成す�
 - `Narration` — ナレーション（text, voice_path?, font_family?）
 - `Background` — 背景変更（path）。通常進行では旧背景と新背景を同時保持し、既定 700ms（フロントマター `background_fade_ms` で作品ごとに変更可・表示/切替/退場すべてに適用・#407）で alpha を入れ替えるクロスフェードを行う（復元・シーク・スキップは即時）
 - `Bgm` — BGM 制御（action: Play/Stop, path, fade_ms?: Play=fade-in / Stop=fade-out 時間 ms）
-- `Se` — SE 再生（path, fade_ms?: fade-in 時間 ms）
+- `Se` — SE 再生（paths: 候補ファイルパス配列、通常は1件＝従来通りの単発再生。複数件は選択数+間隔でランダム抽出+シャッフル再生のプールになる（#672、後述「SE複数候補プールのランダム抽出+シャッフル+ランダム間隔再生」節参照）、fade_ms?: fade-in 時間 ms、count?: 選択数K・省略時は全件、gap_min_ms?/gap_max_ms?: ランダム間隔レンジ・省略時のランタイム既定は50-200ms）
 - `Blackout` — 暗転制御（action: On/Off）
 - `SceneTransition` — 場面転換
 - `PageBreak` — 手動改頁マーカー（本文中の単独行 `---`。`dialog_style: novel` の強制ページ境界。非テキストイベントとして読み飛ばす。#292 Phase 2）。**本文中の `--`（2 連）は別物**で、余韻横棒 `──` に正準化され novel の文送り境界になる（#340・後述）。改頁になるのは単独行 `---`（3 連以上）だけ
@@ -611,7 +611,15 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
   select_and_resolve_se_paths` が再生トリガのたびに新規計算する（`tui/src/se_selection.rs`
   の純粋関数、GameStateに選択結果を焼き込まない）。`AudioPlayer::play_se_sequence` が
   gapの待機を別スレッドで行うため、TUIのキー入力ループはブロックされない（各再生は
-  `play_se` と同じ fire-and-forget）。
+  `play_se` と同じ fire-and-forget）。**SEシーケンスのキャンセル（#672フォローアップ）**:
+  背景スレッドはシーンが実際に切り替わった瞬間（`main.rs::event_loop` が
+  `playback.current_scene_idx()` の前後比較で検出、選択肢ジャンプ含む）に
+  `AudioPlayer::cancel_se_sequence()` でキャンセルされる。世代カウンタ
+  （`se_selection::SeSequenceGeneration`、GUI版 `AudioManager.seSequenceGeneration` と同じ
+  generation-based cancellation）を進めるだけで、実行中の全スレッドは次のチェックポイント
+  （gapの `thread::sleep` が明けた直後）で自ら停止する——`AudioPlayer` 自体が実デバイス
+  依存でCI環境では構築できないため、世代カウンタの増分・比較という中核ロジックだけを
+  `SeSequenceGeneration` として切り出しデバイス非依存にテストしている。
 - **オート進行ウェイト設定項目の追加（#644、GUI版とのパリティ）**: `SettingsField` enum
   （`TextSpeed`/`BgmVolume`/`SeVolume`/`VoiceVolume` の4項目）に `AutoWaitMs` を
   `TextSpeed` の直後（GUI版 `Settings` interface の並び順に対応）に追加し、5項目に
@@ -634,6 +642,25 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
 
 - ワンショット再生
 - 複数 SE の同時再生対応
+- **複数候補プールのランダム抽出+シャッフル+ランダム間隔再生（#672）**: `Event::Se` の
+  `paths` が複数件のとき、`seSelection.selectAndShuffleSeFiles(paths, count)` が発火の
+  たびに重複無しでK件抽出+シャッフルし（`count` 省略時は全件）、`AudioManager.
+  playSeSequence(urls, gapMinMs, gapMaxMs, fadeInMs)` が選択済み順に、`gap_min_ms`/
+  `gap_max_ms`（省略時のランタイム既定 50-200ms）の範囲で `seSelection.randomGapMs` が
+  決めたランダム間隔を挟みながら再生する（1件のみ＝従来通りの単発再生、後方互換）。
+  各再生は `playSe` と同じ fire-and-forget（gapがクリップ長より短ければ複数SEが重なって
+  鳴る意図的な挙動）。選択・シャッフル順序はどこにも永続化せず、`NovelRenderer.
+  processDirective` が `Se` イベント発火のたびに新規計算する（doctrine 規律3）。
+  **gap待機のキャンセル（#672フォローアップ）**: `playSeSequence` の gap 待機は
+  `AudioManager` に注入された `TimeController`（`NovelRenderer.time` を共有）経由の
+  `setTimeout` で行い、世代カウンタ（`seSequenceGeneration`）ベースでキャンセル可能にした
+  `AudioManager.cancelSeSequence()` を `NovelRenderer` の他の全タイマー（wait/auto/skip/
+  shake/toast/intermission 等）と同じ規律で `resetAndStartEvents`（シーン遷移）・
+  `endStory`（終劇）・`applyState`（goBack/seekTo/セーブロード）・`AudioManager.destroy()`
+  （`NovelRenderer.destroy()` 経由）から呼ぶ。導入当初はこの規律から漏れており、シーン
+  遷移後もgap待機中の残りSEがバックグラウンドで鳴り続けるギャップがあった（テスト設計
+  フェーズで発見、是正）。TUI版 `AudioPlayer.cancel_se_sequence()`（`tui/src/audio.rs`、
+  上記TUI節参照）も同じ generation-based cancellation で対称に実装されている。
 
 ### AudioBuffer キャッシュ
 

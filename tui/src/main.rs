@@ -1275,6 +1275,19 @@ where
                 // 方針、GUI版 `quickSave` と同じ）。`config.quicksave_path` が `None`
                 // （`Config::default()` を直接使うテストの大半）なら何もしない。
                 if playback.current_scene_idx() != prev_scene_idx {
+                    // #672 フォローアップ: シーンが実際に切り替わった（通常の advance で
+                    // 新シーンへ進んだ場合・選択肢ジャンプの両方を含む、`on_advance` が
+                    // 内部で `select_current_choice` に委譲するため区別しない）瞬間に、
+                    // 前シーンで発火した SE シーケンスの gap 待機スレッドをキャンセルする。
+                    // GUI版 `NovelRenderer.resetAndStartEvents` の `cancelSeSequence()` 呼び出しと
+                    // 同じ理由——ここで止めないと、シーン遷移後も裏でランダム間隔の SE が
+                    // 鳴り続ける（`audio::AudioPlayer::cancel_se_sequence` のdoc comment参照）。
+                    // TUIには GUI版の `endStory`/`applyState` に相当する専用フックが無く
+                    // （選択肢ジャンプ含めシーン遷移は全て `Playback::current_scene_idx()` の
+                    // 変化として一様に観測できる）、この分岐が唯一かつ十分な統合点になる。
+                    if let Some(a) = audio.as_deref() {
+                        a.cancel_se_sequence();
+                    }
                     if let Some(path) = &config.quicksave_path {
                         save::save_quick(path, playback, &read_positions);
                     }

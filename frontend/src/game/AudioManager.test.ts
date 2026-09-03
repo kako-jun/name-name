@@ -138,4 +138,32 @@ describe('AudioManager.playSeSequence (#672)', () => {
     expect(playSeSpy).toHaveBeenCalledWith('y.mp3', undefined)
     expect(playSeSpy).toHaveBeenCalledTimes(4)
   })
+
+  it('35: 2シーケンスが同時にgap待機中にcancelSeSequence()を1回呼ぶと両方止まる (#672 フォローアップ、セルフレビューS5)', async () => {
+    // 34/34bは「単一シーケンスのキャンセル」「キャンセルしない場合の2シーケンス無干渉」を
+    // それぞれ検証したが、「2シーケンスが同時にgap待機中の状態でcancelSeSequence()を1回
+    // 呼んだら両方とも止まる」という、複数シーケンス+実際のキャンセルの組み合わせは
+    // 未検証だった。cancelSeSequence()は世代を1つ進めるだけ（全シーケンス共有のカウンタ）
+    // なので、並行中の全シーケンスに一律で効くはずであることを確認する。
+    vi.useFakeTimers()
+    const { manager, playSeSpy } = makeManagerWithSpy()
+
+    const first = manager.playSeSequence(['a.mp3', 'b.mp3', 'c.mp3'], 100, 100, undefined)
+    await Promise.resolve()
+    const second = manager.playSeSequence(['x.mp3', 'y.mp3', 'z.mp3'], 100, 100, undefined)
+    await Promise.resolve()
+
+    // 両シーケンスとも1件目（a.mp3/x.mp3）は再生済みで、2件目に進む前のgap待機中のはず。
+    expect(playSeSpy).toHaveBeenCalledTimes(2)
+
+    manager.cancelSeSequence()
+    await vi.advanceTimersByTimeAsync(1000)
+    await first
+    await second
+
+    // どちらのシーケンスも1件目より後（b/c/y/z）は一切再生されない。
+    expect(playSeSpy).toHaveBeenCalledTimes(2)
+    expect(playSeSpy).toHaveBeenCalledWith('a.mp3', undefined)
+    expect(playSeSpy).toHaveBeenCalledWith('x.mp3', undefined)
+  })
 })

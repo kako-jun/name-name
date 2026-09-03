@@ -113,6 +113,24 @@ describe('NovelRenderer [SE: ...] ディレクティブ処理 (#672)', () => {
  * `cancelSeSequence` spy で確認する（実際に後続再生が止まることのメカニズム自体は
  * `AudioManager.test.ts` の34/34bで decisive に検証済み）。
  */
+/** destroy() の appInitialized ガード（PixiJS 実 init 未完了時の early-return・React StrictMode
+ *  対策）を満たすための最小スタブ（`NovelRenderer.eventImage.test.ts` の
+ *  `stubDestroyableApp` と同じ割り切り。jsdom には実 WebGL/canvas init が無いため
+ *  ここだけ最小限に差し替える）。 */
+interface DestroyableAppInternals {
+  appInitialized: boolean
+  app: { canvas: unknown; destroy: (...args: unknown[]) => void }
+}
+function stubDestroyableApp(r: NovelRenderer): void {
+  const appInternals = r as unknown as DestroyableAppInternals
+  appInternals.appInitialized = true
+  Object.defineProperty(appInternals.app, 'canvas', {
+    configurable: true,
+    value: { removeEventListener: () => {} },
+  })
+  appInternals.app.destroy = () => {}
+}
+
 describe('NovelRenderer: SEシーケンスのキャンセル配線 (#672 フォローアップ)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -135,6 +153,32 @@ describe('NovelRenderer: SEシーケンスのキャンセル配線 (#672 フォ�
     const cancelSpy = vi.spyOn(r.getAudioManager(), 'cancelSeSequence')
 
     r.jumpToScene('out-scene')
+
+    expect(cancelSpy).toHaveBeenCalled()
+  })
+
+  it('36: 状態復元（seekTo→applyState）でもSEシーケンスの待機中タイマーがキャンセルされる（セルフレビューS4）', async () => {
+    const r = new NovelRenderer()
+    r.setScenes([scene('entry', [narration('p0'), narration('p1'), narration('p2')])])
+    // history[0]=p0, history[1]=p1 まで進める（seekTo(0) で history[0] へ applyState() 経由で戻る）。
+    await r.playScript([{ type: 'advance' }])
+    await r.playScript([{ type: 'advance' }])
+    // history 構築（playScript による通常 advance）は applyState を経由しないため、
+    // spy はここで初めて仕込んでも直前の advance を誤って拾わない。
+    const cancelSpy = vi.spyOn(r.getAudioManager(), 'cancelSeSequence')
+
+    r.seekTo(0)
+
+    expect(cancelSpy).toHaveBeenCalled()
+  })
+
+  it('37: dispose（destroy）でもSEシーケンスの待機中タイマーがキャンセルされる（AudioManager.destroy()経由、セルフレビューS4）', () => {
+    const r = new NovelRenderer()
+    r.setScenes([scene('entry', [narration('start')])])
+    stubDestroyableApp(r)
+    const cancelSpy = vi.spyOn(r.getAudioManager(), 'cancelSeSequence')
+
+    r.destroy()
 
     expect(cancelSpy).toHaveBeenCalled()
   })
