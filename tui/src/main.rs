@@ -11,11 +11,12 @@ mod pixelate_transition;
 mod playback;
 mod reveal;
 mod save;
+mod se_selection;
 mod sentence;
 mod ui;
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -1274,6 +1275,19 @@ where
                 // 方針、GUI版 `quickSave` と同じ）。`config.quicksave_path` が `None`
                 // （`Config::default()` を直接使うテストの大半）なら何もしない。
                 if playback.current_scene_idx() != prev_scene_idx {
+                    // #672 フォローアップ: シーンが実際に切り替わった（通常の advance で
+                    // 新シーンへ進んだ場合・選択肢ジャンプの両方を含む、`on_advance` が
+                    // 内部で `select_current_choice` に委譲するため区別しない）瞬間に、
+                    // 前シーンで発火した SE シーケンスの gap 待機スレッドをキャンセルする。
+                    // GUI版 `NovelRenderer.resetAndStartEvents` の `cancelSeSequence()` 呼び出しと
+                    // 同じ理由——ここで止めないと、シーン遷移後も裏でランダム間隔の SE が
+                    // 鳴り続ける（`audio::AudioPlayer::cancel_se_sequence` のdoc comment参照）。
+                    // TUIには GUI版の `endStory`/`applyState` に相当する専用フックが無く
+                    // （選択肢ジャンプ含めシーン遷移は全て `Playback::current_scene_idx()` の
+                    // 変化として一様に観測できる）、この分岐が唯一かつ十分な統合点になる。
+                    if let Some(a) = audio.as_deref() {
+                        a.cancel_se_sequence();
+                    }
                     if let Some(path) = &config.quicksave_path {
                         save::save_quick(path, playback, &read_positions);
                     }
@@ -1608,6 +1622,12 @@ fn sync_bgm(
 /// パス解決に失敗した個別の SE（`config.resolve_sound_path` が `None`）は黙って読み飛ばし、
 /// 残りの SE の再生は継続する（1件の記述ミスで他の SE まで巻き込んで無音にしない）。
 /// `audio` が `None` の場合は `last_cursor` の追跡だけ行い実際の再生はしない。
+///
+/// `paths` が複数件の [`playback::SeCue`]（#672）は、ここで初めて実際のランダム抽出を行う
+/// （`select_current_se_paths` 参照）——`item_se`/`current_se_cues()` は選択前の生の記述を
+/// 返すだけで、抽出結果をどこにも永続化しない（doctrine 規律3）。抽出は「未解決の相対パス」に
+/// 対して行い、解決に失敗した候補だけをその後に読み飛ばす（多くの候補のうち一部だけが
+/// 記述ミスでも、残りの選択結果はそのまま再生される）。
 fn play_new_se_cues(
     last_cursor: &mut Option<usize>,
     playback: &Playback,
@@ -1620,11 +1640,33 @@ fn play_new_se_cues(
     }
     *last_cursor = Some(cursor);
     let Some(audio) = audio else { return };
-    for relative in playback.current_se_cues() {
-        if let Some(path) = config.resolve_sound_path(relative) {
-            audio.play_se(&path);
+    for cue in playback.current_se_cues() {
+        let resolved = select_and_resolve_se_paths(cue, config);
+        if resolved.is_empty() {
+            continue;
         }
+        // 間隔省略時のランタイム既定 50-200ms (#672 Issue本文、GUI版 NovelRenderer と同じ値)
+        let gap_min_ms = cue.gap_min_ms.unwrap_or(50);
+        let gap_max_ms = cue.gap_max_ms.unwrap_or(200);
+        audio.play_se_sequence(resolved, (gap_min_ms, gap_max_ms));
     }
+}
+
+/// [`playback::SeCue`] の候補プールから実際に鳴らすファイルを決める (#672)。
+///
+/// `cue.paths`/`cue.count` から `se_selection::select_and_shuffle_se_files` で重複無し
+/// ランダム抽出+シャッフルし、選択されたものだけを `config.resolve_sound_path` で解決する
+/// （解決失敗は黙ってその1件だけ読み飛ばす、`play_new_se_cues` のdoc comment参照）。
+/// 抽出を解決より先に行うのは、候補プールが多数かつ一部だけ記述ミスというケースで、
+/// 「まず正しく K 件選び、そのうち解決できたものだけ鳴らす」という直感的な意味論にするため
+/// （逆に解決を先にすると、記述ミスの多い原稿ほど実質的な抽出母数が変わってしまう）。
+fn select_and_resolve_se_paths(cue: &playback::SeCue, config: &Config) -> Vec<PathBuf> {
+    let selected =
+        se_selection::select_and_shuffle_se_files(&cue.paths, cue.count, &mut rand::thread_rng());
+    selected
+        .iter()
+        .filter_map(|relative| config.resolve_sound_path(relative))
+        .collect()
 }
 
 #[cfg(test)]
@@ -3469,6 +3511,58 @@ mod tests {
             Some(1),
             "次のitemへ進んだのでcursorが更新されるはず"
         );
+    }
+
+    // ---- #672: select_and_resolve_se_paths（音声出力デバイス不要、純粋な選択+パス解決）----
+    //
+    // `select_and_resolve_se_paths` 自体は `AudioPlayer` を要求しない private 関数のため、
+    // `play_new_se_cues`（`audio: Option<&mut AudioPlayer>` 経由でしか呼べず、CI には
+    // 実オーディオデバイスが無いため `Some` を得られない、`audio.rs` の #537 節doc comment
+    // 参照）を介さず直接テストできる。
+
+    #[test]
+    fn select_and_resolve_se_paths_skips_individually_unresolvable_candidates() {
+        // 複数候補のうち一部が resolve_sound_path で弾かれても（パストラバーサル等の記述ミス
+        // 相当）、残りは解決される（#672、play_new_se_cues のdoc comment参照:
+        // 1件の記述ミスで他の SE まで巻き込んで無音にしない）。
+        let cue = playback::SeCue {
+            paths: vec![
+                "a.wav".to_string(),
+                "../evil.wav".to_string(),
+                "b.wav".to_string(),
+            ],
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
+        };
+        let config = Config::default();
+
+        let resolved = select_and_resolve_se_paths(&cue, &config);
+
+        assert_eq!(
+            resolved.len(),
+            2,
+            "不正パス1件だけ弾かれ、残り2件は解決されるはず: {resolved:?}"
+        );
+        assert!(resolved.contains(&config.resolve_sound_path("a.wav").unwrap()));
+        assert!(resolved.contains(&config.resolve_sound_path("b.wav").unwrap()));
+    }
+
+    #[test]
+    fn select_and_resolve_se_paths_count_zero_returns_empty_vec() {
+        // count=Some(0) のとき空Vecを返す（#672、play_new_se_cues 側はこれを「SE無し」として
+        // continue する契約、main.rs::play_new_se_cues のdoc comment参照）。
+        let cue = playback::SeCue {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            count: Some(0),
+            gap_min_ms: None,
+            gap_max_ms: None,
+        };
+        let config = Config::default();
+
+        let resolved = select_and_resolve_se_paths(&cue, &config);
+
+        assert!(resolved.is_empty());
     }
 
     // ---- #537: 起動時音量同期 ----

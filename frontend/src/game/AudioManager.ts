@@ -5,7 +5,14 @@
  * - SE: ワンショット再生、複数同時再生可能
  * - AudioBuffer キャッシュで同一ファイルの再 fetch を防止
  * - ユーザーインタラクション制約への対応（ensureContext）
+ * - SE 複数候補プールのランダム抽出+シャッフル+ランダム間隔再生（#672、`playSeSequence`）。
+ *   再生の合間の gap 待機は `TimeController`（`this.time`）経由で、NovelRenderer の
+ *   他の全タイマー（wait/auto/skip/shake/toast/intermission 等）と同じ規律で管理する。
+ *   これにより `cancelSeSequence()` でシーン遷移・終劇・状態復元時にキャンセルできる
+ *   （#672 フォローアップ、再発防止の経緯は `cancelSeSequence` のdoc comment参照）。
  */
+import { randomGapMs } from './seSelection'
+import { TimeController, defaultTimeController } from './TimeController'
 
 export class AudioManager {
   private ctx: AudioContext | null = null
@@ -19,6 +26,28 @@ export class AudioManager {
     gain: GainNode
     timer: ReturnType<typeof setTimeout>
   }[] = []
+
+  // NovelRenderer が持つ TimeController をコンストラクタ経由で共有する（既定は
+  // defaultTimeController、テスト/未指定時は live モード = window.setTimeout と等価）。
+  // playSeSequence の gap 待機だけをこれに通す（#672 フォローアップ、他の音声処理
+  // ―ロード・decode・onended 等―は引き続き対象外、TimeController.ts のdoc comment参照）。
+  private readonly time: TimeController
+  // playSeSequence が現在待機中の gap（次の再生までの間隔）一覧。processDirective が
+  // 同一フレームで複数の [SE: 複数候補] を連続処理すると、1つの AudioManager に対して
+  // 複数の playSeSequence 呼び出しが並行して in-flight になりうる——単一フィールドで
+  // 最新の待機だけを追跡すると、後発の呼び出しが先発の待機を上書きしてしまい
+  // cancelSeSequence() が先発分を取りこぼす（配列で全件を追跡することで解消）。
+  private pendingSeSequenceGapWaits: { timerId: number; settle: () => void }[] = []
+  // playSeSequence の「世代」カウンタ。cancelSeSequence() が呼ばれた時だけ増分する
+  // （playSeSequence 自身の開始では増やさない——増やすと「新しい [SE:] が発火しただけ」で
+  // 既存の並行シーケンスまで巻き込んで打ち切ってしまう、複数 SE の意図的な重なり再生
+  // という #672 の設計と矛盾する事故になるため）。実行中のループは開始時に捕まえた世代と
+  // 比較し、ずれていれば以後の再生を打ち切る（generation-based cancellation）。
+  private seSequenceGeneration = 0
+
+  constructor(time: TimeController = defaultTimeController) {
+    this.time = time
+  }
 
   // マスター音量（Issue #138）。BGM / SE をそれぞれの master gain に集約し、
   // setBgmVolume / setSeVolume で動的に変更できるようにする。
@@ -335,6 +364,93 @@ export class AudioManager {
   }
 
   /**
+   * 既に選択・シャッフル済みの SE URL 一覧を、ランダム間隔を挟みながら順に再生する (#672)。
+   *
+   * `[SE: p1,p2,..., 選択数=K, 間隔=min-max]` の実際の再生を担う。選択・シャッフル自体は
+   * `seSelection.selectAndShuffleSeFiles` が既に済ませている前提（呼び出し元 = NovelRenderer）
+   * ——ここは「渡された順に、合間だけランダムに空けて鳴らす」ことだけに責務を絞る
+   * （doctrine 規律4「単一責務」）。
+   *
+   * 各ファイルは `playSe` と同じ fire-and-forget（再生完了を待たない）で発火するため、
+   * gap がクリップの長さより短ければ複数の SE が重なって鳴る（衣擦れ等の自然な重なりを
+   * 狙った意図的な挙動）。1件のみ（K=1）の場合は間隔を挟む相手がいないため即時再生する。
+   *
+   * gap 待機は `this.time.setTimeout`（生の `setTimeout` ではない）に通し、待機中の
+   * タイマーを `this.pendingSeSequenceGapWaits` に登録する。これにより `cancelSeSequence()`
+   * から NovelRenderer の他タイマーと同じ規律でキャンセルできる（#672 フォローアップ）。
+   * 開始時に世代カウンタのスナップショットを取り、gap 待機から戻るたびに現在値と比較する
+   * ——`cancelSeSequence()` が世代を進めていれば、それ以降の URL は再生せず打ち切る。
+   *
+   * @param urls 再生する SE の URL 一覧（選択・シャッフル済み）
+   * @param gapMinMs ランダム間隔レンジ下限 ms
+   * @param gapMaxMs ランダム間隔レンジ上限 ms
+   * @param fadeInMs 各再生に適用する fade-in 時間 ms (#145)。未指定なら即時フル音量。
+   */
+  async playSeSequence(
+    urls: readonly string[],
+    gapMinMs: number,
+    gapMaxMs: number,
+    fadeInMs?: number
+  ): Promise<void> {
+    // 開始時点の世代を捕まえるだけで、ここでは増分しない（生成のたびに増分すると、
+    // 同一フレームで連続発火した別の [SE:] がこの世代を捕まえてしまい、cancelSeSequence()
+    // 抜きでも先発シーケンスの残りが打ち切られてしまう——フィールド doc comment参照）。
+    const generation = this.seSequenceGeneration
+    for (let i = 0; i < urls.length; i++) {
+      if (generation !== this.seSequenceGeneration) return
+      // 再生完了を待たない（fire-and-forget、playSe 単体呼び出しと同じ意味論）。
+      void this.playSe(urls[i], fadeInMs)
+      if (i + 1 < urls.length) {
+        const gap = randomGapMs(gapMinMs, gapMaxMs)
+        await new Promise<void>((resolve) => {
+          const wait: { timerId: number; settle: () => void } = {
+            timerId: 0,
+            settle: () => {
+              this.pendingSeSequenceGapWaits = this.pendingSeSequenceGapWaits.filter(
+                (w) => w !== wait
+              )
+              resolve()
+            },
+          }
+          wait.timerId = this.time.setTimeout(wait.settle, gap)
+          this.pendingSeSequenceGapWaits.push(wait)
+        })
+        if (generation !== this.seSequenceGeneration) return
+      }
+    }
+  }
+
+  /**
+   * 再生中の SE シーケンス（`playSeSequence`）が待機中の gap タイマーを全てキャンセルする (#672)。
+   *
+   * `NovelRenderer` の他の全タイマー（wait/auto/skip/shake/toast/intermission 等）は
+   * `this.time.clearTimeout` で一元管理され、シーン遷移・終劇（`endStory`）・状態復元
+   * （`applyState`、goBack/seekTo/セーブロード）・dispose 時にキャンセルされる。
+   * `playSeSequence` 導入時（#672 実装）はこの規律から漏れており、シーケンス再生中に
+   * シーン遷移が起きても後続の再生がキャンセルされずバックグラウンドで鳴り続ける
+   * ギャップがあった（テスト設計フェーズで発見、本メソッドで是正）。
+   *
+   * 世代カウンタ（`seSequenceGeneration`）を進め、実行中の全 `playSeSequence` ループに
+   * 「もう古い呼び出しである」ことを伝える。待機中の gap タイマーはそれぞれ
+   * `this.time.clearTimeout` した上で `settle()` を呼び、`await` で止まっていたループを
+   * 即座に再開させる（clearTimeout だけだと settle 相当の resolve が呼ばれず、
+   * async 関数が Promise pending のまま宙に浮いた状態で止まり続けてしまうため。
+   * 再開後は世代の不一致チェックに引っかかって残りの url を再生せず return する）。
+   *
+   * 既に発火済みの単発 SE（`playSe`）自体は元々 fire-and-forget で止める手段が無い
+   * （既存仕様どおり、ここでは変更しない）。止めるのは「次の再生を待っている gap」だけ。
+   */
+  cancelSeSequence(): void {
+    this.seSequenceGeneration++
+    const waits = this.pendingSeSequenceGapWaits
+    this.pendingSeSequenceGapWaits = []
+    for (const wait of waits) {
+      this.time.clearTimeout(wait.timerId)
+      wait.settle()
+    }
+  }
+
+  /**
    * ボイス（per-line voice）をワンショット再生する (#144)。
    * 再生終了時に onEnded を呼ぶ。オートモードの voice 終了待ちに使用。
    * 複数呼び出し時は前のボイスを停止して新しいものを再生する。
@@ -454,6 +570,7 @@ export class AudioManager {
    * 全停止・リソース解放
    */
   destroy(): void {
+    this.cancelSeSequence()
     this.stopBgmImmediate()
     this.stopVoice()
     this.audioCache.clear()

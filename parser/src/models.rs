@@ -525,12 +525,31 @@ pub enum Event {
         fade_ms: Option<u32>,
     },
     Se {
-        path: String,
+        /// SE 候補ファイルパスの一覧 (#672)。
+        /// 通常は1件（従来通りの単発再生、後方互換）。カンマ区切りで複数列挙すると
+        /// ランダム抽出+シャッフル再生のプールとして扱う（`count`/`gap_min_ms`/`gap_max_ms` 参照）。
+        /// パーサーは常に1件以上を保証する（空配列は作らない）。
+        /// Markdown 構文: `[SE: path]` / `[SE: p1,p2,..., 選択数=5, 間隔=50-200]`
+        paths: Vec<String>,
         /// SE fade-in 時間 ms (#145)。
-        /// `None` なら fade-in なし（従来通り即時再生）。
+        /// `None` なら fade-in なし（従来通り即時再生）。選択された全ファイルの再生に
+        /// 同じ値を適用する（#672、シンプルさ優先）。
         /// Markdown 構文: `[SE: path, フェード=200]`
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fade_ms: Option<u32>,
+        /// 選択数 K (#672)。`paths` から重複無しでランダム抽出する件数。
+        /// `選択数=`/`count=` で指定。`None` は全件（K = paths.len()）を使う。
+        /// `paths` が1件のみの場合は無関係（常にその1件を単発再生）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<u32>,
+        /// ランダム間隔レンジ下限 ms (#672)。`間隔=min-max`/`gap=min-max` の min。
+        /// `count`（実質K）が1以下、または `paths` が1件のみのときは無関係
+        /// （待機を挟む相手がいない）。省略時のランタイム既定は 50ms。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gap_min_ms: Option<u32>,
+        /// ランダム間隔レンジ上限 ms (#672)。省略時のランタイム既定は 200ms。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gap_max_ms: Option<u32>,
     },
     Blackout {
         action: BlackoutAction,

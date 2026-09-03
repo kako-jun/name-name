@@ -59,8 +59,22 @@ describe('EventDisplay', () => {
       renderEvent({ Bgm: { path: 'bgm.ogg', action: 'Play', fade_ms: 800 } }).container.textContent
     ).toContain('フェード 800ms')
     expect(
-      renderEvent({ Se: { path: 'chime.wav', fade_ms: 200 } }).container.textContent
+      renderEvent({ Se: { paths: ['chime.wav'], fade_ms: 200 } }).container.textContent
     ).toContain('フェード 200ms')
+  })
+
+  it('renders Se multi-file pool with count/gap badges (#672)', () => {
+    const { container } = renderEvent({
+      Se: {
+        paths: ['a.wav', 'b.wav', 'c.wav'],
+        count: 2,
+        gap_min_ms: 50,
+        gap_max_ms: 200,
+      },
+    })
+    expect(container.textContent).toContain('a.wav, b.wav, c.wav')
+    expect(container.textContent).toContain('選択数=2')
+    expect(container.textContent).toContain('間隔=50-200')
   })
 
   it('renders EventImage with back/fade badges and no effects badge when all flags false', () => {

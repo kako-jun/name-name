@@ -22,14 +22,29 @@
 //! `AudioPlayer::try_new` が `None` を返し、呼び出し側（`main.rs`）は音声再生機能を丸ごと
 //! 無効化して進行を続ける（エラーにしない）。既存の TUI が画像デコード失敗時にプレースホルダへ
 //! フォールバックする設計・#512 暗転が持つ fail-soft 方針と同じ思想。
+//!
+//! ## SE シーケンスのキャンセル (#672 フォローアップ)
+//!
+//! `play_se_sequence` が gap 待機のために spawn する背景スレッドは、GUI版
+//! `AudioManager.playSeSequence` の gap 待機（`TimeController` 経由、シーン遷移・終劇・
+//! 状態復元・dispose 時に `cancelSeSequence()` でキャンセルされる）と対称の機構
+//! `cancel_se_sequence()` を持つ。世代カウンタ（`se_selection::SeSequenceGeneration`）を
+//! 進めるだけで、実行中の全スレッドは次のチェックポイント（gap の `thread::sleep` が
+//! 明けた直後）で自ら停止する——OS スレッドの `sleep` は割り込めないため、GUI版の
+//! `clearTimeout` ほど即時ではなく「現在の gap が明けるまで」の遅延を伴うが、後続の
+//! 再生は確実に止まる。`main.rs` はシーンが実際に切り替わった瞬間
+//! （`playback.current_scene_idx()` の前後比較、選択肢ジャンプも含む）にこれを呼ぶ。
 
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 
 use crate::config::{self, percent_to_volume_scale};
+use crate::se_selection::SeSequenceGeneration;
 
 /// BGM/SE の再生を担うプレイヤー。`OutputStream` はドロップされるとデバイスが閉じるため、
 /// 生存期間中ずっと保持し続ける必要がある（rodio の制約、`_stream` の命名は未使用警告除けと
@@ -44,6 +59,9 @@ pub struct AudioPlayer {
     bgm_volume: f32,
     /// SE の音量（0.0〜1.0）。`bgm_volume` と同じく `try_new` の引数から生成直後に反映される。
     se_volume: f32,
+    /// `play_se_sequence` の gap 待機スレッドをキャンセル可能にする世代カウンタ
+    /// (#672 フォローアップ、モジュール冒頭「SE シーケンスのキャンセル」節参照)。
+    se_sequence_generation: SeSequenceGeneration,
 }
 
 impl AudioPlayer {
@@ -73,6 +91,7 @@ impl AudioPlayer {
             bgm_sink: None,
             bgm_volume,
             se_volume,
+            se_sequence_generation: SeSequenceGeneration::new(),
         })
     }
 
@@ -143,6 +162,80 @@ impl AudioPlayer {
         sink.set_volume(self.se_volume);
         sink.append(source);
         sink.detach();
+    }
+
+    /// 既に選択・シャッフル済みの SE パス一覧を、ランダム間隔を挟みながら順に再生する (#672)。
+    ///
+    /// `[SE: p1,p2,..., 選択数=K, 間隔=min-max]` の実際の再生を担う。選択・シャッフル自体は
+    /// 呼び出し元（`main.rs::select_and_resolve_se_paths`）が既に済ませている前提——ここは
+    /// 「渡された順に、合間だけランダムに空けて鳴らす」ことだけに責務を絞る（GUI版
+    /// `AudioManager.playSeSequence` 相当、doctrine 規律4「単一責務」）。
+    ///
+    /// gap の待機はメインスレッド（TUIのキー入力ループ）をブロックしないよう、別スレッドで
+    /// 行う——各再生は `play_se` と同じ fire-and-forget（`Sink::detach`）で、gap が短ければ
+    /// 複数の SE が重なって鳴る（衣擦れ等の自然な重なりを狙った意図的な挙動、GUI版と同じ）。
+    /// 1件のみ（K=1）の場合は間隔を挟む相手がいないため、スレッドを起こさず即時再生する。
+    ///
+    /// 開始時に `se_sequence_generation` のスナップショットを取り、各ループの先頭で現行かを
+    /// チェックする——`cancel_se_sequence()` が世代を進めていれば、それ以降の path は
+    /// 再生せず打ち切る（モジュール冒頭「SE シーケンスのキャンセル」節参照）。
+    pub fn play_se_sequence(&self, paths: Vec<PathBuf>, gap_range_ms: (u32, u32)) {
+        if paths.is_empty() {
+            return;
+        }
+        if paths.len() == 1 {
+            self.play_se(&paths[0]);
+            return;
+        }
+        let stream_handle = self.stream_handle.clone();
+        let se_volume = self.se_volume;
+        // 開始時点の世代を捕まえるだけで、ここでは進めない——進めると「新しい [SE:] が
+        // 発火しただけ」で既存の並行シーケンスまで巻き込んで打ち切ってしまう
+        // （`SeSequenceGeneration` のdoc comment参照、GUI版と同じ設計）。
+        let generation = self.se_sequence_generation.clone();
+        let snapshot = generation.snapshot();
+        thread::spawn(move || {
+            let mut rng = rand::thread_rng();
+            for (i, path) in paths.iter().enumerate() {
+                if !generation.is_current(snapshot) {
+                    return;
+                }
+                if let Some(source) = decode_file(path) {
+                    if let Ok(sink) = Sink::try_new(&stream_handle) {
+                        sink.set_volume(se_volume);
+                        sink.append(source);
+                        sink.detach();
+                    }
+                }
+                if i + 1 < paths.len() {
+                    let gap = crate::se_selection::random_gap_ms(
+                        gap_range_ms.0,
+                        gap_range_ms.1,
+                        &mut rng,
+                    );
+                    thread::sleep(Duration::from_millis(gap as u64));
+                }
+            }
+        });
+    }
+
+    /// 生成中の SE シーケンス（`play_se_sequence`）の gap 待機スレッドを全てキャンセルする
+    /// (#672 フォローアップ)。
+    ///
+    /// GUI版 `AudioManager.cancelSeSequence()` と対称の機構——`NovelRenderer` の他の全
+    /// タイマーがシーン遷移・終劇・状態復元・dispose時にキャンセルされるのに対し、
+    /// `playSeSequence`（TUI版は `play_se_sequence`）だけがこの規律から漏れており、
+    /// シーン遷移後もバックグラウンドで鳴り続けるギャップがあった（テスト設計フェーズで
+    /// 発見、是正）。呼び出し元（`main.rs`）はシーンが実際に切り替わった瞬間
+    /// （選択肢ジャンプによる遷移も含む）にこれを呼ぶ。
+    ///
+    /// 世代カウンタを進めるだけで、実行中の背景スレッドは各ループ先頭のチェックポイントで
+    /// 自ら停止する。OS スレッドの `sleep` 自体は割り込めないため、GUI版の `clearTimeout`
+    /// ほど即時ではなく「現在の gap が明けるまで」の遅延を伴うが、後続の再生は確実に止まる
+    /// （モジュール冒頭「SE シーケンスのキャンセル」節参照）。既に発火済みの単発 SE
+    /// （`Sink::detach()` 済み）自体は元々止める手段が無い（既存仕様どおり、変更しない）。
+    pub fn cancel_se_sequence(&self) {
+        self.se_sequence_generation.cancel();
     }
 }
 

@@ -112,9 +112,20 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
 
   if ('Se' in event) {
     const fade = event.Se.fade_ms != null ? ` (フェード ${event.Se.fade_ms}ms)` : ''
+    // #672: 複数候補プールの場合は選択数/間隔も併記する（デバッグ表示、実際の選択はランタイム側）
+    const pool = event.Se.paths.length > 1
+    const count = event.Se.count != null ? ` 選択数=${event.Se.count}` : ''
+    const gap =
+      event.Se.gap_min_ms != null && event.Se.gap_max_ms != null
+        ? ` 間隔=${event.Se.gap_min_ms}-${event.Se.gap_max_ms}`
+        : ''
+    // pool でないときは常に空文字列（count/gap は本来 pool 時のみ意味を持つ値、セルフレビューnit対応:
+    // JSX 側で `pool && ...` と boolean/文字列を混在させず、ここで先に確定させて意図を明確にする）。
+    const poolInfo = pool ? `${count}${gap}` : ''
     return (
       <div className={`text-xs italic ml-2 ${meta}`}>
-        SE: {event.Se.path}
+        SE: {event.Se.paths.join(', ')}
+        {poolInfo}
         {fade}
       </div>
     )

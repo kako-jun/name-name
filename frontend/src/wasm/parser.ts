@@ -187,10 +187,16 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
       }
     }
     if ('Se' in event) {
+      // paths (#672): Rust 側は常に1件以上の Vec<String> を保証する契約（parser.rs
+      // parse_se_directive のdoc comment参照）ため素通しでよい。count/gap_min_ms/gap_max_ms は
+      // 他の Option<u32> フィールドと同じく undefined → null に正規化する。
       return {
         Se: {
-          path: event.Se.path,
+          paths: event.Se.paths,
           fade_ms: event.Se.fade_ms ?? null,
+          count: event.Se.count ?? null,
+          gap_min_ms: event.Se.gap_min_ms ?? null,
+          gap_max_ms: event.Se.gap_max_ms ?? null,
         },
       }
     }

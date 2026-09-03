@@ -150,6 +150,26 @@ use name_name_parser::models::{
 use crate::flags::GameFlags;
 use crate::sentence;
 
+/// `[SE:]` タグ1個分の、まだ選択・シャッフルされていない生の再生記述 (#672)。
+///
+/// `Event::Se` の各フィールドをそのまま保持する。`paths` が複数件のランダム抽出+シャッフルは
+/// あえてここでは行わない——`Playback::item_se`（走査時に一度だけ構築される）へ選択結果を
+/// 焼き込んでしまうと、同じ item に何度到達しても常に同じ組み合わせになり「毎回微妙に違う音」
+/// という #672 の狙いを損なう。実際の抽出は再生トリガのたび（`main.rs::play_new_se_cues`）に
+/// `crate::se_selection::select_and_shuffle_se_files` で新規に計算する（doctrine 規律3、
+/// ランダム性を永続構造に持ち込まない）。`fade_ms` は既存の #502 実装方針（TUI はフェード無し
+/// 即時再生の MVP スコープ）を踏襲し、依然として使用しない。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeCue {
+    pub paths: Vec<String>,
+    /// 選択数 K。`None` は全件（K = `paths.len()`）。
+    pub count: Option<u32>,
+    /// ランダム間隔レンジ下限 ms。`None` はランタイム既定 50ms。
+    pub gap_min_ms: Option<u32>,
+    /// ランダム間隔レンジ上限 ms。`None` はランタイム既定 200ms。
+    pub gap_max_ms: Option<u32>,
+}
+
 /// 画面に表示する1行分の内容（話者名 + 本文 + その時点のイベント絵）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DisplayLine {
@@ -407,7 +427,7 @@ pub struct Playback {
     /// 焼き付けて持ち回る」形で再現する。`Event::Choice` item も対象に含める（除外する理由が
     /// ない）。
     item_bgm: Vec<Option<String>>,
-    /// `items[i]` に到達した瞬間に一度だけ再生すべき SE のパス一覧（`Event::Se`、#502）。
+    /// `items[i]` に到達した瞬間に一度だけ再生すべき SE の生記述一覧（`Event::Se`、#502/#672）。
     /// 直前の item から現在の item までの間に出現した `[SE:]` を出現順にすべて含む
     /// （複数の SE が連続していても取りこぼさない、通常は0〜1件）。BGM と異なり GUI版
     /// `playSe` に持続する state は無い（ワンショット）ため、`item_bgm` のような「現在位置を
@@ -415,7 +435,11 @@ pub struct Playback {
     /// （[`Playback::item_index`] の変化）を検出したときに一度だけ消費するトリガとして扱う想定。
     /// ドキュメント末尾以降に出現した SE（後続 item が存在しない）は、どの item にも属せない
     /// ため再生対象にならない（既知の制約、影響は軽微）。
-    item_se: Vec<Vec<String>>,
+    ///
+    /// 要素は [`SeCue`]（選択・シャッフル前の生の記述）であり、`paths` が複数件でもここでは
+    /// 抽出しない——実際の抽出は消費側（`main.rs::play_new_se_cues`）が毎回新規に行う
+    /// （[`SeCue`] のdoc comment参照、#672）。
+    item_se: Vec<Vec<SeCue>>,
     /// `items[i]` の、シーンを跨いで安定な識別子（`(scene_order 内インデックス, その
     /// シーン内での構築順インデックス)`、#499/#509統合）。`items` と同じ長さを常に保つ
     /// （`item_file_ids` と同じ並行 Vec のパターン）。詳細・既知の制約は
@@ -511,10 +535,10 @@ struct SceneScanState {
     /// `current_blackout` と同じ「シーン・チャプター境界をまたいで引き継ぐ宣言的 state」
     /// パターン（`Playback` 構造体の `item_bgm` doc comment参照）。
     current_bgm: Option<String>,
-    /// 直前の item から現在位置までの間に出現した `[SE:]` の出現順一覧（#502）。次に item が
+    /// 直前の item から現在位置までの間に出現した `[SE:]` の出現順一覧（#502/#672）。次に item が
     /// push されるタイミングで `item_se` へ焼き付けられ、その場で空に戻る
     /// （`Playback` 構造体の `item_se` doc comment参照）。
-    pending_se: Vec<String>,
+    pending_se: Vec<SeCue>,
 }
 
 /// 自動クイックロード専用（#579 セルフレビュー must対応）。セーブ時点で保持していた
@@ -567,7 +591,7 @@ fn push_wait_chain_terminal_item(
     item_wait_ms: &mut Vec<Option<u32>>,
     item_blackout: &mut Vec<bool>,
     item_bgm: &mut Vec<Option<String>>,
-    item_se: &mut Vec<Vec<String>>,
+    item_se: &mut Vec<Vec<SeCue>>,
 ) {
     items.push(PlaybackItem::Image(DisplayLine {
         speaker: state.current_speaker.clone(),
@@ -624,7 +648,7 @@ fn build_scene_items(
     item_wait_ms: &mut Vec<Option<u32>>,
     item_blackout: &mut Vec<bool>,
     item_bgm: &mut Vec<Option<String>>,
-    item_se: &mut Vec<Vec<String>>,
+    item_se: &mut Vec<Vec<SeCue>>,
 ) {
     let mut event_index = 0;
     while event_index < events.len() {
@@ -807,9 +831,22 @@ fn build_scene_items(
             // `current_event_image`/`current_bgm` のような「直近の値」ではなく
             // 「次に生成される item に紐づけて後で一度だけ再生するトリガ」として
             // 貯めておく（`item_se` の doc comment 参照、#502）。`fade_ms` は BGM と
-            // 同じ理由で捨てる。
-            Event::Se { path, .. } => {
-                state.pending_se.push(path.clone());
+            // 同じ理由で捨てる。paths/count/gap_min_ms/gap_max_ms (#672) は選択前の生の
+            // まま `SeCue` へ保持する（実際のランダム抽出は消費側が毎回行う、`SeCue` のdoc
+            // comment参照）。
+            Event::Se {
+                paths,
+                count,
+                gap_min_ms,
+                gap_max_ms,
+                ..
+            } => {
+                state.pending_se.push(SeCue {
+                    paths: paths.clone(),
+                    count: *count,
+                    gap_min_ms: *gap_min_ms,
+                    gap_max_ms: *gap_max_ms,
+                });
             }
             Event::Flag { name, value } => {
                 flags.set(name.clone(), value.clone());
@@ -915,7 +952,7 @@ impl Playback {
         let mut item_wait_ms = Vec::new();
         let mut item_blackout = Vec::new();
         let mut item_bgm = Vec::new();
-        let mut item_se: Vec<Vec<String>> = Vec::new();
+        let mut item_se: Vec<Vec<SeCue>> = Vec::new();
         let mut scene_order: Vec<SceneRef> = Vec::new();
         let mut scene_index_by_id = HashMap::new();
         // 直前まで表示されていた会話行の話者・本文（#497）。`Event::EventImage` の直後に
@@ -1072,7 +1109,7 @@ impl Playback {
         self.item_bgm.get(self.index).and_then(|b| b.as_deref())
     }
 
-    /// 現在位置の item に到達した際に一度だけ再生すべき SE のパス一覧（`Event::Se`、#502）。
+    /// 現在位置の item に到達した際に一度だけ再生すべき SE の生記述一覧（`Event::Se`、#502/#672）。
     /// `items` が空、または現在位置が末尾を過ぎている場合は空スライス。呼び出し側
     /// （`event_loop`）は [`Playback::item_index`] の変化（＝この item への新規到達）を検出
     /// したときだけ、この一覧を消費して1回だけ再生する想定（`item_se` の doc comment 参照）。
@@ -1081,7 +1118,12 @@ impl Playback {
     /// [`Playback::position`]（Line item のみを数える会話行番号）と異なり Choice item への
     /// 遷移でも変化する一方、`sentence_per_page` による同一 Line item 内の文送りでは変化しない
     /// （同じ item に紐づく SE を文送りのたびに再トリガーしない、という意図した挙動でもある）。
-    pub fn current_se_cues(&self) -> &[String] {
+    ///
+    /// 返す [`SeCue`] は選択・シャッフル前の生の記述——`paths` が複数件でもここでは
+    /// 抽出しない。既訪問の item へ戻ってきても同じ `SeCue`（同じ候補プール）が観測されるが、
+    /// そこから実際に鳴る音は呼び出し側が毎回新規に抽出するため、訪問のたびに変わりうる
+    /// （`SeCue` のdoc comment参照、#672）。
+    pub fn current_se_cues(&self) -> &[SeCue] {
         self.item_se
             .get(self.index)
             .map(Vec::as_slice)
@@ -2269,8 +2311,11 @@ mod tests {
                 fade_ms: None,
             },
             Event::Se {
-                path: "se.ogg".to_string(),
+                paths: vec!["se.ogg".to_string()],
                 fade_ms: None,
+                count: None,
+                gap_min_ms: None,
+                gap_max_ms: None,
             },
             Event::Choice {
                 options: vec![ChoiceOption {
@@ -7194,8 +7239,22 @@ mod tests {
 
     fn se(path: &str) -> Event {
         Event::Se {
-            path: path.to_string(),
+            paths: vec![path.to_string()],
             fade_ms: None,
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    }
+
+    /// `current_se_cues()` の期待値組み立て用。`se(path)` が生成する `Event::Se` から
+    /// `Playback` が構築する `SeCue`（単一パス、count/gap 無し）と一致する (#672)。
+    fn se_cue(path: &str) -> SeCue {
+        SeCue {
+            paths: vec![path.to_string()],
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
         }
     }
 
@@ -7327,7 +7386,7 @@ mod tests {
     fn dialog_after_se_carries_its_path_as_a_one_shot_cue() {
         let doc = doc_single_scene(vec![se("chime.wav"), dialog(Some("A"), vec!["後"])]);
         let pb = Playback::from_document(&doc);
-        assert_eq!(pb.current_se_cues(), &["chime.wav".to_string()]);
+        assert_eq!(pb.current_se_cues(), &[se_cue("chime.wav")]);
     }
 
     #[test]
@@ -7338,7 +7397,7 @@ mod tests {
             dialog(Some("A"), vec!["2"]),
         ]);
         let mut pb = Playback::from_document(&doc);
-        assert_eq!(pb.current_se_cues(), &["chime.wav".to_string()]);
+        assert_eq!(pb.current_se_cues(), &[se_cue("chime.wav")]);
         pb.advance();
         assert!(
             pb.current_se_cues().is_empty(),
@@ -7354,10 +7413,7 @@ mod tests {
             dialog(Some("A"), vec!["後"]),
         ]);
         let pb = Playback::from_document(&doc);
-        assert_eq!(
-            pb.current_se_cues(),
-            &["a.wav".to_string(), "b.wav".to_string()]
-        );
+        assert_eq!(pb.current_se_cues(), &[se_cue("a.wav"), se_cue("b.wav")]);
     }
 
     #[test]
@@ -7455,7 +7511,7 @@ mod tests {
         assert!(pb.current_choice().is_some(), "Choiceが現在位置のはず");
         assert_eq!(
             pb.current_se_cues(),
-            &["select.wav".to_string()],
+            &[se_cue("select.wav")],
             "Choice item自体もSEを保持する"
         );
     }
@@ -7473,7 +7529,7 @@ mod tests {
             pb.item_index(),
             "カーソル移動だけではitem_index()は変化しないはず(SE再発火防止)"
         );
-        assert_eq!(pb.current_se_cues(), &["select.wav".to_string()]);
+        assert_eq!(pb.current_se_cues(), &[se_cue("select.wav")]);
     }
 
     #[test]
@@ -7495,7 +7551,7 @@ mod tests {
         assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
         assert_eq!(
             pb.current_se_cues(),
-            &["arrival.wav".to_string()],
+            &[se_cue("arrival.wav")],
             "jump先itemのSEが正しく参照できるはず"
         );
     }
@@ -7528,7 +7584,7 @@ mod tests {
         let mut pb = Playback::from_document(&doc);
         assert_eq!(
             pb.current_se_cues(),
-            &["bgm-room.wav".to_string()],
+            &[se_cue("bgm-room.wav")],
             "最初の訪問時にSEが記録されているはず"
         );
         pb.advance(); // "1-1"の台詞 → "1-2"の台詞
@@ -7539,7 +7595,7 @@ mod tests {
         );
         assert_eq!(
             pb.current_se_cues(),
-            &["bgm-room.wav".to_string()],
+            &[se_cue("bgm-room.wav")],
             "既訪問シーンへ戻っても同じSEが再びcurrent_se_cues()に現れる(仕様、バグではない)"
         );
     }
@@ -7558,7 +7614,7 @@ mod tests {
         let pb = Playback::from_document(&doc);
         assert_eq!(
             pb.current_se_cues(),
-            &["valid.wav".to_string(), "../escape.wav".to_string()],
+            &[se_cue("valid.wav"), se_cue("../escape.wav")],
             "パスの妥当性に関わらず両方のSEが記録される"
         );
     }
@@ -7574,7 +7630,7 @@ mod tests {
         ]);
         let mut pb = Playback::from_document(&doc);
         assert_eq!(pb.current_bgm(), Some("room.ogg"));
-        assert_eq!(pb.current_se_cues(), &["warn.wav".to_string()]);
+        assert_eq!(pb.current_se_cues(), &[se_cue("warn.wav")]);
 
         assert!(
             !pb.select_current_choice(),
@@ -7588,7 +7644,7 @@ mod tests {
         );
         assert_eq!(
             pb.current_se_cues(),
-            &["warn.wav".to_string()],
+            &[se_cue("warn.wav")],
             "jump失敗後もSE状態は変わらないはず"
         );
     }
@@ -7611,7 +7667,7 @@ mod tests {
         );
         let doc = document_with_chapters(vec![ch1]);
         let mut pb = Playback::from_document(&doc);
-        assert_eq!(pb.current_se_cues(), &["open-menu.wav".to_string()]);
+        assert_eq!(pb.current_se_cues(), &[se_cue("open-menu.wav")]);
         let source_cursor = pb.item_index();
 
         assert!(pb.select_current_choice(), "有効なjump先なので成功するはず");
@@ -8249,7 +8305,7 @@ mod tests {
         );
         assert_eq!(
             pb.current_se_cues(),
-            &["orphan.wav".to_string()],
+            &[se_cue("orphan.wav")],
             "同一ファイル内のジャンプではpending_se(orphan.wav)も引き継がれ、jump先の\
              最初のitemで再生されるはず(#540)"
         );

@@ -15,7 +15,12 @@
  * 未統合 (今後動画化が本実装に進んだ際に対応):
  * - Pixi の Ticker (NovelRenderer.shakeTimer / effectTimer、CharacterLayer.animTicker、
  *   DialogBox.ticker)
- * - AudioManager の voice/SE/BGM 同期
+ * - AudioManager の voice/BGM 同期（fetch/decodeAudioData の非同期待ちや BGM フェード完了
+ *   タイマーは引き続き実時計依存）。SE 複数候補プールの再生順序（`playSeSequence` の gap
+ *   待機）だけは #672 フォローアップでこの TimeController に統合済み——NovelRenderer が
+ *   `new AudioManager(this.time)` で自身の TimeController を注入し、シーン遷移・終劇・
+ *   状態復元・dispose 時に `AudioManager.cancelSeSequence()` でキャンセルできる
+ *   （`AudioManager` 冒頭のdoc comment参照）。
  *
  * 各 NovelRenderer インスタンスがひとつ持つ。React 経由でも `renderer.getTimeController()`
  * から触れる。
