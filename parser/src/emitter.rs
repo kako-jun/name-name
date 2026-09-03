@@ -420,14 +420,30 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 prev_was_dialog_or_text = false;
             }
-            Event::Se { path, fade_ms } => {
+            Event::Se {
+                paths,
+                fade_ms,
+                count,
+                gap_min_ms,
+                gap_max_ms,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                match fade_ms {
-                    Some(ms) => out.push_str(&format!("[SE: {path}, フェード={ms}]\n")),
-                    None => out.push_str(&format!("[SE: {path}]\n")),
+                // #672: paths を "," 結合（1件のみなら従来通りの単発表記）。
+                // 選択数/間隔/フェードは指定されたものだけを付加する（round-trip 保持）。
+                let joined = paths.join(",");
+                let mut kv = String::new();
+                if let Some(k) = count {
+                    kv.push_str(&format!(", 選択数={k}"));
                 }
+                if let (Some(min), Some(max)) = (gap_min_ms, gap_max_ms) {
+                    kv.push_str(&format!(", 間隔={min}-{max}"));
+                }
+                if let Some(ms) = fade_ms {
+                    kv.push_str(&format!(", フェード={ms}"));
+                }
+                out.push_str(&format!("[SE: {joined}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::Blackout { action } => {

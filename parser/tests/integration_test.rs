@@ -120,8 +120,11 @@ fn test_parse_sample() {
     assert_eq!(
         events[4],
         Event::Se {
-            path: "se_maoudamashii_onepoint26.ogg".to_string(),
+            paths: vec!["se_maoudamashii_onepoint26.ogg".to_string()],
             fade_ms: None,
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
         }
     );
 
@@ -3359,8 +3362,84 @@ fn test_se_with_fade_in() {
     assert_eq!(
         events[0],
         Event::Se {
-            path: "se/door.ogg".to_string(),
+            paths: vec!["se/door.ogg".to_string()],
             fade_ms: Some(200),
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
+        }
+    );
+}
+
+#[test]
+fn test_se_multi_file_shuffle_random_gap_parses_and_round_trips() {
+    // [SE: p1,p2,..., 選択数=K, 間隔=min-max] (#672)
+    // カンマ区切りで複数パスを列挙すると SE 候補プールとして蓄積され、
+    // 選択数/間隔 kv 修飾子も併せて parse される。emit → parse で全フィールドが保持される。
+    let input = "## s: テスト\n\n\
+        [SE: cloth-lift-v1.wav,cloth-lift-v2.wav,cloth-shift-small-v1.wav, 選択数=2, 間隔=50-200]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec![
+                "cloth-lift-v1.wav".to_string(),
+                "cloth-lift-v2.wav".to_string(),
+                "cloth-shift-small-v1.wav".to_string(),
+            ],
+            fade_ms: None,
+            count: Some(2),
+            gap_min_ms: Some(50),
+            gap_max_ms: Some(200),
+        }
+    );
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc, doc2,
+        "emit → parse でSE候補プール/選択数/間隔が保持される (#672)"
+    );
+}
+
+#[test]
+fn test_se_multi_file_english_alias_count_and_gap() {
+    // count=/gap= の英語 alias も 選択数=/間隔= と同じ意味で受理される (#672)
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav,c.wav, count=1, gap=100-300]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec![
+                "a.wav".to_string(),
+                "b.wav".to_string(),
+                "c.wav".to_string()
+            ],
+            fade_ms: None,
+            count: Some(1),
+            gap_min_ms: Some(100),
+            gap_max_ms: Some(300),
+        }
+    );
+}
+
+#[test]
+fn test_se_multi_file_omitted_count_and_gap_default_to_none() {
+    // 選択数/間隔省略時は None のまま（ランタイム側が既定値を適用する契約、#672）
+    let input = "## s: テスト\n\n[SE: a.wav,b.wav]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events[0],
+        Event::Se {
+            paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            fade_ms: None,
+            count: None,
+            gap_min_ms: None,
+            gap_max_ms: None,
         }
     );
 }

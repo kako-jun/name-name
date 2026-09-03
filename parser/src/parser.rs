@@ -1077,9 +1077,9 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
         });
     }
     // [SE: path] / [SE: path, フェード=200] (#145)
+    // [SE: p1,p2,..., 選択数=5, 間隔=50-200] (#672、複数候補ランダム抽出+シャッフル再生)
     if let Some(rest) = content.strip_prefix("SE:") {
-        let (path, fade_ms) = parse_audio_path_and_fade(rest);
-        return Some(Event::Se { path, fade_ms });
+        return Some(parse_se_directive(rest));
     }
     if content == "暗転" {
         return Some(Event::Blackout {
@@ -1266,11 +1266,13 @@ fn parse_fade_kv(pair: &str, accept_bare_number: bool) -> Option<u32> {
     }
 }
 
-/// `[BGM: path, フェード=500]` / `[SE: path, フェード=200]` の本体を分解する (#145)。
+/// `[BGM: path, フェード=500]` の本体を分解する (#145)。
 /// 最初の `,` 区切り要素を path、残りを kv ペアとして解釈する。
 /// kv は `フェード` / `fade` のみ受理。Play 系は path との曖昧さを避けるため bare 数字は受理しない
 /// （Stop 系の `[BGM停止: 2000]` のみ bare 数字を許容）。
 /// 未知のキーや不正な値は silent skip する（後方互換重視）。
+/// SE (`[SE: ...]`) は #672 で複数パス対応したため専用の [`parse_se_directive`] を使う
+/// （このヘルパーは BGM 専用、スコープ外のまま）。
 fn parse_audio_path_and_fade(content: &str) -> (String, Option<u32>) {
     let mut parts = content.split(',');
     let path = parts
@@ -1284,6 +1286,78 @@ fn parse_audio_path_and_fade(content: &str) -> (String, Option<u32>) {
         }
     }
     (path, fade_ms)
+}
+
+/// `[SE: path]` / `[SE: path, フェード=200]` /
+/// `[SE: p1,p2,..., 選択数=5, 間隔=50-200, フェード=200]` の本体を分解する (#672)。
+///
+/// `,` 区切りの各トークンのうち `=` を含まないものはすべて SE 候補パスとして蓄積し、
+/// `=` を含むものは kv 修飾子として解釈する。これは既存の `expressions={key:path,...}`
+/// （NPC 表情差分マップ）や `character_height_ratios: theo:0.65,hue:0.68` と同じ
+/// 「カンマ区切りで列挙する」慣習に合わせた設計（`|` 等の新記号は導入しない）。
+/// パス候補が1件のみなら従来通りの単発再生（後方互換、既存スクリプトへの影響なし）。
+///
+/// kv は `選択数`/`count`（u32、抽出件数K。省略時はランタイムが全件=N扱い）、
+/// `間隔`/`gap`（`min-max` 形式、ランダム待機レンジ ms）、`フェード`/`fade`（u32、既存 #145）
+/// を受理する。未知のキー・不正な値（数値 parse 失敗、`min-max` 形式でない等）は silent skip
+/// する（`parse_audio_path_and_fade` と同じ後方互換方針）。
+///
+/// パス候補が1件も無い（例: `[SE: 選択数=1]` のように kv だけが書かれた記述ミス）場合は
+/// 空文字列1件にフォールバックする — `paths` が空配列にならないことを保証する
+/// （ランタイム側が `paths[0]` 等を無条件に読める前提を壊さない防御、通常の原稿では発生しない）。
+fn parse_se_directive(content: &str) -> Event {
+    let mut paths: Vec<String> = Vec::new();
+    let mut fade_ms: Option<u32> = None;
+    let mut count: Option<u32> = None;
+    let mut gap_min_ms: Option<u32> = None;
+    let mut gap_max_ms: Option<u32> = None;
+
+    for raw in content.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if let Some((key, value)) = token.split_once('=') {
+            let value = value.trim();
+            match key.trim() {
+                "フェード" | "fade" => {
+                    if let Ok(n) = value.parse::<u32>() {
+                        fade_ms = Some(n);
+                    }
+                }
+                "選択数" | "count" => {
+                    if let Ok(n) = value.parse::<u32>() {
+                        count = Some(n);
+                    }
+                }
+                "間隔" | "gap" => {
+                    if let Some((min_s, max_s)) = value.split_once('-') {
+                        if let (Ok(min_v), Ok(max_v)) =
+                            (min_s.trim().parse::<u32>(), max_s.trim().parse::<u32>())
+                        {
+                            gap_min_ms = Some(min_v);
+                            gap_max_ms = Some(max_v);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            paths.push(token.to_string());
+        }
+    }
+
+    if paths.is_empty() {
+        paths.push(String::new());
+    }
+
+    Event::Se {
+        paths,
+        fade_ms,
+        count,
+        gap_min_ms,
+        gap_max_ms,
+    }
 }
 
 /// `[退場: 名前]` / `[退場: 名前, フェード=2100]` の本体を分解する。
@@ -2954,8 +3028,11 @@ title: "テスト"
         assert_eq!(
             events[3],
             Event::Se {
-                path: "se_test.ogg".to_string(),
+                paths: vec!["se_test.ogg".to_string()],
                 fade_ms: None,
+                count: None,
+                gap_min_ms: None,
+                gap_max_ms: None,
             }
         );
         assert_eq!(
