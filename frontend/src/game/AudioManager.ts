@@ -5,7 +5,9 @@
  * - SE: ワンショット再生、複数同時再生可能
  * - AudioBuffer キャッシュで同一ファイルの再 fetch を防止
  * - ユーザーインタラクション制約への対応（ensureContext）
+ * - SE 複数候補プールのランダム抽出+シャッフル+ランダム間隔再生（#672、`playSeSequence`）
  */
+import { randomGapMs } from './seSelection'
 
 export class AudioManager {
   private ctx: AudioContext | null = null
@@ -332,6 +334,39 @@ export class AudioManager {
       source.onended = () => source.disconnect()
     }
     source.start(0)
+  }
+
+  /**
+   * 既に選択・シャッフル済みの SE URL 一覧を、ランダム間隔を挟みながら順に再生する (#672)。
+   *
+   * `[SE: p1,p2,..., 選択数=K, 間隔=min-max]` の実際の再生を担う。選択・シャッフル自体は
+   * `seSelection.selectAndShuffleSeFiles` が既に済ませている前提（呼び出し元 = NovelRenderer）
+   * ——ここは「渡された順に、合間だけランダムに空けて鳴らす」ことだけに責務を絞る
+   * （doctrine 規律4「単一責務」）。
+   *
+   * 各ファイルは `playSe` と同じ fire-and-forget（再生完了を待たない）で発火するため、
+   * gap がクリップの長さより短ければ複数の SE が重なって鳴る（衣擦れ等の自然な重なりを
+   * 狙った意図的な挙動）。1件のみ（K=1）の場合は間隔を挟む相手がいないため即時再生する。
+   *
+   * @param urls 再生する SE の URL 一覧（選択・シャッフル済み）
+   * @param gapMinMs ランダム間隔レンジ下限 ms
+   * @param gapMaxMs ランダム間隔レンジ上限 ms
+   * @param fadeInMs 各再生に適用する fade-in 時間 ms (#145)。未指定なら即時フル音量。
+   */
+  async playSeSequence(
+    urls: readonly string[],
+    gapMinMs: number,
+    gapMaxMs: number,
+    fadeInMs?: number
+  ): Promise<void> {
+    for (let i = 0; i < urls.length; i++) {
+      // 再生完了を待たない（fire-and-forget、playSe 単体呼び出しと同じ意味論）。
+      void this.playSe(urls[i], fadeInMs)
+      if (i + 1 < urls.length) {
+        const gap = randomGapMs(gapMinMs, gapMaxMs)
+        await new Promise<void>((resolve) => setTimeout(resolve, gap))
+      }
+    }
   }
 
   /**

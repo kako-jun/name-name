@@ -285,7 +285,21 @@ export type Event =
         fade_ms?: number | null
       }
     }
-  | { Se: { path: string; /** SE fade-in 時間 ms (#145) */ fade_ms?: number | null } }
+  | {
+      Se: {
+        /** SE 候補ファイルパスの一覧 (#672)。通常は1件（従来通りの単発再生、後方互換）。
+         *  複数件の場合はランダム抽出+シャッフル再生のプールとして扱う（`count`/`gap_min_ms`/`gap_max_ms` 参照）。 */
+        paths: string[]
+        /** SE fade-in 時間 ms (#145)。選択された全ファイルの再生に同じ値を適用する。 */
+        fade_ms?: number | null
+        /** 選択数 K (#672)。`paths` から重複無しでランダム抽出する件数。null/undefined は全件(K=paths.length)。 */
+        count?: number | null
+        /** ランダム間隔レンジ下限 ms (#672)。null/undefined 時のランタイム既定は 50ms。 */
+        gap_min_ms?: number | null
+        /** ランダム間隔レンジ上限 ms (#672)。null/undefined 時のランタイム既定は 200ms。 */
+        gap_max_ms?: number | null
+      }
+    }
   | { Blackout: { action: BlackoutAction } }
   | 'SceneTransition'
   /**

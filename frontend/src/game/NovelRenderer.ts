@@ -25,6 +25,7 @@ import { CharacterLayer, NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 import { AudioManager } from './AudioManager'
+import { selectAndShuffleSeFiles } from './seSelection'
 import {
   BackgroundFade,
   GameState,
@@ -3986,9 +3987,16 @@ export class NovelRenderer {
       return
     }
     if ('Se' in event) {
-      const soundUrl = resolveAssetUrl(this.assetBaseUrl, 'sounds', event.Se.path)
-      // fade_ms (#145): 指定があれば fade-in、未指定なら即時再生
-      this.audioManager.playSe(soundUrl, event.Se.fade_ms ?? undefined)
+      // paths が1件のみなら従来通りの単発再生（後方互換）。複数件ならランダム抽出+シャッフル
+      // +ランダム間隔の再生プールとして扱う (#672)。選択・シャッフルはここ（トリガ発火時）で
+      // 毎回新たに計算し、GameState 等の永続構造には焼き込まない（doctrine 規律3）。
+      const selected = selectAndShuffleSeFiles(event.Se.paths, event.Se.count)
+      const soundUrls = selected.map((path) => resolveAssetUrl(this.assetBaseUrl, 'sounds', path))
+      // 間隔省略時のランタイム既定 50-200ms (#672 Issue本文)
+      const gapMinMs = event.Se.gap_min_ms ?? 50
+      const gapMaxMs = event.Se.gap_max_ms ?? 200
+      // fade_ms (#145): 指定があれば各再生に fade-in、未指定なら即時再生
+      this.audioManager.playSeSequence(soundUrls, gapMinMs, gapMaxMs, event.Se.fade_ms ?? undefined)
       return
     }
     if ('Flag' in event) {
