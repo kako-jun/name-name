@@ -9727,3 +9727,138 @@ title: "テスト"
         "未指定なら emit にキー自体が出ない: {emitted}"
     );
 }
+
+#[test]
+fn test_telop_bottom_left_japanese_token_alone() {
+    // 位置=左下 単独指定（他の位置トークンは既存テストで網羅済み）
+    let event = parse_single_telop("[テロップ: 左下確認, 位置=左下]").expect("Telop を期待");
+    match event {
+        Event::Telop { position, .. } => assert_eq!(position, TelopPosition::BottomLeft),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_seconds_boundary_1_30_31() {
+    // 境界値 -1/境界/+1 を1テストにまとめる（クランプ範囲 [1, 30] の下限・上限・超過）
+    let at_min = parse_single_telop("[テロップ: 下限, 秒=1]").expect("Telop を期待");
+    match at_min {
+        Event::Telop { seconds, .. } => assert_eq!(seconds, 1, "下限ちょうどはそのまま"),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+
+    let at_max = parse_single_telop("[テロップ: 上限, 秒=30]").expect("Telop を期待");
+    match at_max {
+        Event::Telop { seconds, .. } => assert_eq!(seconds, 30, "上限ちょうどはそのまま"),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+
+    let over_max = parse_single_telop("[テロップ: 上限超え, 秒=31]").expect("Telop を期待");
+    match over_max {
+        Event::Telop { seconds, .. } => assert_eq!(seconds, 30, "上限+1 は 30 にクランプされる"),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_negative_seconds_falls_back_to_default() {
+    // 秒=-5 は u32::parse が Err になる経路（非数値 "abc" とは別の入力形で同経路を確認）
+    let event = parse_single_telop("[テロップ: 負の秒, 秒=-5]").expect("Telop を期待");
+    match event {
+        Event::Telop { seconds, .. } => {
+            assert_eq!(seconds, 4, "負値は u32 パース失敗経路で既定 4 にフォールバック")
+        }
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_empty_kind_value_is_none() {
+    let event = parse_single_telop("[テロップ: 本文, 種別=]").expect("Telop を期待");
+    match event {
+        Event::Telop { kind, .. } => assert_eq!(kind, None, "空文字の種別は None"),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_unknown_key_absorbed_into_body() {
+    // 既知キー（位置/秒/種別）に一致しない断片は本文へ吸収されて再結合される
+    let event = parse_single_telop("[テロップ: 本文, foo=bar]").expect("Telop を期待");
+    match event {
+        Event::Telop { text, .. } => {
+            assert_eq!(text, "本文, foo=bar", "未知キーは本文へ吸収される")
+        }
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_kv_only_no_body_is_ignored() {
+    // 本文なし・kv のみの指定はディレクティブごと無視される（空本文の既存扱いと同じ結論）
+    assert_eq!(
+        parse_single_telop("[テロップ: 位置=右上]"),
+        None,
+        "本文がないディレクティブは無視される"
+    );
+}
+
+#[test]
+fn test_telop_after_dialog_emit_reparse_roundtrip() {
+    // Dialog 直後に Telop を置いた文書が emit→reparse で events を保持する
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+**カコ** (suppin_1, 左):
+やっほー。
+
+[テロップ: 到着, 位置=左上]
+"#;
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let reparsed = parser::parse(&emitted);
+    assert_eq!(
+        reparsed.chapters[0].scenes[0].events, doc.chapters[0].scenes[0].events,
+        "Dialog 直後の Telop が emit→reparse で保持される: {emitted}"
+    );
+}
+
+#[test]
+fn test_telop_multiple_events_preserve_order_and_fields() {
+    // 同一シーンに複数の [テロップ:] を連続配置しても、events の順序と各フィールドが保たれる
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: テロップ複数\n\n[テロップ: 一つ目, 位置=左上, 秒=5]\n[テロップ: 二つ目, 位置=右下, 秒=3, 種別=note]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 2, "2件のテロップが両方 events に入る: {events:?}");
+    match (&events[0], &events[1]) {
+        (
+            Event::Telop {
+                text: t1,
+                position: p1,
+                seconds: s1,
+                kind: k1,
+            },
+            Event::Telop {
+                text: t2,
+                position: p2,
+                seconds: s2,
+                kind: k2,
+            },
+        ) => {
+            assert_eq!(t1, "一つ目");
+            assert_eq!(*p1, TelopPosition::TopLeft);
+            assert_eq!(*s1, 5);
+            assert_eq!(*k1, None);
+            assert_eq!(t2, "二つ目");
+            assert_eq!(*p2, TelopPosition::BottomRight);
+            assert_eq!(*s2, 3);
+            assert_eq!(*k2, Some("note".to_string()));
+        }
+        other => panic!("2件とも Telop を期待したが {other:?}"),
+    }
+}
