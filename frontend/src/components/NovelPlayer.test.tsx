@@ -1055,6 +1055,59 @@ describe('NovelPlayer SeekBar 色 seekbar_color 配線 (#440)', () => {
   })
 })
 
+// #674: doc.telop_reserve → renderer.setTelopReserve 配線。seekbar_color（#440）と同じ
+// `?? null` フォールバック流儀（null/undefined → null）で init 時に流す。
+describe('NovelPlayer telopReserve 配線 (#674)', () => {
+  it('telopReserve={true} なら mount 時に renderer.setTelopReserve(true) が呼ばれる', async () => {
+    render(<NovelPlayer events={[]} telopReserve={true} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setTelopReserve).toHaveBeenCalledWith(true)
+  })
+
+  it('telopReserve 未指定なら mount 時に renderer.setTelopReserve(null) が呼ばれる', async () => {
+    render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setTelopReserve).toHaveBeenCalledWith(null)
+  })
+
+  it('telopReserve={null} でも mount 時に renderer.setTelopReserve(null) が呼ばれる（明示 null）', async () => {
+    render(<NovelPlayer events={[]} telopReserve={null} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setTelopReserve).toHaveBeenCalledWith(null)
+  })
+
+  // 最重要: setTelopReserve は setEvents（＝初回改頁計算の起点）より前に呼ばれる必要がある
+  // （NovelPlayer.tsx の配線コメント「setEvents/setScenes より前に設定し、初回描画から
+  // 本文領域の下端が狭い状態で改頁が確定するようにする」）。呼び出し順が入れ替わると、
+  // 初回ページだけテロップ帯を考慮しない行数で改頁されてしまう回帰になる。
+  it('最重要: setTelopReserve が setEvents より先に呼ばれる（初回改頁計算に反映させるため）', async () => {
+    render(<NovelPlayer events={[]} telopReserve={true} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    const reserveOrder = r.setTelopReserve.mock.invocationCallOrder[0]
+    const eventsOrder = r.setEvents.mock.invocationCallOrder[0]
+    expect(reserveOrder).toBeLessThan(eventsOrder)
+  })
+
+  it('rerender で telopReserve が undefined → true → null と変化すると、都度 renderer.setTelopReserve に反映される', async () => {
+    const { rerender } = render(<NovelPlayer events={[]} />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setTelopReserve).toHaveBeenLastCalledWith(null)
+
+    rerender(<NovelPlayer events={[]} telopReserve={true} />)
+    await flushAsync()
+    expect(r.setTelopReserve).toHaveBeenLastCalledWith(true)
+
+    rerender(<NovelPlayer events={[]} telopReserve={null} />)
+    await flushAsync()
+    expect(r.setTelopReserve).toHaveBeenLastCalledWith(null)
+  })
+})
+
 // #605: 操作ボタン（A/S/D）の ON 時背景色を seekbar_color に連動させる配線。
 // 色決定ロジック自体（境界値等）は resolveActionButtonColor 単体で novelLayout.test.ts が縛るので、
 // ここでは「NovelPlayer が resolveActionButtonColor の結果を各ボタンの style CSS 変数
