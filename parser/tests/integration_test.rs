@@ -9766,7 +9766,10 @@ fn test_telop_negative_seconds_falls_back_to_default() {
     let event = parse_single_telop("[テロップ: 負の秒, 秒=-5]").expect("Telop を期待");
     match event {
         Event::Telop { seconds, .. } => {
-            assert_eq!(seconds, 4, "負値は u32 パース失敗経路で既定 4 にフォールバック")
+            assert_eq!(
+                seconds, 4,
+                "負値は u32 パース失敗経路で既定 4 にフォールバック"
+            )
         }
         other => panic!("Telop を期待したが {other:?}"),
     }
@@ -9860,7 +9863,11 @@ fn test_telop_multiple_events_preserve_order_and_fields() {
     let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: テロップ複数\n\n[テロップ: 一つ目, 位置=左上, 秒=5]\n[テロップ: 二つ目, 位置=右下, 秒=3, 種別=note]\n";
     let doc = parser::parse(input);
     let events = &doc.chapters[0].scenes[0].events;
-    assert_eq!(events.len(), 2, "2件のテロップが両方 events に入る: {events:?}");
+    assert_eq!(
+        events.len(),
+        2,
+        "2件のテロップが両方 events に入る: {events:?}"
+    );
     match (&events[0], &events[1]) {
         (
             Event::Telop {
