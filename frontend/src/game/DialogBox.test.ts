@@ -1247,6 +1247,107 @@ describe('DialogBox novel mode (#283)', () => {
     expect(box.isNovelMode).toBe(false)
     box.dispose()
   })
+
+  // --- テロップ帯予約 setNovelBottomReserve (#674) ---------------------------
+
+  // 26: novelMode 中に setNovelBottomReserve(px) を呼ぶと boxH が
+  //     expectedNovelGeometry(w,h).boxH - px になる（即座に再計算される）。
+  it('26: novelMode 中に setNovelBottomReserve(px) を呼ぶと boxH が expectedNovelGeometry(w,h).boxH - px になる', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const px = 40
+    box.setNovelBottomReserve(px)
+    const exp = expectedNovelGeometry(W, H)
+    expect(novelInternals(box).boxH).toBe(exp.boxH - px)
+    box.dispose()
+  })
+
+  // 27: novelMode に入る前に setNovelBottomReserve を呼んでも、後から setNovelMode(true) した
+  //     ときに反映される（呼び出し順序に依存しない）。
+  it('27: novelMode 前に setNovelBottomReserve を呼んでも novelMode 突入後に反映される（順序非依存）', () => {
+    const box = makeBox()
+    const px = 40
+    box.setNovelBottomReserve(px)
+    box.setNovelMode(true)
+    const exp = expectedNovelGeometry(W, H)
+    expect(novelInternals(box).boxH).toBe(exp.boxH - px)
+    box.dispose()
+  })
+
+  // 28: reserve=0 を明示指定した場合と、そもそも setNovelBottomReserve を呼ばない場合は
+  //     boxH が完全に同値になる（0 = 予約なしの既定と一致）。
+  it('28: reserve=0 と未設定(呼ばない)は同値（boxH が変わらない）', () => {
+    const boxUnset = makeBox()
+    boxUnset.setNovelMode(true)
+    const unsetBoxH = novelInternals(boxUnset).boxH
+
+    const boxZero = makeBox()
+    boxZero.setNovelMode(true)
+    boxZero.setNovelBottomReserve(0)
+    const zeroBoxH = novelInternals(boxZero).boxH
+
+    expect(zeroBoxH).toBe(unsetBoxH)
+    boxUnset.dispose()
+    boxZero.dispose()
+  })
+
+  // 29: 負値は Math.max(0, px) で 0 にクランプされる（boxH が未設定時と変わらない）。
+  it('29: 負値の reserve は 0 にクランプされる（boxH が変わらない）', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const before = novelInternals(box).boxH
+    box.setNovelBottomReserve(-50)
+    expect(novelInternals(box).boxH).toBe(before)
+    box.dispose()
+  })
+
+  // 30a: splitLayoutRegion 設定中は applySplitLayoutBoxGeometry が boxH を決めるため、
+  //      setNovelBottomReserve は影響しない（対象外の分岐）。
+  it('30a: splitLayoutRegion 設定中は setNovelBottomReserve が boxH に影響しない', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const region: LayoutRect = { x: 400, y: 0, width: 400, height: 450 }
+    box.setSplitLayoutRegion(region)
+    const before = novelInternals(box).boxH
+    box.setNovelBottomReserve(999)
+    expect(novelInternals(box).boxH).toBe(before)
+    box.dispose()
+  })
+
+  // 30b: dualWindowRegions 設定中は applyDualWindowBoxGeometry が boxH を決めるため、
+  //      setNovelBottomReserve は影響しない（対象外の分岐）。
+  it('30b: dualWindowRegions 設定中は setNovelBottomReserve が boxH に影響しない', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const opponent: LayoutRect = { x: 400, y: 0, width: 400, height: 225 }
+    const self_: LayoutRect = { x: 400, y: 225, width: 400, height: 225 }
+    box.setDualWindowRegions({ opponent, self: self_ })
+    const before = novelInternals(box).boxH
+    box.setNovelBottomReserve(999)
+    expect(novelInternals(box).boxH).toBe(before)
+    box.dispose()
+  })
+
+  // 31(最重要): reserve px が行高（fontSize*1.6）を跨ぐ境界で novelMaxLinesPerPage() が
+  //             ちょうど1行減る。expectedMaxLines と同形の usable/lineHeight から
+  //             「まだ跨がない reserve=remainder」と「跨いだ reserve=remainder+1」を算出する。
+  it('31(最重要): reserve px が行高を跨ぐ境界で novelMaxLinesPerPage() が1行減る', () => {
+    const box = makeBox()
+    box.setNovelMode(true)
+    const boxH0 = expectedNovelGeometry(W, H).boxH
+    const usable0 = boxH0 - PAD * 2
+    const lineHeight = FONT_SIZE * 1.6
+    const n0 = Math.floor(usable0 / lineHeight)
+    const remainder = usable0 - n0 * lineHeight
+
+    box.setNovelBottomReserve(remainder)
+    expect(box.novelMaxLinesPerPage()).toBe(n0) // ちょうど境界: まだ 1 行分は減らない
+
+    box.setNovelBottomReserve(remainder + 1)
+    expect(box.novelMaxLinesPerPage()).toBe(n0 - 1) // 1px 跨ぐと 1 行減る
+
+    box.dispose()
+  })
 })
 
 // split_layout (#442) のテキスト領域固定。dialog_style（adv/novel）とは独立の軸で、
