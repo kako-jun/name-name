@@ -2182,6 +2182,7 @@ mod tests {
             fullscreen_image: None,
             sentence_per_page: None,
             pixel_art: None,
+            telop_reserve: None,
             chapters,
         }
     }
