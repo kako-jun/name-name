@@ -21,11 +21,16 @@
  * アニメーション位相（スライドイン/保持/フェードアウトのどの段階か）は settled state を持たない
  * 一時状態としてこのクラスだけが保持する（ADR-0002 / dev-doctrine 規律1）。タイマーは
  * `EventImageLayer.fadeAnimation` と同じ `TimeController`（`this.time.setInterval`, 16ms 間隔）駆動。
+ *
+ * 下端アンカー（BottomLeft/BottomRight）は画面下部の丸ボタン行（DOM 固定 CSS px）に重ならないよう
+ * `buttonRowHeightPx`（既定 `PLAYER_BUTTON_ROW_HEIGHT_PX`）ぶん余分にマージンを取る (#677)。
+ * `setButtonRowHeightPx` で表示倍率補正後の値に更新できる（`SeekBar.setVerticalCenter` と同じ流儀）。
  */
 import { Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
 import type { TelopPosition } from '../types'
 import {
   computeTelopGeometry,
+  PLAYER_BUTTON_ROW_HEIGHT_PX,
   TELOP_ACCENT_WIDTH_PX,
   TELOP_FADE_OUT_MS,
   TELOP_FONT_SCALE,
@@ -89,6 +94,13 @@ export class TelopLayer extends Container {
   private nextId = 1
   private screenWidth: number
   private screenHeight: number
+  /**
+   * 下端アンカー（BottomLeft/BottomRight）の下部丸ボタン行ぶんの論理座標マージン (#677)。
+   * 既定は表示倍率 1:1 の `PLAYER_BUTTON_ROW_HEIGHT_PX`。`NovelRenderer.syncTelopBottomMarginToButtons`
+   * が `canvas.clientHeight` から求めた実倍率で割った値を `setButtonRowHeightPx` 経由で渡す
+   * （`SeekBar.setVerticalCenter` と同じ流儀、#350）。
+   */
+  private buttonRowHeightPx = PLAYER_BUTTON_ROW_HEIGHT_PX
 
   constructor(
     screenWidth: number,
@@ -100,6 +112,18 @@ export class TelopLayer extends Container {
     this.screenHeight = screenHeight
     // 旧 ToastOverlay と同じくクリックしても何も起きない（誤タップで本文が進むのを防ぐ、#674 仕様）。
     this.eventMode = 'none'
+  }
+
+  /**
+   * 下部丸ボタン行の論理座標マージンを更新し、既存段を含めて即座に再配置する (#677)。
+   * `NovelRenderer` が表示倍率の変化（resize/回転）を検知するたびに呼ぶ想定。
+   * `canvas.clientHeight` のサブピクセル揺れ（レイアウト計算の丸め誤差等）で無意味な
+   * relayout が頻発しないよう、差が 0.5px 未満なら no-op とする（#678）。
+   */
+  setButtonRowHeightPx(px: number): void {
+    if (Math.abs(px - this.buttonRowHeightPx) < 0.5) return
+    this.buttonRowHeightPx = px
+    this.relayout()
   }
 
   /**
@@ -264,6 +288,7 @@ export class TelopLayer extends Container {
           stackIndex,
           fontSize: entry.fontSize,
           textWidth: entry.textWidth,
+          buttonRowHeightPx: this.buttonRowHeightPx,
         })
         entry.targetX = geometry.x
         entry.targetY = geometry.y

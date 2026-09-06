@@ -334,7 +334,8 @@ export class DialogBox extends Container {
   /**
    * テロップ帯予約 (#674)。frontmatter `telop_reserve: true` の作品だけ、`applyNovelGeometry()`
    * の全画面分岐（split_layout / 2窓 は対象外＝そのまま）で `boxH` からこの高さぶんを差し引く。
-   * `computeTelopBandHeight(fontSize)`（novelLayout.ts）を `setNovelBottomReserve` で渡す。
+   * `computeTelopBottomReserveHeight(fontSize, buttonRowHeightPx)`（novelLayout.ts、#677。
+   * テロップ帯高さ＋下部丸ボタン行ぶん）を `setNovelBottomReserve` で渡す。
    * 0 = 予約なし（既定・後方互換。テロップは本文の上に半透明で重なる）。
    */
   private novelBottomReservePx = 0
@@ -625,7 +626,8 @@ export class DialogBox extends Container {
   }
 
   /**
-   * テロップ帯予約 (#674)。`px`（`computeTelopBandHeight(fontSize)` の結果、0 = 予約なし）を
+   * テロップ帯予約 (#674)。`px`（`computeTelopBottomReserveHeight(fontSize, buttonRowHeightPx)` の
+   * 結果、0 = 予約なし。#677 でテロップ帯高さに下部丸ボタン行ぶんを加算するよう拡張）を
    * `applyNovelGeometry()` の全画面分岐に反映する。novel モード中なら即座にジオメトリを
    * 再計算する（改頁行数 `novelMaxLinesPerPage()` はこの boxH から導かれるため、次の改頁計算にも
    * 自動で反映される）。split_layout / 2窓モードの領域計算は対象外（そのまま）。
@@ -752,8 +754,8 @@ export class DialogBox extends Container {
       this.boxX = NOVEL_TEXT_MARGIN_X
       this.boxW = this.screenWidth - NOVEL_TEXT_MARGIN_X * 2
       this.boxY = topY
-      // テロップ帯予約 (#674): telop_reserve: true の作品だけ下端をテロップ帯1段ぶん上げる。
-      // 改頁行数 (novelMaxLinesPerPage) はこの boxH から導かれるため、改頁計算にも自動で波及する。
+      // テロップ帯予約 (#674): telop_reserve: true の作品だけ下端をテロップ帯1段ぶん＋下部丸ボタン行ぶん
+      // (#677) 上げる。改頁行数 (novelMaxLinesPerPage) はこの boxH から導かれるため、改頁計算にも自動で波及する。
       this.boxH = this.screenHeight - topY - NOVEL_TEXT_MARGIN_BOTTOM - this.novelBottomReservePx
     }
 

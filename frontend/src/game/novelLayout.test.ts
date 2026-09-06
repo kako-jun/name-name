@@ -44,12 +44,15 @@ import {
   SKIP_BUTTON_FALLBACK_COLOR,
   DEBUG_BUTTON_FALLBACK_COLOR,
   computeTelopBandHeight,
+  computeTelopBottomReserveHeight,
   computeTelopGeometry,
   TELOP_FONT_SCALE,
   TELOP_LINE_HEIGHT_RATIO,
   TELOP_PADDING_Y_PX,
   TELOP_MARGIN_PX,
+  TELOP_BOTTOM_RESERVE_PX,
   TELOP_STACK_GAP_PX,
+  PLAYER_BUTTON_ROW_HEIGHT_PX,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -2972,16 +2975,43 @@ describe('computeTelopGeometry (#674)', () => {
     })
   }
 
-  it('BottomRight: 右端=screenWidth-MARGIN・下端=screenHeight-MARGIN', () => {
+  // #677: 下端アンカーは下部丸ボタン行（PLAYER_BUTTON_ROW_HEIGHT_PX）ぶんも避けるため、
+  // 下端マージンは TELOP_MARGIN_PX 単体ではなく TELOP_BOTTOM_RESERVE_PX になる。
+  it('BottomRight: 右端=screenWidth-MARGIN・下端=screenHeight-TELOP_BOTTOM_RESERVE_PX（ボタン行を避ける、#677）', () => {
     const g = geometryAt('BottomRight')
     expect(g.x + g.width).toBe(screenWidth - TELOP_MARGIN_PX)
-    expect(g.y + g.height).toBe(screenHeight - TELOP_MARGIN_PX)
+    expect(g.y + g.height).toBe(screenHeight - TELOP_BOTTOM_RESERVE_PX)
   })
 
-  it('BottomLeft: 左端=MARGIN・下端=screenHeight-MARGIN', () => {
+  it('BottomLeft: 左端=MARGIN・下端=screenHeight-TELOP_BOTTOM_RESERVE_PX（ボタン行を避ける、#677）', () => {
     const g = geometryAt('BottomLeft')
     expect(g.x).toBe(TELOP_MARGIN_PX)
-    expect(g.y + g.height).toBe(screenHeight - TELOP_MARGIN_PX)
+    expect(g.y + g.height).toBe(screenHeight - TELOP_BOTTOM_RESERVE_PX)
+  })
+
+  // #677 固定テスト: 右下/左下の帯の下端が下部丸ボタン行の上端より上（重ならない）。
+  it('#677: BottomRight/BottomLeft の帯の下端は丸ボタン行の上端（screenHeight - PLAYER_BUTTON_ROW_HEIGHT_PX）より上', () => {
+    const buttonRowTopY = screenHeight - PLAYER_BUTTON_ROW_HEIGHT_PX
+    for (const position of ['BottomRight', 'BottomLeft'] as const) {
+      const g = geometryAt(position)
+      expect(g.y + g.height).toBeLessThan(buttonRowTopY)
+    }
+  })
+
+  // #677: buttonRowHeightPx を明示指定すると、表示倍率補正後の値がそのまま下端マージンに使われる
+  // （NovelRenderer.syncTelopBottomMarginToButtons が渡す値の代役）。
+  it('#677: buttonRowHeightPx を明示指定すると下端マージンが TELOP_MARGIN_PX + buttonRowHeightPx になる', () => {
+    const customButtonRowHeightPx = 80
+    const g = computeTelopGeometry({
+      screenWidth,
+      screenHeight,
+      position: 'BottomRight',
+      stackIndex: 0,
+      fontSize,
+      textWidth,
+      buttonRowHeightPx: customButtonRowHeightPx,
+    })
+    expect(g.y + g.height).toBe(screenHeight - TELOP_MARGIN_PX - customButtonRowHeightPx)
   })
 
   it('TopRight: 右端=screenWidth-MARGIN・上端=MARGIN', () => {
@@ -3036,7 +3066,7 @@ describe('computeTelopGeometry (#674)', () => {
       textWidth,
     })
     expect(g916.x + g916.width).toBe(450 - TELOP_MARGIN_PX)
-    expect(g916.y + g916.height).toBe(800 - TELOP_MARGIN_PX)
+    expect(g916.y + g916.height).toBe(800 - TELOP_BOTTOM_RESERVE_PX)
 
     const g169 = computeTelopGeometry({
       screenWidth: 800,
@@ -3047,6 +3077,35 @@ describe('computeTelopGeometry (#674)', () => {
       textWidth,
     })
     expect(g169.x + g169.width).toBe(800 - TELOP_MARGIN_PX)
-    expect(g169.y + g169.height).toBe(450 - TELOP_MARGIN_PX)
+    expect(g169.y + g169.height).toBe(450 - TELOP_BOTTOM_RESERVE_PX)
+  })
+})
+
+describe('computeTelopBottomReserveHeight (#677)', () => {
+  // 期待値は novelLayout の export 定数からのみ組み、計算結果を直書きしない。
+  function oracle(fontSize: number, buttonRowHeightPx: number): number {
+    return computeTelopBandHeight(fontSize) + buttonRowHeightPx
+  }
+
+  it('buttonRowHeightPx 省略時は PLAYER_BUTTON_ROW_HEIGHT_PX（表示倍率1:1）を使う', () => {
+    for (const fontSize of [16, 24, 32, 48]) {
+      expect(computeTelopBottomReserveHeight(fontSize)).toBe(
+        oracle(fontSize, PLAYER_BUTTON_ROW_HEIGHT_PX)
+      )
+    }
+  })
+
+  it('buttonRowHeightPx を明示指定するとその値がそのまま加算される（表示倍率補正後の値を渡す想定）', () => {
+    const customButtonRowHeightPx = 96
+    expect(computeTelopBottomReserveHeight(24, customButtonRowHeightPx)).toBe(
+      oracle(24, customButtonRowHeightPx)
+    )
+  })
+
+  // #677: computeTelopGeometry の下端アンカーマージン増分（TELOP_BOTTOM_RESERVE_PX - TELOP_MARGIN_PX）
+  // と、reserve に加算される buttonRowHeightPx（既定値）が一致する（二重計上していないことの直接確認）。
+  it('二重計上防止: 既定の buttonRowHeightPx は TELOP_BOTTOM_RESERVE_PX と TELOP_MARGIN_PX の差に一致する', () => {
+    expect(PLAYER_BUTTON_ROW_HEIGHT_PX).toBe(TELOP_BOTTOM_RESERVE_PX - TELOP_MARGIN_PX)
+    expect(PLAYER_BUTTON_ROW_HEIGHT_PX).toBe(PLAYER_BUTTON_BOTTOM_MARGIN_PX + PLAYER_BUTTON_SIZE_PX)
   })
 })

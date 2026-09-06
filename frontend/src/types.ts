@@ -687,8 +687,9 @@ export interface EventDocument {
    *  null/undefined・false は従来どおり（後方互換）。frontmatter `fullscreen_image:` から流す。 */
   fullscreen_image?: boolean | null
   /** テロップ帯の予約 (#674)。重なり回避は動的にしない方針（kako-jun 2026-09-07）。`true` のとき
-   *  `dialog_style: novel` の本文領域の下端をテロップ帯1段ぶん（`computeTelopBandHeight(font_size)`）
-   *  上げ、改頁計算もその縮小後の領域で行う。`位置=右上|左上` のテロップのみを使う作品は不要（`false`のまま）。
+   *  `dialog_style: novel` の本文領域の下端をテロップ帯1段ぶん＋下部丸ボタン行ぶん
+   *  （`computeTelopBottomReserveHeight(font_size)`、#677）上げ、改頁計算もその縮小後の領域で行う。
+   *  `位置=右上|左上` のテロップのみを使う作品は不要（`false`のまま）。
    *  null/undefined・false は従来どおり（テロップは本文の上に半透明で重なる）。
    *  frontmatter `telop_reserve:` から流す。 */
   telop_reserve?: boolean | null

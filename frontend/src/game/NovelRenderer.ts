@@ -76,6 +76,7 @@ import {
   formatCounterText,
   computeSeekBarPosition,
   PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX,
+  PLAYER_BUTTON_ROW_HEIGHT_PX,
   describeEventForDebug,
   findSceneById,
   resolveSceneTitle,
@@ -85,7 +86,7 @@ import {
   computeSplitLayoutRegions,
   splitTextRegionForDualWindow,
   type LayoutRect,
-  computeTelopBandHeight,
+  computeTelopBottomReserveHeight,
 } from './novelLayout'
 import { stripRubyMarkup, mapSentencesToRubyPreservedText } from './ruby'
 
@@ -301,6 +302,14 @@ export class NovelRenderer {
   private telopAccentColorNum: number = DEFAULT_BAR_FILL_COLOR
   /** テロップ帯予約 (#674)。frontmatter `telop_reserve:` から `setTelopReserve` 経由で設定される。 */
   private telopReserveEnabled = false
+  /**
+   * 下部丸ボタン行ぶんの論理座標マージン (#677)。既定は表示倍率 1:1 の `PLAYER_BUTTON_ROW_HEIGHT_PX`。
+   * `syncTelopBottomMarginToButtons` が `canvas.clientHeight` から求めた実倍率で更新する
+   * （`PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX` を使う SeekBar 側の同期と同じ流儀、#350）。
+   * `telopLayer.setButtonRowHeightPx` と `dialogBox.setNovelBottomReserve`（テロップ帯予約）の
+   * 両方がこの値を共有し、二重計上を避ける。
+   */
+  private telopButtonRowHeightPx: number = PLAYER_BUTTON_ROW_HEIGHT_PX
   private blackoutOverlay: Graphics
   /** novel スタイル (#283) の全画面スクリム。セリフ表示中だけ半透明黒を敷く。
    *  z 順は characterLayer の上・blackoutOverlay の下。adv では常に visible=false。 */
@@ -926,9 +935,15 @@ export class NovelRenderer {
       // #350: スライダのつまみ中心を「丸ボタンの実中央（固定 CSS px）」へ合わせる。Pixi 論理座標は
       // キャンバスの表示倍率でスケールするため、表示高さ≠論理高さだと丸ボタン中央からズレる。実倍率を
       // canvas.clientHeight から求めて補正し、resize/回転にも追従する（ResizeObserver 未対応環境は初期同期のみ）。
+      // #677: 同じ理由でテロップの下端アンカーもボタン行の実高さを避けて配置する
+      // （syncTelopBottomMarginToButtons）。
       this.syncSeekBarVerticalToButtons()
+      this.syncTelopBottomMarginToButtons()
       if (typeof ResizeObserver !== 'undefined') {
-        this.seekBarResizeObserver = new ResizeObserver(() => this.syncSeekBarVerticalToButtons())
+        this.seekBarResizeObserver = new ResizeObserver(() => {
+          this.syncSeekBarVerticalToButtons()
+          this.syncTelopBottomMarginToButtons()
+        })
         this.seekBarResizeObserver.observe(canvas)
       }
     }
@@ -3548,6 +3563,29 @@ export class NovelRenderer {
   }
 
   /**
+   * テロップの下端アンカー（BottomLeft/BottomRight）が下部丸ボタン行の実際の高さ（固定 CSS px）を
+   * 避けられるよう、論理座標換算のボタン行高さを算出して `telopLayer` / `dialogBox` の予約に
+   * 反映する (#677)。`syncSeekBarVerticalToButtons` と同じ理由・同じ算出方法（`canvas.clientHeight`
+   * から実倍率を求め、固定 CSS px をその倍率で割って論理座標に変換する）。
+   * clientHeight 未測定（0）のときは触らない（constructor 既定の `PLAYER_BUTTON_ROW_HEIGHT_PX` のまま）。
+   * `telopReserveEnabled` が false（`telop_reserve:` 未指定/false）の作品では帯予約自体が常に 0 のため、
+   * `applyTelopReserve`（→ `dialogBox.setNovelBottomReserve` → 改頁行数の再計算）は無駄な再計算になる。
+   * テロップ帯そのものの高さ同期（`setButtonRowHeightPx`）は予約の有無に関係なく必要なので常に行う（#678）。
+   */
+  private syncTelopBottomMarginToButtons(): void {
+    const canvas = this.app?.canvas as HTMLCanvasElement | undefined
+    if (!canvas) return
+    const clientH = canvas.clientHeight
+    if (!(clientH > 0)) return
+    const scale = clientH / this.screenHeight
+    this.telopButtonRowHeightPx = PLAYER_BUTTON_ROW_HEIGHT_PX / scale
+    this.telopLayer.setButtonRowHeightPx(this.telopButtonRowHeightPx)
+    if (this.telopReserveEnabled) {
+      this.applyTelopReserve()
+    }
+  }
+
+  /**
    * 暗転オーバーレイの表示を切り替え、SeekBar の可視ゲートと同期する (#350)。
    * 暗転中はスライダを隠す（z 順は変えず可視性ゲートで対処し、黒の上に薄いスライダ線が残らない）。
    * active も SeekBar 側で解除する。GameState の永続 isBlackout から導出する transient な見た目同期で、
@@ -4912,15 +4950,27 @@ export class NovelRenderer {
 
   /**
    * テロップ帯の予約 (#674)。frontmatter `telop_reserve:` の値を渡す。`true` のとき
-   * `dialog_style: novel` の本文領域の下端をテロップ帯1段ぶん（`computeTelopBandHeight`）上げる
-   * （`DialogBox.setNovelBottomReserve` 経由）。改頁行数もこの縮小後の boxH から導かれるため
-   * 自動で追従する。`false`/未指定は予約なし（テロップは本文の上に半透明で重なる）。
+   * `dialog_style: novel` の本文領域の下端をテロップ帯1段ぶん＋下部丸ボタン行ぶん
+   * （`computeTelopBottomReserveHeight`、#677）上げる（`DialogBox.setNovelBottomReserve` 経由）。
+   * 改頁行数もこの縮小後の boxH から導かれるため自動で追従する。
+   * `false`/未指定は予約なし（テロップは本文の上に半透明で重なる）。
    */
   setTelopReserve(enabled: boolean | null | undefined): void {
     this.telopReserveEnabled = enabled === true
+    this.applyTelopReserve()
+  }
+
+  /**
+   * `telopReserveEnabled` / `telopButtonRowHeightPx` の現在値から `dialogBox.setNovelBottomReserve`
+   * を再適用する (#677)。`setTelopReserve`（frontmatter 反映）と
+   * `syncTelopBottomMarginToButtons`（表示倍率変化）の両方から呼ばれる。
+   */
+  private applyTelopReserve(): void {
     const fontSize = this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE
     this.dialogBox.setNovelBottomReserve(
-      this.telopReserveEnabled ? computeTelopBandHeight(fontSize) : 0
+      this.telopReserveEnabled
+        ? computeTelopBottomReserveHeight(fontSize, this.telopButtonRowHeightPx)
+        : 0
     )
   }
 
