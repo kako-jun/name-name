@@ -13,7 +13,7 @@
 
 import type { BackgroundFade, NovelGameState } from './GameState'
 import type { SaveSlotData } from './SaveManager'
-import type { EventScene } from '../types'
+import type { EventScene, TelopPosition } from '../types'
 import { MIDLINE_RULE } from './textCanonical'
 import { hasOwn } from './ownProperty'
 
@@ -1138,6 +1138,87 @@ export function computeSeekBarGeometry(
     barY: thumbCenterY - barHeight / 2,
     thumbCenterY,
   }
+}
+
+// --- テロップ (#674) --------------------------------------------------------
+
+/** テロップ本文の文字サイズ比率。本文 font_size の何倍か。 */
+export const TELOP_FONT_SCALE = 0.7
+/** テロップ本文の行間比率（文字サイズ × この値 = 1 行の高さ）。 */
+export const TELOP_LINE_HEIGHT_RATIO = 1.4
+/** テロップ下地の上下余白（片側・px）。帯高さ = テキスト高さ + この値 × 2。 */
+export const TELOP_PADDING_Y_PX = 10
+/** テロップ下地の左右余白（片側・px、アクセント縦線側を除く）。 */
+export const TELOP_PADDING_X_PX = 14
+/** アクセント縦線（`seekbar_color` を流用）の幅（px）。 */
+export const TELOP_ACCENT_WIDTH_PX = 4
+/** 画面端からテロップ下地までのマージン（px）。 */
+export const TELOP_MARGIN_PX = 16
+/** 積み上げ時の段間ギャップ（px）。 */
+export const TELOP_STACK_GAP_PX = 8
+/** 同時表示の最大段数。超えたら古いものから消す。 */
+export const TELOP_MAX_STACK = 3
+/** スライドイン所要時間 (ms)。 */
+export const TELOP_SLIDE_IN_MS = 300
+/** フェードアウト所要時間 (ms)。`character_fade_ms` の既定値と同じ流儀（#674 仕様）。 */
+export const TELOP_FADE_OUT_MS = 700
+
+/**
+ * テロップ1段ぶんの帯高さ (px) を算出する純粋関数 (#674)。
+ * `本文 font_size × TELOP_FONT_SCALE` を実効文字サイズとし、行間 `TELOP_LINE_HEIGHT_RATIO` を
+ * 掛けた1行ぶんの高さに、上下余白 `TELOP_PADDING_Y_PX` を両側分足す。
+ * `DialogBox.setNovelBottomReserve` へ渡す値（`telop_reserve: true` 時の本文領域下端予約幅）と、
+ * `TelopLayer` 自身の矩形高さの両方がこの値を共有する。
+ */
+export function computeTelopBandHeight(fontSize: number): number {
+  const textHeight = fontSize * TELOP_FONT_SCALE * TELOP_LINE_HEIGHT_RATIO
+  return textHeight + TELOP_PADDING_Y_PX * 2
+}
+
+/** `computeTelopGeometry` の入力。 */
+export interface TelopGeometryInput {
+  screenWidth: number
+  screenHeight: number
+  position: TelopPosition
+  /** 0 = アンカー辺（右下/左下/右上/左上のいずれか）に最も近い段。増えるほど辺から離れる。
+   *  「新しいものが下」の意味論（新規追加時にどの段へ入れるか）は呼び出し側（TelopLayer）が
+   *  position に応じて決める（下端アンカーは index 0 = 最新、上端アンカーは index 0 = 最古）。 */
+  stackIndex: number
+  fontSize: number
+  /** 本文の実測幅 (px)。下地幅 = これ + 左右余白 + アクセント縦線幅。 */
+  textWidth: number
+}
+
+/** `computeTelopGeometry` の戻り値。矩形（論理座標・px）とスライドイン開始 X。 */
+export interface TelopGeometry {
+  x: number
+  y: number
+  width: number
+  height: number
+  /** スライドイン開始時の x（画面外）。右側配置は右から、左側配置は左から入る。 */
+  slideFromX: number
+}
+
+/**
+ * テロップ矩形とスライドイン開始位置を算出する純粋関数 (#674)。
+ * 重なり回避は動的にしない（kako-jun 2026-09-07 方針）——同じ position の複数段は
+ * `stackIndex` に応じて縦にオフセットするだけで、他 position との重なり回避は行わない。
+ */
+export function computeTelopGeometry(input: TelopGeometryInput): TelopGeometry {
+  const { screenWidth, screenHeight, position, stackIndex, fontSize, textWidth } = input
+  const height = computeTelopBandHeight(fontSize)
+  const width = textWidth + TELOP_PADDING_X_PX * 2 + TELOP_ACCENT_WIDTH_PX
+  const isRight = position === 'BottomRight' || position === 'TopRight'
+  const isTop = position === 'TopLeft' || position === 'TopRight'
+
+  const x = isRight ? screenWidth - TELOP_MARGIN_PX - width : TELOP_MARGIN_PX
+  const edgeOffset = stackIndex * (height + TELOP_STACK_GAP_PX)
+  const y = isTop
+    ? TELOP_MARGIN_PX + edgeOffset
+    : screenHeight - TELOP_MARGIN_PX - height - edgeOffset
+  const slideFromX = isRight ? screenWidth : -width
+
+  return { x, y, width, height, slideFromX }
 }
 
 /** デバッグ HUD 用に 1 イベントから取り出した種別と本文プレビュー。 */

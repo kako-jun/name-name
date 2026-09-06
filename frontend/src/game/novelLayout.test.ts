@@ -43,10 +43,17 @@ import {
   AUTO_BUTTON_FALLBACK_COLOR,
   SKIP_BUTTON_FALLBACK_COLOR,
   DEBUG_BUTTON_FALLBACK_COLOR,
+  computeTelopBandHeight,
+  computeTelopGeometry,
+  TELOP_FONT_SCALE,
+  TELOP_LINE_HEIGHT_RATIO,
+  TELOP_PADDING_Y_PX,
+  TELOP_MARGIN_PX,
+  TELOP_STACK_GAP_PX,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
-import type { EventScene } from '../types'
+import type { EventScene, TelopPosition } from '../types'
 import type { ChoiceIconLayout } from './novelLayout'
 
 describe('computeCoverFit', () => {
@@ -2930,5 +2937,116 @@ describe('computeDynamicRenderResolution (#446)', () => {
     expect(result * 800).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_DIMENSION_PX)
     // ついでに幅側もこのケースでは同時に収まる（screenWidth < screenHeight なので当然余裕がある）。
     expect(result * 450).toBeLessThanOrEqual(MAX_RENDER_BACKBUFFER_DIMENSION_PX)
+  })
+})
+
+// --- テロップ (#674) --------------------------------------------------------
+
+describe('computeTelopBandHeight (#674)', () => {
+  // 期待値は novelLayout の export 定数からのみ組み、計算結果を直書きしない。
+  function oracle(fontSize: number): number {
+    return fontSize * TELOP_FONT_SCALE * TELOP_LINE_HEIGHT_RATIO + TELOP_PADDING_Y_PX * 2
+  }
+
+  it('複数 fontSize でオラクル（export 定数から算出）と一致する', () => {
+    for (const fontSize of [16, 24, 32, 48]) {
+      expect(computeTelopBandHeight(fontSize)).toBe(oracle(fontSize))
+    }
+  })
+})
+
+describe('computeTelopGeometry (#674)', () => {
+  const screenWidth = 1920
+  const screenHeight = 1080
+  const fontSize = 24
+  const textWidth = 200
+
+  function geometryAt(position: TelopPosition, stackIndex = 0) {
+    return computeTelopGeometry({
+      screenWidth,
+      screenHeight,
+      position,
+      stackIndex,
+      fontSize,
+      textWidth,
+    })
+  }
+
+  it('BottomRight: 右端=screenWidth-MARGIN・下端=screenHeight-MARGIN', () => {
+    const g = geometryAt('BottomRight')
+    expect(g.x + g.width).toBe(screenWidth - TELOP_MARGIN_PX)
+    expect(g.y + g.height).toBe(screenHeight - TELOP_MARGIN_PX)
+  })
+
+  it('BottomLeft: 左端=MARGIN・下端=screenHeight-MARGIN', () => {
+    const g = geometryAt('BottomLeft')
+    expect(g.x).toBe(TELOP_MARGIN_PX)
+    expect(g.y + g.height).toBe(screenHeight - TELOP_MARGIN_PX)
+  })
+
+  it('TopRight: 右端=screenWidth-MARGIN・上端=MARGIN', () => {
+    const g = geometryAt('TopRight')
+    expect(g.x + g.width).toBe(screenWidth - TELOP_MARGIN_PX)
+    expect(g.y).toBe(TELOP_MARGIN_PX)
+  })
+
+  it('TopLeft: 左端=MARGIN・上端=MARGIN', () => {
+    const g = geometryAt('TopLeft')
+    expect(g.x).toBe(TELOP_MARGIN_PX)
+    expect(g.y).toBe(TELOP_MARGIN_PX)
+  })
+
+  it('stackIndex 0/1/2 で edgeOffset が (height+GAP) 刻みで線形加算される（下端アンカー、新しいものが下=index0）', () => {
+    const g0 = geometryAt('BottomRight', 0)
+    const g1 = geometryAt('BottomRight', 1)
+    const g2 = geometryAt('BottomRight', 2)
+    const step = g0.height + TELOP_STACK_GAP_PX
+    expect(g1.y).toBe(g0.y - step)
+    expect(g2.y).toBe(g0.y - step * 2)
+  })
+
+  it('stackIndex 0/1/2 で edgeOffset が (height+GAP) 刻みで線形加算される（上端アンカー）', () => {
+    const g0 = geometryAt('TopLeft', 0)
+    const g1 = geometryAt('TopLeft', 1)
+    const g2 = geometryAt('TopLeft', 2)
+    const step = g0.height + TELOP_STACK_GAP_PX
+    expect(g1.y).toBe(g0.y + step)
+    expect(g2.y).toBe(g0.y + step * 2)
+  })
+
+  it('右側配置(BottomRight/TopRight)は slideFromX===screenWidth（画面右外から入る）', () => {
+    expect(geometryAt('BottomRight').slideFromX).toBe(screenWidth)
+    expect(geometryAt('TopRight').slideFromX).toBe(screenWidth)
+  })
+
+  it('左側配置(BottomLeft/TopLeft)は slideFromX===-width（画面左外から入る）', () => {
+    const gBL = geometryAt('BottomLeft')
+    expect(gBL.slideFromX).toBe(-gBL.width)
+    const gTL = geometryAt('TopLeft')
+    expect(gTL.slideFromX).toBe(-gTL.width)
+  })
+
+  it('9:16(450x800) と 16:9(800x450) で x/y が screenWidth/screenHeight に追従する', () => {
+    const g916 = computeTelopGeometry({
+      screenWidth: 450,
+      screenHeight: 800,
+      position: 'BottomRight',
+      stackIndex: 0,
+      fontSize,
+      textWidth,
+    })
+    expect(g916.x + g916.width).toBe(450 - TELOP_MARGIN_PX)
+    expect(g916.y + g916.height).toBe(800 - TELOP_MARGIN_PX)
+
+    const g169 = computeTelopGeometry({
+      screenWidth: 800,
+      screenHeight: 450,
+      position: 'BottomRight',
+      stackIndex: 0,
+      fontSize,
+      textWidth,
+    })
+    expect(g169.x + g169.width).toBe(800 - TELOP_MARGIN_PX)
+    expect(g169.y + g169.height).toBe(450 - TELOP_MARGIN_PX)
   })
 })

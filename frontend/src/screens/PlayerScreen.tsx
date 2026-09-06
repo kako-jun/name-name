@@ -1057,6 +1057,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             eventImageTransitionDefault={doc?.event_image_transition ?? null}
             backgroundColor={doc?.background_color ?? null}
             seekbarColor={doc?.seekbar_color ?? null}
+            telopReserve={doc?.telop_reserve ?? null}
             intermissionEvents={intermissionScene?.events ?? null}
             intermissionBackgroundFadeMs={intermissionScene?.backgroundFadeMs ?? null}
             intermissionCharacterFadeMs={intermissionScene?.characterFadeMs ?? null}

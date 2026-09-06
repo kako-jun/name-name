@@ -37,6 +37,7 @@ import {
 import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { VideoLayer } from './VideoLayer'
 import { EventImageLayer } from './EventImageLayer'
+import { TelopLayer } from './TelopLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
 import { TitleScreenOverlay, TITLE_LOGO_Y_RATIO } from './TitleScreenOverlay'
 import { SaveManager, SaveSlotData } from './SaveManager'
@@ -84,6 +85,7 @@ import {
   computeSplitLayoutRegions,
   splitTextRegionForDualWindow,
   type LayoutRect,
+  computeTelopBandHeight,
 } from './novelLayout'
 import { stripRubyMarkup, mapSentencesToRubyPreservedText } from './ruby'
 
@@ -292,6 +294,13 @@ export class NovelRenderer {
   private characterLayer: CharacterLayer
   /** イベント絵レイヤー (#351)。テキストより背面・背景/立ち絵より前面（立ち絵の直後）に配置 */
   private eventImageLayer: EventImageLayer
+  /** テロップレイヤー (#674)。dialogBox の直後・SeekBar/選択肢/終劇オーバーレイの下に配置。 */
+  private telopLayer: TelopLayer
+  /** テロップのアクセント縦線色 (#674)。`setSeekBarColor` と同じ色解決を共有する（Issue コメント
+   *  「アクセント色は SeekBar と同じ色解決」）。 */
+  private telopAccentColorNum: number = DEFAULT_BAR_FILL_COLOR
+  /** テロップ帯予約 (#674)。frontmatter `telop_reserve:` から `setTelopReserve` 経由で設定される。 */
+  private telopReserveEnabled = false
   private blackoutOverlay: Graphics
   /** novel スタイル (#283) の全画面スクリム。セリフ表示中だけ半透明黒を敷く。
    *  z 順は characterLayer の上・blackoutOverlay の下。adv では常に visible=false。 */
@@ -762,6 +771,9 @@ export class NovelRenderer {
     // イベント絵レイヤー (#351)。立ち絵と同じ TimeController を共有し、動画 export でも
     // フェードが決定論的に進む（this.time が virtual モードなら仮想時刻で駆動される）。
     this.eventImageLayer = new EventImageLayer(this.screenWidth, this.screenHeight, this.time)
+    // テロップレイヤー (#674)。同じ TimeController を共有し、動画 export でもスライドイン/
+    // フェードアウトが決定論的に進む（EventImageLayer と同じ流儀）。
+    this.telopLayer = new TelopLayer(this.screenWidth, this.screenHeight, this.time)
     this.blackoutOverlay = new Graphics()
     this.defaultDialogBorderless = config?.dialogBorderless ?? false
     this.dialogBox = new DialogBox({
@@ -883,6 +895,10 @@ export class NovelRenderer {
 
     // ダイアログボックス
     this.app.stage.addChild(this.dialogBox)
+
+    // テロップレイヤー (#674)。イベント絵より上・本文の上に重なる（telop_reserve: false 時）位置で、
+    // SeekBar・選択肢・終劇オーバーレイよりは下（後続の addChild が z 順で上に来る）。
+    this.app.stage.addChild(this.telopLayer)
 
     // シークバー（シナリオスライダ）。つまみ中心は下部丸ボタンの中央を貫く高さ (#350)。
     this.seekBar.setOnSeek((displayIndex) => {
@@ -1710,6 +1726,9 @@ export class NovelRenderer {
     // 引き継がない（両分岐共通）。back=Hide で隠れていた背景・立ち絵の可視性もここで戻す。
     this.eventImageLayer.remove()
     this.applyEventImageVisibility()
+    // テロップ (#674) も新しいイベント列の開始で常にクリアする。前シーンの表示中テロップを
+    // 引き継がない（演出の中間状態を持ち越さない、eventImageLayer と同じ規律）。
+    this.telopLayer.clear()
     this.setBlackout(false)
     this.currentBgmPath = null
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
@@ -2777,6 +2796,8 @@ export class NovelRenderer {
     // イベント絵レイヤーが読み込んだテクスチャも解放する (#351 セルフレビュー指摘。
     // setEvents() と同じ理由: textureCache 相当の登録先が無いと GPU テクスチャがリークする)。
     this.eventImageLayer.disposeTextures()
+    // テロップレイヤーのタイマー・表示中の段を破棄する (#674)。
+    this.telopLayer.clear()
     this.audioManager.destroy()
     this.characterLayer.clear()
     this.choiceOverlay.hide()
@@ -3313,6 +3334,9 @@ export class NovelRenderer {
     // novel スクリム退避途中（#283）は演出中間状態なので復元では持たない。リセットして
     // 「退避していない」前提に倒す。render() が現在ページのスクリム可視性を再設定する。
     this.resetNovelScrimState()
+    // テロップ (#674) も演出の中間状態なので復元（goBack/seekTo/セーブ復元/任意局面起動）では
+    // 一切持たない（NovelGameState に持たせない設計、ADR-0002）。表示中の段があれば即座に消す。
+    this.telopLayer.clear()
 
     // フラグ復元。goBack/seekTo は applyState を単独で呼ぶため、ここでの復元は必須。
     // restoreToScene 経由では resolveEvents 用に先んじて同じ復元が行われるが、
@@ -3886,6 +3910,8 @@ export class NovelRenderer {
         // 背景・立ち絵が隠れたまま次のシーンに持ち越されないようにする防御。
         this.eventImageLayer.remove()
         this.applyEventImageVisibility()
+        // テロップ (#674) も場面転換でクリアする（eventImageLayer と同じ防御）。
+        this.telopLayer.clear()
         this.setBlackout(false)
         // novel: 場面転換でスクリム+文字を退避して新しい絵を見せ、戻す (#283)
         this.retreatNovelScrim()
@@ -3979,6 +4005,28 @@ export class NovelRenderer {
       // [イベント絵終了] でイベント絵レイヤーをクリアする (#351)。
       this.eventImageLayer.remove({ fadeMs: event.EventImageExit.fade_ms ?? this.eventImageFadeMs })
       this.applyEventImageVisibility()
+      return
+    }
+    if ('Telop' in event) {
+      // 汎用テロップ (#674)。スキップ中は表示しない（ADR-0002: 演出の中間状態を作らない既存方針と
+      // 同じ）。復元（セーブ/ロード・シーク・任意局面起動）は applyState の宣言的復元経由で
+      // processDirective/このイベント自体を通らないため個別ガードは不要
+      // （NovelGameState には Telop を一切持たせない設計、Issue コメント参照）。
+      if (this.skipMode) return
+      const telop = event.Telop
+      this.telopLayer.show({
+        text: telop.text,
+        position: telop.position ?? 'BottomRight',
+        seconds: telop.seconds ?? 4,
+        kind: telop.kind ?? null,
+        fontFamily: resolveFontFamily(
+          null,
+          this.gameDefaultFontFamily,
+          NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+        ),
+        fontSize: this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE,
+        accentColor: this.telopAccentColorNum,
+      })
       return
     }
     if ('Blackout' in event) {
@@ -4855,6 +4903,25 @@ export class NovelRenderer {
         ? parseColorToNumber(color, DEFAULT_BAR_FILL_COLOR)
         : DEFAULT_BAR_FILL_COLOR
     this.seekBar.setFillColor(num)
+    // テロップのアクセント縦線色 (#674) も同じ色解決を共有する（Issue コメント「アクセント色は
+    // SeekBar と同じ色解決＝setSeekBarColor で保持している値」）。次回以降の show() だけでなく、
+    // 既に表示中の段の縦線も setAccentColor() で即座に描き直す（#674 セルフレビュー Q1）。
+    this.telopAccentColorNum = num
+    this.telopLayer.setAccentColor(num)
+  }
+
+  /**
+   * テロップ帯の予約 (#674)。frontmatter `telop_reserve:` の値を渡す。`true` のとき
+   * `dialog_style: novel` の本文領域の下端をテロップ帯1段ぶん（`computeTelopBandHeight`）上げる
+   * （`DialogBox.setNovelBottomReserve` 経由）。改頁行数もこの縮小後の boxH から導かれるため
+   * 自動で追従する。`false`/未指定は予約なし（テロップは本文の上に半透明で重なる）。
+   */
+  setTelopReserve(enabled: boolean | null | undefined): void {
+    this.telopReserveEnabled = enabled === true
+    const fontSize = this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE
+    this.dialogBox.setNovelBottomReserve(
+      this.telopReserveEnabled ? computeTelopBandHeight(fontSize) : 0
+    )
   }
 
   // --- クイックセーブ / クイックロード (#142) ---

@@ -755,6 +755,8 @@ function EditorScreen({
                 backgroundColor={doc?.background_color ?? null}
                 // SeekBar 色 (#440)。doc 由来・未指定は既定の水色。seekbar_color 指定作品は編集プレビューでも反映。
                 seekbarColor={doc?.seekbar_color ?? null}
+                // テロップ帯予約 (#674)。doc 由来・telop_reserve: true の作品は編集プレビューでも本文領域を狭める。
+                telopReserve={doc?.telop_reserve ?? null}
                 // Skip(S) は doc 由来（#310）。skip_enabled=false の作品は編集プレビューでも S を隠す。
                 skipEnabled={doc?.skip_enabled ?? null}
                 // デバッグ(D) は frontmatter 非依存で常時有効（編集者用 #310）。debug_enabled は /play 専用。

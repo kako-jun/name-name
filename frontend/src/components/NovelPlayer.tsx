@@ -160,6 +160,9 @@ interface NovelPlayerProps {
   /** SeekBar（シナリオスライダ）のフィル／つまみ色 (#440)。frontmatter `seekbar_color:` から流す。
    *  null/undefined/不正値で既定の水色 #a8dadc（後方互換）。トラック背景は据え置き。 */
   seekbarColor?: string | null
+  /** テロップ帯の予約 (#674)。frontmatter `telop_reserve:` から流す。`true` で novel の本文領域の
+   *  下端をテロップ帯1段ぶん上げる。null/undefined/false は予約なし（テロップは本文の上に重なる）。 */
+  telopReserve?: boolean | null
   /**
    * intermission.md 専用シーン (#404)。`assets/scripts/intermission.md` を取得・parse できた場合に
    * PlayerScreen が渡す flatten 済み Event 列。null/undefined/空配列は「未設定」＝endStory() は
@@ -273,6 +276,7 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
     eventImageTransitionDefault,
     backgroundColor,
     seekbarColor,
+    telopReserve,
     intermissionEvents,
     intermissionBackgroundFadeMs,
     intermissionCharacterFadeMs,
@@ -709,6 +713,9 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       // SeekBar のフィル／つまみ色 (#440)。setDefaultBackgroundColor と対称の per-game 設定。
       // 未指定/不正値なら既定の水色にフォールバック（後方互換）。
       renderer.setSeekBarColor(seekbarColor ?? null)
+      // テロップ帯の予約 (#674)。setEvents/setScenes（＝改頁計算の初回実行）より前に設定し、
+      // 初回描画から本文領域の下端がテロップ帯ぶん狭い状態で改頁が確定するようにする。
+      renderer.setTelopReserve(telopReserve ?? null)
       // intermission.md 専用シーン (#404)。PlayerScreen が非同期取得するため、マウント時点では
       // まだ未解決（null）のことが多いが、後段の setEvents/startFrom より前に一度呼んでおく
       // （解決後は下の intermissionEvents 変化 effect が反映する）。
@@ -951,6 +958,11 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
   useEffect(() => {
     rendererRef.current?.setSeekBarColor(seekbarColor ?? null)
   }, [seekbarColor])
+
+  // telopReserve（テロップ帯の予約）が変化したときに renderer に反映 (#674)
+  useEffect(() => {
+    rendererRef.current?.setTelopReserve(telopReserve ?? null)
+  }, [telopReserve])
 
   // タイトル画面 (#628 フェーズ2b): titleScreen が非 null になったら showTitleScreen、
   // null に戻ったら hideTitleScreen（PlayerScreen 側は `startSceneId === null &&

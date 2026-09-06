@@ -332,6 +332,14 @@ export class DialogBox extends Container {
   private splitLayoutRegion: LayoutRect | null = null
 
   /**
+   * テロップ帯予約 (#674)。frontmatter `telop_reserve: true` の作品だけ、`applyNovelGeometry()`
+   * の全画面分岐（split_layout / 2窓 は対象外＝そのまま）で `boxH` からこの高さぶんを差し引く。
+   * `computeTelopBandHeight(fontSize)`（novelLayout.ts）を `setNovelBottomReserve` で渡す。
+   * 0 = 予約なし（既定・後方互換。テロップは本文の上に半透明で重なる）。
+   */
+  private novelBottomReservePx = 0
+
+  /**
    * 2窓モード (#444) のテキスト領域（相手=上/自分=下）。null = 無効（従来の単一テキスト
    * ウィンドウ、`splitLayoutRegion` 全体 or 全画面/下部バー）。`split_layout: true` かつ
    * `protagonist:` 指定時にだけ NovelRenderer が `setDualWindowRegions` で設定する。
@@ -616,6 +624,19 @@ export class DialogBox extends Container {
     }
   }
 
+  /**
+   * テロップ帯予約 (#674)。`px`（`computeTelopBandHeight(fontSize)` の結果、0 = 予約なし）を
+   * `applyNovelGeometry()` の全画面分岐に反映する。novel モード中なら即座にジオメトリを
+   * 再計算する（改頁行数 `novelMaxLinesPerPage()` はこの boxH から導かれるため、次の改頁計算にも
+   * 自動で反映される）。split_layout / 2窓モードの領域計算は対象外（そのまま）。
+   */
+  setNovelBottomReserve(px: number): void {
+    this.novelBottomReservePx = Math.max(0, px)
+    if (this.novelMode) {
+      this.applyNovelGeometry()
+    }
+  }
+
   /** 2窓モード (#444) が有効か。`dualWindowRegions` が設定されていれば true。 */
   private get dualWindowActive(): boolean {
     return this.dualWindowRegions !== null
@@ -731,7 +752,9 @@ export class DialogBox extends Container {
       this.boxX = NOVEL_TEXT_MARGIN_X
       this.boxW = this.screenWidth - NOVEL_TEXT_MARGIN_X * 2
       this.boxY = topY
-      this.boxH = this.screenHeight - topY - NOVEL_TEXT_MARGIN_BOTTOM
+      // テロップ帯予約 (#674): telop_reserve: true の作品だけ下端をテロップ帯1段ぶん上げる。
+      // 改頁行数 (novelMaxLinesPerPage) はこの boxH から導かれるため、改頁計算にも自動で波及する。
+      this.boxH = this.screenHeight - topY - NOVEL_TEXT_MARGIN_BOTTOM - this.novelBottomReservePx
     }
 
     // テキスト位置更新（borderless 前提なので背景・名札は描かない）。

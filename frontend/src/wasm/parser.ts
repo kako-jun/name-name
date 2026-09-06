@@ -243,6 +243,20 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
         },
       }
     }
+    if ('Telop' in event) {
+      // #674: position/seconds は Rust 側 #[serde(default)] のため型上 optional だが、
+      // parser が常に解決済みの値を焼き込む想定（EventImage.back/transition と同じ防御的正規化）。
+      // undefined を既定値（BottomRight/4）に倒す。kind は Option<String> なので null に倒す。
+      const telop = event.Telop
+      return {
+        Telop: {
+          text: telop.text,
+          position: telop.position ?? 'BottomRight',
+          seconds: telop.seconds ?? 4,
+          kind: telop.kind ?? null,
+        },
+      }
+    }
     if ('Condition' in event) {
       return {
         Condition: {
@@ -341,6 +355,10 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // テキストウィンドウを隠さない）。ここを忘れると Rust 側は正しくパースされているのに wasm 経由で
     // undefined になり、テストは緑のまま本番だけ壊れる（#310/#378/#448/#466 と同じ事故パターン）。
     fullscreen_image: doc.fullscreen_image ?? null,
+    // テロップ帯の予約 (#674)。boolean なので ?? null（未指定は下流で既定 false ＝本文の上に半透明で重なる）。
+    // ここを忘れると Rust 側は正しくパースされているのに wasm 経由で undefined になり、
+    // テストは緑のまま本番だけ壊れる（#310/#378/#448/#466/#530 と同じ事故パターン）。
+    telop_reserve: doc.telop_reserve ?? null,
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,
