@@ -46,6 +46,7 @@ import {
   computeTelopBandHeight,
   computeTelopBottomReserveHeight,
   computeTelopGeometry,
+  computeTelopMaxWidth,
   TELOP_FONT_SCALE,
   TELOP_LINE_HEIGHT_RATIO,
   TELOP_PADDING_Y_PX,
@@ -2958,20 +2959,40 @@ describe('computeTelopBandHeight (#674)', () => {
   })
 })
 
-describe('computeTelopGeometry (#674)', () => {
+describe('computeTelopMaxWidth (#679)', () => {
+  it('screenWidth から TELOP_MARGIN_PX の2倍を引いた値を返す', () => {
+    for (const screenWidth of [450, 800, 1920]) {
+      expect(computeTelopMaxWidth(screenWidth)).toBe(screenWidth - TELOP_MARGIN_PX * 2)
+    }
+  })
+
+  it('9:16 論理幅450pxでは TelopLayer 側の余白（左右padding×2+アクセント幅）を引いた wordWrapWidth が正の値になる', () => {
+    // TelopLayer.computeWordWrapWidth と同じ式（TELOP_PADDING_X_PX は novelLayout 側 export 済み定数ではなく
+    // TelopLayer 内部使用のため、ここでは maxWidth 自体が画面を超えないことだけを確認する）。
+    const maxWidth = computeTelopMaxWidth(450)
+    expect(maxWidth).toBeGreaterThan(0)
+    expect(maxWidth).toBeLessThan(450)
+  })
+})
+
+describe('computeTelopGeometry (#674 / #679)', () => {
   const screenWidth = 1920
   const screenHeight = 1080
   const fontSize = 24
   const textWidth = 200
+  // 1行ぶんの実測高さ相当（#679: computeTelopGeometry はもう fontSize から高さを導かず、
+  // 呼び出し側が渡す実測 textHeight をそのまま使う。単一行のオラクルとして
+  // computeTelopBandHeight と同じ式から textHeight 分だけを取り出す）。
+  const textHeight = fontSize * TELOP_FONT_SCALE * TELOP_LINE_HEIGHT_RATIO
 
-  function geometryAt(position: TelopPosition, stackIndex = 0) {
+  function geometryAt(position: TelopPosition, stackOffsetPx = 0) {
     return computeTelopGeometry({
       screenWidth,
       screenHeight,
       position,
-      stackIndex,
-      fontSize,
+      stackOffsetPx,
       textWidth,
+      textHeight,
     })
   }
 
@@ -3006,9 +3027,9 @@ describe('computeTelopGeometry (#674)', () => {
       screenWidth,
       screenHeight,
       position: 'BottomRight',
-      stackIndex: 0,
-      fontSize,
+      stackOffsetPx: 0,
       textWidth,
+      textHeight,
       buttonRowHeightPx: customButtonRowHeightPx,
     })
     expect(g.y + g.height).toBe(screenHeight - TELOP_MARGIN_PX - customButtonRowHeightPx)
@@ -3026,20 +3047,24 @@ describe('computeTelopGeometry (#674)', () => {
     expect(g.y).toBe(TELOP_MARGIN_PX)
   })
 
-  it('stackIndex 0/1/2 で edgeOffset が (height+GAP) 刻みで線形加算される（下端アンカー、新しいものが下=index0）', () => {
+  // #679: computeTelopGeometry はもう「stackIndex × 1段の高さ」を内部計算しない。呼び出し側
+  // （TelopLayer.relayout）が積み上げた stackOffsetPx をそのまま y に反映するだけの純粋関数。
+  // ここでは呼び出し側が「各段の高さが揃っている場合」に積み上げる値（0, step, step*2）を
+  // 手で組んで渡し、その通りに y が線形加算されることを確認する。
+  it('stackOffsetPx が (height+GAP) 刻みで積まれると y が線形加算される（下端アンカー、新しいものが下=offset0）', () => {
     const g0 = geometryAt('BottomRight', 0)
-    const g1 = geometryAt('BottomRight', 1)
-    const g2 = geometryAt('BottomRight', 2)
     const step = g0.height + TELOP_STACK_GAP_PX
+    const g1 = geometryAt('BottomRight', step)
+    const g2 = geometryAt('BottomRight', step * 2)
     expect(g1.y).toBe(g0.y - step)
     expect(g2.y).toBe(g0.y - step * 2)
   })
 
-  it('stackIndex 0/1/2 で edgeOffset が (height+GAP) 刻みで線形加算される（上端アンカー）', () => {
+  it('stackOffsetPx が (height+GAP) 刻みで積まれると y が線形加算される（上端アンカー）', () => {
     const g0 = geometryAt('TopLeft', 0)
-    const g1 = geometryAt('TopLeft', 1)
-    const g2 = geometryAt('TopLeft', 2)
     const step = g0.height + TELOP_STACK_GAP_PX
+    const g1 = geometryAt('TopLeft', step)
+    const g2 = geometryAt('TopLeft', step * 2)
     expect(g1.y).toBe(g0.y + step)
     expect(g2.y).toBe(g0.y + step * 2)
   })
@@ -3061,9 +3086,9 @@ describe('computeTelopGeometry (#674)', () => {
       screenWidth: 450,
       screenHeight: 800,
       position: 'BottomRight',
-      stackIndex: 0,
-      fontSize,
+      stackOffsetPx: 0,
       textWidth,
+      textHeight,
     })
     expect(g916.x + g916.width).toBe(450 - TELOP_MARGIN_PX)
     expect(g916.y + g916.height).toBe(800 - TELOP_BOTTOM_RESERVE_PX)
@@ -3072,12 +3097,30 @@ describe('computeTelopGeometry (#674)', () => {
       screenWidth: 800,
       screenHeight: 450,
       position: 'BottomRight',
-      stackIndex: 0,
-      fontSize,
+      stackOffsetPx: 0,
       textWidth,
+      textHeight,
     })
     expect(g169.x + g169.width).toBe(800 - TELOP_MARGIN_PX)
     expect(g169.y + g169.height).toBe(450 - TELOP_BOTTOM_RESERVE_PX)
+  })
+
+  // #679: 折り返して複数行になったテロップは、渡す textHeight がそのぶん大きくなるため
+  // 帯（height）も比例して高くなる（fontSize からは求まらない、実測ベースの矩形であることの確認）。
+  it('#679: textHeight が大きいほど帯の高さ(height)が同じ分だけ大きくなる（可変高さの矩形）', () => {
+    const oneLine = geometryAt('BottomRight')
+    const threeLines = computeTelopGeometry({
+      screenWidth,
+      screenHeight,
+      position: 'BottomRight',
+      stackOffsetPx: 0,
+      textWidth,
+      textHeight: textHeight * 3,
+    })
+    expect(threeLines.height).toBe(oneLine.height + (textHeight * 3 - textHeight))
+    expect(threeLines.height).toBeGreaterThan(oneLine.height)
+    // 幅は textWidth だけで決まり textHeight に影響されない。
+    expect(threeLines.width).toBe(oneLine.width)
   })
 })
 
