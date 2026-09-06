@@ -66,6 +66,7 @@ interface TelopLayerForTest {
     accentColor: number
   }): void
   clear(): void
+  setAccentColor(color: number): void
 }
 interface DialogBoxForTest {
   setNovelBottomReserve(px: number): void
@@ -245,5 +246,19 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
     r.setTelopReserve(undefined)
 
     expect(spy).toHaveBeenCalledWith(0)
+  })
+
+  // 38: 表示中に setSeekBarColor を呼ぶと、次回以降の show() だけでなく、既に表示中の段の
+  // アクセント縦線も telopLayer.setAccentColor(新色) で即座に更新される (#674 セルフレビュー Q1)。
+  it('38: 表示中に setSeekBarColor を呼ぶと telopLayer.setAccentColor が新色で呼ばれる', async () => {
+    const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
+    r.startFrom({ sceneId: 'a' })
+    await r.playScript([{ type: 'advance' }]) // x -> telop(show) -> y（表示中の段が1つある状態）
+
+    const setAccentColorSpy = vi.spyOn(internals(r).telopLayer, 'setAccentColor')
+
+    r.setSeekBarColor('#1a4a7a')
+
+    expect(setAccentColorSpy).toHaveBeenCalledWith(0x1a4a7a)
   })
 })
