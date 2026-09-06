@@ -9794,6 +9794,32 @@ fn test_telop_unknown_key_absorbed_into_body() {
 }
 
 #[test]
+fn test_telop_body_fragment_matching_known_key_name_is_consumed_as_kv() {
+    // 本文断片が既知キー名（位置/秒/種別）と衝突する場合、値の妥当性に関わらずキーとして
+    // 消費される（本文としては戻らない）。models.rs の doc コメント
+    // 「既知キーと衝突しない限り本文として保持される」の裏側の挙動を固定する。
+
+    // 「位置=100」は 位置キーとして消費され、値 100 は未知トークンなので既定にフォールバック。
+    // 本文が残らないためディレクティブ自体が無視される。
+    assert_eq!(
+        parse_single_telop("[テロップ: 位置=100]"),
+        None,
+        "位置キーとして消費され本文が残らないため無視される"
+    );
+
+    // 「本文, 秒=abc」は 秒キーとして消費され、値 abc は非数値なので既定 4 にフォールバック。
+    // 本文は「本文」のみが残る。
+    let event = parse_single_telop("[テロップ: 本文, 秒=abc]").expect("Telop を期待");
+    match event {
+        Event::Telop { text, seconds, .. } => {
+            assert_eq!(text, "本文", "秒キーとして消費され本文側には残らない");
+            assert_eq!(seconds, 4, "非数値は既定 4 にフォールバック");
+        }
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
 fn test_telop_kv_only_no_body_is_ignored() {
     // 本文なし・kv のみの指定はディレクティブごと無視される（空本文の既存扱いと同じ結論）
     assert_eq!(
