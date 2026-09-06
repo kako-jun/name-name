@@ -110,6 +110,7 @@ const {
     setEventImageTransitionDefault = vi.fn()
     setDefaultBackgroundColor = vi.fn()
     setSeekBarColor = vi.fn()
+    setTelopReserve = vi.fn()
     setIntermissionScene = vi.fn()
     hasIntermissionScene = vi.fn().mockReturnValue(false)
     // #628 フェーズ2b: タイトル画面 (PixiJS 版 TitleScreenOverlay) の表示/非表示。
