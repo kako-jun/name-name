@@ -199,6 +199,20 @@ export class TelopLayer extends Container {
   }
 
   /**
+   * アクセント縦線色を変更し、表示中の全段の縦線を新色で描き直す (#674 セルフレビュー Q1)。
+   * `NovelRenderer.setSeekBarColor()` が SeekBar と同じ色解決で呼ぶ。以後 `show()` する新規の
+   * 段にも引き続き使われるよう、次に渡される `TelopShowOptions.accentColor` の解決元
+   * （`NovelRenderer` 側）もこの色を反映する前提——このメソッド自体は「今表示中の段」の
+   * 見た目だけを即時更新する。
+   */
+  setAccentColor(color: number): void {
+    for (const entry of this.entries) {
+      entry.accentColor = color
+      this.redrawEntryBackground(entry)
+    }
+  }
+
+  /**
    * `.width` は canvas 2D context が使えない環境（jsdom のユニットテスト等）で例外を投げることが
    * ある（`ToastOverlay.measureTextSize` / `CharacterLayer.measureGlyphWidth` と同じ既知の防御）。
    */

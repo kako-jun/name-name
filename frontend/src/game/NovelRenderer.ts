@@ -4904,9 +4904,10 @@ export class NovelRenderer {
         : DEFAULT_BAR_FILL_COLOR
     this.seekBar.setFillColor(num)
     // テロップのアクセント縦線色 (#674) も同じ色解決を共有する（Issue コメント「アクセント色は
-    // SeekBar と同じ色解決＝setSeekBarColor で保持している値」）。次回以降の show() から反映される
-    // （既に表示中の段の縦線は再描画しない——即座の見た目変更は稀な運用のため許容）。
+    // SeekBar と同じ色解決＝setSeekBarColor で保持している値」）。次回以降の show() だけでなく、
+    // 既に表示中の段の縦線も setAccentColor() で即座に描き直す（#674 セルフレビュー Q1）。
     this.telopAccentColorNum = num
+    this.telopLayer.setAccentColor(num)
   }
 
   /**
