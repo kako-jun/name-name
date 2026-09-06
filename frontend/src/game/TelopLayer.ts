@@ -75,6 +75,9 @@ interface TelopEntry {
   targetX: number
   targetY: number
   slideFromX: number
+  /** 'in' フェーズの Y 補間の起点。show() 時点の初期 targetY で確定し、以後は変えない
+   *  （X の slideFromX と同じ扱い。#674 セルフレビュー S3）。 */
+  slideFromY: number
   phase: 'in' | 'hold' | 'out'
   phaseStartedAtMs: number
   interval: number | null
@@ -99,7 +102,14 @@ export class TelopLayer extends Container {
     this.eventMode = 'none'
   }
 
-  /** 画面リサイズ時に全段の幾何を再計算する。 */
+  /**
+   * 画面リサイズ時に全段の幾何を再計算する。
+   *
+   * 本番の `NovelRenderer` からは呼ばれない（論理 screenWidth/Height はコンストラクタで固定・
+   * `aspect_ratio: auto` の fluid モードは画面回転のたびに `NovelRenderer` ごと再マウントする
+   * ため、既存インスタンスへの実行時リサイズは発生しない）。将来の実行時リサイズ対応と
+   * 単体テスト（#674 セルフレビュー S2）のための API として残す。
+   */
   resize(screenWidth: number, screenHeight: number): void {
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
@@ -143,6 +153,7 @@ export class TelopLayer extends Container {
       targetX: 0,
       targetY: 0,
       slideFromX: 0,
+      slideFromY: 0,
       phase: 'in',
       phaseStartedAtMs: this.time.now(),
       interval: null,
@@ -153,10 +164,13 @@ export class TelopLayer extends Container {
     this.addChild(container)
     this.evictOverflow(position)
     this.relayout()
+    // Y 補間の起点を確定する（この時点の targetY = 初期の定位置。以後の relayout で
+    // stackIndex がずれても slideFromY 自体は変えない。X の slideFromX と同じ扱い、#674 S3）。
+    entry.slideFromY = entry.targetY
 
-    // relayout() が確定させた slideFromX/targetY から、画面外→定位置へスライドインを開始する。
+    // relayout() が確定させた slideFromX/slideFromY から、画面外→定位置へスライドインを開始する。
     container.x = entry.slideFromX
-    container.y = entry.targetY
+    container.y = entry.slideFromY
     container.alpha = 1
     entry.phaseStartedAtMs = this.time.now()
     entry.interval = this.time.setInterval(() => this.updateFrame(entry), 16)
@@ -239,12 +253,13 @@ export class TelopLayer extends Container {
         entry.height = geometry.height
         this.redrawEntryBackground(entry)
         // スライドイン中は定位置ではなくアニメーション補間に任せる（updateFrame が毎フレーム
-        // container.x を書き換える）。保持/フェードアウト中の段は resize/積み直しで即座に
+        // container.x/y を書き換える。X は slideFromX、Y は slideFromY を起点に targetX/Y へ
+        // 補間する、#674 S3）。保持/フェードアウト中の段は resize/積み直しで即座に
         // 新しい定位置へスナップする（reflow アニメーションは持たない、#674 スコープ外）。
         if (entry.phase !== 'in') {
           entry.container.x = entry.targetX
+          entry.container.y = entry.targetY
         }
-        entry.container.y = entry.targetY
       })
     }
   }
@@ -276,8 +291,13 @@ export class TelopLayer extends Container {
       const elapsed = this.time.now() - entry.phaseStartedAtMs
       const t = easeOut(effectProgress(elapsed, TELOP_SLIDE_IN_MS))
       entry.container.x = entry.slideFromX + (entry.targetX - entry.slideFromX) * t
+      // Y も X と同じ扱いで補間する（#674 S3）: 積み直しで stackIndex がずれて targetY が
+      // 変わっても、slideFromY（show() 時点で確定した初期定位置）から現在の targetY へ
+      // 毎フレーム補間し、瞬間移動しない。
+      entry.container.y = entry.slideFromY + (entry.targetY - entry.slideFromY) * t
       if (elapsed >= TELOP_SLIDE_IN_MS) {
         entry.container.x = entry.targetX
+        entry.container.y = entry.targetY
         entry.phase = 'hold'
         this.stopInterval(entry)
       }
