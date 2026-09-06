@@ -19,11 +19,13 @@ import {
   TELOP_SLIDE_IN_MS,
   TELOP_FADE_OUT_MS,
   TELOP_FONT_SCALE,
+  TELOP_LINE_HEIGHT_RATIO,
   TELOP_MAX_STACK,
   TELOP_STACK_GAP_PX,
   TELOP_PADDING_X_PX,
   TELOP_ACCENT_WIDTH_PX,
   computeTelopMaxWidth,
+  computeTelopBandHeight,
 } from './novelLayout'
 
 const SCREEN_W = 800
@@ -512,6 +514,23 @@ describe('TelopLayer 折り返し・多段化 (#679)', () => {
     expect(entry.textObj.style.wordWrap).toBe(true)
     expect(entry.textObj.style.breakWords).toBe(true)
     expect(entry.textObj.style.wordWrapWidth).toBe(expectedWordWrapWidth(SCREEN_W))
+  })
+
+  // 40: 単一行テロップの帯高さは `computeTelopBandHeight(fontSize)` と一致する（#679 レビューS2）。
+  //     `TextStyle.lineHeight` を式の行高（fontSize×TELOP_FONT_SCALE×TELOP_LINE_HEIGHT_RATIO）
+  //     として明示することで、PIXI の実測 text.height（単一行なら lineHeight と一致）が
+  //     予約帯の式とズレなくなる。jsdom には canvas 2D context が無く実測はフォールバック近似に
+  //     なるが、フォールバックも同じ式で lineHeight を組むため、ここでは production の
+  //     `TextStyle.lineHeight` 設定自体を直接検証し、式との一致を担保する。
+  it('40: 単一行テロップの帯高さ(entry.height)は computeTelopBandHeight(fontSize) と一致し、textObj.style.lineHeight は式の行高と一致する', () => {
+    const layer = makeLayer(virtualTime())
+    const fontSize = 24
+    layer.show(opts(SHORT_TEXT, { fontSize }))
+    const entry = internals(layer).entries[0]
+
+    const expectedLineHeight = fontSize * TELOP_FONT_SCALE * TELOP_LINE_HEIGHT_RATIO
+    expect(entry.textObj.style.lineHeight).toBe(expectedLineHeight)
+    expect(entry.height).toBe(computeTelopBandHeight(fontSize))
   })
 
   it('36: 長い本文(50字級)は textWidth が wordWrapWidth を超えない（jsdomフォールバック経路でもクランプされる）', () => {

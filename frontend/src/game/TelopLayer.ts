@@ -156,11 +156,16 @@ export class TelopLayer extends Container {
     const { text, position, seconds, kind, fontFamily, fontSize, accentColor } = options
 
     const wordWrapWidth = this.computeWordWrapWidth()
+    const effectiveFontSize = fontSize * TELOP_FONT_SCALE
     const textObj = new PixiText({
       text,
       style: new TextStyle({
         fontFamily,
-        fontSize: fontSize * TELOP_FONT_SCALE,
+        fontSize: effectiveFontSize,
+        // `computeTelopBandHeight` の式（fontSize×TELOP_FONT_SCALE×TELOP_LINE_HEIGHT_RATIO）と
+        // 実測高さを一致させるため、PIXI の行高を明示する（未指定だとフォント自体の行間メトリクスが
+        // 使われ、単一行の実測 text.height が予約帯の式とズレる。#679 レビューS2）。
+        lineHeight: effectiveFontSize * TELOP_LINE_HEIGHT_RATIO,
         fill: TELOP_TEXT_COLOR,
         wordWrap: true,
         wordWrapWidth,
