@@ -227,10 +227,13 @@ export class TelopLayer extends Container {
 
   private evictOverflow(position: TelopPosition): void {
     const group = this.entries.filter((e) => e.position === position)
-    while (group.length > TELOP_MAX_STACK) {
-      const oldest = group.shift()
-      if (!oldest) break
-      this.entries = this.entries.filter((e) => e.id !== oldest.id)
+    const overflowCount = group.length - TELOP_MAX_STACK
+    if (overflowCount <= 0) return
+
+    // 最古（配列先頭側）から overflowCount 件をまとめて破棄し、除去は1回の filter で行う
+    // （#674 セルフレビュー N-2。挙動は従来のループ版と同一）。
+    const toEvict = group.slice(0, overflowCount)
+    for (const oldest of toEvict) {
       this.stopInterval(oldest)
       if (oldest.holdTimer != null) {
         this.time.clearTimeout(oldest.holdTimer)
@@ -238,6 +241,8 @@ export class TelopLayer extends Container {
       this.removeChild(oldest.container)
       oldest.container.destroy({ children: true })
     }
+    const evictIds = new Set(toEvict.map((e) => e.id))
+    this.entries = this.entries.filter((e) => !evictIds.has(e.id))
   }
 
   /**
