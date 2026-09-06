@@ -15,6 +15,8 @@ export type EventImageBack = 'Hide' | 'Keep'
 /** イベント絵の遷移モード (#583)。既定は 'Fade'（既存の透明度フェード、非回帰）。
  *  'Pixelate' はドットが段階的に荒くなる→切り替わる→段階的に細かく戻る。 */
 export type EventImageTransition = 'Fade' | 'Pixelate'
+/** テロップ表示位置 (#674)。既定は 'BottomRight'（画面右下）。 */
+export type TelopPosition = 'TopLeft' | 'TopRight' | 'BottomRight' | 'BottomLeft'
 
 /**
  * イベント絵のアンビエント演出フラグ (#582)。Gymnasia の「暗闇+オレンジ色のろうそく光+
@@ -268,6 +270,26 @@ export type Event =
       EventImageExit: {
         /** 退場フェードアウト時間 ms。未指定/null は `event_image_fade_ms` または runtime 既定 700ms */
         fade_ms?: number | null
+      }
+    }
+  | {
+      /**
+       * 汎用テロップ (#674)。画面隅に短文を数秒表示して消える演出。エンジンは text/kind の
+       * 中身を解釈しない。`[テロップ: 本文]` / `[テロップ: 本文, 位置=右下, 秒=4, 種別=しおり]`。
+       * runtime は非同期でスライドイン→seconds 秒保持→フェードアウトし、本文の reveal や
+       * クリック待ちをブロックしない。復元中・スキップ中は表示しない（GameState には持たせない、
+       * ADR 0002）。重なり回避は動的にしない（`telop_reserve` frontmatter で本文領域側を予約する）。
+       */
+      Telop: {
+        text: string
+        /** wasm は #[serde(default)] のため型上は optional だが、実際の parse_markdown() 出力では
+         *  常に 4 種のいずれかが入る（parser.ts で正規化）。 */
+        position?: TelopPosition
+        /** 表示秒数。[1, 30] にクランプ済み。wasm は #[serde(default)] のため型上は optional だが
+         *  実際の出力では常に数値が入る（parser.ts で正規化）。 */
+        seconds?: number
+        /** 任意の識別子。作品側の見た目上書きフック。未指定は null。 */
+        kind?: string | null
       }
     }
   | {
@@ -664,6 +686,12 @@ export interface EventDocument {
    *
    *  null/undefined・false は従来どおり（後方互換）。frontmatter `fullscreen_image:` から流す。 */
   fullscreen_image?: boolean | null
+  /** テロップ帯の予約 (#674)。重なり回避は動的にしない方針（kako-jun 2026-09-07）。`true` のとき
+   *  `dialog_style: novel` の本文領域の下端をテロップ帯1段ぶん（`computeTelopBandHeight(font_size)`）
+   *  上げ、改頁計算もその縮小後の領域で行う。`位置=右上|左上` のテロップのみを使う作品は不要（`false`のまま）。
+   *  null/undefined・false は従来どおり（テロップは本文の上に半透明で重なる）。
+   *  frontmatter `telop_reserve:` から流す。 */
+  telop_reserve?: boolean | null
   chapters: EventChapter[]
 }
 
