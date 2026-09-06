@@ -10,7 +10,8 @@
  *    PixiJS Text の `.width` は常に例外を投げる。`measureTextWidth` のフォールバック経路
  *    （#25）はこの環境で自然に踏まれる（追加のモックは不要）。
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { Graphics } from 'pixi.js'
 import { TelopLayer, type TelopShowOptions } from './TelopLayer'
 import { TimeController } from './TimeController'
 import type { TelopPosition } from '../types'
@@ -76,6 +77,7 @@ interface TelopEntryForTest {
   id: number
   position: TelopPosition
   phase: 'in' | 'hold' | 'out'
+  accentColor: number
   targetX: number
   targetY: number
   slideFromX: number
@@ -84,6 +86,7 @@ interface TelopEntryForTest {
   textWidth: number
   container: { x: number; y: number; alpha: number }
   textObj: { text: string }
+  accent: Graphics
 }
 interface TelopLayerInternals {
   entries: TelopEntryForTest[]
@@ -348,5 +351,80 @@ describe('TelopLayer measureTextWidth フォールバック (#674)', () => {
 
     const expected = text.length * (fontSize * TELOP_FONT_SCALE * 0.95)
     expect(entry.textWidth).toBe(expected)
+  })
+})
+
+describe('TelopLayer.setAccentColor (#674 セルフレビュー2巡目 S-1)', () => {
+  const NEW_COLOR = 0x00ff00
+
+  // 27: 表示中の複数段（同一 position の複数段・別 position の段の両方）が、全て新色で
+  //     再描画される（accentColor が更新され、accent Graphics の clear/fill が呼ばれる）。
+  it('27: 表示中の複数段（同一 position・別 position）が全て新色で再描画される', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts('br1', { position: 'BottomRight' }))
+    layer.show(opts('br2', { position: 'BottomRight' }))
+    layer.show(opts('tl1', { position: 'TopLeft' }))
+    const entries = internals(layer).entries
+    const clearSpies = entries.map((e) => vi.spyOn(e.accent, 'clear'))
+    const fillSpies = entries.map((e) => vi.spyOn(e.accent, 'fill'))
+
+    layer.setAccentColor(NEW_COLOR)
+
+    entries.forEach((entry, i) => {
+      expect(entry.accentColor).toBe(NEW_COLOR)
+      expect(clearSpies[i]).toHaveBeenCalled()
+      expect(fillSpies[i]).toHaveBeenCalled()
+    })
+  })
+
+  // 28: entries が空（一度も show() していない）なら no-op — 例外を投げない。
+  it('28: entries が空なら no-op（例外を投げない）', () => {
+    const layer = makeLayer(virtualTime())
+    expect(() => layer.setAccentColor(NEW_COLOR)).not.toThrow()
+    expect(internals(layer).entries.length).toBe(0)
+  })
+
+  // 29: phase が 'in'/'hold'/'out' のどれであっても accentColor が更新され再描画される
+  //     （phase 自体は setAccentColor で変化しない）。
+  it.each(['in', 'hold', 'out'] as const)(
+    '29: phase="%s" でも accentColor が更新され再描画される',
+    (targetPhase) => {
+      const time = virtualTime()
+      const layer = makeLayer(time)
+      layer.show(opts('通知', { seconds: 1 }))
+      const entry = internals(layer).entries[0]
+
+      if (targetPhase === 'hold' || targetPhase === 'out') {
+        time.tick(quantizedThreshold(TELOP_SLIDE_IN_MS)) // in→hold
+      }
+      if (targetPhase === 'out') {
+        time.tick(1000) // hold(seconds=1)ぶん経過 → out へ（破棄はまだ）
+      }
+      expect(entry.phase).toBe(targetPhase)
+
+      const clearSpy = vi.spyOn(entry.accent, 'clear')
+      const fillSpy = vi.spyOn(entry.accent, 'fill')
+
+      layer.setAccentColor(NEW_COLOR)
+
+      expect(entry.accentColor).toBe(NEW_COLOR)
+      expect(clearSpy).toHaveBeenCalled()
+      expect(fillSpy).toHaveBeenCalled()
+      expect(entry.phase).toBe(targetPhase) // phase 自体は変えない
+    }
+  )
+
+  // 30: 更新後に別の show() が入り relayout() が走っても、新色は上書きされず保持される。
+  it('30: 更新後に別の show() で relayout が走っても新色が保持される', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts('先発', { position: 'BottomRight' }))
+    const entry = internals(layer).entries[0]
+
+    layer.setAccentColor(NEW_COLOR)
+    expect(entry.accentColor).toBe(NEW_COLOR)
+
+    layer.show(opts('後発', { position: 'BottomRight' })) // relayout() が再度 redrawEntryBackground を呼ぶ
+
+    expect(entry.accentColor).toBe(NEW_COLOR) // 古い色に戻らない
   })
 })
