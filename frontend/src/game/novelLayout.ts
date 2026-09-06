@@ -1163,6 +1163,16 @@ export const TELOP_PADDING_X_PX = 14
 export const TELOP_ACCENT_WIDTH_PX = 4
 /** 画面端からテロップ下地までのマージン（px）。 */
 export const TELOP_MARGIN_PX = 16
+
+/**
+ * テロップ本文が折り返せる最大幅 (px) を算出する純粋関数 (#679)。
+ * `screenWidth` から左右の `TELOP_MARGIN_PX` を差し引いた、帯自体が使える画面幅。
+ * `TelopLayer` はここからさらに左右余白 (`TELOP_PADDING_X_PX`×2) とアクセント縦線幅
+ * (`TELOP_ACCENT_WIDTH_PX`) を差し引いた値を PIXI.Text の `wordWrapWidth` に使う。
+ */
+export function computeTelopMaxWidth(screenWidth: number): number {
+  return screenWidth - TELOP_MARGIN_PX * 2
+}
 /**
  * 下端アンカー（BottomLeft/BottomRight）専用の画面下端からのマージン（px）(#677)。
  * 下部丸ボタン行（`PLAYER_BUTTON_ROW_HEIGHT_PX`）に重ならないよう、通常の `TELOP_MARGIN_PX` に
@@ -1181,11 +1191,16 @@ export const TELOP_SLIDE_IN_MS = 300
 export const TELOP_FADE_OUT_MS = 700
 
 /**
- * テロップ1段ぶんの帯高さ (px) を算出する純粋関数 (#674)。
+ * テロップ1行ぶんの帯高さ (px) を算出する純粋関数 (#674)。
  * `本文 font_size × TELOP_FONT_SCALE` を実効文字サイズとし、行間 `TELOP_LINE_HEIGHT_RATIO` を
  * 掛けた1行ぶんの高さに、上下余白 `TELOP_PADDING_Y_PX` を両側分足す。
- * `DialogBox.setNovelBottomReserve` へ渡す値（`telop_reserve: true` 時の本文領域下端予約幅）と、
- * `TelopLayer` 自身の矩形高さの両方がこの値を共有する。
+ * `DialogBox.setNovelBottomReserve` へ渡す値（`telop_reserve: true` 時の本文領域下端予約幅、
+ * `computeTelopBottomReserveHeight` 経由）が使う「1行ぶん」固定の高さ。
+ *
+ * `TelopLayer` 自身の矩形高さ（`computeTelopGeometry` の `height`）はこの関数を使わない (#679)。
+ * 折り返して複数行になったテロップは実測 `text.height` から高さを求める必要があり、
+ * `fontSize` だけの関数では表現できないため。予約帯はあえて「1行ぶん」のまま据え置き、
+ * 複数行のテロップは予約帯より上に本文へ一時的にはみ出すのを許容する（仕様として明記）。
  */
 export function computeTelopBandHeight(fontSize: number): number {
   const textHeight = fontSize * TELOP_FONT_SCALE * TELOP_LINE_HEIGHT_RATIO
@@ -1215,13 +1230,25 @@ export interface TelopGeometryInput {
   screenWidth: number
   screenHeight: number
   position: TelopPosition
-  /** 0 = アンカー辺（右下/左下/右上/左上のいずれか）に最も近い段。増えるほど辺から離れる。
-   *  「新しいものが下」の意味論（新規追加時にどの段へ入れるか）は呼び出し側（TelopLayer）が
-   *  position に応じて決める（下端アンカーは index 0 = 最新、上端アンカーは index 0 = 最古）。 */
-  stackIndex: number
-  fontSize: number
-  /** 本文の実測幅 (px)。下地幅 = これ + 左右余白 + アクセント縦線幅。 */
+  /**
+   * アンカー辺（右下/左下/右上/左上のいずれか）からの累積オフセット (px)。0 = アンカー辺に
+   * 最も近い段（その辺に直接接する）。呼び出し側（`TelopLayer.relayout`）が「これより手前
+   * （アンカー辺に近い側）の全段の `height + TELOP_STACK_GAP_PX` の合計」を渡す (#679)。
+   * 各段の実測高さ（折り返しで可変）をそのまま積み上げるためで、固定の等間隔（旧来の
+   * `段番号 × 1行分の高さ`）を仮定しない。「新しいものが下」の意味論（新規追加時に
+   * どの段へ入れるか）は呼び出し側が position に応じて決める（下端アンカーは最新の段が
+   * オフセット0、上端アンカーは最古の段がオフセット0）。
+   */
+  stackOffsetPx: number
+  /** 本文の実測幅 (px)。下地幅 = これ + 左右余白 + アクセント縦線幅。折り返し時は
+   *  wordWrap 後の実際の描画幅（最長行の幅、`wordWrapWidth` 以下）を渡す。 */
   textWidth: number
+  /**
+   * 本文の実測高さ (px) (#679)。下地高さ = これ + 上下余白 ×2。単一行なら
+   * `computeTelopBandHeight` が返す1行ぶんの高さと一致するが、折り返して複数行になった
+   * テロップは PIXI.Text の実測 `text.height`（行数に比例して伸びる）をそのまま渡す。
+   */
+  textHeight: number
   /**
    * 下端アンカー（BottomLeft/BottomRight）専用、下部丸ボタン行の高さ (px) (#677)。
    * 省略時は表示倍率 1:1 の `PLAYER_BUTTON_ROW_HEIGHT_PX`。上端アンカーには影響しない。
@@ -1243,28 +1270,34 @@ export interface TelopGeometry {
 /**
  * テロップ矩形とスライドイン開始位置を算出する純粋関数 (#674)。
  * 重なり回避は動的にしない（kako-jun 2026-09-07 方針）——同じ position の複数段は
- * `stackIndex` に応じて縦にオフセットするだけで、他 position との重なり回避は行わない。
+ * `stackOffsetPx` に応じて縦にオフセットするだけで、他 position との重なり回避は行わない。
  *
  * 下端アンカー（BottomLeft/BottomRight）だけは、下部丸ボタン行（DOM 固定 CSS px。
  * `NovelPlayer.tsx` の `bottom-3`=12px・`w-9 h-9`=36px）と重ならないよう、画面下端からの
  * マージンに `TELOP_MARGIN_PX` だけでなく `buttonRowHeightPx`（省略時 `PLAYER_BUTTON_ROW_HEIGHT_PX`、
  * 合算は `TELOP_BOTTOM_RESERVE_PX` と一致）も加える (#677)。上端アンカーは影響を受けない
  * （ボタン行は画面下部にしかないため）。
+ *
+ * 帯の幅・高さは呼び出し側（`TelopLayer`）が渡す実測 `textWidth`/`textHeight` から組む (#679)。
+ * `computeTelopBandHeight`（font_size からの1行ぶん高さ）はここでは使わない
+ * ——折り返して複数行になったテロップは帯もそのぶん高くなる必要があり、`fontSize` だけからは
+ * 求められないため。`telop_reserve` の帯予約（`computeTelopBottomReserveHeight`）は引き続き
+ * `computeTelopBandHeight` の1行ぶん固定値を使う（複数行テロップは予約帯より上に伸び、
+ * 本文と一時的に重なるのを許容する。詳細は `docs/spec/markdown-v0.1.md` テロップ節）。
  */
 export function computeTelopGeometry(input: TelopGeometryInput): TelopGeometry {
-  const { screenWidth, screenHeight, position, stackIndex, fontSize, textWidth } = input
+  const { screenWidth, screenHeight, position, stackOffsetPx, textWidth, textHeight } = input
   const buttonRowHeightPx = input.buttonRowHeightPx ?? PLAYER_BUTTON_ROW_HEIGHT_PX
-  const height = computeTelopBandHeight(fontSize)
+  const height = textHeight + TELOP_PADDING_Y_PX * 2
   const width = textWidth + TELOP_PADDING_X_PX * 2 + TELOP_ACCENT_WIDTH_PX
   const isRight = position === 'BottomRight' || position === 'TopRight'
   const isTop = position === 'TopLeft' || position === 'TopRight'
 
   const x = isRight ? screenWidth - TELOP_MARGIN_PX - width : TELOP_MARGIN_PX
-  const edgeOffset = stackIndex * (height + TELOP_STACK_GAP_PX)
   const bottomAnchorMarginPx = TELOP_MARGIN_PX + buttonRowHeightPx
   const y = isTop
-    ? TELOP_MARGIN_PX + edgeOffset
-    : screenHeight - bottomAnchorMarginPx - height - edgeOffset
+    ? TELOP_MARGIN_PX + stackOffsetPx
+    : screenHeight - bottomAnchorMarginPx - height - stackOffsetPx
   const slideFromX = isRight ? screenWidth : -width
 
   return { x, y, width, height, slideFromX }

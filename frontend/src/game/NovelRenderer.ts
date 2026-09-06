@@ -310,6 +310,15 @@ export class NovelRenderer {
    * 両方がこの値を共有し、二重計上を避ける。
    */
   private telopButtonRowHeightPx: number = PLAYER_BUTTON_ROW_HEIGHT_PX
+  /**
+   * `telopLayer.clear()`（destroy 以外の呼び出し = scene切替/goBack/seekTo/セーブ復元）が
+   * 起きるたびに1つ増える世代カウンタ (#679 レビューS3)。`processDirective` の `Telop` 分岐は
+   * `ensureFontLoaded()` の完了を待ってから `telopLayer.show()` する（フォント未ロードのまま
+   * 折り返し行数が確定してしまう問題の修正）が、待機中にシーン切替等が起きて古いテロップを
+   * 出すのは事故なので、show 呼び出し予定時にこの値を記録し、完了時に変化していないか
+   * `clearTelopLayer()` 経由の呼び出しと突き合わせて確認する。
+   */
+  private telopClearEpoch = 0
   private blackoutOverlay: Graphics
   /** novel スタイル (#283) の全画面スクリム。セリフ表示中だけ半透明黒を敷く。
    *  z 順は characterLayer の上・blackoutOverlay の下。adv では常に visible=false。 */
@@ -1743,7 +1752,7 @@ export class NovelRenderer {
     this.applyEventImageVisibility()
     // テロップ (#674) も新しいイベント列の開始で常にクリアする。前シーンの表示中テロップを
     // 引き継がない（演出の中間状態を持ち越さない、eventImageLayer と同じ規律）。
-    this.telopLayer.clear()
+    this.clearTelopLayer()
     this.setBlackout(false)
     this.currentBgmPath = null
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
@@ -2812,7 +2821,7 @@ export class NovelRenderer {
     // setEvents() と同じ理由: textureCache 相当の登録先が無いと GPU テクスチャがリークする)。
     this.eventImageLayer.disposeTextures()
     // テロップレイヤーのタイマー・表示中の段を破棄する (#674)。
-    this.telopLayer.clear()
+    this.clearTelopLayer()
     this.audioManager.destroy()
     this.characterLayer.clear()
     this.choiceOverlay.hide()
@@ -3351,7 +3360,7 @@ export class NovelRenderer {
     this.resetNovelScrimState()
     // テロップ (#674) も演出の中間状態なので復元（goBack/seekTo/セーブ復元/任意局面起動）では
     // 一切持たない（NovelGameState に持たせない設計、ADR-0002）。表示中の段があれば即座に消す。
-    this.telopLayer.clear()
+    this.clearTelopLayer()
 
     // フラグ復元。goBack/seekTo は applyState を単独で呼ぶため、ここでの復元は必須。
     // restoreToScene 経由では resolveEvents 用に先んじて同じ復元が行われるが、
@@ -3572,6 +3581,17 @@ export class NovelRenderer {
    * `applyTelopReserve`（→ `dialogBox.setNovelBottomReserve` → 改頁行数の再計算）は無駄な再計算になる。
    * テロップ帯そのものの高さ同期（`setButtonRowHeightPx`）は予約の有無に関係なく必要なので常に行う（#678）。
    */
+  /**
+   * `telopLayer.clear()` を呼びつつ `telopClearEpoch` を1つ進める (#679 レビューS3)。
+   * scene切替（resetAndStartEvents / SceneTransition）・goBack/seekTo/セーブ復元（applyState）・
+   * destroy() の4箇所全てここ経由にし、`processDirective` の `Telop` 分岐が
+   * `ensureFontLoaded()` 完了時にこのエポックの変化を見て「待機中に打ち切られたか」を判定する。
+   */
+  private clearTelopLayer(): void {
+    this.telopLayer.clear()
+    this.telopClearEpoch++
+  }
+
   private syncTelopBottomMarginToButtons(): void {
     const canvas = this.app?.canvas as HTMLCanvasElement | undefined
     if (!canvas) return
@@ -3949,7 +3969,7 @@ export class NovelRenderer {
         this.eventImageLayer.remove()
         this.applyEventImageVisibility()
         // テロップ (#674) も場面転換でクリアする（eventImageLayer と同じ防御）。
-        this.telopLayer.clear()
+        this.clearTelopLayer()
         this.setBlackout(false)
         // novel: 場面転換でスクリム+文字を退避して新しい絵を見せ、戻す (#283)
         this.retreatNovelScrim()
@@ -4052,19 +4072,43 @@ export class NovelRenderer {
       // （NovelGameState には Telop を一切持たせない設計、Issue コメント参照）。
       if (this.skipMode) return
       const telop = event.Telop
-      this.telopLayer.show({
-        text: telop.text,
-        position: telop.position ?? 'BottomRight',
-        seconds: telop.seconds ?? 4,
-        kind: telop.kind ?? null,
-        fontFamily: resolveFontFamily(
-          null,
-          this.gameDefaultFontFamily,
-          NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
-        ),
-        fontSize: this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE,
-        accentColor: this.telopAccentColorNum,
-      })
+      const resolvedFontFamily = resolveFontFamily(
+        null,
+        this.gameDefaultFontFamily,
+        NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+      )
+      const fontSize = this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE
+      const accentColor = this.telopAccentColorNum
+      // フォント未ロードのまま show() すると、その時点のフォールバックフォントの字形幅で
+      // wordWrap の折り返し行数・帯の高さが確定してしまい、後からフォントが差し替わっても
+      // 追従しない（TelopLayer は Dialog/Narration と違い後追いの再測定フックを持たない）。
+      // 他レイヤー（Dialog/Narration）と同じ ensureFontLoaded() の完了を待ってから show() する
+      // （#679 レビューS3）。await 自体は fire-and-forget（本文の進行はブロックしない）。
+      const expectedClearEpoch = this.telopClearEpoch
+      void ensureFontLoaded(resolvedFontFamily)
+        .catch((err) => {
+          // ロード失敗時もフォールバックフォントで表示自体は続行する（.then は必ず走る、
+          // Dialog/Narration の「ロード失敗時は差し替えないだけ」より一段階前の判断——
+          // Telop はまだ一度も描画していないため、失敗しても出さないより出す方が良い）。
+          console.warn('[name-name] テロップ用フォントロードに失敗', resolvedFontFamily, err)
+        })
+        .then(() => {
+          // 待機中にシーン切替/goBack/seekTo/セーブ復元（telopLayer.clear() 経由。
+          // clearTelopLayer() が telopClearEpoch を進める）・スキップ開始・破棄が起きていたら
+          // 古いテロップを出さない。
+          if (!this.initialized) return
+          if (this.skipMode) return
+          if (this.telopClearEpoch !== expectedClearEpoch) return
+          this.telopLayer.show({
+            text: telop.text,
+            position: telop.position ?? 'BottomRight',
+            seconds: telop.seconds ?? 4,
+            kind: telop.kind ?? null,
+            fontFamily: resolvedFontFamily,
+            fontSize,
+            accentColor,
+          })
+        })
       return
     }
     if ('Blackout' in event) {

@@ -11,7 +11,7 @@
  *    （#25）はこの環境で自然に踏まれる（追加のモックは不要）。
  */
 import { describe, expect, it, vi } from 'vitest'
-import type { Graphics } from 'pixi.js'
+import type { Graphics, TextStyle } from 'pixi.js'
 import { TelopLayer, type TelopShowOptions } from './TelopLayer'
 import { TimeController } from './TimeController'
 import type { TelopPosition } from '../types'
@@ -19,7 +19,13 @@ import {
   TELOP_SLIDE_IN_MS,
   TELOP_FADE_OUT_MS,
   TELOP_FONT_SCALE,
+  TELOP_LINE_HEIGHT_RATIO,
   TELOP_MAX_STACK,
+  TELOP_STACK_GAP_PX,
+  TELOP_PADDING_X_PX,
+  TELOP_ACCENT_WIDTH_PX,
+  computeTelopMaxWidth,
+  computeTelopBandHeight,
 } from './novelLayout'
 
 const SCREEN_W = 800
@@ -84,8 +90,9 @@ interface TelopEntryForTest {
   width: number
   height: number
   textWidth: number
+  textHeight: number
   container: { x: number; y: number; alpha: number }
-  textObj: { text: string }
+  textObj: { text: string; style: TextStyle }
   accent: Graphics
 }
 interface TelopLayerInternals {
@@ -233,12 +240,12 @@ describe('TelopLayer race: clear()/resize() の割り込み', () => {
   })
 })
 
-describe('TelopLayer 「in」中の stackIndex 変化 (#674 セルフレビュー S3)', () => {
+describe('TelopLayer 「in」中の累積オフセット変化 (#674 セルフレビュー S3)', () => {
   // 26: 先発が 'in'（スライドイン中）のまま、同一 position へ後発の show() が入って
-  //     stackIndex がずれ targetY が変わっても、Y は瞬間移動せず補間で新しい定位置へ追従する
-  //     （X と同じ扱い。relayout() は 'in' 中の container.y に触れず、updateFrame が
-  //     slideFromY→targetY を毎フレーム補間する）。
-  it('26: in 中に後発の show() で stackIndex がずれても、先発の Y は瞬間移動せず補間で新しい targetY に収束する', () => {
+  //     累積オフセット(stackOffsetPx)がずれ targetY が変わっても、Y は瞬間移動せず補間で
+  //     新しい定位置へ追従する（X と同じ扱い。relayout() は 'in' 中の container.y に触れず、
+  //     updateFrame が slideFromY→targetY を毎フレーム補間する）。
+  it('26: in 中に後発の show() で累積オフセット(stackOffsetPx)がずれても、先発の Y は瞬間移動せず補間で新しい targetY に収束する', () => {
     const time = virtualTime()
     const layer = makeLayer(time)
     layer.show(opts('先発', { position: 'BottomRight' }))
@@ -250,10 +257,10 @@ describe('TelopLayer 「in」中の stackIndex 変化 (#674 セルフレビュ�
     const yBeforeStackShift = entry.container.y
     const targetYBeforeStackShift = entry.targetY
 
-    layer.show(opts('後発', { position: 'BottomRight' })) // 先発を stackIndex 1 へ押し出す
+    layer.show(opts('後発', { position: 'BottomRight' })) // 先発を累積オフセット1段ぶん押し出す
 
     expect(entry.phase).toBe('in') // まだ in のまま
-    expect(entry.targetY).not.toBe(targetYBeforeStackShift) // stackIndex がずれ target 自体は変わる
+    expect(entry.targetY).not.toBe(targetYBeforeStackShift) // 累積オフセットがずれ target 自体は変わる
     expect(entry.container.y).toBe(yBeforeStackShift) // 直後は瞬間移動しない（relayout は in 中の container.y に触れない）
 
     const afterMs = quantizedThreshold(TELOP_SLIDE_IN_MS)
@@ -483,5 +490,95 @@ describe('TelopLayer.setButtonRowHeightPx (#677)', () => {
     layer.setButtonRowHeightPx(200.6)
 
     expect(entry.targetY).not.toBe(targetYAfterFirstSet)
+  })
+})
+
+// #679: 長い本文（著作名＋読み仮名等）が帯の最大幅を超えるとき折り返し、帯を多段にする。
+describe('TelopLayer 折り返し・多段化 (#679)', () => {
+  /** TelopLayer.computeWordWrapWidth と同じ式（余白/アクセント幅は novelLayout の export 定数から組む）。 */
+  function expectedWordWrapWidth(screenWidth: number): number {
+    return computeTelopMaxWidth(screenWidth) - TELOP_PADDING_X_PX * 2 - TELOP_ACCENT_WIDTH_PX
+  }
+
+  // スペースの無い日本語の長文（実際のしおりテロップ相当、#679 現象の再現。47字、SCREEN_W=800の
+  // wordWrapWidth を超え2行に折り返る長さ——jsdomフォールバックの近似式で確認済み）。
+  const LONG_TEXT =
+    '人倫の形而上学の基礎づけじんりんのけいじじょうがくのきそづけ世界市民的見地における普遍史の理念'
+  const SHORT_TEXT = '通知'
+
+  it('35: show() は textObj.style に wordWrap=true・breakWords=true・現在の screenWidth から求めた wordWrapWidth を設定する', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts(SHORT_TEXT))
+    const entry = internals(layer).entries[0]
+
+    expect(entry.textObj.style.wordWrap).toBe(true)
+    expect(entry.textObj.style.breakWords).toBe(true)
+    expect(entry.textObj.style.wordWrapWidth).toBe(expectedWordWrapWidth(SCREEN_W))
+  })
+
+  // 40: 単一行テロップの帯高さは `computeTelopBandHeight(fontSize)` と一致する（#679 レビューS2）。
+  //     `TextStyle.lineHeight` を式の行高（fontSize×TELOP_FONT_SCALE×TELOP_LINE_HEIGHT_RATIO）
+  //     として明示することで、PIXI の実測 text.height（単一行なら lineHeight と一致）が
+  //     予約帯の式とズレなくなる。jsdom には canvas 2D context が無く実測はフォールバック近似に
+  //     なるが、フォールバックも同じ式で lineHeight を組むため、ここでは production の
+  //     `TextStyle.lineHeight` 設定自体を直接検証し、式との一致を担保する。
+  it('40: 単一行テロップの帯高さ(entry.height)は computeTelopBandHeight(fontSize) と一致し、textObj.style.lineHeight は式の行高と一致する', () => {
+    const layer = makeLayer(virtualTime())
+    const fontSize = 24
+    layer.show(opts(SHORT_TEXT, { fontSize }))
+    const entry = internals(layer).entries[0]
+
+    const expectedLineHeight = fontSize * TELOP_FONT_SCALE * TELOP_LINE_HEIGHT_RATIO
+    expect(entry.textObj.style.lineHeight).toBe(expectedLineHeight)
+    expect(entry.height).toBe(computeTelopBandHeight(fontSize))
+  })
+
+  it('36: 長い本文(50字級)は textWidth が wordWrapWidth を超えない（jsdomフォールバック経路でもクランプされる）', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts(LONG_TEXT))
+    const entry = internals(layer).entries[0]
+
+    expect(entry.textWidth).toBeLessThanOrEqual(expectedWordWrapWidth(SCREEN_W))
+  })
+
+  it('37: 長い本文は複数行に折り返り、帯の高さ(textHeight)が短文の1行ぶんより大きくなる', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts(SHORT_TEXT, { position: 'TopLeft' }))
+    const shortEntry = internals(layer).entries[0]
+    layer.show(opts(LONG_TEXT, { position: 'TopRight' })) // 別 position でスタックに影響させない
+    const longEntry = internals(layer).entries[1]
+
+    expect(longEntry.textHeight).toBeGreaterThan(shortEntry.textHeight)
+    expect(longEntry.height).toBeGreaterThan(shortEntry.height)
+  })
+
+  // 38: スタックは各段の実測高さを累積して積む（#679 の直接検証）。旧実装は
+  //     「stackIndex × 自分自身の高さ」で積んでいたため、高さの異なる段が混在すると
+  //     ズレて重なる/隙間が空くバグがあった。新実装では「edge に近い段の実測高さ + GAP」が
+  //     正しくオフセットに使われるため、bottom = 次段の top - GAP の関係が厳密に成り立つ。
+  it('38: スタックは各段の実測高さ（固定の1行高さではない）を累積して配置する', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts(LONG_TEXT, { position: 'BottomRight' })) // 先発（古い方、edgeから2番目に積まれる）
+    const older = internals(layer).entries[0]
+    layer.show(opts(SHORT_TEXT, { position: 'BottomRight' })) // 後発（新しい方、edgeに一番近い=offset0）
+    const newer = internals(layer).entries[1]
+
+    expect(older.height).not.toBe(newer.height) // 高さが異なる前提が成立していることの確認
+    // older の下端 + GAP が newer の上端に厳密一致する（newer の実測高さがそのまま積み上げに使われる証拠）。
+    expect(older.targetY + older.height + TELOP_STACK_GAP_PX).toBe(newer.targetY)
+  })
+
+  // 39: resize() で screenWidth が変わると wordWrapWidth も追従し、既存段が再測定される。
+  it('39: resize() で screenWidth が変わると既存段の wordWrapWidth が新しい画面幅に追従する', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts(LONG_TEXT))
+    const entry = internals(layer).entries[0]
+    expect(entry.textObj.style.wordWrapWidth).toBe(expectedWordWrapWidth(SCREEN_W))
+
+    const narrowerWidth = 450 // 9:16 論理幅相当、SCREEN_W(800) より狭い
+    layer.resize(narrowerWidth, SCREEN_H)
+
+    expect(entry.textObj.style.wordWrapWidth).toBe(expectedWordWrapWidth(narrowerWidth))
+    expect(entry.textWidth).toBeLessThanOrEqual(expectedWordWrapWidth(narrowerWidth))
   })
 })

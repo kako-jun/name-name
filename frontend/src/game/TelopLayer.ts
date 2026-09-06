@@ -12,7 +12,7 @@
  * `computeFadeAlpha` と同じ流儀）→ 破棄。**非同期**（呼び出し元の reveal/クリック待ちを一切
  * ブロックしない、内部で完結する）。
  *
- * 複数出現時は縦に積む（`novelLayout.ts` の `computeTelopGeometry` の `stackIndex`）。
+ * 複数出現時は縦に積む（`novelLayout.ts` の `computeTelopGeometry` の `stackOffsetPx`＝累積オフセット）。
  * 「新しいものが下」の意味論は `relayout()` が position ごとに解決する: 下端アンカー
  * （BottomLeft/BottomRight）は新しいものほど辺に近い段（index 0）、上端アンカー（TopLeft/TopRight）
  * は古いものほど辺に近い段（index 0）——どちらも新しいものが視覚的な「下」に来る。
@@ -25,18 +25,27 @@
  * 下端アンカー（BottomLeft/BottomRight）は画面下部の丸ボタン行（DOM 固定 CSS px）に重ならないよう
  * `buttonRowHeightPx`（既定 `PLAYER_BUTTON_ROW_HEIGHT_PX`）ぶん余分にマージンを取る (#677)。
  * `setButtonRowHeightPx` で表示倍率補正後の値に更新できる（`SeekBar.setVerticalCenter` と同じ流儀）。
+ *
+ * 本文は `wordWrap: true` + `breakWords: true`（日本語は空白が無く breakWords 必須）で
+ * `computeTelopMaxWidth(screenWidth)` から左右余白・アクセント縦線幅を差し引いた
+ * `wordWrapWidth` に折り返す (#679)。帯の高さは実測 `text.height`（複数行なら行数ぶん高くなる）
+ * から求め、スタック（同一 position の段積み）は各段の実測高さを累積して積む
+ * （固定高さ1行分の前提を置かない）。
  */
 import { Container, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
 import type { TelopPosition } from '../types'
 import {
   computeTelopGeometry,
+  computeTelopMaxWidth,
   PLAYER_BUTTON_ROW_HEIGHT_PX,
   TELOP_ACCENT_WIDTH_PX,
   TELOP_FADE_OUT_MS,
   TELOP_FONT_SCALE,
+  TELOP_LINE_HEIGHT_RATIO,
   TELOP_MAX_STACK,
   TELOP_PADDING_X_PX,
   TELOP_SLIDE_IN_MS,
+  TELOP_STACK_GAP_PX,
 } from './novelLayout'
 import { computeFadeAlpha, effectProgress } from './screenEffects'
 import { easeOut } from './easing'
@@ -71,6 +80,8 @@ interface TelopEntry {
   fontSize: number
   accentColor: number
   textWidth: number
+  /** 実測の本文高さ (px)。折り返して複数行になると増える (#679)。 */
+  textHeight: number
   container: Container
   bg: Graphics
   accent: Graphics
@@ -144,12 +155,21 @@ export class TelopLayer extends Container {
   show(options: TelopShowOptions): void {
     const { text, position, seconds, kind, fontFamily, fontSize, accentColor } = options
 
+    const wordWrapWidth = this.computeWordWrapWidth()
+    const effectiveFontSize = fontSize * TELOP_FONT_SCALE
     const textObj = new PixiText({
       text,
       style: new TextStyle({
         fontFamily,
-        fontSize: fontSize * TELOP_FONT_SCALE,
+        fontSize: effectiveFontSize,
+        // `computeTelopBandHeight` の式（fontSize×TELOP_FONT_SCALE×TELOP_LINE_HEIGHT_RATIO）と
+        // 実測高さを一致させるため、PIXI の行高を明示する（未指定だとフォント自体の行間メトリクスが
+        // 使われ、単一行の実測 text.height が予約帯の式とズレる。#679 レビューS2）。
+        lineHeight: effectiveFontSize * TELOP_LINE_HEIGHT_RATIO,
         fill: TELOP_TEXT_COLOR,
+        wordWrap: true,
+        wordWrapWidth,
+        breakWords: true,
       }),
     })
     textObj.anchor.set(0, 0.5)
@@ -167,7 +187,8 @@ export class TelopLayer extends Container {
       kind: kind ?? null,
       fontSize,
       accentColor,
-      textWidth: this.measureTextWidth(textObj, fontSize),
+      textWidth: this.measureTextWidth(textObj, fontSize, wordWrapWidth),
+      textHeight: this.measureTextHeight(textObj, fontSize, wordWrapWidth),
       container,
       bg,
       accent,
@@ -189,7 +210,7 @@ export class TelopLayer extends Container {
     this.evictOverflow(position)
     this.relayout()
     // Y 補間の起点を確定する（この時点の targetY = 初期の定位置。以後の relayout で
-    // stackIndex がずれても slideFromY 自体は変えない。X の slideFromX と同じ扱い、#674 S3）。
+    // 累積オフセット(stackOffsetPx)がずれても slideFromY 自体は変えない。X の slideFromX と同じ扱い、#674 S3）。
     entry.slideFromY = entry.targetY
 
     // relayout() が確定させた slideFromX/slideFromY から、画面外→定位置へスライドインを開始する。
@@ -237,15 +258,44 @@ export class TelopLayer extends Container {
   }
 
   /**
+   * `wordWrapWidth`（左右余白・アクセント縦線幅を差し引いた本文の折り返し幅）を算出する (#679)。
+   * `computeTelopMaxWidth(screenWidth)` が帯全体の最大幅、そこから `TelopLayer` 自身が持つ
+   * 左右余白 (`TELOP_PADDING_X_PX`×2) とアクセント縦線幅 (`TELOP_ACCENT_WIDTH_PX`) を引く。
+   */
+  private computeWordWrapWidth(): number {
+    return computeTelopMaxWidth(this.screenWidth) - TELOP_PADDING_X_PX * 2 - TELOP_ACCENT_WIDTH_PX
+  }
+
+  /**
    * `.width` は canvas 2D context が使えない環境（jsdom のユニットテスト等）で例外を投げることが
    * ある（`ToastOverlay.measureTextSize` / `CharacterLayer.measureGlyphWidth` と同じ既知の防御）。
+   * その場合は `文字数 × fontSize×TELOP_FONT_SCALE×0.95` の近似幅を、`wordWrapWidth` で
+   * クランプして返す（折り返しが起きる本文は最長行が概ね `wordWrapWidth` 一杯になる想定、#679）。
    */
-  private measureTextWidth(textObj: PixiText, fontSize: number): number {
+  private measureTextWidth(textObj: PixiText, fontSize: number, wordWrapWidth: number): number {
     try {
       return textObj.width
     } catch {
       const approxCharWidth = fontSize * TELOP_FONT_SCALE * 0.95
-      return textObj.text.length * approxCharWidth
+      const naturalWidth = textObj.text.length * approxCharWidth
+      return Math.min(naturalWidth, wordWrapWidth)
+    }
+  }
+
+  /**
+   * `.height` も `.width` と同じ理由（jsdom に canvas 2D context が無い）で例外を投げることが
+   * ある。その場合は近似の1行幅から折り返し後の概算行数を出し、1行の高さ
+   * （`computeTelopBandHeight` と同じ式）に掛けてフォールバックする (#679)。
+   */
+  private measureTextHeight(textObj: PixiText, fontSize: number, wordWrapWidth: number): number {
+    try {
+      return textObj.height
+    } catch {
+      const approxCharWidth = fontSize * TELOP_FONT_SCALE * 0.95
+      const naturalWidth = textObj.text.length * approxCharWidth
+      const lineHeight = fontSize * TELOP_FONT_SCALE * TELOP_LINE_HEIGHT_RATIO
+      const lines = Math.max(1, Math.ceil(naturalWidth / wordWrapWidth))
+      return lines * lineHeight
     }
   }
 
@@ -270,24 +320,40 @@ export class TelopLayer extends Container {
   }
 
   /**
-   * position ごとに段（stackIndex）を割り当てて幾何を再計算する。「新しいものが下」の意味論
-   * （どちらの辺アンカーでも新しいものが視覚的な下に来る）は、下端アンカーだけ配列を逆順にして
-   * 解決する（クラス doc 冒頭参照）。
+   * position ごとに段（アンカー辺からの累積オフセット）を割り当てて幾何を再計算する。
+   * 「新しいものが下」の意味論（どちらの辺アンカーでも新しいものが視覚的な下に来る）は、
+   * 下端アンカーだけ配列を逆順にして解決する（クラス doc 冒頭参照）。
+   *
+   * 各段のオフセットは「これより手前（アンカー辺に近い側）の全段の実測 `height + GAP` の
+   * 累積」で求める (#679)。`computeTelopGeometry` 自体は前段の高さを知らない純粋関数なので、
+   * ここ（呼び出し側）で `stackOffsetPx` を順に積み上げてから渡す——折り返しで各段の高さが
+   * バラバラでも、固定の等間隔ではなく実測高さどおりに積む。
+   *
+   * `resize()` で `screenWidth` が変わり `wordWrapWidth` が変化した場合、既存段の折り返しも
+   * 追従させるため `textObj.style.wordWrapWidth` を更新し textWidth/textHeight を再測定する
+   * (#679)。変化がない通常の relayout（show/evict/setAccentColor 等）では無駄な再測定をしない。
    */
   private relayout(): void {
+    const wordWrapWidth = this.computeWordWrapWidth()
     const positions: TelopPosition[] = ['TopLeft', 'TopRight', 'BottomLeft', 'BottomRight']
     for (const position of positions) {
       const group = this.entries.filter((e) => e.position === position)
       const isBottom = position === 'BottomLeft' || position === 'BottomRight'
       const ordered = isBottom ? [...group].reverse() : group
-      ordered.forEach((entry, stackIndex) => {
+      let stackOffsetPx = 0
+      ordered.forEach((entry) => {
+        if (entry.textObj.style.wordWrapWidth !== wordWrapWidth) {
+          entry.textObj.style.wordWrapWidth = wordWrapWidth
+          entry.textWidth = this.measureTextWidth(entry.textObj, entry.fontSize, wordWrapWidth)
+          entry.textHeight = this.measureTextHeight(entry.textObj, entry.fontSize, wordWrapWidth)
+        }
         const geometry = computeTelopGeometry({
           screenWidth: this.screenWidth,
           screenHeight: this.screenHeight,
           position,
-          stackIndex,
-          fontSize: entry.fontSize,
+          stackOffsetPx,
           textWidth: entry.textWidth,
+          textHeight: entry.textHeight,
           buttonRowHeightPx: this.buttonRowHeightPx,
         })
         entry.targetX = geometry.x
@@ -304,6 +370,7 @@ export class TelopLayer extends Container {
           entry.container.x = entry.targetX
           entry.container.y = entry.targetY
         }
+        stackOffsetPx += geometry.height + TELOP_STACK_GAP_PX
       })
     }
   }
@@ -335,7 +402,7 @@ export class TelopLayer extends Container {
       const elapsed = this.time.now() - entry.phaseStartedAtMs
       const t = easeOut(effectProgress(elapsed, TELOP_SLIDE_IN_MS))
       entry.container.x = entry.slideFromX + (entry.targetX - entry.slideFromX) * t
-      // Y も X と同じ扱いで補間する（#674 S3）: 積み直しで stackIndex がずれて targetY が
+      // Y も X と同じ扱いで補間する（#674 S3）: 積み直しで累積オフセット(stackOffsetPx)がずれて targetY が
       // 変わっても、slideFromY（show() 時点で確定した初期定位置）から現在の targetY へ
       // 毎フレーム補間し、瞬間移動しない。
       entry.container.y = entry.slideFromY + (entry.targetY - entry.slideFromY) * t
