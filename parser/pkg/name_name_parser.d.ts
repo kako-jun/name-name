@@ -90,6 +90,13 @@ export type EventImageBack = "Hide" | "Keep";
 export type EventImageTransition = "Fade" | "Pixelate";
 
 /**
+ * テロップ表示位置 (#674)。既定は `BottomRight`（画面右下）。
+ * Markdown 側の日本語トークン（右下/左下/右上/左上）・英語 alias
+ * （bottom-right/bottom-left/top-right/top-left）どちらでも指定できる（parser 側で正規化）。
+ */
+export type TelopPosition = "TopLeft" | "TopRight" | "BottomRight" | "BottomLeft";
+
+/**
  * パーティメンバーの呪文習得スロット (#175)
  */
 export interface PartyLearns {
@@ -435,6 +442,16 @@ export interface Document {
      * （空・非真偽値）は None（既定 false）にフォールバック。frontmatter `fullscreen_image:` から流す。
      */
     fullscreen_image?: boolean;
+    /**
+     * テロップ帯の予約 (#674)。**重なり回避は動的にしない**（kako-jun 2026-09-07 方針:
+     * 「1段ずらす等の小細工をするくらいなら、最終行に本文がいかないようにしてもいい」）。
+     * `true` のとき、`dialog_style: novel` の本文領域の下端をテロップ帯1段ぶん
+     * （`computeTelopBandHeight(font_size)`、文字サイズ×0.7×行間1.4＋余白）上げ、改頁計算も
+     * その縮小後の領域で行う。`位置=右上|左上` のテロップのみを使う作品は予約不要（`false` のまま）。
+     * `false`（既定）の作品では、テロップは本文の上に半透明で重なる（それで構わない作品向け）。
+     * 未指定・非真偽値は None（既定 false 相当、後方互換）。frontmatter `telop_reserve:` から流す。
+     */
+    telop_reserve?: boolean;
     chapters: Chapter[];
 }
 
@@ -549,7 +566,7 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 
 export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut" | "EaseOutBack";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; fit?: boolean } } | { Narration: { text: string[]; voice_path?: string; font_family?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } };
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; fit?: boolean } } | { Narration: { text: string[]; voice_path?: string; font_family?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } };
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 
@@ -564,8 +581,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly emit_markdown: (a: any) => [number, number, number, number];
+    readonly parse_markdown: (a: number, b: number) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
