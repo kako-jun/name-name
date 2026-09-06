@@ -115,6 +115,20 @@ pub struct AmbientEffects {
     pub candle: bool,
 }
 
+/// テロップ表示位置 (#674)。既定は `BottomRight`（画面右下）。
+/// Markdown 側の日本語トークン（右下/左下/右上/左上）・英語 alias
+/// （bottom-right/bottom-left/top-right/top-left）どちらでも指定できる（parser 側で正規化）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum TelopPosition {
+    TopLeft,
+    TopRight,
+    #[default]
+    BottomRight,
+    BottomLeft,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
 #[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
@@ -503,6 +517,35 @@ pub enum Event {
         /// `Some(0)` は即時消去。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fade_ms: Option<u32>,
+    },
+    /// 汎用テロップ (#674)。画面隅に短文を数秒表示して消える演出。エンジンは `text`/`kind` の
+    /// 中身を解釈しない（用途は作品側が決める：地名/日時、用語補足、実績解除、技名、引用元 等）。
+    ///
+    /// Markdown 構文: `[テロップ: 本文]` / `[テロップ: 本文, 位置=右下, 秒=4, 種別=しおり]`。
+    /// runtime（NovelRenderer/TelopLayer）は直前の話者ブロック（または演出）表示直後、指定位置へ
+    /// **横から非同期でスライドイン**（右側配置なら右から、左側なら左から）→ `seconds` 秒保持 →
+    /// フェードアウト（既定 700ms＝`character_fade_ms` と同じ既定値の流儀）する。本文の reveal や
+    /// クリック待ちはブロックしない（`[待機: 表示完了]` は従来どおりテロップを待たない）。
+    /// 復元（セーブ/ロード・シーク・任意局面起動）・スキップ中は表示しない（ADR 0002:
+    /// 演出の中間状態を GameState に持たない・NovelGameState には一切保持しない）。
+    /// 複数出現時は縦に積む（新しいものが下）、同時最大 3、超過は古いものから消す。
+    ///
+    /// 本文との重なり回避は動的にしない（kako-jun 2026-09-07 方針）。`Document::telop_reserve`
+    /// が `true` の作品だけ、本文領域の下端をテロップ帯 1 段ぶん上げて確保する。
+    Telop {
+        /// 表示文字列。空文字は parser 側でディレクティブ自体を無視する（不正ディレクティブと
+        /// 同じ扱い）ため、ここに来る値は常に非空。trim 済み。
+        text: String,
+        #[serde(default)]
+        position: TelopPosition,
+        /// 表示秒数。`[1, 30]` にクランプ済み（parser 側で解決、runtime は再クランプ不要）。
+        /// 未指定・非数値・範囲外は既定 4 にフォールバック/クランプする。
+        #[serde(default = "default_telop_seconds")]
+        seconds: u32,
+        /// 任意の識別子（CSS クラス相当）。作品側の設定で見た目を上書きするためのフック。
+        /// エンジンは意味を解釈せず保持のみ。未指定は None（既定装飾）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
     },
     /// 単色の地色 (#273)。背景画像 (`Background`) と同じ永続状態として扱う。
     /// `[背景色: #f5f0e8]` で画面全面を 1 色で塗る。NovelGameState に持たせ、
@@ -1229,11 +1272,25 @@ pub struct Document {
     /// （空・非真偽値）は None（既定 false）にフォールバック。frontmatter `fullscreen_image:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fullscreen_image: Option<bool>,
+    /// テロップ帯の予約 (#674)。**重なり回避は動的にしない**（kako-jun 2026-09-07 方針:
+    /// 「1段ずらす等の小細工をするくらいなら、最終行に本文がいかないようにしてもいい」）。
+    /// `true` のとき、`dialog_style: novel` の本文領域の下端をテロップ帯1段ぶん
+    /// （`computeTelopBandHeight(font_size)`、文字サイズ×0.7×行間1.4＋余白）上げ、改頁計算も
+    /// その縮小後の領域で行う。`位置=右上|左上` のテロップのみを使う作品は予約不要（`false` のまま）。
+    /// `false`（既定）の作品では、テロップは本文の上に半透明で重なる（それで構わない作品向け）。
+    /// 未指定・非真偽値は None（既定 false 相当、後方互換）。frontmatter `telop_reserve:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telop_reserve: Option<bool>,
     pub chapters: Vec<Chapter>,
 }
 
 fn default_aspect_ratio() -> String {
     "16:9".to_string()
+}
+
+/// `Event::Telop::seconds` の既定値 (#674)。
+fn default_telop_seconds() -> u32 {
+    4
 }
 
 fn default_shake_intensity() -> u32 {

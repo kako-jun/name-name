@@ -39,6 +39,7 @@ pub fn parse(input: &str) -> Document {
     let mut pixel_art: Option<bool> = None;
     let mut header: Option<String> = None;
     let mut fullscreen_image: Option<bool> = None;
+    let mut telop_reserve: Option<bool> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -200,6 +201,10 @@ pub fn parse(input: &str) -> Document {
                 // フルキャンバス画像表示モード (#530)。`true` / `false` のみ受ける（parse_bool_kv）。
                 // 空・不正値は None のまま（runtime 既定 false ＝従来どおりテキストウィンドウを隠さない）。
                 fullscreen_image = parse_bool_kv(&unquote(val.trim()));
+            } else if let Some(val) = line.strip_prefix("telop_reserve:") {
+                // テロップ帯の予約 (#674)。`true` / `false` のみ受ける。空・不正値は None
+                // （runtime 既定 false ＝本文の上にテロップが半透明で重なる、後方互換）。
+                telop_reserve = parse_bool_kv(&unquote(val.trim()));
             }
             pos += 1;
         }
@@ -981,6 +986,7 @@ pub fn parse(input: &str) -> Document {
         pixel_art,
         header,
         fullscreen_image,
+        telop_reserve,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,
@@ -1050,6 +1056,10 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     }
     if let Some(rest) = content.strip_prefix("イベント絵:") {
         return Some(parse_event_image_directive(rest, default_transition));
+    }
+    // [テロップ: 本文] / [テロップ: 本文, 位置=右下, 秒=4, 種別=しおり] (#674)
+    if let Some(rest) = content.strip_prefix("テロップ:") {
+        return parse_telop_directive(rest);
     }
     // [BGM停止] / [BGM停止: 2000] / [BGM停止: フェード=2000] (#145)
     if content == "BGM停止" {
@@ -1628,6 +1638,74 @@ fn parse_event_image_exit_directive(content: &str) -> Event {
         }
     }
     Event::EventImageExit { fade_ms }
+}
+
+/// `[テロップ: 本文, 位置=右下, 秒=4, 種別=しおり]` を解釈する (#674)。
+/// `parse_event_image_directive` の kv 流儀を踏襲するが、既知キー（位置/秒/種別）に一致しない
+/// 断片は破棄せず本文へ戻す（`,` で再結合）。本文が全角読点・カンマを含んでいても、あるいは
+/// 誤って ASCII カンマを含んでいても、既知キーと衝突しない限り本文として保持される。
+/// 本文は trim 済みで空になった場合はディレクティブ自体を無視する（不正ディレクティブの既存扱いに揃える）。
+fn parse_telop_directive(content: &str) -> Option<Event> {
+    let mut position = TelopPosition::default();
+    // 既定 4 秒 (#674)。`models::default_telop_seconds`（serde 既定・非 pub）と同値。
+    let mut seconds: u32 = 4;
+    let mut kind: Option<String> = None;
+    let mut body_parts: Vec<&str> = Vec::new();
+
+    for raw in content.split(',') {
+        let pair = raw.trim();
+        if let Some((k, v)) = pair.split_once('=') {
+            let key = k.trim();
+            if matches!(key, "位置" | "position") {
+                position = normalize_telop_position(v.trim());
+                continue;
+            }
+            if matches!(key, "秒" | "sec" | "seconds") {
+                seconds = parse_telop_seconds(v.trim());
+                continue;
+            }
+            if matches!(key, "種別" | "kind") {
+                let kv = v.trim();
+                if !kv.is_empty() {
+                    kind = Some(kv.to_string());
+                }
+                continue;
+            }
+        }
+        body_parts.push(raw);
+    }
+
+    let text = body_parts.join(",").trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+
+    Some(Event::Telop {
+        text,
+        position,
+        seconds,
+        kind,
+    })
+}
+
+/// `位置=` / `position=` の値を正規化する (#674)。日本語4種＋英語 alias（大小無視）のみ受理し、
+/// それ以外は既定 `BottomRight` にフォールバックする。
+fn normalize_telop_position(value: &str) -> TelopPosition {
+    match value.to_ascii_lowercase().as_str() {
+        "左上" | "top-left" => TelopPosition::TopLeft,
+        "右上" | "top-right" => TelopPosition::TopRight,
+        "左下" | "bottom-left" => TelopPosition::BottomLeft,
+        _ => TelopPosition::BottomRight,
+    }
+}
+
+/// `秒=` / `sec=` / `seconds=` の値を解釈する (#674)。数値としてパースできない場合は既定 4 に
+/// フォールバックし、パースできた場合は `[1, 30]` にクランプする。
+fn parse_telop_seconds(value: &str) -> u32 {
+    match value.parse::<u32>() {
+        Ok(n) => n.clamp(1, 30),
+        Err(_) => 4,
+    }
 }
 
 /// `true` / `false`（大文字小文字無視）を bool に解釈する (#252)。それ以外は None。

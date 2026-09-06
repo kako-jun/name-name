@@ -130,6 +130,10 @@ pub fn emit(doc: &Document) -> String {
         if let Some(v) = doc.fullscreen_image {
             out.push_str(&format!("fullscreen_image: {v}\n"));
         }
+        // Emit telop_reserve only when present (#674)。skip_enabled / debug_enabled と同じ流儀。
+        if let Some(v) = doc.telop_reserve {
+            out.push_str(&format!("telop_reserve: {v}\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -394,6 +398,35 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     Some(ms) => out.push_str(&format!("[イベント絵終了: フェード={ms}]\n")),
                     None => out.push_str("[イベント絵終了]\n"),
                 }
+                prev_was_dialog_or_text = false;
+            }
+            Event::Telop {
+                text,
+                position,
+                seconds,
+                kind,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // #674: 既定値の引数は省略して round-trip を安定させる（位置=BottomRight・秒=4 は無出力）。
+                let mut kv = String::new();
+                if *position != TelopPosition::BottomRight {
+                    let token = match position {
+                        TelopPosition::TopLeft => "左上",
+                        TelopPosition::TopRight => "右上",
+                        TelopPosition::BottomLeft => "左下",
+                        TelopPosition::BottomRight => unreachable!(),
+                    };
+                    kv.push_str(&format!(", 位置={token}"));
+                }
+                if *seconds != 4 {
+                    kv.push_str(&format!(", 秒={seconds}"));
+                }
+                if let Some(k) = kind {
+                    kv.push_str(&format!(", 種別={k}"));
+                }
+                out.push_str(&format!("[テロップ: {text}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::Bgm {
@@ -1383,6 +1416,7 @@ mod tests {
             pixel_art: None,
             header: None,
             fullscreen_image: None,
+            telop_reserve: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1638,6 +1672,7 @@ mod tests {
             pixel_art: None,
             header: None,
             fullscreen_image: None,
+            telop_reserve: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),
