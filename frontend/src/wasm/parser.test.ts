@@ -1593,3 +1593,84 @@ describe('parseMarkdown + normalizeEvents: RpgMap encounter デシジョンテ�
     errorSpy.mockRestore()
   })
 })
+
+describe('parseMarkdown + normalizeEvents: Telop が normalize を生き残る (#674)', () => {
+  // #310/#378/#582 と同じ事故パターン（normalizeEvents の分岐を書き忘れると WASM が parse
+  // した値が黙って落ちる）の回帰防止線。実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）を通し、
+  // kv 省略時に position/seconds が既定値へ正規化され、kind が undefined でなく null に倒れる
+  // ことを縛る（normalizeEvents の `telop.kind ?? null` を書き忘れると undefined のまま漏れる）。
+  it('kv 省略の Telop が { text, position: "BottomRight", seconds: 4, kind: null } に正規化される', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[テロップ: 到着から3日後]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      Telop: {
+        text: '到着から3日後',
+        position: 'BottomRight',
+        seconds: 4,
+        kind: null,
+      },
+    })
+  })
+
+  it('全指定の Telop（位置/秒/種別）が正しく正規化される', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[テロップ: 栞, 位置=左上, 秒=6, 種別=しおり]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      Telop: {
+        text: '栞',
+        position: 'TopLeft',
+        seconds: 6,
+        kind: 'しおり',
+      },
+    })
+  })
+})
+
+describe('parseMarkdown + normalizeDocument: telop_reserve が normalize を生き残る (#674)', () => {
+  // fullscreen_image (#530/#547) と同じ流儀。normalizeDocument の列挙に telop_reserve を
+  // 書き忘れると WASM が parse した値が /play runtime（DialogBox.setNovelBottomReserve）に届かず、
+  // テロップ帯の予約が効かなくなる。false が null に潰れないことも合わせて縛る。
+  function docWith(telopReserveLine?: string): string {
+    const lines = ['---', 'engine: name-name', 'chapter: 1', 'title: t']
+    if (telopReserveLine) lines.push(telopReserveLine)
+    lines.push('---', '', '## s', '', '**A**:', 'x', '')
+    return lines.join('\n')
+  }
+
+  it('telop_reserve: true → doc.telop_reserve === true', async () => {
+    const doc = await parseMarkdown(docWith('telop_reserve: true'))
+    expect(doc.telop_reserve).toBe(true)
+  })
+
+  it('telop_reserve: false → doc.telop_reserve === false（値が normalize を生き残る・false が null に潰れない）', async () => {
+    const doc = await parseMarkdown(docWith('telop_reserve: false'))
+    expect(doc.telop_reserve).toBe(false)
+  })
+
+  it('telop_reserve 省略 → doc.telop_reserve === null（未指定は下流で既定 false＝本文に半透明で重なる）', async () => {
+    const doc = await parseMarkdown(docWith())
+    expect(doc.telop_reserve).toBeNull()
+  })
+})
