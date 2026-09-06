@@ -482,6 +482,7 @@ NovelRenderer (PixiJS)          ← 1イベントずつ描画
 
 - `Background` — 背景変更
 - `EventImage` / `EventImageExit` — イベント絵レイヤーの表示/終了（#351）
+- `Telop` — テロップ（画面隅への短文の非同期スライドイン表示。#674、下記参照）
 - `Blackout` — 暗転/暗転解除（action: On/Off）
 - `SceneTransition` — 場面転換
 - `PageBreak` — 手動改頁マーカー（`---`）。何もせず読み飛ばす（次の text イベントが新ページから始まる、#292 Phase 2）
@@ -492,6 +493,10 @@ NovelRenderer (PixiJS)          ← 1イベントずつ描画
 - `WaitDisplayComplete` — 表示完了待機（ユーザー操作は待たず、視覚演出完了後に自動進行）
 
 `Dialog` と `Narration` のみユーザー操作（クリック/キー）で進行する。
+
+### テロップレイヤー (`TelopLayer.ts`・#674)
+
+`[テロップ: 本文, 位置=右下, 秒=4, 種別=しおり]` から駆動される、画面隅に短文を数秒表示して消える演出。`EventImageLayer`/`ToastOverlay` と同じ「薄いラッパー」方針で、いつ表示するか（復元中・スキップ中は表示しない）の判断は `NovelRenderer.processDirective()` が持ち、`TelopLayer` 自身はスライドイン（`easing.ts` の `easeOut`）→保持→フェードアウト（線形、`computeFadeAlpha` と同じ流儀）の描画だけを担う。矩形幾何・帯高さの計算は `novelLayout.ts` の `computeTelopGeometry`/`computeTelopBandHeight`（純粋関数）に切り出す。**復元・スキップでは表示しない**——`NovelGameState` にはテロップの状態を一切持たせない（ADR-0002）ため、`applyState`（goBack/seekTo/セーブ復元/任意局面起動）はそもそも `processDirective` を再生しない経路で `telopLayer.clear()` するだけであり、追加ガードは不要。複数出現時は position ごとに縦へ積む（新しいものが下＝下端アンカーは新しいものほど辺に近い段、上端アンカーは古いものほど辺に近い段）、同時最大3段で超過は古いものから即破棄。frontmatter `telop_reserve: true`（既定 false）のときだけ `DialogBox.setNovelBottomReserve(computeTelopBandHeight(font_size))` 経由で novel の本文領域下端を1段ぶん狭め、改頁計算もその領域で行う（動的な重なり回避はしない方針、kako-jun 2026-09-07）。レイヤー順は `dialogBox` の直後・`seekBar`/選択肢/終劇オーバーレイの下。
 
 ### canvas の touch-action 方針 (#434)
 
