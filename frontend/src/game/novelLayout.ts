@@ -1093,6 +1093,15 @@ export const PLAYER_BUTTON_BOTTOM_MARGIN_PX = 12
 export const PLAYER_BUTTON_RIGHT_MARGIN_PX = 12
 /** 下部丸ボタンのスロット間隔（px）。ボタン幅 36 + 余白 8。 */
 export const PLAYER_BUTTON_SLOT_GAP_PX = 44
+/**
+ * 下部丸ボタン行が画面下端から占める高さ（px）＝ボタン下端マージン＋直径 (#677)。
+ * テロップの下端アンカー（BottomLeft/BottomRight）がこの行に重ならないよう、
+ * `computeTelopGeometry` / `computeTelopBottomReserveHeight` の両方がこの値（表示倍率 1:1 の既定値）
+ * を共有する。表示倍率が 1 でない端末では呼び出し側（NovelRenderer）が `canvas.clientHeight` から
+ * 求めた実倍率でこの値を割った「論理座標換算のボタン行高さ」を明示的に渡す
+ * （`SeekBar.setVerticalCenter` と同じ流儀。#350 の `syncSeekBarVerticalToButtons` 参照）。
+ */
+export const PLAYER_BUTTON_ROW_HEIGHT_PX = PLAYER_BUTTON_BOTTOM_MARGIN_PX + PLAYER_BUTTON_SIZE_PX
 
 /**
  * 下部丸ボタンの中央 Y を「画面下端からのオフセット px」で表した値 (#350)。
@@ -1154,6 +1163,14 @@ export const TELOP_PADDING_X_PX = 14
 export const TELOP_ACCENT_WIDTH_PX = 4
 /** 画面端からテロップ下地までのマージン（px）。 */
 export const TELOP_MARGIN_PX = 16
+/**
+ * 下端アンカー（BottomLeft/BottomRight）専用の画面下端からのマージン（px）(#677)。
+ * 下部丸ボタン行（`PLAYER_BUTTON_ROW_HEIGHT_PX`）に重ならないよう、通常の `TELOP_MARGIN_PX` に
+ * ボタン行の高さを足した値。表示倍率 1:1（`buttonRowHeightPx` 省略時の既定）のときの値で、
+ * `computeTelopGeometry` のテスト用オラクルとしても使う。上端アンカー（TopLeft/TopRight）は
+ * ボタン行と無関係なので従来どおり `TELOP_MARGIN_PX` のまま。
+ */
+export const TELOP_BOTTOM_RESERVE_PX = PLAYER_BUTTON_ROW_HEIGHT_PX + TELOP_MARGIN_PX
 /** 積み上げ時の段間ギャップ（px）。 */
 export const TELOP_STACK_GAP_PX = 8
 /** 同時表示の最大段数。超えたら古いものから消す。 */
@@ -1175,6 +1192,24 @@ export function computeTelopBandHeight(fontSize: number): number {
   return textHeight + TELOP_PADDING_Y_PX * 2
 }
 
+/**
+ * `telop_reserve: true` 時に `DialogBox.setNovelBottomReserve` へ渡す予約高さ (px) を算出する
+ * 純粋関数 (#677)。本文領域の下端（novel 全画面テキストの下端）は、この帯の直下に
+ * `computeTelopGeometry` が置く下端アンカーのテロップ帯の上端に接するようにする
+ * （二重計上防止 — 下部丸ボタン行ぶんの高さは `buttonRowHeightPx` として1回だけここに足し、
+ * `computeTelopGeometry` 側の下端マージンにも同じ値が1回だけ足される。詳細は両者の関係を
+ * 検証する `novelLayout.test.ts` の該当テスト参照）。
+ * `buttonRowHeightPx` 省略時は表示倍率 1:1 の `PLAYER_BUTTON_ROW_HEIGHT_PX`。表示倍率が
+ * 1 でない端末では呼び出し側（`NovelRenderer.syncTelopBottomMarginToButtons`）が
+ * `canvas.clientHeight` から求めた実倍率で割った論理座標換算の値を渡す。
+ */
+export function computeTelopBottomReserveHeight(
+  fontSize: number,
+  buttonRowHeightPx: number = PLAYER_BUTTON_ROW_HEIGHT_PX
+): number {
+  return computeTelopBandHeight(fontSize) + buttonRowHeightPx
+}
+
 /** `computeTelopGeometry` の入力。 */
 export interface TelopGeometryInput {
   screenWidth: number
@@ -1187,6 +1222,12 @@ export interface TelopGeometryInput {
   fontSize: number
   /** 本文の実測幅 (px)。下地幅 = これ + 左右余白 + アクセント縦線幅。 */
   textWidth: number
+  /**
+   * 下端アンカー（BottomLeft/BottomRight）専用、下部丸ボタン行の高さ (px) (#677)。
+   * 省略時は表示倍率 1:1 の `PLAYER_BUTTON_ROW_HEIGHT_PX`。上端アンカーには影響しない。
+   * `computeTelopBottomReserveHeight` と同じ値を渡すこと（二重計上防止）。
+   */
+  buttonRowHeightPx?: number
 }
 
 /** `computeTelopGeometry` の戻り値。矩形（論理座標・px）とスライドイン開始 X。 */
@@ -1203,9 +1244,16 @@ export interface TelopGeometry {
  * テロップ矩形とスライドイン開始位置を算出する純粋関数 (#674)。
  * 重なり回避は動的にしない（kako-jun 2026-09-07 方針）——同じ position の複数段は
  * `stackIndex` に応じて縦にオフセットするだけで、他 position との重なり回避は行わない。
+ *
+ * 下端アンカー（BottomLeft/BottomRight）だけは、下部丸ボタン行（DOM 固定 CSS px。
+ * `NovelPlayer.tsx` の `bottom-3`=12px・`w-9 h-9`=36px）と重ならないよう、画面下端からの
+ * マージンに `TELOP_MARGIN_PX` だけでなく `buttonRowHeightPx`（省略時 `PLAYER_BUTTON_ROW_HEIGHT_PX`、
+ * 合算は `TELOP_BOTTOM_RESERVE_PX` と一致）も加える (#677)。上端アンカーは影響を受けない
+ * （ボタン行は画面下部にしかないため）。
  */
 export function computeTelopGeometry(input: TelopGeometryInput): TelopGeometry {
   const { screenWidth, screenHeight, position, stackIndex, fontSize, textWidth } = input
+  const buttonRowHeightPx = input.buttonRowHeightPx ?? PLAYER_BUTTON_ROW_HEIGHT_PX
   const height = computeTelopBandHeight(fontSize)
   const width = textWidth + TELOP_PADDING_X_PX * 2 + TELOP_ACCENT_WIDTH_PX
   const isRight = position === 'BottomRight' || position === 'TopRight'
@@ -1213,9 +1261,10 @@ export function computeTelopGeometry(input: TelopGeometryInput): TelopGeometry {
 
   const x = isRight ? screenWidth - TELOP_MARGIN_PX - width : TELOP_MARGIN_PX
   const edgeOffset = stackIndex * (height + TELOP_STACK_GAP_PX)
+  const bottomAnchorMarginPx = TELOP_MARGIN_PX + buttonRowHeightPx
   const y = isTop
     ? TELOP_MARGIN_PX + edgeOffset
-    : screenHeight - TELOP_MARGIN_PX - height - edgeOffset
+    : screenHeight - bottomAnchorMarginPx - height - edgeOffset
   const slideFromX = isRight ? screenWidth : -width
 
   return { x, y, width, height, slideFromX }
