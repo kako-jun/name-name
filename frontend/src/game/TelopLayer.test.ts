@@ -238,12 +238,12 @@ describe('TelopLayer race: clear()/resize() の割り込み', () => {
   })
 })
 
-describe('TelopLayer 「in」中の stackIndex 変化 (#674 セルフレビュー S3)', () => {
+describe('TelopLayer 「in」中の累積オフセット変化 (#674 セルフレビュー S3)', () => {
   // 26: 先発が 'in'（スライドイン中）のまま、同一 position へ後発の show() が入って
-  //     stackIndex がずれ targetY が変わっても、Y は瞬間移動せず補間で新しい定位置へ追従する
-  //     （X と同じ扱い。relayout() は 'in' 中の container.y に触れず、updateFrame が
-  //     slideFromY→targetY を毎フレーム補間する）。
-  it('26: in 中に後発の show() で stackIndex がずれても、先発の Y は瞬間移動せず補間で新しい targetY に収束する', () => {
+  //     累積オフセット(stackOffsetPx)がずれ targetY が変わっても、Y は瞬間移動せず補間で
+  //     新しい定位置へ追従する（X と同じ扱い。relayout() は 'in' 中の container.y に触れず、
+  //     updateFrame が slideFromY→targetY を毎フレーム補間する）。
+  it('26: in 中に後発の show() で累積オフセット(stackOffsetPx)がずれても、先発の Y は瞬間移動せず補間で新しい targetY に収束する', () => {
     const time = virtualTime()
     const layer = makeLayer(time)
     layer.show(opts('先発', { position: 'BottomRight' }))
@@ -255,10 +255,10 @@ describe('TelopLayer 「in」中の stackIndex 変化 (#674 セルフレビュ�
     const yBeforeStackShift = entry.container.y
     const targetYBeforeStackShift = entry.targetY
 
-    layer.show(opts('後発', { position: 'BottomRight' })) // 先発を stackIndex 1 へ押し出す
+    layer.show(opts('後発', { position: 'BottomRight' })) // 先発を累積オフセット1段ぶん押し出す
 
     expect(entry.phase).toBe('in') // まだ in のまま
-    expect(entry.targetY).not.toBe(targetYBeforeStackShift) // stackIndex がずれ target 自体は変わる
+    expect(entry.targetY).not.toBe(targetYBeforeStackShift) // 累積オフセットがずれ target 自体は変わる
     expect(entry.container.y).toBe(yBeforeStackShift) // 直後は瞬間移動しない（relayout は in 中の container.y に触れない）
 
     const afterMs = quantizedThreshold(TELOP_SLIDE_IN_MS)

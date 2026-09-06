@@ -12,7 +12,7 @@
  * `computeFadeAlpha` と同じ流儀）→ 破棄。**非同期**（呼び出し元の reveal/クリック待ちを一切
  * ブロックしない、内部で完結する）。
  *
- * 複数出現時は縦に積む（`novelLayout.ts` の `computeTelopGeometry` の `stackIndex`）。
+ * 複数出現時は縦に積む（`novelLayout.ts` の `computeTelopGeometry` の `stackOffsetPx`＝累積オフセット）。
  * 「新しいものが下」の意味論は `relayout()` が position ごとに解決する: 下端アンカー
  * （BottomLeft/BottomRight）は新しいものほど辺に近い段（index 0）、上端アンカー（TopLeft/TopRight）
  * は古いものほど辺に近い段（index 0）——どちらも新しいものが視覚的な「下」に来る。
@@ -205,7 +205,7 @@ export class TelopLayer extends Container {
     this.evictOverflow(position)
     this.relayout()
     // Y 補間の起点を確定する（この時点の targetY = 初期の定位置。以後の relayout で
-    // stackIndex がずれても slideFromY 自体は変えない。X の slideFromX と同じ扱い、#674 S3）。
+    // 累積オフセット(stackOffsetPx)がずれても slideFromY 自体は変えない。X の slideFromX と同じ扱い、#674 S3）。
     entry.slideFromY = entry.targetY
 
     // relayout() が確定させた slideFromX/slideFromY から、画面外→定位置へスライドインを開始する。
@@ -397,7 +397,7 @@ export class TelopLayer extends Container {
       const elapsed = this.time.now() - entry.phaseStartedAtMs
       const t = easeOut(effectProgress(elapsed, TELOP_SLIDE_IN_MS))
       entry.container.x = entry.slideFromX + (entry.targetX - entry.slideFromX) * t
-      // Y も X と同じ扱いで補間する（#674 S3）: 積み直しで stackIndex がずれて targetY が
+      // Y も X と同じ扱いで補間する（#674 S3）: 積み直しで累積オフセット(stackOffsetPx)がずれて targetY が
       // 変わっても、slideFromY（show() 時点で確定した初期定位置）から現在の targetY へ
       // 毎フレーム補間し、瞬間移動しない。
       entry.container.y = entry.slideFromY + (entry.targetY - entry.slideFromY) * t
