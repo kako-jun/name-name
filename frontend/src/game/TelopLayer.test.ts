@@ -456,8 +456,9 @@ describe('TelopLayer.setButtonRowHeightPx (#677)', () => {
     expect(entry.targetY).toBe(targetYBefore)
   })
 
-  // 33: 同じ値を渡した場合は no-op（不要な relayout を避ける）。既存段の targetY は変わらない。
-  it('33: 現在値と同じ px を渡しても targetY は変わらない（no-op）', () => {
+  // 33: 差が 0.5px 未満なら no-op（不要な relayout を避ける）。既存段の targetY は変わらない。
+  // canvas.clientHeight のサブピクセル揺れによる relayout 頻発を防ぐための許容差（#678）。
+  it('33: 現在値との差が 0.4px（0.5px 未満）なら no-op', () => {
     const layer = makeLayer(virtualTime())
     layer.show(opts('通知', { position: 'BottomRight' }))
     const entry = internals(layer).entries[0]
@@ -465,8 +466,22 @@ describe('TelopLayer.setButtonRowHeightPx (#677)', () => {
     layer.setButtonRowHeightPx(200)
     const targetYAfterFirstSet = entry.targetY
 
-    layer.setButtonRowHeightPx(200)
+    layer.setButtonRowHeightPx(200.4)
 
     expect(entry.targetY).toBe(targetYAfterFirstSet)
+  })
+
+  // 34: 差が 0.6px（0.5px 以上）なら relayout する。
+  it('34: 現在値との差が 0.6px（0.5px 以上）なら relayout する', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts('通知', { position: 'BottomRight' }))
+    const entry = internals(layer).entries[0]
+
+    layer.setButtonRowHeightPx(200)
+    const targetYAfterFirstSet = entry.targetY
+
+    layer.setButtonRowHeightPx(200.6)
+
+    expect(entry.targetY).not.toBe(targetYAfterFirstSet)
   })
 })

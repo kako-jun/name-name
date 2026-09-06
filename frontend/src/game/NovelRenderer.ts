@@ -3568,6 +3568,9 @@ export class NovelRenderer {
    * 反映する (#677)。`syncSeekBarVerticalToButtons` と同じ理由・同じ算出方法（`canvas.clientHeight`
    * から実倍率を求め、固定 CSS px をその倍率で割って論理座標に変換する）。
    * clientHeight 未測定（0）のときは触らない（constructor 既定の `PLAYER_BUTTON_ROW_HEIGHT_PX` のまま）。
+   * `telopReserveEnabled` が false（`telop_reserve:` 未指定/false）の作品では帯予約自体が常に 0 のため、
+   * `applyTelopReserve`（→ `dialogBox.setNovelBottomReserve` → 改頁行数の再計算）は無駄な再計算になる。
+   * テロップ帯そのものの高さ同期（`setButtonRowHeightPx`）は予約の有無に関係なく必要なので常に行う（#678）。
    */
   private syncTelopBottomMarginToButtons(): void {
     const canvas = this.app?.canvas as HTMLCanvasElement | undefined
@@ -3577,7 +3580,9 @@ export class NovelRenderer {
     const scale = clientH / this.screenHeight
     this.telopButtonRowHeightPx = PLAYER_BUTTON_ROW_HEIGHT_PX / scale
     this.telopLayer.setButtonRowHeightPx(this.telopButtonRowHeightPx)
-    this.applyTelopReserve()
+    if (this.telopReserveEnabled) {
+      this.applyTelopReserve()
+    }
   }
 
   /**

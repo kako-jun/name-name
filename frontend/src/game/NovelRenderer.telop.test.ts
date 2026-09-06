@@ -76,6 +76,7 @@ interface RendererInternals {
   dialogBox: DialogBoxForTest
   appInitialized: boolean
   app: { canvas: unknown; destroy: (...args: unknown[]) => void }
+  syncTelopBottomMarginToButtons: () => void
 }
 function internals(r: NovelRenderer): RendererInternals {
   return r as unknown as RendererInternals
@@ -262,5 +263,23 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
     r.setSeekBarColor('#1a4a7a')
 
     expect(setAccentColorSpy).toHaveBeenCalledWith(0x1a4a7a)
+  })
+
+  // 39: telop_reserve 無効（既定）な作品では、ResizeObserver 由来の表示倍率同期
+  // （syncTelopBottomMarginToButtons、#677）が走っても dialogBox.setNovelBottomReserve は
+  // 呼ばれない（telopReserveEnabled が false のときは applyTelopReserve 自体を呼ばないガード、#678）。
+  it('39: telop_reserve 無効時は ResizeObserver 同期で dialogBox.setNovelBottomReserve が呼ばれない', () => {
+    const r = new NovelRenderer()
+    const spy = vi.spyOn(internals(r).dialogBox, 'setNovelBottomReserve')
+    // canvas.clientHeight を測定済みにして syncTelopBottomMarginToButtons の early return を回避する
+    // （stubDestroyableApp と同じく Application.canvas は getter のみなので defineProperty で上書きする）。
+    Object.defineProperty(internals(r).app, 'canvas', {
+      configurable: true,
+      value: { clientHeight: 800 },
+    })
+
+    internals(r).syncTelopBottomMarginToButtons()
+
+    expect(spy).not.toHaveBeenCalled()
   })
 })

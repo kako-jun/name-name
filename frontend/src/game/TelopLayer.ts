@@ -117,9 +117,11 @@ export class TelopLayer extends Container {
   /**
    * 下部丸ボタン行の論理座標マージンを更新し、既存段を含めて即座に再配置する (#677)。
    * `NovelRenderer` が表示倍率の変化（resize/回転）を検知するたびに呼ぶ想定。
+   * `canvas.clientHeight` のサブピクセル揺れ（レイアウト計算の丸め誤差等）で無意味な
+   * relayout が頻発しないよう、差が 0.5px 未満なら no-op とする（#678）。
    */
   setButtonRowHeightPx(px: number): void {
-    if (px === this.buttonRowHeightPx) return
+    if (Math.abs(px - this.buttonRowHeightPx) < 0.5) return
     this.buttonRowHeightPx = px
     this.relayout()
   }
