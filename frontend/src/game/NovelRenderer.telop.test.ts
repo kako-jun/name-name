@@ -16,7 +16,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene, TelopPosition } from '../types'
-import { computeTelopBandHeight } from './novelLayout'
+import { computeTelopBottomReserveHeight } from './novelLayout'
 import { DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 
 // --- fixture helpers（NovelRenderer.eventImage.test.ts と同じスタイル）---
@@ -210,15 +210,17 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
     )
   })
 
-  // 37: setTelopReserve(true) は dialogBox.setNovelBottomReserve(computeTelopBandHeight(fontSize)) を呼ぶ。
-  it('37a: setTelopReserve(true) → dialogBox.setNovelBottomReserve(computeTelopBandHeight(fontSize))', () => {
+  // 37: setTelopReserve(true) は dialogBox.setNovelBottomReserve(computeTelopBottomReserveHeight(fontSize, ...)) を呼ぶ。
+  // canvas 未マウント（clientHeight 未測定）のため telopButtonRowHeightPx は表示倍率1:1の既定値のまま
+  // （syncTelopBottomMarginToButtons が一度も走らない、#677）。
+  it('37a: setTelopReserve(true) → dialogBox.setNovelBottomReserve(computeTelopBottomReserveHeight(fontSize))', () => {
     const r = new NovelRenderer()
     r.setFontSize(28)
     const spy = vi.spyOn(internals(r).dialogBox, 'setNovelBottomReserve')
 
     r.setTelopReserve(true)
 
-    expect(spy).toHaveBeenCalledWith(computeTelopBandHeight(28))
+    expect(spy).toHaveBeenCalledWith(computeTelopBottomReserveHeight(28))
   })
 
   it('37b: setTelopReserve(false) → dialogBox.setNovelBottomReserve(0)', () => {

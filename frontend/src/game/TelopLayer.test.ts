@@ -428,3 +428,45 @@ describe('TelopLayer.setAccentColor (#674 セルフレビュー2巡目 S-1)', ()
     expect(entry.accentColor).toBe(NEW_COLOR) // 古い色に戻らない
   })
 })
+
+// #677: 下部丸ボタン行を避けるための setButtonRowHeightPx。
+describe('TelopLayer.setButtonRowHeightPx (#677)', () => {
+  // 31: setButtonRowHeightPx(px) は下端アンカーの既存段を即座に新しい定位置へ再配置する
+  //     （SeekBar.setVerticalCenter / setAccentColor と同じ「即時反映」方針）。
+  it('31: 下端アンカー(BottomRight)の targetY が新しい buttonRowHeightPx に応じて上へ移動する', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts('通知', { position: 'BottomRight' }))
+    const entry = internals(layer).entries[0]
+    const targetYBefore = entry.targetY
+
+    layer.setButtonRowHeightPx(200)
+
+    expect(entry.targetY).toBeLessThan(targetYBefore) // ボタン行が高くなった分だけ上へ
+  })
+
+  // 32: 上端アンカー(TopLeft)はボタン行の影響を受けない（isTop 分岐は buttonRowHeightPx を使わない）。
+  it('32: 上端アンカー(TopLeft)の targetY は setButtonRowHeightPx の影響を受けない', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts('通知', { position: 'TopLeft' }))
+    const entry = internals(layer).entries[0]
+    const targetYBefore = entry.targetY
+
+    layer.setButtonRowHeightPx(200)
+
+    expect(entry.targetY).toBe(targetYBefore)
+  })
+
+  // 33: 同じ値を渡した場合は no-op（不要な relayout を避ける）。既存段の targetY は変わらない。
+  it('33: 現在値と同じ px を渡しても targetY は変わらない（no-op）', () => {
+    const layer = makeLayer(virtualTime())
+    layer.show(opts('通知', { position: 'BottomRight' }))
+    const entry = internals(layer).entries[0]
+
+    layer.setButtonRowHeightPx(200)
+    const targetYAfterFirstSet = entry.targetY
+
+    layer.setButtonRowHeightPx(200)
+
+    expect(entry.targetY).toBe(targetYAfterFirstSet)
+  })
+})
