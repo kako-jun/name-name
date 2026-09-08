@@ -489,6 +489,26 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 prev_was_dialog_or_text = false;
             }
+            Event::CameraMode { mode, orientation } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mode_token = match mode {
+                    CameraMode::Novel => "ノベル",
+                    CameraMode::Theater => "シアター",
+                };
+                // #681: orientation は既定（客席 = None）のときは無出力にして round-trip を
+                // 安定させる（#674 テロップの位置=既定省略と同じ流儀）。舞台指定のときだけ出す。
+                match orientation {
+                    Some(CameraOrientation::Stage) => {
+                        out.push_str(&format!("[カメラ: {mode_token}, 向き: 舞台]\n"));
+                    }
+                    _ => {
+                        out.push_str(&format!("[カメラ: {mode_token}]\n"));
+                    }
+                }
+                prev_was_dialog_or_text = false;
+            }
             Event::SceneTransition => {
                 if prev_was_dialog_or_text {
                     out.push('\n');

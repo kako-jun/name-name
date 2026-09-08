@@ -1101,6 +1101,11 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
             action: BlackoutAction::Off,
         });
     }
+    // [カメラ: シアター] / [カメラ: ノベル] / [カメラ: シアター, 向き: 客席] /
+    // [カメラ: シアター, 向き: 舞台] (#681)
+    if let Some(rest) = content.strip_prefix("カメラ:") {
+        return Some(parse_camera_mode_directive(rest));
+    }
     if content == "場面転換" {
         return Some(Event::SceneTransition);
     }
@@ -1638,6 +1643,35 @@ fn parse_event_image_exit_directive(content: &str) -> Event {
         }
     }
     Event::EventImageExit { fade_ms }
+}
+
+/// `[カメラ: <mode>]` / `[カメラ: <mode>, 向き: <orientation>]` を解釈する (#681)。
+///
+/// mode: `"シアター"` のときだけ `CameraMode::Theater`。それ以外（`"ノベル"`・省略・未知値）は
+/// `CameraMode::Novel` にフォールバックする（`dialog_style`/`Blackout` と同じ後方互換パターン）。
+///
+/// orientation: `mode` が `Theater` のときだけ解釈する（`Novel` のときは `向き:` があっても無視し
+/// 常に `None`）。`向き: 舞台` のときだけ `Some(CameraOrientation::Stage)`。それ以外
+/// （`向き: 客席`・省略・未知値）は `None`（= 客席相当、既定）にフォールバックする。
+fn parse_camera_mode_directive(content: &str) -> Event {
+    let mut parts = content.split(',');
+    let mode = match parts.next().unwrap_or("").trim() {
+        "シアター" => CameraMode::Theater,
+        _ => CameraMode::Novel,
+    };
+
+    let mut orientation = None;
+    if mode == CameraMode::Theater {
+        for part in parts {
+            if let Some(v) = part.trim().strip_prefix("向き:") {
+                if v.trim() == "舞台" {
+                    orientation = Some(CameraOrientation::Stage);
+                }
+            }
+        }
+    }
+
+    Event::CameraMode { mode, orientation }
 }
 
 /// `[テロップ: 本文, 位置=右下, 秒=4, 種別=しおり]` を解釈する (#674)。
@@ -4101,6 +4135,77 @@ title: "test"
         let emitted = emit(&doc1);
         let doc2 = parse(&emitted);
         assert_eq!(doc1, doc2, "background color round-trip should be stable");
+    }
+
+    #[test]
+    fn parses_camera_mode_theater_and_novel() {
+        // 基本形: シアター/ノベル、未知値・省略は Novel にフォールバック (#681)。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター]\n[カメラ: ノベル]\n[カメラ: 謎の値]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::CameraMode {
+                mode: CameraMode::Novel,
+                orientation: None,
+            }
+        );
+        assert_eq!(
+            events[2],
+            Event::CameraMode {
+                mode: CameraMode::Novel,
+                orientation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_camera_mode_orientation() {
+        // 向き指定 (#681)。客席/省略/未知値は None、舞台のみ Some(Stage)。
+        // Novel モードでは 向き: が付いていても無視される。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 客席]\n[カメラ: シアター, 向き: 舞台]\n[カメラ: ノベル, 向き: 舞台]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: Some(CameraOrientation::Stage),
+            }
+        );
+        assert_eq!(
+            events[2],
+            Event::CameraMode {
+                mode: CameraMode::Novel,
+                orientation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn camera_mode_roundtrip() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 舞台]\n[カメラ: ノベル]\n";
+        let doc1 = parse(input);
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "camera mode round-trip should be stable");
     }
 
     #[test]
