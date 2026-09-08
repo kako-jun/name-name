@@ -16,6 +16,9 @@ import type { SaveSlotData } from './SaveManager'
 import type { EventScene, StageDirection, TelopPosition } from '../types'
 import { MIDLINE_RULE } from './textCanonical'
 import { hasOwn } from './ownProperty'
+import type { CameraProjection } from './cameraProjection'
+import { easeOut } from './easing'
+import { effectProgress } from './screenEffects'
 
 /** カバーフィット後の背景スプライト寸法と配置（px）。 */
 export interface CoverFit {
@@ -950,6 +953,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   backgroundFade = normalizedFade（呼び出し側で normalizeBackgroundFade 済みを渡す）
  *   backgroundBrightness = data.backgroundBrightness ?? null  // 古いセーブには無い → 原画のまま
  *   video          = data.video ?? null      // 古いセーブには無い → 動画なし
+ *   backgroundBoards = data.backgroundBoards ?? []  // 古いセーブには無い → 板なし (#683)
  *   isBlackout     = data.isBlackout ?? false
  *   characters     = data.characters ?? []
  *   currentBgmPath = data.currentBgmPath ?? null
@@ -985,6 +989,8 @@ export function saveSlotToGameState(
     video: data.video ?? null,
     // イベント絵レイヤー (#351)。古いセーブには無い → ?? null（イベント絵なし）に倒す。
     eventImage: data.eventImage ?? null,
+    // シアターモード舞台構造の背景板 (#683)。古いセーブには無い → ?? [] で板なしに倒す。
+    backgroundBoards: data.backgroundBoards ?? [],
     isBlackout: data.isBlackout ?? false,
     characters: data.characters ?? [],
     currentBgmPath: data.currentBgmPath ?? null,
@@ -1343,6 +1349,79 @@ export function computeTelopGeometry(input: TelopGeometryInput): TelopGeometry {
   const slideFromX = isRight ? screenWidth : -width
 
   return { x, y, width, height, slideFromX }
+}
+
+// ===== #683: シアターモード舞台構造（背景板の多層 depth 配置）=====
+
+/**
+ * `computeBoardPlacement` の戻り値。中心アンカー（`sprite.anchor.set(0.5, 0.5)`）の
+ * スプライトに設定する x/y/width/height。
+ */
+export interface BoardPlacement {
+  /** sprite.x（常に画面水平中央。カメラの向き反転による水平オフセットは #683 スコープ外） */
+  x: number
+  /** sprite.y（画面垂直中央 + 仰角由来の垂直オフセット、#682） */
+  y: number
+  /** sprite.width（cover-fit 幅 × カメラ射影スケール） */
+  width: number
+  /** sprite.height（cover-fit 高さ × カメラ射影スケール） */
+  height: number
+}
+
+/**
+ * 背景板 (#683) 1枚分の配置を算出する純粋関数。
+ *
+ * 既存 `computeCoverFit`（アスペクト比維持で画面いっぱいに覆う背景幾何）を土台に、
+ * `computeCameraProjection`（#681/#682）が返す `scale`/`verticalOffset` を掛け合わせる:
+ *   width  = coverFit.width  * projection.scale
+ *   height = coverFit.height * projection.scale
+ *   x      = screenWidth  / 2
+ *   y      = screenHeight / 2 + projection.verticalOffset
+ *
+ * ノベルモードは `projection = { scale: 1, verticalOffset: 0 }`（#681 の設計）なので、
+ * この関数を通しても `computeCoverFit` 単体の全画面表示と実質的に同じ見た目になる
+ * （後方互換）。シアターモードでは depth に応じて `scale` が縮小し、板は画面中心を基準に
+ * 小さくなる（cover-fit は本来 anchor (0,0) の左上原点だが、この関数は anchor (0.5, 0.5)
+ * の中心アンカー用に画面中央座標を返す — depth によるスケール変化を画面中心基準で縮小
+ * させるため。呼び出し側 `BackgroundBoardLayer` が sprite.anchor を 0.5, 0.5 に設定する）。
+ *
+ * `orientation`（客席/舞台）由来の水平オフセットは現時点で `computeCameraProjection` 自体が
+ * 未実装（#683 スコープ外、cameraProjection.ts の doc comment 参照）のため、この関数も
+ * 常に画面水平中央を返す。
+ */
+export function computeBoardPlacement(
+  textureWidth: number,
+  textureHeight: number,
+  screenWidth: number,
+  screenHeight: number,
+  projection: CameraProjection
+): BoardPlacement {
+  const fit = computeCoverFit(textureWidth, textureHeight, screenWidth, screenHeight)
+  return {
+    x: screenWidth / 2,
+    y: screenHeight / 2 + projection.verticalOffset,
+    width: fit.width * projection.scale,
+    height: fit.height * projection.scale,
+  }
+}
+
+/** 背景板 (#683) の「上から降りてくる」スライドインアニメーションの所要時間 (ms)。 */
+export const BOARD_SLIDE_IN_MS = 600
+
+/**
+ * 背景板 (#683) の追加時スライドインアニメーションの Y 方向オフセットを、経過時間から
+ * 求める純粋関数。`TelopLayer`（#674）と同じ `effectProgress` + `easeOut`（減速イージング、
+ * 降りてきて着地する質感）の組み合わせ。
+ *
+ * 戻り値は screen サイズに依存しない正規化値: `0` = 最終位置（アニメーション完了、
+ * `elapsedMs >= durationMs` または `durationMs <= 0`）。`-1`（`elapsedMs=0` 時点）〜 `0`
+ * の範囲でイーズアウトしながら単調増加する負値（まだ画面上方向にずれている途中経過）。
+ * 呼び出し側（`BackgroundBoardLayer`）がこの値に実際の移動距離（px、例: screenHeight）を
+ * 掛けて `sprite.y = targetY + offset * distancePx` のように使う。
+ */
+export function computeBoardSlideInOffset(elapsedMs: number, durationMs: number): number {
+  const t = easeOut(effectProgress(elapsedMs, durationMs))
+  return -(1 - t)
 }
 
 /** デバッグ HUD 用に 1 イベントから取り出した種別と本文プレビュー。 */

@@ -56,6 +56,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined/null はイベント絵なし扱い。
    */
   eventImage?: EventImageState | null
+  /**
+   * シアターモード舞台構造の背景板 (#683)。
+   * 後方互換: 古いセーブデータには無い → undefined は空配列（板なし）扱い。
+   */
+  backgroundBoards?: Array<{ path: string; depth: number }>
   /** 暗転状態 */
   isBlackout: boolean
   /** 表示中のキャラクター情報 */

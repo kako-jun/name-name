@@ -55,6 +55,8 @@ import {
   TELOP_BOTTOM_RESERVE_PX,
   TELOP_STACK_GAP_PX,
   PLAYER_BUTTON_ROW_HEIGHT_PX,
+  computeBoardPlacement,
+  computeBoardSlideInOffset,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -1148,6 +1150,8 @@ describe('saveSlotToGameState', () => {
       video: data.video ?? null,
       // イベント絵レイヤー (#351)。古いセーブには無い → ?? null（イベント絵なし）に倒す。
       eventImage: data.eventImage ?? null,
+      // 舞台構造の背景板 (#683)。古いセーブには無い → ?? [] で板なしに倒す。
+      backgroundBoards: data.backgroundBoards ?? [],
       isBlackout: data.isBlackout ?? false,
       characters: data.characters ?? [],
       currentBgmPath: data.currentBgmPath ?? null,
@@ -1182,6 +1186,7 @@ describe('saveSlotToGameState', () => {
       backgroundBrightness: null,
       video: null,
       eventImage: null,
+      backgroundBoards: [],
       isBlackout: true,
       characters: [{ name: 'A', expression: 'smile', position: 'center' }],
       currentBgmPath: 'bgm/main.mp3',
@@ -3234,5 +3239,89 @@ describe('computeTelopBottomReserveHeight (#677)', () => {
   it('二重計上防止: 既定の buttonRowHeightPx は TELOP_BOTTOM_RESERVE_PX と TELOP_MARGIN_PX の差に一致する', () => {
     expect(PLAYER_BUTTON_ROW_HEIGHT_PX).toBe(TELOP_BOTTOM_RESERVE_PX - TELOP_MARGIN_PX)
     expect(PLAYER_BUTTON_ROW_HEIGHT_PX).toBe(PLAYER_BUTTON_BOTTOM_MARGIN_PX + PLAYER_BUTTON_SIZE_PX)
+  })
+})
+
+// ===== #683: シアターモード舞台構造（背景板の多層 depth 配置）テスト =====
+
+describe('computeBoardSlideInOffset (#683)', () => {
+  // durationMs はこの純粋関数の一般的な境界値検証用の任意値（screenEffects.test.ts の
+  // effectProgress 検証と同じ流儀）。実際の本番値 BOARD_SLIDE_IN_MS を使った具体的な
+  // アニメーション挙動は BackgroundBoardLayer.test.ts 側で検証する。
+
+  // 観点10a: elapsedMs=0（アニメーション開始直後）は -1（画面外の開始位置）を返す。
+  it('elapsedMs=0 のとき -1（開始位置＝最終位置より画面高さぶん上）を返す', () => {
+    expect(computeBoardSlideInOffset(0, 1000)).toBe(-1)
+  })
+
+  // 観点10b: elapsedMs===durationMs ちょうどは 0（最終位置に到達済み）。
+  // 実装は `-(1 - t)` で t=1 のとき算術的に -0 を返す（`Object.is` は -0 !== 0 を区別するため
+  // `toBe(0)` は使えない）。呼び出し側 `BackgroundBoardLayer.updateSlideFrame` は
+  // `elapsed >= BOARD_SLIDE_IN_MS` 時に `sprite.y = targetY` を明示的に上書きしてこの -0 を
+  // 経由しないため実害はない。ここでは符号を問わず数値としての 0（`Math.abs(-0) === 0`）だけを
+  // 確認する（-0 と 0 は算術的に等価。sign of zero を意味論として使う仕様ではないため）。
+  it('elapsedMs が durationMs とちょうど一致するとき 0（最終位置）を返す', () => {
+    expect(Math.abs(computeBoardSlideInOffset(1000, 1000))).toBe(0)
+  })
+
+  // 観点10c: elapsedMs>durationMs（アニメーション完了後）でも 0 のまま（オーバーシュートしない）。
+  it('elapsedMs が durationMs を超えても 0（最終位置）のまま', () => {
+    expect(Math.abs(computeBoardSlideInOffset(1500, 1000))).toBe(0)
+  })
+
+  // 観点11: durationMs<=0（アニメーション時間なし）は elapsedMs に関わらず即座に完了扱い（0）。
+  it('durationMs<=0 のとき elapsedMs に関わらず即座に完了（0）扱いになる', () => {
+    expect(Math.abs(computeBoardSlideInOffset(0, 0))).toBe(0)
+    expect(Math.abs(computeBoardSlideInOffset(500, -5))).toBe(0)
+  })
+})
+
+describe('computeBoardPlacement (#683)', () => {
+  const textureWidth = 400
+  const textureHeight = 300
+  const screenWidth = 800
+  const screenHeight = 450
+
+  // 観点12: novel モード相当の projection（scale=1, verticalOffset=0、#681 の設計）を通しても
+  // computeCoverFit 単体の全画面表示と同じ width/height になる（後方互換の formula 直接確認）。
+  it('novel モード相当（scale=1, verticalOffset=0）は computeCoverFit と同じ width/height になる', () => {
+    const fit = computeCoverFit(textureWidth, textureHeight, screenWidth, screenHeight)
+    const placement = computeBoardPlacement(
+      textureWidth,
+      textureHeight,
+      screenWidth,
+      screenHeight,
+      {
+        scale: 1,
+        verticalOffset: 0,
+      }
+    )
+    expect(placement.width).toBe(fit.width)
+    expect(placement.height).toBe(fit.height)
+    // 中心アンカー: x は常に画面水平中央、y は画面垂直中央 + verticalOffset(0)。
+    expect(placement.x).toBe(screenWidth / 2)
+    expect(placement.y).toBe(screenHeight / 2)
+  })
+
+  // 観点13: theater モード相当の projection（scale!=1, verticalOffset!=0）では、
+  // width/height が scale 倍・y が verticalOffset ぶんシフトされて反映される。
+  it('theater モード相当の projection では scale 倍・verticalOffset シフトが反映される', () => {
+    const fit = computeCoverFit(textureWidth, textureHeight, screenWidth, screenHeight)
+    const scale = 0.5
+    const verticalOffset = 20
+    const placement = computeBoardPlacement(
+      textureWidth,
+      textureHeight,
+      screenWidth,
+      screenHeight,
+      {
+        scale,
+        verticalOffset,
+      }
+    )
+    expect(placement.width).toBe(fit.width * scale)
+    expect(placement.height).toBe(fit.height * scale)
+    expect(placement.x).toBe(screenWidth / 2)
+    expect(placement.y).toBe(screenHeight / 2 + verticalOffset)
   })
 })

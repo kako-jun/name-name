@@ -111,6 +111,13 @@ export interface NovelGameState {
   video: VideoState | null
   /** イベント絵レイヤー (#351)。なしなら null */
   eventImage: EventImageState | null
+  /**
+   * シアターモード舞台構造の背景板 (#683)。`[背景板: path, depth: N]` の加算的な蓄積状態
+   * （既存の単一スロット `backgroundPath` とは独立）。既定は空配列。演出の中間状態
+   * （降りてくるアニメーションの進行度）は持たない（ADR-0002。#684 の stageMotion と同じ扱い、
+   * `BackgroundBoardLayer` だけが一時的なアニメーション位相を保持する）。
+   */
+  backgroundBoards: Array<{ path: string; depth: number }>
   isBlackout: boolean
   characters: Array<{ name: string; expression: string; position: string }>
   currentBgmPath: string | null

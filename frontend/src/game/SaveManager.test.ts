@@ -389,3 +389,72 @@ describe('SaveManager - カメラ仰角 (#682)', () => {
     expect(state.cameraElevation).toBeNull()
   })
 })
+
+describe('SaveManager - 舞台構造の背景板 (#683)', () => {
+  let manager: SaveManager
+
+  beforeEach(() => {
+    manager = new SaveManager('board-test')
+    localStorage.clear()
+  })
+
+  // テスト観点1: backgroundBoards キー自体が存在しない旧形式セーブ（#683 実装前に作られたセーブ
+  // 相当）を直接 localStorage に書き込み、load() がクラッシュしないこと・その結果を
+  // saveSlotToGameState() に渡すと backgroundBoards が []（板なし）にフォールバックすることを
+  // 確認する（backgroundFade/video/cameraElevation の「欠如キーでクラッシュしない」テストと
+  // 同型 #250/#252/#682）。
+  it('1: backgroundBoards キー無しの旧セーブ JSON を load してもクラッシュせず、saveSlotToGameState で [] にフォールバックする', () => {
+    // 旧フォーマットを直接 localStorage に書く（backgroundBoards キー無し）
+    const legacy = {
+      slot: 0,
+      sceneId: 'scene-1',
+      eventIndex: 3,
+      textIndex: 1,
+      flags: { visited: { Bool: true } },
+      backgroundPath: '/bg/room.png',
+      isBlackout: false,
+      characters: [{ name: 'Alice', expression: 'happy', position: 'center' }],
+      currentBgmPath: '/bgm/main.mp3',
+      // backgroundBoards は意図的に省略（キー自体が JSON に存在しない #683 前フォーマット）
+      savedAt: new Date().toISOString(),
+      sceneName: 'シーン1',
+    }
+    localStorage.setItem('name-name-save-board-test-0', JSON.stringify(legacy))
+
+    expect(() => manager.load(0)).not.toThrow()
+    const loaded = manager.load(0)
+    expect(loaded).not.toBeNull()
+    expect(loaded?.sceneId).toBe('scene-1')
+    expect(loaded?.backgroundBoards).toBeUndefined()
+
+    const state = saveSlotToGameState(loaded as SaveSlotData, null)
+    expect(state.backgroundBoards).toEqual([])
+  })
+
+  // テスト観点2: backgroundBoards ありの新形式セーブが localStorage 往復（save → load）で
+  // 値をそのまま保持し、saveSlotToGameState() を通した後も同じ配列が保持されることを確認する
+  // （video 付きで save → load して全フィールドが保持されるテストと同型 #252）。
+  it('2: backgroundBoards 付きで save → load → saveSlotToGameState で値が保持される（往復）', () => {
+    const data: SaveSlotData = {
+      ...makeSaveData(),
+      slot: 0,
+      backgroundBoards: [
+        { path: 'sky.png', depth: 10 },
+        { path: 'tree.png', depth: 4 },
+      ],
+    }
+    manager.save(0, data)
+
+    const loaded = manager.load(0)
+    expect(loaded?.backgroundBoards).toEqual([
+      { path: 'sky.png', depth: 10 },
+      { path: 'tree.png', depth: 4 },
+    ])
+
+    const state = saveSlotToGameState(loaded as SaveSlotData, null)
+    expect(state.backgroundBoards).toEqual([
+      { path: 'sky.png', depth: 10 },
+      { path: 'tree.png', depth: 4 },
+    ])
+  })
+})
