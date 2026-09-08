@@ -1050,9 +1050,11 @@ MapEditor/NPCEditor の変更
 なんでやねん！
 ```
 
-### 入場・退場の方向モーション（新規）
+### 入場・退場の方向モーション（実装済み・#684）
 
 既存の `[登場: 名前 (sprite/表情, 位置)]`（#401）/ `[退場: 名前]` タグに、任意で方向引数を追加する。引数なしは従来通り（瞬間表示/フェード、後方互換）。引数ありのときだけ、舞台上を歩いて入る/去るモーションになる:
+
+**実装状況 (#684)**: `Event::Enter.enter_direction` / `Event::Exit.exit_direction`（`Option<StageDirection>`、`Kamite`/`Shimote`）をパーサ・エミッタで往復対応済み。所要時間の per-game 設定 `character_move_ms`（frontmatter、未指定は runtime 既定 1400ms）も実装済み。X 座標の tween 計算は `computeStageMotionOffset`（`frontend/src/game/novelLayout.ts`、純粋関数）に集約し、`CharacterLayer` が `stageMotion`（ticker 駆動、fadeAnimation とは独立の軸）として駆動する。ノベルモードでは `NovelRenderer.cameraMode` を見て方向引数を無視しフェードにフォールバックする（呼び出し側で判定、CharacterLayer 自体はカメラモードを知らない）。GameState には一切状態を追加しない（ADR 0002、演出の中間状態を持たない — セーブ/シーク/任意局面起動では常に最終確定位置で即時表示）。
 
 ```markdown
 [登場: トモ, 上手から]
