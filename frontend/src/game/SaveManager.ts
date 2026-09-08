@@ -11,7 +11,7 @@
  * 私的プロジェクトのため、既存セーブが消えても許容範囲）。
  */
 
-import { CameraMode, CameraOrientation, FlagValue } from '../types'
+import { CameraElevation, CameraMode, CameraOrientation, FlagValue } from '../types'
 import { BackgroundFade, EventImageState, VideoState } from './GameState'
 
 const SLOT_COUNT = 3
@@ -72,6 +72,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined は 'Audience'（既定）扱い。
    */
   cameraOrientation?: CameraOrientation
+  /**
+   * シアターモードのカメラ仰角 (#682)。
+   * 後方互換: 古いセーブデータには無い → undefined は null（水平・既定）扱い。
+   */
+  cameraElevation?: CameraElevation | null
   savedAt: string // ISO 8601
   sceneName: string | null
 }

@@ -1,19 +1,20 @@
 /**
- * NovelRenderer CameraMode 配線統合テスト (#681)。
+ * NovelRenderer CameraMode 配線統合テスト (#681/#682)。
  *
  * cameraProjection.ts の純粋関数自体の単体挙動は cameraProjection.test.ts でカバー済み。
  * ここでは NovelRenderer 側の「isBlackout と同種の宣言的 settled state」としての配線だけを
  * 検証する:
- *  - シーン遷移（resetAndStartEvents 経由）で既定値（Novel/Audience）にリセットされる
- *  - goBack（スナップショットベースの宣言的復元）で直前の cameraMode/cameraOrientation に戻る
+ *  - シーン遷移（resetAndStartEvents 経由）で既定値（Novel/Audience/水平=null）にリセットされる
+ *  - goBack（スナップショットベースの宣言的復元）で直前の cameraMode/cameraOrientation/cameraElevation に戻る
  *
  * 観測は既存の NovelRenderer 系テスト（NovelRenderer.telop.test.ts と同形）: `playScript` で
- * 駆動し、`getSnapshot()` の cameraMode/cameraOrientation を直接読む（isBlackout 等と同じく
- * getSnapshot() が公開 API のため、private フィールドへの internals キャストは不要）。
+ * 駆動し、`getSnapshot()` の cameraMode/cameraOrientation/cameraElevation を直接読む
+ * （isBlackout 等と同じく getSnapshot() が公開 API のため、private フィールドへの internals
+ * キャストは不要）。
  */
 import { describe, expect, it } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
-import type { CameraMode, CameraOrientation, Event, EventScene } from '../types'
+import type { CameraElevation, CameraMode, CameraOrientation, Event, EventScene } from '../types'
 
 // --- fixture helpers（NovelRenderer.telop.test.ts と同じスタイル）---
 
@@ -21,8 +22,12 @@ function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
 }
 
-function cameraMode(mode: CameraMode, orientation?: CameraOrientation | null): Event {
-  return { CameraMode: { mode, orientation } } as Event
+function cameraMode(
+  mode: CameraMode,
+  orientation?: CameraOrientation | null,
+  elevation?: CameraElevation | null
+): Event {
+  return { CameraMode: { mode, orientation, elevation } } as Event
 }
 
 function scene(id: string, events: Event[]): EventScene {
@@ -76,5 +81,40 @@ describe('NovelRenderer CameraMode 配線 (#681)', () => {
 
     expect(r.getSnapshot().cameraMode).toBe('Novel')
     expect(r.getSnapshot().cameraOrientation).toBe('Audience')
+  })
+
+  // #682: elevation は orientation と同じ独立した第2軸。12/14 と対の確認。
+  it('12b: シーン内で CameraMode(Theater, elevation=LookUp) を実行後、シーン遷移で水平(null)にリセットされる', async () => {
+    const r = makeRenderer([
+      scene('a', [narration('one'), cameraMode('Theater', null, 'LookUp'), narration('two')]),
+      scene('b', [narration('three')]),
+    ])
+    r.startFrom({ sceneId: 'a' })
+
+    await r.playScript([{ type: 'advance' }])
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraElevation).toBe('LookUp')
+
+    r.jumpToScene('b')
+
+    expect(r.getSnapshot().cameraMode).toBe('Novel')
+    expect(r.getSnapshot().cameraElevation).toBeNull()
+  })
+
+  it('14b: CameraMode(Theater, elevation=LookDown) 実行後に goBack すると直前の水平(null)に戻る', async () => {
+    const r = makeRenderer([
+      scene('a', [narration('one'), cameraMode('Theater', null, 'LookDown'), narration('two')]),
+    ])
+    r.startFrom({ sceneId: 'a' })
+    expect(r.getSnapshot().cameraElevation).toBeNull()
+
+    await r.playScript([{ type: 'advance' }])
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraElevation).toBe('LookDown')
+
+    r.goBack()
+
+    expect(r.getSnapshot().cameraMode).toBe('Novel')
+    expect(r.getSnapshot().cameraElevation).toBeNull()
   })
 })

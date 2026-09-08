@@ -30,6 +30,7 @@ function makeState(eventIndex: number): NovelGameState {
     currentBgmPath: null,
     cameraMode: 'Novel',
     cameraOrientation: 'Audience',
+    cameraElevation: null,
     storyEnded: false,
   }
 }
