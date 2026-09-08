@@ -238,6 +238,23 @@ export type Event =
       }
     }
   | {
+      /**
+       * 舞台構造の背景板 (#683)。`Background`（単一スロット・新しいものが古いものを置換）とは
+       * 独立した加算的な仕組み: 1シーン内に複数書けば、それぞれ別の板として蓄積される。
+       * シアターモードでは depth が大きいほど縮小表示され（`computeCameraProjection`）、
+       * 舞台の書割のような多層の奥行きを表現する。ノベルモードでは常に scale=1 で正面に
+       * 重なるだけになる（#681 の設計により後方互換）。クリアは `[場面転換]`
+       * （`Event::SceneTransition`）にまとめる（専用のクリアディレクティブは無い）。
+       */
+      BackgroundBoard: {
+        path: string
+        /** 非負の任意単位。シアターモードの基準距離は `THEATER_CAMERA_REFERENCE_DEPTH`。
+         *  wasm は #[serde(default)] のため型上は optional だが、実際の parse_markdown()
+         *  出力では常に数値が入る（省略/非数値は parser 側で 0.0 にフォールバック済み）。 */
+        depth?: number
+      }
+    }
+  | {
       Video: {
         path: string
         /** #252 配置位置（左/中央/右、英語 alias left/center/right）。未指定は中央 */

@@ -22,6 +22,7 @@ import {
   TextStyle,
 } from 'pixi.js'
 import { CharacterLayer, NOVEL_ROLE_X_RATIO } from './CharacterLayer'
+import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 import { AudioManager } from './AudioManager'
@@ -730,6 +731,12 @@ export class NovelRenderer {
    */
   private cameraElevation: CameraElevation | null = null
 
+  /**
+   * 舞台構造の背景板レイヤー (#683)。`[背景板: path, depth: N]` の加算的な蓄積を管理する。
+   * 既存の単一スロット背景（bgContainer / setBackground）とは完全に独立。
+   */
+  private backgroundBoardLayer: BackgroundBoardLayer
+
   /** 枠なしモードのデフォルト値（per-game 設定）。per-scene の DialogBorderless で上書きされる */
   private defaultDialogBorderless: boolean = false
 
@@ -807,6 +814,13 @@ export class NovelRenderer {
     this.screenWidth = ASPECT_RATIOS[ratio].width
     this.screenHeight = ASPECT_RATIOS[ratio].height
     this.characterLayer = new CharacterLayer(this.screenWidth, this.screenHeight, this.time)
+    // 舞台構造の背景板レイヤー (#683)。他のレイヤーと同じ TimeController を共有し、
+    // 動画 export でもスライドインが決定論的に進む（CharacterLayer/TelopLayer と同じ流儀）。
+    this.backgroundBoardLayer = new BackgroundBoardLayer(
+      this.screenWidth,
+      this.screenHeight,
+      this.time
+    )
     // イベント絵レイヤー (#351)。立ち絵と同じ TimeController を共有し、動画 export でも
     // フェードが決定論的に進む（this.time が virtual モードなら仮想時刻で駆動される）。
     this.eventImageLayer = new EventImageLayer(this.screenWidth, this.screenHeight, this.time)
@@ -886,6 +900,10 @@ export class NovelRenderer {
 
     // 背景画像コンテナ
     this.app.stage.addChild(this.bgContainer)
+
+    // 舞台構造の背景板レイヤー (#683)。既存の単一スロット背景の直後・動画/立ち絵より下
+    // （舞台の書割は背景と同じ「奥の情景」なので、動画・キャラより手前には出さない）。
+    this.app.stage.addChild(this.backgroundBoardLayer)
 
     // 動画入力レイヤー (#252)。背景の直後・立ち絵の下に配置（背景の上、キャラの下）。
     this.app.stage.addChild(this.videoLayer)
@@ -1112,6 +1130,8 @@ export class NovelRenderer {
     // イベント絵レイヤーのテクスチャも同じタイミングで解放する (#351 セルフレビュー指摘:
     // 背景と違い textureCache 相当の登録先が無く、GPU テクスチャが解放されずリークしていた)。
     this.eventImageLayer.disposeTextures()
+    // 背景板レイヤーのテクスチャも同じ理由で解放する (#683、eventImageLayer と同じ流儀)。
+    this.backgroundBoardLayer.disposeTextures()
     // #662: setEvents() は「エントリ文書の events を(再)供給する」唯一の公開経路
     // （NovelPlayer のマウント effect / events-prop 変化 effect から呼ばれる）。
     // ここでスナップショットしておけば、この後 quickLoad/restoreToScene が rawEvents を
@@ -1761,6 +1781,10 @@ export class NovelRenderer {
       this.videoLayer.remove()
     } else {
       this.clearBackground()
+      // 背景板 (#683) も既存の単一スロット背景と同じ持続規律にする: 通常のシーン間ジャンプ
+      // （preserveBackgroundForTransition=true）では持ち越し、この非 preserve 分岐（新しい
+      // イベント列の最初の開始・setEvents() 経由）と明示的な `[場面転換]` でのみクリアする。
+      this.backgroundBoardLayer.clear()
     }
     if (options?.preserveBackgroundForTransition) {
       this.characterLayer.clearForSceneTransition()
@@ -2846,6 +2870,9 @@ export class NovelRenderer {
     // イベント絵レイヤーが読み込んだテクスチャも解放する (#351 セルフレビュー指摘。
     // setEvents() と同じ理由: textureCache 相当の登録先が無いと GPU テクスチャがリークする)。
     this.eventImageLayer.disposeTextures()
+    // 背景板レイヤーも破棄・テクスチャ解放する (#683、eventImageLayer と同じ流儀)。
+    this.backgroundBoardLayer.clear()
+    this.backgroundBoardLayer.disposeTextures()
     // テロップレイヤーのタイマー・表示中の段を破棄する (#674)。
     this.clearTelopLayer()
     this.audioManager.destroy()
@@ -3089,6 +3116,7 @@ export class NovelRenderer {
       backgroundBrightness: this.currentBackgroundBrightness,
       video: this.videoLayer.getState(),
       eventImage: this.eventImageLayer.getState(),
+      backgroundBoards: this.backgroundBoardLayer.getState(),
       isBlackout: this.blackoutOverlay.visible,
       characters: this.characterLayer.getCharacterStates(),
       currentBgmPath: this.currentBgmPath,
@@ -3499,6 +3527,17 @@ export class NovelRenderer {
     this.cameraOrientation = state.cameraOrientation
     this.cameraElevation = state.cameraElevation
 
+    // 舞台構造の背景板復元 (#683)。characters と同じくスライドインは起こさず、スナップショット
+    // 時点の状態を即時表示する（ADR-0002: 演出の中間状態を復元しない）。BackgroundBoardLayer は
+    // カメラ状態を自前で保持している（上の this.cameraMode 等への代入はこのレイヤーには伝わらない）
+    // ため、restore() で板を再配置する前に setCamera() で明示的に同期させる。
+    this.backgroundBoardLayer.setCamera(
+      this.cameraMode,
+      this.cameraOrientation,
+      this.cameraElevation
+    )
+    this.backgroundBoardLayer.restore(state.backgroundBoards, this.assetBaseUrl)
+
     // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）。
     // novel 役割配置 (#286): protagonist 指定時は復元でも質問役=左 / 回答役=右の x を当てる
     // （token のままだと前進時の配置と食い違うため）。ポーズ nudge は演出なので復元では起こさない。
@@ -3869,8 +3908,9 @@ export class NovelRenderer {
    *   ※ `Condition` は `resolveEvents` で展開済みのため `resolvedEvents` には通常現れないが、
    *     仕様として境界扱いを明示しておく（防御的・非回帰）。
    * - 収集対象: `Dialog` / `ExpressionChange` の立ち絵（`resolveCharacterImageUrls`、
-   *   webp/png の複数候補）、`Background` の背景画像、`EventImage` のイベント絵、
-   *   単独画像 `[画像:]`（#274, `Image`）（いずれも `resolveAssetUrl`）(#621)。Video 等
+   *   webp/png の複数候補）、`Background` の背景画像、`BackgroundBoard` の背景板 (#683)、
+   *   `EventImage` のイベント絵、単独画像 `[画像:]`（#274, `Image`）（いずれも
+   *   `resolveAssetUrl`）(#621)。Video 等
    *   `Assets.load` 経路でないものは対象外。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
    *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。
    * - **緩い上限**: 分岐までが極端に長い場合に備え、先読みするテキストイベント
@@ -3949,6 +3989,10 @@ export class NovelRenderer {
         }
       } else if ('Background' in event) {
         urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Background.path))
+      } else if ('BackgroundBoard' in event) {
+        // 舞台構造の背景板 (#683) も背景と同じ Assets.load 遅延ロード経路（BackgroundBoardLayer.add）
+        // を通るため、同じく先読み対象にする。
+        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.BackgroundBoard.path))
       } else if ('EventImage' in event) {
         // イベント絵 (#351) の先読み (#621)。EventImageLayer.show() は表示の瞬間に初めて
         // Assets.load するため、事前に温めておかないと切替時に初回コールドロード相当の
@@ -3997,6 +4041,8 @@ export class NovelRenderer {
     if (typeof event === 'string') {
       if (event === 'SceneTransition') {
         this.clearBackground()
+        // 舞台構造の背景板 (#683) も既存の単一スロット背景と同じタイミングでクリアする。
+        this.backgroundBoardLayer.clear()
         // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
         this.videoLayer.remove()
         // イベント絵レイヤーも場面転換でクリアする (#351)。作者が [イベント絵終了] を書き忘れても
@@ -4030,6 +4076,13 @@ export class NovelRenderer {
         }),
         bg.brightness
       )
+      return
+    }
+    if ('BackgroundBoard' in event) {
+      // 舞台構造の背景板 (#683)。既存の単一スロット背景とは独立した加算的な仕組み:
+      // 同じシーン内で複数回発火すれば、それぞれ別の板として BackgroundBoardLayer に蓄積される。
+      const board = event.BackgroundBoard
+      this.backgroundBoardLayer.add(board.path, board.depth ?? 0, this.assetBaseUrl)
       return
     }
     if ('BackgroundColor' in event) {
@@ -4151,12 +4204,18 @@ export class NovelRenderer {
       return
     }
     if ('CameraMode' in event) {
-      // #681/#682: GameState 更新のみの薄い配線。実際の射影計算（cameraProjection）の描画反映は
-      // depth 値の配線（#683）待ち。orientation 省略/未知値は客席相当（'Audience'）、
+      // #681/#682: GameState 更新。orientation 省略/未知値は客席相当（'Audience'）、
       // elevation 省略/未知値は水平相当（null）。
       this.cameraMode = event.CameraMode.mode
       this.cameraOrientation = event.CameraMode.orientation ?? 'Audience'
       this.cameraElevation = event.CameraMode.elevation ?? null
+      // #683: カメラ状態が変わったので、既存の背景板があれば新しい scale/verticalOffset で
+      // 再配置する（板を持たないゲームでは entries が空なので no-op）。
+      this.backgroundBoardLayer.setCamera(
+        this.cameraMode,
+        this.cameraOrientation,
+        this.cameraElevation
+      )
       return
     }
     if ('Bgm' in event) {
@@ -5097,6 +5156,7 @@ export class NovelRenderer {
       backgroundBrightness: snapshot.backgroundBrightness,
       video: snapshot.video,
       eventImage: snapshot.eventImage,
+      backgroundBoards: snapshot.backgroundBoards,
       isBlackout: snapshot.isBlackout,
       characters: snapshot.characters,
       currentBgmPath: snapshot.currentBgmPath,
@@ -5591,6 +5651,7 @@ export class NovelRenderer {
       backgroundBrightness: null,
       video: null,
       eventImage: null,
+      backgroundBoards: [],
       isBlackout: false,
       characters: [],
       currentBgmPath: null,

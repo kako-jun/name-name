@@ -177,6 +177,18 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
         },
       }
     }
+    if ('BackgroundBoard' in event) {
+      // #683: Rust 側は `depth: f32`（Option ではないが #[serde(default)] のため tsify の型上は
+      // optional）。実運用では常に値が入るはずだが、他の #[serde(default)] フィールドと同じ
+      // 防御的正規化として undefined を 0.0（最前面・parser 側フォールバックと同じ既定値）に倒す。
+      const board = event.BackgroundBoard
+      return {
+        BackgroundBoard: {
+          path: board.path,
+          depth: board.depth ?? 0,
+        },
+      }
+    }
     if ('Bgm' in event) {
       return {
         Bgm: {
