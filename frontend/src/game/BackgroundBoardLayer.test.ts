@@ -14,6 +14,7 @@ import { Assets, type Texture } from 'pixi.js'
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { TimeController } from './TimeController'
 import { BOARD_SLIDE_IN_MS } from './novelLayout'
+import { THEATER_ELEVATION_OFFSET_PER_DEPTH } from './cameraProjection'
 
 const SCREEN_W = 800
 const SCREEN_H = 450
@@ -100,6 +101,33 @@ describe('BackgroundBoardLayer 基本', () => {
     const spriteOf = (path: string) => entries.find((e) => e.path === path)?.sprite
     expect(layer.children).toEqual([spriteOf('far.png'), spriteOf('mid.png'), spriteOf('near.png')])
   })
+
+  // テスト観点14: insertSorted() は `[...entries].sort((a, b) => b.depth - a.depth)` を使う。
+  // JS の Array.prototype.sort は ES2019 以降 stable 保証（同値の要素は元の相対順を保つ）ため、
+  // 同一 depth の複数板は比較関数が常に 0 を返し、追加した順序のまま Container の子要素順になる。
+  it('14: 同一 depth の複数板は Container の子要素順が挿入順のまま安定する', async () => {
+    mockAssetsLoadResolved()
+    const layer = new BackgroundBoardLayer(SCREEN_W, SCREEN_H, virtualTime())
+    layer.add('first.png', 5, '/assets')
+    layer.add('second.png', 5, '/assets')
+    layer.add('third.png', 5, '/assets')
+    await flushPromises()
+    const entries = internals(layer).entries
+    const spriteOf = (path: string) => entries.find((e) => e.path === path)?.sprite
+    expect(layer.children).toEqual([
+      spriteOf('first.png'),
+      spriteOf('second.png'),
+      spriteOf('third.png'),
+    ])
+  })
+
+  // テスト観点15: path が空文字でも add() は特別扱いせず、getState() にそのまま積まれる
+  // （Rust パーサー側も path の空文字バリデーションを行わないため、値をそのまま通す一貫した挙動）。
+  it('15: path が空文字でも例外を投げず getState() に空文字のまま積まれる', () => {
+    const layer = new BackgroundBoardLayer(SCREEN_W, SCREEN_H, virtualTime())
+    expect(() => layer.add('', 3, '')).not.toThrow()
+    expect(layer.getState()).toEqual([{ path: '', depth: 3 }])
+  })
 })
 
 describe('カメラ射影 (#681/#682) との連携', () => {
@@ -143,6 +171,29 @@ describe('カメラ射影 (#681/#682) との連携', () => {
     layer.setCamera('Theater', 'Audience', null)
     expect(sprite?.width).toBeCloseTo(SCREEN_W * 0.5) // シアターモードへ切替と同時に再配置される
   })
+
+  // テスト観点9: depth に上限クランプは無い（add() がクランプするのは非有限値・負値のみ、
+  // Math.max(0, depth)）。巨大な有限値でも computeCameraProjection の
+  // `scale = REF_DEPTH / (REF_DEPTH + depth)` は 0 除算にならず、限りなく 0 に近い正の有限値に
+  // 漸近する（NaN/Infinity 化しない）。
+  it('9: depth が Number.MAX_VALUE でも scale は 0 除算・NaN化せず極小の正の有限値になる', async () => {
+    mockAssetsLoadResolved()
+    const layer = new BackgroundBoardLayer(SCREEN_W, SCREEN_H, virtualTime())
+    layer.setCamera('Theater', 'Audience', null)
+    layer.add('far.png', Number.MAX_VALUE, '/assets', { instant: true })
+    await flushPromises()
+    const entry = internals(layer).entries[0]
+    // 上限クランプが無いこと自体も確認する（depth がそのまま Number.MAX_VALUE で保持される）。
+    expect(entry.depth).toBe(Number.MAX_VALUE)
+    const sprite = entry.sprite
+    expect(sprite).not.toBeNull()
+    expect(Number.isFinite(sprite?.width)).toBe(true)
+    expect(Number.isFinite(sprite?.height)).toBe(true)
+    expect(sprite?.width).toBeGreaterThan(0)
+    expect(sprite?.height).toBeGreaterThan(0)
+    // 極小に縮小されている（原寸 SCREEN_W よりはるかに小さい）ことの確認。
+    expect(sprite?.width).toBeLessThan(1)
+  })
 })
 
 describe('スライドインアニメーション (#683)', () => {
@@ -159,6 +210,37 @@ describe('スライドインアニメーション (#683)', () => {
 
     time.tick(BOARD_SLIDE_IN_MS + 32)
     expect(entry.sprite?.y).toBe(SCREEN_H / 2)
+    expect(entry.interval).toBeNull()
+  })
+
+  // テスト観点3: スライドイン中（interval 稼働中）に setCamera() を呼んでも layoutBoard() は
+  // targetX/targetY を更新するだけで、interval 自体は止め直さない（updateSlideFrame は毎フレーム
+  // 最新の entry.targetY を読むため、tween は中断されず新しい着地点へ向けて自然に継続する）。
+  it('3: スライドイン中に setCamera() を呼ぶと、tween が中断されず新しい targetY へ向けて継続する', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = new BackgroundBoardLayer(SCREEN_W, SCREEN_H, time)
+    const depth = 5
+    layer.add('board.png', depth, '/assets') // ノベルモード（既定）でスライドイン開始
+    await flushPromises()
+    const entry = internals(layer).entries[0]
+    const intervalBeforeCameraChange = entry.interval
+    expect(intervalBeforeCameraChange).not.toBeNull()
+
+    // スライドインの半分ほど進めてから、tween 継続中にカメラ状態を切り替える。
+    time.tick(BOARD_SLIDE_IN_MS / 2)
+
+    layer.setCamera('Theater', 'Audience', 'LookDown')
+    // シアター + LookDown: verticalOffset = depth * THEATER_ELEVATION_OFFSET_PER_DEPTH（正値）。
+    const newTargetY = SCREEN_H / 2 + depth * THEATER_ELEVATION_OFFSET_PER_DEPTH
+
+    // setCamera() は稼働中の interval を止め直さない（同じ id のまま、tween は中断されない）。
+    expect(entry.interval).toBe(intervalBeforeCameraChange)
+    expect(entry.interval).not.toBeNull()
+
+    // 残り時間を進めると、旧 targetY（画面中央）ではなく新しい targetY へ収束する。
+    time.tick(BOARD_SLIDE_IN_MS / 2 + 32)
+    expect(entry.sprite?.y).toBeCloseTo(newTargetY)
     expect(entry.interval).toBeNull()
   })
 
@@ -228,5 +310,24 @@ describe('BackgroundBoardLayer disposeTextures（GPU テクスチャのリーク
     const layer = new BackgroundBoardLayer(SCREEN_W, SCREEN_H, virtualTime())
     layer.disposeTextures()
     expect(unloadSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('アセットロード失敗 (#683)', () => {
+  // テスト観点5: Assets.load() が reject したとき、add() の .catch() ハンドラは
+  // console.warn を出すだけで例外を投げ直さない（呼び出し元の processDirective まで伝播しない）。
+  // entry 自体は add() 冒頭で同期的に push 済みのため getState() には path/depth が残り、
+  // sprite はロード成功時にのみ代入される（entry.sprite = new Sprite(texture)）ため null のまま。
+  it('5: アセットロード失敗時、console.warn を出すが例外は投げず、getState() には path/depth が残り sprite は null のまま', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(Assets, 'load').mockRejectedValue(new Error('load failed'))
+    const layer = new BackgroundBoardLayer(SCREEN_W, SCREEN_H, virtualTime())
+
+    expect(() => layer.add('broken.png', 3, '/assets')).not.toThrow()
+    await flushPromises()
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(layer.getState()).toEqual([{ path: 'broken.png', depth: 3 }])
+    expect(internals(layer).entries[0].sprite).toBeNull()
   })
 })

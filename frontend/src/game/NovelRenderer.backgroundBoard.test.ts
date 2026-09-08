@@ -17,7 +17,7 @@
  * `assetBaseUrl` を設定しないため `Assets.load` は呼ばれない（BackgroundBoardLayer.add() の
  * ガード。NovelRenderer.cameraMode.test.ts と同じ流儀で、状態配線だけを軽量に検証できる）。
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 
@@ -29,8 +29,43 @@ function backgroundBoard(path: string, depth?: number): Event {
   return { BackgroundBoard: { path, depth } } as Event
 }
 
+/** 既存の単一スロット背景（`Background`。`backgroundBoard` の加算的な仕組みとは独立）。 */
+function background(path: string): Event {
+  return { Background: { path } } as Event
+}
+
 function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
+}
+
+/** private フィールドへ到達するための内部アクセサ（NovelRenderer.eventImage.test.ts と同じ流儀）。 */
+interface BackgroundBoardLayerForTest {
+  clear(): void
+  disposeTextures(): void
+  add(path: string, depth: number, assetBaseUrl: string, opts?: { instant?: boolean }): void
+  restore(boards: readonly { path: string; depth: number }[], assetBaseUrl: string): void
+}
+interface RendererInternals {
+  backgroundBoardLayer: BackgroundBoardLayerForTest
+  appInitialized: boolean
+  app: { canvas: unknown; destroy: (...args: unknown[]) => void }
+}
+function internals(r: NovelRenderer): RendererInternals {
+  return r as unknown as RendererInternals
+}
+
+/**
+ * destroy() の appInitialized ガード（PixiJS 実 init 未完了時の early-return）を満たすための
+ * 最小スタブ（NovelRenderer.eventImage.test.ts の stubDestroyableApp と同じ割り切り）。
+ */
+function stubDestroyableApp(r: NovelRenderer): void {
+  const appInternals = internals(r)
+  appInternals.appInitialized = true
+  Object.defineProperty(appInternals.app, 'canvas', {
+    configurable: true,
+    value: { removeEventListener: () => {} },
+  })
+  appInternals.app.destroy = () => {}
 }
 
 describe('NovelRenderer BackgroundBoard 配線 (#683)', () => {
@@ -113,5 +148,89 @@ describe('NovelRenderer BackgroundBoard 配線 (#683)', () => {
 
     r.goBack() // two -> one（board 実行前のスナップショットへ）
     expect(r.getSnapshot().backgroundBoards).toEqual([])
+  })
+})
+
+describe('NovelRenderer BackgroundBoard と既存の単一スロット背景の独立性 (#683)', () => {
+  // テスト観点4: [背景:]（単一スロット背景。processDirective の 'Background' 分岐）は
+  // backgroundBoardLayer に一切触れない実装（NovelRenderer.ts 参照）のため、
+  // backgroundBoards は不変のまま。
+  it('4: [背景:] の変更は backgroundBoards に一切影響しない', () => {
+    const r = new NovelRenderer()
+    r.setScenes([
+      scene('a', [backgroundBoard('sky.png', 10), background('room.png'), narration('one')]),
+    ])
+    expect(r.getSnapshot().backgroundBoards).toEqual([{ path: 'sky.png', depth: 10 }])
+    expect(r.getSnapshot().backgroundPath).toBe('room.png')
+  })
+
+  // テスト観点4続: 単一スロット背景を複数回差し替えても（新しい方が古い方を置換）、
+  // 加算的な backgroundBoards には波及しない（意味論が完全に独立していることの追加確認）。
+  it('4b: 複数回の [背景:] 差し替え（単一スロットの置換）を経ても backgroundBoards は変化しない', async () => {
+    const r = new NovelRenderer()
+    r.setScenes([
+      scene('a', [
+        backgroundBoard('sky.png', 10),
+        background('room1.png'),
+        narration('one'),
+        background('room2.png'),
+        narration('two'),
+      ]),
+    ])
+    expect(r.getSnapshot().backgroundBoards).toEqual([{ path: 'sky.png', depth: 10 }])
+    expect(r.getSnapshot().backgroundPath).toBe('room1.png')
+
+    await r.playScript([{ type: 'advance' }]) // one -> [背景: room2.png] -> two
+    expect(r.getSnapshot().backgroundPath).toBe('room2.png')
+    expect(r.getSnapshot().backgroundBoards).toEqual([{ path: 'sky.png', depth: 10 }])
+  })
+})
+
+describe('NovelRenderer BackgroundBoard の settled state / 破棄 / 復元経路 (#683)', () => {
+  // テスト観点16: BackgroundBoardLayer.getState() は
+  // `entries.map((e) => ({ path: e.path, depth: e.depth }))` のみを返す実装のため、
+  // getSnapshot().backgroundBoards の各要素はスプライトやアニメーション位相などの内部状態を
+  // 一切含まない、{path, depth} の2キーだけの settled state になる（ADR-0002）。
+  it('16: getSnapshot().backgroundBoards の各要素は {path, depth} のみで内部状態を含まない', () => {
+    const r = new NovelRenderer()
+    r.setScenes([scene('a', [backgroundBoard('sky.png', 10), narration('one')])])
+    const boards = r.getSnapshot().backgroundBoards
+    expect(boards).toHaveLength(1)
+    expect(Object.keys(boards[0]).sort()).toEqual(['depth', 'path'])
+  })
+
+  // テスト観点17: destroy() は backgroundBoardLayer.clear() と disposeTextures() の両方を呼ぶ
+  // （eventImageLayer と同じ GPU テクスチャのリーク防止の流儀、NovelRenderer.eventImage.test.ts
+  // の EI14 と同型）。
+  it('17: destroy() は backgroundBoardLayer.clear() と disposeTextures() の両方を呼ぶ', () => {
+    const r = new NovelRenderer()
+    r.setScenes([scene('a', [backgroundBoard('sky.png', 10), narration('one')])])
+    const layer = internals(r).backgroundBoardLayer
+    const clearSpy = vi.spyOn(layer, 'clear')
+    const disposeSpy = vi.spyOn(layer, 'disposeTextures')
+    stubDestroyableApp(r)
+
+    r.destroy()
+
+    expect(clearSpy).toHaveBeenCalled()
+    expect(disposeSpy).toHaveBeenCalledTimes(1)
+  })
+
+  // テスト観点18: goBack/seekTo（applyState 経由）で板を含むスナップショットへ戻る際は、
+  // 常に backgroundBoardLayer.restore() 経由で `add(path, depth, assetBaseUrl, { instant: true })`
+  // が呼ばれる。instant:true は add() 内で「上から降りてくる」スライドインを起こさず即座に
+  // 最終位置へ配置する分岐（BackgroundBoardLayer.test.ts で直接検証済み）に対応するため、
+  // この呼び出し引数を固定すれば goBack 経由でスライドインが発生しないことを保証できる。
+  it('18: goBack で板を含むスナップショットへ戻る際は instant:true で復元されスライドインしない', async () => {
+    const r = new NovelRenderer()
+    r.setScenes([scene('a', [backgroundBoard('sky.png', 10), narration('one'), narration('two')])])
+    // setScenes の自動開始で [背景板:] directive が実行済み、'one' で停止。
+    await r.playScript([{ type: 'advance' }]) // one -> two
+    const layer = internals(r).backgroundBoardLayer
+    const addSpy = vi.spyOn(layer, 'add')
+
+    r.goBack() // two -> one（backgroundBoards=[sky.png] のまま）
+
+    expect(addSpy).toHaveBeenCalledWith('sky.png', 10, '', { instant: true })
   })
 })

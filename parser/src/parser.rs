@@ -4253,6 +4253,61 @@ title: "test"
         assert_eq!(doc1, doc2, "background board round-trip should be stable");
     }
 
+    // テスト観点6: 負の有限 depth はパーサー側でクランプされずそのまま保持される。
+    // parse_background_board_directive の `.filter(|n| n.is_finite())` は非有限値のみを弾き、
+    // 符号やクランプ範囲は一切見ない（負値のクランプはフロント側 BackgroundBoardLayer.add() の
+    // 描画時最終防御に委ねる、Issue #683 方針）。
+    #[test]
+    fn background_board_negative_depth_is_not_clamped_by_parser() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景板: front.png, depth: -3]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[0],
+            Event::BackgroundBoard {
+                path: "front.png".to_string(),
+                depth: -3.0,
+            },
+            "負の depth はクランプされず -3.0 のまま保持される"
+        );
+    }
+
+    // テスト観点8: f32 の表現範囲を超える depth（f32::MAX ≈ 3.4e38 を大きく超える 1e40）は
+    // `"1e40".parse::<f32>()` が `Ok(f32::INFINITY)` を返す（Rust の float parse はオーバーフローを
+    // エラーではなく無限大への丸めとして扱う）ため、後続の `is_finite()` フィルタに弾かれ
+    // 0.0（最前面）にフォールバックする。
+    #[test]
+    fn background_board_f32_overflow_depth_falls_back_to_zero() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景板: huge.png, depth: 1e40]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[0],
+            Event::BackgroundBoard {
+                path: "huge.png".to_string(),
+                depth: 0.0,
+            },
+            "f32 オーバーフロー値は 0.0 にフォールバックする"
+        );
+    }
+
+    // テスト観点19（低優先度）: 負の depth も emit 時に kv を省略せず出力する（round-trip 安定性）。
+    // emitter の `if *depth != 0.0` ガードは 0.0 以外なら符号を問わず出力するため、負値でも
+    // kv 自体は落ちないはず——0.0 側の等値判定だけを見ている実装の負値経路を明示的に固定する。
+    #[test]
+    fn background_board_negative_depth_emits_kv_and_roundtrips() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景板: front.png, depth: -3]\n";
+        let doc1 = parse(input);
+        let emitted = emit(&doc1);
+        assert!(
+            emitted.contains("depth: -3"),
+            "負の depth も kv 出力が省略されない: {emitted}"
+        );
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "negative depth round-trip should be stable");
+    }
+
     #[test]
     fn parses_camera_mode_theater_and_novel() {
         // 基本形: シアター/ノベル、未知値・省略は Novel にフォールバック (#681)。
