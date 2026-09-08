@@ -431,6 +431,57 @@ describe('CharacterLayer 退場walk中/入場walk中の状態遷移バグ修正 
     expect(current).toBeDefined()
     expect(current!.stageMotion).toBeFalsy()
   })
+
+  // must-3（PR #688 再レビュー指摘）: reviveFromInProgressStageMotion は kind を問わず show() の
+  // no-op 判定より前に無条件で呼ばれていたため、kind==='enter'（歩行入場中）に対して
+  // expression/position/fit が完全に同一の再 show（NovelRenderer.ts の「冪等: 同一 name/expression/
+  // position/fit の再宣言は show() 側の no-op ガードで無効」という既存コメント、および
+  // showCharacterFromDialog が Dialog 行ごとに show() を呼ぶ設計が想定する自然なケース）が来ても、
+  // 歩行入場を即座に打ち切ってスナップさせてしまっていた。
+  // 修正: kind==='enter' かつ no-op 判定（expression/position/fit 一致 && !overrideXChanged）が
+  // 真のときだけ revive をスキップして歩行を継続させる。kind==='exit' は #177 由来の意図（同じ状態
+  // での show() は退場を取り消して連れ戻す）のため無条件スナップを維持する。
+  it('must-3: 入場walk中に完全に同一のexpression/position/fitで再show()されても、歩行が継続され即座にスナップしない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { enterDirection: 'Kamite' }) // targetX=400
+    await flushPromises()
+
+    const internal = layer as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 700 // 入場walkの途中（durationMs 既定1400 未満）
+    internal.animTicker?.update()
+    const entering = asInternals(layer).characters.get('hero')
+    expect(entering).toBeDefined()
+    expect(entering!.stageMotion).not.toBeNull() // 前提: まだ入場walk中
+    const midWalkX = entering!.sprite.x
+    expect(midWalkX).not.toBe(400) // 前提: まだ最終位置(targetX)には到達していない
+
+    // 完全に同一の expression/position/fit（override x なし）で再 show。
+    // [登場: hero, 上手から] の直後に同じキャラの Dialog 行（同じ表情/位置）が続く、
+    // という自然な使い方をそのまま再現する。
+    layer.show('hero', 'normal', '中央', '/assets')
+
+    const revived = asInternals(layer).characters.get('hero')
+    expect(revived).toBeDefined()
+    expect(revived!.stageMotion).not.toBeNull() // 歩行入場は継続する（キャンセルされない）
+    expect(revived!.stageMotion!.kind).toBe('enter')
+    expect(revived!.sprite.x).toBe(midWalkX) // 即座にスナップしない
+
+    // 入場walkが完了する時刻まで進めると、最終位置(targetX)へ自然に到達する。
+    internal.elapsedMs += 1000
+    internal.animTicker?.update()
+    const after = asInternals(layer).characters.get('hero')
+    expect(after).toBeDefined()
+    expect(after!.stageMotion).toBeFalsy() // walk完了で自然にクリアされる
+    expect(after!.sprite.x).toBe(400)
+  })
 })
 
 // =====================================================================================

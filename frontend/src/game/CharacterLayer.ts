@@ -1224,8 +1224,13 @@ export class CharacterLayer extends Container {
    * walk のキャンセル→通常の再表示ロジックへの合流に切り替える共通ヘルパー (#684 バグ修正、
    * PR #688 セルフレビュー must-1 で kind==='enter' も対象に拡張)。
    *
-   * `reviveFromExitFade`（fadeAnimation 版）と対の役割。show() の既存キャラ分岐の先頭で
-   * 必ず呼ぶ（no-op/textureChanged/positionChanged いずれの後続分岐より前）。
+   * `reviveFromExitFade`（fadeAnimation 版）と対の役割。関数自体は kind を問わず対称に
+   * `stageMotion` を破棄・スナップする（下記参照）が、呼び出し側（show()）は
+   * kind==='enter' かつ no-op（expression/position/fit 一致 && !overrideXChanged）のときは
+   * この関数を呼ばず、歩行を継続させる（PR #688 再レビュー must-3、詳細は show() 側のコメント
+   * 参照）。それ以外（kind==='exit'、または kind==='enter' で実際に変化がある場合）は、
+   * show() の既存キャラ分岐の先頭で（no-op/textureChanged/positionChanged いずれの後続分岐
+   * よりも前に）呼ぶ。
    *
    * 修正前の挙動（バグ、kind==='exit' のみ対応していた頃）: `remove()` の方向指定退場は
    * `fadeAnimation` を張らないため、`reviveFromExitFade` は
@@ -1385,27 +1390,43 @@ export class CharacterLayer extends Container {
     if (existing) {
       // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す (#177)
       this.reviveFromExitFade(existing, instant)
-      // 入場・退場walk中の再 show: 進行中の方向モーションをキャンセルして通常の再表示ロジックへ
-      // 合流させる (#684 バグ修正、kind==='enter' も対象。PR #688 セルフレビュー must-1)
-      this.reviveFromInProgressStageMotion(existing)
 
-      // novel 役割配置 (#286): override x がある再 show は、現在の sprite.x と違えば
-      // 「横位置変更あり」とみなす（position トークンは同じでも質問役↔回答役の入替で x が動く）。
-      // override 無しの従来呼び出しでは、position トークン未変化なら x を触らない（#134 の
-      // [アニメ] で動かした立ち絵を再 show で勝手に戻さない adv 非回帰のため、override 時だけ判定する）。
-      const overrideXChanged =
-        hasXOverride && Math.abs(existing.sprite.x - (overrideX as number)) >= 0.5
+      // 入場・退場walk中の再 show の no-op 判定 (PR #688 再レビュー must-3)。
+      // revive 呼び出しより前に評価する: `existing.stageMotion` が張られている間は
+      // `reviveFromInProgressStageMotion` が sprite.x を `stageMotion.baseX` へ揃えるので、
+      // 「revive したときの sprite.x」は revive 前でも `stageMotion.baseX` として先取りできる
+      // （stageMotion が無ければ現在の sprite.x がそのまま該当する）。novel 役割配置 (#286):
+      // override x がある再 show は、この位置と違えば「横位置変更あり」とみなす（position トークン
+      // は同じでも質問役↔回答役の入替で x が動く）。override 無しの従来呼び出しでは、position
+      // トークン未変化なら x を触らない（#134 の [アニメ] で動かした立ち絵を再 show で勝手に戻さない
+      // adv 非回帰のため、override 時だけ判定する）。
+      const stageMotionBeforeRevive = existing.stageMotion
+      const restingX = stageMotionBeforeRevive ? stageMotionBeforeRevive.baseX : existing.sprite.x
+      const overrideXChanged = hasXOverride && Math.abs(restingX - (overrideX as number)) >= 0.5
 
       // 表情が同じで位置も同じ、フィット指定も同じなら何もしない（フェード状態は上で解消済み）。
       // フィット (#294) が変化したら texture を再ロードして scale を取り直す必要があるので、
       // 早期 return の条件に fit 一致も含める。
-      if (
+      const isUnchanged =
         existing.expression === expression &&
         existing.position === normalizedPosition &&
         existing.fit === fit &&
         !overrideXChanged
-      ) {
-        // no-op（立ち絵は既に表示済み）。texture を待つ必要はないので即 ready (#293)。
+
+      // 入場・退場walk中の再 show: 進行中の方向モーションをキャンセルして通常の再表示ロジックへ
+      // 合流させる (#684 バグ修正、kind==='enter' も対象。PR #688 セルフレビュー must-1)。
+      // ただし kind==='enter' かつ変化なし（isUnchanged）のときはキャンセルしない (must-3)。
+      // `[登場: 名前, 方向]` で無言入場させた直後に同じキャラの Dialog 行（同じ表情/位置）が続く、
+      // という自然な使い方で歩行入場が即座に打ち切られてしまう不具合の修正。kind==='exit' は
+      // #177 由来の「同じ状態での show() は退場を取り消して連れ戻す」という既存の意図があるため、
+      // isUnchanged に関わらず常にキャンセルする（非回帰、変更しない）。
+      if (!(stageMotionBeforeRevive?.kind === 'enter' && isUnchanged)) {
+        this.reviveFromInProgressStageMotion(existing)
+      }
+
+      if (isUnchanged) {
+        // no-op（立ち絵は既に表示済み、または歩行入場が継続中）。
+        // texture を待つ必要はないので即 ready (#293)。
         onReady?.()
         return
       }
