@@ -499,8 +499,12 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 };
                 // #681: orientation は既定（客席 = None）のときは無出力にして round-trip を
                 // 安定させる（#674 テロップの位置=既定省略と同じ流儀）。舞台指定のときだけ出す。
-                match orientation {
-                    Some(CameraOrientation::Stage) => {
+                // mode も併せて見る: orientation の値だけで判定すると、パーサーが通常は作らない
+                // 組み合わせ {mode: Novel, orientation: Some(Stage)} を直接構築して渡した場合に
+                // `[カメラ: ノベル, 向き: 舞台]` という不自然な行を出力してしまい、再パースで
+                // {Novel, None} に戻る非対称 round-trip になる（QAテストで検出・固定済み）。
+                match (mode, orientation) {
+                    (CameraMode::Theater, Some(CameraOrientation::Stage)) => {
                         out.push_str(&format!("[カメラ: {mode_token}, 向き: 舞台]\n"));
                     }
                     _ => {
