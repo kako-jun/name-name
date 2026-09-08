@@ -31,6 +31,11 @@ function condition(flag: string, events: Event[]): Event {
   return { Condition: { flag, events } }
 }
 
+/** [カメラ: シアター, 向き: 舞台] 相当のディレクティブイベント (#681)。 */
+function cameraModeEvent(): Event {
+  return { CameraMode: { mode: 'Theater', orientation: 'Stage' } } as Event
+}
+
 const boolFlag = (b: boolean): FlagValue => ({ Bool: b })
 
 /**
@@ -138,6 +143,12 @@ const SCENES_COND: EventScene[] = [
   ]),
 ]
 
+// CameraMode ディレクティブを含むシーン (#681)。R6b/R7b で「宣言的 settled state が
+// restoreToScene を通らない分岐では変化しない」ことを CameraMode 特有ではなく汎用に確認する。
+const CAMERA_SCENES: EventScene[] = [
+  scene('cam', [narration('cam1'), cameraModeEvent(), narration('cam2')]),
+]
+
 describe('NovelRenderer.restoreSnapshot (#460)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -230,6 +241,36 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(r.getCurrentSceneId()).toBe(sceneBefore)
     expect(internals(r).history.length).toBe(historyLenBefore)
     expect(warnSpy).toHaveBeenCalledTimes(1)
+  })
+
+  // 19: R6/R7 と同じ2分岐（sceneId: null / シーン未発見）は restoreToScene/applyState を
+  // 通らない（fromJSON(flags) のみ）ため、cameraMode/cameraOrientation も他の宣言的
+  // settled state（isBlackout 等）と同じく変化しないはず。CameraMode 固有のバグでは
+  // なく、この2分岐の一般的な性質であることをロックする (#681)。
+  it('R6b: sceneId: null 分岐は cameraMode/cameraOrientation を変化させない（CameraMode 固有バグでないことのロック）', async () => {
+    const r = makeRenderer(CAMERA_SCENES)
+    r.startFrom({ sceneId: 'cam' })
+    await r.playScript([{ type: 'advance' }]) // cam1 -> camera(directive処理) -> cam2
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: null, flags: { fresh: boolFlag(true) } }))
+
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
+  })
+
+  it('R7b: シーン未発見分岐は cameraMode/cameraOrientation を変化させない（CameraMode 固有バグでないことのロック）', async () => {
+    const r = makeRenderer(CAMERA_SCENES)
+    r.startFrom({ sceneId: 'cam' })
+    await r.playScript([{ type: 'advance' }])
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
+
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'ghost', flags: { restored: boolFlag(true) } }))
+
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
   })
 
   // ===== E. 境界値 =====
@@ -782,5 +823,34 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
 
     expect(warnSpy).not.toHaveBeenCalled()
     expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  // ===== O. #681 カメラモードの fluid 再マウント引き継ぎ =====
+  //
+  // fluid（`aspect_ratio: auto`）で画面幅が向きカテゴリを跨ぐと NovelPlayer は新しい
+  // aspectRatio で NovelRenderer を作り直し、旧 renderer の getSnapshot() を新 renderer の
+  // restoreSnapshot() へそのまま渡す (#442)。cameraMode/cameraOrientation も他のフィールド
+  // （backgroundPath 等）と同じ applyState 経由の単純代入であることを、T-F 系と同じ
+  // 2-renderer 間の restoreSnapshot で検証する。
+
+  it('O1: fluid 再マウント（aspectRatio が異なる新 renderer への restoreSnapshot）で cameraMode/cameraOrientation が引き継がれる', () => {
+    const oldR = new NovelRenderer({ aspectRatio: '16:9' })
+    muteAudio(oldR)
+    oldR.setScenes(SCENES)
+    oldR.restoreSnapshot(
+      craftSnapshot({ sceneId: 'a', cameraMode: 'Theater', cameraOrientation: 'Stage' })
+    )
+    const oldSnapshot = oldR.getSnapshot()
+    expect(oldSnapshot.cameraMode).toBe('Theater')
+    expect(oldSnapshot.cameraOrientation).toBe('Stage')
+
+    // fluid remount: 新しい aspectRatio の renderer インスタンスへ旧 snapshot をそのまま渡す
+    const newR = new NovelRenderer({ aspectRatio: '9:16' })
+    muteAudio(newR)
+    newR.setScenes(SCENES)
+    newR.restoreSnapshot(oldSnapshot)
+
+    expect(newR.getSnapshot().cameraMode).toBe('Theater')
+    expect(newR.getSnapshot().cameraOrientation).toBe('Stage')
   })
 })

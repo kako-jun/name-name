@@ -1226,6 +1226,25 @@ describe('saveSlotToGameState', () => {
     const data: SaveSlotData = { ...baseData(), backgroundColor: '#abc' }
     expect(saveSlotToGameState(data, null).backgroundColor).toBe('#abc')
   })
+
+  // 16 / CAM1: cameraMode/cameraOrientation を持たない（旧形式セーブ相当）入力 →
+  // ?? による後方互換フォールバックで Novel/Audience に倒れ、例外も投げない (#681)。
+  // baseData() はもともと cameraMode/cameraOrientation を持たないため、欠落＝旧セーブと同じ。
+  it('CAM1: cameraMode/cameraOrientation 無しの入力（旧形式セーブ）→ Novel/Audience にフォールバックし例外を投げない', () => {
+    const data = baseData()
+    expect(() => saveSlotToGameState(data, null)).not.toThrow()
+    const state = saveSlotToGameState(data, null)
+    expect(state.cameraMode).toBe('Novel')
+    expect(state.cameraOrientation).toBe('Audience')
+  })
+
+  // CAM2: cameraMode/cameraOrientation 指定ありはそのまま透過する（BG7 と対の確認）。
+  it('CAM2: cameraMode=Theater/cameraOrientation=Stage 指定あり → そのまま透過する', () => {
+    const data: SaveSlotData = { ...baseData(), cameraMode: 'Theater', cameraOrientation: 'Stage' }
+    const state = saveSlotToGameState(data, null)
+    expect(state.cameraMode).toBe('Theater')
+    expect(state.cameraOrientation).toBe('Stage')
+  })
 })
 
 // ===== #273: parseColorToNumber 移設の非回帰（novelLayout から直 import）=====
