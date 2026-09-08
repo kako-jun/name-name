@@ -1645,7 +1645,8 @@ fn parse_event_image_exit_directive(content: &str) -> Event {
     Event::EventImageExit { fade_ms }
 }
 
-/// `[カメラ: <mode>]` / `[カメラ: <mode>, 向き: <orientation>]` を解釈する (#681)。
+/// `[カメラ: <mode>]` / `[カメラ: <mode>, 向き: <orientation>, 仰角: <elevation>]` を解釈する
+/// (#681/#682)。
 ///
 /// mode: `"シアター"` のときだけ `CameraMode::Theater`。それ以外（`"ノベル"`・省略・未知値）は
 /// `CameraMode::Novel` にフォールバックする（`dialog_style`/`Blackout` と同じ後方互換パターン）。
@@ -1653,6 +1654,11 @@ fn parse_event_image_exit_directive(content: &str) -> Event {
 /// orientation: `mode` が `Theater` のときだけ解釈する（`Novel` のときは `向き:` があっても無視し
 /// 常に `None`）。`向き: 舞台` のときだけ `Some(CameraOrientation::Stage)`。それ以外
 /// （`向き: 客席`・省略・未知値）は `None`（= 客席相当、既定）にフォールバックする。
+///
+/// elevation: `orientation` と同じ扱い。`mode` が `Theater` のときだけ解釈する（`Novel` のときは
+/// `仰角:` があっても無視し常に `None`）。`仰角: 見上げ` は `Some(CameraElevation::LookUp)`、
+/// `仰角: 見下ろし` は `Some(CameraElevation::LookDown)`。それ以外（`仰角: 水平`・省略・未知値）は
+/// `None`（= 水平相当、既定）にフォールバックする。
 fn parse_camera_mode_directive(content: &str) -> Event {
     let mut parts = content.split(',');
     let mode = match parts.next().unwrap_or("").trim() {
@@ -1661,17 +1667,29 @@ fn parse_camera_mode_directive(content: &str) -> Event {
     };
 
     let mut orientation = None;
+    let mut elevation = None;
     if mode == CameraMode::Theater {
         for part in parts {
-            if let Some(v) = part.trim().strip_prefix("向き:") {
+            let trimmed = part.trim();
+            if let Some(v) = trimmed.strip_prefix("向き:") {
                 if v.trim() == "舞台" {
                     orientation = Some(CameraOrientation::Stage);
+                }
+            } else if let Some(v) = trimmed.strip_prefix("仰角:") {
+                match v.trim() {
+                    "見上げ" => elevation = Some(CameraElevation::LookUp),
+                    "見下ろし" => elevation = Some(CameraElevation::LookDown),
+                    _ => {}
                 }
             }
         }
     }
 
-    Event::CameraMode { mode, orientation }
+    Event::CameraMode {
+        mode,
+        orientation,
+        elevation,
+    }
 }
 
 /// `[テロップ: 本文, 位置=右下, 秒=4, 種別=しおり]` を解釈する (#674)。
@@ -4149,6 +4167,7 @@ title: "test"
             Event::CameraMode {
                 mode: CameraMode::Theater,
                 orientation: None,
+                elevation: None,
             }
         );
         assert_eq!(
@@ -4156,6 +4175,7 @@ title: "test"
             Event::CameraMode {
                 mode: CameraMode::Novel,
                 orientation: None,
+                elevation: None,
             }
         );
         assert_eq!(
@@ -4163,6 +4183,7 @@ title: "test"
             Event::CameraMode {
                 mode: CameraMode::Novel,
                 orientation: None,
+                elevation: None,
             }
         );
     }
@@ -4180,6 +4201,7 @@ title: "test"
             Event::CameraMode {
                 mode: CameraMode::Theater,
                 orientation: None,
+                elevation: None,
             }
         );
         assert_eq!(
@@ -4187,6 +4209,7 @@ title: "test"
             Event::CameraMode {
                 mode: CameraMode::Theater,
                 orientation: Some(CameraOrientation::Stage),
+                elevation: None,
             }
         );
         assert_eq!(
@@ -4194,6 +4217,7 @@ title: "test"
             Event::CameraMode {
                 mode: CameraMode::Novel,
                 orientation: None,
+                elevation: None,
             }
         );
     }
@@ -4220,6 +4244,7 @@ title: "test"
             Event::CameraMode {
                 mode: CameraMode::Theater,
                 orientation: None,
+                elevation: None,
             }
         );
     }
@@ -4237,6 +4262,7 @@ title: "test"
             Event::CameraMode {
                 mode: CameraMode::Novel,
                 orientation: None,
+                elevation: None,
             }
         );
     }
@@ -4271,10 +4297,12 @@ title: "test"
         let text_with_bogus_orientation = emit_single_camera_event(Event::CameraMode {
             mode: CameraMode::Novel,
             orientation: Some(CameraOrientation::Stage),
+            elevation: None,
         });
         let text_with_none = emit_single_camera_event(Event::CameraMode {
             mode: CameraMode::Novel,
             orientation: None,
+            elevation: None,
         });
 
         assert_eq!(
@@ -4294,12 +4322,118 @@ title: "test"
             Event::CameraMode {
                 mode: CameraMode::Novel,
                 orientation: None,
+                elevation: None,
             }
         );
         let re_emitted = emit(&reparsed);
         assert_eq!(
             re_emitted, text_with_bogus_orientation,
             "修正後は1回目の emit の時点で既に安定形になっているため、再emit しても変化しない"
+        );
+    }
+
+    #[test]
+    fn parses_camera_mode_elevation() {
+        // 仰角指定 (#682)。水平/省略/未知値は None、見上げ/見下ろしのみそれぞれ Some。
+        // Novel モードでは 仰角: が付いていても無視される（向き: と同じ扱い）。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 仰角: 水平]\n[カメラ: シアター, 仰角: 見上げ]\n[カメラ: シアター, 仰角: 見下ろし]\n[カメラ: ノベル, 仰角: 見上げ]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 4);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+                elevation: None,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+                elevation: Some(CameraElevation::LookUp),
+            }
+        );
+        assert_eq!(
+            events[2],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+                elevation: Some(CameraElevation::LookDown),
+            }
+        );
+        assert_eq!(
+            events[3],
+            Event::CameraMode {
+                mode: CameraMode::Novel,
+                orientation: None,
+                elevation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_camera_mode_orientation_and_elevation_combined() {
+        // 向き と 仰角 は独立した第2軸として同時指定できる (#682)。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 舞台, 仰角: 見上げ]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: Some(CameraOrientation::Stage),
+                elevation: Some(CameraElevation::LookUp),
+            }
+        );
+    }
+
+    #[test]
+    fn camera_mode_elevation_roundtrip() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 舞台, 仰角: 見下ろし]\n[カメラ: シアター, 仰角: 見上げ]\n[カメラ: ノベル]\n";
+        let doc1 = parse(input);
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "camera elevation round-trip should be stable");
+    }
+
+    // #682: emitter.rs は orientation と同じ非対称 round-trip パターンを踏襲する
+    // （match (mode, elevation) で mode も併せて判定、#681 の教訓を最初から反映）。
+    // mode=Novel なら elevation の値に関わらず 仰角: を出力しない。
+    #[test]
+    fn camera_mode_emitter_ignores_elevation_when_mode_is_not_theater() {
+        use crate::emitter::emit;
+
+        fn emit_single_camera_event(event: Event) -> String {
+            let base =
+                "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: ノベル]\n";
+            let mut doc = parse(base);
+            doc.chapters[0].scenes[0].events[0] = event;
+            emit(&doc)
+        }
+
+        let text_with_bogus_elevation = emit_single_camera_event(Event::CameraMode {
+            mode: CameraMode::Novel,
+            orientation: None,
+            elevation: Some(CameraElevation::LookUp),
+        });
+        let text_with_none = emit_single_camera_event(Event::CameraMode {
+            mode: CameraMode::Novel,
+            orientation: None,
+            elevation: None,
+        });
+
+        assert_eq!(
+            text_with_bogus_elevation, text_with_none,
+            "mode=Novel の出力は elevation の値に関わらず同じテキストになるべき（仰角: を出力しない）"
+        );
+        assert!(
+            !text_with_bogus_elevation.contains("仰角:"),
+            "mode=Novel のときに 仰角: が出力されてはいけない"
         );
     }
 
