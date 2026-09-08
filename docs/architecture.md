@@ -979,11 +979,11 @@ MapEditor/NPCEditor の変更
 - `rpgProjectFromDoc(doc, sceneId?)` — doc → RPGProject（マップが無ければ null）
 - `applyRpgProjectToDoc(doc, project, sceneId)` — RPGProject → doc（既存シーンの RPG 要素を置換、無ければ新シーン追加）
 
-## シアターモード構想（基盤実装済み・描画は未実装）
+## シアターモード構想（カメラ基盤・背景板の depth 配置まで実装済み）
 
 舞台/漫才向けの制約付き制作ゲーム「絶対もっといいセリフあったよな」のための、カメラ・舞台演出の設計。既存の `dialog_style`（`adv`/`novel`, #283）・`split_layout`（Gymnasia向け, #442）と同じく、既存の2択を置き換えずに**独立した per-game 設定軸を積み重ねる**方針に倣う。おぐらじあの計画中のコミック風表示も同じ並びの軸になる想定（4つ目）。シアター/舞台は5つ目としてこの並びに合流する。
 
-**実装状況 (#681/#682)**: `Event::CameraMode { mode: Novel|Theater, orientation: Option<Audience|Stage>, elevation: Option<LookUp|LookDown> }`（parser）・`NovelGameState.cameraMode`/`cameraOrientation`/`cameraElevation`（GameState 側 settled state、save/seek/任意局面起動で復元可能）・`computeCameraProjection(mode, orientation, elevation, depth)`（`frontend/src/game/cameraProjection.ts`、純粋関数、novel は identity・theater は depth に応じた縮小スケールと、仰角（後述）に応じた `verticalOffset` を返す）まで実装済み。**未実装**なのは、背景板・大道具・キャラへの実際の depth 値付与と、それを `computeCameraProjection` に通して得た scale・verticalOffset を実際の座標に反映する描画配線（下記「舞台構造」「レイヤーモデル」節の内容全般）・向き（客席/舞台）反転時の座標系。これらは #683 以降のスコープ。
+**実装状況 (#681/#682/#683)**: `Event::CameraMode { mode: Novel|Theater, orientation: Option<Audience|Stage>, elevation: Option<LookUp|LookDown> }`（parser）・`NovelGameState.cameraMode`/`cameraOrientation`/`cameraElevation`（GameState 側 settled state、save/seek/任意局面起動で復元可能）・`computeCameraProjection(mode, orientation, elevation, depth)`（`frontend/src/game/cameraProjection.ts`、純粋関数、novel は identity・theater は depth に応じた縮小スケールと、仰角（後述）に応じた `verticalOffset` を返す）まで実装済み。#683 でこの関数が初めて実際の描画に配線された: `Event::BackgroundBoard { path, depth }`（parser、`[背景板: path, depth: N]`）・`NovelGameState.backgroundBoards`（settled state、save/seek/任意局面起動で復元可能）・`BackgroundBoardLayer`（`frontend/src/game/BackgroundBoardLayer.ts`、`computeCameraProjection` の scale/verticalOffset を `novelLayout.computeBoardPlacement` で実座標に変換し、`novelLayout.computeBoardSlideInOffset` で追加時の「上から降りてくる」演出を行う）まで実装済み（下記「舞台構造」節）。**未実装**なのは、大道具・キャラへの depth 値付与と射影反映（下記「レイヤーモデル」節）・向き（客席/舞台）反転時の座標系。これらは #683 以降のスコープ。
 
 実装方針: せおはやみで確立した「話者ターンごとの立ち絵差し替え」機構（`CharacterLayer` / 話者タグ）の延長として作る。台本フォーマット・話者切り替えロジックは共通のまま、表示層（描画・射影・モーション）だけを差し替える。台本や `resolveEvents` の構造を新設計にしない。
 
@@ -1006,7 +1006,7 @@ MapEditor/NPCEditor の変更
 
 演出としても使える（例: 作中劇オチでモードをシアターに切り替え、客席が見える）。
 
-### 舞台構造
+### 舞台構造（実装済み・#683）
 
 背景は1枚ではなく、本物の舞台のように**複数枚の板が異なる奥行きに吊られている**:
 
@@ -1016,9 +1016,10 @@ MapEditor/NPCEditor の変更
 [背景板: 木.png, depth: 4]     # 前景
 ```
 
-- 板は上から降りてくるアニメーションで切り替わる（場面転換）
-- ノベルモードでは全部正面に重なるだけ（従来の背景切り替えと同じ）
-- シアターモードでは遠近法で奥行き差が見える
+- 既存の単一スロット背景（`[背景:]`/`Event::Background`）とは完全に独立した加算的な仕組み。1シーン内に複数書けば、それぞれ別の板として `BackgroundBoardLayer` に蓄積される（構文の詳細は `docs/spec/markdown-v0.1.md`「背景板（舞台構造）」節を参照）
+- 板の追加時は「上から降りてくる」tween アニメーションで登場する（`novelLayout.computeBoardSlideInOffset`、既定 600ms）。場面転換自体に専用の退場演出は無く、`[場面転換]` で既存の単一スロット背景と同じタイミングで即座にクリアされる
+- ノベルモードでは `computeCameraProjection` が常に `scale=1` を返すため、全部原寸で正面に重なるだけになる（従来の背景切り替えと同じ見た目、自動的に後方互換）
+- シアターモードでは depth に応じて `scale` が縮小し、遠近法で奥行き差が見える（depth が大きいほど画面中心を基準に小さく表示される）
 
 ### カメラの向き・仰角
 
