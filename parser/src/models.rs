@@ -81,6 +81,19 @@ pub enum CameraOrientation {
     Stage,
 }
 
+/// シアターモードのカメラ仰角 (#682)。既定は水平（`None`、正面固定・従来通り）。`LookUp` は
+/// 見上げ（斜め下から見上げるアングル、力強さ・迫力）、`LookDown` は見下ろし（斜め上から
+/// 見下ろすアングル、俯瞰・儚さ）。`CameraMode::Novel` では意味を持たない（常に無視される）。
+/// `向き`（客席/舞台）とは独立した第2軸（docs/architecture.md「シアターモード構想」）。
+/// `[カメラ: シアター, 仰角: 見上げ]` / `[カメラ: シアター, 仰角: 見下ろし]`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum CameraElevation {
+    LookUp,
+    LookDown,
+}
+
 /// イベント絵の背面（背景・立ち絵）扱い (#351)。既定は `Hide`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
@@ -625,16 +638,21 @@ pub enum Event {
     Blackout {
         action: BlackoutAction,
     },
-    /// カメラモード切り替え (#681)。`[カメラ: シアター]` / `[カメラ: ノベル]`。
+    /// カメラモード切り替え (#681/#682)。`[カメラ: シアター]` / `[カメラ: ノベル]`。
     /// `orientation` は `mode == Theater` のときだけ意味を持つ（`向き: 客席` / `向き: 舞台`）。
     /// `None` = 客席（既定・orientation 省略/未知値/`Novel` モード時の正規形）、
     /// `Some(Stage)` = 明示的に舞台向き（逆転）を指定したときだけ。
-    /// 未知値・省略は Novel/客席にフォールバックする（`dialog_style`/`Blackout` と同じ
+    /// `elevation` も同様に `mode == Theater` のときだけ意味を持つ（`仰角: 見上げ` / `仰角: 見下ろし`）。
+    /// `None` = 水平（既定・仰角省略/未知値/`Novel` モード時の正規形）、
+    /// `Some(LookUp)`/`Some(LookDown)` = 明示的に見上げ/見下ろしを指定したときだけ。
+    /// 未知値・省略は Novel/客席/水平にフォールバックする（`dialog_style`/`Blackout` と同じ
     /// 後方互換パターン）。
     CameraMode {
         mode: CameraMode,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         orientation: Option<CameraOrientation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        elevation: Option<CameraElevation>,
     },
     SceneTransition,
     /// 手動改頁マーカー (#292 Phase 2)。本文中の単独行 `---` から生成される。
