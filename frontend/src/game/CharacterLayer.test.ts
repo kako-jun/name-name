@@ -27,6 +27,13 @@ interface FadeAnimationLike {
   destroyOnComplete: boolean
 }
 
+interface StageMotionLike {
+  kind: 'enter' | 'exit'
+  direction: 'Kamite' | 'Shimote'
+  durationMs: number
+  baseX: number
+}
+
 interface CharacterStateLike {
   sprite: {
     alpha: number
@@ -37,6 +44,7 @@ interface CharacterStateLike {
     texture?: { source?: { scaleMode?: string } }
   }
   fadeAnimation: FadeAnimationLike | null
+  stageMotion?: StageMotionLike | null
   snapshotHidden?: boolean
   attached?: boolean
 }
@@ -152,6 +160,88 @@ describe('CharacterLayer fade (Issue #177)', () => {
     expect(fade.toAlpha).toBe(0)
     expect(fade.durationMs).toBe(700) // #407 で 300→700
     expect(fade.durationMs).toBe(BACKGROUND_CROSSFADE_MS)
+  })
+})
+
+describe('CharacterLayer 入場・退場の方向モーション（Issue #684）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('show() に enterDirection を渡すと、texture 読込後に fadeAnimation ではなく stageMotion(kind=enter) が立つ（alpha は即 1）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { enterDirection: 'Kamite' })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    // フェードではなく移動だけで見せる演出なので、alpha は最初から 1（#684 の意図）。
+    expect(state!.sprite.alpha).toBe(1)
+    // 開始位置は画面外（上手 = 右端の外側 = targetX(400) + screenWidth(800) = 1200）。
+    expect(state!.sprite.x).toBe(1200)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(state!.fadeAnimation).toBeNull()
+    expect(state!.stageMotion).not.toBeNull()
+    expect(state!.stageMotion!.kind).toBe('enter')
+    expect(state!.stageMotion!.direction).toBe('Kamite')
+    expect(state!.stageMotion!.baseX).toBe(400) // targetX（中央）
+  })
+
+  it('show() に enterDirection を渡しても instant: true なら従来通り即時表示（stageMotion なし）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, enterDirection: 'Shimote' })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.sprite.alpha).toBe(1)
+    expect(state!.sprite.x).toBe(400) // targetX のまま（画面外オフセットなし）
+    expect(state!.stageMotion).toBeFalsy()
+  })
+
+  it('show() に方向引数を渡さなければ従来通りフェード登場になる（後方互換）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets')
+    const state = asInternals(layer).characters.get('hero')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(state!.stageMotion).toBeFalsy()
+    expect(state!.fadeAnimation).not.toBeNull()
+  })
+
+  it('remove() に exitDirection を渡すと、fadeAnimation ではなく stageMotion(kind=exit) が立つ（alpha は 1 のまま）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.remove('hero', { exitDirection: 'Shimote' })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.sprite.alpha).toBe(1)
+    expect(state!.fadeAnimation).toBeNull()
+    expect(state!.stageMotion).not.toBeNull()
+    expect(state!.stageMotion!.kind).toBe('exit')
+    expect(state!.stageMotion!.direction).toBe('Shimote')
+    expect(state!.stageMotion!.baseX).toBe(400) // 退場開始時点の現在位置
+  })
+
+  it('remove() に exitDirection を渡しても instant: true なら従来通り即座に破棄される', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.remove('hero', { instant: true, exitDirection: 'Kamite' })
+    expect(asInternals(layer).characters.has('hero')).toBe(false)
+  })
+
+  it('remove() に方向引数を渡さなければ従来通りフェード退場になる（後方互換）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.remove('hero')
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.stageMotion).toBeFalsy()
+    expect(state!.fadeAnimation).not.toBeNull()
   })
 })
 

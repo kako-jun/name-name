@@ -144,6 +144,10 @@ interface NovelPlayerProps {
   characterScale?: number | null
   /** 立ち絵の新規表示・退場フェード時間 (ms)。frontmatter `character_fade_ms:` から流す。 */
   characterFadeMs?: number | null
+  /** 入場・退場の方向モーション（上手/下手）の徒歩移動所要時間 (ms) (#684)。
+   *  frontmatter `character_move_ms:` から流す。方向引数を指定した `[登場:]`/`[退場:]` にだけ効き、
+   *  従来の瞬間表示/フェードには影響しない。null/undefined は runtime 既定 1400ms。 */
+  characterMoveMs?: number | null
   /** 背景クロスフェード・退場（終劇）フェード時間 (ms) (#407)。frontmatter `background_fade_ms:` から流す。
    *  null/undefined で runtime 既定 700ms（BACKGROUND_CROSSFADE_MS）＝後方互換。 */
   backgroundFadeMs?: number | null
@@ -271,6 +275,7 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
     characterHeightRatios,
     characterScale,
     characterFadeMs,
+    characterMoveMs,
     backgroundFadeMs,
     eventImageFadeMs,
     eventImageTransitionDefault,
@@ -700,6 +705,9 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       renderer.setCharacterScale(characterScale ?? null)
       // 立ち絵フェード時間。初回 show より前に設定し、ToHeart 式のじわっとした登場を作品単位で調整する。
       renderer.setCharacterFadeMs(characterFadeMs ?? null)
+      // 入場・退場の方向モーション（上手/下手）の徒歩移動所要時間 (#684)。characterFadeMs と同じく
+      // 初回 show より前に設定する（方向引数を指定した [登場:]/[退場:] にだけ効く）。
+      renderer.setCharacterMoveMs(characterMoveMs ?? null)
       // 背景フェード時間 (#407)。初回背景表示より前に設定し、背景の表示（イン）・切り替え・退場（アウト）を
       // 作品単位で調整する（未指定なら既定 700ms＝BACKGROUND_CROSSFADE_MS で非回帰）。
       renderer.setBackgroundFadeMs(backgroundFadeMs ?? null)
@@ -935,6 +943,11 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
   useEffect(() => {
     rendererRef.current?.setCharacterFadeMs(characterFadeMs ?? null)
   }, [characterFadeMs])
+
+  // characterMoveMs が変化したときに renderer に反映 (#684)
+  useEffect(() => {
+    rendererRef.current?.setCharacterMoveMs(characterMoveMs ?? null)
+  }, [characterMoveMs])
 
   // backgroundFadeMs が変化したときに renderer に反映 (#407)
   useEffect(() => {

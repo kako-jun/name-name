@@ -2346,6 +2346,15 @@ export class NovelRenderer {
   }
 
   /**
+   * 入場・退場の方向モーション（上手/下手）の徒歩移動所要時間を設定する (#684)。
+   * frontmatter `character_move_ms:` の値（ms）を渡す。null/undefined のときは既定 1400ms。
+   * 方向引数を指定した `[登場:]`/`[退場:]` にだけ効く（従来の瞬間表示/フェードには影響しない）。
+   */
+  setCharacterMoveMs(ms: number | null | undefined): void {
+    this.characterLayer.setCharacterMoveMs(ms ?? null)
+  }
+
+  /**
    * 背景クロスフェード・退場（終劇）フェード時間を設定する (#407)。
    * frontmatter `background_fade_ms:` の値（ms）を渡す。null/undefined/非有限のときは既定
    * `BACKGROUND_CROSSFADE_MS`（700ms）にフォールバックし、範囲外は [0, 5000] にクランプする
@@ -4252,9 +4261,14 @@ export class NovelRenderer {
     }
     if ('Exit' in event) {
       // スキップモード中はフェードを抑制して即時退場（既読を素早く流す UX に揃える）#177
+      // 方向モーション (#684): シアターモードのときだけ方向引数を反映する。ノベルモードでは
+      // 無視して従来通りのフェード退場にフォールバックする（#681 の cameraMode を参照して分岐）。
+      const exitDirection =
+        this.cameraMode === 'Theater' ? (event.Exit.exit_direction ?? undefined) : undefined
       this.characterLayer.remove(event.Exit.character, {
         instant: this.skipMode,
         durationMsOverride: event.Exit.fade_ms ?? undefined,
+        exitDirection,
       })
       return
     }
@@ -4266,13 +4280,18 @@ export class NovelRenderer {
       // expression / position / character が揃っていない不完全な指定は showCharacterFromDialog の
       // 実表示ガードに揃えて silent skip（立ち絵を出さない）。
       // 冪等: 同一 name/expression/position/fit の再宣言は CharacterLayer.show 側の no-op ガードで無効。
-      const { character, expression, position, fit } = event.Enter
+      const { character, expression, position, fit, enter_direction } = event.Enter
       if (character && expression && position) {
         const xRatio = this.resolveNovelRoleXRatio(character)
+        // 方向モーション (#684): シアターモードのときだけ方向引数を反映する。ノベルモードでは
+        // 無視して従来通りの瞬間表示/フェード登場にフォールバックする。
+        const enterDirection =
+          this.cameraMode === 'Theater' ? (enter_direction ?? undefined) : undefined
         this.characterLayer.show(character, expression, position, this.assetBaseUrl, {
           instant: this.skipMode,
           xRatio,
           fit: fit === true,
+          enterDirection,
         })
       }
       return

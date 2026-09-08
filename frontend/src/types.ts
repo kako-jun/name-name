@@ -18,6 +18,11 @@ export type CameraMode = 'Novel' | 'Theater'
 /** シアターモードのカメラの向き (#681)。既定は 'Audience'（客席視点）。'Stage' は逆転
  *  （演者の背中越しに客席が見える構図）。`CameraMode` が 'Novel' のときは意味を持たない。 */
 export type CameraOrientation = 'Audience' | 'Stage'
+/** 舞台方向（上手/下手） (#684)。入場・退場モーションの向き。客席から見て舞台向かって右側が
+ *  「上手」(Kamite)、左側が「下手」(Shimote)。画面座標では 上手=画面右端の外側 /
+ *  下手=画面左端の外側（`computeStageMotionOffset`（`game/novelLayout.ts`）が解釈する）。
+ *  `[登場: 名前, 上手から]` / `[退場: 名前, 下手へ]` から流れる。 */
+export type StageDirection = 'Kamite' | 'Shimote'
 /** イベント絵の背面（背景・立ち絵）扱い (#351)。既定は 'Hide' */
 export type EventImageBack = 'Hide' | 'Keep'
 /** イベント絵の遷移モード (#583)。既定は 'Fade'（既存の透明度フェード、非回帰）。
@@ -345,6 +350,10 @@ export type Event =
         character: string
         /** この退場だけのフェードアウト時間 ms。未指定/null は character_fade_ms または runtime 既定 */
         fade_ms?: number | null
+        /** 退場の方向モーション (#684)。指定時は舞台上を指定方向へ歩いて去る演出になる。
+         *  未指定/null は従来通りのフェード退場（後方互換）。ノベルモードでは無視してフェードに
+         *  フォールバックする。 */
+        exit_direction?: StageDirection | null
       }
     }
   /**
@@ -360,6 +369,10 @@ export type Event =
         expression?: string | null
         position?: string | null
         fit?: boolean
+        /** 登場の方向モーション (#684)。指定時は舞台上を指定方向から歩いて入る演出になる。
+         *  未指定/null は従来通りの瞬間表示/フェード登場（後方互換）。ノベルモードでは無視して
+         *  フェードにフォールバックする。 */
+        enter_direction?: StageDirection | null
       }
     }
   | { Wait: { ms: number } }
@@ -611,6 +624,13 @@ export interface EventDocument {
   /** 立ち絵の新規表示・退場フェード時間 (ms)。
    *  null/undefined のときは runtime 既定 700ms（後方互換）。frontmatter `character_fade_ms:` から流す。 */
   character_fade_ms?: number | null
+  /** 入場・退場の方向モーション（上手/下手）の徒歩移動所要時間 (ms) (#684)。
+   *  `[登場: 名前, 上手から]` / `[退場: 名前, 下手へ]` で方向引数を指定したときだけ使う
+   *  （方向引数なしの従来の瞬間表示/フェードには影響しない）。character_fade_ms と同系統の
+   *  per-game 設定だが、徒歩移動はフェードより長めが自然なため既定値は別（runtime 既定 1400ms）。
+   *  null/undefined のときは runtime 既定。runtime では [0, 5000] にクランプする。
+   *  引用符なしの数値で書く（`character_move_ms: 1400`）。frontmatter `character_move_ms:` から流す。 */
+  character_move_ms?: number | null
   /** 背景クロスフェード・退場（終劇）フェード時間 (ms) (#407)。character_fade_ms と対称の per-game 設定。
    *  背景の表示（イン）・切り替え（クロスフェード）・退場（アウト）すべてこの時間で動く。
    *  null/undefined のときは runtime 既定 700ms（現行 BACKGROUND_CROSSFADE_MS＝後方互換）。

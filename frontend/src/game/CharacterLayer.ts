@@ -6,7 +6,7 @@
 
 import { Assets, Container, Graphics, Sprite, Text, Texture, TextStyle, Ticker } from 'pixi.js'
 import { PixelateFilter } from 'pixi-filters'
-import type { Easing, EventImageTransition } from '../types'
+import type { Easing, EventImageTransition, StageDirection } from '../types'
 import { applyEasing, resolveDelta } from './easing'
 import { ensureFontLoaded } from './FontLoader'
 import {
@@ -42,6 +42,7 @@ import {
 // 色パーサ・2D 位置・URL 解決は novelLayout.ts（色/幾何の純関数置き場）に集約 (#273 / #274)。
 import {
   clampFadeMs,
+  computeStageMotionOffset,
   parseColorToNumber,
   resolvePositionWithOverride,
   resolveAssetUrl,
@@ -495,6 +496,14 @@ interface CharacterState {
    * 事故を防ぐ。false（未着手/失敗済み）のときだけ再ロードする。
    */
   imageLoadPending?: boolean
+  /**
+   * 入場・退場の方向モーション（上手/下手）の進行状態 (#684)。`fadeAnimation`（alpha 専用）とは
+   * 別軸で、`sprite.x` だけを歩行アニメーションとして動かす。`[登場: 名前, 上手から]` /
+   * `[退場: 名前, 下手へ]` で方向引数を明示したときだけ生成される（引数なしは従来通り
+   * `fadeAnimation` を使う）。値の計算は `computeStageMotionOffset`（`novelLayout.ts`）に集約する。
+   * showLabel/showImage/showTitle 等の render-only 要素では使わないため optional にしてある。
+   */
+  stageMotion?: StageMotionAnimation | null
 }
 
 /**
@@ -535,6 +544,26 @@ interface FadeAnimation {
 }
 
 /**
+ * 入場・退場の方向モーション（上手/下手）の進行状態 (#684)。
+ *
+ * `fadeAnimation` と同じ ticker 駆動パターンだが、対象は `sprite.x`（alpha は常に 1）。
+ * `kind: 'enter'` は `baseX`（静止位置=targetX）へ向かって画面外から歩いて入る、
+ * `kind: 'exit'` は `baseX`（退場開始時点の元位置）から画面外へ歩いて去る。
+ * 実際のオフセット計算は `computeStageMotionOffset`（`novelLayout.ts`）に委ねる純粋計算で、
+ * ここでは「いつ・どの sprite に当てるか」だけを保持する（規律4: 計算はレンダラ本体に直書きしない）。
+ */
+interface StageMotionAnimation {
+  kind: 'enter' | 'exit'
+  direction: StageDirection
+  startMs: number
+  durationMs: number
+  /** 静止位置の x（enter: 到達先 / exit: 退場前の元位置）。 */
+  baseX: number
+  /** exit 完了後のローカル hook（`remove()` の `onComplete`）。GameState には出さない。 */
+  onComplete?: () => void
+}
+
+/**
  * 話者交代のポーズ変化 (#286)。
  *
  * 名札を出さない novel スタイルで「今この人が喋っている」を立ち絵で示すための、軽い自己復帰アニメ。
@@ -565,6 +594,17 @@ interface PoseNudge {
 const DEFAULT_FADE_MS = 700
 const CHARACTER_FADE_MS_MIN = 0
 const CHARACTER_FADE_MS_MAX = 5_000
+
+/**
+ * 入場・退場の方向モーション（上手/下手）の徒歩移動デフォルト所要時間 (ms) (#684)。
+ * 仕様書 docs/spec/markdown-v0.1.md と数値を揃えて変更する。
+ * `character_fade_ms` 既定 700ms より長めにする（「フェード時間の推奨3値」の長め=1400 を採用。
+ * 徒歩移動はフェードより間を持たせた方が自然）。`character_move_ms` 未指定の全作品の
+ * 方向モーションがこの時間になる。
+ */
+const DEFAULT_MOVE_MS = 1400
+const CHARACTER_MOVE_MS_MIN = 0
+const CHARACTER_MOVE_MS_MAX = 5_000
 
 /**
  * タイトルカード補助要素（ラベル / 画像 #274）のフェードイン時間 (ms)。
@@ -716,6 +756,9 @@ export class CharacterLayer extends Container {
   private characterScale: number | null = null
   /** 立ち絵の新規表示・退場フェード時間（ms）。frontmatter `character_fade_ms` 由来。 */
   private characterFadeMs: number = DEFAULT_FADE_MS
+  /** 入場・退場の方向モーション（上手/下手）の徒歩移動所要時間（ms） (#684)。
+   *  frontmatter `character_move_ms` 由来。方向引数を指定した `[登場:]`/`[退場:]` にだけ効く。 */
+  private characterMoveMs: number = DEFAULT_MOVE_MS
   /** auto-scale 計算のために screenWidth / screenHeight を保持 */
   private readonly screenWidth: number
   private readonly screenHeight: number
@@ -1008,6 +1051,19 @@ export class CharacterLayer extends Container {
     )
   }
 
+  /**
+   * 入場・退場の方向モーション（上手/下手）の徒歩移動所要時間を per-game 値で上書きする (#684)。
+   * null/undefined/非有限値は既定 1400ms、範囲外は [0, 5000] にクランプする（setCharacterFadeMs と対称）。
+   */
+  setCharacterMoveMs(ms: number | null | undefined): void {
+    this.characterMoveMs = clampFadeMs(
+      ms,
+      DEFAULT_MOVE_MS,
+      CHARACTER_MOVE_MS_MIN,
+      CHARACTER_MOVE_MS_MAX
+    )
+  }
+
   private createPortraitState(
     character: string,
     expression: string,
@@ -1098,6 +1154,31 @@ export class CharacterLayer extends Container {
       fromAlpha,
       toAlpha,
       destroyOnComplete,
+      onComplete,
+    }
+    this.ensureTicker()
+  }
+
+  /**
+   * 入場・退場の方向モーション（上手/下手）を開始する (#684)。`startFade` と対の役割で、
+   * `sprite.x` だけを `characterMoveMs` かけて tween する（alpha は変更しない）。
+   * `kind: 'enter'` は `baseX`（= targetX）を到達先、`kind: 'exit'` は `baseX`（= 退場開始時点の
+   * 現在位置）を出発点として扱う。実際のオフセット計算はティッカー側で `computeStageMotionOffset`
+   * （`novelLayout.ts`）を呼んで行う（規律4: 計算をレンダラ本体に直書きしない）。
+   */
+  private startStageMotion(
+    state: CharacterState,
+    kind: 'enter' | 'exit',
+    direction: StageDirection,
+    baseX: number,
+    onComplete?: () => void
+  ): void {
+    state.stageMotion = {
+      kind,
+      direction,
+      startMs: this.elapsedMs,
+      durationMs: this.characterMoveMs,
+      baseX,
       onComplete,
     }
     this.ensureTicker()
@@ -1215,7 +1296,16 @@ export class CharacterLayer extends Container {
     expression: string,
     position: string,
     assetBaseUrl: string,
-    options?: { instant?: boolean; xRatio?: number; fit?: boolean; onReady?: () => void }
+    options?: {
+      instant?: boolean
+      xRatio?: number
+      fit?: boolean
+      onReady?: () => void
+      /** 登場の方向モーション (#684)。指定時（かつ !instant）は新規表示だけフェードの代わりに
+       *  画面外からの歩行 tween になる。既存キャラの再 show（表情/位置変更）には効かない
+       *  （新規登場のみのスコープ、`[登場: 名前, 方向]` タグの意図に合わせる）。 */
+      enterDirection?: StageDirection
+    }
   ): void {
     // onReady (#293): 立ち絵の用意（テクスチャ load 完了／texture 不要な早期 return）が済んだら
     // 1回だけ呼ぶフック。NovelRenderer が forward novel でテキスト reveal をこの完了に揃え、
@@ -1362,7 +1452,14 @@ export class CharacterLayer extends Container {
       return
     }
 
-    const shouldFade = !instant && this.characterFadeMs > 0
+    // 登場の方向モーション (#684)。新規表示（このブランチ）だけのスコープ（既存キャラの再 show
+    // には効かせない、`[登場: 名前, 方向]` タグの意図に合わせる）。instant / characterMoveMs<=0 なら
+    // 従来通りのフェード（または即時表示）にフォールバックする。walkDirection への代入で
+    // StageDirection | undefined を確定させ、以降は walkDirection の truthy チェックだけで
+    // TypeScript が narrowing できるようにする。
+    const walkDirection: StageDirection | undefined =
+      !instant && this.characterMoveMs > 0 ? options?.enterDirection : undefined
+    const shouldFade = !instant && !walkDirection && this.characterFadeMs > 0
     const state = this.createPortraitState(
       character,
       expression,
@@ -1373,6 +1470,18 @@ export class CharacterLayer extends Container {
       shouldFade ? 0 : 1,
       false
     )
+    if (walkDirection) {
+      // createPortraitState は sprite.x=targetX（静止位置）で作るため、歩行開始位置（画面外）へ
+      // 上書きする。alpha は 1 のまま（フェードではなく移動だけで見せる演出）。
+      const startOffset = computeStageMotionOffset(
+        walkDirection,
+        0,
+        this.characterMoveMs,
+        this.screenWidth
+      )
+      state.sprite.x = targetX + startOffset
+      if (state.label) state.label.x = state.sprite.x
+    }
     this.characters.set(character, state)
     let entranceStarted = false
     let collidersGone = false
@@ -1384,6 +1493,8 @@ export class CharacterLayer extends Container {
       this.attachCharacterState(state)
       if (shouldFade) {
         this.startFade(state, 0, 1, false)
+      } else if (walkDirection) {
+        this.startStageMotion(state, 'enter', walkDirection, targetX)
       }
     }
     const startEntrance = () => {
@@ -2882,10 +2993,12 @@ export class CharacterLayer extends Container {
     state.maskGraphics = undefined
   }
 
-  /** 進行中アニメーション（transform / fade / textEffect / underline いずれか）を持つキャラがいるか */
+  /** 進行中アニメーション（transform / fade / stageMotion / textEffect / underline いずれか）を持つキャラがいるか */
   hasActiveAnimation(): boolean {
     for (const s of this.characters.values()) {
-      if (s.animation || s.fadeAnimation || s.poseNudge || s.pixelateState) return true
+      if (s.animation || s.fadeAnimation || s.stageMotion || s.poseNudge || s.pixelateState) {
+        return true
+      }
       if (s.textEffect && this.isTextEffectActive(s.textEffect)) return true
       if (s.underline && this.isUnderlineActive(s.underline)) return true
     }
@@ -2893,16 +3006,17 @@ export class CharacterLayer extends Container {
   }
 
   /**
-   * 本物の立ち絵の遷移（transform / fade / pose nudge）が残っているか。
+   * 本物の立ち絵の遷移（transform / fade / 方向モーション / pose nudge）が残っているか。
    *
    * hasActiveAnimation() はタイトル文字演出やカーソル点滅も含むため、本文 reveal の待機条件には
    * 強すぎる。forward novel では「立ち絵が落ち着くまで」だけ待てばよいので renderOnly と
-   * textEffect/underline を除外する。
+   * textEffect/underline を除外する。stageMotion (#684) も同じ「立ち絵が落ち着くまで」の対象
+   * （方向引数ありの登場/退場が完了するまで `[待機: 表示完了]`/次の本文 reveal を待たせる）。
    */
   hasActivePortraitTransition(): boolean {
     for (const s of this.characters.values()) {
       if (s.renderOnly) continue
-      if (s.animation || s.fadeAnimation || s.poseNudge) return true
+      if (s.animation || s.fadeAnimation || s.stageMotion || s.poseNudge) return true
     }
     return false
   }
@@ -2963,6 +3077,40 @@ export class CharacterLayer extends Container {
             state.sprite.rotation = a.fromRotation + (a.toRotation - a.fromRotation) * eased
             const sc = a.fromScale + (a.toScale - a.fromScale) * eased
             state.sprite.scale.set(sc, sc)
+          }
+        }
+
+        // 入場・退場の方向モーション（上手/下手）を毎フレーム純粋計算で駆動する (#684)。
+        // sprite.x のみを動かす（alpha は fadeAnimation の管轄外＝常に 1 のまま）。
+        const sm = state.stageMotion
+        if (sm) {
+          const tm = (this.elapsedMs - sm.startMs) / sm.durationMs
+          if (tm >= 1) {
+            state.stageMotion = null
+            const onComplete = sm.onComplete
+            if (sm.kind === 'exit') {
+              this.destroyCharacterState(state)
+              this.characters.delete(name)
+            } else {
+              state.sprite.x = sm.baseX
+            }
+            onComplete?.()
+          } else {
+            anyActive = true
+            // computeStageMotionOffset は「入場の形」（elapsedMs=0 で画面外いっぱい→durationMs で
+            // 静止位置）を正本とする。退場 (kind='exit') はこの式自体を分岐させず、経過時間を
+            // 反転（durationMs - 実経過ms）して渡すことで同じ式を再利用する（関数の JSDoc 参照）。
+            const elapsedForOffset =
+              sm.kind === 'exit'
+                ? sm.durationMs - (this.elapsedMs - sm.startMs)
+                : this.elapsedMs - sm.startMs
+            const offset = computeStageMotionOffset(
+              sm.direction,
+              elapsedForOffset,
+              sm.durationMs,
+              this.screenWidth
+            )
+            state.sprite.x = sm.baseX + offset
           }
         }
 
@@ -3082,6 +3230,9 @@ export class CharacterLayer extends Container {
    *  - `renderOnly`（Title/Label/Image #274）。これらは立ち絵スロットを占有する標準立ち絵ではなく、
    *    2D 自由配置の演出要素なので位置衝突の対象にしない。
    *  - 既に退場フェード中（fadeAnimation.destroyOnComplete）のキャラ。二重退場を避ける。
+   *  - 既に方向モーションで退場中（stageMotion.kind==='exit'）のキャラ (#684)。同じく二重退場を
+   *    避ける（歩行退場の途中にこの通常フェード退場を重ねて起こすと、歩きながら同時にフェードする
+   *    見た目のグリッチになるため）。
    *
    * 別位置（左のせお等）には x が一致しないため干渉しない。退場は GameState に中間状態を持ち込まず、
    * characters Map から消える（getCharacterStates は退場後の状態を写す）ので、任意局面起動・goBack/seek
@@ -3103,6 +3254,7 @@ export class CharacterLayer extends Container {
       if (name === keepName) continue
       if (state.renderOnly) continue
       if (state.fadeAnimation?.destroyOnComplete) continue
+      if (state.stageMotion?.kind === 'exit') continue
       if (Math.abs(state.sprite.x - targetX) < CharacterLayer.SAME_POSITION_EPSILON) {
         colliders.push(name)
       }
@@ -3135,6 +3287,10 @@ export class CharacterLayer extends Container {
       onComplete?: () => void
       /** このコールだけ characterFadeMs を上書きする (#404 intermission 用)。フィールドは変更しない。 */
       durationMsOverride?: number
+      /** 退場の方向モーション (#684)。指定時（かつ !instant・characterMoveMs>0）はフェードの代わりに
+       *  画面外への歩行 tween になる。`durationMsOverride` はこの経路では無視する（characterMoveMs を使う。
+       *  移動時間の override は #684 スコープ外）。 */
+      exitDirection?: StageDirection
     }
   ): void {
     const state = this.characters.get(character)
@@ -3146,6 +3302,18 @@ export class CharacterLayer extends Container {
     if (state.idleIntervalId) {
       this.time.clearInterval(state.idleIntervalId)
       state.idleIntervalId = undefined
+    }
+    // 方向モーション退場 (#684): instant でなく、方向指定があり、移動時間が正のときだけ歩行退場にする。
+    // それ以外（instant / 方向未指定 / 移動時間0）は従来通りのフェード退場にフォールバックする。
+    if (!instant && options?.exitDirection && this.characterMoveMs > 0) {
+      this.startStageMotion(
+        state,
+        'exit',
+        options.exitDirection,
+        state.sprite.x,
+        options?.onComplete
+      )
+      return
     }
     const durationMs = options?.durationMsOverride ?? this.characterFadeMs
     if (instant || durationMs <= 0) {
@@ -3176,6 +3344,9 @@ export class CharacterLayer extends Container {
       // 含めない (#303)。1 位置 1 キャラの衝突退場で fade-out 中の前キャラがまだ Map に残っていても、
       // セーブ/シーク/任意局面起動の復元で「退場しかけのキャラ」が立ち絵として蘇らないようにする。
       if (state.fadeAnimation?.destroyOnComplete) continue
+      // 方向モーションで退場中（stageMotion.kind==='exit'）のキャラも同じ理由で除外する (#684)。
+      // 復元は常に演出の中間状態を持たない最終確定位置（ADR0002）＝歩行退場中は「もう退場済み」扱い。
+      if (state.stageMotion?.kind === 'exit') continue
       result.push({ name, expression: state.expression, position: state.position })
     }
     return result
