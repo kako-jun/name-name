@@ -1220,33 +1220,50 @@ export class CharacterLayer extends Container {
   }
 
   /**
-   * 退場の方向モーション（`stageMotion.kind === 'exit'`）予約中の同 id 再表示を、歩行退場の
-   * キャンセル→通常の再表示ロジックへの合流に切り替える共通ヘルパー (#684 バグ修正)。
+   * 入場・退場いずれの方向モーション（`stageMotion`、kind を問わない）進行中の同 id 再表示を、
+   * walk のキャンセル→通常の再表示ロジックへの合流に切り替える共通ヘルパー (#684 バグ修正、
+   * PR #688 セルフレビュー must-1 で kind==='enter' も対象に拡張)。
    *
    * `reviveFromExitFade`（fadeAnimation 版）と対の役割。show() の既存キャラ分岐の先頭で
    * 必ず呼ぶ（no-op/textureChanged/positionChanged いずれの後続分岐より前）。
    *
-   * 修正前の挙動（バグ）: `remove()` の方向指定退場は `fadeAnimation` を張らないため、
-   * `reviveFromExitFade` は `existing.fadeAnimation?.destroyOnComplete` を見ても何も検知できず
-   * no-op だった。結果、同じ表情/位置で再 show されると show() 先頭の no-op ガード
-   * （expression/position/fit 一致）に落ちて完全な無反応になり、歩行退場は止まらず最終的に
-   * キャラが破棄される。表情/位置が変わる再 show でも `positionChanged` 分岐が `sprite.x` を
-   * 書き換えた直後、次の ticker フレームで `stageMotion` 処理が `sprite.x` を退場軌道の位置へ
-   * 上書きしてしまい、結局は同じく破棄される。
+   * 修正前の挙動（バグ、kind==='exit' のみ対応していた頃）: `remove()` の方向指定退場は
+   * `fadeAnimation` を張らないため、`reviveFromExitFade` は
+   * `existing.fadeAnimation?.destroyOnComplete` を見ても何も検知できず no-op だった。結果、
+   * 同じ表情/位置で再 show されると show() 先頭の no-op ガード（expression/position/fit 一致）
+   * に落ちて完全な無反応になり、歩行退場は止まらず最終的にキャラが破棄される。表情/位置が
+   * 変わる再 show でも `positionChanged` 分岐が `sprite.x` を書き換えた直後、次の ticker
+   * フレームで `stageMotion` 処理が `sprite.x` を退場軌道の位置へ上書きしてしまい、結局は
+   * 同じく破棄される。
    *
-   * 修正: `existing.stageMotion?.kind === 'exit'` を検知したら、`stageMotion` を破棄して
-   * `sprite.x`（および追従する `label.x`）を退場開始時点の位置（`stageMotion.baseX`）へ
-   * 即座に戻す。以降は通常の再 show ロジック（no-op / textureChanged クロスフェード /
-   * positionChanged の `sprite.x` 上書き）がそのまま効き、position が変わっていればその後の
-   * 分岐がさらに新しい targetX へ上書きする。ticker 側（ensureTicker）はこの id の
+   * 追加のバグ（must-1、kind==='enter' 未対応だった頃）: 入場walk中（`kind==='enter'`）の
+   * キャラに対して別 position/expression で再 show すると、この関数は即 no-op で `stageMotion`
+   * を素通りさせていた。position 変更時は `existing.sprite.x = targetX` で新位置へ即座に
+   * セットしても、残った `stageMotion`（古い baseX を持つ enter 軌道）が次の ticker フレームで
+   * `sprite.x` を古い軌道へ再度上書きし、walk 完了時には新しく指定した位置ではなく最初に
+   * 入場を始めた時の目的地に着地してしまう。expression 変更時（textureChanged のクロス
+   * フェード分岐）は `existing` を `oldKey` にリネームして温存するが、この際も `stageMotion`
+   * をクリアしないため、フェードアウト中の旧 sprite が同時に歩き続ける「幽霊ウォーク」になる。
+   *
+   * 修正: `existing.stageMotion` があれば **kind を問わず**破棄し、`sprite.x`（および追従する
+   * `label.x`）を `stageMotion.baseX` へ即座に揃える。`baseX` は kind==='exit' なら退場開始
+   * 時点の元位置、kind==='enter' なら到達予定の静止位置（`StageMotionAnimation` の JSDoc
+   * 参照）——どちらも「walk していないときの正しい位置」を表す共通の意味論なので、kind 分岐
+   * 無しで同じ代入で扱える。以降は通常の再 show ロジック（no-op / textureChanged クロス
+   * フェード / positionChanged の `sprite.x` 上書き）がそのまま効き、position が変わっていれば
+   * その後の分岐がさらに新しい targetX へ上書きする。ticker 側（ensureTicker）はこの id の
    * `stageMotion` を毎フレーム `state.stageMotion` 経由で見るだけなので、ここで null にすれば
-   * 以降のフレームで `sprite.x` が退場軌道へ巻き戻されることはない。
+   * 以降のフレームで `sprite.x` が古い walk 軌道へ巻き戻されることはない。
    *
-   * `stageMotion.kind === 'enter'`（入場walk中）や `stageMotion` 無しのときは no-op
-   * （対象は退場walkのキャンセルだけ）。
+   * 実装方針（バグ報告に挙がった二択のうち (b) を採用）: 「(a) `baseX` を新 targetX へ更新して
+   * 歩行を継続する」ではなく「(b) 進行中の walk をキャンセルして即座にスナップする」を選んだ。
+   * enter/exit を kind 分岐なしで対称に扱えて実装がシンプルであり、`StageMotionAnimation.baseX`
+   * の「静止位置」という既存の意味論を変えずに済むため。
+   *
+   * `stageMotion` 無しのときは no-op。
    */
-  private reviveFromExitStageMotion(existing: CharacterState): void {
-    if (existing.stageMotion?.kind !== 'exit') return
+  private reviveFromInProgressStageMotion(existing: CharacterState): void {
+    if (!existing.stageMotion) return
     existing.sprite.x = existing.stageMotion.baseX
     if (existing.label) existing.label.x = existing.sprite.x
     existing.stageMotion = null
@@ -1368,8 +1385,9 @@ export class CharacterLayer extends Container {
     if (existing) {
       // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す (#177)
       this.reviveFromExitFade(existing, instant)
-      // 退場walk中の再 show: 歩行退場をキャンセルして通常の再表示ロジックへ合流させる (#684 バグ修正)
-      this.reviveFromExitStageMotion(existing)
+      // 入場・退場walk中の再 show: 進行中の方向モーションをキャンセルして通常の再表示ロジックへ
+      // 合流させる (#684 バグ修正、kind==='enter' も対象。PR #688 セルフレビュー must-1)
+      this.reviveFromInProgressStageMotion(existing)
 
       // novel 役割配置 (#286): override x がある再 show は、現在の sprite.x と違えば
       // 「横位置変更あり」とみなす（position トークンは同じでも質問役↔回答役の入替で x が動く）。
@@ -3272,6 +3290,14 @@ export class CharacterLayer extends Container {
    * 別位置（左のせお等）には x が一致しないため干渉しない。退場は GameState に中間状態を持ち込まず、
    * characters Map から消える（getCharacterStates は退場後の状態を写す）ので、任意局面起動・goBack/seek
    * の復元でも重なり・消えすぎは起きない。
+   *
+   * 歩行入場中（stageMotion.kind==='enter'）の衝突判定は現在位置でなく最終目標位置を見る
+   * (#684 should-1、PR #688 セルフレビュー指摘)。理由: `state.sprite.x` は歩行の初期値が画面外
+   * （`computeStageMotionOffset` の startOffset 分ずれた位置）なので、歩行完了まで（最大
+   * `characterMoveMs`）は「これから同じ位置に立つ予定」のキャラでも `sprite.x` 基準では
+   * targetX と一致せず衝突を検知できない。`stageMotion.baseX` は kind==='enter' のとき到達予定の
+   * 静止位置そのもの（`StageMotionAnimation` の JSDoc 参照）なので、これを比較対象にすれば
+   * 「最終的にここに立つ予定」として歩行入場中でも正しく衝突判定できる。
    */
   private evictCollidersAt(
     targetX: number,
@@ -3290,7 +3316,10 @@ export class CharacterLayer extends Container {
       if (state.renderOnly) continue
       if (state.fadeAnimation?.destroyOnComplete) continue
       if (state.stageMotion?.kind === 'exit') continue
-      if (Math.abs(state.sprite.x - targetX) < CharacterLayer.SAME_POSITION_EPSILON) {
+      // 歩行入場中は「これから立つ予定」の最終目標位置（baseX）で判定する (#684 should-1)。
+      const effectiveX =
+        state.stageMotion?.kind === 'enter' ? state.stageMotion.baseX : state.sprite.x
+      if (Math.abs(effectiveX - targetX) < CharacterLayer.SAME_POSITION_EPSILON) {
         colliders.push(name)
       }
     }

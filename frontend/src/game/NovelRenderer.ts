@@ -4163,6 +4163,10 @@ export class NovelRenderer {
       // #681/#682: GameState 更新のみの薄い配線。実際の射影計算（cameraProjection）の描画反映は
       // depth 値の配線（#683）待ち。orientation 省略/未知値は客席相当（'Audience'）、
       // elevation 省略/未知値は水平相当（null）。
+      // 既知の割り切り (#684 PR #688 セルフレビュー question): ここで cameraMode を切り替えても
+      // CharacterLayer は cameraMode を知らない設計のため、進行中の stageMotion（歩行入場/退場）
+      // はキャンセルされず走り続ける。現状は depth/射影変換が未配線（#683 待ち）で視覚的実害が
+      // ほぼ無いため意図的に対応していない。#683 以降で実害が出るなら別途 Issue化する。
       this.cameraMode = event.CameraMode.mode
       this.cameraOrientation = event.CameraMode.orientation ?? 'Audience'
       this.cameraElevation = event.CameraMode.elevation ?? null
