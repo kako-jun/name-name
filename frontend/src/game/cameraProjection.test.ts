@@ -105,6 +105,19 @@ describe('computeCameraProjection', () => {
     expect(computeCameraProjection('Theater', 'Audience', null, 50).verticalOffset).toBe(0)
   })
 
+  // 境界値: depth=0 は `clampedDepth * n` の掛け算を経由すると `-0 * n` = -0 になりうる
+  // （LookUp 側は負符号を掛けるため特に危険）。実装は `clampedDepth > 0` ガードで掛け算自体を
+  // 迂回しているはずだが、それを Object.is で厳密確認する（0 と -0 は `toBe`/`===` では
+  // 区別できないため、符号ビットを直接見る Object.is / 1/x === Infinity が必須）。
+  it('theater モードは depth=0 のとき elevation=LookUp/LookDown でも verticalOffset が正の0（-0 ではない）になる', () => {
+    const up = computeCameraProjection('Theater', 'Audience', 'LookUp', 0).verticalOffset
+    const down = computeCameraProjection('Theater', 'Audience', 'LookDown', 0).verticalOffset
+    expect(Object.is(up, 0)).toBe(true)
+    expect(Object.is(down, 0)).toBe(true)
+    expect(1 / up).toBe(Infinity)
+    expect(1 / down).toBe(Infinity)
+  })
+
   it('theater モードは elevation=LookUp のとき verticalOffset が負値になる', () => {
     const { verticalOffset } = computeCameraProjection('Theater', 'Audience', 'LookUp', 5)
     expect(verticalOffset).toBeLessThan(0)
@@ -138,5 +151,16 @@ describe('computeCameraProjection', () => {
   it('theater モードは elevation=LookUp/LookDown でも depth を負値・NaN から 0 相当にクランプする', () => {
     expect(computeCameraProjection('Theater', 'Audience', 'LookUp', -10).verticalOffset).toBe(0)
     expect(computeCameraProjection('Theater', 'Audience', 'LookDown', NaN).verticalOffset).toBe(0)
+  })
+
+  // 境界値: depth===THEATER_CAMERA_REFERENCE_DEPTH ちょうどでの verticalOffset を具体数値で
+  // 固定する（scale 側の「ちょうど」境界値テストと対。式の typo 検出保険。定数は export された
+  // 値を参照し直書きしない）。
+  it('theater モードは depth===THEATER_CAMERA_REFERENCE_DEPTH ちょうどで verticalOffset が具体値になる', () => {
+    const depth = THEATER_CAMERA_REFERENCE_DEPTH
+    const up = computeCameraProjection('Theater', 'Audience', 'LookUp', depth).verticalOffset
+    const down = computeCameraProjection('Theater', 'Audience', 'LookDown', depth).verticalOffset
+    expect(up).toBe(-THEATER_CAMERA_REFERENCE_DEPTH * THEATER_ELEVATION_OFFSET_PER_DEPTH)
+    expect(down).toBe(THEATER_CAMERA_REFERENCE_DEPTH * THEATER_ELEVATION_OFFSET_PER_DEPTH)
   })
 })

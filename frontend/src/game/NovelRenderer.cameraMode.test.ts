@@ -117,4 +117,59 @@ describe('NovelRenderer CameraMode 配線 (#681)', () => {
     expect(r.getSnapshot().cameraMode).toBe('Novel')
     expect(r.getSnapshot().cameraElevation).toBeNull()
   })
+
+  // #682: orientation（向き）と elevation（仰角）は独立した第2軸。どちらか一方だけを立てた
+  // 12b/14b に対し、両方同時に非既定値へ立てた状態でも「独立に」既定値へ戻ることを確認する
+  // （片方のリセットがもう片方を巻き込んで壊さないか、または巻き込まれず残留しないか）。
+  it('12c: シーン内で CameraMode(Theater, Stage, LookUp) を実行後、シーン遷移で orientation/elevation が独立に既定値へリセットされる', async () => {
+    const r = makeRenderer([
+      scene('a', [narration('one'), cameraMode('Theater', 'Stage', 'LookUp'), narration('two')]),
+      scene('b', [narration('three')]),
+    ])
+    r.startFrom({ sceneId: 'a' })
+
+    await r.playScript([{ type: 'advance' }])
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
+    expect(r.getSnapshot().cameraElevation).toBe('LookUp')
+
+    r.jumpToScene('b')
+
+    expect(r.getSnapshot().cameraMode).toBe('Novel')
+    expect(r.getSnapshot().cameraOrientation).toBe('Audience')
+    expect(r.getSnapshot().cameraElevation).toBeNull()
+  })
+
+  // goBack が「既定値への丸め」ではなく「直前のスナップショットの厳密な組み合わせ」への
+  // 復元であることを、2つの CameraMode ディレクティブを挟んで確認する。1つ目のディレクティブで
+  // 非既定の組み合わせ（Stage/LookUp）へ移り、2つ目で elevation だけを LookDown に変えた後
+  // goBack すると、既定値（Audience/null）ではなく1つ目の組み合わせ（Stage/LookUp）に戻る
+  // はず（もし goBack が cameraOrientation/cameraElevation を個別に「既定値」へ戻す実装
+  // だった場合はここで検出できる）。
+  it('14c: CameraMode(Theater, Stage, LookDown) 実行後に goBack すると直前の Theater/Stage/LookUp の組み合わせに戻る（既定値への丸めではない）', async () => {
+    const r = makeRenderer([
+      scene('a', [
+        narration('one'),
+        cameraMode('Theater', 'Stage', 'LookUp'),
+        narration('two'),
+        cameraMode('Theater', 'Stage', 'LookDown'),
+        narration('three'),
+      ]),
+    ])
+    r.startFrom({ sceneId: 'a' })
+
+    await r.playScript([{ type: 'advance' }]) // one -> camera1(Stage,LookUp) -> two
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
+    expect(r.getSnapshot().cameraElevation).toBe('LookUp')
+
+    await r.playScript([{ type: 'advance' }]) // two -> camera2(Stage,LookDown) -> three
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
+    expect(r.getSnapshot().cameraElevation).toBe('LookDown')
+
+    r.goBack() // three -> two（camera2 実行前のスナップショットへ）
+
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
+    expect(r.getSnapshot().cameraElevation).toBe('LookUp')
+  })
 })

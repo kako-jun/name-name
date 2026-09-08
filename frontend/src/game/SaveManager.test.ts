@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { SaveManager, SaveSlotData } from './SaveManager'
+import { saveSlotToGameState } from './novelLayout'
 
 function makeSaveData(): SaveSlotData {
   return {
@@ -344,5 +345,47 @@ describe('SaveManager - importJSON バリデータ (#681)', () => {
     expect(loaded?.sceneId).toBe('scene-1')
     expect(loaded?.cameraMode).toBeUndefined()
     expect(loaded?.cameraOrientation).toBeUndefined()
+  })
+})
+
+describe('SaveManager - カメラ仰角 (#682)', () => {
+  let manager: SaveManager
+
+  beforeEach(() => {
+    manager = new SaveManager('elevation-test')
+    localStorage.clear()
+  })
+
+  // 後方互換: #681 時点（cameraElevation フィールド追加前）に作られたクイックセーブ相当。
+  // cameraElevation キー自体が存在しない生 JSON オブジェクトを直接 localStorage に書き、
+  // quickLoad() がクラッシュしないこと・その結果を saveSlotToGameState() に渡すと
+  // cameraElevation が null（水平・既定）にフォールバックすることを確認する
+  // （backgroundFade/video の「欠如キーでクラッシュしない」テストと同型 #250/#252）。
+  it('cameraElevation キー無しの旧クイックセーブ JSON を quickLoad してもクラッシュせず、saveSlotToGameState で null にフォールバックする', () => {
+    const legacy = {
+      slot: -1,
+      sceneId: 'scene-1',
+      eventIndex: 3,
+      textIndex: 1,
+      flags: { visited: { Bool: true } },
+      backgroundPath: '/bg/room.png',
+      isBlackout: false,
+      characters: [{ name: 'Alice', expression: 'happy', position: 'center' }],
+      currentBgmPath: '/bgm/main.mp3',
+      cameraMode: 'Theater',
+      cameraOrientation: 'Stage',
+      // cameraElevation は意図的に省略（キー自体が JSON に存在しない #682 前フォーマット）
+      savedAt: new Date().toISOString(),
+      sceneName: 'シーン1',
+    }
+    localStorage.setItem('name-name-save-elevation-test-quick', JSON.stringify(legacy))
+
+    expect(() => manager.quickLoad()).not.toThrow()
+    const loaded = manager.quickLoad()
+    expect(loaded).not.toBeNull()
+    expect(loaded?.cameraElevation).toBeUndefined()
+
+    const state = saveSlotToGameState(loaded as SaveSlotData, null)
+    expect(state.cameraElevation).toBeNull()
   })
 })

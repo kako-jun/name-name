@@ -4438,6 +4438,94 @@ title: "test"
     }
 
     #[test]
+    fn parses_camera_mode_both_orientation_and_elevation_unknown_fall_back_to_none() {
+        // 向き/仰角がともに未知値のとき、それぞれ独立に None にフォールバックする (#682)。
+        // 片方の未知値パースがもう片方の判定に巻き込まれない（相互に無関係な独立フィールド
+        // であることの確認）。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 謎, 仰角: 謎]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+                elevation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_camera_mode_empty_elevation_value_falls_back_to_none() {
+        // `仰角:` の値が空文字（`仰角:` の直後に何もない）のとき None にフォールバックする
+        // (#682)。`向き:` の空文字フォールバックと対の確認。
+        let input =
+            "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 仰角:]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+                elevation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_camera_mode_elevation_before_orientation_same_result() {
+        // `仰角:` が `向き:` より前に書かれても同じ結果になる (#682)。parse_camera_mode_directive
+        // は content を `,` split した各 part を独立に prefix 判定するため、書字順序に
+        // 依存しないはず（実装がもし順序依存になっていたらここで検出する）。
+        let elevation_first = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 仰角: 見上げ, 向き: 舞台]\n";
+        let orientation_first = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 舞台, 仰角: 見上げ]\n";
+
+        let doc_elevation_first = parse(elevation_first);
+        let doc_orientation_first = parse(orientation_first);
+
+        let expected = Event::CameraMode {
+            mode: CameraMode::Theater,
+            orientation: Some(CameraOrientation::Stage),
+            elevation: Some(CameraElevation::LookUp),
+        };
+        assert_eq!(
+            doc_elevation_first.chapters[0].scenes[0].events[0],
+            expected
+        );
+        assert_eq!(
+            doc_orientation_first.chapters[0].scenes[0].events[0],
+            expected
+        );
+    }
+
+    // #682 優先度高観点5: emit した実際の文字列を直接 assert する（意味的往復だけでなく
+    // 出力フォーマット固定を保証する）。camera_mode_elevation_roundtrip は doc1==doc2 の
+    // 意味的往復のみを見ているため、`[カメラ: {mode}, 向き: {orientation}, 仰角: {elevation}]`
+    // という順序・区切り文字・改行を含む出力フォーマット自体は別途固定する必要がある。
+    #[test]
+    fn camera_mode_emit_exact_string_with_orientation_and_elevation() {
+        // `emit()` は Document 全体（frontmatter・シーン見出し込み）を返す公開関数のため、
+        // 対象の1行だけを取り出してから完全一致 (`assert_eq!`) で比較する（`contains` による
+        // 緩い包含チェックではなく、行そのものが期待する文字列と一字一句一致することを
+        // 保証する。意味的往復だけを見る camera_mode_elevation_roundtrip と役割を分ける）。
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 舞台, 仰角: 見下ろし]\n";
+        let doc = parse(input);
+        let emitted = emit(&doc);
+        let camera_line = emitted
+            .lines()
+            .find(|line| line.starts_with("[カメラ:"))
+            .expect("emitted output should contain a camera line");
+        assert_eq!(
+            camera_line, "[カメラ: シアター, 向き: 舞台, 仰角: 見下ろし]",
+            "emit の実際の出力が期待するフォーマットと完全一致するべき"
+        );
+    }
+
+    #[test]
     fn parses_title_with_color() {
         let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[タイトル: orber, 色=#1a4a7a]\n";
         let doc = parse(input);
