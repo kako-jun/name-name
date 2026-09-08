@@ -25,6 +25,7 @@ pub fn parse(input: &str) -> Document {
         std::collections::HashMap::new();
     let mut character_scale: Option<f64> = None;
     let mut character_fade_ms: Option<u32> = None;
+    let mut character_move_ms: Option<u32> = None;
     let mut background_fade_ms: Option<u32> = None;
     let mut event_image_fade_ms: Option<u32> = None;
     let mut event_image_transition = EventImageTransition::Fade;
@@ -132,6 +133,10 @@ pub fn parse(input: &str) -> Document {
                 // 立ち絵の新規表示・退場フェード時間（ms）。数値のみ受ける。
                 // 空・非数値は None のまま（runtime 既定 700ms にフォールバック）。
                 character_fade_ms = unquote(val.trim()).parse::<u32>().ok();
+            } else if let Some(val) = line.strip_prefix("character_move_ms:") {
+                // 入場・退場の方向モーション（上手/下手）の徒歩移動所要時間（ms） (#684)。
+                // character_fade_ms と同じ流儀・u32。空・非数値は None のまま（runtime 既定 1400ms にフォールバック）。
+                character_move_ms = unquote(val.trim()).parse::<u32>().ok();
             } else if let Some(val) = line.strip_prefix("background_fade_ms:") {
                 // 背景クロスフェード・退場（終劇）フェード時間（ms）。character_fade_ms と同じ流儀・u32。
                 // 空・非数値は None のまま（runtime 既定 700ms＝BACKGROUND_CROSSFADE_MS にフォールバック）。
@@ -972,6 +977,7 @@ pub fn parse(input: &str) -> Document {
         character_height_ratios,
         character_scale,
         character_fade_ms,
+        character_move_ms,
         background_fade_ms,
         event_image_fade_ms,
         event_image_transition,
@@ -1388,9 +1394,22 @@ fn parse_se_directive(content: &str) -> Event {
     }
 }
 
-/// `[退場: 名前]` / `[退場: 名前, フェード=2100]` の本体を分解する。
-/// 最初の `,` 区切り要素を character、残りを fade kv として解釈する。
-/// 既存構文との後方互換のため、未知キーや不正なフェード値は silent skip する。
+/// `上手から`/`下手から`（登場）・`上手へ`/`下手へ`（退場）の方向トークンを解釈する共通ヘルパー (#684)。
+/// Enter/Exit 両方から呼べるよう、どちらの送り仮名（から/へ）も受理する（登場に `へ` を書いても
+/// 退場に `から` を書いても同じ方向として解釈する。他ディレクティブの kv alias 受理と同じく、
+/// 過度に厳密なバリデーションはしない方針）。未知のトークン・空文字は `None`
+/// （他ディレクティブと同じ後方互換フォールバック。呼び出し側は従来通りのフェード表示にフォールバックする）。
+fn parse_stage_direction_token(token: &str) -> Option<StageDirection> {
+    match token.trim() {
+        "上手から" | "上手へ" => Some(StageDirection::Kamite),
+        "下手から" | "下手へ" => Some(StageDirection::Shimote),
+        _ => None,
+    }
+}
+
+/// `[退場: 名前]` / `[退場: 名前, フェード=2100]` / `[退場: 名前, 上手へ]` の本体を分解する。
+/// 最初の `,` 区切り要素を character、残りを fade kv / 方向トークンとして解釈する (#684)。
+/// 既存構文との後方互換のため、未知キーや不正なフェード値・方向トークンは silent skip する。
 fn parse_exit_directive(content: &str) -> Event {
     let mut parts = content.split(',');
     let character = parts
@@ -1398,12 +1417,21 @@ fn parse_exit_directive(content: &str) -> Event {
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
     let mut fade_ms: Option<u32> = None;
+    let mut exit_direction: Option<StageDirection> = None;
     for raw in parts {
         if let Some(n) = parse_fade_kv(raw, false) {
             fade_ms = Some(n);
+            continue;
+        }
+        if let Some(dir) = parse_stage_direction_token(raw) {
+            exit_direction = Some(dir);
         }
     }
-    Event::Exit { character, fade_ms }
+    Event::Exit {
+        character,
+        fade_ms,
+        exit_direction,
+    }
 }
 
 /// `[背景: path]` / `[背景: path, フェード上=40, フェード下=60, ..., 明るさ=0.6]` の本体を分解する (#250)。
@@ -2458,7 +2486,8 @@ fn parse_character_attrs(attrs: &str) -> (Option<String>, Option<String>, bool) 
     (expression, position, fit)
 }
 
-/// `[登場: 名前 (sprite/表情, 位置)]` の本体（`登場:` 以降）をパースして `Enter` Event を作る (#401)。
+/// `[登場: 名前 (sprite/表情, 位置)]` / `[登場: 名前 (sprite/表情, 位置), 上手から]` /
+/// `[登場: 名前, 上手から]` の本体（`登場:` 以降）をパースして `Enter` Event を作る (#401 / #684)。
 /// 話者タグ `名前 (expression, position, フィット?)` と同じ属性書式を `parse_character_attrs` で共有する。
 /// 本文は持たない（無言で立ち絵を出す）。名前が空なら None（無効 = 何も emit しない）。
 ///
@@ -2467,29 +2496,42 @@ fn parse_character_attrs(attrs: &str) -> (Option<String>, Option<String>, bool) 
 /// （expression/position=None）として扱う。こうすると閉じ括弧の欠けた malformed 入力は
 /// engine の実表示ガード（character && expression && position）で立ち絵を出さない silent skip に落ちる。
 /// 括弧が無ければ元々属性なし（名前だけの Enter）で、正常系（両括弧が揃う）は現状維持。
+///
+/// 方向トークン (#684) は、括弧ありのときは閉じ括弧より後ろ（例: `), 上手から`）、括弧なしのときは
+/// 最初の `,` より後ろ（例: `トモ, 上手から`）を見る。**修正**: 括弧なしブランチは従来
+/// `content.to_string()` を丸ごと名前にしていたため `[登場: トモ, 上手から]` の名前が壊れていた
+/// （`"トモ, 上手から"` になっていた）。`split_once(',')` で名前と方向トークン候補を分離する。
 fn parse_enter_directive(content: &str) -> Option<Event> {
     let content = content.trim();
-    let (character, expression, position, fit) = if let Some(paren_start) = content.find('(') {
-        let name = content[..paren_start].trim().to_string();
-        // 対応する閉じ括弧は開き括弧より後ろを探す。無ければ属性を無視して名前のみ。
-        if let Some(rel_end) = content[paren_start + 1..].find(')') {
-            let attrs = &content[paren_start + 1..paren_start + 1 + rel_end];
-            let (expression, position, fit) = parse_character_attrs(attrs);
-            (name, expression, position, fit)
+    let (character, expression, position, fit, direction_part) =
+        if let Some(paren_start) = content.find('(') {
+            let name = content[..paren_start].trim().to_string();
+            // 対応する閉じ括弧は開き括弧より後ろを探す。無ければ属性を無視して名前のみ。
+            if let Some(rel_end) = content[paren_start + 1..].find(')') {
+                let attrs = &content[paren_start + 1..paren_start + 1 + rel_end];
+                let (expression, position, fit) = parse_character_attrs(attrs);
+                let after_paren = &content[paren_start + 1 + rel_end + 1..];
+                (name, expression, position, fit, after_paren)
+            } else {
+                (name, None, None, false, "")
+            }
         } else {
-            (name, None, None, false)
-        }
-    } else {
-        (content.to_string(), None, None, false)
-    };
+            match content.split_once(',') {
+                Some((name, rest)) => (name.trim().to_string(), None, None, false, rest),
+                None => (content.to_string(), None, None, false, ""),
+            }
+        };
     if character.is_empty() {
         return None;
     }
+    let enter_direction =
+        parse_stage_direction_token(direction_part.trim().trim_start_matches(',').trim());
     Some(Event::Enter {
         character,
         expression,
         position,
         fit,
+        enter_direction,
     })
 }
 
@@ -3225,7 +3267,8 @@ title: "テスト"
             events[6],
             Event::Exit {
                 character: "トモ".to_string(),
-                fade_ms: None
+                fade_ms: None,
+                exit_direction: None,
             }
         );
         assert_eq!(events[7], Event::Wait { ms: 1000 });
@@ -3264,6 +3307,7 @@ title: "テスト"
                 expression: Some("theo/normal".to_string()),
                 position: Some("左".to_string()),
                 fit: false,
+                enter_direction: None,
             }
         );
         assert_eq!(
@@ -3273,6 +3317,7 @@ title: "テスト"
                 expression: Some("spino/normal".to_string()),
                 position: Some("右".to_string()),
                 fit: false,
+                enter_direction: None,
             }
         );
     }
@@ -3291,6 +3336,7 @@ title: "テスト"
                 expression: Some("theo/akarame".to_string()),
                 position: Some("左".to_string()),
                 fit: true,
+                enter_direction: None,
             }
         );
 
@@ -3320,6 +3366,7 @@ title: "テスト"
                 expression: None,
                 position: None,
                 fit: false,
+                enter_direction: None,
             })
         );
 
@@ -3334,6 +3381,7 @@ title: "テスト"
                 expression: Some("theo/normal".to_string()),
                 position: None,
                 fit: false,
+                enter_direction: None,
             })
         );
 
@@ -3346,6 +3394,7 @@ title: "テスト"
                 expression: None,
                 position: None,
                 fit: false,
+                enter_direction: None,
             })
         );
 
@@ -3357,7 +3406,99 @@ title: "テスト"
                 expression: None,
                 position: None,
                 fit: false,
+                enter_direction: None,
             })
+        );
+    }
+
+    #[test]
+    fn test_parse_enter_exit_stage_direction() {
+        // #684: 任意の方向引数（上手/下手）。括弧なし・括弧ありの両方、Enter/Exit 両方を確認する。
+
+        // 括弧なし + 方向引数（修正確認: 旧実装は character が "トモ, 上手から" に壊れていた）。
+        assert_eq!(
+            parse_directive("[登場: トモ, 上手から]", EventImageTransition::Fade),
+            Some(Event::Enter {
+                character: "トモ".to_string(),
+                expression: None,
+                position: None,
+                fit: false,
+                enter_direction: Some(StageDirection::Kamite),
+            })
+        );
+
+        // 括弧あり + 方向引数（閉じ括弧より後ろを見る）。
+        assert_eq!(
+            parse_directive(
+                "[登場: せお (theo/normal, 左), 下手から]",
+                EventImageTransition::Fade
+            ),
+            Some(Event::Enter {
+                character: "せお".to_string(),
+                expression: Some("theo/normal".to_string()),
+                position: Some("左".to_string()),
+                fit: false,
+                enter_direction: Some(StageDirection::Shimote),
+            })
+        );
+
+        // 未知の方向トークンは None にフォールバック（後方互換）。
+        assert_eq!(
+            parse_directive("[登場: トモ, 舞台裏から]", EventImageTransition::Fade),
+            Some(Event::Enter {
+                character: "トモ".to_string(),
+                expression: None,
+                position: None,
+                fit: false,
+                enter_direction: None,
+            })
+        );
+
+        // 引数なしは従来通り None（後方互換）。
+        assert_eq!(
+            parse_directive("[登場: トモ]", EventImageTransition::Fade),
+            Some(Event::Enter {
+                character: "トモ".to_string(),
+                expression: None,
+                position: None,
+                fit: false,
+                enter_direction: None,
+            })
+        );
+
+        // 退場: 方向引数とフェード kv は併記できる。
+        assert_eq!(
+            parse_directive("[退場: トモ, 下手へ]", EventImageTransition::Fade),
+            Some(Event::Exit {
+                character: "トモ".to_string(),
+                fade_ms: None,
+                exit_direction: Some(StageDirection::Shimote),
+            })
+        );
+        assert_eq!(
+            parse_directive(
+                "[退場: トモ, フェード=500, 上手へ]",
+                EventImageTransition::Fade
+            ),
+            Some(Event::Exit {
+                character: "トモ".to_string(),
+                fade_ms: Some(500),
+                exit_direction: Some(StageDirection::Kamite),
+            })
+        );
+
+        // round-trip: 方向引数ありは emit でも保持される。無しは従来通り non-破壊。
+        let doc = parse(
+            "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## s: t\n\n[登場: トモ, 上手から]\n[退場: トモ, 下手へ]\n",
+        );
+        let emitted = crate::emitter::emit(&doc);
+        assert!(
+            emitted.contains("[登場: トモ, 上手から]"),
+            "emit 結果:\n{emitted}"
+        );
+        assert!(
+            emitted.contains("[退場: トモ, 下手へ]"),
+            "emit 結果:\n{emitted}"
         );
     }
 

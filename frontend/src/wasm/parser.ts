@@ -94,20 +94,25 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
       // 無言の立ち絵登場 (#401)。Dialog と同じ立ち絵属性なので同じ規約で正規化する。
       // WASM 経由で undefined になる expression/position は null に、fit は false のとき
       // undefined を返すため明示 boolean に倒す（新フィールド欠落の罠回避・Dialog #294 と同じ）。
+      // enter_direction (#684) も Option<StageDirection> なので undefined → null に倒す。
       return {
         Enter: {
           character: event.Enter.character,
           expression: event.Enter.expression ?? null,
           position: event.Enter.position ?? null,
           fit: event.Enter.fit === true,
+          enter_direction: event.Enter.enter_direction ?? null,
         },
       }
     }
     if ('Exit' in event) {
+      // exit_direction (#684) は Option<StageDirection> なので undefined → null に倒す
+      // （fade_ms と同じ新フィールド欠落の罠回避）。
       return {
         Exit: {
           character: event.Exit.character,
           fade_ms: event.Exit.fade_ms ?? null,
+          exit_direction: event.Exit.exit_direction ?? null,
         },
       }
     }
@@ -332,6 +337,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // 立ち絵の元絵基準スケール (#378)。数値なので ?? null（未指定は下位優先順位へフォールバック）。
     character_scale: doc.character_scale ?? null,
     character_fade_ms: doc.character_fade_ms ?? null,
+    // 入場・退場の方向モーション（上手/下手）の徒歩移動所要時間 (#684)。数値なので ?? null（未指定は runtime 既定 1400ms）。
+    character_move_ms: doc.character_move_ms ?? null,
     // 背景クロスフェード・退場（終劇）フェード時間 (#407)。数値なので ?? null（未指定は runtime 既定 700＝BACKGROUND_CROSSFADE_MS）。
     background_fade_ms: doc.background_fade_ms ?? null,
     // イベント絵の表示・退場フェード時間。個別 `フェード=` が無いイベント絵で使う。

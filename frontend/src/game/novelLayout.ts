@@ -13,7 +13,7 @@
 
 import type { BackgroundFade, NovelGameState } from './GameState'
 import type { SaveSlotData } from './SaveManager'
-import type { EventScene, TelopPosition } from '../types'
+import type { EventScene, StageDirection, TelopPosition } from '../types'
 import { MIDLINE_RULE } from './textCanonical'
 import { hasOwn } from './ownProperty'
 import type { CameraProjection } from './cameraProjection'
@@ -1048,6 +1048,40 @@ export function clampFadeMs(
   return ms == null || !Number.isFinite(ms)
     ? fallbackMs
     : Math.min(max, Math.max(min, Math.floor(ms)))
+}
+
+/**
+ * 入場・退場の方向モーション（上手/下手）の X オフセットを算出する純粋関数 (#684)。
+ *
+ * `CharacterLayer` の登場/退場アニメ（`ticker` 駆動）が毎フレーム呼ぶ。**「入場」の形**
+ * （elapsedMs=0 で画面外いっぱい、elapsedMs>=durationMs で 0＝静止位置）を正本とし、
+ * 「退場」はこの関数自体を分岐させず、呼び出し側が `elapsedMs` に
+ * `durationMs - 実経過ms` を渡す（時間を反転させる）ことで同じ式を再利用する
+ * （elapsedMs=0 で 0＝静止位置スタート、durationMs で画面外いっぱい＝退場完了）。
+ *
+ * - `direction: 'Kamite'`（上手 = 画面右端の外側）は正のオフセット、
+ *   `'Shimote'`（下手 = 画面左端の外側）は負のオフセット。
+ * - `elapsedMs` は `[0, durationMs]` にクランプしてから使う（呼び出し側が範囲外を渡しても暴走しない）。
+ * - `durationMs <= 0` は即座に 0（オフセットなし＝静止位置）を返す（即時表示、後方互換）。
+ *
+ * 返り値は「静止位置（targetX / 退場前の元位置）に加算するオフセット」。
+ * 実際の sprite.x は呼び出し側で `baseX + computeStageMotionOffset(...)` として組み立てる。
+ */
+export function computeStageMotionOffset(
+  direction: StageDirection,
+  elapsedMs: number,
+  durationMs: number,
+  screenWidth: number
+): number {
+  if (durationMs <= 0) return 0
+  const t = Math.min(1, Math.max(0, elapsedMs / durationMs))
+  const remaining = 1 - t
+  // remaining===0（静止位置に到達）は sign を掛けても厳密に 0 を返す。
+  // `sign * screenWidth * 0` は sign===-1 のとき -0 になり、呼び出し側の `toBe(0)`（Object.is）
+  // 等値比較を壊しうるため明示的に避ける（算術上は -0 と 0 は等価だが、意図を明確にする）。
+  if (remaining === 0) return 0
+  const sign = direction === 'Kamite' ? 1 : -1
+  return sign * screenWidth * remaining
 }
 
 /**

@@ -105,6 +105,7 @@ const {
     setCharacterHeightRatios = vi.fn()
     setCharacterScale = vi.fn()
     setCharacterFadeMs = vi.fn()
+    setCharacterMoveMs = vi.fn()
     setBackgroundFadeMs = vi.fn()
     setEventImageFadeMs = vi.fn()
     setEventImageTransitionDefault = vi.fn()

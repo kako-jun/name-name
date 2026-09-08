@@ -223,7 +223,8 @@ fn test_parse_sample() {
         events[11],
         Event::Exit {
             character: "トモ".to_string(),
-            fade_ms: None
+            fade_ms: None,
+            exit_direction: None,
         }
     );
     // [場面転換]
@@ -4549,6 +4550,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         character_height_ratios: std::collections::HashMap::new(),
         character_scale: None,
         character_fade_ms: None,
+        character_move_ms: None,
         background_fade_ms: None,
         event_image_fade_ms: None,
         event_image_transition: EventImageTransition::default(),
@@ -5752,6 +5754,58 @@ title: "テスト"
         !emitted.contains("background_fade_ms:"),
         "background_fade_ms が None なら emit に出ない: {emitted}"
     );
+}
+
+// --- character_move_ms (入場・退場の方向モーション徒歩移動所要時間の per-game 設定, #684) ---
+
+#[test]
+fn test_character_move_ms_round_trip() {
+    // parse → emit → parse で値が保持され、emit に `character_move_ms: 1800` が出る（emitter 対称）。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\ncharacter_move_ms: 1800\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_move_ms, Some(1800));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("character_move_ms: 1800"),
+        "emit に `character_move_ms: 1800` が含まれること: {emitted}"
+    );
+
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc2.character_move_ms,
+        Some(1800),
+        "round-trip で character_move_ms が保持される"
+    );
+}
+
+#[test]
+fn test_character_move_ms_none_omits_emit_line() {
+    // None なら emit に `character_move_ms:` 行が出ない（skip_serializing_if = Option::is_none）。
+    let input =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_move_ms, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("character_move_ms:"),
+        "character_move_ms が None なら emit に出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_character_move_ms_coexists_with_character_fade_ms() {
+    // character_fade_ms と対称・独立に共存する（片方の値がもう片方へ混ざらない）。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\ncharacter_fade_ms: 500\ncharacter_move_ms: 1800\n---\n\n## 1-1: シーン\n\nナレ。\n";
+    let doc = parser::parse(input);
+    assert_eq!(doc.character_fade_ms, Some(500));
+    assert_eq!(doc.character_move_ms, Some(1800));
+
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.character_fade_ms, Some(500));
+    assert_eq!(doc2.character_move_ms, Some(1800));
 }
 
 // --- event_image_fade_ms (イベント絵フェード時間の per-game 設定) ---
@@ -8978,6 +9032,7 @@ fn test_character_exit_with_fade_roundtrip() {
         Event::Exit {
             character: "ヴィンチア".to_string(),
             fade_ms: Some(2100),
+            exit_direction: None,
         }
     );
     let md = emitter::emit(&doc);
@@ -8991,6 +9046,7 @@ fn test_character_exit_with_fade_roundtrip() {
         Event::Exit {
             character: "ヴィンチア".to_string(),
             fade_ms: Some(2100),
+            exit_direction: None,
         }
     );
 }
@@ -9004,6 +9060,7 @@ fn test_character_exit_without_fade_stays_legacy_shape_on_emit() {
         Event::Exit {
             character: "トモ".to_string(),
             fade_ms: None,
+            exit_direction: None,
         }
     );
     let md = emitter::emit(&doc);
@@ -9663,6 +9720,7 @@ fn telop_test_doc_base() -> Document {
         character_height_ratios: std::collections::HashMap::new(),
         character_scale: None,
         character_fade_ms: None,
+        character_move_ms: None,
         background_fade_ms: None,
         event_image_fade_ms: None,
         event_image_transition: EventImageTransition::default(),
