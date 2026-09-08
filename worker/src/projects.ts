@@ -23,6 +23,7 @@ export const PROJECTS: ReadonlyArray<Project> = [
   { name: "elevator-gurl", title: "ヱレベヰターガール", repo: "kako-jun/elevator-gurl", external_url: "https://elevator-gurl.llll-ll.com" },
   { name: "the-peeple", title: "The Peeple", repo: "kako-jun/the-peeple", external_url: "https://the-peeple.llll-ll.com" },
   { name: "theo-hayami", title: "せおはやみ", repo: "kako-jun/theo-hayami", scriptsDir: "content/scripts" },
+  { name: "treppenwitz", title: "絶対もっといいセリフあったよな", repo: "kako-jun/treppenwitz" },
 ];
 
 export function findProject(name: string): Project | undefined {
