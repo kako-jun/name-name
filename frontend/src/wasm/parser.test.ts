@@ -1776,3 +1776,45 @@ describe('parseMarkdown + normalizeDocument: telop_reserve が normalize を生�
     expect(doc.telop_reserve).toBeNull()
   })
 })
+
+describe('parseMarkdown + normalizeDocument: 舞台構造の背景板が normalize を生き残る (#683)', () => {
+  // 実 wasm 境界（Assets.load 等をモックしないユニットテストとは別に、tsify のシリアライズ・
+  // normalizeEvents の undefined 正規化まで含めた実経路）で `[背景板:]` を検証する。
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s:',
+    '',
+    '[背景板: sky.png, depth: 10]',
+    '[背景板: mountain.png, depth: 7]',
+    '[背景板: tree.png]',
+    '',
+  ].join('\n')
+
+  it('1シーン内の複数 [背景板:] が加算的に3つの独立イベントとして残る', async () => {
+    const doc = await parseMarkdown(markdown)
+    const events = doc.chapters[0].scenes[0].events
+    expect(events).toEqual([
+      { BackgroundBoard: { path: 'sky.png', depth: 10 } },
+      { BackgroundBoard: { path: 'mountain.png', depth: 7 } },
+      { BackgroundBoard: { path: 'tree.png', depth: 0 } },
+    ])
+  })
+
+  it('emitMarkdown → 再 parse の round-trip で構文・値が保たれる', async () => {
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[背景板: sky.png, depth: 10]')
+    expect(emitted).toContain('[背景板: mountain.png, depth: 7]')
+    // depth 既定値 0 は round-trip 安定のため無出力になる。
+    expect(emitted).toContain('[背景板: tree.png]')
+    expect(emitted).not.toContain('tree.png, depth')
+
+    const doc2 = await parseMarkdown(emitted)
+    expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})
