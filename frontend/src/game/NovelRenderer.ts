@@ -48,7 +48,14 @@ import { ToastOverlay } from './ToastOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { isSceneIdConfined } from './sceneConfinement'
-import { CameraMode, CameraOrientation, Event, EventImageTransition, EventScene } from '../types'
+import {
+  CameraElevation,
+  CameraMode,
+  CameraOrientation,
+  Event,
+  EventImageTransition,
+  EventScene,
+} from '../types'
 import { ASPECT_RATIOS, type AspectRatio, DEFAULT_ASPECT_RATIO } from './constants'
 import {
   isRead,
@@ -717,6 +724,11 @@ export class NovelRenderer {
   private cameraMode: CameraMode = 'Novel'
   /** シアターモードのカメラの向き (#681)。`cameraMode` が 'Novel' のときは意味を持たない。 */
   private cameraOrientation: CameraOrientation = 'Audience'
+  /**
+   * シアターモードのカメラ仰角 (#682)。`cameraOrientation` と同種の宣言的 settled state。
+   * `cameraMode` が 'Novel' のときは意味を持たない。null = 水平（既定）。
+   */
+  private cameraElevation: CameraElevation | null = null
 
   /** 枠なしモードのデフォルト値（per-game 設定）。per-scene の DialogBorderless で上書きされる */
   private defaultDialogBorderless: boolean = false
@@ -1768,6 +1780,7 @@ export class NovelRenderer {
     // シーンをまたいで暗黙に持ち越さず、そのシーンで必要なら明示的に [カメラ:] を書く。
     this.cameraMode = 'Novel'
     this.cameraOrientation = 'Audience'
+    this.cameraElevation = null
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
     this.dialogBox.clearText()
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
@@ -3090,6 +3103,7 @@ export class NovelRenderer {
       currentBgmPath: this.currentBgmPath,
       cameraMode: this.cameraMode,
       cameraOrientation: this.cameraOrientation,
+      cameraElevation: this.cameraElevation,
       storyEnded: this.storyEnded,
     }
   }
@@ -3488,10 +3502,11 @@ export class NovelRenderer {
     // 暗転復元（セーブ/ロード・シーク・任意局面起動の applyState はすべてここを通る #350）
     this.setBlackout(state.isBlackout)
 
-    // カメラモード復元 (#681)。isBlackout と同種の宣言的 settled state で、
+    // カメラモード復元 (#681/#682)。isBlackout と同種の宣言的 settled state で、
     // goBack/seekTo/セーブ復元/任意局面起動のすべてがこの applyState を通る。
     this.cameraMode = state.cameraMode
     this.cameraOrientation = state.cameraOrientation
+    this.cameraElevation = state.cameraElevation
 
     // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）。
     // novel 役割配置 (#286): protagonist 指定時は復元でも質問役=左 / 回答役=右の x を当てる
@@ -4145,10 +4160,12 @@ export class NovelRenderer {
       return
     }
     if ('CameraMode' in event) {
-      // #681: GameState 更新のみの薄い配線。実際の射影計算（cameraProjection）の描画反映は
-      // depth 値の配線（#683）待ち。orientation 省略/未知値は客席相当（'Audience'）。
+      // #681/#682: GameState 更新のみの薄い配線。実際の射影計算（cameraProjection）の描画反映は
+      // depth 値の配線（#683）待ち。orientation 省略/未知値は客席相当（'Audience'）、
+      // elevation 省略/未知値は水平相当（null）。
       this.cameraMode = event.CameraMode.mode
       this.cameraOrientation = event.CameraMode.orientation ?? 'Audience'
+      this.cameraElevation = event.CameraMode.elevation ?? null
       return
     }
     if ('Bgm' in event) {
@@ -5104,6 +5121,7 @@ export class NovelRenderer {
       currentBgmPath: snapshot.currentBgmPath,
       cameraMode: snapshot.cameraMode,
       cameraOrientation: snapshot.cameraOrientation,
+      cameraElevation: snapshot.cameraElevation,
       savedAt: new Date().toISOString(),
       sceneName,
     }
@@ -5173,6 +5191,7 @@ export class NovelRenderer {
         currentBgmPath: snapshot.currentBgmPath,
         cameraMode: snapshot.cameraMode,
         cameraOrientation: snapshot.cameraOrientation,
+        cameraElevation: snapshot.cameraElevation,
         savedAt: new Date().toISOString(),
         sceneName,
       }
@@ -5596,6 +5615,7 @@ export class NovelRenderer {
       currentBgmPath: null,
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
+      cameraElevation: null,
       storyEnded: false,
     }
     this.restoreToScene(scene, state)

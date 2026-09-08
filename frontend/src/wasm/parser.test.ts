@@ -1709,6 +1709,45 @@ describe('parseMarkdown: CameraMode イベントが実 WASM parser を通して�
       CameraMode: { mode: 'Theater', orientation: 'Stage' },
     })
   })
+
+  // #682: elevation も orientation と同じ実 WASM 経由の回帰防止線。
+  it('[カメラ: シアター, 仰角: 見上げ] が Theater + elevation:LookUp として届く', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[カメラ: シアター, 仰角: 見上げ]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      CameraMode: { mode: 'Theater', elevation: 'LookUp' },
+    })
+  })
+
+  it('[カメラ: シアター, 向き: 舞台, 仰角: 見下ろし] が向き/仰角同時指定で届く', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[カメラ: シアター, 向き: 舞台, 仰角: 見下ろし]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      CameraMode: { mode: 'Theater', orientation: 'Stage', elevation: 'LookDown' },
+    })
+  })
 })
 
 describe('parseMarkdown + normalizeDocument: telop_reserve が normalize を生き残る (#674)', () => {

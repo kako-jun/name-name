@@ -1154,6 +1154,8 @@ describe('saveSlotToGameState', () => {
       // カメラモード (#681)。古いセーブには無い → ノベル/客席（既定）にフォールバック。
       cameraMode: data.cameraMode ?? 'Novel',
       cameraOrientation: data.cameraOrientation ?? 'Audience',
+      // カメラ仰角 (#682)。古いセーブには無い → 水平（既定）にフォールバック。
+      cameraElevation: data.cameraElevation ?? null,
       // 終劇状態 (#386) は SaveSlotData 未対応。セーブ/ロードは常に「終劇していない」扱い。
       storyEnded: false,
     }
@@ -1185,6 +1187,7 @@ describe('saveSlotToGameState', () => {
       currentBgmPath: 'bgm/main.mp3',
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
+      cameraElevation: null,
       storyEnded: false,
     })
   })
@@ -1245,6 +1248,22 @@ describe('saveSlotToGameState', () => {
     const state = saveSlotToGameState(data, null)
     expect(state.cameraMode).toBe('Theater')
     expect(state.cameraOrientation).toBe('Stage')
+  })
+
+  // CAM3: cameraElevation を持たない（旧形式セーブ相当）入力 → null（水平）にフォールバックし
+  // 例外も投げない (#682)。CAM1 と対の確認。
+  it('CAM3: cameraElevation 無しの入力（旧形式セーブ）→ null にフォールバックし例外を投げない', () => {
+    const data = baseData()
+    expect(() => saveSlotToGameState(data, null)).not.toThrow()
+    const state = saveSlotToGameState(data, null)
+    expect(state.cameraElevation).toBeNull()
+  })
+
+  // CAM4: cameraElevation 指定ありはそのまま透過する（CAM2 と対の確認）。
+  it('CAM4: cameraElevation=LookUp 指定あり → そのまま透過する', () => {
+    const data: SaveSlotData = { ...baseData(), cameraMode: 'Theater', cameraElevation: 'LookUp' }
+    const state = saveSlotToGameState(data, null)
+    expect(state.cameraElevation).toBe('LookUp')
   })
 })
 

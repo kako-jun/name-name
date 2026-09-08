@@ -493,7 +493,11 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 prev_was_dialog_or_text = false;
             }
-            Event::CameraMode { mode, orientation } => {
+            Event::CameraMode {
+                mode,
+                orientation,
+                elevation,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
@@ -507,14 +511,20 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 // 組み合わせ {mode: Novel, orientation: Some(Stage)} を直接構築して渡した場合に
                 // `[カメラ: ノベル, 向き: 舞台]` という不自然な行を出力してしまい、再パースで
                 // {Novel, None} に戻る非対称 round-trip になる（QAテストで検出・固定済み）。
-                match (mode, orientation) {
-                    (CameraMode::Theater, Some(CameraOrientation::Stage)) => {
-                        out.push_str(&format!("[カメラ: {mode_token}, 向き: 舞台]\n"));
-                    }
-                    _ => {
-                        out.push_str(&format!("[カメラ: {mode_token}]\n"));
-                    }
-                }
+                let orientation_suffix = match (mode, orientation) {
+                    (CameraMode::Theater, Some(CameraOrientation::Stage)) => ", 向き: 舞台",
+                    _ => "",
+                };
+                // #682: elevation も orientation と同じ非対称 round-trip パターン。値だけでなく
+                // mode も match のタプルに含めて判定する（#681 の教訓を最初から反映、同じ轍を踏まない）。
+                let elevation_suffix = match (mode, elevation) {
+                    (CameraMode::Theater, Some(CameraElevation::LookUp)) => ", 仰角: 見上げ",
+                    (CameraMode::Theater, Some(CameraElevation::LookDown)) => ", 仰角: 見下ろし",
+                    _ => "",
+                };
+                out.push_str(&format!(
+                    "[カメラ: {mode_token}{orientation_suffix}{elevation_suffix}]\n"
+                ));
                 prev_was_dialog_or_text = false;
             }
             Event::SceneTransition => {
