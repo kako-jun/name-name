@@ -5,7 +5,14 @@
  * NovelRenderer.setEvents() でリセットされない。
  */
 
-import { AmbientEffects, CameraMode, CameraOrientation, Event, FlagValue } from '../types'
+import {
+  AmbientEffects,
+  CameraElevation,
+  CameraMode,
+  CameraOrientation,
+  Event,
+  FlagValue,
+} from '../types'
 import { safeAssign } from './ownProperty'
 
 /**
@@ -119,6 +126,12 @@ export interface NovelGameState {
    * `cameraMode` が 'Novel' のときは意味を持たない（無視される）。
    */
   cameraOrientation: CameraOrientation
+  /**
+   * シアターモードのカメラ仰角 (#682)。null（既定・水平）/ 'LookUp'（見上げ）/ 'LookDown'（見下ろし）。
+   * `cameraOrientation` と同じく `cameraMode` が 'Novel' のときは意味を持たない（無視される）。
+   * 新しいシーン開始時は null（水平）に戻る（cameraOrientation と同じ規律）。
+   */
+  cameraElevation: CameraElevation | null
   /**
    * 終劇状態 (#386)。`?scene=` ディープリンク単独埋め込みの confinement（在圏）外へ
    * choice でジャンプしようとしたときに true になる、宣言的なフラグ。

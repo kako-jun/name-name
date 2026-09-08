@@ -18,6 +18,11 @@ export type CameraMode = 'Novel' | 'Theater'
 /** シアターモードのカメラの向き (#681)。既定は 'Audience'（客席視点）。'Stage' は逆転
  *  （演者の背中越しに客席が見える構図）。`CameraMode` が 'Novel' のときは意味を持たない。 */
 export type CameraOrientation = 'Audience' | 'Stage'
+/** シアターモードのカメラ仰角 (#682)。既定は水平（null/undefined）。'LookUp' は見上げ
+ *  （斜め下から見上げるアングル、力強さ・迫力）、'LookDown' は見下ろし（斜め上から見下ろす
+ *  アングル、俯瞰・儚さ）。`向き`（客席/舞台）とは独立した第2軸。`CameraMode` が 'Novel'
+ *  のときは意味を持たない。 */
+export type CameraElevation = 'LookUp' | 'LookDown'
 /** イベント絵の背面（背景・立ち絵）扱い (#351)。既定は 'Hide' */
 export type EventImageBack = 'Hide' | 'Keep'
 /** イベント絵の遷移モード (#583)。既定は 'Fade'（既存の透明度フェード、非回帰）。
@@ -523,12 +528,15 @@ export type Event =
       }
     }
   | {
-      /** カメラモード切り替え (#681)。`[カメラ: シアター]` / `[カメラ: ノベル]`。
+      /** カメラモード切り替え (#681/#682)。`[カメラ: シアター]` / `[カメラ: ノベル]`。
        *  `orientation` は `mode === 'Theater'` のときだけ意味を持つ（`向き: 客席|舞台`）。
-       *  null/undefined = 客席（既定）。'Stage' を明示指定したときだけそれ以外の値になる。 */
+       *  null/undefined = 客席（既定）。'Stage' を明示指定したときだけそれ以外の値になる。
+       *  `elevation` も同様に `mode === 'Theater'` のときだけ意味を持つ（`仰角: 水平|見上げ|見下ろし`）。
+       *  null/undefined = 水平（既定）。'LookUp'/'LookDown' を明示指定したときだけそれ以外の値になる。 */
       CameraMode: {
         mode: CameraMode
         orientation?: CameraOrientation | null
+        elevation?: CameraElevation | null
       }
     }
 
