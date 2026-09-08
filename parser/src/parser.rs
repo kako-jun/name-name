@@ -1035,6 +1035,12 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
             color: rest.trim().to_string(),
         });
     }
+    // [背景板: path] / [背景板: path, depth: N] — 舞台構造の背景板 (#683)。
+    // strip_prefix("背景:") は "背景板: …" にマッチしない（3 文字目が ':' でなく '板'）ため
+    // 順序非依存だが、意図を明示するため「背景:」より前に置く（背景色: と同じ慣例）。
+    if let Some(rest) = content.strip_prefix("背景板:") {
+        return Some(parse_background_board_directive(rest));
+    }
     if let Some(rest) = content.strip_prefix("背景:") {
         return Some(parse_background_directive(rest));
     }
@@ -1463,6 +1469,42 @@ fn parse_brightness_kv(value: &str) -> Option<f32> {
     } else {
         None
     }
+}
+
+/// `[背景板: path]` / `[背景板: path, depth: N]` の本体を分解する (#683)。
+/// `parse_background_directive` と同じく最初の `,` で path / kv を分離する。
+/// `depth:` は `parse_camera_mode_directive` の `向き:`/`仰角:` と同じコロン kv 記法
+/// （docs/architecture.md のシアターモード構想節の例に合わせる。`=` ではない）。
+/// 非数値・NaN・省略は `0.0`（最前面）にフォールバックする（厳密なバリデーションはフロント側の
+/// 描画時クランプに委ねる、Issue #683 方針）。未知のキーは silent skip する（後方互換重視）。
+fn parse_background_board_directive(content: &str) -> Event {
+    let (path_part, kv_part) = match content.split_once(',') {
+        Some((p, rest)) => (p, Some(rest)),
+        None => (content, None),
+    };
+    let path = path_part.trim().to_string();
+
+    let mut depth: f32 = 0.0;
+    if let Some(kv) = kv_part {
+        for raw in kv.split(',') {
+            let pair = raw.trim();
+            if pair.is_empty() {
+                continue;
+            }
+            if let Some((k, v)) = pair.split_once(':') {
+                if k.trim() == "depth" {
+                    depth = v
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|n| n.is_finite())
+                        .unwrap_or(0.0);
+                }
+            }
+        }
+    }
+
+    Event::BackgroundBoard { path, depth }
 }
 
 /// `[動画: path]` / `[動画: path, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, ...]`
@@ -4153,6 +4195,62 @@ title: "test"
         let emitted = emit(&doc1);
         let doc2 = parse(&emitted);
         assert_eq!(doc1, doc2, "background color round-trip should be stable");
+    }
+
+    // ===== 舞台構造の背景板 (#683) =====
+
+    #[test]
+    fn parses_background_board_with_and_without_depth() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景板: sky.png]\n[背景板: mountain.png, depth: 7]\n[背景板: bogus.png, depth: not-a-number]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0],
+            Event::BackgroundBoard {
+                path: "sky.png".to_string(),
+                depth: 0.0,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::BackgroundBoard {
+                path: "mountain.png".to_string(),
+                depth: 7.0,
+            }
+        );
+        // 非数値な depth は 0.0 (最前面) にフォールバックする。
+        assert_eq!(
+            events[2],
+            Event::BackgroundBoard {
+                path: "bogus.png".to_string(),
+                depth: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn background_board_does_not_shadow_background() {
+        // `[背景: …]` が `背景板` パスに吸われていないこと（プレフィックス衝突回避、背景色と同じ規約）。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景: bg.png]\n[背景板: board.png, depth: 3]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], Event::Background { .. }));
+        assert!(matches!(events[1], Event::BackgroundBoard { .. }));
+    }
+
+    #[test]
+    fn background_board_multiple_accumulate_and_roundtrip() {
+        // 1シーン内に複数の [背景板:] を書くと加算的に蓄積される（単一スロットの背景とは違う意味論）。
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景板: sky.png, depth: 10]\n[背景板: mountain.png, depth: 7]\n[背景板: tree.png, depth: 4]\n";
+        let doc1 = parse(input);
+        let events = &doc1.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3, "3枚とも独立したイベントとして蓄積される");
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "background board round-trip should be stable");
     }
 
     #[test]

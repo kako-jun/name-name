@@ -286,6 +286,19 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&format!("[背景: {path}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
+            Event::BackgroundBoard { path, depth } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // #683: depth はコロン kv 記法（CameraMode の 向き:/仰角: と同じ）。
+                // 既定値 0.0（最前面）は round-trip 安定のため無出力にする。
+                let mut kv = String::new();
+                if *depth != 0.0 {
+                    kv.push_str(&format!(", depth: {depth}"));
+                }
+                out.push_str(&format!("[背景板: {path}{kv}]\n"));
+                prev_was_dialog_or_text = false;
+            }
             Event::BackgroundColor { color } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
