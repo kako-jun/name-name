@@ -1220,6 +1220,39 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 退場の方向モーション（`stageMotion.kind === 'exit'`）予約中の同 id 再表示を、歩行退場の
+   * キャンセル→通常の再表示ロジックへの合流に切り替える共通ヘルパー (#684 バグ修正)。
+   *
+   * `reviveFromExitFade`（fadeAnimation 版）と対の役割。show() の既存キャラ分岐の先頭で
+   * 必ず呼ぶ（no-op/textureChanged/positionChanged いずれの後続分岐より前）。
+   *
+   * 修正前の挙動（バグ）: `remove()` の方向指定退場は `fadeAnimation` を張らないため、
+   * `reviveFromExitFade` は `existing.fadeAnimation?.destroyOnComplete` を見ても何も検知できず
+   * no-op だった。結果、同じ表情/位置で再 show されると show() 先頭の no-op ガード
+   * （expression/position/fit 一致）に落ちて完全な無反応になり、歩行退場は止まらず最終的に
+   * キャラが破棄される。表情/位置が変わる再 show でも `positionChanged` 分岐が `sprite.x` を
+   * 書き換えた直後、次の ticker フレームで `stageMotion` 処理が `sprite.x` を退場軌道の位置へ
+   * 上書きしてしまい、結局は同じく破棄される。
+   *
+   * 修正: `existing.stageMotion?.kind === 'exit'` を検知したら、`stageMotion` を破棄して
+   * `sprite.x`（および追従する `label.x`）を退場開始時点の位置（`stageMotion.baseX`）へ
+   * 即座に戻す。以降は通常の再 show ロジック（no-op / textureChanged クロスフェード /
+   * positionChanged の `sprite.x` 上書き）がそのまま効き、position が変わっていればその後の
+   * 分岐がさらに新しい targetX へ上書きする。ticker 側（ensureTicker）はこの id の
+   * `stageMotion` を毎フレーム `state.stageMotion` 経由で見るだけなので、ここで null にすれば
+   * 以降のフレームで `sprite.x` が退場軌道へ巻き戻されることはない。
+   *
+   * `stageMotion.kind === 'enter'`（入場walk中）や `stageMotion` 無しのときは no-op
+   * （対象は退場walkのキャンセルだけ）。
+   */
+  private reviveFromExitStageMotion(existing: CharacterState): void {
+    if (existing.stageMotion?.kind !== 'exit') return
+    existing.sprite.x = existing.stageMotion.baseX
+    if (existing.label) existing.label.x = existing.sprite.x
+    existing.stageMotion = null
+  }
+
+  /**
    * タイトルカード補助要素（ラベル/画像 #274）の入場フェードを開始する共通ヘルパー (#427)。
    *
    * showLabel/showImage の load/font 解決後の `.then()` から呼ぶ。両者でほぼ同一のフェード設定
@@ -1335,6 +1368,8 @@ export class CharacterLayer extends Container {
     if (existing) {
       // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す (#177)
       this.reviveFromExitFade(existing, instant)
+      // 退場walk中の再 show: 歩行退場をキャンセルして通常の再表示ロジックへ合流させる (#684 バグ修正)
+      this.reviveFromExitStageMotion(existing)
 
       // novel 役割配置 (#286): override x がある再 show は、現在の sprite.x と違えば
       // 「横位置変更あり」とみなす（position トークンは同じでも質問役↔回答役の入替で x が動く）。
@@ -3322,6 +3357,14 @@ export class CharacterLayer extends Container {
       this.maybeStopTicker()
       options?.onComplete?.()
       return
+    }
+    // フェード退場経路（方向未指定、または上の分岐から流れてきた instant でない残りのケース）を
+    // 選んだら、進行中の stageMotion（kind を問わず。入場walk中の方向未指定 [退場:] が主な対象）を
+    // クリアする (#684 バグ3)。残したままだと ticker が sprite.x を stageMotion の軌道で動かし
+    // 続け、tween 完了時に baseX へスナップする視覚グリッチになる。sprite.x はクリア時点の値の
+    // まま凍結され、以後は fadeAnimation（alpha のみ）に一本化される。
+    if (state.stageMotion) {
+      state.stageMotion = null
     }
     this.startFade(state, state.sprite.alpha, 0, true, options?.onComplete, durationMs)
   }
