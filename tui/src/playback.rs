@@ -2169,6 +2169,7 @@ mod tests {
             character_height_ratios: HashMap::new(),
             character_scale: None,
             character_fade_ms: None,
+            character_move_ms: None,
             background_fade_ms: None,
             event_image_fade_ms: None,
             event_image_transition: EventImageTransition::default(),
