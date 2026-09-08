@@ -1648,6 +1648,69 @@ describe('parseMarkdown + normalizeEvents: Telop が normalize を生き残る (
   })
 })
 
+describe('parseMarkdown: CameraMode イベントが実 WASM parser を通して正しく届く (#681)', () => {
+  // #310/#378/#582/#674 と同じ回帰防止線。normalizeEvents は CameraMode に専用分岐を
+  // 持たず末尾の汎用 `return event` に任せる設計（フィールドを列挙し直さないため
+  // 「列挙し忘れて値が落ちる」罠自体が発生しない）が、それでも実 WASM 経由で正しく
+  // 届くことを実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）で確認する。
+  it('[カメラ: シアター] が Theater として届く（orientation 省略）', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[カメラ: シアター]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      CameraMode: { mode: 'Theater' },
+    })
+  })
+
+  it('[カメラ: ノベル] が Novel として届く', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[カメラ: ノベル]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      CameraMode: { mode: 'Novel' },
+    })
+  })
+
+  it('[カメラ: シアター, 向き: 舞台] が Theater + Stage として届く', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[カメラ: シアター, 向き: 舞台]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events[0]).toEqual({
+      CameraMode: { mode: 'Theater', orientation: 'Stage' },
+    })
+  })
+})
+
 describe('parseMarkdown + normalizeDocument: telop_reserve が normalize を生き残る (#674)', () => {
   // fullscreen_image (#530/#547) と同じ流儀。normalizeDocument の列挙に telop_reserve を
   // 書き忘れると WASM が parse した値が /play runtime（DialogBox.setNovelBottomReserve）に届かず、
