@@ -11,7 +11,7 @@
  * 私的プロジェクトのため、既存セーブが消えても許容範囲）。
  */
 
-import { FlagValue } from '../types'
+import { CameraMode, CameraOrientation, FlagValue } from '../types'
 import { BackgroundFade, EventImageState, VideoState } from './GameState'
 
 const SLOT_COUNT = 3
@@ -62,6 +62,16 @@ export interface SaveSlotData {
   characters: Array<{ name: string; expression: string; position: string }>
   /** 再生中の BGM パス */
   currentBgmPath: string | null
+  /**
+   * カメラモード (#681)。
+   * 後方互換: 古いセーブデータには無い → undefined は 'Novel'（既定・従来通り）扱い。
+   */
+  cameraMode?: CameraMode
+  /**
+   * シアターモードのカメラの向き (#681)。
+   * 後方互換: 古いセーブデータには無い → undefined は 'Audience'（既定）扱い。
+   */
+  cameraOrientation?: CameraOrientation
   savedAt: string // ISO 8601
   sceneName: string | null
 }

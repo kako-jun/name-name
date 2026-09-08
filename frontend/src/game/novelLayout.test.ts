@@ -1150,6 +1150,9 @@ describe('saveSlotToGameState', () => {
       isBlackout: data.isBlackout ?? false,
       characters: data.characters ?? [],
       currentBgmPath: data.currentBgmPath ?? null,
+      // カメラモード (#681)。古いセーブには無い → ノベル/客席（既定）にフォールバック。
+      cameraMode: data.cameraMode ?? 'Novel',
+      cameraOrientation: data.cameraOrientation ?? 'Audience',
       // 終劇状態 (#386) は SaveSlotData 未対応。セーブ/ロードは常に「終劇していない」扱い。
       storyEnded: false,
     }
@@ -1179,6 +1182,8 @@ describe('saveSlotToGameState', () => {
       isBlackout: true,
       characters: [{ name: 'A', expression: 'smile', position: 'center' }],
       currentBgmPath: 'bgm/main.mp3',
+      cameraMode: 'Novel',
+      cameraOrientation: 'Audience',
       storyEnded: false,
     })
   })

@@ -1828,6 +1828,8 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     isBlackout: false,
     characters: [],
     currentBgmPath: null,
+    cameraMode: 'Novel',
+    cameraOrientation: 'Audience',
     storyEnded: false,
   }
 

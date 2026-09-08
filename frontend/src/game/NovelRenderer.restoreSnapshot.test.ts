@@ -114,6 +114,8 @@ function craftSnapshot(over: Partial<NovelGameState>): NovelGameState {
     isBlackout: false,
     characters: [],
     currentBgmPath: null,
+    cameraMode: 'Novel',
+    cameraOrientation: 'Audience',
     storyEnded: false,
     ...over,
   }
