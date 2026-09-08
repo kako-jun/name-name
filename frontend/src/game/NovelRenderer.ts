@@ -1805,6 +1805,17 @@ export class NovelRenderer {
     this.cameraMode = 'Novel'
     this.cameraOrientation = 'Audience'
     this.cameraElevation = null
+    // #683 PR #690 セルフレビュー must: BackgroundBoardLayer は自身のカメラ状態を内部に保持し、
+    // setCamera()（[カメラ:] ディレクティブ処理 / applyState 復元）でしか同期されない。上の
+    // 3行の代入だけでは伝わらないため、ここで明示的に同期する（entries が空なら no-op）。
+    // これを忘れると、preserveBackgroundForTransition=true で持ち越した板が前シーンのカメラ
+    // 射影（縮小表示等）のまま取り残されたり、新しいシーンで積む板が前シーンのカメラ状態で
+    // 配置されたりする（preserve/非 preserve どちらの分岐でも起きる。applyState の同種コメント参照）。
+    this.backgroundBoardLayer.setCamera(
+      this.cameraMode,
+      this.cameraOrientation,
+      this.cameraElevation
+    )
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
     this.dialogBox.clearText()
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット

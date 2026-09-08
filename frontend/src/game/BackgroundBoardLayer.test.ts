@@ -244,6 +244,44 @@ describe('スライドインアニメーション (#683)', () => {
     expect(entry.interval).toBeNull()
   })
 
+  // PR #690 セルフレビュー should: layoutBoard() は sprite.y だけ interval 稼働中（スライドイン中）
+  // ならガードして補間に委ねるが、width/height/x は毎回無条件で即座に上書きしていた。
+  // カメラ切替がスライドイン中に起きると、サイズと横位置だけ瞬間的にジャンプし、縦位置だけ
+  // 滑らかに補間されるという非対称なアニメーションになる。doc comment の「瞬間移動を避ける」
+  // 意図に合わせ、width/height/x も y と同じく次の updateSlideFrame（tick 駆動）まで反映を
+  // 遅らせるべき——という回帰テスト。
+  it('21: スライドイン中の setCamera() は width/height/x も y と同じく即座にジャンプせず、次の tick まで反映を遅らせる', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = new BackgroundBoardLayer(SCREEN_W, SCREEN_H, time)
+    const depth = 10 // THEATER_CAMERA_REFERENCE_DEPTH と揃えて scale=0.5 にする
+    layer.add('board.png', depth, '/assets') // ノベルモード（既定）でスライドイン開始（scale=1）
+    await flushPromises()
+    const entry = internals(layer).entries[0]
+    expect(entry.interval).not.toBeNull()
+    expect(entry.sprite?.width).toBe(SCREEN_W)
+
+    time.tick(BOARD_SLIDE_IN_MS / 2) // スライドイン継続中
+
+    layer.setCamera('Theater', 'Audience', null) // depth=10 → scale = 10/(10+10) = 0.5
+
+    // setCamera() 呼び出し直後（同じ tick 内）は、y と同じく width/height/x もまだジャンプしない。
+    expect(entry.sprite?.width).toBe(SCREEN_W)
+    expect(entry.sprite?.height).toBe(SCREEN_H)
+    expect(entry.interval).not.toBeNull() // tween 自体は中断されない（テスト観点3と同じ）
+
+    // 次の tick（16ms）で width/height/x も y と同じタイミングで新しい値へ反映される。
+    time.tick(16)
+    expect(entry.sprite?.width).toBeCloseTo(SCREEN_W * 0.5)
+    expect(entry.sprite?.height).toBeCloseTo(SCREEN_H * 0.5)
+
+    // スライドイン完了後も新しいカメラ状態のサイズのまま。
+    time.tick(BOARD_SLIDE_IN_MS)
+    expect(entry.sprite?.width).toBeCloseTo(SCREEN_W * 0.5)
+    expect(entry.sprite?.y).toBe(SCREEN_H / 2)
+    expect(entry.interval).toBeNull()
+  })
+
   it('restore()（instant）はスライドインを起こさず即座に最終位置へ配置する（ADR-0002）', async () => {
     mockAssetsLoadResolved()
     const layer = new BackgroundBoardLayer(SCREEN_W, SCREEN_H, virtualTime())

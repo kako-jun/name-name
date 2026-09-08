@@ -57,9 +57,16 @@ interface BoardEntry {
   textureHeight: number
   /** clear()/destroy() 済みなら true。非同期ロード完了時にこれを見て古い応答を無視する。 */
   disposed: boolean
-  /** layoutBoard() が最後に計算した最終位置(スライドイン中はここへ向けて補間する)。 */
+  /** layoutBoard() が最後に計算した最終位置・サイズ(スライドイン中はここへ向けて補間する)。 */
   targetX: number
   targetY: number
+  /**
+   * layoutBoard() が最後に計算した最終サイズ。スライドイン中は sprite.width/height に即座には
+   * 反映せず、targetY と同じく updateSlideFrame() が毎フレーム反映する（#690 セルフレビュー
+   * should: y だけ補間してサイズと x は瞬間ジャンプする非対称を解消）。
+   */
+  targetWidth: number
+  targetHeight: number
   /** スライドイン中のみ非 null。TelopLayer の interval 駆動と同じ流儀。 */
   interval: number | null
   phaseStartedAtMs: number
@@ -122,6 +129,8 @@ export class BackgroundBoardLayer extends Container {
       disposed: false,
       targetX: this.screenWidth / 2,
       targetY: this.screenHeight / 2,
+      targetWidth: 0,
+      targetHeight: 0,
       interval: null,
       phaseStartedAtMs: this.time.now(),
     }
@@ -212,8 +221,10 @@ export class BackgroundBoardLayer extends Container {
 
   /**
    * `entry.sprite` の位置・サイズをカメラ射影に基づいて再計算する。スライドイン中（interval
-   * が動いている）の場合は `targetX/targetY` の更新だけ行い、実際の sprite.y は
-   * `updateSlideFrame` が毎フレーム補間するので触らない（瞬間移動を避ける）。
+   * が動いている）の場合は `targetX/targetY/targetWidth/targetHeight` の更新だけ行い、実際の
+   * sprite.width/height/x/y は `updateSlideFrame` が毎フレーム反映するので触らない
+   * （瞬間移動を避ける。#690 セルフレビュー should: 以前は width/height/x だけ無条件で
+   * 即座に上書きしており、y だけ補間されるという非対称なジャンプが起きていた）。
    */
   private layoutBoard(entry: BoardEntry): void {
     if (!entry.sprite) return
@@ -232,10 +243,12 @@ export class BackgroundBoardLayer extends Container {
     )
     entry.targetX = placement.x
     entry.targetY = placement.y
-    entry.sprite.width = placement.width
-    entry.sprite.height = placement.height
-    entry.sprite.x = placement.x
+    entry.targetWidth = placement.width
+    entry.targetHeight = placement.height
     if (entry.interval == null) {
+      entry.sprite.width = placement.width
+      entry.sprite.height = placement.height
+      entry.sprite.x = placement.x
       entry.sprite.y = placement.y
     }
   }
@@ -269,6 +282,12 @@ export class BackgroundBoardLayer extends Container {
     }
     const elapsed = this.time.now() - entry.phaseStartedAtMs
     const offset = computeBoardSlideInOffset(elapsed, BOARD_SLIDE_IN_MS)
+    // width/height/x はスライドイン中に setCamera() 等で targetWidth/targetHeight/targetX が
+    // 更新されていても layoutBoard() が触らないため、y と同じタイミング（このフレーム）で
+    // ここに反映する（#690 セルフレビュー should）。
+    entry.sprite.width = entry.targetWidth
+    entry.sprite.height = entry.targetHeight
+    entry.sprite.x = entry.targetX
     entry.sprite.y = entry.targetY + offset * this.screenHeight
     if (elapsed >= BOARD_SLIDE_IN_MS) {
       entry.sprite.y = entry.targetY

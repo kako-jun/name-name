@@ -17,9 +17,12 @@
  * `assetBaseUrl` を設定しないため `Assets.load` は呼ばれない（BackgroundBoardLayer.add() の
  * ガード。NovelRenderer.cameraMode.test.ts と同じ流儀で、状態配線だけを軽量に検証できる）。
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Assets, type Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
+import { GAME_WIDTH } from './constants'
+import { THEATER_CAMERA_REFERENCE_DEPTH } from './cameraProjection'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -34,6 +37,11 @@ function background(path: string): Event {
   return { Background: { path } } as Event
 }
 
+/** カメラモード切替（#681/#682。orientation/elevation は既定のまま mode だけ変える）。 */
+function cameraDirective(mode: 'Novel' | 'Theater'): Event {
+  return { CameraMode: { mode, orientation: undefined, elevation: undefined } } as Event
+}
+
 function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
@@ -44,6 +52,13 @@ interface BackgroundBoardLayerForTest {
   disposeTextures(): void
   add(path: string, depth: number, assetBaseUrl: string, opts?: { instant?: boolean }): void
   restore(boards: readonly { path: string; depth: number }[], assetBaseUrl: string): void
+  // entries はカメラ射影が実際にどう反映されたかをスプライトの幾何で検証するために読む
+  // （BackgroundBoardLayer.test.ts と同じ internals キャストの流儀）。
+  entries: {
+    path: string
+    depth: number
+    sprite: { x: number; y: number; width: number; height: number } | null
+  }[]
 }
 interface RendererInternals {
   backgroundBoardLayer: BackgroundBoardLayerForTest
@@ -233,4 +248,78 @@ describe('NovelRenderer BackgroundBoard の settled state / 破棄 / 復元経�
 
     expect(addSpy).toHaveBeenCalledWith('sky.png', 10, '', { instant: true })
   })
+})
+
+describe('NovelRenderer BackgroundBoard カメラ状態のシーン遷移同期 (PR #690 セルフレビュー must)', () => {
+  // resetAndStartEvents() は cameraMode/cameraOrientation/cameraElevation を毎シーン既定値へ
+  // リセットするが、backgroundBoardLayer が内部に保持するカメラ状態（setCamera() でしか
+  // 同期されない）は別。この3行の直後に backgroundBoardLayer.setCamera() を呼ばないと、
+  // getSnapshot().cameraMode は 'Novel' に戻るのに、持ち越された板は前シーンのカメラ射影
+  // （縮小表示）のまま取り残される。この describe は幾何（sprite.width）で実際の症状を検証する
+  // （BackgroundBoardLayer.test.ts が射影計算自体をカバー済みなので、ここでは配線の欠落だけを見る）。
+
+  function mockTexture(): Texture {
+    // 画面と同じアスペクト比のテクスチャ（cover-fit で screenWidth にぴったり一致させ、
+    // scale 以外の要因で width が動かないようにする。BackgroundBoardLayer.test.ts と同じ流儀）。
+    return { width: GAME_WIDTH, height: 450, source: { scaleMode: 'linear' } } as unknown as Texture
+  }
+
+  function mockAssetsLoadResolved(): void {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+  }
+
+  const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('通常のシーン間ジャンプで持ち越された板は、カメラが Novel にリセットされると原寸に戻る（Theater 射影を引きずらない）', async () => {
+    const r = new NovelRenderer()
+    r.getTimeController().setMode('virtual')
+    mockAssetsLoadResolved()
+    r.setAssetBaseUrl('/assets')
+    const depth = THEATER_CAMERA_REFERENCE_DEPTH // scale = REF/(REF+REF) = 0.5 になる depth を選ぶ
+    r.setScenes([
+      scene('a', [cameraDirective('Theater'), backgroundBoard('sky.png', depth), narration('one')]),
+      scene('b', [narration('two')]),
+    ])
+    await flushPromises()
+    // スライドイン演出を完了させ、y と同様に interval に左右されない状態で幾何を確認する。
+    r.getTimeController().tick(1000)
+
+    const layer = internals(r).backgroundBoardLayer
+    const before = layer.entries.find((e) => e.path === 'sky.png')?.sprite
+    expect(before?.width).toBeCloseTo(GAME_WIDTH * 0.5) // シーンA: Theater 射影で縮小
+
+    r.jumpToScene('b') // resetAndStartEvents（preserveBackgroundForTransition=true 分岐）
+
+    const after = layer.entries.find((e) => e.path === 'sky.png')?.sprite
+    expect(after?.width).toBe(GAME_WIDTH) // シーンB: Novel（原寸）に戻っているはず
+  })
+
+  it('カメラのみ Theater だったシーンから遷移後、新規 [背景板:] は Novel 射影（原寸）で配置される', async () => {
+    const r = new NovelRenderer()
+    r.getTimeController().setMode('virtual')
+    mockAssetsLoadResolved()
+    r.setAssetBaseUrl('/assets')
+    const depth = THEATER_CAMERA_REFERENCE_DEPTH
+    r.setScenes([
+      scene('a', [cameraDirective('Theater'), narration('one')]),
+      scene('b', [backgroundBoard('tree.png', depth), narration('two')]),
+    ])
+    await flushPromises()
+
+    r.jumpToScene('b') // resetAndStartEvents 直後にシーンBの [背景板:] が実行される
+    await flushPromises()
+
+    const layer = internals(r).backgroundBoardLayer
+    const sprite = layer.entries.find((e) => e.path === 'tree.png')?.sprite
+    expect(sprite?.width).toBe(GAME_WIDTH) // 古い Theater 射影を引きずらず Novel（原寸）で配置される
+  })
+
+  // 注記: `[場面転換]`（processDirective の 'SceneTransition' 分岐）はシーン内の演出リセット
+  // であって resetAndStartEvents を経由するシーン境界ではない。cameraMode 自体をここでは
+  // リセットしない設計（#681 のスコープ、docs/architecture.md 参照）のため、`[場面転換]` の
+  // 前後で backgroundBoardLayer とこの2状態が乖離することはなく、本 must 修正の対象外。
 })
