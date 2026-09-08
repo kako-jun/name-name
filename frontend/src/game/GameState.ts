@@ -5,7 +5,7 @@
  * NovelRenderer.setEvents() でリセットされない。
  */
 
-import { AmbientEffects, Event, FlagValue } from '../types'
+import { AmbientEffects, CameraMode, CameraOrientation, Event, FlagValue } from '../types'
 import { safeAssign } from './ownProperty'
 
 /**
@@ -107,6 +107,18 @@ export interface NovelGameState {
   isBlackout: boolean
   characters: Array<{ name: string; expression: string; position: string }>
   currentBgmPath: string | null
+  /**
+   * カメラモード (#681)。'Novel'（既定・正投影・従来通り）/ 'Theater'（透視投影）。
+   * `[カメラ: シアター]` / `[カメラ: ノベル]` イベント処理で更新する、isBlackout と同種の
+   * 宣言的な settled state（演出の中間状態ではない）。新しいシーン開始時は 'Novel' に戻る
+   * （isBlackout と同じくシーンをまたいで暗黙に持ち越さない、明示指定必須の設計）。
+   */
+  cameraMode: CameraMode
+  /**
+   * シアターモードのカメラの向き (#681)。'Audience'（既定・客席視点）/ 'Stage'（逆転）。
+   * `cameraMode` が 'Novel' のときは意味を持たない（無視される）。
+   */
+  cameraOrientation: CameraOrientation
   /**
    * 終劇状態 (#386)。`?scene=` ディープリンク単独埋め込みの confinement（在圏）外へ
    * choice でジャンプしようとしたときに true になる、宣言的なフラグ。

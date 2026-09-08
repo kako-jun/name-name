@@ -10,6 +10,14 @@ export type Mode = 'edit' | 'play'
 
 export type BgmAction = 'Play' | 'Stop'
 export type BlackoutAction = 'On' | 'Off'
+/** カメラモード (#681)。既定は 'Novel'（正投影、奥行きによる縮小なし、既存描画と完全一致）。
+ *  'Theater' は透視投影（奥行きに応じて縮小）を適用する演劇/漫才向けカメラ。
+ *  `dialog_style`/`split_layout` と同じ独立の per-scene 設定軸（docs/architecture.md
+ *  「シアターモード構想」）。実際の depth 値付与・縮小描画配線は別 Issue（#683）。 */
+export type CameraMode = 'Novel' | 'Theater'
+/** シアターモードのカメラの向き (#681)。既定は 'Audience'（客席視点）。'Stage' は逆転
+ *  （演者の背中越しに客席が見える構図）。`CameraMode` が 'Novel' のときは意味を持たない。 */
+export type CameraOrientation = 'Audience' | 'Stage'
 /** イベント絵の背面（背景・立ち絵）扱い (#351)。既定は 'Hide' */
 export type EventImageBack = 'Hide' | 'Keep'
 /** イベント絵の遷移モード (#583)。既定は 'Fade'（既存の透明度フェード、非回帰）。
@@ -512,6 +520,15 @@ export type Event =
         from_alpha: number
         to_alpha: number
         duration_ms: number
+      }
+    }
+  | {
+      /** カメラモード切り替え (#681)。`[カメラ: シアター]` / `[カメラ: ノベル]`。
+       *  `orientation` は `mode === 'Theater'` のときだけ意味を持つ（`向き: 客席|舞台`）。
+       *  null/undefined = 客席（既定）。'Stage' を明示指定したときだけそれ以外の値になる。 */
+      CameraMode: {
+        mode: CameraMode
+        orientation?: CameraOrientation | null
       }
     }
 
