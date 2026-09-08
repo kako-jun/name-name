@@ -1101,6 +1101,11 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
             action: BlackoutAction::Off,
         });
     }
+    // [カメラ: シアター] / [カメラ: ノベル] / [カメラ: シアター, 向き: 客席] /
+    // [カメラ: シアター, 向き: 舞台] (#681)
+    if let Some(rest) = content.strip_prefix("カメラ:") {
+        return Some(parse_camera_mode_directive(rest));
+    }
     if content == "場面転換" {
         return Some(Event::SceneTransition);
     }
@@ -1638,6 +1643,35 @@ fn parse_event_image_exit_directive(content: &str) -> Event {
         }
     }
     Event::EventImageExit { fade_ms }
+}
+
+/// `[カメラ: <mode>]` / `[カメラ: <mode>, 向き: <orientation>]` を解釈する (#681)。
+///
+/// mode: `"シアター"` のときだけ `CameraMode::Theater`。それ以外（`"ノベル"`・省略・未知値）は
+/// `CameraMode::Novel` にフォールバックする（`dialog_style`/`Blackout` と同じ後方互換パターン）。
+///
+/// orientation: `mode` が `Theater` のときだけ解釈する（`Novel` のときは `向き:` があっても無視し
+/// 常に `None`）。`向き: 舞台` のときだけ `Some(CameraOrientation::Stage)`。それ以外
+/// （`向き: 客席`・省略・未知値）は `None`（= 客席相当、既定）にフォールバックする。
+fn parse_camera_mode_directive(content: &str) -> Event {
+    let mut parts = content.split(',');
+    let mode = match parts.next().unwrap_or("").trim() {
+        "シアター" => CameraMode::Theater,
+        _ => CameraMode::Novel,
+    };
+
+    let mut orientation = None;
+    if mode == CameraMode::Theater {
+        for part in parts {
+            if let Some(v) = part.trim().strip_prefix("向き:") {
+                if v.trim() == "舞台" {
+                    orientation = Some(CameraOrientation::Stage);
+                }
+            }
+        }
+    }
+
+    Event::CameraMode { mode, orientation }
 }
 
 /// `[テロップ: 本文, 位置=右下, 秒=4, 種別=しおり]` を解釈する (#674)。
@@ -4101,6 +4135,172 @@ title: "test"
         let emitted = emit(&doc1);
         let doc2 = parse(&emitted);
         assert_eq!(doc1, doc2, "background color round-trip should be stable");
+    }
+
+    #[test]
+    fn parses_camera_mode_theater_and_novel() {
+        // 基本形: シアター/ノベル、未知値・省略は Novel にフォールバック (#681)。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター]\n[カメラ: ノベル]\n[カメラ: 謎の値]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::CameraMode {
+                mode: CameraMode::Novel,
+                orientation: None,
+            }
+        );
+        assert_eq!(
+            events[2],
+            Event::CameraMode {
+                mode: CameraMode::Novel,
+                orientation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_camera_mode_orientation() {
+        // 向き指定 (#681)。客席/省略/未知値は None、舞台のみ Some(Stage)。
+        // Novel モードでは 向き: が付いていても無視される。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 客席]\n[カメラ: シアター, 向き: 舞台]\n[カメラ: ノベル, 向き: 舞台]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: Some(CameraOrientation::Stage),
+            }
+        );
+        assert_eq!(
+            events[2],
+            Event::CameraMode {
+                mode: CameraMode::Novel,
+                orientation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn camera_mode_roundtrip() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 舞台]\n[カメラ: ノベル]\n";
+        let doc1 = parse(input);
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "camera mode round-trip should be stable");
+    }
+
+    #[test]
+    fn parses_camera_mode_unknown_orientation_falls_back_to_none() {
+        // 未知の 向き 値（"天井"）は Some(Stage) 以外すべて None にフォールバックする (#681)。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 向き: 天井]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Theater,
+                orientation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_camera_mode_empty_content_defaults_to_novel() {
+        // `[カメラ:]`（mode 省略・空 content）は Novel にフォールバックする (#681)。
+        let input =
+            "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ:]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            Event::CameraMode {
+                mode: CameraMode::Novel,
+                orientation: None,
+            }
+        );
+    }
+
+    // #681 QAレポート「3. 過去事故パターンとの照合結果で見つかった新規バグ候補」対応。
+    //
+    // emitter.rs の CameraMode 出力は元は orientation の値だけを見て `向き:` を出力するかを
+    // 決めており、mode を見ていなかった。パーサー・エディタが通常は作らない組み合わせ
+    // `{mode: Novel, orientation: Some(Stage)}` を直接構築して emit に渡すと
+    // `[カメラ: ノベル, 向き: 舞台]` という不自然な行を出力していた。
+    //
+    // 注: `{Novel, Some(Stage)}` というタプル自体は「Novel モードでは 向き: を出力しない」
+    // 設計上、reparse すると常に `{Novel, None}` に丸められる（正規形が Novel×Stage の組を
+    // 表現できないのは意図どおりで、emitter 修正の前後で変わらない）。したがってこのテストは
+    // `doc1 == doc2`（crafted event 自体の完全な往復）ではなく、emitter 修正が実際に保証する
+    // 性質 — 「mode=Novel なら orientation の値に関わらず常に同じ（向き: を含まない）テキストを
+    // 出力する」「その出力は1回目の emit の時点で既に安定形（reparse→再emit しても変化しない）」
+    // — を固定する。修正前は先頭の等値チェックで FAILED することを確認済み。
+    #[test]
+    fn camera_mode_emitter_ignores_orientation_when_mode_is_not_theater() {
+        use crate::emitter::emit;
+
+        fn emit_single_camera_event(event: Event) -> String {
+            let base =
+                "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: ノベル]\n";
+            let mut doc = parse(base);
+            doc.chapters[0].scenes[0].events[0] = event;
+            emit(&doc)
+        }
+
+        // パーサー・エディタが通常作らない組み合わせ。
+        let text_with_bogus_orientation = emit_single_camera_event(Event::CameraMode {
+            mode: CameraMode::Novel,
+            orientation: Some(CameraOrientation::Stage),
+        });
+        let text_with_none = emit_single_camera_event(Event::CameraMode {
+            mode: CameraMode::Novel,
+            orientation: None,
+        });
+
+        assert_eq!(
+            text_with_bogus_orientation, text_with_none,
+            "mode=Novel の出力は orientation の値に関わらず同じテキストになるべき（向き: を出力しない）"
+        );
+        assert!(
+            !text_with_bogus_orientation.contains("向き:"),
+            "mode=Novel のときに 向き: が出力されてはいけない"
+        );
+
+        // reparse すると常に {Novel, None} に丸められ、そこから再度 emit した結果は
+        // 最初の emit 結果と一致する（＝1回目の emit から既に安定形になっている）。
+        let reparsed = parse(&text_with_bogus_orientation);
+        assert_eq!(
+            reparsed.chapters[0].scenes[0].events[0],
+            Event::CameraMode {
+                mode: CameraMode::Novel,
+                orientation: None,
+            }
+        );
+        let re_emitted = emit(&reparsed);
+        assert_eq!(
+            re_emitted, text_with_bogus_orientation,
+            "修正後は1回目の emit の時点で既に安定形になっているため、再emit しても変化しない"
+        );
     }
 
     #[test]

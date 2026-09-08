@@ -979,9 +979,11 @@ MapEditor/NPCEditor の変更
 - `rpgProjectFromDoc(doc, sceneId?)` — doc → RPGProject（マップが無ければ null）
 - `applyRpgProjectToDoc(doc, project, sceneId)` — RPGProject → doc（既存シーンの RPG 要素を置換、無ければ新シーン追加）
 
-## シアターモード構想（未実装・設計段階）
+## シアターモード構想（基盤実装済み・描画は未実装）
 
-舞台/漫才向けの制約付き制作ゲーム「絶対もっといいセリフあったよな」のための、カメラ・舞台演出の設計。現時点では **未実装**。既存の `dialog_style`（`adv`/`novel`, #283）・`split_layout`（Gymnasia向け, #442）と同じく、既存の2択を置き換えずに**独立した per-game 設定軸を積み重ねる**方針に倣う。おぐらじあの計画中のコミック風表示も同じ並びの軸になる想定（4つ目）。シアター/舞台は5つ目としてこの並びに合流する。
+舞台/漫才向けの制約付き制作ゲーム「絶対もっといいセリフあったよな」のための、カメラ・舞台演出の設計。既存の `dialog_style`（`adv`/`novel`, #283）・`split_layout`（Gymnasia向け, #442）と同じく、既存の2択を置き換えずに**独立した per-game 設定軸を積み重ねる**方針に倣う。おぐらじあの計画中のコミック風表示も同じ並びの軸になる想定（4つ目）。シアター/舞台は5つ目としてこの並びに合流する。
+
+**実装状況 (#681)**: `Event::CameraMode { mode: Novel|Theater, orientation: Option<Audience|Stage> }`（parser）・`NovelGameState.cameraMode`/`cameraOrientation`（GameState 側 settled state、save/seek/任意局面起動で復元可能）・`computeCameraProjection(mode, orientation, depth)`（`frontend/src/game/cameraProjection.ts`、純粋関数、novel は identity・theater は depth に応じた縮小スケール）まで実装済み。**未実装**なのは、背景板・大道具・キャラへの実際の depth 値付与とそれを `computeCameraProjection` に通す描画配線（下記「舞台構造」「レイヤーモデル」節の内容全般）・カメラ仰角（下記）・向き（客席/舞台）反転時の座標系。これらは #683 以降のスコープ。
 
 実装方針: せおはやみで確立した「話者ターンごとの立ち絵差し替え」機構（`CharacterLayer` / 話者タグ）の延長として作る。台本フォーマット・話者切り替えロジックは共通のまま、表示層（描画・射影・モーション）だけを差し替える。台本や `resolveEvents` の構造を新設計にしない。
 

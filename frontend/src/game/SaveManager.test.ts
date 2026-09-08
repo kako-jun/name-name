@@ -72,6 +72,21 @@ describe('SaveManager - クイックセーブ', () => {
     expect(manager.hasQuickSave()).toBe(false)
     expect(manager.quickLoad()).toBeNull()
   })
+
+  // 15: 既存テストは makeSaveData()（cameraMode/cameraOrientation 未指定＝既定値相当）しか
+  // 通していなかった。Theater/Stage という非既定値の実往復（quickSave → quickLoad）を
+  // 明示的に固定する (#681)。
+  it('15: quickSave → quickLoad で cameraMode=Theater/cameraOrientation=Stage が往復保持される', () => {
+    const data: SaveSlotData = {
+      ...makeSaveData(),
+      cameraMode: 'Theater',
+      cameraOrientation: 'Stage',
+    }
+    manager.quickSave(data)
+    const loaded = manager.quickLoad()
+    expect(loaded?.cameraMode).toBe('Theater')
+    expect(loaded?.cameraOrientation).toBe('Stage')
+  })
 })
 
 describe('SaveManager - 背景端フェード (#250)', () => {
@@ -288,5 +303,46 @@ describe('SaveManager - docKey 名前空間化 (#578)', () => {
     expect(a.hasQuickSave()).toBe(false)
     expect(b.hasQuickSave()).toBe(true)
     expect(b.quickLoad()?.sceneId).toBe('b-quick')
+  })
+})
+
+describe('SaveManager - importJSON バリデータ (#681)', () => {
+  let manager: SaveManager
+
+  beforeEach(() => {
+    manager = new SaveManager('import-test')
+    localStorage.clear()
+  })
+
+  // 17: importJSON() の形状バリデータ（eventIndex/textIndex/savedAt/flags/isBlackout/
+  // characters の6フィールドのみ検査）は cameraMode/cameraOrientation を一切見ていない
+  // （#378 と同型の型ギャップ）。この欠落オブジェクトが弾かれず正常取り込みされることを
+  // 明示的にロックする（バリデータが将来 cameraMode を検査し始めたときの回帰にも
+  // 気付けるよう、期待挙動を固定しておく）。
+  it('17: cameraMode/cameraOrientation 欠落のスロットもバリデータに弾かれず正常取り込みされる', () => {
+    const slotWithoutCamera = {
+      slot: 0,
+      sceneId: 'scene-1',
+      eventIndex: 3,
+      textIndex: 1,
+      flags: { visited: { Bool: true } },
+      backgroundPath: '/bg/room.png',
+      isBlackout: false,
+      characters: [{ name: 'Alice', expression: 'happy', position: 'center' }],
+      currentBgmPath: '/bgm/main.mp3',
+      savedAt: new Date().toISOString(),
+      sceneName: 'シーン1',
+      // cameraMode/cameraOrientation は意図的に省略（#378型ギャップの明示ロック対象）
+    }
+    const json = JSON.stringify([slotWithoutCamera, null, null])
+
+    const ok = manager.importJSON(json)
+
+    expect(ok).toBe(true)
+    const loaded = manager.load(0)
+    expect(loaded).not.toBeNull()
+    expect(loaded?.sceneId).toBe('scene-1')
+    expect(loaded?.cameraMode).toBeUndefined()
+    expect(loaded?.cameraOrientation).toBeUndefined()
   })
 })

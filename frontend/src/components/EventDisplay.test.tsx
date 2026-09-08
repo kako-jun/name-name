@@ -277,4 +277,15 @@ describe('EventDisplay', () => {
     const { getByTestId } = renderEvent(unknown)
     expect(getByTestId('event-unknown').textContent).toContain('SomeFutureVariant')
   })
+
+  // 21: CameraMode (#681) はまだ EventDisplay に専用分岐が無いため、他の未対応 variant と
+  // 同じ「⚠ 未対応イベント」フォールバックに落ちる。これは #234 で塞いだはずの「新 variant が
+  // 空表示になる」事故の再発防止線 — CameraMode は実在の型定義済み variant（fake ではない）
+  // で、専用表示が未実装のまま忘れられていないか（blank/null に戻っていないか）を固定する。
+  // 専用の表示を実装したら、このテストは「⚠ 未対応イベント」を検証する形から更新すること。
+  it('renders CameraMode event as the unknown-event fallback, not blank/null (#234 regression guard)', () => {
+    const event: Event = { CameraMode: { mode: 'Theater', orientation: 'Stage' } }
+    const { getByTestId } = renderEvent(event)
+    expect(getByTestId('event-unknown').textContent).toContain('CameraMode')
+  })
 })

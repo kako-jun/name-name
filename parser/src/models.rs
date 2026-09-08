@@ -53,6 +53,34 @@ pub enum BlackoutAction {
     Off,
 }
 
+/// カメラモード (#681)。既定は `Novel`（正投影＝カメラ正面固定、奥行きによる縮小なし、
+/// 既存のノベル/ADV描画と完全一致・非回帰）。`Theater` は透視投影（奥行きに応じて縮小）を
+/// 適用する演劇/漫才向けカメラ。`dialog_style`/`split_layout` と同じく、既存の描画モードを
+/// 置き換えず積み重なる独立の per-scene 設定軸（docs/architecture.md「シアターモード構想」）。
+/// `[カメラ: シアター]` / `[カメラ: ノベル]` でシーン単位に切り替える。台本フォーマット・
+/// キャラ配置・大道具/小道具・BGM/SE/立ち絵/背景はモード非依存で共通のまま（#681 スコープ）。
+/// 実際の depth 値付与とそれを使った縮小描画の配線は別 Issue（#683）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum CameraMode {
+    #[default]
+    Novel,
+    Theater,
+}
+
+/// シアターモードのカメラの向き (#681)。既定は `Audience`（客席視点、通常の観客視点で
+/// 舞台を見る構図）。`Stage` は逆転（演者の背中越しに客席が見える構図。客席用の背景絵が
+/// 別途要る）。`CameraMode::Novel` では意味を持たない（常に無視される）。
+/// `[カメラ: シアター, 向き: 客席]` / `[カメラ: シアター, 向き: 舞台]`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum CameraOrientation {
+    Audience,
+    Stage,
+}
+
 /// イベント絵の背面（背景・立ち絵）扱い (#351)。既定は `Hide`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
@@ -596,6 +624,17 @@ pub enum Event {
     },
     Blackout {
         action: BlackoutAction,
+    },
+    /// カメラモード切り替え (#681)。`[カメラ: シアター]` / `[カメラ: ノベル]`。
+    /// `orientation` は `mode == Theater` のときだけ意味を持つ（`向き: 客席` / `向き: 舞台`）。
+    /// `None` = 客席（既定・orientation 省略/未知値/`Novel` モード時の正規形）、
+    /// `Some(Stage)` = 明示的に舞台向き（逆転）を指定したときだけ。
+    /// 未知値・省略は Novel/客席にフォールバックする（`dialog_style`/`Blackout` と同じ
+    /// 後方互換パターン）。
+    CameraMode {
+        mode: CameraMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        orientation: Option<CameraOrientation>,
     },
     SceneTransition,
     /// 手動改頁マーカー (#292 Phase 2)。本文中の単独行 `---` から生成される。

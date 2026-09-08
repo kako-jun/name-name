@@ -953,6 +953,8 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   isBlackout     = data.isBlackout ?? false
  *   characters     = data.characters ?? []
  *   currentBgmPath = data.currentBgmPath ?? null
+ *   cameraMode        = data.cameraMode ?? 'Novel'  // 古いセーブには無い (#681)
+ *   cameraOrientation = data.cameraOrientation ?? 'Audience'  // 古いセーブには無い (#681)
  *   storyEnded     = false  // SaveSlotData 未対応 (#386)。セーブ/ロードは常に「終劇していない」扱い
  *
  * `backgroundFade` の正規化（`normalizeBackgroundFade` / `edgeFadeMask`）は PixiJS を間接
@@ -985,6 +987,9 @@ export function saveSlotToGameState(
     isBlackout: data.isBlackout ?? false,
     characters: data.characters ?? [],
     currentBgmPath: data.currentBgmPath ?? null,
+    // カメラモード (#681)。古いセーブには無い → ?? でノベル/客席（既定）にフォールバック。
+    cameraMode: data.cameraMode ?? 'Novel',
+    cameraOrientation: data.cameraOrientation ?? 'Audience',
     // 終劇状態 (#386) はセーブデータに持たせない（SaveSlotData 未対応・古いセーブにも無い）。
     // quicksave/quickload・スロット保存はすべて「終劇していない」状態として復元する。
     storyEnded: false,
