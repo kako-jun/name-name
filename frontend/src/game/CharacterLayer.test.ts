@@ -245,6 +245,252 @@ describe('CharacterLayer 入場・退場の方向モーション（Issue #684）
   })
 })
 
+// =====================================================================================
+// #684 バグ修正（テスト設計エージェントが発見した P0）:
+//
+// バグ1・2: remove() の方向指定退場（stageMotion.kind='exit'）は fadeAnimation を張らないため、
+//   reviveFromExitFade（fadeAnimation.destroyOnComplete しか見ない）は退場walk中の再 show を
+//   検知できなかった。同じ表情/位置での再 show は show() 先頭の no-op ガードに落ちて完全無反応
+//   （歩行退場が止まらずキャラは消える）、別の表情/位置での再 show も positionChanged 分岐が
+//   sprite.x を書き換えた直後に ticker の stageMotion 処理が退場軌道の位置へ上書きし、
+//   最終的にはやはりキャラが破棄される。
+//   修正: reviveFromExitStageMotion を追加し、show() の既存キャラ分岐の先頭で
+//   stageMotion.kind==='exit' を検知して破棄・sprite.x を退場開始位置へ戻す。
+//
+// バグ3: remove() がフェード退場（方向未指定）を選んでも、進行中の stageMotion（kind='enter'）を
+//   クリアしないため、sprite.x（stageMotion）と sprite.alpha（fadeAnimation）が同一フレームで
+//   独立に動き、stageMotion 完了時に sprite.x が baseX へ一瞬スナップする視覚グリッチが起きる。
+//   修正: フェード退場経路を選んだら kind を問わず stageMotion をクリアする。
+// =====================================================================================
+describe('CharacterLayer 退場walk中/入場walk中の状態遷移バグ修正 (#684)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('バグ1: 退場walk中に同名・同表情/同位置で [登場:] されると、歩行退場がキャンセルされキャラは表示され続ける', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '左', '/assets', { instant: true })
+    layer.remove('hero', { exitDirection: 'Shimote' }) // durationMs 既定1400の歩行退場を予約
+
+    const internal = layer as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    // 退場walkの途中まで進める（完了前であることが前提）。
+    internal.elapsedMs += 700
+    internal.animTicker?.update()
+    const mid = asInternals(layer).characters.get('hero')
+    expect(mid).toBeDefined()
+    expect(mid!.stageMotion).not.toBeNull() // 前提: まだ歩行退場中
+
+    // 同名・同表情/同位置で再登場（歩行退場のキャンセルを期待）。
+    layer.show('hero', 'normal', '左', '/assets')
+
+    const revived = asInternals(layer).characters.get('hero')
+    expect(revived).toBeDefined()
+    expect(revived!.stageMotion).toBeFalsy() // 歩行退場はキャンセルされた
+    expect(revived!.sprite.alpha).toBe(1)
+
+    // 元の退場walkが完了するはずだった時刻（累計1700ms > durationMs 1400）を過ぎても、
+    // キャラは残り続ける（修正前は stageMotion が生き残り、この時点で破棄されていた）。
+    internal.elapsedMs += 1000
+    internal.animTicker?.update()
+    expect(asInternals(layer).characters.has('hero')).toBe(true)
+  })
+
+  it('バグ2: 退場walk中に同名・別位置で [登場:] されると、新しい位置が最終的に反映される（歩行退場の軌道に上書きされない）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '左', '/assets', { instant: true }) // targetX=150
+    layer.remove('hero', { exitDirection: 'Shimote' }) // baseX=150 から歩行退場を予約
+
+    const internal = layer as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 700 // 歩行退場の途中
+    internal.animTicker?.update()
+
+    // 同名・同表情だが別位置（右）で再登場。
+    layer.show('hero', 'normal', '右', '/assets')
+
+    const revived = asInternals(layer).characters.get('hero')
+    expect(revived).toBeDefined()
+    expect(revived!.stageMotion).toBeFalsy()
+    expect(revived!.sprite.x).toBe(650) // 右の targetX (800*0.8125)
+
+    // 元の退場walkが完了するはずだった時刻を過ぎても、新しい位置のまま・キャラは破棄されない
+    // （修正前は stageMotion が baseX=150 起点の退場軌道で sprite.x を上書きし続け、最終的に破棄されていた）。
+    internal.elapsedMs += 1000
+    internal.animTicker?.update()
+    const after = asInternals(layer).characters.get('hero')
+    expect(after).toBeDefined()
+    expect(after!.sprite.x).toBe(650)
+  })
+
+  it('バグ3: 入場walk中に方向指定なしの [退場:] を呼ぶと、stageMotionが残らずfadeAnimation単独に一本化される', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { enterDirection: 'Kamite' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const entering = asInternals(layer).characters.get('hero')
+    expect(entering).toBeDefined()
+    expect(entering!.stageMotion).not.toBeNull() // 前提: 入場walk中
+
+    layer.remove('hero') // 方向指定なし → フェード経路
+
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    // 修正前は stageMotion(kind=enter) がクリアされず、fadeAnimation と同時に sprite.x を動かし続けた。
+    expect(state!.stageMotion).toBeFalsy()
+    expect(state!.fadeAnimation).not.toBeNull()
+    expect(state!.fadeAnimation!.toAlpha).toBe(0)
+    expect(state!.fadeAnimation!.destroyOnComplete).toBe(true)
+  })
+})
+
+// =====================================================================================
+// #684 P1: character_move_ms の正常系（設定値の伝播）とカメラモード配線の欠落穴埋め。
+// =====================================================================================
+describe('CharacterLayer characterMoveMs の伝播 (#684 P1)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('setCharacterMoveMs(2000) 後の show({enterDirection}) は stageMotion.durationMs=2000 になる', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.setCharacterMoveMs(2000)
+    layer.show('hero', 'normal', '中央', '/assets', { enterDirection: 'Kamite' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.stageMotion!.durationMs).toBe(2000)
+  })
+
+  it('setCharacterMoveMs(2000) 後の remove({exitDirection}) は stageMotion.durationMs=2000 になる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.setCharacterMoveMs(2000)
+    layer.remove('hero', { exitDirection: 'Shimote' })
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.stageMotion!.durationMs).toBe(2000)
+  })
+
+  it('setCharacterMoveMs(null) / setCharacterMoveMs(undefined) はいずれも既定 1400ms にフォールバックする', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.setCharacterMoveMs(null)
+    layer.remove('hero', { exitDirection: 'Shimote' })
+    expect(asInternals(layer).characters.get('hero')!.stageMotion!.durationMs).toBe(1400)
+
+    layer.show('friend', 'normal', '右', '/assets', { instant: true })
+    layer.setCharacterMoveMs(undefined)
+    layer.remove('friend', { exitDirection: 'Kamite' })
+    expect(asInternals(layer).characters.get('friend')!.stageMotion!.durationMs).toBe(1400)
+  })
+
+  it('remove() に exitDirection と durationMsOverride を同時に渡すと、durationMsOverride は無視され characterMoveMs が使われる（フェード=併記時の仕様固定）', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.setCharacterMoveMs(1800)
+    layer.remove('hero', { exitDirection: 'Kamite', durationMsOverride: 500 })
+
+    const state = asInternals(layer).characters.get('hero')
+    expect(state).toBeDefined()
+    expect(state!.fadeAnimation).toBeNull() // フェード経路には入らない
+    expect(state!.stageMotion).not.toBeNull()
+    expect(state!.stageMotion!.durationMs).toBe(1800) // durationMsOverride(500) でなく characterMoveMs
+  })
+})
+
+// =====================================================================================
+// #684 P2: character_move_ms の境界値・異常系。
+// =====================================================================================
+describe('CharacterLayer setCharacterMoveMs クランプ/フォールバック (#684 P2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  interface CharacterLayerMoveMsInternals {
+    characterMoveMs: number
+  }
+  function moveMsInternals(layer: CharacterLayer): CharacterLayerMoveMsInternals {
+    return layer as unknown as CharacterLayerMoveMsInternals
+  }
+
+  it('setCharacterMoveMs は負値/NaN/Infinity/5001以上を[0,5000]にクランプする', () => {
+    const layer = new CharacterLayer(800, 450)
+
+    layer.setCharacterMoveMs(-100)
+    expect(moveMsInternals(layer).characterMoveMs).toBe(0) // min クランプ
+
+    layer.setCharacterMoveMs(NaN)
+    expect(moveMsInternals(layer).characterMoveMs).toBe(1400) // 非有限は既定へ
+
+    layer.setCharacterMoveMs(Infinity)
+    expect(moveMsInternals(layer).characterMoveMs).toBe(1400)
+
+    layer.setCharacterMoveMs(5001)
+    expect(moveMsInternals(layer).characterMoveMs).toBe(5000) // max クランプ
+  })
+
+  it('characterMoveMs===0 のとき、方向指定してもフェード/即時表示にフォールバックする', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.setCharacterMoveMs(0)
+
+    // show 側: enterDirection を渡してもフェード登場にフォールバック（characterFadeMs 既定700>0のため）。
+    layer.show('hero', 'normal', '中央', '/assets', { enterDirection: 'Kamite' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const showState = asInternals(layer).characters.get('hero')
+    expect(showState!.stageMotion).toBeFalsy()
+    expect(showState!.fadeAnimation).not.toBeNull()
+
+    // remove 側: exitDirection を渡してもフェード退場にフォールバック。
+    layer.show('friend', 'normal', '右', '/assets', { instant: true })
+    layer.remove('friend', { exitDirection: 'Shimote' })
+    const removeState = asInternals(layer).characters.get('friend')
+    expect(removeState!.stageMotion).toBeFalsy()
+    expect(removeState!.fadeAnimation).not.toBeNull()
+  })
+})
+
+// =====================================================================================
+// #684 P3: 状態遷移の観測 API（既存挙動の固定・回帰防止）。
+// =====================================================================================
+describe('CharacterLayer stageMotion と進行中判定 API (#684 P3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('stageMotion進行中は hasActiveAnimation()/hasActivePortraitTransition() が true を返す', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      source: { scaleMode: 'linear' },
+    } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { enterDirection: 'Kamite' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const state = asInternals(layer).characters.get('hero')
+    expect(state!.stageMotion).not.toBeNull() // 前提: 入場walk中
+
+    expect(layer.hasActiveAnimation()).toBe(true)
+    expect(layer.hasActivePortraitTransition()).toBe(true)
+  })
+})
+
 describe('CharacterLayer pixel_art スケールモード（立ち絵 show 経路, #466）', () => {
   // setPixelArt() で受け取った値を loadTexture の Assets.load().then() 内で
   // texture.source.scaleMode に反映する（nearest = ドット絵向け / linear = 従来の滑らか）。
