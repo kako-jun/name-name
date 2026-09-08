@@ -81,6 +81,20 @@ pub enum CameraOrientation {
     Stage,
 }
 
+/// 舞台方向（上手/下手） (#684)。入場・退場モーションの向きを表す。
+/// 客席から見て舞台向かって右側が「上手」、左側が「下手」（伝統的な演劇/歌舞伎の慣習語彙。
+/// dev-doctrine 規律7「Markdown構文キーワードは汎用名にする」の対象外＝特定ゲームの世界観語彙ではない）。
+/// 画面座標の対応（runtime 側の解釈）: 上手 = 画面右端の外側、下手 = 画面左端の外側。
+/// `[登場: 名前, 上手から]` / `[退場: 名前, 下手へ]` で指定する。省略時は `None`（従来通りの
+/// 瞬間表示/フェード、後方互換）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum StageDirection {
+    Kamite,
+    Shimote,
+}
+
 /// シアターモードのカメラ仰角 (#682)。既定は水平（`None`、正面固定・従来通り）。`LookUp` は
 /// 見上げ（斜め下から見上げるアングル、力強さ・迫力）、`LookDown` は見下ろし（斜め上から
 /// 見下ろすアングル、俯瞰・儚さ）。`CameraMode::Novel` では意味を持たない（常に無視される）。
@@ -678,6 +692,12 @@ pub enum Event {
         /// Markdown 構文: `[退場: ヒロイン, フェード=2100]` / `[退場: ヒロイン, fade=2100]`。
         /// 既存の `[退場: ヒロイン]` は `None` のままなので後方互換。
         fade_ms: Option<u32>,
+        /// 退場の方向モーション (#684)。`Some` のときだけ舞台上を指定方向へ歩いて去る演出になる。
+        /// `None`（省略/未知値）は従来通りのフェード退場（後方互換）。
+        /// Markdown 構文: `[退場: ヒロイン, 上手へ]` / `[退場: ヒロイン, 下手へ]`。
+        /// ノベルモードでは runtime 側がこの値を無視してフェード退場にフォールバックする。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_direction: Option<StageDirection>,
     },
     /// 無言の立ち絵登場 (#401)。`[登場: 名前 (sprite/表情, 位置)]` で本文を伴わず立ち絵を表示する。
     /// 話者タグ（`Dialog` の立ち絵指定 `名前 (sprite/表情, 位置)`）と同じ属性書式・意味論だが、
@@ -695,6 +715,12 @@ pub enum Event {
         /// （true のときだけ論理画面より大きい立ち絵を画面内に収める旧 fit-down を適用）。
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         fit: bool,
+        /// 登場の方向モーション (#684)。`Some` のときだけ舞台上を指定方向から歩いて入る演出になる。
+        /// `None`（省略/未知値）は従来通りの瞬間表示/フェード登場（後方互換）。
+        /// Markdown 構文: `[登場: 名前 (sprite/表情, 位置), 上手から]`（括弧なしの `[登場: 名前, 上手から]` も可）。
+        /// ノベルモードでは runtime 側がこの値を無視してフェード登場にフォールバックする。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enter_direction: Option<StageDirection>,
     },
     Wait {
         ms: u32,
@@ -1213,6 +1239,12 @@ pub struct Document {
     /// 調整するための per-game 数値設定。空・非数値は None 扱い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character_fade_ms: Option<u32>,
+    /// 入場・退場の方向モーション（上手/下手）の徒歩移動所要時間（ms） (#684)。
+    /// frontmatter `character_move_ms:` から流す。`character_fade_ms` と同系統の per-game 数値設定だが、
+    /// 方向引数を指定した `[登場:]`/`[退場:]`（`enter_direction`/`exit_direction` が `Some`）にだけ効き、
+    /// 従来の瞬間表示/フェードには影響しない。未指定なら runtime 既定 1400ms。空・非数値は None 扱い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_move_ms: Option<u32>,
     /// 背景クロスフェード・退場（終劇）フェード時間（ms）。frontmatter `background_fade_ms:` から流す。
     /// 未指定なら runtime 既定 700ms（現行 `BACKGROUND_CROSSFADE_MS`＝後方互換）。`character_fade_ms`
     /// と対称の per-game 数値設定で、背景の表示（イン）・切り替え（クロスフェード）・退場（アウト）を

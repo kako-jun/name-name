@@ -69,6 +69,10 @@ pub fn emit(doc: &Document) -> String {
         if let Some(ms) = doc.character_fade_ms {
             out.push_str(&format!("character_fade_ms: {ms}\n"));
         }
+        // Emit character_move_ms only when present (#684)。character_fade_ms と同じ流儀（数値・quote 不要）。
+        if let Some(ms) = doc.character_move_ms {
+            out.push_str(&format!("character_move_ms: {ms}\n"));
+        }
         // Emit background_fade_ms only when present。character_fade_ms と同じ流儀（数値・quote 不要）。
         if let Some(ms) = doc.background_fade_ms {
             out.push_str(&format!("background_fade_ms: {ms}\n"));
@@ -542,13 +546,27 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 out.push_str("---\n");
             }
-            Event::Exit { character, fade_ms } => {
+            Event::Exit {
+                character,
+                fade_ms,
+                exit_direction,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                match fade_ms {
-                    Some(ms) => out.push_str(&format!("[退場: {character}, フェード={ms}]\n")),
-                    None => out.push_str(&format!("[退場: {character}]\n")),
+                // フェード指定 (#145) と方向モーション指定 (#684) は独立の kv として併記できる。
+                // どちらも None（従来の `[退場: 名前]`）は非破壊で round-trip を保つ。
+                let mut kv: Vec<String> = Vec::new();
+                if let Some(ms) = fade_ms {
+                    kv.push(format!("フェード={ms}"));
+                }
+                if let Some(dir) = exit_direction {
+                    kv.push(stage_direction_token(*dir, "へ"));
+                }
+                if kv.is_empty() {
+                    out.push_str(&format!("[退場: {character}]\n"));
+                } else {
+                    out.push_str(&format!("[退場: {character}, {}]\n", kv.join(", ")));
                 }
                 prev_was_dialog_or_text = false;
             }
@@ -557,6 +575,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 expression,
                 position,
                 fit,
+                enter_direction,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -576,10 +595,21 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if *fit {
                     attrs.push("フィット");
                 }
-                if attrs.is_empty() {
-                    out.push_str(&format!("[登場: {character}]\n"));
-                } else {
-                    out.push_str(&format!("[登場: {character} ({})]\n", attrs.join(", ")));
+                // 方向モーション (#684) は括弧の外側（属性の後ろ）に `, 上手から`/`, 下手から` として
+                // 付く。括弧なし（属性が空）の登場でも `[登場: 名前, 上手から]` の形で付けられる。
+                let direction_token = enter_direction.map(|dir| stage_direction_token(dir, "から"));
+                match (attrs.is_empty(), &direction_token) {
+                    (true, None) => out.push_str(&format!("[登場: {character}]\n")),
+                    (true, Some(dir)) => out.push_str(&format!("[登場: {character}, {dir}]\n")),
+                    (false, None) => {
+                        out.push_str(&format!("[登場: {character} ({})]\n", attrs.join(", ")));
+                    }
+                    (false, Some(dir)) => {
+                        out.push_str(&format!(
+                            "[登場: {character} ({}), {dir}]\n",
+                            attrs.join(", ")
+                        ));
+                    }
                 }
                 prev_was_dialog_or_text = false;
             }
@@ -1314,6 +1344,17 @@ fn easing_keyword(easing: crate::models::Easing) -> &'static str {
     }
 }
 
+/// `StageDirection` を送り仮名付きの Markdown トークンに変換する (#684)。
+/// `suffix` は登場 `"から"` / 退場 `"へ"` を呼び出し側が渡す（`parse_stage_direction_token` は
+/// 逆側の送り仮名も受理するが、emit は常に文法的に自然な組み合わせで出力する）。
+fn stage_direction_token(dir: StageDirection, suffix: &str) -> String {
+    let word = match dir {
+        StageDirection::Kamite => "上手",
+        StageDirection::Shimote => "下手",
+    };
+    format!("{word}{suffix}")
+}
+
 fn tile_char(t: u8) -> char {
     match t {
         0 => 'G',
@@ -1436,6 +1477,7 @@ mod tests {
             character_height_ratios: std::collections::HashMap::new(),
             character_scale: None,
             character_fade_ms: None,
+            character_move_ms: None,
             background_fade_ms: None,
             event_image_fade_ms: None,
             event_image_transition: EventImageTransition::default(),
@@ -1692,6 +1734,7 @@ mod tests {
             character_height_ratios: std::collections::HashMap::new(),
             character_scale: None,
             character_fade_ms: None,
+            character_move_ms: None,
             background_fade_ms: None,
             event_image_fade_ms: None,
             event_image_transition: EventImageTransition::default(),

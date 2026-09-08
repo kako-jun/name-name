@@ -749,6 +749,7 @@ function EditorScreen({
                 characterHeightRatios={doc?.character_height_ratios}
                 characterScale={doc?.character_scale ?? null}
                 characterFadeMs={doc?.character_fade_ms ?? null}
+                characterMoveMs={doc?.character_move_ms ?? null}
                 backgroundFadeMs={doc?.background_fade_ms ?? null}
                 eventImageFadeMs={doc?.event_image_fade_ms ?? null}
                 eventImageTransitionDefault={doc?.event_image_transition ?? null}

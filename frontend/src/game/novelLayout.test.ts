@@ -38,6 +38,7 @@ import {
   wrappedPrefixLength,
   computeNovelIndicatorPlacement,
   clampFadeMs,
+  computeStageMotionOffset,
   computeFullscreenImageFit,
   clampFullscreenImageScrollY,
   AUTO_BUTTON_FALLBACK_COLOR,
@@ -2877,6 +2878,46 @@ describe('clampFadeMs (#407 / #404)', () => {
     expect(clampFadeMs(2500, 1400, 100, 2000)).toBe(2000) // max クランプ
     expect(clampFadeMs(null, 1400, 100, 2000)).toBe(1400) // フォールバックは min/max と独立
     expect(clampFadeMs(900, 1400, 100, 2000)).toBe(900) // レンジ内はそのまま
+  })
+})
+
+// computeStageMotionOffset (#684): 入場・退場の方向モーション（上手/下手）の X オフセット算出。
+// 「入場の形」（elapsedMs=0 で画面外いっぱい→durationMs で 0＝静止位置）を正本とし、
+// 退場は呼び出し側が elapsedMs に durationMs-実経過ms を渡して同じ式を再利用する（CharacterLayer 側）。
+describe('computeStageMotionOffset (#684)', () => {
+  it('境界値: elapsedMs=0 は画面外いっぱいのオフセット（screenWidth 分）を返す', () => {
+    expect(computeStageMotionOffset('Kamite', 0, 1000, 1280)).toBe(1280)
+    expect(computeStageMotionOffset('Shimote', 0, 1000, 1280)).toBe(-1280)
+  })
+
+  it('境界値: elapsedMs=durationMs は 0（静止位置＝オフセットなし）を返す', () => {
+    expect(computeStageMotionOffset('Kamite', 1000, 1000, 1280)).toBe(0)
+    expect(computeStageMotionOffset('Shimote', 1000, 1000, 1280)).toBe(0)
+  })
+
+  it('正常系: elapsedMs=durationMs の半分で screenWidth の半分のオフセットになる（線形）', () => {
+    expect(computeStageMotionOffset('Kamite', 500, 1000, 1280)).toBe(640)
+    expect(computeStageMotionOffset('Shimote', 500, 1000, 1280)).toBe(-640)
+  })
+
+  it('境界値: elapsedMs が durationMs を超えても 0 にクランプされる（暴走しない）', () => {
+    expect(computeStageMotionOffset('Kamite', 1500, 1000, 1280)).toBe(0)
+  })
+
+  it('境界値: elapsedMs が負値でも screenWidth 分にクランプされる（暴走しない）', () => {
+    expect(computeStageMotionOffset('Kamite', -500, 1000, 1280)).toBe(1280)
+  })
+
+  it('境界値: durationMs<=0 は常に 0（即時表示、後方互換）', () => {
+    expect(computeStageMotionOffset('Kamite', 0, 0, 1280)).toBe(0)
+    expect(computeStageMotionOffset('Kamite', 500, -100, 1280)).toBe(0)
+  })
+
+  it('退場の逆再生パターン: durationMs-経過ms を渡すと 0→screenWidth へ増加する', () => {
+    // 経過0ms（退場開始直後）: durationMs-0=durationMs → オフセット0（静止位置スタート）。
+    expect(computeStageMotionOffset('Shimote', 1000 - 0, 1000, 1280)).toBe(0)
+    // 経過1000ms（退場完了）: durationMs-1000=0 → オフセット最大（画面外）。
+    expect(computeStageMotionOffset('Shimote', 1000 - 1000, 1000, 1280)).toBe(-1280)
   })
 })
 

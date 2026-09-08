@@ -107,7 +107,7 @@ describe('parseMarkdown + normalizeDocument: character exit fade survives normal
   it('keeps per-exit fade_ms from [退場: name, フェード=N]', async () => {
     const doc = await parseMarkdown(markdown)
     expect(doc.chapters[0].scenes[0].events[0]).toEqual({
-      Exit: { character: 'ヴィンチア', fade_ms: 2100 },
+      Exit: { character: 'ヴィンチア', fade_ms: 2100, exit_direction: null },
     })
   })
 
