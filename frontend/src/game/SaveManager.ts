@@ -61,6 +61,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined は空配列（板なし）扱い。
    */
   backgroundBoards?: Array<{ path: string; depth: number }>
+  /**
+   * シアターモード舞台構造の大道具 (#692)。
+   * 後方互換: 古いセーブデータには無い → undefined は空配列（大道具なし）扱い。
+   */
+  props?: Array<{ path: string; depth: number }>
   /** 暗転状態 */
   isBlackout: boolean
   /** 表示中のキャラクター情報 */

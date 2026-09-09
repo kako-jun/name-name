@@ -23,6 +23,7 @@ import {
 } from 'pixi.js'
 import { CharacterLayer, NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
+import { PropLayer } from './PropLayer'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 import { AudioManager } from './AudioManager'
@@ -737,6 +738,13 @@ export class NovelRenderer {
    */
   private backgroundBoardLayer: BackgroundBoardLayer
 
+  /**
+   * 舞台構造の大道具レイヤー (#692)。`[大道具: path, depth: N]` の加算的な蓄積を管理する。
+   * `backgroundBoardLayer` と独立した PixiJS レイヤー（数値 depth を共有する空間ではなく、
+   * レイヤー自体の描画順で「背景板より手前・キャラより奥」の群を作る）。
+   */
+  private propLayer: PropLayer
+
   /** 枠なしモードのデフォルト値（per-game 設定）。per-scene の DialogBorderless で上書きされる */
   private defaultDialogBorderless: boolean = false
 
@@ -821,6 +829,8 @@ export class NovelRenderer {
       this.screenHeight,
       this.time
     )
+    // 舞台構造の大道具レイヤー (#692)。背景板と同じ TimeController を共有する。
+    this.propLayer = new PropLayer(this.screenWidth, this.screenHeight, this.time)
     // イベント絵レイヤー (#351)。立ち絵と同じ TimeController を共有し、動画 export でも
     // フェードが決定論的に進む（this.time が virtual モードなら仮想時刻で駆動される）。
     this.eventImageLayer = new EventImageLayer(this.screenWidth, this.screenHeight, this.time)
@@ -904,6 +914,10 @@ export class NovelRenderer {
     // 舞台構造の背景板レイヤー (#683)。既存の単一スロット背景の直後・動画/立ち絵より下
     // （舞台の書割は背景と同じ「奥の情景」なので、動画・キャラより手前には出さない）。
     this.app.stage.addChild(this.backgroundBoardLayer)
+
+    // 舞台構造の大道具レイヤー (#692)。背景板の直後・キャラの前に配置（レイヤーモデル:
+    // 奥 ← 背景板 ← 大道具 ← キャラ ← 手前）。
+    this.app.stage.addChild(this.propLayer)
 
     // 動画入力レイヤー (#252)。背景の直後・立ち絵の下に配置（背景の上、キャラの下）。
     this.app.stage.addChild(this.videoLayer)
@@ -1132,6 +1146,8 @@ export class NovelRenderer {
     this.eventImageLayer.disposeTextures()
     // 背景板レイヤーのテクスチャも同じ理由で解放する (#683、eventImageLayer と同じ流儀)。
     this.backgroundBoardLayer.disposeTextures()
+    // 大道具レイヤーのテクスチャも同じ理由で解放する (#692、backgroundBoardLayer と同じ流儀)。
+    this.propLayer.disposeTextures()
     // #662: setEvents() は「エントリ文書の events を(再)供給する」唯一の公開経路
     // （NovelPlayer のマウント effect / events-prop 変化 effect から呼ばれる）。
     // ここでスナップショットしておけば、この後 quickLoad/restoreToScene が rawEvents を
@@ -1785,6 +1801,8 @@ export class NovelRenderer {
       // （preserveBackgroundForTransition=true）では持ち越し、この非 preserve 分岐（新しい
       // イベント列の最初の開始・setEvents() 経由）と明示的な `[場面転換]` でのみクリアする。
       this.backgroundBoardLayer.clear()
+      // 大道具 (#692) も背景板と同じ持続規律にする。
+      this.propLayer.clear()
     }
     if (options?.preserveBackgroundForTransition) {
       this.characterLayer.clearForSceneTransition()
@@ -1816,6 +1834,8 @@ export class NovelRenderer {
       this.cameraOrientation,
       this.cameraElevation
     )
+    // 大道具レイヤー (#692) も背景板と同じ理由でカメラ状態を明示的に同期する。
+    this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
     this.dialogBox.clearText()
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
@@ -2893,6 +2913,9 @@ export class NovelRenderer {
     // 背景板レイヤーも破棄・テクスチャ解放する (#683、eventImageLayer と同じ流儀)。
     this.backgroundBoardLayer.clear()
     this.backgroundBoardLayer.disposeTextures()
+    // 大道具レイヤーも破棄・テクスチャ解放する (#692、backgroundBoardLayer と同じ流儀)。
+    this.propLayer.clear()
+    this.propLayer.disposeTextures()
     // テロップレイヤーのタイマー・表示中の段を破棄する (#674)。
     this.clearTelopLayer()
     this.audioManager.destroy()
@@ -3137,6 +3160,7 @@ export class NovelRenderer {
       video: this.videoLayer.getState(),
       eventImage: this.eventImageLayer.getState(),
       backgroundBoards: this.backgroundBoardLayer.getState(),
+      props: this.propLayer.getState(),
       isBlackout: this.blackoutOverlay.visible,
       characters: this.characterLayer.getCharacterStates(),
       currentBgmPath: this.currentBgmPath,
@@ -3557,6 +3581,11 @@ export class NovelRenderer {
       this.cameraElevation
     )
     this.backgroundBoardLayer.restore(state.backgroundBoards, this.assetBaseUrl)
+
+    // 舞台構造の大道具復元 (#692)。backgroundBoardLayer と同じ理由・同じ手順
+    // （自前でカメラ状態を保持しているため restore() 前に setCamera() で明示的に同期する）。
+    this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
+    this.propLayer.restore(state.props, this.assetBaseUrl)
 
     // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）。
     // novel 役割配置 (#286): protagonist 指定時は復元でも質問役=左 / 回答役=右の x を当てる
@@ -4013,6 +4042,10 @@ export class NovelRenderer {
         // 舞台構造の背景板 (#683) も背景と同じ Assets.load 遅延ロード経路（BackgroundBoardLayer.add）
         // を通るため、同じく先読み対象にする。
         urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.BackgroundBoard.path))
+      } else if ('Prop' in event) {
+        // 舞台構造の大道具 (#692) も背景板と同じ Assets.load 遅延ロード経路（PropLayer.add）
+        // を通るため、同じく先読み対象にする。
+        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Prop.path))
       } else if ('EventImage' in event) {
         // イベント絵 (#351) の先読み (#621)。EventImageLayer.show() は表示の瞬間に初めて
         // Assets.load するため、事前に温めておかないと切替時に初回コールドロード相当の
@@ -4063,6 +4096,8 @@ export class NovelRenderer {
         this.clearBackground()
         // 舞台構造の背景板 (#683) も既存の単一スロット背景と同じタイミングでクリアする。
         this.backgroundBoardLayer.clear()
+        // 舞台構造の大道具 (#692) も背景板と同じタイミングでクリアする。
+        this.propLayer.clear()
         // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
         this.videoLayer.remove()
         // イベント絵レイヤーも場面転換でクリアする (#351)。作者が [イベント絵終了] を書き忘れても
@@ -4103,6 +4138,13 @@ export class NovelRenderer {
       // 同じシーン内で複数回発火すれば、それぞれ別の板として BackgroundBoardLayer に蓄積される。
       const board = event.BackgroundBoard
       this.backgroundBoardLayer.add(board.path, board.depth ?? 0, this.assetBaseUrl)
+      return
+    }
+    if ('Prop' in event) {
+      // 舞台構造の大道具 (#692)。背景板とは独立した PixiJS レイヤーに加算的に蓄積される:
+      // 同じシーン内で複数回発火すれば、それぞれ別の大道具として PropLayer に蓄積される。
+      const prop = event.Prop
+      this.propLayer.add(prop.path, prop.depth ?? 0, this.assetBaseUrl)
       return
     }
     if ('BackgroundColor' in event) {
@@ -4240,6 +4282,8 @@ export class NovelRenderer {
         this.cameraOrientation,
         this.cameraElevation
       )
+      // #692: 大道具も背景板と同じ理由で再配置する。
+      this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
       return
     }
     if ('Bgm' in event) {
@@ -5191,6 +5235,7 @@ export class NovelRenderer {
       video: snapshot.video,
       eventImage: snapshot.eventImage,
       backgroundBoards: snapshot.backgroundBoards,
+      props: snapshot.props,
       isBlackout: snapshot.isBlackout,
       characters: snapshot.characters,
       currentBgmPath: snapshot.currentBgmPath,
@@ -5686,6 +5731,7 @@ export class NovelRenderer {
       video: null,
       eventImage: null,
       backgroundBoards: [],
+      props: [],
       isBlackout: false,
       characters: [],
       currentBgmPath: null,

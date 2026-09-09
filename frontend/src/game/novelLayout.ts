@@ -954,6 +954,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   backgroundBrightness = data.backgroundBrightness ?? null  // 古いセーブには無い → 原画のまま
  *   video          = data.video ?? null      // 古いセーブには無い → 動画なし
  *   backgroundBoards = data.backgroundBoards ?? []  // 古いセーブには無い → 板なし (#683)
+ *   props          = data.props ?? []        // 古いセーブには無い → 大道具なし (#692)
  *   isBlackout     = data.isBlackout ?? false
  *   characters     = data.characters ?? []
  *   currentBgmPath = data.currentBgmPath ?? null
@@ -991,6 +992,8 @@ export function saveSlotToGameState(
     eventImage: data.eventImage ?? null,
     // シアターモード舞台構造の背景板 (#683)。古いセーブには無い → ?? [] で板なしに倒す。
     backgroundBoards: data.backgroundBoards ?? [],
+    // シアターモード舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
+    props: data.props ?? [],
     isBlackout: data.isBlackout ?? false,
     characters: data.characters ?? [],
     currentBgmPath: data.currentBgmPath ?? null,

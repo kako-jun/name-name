@@ -1152,6 +1152,8 @@ describe('saveSlotToGameState', () => {
       eventImage: data.eventImage ?? null,
       // 舞台構造の背景板 (#683)。古いセーブには無い → ?? [] で板なしに倒す。
       backgroundBoards: data.backgroundBoards ?? [],
+      // 舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
+      props: data.props ?? [],
       isBlackout: data.isBlackout ?? false,
       characters: data.characters ?? [],
       currentBgmPath: data.currentBgmPath ?? null,
@@ -1187,6 +1189,7 @@ describe('saveSlotToGameState', () => {
       video: null,
       eventImage: null,
       backgroundBoards: [],
+      props: [],
       isBlackout: true,
       characters: [{ name: 'A', expression: 'smile', position: 'center' }],
       currentBgmPath: 'bgm/main.mp3',

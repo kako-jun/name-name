@@ -117,6 +117,7 @@ function craftSnapshot(over: Partial<NovelGameState>): NovelGameState {
     video: null,
     eventImage: null,
     backgroundBoards: [],
+    props: [],
     isBlackout: false,
     characters: [],
     currentBgmPath: null,
