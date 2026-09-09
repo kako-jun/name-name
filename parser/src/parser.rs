@@ -1047,6 +1047,11 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     if let Some(rest) = content.strip_prefix("背景板:") {
         return Some(parse_background_board_directive(rest));
     }
+    // [大道具: path] / [大道具: path, depth: N] — 舞台構造の大道具 (#692)。
+    // 他の既存タグと prefix 衝突しないことを確認済み（`rg -n '"大道具"' parser/src/parser.rs`）。
+    if let Some(rest) = content.strip_prefix("大道具:") {
+        return Some(parse_prop_directive(rest));
+    }
     if let Some(rest) = content.strip_prefix("背景:") {
         return Some(parse_background_directive(rest));
     }
@@ -1533,6 +1538,39 @@ fn parse_background_board_directive(content: &str) -> Event {
     }
 
     Event::BackgroundBoard { path, depth }
+}
+
+/// `[大道具: path]` / `[大道具: path, depth: N]` の本体を分解する (#692)。
+/// `parse_background_board_directive` と同一のロジック（path / kv 分離、`depth:` コロン kv 記法、
+/// 非数値・NaN・省略は `0.0` フォールバック、未知キーは silent skip）。
+fn parse_prop_directive(content: &str) -> Event {
+    let (path_part, kv_part) = match content.split_once(',') {
+        Some((p, rest)) => (p, Some(rest)),
+        None => (content, None),
+    };
+    let path = path_part.trim().to_string();
+
+    let mut depth: f32 = 0.0;
+    if let Some(kv) = kv_part {
+        for raw in kv.split(',') {
+            let pair = raw.trim();
+            if pair.is_empty() {
+                continue;
+            }
+            if let Some((k, v)) = pair.split_once(':') {
+                if k.trim() == "depth" {
+                    depth = v
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|n| n.is_finite())
+                        .unwrap_or(0.0);
+                }
+            }
+        }
+    }
+
+    Event::Prop { path, depth }
 }
 
 /// `[動画: path]` / `[動画: path, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, ...]`
@@ -4447,6 +4485,211 @@ title: "test"
         );
         let doc2 = parse(&emitted);
         assert_eq!(doc1, doc2, "negative depth round-trip should be stable");
+    }
+
+    // ===== 舞台構造の大道具 (#692) — 最小ラウンドトリップ =====
+    // 本格的なテスト設計（境界値・エッジケース）は別サブエージェント担当。ここでは
+    // parse_background_board_directive と対称のロジックであることの最小限確認のみ行う。
+
+    #[test]
+    fn parses_prop_with_and_without_depth() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: desk.png]\n[大道具: chair.png, depth: 3]\n[大道具: bogus.png, depth: not-a-number]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0],
+            Event::Prop {
+                path: "desk.png".to_string(),
+                depth: 0.0,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::Prop {
+                path: "chair.png".to_string(),
+                depth: 3.0,
+            }
+        );
+        // 非数値な depth は 0.0 (最前面) にフォールバックする。
+        assert_eq!(
+            events[2],
+            Event::Prop {
+                path: "bogus.png".to_string(),
+                depth: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn prop_multiple_accumulate_and_roundtrip() {
+        // 1シーン内に複数の [大道具:] を書くと加算的に蓄積される（BackgroundBoard と同じ意味論）。
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: desk.png, depth: 3]\n[大道具: chair.png, depth: 2]\n";
+        let doc1 = parse(input);
+        let events = &doc1.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 2, "2点とも独立したイベントとして蓄積される");
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "prop round-trip should be stable");
+    }
+
+    #[test]
+    fn prop_does_not_shadow_background_board() {
+        // `[背景板: …]` が `大道具` パスに吸われていないこと（prefix 衝突回避）。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景板: sky.png]\n[大道具: desk.png, depth: 3]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], Event::BackgroundBoard { .. }));
+        assert!(matches!(events[1], Event::Prop { .. }));
+    }
+
+    // テスト観点4: 負の有限 depth はパーサー側でクランプされずそのまま保持される
+    // （background_board_negative_depth_is_not_clamped_by_parser の対称版）。
+    #[test]
+    fn prop_negative_depth_is_not_clamped_by_parser() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: front.png, depth: -3]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[0],
+            Event::Prop {
+                path: "front.png".to_string(),
+                depth: -3.0,
+            },
+            "負の depth はクランプされず -3.0 のまま保持される"
+        );
+    }
+
+    // テスト観点5: f32 の表現範囲を超える depth（1e40）は parse::<f32>() が Ok(Infinity) を返し、
+    // is_finite() フィルタに弾かれて 0.0（最前面）にフォールバックする
+    // （background_board_f32_overflow_depth_falls_back_to_zero の対称版）。
+    #[test]
+    fn prop_f32_overflow_depth_falls_back_to_zero() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: huge.png, depth: 1e40]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[0],
+            Event::Prop {
+                path: "huge.png".to_string(),
+                depth: 0.0,
+            },
+            "f32 オーバーフロー値は 0.0 にフォールバックする"
+        );
+    }
+
+    // テスト観点6: `"NaN"` リテラルは Rust の f32 parse 自体は成功する（Ok(f32::NAN)）が、
+    // 後続の `.filter(|n| n.is_finite())` で弾かれ 0.0 にフォールバックする。
+    // parse 自体が失敗する非数値（"not-a-number" 等、観点A3相当）とは異なる経路であることの確認。
+    #[test]
+    fn prop_nan_literal_depth_falls_back_to_zero_via_is_finite_filter() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: weird.png, depth: NaN]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[0],
+            Event::Prop {
+                path: "weird.png".to_string(),
+                depth: 0.0,
+            },
+            "\"NaN\" リテラルは parse に成功するが is_finite フィルタで 0.0 に落ちる"
+        );
+    }
+
+    // テスト観点7: 負の depth も emit 時に kv を省略せず出力する（round-trip 安定性）。
+    // emitter の `if *depth != 0.0` ガードが `> 0.0` に取り違えられていないかの回帰確認
+    // （background_board_negative_depth_emits_kv_and_roundtrips の対称版）。
+    #[test]
+    fn prop_negative_depth_emits_kv_and_roundtrips() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: front.png, depth: -3]\n";
+        let doc1 = parse(input);
+        let emitted = emit(&doc1);
+        assert!(
+            emitted.contains("depth: -3"),
+            "負の depth も kv 出力が省略されない: {emitted}"
+        );
+        let doc2 = parse(&emitted);
+        assert_eq!(
+            doc1, doc2,
+            "negative prop depth round-trip should be stable"
+        );
+    }
+
+    // テスト観点8: `depth:` キーが複数回出現した場合、kv ループは最後まで回るため最後の値が勝つ。
+    #[test]
+    fn prop_multiple_depth_keys_last_one_wins() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: desk.png, depth: 1, depth: 9]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[0],
+            Event::Prop {
+                path: "desk.png".to_string(),
+                depth: 9.0,
+            },
+            "depth: が複数回出現したら最後の値が勝つ"
+        );
+    }
+
+    // テスト観点10: 大道具パスに日本語を使っても UTF-8 境界で壊れず正しく parse・round-trip する。
+    #[test]
+    fn prop_path_with_japanese_characters_roundtrips() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: 机.png, depth: 2]\n";
+        let doc1 = parse(input);
+        let events = &doc1.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[0],
+            Event::Prop {
+                path: "机.png".to_string(),
+                depth: 2.0,
+            },
+            "日本語パスも UTF-8 境界で壊れず正しく parse される"
+        );
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "japanese prop path round-trip should be stable");
+    }
+
+    // テスト観点11: `[背景板:]` と `[大道具:]` が同一シーンに混在してもそれぞれ独立イベントとして
+    // 蓄積される順序を維持する（片方が他方を上書き・吸収しない）。
+    #[test]
+    fn background_board_and_prop_coexist_and_preserve_order() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景板: sky.png, depth: 10]\n[大道具: desk.png, depth: 3]\n[背景板: mountain.png, depth: 7]\n[大道具: chair.png, depth: 1]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 4, "4件とも独立イベントとして蓄積される");
+        assert_eq!(
+            events[0],
+            Event::BackgroundBoard {
+                path: "sky.png".to_string(),
+                depth: 10.0,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::Prop {
+                path: "desk.png".to_string(),
+                depth: 3.0,
+            }
+        );
+        assert_eq!(
+            events[2],
+            Event::BackgroundBoard {
+                path: "mountain.png".to_string(),
+                depth: 7.0,
+            }
+        );
+        assert_eq!(
+            events[3],
+            Event::Prop {
+                path: "chair.png".to_string(),
+                depth: 1.0,
+            }
+        );
     }
 
     #[test]

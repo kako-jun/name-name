@@ -979,11 +979,11 @@ MapEditor/NPCEditor の変更
 - `rpgProjectFromDoc(doc, sceneId?)` — doc → RPGProject（マップが無ければ null）
 - `applyRpgProjectToDoc(doc, project, sceneId)` — RPGProject → doc（既存シーンの RPG 要素を置換、無ければ新シーン追加）
 
-## シアターモード構想（カメラ基盤・背景板の depth 配置まで実装済み）
+## シアターモード構想（カメラ基盤・背景板/大道具の depth 配置まで実装済み）
 
 舞台/漫才向けの制約付き制作ゲーム「絶対もっといいセリフあったよな」のための、カメラ・舞台演出の設計。既存の `dialog_style`（`adv`/`novel`, #283）・`split_layout`（Gymnasia向け, #442）と同じく、既存の2択を置き換えずに**独立した per-game 設定軸を積み重ねる**方針に倣う。おぐらじあの計画中のコミック風表示も同じ並びの軸になる想定（4つ目）。シアター/舞台は5つ目としてこの並びに合流する。
 
-**実装状況 (#681/#682/#683)**: `Event::CameraMode { mode: Novel|Theater, orientation: Option<Audience|Stage>, elevation: Option<LookUp|LookDown> }`（parser）・`NovelGameState.cameraMode`/`cameraOrientation`/`cameraElevation`（GameState 側 settled state、save/seek/任意局面起動で復元可能）・`computeCameraProjection(mode, orientation, elevation, depth)`（`frontend/src/game/cameraProjection.ts`、純粋関数、novel は identity・theater は depth に応じた縮小スケールと、仰角（後述）に応じた `verticalOffset` を返す）まで実装済み。#683 でこの関数が初めて実際の描画に配線された: `Event::BackgroundBoard { path, depth }`（parser、`[背景板: path, depth: N]`）・`NovelGameState.backgroundBoards`（settled state、save/seek/任意局面起動で復元可能）・`BackgroundBoardLayer`（`frontend/src/game/BackgroundBoardLayer.ts`、`computeCameraProjection` の scale/verticalOffset を `novelLayout.computeBoardPlacement` で実座標に変換し、`novelLayout.computeBoardSlideInOffset` で追加時の「上から降りてくる」演出を行う）まで実装済み（下記「舞台構造」節）。**未実装**なのは、大道具・キャラへの depth 値付与と射影反映（下記「レイヤーモデル」節）・向き（客席/舞台）反転時の座標系。これらは #683 以降のスコープ。
+**実装状況 (#681/#682/#683/#692)**: `Event::CameraMode { mode: Novel|Theater, orientation: Option<Audience|Stage>, elevation: Option<LookUp|LookDown> }`（parser）・`NovelGameState.cameraMode`/`cameraOrientation`/`cameraElevation`（GameState 側 settled state、save/seek/任意局面起動で復元可能）・`computeCameraProjection(mode, orientation, elevation, depth)`（`frontend/src/game/cameraProjection.ts`、純粋関数、novel は identity・theater は depth に応じた縮小スケールと、仰角（後述）に応じた `verticalOffset` を返す）まで実装済み。#683 でこの関数が初めて実際の描画に配線された: `Event::BackgroundBoard { path, depth }`（parser、`[背景板: path, depth: N]`）・`NovelGameState.backgroundBoards`（settled state、save/seek/任意局面起動で復元可能）・`BackgroundBoardLayer`（`frontend/src/game/BackgroundBoardLayer.ts`、`computeCameraProjection` の scale/verticalOffset を `novelLayout.computeBoardPlacement` で実座標に変換し、`novelLayout.computeBoardSlideInOffset` で追加時の「上から降りてくる」演出を行う）まで実装済み（下記「舞台構造」節）。#692 で大道具にも同じ depth 配置が実装された: `Event::Prop { path, depth }`（parser、`[大道具: path, depth: N]`）・`NovelGameState.props`・`PropLayer`（`frontend/src/game/PropLayer.ts`、`BackgroundBoardLayer` を複製した独立レイヤーで、背景板レイヤーとキャラレイヤーの間に配置される）。**未実装**なのは、キャラへの depth 値付与と射影反映（下記「レイヤーモデル」節）・向き（客席/舞台）反転時の座標系。これらは #692 以降のスコープ（キャラは #694）。
 
 実装方針: せおはやみで確立した「話者ターンごとの立ち絵差し替え」機構（`CharacterLayer` / 話者タグ）の延長として作る。台本フォーマット・話者切り替えロジックは共通のまま、表示層（描画・射影・モーション）だけを差し替える。台本や `resolveEvents` の構造を新設計にしない。
 
@@ -1006,7 +1006,7 @@ MapEditor/NPCEditor の変更
 
 演出としても使える（例: 作中劇オチでモードをシアターに切り替え、客席が見える）。
 
-### 舞台構造（実装済み・#683）
+### 舞台構造（実装済み・#683/#692）
 
 背景は1枚ではなく、本物の舞台のように**複数枚の板が異なる奥行きに吊られている**:
 
@@ -1020,6 +1020,7 @@ MapEditor/NPCEditor の変更
 - 板の追加時は「上から降りてくる」tween アニメーションで登場する（`novelLayout.computeBoardSlideInOffset`、既定 600ms）。場面転換自体に専用の退場演出は無く、`[場面転換]` で既存の単一スロット背景と同じタイミングで即座にクリアされる
 - ノベルモードでは `computeCameraProjection` が常に `scale=1` を返すため、全部原寸で正面に重なるだけになる（従来の背景切り替えと同じ見た目、自動的に後方互換）
 - シアターモードでは depth に応じて `scale` が縮小し、遠近法で奥行き差が見える（depth が大きいほど画面中心を基準に小さく表示される）
+- **大道具 (#692)** も同じ仕組みで実装済み: `[大道具: path, depth: N]`（`Event::Prop`）・`NovelGameState.props`・`PropLayer`（`BackgroundBoardLayer` を複製した独立レイヤー）。ただし数値 depth の空間は背景板と共有せず、レイヤー自体が背景板より手前・キャラより奥に固定される（下記「レイヤーモデル」節、`docs/spec/markdown-v0.1.md`「大道具（舞台構造）」節参照）
 
 ### カメラの向き・仰角
 
@@ -1044,7 +1045,7 @@ MapEditor/NPCEditor の変更
 ```
 
 - キャラが持つ小道具（マイク、扇子、剣など）は**キャラの差分レイヤー**。表情や服と同じ扱いで、depth はキャラと同一（シアターモードでもキャラから浮かない）
-- 大道具（机、椅子など）は独立した depth を持つ
+- **大道具（机、椅子など）は独立した depth を持つ（実装済み・#692）**: `Event::Prop { path, depth }` / `[大道具: path, depth: N]`。背景板・キャラとは別の独立した PixiJS レイヤー（`PropLayer`）として、背景板レイヤーの後・キャラレイヤーの前に配置される。数値 depth は大道具どうしの奥行き順にのみ使われ、背景板の depth 値と直接比較されることはない（レイヤーのグループ順序自体が「背景板より手前・キャラより奥」を固定する）。**現状は背景板と同じ cover-fit（画面全体を覆う、常に画面中央・アスペクト比維持で拡大）配置で、個別オブジェクトとしてのx/y位置指定には未対応**（大道具1枚＝机や椅子を含む全画面サイズの透過PNGを用意する必要がある。`PropLayer` が `BackgroundBoardLayer` と同じ `computeBoardPlacement`——`computeCameraProjection` の scale/verticalOffset を実座標に変換する関数——を再利用しているため）。個別配置は将来のスコープ。詳細は上記「舞台構造」節参照
 
 ```markdown
 **ボケ** (ツッコミ顔, 上手, 小道具: マイク.png):

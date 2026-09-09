@@ -194,6 +194,16 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
         },
       }
     }
+    if ('Prop' in event) {
+      // #692: BackgroundBoard と同じ防御的正規化（undefined → 0.0）。
+      const prop = event.Prop
+      return {
+        Prop: {
+          path: prop.path,
+          depth: prop.depth ?? 0,
+        },
+      }
+    }
     if ('Bgm' in event) {
       return {
         Bgm: {

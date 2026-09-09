@@ -1818,3 +1818,53 @@ describe('parseMarkdown + normalizeDocument: 舞台構造の背景板が normali
     expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+describe('parseMarkdown + normalizeDocument: 舞台構造の大道具が normalize を生き残る (#692)', () => {
+  // 実 wasm 境界（Assets.load 等をモックしないユニットテストとは別に、tsify のシリアライズ・
+  // normalizeEvents の undefined 正規化まで含めた実経路）で `[大道具:]` を検証する。
+  // BackgroundBoard 用ブロック（#683、上記）の対称版。PropLayer は BackgroundBoardLayer と
+  // 同じ computeBoardPlacement を再利用する cover-fit 配置のため、正規化仕様も同一。
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s:',
+    '',
+    '[大道具: 机.png, depth: 3]',
+    '[大道具: 椅子.png, depth: 1]',
+    '[大道具: 棚.png]',
+    '',
+  ].join('\n')
+
+  it('path/depth が欠落・変質せず、depth 省略時は0として正規化される', async () => {
+    const doc = await parseMarkdown(markdown)
+    const events = doc.chapters[0].scenes[0].events
+    expect(events).toEqual([
+      { Prop: { path: '机.png', depth: 3 } },
+      { Prop: { path: '椅子.png', depth: 1 } },
+      { Prop: { path: '棚.png', depth: 0 } },
+    ])
+  })
+
+  it('1シーン内の複数 [大道具:] が加算的に3つの独立イベントとして残る', async () => {
+    const doc = await parseMarkdown(markdown)
+    const events = doc.chapters[0].scenes[0].events
+    expect(events.filter((e) => typeof e === 'object' && e !== null && 'Prop' in e)).toHaveLength(3)
+  })
+
+  it('emitMarkdown → 再 parse の round-trip で構文・値が保たれる', async () => {
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[大道具: 机.png, depth: 3]')
+    expect(emitted).toContain('[大道具: 椅子.png, depth: 1]')
+    // depth 既定値 0 は round-trip 安定のため無出力になる。
+    expect(emitted).toContain('[大道具: 棚.png]')
+    expect(emitted).not.toContain('棚.png, depth')
+
+    const doc2 = await parseMarkdown(emitted)
+    expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})

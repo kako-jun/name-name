@@ -1827,6 +1827,7 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     video: null,
     eventImage: null,
     backgroundBoards: [],
+    props: [],
     isBlackout: false,
     characters: [],
     currentBgmPath: null,

@@ -458,3 +458,104 @@ describe('SaveManager - 舞台構造の背景板 (#683)', () => {
     ])
   })
 })
+
+describe('SaveManager - 舞台構造の大道具 (#692)', () => {
+  let manager: SaveManager
+
+  beforeEach(() => {
+    manager = new SaveManager('prop-test')
+    localStorage.clear()
+  })
+
+  // F1: props キー自体が存在しない旧形式セーブ（#692 実装前に作られたセーブ相当）を直接
+  // localStorage に書き込み、load() がクラッシュしないこと・その結果を saveSlotToGameState()
+  // に渡すと props が []（大道具なし）にフォールバックすることを確認する（backgroundBoards の
+  // 観点1と同型 #683）。
+  it('F1: props キー無しの旧セーブ JSON を load してもクラッシュせず、saveSlotToGameState で [] にフォールバックする', () => {
+    // 旧フォーマットを直接 localStorage に書く（props キー無し、backgroundBoards キーも無し）
+    const legacy = {
+      slot: 0,
+      sceneId: 'scene-1',
+      eventIndex: 3,
+      textIndex: 1,
+      flags: { visited: { Bool: true } },
+      backgroundPath: '/bg/room.png',
+      isBlackout: false,
+      characters: [{ name: 'Alice', expression: 'happy', position: 'center' }],
+      currentBgmPath: '/bgm/main.mp3',
+      // props は意図的に省略（キー自体が JSON に存在しない #692 前フォーマット）
+      savedAt: new Date().toISOString(),
+      sceneName: 'シーン1',
+    }
+    localStorage.setItem('name-name-save-prop-test-0', JSON.stringify(legacy))
+
+    expect(() => manager.load(0)).not.toThrow()
+    const loaded = manager.load(0)
+    expect(loaded).not.toBeNull()
+    expect(loaded?.sceneId).toBe('scene-1')
+    expect(loaded?.props).toBeUndefined()
+
+    const state = saveSlotToGameState(loaded as SaveSlotData, null)
+    expect(state.props).toEqual([])
+  })
+
+  // F2（最重要）: backgroundBoards キーはあるが props キーが無い実運用上ありうるセーブ
+  // （#683 実装後・#692 実装前の間に保存されたデータ）を直接 localStorage に書き込み、
+  // load() がクラッシュしないこと・backgroundBoards は値を保持したまま props だけ []
+  // にフォールバックすることを確認する。2つの独立フィールドの後方互換フォールバックが
+  // 互いに干渉しない（片方の欠如がもう片方の値を巻き込んで壊さない）ことの回帰確認。
+  it('F2: backgroundBoards はあるが props キーが無いセーブ（#683〜#692間相当）を load してもクラッシュせず、backgroundBoards は保持されつつ props だけ [] にフォールバックする', () => {
+    const legacy = {
+      slot: 0,
+      sceneId: 'scene-1',
+      eventIndex: 3,
+      textIndex: 1,
+      flags: { visited: { Bool: true } },
+      backgroundPath: '/bg/room.png',
+      isBlackout: false,
+      characters: [{ name: 'Alice', expression: 'happy', position: 'center' }],
+      currentBgmPath: '/bgm/main.mp3',
+      backgroundBoards: [{ path: 'sky.png', depth: 10 }],
+      // props は意図的に省略（#683〜#692 間に保存されたセーブ相当）
+      savedAt: new Date().toISOString(),
+      sceneName: 'シーン1',
+    }
+    localStorage.setItem('name-name-save-prop-test-0', JSON.stringify(legacy))
+
+    expect(() => manager.load(0)).not.toThrow()
+    const loaded = manager.load(0)
+    expect(loaded).not.toBeNull()
+    expect(loaded?.backgroundBoards).toEqual([{ path: 'sky.png', depth: 10 }])
+    expect(loaded?.props).toBeUndefined()
+
+    const state = saveSlotToGameState(loaded as SaveSlotData, null)
+    expect(state.backgroundBoards).toEqual([{ path: 'sky.png', depth: 10 }])
+    expect(state.props).toEqual([])
+  })
+
+  // props ありの新形式セーブが localStorage 往復（save → load → saveSlotToGameState）で
+  // 値が保持されることを確認する（backgroundBoards の観点2と同型 #683）。
+  it('props 付きで save → load → saveSlotToGameState で値が保持される（往復）', () => {
+    const data: SaveSlotData = {
+      ...makeSaveData(),
+      slot: 0,
+      props: [
+        { path: 'desk.png', depth: 3 },
+        { path: 'chair.png', depth: 1 },
+      ],
+    }
+    manager.save(0, data)
+
+    const loaded = manager.load(0)
+    expect(loaded?.props).toEqual([
+      { path: 'desk.png', depth: 3 },
+      { path: 'chair.png', depth: 1 },
+    ])
+
+    const state = saveSlotToGameState(loaded as SaveSlotData, null)
+    expect(state.props).toEqual([
+      { path: 'desk.png', depth: 3 },
+      { path: 'chair.png', depth: 1 },
+    ])
+  })
+})

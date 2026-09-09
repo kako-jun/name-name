@@ -1152,6 +1152,8 @@ describe('saveSlotToGameState', () => {
       eventImage: data.eventImage ?? null,
       // 舞台構造の背景板 (#683)。古いセーブには無い → ?? [] で板なしに倒す。
       backgroundBoards: data.backgroundBoards ?? [],
+      // 舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
+      props: data.props ?? [],
       isBlackout: data.isBlackout ?? false,
       characters: data.characters ?? [],
       currentBgmPath: data.currentBgmPath ?? null,
@@ -1187,6 +1189,7 @@ describe('saveSlotToGameState', () => {
       video: null,
       eventImage: null,
       backgroundBoards: [],
+      props: [],
       isBlackout: true,
       characters: [{ name: 'A', expression: 'smile', position: 'center' }],
       currentBgmPath: 'bgm/main.mp3',
@@ -1269,6 +1272,25 @@ describe('saveSlotToGameState', () => {
     const data: SaveSlotData = { ...baseData(), cameraMode: 'Theater', cameraElevation: 'LookUp' }
     const state = saveSlotToGameState(data, null)
     expect(state.cameraElevation).toBe('LookUp')
+  })
+
+  // PROP1: 舞台構造の大道具 (#692)。props 指定あり（非空配列）はそのまま透過する
+  // （BG7/CAM2/CAM4 と同型の「値ありは変換せず透過」確認。空配列フォールバックは
+  // 「全フィールドが data から正しく写像される」テストと SaveManager.test.ts の
+  // F1/F2 が別途カバーする）。
+  it('PROP1: props 指定あり（非空配列）→ そのまま透過する', () => {
+    const data: SaveSlotData = {
+      ...baseData(),
+      props: [
+        { path: 'desk.png', depth: 3 },
+        { path: 'chair.png', depth: 1 },
+      ],
+    }
+    const state = saveSlotToGameState(data, null)
+    expect(state.props).toEqual([
+      { path: 'desk.png', depth: 3 },
+      { path: 'chair.png', depth: 1 },
+    ])
   })
 })
 

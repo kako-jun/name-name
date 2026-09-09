@@ -260,6 +260,19 @@ export type Event =
       }
     }
   | {
+      /**
+       * 舞台構造の大道具 (#692)。`BackgroundBoard`（背景板）と対称的な仕組みだが、独立した
+       * PixiJS レイヤーとしてキャラより奥・背景板より手前に固定される点が異なる
+       * （docs/architecture.md「シアターモード構想」→「レイヤーモデル」節参照）。
+       * 1シーン内に複数書けば、それぞれ別の大道具として蓄積される（加算的）。
+       */
+      Prop: {
+        path: string
+        /** 非負の任意単位。BackgroundBoard.depth と同じ規約。 */
+        depth?: number
+      }
+    }
+  | {
       Video: {
         path: string
         /** #252 配置位置（左/中央/右、英語 alias left/center/right）。未指定は中央 */
