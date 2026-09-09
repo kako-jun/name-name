@@ -1273,6 +1273,25 @@ describe('saveSlotToGameState', () => {
     const state = saveSlotToGameState(data, null)
     expect(state.cameraElevation).toBe('LookUp')
   })
+
+  // PROP1: 舞台構造の大道具 (#692)。props 指定あり（非空配列）はそのまま透過する
+  // （BG7/CAM2/CAM4 と同型の「値ありは変換せず透過」確認。空配列フォールバックは
+  // 「全フィールドが data から正しく写像される」テストと SaveManager.test.ts の
+  // F1/F2 が別途カバーする）。
+  it('PROP1: props 指定あり（非空配列）→ そのまま透過する', () => {
+    const data: SaveSlotData = {
+      ...baseData(),
+      props: [
+        { path: 'desk.png', depth: 3 },
+        { path: 'chair.png', depth: 1 },
+      ],
+    }
+    const state = saveSlotToGameState(data, null)
+    expect(state.props).toEqual([
+      { path: 'desk.png', depth: 3 },
+      { path: 'chair.png', depth: 1 },
+    ])
+  })
 })
 
 // ===== #273: parseColorToNumber 移設の非回帰（novelLayout から直 import）=====
