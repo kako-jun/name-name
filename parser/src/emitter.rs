@@ -303,6 +303,18 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&format!("[背景板: {path}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
+            Event::Prop { path, depth } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // #692: BackgroundBoard と同じ round-trip 規約（既定値 0.0 は無出力）。
+                let mut kv = String::new();
+                if *depth != 0.0 {
+                    kv.push_str(&format!(", depth: {depth}"));
+                }
+                out.push_str(&format!("[大道具: {path}{kv}]\n"));
+                prev_was_dialog_or_text = false;
+            }
             Event::BackgroundColor { color } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');

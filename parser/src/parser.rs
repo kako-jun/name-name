@@ -1047,6 +1047,11 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     if let Some(rest) = content.strip_prefix("背景板:") {
         return Some(parse_background_board_directive(rest));
     }
+    // [大道具: path] / [大道具: path, depth: N] — 舞台構造の大道具 (#692)。
+    // 他の既存タグと prefix 衝突しないことを確認済み（`rg -n '"大道具"' parser/src/parser.rs`）。
+    if let Some(rest) = content.strip_prefix("大道具:") {
+        return Some(parse_prop_directive(rest));
+    }
     if let Some(rest) = content.strip_prefix("背景:") {
         return Some(parse_background_directive(rest));
     }
@@ -1533,6 +1538,39 @@ fn parse_background_board_directive(content: &str) -> Event {
     }
 
     Event::BackgroundBoard { path, depth }
+}
+
+/// `[大道具: path]` / `[大道具: path, depth: N]` の本体を分解する (#692)。
+/// `parse_background_board_directive` と同一のロジック（path / kv 分離、`depth:` コロン kv 記法、
+/// 非数値・NaN・省略は `0.0` フォールバック、未知キーは silent skip）。
+fn parse_prop_directive(content: &str) -> Event {
+    let (path_part, kv_part) = match content.split_once(',') {
+        Some((p, rest)) => (p, Some(rest)),
+        None => (content, None),
+    };
+    let path = path_part.trim().to_string();
+
+    let mut depth: f32 = 0.0;
+    if let Some(kv) = kv_part {
+        for raw in kv.split(',') {
+            let pair = raw.trim();
+            if pair.is_empty() {
+                continue;
+            }
+            if let Some((k, v)) = pair.split_once(':') {
+                if k.trim() == "depth" {
+                    depth = v
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|n| n.is_finite())
+                        .unwrap_or(0.0);
+                }
+            }
+        }
+    }
+
+    Event::Prop { path, depth }
 }
 
 /// `[動画: path]` / `[動画: path, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, ...]`
@@ -4447,6 +4485,64 @@ title: "test"
         );
         let doc2 = parse(&emitted);
         assert_eq!(doc1, doc2, "negative depth round-trip should be stable");
+    }
+
+    // ===== 舞台構造の大道具 (#692) — 最小ラウンドトリップ =====
+    // 本格的なテスト設計（境界値・エッジケース）は別サブエージェント担当。ここでは
+    // parse_background_board_directive と対称のロジックであることの最小限確認のみ行う。
+
+    #[test]
+    fn parses_prop_with_and_without_depth() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: desk.png]\n[大道具: chair.png, depth: 3]\n[大道具: bogus.png, depth: not-a-number]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0],
+            Event::Prop {
+                path: "desk.png".to_string(),
+                depth: 0.0,
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::Prop {
+                path: "chair.png".to_string(),
+                depth: 3.0,
+            }
+        );
+        // 非数値な depth は 0.0 (最前面) にフォールバックする。
+        assert_eq!(
+            events[2],
+            Event::Prop {
+                path: "bogus.png".to_string(),
+                depth: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn prop_multiple_accumulate_and_roundtrip() {
+        // 1シーン内に複数の [大道具:] を書くと加算的に蓄積される（BackgroundBoard と同じ意味論）。
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[大道具: desk.png, depth: 3]\n[大道具: chair.png, depth: 2]\n";
+        let doc1 = parse(input);
+        let events = &doc1.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 2, "2点とも独立したイベントとして蓄積される");
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "prop round-trip should be stable");
+    }
+
+    #[test]
+    fn prop_does_not_shadow_background_board() {
+        // `[背景板: …]` が `大道具` パスに吸われていないこと（prefix 衝突回避）。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[背景板: sky.png]\n[大道具: desk.png, depth: 3]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], Event::BackgroundBoard { .. }));
+        assert!(matches!(events[1], Event::Prop { .. }));
     }
 
     #[test]
