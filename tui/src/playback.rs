@@ -2216,6 +2216,7 @@ mod tests {
             voice_path: None,
             font_family: None,
             fit: false,
+            depth: None,
         }
     }
 

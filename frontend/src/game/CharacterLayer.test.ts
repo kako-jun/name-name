@@ -3688,7 +3688,7 @@ describe('CharacterLayer 立ち絵 transition semantics (#337)', () => {
       destroyOnComplete: false,
     })
     expect(layer.getCharacterStates()).toEqual([
-      { name: 'hero', expression: 'smile', position: 'center' },
+      { name: 'hero', expression: 'smile', position: 'center', depth: 0 },
     ])
   })
 })

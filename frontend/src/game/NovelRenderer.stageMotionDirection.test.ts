@@ -71,6 +71,7 @@ describe('NovelRenderer Enter/Exit の方向モーション cameraMode ゲーテ
       xRatio: undefined,
       fit: false,
       enterDirection: 'Kamite',
+      depth: 0,
     })
   })
 
@@ -112,6 +113,7 @@ describe('NovelRenderer Enter/Exit の方向モーション cameraMode ゲーテ
       xRatio: undefined,
       fit: false,
       enterDirection: undefined,
+      depth: 0,
     })
     expect(removeSpy).toHaveBeenCalledWith('せお', {
       instant: false,
@@ -147,6 +149,7 @@ describe('NovelRenderer Enter/Exit の方向モーション cameraMode ゲーテ
       xRatio: undefined,
       fit: false,
       enterDirection: 'Kamite',
+      depth: 0,
     })
     expect(removeSpy).toHaveBeenCalledWith('せお', {
       instant: true,

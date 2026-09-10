@@ -6,7 +6,15 @@
 
 import { Assets, Container, Graphics, Sprite, Text, Texture, TextStyle, Ticker } from 'pixi.js'
 import { PixelateFilter } from 'pixi-filters'
-import type { Easing, EventImageTransition, StageDirection } from '../types'
+import type {
+  CameraElevation,
+  CameraMode,
+  CameraOrientation,
+  Easing,
+  EventImageTransition,
+  StageDirection,
+} from '../types'
+import { computeCameraProjection } from './cameraProjection'
 import { applyEasing, resolveDelta } from './easing'
 import { ensureFontLoaded } from './FontLoader'
 import {
@@ -404,6 +412,11 @@ interface CharacterState {
   label?: Text
   position: string
   expression: string
+  /**
+   * シアターモードの奥行き配置 (#694)。`computeCameraProjection` に渡す非負の任意単位。
+   * 既定 0（最前面）。render-only（Title/Label/Image #274）は常に 0（カメラ射影の対象外）。
+   */
+  depth: number
   /** 進行中アニメーション。null なら静的 */
   animation: ActiveAnimation | null
   /** フェードイン/アウトアニメーション。退場時は完了後に sprite を destroy する */
@@ -774,6 +787,14 @@ export class CharacterLayer extends Container {
   private readonly positionX: Record<string, number>
   /** タイマーの抽象化 (動画エクスポート用 virtual モード対応) */
   private readonly time: TimeController
+  /**
+   * シアターモードのカメラ状態 (#694)。`setCamera()`（`[カメラ:]` イベント処理 / applyState 復元）
+   * でしか同期されない。`BackgroundBoardLayer`/`PropLayer` と同じく自前で保持する
+   * （NovelRenderer 側のカメラ状態フィールドとは独立、setCamera 呼び出しで明示的に同期する設計）。
+   */
+  private cameraMode: CameraMode = 'Novel'
+  private cameraOrientation: CameraOrientation = 'Audience'
+  private cameraElevation: CameraElevation | null = null
 
   /**
    * @param screenWidth 論理画面幅（ASPECT_RATIOS から取得した値を渡す）
@@ -1040,6 +1061,89 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * カメラ状態が変わったとき（`[カメラ:]` イベント処理 / applyState 復元）に呼ぶ (#694)。
+   * `BackgroundBoardLayer.setCamera` / `PropLayer.setCamera` と同じ役割・シグネチャ。
+   * 既存表示中の全キャラを新しいカメラ状態で再配置する（`reapplyCharacterDepth`）。
+   */
+  setCamera(
+    mode: CameraMode,
+    orientation: CameraOrientation,
+    elevation: CameraElevation | null
+  ): void {
+    this.cameraMode = mode
+    this.cameraOrientation = orientation
+    this.cameraElevation = elevation
+    this.reapplyCharacterDepth()
+  }
+
+  /**
+   * 指定キャラクター1体にカメラ射影 (#694, `computeCameraProjection`) の scale/verticalOffset を
+   * 適用する。base scale は fit を除く優先順位（character_scale > character_height_ratios /
+   * character_height_ratio > 原寸1、`reapplyCharacterHeightRatios` と同じ式）で現在ロード済みの
+   * texture から再計算し、depth に基づく `projection.scale` を乗算する。Y 座標は
+   * `this.characterY`（足元基準）に `projection.verticalOffset` を加算する
+   * （`BackgroundBoardLayer.computeBoardPlacement` と同じ考え方だが、キャラは独自の x/y/scale
+   * 計算体系を持つため、既存の計算結果へ camera projection の scale/verticalOffset を
+   * 掛け合わせる形にする）。
+   *
+   * `show()` が texture 据え置きで depth だけ変わった再表示を処理する経路と、`setCamera()` の
+   * 全キャラ再適用（`reapplyCharacterDepth`）の両方から呼ぶ共通ロジック（規律4）。
+   *
+   * fit(#294)・render-only（Title/Label/Image #274）・アニメ中・クロスフェード中の旧 sprite
+   * （snapshotHidden）は `reapplyCharacterHeightRatios` と同じ理由で対象外。加えて `poseNudge`
+   * (#286) 進行中も対象外にする——このメソッドは sprite.y も書き換えるため、nudge が持つ
+   * `baseY` 追跡（毎フレーム baseY を基準に補間する）と競合させないための追加除外
+   * （`reapplyCharacterHeightRatios` は scale のみを書き換えるため poseNudge を気にしなくてよかった）。
+   * texture 未ロード（height<=0）も対象外（次の loadTexture 完了時に反映される）。
+   */
+  private applyCameraProjectionToCharacter(name: string, state: CharacterState): void {
+    if (
+      state.renderOnly ||
+      state.fit ||
+      state.animation !== null ||
+      state.snapshotHidden ||
+      state.poseNudge !== null
+    ) {
+      return
+    }
+    const texture = state.sprite.texture
+    if (!texture || texture.height <= 0) return
+    let baseScale: number
+    if (this.characterScale !== null) {
+      baseScale = this.characterScale
+    } else {
+      const targetRatio = resolveCharacterHeightRatio(
+        name,
+        this.characterHeightRatios,
+        this.characterHeightRatio
+      )
+      baseScale =
+        targetRatio === null
+          ? 1
+          : computeTargetHeightScale(texture.height, targetRatio, this.screenHeight)
+    }
+    const projection = computeCameraProjection(
+      this.cameraMode,
+      this.cameraOrientation,
+      this.cameraElevation,
+      state.depth
+    )
+    state.sprite.scale.set(baseScale * projection.scale)
+    state.sprite.y = this.characterY + projection.verticalOffset
+  }
+
+  /**
+   * 表示中の全立ち絵にカメラ射影 (#694) を再適用する。`setCamera()` の共通ライブ再適用ロジック
+   * （`reapplyCharacterHeightRatios` と同じ規律4のパターン）。詳細は
+   * `applyCameraProjectionToCharacter` の JSDoc 参照。
+   */
+  private reapplyCharacterDepth(): void {
+    for (const [name, state] of this.characters.entries()) {
+      this.applyCameraProjectionToCharacter(name, state)
+    }
+  }
+
+  /**
    * 立ち絵の新規表示・退場フェード時間を per-game 値で上書きする。
    * null/undefined/非有限値は既定 700ms (#407)、範囲外は [0, 5000] にクランプする。
    */
@@ -1072,6 +1176,7 @@ export class CharacterLayer extends Container {
     assetBaseUrl: string,
     targetX: number,
     fit: boolean,
+    depth: number,
     alpha: number,
     attached: boolean
   ): CharacterState {
@@ -1108,6 +1213,7 @@ export class CharacterLayer extends Container {
       expression,
       assetBaseUrl,
       fit,
+      depth,
       animation: null,
       poseNudge: null,
       fadeAnimation: null,
@@ -1361,6 +1467,11 @@ export class CharacterLayer extends Container {
        *  画面外からの歩行 tween になる。既存キャラの再 show（表情/位置変更）には効かない
        *  （新規登場のみのスコープ、`[登場: 名前, 方向]` タグの意図に合わせる）。 */
       enterDirection?: StageDirection
+      /** シアターモードの奥行き配置 (#694)。Dialog/Enter イベントの `depth` 値。未指定/非有限/
+       *  負値は 0（最前面）に倒す（`computeCameraProjection` に渡す前のフロント側最終防御。
+       *  パーサー側も非数値は 0.0 にフォールバック済みだが二重に守る、BackgroundBoardLayer/
+       *  PropLayer と同じ方針）。 */
+      depth?: number
     }
   ): void {
     // onReady (#293): 立ち絵の用意（テクスチャ load 完了／texture 不要な早期 return）が済んだら
@@ -1371,6 +1482,9 @@ export class CharacterLayer extends Container {
     const fit = options?.fit === true
     const normalizedPosition = normalizePosition(position)
     const instant = options?.instant === true
+    // シアターモードの奥行き (#694)。非有限・負値は 0（最前面）にクランプする
+    // （BackgroundBoardLayer.add / PropLayer.add と同じ最終防御）。
+    const depth = Number.isFinite(options?.depth) ? Math.max(0, options?.depth as number) : 0
     // novel 役割配置 (#286): xRatio override があれば positionX テーブルでなく
     // screenWidth * xRatio で水平位置を決める。position 文字列（snapshot/復元用の正本トークン）は
     // 据え置き、見た目の x だけを役割（質問役=左 / 回答役=右）に合わせる。
@@ -1402,15 +1516,20 @@ export class CharacterLayer extends Container {
       const stageMotionBeforeRevive = existing.stageMotion
       const restingX = stageMotionBeforeRevive ? stageMotionBeforeRevive.baseX : existing.sprite.x
       const overrideXChanged = hasXOverride && Math.abs(restingX - (overrideX as number)) >= 0.5
+      // シアターモードの奥行き変化 (#694)。position/expression/fit が同じでも depth だけ変わる
+      // 再 show（例: 同じキャラの次の Dialog 行で depth 値が変わる）を検知する。
+      const depthChanged = existing.depth !== depth
+      existing.depth = depth
 
       // 表情が同じで位置も同じ、フィット指定も同じなら何もしない（フェード状態は上で解消済み）。
       // フィット (#294) が変化したら texture を再ロードして scale を取り直す必要があるので、
-      // 早期 return の条件に fit 一致も含める。
+      // 早期 return の条件に fit 一致も含める。depth (#694) も同様に含める。
       const isUnchanged =
         existing.expression === expression &&
         existing.position === normalizedPosition &&
         existing.fit === fit &&
-        !overrideXChanged
+        !overrideXChanged &&
+        !depthChanged
 
       // 入場・退場walk中の再 show: 進行中の方向モーションをキャンセルして通常の再表示ロジックへ
       // 合流させる (#684 バグ修正、kind==='enter' も対象。PR #688 セルフレビュー must-1)。
@@ -1459,6 +1578,7 @@ export class CharacterLayer extends Container {
           assetBaseUrl,
           targetX,
           fit,
+          depth,
           0,
           true
         )
@@ -1519,7 +1639,13 @@ export class CharacterLayer extends Container {
         )
         existing.expression = expression
       } else {
-        // 位置/x だけの変更（texture 据え置き）。待つ必要はないので即 ready (#293)。
+        // 位置/x だけ、または depth だけの変更（texture 据え置き）。texture が既にロード済みなら
+        // 新しい depth の camera projection を即座に反映する (#694)。texture 未ロードならまだ
+        // 適用できないが、この後の loadTexture 完了時（別経路）に最新の existing.depth を見て
+        // 反映されるので破綻しない。待つ必要はないので即 ready (#293)。
+        if (depthChanged) {
+          this.applyCameraProjectionToCharacter(character, existing)
+        }
         onReady?.()
       }
       return
@@ -1540,6 +1666,7 @@ export class CharacterLayer extends Container {
       assetBaseUrl,
       targetX,
       fit,
+      depth,
       shouldFade ? 0 : 1,
       false
     )
@@ -1773,6 +1900,8 @@ export class CharacterLayer extends Container {
       assetBaseUrl: '',
       // render-only（タイトル）はフィット対象外。常に原寸 (#294)。
       fit: false,
+      // render-only はカメラ射影の対象外 (#694)。常に 0。
+      depth: 0,
       animation: null,
       poseNudge: null,
       fadeAnimation: null,
@@ -1902,6 +2031,8 @@ export class CharacterLayer extends Container {
       assetBaseUrl: '',
       // render-only（ラベル/タイトル）はフィット対象外。常に原寸 (#294)。
       fit: false,
+      // render-only はカメラ射影の対象外 (#694)。常に 0。
+      depth: 0,
       animation: null,
       poseNudge: null,
       // フェード開始は ensureFontLoaded() 完了後（下記 .then() 内）に遅延する (#427)。
@@ -2108,6 +2239,8 @@ export class CharacterLayer extends Container {
       assetBaseUrl: opts.assetBaseUrl,
       // render-only（単独画像 #274）はフィット対象外。表示は showImage 専用の sizing に従う。
       fit: false,
+      // render-only はカメラ射影の対象外 (#694)。常に 0。
+      depth: 0,
       animation: null,
       poseNudge: null,
       // フェード開始は Assets.load() 完了後（下記 .then() 内）に遅延する (#427)。
@@ -3427,8 +3560,13 @@ export class CharacterLayer extends Container {
    * 復元時（applyState）は state.characters を show() で再生するため、ここに renderOnly が漏れると
    * Title/Label/Image が立ち絵として誤って復元されてしまう。それを防ぐフィルタ。
    */
-  getCharacterStates(): Array<{ name: string; expression: string; position: string }> {
-    const result: Array<{ name: string; expression: string; position: string }> = []
+  getCharacterStates(): Array<{
+    name: string
+    expression: string
+    position: string
+    depth: number
+  }> {
+    const result: Array<{ name: string; expression: string; position: string; depth: number }> = []
     for (const [name, state] of this.characters) {
       if (state.renderOnly) continue
       if (state.snapshotHidden) continue
@@ -3439,7 +3577,12 @@ export class CharacterLayer extends Container {
       // 方向モーションで退場中（stageMotion.kind==='exit'）のキャラも同じ理由で除外する (#684)。
       // 復元は常に演出の中間状態を持たない最終確定位置（ADR0002）＝歩行退場中は「もう退場済み」扱い。
       if (state.stageMotion?.kind === 'exit') continue
-      result.push({ name, expression: state.expression, position: state.position })
+      result.push({
+        name,
+        expression: state.expression,
+        position: state.position,
+        depth: state.depth,
+      })
     }
     return result
   }
@@ -3570,7 +3713,21 @@ export class CharacterLayer extends Container {
                 ? 1
                 : computeTargetHeightScale(texture.height, targetRatio, this.screenHeight)
           }
-          sprite.scale.set(scale)
+          // カメラ射影 (#694): depth に基づく scale/verticalOffset を、上で決めた基本スケール・
+          // 足元 Y 座標に乗算・加算で合成する（fit/character_scale/character_height_ratio の
+          // どの分岐で決まった scale でも一律に適用する）。ノベルモード（既定）では
+          // computeCameraProjection が常に scale=1/verticalOffset=0 を返すため、既存の見た目は
+          // 無変化（後方互換）。depth は `this.characters` に既に登録済みの state から引く
+          // （show() が loadTexture を呼ぶ前に必ず該当 character キーへ state を set 済み）。
+          const depth = this.characters.get(characterName)?.depth ?? 0
+          const projection = computeCameraProjection(
+            this.cameraMode,
+            this.cameraOrientation,
+            this.cameraElevation,
+            depth
+          )
+          sprite.scale.set(scale * projection.scale)
+          sprite.y = this.characterY + projection.verticalOffset
           // ラベルを立ち絵（sprite）の幅に収める。natural width が sprite 幅を超えたら縮小、
           // 収まっていれば等倍のまま（大きくしない）。setCharacterHeightRatio のライブ再スケール (#360)
           // と共有するヘルパで、fit ロジックの重複を避ける（規律4）。

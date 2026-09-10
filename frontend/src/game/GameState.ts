@@ -126,7 +126,7 @@ export interface NovelGameState {
    */
   props: Array<{ path: string; depth: number }>
   isBlackout: boolean
-  characters: Array<{ name: string; expression: string; position: string }>
+  characters: Array<{ name: string; expression: string; position: string; depth: number }>
   currentBgmPath: string | null
   /**
    * カメラモード (#681)。'Novel'（既定・正投影・従来通り）/ 'Theater'（透視投影）。

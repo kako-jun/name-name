@@ -215,6 +215,13 @@ export type Event =
          * 未指定 / false は原寸（scale=1）で表示する。サイズ・位置では自動分岐しない。
          */
         fit?: boolean
+        /**
+         * シアターモードのキャラクター奥行き配置 (#694)。話者行のオプションに `depth: N` /
+         * `depth=N` を書くと `computeCameraProjection`（cameraProjection.ts）の
+         * scale/verticalOffset を立ち絵に適用する。未指定/null は 0（最前面）扱い。
+         * ノベルモード（既定）では常に scale=1/verticalOffset=0 になるため、既存の見た目は無変化。
+         */
+        depth?: number | null
       }
     }
   | {
@@ -408,6 +415,8 @@ export type Event =
          *  未指定/null は従来通りの瞬間表示/フェード登場（後方互換）。ノベルモードでは無視して
          *  フェードにフォールバックする。 */
         enter_direction?: StageDirection | null
+        /** シアターモードのキャラクター奥行き配置 (#694)。`Dialog.depth` と同義。 */
+        depth?: number | null
       }
     }
   | { Wait: { ms: number } }

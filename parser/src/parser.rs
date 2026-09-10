@@ -234,6 +234,8 @@ pub fn parse(input: &str) -> Document {
     let mut last_position: Option<String> = None;
     // 立ち絵フィット (#294)。話者行で指定された fit を継続行 Dialog にも引き継ぐ。
     let mut last_fit: bool = false;
+    // シアターモードのキャラクター奥行き (#694)。話者行で指定された depth を継続行 Dialog にも引き継ぐ。
+    let mut last_depth: Option<f32> = None;
     // per-line voice (#144): [ボイス: path] で次の Dialog/Narration に注入する
     let mut pending_voice_path: Option<String> = None;
     // per-line font (#147): [フォント: family] で次の Dialog/Narration に注入する。
@@ -255,6 +257,7 @@ pub fn parse(input: &str) -> Document {
             last_expression = None;
             last_position = None;
             last_fit = false;
+            last_depth = None;
             if let Some(colon_pos) = rest.find(':') {
                 let id = rest[..colon_pos].trim().to_string();
                 let title_raw = rest[colon_pos + 1..].trim().to_string();
@@ -824,9 +827,9 @@ pub fn parse(input: &str) -> Document {
                     last_character = Some(character.clone());
                     last_expression = Some(expression.clone());
                     // position stays the same.
-                    // last_position / last_fit は意図的に更新しない。表情チェンジは
-                    // 立ち絵の位置・フィット指定を持たないため、以降の継続 Dialog は
-                    // 直前の話者行で確定した position / fit をそのまま継承する。
+                    // last_position / last_fit / last_depth は意図的に更新しない。表情チェンジは
+                    // 立ち絵の位置・フィット・depth 指定を持たないため、以降の継続 Dialog は
+                    // 直前の話者行で確定した position / fit / depth をそのまま継承する。
                 }
                 current_events.push(event);
             }
@@ -836,11 +839,12 @@ pub fn parse(input: &str) -> Document {
 
         // Speaker line: **カコ** (suppin_1, 左):
         if trimmed.starts_with("**") && is_speaker_line(trimmed) {
-            let (character, expression, position, fit) = parse_speaker_line(trimmed);
+            let (character, expression, position, fit, depth) = parse_speaker_line(trimmed);
             last_character = Some(character.clone());
             last_expression = expression.clone();
             last_position = position.clone();
             last_fit = fit;
+            last_depth = depth;
 
             pos += 1;
             // Collect text lines until empty line or next command
@@ -880,6 +884,7 @@ pub fn parse(input: &str) -> Document {
                 voice_path: pending_voice_path.take(),
                 font_family: pending_font_family.take(),
                 fit,
+                depth,
             });
             continue;
         }
@@ -943,6 +948,7 @@ pub fn parse(input: &str) -> Document {
                     voice_path: pending_voice_path.take(),
                     font_family: pending_font_family.take(),
                     fit: last_fit,
+                    depth: last_depth,
                 });
             }
             continue;
@@ -2481,7 +2487,31 @@ fn is_fit_token(token: &str) -> bool {
     }
 }
 
-fn parse_speaker_line(line: &str) -> (String, Option<String>, Option<String>, bool) {
+/// 話者行/登場ディレクティブのオプションに書かれた `depth:` / `depth=N` トークンかどうかを判定し、
+/// パース済み値を返す (#694)。`is_fit_token` と同じキー分離パターン（コロン・イコール両対応）。
+///
+/// 戻り値は「このトークンが depth 指定かどうか」と「パース済み値」を分けて返す:
+/// - `None` = depth トークンではない（キーが `depth` に一致しない。呼び出し側は position 等の
+///   位置取り対象として残す）。
+/// - `Some(None)` = depth トークンだが値が非数値/NaN/Infinity/省略（呼び出し側で 0.0 に
+///   フォールバックする。背景板/大道具の `depth:` と同じ方針）。
+/// - `Some(Some(v))` = 有効な depth 値。
+fn parse_depth_token(token: &str) -> Option<Option<f32>> {
+    let t = token.trim();
+    let (key, val) = match t.split_once(':').or_else(|| t.split_once('=')) {
+        Some((k, v)) => (k.trim(), Some(v.trim())),
+        None => (t, None),
+    };
+    if key != "depth" {
+        return None;
+    }
+    Some(
+        val.and_then(|v| v.parse::<f32>().ok())
+            .filter(|n| n.is_finite()),
+    )
+}
+
+fn parse_speaker_line(line: &str) -> (String, Option<String>, Option<String>, bool, Option<f32>) {
     // Extract character name between ** **
     let after_stars = &line[2..]; // skip leading **
     let name_end = after_stars.find("**").unwrap_or(after_stars.len());
@@ -2490,29 +2520,34 @@ fn parse_speaker_line(line: &str) -> (String, Option<String>, Option<String>, bo
     let rest = &after_stars[name_end + 2..]; // after closing **
     let rest = rest.trim();
 
-    // Check for parenthesized attributes: (expression, position, フィット):
+    // Check for parenthesized attributes: (expression, position, フィット, depth: N):
     if let Some(paren_start) = rest.find('(') {
         if let Some(paren_end) = rest.find(')') {
             let attrs = &rest[paren_start + 1..paren_end];
-            let (expression, position, fit) = parse_character_attrs(attrs);
-            return (character, expression, position, fit);
+            let (expression, position, fit, depth) = parse_character_attrs(attrs);
+            return (character, expression, position, fit, depth);
         }
     }
 
-    (character, None, None, false)
+    (character, None, None, false, None)
 }
 
-/// 括弧内の立ち絵属性 `expression, position, フィット?` をパースする (#294 / #401)。
+/// 括弧内の立ち絵属性 `expression, position, フィット?, depth: N?` をパースする (#294 / #401 / #694)。
 /// 話者タグ (`parse_speaker_line`) と登場ディレクティブ (`parse_enter_directive`) の共通処理。
-/// フィット (#294) は真偽フラグなので、まず全トークンから抜き出して位置取りから除外する。
-/// 残ったトークンを従来どおり expression=先頭 / position=2 番目 の位置取りで読む。
-fn parse_character_attrs(attrs: &str) -> (Option<String>, Option<String>, bool) {
+/// フィット (#294) と depth (#694) はどちらも位置取りに参加しないオプショントークンなので、
+/// まず全トークンから抜き出して位置取りから除外する。残ったトークンを従来どおり
+/// expression=先頭 / position=2 番目 の位置取りで読む。
+fn parse_character_attrs(attrs: &str) -> (Option<String>, Option<String>, bool, Option<f32>) {
     let mut fit = false;
+    let mut depth: Option<f32> = None;
     let positional: Vec<&str> = attrs
         .split(',')
         .filter(|s| {
             if is_fit_token(s) {
                 fit = true;
+                false
+            } else if let Some(parsed) = parse_depth_token(s) {
+                depth = parsed;
                 false
             } else {
                 true
@@ -2521,7 +2556,7 @@ fn parse_character_attrs(attrs: &str) -> (Option<String>, Option<String>, bool) 
         .collect();
     let expression = positional.first().map(|s| s.trim().to_string());
     let position = positional.get(1).map(|s| s.trim().to_string());
-    (expression, position, fit)
+    (expression, position, fit, depth)
 }
 
 /// `[登場: 名前 (sprite/表情, 位置)]` / `[登場: 名前 (sprite/表情, 位置), 上手から]` /
@@ -2541,22 +2576,22 @@ fn parse_character_attrs(attrs: &str) -> (Option<String>, Option<String>, bool) 
 /// （`"トモ, 上手から"` になっていた）。`split_once(',')` で名前と方向トークン候補を分離する。
 fn parse_enter_directive(content: &str) -> Option<Event> {
     let content = content.trim();
-    let (character, expression, position, fit, direction_part) =
+    let (character, expression, position, fit, depth, direction_part) =
         if let Some(paren_start) = content.find('(') {
             let name = content[..paren_start].trim().to_string();
             // 対応する閉じ括弧は開き括弧より後ろを探す。無ければ属性を無視して名前のみ。
             if let Some(rel_end) = content[paren_start + 1..].find(')') {
                 let attrs = &content[paren_start + 1..paren_start + 1 + rel_end];
-                let (expression, position, fit) = parse_character_attrs(attrs);
+                let (expression, position, fit, depth) = parse_character_attrs(attrs);
                 let after_paren = &content[paren_start + 1 + rel_end + 1..];
-                (name, expression, position, fit, after_paren)
+                (name, expression, position, fit, depth, after_paren)
             } else {
-                (name, None, None, false, "")
+                (name, None, None, false, None, "")
             }
         } else {
             match content.split_once(',') {
-                Some((name, rest)) => (name.trim().to_string(), None, None, false, rest),
-                None => (content.to_string(), None, None, false, ""),
+                Some((name, rest)) => (name.trim().to_string(), None, None, false, None, rest),
+                None => (content.to_string(), None, None, false, None, ""),
             }
         };
     if character.is_empty() {
@@ -2570,6 +2605,7 @@ fn parse_enter_directive(content: &str) -> Option<Event> {
         position,
         fit,
         enter_direction,
+        depth,
     })
 }
 
@@ -3346,6 +3382,7 @@ title: "テスト"
                 position: Some("左".to_string()),
                 fit: false,
                 enter_direction: None,
+                depth: None,
             }
         );
         assert_eq!(
@@ -3356,6 +3393,7 @@ title: "テスト"
                 position: Some("右".to_string()),
                 fit: false,
                 enter_direction: None,
+                depth: None,
             }
         );
     }
@@ -3375,6 +3413,7 @@ title: "テスト"
                 position: Some("左".to_string()),
                 fit: true,
                 enter_direction: None,
+                depth: None,
             }
         );
 
@@ -3405,6 +3444,7 @@ title: "テスト"
                 position: None,
                 fit: false,
                 enter_direction: None,
+                depth: None,
             })
         );
 
@@ -3420,6 +3460,7 @@ title: "テスト"
                 position: None,
                 fit: false,
                 enter_direction: None,
+                depth: None,
             })
         );
 
@@ -3433,6 +3474,7 @@ title: "テスト"
                 position: None,
                 fit: false,
                 enter_direction: None,
+                depth: None,
             })
         );
 
@@ -3445,6 +3487,7 @@ title: "テスト"
                 position: None,
                 fit: false,
                 enter_direction: None,
+                depth: None,
             })
         );
     }
@@ -3462,6 +3505,7 @@ title: "テスト"
                 position: None,
                 fit: false,
                 enter_direction: Some(StageDirection::Kamite),
+                depth: None,
             })
         );
 
@@ -3477,6 +3521,7 @@ title: "テスト"
                 position: Some("左".to_string()),
                 fit: false,
                 enter_direction: Some(StageDirection::Shimote),
+                depth: None,
             })
         );
 
@@ -3489,6 +3534,7 @@ title: "テスト"
                 position: None,
                 fit: false,
                 enter_direction: None,
+                depth: None,
             })
         );
 
@@ -3501,6 +3547,7 @@ title: "テスト"
                 position: None,
                 fit: false,
                 enter_direction: None,
+                depth: None,
             })
         );
 

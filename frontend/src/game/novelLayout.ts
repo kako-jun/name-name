@@ -1030,7 +1030,8 @@ export function saveSlotToGameState(
     // シアターモード舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
     props: data.props ?? [],
     isBlackout: data.isBlackout ?? false,
-    characters: data.characters ?? [],
+    // シアターモードの奥行き配置 (#694)。古いセーブの各要素には無い → ?? 0（最前面）に倒す。
+    characters: (data.characters ?? []).map((c) => ({ ...c, depth: c.depth ?? 0 })),
     currentBgmPath: data.currentBgmPath ?? null,
     // カメラモード (#681)。古いセーブには無い → ?? でノベル/客席（既定）にフォールバック。
     cameraMode: data.cameraMode ?? 'Novel',
