@@ -44,6 +44,7 @@ import {
   clampFadeMs,
   computeStageMotionOffset,
   parseColorToNumber,
+  resolveCharacterXRatio,
   resolvePositionWithOverride,
   resolveAssetUrl,
   resolveCharacterImageUrls,
@@ -1375,16 +1376,14 @@ export class CharacterLayer extends Container {
     // 据え置き、見た目の x だけを役割（質問役=左 / 回答役=右）に合わせる。
     const hasXOverride = options?.xRatio !== undefined && Number.isFinite(options.xRatio)
     const overrideX = hasXOverride ? this.screenWidth * (options?.xRatio as number) : undefined
-    // この show が立ち絵を置く先の水平座標 (#303)。override x > position トークン > center の順で解決する。
-    // 「1 位置に 1 キャラ」を保証するため、別キャラがこの x を占有していたら退場させる判定に使う。
-    // own-property のみ見る (#368)。素朴な `this.positionX[normalizedPosition]` は Object.prototype
-    // も辿ってしまい、normalizedPosition が `constructor` 等と一致すると `??` のフォールバックが
-    // 発火せず関数オブジェクトを返してしまう。
+    // この show が立ち絵を置く先の水平座標 (#303)。override x > position トークン（自由比率含む
+    // #694） > center の順で解決する。「1 位置に 1 キャラ」を保証するため、別キャラがこの x を
+    // 占有していたら退場させる判定に使う。
+    // 自由な横位置指定 (#694): position トークンが left/center/right/off_left/off_right の
+    // いずれでもなければ、resolveCharacterXRatio が数値としてのパースを試みる
+    // （`(表情, 0.15)` → 画面幅 15% の位置）。既存の文字列トークンは完全後方互換。
     const targetX =
-      overrideX ??
-      (hasOwn(this.positionX, normalizedPosition)
-        ? this.positionX[normalizedPosition]
-        : this.positionX['center'])
+      overrideX ?? this.screenWidth * resolveCharacterXRatio(normalizedPosition, CHARACTER_X_RATIO)
     const existing = this.characters.get(character)
 
     if (existing) {

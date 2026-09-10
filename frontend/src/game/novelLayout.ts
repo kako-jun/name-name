@@ -853,6 +853,41 @@ function isValidRatio(v: number | undefined): v is number {
   return v !== undefined && Number.isFinite(v) && v >= 0 && v <= 1
 }
 
+/**
+ * 立ち絵の位置トークン（`normalizePosition()` 済み）から x 比率（0..1、`CHARACTER_X_RATIO` と
+ * 同じ意味＝ `sprite 中心 x = screenWidth * xRatio`）を解決する純粋関数 (#694)。
+ *
+ * 話者タグ・登場ディレクティブの位置指定に、既存の文字列トークン（left/center/right/off_left/
+ * off_right。日本語エイリアスは呼び出し側の `normalizePosition` が解決済み）に加えて、0〜1 の数値を
+ * 直接 x 比率として受け付ける（例: `**トモ** (笑顔, 0.15)` → 画面幅 15% の位置）。
+ *
+ * 解決順序:
+ * 1. `positionTable`（`CHARACTER_X_RATIO` 等、比率テーブル）に一致すればそのまま返す
+ *    （own-property のみ見る。#368 と同じ理由 — position が `constructor` 等の
+ *    Object.prototype のプロパティ名と衝突しても、関数オブジェクトを誤って返さない）。
+ *    既存の文字列トークンは完全後方互換（このケースのみ通れば挙動は変わらない）。
+ * 2. 上記に一致しない未知のトークンは数値としてパースを試みる。空文字列は対象外（`Number('')`
+ *    が `0` になる JS の仕様に引きずられないためのガード）。有限値なら `[0, 1]` にクランプして返す。
+ * 3. 数値でもエイリアスでもなければ `positionTable['center']` にフォールバックする
+ *    （既存の「未知の文字列は中央」という挙動を維持）。
+ */
+export function resolveCharacterXRatio(
+  position: string,
+  positionTable: Record<string, number>
+): number {
+  if (hasOwn(positionTable, position)) {
+    return positionTable[position]
+  }
+  const trimmed = position.trim()
+  if (trimmed.length > 0) {
+    const parsed = Number(trimmed)
+    if (Number.isFinite(parsed)) {
+      return Math.min(1, Math.max(0, parsed))
+    }
+  }
+  return positionTable['center'] ?? 0.5
+}
+
 /** アセット URL の種別。`images/` か `sounds/` のサブディレクトリに対応する。 */
 export type AssetKind = 'images' | 'sounds'
 
