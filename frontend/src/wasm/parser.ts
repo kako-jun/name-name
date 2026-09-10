@@ -77,6 +77,11 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
           // 立ち絵の明示フィット (#294)。WASM は false のとき undefined を返すため
           // 明示 boolean に正規化して normalize で落とさない（新フィールド欠落の罠回避）。
           fit: event.Dialog.fit === true,
+          // シアターモードのキャラクター奥行き配置 (#694)。Option<f32> なので WASM 経由で
+          // undefined になる。他の Option フィールドと同じく null に正規化する
+          // （ここを忘れると Rust 側は正しくパースされているのに wasm 経由で undefined になり、
+          // テストは緑のまま本番だけ壊れる — #308 以来の事故パターン）。
+          depth: event.Dialog.depth ?? null,
         },
       }
     }
@@ -102,6 +107,9 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
           position: event.Enter.position ?? null,
           fit: event.Enter.fit === true,
           enter_direction: event.Enter.enter_direction ?? null,
+          // シアターモードのキャラクター奥行き配置 (#694)。Dialog.depth と同じく
+          // Option<f32> なので undefined を null に正規化する。
+          depth: event.Enter.depth ?? null,
         },
       }
     }
