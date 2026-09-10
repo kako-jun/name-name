@@ -3479,7 +3479,7 @@ title: "テスト"
             (expr_a, pos_a, fit_a, depth_a),
             (expr_b, pos_b, fit_b, depth_b)
         );
-        assert_eq!(fit_a, true);
+        assert!(fit_a);
         assert_eq!(depth_a, Some(3.0));
     }
 
@@ -3490,7 +3490,7 @@ title: "テスト"
         let (expression, position, fit, depth) = parse_character_attrs("depth: 5");
         assert_eq!(expression, None);
         assert_eq!(position, None);
-        assert_eq!(fit, false);
+        assert!(!fit);
         assert_eq!(depth, Some(5.0));
     }
 
