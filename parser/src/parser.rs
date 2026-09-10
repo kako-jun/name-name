@@ -3428,6 +3428,224 @@ title: "テスト"
         );
     }
 
+    // =================================================================================
+    // #694: シアターモードのキャラクター奥行き配置 (`depth: N` / `depth=N`)。
+    // parse_depth_token（is_fit_token の姉妹関数）の decision table を単体で固定し、
+    // 話者タグ/登場ディレクティブでの実パース・継承・round-trip を確認する。
+    // =================================================================================
+
+    #[test]
+    fn test_parse_depth_token_decision_table() {
+        // Row1: key が "depth" でなければトークンとして扱わない（position 等の位置取りに残す）。
+        assert_eq!(parse_depth_token("フィット"), None);
+        assert_eq!(parse_depth_token("左"), None);
+        // Row2: bare "depth"（値なし、コロンも `=` もない）は depth トークンだが値なし → Some(None)。
+        assert_eq!(parse_depth_token("depth"), Some(None));
+        // Row2 相当: "depth:" も値が空文字列でパース失敗 → Some(None)。
+        assert_eq!(parse_depth_token("depth:"), Some(None));
+        // key=value 区切りは `:` と `=` の両方に対応する。
+        assert_eq!(parse_depth_token("depth: 3"), Some(Some(3.0)));
+        assert_eq!(parse_depth_token("depth=3"), Some(Some(3.0)));
+        // 境界値 0 はクランプなしでそのまま通る。
+        assert_eq!(parse_depth_token("depth: 0"), Some(Some(0.0)));
+        // 負値もクランプされない（フロント側/computeCameraProjection 側で最終防御する設計）。
+        assert_eq!(parse_depth_token("depth: -0.001"), Some(Some(-0.001)));
+        // Row3: 値はあるが f32 としてパース失敗 → Some(None)。
+        assert_eq!(parse_depth_token("depth: abc"), Some(None));
+        // Row4: パース自体は成功するが非有限（NaN/Infinity）→ is_finite() で弾かれ Some(None)。
+        assert_eq!(parse_depth_token("depth: NaN"), Some(None));
+        assert_eq!(parse_depth_token("depth: Infinity"), Some(None));
+        // キー比較は大文字小文字を区別する。"Depth:" は depth トークンとして認識されない。
+        assert_eq!(parse_depth_token("Depth: 3"), None);
+        // 空文字列はキーが "depth" と一致しないので None。
+        assert_eq!(parse_depth_token(""), None);
+    }
+
+    #[test]
+    fn test_parse_character_attrs_depth_duplicate_last_wins() {
+        // 同じ属性リスト内で depth: が複数回書かれた場合、最後の値が勝つ
+        // （parse_character_attrs のフィルタが逐次代入するため、実装が最初勝ちに退行していないか確認）。
+        let (_, _, _, depth) = parse_character_attrs("笑顔, 左, depth: 1, depth: 9");
+        assert_eq!(depth, Some(9.0));
+    }
+
+    #[test]
+    fn test_parse_character_attrs_fit_and_depth_order_independent() {
+        // フィット / depth トークンの記述順序に依存しないことを確認する（どちらも位置取りから
+        // フィルタで除外されるだけなので、順序が違っても結果は一致するはず）。
+        let (expr_a, pos_a, fit_a, depth_a) = parse_character_attrs("笑顔, 左, フィット, depth: 3");
+        let (expr_b, pos_b, fit_b, depth_b) = parse_character_attrs("笑顔, 左, depth: 3, フィット");
+        assert_eq!(
+            (expr_a, pos_a, fit_a, depth_a),
+            (expr_b, pos_b, fit_b, depth_b)
+        );
+        assert_eq!(fit_a, true);
+        assert_eq!(depth_a, Some(3.0));
+    }
+
+    #[test]
+    fn test_parse_character_attrs_depth_only_does_not_leak_into_positional() {
+        // 位置トークンなしで depth: だけを書いても、positional 配列（expression/position 判定）に
+        // 混ざらない（フィルタで除外されているので expression/position は両方 None のまま）。
+        let (expression, position, fit, depth) = parse_character_attrs("depth: 5");
+        assert_eq!(expression, None);
+        assert_eq!(position, None);
+        assert_eq!(fit, false);
+        assert_eq!(depth, Some(5.0));
+    }
+
+    #[test]
+    fn test_dialog_depth_parse_and_roundtrip() {
+        // 話者タグの depth: N が Event::Dialog.depth にパースされる。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## s: t\n\n**ボケ** (笑顔, 上手, depth: 3):\nなんでやねん\n";
+        let doc = parse(input);
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Dialog {
+                depth,
+                position,
+                expression,
+                ..
+            } => {
+                assert_eq!(depth, &Some(3.0));
+                assert_eq!(position, &Some("上手".to_string()));
+                assert_eq!(expression, &Some("笑顔".to_string()));
+            }
+            other => panic!("Expected Dialog event, got {other:?}"),
+        }
+
+        // round-trip: emit → 再parse でも同じ depth が得られる。
+        let emitted = crate::emitter::emit(&doc);
+        let doc2 = parse(&emitted);
+        match &doc2.chapters[0].scenes[0].events[0] {
+            Event::Dialog { depth, .. } => assert_eq!(depth, &Some(3.0), "emit結果:\n{emitted}"),
+            other => panic!("Expected Dialog event after roundtrip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dialog_depth_zero_vs_omitted_emit_distinction() {
+        // #694: depth: 0 明示指定 (Some(0.0)) は emit でも省略されない
+        // （None との区別を保つ。doc の主張の裏取り）。
+        let doc_with_zero = parse(
+            "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## s: t\n\n**カコ** (笑顔, 左, depth: 0):\nセリフ\n",
+        );
+        match &doc_with_zero.chapters[0].scenes[0].events[0] {
+            Event::Dialog { depth, .. } => assert_eq!(depth, &Some(0.0)),
+            other => panic!("Expected Dialog event, got {other:?}"),
+        }
+        let emitted_with_zero = crate::emitter::emit(&doc_with_zero);
+        assert!(
+            emitted_with_zero.contains("depth: 0"),
+            "明示指定の depth: 0 は emit で省略されない: {emitted_with_zero}"
+        );
+
+        // depth 省略の話者タグは depth==None、emit 結果にも depth トークンが出ない。
+        let doc_omitted = parse(
+            "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## s: t\n\n**カコ** (笑顔, 左):\nセリフ\n",
+        );
+        match &doc_omitted.chapters[0].scenes[0].events[0] {
+            Event::Dialog { depth, .. } => assert_eq!(depth, &None),
+            other => panic!("Expected Dialog event, got {other:?}"),
+        }
+        let emitted_omitted = crate::emitter::emit(&doc_omitted);
+        assert!(
+            !emitted_omitted.contains("depth"),
+            "depth 省略時は emit 結果に depth トークンが出ない: {emitted_omitted}"
+        );
+    }
+
+    #[test]
+    fn test_dialog_depth_continuation_inherits_last_speaker_depth() {
+        // 話者行の depth: 3 の後、空行区切りの継続テキスト行（話者タグなし）も
+        // last_depth 継承により depth: Some(3.0) を持つ。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## s: t\n\n**カコ** (笑顔, 左, depth: 3):\nセリフ1\n\nセリフ2\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events.len(),
+            2,
+            "話者行 + 継続行で2つの Dialog になるはず: {events:?}"
+        );
+        for event in events {
+            match event {
+                Event::Dialog { depth, text, .. } => {
+                    assert_eq!(
+                        depth,
+                        &Some(3.0),
+                        "text={text:?} の depth が継承されていない"
+                    );
+                }
+                other => panic!("Expected Dialog event, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_dialog_depth_survives_expression_change_continuation() {
+        // 表情チェンジ (`**キャラ** → 表情:`) は position/fit/depth を更新しないため、
+        // その後の継続テキスト行は表情チェンジ前の depth をそのまま継承する。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## s: t\n\n**カコ** (笑顔, 左, depth: 3):\nセリフ1\n\n**カコ** → 困り:\nセリフ2\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        // [Dialog(笑顔), ExpressionChange(困り), Dialog(困り)] の3イベント。
+        assert_eq!(events.len(), 3, "events={events:?}");
+        match &events[2] {
+            Event::Dialog {
+                depth,
+                position,
+                expression,
+                ..
+            } => {
+                assert_eq!(depth, &Some(3.0));
+                assert_eq!(position, &Some("左".to_string()));
+                assert_eq!(expression, &Some("困り".to_string()));
+            }
+            other => panic!("Expected Dialog event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dialog_depth_resets_on_scene_heading_crossing() {
+        // 新しい `## シーン` 見出しを跨ぐと last_depth（と last_position）は None にリセットされる。
+        // 表情チェンジは position/fit/depth を更新しないため、新シーン最初の行が表情チェンジだと
+        // シーン跨ぎのリセットが効いていない限り前シーンの depth/position が漏れてしまう
+        // （last_character だけをリセットしても防げない、last_depth 自体のリセットを狙い撃つ回帰テスト）。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## s1: 1\n\n**カコ** (笑顔, 左, depth: 3):\nセリフ1\n\n## s2: 2\n\n**カコ** → 困り:\nセリフ2\n";
+        let doc = parse(input);
+        assert_eq!(doc.chapters[0].scenes.len(), 2);
+        let scene2_events = &doc.chapters[0].scenes[1].events;
+        // [ExpressionChange(困り), Dialog(困り)] の2イベント。
+        assert_eq!(scene2_events.len(), 2, "events={scene2_events:?}");
+        match &scene2_events[1] {
+            Event::Dialog {
+                depth, position, ..
+            } => {
+                assert_eq!(depth, &None, "前シーンの depth: 3 が漏れている");
+                assert_eq!(position, &None, "前シーンの position が漏れている");
+            }
+            other => panic!("Expected Dialog event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_enter_directive_depth_parse() {
+        // [登場: 名前 (表情, 位置, depth: N)] の depth が Event::Enter.depth にパースされる。
+        assert_eq!(
+            parse_directive(
+                "[登場: せお (theo/akarame, 左, depth: 5)]",
+                EventImageTransition::Fade
+            ),
+            Some(Event::Enter {
+                character: "せお".to_string(),
+                expression: Some("theo/akarame".to_string()),
+                position: Some("左".to_string()),
+                fit: false,
+                enter_direction: None,
+                depth: Some(5.0),
+            })
+        );
+    }
+
     #[test]
     fn test_parse_enter_directive_edge_cases() {
         // 登場ディレクティブのエッジケース (#401)。

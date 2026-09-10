@@ -15,6 +15,7 @@ import {
 } from './CharacterLayer'
 import { CURSOR_DEFAULTS } from './textEffect'
 import { NovelRenderer, BACKGROUND_CROSSFADE_MS } from './NovelRenderer'
+import { computeCameraProjection, THEATER_CAMERA_REFERENCE_DEPTH } from './cameraProjection'
 import { ASPECT_RATIOS } from './constants'
 import { __setDocumentForTest, resetFontLoaderCache } from './FontLoader'
 import * as FontLoader from './FontLoader'
@@ -5904,6 +5905,250 @@ describe('CharacterLayer character_scale ライブ再適用（#378）', () => {
     expect(chars.get('hero')!.sprite.scale.x).toBe(2)
     // 旧 sprite は対象外のままなので元のスケールを保つ（新 sprite に引きずられない）。
     expect(chars.get(oldKey)!.sprite.scale.x).toBe(beforeScale)
+  })
+})
+
+// =====================================================================================
+// #694: applyCameraProjectionToCharacter の早期 return ガード（MC/DC 相当、1条件ずつ単独で
+//   true にしてもスキップに落ちることを確認する）と、setCamera() のライブ再適用・depth だけの
+//   再 show の即時反映を検証する。poseNudge ガードは #694 で新規追加された最重要回帰点
+//   （nudge の baseY 追跡と sprite.y 書き換えが競合しないようにするためのガード）。
+// =====================================================================================
+describe('CharacterLayer applyCameraProjectionToCharacter ガード / setCamera ライブ再適用 (#694)', () => {
+  beforeEach(() => {
+    __setDocumentForTest(null)
+    resetFontLoaderCache()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __setDocumentForTest(typeof document === 'undefined' ? null : document)
+    resetFontLoaderCache()
+  })
+
+  const fakeTexture = (width: number, height: number): unknown => ({
+    width,
+    height,
+    source: { scaleMode: 'linear' },
+  })
+  const { width: SW, height: SH } = ASPECT_RATIOS['9:16']
+  // characterY は screenHeight * CHARACTER_Y_RATIO（足元基準の既定 y）。
+  const characterY = SH * CHARACTER_Y_RATIO
+
+  it('H1: ノベルモード（dialog_style 既定）は depth の値に関わらず scale=1/y=characterY で見た目無変化', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    // カメラモードは既定 Novel のまま（setCamera を呼ばない）。depth 値をいろいろ変えても
+    // computeCameraProjection が Novel では常に {scale:1, verticalOffset:0} を返すため無変化。
+    for (const depth of [0, 5, -3, THEATER_CAMERA_REFERENCE_DEPTH]) {
+      const layer = new CharacterLayer(SW, SH)
+      layer.show('hero', 'normal', '中央', '/assets', { instant: true, depth })
+      await flushPromises()
+      const st = imageChars(layer).characters.get('hero')!
+      expect(st.sprite.scale.x).toBe(1)
+      expect(st.sprite.scale.y).toBe(1)
+      expect(st.sprite.y).toBe(characterY)
+    }
+  })
+
+  it('D1: 全ガード条件 false・texture ロード済みなら sprite.scale/y が computeCameraProjection の結果で更新される', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', {
+      instant: true,
+      depth: THEATER_CAMERA_REFERENCE_DEPTH,
+    })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    // Novel（既定）では depth に関わらず scale=1 / y=characterY（非回帰）。
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.y).toBe(characterY)
+
+    layer.setCamera('Theater', 'Audience', 'LookDown')
+    const expected = computeCameraProjection(
+      'Theater',
+      'Audience',
+      'LookDown',
+      THEATER_CAMERA_REFERENCE_DEPTH
+    )
+    // baseScale=1（character_scale/character_height_ratio 未設定）* projection.scale。
+    expect(st.sprite.scale.x).toBeCloseTo(expected.scale, 10)
+    expect(st.sprite.scale.y).toBeCloseTo(expected.scale, 10)
+    expect(st.sprite.y).toBeCloseTo(characterY + expected.verticalOffset, 10)
+    // depth=THEATER_CAMERA_REFERENCE_DEPTH では scale が縮小し、LookDown で y が下がる
+    // （具体的な変化が起きたことも合わせて確認、恒等写像に潰れていないことの担保）。
+    expect(st.sprite.scale.x).toBeLessThan(1)
+    expect(st.sprite.y).toBeGreaterThan(characterY)
+  })
+
+  it('D2: renderOnly（showImage）は setCamera を呼んでも scale/y が更新されない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.showImage({ id: 'avatar', path: 'a.png', assetBaseUrl: '/assets', instant: true })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('avatar')!
+    const scaleBefore = { x: st.sprite.scale.x, y: st.sprite.scale.y }
+    const yBefore = st.sprite.y
+
+    layer.setCamera('Theater', 'Audience', 'LookDown')
+    expect(st.sprite.scale.x).toBe(scaleBefore.x)
+    expect(st.sprite.scale.y).toBe(scaleBefore.y)
+    expect(st.sprite.y).toBe(yBefore)
+  })
+
+  it('D3: fit=true の立ち絵は setCamera を呼んでも scale/y が更新されない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW * 2, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, fit: true, depth: 5 })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    const scaleBefore = st.sprite.scale.x
+    const yBefore = st.sprite.y
+
+    layer.setCamera('Theater', 'Audience', 'LookDown')
+    expect(st.sprite.scale.x).toBe(scaleBefore)
+    expect(st.sprite.y).toBe(yBefore)
+  })
+
+  it('D4: アニメ進行中（animation 非 null）の立ち絵は setCamera を呼んでも scale/y が更新されない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, depth: 5 })
+    await flushPromises()
+    layer.animate('hero', { dy: '-100', duration_ms: 500 })
+    const st = imageChars(layer).characters.get('hero')! as unknown as {
+      sprite: { scale: { x: number; y: number }; y: number }
+      animation: unknown
+    }
+    expect(st.animation).not.toBeNull()
+    const scaleBefore = st.sprite.scale.x
+    const yBefore = st.sprite.y
+
+    layer.setCamera('Theater', 'Audience', 'LookDown')
+    expect(st.sprite.scale.x).toBe(scaleBefore)
+    expect(st.sprite.y).toBe(yBefore)
+  })
+
+  it('D5: クロスフェード中の旧 sprite（snapshotHidden）は setCamera を呼んでも scale/y が更新されない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, depth: 5 })
+    await flushPromises()
+    const chars = imageChars(layer).characters
+    // 表情変更 → 非 instant・既定 fade あり → クロスフェード分岐（#337）。旧 sprite は snapshotHidden。
+    layer.show('hero', 'sad', '中央', '/assets', { depth: 5 })
+    const oldKey = [...chars.keys()].find((k) => k !== 'hero')!
+    expect(chars.get(oldKey)!.snapshotHidden).toBe(true)
+    const oldSt = chars.get(oldKey)!
+    const scaleBefore = oldSt.sprite.scale.x
+    const yBefore = oldSt.sprite.y
+
+    layer.setCamera('Theater', 'Audience', 'LookDown')
+    expect(oldSt.sprite.scale.x).toBe(scaleBefore)
+    expect(oldSt.sprite.y).toBe(yBefore)
+  })
+
+  it('D6（#694 新規ガード・最重要回帰点）: poseNudge 進行中の立ち絵は setCamera を呼んでも scale/y が更新されない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, depth: 5 })
+    await flushPromises()
+    layer.nudgePose('hero')
+    expect(layer.getPoseNudgeState('hero')).not.toBeNull()
+    const st = imageChars(layer).characters.get('hero')!
+    const scaleBefore = st.sprite.scale.x
+    const yBefore = st.sprite.y
+
+    layer.setCamera('Theater', 'Audience', 'LookDown')
+    expect(st.sprite.scale.x).toBe(scaleBefore)
+    expect(st.sprite.y).toBe(yBefore)
+  })
+
+  it('D7: texture 未ロード（height<=0）の立ち絵は setCamera を呼んでも scale/y が更新されない', async () => {
+    // height=0 のテクスチャがロードされる異常系（次の loadTexture 完了時まで反映を待つ想定）。
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, 0) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, depth: 5 })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    expect(st.sprite.texture).toMatchObject({ height: 0 })
+    const scaleBefore = st.sprite.scale.x
+    const yBefore = st.sprite.y
+
+    layer.setCamera('Theater', 'Audience', 'LookDown')
+    expect(st.sprite.scale.x).toBe(scaleBefore)
+    expect(st.sprite.y).toBe(yBefore)
+  })
+
+  it('E1: ノベル→シアターへ切替えると表示中キャラの scale/y が即座に変化する', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', {
+      instant: true,
+      depth: THEATER_CAMERA_REFERENCE_DEPTH,
+    })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.y).toBe(characterY)
+
+    layer.setCamera('Theater', 'Audience', null)
+    expect(st.sprite.scale.x).toBeLessThan(1)
+    expect(st.sprite.scale.x).toBeCloseTo(0.5, 10) // depth===REFERENCE_DEPTH → scale=REF/(REF+REF)=0.5
+  })
+
+  it('E2: シアター→ノベルへ切替え戻すと scale=1・verticalOffset=0（characterY）に戻る', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', {
+      instant: true,
+      depth: THEATER_CAMERA_REFERENCE_DEPTH,
+    })
+    await flushPromises()
+    const st = imageChars(layer).characters.get('hero')!
+    layer.setCamera('Theater', 'Audience', 'LookUp')
+    expect(st.sprite.scale.x).not.toBe(1)
+    expect(st.sprite.y).not.toBe(characterY)
+
+    layer.setCamera('Novel', 'Audience', null)
+    expect(st.sprite.scale.x).toBe(1)
+    expect(st.sprite.scale.y).toBe(1)
+    expect(st.sprite.y).toBe(characterY)
+  })
+
+  it('F1: 同キャラの次の show で depth だけ変更（expression/position/fit同一）は texture 再ロードなしで即時反映される', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, depth: 0 })
+    await flushPromises()
+    layer.setCamera('Theater', 'Audience', null)
+    const st = imageChars(layer).characters.get('hero')!
+    // depth=0 → scale=REF/(REF+0)=1（見た目上は novel と同じ）。
+    expect(st.sprite.scale.x).toBe(1)
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+
+    // 同じ expression/position/fit で depth だけ変更 → texture 再ロードなし、scale は即時反映。
+    layer.show('hero', 'normal', '中央', '/assets', {
+      instant: true,
+      depth: THEATER_CAMERA_REFERENCE_DEPTH,
+    })
+    expect(loadSpy).toHaveBeenCalledTimes(1) // 再ロードされていない
+    expect(st.sprite.scale.x).toBeCloseTo(0.5, 10)
+  })
+
+  it('F4: 全く同じ depth 値での再 show は depthChanged=false で no-op（texture 再ロードなし・値も不変）', async () => {
+    const loadSpy = vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW, SH * 2) as never)
+    const layer = new CharacterLayer(SW, SH)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, depth: 3 })
+    await flushPromises()
+    layer.setCamera('Theater', 'Audience', null)
+    const st = imageChars(layer).characters.get('hero')!
+    const scaleBefore = st.sprite.scale.x
+    const yBefore = st.sprite.y
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true, depth: 3 })
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    expect(st.sprite.scale.x).toBe(scaleBefore)
+    expect(st.sprite.y).toBe(yBefore)
   })
 })
 
