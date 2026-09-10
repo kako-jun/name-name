@@ -456,6 +456,15 @@ pub enum Event {
         /// サイズや位置で自動分岐はしない（明示指定だけが縮小のトリガ）。novel/adv で分けない。
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         fit: bool,
+        /// シアターモードのキャラクター奥行き配置 (#694)。話者行のオプションに `depth: N` /
+        /// `depth=N` を書くと `computeCameraProjection`（フロント側 cameraProjection.ts）の
+        /// scale/verticalOffset を立ち絵に適用する。`None`（省略）は 0.0（最前面）扱い
+        /// （`BackgroundBoard`/`Prop` の depth と同じ意味論だが、こちらは話者タグごとに毎回
+        /// 明示されるとは限らないため plain f32 ではなく Option にして「未指定」を区別する）。
+        /// ノベルモード（既定）では `computeCameraProjection` が常に scale=1/verticalOffset=0 を
+        /// 返すため、値の有無に関わらず既存の見た目は無変化（後方互換）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depth: Option<f32>,
     },
     Narration {
         text: Vec<String>,
@@ -770,6 +779,9 @@ pub enum Event {
         /// ノベルモードでは runtime 側がこの値を無視してフェード登場にフォールバックする。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enter_direction: Option<StageDirection>,
+        /// シアターモードのキャラクター奥行き配置 (#694)。`Dialog::depth` と同じ意味論。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depth: Option<f32>,
     },
     Wait {
         ms: u32,

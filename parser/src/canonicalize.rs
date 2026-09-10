@@ -358,6 +358,7 @@ mod tests {
                 voice_path: None,
                 font_family: None,
                 fit: false,
+                depth: None,
             },
             Event::Narration {
                 text: vec!["風が吹いた--".to_string()],
@@ -374,6 +375,7 @@ mod tests {
                     voice_path: None,
                     font_family: None,
                     fit: false,
+                    depth: None,
                 }],
             },
         ];
@@ -414,6 +416,7 @@ mod tests {
             voice_path: None,
             font_family: None,
             fit: false,
+            depth: None,
         }];
         canonicalize_events(&mut events);
         match &events[0] {

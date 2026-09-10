@@ -57,6 +57,7 @@ import {
   PLAYER_BUTTON_ROW_HEIGHT_PX,
   computeBoardPlacement,
   computeBoardSlideInOffset,
+  resolveCharacterXRatio,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
 import type { BackgroundFade } from './GameState'
@@ -1155,7 +1156,8 @@ describe('saveSlotToGameState', () => {
       // 舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
       props: data.props ?? [],
       isBlackout: data.isBlackout ?? false,
-      characters: data.characters ?? [],
+      // シアターモードの奥行き配置 (#694)。古いセーブの各要素には無い → ?? 0（最前面）に倒す。
+      characters: (data.characters ?? []).map((c) => ({ ...c, depth: c.depth ?? 0 })),
       currentBgmPath: data.currentBgmPath ?? null,
       // カメラモード (#681)。古いセーブには無い → ノベル/客席（既定）にフォールバック。
       cameraMode: data.cameraMode ?? 'Novel',
@@ -1191,7 +1193,7 @@ describe('saveSlotToGameState', () => {
       backgroundBoards: [],
       props: [],
       isBlackout: true,
-      characters: [{ name: 'A', expression: 'smile', position: 'center' }],
+      characters: [{ name: 'A', expression: 'smile', position: 'center', depth: 0 }],
       currentBgmPath: 'bgm/main.mp3',
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
@@ -1956,6 +1958,89 @@ describe('resolvePositionWithOverride (#275)', () => {
     expect(resolvePositionWithOverride('中下', Infinity, -Infinity)).toEqual(base)
     // 片軸だけ無効 → その軸だけフォールバック、もう片方は採用。
     expect(resolvePositionWithOverride('中下', 2, 0.3)).toEqual({ xRatio: 0.5, yRatio: 0.3 })
+  })
+})
+
+// =====================================================================================
+// #694: resolveCharacterXRatio（話者タグ・登場ディレクティブの position トークンから
+//   x 比率を解決する純粋関数）。テーブル一致 → 数値パース → center フォールバックの3段構え。
+//   フィクスチャの positionTable は本番の CHARACTER_X_RATIO（CharacterLayer.ts、非 export）と
+//   無関係な独立値にする。own-property 一致の分岐が「テーブルの値をそのまま返す」ことだけを
+//   確認すればよく、本番比率の実値に依存させると陳腐化するため。
+// =====================================================================================
+describe('resolveCharacterXRatio (#694)', () => {
+  const table: Record<string, number> = { left: 0.2, center: 0.5, right: 0.8 }
+
+  it('既存の文字列トークンはテーブル値をそのまま返す（非回帰）', () => {
+    expect(resolveCharacterXRatio('left', table)).toBe(0.2)
+    expect(resolveCharacterXRatio('center', table)).toBe(0.5)
+    expect(resolveCharacterXRatio('right', table)).toBe(0.8)
+  })
+
+  it('0〜1 の数値文字列はそのまま x 比率として解決する', () => {
+    expect(resolveCharacterXRatio('0.15', table)).toBe(0.15)
+  })
+
+  it('境界値 "0" はクランプなしでそのまま 0', () => {
+    expect(resolveCharacterXRatio('0', table)).toBe(0)
+  })
+
+  it('下限未満 "-0.0001" は 0 にクランプされる', () => {
+    expect(resolveCharacterXRatio('-0.0001', table)).toBe(0)
+  })
+
+  it('境界値 "1" はクランプなしでそのまま 1', () => {
+    expect(resolveCharacterXRatio('1', table)).toBe(1)
+  })
+
+  it('上限超過 "1.0001" は 1 にクランプされる', () => {
+    expect(resolveCharacterXRatio('1.0001', table)).toBe(1)
+  })
+
+  it('空文字はテーブルの center にフォールバックする（Number("")===0 に引きずられない）', () => {
+    expect(resolveCharacterXRatio('', table)).toBe(table.center)
+  })
+
+  it('空白のみはテーブルの center にフォールバックする', () => {
+    expect(resolveCharacterXRatio('   ', table)).toBe(table.center)
+  })
+
+  it('"NaN" 文字列はテーブルの center にフォールバックする', () => {
+    expect(resolveCharacterXRatio('NaN', table)).toBe(table.center)
+  })
+
+  it('"Infinity" / "-Infinity" はテーブルの center にフォールバックする（非有限値を弾く）', () => {
+    expect(resolveCharacterXRatio('Infinity', table)).toBe(table.center)
+    expect(resolveCharacterXRatio('-Infinity', table)).toBe(table.center)
+  })
+
+  it('小数点のみ "." はテーブルの center にフォールバックする', () => {
+    expect(resolveCharacterXRatio('.', table)).toBe(table.center)
+  })
+
+  it('positionTable に無い "constructor" は own-property 一致にならず center にフォールバックする（#368 類似の事故パターン確認、関数オブジェクトを返さない）', () => {
+    expect(resolveCharacterXRatio('constructor', table)).toBe(table.center)
+  })
+
+  it('positionTable に無い "__proto__" は own-property 一致にならず center にフォールバックする（同上）', () => {
+    expect(resolveCharacterXRatio('__proto__', table)).toBe(table.center)
+  })
+
+  // Number("0x10") は JS 仕様上 16 進として解釈され 16 になる（罠）。未知トークンとして
+  // center に落ちてほしい直感とは裏腹に、有限数値 16 として解決され [0,1] にクランプされて
+  // 1 になる。resolveCharacterXRatio の実装は Number() に形式を委譲しており、この挙動は
+  // 意図的な仕様（脚本側が 16 進/2進表記の position を書くことは想定していないので実害はない）。
+  it('"0x10" は Number() の 16 進解釈により 16 → 1 にクランプされる（JS Number() の罠、center フォールバックにはならない）', () => {
+    expect(resolveCharacterXRatio('0x10', table)).toBe(1)
+  })
+
+  // 指数表記も Number() がそのまま解釈するので、0〜1 の範囲内なら妥当な x 比率として通る。
+  it('指数表記 "1e-1" は Number() が 0.1 として解決しそのまま採用される', () => {
+    expect(resolveCharacterXRatio('1e-1', table)).toBe(0.1)
+  })
+
+  it('未知の文字列トークン（数値でも既存トークンでもない）は center にフォールバックする（非回帰）', () => {
+    expect(resolveCharacterXRatio('あいうえお', table)).toBe(table.center)
   })
 })
 

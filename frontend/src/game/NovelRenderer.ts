@@ -150,6 +150,8 @@ export function getTextEvent(event: Event):
       text: string[]
       /** 立ち絵の明示フィット指定 (#294)。true のとき loadTexture で旧 fit-down を適用する。 */
       fit: boolean
+      /** シアターモードのキャラクター奥行き配置 (#694)。未指定/null は 0（最前面）。 */
+      depth: number
     }
   | { type: 'narration'; text: string[] }
   | null {
@@ -163,6 +165,8 @@ export function getTextEvent(event: Event):
         text: event.Dialog.text,
         // 未指定 / false は原寸（fit=false）。明示 boolean に倒す。
         fit: event.Dialog.fit === true,
+        // 未指定/null は 0（最前面）に倒す (#694)。
+        depth: event.Dialog.depth ?? 0,
       }
     }
     if ('Narration' in event) {
@@ -1094,6 +1098,7 @@ export class NovelRenderer {
       name: string
       expression: string
       position: string
+      depth: number
       x: number
       y: number
       scale: number
@@ -1113,6 +1118,7 @@ export class NovelRenderer {
         name: s.name,
         expression: s.expression,
         position: s.position,
+        depth: s.depth,
         x: st?.sprite.x ?? -1,
         y: st?.sprite.y ?? -1,
         scale: st?.sprite.scale.x ?? -1,
@@ -1836,6 +1842,8 @@ export class NovelRenderer {
     )
     // 大道具レイヤー (#692) も背景板と同じ理由でカメラ状態を明示的に同期する。
     this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
+    // 立ち絵レイヤー (#694) も背景板・大道具と同じ理由でカメラ状態を明示的に同期する。
+    this.characterLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
     this.dialogBox.clearText()
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
@@ -3590,6 +3598,9 @@ export class NovelRenderer {
     // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）。
     // novel 役割配置 (#286): protagonist 指定時は復元でも質問役=左 / 回答役=右の x を当てる
     // （token のままだと前進時の配置と食い違うため）。ポーズ nudge は演出なので復元では起こさない。
+    // 立ち絵レイヤー (#694) も背景板/大道具と同じ理由・同じ手順（自前でカメラ状態を保持している
+    // ため、以下の show() 呼び出しより前に setCamera() で明示的に同期する）。
+    this.characterLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
     this.characterLayer.clear()
     for (const ch of state.characters) {
       const xRatio = this.resolveNovelRoleXRatio(ch.name)
@@ -3600,6 +3611,9 @@ export class NovelRenderer {
         instant: true,
         xRatio,
         fit,
+        // シアターモードの奥行き配置 (#694)。NovelGameState.characters に直接持つ（fit と違い
+        // 脚本の再走査は不要）。
+        depth: ch.depth,
       })
     }
     // 話者交代追跡 (#286) を復元位置の話者に合わせる。任意局面復元の直後に同じ話者で
@@ -4268,10 +4282,13 @@ export class NovelRenderer {
     if ('CameraMode' in event) {
       // #681/#682: GameState 更新。orientation 省略/未知値は客席相当（'Audience'）、
       // elevation 省略/未知値は水平相当（null）。
-      // 既知の割り切り (#684 PR #688 セルフレビュー question): ここで cameraMode を切り替えても
-      // CharacterLayer は cameraMode を知らない設計のため、進行中の stageMotion（歩行入場/退場）
-      // はキャンセルされず走り続ける。現状は depth/射影変換が未配線（#683 待ち）で視覚的実害が
-      // ほぼ無いため意図的に対応していない。#683 以降で実害が出るなら別途 Issue化する。
+      // #694 で解消: CharacterLayer も setCamera() 経由でカメラ状態を受け取るようになったため、
+      // 既存の立ち絵は depth に基づく scale/verticalOffset で再配置される（下記
+      // characterLayer.setCamera 呼び出し）。ただし進行中の stageMotion（歩行入場/退場、#684）は
+      // sprite.x のみを動かす独立の tween で、setCamera の再適用対象外（camera projection は
+      // sprite.y/scale だけを書き換える）のため、引き続きキャンセルされず走り続ける。これは
+      // #684 時点からの既知の割り切りのまま（歩行中に camera 変更が重なる稀なケースの視覚的実害は
+      // 小さいと判断）。
       this.cameraMode = event.CameraMode.mode
       this.cameraOrientation = event.CameraMode.orientation ?? 'Audience'
       this.cameraElevation = event.CameraMode.elevation ?? null
@@ -4284,6 +4301,8 @@ export class NovelRenderer {
       )
       // #692: 大道具も背景板と同じ理由で再配置する。
       this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
+      // #694: 立ち絵も背景板・大道具と同じ理由で再配置する。
+      this.characterLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
       return
     }
     if ('Bgm' in event) {
@@ -4415,7 +4434,7 @@ export class NovelRenderer {
       // expression / position / character が揃っていない不完全な指定は showCharacterFromDialog の
       // 実表示ガードに揃えて silent skip（立ち絵を出さない）。
       // 冪等: 同一 name/expression/position/fit の再宣言は CharacterLayer.show 側の no-op ガードで無効。
-      const { character, expression, position, fit, enter_direction } = event.Enter
+      const { character, expression, position, fit, enter_direction, depth } = event.Enter
       if (character && expression && position) {
         const xRatio = this.resolveNovelRoleXRatio(character)
         // 方向モーション (#684): シアターモードのときだけ方向引数を反映する。ノベルモードでは
@@ -4427,6 +4446,8 @@ export class NovelRenderer {
           xRatio,
           fit: fit === true,
           enterDirection,
+          // シアターモードの奥行き配置 (#694)。未指定/null は 0（最前面）。
+          depth: depth ?? 0,
         })
       }
       return
@@ -4698,7 +4719,7 @@ export class NovelRenderer {
       // スキップモード中はフェードを抑制（既読シーンの高速進行で違和感を出さない）#177
       // 明示フィット (#294): 脚本の話者行 `フィット` 由来。adv/novel で分岐しない。
       // onReady (#293): 立ち絵テクスチャの用意完了でテキスト reveal を解禁する。
-      { instant: this.skipMode, xRatio, fit: textEvt.fit, onReady }
+      { instant: this.skipMode, xRatio, fit: textEvt.fit, depth: textEvt.depth, onReady }
     )
 
     // 話者交代でポーズ変化 (#286)。novel のみ・スキップ中は抑制（高速進行で乱発しない）。

@@ -68,8 +68,12 @@ export interface SaveSlotData {
   props?: Array<{ path: string; depth: number }>
   /** 暗転状態 */
   isBlackout: boolean
-  /** 表示中のキャラクター情報 */
-  characters: Array<{ name: string; expression: string; position: string }>
+  /**
+   * 表示中のキャラクター情報。
+   * `depth`（シアターモードの奥行き配置 #694）は後方互換のため per-item optional にする:
+   * 古いセーブデータの各要素には無い → 読み出し側（`saveSlotToGameState`）で `?? 0`（最前面）に倒す。
+   */
+  characters: Array<{ name: string; expression: string; position: string; depth?: number }>
   /** 再生中の BGM パス */
   currentBgmPath: string | null
   /**

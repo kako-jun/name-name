@@ -1868,3 +1868,95 @@ describe('parseMarkdown + normalizeDocument: 舞台構造の大道具が normali
     expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+describe('parseMarkdown + normalizeEvents: Dialog/Enter の depth が normalize を生き残る (#694 must-1回帰防止)', () => {
+  // PR #709 セルフレビュー must-1: normalizeEvents の Dialog/Enter 分岐はフィールド列挙リビルド
+  // 方式のため、#694 で追加した depth を列挙に足し忘れると Rust 側は正しく parse しているのに
+  // wasm 境界（normalizeEvents）で黙って undefined に落ちる（#308/#310/#407/#508/#517 と同型の事故）。
+  // CharacterLayer.test.ts や parser.rs の単体テストはこの wasm 正規化層を経由しないため検出できない。
+  // 実 parseMarkdown（WASM_BASE64 同梱・fetch 不要）を通し、本番エントリポイント経由で
+  // depth が Dialog/Enter イベントに届くことを固定する。
+  const findDialog = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters
+      .flatMap((c) => c.scenes.flatMap((s) => s.events))
+      .find((e) => typeof e === 'object' && e !== null && 'Dialog' in e) as
+      | { Dialog: { depth?: number | null } }
+      | undefined
+
+  const findEnter = (doc: Awaited<ReturnType<typeof parseMarkdown>>) =>
+    doc.chapters
+      .flatMap((c) => c.scenes.flatMap((s) => s.events))
+      .find((e) => typeof e === 'object' && e !== null && 'Enter' in e) as
+      | { Enter: { depth?: number | null } }
+      | undefined
+
+  it('話者行の depth: N が Dialog.depth として normalize を生き残る', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s: t',
+      '',
+      '**カコ** (笑顔, 左, depth: 3):',
+      'セリフ',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(findDialog(doc)?.Dialog.depth).toBe(3)
+  })
+
+  it('depth 未指定の Dialog は depth が null に正規化される（undefined ではない）', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s: t',
+      '',
+      '**カコ**:',
+      'セリフ',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(findDialog(doc)?.Dialog.depth).toBeNull()
+  })
+
+  it('[登場: 名前 (表情, 位置, depth: N)] の depth が Enter.depth として normalize を生き残る', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s: t',
+      '',
+      '[登場: せお (theo/akarame, 左, depth: 5)]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(findEnter(doc)?.Enter.depth).toBe(5)
+  })
+
+  it('depth 未指定の Enter は depth が null に正規化される（undefined ではない）', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s: t',
+      '',
+      '[登場: せお (theo/akarame, 左)]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(markdown)
+    expect(findEnter(doc)?.Enter.depth).toBeNull()
+  })
+})

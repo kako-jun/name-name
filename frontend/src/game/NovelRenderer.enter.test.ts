@@ -59,8 +59,18 @@ describe('[登場:] 無言立ち絵ディレクティブ (#401)', () => {
     expect(s.eventIndex).toBe(2) // Enter, Enter を越えて Narration(index 2) で停止
     const chars = s.characters
     expect(chars).toHaveLength(2)
-    expect(chars).toContainEqual({ name: 'せお', expression: 'theo/normal', position: 'left' })
-    expect(chars).toContainEqual({ name: 'スピノ', expression: 'spino/normal', position: 'right' })
+    expect(chars).toContainEqual({
+      name: 'せお',
+      expression: 'theo/normal',
+      position: 'left',
+      depth: 0,
+    })
+    expect(chars).toContainEqual({
+      name: 'スピノ',
+      expression: 'spino/normal',
+      position: 'right',
+      depth: 0,
+    })
   })
 
   it('T2: 同一状態の [登場:] を二連で書いても 1 体のまま（冪等）', async () => {
@@ -111,7 +121,17 @@ describe('[登場:] 無言立ち絵ディレクティブ (#401)', () => {
 
     const chars = r.getSnapshot().characters
     expect(chars).toHaveLength(2)
-    expect(chars).toContainEqual({ name: 'せお', expression: 'theo/normal', position: 'left' })
-    expect(chars).toContainEqual({ name: 'スピノ', expression: 'spino/warai', position: 'right' })
+    expect(chars).toContainEqual({
+      name: 'せお',
+      expression: 'theo/normal',
+      position: 'left',
+      depth: 0,
+    })
+    expect(chars).toContainEqual({
+      name: 'スピノ',
+      expression: 'spino/warai',
+      position: 'right',
+      depth: 0,
+    })
   })
 })

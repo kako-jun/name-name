@@ -187,6 +187,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 voice_path,
                 font_family,
                 fit,
+                depth,
             } => {
                 // Add blank line before dialog if previous was also dialog (new speech block)
                 if prev_was_dialog_or_text && i > 0 {
@@ -210,8 +211,10 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         out.push_str(&format!("**{ch}**"));
                         // 話者行オプションを位置取りで組み立てる: expression=先頭 / position=2 番目、
                         // フィット (#294) は真偽フラグなので末尾に `フィット` トークンとして付ける。
-                        // parser 側は `フィット` / `fit` を位置取りから除外してから expr/pos を読むので
-                        // round-trip で安定する。fit=false かつ expr/pos なしのときは従来どおり `:` だけ。
+                        // depth (#694) も同じく位置取りに参加しないオプショントークンとして、fit の
+                        // 直後に `depth: N` を付ける。parser 側は両トークンとも位置取りから除外して
+                        // から expr/pos を読むので round-trip で安定する。fit=false かつ depth=None
+                        // かつ expr/pos なしのときは従来どおり `:` だけ。
                         let expr = expression.as_deref().unwrap_or("");
                         let pos = position.as_deref().unwrap_or("");
                         let mut attrs: Vec<&str> = Vec::new();
@@ -224,6 +227,13 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         }
                         if *fit {
                             attrs.push("フィット");
+                        }
+                        // 未指定 (None) は round-trip でも省略したまま保つ（Some(0.0) 明示指定と
+                        // 区別する。Prop/BackgroundBoard の plain f32 とは違い Option なので、
+                        // 値ではなく Some/None の有無で出力可否を決める）。
+                        let depth_str = depth.map(|d| format!("depth: {d}"));
+                        if let Some(ref ds) = depth_str {
+                            attrs.push(ds.as_str());
                         }
                         if attrs.is_empty() {
                             out.push_str(":\n");
@@ -601,13 +611,15 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 position,
                 fit,
                 enter_direction,
+                depth,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                // 話者タグの `(表情, 位置, フィット)` と同じ位置取りで属性を組み立てる (#401)。
-                // 話者行 (`emit_events` の Dialog 分岐) と同じく: position があれば expression が
-                // 空でも位置取りを保つため両方積む。フィット (#294) は末尾に `フィット` トークン。
+                // 話者タグの `(表情, 位置, フィット, depth: N)` と同じ位置取りで属性を組み立てる
+                // (#401 / #694)。話者行 (`emit_events` の Dialog 分岐) と同じく: position があれば
+                // expression が空でも位置取りを保つため両方積む。フィット (#294) は末尾に
+                // `フィット` トークン、depth (#694) はその直後に `depth: N` トークン。
                 let expr = expression.as_deref().unwrap_or("");
                 let pos = position.as_deref().unwrap_or("");
                 let mut attrs: Vec<&str> = Vec::new();
@@ -619,6 +631,10 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if *fit {
                     attrs.push("フィット");
+                }
+                let depth_str = depth.map(|d| format!("depth: {d}"));
+                if let Some(ref ds) = depth_str {
+                    attrs.push(ds.as_str());
                 }
                 // 方向モーション (#684) は括弧の外側（属性の後ろ）に `, 上手から`/`, 下手から` として
                 // 付く。括弧なし（属性が空）の登場でも `[登場: 名前, 上手から]` の形で付けられる。
@@ -1535,6 +1551,7 @@ mod tests {
                         voice_path: None,
                         font_family: None,
                         fit: false,
+                        depth: None,
                     }],
                 }],
             }],
