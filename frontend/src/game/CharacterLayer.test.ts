@@ -5994,18 +5994,32 @@ describe('CharacterLayer applyCameraProjectionToCharacter ガード / setCamera 
     expect(st.sprite.y).toBe(yBefore)
   })
 
-  it('D3: fit=true の立ち絵は setCamera を呼んでも scale/y が更新されない', async () => {
+  it('D3: fit=true の立ち絵も setCamera を呼ぶと scale/y が更新される（should-3・#709セルフレビュー）', async () => {
+    // #709 セルフレビュー should-3: applyCameraProjectionToCharacter は以前 state.fit を早期
+    // return で除外していたため、フィット＋depth指定のキャラは setCamera 後もテクスチャが
+    // 再ロードされるまで再配置が反映されなかった（loadTexture の fit 分岐との非対称性）。
+    // 修正後は loadTexture と同じ computeFitScale で baseScale を求めてから projection を
+    // 乗算するため、fit=true でも scale/y が更新される。
     vi.spyOn(Assets, 'load').mockResolvedValue(fakeTexture(SW * 2, SH * 2) as never)
     const layer = new CharacterLayer(SW, SH)
     layer.show('hero', 'normal', '中央', '/assets', { instant: true, fit: true, depth: 5 })
     await flushPromises()
     const st = imageChars(layer).characters.get('hero')!
-    const scaleBefore = st.sprite.scale.x
+    // texture は screen の2倍サイズなので computeFitScale は 0.5 に縮める（fit-down）。
+    // Novel（既定カメラ）では projection.scale=1 なので、初期 scale はそのまま baseScale=0.5。
+    const fitBaseScale = 0.5
+    expect(st.sprite.scale.x).toBeCloseTo(fitBaseScale, 10)
     const yBefore = st.sprite.y
+    expect(yBefore).toBe(characterY)
 
     layer.setCamera('Theater', 'Audience', 'LookDown')
-    expect(st.sprite.scale.x).toBe(scaleBefore)
-    expect(st.sprite.y).toBe(yBefore)
+    const expected = computeCameraProjection('Theater', 'Audience', 'LookDown', 5)
+    // fit の baseScale(0.5) に projection.scale を乗算した値になる（恒等の 1 のままにならない）。
+    expect(st.sprite.scale.x).toBeCloseTo(fitBaseScale * expected.scale, 10)
+    expect(st.sprite.scale.y).toBeCloseTo(fitBaseScale * expected.scale, 10)
+    expect(st.sprite.y).toBeCloseTo(characterY + expected.verticalOffset, 10)
+    expect(st.sprite.scale.x).toBeLessThan(fitBaseScale)
+    expect(st.sprite.y).toBeGreaterThan(yBefore)
   })
 
   it('D4: アニメ進行中（animation 非 null）の立ち絵は setCamera を呼んでも scale/y が更新されない', async () => {

@@ -1089,7 +1089,13 @@ export class CharacterLayer extends Container {
    * `show()` が texture 据え置きで depth だけ変わった再表示を処理する経路と、`setCamera()` の
    * 全キャラ再適用（`reapplyCharacterDepth`）の両方から呼ぶ共通ロジック（規律4）。
    *
-   * fit(#294)・render-only（Title/Label/Image #274）・アニメ中・クロスフェード中の旧 sprite
+   * fit(#294) のキャラも対象に含める（PR #709 セルフレビュー should-3）: loadTexture の fit 分岐と
+   * 同じ computeFitScale で baseScale を求めてから projection を乗算する。これにより
+   * 「フィット＋depth指定キャラが表示された後、カメラモードが切り替わっても次のテクスチャ
+   * 再ロードまでdepthに基づく再配置が反映されない」非対称性を解消する（初回ロード経路と
+   * ライブ再適用経路が完全に一致した計算になる）。
+   *
+   * render-only（Title/Label/Image #274）・アニメ中・クロスフェード中の旧 sprite
    * （snapshotHidden）は `reapplyCharacterHeightRatios` と同じ理由で対象外。加えて `poseNudge`
    * (#286) 進行中も対象外にする——このメソッドは sprite.y も書き換えるため、nudge が持つ
    * `baseY` 追跡（毎フレーム baseY を基準に補間する）と競合させないための追加除外
@@ -1099,7 +1105,6 @@ export class CharacterLayer extends Container {
   private applyCameraProjectionToCharacter(name: string, state: CharacterState): void {
     if (
       state.renderOnly ||
-      state.fit ||
       state.animation !== null ||
       state.snapshotHidden ||
       state.poseNudge !== null
@@ -1109,7 +1114,15 @@ export class CharacterLayer extends Container {
     const texture = state.sprite.texture
     if (!texture || texture.height <= 0) return
     let baseScale: number
-    if (this.characterScale !== null) {
+    if (state.fit) {
+      // loadTexture の fit 分岐と同じ計算（優先順位: fit > character_scale > height_ratio > 原寸1）。
+      baseScale = computeFitScale(
+        texture.width,
+        texture.height,
+        this.screenWidth,
+        this.screenHeight
+      )
+    } else if (this.characterScale !== null) {
       baseScale = this.characterScale
     } else {
       const targetRatio = resolveCharacterHeightRatio(
