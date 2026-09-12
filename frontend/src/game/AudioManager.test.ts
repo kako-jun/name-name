@@ -15,6 +15,55 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { AudioManager } from './AudioManager'
 
+type NodeSpy = {
+  connect: ReturnType<typeof vi.fn>
+  disconnect: ReturnType<typeof vi.fn>
+}
+
+function nodeSpy(): NodeSpy {
+  return { connect: vi.fn(), disconnect: vi.fn() }
+}
+
+function makeVoiceAudioContext() {
+  const source = {
+    ...nodeSpy(),
+    buffer: null,
+    onended: null as (() => void) | null,
+    start: vi.fn(),
+    stop: vi.fn(),
+  }
+  const filter = {
+    ...nodeSpy(),
+    type: 'allpass' as BiquadFilterType,
+    frequency: { setValueAtTime: vi.fn() },
+  }
+  const panner = { ...nodeSpy(), pan: { setValueAtTime: vi.fn() } }
+  const distanceGain = { ...nodeSpy(), gain: { value: 1, setValueAtTime: vi.fn() } }
+  const bgmMaster = { ...nodeSpy(), gain: { value: 1, setValueAtTime: vi.fn() } }
+  const seMaster = { ...nodeSpy(), gain: { value: 1, setValueAtTime: vi.fn() } }
+  const videoMaster = { ...nodeSpy(), gain: { value: 1, setValueAtTime: vi.fn() } }
+  const captureDestination = { stream: {} }
+  const gains = [bgmMaster, seMaster, videoMaster, distanceGain]
+  const context = {
+    currentTime: 3,
+    destination: nodeSpy(),
+    createBufferSource: vi.fn(() => source),
+    createBiquadFilter: vi.fn(() => filter),
+    createStereoPanner: vi.fn(() => panner),
+    createGain: vi.fn(() => gains.shift()),
+    createMediaStreamDestination: vi.fn(() => captureDestination),
+  }
+  return { context, source, filter, panner, distanceGain, seMaster, captureDestination }
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 function makeManagerWithSpy(): { manager: AudioManager; playSeSpy: ReturnType<typeof vi.fn> } {
   const manager = new AudioManager()
   const playSeSpy = vi.spyOn(manager, 'playSe').mockResolvedValue(undefined)
@@ -165,5 +214,145 @@ describe('AudioManager.playSeSequence (#672)', () => {
     expect(playSeSpy).toHaveBeenCalledTimes(2)
     expect(playSeSpy).toHaveBeenCalledWith('a.mp3', undefined)
     expect(playSeSpy).toHaveBeenCalledWith('x.mp3', undefined)
+  })
+})
+
+describe('AudioManager.playVoice spatial graph (#696)', () => {
+  it('空間パラメータ指定時は lowpass・pan・距離 gain を SE master の手前に接続する', async () => {
+    const manager = new AudioManager()
+    const audio = makeVoiceAudioContext()
+    const internals = manager as unknown as {
+      ctx: AudioContext
+      audioCache: Map<string, AudioBuffer>
+    }
+    internals.ctx = audio.context as unknown as AudioContext
+    internals.audioCache.set('voice.ogg', {} as AudioBuffer)
+
+    await manager.playVoice('voice.ogg', undefined, { pan: 0.25, gain: 0.5, lowpassHz: 8000 })
+
+    expect(audio.source.connect).toHaveBeenCalledWith(audio.filter)
+    expect(audio.filter.type).toBe('lowpass')
+    expect(audio.filter.frequency.setValueAtTime).toHaveBeenCalledWith(8000, 3)
+    expect(audio.filter.connect).toHaveBeenCalledWith(audio.panner)
+    expect(audio.panner.pan.setValueAtTime).toHaveBeenCalledWith(0.25, 3)
+    expect(audio.panner.connect).toHaveBeenCalledWith(audio.distanceGain)
+    expect(audio.distanceGain.gain.setValueAtTime).toHaveBeenCalledWith(0.5, 3)
+    expect(audio.distanceGain.connect).toHaveBeenCalledWith(audio.seMaster)
+
+    audio.source.onended?.()
+    expect(audio.filter.disconnect).toHaveBeenCalledTimes(1)
+    expect(audio.panner.disconnect).toHaveBeenCalledTimes(1)
+    expect(audio.distanceGain.disconnect).toHaveBeenCalledTimes(1)
+  })
+
+  it('空間パラメータなしでは従来どおり source を SE master へ直結する', async () => {
+    const manager = new AudioManager()
+    const audio = makeVoiceAudioContext()
+    const internals = manager as unknown as {
+      ctx: AudioContext
+      audioCache: Map<string, AudioBuffer>
+    }
+    internals.ctx = audio.context as unknown as AudioContext
+    internals.audioCache.set('voice.ogg', {} as AudioBuffer)
+
+    await manager.playVoice('voice.ogg')
+
+    expect(audio.context.createBiquadFilter).not.toHaveBeenCalled()
+    expect(audio.context.createStereoPanner).not.toHaveBeenCalled()
+    expect(audio.source.connect).toHaveBeenCalledWith(audio.seMaster)
+  })
+
+  it('録画中も空間化ボイスは既存の SE master 経由で capture に流れる', async () => {
+    const manager = new AudioManager()
+    const audio = makeVoiceAudioContext()
+    const internals = manager as unknown as {
+      ctx: AudioContext
+      audioCache: Map<string, AudioBuffer>
+    }
+    internals.ctx = audio.context as unknown as AudioContext
+    internals.audioCache.set('voice.ogg', {} as AudioBuffer)
+
+    manager.enableCapture()
+    await manager.playVoice('voice.ogg', undefined, { pan: 0, gain: 1, lowpassHz: 20000 })
+
+    expect(audio.distanceGain.connect).toHaveBeenCalledWith(audio.seMaster)
+    expect(audio.seMaster.connect).toHaveBeenCalledWith(audio.captureDestination)
+  })
+
+  it('ロード順が逆転しても最後に要求したボイスだけを開始する', async () => {
+    const manager = new AudioManager()
+    const audio = makeVoiceAudioContext()
+    const internals = manager as unknown as {
+      ctx: AudioContext
+      loadAudio: (url: string) => Promise<AudioBuffer>
+    }
+    internals.ctx = audio.context as unknown as AudioContext
+    const first = deferred<AudioBuffer>()
+    const second = deferred<AudioBuffer>()
+    vi.spyOn(internals, 'loadAudio').mockImplementation((url) =>
+      url === 'first.ogg' ? first.promise : second.promise
+    )
+    const firstEnded = vi.fn()
+    const secondEnded = vi.fn()
+
+    const firstRequest = manager.playVoice('first.ogg', firstEnded)
+    const secondRequest = manager.playVoice('second.ogg', secondEnded)
+    second.resolve({} as AudioBuffer)
+    await secondRequest
+    first.resolve({} as AudioBuffer)
+    await firstRequest
+
+    expect(audio.context.createBufferSource).toHaveBeenCalledTimes(1)
+    expect(audio.source.start).toHaveBeenCalledTimes(1)
+    expect(firstEnded).not.toHaveBeenCalled()
+    audio.source.onended?.()
+    expect(secondEnded).toHaveBeenCalledTimes(1)
+  })
+
+  it('停止済みの旧ボイスの遅延 onended は新ボイスの空間ノードを切断しない', async () => {
+    const manager = new AudioManager()
+    const audio = makeVoiceAudioContext()
+    const secondSource = {
+      ...nodeSpy(),
+      buffer: null,
+      onended: null as (() => void) | null,
+      start: vi.fn(),
+      stop: vi.fn(),
+    }
+    const secondFilter = {
+      ...nodeSpy(),
+      type: 'allpass' as BiquadFilterType,
+      frequency: { setValueAtTime: vi.fn() },
+    }
+    const secondPanner = { ...nodeSpy(), pan: { setValueAtTime: vi.fn() } }
+    const secondGain = { ...nodeSpy(), gain: { value: 1, setValueAtTime: vi.fn() } }
+    const internals = manager as unknown as {
+      ctx: AudioContext
+      audioCache: Map<string, AudioBuffer>
+    }
+    internals.ctx = audio.context as unknown as AudioContext
+    internals.audioCache.set('first.ogg', {} as AudioBuffer)
+    internals.audioCache.set('second.ogg', {} as AudioBuffer)
+
+    await manager.playVoice('first.ogg', undefined, { pan: -0.5, gain: 1, lowpassHz: 20000 })
+    const staleOnEnded = audio.source.onended
+    audio.context.createBufferSource.mockReturnValueOnce(secondSource)
+    audio.context.createBiquadFilter.mockReturnValueOnce(secondFilter)
+    audio.context.createStereoPanner.mockReturnValueOnce(secondPanner)
+    audio.context.createGain.mockReturnValueOnce(secondGain)
+    await manager.playVoice('second.ogg', undefined, { pan: 0.5, gain: 0.5, lowpassHz: 8000 })
+
+    expect(audio.source.stop).toHaveBeenCalledTimes(1)
+    expect(audio.filter.disconnect).toHaveBeenCalledTimes(1)
+    // stopVoice は onended を外すが、既にキューされた旧 callback も安全であることを固定する。
+    staleOnEnded?.()
+    expect(secondFilter.disconnect).not.toHaveBeenCalled()
+    expect(secondPanner.disconnect).not.toHaveBeenCalled()
+    expect(secondGain.disconnect).not.toHaveBeenCalled()
+
+    secondSource.onended?.()
+    expect(secondFilter.disconnect).toHaveBeenCalledTimes(1)
+    expect(secondPanner.disconnect).toHaveBeenCalledTimes(1)
+    expect(secondGain.disconnect).toHaveBeenCalledTimes(1)
   })
 })

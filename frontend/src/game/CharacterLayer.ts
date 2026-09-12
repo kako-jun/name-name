@@ -108,7 +108,7 @@ async function loadFirstAvailableTexture(
 }
 
 /** キャラクターの画面上の配置位置（screenWidth に対する比率） */
-const CHARACTER_X_RATIO: Record<string, number> = {
+export const CHARACTER_X_RATIO: Record<string, number> = {
   left: 150 / 800, // 0.1875
   center: 400 / 800, // 0.5
   right: 650 / 800, // 0.8125
