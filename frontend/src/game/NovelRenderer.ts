@@ -745,7 +745,7 @@ export class NovelRenderer {
   /**
    * 舞台構造の大道具レイヤー (#692)。`[大道具: path, depth: N]` の加算的な蓄積を管理する。
    * `backgroundBoardLayer` と独立した PixiJS レイヤー（数値 depth を共有する空間ではなく、
-   * レイヤー自体の描画順で「背景板より手前・キャラより奥」の群を作る）。
+   * レイヤー自体の描画順で「背景板・キャラより手前、イベント絵/UIより奥」の群を作る）。
    */
   private propLayer: PropLayer
 
@@ -3754,7 +3754,8 @@ export class NovelRenderer {
   }
 
   /**
-   * イベント絵レイヤー (#351) の `back` 値に応じて、背景・立ち絵・動画の可視性を宣言的にトグルする。
+   * イベント絵レイヤー (#351) の `back` 値に応じて、背景・背景板・動画・立ち絵・大道具の
+   * 可視性を宣言的にトグルする。
    *
    * `setBlackout` と同じ「単一の宣言的セッター」パターン: processDirective（ライブ進行）と
    * applyState（goBack/seekTo/セーブ復元）の両方から、eventImageLayer の現在状態を毎回
@@ -3764,15 +3765,17 @@ export class NovelRenderer {
    * 判定は `eventImageLayer.shouldHideBackLayer()` に委ねる（`getState()?.back==='Hide'` の単純な
    * 意図参照ではなく、ロード失敗時は覆うものが無いため隠さない可視性専用ロジック。セルフレビュー
    * 指摘: back=Hide のままロードが永久に失敗すると背面が隠れっぱなしになる事故を防ぐ）。
-   * `videoLayer`（#252）も背面スタックの一部（characterLayer と bgContainer の間に位置）なので
-   * 同じトグルに含める（セルフレビュー指摘: event image の前面に動画だけ透けて見える事故を防ぐ）。
+   * `backgroundBoardLayer`（#683）・`videoLayer`（#252）・`propLayer`（#692）も背面スタックの
+   * 一部なので同じトグルに含める（event image の前面に追加レイヤーだけ透けて見える事故を防ぐ）。
    */
   private applyEventImageVisibility(): void {
     const hide = this.eventImageLayer.shouldHideBackLayer()
     this.bgGraphics.visible = !hide
     this.bgContainer.visible = !hide
+    this.backgroundBoardLayer.visible = !hide
     this.videoLayer.visible = !hide
     this.characterLayer.visible = !hide
+    this.propLayer.visible = !hide
   }
 
   private handleAdvance = (): void => {

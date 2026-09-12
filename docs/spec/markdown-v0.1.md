@@ -448,7 +448,7 @@ TUI版も `[場面転換]` で暗転を解除する。ただしTUI版は背景�
 
 パーサー内部では `Event::CameraMode { mode, orientation, elevation }` の単一バリアントで表現される。emit（再保存）時、orientation/elevation が既定（`None`）のときはそれぞれ `向き:`/`仰角:` を無出力にし（`[カメラ: シアター]` の形に戻る）、`Theater` かつ `Some(Stage)`/`Some(LookUp)`/`Some(LookDown)` のときだけ対応するトークンを出力する。この判定は mode と orientation/elevation の組み合わせで行うため、パーサーが通常は作らない `{mode: Novel, orientation: Some(Stage)}` のような組み合わせを直接構築した場合でも各トークンを出力しない側に倒れ、round-trip が安定する。
 
-**現状のスコープ**: Issue #681/#682 時点で実装済みなのは状態管理（モード/向き/仰角の保持、save/seek/任意局面起動での復元、`computeCameraProjection` が仰角から `verticalOffset` を計算するところまで）。#683 で `computeCameraProjection` が初めて実際の描画に配線され、背景板（`[背景板:]`、下記節参照）の depth に応じた縮小表示が見えるようになった。**未実装**なのはキャラの Y 座標への反映を含む射影変換の視覚的反映（大道具・キャラの depth 配置）で、これは #683 以降のスコープのまま。TUI版（`tui/`）はこのイベントを解釈しない（無視される。もともと背景描画・射影演出を持たないため対応の予定もない）。
+**現状のスコープ**: Issue #681/#682 で状態管理（モード/向き/仰角の保持、save/seek/任意局面起動での復元）と `computeCameraProjection` を実装し、#683 で背景板、#692 で大道具、#694 でキャラの depth 配置へ射影変換を配線済み。背景板・大道具は depth に応じて縮小・上下移動し、キャラは自由な x 位置と depth に応じた縮小・Y 座標を反映する。TUI版（`tui/`）はこのイベントを解釈しない（無視される。もともと背景描画・射影演出を持たないため対応の予定もない）。
 
 ## 背景板（舞台構造） (#683)
 
