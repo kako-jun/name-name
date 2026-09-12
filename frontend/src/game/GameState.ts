@@ -54,10 +54,11 @@ export interface VideoState {
 /**
  * イベント絵レイヤーの表示状態 (#351)。
  *
- * テキストより背面・背景/立ち絵より前面に出る、画面ぴったりの単一スロット画像。
- * `back` が `'Hide'`（既定）のとき、下の背景・立ち絵は非表示になる（NovelRenderer.applyState /
+ * テキストより背面・全背面レイヤー（背景・背景板・動画・立ち絵・大道具）より前面に出る、
+ * 画面ぴったりの単一スロット画像。
+ * `back` が `'Hide'`（既定）のとき、全背面レイヤーは非表示になる（NovelRenderer.applyState /
  * processDirective が state.eventImage の有無・back 値を見て毎回宣言的に可視性をトグルする）。
- * `'Keep'` は背景・立ち絵を裏で維持する（物証アップ/一時ズーム用途）。
+ * `'Keep'` は全背面レイヤーを裏で維持する（物証アップ/一時ズーム用途）。
  *
  * フェード時間（表示フェードイン/退場フェードアウト）は持たない。それは一度きりの transition
  * パラメータであって settled state ではないため（ADR-0002: スナップショットは常に
@@ -66,7 +67,7 @@ export interface VideoState {
 export interface EventImageState {
   /** 画像への相対パス（`assetBaseUrl + '/images/' + path` で URL 化） */
   path: string
-  /** 背面（背景・立ち絵）扱い。'Hide' = 隠す（既定）/ 'Keep' = 裏で維持する */
+  /** 全背面レイヤーの扱い。'Hide' = 隠す（既定）/ 'Keep' = 裏で維持する */
   back: 'Hide' | 'Keep'
   /**
    * アンビエント演出フラグ (#582)。`back` と同じく settled state（`[イベント絵:]` の作者指定を

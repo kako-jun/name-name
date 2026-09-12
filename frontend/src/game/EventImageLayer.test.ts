@@ -585,7 +585,7 @@ describe('EventImageLayer hasPendingVisualTransition（[待機: 表示完了] �
 })
 
 // セルフレビュー指摘 (#351): ロード失敗のまま back=Hide が残ると、覆う画像が無いのに
-// 背景・立ち絵が隠れっぱなしになる。getState()（settled state・ADR-0002）は失敗しても
+// 全背面レイヤーが隠れっぱなしになる。getState()（settled state・ADR-0002）は失敗しても
 // 作者の意図を保持し続けるが、可視性判定専用の shouldHideBackLayer() は失敗世代を反映する。
 describe('EventImageLayer shouldHideBackLayer（可視性判定専用 API・セルフレビュー指摘）', () => {
   it('current が無ければ false', () => {

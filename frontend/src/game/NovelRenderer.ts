@@ -1417,7 +1417,8 @@ export class NovelRenderer {
     this.videoLayer.remove()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
-    // 元背景・立ち絵が一瞬見える。終劇専用の黒フェードで画面を覆い切った後に片付ける。
+    // 元の全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が一瞬見える。
+    // 終劇専用の黒フェードで画面を覆い切った後に片付ける。
     this.fadeOutBackgroundEntries(eraseBackgroundFadeMs)
     this.characterLayer.clearForSceneTransition(eraseCharacterFadeMs)
     const eraseVisualFadeMs = Math.max(eraseBackgroundFadeMs, eraseCharacterFadeMs ?? 0)
@@ -1816,7 +1817,8 @@ export class NovelRenderer {
       this.characterLayer.clear()
     }
     // イベント絵レイヤーは新しいイベント列の開始で常にクリアする (#351)。前シーンのイベント絵は
-    // 引き継がない（両分岐共通）。back=Hide で隠れていた背景・立ち絵の可視性もここで戻す。
+    // 引き継がない（両分岐共通）。back=Hide で隠れていた全背面レイヤー
+    // （背景・背景板・動画・立ち絵・大道具）の可視性もここで戻す。
     this.eventImageLayer.remove()
     this.applyEventImageVisibility()
     // テロップ (#674) も新しいイベント列の開始で常にクリアする。前シーンの表示中テロップを
@@ -4118,7 +4120,8 @@ export class NovelRenderer {
         // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
         this.videoLayer.remove()
         // イベント絵レイヤーも場面転換でクリアする (#351)。作者が [イベント絵終了] を書き忘れても
-        // 背景・立ち絵が隠れたまま次のシーンに持ち越されないようにする防御。
+        // 全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が隠れたまま次のシーンに
+        // 持ち越されないようにする防御。
         this.eventImageLayer.remove()
         this.applyEventImageVisibility()
         // テロップ (#674) も場面転換でクリアする（eventImageLayer と同じ防御）。

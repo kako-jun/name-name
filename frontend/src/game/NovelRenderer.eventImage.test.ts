@@ -202,8 +202,8 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(internals(r).propLayer.visible).toBe(false)
   })
 
-  // EI3: 背面=keep で処理すると背景・立ち絵は表示されたまま。
-  it('EI3: 背面=keep で処理すると背景・立ち絵は隠れない', async () => {
+  // EI3: 背面=keep で処理すると全背面レイヤーは表示されたまま。
+  it('EI3: 背面=keep で処理すると全背面レイヤーは隠れない', async () => {
     const r = makeRenderer([
       scene('a', [narration('x'), eventImage('story/x.webp', { back: 'Keep' }), narration('y')]),
     ])
@@ -219,8 +219,8 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(internals(r).propLayer.visible).toBe(true)
   })
 
-  // EI4: [イベント絵終了] で eventImageLayer がクリアされ、back=Hide で隠れていた背景・立ち絵が戻る。
-  it('EI4: [イベント絵終了] を処理すると eventImage がクリアされ、隠れていた背景・立ち絵が再表示される', async () => {
+  // EI4: [イベント絵終了] で eventImageLayer がクリアされ、back=Hide で隠れていた全背面レイヤーが戻る。
+  it('EI4: [イベント絵終了] を処理すると eventImage がクリアされ、隠れていた全背面レイヤーが再表示される', async () => {
     const r = makeRenderer([
       scene('a', [
         narration('x'),
@@ -350,7 +350,7 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
   // ===== シーン遷移・新シーン開始でのクリア =====
 
   // EI9: [場面転換] を挟むとイベント絵がクリアされ、可視性も戻る（作者の書き忘れ防御）。
-  it('EI9: [場面転換] を処理するとイベント絵がクリアされ、隠れていた背景・立ち絵が戻る', async () => {
+  it('EI9: [場面転換] を処理するとイベント絵がクリアされ、隠れていた全背面レイヤーが戻る', async () => {
     const r = makeRenderer([
       scene('a', [
         narration('x'),
@@ -412,9 +412,9 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(internals(rKeep).videoLayer.visible).toBe(true)
   })
 
-  // EI12: 画像ロードが恒久的に失敗すると、隠していた背景・立ち絵・動画が自動的に再表示される
+  // EI12: 画像ロードが恒久的に失敗すると、隠していた全背面レイヤーが自動的に再表示される
   //       （覆うものが無いのに背面が隠れっぱなしになる事故の防止・セルフレビュー指摘）。
-  it('EI12: イベント絵のロードが失敗すると隠していた背景・立ち絵・動画が再表示される', async () => {
+  it('EI12: イベント絵のロードが失敗すると隠していた全背面レイヤーが再表示される', async () => {
     vi.spyOn(Assets, 'load').mockRejectedValue(new Error('missing') as never)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([
