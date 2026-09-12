@@ -21,7 +21,12 @@ import {
   Texture,
   TextStyle,
 } from 'pixi.js'
-import { CharacterLayer, NOVEL_ROLE_X_RATIO } from './CharacterLayer'
+import {
+  CharacterLayer,
+  CHARACTER_X_RATIO,
+  normalizePosition,
+  NOVEL_ROLE_X_RATIO,
+} from './CharacterLayer'
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { PropLayer } from './PropLayer'
 import { DialogBox } from './DialogBox'
@@ -96,8 +101,10 @@ import {
   splitTextRegionForDualWindow,
   type LayoutRect,
   computeTelopBottomReserveHeight,
+  resolveCharacterXRatio,
 } from './novelLayout'
 import { stripRubyMarkup, mapSentencesToRubyPreservedText } from './ruby'
+import { resolveVoiceSpatialization } from './voiceSpatialization'
 
 /**
  * 立ち絵・背景先読み (#389) のテキストイベント数上限。旧仕様（8）は theo-hayami の実測値
@@ -5981,7 +5988,20 @@ export class NovelRenderer {
       // 以前は voice 終了で scheduleAutoAdvance を呼んでいたが、これだと voice の長さで
       // 中央ホールド時間が伸びてしまい「決まった時間で次へ進む」設計と合わなかった。
       // voice が長くて次イベントが先に来ると stopVoice で切られるが、短句ナレ用途ではOK。
-      this.audioManager.playVoice(voiceUrl)
+      // #696: ナレーションは音源位置を持たないため従来どおり中央・無加工にする。
+      // Dialog だけ既存 #694 の position/depth をシアターモードの音響へ投影する。
+      const spatialization =
+        typeof current === 'object' && current !== null && 'Dialog' in current
+          ? resolveVoiceSpatialization(
+              this.cameraMode,
+              resolveCharacterXRatio(
+                normalizePosition(current.Dialog.position ?? 'center'),
+                CHARACTER_X_RATIO
+              ),
+              current.Dialog.depth ?? 0
+            )
+          : null
+      this.audioManager.playVoice(voiceUrl, undefined, spatialization)
     }
 
     // フォント解決 (#147): per-line override → per-game default → runtime default の優先順。

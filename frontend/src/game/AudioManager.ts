@@ -13,6 +13,7 @@
  */
 import { randomGapMs } from './seSelection'
 import { TimeController, defaultTimeController } from './TimeController'
+import type { VoiceSpatialization } from './voiceSpatialization'
 
 export class AudioManager {
   private ctx: AudioContext | null = null
@@ -58,6 +59,10 @@ export class AudioManager {
 
   // per-line voice (#144)
   private voiceSource: AudioBufferSourceNode | null = null
+  /** 新しい台詞要求や停止で進め、ロード中の古い要求を無効化する。 */
+  private voiceGeneration = 0
+  /** source ごとの空間化ノード。別の voice の終了で切断しないよう所有者を分ける。 */
+  private voiceSpatialNodes = new Map<AudioBufferSourceNode, AudioNode[]>()
 
   // 動画入力レイヤの音声ミックス (#252)。動画レイヤの HTMLVideoElement を
   // createMediaElementSource で WebAudio グラフに取り込み、videoMasterGain 経由で
@@ -455,9 +460,14 @@ export class AudioManager {
    * 再生終了時に onEnded を呼ぶ。オートモードの voice 終了待ちに使用。
    * 複数呼び出し時は前のボイスを停止して新しいものを再生する。
    */
-  async playVoice(url: string, onEnded?: () => void): Promise<void> {
+  async playVoice(
+    url: string,
+    onEnded?: () => void,
+    spatialization?: VoiceSpatialization | null
+  ): Promise<void> {
     // 前のボイスを停止
     this.stopVoice()
+    const generation = this.voiceGeneration
 
     if (!this.ctx) {
       // autoMode で「画面に触れず」進行している動画モード等、ensureContext が一度も呼ばれない
@@ -472,6 +482,8 @@ export class AudioManager {
     }
     this.lastWarning = null
     const buffer = await this.loadAudio(url)
+    // ロード中に次の台詞/停止が来たら、古い要求は音も onEnded も発火させない。
+    if (generation !== this.voiceGeneration) return
     if (!buffer || !this.ctx) {
       onEnded?.()
       return
@@ -480,15 +492,33 @@ export class AudioManager {
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
     this.ensureMasterGains()
+    let output: AudioNode = source
+    if (spatialization) {
+      // source → lowpass → stereo pan → distance gain → SE master。
+      // 各ボイスに閉じたノード列なので、次行への遷移・終了時に確実に解放する。
+      const filter = this.ctx.createBiquadFilter()
+      filter.type = 'lowpass'
+      filter.frequency.setValueAtTime(spatialization.lowpassHz, this.ctx.currentTime)
+      const panner = this.ctx.createStereoPanner()
+      panner.pan.setValueAtTime(spatialization.pan, this.ctx.currentTime)
+      const gain = this.ctx.createGain()
+      gain.gain.setValueAtTime(spatialization.gain, this.ctx.currentTime)
+      source.connect(filter)
+      filter.connect(panner)
+      panner.connect(gain)
+      output = gain
+      this.voiceSpatialNodes.set(source, [filter, panner, gain])
+    }
     // TODO (#144 follow-up): voice 専用 masterGain を追加して SE と独立して音量制御できるようにする。
     // 現状は seMasterGain に繋いでいるため、SE 音量を下げるとボイスも小さくなる。
     if (this.seMasterGain) {
-      source.connect(this.seMasterGain)
+      output.connect(this.seMasterGain)
     } else {
-      source.connect(this.ctx.destination)
+      output.connect(this.ctx.destination)
     }
     source.onended = () => {
       source.disconnect()
+      this.disconnectVoiceSpatialNodes(source)
       if (this.voiceSource === source) {
         this.voiceSource = null
       }
@@ -502,6 +532,8 @@ export class AudioManager {
    * 再生中のボイスを停止する。onEnded は呼ばれない。
    */
   stopVoice(): void {
+    // source がまだ無いロード待機中の要求も無効化する。
+    this.voiceGeneration++
     if (this.voiceSource) {
       const s = this.voiceSource
       // 先に null にして onended ハンドラ内のガードを有効化し、
@@ -514,6 +546,19 @@ export class AudioManager {
         // already stopped
       }
       s.disconnect()
+      this.disconnectVoiceSpatialNodes(s)
+    }
+  }
+
+  private disconnectVoiceSpatialNodes(source: AudioBufferSourceNode): void {
+    const nodes = this.voiceSpatialNodes.get(source) ?? []
+    this.voiceSpatialNodes.delete(source)
+    for (const node of nodes) {
+      try {
+        node.disconnect()
+      } catch {
+        // already disconnected
+      }
     }
   }
 
