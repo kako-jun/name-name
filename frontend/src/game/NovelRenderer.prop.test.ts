@@ -118,22 +118,25 @@ describe('NovelRenderer Prop 配線 (#692)', () => {
 
     await r.init(document.createElement('div'))
 
-    const children = renderer.app.stage.children
-    const backgroundBoardIndex = children.indexOf(renderer.backgroundBoardLayer)
-    const videoIndex = children.indexOf(renderer.videoLayer)
-    const titleScreenIndex = children.indexOf(renderer.titleScreenOverlay)
-    const characterIndex = children.indexOf(renderer.characterLayer)
-    const propIndex = children.indexOf(renderer.propLayer)
-    const eventImageIndex = children.indexOf(renderer.eventImageLayer)
-    const novelScrimIndex = children.indexOf(renderer.novelScrim)
+    // #695 の順序契約に関係する親レイヤー集合（背景板からスクリムまでの連続区間）だけを
+    // 対象にする。区間外の内部 Graphics/UI は除外しつつ、区間内への別親レイヤー挿入も検知する。
+    const expectedParentLayers = [
+      renderer.backgroundBoardLayer,
+      renderer.videoLayer,
+      renderer.titleScreenOverlay,
+      renderer.characterLayer,
+      renderer.propLayer,
+      renderer.eventImageLayer,
+      renderer.novelScrim,
+    ]
+    const firstParentIndex = renderer.app.stage.children.indexOf(renderer.backgroundBoardLayer)
+    const lastParentIndex = renderer.app.stage.children.indexOf(renderer.novelScrim)
+    const actualParentLayers = renderer.app.stage.children.slice(
+      firstParentIndex,
+      lastParentIndex + 1
+    )
 
-    expect(backgroundBoardIndex).toBeGreaterThanOrEqual(0)
-    expect(videoIndex).toBeGreaterThan(backgroundBoardIndex)
-    expect(titleScreenIndex).toBeGreaterThan(videoIndex)
-    expect(characterIndex).toBeGreaterThan(titleScreenIndex)
-    expect(propIndex).toBeGreaterThan(characterIndex)
-    expect(eventImageIndex).toBeGreaterThan(propIndex)
-    expect(novelScrimIndex).toBeGreaterThan(eventImageIndex)
+    expect(actualParentLayers).toEqual(expectedParentLayers)
 
     renderer.app.destroy = () => {}
     r.destroy()

@@ -306,7 +306,7 @@ export class NovelRenderer {
   /** 動画入力レイヤ (#252)。背景の直後・立ち絵の下に配置 */
   private videoLayer: VideoLayer
   private characterLayer: CharacterLayer
-  /** イベント絵レイヤー (#351)。テキストより背面・背景/立ち絵より前面（立ち絵の直後）に配置 */
+  /** イベント絵レイヤー (#351)。テキストより背面・全背面レイヤー（背景・背景板・動画・立ち絵・大道具）より前面に配置 */
   private eventImageLayer: EventImageLayer
   /** テロップレイヤー (#674)。dialogBox の直後・SeekBar/選択肢/終劇オーバーレイの下に配置。 */
   private telopLayer: TelopLayer
@@ -939,8 +939,8 @@ export class NovelRenderer {
     // レイヤー内の depth は大道具どうしの奥行きだけを扱い、背景板・キャラとは独立する。
     this.app.stage.addChild(this.propLayer)
 
-    // イベント絵レイヤー (#351)。z 順はテキストより背面・背景/立ち絵より前面
-    // （立ち絵の直後・novelScrim/ダイアログより前）。
+    // イベント絵レイヤー (#351)。z 順はテキストより背面・全背面レイヤー
+    // （背景・背景板・動画・立ち絵・大道具）より前面（novelScrim/ダイアログより前）。
     this.app.stage.addChild(this.eventImageLayer)
 
     // novel スタイルの全画面スクリム (#283)。z 順は立ち絵の上・暗転/効果/ダイアログの下。
@@ -3561,8 +3561,8 @@ export class NovelRenderer {
     // 動画には触れないため（show が単一スロットを置換、なしなら remove）、背景復元の後に行う。
     this.videoLayer.restore(state.video)
 
-    // イベント絵レイヤー復元 (#351)。フェードは行わず即時反映（ADR-0002）。背景・立ち絵・動画の
-    // 可視性は eventImageLayer の復元後の状態を見て宣言的に再計算する（processDirective と
+    // イベント絵レイヤー復元 (#351)。フェードは行わず即時反映（ADR-0002）。全背面レイヤー
+    // （背景・背景板・動画・立ち絵・大道具）の可視性は復元後の状態を見て宣言的に再計算する（processDirective と
     // 同じ applyEventImageVisibility を共有）。onSettled でロード完了/失敗後にも再計算する
     // （processDirective の EventImage 分岐と同じセルフレビュー対応）。
     this.eventImageLayer.restore(state.eventImage, {
@@ -4192,7 +4192,8 @@ export class NovelRenderer {
     }
     if ('EventImage' in event) {
       // イベント絵レイヤー (#351)。URL 構築は EventImageLayer 側（assetBaseUrl + '/images/' + path）
-      // に委譲する。表示後、背面（背景・立ち絵・動画）の可視性を back 値に応じて宣言的に更新する
+      // に委譲する。表示後、全背面レイヤー（背景・背景板・動画・立ち絵・大道具）の可視性を
+      // back 値に応じて宣言的に更新する
       // （applyEventImageVisibility は setBlackout と同じく processDirective / applyState の
       // 両方から呼ばれる単一の宣言的トグル。一回限りのアニメーションにはしない・ADR-0002）。
       // onSettled でロード完了/失敗後にも再計算する（セルフレビュー指摘: ロード失敗のまま

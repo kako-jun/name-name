@@ -2,7 +2,8 @@
  * イベント絵レイヤー (#351)。
  *
  * `[イベント絵: path, 背面=hide/keep, フェード=1400]` / `[イベント絵終了: フェード=700]` から
- * 駆動される、テキストより背面・背景/立ち絵より前面に出る「画面ぴったり」の単一スロット画像。
+ * 駆動される、テキストより背面・全背面レイヤー（背景・背景板・動画・立ち絵・大道具）より前面に出る
+ * 「画面ぴったり」の単一スロット画像。
  * VideoLayer と同じ単一スロット意味論（新しい show() が前の画像を置換する）を踏襲するが、
  * 動画ではなく静止画で、独自の位置/スケール指定は持たず常に cover-fit で覆う。通常は画面全体、
  * `split_layout: true`（#464）で `setSplitLayoutRegion` が設定されていればその矩形（キャラ画像側の
@@ -101,7 +102,7 @@ const WOBBLE_DISPLACEMENT_SCALE = 22
 const SCROLL_HINT_LABEL = '↑↓ スクロールできます'
 
 export interface EventImageShowOptions {
-  /** 背面（背景・立ち絵）扱い。未指定は 'Hide'（既定） */
+  /** 全背面レイヤー（背景・背景板・動画・立ち絵・大道具）の扱い。未指定は 'Hide'（既定） */
   back?: 'Hide' | 'Keep' | null
   /** 表示フェードイン時間 (ms)。呼び出し元が個別指定または per-game 既定を渡す。0 以下は即時表示。
    *  `transition` が 'Pixelate' の場合は遷移全体（コルセン+リファイン）の所要時間として使う。 */
@@ -118,7 +119,7 @@ export interface EventImageShowOptions {
    * ロード成否に関わらず一度だけ発火する（CharacterLayer の #293 `onReady` と同じ流儀）。
    * 呼び出し元（NovelRenderer）はこれを機に `applyEventImageVisibility()` を再計算する。
    * ロード失敗時に `shouldHideBackLayer()` が false へ切り替わることを反映させ、覆うものが
-   * 無いのに背面（背景・立ち絵）だけ隠れっぱなしになる事故を防ぐ（セルフレビュー指摘）。
+   * 無いのに全背面レイヤーだけ隠れっぱなしになる事故を防ぐ（セルフレビュー指摘）。
    * 世代が古い（後から来た show()/remove() に追い越された）呼び出しでは発火しない。
    */
   onSettled?: () => void
@@ -240,7 +241,7 @@ export class EventImageLayer extends Container {
    * 直近の show() のロードが失敗したか（現行世代のみ）。`current`（settled state・ADR-0002）は
    * ロード成否に関わらず作者の意図（path/back）を保持し続けるが、`shouldHideBackLayer()`（可視性
    * 判定専用）はこのフラグを見て「覆うものが実際に無い」間は背面を隠さないようにする
-   * （セルフレビュー指摘: ロード失敗のまま back=Hide が残ると背景・立ち絵が永久に隠れっぱなしになる事故）。
+   * （セルフレビュー指摘: ロード失敗のまま back=Hide が残ると全背面レイヤーが永久に隠れっぱなしになる事故）。
    */
   private loadFailed = false
 
@@ -1059,13 +1060,13 @@ export class EventImageLayer extends Container {
   }
 
   /**
-   * `back=Hide` によって背面（背景・立ち絵）を実際に隠すべきかを返す（NovelRenderer.
+   * `back=Hide` によって全背面レイヤー（背景・背景板・動画・立ち絵・大道具）を実際に隠すべきかを返す（NovelRenderer.
    * applyEventImageVisibility() の可視性判定専用 API）。
    *
    * `getState()`（settled state・ADR-0002・作者の意図として path/back を保持し続ける。
    * セーブ/リトライのため load 成否に関わらず不変）とは別に、こちらは「実際に画像が
    * 覆っているか」を返す。ロード前・フェードイン中は背面を残して暗転フラッシュを避け、
-   * ロードが失敗した世代では覆うものが存在しないため false を返し、背景・立ち絵が永久に
+   * ロードが失敗した世代では覆うものが存在しないため false を返し、全背面レイヤーが永久に
    * 隠れっぱなしになる事故も防ぐ（セルフレビュー指摘）。
    */
   shouldHideBackLayer(): boolean {
