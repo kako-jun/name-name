@@ -919,10 +919,6 @@ export class NovelRenderer {
     // （舞台の書割は背景と同じ「奥の情景」なので、動画・キャラより手前には出さない）。
     this.app.stage.addChild(this.backgroundBoardLayer)
 
-    // 舞台構造の大道具レイヤー (#692)。背景板の直後・キャラの前に配置（レイヤーモデル:
-    // 奥 ← 背景板 ← 大道具 ← キャラ ← 手前）。
-    this.app.stage.addChild(this.propLayer)
-
     // 動画入力レイヤー (#252)。背景の直後・立ち絵の下に配置（背景の上、キャラの下）。
     this.app.stage.addChild(this.videoLayer)
 
@@ -938,6 +934,10 @@ export class NovelRenderer {
 
     // 立ち絵レイヤー
     this.app.stage.addChild(this.characterLayer)
+
+    // 舞台構造の小道具レイヤー (#692, #695)。立ち絵の直後に配置してキャラより前面に出す。
+    // レイヤー内の depth は小道具どうしの奥行きだけを扱い、背景板・キャラとは独立する。
+    this.app.stage.addChild(this.propLayer)
 
     // イベント絵レイヤー (#351)。z 順はテキストより背面・背景/立ち絵より前面
     // （立ち絵の直後・novelScrim/ダイアログより前）。

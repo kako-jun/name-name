@@ -120,8 +120,8 @@ export interface NovelGameState {
   backgroundBoards: Array<{ path: string; depth: number }>
   /**
    * シアターモード舞台構造の大道具 (#692)。`[大道具: path, depth: N]` の加算的な蓄積状態
-   * （`backgroundBoards` と同じ扱い）。背景板とは独立した PixiJS レイヤーで、キャラより奥・
-   * 背景板より手前に固定される（docs/architecture.md「レイヤーモデル」節）。既定は空配列。
+   * （`backgroundBoards` と同じ扱い）。背景板・キャラとは独立した PixiJS レイヤーで、キャラより
+   * 手前に固定される（docs/architecture.md「レイヤーモデル」節）。既定は空配列。
    * 演出の中間状態は持たない（ADR-0002。`PropLayer` だけが一時的なアニメーション位相を保持する）。
    */
   props: Array<{ path: string; depth: number }>
