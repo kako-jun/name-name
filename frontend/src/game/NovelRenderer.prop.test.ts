@@ -71,9 +71,12 @@ interface PropLayerForTest {
 }
 interface RendererInternals {
   backgroundBoardLayer: unknown
+  videoLayer: unknown
+  titleScreenOverlay: unknown
   characterLayer: unknown
   propLayer: PropLayerForTest
   eventImageLayer: unknown
+  novelScrim: unknown
   appInitialized: boolean
   app: {
     init: (...args: unknown[]) => Promise<void>
@@ -102,7 +105,7 @@ function stubDestroyableApp(r: NovelRenderer): void {
 }
 
 describe('NovelRenderer Prop 配線 (#692)', () => {
-  it('init() 後の親レイヤー順は背景板 < キャラ < 小道具 < イベント絵になる (#695)', async () => {
+  it('init() 後の親レイヤー順は背景板 < 動画 < タイトル < キャラ < 大道具 < イベント絵 < スクリムになる (#695)', async () => {
     const r = new NovelRenderer()
     const renderer = internals(r)
     const canvas = document.createElement('canvas')
@@ -117,14 +120,20 @@ describe('NovelRenderer Prop 配線 (#692)', () => {
 
     const children = renderer.app.stage.children
     const backgroundBoardIndex = children.indexOf(renderer.backgroundBoardLayer)
+    const videoIndex = children.indexOf(renderer.videoLayer)
+    const titleScreenIndex = children.indexOf(renderer.titleScreenOverlay)
     const characterIndex = children.indexOf(renderer.characterLayer)
     const propIndex = children.indexOf(renderer.propLayer)
     const eventImageIndex = children.indexOf(renderer.eventImageLayer)
+    const novelScrimIndex = children.indexOf(renderer.novelScrim)
 
     expect(backgroundBoardIndex).toBeGreaterThanOrEqual(0)
-    expect(characterIndex).toBeGreaterThan(backgroundBoardIndex)
+    expect(videoIndex).toBeGreaterThan(backgroundBoardIndex)
+    expect(titleScreenIndex).toBeGreaterThan(videoIndex)
+    expect(characterIndex).toBeGreaterThan(titleScreenIndex)
     expect(propIndex).toBeGreaterThan(characterIndex)
     expect(eventImageIndex).toBeGreaterThan(propIndex)
+    expect(novelScrimIndex).toBeGreaterThan(eventImageIndex)
 
     renderer.app.destroy = () => {}
     r.destroy()
