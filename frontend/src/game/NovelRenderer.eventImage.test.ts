@@ -4,7 +4,7 @@
  * EventImageLayer 自体の単体挙動（フェード進行・pending 判定・getState/restore）は
  * EventImageLayer.test.ts でカバー済み。ここでは NovelRenderer 側の配線を検証する:
  *  - `[イベント絵:]` / `[イベント絵終了:]` ディレクティブ処理（processDirective）
- *  - `applyEventImageVisibility()`（back=Hide/Keep による背景・立ち絵の可視性トグル）
+ *  - `applyEventImageVisibility()`（back=Hide/Keep による全背面レイヤーの可視性トグル）
  *  - save/load・seek での復元
  *  - 場面転換・新シーン開始でのクリア
  *  - `[待機: 表示完了]`（hasPendingVisualTransition）への統合
@@ -69,12 +69,14 @@ interface RendererInternals {
   eventImageLayer: EventImageLayerForTest
   bgGraphics: { visible: boolean }
   bgContainer: { visible: boolean }
+  backgroundBoardLayer: { visible: boolean }
   videoLayer: { visible: boolean }
   characterLayer: {
     visible: boolean
     hasPendingVisualTransition: () => boolean
     getSplitLayoutRegion(): LayoutRect | null
   }
+  propLayer: { visible: boolean }
   eventIndex: number
   waitingForWait: boolean
   initialized: boolean
@@ -158,8 +160,8 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(r.getSnapshot().eventImage).toEqual({ path: 'story/x.webp', back: 'Hide' })
   })
 
-  // EI2: 背面省略（既定 Hide）→ 背景・立ち絵が全部 visible=false になる。
-  it('EI2: 背面省略（既定 Hide）で処理すると背景・立ち絵が隠れる', async () => {
+  // EI2: 背面省略（既定 Hide）→ イベント絵より背面の全レイヤーが visible=false になる。
+  it('EI2: 背面省略（既定 Hide）で処理すると全背面レイヤーが隠れる', async () => {
     const r = makeRenderer([
       scene('a', [narration('x'), eventImage('story/x.webp'), narration('y')]),
     ])
@@ -168,7 +170,10 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
 
     expect(internals(r).bgGraphics.visible).toBe(false)
     expect(internals(r).bgContainer.visible).toBe(false)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(false)
+    expect(internals(r).videoLayer.visible).toBe(false)
     expect(internals(r).characterLayer.visible).toBe(false)
+    expect(internals(r).propLayer.visible).toBe(false)
   })
 
   it('EI2b: 既定700msフェードでは、イベント絵のフェードイン完了まで背面を隠さない', async () => {
@@ -182,17 +187,23 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
 
     expect(internals(r).bgGraphics.visible).toBe(true)
     expect(internals(r).bgContainer.visible).toBe(true)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals(r).videoLayer.visible).toBe(true)
     expect(internals(r).characterLayer.visible).toBe(true)
+    expect(internals(r).propLayer.visible).toBe(true)
 
     r.getTimeController().tick(700 + 16)
 
     expect(internals(r).bgGraphics.visible).toBe(false)
     expect(internals(r).bgContainer.visible).toBe(false)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(false)
+    expect(internals(r).videoLayer.visible).toBe(false)
     expect(internals(r).characterLayer.visible).toBe(false)
+    expect(internals(r).propLayer.visible).toBe(false)
   })
 
-  // EI3: 背面=keep で処理すると背景・立ち絵は表示されたまま。
-  it('EI3: 背面=keep で処理すると背景・立ち絵は隠れない', async () => {
+  // EI3: 背面=keep で処理すると全背面レイヤーは表示されたまま。
+  it('EI3: 背面=keep で処理すると全背面レイヤーは隠れない', async () => {
     const r = makeRenderer([
       scene('a', [narration('x'), eventImage('story/x.webp', { back: 'Keep' }), narration('y')]),
     ])
@@ -202,11 +213,14 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(internals(r).eventImageLayer.getState()).toEqual({ path: 'story/x.webp', back: 'Keep' })
     expect(internals(r).bgGraphics.visible).toBe(true)
     expect(internals(r).bgContainer.visible).toBe(true)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals(r).videoLayer.visible).toBe(true)
     expect(internals(r).characterLayer.visible).toBe(true)
+    expect(internals(r).propLayer.visible).toBe(true)
   })
 
-  // EI4: [イベント絵終了] で eventImageLayer がクリアされ、back=Hide で隠れていた背景・立ち絵が戻る。
-  it('EI4: [イベント絵終了] を処理すると eventImage がクリアされ、隠れていた背景・立ち絵が再表示される', async () => {
+  // EI4: [イベント絵終了] で eventImageLayer がクリアされ、back=Hide で隠れていた全背面レイヤーが戻る。
+  it('EI4: [イベント絵終了] を処理すると eventImage がクリアされ、隠れていた全背面レイヤーが再表示される', async () => {
     const r = makeRenderer([
       scene('a', [
         narration('x'),
@@ -226,7 +240,10 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(r.getSnapshot().eventImage).toBeNull()
     expect(internals(r).bgGraphics.visible).toBe(true)
     expect(internals(r).bgContainer.visible).toBe(true)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals(r).videoLayer.visible).toBe(true)
     expect(internals(r).characterLayer.visible).toBe(true)
+    expect(internals(r).propLayer.visible).toBe(true)
   })
 
   // ===== save/load 往復 =====
@@ -248,8 +265,12 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
 
     expect(r2.getSnapshot().eventImage).toEqual({ path: 'story/x.webp', back: 'Keep' })
     expect(internals(r2).eventImageLayer.getState()).toEqual({ path: 'story/x.webp', back: 'Keep' })
-    // back=Keep なので背景・立ち絵は隠れない。
+    // back=Keep なので全背面レイヤーは隠れない。
     expect(internals(r2).bgGraphics.visible).toBe(true)
+    expect(internals(r2).backgroundBoardLayer.visible).toBe(true)
+    expect(internals(r2).videoLayer.visible).toBe(true)
+    expect(internals(r2).characterLayer.visible).toBe(true)
+    expect(internals(r2).propLayer.visible).toBe(true)
   })
 
   // EI6: eventImage キー欠落の旧セーブ → 落ちず eventImage===null（後方互換）。
@@ -275,8 +296,12 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(r.getSnapshot().eventImage).toEqual({ path: 'story/x.webp', back: 'Hide' })
     // 復元ロード中は背面を残し、画像が実際に覆える状態になってから隠す。
     expect(internals(r).bgGraphics.visible).toBe(true)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals(r).propLayer.visible).toBe(true)
     await flushPromises()
     expect(internals(r).bgGraphics.visible).toBe(false)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(false)
+    expect(internals(r).propLayer.visible).toBe(false)
   })
 
   // ===== seek 復元 =====
@@ -310,18 +335,22 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     await flushPromises()
     expect(internals(r).bgGraphics.visible).toBe(false)
     expect(internals(r).characterLayer.visible).toBe(false)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(false)
+    expect(internals(r).propLayer.visible).toBe(false)
 
     // イベント絵なしの履歴位置（0）へ戻る。
     r.seekTo(0)
     expect(internals(r).eventImageLayer.getState()).toBeNull()
     expect(internals(r).bgGraphics.visible).toBe(true)
     expect(internals(r).characterLayer.visible).toBe(true)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals(r).propLayer.visible).toBe(true)
   })
 
   // ===== シーン遷移・新シーン開始でのクリア =====
 
   // EI9: [場面転換] を挟むとイベント絵がクリアされ、可視性も戻る（作者の書き忘れ防御）。
-  it('EI9: [場面転換] を処理するとイベント絵がクリアされ、隠れていた背景・立ち絵が戻る', async () => {
+  it('EI9: [場面転換] を処理するとイベント絵がクリアされ、隠れていた全背面レイヤーが戻る', async () => {
     const r = makeRenderer([
       scene('a', [
         narration('x'),
@@ -340,6 +369,8 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(internals(r).eventImageLayer.getState()).toBeNull()
     expect(internals(r).bgGraphics.visible).toBe(true)
     expect(internals(r).characterLayer.visible).toBe(true)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals(r).propLayer.visible).toBe(true)
   })
 
   // EI10: 別シーンへの jumpToScene（新しいイベント列の開始）でも前シーンのイベント絵は引き継がれない。
@@ -358,6 +389,8 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(internals(r).eventImageLayer.getState()).toBeNull()
     expect(internals(r).bgGraphics.visible).toBe(true)
     expect(internals(r).characterLayer.visible).toBe(true)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals(r).propLayer.visible).toBe(true)
   })
 
   // ===== セルフレビュー指摘の統合テスト (#351) =====
@@ -379,9 +412,9 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(internals(rKeep).videoLayer.visible).toBe(true)
   })
 
-  // EI12: 画像ロードが恒久的に失敗すると、隠していた背景・立ち絵・動画が自動的に再表示される
+  // EI12: 画像ロードが恒久的に失敗すると、隠していた全背面レイヤーが自動的に再表示される
   //       （覆うものが無いのに背面が隠れっぱなしになる事故の防止・セルフレビュー指摘）。
-  it('EI12: イベント絵のロードが失敗すると隠していた背景・立ち絵・動画が再表示される', async () => {
+  it('EI12: イベント絵のロードが失敗すると隠していた全背面レイヤーが再表示される', async () => {
     vi.spyOn(Assets, 'load').mockRejectedValue(new Error('missing') as never)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([
@@ -400,6 +433,8 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(internals(r).bgContainer.visible).toBe(true)
     expect(internals(r).videoLayer.visible).toBe(true)
     expect(internals(r).characterLayer.visible).toBe(true)
+    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals(r).propLayer.visible).toBe(true)
     // settled state（snapshot.eventImage）自体は作者の意図として保持される（ADR-0002）。
     expect(r.getSnapshot().eventImage).toEqual({ path: 'story/x.webp', back: 'Hide' })
   })

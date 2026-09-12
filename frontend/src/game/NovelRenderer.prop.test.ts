@@ -18,18 +18,9 @@
  * `assetBaseUrl` を設定しないため `Assets.load` は呼ばれない（PropLayer.add() のガード。
  * NovelRenderer.cameraMode.test.ts と同じ流儀で、状態配線だけを軽量に検証できる）。
  *
- * 注記（非適用観点）: 「app.stage の子要素インデックス順が backgroundBoardLayer < propLayer <
- * characterLayer である」「BackgroundBoard/Prop の depth 数値が逆転していてもレイヤー群順が
- * 優先される」の3件は、実 PixiJS の `app.stage.addChild()` 呼び出し順（NovelRenderer.init()
- * 内、`this.app.stage.addChild(this.backgroundBoardLayer)` → `addChild(this.propLayer)` →
- * `addChild(this.characterLayer)`）でのみ決まる。jsdom には実 PixiJS canvas
- * が無く `init()` を最後まで実行できないため（`NovelRenderer.restoreSnapshot.test.ts` の
- * `markInitialized` 節・`NovelPlayer.test.tsx` の MockRenderer 節が明記する既存の環境制約）、
- * この3件はこのファイルを含む既存のどの NovelRenderer テストでも検証されていない。新たに
- * `Application.init` を丸ごと差し替えるモック基盤を作れば検証できなくはないが、この一連の
- * テスト作成の範囲外の新規インフラになるため見送る（`git grep` で NovelRenderer.ts の該当
- * addChild 3行の順序を目視確認済み: 916行目 backgroundBoardLayer → 920行目 propLayer →
- * 936行目 characterLayer）。
+ * #695 では `Application.init` だけをスタブ化して `NovelRenderer.init()` 本体を通し、
+ * `stage.children` の親レイヤー順を直接検証する。各レイヤー内の depth 値にかかわらず、この
+ * addChild 順がレイヤー群どうしの前後関係を決める。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Assets, type Texture } from 'pixi.js'
@@ -79,9 +70,21 @@ interface PropLayerForTest {
   }[]
 }
 interface RendererInternals {
+  backgroundBoardLayer: unknown
+  videoLayer: unknown
+  titleScreenOverlay: unknown
+  characterLayer: unknown
   propLayer: PropLayerForTest
+  eventImageLayer: unknown
+  novelScrim: unknown
   appInitialized: boolean
-  app: { canvas: unknown; destroy: (...args: unknown[]) => void }
+  app: {
+    init: (...args: unknown[]) => Promise<void>
+    stage: { children: unknown[] }
+    canvas: unknown
+    renderer?: { resolution: number }
+    destroy: (...args: unknown[]) => void
+  }
 }
 function internals(r: NovelRenderer): RendererInternals {
   return r as unknown as RendererInternals
@@ -102,6 +105,43 @@ function stubDestroyableApp(r: NovelRenderer): void {
 }
 
 describe('NovelRenderer Prop 配線 (#692)', () => {
+  it('init() 後の親レイヤー順は背景板 < 動画 < タイトル < キャラ < 大道具 < イベント絵 < スクリムになる (#695)', async () => {
+    const r = new NovelRenderer()
+    const renderer = internals(r)
+    const canvas = document.createElement('canvas')
+    vi.spyOn(renderer.app, 'init').mockResolvedValue()
+    Object.defineProperty(renderer.app, 'canvas', { configurable: true, value: canvas })
+    Object.defineProperty(renderer.app, 'renderer', {
+      configurable: true,
+      value: { resolution: 1 },
+    })
+
+    await r.init(document.createElement('div'))
+
+    // #695 の順序契約に関係する親レイヤー集合（背景板からスクリムまでの連続区間）だけを
+    // 対象にする。区間外の内部 Graphics/UI は除外しつつ、区間内への別親レイヤー挿入も検知する。
+    const expectedParentLayers = [
+      renderer.backgroundBoardLayer,
+      renderer.videoLayer,
+      renderer.titleScreenOverlay,
+      renderer.characterLayer,
+      renderer.propLayer,
+      renderer.eventImageLayer,
+      renderer.novelScrim,
+    ]
+    const firstParentIndex = renderer.app.stage.children.indexOf(renderer.backgroundBoardLayer)
+    const lastParentIndex = renderer.app.stage.children.indexOf(renderer.novelScrim)
+    const actualParentLayers = renderer.app.stage.children.slice(
+      firstParentIndex,
+      lastParentIndex + 1
+    )
+
+    expect(actualParentLayers).toEqual(expectedParentLayers)
+
+    renderer.app.destroy = () => {}
+    r.destroy()
+  })
+
   it('本文しかないシーンは props が空配列のまま', () => {
     const r = new NovelRenderer()
     r.setScenes([scene('a', [narration('one')])])

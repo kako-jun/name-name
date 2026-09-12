@@ -306,7 +306,7 @@ export class NovelRenderer {
   /** 動画入力レイヤ (#252)。背景の直後・立ち絵の下に配置 */
   private videoLayer: VideoLayer
   private characterLayer: CharacterLayer
-  /** イベント絵レイヤー (#351)。テキストより背面・背景/立ち絵より前面（立ち絵の直後）に配置 */
+  /** イベント絵レイヤー (#351)。テキストより背面・全背面レイヤー（背景・背景板・動画・立ち絵・大道具）より前面に配置 */
   private eventImageLayer: EventImageLayer
   /** テロップレイヤー (#674)。dialogBox の直後・SeekBar/選択肢/終劇オーバーレイの下に配置。 */
   private telopLayer: TelopLayer
@@ -745,7 +745,7 @@ export class NovelRenderer {
   /**
    * 舞台構造の大道具レイヤー (#692)。`[大道具: path, depth: N]` の加算的な蓄積を管理する。
    * `backgroundBoardLayer` と独立した PixiJS レイヤー（数値 depth を共有する空間ではなく、
-   * レイヤー自体の描画順で「背景板より手前・キャラより奥」の群を作る）。
+   * レイヤー自体の描画順で「背景板・キャラより手前、イベント絵/UIより奥」の群を作る）。
    */
   private propLayer: PropLayer
 
@@ -919,10 +919,6 @@ export class NovelRenderer {
     // （舞台の書割は背景と同じ「奥の情景」なので、動画・キャラより手前には出さない）。
     this.app.stage.addChild(this.backgroundBoardLayer)
 
-    // 舞台構造の大道具レイヤー (#692)。背景板の直後・キャラの前に配置（レイヤーモデル:
-    // 奥 ← 背景板 ← 大道具 ← キャラ ← 手前）。
-    this.app.stage.addChild(this.propLayer)
-
     // 動画入力レイヤー (#252)。背景の直後・立ち絵の下に配置（背景の上、キャラの下）。
     this.app.stage.addChild(this.videoLayer)
 
@@ -939,8 +935,12 @@ export class NovelRenderer {
     // 立ち絵レイヤー
     this.app.stage.addChild(this.characterLayer)
 
-    // イベント絵レイヤー (#351)。z 順はテキストより背面・背景/立ち絵より前面
-    // （立ち絵の直後・novelScrim/ダイアログより前）。
+    // 舞台構造の大道具レイヤー (#692, #695)。立ち絵の直後に配置してキャラより前面に出す。
+    // レイヤー内の depth は大道具どうしの奥行きだけを扱い、背景板・キャラとは独立する。
+    this.app.stage.addChild(this.propLayer)
+
+    // イベント絵レイヤー (#351)。z 順はテキストより背面・全背面レイヤー
+    // （背景・背景板・動画・立ち絵・大道具）より前面（novelScrim/ダイアログより前）。
     this.app.stage.addChild(this.eventImageLayer)
 
     // novel スタイルの全画面スクリム (#283)。z 順は立ち絵の上・暗転/効果/ダイアログの下。
@@ -1417,7 +1417,8 @@ export class NovelRenderer {
     this.videoLayer.remove()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
-    // 元背景・立ち絵が一瞬見える。終劇専用の黒フェードで画面を覆い切った後に片付ける。
+    // 元の全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が一瞬見える。
+    // 終劇専用の黒フェードで画面を覆い切った後に片付ける。
     this.fadeOutBackgroundEntries(eraseBackgroundFadeMs)
     this.characterLayer.clearForSceneTransition(eraseCharacterFadeMs)
     const eraseVisualFadeMs = Math.max(eraseBackgroundFadeMs, eraseCharacterFadeMs ?? 0)
@@ -1816,7 +1817,8 @@ export class NovelRenderer {
       this.characterLayer.clear()
     }
     // イベント絵レイヤーは新しいイベント列の開始で常にクリアする (#351)。前シーンのイベント絵は
-    // 引き継がない（両分岐共通）。back=Hide で隠れていた背景・立ち絵の可視性もここで戻す。
+    // 引き継がない（両分岐共通）。back=Hide で隠れていた全背面レイヤー
+    // （背景・背景板・動画・立ち絵・大道具）の可視性もここで戻す。
     this.eventImageLayer.remove()
     this.applyEventImageVisibility()
     // テロップ (#674) も新しいイベント列の開始で常にクリアする。前シーンの表示中テロップを
@@ -3561,8 +3563,8 @@ export class NovelRenderer {
     // 動画には触れないため（show が単一スロットを置換、なしなら remove）、背景復元の後に行う。
     this.videoLayer.restore(state.video)
 
-    // イベント絵レイヤー復元 (#351)。フェードは行わず即時反映（ADR-0002）。背景・立ち絵・動画の
-    // 可視性は eventImageLayer の復元後の状態を見て宣言的に再計算する（processDirective と
+    // イベント絵レイヤー復元 (#351)。フェードは行わず即時反映（ADR-0002）。全背面レイヤー
+    // （背景・背景板・動画・立ち絵・大道具）の可視性は復元後の状態を見て宣言的に再計算する（processDirective と
     // 同じ applyEventImageVisibility を共有）。onSettled でロード完了/失敗後にも再計算する
     // （processDirective の EventImage 分岐と同じセルフレビュー対応）。
     this.eventImageLayer.restore(state.eventImage, {
@@ -3754,7 +3756,8 @@ export class NovelRenderer {
   }
 
   /**
-   * イベント絵レイヤー (#351) の `back` 値に応じて、背景・立ち絵・動画の可視性を宣言的にトグルする。
+   * イベント絵レイヤー (#351) の `back` 値に応じて、背景・背景板・動画・立ち絵・大道具の
+   * 可視性を宣言的にトグルする。
    *
    * `setBlackout` と同じ「単一の宣言的セッター」パターン: processDirective（ライブ進行）と
    * applyState（goBack/seekTo/セーブ復元）の両方から、eventImageLayer の現在状態を毎回
@@ -3764,15 +3767,17 @@ export class NovelRenderer {
    * 判定は `eventImageLayer.shouldHideBackLayer()` に委ねる（`getState()?.back==='Hide'` の単純な
    * 意図参照ではなく、ロード失敗時は覆うものが無いため隠さない可視性専用ロジック。セルフレビュー
    * 指摘: back=Hide のままロードが永久に失敗すると背面が隠れっぱなしになる事故を防ぐ）。
-   * `videoLayer`（#252）も背面スタックの一部（characterLayer と bgContainer の間に位置）なので
-   * 同じトグルに含める（セルフレビュー指摘: event image の前面に動画だけ透けて見える事故を防ぐ）。
+   * `backgroundBoardLayer`（#683）・`videoLayer`（#252）・`propLayer`（#692）も背面スタックの
+   * 一部なので同じトグルに含める（event image の前面に追加レイヤーだけ透けて見える事故を防ぐ）。
    */
   private applyEventImageVisibility(): void {
     const hide = this.eventImageLayer.shouldHideBackLayer()
     this.bgGraphics.visible = !hide
     this.bgContainer.visible = !hide
+    this.backgroundBoardLayer.visible = !hide
     this.videoLayer.visible = !hide
     this.characterLayer.visible = !hide
+    this.propLayer.visible = !hide
   }
 
   private handleAdvance = (): void => {
@@ -4115,7 +4120,8 @@ export class NovelRenderer {
         // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
         this.videoLayer.remove()
         // イベント絵レイヤーも場面転換でクリアする (#351)。作者が [イベント絵終了] を書き忘れても
-        // 背景・立ち絵が隠れたまま次のシーンに持ち越されないようにする防御。
+        // 全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が隠れたまま次のシーンに
+        // 持ち越されないようにする防御。
         this.eventImageLayer.remove()
         this.applyEventImageVisibility()
         // テロップ (#674) も場面転換でクリアする（eventImageLayer と同じ防御）。
@@ -4189,7 +4195,8 @@ export class NovelRenderer {
     }
     if ('EventImage' in event) {
       // イベント絵レイヤー (#351)。URL 構築は EventImageLayer 側（assetBaseUrl + '/images/' + path）
-      // に委譲する。表示後、背面（背景・立ち絵・動画）の可視性を back 値に応じて宣言的に更新する
+      // に委譲する。表示後、全背面レイヤー（背景・背景板・動画・立ち絵・大道具）の可視性を
+      // back 値に応じて宣言的に更新する
       // （applyEventImageVisibility は setBlackout と同じく processDirective / applyState の
       // 両方から呼ばれる単一の宣言的トグル。一回限りのアニメーションにはしない・ADR-0002）。
       // onSettled でロード完了/失敗後にも再計算する（セルフレビュー指摘: ロード失敗のまま
