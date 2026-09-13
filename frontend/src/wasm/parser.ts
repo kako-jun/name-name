@@ -74,6 +74,7 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
           // 空文字も null に倒す (#147 R1 N5)。
           voice_path: nullIfEmpty(event.Dialog.voice_path),
           font_family: nullIfEmpty(event.Dialog.font_family),
+          bubble_style: nullIfEmpty(event.Dialog.bubble_style),
           // 立ち絵の明示フィット (#294)。WASM は false のとき undefined を返すため
           // 明示 boolean に正規化して normalize で落とさない（新フィールド欠落の罠回避）。
           fit: event.Dialog.fit === true,
@@ -92,6 +93,7 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
           text: event.Narration.text.map(canonicalizeBodyText),
           voice_path: nullIfEmpty(event.Narration.voice_path),
           font_family: nullIfEmpty(event.Narration.font_family),
+          bubble_style: nullIfEmpty(event.Narration.bubble_style),
         },
       }
     }

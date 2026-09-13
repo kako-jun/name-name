@@ -269,8 +269,8 @@ Rust で実装。wasm-bindgen + tsify-next で TypeScript 型を自動生成す�
 
 `parser/src/models.rs` が型の正本。主要なバリアント:
 
-- `Dialog` — ダイアログ（character, expression, position, text, voice_path?, font_family?）
-- `Narration` — ナレーション（text, voice_path?, font_family?）
+- `Dialog` — ダイアログ（character, expression, position, text, voice_path?, font_family?, bubble_style?）。`bubble_style` は `[吹き出し:]` の line-scoped 表示指定で、DialogBox を場面内の PixiJS 吹き出しへ置換する。Novel では平面、Theater では既存の position/depth/camera projection を使う。
+- `Narration` — ナレーション（text, voice_path?, font_family?, bubble_style?）
 - `Background` — 背景変更（path）。通常進行では旧背景と新背景を同時保持し、既定 700ms（フロントマター `background_fade_ms` で作品ごとに変更可・表示/切替/退場すべてに適用・#407）で alpha を入れ替えるクロスフェードを行う（復元・シーク・スキップは即時）
 - `Bgm` — BGM 制御（action: Play/Stop, path, fade_ms?: Play=fade-in / Stop=fade-out 時間 ms）
 - `Se` — SE 再生（paths: 候補ファイルパス配列、通常は1件＝従来通りの単発再生。複数件は選択数+間隔でランダム抽出+シャッフル再生のプールになる（#672、後述「SE複数候補プールのランダム抽出+シャッフル+ランダム間隔再生」節参照）、fade_ms?: fade-in 時間 ms、count?: 選択数K・省略時は全件、gap_min_ms?/gap_max_ms?: ランダム間隔レンジ・省略時のランタイム既定は50-200ms）

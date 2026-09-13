@@ -90,6 +90,53 @@ describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive
   })
 })
 
+describe('parseMarkdown + normalizeDocument: line-scoped bubble style (#698)', () => {
+  it('keeps each bubble style at the WASM boundary and normalizes an omitted directive to null', async () => {
+    const markdown = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[吹き出し: 通常]',
+      '**A**:',
+      '通常',
+      '',
+      '[吹き出し: 静か]',
+      '> 静か',
+      '',
+      '[吹き出し: 叫び]',
+      '**A**:',
+      '叫び',
+      '',
+      '[吹き出し: 内心]',
+      '**A**:',
+      '内心',
+      '',
+      '[吹き出し: ナレーション]',
+      '> ナレーション',
+      '',
+      '**A**:',
+      '従来本文',
+      '',
+    ].join('\n')
+
+    const doc = await parseMarkdown(markdown)
+    const events = doc.chapters[0].scenes[0].events
+    expect(events).toMatchObject([
+      { Dialog: { bubble_style: '通常' } },
+      { Narration: { bubble_style: '静か' } },
+      { Dialog: { bubble_style: '叫び' } },
+      { Dialog: { bubble_style: '内心' } },
+      { Narration: { bubble_style: 'ナレーション' } },
+      { Dialog: { bubble_style: null } },
+    ])
+  })
+})
+
 describe('parseMarkdown + normalizeDocument: character exit fade survives normalize', () => {
   const markdown = [
     '---',

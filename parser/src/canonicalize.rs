@@ -357,6 +357,7 @@ mod tests {
                 text: vec!["待って--".to_string(), "行かないで…".to_string()],
                 voice_path: None,
                 font_family: None,
+                bubble_style: None,
                 fit: false,
                 depth: None,
             },
@@ -364,6 +365,7 @@ mod tests {
                 text: vec!["風が吹いた--".to_string()],
                 voice_path: None,
                 font_family: None,
+                bubble_style: None,
             },
             Event::Condition {
                 flag: "met".to_string(),
@@ -374,6 +376,7 @@ mod tests {
                     text: vec!["また--会えたね".to_string()],
                     voice_path: None,
                     font_family: None,
+                    bubble_style: None,
                     fit: false,
                     depth: None,
                 }],
@@ -415,6 +418,7 @@ mod tests {
             text: vec!["待って--".to_string()],
             voice_path: None,
             font_family: None,
+            bubble_style: None,
             fit: false,
             depth: None,
         }];
