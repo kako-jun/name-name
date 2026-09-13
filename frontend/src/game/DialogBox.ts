@@ -368,6 +368,11 @@ export class DialogBox extends Container {
 
   // --- typewriter ---
   private typewriter: TypewriterState = makeInitialTypewriterState()
+  /**
+   * 本文の可視文字数を購読する。吹き出しのような代替表示はここを唯一の typewriter
+   * 状態源にするため、別のタイピング状態を持たない。折返し改行は含めない。
+   */
+  private visibleCharacterCountListeners = new Set<(count: number) => void>()
   private msPerChar: number
   private indicatorWanted: boolean = false
   private onTypingDone: (() => void) | null = null
@@ -506,7 +511,7 @@ export class DialogBox extends Container {
       if (isTypingActive(this.typewriter)) {
         const next = tickTypewriter(this.typewriter, this.ticker.deltaMS, this.msPerChar)
         if (next.displayedCharCount !== this.typewriter.displayedCharCount) {
-          this.dialogText.text = this.visibleDialogText(next)
+          this.setVisibleDialogText(this.visibleDialogText(next))
           this.updateRubyVisibility(next.displayedCharCount)
         }
         const justFinished = isTypingActive(this.typewriter) && !isTypingActive(next)
@@ -878,7 +883,7 @@ export class DialogBox extends Container {
     const plainText = stripRubyMarkup(text)
     const lines = wordwrap(plainText, maxTextWidth, font)
     this.typewriter = startTypewriter(lines.join('\n'))
-    this.dialogText.text = ''
+    this.setVisibleDialogText('')
     this.indicator.visible = false
     this.rubyPlacements = computeRubyPlacements(runs, lines)
     this.rubyBuildToken += 1
@@ -955,7 +960,7 @@ export class DialogBox extends Container {
     const fromCount = wrappedPrefixLength(fullText, clampedPlainPrefix)
     this.typewriter = startTypewriterFrom(fullText, fromCount)
     // 既出分（fromCount 文字）は即時表示する。残りは ticker がタイプする。
-    this.dialogText.text = this.visibleDialogText(this.typewriter)
+    this.setVisibleDialogText(this.visibleDialogText(this.typewriter))
     this.indicator.visible = false
     // novel 配置用に累積テキストの wrap 結果を保持する (#292)。
     this.novelWrappedLines = lines
@@ -990,7 +995,7 @@ export class DialogBox extends Container {
   clearText(): void {
     this.rubyBuildToken += 1
     this.typewriter = makeInitialTypewriterState()
-    this.dialogText.text = ''
+    this.setVisibleDialogText('')
     this.currentText = ''
     this.onTypingDone = null
     this.novelWrappedLines = []
@@ -1000,7 +1005,7 @@ export class DialogBox extends Container {
   skipTypewriter(): void {
     if (!isTypingActive(this.typewriter)) return
     this.typewriter = typewriterSkip(this.typewriter)
-    this.dialogText.text = this.visibleDialogText(this.typewriter)
+    this.setVisibleDialogText(this.visibleDialogText(this.typewriter))
     this.revealAllRuby()
     this.onTypingDone = null
     // スキップ完了で文末まで一気に出るので、novel ならインジケータを文末へ置き直す (#292)。
@@ -1010,6 +1015,26 @@ export class DialogBox extends Container {
 
   isTyping(): boolean {
     return isTypingActive(this.typewriter)
+  }
+
+  /** 現在 typewriter により可視になっている本文。代替本文レイヤーの同期用。 */
+  getVisibleText(): string {
+    return this.dialogText.text
+  }
+
+  /** 現在表示済みの本文文字数。DialogBox が挿入した折返し改行は数えない。 */
+  getVisibleCharacterCount(): number {
+    return this.dialogText.text.replace(/\n/g, '').length
+  }
+
+  /**
+   * 本文可視文字列の更新を購読する。返値を呼ぶと購読解除する。
+   * DialogBox が typewriter の唯一の所有者であり、購読側は文字列を表示するだけに留める。
+   */
+  onVisibleCharacterCountChange(listener: (count: number) => void): () => void {
+    this.visibleCharacterCountListeners.add(listener)
+    listener(this.getVisibleCharacterCount())
+    return () => this.visibleCharacterCountListeners.delete(listener)
   }
 
   /**
@@ -1176,7 +1201,7 @@ export class DialogBox extends Container {
         fullText,
         wrappedPrefixLength(fullText, visiblePlainLength)
       )
-      this.dialogText.text = this.visibleDialogText(this.typewriter)
+      this.setVisibleDialogText(this.visibleDialogText(this.typewriter))
       this.rubyPlacements = computeRubyPlacements(runs, lines)
       this.rubyBuildToken += 1
       const rubyToken = this.rubyBuildToken
@@ -1186,13 +1211,13 @@ export class DialogBox extends Container {
           this.rebuildRubyEntries(lines, font)
           if (this.msPerChar === 0) {
             this.skipTypewriter()
-            this.dialogText.text = fullText
+            this.setVisibleDialogText(fullText)
             this.revealAllRuby()
           } else if (!isTypingActive(this.typewriter)) {
-            this.dialogText.text = fullText
+            this.setVisibleDialogText(fullText)
             this.revealAllRuby()
           } else {
-            this.dialogText.text = ''
+            this.setVisibleDialogText('')
             this.updateRubyVisibility(0)
           }
         })
@@ -1260,13 +1285,13 @@ export class DialogBox extends Container {
       this.rebuildRubyEntries(lines, font)
       if (this.msPerChar === 0) {
         this.skipTypewriter()
-        this.dialogText.text = fullText
+        this.setVisibleDialogText(fullText)
         this.revealAllRuby()
       } else if (!isTypingActive(this.typewriter)) {
-        this.dialogText.text = fullText
+        this.setVisibleDialogText(fullText)
         this.revealAllRuby()
       } else {
-        this.dialogText.text = ''
+        this.setVisibleDialogText('')
         this.updateRubyVisibility(0)
       }
     }
@@ -1703,6 +1728,12 @@ export class DialogBox extends Container {
     // 本文は verbatim で描く (#356)。ダッシュ・長音符などの glyph 統一はエンジンで行わない
     // （原稿＝単一情報源を描画層が書き換えない）。表記統一が要るなら原稿側で揃える。
     return visibleText(state)
+  }
+
+  private setVisibleDialogText(text: string): void {
+    this.dialogText.text = text
+    const count = text.replace(/\n/g, '').length
+    for (const listener of this.visibleCharacterCountListeners) listener(count)
   }
 
   /**

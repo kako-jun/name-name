@@ -209,6 +209,8 @@ export type Event =
         voice_path?: string | null
         /** per-line フォント上書き (#147)。CSS の font-family 文字列 */
         font_family?: string | null
+        /** `[吹き出し: 種別]` の per-line 本文表示スタイル (#698) */
+        bubble_style?: string | null
         /**
          * 立ち絵の明示フィット指定 (#294)。話者行に `フィット` / `fit` を書くと true。
          * true のときだけ「論理画面より大きい立ち絵を画面内に収める」旧 fit-down を適用する。
@@ -230,6 +232,8 @@ export type Event =
         voice_path?: string | null
         /** per-line フォント上書き (#147) */
         font_family?: string | null
+        /** `[吹き出し: 種別]` の per-line 本文表示スタイル (#698) */
+        bubble_style?: string | null
       }
     }
   | {

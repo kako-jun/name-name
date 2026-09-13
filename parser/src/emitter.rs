@@ -186,6 +186,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 text,
                 voice_path,
                 font_family,
+                bubble_style,
                 fit,
                 depth,
             } => {
@@ -202,6 +203,13 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 // Emit [ボイス: path] before the dialog block
                 if let Some(ref vp) = voice_path {
                     out.push_str(&format!("[ボイス: {vp}]\n"));
+                }
+                // `[吹き出し:]` は「直後の本文」にだけ掛かる。`[ボイス:]` は本文ではなく
+                // 直前のテキストイベントへ注入するディレクティブなので、先に出力する。
+                // 逆順だと parser の「非本文ディレクティブで pending を破棄する」契約により
+                // emit → parse で bubble_style が失われる (#698)。
+                if let Some(ref style) = bubble_style {
+                    out.push_str(&format!("[吹き出し: {style}]\n"));
                 }
 
                 // Check if we need to emit a speaker line
@@ -254,6 +262,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 text,
                 voice_path,
                 font_family,
+                bubble_style,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -263,6 +272,10 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(ref vp) = voice_path {
                     out.push_str(&format!("[ボイス: {vp}]\n"));
+                }
+                // Dialog と同じく、本文直前に置いて pending の対象を固定する。
+                if let Some(ref style) = bubble_style {
+                    out.push_str(&format!("[吹き出し: {style}]\n"));
                 }
                 for line in text {
                     out.push_str(&format!("> {line}\n"));
@@ -1550,6 +1563,7 @@ mod tests {
                         text: vec!["こんにちは。".to_string()],
                         voice_path: None,
                         font_family: None,
+                        bubble_style: None,
                         fit: false,
                         depth: None,
                     }],

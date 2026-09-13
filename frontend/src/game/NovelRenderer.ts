@@ -29,6 +29,8 @@ import {
 } from './CharacterLayer'
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { PropLayer } from './PropLayer'
+import { BubbleLayer, type BubbleStyle } from './BubbleLayer'
+import { resolveTextDisplay } from './bubblePresentation'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
 import { AudioManager } from './AudioManager'
@@ -308,6 +310,8 @@ export class NovelRenderer {
   /** init() 完了済みかのフラグ。React StrictMode 等で init 中に destroy が呼ばれたときの no-op 判定に使う */
   private appInitialized = false
   private dialogBox: DialogBox
+  /** DialogBox の代替として本文を描く、イベント宣言由来の吹き出し (#698)。 */
+  private bubbleLayer: BubbleLayer
   private bgGraphics: Graphics
   private bgContainer: Container
   /** 動画入力レイヤ (#252)。背景の直後・立ち絵の下に配置 */
@@ -842,6 +846,7 @@ export class NovelRenderer {
     )
     // 舞台構造の大道具レイヤー (#692)。背景板と同じ TimeController を共有する。
     this.propLayer = new PropLayer(this.screenWidth, this.screenHeight, this.time)
+    this.bubbleLayer = new BubbleLayer(this.screenWidth, this.screenHeight)
     // イベント絵レイヤー (#351)。立ち絵と同じ TimeController を共有し、動画 export でも
     // フェードが決定論的に進む（this.time が virtual モードなら仮想時刻で駆動される）。
     this.eventImageLayer = new EventImageLayer(this.screenWidth, this.screenHeight, this.time)
@@ -855,6 +860,11 @@ export class NovelRenderer {
       screenHeight: this.screenHeight,
       borderless: this.defaultDialogBorderless,
     })
+    // BubbleLayer は DialogBox の typewriter 状態を複製しない。可視本文文字数だけを購読し、
+    // 自身の幅で折り返した本文へ同じ進捗を適用するため、操作・auto の進行契約は本文と一致する。
+    this.dialogBox.onVisibleCharacterCountChange((count) =>
+      this.bubbleLayer.setVisibleCharacterCount(count)
+    )
     // this.time を共有注入する (#672 フォローアップ)。playSeSequence の gap 待機を
     // NovelRenderer の他タイマーと同じ TimeController 管理下に置き、cancelSeSequence() で
     // シーン遷移・終劇・状態復元・dispose 時にキャンセルできるようにする
@@ -977,6 +987,8 @@ export class NovelRenderer {
 
     // ダイアログボックス
     this.app.stage.addChild(this.dialogBox)
+
+    this.app.stage.addChild(this.bubbleLayer)
 
     // テロップレイヤー (#674)。イベント絵より上・本文の上に重なる（telop_reserve: false 時）位置で、
     // SeekBar・選択肢・終劇オーバーレイよりは下（後続の addChild が z 順で上に来る）。
@@ -1855,6 +1867,9 @@ export class NovelRenderer {
     this.characterLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
     this.dialogBox.clearText()
+    // 吹き出しも DialogBox と同じ一時的な本文表示であり、シーン/イベント列の境界をまたいで
+    // 残してはならない。skipAutoAdvance で次本文の render が保留される経路もここで安全になる。
+    this.bubbleLayer.hide()
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
     this.dialogBox.setBorderless(this.defaultDialogBorderless)
     // novel (#283): setBorderless が borderless を上書きしたので novel 幾何を再適用し、
@@ -5890,13 +5905,19 @@ export class NovelRenderer {
    */
   private render(): void {
     if (!this.initialized) return
-    if (this.eventIndex >= this.resolvedEvents.length) return
+    if (this.eventIndex >= this.resolvedEvents.length) {
+      // 空イベント列・終端へ切り替わった後に、直前の本文吹き出しだけが残るのを防ぐ。
+      this.dialogBox.clearText()
+      this.bubbleLayer.hide()
+      return
+    }
 
     const current = this.resolvedEvents[this.eventIndex]
     const textEvt = getTextEvent(current)
 
     if (!textEvt) {
       this.dialogBox.clearText()
+      this.bubbleLayer.hide()
       return
     }
 
@@ -5968,17 +5989,20 @@ export class NovelRenderer {
     const atEventStart = this.textIndex === 0 && (!novel || novelSentenceIndex === 0)
     let voicePath: string | null = null
     let perLineFontFamily: string | null = null
+    let bubbleStyle: BubbleStyle | null = null
     if (typeof current === 'object' && current !== null) {
       if ('Dialog' in current) {
         if (atEventStart) {
           voicePath = current.Dialog.voice_path ?? null
         }
         perLineFontFamily = current.Dialog.font_family ?? null
+        bubbleStyle = this.resolveBubbleStyle(current.Dialog.bubble_style)
       } else if ('Narration' in current) {
         if (atEventStart) {
           voicePath = current.Narration.voice_path ?? null
         }
         perLineFontFamily = current.Narration.font_family ?? null
+        bubbleStyle = this.resolveBubbleStyle(current.Narration.bubble_style)
       }
     }
 
@@ -6011,6 +6035,7 @@ export class NovelRenderer {
       this.gameDefaultFontFamily,
       NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
     )
+    const resolvedFontSize = this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE
     this.currentResolvedFontFamily = resolvedFontFamily
     // フォント未ロードのままで TextStyle に当てると fallback で bake されるため、
     // 非同期ロードしてから DialogBox に反映する。先に既存フォントで描画しておくと
@@ -6052,6 +6077,36 @@ export class NovelRenderer {
       this.dialogBox.setDialog(name, line, onTypingDone)
     }
 
+    // setDialog が DialogBox を再表示するため、本文を設定してから可視レイヤーを置換する。
+    // Event の bubble_style から毎回導くので snapshot/seek/reload に独立した状態を持たない。
+    const textDisplay = resolveTextDisplay(bubbleStyle, line)
+    this.dialogBox.visible = textDisplay === 'dialogBox'
+    if (textDisplay === 'bubble' && bubbleStyle) {
+      const dialog =
+        typeof current === 'object' && current !== null && 'Dialog' in current
+          ? current.Dialog
+          : null
+      this.bubbleLayer.show({
+        style: bubbleStyle,
+        text: line,
+        visibleCharacterCount: this.dialogBox.getVisibleCharacterCount(),
+        xRatio: dialog
+          ? resolveCharacterXRatio(
+              normalizePosition(dialog.position ?? 'center'),
+              CHARACTER_X_RATIO
+            )
+          : 0.5,
+        depth: dialog?.depth ?? 0,
+        mode: this.cameraMode,
+        orientation: this.cameraOrientation,
+        elevation: this.cameraElevation,
+        fontFamily: resolvedFontFamily,
+        fontSize: resolvedFontSize,
+      })
+    } else {
+      this.bubbleLayer.hide()
+    }
+
     // novel スクリム (#283): セリフが表示されている間だけ半透明黒を敷く。
     // 空ページ（立ち絵だけの空ダイアログ）はテキスト非表示なのでスクリムも出さない。
     const hasVisibleText = line.replace(/[\s\u3000]/g, '') !== ''
@@ -6080,6 +6135,16 @@ export class NovelRenderer {
 
     this.updateCounter()
     this.updateSeekBar()
+  }
+
+  private resolveBubbleStyle(value: string | null | undefined): BubbleStyle | null {
+    return value === '通常' ||
+      value === '静か' ||
+      value === '叫び' ||
+      value === '内心' ||
+      value === 'ナレーション'
+      ? value
+      : null
   }
 
   /**

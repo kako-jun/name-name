@@ -2215,6 +2215,7 @@ mod tests {
             text: text.into_iter().map(|s| s.to_string()).collect(),
             voice_path: None,
             font_family: None,
+            bubble_style: None,
             fit: false,
             depth: None,
         }
@@ -2225,6 +2226,7 @@ mod tests {
             text: text.into_iter().map(|s| s.to_string()).collect(),
             voice_path: None,
             font_family: None,
+            bubble_style: None,
         }
     }
 

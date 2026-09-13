@@ -450,6 +450,9 @@ pub enum Event {
         /// 未指定の場合は Document.font_family（per-game 既定）→ runtime 既定の順でフォールバック。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         font_family: Option<String>,
+        /// 次の本文を吹き出しとして描画する per-line 指定 (#698)。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bubble_style: Option<String>,
         /// 立ち絵の明示フィット指定 (#294)。話者行のオプションに `フィット` / `fit` を書くと true。
         /// `true` のときだけ「論理画面より大きい立ち絵を画面内に収める」旧 fit-down を適用する
         /// （大きい時だけ縮小・小さい時は原寸）。既定（`false`）は原寸（scale=1）で表示する。
@@ -474,6 +477,9 @@ pub enum Event {
         /// per-line フォント上書き (#147)。詳細は Dialog::font_family を参照。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         font_family: Option<String>,
+        /// `[吹き出し: 種別]` で注入される本文表示スタイル (#698)。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bubble_style: Option<String>,
     },
     Background {
         path: String,

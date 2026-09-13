@@ -241,6 +241,8 @@ pub fn parse(input: &str) -> Document {
     // per-line font (#147): [フォント: family] で次の Dialog/Narration に注入する。
     // [フォント解除] で None にクリアされる（base に戻る）。
     let mut pending_font_family: Option<String> = None;
+    // per-line bubble (#698): [吹き出し: 種別] で次の Dialog/Narration に注入する。
+    let mut pending_bubble_style: Option<String> = None;
 
     while pos < len {
         let line = lines[pos];
@@ -258,6 +260,9 @@ pub fn parse(input: &str) -> Document {
             last_position = None;
             last_fit = false;
             last_depth = None;
+            // `[吹き出し:]` は「直後の本文」だけに掛かる。シーンをまたいで前の
+            // 指定が漏れると、台本の離れた台詞が意図せず置換されるため必ず破棄する。
+            pending_bubble_style = None;
             if let Some(colon_pos) = rest.find(':') {
                 let id = rest[..colon_pos].trim().to_string();
                 let title_raw = rest[colon_pos + 1..].trim().to_string();
@@ -289,12 +294,35 @@ pub fn parse(input: &str) -> Document {
             continue;
         }
 
+        // per-line bubble (#698): `[吹き出し: 種別]` は次の Dialog/Narration にだけ注入する。
+        // 無効な種別も「指定」として消費し、先行する有効指定を残さない。これにより
+        // `[吹き出し: 叫び]` → `[吹き出し: 未定義]` → 台詞 が叫びのままになる漏洩を防ぐ。
+        if let Some(content) = trimmed
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .and_then(|s| s.strip_prefix("吹き出し:"))
+        {
+            let style = content.trim();
+            pending_bubble_style =
+                matches!(style, "通常" | "静か" | "叫び" | "内心" | "ナレーション")
+                    .then(|| style.to_string());
+            pos += 1;
+            continue;
+        }
+
+        // 吹き出しの後に本文以外のディレクティブが来たら、直後本文という契約を満たさない。
+        // 各ディレクティブ分岐で個別に消し忘れないよう、括弧ディレクティブの共通入口で破棄する。
+        if trimmed.starts_with('[') {
+            pending_bubble_style = None;
+        }
+
         // 本文の単独 `---` 行 = 手動改頁マーカー (#292 Phase 2)。
         // frontmatter の `---` は先頭ブロックで処理済み（pos がそこを越えてここに来る）なので、
         // ここに到達する単独 `---` は本文中のものだけ＝改頁センチネルとして扱う。
         // `last_character` は維持する（`---` を挟んでも同一話者が続けば継続行として扱い、
         // 話者名は再掲しない＝1 つのセリフを 2 ページに割る意味論）。
         if trimmed == "---" {
+            pending_bubble_style = None;
             current_events.push(Event::PageBreak);
             pos += 1;
             continue;
@@ -730,6 +758,7 @@ pub fn parse(input: &str) -> Document {
                 // pending を破棄する（誤ったイベントへの注入を防ぐ #144 / #147）
                 pending_voice_path = None;
                 pending_font_family = None;
+                pending_bubble_style = None;
                 current_events.push(event);
             }
             pos += 1;
@@ -818,6 +847,8 @@ pub fn parse(input: &str) -> Document {
 
         // Expression change: **トモ** → angry_1:
         if trimmed.starts_with("**") && trimmed.contains('→') {
+            // 表情変更も本文ではない。直後本文だけという吹き出し指定を越境させない。
+            pending_bubble_style = None;
             if let Some(event) = parse_expression_change(trimmed) {
                 if let Event::ExpressionChange {
                     character,
@@ -883,6 +914,7 @@ pub fn parse(input: &str) -> Document {
                 },
                 voice_path: pending_voice_path.take(),
                 font_family: pending_font_family.take(),
+                bubble_style: pending_bubble_style.take(),
                 fit,
                 depth,
             });
@@ -911,6 +943,7 @@ pub fn parse(input: &str) -> Document {
                 text: narration_lines,
                 voice_path: pending_voice_path.take(),
                 font_family: pending_font_family.take(),
+                bubble_style: pending_bubble_style.take(),
             });
             continue;
         }
@@ -947,6 +980,7 @@ pub fn parse(input: &str) -> Document {
                     text: text_lines,
                     voice_path: pending_voice_path.take(),
                     font_family: pending_font_family.take(),
+                    bubble_style: pending_bubble_style.take(),
                     fit: last_fit,
                     depth: last_depth,
                 });
@@ -3269,6 +3303,126 @@ title: "テスト"
                 assert_eq!(text, &vec!["こんにちは。".to_string()]);
             }
             _ => panic!("Expected Dialog event"),
+        }
+    }
+
+    #[test]
+    fn bubble_style_is_injected_into_the_next_text_event_and_round_trips() {
+        let input = "## 1-1: 舞台\n\n[吹き出し: 叫び]\n**漫才師** (右, depth: 4):\nなんでやねん！\n\n[吹き出し: ナレーション]\n> 客席が沸いた。\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert!(
+            matches!(&events[0], Event::Dialog { bubble_style: Some(style), .. } if style == "叫び")
+        );
+        assert!(
+            matches!(&events[1], Event::Narration { bubble_style: Some(style), .. } if style == "ナレーション")
+        );
+        let emitted = crate::emitter::emit(&doc);
+        assert!(emitted.contains("[吹き出し: 叫び]"));
+        assert_eq!(parse(&emitted), doc);
+    }
+
+    #[test]
+    fn bubble_styles_all_round_trip_and_only_attach_to_the_immediately_next_text_event() {
+        let styles = ["通常", "静か", "叫び", "内心", "ナレーション"];
+        for style in styles {
+            let input = format!(
+                "## 1-1: 舞台\n\n[吹き出し: {style}]\n**A** (右):\n台詞\n\n[吹き出し: {style}]\n> 地の文\n"
+            );
+            let doc = parse(&input);
+            let events = &doc.chapters[0].scenes[0].events;
+            assert!(
+                matches!(&events[0], Event::Dialog { bubble_style: Some(actual), .. } if actual == style),
+                "Dialog style {style} was not injected"
+            );
+            assert!(
+                matches!(&events[1], Event::Narration { bubble_style: Some(actual), .. } if actual == style),
+                "Narration style {style} was not injected"
+            );
+            assert_eq!(
+                parse(&crate::emitter::emit(&doc)),
+                doc,
+                "style {style} did not round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn bubble_style_and_voice_path_round_trip_for_dialog_and_narration() {
+        // `[ボイス:]` は非本文ディレクティブなので、emitter はそれを `[吹き出し:]` より
+        // 前に置かなければならない。一般ディレクティブで pending を破棄する契約を緩めず、
+        // 音声付き Dialog / Narration の両方で正規出力を固定する。
+        let input = "## 1-1: 舞台\n\n[ボイス: tsukkomi.ogg]\n[吹き出し: 叫び]\n**漫才師**:\nなんでやねん！\n\n[ボイス: narration.ogg]\n[吹き出し: ナレーション]\n> 客席が沸いた。\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert!(matches!(
+            &events[0],
+            Event::Dialog {
+                voice_path: Some(voice),
+                bubble_style: Some(style),
+                ..
+            } if voice == "tsukkomi.ogg" && style == "叫び"
+        ));
+        assert!(matches!(
+            &events[1],
+            Event::Narration {
+                voice_path: Some(voice),
+                bubble_style: Some(style),
+                ..
+            } if voice == "narration.ogg" && style == "ナレーション"
+        ));
+
+        let emitted = crate::emitter::emit(&doc);
+        assert!(emitted.contains("[ボイス: tsukkomi.ogg]\n[吹き出し: 叫び]"));
+        assert!(emitted.contains("[ボイス: narration.ogg]\n[吹き出し: ナレーション]"));
+        assert_eq!(parse(&emitted), doc);
+    }
+
+    #[test]
+    fn bubble_style_is_cleared_by_invalid_directives_and_scene_boundaries() {
+        let input = "## 1-1: 一幕\n\n[吹き出し: 叫び]\n[吹き出し: 未定義]\n**A**:\n無効指定後\n\n[吹き出し: 静か]\n[背景: bg.png]\n**A**:\n背景後\n\n[吹き出し: 内心]\n## 1-2: 二幕\n\n**B**:\n次場面\n";
+        let doc = parse(input);
+        let first = &doc.chapters[0].scenes[0].events;
+        let second = &doc.chapters[0].scenes[1].events;
+        assert!(matches!(
+            &first[0],
+            Event::Dialog {
+                bubble_style: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &first[2],
+            Event::Dialog {
+                bubble_style: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &second[0],
+            Event::Dialog {
+                bubble_style: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bubble_style_is_cleared_by_all_non_text_boundaries_and_malformed_directives() {
+        let input = "## 1-1: 舞台\n\n[吹き出し: 叫び]\n[吹き出し]\n**A**:\n壊れた指定後\n\n[吹き出し: 静か]\n[吹き出し: ]\n**A**:\n空指定後\n\n[吹き出し: 内心]\n[条件: known]\n> 条件内\n[/条件]\n**A**:\n条件後\n\n[吹き出し: 通常]\n[選択]\n- 選ぶ → next\n[/選択]\n**A**:\n選択後\n\n[吹き出し: ナレーション]\n**A** → angry:\n**A**:\n表情変更後\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        for event in events {
+            if let Event::Dialog {
+                text, bubble_style, ..
+            } = event
+            {
+                assert!(
+                    bubble_style.is_none(),
+                    "non-text boundary leaked into {:?}",
+                    text
+                );
+            }
         }
     }
 
