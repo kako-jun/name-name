@@ -740,7 +740,9 @@ describe('NovelRenderer.render() dialogBox visibility during title screen (#713)
     internals(r).initialized = true
     muteAudio(r)
     r.getTimeController().setMode('virtual')
-    r.setScenes([scene('s713-8', [narration('一行目'), 'WaitDisplayComplete', narration('二行目')])])
+    r.setScenes([
+      scene('s713-8', [narration('一行目'), 'WaitDisplayComplete', narration('二行目')]),
+    ])
     expect(internals(r).dialogBox.visible).toBe(true)
 
     r.showTitleScreen(makeTitleScreenOpts())
