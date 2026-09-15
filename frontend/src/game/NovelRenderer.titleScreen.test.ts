@@ -85,6 +85,12 @@ interface TitleScreenInternals {
   }
   advance: () => void
   saveLoadOverlay: { visible: boolean }
+  // #713 回帰用の追加フィールド。render() は private だが、init() を経由しない
+  // （initialized===false の）既存テストと違い、#713 の回帰テストは実際に render() を
+  // 走らせて dialogBox.visible の再代入を観測する必要があるため initialized も直接叩く。
+  initialized: boolean
+  render: () => void
+  waitingForWait: boolean
 }
 function internals(r: NovelRenderer): TitleScreenInternals {
   return r as unknown as TitleScreenInternals
@@ -613,5 +619,144 @@ describe('NovelRenderer キーボード操作でのChoice確定 E2E (#633 フェ
 
     expect(titleDelegateSpy).toHaveBeenCalledWith('Enter', false)
     expect(choiceDelegateSpy).not.toHaveBeenCalled()
+  })
+})
+
+// #713: render() 内の `this.dialogBox.visible = textDisplay === 'dialogBox'` が
+// titleScreenOverlay.visible を見ずに textDisplay だけで決めていたため、タイトル画面表示中に
+// シナリオの自動進行（render() の再実行）が起きると dialogBox が裏で再表示され、タイトル
+// ボタンの下にシナリオ1行目が透けて見える回帰があった。修正後は
+// `!this.titleScreenOverlay.visible && textDisplay === 'dialogBox'` で titleScreenOverlay
+// ガードを併記する。
+//
+// この describe だけは render() を実際に走らせて dialogBox.visible の再代入を観測する必要が
+// あるため、他の TC25-42/TC-N* と異なり `initialized = true` を明示する（NovelRenderer.novel.test.ts
+// の JSDoc にあるとおり、通常は init() を呼ばないテストは render() が initialized ガードで
+// 描画をスキップする前提で書かれている）。DialogBox/BubbleLayer は実体をそのまま使う
+// （NovelRenderer.bubble.test.ts のようなモック差し替えはしない）— jsdom + Assets.load モックの
+// 組み合わせで実際に render() を通しても例外は出ないことを確認済み。
+//
+// デシジョンテーブル（titleScreenOverlay.visible × textDisplay → dialogBox.visible 期待値）:
+//   #1 false/dialogBox→true(非回帰) #2 false/bubble→false(非回帰)
+//   #3 true/dialogBox→false(本命・#713直接再現) #4 true/bubble→false(旧実装でも偶然falseだったが
+//   bubbleLayer.show() 自体が無条件に呼ばれ続ける別リスクとして #714 で分離済み・スコープ外)
+describe('NovelRenderer.render() dialogBox visibility during title screen (#713)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  /** bubble_style 付きの Narration（#698 吹き出し表示）を作る。 */
+  function narrationBubble(text: string, bubbleStyle: string): Event {
+    return { Narration: { text: [text], bubble_style: bubbleStyle } }
+  }
+
+  it('TC-713-1: titleScreenOverlay 非表示 × 通常本文（bubble_style 未指定）は dialogBox.visible=true になる（表#1、既存動作の非回帰）', () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    muteAudio(r)
+    r.setScenes([scene('s713-1', [narration('通常本文')])])
+
+    expect(internals(r).titleScreenOverlay.visible).toBe(false)
+    expect(internals(r).dialogBox.visible).toBe(true)
+  })
+
+  it('TC-713-2: titleScreenOverlay 非表示 × 吹き出し指定（bubble_style あり）は dialogBox.visible=false になる（表#2、既存動作の非回帰）', () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    muteAudio(r)
+    r.setScenes([scene('s713-2', [narrationBubble('叫び台詞', '叫び')])])
+
+    expect(internals(r).titleScreenOverlay.visible).toBe(false)
+    expect(internals(r).dialogBox.visible).toBe(false)
+  })
+
+  it('TC-713-3(本命): テキスト付きシーン表示中に showTitleScreen() → advance() で render() が再実行されても dialogBox.visible=false のまま（表#3、#713 の直接再現・修正前は失敗する回帰テスト）', () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    muteAudio(r)
+    r.setScenes([scene('s713-3', [narration('一行目', '二行目')])])
+    // baseline: タイトル画面が無ければ通常どおり表示される。
+    expect(internals(r).dialogBox.visible).toBe(true)
+
+    r.showTitleScreen(makeTitleScreenOpts())
+    expect(internals(r).dialogBox.visible).toBe(false)
+
+    // handleAdvance 等の DOM/canvas ガードを経由せず、内部の advance() を直接叩いて
+    // render() を再実行させる（Issue #713 の実際の再現経路＝エントリスクリプトの自動進行）。
+    internals(r).advance()
+
+    expect(internals(r).dialogBox.visible).toBe(false)
+  })
+
+  it('TC-713-4: TC-713-3 の状態から hideTitleScreen() を呼ぶと dialogBox.visible=true に復帰する（状態遷移の対照確認、非回帰）', () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    muteAudio(r)
+    r.setScenes([scene('s713-4', [narration('一行目', '二行目')])])
+    r.showTitleScreen(makeTitleScreenOpts())
+    internals(r).advance()
+    expect(internals(r).dialogBox.visible).toBe(false)
+
+    r.hideTitleScreen()
+
+    expect(internals(r).dialogBox.visible).toBe(true)
+  })
+
+  it('TC-713-6: line が空文字（改頁等）でも、タイトル画面表示中に render() を再実行すると dialogBox.visible=false のまま（表#3 の境界: 空文字でも textDisplay は dialogBox 扱いになるケース）', () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    muteAudio(r)
+    r.setScenes([scene('s713-6', [narration('')])])
+    // baseline: 空文字でも bubble_style が無ければ従来どおり dialogBox 扱いで表示される。
+    expect(internals(r).dialogBox.visible).toBe(true)
+
+    r.showTitleScreen(makeTitleScreenOpts())
+    expect(internals(r).dialogBox.visible).toBe(false)
+
+    // eventIndex/textIndex は動かさず render() だけを再実行させ、line='' のままガードが
+    // 効くことを固定する。
+    internals(r).render()
+
+    expect(internals(r).dialogBox.visible).toBe(false)
+  })
+
+  it('TC-713-7: タイトル画面表示中に render() を複数回連続で呼んでも dialogBox.visible が false のまま安定する（冪等性）', () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    muteAudio(r)
+    r.setScenes([scene('s713-7', [narration('本文')])])
+    r.showTitleScreen(makeTitleScreenOpts())
+    expect(internals(r).dialogBox.visible).toBe(false)
+
+    internals(r).render()
+    internals(r).render()
+    internals(r).render()
+
+    expect(internals(r).dialogBox.visible).toBe(false)
+  })
+
+  it('TC-713-8(最も説得力の高い回帰テスト): [待機: 表示完了] の polling が仮想タイマーで完了し finishWaitAndContinue() 経由で render() が再実行されても、タイトル画面表示中は dialogBox.visible=true に戻らない（Issue本文の実再現シーケンス）', () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    muteAudio(r)
+    r.getTimeController().setMode('virtual')
+    r.setScenes([
+      scene('s713-8', [narration('一行目'), 'WaitDisplayComplete', narration('二行目')]),
+    ])
+    expect(internals(r).dialogBox.visible).toBe(true)
+
+    r.showTitleScreen(makeTitleScreenOpts())
+    expect(internals(r).dialogBox.visible).toBe(false)
+
+    // 一行目 → [待機: 表示完了] directive に到達させる（waitingForWait=true・16ms interval 開始）。
+    internals(r).advance()
+    expect(internals(r).waitingForWait).toBe(true)
+    expect(internals(r).dialogBox.visible).toBe(false)
+
+    // polling 完了 → finishWaitAndContinue() → 二行目の render() が同期的に走る。
+    r.getTimeController().tick(16)
+
+    expect(internals(r).waitingForWait).toBe(false)
+    expect(internals(r).dialogBox.visible).toBe(false)
   })
 })

@@ -6079,8 +6079,12 @@ export class NovelRenderer {
 
     // setDialog が DialogBox を再表示するため、本文を設定してから可視レイヤーを置換する。
     // Event の bubble_style から毎回導くので snapshot/seek/reload に独立した状態を持たない。
+    // タイトル画面表示中 (#713): showTitleScreen() が dialogBox.visible = false にしても、
+    // エントリスクリプトの自動進行が render() を再度呼ぶとここが無条件で true に戻してしまい
+    // タイトルボタンの裏でシナリオ1行目が表示される回帰があった。handleAdvance() 等が使う
+    // titleScreenOverlay.visible ガードをここにも適用する。
     const textDisplay = resolveTextDisplay(bubbleStyle, line)
-    this.dialogBox.visible = textDisplay === 'dialogBox'
+    this.dialogBox.visible = !this.titleScreenOverlay.visible && textDisplay === 'dialogBox'
     if (textDisplay === 'bubble' && bubbleStyle) {
       const dialog =
         typeof current === 'object' && current !== null && 'Dialog' in current
