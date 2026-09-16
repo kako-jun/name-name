@@ -3096,6 +3096,75 @@ fn test_paper_doll_outline_duplicate_color_key_last_wins() {
     );
 }
 
+// ---- #697 幕（舞台演出） ----
+
+/// `[幕: ...]` 1 行だけを含む最小ドキュメントをパースし、最初の Event を取り出すヘルパ (#697)。
+fn parse_single_curtain(directive_line: &str) -> Event {
+    let input = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## s1: 幕テスト\n\n{directive_line}\n"
+    );
+    let doc = parser::parse(&input);
+    doc.chapters[0].scenes[0].events[0].clone()
+}
+
+#[test]
+fn test_curtain_lowers_with_path_only() {
+    let event = parse_single_curtain("[幕: caution.png]");
+    assert_eq!(
+        event,
+        Event::Curtain {
+            path: "caution.png".to_string(),
+            characters_in_front: false,
+        }
+    );
+}
+
+#[test]
+fn test_curtain_characters_in_front_for_curtain_call() {
+    let event = parse_single_curtain("[幕: caution.png, 手前にキャラ]");
+    assert_eq!(
+        event,
+        Event::Curtain {
+            path: "caution.png".to_string(),
+            characters_in_front: true,
+        }
+    );
+}
+
+#[test]
+fn test_curtain_up_parses() {
+    let event = parse_single_curtain("[幕: 上げる]");
+    assert_eq!(event, Event::CurtainUp);
+}
+
+#[test]
+fn test_curtain_roundtrip() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "幕テスト"
+---
+
+## s1: 幕
+
+[幕: caution.png]
+[幕: caution.png, 手前にキャラ]
+[幕: 上げる]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3);
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[幕: caution.png]\n"));
+    assert!(emitted.contains("[幕: caution.png, 手前にキャラ]\n"));
+    assert!(emitted.contains("[幕: 上げる]\n"));
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.chapters[0].scenes[0].events.len(), 3);
+    assert_eq!(events[0], doc2.chapters[0].scenes[0].events[0]);
+    assert_eq!(events[1], doc2.chapters[0].scenes[0].events[1]);
+    assert_eq!(events[2], doc2.chapters[0].scenes[0].events[2]);
+}
+
 // ---- #268 [文字演出] グリフ単位の文字アニメ ----
 
 #[test]

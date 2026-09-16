@@ -1429,6 +1429,28 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&line);
                 prev_was_dialog_or_text = false;
             }
+            Event::Curtain {
+                path,
+                characters_in_front,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!("[幕: {path}");
+                if *characters_in_front {
+                    line.push_str(", 手前にキャラ");
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::CurtainUp => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[幕: 上げる]\n");
+                prev_was_dialog_or_text = false;
+            }
         }
     }
 }

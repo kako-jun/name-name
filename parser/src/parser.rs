@@ -1330,6 +1330,11 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
         return Some(parse_paper_doll_outline_directive(rest));
     }
 
+    // [幕: caution.png] / [幕: caution.png, 手前にキャラ] / [幕: 上げる] (#697)
+    if let Some(rest) = content.strip_prefix("幕:") {
+        return Some(parse_curtain_directive(rest));
+    }
+
     None
 }
 
@@ -2143,6 +2148,34 @@ fn parse_paper_doll_outline_directive(content: &str) -> Event {
         enabled,
         color,
         thickness,
+    }
+}
+
+/// `[幕: caution.png]` / `[幕: caution.png, 手前にキャラ]` / `[幕: 上げる]` を解釈する (#697)。
+///
+/// 第一引数（カンマ区切り最初のトークン）が `"上げる"` のときだけ `Event::CurtainUp`
+/// （`Spotlight`/`SpotlightOff` と同じ「オン系は設定値を持つ、オフ系は専用の空イベント」
+/// パターン）。それ以外は第一引数を画像パスとして `Event::Curtain` を返す（幕を降ろす）。
+/// 第二引数以降に `手前にキャラ` トークンがあれば `characters_in_front: true`
+/// （カーテンコール用、キャラより奥に配置）。
+fn parse_curtain_directive(content: &str) -> Event {
+    let mut parts = content.split(',');
+    let first = parts.next().unwrap_or("").trim();
+    if first == "上げる" {
+        return Event::CurtainUp;
+    }
+
+    let path = first.to_string();
+    let mut characters_in_front = false;
+    for part in parts {
+        if part.trim() == "手前にキャラ" {
+            characters_in_front = true;
+        }
+    }
+
+    Event::Curtain {
+        path,
+        characters_in_front,
     }
 }
 
