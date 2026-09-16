@@ -1478,15 +1478,23 @@ export function computeBoardSlideInOffset(elapsedMs: number, durationMs: number)
  * イージングは `easeIn`（加速、上へ引っ張られて速度が増していく質感）にして昇降の見た目に
  * 差を付ける。
  *
- * 戻り値は screen サイズに依存しない正規化値: `0` = 最終位置（アニメーション開始・幕が
- * まだ見えている、`elapsedMs=0` 時点）〜 `-1`（`elapsedMs >= durationMs` または
- * `durationMs <= 0`、画面上方向に完全に消えた状態）の範囲で単調減少する。呼び出し側
- * （`CurtainLayer`）がこの値に実際の移動距離（px、例: screenHeight）を掛けて
+ * 戻り値は screen サイズに依存しない正規化値: `startOffset`（既定 `0` = 最終位置、
+ * アニメーション開始・幕がまだ見えている、`elapsedMs=0` 時点）〜 `-1`（`elapsedMs >=
+ * durationMs` または `durationMs <= 0`、画面上方向に完全に消えた状態）の範囲で単調減少する。
+ * 呼び出し側（`CurtainLayer`）がこの値に実際の移動距離（px、例: screenHeight）を掛けて
  * `sprite.y = targetY + offset * distancePx` のように使う。
+ *
+ * `startOffset`（既定 `0`）は降下アニメーション未完了の状態（現在オフセットが `0` と `-1` の
+ * 中間）から `raise()` が呼ばれた場合に、その現在位置から連続的に上昇を始めるための引数
+ * （#697 バグ修正）。省略時（`0`）は従来どおり `0 → -1` の挙動と完全に一致する。
  */
-export function computeCurtainRiseOffset(elapsedMs: number, durationMs: number): number {
+export function computeCurtainRiseOffset(
+  elapsedMs: number,
+  durationMs: number,
+  startOffset = 0
+): number {
   const t = easeIn(effectProgress(elapsedMs, durationMs))
-  return -t
+  return startOffset + (-1 - startOffset) * t
 }
 
 /** デバッグ HUD 用に 1 イベントから取り出した種別と本文プレビュー。 */

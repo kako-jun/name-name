@@ -15,7 +15,10 @@
  *
  * 昇降アニメーションは `novelLayout.ts` の `computeBoardSlideInOffset`（降ろす、#683 を流用）/
  * `computeCurtainRiseOffset`（上げる、#697 新設）純粋関数 + `TimeController` 駆動
- * （`BackgroundBoardLayer` と同じ設計パターン）。
+ * （`BackgroundBoardLayer` と同じ設計パターン）。降下未完了の状態で `raise()` が呼ばれても、
+ * その時点の実際の `sprite.y` から現在オフセットを算出して上昇を始めるため、現在位置を無視して
+ * 「完全に降りた位置」へジャンプしてから上昇することはない（#697 バグ修正、`raise()` の
+ * JSDoc も参照）。
  *
  * z-order はこのクラス自身では管理しない。`characters_in_front` に応じた stage 上の位置
  * （`propLayer` の直後 or `backgroundBoardLayer` の直後）は `NovelRenderer` が
@@ -123,6 +126,10 @@ export class CurtainLayer extends Container {
    * 幕が無ければ何もしない。復元経路（goBack/seekTo/セーブ復元/任意局面起動）はこのメソッドを
    * 経由しない——`restore()` が `state=null` を直接 `clear()`（即座に消去、アニメーションなし）
    * へ振り分ける。
+   *
+   * 降下アニメーション未完了（`sprite.y` がまだ `targetY` に達していない）の状態で呼ばれても、
+   * その時点の実際の `sprite.y` から現在オフセットを算出して上昇の開始点に使うため、
+   * 「完全に降りた位置」へ一旦ジャンプしてから上昇を始めることはない（#697 バグ修正）。
    */
   raise(): void {
     this.state = null
@@ -131,7 +138,10 @@ export class CurtainLayer extends Container {
     ++this.generation // 進行中のロードを無効化する
     this.stopInterval()
     this.phaseStartedAtMs = this.time.now()
-    this.startRaise(sprite)
+    // raise() 呼び出し時点の実際の位置を現在オフセット（概ね -1〜0）へ変換し、
+    // updateRaiseFrame がそこから -1 へ連続補間できるようにする。
+    const currentOffset = (sprite.y - this.targetY) / this.screenHeight
+    this.startRaise(sprite, currentOffset)
   }
 
   /** 幕を即座に消去する（`[場面転換]`）。上昇アニメーションは起こさない。 */
@@ -207,18 +217,21 @@ export class CurtainLayer extends Container {
     }
   }
 
-  private startRaise(sprite: Sprite): void {
+  private startRaise(sprite: Sprite, startOffset: number): void {
     const myGeneration = this.generation
-    this.interval = this.time.setInterval(() => this.updateRaiseFrame(sprite, myGeneration), 16)
+    this.interval = this.time.setInterval(
+      () => this.updateRaiseFrame(sprite, myGeneration, startOffset),
+      16
+    )
   }
 
-  private updateRaiseFrame(sprite: Sprite, myGeneration: number): void {
+  private updateRaiseFrame(sprite: Sprite, myGeneration: number, startOffset: number): void {
     if (myGeneration !== this.generation || this.sprite !== sprite) {
       this.stopInterval()
       return
     }
     const elapsed = this.time.now() - this.phaseStartedAtMs
-    const offset = computeCurtainRiseOffset(elapsed, BOARD_SLIDE_IN_MS)
+    const offset = computeCurtainRiseOffset(elapsed, BOARD_SLIDE_IN_MS, startOffset)
     sprite.y = this.targetY + offset * this.screenHeight
     if (elapsed >= BOARD_SLIDE_IN_MS) {
       this.disposeCurrentSprite()
