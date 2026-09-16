@@ -40,6 +40,8 @@ interface CharacterStateLike {
     alpha: number
     x: number
     y: number
+    // getCurrentPosition (#693) の y - height/2 補正観測用。
+    height: number
     parent?: unknown
     // texture.source.scaleMode 観測用（#466 pixel_art）。
     texture?: { source?: { scaleMode?: string } }
@@ -6800,5 +6802,56 @@ describe('CharacterLayer showLabel/showImage 退場フェード予約中の再�
     internal.animTicker?.update()
     expect(st.fadeAnimation).toBeNull()
     expect(st.sprite.alpha).toBe(1)
+  })
+})
+
+describe('CharacterLayer.getCurrentPosition (#693 追うスポットライト用)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('表示中の立ち絵は sprite.x と、アンカー(0.5,1)から高さ半分だけ上に補正した y を返す', async () => {
+    // 実 Sprite.height は texture.orig.height を要する（偽 texture には無いと getter が
+    // throw する、上の (e) テストの doc comment と同じ制約）ため orig も与える。
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 200,
+      height: 400,
+      orig: { width: 200, height: 400 },
+      source: { scaleMode: 'linear' },
+    } as never)
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets')
+    await new Promise((resolve) => setTimeout(resolve, 0)) // texture load 完了 → fit scale 適用後
+
+    const state = asInternals(layer).characters.get('hero')!
+    expect(state.sprite.height).toBeGreaterThan(0) // fit 済みで原寸0のまま止まっていない
+
+    const pos = layer.getCurrentPosition('hero')
+    expect(pos).toEqual({ x: state.sprite.x, y: state.sprite.y - state.sprite.height / 2 })
+    // 中心点は足元(sprite.y)より上にある（体の中心付近への補正が効いている）。
+    expect(pos!.y).toBeLessThan(state.sprite.y)
+  })
+
+  it('show() していないキャラ名は null を返す', () => {
+    const layer = new CharacterLayer(800, 450)
+    expect(layer.getCurrentPosition('nobody')).toBeNull()
+  })
+
+  it('render-only identifier（Title #274）も getCharacterStates のフィルタと無関係に取得できる', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.showTitle('タイトル', 'sans-serif')
+    const state = asInternals(layer).characters.get('Title')!
+
+    const pos = layer.getCurrentPosition('Title')
+    expect(pos).toEqual({ x: state.sprite.x, y: state.sprite.y - state.sprite.height / 2 })
+    // 対比: getCharacterStates は renderOnly を除外するので Title は含まれない（#274 の既存規律）。
+    expect(layer.getCharacterStates().some((c) => c.name === 'Title')).toBe(false)
+  })
+
+  it('退場完了（Map から削除済み）後は null を返す', () => {
+    const layer = new CharacterLayer(800, 450)
+    layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+    layer.remove('hero', { instant: true })
+    expect(layer.getCurrentPosition('hero')).toBeNull()
   })
 })

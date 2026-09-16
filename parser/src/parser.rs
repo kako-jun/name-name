@@ -3521,8 +3521,7 @@ title: "テスト"
             {
                 assert!(
                     bubble_style.is_none(),
-                    "non-text boundary leaked into {:?}",
-                    text
+                    "non-text boundary leaked into {text:?}"
                 );
             }
         }

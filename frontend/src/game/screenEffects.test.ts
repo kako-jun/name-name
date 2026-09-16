@@ -4,6 +4,8 @@ import {
   computeShakeOffset,
   computeFlashAlpha,
   computeFadeAlpha,
+  computeFlashAreaRect,
+  computeStrobeFlashAlpha,
 } from './screenEffects'
 
 describe('effectProgress', () => {
@@ -182,5 +184,121 @@ describe('computeFadeAlpha', () => {
   it('from / to が非有限なら 0 扱い', () => {
     expect(computeFadeAlpha(100, NaN, 0.5, 500).alpha).toBeGreaterThanOrEqual(0)
     expect(computeFadeAlpha(500, 0.5, NaN, 500).alpha).toBe(0)
+  })
+})
+
+describe('computeFlashAreaRect (#693)', () => {
+  it('area が null/undefined なら全画面矩形を返す（既存動作・後方互換）', () => {
+    expect(computeFlashAreaRect(null, 800, 450)).toEqual({ x: 0, y: 0, width: 800, height: 450 })
+    expect(computeFlashAreaRect(undefined, 800, 450)).toEqual({
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 450,
+    })
+  })
+
+  it('範囲内の比率を screenWidth/Height 基準の px 矩形に変換する', () => {
+    const rect = computeFlashAreaRect({ x: 0.2, y: 0.3, w: 0.3, h: 0.4 }, 800, 450)
+    expect(rect).toEqual({ x: 160, y: 135, width: 240, height: 180 })
+  })
+
+  it('境界: 範囲外の値は [0, 1] にクランプしてから px 変換する（x=-0.1→0, w=1.1→1）', () => {
+    const rect = computeFlashAreaRect({ x: -0.1, y: 0, w: 1.1, h: 1 }, 800, 450)
+    expect(rect.x).toBe(0)
+    expect(rect.width).toBe(800)
+  })
+
+  it('非有限値（NaN/Infinity）は 0 にクランプする（parser 側は緩いのでここが最終防御）', () => {
+    const rect = computeFlashAreaRect({ x: NaN, y: Infinity, w: -Infinity, h: 0.5 }, 800, 450)
+    expect(rect.x).toBe(0)
+    expect(rect.y).toBe(0)
+    expect(rect.width).toBe(0)
+    expect(rect.height).toBe(225)
+  })
+})
+
+describe('computeStrobeFlashAlpha (#693)', () => {
+  it('リファレンス等価性: strobeCount<=1 のとき computeFlashAlpha と完全に同じ結果になる（後方互換）', () => {
+    const peak = 0.8
+    const duration = 400
+    for (const elapsed of [0, 50, 100, 200, 399, 400, 500]) {
+      const ref = computeFlashAlpha(elapsed, peak, duration)
+      const got1 = computeStrobeFlashAlpha(elapsed, peak, duration, 1, duration)
+      const got0 = computeStrobeFlashAlpha(elapsed, peak, duration, 0, duration)
+      expect(got1.alpha).toBeCloseTo(ref.alpha, 12)
+      expect(got1.done).toBe(ref.done)
+      expect(got0.alpha).toBeCloseTo(ref.alpha, 12)
+      expect(got0.done).toBe(ref.done)
+    }
+  })
+
+  it('interval 境界(149/150/151ms): 150ms ちょうどで次のパルスが始まりピークへ瞬時に戻る', () => {
+    const peak = 0.8
+    const duration = 400
+    const interval = 150
+    const before = computeStrobeFlashAlpha(149, peak, duration, 2, interval)
+    const atBoundary = computeStrobeFlashAlpha(150, peak, duration, 2, interval)
+    const after = computeStrobeFlashAlpha(151, peak, duration, 2, interval)
+    // 149ms は1回目のパルスの減衰途中（peak未満）。
+    expect(before.alpha).toBeLessThan(peak)
+    expect(before.alpha).toBeCloseTo(computeFlashAlpha(149, peak, duration).alpha, 12)
+    // 150ms は2回目のパルス開始直後 = ピークへ瞬時に戻る。
+    expect(atBoundary.alpha).toBeCloseTo(peak, 12)
+    // 151ms はピークからわずかに減衰し始めるが、まだほぼピーク。
+    expect(after.alpha).toBeLessThan(peak)
+    expect(after.alpha).toBeCloseTo(computeFlashAlpha(1, peak, duration).alpha, 12)
+  })
+
+  it('最終パルス完了境界(399/400/401ms): 最後のパルス開始から duration 経過でちょうど done=true になる', () => {
+    // strobeCount=2, interval=150 → 最後のパルス(index=1)は elapsed=150 で始まる。
+    const peak = 0.8
+    const duration = 400
+    const interval = 150
+    const lastPulseStart = interval // 150
+    const justBefore = computeStrobeFlashAlpha(lastPulseStart + 399, peak, duration, 2, interval)
+    const atBoundary = computeStrobeFlashAlpha(lastPulseStart + 400, peak, duration, 2, interval)
+    const justAfter = computeStrobeFlashAlpha(lastPulseStart + 401, peak, duration, 2, interval)
+    expect(justBefore.done).toBe(false)
+    expect(atBoundary.done).toBe(true)
+    expect(atBoundary.alpha).toBeCloseTo(0, 12)
+    expect(justAfter.done).toBe(true)
+  })
+
+  it('中間パルスが減衰しきって alpha=0 になっても、後続パルスが残っていれば done=false のまま（明滅の谷間）', () => {
+    // interval(500) >= duration(400) なので、1回目のパルスは完全に減衰しきってから
+    // 次のパルス開始(elapsed=500)を待つ谷間が生まれる。elapsed=450 はその谷間。
+    const r = computeStrobeFlashAlpha(450, 0.8, 400, 3, 500)
+    expect(r.alpha).toBeCloseTo(0, 12)
+    expect(r.done).toBe(false)
+  })
+
+  it('strobeCount/intervalMs の非有限値・0以下は安全側にフォールバックする', () => {
+    const peak = 0.8
+    const duration = 300
+    // strobeCount<1 や非有限は 1 扱い（後方互換の単発）。
+    expect(computeStrobeFlashAlpha(0, peak, duration, 0, duration)).toEqual(
+      computeStrobeFlashAlpha(0, peak, duration, 1, duration)
+    )
+    expect(computeStrobeFlashAlpha(0, peak, duration, NaN, duration)).toEqual(
+      computeStrobeFlashAlpha(0, peak, duration, 1, duration)
+    )
+    // intervalMs が 0 以下・非有限なら durationMs にフォールバック。
+    expect(computeStrobeFlashAlpha(0, peak, duration, 2, 0)).toEqual(
+      computeStrobeFlashAlpha(0, peak, duration, 2, duration)
+    )
+    expect(computeStrobeFlashAlpha(0, peak, duration, 2, -5)).toEqual(
+      computeStrobeFlashAlpha(0, peak, duration, 2, duration)
+    )
+    // durationMs も 0 以下なら interval は最終的に 1 にフォールバックする（0除算回避）。
+    expect(() => computeStrobeFlashAlpha(0, peak, 0, 2, 0)).not.toThrow()
+  })
+
+  it('elapsedMs が負値・非有限なら 0 扱い（先頭パルスのピークになる）', () => {
+    const peak = 0.8
+    const duration = 400
+    const zero = computeStrobeFlashAlpha(0, peak, duration, 3, 150)
+    expect(computeStrobeFlashAlpha(-100, peak, duration, 3, 150)).toEqual(zero)
+    expect(computeStrobeFlashAlpha(NaN, peak, duration, 3, 150)).toEqual(zero)
   })
 })
