@@ -494,8 +494,8 @@ interface CharacterState {
    */
   pixelateState?: ImagePixelateTransitionState
   /** ピクセレート遷移用フィルタ。id 毎にステートレスに使い回す（初回のピクセレート遷移まで
-   *  生成を遅延させる）。`sprite.filters` に直接掛ける（CharacterLayer には EventImageLayer の
-   *  `imageGroup` に相当する wrapper container が無いため）。 */
+   *  生成を遅延させる）。紙人形輪郭（#699）との共存のため `sprite.filters` への代入は
+   *  `applySpriteFilters()` に一本化されており、このフィールドへの直接代入だけでは反映されない。 */
   pixelateFilter?: PixelateFilter
   /**
    * `showImage()` のテクスチャロード（Fade 経路の `Assets.load` / ピクセレート経路の
