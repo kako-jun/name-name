@@ -12,7 +12,13 @@
  */
 
 import { CameraElevation, CameraMode, CameraOrientation, FlagValue } from '../types'
-import { BackgroundFade, EventImageState, SpotlightState, VideoState } from './GameState'
+import {
+  BackgroundFade,
+  CurtainState,
+  EventImageState,
+  SpotlightState,
+  VideoState,
+} from './GameState'
 import type { PaperDollOutlineConfig } from './outlineFilter'
 
 const SLOT_COUNT = 3
@@ -72,6 +78,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined/null は消灯扱い。
    */
   spotlight?: SpotlightState | null
+  /**
+   * 幕 (#697)。単一スロットの settled state。
+   * 後方互換: 古いセーブデータには無い → undefined/null は幕なし扱い。
+   */
+  curtain?: CurtainState | null
   /** 暗転状態 */
   isBlackout: boolean
   /**

@@ -17,7 +17,7 @@ import type { EventScene, StageDirection, TelopPosition } from '../types'
 import { MIDLINE_RULE } from './textCanonical'
 import { hasOwn } from './ownProperty'
 import type { CameraProjection } from './cameraProjection'
-import { easeOut } from './easing'
+import { easeIn, easeOut } from './easing'
 import { effectProgress } from './screenEffects'
 
 /** カバーフィット後の背景スプライト寸法と配置（px）。 */
@@ -991,6 +991,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   backgroundBoards = data.backgroundBoards ?? []  // 古いセーブには無い → 板なし (#683)
  *   props          = data.props ?? []        // 古いセーブには無い → 大道具なし (#692)
  *   spotlight      = data.spotlight ?? null  // 古いセーブには無い → 消灯 (#693)
+ *   curtain        = data.curtain ?? null    // 古いセーブには無い → 幕なし (#697)
  *   isBlackout     = data.isBlackout ?? false
  *   characters     = data.characters ?? []
  *   currentBgmPath = data.currentBgmPath ?? null
@@ -1033,6 +1034,8 @@ export function saveSlotToGameState(
     props: data.props ?? [],
     // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
     spotlight: data.spotlight ?? null,
+    // 幕 (#697)。古いセーブには無い → ?? null で幕なしに倒す。
+    curtain: data.curtain ?? null,
     isBlackout: data.isBlackout ?? false,
     // シアターモードの奥行き配置 (#694)。古いセーブの各要素には無い → ?? 0（最前面）に倒す。
     characters: (data.characters ?? []).map((c) => ({ ...c, depth: c.depth ?? 0 })),
@@ -1467,6 +1470,23 @@ export const BOARD_SLIDE_IN_MS = 600
 export function computeBoardSlideInOffset(elapsedMs: number, durationMs: number): number {
   const t = easeOut(effectProgress(elapsedMs, durationMs))
   return -(1 - t)
+}
+
+/**
+ * 幕 (#697) の「上へ消えていく」アニメーションの Y 方向オフセットを、経過時間から求める
+ * 純粋関数。`computeBoardSlideInOffset`（降ろす、#683）と対称の方向（`0` → 負値）だが、
+ * イージングは `easeIn`（加速、上へ引っ張られて速度が増していく質感）にして昇降の見た目に
+ * 差を付ける。
+ *
+ * 戻り値は screen サイズに依存しない正規化値: `0` = 最終位置（アニメーション開始・幕が
+ * まだ見えている、`elapsedMs=0` 時点）〜 `-1`（`elapsedMs >= durationMs` または
+ * `durationMs <= 0`、画面上方向に完全に消えた状態）の範囲で単調減少する。呼び出し側
+ * （`CurtainLayer`）がこの値に実際の移動距離（px、例: screenHeight）を掛けて
+ * `sprite.y = targetY + offset * distancePx` のように使う。
+ */
+export function computeCurtainRiseOffset(elapsedMs: number, durationMs: number): number {
+  const t = easeIn(effectProgress(elapsedMs, durationMs))
+  return -t
 }
 
 /** デバッグ HUD 用に 1 イベントから取り出した種別と本文プレビュー。 */

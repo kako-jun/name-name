@@ -97,6 +97,21 @@ export interface SpotlightState {
 }
 
 /**
+ * 幕の settled state (#697)。`[幕: path]` / `[幕: path, 手前にキャラ]` / `[幕: 上げる]` で
+ * 更新する。`backgroundBoards`/`props` と異なり単一スロット（幕は1枚のみ、加算的な蓄積は
+ * しない）。`null` = 幕なし（既定、`[幕: 上げる]` 後もこの値になる）。
+ *
+ * `charactersInFront` はカーテンコール用の配置フラグ。`true` のとき幕はキャラクター・
+ * スポットライト・大道具より奥（キャラより手前に立てる配置）、既定 `false` は舞台全体を
+ * 覆う通常の閉幕（最前面）。`CurtainLayer` が `NovelRenderer` の `stage.setChildIndex()` で
+ * 2つの z 位置を切り替える。
+ */
+export interface CurtainState {
+  path: string
+  charactersInFront: boolean
+}
+
+/**
  * ノベルゲームの全状態を表すスナップショット
  *
  * advance/goBack/seekTo/save/load の際にこのインターフェースで状態を取り回す。
@@ -147,6 +162,11 @@ export interface NovelGameState {
    * ADR-0002）。`SpotlightState` 参照。
    */
   spotlight: SpotlightState | null
+  /**
+   * 幕 (#697)。`null` = 幕なし（既定）。単一スロットの settled state（save/seek/任意局面起動で
+   * 復元可能）。`Prop`/`BackgroundBoard` と同じく `[場面転換]` でクリアされる（`CurtainState` 参照）。
+   */
+  curtain: CurtainState | null
   isBlackout: boolean
   characters: Array<{ name: string; expression: string; position: string; depth: number }>
   currentBgmPath: string | null

@@ -29,6 +29,7 @@ import {
 } from './CharacterLayer'
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { PropLayer } from './PropLayer'
+import { CurtainLayer } from './CurtainLayer'
 import {
   DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
   DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
@@ -790,6 +791,14 @@ export class NovelRenderer {
    */
   private lightingLayer: LightingLayer
 
+  /**
+   * 幕レイヤー (#697)。`[幕: path]`/`[幕: path, 手前にキャラ]`/`[幕: 上げる]` の単一スロット
+   * settled state（`NovelGameState.curtain`）を管理する。`backgroundBoardLayer`/`propLayer` と
+   * 異なり depth 配置・カメラ射影は持たない。`characters_in_front` に応じて stage 上の
+   * z-order を `setCurtainZOrder()` で切り替える（下記 addChild 順参照）。
+   */
+  private curtainLayer: CurtainLayer
+
   /** 枠なしモードのデフォルト値（per-game 設定）。per-scene の DialogBorderless で上書きされる */
   private defaultDialogBorderless: boolean = false
 
@@ -884,6 +893,8 @@ export class NovelRenderer {
       this.characterLayer,
       this.time
     )
+    // 幕レイヤー (#697)。背景板/大道具と同じ TimeController を共有する。
+    this.curtainLayer = new CurtainLayer(this.screenWidth, this.screenHeight, this.time)
     this.bubbleLayer = new BubbleLayer(this.screenWidth, this.screenHeight)
     // イベント絵レイヤー (#351)。立ち絵と同じ TimeController を共有し、動画 export でも
     // フェードが決定論的に進む（this.time が virtual モードなら仮想時刻で駆動される）。
@@ -998,6 +1009,13 @@ export class NovelRenderer {
     // 舞台構造の大道具レイヤー (#692, #695)。立ち絵の直後に配置してキャラより前面に出す。
     // レイヤー内の depth は大道具どうしの奥行きだけを扱い、背景板・キャラとは独立する。
     this.app.stage.addChild(this.propLayer)
+
+    // 幕レイヤー (#697)。既定位置（characters_in_front: false）は propLayer の直後・
+    // eventImageLayer の手前——舞台全体を覆う通常の閉幕として最前面に配置される。
+    // カーテンコール（characters_in_front: true）時は setCurtainZOrder() が
+    // backgroundBoardLayer の直後・characterLayer の手前へ差し替える
+    // （docs/architecture.md「シアターモード構想」→「レイヤーモデル」節参照）。
+    this.app.stage.addChild(this.curtainLayer)
 
     // イベント絵レイヤー (#351)。z 順はテキストより背面・全背面レイヤー
     // （背景・背景板・動画・立ち絵・大道具）より前面（novelScrim/ダイアログより前）。
@@ -1216,6 +1234,8 @@ export class NovelRenderer {
     this.backgroundBoardLayer.disposeTextures()
     // 大道具レイヤーのテクスチャも同じ理由で解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.disposeTextures()
+    // 幕レイヤーのテクスチャも同じ理由で解放する (#697、backgroundBoardLayer と同じ流儀)。
+    this.curtainLayer.disposeTextures()
     // #662: setEvents() は「エントリ文書の events を(再)供給する」唯一の公開経路
     // （NovelPlayer のマウント effect / events-prop 変化 effect から呼ばれる）。
     // ここでスナップショットしておけば、この後 quickLoad/restoreToScene が rawEvents を
@@ -1875,6 +1895,9 @@ export class NovelRenderer {
       this.backgroundBoardLayer.clear()
       // 大道具 (#692) も背景板と同じ持続規律にする。
       this.propLayer.clear()
+      // 幕 (#697) も背景板・大道具と同じ持続規律にする。z-order も既定位置へ戻す。
+      this.curtainLayer.clear()
+      this.setCurtainZOrder(false)
     }
     if (options?.preserveBackgroundForTransition) {
       this.characterLayer.clearForSceneTransition()
@@ -3008,6 +3031,9 @@ export class NovelRenderer {
     // 大道具レイヤーも破棄・テクスチャ解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.clear()
     this.propLayer.disposeTextures()
+    // 幕レイヤーも破棄・テクスチャ解放する (#697、backgroundBoardLayer と同じ流儀)。
+    this.curtainLayer.clear()
+    this.curtainLayer.disposeTextures()
     // スポットライトレイヤーの ticker を停止する (#693)。グラデーションテクスチャ自体は
     // 専用の disposeTextures() を持たず、この後の app.destroy(true, { children: true }) で解放される。
     this.lightingLayer.clear()
@@ -3277,6 +3303,7 @@ export class NovelRenderer {
       backgroundBoards: this.backgroundBoardLayer.getState(),
       props: this.propLayer.getState(),
       spotlight: this.lightingLayer.getState(),
+      curtain: this.curtainLayer.getState(),
       isBlackout: this.blackoutOverlay.visible,
       characters: this.characterLayer.getCharacterStates(),
       currentBgmPath: this.currentBgmPath,
@@ -3711,6 +3738,12 @@ export class NovelRenderer {
     this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
     this.propLayer.restore(state.props, this.assetBaseUrl)
 
+    // 幕復元 (#697)。backgroundBoardLayer/propLayer と異なりカメラ射影は持たないため
+    // setCamera() は不要。z-order を charactersInFront に合わせてから（既定 false）、
+    // スライド無しで即座に最終位置へ配置する。
+    this.setCurtainZOrder(state.curtain?.charactersInFront ?? false)
+    this.curtainLayer.restore(state.curtain, this.assetBaseUrl)
+
     // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）。
     // novel 役割配置 (#286): protagonist 指定時は復元でも質問役=左 / 回答役=右の x を当てる
     // （token のままだと前進時の配置と食い違うため）。ポーズ nudge は演出なので復元では起こさない。
@@ -3887,8 +3920,8 @@ export class NovelRenderer {
    * 意図参照ではなく、ロード失敗時は覆うものが無いため隠さない可視性専用ロジック。セルフレビュー
    * 指摘: back=Hide のままロードが永久に失敗すると背面が隠れっぱなしになる事故を防ぐ）。
    * `backgroundBoardLayer`（#683）・`videoLayer`（#252）・`propLayer`（#692）・
-   * `lightingLayer`（#693）も背面スタックの一部なので同じトグルに含める（event image の前面に
-   * 追加レイヤーだけ透けて見える事故を防ぐ）。
+   * `lightingLayer`（#693）・`curtainLayer`（#697）も背面スタックの一部なので同じトグルに含める
+   * （event image の前面に追加レイヤーだけ透けて見える事故を防ぐ）。
    */
   private applyEventImageVisibility(): void {
     const hide = this.eventImageLayer.shouldHideBackLayer()
@@ -3899,6 +3932,36 @@ export class NovelRenderer {
     this.characterLayer.visible = !hide
     this.lightingLayer.visible = !hide
     this.propLayer.visible = !hide
+    this.curtainLayer.visible = !hide
+  }
+
+  /**
+   * 幕レイヤーの stage 上の z-order を `characters_in_front` に応じて切り替える (#697)。
+   * このコードベースで動的な z-order 差し替えの前例が無いため、`stage.removeChild()` で
+   * 一旦取り除いてから `stage.addChildAt()` で挿入する（`Container.setChildIndex()` は内部で
+   * 「現在位置から取り除いてから挿入する」ため、移動元と移動先の位置関係によっては index が
+   * 1つズレる——先に明示的に取り除いておけば、この後の `getChildIndex()` は curtainLayer を
+   * 含まない配列に対する値になり、ズレの心配なく `+1` するだけで正しい位置に挿入できる）。
+   *
+   * - `false`（既定）: `propLayer` の直後（最前面、`eventImageLayer` の手前）
+   * - `true`（カーテンコール）: `backgroundBoardLayer` の直後（`characterLayer` の手前）
+   *
+   * `init()` 完了前（PixiJS canvas 未構築。jsdom テストが `setScenes()`/`setEvents()` を
+   * 呼んでいる状態、`NovelRenderer.restoreSnapshot.test.ts` 等）は各レイヤーがまだ
+   * `app.stage` の子ではない——`init()` が全レイヤーを一括で `addChild` するまではこの
+   * メソッドが動かす対象自体が存在しないので、その場合は何もしない（本番経路は必ず
+   * `renderer.init(container).then(() => renderer.setScenes/setEvents(...))` の順で呼ばれる
+   * ため、init() 完了後は常に全レイヤーが揃っている）。
+   */
+  private setCurtainZOrder(charactersInFront: boolean): void {
+    const stage = this.app.stage
+    const referenceLayer = charactersInFront ? this.backgroundBoardLayer : this.propLayer
+    if (referenceLayer.parent !== stage) return
+    if (this.curtainLayer.parent === stage) {
+      stage.removeChild(this.curtainLayer)
+    }
+    const referenceIndex = stage.getChildIndex(referenceLayer)
+    stage.addChildAt(this.curtainLayer, referenceIndex + 1)
   }
 
   private handleAdvance = (): void => {
@@ -4238,6 +4301,10 @@ export class NovelRenderer {
         this.backgroundBoardLayer.clear()
         // 舞台構造の大道具 (#692) も背景板と同じタイミングでクリアする。
         this.propLayer.clear()
+        // 幕 (#697) も背景板・大道具と同じ単一スロット持続規律（[場面転換] でクリア、
+        // 通常のシーン間ジャンプでは持ち越し）。z-order も既定位置へ戻す。
+        this.curtainLayer.clear()
+        this.setCurtainZOrder(false)
         // 追うスポットライト (#693) も同じタイミングで消灯する（resetAndStartEvents と同じ規律）。
         this.lightingLayer.clear()
         // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
@@ -4263,6 +4330,12 @@ export class NovelRenderer {
       if (event === 'SpotlightOff') {
         // スポットライト消灯 (#693)。settled state（fire-and-forget ではない）。
         this.lightingLayer.clear()
+      }
+      if (event === 'CurtainUp') {
+        // 幕を上げる (#697)。settled state は curtainLayer.raise() 内で即座に null になる
+        // （上昇アニメーション自体は演出の中間状態、ADR-0002）。z-order はそのままでよい
+        // （幕が見えなくなるだけなので、次に [幕:] が来たときの setCurtainZOrder で改めて決まる）。
+        this.curtainLayer.raise()
       }
       return
     }
@@ -4453,6 +4526,15 @@ export class NovelRenderer {
       // 反映されると同時に、以後新規に表示されるスプライトにも自動適用される。
       this.characterLayer.setPaperDollOutline(this.paperDollOutline)
       this.propLayer.setPaperDollOutline(this.paperDollOutline)
+      return
+    }
+    if ('Curtain' in event) {
+      // 幕を降ろす (#697)。settled state（fire-and-forget ではない）。z-order を
+      // characters_in_front に合わせてから表示する（curtainLayer.show() 自体は自分の stage 上の
+      // 位置を知らない）。
+      const curtain = event.Curtain
+      this.setCurtainZOrder(curtain.characters_in_front)
+      this.curtainLayer.show(curtain.path, curtain.characters_in_front, this.assetBaseUrl)
       return
     }
     if ('Bgm' in event) {
@@ -5425,6 +5507,7 @@ export class NovelRenderer {
       backgroundBoards: snapshot.backgroundBoards,
       props: snapshot.props,
       spotlight: snapshot.spotlight,
+      curtain: snapshot.curtain,
       isBlackout: snapshot.isBlackout,
       characters: snapshot.characters,
       currentBgmPath: snapshot.currentBgmPath,
@@ -5499,6 +5582,7 @@ export class NovelRenderer {
         backgroundBoards: snapshot.backgroundBoards,
         props: snapshot.props,
         spotlight: snapshot.spotlight,
+        curtain: snapshot.curtain,
         isBlackout: snapshot.isBlackout,
         characters: snapshot.characters,
         currentBgmPath: snapshot.currentBgmPath,
@@ -5927,6 +6011,7 @@ export class NovelRenderer {
       backgroundBoards: [],
       props: [],
       spotlight: null,
+      curtain: null,
       isBlackout: false,
       characters: [],
       currentBgmPath: null,

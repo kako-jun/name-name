@@ -1157,6 +1157,8 @@ describe('saveSlotToGameState', () => {
       props: data.props ?? [],
       // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
       spotlight: data.spotlight ?? null,
+      // 幕 (#697)。古いセーブには無い → ?? null で幕なしに倒す。
+      curtain: data.curtain ?? null,
       isBlackout: data.isBlackout ?? false,
       // シアターモードの奥行き配置 (#694)。古いセーブの各要素には無い → ?? 0（最前面）に倒す。
       characters: (data.characters ?? []).map((c) => ({ ...c, depth: c.depth ?? 0 })),
@@ -1197,6 +1199,7 @@ describe('saveSlotToGameState', () => {
       backgroundBoards: [],
       props: [],
       spotlight: null,
+      curtain: null,
       isBlackout: true,
       characters: [{ name: 'A', expression: 'smile', position: 'center', depth: 0 }],
       currentBgmPath: 'bgm/main.mp3',

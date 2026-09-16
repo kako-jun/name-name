@@ -643,6 +643,18 @@ export type Event =
         thickness?: number
       }
     }
+  | {
+      /** 幕を降ろす (#697)。`[幕: path]` / `[幕: path, 手前にキャラ]`。
+       *  `NovelGameState.curtain` に settled state として保持される（単一スロット、
+       *  Prop/BackgroundBoard のような加算的な蓄積はしない）。
+       *  `characters_in_front: true`（カーテンコール用）は幕をキャラクター・大道具より奥
+       *  （キャラより手前に立てる配置）にする。既定 `false` は舞台全体を覆う通常の閉幕。 */
+      Curtain: {
+        path: string
+        characters_in_front: boolean
+      }
+    }
+  | 'CurtainUp'
 
 export type Easing = 'Linear' | 'EaseIn' | 'EaseOut' | 'EaseInOut' | 'EaseOutBack'
 

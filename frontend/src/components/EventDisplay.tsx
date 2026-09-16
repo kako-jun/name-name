@@ -26,6 +26,9 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     if (event === 'SpotlightOff') {
       return <div className={`text-xs italic ml-2 ${meta}`}>スポットライト消灯</div>
     }
+    if (event === 'CurtainUp') {
+      return <div className={`text-xs italic ml-2 ${meta}`}>幕: 上げる</div>
+    }
     return <div className={`text-sm italic ml-2 ${accent}`}>[場面転換]</div>
   }
 

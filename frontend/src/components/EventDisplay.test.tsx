@@ -319,6 +319,14 @@ describe('EventDisplay', () => {
     expect(container.textContent).not.toContain('場面転換')
   })
 
+  // #697: 幕を上げる。SpotlightOff と同じく文字列 variant なので専用表示を持たせる
+  // （持たせないと SceneTransition のフォールバックに誤って落ちる）。
+  it('renders CurtainUp as a dedicated label, not the SceneTransition fallback (#697)', () => {
+    const { container } = renderEvent('CurtainUp')
+    expect(container.textContent).toContain('幕: 上げる')
+    expect(container.textContent).not.toContain('場面転換')
+  })
+
   it('renders an unknown event variant with a warning instead of returning null', () => {
     // parser が将来 variant を増やしたときに「空表示でユーザーが気付かない」事故を防ぐ。
     // TS の Event 型に未定義の variant も実 JSON では来うる（WASM 出力 vs TS 型のズレ等）ので、
