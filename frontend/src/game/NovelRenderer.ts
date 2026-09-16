@@ -2983,7 +2983,8 @@ export class NovelRenderer {
     // 大道具レイヤーも破棄・テクスチャ解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.clear()
     this.propLayer.disposeTextures()
-    // スポットライトレイヤーの ticker とグラデーションテクスチャも破棄する (#693)。
+    // スポットライトレイヤーの ticker を停止する (#693)。グラデーションテクスチャ自体は
+    // 専用の disposeTextures() を持たず、この後の app.destroy(true, { children: true }) で解放される。
     this.lightingLayer.clear()
     // テロップレイヤーのタイマー・表示中の段を破棄する (#674)。
     this.clearTelopLayer()
