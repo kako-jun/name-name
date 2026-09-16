@@ -1300,6 +1300,27 @@ describe('saveSlotToGameState', () => {
       { path: 'chair.png', depth: 1 },
     ])
   })
+
+  // PDO1: 紙人形風の輪郭 (#699)。paperDollOutline を持たない（旧形式セーブ相当）入力 →
+  // null（通常表示・既定）にフォールバックし例外も投げない（CAM1/CAM3 と同型）。
+  // baseData() はもともと paperDollOutline を持たないため、欠落＝旧セーブと同じ。
+  it('PDO1: paperDollOutline 無しの入力（旧形式セーブ）→ null にフォールバックし例外を投げない', () => {
+    const data = baseData()
+    expect(() => saveSlotToGameState(data, null)).not.toThrow()
+    const state = saveSlotToGameState(data, null)
+    expect(state.paperDollOutline).toBeNull()
+  })
+
+  // PDO2: paperDollOutline 指定ありはそのまま透過する（CAM2/CAM4/PROP1 と同型の
+  // 「値ありは変換せず透過」確認）。
+  it('PDO2: paperDollOutline 指定あり → そのまま透過する', () => {
+    const data: SaveSlotData = {
+      ...baseData(),
+      paperDollOutline: { color: '#abcdef', thickness: 4 },
+    }
+    const state = saveSlotToGameState(data, null)
+    expect(state.paperDollOutline).toEqual({ color: '#abcdef', thickness: 4 })
+  })
 })
 
 // ===== #273: parseColorToNumber 移設の非回帰（novelLayout から直 import）=====

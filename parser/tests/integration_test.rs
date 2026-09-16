@@ -3011,6 +3011,91 @@ title: "効果テスト"
     }
 }
 
+#[test]
+fn test_paper_doll_outline_empty_color_value_is_none() {
+    // color= の値が空文字 → 未指定と同じ扱いで None（空文字を色として保持しない）。
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オン, color=]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: true,
+            color: None,
+            thickness: None,
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_non_numeric_width_is_none() {
+    // width= が数値としてパースできない → None（不正値は無視して既定値フォールバックに委ねる）。
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オン, width=abc]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: true,
+            color: None,
+            thickness: None,
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_width_zero_is_accepted() {
+    // width=0 はパース可能な数値なのでそのまま Some(0.0) として通る（0固有の弾きは無い）。
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オン, width=0]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: true,
+            color: None,
+            thickness: Some(0.0),
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_negative_width_is_accepted() {
+    // width=-1 も同様に負数チェックが無いためそのまま Some(-1.0) として通る
+    // （クランプは runtime 側の責務ではなく、parser はパースできる数値をそのまま透過する）。
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オン, width=-1]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: true,
+            color: None,
+            thickness: Some(-1.0),
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_mixed_en_ja_keys() {
+    // 英語キー(color)と日本語キー(太さ)が同じ行に混在しても、それぞれ独立に解釈される。
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オン, color=#111111, 太さ=4]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: true,
+            color: Some("#111111".to_string()),
+            thickness: Some(4.0),
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_duplicate_color_key_last_wins() {
+    // 同じキーが複数回指定された場合、for ループが後勝ちで上書きする。
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オン, color=#111111, color=#222222]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: true,
+            color: Some("#222222".to_string()),
+            thickness: None,
+        }
+    );
+}
+
 // ---- #268 [文字演出] グリフ単位の文字アニメ ----
 
 #[test]
