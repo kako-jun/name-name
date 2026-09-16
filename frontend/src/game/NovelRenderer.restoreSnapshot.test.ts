@@ -125,6 +125,7 @@ function craftSnapshot(over: Partial<NovelGameState>): NovelGameState {
     cameraMode: 'Novel',
     cameraOrientation: 'Audience',
     cameraElevation: null,
+    paperDollOutline: null,
     storyEnded: false,
     ...over,
   }

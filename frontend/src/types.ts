@@ -630,6 +630,19 @@ export type Event =
         elevation?: CameraElevation | null
       }
     }
+  | {
+      /** 紙人形風の輪郭 (#699)。`[紙人形輪郭: オン]` / `[紙人形輪郭: オフ]`。
+       *  スコープはキャラクター個別ではなくシナリオ（.md）全体: `enabled: true` にした時点
+       *  以降、そのシナリオ内で表示される全てのキャラクター・大道具に輪郭が付く
+       *  （`NovelGameState.paperDollOutline` に settled state として保持される）。
+       *  `color`/`thickness` は `enabled: true` のときだけ意味を持つ。未指定は runtime 側の
+       *  既定値（白 #ffffff・太さ2）にフォールバックする。 */
+      PaperDollOutline: {
+        enabled: boolean
+        color?: string
+        thickness?: number
+      }
+    }
 
 export type Easing = 'Linear' | 'EaseIn' | 'EaseOut' | 'EaseInOut' | 'EaseOutBack'
 

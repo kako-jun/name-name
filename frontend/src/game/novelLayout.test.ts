@@ -1166,6 +1166,8 @@ describe('saveSlotToGameState', () => {
       cameraOrientation: data.cameraOrientation ?? 'Audience',
       // カメラ仰角 (#682)。古いセーブには無い → 水平（既定）にフォールバック。
       cameraElevation: data.cameraElevation ?? null,
+      // 紙人形風の輪郭 (#699)。古いセーブには無い → 通常表示（既定）にフォールバック。
+      paperDollOutline: data.paperDollOutline ?? null,
       // 終劇状態 (#386) は SaveSlotData 未対応。セーブ/ロードは常に「終劇していない」扱い。
       storyEnded: false,
     }
@@ -1201,6 +1203,7 @@ describe('saveSlotToGameState', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      paperDollOutline: null,
       storyEnded: false,
     })
   })

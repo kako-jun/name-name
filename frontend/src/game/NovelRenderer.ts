@@ -29,6 +29,11 @@ import {
 } from './CharacterLayer'
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { PropLayer } from './PropLayer'
+import {
+  DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
+  DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
+  type PaperDollOutlineConfig,
+} from './outlineFilter'
 import { BubbleLayer, type BubbleStyle } from './BubbleLayer'
 import { resolveTextDisplay } from './bubblePresentation'
 import { DialogBox } from './DialogBox'
@@ -753,6 +758,16 @@ export class NovelRenderer {
    * `cameraMode` が 'Novel' のときは意味を持たない。null = 水平（既定）。
    */
   private cameraElevation: CameraElevation | null = null
+
+  /**
+   * 紙人形風の輪郭 (#699)。`isBlackout`/`cameraMode` と同種の宣言的 settled state
+   * （`NovelGameState.paperDollOutline`）だが、スコープはシーン単位ではなくシナリオ
+   * （entryRawEvents）全体: `[紙人形輪郭: オン]` イベント処理で更新した後、`cameraMode` と違い
+   * `resetAndStartEvents` の場面転換（preserveBackgroundForTransition）経路では自動クリア
+   * しない——非 preserve 経路（新しいエントリ文書の開始・`restart()`）でのみリセットする。
+   * `characterLayer`/`propLayer` 両方に同じ設定を伝える。`null` = 通常表示（既定）。
+   */
+  private paperDollOutline: PaperDollOutlineConfig | null = null
 
   /**
    * 舞台構造の背景板レイヤー (#683)。`[背景板: path, depth: N]` の加算的な蓄積を管理する。
@@ -1865,6 +1880,16 @@ export class NovelRenderer {
       this.characterLayer.clearForSceneTransition()
     } else {
       this.characterLayer.clear()
+    }
+    // 紙人形輪郭 (#699) は cameraMode/spotlight と異なり、場面転換
+    // （preserveBackgroundForTransition=true、同シナリオ内のシーン間ジャンプ）では自動クリア
+    // しない——一度オンにしたら、そのシナリオ内で以降表示される全キャラクター/大道具に
+    // 持続させる設計（Issue #699 方針）。新しいエントリ文書の開始（setEvents()）・restart() の
+    // ときだけ通常表示にリセットする（背景板/大道具と同じ非 preserve 条件、上記参照）。
+    if (!options?.preserveBackgroundForTransition) {
+      this.paperDollOutline = null
+      this.characterLayer.setPaperDollOutline(null)
+      this.propLayer.setPaperDollOutline(null)
     }
     // イベント絵レイヤーは新しいイベント列の開始で常にクリアする (#351)。前シーンのイベント絵は
     // 引き継がない（両分岐共通）。back=Hide で隠れていた全背面レイヤー
@@ -3258,6 +3283,7 @@ export class NovelRenderer {
       cameraMode: this.cameraMode,
       cameraOrientation: this.cameraOrientation,
       cameraElevation: this.cameraElevation,
+      paperDollOutline: this.paperDollOutline,
       storyEnded: this.storyEnded,
     }
   }
@@ -3661,6 +3687,13 @@ export class NovelRenderer {
     this.cameraMode = state.cameraMode
     this.cameraOrientation = state.cameraOrientation
     this.cameraElevation = state.cameraElevation
+
+    // 紙人形輪郭復元 (#699)。cameraMode と同種の宣言的 settled state。CharacterLayer/PropLayer
+    // 両方に同じ設定を伝える。以降の characterLayer.show()/propLayer.restore() で新規作成される
+    // スプライトにも自動適用されるため、それらより前に呼ぶ。
+    this.paperDollOutline = state.paperDollOutline
+    this.characterLayer.setPaperDollOutline(this.paperDollOutline)
+    this.propLayer.setPaperDollOutline(this.paperDollOutline)
 
     // 舞台構造の背景板復元 (#683)。characters と同じくスライドインは起こさず、スナップショット
     // 時点の状態を即時表示する（ADR-0002: 演出の中間状態を復元しない）。BackgroundBoardLayer は
@@ -4404,6 +4437,22 @@ export class NovelRenderer {
       this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
       // #694: 立ち絵も背景板・大道具と同じ理由で再配置する。
       this.characterLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
+      return
+    }
+    if ('PaperDollOutline' in event) {
+      // #699: GameState 更新。スコープはキャラクター個別ではなくシナリオ全体
+      // （cameraMode と違い場面転換で自動クリアしない、resetAndStartEvents 参照）。
+      // color/thickness 省略時は runtime 側の既定値（白・太さ2）にフォールバックする。
+      this.paperDollOutline = event.PaperDollOutline.enabled
+        ? {
+            color: event.PaperDollOutline.color ?? DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
+            thickness: event.PaperDollOutline.thickness ?? DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
+          }
+        : null
+      // CharacterLayer/PropLayer 両方に同じ設定を伝える。現在表示中のスプライトへ即座に
+      // 反映されると同時に、以後新規に表示されるスプライトにも自動適用される。
+      this.characterLayer.setPaperDollOutline(this.paperDollOutline)
+      this.propLayer.setPaperDollOutline(this.paperDollOutline)
       return
     }
     if ('Bgm' in event) {
@@ -5382,6 +5431,7 @@ export class NovelRenderer {
       cameraMode: snapshot.cameraMode,
       cameraOrientation: snapshot.cameraOrientation,
       cameraElevation: snapshot.cameraElevation,
+      paperDollOutline: snapshot.paperDollOutline,
       savedAt: new Date().toISOString(),
       sceneName,
     }
@@ -5455,6 +5505,7 @@ export class NovelRenderer {
         cameraMode: snapshot.cameraMode,
         cameraOrientation: snapshot.cameraOrientation,
         cameraElevation: snapshot.cameraElevation,
+        paperDollOutline: snapshot.paperDollOutline,
         savedAt: new Date().toISOString(),
         sceneName,
       }
@@ -5882,6 +5933,7 @@ export class NovelRenderer {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      paperDollOutline: null,
       storyEnded: false,
     }
     this.restoreToScene(scene, state)

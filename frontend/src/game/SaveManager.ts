@@ -13,6 +13,7 @@
 
 import { CameraElevation, CameraMode, CameraOrientation, FlagValue } from '../types'
 import { BackgroundFade, EventImageState, SpotlightState, VideoState } from './GameState'
+import type { PaperDollOutlineConfig } from './outlineFilter'
 
 const SLOT_COUNT = 3
 const STORAGE_PREFIX = 'name-name-save-'
@@ -96,6 +97,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined は null（水平・既定）扱い。
    */
   cameraElevation?: CameraElevation | null
+  /**
+   * 紙人形風の輪郭 (#699)。
+   * 後方互換: 古いセーブデータには無い → undefined/null は通常表示（既定）扱い。
+   */
+  paperDollOutline?: PaperDollOutlineConfig | null
   savedAt: string // ISO 8601
   sceneName: string | null
 }

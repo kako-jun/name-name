@@ -14,6 +14,7 @@ import {
   FlagValue,
 } from '../types'
 import { safeAssign } from './ownProperty'
+import type { PaperDollOutlineConfig } from './outlineFilter'
 
 /**
  * 背景画像の端フェードマスク設定 (#250)。
@@ -167,6 +168,17 @@ export interface NovelGameState {
    * 新しいシーン開始時は null（水平）に戻る（cameraOrientation と同じ規律）。
    */
   cameraElevation: CameraElevation | null
+  /**
+   * 紙人形風の輪郭 (#699)。`[紙人形輪郭: オン]` / `[紙人形輪郭: オフ]` で更新する。
+   * `cameraMode` と同じく宣言的な settled state（save/seek/任意局面起動で復元可能）だが、
+   * スコープはシーン単位ではなく**シナリオ（entryRawEvents）全体**: 一度オンにすると、
+   * そのシナリオ内で以降表示される全てのキャラクター（`CharacterLayer`）・大道具
+   * （`PropLayer`）に輪郭が付く。`cameraMode`/`spotlight` と異なり、場面転換（シーン間
+   * ジャンプ）や `endStory()` では自動クリアしない——別の .md（`setEvents()` でのエントリ
+   * 文書差し替え）や `restart()` では `NovelRenderer.resetAndStartEvents` の non-preserve
+   * 経路がリセットする。`null` = 通常表示（既定）。
+   */
+  paperDollOutline: PaperDollOutlineConfig | null
   /**
    * 終劇状態 (#386)。`?scene=` ディープリンク単独埋め込みの confinement（在圏）外へ
    * choice でジャンプしようとしたときに true になる、宣言的なフラグ。
