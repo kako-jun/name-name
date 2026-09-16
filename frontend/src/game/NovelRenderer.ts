@@ -5446,6 +5446,8 @@ export class NovelRenderer {
         backgroundBrightness: snapshot.backgroundBrightness,
         video: snapshot.video,
         eventImage: snapshot.eventImage,
+        backgroundBoards: snapshot.backgroundBoards,
+        props: snapshot.props,
         spotlight: snapshot.spotlight,
         isBlackout: snapshot.isBlackout,
         characters: snapshot.characters,
