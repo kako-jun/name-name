@@ -188,20 +188,20 @@ describe('CurtainLayer raise()（幕を上げる）', () => {
     expect(layer.getState()).toBeNull()
   })
 
-  // 要検証・バグの可能性あり: 降下アニメ中に raise() が呼ばれた場合の連続性。
+  // 回帰防止テスト: 降下アニメ中に raise() が呼ばれた場合の連続性（#697バグ修正、コミット96137ed）。
   //
-  // 正しい仕様（あるべき挙動）: raise() は「その時点の現在位置」から上昇を始めるべきで、
-  // 一旦「完全に降りた位置」へジャンプしてから上昇を始めてはならない（見た目上のポップ/瞬間移動は
-  // 演出として許容されていない、他の全アニメーションが tween 中断時も現在値から継続する規律
+  // 仕様: raise() は「その時点の現在位置」から上昇を始める。一旦「完全に降りた位置」へ
+  // ジャンプしてから上昇を始めることはない（見た目上のポップ/瞬間移動は演出として許容されない、
+  // 他の全アニメーションが tween 中断時も現在値から継続する規律
   // （BackgroundBoardLayer.test.ts 観点3/21 参照）と一貫させるため）。
   //
-  // 実装 (CurtainLayer.raise() / updateRaiseFrame()) は raise() 時点で phaseStartedAtMs を
-  // this.time.now() にリセットし、computeCurtainRiseOffset(elapsed, ...) を
-  // elapsed=0 から測り直す。computeCurtainRiseOffset(0, duration) は仕様上常に 0 を返す
-  // （= targetY、「幕が完全に降りきった位置」）ため、raise() 開始時点で sprite.y が
-  // targetY 未満（＝まだ降下し切っていない）だった場合、次のフレームで sprite.y は
-  // 「現在位置」ではなく「targetY 付近」へ一旦ジャンプしてから上昇を始めてしまう。
-  it('降下70%地点相当でraise()を呼んでも、次フレームのsprite.yが完全に降りた位置へジャンプせず現在位置から連続的に上昇する（現状バグの疑い）', async () => {
+  // 修正前は CurtainLayer.raise()/updateRaiseFrame() が raise() 時点で phaseStartedAtMs を
+  // this.time.now() にリセットし、computeCurtainRiseOffset(elapsed, ...) を elapsed=0 から
+  // 測り直していたため、computeCurtainRiseOffset(0, duration) が常に返す 0（= targetY、
+  // 「幕が完全に降りきった位置」）へ一旦ジャンプしてから上昇するバグがあった。
+  // raise() 呼び出し時点の実際の sprite.y から startOffset を算出して
+  // computeCurtainRiseOffset(elapsed, duration, startOffset) に渡すよう修正済み。
+  it('降下70%地点相当でraise()を呼んでも、次フレームのsprite.yが完全に降りた位置へジャンプせず現在位置から連続的に上昇する', async () => {
     mockAssetsLoadResolved()
     const time = virtualTime()
     const layer = new CurtainLayer(SCREEN_W, SCREEN_H, time)
