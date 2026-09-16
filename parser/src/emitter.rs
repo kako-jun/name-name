@@ -1405,6 +1405,30 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str("[スポットライト消灯]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::PaperDollOutline {
+                enabled,
+                color,
+                thickness,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // #699: enabled=false のとき color/thickness は無視して素の
+                // `[紙人形輪郭: オフ]` に正規化する（parser 側も enabled=false のときは
+                // color=/width= を解釈しないため、往復で値が失われても非対称にならない）。
+                let mut line = format!("[紙人形輪郭: {}", if *enabled { "オン" } else { "オフ" });
+                if *enabled {
+                    if let Some(c) = color {
+                        line.push_str(&format!(", color={c}"));
+                    }
+                    if let Some(t) = thickness {
+                        line.push_str(&format!(", width={t}"));
+                    }
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
         }
     }
 }

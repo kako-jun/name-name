@@ -1220,6 +1220,28 @@ pub enum Event {
     },
     /// スポットライトを消灯する (#693)。Markdown 構文: `[スポットライト消灯]`。
     SpotlightOff,
+    /// 紙人形風の輪郭 (#699)。`[紙人形輪郭: オン]` / `[紙人形輪郭: オフ]`。
+    ///
+    /// スコープはキャラクター個別ではなく**シナリオ（.md）全体**: `enabled: true` にした時点
+    /// 以降、そのシナリオ内で表示される全てのキャラクター（`CharacterLayer`）・大道具
+    /// （`PropLayer`）に輪郭が付く（話者ごとの指定ではない）。`CameraMode` と同じく
+    /// `NovelGameState.paperDollOutline` に settled state として持たせるが、`CameraMode`/
+    /// `Spotlight` と異なり場面転換（シーン間ジャンプ）や終劇では自動クリアしない
+    /// （runtime 側 `NovelRenderer.resetAndStartEvents` の non-preserve 経路——新しい
+    /// エントリ文書の開始・`restart()`——でのみリセットする）。
+    ///
+    /// `color`/`thickness` は `enabled: true` のときだけ意味を持つ。`None` は runtime 側の
+    /// 既定値（白 `#ffffff`・太さ `2`）にフォールバックする。`enabled: false` のときは
+    /// 両方とも無視され、emitter は `[紙人形輪郭: オフ]` のみを書き戻す（round-trip 安定化）。
+    ///
+    /// Markdown 構文: `[紙人形輪郭: オン, color=#ffffff, width=2]`。
+    PaperDollOutline {
+        enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thickness: Option<f32>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

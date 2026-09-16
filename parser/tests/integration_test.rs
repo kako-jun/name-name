@@ -2882,6 +2882,135 @@ title: "効果テスト"
     }
 }
 
+// ---- #699 紙人形輪郭 ----
+
+/// `[紙人形輪郭: ...]` 1 行だけを含む最小ドキュメントをパースし、最初の Event を取り出すヘルパ (#699)。
+fn parse_single_paper_doll_outline(directive_line: &str) -> Event {
+    let input = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## s1: 紙人形輪郭テスト\n\n{directive_line}\n"
+    );
+    let doc = parser::parse(&input);
+    doc.chapters[0].scenes[0].events[0].clone()
+}
+
+#[test]
+fn test_paper_doll_outline_on_omitted_color_width_are_none() {
+    // オンのみ・color/width 省略 → 両方 None（runtime 側が既定値 #ffffff/2 にフォールバックする）。
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オン]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: true,
+            color: None,
+            thickness: None,
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_off_parses() {
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オフ]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: false,
+            color: None,
+            thickness: None,
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_unknown_first_token_falls_back_to_off() {
+    // dialog_style/Blackout と同じ後方互換パターン: 未知値・空はオフ扱い。
+    let event = parse_single_paper_doll_outline("[紙人形輪郭:]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: false,
+            color: None,
+            thickness: None,
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_on_with_en_keys() {
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オン, color=#000000, width=3]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: true,
+            color: Some("#000000".to_string()),
+            thickness: Some(3.0),
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_on_with_ja_keys() {
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オン, 色=#123456, 太さ=1.5]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: true,
+            color: Some("#123456".to_string()),
+            thickness: Some(1.5),
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_off_ignores_color_and_width() {
+    // オフ指定時は color=/width= が書かれていても無視する（emit も素の [紙人形輪郭: オフ] に正規化する）。
+    let event = parse_single_paper_doll_outline("[紙人形輪郭: オフ, color=#ff0000, width=5]");
+    assert_eq!(
+        event,
+        Event::PaperDollOutline {
+            enabled: false,
+            color: None,
+            thickness: None,
+        }
+    );
+}
+
+#[test]
+fn test_paper_doll_outline_on_off_roundtrip() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: 紙人形輪郭
+
+[紙人形輪郭: オン, color=#000000, width=3]
+[紙人形輪郭: オフ]
+[紙人形輪郭: オン]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3);
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[紙人形輪郭: オン, color=#000000, width=3]\n"));
+    assert!(emitted.contains("[紙人形輪郭: オフ]\n"));
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.chapters[0].scenes[0].events.len(), 3);
+    assert_eq!(events[0], doc2.chapters[0].scenes[0].events[0]);
+    assert_eq!(events[1], doc2.chapters[0].scenes[0].events[1]);
+    assert_eq!(events[2], doc2.chapters[0].scenes[0].events[2]);
+    if let Event::PaperDollOutline {
+        color, thickness, ..
+    } = &events[2]
+    {
+        // 3個目（[紙人形輪郭: オン] のみ）は color/width 省略なので None のまま。
+        assert_eq!(*color, None);
+        assert_eq!(*thickness, None);
+    } else {
+        panic!("Expected PaperDollOutline, got {:?}", events[2]);
+    }
+}
+
 // ---- #268 [文字演出] グリフ単位の文字アニメ ----
 
 #[test]
