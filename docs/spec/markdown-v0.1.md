@@ -506,6 +506,26 @@ TUI版も `[場面転換]` で暗転を解除する。ただしTUI版は背景�
 
 パーサー内部では `Event::Spotlight { target, color, radius }` / `Event::SpotlightOff`（unit variant）で表現される。TUI版（`tui/`）はこれらのイベントを解釈しない（無視される。`BackgroundBoard`/`Prop`/`CameraMode` と同じ理由）。
 
+## 紙人形輪郭（舞台構造） (#699)
+
+```markdown
+[紙人形輪郭: オン]
+[紙人形輪郭: オン, color=#000000, width=3]
+[紙人形輪郭: オフ]
+```
+
+立ち絵・大道具のシルエット輪郭に沿って白枠/黒枠を自動生成し、紙人形（切り絵）風に見せる。`NovelGameState.paperDollOutline` に settled state で保持される（save/seek/任意局面起動で復元可能）。
+
+- 第一引数が `オン`/`オフ`。`オン` 以外（`オフ`・省略・未知値）はすべて `enabled: false` にフォールバックする（`dialog_style`/`Blackout`/`[カメラ:]` と同じ後方互換パターン）。
+- `color`: 輪郭色（16進カラーコード）。`オン` のときだけ意味を持つ。省略時 `#ffffff`。日本語キー `色` も受理する。
+- `width`: 輪郭の太さ。`オン` のときだけ意味を持つ。省略時 `2`。日本語キー `太さ` も受理する。
+- **スコープはキャラクター個別ではなく、そのシナリオ（.md）全体**。一度 `オン` にすると、以降表示される全てのキャラクター・大道具に常時輪郭が付く（話者ごとの指定ではない）。別の .md では輪郭なし（通常表示）のままでよい。
+- `[カメラ:]`/`Event::CameraMode` と異なり、**場面転換（同シナリオ内のシーン間ジャンプ）・終劇では自動クリアしない**。新しいエントリ文書の開始・「はじめから」（`restart()`）のときだけ通常表示にリセットされる。
+- ノベルモード・シアターモードどちらでも機能する（カメラモードと独立した要素）。
+- 対象は立ち絵（`CharacterLayer`）・大道具（`PropLayer`、`Prop`/上記「大道具（舞台構造）」節）の両方。render-only の Title/Label/画像単体（`[タイトル:]`/`[ラベル:]`/`[画像:]`）には付かない。
+
+パーサー内部では `Event::PaperDollOutline { enabled, color, thickness }` の単一バリアントで表現される。emit（再保存）時、`enabled: false` のときは `color`/`thickness` を無視して `[紙人形輪郭: オフ]` の形に正規化する（`[カメラ:]` の orientation/elevation 省略時と同じ非対称 round-trip 対策）。TUI版（`tui/`）はこのイベントを解釈しない（無視される。`Spotlight`/`CameraMode` と同じ理由）。
+
 ## 終劇（intermission.md 専用シーン）(#404)
 
 単独埋め込み（`?scene=` deep-link 等）で在圏（confinement）の外へ choice が漏れそうになると、
