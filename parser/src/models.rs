@@ -1242,6 +1242,27 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thickness: Option<f32>,
     },
+    /// 幕 (#697)。舞台演出の一種として、指定画像でスライドダウン演出しながら幕を降ろす。
+    /// `Spotlight`/`SpotlightOff` と同じ「オン系は設定値を持つ、オフ系は専用の空イベント」
+    /// パターンに倣い、上げる方は [`Event::CurtainUp`] という別 variant にする。
+    ///
+    /// `NovelGameState.curtain`（settled state、save/seek/任意局面起動で復元可能）に持たせる。
+    /// `BackgroundBoard`/`Prop` と同じく `[場面転換]`（`Event::SceneTransition`）でクリアし、
+    /// 専用のクリアディレクティブは持たない。それらと異なり単一スロット（幕は1枚のみ、加算的な
+    /// 蓄積はしない）。
+    ///
+    /// `characters_in_front`（カーテンコール用）: `true` のとき、幕はキャラクター・大道具より
+    /// **奥**（キャラより手前に立てる配置）になる。既定 `false` のときは舞台全体を覆う通常の
+    /// 閉幕として最前面に配置される（`frontend/src/game/CurtainLayer.ts` が
+    /// `stage.setChildIndex()` で2つの z 位置を切り替える）。
+    ///
+    /// Markdown 構文: `[幕: caution.png]` / `[幕: caution.png, 手前にキャラ]`。
+    Curtain {
+        path: String,
+        characters_in_front: bool,
+    },
+    /// 幕を上げる (#697)。Markdown 構文: `[幕: 上げる]`。`SpotlightOff` と同じ専用の空イベント。
+    CurtainUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

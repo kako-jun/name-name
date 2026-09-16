@@ -319,6 +319,24 @@ describe('EventDisplay', () => {
     expect(container.textContent).not.toContain('場面転換')
   })
 
+  // #697: 幕を上げる。SpotlightOff と同じく文字列 variant なので専用表示を持たせる
+  // （持たせないと SceneTransition のフォールバックに誤って落ちる）。
+  it('renders CurtainUp as a dedicated label, not the SceneTransition fallback (#697)', () => {
+    const { container } = renderEvent('CurtainUp')
+    expect(container.textContent).toContain('幕: 上げる')
+    expect(container.textContent).not.toContain('場面転換')
+  })
+
+  // #697: Curtain（object variant）はまだ EventDisplay に専用分岐が無いため、Prop/BackgroundBoard/
+  // PaperDollOutline と同じ「⚠ 未対応イベント」汎用フォールバックに落ちる（CameraMode の #234
+  // 回帰ガードと同じ形）。CurtainUp（文字列 variant）は専用表示を持つのに対し、Curtain（object
+  // variant）は持たない非対称を明示する。専用表示を実装したら、このテストは更新すること。
+  it('renders Curtain (object variant) as the unknown-event fallback, not blank/null (#234-style regression guard, #697)', () => {
+    const event: Event = { Curtain: { path: 'a.png', characters_in_front: true } }
+    const { getByTestId } = renderEvent(event)
+    expect(getByTestId('event-unknown').textContent).toContain('Curtain')
+  })
+
   it('renders an unknown event variant with a warning instead of returning null', () => {
     // parser が将来 variant を増やしたときに「空表示でユーザーが気付かない」事故を防ぐ。
     // TS の Event 型に未定義の variant も実 JSON では来うる（WASM 出力 vs TS 型のズレ等）ので、

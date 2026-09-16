@@ -526,6 +526,26 @@ TUI版も `[場面転換]` で暗転を解除する。ただしTUI版は背景�
 
 パーサー内部では `Event::PaperDollOutline { enabled, color, thickness }` の単一バリアントで表現される。emit（再保存）時、`enabled: false` のときは `color`/`thickness` を無視して `[紙人形輪郭: オフ]` の形に正規化する（`[カメラ:]` の orientation/elevation 省略時と同じ非対称 round-trip 対策）。TUI版（`tui/`）はこのイベントを解釈しない（無視される。`Spotlight`/`CameraMode` と同じ理由）。
 
+## 幕（舞台演出） (#697)
+
+```markdown
+[幕: caution.png]
+[幕: caution.png, 手前にキャラ]
+[幕: 上げる]
+```
+
+演劇/漫才の幕の昇降演出。指定画像でスライドダウンしながら幕を降ろし、幕より手前にキャラクターを立てる配置（カーテンコール等）にも対応する。`NovelGameState.curtain` に単一スロットの settled state で保持される（save/seek/任意局面起動で復元可能）。
+
+- 第一引数が画像への相対パス。第一引数が `上げる` のときだけ幕を上げる（`Event::CurtainUp`。`Spotlight`/`SpotlightOff` と同じ「オン系は設定値を持つ、オフ系は専用の空イベント」パターン）。
+- `手前にキャラ`（第二引数以降、bare トークン）: 指定すると `characters_in_front: true` になる。幕は降りているが、キャラクター・スポットライト・大道具より**奥**（キャラより手前に立てる配置、カーテンコール用）になる。省略時（既定 `false`）は舞台全体を覆う通常の閉幕として最前面に配置される。
+- **単一スロット**（幕は1枚のみ）。`BackgroundBoard`/`Prop` のような加算的な蓄積はしない——新しい `[幕: ...]` は既存の幕を即座に置き換える。
+- 昇降アニメーション（既定 600ms）は背景板の「上から降りてくる」演出（#683）と同じ設計パターン: 降ろす＝上から降りてくる（`novelLayout.computeBoardSlideInOffset`、easeOut）をそのまま流用し、上げる＝上へ消えていく（`novelLayout.computeCurtainRiseOffset`、easeIn。昇降で異なるイージングを使い見た目に差を付ける）。goBack/seekTo/セーブ復元/任意局面起動時の復元はこのアニメーションを起こさず、即座に最終位置へ配置する（ADR-0002: 演出の中間状態を復元しない）。
+- クリアは既存 `[場面転換]`（`Event::SceneTransition`）にまとめる。専用のクリアディレクティブは無く、通常のシーン間ジャンプ（選択肢の `jump:` 等）では持ち越される（`BackgroundBoard`/`Prop` と同じ規律）。
+- 配置は depth 配置・カメラ射影を持たない全画面カバーフィット（`novelLayout.computeCoverFit`、単一スロット背景と同じ配置方式）。`BackgroundBoard`/`Prop` の中心アンカー・カメラ射影込み配置（`computeBoardPlacement`）とは異なる。
+- レイヤー順（z-order）は `characters_in_front` に応じて2値: `false`（既定）は `PropLayer` の直後・`EventImageLayer` の手前（最前面）、`true` は `BackgroundBoardLayer` の直後・`CharacterLayer` の手前。`NovelRenderer` が directive 処理のたびに `stage.setChildIndex()` 相当の操作で位置を差し替える（`docs/architecture.md`「シアターモード構想」→「レイヤーモデル」節参照）。
+
+パーサー内部では `Event::Curtain { path: String, characters_in_front: bool }` / `Event::CurtainUp`（unit variant）で表現される。TUI版（`tui/`）はこれらのイベントを解釈しない（無視される。`Spotlight`/`BackgroundBoard`/`Prop` と同じ理由）。
+
 ## 終劇（intermission.md 専用シーン）(#404)
 
 単独埋め込み（`?scene=` deep-link 等）で在圏（confinement）の外へ choice が漏れそうになると、
