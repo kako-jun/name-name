@@ -3165,6 +3165,82 @@ title: "幕テスト"
     assert_eq!(events[2], doc2.chapters[0].scenes[0].events[2]);
 }
 
+// ---- #697 幕: パーサー側エッジケース ----
+
+/// path が空文字（`[幕: ]`）でもパニックせず、空文字の path として通す
+/// （BackgroundBoardLayer.add() 側の同種テスト「15: path が空文字でも例外を投げず」と対称の
+/// 契約。パーサーは空文字バリデーションを行わず、値をそのまま通す一貫した挙動）。
+#[test]
+fn test_curtain_empty_path_does_not_panic() {
+    let event = parse_single_curtain("[幕: ]");
+    assert_eq!(
+        event,
+        Event::Curtain {
+            path: "".to_string(),
+            characters_in_front: false,
+        }
+    );
+}
+
+/// `手前にキャラ` トークンが重複しても冪等（true のまま、パニックしない）。
+#[test]
+fn test_curtain_duplicate_characters_in_front_token_is_idempotent() {
+    let event = parse_single_curtain("[幕: a.png, 手前にキャラ, 手前にキャラ]");
+    assert_eq!(
+        event,
+        Event::Curtain {
+            path: "a.png".to_string(),
+            characters_in_front: true,
+        }
+    );
+}
+
+/// 未知トークンは無視される（`手前にキャラ` と併記した場合、無視されつつ既知トークンは反映される）。
+#[test]
+fn test_curtain_unknown_token_ignored_alongside_known_token() {
+    let event = parse_single_curtain("[幕: a.png, 手前にキャラ, 謎トークン]");
+    assert_eq!(
+        event,
+        Event::Curtain {
+            path: "a.png".to_string(),
+            characters_in_front: true,
+        }
+    );
+}
+
+/// 未知トークン単体（`手前にキャラ` 無し）は無視され、characters_in_front は既定 false のまま。
+#[test]
+fn test_curtain_unknown_token_alone_ignored() {
+    let event = parse_single_curtain("[幕: a.png, 謎トークン]");
+    assert_eq!(
+        event,
+        Event::Curtain {
+            path: "a.png".to_string(),
+            characters_in_front: false,
+        }
+    );
+}
+
+/// コロン直後にスペースが無くても（`[幕:a.png]`）通常どおりパースできる。
+#[test]
+fn test_curtain_no_space_after_colon() {
+    let event = parse_single_curtain("[幕:a.png]");
+    assert_eq!(
+        event,
+        Event::Curtain {
+            path: "a.png".to_string(),
+            characters_in_front: false,
+        }
+    );
+}
+
+/// コロン直後スペース無し版の `[幕:上げる]` も CurtainUp としてパースできる。
+#[test]
+fn test_curtain_up_no_space_after_colon() {
+    let event = parse_single_curtain("[幕:上げる]");
+    assert_eq!(event, Event::CurtainUp);
+}
+
 // ---- #268 [文字演出] グリフ単位の文字アニメ ----
 
 #[test]

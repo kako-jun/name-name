@@ -57,6 +57,7 @@ import {
   PLAYER_BUTTON_ROW_HEIGHT_PX,
   computeBoardPlacement,
   computeBoardSlideInOffset,
+  computeCurtainRiseOffset,
   resolveCharacterXRatio,
 } from './novelLayout'
 import type { SaveSlotData } from './SaveManager'
@@ -3460,5 +3461,64 @@ describe('computeBoardPlacement (#683)', () => {
     expect(placement.height).toBe(fit.height * scale)
     expect(placement.x).toBe(screenWidth / 2)
     expect(placement.y).toBe(screenHeight / 2 + verticalOffset)
+  })
+})
+
+// ===== #697: 幕（CurtainLayer）の上昇アニメーション純粋関数 =====
+
+describe('computeCurtainRiseOffset (#697)', () => {
+  // durationMs はこの純粋関数の一般的な境界値検証用の任意値（computeBoardSlideInOffset の
+  // テストと同じ流儀）。実際の本番値 BOARD_SLIDE_IN_MS を使った具体的なアニメーション挙動は
+  // CurtainLayer.test.ts 側で検証する。
+
+  // 実装は `-easeIn(t)` で t=0 のとき算術的に -0 を返す（`Object.is` は -0 !== 0 を区別する
+  // ため `toBe(0)` は使えない。computeBoardSlideInOffset の同種テストと同じ流儀で
+  // `Math.abs()` を挟み、符号を問わず数値としての 0 だけを確認する）。
+  it('elapsedMs=0 のとき 0（最終位置＝まだ幕が見えている開始位置）を返す', () => {
+    expect(Math.abs(computeCurtainRiseOffset(0, 1000))).toBe(0)
+  })
+
+  it('elapsedMs が durationMs とちょうど一致するとき -1（画面上方向に完全に消えた位置）を返す', () => {
+    expect(computeCurtainRiseOffset(1000, 1000)).toBe(-1)
+  })
+
+  it('elapsedMs が durationMs を超えても -1 のまま（クランプ、オーバーシュートしない）', () => {
+    expect(computeCurtainRiseOffset(1500, 1000)).toBe(-1)
+  })
+
+  it('durationMs<=0 のとき elapsedMs に関わらず -1 固定（即座に完了扱い）', () => {
+    expect(computeCurtainRiseOffset(0, 0)).toBe(-1)
+    expect(computeCurtainRiseOffset(500, -5)).toBe(-1)
+    expect(computeCurtainRiseOffset(-500, -5)).toBe(-1)
+  })
+
+  it('elapsedMs が負値のとき 0 固定（durationMs は正の通常値）', () => {
+    expect(Math.abs(computeCurtainRiseOffset(-1, 1000))).toBe(0)
+    expect(Math.abs(computeCurtainRiseOffset(-1000, 1000))).toBe(0)
+  })
+
+  it('0〜durationMs の範囲で単調減少する（増加に転じない）', () => {
+    const durationMs = 1000
+    const samples = [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+    const values = samples.map((ms) => computeCurtainRiseOffset(ms, durationMs))
+    for (let i = 1; i < values.length; i++) {
+      expect(values[i]).toBeLessThanOrEqual(values[i - 1])
+    }
+    // 端点も含めて厳密に範囲内([-1, 0])に収まる。
+    for (const v of values) {
+      expect(v).toBeLessThanOrEqual(0)
+      expect(v).toBeGreaterThanOrEqual(-1)
+    }
+  })
+
+  // 観点: computeBoardSlideInOffset（降ろす、-1→0）と computeCurtainRiseOffset（上げる、0→-1）は
+  // 値域・端点が対称であることを直接比較する（doc comment の「対称の方向」という主張の検証）。
+  it('computeBoardSlideInOffset（降ろす）と方向が対称: 開始/終了の符号が入れ替わる', () => {
+    const durationMs = 1000
+    // 降ろす: 開始(-1) → 終了(0)。上げる: 開始(0) → 終了(-1)。互いに始点/終点が入れ替わっている。
+    expect(computeBoardSlideInOffset(0, durationMs)).toBe(-1)
+    expect(Math.abs(computeBoardSlideInOffset(durationMs, durationMs))).toBe(0)
+    expect(Math.abs(computeCurtainRiseOffset(0, durationMs))).toBe(0)
+    expect(computeCurtainRiseOffset(durationMs, durationMs)).toBe(-1)
   })
 })
