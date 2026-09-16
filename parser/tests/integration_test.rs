@@ -2321,11 +2321,18 @@ title: "効果テスト"
         color,
         alpha,
         duration_ms,
+        area,
+        strobe,
+        interval_ms,
     } = &events[0]
     {
         assert_eq!(color, "#ffffff");
         assert!((alpha - 0.8).abs() < 1e-5);
         assert_eq!(*duration_ms, 300);
+        // #693 拡張フィールドの後方互換デフォルト（未指定時）
+        assert_eq!(*area, None);
+        assert_eq!(*strobe, 1);
+        assert_eq!(*interval_ms, None);
     } else {
         panic!("Expected Flash, got {:?}", events[0]);
     }
@@ -2349,6 +2356,7 @@ title: "効果テスト"
         color,
         alpha,
         duration_ms,
+        ..
     } = &events[0]
     {
         assert_eq!(color, "#ff0000");
@@ -2479,6 +2487,399 @@ title: "効果テスト"
     assert_eq!(events[0], doc2.chapters[0].scenes[0].events[0]);
     assert_eq!(events[1], doc2.chapters[0].scenes[0].events[1]);
     assert_eq!(events[2], doc2.chapters[0].scenes[0].events[2]);
+}
+
+// ---- #693 フラッシュ area/strobe/interval 拡張 + 追うスポットライト ----
+
+/// `[フラッシュ: ...]` 1 行だけを含む最小ドキュメントをパースし、最初の Event を取り出すヘルパ (#693)。
+fn parse_single_flash(directive_line: &str) -> Event {
+    let input = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## s1: フラッシュテスト\n\n{directive_line}\n"
+    );
+    let doc = parser::parse(&input);
+    doc.chapters[0].scenes[0].events[0].clone()
+}
+
+/// `[スポットライト: ...]` / `[スポットライト消灯]` 1 行だけを含む最小ドキュメントをパースし、
+/// 最初の Event を取り出すヘルパ (#693)。
+fn parse_single_spotlight(directive_line: &str) -> Event {
+    let input = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## s1: スポットライトテスト\n\n{directive_line}\n"
+    );
+    let doc = parser::parse(&input);
+    doc.chapters[0].scenes[0].events[0].clone()
+}
+
+#[test]
+fn test_flash_area_4_values_parses_as_rect() {
+    // 境界: ちょうど4値 → FlashArea が設定される。
+    let event = parse_single_flash("[フラッシュ: area=0.2,0.3,0.3,0.4]");
+    if let Event::Flash { area, .. } = event {
+        assert_eq!(
+            area,
+            Some(FlashArea {
+                x: 0.2,
+                y: 0.3,
+                w: 0.3,
+                h: 0.4
+            })
+        );
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_area_3_values_is_not_set_boundary_minus_1() {
+    // 境界-1: 3値しか無い → area は設定されない（None のまま）。panic もしない。
+    let event = parse_single_flash("[フラッシュ: area=0.2,0.3,0.3]");
+    if let Event::Flash {
+        area, duration_ms, ..
+    } = event
+    {
+        assert_eq!(area, None);
+        // 消費されなかった残りのbareトークンは無視され、他のデフォルト値は壊れない。
+        assert_eq!(duration_ms, 300);
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_area_5_values_uses_first_4_and_drops_extra_boundary_plus_1() {
+    // 境界+1: 5値 → 先頭4値だけを使い、5個目の余剰トークンは黙って捨てられる。
+    let event = parse_single_flash("[フラッシュ: area=0.1,0.2,0.3,0.4,0.5]");
+    if let Event::Flash { area, .. } = event {
+        assert_eq!(
+            area,
+            Some(FlashArea {
+                x: 0.1,
+                y: 0.2,
+                w: 0.3,
+                h: 0.4
+            })
+        );
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_area_token_scan_stops_before_next_kv_pair() {
+    // area= の bare トークン走査が `=` を含む次の kv ペア(strobe=3)を飲み込まず、
+    // area は4値ちょうどで確定し、strobe は別途正しくパースされることを縛る
+    // （このIssueの核心ロジック: 単純な split(',') では壊れる箇所）。
+    let event = parse_single_flash("[フラッシュ: area=0.1,0.2,0.3,0.4, strobe=3]");
+    if let Event::Flash { area, strobe, .. } = event {
+        assert_eq!(
+            area,
+            Some(FlashArea {
+                x: 0.1,
+                y: 0.2,
+                w: 0.3,
+                h: 0.4
+            })
+        );
+        assert_eq!(strobe, 3);
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_area_ja_key_alias() {
+    // 日本語キー「エリア」でも area と同じく解釈される。
+    let event = parse_single_flash("[フラッシュ: エリア=0.05,0.1,0.2,0.25]");
+    if let Event::Flash { area, .. } = event {
+        assert_eq!(
+            area,
+            Some(FlashArea {
+                x: 0.05,
+                y: 0.1,
+                w: 0.2,
+                h: 0.25
+            })
+        );
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_area_non_numeric_values_not_set() {
+    // 4値そろっていても数値変換に失敗すれば area は設定されない（panic もしない）。
+    let event = parse_single_flash("[フラッシュ: area=a,b,c,d]");
+    if let Event::Flash { area, strobe, .. } = event {
+        assert_eq!(area, None);
+        assert_eq!(strobe, 1); // 他のフィールドは既定値のまま壊れない
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_area_negative_and_out_of_range_values_pass_through_unclamped() {
+    // parser 側は area の値域チェックをしない（クランプはフロント側 computeFlashAreaRect の
+    // 責務、models.rs のドキュメントコメント参照）。範囲外・負値もそのまま保持される。
+    let event = parse_single_flash("[フラッシュ: area=-0.5,0,1.5,2]");
+    if let Event::Flash { area, .. } = event {
+        assert_eq!(
+            area,
+            Some(FlashArea {
+                x: -0.5,
+                y: 0.0,
+                w: 1.5,
+                h: 2.0
+            })
+        );
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_strobe_zero_clamps_to_one_boundary_minus_1() {
+    // 境界-1: strobe=0 は `.max(1)` により 1 にクランプされる。
+    let event = parse_single_flash("[フラッシュ: strobe=0]");
+    if let Event::Flash { strobe, .. } = event {
+        assert_eq!(strobe, 1);
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_strobe_one_stays_one_boundary_ja_alias() {
+    // 境界: strobe=1（日本語キー「ストロボ」でも同じ）はクランプの影響を受けずそのまま1。
+    let event = parse_single_flash("[フラッシュ: ストロボ=1]");
+    if let Event::Flash { strobe, .. } = event {
+        assert_eq!(strobe, 1);
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_strobe_two_stays_two_boundary_plus_1() {
+    // 境界+1: strobe=2 はクランプされず2のまま
+    // （`.max(1)` を `.min(1)` 等と取り違えていないかを検出する）。
+    let event = parse_single_flash("[フラッシュ: strobe=2]");
+    if let Event::Flash { strobe, .. } = event {
+        assert_eq!(strobe, 2);
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_interval_explicit_value_and_ja_alias() {
+    let event = parse_single_flash("[フラッシュ: interval=150]");
+    if let Event::Flash { interval_ms, .. } = event {
+        assert_eq!(interval_ms, Some(150));
+    } else {
+        panic!("Expected Flash, got {event:?}");
+    }
+
+    let event_ja = parse_single_flash("[フラッシュ: 間隔=200]");
+    if let Event::Flash { interval_ms, .. } = event_ja {
+        assert_eq!(interval_ms, Some(200));
+    } else {
+        panic!("Expected Flash, got {event_ja:?}");
+    }
+}
+
+#[test]
+fn test_spotlight_off_parses() {
+    let event = parse_single_spotlight("[スポットライト消灯]");
+    assert_eq!(event, Event::SpotlightOff);
+}
+
+#[test]
+fn test_spotlight_all_omitted_uses_defaults() {
+    // 全キー省略時: target=None（画面中央固定）、白、既定半径 0.2。
+    let event = parse_single_spotlight("[スポットライト:]");
+    if let Event::Spotlight {
+        target,
+        color,
+        radius,
+    } = event
+    {
+        assert_eq!(target, None);
+        assert_eq!(color, "#ffffff");
+        assert!((radius - 0.2).abs() < 1e-6);
+    } else {
+        panic!("Expected Spotlight, got {event:?}");
+    }
+}
+
+#[test]
+fn test_spotlight_en_keys() {
+    let event = parse_single_spotlight("[スポットライト: target=Alice, color=#00ff00, radius=0.5]");
+    if let Event::Spotlight {
+        target,
+        color,
+        radius,
+    } = event
+    {
+        assert_eq!(target, Some("Alice".to_string()));
+        assert_eq!(color, "#00ff00");
+        assert!((radius - 0.5).abs() < 1e-6);
+    } else {
+        panic!("Expected Spotlight, got {event:?}");
+    }
+}
+
+#[test]
+fn test_spotlight_ja_keys() {
+    let event = parse_single_spotlight("[スポットライト: 対象=カコ, 色=#ff0000, 半径=0.3]");
+    if let Event::Spotlight {
+        target,
+        color,
+        radius,
+    } = event
+    {
+        assert_eq!(target, Some("カコ".to_string()));
+        assert_eq!(color, "#ff0000");
+        assert!((radius - 0.3).abs() < 1e-6);
+    } else {
+        panic!("Expected Spotlight, got {event:?}");
+    }
+}
+
+#[test]
+fn test_spotlight_empty_target_value_is_not_set() {
+    // 対象= の値が空文字の場合は target を設定しない（None のまま、フロント側は画面中央）。
+    let event = parse_single_spotlight("[スポットライト: 対象=, color=#ffffff]");
+    if let Event::Spotlight { target, .. } = event {
+        assert_eq!(target, None);
+    } else {
+        panic!("Expected Spotlight, got {event:?}");
+    }
+}
+
+#[test]
+fn test_spotlight_radius_non_numeric_falls_back_to_default() {
+    let event = parse_single_spotlight("[スポットライト: radius=abc]");
+    if let Event::Spotlight { radius, .. } = event {
+        assert!((radius - 0.2).abs() < 1e-6);
+    } else {
+        panic!("Expected Spotlight, got {event:?}");
+    }
+}
+
+#[test]
+fn test_spotlight_unknown_key_ignored_others_still_parsed() {
+    let event = parse_single_spotlight("[スポットライト: foo=bar, color=#123456]");
+    if let Event::Spotlight {
+        target,
+        color,
+        radius,
+    } = event
+    {
+        assert_eq!(target, None);
+        assert_eq!(color, "#123456");
+        assert!((radius - 0.2).abs() < 1e-6);
+    } else {
+        panic!("Expected Spotlight, got {event:?}");
+    }
+}
+
+#[test]
+fn test_flash_area_strobe_interval_roundtrip() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: フラッシュ拡張
+
+[フラッシュ: color=#ffffff, alpha=1.0, duration=200, area=0.1,0.2,0.3,0.4, strobe=3, interval=150]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    let emitted = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(events[0], doc2.chapters[0].scenes[0].events[0]);
+    if let Event::Flash {
+        area,
+        strobe,
+        interval_ms,
+        ..
+    } = &events[0]
+    {
+        assert_eq!(
+            *area,
+            Some(FlashArea {
+                x: 0.1,
+                y: 0.2,
+                w: 0.3,
+                h: 0.4
+            })
+        );
+        assert_eq!(*strobe, 3);
+        assert_eq!(*interval_ms, Some(150));
+    } else {
+        panic!("Expected Flash, got {:?}", events[0]);
+    }
+}
+
+#[test]
+fn test_flash_default_extension_fields_omitted_in_emit() {
+    // 後方互換: area/strobe/interval が既定値のときは emit 結果に一切出さない
+    // （既存スクリプトの emit 結果を変えない、emitter.rs のコメント参照）。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## s1: フラッシュ\n\n[フラッシュ: color=#ffffff, alpha=0.8, duration=300]\n";
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("area="),
+        "emit結果にareaが出てはいけない: {emitted}"
+    );
+    assert!(
+        !emitted.contains("strobe="),
+        "emit結果にstrobeが出てはいけない: {emitted}"
+    );
+    assert!(
+        !emitted.contains("interval="),
+        "emit結果にintervalが出てはいけない: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(
+        doc.chapters[0].scenes[0].events[0],
+        doc2.chapters[0].scenes[0].events[0]
+    );
+}
+
+#[test]
+fn test_spotlight_and_spotlight_off_roundtrip() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "効果テスト"
+---
+
+## s1: スポットライト
+
+[スポットライト: 対象=カコ, color=#ff0000, radius=0.3]
+[スポットライト消灯]
+[スポットライト: color=#00ff00, radius=0.6]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(events.len(), 3);
+    let emitted = emitter::emit(&doc);
+    // target 省略時（3個目）は emit 結果にも「対象=」が出ない（後方互換の対称形）。
+    assert!(emitted.contains("[スポットライト消灯]\n"));
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.chapters[0].scenes[0].events.len(), 3);
+    assert_eq!(events[0], doc2.chapters[0].scenes[0].events[0]);
+    assert_eq!(events[1], doc2.chapters[0].scenes[0].events[1]);
+    assert_eq!(events[2], doc2.chapters[0].scenes[0].events[2]);
+    if let Event::Spotlight { target, .. } = &events[2] {
+        assert_eq!(*target, None);
+    } else {
+        panic!("Expected Spotlight, got {:?}", events[2]);
+    }
 }
 
 // ---- #268 [文字演出] グリフ単位の文字アニメ ----

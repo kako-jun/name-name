@@ -1315,6 +1315,16 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
         return parse_fade_directive(rest);
     }
 
+    // [スポットライト消灯] (#693)
+    if content == "スポットライト消灯" {
+        return Some(Event::SpotlightOff);
+    }
+
+    // [スポットライト: 対象=名前, color=#ffffff, radius=0.2] (#693)
+    if let Some(rest) = content.strip_prefix("スポットライト:") {
+        return Some(parse_spotlight_directive(rest));
+    }
+
     None
 }
 
@@ -1961,10 +1971,101 @@ fn parse_shake_directive(content: &str) -> Option<Event> {
     })
 }
 
+/// `[フラッシュ: color=..., alpha=..., duration=..., area=x,y,w,h, strobe=N, interval=ms]` を
+/// 解釈する (#693 でエリア限定・ストロボ拡張)。
+///
+/// `area=x,y,w,h` はカンマ区切り4値のため、既存の「`content.split(',')` で単純に kv ペアへ
+/// 分解する」やり方（`SE` の候補パス列挙等と同じ発想の逆）では壊れる。トークン列を index で
+/// 走査し、`area=` を見つけたら続く `=` を含まない bare トークンを（4つ揃うまで）追加で
+/// 消費する方式にする。4つ揃わない・数値変換に失敗した場合は `area` を設定せず、消費されな
+/// かった残りのトークンは通常どおり1つずつ処理される（`=` を含まないので黙って無視される、
+/// 既存の不正トークン耐性と同じ）。
 fn parse_flash_directive(content: &str) -> Option<Event> {
     let mut color = "#ffffff".to_string();
     let mut alpha: f32 = 0.8;
     let mut duration_ms: u32 = 300;
+    let mut area: Option<FlashArea> = None;
+    let mut strobe: u32 = 1;
+    let mut interval_ms: Option<u32> = None;
+
+    let tokens: Vec<&str> = content.split(',').collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        let pair = tokens[i].trim();
+        if pair.is_empty() {
+            i += 1;
+            continue;
+        }
+        if let Some((k, v)) = pair.split_once('=') {
+            let v = v.trim();
+            match k.trim() {
+                "color" | "色" => color = v.to_string(),
+                "alpha" | "不透明度" => {
+                    if let Ok(n) = v.parse() {
+                        alpha = n;
+                    }
+                }
+                "duration" | "時間" => {
+                    if let Ok(n) = v.parse() {
+                        duration_ms = n;
+                    }
+                }
+                "area" | "エリア" => {
+                    let mut parts = vec![v.to_string()];
+                    let mut j = i + 1;
+                    while parts.len() < 4 && j < tokens.len() {
+                        let next = tokens[j].trim();
+                        if next.is_empty() || next.contains('=') {
+                            break;
+                        }
+                        parts.push(next.to_string());
+                        j += 1;
+                    }
+                    if parts.len() == 4 {
+                        if let (Ok(x), Ok(y), Ok(w), Ok(h)) = (
+                            parts[0].parse::<f32>(),
+                            parts[1].parse::<f32>(),
+                            parts[2].parse::<f32>(),
+                            parts[3].parse::<f32>(),
+                        ) {
+                            area = Some(FlashArea { x, y, w, h });
+                            // 消費した bare トークン分だけ余分に読み進める（末尾の i += 1 と合わせて j へ）。
+                            i = j - 1;
+                        }
+                    }
+                }
+                "strobe" | "ストロボ" => {
+                    if let Ok(n) = v.parse::<u32>() {
+                        strobe = n.max(1);
+                    }
+                }
+                "interval" | "間隔" => {
+                    if let Ok(n) = v.parse::<u32>() {
+                        interval_ms = Some(n);
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+
+    Some(Event::Flash {
+        color,
+        alpha,
+        duration_ms,
+        area,
+        strobe,
+        interval_ms,
+    })
+}
+
+/// `[スポットライト: 対象=名前, color=#ffffff, radius=0.2]` を解釈する (#693)。
+/// 全キー省略可能（`[スポットライト:]` は画面中央に白・既定半径で点灯、フロント側の解釈）。
+fn parse_spotlight_directive(content: &str) -> Event {
+    let mut target: Option<String> = None;
+    let mut color = "#ffffff".to_string();
+    let mut radius: f32 = 0.2;
 
     for raw_pair in content.split(',') {
         let pair = raw_pair.trim();
@@ -1972,16 +2073,17 @@ fn parse_flash_directive(content: &str) -> Option<Event> {
             continue;
         }
         if let Some((k, v)) = pair.split_once('=') {
+            let v = v.trim();
             match k.trim() {
-                "color" | "色" => color = v.trim().to_string(),
-                "alpha" | "不透明度" => {
-                    if let Ok(v) = v.trim().parse() {
-                        alpha = v;
+                "target" | "対象" => {
+                    if !v.is_empty() {
+                        target = Some(v.to_string());
                     }
                 }
-                "duration" | "時間" => {
-                    if let Ok(v) = v.trim().parse() {
-                        duration_ms = v;
+                "color" | "色" => color = v.to_string(),
+                "radius" | "半径" => {
+                    if let Ok(n) = v.parse() {
+                        radius = n;
                     }
                 }
                 _ => {}
@@ -1989,11 +2091,11 @@ fn parse_flash_directive(content: &str) -> Option<Event> {
         }
     }
 
-    Some(Event::Flash {
+    Event::Spotlight {
+        target,
         color,
-        alpha,
-        duration_ms,
-    })
+        radius,
+    }
 }
 
 fn parse_fade_directive(content: &str) -> Option<Event> {
@@ -3419,8 +3521,7 @@ title: "テスト"
             {
                 assert!(
                     bubble_style.is_none(),
-                    "non-text boundary leaked into {:?}",
-                    text
+                    "non-text boundary leaked into {text:?}"
                 );
             }
         }

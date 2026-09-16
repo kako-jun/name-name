@@ -254,7 +254,8 @@ describe('EventDisplay', () => {
       renderEvent({ Shake: { intensity_px: 10, duration_ms: 500 } }).container.textContent
     ).toContain('10px')
     expect(
-      renderEvent({ Flash: { color: '#fff', alpha: 0.8, duration_ms: 300 } }).container.textContent
+      renderEvent({ Flash: { color: '#fff', alpha: 0.8, duration_ms: 300, strobe: 1 } }).container
+        .textContent
     ).toContain('α=0.8')
     expect(
       renderEvent({
@@ -267,6 +268,55 @@ describe('EventDisplay', () => {
         },
       }).container.textContent
     ).toContain('all')
+  })
+
+  // #693: Flash の area/strobe/interval 拡張。既定値（strobe=1・area/interval_ms 省略）では
+  // 従来の表示のまま何も付け足さない（後方互換、#234 で保証した「全 variant 何か描画する」を
+  // 拡張フィールドの有無で不安定にしない）。
+  it('renders Flash without the #693 extension parenthetical when area/strobe/interval are all default', () => {
+    const { container } = renderEvent({
+      Flash: { color: '#fff', alpha: 0.8, duration_ms: 300, strobe: 1 },
+    })
+    expect(container.textContent).toContain('α=0.8')
+    expect(container.textContent).not.toContain('エリア=')
+    expect(container.textContent).not.toContain('ストロボ')
+    expect(container.textContent).not.toContain('間隔=')
+  })
+
+  it('renders Flash area/strobe/interval (#693) in the extension parenthetical when present', () => {
+    const { container } = renderEvent({
+      Flash: {
+        color: '#fff',
+        alpha: 0.8,
+        duration_ms: 300,
+        area: { x: 0.2, y: 0.3, w: 0.3, h: 0.4 },
+        strobe: 3,
+        interval_ms: 150,
+      },
+    })
+    expect(container.textContent).toContain('エリア=0.2,0.3,0.3,0.4')
+    expect(container.textContent).toContain('ストロボ×3')
+    expect(container.textContent).toContain('間隔=150ms')
+  })
+
+  // #693: 追うスポットライト。target 省略時は「（中央固定）」で明示する（値が無いことを
+  // 空白で誤魔化さない、#234 の一般原則と同じ）。SpotlightOff は文字列 variant として
+  // 専用表示を持つ（SceneTransition のフォールバックに落ちない）。
+  it('renders Spotlight with target name, and "（中央固定）" fallback when target is omitted (#693)', () => {
+    expect(
+      renderEvent({ Spotlight: { target: 'alice', color: '#ff0000', radius: 0.3 } }).container
+        .textContent
+    ).toContain('スポットライト: alice #ff0000 半径=0.3')
+
+    expect(
+      renderEvent({ Spotlight: { color: '#ffffff', radius: 0.2 } }).container.textContent
+    ).toContain('（中央固定）')
+  })
+
+  it('renders SpotlightOff as a dedicated label, not the SceneTransition fallback (#693)', () => {
+    const { container } = renderEvent('SpotlightOff')
+    expect(container.textContent).toContain('スポットライト消灯')
+    expect(container.textContent).not.toContain('場面転換')
   })
 
   it('renders an unknown event variant with a warning instead of returning null', () => {

@@ -74,6 +74,7 @@ interface RendererInternals {
   videoLayer: unknown
   titleScreenOverlay: unknown
   characterLayer: unknown
+  lightingLayer: unknown
   propLayer: PropLayerForTest
   eventImageLayer: unknown
   novelScrim: unknown
@@ -105,7 +106,7 @@ function stubDestroyableApp(r: NovelRenderer): void {
 }
 
 describe('NovelRenderer Prop 配線 (#692)', () => {
-  it('init() 後の親レイヤー順は背景板 < 動画 < タイトル < キャラ < 大道具 < イベント絵 < スクリムになる (#695)', async () => {
+  it('init() 後の親レイヤー順は背景板 < 動画 < タイトル < キャラ < スポットライト < 大道具 < イベント絵 < スクリムになる (#695, #693)', async () => {
     const r = new NovelRenderer()
     const renderer = internals(r)
     const canvas = document.createElement('canvas')
@@ -125,6 +126,7 @@ describe('NovelRenderer Prop 配線 (#692)', () => {
       renderer.videoLayer,
       renderer.titleScreenOverlay,
       renderer.characterLayer,
+      renderer.lightingLayer,
       renderer.propLayer,
       renderer.eventImageLayer,
       renderer.novelScrim,

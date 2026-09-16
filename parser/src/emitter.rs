@@ -1343,13 +1343,28 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 color,
                 alpha,
                 duration_ms,
+                area,
+                strobe,
+                interval_ms,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
-                out.push_str(&format!(
-                    "[フラッシュ: color={color}, alpha={alpha}, duration={duration_ms}]\n"
-                ));
+                let mut line =
+                    format!("[フラッシュ: color={color}, alpha={alpha}, duration={duration_ms}");
+                // area/strobe/interval は #693 拡張。既定値（全画面・単発）のときは出さず、
+                // 既存スクリプトの emit 結果を変えない（後方互換）。
+                if let Some(a) = area {
+                    line.push_str(&format!(", area={},{},{},{}", a.x, a.y, a.w, a.h));
+                }
+                if *strobe != 1 {
+                    line.push_str(&format!(", strobe={strobe}"));
+                }
+                if let Some(iv) = interval_ms {
+                    line.push_str(&format!(", interval={iv}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
                 prev_was_dialog_or_text = false;
             }
             Event::Fade {
@@ -1365,6 +1380,29 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&format!(
                     "[フェード: target={target}, color={color}, from={from_alpha}, to={to_alpha}, duration={duration_ms}]\n"
                 ));
+                prev_was_dialog_or_text = false;
+            }
+            Event::Spotlight {
+                target,
+                color,
+                radius,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = String::from("[スポットライト: ");
+                if let Some(t) = target {
+                    line.push_str(&format!("対象={t}, "));
+                }
+                line.push_str(&format!("color={color}, radius={radius}]\n"));
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::SpotlightOff => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[スポットライト消灯]\n");
                 prev_was_dialog_or_text = false;
             }
         }

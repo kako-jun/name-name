@@ -979,11 +979,11 @@ MapEditor/NPCEditor の変更
 - `rpgProjectFromDoc(doc, sceneId?)` — doc → RPGProject（マップが無ければ null）
 - `applyRpgProjectToDoc(doc, project, sceneId)` — RPGProject → doc（既存シーンの RPG 要素を置換、無ければ新シーン追加）
 
-## シアターモード構想（カメラ基盤・背景板/大道具/キャラの depth 配置まで実装済み）
+## シアターモード構想（カメラ基盤・背景板/大道具/キャラの depth 配置・照明まで実装済み）
 
 舞台/漫才向けの制約付き制作ゲーム「絶対もっといいセリフあったよな」のための、カメラ・舞台演出の設計。既存の `dialog_style`（`adv`/`novel`, #283）・`split_layout`（Gymnasia向け, #442）と同じく、既存の2択を置き換えずに**独立した per-game 設定軸を積み重ねる**方針に倣う。おぐらじあの計画中のコミック風表示も同じ並びの軸になる想定（4つ目）。シアター/舞台は5つ目としてこの並びに合流する。
 
-**実装状況 (#681/#682/#683/#692/#694/#695/#696)**: `Event::CameraMode { mode: Novel|Theater, orientation: Option<Audience|Stage>, elevation: Option<LookUp|LookDown> }`（parser）・`NovelGameState.cameraMode`/`cameraOrientation`/`cameraElevation`（GameState 側 settled state、save/seek/任意局面起動で復元可能）・`computeCameraProjection(mode, orientation, elevation, depth)`（`frontend/src/game/cameraProjection.ts`、純粋関数、novel は identity・theater は depth に応じた縮小スケールと、仰角（後述）に応じた `verticalOffset` を返す）まで実装済み。#683 でこの関数が初めて実際の描画に配線された: `Event::BackgroundBoard { path, depth }`（parser、`[背景板: path, depth: N]`）・`NovelGameState.backgroundBoards`（settled state、save/seek/任意局面起動で復元可能）・`BackgroundBoardLayer`（`frontend/src/game/BackgroundBoardLayer.ts`、`computeCameraProjection` の scale/verticalOffset を `novelLayout.computeBoardPlacement` で実座標に変換し、`novelLayout.computeBoardSlideInOffset` で追加時の「上から降りてくる」演出を行う）まで実装済み（下記「舞台構造」節）。#692 で大道具にも同じ depth 配置が実装された: `Event::Prop { path, depth }`（parser、`[大道具: path, depth: N]`）・`NovelGameState.props`・`PropLayer`（`frontend/src/game/PropLayer.ts`、`BackgroundBoardLayer` を複製した独立レイヤー）。#694 でキャラにも depth 配置が実装された: 話者タグ・登場ディレクティブのオプションに `depth: N` を追加（`Event::Dialog.depth` / `Event::Enter.depth`、`Option<f32>`。省略は 0.0＝最前面）、`CharacterLayer` が `computeCameraProjection` の scale/verticalOffset を既存の character_height_ratio/character_scale/fit 由来の基本スケール・足元Y座標へ乗算・加算で合成する（下記「レイヤーモデル」節）。同 Issue で話者タグの横位置指定も自由化: 既存の `左`/`中央`/`右` 等の文字列トークンに加え、0〜1 の数値（例 `0.15`）を直接 x 比率として書けるようになった（`novelLayout.resolveCharacterXRatio`）。#695 で `PropLayer` は `CharacterLayer` の直後、`EventImageLayer` の前に配置され、大道具をキャラより手前・イベント絵/UIより奥に描画する。#696 でシアターモードの台詞ボイスは既存の `position`/`depth` から左右パン・距離減衰・ローパスを得る。**未実装**のまま残るのは向き（客席/舞台）反転時の座標系のみ。
+**実装状況 (#681/#682/#683/#692/#693/#694/#695/#696)**: `Event::CameraMode { mode: Novel|Theater, orientation: Option<Audience|Stage>, elevation: Option<LookUp|LookDown> }`（parser）・`NovelGameState.cameraMode`/`cameraOrientation`/`cameraElevation`（GameState 側 settled state、save/seek/任意局面起動で復元可能）・`computeCameraProjection(mode, orientation, elevation, depth)`（`frontend/src/game/cameraProjection.ts`、純粋関数、novel は identity・theater は depth に応じた縮小スケールと、仰角（後述）に応じた `verticalOffset` を返す）まで実装済み。#683 でこの関数が初めて実際の描画に配線された: `Event::BackgroundBoard { path, depth }`（parser、`[背景板: path, depth: N]`）・`NovelGameState.backgroundBoards`（settled state、save/seek/任意局面起動で復元可能）・`BackgroundBoardLayer`（`frontend/src/game/BackgroundBoardLayer.ts`、`computeCameraProjection` の scale/verticalOffset を `novelLayout.computeBoardPlacement` で実座標に変換し、`novelLayout.computeBoardSlideInOffset` で追加時の「上から降りてくる」演出を行う）まで実装済み（下記「舞台構造」節）。#692 で大道具にも同じ depth 配置が実装された: `Event::Prop { path, depth }`（parser、`[大道具: path, depth: N]`）・`NovelGameState.props`・`PropLayer`（`frontend/src/game/PropLayer.ts`、`BackgroundBoardLayer` を複製した独立レイヤー）。#694 でキャラにも depth 配置が実装された: 話者タグ・登場ディレクティブのオプションに `depth: N` を追加（`Event::Dialog.depth` / `Event::Enter.depth`、`Option<f32>`。省略は 0.0＝最前面）、`CharacterLayer` が `computeCameraProjection` の scale/verticalOffset を既存の character_height_ratio/character_scale/fit 由来の基本スケール・足元Y座標へ乗算・加算で合成する（下記「レイヤーモデル」節）。同 Issue で話者タグの横位置指定も自由化: 既存の `左`/`中央`/`右` 等の文字列トークンに加え、0〜1 の数値（例 `0.15`）を直接 x 比率として書けるようになった（`novelLayout.resolveCharacterXRatio`）。#695 で `PropLayer` は `CharacterLayer` の直後、`EventImageLayer` の前に配置され、大道具をキャラより手前・イベント絵/UIより奥に描画する。#696 でシアターモードの台詞ボイスは既存の `position`/`depth` から左右パン・距離減衰・ローパスを得る。#693 で照明が2要素に分けて実装された（下記「照明」節）: (1) 既存 `Event::Flash`（一過性の全画面フラッシュ、#143）を `area`（エリア限定矩形）・`strobe`/`interval`（断続ストロボ）に拡張、(2) 新規の永続ライティング要素として `Event::Spotlight { target, color, radius }` / `Event::SpotlightOff`・`NovelGameState.spotlight`（settled state）・`LightingLayer`（`frontend/src/game/LightingLayer.ts`）を追加。スポットライトは対象キャラの現在座標（`CharacterLayer.getCurrentPosition()`）に毎フレーム追従する。**未実装**のまま残るのは向き（客席/舞台）反転時の座標系のみ。
 
 実装方針: せおはやみで確立した「話者ターンごとの立ち絵差し替え」機構（`CharacterLayer` / 話者タグ）の延長として作る。台本フォーマット・話者切り替えロジックは共通のまま、表示層（描画・射影・モーション）だけを差し替える。台本や `resolveEvents` の構造を新設計にしない。
 
@@ -1038,14 +1038,15 @@ MapEditor/NPCEditor の変更
 ### レイヤーモデル
 
 ```
-奥 ← 背景板（depth複数）← キャラ ← 大道具 ← 手前
+奥 ← 背景板（depth複数）← キャラ ← スポットライト ← 大道具 ← 手前
                            └─ 表情（差分）
                            └─ 服（差分）
                            └─ 小道具（差分）
 ```
 
 - キャラが持つ小道具（マイク、扇子、剣など）は**キャラの差分レイヤー**。表情や服と同じ扱いで、depth はキャラと同一（シアターモードでもキャラから浮かない）
-- **大道具（机、椅子など）は独立した depth を持つ（実装済み・#692/#695）**: `Event::Prop { path, depth }` / `[大道具: path, depth: N]`。背景板・キャラとは別の独立した PixiJS レイヤー（`PropLayer`）として、stage 上で `CharacterLayer` の直後、`EventImageLayer` の前に配置される。数値 depth は大道具どうしの奥行き順にのみ使われ、背景板・キャラの depth 値と直接比較されることはない（レイヤーのグループ順序自体が「背景板・キャラより手前、イベント絵/UIより奥」を固定する）。**現状は背景板と同じ cover-fit（画面全体を覆う、常に画面中央・アスペクト比維持で拡大）配置で、個別オブジェクトとしてのx/y位置指定には未対応**（大道具1枚＝机や椅子を含む全画面サイズの透過PNGを用意する必要がある。`PropLayer` が `BackgroundBoardLayer` と同じ `computeBoardPlacement`——`computeCameraProjection` の scale/verticalOffset を実座標に変換する関数——を再利用しているため）。個別配置は将来のスコープ。詳細は上記「舞台構造」節参照
+- **追うスポットライトは光源として独立したレイヤーに固定される（実装済み・#693）**: `Event::Spotlight { target, color, radius }` / `[スポットライト: 対象=名前, color=..., radius=...]`。`LightingLayer`（`frontend/src/game/LightingLayer.ts`）が stage 上で `CharacterLayer` の直後・`PropLayer` の前に配置される。大道具・背景板と違い数値 depth の空間は持たない（レイヤー自体の描画順が「キャラより手前・大道具より奥」を固定する）。詳細は下記「照明」節参照
+- **大道具（机、椅子など）は独立した depth を持つ（実装済み・#692/#695）**: `Event::Prop { path, depth }` / `[大道具: path, depth: N]`。背景板・キャラとは別の独立した PixiJS レイヤー（`PropLayer`）として、stage 上で `LightingLayer`（#693）の直後、`EventImageLayer` の前に配置される（`CharacterLayer` の直後は `LightingLayer` が挟まる、上記レイヤー順図参照）。数値 depth は大道具どうしの奥行き順にのみ使われ、背景板・キャラの depth 値と直接比較されることはない（レイヤーのグループ順序自体が「背景板・キャラより手前、イベント絵/UIより奥」を固定する）。**現状は背景板と同じ cover-fit（画面全体を覆う、常に画面中央・アスペクト比維持で拡大）配置で、個別オブジェクトとしてのx/y位置指定には未対応**（大道具1枚＝机や椅子を含む全画面サイズの透過PNGを用意する必要がある。`PropLayer` が `BackgroundBoardLayer` と同じ `computeBoardPlacement`——`computeCameraProjection` の scale/verticalOffset を実座標に変換する関数——を再利用しているため）。個別配置は将来のスコープ。詳細は上記「舞台構造」節参照
 - **キャラ自身の depth 配置も実装済み（#694）**: 話者タグ・登場ディレクティブのオプションに `depth: N` を追加（`Event::Dialog.depth` / `Event::Enter.depth`、`Option<f32>`。パース失敗・省略は 0.0＝最前面）。`CharacterLayer` は独自の x/y/scale 計算体系を持つため、大道具/背景板のような専用の配置関数（`computeBoardPlacement`）は使わず、`computeCameraProjection` が返す scale/verticalOffset を、character_height_ratio(s)/character_scale/フィット（#294/#360/#364/#378）で決まる基本スケール・足元Y座標（`characterY`）に直接**乗算・加算**で合成する。ノベルモード（既定）では `computeCameraProjection` が常に `scale=1, verticalOffset=0` を返すため見た目は無変化（後方互換）。カメラ状態が変わったとき（`[カメラ:]`）は `CharacterLayer.setCamera()` が表示中の全キャラを新しい scale/verticalOffset で再配置する（`BackgroundBoardLayer`/`PropLayer` の同名メソッドと同じ役割）。同 Issue で話者タグの横位置指定も自由化した: 既存の `左`/`中央`/`右`/`上手`/`下手` 等の文字列トークンに加え、0〜1 の数値（例 `**トモ** (笑顔, 0.15)`）を直接 x 比率として書ける（`novelLayout.resolveCharacterXRatio`、未知の文字列は従来通り中央にフォールバック）
 
 ```markdown
@@ -1080,6 +1081,34 @@ depth 指定の実例（#694）:
 - 方向は上手/下手（位置指定と同じ語彙を流用。話者タグの `位置` トークンは既に `上手`/`下手` を受理している）
 - モーション時間は `character_fade_ms` と同系統の per-game 設定で調整できるようにする想定（実装時に検討）
 - ノベルモードでは方向引数を無視し、従来のフェード挙動にフォールバックする
+
+### 照明（フラッシュ拡張 / スポットライト）(#693)
+
+舞台演出としての照明を2要素に分けて実装した。
+
+**1. エリア限定フラッシュ・ストロボ**: 既存 `Event::Flash`（一過性の全画面フラッシュ、#143、`docs/spec/markdown-v0.1.md`「画面効果」節参照）を拡張する。
+
+```markdown
+[フラッシュ: color=#ffffff, alpha=0.8, duration=300, area=0.2,0.3,0.3,0.4, strobe=3, interval=150]
+```
+
+- `area=x,y,w,h`（0〜1のratio、画面全体を基準にした矩形。省略時は全画面のまま後方互換）でオーバーレイの描画範囲を限定する。パーサー内部の parse は `content.split(',')` による単純な kv 分解では複数値の `area` を壊すため、`parse_flash_directive`（`parser/src/parser.rs`）はトークン列を index 走査し `area=` の後続 bare トークンを4つまで追加消費する専用ロジックを持つ。
+- `strobe=N`（回数、省略時1回のまま後方互換）+ `interval=ms`（省略時は `duration` と同じ値にフォールバック）でフラッシュを断続的に繰り返す。
+- fire-and-forget を維持する（`NovelGameState` には入れない。既存の Shake/Flash/Fade と同じ扱い）。
+- alpha 補間は `computeStrobeFlashAlpha`（`frontend/src/game/screenEffects.ts`、純粋関数）に集約。`strobeCount<=1` のときは既存の `computeFlashAlpha` と完全に同じ結果になる（後方互換）。描画範囲の px 変換は `computeFlashAreaRect`（同ファイル）。
+
+**2. 追うスポットライト**: 新規の永続ライティング要素として `NovelGameState.spotlight`（settled state、save/seek/任意局面起動で復元可能）に持たせる。
+
+```markdown
+[スポットライト: 対象=キャラ名, color=#ffffff, radius=0.2]
+[スポットライト消灯]
+```
+
+- パーサー内部では `Event::Spotlight { target: Option<String>, color, radius }` / `Event::SpotlightOff`（unit variant）で表現される。`target` 省略時は画面中央に固定表示する（キャラに追従しない、実装時に決めた既定挙動）。
+- `LightingLayer`（`frontend/src/game/LightingLayer.ts`、上記レイヤーモデル節参照）が対象キャラの**現在の**表示位置を毎フレーム追従する。座標は新設の `CharacterLayer.getCurrentPosition(name)` が返す——`show()`/`Enter` で表示中の立ち絵はもちろん、`Underline`/`Animate`/`TextEffect` と同じく render-only（Title/Label/Image）の identifier も区別なく対象にできる。返す座標はアンカー `(0.5, 1)`（足元）から、スプライト高さの半分だけ上（体の中心付近）に補正した点。生成時点の座標を固定で保持しないため、入場退場モーション（#684）や将来の立ち位置変更でも追従できる。
+- 描画は Canvas 2D で1枚だけ生成した「白の中心から外周へ透明にフェードする」正方形テクスチャを `Sprite`（`blendMode: 'add'`、`tint` で色付け、`width`/`height` で直径を伸縮）として使い回す（`ambientEffects.buildDisplacementNoiseCanvas` と同じパターン）。PixiJS v8 の `FillGradient`（radial）+ `Graphics.fill()` も検討したが、fill 時に即座に `CanvasRenderingContext2D.createRadialGradient` を呼ぶため、jsdom（`canvas` npm パッケージ未導入、`getContext('2d')` が `null`）のテスト環境で例外を投げることが判明し不採用にした。`buildSpotlightGradientCanvas` は `getContext('2d')` が `null` のとき例外を投げず `null` を返す（描画だけ諦める、state 管理は継続）。
+- カメラモード非依存（`CameraMode::Novel`/`Theater` どちらでも機能する）。
+- 新しいシーンの開始・`[場面転換]`・`endStory()` で自動的に消灯する（`isBlackout`/`cameraMode` と同じ規律。シーンをまたいで暗黙に持ち越さない）。
 
 ### 活用例
 

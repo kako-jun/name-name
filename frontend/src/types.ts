@@ -37,6 +37,18 @@ export type EventImageTransition = 'Fade' | 'Pixelate'
 export type TelopPosition = 'TopLeft' | 'TopRight' | 'BottomRight' | 'BottomLeft'
 
 /**
+ * フラッシュのエリア限定矩形 (#693)。画面全体を基準にした 0.0〜1.0 の比率
+ * （x/y は左上原点、w/h は幅・高さ）。parser/src/models.rs::FlashArea と同形。
+ * 実 px への変換は `computeFlashAreaRect`（frontend/src/game/screenEffects.ts）。
+ */
+export interface FlashArea {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/**
  * イベント絵のアンビエント演出フラグ (#582)。Gymnasia の「暗闇+オレンジ色のろうそく光+
  * ゆらぎ+ビネット」ルックを画像単位でオンにする。既定は全て false（画面全体への一律適用
  * ではなく画像ごとの明示オプトイン）。GUI（PixiJS フィルタチェーン）・TUI（RGBA ピクセル
@@ -573,7 +585,19 @@ export type Event =
     }
   | { DialogBorderless: { borderless: boolean } }
   | { Shake: { intensity_px: number; duration_ms: number } }
-  | { Flash: { color: string; alpha: number; duration_ms: number } }
+  | {
+      /** フラッシュ演出 (#143)。エリア限定・ストロボ拡張 (#693)。
+       *  `area` 省略は全画面（既定・後方互換）。`strobe` 省略は 1（単発、後方互換）。
+       *  `interval_ms` 省略は `duration_ms` と同じ値にフォールバック（NovelRenderer.startFlash）。 */
+      Flash: {
+        color: string
+        alpha: number
+        duration_ms: number
+        area?: FlashArea
+        strobe: number
+        interval_ms?: number
+      }
+    }
   | {
       Fade: {
         target: string
@@ -583,6 +607,17 @@ export type Event =
         duration_ms: number
       }
     }
+  | {
+      /** 追うスポットライト (#693)。永続ライティング要素。`NovelGameState.spotlight` に
+       *  settled state として保持される（`Flash` と違い fire-and-forget ではない）。
+       *  `target` 省略は画面中央固定（キャラに追従しない）。 */
+      Spotlight: {
+        target?: string
+        color: string
+        radius: number
+      }
+    }
+  | 'SpotlightOff'
   | {
       /** カメラモード切り替え (#681/#682)。`[カメラ: シアター]` / `[カメラ: ノベル]`。
        *  `orientation` は `mode === 'Theater'` のときだけ意味を持つ（`向き: 客席|舞台`）。

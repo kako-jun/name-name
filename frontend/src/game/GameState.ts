@@ -81,6 +81,21 @@ export interface EventImageState {
 }
 
 /**
+ * 追うスポットライトの settled state (#693)。`[スポットライト: 対象=名前, color=..., radius=...]` /
+ * `[スポットライト消灯]` で更新する。`Event::Flash`（一過性の fire-and-forget 演出）とは異なり
+ * 永続ライティング要素なので `NovelGameState` に持たせ、save/seek/任意局面起動で復元する。
+ *
+ * `target` が `null` のときは画面中央に固定表示する（キャラに追従しない、対象未指定の既定挙動）。
+ * `LightingLayer` が毎フレーム `target` の現在座標を `CharacterLayer.getCurrentPosition()` で
+ * 問い合わせて追従する（アニメーション位相自体はここに持たせない、ADR-0002）。
+ */
+export interface SpotlightState {
+  target: string | null
+  color: string
+  radius: number
+}
+
+/**
  * ノベルゲームの全状態を表すスナップショット
  *
  * advance/goBack/seekTo/save/load の際にこのインターフェースで状態を取り回す。
@@ -126,6 +141,11 @@ export interface NovelGameState {
    * 演出の中間状態は持たない（ADR-0002。`PropLayer` だけが一時的なアニメーション位相を保持する）。
    */
   props: Array<{ path: string; depth: number }>
+  /**
+   * 追うスポットライト (#693)。`null` = 消灯（既定）。settled state（演出の中間状態は持たない、
+   * ADR-0002）。`SpotlightState` 参照。
+   */
+  spotlight: SpotlightState | null
   isBlackout: boolean
   characters: Array<{ name: string; expression: string; position: string; depth: number }>
   currentBgmPath: string | null
