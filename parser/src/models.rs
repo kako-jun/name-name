@@ -1194,6 +1194,32 @@ pub enum Event {
         #[serde(default = "default_effect_duration")]
         duration_ms: u32,
     },
+    /// 追うスポットライト (#693)。舞台照明の一種だが `Flash`（一過性の fire-and-forget 演出）
+    /// とは異なり、新規の永続ライティング要素として `NovelGameState.spotlight`（settled state、
+    /// save/seek/任意局面起動で復元可能）に持たせる。
+    ///
+    /// `target`（対象キャラ名）を指定すると、そのキャラの現在の表示位置（depth・カメラ射影
+    /// (`computeCameraProjection`) 適用後の実座標。`CharacterLayer` が入場退場モーション・
+    /// 将来の立ち位置変更後も毎フレーム追従して問い合わせに答える——`CharacterLayer` 側に
+    /// 現在座標を返すメソッドを追加する形で実装）へ円形グラデーションの光を重ねる
+    /// （`LightingLayer`、frontend/src/game/LightingLayer.ts）。`target` 省略時は画面中央に
+    /// 固定表示する（キャラに追従しない）。
+    ///
+    /// カメラモード非依存（`CameraMode::Novel`/`Theater` どちらでも機能する、#693 方針）。
+    ///
+    /// Markdown 構文: `[スポットライト: 対象=キャラ名, color=#ffffff, radius=0.2]`。
+    /// 日本語キー `対象` / 英語 `target`、`色` / `color`、`半径` / `radius`。全て省略可能
+    /// （`[スポットライト:]` は画面中央に白・`radius=0.2` で点灯）。消灯は `SpotlightOff`。
+    Spotlight {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+        #[serde(default = "default_flash_color")]
+        color: String,
+        #[serde(default = "default_spotlight_radius")]
+        radius: f32,
+    },
+    /// スポットライトを消灯する (#693)。Markdown 構文: `[スポットライト消灯]`。
+    SpotlightOff,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1516,4 +1542,9 @@ fn default_fade_to_alpha() -> f32 {
 /// `Event::Flash::strobe` の既定値 (#693)。1 回=後方互換の単発フラッシュ。
 fn default_flash_strobe() -> u32 {
     1
+}
+
+/// `Event::Spotlight::radius` の既定値 (#693)。画面幅比 0.2（Markdown 構文例と同じ値）。
+fn default_spotlight_radius() -> f32 {
+    0.2
 }

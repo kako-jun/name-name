@@ -66,6 +66,7 @@ import {
   EventScene,
   FlashArea,
 } from '../types'
+import { LightingLayer } from './LightingLayer'
 import { ASPECT_RATIOS, type AspectRatio, DEFAULT_ASPECT_RATIO } from './constants'
 import {
   isRead,
@@ -766,6 +767,14 @@ export class NovelRenderer {
    */
   private propLayer: PropLayer
 
+  /**
+   * 追うスポットライトレイヤー (#693)。`[スポットライト: ...]`/`[スポットライト消灯]` の
+   * 永続ライティング要素（settled state、`NovelGameState.spotlight`）を管理する。
+   * `backgroundBoardLayer`/`propLayer` と同系統だが、独自の depth 空間は持たない
+   * （光源なので `CharacterLayer` の直後・`propLayer` の前に固定、下記 addChild 順参照）。
+   */
+  private lightingLayer: LightingLayer
+
   /** 枠なしモードのデフォルト値（per-game 設定）。per-scene の DialogBorderless で上書きされる */
   private defaultDialogBorderless: boolean = false
 
@@ -852,6 +861,14 @@ export class NovelRenderer {
     )
     // 舞台構造の大道具レイヤー (#692)。背景板と同じ TimeController を共有する。
     this.propLayer = new PropLayer(this.screenWidth, this.screenHeight, this.time)
+    // 追うスポットライトレイヤー (#693)。対象キャラの現在座標を characterLayer に問い合わせる
+    // ため、characterLayer 構築後にインスタンス化する。
+    this.lightingLayer = new LightingLayer(
+      this.screenWidth,
+      this.screenHeight,
+      this.characterLayer,
+      this.time
+    )
     this.bubbleLayer = new BubbleLayer(this.screenWidth, this.screenHeight)
     // イベント絵レイヤー (#351)。立ち絵と同じ TimeController を共有し、動画 export でも
     // フェードが決定論的に進む（this.time が virtual モードなら仮想時刻で駆動される）。
@@ -957,6 +974,11 @@ export class NovelRenderer {
 
     // 立ち絵レイヤー
     this.app.stage.addChild(this.characterLayer)
+
+    // 追うスポットライトレイヤー (#693)。光源なのでキャラの直後・大道具の前に配置する
+    // （docs/architecture.md「シアターモード構想」→「レイヤーモデル」節: 奥 ← 背景板 ← キャラ ←
+    // スポットライト ← 大道具 ← 手前）。
+    this.app.stage.addChild(this.lightingLayer)
 
     // 舞台構造の大道具レイヤー (#692, #695)。立ち絵の直後に配置してキャラより前面に出す。
     // レイヤー内の depth は大道具どうしの奥行きだけを扱い、背景板・キャラとは独立する。
@@ -1409,6 +1431,9 @@ export class NovelRenderer {
       this.effectOverlay.alpha = 0
       this.effectOverlay.visible = false
     }
+    // 追うスポットライト (#693) も同じ理由で消灯する。settled state ではあるが、"to be
+    // continued..." 画面まで光が残るのは Shake/Flash/Fade の残留と同種の見た目の事故のため。
+    this.lightingLayer.clear()
 
     // 消去フェード時間の決定 (#404): intermission.md 専用シーンが設定されているときは、
     // 物語本編の per-game `backgroundFadeMs`/CharacterLayer の `characterFadeMs`（他の全
@@ -1851,6 +1876,10 @@ export class NovelRenderer {
     this.clearTelopLayer()
     this.setBlackout(false)
     this.currentBgmPath = null
+    // 追うスポットライト (#693) も新しいシーンの開始で常に消灯する。isBlackout/cameraMode と
+    // 同じ規律: target キャラは次シーンに存在するとは限らないため、シーンをまたいで暗黙に
+    // 持ち越さず、そのシーンで必要なら明示的に [スポットライト:] を書く。
+    this.lightingLayer.clear()
     // 新しいシーンの開始でカメラモードを既定に戻す (#681)。isBlackout と同じ規律:
     // シーンをまたいで暗黙に持ち越さず、そのシーンで必要なら明示的に [カメラ:] を書く。
     this.cameraMode = 'Novel'
@@ -2954,6 +2983,8 @@ export class NovelRenderer {
     // 大道具レイヤーも破棄・テクスチャ解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.clear()
     this.propLayer.disposeTextures()
+    // スポットライトレイヤーの ticker とグラデーションテクスチャも破棄する (#693)。
+    this.lightingLayer.clear()
     // テロップレイヤーのタイマー・表示中の段を破棄する (#674)。
     this.clearTelopLayer()
     this.audioManager.destroy()
@@ -3219,6 +3250,7 @@ export class NovelRenderer {
       eventImage: this.eventImageLayer.getState(),
       backgroundBoards: this.backgroundBoardLayer.getState(),
       props: this.propLayer.getState(),
+      spotlight: this.lightingLayer.getState(),
       isBlackout: this.blackoutOverlay.visible,
       characters: this.characterLayer.getCharacterStates(),
       currentBgmPath: this.currentBgmPath,
@@ -3672,6 +3704,11 @@ export class NovelRenderer {
     const restoredEvt = getTextEvent(this.resolvedEvents[this.eventIndex])
     this.lastSpeaker = restoredEvt?.type === 'dialog' ? restoredEvt.character : null
 
+    // 追うスポットライト復元 (#693)。対象キャラの座標問い合わせに使う characterLayer への
+    // 復元が終わった直後に行う（target が存在しなくても LightingLayer 側が画面中央へ
+    // フォールバックするので順序自体は必須ではないが、依存関係として自然な位置に置く）。
+    this.lightingLayer.restore(state.spotlight)
+
     // BGM復元
     if (state.currentBgmPath) {
       const soundUrl = resolveAssetUrl(this.assetBaseUrl, 'sounds', state.currentBgmPath)
@@ -3804,8 +3841,8 @@ export class NovelRenderer {
   }
 
   /**
-   * イベント絵レイヤー (#351) の `back` 値に応じて、背景・背景板・動画・立ち絵・大道具の
-   * 可視性を宣言的にトグルする。
+   * イベント絵レイヤー (#351) の `back` 値に応じて、背景・背景板・動画・立ち絵・スポットライト・
+   * 大道具の可視性を宣言的にトグルする。
    *
    * `setBlackout` と同じ「単一の宣言的セッター」パターン: processDirective（ライブ進行）と
    * applyState（goBack/seekTo/セーブ復元）の両方から、eventImageLayer の現在状態を毎回
@@ -3815,8 +3852,9 @@ export class NovelRenderer {
    * 判定は `eventImageLayer.shouldHideBackLayer()` に委ねる（`getState()?.back==='Hide'` の単純な
    * 意図参照ではなく、ロード失敗時は覆うものが無いため隠さない可視性専用ロジック。セルフレビュー
    * 指摘: back=Hide のままロードが永久に失敗すると背面が隠れっぱなしになる事故を防ぐ）。
-   * `backgroundBoardLayer`（#683）・`videoLayer`（#252）・`propLayer`（#692）も背面スタックの
-   * 一部なので同じトグルに含める（event image の前面に追加レイヤーだけ透けて見える事故を防ぐ）。
+   * `backgroundBoardLayer`（#683）・`videoLayer`（#252）・`propLayer`（#692）・
+   * `lightingLayer`（#693）も背面スタックの一部なので同じトグルに含める（event image の前面に
+   * 追加レイヤーだけ透けて見える事故を防ぐ）。
    */
   private applyEventImageVisibility(): void {
     const hide = this.eventImageLayer.shouldHideBackLayer()
@@ -3825,6 +3863,7 @@ export class NovelRenderer {
     this.backgroundBoardLayer.visible = !hide
     this.videoLayer.visible = !hide
     this.characterLayer.visible = !hide
+    this.lightingLayer.visible = !hide
     this.propLayer.visible = !hide
   }
 
@@ -4165,6 +4204,8 @@ export class NovelRenderer {
         this.backgroundBoardLayer.clear()
         // 舞台構造の大道具 (#692) も背景板と同じタイミングでクリアする。
         this.propLayer.clear()
+        // 追うスポットライト (#693) も同じタイミングで消灯する（resetAndStartEvents と同じ規律）。
+        this.lightingLayer.clear()
         // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
         this.videoLayer.remove()
         // イベント絵レイヤーも場面転換でクリアする (#351)。作者が [イベント絵終了] を書き忘れても
@@ -4184,6 +4225,10 @@ export class NovelRenderer {
       }
       if (event === 'WaitDisplayComplete') {
         this.beginWaitDisplayComplete()
+      }
+      if (event === 'SpotlightOff') {
+        // スポットライト消灯 (#693)。settled state（fire-and-forget ではない）。
+        this.lightingLayer.clear()
       }
       return
     }
@@ -4663,6 +4708,16 @@ export class NovelRenderer {
         event.Fade.from_alpha,
         event.Fade.to_alpha,
         event.Fade.duration_ms
+      )
+      return
+    }
+    if ('Spotlight' in event) {
+      // 追うスポットライト点灯 (#693)。Flash/Fade と違い settled state（fire-and-forget ではない）。
+      // 'SpotlightOff'（文字列 variant）は本関数冒頭の `typeof event === 'string'` ブロックで処理する。
+      this.lightingLayer.set(
+        event.Spotlight.target ?? null,
+        event.Spotlight.color,
+        event.Spotlight.radius
       )
       return
     }
@@ -5319,6 +5374,7 @@ export class NovelRenderer {
       eventImage: snapshot.eventImage,
       backgroundBoards: snapshot.backgroundBoards,
       props: snapshot.props,
+      spotlight: snapshot.spotlight,
       isBlackout: snapshot.isBlackout,
       characters: snapshot.characters,
       currentBgmPath: snapshot.currentBgmPath,
@@ -5389,6 +5445,7 @@ export class NovelRenderer {
         backgroundBrightness: snapshot.backgroundBrightness,
         video: snapshot.video,
         eventImage: snapshot.eventImage,
+        spotlight: snapshot.spotlight,
         isBlackout: snapshot.isBlackout,
         characters: snapshot.characters,
         currentBgmPath: snapshot.currentBgmPath,
@@ -5815,6 +5872,7 @@ export class NovelRenderer {
       eventImage: null,
       backgroundBoards: [],
       props: [],
+      spotlight: null,
       isBlackout: false,
       characters: [],
       currentBgmPath: null,

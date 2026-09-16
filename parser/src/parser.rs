@@ -1315,6 +1315,16 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
         return parse_fade_directive(rest);
     }
 
+    // [スポットライト消灯] (#693)
+    if content == "スポットライト消灯" {
+        return Some(Event::SpotlightOff);
+    }
+
+    // [スポットライト: 対象=名前, color=#ffffff, radius=0.2] (#693)
+    if let Some(rest) = content.strip_prefix("スポットライト:") {
+        return Some(parse_spotlight_directive(rest));
+    }
+
     None
 }
 
@@ -2048,6 +2058,44 @@ fn parse_flash_directive(content: &str) -> Option<Event> {
         strobe,
         interval_ms,
     })
+}
+
+/// `[スポットライト: 対象=名前, color=#ffffff, radius=0.2]` を解釈する (#693)。
+/// 全キー省略可能（`[スポットライト:]` は画面中央に白・既定半径で点灯、フロント側の解釈）。
+fn parse_spotlight_directive(content: &str) -> Event {
+    let mut target: Option<String> = None;
+    let mut color = "#ffffff".to_string();
+    let mut radius: f32 = 0.2;
+
+    for raw_pair in content.split(',') {
+        let pair = raw_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = pair.split_once('=') {
+            let v = v.trim();
+            match k.trim() {
+                "target" | "対象" => {
+                    if !v.is_empty() {
+                        target = Some(v.to_string());
+                    }
+                }
+                "color" | "色" => color = v.to_string(),
+                "radius" | "半径" => {
+                    if let Ok(n) = v.parse() {
+                        radius = n;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Event::Spotlight {
+        target,
+        color,
+        radius,
+    }
 }
 
 fn parse_fade_directive(content: &str) -> Option<Event> {

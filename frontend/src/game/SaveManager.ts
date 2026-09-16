@@ -12,7 +12,7 @@
  */
 
 import { CameraElevation, CameraMode, CameraOrientation, FlagValue } from '../types'
-import { BackgroundFade, EventImageState, VideoState } from './GameState'
+import { BackgroundFade, EventImageState, SpotlightState, VideoState } from './GameState'
 
 const SLOT_COUNT = 3
 const STORAGE_PREFIX = 'name-name-save-'
@@ -66,6 +66,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined は空配列（大道具なし）扱い。
    */
   props?: Array<{ path: string; depth: number }>
+  /**
+   * 追うスポットライト (#693)。
+   * 後方互換: 古いセーブデータには無い → undefined/null は消灯扱い。
+   */
+  spotlight?: SpotlightState | null
   /** 暗転状態 */
   isBlackout: boolean
   /**

@@ -23,6 +23,9 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     if (event === 'WaitDisplayComplete') {
       return <div className={`text-xs italic ml-2 ${meta}`}>待機: 表示完了</div>
     }
+    if (event === 'SpotlightOff') {
+      return <div className={`text-xs italic ml-2 ${meta}`}>スポットライト消灯</div>
+    }
     return <div className={`text-sm italic ml-2 ${accent}`}>[場面転換]</div>
   }
 
@@ -448,6 +451,15 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     return (
       <div className={`text-xs italic ml-2 ${meta}`}>
         フェード: {f.target} {f.color} {f.from_alpha}→{f.to_alpha} / {f.duration_ms}ms
+      </div>
+    )
+  }
+
+  if ('Spotlight' in event) {
+    const s = event.Spotlight
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        スポットライト: {s.target ?? '（中央固定）'} {s.color} 半径={s.radius}
       </div>
     )
   }

@@ -1382,6 +1382,29 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 ));
                 prev_was_dialog_or_text = false;
             }
+            Event::Spotlight {
+                target,
+                color,
+                radius,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = String::from("[スポットライト: ");
+                if let Some(t) = target {
+                    line.push_str(&format!("対象={t}, "));
+                }
+                line.push_str(&format!("color={color}, radius={radius}]\n"));
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::SpotlightOff => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[スポットライト消灯]\n");
+                prev_was_dialog_or_text = false;
+            }
         }
     }
 }

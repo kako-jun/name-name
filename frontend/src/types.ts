@@ -608,6 +608,17 @@ export type Event =
       }
     }
   | {
+      /** 追うスポットライト (#693)。永続ライティング要素。`NovelGameState.spotlight` に
+       *  settled state として保持される（`Flash` と違い fire-and-forget ではない）。
+       *  `target` 省略は画面中央固定（キャラに追従しない）。 */
+      Spotlight: {
+        target?: string
+        color: string
+        radius: number
+      }
+    }
+  | 'SpotlightOff'
+  | {
       /** カメラモード切り替え (#681/#682)。`[カメラ: シアター]` / `[カメラ: ノベル]`。
        *  `orientation` は `mode === 'Theater'` のときだけ意味を持つ（`向き: 客席|舞台`）。
        *  null/undefined = 客席（既定）。'Stage' を明示指定したときだけそれ以外の値になる。

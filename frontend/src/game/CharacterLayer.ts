@@ -3601,6 +3601,28 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 指定 identifier の現在の表示位置を返す (#693 追うスポットライト用)。
+   *
+   * `show()`/`Enter` で表示中の立ち絵はもちろん、`Underline`/`Animate`/`TextEffect` と同じく
+   * render-only（Title/Label/Image #274）の identifier も区別なく対象にできる（この Map に
+   * 存在する全エントリが対象。renderOnly フィルタは `getCharacterStates` だけの規律）。
+   *
+   * 返す座標はアンカー `(0.5, 1)`（足元）の `sprite.x/y` から、スプライト高さの半分だけ上
+   * （体の中心付近）に補正した点。カメラ射影・入場退場モーション（#684）・ポーズ nudge 等、
+   * その時点で `sprite.x/y/height` に反映されている全ての効果を毎フレーム素直に読むだけなので、
+   * 呼び出し時点の「今の位置」を返す——生成時点の座標を固定で保持しない
+   * （`LightingLayer` が毎フレーム呼ぶことでキャラの移動に追従する、Issue #693 方針）。
+   *
+   * 対象が現在表示されていない（show されていない、または退場完了で Map から削除済み）場合は
+   * `null` を返す。
+   */
+  getCurrentPosition(name: string): { x: number; y: number } | null {
+    const state = this.characters.get(name)
+    if (!state) return null
+    return { x: state.sprite.x, y: state.sprite.y - state.sprite.height / 2 }
+  }
+
+  /**
    * 全キャラクターを削除する
    */
   clear(): void {

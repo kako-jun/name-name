@@ -990,6 +990,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   video          = data.video ?? null      // 古いセーブには無い → 動画なし
  *   backgroundBoards = data.backgroundBoards ?? []  // 古いセーブには無い → 板なし (#683)
  *   props          = data.props ?? []        // 古いセーブには無い → 大道具なし (#692)
+ *   spotlight      = data.spotlight ?? null  // 古いセーブには無い → 消灯 (#693)
  *   isBlackout     = data.isBlackout ?? false
  *   characters     = data.characters ?? []
  *   currentBgmPath = data.currentBgmPath ?? null
@@ -1029,6 +1030,8 @@ export function saveSlotToGameState(
     backgroundBoards: data.backgroundBoards ?? [],
     // シアターモード舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
     props: data.props ?? [],
+    // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
+    spotlight: data.spotlight ?? null,
     isBlackout: data.isBlackout ?? false,
     // シアターモードの奥行き配置 (#694)。古いセーブの各要素には無い → ?? 0（最前面）に倒す。
     characters: (data.characters ?? []).map((c) => ({ ...c, depth: c.depth ?? 0 })),
