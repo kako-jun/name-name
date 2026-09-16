@@ -34,6 +34,7 @@ function makeState(eventIndex: number): NovelGameState {
     cameraMode: 'Novel',
     cameraOrientation: 'Audience',
     cameraElevation: null,
+    paperDollOutline: null,
     storyEnded: false,
   }
 }

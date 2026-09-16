@@ -6,6 +6,8 @@
 
 import { Assets, Container, Graphics, Sprite, Text, Texture, TextStyle, Ticker } from 'pixi.js'
 import { PixelateFilter } from 'pixi-filters'
+import type { OutlineFilter } from 'pixi-filters'
+import { createPaperDollOutlineFilter, type PaperDollOutlineConfig } from './outlineFilter'
 import type {
   CameraElevation,
   CameraMode,
@@ -492,8 +494,8 @@ interface CharacterState {
    */
   pixelateState?: ImagePixelateTransitionState
   /** ピクセレート遷移用フィルタ。id 毎にステートレスに使い回す（初回のピクセレート遷移まで
-   *  生成を遅延させる）。`sprite.filters` に直接掛ける（CharacterLayer には EventImageLayer の
-   *  `imageGroup` に相当する wrapper container が無いため）。 */
+   *  生成を遅延させる）。紙人形輪郭（#699）との共存のため `sprite.filters` への代入は
+   *  `applySpriteFilters()` に一本化されており、このフィールドへの直接代入だけでは反映されない。 */
   pixelateFilter?: PixelateFilter
   /**
    * `showImage()` のテクスチャロード（Fade 経路の `Assets.load` / ピクセレート経路の
@@ -797,6 +799,13 @@ export class CharacterLayer extends Container {
   private cameraElevation: CameraElevation | null = null
 
   /**
+   * 紙人形風の輪郭 (#699)。`setPaperDollOutline()`（`[紙人形輪郭:]` イベント処理 / applyState
+   * 復元）でしか同期されない。`null` = 輪郭なし（既定）。全キャラクターで単一インスタンスを
+   * 共有する（色・太さはシナリオ全体で1つの値のため、キャラクター毎に作り直す必要はない）。
+   */
+  private paperDollOutlineFilter: OutlineFilter | null = null
+
+  /**
    * @param screenWidth 論理画面幅（ASPECT_RATIOS から取得した値を渡す）
    * @param screenHeight 論理画面高さ（ASPECT_RATIOS から取得した値を渡す）
    */
@@ -1077,6 +1086,36 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 紙人形風の輪郭 (#699) を設定する。`[紙人形輪郭:]` イベント処理 / applyState 復元から呼ぶ。
+   * `null` は解除。現在表示中の全キャラクター（render-only の Title/Label/Image #274 は対象外、
+   * 実際の立ち絵のみ）へ即座に反映し、以後 `show()` で新規作成されるスプライトにも
+   * `createPortraitState` 経由で自動適用される（スコープはキャラクター個別ではなくシナリオ
+   * 全体、Issue #699 方針）。
+   */
+  setPaperDollOutline(config: PaperDollOutlineConfig | null): void {
+    this.paperDollOutlineFilter = config ? createPaperDollOutlineFilter(config) : null
+    for (const state of this.characters.values()) {
+      if (state.renderOnly) continue
+      this.applySpriteFilters(state)
+    }
+  }
+
+  /**
+   * `sprite.filters` を紙人形輪郭 (#699) とピクセレート遷移 (#628) の両方を考慮して組み立てる。
+   * この2つは独立に有効・無効になりうる（輪郭はシナリオ全体で持続、ピクセレートは新規表示時
+   * だけの一過性遷移）ため、`sprite.filters = ...` への直接代入はここへ集約し、どちらかを
+   * セットする際にもう一方を消してしまわないようにする（既存の `PixelateFilter` 運用との整合、
+   * Issue #699 実装方針の注意点）。
+   */
+  private applySpriteFilters(state: CharacterState): void {
+    if (state.sprite.destroyed) return
+    const filters: Array<OutlineFilter | PixelateFilter> = []
+    if (this.paperDollOutlineFilter) filters.push(this.paperDollOutlineFilter)
+    if (state.pixelateState && state.pixelateFilter) filters.push(state.pixelateFilter)
+    state.sprite.filters = filters.length > 0 ? filters : null
+  }
+
+  /**
    * 指定キャラクター1体にカメラ射影 (#694, `computeCameraProjection`) の scale/verticalOffset を
    * 適用する。base scale は fit を除く優先順位（character_scale > character_height_ratios /
    * character_height_ratio > 原寸1、`reapplyCharacterHeightRatios` と同じ式）で現在ロード済みの
@@ -1219,7 +1258,7 @@ export class CharacterLayer extends Container {
         .catch(() => {})
     }
 
-    return {
+    const state: CharacterState = {
       sprite,
       label,
       position: normalizedPosition,
@@ -1234,6 +1273,11 @@ export class CharacterLayer extends Container {
       underline: null,
       attached,
     }
+    // 紙人形輪郭 (#699): 生成時点で有効なら新規スプライトにも即座に適用する。
+    // このメソッドの呼び出し時点では pixelateState は未設定なので、ピクセレート遷移との
+    // 競合は起きない（applySpriteFilters は両方を考慮するが、ここでは輪郭のみが対象）。
+    this.applySpriteFilters(state)
+    return state
   }
 
   private attachCharacterState(state: CharacterState): void {
@@ -2407,7 +2451,6 @@ export class CharacterLayer extends Container {
   ): void {
     if (!state.pixelateFilter) state.pixelateFilter = new PixelateFilter(1)
     state.pixelateFilter.size = 1
-    state.sprite.filters = [state.pixelateFilter]
 
     const swapAtMs = computeSwapAtMs(opts.durationMs)
     state.pixelateState = {
@@ -2421,6 +2464,8 @@ export class CharacterLayer extends Container {
       maxHeight: opts.maxHeight,
       circular: opts.circular,
     }
+    // 紙人形輪郭 (#699) が有効なら、ピクセレートと共存させる（既存 filters を破壊しない）。
+    this.applySpriteFilters(state)
     this.ensureTicker()
 
     Assets.load(url)
@@ -2518,14 +2563,16 @@ export class CharacterLayer extends Container {
   /**
    * `[画像:]` のピクセレート遷移 (#628) の状態を終える。リファイン完了・打ち切り（load 失敗・
    * 退場破棄）いずれも同じ後始末（`pixelateState` を外し `PixelateFilter.size` を初期値へ戻し
-   * `sprite.filters` を外す）。`destroyCharacterState` から呼ばれる場合は sprite 破棄の**前**に
-   * 呼ぶこと（`sprite.destroyed` チェックで filters 操作をガードしている）。
+   * `sprite.filters` からピクセレートフィルタだけを外す。紙人形輪郭 (#699) が有効なら
+   * `applySpriteFilters` がそちらは残す）。`destroyCharacterState` から呼ばれる場合は sprite
+   * 破棄の**前**に呼ぶこと（`applySpriteFilters` の `sprite.destroyed` チェックで
+   * filters 操作をガードしている）。
    */
   private clearImagePixelateState(state: CharacterState): void {
     if (!state.pixelateState) return
     state.pixelateState = undefined
     if (state.pixelateFilter) state.pixelateFilter.size = 1
-    if (!state.sprite.destroyed) state.sprite.filters = null
+    this.applySpriteFilters(state)
   }
 
   /**

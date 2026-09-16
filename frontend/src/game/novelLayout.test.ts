@@ -1166,6 +1166,8 @@ describe('saveSlotToGameState', () => {
       cameraOrientation: data.cameraOrientation ?? 'Audience',
       // カメラ仰角 (#682)。古いセーブには無い → 水平（既定）にフォールバック。
       cameraElevation: data.cameraElevation ?? null,
+      // 紙人形風の輪郭 (#699)。古いセーブには無い → 通常表示（既定）にフォールバック。
+      paperDollOutline: data.paperDollOutline ?? null,
       // 終劇状態 (#386) は SaveSlotData 未対応。セーブ/ロードは常に「終劇していない」扱い。
       storyEnded: false,
     }
@@ -1201,6 +1203,7 @@ describe('saveSlotToGameState', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      paperDollOutline: null,
       storyEnded: false,
     })
   })
@@ -1296,6 +1299,27 @@ describe('saveSlotToGameState', () => {
       { path: 'desk.png', depth: 3 },
       { path: 'chair.png', depth: 1 },
     ])
+  })
+
+  // PDO1: 紙人形風の輪郭 (#699)。paperDollOutline を持たない（旧形式セーブ相当）入力 →
+  // null（通常表示・既定）にフォールバックし例外も投げない（CAM1/CAM3 と同型）。
+  // baseData() はもともと paperDollOutline を持たないため、欠落＝旧セーブと同じ。
+  it('PDO1: paperDollOutline 無しの入力（旧形式セーブ）→ null にフォールバックし例外を投げない', () => {
+    const data = baseData()
+    expect(() => saveSlotToGameState(data, null)).not.toThrow()
+    const state = saveSlotToGameState(data, null)
+    expect(state.paperDollOutline).toBeNull()
+  })
+
+  // PDO2: paperDollOutline 指定ありはそのまま透過する（CAM2/CAM4/PROP1 と同型の
+  // 「値ありは変換せず透過」確認）。
+  it('PDO2: paperDollOutline 指定あり → そのまま透過する', () => {
+    const data: SaveSlotData = {
+      ...baseData(),
+      paperDollOutline: { color: '#abcdef', thickness: 4 },
+    }
+    const state = saveSlotToGameState(data, null)
+    expect(state.paperDollOutline).toEqual({ color: '#abcdef', thickness: 4 })
   })
 })
 

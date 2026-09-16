@@ -390,6 +390,47 @@ describe('SaveManager - カメラ仰角 (#682)', () => {
   })
 })
 
+describe('SaveManager - 紙人形風の輪郭 (#699)', () => {
+  let manager: SaveManager
+
+  beforeEach(() => {
+    manager = new SaveManager('paper-doll-outline-test')
+    localStorage.clear()
+  })
+
+  // 後方互換: #699 実装前に作られたクイックセーブ相当。paperDollOutline キー自体が
+  // 存在しない生 JSON オブジェクトを直接 localStorage に書き、quickLoad() がクラッシュしない
+  // こと・その結果を saveSlotToGameState() に渡すと paperDollOutline が null（通常表示・既定）に
+  // フォールバックすることを確認する（cameraElevation の「欠如キーでクラッシュしない」テストと同型）。
+  it('paperDollOutline キー無しの旧クイックセーブ JSON を quickLoad してもクラッシュせず、saveSlotToGameState で null にフォールバックする', () => {
+    const legacy = {
+      slot: -1,
+      sceneId: 'scene-1',
+      eventIndex: 3,
+      textIndex: 1,
+      flags: { visited: { Bool: true } },
+      backgroundPath: '/bg/room.png',
+      isBlackout: false,
+      characters: [{ name: 'Alice', expression: 'happy', position: 'center' }],
+      currentBgmPath: '/bgm/main.mp3',
+      cameraMode: 'Theater',
+      cameraOrientation: 'Stage',
+      // paperDollOutline は意図的に省略（キー自体が JSON に存在しない #699 前フォーマット）
+      savedAt: new Date().toISOString(),
+      sceneName: 'シーン1',
+    }
+    localStorage.setItem('name-name-save-paper-doll-outline-test-quick', JSON.stringify(legacy))
+
+    expect(() => manager.quickLoad()).not.toThrow()
+    const loaded = manager.quickLoad()
+    expect(loaded).not.toBeNull()
+    expect(loaded?.paperDollOutline).toBeUndefined()
+
+    const state = saveSlotToGameState(loaded as SaveSlotData, null)
+    expect(state.paperDollOutline).toBeNull()
+  })
+})
+
 describe('SaveManager - 舞台構造の背景板 (#683)', () => {
   let manager: SaveManager
 

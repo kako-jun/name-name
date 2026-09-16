@@ -31,6 +31,7 @@
  * （ADR-0002）ため、スライドインを起こさず即座に最終位置へ配置する。
  */
 import { Assets, Container, Sprite, type Texture } from 'pixi.js'
+import type { OutlineFilter } from 'pixi-filters'
 import type { CameraElevation, CameraMode, CameraOrientation } from '../types'
 import { computeCameraProjection } from './cameraProjection'
 import {
@@ -39,6 +40,7 @@ import {
   computeBoardSlideInOffset,
   resolveAssetUrl,
 } from './novelLayout'
+import { createPaperDollOutlineFilter, type PaperDollOutlineConfig } from './outlineFilter'
 import { TimeController, defaultTimeController } from './TimeController'
 
 /** `getState()` の1要素。`NovelGameState.props` と同形（settled state）。 */
@@ -80,6 +82,12 @@ export class PropLayer extends Container {
   private cameraElevation: CameraElevation | null = null
   /** これまでにロードした画像 URL（GPU テクスチャのリーク防止用。BackgroundBoardLayer.loadedUrls と同じ流儀）。 */
   private loadedUrls: Set<string> = new Set()
+  /**
+   * 紙人形風の輪郭 (#699)。`setPaperDollOutline()`（`[紙人形輪郭:]` イベント処理 / applyState
+   * 復元）でしか同期されない。`null` = 輪郭なし（既定）。`CharacterLayer` と異なりこのレイヤーの
+   * スプライトには他にフィルタ運用が無いため、`sprite.filters = [filter] / null` の直代入でよい。
+   */
+  private paperDollOutlineFilter: OutlineFilter | null = null
 
   constructor(
     private readonly screenWidth: number,
@@ -106,6 +114,21 @@ export class PropLayer extends Container {
     this.cameraElevation = elevation
     for (const entry of this.entries) {
       if (entry.sprite) this.layoutProp(entry)
+    }
+  }
+
+  /**
+   * 紙人形風の輪郭 (#699) を設定する。`[紙人形輪郭:]` イベント処理 / applyState 復元から呼ぶ。
+   * `null` は解除。現在ロード済みの全大道具へ即座に反映し、以後 `add()` でロードされる大道具にも
+   * 自動適用される（スコープはキャラクター個別ではなくシナリオ全体、`CharacterLayer` と同じ
+   * Issue #699 方針）。
+   */
+  setPaperDollOutline(config: PaperDollOutlineConfig | null): void {
+    this.paperDollOutlineFilter = config ? createPaperDollOutlineFilter(config) : null
+    for (const entry of this.entries) {
+      if (entry.sprite) {
+        entry.sprite.filters = this.paperDollOutlineFilter ? [this.paperDollOutlineFilter] : null
+      }
     }
   }
 
@@ -147,6 +170,8 @@ export class PropLayer extends Container {
         entry.textureHeight = texture.height
         const sprite = new Sprite(texture)
         sprite.anchor.set(0.5, 0.5)
+        // 紙人形輪郭 (#699): ロード完了時点で有効なら新規スプライトにも即座に適用する。
+        if (this.paperDollOutlineFilter) sprite.filters = [this.paperDollOutlineFilter]
         entry.sprite = sprite
         this.insertSorted()
         this.layoutProp(entry)

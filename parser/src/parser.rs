@@ -1325,6 +1325,11 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
         return Some(parse_spotlight_directive(rest));
     }
 
+    // [紙人形輪郭: オン] / [紙人形輪郭: オフ] / [紙人形輪郭: オン, color=#000000, width=3] (#699)
+    if let Some(rest) = content.strip_prefix("紙人形輪郭:") {
+        return Some(parse_paper_doll_outline_directive(rest));
+    }
+
     None
 }
 
@@ -2095,6 +2100,49 @@ fn parse_spotlight_directive(content: &str) -> Event {
         target,
         color,
         radius,
+    }
+}
+
+/// `[紙人形輪郭: オン]` / `[紙人形輪郭: オフ]` / `[紙人形輪郭: オン, color=#000000, width=3]` を
+/// 解釈する (#699)。
+///
+/// 先頭 bare トークンが `"オン"` のときだけ `enabled: true`（それ以外——`"オフ"`・省略・未知値——は
+/// `false`、`dialog_style`/`Blackout` と同じ後方互換パターン）。`color=`/`width=` は
+/// `enabled: true` のときだけ解釈する（`parse_camera_mode_directive` が `mode == Theater` の
+/// ときだけ `向き:`/`仰角:` を見るのと同じ非対称 round-trip 対策）。英語キー `color`/`width` の
+/// 他に日本語キー `色`/`太さ` も受理する（`parse_flash_directive` と同じ両対応）。
+fn parse_paper_doll_outline_directive(content: &str) -> Event {
+    let mut parts = content.split(',');
+    let enabled = parts.next().unwrap_or("").trim() == "オン";
+
+    let mut color: Option<String> = None;
+    let mut thickness: Option<f32> = None;
+    if enabled {
+        for part in parts {
+            let trimmed = part.trim();
+            if let Some((k, v)) = trimmed.split_once('=') {
+                let v = v.trim();
+                match k.trim() {
+                    "color" | "色" => {
+                        if !v.is_empty() {
+                            color = Some(v.to_string());
+                        }
+                    }
+                    "width" | "太さ" => {
+                        if let Ok(n) = v.parse::<f32>() {
+                            thickness = Some(n);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Event::PaperDollOutline {
+        enabled,
+        color,
+        thickness,
     }
 }
 

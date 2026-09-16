@@ -1835,6 +1835,7 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     cameraMode: 'Novel',
     cameraOrientation: 'Audience',
     cameraElevation: null,
+    paperDollOutline: null,
     storyEnded: false,
   }
 

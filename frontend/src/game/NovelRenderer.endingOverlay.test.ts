@@ -165,6 +165,7 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      paperDollOutline: null,
       storyEnded: true,
     }
     r.restoreSnapshot(snapshot)
@@ -222,6 +223,7 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      paperDollOutline: null,
       storyEnded: true,
     }
     r.restoreSnapshot(snapshot)
