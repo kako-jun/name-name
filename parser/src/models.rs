@@ -184,6 +184,20 @@ pub enum TelopPosition {
     BottomLeft,
 }
 
+/// フラッシュのエリア限定矩形 (#693)。画面全体を基準にした `0.0`〜`1.0` の比率
+/// （`x`/`y` は左上原点、`w`/`h` は幅・高さ）。範囲外・負値のクランプはここでは行わず、
+/// フロント側の描画時変換（`computeFlashAreaRect`、frontend/src/game/screenEffects.ts）に
+/// 委ねる（`BackgroundBoard`/`Prop` の depth と同じ「パーサーは緩く受け取りフロントで防御」方針）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FlashArea {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
 #[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
@@ -1121,10 +1135,22 @@ pub enum Event {
         #[serde(default = "default_effect_duration")]
         duration_ms: u32,
     },
-    /// フラッシュ演出 (#143)。
+    /// フラッシュ演出 (#143)。エリア限定・ストロボ拡張 (#693)。
     ///
     /// `[フラッシュ: color=#ffffff, alpha=0.8, duration=300]`
     /// 指定色のオーバーレイを瞬時に表示し、duration かけてアルファ 0 へ fade out する。
+    ///
+    /// `area=x,y,w,h`（#693。`FlashArea`、`0.0`〜`1.0` の比率で画面全体を基準にした矩形。
+    /// カンマ区切り4値、`x,y` は左上原点）を指定すると、オーバーレイの描画範囲をその矩形に
+    /// 限定する（キャラのスポットライトと違い追従はしない静止矩形）。省略時は全画面
+    /// （既定・後方互換）。
+    ///
+    /// `strobe=N`（回数、`>= 1`。省略時 1 回=後方互換の単発フラッシュ）+ `interval=ms`
+    /// （パルス開始間隔。省略時は `duration` と同じ値にフォールバックする）を指定すると、
+    /// 同じフラッシュを断続的に N 回繰り返すストロボ演出になる。
+    ///
+    /// Markdown 構文例:
+    /// `[フラッシュ: color=#ffffff, alpha=0.8, duration=300, area=0.2,0.3,0.3,0.4, strobe=3, interval=150]`
     Flash {
         /// 色コード（例: "#ffffff"）
         #[serde(default = "default_flash_color")]
@@ -1135,6 +1161,16 @@ pub enum Event {
         /// フェードアウト時間 ms
         #[serde(default = "default_effect_duration")]
         duration_ms: u32,
+        /// エリア限定矩形 (#693)。`None` = 全画面（既定・後方互換）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        area: Option<FlashArea>,
+        /// ストロボ回数 (#693)。既定 `1`（後方互換、単発フラッシュ）。
+        #[serde(default = "default_flash_strobe")]
+        strobe: u32,
+        /// ストロボのパルス開始間隔 ms (#693)。`None` は `duration_ms` と同じ値に
+        /// フォールバックする（フロント側 `startFlash` が解決する）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interval_ms: Option<u32>,
     },
     /// フェード演出 (#143)。
     ///
@@ -1475,4 +1511,9 @@ fn default_fade_color() -> String {
 
 fn default_fade_to_alpha() -> f32 {
     1.0
+}
+
+/// `Event::Flash::strobe` の既定値 (#693)。1 回=後方互換の単発フラッシュ。
+fn default_flash_strobe() -> u32 {
+    1
 }

@@ -431,9 +431,14 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
 
   if ('Flash' in event) {
     const f = event.Flash
+    const extra: string[] = []
+    if (f.area) extra.push(`エリア=${f.area.x},${f.area.y},${f.area.w},${f.area.h}`)
+    if (f.strobe !== 1) extra.push(`ストロボ×${f.strobe}`)
+    if (f.interval_ms != null) extra.push(`間隔=${f.interval_ms}ms`)
     return (
       <div className={`text-xs italic ml-2 ${meta}`}>
         フラッシュ: {f.color} α={f.alpha} / {f.duration_ms}ms
+        {extra.length > 0 ? ` (${extra.join(', ')})` : ''}
       </div>
     )
   }

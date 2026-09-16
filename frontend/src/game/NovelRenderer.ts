@@ -64,6 +64,7 @@ import {
   Event,
   EventImageTransition,
   EventScene,
+  FlashArea,
 } from '../types'
 import { ASPECT_RATIOS, type AspectRatio, DEFAULT_ASPECT_RATIO } from './constants'
 import {
@@ -79,7 +80,12 @@ import {
   markReadScene,
 } from './readProgress'
 import { TimeController, defaultTimeController } from './TimeController'
-import { computeShakeOffset, computeFlashAlpha, computeFadeAlpha } from './screenEffects'
+import {
+  computeShakeOffset,
+  computeFadeAlpha,
+  computeFlashAreaRect,
+  computeStrobeFlashAlpha,
+} from './screenEffects'
 import {
   clampFadeMs,
   computeCoverFit,
@@ -3007,10 +3013,19 @@ export class NovelRenderer {
   }
 
   /**
-   * フラッシュ演出 (#143)。
+   * フラッシュ演出 (#143)。エリア限定・ストロボ拡張 (#693)。
    * effectOverlay を指定色で alpha ピーク → 0 にフェードアウトする。
+   * `area` 指定時はオーバーレイの矩形をその範囲に限定する（`null` は全画面、後方互換）。
+   * `strobe` > 1 のときは `intervalMs` 間隔で同じパルスを繰り返す（`computeStrobeFlashAlpha`）。
    */
-  private startFlash(colorHex: string, peakAlpha: number, durationMs: number): void {
+  private startFlash(
+    colorHex: string,
+    peakAlpha: number,
+    durationMs: number,
+    area: FlashArea | null,
+    strobeCount: number,
+    intervalMs: number | null
+  ): void {
     if (!this.effectOverlay) return
     if (this.effectTimer) {
       this.time.clearInterval(this.effectTimer)
@@ -3018,21 +3033,32 @@ export class NovelRenderer {
     }
 
     const color = parseHexColor(colorHex)
+    // エリア限定矩形は screenEffects.computeFlashAreaRect に集約 (#693)。area なしは全画面。
+    const rect = computeFlashAreaRect(area, this.screenWidth, this.screenHeight)
     this.effectOverlay.clear()
-    this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
+    this.effectOverlay.rect(rect.x, rect.y, rect.width, rect.height)
     this.effectOverlay.fill(color)
     this.effectOverlay.alpha = peakAlpha
     this.effectOverlay.visible = true
 
     const startMs = performance.now()
     const FPS = 60
-    const intervalMs = 1000 / FPS
+    const intervalMsTick = 1000 / FPS
+    // interval 省略時は duration と同程度の適当なデフォルト（Issue #693 方針）。
+    const effectivePulseIntervalMs = intervalMs ?? durationMs
 
     this.effectTimer = this.time.setInterval(() => {
       const elapsed = performance.now() - startMs
       if (!this.effectOverlay) return
-      // alpha 補間は screenEffects.computeFlashAlpha に集約 (#260)
-      const { alpha, done } = computeFlashAlpha(elapsed, peakAlpha, durationMs)
+      // alpha 補間は screenEffects.computeStrobeFlashAlpha に集約 (#260/#693)。
+      // strobeCount<=1 のときは computeFlashAlpha と完全に同じ結果になる（後方互換）。
+      const { alpha, done } = computeStrobeFlashAlpha(
+        elapsed,
+        peakAlpha,
+        durationMs,
+        strobeCount,
+        effectivePulseIntervalMs
+      )
       this.effectOverlay.alpha = alpha
       if (done) {
         this.effectOverlay.visible = false
@@ -3042,7 +3068,7 @@ export class NovelRenderer {
           this.effectTimer = null
         }
       }
-    }, intervalMs)
+    }, intervalMsTick)
   }
 
   /**
@@ -4618,8 +4644,15 @@ export class NovelRenderer {
       return
     }
     if ('Flash' in event) {
-      // フラッシュ (#143) — fire-and-forget
-      this.startFlash(event.Flash.color, event.Flash.alpha, event.Flash.duration_ms)
+      // フラッシュ (#143) — fire-and-forget。エリア限定・ストロボは #693 拡張。
+      this.startFlash(
+        event.Flash.color,
+        event.Flash.alpha,
+        event.Flash.duration_ms,
+        event.Flash.area ?? null,
+        event.Flash.strobe,
+        event.Flash.interval_ms ?? null
+      )
       return
     }
     if ('Fade' in event) {

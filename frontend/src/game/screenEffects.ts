@@ -97,6 +97,73 @@ export function computeFlashAlpha(
   return { alpha: safePeak * (1 - progress), done: progress >= 1 }
 }
 
+/** フラッシュのエリア限定矩形を実 px に変換した結果 (#693)。 */
+export interface FlashAreaRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * フラッシュの描画範囲を実 px 矩形に変換する純粋関数 (#693)。
+ *
+ * `area` が `null`/`undefined` なら全画面（既存動作、後方互換）。`area` は画面全体を基準にした
+ * `0.0`〜`1.0` の比率（`parser::models::FlashArea` と同形）。範囲外・非有限値は `[0, 1]` に
+ * クランプする（parser 側は緩く受け取るだけなので、ここがフロント側の最終防御）。
+ */
+export function computeFlashAreaRect(
+  area: { x: number; y: number; w: number; h: number } | null | undefined,
+  screenWidth: number,
+  screenHeight: number
+): FlashAreaRect {
+  if (!area) return { x: 0, y: 0, width: screenWidth, height: screenHeight }
+  const clamp01 = (n: number): number => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0)
+  return {
+    x: clamp01(area.x) * screenWidth,
+    y: clamp01(area.y) * screenHeight,
+    width: clamp01(area.w) * screenWidth,
+    height: clamp01(area.h) * screenHeight,
+  }
+}
+
+/**
+ * ストロボ（断続フラッシュ）の alpha を返す純粋関数 (#693)。
+ *
+ * `strobeCount` 回のフラッシュを `intervalMs` 間隔（パルス開始どうしの間隔）で繰り返す。
+ * 各パルスは `computeFlashAlpha` と同じ「即座にピーク → durationMs かけて 0 へ」の波形。
+ * `intervalMs < durationMs` のとき（次のパルス開始が前のフェードアウト完了より早い）は、
+ * 前のパルスが減衰しきる前に次のパルスがピークへ瞬時に戻る（実際のストロボ光の見え方と一致、
+ * 意図的な仕様）。
+ *
+ * `strobeCount <= 1` のときは常に 1 回目のパルスだけを計算するため、既存の `computeFlashAlpha`
+ * と完全に同じ結果になる（後方互換）。
+ *
+ * 入力契約: `strobeCount` の非有限値/1未満は `1` 扱い。`intervalMs` の非有限値/0以下は
+ * `durationMs`（0以下なら `1`）にフォールバック（呼び出し側 `NovelRenderer.startFlash` が
+ * `interval_ms ?? duration_ms` を渡す想定だが、二重に防御する）。
+ */
+export function computeStrobeFlashAlpha(
+  elapsedMs: number,
+  peakAlpha: number,
+  durationMs: number,
+  strobeCount: number,
+  intervalMs: number
+): EffectAlpha {
+  const safeCount = Number.isFinite(strobeCount) && strobeCount >= 1 ? Math.floor(strobeCount) : 1
+  const safeInterval =
+    Number.isFinite(intervalMs) && intervalMs > 0
+      ? intervalMs
+      : Number.isFinite(durationMs) && durationMs > 0
+        ? durationMs
+        : 1
+  const safeElapsed = Number.isFinite(elapsedMs) && elapsedMs > 0 ? elapsedMs : 0
+  const pulseIndex = Math.min(safeCount - 1, Math.floor(safeElapsed / safeInterval))
+  const localElapsed = safeElapsed - pulseIndex * safeInterval
+  const { alpha, done: pulseDone } = computeFlashAlpha(localElapsed, peakAlpha, durationMs)
+  return { alpha, done: pulseDone && pulseIndex >= safeCount - 1 }
+}
+
 /**
  * フェード演出の alpha を返す純粋関数 (#143)。
  *

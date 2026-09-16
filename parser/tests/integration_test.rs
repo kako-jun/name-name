@@ -2321,11 +2321,18 @@ title: "効果テスト"
         color,
         alpha,
         duration_ms,
+        area,
+        strobe,
+        interval_ms,
     } = &events[0]
     {
         assert_eq!(color, "#ffffff");
         assert!((alpha - 0.8).abs() < 1e-5);
         assert_eq!(*duration_ms, 300);
+        // #693 拡張フィールドの後方互換デフォルト（未指定時）
+        assert_eq!(*area, None);
+        assert_eq!(*strobe, 1);
+        assert_eq!(*interval_ms, None);
     } else {
         panic!("Expected Flash, got {:?}", events[0]);
     }
@@ -2349,6 +2356,7 @@ title: "効果テスト"
         color,
         alpha,
         duration_ms,
+        ..
     } = &events[0]
     {
         assert_eq!(color, "#ff0000");

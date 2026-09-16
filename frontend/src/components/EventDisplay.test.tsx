@@ -254,7 +254,8 @@ describe('EventDisplay', () => {
       renderEvent({ Shake: { intensity_px: 10, duration_ms: 500 } }).container.textContent
     ).toContain('10px')
     expect(
-      renderEvent({ Flash: { color: '#fff', alpha: 0.8, duration_ms: 300 } }).container.textContent
+      renderEvent({ Flash: { color: '#fff', alpha: 0.8, duration_ms: 300, strobe: 1 } }).container
+        .textContent
     ).toContain('α=0.8')
     expect(
       renderEvent({
