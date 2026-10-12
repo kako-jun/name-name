@@ -448,6 +448,8 @@ export type Event =
   | { Choice: { options: ChoiceOption[]; columns?: number | null } }
   | { Flag: { name: string; value: FlagValue } }
   | { Condition: { flag: string; events: Event[] } }
+  /** 無条件ジャンプ (#725)。`[ジャンプ: シーンID]`。選択肢なしで target のシーンへ遷移する。 */
+  | { Jump: { target: string } }
   | { ExpressionChange: { character: string; expression: string } }
   | { RpgMap: RpgMapData }
   | { PlayerStart: PlayerStartData }

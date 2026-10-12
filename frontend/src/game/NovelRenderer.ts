@@ -1617,7 +1617,7 @@ export class NovelRenderer {
    *   タブロー専用のローカル・ステージング。`this.intermissionTimer`（endStory() の初回描画待ちと
    *   同じフィールドを再利用。destroy/resetAndStartEvents/applyState で既にキャンセルされる）で
    *   指定 ms 後に `renderIntermissionTableau(events, i + 1)` を呼び、残りのイベントから再開する。
-   * - Choice/WaitDisplayComplete/Flag は resolvedEvents/eventIndex を前提にする（Choice）か
+   * - Choice/WaitDisplayComplete/Flag/Jump は resolvedEvents/eventIndex を前提にする（Choice）か
    *   `NovelGameState` を恒久的に書き換える（Flag → `gameState.setFlag` + `reResolveEvents`）かのいずれかで、
    *   単発タブローには意味を持たない・持たせてはいけないため無視する（dev のみ warn）。特に Flag は
    *   docstring 冒頭の「GameState には一切触れない」を破るため、他の演出ディレクティブと違い明示除外が必須。
@@ -1676,11 +1676,13 @@ export class NovelRenderer {
         }
         if (
           event === 'WaitDisplayComplete' ||
-          (typeof event === 'object' && event !== null && ('Choice' in event || 'Flag' in event))
+          (typeof event === 'object' &&
+            event !== null &&
+            ('Choice' in event || 'Flag' in event || 'Jump' in event))
         ) {
           if (import.meta.env.DEV) {
             console.warn(
-              '[name-name] intermission.md: Choice/[待機: 表示完了]/Flag は静止画タブローでは無視されます'
+              '[name-name] intermission.md: Choice/[待機: 表示完了]/Flag/[ジャンプ:] は静止画タブローでは無視されます'
             )
           }
           continue
@@ -4194,7 +4196,8 @@ export class NovelRenderer {
       if (typeof event !== 'object' || event === null) continue
 
       // 分岐に当たったら走査終了（分岐先が確定しないと先読みできない）
-      if ('Choice' in event || 'Condition' in event) break
+      // Jump (#725) も分岐扱い: 遷移先は別シーンで、ここから先の同一配列は再生されない。
+      if ('Choice' in event || 'Condition' in event || 'Jump' in event) break
 
       // テキストイベント数の緩い上限で打ち切る（Dialog も下でアセットを積むので判定を先に）
       if (getTextEvent(event) !== null) {
@@ -4633,6 +4636,25 @@ export class NovelRenderer {
         locked,
         cleared
       )
+      return
+    }
+    if ('Jump' in event) {
+      // 無条件ジャンプ (#725)。Choice 確定と同じ `jumpToScene` を呼ぶ（confinement #386・
+      // missingSceneResolver による遅延ロード #460 をそのまま再利用）。
+      // Choice 到達時と同様、ここまでを読み終えた scene とみなす (#366)。
+      this.markCurrentSceneRead()
+      // jumpToScene → startScene → resetAndStartEvents は processUntilNextTextEvent を内包し
+      // 描画までするため、呼び出し元ループ（processUntilNextTextEvent）の中で同期実行すると
+      // 新シーンの eventIndex++ や二重 render になる。[待機] と同じ停止ゲート（waitingForWait）で
+      // 呼び出し元を止め、次 tick に遷移する。成功すれば resetAndStartEvents が waitingForWait
+      // と waitTimer をリセットする。遷移先不在（警告のみ）・遅延ロード中は、waitingForWait を
+      // 維持したまま止まる（advance が Jump を飛び越して終劇に落ちるのを防ぐ）。
+      this.waitingForWait = true
+      this.waitTimer = this.time.setTimeout(() => {
+        this.waitTimer = null
+        if (!this.initialized) return
+        this.jumpToScene(event.Jump.target)
+      }, 0)
       return
     }
     if ('ExpressionChange' in event) {

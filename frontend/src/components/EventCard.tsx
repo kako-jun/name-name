@@ -42,7 +42,7 @@ function variantLabel(event: Event): string {
 /**
  * #239 (manga-desk theme): variant ごとに「机の上の物」の見た目を割り当てる。
  * - Dialog / Narration → 原稿用紙 (desk-genko)
- * - Choice / Flag / Condition → 青ペンの分岐メモ (desk-fusen-b)
+ * - Choice / Flag / Condition / Jump → 青ペンの分岐メモ (desk-fusen-b)
  * - Monster / Item / Spell / PartyMember → 資料の付箋 (desk-fusen-g)
  * - Npc / RpgMap / PlayerStart / RpgEvent / RpgTrigger → RPG メモ (desk-fusen-p)
  * - その他演出系 (Background, Bgm, Se, Wait, WaitDisplayComplete, Animate, TextEffect, Underline, Shake, Flash, Fade, ...) → 黄付箋
@@ -50,7 +50,8 @@ function variantLabel(event: Event): string {
 function variantToDeskClass(event: Event): string {
   if (typeof event === 'string') return 'desk-fusen' // SceneTransition
   if ('Dialog' in event || 'Narration' in event) return 'desk-genko desk-body'
-  if ('Choice' in event || 'Flag' in event || 'Condition' in event) return 'desk-fusen desk-fusen-b'
+  if ('Choice' in event || 'Flag' in event || 'Condition' in event || 'Jump' in event)
+    return 'desk-fusen desk-fusen-b'
   if ('Monster' in event || 'Item' in event || 'Spell' in event || 'PartyMember' in event)
     return 'desk-fusen desk-fusen-g'
   if (
