@@ -164,7 +164,7 @@ resolver 経由で）事前解決・ロードしてから `NovelPlayer` に `ini
 `?debug_scene=` も同じく `PlayerScreen` のロード effect で `resolveMissingScene` により事前解決する
 （#726）。`NovelRenderer.startFrom` は `missingSceneResolver` で再挑戦せず、未ロードの sceneId では
 no-op になるため。ただし解決結果は `allScenes` に載せるだけで、`startSceneId`/`confinedSceneIds` には
-混ぜない（`debug_scene` は confinement なしを維持）。解決失敗時は HUD（`loadDebugInfo`）に
+混ぜない。`debug_scene` が解決できたときは `?scene=` 併用でも confinement を外す（`debug_scene` は confinement なし・後勝ち）。解決失敗時は HUD（`loadDebugInfo`）に
 `debug_scene: <id> → not found (fallback to entry)` を出す。
 `NovelPlayer` はマウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ
 （`debug_scene` ブロックより前に評価するため、両方指定されると `debug_scene` 側が後勝ちで

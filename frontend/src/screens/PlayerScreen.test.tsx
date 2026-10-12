@@ -2556,13 +2556,15 @@ describe('PlayerScreen', () => {
         )
       })
 
-      it('63: 存在しない id を debug_scene 指定すると HUD に not found が出て、エントリ先頭のまま（索引はエントリのシーンのみ・クラッシュしない）', async () => {
+      it('63: 存在しない id を debug_scene 指定すると HUD に not found が出て、エントリ先頭のまま（全サブ MD を探索しても見つからず・クラッシュしない）', async () => {
         window.history.pushState({}, '', '?debug_scene=no-such-scene')
         await renderMultiDocProject()
         expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
           'debug_scene: no-such-scene → not found (fallback to entry)'
         )
         expect(sceneIds()).not.toContain('no-such-scene')
+        // resolveMissingScene のフォールバックで全サブ MD を探索した
+        expect(cellFetchCount(CELL_PATH)).toBe(1)
         expect(lastNovelPlayerProps().initialSceneId).toBeNull()
         expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
         expect(screen.queryByRole('alert')).toBeNull()
@@ -2578,12 +2580,12 @@ describe('PlayerScreen', () => {
         )
       })
 
-      it('65: ?scene= と debug_scene 併用（別ファイル）は両方解決され、confinement は ?scene= 側の MD のみ', async () => {
+      it('65: ?scene= と debug_scene 併用（別ファイル）は両方解決され、debug が解決できたので confinement は null（b.md 内の遷移が終劇にならない）', async () => {
         window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=cell-b-1')
         await renderTwoCellProject()
         expect(sceneIds()).toEqual(expect.arrayContaining(['cell-scene-1', 'cell-b-1']))
         expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
-        expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
         const debugInfo = lastNovelPlayerProps().debugInfo as string[]
         expect(debugInfo).toContain('scene param: cell-scene-1 → resolved')
         expect(debugInfo).toContain('debug_scene: cell-b-1 → resolved')
@@ -2598,13 +2600,13 @@ describe('PlayerScreen', () => {
         expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
       })
 
-      it('67: 同一 sceneId を ?scene= と debug_scene 両方に指定しても冪等（索引に重複なし・サブ MD は 1 回だけ fetch・confinement は ?scene= 通り）', async () => {
+      it('67: 同一 sceneId を ?scene= と debug_scene 両方に指定しても冪等（索引に重複なし・サブ MD は 1 回だけ fetch・debug 解決済みなので confinement は null）', async () => {
         window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=cell-scene-1')
         await renderMultiDocProject()
         const ids = sceneIds()
         expect(ids.filter((id) => id === 'cell-scene-1')).toHaveLength(1)
         expect(cellFetchCount(CELL_PATH)).toBe(1)
-        expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
       })
 
       it('68: debug 系クエリが無い通常フローでは debug_scene 行が debugInfo に出ず、サブ MD も fetch しない（非回帰）', async () => {

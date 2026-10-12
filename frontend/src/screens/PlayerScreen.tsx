@@ -572,6 +572,9 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           const resolvedStartSceneId =
             sceneParam && entryScenes.some((s) => s.id === sceneParam) ? sceneParam : null
           setStartSceneId(resolvedStartSceneId)
+          const debugQueryFb = parseDebugQuery(window.location.search)
+          const debugSceneIdFb =
+            debugQueryFb && 'scene' in debugQueryFb ? debugQueryFb.scene.sceneId : null
           setLoadDebugInfo([
             'mode: single script fallback',
             `entry: ${SCRIPT_BASENAME}`,
@@ -582,6 +585,11 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             ...(sceneParam
               ? [
                   `scene param: ${sceneParam} → ${resolvedStartSceneId ? 'resolved' : 'not found (fallback to entry)'}`,
+                ]
+              : []),
+            ...(debugSceneIdFb
+              ? [
+                  `debug_scene: ${debugSceneIdFb} → ${entryScenes.some((s) => s.id === debugSceneIdFb) ? 'resolved' : 'not found (fallback to entry)'}`,
                 ]
               : []),
           ])
@@ -637,7 +645,8 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
         // #726: `?debug_scene=<id>` もエントリ外（未ロード）のサブ MD にあるシーンを指し得るため、
         // NovelPlayer マウント前に同じ resolveMissingScene で事前解決して allScenes に載せる。
         // NovelRenderer.startFrom は missingSceneResolver で再挑戦しない（見つからなければ no-op）ため。
-        // startSceneId / confinedSceneIds には混ぜない（#652/#656: debug は confinement なし）。
+        // startSceneId には混ぜないが、解決できたときは confinement を外す（#652/#656: debug は
+        // confinement なし。`?scene=` 併用でも debug 後勝ち）。
         let debugSceneResolution: { id: string; found: boolean } | null = null
         const debugQuery = parseDebugQuery(window.location.search)
         const debugSceneId = debugQuery && 'scene' in debugQuery ? debugQuery.scene.sceneId : null
@@ -646,7 +655,8 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           if (cancelled) return
           debugSceneResolution = {
             id: debugSceneId,
-            found: !!scenesWithDebug && scenesWithDebug.some((s) => s.id === debugSceneId),
+            // resolveMissingScene は見つかったときだけ非 null を返す
+            found: scenesWithDebug !== null,
           }
         }
 
@@ -656,9 +666,10 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
         // hub の内容が漏れるのを防ぐ（theo-hayami #20: 他ファイルへは HTML リンクで、埋め込み
         // 内の choice では遷移しない）。`?scene=` が hub 自身の sceneId を指した場合は
         // findConfinedSceneIds が null を返す＝無制限フローにフォールバックする。
-        const confinedIds = resolvedStartSceneId
-          ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current, entryPath)
-          : null
+        const confinedIds =
+          resolvedStartSceneId && !debugSceneResolution?.found
+            ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current, entryPath)
+            : null
         setConfinedSceneIds(confinedIds)
 
         // 初期ジャンプ解決索引は entry のシーン + #386 で事前ロードした対象 script のシーン。

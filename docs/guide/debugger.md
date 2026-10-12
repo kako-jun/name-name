@@ -32,7 +32,9 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 `debug_scene` が指すシーンがエントリ `script.md` に無く、`scriptsDir` 配下のサブ MD にある場合も
 動作する（#726）。`PlayerScreen` が `NovelPlayer` のマウント前に `?scene=` と同じ遅延ロード
 （`resolveMissingScene`）でそのシーンを含む MD を事前解決し、ジャンプ解決索引（`allScenes`）に
-載せる。`startSceneId`/`confinedSceneIds` には混ぜないため confinement なしは変わらない。
+載せる。`startSceneId` には混ぜず、confinement なしは変わらない。`?scene=` と併用しても、
+`debug_scene` が解決できれば confinement は外れる（後勝ち。別ファイルの `debug_scene` 内の選択肢ジャンプが
+終劇にならない）。存在しない ID を指定すると全 MD を探索してから開始するため、起動が遅れる。
 解決できなかった場合（存在しない ID）はエントリ先頭から開始し、デバッグ HUD に
 `debug_scene: <id> → not found (fallback to entry)` と表示する。
 
