@@ -10713,3 +10713,115 @@ fn test_telop_multiple_events_preserve_order_and_fields() {
         other => panic!("2件とも Telop を期待したが {other:?}"),
     }
 }
+
+// ===== #725: 無条件ジャンプ [ジャンプ: シーンID] =====
+
+fn jump_doc(body: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"jump\"\n---\n\n## 1-1: a\n\n{body}\n\n## 1-2: b\n\n**B**:\nb\n"
+    )
+}
+
+#[test]
+fn test_jump_target_is_trimmed_and_colon_spacing_is_free() {
+    for line in [
+        "[ジャンプ: 2-1]",
+        "[ジャンプ:2-1]",
+        "[ジャンプ:   2-1   ]",
+        "[ジャンプ:\u{3000}2-1\u{3000}]",
+    ] {
+        let doc = parser::parse(&jump_doc(&format!("**A**:\nx\n\n{line}")));
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events.last(),
+            Some(&Event::Jump {
+                target: "2-1".to_string()
+            }),
+            "{line:?} は target=2-1 の Jump になる"
+        );
+    }
+}
+
+#[test]
+fn test_jump_with_empty_target_is_ignored_and_not_emitted_as_text() {
+    for line in ["[ジャンプ: ]", "[ジャンプ:]", "[ジャンプ:   ]"] {
+        let doc = parser::parse(&jump_doc(&format!("**A**:\nx\n\n{line}")));
+        let events = &doc.chapters[0].scenes[0].events;
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::Jump { .. })),
+            "{line:?} は Jump を生成しない: {events:?}"
+        );
+        let has_text_leak = events.iter().any(|e| match e {
+            Event::Dialog { text, .. } | Event::Narration { text, .. } => {
+                text.iter().any(|t| t.contains("ジャンプ"))
+            }
+            _ => false,
+        });
+        assert!(!has_text_leak, "{line:?} が本文に漏れない: {events:?}");
+        // 空 Jump を含んでいても emit -> parse が安定する
+        let emitted = emitter::emit(&doc);
+        assert!(!emitted.contains("[ジャンプ"), "emit に空 Jump は出ない");
+        assert_eq!(parser::parse(&emitted), doc);
+    }
+}
+
+#[test]
+fn test_jump_does_not_swallow_following_lines_and_keeps_order() {
+    let doc = parser::parse(&jump_doc(
+        "**A**:\nx\n\n[ジャンプ: 1-2]\n[BGM: a.ogg]\n\n**A**:\ny",
+    ));
+    let events = &doc.chapters[0].scenes[0].events;
+    let jump_idx = events
+        .iter()
+        .position(|e| matches!(e, Event::Jump { .. }))
+        .expect("Jump がある");
+    assert!(matches!(events[jump_idx + 1], Event::Bgm { .. }));
+    assert!(matches!(events[jump_idx + 2], Event::Dialog { .. }));
+}
+
+#[test]
+fn test_jump_target_is_not_canonicalized_and_survives_round_trip() {
+    // canonicalize は表示本文にだけ掛かる。ID（全角/半角混在・記号含む）は不変で往復する。
+    let doc = parser::parse(&jump_doc("**A**:\nx\n\n[ジャンプ: シーン_１-2.final]"));
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events.last(),
+        Some(&Event::Jump {
+            target: "シーン_１-2.final".to_string()
+        })
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[ジャンプ: シーン_１-2.final]\n"));
+    assert_eq!(parser::parse(&emitted), doc);
+}
+
+#[test]
+fn test_jump_in_condition_with_following_dialog_round_trips_with_blank_line_rules() {
+    let input = jump_doc(
+        "[フラグ: seen = true]\n\n**A**:\nx\n\n[条件: seen]\n**A**:\n分岐内\n[ジャンプ: 1-2]\n[/条件]\n\n**A**:\n続き",
+    );
+    let doc1 = parser::parse(&input);
+    let events = &doc1.chapters[0].scenes[0].events;
+    let cond = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Condition { events, .. } => Some(events),
+            _ => None,
+        })
+        .expect("Condition がある");
+    assert!(matches!(cond.last(), Some(Event::Jump { target }) if target == "1-2"));
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc1, doc2, "emit: {emitted}");
+    // emit は冪等
+    assert_eq!(emitter::emit(&doc2), emitted);
+}
+
+#[test]
+fn test_jump_serializes_as_externally_tagged_json_for_wasm_consumers() {
+    // frontend の `{ Jump: { target } }` 型（types.ts）と serde 表現が一致していること。
+    let doc = parser::parse(&jump_doc("**A**:\nx\n\n[ジャンプ: 1-2]"));
+    let json = serde_json::to_value(&doc.chapters[0].scenes[0].events).unwrap();
+    let last = json.as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last, serde_json::json!({ "Jump": { "target": "1-2" } }));
+}

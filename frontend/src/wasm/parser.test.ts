@@ -2007,3 +2007,45 @@ describe('parseMarkdown + normalizeEvents: Dialog/Enter の depth が normalize 
     expect(findEnter(doc)?.Enter.depth).toBeNull()
   })
 })
+
+// #725: 無条件ジャンプ。wasm 再生成の取りこぼし（旧 wasm は [ジャンプ:] を未知行として落とす）を検知する。
+describe('parseMarkdown / emitMarkdown: [ジャンプ: ID] (#725)', () => {
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## a: t',
+    '',
+    '**A**:',
+    'x',
+    '',
+    '[条件: f]',
+    '[ジャンプ: 2-1]',
+    '[/条件]',
+    '[ジャンプ:  1-2 ]',
+    '[ジャンプ: ]',
+    '',
+  ].join('\n')
+
+  it('実 wasm 経路で Jump イベントになり、条件内・trim・空無視が効く', async () => {
+    const doc = await parseMarkdown(markdown)
+    const events = doc.chapters[0].scenes[0].events
+    expect(events).toContainEqual({
+      Condition: { flag: 'f', events: [{ Jump: { target: '2-1' } }] },
+    })
+    const jumps = events.filter((e) => typeof e === 'object' && e !== null && 'Jump' in e)
+    expect(jumps).toEqual([{ Jump: { target: '1-2' } }])
+  })
+
+  it('emitMarkdown で [ジャンプ: ID] に往復する', async () => {
+    const doc = await parseMarkdown(markdown)
+    const out = await emitMarkdown(doc)
+    expect(out).toContain('[ジャンプ: 1-2]')
+    expect(out).toContain('[ジャンプ: 2-1]')
+    const doc2 = await parseMarkdown(out)
+    expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})

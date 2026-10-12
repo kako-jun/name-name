@@ -138,6 +138,12 @@ describe('EventDisplay', () => {
     ).toContain('has_key')
   })
 
+  it('renders Jump (#725)', () => {
+    expect(renderEvent({ Jump: { target: '2-1' } }).container.textContent).toContain(
+      'ジャンプ: 2-1'
+    )
+  })
+
   // ----- RPG マスターデータ (#234 の本丸) -----
   it('renders Monster master data', () => {
     const { container } = renderEvent({

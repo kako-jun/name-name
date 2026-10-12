@@ -2439,6 +2439,206 @@ mod tests {
         let _ = pb.advance();
     }
 
+    /// Jump より後ろのイベントは item 化されない（再生されない）。
+    #[test]
+    fn jump_drops_events_after_it_in_the_same_scene() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![
+                        narration(vec!["a1"]),
+                        jump_event("c"),
+                        narration(vec!["a2-unreachable"]),
+                    ],
+                ),
+                scene("b", vec![narration(vec!["b1"])]),
+                scene("c", vec![narration(vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.total(),
+            3,
+            "a1 / (b1 は遷移先ではないが item 化される) / c1"
+        );
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        assert_eq!(pb.current_line().unwrap().text, vec!["c1".to_string()]);
+    }
+
+    /// sentence_per_page 有効時: 最後の item の全文を読み終えるまで Jump しない。
+    #[test]
+    fn jump_with_sentence_per_page_waits_for_last_sentence_before_jumping() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![dialog(Some("A"), vec!["一文目。二文目。"]), jump_event("c")],
+                ),
+                scene("b", vec![narration(vec!["b1"])]),
+                scene("c", vec![narration(vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["一文目。".to_string()]
+        );
+        assert!(!pb.is_at_end());
+        assert!(pb.advance(), "一文目 -> 二文目（まだ a のまま）");
+        assert_eq!(pb.current_scene_id(), "a");
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["二文目。".to_string()]
+        );
+        assert!(!pb.is_at_end(), "Jump 先があるので末尾ではない");
+        assert!(pb.advance(), "二文目 -> Jump 先");
+        assert_eq!(pb.current_scene_id(), "c");
+        assert_eq!(pb.current_line().unwrap().text, vec!["c1".to_string()]);
+    }
+
+    /// 別ファイルへの Jump は選択肢ジャンプと同じ境界リセット（BGM/イベント絵/暗転）を適用する。
+    /// （BGM 持ち越しは別PRの範囲。ここは main の現挙動＝リセットに合わせる。）
+    #[test]
+    fn jump_across_file_boundary_resets_running_state_like_choice_jump() {
+        let file0 = chapter(
+            1,
+            vec![scene(
+                "a",
+                vec![
+                    Event::Bgm {
+                        path: Some("a.ogg".to_string()),
+                        action: BgmAction::Play,
+                        fade_ms: None,
+                    },
+                    event_image("route0/scene.webp"),
+                    Event::Blackout {
+                        action: name_name_parser::models::BlackoutAction::On,
+                    },
+                    dialog(Some("A"), vec!["ファイル0の最後"]),
+                    jump_event("hub"),
+                ],
+            )],
+        );
+        let file1 = chapter(
+            2,
+            vec![scene("hub", vec![dialog(Some("H"), vec!["別ファイル"])])],
+        );
+        let doc = document_with_chapters(vec![file0, file1]);
+        let mut pb = Playback::from_merged_document(&doc, &[0, 1]);
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        assert!(pb.is_blackout());
+        assert!(!pb.is_at_end());
+
+        assert!(pb.advance());
+
+        assert_eq!(pb.current_scene_id(), "hub");
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["別ファイル".to_string()]
+        );
+        assert_eq!(pb.current_bgm(), None);
+        assert!(!pb.is_blackout());
+        assert_eq!(pb.current_line().unwrap().event_image, None);
+        assert!(pb.is_at_end());
+    }
+
+    /// 同一ファイル内の Jump では BGM/イベント絵が持ち越される（ファイル境界でのみリセット）。
+    #[test]
+    fn jump_within_same_file_keeps_running_state() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![
+                        Event::Bgm {
+                            path: Some("a.ogg".to_string()),
+                            action: BgmAction::Play,
+                            fade_ms: None,
+                        },
+                        event_image("keep.webp"),
+                        dialog(Some("A"), vec!["a1"]),
+                        jump_event("c"),
+                    ],
+                ),
+                scene("b", vec![narration(vec!["b1"])]),
+                scene("c", vec![dialog(Some("C"), vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("keep.webp")
+        );
+    }
+
+    /// Jump のみの中継シーンを経由して、さらにその先へ（advance 経路）。
+    #[test]
+    fn jump_through_jump_only_relay_scene_lands_on_final_target() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"]), jump_event("relay")]),
+                scene("relay", vec![jump_event("c")]),
+                scene("b", vec![narration(vec!["b1"])]),
+                scene("c", vec![narration(vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        assert_eq!(pb.current_line().unwrap().text, vec!["c1".to_string()]);
+    }
+
+    /// 選択肢で飛んだ先のシーンが Jump で終わっていても、そこから先へ続く（choice 経路の pending_jump）。
+    #[test]
+    fn choice_jump_into_scene_ending_with_jump_continues_to_its_target() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![narration(vec!["a1"]), choice(vec![("進む", "b")])],
+                ),
+                scene("b", vec![narration(vec!["b1"]), jump_event("d")]),
+                scene("c", vec![narration(vec!["c1"])]),
+                scene("d", vec![narration(vec!["d1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert!(pb.select_current_choice());
+        assert_eq!(pb.current_scene_id(), "b");
+        assert!(!pb.is_at_end());
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "d");
+    }
+
+    /// Jump 先の読み終わり後に、元シーンの Jump が再発火して戻ってしまわない（pending_jump は take される）。
+    #[test]
+    fn jump_target_does_not_re_fire_original_pending_jump() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"]), jump_event("c")]),
+                scene("c", vec![narration(vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        assert!(pb.is_at_end());
+        assert!(!pb.advance(), "c は末尾。a の Jump が再発火しない");
+        assert_eq!(pb.current_scene_id(), "c");
+    }
+
     #[test]
     fn dialog_with_character_produces_correct_display_line() {
         let doc = doc_single_scene(vec![dialog(Some("カコ"), vec!["やあ"])]);
