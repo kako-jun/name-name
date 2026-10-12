@@ -3524,7 +3524,7 @@ mod tests {
     }
 
     #[test]
-    fn select_current_choice_relay_across_file_boundary_resets_bgm_and_event_image() {
+    fn select_current_choice_relay_across_file_boundary_keeps_bgm_but_resets_event_image() {
         // #574の中継自動継続が別ファイルへjumpする場合も、#528/#540のリークガード
         // (BGM/イベント絵/暗転/pending_se/話者・本文のリセット)が適用されるはず。
         // "start"→"relay"は同一ファイル内(ここではリセットは発火しない)、
@@ -8117,7 +8117,8 @@ mod tests {
     // ---- #528: select_current_choiceのファイル境界越えジャンプでの状態リセット ----
 
     #[test]
-    fn select_current_choice_resets_running_state_when_jumping_across_file_boundary() {
+    fn select_current_choice_keeps_bgm_but_resets_other_running_state_when_jumping_across_file_boundary(
+    ) {
         // route1(file 0)末尾でBGM再生中・イベント絵表示中・暗転中のまま、Choiceで
         // 別ファイルのhub(file 1)へジャンプする。route1のChoiceの直後(itemを消費する前)に
         // 置いたSEは、後続itemが無いためpending_seとしてscan_stateに残留したまま
@@ -8249,11 +8250,110 @@ mod tests {
     }
 
     #[test]
+    fn select_current_choice_across_file_boundary_target_bgm_stop_clears_carried_bgm() {
+        // #724: ファイル境界越えで持ち越したBGMも、ジャンプ先冒頭の[BGM停止]では通常どおりNoneになる。
+        let route1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![
+                    bgm_play("a.ogg"),
+                    dialog(Some("A"), vec!["ルート1"]),
+                    choice(vec![("hubへ", "hub")]),
+                ],
+            )],
+        );
+        let hub = chapter(
+            2,
+            vec![scene(
+                "hub",
+                vec![bgm_stop(), dialog(Some("施設"), vec!["定期報告"])],
+            )],
+        );
+        let doc = document_with_chapters(vec![route1, hub]);
+        let mut pb = Playback::from_merged_document(&doc, &[0, 1]);
+        assert!(pb.advance());
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["定期報告".to_string()]
+        );
+        assert_eq!(
+            pb.current_bgm(),
+            None,
+            "ジャンプ先の[BGM停止]でNoneになるはず(#724)"
+        );
+    }
+
+    #[test]
+    fn select_current_choice_across_file_boundary_target_bgm_play_switches_track() {
+        // #724: ファイル境界越えの先に別曲の[BGM:]があれば切り替わる。
+        let route1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![
+                    bgm_play("a.ogg"),
+                    dialog(Some("A"), vec!["ルート1"]),
+                    choice(vec![("hubへ", "hub")]),
+                ],
+            )],
+        );
+        let hub = chapter(
+            2,
+            vec![scene(
+                "hub",
+                vec![bgm_play("b.ogg"), dialog(Some("施設"), vec!["定期報告"])],
+            )],
+        );
+        let doc = document_with_chapters(vec![route1, hub]);
+        let mut pb = Playback::from_merged_document(&doc, &[0, 1]);
+        assert!(pb.advance());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(pb.current_bgm(), Some("b.ogg"));
+    }
+
+    #[test]
+    fn select_current_choice_across_file_boundary_keeps_same_bgm_when_target_replays_it() {
+        // #724: 持ち越し先冒頭の同一曲[BGM:]でも current_bgm は同じ曲のまま。
+        let route1 = chapter(
+            1,
+            vec![scene(
+                "1-1",
+                vec![
+                    bgm_play("a.ogg"),
+                    dialog(Some("A"), vec!["ルート1"]),
+                    choice(vec![("hubへ", "hub")]),
+                ],
+            )],
+        );
+        let hub = chapter(
+            2,
+            vec![scene(
+                "hub",
+                vec![bgm_play("a.ogg"), dialog(Some("施設"), vec!["定期報告"])],
+            )],
+        );
+        let doc = document_with_chapters(vec![route1, hub]);
+        let mut pb = Playback::from_merged_document(&doc, &[0, 1]);
+        assert!(pb.advance());
+
+        assert!(pb.select_current_choice());
+
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+    }
+
+    #[test]
     fn select_current_choice_preserves_running_state_when_jumping_within_same_file() {
         // 同一ファイル内のジャンプでは、#528/#540のリセットは発火せず、BGM/イベント絵/
         // 暗転/pending SEがすべてそのまま引き継がれる(同一ルート内でシーンを跨いで
         // これらの状態が継続する、既存の意図した挙動)。クロスファイル側のテスト
-        // (select_current_choice_resets_running_state_when_jumping_across_file_boundary)は
+        // (select_current_choice_keeps_bgm_but_resets_other_running_state_when_jumping_across_file_boundary)は
         // 4フィールド全部を確認しているが、こちらは従来BGMしか確認しておらず非対称
         // だった(#540 should対応、他3フィールドも追加)。
         let ch1 = chapter(
