@@ -29,6 +29,13 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 `debug_scene`/`debug_script` を指定した起動はタイトル画面を出さず、指定した局面から直接開始する
 （`PlayerScreen.tsx` の `hasDebugStart` 判定、#656）。
 
+`debug_scene` が指すシーンがエントリ `script.md` に無く、`scriptsDir` 配下のサブ MD にある場合も
+動作する（#726）。`PlayerScreen` が `NovelPlayer` のマウント前に `?scene=` と同じ遅延ロード
+（`resolveMissingScene`）でそのシーンを含む MD を事前解決し、ジャンプ解決索引（`allScenes`）に
+載せる。`startSceneId`/`confinedSceneIds` には混ぜないため confinement なしは変わらない。
+解決できなかった場合（存在しない ID）はエントリ先頭から開始し、デバッグ HUD に
+`debug_scene: <id> → not found (fallback to entry)` と表示する。
+
 | クエリ | 意味 | 例 |
 |---|---|---|
 | `debug_scene` | 開始シーン ID（confinement なし。ファイル境界を無視して直接遷移） | `?debug_scene=1-2` |

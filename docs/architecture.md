@@ -160,6 +160,12 @@ basename が `script.md`** のもの（無ければ先頭）を選ぶ。
 
 `PlayerScreen` が `?scene=` を読み、対象 sceneId が属する script を（上記の missing scene
 resolver 経由で）事前解決・ロードしてから `NovelPlayer` に `initialSceneId` として渡す。
+
+`?debug_scene=` も同じく `PlayerScreen` のロード effect で `resolveMissingScene` により事前解決する
+（#726）。`NovelRenderer.startFrom` は `missingSceneResolver` で再挑戦せず、未ロードの sceneId では
+no-op になるため。ただし解決結果は `allScenes` に載せるだけで、`startSceneId`/`confinedSceneIds` には
+混ぜない（`debug_scene` は confinement なしを維持）。解決失敗時は HUD（`loadDebugInfo`）に
+`debug_scene: <id> → not found (fallback to entry)` を出す。
 `NovelPlayer` はマウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ
 （`debug_scene` ブロックより前に評価するため、両方指定されると `debug_scene` 側が後勝ちで
 優先される）。無効・未解決の sceneId は現行どおりエントリ（ハブ）から開始する。

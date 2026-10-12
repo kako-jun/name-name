@@ -634,6 +634,22 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
         }
         setStartSceneId(resolvedStartSceneId)
 
+        // #726: `?debug_scene=<id>` もエントリ外（未ロード）のサブ MD にあるシーンを指し得るため、
+        // NovelPlayer マウント前に同じ resolveMissingScene で事前解決して allScenes に載せる。
+        // NovelRenderer.startFrom は missingSceneResolver で再挑戦しない（見つからなければ no-op）ため。
+        // startSceneId / confinedSceneIds には混ぜない（#652/#656: debug は confinement なし）。
+        let debugSceneResolution: { id: string; found: boolean } | null = null
+        const debugQuery = parseDebugQuery(window.location.search)
+        const debugSceneId = debugQuery && 'scene' in debugQuery ? debugQuery.scene.sceneId : null
+        if (debugSceneId) {
+          const scenesWithDebug = await resolveMissingScene(debugSceneId)
+          if (cancelled) return
+          debugSceneResolution = {
+            id: debugSceneId,
+            found: !!scenesWithDebug && scenesWithDebug.some((s) => s.id === debugSceneId),
+          }
+        }
+
         // confinement（在圏）一覧 (#386)。対象 sceneId が属する doc 自身の sceneId 一覧に
         // 限定する（entry/hub 自身は候補から除外・修正2）。これにより NovelRenderer.jumpToScene
         // がこの集合外（hub・他ファイル）への choice ジャンプを終劇として扱い、単独埋め込みに
@@ -662,6 +678,11 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           ...(sceneParam
             ? [
                 `scene param: ${sceneParam} → ${resolvedStartSceneId ? 'resolved' : 'not found (fallback to entry)'}`,
+              ]
+            : []),
+          ...(debugSceneResolution
+            ? [
+                `debug_scene: ${debugSceneResolution.id} → ${debugSceneResolution.found ? 'resolved' : 'not found (fallback to entry)'}`,
               ]
             : []),
           `events: ${flattenDocumentEvents(entryDoc).length}`,
