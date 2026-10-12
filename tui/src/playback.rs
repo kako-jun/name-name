@@ -123,7 +123,12 @@
 //! そのシーンの最後の item を読み終えて [`Playback::advance`] したとき、ドキュメント順の後続
 //! ではなく [`Playback::jump_to_scene_id`]（選択肢確定と同じ遷移本体）へ進む。item を1件も
 //! 持たない中継シーン（Jump だけのシーン）は #574 の中継シーンと同様に素通りし、循環は
-//! `RELAY_HOP_LIMIT` で止める。遷移先が存在しない場合は位置を変えず `advance` が `false`。
+//! `RELAY_HOP_LIMIT` で止める。遷移先が存在しない場合は（中継シーン・上限到達も含め）位置を変えず
+//! `advance` が `false` を返し、予約は遷移に成功するまで残るので何度 `advance` しても停止し続ける
+//! （ドキュメント順の後続へは進まない。GUI と同じ「その位置で停止」）。TUI には GUI の
+//! `console.warn` に相当するステータス行の警告枠がないため、選択肢の遷移先不在と同様に無言で止める。
+//! item 0件で `[ジャンプ:]` を持つ中継シーンは `is_at_end` / `has_more_scenes_with_items` でも
+//! 「先がある」とみなす。
 //!
 //! ## フラグ管理・条件分岐の遅延評価 (#509)
 //!
@@ -1081,7 +1086,7 @@ impl Playback {
         // 最初のシーンが表示 item を持たず `[ジャンプ:]` で始まる場合（#725）は、そのまま
         // 遷移先から始める（表示できる item が無いまま待機状態にならないようにする）。
         if playback.items.is_empty() {
-            if let Some(target) = playback.pending_jump.take() {
+            if let Some(target) = playback.pending_jump.clone() {
                 playback.jump_to_scene_id(&target);
             }
         }
@@ -1503,8 +1508,10 @@ impl Playback {
         // 現在シーンが `[ジャンプ: シーンID]` で終わっている (#725): ドキュメント順の後続では
         // なく遷移先へ進む。選択肢確定と同じ `jump_to_scene_id` 経路（ファイル境界越えの
         // リセット・0件シーンのフォールスルーを含む）。ファイル境界は選択肢ジャンプと同じく
-        // 明示遷移なので越えてよい。遷移先が存在しなければ位置を変えず `false`。
-        if let Some(target) = self.pending_jump.take() {
+        // 明示遷移なので越えてよい。遷移先が存在しなければ位置を変えず `false`。予約は遷移に
+        // 成功したときだけ消える（`jump_to_scene_idx` 冒頭で破棄）ので、遷移先不在のまま
+        // 2回目以降に `advance` しても同じ位置で停止し続け、ドキュメント順の後続へ進まない。
+        if let Some(target) = self.pending_jump.clone() {
             return self.jump_to_scene_id(&target);
         }
         loop {
@@ -1547,10 +1554,11 @@ impl Playback {
             }
             // このシーンはitemを1件も生成しなかった。`[ジャンプ:]` で終わる中継シーン
             // （#725）ならその遷移先へ、そうでなければさらに次のシーンへ。
+            // 遷移先が存在しない場合は後続へ進まず停止する（予約を残すので再度 advance しても
+            // 同じく停止する）。
             if let Some(target) = jump {
-                if self.scene_index_by_id.contains_key(&target) {
-                    return self.jump_to_scene_id(&target);
-                }
+                self.pending_jump = Some(target.clone());
+                return self.jump_to_scene_id(&target);
             }
         }
     }
@@ -1715,10 +1723,6 @@ impl Playback {
         self.jump_to_scene_idx(target_scene_idx, Some(continuation))
     }
 
-    /// [`Playback::jump_to_scene_id`] の本体（解決済みの `scene_order` インデックス版、
-    /// #579 で `select_current_choice` から切り出した）。`continuation` が `Some` の場合、
-    /// 下のファイル境界リセットより後にその値で `scan_state` の該当3フィールドを上書き
-    /// する（[`Playback::jump_to_scene_id_with_continuation`] doc comment参照、#579）。
     /// ファイル境界を越えるジャンプで、シーンを跨いで引き継ぐランニング状態
     /// （BGM/イベント絵/暗転/pending SE/話者・本文）をリセットする (#528/#540)。
     fn reset_running_state_across_files(&mut self) {
@@ -1733,11 +1737,18 @@ impl Playback {
         self.scan_state.current_text = Vec::new();
     }
 
+    /// [`Playback::jump_to_scene_id`] の本体（解決済みの `scene_order` インデックス版、
+    /// #579 で `select_current_choice` から切り出した）。`continuation` が `Some` の場合、
+    /// 下のファイル境界リセットより後にその値で `scan_state` の該当3フィールドを上書き
+    /// する（[`Playback::jump_to_scene_id_with_continuation`] doc comment参照、#579）。
     fn jump_to_scene_idx(
         &mut self,
         target_scene_idx: usize,
         continuation: Option<SceneContinuation>,
     ) -> bool {
+        // 遷移を実行するので、遷移元シーンの `[ジャンプ:]` 予約（#725）は破棄する。選択肢先が
+        // item 0件の末尾・ファイル境界で止まる経路でも古い予約を持ち越さない。
+        self.pending_jump = None;
         // ジャンプ元とジャンプ先が異なるファイル由来の場合、シーンを跨いで引き継ぐ
         // ランニング状態（BGM/イベント絵/暗転/pending SE/話者・本文）をリセットする
         // （#528、#540で`current_speaker`/`current_text`を追加）。
@@ -1899,7 +1910,8 @@ impl Playback {
             }
             // ジャンプ先シーンがitem 0件で `[ジャンプ:]` で終わっている中継シーン (#725):
             // さらにその遷移先から続ける（`relay_hops` は #574 の中継と共有する上限で、
-            // 循環参照でもハングしない。上限到達・遷移先不在のときは下の通常フォールスルー）。
+            // 循環参照でもハングしない）。遷移先不在・上限到達のときはドキュメント順の後続へ
+            // 進まず停止する（予約を残すので `advance` を繰り返しても同じ位置で止まる）。
             if let Some(target) = jump {
                 if relay_hops < RELAY_HOP_LIMIT {
                     if let Some(&jump_target_idx) = self.scene_index_by_id.get(&target) {
@@ -1913,6 +1925,8 @@ impl Playback {
                         continue;
                     }
                 }
+                self.pending_jump = Some(target);
+                return false;
             }
             // ジャンプ先シーンがitem 0件。ファイル境界を越えない範囲で次のシーンへ
             // フォールスルーする（`advance()` のゼロ件シーン読み飛ばしループと同じ規約、
@@ -2129,7 +2143,8 @@ impl Playback {
                 &mut item_bgm,
                 &mut item_se,
             );
-            if !items.is_empty() {
+            // item 0件でも `[ジャンプ:]` で終わる中継シーン（#725）は「先がある」とみなす。
+            if !items.is_empty() || scan_state.pending_jump.is_some() {
                 return true;
             }
             scene_idx = next_scene_idx;
@@ -2619,6 +2634,82 @@ mod tests {
         assert!(!pb.is_at_end());
         assert!(pb.advance());
         assert_eq!(pb.current_scene_id(), "d");
+    }
+
+    /// 遷移先不在の Jump: 何度 advance しても同じ位置で停止し、ドキュメント順の後続へ進まない。
+    #[test]
+    fn jump_to_missing_target_stalls_on_every_advance() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"]), jump_event("nowhere")]),
+                scene("b", vec![narration(vec!["b1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        for _ in 0..3 {
+            assert!(!pb.advance());
+            assert_eq!(pb.current_scene_id(), "a");
+            assert_eq!(pb.current_line().unwrap().text, vec!["a1".to_string()]);
+        }
+    }
+
+    /// 中継シーン（Jump のみ）の遷移先が不在でも停止し、後続シーンへ進まない。
+    #[test]
+    fn jump_only_relay_with_missing_target_stalls() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"])]),
+                scene("r", vec![jump_event("nowhere")]),
+                scene("b", vec![narration(vec!["b1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        for _ in 0..3 {
+            assert!(!pb.advance());
+            assert_eq!(pb.current_line().unwrap().text, vec!["a1".to_string()]);
+        }
+    }
+
+    /// Jump のみの中継シーンが [a(本文), r(Jump→a)] の形でも、a 末尾は末尾扱いにならない。
+    #[test]
+    fn jump_only_relay_scene_counts_as_more_scenes_for_is_at_end() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"])]),
+                scene("r", vec![jump_event("a")]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(!pb.is_at_end());
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "a");
+    }
+
+    /// 選択肢先が item 0件で止まる経路でも、遷移元シーンの古い Jump 予約を持ち越さない。
+    #[test]
+    fn choice_jump_clears_stale_pending_jump() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![
+                        narration(vec!["a1"]),
+                        choice(vec![("進む", "z")]),
+                        jump_event("c"),
+                    ],
+                ),
+                scene("c", vec![narration(vec!["c1"])]),
+                scene("z", vec![]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert!(pb.select_current_choice());
+        assert!(pb.pending_jump.is_none());
     }
 
     /// Jump 先の読み終わり後に、元シーンの Jump が再発火して戻ってしまわない（pending_jump は take される）。
