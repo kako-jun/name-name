@@ -43,6 +43,7 @@ function scene(id: string, events: Event[]): EventScene {
 
 interface Internals {
   initialized: boolean
+  skipMode: boolean
   isAtJump(): boolean
   openSaveMenu(): void
   saveLoadOverlay: { showSave: (...args: unknown[]) => void }
@@ -191,7 +192,13 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     r.advance() // Jump 到達
     tick(r)
     expect(internals(r).waitingForWait).toBe(false)
-    r.goBack() // n2 のスナップショットを pop して n1 へ
+    r.goBack() // 停止中: 画面の n2 を復元し直す（n1 まで飛ばさない）
+    expect(text(r)).toContain('n2')
+    r.advance() // Jump 再発火
+    tick(r) // 再び停止
+    expect(internals(r).waitingForWait).toBe(false)
+    r.goBack()
+    r.goBack() // 通常の goBack: n2 → n1
     expect(text(r)).toContain('n1')
     r.advance() // n2
     r.advance() // 再び Jump（停止）
@@ -199,6 +206,31 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     expect(r.quickLoad()).toBe(true)
     expect(text(r)).toContain('n1')
     expect(r.getSnapshot().storyEnded).toBe(false)
+  })
+
+  it('6e: 本文 1 行のシーンの Jump 停止中でも goBack で本文へ戻れ、advance で Jump が再発火する', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([scene('a', [narration('only'), jump('nowhere')])])
+    r.advance()
+    tick(r)
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    r.goBack()
+    expect(internals(r).isAtJump()).toBe(false)
+    expect(text(r)).toContain('only')
+    r.advance()
+    tick(r)
+    expect(warnSpy).toHaveBeenCalledTimes(2)
+    expect(internals(r).isAtJump()).toBe(true)
+    expect(r.getSnapshot().storyEnded).toBe(false)
+  })
+
+  it('6f: スキップ中に停止した Jump へ着いたらスキップが解除される', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([scene('a', [narration('a1'), jump('nowhere')])])
+    r.setSkipMode(true)
+    r.advance()
+    tick(r, 100)
+    expect(internals(r).skipMode).toBe(false)
   })
 
   it('6c: resolver が null を返す・例外を投げる・lazy load 後も不在 → いずれも停止ゲートを下ろして停止', async () => {
@@ -374,6 +406,20 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     }
     expect(warnSpy).not.toHaveBeenCalled()
     expect(text(r)).toContain('a1')
+  })
+
+  it('13d: playScript は Jump のみの中継シーンを挟んでも（複数 hop）遷移を待ち切る', async () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    vi.spyOn(internals(r), 'render').mockImplementation(() => {})
+    r.setScenes([
+      scene('a', [narration('a1'), jump('r')]),
+      scene('r', [jump('c')]),
+      scene('c', [narration('c1'), narration('c2')]),
+    ])
+    await r.playScript([{ type: 'advance' }, { type: 'advance' }])
+    expect(r.getCurrentSceneId()).toBe('c')
+    expect(text(r)).toContain('c2')
   })
 
   it('13c: playScript は Jump 直後の advance ステップを捨てず、遷移を待ってから進める (N3)', async () => {
