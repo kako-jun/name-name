@@ -99,7 +99,8 @@
 //! による明示的なファイル境界越えは意図的に許可対象のままだが、ジャンプ元とジャンプ先が
 //! 異なるファイル由来のとき、シーンを跨いで引き継ぐランニング状態（`SceneScanState` の
 //! `current_bgm`/`current_event_image`/`current_blackout`/`pending_se`）には #496 と同種の
-//! 保護が及んでいなかった（#528）。route1（file 0）の末尾が `[BGM: a.ogg]` 再生中のまま
+//! 保護が及んでいなかった（#528）。なお BGM だけは #724 で方針を変え、GUI版と同じく
+//! ジャンプ一般で持ち越す（ファイル境界でもリセットしない）。以下の BGM に関する記述は #528 当時のもの。route1（file 0）の末尾が `[BGM: a.ogg]` 再生中のまま
 //! route2（file 1）へジャンプすると、無関係な BGM やイベント絵が route2 冒頭まで
 //! そのまま引き継がれてしまう実害があった（Gymnasia実データで確認）。#528 で
 //! `select_current_choice` に、ジャンプ元とジャンプ先の `file_id` が異なる場合だけ上記4
@@ -1663,8 +1664,8 @@ impl Playback {
         continuation: Option<SceneContinuation>,
     ) -> bool {
         // ジャンプ元とジャンプ先が異なるファイル由来の場合、シーンを跨いで引き継ぐ
-        // ランニング状態（BGM/イベント絵/暗転/pending SE/話者・本文）をリセットする
-        // （#528、#540で`current_speaker`/`current_text`を追加）。
+        // ランニング状態（イベント絵/暗転/pending SE/話者・本文）をリセットする
+        // （#528、#540で`current_speaker`/`current_text`を追加。BGM は #724 で対象外にした）。
         // `advance()` は `item_file_ids` を見てファイル境界をまたぐ暗黙の前進を拒否する
         // （#496）が、選択肢ジャンプ（本メソッド）は元々ファイル境界の対象外として設計
         // されており（モジュール冒頭ドキュメント参照）、この種の保護を持っていなかった。
@@ -1684,7 +1685,8 @@ impl Playback {
         if self.scene_order[self.current_scene_idx].file_id
             != self.scene_order[target_scene_idx].file_id
         {
-            self.scan_state.current_bgm = None;
+            // BGM は「変えるまで鳴り続ける」ためリセットしない（#724、GUI版のシーンジャンプでの
+            // BGM 持ち越しと揃える。#528 当初は BGM もリセット対象だった）。
             self.scan_state.current_event_image = None;
             self.scan_state.current_event_image_effects = AmbientEffects::default();
             self.scan_state.current_event_image_transition = EventImageTransition::default();
@@ -1810,7 +1812,7 @@ impl Playback {
                             if self.scene_order[self.current_scene_idx].file_id
                                 != self.scene_order[relay_target_idx].file_id
                             {
-                                self.scan_state.current_bgm = None;
+                                // BGM は持ち越す（#724）。
                                 self.scan_state.current_event_image = None;
                                 self.scan_state.current_event_image_effects =
                                     AmbientEffects::default();
@@ -3576,9 +3578,8 @@ mod tests {
         );
         assert_eq!(
             pb.current_bgm(),
-            None,
-            "中継シーンがファイル境界を越えてjumpしたのでBGMはリセットされるはず\
-             (#528の保護が中継hopにも適用される)"
+            Some("a.ogg"),
+            "中継シーンがファイル境界を越えてjumpしてもBGMは持ち越される(#724)"
         );
         assert!(
             !pb.is_blackout(),
@@ -8167,8 +8168,8 @@ mod tests {
 
         assert_eq!(
             pb.current_bgm(),
-            None,
-            "ファイル境界を越えたのでroute1のBGMはリセットされ、hub側で新規指定が無い限りNoneのはず(#528)"
+            Some("a.ogg"),
+            "BGMはファイル境界を越えても持ち越される(#724、#528当初はリセットだった)"
         );
         assert_eq!(
             pb.current_line().unwrap().event_image,

@@ -1877,7 +1877,12 @@ export class NovelRenderer {
       this.effectOverlay.visible = false
     }
     this.choiceOverlay.hide()
-    this.audioManager.stopBgm(0)
+    // BGM は「変えるまで鳴り続ける」(#724): 場面転換（startScene 経由のジャンプ）では持ち越し、
+    // 次シーン冒頭の同一曲 [BGM:] も頭出ししない（AudioManager.playBgm の同一 URL 継続分岐）。
+    // 新しいイベント列の最初の開始（setEvents）・restart では従来どおり停止する。
+    if (!options?.preserveBackgroundForTransition) {
+      this.audioManager.stopBgm(0)
+    }
     // SE シーケンス（#672）の gap 待機タイマーをキャンセルする。新しいシーンへ遷移した後も
     // 前シーンで発火した [SE: 複数候補] の残りが setTimeout 越しにバックグラウンド再生され
     // 続けないようにする（他タイマーと同じ規律、AudioManager.cancelSeSequence のdoc comment参照）。
@@ -1923,7 +1928,10 @@ export class NovelRenderer {
     // 引き継がない（演出の中間状態を持ち越さない、eventImageLayer と同じ規律）。
     this.clearTelopLayer()
     this.setBlackout(false)
-    this.currentBgmPath = null
+    // currentBgmPath は上の stopBgm と対で、持ち越し時（#724）は保持して snapshot/save と整合させる。
+    if (!options?.preserveBackgroundForTransition) {
+      this.currentBgmPath = null
+    }
     // 追うスポットライト (#693) も新しいシーンの開始で常に消灯する。isBlackout/cameraMode と
     // 同じ規律: target キャラは次シーンに存在するとは限らないため、シーンをまたいで暗黙に
     // 持ち越さず、そのシーンで必要なら明示的に [スポットライト:] を書く。
