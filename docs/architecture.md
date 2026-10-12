@@ -642,7 +642,7 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
 - ループ再生
 - 曲切り替え時はフェードアウト → 新曲開始
 - `[BGM停止]` でフェードアウト停止
-- **シーンジャンプでは持ち越す（#724）**: `NovelRenderer.resetAndStartEvents` は `preserveBackgroundForTransition`（`startScene` 経由のジャンプ）のとき `audioManager.stopBgm(0)` と `currentBgmPath = null` を実行しない。次シーン冒頭の同一曲 `[BGM:]` は `AudioManager.playBgm` の同一 URL 継続分岐で頭出しされない。`setEvents` / `restart` / 終劇（`endStory`）では従来どおり停止する。無音にしたいシーンは冒頭で `[BGM停止]`。`NovelGameState.currentBgmPath` はジャンプ後もそのまま整合し、snapshot / seek / save / load で復元される
+- **シーンジャンプでは持ち越す（#724）**: `NovelRenderer.resetAndStartEvents` は独立オプション `carryBgm`（背景持ち越しの `preserveBackgroundForTransition` とは別。`jumpToScene` / `resolveMissingSceneAndJump` が true を渡す）のとき `audioManager.stopBgm(0)` と `currentBgmPath = null` を実行しない。次シーン冒頭の同一曲 `[BGM:]` は `AudioManager.playBgm` の同一 URL 継続分岐で頭出しされない。`setEvents` / `restart` / 終劇（`endStory`）、`startFrom`（`?scene=` / `?debug_scene=`）、動画書き出し（`stopBgmForFreshStart()`）の新規開始では従来どおり停止する。無音にしたいシーンは冒頭で `[BGM停止]`。`NovelGameState.currentBgmPath` はジャンプ後もそのまま整合し、snapshot / seek / save / load で復元される
 
 ### SE
 
