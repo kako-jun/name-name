@@ -234,7 +234,7 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
   })
 
   it('6c: resolver が null を返す・例外を投げる・lazy load 後も不在 → いずれも停止ゲートを下ろして停止', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const cases: Array<() => Promise<EventScene[] | null>> = [
       () => Promise.resolve(null),
       () => Promise.reject(new Error('boom')),
@@ -248,6 +248,9 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
       await new Promise((res) => setTimeout(res, 0))
       expect(internals(r).waitingForWait).toBe(false)
       expect(r.getCurrentSceneId()).toBe('a')
+      // いずれの失敗経路でも警告が 1 回以上出て、対象シーンIDを含む
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('far'))).toBe(true)
+      warnSpy.mockClear()
       r.advance()
       expect(r.getSnapshot().storyEnded).toBe(false)
     }

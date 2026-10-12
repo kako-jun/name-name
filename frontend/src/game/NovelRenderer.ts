@@ -1455,6 +1455,9 @@ export class NovelRenderer {
       // 破棄済みの this.app.stage を触るため、初期化チェック無しで先に進むと例外を投げうる。
       if (!this.initialized) return
       if (!scenes) {
+        console.warn(
+          `[name-name] シーンが見つからない（resolver が null を返しました）: ${sceneId}`
+        )
         this.stallJump()
         return
       }

@@ -298,8 +298,10 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
 
     expect(resolver).toHaveBeenCalledWith('ghost-route')
     expect(r.getCurrentSceneId()).toBe(sceneBefore)
-    // null 解決は「lazy load 後も見つからない」ケースとは異なる分岐（scenes 自体が無い）なので warn しない
-    expect(warnSpy).not.toHaveBeenCalled()
+    // null 解決は「lazy load 後も見つからない」ケースとは別分岐（scenes 自体が無い）だが、
+    // 遷移先不在を作者が気づけるよう警告を 1 回出す (#725)
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(String(warnSpy.mock.calls[0][0])).toContain('resolver が null')
   })
 
   it('J-K3: resolver がシーンを返すが sceneId を含まない配列を解決すると console.warn が1回呼ばれ jump は実行されない', async () => {
