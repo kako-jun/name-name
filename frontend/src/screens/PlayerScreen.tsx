@@ -270,8 +270,8 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   // 誤って表示され、「つづきから」（hasQuickSave()=false 時）/「はじめから」の
   // renderer.restart() が NovelPlayer 側で既に startFrom 済みのデバッグ位置を握りつぶしていた
   // （#656 の実機報告: つづきからが常に10択のハブから始まる／読書中に突然 to be continued になる）。
-  // debug_scene/debug_script の値自体は startSceneId や confinedSceneIds の計算には一切混ぜない
-  // ——`?debug_scene=` は #652 の設計どおり confinement を持たない別経路のままにし、ここでは
+  // debug_scene/debug_script の値は startSceneId には混ぜない。debug_scene が解決できた場合のみ
+  // confinedSceneIds を null にする（#726、後勝ち。#652 の設計どおり debug は confinement なし）。ここでは
   // 「タイトル画面を出すか」の判定だけを分離して拡張する。isEmbedded()/playerDark と同じく
   // マウント中は不変なのでレンダー時に一度評価する。
   const hasDebugStart = parseDebugQuery(window.location.search) !== null
@@ -572,6 +572,11 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           const resolvedStartSceneId =
             sceneParam && entryScenes.some((s) => s.id === sceneParam) ? sceneParam : null
           setStartSceneId(resolvedStartSceneId)
+          const fallbackDebugQuery = parseDebugQuery(window.location.search)
+          const fallbackDebugSceneId =
+            fallbackDebugQuery && 'scene' in fallbackDebugQuery
+              ? fallbackDebugQuery.scene.sceneId
+              : null
           setLoadDebugInfo([
             'mode: single script fallback',
             `entry: ${SCRIPT_BASENAME}`,
@@ -582,6 +587,11 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             ...(sceneParam
               ? [
                   `scene param: ${sceneParam} → ${resolvedStartSceneId ? 'resolved' : 'not found (fallback to entry)'}`,
+                ]
+              : []),
+            ...(fallbackDebugSceneId
+              ? [
+                  `debug_scene: ${fallbackDebugSceneId} → ${entryScenes.some((s) => s.id === fallbackDebugSceneId) ? 'resolved' : resolvedStartSceneId ? 'not found (ignored)' : 'not found (fallback to entry)'}`,
                 ]
               : []),
           ])
@@ -634,15 +644,34 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
         }
         setStartSceneId(resolvedStartSceneId)
 
+        // #726: `?debug_scene=<id>` もエントリ外（未ロード）のサブ MD にあるシーンを指し得るため、
+        // NovelPlayer マウント前に同じ resolveMissingScene で事前解決して allScenes に載せる。
+        // NovelRenderer.startFrom は missingSceneResolver で再挑戦しない（見つからなければ no-op）ため。
+        // startSceneId には混ぜないが、解決できたときは confinement を外す（#652/#656: debug は
+        // confinement なし。`?scene=` 併用でも debug 後勝ち）。
+        let debugSceneResolution: { id: string; found: boolean } | null = null
+        const debugQuery = parseDebugQuery(window.location.search)
+        const debugSceneId = debugQuery && 'scene' in debugQuery ? debugQuery.scene.sceneId : null
+        if (debugSceneId) {
+          const scenesWithDebug = await resolveMissingScene(debugSceneId)
+          if (cancelled) return
+          debugSceneResolution = {
+            id: debugSceneId,
+            // resolveMissingScene は見つかったときだけ非 null を返す
+            found: scenesWithDebug !== null,
+          }
+        }
+
         // confinement（在圏）一覧 (#386)。対象 sceneId が属する doc 自身の sceneId 一覧に
         // 限定する（entry/hub 自身は候補から除外・修正2）。これにより NovelRenderer.jumpToScene
         // がこの集合外（hub・他ファイル）への choice ジャンプを終劇として扱い、単独埋め込みに
         // hub の内容が漏れるのを防ぐ（theo-hayami #20: 他ファイルへは HTML リンクで、埋め込み
         // 内の choice では遷移しない）。`?scene=` が hub 自身の sceneId を指した場合は
         // findConfinedSceneIds が null を返す＝無制限フローにフォールバックする。
-        const confinedIds = resolvedStartSceneId
-          ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current, entryPath)
-          : null
+        const confinedIds =
+          resolvedStartSceneId && !debugSceneResolution?.found
+            ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current, entryPath)
+            : null
         setConfinedSceneIds(confinedIds)
 
         // 初期ジャンプ解決索引は entry のシーン + #386 で事前ロードした対象 script のシーン。
@@ -662,6 +691,11 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           ...(sceneParam
             ? [
                 `scene param: ${sceneParam} → ${resolvedStartSceneId ? 'resolved' : 'not found (fallback to entry)'}`,
+              ]
+            : []),
+          ...(debugSceneResolution
+            ? [
+                `debug_scene: ${debugSceneResolution.id} → ${debugSceneResolution.found ? 'resolved' : resolvedStartSceneId ? 'not found (ignored)' : 'not found (fallback to entry)'}`,
               ]
             : []),
           `events: ${flattenDocumentEvents(entryDoc).length}`,
@@ -919,7 +953,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             // #656: `hasDebugStart`（`?debug_scene=`/`?debug_script=`）も同じ理由でタイトルを
             // 出さないゲートに加える。こちらは startSceneId を経由しない別経路（NovelPlayer の
             // mount effect が独自に startFrom/playScript する、上の hasDebugStart 宣言部参照）
-            // なので、startSceneId 自体（＝ confinedSceneIds の計算元）には一切影響させない。
+            // なので、startSceneId 自体には影響させない（confinedSceneIds は debug_scene 解決時に null になる、#726）。
             //
             // onNewGame/onContinue/onOpenSettings/onBack の副作用ロジック自体は #141/#620 の
             // 実装から一切変更していない（表示だけを PixiJS 化する、#628 フェーズ2b のスコープ）。
