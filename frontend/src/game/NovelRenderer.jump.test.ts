@@ -43,6 +43,9 @@ function scene(id: string, events: Event[]): EventScene {
 
 interface Internals {
   initialized: boolean
+  isAtJump(): boolean
+  openSaveMenu(): void
+  saveLoadOverlay: { showSave: (...args: unknown[]) => void }
   eventIndex: number
   waitingForWait: boolean
   waitTimer: number | null
@@ -158,7 +161,7 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
 
   // ===== 遷移先不在 =====
 
-  it('6: 遷移先が存在し resolver も無い → 警告のみで a の位置に停止（終劇にならない・例外なし）', () => {
+  it('6: 遷移先が存在せず resolver も無い → 警告のみで a の位置に停止（終劇にならない・例外なし）', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([scene('a', [narration('a1'), jump('nowhere')])])
     r.advance()
@@ -167,9 +170,70 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     expect(String(warnSpy.mock.calls[0][0])).toContain('nowhere')
     expect(r.getCurrentSceneId()).toBe('a')
     expect(r.getSnapshot().storyEnded).toBe(false)
-    // 以降の advance も Jump を飛び越して終劇に落ちない
-    r.advance()
+    // 以降の advance も Jump を飛び越して終劇に落ちない（何度でも停止し続ける）
+    for (let i = 0; i < 3; i++) {
+      r.advance()
+      tick(r)
+      expect(r.getSnapshot().storyEnded).toBe(false)
+      expect(r.getCurrentSceneId()).toBe('a')
+    }
+    // 停止ゲート（waitingForWait）は下りている: goBack 等を塞いで詰まない (S1)
+    expect(internals(r).waitingForWait).toBe(false)
+  })
+
+  it('6b: 遷移先不在で停止中でも goBack / quickLoad は使える（waitingForWait で詰まない）', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([scene('a', [narration('n1'), narration('n2'), jump('nowhere')])], {
+      docKey: 'doc-725-stall',
+    })
+    expect(r.quickSave()).toBe(true) // n1 で保存
+    r.advance() // n2
+    r.advance() // Jump 到達
+    tick(r)
+    expect(internals(r).waitingForWait).toBe(false)
+    r.goBack() // n2 のスナップショットを pop して n1 へ
+    expect(text(r)).toContain('n1')
+    r.advance() // n2
+    r.advance() // 再び Jump（停止）
+    tick(r)
+    expect(r.quickLoad()).toBe(true)
+    expect(text(r)).toContain('n1')
     expect(r.getSnapshot().storyEnded).toBe(false)
+  })
+
+  it('6c: resolver が null を返す・例外を投げる・lazy load 後も不在 → いずれも停止ゲートを下ろして停止', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const cases: Array<() => Promise<EventScene[] | null>> = [
+      () => Promise.resolve(null),
+      () => Promise.reject(new Error('boom')),
+      () => Promise.resolve([scene('a', [narration('a1'), jump('far')])]),
+    ]
+    for (const resolverImpl of cases) {
+      const r = makeRenderer([scene('a', [narration('a1'), jump('far')])])
+      r.setMissingSceneResolver(resolverImpl)
+      r.advance()
+      tick(r)
+      await new Promise((res) => setTimeout(res, 0))
+      expect(internals(r).waitingForWait).toBe(false)
+      expect(r.getCurrentSceneId()).toBe('a')
+      r.advance()
+      expect(r.getSnapshot().storyEnded).toBe(false)
+    }
+  })
+
+  it('6d: Jump 待機中（遅延ロード往復中を含む）・停止中はセーブメニューもクイックセーブも開けない (S2)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([scene('a', [narration('a1'), jump('nowhere')])], {
+      docKey: 'doc-725-save',
+    })
+    const showSave = vi.spyOn(internals(r).saveLoadOverlay, 'showSave').mockImplementation(() => {})
+    r.advance() // Jump 到達（待機中）
+    internals(r).openSaveMenu()
+    expect(r.quickSave()).toBe(false)
+    tick(r) // 遷移失敗 → 停止
+    internals(r).openSaveMenu()
+    expect(r.quickSave()).toBe(false)
+    expect(showSave).not.toHaveBeenCalled()
   })
 
   it('7: missingSceneResolver 経由で未ロード MD へ遷移し、ロード中の advance で終劇に落ちない', async () => {
@@ -276,26 +340,53 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     expect(r.getSnapshot().storyEnded).toBe(false)
   })
 
-  it('13: Jump のみのシーンの循環（a → b → a）は実時間の macrotask ごとに進み、同期ループで固まらない', async () => {
-    // virtual TimeController は tick 内で連鎖する 0ms タイマーを全て消化するため、ここは live で検証する。
+  it('13: Jump のみのシーンの循環（a → b → a）は連続 100 回で警告して停止する (S3)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = new NovelRenderer()
+    r.getTimeController().setMode('virtual')
     internals(r).initialized = true
     vi.spyOn(internals(r), 'render').mockImplementation(() => {})
     const onScene = vi.fn()
     r.setOnSceneChange(onScene)
     r.setScenes([scene('a', [jump('b')]), scene('b', [jump('a')])])
-    // setScenes が同期で返ってきた時点（=固まっていない）。初期シーン開始の通知は基準にする
-    const baseline = onScene.mock.calls.length
-    // 全並列実行下でも安定するよう、固定待ちでなく条件成立までポーリングする（上限 2s）
-    const deadline = Date.now() + 2000
-    while (onScene.mock.calls.length - baseline < 2 && Date.now() < deadline) {
-      await new Promise((res) => setTimeout(res, 5))
-    }
-    expect(onScene.mock.calls.length - baseline).toBeGreaterThanOrEqual(2)
+    // virtual TimeController は tick 内で連鎖する 0ms タイマーを全て消化する
+    tick(r, 10)
+    expect(onScene.mock.calls.length).toBeGreaterThanOrEqual(100)
+    expect(onScene.mock.calls.length).toBeLessThanOrEqual(103)
+    const loopWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('循環'))
+    expect(loopWarns.length).toBe(1)
+    expect(internals(r).waitingForWait).toBe(false)
     expect(r.getSnapshot().storyEnded).toBe(false)
-    // 循環を止める（以降のタイマーは initialized ガードで何もしない）
-    internals(r).initialized = false
-    await new Promise((res) => setTimeout(res, 10))
+    // 停止後は何も進まない
+    const n = onScene.mock.calls.length
+    tick(r, 100)
+    r.advance()
+    tick(r, 100)
+    expect(onScene.mock.calls.length).toBe(n)
+  })
+
+  it('13b: 本文を挟む周回（a1 → Jump → a）は連続カウントがリセットされ制限されない', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([scene('a', [narration('a1'), jump('a')])])
+    for (let i = 0; i < 150; i++) {
+      r.advance()
+      tick(r)
+    }
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(text(r)).toContain('a1')
+  })
+
+  it('13c: playScript は Jump 直後の advance ステップを捨てず、遷移を待ってから進める (N3)', async () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    vi.spyOn(internals(r), 'render').mockImplementation(() => {})
+    r.setScenes([
+      scene('a', [narration('a1'), jump('c')]),
+      scene('c', [narration('c1'), narration('c2')]),
+    ])
+    await r.playScript([{ type: 'advance' }, { type: 'advance' }])
+    expect(r.getCurrentSceneId()).toBe('c')
+    expect(text(r)).toContain('c2')
   })
 
   // ===== skip / auto =====

@@ -675,7 +675,15 @@ export class NovelRenderer {
   private suppressNextAdvance = false
 
   /** Wait イベント実行中フラグ */
+  private static readonly JUMP_CHAIN_LIMIT = 100
   private waitingForWait = false
+  /**
+   * 本文を描画しないまま連続して実行した `[ジャンプ:]` の回数 (#725)。Jump のみのシーン同士の
+   * 循環（a → b → a …）が macrotask ごとに永久に回らないよう、`JUMP_CHAIN_LIMIT` で打ち切る
+   * （TUI の `RELAY_HOP_LIMIT` と同じ 100）。本文の描画（pushSnapshot）・ユーザー操作（advance）・
+   * 状態復元（applyState）・setScenes でリセットする。
+   */
+  private consecutiveJumps = 0
 
   /**
    * `resetAndStartEvents({ skipAutoAdvance: true })` で自動進行
@@ -1286,6 +1294,7 @@ export class NovelRenderer {
   setScenes(scenes: EventScene[], options?: { skipAutoAdvance?: boolean }): void {
     this.allScenes = scenes
     this.gameState.clear()
+    this.consecutiveJumps = 0
     if (scenes.length > 0) {
       this.currentSceneId = scenes[0].id
       this.setEvents(scenes[0].events, options)
@@ -1367,10 +1376,40 @@ export class NovelRenderer {
         void this.resolveMissingSceneAndJump(sceneId)
       } else {
         console.warn(`[name-name] シーンが見つからない: ${sceneId}`)
+        this.stallJump()
       }
       return
     }
     this.startScene(sceneId, scene)
+  }
+
+  /**
+   * playScript 用 (#725): 直前のステップで `[ジャンプ:]` に到達していたら、遷移の macrotask
+   * （`setTimeout(0)`）を消化してから次のステップへ進む。これが無いと、Jump 直後の
+   * `advance` ステップが停止ゲート（waitingForWait）で黙って捨てられる。Jump 側の
+   * タイマーが先に登録されているため、ここで 0ms 待てばその後に解決する。
+   */
+  private async drainPendingJump(): Promise<boolean> {
+    if (!this.waitingForWait || !this.isAtJump()) return false
+    await new Promise<void>((resolve) => this.time.setTimeout(resolve, 0))
+    return true
+  }
+
+  /** 現在位置（eventIndex）が `[ジャンプ:]` 上か (#725)。待機中・停止中の両方で真になる。 */
+  private isAtJump(): boolean {
+    const ev = this.resolvedEvents[this.eventIndex]
+    return typeof ev === 'object' && ev !== null && 'Jump' in ev
+  }
+
+  /**
+   * Jump の遷移に失敗したとき（遷移先不在・resolver が null/例外・lazy load 後も不在・循環上限）、
+   * 停止ゲート（waitingForWait）だけを下ろして Jump の位置で止まる (#725)。ゲートを残すと
+   * goBack/seekTo/quickLoad 等まで塞がって詰むため。停止中は `advance` が `isAtJump()` で弾く。
+   */
+  private stallJump(): void {
+    if (this.waitingForWait && this.isAtJump()) {
+      this.waitingForWait = false
+    }
   }
 
   private startScene(sceneId: string, scene: EventScene): void {
@@ -1396,16 +1435,21 @@ export class NovelRenderer {
       // が destroy() されると this.initialized が false になり、destroy 後は startScene が
       // 破棄済みの this.app.stage を触るため、初期化チェック無しで先に進むと例外を投げうる。
       if (!this.initialized) return
-      if (!scenes) return
+      if (!scenes) {
+        this.stallJump()
+        return
+      }
       this.setJumpSceneIndex(scenes)
       const scene = findSceneById(this.allScenes, sceneId)
       if (!scene) {
         console.warn(`[name-name] lazy load 後もシーンが見つかりません: ${sceneId}`)
+        this.stallJump()
         return
       }
       this.startScene(sceneId, scene)
     } catch (err) {
       console.warn(`[name-name] シーンの追加読み込みに失敗しました: ${sceneId}`, err)
+      if (this.initialized) this.stallJump()
     } finally {
       this.pendingMissingScenes.delete(sceneId)
     }
@@ -3325,6 +3369,10 @@ export class NovelRenderer {
     if (this.storyEnded) return
     if (this.resolvedEvents.length === 0) return
     if (this.waitingForChoice || this.waitingForWait) return
+    // Jump 停止中 (#725): 遷移先不在・循環上限で止まっているとき、Jump を飛び越して後続へ
+    // （末尾なら終劇へ）進まない。goBack/seekTo/quickLoad は waitingForWait を立てないので使える。
+    if (this.isAtJump()) return
+    this.consecutiveJumps = 0
 
     const current = this.resolvedEvents[this.eventIndex]
     const textEvt = getTextEvent(current)
@@ -3437,6 +3485,8 @@ export class NovelRenderer {
    * - `choice`: 選択肢の確定パスと同等にフラグを整合させてから直接 `jumpToScene(jump)` する
    *   （Choice オーバーレイの表示はスキップする）
    * - `wait`: ms ミリ秒だけ待つ（将来の非同期イベント用）
+   * - `[ジャンプ:]` (#725) に到達した `advance`/`choice` ステップの直後は、遷移の macrotask
+   *   （setTimeout(0)）を自動で消化してから次のステップへ進む（`wait` を挟む必要はない）
    *
    * デバッグ/テスト用のリプレイ API。再生中は msPerChar=0（タイプライター即スキップ）とし、
    * 完了時・例外時とも元の msPerChar に必ず復元する（try/finally）。
@@ -3464,6 +3514,9 @@ export class NovelRenderer {
         switch (step.type) {
           case 'advance':
             this.advance()
+            if (await this.drainPendingJump()) {
+              if (!this.initialized) return
+            }
             break
           case 'choice':
             // 選択肢確定パス（ChoiceOverlay のコールバック）と同じフラグ整合を保つ。
@@ -3474,6 +3527,9 @@ export class NovelRenderer {
             // シーン）時は resetAndStartEvents が呼ばれないため、ここで明示的にリセットする。
             this.waitingForChoice = false
             this.jumpToScene(step.jump)
+            if (await this.drainPendingJump()) {
+              if (!this.initialized) return
+            }
             break
           case 'wait':
             await new Promise<void>((resolve) => this.time.setTimeout(resolve, step.ms))
@@ -3570,6 +3626,8 @@ export class NovelRenderer {
       this.eventIndex < this.resolvedEvents.length &&
       getTextEvent(this.resolvedEvents[this.eventIndex])
     ) {
+      // 本文を描画した時点で、Jump だけが続く連鎖の回数をリセットする (#725)。
+      this.consecutiveJumps = 0
       this.history.push(this.getSnapshot())
     }
   }
@@ -3578,6 +3636,7 @@ export class NovelRenderer {
    * スナップショットから状態を宣言的に復元する
    */
   private applyState(state: NovelGameState): void {
+    this.consecutiveJumps = 0
     // intermission タブロー描画の遅延タイマーをキャンセルする (#404)。goBack/seekTo でフェード中の
     // 終劇が巻き戻された後、古いタイマーが発火して復元済みの画面をタブローで上書きしてしまう事故を防ぐ。
     if (this.intermissionTimer) {
@@ -4653,6 +4712,15 @@ export class NovelRenderer {
       this.waitTimer = this.time.setTimeout(() => {
         this.waitTimer = null
         if (!this.initialized) return
+        // 本文を描画しない Jump だけの連鎖（循環）は上限で止める。TUI の RELAY_HOP_LIMIT と同値。
+        this.consecutiveJumps++
+        if (this.consecutiveJumps > NovelRenderer.JUMP_CHAIN_LIMIT) {
+          console.warn(
+            `[name-name] [ジャンプ:] が本文なしで ${NovelRenderer.JUMP_CHAIN_LIMIT} 回を超えて連続したため停止します（循環の可能性）: ${event.Jump.target}`
+          )
+          this.stallJump()
+          return
+        }
         this.jumpToScene(event.Jump.target)
       }, 0)
       return
@@ -5507,6 +5575,8 @@ export class NovelRenderer {
    */
   quickSave(): boolean {
     if (this.waitingForChoice || this.waitingForWait || this.storyEnded) return false
+    // Jump 停止中 (#725): waitingForWait を下ろした状態でも保存しない（openSaveMenu と同じ理由）。
+    if (this.isAtJump()) return false
 
     // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
     // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
@@ -5583,6 +5653,9 @@ export class NovelRenderer {
    */
   private openSaveMenu(): void {
     if (this.storyEnded) return
+    // Jump 待機中・停止中 (#725) は開かない。eventIndex が Jump を指したまま保存すると、
+    // ロード時に directive が再実行されず次の advance で Jump を飛び越してしまう。
+    if (this.isAtJump()) return
     this.saveLoadOverlay.showSave((slot: number) => {
       // quickSave と共通のシーンタイトル解決 (#260)。
       const sceneName = resolveSceneTitle(this.allScenes, this.currentSceneId)
