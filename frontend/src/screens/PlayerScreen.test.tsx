@@ -2495,6 +2495,125 @@ describe('PlayerScreen', () => {
         expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
       })
     })
+
+    // --- #726: `?debug_scene=` もエントリ外（未ロード）のサブ MD シーンを事前解決する ---
+    describe('PlayerScreen `?debug_scene=` の遅延ロード事前解決 (#726)', () => {
+      const CELL_PATH = 'content/scripts/free/a.md'
+      const CELL_B_PATH = 'content/scripts/free/b.md'
+
+      function cellFetchCount(path: string): number {
+        return getContentsMock.mock.calls.filter((c) => c[1] === path).length
+      }
+
+      function sceneIds(): string[] {
+        return lastJumpSceneIndex().map((sc) => sc.id)
+      }
+
+      /** mockMultiDocProject に b.md（cell-b-1）を足した 3 ファイル構成にする。 */
+      async function renderTwoCellProject() {
+        mockMultiDocProject()
+        listScriptsMock.mockResolvedValue([
+          { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+          { path: CELL_PATH, sha: 's1', size: 1, title: null, hidden: false },
+          { path: CELL_B_PATH, sha: 's2', size: 1, title: null, hidden: false },
+        ])
+        const base = parseMarkdownMock.getMockImplementation()!
+        parseMarkdownMock.mockImplementation(async (md: string, ...rest: unknown[]) => {
+          if (md === CELL_B_PATH) {
+            return {
+              engine: 'name-name',
+              chapters: [
+                {
+                  number: 1,
+                  title: 'c',
+                  hidden: false,
+                  default_bgm: null,
+                  scenes: [{ id: 'cell-b-1', title: 'b1', view: 'TopDown', events: [] }],
+                },
+              ],
+            }
+          }
+          return (base as (m: string, ...r: unknown[]) => Promise<unknown>)(md, ...rest)
+        })
+        render(
+          <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
+        )
+        await waitFor(() => {
+          expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+        })
+      }
+
+      it('62: エントリ外サブ MD のシーンを debug_scene 指定すると jumpSceneIndex に載り、タイトル非表示・initialSceneId/confinedSceneIds は null のまま', async () => {
+        window.history.pushState({}, '', '?debug_scene=cell-scene-1')
+        await renderMultiDocProject()
+        expect(sceneIds()).toContain('cell-scene-1')
+        expect(cellFetchCount(CELL_PATH)).toBeGreaterThan(0)
+        expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
+        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'debug_scene: cell-scene-1 → resolved'
+        )
+      })
+
+      it('63: 存在しない id を debug_scene 指定すると HUD に not found が出て、エントリ先頭のまま（索引はエントリのシーンのみ・クラッシュしない）', async () => {
+        window.history.pushState({}, '', '?debug_scene=no-such-scene')
+        await renderMultiDocProject()
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'debug_scene: no-such-scene → not found (fallback to entry)'
+        )
+        expect(sceneIds()).not.toContain('no-such-scene')
+        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+        expect(screen.queryByRole('alert')).toBeNull()
+      })
+
+      it('64: エントリ内に既にある id（hub-scene）を debug_scene 指定しても追加 fetch せず resolved になる', async () => {
+        window.history.pushState({}, '', '?debug_scene=hub-scene')
+        await renderMultiDocProject()
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
+        expect(sceneIds()).toContain('hub-scene')
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'debug_scene: hub-scene → resolved'
+        )
+      })
+
+      it('65: ?scene= と debug_scene 併用（別ファイル）は両方解決され、confinement は ?scene= 側の MD のみ', async () => {
+        window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=cell-b-1')
+        await renderTwoCellProject()
+        expect(sceneIds()).toEqual(expect.arrayContaining(['cell-scene-1', 'cell-b-1']))
+        expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
+        expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+        expect(debugInfo).toContain('scene param: cell-scene-1 → resolved')
+        expect(debugInfo).toContain('debug_scene: cell-b-1 → resolved')
+      })
+
+      it('66: debug_script のみ（scene キー無し）では debug_scene の事前解決を行わず、サブ MD も fetch しない', async () => {
+        window.history.pushState({}, '', '?debug_script=advance')
+        await renderMultiDocProject()
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
+        expect(sceneIds()).not.toContain('cell-scene-1')
+        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+        expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
+      })
+
+      it('67: 同一 sceneId を ?scene= と debug_scene 両方に指定しても冪等（索引に重複なし・サブ MD は 1 回だけ fetch・confinement は ?scene= 通り）', async () => {
+        window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=cell-scene-1')
+        await renderMultiDocProject()
+        const ids = sceneIds()
+        expect(ids.filter((id) => id === 'cell-scene-1')).toHaveLength(1)
+        expect(cellFetchCount(CELL_PATH)).toBe(1)
+        expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+      })
+
+      it('68: debug 系クエリが無い通常フローでは debug_scene 行が debugInfo に出ず、サブ MD も fetch しない（非回帰）', async () => {
+        await renderMultiDocProject()
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
+        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+        expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
+      })
+    })
   })
 
   // --- #519: frontmatter `header:` による standalone 再生時のプレイヤーヘッダ抑制 ---
