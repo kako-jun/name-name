@@ -393,7 +393,8 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
 
   // ===== J. 終劇後の BGM 停止 (#386 レビュー M2) =====
   //
-  // resetAndStartEvents()（通常のシーン遷移）は毎回 stopBgm(0) + currentBgmPath=null するが、
+  // resetAndStartEvents() は setEvents/restart では stopBgm(0) + currentBgmPath=null するが
+  // （#724 以降、シーンジャンプでは BGM を持ち越す）、
   // endStory() にはこれが無かった。終劇は物語上の終端で以後 Bgm イベントは来ないため、
   // 一度このバグを踏むと BGM が永久に鳴り続ける（初見訪問者にはセーブが無く止める手段がない）。
   // playBgm() 自体は AudioContext/アセット読込を伴い jsdom 対象外のため、他のテストと同じく
