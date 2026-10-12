@@ -1517,6 +1517,9 @@ impl Playback {
             return self.jump_to_scene_id(&target);
         }
         let origin_scene_idx = self.current_scene_idx;
+        let origin_scan_state = self.scan_state.clone();
+        let origin_flags = self.flags.clone();
+        let origin_total_cache = self.total_cache.get();
         loop {
             let next_scene_idx = self.current_scene_idx + 1;
             let Some(next_scene) = self.scene_order.get(next_scene_idx) else {
@@ -1565,7 +1568,13 @@ impl Playback {
                 self.pending_jump = Some(target.clone());
                 let moved = self.jump_to_scene_id(&target);
                 if !moved {
+                    // 中継シーン内の `[フラグ:]` 等も巻き戻し、元シーンの予約（ここへ来た時点では
+                    // 無し）に戻す。次の `advance` は同じ中継シーンから再試行して同じく停止する。
                     self.current_scene_idx = origin_scene_idx;
+                    self.scan_state = origin_scan_state;
+                    self.flags = origin_flags;
+                    self.total_cache.set(origin_total_cache);
+                    self.pending_jump = None;
                 }
                 return moved;
             }
@@ -1757,12 +1766,14 @@ impl Playback {
     ) -> bool {
         // 遷移を実行するので、遷移元シーンの `[ジャンプ:]` 予約（#725）は破棄する。選択肢先が
         // item 0件の末尾・ファイル境界で止まる経路でも古い予約を持ち越さない。
-        self.pending_jump = None;
+        let origin_pending_jump = self.pending_jump.take();
         // 中継シーンの遷移先不在・上限到達で停止する場合に、遷移前の状態へ戻すための退避 (#725)。
         // 停止でも `current_scene_idx`/`scan_state` が中継シーン側へ進んだままだと、表示は元の行
         // のままシーン切替検知（自動クイックセーブ・SE キャンセル）が中継シーンを指してしまう。
         let origin_scene_idx = self.current_scene_idx;
         let origin_scan_state = self.scan_state.clone();
+        let origin_flags = self.flags.clone();
+        let origin_total_cache = self.total_cache.get();
         // ジャンプ元とジャンプ先が異なるファイル由来の場合、シーンを跨いで引き継ぐ
         // ランニング状態（イベント絵/暗転/pending SE/話者・本文）をリセットする
         // （#528、#540で`current_speaker`/`current_text`を追加。BGM は #724 で対象外にした）。
@@ -1942,7 +1953,10 @@ impl Playback {
                 }
                 self.current_scene_idx = origin_scene_idx;
                 self.scan_state = origin_scan_state;
-                self.pending_jump = Some(target);
+                self.flags = origin_flags;
+                self.total_cache.set(origin_total_cache);
+                // 停止しても元シーンの予約は保持する（中継シーンが持つ不在の遷移先に差し替えない）。
+                self.pending_jump = origin_pending_jump;
                 return false;
             }
             // ジャンプ先シーンがitem 0件。ファイル境界を越えない範囲で次のシーンへ
@@ -2678,7 +2692,10 @@ mod tests {
             1,
             vec![
                 scene("a", vec![narration(vec!["a1"])]),
-                scene("r", vec![jump_event("nowhere")]),
+                scene(
+                    "r",
+                    vec![flag_event("relay_flag", true), jump_event("nowhere")],
+                ),
                 scene("b", vec![narration(vec!["b1"])]),
             ],
         )]);
@@ -2691,6 +2708,11 @@ mod tests {
             "advance 停止でも中継シーンへ動かない"
         );
         assert_eq!(pb.current_scene_id(), "a");
+        assert!(
+            !pb.flags.check("relay_flag"),
+            "中継シーン内のフラグも巻き戻る"
+        );
+        assert!(pb.pending_jump.is_none());
 
         let doc = document_with_chapters(vec![chapter(
             1,
@@ -2699,13 +2721,18 @@ mod tests {
                     "a",
                     vec![narration(vec!["a1"]), choice(vec![("進む", "r")])],
                 ),
-                scene("r", vec![jump_event("nowhere")]),
+                scene(
+                    "r",
+                    vec![flag_event("relay_flag", true), jump_event("nowhere")],
+                ),
             ],
         )]);
         let mut pb = Playback::from_document(&doc);
         assert!(pb.advance());
         assert!(!pb.select_current_choice());
         assert_eq!(pb.current_scene_idx(), 0, "選択肢経路の停止でも動かない");
+        assert!(!pb.flags.check("relay_flag"));
+        assert!(pb.pending_jump.is_none(), "元シーンの予約（無し）を保持");
         assert!(pb.current_choice().is_some());
     }
 
