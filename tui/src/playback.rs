@@ -100,7 +100,8 @@
 //! 異なるファイル由来のとき、シーンを跨いで引き継ぐランニング状態（`SceneScanState` の
 //! `current_bgm`/`current_event_image`/`current_blackout`/`pending_se`）には #496 と同種の
 //! 保護が及んでいなかった（#528）。なお BGM だけは #724 で方針を変え、GUI版と同じく
-//! ジャンプ一般で持ち越す（ファイル境界でもリセットしない）。以下の BGM に関する記述は #528 当時のもの。route1（file 0）の末尾が `[BGM: a.ogg]` 再生中のまま
+//! ジャンプ一般で持ち越す（ファイル境界でもリセットしない）。以下の BGM に関する
+//! 記述は #528 当時のもの。route1（file 0）の末尾が `[BGM: a.ogg]` 再生中のまま
 //! route2（file 1）へジャンプすると、無関係な BGM やイベント絵が route2 冒頭まで
 //! そのまま引き継がれてしまう実害があった（Gymnasia実データで確認）。#528 で
 //! `select_current_choice` に、ジャンプ元とジャンプ先の `file_id` が異なる場合だけ上記4
@@ -1669,9 +1670,10 @@ impl Playback {
         // `advance()` は `item_file_ids` を見てファイル境界をまたぐ暗黙の前進を拒否する
         // （#496）が、選択肢ジャンプ（本メソッド）は元々ファイル境界の対象外として設計
         // されており（モジュール冒頭ドキュメント参照）、この種の保護を持っていなかった。
-        // その結果、例えば route1（file 0）の末尾で `[BGM: a.ogg]` が再生中のまま
-        // route2（file 1）へジャンプすると、無関係な a.ogg が route2 冒頭までそのまま
-        // 引き継がれてしまう（Issue #528、Gymnasia実データで実害を確認）。
+        // その結果、例えば route1（file 0）の末尾で `[イベント絵: x]` が表示中のまま
+        // route2（file 1）へジャンプすると、無関係な x が route2 冒頭までそのまま
+        // 引き継がれてしまう（Issue #528、Gymnasia実データで実害を確認。当初は BGM も
+        // 対象だったが #724 で除外した）。
         // `current_speaker`/`current_text`は元々「Wait+EventImage自動連続表示専用
         // フィールドなので対象外」（#528のスコープ外）としていたが、独立レビュー
         // （#540）で「会話行を経ずにシーン先頭が直接 `[イベント絵:][待機:Nms]` で
@@ -1807,8 +1809,8 @@ impl Playback {
                             // ジャンプしたのと意味的に同じ操作（本メソッド冒頭の
                             // ファイル境界越えリセットの対象と同種）。中継シーンが
                             // 別ファイルへ`jump`するケースは稀だが、あり得る場合に
-                            // BGM等のリークガード（#528/#540）を免除する理由がないため
-                            // 同じリセットを適用する。
+                            // イベント絵等のリークガード（#528/#540）を免除する理由がないため
+                            // 同じリセットを適用する（BGM は #724 で対象外、持ち越す）。
                             if self.scene_order[self.current_scene_idx].file_id
                                 != self.scene_order[relay_target_idx].file_id
                             {
@@ -3526,7 +3528,7 @@ mod tests {
     #[test]
     fn select_current_choice_relay_across_file_boundary_keeps_bgm_but_resets_event_image() {
         // #574の中継自動継続が別ファイルへjumpする場合も、#528/#540のリークガード
-        // (BGM/イベント絵/暗転/pending_se/話者・本文のリセット)が適用されるはず。
+        // (イベント絵/暗転/pending_se/話者・本文のリセット。BGM は #724 で持ち越し)が適用されるはず。
         // "start"→"relay"は同一ファイル内(ここではリセットは発火しない)、
         // "relay"の唯一の選択肢が別ファイルの"hub"へjumpする箇所で発火することを確認する。
         let route1 = chapter(
