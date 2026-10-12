@@ -224,15 +224,20 @@ describe('NovelRenderer BGM 持ち越し (#724)', () => {
   it('12: stopBgmForFreshStart（動画書き出し）の後は同曲ジャンプでも新規に鳴らす', () => {
     const { r, spies } = makeRenderer([
       scene('a', [bgm('a.ogg'), narration('A')]),
-      scene('b', [narration('B')]),
+      scene('b', [bgm('a.ogg'), narration('B')]),
     ])
     spies.stopBgm.mockClear()
+    spies.playBgm.mockClear()
 
     r.stopBgmForFreshStart()
-    r.jumpToScene('b')
-
     expect(spies.stopBgm).toHaveBeenCalledWith(0)
     expect(bgmPath(r)).toBeNull()
+
+    r.jumpToScene('b')
+
+    expect(spies.playBgm).toHaveBeenCalledTimes(1)
+    expect(String(spies.playBgm.mock.calls[0][0])).toContain('a.ogg')
+    expect(bgmPath(r)).toBe('a.ogg')
   })
 })
 
