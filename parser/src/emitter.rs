@@ -732,6 +732,13 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str("[/条件]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::Jump { target } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[ジャンプ: {target}]\n"));
+                prev_was_dialog_or_text = false;
+            }
             Event::ExpressionChange {
                 character,
                 expression,
@@ -1952,5 +1959,31 @@ mod tests {
         let emitted = emit(&doc1);
         let doc2 = crate::parser::parse(&emitted);
         assert_eq!(doc1, doc2, "encounter round-trip should be stable");
+    }
+
+    #[test]
+    fn round_trip_jump() {
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: a\n\n**主人公**:\nおわり。\n\n[条件: f]\n[ジャンプ: 2-1]\n[/条件]\n[ジャンプ: 1-2]\n";
+        let doc1 = crate::parser::parse(input);
+        let events = &doc1.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[1],
+            Event::Condition {
+                flag: "f".to_string(),
+                events: vec![Event::Jump {
+                    target: "2-1".to_string()
+                }]
+            }
+        );
+        assert_eq!(
+            events[2],
+            Event::Jump {
+                target: "1-2".to_string()
+            }
+        );
+        let emitted = emit(&doc1);
+        assert!(emitted.contains("[ジャンプ: 1-2]\n"));
+        let doc2 = crate::parser::parse(&emitted);
+        assert_eq!(doc1, doc2, "jump round-trip should be stable");
     }
 }

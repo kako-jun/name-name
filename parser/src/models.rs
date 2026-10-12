@@ -825,6 +825,11 @@ pub enum Event {
         flag: String,
         events: Vec<Event>,
     },
+    /// 無条件ジャンプ (#725)。`[ジャンプ: シーンID]` で書く。選択肢なしで `target` のシーンへ遷移する。
+    /// `[条件:]` ブロック内にも書ける（条件付き自動遷移）。
+    Jump {
+        target: String,
+    },
     ExpressionChange {
         character: String,
         expression: String,
