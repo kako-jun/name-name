@@ -318,6 +318,8 @@ export async function exportVideo(
   // この順序で「前回プレビューの最終フレーム混入」と「BGM 頭欠け」の両方を最小化する。
   // jumpToScene 後すぐに recorder を立ち上げないと BGM の起点を取り逃す。
   renderer.setAutoMode(true)
+  // 書き出しは新規開始: ライブプレビューで鳴っていた BGM を録画へ持ち込まない・同曲でも頭出しする (#724)
+  renderer.stopBgmForFreshStart()
   renderer.jumpToScene(startSceneId)
   onProgress?.('録画準備中')
 

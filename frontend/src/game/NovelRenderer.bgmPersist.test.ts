@@ -1,9 +1,9 @@
 /**
  * シーンジャンプでの BGM 持ち越しのテスト (#724)。
  *
- * BGM は「変えるまで鳴り続ける」: startScene 経由のシーン遷移（jumpToScene）では
- * resetAndStartEvents が stopBgm / currentBgmPath=null をスキップし、次シーン冒頭の同一曲 [BGM:] も
- * AudioManager.playBgm の同一 URL 継続で頭出ししない。setEvents / restart / endStory では従来どおり停止する。
+ * BGM は「変えるまで鳴り続ける」: 選択肢・物語進行によるシーン遷移（jumpToScene）では
+ * resetAndStartEvents（carryBgm=true）が stopBgm / currentBgmPath=null をスキップし、次シーン冒頭の同一曲 [BGM:] も
+ * AudioManager.playBgm の同一 URL 継続で頭出ししない。setEvents / restart / endStory / startFrom では従来どおり停止する。
  *
  * playBgm / stopBgm は AudioContext を伴い jsdom 対象外のため spy で差し替え、呼び出しと
  * 追跡フィールド（currentBgmPath, getSnapshot）で検証する。同一 URL 継続は AudioManager 単体で別途確認する。
@@ -161,7 +161,7 @@ describe('NovelRenderer BGM 持ち越し (#724)', () => {
     spies.stopBgm.mockClear()
 
     r.setConfinedSceneIds(['a'])
-    r.jumpToScene('out-of-confinement')
+    r.jumpToScene('b') // 実在するが圏外のシーン → 終劇
 
     expect(spies.stopBgm).toHaveBeenCalled()
     expect(bgmPath(r)).toBeNull()
@@ -187,18 +187,52 @@ describe('NovelRenderer BGM 持ち越し (#724)', () => {
     expect(bgmPath(r2)).toBe('a.ogg')
   })
 
-  it('10: ジャンプ後の seekTo（履歴巻き戻し）でも currentBgmPath が整合する', () => {
-    const { r } = makeRenderer([
+  it('10: ジャンプ後の seekTo（履歴巻き戻し）で BGM が復元される', () => {
+    const { r, spies } = makeRenderer([
       scene('a', [bgm('a.ogg'), narration('A')]),
       scene('b', [narration('B1'), narration('B2')]),
     ])
     r.jumpToScene('b')
-    const idx = (r as unknown as { history: unknown[] }).history.length - 1
-    expect(idx).toBeGreaterThanOrEqual(0)
+    r.advance() // B2 まで進める
+    const internals = r as unknown as { history: unknown[]; currentBgmPath: string | null }
+    expect(internals.history.length).toBeGreaterThanOrEqual(2)
+    internals.currentBgmPath = 'other.ogg'
+    spies.playBgm.mockClear()
 
-    r.seekTo(idx)
+    r.seekTo(0)
 
+    expect(spies.playBgm).toHaveBeenCalled()
+    expect(String(spies.playBgm.mock.calls[0][0])).toContain('a.ogg')
     expect(bgmPath(r)).toBe('a.ogg')
+  })
+
+  it('11: startFrom（?scene= の新規開始）は BGM を持ち越さず停止する', () => {
+    const { r, spies } = makeRenderer([
+      scene('a', [bgm('a.ogg'), narration('A')]),
+      scene('b', [narration('B')]),
+    ])
+    expect(bgmPath(r)).toBe('a.ogg')
+    spies.stopBgm.mockClear()
+
+    r.startFrom({ sceneId: 'b' })
+
+    expect(r.getCurrentSceneId()).toBe('b')
+    expect(spies.stopBgm).toHaveBeenCalledWith(0)
+    expect(bgmPath(r)).toBeNull()
+  })
+
+  it('12: stopBgmForFreshStart（動画書き出し）の後は同曲ジャンプでも新規に鳴らす', () => {
+    const { r, spies } = makeRenderer([
+      scene('a', [bgm('a.ogg'), narration('A')]),
+      scene('b', [narration('B')]),
+    ])
+    spies.stopBgm.mockClear()
+
+    r.stopBgmForFreshStart()
+    r.jumpToScene('b')
+
+    expect(spies.stopBgm).toHaveBeenCalledWith(0)
+    expect(bgmPath(r)).toBeNull()
   })
 })
 

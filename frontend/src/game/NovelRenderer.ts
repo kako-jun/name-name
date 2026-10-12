@@ -1370,10 +1370,23 @@ export class NovelRenderer {
       }
       return
     }
-    this.startScene(sceneId, scene)
+    this.startScene(sceneId, scene, true)
   }
 
-  private startScene(sceneId: string, scene: EventScene): void {
+  /**
+   * BGM を止めて持ち越し状態（currentBgmPath）も空にする (#724)。動画書き出しのように、
+   * ライブプレビューで鳴っていた曲を引き継がず「新規開始」したい呼び出し側が jumpToScene の前に使う。
+   */
+  stopBgmForFreshStart(): void {
+    this.audioManager.stopBgm(0)
+    this.currentBgmPath = null
+  }
+
+  /**
+   * @param carryBgm true なら BGM を持ち越す (#724)。選択肢・物語進行によるジャンプ
+   *   （jumpToScene / resolveMissingSceneAndJump）だけが true を渡す。startFrom 等の新規開始は false。
+   */
+  private startScene(sceneId: string, scene: EventScene, carryBgm = false): void {
     // #386: 通常のシーン遷移が成立する経路なので、終劇状態は解除しておく（宣言的整合性の保険。
     // 通常はここに来る前に jumpToScene の confinement チェックで弾かれるため storyEnded は
     // 既に false のはずだが、デバッグ等から直接呼ばれた場合の保険として明示的に戻す）。
@@ -1383,7 +1396,10 @@ export class NovelRenderer {
       this.syncEndingOverlayVisibility()
     }
     this.currentSceneId = sceneId
-    this.resetAndStartEvents([...scene.events], { preserveBackgroundForTransition: true })
+    this.resetAndStartEvents([...scene.events], {
+      preserveBackgroundForTransition: true,
+      carryBgm,
+    })
     this.onSceneChangeCallback?.(sceneId)
   }
 
@@ -1403,7 +1419,7 @@ export class NovelRenderer {
         console.warn(`[name-name] lazy load 後もシーンが見つかりません: ${sceneId}`)
         return
       }
-      this.startScene(sceneId, scene)
+      this.startScene(sceneId, scene, true)
     } catch (err) {
       console.warn(`[name-name] シーンの追加読み込みに失敗しました: ${sceneId}`, err)
     } finally {
@@ -1841,7 +1857,11 @@ export class NovelRenderer {
    */
   private resetAndStartEvents(
     events: Event[],
-    options?: { preserveBackgroundForTransition?: boolean; skipAutoAdvance?: boolean }
+    options?: {
+      preserveBackgroundForTransition?: boolean
+      carryBgm?: boolean
+      skipAutoAdvance?: boolean
+    }
   ): void {
     this.waitingForChoice = false
     this.waitingForWait = false
@@ -1877,10 +1897,11 @@ export class NovelRenderer {
       this.effectOverlay.visible = false
     }
     this.choiceOverlay.hide()
-    // BGM は「変えるまで鳴り続ける」(#724): 場面転換（startScene 経由のジャンプ）では持ち越し、
-    // 次シーン冒頭の同一曲 [BGM:] も頭出ししない（AudioManager.playBgm の同一 URL 継続分岐）。
-    // 新しいイベント列の最初の開始（setEvents）・restart では従来どおり停止する。
-    if (!options?.preserveBackgroundForTransition) {
+    // BGM は「変えるまで鳴り続ける」(#724): 選択肢・物語進行によるジャンプ（carryBgm=true）では
+    // 持ち越し、次シーン冒頭の同一曲 [BGM:] も頭出ししない（AudioManager.playBgm の同一 URL 継続分岐）。
+    // 新規開始（setEvents・restart・startFrom の ?scene= / ?debug_scene=）では従来どおり停止する。
+    // 背景等の持ち越し（preserveBackgroundForTransition）とは独立した別オプション。
+    if (!options?.carryBgm) {
       this.audioManager.stopBgm(0)
     }
     // SE シーケンス（#672）の gap 待機タイマーをキャンセルする。新しいシーンへ遷移した後も
@@ -1929,7 +1950,7 @@ export class NovelRenderer {
     this.clearTelopLayer()
     this.setBlackout(false)
     // currentBgmPath は上の stopBgm と対で、持ち越し時（#724）は保持して snapshot/save と整合させる。
-    if (!options?.preserveBackgroundForTransition) {
+    if (!options?.carryBgm) {
       this.currentBgmPath = null
     }
     // 追うスポットライト (#693) も新しいシーンの開始で常に消灯する。isBlackout/cameraMode と
