@@ -768,4 +768,57 @@ mod tests {
              (check()は存在確認のみのため、Debug表示で内容そのものを確認する)"
         );
     }
+
+    /// #725: `[ジャンプ:]` で終わるシーンを自動クイックセーブ → 別 `Playback` へロードしても、
+    /// そのシーンの Jump 予約が復元され、読み終えると遷移先へ進む（パーサー実経路込み）。
+    #[test]
+    fn save_quick_then_restore_scene_ending_with_jump_still_jumps_to_target() {
+        let path = temp_path("jump-round-trip");
+        let _guard = TempFile(path.clone());
+        let document = name_name_parser::parser::parse(
+            "---\nengine: name-name\n---\n\n\
+             ## 1-1: 開始\n\n**A**:\n最初\n\n[ジャンプ: 1-3]\n\n\
+             ## 1-2: 飛ばされる\n\n**B**:\n読まれない\n\n\
+             ## 1-3: 着地\n\n**C**:\n着地のセリフ\n",
+        );
+        let playback = Playback::from_document(&document);
+        assert_eq!(playback.current_scene_id(), "1-1");
+        save_quick(&path, &playback, &HashSet::new());
+
+        let mut restored = Playback::from_document(&document);
+        assert!(restore_playback(&mut restored, &path));
+        assert_eq!(restored.current_scene_id(), "1-1");
+        assert!(!restored.is_at_end());
+        assert!(restored.advance());
+        assert_eq!(restored.current_scene_id(), "1-3");
+        assert_eq!(
+            restored
+                .current_line()
+                .expect("着地の会話行")
+                .speaker
+                .as_deref(),
+            Some("C")
+        );
+    }
+
+    /// #725: Jump 先シーンで保存 → ロードしても Jump 元には戻らず、Jump 先の位置で復元される。
+    #[test]
+    fn save_quick_at_jump_target_restores_target_scene() {
+        let path = temp_path("jump-target-restore");
+        let _guard = TempFile(path.clone());
+        let document = name_name_parser::parser::parse(
+            "---\nengine: name-name\n---\n\n\
+             ## 1-1: 開始\n\n**A**:\n最初\n\n[ジャンプ: 1-3]\n\n\
+             ## 1-3: 着地\n\n**C**:\n着地のセリフ\n",
+        );
+        let mut playback = Playback::from_document(&document);
+        assert!(playback.advance());
+        assert_eq!(playback.current_scene_id(), "1-3");
+        save_quick(&path, &playback, &HashSet::new());
+
+        let mut restored = Playback::from_document(&document);
+        assert!(restore_playback(&mut restored, &path));
+        assert_eq!(restored.current_scene_id(), "1-3");
+        assert!(restored.is_at_end());
+    }
 }

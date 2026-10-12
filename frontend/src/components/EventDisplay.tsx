@@ -187,6 +187,10 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     )
   }
 
+  if ('Jump' in event) {
+    return <div className={`text-xs italic ml-2 ${meta}`}>ジャンプ: {event.Jump.target}</div>
+  }
+
   if ('Flag' in event) {
     const v = event.Flag.value
     let valueStr = ''

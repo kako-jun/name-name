@@ -1142,7 +1142,18 @@ where
                 let prev_line_for_backlog = playback.current_line().cloned();
                 // 選択肢表示中（`Playback::current_choice` が `Some`）は、on_advance 内部で
                 // `select_current_choice` による確定を試みる（#482、デシジョンテーブル参照）。
+                let reveal_was_done_before_advance = current_reveal
+                    .as_ref()
+                    .is_none_or(|reveal| reveal.is_done(Instant::now()));
                 let advanced = on_advance(playback, &mut current_reveal, &config, Instant::now());
+                // スキップ中の合成 Advance が、表示完了済みなのに進めなかった（遷移先不在で停止中の
+                // `[ジャンプ:]` 等、#725）場合はスキップを解除する。解除しないと、既読のまま
+                // 毎周回 `advance()==false` を空回りし、`next_action()` を一度も読まないので
+                // キー入力（q での終了を含む）を永久に受け付けないビジーループになる
+                // （`deadline_triggered` の入力枯渇対策と同じ型）。
+                if skip_triggered && !advanced && reveal_was_done_before_advance {
+                    skip_mode = false;
+                }
                 // BGM/SE の同期は `position()`（Line item のみを数える）ではなく、内部で
                 // それぞれ「宣言的な値の変化」「生カーソルの変化」を見て判定するため、Choice
                 // item への遷移（position() は変化しない）でも正しく反応する（#502）。
@@ -5706,6 +5717,51 @@ mod tests {
         assert_eq!(
             playback.current_line().unwrap().speaker.as_deref(),
             Some("B")
+        );
+    }
+
+    #[test]
+    fn event_loop_skip_on_stalled_jump_releases_skip_and_lets_quit_through() {
+        // #725: 遷移先不在で停止中の `[ジャンプ:]` に既読のままスキップで着くと、毎周回
+        // `advance()==false` を空回りして `next_action()` を読まないビジーループになり、
+        // q でも抜けられなかった。停止したらスキップを解除して入力を受け付ける。
+        let config = instant_config();
+        let source = "---\nengine: name-name\n---\n\n## 1-1: 起点\n\n**B**:\nb1\n\n\
+                       [条件: go]\n[ジャンプ: nowhere]\n[/条件]\n\n[選択]\n- 次へ→1-2\n[/選択]\n\n\
+                       ## 1-2: 中継\n\n[フラグ: go = true]\n\n[ジャンプ: 1-1]\n";
+        let document = name_name_parser::parser::parse(source);
+        let mut playback = Playback::from_document(&document);
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        let (mut next_action, remaining) = action_queue(vec![
+            Action::Advance,    // b1 -> 選択肢（b1 を既読に）
+            Action::Advance,    // 選択確定 -> 1-2 中継 -> 1-1 の b1（go=true なので Jump 予約）
+            Action::ToggleSkip, // 既読の停止中 Jump からスキップ開始
+            Action::Quit,
+        ]);
+
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            *remaining.borrow(),
+            0,
+            "Quit まで読み切れている（ハングしない）"
+        );
+        assert_eq!(playback.current_scene_id(), "1-1");
+        assert_eq!(
+            playback.current_line().unwrap().text,
+            vec!["b1".to_string()]
         );
     }
 

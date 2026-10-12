@@ -1183,6 +1183,15 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
             return Some(Event::Wait { ms });
         }
     }
+    // [ジャンプ: シーンID] — 選択肢なしの無条件ジャンプ (#725)。シーンIDが空なら無視する。
+    if let Some(rest) = content.strip_prefix("ジャンプ:") {
+        let target = rest.trim();
+        if !target.is_empty() {
+            return Some(Event::Jump {
+                target: target.to_string(),
+            });
+        }
+    }
     if let Some(rest) = content.strip_prefix("フラグ:") {
         if let Some(eq_pos) = rest.find('=') {
             let name = rest[..eq_pos].trim().to_string();

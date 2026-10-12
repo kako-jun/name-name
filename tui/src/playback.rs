@@ -117,6 +117,21 @@
 //! 無関係な自動連続画像に上書きされずに乗る）。#528と同じ根本原因のため、#540で
 //! `current_speaker`/`current_text` も上記4フィールドと同じリセット対象に合流させた。
 //!
+//! ## 無条件ジャンプ `[ジャンプ: シーンID]` (#725)
+//!
+//! `Event::Jump { target }` は item を生成せず、[`build_scene_items`] が遷移先を
+//! `SceneScanState::pending_jump` に予約してそのシーンの残りの走査を打ち切る（`[条件:]` 内の
+//! Jump は条件が真のときだけ到達する）。[`Playback`] は構築直後にこれを `pending_jump` へ移し、
+//! そのシーンの最後の item を読み終えて [`Playback::advance`] したとき、ドキュメント順の後続
+//! ではなく [`Playback::jump_to_scene_id`]（選択肢確定と同じ遷移本体）へ進む。item を1件も
+//! 持たない中継シーン（Jump だけのシーン）は #574 の中継シーンと同様に素通りし、循環は
+//! `RELAY_HOP_LIMIT` で止める。遷移先が存在しない場合は（中継シーン・上限到達も含め）位置を変えず
+//! `advance` が `false` を返し、予約は遷移に成功するまで残るので何度 `advance` しても停止し続ける
+//! （ドキュメント順の後続へは進まない。GUI と同じ「その位置で停止」）。TUI には GUI の
+//! `console.warn` に相当するステータス行の警告枠がないため、選択肢の遷移先不在と同様に無言で止める。
+//! item 0件で `[ジャンプ:]` を持つ中継シーンは `is_at_end` / `has_more_scenes_with_items` でも
+//! 「先がある」とみなす。
+//!
 //! ## フラグ管理・条件分岐の遅延評価 (#509)
 //!
 //! `Event::Flag`/`Event::Condition` は、GUI版 `GameState`/`resolveEvents`
@@ -512,6 +527,12 @@ pub struct Playback {
     /// （`NovelRenderer.setDebugUnlockAllChoices`）と対称。`with_debug_unlock_all`
     /// で構築直後に設定する想定（`with_sentence_per_page` と同じパターン）。
     debug_unlock_all: bool,
+    /// 現在のシーン（`current_scene_idx`）が `[ジャンプ: シーンID]`（`Event::Jump`、#725）で
+    /// 終わっている場合の遷移先シーンID。現在シーンの最後の item を読み終えて `advance()` した
+    /// とき、ドキュメント順の後続シーンではなくこのシーンへ遷移する（選択肢確定と同じ
+    /// [`Playback::jump_to_scene_id`] 経路）。シーンを構築するたびに更新し、遷移したら `None`
+    /// に戻る。`is_at_end` はこれが `Some` の間は末尾扱いしない。
+    pending_jump: Option<String>,
 }
 
 /// `build_scene_items` がシーンを跨いで引き継ぐランニング状態のまとめ役（#509 Phase A）。
@@ -541,6 +562,12 @@ struct SceneScanState {
     /// push されるタイミングで `item_se` へ焼き付けられ、その場で空に戻る
     /// （`Playback` 構造体の `item_se` doc comment参照）。
     pending_se: Vec<SeCue>,
+    /// `[ジャンプ: シーンID]`（`Event::Jump`、#725）に到達したときの遷移先シーンID。
+    /// `build_scene_items` が Jump に遭遇した時点でここへ積み、そのシーンのそれ以降の
+    /// イベントの処理を打ち切る（`[条件:]` 内の Jump も同様に外側の走査ごと打ち切る）。
+    /// `build_scene_items` の呼び出しごとに入口で `None` に戻るため、呼び出し側（`Playback`
+    /// の実プレイ経路）は構築直後に `take()` して [`Playback::pending_jump`] へ移す。
+    pending_jump: Option<String>,
 }
 
 /// 自動クイックロード専用（#579 セルフレビュー must対応）。セーブ時点で保持していた
@@ -652,8 +679,15 @@ fn build_scene_items(
     item_bgm: &mut Vec<Option<String>>,
     item_se: &mut Vec<Vec<SeCue>>,
 ) {
+    // 前回の呼び出しの遷移予約を持ち越さない（スキャン用の使い捨て呼び出しでも安全）。
+    state.pending_jump = None;
     let mut event_index = 0;
     while event_index < events.len() {
+        // `[ジャンプ:]` に到達済み（`[条件:]` 内の再帰呼び出しで積まれた場合も含む）なら、
+        // それ以降のイベントは再生されないので走査を打ち切る (#725)。
+        if state.pending_jump.is_some() {
+            break;
+        }
         let event = &events[event_index];
         match event {
             // `path` の `..` は `back`（表示位置）を意図的に捨てている。`effects`
@@ -853,6 +887,12 @@ fn build_scene_items(
             Event::Flag { name, value } => {
                 flags.set(name.clone(), value.clone());
             }
+            // 無条件ジャンプ (#725)。item は生成せず遷移先だけを予約する。実際の遷移は
+            // 「このシーンの表示済み item を読み終えて次へ進むとき」に `Playback` が行う
+            // （`Playback::advance` / `Playback::jump_to_scene_idx`）。
+            Event::Jump { target } => {
+                state.pending_jump = Some(target.clone());
+            }
             Event::Condition {
                 flag,
                 events: inner,
@@ -972,6 +1012,7 @@ impl Playback {
             current_blackout: false,
             current_bgm: None,
             pending_se: Vec::new(),
+            pending_jump: None,
         };
         let mut flags = GameFlags::new();
         for (chapter_index, chapter) in doc.chapters.iter().enumerate() {
@@ -995,6 +1036,7 @@ impl Playback {
         }
         let mut item_scene_key = Vec::new();
         let mut item_content_hash = Vec::new();
+        let mut pending_jump = None;
         if let Some(first_scene) = scene_order.first() {
             let start = items.len();
             build_scene_items(
@@ -1017,8 +1059,9 @@ impl Playback {
                 start,
                 items.len(),
             );
+            pending_jump = scan_state.pending_jump.take();
         }
-        Self {
+        let mut playback = Self {
             items,
             item_file_ids,
             item_wait_ms,
@@ -1040,7 +1083,16 @@ impl Playback {
             flags,
             total_cache: std::cell::Cell::new(None),
             debug_unlock_all: false,
+            pending_jump,
+        };
+        // 最初のシーンが表示 item を持たず `[ジャンプ:]` で始まる場合（#725）は、そのまま
+        // 遷移先から始める（表示できる item が無いまま待機状態にならないようにする）。
+        if playback.items.is_empty() {
+            if let Some(target) = playback.pending_jump.clone() {
+                playback.jump_to_scene_id(&target);
+            }
         }
+        playback
     }
 
     /// 文単位改頁（adv の 1 ページ＝1 文、#486）を有効/無効にする。`Playback::from_document`
@@ -1455,6 +1507,19 @@ impl Playback {
             self.set_index(self.index + 1);
             return true;
         }
+        // 現在シーンが `[ジャンプ: シーンID]` で終わっている (#725): ドキュメント順の後続では
+        // なく遷移先へ進む。選択肢確定と同じ `jump_to_scene_id` 経路（ファイル境界越えの
+        // リセット・0件シーンのフォールスルーを含む）。ファイル境界は選択肢ジャンプと同じく
+        // 明示遷移なので越えてよい。遷移先が存在しなければ位置を変えず `false`。予約は遷移に
+        // 成功したときだけ消える（`jump_to_scene_idx` 冒頭で破棄）ので、遷移先不在のまま
+        // 2回目以降に `advance` しても同じ位置で停止し続け、ドキュメント順の後続へ進まない。
+        if let Some(target) = self.pending_jump.clone() {
+            return self.jump_to_scene_id(&target);
+        }
+        let origin_scene_idx = self.current_scene_idx;
+        let origin_scan_state = self.scan_state.clone();
+        let origin_flags = self.flags.clone();
+        let origin_total_cache = self.total_cache.get();
         loop {
             let next_scene_idx = self.current_scene_idx + 1;
             let Some(next_scene) = self.scene_order.get(next_scene_idx) else {
@@ -1487,11 +1552,32 @@ impl Playback {
                 self.items.len(),
             );
             self.current_scene_idx = next_scene_idx;
+            let jump = self.scan_state.pending_jump.take();
             if self.items.len() > start {
+                self.pending_jump = jump;
                 self.set_index(start);
                 return true;
             }
-            // このシーンはitemを1件も生成しなかった。さらに次のシーンへ。
+            // このシーンはitemを1件も生成しなかった。`[ジャンプ:]` で終わる中継シーン
+            // （#725）ならその遷移先へ、そうでなければさらに次のシーンへ。
+            // 遷移先が存在しない場合は後続へ進まず停止する（予約を残すので再度 advance しても
+            // 同じく停止する）。
+            if let Some(target) = jump {
+                // 停止（false）のときは表示も位置も変わらないので、`current_scene_idx` も遷移前に戻す
+                // （さもないと main.rs のシーン切替検知が中継シーンを指して自動セーブ等が走る）。
+                self.pending_jump = Some(target.clone());
+                let moved = self.jump_to_scene_id(&target);
+                if !moved {
+                    // 中継シーン内の `[フラグ:]` 等も巻き戻し、元シーンの予約（ここへ来た時点では
+                    // 無し）に戻す。次の `advance` は同じ中継シーンから再試行して同じく停止する。
+                    self.current_scene_idx = origin_scene_idx;
+                    self.scan_state = origin_scan_state;
+                    self.flags = origin_flags;
+                    self.total_cache.set(origin_total_cache);
+                    self.pending_jump = None;
+                }
+                return moved;
+            }
         }
     }
 
@@ -1655,6 +1741,20 @@ impl Playback {
         self.jump_to_scene_idx(target_scene_idx, Some(continuation))
     }
 
+    /// ファイル境界を越えるジャンプで、シーンを跨いで引き継ぐランニング状態
+    /// （イベント絵/暗転/pending SE/話者・本文）をリセットする (#528/#540)。BGM は #724 で対象外
+    /// （持ち越す）。
+    fn reset_running_state_across_files(&mut self) {
+        self.scan_state.current_event_image = None;
+        self.scan_state.current_event_image_effects = AmbientEffects::default();
+        self.scan_state.current_event_image_transition = EventImageTransition::default();
+        self.scan_state.current_event_image_fade_ms = None;
+        self.scan_state.current_blackout = false;
+        self.scan_state.pending_se.clear();
+        self.scan_state.current_speaker = None;
+        self.scan_state.current_text = Vec::new();
+    }
+
     /// [`Playback::jump_to_scene_id`] の本体（解決済みの `scene_order` インデックス版、
     /// #579 で `select_current_choice` から切り出した）。`continuation` が `Some` の場合、
     /// 下のファイル境界リセットより後にその値で `scan_state` の該当3フィールドを上書き
@@ -1664,6 +1764,16 @@ impl Playback {
         target_scene_idx: usize,
         continuation: Option<SceneContinuation>,
     ) -> bool {
+        // 遷移を実行するので、遷移元シーンの `[ジャンプ:]` 予約（#725）は破棄する。選択肢先が
+        // item 0件の末尾・ファイル境界で止まる経路でも古い予約を持ち越さない。
+        let origin_pending_jump = self.pending_jump.take();
+        // 中継シーンの遷移先不在・上限到達で停止する場合に、遷移前の状態へ戻すための退避 (#725)。
+        // 停止でも `current_scene_idx`/`scan_state` が中継シーン側へ進んだままだと、表示は元の行
+        // のままシーン切替検知（自動クイックセーブ・SE キャンセル）が中継シーンを指してしまう。
+        let origin_scene_idx = self.current_scene_idx;
+        let origin_scan_state = self.scan_state.clone();
+        let origin_flags = self.flags.clone();
+        let origin_total_cache = self.total_cache.get();
         // ジャンプ元とジャンプ先が異なるファイル由来の場合、シーンを跨いで引き継ぐ
         // ランニング状態（イベント絵/暗転/pending SE/話者・本文）をリセットする
         // （#528、#540で`current_speaker`/`current_text`を追加。BGM は #724 で対象外にした）。
@@ -1687,16 +1797,7 @@ impl Playback {
         if self.scene_order[self.current_scene_idx].file_id
             != self.scene_order[target_scene_idx].file_id
         {
-            // BGM は「変えるまで鳴り続ける」ためリセットしない（#724、GUI版のシーンジャンプでの
-            // BGM 持ち越しと揃える。#528 当初は BGM もリセット対象だった）。
-            self.scan_state.current_event_image = None;
-            self.scan_state.current_event_image_effects = AmbientEffects::default();
-            self.scan_state.current_event_image_transition = EventImageTransition::default();
-            self.scan_state.current_event_image_fade_ms = None;
-            self.scan_state.current_blackout = false;
-            self.scan_state.pending_se.clear();
-            self.scan_state.current_speaker = None;
-            self.scan_state.current_text = Vec::new();
+            self.reset_running_state_across_files();
         }
         // 自動クイックロード（#579）: 上のファイル境界リセットより後に適用することで、
         // ファイル境界の有無に関わらず必ずこの値で確定させる（`jump_to_scene_id_with_
@@ -1743,6 +1844,7 @@ impl Playback {
                 self.items.len(),
             );
             self.current_scene_idx = scene_idx;
+            let jump = self.scan_state.pending_jump.take();
             if self.items.len() > start {
                 // 中継シーンの自動継続（#574）
                 //
@@ -1814,17 +1916,7 @@ impl Playback {
                             if self.scene_order[self.current_scene_idx].file_id
                                 != self.scene_order[relay_target_idx].file_id
                             {
-                                // BGM は持ち越す（#724）。
-                                self.scan_state.current_event_image = None;
-                                self.scan_state.current_event_image_effects =
-                                    AmbientEffects::default();
-                                self.scan_state.current_event_image_transition =
-                                    EventImageTransition::default();
-                                self.scan_state.current_event_image_fade_ms = None;
-                                self.scan_state.current_blackout = false;
-                                self.scan_state.pending_se.clear();
-                                self.scan_state.current_speaker = None;
-                                self.scan_state.current_text = Vec::new();
+                                self.reset_running_state_across_files();
                             }
 
                             relay_hops += 1;
@@ -1838,8 +1930,34 @@ impl Playback {
                     // 循環参照等でRELAY_HOP_LIMITに達した。無限ループを避けるため、
                     // これ以上は自動継続せず現在の着地点で停止する。
                 }
+                self.pending_jump = jump;
                 self.set_index(start);
                 return true;
+            }
+            // ジャンプ先シーンがitem 0件で `[ジャンプ:]` で終わっている中継シーン (#725):
+            // さらにその遷移先から続ける（`relay_hops` は #574 の中継と共有する上限で、
+            // 循環参照でもハングしない）。遷移先不在・上限到達のときはドキュメント順の後続へ
+            // 進まず停止する（予約を残すので `advance` を繰り返しても同じ位置で止まる）。
+            if let Some(target) = jump {
+                if relay_hops < RELAY_HOP_LIMIT {
+                    if let Some(&jump_target_idx) = self.scene_index_by_id.get(&target) {
+                        if self.scene_order[scene_idx].file_id
+                            != self.scene_order[jump_target_idx].file_id
+                        {
+                            self.reset_running_state_across_files();
+                        }
+                        relay_hops += 1;
+                        scene_idx = jump_target_idx;
+                        continue;
+                    }
+                }
+                self.current_scene_idx = origin_scene_idx;
+                self.scan_state = origin_scan_state;
+                self.flags = origin_flags;
+                self.total_cache.set(origin_total_cache);
+                // 停止しても元シーンの予約は保持する（中継シーンが持つ不在の遷移先に差し替えない）。
+                self.pending_jump = origin_pending_jump;
+                return false;
             }
             // ジャンプ先シーンがitem 0件。ファイル境界を越えない範囲で次のシーンへ
             // フォールスルーする（`advance()` のゼロ件シーン読み飛ばしループと同じ規約、
@@ -1938,6 +2056,7 @@ impl Playback {
             current_blackout: false,
             current_bgm: None,
             pending_se: Vec::new(),
+            pending_jump: None,
         };
         let mut flags = self.flags.clone();
         let mut count = 0;
@@ -2012,6 +2131,10 @@ impl Playback {
             return false;
         }
         if self.items.is_empty() || self.index + 1 >= self.items.len() {
+            // 現在シーンが `[ジャンプ:]` で終わっているなら、遷移先があるので末尾ではない (#725)。
+            if self.pending_jump.is_some() {
+                return false;
+            }
             return !self.has_more_scenes_with_items();
         }
         self.item_file_ids[self.index + 1] != self.item_file_ids[self.index]
@@ -2051,7 +2174,8 @@ impl Playback {
                 &mut item_bgm,
                 &mut item_se,
             );
-            if !items.is_empty() {
+            // item 0件でも `[ジャンプ:]` で終わる中継シーン（#725）は「先がある」とみなす。
+            if !items.is_empty() || scan_state.pending_jump.is_some() {
                 return true;
             }
             scene_idx = next_scene_idx;
@@ -2104,11 +2228,13 @@ impl Playback {
                 current_blackout: false,
                 current_bgm: None,
                 pending_se: Vec::new(),
+                pending_jump: None,
             },
             current_scene_idx: 0,
             flags: GameFlags::new(),
             total_cache: std::cell::Cell::new(None),
             debug_unlock_all: false,
+            pending_jump: None,
         }
     }
 }
@@ -2263,6 +2389,427 @@ mod tests {
     /// 単一チャプター・単一シーンに `events` を並べた `Document` を作る。
     fn doc_single_scene(events: Vec<Event>) -> Document {
         document_with_chapters(vec![chapter(1, vec![scene("1-1", events)])])
+    }
+
+    fn jump_event(target: &str) -> Event {
+        Event::Jump {
+            target: target.to_string(),
+        }
+    }
+
+    /// `[ジャンプ: シーンID]`（#725）: シーン末尾に置くと、ドキュメント順の後続ではなく
+    /// 遷移先へ進む。遷移先を読み終えた後は（遷移先の後続シーンが無ければ）末尾になる。
+    #[test]
+    fn jump_at_scene_end_goes_to_target_instead_of_next_scene_in_document_order() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"]), jump_event("c")]),
+                scene("b", vec![narration(vec!["b1"])]),
+                scene("c", vec![narration(vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(!pb.is_at_end(), "ジャンプ先があるので a1 は末尾ではない");
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        assert_eq!(pb.current_line().unwrap().text, vec!["c1".to_string()]);
+        assert!(pb.is_at_end());
+    }
+
+    /// 先頭が Jump のみの中継シーンは、構築時点で遷移先から始まる。
+    #[test]
+    fn jump_only_first_scene_starts_at_target() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![jump_event("b")]),
+                scene("b", vec![narration(vec!["b1"])]),
+            ],
+        )]);
+        let pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_scene_id(), "b");
+        assert_eq!(pb.current_line().unwrap().text, vec!["b1".to_string()]);
+    }
+
+    /// `[条件:]` 内の Jump は条件が真のときだけ遷移する（偽なら無視してドキュメント順）。
+    #[test]
+    fn jump_inside_condition_only_fires_when_flag_is_true() {
+        let build = |flag_value: bool| {
+            document_with_chapters(vec![chapter(
+                1,
+                vec![
+                    scene(
+                        "a",
+                        vec![
+                            flag_event("f", flag_value),
+                            narration(vec!["a1"]),
+                            condition_event("f", vec![jump_event("c")]),
+                        ],
+                    ),
+                    scene("b", vec![narration(vec!["b1"])]),
+                    scene("c", vec![narration(vec!["c1"])]),
+                ],
+            )])
+        };
+        let mut pb = Playback::from_document(&build(true));
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        let mut pb = Playback::from_document(&build(false));
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "b");
+    }
+
+    /// 存在しない遷移先・自己ループの中継シーンでもハング/panic しない。
+    #[test]
+    fn jump_to_missing_target_or_relay_cycle_does_not_hang() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"]), jump_event("nowhere")]),
+                scene("x", vec![jump_event("y")]),
+                scene("y", vec![jump_event("x")]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(!pb.advance());
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"]), jump_event("x")]),
+                scene("x", vec![jump_event("y")]),
+                scene("y", vec![jump_event("x")]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        let _ = pb.advance();
+    }
+
+    /// Jump より後ろのイベントは item 化されない（再生されない）。
+    #[test]
+    fn jump_drops_events_after_it_in_the_same_scene() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![
+                        narration(vec!["a1"]),
+                        jump_event("c"),
+                        narration(vec!["a2-unreachable"]),
+                    ],
+                ),
+                scene("b", vec![narration(vec!["b1"])]),
+                scene("c", vec![narration(vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(
+            pb.total(),
+            3,
+            "a1 / (b1 は遷移先ではないが item 化される) / c1"
+        );
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        assert_eq!(pb.current_line().unwrap().text, vec!["c1".to_string()]);
+    }
+
+    /// sentence_per_page 有効時: 最後の item の全文を読み終えるまで Jump しない。
+    #[test]
+    fn jump_with_sentence_per_page_waits_for_last_sentence_before_jumping() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![dialog(Some("A"), vec!["一文目。二文目。"]), jump_event("c")],
+                ),
+                scene("b", vec![narration(vec!["b1"])]),
+                scene("c", vec![narration(vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc).with_sentence_per_page(true);
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["一文目。".to_string()]
+        );
+        assert!(!pb.is_at_end());
+        assert!(pb.advance(), "一文目 -> 二文目（まだ a のまま）");
+        assert_eq!(pb.current_scene_id(), "a");
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["二文目。".to_string()]
+        );
+        assert!(!pb.is_at_end(), "Jump 先があるので末尾ではない");
+        assert!(pb.advance(), "二文目 -> Jump 先");
+        assert_eq!(pb.current_scene_id(), "c");
+        assert_eq!(pb.current_line().unwrap().text, vec!["c1".to_string()]);
+    }
+
+    /// 別ファイルへの Jump は選択肢ジャンプと同じ境界リセット（BGM/イベント絵/暗転）を適用する。
+    /// （BGM は #724 で持ち越し。イベント絵/暗転だけリセットされる。）
+    #[test]
+    fn jump_across_file_boundary_resets_running_state_like_choice_jump() {
+        let file0 = chapter(
+            1,
+            vec![scene(
+                "a",
+                vec![
+                    Event::Bgm {
+                        path: Some("a.ogg".to_string()),
+                        action: BgmAction::Play,
+                        fade_ms: None,
+                    },
+                    event_image("route0/scene.webp"),
+                    Event::Blackout {
+                        action: name_name_parser::models::BlackoutAction::On,
+                    },
+                    dialog(Some("A"), vec!["ファイル0の最後"]),
+                    jump_event("hub"),
+                ],
+            )],
+        );
+        let file1 = chapter(
+            2,
+            vec![scene("hub", vec![dialog(Some("H"), vec!["別ファイル"])])],
+        );
+        let doc = document_with_chapters(vec![file0, file1]);
+        let mut pb = Playback::from_merged_document(&doc, &[0, 1]);
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        assert!(pb.is_blackout());
+        assert!(!pb.is_at_end());
+
+        assert!(pb.advance());
+
+        assert_eq!(pb.current_scene_id(), "hub");
+        assert_eq!(
+            pb.current_line().unwrap().text,
+            vec!["別ファイル".to_string()]
+        );
+        assert_eq!(pb.current_bgm(), Some("a.ogg"), "BGM は持ち越す（#724）");
+        assert!(!pb.is_blackout());
+        assert_eq!(pb.current_line().unwrap().event_image, None);
+        assert!(pb.is_at_end());
+    }
+
+    /// 同一ファイル内の Jump では BGM/イベント絵が持ち越される（ファイル境界でのみリセット）。
+    #[test]
+    fn jump_within_same_file_keeps_running_state() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![
+                        Event::Bgm {
+                            path: Some("a.ogg".to_string()),
+                            action: BgmAction::Play,
+                            fade_ms: None,
+                        },
+                        event_image("keep.webp"),
+                        dialog(Some("A"), vec!["a1"]),
+                        jump_event("c"),
+                    ],
+                ),
+                scene("b", vec![narration(vec!["b1"])]),
+                scene("c", vec![dialog(Some("C"), vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        assert_eq!(pb.current_bgm(), Some("a.ogg"));
+        assert_eq!(
+            pb.current_line().unwrap().event_image.as_deref(),
+            Some("keep.webp")
+        );
+    }
+
+    /// Jump のみの中継シーンを経由して、さらにその先へ（advance 経路）。
+    #[test]
+    fn jump_through_jump_only_relay_scene_lands_on_final_target() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"]), jump_event("relay")]),
+                scene("relay", vec![jump_event("c")]),
+                scene("b", vec![narration(vec!["b1"])]),
+                scene("c", vec![narration(vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        assert_eq!(pb.current_line().unwrap().text, vec!["c1".to_string()]);
+    }
+
+    /// 選択肢で飛んだ先のシーンが Jump で終わっていても、そこから先へ続く（choice 経路の pending_jump）。
+    #[test]
+    fn choice_jump_into_scene_ending_with_jump_continues_to_its_target() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![narration(vec!["a1"]), choice(vec![("進む", "b")])],
+                ),
+                scene("b", vec![narration(vec!["b1"]), jump_event("d")]),
+                scene("c", vec![narration(vec!["c1"])]),
+                scene("d", vec![narration(vec!["d1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert!(pb.select_current_choice());
+        assert_eq!(pb.current_scene_id(), "b");
+        assert!(!pb.is_at_end());
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "d");
+    }
+
+    /// 遷移先不在の Jump: 何度 advance しても同じ位置で停止し、ドキュメント順の後続へ進まない。
+    #[test]
+    fn jump_to_missing_target_stalls_on_every_advance() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"]), jump_event("nowhere")]),
+                scene("b", vec![narration(vec!["b1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        for _ in 0..3 {
+            assert!(!pb.advance());
+            assert_eq!(pb.current_scene_id(), "a");
+            assert_eq!(pb.current_line().unwrap().text, vec!["a1".to_string()]);
+        }
+    }
+
+    /// 停止した経路では current_scene_idx / scan_state を遷移前に戻す（シーン切替検知の誤発火防止）。
+    #[test]
+    fn stalled_relay_restores_current_scene_idx_in_advance_and_choice_paths() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"])]),
+                scene(
+                    "r",
+                    vec![flag_event("relay_flag", true), jump_event("nowhere")],
+                ),
+                scene("b", vec![narration(vec!["b1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert_eq!(pb.current_scene_idx(), 0);
+        assert!(!pb.advance());
+        assert_eq!(
+            pb.current_scene_idx(),
+            0,
+            "advance 停止でも中継シーンへ動かない"
+        );
+        assert_eq!(pb.current_scene_id(), "a");
+        assert!(
+            !pb.flags.check("relay_flag"),
+            "中継シーン内のフラグも巻き戻る"
+        );
+        assert!(pb.pending_jump.is_none());
+
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![narration(vec!["a1"]), choice(vec![("進む", "r")])],
+                ),
+                scene(
+                    "r",
+                    vec![flag_event("relay_flag", true), jump_event("nowhere")],
+                ),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert!(!pb.select_current_choice());
+        assert_eq!(pb.current_scene_idx(), 0, "選択肢経路の停止でも動かない");
+        assert!(!pb.flags.check("relay_flag"));
+        assert!(pb.pending_jump.is_none(), "元シーンの予約（無し）を保持");
+        assert!(pb.current_choice().is_some());
+    }
+
+    /// 中継シーン（Jump のみ）の遷移先が不在でも停止し、後続シーンへ進まない。
+    #[test]
+    fn jump_only_relay_with_missing_target_stalls() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"])]),
+                scene("r", vec![jump_event("nowhere")]),
+                scene("b", vec![narration(vec!["b1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        for _ in 0..3 {
+            assert!(!pb.advance());
+            assert_eq!(pb.current_line().unwrap().text, vec!["a1".to_string()]);
+        }
+    }
+
+    /// Jump のみの中継シーンが [a(本文), r(Jump→a)] の形でも、a 末尾は末尾扱いにならない。
+    #[test]
+    fn jump_only_relay_scene_counts_as_more_scenes_for_is_at_end() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"])]),
+                scene("r", vec![jump_event("a")]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(!pb.is_at_end());
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "a");
+    }
+
+    /// 選択肢先が item 0件で止まる経路でも、遷移元シーンの古い Jump 予約を持ち越さない。
+    #[test]
+    fn choice_jump_clears_stale_pending_jump() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene(
+                    "a",
+                    vec![
+                        narration(vec!["a1"]),
+                        choice(vec![("進む", "z")]),
+                        jump_event("c"),
+                    ],
+                ),
+                scene("c", vec![narration(vec!["c1"])]),
+                scene("z", vec![]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert!(pb.select_current_choice());
+        assert!(pb.pending_jump.is_none());
+    }
+
+    /// Jump 先の読み終わり後に、元シーンの Jump が再発火して戻ってしまわない（pending_jump は take される）。
+    #[test]
+    fn jump_target_does_not_re_fire_original_pending_jump() {
+        let doc = document_with_chapters(vec![chapter(
+            1,
+            vec![
+                scene("a", vec![narration(vec!["a1"]), jump_event("c")]),
+                scene("c", vec![narration(vec!["c1"])]),
+            ],
+        )]);
+        let mut pb = Playback::from_document(&doc);
+        assert!(pb.advance());
+        assert_eq!(pb.current_scene_id(), "c");
+        assert!(pb.is_at_end());
+        assert!(!pb.advance(), "c は末尾。a の Jump が再発火しない");
+        assert_eq!(pb.current_scene_id(), "c");
     }
 
     #[test]
