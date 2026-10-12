@@ -2644,6 +2644,13 @@ describe('PlayerScreen', () => {
         expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
       })
 
+      it('68: debug 系クエリが無い通常フローでは debug_scene 行が debugInfo に出ず、サブ MD も fetch しない（非回帰）', async () => {
+        await renderMultiDocProject()
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
+        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+        expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
+      })
+
       it('69: ?scene= 解決済みで debug_scene が見つからない場合、confinement と initialSceneId は ?scene= のまま・HUD は not found (ignored)', async () => {
         window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=no-such-scene')
         await renderMultiDocProject()
@@ -2652,13 +2659,6 @@ describe('PlayerScreen', () => {
         expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
           'debug_scene: no-such-scene → not found (ignored)'
         )
-      })
-
-      it('68: debug 系クエリが無い通常フローでは debug_scene 行が debugInfo に出ず、サブ MD も fetch しない（非回帰）', async () => {
-        await renderMultiDocProject()
-        expect(cellFetchCount(CELL_PATH)).toBe(0)
-        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
-        expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
       })
     })
   })
