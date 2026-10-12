@@ -2274,6 +2274,41 @@ describe('PlayerScreen', () => {
       expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
     })
 
+    it('45b: 単一 script.md フォールバックでも ?debug_scene=<エントリ内 id> で HUD に debug_scene → resolved が出る', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      window.history.pushState({}, '', '?debug_scene=only-scene')
+      listProjectsMock.mockResolvedValue([
+        { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+      ])
+      listScriptsMock.mockRejectedValue(new Error('listScripts unavailable'))
+      getContentsMock.mockResolvedValue({
+        path: 'script.md',
+        sha: 'sha-entry',
+        content: 'script.md',
+      })
+      parseMarkdownMock.mockResolvedValue({
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [{ id: 'only-scene', title: 'only', view: 'TopDown', events: [] }],
+          },
+        ],
+      })
+      render(
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+      expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+        'debug_scene: only-scene → resolved'
+      )
+    })
+
     it('46: ?scene= 解決に必要な別 MD の取得が失敗しても（resolveMissingScene が内部で catch して null を返す）クラッシュせず entry 再生にフォールバックする', async () => {
       vi.spyOn(console, 'warn').mockImplementation(() => {})
       window.history.pushState({}, '', '?scene=unreachable-scene')
@@ -2607,6 +2642,16 @@ describe('PlayerScreen', () => {
         expect(ids.filter((id) => id === 'cell-scene-1')).toHaveLength(1)
         expect(cellFetchCount(CELL_PATH)).toBe(1)
         expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+      })
+
+      it('69: ?scene= 解決済みで debug_scene が見つからない場合、confinement と initialSceneId は ?scene= のまま・HUD は not found (ignored)', async () => {
+        window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=no-such-scene')
+        await renderMultiDocProject()
+        expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
+        expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'debug_scene: no-such-scene → not found (ignored)'
+        )
       })
 
       it('68: debug 系クエリが無い通常フローでは debug_scene 行が debugInfo に出ず、サブ MD も fetch しない（非回帰）', async () => {

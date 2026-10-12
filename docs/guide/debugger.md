@@ -36,7 +36,8 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 `debug_scene` が解決できれば confinement は外れる（後勝ち。別ファイルの `debug_scene` 内の選択肢ジャンプが
 終劇にならない）。存在しない ID を指定すると全 MD を探索してから開始するため、起動が遅れる。
 解決できなかった場合（存在しない ID）はエントリ先頭から開始し、デバッグ HUD に
-`debug_scene: <id> → not found (fallback to entry)` と表示する。
+`debug_scene: <id> → not found (fallback to entry)` と表示する（`?scene=` が解決済みなら
+`not found (ignored)`。開始位置・confinement は `?scene=` のまま）。
 
 | クエリ | 意味 | 例 |
 |---|---|---|
