@@ -674,8 +674,9 @@ export class NovelRenderer {
    * （justSelectedChoice と同型の抑制）。 */
   private suppressNextAdvance = false
 
-  /** Wait イベント実行中フラグ */
+  /** 本文なしで連続できる `[ジャンプ:]` の上限 (#725)。TUI の `RELAY_HOP_LIMIT` と同値。 */
   private static readonly JUMP_CHAIN_LIMIT = 100
+  /** Wait イベント実行中フラグ */
   private waitingForWait = false
   /**
    * 本文を描画しないまま連続して実行した `[ジャンプ:]` の回数 (#725)。Jump のみのシーン同士の
@@ -1380,7 +1381,7 @@ export class NovelRenderer {
       }
       return
     }
-    this.startScene(sceneId, scene)
+    this.startScene(sceneId, scene, true)
   }
 
   /**
@@ -1409,10 +1410,25 @@ export class NovelRenderer {
   private stallJump(): void {
     if (this.waitingForWait && this.isAtJump()) {
       this.waitingForWait = false
+      // スキップ中に停止した Jump へ着き続けて空回りしないよう解除する（TUI と同じ）。
+      this.setSkipMode(false)
     }
   }
 
-  private startScene(sceneId: string, scene: EventScene): void {
+  /**
+   * BGM を止めて持ち越し状態（currentBgmPath）も空にする (#724)。動画書き出しのように、
+   * ライブプレビューで鳴っていた曲を引き継がず「新規開始」したい呼び出し側が jumpToScene の前に使う。
+   */
+  stopBgmForFreshStart(): void {
+    this.audioManager.stopBgm(0)
+    this.currentBgmPath = null
+  }
+
+  /**
+   * @param carryBgm true なら BGM を持ち越す (#724)。選択肢・物語進行によるジャンプ
+   *   （jumpToScene / resolveMissingSceneAndJump）だけが true を渡す。startFrom 等の新規開始は false。
+   */
+  private startScene(sceneId: string, scene: EventScene, carryBgm = false): void {
     // #386: 通常のシーン遷移が成立する経路なので、終劇状態は解除しておく（宣言的整合性の保険。
     // 通常はここに来る前に jumpToScene の confinement チェックで弾かれるため storyEnded は
     // 既に false のはずだが、デバッグ等から直接呼ばれた場合の保険として明示的に戻す）。
@@ -1422,7 +1438,10 @@ export class NovelRenderer {
       this.syncEndingOverlayVisibility()
     }
     this.currentSceneId = sceneId
-    this.resetAndStartEvents([...scene.events], { preserveBackgroundForTransition: true })
+    this.resetAndStartEvents([...scene.events], {
+      preserveBackgroundForTransition: true,
+      carryBgm,
+    })
     this.onSceneChangeCallback?.(sceneId)
   }
 
@@ -1446,7 +1465,7 @@ export class NovelRenderer {
         this.stallJump()
         return
       }
-      this.startScene(sceneId, scene)
+      this.startScene(sceneId, scene, true)
     } catch (err) {
       console.warn(`[name-name] シーンの追加読み込みに失敗しました: ${sceneId}`, err)
       if (this.initialized) this.stallJump()
@@ -1887,7 +1906,11 @@ export class NovelRenderer {
    */
   private resetAndStartEvents(
     events: Event[],
-    options?: { preserveBackgroundForTransition?: boolean; skipAutoAdvance?: boolean }
+    options?: {
+      preserveBackgroundForTransition?: boolean
+      carryBgm?: boolean
+      skipAutoAdvance?: boolean
+    }
   ): void {
     this.waitingForChoice = false
     this.waitingForWait = false
@@ -1923,7 +1946,13 @@ export class NovelRenderer {
       this.effectOverlay.visible = false
     }
     this.choiceOverlay.hide()
-    this.audioManager.stopBgm(0)
+    // BGM は「変えるまで鳴り続ける」(#724): 選択肢・物語進行によるジャンプ（carryBgm=true）では
+    // 持ち越し、次シーン冒頭の同一曲 [BGM:] も頭出ししない（AudioManager.playBgm の同一 URL 継続分岐）。
+    // 新規開始（setEvents・restart・startFrom の ?scene= / ?debug_scene=）では従来どおり停止する。
+    // 背景等の持ち越し（preserveBackgroundForTransition）とは独立した別オプション。
+    if (!options?.carryBgm) {
+      this.audioManager.stopBgm(0)
+    }
     // SE シーケンス（#672）の gap 待機タイマーをキャンセルする。新しいシーンへ遷移した後も
     // 前シーンで発火した [SE: 複数候補] の残りが setTimeout 越しにバックグラウンド再生され
     // 続けないようにする（他タイマーと同じ規律、AudioManager.cancelSeSequence のdoc comment参照）。
@@ -1969,7 +1998,10 @@ export class NovelRenderer {
     // 引き継がない（演出の中間状態を持ち越さない、eventImageLayer と同じ規律）。
     this.clearTelopLayer()
     this.setBlackout(false)
-    this.currentBgmPath = null
+    // currentBgmPath は上の stopBgm と対で、持ち越し時（#724）は保持して snapshot/save と整合させる。
+    if (!options?.carryBgm) {
+      this.currentBgmPath = null
+    }
     // 追うスポットライト (#693) も新しいシーンの開始で常に消灯する。isBlackout/cameraMode と
     // 同じ規律: target キャラは次シーンに存在するとは限らないため、シーンをまたいで暗黙に
     // 持ち越さず、そのシーンで必要なら明示的に [スポットライト:] を書く。
@@ -3514,7 +3546,7 @@ export class NovelRenderer {
         switch (step.type) {
           case 'advance':
             this.advance()
-            if (await this.drainPendingJump()) {
+            while (await this.drainPendingJump()) {
               if (!this.initialized) return
             }
             break
@@ -3527,7 +3559,7 @@ export class NovelRenderer {
             // シーン）時は resetAndStartEvents が呼ばれないため、ここで明示的にリセットする。
             this.waitingForChoice = false
             this.jumpToScene(step.jump)
-            if (await this.drainPendingJump()) {
+            while (await this.drainPendingJump()) {
               if (!this.initialized) return
             }
             break
@@ -3556,6 +3588,17 @@ export class NovelRenderer {
     if (this.storyEnded) return
     if (this.resolvedEvents.length === 0) return
     if (this.waitingForChoice || this.waitingForWait) return
+    // Jump 停止中 (#725): 画面は直前の本文のままなので、history 末尾（＝その本文）を pop せずに
+    // 復元し直す（pop すると一つ前の行まで飛ばす／本文 1 行のシーンでは何も起きない）。
+    // 復元後の advance で Jump が再発火する。
+    if (this.isAtJump()) {
+      const last = this.history[this.history.length - 1]
+      if (last) {
+        this.applyState(last)
+        this.render()
+      }
+      return
+    }
 
     const current = this.resolvedEvents[this.eventIndex]
     const textEvt = getTextEvent(current)

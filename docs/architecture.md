@@ -63,7 +63,7 @@ name-name/
 
 Worker はパースしない。GitHub から Markdown を取得してそのままフロントエンドに渡し、フロントエンドが WASM パーサー（`frontend/src/wasm/parser.ts`）で Event[] に変換する。WASM の初期化は遅延実行（初回呼び出し時に `init()` を実行）。
 
-`tui/` の選択肢分岐（`Playback`, #482）はシーン境界を越えてフラットに読み進む設計で、GUI版と異なり jump 先シーンを読み終えても終劇にならない。原稿を書く側は、選択肢の分岐先シーンをドキュメント末尾に置くか、必ず次の `Choice` で明示的に閉じること — さもないとドキュメント順で後続の別シーンの内容がそのまま漏れて表示されてしまう（設計の詳細は `tui/src/playback.rs` 冒頭のdocコメント参照）。この割り切りは単一ファイル前提だったため、複数の `.md` を一括マージする `multi_doc`（#496）以降は例外を設けている: `Playback::from_merged_document` で構築すると各 item に由来ファイルの id が刻まれ、暗黙の `advance()` はファイル境界（＝マージ対象ファイルの境目）を越えず、そこに到達すると `is_at_end()` になる。選択肢ジャンプ（`select_current_choice`）はこの制限の対象外で、別ファイルのシーンへ明示的に飛ぶのは従来どおり成功する。ただしジャンプ元とジャンプ先が異なるファイル由来の場合、シーンを跨いで引き継ぐランニング状態（BGM/イベント絵/暗転/直前SE、#502/#497/#512）は#528でリセットされるようになった — 同一ファイル内のジャンプでは従来どおり引き継がれる。
+`tui/` の選択肢分岐（`Playback`, #482）はシーン境界を越えてフラットに読み進む設計で、GUI版と異なり jump 先シーンを読み終えても終劇にならない。原稿を書く側は、選択肢の分岐先シーンをドキュメント末尾に置くか、必ず次の `Choice` で明示的に閉じること — さもないとドキュメント順で後続の別シーンの内容がそのまま漏れて表示されてしまう（設計の詳細は `tui/src/playback.rs` 冒頭のdocコメント参照）。この割り切りは単一ファイル前提だったため、複数の `.md` を一括マージする `multi_doc`（#496）以降は例外を設けている: `Playback::from_merged_document` で構築すると各 item に由来ファイルの id が刻まれ、暗黙の `advance()` はファイル境界（＝マージ対象ファイルの境目）を越えず、そこに到達すると `is_at_end()` になる。選択肢ジャンプ（`select_current_choice`）はこの制限の対象外で、別ファイルのシーンへ明示的に飛ぶのは従来どおり成功する。ただしジャンプ元とジャンプ先が異なるファイル由来の場合、シーンを跨いで引き継ぐランニング状態（イベント絵/暗転/直前SE、#497/#512）は#528でリセットされるようになった — 同一ファイル内のジャンプでは従来どおり引き継がれる。BGM（#502）は当初このリセット対象だったが、#724 で GUI版と揃えて「ジャンプ一般で持ち越す」に変更し、ファイル境界でもリセットしない。
 
 ジャンプ先シーンが「純粋な中継シーン」の場合、`select_current_choice` はプレイヤーへの追加入力を要求せず自動的に先へ進む（#574）。判定基準（厳密）: そのシーンが積んだ items が「正確に1件」かつ、その1件が `Choice` で `options.len() == 1` の場合だけを対象とする。Line/Image が1件でも混ざっていれば対象外（地の文やイベント絵のある「見せ場のある単一選択肢画面」は飛ばさない）し、選択肢が0件/2件以上でも対象外（プレイヤーに分岐の意思決定をさせる画面は必ず止める）。背景: Gymnasiaの`hub_gate`→`hub_gate_advance_1`のような、フラグ設定専用で本文・イベント絵を持たず「続ける」選択肢1つだけを持つ中継シーンにジャンプすると、直前の画面（同じく「続ける」だけ）とピクセル単位で同一に見えてしまい、プレイヤーには「続ける」を2回押さないと反応しないUXバグに見えていた。この自動継続は実内容のあるシーン、または選択肢が0件/2件以上のシーンに着地するまで繰り返し、循環参照による無限ループは `RELAY_HOP_LIMIT`（100回）で打ち切る。中継シーンがファイル境界を越えて`jump`する場合も、上記のファイル境界越えリセットが同様に適用される。
 
@@ -160,6 +160,12 @@ basename が `script.md`** のもの（無ければ先頭）を選ぶ。
 
 `PlayerScreen` が `?scene=` を読み、対象 sceneId が属する script を（上記の missing scene
 resolver 経由で）事前解決・ロードしてから `NovelPlayer` に `initialSceneId` として渡す。
+
+`?debug_scene=` も同じく `PlayerScreen` のロード effect で `resolveMissingScene` により事前解決する
+（#726）。`NovelRenderer.startFrom` は `missingSceneResolver` で再挑戦せず、未ロードの sceneId では
+no-op になるため。ただし解決結果は `allScenes` に載せるだけで、`startSceneId` には
+混ぜない。`debug_scene` が解決できたときは `?scene=` 併用でも confinement を外す（`debug_scene` は confinement なし・後勝ち）。解決失敗時は HUD（`loadDebugInfo`）に
+`debug_scene: <id> → not found (fallback to entry)` を出す（`?scene=` が解決済みなら `not found (ignored)`、その場合 confinement は `?scene=` のまま）。
 `NovelPlayer` はマウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ
 （`debug_scene` ブロックより前に評価するため、両方指定されると `debug_scene` 側が後勝ちで
 優先される）。無効・未解決の sceneId は現行どおりエントリ（ハブ）から開始する。
@@ -643,6 +649,7 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
 - ループ再生
 - 曲切り替え時はフェードアウト → 新曲開始
 - `[BGM停止]` でフェードアウト停止
+- **シーンジャンプでは持ち越す（#724）**: `NovelRenderer.resetAndStartEvents` は独立オプション `carryBgm`（背景持ち越しの `preserveBackgroundForTransition` とは別。`jumpToScene` / `resolveMissingSceneAndJump` が true を渡す）のとき `audioManager.stopBgm(0)` と `currentBgmPath = null` を実行しない。次シーン冒頭の同一曲 `[BGM:]` は `AudioManager.playBgm` の同一 URL 継続分岐で頭出しされない。`setEvents` / `restart` / 終劇（`endStory`）、`startFrom`（`?scene=` / `?debug_scene=`）、動画書き出し（`stopBgmForFreshStart()`）の新規開始では従来どおり停止する。無音にしたいシーンは冒頭で `[BGM停止]`。`NovelGameState.currentBgmPath` はジャンプ後もそのまま整合し、snapshot / seek / save / load で復元される
 
 ### SE
 

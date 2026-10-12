@@ -2274,6 +2274,41 @@ describe('PlayerScreen', () => {
       expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
     })
 
+    it('45b: 単一 script.md フォールバックでも ?debug_scene=<エントリ内 id> で HUD に debug_scene → resolved が出る', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      window.history.pushState({}, '', '?debug_scene=only-scene')
+      listProjectsMock.mockResolvedValue([
+        { name: 'theo-hayami', title: 'せおはやみ', repo: 'kako-jun/theo-hayami' },
+      ])
+      listScriptsMock.mockRejectedValue(new Error('listScripts unavailable'))
+      getContentsMock.mockResolvedValue({
+        path: 'script.md',
+        sha: 'sha-entry',
+        content: 'script.md',
+      })
+      parseMarkdownMock.mockResolvedValue({
+        engine: 'name-name',
+        chapters: [
+          {
+            number: 1,
+            title: 'c',
+            hidden: false,
+            default_bgm: null,
+            scenes: [{ id: 'only-scene', title: 'only', view: 'TopDown', events: [] }],
+          },
+        ],
+      })
+      render(
+        <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+      })
+      expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+        'debug_scene: only-scene → resolved'
+      )
+    })
+
     it('46: ?scene= 解決に必要な別 MD の取得が失敗しても（resolveMissingScene が内部で catch して null を返す）クラッシュせず entry 再生にフォールバックする', async () => {
       vi.spyOn(console, 'warn').mockImplementation(() => {})
       window.history.pushState({}, '', '?scene=unreachable-scene')
@@ -2493,6 +2528,137 @@ describe('PlayerScreen', () => {
         expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
         expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
         expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
+      })
+    })
+
+    // --- #726: `?debug_scene=` もエントリ外（未ロード）のサブ MD シーンを事前解決する ---
+    describe('PlayerScreen `?debug_scene=` の遅延ロード事前解決 (#726)', () => {
+      const CELL_PATH = 'content/scripts/free/a.md'
+      const CELL_B_PATH = 'content/scripts/free/b.md'
+
+      function cellFetchCount(path: string): number {
+        return getContentsMock.mock.calls.filter((c) => c[1] === path).length
+      }
+
+      function sceneIds(): string[] {
+        return lastJumpSceneIndex().map((sc) => sc.id)
+      }
+
+      /** mockMultiDocProject に b.md（cell-b-1）を足した 3 ファイル構成にする。 */
+      async function renderTwoCellProject() {
+        mockMultiDocProject()
+        listScriptsMock.mockResolvedValue([
+          { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+          { path: CELL_PATH, sha: 's1', size: 1, title: null, hidden: false },
+          { path: CELL_B_PATH, sha: 's2', size: 1, title: null, hidden: false },
+        ])
+        const base = parseMarkdownMock.getMockImplementation()!
+        parseMarkdownMock.mockImplementation(async (md: string, ...rest: unknown[]) => {
+          if (md === CELL_B_PATH) {
+            return {
+              engine: 'name-name',
+              chapters: [
+                {
+                  number: 1,
+                  title: 'c',
+                  hidden: false,
+                  default_bgm: null,
+                  scenes: [{ id: 'cell-b-1', title: 'b1', view: 'TopDown', events: [] }],
+                },
+              ],
+            }
+          }
+          return (base as (m: string, ...r: unknown[]) => Promise<unknown>)(md, ...rest)
+        })
+        render(
+          <PlayerScreen projectName="theo-hayami" apiBaseUrl="http://api.test" onBack={() => {}} />
+        )
+        await waitFor(() => {
+          expect(screen.getByTestId('novel-player')).toBeInTheDocument()
+        })
+      }
+
+      it('62: エントリ外サブ MD のシーンを debug_scene 指定すると jumpSceneIndex に載り、タイトル非表示・initialSceneId/confinedSceneIds は null のまま', async () => {
+        window.history.pushState({}, '', '?debug_scene=cell-scene-1')
+        await renderMultiDocProject()
+        expect(sceneIds()).toContain('cell-scene-1')
+        expect(cellFetchCount(CELL_PATH)).toBeGreaterThan(0)
+        expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
+        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'debug_scene: cell-scene-1 → resolved'
+        )
+      })
+
+      it('63: 存在しない id を debug_scene 指定すると HUD に not found が出て、エントリ先頭のまま（全サブ MD を探索しても見つからず・クラッシュしない）', async () => {
+        window.history.pushState({}, '', '?debug_scene=no-such-scene')
+        await renderMultiDocProject()
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'debug_scene: no-such-scene → not found (fallback to entry)'
+        )
+        expect(sceneIds()).not.toContain('no-such-scene')
+        // resolveMissingScene のフォールバックで全サブ MD を探索した
+        expect(cellFetchCount(CELL_PATH)).toBe(1)
+        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+        expect(screen.queryByRole('alert')).toBeNull()
+      })
+
+      it('64: エントリ内に既にある id（hub-scene）を debug_scene 指定しても追加 fetch せず resolved になる', async () => {
+        window.history.pushState({}, '', '?debug_scene=hub-scene')
+        await renderMultiDocProject()
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
+        expect(sceneIds()).toContain('hub-scene')
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'debug_scene: hub-scene → resolved'
+        )
+      })
+
+      it('65: ?scene= と debug_scene 併用（別ファイル）は両方解決され、debug が解決できたので confinement は null（b.md 内の遷移が終劇にならない）', async () => {
+        window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=cell-b-1')
+        await renderTwoCellProject()
+        expect(sceneIds()).toEqual(expect.arrayContaining(['cell-scene-1', 'cell-b-1']))
+        expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+        expect(debugInfo).toContain('scene param: cell-scene-1 → resolved')
+        expect(debugInfo).toContain('debug_scene: cell-b-1 → resolved')
+      })
+
+      it('66: debug_script のみ（scene キー無し）では debug_scene の事前解決を行わず、サブ MD も fetch しない', async () => {
+        window.history.pushState({}, '', '?debug_script=advance')
+        await renderMultiDocProject()
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
+        expect(sceneIds()).not.toContain('cell-scene-1')
+        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+        expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
+      })
+
+      it('67: 同一 sceneId を ?scene= と debug_scene 両方に指定しても冪等（索引に重複なし・サブ MD は 1 回だけ fetch・debug 解決済みなので confinement は null）', async () => {
+        window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=cell-scene-1')
+        await renderMultiDocProject()
+        const ids = sceneIds()
+        expect(ids.filter((id) => id === 'cell-scene-1')).toHaveLength(1)
+        expect(cellFetchCount(CELL_PATH)).toBe(1)
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+      })
+
+      it('68: debug 系クエリが無い通常フローでは debug_scene 行が debugInfo に出ず、サブ MD も fetch しない（非回帰）', async () => {
+        await renderMultiDocProject()
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
+        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+        expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
+      })
+
+      it('69: ?scene= 解決済みで debug_scene が見つからない場合、confinement と initialSceneId は ?scene= のまま・HUD は not found (ignored)', async () => {
+        window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=no-such-scene')
+        await renderMultiDocProject()
+        expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
+        expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'debug_scene: no-such-scene → not found (ignored)'
+        )
       })
     })
   })

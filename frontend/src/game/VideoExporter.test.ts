@@ -98,6 +98,7 @@ describe('exportVideo state machine (smoke)', () => {
       onEnd: () => {},
       takeOnEnd: () => null,
       takeOnSceneChange: () => null,
+      stopBgmForFreshStart: () => {},
       jumpToScene: () => {},
       setAutoMode: () => {},
     } as unknown as Parameters<typeof exportVideo>[0]
@@ -142,6 +143,7 @@ describe('exportVideo resolution bump (#279)', () => {
       setOnEnd: () => {},
       takeOnEnd: () => null,
       takeOnSceneChange: () => null,
+      stopBgmForFreshStart: () => {},
       jumpToScene: () => {},
       setAutoMode: () => {},
     } as unknown as Parameters<typeof import('./VideoExporter').exportVideo>[0]
@@ -193,6 +195,7 @@ describe('exportVideo resolution bump (#279)', () => {
         setOnEnd: () => {},
         takeOnEnd: () => null,
         takeOnSceneChange: () => null,
+        stopBgmForFreshStart: () => {},
         jumpToScene: () => {},
         setAutoMode: () => {},
       } as unknown as Parameters<typeof exportVideo>[0]
@@ -277,6 +280,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       setOnEnd: (cb: () => void) => captureOnEnd(cb),
       takeOnEnd: () => null,
       takeOnSceneChange: () => null,
+      stopBgmForFreshStart: () => {},
       jumpToScene: () => {},
       setAutoMode: () => {},
       prepareVideosForExport: async () => {},
@@ -311,6 +315,36 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
     expect(exportCalls).toEqual([true, false])
   })
 
+  // #724: 書き出しは新規開始。ライブプレビューの BGM を持ち込まないよう jumpToScene の前に BGM を止める。
+  it('#724: jumpToScene の前に stopBgmForFreshStart を呼ぶ', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    let started!: () => void
+    const startedPromise = new Promise<void>((res) => {
+      started = res
+    })
+    installRecordableMediaRecorder(() => started())
+
+    const order: string[] = []
+    let onEnd: (() => void) | null = null
+    const renderer = successRenderer([], (cb) => {
+      onEnd = cb
+    }) as unknown as Record<string, unknown>
+    renderer.stopBgmForFreshStart = () => order.push('stopBgm')
+    renderer.jumpToScene = () => order.push('jump')
+
+    const p = exportVideo(renderer as unknown as Parameters<typeof exportVideo>[0], {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      fps: 30,
+      preRollMs: 0,
+      postRollMs: 0,
+    })
+    await startedPromise
+    onEnd!()
+    await p
+    expect(order).toEqual(['stopBgm', 'jump'])
+  })
+
   // F-2: audioStream 取得失敗（enableCapture→null）でも throw 前に setExporting(false) を呼び最終 false。
   it('F-2: audioStream 失敗時も throw 前に setExporting(false) を呼び最終 false', async () => {
     const { exportVideo } = await import('./VideoExporter')
@@ -338,6 +372,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       setOnEnd: () => {},
       takeOnEnd: () => null,
       takeOnSceneChange: () => null,
+      stopBgmForFreshStart: () => {},
       jumpToScene: () => {},
       setAutoMode: () => {},
     } as unknown as Parameters<typeof exportVideo>[0]
@@ -378,6 +413,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
         setOnEnd: () => {},
         takeOnEnd: () => null,
         takeOnSceneChange: () => null,
+        stopBgmForFreshStart: () => {},
         jumpToScene: () => {},
         setAutoMode: () => {},
       } as unknown as Parameters<typeof exportVideo>[0]
@@ -441,6 +477,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       },
       takeOnEnd: () => null,
       takeOnSceneChange: () => null,
+      stopBgmForFreshStart: () => {},
       jumpToScene: () => {},
       setAutoMode: () => {},
       prepareVideosForExport: async () => {},
@@ -536,6 +573,7 @@ describe('exportVideo cleanup 解像度復元 (#455 resolveCleanupResolution)', 
       setOnEnd: () => {},
       takeOnEnd: () => null,
       takeOnSceneChange: () => null,
+      stopBgmForFreshStart: () => {},
       jumpToScene: () => {},
       setAutoMode: () => {},
     } as unknown as Parameters<typeof import('./VideoExporter').exportVideo>[0]
@@ -649,6 +687,7 @@ describe('exportVideo cleanup 解像度復元 (#455 resolveCleanupResolution)', 
       setOnEnd: () => {},
       takeOnEnd: () => null,
       takeOnSceneChange: () => null,
+      stopBgmForFreshStart: () => {},
       jumpToScene: () => {},
       setAutoMode: () => {},
     } as unknown as Parameters<typeof exportVideo>[0]
