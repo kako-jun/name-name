@@ -915,21 +915,25 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
     }
     // 値の列: 見出し（「MP 」） + 現在値の最大桁 + 「/最大値」。MP の最大値は常に出す
     const valueColumn = (maxValue: number, showMax: boolean, rightEdge: number) => {
-      const label = labels ? estimateTextWidth('MP ', font) : 0
+      // 見出しと数字がくっつかないよう、見出しの後ろに列間と同じすき間（実フォントの「MP」は概算より広いので、これで実際に隙間が残る）を空ける
+      const label = labels ? estimateTextWidth('MP', font) + SIDE_STATUS_COLUMN_GAP : 0
       const maxPart = showMax ? estimateTextWidth(`/${maxValue}`, font) : 0
-      const w = label + estimateTextWidth(`${maxValue}`, font) + maxPart
-      return { x: rightEdge - w, w, curRight: rightEdge - maxPart }
+      const curW = estimateTextWidth(`${maxValue}`, font)
+      const w = label + curW + maxPart
+      return { x: rightEdge - w, w, curRight: rightEdge - maxPart, labelPlusCur: label + curW }
     }
     let mp: StatusValueColumn | null = null
     if (withMp) {
       mp = valueColumn(input.maxMp, true, edge)
       edge = mp.x - SIDE_STATUS_COLUMN_GAP
     }
-    const hp = valueColumn(input.maxHp, maxHpShown, edge)
-    // 極端に狭いときも、HP 列が名前の左端（パネルの左余白）より左へ出ない
+    const { labelPlusCur: hpLabelCur, ...hp } = valueColumn(input.maxHp, maxHpShown, edge)
+    // 極端に狭いときも、HP 列が名前の左端（パネルの左余白）より左へ出ない。
+    // 現在値の右端は、見出しと現在値の最大桁が重ならない位置までは右へ押し出す
     if (hp.x < left) {
       hp.w = Math.max(0, hp.x + hp.w - left)
       hp.x = left
+      hp.curRight = Math.max(hp.curRight, left + hpLabelCur)
     }
     const nameW = Math.max(0, hp.x - SIDE_STATUS_COLUMN_GAP - left)
     return {

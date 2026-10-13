@@ -1497,6 +1497,8 @@ export class BattleScreen extends Container {
     let budget = maxWidth
     t.text = fitLabel(name, budget, SIDE_STATUS_FONT_SIZE)
     if (!Number.isFinite(maxWidth)) return
+    // ff-blue の文字影（右下へずれる）ぶんも列に食い込ませない
+    const shadow = this.windowStyle === 'ff-blue' ? FF_BLUE_TEXT_SHADOW.distance : 0
     for (let n = 0; n < 40 && budget > 0; n++) {
       let w = 0
       try {
@@ -1504,8 +1506,8 @@ export class BattleScreen extends Container {
       } catch {
         return
       }
-      if (!Number.isFinite(w) || w <= maxWidth + 0.5) return
-      budget = Math.max(0, budget - Math.max(1, w - maxWidth))
+      if (!Number.isFinite(w) || w <= maxWidth - shadow + 0.5) return
+      budget = Math.max(0, budget - Math.max(1, w - maxWidth + shadow))
       t.text = fitLabel(name, budget, SIDE_STATUS_FONT_SIZE)
     }
   }

@@ -2970,3 +2970,31 @@ describe('BattleScreen: side の名前は実測幅でも列幅に収める (#745
     }
   })
 })
+
+describe('BattleScreen: side の名前は ff-blue の文字影ぶんも列に食い込ませない (#745)', () => {
+  it('実測幅 + 影の距離が列幅以下になるまで詰める', () => {
+    Object.defineProperty(PixiText.prototype, 'width', {
+      configurable: true,
+      get(this: PixiText) {
+        return this.text.length * 20
+      },
+    })
+    try {
+      const s = track(
+        make(
+          [entity('a', { name: 'Abcdefghijklmnop' })],
+          [entity('slime')],
+          { layout: 'side', windowStyle: 'ff-blue' },
+          800,
+          450
+        )
+      )
+      const colW = (s as unknown as { sideStatusColumns: { name: { w: number } } })
+        .sideStatusColumns.name.w
+      const t = internals(s).statusTexts[0]
+      expect(t.text.length * 20 + FF_BLUE_TEXT_SHADOW.distance).toBeLessThanOrEqual(colW + 0.5)
+    } finally {
+      delete (PixiText.prototype as unknown as Record<string, unknown>).width
+    }
+  })
+})

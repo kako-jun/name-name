@@ -1866,8 +1866,11 @@ describe('computeStatusColumns: 見出し・現在値・/最大値の 3 分割 (
       c.mp!.x + c.mp!.w - estimateTextWidth('/99', SIDE_STATUS_FONT_SIZE),
       6
     )
-    // 見出し + 現在値の最大桁 + /最大値 = 従来の「HP 120/120」の幅
-    expect(c.hp.w).toBeCloseTo(estimateTextWidth('HP 120/120', SIDE_STATUS_FONT_SIZE), 6)
+    // 見出し + 見出しと数字のすき間（列間と同じ） + 現在値の最大桁 + /最大値
+    expect(c.hp.w).toBeCloseTo(
+      estimateTextWidth('HP120/120', SIDE_STATUS_FONT_SIZE) + SIDE_STATUS_COLUMN_GAP,
+      6
+    )
   })
 
   it('最大値を省く段階では現在値が列の右端に右寄せされる', () => {
@@ -1880,5 +1883,30 @@ describe('computeStatusColumns: 見出し・現在値・/最大値の 3 分割 (
     const c = computeStatusColumns({ ...base, maxHp: 99999, width: 20, atb: true })
     expect(c.hp.x).toBeGreaterThanOrEqual(base.x + SIDE_STATUS_TEXT_PADDING - 1e-9)
     expect(c.hp.w).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('computeStatusColumns: 見出しと数字のすき間・狭いときの重なり防止 (#745)', () => {
+  const base = { x: 100, width: 400, maxHp: 120, maxMp: 99, compact: false, atb: false }
+  const F = SIDE_STATUS_FONT_SIZE
+
+  it('見出しの右端と現在値の最大桁の左端の間に、列間と同じすき間（実フォントの「MP」は概算より広いので、これで実際に隙間が残る）がある', () => {
+    const c = computeStatusColumns(base)
+    for (const [col, label, max] of [
+      [c.hp, 'HP', 120],
+      [c.mp!, 'MP', 99],
+    ] as const) {
+      const labelRight = col.x + estimateTextWidth(label, F)
+      const curLeft = col.curRight - estimateTextWidth(`${max}`, F)
+      expect(curLeft - labelRight).toBeCloseTo(SIDE_STATUS_COLUMN_GAP, 6)
+    }
+  })
+
+  it('極端に狭く HP 列を左余白で止めても、現在値は見出しと重ならない位置までは右へ押し出される', () => {
+    const c = computeStatusColumns({ ...base, maxHp: 99999, width: 20, atb: true })
+    const left = base.x + SIDE_STATUS_TEXT_PADDING
+    const labelRight = c.showLabels ? left + estimateTextWidth('HP', F) : left
+    const curLeft = c.hp.curRight - estimateTextWidth('99999', F)
+    expect(curLeft).toBeGreaterThanOrEqual(labelRight - 1e-9)
   })
 })

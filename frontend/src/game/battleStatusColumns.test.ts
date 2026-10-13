@@ -29,7 +29,8 @@ const base: StatusColumnsInput = {
 /** 名前列がちょうど MIN_NAME になる status 幅（最初の段階 = MP あり・見出しあり）を、関数の出力から逆算する */
 function exactMinNameWidth(input: StatusColumnsInput): number {
   const c = computeStatusColumns({ ...input, width: 600 })
-  return 600 - (c.name.w - MIN_NAME)
+  // 浮動小数の丸めで境界ちょうどが 1 ulp 下回らないよう、ごく小さく上げる
+  return 600 - (c.name.w - MIN_NAME) + 1e-9
 }
 
 describe('computeStatusColumns: 名前列の最低文字数の境界 (#745)', () => {
@@ -75,7 +76,7 @@ describe('computeStatusColumns: maxHp の桁数 (#745)', () => {
   it('HP 列の幅は「HP 最大/最大」の概算幅そのもの（定数の直書きなし）', () => {
     for (const m of [99, 100, 999, 1000]) {
       const c = computeStatusColumns({ ...base, maxHp: m })
-      expect(c.hp.w).toBeCloseTo(estimateTextWidth(`HP ${m}/${m}`, F), 6)
+      expect(c.hp.w).toBeCloseTo(estimateTextWidth(`HP${m}/${m}`, F) + SIDE_STATUS_COLUMN_GAP, 6)
     }
   })
 
@@ -83,7 +84,7 @@ describe('computeStatusColumns: maxHp の桁数 (#745)', () => {
     const c0 = computeStatusColumns({ ...base, maxMp: 0 })
     const c1000 = computeStatusColumns({ ...base, maxMp: 1000 })
     expect(c0.mp).not.toBeNull()
-    expect(c0.mp!.w).toBeCloseTo(estimateTextWidth('MP 0/0', F), 6)
+    expect(c0.mp!.w).toBeCloseTo(estimateTextWidth('MP0/0', F) + SIDE_STATUS_COLUMN_GAP, 6)
     expect(c1000.mp!.w).toBeGreaterThan(c0.mp!.w)
   })
 

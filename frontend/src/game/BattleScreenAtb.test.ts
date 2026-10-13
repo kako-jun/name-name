@@ -364,7 +364,10 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
       expect(r.h).toBeLessThanOrEqual(3)
       // 文字の右端 <= HP の左端 <= HP の右端 <= ゲージの左端
       expect(t.x + estimateTextWidth(t.text, 14)).toBeLessThanOrEqual(hpLeft + 0.001)
-      expect(I(s).statusHpMaxes[i].x || hpC.x).toBeLessThanOrEqual(r.x + 0.001)
+      // HP 列の右端: 「/最大値」があれば「/」の x + その概算幅、なければ現在値の右端
+      const hpMax = I(s).statusHpMaxes[i]
+      const hpRight = hpMax.text === '' ? hpC.x : hpMax.x + estimateTextWidth(hpMax.text, 14)
+      expect(hpRight).toBeLessThanOrEqual(r.x + 0.001)
       // 名前が消えない
       expect(t.text.length).toBeGreaterThan(1)
     })
