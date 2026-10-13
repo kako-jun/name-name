@@ -4032,7 +4032,14 @@ export class NovelRenderer {
    * stalled は据え置く（遷移先不在で停止していた Jump を、失敗した復元のたびに再試行・再警告しない）。
    */
   private rearmPendingJumpAfterFailedRestore(): void {
-    if (this.jumpState === 'pending') this.rearmJumpAtCurrentPosition()
+    if (this.jumpState !== 'pending') return
+    const current = this.resolvedEvents[this.eventIndex]
+    if (typeof current === 'object' && current !== null && 'Jump' in current) {
+      this.rearmJumpAtCurrentPosition()
+    } else {
+      // 現在位置が Jump でなければ再予約できない。pending を残すと詰むので確定させる（防御）。
+      this.jumpState = 'idle'
+    }
   }
 
   /**
@@ -6053,6 +6060,7 @@ export class NovelRenderer {
         // skipAutoAdvance でスキップした自動進行をここで確定的に再開しないと
         // フリーズしたままになる。
         this.resumeAutoAdvanceIfPending()
+        // quickLoad / ロードメニューが pending を弾き、ロード中に armJump されると世代不一致で破棄されるため到達しない。防御として残す。
         this.rearmPendingJumpAfterFailedRestore()
         return
       }
@@ -6065,6 +6073,7 @@ export class NovelRenderer {
         )
         // #620: 上と同じ理由。lazy load 後も見つからない失敗確定時点で再開する。
         this.resumeAutoAdvanceIfPending()
+        // quickLoad / ロードメニューが pending を弾き、ロード中に armJump されると世代不一致で破棄されるため到達しない。防御として残す。
         this.rearmPendingJumpAfterFailedRestore()
         return
       }
@@ -6079,6 +6088,7 @@ export class NovelRenderer {
       )
       // #620: resolver が reject した失敗確定時点でも同様に再開する。
       this.resumeAutoAdvanceIfPending()
+      // quickLoad / ロードメニューが pending を弾き、ロード中に armJump されると世代不一致で破棄されるため到達しない。防御として残す。
       if (this.initialized) this.rearmPendingJumpAfterFailedRestore()
     }
   }
