@@ -1571,6 +1571,18 @@ pub struct Document {
     /// フォールバックする。GUI 専用（TUI は読まない）。frontmatter `window_style:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_style: Option<String>,
+    /// RPG 戦闘背景の彩度・明度を表示時のフィルタで落とすか (#753)。`"on"`（既定）/ `"off"` の2択。
+    /// 値は parser でバリデーションせず生文字列で透過する（`window_style` と同じ流儀）。未知値・空文字は
+    /// None 扱いとし、runtime 側で `"on"` にフォールバックする。GUI 専用（TUI は読まない）。
+    /// frontmatter `battle_background_tone:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_background_tone: Option<String>,
+    /// RPG 戦闘背景の被写界深度（DoF）風の手前ぼかし (#753)。`"on"` / `"off"`（既定）の2択。
+    /// 値は parser でバリデーションせず生文字列で透過する（`battle_background_tone` と同じ流儀）。未知値・空文字は
+    /// None 扱いとし、runtime 側で `"off"` にフォールバックする。GUI 専用（TUI は読まない）。
+    /// frontmatter `battle_background_dof:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_background_dof: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

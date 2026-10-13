@@ -35,6 +35,8 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     layout: 'side',
     spriteStyle: 'none',
     windowStyle: 'dark',
+    backgroundTone: 'on',
+    backgroundDof: 'off',
     backgroundOn: false,
     partyCount: 4,
     enemyCount: 4,
@@ -858,13 +860,13 @@ describe('describeView', () => {
         height: 640,
       })
     ).toBe(
-      'layout=side  spriteStyle=none  windowStyle=ff-blue  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=ff-blue  backgroundTone=on  backgroundDof=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
   it('DPR=2・360x640 の完全一致文字列', () => {
     expect(describeView(view({ sizeId: '360x640' }), 2, { width: 360, height: 640 })).toBe(
-      'layout=side  spriteStyle=none  windowStyle=dark  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=dark  backgroundTone=on  backgroundDof=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
@@ -949,4 +951,71 @@ describe('front は味方 1 人 (N2)', () => {
       describeView(view({ layout: 'front', partyCount: 4 }), 1, { width: 1, height: 1 })
     ).toContain('party=1 ')
   })
+})
+
+describe('backgroundTone (#753)', () => {
+  const base = 'http://localhost/'
+  it("既定は 'on'。on/off を受理し、不正値はエラー", () => {
+    expect(defaultConfig().backgroundTone).toBe('on')
+    for (const v of ['on', 'off'] as const) {
+      const r = parseConfig({ backgroundTone: v }, base)
+      expect(r.ok && r.value.backgroundTone).toBe(v)
+    }
+    const bad = parseConfig({ backgroundTone: 'x' }, base)
+    expect(bad.ok).toBe(false)
+  })
+  it('view から options に反映され、viewsEqual / describeView に含まれる', () => {
+    const v = initialView(defaultConfig())
+    const off = { ...v, backgroundTone: 'off' as const }
+    expect(buildBattleSetup(defaultConfig(), off).options.backgroundTone).toBe('off')
+    expect(viewsEqual(v, off)).toBe(false)
+    expect(describeView(off, 1, { width: 800, height: 450 })).toContain('backgroundTone=off')
+  })
+})
+
+describe('backgroundDof (#753)', () => {
+  const base = 'http://localhost/'
+  it("既定は 'off'。on/off を受理し、不正値はエラー", () => {
+    expect(defaultConfig().backgroundDof).toBe('off')
+    for (const v of ['on', 'off'] as const) {
+      const r = parseConfig({ backgroundDof: v }, base)
+      expect(r.ok && r.value.backgroundDof).toBe(v)
+    }
+    expect(parseConfig({ backgroundDof: 'x' }, base).ok).toBe(false)
+  })
+  it('view から options に反映され、viewsEqual / describeView に含まれ、彩度明度と独立', () => {
+    const v = initialView(defaultConfig())
+    const on = { ...v, backgroundDof: 'on' as const }
+    expect(buildBattleSetup(defaultConfig(), on).options.backgroundDof).toBe('on')
+    expect(buildBattleSetup(defaultConfig(), on).options.backgroundTone).toBe('on')
+    expect(viewsEqual(v, on)).toBe(false)
+    expect(describeView(on, 1, { width: 800, height: 450 })).toContain('backgroundDof=on')
+  })
+})
+
+describe('backgroundTone / backgroundDof: 追加の観点 (#753)', () => {
+  it.each(['backgroundTone', 'backgroundDof'] as const)(
+    '%s の不正値エラーにキー名が含まれる',
+    (key) => {
+      const r = parseConfig({ [key]: 'foo' }, BASE)
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain(key)
+    }
+  )
+
+  it.each([
+    { tone: 'off', dof: 'on' },
+    { tone: 'on', dof: 'off' },
+  ] as const)(
+    '背景なしでも buildBattleSetup は tone=$tone / dof=$dof を options に素通しする',
+    ({ tone, dof }) => {
+      const s = buildBattleSetup(
+        defaultConfig(),
+        view({ backgroundOn: false, backgroundTone: tone, backgroundDof: dof })
+      )
+      expect(s.options.background).toBeUndefined()
+      expect(s.options.backgroundTone).toBe(tone)
+      expect(s.options.backgroundDof).toBe(dof)
+    }
+  )
 })

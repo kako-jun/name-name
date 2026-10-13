@@ -32,13 +32,17 @@
 
 import {
   Assets,
+  BlurFilter,
+  ColorMatrixFilter,
   Container,
   Graphics,
+  Mesh,
+  MeshGeometry,
   Rectangle,
   Sprite,
   Text as PixiText,
   TextStyle,
-  type Texture,
+  Texture,
 } from 'pixi.js'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
@@ -72,6 +76,22 @@ import {
   FF_BLUE_TEXT_SHADOW,
   type WindowStyle,
 } from './windowStyle'
+import {
+  BACKGROUND_TONE_BRIGHTNESS,
+  BACKGROUND_TONE_SATURATION,
+  saturationToPixiAmount,
+  type BackgroundTone,
+} from './backgroundTone'
+import {
+  DOF_MASK_TEXTURE_HEIGHT,
+  DOF_DEFAULT_PARAMS,
+  DOF_LEVEL_COUNT,
+  computeDofFilterArea,
+  computeDofLevels,
+  computeDofQuad,
+  dofMaskStops,
+  type BackgroundDof,
+} from './depthOfField'
 
 const BG_DIM_ALPHA = 0.55
 const PANEL_BG = 0x000000
@@ -132,6 +152,18 @@ const TEXT_STYLE_HP = new TextStyle({
 
 type CommandId = 'attack' | 'spell' | 'item' | 'escape'
 
+/** 被写界深度の 1 段（ぼかしコピーとそのマスク）(#753) */
+interface DofLevelView {
+  /** 背景を四方へ広げた矩形メッシュ（端ピクセルを繰り返す）。ぼかしが画面端で欠けないようにする */
+  sprite: Mesh
+  mask: Sprite
+  blur: BlurFilter
+  /** 自前生成なので自分で破棄する */
+  maskTexture: Texture | null
+  /** マスクテクスチャを作ったときの立ち上がり割合 */
+  maskRamp: number
+}
+
 interface CommandButton {
   id: CommandId
   hit: Container
@@ -162,6 +194,16 @@ export interface BattleScreenOptions {
    * （白枠は維持）＋文字に黒い影。色だけがテーマで、寸法は変えない。
    */
   windowStyle?: WindowStyle
+  /**
+   * 背景画像の彩度・明度を表示時のフィルタで落とすか (#753)。`on`（既定）= 落とす、`off` = 素材そのまま。
+   * 背景スプライトにだけかかり、キャラ・敵・パネル・テキストには影響しない。背景なしのときは無関係。
+   */
+  backgroundTone?: BackgroundTone
+  /**
+   * 背景画像の被写界深度（DoF）風の手前ぼかし (#753)。`on` = 画面の下側ほど強くぼかす、`off`（既定）= ぼかさない。
+   * 背景スプライトにだけかかり、キャラ・敵・パネル・テキストには影響しない。背景なしのときは無関係。
+   */
+  backgroundDof?: BackgroundDof
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -190,6 +232,14 @@ export class BattleScreen extends Container {
   private spriteStyle: SpriteStyle
   /** ウィンドウ配色テーマ (#744) */
   private windowStyle: WindowStyle
+  /** 背景トーン調整 (#753) */
+  private backgroundTone: BackgroundTone
+  /** 背景スプライトにかけるフィルタ（1 個を使い回す。destroy で解放） */
+  private backgroundToneFilter: ColorMatrixFilter | null = null
+  /** 背景の被写界深度風ぼかし (#753) */
+  private backgroundDof: BackgroundDof
+  /** 背景と同じテクスチャのぼかしコピー（テクスチャは共有）を強さ別に重ねた段。各段に縦グラデーションのアルファマスクを持つ */
+  private dofLevels: DofLevelView[] = []
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
   private backgroundSprite: Sprite | null = null
@@ -234,6 +284,8 @@ export class BattleScreen extends Container {
     this.layoutMode = opts.layout === 'side' ? 'side' : 'front'
     this.spriteStyle = opts.spriteStyle === 'acrylic' ? 'acrylic' : 'none'
     this.windowStyle = opts.windowStyle === 'ff-blue' ? 'ff-blue' : 'dark'
+    this.backgroundTone = opts.backgroundTone === 'off' ? 'off' : 'on'
+    this.backgroundDof = opts.backgroundDof === 'on' ? 'on' : 'off'
     this.acrylicParams =
       this.spriteStyle === 'acrylic' ? resolveAcrylicParams(opts.spriteStyleParams) : null
 
@@ -268,6 +320,9 @@ export class BattleScreen extends Container {
       v.acrylicFilter?.destroy()
       v.acrylicFilter = null
     }
+    this.backgroundToneFilter?.destroy()
+    this.backgroundToneFilter = null
+    this.disposeBackgroundDof()
     super.destroy(options)
   }
 
@@ -278,10 +333,142 @@ export class BattleScreen extends Container {
       if (this.destroyedFlag) return
       const sprite = new Sprite(tex)
       this.backgroundSprite = sprite
+      this.applyBackgroundTone(sprite)
       this.addChildAt(sprite, 0)
+      this.applyBackgroundDof(sprite)
       this.layout()
     } catch (e) {
       console.warn(`[BattleScreen] failed to load background "${path}":`, e)
+    }
+  }
+
+  /** 背景スプライトにだけ彩度・明度を落とすフィルタをかける (#753)。`off` のときはフィルタ無し。フィルタは 1 個を使い回す */
+  private applyBackgroundTone(sprite: Sprite): void {
+    if (this.backgroundTone === 'off') {
+      sprite.filters = null
+      return
+    }
+    if (!this.backgroundToneFilter) {
+      const f = new ColorMatrixFilter()
+      f.saturate(saturationToPixiAmount(BACKGROUND_TONE_SATURATION), false)
+      f.brightness(BACKGROUND_TONE_BRIGHTNESS, true)
+      this.backgroundToneFilter = f
+    }
+    sprite.filters = [this.backgroundToneFilter]
+  }
+
+  /**
+   * 背景の手前ぼかし (#753)。背景と同じテクスチャのぼかしコピーを、強さを段階的に変えて DOF_LEVEL_COUNT 枚、
+   * 背景の直上へ重ねる（可変半径ガウスの近似）。各段は縦グラデーションのアルファマスク（alpha チャンネル）で
+   * 受け持つ帯だけ見せる。背景が差し替わっても積み増さないよう、先に前回分を破棄する。`off` のときは何も作らない。
+   * マスクの絵が作れない環境（canvas 不可）では、作った段も含めて 1 段も残さない（ぼかし無しで続行。layout で再試行しない）。
+   */
+  private applyBackgroundDof(bg: Sprite): void {
+    this.disposeBackgroundDof()
+    if (this.backgroundDof === 'off') return
+    const gs = computeDofLevels(this.screenHeight, DOF_DEFAULT_PARAMS, DOF_LEVEL_COUNT)
+    let index = 1
+    for (let i = 0; i < DOF_LEVEL_COUNT; i++) {
+      const tex = this.createDofMaskTexture(gs[i].rampFraction)
+      if (!tex) {
+        this.disposeBackgroundDof()
+        return
+      }
+      const q = computeDofQuad(bg.width, bg.height)
+      const copy = new Mesh({
+        geometry: new MeshGeometry({ positions: q.positions, uvs: q.uvs, indices: q.indices }),
+        texture: bg.texture,
+      })
+      // repeatEdgePixels は padding を 0 にするだけ（端を繰り返す処理ではない）ので使わない。
+      // clipToViewport で フィルタ領域が画面端で切れてカーネルが欠けるので、padding を残し viewport クリップも切る
+      const blur = new BlurFilter({ strength: 0 })
+      blur.clipToViewport = false
+      copy.filters = this.backgroundToneFilter ? [this.backgroundToneFilter, blur] : [blur]
+      const mask = new Sprite(tex)
+      this.addChildAt(copy, index++)
+      this.addChildAt(mask, index++)
+      copy.setMask({ mask, channel: 'alpha' })
+      this.dofLevels.push({
+        sprite: copy,
+        mask,
+        blur,
+        maskTexture: tex,
+        maskRamp: gs[i].rampFraction,
+      })
+    }
+  }
+
+  /** ぼかしコピー・マスク・フィルタ・マスクのテクスチャを解放する（共有している背景テクスチャは壊さない） */
+  private disposeBackgroundDof(): void {
+    for (const lv of this.dofLevels) {
+      lv.sprite.filters = null
+      // Mesh.destroy は geometry を破棄しない（段ごとに作った MeshGeometry の GPU バッファが残る）ので自分で破棄する
+      const geo = lv.sprite.geometry
+      lv.sprite.destroy()
+      geo.destroy()
+      lv.mask.destroy()
+      lv.blur.destroy()
+      lv.maskTexture?.destroy(true)
+    }
+    this.dofLevels = []
+  }
+
+  /** 画面サイズに合わせて各段の位置・強さ・フィルタ領域を更新する。立ち上がり割合が変わった段だけマスクの絵を作り直す */
+  private layoutBackgroundDof(bg: Sprite, W: number, H: number): void {
+    if (this.dofLevels.length === 0) return
+    const gs = computeDofLevels(H, DOF_DEFAULT_PARAMS, this.dofLevels.length)
+    this.dofLevels.forEach((lv, i) => {
+      const g = gs[i]
+      lv.sprite.position.copyFrom(bg.position)
+      const q = computeDofQuad(bg.width, bg.height)
+      lv.sprite.geometry.positions = q.positions
+      lv.sprite.geometry.uvs = q.uvs
+      lv.blur.strength = g.blurStrength
+      // フィルタ領域をその段のマスクが見える帯に絞る（ローカル座標＝背景左上原点。マスクの上端は画面座標 startY）
+      const fa = computeDofFilterArea(bg.width, bg.height, g.startY - bg.position.y)
+      const area = lv.sprite.filterArea
+      if (area instanceof Rectangle) {
+        area.x = fa.x
+        area.y = fa.y
+        area.width = fa.width
+        area.height = fa.height
+      } else {
+        lv.sprite.filterArea = new Rectangle(fa.x, fa.y, fa.width, fa.height)
+      }
+      if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4) {
+        const tex = this.createDofMaskTexture(g.rampFraction)
+        if (tex) {
+          const old = lv.maskTexture
+          lv.maskTexture = tex
+          lv.maskRamp = g.rampFraction
+          lv.mask.texture = tex
+          old?.destroy(true)
+        }
+      }
+      lv.mask.position.set(0, g.startY)
+      lv.mask.width = W
+      lv.mask.height = g.maskHeight
+    })
+  }
+
+  /** 縦にアルファが 0 → 1 に立ち上がる 1 x N の canvas テクスチャを作る。canvas が使えない環境では null（ぼかし無しで続行） */
+  private createDofMaskTexture(rampFraction: number): Texture | null {
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = 1
+      canvas.height = DOF_MASK_TEXTURE_HEIGHT
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      const grad = ctx.createLinearGradient(0, 0, 0, DOF_MASK_TEXTURE_HEIGHT)
+      for (const s of dofMaskStops(rampFraction)) {
+        grad.addColorStop(s.offset, `rgba(255,255,255,${s.alpha})`)
+      }
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, 1, DOF_MASK_TEXTURE_HEIGHT)
+      return Texture.from(canvas)
+    } catch (e) {
+      console.warn('[BattleScreen] failed to build DoF mask texture:', e)
+      return null
     }
   }
 
@@ -521,6 +708,7 @@ export class BattleScreen extends Container {
       this.backgroundSprite.position.set(fit.x, fit.y)
       this.backgroundSprite.width = fit.width
       this.backgroundSprite.height = fit.height
+      this.layoutBackgroundDof(this.backgroundSprite, W, H)
       this.dim.clear()
     } else {
       // フィールド全体を暗くする半透明黒

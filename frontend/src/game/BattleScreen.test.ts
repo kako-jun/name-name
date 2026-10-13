@@ -5,9 +5,11 @@
  * visible / フォールバック / 背景 sprite の有無 / console.warn / destroy 後 resolve の race を検証する。
  * EventImageLayer.test.ts と同じ流儀（internals キャストで private を観測し、`vi.spyOn(Assets, 'load')`）。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Assets,
+  BlurFilter,
+  ColorMatrixFilter,
   type Container,
   Graphics,
   type Sprite,
@@ -16,6 +18,13 @@ import {
   type Text,
   Text as PixiText,
 } from 'pixi.js'
+import {
+  DOF_DEFAULT_PARAMS,
+  DOF_EDGE_EXTEND,
+  DOF_LEVEL_COUNT,
+  DOF_MAX_BLUR_STRENGTH,
+  computeDofLevels,
+} from './depthOfField'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
@@ -192,6 +201,184 @@ describe('BattleScreen: 背景画像', () => {
     resolve(mockTexture())
     await flushPromises()
     expect(internals(s).backgroundSprite).toBeNull()
+  })
+})
+
+describe('BattleScreen: 被写界深度 (#753)', () => {
+  // jsdom は canvas 不可で createDofMaskTexture が常に null → 段が作られないので、成功する形に差し替える
+  beforeEach(() => {
+    vi.spyOn(BattleScreen.prototype as never, 'createDofMaskTexture').mockImplementation(
+      (() => new Texture()) as never
+    )
+  })
+
+  const dofLevels = (s: BattleScreen) =>
+    (
+      s as unknown as {
+        dofLevels: {
+          sprite: { geometry: { positions: Float32Array }; filters: unknown }
+          mask: Sprite
+        }[]
+      }
+    ).dofLevels
+
+  it('on: 段数ぶんのぼかしコピー+マスクが背景の直上に弱→強の順で並ぶ（背面に隠れない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    const i = internals(s)
+    const lv = dofLevels(s)
+    expect(lv).toHaveLength(DOF_LEVEL_COUNT)
+    expect(i.children[0]).toBe(i.backgroundSprite)
+    lv.forEach((l, k) => {
+      expect(i.children[1 + k * 2]).toBe(l.sprite)
+      expect(i.children[2 + k * 2]).toBe(l.mask)
+      // 拡張後の幅は背景幅 + 2 * 拡張量（端のぼけ欠け対策）
+      const xs = [0, 2, 4, 6].map((n) => l.sprite.geometry.positions[n])
+      expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(
+        i.backgroundSprite!.width + 2 * DOF_EDGE_EXTEND
+      )
+      // マスクは画面幅を覆う
+      expect(l.mask.x).toBe(0)
+      expect(l.mask.width).toBeGreaterThanOrEqual(800)
+    })
+    const strengths = lv.map(
+      (l) => (l.sprite.filters as unknown as { strength: number }[]).slice(-1)[0].strength
+    )
+    expect(strengths[strengths.length - 1]).toBeCloseTo(DOF_MAX_BLUR_STRENGTH)
+    expect([...strengths].sort((a, b) => a - b)).toEqual(strengths)
+    expect(new Set(strengths).size).toBe(DOF_LEVEL_COUNT)
+  })
+
+  it('各段のぼかしフィルタは padding を残し viewport クリップを切る（画面端でカーネルが欠けない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    for (const l of dofLevels(s)) {
+      const blur = (
+        l.sprite.filters as {
+          strength: number
+          padding: number
+          repeatEdgePixels: boolean
+          clipToViewport: boolean
+        }[]
+      ).slice(-1)[0]
+      expect(blur.repeatEdgePixels).toBe(false)
+      expect(blur.clipToViewport).toBe(false)
+      expect(blur.padding).toBeGreaterThanOrEqual(blur.strength)
+      expect(blur.padding).toBeLessThanOrEqual(DOF_EDGE_EXTEND)
+    }
+  })
+
+  it('redraw を繰り返しても段は積み増さない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    const before = internals(s).children.length
+    s.redraw(300, 200)
+    s.redraw(320, 240)
+    expect(dofLevels(s)).toHaveLength(DOF_LEVEL_COUNT)
+    expect(internals(s).children.length).toBe(before)
+  })
+
+  it('canvas が使えず マスクが作れないときは 1 段も作らず、layout のたびに再試行しない', async () => {
+    const create = vi
+      .spyOn(BattleScreen.prototype as never, 'createDofMaskTexture')
+      .mockImplementation((() => null) as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    expect(dofLevels(s)).toHaveLength(0)
+    const calls = create.mock.calls.length
+    expect(calls).toBeGreaterThanOrEqual(1)
+    s.redraw(300, 200)
+    s.redraw(640, 480)
+    expect(create.mock.calls.length).toBe(calls)
+    expect(internals(s).children[0]).toBe(internals(s).backgroundSprite)
+  })
+
+  it('途中の段でマスクが作れなくなったら、作った段も破棄して残さない', async () => {
+    let n = 0
+    vi.spyOn(BattleScreen.prototype as never, 'createDofMaskTexture').mockImplementation((() =>
+      n++ < 2 ? new Texture() : null) as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    expect(dofLevels(s)).toHaveLength(0)
+    expect(internals(s).children[0]).toBe(internals(s).backgroundSprite)
+  })
+
+  it('destroy は各段の geometry を 1 回ずつ破棄する（Mesh.destroy は geometry を破棄しない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    const spies = dofLevels(s).map((l) =>
+      vi.spyOn((l.sprite as unknown as { geometry: { destroy: () => void } }).geometry, 'destroy')
+    )
+    expect(spies).toHaveLength(DOF_LEVEL_COUNT)
+    s.destroy({ children: true })
+    spies.forEach((sp) => expect(sp).toHaveBeenCalledTimes(1))
+  })
+
+  it('各段の filterArea は その段のマスクが見える帯＋左右の拡張を覆い、上の段ほど上から始まる。リサイズに追従', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    for (const [w, h] of [
+      [800, 450],
+      [300, 600],
+    ]) {
+      s.redraw(w, h)
+      const bg = internals(s).backgroundSprite!
+      let prevY = -Infinity
+      for (const l of dofLevels(s)) {
+        const fa = (
+          l.sprite as unknown as {
+            filterArea: { x: number; y: number; width: number; height: number }
+          }
+        ).filterArea
+        // 幅は背景幅＋左右の拡張
+        expect(fa.x).toBeCloseTo(-DOF_EDGE_EXTEND)
+        expect(fa.width).toBeCloseTo(bg.width + 2 * DOF_EDGE_EXTEND)
+        // 上端はマスクの上端（画面座標 mask.y をローカルへ）に一致、下端は広げた矩形の下端
+        expect(fa.y).toBeCloseTo(l.mask.y - bg.position.y)
+        expect(fa.y + fa.height).toBeCloseTo(bg.height + DOF_EDGE_EXTEND)
+        expect(fa.y).toBeGreaterThanOrEqual(prevY)
+        prevY = fa.y
+      }
+    }
+  })
+
+  it('実物の createDofMaskTexture は jsdom（canvas 不可）では null を返す', () => {
+    vi.restoreAllMocks()
+    const s = track(make([entity('hero')], [entity('slime')]))
+    const fn = (
+      BattleScreen.prototype as unknown as {
+        createDofMaskTexture: (this: BattleScreen, r: number) => unknown
+      }
+    ).createDofMaskTexture
+    expect(fn.call(s, 0.5)).toBeNull()
+  })
+
+  it('off なら段を作らない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(make([entity('hero')], [entity('slime')], { background: 'bg/a.webp' }))
+    await flushPromises()
+    expect(dofLevels(s)).toHaveLength(0)
   })
 })
 
@@ -1371,5 +1558,299 @@ describe('BattleScreen: windowStyle (#744)', () => {
         expect(allTexts(s).some(hasShadow)).toBe(false)
       }
     })
+  })
+})
+
+describe('BattleScreen: 背景トーン調整 (#753)', () => {
+  // jsdom は canvas 不可で createDofMaskTexture が常に null → 段が作られないので、成功する形に差し替える
+  beforeEach(() => {
+    vi.spyOn(BattleScreen.prototype as never, 'createDofMaskTexture').mockImplementation(
+      (() => new Texture()) as never
+    )
+  })
+
+  interface ToneLevel {
+    sprite: Container
+    mask: Sprite
+    blur: BlurFilter
+    maskTexture: { destroy: (...a: unknown[]) => void } | null
+    maskRamp: number
+  }
+  interface ToneInternals {
+    backgroundToneFilter: ColorMatrixFilter | null
+    dofLevels: ToneLevel[]
+  }
+  const ti = (s: BattleScreen): ToneInternals => s as unknown as ToneInternals
+  const filtersOf = (o: { filters?: unknown } | null | undefined): unknown[] =>
+    ((o?.filters as unknown[] | null | undefined) ?? []) as unknown[]
+  const bgOf = (s: BattleScreen): Sprite => internals(s).backgroundSprite!
+
+  async function loaded(opts: BattleScreenOptions, w = 800, h = 450): Promise<BattleScreen> {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', ...opts }, w, h)
+    )
+    await flushPromises()
+    return s
+  }
+
+  /** 木全体を辿る */
+  function descendants(c: Container): Container[] {
+    const out: Container[] = []
+    for (const ch of c.children as Container[]) {
+      out.push(ch, ...descendants(ch))
+    }
+    return out
+  }
+
+  it('背景あり・tone 既定で背景 sprite の filters はちょうど 1 個の ColorMatrixFilter', async () => {
+    const s = await loaded({})
+    const f = filtersOf(bgOf(s))
+    expect(f).toHaveLength(1)
+    expect(f[0]).toBeInstanceOf(ColorMatrixFilter)
+    expect(f[0]).toBe(ti(s).backgroundToneFilter)
+  })
+
+  it("backgroundTone:'off' なら背景 sprite の filters は空で toneFilter も作らない", async () => {
+    const s = await loaded({ backgroundTone: 'off' })
+    expect(filtersOf(bgOf(s))).toHaveLength(0)
+    expect(ti(s).backgroundToneFilter).toBeNull()
+  })
+
+  it('背景なしなら tone on でもフィルタは作らない・例外なし', async () => {
+    const load = vi.spyOn(Assets, 'load')
+    const s = track(make([entity('hero')], [entity('slime')], { backgroundTone: 'on' }))
+    await flushPromises()
+    expect(load).not.toHaveBeenCalled()
+    expect(internals(s).backgroundSprite).toBeNull()
+    expect(ti(s).backgroundToneFilter).toBeNull()
+    expect(() => s.destroy({ children: true })).not.toThrow()
+  })
+
+  it('背景ロード失敗ではフィルタも段も作らず、warn で握り、destroy も落ちない', async () => {
+    vi.spyOn(Assets, 'load').mockRejectedValue(new Error('404'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = track(
+      make([entity('hero')], [entity('slime')], {
+        background: 'bg/missing.webp',
+        backgroundTone: 'on',
+        backgroundDof: 'on',
+      })
+    )
+    await flushPromises()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(ti(s).backgroundToneFilter).toBeNull()
+    expect(ti(s).dofLevels).toHaveLength(0)
+    expect(() => s.destroy({ children: true })).not.toThrow()
+  })
+
+  it.each(['front', 'side'] as const)(
+    'tone は背景 sprite とぼかしコピー以外のどの子孫にも掛からない（%s）',
+    async (layout) => {
+      const s = await loaded({ layout, backgroundDof: 'on' })
+      const tf = ti(s).backgroundToneFilter
+      const dofSprites = ti(s).dofLevels.map((l) => l.sprite)
+      const blurs = ti(s).dofLevels.map((l) => l.blur)
+      const others = descendants(s).filter((c) => c !== bgOf(s) && !dofSprites.includes(c))
+      expect(others.length).toBeGreaterThan(0)
+      for (const c of others) {
+        const f = filtersOf(c)
+        expect(f).not.toContain(tf)
+        for (const b of blurs) expect(f).not.toContain(b)
+        expect(f.some((x) => x instanceof ColorMatrixFilter)).toBe(false)
+      }
+    }
+  )
+
+  it.each([
+    { tone: 'on', dof: 'on' },
+    { tone: 'on', dof: 'off' },
+    { tone: 'off', dof: 'on' },
+    { tone: 'off', dof: 'off' },
+  ] as const)('tone=$tone × dof=$dof のフィルタ構成', async ({ tone, dof }) => {
+    const s = await loaded({ backgroundTone: tone, backgroundDof: dof })
+    const lv = ti(s).dofLevels
+    expect(internals(s).children[0]).toBe(bgOf(s))
+    expect(filtersOf(bgOf(s))).toHaveLength(tone === 'on' ? 1 : 0)
+    expect(lv).toHaveLength(dof === 'on' ? DOF_LEVEL_COUNT : 0)
+    const tf = ti(s).backgroundToneFilter
+    for (const l of lv) {
+      expect(filtersOf(l.sprite)).toEqual(tone === 'on' ? [tf, l.blur] : [l.blur])
+    }
+  })
+
+  it('tone on かつ dof on では各コピーが背景と同じ tone フィルタ インスタンスを共有し、tone は 1 個だけ', async () => {
+    const s = await loaded({ backgroundDof: 'on' })
+    const tf = filtersOf(bgOf(s))[0]
+    expect(tf).toBeInstanceOf(ColorMatrixFilter)
+    const all = [bgOf(s), ...ti(s).dofLevels.map((l) => l.sprite)]
+    const toneInstances = new Set<unknown>()
+    for (const c of all) {
+      const f = filtersOf(c)
+      expect(f[0]).toBe(tf)
+      f.filter((x) => x instanceof ColorMatrixFilter).forEach((x) => toneInstances.add(x))
+    }
+    expect(toneInstances.size).toBe(1)
+  })
+
+  it('blur は背景 sprite・キャラ・パネル・Text のいずれの filters にも入らない', async () => {
+    const s = await loaded({ layout: 'side', backgroundDof: 'on' })
+    const copies = ti(s).dofLevels.map((l) => l.sprite)
+    expect(filtersOf(bgOf(s)).some((x) => x instanceof BlurFilter)).toBe(false)
+    for (const c of descendants(s)) {
+      if (copies.includes(c)) continue
+      expect(filtersOf(c).some((x) => x instanceof BlurFilter)).toBe(false)
+    }
+  })
+
+  it('tone on + dof on の destroy は例外なく、tone/blur/maskTexture を破棄する', async () => {
+    vi.spyOn(BattleScreen.prototype as never, 'createDofMaskTexture').mockImplementation((() => {
+      const t = new Texture()
+      vi.spyOn(t, 'destroy').mockImplementation(() => {})
+      return t
+    }) as never)
+    const s = await loaded({ backgroundDof: 'on' })
+    const tfSpy = vi.spyOn(ti(s).backgroundToneFilter!, 'destroy')
+    const lv = [...ti(s).dofLevels]
+    const blurSpies = lv.map((l) => vi.spyOn(l.blur, 'destroy'))
+    const texs = lv.map((l) => l.maskTexture!)
+    expect(texs.every((t) => t !== null)).toBe(true)
+    const texSpies = texs.map((t) => vi.spyOn(t, 'destroy'))
+    expect(() => s.destroy({ children: true })).not.toThrow()
+    expect(tfSpy).toHaveBeenCalledTimes(1)
+    blurSpies.forEach((sp) => expect(sp).toHaveBeenCalledTimes(1))
+    texSpies.forEach((sp) => expect(sp).toHaveBeenCalled())
+    expect(ti(s).dofLevels).toHaveLength(0)
+    expect(ti(s).backgroundToneFilter).toBeNull()
+  })
+
+  it('destroy を 2 回呼んでも落ちない（tone + dof）', async () => {
+    const s = await loaded({ backgroundDof: 'on' })
+    s.destroy({ children: true })
+    expect(() => s.destroy({ children: true })).not.toThrow()
+  })
+
+  it('dof off + tone on の destroy は tone を 1 回だけ破棄して落ちない', async () => {
+    const s = await loaded({})
+    const sp = vi.spyOn(ti(s).backgroundToneFilter!, 'destroy')
+    expect(() => s.destroy({ children: true })).not.toThrow()
+    expect(sp).toHaveBeenCalledTimes(1)
+  })
+
+  it('dof on + tone off の destroy は toneFilter が null でも落ちず、blur を破棄する', async () => {
+    const s = await loaded({ backgroundTone: 'off', backgroundDof: 'on' })
+    const lv = [...ti(s).dofLevels]
+    lv.forEach((l) => expect(filtersOf(l.sprite)).toEqual([l.blur]))
+    const spies = lv.map((l) => vi.spyOn(l.blur, 'destroy'))
+    expect(() => s.destroy({ children: true })).not.toThrow()
+    spies.forEach((sp) => expect(sp).toHaveBeenCalledTimes(1))
+  })
+
+  it('redraw（サイズ変更含む）を繰り返しても toneFilter は同一インスタンスで filters は増えない', async () => {
+    const s = await loaded({ backgroundDof: 'on' })
+    const tf = ti(s).backgroundToneFilter
+    for (const [w, h] of [
+      [300, 200],
+      [400, 700],
+      [800, 450],
+      [320, 240],
+    ]) {
+      s.redraw(w, h)
+      expect(ti(s).backgroundToneFilter).toBe(tf)
+      expect(filtersOf(bgOf(s))).toEqual([tf])
+      ti(s).dofLevels.forEach((l) => expect(filtersOf(l.sprite)).toEqual([tf, l.blur]))
+    }
+  })
+
+  it('マスクテクスチャは rampFraction が変わるときだけ再生成する', async () => {
+    const create = vi
+      .spyOn(BattleScreen.prototype as never, 'createDofMaskTexture')
+      .mockImplementation((() => new Texture()) as never)
+    const s = await loaded({ backgroundDof: 'on' })
+    const initial = create.mock.calls.length
+    expect(initial).toBe(DOF_LEVEL_COUNT)
+    const before = ti(s).dofLevels.map((l) => l.maskTexture)
+    s.redraw(300, 200)
+    s.redraw(640, 960)
+    expect(create.mock.calls.length).toBe(initial)
+    expect(ti(s).dofLevels.map((l) => l.maskTexture)).toEqual(before)
+    // 記録済みの rampFraction とずれた段だけ、次の layout で作り直す
+    ti(s).dofLevels[0].maskRamp = -1
+    s.redraw(640, 960)
+    expect(create.mock.calls.length).toBe(initial + 1)
+  })
+
+  it('リサイズでぼかしコピーの position は背景と一致し、geometry は新しい背景サイズに追従する', async () => {
+    const s = await loaded({ backgroundDof: 'on' })
+    for (const [w, h] of [
+      [300, 600],
+      [900, 300],
+    ]) {
+      s.redraw(w, h)
+      const bg = bgOf(s)
+      for (const l of ti(s).dofLevels) {
+        expect(l.sprite.position.x).toBe(bg.position.x)
+        expect(l.sprite.position.y).toBe(bg.position.y)
+        const p = (l.sprite as unknown as { geometry: { positions: Float32Array } }).geometry
+          .positions
+        const xs = [0, 2, 4, 6].map((n) => p[n])
+        const ys = [1, 3, 5, 7].map((n) => p[n])
+        expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(bg.width + 2 * DOF_EDGE_EXTEND, 3)
+        expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(bg.height + 2 * DOF_EDGE_EXTEND, 3)
+      }
+    }
+  })
+
+  it('各段の mask.y は computeDofLevels の startY と一致し、段が進むほど増える', async () => {
+    const s = await loaded({ backgroundDof: 'on' }, 800, 450)
+    const lv = ti(s).dofLevels
+    const gs = computeDofLevels(450, DOF_DEFAULT_PARAMS, lv.length)
+    lv.forEach((l, i) => expect(l.mask.y).toBeCloseTo(gs[i].startY))
+    for (let i = 1; i < lv.length; i++) expect(lv[i].mask.y).toBeGreaterThan(lv[i - 1].mask.y)
+  })
+
+  it("ctor の正規化: backgroundTone は 'off' 厳密一致だけ off、backgroundDof は 'on' 厳密一致だけ on", async () => {
+    for (const t of ['OFF', 'foo', undefined, 'on']) {
+      const s = await loaded({ backgroundTone: t as never })
+      expect(filtersOf(bgOf(s))).toHaveLength(1)
+    }
+    for (const d of ['ON', 'foo', undefined, 'off']) {
+      const s = await loaded({ backgroundDof: d as never })
+      expect(ti(s).dofLevels).toHaveLength(0)
+    }
+  })
+
+  it('背景ロード完了前に destroy したら、後からフィルタ・コピー・マスクは作られない', async () => {
+    let resolve!: (t: Texture) => void
+    vi.spyOn(Assets, 'load').mockReturnValue(
+      new Promise<Texture>((r) => {
+        resolve = r
+      }) as never
+    )
+    const s = make([entity('hero')], [entity('slime')], {
+      background: 'bg/a.webp',
+      backgroundTone: 'on',
+      backgroundDof: 'on',
+    })
+    s.destroy({ children: true })
+    resolve(mockTexture())
+    await flushPromises()
+    expect(ti(s).backgroundToneFilter).toBeNull()
+    expect(ti(s).dofLevels).toHaveLength(0)
+    expect(internals(s).backgroundSprite).toBeNull()
+  })
+
+  it('front/side の両レイアウトで tone × dof のフィルタ構成は同じ', async () => {
+    const summarize = async (layout: 'front' | 'side') => {
+      const s = await loaded({ layout, backgroundDof: 'on' })
+      const names = (o: Container) => filtersOf(o).map((f) => (f as object).constructor.name)
+      return {
+        bg: names(bgOf(s)),
+        levels: ti(s).dofLevels.length,
+        copies: ti(s).dofLevels.map((l) => names(l.sprite)),
+        first: internals(s).children[0] === bgOf(s),
+      }
+    }
+    expect(await summarize('side')).toEqual(await summarize('front'))
   })
 })

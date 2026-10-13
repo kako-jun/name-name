@@ -5330,6 +5330,8 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_background: None,
         sprite_style: None,
         window_style: None,
+        battle_background_tone: None,
+        battle_background_dof: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10504,6 +10506,8 @@ fn telop_test_doc_base() -> Document {
         battle_background: None,
         sprite_style: None,
         window_style: None,
+        battle_background_tone: None,
+        battle_background_dof: None,
         chapters: vec![],
     }
 }
@@ -11255,4 +11259,166 @@ fn test_jump_serializes_as_externally_tagged_json_for_wasm_consumers() {
     let json = serde_json::to_value(&doc.chapters[0].scenes[0].events).unwrap();
     let last = json.as_array().unwrap().last().unwrap().clone();
     assert_eq!(last, serde_json::json!({ "Jump": { "target": "1-2" } }));
+}
+
+// ---- #753: battle_background_tone (frontmatter 透過。window_style と同じ流儀) ----
+
+#[test]
+fn test_battle_background_tone_off_parses() {
+    let doc = parser::parse(&battle_doc("battle_background_tone: \"off\"\n"));
+    assert_eq!(doc.battle_background_tone.as_deref(), Some("off"));
+}
+
+#[test]
+fn test_battle_background_dof_on_parses() {
+    let doc = parser::parse(&battle_doc("battle_background_dof: \"on\"\n"));
+    assert_eq!(doc.battle_background_dof.as_deref(), Some("on"));
+}
+
+#[test]
+fn test_battle_background_dof_unset_is_none() {
+    let doc = parser::parse(&battle_doc(""));
+    assert_eq!(doc.battle_background_dof, None);
+}
+
+#[test]
+fn test_battle_background_tone_unset_is_none() {
+    let doc = parser::parse(&battle_doc(""));
+    assert_eq!(doc.battle_background_tone, None);
+}
+
+// ---- #753: battle_background_tone / dof の追加観点 ----
+
+#[test]
+fn test_battle_background_tone_dof_unquoted_values_parse() {
+    let doc = parser::parse(&battle_doc(
+        "battle_background_tone: off\nbattle_background_dof: on\n",
+    ));
+    assert_eq!(doc.battle_background_tone.as_deref(), Some("off"));
+    assert_eq!(doc.battle_background_dof.as_deref(), Some("on"));
+}
+
+#[test]
+fn test_battle_background_tone_dof_empty_or_missing_value_is_none() {
+    for fm in [
+        "battle_background_tone:\nbattle_background_dof:\n",
+        "battle_background_tone: \"\"\nbattle_background_dof: \"\"\n",
+    ] {
+        let doc = parser::parse(&battle_doc(fm));
+        assert_eq!(doc.battle_background_tone, None, "{fm}");
+        assert_eq!(doc.battle_background_dof, None, "{fm}");
+    }
+}
+
+#[test]
+fn test_battle_background_tone_dof_surrounding_whitespace_is_trimmed() {
+    let doc = parser::parse(&battle_doc(
+        "battle_background_tone:    off   \nbattle_background_dof:   \"on\"  \n",
+    ));
+    assert_eq!(doc.battle_background_tone.as_deref(), Some("off"));
+    assert_eq!(doc.battle_background_dof.as_deref(), Some("on"));
+}
+
+#[test]
+fn test_battle_background_tone_dof_unknown_and_uppercase_pass_through() {
+    let doc = parser::parse(&battle_doc(
+        "battle_background_tone: FOO\nbattle_background_dof: ON\n",
+    ));
+    assert_eq!(doc.battle_background_tone.as_deref(), Some("FOO"));
+    assert_eq!(doc.battle_background_dof.as_deref(), Some("ON"));
+}
+
+#[test]
+fn test_battle_background_tone_dof_emit_roundtrip_keeps_values() {
+    let doc = parser::parse(&battle_doc(
+        "battle_background_tone: off\nbattle_background_dof: on\n",
+    ));
+    let emitted1 = emitter::emit(&doc);
+    assert!(
+        emitted1.contains("battle_background_tone: \"off\"\n"),
+        "{emitted1}"
+    );
+    assert!(
+        emitted1.contains("battle_background_dof: \"on\"\n"),
+        "{emitted1}"
+    );
+    let doc2 = parser::parse(&emitted1);
+    assert_eq!(doc2.battle_background_tone.as_deref(), Some("off"));
+    assert_eq!(doc2.battle_background_dof.as_deref(), Some("on"));
+    assert_eq!(emitted1, emitter::emit(&doc2));
+}
+
+#[test]
+fn test_battle_background_tone_dof_none_emits_neither_key() {
+    let doc = parser::parse(&battle_doc(""));
+    let emitted = emitter::emit(&doc);
+    assert!(!emitted.contains("battle_background_tone"), "{emitted}");
+    assert!(!emitted.contains("battle_background_dof"), "{emitted}");
+}
+
+#[test]
+fn test_battle_background_tone_dof_inner_quote_is_stripped_on_emit() {
+    let mut doc = parser::parse(&battle_doc(""));
+    doc.battle_background_tone = Some("o\"n".to_string());
+    doc.battle_background_dof = Some("o\"ff".to_string());
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_background_tone: \"on\"\n"),
+        "{emitted}"
+    );
+    assert!(
+        emitted.contains("battle_background_dof: \"off\"\n"),
+        "{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.battle_background_tone.as_deref(), Some("on"));
+    assert_eq!(doc2.battle_background_dof.as_deref(), Some("off"));
+}
+
+#[test]
+fn test_battle_background_tone_and_dof_are_independent() {
+    let only_tone = parser::parse(&battle_doc("battle_background_tone: off\n"));
+    assert_eq!(only_tone.battle_background_tone.as_deref(), Some("off"));
+    assert_eq!(only_tone.battle_background_dof, None);
+    let only_dof = parser::parse(&battle_doc("battle_background_dof: on\n"));
+    assert_eq!(only_dof.battle_background_tone, None);
+    assert_eq!(only_dof.battle_background_dof.as_deref(), Some("on"));
+}
+
+#[test]
+fn test_battle_background_tone_dof_coexist_with_other_battle_fields() {
+    let doc = parser::parse(&battle_doc(
+        "battle_layout: side\nbattle_background: bg/cave.webp\nsprite_style: acrylic\nwindow_style: ff-blue\nbattle_background_tone: off\nbattle_background_dof: on\n",
+    ));
+    assert_eq!(doc.battle_layout.as_deref(), Some("side"));
+    assert_eq!(doc.battle_background.as_deref(), Some("bg/cave.webp"));
+    assert_eq!(doc.sprite_style.as_deref(), Some("acrylic"));
+    assert_eq!(doc.window_style.as_deref(), Some("ff-blue"));
+    assert_eq!(doc.battle_background_tone.as_deref(), Some("off"));
+    assert_eq!(doc.battle_background_dof.as_deref(), Some("on"));
+    let doc2 = parser::parse(&emitter::emit(&doc));
+    assert_eq!(doc2.battle_background.as_deref(), Some("bg/cave.webp"));
+    assert_eq!(doc2.battle_background_tone, doc.battle_background_tone);
+    assert_eq!(doc2.battle_background_dof, doc.battle_background_dof);
+}
+
+#[test]
+fn test_battle_background_prefix_does_not_collide_with_tone_dof() {
+    // `battle_background:` はパス、`battle_background_tone:` は別キー。互いに値を奪わない
+    let doc = parser::parse(&battle_doc("battle_background_tone: off\n"));
+    assert_eq!(doc.battle_background, None);
+    let doc = parser::parse(&battle_doc("battle_background_dof: on\n"));
+    assert_eq!(doc.battle_background, None);
+    let doc = parser::parse(&battle_doc("battle_background: bg/a.webp\n"));
+    assert_eq!(doc.battle_background.as_deref(), Some("bg/a.webp"));
+    assert_eq!(doc.battle_background_tone, None);
+    assert_eq!(doc.battle_background_dof, None);
+}
+
+#[test]
+fn test_battle_background_tone_dof_in_body_are_not_parsed() {
+    let src = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nbattle_background_tone: off\nbattle_background_dof: on\n";
+    let doc = parser::parse(src);
+    assert_eq!(doc.battle_background_tone, None);
+    assert_eq!(doc.battle_background_dof, None);
 }
