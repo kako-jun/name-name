@@ -76,7 +76,6 @@ const {
     setOnSkipModeChange = vi.fn()
     setOnSeekActiveChange = vi.fn()
     setOnStoryEndedChange = vi.fn()
-    setConfinedSceneIds = vi.fn()
     // #652: デバッグ用の全選択肢ロック解除。mount 時に常に呼ばれる（未指定時は false）。
     setDebugUnlockAllChoices = vi.fn()
     // #467: letterbox/pillarbox の黒帯タップ用公開API。NovelPlayer 側の
@@ -124,10 +123,14 @@ const {
     applySettings = vi.fn()
     setScenes = vi.fn()
     setEvents = vi.fn()
+    // #734: マウント時は開始しない読み込み（loadEvents/loadScenes）だけを使う。
+    loadScenes = vi.fn()
+    loadEvents = vi.fn()
     setJumpSceneIndex = vi.fn()
     setAutoMode = vi.fn()
     setSkipMode = vi.fn()
-    startFrom = vi.fn()
+    // #734: 入場 API は結果の Promise を返す。既定は入場成功。
+    startFrom = vi.fn().mockResolvedValue({ status: 'entered', sceneId: null })
     // #460: fluid 再マウント cleanup が destroy() 直前に必ず呼ぶ。既定は sceneId: null
     // （setEvents/setScenes 未実行の「意味のないスナップショット」相当）を返し、NovelPlayer 側の
     // 「sceneId が null なら保持しない」ガードにより従来どおり initialSceneId ベースの起動になる
@@ -149,18 +152,17 @@ const {
       currentBgmPath: null,
       storyEnded: false,
     })
-    restoreSnapshot = vi.fn()
+    restoreSnapshot = vi.fn().mockResolvedValue({ status: 'entered', sceneId: null })
     playScript = vi.fn().mockResolvedValue(undefined)
     quickSave = vi.fn().mockReturnValue(false)
-    quickLoad = vi.fn().mockReturnValue(false)
+    // null = クイックセーブデータが無い / ゲートで弾かれた。
+    quickLoad = vi.fn().mockResolvedValue(null)
+    // 自動クイックロードが失敗したときにエントリへ引き継ぐクイックセーブの flags。
+    getQuickSaveFlags = vi.fn().mockReturnValue(null)
     // #630: F5/F8 のクイックセーブ/ロード通知 toast は PixiJS 側 (NovelRenderer.showToast) に
     // 内部化された。NovelPlayer はこのメソッドを呼ぶだけなので、DOM 側では呼び出し配線のみを
     // 検証する（表示自体は NovelRenderer.toast.test.ts が担保）。
     showToast = vi.fn()
-    // #620: quickLoad() が false（同期的失敗）を返した際のフォールバック。未定義のままだと
-    // NovelPlayer 側の呼び出しが TypeError で Unhandled Rejection になり、テストが握りつぶした
-    // まま「緑」に見えてしまう（実際に発生していた不備）。
-    resumeAutoAdvanceIfPending = vi.fn()
     getDebugState = vi.fn().mockReturnValue({
       eventIndex: 0,
       eventCount: 1,
@@ -770,36 +772,55 @@ describe('NovelPlayer events/jumpSceneIndex 同期 effect の分離 (#671 M1)', 
 describe('NovelPlayer `?scene=` ディープリンク + confinement 配線 (#386)', () => {
   const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
 
-  it('G1: initialSceneId を渡すと mount 時に renderer.startFrom({ sceneId }) が1回だけ呼ばれる', async () => {
+  it('G1: initialSceneId を渡すと mount 時に renderer.startFrom({ sceneId, confinedSceneIds: null }) が1回だけ呼ばれる（初期入場は1回）', async () => {
     render(<NovelPlayer events={[]} initialSceneId="scene-x" />)
     await flushAsync()
     const r = lastRenderer()
     expect(r.startFrom).toHaveBeenCalledTimes(1)
-    expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+    expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x', confinedSceneIds: null })
   })
 
-  it('G2: initialSceneId 未指定なら startFrom は呼ばれない', async () => {
+  it('G2: initialSceneId 未指定なら初期入場はエントリ startFrom({}) の1回だけ', async () => {
     render(<NovelPlayer events={[]} />)
     await flushAsync()
-    expect(lastRenderer().startFrom).not.toHaveBeenCalled()
+    const r = lastRenderer()
+    expect(r.startFrom).toHaveBeenCalledTimes(1)
+    expect(r.startFrom).toHaveBeenCalledWith({})
   })
 
-  it('G3: initialSceneId={null} でも startFrom は呼ばれない', async () => {
+  it('G3: initialSceneId={null} でも初期入場はエントリ startFrom({}) の1回だけ', async () => {
     render(<NovelPlayer events={[]} initialSceneId={null} />)
     await flushAsync()
-    expect(lastRenderer().startFrom).not.toHaveBeenCalled()
+    const r = lastRenderer()
+    expect(r.startFrom).toHaveBeenCalledTimes(1)
+    expect(r.startFrom).toHaveBeenCalledWith({})
   })
 
-  it('G4: confinedSceneIds を渡すと mount 時に renderer.setConfinedSceneIds がその配列で呼ばれる', async () => {
-    render(<NovelPlayer events={[]} confinedSceneIds={['a', 'b']} />)
+  it('G4: confinedSceneIds は入場属性として startFrom({ sceneId, confinedSceneIds }) に渡る', async () => {
+    render(<NovelPlayer events={[]} initialSceneId="scene-x" confinedSceneIds={['a', 'b']} />)
     await flushAsync()
-    expect(lastRenderer().setConfinedSceneIds).toHaveBeenCalledWith(['a', 'b'])
+    expect(lastRenderer().startFrom).toHaveBeenCalledWith({
+      sceneId: 'scene-x',
+      confinedSceneIds: ['a', 'b'],
+    })
   })
 
-  it('G5: confinedSceneIds 未指定なら renderer.setConfinedSceneIds が null で呼ばれる（無制限＝後方互換）', async () => {
+  it('G5: マウント時は開始しない読み込み（loadEvents）だけを使い、setEvents / setScenes は1回も呼ばない（エントリ冒頭の二重実行をしない）', async () => {
     render(<NovelPlayer events={[]} />)
     await flushAsync()
-    expect(lastRenderer().setConfinedSceneIds).toHaveBeenCalledWith(null)
+    const r = lastRenderer()
+    expect(r.loadEvents).toHaveBeenCalledTimes(1)
+    expect(r.setEvents).not.toHaveBeenCalled()
+    expect(r.setScenes).not.toHaveBeenCalled()
+  })
+
+  it('G5b: scenes 指定のマウントも loadScenes だけを使う', async () => {
+    const scenes: EventScene[] = [{ id: 's1', title: 's1', view: 'TopDown', events: [] }]
+    render(<NovelPlayer events={[]} scenes={scenes} />)
+    await flushAsync()
+    const r = lastRenderer()
+    expect(r.loadScenes).toHaveBeenCalledWith(scenes)
+    expect(r.setScenes).not.toHaveBeenCalled()
   })
 
   // G6-G9 (旧: "to be continued..." の DOM 表示が onStoryEndedChange(true/false) に追従することの
@@ -807,17 +828,32 @@ describe('NovelPlayer `?scene=` ディープリンク + confinement 配線 (#386
   // 内部化されたため、NovelPlayer 側にはもう検証対象の DOM が無い。表示ロジックの単体テストは
   // NovelRenderer.endingOverlay.test.ts が担保する。
 
-  it('G10: `?scene=` 由来の initialSceneId と `?debug_scene=` が同時指定された場合、debug_scene 側の startFrom が後勝ちする（#652で本番ビルドでも有効）', async () => {
+  it('G10: `?scene=` と `?debug_scene=` の併用は debug_scene が先に試され、入場できれば startFrom は1回だけ（confinement なし。#652）', async () => {
     window.history.pushState({}, '', '?debug_scene=dbg-scene')
     try {
-      render(<NovelPlayer events={[]} initialSceneId="prod-scene" />)
+      render(<NovelPlayer events={[]} initialSceneId="prod-scene" confinedSceneIds={['p']} />)
       await flushAsync()
       const r = lastRenderer()
-      // initialSceneId(#386) が先に startFrom され、その後 debug_scene(#220、#652) が
-      // 上書きする（NovelPlayer 側のコメント通り、デバッグ目的の上書きを優先させる設計）。
-      expect(r.startFrom).toHaveBeenNthCalledWith(1, { sceneId: 'prod-scene' })
-      expect(r.startFrom).toHaveBeenNthCalledWith(2, { sceneId: 'dbg-scene' })
+      expect(r.startFrom).toHaveBeenCalledTimes(1)
+      expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'dbg-scene', confinedSceneIds: null })
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+
+  it('G10b: `?debug_scene=` が入場できない（不在）と `?scene=` の入場に進み、その confinement が保たれる（#726）', async () => {
+    window.history.pushState({}, '', '?debug_scene=ghost')
+    try {
+      render(<NovelPlayer events={[]} initialSceneId="prod-scene" confinedSceneIds={['p']} />)
+      const r = lastRenderer()
+      r.startFrom.mockResolvedValueOnce({ status: 'failed', reason: 'not-found' })
+      await flushAsync()
       expect(r.startFrom).toHaveBeenCalledTimes(2)
+      expect(r.startFrom).toHaveBeenNthCalledWith(1, { sceneId: 'ghost', confinedSceneIds: null })
+      expect(r.startFrom).toHaveBeenNthCalledWith(2, {
+        sceneId: 'prod-scene',
+        confinedSceneIds: ['p'],
+      })
     } finally {
       window.history.pushState({}, '', '/')
     }
@@ -844,15 +880,14 @@ describe('NovelPlayer `?scene=` ディープリンク + confinement 配線 (#386
   // 同一URLで組み合わせた場合の相互作用」。G10（debug_scene 単独）・G11（debug_unlock_all 単独）
   // はそれぞれ独立に検証済みだが、同一 URL に両方指定した場合に一方がもう一方の配線を
   // 妨げないこと（両方呼ばれる・呼び出し順が崩れない）は未検証だった。
-  it('G13 (#652): `?debug_scene=`と`?debug_unlock_all=1`を同一URLで指定すると、両方が独立に配線される（startFromが後勝ちし、setDebugUnlockAllChoices(true)も呼ばれる）', async () => {
+  it('G13 (#652): `?debug_scene=`と`?debug_unlock_all=1`を同一URLで指定すると、両方が独立に配線される（debug_scene の startFrom が入場し、setDebugUnlockAllChoices(true)も呼ばれる）', async () => {
     window.history.pushState({}, '', '?debug_scene=dbg-scene&debug_unlock_all=1')
     try {
       render(<NovelPlayer events={[]} initialSceneId="prod-scene" />)
       await flushAsync()
       const r = lastRenderer()
-      expect(r.startFrom).toHaveBeenNthCalledWith(1, { sceneId: 'prod-scene' })
-      expect(r.startFrom).toHaveBeenNthCalledWith(2, { sceneId: 'dbg-scene' })
-      expect(r.startFrom).toHaveBeenCalledTimes(2)
+      expect(r.startFrom).toHaveBeenCalledTimes(1)
+      expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'dbg-scene', confinedSceneIds: null })
       expect(r.setDebugUnlockAllChoices).toHaveBeenCalledWith(true)
     } finally {
       window.history.pushState({}, '', '/')
@@ -1080,17 +1115,17 @@ describe('NovelPlayer telopReserve 配線 (#674)', () => {
     expect(r.setTelopReserve).toHaveBeenCalledWith(null)
   })
 
-  // 最重要: setTelopReserve は setEvents（＝初回改頁計算の起点）より前に呼ばれる必要がある
+  // 最重要: setTelopReserve は loadEvents / 初期入場（＝初回改頁計算の起点）より前に呼ばれる必要がある
   // （NovelPlayer.tsx の配線コメント「setEvents/setScenes より前に設定し、初回描画から
   // 本文領域の下端が狭い状態で改頁が確定するようにする」）。呼び出し順が入れ替わると、
   // 初回ページだけテロップ帯を考慮しない行数で改頁されてしまう回帰になる。
-  it('最重要: setTelopReserve が setEvents より先に呼ばれる（初回改頁計算に反映させるため）', async () => {
+  it('最重要: setTelopReserve が loadEvents と初期入場より先に呼ばれる（初回改頁計算に反映させるため）', async () => {
     render(<NovelPlayer events={[]} telopReserve={true} />)
     await flushAsync()
     const r = rendererInstances[rendererInstances.length - 1]
     const reserveOrder = r.setTelopReserve.mock.invocationCallOrder[0]
-    const eventsOrder = r.setEvents.mock.invocationCallOrder[0]
-    expect(reserveOrder).toBeLessThan(eventsOrder)
+    expect(reserveOrder).toBeLessThan(r.loadEvents.mock.invocationCallOrder[0])
+    expect(reserveOrder).toBeLessThan(r.startFrom.mock.invocationCallOrder[0])
   })
 
   it('rerender で telopReserve が undefined → true → null と変化すると、都度 renderer.setTelopReserve に反映される', async () => {
@@ -1449,16 +1484,17 @@ describe('NovelPlayer 非fluid時はaspectRatio変更で再マウントしない
 describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)', () => {
   const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
 
-  it('16: pendingSnapshot 無・initialSceneId 無・hasQuickSave() 偽・docKey 有 → quickLoad は呼ばれず通常のエントリ再生のまま', async () => {
+  it('16: pendingSnapshot 無・initialSceneId 無・hasQuickSave() 偽・docKey 有 → quickLoad は呼ばれず、エントリ startFrom({}) の1回', async () => {
     render(<NovelPlayer events={[]} docKey="proj-a" />)
     await flushAsync()
     const r = lastRenderer()
     expect(r.hasQuickSave).toHaveBeenCalled()
     expect(r.quickLoad).not.toHaveBeenCalled()
-    expect(r.startFrom).not.toHaveBeenCalled()
+    expect(r.startFrom).toHaveBeenCalledTimes(1)
+    expect(r.startFrom).toHaveBeenCalledWith({})
   })
 
-  it('17: 同条件で hasQuickSave() が真 → quickLoad() が呼ばれる', async () => {
+  it('17: 同条件で hasQuickSave() が真 → quickLoad("auto") が呼ばれ、データ無し（null）ならエントリへ進む', async () => {
     render(<NovelPlayer events={[]} docKey="proj-a" />)
     const r = rendererInstances[rendererInstances.length - 1]
     r.hasQuickSave.mockReturnValue(true)
@@ -1467,60 +1503,90 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     expect(r.quickLoad).toHaveBeenCalledTimes(1)
     // マウント時の自動クイックロードは起点 'auto'（成功トーストを出さない）で呼ぶ (#765)
     expect(r.quickLoad).toHaveBeenCalledWith('auto')
+    expect(r.startFrom).toHaveBeenCalledTimes(1)
+    expect(r.startFrom).toHaveBeenCalledWith({})
+  })
+
+  // #620 → #734: エントリ冒頭の自動進行を quickLoad に譲るための skipAutoAdvance は廃止した。
+  // マウント時は loadEvents（開始しない読み込み）だけを使うので、quickLoad の入口ガードに弾かれない。
+  it('23 (#734): 自動クイックロードが成立する条件でも、マウント時に setEvents は呼ばれず loadEvents が1回だけ呼ばれる', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" />)
+    const r = rendererInstances[rendererInstances.length - 1]
+    r.hasQuickSave.mockReturnValue(true)
+    await flushAsync()
+
+    expect(r.loadEvents).toHaveBeenCalledWith([])
+    expect(r.setEvents).not.toHaveBeenCalled()
+  })
+
+  it('24 (#734): quickLoad() が入場できた（entered）場合、エントリ startFrom は呼ばれず、自動セーブが配線される', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" />)
+    const r = rendererInstances[rendererInstances.length - 1]
+    r.hasQuickSave.mockReturnValue(true)
+    r.quickLoad.mockResolvedValue({ status: 'entered', sceneId: 'r1' })
+    await flushAsync()
+
+    expect(r.quickLoad).toHaveBeenCalledTimes(1)
     expect(r.startFrom).not.toHaveBeenCalled()
+    expect(r.setOnSceneChange).toHaveBeenCalledTimes(1)
   })
 
-  // #620: willAutoQuickLoad（pendingSnapshot 無・initialSceneId 無・docKey 有・hasQuickSave() 真）
-  // が成立する条件では、entry シーン冒頭の自動進行を quickLoad() 側に譲るため、setEvents/setScenes
-  // 自体に skipAutoAdvance: true を渡す契約になっている。渡し忘れる回帰（#620 の直接原因）を防ぐ。
-  it('23 (#620): willAutoQuickLoad が真の場合、setEvents が { skipAutoAdvance: true } で呼ばれる', async () => {
+  // ロードに失敗しても進めたルートの flags は保ってエントリから始める (#734 ADR 0003 §5)。
+  it('25 (#734): quickLoad() が not-found で失敗 → セーブの flags を保ってエントリから始まり、自動セーブは配線される', async () => {
     render(<NovelPlayer events={[]} docKey="proj-a" />)
     const r = rendererInstances[rendererInstances.length - 1]
     r.hasQuickSave.mockReturnValue(true)
+    const flags = { milestone: { Bool: true } }
+    r.quickLoad.mockResolvedValue({ status: 'failed', reason: 'not-found' })
+    r.getQuickSaveFlags.mockReturnValue(flags)
     await flushAsync()
 
-    expect(r.setEvents).toHaveBeenCalledWith([], { skipAutoAdvance: true })
+    expect(r.startFrom).toHaveBeenCalledTimes(1)
+    expect(r.startFrom).toHaveBeenCalledWith({ flags })
+    expect(r.setOnSceneChange).toHaveBeenCalledTimes(1)
+    expect(r.showToast).not.toHaveBeenCalled()
   })
 
-  // #620: quickLoad() が実際にシーンを復元できた（true を返した）場合は、skipAutoAdvance で
-  // 保留していた自動進行は restoreToScene 側の後始末に任せるべきで、NovelPlayer 側の
-  // フォールバック resumeAutoAdvanceIfPending() を重ねて呼ぶ必要はない。
-  it('24 (#620): quickLoad() が true を返す場合、resumeAutoAdvanceIfPending() は呼ばれない', async () => {
+  it('25b (#734): quickLoad() が resolver-error（通信失敗）で失敗 → flags を保ってエントリから始まるが、自動セーブは配線せず、トーストで知らせる', async () => {
     render(<NovelPlayer events={[]} docKey="proj-a" />)
     const r = rendererInstances[rendererInstances.length - 1]
     r.hasQuickSave.mockReturnValue(true)
-    r.quickLoad.mockReturnValue(true)
+    const flags = { milestone: { Bool: true } }
+    r.quickLoad.mockResolvedValue({ status: 'failed', reason: 'resolver-error' })
+    r.getQuickSaveFlags.mockReturnValue(flags)
     await flushAsync()
 
-    expect(r.quickLoad).toHaveBeenCalledTimes(1)
-    expect(r.resumeAutoAdvanceIfPending).not.toHaveBeenCalled()
+    expect(r.startFrom).toHaveBeenCalledWith({ flags })
+    expect(r.setOnSceneChange).not.toHaveBeenCalled()
+    expect(r.showToast).toHaveBeenCalledTimes(1)
   })
 
-  // #620 の本題: quickLoad() が false（データ不整合等の同期的失敗）を返した場合、
-  // skipAutoAdvance でスキップしたまま放置される entry シーン冒頭の自動進行を
-  // resumeAutoAdvanceIfPending() で必ずフォールバック実行しないと画面が固まる。
-  it('25 (#620): quickLoad() が false を返す場合、resumeAutoAdvanceIfPending() が1回呼ばれる', async () => {
+  it('26 (#734): 自動セーブの配線は初期入場の確定後（入場が未決着の間は配線されない）', async () => {
     render(<NovelPlayer events={[]} docKey="proj-a" />)
     const r = rendererInstances[rendererInstances.length - 1]
-    r.hasQuickSave.mockReturnValue(true)
-    r.quickLoad.mockReturnValue(false)
+    let settle!: (v: { status: 'entered'; sceneId: null }) => void
+    r.startFrom.mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve
+      })
+    )
     await flushAsync()
+    expect(r.setOnSceneChange).not.toHaveBeenCalled()
 
-    expect(r.quickLoad).toHaveBeenCalledTimes(1)
-    expect(r.resumeAutoAdvanceIfPending).toHaveBeenCalledTimes(1)
+    settle({ status: 'entered', sceneId: null })
+    await flushAsync()
+    expect(r.setOnSceneChange).toHaveBeenCalledTimes(1)
   })
 
-  it('19: pendingSnapshot 無・initialSceneId 有の場合、hasQuickSave() の値に関わらず startFrom() のみが呼ばれる', async () => {
+  it('19: pendingSnapshot 無・initialSceneId 有の場合、hasQuickSave() の値に関わらず ?scene= の startFrom() のみが呼ばれ quickLoad は呼ばれない', async () => {
     render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="scene-x" />)
     const r = rendererInstances[rendererInstances.length - 1]
     r.hasQuickSave.mockReturnValue(true)
     await flushAsync()
 
-    expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+    expect(r.startFrom).toHaveBeenCalledTimes(1)
+    expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x', confinedSceneIds: null })
     expect(r.quickLoad).not.toHaveBeenCalled()
-    // #620: initialSceneId が優先される場合は willAutoQuickLoad が成立しないため、
-    // setEvents は skipAutoAdvance: false（既定の自動進行あり）で呼ばれる。
-    expect(r.setEvents).toHaveBeenCalledWith([], { skipAutoAdvance: false })
   })
 
   it('20: マウント時に renderer.setOnSceneChange が渡され、そのコールバックを呼ぶと renderer.quickSave() が実行される（docKey 有り）', async () => {
@@ -1558,7 +1624,7 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     expect(rendererA.quickSave).toHaveBeenCalledTimes(1) // A 側は変化しない
   })
 
-  it('22: docKey 未指定でマウントした場合（EditorScreen相当）、renderer.setOnSceneChange が呼ばれず、起動時の hasQuickSave()/quickLoad チェーンも実行されない', async () => {
+  it('22: docKey 未指定でマウントした場合（EditorScreen相当）、renderer.setOnSceneChange が呼ばれず、自動クイックロードも実行されずエントリから始まる', async () => {
     render(<NovelPlayer events={[]} />)
     await flushAsync()
     const r = lastRenderer()
@@ -1566,11 +1632,7 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     expect(r.setOnSceneChange).not.toHaveBeenCalled()
     expect(r.hasQuickSave).not.toHaveBeenCalled()
     expect(r.quickLoad).not.toHaveBeenCalled()
-    // #620: docKey が無いと willAutoQuickLoad は成立しない（!!docKey が偽で短絡）ため、
-    // setEvents は skipAutoAdvance: false で呼ばれ、resumeAutoAdvanceIfPending() も呼ばれない
-    // （quickLoad 自体が評価されないので後始末も不要）。
-    expect(r.setEvents).toHaveBeenCalledWith([], { skipAutoAdvance: false })
-    expect(r.resumeAutoAdvanceIfPending).not.toHaveBeenCalled()
+    expect(r.startFrom).toHaveBeenCalledWith({})
   })
 })
 
@@ -1597,7 +1659,7 @@ describe('NovelPlayer deep-link/デバッグ起動時の自動クイックセー
     const r = lastRenderer()
 
     expect(r.setOnSceneChange).not.toHaveBeenCalled()
-    expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+    expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x', confinedSceneIds: null })
   })
 
   it('664-2: docKey + debug_scene 指定 → setOnSceneChange は配線されず、startFrom は debug_scene 由来で呼ばれる（決定表#5）', async () => {
@@ -1609,7 +1671,7 @@ describe('NovelPlayer deep-link/デバッグ起動時の自動クイックセー
 
       expect(r.setOnSceneChange).not.toHaveBeenCalled()
       expect(r.startFrom).toHaveBeenCalledTimes(1)
-      expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'dbg-scene' })
+      expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'dbg-scene', confinedSceneIds: null })
     } finally {
       window.history.pushState({}, '', '/')
     }
@@ -1655,13 +1717,14 @@ describe('NovelPlayer deep-link/デバッグ起動時の自動クイックセー
       const r = lastRenderer()
 
       expect(r.setOnSceneChange).toHaveBeenCalledTimes(1)
-      expect(r.startFrom).not.toHaveBeenCalled()
+      expect(r.startFrom).toHaveBeenCalledTimes(1)
+      expect(r.startFrom).toHaveBeenCalledWith({}) // debug_scene 空文字は無効 → エントリ入場
     } finally {
       window.history.pushState({}, '', '/')
     }
   })
 
-  it('664-6: initialSceneId と debug_scene が同時指定でも setOnSceneChange は配線されず、startFrom は debug_scene 側が後勝ちする（G10 拡張）', async () => {
+  it('664-6: initialSceneId と debug_scene が同時指定でも setOnSceneChange は配線されず、startFrom は debug_scene の1回だけ（G10 拡張）', async () => {
     window.history.pushState({}, '', '?debug_scene=dbg-scene')
     try {
       render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="prod-scene" />)
@@ -1669,9 +1732,8 @@ describe('NovelPlayer deep-link/デバッグ起動時の自動クイックセー
       const r = lastRenderer()
 
       expect(r.setOnSceneChange).not.toHaveBeenCalled()
-      expect(r.startFrom).toHaveBeenNthCalledWith(1, { sceneId: 'prod-scene' })
-      expect(r.startFrom).toHaveBeenNthCalledWith(2, { sceneId: 'dbg-scene' })
-      expect(r.startFrom).toHaveBeenCalledTimes(2)
+      expect(r.startFrom).toHaveBeenCalledTimes(1)
+      expect(r.startFrom).toHaveBeenCalledWith({ sceneId: 'dbg-scene', confinedSceneIds: null })
     } finally {
       window.history.pushState({}, '', '/')
     }
@@ -1877,7 +1939,7 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     await flushAsync()
     const first = rendererInstances[0]
     // 初回マウントは G1 と同条件: initialSceneId により startFrom が呼ばれている
-    expect(first.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+    expect(first.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x', confinedSceneIds: null })
 
     const snapshot: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: 'scene-a' }
     first.getSnapshot.mockReturnValue(snapshot)
@@ -1890,6 +1952,29 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     const second = rendererInstances[1]
     expect(second.restoreSnapshot).toHaveBeenCalledTimes(1)
     expect(second.startFrom).not.toHaveBeenCalled()
+  })
+
+  it('P2b (#734 不整合14): fluid 再マウントでは debug 起点（?debug_scene=）を再実行せず、restoreSnapshot で引き継いだ位置を上書きしない', async () => {
+    window.history.pushState({}, '', '?debug_scene=dbg-scene')
+    try {
+      render(<NovelPlayer events={[]} aspectRatio="auto" />)
+      await flushAsync()
+      const first = rendererInstances[0]
+      expect(first.startFrom).toHaveBeenCalledWith({ sceneId: 'dbg-scene', confinedSceneIds: null })
+      first.getSnapshot.mockReturnValue({ ...NEUTRAL_SNAPSHOT, sceneId: 'scene-a' })
+
+      act(() => {
+        triggerResize(400, 800)
+      })
+      await flushAsync()
+
+      const second = rendererInstances[1]
+      expect(second.restoreSnapshot).toHaveBeenCalledTimes(1)
+      expect(second.startFrom).not.toHaveBeenCalled()
+      expect(second.quickLoad).not.toHaveBeenCalled()
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
   })
 
   it('P3: 旧 renderer の getSnapshot が既定の sceneId: null のままリサイズすると restoreSnapshot は呼ばれず、initialSceneId 指定時は従来どおり新 renderer で startFrom が呼ばれる', async () => {
@@ -1906,7 +1991,7 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     const second = rendererInstances[1]
     expect(second.restoreSnapshot).not.toHaveBeenCalled()
     expect(second.startFrom).toHaveBeenCalledTimes(1)
-    expect(second.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x' })
+    expect(second.startFrom).toHaveBeenCalledWith({ sceneId: 'scene-x', confinedSceneIds: null })
   })
 
   it('P4: 縦→横→縦と2回remountさせても、2回目の restoreSnapshot は1回目に生成された renderer 自身の getSnapshot 戻り値で呼ばれ、初代(0世代目)の値が混入しない', async () => {
@@ -2108,9 +2193,9 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     expect(second.restoreSnapshot).toHaveBeenCalledWith(snapshot)
     expect(second.quickLoad).not.toHaveBeenCalled()
     expect(second.startFrom).not.toHaveBeenCalled()
-    // #620: pendingSnapshot が優先される場合は willAutoQuickLoad が成立しないため、
-    // setEvents は skipAutoAdvance: false（既定の自動進行あり）で呼ばれる。
-    expect(second.setEvents).toHaveBeenCalledWith([], { skipAutoAdvance: false })
+    // #734: 再マウントでも文書は開始しない読み込み（loadEvents）で入れる。
+    expect(second.loadEvents).toHaveBeenCalledWith([])
+    expect(second.setEvents).not.toHaveBeenCalled()
   })
 })
 
