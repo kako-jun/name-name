@@ -551,6 +551,16 @@ describe('BattleScreen: acrylic (#737)', () => {
   const sideNone: BattleScreenOptions = { layout: 'side' }
   const acrylic: BattleScreenOptions = { layout: 'side', spriteStyle: 'acrylic' }
   const withSprite = (id: string): BattleEntity => entity(id, { sprite: `img/${id}.webp` })
+  /** Graphics に積まれた fill 命令の色と不透明度（描画順） */
+  const fillsOf = (g: Graphics): Array<{ color: number; alpha: number }> =>
+    (
+      g.context.instructions as unknown as Array<{
+        action: string
+        data: { style: { color: number; alpha: number } }
+      }>
+    )
+      .filter((ins) => ins.action === 'fill')
+      .map((ins) => ({ color: ins.data.style.color, alpha: ins.data.style.alpha }))
   const TEX_W = 100
   const TEX_H = 50
   /** 実寸を持つ本物の Texture（モックだと Sprite が EMPTY に差し替えて配置の数値を検証できない） */
@@ -700,6 +710,31 @@ describe('BattleScreen: acrylic (#737)', () => {
       const g = defaultGeometry(slotSize())
       // 最も広い影の楕円がバウンディングを決める
       expect(b.width).toBeCloseTo(g.shadow!.rx * 2, 6)
+    })
+
+    it('仕様値: 影は黒 0.4・台座は 0x111111・ハイライトは白 0.3 の順に塗られる（リテラル固定）', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      expect(fillsOf(internals(s).enemyViews[0].acrylicBack!)).toEqual([
+        { color: 0x000000, alpha: 0.4 },
+        { color: 0x111111, alpha: 1 },
+        { color: 0xffffff, alpha: 0.3 },
+      ])
+    })
+
+    it('spriteStyleParams の shadowAlpha / highlightAlpha が影・ハイライトの塗りに別々に反映される', async () => {
+      okLoad()
+      const s = track(
+        make([entity('hero')], [withSprite('slime')], {
+          ...acrylic,
+          spriteStyleParams: { shadowAlpha: 0.7, highlightAlpha: 0.6 },
+        })
+      )
+      await flushPromises()
+      const fills = fillsOf(internals(s).enemyViews[0].acrylicBack!)
+      expect(fills[0].alpha).toBe(0.7)
+      expect(fills[2].alpha).toBe(0.6)
     })
 
     it('失敗: 色四角のまま・acrylicBack 非表示・filter なし・warn 1 回', async () => {
