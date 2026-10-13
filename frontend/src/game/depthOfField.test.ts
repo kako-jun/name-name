@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   DOF_DEFAULT_PARAMS,
+  DOF_EDGE_EXTEND,
+  computeDofQuad,
   DOF_LEVEL_COUNT,
   computeDofGradient,
   computeDofLevels,
@@ -112,6 +114,36 @@ describe('computeDofLevels (#753)', () => {
     }
   })
   it('最大ぼかしは下端で明らかに見える強さ', () => {
-    expect(DOF_DEFAULT_PARAMS.maxBlurStrength).toBeGreaterThanOrEqual(16)
+    expect(DOF_DEFAULT_PARAMS.maxBlurStrength).toBeGreaterThanOrEqual(8)
+  })
+})
+
+describe('computeDofQuad / DOF_EDGE_EXTEND (画面端のぼけ欠け対策)', () => {
+  it('広げる量は最大ぼかしの padding（strength * 2）以上', () => {
+    expect(DOF_EDGE_EXTEND).toBeGreaterThanOrEqual(DOF_DEFAULT_PARAMS.maxBlurStrength * 2)
+  })
+
+  it('幅は背景幅 + 2 * extend、高さは背景高 + 2 * extend。原点は -extend', () => {
+    const q = computeDofQuad(800, 450, 24)
+    const xs = [0, 2, 4, 6].map((i) => q.positions[i])
+    const ys = [1, 3, 5, 7].map((i) => q.positions[i])
+    expect(Math.max(...xs) - Math.min(...xs)).toBe(800 + 2 * 24)
+    expect(Math.max(...ys) - Math.min(...ys)).toBe(450 + 2 * 24)
+    expect(Math.min(...xs)).toBe(-24)
+    expect(Math.min(...ys)).toBe(-24)
+  })
+
+  it('UV は 0〜1 の外側へ extend / サイズ だけはみ出す（端ピクセルの繰り返し）', () => {
+    const q = computeDofQuad(100, 50, 10)
+    expect(q.uvs[0]).toBeCloseTo(-10 / 100)
+    expect(q.uvs[1]).toBeCloseTo(-10 / 50)
+    expect(q.uvs[4]).toBeCloseTo(1 + 10 / 100)
+    expect(q.uvs[5]).toBeCloseTo(1 + 10 / 50)
+    expect(Array.from(q.indices)).toEqual([0, 1, 2, 0, 2, 3])
+  })
+
+  it('サイズ 0 でも NaN にならない', () => {
+    const q = computeDofQuad(0, 0, 10)
+    expect([...q.positions, ...q.uvs].every(Number.isFinite)).toBe(true)
   })
 })

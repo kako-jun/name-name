@@ -36,6 +36,8 @@ import {
   ColorMatrixFilter,
   Container,
   Graphics,
+  Mesh,
+  MeshGeometry,
   Rectangle,
   Sprite,
   Text as PixiText,
@@ -85,6 +87,7 @@ import {
   DOF_DEFAULT_PARAMS,
   DOF_LEVEL_COUNT,
   computeDofLevels,
+  computeDofQuad,
   dofMaskStops,
   type BackgroundDof,
 } from './depthOfField'
@@ -150,7 +153,8 @@ type CommandId = 'attack' | 'spell' | 'item' | 'escape'
 
 /** 被写界深度の 1 段（ぼかしコピーとそのマスク）(#753) */
 interface DofLevelView {
-  sprite: Sprite
+  /** 背景を四方へ広げた矩形メッシュ（端ピクセルを繰り返す）。ぼかしが画面端で欠けないようにする */
+  sprite: Mesh
   mask: Sprite
   blur: BlurFilter
   /** 自前生成なので自分で破棄する */
@@ -362,9 +366,16 @@ export class BattleScreen extends Container {
     if (this.backgroundDof === 'off') return
     let index = 1
     for (let i = 0; i < DOF_LEVEL_COUNT; i++) {
-      const copy = new Sprite(bg.texture)
+      const q = computeDofQuad(bg.width, bg.height)
+      const copy = new Mesh({
+        geometry: new MeshGeometry({ positions: q.positions, uvs: q.uvs, indices: q.indices }),
+        texture: bg.texture,
+      })
+      // repeatEdgePixels は padding を 0 にするだけで端を繰り返す処理は無く、clipToViewport で
+      // フィルタ領域が画面端で切れてカーネルが欠ける。padding を残し viewport クリップも切る
       const blur = new BlurFilter({ strength: 0 })
-      blur.repeatEdgePixels = true
+      blur.repeatEdgePixels = false
+      blur.clipToViewport = false
       copy.filters = this.backgroundToneFilter ? [this.backgroundToneFilter, blur] : [blur]
       const mask = new Sprite()
       this.addChildAt(copy, index++)
@@ -393,8 +404,9 @@ export class BattleScreen extends Container {
     this.dofLevels.forEach((lv, i) => {
       const g = gs[i]
       lv.sprite.position.copyFrom(bg.position)
-      lv.sprite.width = bg.width
-      lv.sprite.height = bg.height
+      const q = computeDofQuad(bg.width, bg.height)
+      lv.sprite.geometry.positions = q.positions
+      lv.sprite.geometry.uvs = q.uvs
       lv.blur.strength = g.blurStrength
       if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4 || !lv.maskTexture) {
         const tex = this.createDofMaskTexture(g.rampFraction)

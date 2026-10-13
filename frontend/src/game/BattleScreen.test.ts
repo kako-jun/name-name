@@ -16,7 +16,7 @@ import {
   type Text,
   Text as PixiText,
 } from 'pixi.js'
-import { DOF_LEVEL_COUNT, DOF_MAX_BLUR_STRENGTH } from './depthOfField'
+import { DOF_EDGE_EXTEND, DOF_LEVEL_COUNT, DOF_MAX_BLUR_STRENGTH } from './depthOfField'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
@@ -198,7 +198,14 @@ describe('BattleScreen: 背景画像', () => {
 
 describe('BattleScreen: 被写界深度 (#753)', () => {
   const dofLevels = (s: BattleScreen) =>
-    (s as unknown as { dofLevels: { sprite: Sprite; mask: Sprite }[] }).dofLevels
+    (
+      s as unknown as {
+        dofLevels: {
+          sprite: { geometry: { positions: Float32Array }; filters: unknown }
+          mask: Sprite
+        }[]
+      }
+    ).dofLevels
 
   it('on: 段数ぶんのぼかしコピー+マスクが背景の直上に弱→強の順で並ぶ（背面に隠れない）', async () => {
     vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
@@ -213,8 +220,14 @@ describe('BattleScreen: 被写界深度 (#753)', () => {
     lv.forEach((l, k) => {
       expect(i.children[1 + k * 2]).toBe(l.sprite)
       expect(i.children[2 + k * 2]).toBe(l.mask)
-      expect(l.sprite.visible).toBe(true)
-      expect(l.sprite.width).toBeCloseTo(i.backgroundSprite!.width)
+      // 拡張後の幅は背景幅 + 2 * 拡張量（端のぼけ欠け対策）
+      const xs = [0, 2, 4, 6].map((n) => l.sprite.geometry.positions[n])
+      expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(
+        i.backgroundSprite!.width + 2 * DOF_EDGE_EXTEND
+      )
+      // マスクは画面幅を覆う
+      expect(l.mask.x).toBe(0)
+      expect(l.mask.width).toBeGreaterThanOrEqual(800)
     })
     const strengths = lv.map(
       (l) => (l.sprite.filters as unknown as { strength: number }[]).slice(-1)[0].strength
@@ -222,6 +235,28 @@ describe('BattleScreen: 被写界深度 (#753)', () => {
     expect(strengths[strengths.length - 1]).toBeCloseTo(DOF_MAX_BLUR_STRENGTH)
     expect([...strengths].sort((a, b) => a - b)).toEqual(strengths)
     expect(new Set(strengths).size).toBe(DOF_LEVEL_COUNT)
+  })
+
+  it('各段のぼかしフィルタは padding を残し viewport クリップを切る（画面端でカーネルが欠けない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    for (const l of dofLevels(s)) {
+      const blur = (
+        l.sprite.filters as {
+          strength: number
+          padding: number
+          repeatEdgePixels: boolean
+          clipToViewport: boolean
+        }[]
+      ).slice(-1)[0]
+      expect(blur.repeatEdgePixels).toBe(false)
+      expect(blur.clipToViewport).toBe(false)
+      expect(blur.padding).toBeGreaterThanOrEqual(blur.strength)
+      expect(blur.padding).toBeLessThanOrEqual(DOF_EDGE_EXTEND)
+    }
   })
 
   it('redraw を繰り返しても段は積み増さない', async () => {

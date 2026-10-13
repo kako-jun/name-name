@@ -18,13 +18,20 @@ export const DOF_START_RATIO = 0.5
 /** ぼかしが最大に達するまでのグラデーション幅（画面高さの割合）。開始位置からこの幅で 0 → 最大へ。目視で調整する値 */
 export const DOF_GRADIENT_RATIO = 0.5
 /** 最大のぼかしの強さ（PixiJS BlurFilter の strength）。目視で調整する値 */
-export const DOF_MAX_BLUR_STRENGTH = 18
+export const DOF_MAX_BLUR_STRENGTH = 12
 
 /**
  * ぼかしコピーの段数。強さの異なるコピーを重ねて、可変半径ガウスぼかしを近似する（段が多いほど滑らか、重い）。
  * 段 k（1..N）の強さは max * k / N。段 k のマスクは勾配の (k-1)/N 地点で 0、k/N 地点で 1 になり、以降は 1。
  */
 export const DOF_LEVEL_COUNT = 4
+
+/**
+ * ぼかしコピーを背景の四方へ広げる量（論理 px）。画面端でも中央と同じぼけ量にするため、最大ぼかしの
+ * フィルタ padding（PixiJS BlurFilter は strength * 2）以上にする。広げた部分はテクスチャの端ピクセルの繰り返し
+ * （clamp-to-edge）で埋め、見える範囲はマスク（画面幅）でクリップする。
+ */
+export const DOF_EDGE_EXTEND = DOF_MAX_BLUR_STRENGTH * 2
 
 /** マスク用グラデーションテクスチャの縦解像度（px）。1 x この値の canvas を縦に引き伸ばして使う */
 export const DOF_MASK_TEXTURE_HEIGHT = 256
@@ -133,4 +140,30 @@ export function dofMaskStops(rampFraction: number): { offset: number; alpha: num
         { offset: r, alpha: 1 },
         { offset: 1, alpha: 1 },
       ]
+}
+
+export interface DofQuad {
+  /** 頂点座標（x, y の列。背景スプライト左上を原点とする表示 px）。背景を四方へ extend だけ広げた矩形 */
+  positions: Float32Array
+  /** 頂点 UV。広げた部分は 0〜1 の外側を指し、clamp-to-edge で端ピクセルの繰り返しになる */
+  uvs: Float32Array
+  indices: Uint32Array
+}
+
+/** 表示サイズ width x height の背景を四方へ extend 広げたぼかしコピー用の矩形（2 三角形）を求める */
+export function computeDofQuad(
+  width: number,
+  height: number,
+  extend: number = DOF_EDGE_EXTEND
+): DofQuad {
+  const w = Math.max(0, width)
+  const h = Math.max(0, height)
+  const e = Math.max(0, extend)
+  const u = w > 0 ? e / w : 0
+  const v = h > 0 ? e / h : 0
+  return {
+    positions: new Float32Array([-e, -e, w + e, -e, w + e, h + e, -e, h + e]),
+    uvs: new Float32Array([-u, -v, 1 + u, -v, 1 + u, 1 + v, -u, 1 + v]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+  }
 }
