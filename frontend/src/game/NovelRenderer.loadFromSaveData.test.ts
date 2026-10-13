@@ -69,6 +69,7 @@ interface RendererInternals {
   initialized: boolean
   waitingForChoice: boolean
   waitingForWait: boolean
+  pendingMissingScenes: Map<string, Promise<EventScene[] | null>>
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -695,5 +696,102 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(r.getCurrentSceneId()).toBe('r01-01')
+  })
+})
+
+// ===== 遷移世代ガード (#759) =====
+describe('NovelRenderer.loadFromSaveDataMissingScene 遅延ロード中の遷移世代ガード (#759)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const ENTRY: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+  const ROUTE = scene('r01-01', [narration('route-a', 'route-b')])
+
+  function deferred(): {
+    promise: Promise<EventScene[] | null>
+    resolve: (v: EventScene[] | null) => void
+    reject: (e: unknown) => void
+  } {
+    let resolve!: (v: EventScene[] | null) => void
+    let reject!: (e: unknown) => void
+    const promise = new Promise<EventScene[] | null>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
+  function setup(resolver: (id: string) => Promise<EventScene[] | null>): NovelRenderer {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(ENTRY))
+    r.setJumpSceneIndex(ENTRY)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+    r.startFrom({ sceneId: 'entry-hub', flags: { fresh: boolFlag(true) } })
+    return r
+  }
+
+  it('G1: 解決中に startFrom で文脈が変わると、解決成功後も古いロードは当たらない', async () => {
+    const d = deferred()
+    const r = setup(() => d.promise)
+    seedQuickSave(craftSave({ sceneId: 'r01-01', flags: { stale: boolFlag(true) } }))
+    expect(r.quickLoad()).toBe(true)
+
+    r.startFrom({ sceneId: 'entry-hub', flags: { fresh: boolFlag(true) } })
+    d.resolve([...ENTRY, ROUTE])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(r.getCurrentSceneId()).toBe('entry-hub')
+    expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
+  })
+
+  it('G2: 解決中に startFrom した後で解決が失敗（null / reject）しても、新しい文脈のフラグを上書きしない', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const fail of ['null', 'reject'] as const) {
+      const d = deferred()
+      const r = setup(() => d.promise)
+      seedQuickSave(craftSave({ sceneId: 'r01-01', flags: { stale: boolFlag(true) } }))
+      r.quickLoad()
+      r.startFrom({ sceneId: 'entry-hub', flags: { fresh: boolFlag(true) } })
+      if (fail === 'null') d.resolve(null)
+      else d.reject(new Error('boom'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
+    }
+  })
+
+  it('G3: 同一シーンの重複ロードは resolver 1 回で共有され、宙に浮かず復元される', async () => {
+    const d = deferred()
+    const resolver = vi.fn(() => d.promise)
+    const r = setup(resolver)
+    seedQuickSave(craftSave({ sceneId: 'r01-01', flags: { loaded: boolFlag(true) } }))
+    r.quickLoad()
+    r.quickLoad()
+    d.resolve([...ENTRY, ROUTE])
+
+    await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))
+    expect(resolver).toHaveBeenCalledTimes(1)
+    expect(r.getSnapshot().flags).toEqual({ loaded: boolFlag(true) })
+  })
+
+  it('G4: 別経路が同一シーンを解決中でも、ロードはその解決を共有して待ち、完了後に復元される', async () => {
+    const d = deferred()
+    const resolver = vi.fn(() => d.promise)
+    const r = setup(resolver)
+    internals(r).pendingMissingScenes.set('r01-01', d.promise)
+    seedQuickSave(craftSave({ sceneId: 'r01-01', flags: { loaded: boolFlag(true) } }))
+    r.quickLoad()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(r.getCurrentSceneId()).toBe('entry-hub')
+
+    d.resolve([...ENTRY, ROUTE])
+    await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))
+    expect(resolver).not.toHaveBeenCalled()
   })
 })

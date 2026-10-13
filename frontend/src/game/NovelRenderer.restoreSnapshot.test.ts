@@ -600,9 +600,10 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(r.getCurrentSceneId()).toBeNull()
   })
 
-  it('S2: pendingMissingScenes に既に同一 sceneId が入っている状態で restoreSnapshot を呼ぶと、resolver は起動されず flags だけが渡した値に更新される', async () => {
+  it('S2: 同一 sceneId が別経路（Jump 等）で解決中でも、restoreSnapshot はその解決を共有して待ち、完了後に復元される（resolver 重複起動なし・宙に浮かない #759）', async () => {
     const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
-    const resolver = vi.fn(async () => entryScenes)
+    const routeScene = scene('r01-01', [narration('route-line')])
+    const resolver = vi.fn(async () => [...entryScenes, routeScene])
 
     const r = new NovelRenderer()
     muteAudio(r)
@@ -611,20 +612,24 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.setMissingSceneResolver(resolver)
     markInitialized(r)
     r.startFrom({ sceneId: 'entry-hub' })
-    const sceneBefore = r.getCurrentSceneId()
 
     // jumpToScene 側の resolveMissingSceneAndJump が同一 sceneId を既に解決中、という状況を再現
-    // （#460 セルフレビュー S2: この分岐にヒットするケースだけ flags すら復元されていなかった）
-    internals(r).pendingMissingScenes.set('r01-01', new Promise(() => {}))
+    let resolveShared!: (v: EventScene[] | null) => void
+    internals(r).pendingMissingScenes.set(
+      'r01-01',
+      new Promise<EventScene[] | null>((res) => {
+        resolveShared = res
+      })
+    )
 
     r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', flags: { restored: boolFlag(true) } }))
-
-    // このガードは await を経ないため、fromJSON(flags) は同期的に完了している
-    expect(r.getSnapshot().flags).toEqual({ restored: boolFlag(true) })
-    // restoreToScene は呼ばれていない（currentSceneId は変化しない）
-    expect(r.getCurrentSceneId()).toBe(sceneBefore)
-
     await new Promise((resolve) => setTimeout(resolve, 0))
+    // 解決待ち中は復元されない
+    expect(r.getCurrentSceneId()).toBe('entry-hub')
+
+    resolveShared([...entryScenes, routeScene])
+    await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))
+    expect(r.getSnapshot().flags).toEqual({ restored: boolFlag(true) })
     expect(resolver).not.toHaveBeenCalled()
   })
 
@@ -858,5 +863,125 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
 
     expect(newR.getSnapshot().cameraMode).toBe('Theater')
     expect(newR.getSnapshot().cameraOrientation).toBe('Stage')
+  })
+})
+
+// ===== 遷移世代ガード (#759) =====
+// 未ロードシーンへの復元中に文脈が変わったら、古い復元は成功・失敗とも破棄される。
+describe('NovelRenderer.restoreSnapshot 遅延ロード中の遷移世代ガード (#759)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const ENTRY: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+  const ROUTE = scene('r01-01', [narration('route-a', 'route-b')])
+
+  function deferred(): {
+    promise: Promise<EventScene[] | null>
+    resolve: (v: EventScene[] | null) => void
+    reject: (e: unknown) => void
+  } {
+    let resolve!: (v: EventScene[] | null) => void
+    let reject!: (e: unknown) => void
+    const promise = new Promise<EventScene[] | null>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
+  function setup(resolver: (id: string) => Promise<EventScene[] | null>): NovelRenderer {
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(ENTRY))
+    r.setJumpSceneIndex(ENTRY)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+    r.startFrom({ sceneId: 'entry-hub', flags: { fresh: boolFlag(true) } })
+    return r
+  }
+
+  it('G1: 解決中に startFrom で文脈が変わると、解決成功後も古い復元は当たらない', async () => {
+    const d = deferred()
+    const r = setup(() => d.promise)
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', flags: { stale: boolFlag(true) } }))
+
+    r.startFrom({ sceneId: 'entry-hub', flags: { fresh: boolFlag(true) } })
+    d.resolve([...ENTRY, ROUTE])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(r.getCurrentSceneId()).toBe('entry-hub')
+    expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
+    expect(r.getAllSceneIds()).toEqual(['entry-hub'])
+  })
+
+  it('G2: 解決中に startFrom した後で解決が失敗（null / reject）しても、新しい文脈のフラグを上書きせず warn も出さない', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const fail of ['null', 'reject'] as const) {
+      const d = deferred()
+      const r = setup(() => d.promise)
+      r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', flags: { stale: boolFlag(true) } }))
+      r.startFrom({ sceneId: 'entry-hub', flags: { fresh: boolFlag(true) } })
+      if (fail === 'null') d.resolve(null)
+      else d.reject(new Error('boom'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
+      expect(r.getCurrentSceneId()).toBe('entry-hub')
+    }
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('G3: 解決中に setEvents で別のイベント列に差し替わったら、古い復元は当たらない', async () => {
+    const d = deferred()
+    const r = setup(() => d.promise)
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', flags: { stale: boolFlag(true) } }))
+
+    const other: EventScene[] = [scene('other', [narration('other-line')])]
+    r.setEvents(flatten(other))
+    d.resolve([...ENTRY, ROUTE])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(r.getCurrentSceneId()).not.toBe('r01-01')
+    expect(r.getSnapshot().flags).not.toHaveProperty('stale')
+  })
+
+  it('G4: 解決中に別の restoreSnapshot（既ロードのシーン）が入ったら、古い復元は当たらない', async () => {
+    const d = deferred()
+    const r = setup(() => d.promise)
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', flags: { stale: boolFlag(true) } }))
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'entry-hub', flags: { newer: boolFlag(true) } }))
+    d.resolve([...ENTRY, ROUTE])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(r.getCurrentSceneId()).toBe('entry-hub')
+    expect(r.getSnapshot().flags).toEqual({ newer: boolFlag(true) })
+  })
+
+  it('G5: 同一シーンの重複復元要求は resolver 1 回で共有され、最後の要求だけが適用される（どちらも宙に浮かない）', async () => {
+    const d = deferred()
+    const resolver = vi.fn(() => d.promise)
+    const r = setup(resolver)
+    r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'r01-01', eventIndex: 0, flags: { first: boolFlag(true) } })
+    )
+    r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'r01-01', eventIndex: 0, flags: { second: boolFlag(true) } })
+    )
+    d.resolve([...ENTRY, ROUTE])
+
+    await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(resolver).toHaveBeenCalledTimes(1)
+    expect(r.getSnapshot().flags).toEqual({ second: boolFlag(true) })
+  })
+
+  it('G6: 文脈が変わらなければ従来どおり復元される（回帰ガード）', async () => {
+    const d = deferred()
+    const r = setup(() => d.promise)
+    r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', flags: { ok: boolFlag(true) } }))
+    d.resolve([...ENTRY, ROUTE])
+    await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))
+    expect(r.getSnapshot().flags).toEqual({ ok: boolFlag(true) })
   })
 })
