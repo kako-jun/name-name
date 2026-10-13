@@ -2476,14 +2476,16 @@ describe('DialogBox ▼グリフの縦スケール (#447 追加要望2)', () => 
 })
 
 // =====================================================================================
-// #774: DialogBox が destroy された後に画像インジケータの fetch が解決/失敗しても例外を投げない
+// #774: DialogBox が destroy された後に画像インジケータの fetch が解決/失敗しても何もしない
 //
-// 画像（text-next-*.webp 等）が 404 の作品では Assets.load の reject が遅れて届き、その時点で
-// 親（Application / Container）が destroy({ children: true }) 済みだと indicatorSprite の scale が
-// null になっており、applyIndicatorFrame の width 設定で
-// "Cannot read properties of null (reading 'x')" が pageerror として上がっていた。
+// 原因: init 前の renderer に setAssetBaseUrl が流れて画像 fetch が始まり（dev の StrictMode
+// 二重マウント・fluid 再マウント・読み込み中の画面離脱など）、init 完了後に renderer が destroy
+// （app.destroy children）される。その後に fetch が解決すると .then 内の applyIndicatorFrame /
+// positionIndicator が破棄済み Container（scale/indicator が null）で throw し、後ろの .catch が
+// 偽の「failed to load indicator images」warning を出して applyIndicatorFrame を再度呼び、
+// 2 回目の throw が unhandled になって pageerror になっていた。
 // =====================================================================================
-describe('DialogBox #774 destroy 後の画像インジケータ解決で例外を投げない', () => {
+describe('DialogBox #774 destroy 後の画像インジケータ解決で何もしない', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
@@ -2499,36 +2501,50 @@ describe('DialogBox #774 destroy 後の画像インジケータ解決で例外�
     return calls
   }
 
-  it('destroy 後に Assets.load が reject しても applyIndicatorFrame が例外を投げない', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const calls = mockLoadQueue()
-    const box = makeRpgBox()
-    box.setIndicatorAssetBaseUrl('/asset-base')
-    box.setIndicatorKind('next')
-    box.destroy({ children: true })
+  const makers: Array<[string, () => DialogBox]> = [
+    ['adv', () => makeRpgBox()],
+    [
+      'novel',
+      () => {
+        const b = makeRpgBox()
+        b.setNovelMode(true)
+        return b
+      },
+    ],
+  ]
 
-    calls[0].reject(new Error('404'))
-    await expect(
-      (async () => {
-        await flushPromises()
-        await flushPromises()
-      })()
-    ).resolves.toBeUndefined()
-    expect(() => asInternals(box).applyIndicatorFrame()).not.toThrow()
-  })
+  describe.each(makers)('%s', (_name, make) => {
+    it('destroy 後に Assets.load が reject しても warn も failed 化も起きない', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const calls = mockLoadQueue()
+      const box = make()
+      box.setIndicatorAssetBaseUrl('/asset-base')
+      box.setIndicatorKind('next')
+      box.destroy({ children: true })
 
-  it('destroy 後に Assets.load が成功しても例外を投げない', async () => {
-    const calls = mockLoadQueue()
-    const box = makeRpgBox()
-    box.setIndicatorAssetBaseUrl('/asset-base')
-    box.setIndicatorKind('next')
-    box.destroy({ children: true })
+      calls[0].reject(new Error('404'))
+      await flushPromises()
+      await flushPromises()
 
-    // 失敗時は .then 内の例外が unhandled rejection になり vitest が run を落とす。
-    calls.forEach((c) => c.resolve(Texture.WHITE))
-    await flushPromises()
-    await flushPromises()
-    expect(() => asInternals(box).applyIndicatorFrame()).not.toThrow()
+      expect(warn).not.toHaveBeenCalled()
+      expect(asInternals(box).failedIndicatorKinds.size).toBe(0)
+    })
+
+    it('destroy 後に Assets.load が成功しても warn が呼ばれない', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const calls = mockLoadQueue()
+      const box = make()
+      box.setIndicatorAssetBaseUrl('/asset-base')
+      box.setIndicatorKind('next')
+      box.destroy({ children: true })
+
+      calls.forEach((c) => c.resolve(Texture.WHITE))
+      await flushPromises()
+      await flushPromises()
+
+      expect(warn).not.toHaveBeenCalled()
+      expect(() => asInternals(box).applyIndicatorFrame()).not.toThrow()
+    })
   })
 
   it('ロード成功時（destroy 前）は従来どおり寸法が設定され sprite が表示される', async () => {
