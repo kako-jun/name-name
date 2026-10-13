@@ -32,7 +32,7 @@ describe('renderGroundShadow', () => {
   const h = 40
   const shape = new Float32Array(w * h)
   for (let y = 10; y < 30; y++) for (let x = 10; x < 30; x++) shape[y * w + x] = 1
-  const r = renderGroundShadow(shape, w, h, 40, P)
+  const r = renderGroundShadow(shape, w, h, 400, P)
   const a = (x: number, y: number): number => r.rgba[(y * w + x) * 4 + 3]
   it('黒（rgb 0）で alpha だけが入り、最大でも castAlpha × 255 以下', () => {
     for (let i = 0; i < w * h; i++) {
