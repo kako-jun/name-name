@@ -578,6 +578,36 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
     expect(exportCalls).toEqual([true, false])
   })
 
+  it('#734 S-a: 開始前に終端を検知しても postRollMs:0 の timer で cleanup が二重に走らない', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    installRecordableMediaRecorder(() => {})
+    const exportCalls: boolean[] = []
+    let onEnd: (() => void) | null = null
+    const renderer = successRenderer(exportCalls, (cb) => {
+      onEnd = cb
+    }) as unknown as Record<string, unknown>
+    let release!: () => void
+    renderer.waitForBackgroundLoad = () =>
+      new Promise<void>((res) => {
+        release = res
+      })
+    const p = exportVideo(renderer as unknown as Exp, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      fps: 30,
+      preRollMs: 0,
+      postRollMs: 0,
+    })
+    const assertion = expect(p).rejects.toThrow(/ended before recording started/)
+    await new Promise((r) => setTimeout(r, 10))
+    onEnd!()
+    await new Promise((r) => setTimeout(r, 10)) // postRollMs:0 の timer が仮にあれば発火する
+    expect(exportCalls).toEqual([true]) // まだ cleanup されていない（多重起動ガードも保持）
+    release()
+    await assertion
+    expect(exportCalls).toEqual([true, false]) // cleanup は 1 回だけ
+  })
+
   it('#734 S3: startFrom 中に先回り終劇(onEnd)しても録画を始めず reject する', async () => {
     const { exportVideo } = await import('./VideoExporter')
     let recorded = false
@@ -1057,6 +1087,31 @@ describe('NovelRenderer#getScreenSize (#455)', () => {
     const second = renderer.getScreenSize()
     expect(first).toEqual({ width: 900, height: 450 })
     expect(second).toEqual({ width: 900, height: 450 })
+  })
+})
+
+describe('buildVideoExportOptions (#734: EditorScreen の state → opts.flags)', () => {
+  it('inheritFlags の ON/OFF で opts.flags が変わり、他の項目はそのまま渡る', async () => {
+    const { buildVideoExportOptions } = await import('./VideoExporter')
+    const live = { met: { Bool: true } }
+    const renderer = { getSnapshot: () => ({ flags: live }) } as unknown as Parameters<
+      typeof buildVideoExportOptions
+    >[0]
+    const onProgress = () => {}
+    const ui = {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      fps: 24,
+      mimeType: 'video/webm',
+      onProgress,
+    }
+    const off = buildVideoExportOptions(renderer, { ...ui, inheritFlags: false })
+    expect(off).toEqual({ ...ui, flags: {} })
+    const on = buildVideoExportOptions(renderer, { ...ui, inheritFlags: true })
+    expect(on.flags).toEqual(live)
+    expect(on.flags).not.toBe(live)
+    expect(on.startSceneId).toBe('a')
+    expect(on.fps).toBe(24)
   })
 })
 

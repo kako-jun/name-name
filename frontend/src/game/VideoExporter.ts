@@ -74,6 +74,28 @@ export function resolveExportFlags(
   return inheritPreview ? structuredClone(renderer.getSnapshot().flags) : {}
 }
 
+/** エディタの書き出し UI の state から `VideoExportOptions` を組み立てる (#734)。 */
+export function buildVideoExportOptions(
+  renderer: Pick<NovelRenderer, 'getSnapshot'>,
+  ui: {
+    startSceneId: string
+    endSceneId: string
+    fps: number
+    inheritFlags: boolean
+    mimeType: string
+    onProgress: (status: string) => void
+  }
+): VideoExportOptions {
+  return {
+    startSceneId: ui.startSceneId,
+    endSceneId: ui.endSceneId,
+    fps: ui.fps,
+    flags: resolveExportFlags(renderer, ui.inheritFlags),
+    mimeType: ui.mimeType,
+    onProgress: ui.onProgress,
+  }
+}
+
 const CODEC_CANDIDATES = [
   'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
@@ -244,12 +266,10 @@ export async function exportVideo(
   let visitedEndScene = false
   const prevAutoMode = renderer.isAutoMode()
   let startedAt = 0
-  let finalizeTimer: ReturnType<typeof setTimeout> | null = null
+  let recordingStarted = false
 
   const cleanup = () => {
     try {
-      // 書き出し前の autoMode へ戻す（書き出しのために入れたオートモードをプレビューへ残さない）
-      renderer.setAutoMode(prevAutoMode)
       // 元値が null だったら null に戻す（advance の onEndCallback?.() 挙動を完全復元）(round-2 S4)
       renderer.setOnSceneChange(prevOnSceneChange)
       renderer.setOnEnd(prevOnEnd)
@@ -262,6 +282,13 @@ export async function exportVideo(
       renderer.setExporting(false)
     } catch (e) {
       console.warn('[VideoExporter] cleanup failed', e)
+    }
+    // 書き出し前の autoMode へ戻す（書き出しのために入れたオートモードをプレビューへ残さない）。
+    // 他の復元が例外で飛ばないよう独立した try で行う。
+    try {
+      renderer.setAutoMode(prevAutoMode)
+    } catch (e) {
+      console.warn('[VideoExporter] autoMode restore failed', e)
     }
     isExporting = false
   }
@@ -282,6 +309,9 @@ export async function exportVideo(
     if (stopped) return
     stopped = true
     onProgress?.(status)
+    // 録画開始前の終端検知: timer は予約しない。本流の failIfStopped が唯一の後始末役になる
+    // （timer が先に発火して cleanup が二重に走り、多重起動ガードが早く外れるのを防ぐ）。
+    if (!recordingStarted) return
 
     // postRoll の余韻録音 → recorder.stop() → onstop で chunks 確定。
     // recorder.onstop は stop() 呼び出し後に発火するので、stop 前に仕掛けて OK。
@@ -289,7 +319,7 @@ export async function exportVideo(
       cleanup()
       settleResolve(performance.now() - startedAt)
     }
-    finalizeTimer = setTimeout(() => {
+    setTimeout(() => {
       try {
         if (recorder.state !== 'inactive') {
           recorder.stop()
@@ -369,14 +399,12 @@ export async function exportVideo(
     failIfStopped()
   } catch (e) {
     // 録画を始める前の失敗: 退避したリスナ・解像度・録画フラグ・isExporting を必ず戻す。
-    // 待ち中に終端検知で予約された finalize の timer は、後で cleanup を再実行して
-    // 次の export を壊さないようここで取り消す。
     stopped = true
-    if (finalizeTimer !== null) clearTimeout(finalizeTimer)
     cleanup()
     throw e instanceof Error ? e : new Error(String(e))
   }
 
+  recordingStarted = true
   startedAt = performance.now()
   recorder.start(1000) // 1 秒ごとに dataavailable。途中 error 時の partial 保存にも有効
   onProgress?.('録画開始')
