@@ -25,7 +25,9 @@ export function getAcrylicBaseTexture(params: AcrylicParams): AcrylicBaseTexture
     params.lineColor,
     params.lineAlpha,
   ].join('|')
-  if (cache.has(key)) return cache.get(key) ?? null
+  const hit = cache.get(key)
+  // 共有テクスチャが外部から破棄されていたら作り直す
+  if (hit && !hit.texture.destroyed) return hit
   const made = build(params)
   // 作れなかった（canvas 無し）場合はキャッシュしない: 環境が変わらない限り毎回すぐ null になるだけ
   if (made) cache.set(key, made)

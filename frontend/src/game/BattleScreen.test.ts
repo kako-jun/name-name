@@ -1416,16 +1416,62 @@ describe('BattleScreen: acrylic (#737)', () => {
       }
     })
 
-    it('成功後の destroy で板（テクスチャごと）が破棄され、view の参照は null になる (#760)', async () => {
+    it('成功後の destroy で板・影のテクスチャが TextureSource ごと破棄され、view の参照は null になる (#760)', async () => {
       okLoad()
+      const plateTex = sizedTexture(TEX_W + 16, TEX_H + 16)
+      const shadowTex = sizedTexture(TEX_W + 16, TEX_H + 16)
+      vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation((() => ({
+        texture: plateTex,
+        pad: 8,
+        shadow: shadowTex,
+        foot: { x: 8, y: 8 },
+      })) as never)
       const s = make([entity('hero')], [withSprite('slime')], acrylic)
       await flushPromises()
       const v = internals(s).enemyViews[0]
-      const plate = v.acrylicPlate!
-      const destroy = vi.spyOn(plate, 'destroy')
+      const plateSrc = plateTex.source
+      const shadowSrc = shadowTex.source
+      expect(plateSrc.destroyed).toBe(false)
+      expect(shadowSrc.destroyed).toBe(false)
       s.destroy({ children: true })
-      expect(destroy).toHaveBeenCalledWith({ texture: true })
+      // TextureSource（GPU・canvas）ごと解放される
+      expect(plateSrc.destroyed).toBe(true)
+      expect(shadowSrc.destroyed).toBe(true)
       expect(v.acrylicPlate).toBeNull()
+      expect(v.acrylicShadow).toBeNull()
+    })
+
+    it('同じ画像の敵が複数いても板・影は 1 組だけ作って共有し、destroy で 1 回だけ解放する (#760)', async () => {
+      okLoad()
+      const make1 = vi
+        .spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate')
+        .mockImplementation((() => ({
+          texture: sizedTexture(TEX_W + 16, TEX_H + 16),
+          pad: 8,
+        })) as never)
+      const s = make(
+        [entity('hero')],
+        [withSprite('slime'), withSprite('slime'), withSprite('slime')],
+        acrylic
+      )
+      await flushPromises()
+      expect(make1).toHaveBeenCalledTimes(1)
+      const views = internals(s).enemyViews
+      expect(new Set(views.map((v) => v.acrylicPlate!.texture)).size).toBe(1)
+      expect(new Set(views.map((v) => v.acrylicPlate)).size).toBe(3)
+      const src = views[0].acrylicPlate!.texture.source
+      s.destroy({ children: true })
+      expect(src.destroyed).toBe(true)
+    })
+
+    it('destroy は Assets のスプライトのテクスチャを壊さない (#760)', async () => {
+      const t = sizedTexture(TEX_W, TEX_H)
+      const src = t.source
+      vi.spyOn(Assets, 'load').mockResolvedValue(t as never)
+      const s = make([entity('hero')], [withSprite('slime')], acrylic)
+      await flushPromises()
+      s.destroy({ children: true })
+      expect(src.destroyed).toBe(false)
     })
   })
 })
@@ -2573,6 +2619,7 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
       expect(views).toHaveLength(5)
       expect(new Set(views.map((v) => v.acrylicBase)).size).toBe(5)
       for (const v of views) expect(v.acrylicBase!.texture).toBe(baseTex)
+      // 画像（パス）が別なら板・影のテクスチャも別（同じ画像の共有は別テストで確認）
       expect(new Set(views.map((v) => v.acrylicPlate!.texture)).size).toBe(5)
       expect(new Set(views.map((v) => v.acrylicShadow!.texture)).size).toBe(5)
       expect(new Set(views.map((v) => v.acrylicShadow)).size).toBe(5)
@@ -2596,9 +2643,11 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
       const v = internals(s).enemyViews[0]
       const plateTex = v.acrylicPlate!.texture
       const shadowTex = v.acrylicShadow!.texture
-      const shadowDestroy = vi.spyOn(v.acrylicShadow!, 'destroy')
+      const shadowSrc = shadowTex.source
+      const plateSrc = plateTex.source
       s.destroy({ children: true })
-      expect(shadowDestroy).toHaveBeenCalledWith({ texture: true })
+      expect(plateSrc.destroyed).toBe(true)
+      expect(shadowSrc.destroyed).toBe(true)
       expect(plateTex.destroyed).toBe(true)
       expect(shadowTex.destroyed).toBe(true)
       expect(baseTex.destroyed).toBe(false)

@@ -320,6 +320,8 @@ export class BattleScreen extends Container {
   private dofLevels: DofLevelView[] = []
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
+  /** 板・影のテクスチャを tex.source ごとに共有するキャッシュ (#760)。destroy で解放 */
+  private plateCache = new Map<unknown, AcrylicPlate | null>()
   /** 戦闘ログのタイプ表示 (#755)。`off` のとき tracker / ticker は使わない */
   private logTypewriter: BattleLogTypewriterMode
   private logTracker: BattleLogTracker = makeBattleLogTracker()
@@ -431,15 +433,36 @@ export class BattleScreen extends Container {
     return this.acrylicParams ? createAcrylicPlateTexture(tex, this.acrylicParams) : null
   }
 
+  /**
+   * 同じ画像（tex.source 単位）の板・影は 1 回だけ作って共有する (#760)。同じ敵が複数いても生成と GPU メモリは 1 組。
+   * 作れなかった（null）結果も覚えて、同じ画像で作り直さない。解放は destroy でまとめて行う。
+   */
+  private getAcrylicPlate(tex: Texture): AcrylicPlate | null {
+    const key = tex.source
+    if (this.plateCache.has(key)) return this.plateCache.get(key) ?? null
+    const plate = this.makeAcrylicPlate(tex)
+    this.plateCache.set(key, plate)
+    return plate
+  }
+
+  /**
+   * 破棄する。板・影のテクスチャは画面が自前で作ったものなので、TextureSource ごと（GPU・canvas）ここで解放する
+   * （Sprite.destroy({texture:true}) は v8 で source を解放しない）。`options` に `texture` は付けないこと:
+   * 台座は全画面で共有するキャッシュ、スプライト・背景・前景は Assets のキャッシュのテクスチャで、壊すと他で使えなくなる。
+   */
   override destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.destroyedFlag = true
-    // 板のテクスチャは自前で作ったものなので自分で破棄する (#760)
     for (const v of [...this.enemyViews, ...this.partyViews]) {
-      v.acrylicPlate?.destroy({ texture: true })
-      v.acrylicShadow?.destroy({ texture: true })
+      v.acrylicPlate?.destroy()
+      v.acrylicShadow?.destroy()
       v.acrylicShadow = null
       v.acrylicPlate = null
     }
+    for (const plate of this.plateCache.values()) {
+      plate?.texture.destroy(true)
+      plate?.shadow?.destroy(true)
+    }
+    this.plateCache.clear()
     this.backgroundToneFilter?.destroy()
     this.backgroundToneFilter = null
     this.disposeBackgroundDof()
@@ -721,7 +744,7 @@ export class BattleScreen extends Container {
           view.acrylicBaseLayout = base.layout
           view.container.addChildAt(view.acrylicBase, idx++)
         }
-        const plate = this.makeAcrylicPlate(tex)
+        const plate = this.getAcrylicPlate(tex)
         if (plate) {
           const plateSprite = new Sprite(plate.texture)
           view.acrylicPlate = plateSprite
