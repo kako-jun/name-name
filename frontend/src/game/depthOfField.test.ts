@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   DOF_DEFAULT_PARAMS,
+  DOF_LEVEL_COUNT,
   computeDofGradient,
+  computeDofLevels,
   dofAlphaAt,
   dofMaskStops,
   normalizeBackgroundDof,
@@ -79,5 +81,37 @@ describe('dofAlphaAt / dofMaskStops', () => {
       { offset: 0.5, alpha: 1 },
       { offset: 1, alpha: 1 },
     ])
+  })
+})
+
+describe('computeDofLevels (#753)', () => {
+  it('段数ぶん・強さは弱→強で最後が最大・マスクの 0→1 区間が隣接して下端まで続く', () => {
+    const lv = computeDofLevels(1000)
+    const { startRatio, gradientRatio, maxBlurStrength } = DOF_DEFAULT_PARAMS
+    expect(lv).toHaveLength(DOF_LEVEL_COUNT)
+    expect(lv[0].startY).toBeCloseTo(1000 * startRatio)
+    expect(lv[lv.length - 1].blurStrength).toBeCloseTo(maxBlurStrength)
+    for (let k = 1; k < lv.length; k++) {
+      expect(lv[k].blurStrength).toBeGreaterThan(lv[k - 1].blurStrength)
+      // 段 k-1 が 1 になる位置 = 段 k が立ち上がり始める位置
+      const prevFull = lv[k - 1].startY + lv[k - 1].maskHeight * lv[k - 1].rampFraction
+      expect(lv[k].startY).toBeCloseTo(prevFull)
+    }
+    const last = lv[lv.length - 1]
+    expect(last.startY + last.maskHeight * last.rampFraction).toBeCloseTo(
+      1000 * (startRatio + gradientRatio)
+    )
+  })
+  it('異常値でも NaN にならない', () => {
+    for (const l of computeDofLevels(
+      0,
+      { startRatio: 1, gradientRatio: 0, maxBlurStrength: NaN },
+      0
+    )) {
+      expect(Number.isFinite(l.startY + l.maskHeight + l.rampFraction + l.blurStrength)).toBe(true)
+    }
+  })
+  it('最大ぼかしは下端で明らかに見える強さ', () => {
+    expect(DOF_DEFAULT_PARAMS.maxBlurStrength).toBeGreaterThanOrEqual(16)
   })
 })

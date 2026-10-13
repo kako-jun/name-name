@@ -16,6 +16,7 @@ import {
   type Text,
   Text as PixiText,
 } from 'pixi.js'
+import { DOF_LEVEL_COUNT, DOF_MAX_BLUR_STRENGTH } from './depthOfField'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
@@ -192,6 +193,54 @@ describe('BattleScreen: 背景画像', () => {
     resolve(mockTexture())
     await flushPromises()
     expect(internals(s).backgroundSprite).toBeNull()
+  })
+})
+
+describe('BattleScreen: 被写界深度 (#753)', () => {
+  const dofLevels = (s: BattleScreen) =>
+    (s as unknown as { dofLevels: { sprite: Sprite; mask: Sprite }[] }).dofLevels
+
+  it('on: 段数ぶんのぼかしコピー+マスクが背景の直上に弱→強の順で並ぶ（背面に隠れない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    const i = internals(s)
+    const lv = dofLevels(s)
+    expect(lv).toHaveLength(DOF_LEVEL_COUNT)
+    expect(i.children[0]).toBe(i.backgroundSprite)
+    lv.forEach((l, k) => {
+      expect(i.children[1 + k * 2]).toBe(l.sprite)
+      expect(i.children[2 + k * 2]).toBe(l.mask)
+      expect(l.sprite.visible).toBe(true)
+      expect(l.sprite.width).toBeCloseTo(i.backgroundSprite!.width)
+    })
+    const strengths = lv.map(
+      (l) => (l.sprite.filters as unknown as { strength: number }[]).slice(-1)[0].strength
+    )
+    expect(strengths[strengths.length - 1]).toBeCloseTo(DOF_MAX_BLUR_STRENGTH)
+    expect([...strengths].sort((a, b) => a - b)).toEqual(strengths)
+    expect(new Set(strengths).size).toBe(DOF_LEVEL_COUNT)
+  })
+
+  it('redraw を繰り返しても段は積み増さない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    s.redraw(300, 200)
+    s.redraw(320, 240)
+    expect(dofLevels(s)).toHaveLength(DOF_LEVEL_COUNT)
+    expect(internals(s).children.length).toBeLessThan(40)
+  })
+
+  it('off なら段を作らない', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(make([entity('hero')], [entity('slime')], { background: 'bg/a.webp' }))
+    await flushPromises()
+    expect(dofLevels(s)).toHaveLength(0)
   })
 })
 

@@ -82,7 +82,9 @@ import {
 } from './backgroundTone'
 import {
   DOF_MASK_TEXTURE_HEIGHT,
-  computeDofGradient,
+  DOF_DEFAULT_PARAMS,
+  DOF_LEVEL_COUNT,
+  computeDofLevels,
   dofMaskStops,
   type BackgroundDof,
 } from './depthOfField'
@@ -145,6 +147,17 @@ const TEXT_STYLE_HP = new TextStyle({
 })
 
 type CommandId = 'attack' | 'spell' | 'item' | 'escape'
+
+/** 被写界深度の 1 段（ぼかしコピーとそのマスク）(#753) */
+interface DofLevelView {
+  sprite: Sprite
+  mask: Sprite
+  blur: BlurFilter
+  /** 自前生成なので自分で破棄する */
+  maskTexture: Texture | null
+  /** マスクテクスチャを作ったときの立ち上がり割合 */
+  maskRamp: number
+}
 
 interface CommandButton {
   id: CommandId
@@ -220,13 +233,8 @@ export class BattleScreen extends Container {
   private backgroundToneFilter: ColorMatrixFilter | null = null
   /** 背景の被写界深度風ぼかし (#753) */
   private backgroundDof: BackgroundDof
-  /** 背景と同じテクスチャのぼかしコピー（テクスチャは共有）と、その縦グラデーションアルファマスク */
-  private dofSprite: Sprite | null = null
-  private dofMask: Sprite | null = null
-  private dofBlur: BlurFilter | null = null
-  /** マスクのグラデーションテクスチャ（自前生成なので自分で破棄する）と、それを作ったときの立ち上がり割合 */
-  private dofMaskTexture: Texture | null = null
-  private dofMaskRamp = -1
+  /** 背景と同じテクスチャのぼかしコピー（テクスチャは共有）を強さ別に重ねた段。各段に縦グラデーションのアルファマスクを持つ */
+  private dofLevels: DofLevelView[] = []
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
   private backgroundSprite: Sprite | null = null
@@ -345,66 +353,62 @@ export class BattleScreen extends Container {
   }
 
   /**
-   * 背景の手前ぼかし (#753)。背景と同じテクスチャのコピー（BlurFilter）を背景の直上に置き、縦グラデーションの
-   * アルファマスクで下側だけ見せる。コピーは Sprite の mask（alpha チャンネル）で切るので、アルファの勾配がそのまま効く。
-   * 背景が差し替わっても積み増さないよう、先に前回分を破棄する。`off` のときは何も作らない。
+   * 背景の手前ぼかし (#753)。背景と同じテクスチャのぼかしコピーを、強さを段階的に変えて DOF_LEVEL_COUNT 枚、
+   * 背景の直上へ重ねる（可変半径ガウスの近似）。各段は縦グラデーションのアルファマスク（alpha チャンネル）で
+   * 受け持つ帯だけ見せる。背景が差し替わっても積み増さないよう、先に前回分を破棄する。`off` のときは何も作らない。
    */
   private applyBackgroundDof(bg: Sprite): void {
     this.disposeBackgroundDof()
     if (this.backgroundDof === 'off') return
-    const copy = new Sprite(bg.texture)
-    const blur = new BlurFilter({ strength: 0 })
-    blur.repeatEdgePixels = true
-    copy.filters = this.backgroundToneFilter ? [this.backgroundToneFilter, blur] : [blur]
-    const mask = new Sprite()
-    this.dofSprite = copy
-    this.dofMask = mask
-    this.dofBlur = blur
-    this.addChildAt(copy, 1)
-    this.addChildAt(mask, 2)
-    copy.setMask({ mask, channel: 'alpha' })
+    let index = 1
+    for (let i = 0; i < DOF_LEVEL_COUNT; i++) {
+      const copy = new Sprite(bg.texture)
+      const blur = new BlurFilter({ strength: 0 })
+      blur.repeatEdgePixels = true
+      copy.filters = this.backgroundToneFilter ? [this.backgroundToneFilter, blur] : [blur]
+      const mask = new Sprite()
+      this.addChildAt(copy, index++)
+      this.addChildAt(mask, index++)
+      copy.setMask({ mask, channel: 'alpha' })
+      this.dofLevels.push({ sprite: copy, mask, blur, maskTexture: null, maskRamp: -1 })
+    }
   }
 
   /** ぼかしコピー・マスク・フィルタ・マスクのテクスチャを解放する（共有している背景テクスチャは壊さない） */
   private disposeBackgroundDof(): void {
-    if (this.dofSprite) {
-      this.dofSprite.setMask({ mask: null })
-      this.dofSprite.filters = null
-      this.dofSprite.destroy()
+    for (const lv of this.dofLevels) {
+      lv.sprite.filters = null
+      lv.sprite.destroy()
+      lv.mask.destroy()
+      lv.blur.destroy()
+      lv.maskTexture?.destroy(true)
     }
-    this.dofMask?.destroy()
-    this.dofBlur?.destroy()
-    this.dofMaskTexture?.destroy(true)
-    this.dofSprite = null
-    this.dofMask = null
-    this.dofBlur = null
-    this.dofMaskTexture = null
-    this.dofMaskRamp = -1
+    this.dofLevels = []
   }
 
-  /** 画面サイズに合わせてぼかしコピー・マスクの位置と強さを更新する。立ち上がり割合が変わったときだけマスクの絵を作り直す */
+  /** 画面サイズに合わせて各段の位置・強さを更新する。立ち上がり割合が変わった段だけマスクの絵を作り直す */
   private layoutBackgroundDof(bg: Sprite, W: number, H: number): void {
-    const copy = this.dofSprite
-    const mask = this.dofMask
-    const blur = this.dofBlur
-    if (!copy || !mask || !blur) return
-    const g = computeDofGradient(H)
-    copy.position.copyFrom(bg.position)
-    copy.width = bg.width
-    copy.height = bg.height
-    blur.strength = g.blurStrength
-    if (Math.abs(g.rampFraction - this.dofMaskRamp) > 1e-4 || !this.dofMaskTexture) {
-      const tex = this.createDofMaskTexture(g.rampFraction)
-      if (tex) {
-        this.dofMaskTexture?.destroy(true)
-        this.dofMaskTexture = tex
-        this.dofMaskRamp = g.rampFraction
-        mask.texture = tex
+    if (this.dofLevels.length === 0) return
+    const gs = computeDofLevels(H, DOF_DEFAULT_PARAMS, this.dofLevels.length)
+    this.dofLevels.forEach((lv, i) => {
+      const g = gs[i]
+      lv.sprite.position.copyFrom(bg.position)
+      lv.sprite.width = bg.width
+      lv.sprite.height = bg.height
+      lv.blur.strength = g.blurStrength
+      if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4 || !lv.maskTexture) {
+        const tex = this.createDofMaskTexture(g.rampFraction)
+        if (tex) {
+          lv.maskTexture?.destroy(true)
+          lv.maskTexture = tex
+          lv.maskRamp = g.rampFraction
+          lv.mask.texture = tex
+        }
       }
-    }
-    mask.position.set(0, g.startY)
-    mask.width = W
-    mask.height = g.maskHeight
+      lv.mask.position.set(0, g.startY)
+      lv.mask.width = W
+      lv.mask.height = g.maskHeight
+    })
   }
 
   /** 縦にアルファが 0 → 1 に立ち上がる 1 x N の canvas テクスチャを作る。canvas が使えない環境では null（ぼかし無しで続行） */

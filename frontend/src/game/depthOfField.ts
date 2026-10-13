@@ -18,7 +18,13 @@ export const DOF_START_RATIO = 0.5
 /** ぼかしが最大に達するまでのグラデーション幅（画面高さの割合）。開始位置からこの幅で 0 → 最大へ。目視で調整する値 */
 export const DOF_GRADIENT_RATIO = 0.5
 /** 最大のぼかしの強さ（PixiJS BlurFilter の strength）。目視で調整する値 */
-export const DOF_MAX_BLUR_STRENGTH = 6
+export const DOF_MAX_BLUR_STRENGTH = 18
+
+/**
+ * ぼかしコピーの段数。強さの異なるコピーを重ねて、可変半径ガウスぼかしを近似する（段が多いほど滑らか、重い）。
+ * 段 k（1..N）の強さは max * k / N。段 k のマスクは勾配の (k-1)/N 地点で 0、k/N 地点で 1 になり、以降は 1。
+ */
+export const DOF_LEVEL_COUNT = 4
 
 /** マスク用グラデーションテクスチャの縦解像度（px）。1 x この値の canvas を縦に引き伸ばして使う */
 export const DOF_MASK_TEXTURE_HEIGHT = 256
@@ -76,6 +82,35 @@ export function computeDofGradient(
     rampFraction: Math.min(1, rampFraction),
     blurStrength: Number.isNaN(params.maxBlurStrength) ? 0 : Math.max(0, params.maxBlurStrength),
   }
+}
+
+/**
+ * 段ごとの配置を求める（上の段＝弱い → 下の段＝強い）。各要素は `computeDofGradient` と同じ形で、
+ * startY はその段のマスクが 0 から立ち上がり始める位置。最後の段は勾配の終端（下端側）で 1 になり、最大の強さ。
+ */
+export function computeDofLevels(
+  screenHeight: number,
+  params: DofParams = DOF_DEFAULT_PARAMS,
+  levelCount: number = DOF_LEVEL_COUNT
+): DofGradient[] {
+  const H = Math.max(0, screenHeight)
+  const n = Math.max(1, Math.floor(levelCount) || 1)
+  const start = clamp01(params.startRatio)
+  const ramp = Math.min(clamp01(params.gradientRatio), 1 - start)
+  const step = ramp / n
+  const max = Number.isNaN(params.maxBlurStrength) ? 0 : Math.max(0, params.maxBlurStrength)
+  const levels: DofGradient[] = []
+  for (let k = 1; k <= n; k++) {
+    const levelStart = start + step * (k - 1)
+    const maskHeight = H * (1 - levelStart)
+    levels.push({
+      startY: H * levelStart,
+      maskHeight,
+      rampFraction: maskHeight > 0 ? Math.min(1, Math.max(step / (1 - levelStart), 1e-3)) : 1,
+      blurStrength: (max * k) / n,
+    })
+  }
+  return levels
 }
 
 /** マスク領域内の縦位置 t（0 = 上端、1 = 下端）でのアルファ。ramp までは 0 → 1 の線形、以降は 1 */
