@@ -25,6 +25,11 @@ import {
   type VideoExportOptions,
 } from '../game/VideoExporter'
 import VideoExportModal from '../components/VideoExportModal'
+import {
+  flattenDocumentScenes,
+  buildSceneIndex,
+  resolveMissingSceneAcrossDocs,
+} from '../game/crossFileScenes'
 
 // kako-jun/name-name#107: 旧 FastAPI モデルでは autosave 1s debounce で
 // ワーキングディレクトリに PUT し、commit ボタンで Git push していた。
@@ -73,15 +78,6 @@ function flattenDocumentEvents(doc: EventDocument): Event[] {
     }
   }
   return events
-}
-
-/**
- * EventDocument の全章の全シーンをフラット化する（NovelPlayer の `jumpSceneIndex` 用、PlayerScreen と同形）。
- * 再生ストリーム（`events`）とは別建てのシーン索引で、これが無いと renderer.allScenes が空のままになり、
- * 選択肢ジャンプも動画書き出しの `startFrom({ sceneId })` もシーンを引き当てられない (#734)。
- */
-function flattenDocumentScenes(doc: EventDocument): EventScene[] {
-  return doc.chapters.flatMap((chapter) => chapter.scenes)
 }
 
 function EditorScreen({
@@ -583,7 +579,111 @@ function EditorScreen({
   // プレイモード用のフラット Event[]
   const novelEvents = useMemo(() => (doc ? flattenDocumentEvents(doc) : []), [doc])
   // シーン索引。doc が変わる（ライブ再パース）たびに作り直し、NovelPlayer の jumpSceneIndex 用 effect が反映する。
-  const novelScenes = useMemo(() => (doc ? flattenDocumentScenes(doc) : []), [doc])
+  const currentDocScenes = useMemo(() => (doc ? flattenDocumentScenes(doc) : []), [doc])
+
+  // 他の MD のシーンへ飛ぶ [ジャンプ:]・選択肢をプレビューで効かせる遅延ロード (#778)。
+  // 遅延ロードの規則は PlayerScreen と共通（game/crossFileScenes.ts）。取得元だけがエディタ固有:
+  //   - 編集中の文書: 常に最新の doc state（未保存の編集を含む）。キャッシュに入れない
+  //   - 他タブの文書: そのタブの未保存の下書き（localStorage）があればそれ、無ければ develop の内容
+  // 取得済みの他文書はタブ切替・プロジェクト切替で捨てる（古い下書き/サーバ版を残さない）。
+  const docRef = useRef<EventDocument | null>(null)
+  docRef.current = doc
+  const loadedOtherDocsRef = useRef<Map<string, EventDocument>>(new Map())
+  const loadingOtherDocsRef = useRef<Map<string, Promise<EventDocument | null>>>(new Map())
+  const otherDocsEpochRef = useRef(0)
+  const sortedScriptPathsRef = useRef<string[]>([])
+  const currentScriptPathRef = useRef(currentScriptPath)
+  currentScriptPathRef.current = currentScriptPath
+  const [lazyOtherScenes, setLazyOtherScenes] = useState<EventScene[]>([])
+  const sortedScriptPaths = useMemo(() => {
+    const paths = availableScripts.map((s) => s.path).sort()
+    return paths.includes(currentScriptPath) ? paths : [currentScriptPath, ...paths]
+  }, [availableScripts, currentScriptPath])
+  sortedScriptPathsRef.current = sortedScriptPaths
+
+  useEffect(() => {
+    otherDocsEpochRef.current++
+    loadedOtherDocsRef.current = new Map()
+    loadingOtherDocsRef.current = new Map()
+    setLazyOtherScenes([])
+  }, [api, projectName, currentScriptPath])
+
+  const loadOtherDoc = useCallback(
+    (path: string): Promise<EventDocument | null> => {
+      const cached = loadedOtherDocsRef.current.get(path)
+      if (cached) return Promise.resolve(cached)
+      const inFlight = loadingOtherDocsRef.current.get(path)
+      if (inFlight) return inFlight
+      const epoch = otherDocsEpochRef.current
+      const loading = loadingOtherDocsRef.current
+      const promise = (async () => {
+        let draft: string | null = null
+        try {
+          draft = localStorage.getItem(localStorageKey(projectName, path))
+        } catch {
+          draft = null
+        }
+        let markdown: string
+        if (draft !== null && draft !== '') {
+          markdown = draft
+        } else {
+          const data = await api.getContents(projectName, path, DEFAULT_BRANCH)
+          markdown = data.content || ''
+        }
+        const parsed = await parseMarkdown(markdown)
+        // タブ切替・プロジェクト切替をまたいだ古い取得結果は捨てる
+        if (otherDocsEpochRef.current === epoch) loadedOtherDocsRef.current.set(path, parsed)
+        return parsed
+      })()
+        .catch((err) => {
+          console.warn(`[EditorScreen] failed to load script ${path}:`, err)
+          return null
+        })
+        .finally(() => {
+          if (loading.get(path) === promise) loading.delete(path)
+        })
+      loading.set(path, promise)
+      return promise
+    },
+    [api, projectName]
+  )
+
+  const resolveMissingScene = useCallback(
+    (sceneId: string): Promise<EventScene[] | null> => {
+      const entryPath = currentScriptPathRef.current
+      const epoch = otherDocsEpochRef.current
+      // 編集中の文書は最新の doc state を差し込んだ作業用 Map で引く（キャッシュ本体には入れない）
+      const docs = new Map(loadedOtherDocsRef.current)
+      if (docRef.current) docs.set(entryPath, docRef.current)
+      return resolveMissingSceneAcrossDocs({
+        sceneId,
+        entryPath,
+        sortedPaths: sortedScriptPathsRef.current,
+        docs,
+        loadDoc: async (path) => {
+          const loaded = await loadOtherDoc(path)
+          if (loaded) docs.set(path, loaded)
+          return loaded
+        },
+        onIndexUpdated: () => {
+          // 索引（jumpSceneIndex）にも反映する。編集中文書は含めない（currentDocScenes が別建て）。
+          if (otherDocsEpochRef.current !== epoch) return
+          setLazyOtherScenes(
+            buildSceneIndex(null, sortedScriptPathsRef.current, loadedOtherDocsRef.current)
+          )
+        },
+      })
+    },
+    [loadOtherDoc]
+  )
+
+  // jumpSceneIndex: 編集中の文書（ライブ再パース）+ 遅延ロード済みの他文書。
+  // doc の編集で currentDocScenes が変わっても、取得済みの他文書の索引は残る。
+  const novelScenes = useMemo(
+    () =>
+      lazyOtherScenes.length === 0 ? currentDocScenes : [...currentDocScenes, ...lazyOtherScenes],
+    [currentDocScenes, lazyOtherScenes]
+  )
 
   return (
     // #239: 漫画家の机テーマ。エディタ全体に desk-paper 紙テクスチャを敷く。
@@ -760,6 +860,7 @@ function EditorScreen({
               <NovelPlayer
                 events={novelEvents}
                 jumpSceneIndex={novelScenes}
+                onResolveMissingScene={resolveMissingScene}
                 aspectRatio={doc?.aspect_ratio}
                 choiceStyle={doc?.choice_style ?? null}
                 fontFamily={doc?.font_family ?? null}
