@@ -43,6 +43,7 @@ import {
   Text as PixiText,
   TextStyle,
   Texture,
+  Ticker,
 } from 'pixi.js'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
@@ -92,6 +93,17 @@ import {
   dofMaskStops,
   type BackgroundDof,
 } from './depthOfField'
+import {
+  BATTLE_LOG_MS_PER_CHAR,
+  isBattleLogTyping,
+  makeBattleLogTracker,
+  skipBattleLog,
+  syncBattleLog,
+  tickBattleLog,
+  visibleBattleLogTail,
+  type BattleLogTracker,
+  type BattleLogTypewriterMode,
+} from './battleLogTypewriter'
 
 const BG_DIM_ALPHA = 0.55
 const PANEL_BG = 0x000000
@@ -204,6 +216,12 @@ export interface BattleScreenOptions {
    * 背景スプライトにだけかかり、キャラ・敵・パネル・テキストには影響しない。背景なしのときは無関係。
    */
   backgroundDof?: BackgroundDof
+  /**
+   * 戦闘ログの新しい行を 1 文字ずつ表示するか (#755)。`on` = 新しく積まれた行だけをタイプ表示（表示済みの行は即時）、
+   * `off`（既定）= 従来どおり即時表示。`on` のときタイプ中にコマンド／ログをタップすると、まず全文を即時表示する
+   * （その 1 タップではコマンドは実行しない。DialogBox の「タップで全文表示→もう一度で進む」と同じ流儀）。
+   */
+  logTypewriter?: BattleLogTypewriterMode
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -242,6 +260,10 @@ export class BattleScreen extends Container {
   private dofLevels: DofLevelView[] = []
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
+  /** 戦闘ログのタイプ表示 (#755)。`off` のとき tracker / ticker は使わない */
+  private logTypewriter: BattleLogTypewriterMode
+  private logTracker: BattleLogTracker = makeBattleLogTracker()
+  private logTicker: Ticker | null = null
   private backgroundSprite: Sprite | null = null
   private enemyViews: EntityView[] = []
   private partyViews: EntityView[] = []
@@ -286,6 +308,7 @@ export class BattleScreen extends Container {
     this.windowStyle = opts.windowStyle === 'ff-blue' ? 'ff-blue' : 'dark'
     this.backgroundTone = opts.backgroundTone === 'off' ? 'off' : 'on'
     this.backgroundDof = opts.backgroundDof === 'on' ? 'on' : 'off'
+    this.logTypewriter = opts.logTypewriter === 'on' ? 'on' : 'off'
     this.acrylicParams =
       this.spriteStyle === 'acrylic' ? resolveAcrylicParams(opts.spriteStyleParams) : null
 
@@ -304,6 +327,11 @@ export class BattleScreen extends Container {
     this.addChild(this.heroStatsText)
     this.addChild(this.commandPanel)
     this.addChild(this.logPanel)
+    if (this.logTypewriter === 'on') {
+      // ログ帯のタップでもタイプ中の行を即時表示できる (#755)
+      this.logPanel.eventMode = 'static'
+      this.logPanel.on('pointertap', () => this.skipLogTyping())
+    }
     this.buildCommandButtons()
     // front のログは固定 4 行。side は layoutSide が必要な行数だけ作る
     if (this.layoutMode === 'front') this.buildLogLines()
@@ -323,6 +351,7 @@ export class BattleScreen extends Container {
     this.backgroundToneFilter?.destroy()
     this.backgroundToneFilter = null
     this.disposeBackgroundDof()
+    this.disposeLogTicker()
     super.destroy(options)
   }
 
@@ -585,6 +614,8 @@ export class BattleScreen extends Container {
 
   /** UI からコマンドが選ばれたとき呼ばれる。エンジン側を進めて refresh */
   private handleCommand(id: CommandId): void {
+    // タイプ中の 1 タップ目は全文表示だけ（コマンドは実行しない）(#755)
+    if (this.skipLogTyping()) return
     if (this.engine.isOver()) return
     switch (id) {
       case 'attack':
@@ -923,6 +954,47 @@ export class BattleScreen extends Container {
     }
   }
 
+  /** タイプ表示 (#755): tracker の表示分をログ行へ反映する */
+  private updateLogTexts(): void {
+    const tail = visibleBattleLogTail(this.logTracker, this.visibleLogLines)
+    for (let i = 0; i < this.logLines.length; i++) {
+      this.logLines[i].text = tail[i] ?? ''
+    }
+  }
+
+  /** タイプ中だけ ticker を回し、終われば止める (#755) */
+  private syncLogTicker(): void {
+    if (this.destroyedFlag) return
+    if (isBattleLogTyping(this.logTracker)) {
+      if (!this.logTicker) {
+        const ticker = new Ticker()
+        ticker.add(() => {
+          this.logTracker = tickBattleLog(this.logTracker, ticker.deltaMS, BATTLE_LOG_MS_PER_CHAR)
+          this.updateLogTexts()
+          if (!isBattleLogTyping(this.logTracker)) this.logTicker?.stop()
+        })
+        this.logTicker = ticker
+      }
+      if (!this.logTicker.started) this.logTicker.start()
+    } else {
+      this.logTicker?.stop()
+    }
+  }
+
+  private disposeLogTicker(): void {
+    this.logTicker?.destroy()
+    this.logTicker = null
+  }
+
+  /** タイプ中なら全文を即時表示する。表示を進めたら true (#755) */
+  private skipLogTyping(): boolean {
+    if (this.logTypewriter !== 'on' || !isBattleLogTyping(this.logTracker)) return false
+    this.logTracker = skipBattleLog(this.logTracker)
+    this.updateLogTexts()
+    this.syncLogTicker()
+    return true
+  }
+
   /** エンジン状態を読み取り、テキストを更新する */
   private refresh(): void {
     const s = this.engine.getState()
@@ -939,9 +1011,15 @@ export class BattleScreen extends Container {
       this.heroStatsText.style.fill = hero.hp > 0 ? TEXT_COLOR : 0x888888
     }
     // ログ末尾 visibleLogLines 件（front は LOG_VISIBLE_LINES、side は layoutSide が決めた行数）
-    const tail = s.log.slice(-this.visibleLogLines)
-    for (let i = 0; i < this.logLines.length; i++) {
-      this.logLines[i].text = tail[i] ?? ''
+    if (this.logTypewriter === 'on') {
+      this.logTracker = syncBattleLog(this.logTracker, s.log)
+      this.updateLogTexts()
+      this.syncLogTicker()
+    } else {
+      const tail = s.log.slice(-this.visibleLogLines)
+      for (let i = 0; i < this.logLines.length; i++) {
+        this.logLines[i].text = tail[i] ?? ''
+      }
     }
     // 暫定: コマンド入力不可なら見た目で示す（alpha 半分）
     const inputEnabled = s.phase === 'party-input'

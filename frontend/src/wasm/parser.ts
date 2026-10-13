@@ -43,7 +43,7 @@ async function ensureInit(): Promise<void> {
  * 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。
  *
  * 適用範囲: ランタイム側で「指定なし」と「明示的に空文字を指定」を区別する必要がない
- * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`)。
+ * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`, `battle_log_typewriter`)。
  * 必須テキスト系（`character`, `text`, `path`）には適用しない — それらは空文字も意味のある値。
  */
 function nullIfEmpty(s: string | null | undefined): string | null {
@@ -411,6 +411,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     battle_background_tone: nullIfEmpty(doc.battle_background_tone),
     // 戦闘背景の被写界深度風ぼかし (#753)。同上。
     battle_background_dof: nullIfEmpty(doc.battle_background_dof),
+    // 戦闘ログの 1 文字ずつ表示 (#755)。同上。
+    battle_log_typewriter: nullIfEmpty(doc.battle_log_typewriter),
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

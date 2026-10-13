@@ -1634,3 +1634,19 @@ describe('rpgProjectFromDoc: battle_background_tone (#753)', () => {
     expect(q.battleBackgroundTone).toBe('on')
   })
 })
+
+describe('rpgProjectFromDoc: battle_log_typewriter (#755)', () => {
+  const withTw = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it("'on' → 'on'。未指定・null・空・未知値は 'off'", () => {
+    expect(rpgProjectFromDoc(withTw({ battle_log_typewriter: 'on' }))!.battleLogTypewriter).toBe(
+      'on'
+    )
+    expect(rpgProjectFromDoc(makeDoc())!.battleLogTypewriter).toBe('off')
+    for (const v of [null, '', 'foo']) {
+      expect(rpgProjectFromDoc(withTw({ battle_log_typewriter: v }))!.battleLogTypewriter).toBe(
+        'off'
+      )
+    }
+  })
+})

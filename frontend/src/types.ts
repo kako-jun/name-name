@@ -866,6 +866,10 @@ export interface EventDocument {
    *  null/undefined・未知値は `"off"` にフォールバック。GUI 専用（TUI は読まない）。
    *  frontmatter `battle_background_dof:` から流す。 */
   battle_background_dof?: string | null
+  /** RPG 戦闘ログの 1 文字ずつ表示 (#755)。`"on"` / `"off"`（既定）。
+   *  null/undefined・未知値は `"off"` にフォールバック。GUI 専用（TUI は読まない）。
+   *  frontmatter `battle_log_typewriter:` から流す。 */
+  battle_log_typewriter?: string | null
   chapters: EventChapter[]
 }
 

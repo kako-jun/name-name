@@ -2244,6 +2244,12 @@ describe('parseMarkdown + normalizeDocument: battle_background_tone / dof が no
     expect(doc.battle_background_dof).toBe('on')
   })
 
+  it('battle_log_typewriter: on → "on"、未指定 → null (#755)', async () => {
+    const doc = await parseMarkdown(docWith('battle_log_typewriter: on'))
+    expect(doc.battle_log_typewriter).toBe('on')
+    expect((await parseMarkdown(docWith())).battle_log_typewriter).toBeNull()
+  })
+
   it('未指定 → 両方 null（undefined ではない）', async () => {
     const doc = await parseMarkdown(docWith())
     expect(doc.battle_background_tone).toBeNull()
