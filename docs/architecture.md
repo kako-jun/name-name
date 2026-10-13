@@ -148,6 +148,20 @@ basename が `script.md`** のもの（無ければ先頭）を選ぶ。
 重複は warn）。なおエントリ doc のみが RPG 判定・`aspect_ratio`/`choice_style`/`font_family`/
 `font_size`/`dialog_style`/`protagonist` の供給元（サブ MD の RPG シーンは未対応）。
 
+**エディタのプレビューでのファイル横断ジャンプ（#778）**: エディタ（`EditorScreen`）のプレビューも、他の .md のシーンへの
+`[ジャンプ:]`・選択肢を `PlayerScreen` と同じ遅延ロードで解決する。遅延ロードの規則（sceneId から候補 MD を推定 →
+未ロード MD を順に取得 → 索引を作り直す）は `frontend/src/game/crossFileScenes.ts` の
+`resolveMissingSceneAcrossDocs` に切り出して両画面で共有する。取得元だけがエディタ固有で、次のとおり:
+
+- **編集中の文書**: 常に最新の `doc` state（未保存の編集を含む）。キャッシュには入れず、呼び出しごとに作業用 `Map` へ差し込む
+- **他タブの文書**: そのタブの未保存の下書き（`localStorage` の `name-name:editor-draft:{project}:{path}`）があればそれ、
+  無ければ **develop** ブランチの内容（エディタと同じ。`/play` は main）。パース結果はタブ切替・プロジェクト切替まで再利用し、切替で捨てる
+- **`jumpSceneIndex`**: 編集中の文書のシーン（ライブ再パースで更新）に、取得済みの他文書のシーンを後ろへ足した配列。
+  ライブ再パースしても取得済みの他文書の索引は残る。反映は索引 effect だけ（#671）で、再生ストリームは触らない
+- エントリは「いま編集中の文書」（`/play` の `script.md` 固定とは異なる）。`event_image_transition` のエントリ継承（#607）はエディタでは行わない
+- **動画書き出しの開始/終了シーン**（`VideoExportModal` の候補）は、今回は範囲外で自文書のシーンのみ（他文書から選べない）
+
+
 #### production 向けシーン直接ディープリンク `?scene=`（#386）
 
 `?scene=<sceneId>` は production ビルドでも常時有効な、特定シーンへの直接埋め込み用の入口。
@@ -485,6 +499,8 @@ interface NovelGameState {
 - 「背景等」は背景・背景板・大道具・幕・紙人形輪郭を指す。「立ち絵」は、進行では `clearForSceneTransition`（遷移用の退場）、それ以外では `clear`
 
 #### 経路と入場の種類
+
+G1・G2 はエディタのプレビュー（`EditorScreen`）でも同じ入口を通り、遅延ロードも `PlayerScreen` と同じ規則で解決する（#778。取得元は編集中の doc・他タブの下書き・develop。詳細は「マルチMD再生と遅延ロード」）。
 
 | 記号 | 経路 | 入口（現状） | 種類（あるべき） |
 |---|---|---|---|
