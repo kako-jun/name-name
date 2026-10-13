@@ -278,7 +278,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
-  // ===== D. 異常系: シーン未発見（フラグだけ復元 + warn） =====
+  // ===== D. 異常系: シーン未発見（位置・flags とも不変 + warn #765） =====
 
   it('14: 存在しない sceneId → warn が呼ばれる', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -288,14 +288,13 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     expect(warnSpy).toHaveBeenCalled()
   })
 
-  it('15: 存在しない sceneId でも flags は復元される（startFrom との差分）', () => {
+  it('15: 存在しない sceneId では flags も適用されない（位置・flags とも現状維持 #765）', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'a', flags: { prev: boolFlag(true) } })
     seedQuickSave(craftSave({ sceneId: 'ghost', flags: { restored: boolFlag(true) } }))
     r.quickLoad()
-    // loadFromSaveData はシーンが無くてもフラグだけは復元する（従来挙動の維持）
-    expect(r.getSnapshot().flags).toEqual({ restored: boolFlag(true) })
+    expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
   })
 
   it('16: 存在しない sceneId → currentSceneId は変化しない', () => {
@@ -530,22 +529,26 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     expect(r.getSnapshot().flags).toEqual({ seen: boolFlag(true) })
   })
 
-  it('11a: missingSceneResolver が無い場合、従来どおりフラグのみ復元され console.warn が呼ばれる', () => {
+  it('11a: missingSceneResolver が無い場合、flags は適用されず console.warn とトーストで通知される (#765)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     // resolver 未設定（makeRenderer は setMissingSceneResolver を呼ばない）。
     seedQuickSave(craftSave({ sceneId: 'ghost-no-resolver', flags: { restored: boolFlag(true) } }))
     const r = makeRenderer(SCENES)
-    r.startFrom({ sceneId: 'a' })
+    markInitialized(r)
+    r.startFrom({ sceneId: 'a', flags: { prev: boolFlag(true) } })
     const sceneBefore = r.getCurrentSceneId()
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
 
     expect(r.quickLoad()).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(r.getSnapshot().flags).toEqual({ restored: boolFlag(true) })
+    expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
     expect(r.getCurrentSceneId()).toBe(sceneBefore)
     expect(warnSpy).toHaveBeenCalled()
+    expect(toast).toHaveBeenCalledWith('ロードに失敗しました')
   })
 
-  it('11b: missingSceneResolver が解決に失敗（null を返す）した場合、フラグのみ復元され console.warn が呼ばれる', async () => {
+  it('11b: missingSceneResolver が解決に失敗（null を返す）した場合、flags は適用されず console.warn とトーストで通知される (#765)', async () => {
     const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
     const resolver = vi.fn(async () => null)
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -556,20 +559,46 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     r.setJumpSceneIndex(entryScenes)
     r.setMissingSceneResolver(resolver)
     markInitialized(r)
-    r.startFrom({ sceneId: 'entry-hub' })
+    r.startFrom({ sceneId: 'entry-hub', flags: { prev: boolFlag(true) } })
     const sceneBefore = r.getCurrentSceneId()
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
 
     seedQuickSave(craftSave({ sceneId: 'ghost-route', flags: { restored: boolFlag(true) } }))
     expect(r.quickLoad()).toBe(true)
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(resolver).toHaveBeenCalledWith('ghost-route')
-    expect(r.getSnapshot().flags).toEqual({ restored: boolFlag(true) })
+    expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
     expect(r.getCurrentSceneId()).toBe(sceneBefore)
     expect(warnSpy).toHaveBeenCalled()
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast).toHaveBeenCalledWith('ロードに失敗しました')
   })
 
-  it('11c: missingSceneResolver が例外を投げた場合でも、フラグのみ復元され console.warn が呼ばれる（例外を外に漏らさない）', async () => {
+  it('11d: resolver がシーンを返すが目的の sceneId が含まれない → flags は適用されずトーストで通知される (#765)', async () => {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const resolver = vi.fn(async () => [...entryScenes, scene('other-route', [narration('o')])])
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+    r.startFrom({ sceneId: 'entry-hub', flags: { prev: boolFlag(true) } })
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
+
+    seedQuickSave(craftSave({ sceneId: 'target-route', flags: { restored: boolFlag(true) } }))
+    expect(r.quickLoad()).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
+    expect(r.getCurrentSceneId()).toBe('entry-hub')
+    expect(toast).toHaveBeenCalledWith('ロードに失敗しました')
+  })
+
+  it('11c: missingSceneResolver が例外を投げた場合でも、flags は適用されず console.warn とトーストで通知される（例外を外に漏らさない）(#765)', async () => {
     const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
     const resolver = vi.fn(async () => {
       throw new Error('network error')
@@ -582,13 +611,16 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     r.setJumpSceneIndex(entryScenes)
     r.setMissingSceneResolver(resolver)
     markInitialized(r)
+    r.startFrom({ sceneId: 'entry-hub', flags: { prev: boolFlag(true) } })
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
 
     seedQuickSave(craftSave({ sceneId: 'ghost-route-2', flags: { y: boolFlag(true) } }))
     expect(() => r.quickLoad()).not.toThrow()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(r.getSnapshot().flags).toEqual({ y: boolFlag(true) })
+    expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
     expect(warnSpy).toHaveBeenCalled()
+    expect(toast).toHaveBeenCalledWith('ロードに失敗しました')
   })
 
   // ===== N. 選択肢/Wait 待機中の quickSave/quickLoad ガード (#578) =====
