@@ -1454,3 +1454,59 @@ describe('partyOrder: パーティの定義順 (#736)', () => {
     expect(m.partyOrder).toEqual(['b', '2', '1', 'a'])
   })
 })
+
+describe('rpgProjectFromDoc: sprite_style (#737)', () => {
+  const withStyle = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it("sprite_style: 'acrylic' → spriteStyle === 'acrylic'", () => {
+    expect(rpgProjectFromDoc(withStyle({ sprite_style: 'acrylic' }))!.spriteStyle).toBe('acrylic')
+  })
+
+  it("sprite_style: 'none' → 'none'", () => {
+    expect(rpgProjectFromDoc(withStyle({ sprite_style: 'none' }))!.spriteStyle).toBe('none')
+  })
+
+  it("sprite_style 未指定・null・undefined → 'none'", () => {
+    expect(rpgProjectFromDoc(makeDoc())!.spriteStyle).toBe('none')
+    expect(rpgProjectFromDoc(withStyle({ sprite_style: null }))!.spriteStyle).toBe('none')
+    expect(rpgProjectFromDoc(withStyle({ sprite_style: undefined }))!.spriteStyle).toBe('none')
+  })
+
+  it("未知値 'foo' → 'none'", () => {
+    expect(rpgProjectFromDoc(withStyle({ sprite_style: 'foo' }))!.spriteStyle).toBe('none')
+  })
+
+  it("大文字・前後空白 ' Acrylic ' は正規化されて 'acrylic'", () => {
+    expect(rpgProjectFromDoc(withStyle({ sprite_style: ' Acrylic ' }))!.spriteStyle).toBe('acrylic')
+  })
+
+  it('battle_layout / battle_background と同居しても値が混ざらない', () => {
+    const p = rpgProjectFromDoc(
+      withStyle({
+        battle_layout: 'side',
+        battle_background: 'bg/a.webp',
+        sprite_style: 'acrylic',
+      })
+    )!
+    expect(p.battleLayout).toBe('side')
+    expect(p.battleBackground).toBe('bg/a.webp')
+    expect(p.spriteStyle).toBe('acrylic')
+    const q = rpgProjectFromDoc(
+      withStyle({ battle_layout: 'side', battle_background: 'bg/a.webp' })
+    )!
+    expect(q.battleLayout).toBe('side')
+    expect(q.spriteStyle).toBe('none')
+  })
+
+  it('sprite_style の有無で battle_layout の解決が変わらない（逆方向の取り違え防止）', () => {
+    expect(rpgProjectFromDoc(withStyle({ sprite_style: 'acrylic' }))!.battleLayout).toBe('front')
+    expect(rpgProjectFromDoc(withStyle({ battle_layout: 'acrylic' }))!.spriteStyle).toBe('none')
+  })
+
+  it('applyRpgProjectToDoc の往復で doc の sprite_style が保持される', () => {
+    const doc = withStyle({ sprite_style: 'acrylic' })
+    const updated = applyRpgProjectToDoc(doc, rpgProjectFromDoc(doc)!, 'map-village')
+    expect(updated.sprite_style).toBe('acrylic')
+    expect(rpgProjectFromDoc(updated)!.spriteStyle).toBe('acrylic')
+  })
+})

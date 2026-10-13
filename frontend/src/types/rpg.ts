@@ -192,6 +192,8 @@ export interface RPGProject {
   battleLayout?: 'front' | 'side'
   /** 戦闘画面の背景画像パス (#736)。frontmatter `battle_background:` 由来。未指定はフィールドを暗くして残す */
   battleBackground?: string
+  /** 戦闘スプライトの表示スタイル (#737)。frontmatter `sprite_style:` 由来。未指定は `'none'`（素材そのまま・後方互換） */
+  spriteStyle?: 'none' | 'acrylic'
 }
 
 /**

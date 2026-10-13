@@ -11,8 +11,9 @@ import {
   type Container,
   type Graphics,
   type Sprite,
+  Texture,
+  TextureSource,
   type Text,
-  type Texture,
 } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
@@ -22,9 +23,12 @@ import {
   SIDE_LABEL_STROKE_WIDTH,
   SIDE_LOG_MIN_LINES,
   SIDE_STATUS_COMPACT_WIDTH,
+  computeContainFit,
   computeSideBattleLayout,
   estimateTextWidth,
 } from './battleLayout'
+import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
+import type { AcrylicEdgeFilter } from './acrylicEdgeFilter'
 
 const DEAD_ALPHA = 0.3
 
@@ -47,6 +51,8 @@ interface EntityViewLike {
   container: Container
   fallback: Graphics
   sprite: Sprite | null
+  acrylicBack: Graphics | null
+  acrylicFilter: AcrylicEdgeFilter | null
   label: Text | null
 }
 interface Internals {
@@ -532,5 +538,419 @@ describe('BattleScreen: 敵ラベルの HP は数値を優先して残す (#736)
     const foes = Array.from({ length: 3 }, (_, k) => entity(`e${k}`, { hp: 12, maxHp: 12 }))
     const s = track(make([entity('hero')], foes, { layout: 'side' }, 800, 450))
     for (const v of internals(s).enemyViews) expect(v.label!.text.split('\n')[1]).toBe('HP 12/12')
+  })
+})
+
+/** Node の process の最小型（@types/node に依存しない） */
+interface NodeEmitter {
+  on(ev: string, fn: (...a: unknown[]) => void): void
+  off(ev: string, fn: (...a: unknown[]) => void): void
+}
+
+describe('BattleScreen: acrylic (#737)', () => {
+  const sideNone: BattleScreenOptions = { layout: 'side' }
+  const acrylic: BattleScreenOptions = { layout: 'side', spriteStyle: 'acrylic' }
+  const withSprite = (id: string): BattleEntity => entity(id, { sprite: `img/${id}.webp` })
+  /** Graphics に積まれた fill 命令の色と不透明度（描画順） */
+  const fillsOf = (g: Graphics): Array<{ color: number; alpha: number }> =>
+    (
+      g.context.instructions as unknown as Array<{
+        action: string
+        data: { style: { color: number; alpha: number } }
+      }>
+    )
+      .filter((ins) => ins.action === 'fill')
+      .map((ins) => ({ color: ins.data.style.color, alpha: ins.data.style.alpha }))
+  const TEX_W = 100
+  const TEX_H = 50
+  /** 実寸を持つ本物の Texture（モックだと Sprite が EMPTY に差し替えて配置の数値を検証できない） */
+  const sizedTexture = (width: number, height: number): Texture =>
+    new Texture({ source: new TextureSource({ width, height }) })
+  const okLoad = (): void => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(sizedTexture(TEX_W, TEX_H) as never)
+  }
+  /** 800x450・敵1・味方1 の slot 一辺 */
+  const slotSize = (w = 800, h = 450, party = 1, enemies = 1): number =>
+    computeSideBattleLayout({ width: w, height: h, partyCount: party, enemyCount: enemies })
+      .enemies[0].size
+  const defaultGeometry = (size: number) =>
+    computeAcrylicGeometry(TEX_W, TEX_H, size, resolveAcrylicParams())
+
+  describe('none（回帰）', () => {
+    it('spriteStyle 未指定: acrylicBack / acrylicFilter は null・sprite.filters は空・子は fallback→sprite→label の 3 つ', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], sideNone))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicBack).toBeNull()
+      expect(v.acrylicFilter).toBeNull()
+      expect(v.sprite!.filters ?? []).toHaveLength(0)
+      expect(v.container.children).toHaveLength(3)
+      expect(v.container.children[0]).toBe(v.fallback)
+      expect(v.container.children[1]).toBe(v.sprite)
+      expect(v.container.children[2]).toBe(v.label)
+    })
+
+    it('spriteStyle 未指定のスプライト配置は #736 の contain と同一', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], sideNone))
+      await flushPromises()
+      const sp = internals(s).enemyViews[0].sprite!
+      const fit = computeContainFit(TEX_W, TEX_H, slotSize())
+      expect(sp.x).toBeCloseTo(fit.x, 9)
+      expect(sp.y).toBeCloseTo(fit.y, 9)
+      expect(sp.width).toBeCloseTo(fit.width, 9)
+      expect(sp.height).toBeCloseTo(fit.height, 9)
+    })
+
+    it("spriteStyle:'none' 明示でも画像成功後の構成は未指定と同一", async () => {
+      okLoad()
+      const a = track(make([entity('hero')], [withSprite('slime')], sideNone))
+      const b = track(
+        make([entity('hero')], [withSprite('slime')], { ...sideNone, spriteStyle: 'none' })
+      )
+      await flushPromises()
+      const va = internals(a).enemyViews[0]
+      const vb = internals(b).enemyViews[0]
+      expect(vb.acrylicBack).toBeNull()
+      expect(vb.acrylicFilter).toBeNull()
+      expect(vb.container.children).toHaveLength(va.container.children.length)
+      expect([vb.sprite!.x, vb.sprite!.y, vb.sprite!.width, vb.sprite!.height]).toEqual([
+        va.sprite!.x,
+        va.sprite!.y,
+        va.sprite!.width,
+        va.sprite!.height,
+      ])
+    })
+
+    it("不正値 'ACRYLIC' は none 扱い（BattleScreen は === 'acrylic' の厳密比較。正規化は rpgProjectFromDoc の責務）", async () => {
+      okLoad()
+      const s = track(
+        make([entity('hero')], [withSprite('slime')], {
+          layout: 'side',
+          spriteStyle: 'ACRYLIC' as never,
+        })
+      )
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicBack).toBeNull()
+      expect(v.acrylicFilter).toBeNull()
+      expect(v.container.children).toHaveLength(3)
+    })
+  })
+
+  describe('acrylic: 読み込み状態', () => {
+    it('sprite 未指定の entity は Assets.load を呼ばず色四角のまま・acrylicBack なし', () => {
+      const load = vi.spyOn(Assets, 'load')
+      const s = track(make([entity('hero')], [entity('slime')], acrylic))
+      expect(load).not.toHaveBeenCalled()
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicBack).toBeNull()
+      expect(v.fallback.visible).toBe(true)
+      expect(internals(s).partyViews[0].acrylicBack).toBeNull()
+    })
+
+    it('保留中: acrylicBack はあるが非表示・fallback 表示・filter なし', () => {
+      vi.spyOn(Assets, 'load').mockReturnValue(new Promise<Texture>(() => {}) as never)
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicBack).not.toBeNull()
+      expect(v.acrylicBack!.visible).toBe(false)
+      expect(v.fallback.visible).toBe(true)
+      expect(v.acrylicFilter).toBeNull()
+      expect(v.sprite).toBeNull()
+    })
+
+    it('成功: acrylicBack 表示・filter ちょうど 1 つ・fallback 非表示・sprite.filters は [filter]', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicBack!.visible).toBe(true)
+      expect(v.acrylicFilter).not.toBeNull()
+      expect(v.fallback.visible).toBe(false)
+      expect(v.sprite!.filters).toHaveLength(1)
+      expect((v.sprite!.filters as unknown[])[0]).toBe(v.acrylicFilter)
+    })
+
+    it('成功: 子の順序は fallback → acrylicBack → sprite → label', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      expect(v.container.children).toHaveLength(4)
+      expect(v.container.children[0]).toBe(v.fallback)
+      expect(v.container.children[1]).toBe(v.acrylicBack)
+      expect(v.container.children[2]).toBe(v.sprite)
+      expect(v.container.children[3]).toBe(v.label)
+    })
+
+    it('成功: sprite は slot 枠に収まり、足元が台座の中心に乗る（computeAcrylicGeometry と一致）', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const sp = internals(s).enemyViews[0].sprite!
+      const size = slotSize()
+      const g = defaultGeometry(size)
+      expect(sp.x).toBeCloseTo(g.sprite.x, 9)
+      expect(sp.y).toBeCloseTo(g.sprite.y, 9)
+      expect(sp.width).toBeCloseTo(g.sprite.width, 9)
+      expect(sp.height).toBeCloseTo(g.sprite.height, 9)
+      expect(sp.x).toBeGreaterThanOrEqual(0)
+      expect(sp.y).toBeGreaterThanOrEqual(0)
+      expect(sp.x + sp.width).toBeLessThanOrEqual(size + 1e-9)
+      expect(sp.y + sp.height).toBeCloseTo(g.base!.cy, 9)
+    })
+
+    it('成功: 台座・影が描かれる（acrylicBack の bounds が台座の幅に一致）', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const b = internals(s).enemyViews[0].acrylicBack!.getLocalBounds()
+      const g = defaultGeometry(slotSize())
+      // 最も広い影の楕円がバウンディングを決める
+      expect(b.width).toBeCloseTo(g.shadow!.rx * 2, 6)
+    })
+
+    it('仕様値: 影は黒 0.4・台座は 0x111111・ハイライトは白 0.3 の順に塗られる（リテラル固定）', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      expect(fillsOf(internals(s).enemyViews[0].acrylicBack!)).toEqual([
+        { color: 0x000000, alpha: 0.4 },
+        { color: 0x111111, alpha: 1 },
+        { color: 0xffffff, alpha: 0.3 },
+      ])
+    })
+
+    it('spriteStyleParams の shadowAlpha / highlightAlpha が影・ハイライトの塗りに別々に反映される', async () => {
+      okLoad()
+      const s = track(
+        make([entity('hero')], [withSprite('slime')], {
+          ...acrylic,
+          spriteStyleParams: { shadowAlpha: 0.7, highlightAlpha: 0.6 },
+        })
+      )
+      await flushPromises()
+      const fills = fillsOf(internals(s).enemyViews[0].acrylicBack!)
+      expect(fills[0].alpha).toBe(0.7)
+      expect(fills[2].alpha).toBe(0.6)
+    })
+
+    it('失敗: 色四角のまま・acrylicBack 非表示・filter なし・warn 1 回', async () => {
+      vi.spyOn(Assets, 'load').mockRejectedValue(new Error('404'))
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(v.sprite).toBeNull()
+      expect(v.fallback.visible).toBe(true)
+      expect(v.acrylicBack!.visible).toBe(false)
+      expect(v.acrylicFilter).toBeNull()
+    })
+
+    it('味方側のスプライトにも適用される', async () => {
+      okLoad()
+      const s = track(make([withSprite('hero')], [entity('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).partyViews[0]
+      expect(v.acrylicFilter).not.toBeNull()
+      expect(v.acrylicBack!.visible).toBe(true)
+      expect(v.sprite!.filters).toHaveLength(1)
+      expect(v.container.children).toHaveLength(3) // 味方にラベルはない: fallback → back → sprite
+      expect(v.container.children[2]).toBe(v.sprite)
+    })
+
+    it('複数体（敵 3・味方 2）: 各 view が独立の filter を持つ（共有しない）', async () => {
+      okLoad()
+      const s = track(
+        make(
+          [withSprite('p0'), withSprite('p1')],
+          [withSprite('e0'), withSprite('e1'), withSprite('e2')],
+          acrylic
+        )
+      )
+      await flushPromises()
+      const views = [...internals(s).enemyViews, ...internals(s).partyViews]
+      expect(views).toHaveLength(5)
+      const filters = views.map((v) => v.acrylicFilter)
+      for (const f of filters) expect(f).not.toBeNull()
+      expect(new Set(filters).size).toBe(5)
+      for (const v of views) expect(v.sprite!.filters).toHaveLength(1)
+    })
+
+    it('成功経路で console.error / warn が呼ばれない', async () => {
+      okLoad()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      track(make([withSprite('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      expect(warn).not.toHaveBeenCalled()
+      expect(error).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('acrylic: front は影響しない', () => {
+    it('front + acrylic + sprite 指定は none の front と同一（子数・position・alpha）で Assets.load も呼ばれない', async () => {
+      const load = vi.spyOn(Assets, 'load')
+      const a = track(
+        make([withSprite('hero')], [withSprite('slime')], { layout: 'front', spriteStyle: 'none' })
+      )
+      const b = track(
+        make([withSprite('hero')], [withSprite('slime')], {
+          layout: 'front',
+          spriteStyle: 'acrylic',
+        })
+      )
+      await flushPromises()
+      expect(load).not.toHaveBeenCalled()
+      const ca = internals(a).children
+      const cb = internals(b).children
+      expect(cb).toHaveLength(ca.length)
+      cb.forEach((c, k) => {
+        expect(c.position.x).toBe(ca[k].position.x)
+        expect(c.position.y).toBe(ca[k].position.y)
+        expect(c.alpha).toBe(ca[k].alpha)
+      })
+      expect(internals(b).enemyViews).toHaveLength(0)
+    })
+  })
+
+  describe('acrylic: redraw / パラメータ', () => {
+    it('redraw を複数回呼んでも filter インスタンスは同一で filters.length は 1・setWidths が新 size で呼ばれる', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      const filter = v.acrylicFilter!
+      const setWidths = vi.spyOn(filter, 'setWidths')
+      s.redraw(400, 700)
+      s.redraw(800, 450)
+      s.redraw(400, 700)
+      expect(v.acrylicFilter).toBe(filter)
+      expect(v.sprite!.filters).toHaveLength(1)
+      expect(setWidths).toHaveBeenCalledTimes(3)
+      const g = defaultGeometry(slotSize(400, 700))
+      expect(setWidths).toHaveBeenLastCalledWith(g.marginPx, g.linePx)
+      const g2 = defaultGeometry(slotSize(800, 450))
+      expect(setWidths).toHaveBeenNthCalledWith(2, g2.marginPx, g2.linePx)
+    })
+
+    it('redraw で size が 0 になると filters は null・通常に戻すと再装着される', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      const filter = v.acrylicFilter!
+      s.redraw(0, 0)
+      expect(slotSize(0, 0)).toBeLessThanOrEqual(0)
+      expect(v.sprite!.filters ?? []).toHaveLength(0)
+      s.redraw(800, 450)
+      expect(v.sprite!.filters).toHaveLength(1)
+      expect((v.sprite!.filters as unknown[])[0]).toBe(filter)
+    })
+
+    it('spriteStyleParams.lineAlpha=0 → filters は付かない・0.01 → 付く', async () => {
+      okLoad()
+      const off = track(
+        make([entity('hero')], [withSprite('slime')], {
+          ...acrylic,
+          spriteStyleParams: { lineAlpha: 0 },
+        })
+      )
+      const on = track(
+        make([entity('hero')], [withSprite('slime')], {
+          ...acrylic,
+          spriteStyleParams: { lineAlpha: 0.01 },
+        })
+      )
+      await flushPromises()
+      expect(internals(off).enemyViews[0].sprite!.filters ?? []).toHaveLength(0)
+      expect(internals(on).enemyViews[0].sprite!.filters).toHaveLength(1)
+    })
+
+    it('hasBase=false → 台座・影は描かれず、足元は枠の下端から余白+線ぶん上', async () => {
+      okLoad()
+      const s = track(
+        make([entity('hero')], [withSprite('slime')], {
+          ...acrylic,
+          spriteStyleParams: { hasBase: false },
+        })
+      )
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      const b = v.acrylicBack!.getLocalBounds()
+      expect(b.width).toBe(0)
+      expect(b.height).toBe(0)
+      const size = slotSize()
+      const g = computeAcrylicGeometry(TEX_W, TEX_H, size, resolveAcrylicParams({ hasBase: false }))
+      expect(v.sprite!.y + v.sprite!.height).toBeCloseTo(size - g.marginPx - g.linePx, 9)
+    })
+
+    it('spriteStyleParams の clamp がコンストラクタで効く（marginRatio:9 は 0.15 として配置される）', async () => {
+      okLoad()
+      const s = track(
+        make([entity('hero')], [withSprite('slime')], {
+          ...acrylic,
+          spriteStyleParams: { marginRatio: 9 },
+        })
+      )
+      await flushPromises()
+      const sp = internals(s).enemyViews[0].sprite!
+      const g = computeAcrylicGeometry(
+        TEX_W,
+        TEX_H,
+        slotSize(),
+        resolveAcrylicParams({ marginRatio: 0.15 })
+      )
+      expect(sp.x).toBeCloseTo(g.sprite.x, 9)
+      expect(sp.width).toBeCloseTo(g.sprite.width, 9)
+      expect(sp.width).toBeGreaterThan(0)
+    })
+  })
+
+  describe('acrylic: destroy', () => {
+    it('保留中の destroy は例外なし', () => {
+      vi.spyOn(Assets, 'load').mockReturnValue(new Promise<Texture>(() => {}) as never)
+      const s = make([entity('hero')], [withSprite('slime')], acrylic)
+      expect(() => s.destroy({ children: true })).not.toThrow()
+    })
+
+    it('destroy 後に resolve しても例外なし・filter も sprite も作られず unhandled rejection も出ない', async () => {
+      const resolvers: Array<(t: Texture) => void> = []
+      vi.spyOn(Assets, 'load').mockImplementation(
+        (() => new Promise<Texture>((r) => resolvers.push(r))) as never
+      )
+      const onRejection = vi.fn()
+      const proc = (globalThis as unknown as { process: NodeEmitter }).process
+      proc.on('unhandledRejection', onRejection)
+      try {
+        const s = make([withSprite('hero')], [withSprite('slime')], acrylic)
+        const views = [...internals(s).enemyViews, ...internals(s).partyViews]
+        s.destroy({ children: true })
+        for (const r of resolvers) r(sizedTexture(TEX_W, TEX_H))
+        await flushPromises()
+        for (const v of views) {
+          expect(v.sprite).toBeNull()
+          expect(v.acrylicFilter).toBeNull()
+        }
+        expect(onRejection).not.toHaveBeenCalled()
+      } finally {
+        proc.off('unhandledRejection', onRejection)
+      }
+    })
+
+    it('成功後の destroy で filter.destroy が 1 回呼ばれ、view の参照は null になる', async () => {
+      okLoad()
+      const s = make([entity('hero')], [withSprite('slime')], acrylic)
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      const filter = v.acrylicFilter!
+      const destroy = vi.spyOn(filter, 'destroy')
+      s.destroy({ children: true })
+      expect(destroy).toHaveBeenCalledTimes(1)
+      expect(v.acrylicFilter).toBeNull()
+    })
   })
 })

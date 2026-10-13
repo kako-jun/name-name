@@ -2316,6 +2316,7 @@ mod tests {
             telop_reserve: None,
             battle_layout: None,
             battle_background: None,
+            sprite_style: None,
             chapters,
         }
     }

@@ -5328,6 +5328,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         telop_reserve: None,
         battle_layout: None,
         battle_background: None,
+        sprite_style: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10500,6 +10501,7 @@ fn telop_test_doc_base() -> Document {
         telop_reserve: None,
         battle_layout: None,
         battle_background: None,
+        sprite_style: None,
         chapters: vec![],
     }
 }
@@ -10715,6 +10717,118 @@ fn test_battle_layout_inner_quote_is_stripped_on_emit() {
         parser::parse(&emitted).battle_layout.as_deref(),
         Some("side")
     );
+}
+
+// ---- #737: sprite_style (frontmatter 透過。battle_layout と同じ流儀) ----
+
+#[test]
+fn test_sprite_style_acrylic_parses() {
+    let doc = parser::parse(&battle_doc("sprite_style: \"acrylic\"\n"));
+    assert_eq!(doc.sprite_style.as_deref(), Some("acrylic"));
+}
+
+#[test]
+fn test_sprite_style_unquoted_value_parses() {
+    let doc = parser::parse(&battle_doc("sprite_style: acrylic\n"));
+    assert_eq!(doc.sprite_style.as_deref(), Some("acrylic"));
+}
+
+#[test]
+fn test_sprite_style_unknown_value_passes_through_parser() {
+    // バリデーションは runtime 側 (normalizeSpriteStyle) の責務。parser は素通し。
+    let doc = parser::parse(&battle_doc("sprite_style: foo\n"));
+    assert_eq!(doc.sprite_style.as_deref(), Some("foo"));
+}
+
+#[test]
+fn test_sprite_style_surrounding_whitespace_is_trimmed() {
+    let doc = parser::parse(&battle_doc("sprite_style:    acrylic   \n"));
+    assert_eq!(doc.sprite_style.as_deref(), Some("acrylic"));
+    let doc = parser::parse(&battle_doc("sprite_style:   \"acrylic\"  \n"));
+    assert_eq!(doc.sprite_style.as_deref(), Some("acrylic"));
+}
+
+#[test]
+fn test_sprite_style_empty_is_none() {
+    let doc = parser::parse(&battle_doc("sprite_style:\n"));
+    assert_eq!(doc.sprite_style, None);
+    let doc = parser::parse(&battle_doc("sprite_style: \"\"\n"));
+    assert_eq!(doc.sprite_style, None);
+}
+
+#[test]
+fn test_sprite_style_round_trips() {
+    let doc = parser::parse(&battle_doc("sprite_style: \"acrylic\"\n"));
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("sprite_style: \"acrylic\"\n"),
+        "emit に sprite_style が含まれる: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.sprite_style.as_deref(), Some("acrylic"));
+}
+
+#[test]
+fn test_sprite_style_inner_quote_is_stripped_on_emit() {
+    let mut doc = parser::parse(&battle_doc(""));
+    doc.sprite_style = Some("acr\"ylic".to_string());
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("sprite_style: \"acrylic\"\n"),
+        "`\"` が除去されて出力される: {emitted}"
+    );
+    assert_eq!(
+        parser::parse(&emitted).sprite_style.as_deref(),
+        Some("acrylic")
+    );
+}
+
+#[test]
+fn test_sprite_style_unspecified_is_none_and_omitted_from_emit() {
+    let doc = parser::parse(&battle_doc(""));
+    assert_eq!(doc.sprite_style, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("sprite_style"),
+        "未指定なら emit にキー自体が出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_sprite_style_coexists_with_battle_fields() {
+    let doc = parser::parse(&battle_doc(
+        "battle_layout: side\nbattle_background: bg/cave.webp\nsprite_style: acrylic\n",
+    ));
+    assert_eq!(doc.battle_layout.as_deref(), Some("side"));
+    assert_eq!(doc.battle_background.as_deref(), Some("bg/cave.webp"));
+    assert_eq!(doc.sprite_style.as_deref(), Some("acrylic"));
+    let doc2 = parser::parse(&emitter::emit(&doc));
+    assert_eq!(doc2.battle_layout, doc.battle_layout);
+    assert_eq!(doc2.battle_background, doc.battle_background);
+    assert_eq!(doc2.sprite_style, doc.sprite_style);
+    // sprite_style だけ指定したとき、他の戦闘フィールドに値が漏れない
+    let only = parser::parse(&battle_doc("sprite_style: acrylic\n"));
+    assert_eq!(only.battle_layout, None);
+    assert_eq!(only.battle_background, None);
+}
+
+#[test]
+fn test_sprite_style_survives_emit_with_multiple_chapters() {
+    let mut doc = parser::parse(&battle_doc("sprite_style: acrylic\n"));
+    let mut ch2 = doc.chapters[0].clone();
+    ch2.number = 2;
+    ch2.title = "二章".to_string();
+    doc.chapters.push(ch2);
+    let emitted = emitter::emit(&doc);
+    assert_eq!(
+        emitted.matches("sprite_style: \"acrylic\"").count(),
+        2,
+        "章ごとの frontmatter に出る: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.sprite_style.as_deref(), Some("acrylic"));
+    let doc3 = parser::parse(&emitter::emit(&doc2));
+    assert_eq!(doc3.sprite_style.as_deref(), Some("acrylic"));
 }
 
 #[test]

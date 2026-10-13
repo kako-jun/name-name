@@ -35,6 +35,7 @@ interface RendererInternals {
   masterPartyOrder: string[]
   battleLayout: 'front' | 'side'
   battleBackground: string | undefined
+  spriteStyle: 'none' | 'acrylic'
   battleScreen: { engine: BattleEngine; opts: Record<string, unknown> } | null
   startBattle(enemies: BattleEntity[]): void
   buildPartyBattleEntities(): BattleEntity[]
@@ -288,5 +289,44 @@ describe('RaycastRenderer: partyOrder と resize の配線 (#736)', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('RaycastRenderer.load → spriteStyle の流れ (#737)', () => {
+  function loaded(p: Partial<RPGProject>) {
+    const { r, i } = makeRenderer()
+    i.ensureWallTextures = async () => {}
+    r.load(project(p))
+    return { r, i }
+  }
+
+  it("load() が spriteStyle を保持し BattleScreen の opts に流す（'acrylic' → opts.spriteStyle === 'acrylic'）", () => {
+    const { i } = loaded({ battleLayout: 'side', spriteStyle: 'acrylic' })
+    expect(i.spriteStyle).toBe('acrylic')
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.spriteStyle).toBe('acrylic')
+  })
+
+  it("spriteStyle 未指定 → 'none' で opts にも 'none' が渡る", () => {
+    const { i } = loaded({ battleLayout: 'side' })
+    expect(i.spriteStyle).toBe('none')
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.spriteStyle).toBe('none')
+  })
+
+  it("battleLayout:'front' + spriteStyle:'acrylic' でも opts に渡る（無効化は BattleScreen 側の責務）", () => {
+    const { i } = loaded({ battleLayout: 'front', spriteStyle: 'acrylic' })
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.layout).toBe('front')
+    expect(i.battleScreen!.opts.spriteStyle).toBe('acrylic')
+  })
+
+  it('load() の再呼び出しで前回の acrylic が残らない（acrylic → 未指定で none に戻る）', () => {
+    const { r, i } = loaded({ spriteStyle: 'acrylic' })
+    expect(i.spriteStyle).toBe('acrylic')
+    r.load(project({}))
+    expect(i.spriteStyle).toBe('none')
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.spriteStyle).toBe('none')
   })
 })

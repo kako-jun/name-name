@@ -1559,6 +1559,12 @@ pub struct Document {
     /// frontmatter `battle_background:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_background: Option<String>,
+    /// RPG 戦闘スプライトの表示スタイル (#737)。`"none"`（既定・後方互換＝素材そのまま）/ `"acrylic"`
+    /// （アクリルスタンド風の後処理）の2択。値は parser でバリデーションせず生文字列で透過する
+    /// （`battle_layout` と同じ流儀）。未知値・空文字は None 扱いとし、runtime 側で `"none"` に
+    /// フォールバックする。GUI 専用（TUI は読まない）。frontmatter `sprite_style:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprite_style: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

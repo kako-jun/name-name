@@ -58,6 +58,13 @@ import {
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
+import { AcrylicEdgeFilter } from './acrylicEdgeFilter'
+import {
+  computeAcrylicGeometry,
+  resolveAcrylicParams,
+  type AcrylicParams,
+  type SpriteStyle,
+} from './spriteStyle'
 import { computeCoverFit } from './novelLayout'
 
 const BG_DIM_ALPHA = 0.55
@@ -78,6 +85,8 @@ const PANEL_GAP = 6
 /** 画像が無い（未指定・読み込み失敗）ときの色四角 (#736)。敵=赤系 / 味方=青系 */
 const FALLBACK_ENEMY_COLOR = 0xcc5555
 const FALLBACK_PARTY_COLOR = 0x5588cc
+/** acrylic の台座の色 (#737)。黒に近い円形台座 */
+const ACRYLIC_BASE_COLOR = 0x111111
 const DEAD_ALPHA = 0.3
 const SIDE_STATUS_FONT_SIZE = 14
 /** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
@@ -134,6 +143,14 @@ export interface BattleScreenOptions {
    * 画像を cover で敷く。未指定・読み込み失敗時は従来どおり半透明黒。
    */
   background?: string
+  /**
+   * スプライト表示スタイル (#737)。`none`（既定）= 素材そのまま、`acrylic` = アクリルスタンド風
+   * （透明な余白・その外周の枠線・黒い円形台座・接地影）。画像のある枠（`side` のスプライト）にだけかけ、
+   * 色四角のフォールバックにはかけない。`front` は敵・味方の画像を描かないので影響しない。
+   */
+  spriteStyle?: SpriteStyle
+  /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
+  spriteStyleParams?: Partial<AcrylicParams>
 }
 
 /** サイドビューの 1 体ぶんの表示物 */
@@ -142,6 +159,9 @@ interface EntityView {
   fallback: Graphics
   color: number
   sprite: Sprite | null
+  /** acrylic のとき: 台座・影を描く Graphics（fallback の直上・sprite の直下）と、sprite にかけるフィルタ。画像読み込み成功まで null/非表示 */
+  acrylicBack: Graphics | null
+  acrylicFilter: AcrylicEdgeFilter | null
   /** 敵のみ: 名前 + HP ラベル */
   label: PixiText | null
 }
@@ -153,6 +173,9 @@ export class BattleScreen extends Container {
   private opts: BattleScreenOptions
 
   private layoutMode: BattleLayoutMode
+  /** 表示スタイル (#737)。`acrylic` のときだけ params が入る */
+  private spriteStyle: SpriteStyle
+  private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
   private backgroundSprite: Sprite | null = null
   private enemyViews: EntityView[] = []
@@ -188,6 +211,9 @@ export class BattleScreen extends Container {
     this.screenHeight = screenHeight
     this.opts = opts
     this.layoutMode = opts.layout === 'side' ? 'side' : 'front'
+    this.spriteStyle = opts.spriteStyle === 'acrylic' ? 'acrylic' : 'none'
+    this.acrylicParams =
+      this.spriteStyle === 'acrylic' ? resolveAcrylicParams(opts.spriteStyleParams) : null
 
     this.dim = new Graphics()
     this.statsPanel = new Graphics()
@@ -215,6 +241,11 @@ export class BattleScreen extends Container {
 
   override destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.destroyedFlag = true
+    // フィルタは Container.destroy の対象外なので自分で破棄する (#737)
+    for (const v of [...this.enemyViews, ...this.partyViews]) {
+      v.acrylicFilter?.destroy()
+      v.acrylicFilter = null
+    }
     super.destroy(options)
   }
 
@@ -270,6 +301,13 @@ export class BattleScreen extends Container {
     const container = new Container()
     const fallback = new Graphics()
     container.addChild(fallback)
+    // acrylic: 台座・影は画像が読み込めるまで出さない（色四角にはかけない）
+    let acrylicBack: Graphics | null = null
+    if (this.acrylicParams && entity.sprite) {
+      acrylicBack = new Graphics()
+      acrylicBack.visible = false
+      container.addChild(acrylicBack)
+    }
     const label = withLabel
       ? new PixiText({
           text: '',
@@ -287,7 +325,15 @@ export class BattleScreen extends Container {
       label.anchor.set(0.5, 0)
       container.addChild(label)
     }
-    const view: EntityView = { container, fallback, color, sprite: null, label }
+    const view: EntityView = {
+      container,
+      fallback,
+      color,
+      sprite: null,
+      acrylicBack,
+      acrylicFilter: null,
+      label,
+    }
     if (entity.sprite) void this.loadEntitySprite(view, entity.sprite)
     return view
   }
@@ -298,7 +344,18 @@ export class BattleScreen extends Container {
       if (this.destroyedFlag || view.container.destroyed) return
       const sprite = new Sprite(tex)
       view.sprite = sprite
-      view.container.addChildAt(sprite, 1)
+      view.container.addChildAt(sprite, view.acrylicBack ? 2 : 1)
+      if (view.acrylicBack) {
+        // フィルタは texture ごとに 1 回だけ作る。余白・線の幅は placeEntityView が枠の大きさに合わせて更新する
+        const p = this.acrylicParams
+        view.acrylicFilter = new AcrylicEdgeFilter({
+          marginPx: 0,
+          linePx: 0,
+          color: p?.lineColor ?? 0xffffff,
+          alpha: p?.lineAlpha ?? 0,
+        })
+        view.acrylicBack.visible = true
+      }
       this.layout()
       this.refresh()
     } catch (e) {
@@ -524,10 +581,14 @@ export class BattleScreen extends Container {
     const fb = computeFallbackRect(size)
     view.fallback.clear().rect(fb.x, fb.y, fb.w, fb.h).fill(view.color)
     if (view.sprite) {
-      const fit = computeContainFit(view.sprite.texture.width, view.sprite.texture.height, size)
-      view.sprite.position.set(fit.x, fit.y)
-      view.sprite.width = fit.width
-      view.sprite.height = fit.height
+      if (this.acrylicParams && view.acrylicBack && view.acrylicFilter) {
+        this.placeAcrylic(view.sprite, view.acrylicBack, view.acrylicFilter, size)
+      } else {
+        const fit = computeContainFit(view.sprite.texture.width, view.sprite.texture.height, size)
+        view.sprite.position.set(fit.x, fit.y)
+        view.sprite.width = fit.width
+        view.sprite.height = fit.height
+      }
       view.fallback.visible = false
     }
     if (view.label) {
@@ -538,6 +599,43 @@ export class BattleScreen extends Container {
         view.label.y = slot.label.y - slot.y
       }
     }
+  }
+
+  /**
+   * acrylic のスプライト 1 体を配置する (#737)。幾何は純粋関数 computeAcrylicGeometry が正本で、
+   * ここは結果を Graphics とフィルタの太さに反映するだけ（フィルタは再生成せず幅を更新）。
+   * 配置は slot 枠の内側に収まるので battleLayout の座標・ラベルとは重ならない。
+   */
+  private placeAcrylic(
+    sprite: Sprite,
+    back: Graphics,
+    filter: AcrylicEdgeFilter,
+    size: number
+  ): void {
+    const params = this.acrylicParams
+    if (!params) return
+    const g = computeAcrylicGeometry(sprite.texture.width, sprite.texture.height, size, params)
+    sprite.position.set(g.sprite.x, g.sprite.y)
+    sprite.width = g.sprite.width
+    sprite.height = g.sprite.height
+    back.clear()
+    if (g.shadow) {
+      back
+        .ellipse(g.shadow.cx, g.shadow.cy, g.shadow.rx, g.shadow.ry)
+        .fill({ color: 0x000000, alpha: params.shadowAlpha })
+    }
+    if (g.base) {
+      back.ellipse(g.base.cx, g.base.cy, g.base.rx, g.base.ry).fill(ACRYLIC_BASE_COLOR)
+    }
+    if (g.highlight) {
+      back
+        .ellipse(g.highlight.cx, g.highlight.cy, g.highlight.rx, g.highlight.ry)
+        .fill({ color: 0xffffff, alpha: params.highlightAlpha })
+    }
+    filter.setWidths(g.marginPx, g.linePx)
+    sprite.filters = g.linePx > 0 && params.lineAlpha > 0 ? [filter] : null
+    // 画像のある枠だけ台座・影を出す（読み込み前・失敗時は色四角のまま）
+    back.visible = true
   }
 
   /** サイドビューのテキスト・生死表示を更新する (#736) */
