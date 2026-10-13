@@ -1583,3 +1583,54 @@ describe('rpgProjectFromDoc: battle_background_dof (#753)', () => {
     )
   })
 })
+
+describe('rpgProjectFromDoc: battle_background_tone (#753)', () => {
+  const withTone = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+  const toneOf = (extra: Partial<EventDocument>) =>
+    rpgProjectFromDoc(withTone(extra))!.battleBackgroundTone
+
+  it("'off' → 'off'、'on' → 'on'", () => {
+    expect(toneOf({ battle_background_tone: 'off' })).toBe('off')
+    expect(toneOf({ battle_background_tone: 'on' })).toBe('on')
+  })
+
+  it("未指定・null・空・未知値は 'on'", () => {
+    expect(rpgProjectFromDoc(makeDoc())!.battleBackgroundTone).toBe('on')
+    expect(toneOf({ battle_background_tone: null })).toBe('on')
+    expect(toneOf({ battle_background_tone: '' })).toBe('on')
+    expect(toneOf({ battle_background_tone: 'foo' })).toBe('on')
+  })
+
+  it("大文字・前後空白つきの 'OFF' / ' off ' も 'off'", () => {
+    expect(toneOf({ battle_background_tone: 'OFF' })).toBe('off')
+    expect(toneOf({ battle_background_tone: ' off ' })).toBe('off')
+  })
+
+  it('tone off と dof on は独立に解決される', () => {
+    const p = rpgProjectFromDoc(
+      withTone({ battle_background_tone: 'off', battle_background_dof: 'on' })
+    )!
+    expect(p.battleBackgroundTone).toBe('off')
+    expect(p.battleBackgroundDof).toBe('on')
+    const q = rpgProjectFromDoc(withTone({ battle_background_dof: 'on' }))!
+    expect(q.battleBackgroundTone).toBe('on')
+    expect(q.battleBackgroundDof).toBe('on')
+  })
+
+  it('他フィールド（window_style 等）と干渉しない', () => {
+    const p = rpgProjectFromDoc(
+      withTone({
+        battle_background_tone: 'off',
+        window_style: 'ff-blue',
+        sprite_style: 'acrylic',
+        battle_layout: 'side',
+      })
+    )!
+    expect(p.battleBackgroundTone).toBe('off')
+    expect(p.windowStyle).toBe('ff-blue')
+    expect(p.spriteStyle).toBe('acrylic')
+    expect(p.battleLayout).toBe('side')
+    const q = rpgProjectFromDoc(withTone({ window_style: 'ff-blue' }))!
+    expect(q.battleBackgroundTone).toBe('on')
+  })
+})

@@ -992,3 +992,30 @@ describe('backgroundDof (#753)', () => {
     expect(describeView(on, 1, { width: 800, height: 450 })).toContain('backgroundDof=on')
   })
 })
+
+describe('backgroundTone / backgroundDof: 追加の観点 (#753)', () => {
+  it.each(['backgroundTone', 'backgroundDof'] as const)(
+    '%s の不正値エラーにキー名が含まれる',
+    (key) => {
+      const r = parseConfig({ [key]: 'foo' }, BASE)
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain(key)
+    }
+  )
+
+  it.each([
+    { tone: 'off', dof: 'on' },
+    { tone: 'on', dof: 'off' },
+  ] as const)(
+    '背景なしでも buildBattleSetup は tone=$tone / dof=$dof を options に素通しする',
+    ({ tone, dof }) => {
+      const s = buildBattleSetup(
+        defaultConfig(),
+        view({ backgroundOn: false, backgroundTone: tone, backgroundDof: dof })
+      )
+      expect(s.options.background).toBeUndefined()
+      expect(s.options.backgroundTone).toBe(tone)
+      expect(s.options.backgroundDof).toBe(dof)
+    }
+  )
+})

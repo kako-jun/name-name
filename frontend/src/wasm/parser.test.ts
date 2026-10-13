@@ -2214,3 +2214,72 @@ describe('parseMarkdown + normalizeDocument: window_style が normalize を生�
     expect(doc.window_style).toBe('foo')
   })
 })
+
+describe('parseMarkdown + normalizeDocument: battle_background_tone / dof が normalize を生き残る (#753)', () => {
+  // window_style (#744) と同じ流儀。normalizeDocument の列挙に書き忘れると wasm 経由で undefined になる。
+  function docWith(...lines: string[]): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...lines,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('battle_background_tone: off → "off"', async () => {
+    const doc = await parseMarkdown(docWith('battle_background_tone: off'))
+    expect(doc.battle_background_tone).toBe('off')
+  })
+
+  it('battle_background_dof: on → "on"', async () => {
+    const doc = await parseMarkdown(docWith('battle_background_dof: on'))
+    expect(doc.battle_background_dof).toBe('on')
+  })
+
+  it('未指定 → 両方 null（undefined ではない）', async () => {
+    const doc = await parseMarkdown(docWith())
+    expect(doc.battle_background_tone).toBeNull()
+    expect(doc.battle_background_dof).toBeNull()
+  })
+
+  it('空文字指定 → 両方 null に倒れる', async () => {
+    const doc = await parseMarkdown(
+      docWith('battle_background_tone: ""', 'battle_background_dof: ""')
+    )
+    expect(doc.battle_background_tone).toBeNull()
+    expect(doc.battle_background_dof).toBeNull()
+  })
+
+  it('未知値は parser では正規化されず素通しする', async () => {
+    const doc = await parseMarkdown(
+      docWith('battle_background_tone: foo', 'battle_background_dof: bar')
+    )
+    expect(doc.battle_background_tone).toBe('foo')
+    expect(doc.battle_background_dof).toBe('bar')
+  })
+
+  it('battle_layout / sprite_style / window_style / tone / dof を併用しても全て生存する', async () => {
+    const doc = await parseMarkdown(
+      docWith(
+        'battle_layout: side',
+        'sprite_style: acrylic',
+        'window_style: ff-blue',
+        'battle_background_tone: off',
+        'battle_background_dof: on'
+      )
+    )
+    expect(doc.battle_layout).toBe('side')
+    expect(doc.sprite_style).toBe('acrylic')
+    expect(doc.window_style).toBe('ff-blue')
+    expect(doc.battle_background_tone).toBe('off')
+    expect(doc.battle_background_dof).toBe('on')
+  })
+})
