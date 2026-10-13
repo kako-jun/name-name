@@ -9,6 +9,8 @@ interface DebugState {
   autoMode: boolean
   waitingForChoice: boolean
   waitingForWait: boolean
+  /** `[ジャンプ:]` の遷移状態 (#733)。`[待機]` の waitingForWait とは独立。 */
+  jumpState?: 'idle' | 'pending' | 'stalled'
   currentResolvedFontFamily: string | null
   sceneId: string | null
   audioWarning: string | null
@@ -86,7 +88,7 @@ export function DebugOverlay({
       `scene: ${state.sceneId ?? '(none)'}`,
       `event: ${state.eventIndex + 1} / ${state.eventCount} [${state.eventKind}]`,
       ...(state.eventText ? [`↳ ${state.eventText}`] : []),
-      `auto: ${state.autoMode ? 'ON' : 'off'} / wait: ${state.waitingForWait ? 'YES' : '-'} / choice: ${state.waitingForChoice ? 'YES' : '-'}`,
+      `auto: ${state.autoMode ? 'ON' : 'off'} / wait: ${state.waitingForWait ? 'YES' : '-'} / jump: ${state.jumpState ?? 'idle'} / choice: ${state.waitingForChoice ? 'YES' : '-'}`,
       `font: ${state.currentResolvedFontFamily ?? '(default)'}`,
       ...(state.audioWarning ? [`⚠ ${state.audioWarning}`] : []),
       ...(debugInfo.length > 0 ? ['load:', ...debugInfo.map((line) => `・${line}`)] : []),
@@ -187,7 +189,7 @@ export function DebugOverlay({
           {state.eventText && <div style={{ color: '#86efac' }}>↳ {state.eventText}</div>}
           <div>
             auto: {state.autoMode ? 'ON' : 'off'} / wait: {state.waitingForWait ? 'YES' : '-'} /
-            choice: {state.waitingForChoice ? 'YES' : '-'}
+            jump: {state.jumpState ?? 'idle'} / choice: {state.waitingForChoice ? 'YES' : '-'}
           </div>
           <div>font: {state.currentResolvedFontFamily ?? '(default)'}</div>
           {state.audioWarning && (

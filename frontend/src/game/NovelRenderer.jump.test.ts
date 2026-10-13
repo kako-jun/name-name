@@ -1,7 +1,7 @@
 /**
  * NovelRenderer の無条件ジャンプ `[ジャンプ: シーンID]`（`Event::Jump`）のテスト (#725)。
  *
- * Jump は processDirective で `markCurrentSceneRead` → `waitingForWait` ゲート →
+ * Jump は processDirective で `markCurrentSceneRead` → `jumpState = 'pending'`（armJump）→
  * `setTimeout(0)` 後に `jumpToScene` を呼ぶ。このため同期再入せず、tick(1) で初めて遷移する。
  * confinement（#386）・missingSceneResolver（#460）・intermission（#404）・先読み（#389）は
  * 既存の流儀（confinement/linearAndJumpIndex/intermission/preload の各テスト）に倣い、
@@ -44,7 +44,7 @@ function scene(id: string, events: Event[]): EventScene {
 interface Internals {
   initialized: boolean
   skipMode: boolean
-  isAtJump(): boolean
+  jumpState: 'idle' | 'pending' | 'stalled'
   openSaveMenu(): void
   saveLoadOverlay: { showSave: (...args: unknown[]) => void }
   eventIndex: number
@@ -101,12 +101,13 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     r.advance()
     // 同期再入しない: Jump 到達直後はまだ a、停止ゲートが立っている
     expect(r.getCurrentSceneId()).toBe('a')
-    expect(internals(r).waitingForWait).toBe(true)
+    expect(internals(r).jumpState).toBe('pending')
+    expect(internals(r).waitingForWait).toBe(false) // [待機] 用ゲートとは独立 (#733)
 
     tick(r)
     expect(r.getCurrentSceneId()).toBe('c')
     expect(text(r)).toContain('c1')
-    expect(internals(r).waitingForWait).toBe(false)
+    expect(internals(r).jumpState).toBe('idle')
     expect(r.getSnapshot().storyEnded).toBe(false)
   })
 
@@ -144,7 +145,7 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
   it('4: シーン先頭が Jump のみの中継シーンも、setScenes 直後に停止ゲート → tick で遷移する', () => {
     const r = makeRenderer([scene('a', [jump('c')]), scene('c', [narration('c1')])])
     expect(r.getCurrentSceneId()).toBe('a')
-    expect(internals(r).waitingForWait).toBe(true)
+    expect(internals(r).jumpState).toBe('pending')
     tick(r)
     expect(r.getCurrentSceneId()).toBe('c')
   })
@@ -178,8 +179,8 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
       expect(r.getSnapshot().storyEnded).toBe(false)
       expect(r.getCurrentSceneId()).toBe('a')
     }
-    // 停止ゲート（waitingForWait）は下りている: goBack 等を塞いで詰まない (S1)
-    expect(internals(r).waitingForWait).toBe(false)
+    // 予約は stalled へ移っている: goBack 等を塞いで詰まない (S1)
+    expect(internals(r).jumpState).toBe('stalled')
   })
 
   it('6b: 遷移先不在で停止中でも goBack / quickLoad は使える（waitingForWait で詰まない）', () => {
@@ -191,12 +192,12 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     r.advance() // n2
     r.advance() // Jump 到達
     tick(r)
-    expect(internals(r).waitingForWait).toBe(false)
+    expect(internals(r).jumpState).toBe('stalled')
     r.goBack() // 停止中: 画面の n2 を復元し直す（n1 まで飛ばさない）
     expect(text(r)).toContain('n2')
     r.advance() // Jump 再発火
     tick(r) // 再び停止
-    expect(internals(r).waitingForWait).toBe(false)
+    expect(internals(r).jumpState).toBe('stalled')
     r.goBack()
     r.goBack() // 通常の goBack: n2 → n1
     expect(text(r)).toContain('n1')
@@ -215,12 +216,12 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     tick(r)
     expect(warnSpy).toHaveBeenCalledTimes(1)
     r.goBack()
-    expect(internals(r).isAtJump()).toBe(false)
+    expect(internals(r).jumpState).toBe('idle')
     expect(text(r)).toContain('only')
     r.advance()
     tick(r)
     expect(warnSpy).toHaveBeenCalledTimes(2)
-    expect(internals(r).isAtJump()).toBe(true)
+    expect(internals(r).jumpState).toBe('stalled')
     expect(r.getSnapshot().storyEnded).toBe(false)
   })
 
@@ -246,7 +247,7 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
       r.advance()
       tick(r)
       await new Promise((res) => setTimeout(res, 0))
-      expect(internals(r).waitingForWait).toBe(false)
+      expect(internals(r).jumpState).toBe('stalled')
       expect(r.getCurrentSceneId()).toBe('a')
       // いずれの失敗経路でも警告が 1 回以上出て、対象シーンIDを含む
       expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('far'))).toBe(true)
@@ -390,7 +391,7 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     expect(onScene.mock.calls.length).toBeLessThanOrEqual(103)
     const loopWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('循環'))
     expect(loopWarns.length).toBe(1)
-    expect(internals(r).waitingForWait).toBe(false)
+    expect(internals(r).jumpState).toBe('stalled')
     expect(r.getSnapshot().storyEnded).toBe(false)
     // 停止後は何も進まない
     const n = onScene.mock.calls.length
