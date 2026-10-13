@@ -1629,7 +1629,7 @@ AGI: 4
 |---|---|---|---|
 | `名前` | `name` | Yes | パーティメンバー名 |
 | `スプライト` | `sprite` | No | 立ち絵 / 戦闘スプライトの相対パス |
-| `隊列` | `row` | No (default front) | 戦闘の隊列 (#747)。`front`（前衛・既定）/ `back`（後衛。`後衛` `後列` も可、大小無視。それ以外は前衛）。`battle_layout: side` のときだけ有効（`front` 配置は隊列を描かず補正もしない）。後衛は画面の右寄り（敵から遠い側）に半歩（スプライト一辺の 0.5 倍）下げて描き、**受ける物理ダメージ・与える近接物理ダメージ（通常攻撃）が半分**（FF4〜6 準拠）。両方後衛なら 2 回半分。丸めは半分ごとに切り捨て・最低 1（`computeAttackDamage` の最低 1 に揃える）。呪文・アイテム（DSL / builtin）は隊列の影響を受けない。計算は `battleEngine.ts` の `applyRowToPhysicalDamage` / `computeRowAttackDamage`。戦闘中の入れ替えは未対応（#204） |
+| `隊列` | `row` | No (default front) | 戦闘の隊列 (#747)。`front`（前衛・既定）/ `back`（後衛。`後衛` `後列` も可、大小無視。それ以外は前衛）。`battle_layout: side` のときだけ有効（`front` 配置は隊列を描かず補正もしない）。後衛は画面の右寄り（敵から遠い側）に半歩（スプライト一辺の 0.5 倍）下げて描き、**受ける物理ダメージ・与える近接物理ダメージ（通常攻撃）が半分**（FF4〜6 準拠）。両方後衛なら 2 回半分。丸めは半分ごとに切り捨て・最低 1（`computeAttackDamage` の最低 1 に揃える）。呪文・アイテム（DSL / builtin）は隊列の影響を受けない。計算は `battleEngine.ts` の `applyRowToPhysicalDamage` / `computeRowAttackDamage`。戦闘中の入れ替えは未対応（#204）。今の BattleEngine は攻撃側・被弾側とも `firstAlive(party)` の 1 人だけなので、後衛のダメージ半減は**先頭の生存者が後衛のときだけ**見える（全員行動は #205 で対応予定）。 |
 | `レベル` | `level` / `Lv` | No (default 1) | 初期レベル |
 | `HP` | `hp` | No (default 1) | 初期 HP（最低 1、`0` 即死扱いを避ける） |
 | `MP` | `mp` | No (default 0) | 初期 MP |
