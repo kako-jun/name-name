@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeBackgroundTone, saturationToPixiAmount } from './backgroundTone'
+import {
+  BACKGROUND_TONE_BRIGHTNESS,
+  BACKGROUND_TONE_SATURATION,
+  normalizeBackgroundTone,
+  saturationToPixiAmount,
+} from './backgroundTone'
 
 describe('normalizeBackgroundTone', () => {
   it('off だけ off。それ以外は on', () => {
@@ -23,5 +28,32 @@ describe('saturationToPixiAmount', () => {
     expect(saturationToPixiAmount(2)).toBe(0)
     expect(saturationToPixiAmount(-1)).toBe(-1)
     expect(saturationToPixiAmount(NaN)).toBe(0)
+  })
+})
+
+describe('backgroundTone: 追加の境界', () => {
+  it('saturationToPixiAmount: ±Infinity はクランプされ NaN にならない', () => {
+    expect(saturationToPixiAmount(Infinity)).toBe(0)
+    expect(saturationToPixiAmount(-Infinity)).toBe(-1)
+    expect(Number.isNaN(saturationToPixiAmount(Infinity))).toBe(false)
+    expect(Number.isNaN(saturationToPixiAmount(-Infinity))).toBe(false)
+  })
+
+  it('normalizeBackgroundTone: 非 string は例外なく on', () => {
+    for (const v of [0, 1, true, false, {}, []]) {
+      expect(normalizeBackgroundTone(v as unknown as string)).toBe('on')
+    }
+  })
+
+  it("normalizeBackgroundTone: 前後の改行・タブは trim され 'off' になる", () => {
+    expect(normalizeBackgroundTone('Off\n')).toBe('off')
+    expect(normalizeBackgroundTone('\toff')).toBe('off')
+  })
+
+  it('係数は (0, 1] の範囲内（値そのものは固定しない）', () => {
+    for (const v of [BACKGROUND_TONE_SATURATION, BACKGROUND_TONE_BRIGHTNESS]) {
+      expect(v).toBeGreaterThan(0)
+      expect(v).toBeLessThanOrEqual(1)
+    }
   })
 })

@@ -147,3 +147,95 @@ describe('computeDofQuad / DOF_EDGE_EXTEND (画面端のぼけ欠け対策)', ()
     expect([...q.positions, ...q.uvs].every(Number.isFinite)).toBe(true)
   })
 })
+
+describe('computeDofLevels: 追加の境界', () => {
+  it.each([0, -3, 0.4, NaN, -Infinity])('levelCount=%s は n>=1 に丸められ有限値', (n) => {
+    const lv = computeDofLevels(1000, DOF_DEFAULT_PARAMS, n)
+    expect(lv.length).toBeGreaterThanOrEqual(1)
+    for (const g of lv) {
+      for (const v of [g.startY, g.maskHeight, g.rampFraction, g.blurStrength]) {
+        expect(Number.isFinite(v)).toBe(true)
+      }
+    }
+  })
+
+  it('levelCount=1 は computeDofGradient と同値', () => {
+    const [l] = computeDofLevels(1000, DOF_DEFAULT_PARAMS, 1)
+    const g = computeDofGradient(1000)
+    expect(l.startY).toBeCloseTo(g.startY)
+    expect(l.rampFraction).toBeCloseTo(g.rampFraction)
+    expect(l.blurStrength).toBeCloseTo(g.blurStrength)
+  })
+
+  it('全段の rampFraction は (0,1]、blurStrength は max*k/N', () => {
+    const lv = computeDofLevels(800)
+    const n = lv.length
+    lv.forEach((g, i) => {
+      expect(g.rampFraction).toBeGreaterThan(0)
+      expect(g.rampFraction).toBeLessThanOrEqual(1)
+      expect(g.blurStrength).toBeCloseTo((DOF_DEFAULT_PARAMS.maxBlurStrength * (i + 1)) / n)
+    })
+  })
+
+  it('gradientRatio=0 でもゼロ除算せず、全段が同じ startY で rampFraction は最小値に張り付く', () => {
+    const lv = computeDofLevels(800, { ...DOF_DEFAULT_PARAMS, gradientRatio: 0 })
+    for (const g of lv) {
+      expect(Number.isFinite(g.rampFraction)).toBe(true)
+      expect(g.rampFraction).toBeGreaterThan(0)
+      expect(g.startY).toBeCloseTo(lv[0].startY)
+      expect(g.rampFraction).toBeCloseTo(lv[0].rampFraction)
+    }
+    expect(lv[0].rampFraction).toBeLessThan(0.01)
+  })
+})
+
+describe('dofAlphaAt / dofMaskStops: 追加の境界', () => {
+  it('dofAlphaAt は t について単調非減少で 0〜1', () => {
+    let prev = -1
+    for (let i = 0; i <= 20; i++) {
+      const a = dofAlphaAt(i / 20, 0.5)
+      expect(a).toBeGreaterThanOrEqual(prev)
+      expect(a).toBeGreaterThanOrEqual(0)
+      expect(a).toBeLessThanOrEqual(1)
+      prev = a
+    }
+  })
+
+  it('dofAlphaAt: t<0 は 0、t>1 は 1、不正な rampFraction でも 0〜1 の有限値', () => {
+    expect(dofAlphaAt(-1, 0.5)).toBe(0)
+    expect(dofAlphaAt(2, 0.5)).toBe(1)
+    for (const r of [0, -1, NaN, 5]) {
+      for (const t of [-1, 0, 0.5, 1, 2]) {
+        const a = dofAlphaAt(t, r)
+        expect(Number.isFinite(a)).toBe(true)
+        expect(a).toBeGreaterThanOrEqual(0)
+        expect(a).toBeLessThanOrEqual(1)
+      }
+    }
+  })
+
+  it.each([0.3, 1, 0, -1, NaN, 5])(
+    'dofMaskStops(%s): offset 昇順・[0,1] 内・alpha 0〜1・先頭 alpha=0・末尾 alpha=1',
+    (r) => {
+      const stops = dofMaskStops(r)
+      expect(stops[0].alpha).toBe(0)
+      expect(stops[stops.length - 1].alpha).toBe(1)
+      stops.forEach((s, i) => {
+        expect(s.offset).toBeGreaterThanOrEqual(0)
+        expect(s.offset).toBeLessThanOrEqual(1)
+        expect(s.alpha).toBeGreaterThanOrEqual(0)
+        expect(s.alpha).toBeLessThanOrEqual(1)
+        if (i > 0) expect(s.offset).toBeGreaterThanOrEqual(stops[i - 1].offset)
+      })
+    }
+  )
+})
+
+describe('normalizeBackgroundDof: 追加', () => {
+  it('非 string は例外なく off、前後の改行は trim', () => {
+    for (const v of [0, 1, true, {}, []]) {
+      expect(normalizeBackgroundDof(v as unknown as string)).toBe('off')
+    }
+    expect(normalizeBackgroundDof('On\n')).toBe('on')
+  })
+})
