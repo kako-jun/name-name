@@ -55,6 +55,7 @@ import { BattleScreen } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { rollEncounter } from './encounter'
+import type { BattleLayoutMode } from './battleLayout'
 export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
@@ -122,6 +123,9 @@ export class RaycastRenderer {
   private masterMonsters: Record<string, import('../types').MonsterDef> = {}
   /** パーティマスター (#175)。`hero` 既定 ID を最優先で使う */
   private masterParty: Record<string, import('../types').PartyMemberDef> = {}
+  /** 戦闘画面のレイアウト / 背景画像 (#736)。frontmatter `battle_layout` / `battle_background` 由来 */
+  private battleLayout: BattleLayoutMode = 'front'
+  private battleBackground: string | undefined = undefined
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -359,6 +363,8 @@ export class RaycastRenderer {
     this.encounterGroups = gameData.map.encounterGroups ?? []
     this.masterMonsters = gameData.monsters ?? {}
     this.masterParty = gameData.party ?? {}
+    this.battleLayout = gameData.battleLayout ?? 'front'
+    this.battleBackground = gameData.battleBackground
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -773,9 +779,17 @@ export class RaycastRenderer {
   private startBattle(enemies: BattleEntity[]): void {
     if (this.battleScreen) return // 多重起動防止
     if (enemies.length === 0) return
-    const hero = this.buildHeroBattleEntity()
-    const engine = new BattleEngine([hero], enemies)
+    // front は従来どおり先頭 1 人だけをエンジンに渡す（全員を渡すと、画面に出ない仲間が
+    // 敵の標的・敗北判定に関与して挙動が変わるため）。side は全員を渡して全員を描く (#736)。
+    // 行動するのは引き続き先頭の生存者のみ（全員行動は別 Issue #205）。
+    const party =
+      this.battleLayout === 'side'
+        ? this.buildPartyBattleEntities()
+        : [this.buildHeroBattleEntity()]
+    const engine = new BattleEngine(party, enemies)
     this.battleScreen = new BattleScreen(engine, this.screenWidth, this.screenHeight, {
+      layout: this.battleLayout,
+      background: this.battleBackground,
       onClose: () => {
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)
@@ -795,19 +809,7 @@ export class RaycastRenderer {
    */
   private buildHeroBattleEntity(): BattleEntity {
     const def = this.masterParty['hero']
-    if (def) {
-      return {
-        id: def.id,
-        name: def.name,
-        hp: def.hp,
-        maxHp: def.hp,
-        mp: def.mp ?? 0,
-        maxMp: def.mp ?? 0,
-        atk: def.atk,
-        def: def.def,
-        agi: def.agi,
-      }
-    }
+    if (def) return this.partyDefToBattleEntity(def)
     return {
       id: 'hero',
       name: 'ゆうしゃ',
@@ -818,6 +820,34 @@ export class RaycastRenderer {
       atk: 5,
       def: 3,
       agi: 4,
+    }
+  }
+
+  /**
+   * 戦闘に出す味方全員を組み立てる (#736)。先頭は従来どおり hero（未定義ならハードコード値）、
+   * 続けて masterParty の hero 以外を定義順に並べる。
+   */
+  private buildPartyBattleEntities(): BattleEntity[] {
+    const members: BattleEntity[] = [this.buildHeroBattleEntity()]
+    for (const [key, def] of Object.entries(this.masterParty)) {
+      if (key === 'hero') continue
+      members.push(this.partyDefToBattleEntity(def))
+    }
+    return members
+  }
+
+  private partyDefToBattleEntity(def: import('../types').PartyMemberDef): BattleEntity {
+    return {
+      id: def.id,
+      name: def.name,
+      hp: def.hp,
+      maxHp: def.hp,
+      mp: def.mp ?? 0,
+      maxMp: def.mp ?? 0,
+      atk: def.atk,
+      def: def.def,
+      agi: def.agi,
+      sprite: def.sprite,
     }
   }
 
@@ -840,6 +870,7 @@ export class RaycastRenderer {
           agi: def.agi,
           exp: def.exp,
           gold: def.gold,
+          sprite: def.sprite,
         }
       : {
           id: 'slime',
