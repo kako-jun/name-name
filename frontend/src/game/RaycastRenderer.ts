@@ -148,6 +148,8 @@ export class RaycastRenderer {
   /** 戦闘画面の奥行き / 前景レイヤー (#747)。frontmatter `battle_horizon` `battle_perspective` / `battle_foreground` 由来 */
   private battleDepth: BattleDepth | null = null
   private battleForeground: string | undefined = undefined
+  /** ドット絵モード (#466)。戦闘のテクスチャを nearest のままにする (#760) */
+  private pixelArt = false
   /** 戦闘の ATB 方式 (#205)。frontmatter `battle_atb` / `battle_atb_mode` 由来。undefined = 従来ターン制 */
   private battleAtb: BattleAtbConfig | undefined = undefined
   private stepCounter: number = 0
@@ -397,6 +399,7 @@ export class RaycastRenderer {
     this.battleLogTypewriter = gameData.battleLogTypewriter ?? 'off'
     this.battleDepth = gameData.battleDepth ?? null
     this.battleForeground = gameData.battleForeground
+    this.pixelArt = gameData.pixelArt === true
     this.battleAtb = gameData.battleAtb
     this.stepCounter = 0
     this.encounterCooldown = 0
@@ -830,6 +833,7 @@ export class RaycastRenderer {
       logTypewriter: this.battleLogTypewriter,
       depth: this.battleDepth,
       foreground: this.battleForeground,
+      pixelArt: this.pixelArt,
       onClose: () => {
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)

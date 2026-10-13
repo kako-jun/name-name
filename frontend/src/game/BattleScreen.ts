@@ -196,6 +196,24 @@ interface CommandButton {
   text: PixiText
 }
 
+/**
+ * 戦闘で使うテクスチャの縮小・拡大フィルタを設定する (#760)。
+ * RPG の Pixi は antialias:false・resolution 1 で、400px 級の画像をミップマップ無しで小さく縮小するとギザギザになる。
+ * 既定は mipmap 生成＋linear で縮小をなめらかにする。`pixelArt`（frontmatter `pixel_art`・#466）なら nearest のまま
+ * （ドット絵を保つ。mipmap も作らない）。GPU へ初回アップロードされる前（Assets.load 直後）に呼ぶこと。
+ * フィールドのレイキャストのテクスチャには触れない。
+ */
+export function applyBattleTextureFilter(tex: Texture, pixelArt: boolean): void {
+  const source = tex.source
+  if (!source) return
+  if (pixelArt) {
+    source.scaleMode = 'nearest'
+    return
+  }
+  source.autoGenerateMipmaps = true
+  source.scaleMode = 'linear'
+}
+
 export interface BattleScreenOptions {
   /** バトル終了（victory / defeat / escaped）時に呼ばれる */
   onClose?: (outcome: 'victory' | 'defeat' | 'escaped') => void
@@ -246,6 +264,11 @@ export interface BattleScreenOptions {
    * 透過 PNG を想定。未指定・読み込み失敗は何も描かない。
    */
   foreground?: string
+  /**
+   * ドット絵モード (#466 / #760)。`true` なら戦闘のテクスチャ（スプライト・敵・背景・前景）を nearest のまま使う。
+   * 未指定・false は mipmap＋linear で縮小をなめらかにする。
+   */
+  pixelArt?: boolean
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -401,6 +424,7 @@ export class BattleScreen extends Container {
   private async loadForeground(path: string): Promise<void> {
     try {
       const tex = (await Assets.load(path)) as Texture
+      applyBattleTextureFilter(tex, !!this.opts.pixelArt)
       if (this.destroyedFlag || !this.sideStage) return
       const sprite = new Sprite(tex)
       this.foregroundSprite = sprite
@@ -415,6 +439,7 @@ export class BattleScreen extends Container {
   private async loadBackground(path: string): Promise<void> {
     try {
       const tex = (await Assets.load(path)) as Texture
+      applyBattleTextureFilter(tex, !!this.opts.pixelArt)
       if (this.destroyedFlag) return
       const sprite = new Sprite(tex)
       this.backgroundSprite = sprite
@@ -644,6 +669,7 @@ export class BattleScreen extends Container {
   private async loadEntitySprite(view: EntityView, path: string): Promise<void> {
     try {
       const tex = (await Assets.load(path)) as Texture
+      applyBattleTextureFilter(tex, !!this.opts.pixelArt)
       if (this.destroyedFlag || view.container.destroyed) return
       const sprite = new Sprite(tex)
       view.sprite = sprite

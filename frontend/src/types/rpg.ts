@@ -210,6 +210,8 @@ export interface RPGProject {
   battleDepth?: { horizon: number; perspective: number }
   /** 戦闘画面の前景レイヤー画像パス (#747)。frontmatter `battle_foreground:` 由来。未指定は無し */
   battleForeground?: string
+  /** ドット絵モード (#466)。frontmatter `pixel_art: true` のとき true。戦闘のテクスチャを nearest のまま使う (#760)。未指定は mipmap＋linear */
+  pixelArt?: boolean
   /**
    * 戦闘の ATB 方式 (#205)。frontmatter `battle_atb: on` のときだけ値を持つ（`mode` は `battle_atb_mode:` 由来、既定 `'wait'`）。
    * 未指定は undefined＝従来ターン制。

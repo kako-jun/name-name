@@ -1964,3 +1964,56 @@ describe('BattleScreen: 背景トーン調整 (#753)', () => {
     expect(await summarize('side')).toEqual(await summarize('front'))
   })
 })
+
+describe('BattleScreen: テクスチャフィルタ (#760)', () => {
+  type MipSource = { scaleMode: string; autoGenerateMipmaps?: boolean }
+  const mipTexture = (): Texture =>
+    ({ width: 400, height: 800, source: { scaleMode: 'nearest' } }) as unknown as Texture
+
+  it('既定: 背景・前景・味方・敵のテクスチャに mipmap 生成 + linear が設定される', async () => {
+    const texs: Texture[] = []
+    vi.spyOn(Assets, 'load').mockImplementation((async () => {
+      const t = mipTexture()
+      texs.push(t)
+      return t
+    }) as never)
+    track(
+      make([entity('hero', { sprite: 'h.png' })], [entity('slime', { sprite: 's.png' })], {
+        layout: 'side',
+        background: 'bg.png',
+        foreground: 'fg.png',
+      })
+    )
+    await flushPromises()
+    expect(texs).toHaveLength(4)
+    for (const t of texs) {
+      const src = t.source as unknown as MipSource
+      expect(src.autoGenerateMipmaps).toBe(true)
+      expect(src.scaleMode).toBe('linear')
+    }
+  })
+
+  it('pixelArt: true なら nearest のまま・mipmap は作らない', async () => {
+    const texs: Texture[] = []
+    vi.spyOn(Assets, 'load').mockImplementation((async () => {
+      const t = mipTexture()
+      texs.push(t)
+      return t
+    }) as never)
+    track(
+      make([entity('hero', { sprite: 'h.png' })], [entity('slime', { sprite: 's.png' })], {
+        layout: 'side',
+        background: 'bg.png',
+        foreground: 'fg.png',
+        pixelArt: true,
+      })
+    )
+    await flushPromises()
+    expect(texs).toHaveLength(4)
+    for (const t of texs) {
+      const src = t.source as unknown as MipSource
+      expect(src.autoGenerateMipmaps).not.toBe(true)
+      expect(src.scaleMode).toBe('nearest')
+    }
+  })
+})
