@@ -1468,7 +1468,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
 
 describe('BattleScreen: 背景トーン調整 (#753)', () => {
   interface ToneLevel {
-    sprite: Container & { geometry: { positions: Float32Array } }
+    sprite: Container
     mask: Sprite
     blur: BlurFilter
     maskTexture: { destroy: (...a: unknown[]) => void } | null
@@ -1696,7 +1696,8 @@ describe('BattleScreen: 背景トーン調整 (#753)', () => {
       for (const l of ti(s).dofLevels) {
         expect(l.sprite.position.x).toBe(bg.position.x)
         expect(l.sprite.position.y).toBe(bg.position.y)
-        const p = l.sprite.geometry.positions
+        const p = (l.sprite as unknown as { geometry: { positions: Float32Array } }).geometry
+          .positions
         const xs = [0, 2, 4, 6].map((n) => p[n])
         const ys = [1, 3, 5, 7].map((n) => p[n])
         expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(bg.width + 2 * DOF_EDGE_EXTEND, 3)
