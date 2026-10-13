@@ -123,11 +123,11 @@ describe('BattleScreen logTypewriter: off は旧挙動と同一 (#755)', () => {
   })
 
   it('off では Ticker を生成も start もしない', () => {
-    const ctor = vi.spyOn(Ticker.prototype, 'start')
+    const start = vi.spyOn(Ticker.prototype, 'start')
     const { s } = setup()
     tap(s, 'attack')
     s.redraw(640, 360)
-    expect(ctor).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
     expect(I(s).logTicker).toBeNull()
   })
 
@@ -227,7 +227,7 @@ describe('BattleScreen logTypewriter: on (#755)', () => {
     expect(I(s).logTicker!.started).toBe(true)
   })
 
-  it('前の戦闘で止まった ticker を二重に作らない（同一 ticker を再利用）', () => {
+  it('skip で止まった ticker を、同じ戦闘内の次の新規行でも二重に作らず再利用する', () => {
     const { s } = setup(on)
     const first = I(s).logTicker
     settle(s)
@@ -235,12 +235,33 @@ describe('BattleScreen logTypewriter: on (#755)', () => {
     expect(I(s).logTicker).toBe(first)
   })
 
-  it('決着後の onClose は skip の 1 タップ目では呼ばれない', () => {
+  it('onClose は、タイプ中のタップでは呼ばれず、全文表示後の勝利タップで 1 回だけ呼ばれる', () => {
     const onClose = vi.fn()
     const { s } = setup({ ...on, onClose }, 800, 450, 1)
+    advance(s, MS) // タイプ中
+    tap(s, 'attack') // 全文表示のみ。コマンドは実行されず onClose も呼ばれない
+    tapLog(s)
+    expect(onClose).not.toHaveBeenCalled()
     settle(s)
     tap(s, 'attack') // 勝利
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('同じ文面のターンが上限(30 行)到達後に何度続いても、毎ターンタイプされ続ける', () => {
+    // atk 3 はダメージのばらつき 0 なので、毎ターン全く同じ 4 行が積まれる
+    const engine = new BattleEngine(
+      [entity('hero', { hp: 99999, maxHp: 99999 })],
+      [entity('slime', { hp: 99999, maxHp: 99999 })],
+      { rng: () => 0.5 }
+    )
+    const s = new BattleScreen(engine, 800, 450, on)
+    created.push(s)
+    for (let turn = 0; turn < 15; turn++) {
+      settle(s)
+      tap(s, 'attack')
+      expect(I(s).logTicker!.started).toBe(true)
+    }
+    expect(engine.getState().logTotal).toBeGreaterThan(30 + 4 * 7)
   })
 
   it('タイプ中の 1 タップ目は escape/spell/item でも実行されない', () => {

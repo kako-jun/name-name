@@ -177,3 +177,39 @@ describe('BattleEngine ガード', () => {
     expect(eng.getState().log.length).toBe(before)
   })
 })
+
+describe('BattleEngine logTotal (#755)', () => {
+  it('開始時は あらわれた の 1 行ぶん、appendLog のたびに log の増分だけ増える', () => {
+    const eng = new BattleEngine([hero()], [slime({ hp: 999, maxHp: 999 })], { rng: () => 0 })
+    expect(eng.getState().logTotal).toBe(1)
+    const before = eng.getState().logTotal
+    eng.selectAttack()
+    const s = eng.getState()
+    expect(s.logTotal).toBeGreaterThan(before)
+    expect(s.logTotal).toBe(s.log.length) // 上限前は log.length と一致
+  })
+
+  it('上限 30 で先頭を捨てても logTotal は単調増加し、減らない', () => {
+    const eng = new BattleEngine(
+      [hero({ hp: 99999, maxHp: 99999 })],
+      [slime({ hp: 99999, maxHp: 99999 })],
+      {
+        rng: () => 0,
+      }
+    )
+    let prev = eng.getState().logTotal
+    let sawCap = false
+    for (let i = 0; i < 20; i++) {
+      eng.selectAttack()
+      const s = eng.getState()
+      expect(s.logTotal).toBeGreaterThan(prev)
+      expect(s.log.length).toBeLessThanOrEqual(30)
+      if (s.logTotal > 30) {
+        sawCap = true
+        expect(s.log.length).toBe(30)
+      }
+      prev = s.logTotal
+    }
+    expect(sawCap).toBe(true)
+  })
+})

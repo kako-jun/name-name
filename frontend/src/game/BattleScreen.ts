@@ -1012,7 +1012,7 @@ export class BattleScreen extends Container {
     }
     // ログ末尾 visibleLogLines 件（front は LOG_VISIBLE_LINES、side は layoutSide が決めた行数）
     if (this.logTypewriter === 'on') {
-      this.logTracker = syncBattleLog(this.logTracker, s.log)
+      this.logTracker = syncBattleLog(this.logTracker, s.log, s.logTotal)
       this.updateLogTexts()
       this.syncLogTicker()
     } else {

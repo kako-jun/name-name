@@ -10,6 +10,7 @@
  * ログは末尾に追記され、上限を超えると先頭が捨てられる（`battleEngine` の LOG_MAX）。絶対インデックスは
  * 失われるので、「タイプ中の行」「まだ始まっていない行」は**ログ末尾からの相対位置**で追う。
  * 先頭が捨てられても末尾相対の位置は変わらないので、流れてもタイプ中の行が別の行に化けない。
+ * 新規行数は文面の突き合わせでなく、エンジンの累計行数 `logTotal` の差で数える（同じ文面が続いても確実）。
  */
 import {
   isTypingActive,
@@ -31,32 +32,11 @@ export function normalizeBattleLogTypewriter(
   return typeof raw === 'string' && raw.trim().toLowerCase() === 'on' ? 'on' : 'off'
 }
 
-/**
- * 前回見たログ `prev` から `next` までに、末尾へ新しく積まれた行数を返す。
- *
- * ログは末尾追記＋先頭切り捨てなので、`prev` の後ろ側が `next` の前側と一致する最小のずれを探す。
- * 重なりが無ければ（別の戦闘など）`next` 全行を新規とみなす。連続する同一文面が多いと
- * 実際より少なく数えることがある（その場合は即時表示側に倒れる）。
- */
-export function countAppendedLines(prev: readonly string[], next: readonly string[]): number {
-  for (let d = 0; d <= prev.length; d++) {
-    const overlap = prev.length - d
-    if (next.length < overlap) continue
-    let same = true
-    for (let i = 0; i < overlap; i++) {
-      if (prev[d + i] !== next[i]) {
-        same = false
-        break
-      }
-    }
-    if (same) return next.length - overlap
-  }
-  return next.length
-}
-
 export interface BattleLogTracker {
   /** 最後に見たログ全体 */
   seen: readonly string[]
+  /** 最後に見たログの累計行数（`BattleState.logTotal`）。次回との差が新規行数 */
+  total: number
   /** ログ末尾から数えた「まだ表示を始めていない行」の数（これらは画面に出さない） */
   hidden: number
   /** タイプ中の行の状態。行は `seen[seen.length - 1 - hidden]`。タイプ中でなければ null */
@@ -64,7 +44,7 @@ export interface BattleLogTracker {
 }
 
 export function makeBattleLogTracker(): BattleLogTracker {
-  return { seen: [], hidden: 0, typing: null }
+  return { seen: [], total: 0, hidden: 0, typing: null }
 }
 
 /** タイプ中でなく待ちがあれば、次の行のタイプを始める（空行は即完了なので飛ばす） */
@@ -75,19 +55,29 @@ function startNext(t: BattleLogTracker): BattleLogTracker {
     const st = startTypewriter(t.seen[t.seen.length - 1 - hidden] ?? '')
     typing = isTypingActive(st) ? st : null
   }
-  return { seen: t.seen, hidden, typing }
+  return { seen: t.seen, total: t.total, hidden, typing }
 }
 
-/** 最新のログを取り込む。新しく積まれた行は待ち行列に入り、順にタイプされる */
-export function syncBattleLog(t: BattleLogTracker, log: readonly string[]): BattleLogTracker {
-  const appended = countAppendedLines(t.seen, log)
+/**
+ * 最新のログを取り込む。新しく積まれた行は待ち行列に入り、順にタイプされる。
+ *
+ * 新規行数は `logTotal`（エンジンの累計行数）の前回との差で数える。ログの文面は比較しないので、
+ * 同じ文面が続いても数え違えない。差がログ長を超える（大量に積まれた）ときは見える範囲（ログ全行）に丸め、
+ * `logTotal` が前回より小さい（別の戦闘に差し替わった）ときは全行を新規とみなす。
+ */
+export function syncBattleLog(
+  t: BattleLogTracker,
+  log: readonly string[],
+  logTotal: number
+): BattleLogTracker {
   const seen = log.slice()
-  if (appended === 0 && seen.length === t.seen.length) return { ...t, seen }
+  const appended = logTotal < t.total ? seen.length : Math.min(logTotal - t.total, seen.length)
+  if (appended === 0 && seen.length === t.seen.length) return { ...t, seen, total: logTotal }
   // 待ち・タイプ中の行が先頭切り捨てで消えていたら、残っている分だけに丸める
   const hidden = Math.min(t.hidden + appended, seen.length)
   let typing = t.typing
   if (typing !== null && seen.length - 1 - hidden < 0) typing = null
-  return startNext({ seen, hidden, typing })
+  return startNext({ seen, total: logTotal, hidden, typing })
 }
 
 /** 1 フレーム進める。タイプ中の行が終わったら次の待ち行へ移る */
@@ -99,13 +89,15 @@ export function tickBattleLog(
   if (t.typing === null) return t
   const next = tickTypewriter(t.typing, deltaMS, msPerChar)
   if (isTypingActive(next)) return { ...t, typing: next }
-  return startNext({ seen: t.seen, hidden: t.hidden, typing: null })
+  // 行が終わったときの余り時間は次の行へ繰り越さない（意図的な仕様）。次の行は常に 0 文字から始まり、
+  // 巨大な deltaMS が来ても 1 tick で複数行を飛ばさない。
+  return startNext({ seen: t.seen, total: t.total, hidden: t.hidden, typing: null })
 }
 
 /** タイプ中の行も待ち行もすべて即時に最後まで表示する */
 export function skipBattleLog(t: BattleLogTracker): BattleLogTracker {
   if (t.typing === null && t.hidden === 0) return t
-  return { seen: t.seen, hidden: 0, typing: null }
+  return { seen: t.seen, total: t.total, hidden: 0, typing: null }
 }
 
 /** タイプ中、または表示待ちの行があるか */
