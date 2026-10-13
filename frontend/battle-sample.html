@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>戦闘画面サンプル (dev)</title>
+    <style>
+      body {
+        margin: 0;
+        background: #1a1a1a;
+        color: #ddd;
+        font: 13px/1.5 sans-serif;
+      }
+      #toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        align-items: center;
+        padding: 8px 12px;
+        background: #2a2a2a;
+      }
+      #toolbar label {
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+      }
+      #toolbar button {
+        cursor: pointer;
+      }
+      #info {
+        padding: 4px 12px;
+        font-family: monospace;
+        color: #9c9;
+        white-space: pre-wrap;
+      }
+      #error {
+        padding: 6px 12px;
+        color: #fff;
+        background: #a22;
+        white-space: pre-wrap;
+      }
+      #error[hidden] {
+        display: none;
+      }
+      .hint {
+        padding: 2px 12px;
+        color: #cc8;
+      }
+      .hint[hidden] {
+        display: none;
+      }
+      #toolbar button:disabled,
+      #toolbar select:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+      #stage {
+        padding: 8px 12px;
+      }
+      #stage canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="toolbar"></div>
+    <div id="error" hidden></div>
+    <div id="hint-prev" class="hint">
+      前の設定がありません（設定を変更すると、変更前の設定との切替ができます）
+    </div>
+    <div id="hint-party" class="hint" hidden>
+      layout=front は本編と同じく味方 1 人だけを戦闘エンジンに渡すため、味方の人数は選べません
+    </div>
+    <div id="info"></div>
+    <div id="stage"></div>
+    <script type="module" src="/src/battleSample/main.ts"></script>
+  </body>
+</html>

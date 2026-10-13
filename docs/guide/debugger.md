@@ -192,3 +192,54 @@ no-op で吸収する（位置を変えない、fail-soft）。
 - `startFrom`（途中局面指定・`eventIndex>0`）とセーブ復元は、共通コア `restoreToScene(scene, state)` を経由して状態を宣言的に組み立てる（[#256](https://github.com/kako-jun/name-name/issues/256)）。復元ロジックは 1 本に集約されている。ただし `startFrom` の `eventIndex=0`（本番 `?scene=` 埋め込みの既定）だけは通常入場と同じ fresh-start 経路（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の話者の立ち絵を出す（[#399](https://github.com/kako-jun/name-name/issues/399)）。
 - 「任意の state から起動・再開できる」ことは、状態と描画が分離できている**機械的な証明**でもある。新しいレンダラ／モードを足すときは、この API で任意局面を再現できることを完了条件にする。
 - 詳しい設計判断は [ADR 0002 — 決定論的状態とデバッグ容易性](../adr/0002-deterministic-state-and-debuggability.md) を参照。
+
+## 戦闘画面サンプルページ（開発用・#749）
+
+戦闘画面（`BattleScreen`）の見た目を、ゲーム本編を経由せずに確認・比較するための独立ページ。ビルド成果物の `battle-sample.html` として出力される（本編からはリンクしない）。本編と同じ `BattleEngine` + `BattleScreen` を載せるので、`layout` / `background` / `spriteStyle` の描画は本編と同じコードパス。
+
+- 開発サーバー: `http://localhost:7374/battle-sample.html`。ビルド後は `dist/battle-sample.html` を静的配信して開く
+- 設定 JSON は `?config=<URL>` で渡す（絶対 URL、またはこのページからの相対 URL）。なければ内蔵既定（色四角のスプライト）で表示する
+- 設定 JSON が不正・取得失敗のときは、画面上部に赤いエラーを出し、内蔵既定で表示を続ける
+
+### ツールバーとブリンク比較
+
+| 項目 | 内容 |
+|---|---|
+| layout | `front` / `side` |
+| spriteStyle | `none` / `acrylic` |
+| 背景あり | 設定 JSON に `background` があるときだけ切り替え可 |
+| 味方 / 敵 | 1〜4 人（設定の件数を超えたぶんは内蔵既定で補う）。`layout=front` のときは味方人数を選べない（下記） |
+| 画面サイズ | `360x640` / `800x450` / `1280x720` / `640x360`（論理サイズ） |
+| 解像度 | `本編相当(1)`（既定）/ `実DPR`。ブリンク比較の対象に含まれる |
+
+切り替えるたびに `BattleScreen` を作り直す（戦闘の進行はリセットされる）。**スペースキー**（またはボタン）で、現在の設定とひとつ前の設定を即座に入れ替える。「1秒ごとに自動交互」をオンにすると 1 秒間隔で交互に表示する。見た目が変わる変更をライブ A/B で判定するための機能。ひとつ前の設定が無い間（起動直後）は、切替ボタンと自動交互は無効で、画面にその旨を案内する。表示中の設定・論理サイズ・`window.devicePixelRatio`・`renderer.resolution`・物理ピクセル数は画面上に表示される。
+
+**解像度の差**: 本編の `app.init`（`RaycastRenderer`）は `resolution` を指定しない（= 1）。サンプルの既定も本編相当の 1 にしてあり、`実DPR` に切り替えると `devicePixelRatio` 倍の解像度で描く（高 DPI 端末でくっきり見えるが、本編の見た目とは異なる）。見た目を本編と比較するときは既定の `本編相当(1)` を使う。`実DPR` は描き直しのたびに `devicePixelRatio` を読み直すだけで、ブラウザのズームやモニター移動には、次に設定を変えるまで追従しない。
+
+**front の味方人数**: 本編は `layout=front` のとき先頭 1 人（hero）だけを戦闘エンジンに渡す（`RaycastRenderer.startBattle`）。サンプルも同じ条件にし、`layout=front` では味方人数の選択を無効にして常に 1 人で表示する。`side` は選択どおりの人数を渡す。
+
+**ビルド成果物**: 本編のビルドは、マルチページ化により共通チャンク（`battleEngine-*.js` など）に分かれる。動作は同じ。
+
+### 設定 JSON の例
+
+```json
+{
+  "layout": "side",
+  "spriteStyle": "acrylic",
+  "background": "battle/background.png",
+  "party": [
+    { "id": "a", "name": "アリス", "hp": 30, "maxHp": 30, "mp": 8, "maxMp": 8, "atk": 8, "def": 4, "agi": 6, "sprite": "battle/party-a.png" },
+    { "id": "b", "name": "ボブ", "hp": 28, "maxHp": 28, "mp": 4, "maxMp": 4, "atk": 9, "def": 5, "agi": 4, "sprite": "battle/party-b.png" }
+  ],
+  "enemies": [
+    { "id": "dragon", "name": "ドラゴン", "hp": 120, "maxHp": 120, "mp": 0, "maxMp": 0, "atk": 14, "def": 8, "agi": 5, "sprite": "battle/enemy-dragon.png" }
+  ]
+}
+```
+
+- トップレベルの項目（`layout` / `spriteStyle` / `background` / `party` / `enemies`）と、各キャラのフィールドはすべて省略可。省略は内蔵既定で補う
+- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
+- `party` / `enemies` は最大 4 件（超えた分は無視）。`maxHp` 省略時は `hp` を最大値とする。`sprite` を省くとその枠は色四角
+- `background` / `sprite` の URL は、設定 JSON の URL を基準に解決される（絶対 URL も可）
+- 設定 JSON と画像が別オリジンの場合、そのオリジンが CORS を許可している必要がある
+- 計算部（検証・補完・URL 解決・ブリンク履歴）は `frontend/src/battleSample/config.ts` の純粋関数、ブラウザ API 部は `main.ts`
