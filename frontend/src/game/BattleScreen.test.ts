@@ -18,6 +18,7 @@ import { BattleScreen, SIDE_LABEL_STROKE_WIDTH, type BattleScreenOptions } from 
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
+  SIDE_COMMAND_TEXT_PADDING,
   SIDE_LOG_MIN_LINES,
   SIDE_STATUS_COMPACT_WIDTH,
   computeSideBattleLayout,
@@ -464,4 +465,53 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
       expect(estimateTextWidth(text, 14)).toBeLessThanOrEqual(L.status.w - 24 + 0.001)
     }
   )
+})
+
+describe('BattleScreen: side の文字はみ出し対策 2 巡目 (#736)', () => {
+  const sideOpts: BattleScreenOptions = { layout: 'side' }
+  type CmdInternals = { commands: Array<{ text: Text }> }
+
+  it.each([
+    [320, 568],
+    [360, 640],
+    [320, 240],
+  ])('%dx%d: コマンド文字はセル幅に余白つきで収まる', (w, h) => {
+    const s = track(make([entity('hero')], [entity('slime')], sideOpts, w, h))
+    const L = computeSideBattleLayout({ width: w, height: h, partyCount: 1, enemyCount: 1 })
+    const cmds = (s as unknown as CmdInternals).commands
+    cmds.forEach((c, k) => {
+      const font = Number(c.text.style.fontSize)
+      expect(
+        estimateTextWidth(c.text.text, font) + SIDE_COMMAND_TEXT_PADDING * 2
+      ).toBeLessThanOrEqual(L.commandCells[k].w + 1e-9)
+    })
+  })
+
+  it('コマンドのフォント縮小は他の BattleScreen（front）に漏れない', () => {
+    const a = track(make([entity('hero')], [entity('slime')], sideOpts, 320, 568))
+    const b = track(make([entity('hero')], [entity('slime')]))
+    expect(Number((a as unknown as CmdInternals).commands[0].text.style.fontSize)).toBeLessThan(18)
+    expect(Number((b as unknown as CmdInternals).commands[0].text.style.fontSize)).toBe(18)
+  })
+
+  it('敵名の省略は縁取り(両側)ぶんを引いた幅に収まる', () => {
+    const s = track(
+      make(
+        [entity('hero')],
+        [
+          entity('a', { name: 'とてもとてもながいなまえのモンスターたち' }),
+          entity('b'),
+          entity('c'),
+        ],
+        sideOpts,
+        360,
+        640
+      )
+    )
+    const L = computeSideBattleLayout({ width: 360, height: 640, partyCount: 1, enemyCount: 3 })
+    const nameLine = internals(s).enemyViews[0].label!.text.split('\n')[0]
+    expect(estimateTextWidth(nameLine, 12)).toBeLessThanOrEqual(
+      L.enemies[0].size - SIDE_LABEL_STROKE_WIDTH * 2 + 0.001
+    )
+  })
 })

@@ -48,6 +48,8 @@ import {
   computeContainFit,
   computeFallbackRect,
   computeSideBattleLayout,
+  SIDE_COMMAND_TEXT_PADDING,
+  fitCommandFontSize,
   fitLabel,
   fitNameWithSuffix,
   type BattleLayoutMode,
@@ -344,7 +346,7 @@ export class BattleScreen extends Container {
       { id: 'escape', label: 'にげる' },
     ]
     for (const item of labels) {
-      const text = new PixiText({ text: item.label, style: TEXT_STYLE_COMMAND })
+      const text = new PixiText({ text: item.label, style: TEXT_STYLE_COMMAND.clone() })
       const hit = new Container()
       hit.eventMode = 'static'
       hit.cursor = 'pointer'
@@ -484,10 +486,19 @@ export class BattleScreen extends Container {
 
     // 下パネル: コマンド（左）
     panel(L.command, this.commandPanel)
+    // 全コマンド共通で、いちばん狭いセルに最長ラベルが収まるフォントサイズにする
+    const minCellW = L.commandCells.reduce((m, c) => Math.min(m, c.w), Infinity)
+    const cmdFont = fitCommandFontSize(
+      minCellW,
+      this.commands.map((c) => c.text.text),
+      COMMAND_FONT_SIZE,
+      SIDE_COMMAND_TEXT_PADDING
+    )
     for (let i = 0; i < this.commands.length; i++) {
       const cell = L.commandCells[i]
       const node = this.commands[i]
       node.hit.hitArea = new Rectangle(cell.x, cell.y, cell.w, cell.h)
+      node.text.style.fontSize = cmdFont
       node.text.anchor.set(0.5, 0.5)
       node.text.x = cell.x + cell.w / 2
       node.text.y = cell.y + cell.h / 2
@@ -538,7 +549,8 @@ export class BattleScreen extends Container {
       view.container.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
       if (view.label) {
         // 2 列配置などでラベル幅(=スプライト一辺)を越える名前は省略して隣と重ねない
-        const w = this.sideLabelWidths[i] ?? 0
+        // 縁取りは文字の両側にはみ出すので、そのぶん（左右 2 本）を最大幅から引く
+        const w = Math.max(0, (this.sideLabelWidths[i] ?? 0) - SIDE_LABEL_STROKE_WIDTH * 2)
         view.label.text =
           `${fitLabel(e.name, w, SIDE_LABEL_FONT_SIZE)}\n` +
           fitLabel(`HP ${e.hp}/${e.maxHp}`, w, SIDE_LABEL_FONT_SIZE)
