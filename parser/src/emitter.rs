@@ -138,12 +138,16 @@ pub fn emit(doc: &Document) -> String {
         if let Some(v) = doc.telop_reserve {
             out.push_str(&format!("telop_reserve: {v}\n"));
         }
-        // Emit battle_layout / battle_background only when present (#736)。header と同じ流儀。
+        // Emit battle_layout / battle_background only when present (#736)。header と同じ流儀で
+        // double-quote で包む。値内の `"` は background_color と同じく除去して出力を壊さない
+        // （battle_background はパス、battle_layout は enum 値で、どちらも `"` を含む正当値がない）。
         if let Some(ref v) = doc.battle_layout {
-            out.push_str(&format!("battle_layout: \"{v}\"\n"));
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_layout: \"{sanitized}\"\n"));
         }
         if let Some(ref v) = doc.battle_background {
-            out.push_str(&format!("battle_background: \"{v}\"\n"));
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_background: \"{sanitized}\"\n"));
         }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
