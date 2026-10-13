@@ -278,8 +278,10 @@ describe('NovelRenderer skipAutoAdvance / pendingAutoAdvance / resumeAutoAdvance
     await vi.waitFor(() => {
       expect(resolver).toHaveBeenCalledWith('ghost-route')
     })
-
-    expect(internals(r).pendingAutoAdvance).toBe(false)
+    // 解決の後処理が終わるまでの microtask 段数に依存せず、結果の状態で待つ。
+    await vi.waitFor(() => {
+      expect(internals(r).pendingAutoAdvance).toBe(false)
+    })
     expect(r.getDebugState().waitingForWait).toBe(true)
   })
 
