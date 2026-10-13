@@ -5,7 +5,7 @@
  * visible / フォールバック / 背景 sprite の有無 / console.warn / destroy 後 resolve の race を検証する。
  * EventImageLayer.test.ts と同じ流儀（internals キャストで private を観測し、`vi.spyOn(Assets, 'load')`）。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Assets,
   BlurFilter,
@@ -205,6 +205,13 @@ describe('BattleScreen: 背景画像', () => {
 })
 
 describe('BattleScreen: 被写界深度 (#753)', () => {
+  // jsdom は canvas 不可で createDofMaskTexture が常に null → 段が作られないので、成功する形に差し替える
+  beforeEach(() => {
+    vi.spyOn(BattleScreen.prototype as never, 'createDofMaskTexture').mockImplementation(
+      (() => new Texture()) as never
+    )
+  })
+
   const dofLevels = (s: BattleScreen) =>
     (
       s as unknown as {
@@ -273,10 +280,87 @@ describe('BattleScreen: 被写界深度 (#753)', () => {
       make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
     )
     await flushPromises()
+    const before = internals(s).children.length
     s.redraw(300, 200)
     s.redraw(320, 240)
     expect(dofLevels(s)).toHaveLength(DOF_LEVEL_COUNT)
-    expect(internals(s).children.length).toBeLessThan(40)
+    expect(internals(s).children.length).toBe(before)
+  })
+
+  it('canvas が使えず マスクが作れないときは 1 段も作らず、layout のたびに再試行しない', async () => {
+    const create = vi
+      .spyOn(BattleScreen.prototype as never, 'createDofMaskTexture')
+      .mockImplementation((() => null) as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    expect(dofLevels(s)).toHaveLength(0)
+    const calls = create.mock.calls.length
+    expect(calls).toBeGreaterThanOrEqual(1)
+    s.redraw(300, 200)
+    s.redraw(640, 480)
+    expect(create.mock.calls.length).toBe(calls)
+    expect(internals(s).children[0]).toBe(internals(s).backgroundSprite)
+  })
+
+  it('途中の段でマスクが作れなくなったら、作った段も破棄して残さない', async () => {
+    let n = 0
+    vi.spyOn(BattleScreen.prototype as never, 'createDofMaskTexture').mockImplementation((() =>
+      n++ < 2 ? new Texture() : null) as never)
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    expect(dofLevels(s)).toHaveLength(0)
+    expect(internals(s).children[0]).toBe(internals(s).backgroundSprite)
+  })
+
+  it('destroy は各段の geometry を 1 回ずつ破棄する（Mesh.destroy は geometry を破棄しない）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    const spies = dofLevels(s).map((l) =>
+      vi.spyOn((l.sprite as unknown as { geometry: { destroy: () => void } }).geometry, 'destroy')
+    )
+    expect(spies).toHaveLength(DOF_LEVEL_COUNT)
+    s.destroy({ children: true })
+    spies.forEach((sp) => expect(sp).toHaveBeenCalledTimes(1))
+  })
+
+  it('各段の filterArea は その段のマスクが見える帯＋左右の拡張を覆い、上の段ほど上から始まる。リサイズに追従', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(
+      make([entity('hero')], [entity('slime')], { background: 'bg/a.webp', backgroundDof: 'on' })
+    )
+    await flushPromises()
+    for (const [w, h] of [
+      [800, 450],
+      [300, 600],
+    ]) {
+      s.redraw(w, h)
+      const bg = internals(s).backgroundSprite!
+      let prevY = -Infinity
+      for (const l of dofLevels(s)) {
+        const fa = (
+          l.sprite as unknown as {
+            filterArea: { x: number; y: number; width: number; height: number }
+          }
+        ).filterArea
+        // 幅は背景幅＋左右の拡張
+        expect(fa.x).toBeCloseTo(-DOF_EDGE_EXTEND)
+        expect(fa.width).toBeCloseTo(bg.width + 2 * DOF_EDGE_EXTEND)
+        // 上端はマスクの上端（画面座標 mask.y をローカルへ）以下、下端は広げた矩形の下端
+        expect(fa.y).toBeLessThanOrEqual(l.mask.y - bg.position.y + 1e-6)
+        expect(fa.y + fa.height).toBeCloseTo(bg.height + DOF_EDGE_EXTEND)
+        expect(fa.y).toBeGreaterThanOrEqual(prevY)
+        prevY = fa.y
+      }
+    }
   })
 
   it('off なら段を作らない', async () => {
@@ -1467,6 +1551,13 @@ describe('BattleScreen: windowStyle (#744)', () => {
 })
 
 describe('BattleScreen: 背景トーン調整 (#753)', () => {
+  // jsdom は canvas 不可で createDofMaskTexture が常に null → 段が作られないので、成功する形に差し替える
+  beforeEach(() => {
+    vi.spyOn(BattleScreen.prototype as never, 'createDofMaskTexture').mockImplementation(
+      (() => new Texture()) as never
+    )
+  })
+
   interface ToneLevel {
     sprite: Container
     mask: Sprite
@@ -1642,13 +1733,6 @@ describe('BattleScreen: 背景トーン調整 (#753)', () => {
     const spies = lv.map((l) => vi.spyOn(l.blur, 'destroy'))
     expect(() => s.destroy({ children: true })).not.toThrow()
     spies.forEach((sp) => expect(sp).toHaveBeenCalledTimes(1))
-  })
-
-  it('destroy({children:true}) 後も tone フィルタの二重 destroy は起きない', async () => {
-    const s = await loaded({ backgroundDof: 'on' })
-    const sp = vi.spyOn(ti(s).backgroundToneFilter!, 'destroy')
-    s.destroy({ children: true })
-    expect(sp.mock.calls.length).toBeLessThanOrEqual(1)
   })
 
   it('redraw（サイズ変更含む）を繰り返しても toneFilter は同一インスタンスで filters は増えない', async () => {

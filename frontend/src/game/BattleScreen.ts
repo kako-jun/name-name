@@ -86,6 +86,7 @@ import {
   DOF_MASK_TEXTURE_HEIGHT,
   DOF_DEFAULT_PARAMS,
   DOF_LEVEL_COUNT,
+  computeDofFilterArea,
   computeDofLevels,
   computeDofQuad,
   dofMaskStops,
@@ -360,28 +361,40 @@ export class BattleScreen extends Container {
    * 背景の手前ぼかし (#753)。背景と同じテクスチャのぼかしコピーを、強さを段階的に変えて DOF_LEVEL_COUNT 枚、
    * 背景の直上へ重ねる（可変半径ガウスの近似）。各段は縦グラデーションのアルファマスク（alpha チャンネル）で
    * 受け持つ帯だけ見せる。背景が差し替わっても積み増さないよう、先に前回分を破棄する。`off` のときは何も作らない。
+   * マスクの絵が作れない環境（canvas 不可）では、作った段も含めて 1 段も残さない（ぼかし無しで続行。layout で再試行しない）。
    */
   private applyBackgroundDof(bg: Sprite): void {
     this.disposeBackgroundDof()
     if (this.backgroundDof === 'off') return
+    const gs = computeDofLevels(this.screenHeight, DOF_DEFAULT_PARAMS, DOF_LEVEL_COUNT)
     let index = 1
     for (let i = 0; i < DOF_LEVEL_COUNT; i++) {
+      const tex = this.createDofMaskTexture(gs[i].rampFraction)
+      if (!tex) {
+        this.disposeBackgroundDof()
+        return
+      }
       const q = computeDofQuad(bg.width, bg.height)
       const copy = new Mesh({
         geometry: new MeshGeometry({ positions: q.positions, uvs: q.uvs, indices: q.indices }),
         texture: bg.texture,
       })
-      // repeatEdgePixels は padding を 0 にするだけで端を繰り返す処理は無く、clipToViewport で
-      // フィルタ領域が画面端で切れてカーネルが欠ける。padding を残し viewport クリップも切る
+      // repeatEdgePixels は padding を 0 にするだけ（端を繰り返す処理ではない）ので使わない。
+      // clipToViewport で フィルタ領域が画面端で切れてカーネルが欠けるので、padding を残し viewport クリップも切る
       const blur = new BlurFilter({ strength: 0 })
-      blur.repeatEdgePixels = false
       blur.clipToViewport = false
       copy.filters = this.backgroundToneFilter ? [this.backgroundToneFilter, blur] : [blur]
-      const mask = new Sprite()
+      const mask = new Sprite(tex)
       this.addChildAt(copy, index++)
       this.addChildAt(mask, index++)
       copy.setMask({ mask, channel: 'alpha' })
-      this.dofLevels.push({ sprite: copy, mask, blur, maskTexture: null, maskRamp: -1 })
+      this.dofLevels.push({
+        sprite: copy,
+        mask,
+        blur,
+        maskTexture: tex,
+        maskRamp: gs[i].rampFraction,
+      })
     }
   }
 
@@ -389,7 +402,10 @@ export class BattleScreen extends Container {
   private disposeBackgroundDof(): void {
     for (const lv of this.dofLevels) {
       lv.sprite.filters = null
+      // Mesh.destroy は geometry を破棄しない（段ごとに作った MeshGeometry の GPU バッファが残る）ので自分で破棄する
+      const geo = lv.sprite.geometry
       lv.sprite.destroy()
+      geo.destroy()
       lv.mask.destroy()
       lv.blur.destroy()
       lv.maskTexture?.destroy(true)
@@ -397,7 +413,7 @@ export class BattleScreen extends Container {
     this.dofLevels = []
   }
 
-  /** 画面サイズに合わせて各段の位置・強さを更新する。立ち上がり割合が変わった段だけマスクの絵を作り直す */
+  /** 画面サイズに合わせて各段の位置・強さ・フィルタ領域を更新する。立ち上がり割合が変わった段だけマスクの絵を作り直す */
   private layoutBackgroundDof(bg: Sprite, W: number, H: number): void {
     if (this.dofLevels.length === 0) return
     const gs = computeDofLevels(H, DOF_DEFAULT_PARAMS, this.dofLevels.length)
@@ -408,13 +424,17 @@ export class BattleScreen extends Container {
       lv.sprite.geometry.positions = q.positions
       lv.sprite.geometry.uvs = q.uvs
       lv.blur.strength = g.blurStrength
-      if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4 || !lv.maskTexture) {
+      // フィルタ領域をその段のマスクが見える帯に絞る（ローカル座標＝背景左上原点。マスクの上端は画面座標 startY）
+      const fa = computeDofFilterArea(bg.width, bg.height, g.startY - bg.position.y)
+      lv.sprite.filterArea = new Rectangle(fa.x, fa.y, fa.width, fa.height)
+      if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4) {
         const tex = this.createDofMaskTexture(g.rampFraction)
         if (tex) {
-          lv.maskTexture?.destroy(true)
+          const old = lv.maskTexture
           lv.maskTexture = tex
           lv.maskRamp = g.rampFraction
           lv.mask.texture = tex
+          old?.destroy(true)
         }
       }
       lv.mask.position.set(0, g.startY)
