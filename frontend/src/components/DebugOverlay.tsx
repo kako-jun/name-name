@@ -9,7 +9,10 @@ interface DebugState {
   autoMode: boolean
   waitingForChoice: boolean
   waitingForWait: boolean
-  /** `[ジャンプ:]` の遷移状態 (#733)。`[待機]` の waitingForWait とは独立。 */
+  /**
+   * `[ジャンプ:]` の遷移状態 (#733)。`[待機]` の waitingForWait とは独立。optional なのは、この型を
+   * 手組みするテストのモックや旧形式の呼び出し側（未対応のまま）を壊さないため。未指定は idle 扱い。
+   */
   jumpState?: 'idle' | 'pending' | 'stalled'
   currentResolvedFontFamily: string | null
   sceneId: string | null

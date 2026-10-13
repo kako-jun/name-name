@@ -399,7 +399,12 @@ export class NovelRenderer {
   /** 動画エクスポート用 (#228)。`jumpToScene` / `setScenes` でシーンが切り替わったときに呼ぶ */
   private onSceneChangeCallback: ((sceneId: string) => void) | null = null
   private missingSceneResolver: ((sceneId: string) => Promise<EventScene[] | null>) | null = null
-  private pendingMissingScenes = new Set<string>()
+  /**
+   * 遅延ロード中の resolver 呼び出し (#733)。同じ sceneId の解決は 1 本に束ね、後続の呼び出しも同じ
+   * Promise を待つ（Jump 経路は世代違いの再入でも自分の世代で後処理するため、黙って捨てると予約が
+   * 宙に浮く）。settle 時に `requestMissingScene` が取り除く。
+   */
+  private pendingMissingScenes = new Map<string, Promise<EventScene[] | null>>()
   /**
    * `?scene=` ディープリンク単独埋め込みの confinement（在圏）一覧 (#386)。
    * null なら制限なし（通常のハブ経由フロー）。非 null のときは `jumpToScene` がこの
@@ -1498,12 +1503,31 @@ export class NovelRenderer {
     this.onSceneChangeCallback?.(sceneId)
   }
 
+  /**
+   * missingSceneResolver を呼ぶ。同じ sceneId が解決中ならその Promise を共有する (#733)。
+   * resolver の同期 throw も reject に畳む。呼び出しごとの後処理（世代・initialized 判定）は呼び出し側。
+   */
+  private requestMissingScene(sceneId: string): Promise<EventScene[] | null> {
+    const inflight = this.pendingMissingScenes.get(sceneId)
+    if (inflight) return inflight
+    const resolver = this.missingSceneResolver
+    const p = (async () => {
+      if (!resolver) return null
+      return await resolver(sceneId)
+    })().finally(() => {
+      this.pendingMissingScenes.delete(sceneId)
+    })
+    this.pendingMissingScenes.set(sceneId, p)
+    return p
+  }
+
   private async resolveMissingSceneAndJump(sceneId: string): Promise<void> {
-    if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) return
-    this.pendingMissingScenes.add(sceneId)
+    if (!this.missingSceneResolver) return
+    // 世代は呼び出しごとに捕捉する。解決中に同じ target の Jump が再予約されても（startFrom・restart・
+    // 再選択）、その呼び出しが同じ Promise を待って自分の世代で後処理するので予約が宙に浮かない。
     const generation = this.transitionGeneration
     try {
-      const scenes = await this.missingSceneResolver(sceneId)
+      const scenes = await this.requestMissingScene(sceneId)
       // 遷移文脈が変わった（遅延ロード中に startFrom・復元・再遷移が入った）古い解決は破棄する (#733)。
       // 成功時の startScene も失敗時の stallJump も、新しい文脈を壊さないよう何もしない。
       if (generation !== this.transitionGeneration) return
@@ -1530,8 +1554,6 @@ export class NovelRenderer {
       if (generation !== this.transitionGeneration) return
       console.warn(`[name-name] シーンの追加読み込みに失敗しました: ${sceneId}`, err)
       if (this.initialized) this.stallJump()
-    } finally {
-      this.pendingMissingScenes.delete(sceneId)
     }
   }
 
@@ -5685,7 +5707,7 @@ export class NovelRenderer {
    */
   quickSave(): boolean {
     if (this.waitingForChoice || this.waitingForWait || this.storyEnded) return false
-    // Jump 待機中・停止中 (#725): 保存しない（openSaveMenu と同じ理由）。
+    // Jump 待機中・停止中 (#725): 遷移途中・停止位置をセーブに残さない（openSaveMenu と同じ理由）。
     if (this.jumpState !== 'idle') return false
 
     // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
@@ -5763,8 +5785,9 @@ export class NovelRenderer {
    */
   private openSaveMenu(): void {
     if (this.storyEnded) return
-    // Jump 待機中・停止中 (#725) は開かない。eventIndex が Jump を指したまま保存すると、
-    // ロード時に directive が再実行されず次の advance で Jump を飛び越してしまう。
+    // Jump 待機中・停止中 (#725) は開かない。遷移途中・停止位置をセーブに残さない
+    // （ロードのたびに再予約・警告・停止を繰り返す状態を避ける。復元側は #733 で再予約するので
+    // 行き止まりにはならないが、保存する価値のある位置ではない）。
     if (this.jumpState !== 'idle') return
     this.saveLoadOverlay.showSave((slot: number) => {
       // quickSave と共通のシーンタイトル解決 (#260)。
@@ -5806,6 +5829,8 @@ export class NovelRenderer {
    * ロードメニューを表示する
    */
   private openLoadMenu(): void {
+    // Jump 遷移の予約中 (#733) は quickLoad と同じく開かない（遷移途中に別の位置へ復元させない）。
+    if (this.jumpState === 'pending') return
     this.saveLoadOverlay.showLoad((data: SaveSlotData) => {
       this.loadFromSaveData(data)
     })
@@ -5967,9 +5992,8 @@ export class NovelRenderer {
       this.resumeAutoAdvanceIfPending()
       return
     }
-    this.pendingMissingScenes.add(sceneId)
     try {
-      const scenes = await this.missingSceneResolver(sceneId)
+      const scenes = await this.requestMissingScene(sceneId)
       // await 中に renderer が destroy() され得る（resolveMissingSceneAndRestore の S1 と
       // 同じ懸念）。destroy 後は applyState が this.app.stage を触るため、initialized
       // チェック無しで先に進むと例外を投げうる。
@@ -6004,8 +6028,6 @@ export class NovelRenderer {
       )
       // #620: resolver が reject した失敗確定時点でも同様に再開する。
       this.resumeAutoAdvanceIfPending()
-    } finally {
-      this.pendingMissingScenes.delete(sceneId)
     }
   }
 
@@ -6115,9 +6137,8 @@ export class NovelRenderer {
       this.gameState.fromJSON(snapshot.flags)
       return
     }
-    this.pendingMissingScenes.add(sceneId)
     try {
-      const scenes = await this.missingSceneResolver(sceneId)
+      const scenes = await this.requestMissingScene(sceneId)
       // #460 セルフレビュー should S1: await 中に renderer が destroy() され得る（連続remount
       // で新しい renderer に既に切り替わっているケース）。destroy 後は applyState が
       // this.app.stage を触るため、initialized チェック無しで先に進むと例外を投げうる。
@@ -6143,8 +6164,6 @@ export class NovelRenderer {
         `[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`,
         err
       )
-    } finally {
-      this.pendingMissingScenes.delete(sceneId)
     }
   }
 
