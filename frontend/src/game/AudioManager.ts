@@ -295,7 +295,6 @@ export class AudioManager {
    */
   stopBgm(fadeMs: number = 1000): void {
     // ロード中の playBgm の完了時再生を無効化する (#730)
-    // playBgm の冒頭からも呼ばれるが、playBgm はこの直後に新しい requestId を捕捉するので自己無効化しない (#730)
     this.bgmRequestId++
     if (!this.ctx || !this.bgmSource || !this.bgmGain) {
       this.currentBgmUrl = null
