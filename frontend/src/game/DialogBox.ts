@@ -16,7 +16,17 @@
  * インスタンスを複数生成して stage に追加するだけで実現できる。
  */
 
-import { Assets, Container, Graphics, Sprite, Text, TextStyle, Texture, Ticker } from 'pixi.js'
+import {
+  Assets,
+  Container,
+  Graphics,
+  Sprite,
+  Text,
+  TextStyle,
+  Texture,
+  Ticker,
+  type DestroyOptions,
+} from 'pixi.js'
 import { wordwrap } from './wordwrap'
 import { parseRubyText, stripRubyMarkup } from './ruby'
 import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
@@ -375,6 +385,7 @@ export class DialogBox extends Container {
   private visibleCharacterCountListeners = new Set<(count: number) => void>()
   private msPerChar: number
   private indicatorWanted: boolean = false
+  private tickerDisposed = false
   private onTypingDone: (() => void) | null = null
 
   private ticker: Ticker
@@ -1472,8 +1483,12 @@ export class DialogBox extends Container {
     const baseUrl = this.indicatorAssetBaseUrl
     const urls = getIndicatorImageUrls(baseUrl, kind)
     this.pendingIndicatorKinds.add(kind)
-    Promise.all(urls.map((url) => Assets.load(url)))
-      .then((loaded) => {
+    // `.then(ok, err)` の2引数形: 表示処理（applyIndicatorFrame / positionIndicator）の例外を
+    // 読み込み失敗として誤報告しない (#774)。
+    Promise.all(urls.map((url) => Assets.load(url))).then(
+      (loaded) => {
+        // destroy 済み（親の destroy({ children: true }) 含む）なら何もしない (#774)。
+        if (this.destroyed) return
         // baseUrl が変わっていたら古い結果。pendingIndicatorKinds は新しい fetch の分をまだ
         // 表しているはずなので触らない（触ると新 fetch 完了前に一瞬 pending が外れてしまう）。
         if (this.indicatorAssetBaseUrl !== baseUrl) return
@@ -1489,14 +1504,16 @@ export class DialogBox extends Container {
           this.applyIndicatorFrame()
           this.positionIndicator()
         }
-      })
-      .catch((err: unknown) => {
+      },
+      (err: unknown) => {
+        if (this.destroyed) return
         if (this.indicatorAssetBaseUrl !== baseUrl) return
         this.pendingIndicatorKinds.delete(kind)
         this.failedIndicatorKinds.add(kind)
         console.warn(`[DialogBox] failed to load ${kind} indicator images:`, err)
         if (this.indicatorKind === kind) this.applyIndicatorFrame()
-      })
+      }
+    )
   }
 
   private tickIndicatorFrame(deltaMs: number): void {
@@ -1600,6 +1617,9 @@ export class DialogBox extends Container {
    *  - それ以外（fetch を試みていない／確定失敗） → 従来どおり ▼ グリフへフォールバックする。
    */
   private applyIndicatorFrame(): void {
+    // #774: destroy 済み（親の destroy({ children: true }) 含む）の後に遅れて届いた画像 fetch の
+    // 解決で呼ばれると、子 Sprite の scale が null で width 設定が例外になる。何もしない。
+    if (this.destroyed || this.indicatorSprite.destroyed) return
     const frames = this.indicatorFrameTextures[this.indicatorKind]
     if (frames && frames.length > 0) {
       this.indicatorSprite.texture = frames[this.indicatorFrameIndex % frames.length]
@@ -1615,8 +1635,19 @@ export class DialogBox extends Container {
 
   dispose(): void {
     this.clearRubyEntries()
+    if (this.tickerDisposed) return
+    this.tickerDisposed = true
     this.ticker.stop()
     this.ticker.destroy()
+  }
+
+  /**
+   * Pixi の destroy（`app.destroy(true, { children: true })` 等）でも ticker を止める (#774)。
+   * 止めないと destroy 済み Sprite に対して tick が走り続ける。
+   */
+  override destroy(options?: DestroyOptions): void {
+    this.dispose()
+    super.destroy(options)
   }
 
   // ---------------------------------------------------------------------------
@@ -1788,7 +1819,7 @@ export class DialogBox extends Container {
     void loadPortraitTexture(path).then(
       (texture) => {
         if (token !== this.currentPortraitToken) return
-        if (!this.portraitFrame) return
+        if (this.destroyed || !this.portraitFrame) return
 
         const portraitY = this.boxY + PORTRAIT_Y_OFFSET
         const fit = computePortraitContainFit(
@@ -1818,6 +1849,7 @@ export class DialogBox extends Container {
       },
       () => {
         if (token !== this.currentPortraitToken) return
+        if (this.destroyed) return
         if (this.portraitSprite) this.portraitSprite.visible = false
       }
     )
