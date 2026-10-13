@@ -227,15 +227,14 @@ export type Step =
   | { type: 'wait'; ms: number }
 
 /**
- * startFrom() の引数 (#220 Phase 2)。
+ * startFrom() の引数 (#220 Phase 2, #734)。
  *
- * sceneId と flags を直接指定して任意の状態からシーンを開始する。
- * デバッグ/テスト用。これは開始指示であってゲーム状態そのものではないため、
+ * 新規開始（文脈を捨てて始める）の指示。これは開始指示であってゲーム状態そのものではないため、
  * NovelGameState とは別に定義する。
  */
 export interface StartFromOptions {
-  /** 開始するシーン ID */
-  sceneId: string
+  /** 開始するシーン ID。省略するとエントリ文書の線形ストリームの先頭から始める */
+  sceneId?: string
   /** 設定するフラグ（置換セマンティクス。省略時は空でクリア） */
   flags?: Record<string, FlagValue>
   /** 開始イベントインデックス（省略時 = 0） */
@@ -244,6 +243,11 @@ export interface StartFromOptions {
   textIndex?: number
   /** novel の現ページ内文インデックス（省略時 = 0・#292）。adv では未使用。 */
   sentenceIndex?: number
+  /**
+   * 入場属性としての confinement（在圏）一覧 (#386)。解決できた時点で置き換える。
+   * 省略・null は解除（制限なし）。`?scene=` の埋め込みが渡す。
+   */
+  confinedSceneIds?: string[] | null
 }
 
 /**
