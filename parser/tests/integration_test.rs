@@ -10833,6 +10833,150 @@ fn test_sprite_style_survives_emit_with_multiple_chapters() {
     assert_eq!(doc3.sprite_style.as_deref(), Some("acrylic"));
 }
 
+// ---- #744: window_style (frontmatter 透過。sprite_style と同じ流儀) ----
+
+#[test]
+fn test_window_style_ff_blue_parses() {
+    let doc = parser::parse(&battle_doc("window_style: \"ff-blue\"\n"));
+    assert_eq!(doc.window_style.as_deref(), Some("ff-blue"));
+}
+
+#[test]
+fn test_window_style_unquoted_value_parses() {
+    let doc = parser::parse(&battle_doc("window_style: ff-blue\n"));
+    assert_eq!(doc.window_style.as_deref(), Some("ff-blue"));
+}
+
+#[test]
+fn test_window_style_dark_passes_through() {
+    let doc = parser::parse(&battle_doc("window_style: dark\n"));
+    assert_eq!(doc.window_style.as_deref(), Some("dark"));
+}
+
+#[test]
+fn test_window_style_unknown_value_passes_through_parser() {
+    // parser はバリデーションしない。runtime 側で dark にフォールバックする
+    let doc = parser::parse(&battle_doc("window_style: foo\n"));
+    assert_eq!(doc.window_style.as_deref(), Some("foo"));
+}
+
+#[test]
+fn test_window_style_uppercase_passes_through_parser() {
+    // 大文字小文字の正規化は runtime の責務。parser は生文字列を保つ
+    let doc = parser::parse(&battle_doc("window_style: FF-BLUE\n"));
+    assert_eq!(doc.window_style.as_deref(), Some("FF-BLUE"));
+}
+
+#[test]
+fn test_window_style_surrounding_whitespace_is_trimmed() {
+    let doc = parser::parse(&battle_doc("window_style:    ff-blue   \n"));
+    assert_eq!(doc.window_style.as_deref(), Some("ff-blue"));
+    let doc = parser::parse(&battle_doc("window_style:   \"ff-blue\"  \n"));
+    assert_eq!(doc.window_style.as_deref(), Some("ff-blue"));
+}
+
+#[test]
+fn test_window_style_no_value_is_none() {
+    let doc = parser::parse(&battle_doc("window_style:\n"));
+    assert_eq!(doc.window_style, None);
+}
+
+#[test]
+fn test_window_style_empty_quotes_is_none() {
+    let doc = parser::parse(&battle_doc("window_style: \"\"\n"));
+    assert_eq!(doc.window_style, None);
+}
+
+#[test]
+fn test_window_style_unspecified_is_none_and_omitted_from_emit() {
+    let doc = parser::parse(&battle_doc(""));
+    assert_eq!(doc.window_style, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("window_style"),
+        "未指定なら emit にキー自体が出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_window_style_emitted_with_quotes() {
+    let doc = parser::parse(&battle_doc("window_style: ff-blue\n"));
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("window_style: \"ff-blue\"\n"),
+        "emit に window_style が含まれる: {emitted}"
+    );
+}
+
+#[test]
+fn test_window_style_emit_parse_is_idempotent() {
+    let doc = parser::parse(&battle_doc("window_style: \"ff-blue\"\n"));
+    let emitted1 = emitter::emit(&doc);
+    let doc2 = parser::parse(&emitted1);
+    assert_eq!(doc2.window_style.as_deref(), Some("ff-blue"));
+    let emitted2 = emitter::emit(&doc2);
+    assert_eq!(emitted1, emitted2);
+}
+
+#[test]
+fn test_window_style_inner_quote_is_stripped_on_emit() {
+    let mut doc = parser::parse(&battle_doc(""));
+    doc.window_style = Some("ff\"-blue".to_string());
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("window_style: \"ff-blue\"\n"),
+        "`\"` が除去されて出力される: {emitted}"
+    );
+    assert_eq!(
+        parser::parse(&emitted).window_style.as_deref(),
+        Some("ff-blue")
+    );
+}
+
+#[test]
+fn test_window_style_coexists_with_battle_fields() {
+    let doc = parser::parse(&battle_doc(
+        "battle_layout: side\nbattle_background: bg/cave.webp\nsprite_style: acrylic\nwindow_style: ff-blue\n",
+    ));
+    assert_eq!(doc.battle_layout.as_deref(), Some("side"));
+    assert_eq!(doc.battle_background.as_deref(), Some("bg/cave.webp"));
+    assert_eq!(doc.sprite_style.as_deref(), Some("acrylic"));
+    assert_eq!(doc.window_style.as_deref(), Some("ff-blue"));
+    let doc2 = parser::parse(&emitter::emit(&doc));
+    assert_eq!(doc2.battle_layout, doc.battle_layout);
+    assert_eq!(doc2.battle_background, doc.battle_background);
+    assert_eq!(doc2.sprite_style, doc.sprite_style);
+    assert_eq!(doc2.window_style, doc.window_style);
+}
+
+#[test]
+fn test_window_style_alone_does_not_leak_into_other_fields() {
+    let only = parser::parse(&battle_doc("window_style: ff-blue\n"));
+    assert_eq!(only.battle_layout, None);
+    assert_eq!(only.battle_background, None);
+    assert_eq!(only.sprite_style, None);
+}
+
+#[test]
+fn test_sprite_style_line_does_not_match_window_style() {
+    let doc = parser::parse(&battle_doc("sprite_style: acrylic\n"));
+    assert_eq!(doc.window_style, None);
+    assert_eq!(doc.sprite_style.as_deref(), Some("acrylic"));
+}
+
+#[test]
+fn test_window_style_none_is_omitted_from_json() {
+    let doc = parser::parse(&battle_doc(""));
+    let json = serde_json::to_value(&doc).unwrap();
+    assert!(
+        json.get("window_style").is_none(),
+        "None は JSON から省略される: {json}"
+    );
+    let doc = parser::parse(&battle_doc("window_style: ff-blue\n"));
+    let json = serde_json::to_value(&doc).unwrap();
+    assert_eq!(json["window_style"], serde_json::json!("ff-blue"));
+}
+
 #[test]
 fn test_telop_bottom_left_japanese_token_alone() {
     // 位置=左下 単独指定（他の位置トークンは既存テストで網羅済み）
