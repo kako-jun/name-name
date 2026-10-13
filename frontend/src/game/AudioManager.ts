@@ -294,6 +294,8 @@ export class AudioManager {
    * BGM をフェードアウトして停止する。
    */
   stopBgm(fadeMs: number = 1000): void {
+    // ロード中の playBgm の完了時再生を無効化する (#730)
+    this.bgmRequestId++
     if (!this.ctx || !this.bgmSource || !this.bgmGain) {
       this.currentBgmUrl = null
       return
@@ -653,6 +655,8 @@ export class AudioManager {
    * BGM を即座に停止する（フェードなし）
    */
   private stopBgmImmediate(): void {
+    // ロード中の playBgm の完了時再生を無効化する (#730)
+    this.bgmRequestId++
     // フェード中のノードも即停止
     for (const node of this.fadingNodes) {
       clearTimeout(node.timer)
